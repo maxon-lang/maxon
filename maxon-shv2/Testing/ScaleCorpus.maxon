@@ -33,9 +33,32 @@
 //      function's return value is opaque at the call site no matter how trivial the callee. Every
 //      generated function therefore takes its seed as a PARAMETER and derives everything from it.
 //
-// The runner does not take this on trust. It runs the degeneracy self-check on every ladder —
-// emitted code bytes must grow with source bytes — and reports VOID, not PASS, if the corpus ever
-// folds flat. See ScaleTestRunner.
+// The runner does not take this on trust. `assertCorpusCompiled` (below) re-verifies it on every
+// single ladder, and a corpus that folded flat is a BROKEN RUN — the one thing this instrument
+// exits non-zero for, because it means nothing was measured at all.
+//
+// ===========================================================================================
+// A RUNG DIRECTORY HOLDS EXACTLY THE GENERATED SOURCES, AND NOTHING ELSE
+// ===========================================================================================
+//
+// This is not tidiness. It is the reproducibility the whole instrument rests on, and it was BROKEN.
+//
+// `build <dir>` LISTS that directory, and every entry it finds costs the compiler a `FilePath` and a
+// `String` — measured, exactly, at +13 allocations and +459 bytes per extra file, at every rung. The
+// runner used to write each rung's EXECUTABLE and its METRICS TSV into the rung's own source
+// directory, and `.scale-tmp/` is never cleaned. So the first run on a fresh checkout compiled a
+// ten-file directory and every run after it compiled a twelve-file one, and the two disagreed by 26
+// allocations and 945 bytes per rung.
+//
+// The numbers were therefore "bit-for-bit reproducible" only if you never deleted your temp
+// directory — which is to say they were not reproducible at all, and the committed goldens that
+// gated on them would have failed on any machine that had never run the suite before. (Found by
+// exactly the delta report this instrument now prints, on a run that changed no compiler code.)
+//
+// The outputs now live in the corpus ROOT, outside every rung (see ScaleTestRunner), and
+// `pruneRungDir` guarantees the invariant holds even for a `.scale-tmp` left behind by an older
+// build. ⚠ It DELETES: `<root>/rung<N>/` is owned by this generator, including under
+// `--emit-corpus=<dir>`.
 //
 // ===========================================================================================
 // NOT COMMITTED, ON PURPOSE
@@ -158,13 +181,12 @@ let GeneratedLoopTrips = 4
 // Rung layout on disk
 // ===========================================================================================
 
-let ScaleTempDirName = ".scale-tmp"
-
-// Shared with ScalePerType, which locates the rungs this generator wrote.
+// Shared with ScalePerType, which locates the rungs this generator wrote, and with the runner, which
+// names each rung's metrics + output file after it — in the corpus ROOT, never in the rung.
 export let RungDirPrefix = "rung"
 export let MaxonExtension = ".maxon"
 
-// One generated rung: where it lives and how big it is. `sourceBytes` is the degeneracy check's
+// One generated rung: where it lives and how big it is. `sourceBytes` is the corpus self-check's
 // denominator — the question "did the compiler's output grow with its input" needs both.
 export type ScaleRung
 	export let index as RungIndex
@@ -189,9 +211,9 @@ function knobAt(base KnobSize, rung RungIndex) returns KnobSize
 end 'knobAt'
 
 // Generate the whole ladder under `root`, returning one ScaleRung per rung.
-export function generateCorpus(root FilePath, rungs RungCount) returns ScaleRungArray throws CompileError
+export function generateCorpus(root FilePath, rungs RungCount) returns ScaleRungArray throws ScaleError
 	if not Directory.create(root) 'noRoot'
-		throw CompileError.directoryNotFound(root)
+		throw ScaleError.reason("could not create the corpus root {root.toString()}")
 	end 'noRoot'
 
 	var ladder = ScaleRungArray.create()
@@ -201,48 +223,73 @@ export function generateCorpus(root FilePath, rungs RungCount) returns ScaleRung
 	return ladder
 end 'generateCorpus'
 
-// The default corpus root: `<specDir>/../.scale-tmp`, resolved against the cwd. Gitignored, and
-// rebuilt from scratch on every run — generation is deterministic, so a stale rung is never
-// silently reused.
-export function defaultCorpusRoot() returns FilePath
-	let rel = try FilePath.from(ScaleTempDirName) otherwise panic("ScaleCorpus: '{ScaleTempDirName}' must be a valid relative path")
-	return Directory.currentPath().join(rel)
-end 'defaultCorpusRoot'
-
 // Generate one rung: a DIRECTORY of `.maxon` files (shv2's `build <dir>` walks them recursively),
 // so the `manyFiles` knob is expressed as real files on disk rather than simulated.
-function generateRung(root FilePath, rung RungIndex) returns ScaleRung throws CompileError
+function generateRung(root FilePath, rung RungIndex) returns ScaleRung throws ScaleError
 	let dirName = try FilePath.from("{RungDirPrefix}{rung}") otherwise panic("ScaleCorpus: rung dir name must be valid")
 	let dir = root.join(dirName)
 	if not Directory.create(dir) 'noDir'
-		throw CompileError.directoryNotFound(dir)
+		throw ScaleError.reason("could not create the rung directory {dir.toString()}")
 	end 'noDir'
 
 	let fileCount = knobAt(FilesBase, rung: rung)
 	let funcCount = knobAt(FunctionsBase, rung: rung)
 
 	var sourceBytes = 0 as SourceByteCount
+	var written = StringArray.create()
 
 	// `a_` / `b_` / ... prefixes only order the directory listing for a human reading a dumped
 	// corpus; shv2 merges files in listing order and the merge is order-independent.
-	sourceBytes = sourceBytes + try writeRungFile(dir, name: "a_seed", source: seedSource())
-	sourceBytes = sourceBytes + try writeManyFunctions(dir, fileCount: fileCount, funcCount: funcCount)
-	sourceBytes = sourceBytes + try writeRungFile(dir, name: "c_long", source: longFunctionSource(knobAt(LongIfsBase, rung: rung)))
-	sourceBytes = sourceBytes + try writeRungFile(dir, name: "d_blocks", source: deepBlocksSource(knobAt(DeepBlocksBase, rung: rung)))
-	sourceBytes = sourceBytes + try writeRungFile(dir, name: "e_chain", source: callChainSource(knobAt(CallChainBase, rung: rung)))
-	sourceBytes = sourceBytes + try writeRungFile(dir, name: "f_loops", source: pressuredLoopsSource(knobAt(PressuredLoopsBase, rung: rung)))
-	sourceBytes = sourceBytes + try writeRungFile(dir, name: "g_main", source: mainSource(fileCount, funcCount: funcCount, chainLength: knobAt(CallChainBase, rung: rung)))
+	sourceBytes = sourceBytes + try writeRungFile(dir, name: "a_seed", source: seedSource(), written: written)
+	sourceBytes = sourceBytes + try writeManyFunctions(dir, fileCount: fileCount, funcCount: funcCount, written: written)
+	sourceBytes = sourceBytes + try writeRungFile(dir, name: "c_long", source: longFunctionSource(knobAt(LongIfsBase, rung: rung)), written: written)
+	sourceBytes = sourceBytes + try writeRungFile(dir, name: "d_blocks", source: deepBlocksSource(knobAt(DeepBlocksBase, rung: rung)), written: written)
+	sourceBytes = sourceBytes + try writeRungFile(dir, name: "e_chain", source: callChainSource(knobAt(CallChainBase, rung: rung)), written: written)
+	sourceBytes = sourceBytes + try writeRungFile(dir, name: "f_loops", source: pressuredLoopsSource(knobAt(PressuredLoopsBase, rung: rung)), written: written)
+	sourceBytes = sourceBytes + try writeRungFile(dir, name: "g_main", source: mainSource(fileCount, funcCount: funcCount, chainLength: knobAt(CallChainBase, rung: rung)), written: written)
+
+	try pruneRungDir(dir, generated: written)
 
 	return ScaleRung.create(rung, dir: dir, sourceBytes: sourceBytes)
 end 'generateRung'
 
 // Write one generated file, returning its byte length so the caller can total the rung's source
-// size without stat-ing the directory back.
-function writeRungFile(dir FilePath, name String, source String) returns SourceByteCount throws CompileError
-	let path = dir.join("{name}{MaxonExtension}")
-	try File.writeText(path, content: source) otherwise throw CompileError.readError(path)
+// size without stat-ing the directory back, and recording its NAME so the prune below knows it
+// belongs there.
+function writeRungFile(dir FilePath, name String, source String, written StringArray) returns SourceByteCount throws ScaleError
+	let fileName = "{name}{MaxonExtension}"
+	let path = dir.join(fileName)
+	try File.writeText(path, content: source) otherwise throw ScaleError.reason("could not write {path.toString()}")
+	written.push(fileName)
 	return source.byteLength() as SourceByteCount
 end 'writeRungFile'
+
+// Delete everything in the rung directory that this run did not just generate — see the header.
+//
+// A rung directory is not a place, it is a VALUE: it is exactly the program this rung's knobs
+// describe. Anything else in it — a stale `b_funcs_9.maxon` from a run with a bigger `FilesBase`, an
+// executable an older version of the runner wrote there — is compiled or listed by `build <dir>`, and
+// so is part of the measurement, silently and unreproducibly.
+//
+// A stale SUBDIRECTORY is a THROW rather than a delete: `build <dir>` walks recursively, so its
+// contents would be compiled, and the stdlib has no recursive remove with which to fix it. Refusing
+// with the path is the honest answer; the fix is one `rm -rf` and it should be a person's decision,
+// not this generator's.
+function pruneRungDir(dir FilePath, generated StringArray) throws ScaleError
+	let entries = try Directory.list(dir) otherwise throw ScaleError.reason("could not list the rung directory {dir.toString()}")
+
+	for entry in entries 'each'
+		if Directory.isDirectory(entry) 'staleSubdir'
+			throw ScaleError.reason("{entry.toString()} is a directory inside a rung, and `build <dir>` walks recursively — so it would be COMPILED as part of this rung and the measurement would be of a program this generator did not write. Delete the corpus root and re-run.")
+		end 'staleSubdir'
+
+		if generated.contains(entry.filename()) 'generated'
+			continue
+		end 'generated'
+
+		try File.delete(entry) otherwise throw ScaleError.reason("could not delete the stale file {entry.toString()} from the rung directory, and leaving it there would put it in the measurement")
+	end 'each'
+end 'pruneRungDir'
 
 // ===========================================================================================
 // The knobs, as source
@@ -283,7 +330,7 @@ end 'seedSource'
 // The `manyFunctions` + `manyFiles` knobs, which are one piece of work: N functions spread over M
 // real files. Both double per rung, so functions-per-file is constant and the two knobs stay
 // independent — M is what `load`/`merge`/the query spine see, N is what the pass pipeline sees.
-function writeManyFunctions(dir FilePath, fileCount KnobSize, funcCount KnobSize) returns SourceByteCount throws CompileError
+function writeManyFunctions(dir FilePath, fileCount KnobSize, funcCount KnobSize, written StringArray) returns SourceByteCount throws ScaleError
 	// Ceiling division: the last file takes the remainder, and no function is dropped because the
 	// counts did not divide evenly.
 	let perFile = (funcCount + fileCount - 1) / fileCount
@@ -298,7 +345,7 @@ function writeManyFunctions(dir FilePath, fileCount KnobSize, funcCount KnobSize
 			end 'past'
 			out.append(smallFunctionSource(fileIndex, slot: slot, salt: funcIndex))
 		end 'eachFunc'
-		total = total + try writeRungFile(dir, name: "b_funcs_{fileIndex}", source: out)
+		total = total + try writeRungFile(dir, name: "b_funcs_{fileIndex}", source: out, written: written)
 	end 'eachFile'
 	return total
 end 'writeManyFunctions'
@@ -461,3 +508,62 @@ function mainSource(fileCount KnobSize, funcCount KnobSize, chainLength KnobSize
 	out.append("end 'main'\n")
 	return out
 end 'mainSource'
+
+// ===========================================================================================
+// The corpus self-check — THE reason anything the instrument reports can be believed
+// ===========================================================================================
+//
+// The trap in this file's header is not hypothetical, and this is where it is caught. A corpus that
+// folds away leaves the instrument measuring an empty compile at every rung; it would fit a perfect
+// straight line through six near-zeroes and report flawless linearity. That is the most convincing
+// possible wrong answer, and nothing downstream could catch it — every number would look lovely.
+//
+// So before anything is reported: did the compiler actually EMIT anything, and did it emit
+// proportionally more of it as the program grew? Emitted code bytes are fitted against source bytes
+// exactly as a phase's cost is, and a flat or sublinear result means the RUN IS BROKEN.
+//
+// This is the one condition the instrument exits NON-ZERO for, and the distinction is the whole
+// design: a surprising number is a reading to explain, but a degenerate corpus did not produce a
+// surprising reading — it produced no reading at all, about a compiler it never ran on a program
+// that was never there.
+
+// The floor emitted code must clear. An exponent of 1.0 is "the compiler emits code proportional to
+// the program", and anything much below that means the program is being optimized away rather than
+// compiled.
+//
+// Not 1.0 exactly: real code size grows slightly SUBLINEARLY here, because a rung's fixed overhead
+// (the entry stub, the runtime floor) is amortized over more program as the ladder climbs. 0.85 is
+// comfortably below that and nowhere near the ~0.0 a folded-flat corpus produces.
+export let MinCodeGrowthExponent = 850 as Milli
+
+// A growth check needs two points. `--rungs=1` is a legal ladder — it measures one program, and its
+// per-rung numbers are as exact as any other run's — but nothing about GROWTH can be said from it,
+// this check included. The runner says so; it does not fail the run for a ladder it was asked for.
+export let MinRungsForGrowth = 2
+
+// The corpus's own growth curve — emitted code against source — rather than the compiler's.
+export function fitCodeGrowth(results RungResultArray) returns FitResult
+	var codes = FitPointArray.create()
+	for result in results 'each'
+		codes.push(result.codeBytes as Real)
+	end 'each'
+	return fitPowerLaw(sourceSizes(results), costs: codes)
+end 'fitCodeGrowth'
+
+export function assertCorpusCompiled(results RungResultArray) throws ScaleError
+	if results.count() < MinRungsForGrowth 'tooFewRungs'
+		return
+	end 'tooFewRungs'
+
+	match fitCodeGrowth(results) 'f'
+		unfittable(reason) then throw ScaleError.reason("emitted code size could not be fitted against source size ({reason}) — the corpus compiled to nothing, so nothing was measured")
+		fitted(exponent, _) then try assertCodeGrewWithSource(exponent)
+	end 'f'
+end 'assertCorpusCompiled'
+
+function assertCodeGrewWithSource(exponent Milli) throws ScaleError
+	if exponent >= MinCodeGrowthExponent 'grew'
+		return
+	end 'grew'
+	throw ScaleError.reason("emitted code grows as source^{milliText(exponent)}, below the floor of {milliText(MinCodeGrowthExponent)} — the corpus FOLDED AWAY rather than compiling, so every number this run produced is a number about nothing. The generated programs must be fold-resistant (see this file's header): seed every value from a loop-carried accumulator or a call result.")
+end 'assertCodeGrewWithSource'

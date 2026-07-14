@@ -1377,23 +1377,38 @@ The splitter's own growth exponent on the intra-function shape falls from **2.07
 > **These numbers are now MEASURED ON EVERY RUN, not remembered.** Every figure in this section — and
 > every linearity claim below — used to rest on throwaway generated programs that were never
 > committed, which made them unfalsifiable and free to regress silently. `maxon-shv2 scale-test` is
-> the committed instrument: a six-rung ladder (each rung double the last), a fitted growth exponent
-> per phase in TIME and in ALLOCATIONS, and exact per-rung memory goldens. See
-> `Testing/ScaleTestRunner.maxon`, or run it through `mcp__maxon-dev__run_scale_test`.
+> the committed instrument: a six-rung ladder (each rung double the last), and a fitted growth
+> exponent per phase in TIME and in ALLOCATIONS. See `Testing/ScaleTestRunner.maxon`, or run it
+> through `mcp__maxon-dev__run_scale_test`.
+>
+> ⚠ **IT IS AN INSTRUMENT, NOT A GATE.** It renders no verdict, there is nothing to pass, and there is
+> no green light to chase — a curve that looks surprising is a **reading to explain**. (It once had
+> budgets, memory goldens and a PASS/FAIL/VOID/NOISY verdict; when `regalloc:liveness` reported NOISY,
+> the response was to change the *instrument* so it would stop complaining. That is optimizing the
+> gauge instead of the engine, and it is only ever tempting when there is a gauge that can be wrong.)
+> **The deliverable is the trend: [`docs/optimization-log.md`](../docs/optimization-log.md)**, a dated
+> table you read downwards. `--note="<why>"` appends a row; the last row is what every run reports its
+> delta from.
 >
 > **As measured, on the committed corpus (6 rungs, 27 KB → 922 KB of source):**
 >
-> | curve | exponent | budget |
+> | curve | time exponent | allocation exponent |
 > |---|---|---|
-> | every frontend + mid phase (`lex`, `parse`, `merge`, `lowerMaxonToStd`, `isel`, `encode`, …) | **0.93 – 1.14** | 1.25 |
-> | `regalloc:splitting` | **1.93** | 2.20 (known gap, below) |
-> | `regalloc:liveness` | **1.72** | 2.20 (known gap, below) |
-> | `regalloc` (phase, = the sum of the above) | **1.70** | 2.20 |
-> | aggregate compile time | **1.48** | reported, not gated |
+> | every frontend + mid phase (`lex`, `parse`, `merge`, `lowerMaxonToStd`, `isel`, `encode`, …) | **0.90 – 1.40** | **0.97 – 0.99** |
+> | `regalloc:splitting` | **2.04** | **1.49** |
+> | `regalloc:liveness` | **1.87** | **1.62** |
+> | `regalloc` (phase, = the sum of the above) | **1.82** | **1.39** |
+> | aggregate | **1.62** | **1.18** |
 >
-> So the linearity claim HOLDS for the whole compiler **except** the register allocator's splitter,
-> exactly as this section says — and that exception is now a number a gate watches rather than a
-> caveat in a document.
+> The **allocation** exponent is exact and bit-for-bit reproducible; the **time** exponent reproduces
+> to ~1% and its absolute milliseconds mean nothing. So the linearity claim HOLDS for the whole
+> compiler **except** the register allocator's splitter, exactly as this section says — and that
+> exception is now a number watched down the pages of a log rather than a caveat in a document.
+>
+> The fit's **residual** is reported and is *not* a noise detector: it measures how well ONE power law
+> describes a curve, and a curve that is a SUM of two (any parent; and `regalloc:liveness`, whose
+> `timedLiveness` bills one liveness per function *and* one after every split into a single bucket)
+> bends on a perfectly idle machine.
 >
 > The suite found one thing this section did not know about: `elimTrivialBlockArgs` was **quadratic**
 > (exponent 2.02 in time, 1.99 in allocations) and had become **54% of a large compile**. It applied

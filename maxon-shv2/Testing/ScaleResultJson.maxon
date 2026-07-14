@@ -1,29 +1,34 @@
 // ScaleResultJson — `--result-json=<path>`: the whole run as a structured document.
 //
-// The MCP tool that drives this suite must not SCRAPE the report. The report is a padded ASCII
+// The MCP tool that drives this instrument must not SCRAPE the report. The report is a padded ASCII
 // table whose columns exist to be read by a person, and the day a phase name outgrows its column a
 // scrape would silently mis-parse rather than fail — which is exactly the failure mode the metrics
 // TSV was introduced to avoid one level down (see MetricsEmit's header). A caller that wants data
 // gets data.
 //
+// THERE IS NO `verdict` FIELD, and there is no `budget` and no `gated`. This suite renders no
+// verdict: it reports numbers and their deltas from the last recorded run, and the caller — a person
+// or a model — reads them. A field named `verdict` would invite exactly the reflex the whole redesign
+// removed: look for the green light, and if it is not green, make it green.
+//
 // Shape:
 //   {
-//     "verdict": "PASS" | "FAIL" | "VOID" | "NOISY",
-//     "reasons": [ ... ],                  // why, when it is not PASS
 //     "rungs":  [ { rung, sourceBytes, codeBytes, nanos, allocs, frees, bytes,
+//                   allocsDelta?, bytesDelta?,        // vs the last logged run; ABSENT if there is none
 //                   phases:   [ {name, nanos, allocs, frees, bytes} ],
 //                   regalloc: [ {name, nanos, allocs, frees, bytes} ] } ],
-//     "curves": [ { name, exponent, budget, residual, sharePermille, gated, verdict } ],
-//     "degeneracy": { codeGrowthExponent, floor, ok }
+//     "curves": [ { name,
+//                   timeSharePermille,  timeFitted,  timeExponent?,  timeResidual?,  timeExponentDelta?,
+//                   allocSharePermille, allocFitted, allocExponent?, allocResidual?, allocExponentDelta? } ],
+//     "corpus": { codeGrowthExponent?, floor, grew },
+//     "previous": { present, date?, note? }
 //   }
 //
-// Exponents, budgets and residuals are FIXED-POINT THOUSANDTHS, the same units the report prints
-// and the baseline commits (1.037 is 1037). One representation end to end: no consumer has to know
-// that a number changed units on its way out.
+// Exponents, residuals and deltas are FIXED-POINT THOUSANDTHS, the same units the report prints and
+// the trend log records (1.037 is 1037). One representation end to end: no consumer has to know that
+// a number changed units on its way out.
 
-export let ScaleJsonVerdictKey = "verdict"
-
-export function writeResultJson(path String, verdict ScaleVerdict, results RungResultArray, baseline ScaleBaseline)
+export function writeResultJson(path String, results RungResultArray, curves ScaleCurveArray, trend ScaleTrend)
 	let target = try FilePath.from(path) otherwise 'badPath'
 		logError(LogCategory.compiler, message: function() gives "Invalid --result-json path '{path}'")
 		return
@@ -33,20 +38,17 @@ export function writeResultJson(path String, verdict ScaleVerdict, results RungR
 	var keys = StringArray.create()
 	var children = JsonNodeIdArray.create()
 
-	keys.push(ScaleJsonVerdictKey)
-	children.push(doc.add(JsonNode.stringNode(verdict.label())))
-
-	keys.push("reasons")
-	children.push(reasonsNode(doc, verdict: verdict))
-
 	keys.push("rungs")
-	children.push(rungsNode(doc, results: results))
+	children.push(rungsNode(doc, results: results, trend: trend))
 
 	keys.push("curves")
-	children.push(curvesNode(doc, results: results, baseline: baseline))
+	children.push(curvesNode(doc, curves: curves, trend: trend))
 
-	keys.push("degeneracy")
-	children.push(degeneracyNode(doc, results: results))
+	keys.push("corpus")
+	children.push(corpusNode(doc, results: results))
+
+	keys.push("previous")
+	children.push(previousNode(doc, trend: trend))
 
 	doc.root = doc.add(JsonNode.objectNode(keys, children: children))
 
@@ -56,45 +58,30 @@ export function writeResultJson(path String, verdict ScaleVerdict, results RungR
 	end 'writeFailed'
 end 'writeResultJson'
 
-// Why the verdict was what it was. PASS carries an empty list rather than being absent — a consumer
-// should never have to distinguish "no reasons key" from "no reasons".
-function reasonsNode(doc JsonDoc, verdict ScaleVerdict) returns JsonNodeId
-	var items = JsonNodeIdArray.create()
-	match verdict 'v'
-		pass then break 'v'
-		fail(reasons) then appendStrings(doc, items: items, lines: reasons)
-		degenerate(reason) then items.push(doc.add(JsonNode.stringNode(reason)))
-		noisy(reason) then items.push(doc.add(JsonNode.stringNode(reason)))
-	end 'v'
-	return doc.add(JsonNode.arrayNode(items))
-end 'reasonsNode'
+// ===========================================================================================
+// Rungs
+// ===========================================================================================
 
-function appendStrings(doc JsonDoc, items JsonNodeIdArray, lines StringArray)
-	for line in lines 'each'
-		items.push(doc.add(JsonNode.stringNode(line)))
-	end 'each'
-end 'appendStrings'
-
-function rungsNode(doc JsonDoc, results RungResultArray) returns JsonNodeId
+function rungsNode(doc JsonDoc, results RungResultArray, trend ScaleTrend) returns JsonNodeId
 	var items = JsonNodeIdArray.create()
-	for result in results 'eachRung'
+	for i in 0 upto results.count() 'eachRung'
+		let result = try results.get(i) otherwise panic("rungsNode: i < count but results.get({i}) failed")
+
 		var keys = StringArray.create()
 		var children = JsonNodeIdArray.create()
 
-		keys.push("rung")
-		children.push(doc.add(JsonNode.numberNode(result.rung as JsonFloat)))
-		keys.push("sourceBytes")
-		children.push(doc.add(JsonNode.numberNode(result.sourceBytes as JsonFloat)))
-		keys.push("codeBytes")
-		children.push(doc.add(JsonNode.numberNode(result.codeBytes as JsonFloat)))
-		keys.push("nanos")
-		children.push(doc.add(JsonNode.numberNode(result.total.nanos as JsonFloat)))
-		keys.push("allocs")
-		children.push(doc.add(JsonNode.numberNode(result.total.allocs as JsonFloat)))
-		keys.push("frees")
-		children.push(doc.add(JsonNode.numberNode(result.total.frees as JsonFloat)))
-		keys.push("bytes")
-		children.push(doc.add(JsonNode.numberNode(result.total.bytes as JsonFloat)))
+		pushNumber(doc, keys: keys, children: children, key: "rung", value: result.rung as JsonFloat)
+		pushNumber(doc, keys: keys, children: children, key: "sourceBytes", value: result.sourceBytes as JsonFloat)
+		pushNumber(doc, keys: keys, children: children, key: "codeBytes", value: result.codeBytes as JsonFloat)
+		pushNumber(doc, keys: keys, children: children, key: "nanos", value: result.total.nanos as JsonFloat)
+		pushNumber(doc, keys: keys, children: children, key: "allocs", value: result.total.allocs as JsonFloat)
+		pushNumber(doc, keys: keys, children: children, key: "frees", value: result.total.frees as JsonFloat)
+		pushNumber(doc, keys: keys, children: children, key: "bytes", value: result.total.bytes as JsonFloat)
+
+		// The deltas the report prints, so a consumer never has to re-derive them from the log. ABSENT
+		// rather than zero when there is nothing to compare against: a zero delta means "identical",
+		// which is a strong claim, and it must not be what "no previous run" looks like.
+		addMemoryDeltas(doc, keys: keys, children: children, result: result, rung: i, trend: trend)
 
 		var phases = JsonNodeIdArray.create()
 		for phase in CompilePhase.allCases 'eachPhase'
@@ -115,164 +102,166 @@ function rungsNode(doc JsonDoc, results RungResultArray) returns JsonNodeId
 	return doc.add(JsonNode.arrayNode(items))
 end 'rungsNode'
 
+function addMemoryDeltas(doc JsonDoc, keys StringArray, children JsonNodeIdArray, result RungResult, rung LadderIndex, trend ScaleTrend)
+	match trend.memory 'm'
+		absent then return
+		present(_, _, allocs, bytes) then addLoggedDeltas(doc, keys: keys, children: children, result: result, rung: rung, loggedAllocs: allocs, loggedBytes: bytes)
+	end 'm'
+end 'addMemoryDeltas'
+
+function addLoggedDeltas(doc JsonDoc, keys StringArray, children JsonNodeIdArray, result RungResult, rung LadderIndex, loggedAllocs AllocCountArray, loggedBytes ByteCountArray)
+	let beforeAllocs = try loggedAllocs.get(rung) otherwise 'notLogged'
+		// This run climbed further than the logged one. The extra rungs have no past, and saying so by
+		// omission is exactly right.
+		return
+	end 'notLogged'
+	let beforeBytes = try loggedBytes.get(rung) otherwise panic("addLoggedDeltas: the two logged columns are the same length — loadScaleTrend refuses a log where they are not")
+
+	pushNumber(doc, keys: keys, children: children, key: "allocsDelta", value: (result.total.allocs as Delta) - beforeAllocs)
+	pushNumber(doc, keys: keys, children: children, key: "bytesDelta", value: (result.total.bytes as Delta) - beforeBytes)
+end 'addLoggedDeltas'
+
 function metricNode(doc JsonDoc, name String, metric PhaseMetric) returns JsonNodeId
 	var keys = StringArray.create()
 	var children = JsonNodeIdArray.create()
 	keys.push("name")
 	children.push(doc.add(JsonNode.stringNode(name)))
-	keys.push("nanos")
-	children.push(doc.add(JsonNode.numberNode(metric.nanos as JsonFloat)))
-	keys.push("allocs")
-	children.push(doc.add(JsonNode.numberNode(metric.allocs as JsonFloat)))
-	keys.push("frees")
-	children.push(doc.add(JsonNode.numberNode(metric.frees as JsonFloat)))
-	keys.push("bytes")
-	children.push(doc.add(JsonNode.numberNode(metric.bytes as JsonFloat)))
+	pushNumber(doc, keys: keys, children: children, key: "nanos", value: metric.nanos as JsonFloat)
+	pushNumber(doc, keys: keys, children: children, key: "allocs", value: metric.allocs as JsonFloat)
+	pushNumber(doc, keys: keys, children: children, key: "frees", value: metric.frees as JsonFloat)
+	pushNumber(doc, keys: keys, children: children, key: "bytes", value: metric.bytes as JsonFloat)
 	return doc.add(JsonNode.objectNode(keys, children: children))
 end 'metricNode'
 
-// Every curve the suite fitted, with its budget and whether it was actually GATED.
-//
-// `gated: false` is the load-bearing field. A phase below the share threshold is skipped, and a
-// consumer that could not tell a skipped curve from a passing one would read a suite that gated
-// nothing as a suite that passed everything.
-function curvesNode(doc JsonDoc, results RungResultArray, baseline ScaleBaseline) returns JsonNodeId
+// ===========================================================================================
+// Curves
+// ===========================================================================================
+
+// Every curve the run fitted, in both of its measurements, with the delta from the last recorded run.
+function curvesNode(doc JsonDoc, curves ScaleCurveArray, trend ScaleTrend) returns JsonNodeId
 	var items = JsonNodeIdArray.create()
+	for curve in curves 'eachCurve'
+		var keys = StringArray.create()
+		var children = JsonNodeIdArray.create()
 
-	for phase in CompilePhase.allCases 'eachPhase'
-		var costs = FitPointArray.create()
-		for result in results 'eachRung'
-			costs.push(result.phaseAt(phase).nanos as Real)
-		end 'eachRung'
-		items.push(curveNode(doc, curve: phaseCurveName(phase), results: results, costs: costs, baseline: baseline, share: topRungShare(results, nanos: topPhaseNanos(results, phase: phase))))
-	end 'eachPhase'
+		keys.push("name")
+		children.push(doc.add(JsonNode.stringNode(curve.name)))
 
-	for sub in RegAllocPhase.allCases 'eachSub'
-		var costs = FitPointArray.create()
-		for result in results 'eachRung'
-			costs.push(result.regAllocAt(sub).nanos as Real)
-		end 'eachRung'
-		items.push(curveNode(doc, curve: regAllocCurveName(sub), results: results, costs: costs, baseline: baseline, share: topRungShare(results, nanos: topRegAllocNanos(results, sub: sub))))
-	end 'eachSub'
+		addFit(doc, keys: keys, children: children, prefix: TimeFieldPrefix, fit: curve.time, share: curve.timeShare, previous: trend.timeExponents, curve: curve.name)
+		addFit(doc, keys: keys, children: children, prefix: AllocFieldPrefix, fit: curve.allocs, share: curve.allocShare, previous: trend.allocExponents, curve: curve.name)
 
-	var totals = FitPointArray.create()
-	var allocs = FitPointArray.create()
-	for result in results 'eachRung'
-		totals.push(result.total.nanos as Real)
-		allocs.push(result.total.allocs as Real)
-	end 'eachRung'
-	items.push(curveNode(doc, curve: BaselineCurveAggregate, results: results, costs: totals, baseline: baseline, share: ScaleFullShare))
-	items.push(curveNode(doc, curve: BaselineCurveMemory, results: results, costs: allocs, baseline: baseline, share: ScaleFullShare))
-
+		items.push(doc.add(JsonNode.objectNode(keys, children: children)))
+	end 'eachCurve'
 	return doc.add(JsonNode.arrayNode(items))
 end 'curvesNode'
 
-export let ScaleFullShare = 1000 as Milli
+// The two measurements every curve carries. Prefixes rather than a nested object, because a consumer
+// asking "did any phase's allocation exponent climb" wants one key per row, not a walk.
+let TimeFieldPrefix = "time"
+let AllocFieldPrefix = "alloc"
 
-function topPhaseNanos(results RungResultArray, phase CompilePhase) returns DurationNanos
-	let top = try results.get(results.count() - 1) otherwise panic("topPhaseNanos: results is empty")
-	return top.phaseAt(phase).nanos
-end 'topPhaseNanos'
+// One measurement of one curve. `<prefix>Fitted: false` is the load-bearing field: a curve with
+// nothing to fit has no exponent at all, and a consumer that read a missing `exponent` as zero would
+// read "this phase did no measurable work" as "this phase is perfectly flat".
+function addFit(doc JsonDoc, keys StringArray, children JsonNodeIdArray, prefix String, fit FitResult, share Milli, previous ExponentByCurve, curve String)
+	pushNumber(doc, keys: keys, children: children, key: "{prefix}SharePermille", value: share)
 
-function topRegAllocNanos(results RungResultArray, sub RegAllocPhase) returns DurationNanos
-	let top = try results.get(results.count() - 1) otherwise panic("topRegAllocNanos: results is empty")
-	return top.regAllocAt(sub).nanos
-end 'topRegAllocNanos'
-
-function topRungShare(results RungResultArray, nanos DurationNanos) returns Milli
-	let top = try results.get(results.count() - 1) otherwise panic("topRungShare: results is empty")
-	if top.total.nanos == 0 'noTotal'
-		return 0
-	end 'noTotal'
-	return ((nanos * ScaleFullShare) / top.total.nanos) as Milli
-end 'topRungShare'
-
-function curveNode(doc JsonDoc, curve String, results RungResultArray, costs FitPointArray, baseline ScaleBaseline, share Milli) returns JsonNodeId
-	var sizes = FitPointArray.create()
-	for result in results 'each'
-		sizes.push(result.sourceBytes as Real)
-	end 'each'
-
-	var keys = StringArray.create()
-	var children = JsonNodeIdArray.create()
-
-	keys.push("name")
-	children.push(doc.add(JsonNode.stringNode(curve)))
-	keys.push("sharePermille")
-	children.push(doc.add(JsonNode.numberNode(share)))
-	keys.push("gated")
-	children.push(doc.add(JsonNode.boolNode(share >= MinPhaseShareMilli)))
-
-	let budget = try baseline.budgetFor(curve) otherwise 0
-	keys.push("budget")
-	children.push(doc.add(JsonNode.numberNode(budget)))
-
-	match fitPowerLaw(sizes, costs: costs) 'f'
-		unfittable(reason) then addUnfittable(doc, keys: keys, children: children, reason: reason)
-		fitted(exponent, residual) then addFitted(doc, keys: keys, children: children, exponent: exponent, residual: residual, budget: budget, share: share)
+	match fit 'f'
+		unfittable(reason) then addUnfittable(doc, keys: keys, children: children, prefix: prefix, reason: reason)
+		fitted(exponent, residual) then addFitted(doc, keys: keys, children: children, prefix: prefix, exponent: exponent, residual: residual, previous: previous, curve: curve)
 	end 'f'
+end 'addFit'
 
-	return doc.add(JsonNode.objectNode(keys, children: children))
-end 'curveNode'
-
-function addUnfittable(doc JsonDoc, keys StringArray, children JsonNodeIdArray, reason String)
-	keys.push("fitted")
+function addUnfittable(doc JsonDoc, keys StringArray, children JsonNodeIdArray, prefix String, reason String)
+	keys.push("{prefix}Fitted")
 	children.push(doc.add(JsonNode.boolNode(false)))
-	keys.push("reason")
+	keys.push("{prefix}Reason")
 	children.push(doc.add(JsonNode.stringNode(reason)))
 end 'addUnfittable'
 
-function addFitted(doc JsonDoc, keys StringArray, children JsonNodeIdArray, exponent Milli, residual Milli, budget Milli, share Milli)
-	keys.push("fitted")
+function addFitted(doc JsonDoc, keys StringArray, children JsonNodeIdArray, prefix String, exponent Milli, residual Milli, previous ExponentByCurve, curve String)
+	keys.push("{prefix}Fitted")
 	children.push(doc.add(JsonNode.boolNode(true)))
-	keys.push("exponent")
-	children.push(doc.add(JsonNode.numberNode(exponent)))
-	keys.push("residual")
-	children.push(doc.add(JsonNode.numberNode(residual)))
-	keys.push("verdict")
-	children.push(doc.add(JsonNode.stringNode(curveVerdictLabel(exponent, residual: residual, budget: budget, share: share))))
+	pushNumber(doc, keys: keys, children: children, key: "{prefix}Exponent", value: exponent)
+	pushNumber(doc, keys: keys, children: children, key: "{prefix}Residual", value: residual)
+
+	let before = try previous.get(curve) otherwise 'noPrevious'
+		return
+	end 'noPrevious'
+	pushNumber(doc, keys: keys, children: children, key: "{prefix}ExponentDelta", value: exponent - before)
 end 'addFitted'
 
-// One curve's own verdict, by exactly the rules ScaleGates applies — skipped if too small to have
-// an opinion, NOISY if its points do not lie on a curve, then over/under budget.
-function curveVerdictLabel(exponent Milli, residual Milli, budget Milli, share Milli) returns String
-	if share < MinPhaseShareMilli 'skipped'
-		return "SKIPPED"
-	end 'skipped'
-	if residual > MaxCleanResidualMilli 'noisy'
-		return "NOISY"
-	end 'noisy'
-	if exponent > budget 'over'
-		return "FAIL"
-	end 'over'
-	return "PASS"
-end 'curveVerdictLabel'
+// ===========================================================================================
+// The corpus self-check, and what this run is measured against
+// ===========================================================================================
 
-// The degeneracy self-check, exposed so a consumer can see the number rather than trust the verdict.
-function degeneracyNode(doc JsonDoc, results RungResultArray) returns JsonNodeId
-	var sizes = FitPointArray.create()
-	var codes = FitPointArray.create()
-	for result in results 'each'
-		sizes.push(result.sourceBytes as Real)
-		codes.push(result.codeBytes as Real)
-	end 'each'
-
+// Exposed so a consumer can see the NUMBER rather than trust a flag. `grew: false` is the one
+// condition the runner exits non-zero for — the corpus folded away and nothing was measured — and a
+// consumer looking at a set of impossibly linear curves deserves to see why they are not to be
+// believed.
+function corpusNode(doc JsonDoc, results RungResultArray) returns JsonNodeId
 	var keys = StringArray.create()
 	var children = JsonNodeIdArray.create()
-	keys.push("floor")
-	children.push(doc.add(JsonNode.numberNode(MinCodeGrowthExponent)))
+	pushNumber(doc, keys: keys, children: children, key: "floor", value: MinCodeGrowthExponent)
 
-	match fitPowerLaw(sizes, costs: codes) 'f'
-		unfittable(reason) then addUnfittable(doc, keys: keys, children: children, reason: reason)
-		fitted(exponent, _) then addDegeneracyFit(doc, keys: keys, children: children, exponent: exponent)
+	match fitCodeGrowth(results) 'f'
+		unfittable(reason) then addUngrownCorpus(doc, keys: keys, children: children, reason: reason)
+		fitted(exponent, _) then addCorpusGrowth(doc, keys: keys, children: children, exponent: exponent)
 	end 'f'
 
 	return doc.add(JsonNode.objectNode(keys, children: children))
-end 'degeneracyNode'
+end 'corpusNode'
 
-function addDegeneracyFit(doc JsonDoc, keys StringArray, children JsonNodeIdArray, exponent Milli)
-	keys.push("codeGrowthExponent")
-	children.push(doc.add(JsonNode.numberNode(exponent)))
-	keys.push("ok")
+function addUngrownCorpus(doc JsonDoc, keys StringArray, children JsonNodeIdArray, reason String)
+	keys.push("grew")
+	children.push(doc.add(JsonNode.boolNode(false)))
+	keys.push("reason")
+	children.push(doc.add(JsonNode.stringNode(reason)))
+end 'addUngrownCorpus'
+
+function addCorpusGrowth(doc JsonDoc, keys StringArray, children JsonNodeIdArray, exponent Milli)
+	pushNumber(doc, keys: keys, children: children, key: "codeGrowthExponent", value: exponent)
+	keys.push("grew")
 	children.push(doc.add(JsonNode.boolNode(exponent >= MinCodeGrowthExponent)))
-end 'addDegeneracyFit'
+end 'addCorpusGrowth'
+
+// Which recorded run every delta above is a delta FROM. Without it the deltas are unattributed, and a
+// consumer comparing two result documents could not tell they had different reference points.
+function previousNode(doc JsonDoc, trend ScaleTrend) returns JsonNodeId
+	match trend.memory 'm'
+		absent then return noPreviousNode(doc)
+		present(date, note, _, _) then return previousRunNode(doc, date: date, note: note)
+	end 'm'
+end 'previousNode'
+
+function noPreviousNode(doc JsonDoc) returns JsonNodeId
+	var keys = StringArray.create()
+	var children = JsonNodeIdArray.create()
+	keys.push("present")
+	children.push(doc.add(JsonNode.boolNode(false)))
+	return doc.add(JsonNode.objectNode(keys, children: children))
+end 'noPreviousNode'
+
+function previousRunNode(doc JsonDoc, date String, note String) returns JsonNodeId
+	var keys = StringArray.create()
+	var children = JsonNodeIdArray.create()
+	keys.push("present")
+	children.push(doc.add(JsonNode.boolNode(true)))
+	keys.push("date")
+	children.push(doc.add(JsonNode.stringNode(date)))
+	keys.push("note")
+	children.push(doc.add(JsonNode.stringNode(note)))
+	return doc.add(JsonNode.objectNode(keys, children: children))
+end 'previousRunNode'
+
+// ===========================================================================================
+// The one place a key and its value are appended
+// ===========================================================================================
+
+// `keys` and `children` are PARALLEL arrays that `JsonNode.objectNode` zips, so a push to one without
+// the other silently shifts every field after it — a document whose values belong to the wrong names.
+// Thirty-odd numbers go into this document; they all go through here.
+function pushNumber(doc JsonDoc, keys StringArray, children JsonNodeIdArray, key String, value JsonFloat)
+	keys.push(key)
+	children.push(doc.add(JsonNode.numberNode(value)))
+end 'pushNumber'

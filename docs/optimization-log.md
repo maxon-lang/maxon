@@ -1,24 +1,30 @@
 # Optimization log
 
-What the compiler's memory traffic has actually done, change by change.
+What the compiler's cost has actually done, change by change. **This is `scale-test`'s deliverable.**
 
-**Read the tables downwards.** Each row is one accepted change, dated; each column is one rung of the
-scaling ladder. A rung's column *is* its history, so the progression is the thing you see rather than
-something you have to reconstruct.
+**Read the tables downwards.** Each row is one recorded change, dated. A column *is* its history, so
+the progression is the thing you see rather than something you have to reconstruct.
+
+`scale-test` renders **no verdict**. There is nothing to pass, no golden to accept, and no light to
+turn green — it is an instrument, and this document is what it is an instrument *for*. The last row
+of each table below is the previous datapoint: every run reads it and reports the delta from it, so
+you still see exactly what moved, without anything failing.
 
 ## How rows get here
 
 Rows are **appended by the tool, not by hand**. Running
 
 ```
-maxon-shv2 scale-test --update-required --note="<why>"
+maxon-shv2 scale-test --note="<what changed, and why the numbers moved>"
 ```
 
-accepts a new set of memory goldens, and that acceptance — a human deciding the compiler *should*
-allocate differently now — is the only event recorded. A scale-test run on its own proves nothing and
-writes nothing; it happens dozens of times a day against dirty trees and abandoned experiments. The
-`--note` is mandatory: the suite can see exactly *what* moved and can never see *why*, and six months
-from now a number with no reason attached is worth almost nothing. See
+records this run as a new dated row in all three tables. **A run without `--note` records nothing** —
+scale-test is run dozens of times a day against dirty trees and abandoned experiments, and a log of
+all of them would be a log nobody reads. If nothing actually moved, it says so and still logs nothing.
+
+The `--note` is not a formality. The instrument can see exactly *what* moved and can never see *why*,
+and six months from now a number with no reason attached is worth almost nothing. So the reason is
+demanded at the one moment it is still known: from you, now. See
 [`maxon-shv2/Testing/ScaleHistory.maxon`](../maxon-shv2/Testing/ScaleHistory.maxon).
 
 ## Reading the numbers
@@ -26,18 +32,23 @@ from now a number with no reason attached is worth almost nothing. See
 The rungs are generated programs, each **double** the last, so rung 5 is 32× rung 0. Rung 0 shows
 constant-factor wins; only rung 5 shows whether a change bent the *curve*.
 
-These are the compiler's own allocation counts and byte volumes while compiling that rung — **not**
-peak resident memory, which nothing currently measures. They are counted rather than sampled and are
-bit-for-bit reproducible: the same source through the same compiler makes exactly the same
-allocations on an idle machine or a loaded one. That is what makes them a golden rather than a
-budget.
+| what | how much to trust it |
+| --- | --- |
+| **allocations, bytes** (per rung) | **Exact and bit-for-bit reproducible.** The same source through the same compiler makes exactly the same allocations, on an idle machine or a loaded one. A number here that moved, moved for a *reason*. |
+| **allocation exponent** | **Exact**, for the same reason: it is fitted through points that cannot move. |
+| **time exponent** | Reproduces to about **1%**. A poor boolean and an excellent tracked number. |
+| **milliseconds** | Machine-dependent. Never in this log, and never conclude anything from them. |
 
-Frees are gated in `scale-baseline.tsv` but not tabulated here — they track allocations almost
-exactly, so a third table would be a near-duplicate. What they are *for* is the leak check:
-`allocs - frees` must not grow.
+These are the compiler's own allocation counts and byte volumes while compiling that rung — **not**
+peak resident memory, which nothing currently measures.
+
+Frees are measured and reported but not tabulated here: they track allocations almost exactly, so a
+fourth table would be a near-duplicate paid for in width. They are in `--result-json` for anyone who
+wants them.
 
 Dates are UTC. The columns assume a six-rung ladder; changing the ladder's length changes what the
-numbers mean, so that would want a new table rather than more columns.
+numbers mean, so the tool refuses to append a row of a different width rather than make the tables
+ragged.
 
 ## Allocations
 
@@ -50,6 +61,7 @@ numbers mean, so that would want a new table rather than more columns.
 | 2026-07-14 | Rebase onto the rewritten main: the ladder now sees the for-in index-counter lowering and the compiler-traces-itself work at the same time. Allocs and frees are exactly the for-in commit's; bytes are its numbers plus the constant +8/rung that origin already accepted, and the two compose with no interaction. | 281,775 | 575,590 | 1,226,720 | 2,783,774 | 6,917,212 | 19,261,978 |
 | 2026-07-14 | try_call on an associated-value enum no longer allocates a placeholder EnumDummy: null already means absent, and scope cleanup was already null-guarded, so the dummy was allocated, increffed, decreffed and freed on every successful call without ever being read | 224,996 | 456,886 | 966,324 | 2,168,570 | 5,306,696 | 14,518,054 |
 | 2026-07-14 | P1.0d block scoping: the parser now pushes and pops a real Scope per if/while body — pushScope/popScope existed, were correct, and were never called, so a let inside an if leaked to the function frame. Two Scope containers per function  | 225,935 | 458,593 | 969,351 | 2,173,373 | 5,311,595 | 14,509,321 |
+| 2026-07-14 | scale-test stopped measuring its own residue: the runner wrote each rung's executable and metrics.tsv INTO the rung source directory, which loadProject enumerates before filtering to .maxon, so every run after the first compiled two extra directory entries per rung (+26 allocs, +945 bytes). Outputs now live in the corpus root and stale files are pruned, so a cold and a warm .scale-tmp now agree exactly. The COMPILER is unchanged; every earlier row in these tables was measured warm and is offset by that constant. | 225,909 | 458,567 | 969,325 | 2,173,347 | 5,311,569 | 14,509,295 |
 <!-- scale-history:allocations -->
 
 ## Bytes
@@ -63,15 +75,43 @@ numbers mean, so that would want a new table rather than more columns.
 | 2026-07-14 | Rebase onto the rewritten main: the ladder now sees the for-in index-counter lowering and the compiler-traces-itself work at the same time. Allocs and frees are exactly the for-in commit's; bytes are its numbers plus the constant +8/rung that origin already accepted, and the two compose with no interaction. | 12,113,827 | 25,521,307 | 57,502,895 | 145,153,469 | 438,545,772 | 1,685,625,091 |
 | 2026-07-14 | try_call on an associated-value enum no longer allocates a placeholder EnumDummy: null already means absent, and scope cleanup was already null-guarded, so the dummy was allocated, increffed, decreffed and freed on every successful call without ever being read | 10,092,819 | 21,316,475 | 48,359,471 | 123,847,293 | 383,771,820 | 1,527,346,499 |
 | 2026-07-14 | P1.0d block scoping: the parser now pushes and pops a real Scope per if/while body — pushScope/popScope existed, were correct, and were never called, so a let inside an if leaked to the function frame. Two Scope containers per function  | 10,036,452 | 21,194,700 | 48,086,144 | 123,187,918 | 382,008,573 | 1,522,048,404 |
+| 2026-07-14 | scale-test stopped measuring its own residue: the runner wrote each rung's executable and metrics.tsv INTO the rung source directory, which loadProject enumerates before filtering to .maxon, so every run after the first compiled two extra directory entries per rung (+26 allocs, +945 bytes). Outputs now live in the corpus root and stale files are pruned, so a cold and a warm .scale-tmp now agree exactly. The COMPILER is unchanged; every earlier row in these tables was measured warm and is offset by that constant. | 10,035,504 | 21,193,752 | 48,085,196 | 123,186,970 | 382,007,625 | 1,522,047,456 |
 <!-- scale-history:bytes -->
 
-Since the suite was introduced, rung 5 has gone **36,897,948 → 14,518,054 allocations** (−61%) and
-**2.86 GB → 1.53 GB** (−47%).
+Since the suite was introduced, rung 5 has gone **36,897,948 → 14,509,321 allocations** (−61%) and
+**2.86 GB → 1.52 GB** (−47%).
+
+## Exponents
+
+Each cell is one curve's fitted **growth exponent**: `time / allocations`. 1.0 is linear, 2.0 is
+quadratic, `n/a` is a curve with nothing to fit (a phase that did no measurable work at that rung).
+
+**This is how a creeping quadratic gets caught, and it needs no threshold.** Watch a column climb.
+The allocation exponent is exact; the time exponent reproduces to ~1%, so a few thousandths is the
+instrument breathing and a few hundred is a phase changing shape.
+
+`regalloc:splitting` and `regalloc:liveness` are **known superlinear** — the splitter recomputes
+liveness from scratch after every split ([`ARCHITECTURE.md`](../maxon-shv2/ARCHITECTURE.md), §the
+splitter). `liveness` also *bends*, because `timedLiveness` bills two call sites into one bucket (one
+per function, linear; one after every split, superlinear), so it is a **sum of two power laws** and no
+single exponent describes it. That is what its large residual means, and it means it on a perfectly
+idle machine. Any parent curve — `phase:regalloc`, `aggregate` — bends for the same reason.
+
+The table's columns come from `CompilePhase` and `RegAllocPhase`. If a phase is added or removed the
+tool **refuses to append** rather than silently write a new column set into a table whose historical
+rows have the old one — a column that means one thing above a date and something else below it is a
+trend that lies.
+
+| date | change | phase:load | phase:lex | phase:parse | phase:merge | phase:resolveTypes | phase:semanticCheck | phase:lowerMaxonToStd | phase:pruneDeadBlockArgs | phase:elimTrivialBlockArgs | phase:foldConstOperands | phase:sugarGate | phase:isel | phase:regalloc | phase:prologueEpilogue | phase:runtimeAugment | phase:encode | phase:link | phase:writeExe | phase:emitIr | regalloc:criticalEdges | regalloc:blockOrder | regalloc:splitting | regalloc:liveness | regalloc:coloring | regalloc:ssaDestruction | regalloc:rewrite | aggregate |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 2026-07-14 | scale-test stopped measuring its own residue: the runner wrote each rung's executable and metrics.tsv INTO the rung source directory, which loadProject enumerates before filtering to .maxon, so every run after the first compiled two extra directory entries per rung (+26 allocs, +945 bytes). Outputs now live in the corpus root and stale files are pruned, so a cold and a warm .scale-tmp now agree exactly. The COMPILER is unchanged; every earlier row in these tables was measured warm and is offset by that constant. | 0.478 / 0.597 | 0.844 / 0.983 | 0.819 / 0.987 | 0.866 / 0.984 | 0.747 / 0.928 | 0.872 / 0.980 | 0.865 / 0.985 | 1.026 / 0.980 | 0.870 / 0.884 | 1.079 / 0.982 | 0.807 / 0.984 | 0.803 / 0.982 | 1.554 / 1.386 | 0.795 / 0.983 | 0.433 / 0.000 | 0.856 / 0.969 | 0.790 / 0.768 | 0.674 / 0.681 | n/a / n/a | 0.752 / 0.971 | 0.817 / 0.951 | 1.782 / 1.493 | 1.598 / 1.617 | 0.826 / 0.984 | 0.896 / 0.988 | 0.922 / 0.986 | 1.342 / 1.182 |
+<!-- scale-history:exponents -->
 
 ## Notes on the changes
 
-The four rows above predate the automated log; their numbers are reconstructed from the
-`scale-baseline.tsv` diffs in git, so they are accurate but were not written by the tool.
+The four earliest rows predate the automated log; their numbers are reconstructed from the diffs in
+git, so they are accurate but were not written by the tool. They also predate the exponent table,
+which is why it starts empty.
 
 **`667ec9eee` — a name is a slice of the source, not a heap String.** By far the largest win so far.
 Token text stopped being a heap `String` and became a zero-copy `ByteArray` slice into the source
@@ -130,7 +170,8 @@ re-runs its tests individually, where each one's own leak check attributes it.
 ## What the profile says is left
 
 From `scale-test --per-type`, which attributes every allocation to the TYPE allocated *and* the SCOPE
-that allocated it.
+that allocated it. **The scope column is the one that finds things** — a `String` row can never tell
+you that 150 of them came from `emitFixedToken`.
 
 | what | share | note |
 | --- | ---: | --- |

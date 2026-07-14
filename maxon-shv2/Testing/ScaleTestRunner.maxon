@@ -1,9 +1,40 @@
-// ScaleTestRunner — climb the generated ladder, fit the growth curves, and return a verdict.
+// ScaleTestRunner — climb the generated ladder, measure it, fit it, print it, and record the trend.
 //
-// One rung per compile, six rungs, each double the last. Per rung: spawn the compiler on the rung's
-// directory with `--metrics=<tsv>`, read the TSV back. Then, across the ladder, fit a growth
-// exponent to every phase's time and to the whole compile's memory, and compare each against a
-// committed budget.
+// IT RENDERS NO VERDICT. There is nothing here to pass.
+//
+// `spec-test` proves the compiler is CORRECT and gates on it. This is an INSTRUMENT: it compiles a
+// ladder of generated programs — six rungs, each double the last — measures time and memory per
+// phase per rung, fits a growth exponent to every curve, prints the tables, and appends a datapoint
+// to `docs/optimization-log.md`. The question it answers is *"what has this compiler's cost actually
+// done, change by change"*, not *"may I merge"*.
+//
+// THAT DISTINCTION IS LOAD-BEARING, and it is not a matter of taste. This suite used to have
+// budgets, committed memory goldens, and a PASS / FAIL / VOID / NOISY verdict — and having a light to
+// turn green did exactly the damage a light to turn green does. When `regalloc:liveness` reported
+// NOISY, the response was to change the INSTRUMENT so it would stop complaining, rather than to
+// explain the reading. That is optimizing the gauge instead of the engine, and it is only ever
+// tempting when there is a gauge that can be wrong. There is now no light, so there is nothing to
+// chase: a curve that looks surprising is a READING TO EXPLAIN.
+//
+// (The NOISY guard was also simply unsound — it inferred "the machine was loaded" from a curve-fit
+// residual, and the ALLOCATION curves, whose points are bit-for-bit reproducible and CANNOT move,
+// carried a nonzero residual too. See CurveFit's header for what a residual actually measures.)
+//
+// ===========================================================================================
+// WHAT AN EXIT CODE STILL MEANS
+// ===========================================================================================
+//
+// Exit 0 on any successful run, whatever the numbers say. Non-zero ONLY when the run itself broke
+// and produced no valid data:
+//
+//   - a rung would not compile,
+//   - a metrics file was missing or malformed,
+//   - the generated corpus was DEGENERATE — it folded away, so nothing was measured at all
+//     (ScaleCorpus.assertCorpusCompiled),
+//   - the trend log could not be read, or a `--note` could not honestly be recorded in it.
+//
+// A broken MEASUREMENT is a broken run. A SURPRISING NUMBER is not. The report says which happened,
+// loudly, and never confuses the two.
 //
 // ===========================================================================================
 // A SUBPROCESS PER RUNG, ONE REPETITION
@@ -13,36 +44,25 @@
 // a new process is COLD BY CONSTRUCTION and there is nothing to bust. Spawning also means a crash
 // at the top rung kills that rung and not the run, which is not hypothetical: the 19,200-block
 // shape at rung 5 is exactly where the historical SIGSEGV lived, and a runner that died with it
-// would report nothing at all about the five rungs that had already passed.
+// would report nothing at all about the five rungs that had already climbed.
 //
-// One repetition, because a second would not buy what it appears to. Wall time at n=1 is noisy, but
-// the fix for that is not averaging — it is the RESIDUAL (see CurveFit), which detects a noisy
-// machine directly and reports NOISY instead of a confident wrong exponent. And the numbers this
-// suite actually GATES on — allocations, frees, bytes — are bit-for-bit reproducible, so a second
-// repetition of those would return the same digits.
-//
-// ===========================================================================================
-// WHAT IS GATED, AND WHAT IS MERELY REPORTED
-// ===========================================================================================
-//
-//   Per-rung memory GOLDENS      exact, committed, deterministic       ** the strong gate **
-//   Per-phase time EXPONENT      fitted; tight budget everywhere except regalloc's
-//                                splitting/liveness, which are known superlinear
-//   Aggregate time EXPONENT      reported. It is POLLUTED BY CONSTRUCTION: `pressuredLoops`
-//                                doubles with everything else and is ~1.9, so its cost overtakes
-//                                the rest as the ladder climbs and drags the aggregate up. That
-//                                is a property of the corpus, not a regression, and gating on it
-//                                would fail every run. The PER-PHASE curves stay clean precisely
-//                                because that cost lands in two named sub-phases.
-//   Absolute milliseconds        reported, never gated — machine-dependent.
-//
-// RESIDUAL RISK, STATED PLAINLY: a genuinely new quadratic introduced INSIDE regalloc's
-// `splitting` or `liveness` could hide under their loosened budgets. Nowhere else can. Tightening
-// them requires fixing the known liveness-recompute gap (ARCHITECTURE.md:1336-1345), which is
-// deliberately out of scope — this suite is the instrument that would justify that work.
+// One repetition, because a second would not buy what it appears to. The numbers that carry the
+// signal — allocations, frees, bytes — are bit-for-bit REPRODUCIBLE, so a second repetition of them
+// returns the same digits. Wall time at n=1 is noisy, and it is reported as the machine-dependent
+// reading it is: the growth EXPONENT fitted through six of them reproduces to ~1%, which is what
+// makes the exponent worth recording and the milliseconds worth nothing.
 
-let ScaleMetricsFileName = "metrics.tsv"
-let ScaleOutputName = "rung"
+// A rung's metrics TSV and its executable, in the corpus ROOT — NEVER inside the rung's own source
+// directory.
+//
+// That is a correctness requirement, not a filing preference. `build <dir>` LISTS the directory it
+// is given, and every entry costs the compiler a `FilePath` and a `String`: a rung whose own output
+// sits beside its sources measures a different program than the same rung on a fresh checkout. It
+// used to, by exactly 26 allocations and 945 bytes per rung, and the "reproducible" memory numbers
+// were reproducible only on a machine that had run the suite before. See ScaleCorpus's header, and
+// `pruneRungDir`, which enforces the other half of the invariant.
+let RungMetricsSuffix = ".metrics.tsv"
+let RungOutputSuffix = ".out"
 
 // Shared with ScalePerType, which spawns the same `build` command against a --mm-trace compiler.
 export let BuildSubcommandName = "build"
@@ -53,11 +73,27 @@ export let OutputFlagName = "-o"
 // The byte counters count every String the compiler allocates, and a source file's PATH is one of
 // them. An absolute path is as long as wherever the repo happens to live, so the same rung compiled
 // from `C:/dev/maxon` and from `/home/e/src/maxon-checkout` would allocate a different number of
-// BYTES — and the per-rung byte goldens, which are committed to git and compared exactly, would
-// fail for every developer whose checkout path differed in length from the one that generated them.
-// A relative path is the same string on every machine. The subprocess inherits this process's
-// working directory, which is the repo root (see Main.resolveSpecDir, which relies on the same).
+// BYTES — and the byte column of the trend log, which is a fact about the compiler and not about the
+// checkout, would read differently for every developer. A relative path is the same string on every
+// machine. The subprocess inherits this process's working directory, which is the repo root (see
+// Main.resolveSpecDir, which relies on the same).
 export let CorpusRelativeRoot = ".scale-tmp"
+
+// Everything in the scale suite that can go wrong at RUN time: a rung that would not compile, a
+// metrics file that never appeared, a trend log that could not be read.
+//
+// A union carrying its own message, because Maxon errors are enums/unions and a message is the only
+// payload any of these needs — every one of them is reported to a human and none is recovered from
+// programmatically. `scaleErrorText` is the single place it is unwrapped.
+export union ScaleError implements Error
+	reason(message String)
+end 'ScaleError'
+
+export function scaleErrorText(error ScaleError) returns String
+	return match error 'e'
+		reason(message) gives message
+	end 'e'
+end 'scaleErrorText'
 
 // One phase's numbers, as parsed back out of a rung's metrics TSV.
 export type PhaseMetric
@@ -103,68 +139,47 @@ end 'RungResult'
 
 export typealias RungResultArray = Array with RungResult
 
-// The suite's verdict. FOUR outcomes, not two, and the two extra ones are the point.
-//
-// VOID  — the CORPUS is degenerate, so the run measured nothing. Not a pass and not a failure: an
-//         invalid experiment. (See `checkDegeneracy`: shv2 folds constants, and a naive benchmark
-//         folds to nothing and reports a perfect straight line.)
-// NOISY — the MACHINE was too loaded to produce a trustworthy fit. Also not a verdict. A green
-//         result from untrustworthy data is the expensive kind of lie.
-export union ScaleVerdict
-	pass
-	fail(reasons StringArray)
-	degenerate(reason String)
-	noisy(reason String)
-
-	export function label() returns String
-		return match self 'v'
-			pass gives "PASS"
-			fail gives "FAIL"
-			degenerate gives "VOID"
-			noisy gives "NOISY"
-		end 'v'
-	end 'label'
-
-	export function isPass() returns bool
-		return match self 'v'
-			pass gives true
-			fail gives false
-			degenerate gives false
-			noisy gives false
-		end 'v'
-	end 'isPass'
-end 'ScaleVerdict'
-
 // ===========================================================================================
 // Entry point
 // ===========================================================================================
 
 export function runScaleTest(args MaxonArgs) returns ExitCode
-	// Refused BEFORE the ladder is climbed, not after. Rejecting the command line once the run has
-	// already spent thirty seconds compiling six rungs would be a rude way to report a typo.
-	if args.updateRequired and args.note.isEmpty() 'noteRequired'
-		printError("scale-test: --update-required needs --note=\"<why the goldens moved>\".\n")
-		printError("            Accepting a golden means deciding the compiler SHOULD allocate differently.\n")
-		printError("            The suite can see exactly WHAT moved and can never see why, so the reason is\n")
-		printError("            recorded with the numbers in {OptimizationLogRelativePath} — and it has to come\n")
-		printError("            from you, now, while it is still known.\n")
+	// `--update-required` is GONE from this command, and saying so is worth four lines. It rewrote
+	// committed memory goldens; there are no goldens. It is still a spec-test flag, and the driver
+	// parses the command line before it knows which command is running — so without this it would be
+	// accepted here and silently do nothing, on a command line every document in this tree used to
+	// tell people to type.
+	if args.updateRequired 'noGoldens'
+		printError("scale-test: --update-required is gone. It rewrote the committed memory goldens, and there are none:\n")
+		printError("            this suite renders no verdict and has nothing to accept.\n")
+		printError("            To RECORD a run in {OptimizationLogRelativePath}, use --note=\"<what changed and why>\".\n")
 		return 1
-	end 'noteRequired'
+	end 'noGoldens'
+
+	// The trend is read FIRST, before a single rung is compiled. It is what this run's numbers are
+	// reported against, and if a `--note` cannot honestly be recorded in it, saying so after thirty
+	// seconds of compiling would be a rude way to report a typo.
+	let trend = try loadScaleTrend() otherwise (error) 'noTrend'
+		return brokenRun("the trend log could not be read", detail: scaleErrorText(error))
+	end 'noTrend'
+
+	if not args.note.isEmpty() 'wantsToRecord'
+		try assertRecordable(trend, note: args.note, rungs: args.rungs) otherwise (error) 'unrecordable'
+			return brokenRun("this run could not be recorded", detail: scaleErrorText(error))
+		end 'unrecordable'
+	end 'wantsToRecord'
 
 	let compilerExe = try Process.executablePath() otherwise 'noExe'
-		printError("error: could not determine the running compiler's path\n")
-		return 1
+		return brokenRun("the running compiler's own path could not be determined", detail: "Process.executablePath() failed")
 	end 'noExe'
 
 	let corpusRoot = try corpusRootPath(args) otherwise 'badCorpus'
-		printError("error: invalid --emit-corpus path: {args.emitCorpus}\n")
-		return 1
+		return brokenRun("the corpus root is not a valid path", detail: "--emit-corpus={args.emitCorpus}")
 	end 'badCorpus'
 
 	print("scale-test: generating {args.rungs} rung(s) under {corpusRoot.toString()}\n")
-	let ladder = try generateCorpus(corpusRoot, rungs: args.rungs) otherwise (e) 'genErr'
-		reportCompileError(e)
-		return 1
+	let ladder = try generateCorpus(corpusRoot, rungs: args.rungs) otherwise (error) 'genErr'
+		return brokenRun("the corpus could not be generated", detail: scaleErrorText(error))
 	end 'genErr'
 
 	if not args.emitCorpus.isEmpty() 'corpusOnly'
@@ -172,66 +187,72 @@ export function runScaleTest(args MaxonArgs) returns ExitCode
 		return 0
 	end 'corpusOnly'
 
+	printRungHeader()
 	var results = RungResultArray.create()
 	for rung in ladder 'eachRung'
-		let result = try compileRung(compilerExe, rung: rung) otherwise (reason) 'rungFailed'
-			// A rung that would not compile is not a slow rung, it is a broken suite: every later
-			// rung is a superset of this one's shapes, so there is nothing left to measure and no
-			// curve worth fitting through what came before.
-			printError("scale-test: rung {rung.index} FAILED to compile — {reason}\n")
-			return 1
+		let result = try compileRung(compilerExe, root: corpusRoot, rung: rung) otherwise (error) 'rungFailed'
+			// A rung that would not compile is not a slow rung, it is a broken run: every later rung is
+			// a superset of this one's shapes, so there is nothing left to measure and no curve worth
+			// fitting through what came before.
+			return brokenRun("rung {rung.index} FAILED to compile", detail: scaleErrorText(error))
 		end 'rungFailed'
 		printRungLine(result)
 		results.push(result)
 	end 'eachRung'
 
-	let baseline = try loadBaseline() otherwise (reason) 'noBaseline'
-		printError("scale-test: could not read {BaselineRelativePath} — {reason}\n")
-		return 1
-	end 'noBaseline'
+	// Check the instrument before the subject. A corpus that folded away measured NOTHING, and every
+	// curve below would be a curve through nothing — a beautifully linear one.
+	try assertCorpusCompiled(results) otherwise (error) 'degenerate'
+		return brokenRun("the generated corpus was DEGENERATE, so this run measured nothing", detail: scaleErrorText(error))
+	end 'degenerate'
 
-	if args.updateRequired 'regenerate'
-		// A SHORT LADDER MAY NOT REWRITE A LONG BASELINE. writeBaseline emits exactly the rungs it was
-		// given, so `--rungs=2 --update-required` against a six-rung baseline would silently DELETE the
-		// goldens for rungs 2-5 — the four most sensitive rungs, and the only ones where a bent curve is
-		// visible at all. Nothing downstream would notice: the suite would go on passing, gating four
-		// fewer rungs than it did yesterday, and the loss would surface as a golden that "was never
-		// there" long after the commit that dropped it.
-		if results.count() < baseline.goldens.count() 'ladderTooShort'
-			printError("scale-test: refusing to rewrite {baseline.goldens.count()} committed golden(s) from a {results.count()}-rung run.\n")
-			printError("            The goldens are written from the rungs actually climbed, so this would DELETE\n")
-			printError("            the goldens for the rungs above {results.count() - 1} rather than update them. Re-run with\n")
-			printError("            --rungs={baseline.goldens.count()} (or more).\n")
-			return 1
-		end 'ladderTooShort'
-
-		// The log is written FIRST. If recording the change fails, the committed goldens are left
-		// alone — a tree carrying new goldens with no matching log entry is exactly the state the
-		// log exists to make impossible.
-		let logged = appendOptimizationLog(baseline, results: results, note: args.note)
-		if logged != 0 'logFailed'
-			return logged
-		end 'logFailed'
-
-		return writeBaseline(baseline, results: results)
-	end 'regenerate'
-
-	let verdict = evaluate(results, baseline: baseline)
-	printVerdict(verdict, results: results, baseline: baseline)
+	let curves = fitScaleCurves(results)
+	printCurveTable(curves, trend: trend)
+	printMemoryTrend(results, trend: trend)
+	printCorpusGrowth(results)
 
 	if not args.resultJson.isEmpty() 'json'
-		writeResultJson(args.resultJson, verdict: verdict, results: results, baseline: baseline)
+		writeResultJson(args.resultJson, results: results, curves: curves, trend: trend)
 	end 'json'
+
+	if not args.note.isEmpty() 'record'
+		let recorded = recordRun(trend, results: results, curves: curves, note: args.note)
+		if recorded != 0 'recordFailed'
+			return recorded
+		end 'recordFailed'
+	end 'record'
 
 	if args.perType 'perTypePass'
 		runPerTypePass(results)
 	end 'perTypePass'
 
-	if verdict.isPass() 'green'
-		return 0
-	end 'green'
-	return 1
+	return 0
 end 'runScaleTest'
+
+// The ONE way this instrument fails: the run broke and produced no data. It says so in those words,
+// so that a reader can never mistake it for a judgement about the numbers — there is no judgement
+// about the numbers.
+function brokenRun(what String, detail String) returns ExitCode
+	printError("\nscale-test: BROKEN RUN — {what}.\n")
+	printError("  {detail}\n")
+	printError("  This is not a verdict about the compiler: nothing was measured. Fix the run and re-run.\n")
+	return 1
+end 'brokenRun'
+
+// Record this run in the trend log, if it is a datapoint the log does not already have.
+function recordRun(trend ScaleTrend, results RungResultArray, curves ScaleCurveArray, note String) returns ExitCode
+	if not anyMemoryMoved(trend, results: results) 'unchanged'
+		// Nothing to record, and saying so is the right answer rather than writing a row. A log row per
+		// run that changed nothing is a log that is mostly rows about nothing.
+		print("\nscale-test: every rung's allocations and bytes match the last logged run — nothing moved, so nothing was logged.\n")
+		return 0
+	end 'unchanged'
+
+	try recordScaleRun(results, curves: curves, note: note) otherwise (error) 'writeFailed'
+		return brokenRun("the run could not be recorded in the trend log", detail: scaleErrorText(error))
+	end 'writeFailed'
+	return 0
+end 'recordRun'
 
 // Where the corpus is generated. `--emit-corpus=<dir>` puts it somewhere a human can read it;
 // otherwise it goes to the gitignored `.scale-tmp/`, relative to the working directory — see
@@ -247,13 +268,9 @@ end 'corpusRootPath'
 // Compiling one rung
 // ===========================================================================================
 
-function compileRung(compilerExe FilePath, rung ScaleRung) returns RungResult throws ScaleError
-	// Bind the FilePath components first: `join` is overloaded on String and FilePath, and a bare
-	// String constant matches both.
-	let metricsName = try FilePath.from(ScaleMetricsFileName) otherwise panic("ScaleTestRunner: '{ScaleMetricsFileName}' must be a valid relative path")
-	let outputName = try FilePath.from(ScaleOutputName) otherwise panic("ScaleTestRunner: '{ScaleOutputName}' must be a valid relative path")
-	let metricsPath = rung.dir.join(metricsName)
-	let outputBase = rung.dir.join(outputName)
+function compileRung(compilerExe FilePath, root FilePath, rung ScaleRung) returns RungResult throws ScaleError
+	let metricsPath = try corpusRootFile(root, name: "{RungDirPrefix}{rung.index}{RungMetricsSuffix}")
+	let outputBase = try corpusRootFile(root, name: "{RungDirPrefix}{rung.index}{RungOutputSuffix}")
 
 	var argv = StringArray.create()
 	argv.push(BuildSubcommandName)
@@ -276,6 +293,13 @@ function compileRung(compilerExe FilePath, rung ScaleRung) returns RungResult th
 
 	return try parseRungMetrics(text, rung: rung)
 end 'compileRung'
+
+// A file in the corpus root. `join` is overloaded on String and FilePath and a bare String constant
+// matches both, so the component is bound to a FilePath first.
+function corpusRootFile(root FilePath, name String) returns FilePath throws ScaleError
+	let component = try FilePath.from(name) otherwise throw ScaleError.reason("'{name}' is not a valid path component")
+	return root.join(component)
+end 'corpusRootFile'
 
 // ===========================================================================================
 // Parsing the metrics TSV (the format is MetricsEmit's; see its header)
@@ -327,8 +351,8 @@ function parseRungMetrics(text String, rung ScaleRung) returns RungResult throws
 			codeSeen = true
 		end 'isCode' else if kind == MetricsKindUnattributed 'isUnattributed'
 			// Read and discarded: the compiler emits it so the two reconciliation panics run on
-			// every metrics build (that is what makes them a tripwire), but the gates are on the
-			// phases themselves and on the total, both of which are already here.
+			// every metrics build (that is what makes them a tripwire), but the curves are fitted from
+			// the phases themselves and from the total, both of which are already here.
 			continue
 		end 'isUnattributed' else 'unknownKind'
 			throw ScaleError.reason("metrics row has an unknown kind '{kind}': {trimmed}")
@@ -339,13 +363,13 @@ function parseRungMetrics(text String, rung ScaleRung) returns RungResult throws
 		throw ScaleError.reason("metrics for rung {rung.index} carried no `total` row")
 	end 'noTotal'
 	if not codeSeen 'noCode'
-		throw ScaleError.reason("metrics for rung {rung.index} carried no `code` row — the degeneracy check cannot run without it")
+		throw ScaleError.reason("metrics for rung {rung.index} carried no `code` row — the corpus self-check cannot run without it")
 	end 'noCode'
 
 	for phase in CompilePhase.allCases 'checkSeen'
 		let seen = try phaseSeen.get(phase.ordinal) otherwise panic("parseRungMetrics: phaseSeen.get OOB for '{phase.name}'")
 		if not seen 'missing'
-			throw ScaleError.reason("metrics for rung {rung.index} never reported phase '{phase.name}' — a phase added to CompilePhase but not to the metrics output would silently escape every gate")
+			throw ScaleError.reason("metrics for rung {rung.index} never reported phase '{phase.name}' — a phase added to CompilePhase but not to the metrics output would silently vanish from every curve and every trend column")
 		end 'missing'
 	end 'checkSeen'
 
@@ -364,10 +388,10 @@ end 'parseMetricFields'
 
 export typealias ParsedCount = int(0 to u64.max)
 
-// A non-negative decimal integer — THE one decimal parser in the suite (the metrics TSV, the
-// baseline rows, `--rungs`, and the trace's `size=` fields all come through here). Every number any
-// of them carries is a count, a byte volume, or a nanosecond reading, and none of them can be
-// negative.
+// A non-negative decimal integer — THE one decimal parser in the suite (the metrics TSV, the trend
+// log's grouped digits, `--rungs`, and the trace's `size=` fields all come through here). Every
+// number any of them carries is a count, a byte volume, or a nanosecond reading, and none of them can
+// be negative.
 //
 // The digit-count guard is not decoration: `--rungs=999999999999999999999` is user input, and
 // without it the accumulator would run past `u64.max` and trap on the range rather than being
@@ -399,16 +423,28 @@ let AsciiDigitZero = 0x30
 let AsciiDigitNine = 0x39
 
 // ===========================================================================================
-// Reporting
+// Reporting — data, and nothing but
 // ===========================================================================================
 
-let RungColumnWidth = 6 as ColumnWidth
+let RungColumnWidth = 10 as ColumnWidth
 let SizeColumnWidth = 12 as ColumnWidth
 let MsColumnWidth = 10 as ColumnWidth
-let CountColumnWidth = 12 as ColumnWidth
+let CountColumnWidth = 14 as ColumnWidth
+
+// The curve table's columns. `curve` is wide enough for `phase:elimTrivialBlockArgs`.
+let CurveColumnWidth = 26 as ColumnWidth
+let ExponentColumnWidth = 10 as ColumnWidth
+let DeltaColumnWidth = 10 as ColumnWidth
+let ResidualColumnWidth = 10 as ColumnWidth
+let ShareColumnWidth = 9 as ColumnWidth
+
+function printRungHeader()
+	print("\n")
+	print("{padRight("  rung", width: RungColumnWidth)}{padLeft("source", width: SizeColumnWidth)}{padLeft("code", width: SizeColumnWidth)}{padLeft("time", width: MsColumnWidth)}{padLeft("allocs", width: CountColumnWidth)}{padLeft("bytes", width: CountColumnWidth)}\n")
+end 'printRungHeader'
 
 function printRungLine(result RungResult)
-	var line = padRight("  rung {result.rung}", width: RungColumnWidth + 4)
+	var line = padRight("  rung {result.rung}", width: RungColumnWidth)
 	line.append(padLeft("{result.sourceBytes}", width: SizeColumnWidth))
 	line.append(padLeft("{result.codeBytes}", width: SizeColumnWidth))
 	line.append(padLeft(millisText(result.total.nanos), width: MsColumnWidth))
@@ -417,105 +453,168 @@ function printRungLine(result RungResult)
 	print("{line}\n")
 end 'printRungLine'
 
-function printVerdict(verdict ScaleVerdict, results RungResultArray, baseline ScaleBaseline)
+// Every curve, in both of its measurements, against the last one recorded in the trend log.
+//
+// THE Δ COLUMNS ARE THE POINT. An exponent on its own is hard to have an opinion about — is 1.31
+// bad? — and an exponent that has climbed 0.28 since the last recorded run is not hard to have an
+// opinion about at all. The allocation exponent is exact and the time exponent reproduces to ~1%, so
+// a Δ of a few thousandths is the instrument breathing and a Δ of a few hundred is a phase changing
+// shape. No threshold is needed anywhere in that sentence, which is exactly why there is none.
+function printCurveTable(curves ScaleCurveArray, trend ScaleTrend)
 	print("\n")
-	print("{padRight("  curve", width: 26)}{padLeft("exponent", width: 12)}{padLeft("budget", width: 10)}{padLeft("residual", width: 11)}{padLeft("share", width: 9)}{padLeft("gate", width: 8)}\n")
-	printCurveTable(results, baseline: baseline)
+	print("{padRight("  curve", width: CurveColumnWidth)}{padLeft("time", width: ExponentColumnWidth)}{padLeft("delta", width: DeltaColumnWidth)}{padLeft("resid", width: ResidualColumnWidth)}{padLeft("share", width: ShareColumnWidth)}{padLeft("allocs", width: ExponentColumnWidth)}{padLeft("delta", width: DeltaColumnWidth)}{padLeft("resid", width: ResidualColumnWidth)}{padLeft("share", width: ShareColumnWidth)}\n")
+
+	for curve in curves 'eachCurve'
+		var line = padRight("  {curve.name}", width: CurveColumnWidth)
+		line.append(padLeft(curve.time.exponentText(), width: ExponentColumnWidth))
+		line.append(padLeft(exponentDeltaText(curve.time, previous: loggedExponent(trend.timeExponents, curve: curve.name)), width: DeltaColumnWidth))
+		line.append(padLeft(curve.time.residualText(), width: ResidualColumnWidth))
+		line.append(padLeft(shareText(curve.timeShare), width: ShareColumnWidth))
+		line.append(padLeft(curve.allocs.exponentText(), width: ExponentColumnWidth))
+		line.append(padLeft(exponentDeltaText(curve.allocs, previous: loggedExponent(trend.allocExponents, curve: curve.name)), width: DeltaColumnWidth))
+		line.append(padLeft(curve.allocs.residualText(), width: ResidualColumnWidth))
+		line.append(padLeft(shareText(curve.allocShare), width: ShareColumnWidth))
+		print("{line}\n")
+	end 'eachCurve'
 
 	print("\n")
-	match verdict 'v'
-		pass then print("scale-test: PASS\n")
-		fail(reasons) then printFailures(reasons)
-		degenerate(reason) then printVoid(reason)
-		noisy(reason) then printNoisy(reason)
-	end 'v'
-end 'printVerdict'
-
-function printFailures(reasons StringArray)
-	printError("scale-test: FAIL — {reasons.count()} gate(s)\n")
-	for reason in reasons 'each'
-		printError("  - {reason}\n")
-	end 'each'
-end 'printFailures'
-
-// VOID is NOT a failure of the compiler — it is a failure of the EXPERIMENT, and saying so in the
-// same breath as "FAIL" would send someone hunting a regression in a compiler that was never
-// measured. It gets its own word.
-function printVoid(reason String)
-	printError("scale-test: VOID — the corpus was degenerate, so this run measured NOTHING.\n")
-	printError("  {reason}\n")
-	printError("  This is not a compiler regression. It is a broken benchmark, and no verdict\n")
-	printError("  about the compiler can be drawn from it — see ScaleCorpus's header on the trap.\n")
-end 'printVoid'
-
-// NOISY is not a verdict either, and it deliberately does not read like one.
-function printNoisy(reason String)
-	printError("scale-test: NOISY — not a verdict.\n")
-	printError("{reason}\n")
-	printError("  The memory gates (which are exact and machine-independent) PASSED. It is the TIME\n")
-	printError("  curves that could not be trusted: their points do not lie on a curve, which means\n")
-	printError("  something else was competing for this machine. Re-run on an idle one.\n")
-end 'printNoisy'
-
-function printCurveTable(results RungResultArray, baseline ScaleBaseline)
-	for phase in CompilePhase.allCases 'eachPhase'
-		var costs = FitPointArray.create()
-		for result in results 'eachRung'
-			costs.push(result.phaseAt(phase).nanos as Real)
-		end 'eachRung'
-		printCurveRow(phaseCurveName(phase), results: results, costs: costs, baseline: baseline, share: phaseShare(results, phase: phase))
-	end 'eachPhase'
-
-	for sub in RegAllocPhase.allCases 'eachSub'
-		var costs = FitPointArray.create()
-		for result in results 'eachRung'
-			costs.push(result.regAllocAt(sub).nanos as Real)
-		end 'eachRung'
-		printCurveRow(regAllocCurveName(sub), results: results, costs: costs, baseline: baseline, share: regAllocShare(results, sub: sub))
-	end 'eachSub'
-
-	var totals = FitPointArray.create()
-	var allocs = FitPointArray.create()
-	for result in results 'eachRung'
-		totals.push(result.total.nanos as Real)
-		allocs.push(result.total.allocs as Real)
-	end 'eachRung'
-	printCurveRow(BaselineCurveAggregate, results: results, costs: totals, baseline: baseline, share: ScaleFullShare)
-	printCurveRow(BaselineCurveMemory, results: results, costs: allocs, baseline: baseline, share: ScaleFullShare)
+	print("  time is machine-dependent and the milliseconds mean nothing; the EXPONENT fitted through\n")
+	print("  them reproduces to ~1%. The allocation exponent is exact. `resid` is how well ONE power law\n")
+	print("  describes the curve — a composite (a parent, or regalloc:liveness) bends, and that is not\n")
+	print("  noise. Nothing here is a verdict; the trend is in {OptimizationLogRelativePath}.\n")
 end 'printCurveTable'
 
-// One row of the curve table: the fitted exponent, the budget it is held to, the phase's share of
-// the top rung, and whether that share was enough for the gate to run at all.
+// This curve's exponent in the last recorded run, reusing `FitResult` rather than growing an option
+// type beside it: "there is no exponent for this curve" is exactly what `unfittable` already means,
+// and one absent-shaped thing is better than two.
 //
-// THE `share` AND `gated` COLUMNS ARE NOT DECORATION. A phase below the threshold is SKIPPED, and a
-// reader who could not tell a skipped curve from a passing one would read a table of dashes as a
-// table of passes. So a skipped row says `skip`, in the column where a verdict would otherwise be.
-function printCurveRow(curve String, results RungResultArray, costs FitPointArray, baseline ScaleBaseline, share Milli)
-	var sizes = FitPointArray.create()
-	for result in results 'each'
-		sizes.push(result.sourceBytes as Real)
-	end 'each'
+// Absent covers three cases — the log has no exponent row, the row predates this curve, or the curve
+// was unfittable when it was written — and none of them is distinguished, because a reader cannot
+// difference against any of them.
+function loggedExponent(exponents ExponentByCurve, curve String) returns FitResult
+	let value = try exponents.get(curve) otherwise 'notLogged'
+		return FitResult.unfittable("the trend log has no exponent for '{curve}'")
+	end 'notLogged'
+	// A logged exponent carries no residual — the log records the slope, which is the number worth
+	// tracking, and not the fit it came from.
+	return FitResult.fitted(value, residual: 0)
+end 'loggedExponent'
 
-	// `loadBaseline` has already asserted every curve is budgeted, so a miss here is a bug in this
-	// file rather than a missing row — hence panic, not a dash.
-	let budgetText = milliText(try baseline.budgetFor(curve) otherwise panic("printCurveRow: curve '{curve}' has no committed budget, which loadBaseline's assertEveryCurveBudgeted should have refused"))
+// `+0.043`, `-0.007`, `0.000`, or `n/a` when either end of the comparison is missing. SIGNED always:
+// a delta with no sign is a number a reader has to compute the direction of themselves.
+function exponentDeltaText(now FitResult, previous FitResult) returns String
+	match now 'n'
+		unfittable then return UnfittableText
+		fitted(current, _) then return signedDeltaAgainst(current, previous: previous)
+	end 'n'
+end 'exponentDeltaText'
 
-	let fit = fitPowerLaw(sizes, costs: costs)
-	let exponentText = match fit 'e'
-		unfittable gives "-"
-		fitted(exponent, _) gives milliText(exponent)
-	end 'e'
-	// The residual is PRINTED, not merely consulted. It is what separates "this compiler is
-	// superlinear" from "this machine was busy", and a reader looking at a surprising exponent needs
-	// to see whether the points it was fitted through actually lay on a curve. On a COMPOSITE row it
-	// is expected to be large and means nothing about the machine — see ScaleGates.curveIsComposite.
-	let residualText = match fit 'r'
-		unfittable gives "-"
-		fitted(_, residual) gives milliText(residual)
-	end 'r'
+function signedDeltaAgainst(current Milli, previous FitResult) returns String
+	match previous 'p'
+		unfittable then return UnfittableText
+		fitted(before, _) then return signedMilli(current - before)
+	end 'p'
+end 'signedDeltaAgainst'
 
-	let shareText = "{share / 10}.{share mod 10}%"
-	let gatedText = "gated" if share >= MinPhaseShareMilli else "skip"
+function signedMilli(delta Milli) returns String
+	if delta > 0 'grew'
+		return "+{milliText(delta)}"
+	end 'grew'
+	return milliText(delta)
+end 'signedMilli'
 
-	print("{padRight("  {curve}", width: 26)}{padLeft(exponentText, width: 12)}{padLeft(budgetText, width: 10)}{padLeft(residualText, width: 11)}{padLeft(shareText, width: 9)}{padLeft(gatedText, width: 8)}\n")
-end 'printCurveRow'
+// The exact half of the instrument: what the compiler allocated, against what it allocated when the
+// trend log was last written. These numbers are bit-for-bit reproducible, so every difference here is
+// REAL — the compiler does something different with memory than it did at the last recorded run, for
+// the same input. It is the most informative thing this suite prints, and it is worth explaining
+// rather than merely noticing.
+function printMemoryTrend(results RungResultArray, trend ScaleTrend)
+	print("\n")
+	match trend.memory 'm'
+		absent then printNoPreviousRun()
+		present(date, note, allocs, bytes) then printMemoryDelta(results, date: date, note: note, loggedAllocs: allocs, loggedBytes: bytes)
+	end 'm'
+end 'printMemoryTrend'
+
+function printNoPreviousRun()
+	print("  {OptimizationLogRelativePath} has no rows yet — this run is the first datapoint, so there is\n")
+	print("  nothing to difference it against. Record it with --note=\"<what changed and why>\".\n")
+end 'printNoPreviousRun'
+
+let TrendRungColumnWidth = 8 as ColumnWidth
+let TrendCountColumnWidth = 16 as ColumnWidth
+let TrendDeltaColumnWidth = 14 as ColumnWidth
+
+function printMemoryDelta(results RungResultArray, date String, note String, loggedAllocs AllocCountArray, loggedBytes ByteCountArray)
+	print("  vs the last row of {OptimizationLogRelativePath} — {date}, \"{note}\"\n")
+	print("\n")
+	print("{padRight("  rung", width: TrendRungColumnWidth)}{padLeft("allocs", width: TrendCountColumnWidth)}{padLeft("delta", width: TrendDeltaColumnWidth)}{padLeft("bytes", width: TrendCountColumnWidth)}{padLeft("delta", width: TrendDeltaColumnWidth)}\n")
+
+	var moved = false
+	for i in 0 upto results.count() 'eachRung'
+		let result = try results.get(i) otherwise panic("printMemoryDelta: i < count but results.get({i}) failed")
+
+		var line = padRight("  {result.rung}", width: TrendRungColumnWidth)
+		line.append(padLeft(groupDigits(result.total.allocs as Delta), width: TrendCountColumnWidth))
+		line.append(padLeft(countDeltaText(result.total.allocs, logged: loggedAllocs, rung: i), width: TrendDeltaColumnWidth))
+		line.append(padLeft(groupDigits(result.total.bytes as Delta), width: TrendCountColumnWidth))
+		line.append(padLeft(countDeltaText(result.total.bytes, logged: loggedBytes, rung: i), width: TrendDeltaColumnWidth))
+		print("{line}\n")
+
+		if countMoved(result.total.allocs, logged: loggedAllocs, rung: i) or countMoved(result.total.bytes, logged: loggedBytes, rung: i) 'changed'
+			moved = true
+		end 'changed'
+	end 'eachRung'
+
+	if not moved 'unchanged'
+		print("\n  Every rung matches the last logged run exactly. The compiler's memory traffic is unchanged.\n")
+		return
+	end 'unchanged'
+
+	print("\n  A number here MOVED, and it moved for a reason: these counts are bit-for-bit reproducible,\n")
+	print("  so the same input through the same compiler cannot produce a different one by accident.\n")
+	print("  Explain it, and record it with --note — the instrument can see WHAT moved and never why.\n")
+end 'printMemoryDelta'
+
+// A rung this run climbed that the logged row did not have is not a delta of zero; it is not a delta
+// at all. (`assertRecordable` refuses to LOG such a run, but a --rungs=3 run with no --note is a
+// perfectly reasonable thing to do while iterating, and it still prints.)
+function countDeltaText(current AllocCount, logged AllocCountArray, rung LadderIndex) returns String
+	let before = try logged.get(rung) otherwise 'notLogged'
+		return UnfittableText
+	end 'notLogged'
+	return signedDeltaText(current as Delta, before: before)
+end 'countDeltaText'
+
+function countMoved(current AllocCount, logged AllocCountArray, rung LadderIndex) returns bool
+	let before = try logged.get(rung) otherwise 'notLogged'
+		return true
+	end 'notLogged'
+	return current != before
+end 'countMoved'
+
+function signedDeltaText(current Delta, before Delta) returns String
+	if current > before 'grew'
+		return "+{groupDigits(current - before)}"
+	end 'grew'
+	return groupDigits(current - before)
+end 'signedDeltaText'
+
+// A position in the ladder — an index into the parallel per-rung arrays (this run's results, and
+// the logged run's columns), which is NOT the same thing as `RungIndex`: those arrays may be shorter
+// than the ladder the log recorded, and that is exactly the case the delta report has to handle.
+export typealias LadderIndex = int(0 to u64.max)
+
+// The corpus self-check's own number. It is PRINTED, not merely consulted: a reader looking at a set
+// of beautifully linear curves is entitled to see the evidence that they are curves through a program
+// that was actually compiled.
+function printCorpusGrowth(results RungResultArray)
+	print("\n")
+	if results.count() < MinRungsForGrowth 'tooFewRungs'
+		print("  corpus: {results.count()} rung(s) — too few to say anything about GROWTH, this check included.\n")
+		return
+	end 'tooFewRungs'
+
+	print("  corpus: emitted code grows as source^{fitCodeGrowth(results).exponentText()} (floor {milliText(MinCodeGrowthExponent)}) — the programs\n")
+	print("          compiled rather than folding away, so the curves above are curves through something.\n")
+end 'printCorpusGrowth'
