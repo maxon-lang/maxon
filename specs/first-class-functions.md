@@ -819,3 +819,66 @@ end 'main'
 ```exitcode
 32
 ```
+
+<!-- test: first-class-function.non-capturing-closure-in-field -->
+A closure that captures NOTHING is a plain function reference — it has no environment to
+lose — so it is stored in a function-typed field and called like any other. This is the
+half of the boundary that must keep working: it is what a table of handlers is built from.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+typealias UnaryOp = function(Integer) returns Integer
+
+type Handler
+	export var op as UnaryOp
+
+	static function create(op UnaryOp) returns Self
+		return Self{op: op}
+	end 'create'
+end 'Handler'
+
+function main() returns ExitCode
+	let h = Handler.create(function(n Integer) gives n * 2)
+	return h.op(21)
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: first-class-function.capturing-closure-in-field-errors -->
+A closure that CAPTURES cannot be stored in a function-typed field, and is refused rather
+than miscompiled. Captures are taken by reference — the environment holds the ADDRESSES of
+the enclosing frame's stack slots — so the environment is bound to that frame. A field is
+one slot and holds the code pointer alone, so the store would drop the environment and the
+first captured read would dereference null, inside emitted code the author never wrote.
+
+Making this work needs escape analysis and by-value capture, which would change the
+by-reference capture semantics the closure tests above pin. It is deliberately deferred.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+typealias UnaryOp = function(Integer) returns Integer
+
+type Handler
+	export var op as UnaryOp
+
+	static function create(op UnaryOp) returns Self
+		return Self{op: op}
+	end 'create'
+end 'Handler'
+
+function double(x Integer) returns Integer
+	return x * 2
+end 'double'
+
+function main() returns ExitCode
+	var h = Handler.create(double)
+	let bump = 20
+	h.op = function(n Integer) gives n + bump
+	return h.op(22)
+end 'main'
+```
+```maxoncstderr
+error E3099: specs/fragments/first-class-functions/first-class-function.capturing-closure-in-field-errors.test:21:4: cannot store a closure that captures in field 'op' of 'Handler': captures are taken by reference to the enclosing function's frame, so the closure cannot outlive it by being stored. Store a function reference, or a closure that captures nothing
+```

@@ -151,6 +151,31 @@ public enum ErrorCode {
   // runtime bit read back from the box. Awaiting the promise where `async` produced it
   // keeps the error type and serves every form.
   SemanticAwaitErrorTypeErased = 3098,
+  // A closure that CAPTURES, stored into a function-typed struct field.
+  //
+  // A closure captures BY REFERENCE: LowerClosureCreate allocates an environment and
+  // fills it with the ADDRESSES of the enclosing frame's stack slots, so that reads
+  // through a capture see later mutations of the captured variable. The environment is
+  // therefore only meaningful while that frame is alive.
+  //
+  // A function VALUE is consequently two words — the code pointer and that environment
+  // pointer — carried in two parallel slots (a parameter's `__env_<name>`, a local's env
+  // temp). A struct FIELD is one 8-byte slot and holds the code pointer alone, so a store
+  // into one drops the environment. The call then passes env=0 and the first captured
+  // read dereferences null. Refuse the store instead: it is the only place the mistake is
+  // still legible, and the fault it produces otherwise lands inside emitted code the
+  // author never wrote.
+  //
+  // A NON-capturing closure is unaffected and must keep working — it lowers to a plain
+  // MaxonFunctionRefOp, has no environment to lose, and is what a table of handlers or
+  // passes keyed by a struct field is built from.
+  //
+  // What would MAKE this work is escape analysis plus by-value (or boxed) capture, so a
+  // closure's environment outlives the frame that built it. That is a real language
+  // mechanism and it is DELIBERATELY DEFERRED here: adopting it would change the
+  // by-reference capture semantics the closure specs currently pin. shv2 schedules it at
+  // P1.5, where it co-lands with `async` — a green-thread capture IS an escape.
+  SemanticCapturingClosureInField = 3099,
 
   // IR pipeline errors (4xxx) - Stage 4
   IrUnsupportedExpression = 4001,

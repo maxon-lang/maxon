@@ -186,6 +186,13 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   }
   // Types registered during this parser's PreScan — only these get auto-conformance synthesis
   private readonly HashSet<string> _locallyDefinedTypes = [];
+  // SSA ids of function values that carry a capture ENVIRONMENT, and the local names bound
+  // to one. A struct field holds a code pointer alone, so storing such a value there drops
+  // the environment (see ErrorCode.SemanticCapturingClosureInField). Only a value produced
+  // by a MaxonClosureCreateOp is in here: a closure that captures nothing lowers to a plain
+  // MaxonFunctionRefOp and is perfectly safe in a field.
+  private readonly HashSet<int> _capturingClosureValues = [];
+  private readonly HashSet<string> _capturingClosureVars = [];
   private string? _currentTypeName;
   // SSA result of the `self` MaxonStructParamOp for the currently-parsing instance
   // method. Used by InvalidateCachedSelfFields() to re-emit MaxonFieldAccessOps
@@ -9129,6 +9136,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       var fnType = GetFunctionTypeFromLastOp();
       _currentBlock!.AddOp(new MaxonAssignOp(name, initValue, isDeclaration: true, isMutable: isMutable, kind));
       _variables.Declare(name, kind, isMutable, initValue, _currentBlock!, fnType: fnType);
+      TrackCapturingClosureBinding(name, initValue);
     } else {
       var kind = DetermineValueKind(initValue);
       var rangedTypeName = _lastRangedTypeName;
@@ -9412,6 +9420,8 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       _currentBlock!.AddOp(new MaxonAssignOp(name, newVal, isDeclaration: false, isMutable: true, varInfo.Kind));
       _reassignedVars.Add(name);
       FixupTempOwnership();
+
+      if (varInfo.Kind == MaxonValueKind.Function) TrackCapturingClosureBinding(name, newVal);
       // Write back to enum heap block when assigning to a mutable payload binding
       if (varInfo.PayloadBinding is { } pb) {
         _currentBlock!.AddOp(new MaxonEnumPayloadAssignOp(pb.EnumVarName, pb.EnumTypeName, pb.PayloadIndex, newVal));
@@ -9518,6 +9528,11 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     RequireMutableField(structType, field, errorToken);
 
     var newValue = ResolveExprValue(ParseExpression());
+
+    // The nascent-self slot is written into the struct literal this factory returns, so it
+    // is a field store like any other.
+    RejectCapturingClosureStoredInField(field, newValue, _currentTypeName, fieldToken.Line, fieldToken.Column);
+
     var fieldKind = field.Type.ToValueKind();
     var slotName = NascentSelfSlotName(fieldToken.Value);
     bool isFirstWrite = _nascentSelfAssignedFields!.Add(fieldToken.Value);
@@ -9565,6 +9580,8 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         && IsWideningCastSafe(newValueKind, fieldKind)) {
       newValue = PromoteValue(newValue, fieldKind);
     }
+
+    RejectCapturingClosureStoredInField(field, newValue, structTypeName, fieldToken.Line, fieldToken.Column);
 
     _currentBlock!.AddOp(new MaxonFieldAssignOp(structVal, structTypeName, fieldToken.Value, newValue));
   }
@@ -17168,6 +17185,8 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
           }
         }
 
+        RejectCapturingClosureStoredInField(field, value, typeName, fieldNameToken.Line, fieldNameToken.Column);
+
         fieldValues.Add((fieldNameToken.Value, value));
       } while (Check(TokenType.Comma) && Advance() != null);
     }
@@ -18823,7 +18842,45 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     var fnVarRefOp = new MaxonFunctionVarRefOp(varName, fnType);
     _currentBlock!.AddOp(fnVarRefOp);
 
+    // A cross-block load mints a fresh SSA id for the same function value, so carry the
+    // "has an environment" fact across with it — otherwise a closure bound in one block
+    // and stored into a field in another would slip past the field-store check.
+    if (_capturingClosureVars.Contains(varName)) _capturingClosureValues.Add(fnVarRefOp.Result.Id);
+
     return fnVarRefOp.Result;
+  }
+
+  /// <summary>
+  /// Records that <paramref name="varName"/> is bound to a function value carrying a
+  /// capture environment, so a later store of that binding into a struct field is still
+  /// recognizable as the closure it came from. A rebinding to a plain function reference
+  /// clears the mark — the variable no longer holds an environment.
+  /// </summary>
+  private void TrackCapturingClosureBinding(string varName, MaxonValue value) {
+    if (_capturingClosureValues.Contains(value.Id))
+      _capturingClosureVars.Add(varName);
+    else
+      _capturingClosureVars.Remove(varName);
+  }
+
+  /// <summary>
+  /// Refuses a function value that carries a capture ENVIRONMENT being stored into a
+  /// function-typed struct field, where only the code pointer fits and the environment
+  /// would be silently dropped. See ErrorCode.SemanticCapturingClosureInField for the
+  /// mechanism, and for why the fix that would make it WORK is deliberately deferred.
+  ///
+  /// A closure that captures nothing is a plain function reference by the time it gets
+  /// here and passes, which is what keeps a table of handlers or passes buildable.
+  /// </summary>
+  private void RejectCapturingClosureStoredInField(
+      IrStructField field, MaxonValue value, string typeName, int line, int column) {
+    if (field.Type is not IrFunctionType || !_capturingClosureValues.Contains(value.Id)) return;
+
+    throw new CompileError(ErrorCode.SemanticCapturingClosureInField,
+      $"cannot store a closure that captures in field '{field.Name}' of '{typeName}': "
+      + "captures are taken by reference to the enclosing function's frame, so the closure "
+      + "cannot outlive it by being stored. Store a function reference, or a closure that captures nothing",
+      line, column);
   }
 
   /// <summary>
@@ -20973,6 +21030,8 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       var closureCreateOp = new MaxonClosureCreateOp(closureName, fnType,
         capturedValues, capturedNames, capturedKinds, capturedStructTypes);
       _currentBlock!.AddOp(closureCreateOp);
+      _capturingClosureValues.Add(closureCreateOp.Result.Id);
+
       return new ExprResult.Direct(closureCreateOp.Result);
     } else {
       var fnRefOp = new MaxonFunctionRefOp(closureName, fnType);
