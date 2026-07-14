@@ -75,8 +75,11 @@ warm-rebuild determinism gate, the full scalar core, and a **linear** SSA-chorda
 allocator. The bones are good — content-hash query spine, parse-staging, 3 IR tiers
 (Maxon→Std→Target, no MIR), flat `StdOp`, x64/PE backend.
 
-**The scalar core is DONE. The mechanism ladder is the live work, and the next step is
-P1.1 (structs).**
+**~~The scalar core is DONE.~~ FALSE — measured 2026-07-13 against `/specs`: 48 of 2,746.** The 126
+tests it passes were written by shv2, for shv2, and not one of them ever used a parenthesis. The core
+is missing grouping, `true`/`false`, `not`/`and`/`or`, block scoping, void functions, top-level
+`typealias`, floats, chars, and bitwise ops — and it turns `a / 0` into a hardware trap. **The live
+work is P1.0d (complete the scalar core); P1.1 (structs) follows it.** See the ladder.
 
 > **Note the two senses of "shv2 runs its spec tests."** shv2 *already* has a `spec-test`
 > command (126/0) — but that harness is compiled by **`maxon.exe`**, the C# bootstrap. Phase 1
@@ -338,8 +341,33 @@ green build.
 |---|---|---|
 | **P1.0o** | **the compiler traces ITSELF — Workstream O1** ⭐ | **FIRST, because it is the instrument the rest of the ladder is debugged with.** shv2's stderr `Logger` dies the moment P1.0a interleaves N workers into one stream. A `__DebugStream` builtin in **`maxon.exe`** + 4 new event codes + a sink behind `Logger`'s existing API ⇒ binary events into the shared-memory ring, demuxed per-worker by `maxon monitor`. **Depends on NOTHING in Phase 1** — the bootstrap already carries the ring, the reserve, and the monitor *(see Workstream O)* |
 | **P1.0a** | **grow the harness's parallel worker pool back** | **The acceptance target must exist before it can be a target.** Port `maxon-selfhosted`'s [`runAllSpecTestsParallel`](maxon-selfhosted/Testing/SpecTestRunner.maxon#L3401) worker pool into `maxon-shv2/Testing/`. Written in Maxon, compiled by **`maxon.exe`**, green under today's gates — so it lands *now*, and every later rung is measured against the real Phase-1 target instead of the serial stub. **Workstream S is what makes it pay:** the corpus takes the suite from 126 tests to thousands |
-| **P1.0b** | **Workstream S1 — port the ≥650 scalar-core cases from `/specs`** ⭐ | *(see Workstream S.)* Teach `SpecParser` the `disabled-test:` marker, bulk-copy the corpus, disable what shv2 cannot yet pass. **The first real test of the scalar core against a corpus shv2 did not author — expect bugs, that is the point.** From here every rung is driven by the cases it enables |
+| **P1.0b** | **Workstream S — the `disabled-test:` marker, and ON-DEMAND porting** ⭐ | *(see Workstream S.)* The marker is SHIPPED (`362b07b72`). **The bulk port is NOT, and will not be** (user directive): spec files are copied from `/specs` **on demand, by the rung that needs them**, not as a corpus dump. A trial bulk sweep was run once, as a MEASUREMENT, and then discarded — see P1.0d, which is what it found |
+| **P1.0d** | **complete the SCALAR CORE** ⭐⭐ **← NEXT** | **NEW, and it exists because the sweep proved this plan's central claim false.** See "The scalar core is NOT done" below |
 | **P1.0c** | **measure the stdlib cone** | against the **upgraded** harness. Cheap, and it sets the boundary — see above |
+
+### ⚠⚠ "The scalar core is DONE" was FALSE — measured 2026-07-13
+
+The 126 spec tests shv2 passes were all written **by shv2, for shv2**. Run against `/specs` — the real,
+accumulated definition of the language, written by people who were not trying to make shv2 look good —
+the scalar core scored **48 passing out of 2,746**. *Not one of the 126 self-authored tests had ever
+used a parenthesis.* **This is exactly the bias Workstream S exists to break, and it broke it on the
+first run.** Every item below was reproduced against the compiler, not inferred:
+
+| Gap | Evidence |
+|---|---|
+| **parenthesized expressions** | `(a + b) * c` ⇒ `E2004: Expected expression but got '('`. The Pratt parser has **no grouping primary** |
+| **`true` / `false` literals** | ⇒ `E2004: Expected expression but got 'true'`. The `bool` TYPE exists (comparisons make it, `if` eats it); only the literals are missing |
+| **`not` / `and` / `or`** | not parseable |
+| **top-level `typealias`** | ⇒ `E3010: Unsupported: top-level typealias (M1 parses only function declarations)`. **1080 cases** — the single biggest blocker in the corpus, and the plan had it scheduled LAST, at P1.9. Most `/specs` files simply OPEN with `typealias Integer = int(i64.min to i64.max)` |
+| **block scoping** | `Parser.maxon` calls **neither** `Scope.pushScope` nor `popScope` — both are correct, and both are **DEAD CODE** (`Scope.maxon:267,276`). Every `if`/`while` body declares into the FUNCTION frame. One twin silently accepts an invalid program; the other feeds malformed SSA to the allocator and panics (`RegisterAllocator.maxon:645` — a **symptom**, not the cause) |
+| **void functions** | **ANY** void function panics the compiler, *even if never called* (`IrBlock.maxon:238`, no terminator). A second, distinct panic fires on an explicit bare `return` (`LowerMaxonToStd.maxon:352`), whose own message wrongly assumes only `main` can be void |
+| **`a / 0`** | escapes as a raw `0xC0000094` hardware trap. `specs/safety.md` requires a clean `panic` + exit 1 |
+| **floats · chars · bitwise** | had **no rung anywhere on the ladder**. Folded into P1.0d (user decision): they are scalar primitives, not mechanisms |
+
+⇒ **P1.0d lands before P1.1**, and it pulls the **declaration half of P1.9 forward** (parse + resolve a
+top-level ranged `typealias`; the corpus's ranges are wide, so the *checks* — `ExpandCastRangeChecks` /
+`InsertRangeChecks` — stay at P1.9 where they belong). Floats need a whole new register bank (there is
+**no XMM class** in the allocator today), so they are the last slice of the rung, not the first.
 | **P1.1** | structs · enums · unions · `match` | concrete, trivial-ownership only. **← NEXT** |
 | **P1.2** | **heap + ownership + drops + `String`** ⭐ | **THE CRUX, and String is the FIRST heap value** — real, needed by everything, and trivially-elemented so it forces no descriptor. Hardcoded `__ManagedMemory`(40B) + `String`(16B) bootstrap structs; rdata `capacity = -2` sentinel; synthesized `__destruct_String`; interpolation of **primitives**. Runtime slice **R1** lands here — mm-trace gates from here and **cannot run without it**. **`own.drop` declares BOTH arms now**; the descriptor arm is unreachable until P1.6 |
 | **P1.3** | **owned payloads in enums/unions** | *moved into Phase 1* — `compilerError(text String)`, `fail(reason String)`. Needs only P1.1 + P1.2's drops. Errors (P1.4) want it too: the harness calls `e.displayReason()` |
@@ -472,14 +500,20 @@ retires the last argument for it.)*
 
 ### The slices
 
-- **S1 — NOW, before P1.1: port every case the CURRENT scalar core should already pass.**
-  **Measured: ≥650 of the 3,259 cases (20%) need nothing shv2 does not already have** — integer
-  arithmetic, comparison, `if`/`else`, `while`/`break`/`continue`, functions/params/calls, `/` and
-  `mod`. *(A conservative floor: the classifier's probes over-fire, which can only push cases out of
-  the scalar bucket, never in.)* **That is 5× the entire current 126-test suite**, and shv2's scalar
-  core has never once been tested against a corpus it did not author. **Expect bugs — that is the
-  point.** The five allocator stress specs, written the same way, turned up two real ones in code
-  that was green. Finding them now is far cheaper than finding them stacked under three more rungs.
+- **S1 — ❌ THE BULK PORT IS CANCELLED (user directive, 2026-07-13). Port spec files ON DEMAND, by
+  the rung that needs them.** The projection here was **≥650 of 3,259 cases portable today**. The
+  sweep was run once, as a *measurement*, and the real number was **48 of 2,746** — because most
+  `/specs` files open with a top-level `typealias` (1080 cases) and because the core cannot parse a
+  parenthesis. **A bulk port would therefore have landed ~2,700 `disabled-test:` markers: 98% of the
+  corpus shelved. That is not a roadmap, it is noise** — the ranked-by-rung grep only says anything
+  once the scalar core is complete.
+  ⇒ The sweep **already did its job**: it named P1.0d. It is discarded, and from here **each rung
+  copies in exactly the `/specs` files it needs** (P1.0d takes `parentheses.md`, `bool-type.md`,
+  `block-scoping.md`, `empty-block.md`, `discarded-results.md`, `ranged-typealias.md`, …). The
+  `disabled-test:` marker still governs *within* a ported file, because a ported file still mixes
+  in-core cases with out-of-core ones — that is unchanged, and it is why the marker exists.
+  **The lesson stands, and it is the whole point of Workstream S: a corpus shv2 did not author found,
+  on its FIRST run, eight gaps and four outright bugs in code that was green.**
 - **S2 — every rung, P1.1 onward: a rung is DONE when the cases it unlocks are ENABLED and green.**
   Author a bespoke spec only where no real one exists — i.e. for shv2-specific surface (allocator
   stress, IR goldens, `E5001` pressure), never for a language feature `/specs` already covers.
@@ -766,9 +800,15 @@ never block on the ladder:
 
 ## Where we are
 
-**The scalar core is DONE** (old M1–M5): `let`/`var`/block scope · full-Pratt
+**The scalar core is ~~DONE~~ INCOMPLETE** (old M1–M5). What genuinely works: `let`/`var` · full-Pratt
 arithmetic/comparison/unary · `if`/`else` · `while`/`break`/`continue` (on-the-fly SSA +
 `EliminatePhis`) · functions with params + calls · integer `/` and `mod`.
+
+⚠ **What "block scope" in that list actually means: nothing.** `Scope.pushScope`/`popScope` exist,
+are correct, and are **never called** — a `let` inside an `if` leaks to the function frame. The claim
+survived because every one of the 126 tests was written by shv2, for shv2. **P1.0d closes this and
+the seven other measured gaps** (parens, `true`/`false`, `not`/`and`/`or`, void functions, top-level
+`typealias`, floats/chars/bitwise, and divide-by-zero-as-hardware-trap). See the ladder.
 
 **The register allocator shipped and beat its own brief.** Register allocation was ~74% of v1's
 self-compile wall time (~418 s of 561 s) against shv2's ≤30 s *whole-compile* budget; shv2's is
