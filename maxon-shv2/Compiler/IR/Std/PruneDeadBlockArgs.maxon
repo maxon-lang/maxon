@@ -50,7 +50,11 @@
 
 // A per-value flag, indexed by ValueId. DENSE (ValueIds are function-local and dense), so no
 // Map and no hashing — the same discipline the register allocator's columns follow.
-typealias ValueFlagColumn = Array with bool
+//
+// Exported with its constructor and its setter: `dropBlockArgs` is shared with
+// `elimTrivialBlockArgs`, and the column that tells it which block-args SURVIVE is what both passes
+// hand it.
+export typealias ValueFlagColumn = Array with bool
 
 // Delete every dead block-arg in every function, in place.
 export function pruneDeadBlockArgs(module StdModule)
@@ -88,8 +92,10 @@ function pruneDeadBlockArgsInFunc(module StdModule, func IrFunction) returns Val
 	let pairs = collectPhiOperands(module, func: func, refByBlockId: refByBlockId)
 	let feeders = buildCsr(pairs.args, to: pairs.incoming, nodeCount: bound)
 
+	// USEFUL IS KEPT: this pass's whole answer is which block-args survive, so it hands the shared
+	// dropper its column directly.
 	let useful = computeUsefulBlockArgs(module, func: func, isBlockArg: isBlockArg, feeders: feeders, bound: bound)
-	return dropUselessBlockArgs(module, func: func, refByBlockId: refByBlockId, useful: useful)
+	return dropBlockArgs(module, func: func, refByBlockId: refByBlockId, kept: useful)
 end 'pruneDeadBlockArgsInFunc'
 
 // One past the highest block-arg ValueId in `func` — the size of the dense flag columns
@@ -114,14 +120,14 @@ export function blockArgIdBound(module StdModule, func IrFunction) returns Value
 	return bound
 end 'blockArgIdBound'
 
-function flagColumn(count ValueId) returns ValueFlagColumn
+export function flagColumn(count ValueId) returns ValueFlagColumn
 	var col = ValueFlagColumn.create()
 	col.resize(count)
 	return col
 end 'flagColumn'
 
-function setFlag(col ValueFlagColumn, v ValueId)
-	try col.set(v, value: true) otherwise panic("pruneDeadBlockArgs: flag write for value {v} is outside the block-arg id space")
+export function setFlag(col ValueFlagColumn, v ValueId)
+	try col.set(v, value: true) otherwise panic("blockArgs: flag write for value {v} is outside the block-arg id space")
 end 'setFlag'
 
 // FALSE for any id outside the column: the columns are sized by the block-arg id space, and
@@ -264,26 +270,42 @@ function markUseful(v ValueId, useful ValueFlagColumn, worklist ValueIdArray)
 	worklist.push(v)
 end 'markUseful'
 
-// Drop every block-arg that is not useful, together with its slot in EVERY incoming edge.
-// The edges are rewritten FIRST, while each target still declares the block-args the slots
-// are aligned to; the block-arg lists are rebuilt after. Returns the number dropped.
-function dropUselessBlockArgs(module StdModule, func IrFunction, refByBlockId ValueIdArray, useful ValueFlagColumn) returns ValueId
+// DELETE EVERY BLOCK-ARG `kept` DOES NOT MARK, TOGETHER WITH ITS SLOT IN EVERY INCOMING EDGE —
+// the one operation BOTH block-arg passes end in, and the one they may not each write for
+// themselves.
+//
+// Dropping slot `k` of a block means dropping `blockArgs[k]` AND slot `k` of every incoming edge's
+// `argIds`, or the positional `blockArgs[k] ↔ argIds[k]` correspondence the whole phi model rests on
+// is broken — and broken SILENTLY, by handing some phi another value's number. Two copies of that
+// discipline is two chances to break it, and a fix applied to one of them would not read as a bug at
+// the other: they differ only in WHICH block-args survive, never in HOW a survivor's slots are kept
+// in step.
+//
+// THE ORDER IS THE DISCIPLINE. The edges are rewritten FIRST, while every target still declares the
+// block-args its slots are aligned to; the block-arg lists are rebuilt only after every edge has
+// been read. Rebuilding a block's args before its predecessors' edges have been re-cut would leave
+// the edges aligned to a list that no longer exists.
+//
+// Returns the number dropped, which is the number of block-args `kept` left unmarked. Both callers
+// take their answer FROM here rather than counting alongside it, so "how many went" cannot disagree
+// with "how many are gone".
+export function dropBlockArgs(module StdModule, func IrFunction, refByBlockId ValueIdArray, kept ValueFlagColumn) returns ValueId
 	for blockRef in func.blockRefs 'eachPred'
-		var pred = try module.blocks.get(blockRef) otherwise panic("pruneDeadBlockArgs: blockRef from func.blockRefs not in module.blocks")
+		var pred = try module.blocks.get(blockRef) otherwise panic("dropBlockArgs: blockRef from func.blockRefs not in module.blocks")
 		var newEdges = BranchEdgeArray.create()
 		for edge in pred.branchEdges 'eachEdge'
 			let target = blockById(module, refByBlockId: refByBlockId, id: edge.targetBlockId, from: pred.label)
-			newEdges.push(BranchEdge.create(edge.targetBlockId, argIds: keptArgIds(edge, pred: pred, target: target, useful: useful)))
+			newEdges.push(BranchEdge.create(edge.targetBlockId, argIds: keptArgIds(edge, pred: pred, target: target, kept: kept)))
 		end 'eachEdge'
 		pred.branchEdges = newEdges
 	end 'eachPred'
 
 	var removed = 0 as ValueId
 	for blockRef in func.blockRefs 'eachBlock'
-		var block = try module.blocks.get(blockRef) otherwise panic("pruneDeadBlockArgs: blockRef from func.blockRefs not in module.blocks")
+		var block = try module.blocks.get(blockRef) otherwise panic("dropBlockArgs: blockRef from func.blockRefs not in module.blocks")
 		var newArgs = IrBlockArgArray.create()
 		for arg in block.blockArgs 'eachArg'
-			if flagOf(useful, v: arg.valueId) 'keep'
+			if flagOf(kept, v: arg.valueId) 'keep'
 				newArgs.push(arg)
 			end 'keep' else 'drop'
 				removed = removed + 1
@@ -293,17 +315,19 @@ function dropUselessBlockArgs(module StdModule, func IrFunction, refByBlockId Va
 	end 'eachBlock'
 
 	return removed
-end 'dropUselessBlockArgs'
+end 'dropBlockArgs'
 
-// The values `edge` passes to the block-args its target KEEPS, in slot order.
-function keptArgIds(edge BranchEdge, pred IrBlock, target IrBlock, useful ValueFlagColumn) returns ValueIdArray
-	var kept = ValueIdArray.create()
+// The values `edge` passes to the block-args its target KEEPS, in slot order — the edge side of the
+// same drop, and the reason it reads the TARGET's block-arg list rather than its own `argIds`: the
+// slot is what the two are aligned by.
+function keptArgIds(edge BranchEdge, pred IrBlock, target IrBlock, kept ValueFlagColumn) returns ValueIdArray
+	var survivors = ValueIdArray.create()
 	for k in 0 upto target.blockArgs.count() 'eachSlot'
-		let arg = try target.blockArgs.get(k) otherwise panic("pruneDeadBlockArgs: blockArgs.get({k}) OOB on '{String.from(target.label)}'")
+		let arg = try target.blockArgs.get(k) otherwise panic("dropBlockArgs: blockArgs.get({k}) OOB on '{String.from(target.label)}'")
 		let incoming = incomingArgAt(edge, k: k, pred: pred, target: target)
-		if flagOf(useful, v: arg.valueId) 'keep'
-			kept.push(incoming)
+		if flagOf(kept, v: arg.valueId) 'keep'
+			survivors.push(incoming)
 		end 'keep'
 	end 'eachSlot'
-	return kept
+	return survivors
 end 'keptArgIds'

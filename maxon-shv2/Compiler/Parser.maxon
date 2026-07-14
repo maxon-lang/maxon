@@ -2103,12 +2103,18 @@ export type Parser
 		// the one that must branch here.
 		var rhsEnd = self.currentBlock
 
-		// The SHORT-CIRCUIT half of the same symmetric rule `emitBinOp` enforces: the left
-		// operand is a bool (that is what brought us here), so an int right operand is the
-		// `bool and int` mismatch. It cannot be caught in `emitBinOp`, because a short-circuit
-		// emits no `binOp` at all — the blocks above have already been laid down.
+		// The SHORT-CIRCUIT half of the same symmetric rule `emitBinOp` enforces, and it ASKS
+		// `emitBinOp`'S QUESTION rather than restating it. A short-circuit emits no `binOp` at
+		// all — the blocks above have already been laid down — so `emitBinOp` never sees this
+		// operator and cannot be the one place the rule lives. But the rule itself is the same
+		// one, with the left operand already known to be a bool (that is what brought us here),
+		// so it is CALLED with that knowledge. Written out longhand instead, it would be a
+		// second copy of "what counts as a mixed operand" sitting on the OTHER path every
+		// `and`/`or` can take, free to drift from the first — and the drift would show up as a
+		// `bool and int` silently accepted on one path and rejected on the other, which is a
+		// wrong answer, not a compile error.
 		let rhsTag = self.tagOf(rhsValue)
-		if not tagIsBool(rhsTag) and not tagIsUnresolved(rhsTag) 'mixedOperands'
+		if wordOpMixesBoolAndInt(infixMaxonOp(opTok.kind), left: ValueTypeTag.boolean, right: rhsTag) 'mixedOperands'
 			throw ParseError.operandTypeMismatch(opTok.kind.rawValue, line: opTok.line, column: opTok.column)
 		end 'mixedOperands'
 

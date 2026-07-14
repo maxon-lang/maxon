@@ -210,6 +210,75 @@ end 'main'
 0
 ```
 
+<!-- test: idle-vars-past-a-break-in-a-branch -->
+**The fold chain must be re-asked at EVERY link, not just the first.** Character for character
+`idle-vars-across-a-loop`, with the loop moved inside an `if` and given a `break`. Both additions
+are load-bearing, and each one adds a link to the chain the fold has to walk:
+
+- a `break` makes the loop's exit block MERGE the condition-false path with the break path, so the
+  parser mints an EXIT phi per var in scope (`Parser.wireLoopExit`) on top of the header phi;
+- the enclosing `if` makes the continuation MERGE the branch that ran the loop with the one that
+  did not, so it mints a THIRD phi per var (`Parser.mergeAtContinuation`).
+
+So each idle `k` now carries `merge ← exit ← header ← k`, and only the header phi is trivial to
+begin with. The continuation's merge phi reads the EXIT phi, not the header phi — so a fold that
+notifies only the phis reading the value it just folded reaches the exit phi and stops. The merge
+phi becomes `φ(k, k)` and is never asked again. Fifteen of those survive, they are phis and
+therefore unspillable, and the compiler refuses a program whose real working set is two:
+
+  error E5001: the loop at …:25 needs 4 more register(s) than are available
+    …:5:29   used 0 times in the loop
+
+which is the same false E5001, from the same cause, arrived at down a longer chain. A worklist
+must therefore RE-FILE a folded phi's readers onto the value it folded TO, so the next fold in the
+chain re-asks them; see `ElimTrivialBlockArgs.FeedTriggers`. Same fifteen vars, same answer, 126.
+```maxon
+function gate(p int) returns bool
+	return p >= 0
+end 'gate'
+
+function idleVarsPastABreak(p int) returns int
+	var k1 = p + 1
+	var k2 = p + 2
+	var k3 = p + 3
+	var k4 = p + 4
+	var k5 = p + 5
+	var k6 = p + 6
+	var k7 = p + 7
+	var k8 = p + 8
+	var k9 = p + 9
+	var k10 = p + 10
+	var k11 = p + 11
+	var k12 = p + 12
+	var k13 = p + 13
+	var k14 = p + 14
+	var k15 = p + 15
+	var sum = 0
+	var i = 0
+	if gate(p) 'guard'
+		while i < 100 'loop'
+			sum = sum + i
+			i = i + 1
+			if i > 3 'done'
+				break
+			end 'done'
+		end 'loop'
+	end 'guard'
+	return sum + k1 + k2 + k3 + k4 + k5 + k6 + k7 + k8 + k9 + k10 + k11 + k12 + k13 + k14 + k15
+end 'idleVarsPastABreak'
+
+function main() returns ExitCode
+	let r = idleVarsPastABreak(0)
+	if r == 126 'ok'
+		return 0
+	end 'ok'
+	return 99
+end 'main'
+```
+```exitcode
+0
+```
+
 <!-- test: five-across-call-in-loop -->
 The LOWER side of the callee-saved boundary — the case that must need NO bracket at all.
 

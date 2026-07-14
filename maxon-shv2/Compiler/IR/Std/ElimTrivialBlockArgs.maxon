@@ -63,7 +63,7 @@
 // number of phis (2N of them) and did QUADRATIC work to find them, which is the tell.
 //
 // A worklist answers both causes exactly and once. When a phi folds, the ONLY phis whose answer
-// can change are the ones it FEEDS, and `buildPhiUserIndex` names them in O(1). So each phi is
+// can change are the ones that READ it, and `FeedTriggers` names them in O(1). So each phi is
 // re-examined only when one of its own operands actually moved, never because something unrelated
 // on the far side of the function did.
 //
@@ -74,6 +74,14 @@
 // old "defer a phi whose target is also folding" rule is gone — it existed only to stop a
 // one-substitution-at-a-time rewrite from leaving a dangling reference to a slot it was about to
 // delete, and a root is by construction not a slot that is about to be deleted.
+//
+// AND THE TRIGGER INDEX MUST MIGRATE WITH THE CHAIN, WHICH IS THE WHOLE SUBTLETY OF THE WORKLIST.
+// When `f` folds to `h`, every phi that read `f` now reads `h` — so when `h` ITSELF folds, those
+// same phis must be re-asked AGAIN. An index keyed on the ORIGINAL incoming value files them under
+// `f` and never under `h`, so `h`'s fold never reaches them and a phi that has BECOME trivial is
+// left standing. `FeedTriggers` therefore re-files each operand slot onto the fold's new root as
+// the fold happens, which is the side-index equivalent of what a use-list-based SSA construction
+// gets for free by physically rewriting the operand.
 
 // What each phi carries, accumulated across the edges that feed it: has a non-self value arrived
 // yet, what was it, and did a LATER one disagree. THE TRIVIALITY RULE LIVES HERE AND NOWHERE ELSE —
@@ -146,6 +154,84 @@ type CarriedValues
 	end 'targetOf'
 end 'CarriedValues'
 
+// WHICH PHI-OPERAND SLOTS A VALUE CURRENTLY FEEDS — the index the worklist fires on when a phi
+// folds, and the one structure in this pass that MOVES as the folds happen.
+//
+// The question a fold has to answer is "whose answer can have changed?", and the answer is "every
+// phi that reads the value I just folded". Read once, that is a static (incoming → arg) index. But
+// a fold RE-POINTS a read: after `f` folds to `h`, a phi that used to read `f` reads `h`, and when
+// `h` in turn folds that phi must be re-asked a SECOND time. A static index files it under `f`
+// forever, so `h`'s fold never names it — and a phi that has become trivial is left standing, which
+// is precisely the thing this pass exists to prevent (see the header: a surviving phi is
+// unspillable, and that is where a FALSE E5001 comes from). It is a silent miss, not a crash: the
+// IR is correct, merely worse, and the 213-spec corpus does not contain the shape.
+//
+// So the SLOTS MIGRATE. Each operand slot lives on the list of the value its incoming operand
+// currently RESOLVES to. Folding `f` walks f's list, re-asks every reader, and re-files the
+// surviving slots onto f's new ROOT — so the next fold in the chain walks them again. This is what
+// a use-list-based SSA construction gets for free by physically rewriting the operand; a pass that
+// defers its rewrite to the end has to carry the same fact itself.
+//
+// Two slots are dropped rather than re-filed, and both are dropped FOREVER:
+//   • one whose READER has itself folded — a deleted phi has no answer left to change;
+//   • one whose new root is NOT a block-arg (an op result, a parameter) — that root can never fold,
+//     so nothing will ever fire on it again.
+// That is what keeps the migration linear on the fold CHAIN the header describes: every reader in
+// the chain folds, so the lists empty as they are walked rather than accumulating.
+type FeedTriggers
+	// Slot index PLUS ONE, in both columns, so a zero-filled column reads as "feeds nothing" and
+	// "end of list" with no sentinel carved out of the slot-index space. Same discipline as
+	// `buildBlockIdIndex`, and for the same reason.
+	var head as ValueIdArray
+	var next as ValueIdArray
+
+	static function create(pairs PhiOperandPairs, bound ValueId) returns FeedTriggers
+		var head = ValueIdArray.create()
+		var next = ValueIdArray.create()
+		head.resize(bound)
+		next.resize(pairs.count())
+
+		var triggers = Self{head: head, next: next}
+
+		// A slot whose incoming value is AT OR ABOVE the block-arg id space is fed by an op result
+		// or a parameter. That value can never fold, so no fold will ever fire on it and the slot
+		// needs no list — and it must be kept out of a column whose key space spans exactly the
+		// block-args.
+		for i in 0 upto pairs.count() 'eachSlot'
+			let incoming = pairs.incomingAt(i)
+			if incoming >= bound 'neverFolds'
+				continue
+			end 'neverFolds'
+
+			triggers.attach(incoming, slot: i)
+		end 'eachSlot'
+
+		return triggers
+	end 'create'
+
+	// File `slot` under `v`, at the head of its list.
+	function attach(v ValueId, slot ValueId)
+		let first = try self.head.get(v) otherwise panic("FeedTriggers: head.get({v}) is outside the block-arg id space")
+		try self.next.set(slot, value: first) otherwise panic("FeedTriggers: next.set({slot}) OOB")
+		try self.head.set(v, value: slot + 1) otherwise panic("FeedTriggers: head.set({v}) OOB")
+	end 'attach'
+
+	function headOf(v ValueId) returns ValueId
+		return try self.head.get(v) otherwise panic("FeedTriggers: head.get({v}) is outside the block-arg id space")
+	end 'headOf'
+
+	function nextOf(slot ValueId) returns ValueId
+		return try self.next.get(slot) otherwise panic("FeedTriggers: next.get({slot}) OOB")
+	end 'nextOf'
+
+	// Detach the whole list in one move. The caller has taken its head and is walking it; leaving
+	// the slots ALSO reachable from `v` would re-file each of them twice the next time anything
+	// asked what `v` feeds.
+	function detach(v ValueId)
+		try self.head.set(v, value: 0) otherwise panic("FeedTriggers: head.set({v}) OOB")
+	end 'detach'
+end 'FeedTriggers'
+
 // Fold every trivial block-arg in every function, in place.
 export function elimTrivialBlockArgs(module StdModule)
 	var removed = 0 as ValueId
@@ -205,11 +291,12 @@ function elimTrivialBlockArgsInFunc(module StdModule, func IrFunction) returns V
 	// Something WILL fold, so now — and only now — the machinery a fold needs.
 	//
 	//   • `feeders[arg]` — what is passed to this phi, so it can be re-read through the fold chain.
-	//   • `users[v]`     — which phis is this value passed to: the question the worklist asks after
-	//                      every fold, and the one a re-sweep answered by re-reading the FUNCTION.
+	//   • `triggers`     — which operand slots does this value currently feed: the question the
+	//                      worklist asks after every fold, and the one a re-sweep answered by
+	//                      re-reading the FUNCTION.
 	//   • `parent`       — the fold chain, as a union-find column seeded with the identity.
 	let feeders = buildCsr(pairs.args, to: pairs.incoming, nodeCount: bound)
-	let users = buildPhiUserIndex(pairs, bound: bound)
+	var triggers = FeedTriggers.create(pairs, bound: bound)
 
 	var parent = ValueIdArray.create()
 	parent.resize(bound)
@@ -220,7 +307,6 @@ function elimTrivialBlockArgsInFunc(module StdModule, func IrFunction) returns V
 	var folded = BoolArray.create()
 	folded.resize(bound)
 
-	var removed = 0 as ValueId
 	while worklist.count() > 0 'settle'
 		let arg = try worklist.pop() otherwise panic("elimTrivialBlockArgs: pop from a non-empty worklist")
 		try queued.set(arg, value: false) otherwise panic("elimTrivialBlockArgs: queued.set({arg}) OOB")
@@ -234,24 +320,66 @@ function elimTrivialBlockArgsInFunc(module StdModule, func IrFunction) returns V
 
 		try folded.set(arg, value: true) otherwise panic("elimTrivialBlockArgs: folded.set({arg}) OOB")
 		try parent.set(arg, value: carried.targetOf(arg)) otherwise panic("elimTrivialBlockArgs: parent.set({arg}) OOB")
-		removed = removed + 1
 
-		// Folding `arg` changed what its users are fed, and NOTHING ELSE in the function changed.
-		// Re-reading exactly them is what a sweep spent a whole pass over the IR to discover.
-		for k in 0 upto users.degree(arg) 'eachUser'
-			let user = users.neighbour(arg, k: k)
-			reread(carried, feeders: feeders, parent: parent, arg: user, bound: bound)
-			enqueue(user, worklist: worklist, queued: queued)
-		end 'eachUser'
+		relayFold(triggers, pairs: pairs, carried: carried, feeders: feeders, parent: parent, folded: folded, worklist: worklist, queued: queued, arg: arg, bound: bound)
 	end 'settle'
 
 	// The compressed forest IS the substitution: after this, `parent[v]` is the value `v` ultimately
 	// became, and `v` itself where nothing changed. No second column, and no chains left in it.
 	compressAll(parent, bound: bound)
 	substituteEverywhere(module, func: func, subst: parent)
-	dropFoldedArgs(module, func: func, refByBlockId: refByBlockId, folded: folded)
-	return removed
+
+	// `folded` is this pass's working column — a fold is an EVENT, and the settle loop asks "has this
+	// one already gone?". The shared dropper asks the OPPOSITE question, "does this one survive?", and
+	// inverting it here, once, is what lets both block-arg passes hand `dropBlockArgs` the same kind of
+	// column. A polarity flag on the dropper would be one more thing the two passes could disagree
+	// about, and the slot alignment it maintains is the one thing that cannot survive a disagreement.
+	var kept = flagColumn(bound)
+	for v in 0 upto bound 'survivors'
+		if not isFolded(folded, v: v) 'survives'
+			setFlag(kept, v: v)
+		end 'survives'
+	end 'survivors'
+
+	return dropBlockArgs(module, func: func, refByBlockId: refByBlockId, kept: kept)
 end 'elimTrivialBlockArgsInFunc'
+
+// `arg` has just folded. Re-ask every phi that READS it — those, and only those, can have changed
+// their answer, and re-reading exactly them is what a sweep spent a whole pass over the IR to
+// discover — and then RE-FILE their operand slots onto `arg`'s new root, so the NEXT fold in the
+// chain re-asks them too. Dropping the re-file is what leaves a trivial phi standing; see the
+// `FeedTriggers` header.
+function relayFold(triggers FeedTriggers, pairs PhiOperandPairs, carried CarriedValues, feeders CsrGraph, parent ValueIdArray, folded BoolArray, worklist ValueIdArray, queued BoolArray, arg ValueId, bound ValueId)
+	// The value `arg` HAS BECOME, and therefore the value its readers now read. It is a root in one
+	// step, not a walk: a fold that moves the root of anything `arg` reads re-reads `arg` first —
+	// that is what the migrating trigger list guarantees — so `carried.targetOf` was already a root
+	// when the caller stored it. `findRoot` is here to STATE that invariant, and it is also what
+	// makes the forest provably ACYCLIC: a fold only ever points a block-arg at a current ROOT.
+	let root = findRoot(parent, v: arg, bound: bound)
+
+	var slot = triggers.headOf(arg)
+	triggers.detach(arg)
+
+	while slot > 0 'eachReader'
+		let thisSlot = slot - 1
+		let following = triggers.nextOf(thisSlot)
+		let reader = pairs.argAt(thisSlot)
+
+		// A reader that has already folded has no answer left to change, and a slot whose root can
+		// never fold can never fire again. Either way the slot is dropped for good, and that is what
+		// stops the migrating lists from accumulating along a chain.
+		if not isFolded(folded, v: reader) 'live'
+			reread(carried, feeders: feeders, parent: parent, arg: reader, bound: bound)
+			enqueue(reader, worklist: worklist, queued: queued)
+
+			if root < bound 'rootCanStillFold'
+				triggers.attach(root, slot: thisSlot)
+			end 'rootCanStillFold'
+		end 'live'
+
+		slot = following
+	end 'eachReader'
+end 'relayFold'
 
 // Re-read `arg`'s feeders through the fold chain, replacing whatever was accumulated for it. Called
 // when one of its feeders has just folded — which is the only event that can change its answer.
@@ -273,30 +401,6 @@ function enqueue(arg ValueId, worklist ValueIdArray, queued BoolArray)
 	try queued.set(arg, value: true) otherwise panic("elimTrivialBlockArgs: queued.set({arg}) OOB")
 	worklist.push(arg)
 end 'enqueue'
-
-// For each block-arg, the phis it FEEDS — `collectPhiOperands`' pairs read in the other direction.
-// This is the index that makes the worklist linear: when a phi folds, it names the only phis whose
-// triviality can have changed, so nothing else is re-examined.
-//
-// A feeder AT OR ABOVE the block-arg id space is an op result or a parameter. It can never fold, so
-// no fold will ever ask for its users and it needs no row — and it must be kept out of the CSR's key
-// space, which spans exactly the block-args.
-function buildPhiUserIndex(pairs PhiOperandPairs, bound ValueId) returns CsrGraph
-	var feederOf = ValueIdArray.create()
-	var userOf = ValueIdArray.create()
-
-	for i in 0 upto pairs.count() 'eachPair'
-		let incoming = pairs.incomingAt(i)
-		if incoming >= bound 'neverFolds'
-			continue
-		end 'neverFolds'
-
-		feederOf.push(incoming)
-		userOf.push(pairs.argAt(i))
-	end 'eachPair'
-
-	return buildCsr(feederOf, to: userOf, nodeCount: bound)
-end 'buildPhiUserIndex'
 
 // The value `v` ultimately becomes: follow the fold chain to the value that is not itself folded.
 //
@@ -374,38 +478,3 @@ function substituteEverywhere(module StdModule, func IrFunction, subst ValueIdAr
 	end 'eachPred'
 end 'substituteEverywhere'
 
-// Drop each folded block-arg together with its slot in EVERY incoming edge. The edges are
-// rewritten FIRST, while each target still declares the block-args the slots are aligned to; the
-// block-arg lists are rebuilt after. This is the same slot-alignment discipline
-// `pruneDeadBlockArgs.dropUselessBlockArgs` follows, and for the same reason: dropping slot `k`
-// of a block means dropping `blockArgs[k]` AND slot `k` of every incoming edge, or the positional
-// `blockArgs[k] <-> argIds[k]` correspondence the whole phi model rests on is broken.
-function dropFoldedArgs(module StdModule, func IrFunction, refByBlockId ValueIdArray, folded BoolArray)
-	for blockRef in func.blockRefs 'eachPred'
-		var pred = try module.blocks.get(blockRef) otherwise panic("elimTrivialBlockArgs: blockRef from func.blockRefs not in module.blocks")
-		var newEdges = BranchEdgeArray.create()
-		for edge in pred.branchEdges 'eachEdge'
-			let target = blockById(module, refByBlockId: refByBlockId, id: edge.targetBlockId, from: pred.label)
-			var keptArgs = ValueIdArray.create()
-			for k in 0 upto target.blockArgs.count() 'eachSlot'
-				let targetArg = try target.blockArgs.get(k) otherwise panic("elimTrivialBlockArgs: blockArgs.get({k}) OOB on '{String.from(target.label)}'")
-				if not isFolded(folded, v: targetArg.valueId) 'keep'
-					keptArgs.push(incomingArgAt(edge, k: k, pred: pred, target: target))
-				end 'keep'
-			end 'eachSlot'
-			newEdges.push(BranchEdge.create(edge.targetBlockId, argIds: keptArgs))
-		end 'eachEdge'
-		pred.branchEdges = newEdges
-	end 'eachPred'
-
-	for blockRef in func.blockRefs 'eachBlock'
-		var block = try module.blocks.get(blockRef) otherwise panic("elimTrivialBlockArgs: blockRef from func.blockRefs not in module.blocks")
-		var newArgs = IrBlockArgArray.create()
-		for arg in block.blockArgs 'eachArg'
-			if not isFolded(folded, v: arg.valueId) 'keep'
-				newArgs.push(arg)
-			end 'keep'
-		end 'eachArg'
-		block.blockArgs = newArgs
-	end 'eachBlock'
-end 'dropFoldedArgs'
