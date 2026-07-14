@@ -18,11 +18,23 @@ verification. Agents own layers.
 Integration is inherently serial and is the real limit on wave size: **beyond ~4–5 agents, integration
 dominates and adding agents makes it slower.**
 
-## 0. Orient
+## 0. Which rung, and orient
 
-Read `maxon-shv2/PLAN.md` (the ladder, and which rung is next) and `maxon-shv2/ARCHITECTURE.md`.
+**If an argument was given** (`/rung P1.2`, `/rung structs`, `/rung fix the divide-by-zero trap`), that
+is the rung. **If NOT, pick the next one from `maxon-shv2/PLAN.md`'s ladder** — it is the source of
+truth for what is next, and it is kept current precisely so that the no-argument form works. State which
+rung you picked and why **before** doing anything, so the user can redirect you cheaply.
+
+Then read `maxon-shv2/ARCHITECTURE.md` (design pillars, core invariants) and the relevant PLAN.md
+sections.
+
 `git fetch origin` and rebase — **optimization work runs in a different repo in parallel** and lands
-upstream.
+upstream, so local `main` goes stale between rungs.
+
+**A rung may be too big for one wave.** If it is, SLICE it and say so: land the cheap, high-unlock,
+low-risk part first (P1.0d's front-end slice unlocked 1080 corpus cases with no new IR ops and no
+codegen), and keep the deep part (a new register bank for floats) as its own slice. Each slice runs the
+full loop below.
 
 ## 1. Establish the baseline YOURSELF
 
