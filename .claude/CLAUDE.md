@@ -20,7 +20,7 @@ must (see Building and Testing below).
 | Build the C# compiler | `mcp__maxon-dev__build` with `target: "csharp"` |
 | Build the shv2 compiler | `mcp__maxon-dev__build` with `target: "shv2"` (built BY the bootstrap — build `csharp` first if it is stale) |
 | Run a spec-test suite | `mcp__maxon-dev__run_spec_test` (set `compiler` to pick the suite; `"shv2"` runs `specs-shv2`) |
-| Gate compile-time + memory SCALING (shv2) | `mcp__maxon-dev__run_scale_test` (no `compiler` arg — shv2 only) |
+| MEASURE compile-time + memory SCALING (shv2) — an instrument, **no verdict** | `mcp__maxon-dev__run_scale_test` (no `compiler` arg — shv2 only) |
 | Get per-test PASS/FAIL detail for a filter | `mcp__maxon-dev__spec_test_outcome` (requires `filter`; either compiler) |
 | Run an inline Maxon snippet or a file | `mcp__maxon-dev__run_program` (requires `compiler`) |
 | Dump IR (optionally per-stage) | `mcp__maxon-dev__dump_ir` (requires `compiler`; `dumpStages: true` for stage-by-stage artifacts — csharp only) |
@@ -40,7 +40,7 @@ Flags like `--filter`, `--update-required`, `--log`, `--mm-trace`, and `--target
 
 ⚠ **DO NOT CHASE A GREEN SCALE-TEST. There isn't one.** A curve that looks wrong is a **reading to explain**, not a light to turn green. And **never touch the instrument to make a number look better** — a past pass exempted `regalloc:liveness` from a noise check to stop it complaining, which was treating the symptom of a verdict that should not have existed. The right response to a curve that bends is to say WHY it bends. (`liveness` bills two call sites into one bucket — one per function, linear; one after every split, superlinear — so it is a *sum of two exponents* and bends on a perfectly idle machine.)
 
-⚠ **The code still carries committed memory "goldens", exponent "budgets", `--update-required` and PASS/FAIL/VOID/NOISY verdicts. That apparatus is ACCRETION — it was never the intent, and it is being removed.** Do not build on it and do not add to it.
+✅ **The gate apparatus is GONE** (2026-07-14): the committed memory goldens, the exponent budgets, `--update-required` and the PASS/FAIL/VOID/NOISY verdicts have all been deleted, along with `ScaleGates.maxon` and `ScaleBaseline.maxon`. **Do not reintroduce them.** `scale-test` exits **0** whatever the numbers say; a non-zero exit means the **RUN ITSELF BROKE** (a degenerate corpus, a rung that failed to compile, an IO failure) and produced no valid data — never that a number was surprising.
 
 How to read the numbers:
 
