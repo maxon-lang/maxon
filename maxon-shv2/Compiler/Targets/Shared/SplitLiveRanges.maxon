@@ -1961,14 +1961,18 @@ type ReachCache
 
 		let row = self.rowCount
 		self.rowCount = row + 1
-		self.rows.resize(self.rowCount * self.numBlocks)
+
+		// `growFilled`, NEVER `resize` — this matrix is extended ONE ROW AT A TIME, which is the exact
+		// shape `resize` is quadratic on: it reserves EXACTLY the length asked, so row `r` reallocates
+		// and copies all `r × numBlocks` entries already there. Θ(rows² × numBlocks) BYTES for a matrix
+		// that ends up Θ(rows × numBlocks) long, and rows and numBlocks BOTH grow with the function.
+		//
+		// The fill is the same one the walk needs: it only ever SETS marks, so the row must arrive
+		// all-false, and after `retargetTo`'s `clear()` the capacity survives — so a bare length bump
+		// would hand this walk the PREVIOUS peak's marks. `growFilled` clears exactly the entries it
+		// added, and the entries it adds ARE this row (`existing == base`).
 		let base = self.slotOf(row, block: 0)
-		// The walk below only ever SETS marks, so the row must arrive all-false — and `resize` does not
-		// deliver that on a REUSED `rows`: after `retargetTo`'s `clear()` the capacity survives, so
-		// growing the length back would hand this walk the PREVIOUS peak's marks.
-		for b in 0 upto self.numBlocks 'clearRow'
-			try self.rows.set(base + b, value: false) otherwise panic("ReachCache.rowFor: rows.set OOB")
-		end 'clearRow'
+		self.rows.growFilled(self.rowCount * self.numBlocks, value: false)
 		markBlocksReachableFromPeak(topo, peakBlockLocal: self.peakBlockLocal, defBlock: defBlock, rows: self.rows, base: base)
 		try self.rowOf.set(defBlock, value: row) otherwise panic("ReachCache.rowFor: rowOf.set OOB")
 		return row

@@ -134,12 +134,23 @@ export type ReuseCopyPlan
 
 	// Record the copy for the op at layout sequence `seq`. The columns grow to fit rather than
 	// being sized up front: a function with no reuse copy at all then allocates nothing.
+	//
+	// `growFilled`, NEVER `resize`. The colorer walks the function in layout order, so `seq` ARRIVES
+	// INCREASING and these columns are extended one copy at a time — the exact shape `resize` is
+	// quadratic on, because it reserves EXACTLY the length asked and so reallocates and copies the
+	// whole column on every extension: Θ(copies × ops) BYTES for columns that end up Θ(ops) long.
+	// `growFilled` grows the capacity geometrically and initialises what it added; `at()` still reads
+	// `count()` as "past the last copy", which is unchanged (the length is still `seq + 1`).
+	//
+	// The register columns are filled with the out-of-file sentinel rather than register 0, so an entry
+	// whose `present` flag is false names no real register (`RegNum` is `int(0 to 16)` precisely so that
+	// `RegisterFileSize` is representable and is not one of the 0..15 the file holds).
 	export function record(seq OpSeq, destReg RegNum, srcReg RegNum)
-		if seq >= self.present.count() 'grow'
-			self.present.resize(seq + 1)
-			self.destRegs.resize(seq + 1)
-			self.srcRegs.resize(seq + 1)
-		end 'grow'
+		let noRegister = RegisterFileSize as RegNum
+		self.present.growFilled(seq + 1, value: false)
+		self.destRegs.growFilled(seq + 1, value: noRegister)
+		self.srcRegs.growFilled(seq + 1, value: noRegister)
+
 		try self.present.set(seq, value: true) otherwise panic("ReuseCopyPlan.record: present.set OOB at sequence {seq}")
 		try self.destRegs.set(seq, value: destReg) otherwise panic("ReuseCopyPlan.record: destRegs.set OOB at sequence {seq}")
 		try self.srcRegs.set(seq, value: srcReg) otherwise panic("ReuseCopyPlan.record: srcRegs.set OOB at sequence {seq}")
