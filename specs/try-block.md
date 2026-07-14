@@ -1345,3 +1345,78 @@ end 'main'
 ```exitcode
 5
 ```
+
+<!-- test: try-block.routed-union-result-is-released -->
+### A routed call returning an associated-value union releases its result
+
+A bare throwing call inside a `try` block has its success value hoisted into a routed
+`__try_block_result_N` temp, which receives the callee's *transferred* reference. That temp
+therefore owns a reference and must release it at scope end, exactly like the temp the
+single-statement `try` forms use.
+
+It did not. `VarRegistry.KeysSince` excluded `__try_block_result_*` from scope-end cleanup on
+the theory that a downstream `let x = <call>` aliased the same slot without increfing — true
+for a struct return, which was separately handed a `CallReturn` `__call_tmp_` that turned the
+alias into a *move*, and false for an associated-value union, which was handed nothing and so
+increfed like any other alias. The result: one reference per routed union-returning call was
+owned by a temp nobody ever decrefed, and the union leaked.
+
+Nothing in the suite returned a union from a bare call inside a `try` block, so the leak went
+unseen. This test is that shape and nothing more: the success path leaks a `Shape` if the
+routed temp's reference is dropped, and the leak checker fails the run with exit 101. Both
+paths are walked because the error path stores null into the same slot and must not
+double-release it.
+
+```maxon
+typealias Num = int(0 to 1000)
+
+union Shape
+    circle(r Num)
+    square(s Num)
+end 'Shape'
+
+union ShapeError
+    tooBig(limit Num)
+end 'ShapeError'
+
+function makeShape(r Num) returns Shape throws ShapeError
+    if r > 500 'tooBig'
+        throw ShapeError.tooBig(500)
+    end 'tooBig'
+
+    return Shape.circle(r)
+end 'makeShape'
+
+function classify(r Num) returns Num
+    var out = 0
+
+    // The success path must FALL OUT of the try block rather than return from inside it.
+    // An early return runs the function-exit cleanup, which released the routed temp anyway;
+    // only falling through reaches the try block's own inner scope-end, which is the one that
+    // dropped it.
+    try 'blk'
+        let s = makeShape(r)
+        match s 'm'
+            circle(v) then out = v
+            square(v) then out = 0
+        end 'm'
+    end 'blk' otherwise (e) 'h'
+        match e 'k'
+            tooBig(limit) then out = limit - 499
+        end 'k'
+    end 'h'
+
+    return out
+end 'classify'
+
+function main() returns ExitCode
+    var total = 0
+    total = total + classify(3)
+    total = total + classify(4)
+    total = total + classify(900)
+    return total
+end 'main'
+```
+```exitcode
+8
+```

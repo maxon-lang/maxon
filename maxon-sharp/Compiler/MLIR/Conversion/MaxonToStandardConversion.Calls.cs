@@ -233,36 +233,26 @@ public static partial class MaxonToStandardConversion {
             ? new StdStackPtr(callResult!.Id, calleeRetStructType.Name, retVarName)
             : new StdHeapPtr(callResult!.Id, calleeRetStructType.Name, retVarName);
       } else if (calleeRetAssocEnum && callResult != null) {
-        // Associated-value enum return: store heap pointer (no unpacking needed)
+        // Associated-value enum return: the value IS a heap pointer, so store it as-is.
+        //
+        // A try_call returns null on the error path, and null is stored here unchanged —
+        // ABSENT is exactly what null means. This used to substitute a heap-allocated
+        // "EnumDummy" whenever the pointer was null, selected between the two, and decreffed
+        // whichever lost, on the belief that scope cleanup needed a real rc=1 allocation to
+        // decref. It does not: scope-end cleanup emits a null-GUARDED decref and every managed
+        // slot is zeroed on function entry, so a null slot is already the well-defined
+        // "nothing to release" case. The dummy was allocated, increffed, decreffed and freed
+        // on every SUCCESSFUL call without ever being read — the single largest source of
+        // allocations in the compiler (~20% of them).
+        //
+        // What makes the bare null safe is that no path reads this value without first
+        // testing the error flag: every `try` form branches on it immediately (see
+        // EmitErrorFlagCheck, and RouteEmittedTryCallToTryBlock for the try-block form),
+        // so the loads and increfs that would fault on null are all dominated by the
+        // success edge. The error edge only ever null-guard-decrefs the slot.
         var retEnumType = (IrEnumType)calleeFunc.ReturnType!;
         var retVarName = temps.CreateTemp("callret", result.Id, retEnumType.Name, OwnershipFlags.Orphan | OwnershipFlags.CallReturn);
-
-        if (isTryCall) {
-          // try_call returns null (0) on error — guard against null dereference
-          // by substituting a dummy allocation when the pointer is null.
-          // The dummy is increffed to rc=1 so it matches the ownership semantics
-          // of a CallReturn transfer — scope cleanup will decref whichever value
-          // was selected (real result or dummy) and both will end up properly freed.
-          int maxPayloadForSize = GetMaxFlatPayloadSlots(retEnumType);
-          int heapSize = 8 + maxPayloadForSize * 8;
-          var dummyPtr = EmitAlloc(block, heapSize, "EnumDummy", scopeName: _currentFuncName);
-          EmitIncrefValue(block, dummyPtr, scopeName: _currentFuncName);
-          var zeroConst = new StdConstI64Op(0);
-          block.AddOp(zeroConst);
-          var isNull = new StdCmpI64Op("eq", (StdI64)callResult, zeroConst.Result);
-          block.AddOp(isNull);
-          var safePtr = new StdSelectI64Op(isNull.Result, dummyPtr, (StdI64)callResult);
-          block.AddOp(safePtr);
-          // Decref the non-selected value: if call succeeded, free the dummy;
-          // if call errored, the real result is null (no decref needed).
-          var notSelected = new StdSelectI64Op(isNull.Result, (StdI64)callResult, dummyPtr);
-          block.AddOp(notSelected);
-          EmitDecrefValueIfNonnull(block, notSelected.Result, scopeName: _currentFuncName);
-          EmitStore(block, safePtr.Result, retVarName, varTypes);
-        } else {
-          EmitStore(block, callResult, retVarName, varTypes);
-        }
-
+        EmitStore(block, callResult, retVarName, varTypes);
         valueMap[result] = new StdHeapPtr(callResult!.Id, retEnumType.Name, retVarName);
       } else if (callResult != null) {
         // Widen 32-bit call results to 64-bit — StdU32 extends StdI32 so this catches both;

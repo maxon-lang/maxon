@@ -48,6 +48,7 @@ numbers mean, so that would want a new table rather than more columns.
 | 2026-07-13 | a byte string literal IS a ByteArray, and may be a global | 315,808 | 644,350 | 1,368,532 | 3,086,090 | 7,598,136 | 20,930,518 |
 | 2026-07-13 | for-in over an Array is an index counter, decided at lowering | 281,775 | 575,590 | 1,226,720 | 2,783,774 | 6,917,212 | 19,261,978 |
 | 2026-07-14 | Rebase onto the rewritten main: the ladder now sees the for-in index-counter lowering and the compiler-traces-itself work at the same time. Allocs and frees are exactly the for-in commit's; bytes are its numbers plus the constant +8/rung that origin already accepted, and the two compose with no interaction. | 281,775 | 575,590 | 1,226,720 | 2,783,774 | 6,917,212 | 19,261,978 |
+| 2026-07-14 | try_call on an associated-value enum no longer allocates a placeholder EnumDummy: null already means absent, and scope cleanup was already null-guarded, so the dummy was allocated, increffed, decreffed and freed on every successful call without ever being read | 224,996 | 456,886 | 966,324 | 2,168,570 | 5,306,696 | 14,518,054 |
 <!-- scale-history:allocations -->
 
 ## Bytes
@@ -59,10 +60,11 @@ numbers mean, so that would want a new table rather than more columns.
 | 2026-07-13 | a byte string literal IS a ByteArray, and may be a global | 13,120,707 | 27,556,083 | 61,705,191 | 154,137,781 | 458,882,020 | 1,735,816,827 |
 | 2026-07-13 | for-in over an Array is an index counter, decided at lowering | 12,113,819 | 25,521,299 | 57,502,887 | 145,153,461 | 438,545,764 | 1,685,625,083 |
 | 2026-07-14 | Rebase onto the rewritten main: the ladder now sees the for-in index-counter lowering and the compiler-traces-itself work at the same time. Allocs and frees are exactly the for-in commit's; bytes are its numbers plus the constant +8/rung that origin already accepted, and the two compose with no interaction. | 12,113,827 | 25,521,307 | 57,502,895 | 145,153,469 | 438,545,772 | 1,685,625,091 |
+| 2026-07-14 | try_call on an associated-value enum no longer allocates a placeholder EnumDummy: null already means absent, and scope cleanup was already null-guarded, so the dummy was allocated, increffed, decreffed and freed on every successful call without ever being read | 10,092,819 | 21,316,475 | 48,359,471 | 123,847,293 | 383,771,820 | 1,527,346,499 |
 <!-- scale-history:bytes -->
 
-Since the suite was introduced, rung 5 has gone **36,897,948 → 19,261,978 allocations** (−48%) and
-**2.86 GB → 1.69 GB** (−41%).
+Since the suite was introduced, rung 5 has gone **36,897,948 → 14,518,054 allocations** (−61%) and
+**2.86 GB → 1.53 GB** (−47%).
 
 ## Notes on the changes
 
@@ -86,15 +88,52 @@ the backing buffer, in the parser, where the loop is built — replacing a post-
 that pattern-matched the CFG back into a loop and bailed on exactly the loops a compiler actually
 runs (arrays of ops, blocks, tokens, strings).
 
+**`EnumDummy` — a `try_call` on an associated-value enum stops allocating a placeholder.** The
+biggest single win in the table: −24.6% of *all* allocations at rung 5. The bootstrap lowered a
+throwing call returning a union into a heap-allocated dummy enum, a `select` between it and the real
+result, and a decref of whichever lost — because a `try_call` returns null on the error path and the
+lowering believed scope cleanup needed a real rc=1 allocation to decref. It never did: scope-end
+cleanup already emits a null-GUARDED decref, and every managed slot is zeroed on function entry, so a
+null slot is already the well-defined "nothing to release" case. On the success path the dummy was
+allocated, increffed, decreffed and freed **without ever being read**. Null is what absent means, and
+storing it is now the whole lowering.
+
+The dummy was also *leaking* on the error path (see below), so this is a correctness fix wearing an
+optimization's clothes.
+
+## Bugs this uncovered
+
+Removing the dummy exposed a leak it had been half-hiding, and the leak in turn exposed a hole in the
+test suite. Both are fixed; both are worth knowing about.
+
+**A routed try-block call leaked one reference per call.** A bare throwing call inside a
+`try 'blk' … end 'blk' otherwise (e)` block has its result hoisted into a `__try_block_result_N` temp
+that receives the callee's *transferred* reference — so that temp owns it and must release it.
+`VarRegistry.KeysSince` excluded exactly those temps from scope-end cleanup, on the theory that a
+downstream `let x = <call>` aliased the same slot without increfing. That was true for a struct
+return, which was separately handed a `CallReturn` `__call_tmp_` that turned the alias into a *move*,
+and false for an associated-value union, which was handed nothing and so increfed like any other
+alias. Both special cases are gone: the try-block form now works the way every single-statement `try`
+form already did, and the temp that receives the reference is the temp that releases it.
+
+**80% of the spec suite could not see a memory leak.** `mm_leak_check` overrides the process exit code
+with 101 when an allocation is still live at exit. But 2311 of the 2886 tests are compiled together
+into one batched binary whose per-test verdicts are parsed from stdout markers carrying each test's
+own `main` return value — and `TestRunner` discarded the batched binary's process exit code entirely.
+The leak checker ran, printed, and had its verdict thrown away. A leaking batched test still emitted a
+full set of passing markers. The runner now reads that exit code; because the leak counter is
+process-global and cannot say *which* test leaked, a non-zero batch exit invalidates the batch and
+re-runs its tests individually, where each one's own leak check attributes it.
+
 ## What the profile says is left
 
 From `scale-test --per-type`, which attributes every allocation to the TYPE allocated *and* the SCOPE
-that allocated it. As of `ac9e7db47`, out of ~2.23M traced allocations:
+that allocated it.
 
-| what | allocations | share | note |
-| --- | ---: | ---: | --- |
-| `EnumDummy` | 435,879 | ~20% | Pure waste from the bootstrap's `try_call` assoc-enum lowering. Elidable. See `docs/refcount-optimization-roadmap.md` item 8. |
-| `OpIndexList` / `BlockRefList` | ~390,000 | ~17% | `IrBlock.opRefs` and `IrFunction.blockRefs` are **linked lists of integers** — a heap node per op reference, plus a `ListIterator` per traversal. `Array` would kill all three (nodes, list boxes, iterators). |
-| `stepBackwardOverOp` et al. | ~146,588 | ~7% | A superlinear cluster inside the register allocator (fitted exponent ~1.47), not a constant factor. |
+| what | share | note |
+| --- | ---: | --- |
+| `OpIndexList` / `BlockRefList` | ~17% | `IrBlock.opRefs` and `IrFunction.blockRefs` are **linked lists of integers** — a heap node per op reference, plus a `ListIterator` per traversal. `Array` would kill all three (nodes, list boxes, iterators). Now the biggest single win available. |
+| `stepBackwardOverOp` et al. | ~7% | A superlinear cluster inside the register allocator (fitted exponent ~1.47), not a constant factor. |
 
-`ArrayIterator`, previously the single biggest allocating scope at 102,845, no longer appears.
+`ArrayIterator` (once the single biggest allocating scope, at 102,845) and `EnumDummy` (once ~20% of
+all allocations) no longer appear.

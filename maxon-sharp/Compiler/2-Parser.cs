@@ -19511,13 +19511,17 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
     // Re-bind callOp.Result so any downstream capture of it points at a live value in the
     // continuation block. Synthesize a load via the appropriate var-ref op for the kind.
+    //
+    // No __call_tmp_ is emitted here. `__try_block_result_N` already holds the callee's
+    // transferred reference and releases it at scope end (see RouteEmittedTryCallToTryBlock),
+    // so a downstream `let x = <call>` is an ordinary alias that increfs its own reference —
+    // exactly what the single-statement `try` forms do. Structs used to get a CallReturn
+    // __call_tmp_ here that turned that alias into a MOVE, which only balanced because
+    // VarRegistry.KeysSince then excluded __try_block_result_N from cleanup. An
+    // associated-value enum got neither, so its transferred reference was owned by a temp
+    // nobody ever decref'd — it leaked one reference per routed call.
     if (resultVarName != null && resultKind != null) {
-      var loadedResult = EmitVarRefOp(resultVarName, resultKind.Value, resultStructTypeName);
-      callOp.Result = loadedResult;
-      // Re-emit struct __call_tmp_ for refcounting on the loaded value, mirroring CreateFunctionCall.
-      if (resultKind == MaxonValueKind.Struct) {
-        EmitCallReturnTempAssign(callOp, resultKind.Value, resultStructTypeName);
-      }
+      callOp.Result = EmitVarRefOp(resultVarName, resultKind.Value, resultStructTypeName);
     }
   }
 

@@ -364,7 +364,7 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
     // semantics callers would expect from running the tests one at a time.
     var batchTimeoutMs = item.Tests.Sum(t => t.TimeoutMs ?? DefaultTestTimeoutMs);
     var batchSw = Stopwatch.StartNew();
-    var (_, batchStdout, _) = RunExecutable(item.BatchExePath, _tempDir, args: null, timeoutMs: batchTimeoutMs);
+    var (batchExitCode, batchStdout, _) = RunExecutable(item.BatchExePath, _tempDir, args: null, timeoutMs: batchTimeoutMs);
     batchSw.Stop();
 
     // Parse the markers out of stdout. If ANY batched test fails its slice
@@ -380,7 +380,24 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
     var results = new TestResult[item.Tests.Length];
     var batchableIdx = new List<int>();
     var batchedResults = new TestResult?[item.Tests.Length];
-    var allBatchablePassed = true;
+
+    // The dispatcher returns 0 on a clean run, so a non-zero PROCESS exit means
+    // something happened that the per-test markers cannot express: most importantly
+    // a memory leak, which mm_leak_check reports by overriding the exit code with 101
+    // as the process leaves. A test's marker carries only the value its own `main`
+    // returned, so a leaking batch still prints a full set of passing markers — which
+    // is how a leaked reference per routed try-block call sat in the compiler unnoticed
+    // behind a green suite. The leak counter is process-global, so the batch cannot say
+    // WHICH test leaked; invalidating the batch re-runs each test in its own binary,
+    // where its own leak check attributes it.
+    var allBatchablePassed = batchExitCode == 0;
+    if (batchExitCode != 0) {
+      Logger.Debug(LogCategory.Testing,
+        $"[BATCH EXIT {batchExitCode}] {item.SpecName}: batched binary exited non-zero "
+        + $"({(batchExitCode == MemoryLeakExitCode ? "memory leak" : "crash or runtime error")}) — "
+        + "re-running individually to attribute it");
+    }
+
     for (int i = 0; i < item.Tests.Length; i++) {
       var test = item.Tests[i];
       var rewrite = BatchRewriter.Rewrite(test.Name, test.Source);
@@ -1031,6 +1048,12 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
   }
 
   private const int DefaultTestTimeoutMs = 2000;
+
+  /// <summary>
+  /// Exit code mm_leak_check substitutes for the program's own when any managed or raw
+  /// allocation is still live at process exit (see RuntimeEmitter.EmitMmLeakCheck).
+  /// </summary>
+  private const int MemoryLeakExitCode = 101;
 
   /// <summary>
   /// Environment variable that pins the runtime scheduler to a single OS

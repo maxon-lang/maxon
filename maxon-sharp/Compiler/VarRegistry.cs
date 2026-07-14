@@ -131,18 +131,12 @@ public class VarRegistry {
 
     /// <summary>
     /// Get variables added since a snapshot (for inner-scope cleanup at branch tails).
-    /// Excludes routed try-block result temps (`__try_block_result_*`): their slot is
-    /// aliased by a downstream `var x = __try_block_result_N` user var, and the user
-    /// var's scope-end already decref's the underlying allocation. Including the temp
-    /// in an inner scope-end double-decref's the same pointer (the assign op skipped
-    /// the second incref since both vars reference the same call-return value).
-    /// Function-exit cleanup uses GetScopeEndVars(), which still picks up these temps
-    /// in case any survives all inner scope ends.
+    /// Every managed temp declared in the scope is released here, including the routed
+    /// try-block result temps (`__try_block_result_*`), which receive the callee's
+    /// transferred reference and are therefore its owner until scope end.
     /// </summary>
     public List<string> KeysSince(HashSet<string> snapshot) {
-        return [.. _vars.Keys.Where(k =>
-            !snapshot.Contains(k)
-            && !k.StartsWith("__try_block_result_"))];
+        return [.. _vars.Keys.Where(k => !snapshot.Contains(k))];
     }
 
     // ---- Ordered Enumeration ----

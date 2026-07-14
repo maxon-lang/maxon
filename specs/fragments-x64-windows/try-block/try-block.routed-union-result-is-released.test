@@ -1,0 +1,260 @@
+// Test: try-block.routed-union-result-is-released
+typealias Num = int(0 to 1000)
+
+union Shape
+    circle(r Num)
+    square(s Num)
+end 'Shape'
+
+union ShapeError
+    tooBig(limit Num)
+end 'ShapeError'
+
+function makeShape(r Num) returns Shape throws ShapeError
+    if r > 500 'tooBig'
+        throw ShapeError.tooBig(500)
+    end 'tooBig'
+
+    return Shape.circle(r)
+end 'makeShape'
+
+function classify(r Num) returns Num
+    var out = 0
+
+    // The success path must FALL OUT of the try block rather than return from inside it.
+    // An early return runs the function-exit cleanup, which released the routed temp anyway;
+    // only falling through reaches the try block's own inner scope-end, which is the one that
+    // dropped it.
+    try 'blk'
+        let s = makeShape(r)
+        match s 'm'
+            circle(v) then out = v
+            square(v) then out = 0
+        end 'm'
+    end 'blk' otherwise (e) 'h'
+        match e 'k'
+            tooBig(limit) then out = limit - 499
+        end 'k'
+    end 'h'
+
+    return out
+end 'classify'
+
+function main() returns ExitCode
+    var total = 0
+    total = total + classify(3)
+    total = total + classify(4)
+    total = total + classify(900)
+    return total
+end 'main'
+---
+ExitCode: 8
+---
+// CompiledIR
+module {
+  func @makeShape(r: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov [rbp-8], rcx
+    x64.mov rax, 500
+    x64.cmp rcx, rax
+    x64.jle makeShape.tooBig_0.after
+  tooBig_0:
+    x64.mov rax, 500
+    x64.mov rcx, 16
+    x64.xor edx, edx
+    x64.mov r8, 8
+    x64.call mm_alloc
+    x64.mov [rbp-16], rax
+    x64.xor ecx, ecx
+    x64.mov [rax+0], rcx
+    x64.mov rdx, 500
+    x64.mov [rax+8], rdx
+    x64.mov rbx, [rbp-16]
+    x64.mov rcx, [rbp-16]
+    x64.call mm_incref
+    x64.mov rdx, [rbp-16]
+    x64.xor eax, eax
+    x64.epilogue
+    x64.ret
+  tooBig_0.after:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, 16
+    x64.xor edx, edx
+    x64.mov r8, 9
+    x64.call mm_alloc
+    x64.mov [rbp-24], rax
+    x64.xor ecx, ecx
+    x64.mov [rax+0], rcx
+    x64.mov rdx, [rbp-8]
+    x64.mov [rax+8], rdx
+    x64.mov rbx, [rbp-24]
+    x64.mov rcx, [rbp-24]
+    x64.call mm_incref
+    x64.mov rax, [rbp-24]
+    x64.xor edx, edx
+    x64.epilogue
+    x64.ret
+  }
+  func @classify(r: i64) -> u16 {
+  entry:
+    x64.prologue stack_size=80
+    x64.xor eax, eax
+    x64.mov [rbp-8], rax
+    x64.call makeShape
+    x64.mov [rbp-16], rax
+    x64.mov [rbp-24], rdx
+    x64.xor ecx, ecx
+    x64.cmp rdx, rcx
+    x64.jne classify.try_block_throw_0
+  try_block_continue_0:
+    x64.mov rax, [rbp-16]
+    x64.mov [rbp-32], rax
+    x64.mov rcx, [rbp-32]
+    x64.call mm_incref
+    x64.mov rdx, [rbp-32]
+    x64.mov rbx, [rdx+0]
+    x64.mov rsi, [rbp-32]
+    x64.mov [rbp-40], rsi
+    x64.mov [rbp-48], rbx
+    x64.jmp classify.m_0.cmp0
+  m_0.cmp0:
+    x64.mov rax, [rbp-48]
+    x64.xor ecx, ecx
+    x64.cmp rax, rcx
+    x64.jne classify.m_0.cmp1
+  m_0.case0:
+    x64.mov rax, [rbp-40]
+    x64.mov rcx, [rax+8]
+    x64.mov [rbp-8], rcx
+    x64.jmp classify.m_0.merge
+  m_0.cmp1:
+    x64.mov rax, [rbp-48]
+    x64.mov rcx, 1
+    x64.cmp rax, rcx
+    x64.jne classify.m_0.merge
+  m_0.case1:
+    x64.xor eax, eax
+    x64.mov [rbp-8], rax
+    x64.jmp classify.m_0.merge
+  m_0.merge:
+    x64.mov rax, [rbp-32]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-32]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rcx, [rbp-16]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_1
+    x64.call mm_decref
+    x64.label __nonnull_skip_1
+    x64.jmp classify.try_block_after_0
+  try_block_throw_0:
+    x64.mov rax, [rbp-16]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_2
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_2
+    x64.jmp classify.try_block_err_0
+  try_block_err_0:
+    x64.mov rax, [rbp-24]
+    x64.mov [rbp-56], rax
+    x64.mov rcx, [rbp-56]
+    x64.mov rdx, [rcx+0]
+    x64.mov [rbp-64], rax
+    x64.mov rbx, [rbp-64]
+    x64.mov [rbp-80], rdx
+    x64.mov rcx, [rbp-64]
+    x64.call mm_incref
+    x64.mov rsi, [rbp-80]
+    x64.mov [rbp-72], rsi
+    x64.jmp classify.k_0.cmp0
+  k_0.cmp0:
+    x64.mov rax, [rbp-72]
+    x64.xor ecx, ecx
+    x64.cmp rax, rcx
+    x64.jne classify.k_0.merge
+  k_0.case0:
+    x64.mov rax, [rbp-64]
+    x64.mov rcx, [rax+8]
+    x64.mov rdx, 499
+    x64.sub rcx, rdx
+    x64.mov [rbp-8], rcx
+    x64.jmp classify.k_0.merge
+  k_0.merge:
+    x64.mov rax, [rbp-56]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_3
+    x64.mov rcx, [rbp-56]
+    x64.call mm_decref
+    x64.label __nonnull_skip_3
+    x64.mov rcx, [rbp-64]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_4
+    x64.call mm_decref
+    x64.label __nonnull_skip_4
+    x64.jmp classify.try_block_after_0
+  try_block_after_0:
+    x64.mov rax, [rbp-8]
+    x64.xor ecx, ecx
+    x64.mov rdx, 1000
+    x64.cmp rax, rdx
+    x64.jg classify.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl classify.__range_panic_0
+    x64.jmp classify.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rcx, 3
+    x64.call classify
+    x64.mov [rbp-8], rax
+    x64.mov rcx, 4
+    x64.call classify
+    x64.mov rcx, [rbp-8]
+    x64.add rcx, rax
+    x64.mov [rbp-16], rcx
+    x64.mov rcx, 900
+    x64.call classify
+    x64.mov rcx, [rbp-16]
+    x64.add rcx, rax
+    x64.xor eax, eax
+    x64.mov edx, 4294967295
+    x64.cmp rcx, rdx
+    x64.jg main.__range_panic_0
+    x64.cmp rcx, rax
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_1]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rax, rcx
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_ShapeError(ptr: i64) {
+  entry:
+    x64.jmp __destruct_ShapeError.done
+  done:
+    x64.ret
+  }
+  func @__destruct_Shape(ptr: i64) {
+  entry:
+    x64.jmp __destruct_Shape.done
+  done:
+    x64.ret
+  }
+}
+---
