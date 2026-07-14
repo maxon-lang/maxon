@@ -47,6 +47,7 @@ numbers mean, so that would want a new table rather than more columns.
 | 2026-07-13 | a name is a slice of the source, not a heap String | 316,018 | 644,760 | 1,369,342 | 3,087,700 | 7,601,346 | 20,936,928 |
 | 2026-07-13 | a byte string literal IS a ByteArray, and may be a global | 315,808 | 644,350 | 1,368,532 | 3,086,090 | 7,598,136 | 20,930,518 |
 | 2026-07-13 | for-in over an Array is an index counter, decided at lowering | 281,775 | 575,590 | 1,226,720 | 2,783,774 | 6,917,212 | 19,261,978 |
+| 2026-07-14 | Rebase onto the rewritten main: the ladder now sees the for-in index-counter lowering and the compiler-traces-itself work at the same time. Allocs and frees are exactly the for-in commit's; bytes are its numbers plus the constant +8/rung that origin already accepted, and the two compose with no interaction. | 281,775 | 575,590 | 1,226,720 | 2,783,774 | 6,917,212 | 19,261,978 |
 <!-- scale-history:allocations -->
 
 ## Bytes
@@ -57,6 +58,7 @@ numbers mean, so that would want a new table rather than more columns.
 | 2026-07-13 | a name is a slice of the source, not a heap String | 13,125,747 | 27,565,923 | 61,724,631 | 154,176,421 | 458,959,060 | 1,735,970,667 |
 | 2026-07-13 | a byte string literal IS a ByteArray, and may be a global | 13,120,707 | 27,556,083 | 61,705,191 | 154,137,781 | 458,882,020 | 1,735,816,827 |
 | 2026-07-13 | for-in over an Array is an index counter, decided at lowering | 12,113,819 | 25,521,299 | 57,502,887 | 145,153,461 | 438,545,764 | 1,685,625,083 |
+| 2026-07-14 | Rebase onto the rewritten main: the ladder now sees the for-in index-counter lowering and the compiler-traces-itself work at the same time. Allocs and frees are exactly the for-in commit's; bytes are its numbers plus the constant +8/rung that origin already accepted, and the two compose with no interaction. | 12,113,827 | 25,521,307 | 57,502,895 | 145,153,469 | 438,545,772 | 1,685,625,091 |
 <!-- scale-history:bytes -->
 
 Since the suite was introduced, rung 5 has gone **36,897,948 → 19,261,978 allocations** (−48%) and
