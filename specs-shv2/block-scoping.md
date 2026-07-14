@@ -121,8 +121,7 @@ end 'main'
 error E2004: specs/fragments/block-scoping/for-destructured-not-accessible-after.test:7:9: Undefined variable 'key'
 ```
 
-<!-- disabled-test: if-body-var-not-accessible-after -->
-<!-- harness: fragment header + path normalization -->
+<!-- test: if-body-var-not-accessible-after -->
 ```maxon
 function main() returns ExitCode
 	if true 'check'
@@ -135,8 +134,7 @@ end 'main'
 error E2004: specs/fragments/block-scoping/if-body-var-not-accessible-after.test:6:9: Undefined variable 'x'
 ```
 
-<!-- disabled-test: if-else-body-var-not-accessible-after -->
-<!-- harness: fragment header + path normalization -->
+<!-- test: if-else-body-var-not-accessible-after -->
 ```maxon
 function main() returns ExitCode
 	if false 'check'
@@ -151,8 +149,7 @@ end 'main'
 error E2004: specs/fragments/block-scoping/if-else-body-var-not-accessible-after.test:8:9: Undefined variable 'y'
 ```
 
-<!-- disabled-test: while-body-var-not-accessible-after -->
-<!-- harness: fragment header + path normalization -->
+<!-- test: while-body-var-not-accessible-after -->
 ```maxon
 function main() returns ExitCode
 	var i = 0

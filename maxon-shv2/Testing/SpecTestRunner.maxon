@@ -62,10 +62,17 @@ let CompilerErrorLabel = "CompilerError:"
 // so it is a visible signal in the fragment, never the normal path.
 let MissingIrPlaceholder = "// (no Target IR: compile produced no sidecar)\n"
 
-// The placeholder that replaces a fragment's absolute on-disk path in captured
-// compiler output. Machine/run independent, so an expected ```maxoncstderr block
-// authored with `<fragment>:L:C` matches regardless of where the temp file lives.
+// The placeholder that replaces a fragment's on-disk path — in captured compiler output AND in
+// the expected text — so what a ```maxoncstderr block compares is the diagnostic, not where the
+// file happened to live. See `normalizeFragmentPath` / `normalizeReferencePath`.
 let FragmentPathToken = "<fragment>"
+
+// Where the C# REFERENCE runner compiles a test's fragment from: `specs/fragments/<spec>/<test>.test`
+// (`TestRunner.cs:158`). shv2 does not write here and never reads this directory — it reconstructs
+// the path only to recognize it in an expectation ported from /specs, whose every diagnostic names
+// it. The `/specs` corpus is the acceptance test, so its rendering of a path is a format contract,
+// exactly like the fence names in SpecParser.
+let ReferenceFragmentDir = "specs/fragments"
 
 typealias FilePathArray = Array with FilePath
 
@@ -153,7 +160,7 @@ export function runOneSpec(compilerExe FilePath, specDir FilePath, specName Stri
 	_ = Directory.create(fragmentDir)
 
 	for test in tests 'eachTest'
-		let outcome = runOneTest(compilerExe, test: test, tempDir: tempDir, exeExtension: exeExtension, fragmentDir: fragmentDir, updateRequired: updateRequired)
+		let outcome = runOneTest(compilerExe, test: test, specName: specName, tempDir: tempDir, exeExtension: exeExtension, fragmentDir: fragmentDir, updateRequired: updateRequired)
 		results.push(SpecTestResult.create(specName, testName: test.name, outcome: outcome))
 	end 'eachTest'
 
@@ -259,7 +266,7 @@ end 'specFilePaths'
 // Target-IR sidecar is produced), check its expectation, then check the emitted IR
 // against the committed `.test` golden. The temp fragment / exe / IR sidecar are
 // cleaned up before returning.
-function runOneTest(compilerExe FilePath, test SpecTest, tempDir FilePath, exeExtension String, fragmentDir FilePath, updateRequired bool) returns TestOutcome
+function runOneTest(compilerExe FilePath, test SpecTest, specName String, tempDir FilePath, exeExtension String, fragmentDir FilePath, updateRequired bool) returns TestOutcome
 	let fragmentPath = tempDir.join("{test.name}{MaxonFragmentExtension}")
 	let exeBase = tempDir.join(test.name)
 	// The driver appends the platform extension to the `-o` value
@@ -272,7 +279,7 @@ function runOneTest(compilerExe FilePath, test SpecTest, tempDir FilePath, exeEx
 	// changeExtension), so the sidecar sits beside the exe under `.ir`.
 	let irPath = exePath.changeExtension(IrFileExtension)
 
-	if not writeFragment(fragmentPath, source: test.source) 'writeFailed'
+	if not writeFragment(fragmentPath, test: test) 'writeFailed'
 		return TestOutcome.fail("could not write fragment {fragmentPath.toString()}")
 	end 'writeFailed'
 
@@ -288,7 +295,7 @@ function runOneTest(compilerExe FilePath, test SpecTest, tempDir FilePath, exeEx
 		return TestOutcome.fail("compiler spawn failed: {e.displayReason()}")
 	end 'compileSpawnFailed'
 
-	let outcome = checkExpectation(test.expectation, compile: compile, fragmentPath: fragmentPath, exePath: exePath)
+	let outcome = checkExpectation(test, specName: specName, compile: compile, fragmentPath: fragmentPath, exePath: exePath)
 
 	// The BEHAVIOUR gate ran above: the program compiled, ran, and returned what it should. The
 	// fragment is the CODE-QUALITY gate, and it only makes sense to ask "is this still the code we
@@ -373,10 +380,26 @@ function firstDifference(committed String, actual String) returns String
 	return "    golden has {oldLines.count()} lines, actual has {newLines.count()} — one is a prefix of the other"
 end 'firstDifference'
 
-// The shared fragment head both expectation kinds carry: the test name, its
-// source verbatim, and the section separator that closes the source block.
+// The exact text of the fragment the compiler is handed: a ONE-LINE `// Test: <name>` header,
+// then the test's ```maxon block verbatim.
+//
+// THE HEADER LINE IS LOAD-BEARING, and it is exactly one line for a reason: the C# reference
+// runner writes the same header (`TestRunner.cs:1696`), so a diagnostic's `line` here EQUALS the
+// reference's for the same source. That is what makes the /specs corpus's ```maxoncstderr blocks
+// — every one of them authored against the reference — portable BYTE-IDENTICALLY. Drop the header
+// and all 442 of them are off by one, for no reason a reader of either spec could see.
+//
+// The committed golden's source section is built from THIS function too, so the fragment the
+// compiler actually saw and the fragment the golden shows can never disagree.
+function fragmentSource(test SpecTest) returns String
+	return "{FragmentTestPrefix}{test.name}\n{test.source}"
+end 'fragmentSource'
+
+// The shared fragment head both expectation kinds carry: the compiled fragment's source
+// (header line included, so the golden shows what was compiled) plus the section separator
+// that closes the source block.
 function fragmentHeader(test SpecTest) returns String
-	return "{FragmentTestPrefix}{test.name}\n{test.source}\n{FragmentSectionSep}\n"
+	return "{fragmentSource(test)}\n{FragmentSectionSep}\n"
 end 'fragmentHeader'
 
 // An exitCode test's fragment: the shared head, the expected exit code, and the
@@ -394,25 +417,30 @@ function buildErrorFragment(test SpecTest, compile ProcessCapture, fragmentPath 
 	return "{fragmentHeader(test)}{CompilerErrorLabel}\n{normalizedError}\n"
 end 'buildErrorFragment'
 
-function checkExpectation(expectation SpecExpectation, compile ProcessCapture, fragmentPath FilePath, exePath FilePath) returns TestOutcome
-	return match expectation 'e'
+function checkExpectation(test SpecTest, specName String, compile ProcessCapture, fragmentPath FilePath, exePath FilePath) returns TestOutcome
+	return match test.expectation 'e'
 		exitCode(expected) gives checkExitCode(expected, compile: compile, exePath: exePath)
-		compilerError(text) gives checkCompilerError(text, compile: compile, fragmentPath: fragmentPath)
+		compilerError(text) gives checkCompilerError(text, specName: specName, testName: test.name, compile: compile, fragmentPath: fragmentPath)
 	end 'e'
 end 'checkExpectation'
 
-// A ```maxoncstderr test: the compile MUST fail, and its stderr — with the
-// fragment's absolute path replaced by the stable `<fragment>` token — must
-// equal the expected text (authored with the same token). The line:col are NOT
-// normalized: they are shv2-native (headerless fragment → code at line 1) and
-// part of what the test asserts.
-function checkCompilerError(expectedText String, compile ProcessCapture, fragmentPath FilePath) returns TestOutcome
+// A ```maxoncstderr test: the compile MUST fail, and its stderr must equal the expected text once
+// BOTH have had the fragment's path replaced by the stable `<fragment>` token — the actual by its
+// scratch path, the expected by the path the C# reference would have used for this same test.
+//
+// Normalizing BOTH sides is what lets one spec corpus feed two compilers. A /specs expectation
+// names `specs/fragments/<spec>/<test>.test` because that is where the reference compiled it; an
+// shv2-native one names `<fragment>` because that is what this runner has always printed. Neither
+// is a claim about the language, so neither should decide whether a test passes. Everything that
+// IS a claim — the code, the message, the line, the column — survives normalization untouched and
+// is compared exactly.
+function checkCompilerError(expectedText String, specName String, testName String, compile ProcessCapture, fragmentPath FilePath) returns TestOutcome
 	if compile.exitCode == 0 'unexpectedSuccess'
 		return TestOutcome.fail("expected a compile error but compilation succeeded")
 	end 'unexpectedSuccess'
 
 	let actual = normalizeFragmentPath(compile.stderr, fragmentPath: fragmentPath).trim()
-	let expected = expectedText.trim()
+	let expected = normalizeReferencePath(expectedText, specName: specName, testName: testName).trim()
 	if actual == expected 'matched'
 		return TestOutcome.pass
 	end 'matched'
@@ -438,12 +466,11 @@ function checkExitCode(expected ExitCodeValue, compile ProcessCapture, exePath F
 	return TestOutcome.fail("exit code mismatch: expected {expected}, got {run.exitCode}")
 end 'checkExitCode'
 
-// Write the test's ```maxon block to `fragmentPath` VERBATIM, appending a single
-// trailing newline if absent (the lexer needs a final newline so it doesn't hit
-// EOF mid-statement). The verbatim body keeps code at line 1, so shv2-native
-// error positions line up with the expected `<fragment>:L:C`.
-function writeFragment(fragmentPath FilePath, source String) returns bool
-	let body = source if source.endsWith("\n") else "{source}\n"
+// Write the compiled fragment to `fragmentPath`, appending a single trailing newline if absent
+// (the lexer needs a final newline so it doesn't hit EOF mid-statement).
+function writeFragment(fragmentPath FilePath, test SpecTest) returns bool
+	let text = fragmentSource(test)
+	let body = text if text.endsWith("\n") else "{text}\n"
 	try File.writeText(fragmentPath, content: body) otherwise return false
 	return true
 end 'writeFragment'
@@ -455,6 +482,23 @@ end 'writeFragment'
 function normalizeFragmentPath(text String, fragmentPath FilePath) returns String
 	return text.replace(fragmentPath.toString(), with: FragmentPathToken)
 end 'normalizeFragmentPath'
+
+// The other half of the same normalization, applied to the EXPECTED text: replace the path the
+// REFERENCE runner would have compiled this very test from with the same `<fragment>` token.
+//
+// This is what makes a /specs ```maxoncstderr block portable byte-for-byte. The reference
+// compiles `specs/fragments/<spec>/<test>.test` (`TestRunner.cs:158`) and prints that path in
+// every diagnostic; shv2 compiles a scratch file under `.spec-tmp/` and prints THAT. Both sides
+// are rewritten to one machine-independent token, so what remains to compare is the part a spec
+// actually asserts — the code, the message, the line and the column.
+//
+// The runner knows the spec and test names, so it RECONSTRUCTS the reference's path exactly:
+// there is nothing to pattern-match here and no regex to invent. An expectation authored
+// shv2-native already carries the token and passes through untouched.
+function normalizeReferencePath(text String, specName String, testName String) returns String
+	let referencePath = "{ReferenceFragmentDir}/{specName}/{testName}{FragmentExtension}"
+	return text.replace(referencePath, with: FragmentPathToken)
+end 'normalizeReferencePath'
 
 // Best-effort removal of the per-test temp fragment + produced exe + IR sidecar.
 // A stale temp file never affects correctness (the next test with this name

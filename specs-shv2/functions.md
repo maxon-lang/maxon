@@ -299,7 +299,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2052: <fragment>:6:13: the first argument cannot be named; only the second and later arguments take 'name:' labels
+error E2052: <fragment>:7:13: the first argument cannot be named; only the second and later arguments take 'name:' labels
 ```
 
 <!-- test: second-arg-unnamed -->
@@ -314,7 +314,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2053: <fragment>:6:16: the second and later arguments must be named ('name: value')
+error E2053: <fragment>:7:16: the second and later arguments must be named ('name: value')
 ```
 
 <!-- test: arity-mismatch -->
@@ -329,7 +329,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3031: <fragment>:6:9: 'add' expects 2 argument(s) but 1 were provided
+error E3031: <fragment>:7:9: 'add' expects 2 argument(s) but 1 were provided
 ```
 
 <!-- test: unknown-function -->
@@ -340,7 +340,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3030: <fragment>:2:9: call to undefined function 'frobnicate'
+error E3030: <fragment>:3:9: call to undefined function 'frobnicate'
 ```
 
 <!-- test: unknown-label -->
@@ -355,5 +355,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3032: <fragment>:6:16: 'add' has no parameter named 'zzz'
+error E3032: <fragment>:7:16: 'add' has no parameter named 'zzz'
 ```

@@ -52,7 +52,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2004: <fragment>:3:12: Expected expression but got '-'
+error E2004: <fragment>:4:12: Expected expression but got '-'
 ```
 
 ## Deferred

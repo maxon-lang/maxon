@@ -73,7 +73,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2010: <fragment>:2:7: Expected '=' but got ':'
+error E2010: <fragment>:3:7: Expected '=' but got ':'
 ```
 
 <!-- test: let-explicit-type-error -->
@@ -85,7 +85,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2010: <fragment>:2:7: Expected '=' but got ':'
+error E2010: <fragment>:3:7: Expected '=' but got ':'
 ```
 
 ## Deferred

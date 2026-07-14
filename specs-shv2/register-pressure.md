@@ -114,14 +114,13 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E5001: the loop at <fragment>:20 needs 3 more register(s) than are available
+error E5001: the loop at <fragment>:21 needs 3 more register(s) than are available
   17 values must be held in registers at once inside this loop, but
   only 14 registers are available. The values idle across the loop were already
   spilled around it at no cost; spilling any of these would put a load or store inside
   the loop body, which is exactly what this error exists to prevent.
 
   remove 3 of these 17 value(s) from the loop, cheapest first (ranked by uses inside the loop):
-    <fragment>:2:11   used 1 time in the loop
     <fragment>:3:11   used 1 time in the loop
     <fragment>:4:11   used 1 time in the loop
     <fragment>:5:11   used 1 time in the loop
@@ -130,14 +129,15 @@ error E5001: the loop at <fragment>:20 needs 3 more register(s) than are availab
     <fragment>:8:11   used 1 time in the loop
     <fragment>:9:11   used 1 time in the loop
     <fragment>:10:11   used 1 time in the loop
-    <fragment>:11:12   used 1 time in the loop
+    <fragment>:11:11   used 1 time in the loop
     <fragment>:12:12   used 1 time in the loop
     <fragment>:13:12   used 1 time in the loop
     <fragment>:14:12   used 1 time in the loop
     <fragment>:15:12   used 1 time in the loop
     <fragment>:16:12   used 1 time in the loop
     <fragment>:17:12   used 1 time in the loop
-    <fragment>:18:10   used 18 times in the loop
+    <fragment>:18:12   used 1 time in the loop
+    <fragment>:19:10   used 18 times in the loop
 
   to fix: hold the loop's working set in an array and index it inside the loop.
   array elements are never promoted into registers, so the values stay in memory
@@ -242,7 +242,7 @@ blocking set — and it is a user-visible, deletable value. Here `p` is read ins
 (`s1 = s1 + i + p`), so with thirteen accumulators plus the counter it is one of fifteen
 values live at once against a pool of fourteen. `p` has NO defining op (it is captured at
 entry, ValueId 0), yet it must NOT trip the Rule-3 "compiler-introduced value" panic: it is
-resolved to its DECLARATION span in the signature (`<fragment>:1:14` — the `p` token) through
+resolved to its DECLARATION span in the signature (`<fragment>:2:14` — the `p` token) through
 the `ParamOriginTable`. It ranks first (used once in the loop); the counter `i` ranks last.
 ```maxon
 function hot(p int) returns int
@@ -284,15 +284,14 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E5001: the loop at <fragment>:17 needs 1 more register(s) than are available
+error E5001: the loop at <fragment>:18 needs 1 more register(s) than are available
   15 values must be held in registers at once inside this loop, but
   only 14 registers are available. The values idle across the loop were already
   spilled around it at no cost; spilling any of these would put a load or store inside
   the loop body, which is exactly what this error exists to prevent.
 
   remove 1 of these 15 value(s) from the loop, cheapest first (ranked by uses inside the loop):
-    <fragment>:1:14   used 1 time in the loop
-    <fragment>:2:11   used 1 time in the loop
+    <fragment>:2:14   used 1 time in the loop
     <fragment>:3:11   used 1 time in the loop
     <fragment>:4:11   used 1 time in the loop
     <fragment>:5:11   used 1 time in the loop
@@ -301,11 +300,12 @@ error E5001: the loop at <fragment>:17 needs 1 more register(s) than are availab
     <fragment>:8:11   used 1 time in the loop
     <fragment>:9:11   used 1 time in the loop
     <fragment>:10:11   used 1 time in the loop
-    <fragment>:11:12   used 1 time in the loop
+    <fragment>:11:11   used 1 time in the loop
     <fragment>:12:12   used 1 time in the loop
     <fragment>:13:12   used 1 time in the loop
     <fragment>:14:12   used 1 time in the loop
-    <fragment>:15:10   used 15 times in the loop
+    <fragment>:15:12   used 1 time in the loop
+    <fragment>:16:10   used 15 times in the loop
 
   to fix: hold the loop's working set in an array and index it inside the loop.
   array elements are never promoted into registers, so the values stay in memory
@@ -317,7 +317,7 @@ A constant the loop uses (`let d`, read by `s14 = d - s14`) is REMATERIALIZED by
 splitter — re-emitted before its use with a FRESH ValueId — and that fresh id, minted after
 parsing, has no origin of its own. When it lands in the blocking set it must NOT trip the
 Rule-3 panic: it is chased through `SplitLineage` back to the original constant, so it resolves
-to the `let d` literal (`<fragment>:23:11`). The remaining working set (thirteen accumulators
+to the `let d` literal (`<fragment>:24:11`). The remaining working set (thirteen accumulators
 plus the counter) still overflows by two, and the deficit (2) never exceeds the sixteen listed
 values. Regression for the fresh-rematerialized-id false panic.
 ```maxon
@@ -363,29 +363,29 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E5001: the loop at <fragment>:18 needs 2 more register(s) than are available
+error E5001: the loop at <fragment>:19 needs 2 more register(s) than are available
   16 values must be held in registers at once inside this loop, but
   only 14 registers are available. The values idle across the loop were already
   spilled around it at no cost; spilling any of these would put a load or store inside
   the loop body, which is exactly what this error exists to prevent.
 
   remove 2 of these 16 value(s) from the loop, cheapest first (ranked by uses inside the loop):
-    <fragment>:18:11   used 0 times in the loop
     <fragment>:19:11   used 0 times in the loop
     <fragment>:20:11   used 0 times in the loop
     <fragment>:21:11   used 0 times in the loop
     <fragment>:22:11   used 0 times in the loop
-    <fragment>:24:11   used 0 times in the loop
+    <fragment>:23:11   used 0 times in the loop
     <fragment>:25:11   used 0 times in the loop
     <fragment>:26:11   used 0 times in the loop
     <fragment>:27:11   used 0 times in the loop
-    <fragment>:28:13   used 0 times in the loop
+    <fragment>:28:11   used 0 times in the loop
     <fragment>:29:13   used 0 times in the loop
     <fragment>:30:13   used 0 times in the loop
     <fragment>:31:13   used 0 times in the loop
-    <fragment>:15:12   used 1 time in the loop
-    <fragment>:23:11   used 1 time in the loop
-    <fragment>:16:10   used 15 times in the loop
+    <fragment>:32:13   used 0 times in the loop
+    <fragment>:16:12   used 1 time in the loop
+    <fragment>:24:11   used 1 time in the loop
+    <fragment>:17:10   used 15 times in the loop
 
   to fix: hold the loop's working set in an array and index it inside the loop.
   array elements are never promoted into registers, so the values stay in memory

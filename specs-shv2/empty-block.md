@@ -22,7 +22,7 @@ end 'check'
 ## Tests
 
 <!-- disabled-test: empty-if -->
-<!-- E3082 empty-block diagnostic (shv2 accepts an empty block) - and then harness: fragment header + path normalization -->
+<!-- E3082 empty-block diagnostic (shv2 accepts an empty block) -->
 ```maxon
 function main() returns ExitCode
 	if true 'check'
@@ -35,7 +35,7 @@ error E3082: specs/fragments/empty-block/empty-if.test:4:2: empty block: 'check'
 ```
 
 <!-- disabled-test: empty-else -->
-<!-- E3082 empty-block diagnostic (shv2 accepts an empty block) - and then harness: fragment header + path normalization -->
+<!-- E3082 empty-block diagnostic (shv2 accepts an empty block) -->
 ```maxon
 function main() returns ExitCode
 	if true 'then'
@@ -50,7 +50,7 @@ error E3082: specs/fragments/empty-block/empty-else.test:6:2: empty block: 'othe
 ```
 
 <!-- disabled-test: empty-while -->
-<!-- E3082 empty-block diagnostic (shv2 accepts an empty block) - and then harness: fragment header + path normalization -->
+<!-- E3082 empty-block diagnostic (shv2 accepts an empty block) -->
 ```maxon
 function main() returns ExitCode
 	var x = 5

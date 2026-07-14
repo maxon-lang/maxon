@@ -46,7 +46,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2048: <fragment>:5:12: 'continue' with label 'loop' targets its own loop; use 'continue' without a label, or 'continue' with the label of an outer loop
+error E2048: <fragment>:6:12: 'continue' with label 'loop' targets its own loop; use 'continue' without a label, or 'continue' with the label of an outer loop
 ```
 
 <!-- test: break.multiple-conditions -->

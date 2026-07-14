@@ -434,7 +434,7 @@ end 'main'
 ### Error: return literal out of range
 
 <!-- disabled-test: error.return-literal-out-of-range -->
-<!-- P1.9 compile-time range check (E3005) - and then harness: fragment header + path normalization -->
+<!-- P1.9 compile-time range check (E3005) -->
 ```maxon
 typealias SmallInt = int(0 to 10)
 
@@ -453,7 +453,7 @@ error E3005: specs/fragments/ranged-typealias/error.return-literal-out-of-range.
 ### Error: literal out of range
 
 <!-- disabled-test: error.literal-out-of-range -->
-<!-- P1.9 `as` cast + E3005 - and then harness: fragment header + path normalization -->
+<!-- P1.9 `as` cast + E3005 -->
 ```maxon
 typealias SmallInt = int(0 to 10)
 
@@ -469,7 +469,7 @@ error E3005: specs/fragments/ranged-typealias/error.literal-out-of-range.test:5:
 ### Error: negative literal out of range
 
 <!-- disabled-test: error.negative-out-of-range -->
-<!-- P1.9 `as` cast + E3005 - and then harness: fragment header + path normalization -->
+<!-- P1.9 `as` cast + E3005 -->
 ```maxon
 typealias Positive = int(1 to 100)
 
@@ -698,7 +698,7 @@ end 'main'
 ### Unused local typealias
 
 <!-- disabled-test: unused-typealias -->
-<!-- E3062 unused-typealias check - and then harness: fragment header + path normalization -->
+<!-- E3062 unused-typealias check -->
 ```maxon
 typealias Score = int(0 to 100)
 
@@ -713,7 +713,7 @@ error E3062: specs/fragments/ranged-typealias/unused-typealias.test:2:11: unused
 ### Unused typealias with used typealias
 
 <!-- disabled-test: unused-typealias-with-used -->
-<!-- P1.9 `as` cast + E3062 - and then harness: fragment header + path normalization -->
+<!-- P1.9 `as` cast + E3062 -->
 ```maxon
 typealias Score = int(0 to 100)
 typealias Age = int(0 to 150)
@@ -730,7 +730,7 @@ error E3062: specs/fragments/ranged-typealias/unused-typealias-with-used.test:3:
 ### Error: unrepresentable range
 
 <!-- disabled-test: error.unrepresentable-range -->
-<!-- E3005 range validation at declaration - and then harness: fragment header + path normalization -->
+<!-- E3005 range validation at declaration -->
 ```maxon
 typealias Bad = int(i64.min to u64.max)
 
@@ -747,7 +747,7 @@ error E3005: specs/fragments/ranged-typealias/error.unrepresentable-range.test:2
 A negative-literal lower paired with `u64.max` upper cannot be represented in 64 bits — the upper bound exceeds `i64.max`, so no single 64-bit type can hold both ends. Without this check the parser would silently collapse the range to `-1..-1` (because `u64.max` is stored as the signed long `-1`).
 
 <!-- disabled-test: error.negative-low-u64-max -->
-<!-- E3005 range validation at declaration - and then harness: fragment header + path normalization -->
+<!-- E3005 range validation at declaration -->
 ```maxon
 typealias Bad = int(-1 to u64.max)
 
@@ -762,7 +762,7 @@ error E3005: specs/fragments/ranged-typealias/error.negative-low-u64-max.test:2:
 ### Error: mismatched type bounds
 
 <!-- disabled-test: error.mismatched-type-bounds -->
-<!-- E3005 range validation at declaration - and then harness: fragment header + path normalization -->
+<!-- E3005 range validation at declaration -->
 ```maxon
 typealias Bad = int(i8.min to i32.max)
 
@@ -832,7 +832,7 @@ end 'main'
 ### Error: bare sized type shorthand not allowed
 
 <!-- disabled-test: error.bare-shorthand -->
-<!-- E2003 bare-sized-type diagnostic (shv2 rejects it as a generic `unsupported`) - and then harness: fragment header + path normalization -->
+<!-- E2003 bare-sized-type diagnostic (shv2 rejects it as a generic `unsupported`) -->
 ```maxon
 typealias Integer = i64
 

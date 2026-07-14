@@ -86,5 +86,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2013: <fragment>:3:2: cannot assign to immutable variable: 'x'
+error E2013: <fragment>:4:2: cannot assign to immutable variable: 'x'
 ```
