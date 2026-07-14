@@ -11,32 +11,24 @@
 // or a model — reads them. A field named `verdict` would invite exactly the reflex the whole redesign
 // removed: look for the green light, and if it is not green, make it green.
 //
+// AND THERE IS NO TIME, AND NO EXPONENT. Not `nanos`, not `ms`, not a fitted growth curve, not a
+// residual, not a share. The ladder DOUBLES, so the ratio between two rungs IS the growth and a
+// consumer can take it from the counts in this document with a division; and wall time is
+// machine-dependent, so any number derived from it would say more about what else the box was doing
+// than about the compiler. Everything here is bit-for-bit reproducible, which is what makes
+// differencing two of these documents mean anything at all.
+//
 // Shape:
 //   {
-//     "rungs":  [ { rung, sourceBytes, codeBytes, nanos, allocs, frees, bytes,
+//     "rungs":  [ { rung, sourceBytes, codeBytes, allocs, frees, bytes,
 //                   allocsDelta?, bytesDelta?,        // vs the last logged run; ABSENT if there is none
-//                   phases:   [ {name, nanos, allocs, frees, bytes} ],
-//                   regalloc: [ {name, nanos, allocs, frees, bytes} ] } ],
-//     "curves": [ { name,
-//                   timeSharePermille,  timeFitted,  timeExponent?,  timeResidual?,  timeExponentDelta?,
-//                   allocSharePermille, allocFitted, allocExponent?, allocResidual?, allocExponentDelta? } ],
-//     "corpus": { codeGrowthExponent?, floor, grew },
+//                   phases:   [ {name, allocs, frees, bytes} ],
+//                   regalloc: [ {name, allocs, frees, bytes} ] } ],
+//     "corpus": { grew, minGrowthPermille?, floorPermille, reason? },
 //     "previous": { present, date?, note? }
 //   }
-//
-// Exponents, residuals and deltas are FIXED-POINT THOUSANDTHS, the same units the report prints and
-// the trend log records (1.037 is 1037). One representation end to end: no consumer has to know that
-// a number changed units on its way out.
 
-// A FAILURE HERE IS A BROKEN RUN, and it throws.
-//
-// It used to log and return, leaving the process to exit 0 — and the caller that asked for the
-// document is a MACHINE. The MCP tool deletes any stale result file before the run precisely so that
-// its absence is meaningful, then reports `error: scale-test wrote no result document` beside an
-// `exitCode` of 0: the two halves of one envelope contradicting each other, with the exit code — the
-// half a script reads — saying everything was fine. A run asked for its measurements in a file and
-// could not put them there. That is the run breaking, exactly as a trend log it cannot write is.
-export function writeResultJson(path String, results RungResultArray, curves ScaleCurveArray, trend ScaleTrend) throws ScaleError
+export function writeResultJson(path String, results RungResultArray, trend LoggedMemory) throws ScaleError
 	let target = try FilePath.from(path) otherwise throw ScaleError.reason("'{path}' is not a valid --result-json path")
 
 	var doc = JsonDoc.create()
@@ -46,9 +38,6 @@ export function writeResultJson(path String, results RungResultArray, curves Sca
 	keys.push("rungs")
 	children.push(rungsNode(doc, results: results, trend: trend))
 
-	keys.push("curves")
-	children.push(curvesNode(doc, curves: curves, trend: trend))
-
 	keys.push("corpus")
 	children.push(corpusNode(doc, results: results))
 
@@ -57,6 +46,14 @@ export function writeResultJson(path String, results RungResultArray, curves Sca
 
 	doc.root = doc.add(JsonNode.objectNode(keys, children: children))
 
+	// A FAILURE HERE IS A BROKEN RUN, and it throws.
+	//
+	// It used to log and return, leaving the process to exit 0 — and the caller that asked for this
+	// document is a MACHINE. The MCP tool deletes any stale result file before the run precisely so
+	// that its absence is meaningful, then reports `error: scale-test wrote no result document` beside
+	// an `exitCode` of 0: two halves of one envelope contradicting each other, with the exit code — the
+	// half a script reads — saying everything was fine. A run that was asked for its measurements in a
+	// file and could not put them there is a run that broke, exactly as a trend log it cannot write is.
 	try File.writeText(target, content: Json.stringifyPrettyNode(doc, root: doc.root)) otherwise throw ScaleError.reason("could not write the result document to {path}")
 end 'writeResultJson'
 
@@ -64,7 +61,7 @@ end 'writeResultJson'
 // Rungs
 // ===========================================================================================
 
-function rungsNode(doc JsonDoc, results RungResultArray, trend ScaleTrend) returns JsonNodeId
+function rungsNode(doc JsonDoc, results RungResultArray, trend LoggedMemory) returns JsonNodeId
 	var items = JsonNodeIdArray.create()
 	for i in 0 upto results.count() 'eachRung'
 		let result = try results.get(i) otherwise panic("rungsNode: i < count but results.get({i}) failed")
@@ -75,27 +72,28 @@ function rungsNode(doc JsonDoc, results RungResultArray, trend ScaleTrend) retur
 		pushNumber(doc, keys: keys, children: children, key: "rung", value: result.rung as JsonFloat)
 		pushNumber(doc, keys: keys, children: children, key: "sourceBytes", value: result.sourceBytes as JsonFloat)
 		pushNumber(doc, keys: keys, children: children, key: "codeBytes", value: result.codeBytes as JsonFloat)
-		pushNumber(doc, keys: keys, children: children, key: "nanos", value: result.total.nanos as JsonFloat)
-		pushNumber(doc, keys: keys, children: children, key: "allocs", value: result.total.allocs as JsonFloat)
-		pushNumber(doc, keys: keys, children: children, key: "frees", value: result.total.frees as JsonFloat)
-		pushNumber(doc, keys: keys, children: children, key: "bytes", value: result.total.bytes as JsonFloat)
+		addMetricFields(doc, keys: keys, children: children, metric: result.total)
 
 		// The deltas the report prints, so a consumer never has to re-derive them from the log. ABSENT
 		// rather than zero when there is nothing to compare against: a zero delta means "identical",
 		// which is a strong claim, and it must not be what "no previous run" looks like.
 		addMemoryDeltas(doc, keys: keys, children: children, result: result, rung: i, trend: trend)
 
+		// The per-phase breakdown, off the ONE phase enumeration the human table also walks
+		// (ScaleTestRunner.scalePhaseSources) — so a phase added to `CompilePhase` appears in the report
+		// and in this document together, or in neither.
 		var phases = JsonNodeIdArray.create()
-		for phase in CompilePhase.allCases 'eachPhase'
-			phases.push(metricNode(doc, name: phase.name, metric: result.phaseAt(phase)))
+		var subs = JsonNodeIdArray.create()
+		for source in scalePhaseSources() 'eachPhase'
+			let node = metricNode(doc, name: phaseSourceName(source), metric: phaseMetricOf(source, result: result))
+			match source 'src'
+				compilePhase then phases.push(node)
+				regAllocPhase then subs.push(node)
+			end 'src'
 		end 'eachPhase'
+
 		keys.push("phases")
 		children.push(doc.add(JsonNode.arrayNode(phases)))
-
-		var subs = JsonNodeIdArray.create()
-		for sub in RegAllocPhase.allCases 'eachSub'
-			subs.push(metricNode(doc, name: sub.name, metric: result.regAllocAt(sub)))
-		end 'eachSub'
 		keys.push("regalloc")
 		children.push(doc.add(JsonNode.arrayNode(subs)))
 
@@ -104,8 +102,8 @@ function rungsNode(doc JsonDoc, results RungResultArray, trend ScaleTrend) retur
 	return doc.add(JsonNode.arrayNode(items))
 end 'rungsNode'
 
-function addMemoryDeltas(doc JsonDoc, keys StringArray, children JsonNodeIdArray, result RungResult, rung LadderIndex, trend ScaleTrend)
-	match trend.memory 'm'
+function addMemoryDeltas(doc JsonDoc, keys StringArray, children JsonNodeIdArray, result RungResult, rung LadderIndex, trend LoggedMemory)
+	match trend 'm'
 		absent then return
 		present(_, _, allocs, bytes) then addLoggedDeltas(doc, keys: keys, children: children, result: result, rung: rung, loggedAllocs: allocs, loggedBytes: bytes)
 	end 'm'
@@ -128,109 +126,98 @@ function metricNode(doc JsonDoc, name String, metric PhaseMetric) returns JsonNo
 	var children = JsonNodeIdArray.create()
 	keys.push("name")
 	children.push(doc.add(JsonNode.stringNode(name)))
-	pushNumber(doc, keys: keys, children: children, key: "nanos", value: metric.nanos as JsonFloat)
-	pushNumber(doc, keys: keys, children: children, key: "allocs", value: metric.allocs as JsonFloat)
-	pushNumber(doc, keys: keys, children: children, key: "frees", value: metric.frees as JsonFloat)
-	pushNumber(doc, keys: keys, children: children, key: "bytes", value: metric.bytes as JsonFloat)
+	addMetricFields(doc, keys: keys, children: children, metric: metric)
 	return doc.add(JsonNode.objectNode(keys, children: children))
 end 'metricNode'
 
-// ===========================================================================================
-// Curves
-// ===========================================================================================
-
-// Every curve the run fitted, in both of its measurements, with the delta from the last recorded run.
-function curvesNode(doc JsonDoc, curves ScaleCurveArray, trend ScaleTrend) returns JsonNodeId
-	var items = JsonNodeIdArray.create()
-	for curve in curves 'eachCurve'
-		var keys = StringArray.create()
-		var children = JsonNodeIdArray.create()
-
-		keys.push("name")
-		children.push(doc.add(JsonNode.stringNode(curve.name)))
-
-		addFit(doc, keys: keys, children: children, prefix: TimeFieldPrefix, fit: curve.time, share: curve.timeShare, previous: trend.timeExponents, curve: curve.name)
-		addFit(doc, keys: keys, children: children, prefix: AllocFieldPrefix, fit: curve.allocs, share: curve.allocShare, previous: trend.allocExponents, curve: curve.name)
-
-		items.push(doc.add(JsonNode.objectNode(keys, children: children)))
-	end 'eachCurve'
-	return doc.add(JsonNode.arrayNode(items))
-end 'curvesNode'
-
-// The two measurements every curve carries. Prefixes rather than a nested object, because a consumer
-// asking "did any phase's allocation exponent climb" wants one key per row, not a walk.
-let TimeFieldPrefix = "time"
-let AllocFieldPrefix = "alloc"
-
-// One measurement of one curve. `<prefix>Fitted: false` is the load-bearing field: a curve with
-// nothing to fit has no exponent at all, and a consumer that read a missing `exponent` as zero would
-// read "this phase did no measurable work" as "this phase is perfectly flat".
-function addFit(doc JsonDoc, keys StringArray, children JsonNodeIdArray, prefix String, fit FitResult, share Milli, previous ExponentByCurve, curve String)
-	pushNumber(doc, keys: keys, children: children, key: "{prefix}SharePermille", value: share)
-
-	match fit 'f'
-		unfittable(reason) then addUnfittable(doc, keys: keys, children: children, prefix: prefix, reason: reason)
-		fitted(exponent, residual) then addFitted(doc, keys: keys, children: children, prefix: prefix, exponent: exponent, residual: residual, previous: previous, curve: curve)
-	end 'f'
-end 'addFit'
-
-function addUnfittable(doc JsonDoc, keys StringArray, children JsonNodeIdArray, prefix String, reason String)
-	keys.push("{prefix}Fitted")
-	children.push(doc.add(JsonNode.boolNode(false)))
-	keys.push("{prefix}Reason")
-	children.push(doc.add(JsonNode.stringNode(reason)))
-end 'addUnfittable'
-
-function addFitted(doc JsonDoc, keys StringArray, children JsonNodeIdArray, prefix String, exponent Milli, residual Milli, previous ExponentByCurve, curve String)
-	keys.push("{prefix}Fitted")
-	children.push(doc.add(JsonNode.boolNode(true)))
-	pushNumber(doc, keys: keys, children: children, key: "{prefix}Exponent", value: exponent)
-	pushNumber(doc, keys: keys, children: children, key: "{prefix}Residual", value: residual)
-
-	let before = try previous.get(curve) otherwise 'noPrevious'
-		return
-	end 'noPrevious'
-	pushNumber(doc, keys: keys, children: children, key: "{prefix}ExponentDelta", value: exponent - before)
-end 'addFitted'
+// The three numbers a PhaseMetric IS, written by ONE function — so the whole-rung object and the
+// per-phase objects cannot drift into carrying different fields for the same measurement.
+function addMetricFields(doc JsonDoc, keys StringArray, children JsonNodeIdArray, metric PhaseMetric)
+	pushNumber(doc, keys: keys, children: children, key: "allocs", value: metric.allocs)
+	pushNumber(doc, keys: keys, children: children, key: "frees", value: metric.frees)
+	pushNumber(doc, keys: keys, children: children, key: "bytes", value: metric.bytes)
+end 'addMetricFields'
 
 // ===========================================================================================
 // The corpus self-check, and what this run is measured against
 // ===========================================================================================
 
 // Exposed so a consumer can see the NUMBER rather than trust a flag. `grew: false` is the one
-// condition the runner exits non-zero for — the corpus folded away and nothing was measured — and a
-// consumer looking at a set of impossibly linear curves deserves to see why they are not to be
+// condition the runner exits non-zero for — the corpus folded away, so nothing was measured — and a
+// consumer looking at a set of impossibly tidy numbers deserves to see why they are not to be
 // believed.
+//
+// `minGrowthPermille` is the WEAKEST rung-over-rung growth of emitted code on the ladder, in
+// thousandths: 2000 is x2.00, which is what a doubling ladder that really compiles produces. The
+// weakest, and not the average, because one rung that folded is one rung that measured nothing, and an
+// average would hide it behind five rungs that did not.
 function corpusNode(doc JsonDoc, results RungResultArray) returns JsonNodeId
 	var keys = StringArray.create()
 	var children = JsonNodeIdArray.create()
-	pushNumber(doc, keys: keys, children: children, key: "floor", value: MinCodeGrowthExponent)
+	pushNumber(doc, keys: keys, children: children, key: "floorPermille", value: (MinCodeGrowthRatio * PermillePerHundredth) as JsonFloat)
 
-	match fitCodeGrowth(results) 'f'
-		unfittable(reason) then addUngrownCorpus(doc, keys: keys, children: children, reason: reason)
-		fitted(exponent, _) then addCorpusGrowth(doc, keys: keys, children: children, exponent: exponent)
-	end 'f'
+	match weakestCodeGrowth(results) 'g'
+		noBaseline then addNoGrowthReading(doc, keys: keys, children: children)
+		measured(ratio) then addCorpusGrowth(doc, keys: keys, children: children, ratio: ratio)
+	end 'g'
 
 	return doc.add(JsonNode.objectNode(keys, children: children))
 end 'corpusNode'
 
-function addUngrownCorpus(doc JsonDoc, keys StringArray, children JsonNodeIdArray, reason String)
+// The document reports growth in THOUSANDTHS where ScaleRatio counts in hundredths. One conversion, in
+// one place: a consumer that differences two documents wants the extra digit, and a human reading a
+// table at a glance does not.
+let PermillePerHundredth = 10
+
+// The weakest rung-over-rung growth on the ladder — the rung most likely to have folded.
+function weakestCodeGrowth(results RungResultArray) returns GrowthReading
+	var weakest = GrowthReading.noBaseline
+
+	for i in 1 upto results.count() 'eachRung'
+		match codeGrowthAt(results, rung: i) 'h'
+			noBaseline then continue
+			measured(ratio) then weakest = weakerOf(weakest, ratio: ratio)
+		end 'h'
+	end 'eachRung'
+
+	return weakest
+end 'weakestCodeGrowth'
+
+function weakerOf(current GrowthReading, ratio GrowthRatio) returns GrowthReading
+	match current 'c'
+		noBaseline then return GrowthReading.measured(ratio)
+		measured(soFar) then return GrowthReading.measured(minRatio(soFar, other: ratio))
+	end 'c'
+end 'weakerOf'
+
+function minRatio(one GrowthRatio, other GrowthRatio) returns GrowthRatio
+	if other < one 'smaller'
+		return other
+	end 'smaller'
+
+	return one
+end 'minRatio'
+
+// A one-rung ladder. NOTHING GREW, because nothing had anything to grow from — which is a different
+// claim from "the corpus folded away", and the runner does not fail the run for it either: `--rungs=1`
+// is a legal thing to ask for, and its counts are as exact as any other run's.
+function addNoGrowthReading(doc JsonDoc, keys StringArray, children JsonNodeIdArray)
 	keys.push("grew")
 	children.push(doc.add(JsonNode.boolNode(false)))
 	keys.push("reason")
-	children.push(doc.add(JsonNode.stringNode(reason)))
-end 'addUngrownCorpus'
+	children.push(doc.add(JsonNode.stringNode("a ladder of one rung has nothing below it to have grown from — a growth reading needs {MinRungsForGrowth} rungs")))
+end 'addNoGrowthReading'
 
-function addCorpusGrowth(doc JsonDoc, keys StringArray, children JsonNodeIdArray, exponent Milli)
-	pushNumber(doc, keys: keys, children: children, key: "codeGrowthExponent", value: exponent)
+function addCorpusGrowth(doc JsonDoc, keys StringArray, children JsonNodeIdArray, ratio GrowthRatio)
+	pushNumber(doc, keys: keys, children: children, key: "minGrowthPermille", value: (ratio * PermillePerHundredth) as JsonFloat)
 	keys.push("grew")
-	children.push(doc.add(JsonNode.boolNode(exponent >= MinCodeGrowthExponent)))
+	children.push(doc.add(JsonNode.boolNode(ratio >= MinCodeGrowthRatio)))
 end 'addCorpusGrowth'
 
 // Which recorded run every delta above is a delta FROM. Without it the deltas are unattributed, and a
 // consumer comparing two result documents could not tell they had different reference points.
-function previousNode(doc JsonDoc, trend ScaleTrend) returns JsonNodeId
-	match trend.memory 'm'
+function previousNode(doc JsonDoc, trend LoggedMemory) returns JsonNodeId
+	match trend 'm'
 		absent then return noPreviousNode(doc)
 		present(date, note, _, _) then return previousRunNode(doc, date: date, note: note)
 	end 'm'
@@ -262,7 +249,7 @@ end 'previousRunNode'
 
 // `keys` and `children` are PARALLEL arrays that `JsonNode.objectNode` zips, so a push to one without
 // the other silently shifts every field after it — a document whose values belong to the wrong names.
-// Thirty-odd numbers go into this document; they all go through here.
+// Every number in this document goes through here.
 function pushNumber(doc JsonDoc, keys StringArray, children JsonNodeIdArray, key String, value JsonFloat)
 	keys.push(key)
 	children.push(doc.add(JsonNode.numberNode(value)))

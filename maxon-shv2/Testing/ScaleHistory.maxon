@@ -14,9 +14,8 @@
 //
 // AND WHEN IT IS GIVEN, THE ROW IS WRITTEN — even if not one allocation moved. The operator asked
 // for the datapoint; declining it because the instrument could not see what was interesting about it
-// is the tool overruling the only party who knows. A change that halves a phase's TIME without moving
-// a byte is most of what optimizing a compiler looks like, and the exponents table exists to carry
-// exactly that. The report still says plainly that the memory did not move.
+// is the tool overruling the only party who knows why the run was made. The report still says
+// plainly that the memory did not move.
 //
 // AND THE NOTE IS THE POINT, not a formality. The instrument can see precisely WHAT moved and can
 // never see WHY. Six months from now "allocations fell 8% at rung 5" is worth almost nothing without
@@ -24,14 +23,21 @@
 // ran the command, at the moment they ran it. So it is demanded there, rather than left as a
 // placeholder that would be committed unfilled.
 //
-// THREE TABLES, each read DOWNWARDS: one row per recorded change, and
+// TWO TABLES, each read DOWNWARDS: one row per recorded change, one column per RUNG.
 //
-//   allocations  one column per RUNG. Exact and bit-for-bit reproducible.
-//   bytes        one column per RUNG. Likewise.
-//   exponents    one column per CURVE — every phase's fitted growth exponent, `time / allocations`.
-//                The allocation exponent is exact; the time exponent reproduces to ~1%. Neither is
-//                a good threshold and both are excellent tracked numbers: a phase going quadratic
-//                shows up as its column climbing, and no gate has to guess where the line is.
+//   allocations  Exact and bit-for-bit reproducible.
+//   bytes        Likewise.
+//
+// AND NOTHING ELSE — no time, and no fitted exponents. There WAS a third table of per-curve growth
+// exponents, `time / allocations`, and it is gone. Time is machine-dependent, so a dated column of it
+// compares a loaded box in July against an idle one in August and concludes nothing. And an exponent
+// added nothing to a ladder that DOUBLES: rung over rung, x2.00 is linear and x4.00 is quadratic, and
+// that is a division a reader can do on the numbers already in these tables. The row that exists
+// carries the raw counts, which is the thing that cannot go out of date.
+//
+// (The exponents table's rows are still in the document, under a heading that says they are CLOSED.
+// Deleting recorded history to tidy up a format change would be the worst of both: the numbers were
+// honestly measured, and they are simply no longer extended.)
 //
 // A new row goes immediately BEFORE the marker that closes its table. Anchoring on a marker rather
 // than appending to the end of the file is what lets the document keep prose after the tables — the
@@ -41,19 +47,17 @@ export let OptimizationLogRelativePath = "docs/optimization-log.md"
 
 let AllocationsTableMarker = "<!-- scale-history:allocations -->"
 let BytesTableMarker = "<!-- scale-history:bytes -->"
-let ExponentsTableMarker = "<!-- scale-history:exponents -->"
 
-// What all three markers above begin with, and the ONE thing a `--note` is checked against — see
+// What both markers above begin with, and the ONE thing a `--note` is checked against — see
 // `assertRecordable`. A note is written verbatim into the row inserted above each marker in turn, so
 // a note that carried a marker's own text would forge one: the row for the first table would contain
 // an anchor the second table's insert then found. Screening the shared PREFIX refuses that whole
-// family — including any marker a later table adds — rather than three literals a fourth could
-// silently escape. (`insertRowBefore` is the backstop, and it reads the document rather than the
-// note.)
+// family — including any marker a later table adds — rather than two literals a third could silently
+// escape. (`insertRowBefore` is the backstop, and it reads the document rather than the note.)
 let TableMarkerPrefix = "<!-- scale-history:"
 
-// The two fixed leading columns every table carries. The rest are rungs (memory) or curves
-// (exponents), which is what `LeadingColumns` is subtracted to find.
+// The two fixed leading columns every table carries. The rest are rungs, which is what
+// `LeadingColumns` is subtracted to find.
 let DateColumnHeading = "date"
 let NoteColumnHeading = "change"
 let LeadingColumns = 2
@@ -66,51 +70,35 @@ typealias CivilPart = int(0 to u64.max)
 typealias DayCount = int(0 to u64.max)
 typealias GroupIndex = int(0 to u64.max)
 
-// A column of one of the log's markdown tables: 0 is `date`, 1 is `change`, and the rest are rungs
-// (the memory tables) or curves (the exponents table).
+// A column of one of the log's markdown tables: 0 is `date`, 1 is `change`, and the rest are rungs.
 typealias ColumnIndex = int(0 to u64.max)
 
 let SecondsPerDay = 86400 as UnixSeconds
 let DigitGroupSize = 3 as GroupIndex
 
-// One run's exponents, keyed by curve name. A curve that was `n/a` then — or did not exist then, or
-// has no exponent row in the log at all — is simply ABSENT from the map, and the report says so
-// rather than differencing against a zero it invented.
+// EVERYTHING THE LOG HAS TO SAY ABOUT THE RUN BEFORE THIS ONE — which, now that the exponents table
+// is closed, is exactly its memory.
 //
-// EMPTY IS THE ABSENT CASE, and it needs no union around it. "The log has no exponent table row" and
-// "the log has no exponent for this curve" produce the same answer at every call site — there is
-// nothing to difference against — so a union the caller unwrapped per row would only make it say so
-// twice. (The exponents table is newer than the other two, so a log that carries memory rows with no
-// exponents beside them is the ordinary case, not a corner one.)
-export typealias ExponentByCurve = Map with (String, Milli)
-
-// The previous run's memory numbers. A union rather than an empty-array sentinel, because here the
-// distinction is real: "the log has no rows yet" is a first datapoint and "the log's last row was all
-// zeroes" would be a broken compiler, and an empty array would say both.
+// This was a `ScaleTrend` struct wrapping this union plus two maps of per-curve exponents. With the
+// exponents gone it would have been a struct with one field, which is a wrapper that makes every
+// caller write `.memory` to say nothing.
+//
+// A union rather than an empty-array sentinel, because here the distinction is real: "the log has no
+// rows yet" is a first datapoint, and "the log's last row was all zeroes" would be a broken compiler.
+// An empty array would say both.
 export union LoggedMemory
 	absent
 	present(date String, note String, allocs AllocCountArray, bytes ByteCountArray)
-end 'LoggedMemory'
-
-// Everything the log has to say about the run before this one.
-export type ScaleTrend
-	export let memory as LoggedMemory
-	export let timeExponents as ExponentByCurve
-	export let allocExponents as ExponentByCurve
-
-	static function create(memory LoggedMemory, timeExponents ExponentByCurve, allocExponents ExponentByCurve) returns ScaleTrend
-		return Self{memory: memory, timeExponents: timeExponents, allocExponents: allocExponents}
-	end 'create'
 
 	// How many rungs the memory tables are keyed by. A run with a different ladder length cannot be
 	// appended to them without going ragged — see `assertRecordable`.
 	export function loggedRungCount() returns RungCount throws ScaleError
-		match self.memory 'm'
+		match self 'm'
 			absent then throw ScaleError.reason("the log has no rows, so it pins no ladder length")
 			present(_, _, allocs, _) then return allocs.count() as RungCount
 		end 'm'
 	end 'loggedRungCount'
-end 'ScaleTrend'
+end 'LoggedMemory'
 
 // ===========================================================================================
 // Reading the log
@@ -131,9 +119,15 @@ union LogTableRow
 	cells(values StringArray)
 end 'LogTableRow'
 
-// Read the trend: the last row of each table, plus the assertion that the exponent table's columns
-// still describe this compiler.
-export function loadScaleTrend() returns ScaleTrend throws ScaleError
+// Read the trend: the last row of the two memory tables, which are written together and must
+// therefore describe the same run.
+//
+// NOTHING IS READ BACK BUT NUMBERS. The exponents table is closed, so there is no longer a cell to
+// parse into a fitted value, no `n/a` token to round-trip, and no table header whose columns have to
+// be checked against the phases this compiler happens to have. Every one of those was a way for a
+// document to be written in a shape it could not be read in — the class of bug that produced a
+// write-only log — and they are gone because the thing they carried is gone.
+export function loadScaleTrend() returns LoggedMemory throws ScaleError
 	let path = try FilePath.from(OptimizationLogRelativePath) otherwise throw ScaleError.reason("'{OptimizationLogRelativePath}' is not a valid path")
 
 	// The log is hand-written prose with machine-appended table rows. The instrument extends it and
@@ -143,15 +137,8 @@ export function loadScaleTrend() returns ScaleTrend throws ScaleError
 
 	let allocations = try readTable(text, marker: AllocationsTableMarker)
 	let bytes = try readTable(text, marker: BytesTableMarker)
-	let exponents = try readTable(text, marker: ExponentsTableMarker)
 
-	try assertCurveColumnsCurrent(exponents)
-
-	var timeExponents = ExponentByCurve.create()
-	var allocExponents = ExponentByCurve.create()
-	try readExponentRow(exponents, time: timeExponents, allocs: allocExponents)
-
-	return ScaleTrend.create(try readMemoryRow(allocations, bytesTable: bytes), timeExponents: timeExponents, allocExponents: allocExponents)
+	return try readMemoryRow(allocations, bytesTable: bytes)
 end 'loadScaleTrend'
 
 // The table that ends at `marker`: the contiguous run of `|`-leading lines immediately above it.
@@ -305,103 +292,6 @@ function rungCounts(cells StringArray) returns AllocCountArray throws ScaleError
 	return counts
 end 'rungCounts'
 
-// The last exponents row, into `time` and `allocs`, keyed by the curve names in the table's own
-// HEADER — by name, never by position. Positional reading would silently re-attribute every
-// historical number the day a phase was inserted into `CompilePhase`, which is exactly the corruption
-// `assertCurveColumnsCurrent` exists to make impossible; reading by name means that check has one job
-// and this one has none.
-//
-// A log with no exponent row simply leaves both maps empty, which is what "no previous exponent"
-// means everywhere downstream.
-function readExponentRow(exponents LogTable, time ExponentByCurve, allocs ExponentByCurve) throws ScaleError
-	match exponents.last 'e'
-		none then return
-		cells(values) then try exponentRowInto(exponents.header, cells: values, time: time, allocs: allocs)
-	end 'e'
-end 'readExponentRow'
-
-function exponentRowInto(header StringArray, cells StringArray, time ExponentByCurve, allocs ExponentByCurve) throws ScaleError
-	for i in LeadingColumns upto cells.count() 'eachCurve'
-		let curve = try cellAt(header, index: i)
-		let cell = try cellAt(cells, index: i)
-		let parts = cell.split(ExponentCellSeparator)
-		if parts.count() != 2 'malformed'
-			throw ScaleError.reason("the exponent cell for '{curve}' reads '{cell}' — it must be `<time>{ExponentCellSeparator}<allocations>`, either of which may be `{UnfittableText}`")
-		end 'malformed'
-
-		try recordExponent(time, curve: curve, raw: try cellAt(parts, index: 0))
-		try recordExponent(allocs, curve: curve, raw: try cellAt(parts, index: 1))
-	end 'eachCurve'
-end 'exponentRowInto'
-
-// SPACES INCLUDED, AND THEY ARE LOAD-BEARING. The cell is split on this exact string, and the token
-// for an unfittable curve is `n/a` — which contains a slash. A bare `/` separator splits `n/a / n/a`
-// into FOUR fields, and the row this instrument had just written became a row it could not read: a
-// trend log that is write-only. (Found by the only test that could find it — writing a row and then
-// reading it back.)
-let ExponentCellSeparator = " / "
-
-// An unfittable curve is left OUT of the map rather than stored as a zero. Zero is a real exponent —
-// a cost that does not grow at all — and a report that differenced against a fabricated one would
-// invent a regression out of a phase that simply had nothing to measure last time.
-function recordExponent(into ExponentByCurve, curve String, raw String) throws ScaleError
-	let text = raw.trim()
-	if text == UnfittableText 'notFitted'
-		return
-	end 'notFitted'
-	into.upsert(curve, value: try parseMilliText(text))
-end 'recordExponent'
-
-// The exponents table's columns must still be the curves this compiler HAS.
-//
-// This is the one place the log's shape is coupled to the code's, and it is coupled deliberately.
-// The columns are derived from `CompilePhase` and `RegAllocPhase`, so adding or removing a phase
-// changes the table — and a tool that silently wrote its new column set into a table whose historical
-// rows had the old one would leave a document where a column means one thing above a certain date and
-// something else below it. That is a trend log that lies, which is worse than no trend log.
-//
-// So it is REFUSED, loudly, with the header to paste. The fix is one line in a markdown file, and it
-// is a fix a human should make consciously — because the honest thing to do with the rows above it
-// may well be to start a new table.
-function assertCurveColumnsCurrent(exponents LogTable) throws ScaleError
-	let expected = exponentTableHeader()
-	if exponents.header.count() != expected.count() 'wrongWidth'
-		throw ScaleError.reason(curveColumnMismatch("it has {exponents.header.count()} column(s), but this compiler has {expected.count() - LeadingColumns} curve(s) plus `{DateColumnHeading}` and `{NoteColumnHeading}`"))
-	end 'wrongWidth'
-
-	for i in 0 upto expected.count() 'eachColumn'
-		let want = try cellAt(expected, index: i)
-		let got = try cellAt(exponents.header, index: i)
-		if want != got 'mismatch'
-			throw ScaleError.reason(curveColumnMismatch("column {i} reads '{got}', but this compiler's curve there is '{want}'"))
-		end 'mismatch'
-	end 'eachColumn'
-end 'assertCurveColumnsCurrent'
-
-function curveColumnMismatch(detail String) returns String
-	return "the exponents table in {OptimizationLogRelativePath} no longer describes this compiler's phases: {detail}.\n            The columns come from CompilePhase + RegAllocPhase, so a phase was added or removed.\n            Rewrite its header row to exactly:\n\n{renderRow(exponentTableHeader())}\n            ...and decide what to do with the rows above it: a column whose meaning changed partway\n            down is a trend that lies. Starting a new table is often the honest answer."
-end 'curveColumnMismatch'
-
-// The exponents table's header: the two fixed columns, then every curve this compiler fits.
-//
-// The curve names come from `scaleCurveNames`, which is the SAME list `fitScaleCurves` walks to
-// produce the cells `renderExponentRow` writes — one enumeration, not two. This function used to walk
-// `CompilePhase` and `RegAllocPhase` itself, and a comment was the only thing keeping its order in
-// step with the order the cells were written in: reorder the fit and every historical exponent would
-// be read back under the wrong curve's name, silently, in the one document that exists to be
-// differenced against.
-function exponentTableHeader() returns StringArray
-	var cells = StringArray.create()
-	cells.push(DateColumnHeading)
-	cells.push(NoteColumnHeading)
-
-	for name in scaleCurveNames() 'eachCurve'
-		cells.push(name)
-	end 'eachCurve'
-
-	return cells
-end 'exponentTableHeader'
-
 // One cell of an already-parsed row, as a THROW rather than a panic: every caller is reading a file a
 // human may have edited, so a cell that is not there is bad input, not a bug in this file.
 function cellAt(cells StringArray, index ColumnIndex) returns String throws ScaleError
@@ -418,21 +308,19 @@ end 'parseGroupedCount'
 // Writing the log
 // ===========================================================================================
 
-// Did this run's EXACT numbers move against the last logged row?
+// Did this run's numbers move against the last logged row?
 //
-// This is a READING, and nothing branches on it any more: a `--note` records the run whether it moved
-// or not, because a note is an instruction from the operator (see `recordRun`). It decides one
-// sentence of prose — whether the run is told that its allocations and bytes are unchanged — and a
-// change that moves only the clock, which is most of what optimizing a compiler looks like, is a
-// perfectly good datapoint that this function will call unmoved.
+// This is a READING, and nothing branches on it: a `--note` records the run whether it moved or not,
+// because a note is an instruction from the operator (see `recordRun`). It decides one sentence of
+// prose — whether the run is told that its allocations and bytes are unchanged.
 //
-// ONLY ALLOCATIONS AND BYTES ARE ASKED. They are bit-for-bit reproducible: the same compiler on the
-// same corpus produces the same digits, so a difference in them is a REAL difference in what the
-// compiler does, every time. The exponents are not asked, and must not be — the time exponent
-// reproduces only to ~1%, so a run that changed nothing at all would still "move" one, and a question
-// whose answer is always yes is not worth asking.
-export function anyMemoryMoved(trend ScaleTrend, results RungResultArray) returns bool
-	return match trend.memory 'm'
+// Everything this instrument measures is bit-for-bit reproducible, so the same compiler on the same
+// corpus produces the same digits and a difference here is a REAL difference in what the compiler
+// does, every time. There is nothing else to ask about: the machine-dependent half of the old suite,
+// which would have "moved" on every run without the compiler changing at all, is not measured any
+// more.
+export function anyMemoryMoved(trend LoggedMemory, results RungResultArray) returns bool
+	return match trend 'm'
 		absent gives true
 		present(_, _, allocs, bytes) gives memoryDiffers(results, loggedAllocs: allocs, loggedBytes: bytes)
 	end 'm'
@@ -458,7 +346,7 @@ end 'memoryDiffers'
 // Refuse a `--note` this run could not honestly record — BEFORE the ladder is climbed, not after.
 // Rejecting the command line once the run has already spent thirty seconds compiling six rungs would
 // be a rude way to report a typo.
-export function assertRecordable(trend ScaleTrend, note String, rungs RungCount) throws ScaleError
+export function assertRecordable(trend LoggedMemory, note String, rungs RungCount) throws ScaleError
 	// A `|` in the note would close the cell it sits in and shift every column after it; a newline
 	// would end the row entirely. Both produce a table that still renders — as the wrong numbers.
 	if note.contains("|") or note.contains("\n") 'wouldBreakTheTable'
@@ -467,10 +355,10 @@ export function assertRecordable(trend ScaleTrend, note String, rungs RungCount)
 
 	// And it may not forge a table marker — the anchor every row is inserted above.
 	if note.contains(TableMarkerPrefix) 'wouldForgeAMarker'
-		throw ScaleError.reason("a --note may not contain `{TableMarkerPrefix}`: the three table markers in {OptimizationLogRelativePath} begin with it, the note is written verbatim into the row inserted above each of them, and a forged marker would decide where the NEXT row landed")
+		throw ScaleError.reason("a --note may not contain `{TableMarkerPrefix}`: the table markers in {OptimizationLogRelativePath} begin with it, the note is written verbatim into the row inserted above each of them, and a forged marker would decide where the NEXT row landed")
 	end 'wouldForgeAMarker'
 
-	match trend.memory 'm'
+	match trend 'm'
 		absent then return
 		present then break 'm'
 	end 'm'
@@ -481,20 +369,19 @@ export function assertRecordable(trend ScaleTrend, note String, rungs RungCount)
 	end 'differentLadder'
 end 'assertRecordable'
 
-// Append this run to all three tables.
+// Append this run to both tables.
 //
 // The file is re-read here rather than carried down from `loadScaleTrend`. It is a document a human
 // edits, and the edit that matters most — a paragraph of prose explaining the row about to be
 // written — is one they may well make WHILE the six rungs are compiling. Writing back a copy read
 // thirty seconds ago would silently discard it.
-export function recordScaleRun(results RungResultArray, curves ScaleCurveArray, note String) throws ScaleError
+export function recordScaleRun(results RungResultArray, note String) throws ScaleError
 	let path = try FilePath.from(OptimizationLogRelativePath) otherwise panic("recordScaleRun: '{OptimizationLogRelativePath}' parsed as a path when the trend was loaded")
 	let existing = try File.readText(path) otherwise throw ScaleError.reason("could not re-read {OptimizationLogRelativePath}")
 
 	let today = todayUtc()
 	var updated = try insertRowBefore(existing, marker: AllocationsTableMarker, row: renderMemoryRow(results, note: note, date: today, ofBytes: false))
 	updated = try insertRowBefore(updated, marker: BytesTableMarker, row: renderMemoryRow(results, note: note, date: today, ofBytes: true))
-	updated = try insertRowBefore(updated, marker: ExponentsTableMarker, row: renderExponentRow(curves, note: note, date: today))
 
 	try File.writeText(path, content: updated) otherwise throw ScaleError.reason("could not write {OptimizationLogRelativePath}")
 
@@ -550,30 +437,11 @@ function renderMemoryRow(results RungResultArray, note String, date String, ofBy
 	cells.push(note)
 
 	for result in results 'eachRung'
-		var value = result.total.allocs
-		if ofBytes 'wantBytes'
-			value = result.total.bytes
-		end 'wantBytes'
-		cells.push(groupDigits(value as Delta))
+		cells.push(groupDigits(measureOf(result.total, ofBytes: ofBytes) as Delta))
 	end 'eachRung'
 
 	return renderRow(cells)
 end 'renderMemoryRow'
-
-// One exponent row: a cell per curve, `<time> / <allocations>`. Both, because they answer different
-// questions about the same phase — allocations exactly, time to about a percent — and a column
-// carrying only one of them would be a column you had to remember the units of.
-function renderExponentRow(curves ScaleCurveArray, note String, date String) returns String
-	var cells = StringArray.create()
-	cells.push(date)
-	cells.push(note)
-
-	for curve in curves 'eachCurve'
-		cells.push("{curve.time.exponentText()}{ExponentCellSeparator}{curve.allocs.exponentText()}")
-	end 'eachCurve'
-
-	return renderRow(cells)
-end 'renderExponentRow'
 
 function renderRow(cells StringArray) returns String
 	var row = "|"

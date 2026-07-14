@@ -224,12 +224,28 @@ end 'toolSchema'
 //
 // NO `updateRequired` EITHER. It rewrote committed memory goldens, and there are none: scale-test is
 // an instrument, not a gate. `note` is what RECORDS a run now, and it stands alone.
+//
+// ⚠ THE TOOL IS DESCRIBED ONCE, IN `ScaleTestDescription`, AND THAT IS DELIBERATE.
+//
+// Every tool in this server carries TWO descriptions — the one `toolDescription` returns, and the one
+// on its input-schema object — and both are shipped to the caller in `tools/list`. They are two
+// hand-maintained accounts of the same tool with nothing making them agree, and a model reading two
+// different accounts cannot tell which is current. This one is now a single constant used by both.
+//
+// It is not a hypothetical failure. The previous version of these strings told a caller that
+// scale-test "checks the per-rung memory goldens exactly" and "returns PASS / FAIL / VOID / NOISY"
+// long after the goldens and the verdict had been deleted — and a model that loaded the schema
+// believed it, and worked from it. THE MCP DESCRIPTION IS WHAT A MODEL READS INSTEAD OF THE SOURCE.
+// It is the highest-leverage documentation in this repo, and the easiest to leave stale.
+//
+// (The other eight tools still have the two-description shape. Collapsing them is the same edit
+// applied eight more times, and it belongs in its own change rather than smuggled into this one.)
 function schemaForScaleTest(doc JsonDoc) returns JsonNodeId
 	let rungsSchema = schemaInteger(doc, description: "How many rungs of the ladder to climb (1-8, default 6). Each rung DOUBLES the generated program, so this is exponential in cost: 6 rungs is a 32x span and about 20 seconds.")
-	let noteSchema = schemaString(doc, description: "RECORD this run in docs/optimization-log.md — one dated row of allocations, bytes and per-phase growth exponents, with this text as the reason. Without it a run reports and records nothing, because scale-test is run dozens of times a day against dirty trees and a log of all of them is a log nobody reads. WITH it the row is always written, even if no allocation moved: a change that only got FASTER is exactly what the exponent table exists to carry. The instrument can see exactly WHAT moved and can never see why: that has to come from you, now.")
-	let perTypeSchema = schemaBoolean(doc, description: "Also run the untimed --mm-trace pass, which attributes allocations to the TYPE allocated AND to the SCOPE that allocated it — the scope table is the one that finds things, because a `String` row can never tell you 150 of them came from one function. Off by default: it is a differently-compiled binary from the one being timed, and it traces every allocation individually.")
+	let noteSchema = schemaString(doc, description: "RECORD this run in docs/optimization-log.md — one dated row of the per-rung allocations and bytes, with this text as the reason. Without it a run reports and records nothing, because scale-test is run dozens of times a day against dirty trees and a log of all of them is a log nobody reads. WITH it the row is ALWAYS written, moved or not: it is an instruction, and you are the only party who knows whether the run is a datapoint. The instrument can see exactly WHAT moved and can never see why: that has to come from you, now.")
+	let perTypeSchema = schemaBoolean(doc, description: "Also run the --mm-trace pass, which attributes allocations to the TYPE allocated AND to the SCOPE that allocated it — the scope table is the one that finds things, because a `String` row can never tell you 150 of them came from one function. Off by default: it is a differently-compiled binary from the one being measured, and it traces every allocation individually.")
 	let emitCorpusSchema = schemaString(doc, description: "Dump the generated corpus to this directory for inspection and compile NOTHING. The corpus is otherwise built into a gitignored temp dir and thrown away. WARNING: <dir>/rung0..N are owned and pruned by the generator.")
-	let logSchema = schemaString(doc, description: "Optional logging spec passed to --log=<value> (e.g. \"compiler:debug\", which prints the per-phase time AND memory tables for each rung's compile).")
+	let logSchema = schemaString(doc, description: "Optional logging spec passed to --log=<value> (e.g. \"compiler:debug\", which prints the COMPILER's own per-phase time and memory tables for each rung's compile — that is where wall-clock milliseconds live, and scale-test itself never collects them).")
 
 	var fields = SchemaFieldArray.create()
 	fields.push(SchemaField.create("rungs", schemaId: rungsSchema, required: false))
@@ -237,8 +253,11 @@ function schemaForScaleTest(doc JsonDoc) returns JsonNodeId
 	fields.push(SchemaField.create("perType", schemaId: perTypeSchema, required: false))
 	fields.push(SchemaField.create("emitCorpus", schemaId: emitCorpusSchema, required: false))
 	fields.push(SchemaField.create("log", schemaId: logSchema, required: false))
-	return schemaObject(doc, fields: fields, description: "Compile a ladder of generated programs, each rung double the last, and MEASURE the per-phase time and memory growth curves. An INSTRUMENT: it renders no verdict, and there is nothing to pass. Returns per-rung metrics, a fitted growth exponent per phase in time AND allocations, and the delta from the last run recorded in docs/optimization-log.md. A non-zero exitCode means the RUN BROKE and measured nothing — never a judgement about the numbers.")
+	return schemaObject(doc, fields: fields, description: ScaleTestDescription)
 end 'schemaForScaleTest'
+
+// THE description of `run_scale_test` — the tool's, and its input schema's. One string, one truth.
+let ScaleTestDescription = "Run the maxon-shv2 MEMORY-scaling instrument (shv2 only): compile a ladder of generated programs, each rung DOUBLE the last, and report per-rung and per-phase MEMORY — allocations, frees, bytes — plus the delta from the last run recorded in docs/optimization-log.md, which is the trend it feeds. IT COLLECTS NO TIME AND FITS NO CURVES, and both are deliberate. Memory is bit-for-bit reproducible (the same source makes the same allocations on an idle box or a loaded one), so a number that MOVED, moved for a reason; wall time is machine-dependent and cannot be trended at all — for the milliseconds of a single compile, pass log=\"compiler:debug\" and read the COMPILER's own table. And because the ladder DOUBLES, the RATIO between two rungs IS the growth: x2.00 is linear, x4.00 is quadratic, read straight off the counts, so there is nothing to fit and no exponent, residual or share to interpret. It renders NO VERDICT — there is nothing to pass and no green light to chase, and a surprising number is a reading to EXPLAIN. A non-zero exitCode means the RUN BROKE and measured nothing (a rung would not compile, or the generated corpus folded away); it is never a judgement about the numbers."
 
 function schemaEmptyObject(doc JsonDoc) returns JsonNodeId
 	let typeId = doc.add(JsonNode.stringNode("object"))
@@ -394,7 +413,7 @@ function toolDescription(name String) returns String
 		return "Build a snippet/file with --mm-trace, run it, pipe the trace through scripts/analyze_mm_trace.py, and return the analyzer's JSON report."
 	end 'mta'
 	if name.equals("run_scale_test") 'rsct'
-		return "Run the maxon-shv2 compile-time + memory scaling INSTRUMENT (shv2 only): compile a ladder of generated programs, each rung double the last, and fit a growth exponent to every phase's time AND allocations. It renders NO VERDICT — there is nothing to pass, and no green light to chase. It returns the per-rung memory (exact, bit-for-bit reproducible), the exponents (allocations exact, time to ~1%), and the delta from the last run recorded in docs/optimization-log.md, which is the trend it feeds. A non-zero exitCode means the RUN BROKE and measured nothing (a rung would not compile, or the generated corpus folded away) — never a judgement about the numbers."
+		return ScaleTestDescription
 	end 'rsct'
 	return "(no description)"
 end 'toolDescription'

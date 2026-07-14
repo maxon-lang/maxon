@@ -1,5 +1,5 @@
-// `run_scale_test` MCP tool. Wraps `maxon-shv2 scale-test` — the compile-time + memory-traffic
-// scaling INSTRUMENT — and returns its measurements as a STRUCTURED document.
+// `run_scale_test` MCP tool. Wraps `maxon-shv2 scale-test` — the MEMORY-scaling INSTRUMENT — and
+// returns its measurements as a STRUCTURED document.
 //
 // ⚠ IT HAS NO VERDICT, AND THIS TOOL MUST NOT INVENT ONE. scale-test reports numbers and their
 // deltas from the last run recorded in `docs/optimization-log.md`; it renders no judgement about
@@ -8,6 +8,13 @@
 // altered to stop it complaining, rather than the compiler being explained. `exitCode` is the only
 // pass/fail thing in the envelope, and it means only ONE thing: non-zero iff the RUN BROKE and
 // measured nothing (a rung would not compile, or the generated corpus folded away).
+//
+// ⚠ AND IT REPORTS NO TIME. The document carries allocations, frees and bytes — per rung and per
+// phase — and no milliseconds, no exponents, no residuals. Memory is bit-for-bit reproducible and
+// wall time is machine-dependent, so memory is the only thing a trend can be built out of; and the
+// ladder DOUBLES, so the ratio between two rungs IS the growth (x2.00 linear, x4.00 quadratic) and a
+// consumer takes it from the counts with a division. If a caller wants the milliseconds of one
+// compile, that is the COMPILER's own instrument: `log: "compiler:debug"`.
 //
 // NO `compiler` ARGUMENT. Only shv2 has `scale-test`, so the tool is fixed to it, exactly as `fmt`
 // is fixed to the C# bootstrap. This follows Compilers.maxon's stated discipline: never hand a

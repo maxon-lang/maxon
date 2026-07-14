@@ -1,24 +1,33 @@
-// ScaleTestRunner — climb the generated ladder, measure it, fit it, print it, and record the trend.
+// ScaleTestRunner — climb the generated ladder, measure its MEMORY, print it, and record the trend.
 //
 // IT RENDERS NO VERDICT. There is nothing here to pass.
 //
 // `spec-test` proves the compiler is CORRECT and gates on it. This is an INSTRUMENT: it compiles a
-// ladder of generated programs — six rungs, each double the last — measures time and memory per
-// phase per rung, fits a growth exponent to every curve, prints the tables, and appends a datapoint
-// to `docs/optimization-log.md`. The question it answers is *"what has this compiler's cost actually
-// done, change by change"*, not *"may I merge"*.
+// ladder of generated programs — six rungs, each double the last — measures ALLOCATIONS, FREES and
+// BYTES per phase per rung, prints them, and appends a datapoint to `docs/optimization-log.md`. The
+// question it answers is *"what has this compiler's memory traffic actually done, change by change"*,
+// not *"may I merge"*.
 //
-// THAT DISTINCTION IS LOAD-BEARING, and it is not a matter of taste. This suite used to have
-// budgets, committed memory goldens, and a PASS / FAIL / VOID / NOISY verdict — and having a light to
-// turn green did exactly the damage a light to turn green does. When `regalloc:liveness` reported
-// NOISY, the response was to change the INSTRUMENT so it would stop complaining, rather than to
-// explain the reading. That is optimizing the gauge instead of the engine, and it is only ever
-// tempting when there is a gauge that can be wrong. There is now no light, so there is nothing to
-// chase: a curve that looks surprising is a READING TO EXPLAIN.
+// ===========================================================================================
+// MEMORY ONLY, AND NO CURVES. Both deletions, and why.
+// ===========================================================================================
 //
-// (The NOISY guard was also simply unsound — it inferred "the machine was loaded" from a curve-fit
-// residual, and the ALLOCATION curves, whose points are bit-for-bit reproducible and CANNOT move,
-// carried a nonzero residual too. See CurveFit's header for what a residual actually measures.)
+// IT DOES NOT COLLECT TIME. Wall time is machine-dependent, so a dated table of it compares a loaded
+// box in July against an idle one in August and concludes nothing. Allocations and bytes are
+// bit-for-bit reproducible: the same compiler on the same corpus produces the same digits whatever
+// else the machine is doing, so a number that MOVED, moved for a reason. That is the only column in
+// which a trend means anything, so it is the only column there is. (The COMPILER still times itself,
+// and should: `--metrics=<path>` and `--log=compiler:debug` give per-phase milliseconds for one
+// compile, which is where a clock is worth reading and where nothing is being trended against another
+// machine on another day. This runner reads those metrics files and ignores their time column.)
+//
+// AND IT FITS NOTHING. The ladder DOUBLES, so the ratio between two consecutive rungs IS the growth,
+// read straight off the raw numbers — x2.00 is linear, x4.00 is quadratic. A fitted exponent could
+// say nothing that the doubling had not already said, and it dragged a residual behind it, and the
+// residual dragged a NOISY verdict, and the NOISY verdict got an exemption written for it so that it
+// would stop complaining. That is optimizing the gauge instead of the engine, and it is only ever
+// tempting when there is a gauge that can be wrong. A ratio is a division: there is no light to turn
+// green, so a surprising number is a READING TO EXPLAIN. See ScaleRatio.
 //
 // ===========================================================================================
 // WHAT AN EXIT CODE STILL MEANS
@@ -49,11 +58,10 @@
 // shape at rung 5 is exactly where the historical SIGSEGV lived, and a runner that died with it
 // would report nothing at all about the five rungs that had already climbed.
 //
-// One repetition, because a second would not buy what it appears to. The numbers that carry the
-// signal — allocations, frees, bytes — are bit-for-bit REPRODUCIBLE, so a second repetition of them
-// returns the same digits. Wall time at n=1 is noisy, and it is reported as the machine-dependent
-// reading it is: the growth EXPONENT fitted through six of them reproduces to ~1%, which is what
-// makes the exponent worth recording and the milliseconds worth nothing.
+// ONE REPETITION, and now it is not even a compromise. Everything measured here is bit-for-bit
+// reproducible, so a second repetition returns the same digits — there is nothing to average out and
+// no reason to pay for it. (This was a real compromise while the suite still timed itself: wall time
+// at n=1 is noisy. It stopped being one when the clock was removed.)
 
 // A rung's metrics TSV and its executable, in the corpus ROOT — NEVER inside the rung's own source
 // directory.
@@ -99,18 +107,22 @@ export function scaleErrorText(error ScaleError) returns String
 end 'scaleErrorText'
 
 // One phase's numbers, as parsed back out of a rung's metrics TSV.
+//
+// NO `nanos` FIELD. The TSV still carries a nanoseconds column — the compiler times itself, and
+// should — and this suite reads straight past it. Carrying it here would mean carrying it into the
+// report, the JSON and the log, and a machine-dependent number in a trend table is a number that
+// says more about what else the box was doing than about the compiler. See this file's header.
 export type PhaseMetric
-	export let nanos as DurationNanos
 	export let allocs as AllocCount
 	export let frees as AllocCount
 	export let bytes as ByteCount
 
-	export static function create(nanos DurationNanos, allocs AllocCount, frees AllocCount, bytes ByteCount) returns PhaseMetric
-		return Self{nanos: nanos, allocs: allocs, frees: frees, bytes: bytes}
+	export static function create(allocs AllocCount, frees AllocCount, bytes ByteCount) returns PhaseMetric
+		return Self{allocs: allocs, frees: frees, bytes: bytes}
 	end 'create'
 
 	export static function zero() returns PhaseMetric
-		return Self{nanos: 0, allocs: 0, frees: 0, bytes: 0}
+		return Self{allocs: 0, frees: 0, bytes: 0}
 	end 'zero'
 end 'PhaseMetric'
 
@@ -141,6 +153,59 @@ export type RungResult
 end 'RungResult'
 
 export typealias RungResultArray = Array with RungResult
+
+// ===========================================================================================
+// The phases this instrument reports, enumerated ONCE
+// ===========================================================================================
+
+// WHAT one row of the per-phase table is measured from: a compile phase, or one of the register
+// allocator's sub-phases.
+//
+// The sub-phases are a BREAKDOWN of `phase:regalloc` and not extra phases beside it — adding them to
+// the same list would double-count every allocation the allocator makes — so they are enumerated
+// after the phases and printed under them.
+//
+// ONE ENUMERATION, walked by the human table and by `--result-json` alike. Two hand-maintained walks
+// of the same enums is how a phase gets added to `CompilePhase`, timed, metered, and then silently
+// omitted from one output but not the other; and a name built at two sites is a name that can differ
+// at two sites. The list, and the naming, live here.
+export union PhaseSource
+	compilePhase(phase CompilePhase)
+	regAllocPhase(sub RegAllocPhase)
+end 'PhaseSource'
+
+export typealias PhaseSourceArray = Array with PhaseSource
+
+let PhaseNamePrefix = "phase:"
+let RegAllocNamePrefix = "regalloc:"
+
+export function scalePhaseSources() returns PhaseSourceArray
+	var sources = PhaseSourceArray.create()
+
+	for phase in CompilePhase.allCases 'eachPhase'
+		sources.push(PhaseSource.compilePhase(phase))
+	end 'eachPhase'
+
+	for sub in RegAllocPhase.allCases 'eachSub'
+		sources.push(PhaseSource.regAllocPhase(sub))
+	end 'eachSub'
+
+	return sources
+end 'scalePhaseSources'
+
+export function phaseSourceName(source PhaseSource) returns String
+	return match source 'src'
+		compilePhase(phase) gives "{PhaseNamePrefix}{phase.name}"
+		regAllocPhase(sub) gives "{RegAllocNamePrefix}{sub.name}"
+	end 'src'
+end 'phaseSourceName'
+
+export function phaseMetricOf(source PhaseSource, result RungResult) returns PhaseMetric
+	return match source 'src'
+		compilePhase(phase) gives result.phaseAt(phase)
+		regAllocPhase(sub) gives result.regAllocAt(sub)
+	end 'src'
+end 'phaseMetricOf'
 
 // ===========================================================================================
 // Entry point
@@ -194,34 +259,34 @@ export function runScaleTest(args MaxonArgs) returns ExitCode
 	var results = RungResultArray.create()
 	for rung in ladder 'eachRung'
 		let result = try compileRung(compilerExe, root: corpusRoot, rung: rung) otherwise (error) 'rungFailed'
-			// A rung that would not compile is not a slow rung, it is a broken run: every later rung is
-			// a superset of this one's shapes, so there is nothing left to measure and no curve worth
-			// fitting through what came before.
+			// A rung that would not compile is a broken run, not a slow one: every later rung is a
+			// superset of this one's shapes, so there is nothing left to measure and nothing the rungs
+			// below it can be compared against.
 			return brokenRun("rung {rung.index} FAILED to compile", detail: scaleErrorText(error))
 		end 'rungFailed'
-		printRungLine(result)
+		printRungLine(result, results: results)
 		results.push(result)
 	end 'eachRung'
 
 	// Check the instrument before the subject. A corpus that folded away measured NOTHING, and every
-	// curve below would be a curve through nothing — a beautifully linear one.
+	// number below it would be a number about nothing — a beautifully proportional set of them.
 	try assertCorpusCompiled(results) otherwise (error) 'degenerate'
 		return brokenRun("the generated corpus was DEGENERATE, so this run measured nothing", detail: scaleErrorText(error))
 	end 'degenerate'
 
-	let curves = fitScaleCurves(results)
-	printCurveTable(curves, trend: trend)
+	printPhaseTable(results, ofBytes: false)
+	printPhaseTable(results, ofBytes: true)
 	printMemoryTrend(results, trend: trend)
 	printCorpusGrowth(results)
 
 	if not args.resultJson.isEmpty() 'json'
-		try writeResultJson(args.resultJson, results: results, curves: curves, trend: trend) otherwise (error) 'jsonFailed'
+		try writeResultJson(args.resultJson, results: results, trend: trend) otherwise (error) 'jsonFailed'
 			return brokenRun("the result document could not be written", detail: scaleErrorText(error))
 		end 'jsonFailed'
 	end 'json'
 
 	if not args.note.isEmpty() 'record'
-		let recorded = recordRun(trend, results: results, curves: curves, note: args.note)
+		let recorded = recordRun(trend, results: results, note: args.note)
 		if recorded != 0 'recordFailed'
 			return recorded
 		end 'recordFailed'
@@ -255,23 +320,22 @@ end 'brokenRun'
 //
 // This used to decline when allocations and bytes both matched the last logged row, on the theory
 // that a row about nothing is noise. It is the wrong theory, and it fails SILENTLY, which is the
-// worse half: a change that made a phase twice as fast without moving a single allocation — which is
-// most of what optimizing a compiler looks like — is EXACTLY the datapoint this instrument's exponent
-// table exists to carry, and the operator who typed `--note` asking for it got a line of prose and no
+// worse half: the operator who typed `--note` asking for the datapoint got a line of prose and no
 // row. A tool that second-guesses an explicit instruction from its operator, and then leaves the
-// history it was told to write simply absent, is worse than one that logs a dull row.
+// history it was told to write simply absent, is worse than one that logs a dull row — and the
+// operator is the only party who knows why the run was made.
 //
 // The REPORT stays honest — an unmoved run is told it did not move — but the row is written.
 //
 // (Every guard that protects the log's INTEGRITY still refuses: a note carrying a `|` or a forged
 // marker, a duplicate marker, a ladder of the wrong width, a curve set that is not this compiler's.
 // Those reject BAD INPUT, which is a different thing entirely from overruling a valid one.)
-function recordRun(trend ScaleTrend, results RungResultArray, curves ScaleCurveArray, note String) returns ExitCode
+function recordRun(trend LoggedMemory, results RungResultArray, note String) returns ExitCode
 	if not anyMemoryMoved(trend, results: results) 'unchanged'
 		print("\nscale-test: no change in allocations or bytes since the last logged run — recording anyway, because --note was given.\n")
 	end 'unchanged'
 
-	try recordScaleRun(results, curves: curves, note: note) otherwise (error) 'writeFailed'
+	try recordScaleRun(results, note: note) otherwise (error) 'writeFailed'
 		return brokenRun("the run could not be recorded in the trend log", detail: scaleErrorText(error))
 	end 'writeFailed'
 	return 0
@@ -401,12 +465,20 @@ end 'parseRungMetrics'
 
 let MetricsFieldCount = 6
 
+// Field 2 is the phase's NANOSECONDS, and it is skipped rather than read.
+//
+// The row is still required to HAVE six fields — the format is MetricsEmit's contract and a row with
+// five is a malformed row, not a row with no clock — but the value is not carried anywhere. Reading
+// it into a variable this suite then never used would be an invitation to put it back in a column.
+let MetricsAllocsField = 3
+let MetricsFreesField = 4
+let MetricsBytesField = 5
+
 function parseMetricFields(fields StringArray) returns PhaseMetric throws ScaleError
-	let nanos = try parseCount(try fields.get(2) otherwise panic("parseMetricFields: nanos field OOB"))
-	let allocs = try parseCount(try fields.get(3) otherwise panic("parseMetricFields: allocs field OOB"))
-	let frees = try parseCount(try fields.get(4) otherwise panic("parseMetricFields: frees field OOB"))
-	let bytes = try parseCount(try fields.get(5) otherwise panic("parseMetricFields: bytes field OOB"))
-	return PhaseMetric.create(nanos, allocs: allocs, frees: frees, bytes: bytes)
+	let allocs = try parseCount(try fields.get(MetricsAllocsField) otherwise panic("parseMetricFields: allocs field OOB after count check"))
+	let frees = try parseCount(try fields.get(MetricsFreesField) otherwise panic("parseMetricFields: frees field OOB after count check"))
+	let bytes = try parseCount(try fields.get(MetricsBytesField) otherwise panic("parseMetricFields: bytes field OOB after count check"))
+	return PhaseMetric.create(allocs, frees: frees, bytes: bytes)
 end 'parseMetricFields'
 
 export typealias ParsedCount = int(0 to u64.max)
@@ -444,116 +516,136 @@ let MaxDecimalDigits = 20
 
 let AsciiDigitZero = 0x30
 let AsciiDigitNine = 0x39
-
 // ===========================================================================================
 // Reporting — data, and nothing but
 // ===========================================================================================
 
 let RungColumnWidth = 10 as ColumnWidth
 let SizeColumnWidth = 12 as ColumnWidth
-let MsColumnWidth = 10 as ColumnWidth
 let CountColumnWidth = 14 as ColumnWidth
+let GrowthColumnWidth = 9 as ColumnWidth
 
-// The curve table's columns. `curve` is wide enough for `phase:elimTrivialBlockArgs`.
-let CurveColumnWidth = 26 as ColumnWidth
-let ExponentColumnWidth = 10 as ColumnWidth
-let DeltaColumnWidth = 10 as ColumnWidth
-let ResidualColumnWidth = 10 as ColumnWidth
-let ShareColumnWidth = 9 as ColumnWidth
+// The per-phase table's columns. `phase` is wide enough for `phase:elimTrivialBlockArgs`.
+let PhaseColumnWidth = 28 as ColumnWidth
+let PhaseCountColumnWidth = 12 as ColumnWidth
 
+// THE LADDER'S OWN TABLE, and the `x` columns are what make it readable at a glance.
+//
+// Each rung DOUBLES the program, so a column of x2.00 is a compiler that is linear in its input and
+// a column of x4.00 is one that is quadratic. Nothing is fitted and nothing is interpreted: the
+// number printed is this rung's count divided by the one below it.
 function printRungHeader()
 	print("\n")
-	print("{padRight("  rung", width: RungColumnWidth)}{padLeft("source", width: SizeColumnWidth)}{padLeft("code", width: SizeColumnWidth)}{padLeft("time", width: MsColumnWidth)}{padLeft("allocs", width: CountColumnWidth)}{padLeft("bytes", width: CountColumnWidth)}\n")
+	print("{padRight("  rung", width: RungColumnWidth)}{padLeft("source", width: SizeColumnWidth)}{padLeft("code", width: SizeColumnWidth)}{padLeft("allocs", width: CountColumnWidth)}{padLeft("x", width: GrowthColumnWidth)}{padLeft("frees", width: CountColumnWidth)}{padLeft("bytes", width: CountColumnWidth)}{padLeft("x", width: GrowthColumnWidth)}\n")
 end 'printRungHeader'
 
-function printRungLine(result RungResult)
+// `results` is the rungs climbed SO FAR, not including this one — the line is printed as each rung
+// lands, so that a run whose top rung dies has still told you everything the rungs below it said.
+function printRungLine(result RungResult, results RungResultArray)
 	var line = padRight("  rung {result.rung}", width: RungColumnWidth)
 	line.append(padLeft("{result.sourceBytes}", width: SizeColumnWidth))
 	line.append(padLeft("{result.codeBytes}", width: SizeColumnWidth))
-	line.append(padLeft(millisText(result.total.nanos), width: MsColumnWidth))
 	line.append(padLeft("{result.total.allocs}", width: CountColumnWidth))
+	line.append(padLeft(growthText(growthAgainstPrevious(result.total.allocs, results: results, ofBytes: false)), width: GrowthColumnWidth))
+	line.append(padLeft("{result.total.frees}", width: CountColumnWidth))
 	line.append(padLeft("{result.total.bytes}", width: CountColumnWidth))
+	line.append(padLeft(growthText(growthAgainstPrevious(result.total.bytes, results: results, ofBytes: true)), width: GrowthColumnWidth))
 	print("{line}\n")
 end 'printRungLine'
 
-// Every curve, in both of its measurements, against the last one recorded in the trend log.
+// This rung's growth over the LAST rung in `results` — which is the rung below it, because the
+// caller has not pushed this one yet. Rung 0 has nothing below it and says so.
+function growthAgainstPrevious(now MemoryCount, results RungResultArray, ofBytes bool) returns GrowthReading
+	if results.count() == 0 'bottomRung'
+		return GrowthReading.noBaseline
+	end 'bottomRung'
+
+	let below = try results.get(results.count() - 1) otherwise panic("growthAgainstPrevious: count > 0 but the last result is missing")
+	return growthOf(now, previous: measureOf(below.total, ofBytes: ofBytes))
+end 'growthAgainstPrevious'
+
+// WHICH of a phase's two published measures a table is about. One `bool` threaded through one
+// accessor, rather than two copies of every table function differing only in the field they read —
+// the allocations table and the bytes table are the same table asked a different question.
 //
-// THE Δ COLUMNS ARE THE POINT. An exponent on its own is hard to have an opinion about — is 1.31
-// bad? — and an exponent that has climbed 0.28 since the last recorded run is not hard to have an
-// opinion about at all. The allocation exponent is exact and the time exponent reproduces to ~1%, so
-// a Δ of a few thousandths is the instrument breathing and a Δ of a few hundred is a phase changing
-// shape. No threshold is needed anywhere in that sentence, which is exactly why there is none.
-function printCurveTable(curves ScaleCurveArray, trend ScaleTrend)
-	print("\n")
-	print("{padRight("  curve", width: CurveColumnWidth)}{padLeft("time", width: ExponentColumnWidth)}{padLeft("delta", width: DeltaColumnWidth)}{padLeft("resid", width: ResidualColumnWidth)}{padLeft("share", width: ShareColumnWidth)}{padLeft("allocs", width: ExponentColumnWidth)}{padLeft("delta", width: DeltaColumnWidth)}{padLeft("resid", width: ResidualColumnWidth)}{padLeft("share", width: ShareColumnWidth)}\n")
+// FREES ARE NOT A THIRD TABLE. They track allocations almost exactly (a compile that allocates N and
+// frees N-k has k live at exit, and k is small and constant), so a third copy of this table would be
+// a near-duplicate paid for in a screenful. They are measured, printed per rung above, and carried
+// per phase in `--result-json` for anyone who wants them.
+export function measureOf(metric PhaseMetric, ofBytes bool) returns MemoryCount
+	if ofBytes 'wantBytes'
+		return metric.bytes
+	end 'wantBytes'
 
-	for curve in curves 'eachCurve'
-		var line = padRight("  {curve.name}", width: CurveColumnWidth)
-		line.append(padLeft(curve.time.exponentText(), width: ExponentColumnWidth))
-		line.append(padLeft(exponentDeltaText(curve.time, previous: loggedExponent(trend.timeExponents, curve: curve.name)), width: DeltaColumnWidth))
-		line.append(padLeft(curve.time.residualText(), width: ResidualColumnWidth))
-		line.append(padLeft(shareText(curve.timeShare), width: ShareColumnWidth))
-		line.append(padLeft(curve.allocs.exponentText(), width: ExponentColumnWidth))
-		line.append(padLeft(exponentDeltaText(curve.allocs, previous: loggedExponent(trend.allocExponents, curve: curve.name)), width: DeltaColumnWidth))
-		line.append(padLeft(curve.allocs.residualText(), width: ResidualColumnWidth))
-		line.append(padLeft(shareText(curve.allocShare), width: ShareColumnWidth))
-		print("{line}\n")
-	end 'eachCurve'
+	return metric.allocs
+end 'measureOf'
 
-	print("\n")
-	print("  time is machine-dependent and the milliseconds mean nothing; the EXPONENT fitted through\n")
-	print("  them reproduces to ~1%. The allocation exponent is exact. `resid` is how well ONE power law\n")
-	print("  describes the curve — a composite (a parent, or regalloc:liveness) bends, and that is not\n")
-	print("  noise. Nothing here is a verdict; the trend is in {OptimizationLogRelativePath}.\n")
-end 'printCurveTable'
-
-// This curve's exponent in the last recorded run, reusing `FitResult` rather than growing an option
-// type beside it: "there is no exponent for this curve" is exactly what `unfittable` already means,
-// and one absent-shaped thing is better than two.
+// EVERY PHASE, AT EVERY RUNG — the table that localizes a movement.
 //
-// Absent covers three cases — the log has no exponent row, the row predates this curve, or the curve
-// was unfittable when it was written — and none of them is distinguished, because a reader cannot
-// difference against any of them.
-function loggedExponent(exponents ExponentByCurve, curve String) returns FitResult
-	let value = try exponents.get(curve) otherwise 'notLogged'
-		return FitResult.unfittable("the trend log has no exponent for '{curve}'")
-	end 'notLogged'
-	// A logged exponent carries no residual — the log records the slope, which is the number worth
-	// tracking, and not the fit it came from.
-	return FitResult.fitted(value, residual: 0)
-end 'loggedExponent'
-
-// `+0.043`, `-0.007`, `0.000`, or `n/a` when either end of the comparison is missing. SIGNED always:
-// a delta with no sign is a number a reader has to compute the direction of themselves.
-function exponentDeltaText(now FitResult, previous FitResult) returns String
-	match now 'n'
-		unfittable then return UnfittableText
-		fitted(current, _) then return signedDeltaAgainst(current, previous: previous)
-	end 'n'
-end 'exponentDeltaText'
-
-function signedDeltaAgainst(current Milli, previous FitResult) returns String
-	match previous 'p'
-		unfittable then return UnfittableText
-		fitted(before, _) then return signedMilli(current - before)
-	end 'p'
-end 'signedDeltaAgainst'
-
-function signedMilli(delta Milli) returns String
-	if delta > 0 'grew'
-		return "+{milliText(delta)}"
-	end 'grew'
-	return milliText(delta)
-end 'signedMilli'
-
-// The exact half of the instrument: what the compiler allocated, against what it allocated when the
-// trend log was last written. These numbers are bit-for-bit reproducible, so every difference here is
-// REAL — the compiler does something different with memory than it did at the last recorded run, for
-// the same input. It is the most informative thing this suite prints, and it is worth explaining
-// rather than merely noticing.
-function printMemoryTrend(results RungResultArray, trend ScaleTrend)
+// The rung table above says the compiler's allocations moved. This one says WHICH PHASE'S did, and
+// the `x` column says whether that phase is growing linearly with the program or faster than it. That
+// is the whole diagnostic loop: the total moved (rung table) → this phase moved (this table) → this
+// TYPE, from this FUNCTION (`--per-type`).
+//
+// The regalloc sub-phases are printed under the phases, not among them: they are a BREAKDOWN of
+// `phase:regalloc` and adding them to the same list would double-count every allocation they make.
+function printPhaseTable(results RungResultArray, ofBytes bool)
 	print("\n")
-	match trend.memory 'm'
+	print("  per-phase {measureHeading(ofBytes)}, and its growth over the rung below (the ladder DOUBLES: x2.00 is linear)\n")
+	print("\n")
+
+	var header = padRight("  phase", width: PhaseColumnWidth)
+	for result in results 'eachRung'
+		header.append(padLeft("rung {result.rung}", width: PhaseCountColumnWidth))
+	end 'eachRung'
+	header.append(padLeft("x", width: GrowthColumnWidth))
+	print("{header}\n")
+
+	for source in scalePhaseSources() 'eachPhase'
+		printPhaseRow(source, results: results, ofBytes: ofBytes)
+	end 'eachPhase'
+end 'printPhaseTable'
+
+function measureHeading(ofBytes bool) returns String
+	if ofBytes 'wantBytes'
+		return "BYTES"
+	end 'wantBytes'
+
+	return "ALLOCATIONS"
+end 'measureHeading'
+
+function printPhaseRow(source PhaseSource, results RungResultArray, ofBytes bool)
+	var line = padRight("  {phaseSourceName(source)}", width: PhaseColumnWidth)
+
+	for result in results 'eachRung'
+		line.append(padLeft("{measureOf(phaseMetricOf(source, result: result), ofBytes: ofBytes)}", width: PhaseCountColumnWidth))
+	end 'eachRung'
+
+	line.append(padLeft(growthText(topRungGrowth(source, results: results, ofBytes: ofBytes)), width: GrowthColumnWidth))
+	print("{line}\n")
+end 'printPhaseRow'
+
+// The growth of the TOP rung over the one below it — the steepest, most informative end of the
+// ladder, and the one a phase that has gone superlinear shows it in first.
+function topRungGrowth(source PhaseSource, results RungResultArray, ofBytes bool) returns GrowthReading
+	if results.count() < MinRungsForGrowth 'tooFewRungs'
+		return GrowthReading.noBaseline
+	end 'tooFewRungs'
+
+	let top = try results.get(results.count() - 1) otherwise panic("topRungGrowth: the ladder is not empty")
+	let below = try results.get(results.count() - 2) otherwise panic("topRungGrowth: the ladder has at least two rungs")
+
+	return growthOf(measureOf(phaseMetricOf(source, result: top), ofBytes: ofBytes), previous: measureOf(phaseMetricOf(source, result: below), ofBytes: ofBytes))
+end 'topRungGrowth'
+
+// What the compiler allocated, against what it allocated when the trend log was last written.
+//
+// THIS IS THE POINT OF THE WHOLE INSTRUMENT. These numbers are bit-for-bit reproducible, so every
+// difference here is REAL — the same input through the same compiler cannot produce a different one
+// by accident. It is worth explaining rather than merely noticing.
+function printMemoryTrend(results RungResultArray, trend LoggedMemory)
+	print("\n")
+	match trend 'm'
 		absent then printNoPreviousRun()
 		present(date, note, allocs, bytes) then printMemoryDelta(results, date: date, note: note, loggedAllocs: allocs, loggedBytes: bytes)
 	end 'm'
@@ -604,7 +696,7 @@ end 'printMemoryDelta'
 // perfectly reasonable thing to do while iterating, and it still prints.)
 function countDeltaText(current AllocCount, logged AllocCountArray, rung LadderIndex) returns String
 	let before = try logged.get(rung) otherwise 'notLogged'
-		return UnfittableText
+		return NoBaselineText
 	end 'notLogged'
 	return signedDeltaText(current as Delta, before: before)
 end 'countDeltaText'
@@ -628,9 +720,9 @@ end 'signedDeltaText'
 // than the ladder the log recorded, and that is exactly the case the delta report has to handle.
 export typealias LadderIndex = int(0 to u64.max)
 
-// The corpus self-check's own number. It is PRINTED, not merely consulted: a reader looking at a set
-// of beautifully linear curves is entitled to see the evidence that they are curves through a program
-// that was actually compiled.
+// The corpus self-check's own numbers. They are PRINTED, not merely consulted: a reader looking at a
+// set of tidy proportional memory numbers is entitled to see the evidence that they are numbers about
+// a program that was actually compiled, rather than one that folded away to nothing.
 function printCorpusGrowth(results RungResultArray)
 	print("\n")
 	if results.count() < MinRungsForGrowth 'tooFewRungs'
@@ -638,6 +730,12 @@ function printCorpusGrowth(results RungResultArray)
 		return
 	end 'tooFewRungs'
 
-	print("  corpus: emitted code grows as source^{fitCodeGrowth(results).exponentText()} (floor {milliText(MinCodeGrowthExponent)}) — the programs\n")
-	print("          compiled rather than folding away, so the curves above are curves through something.\n")
+	var line = "  corpus: emitted code grows"
+	for i in 1 upto results.count() 'eachRung'
+		line.append(" {growthText(codeGrowthAt(results, rung: i))}")
+	end 'eachRung'
+
+	print("{line} per rung (floor {growthText(GrowthReading.measured(MinCodeGrowthRatio))}) —\n")
+	print("          the programs compiled rather than folding away, so the numbers above are numbers\n")
+	print("          about something.\n")
 end 'printCorpusGrowth'

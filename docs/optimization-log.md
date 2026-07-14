@@ -18,15 +18,14 @@ Rows are **appended by the tool, not by hand**. Running
 maxon-shv2 scale-test --note="<what changed, and why the numbers moved>"
 ```
 
-records this run as a new dated row in all three tables. **A run without `--note` records nothing** —
+records this run as a new dated row in both tables. **A run without `--note` records nothing** —
 scale-test is run dozens of times a day against dirty trees and abandoned experiments, and a log of
 all of them would be a log nobody reads.
 
 **`--note` is an instruction, not a request: if you pass one, the row is written.** Even if the
-allocations and bytes are identical to the row above it — a change that halves a phase's *time*
-without moving a byte is most of what optimizing a compiler looks like, and the exponents table is
-here to carry precisely that. The run will tell you plainly that the memory did not move, and then
-record it anyway, because you are the one who knows whether it is a datapoint.
+numbers are identical to the row above it. The run will tell you plainly that nothing moved, and then
+record it anyway, because you are the one who knows whether it is a datapoint and the instrument is
+not.
 
 The `--note` is not a formality. The instrument can see exactly *what* moved and can never see *why*,
 and six months from now a number with no reason attached is worth almost nothing. So the reason is
@@ -36,20 +35,24 @@ demanded at the one moment it is still known: from you, now. See
 ## Reading the numbers
 
 The rungs are generated programs, each **double** the last, so rung 5 is 32× rung 0. Rung 0 shows
-constant-factor wins; only rung 5 shows whether a change bent the *curve*.
+constant-factor wins; only rung 5 shows whether a change bent the curve.
+
+**And because the ladder doubles, the RATIO between two rungs IS the growth.** Divide a rung by the
+one before it: **2× is linear, 4× is quadratic**. That is the whole method — there is nothing fitted,
+no exponent, no residual, and no threshold for anyone to argue about. `scale-test` prints that ratio
+beside every phase; these tables carry the raw counts it is taken from.
 
 | what | how much to trust it |
 | --- | --- |
 | **allocations, bytes** (per rung) | **Exact and bit-for-bit reproducible.** The same source through the same compiler makes exactly the same allocations, on an idle machine or a loaded one. A number here that moved, moved for a *reason*. |
-| **allocation exponent** | **Exact**, for the same reason: it is fitted through points that cannot move. |
-| **time exponent** | Reproduces to about **1%**. A poor boolean and an excellent tracked number. |
-| **milliseconds** | Machine-dependent. Never in this log, and never conclude anything from them. |
+| **the rung-over-rung ratio** | **Exact**, for the same reason: it is a division of two numbers that cannot move. |
+| **time** | **Not measured, and never will be here.** It is machine-dependent, so a dated column of it would compare a loaded box in July against an idle one in August. For the milliseconds of one compile, use the compiler's own `--log=compiler:debug`. |
 
 These are the compiler's own allocation counts and byte volumes while compiling that rung — **not**
 peak resident memory, which nothing currently measures.
 
 Frees are measured and reported but not tabulated here: they track allocations almost exactly, so a
-fourth table would be a near-duplicate paid for in width. They are in `--result-json` for anyone who
+third table would be a near-duplicate paid for in width. They are in `--result-json` for anyone who
 wants them.
 
 Dates are UTC. The columns assume a six-rung ladder; changing the ladder's length changes what the
@@ -87,31 +90,33 @@ ragged.
 Since the suite was introduced, rung 5 has gone **36,897,948 → 14,509,321 allocations** (−61%) and
 **2.86 GB → 1.52 GB** (−47%).
 
-## Exponents
+## Exponents — CLOSED 2026-07-14. Kept as history; no longer written.
 
-Each cell is one curve's fitted **growth exponent**: `time / allocations`. 1.0 is linear, 2.0 is
-quadratic, `n/a` is a curve with nothing to fit (a phase that did no measurable work at that rung).
+**The tool no longer fits exponents, and no longer records time at all.** The row below is the only
+one that was ever machine-written, and it is left exactly as it was measured. Deleting honestly-taken
+numbers to tidy up a format change would be the worst of both worlds; they are simply not extended.
 
-**This is how a creeping quadratic gets caught, and it needs no threshold.** Watch a column climb.
-The allocation exponent is exact; the time exponent reproduces to ~1%, so a few thousandths is the
-instrument breathing and a few hundred is a phase changing shape.
+Two reasons it went, and they are the same reason twice:
 
-`regalloc:splitting` and `regalloc:liveness` are **known superlinear** — the splitter recomputes
-liveness from scratch after every split ([`ARCHITECTURE.md`](../maxon-shv2/ARCHITECTURE.md), §the
-splitter). `liveness` also *bends*, because `timedLiveness` bills two call sites into one bucket (one
-per function, linear; one after every split, superlinear), so it is a **sum of two power laws** and no
-single exponent describes it. That is what its large residual means, and it means it on a perfectly
-idle machine. Any parent curve — `phase:regalloc`, `aggregate` — bends for the same reason.
+**The ladder DOUBLES, so the ratio between two rungs already IS the growth.** x2.00 is linear, x4.00
+is quadratic — read straight off the allocation counts in the tables above, no fit required. An
+exponent could tell you nothing those numbers had not already told you, and it dragged in a residual,
+which dragged in a NOISY verdict, which got an exemption written for it so it would stop complaining.
+That is optimizing the gauge instead of the engine.
 
-The table's columns come from `CompilePhase` and `RegAllocPhase`. If a phase is added or removed the
-tool **refuses to append** rather than silently write a new column set into a table whose historical
-rows have the old one — a column that means one thing above a date and something else below it is a
-trend that lies.
+**And time can never be trended.** It is machine-dependent, so a dated column of it compares a loaded
+box in July against an idle one in August. The `time /` half of every cell below is a fact about the
+machine that ran it. (The compiler still times itself — `--log=compiler:debug` and `--metrics=<path>`
+report per-phase milliseconds for one compile, which is where a clock is worth reading.)
+
+What replaced it: `scale-test` prints per-phase **allocations and bytes at every rung**, with the
+rung-over-rung ratio beside them. `regalloc:liveness` reads **x2.80** and `regalloc:splitting`
+**x2.52** where every other phase sits on **x1.98** — the known-superlinear splitter, visible without
+a single fitted number.
 
 | date | change | phase:load | phase:lex | phase:parse | phase:merge | phase:resolveTypes | phase:semanticCheck | phase:lowerMaxonToStd | phase:pruneDeadBlockArgs | phase:elimTrivialBlockArgs | phase:foldConstOperands | phase:sugarGate | phase:isel | phase:regalloc | phase:prologueEpilogue | phase:runtimeAugment | phase:encode | phase:link | phase:writeExe | phase:emitIr | regalloc:criticalEdges | regalloc:blockOrder | regalloc:splitting | regalloc:liveness | regalloc:coloring | regalloc:ssaDestruction | regalloc:rewrite | aggregate |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | 2026-07-14 | scale-test stopped measuring its own residue: the runner wrote each rung's executable and metrics.tsv INTO the rung source directory, which loadProject enumerates before filtering to .maxon, so every run after the first compiled two extra directory entries per rung (+26 allocs, +945 bytes). Outputs now live in the corpus root and stale files are pruned, so a cold and a warm .scale-tmp now agree exactly. The COMPILER is unchanged; every earlier row in these tables was measured warm and is offset by that constant. | 0.478 / 0.597 | 0.844 / 0.983 | 0.819 / 0.987 | 0.866 / 0.984 | 0.747 / 0.928 | 0.872 / 0.980 | 0.865 / 0.985 | 1.026 / 0.980 | 0.870 / 0.884 | 1.079 / 0.982 | 0.807 / 0.984 | 0.803 / 0.982 | 1.554 / 1.386 | 0.795 / 0.983 | 0.433 / 0.000 | 0.856 / 0.969 | 0.790 / 0.768 | 0.674 / 0.681 | n/a / n/a | 0.752 / 0.971 | 0.817 / 0.951 | 1.782 / 1.493 | 1.598 / 1.617 | 0.826 / 0.984 | 0.896 / 0.988 | 0.922 / 0.986 | 1.342 / 1.182 |
-<!-- scale-history:exponents -->
 
 ## Notes on the changes
 

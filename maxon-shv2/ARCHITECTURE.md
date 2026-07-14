@@ -1377,12 +1377,12 @@ The splitter's own growth exponent on the intra-function shape falls from **2.07
 > **These numbers are now MEASURED ON EVERY RUN, not remembered.** Every figure in this section — and
 > every linearity claim below — used to rest on throwaway generated programs that were never
 > committed, which made them unfalsifiable and free to regress silently. `maxon-shv2 scale-test` is
-> the committed instrument: a six-rung ladder (each rung double the last), and a fitted growth
-> exponent per phase in TIME and in ALLOCATIONS. See `Testing/ScaleTestRunner.maxon`, or run it
-> through `mcp__maxon-dev__run_scale_test`.
+> the committed instrument: a six-rung ladder, **each rung double the last**, reporting per-rung and
+> per-phase MEMORY. See `Testing/ScaleTestRunner.maxon`, or run it through
+> `mcp__maxon-dev__run_scale_test`.
 >
 > ⚠ **IT IS AN INSTRUMENT, NOT A GATE.** It renders no verdict, there is nothing to pass, and there is
-> no green light to chase — a curve that looks surprising is a **reading to explain**. (It once had
+> no green light to chase — a number that looks surprising is a **reading to explain**. (It once had
 > budgets, memory goldens and a PASS/FAIL/VOID/NOISY verdict; when `regalloc:liveness` reported NOISY,
 > the response was to change the *instrument* so it would stop complaining. That is optimizing the
 > gauge instead of the engine, and it is only ever tempting when there is a gauge that can be wrong.)
@@ -1390,40 +1390,46 @@ The splitter's own growth exponent on the intra-function shape falls from **2.07
 > table you read downwards. `--note="<why>"` appends a row; the last row is what every run reports its
 > delta from.
 >
-> **As measured, on the committed corpus (6 rungs, 27 KB → 922 KB of source):**
+> ⚠ **IT MEASURES MEMORY, AND NOT TIME — and it fits nothing.** Allocations and bytes are bit-for-bit
+> reproducible, so a number that moved, moved for a *reason*; wall time is machine-dependent and a
+> dated column of it would compare a loaded box in July against an idle one in August. And because the
+> **ladder DOUBLES, the ratio between two rungs IS the growth** — **x2.00 is linear, x4.00 is
+> quadratic**, read straight off the counts. A fitted exponent said nothing those numbers had not
+> already said, and it dragged a residual behind it, and the residual dragged the NOISY verdict. For
+> the milliseconds of a *single* compile, the compiler still times itself: `--log=compiler:debug`.
 >
-> | curve | time exponent | allocation exponent |
-> |---|---|---|
-> | every frontend + mid phase (`lex`, `parse`, `merge`, `lowerMaxonToStd`, `isel`, `encode`, …) | **0.90 – 1.40** | **0.97 – 0.99** |
-> | `regalloc:splitting` | **2.04** | **1.49** |
-> | `regalloc:liveness` | **1.87** | **1.62** |
-> | `regalloc` (phase, = the sum of the above) | **1.82** | **1.39** |
-> | aggregate | **1.62** | **1.18** |
+> **As measured, on the committed corpus (6 rungs, 27 KB → 922 KB of source) — allocation growth from
+> rung 4 to rung 5, where the ladder doubles:**
 >
-> The **allocation** exponent is exact and bit-for-bit reproducible; the **time** exponent reproduces
-> to ~1% and its absolute milliseconds mean nothing. So the linearity claim HOLDS for the whole
-> compiler **except** the register allocator's splitter, exactly as this section says — and that
-> exception is now a number watched down the pages of a log rather than a caveat in a document.
+> | phase | growth per doubling |
+> |---|---|
+> | every frontend + mid phase (`lex`, `parse`, `merge`, `lowerMaxonToStd`, `isel`, `encode`, …) | **x1.99** — linear, to two decimals, across the board |
+> | `regalloc:splitting` | **x3.51** |
+> | `regalloc:liveness` | **x3.69** |
+> | `regalloc` (phase, = the sum of the above) | **x3.28** |
+> | whole compile | **x2.73** |
 >
-> The fit's **residual** is reported and is *not* a noise detector: it measures how well ONE power law
-> describes a curve, and a curve that is a SUM of two (any parent; and `regalloc:liveness`, whose
-> `timedLiveness` bills one liveness per function *and* one after every split into a single bucket)
-> bends on a perfectly idle machine.
+> So the linearity claim HOLDS for the whole compiler **except** the register allocator's splitter,
+> exactly as this section says — and it holds *visibly*: nineteen phases sitting on x1.99 while two sit
+> near x3.5 is a statement that needs no interpretation and no threshold. That exception is now a
+> number watched down the pages of a log rather than a caveat in a document.
 >
 > The suite found one thing this section did not know about: `elimTrivialBlockArgs` was **quadratic**
-> (exponent 2.02 in time, 1.99 in allocations) and had become **54% of a large compile**. It applied
-> its substitutions one at a time, re-walking every op and rebuilding every branch edge per
-> substitution, and it rescanned every edge in the function for every block-arg. Both are now single
-> passes; the emitted IR is byte-identical and rung 3 compiles **2.2× faster** with **2.8× fewer
-> allocations**.
+> and had become **54% of a large compile**. It applied its substitutions one at a time, re-walking
+> every op and rebuilding every branch edge per substitution, and it rescanned every edge in the
+> function for every block-arg. Both are now single passes; the emitted IR is byte-identical, rung 3
+> compiles **2.2× faster** with **2.8× fewer allocations**, and the phase now sits on **x1.96** with
+> everything else.
 
 **What is left, and it is now the whole of it: the driver still recomputes liveness from scratch
 after every split.** That is O(function × splits) — the intra-function shape above is still
-exponent ~1.9, and `liveness` is ~80% of allocation there. Splitting itself is no longer the cost.
+superlinear (`regalloc:liveness` grows **x3.69** per doubling of the program, against x1.99 for
+everything outside the allocator), and `liveness` is ~80% of allocation there. Splitting itself is no
+longer the cost.
 
-The `--per-type` pass names the objects behind it: `LiveIndexColumn` / `__ManagedMemory_LiveIndex`
-grow at exponent **2.17** and `DenseColumn` / `__ManagedMemory_DenseInt` at **2.04** — the liveness
-result's own dense columns, reallocated from scratch on every recompute. That is the shape of the
+The `--per-type` pass names the objects behind it: `LiveIndexColumn` / `__ManagedMemory_LiveIndex` and
+`DenseColumn` / `__ManagedMemory_DenseInt` — the liveness result's own dense columns, reallocated from
+scratch on every recompute, and both growing faster than the program does. That is the shape of the
 gap, in the allocator's own vocabulary.
 Making it incremental is tractable *in principle* — a split changes the liveness of exactly one
 value plus the fresh reload ids it mints, and nothing else — but the CSR live sets are deliberately

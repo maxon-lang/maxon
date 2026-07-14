@@ -1,25 +1,26 @@
 // ScalePerType — the `--per-type` pass: not "how much did the compiler allocate", but WHAT did it
 // allocate, and WHERE FROM.
 //
-// The timed run answers the first question. When its numbers move — when a phase's allocations start
-// growing as size^2, or simply when a rung's exact count shifts — the next question is immediately
-// "of WHAT?", and the timed binary cannot answer it: its counters are a single running total,
-// deliberately, because anything per-type on that path would be a per-allocation write to a per-type
-// slot and would perturb the very thing being measured.
+// The main run answers the first question. When its numbers move — when a phase's allocations start
+// growing faster than the program does, or simply when a rung's exact count shifts — the next
+// question is immediately "of WHAT?", and the measured binary cannot answer it: its counters are a
+// single running total, deliberately, because anything per-type on that path would be a
+// per-allocation write to a per-type slot and would perturb the very thing being measured.
 //
 // TWO TABLES, AND THE SECOND IS THE ONE THAT FINDS THINGS. Every trace line carries both the type
 // allocated and the SCOPE that allocated it, so both are tallied:
 //
-//   BY TYPE   names the DATA STRUCTURE behind a growth curve. A `LiveIndexColumn` at exponent 2.17
-//             is a quadratic, and the type is enough to find it.
+//   BY TYPE   names the DATA STRUCTURE behind a movement. A `LiveIndexColumn` that QUADRUPLES while
+//             the program doubles is a quadratic, and the type is enough to find it.
 //   BY SCOPE  names the CODE. And the type table structurally cannot: a `String` row says a String
 //             was allocated: it can never say that 150 of them came from `emitFixedToken`,
 //             materializing the same `"("` on every token, because they are indistinguishable from
 //             every other String in the compiler. A constant-factor hog HIDES INSIDE ITS TYPE.
 //             It is a single named row here.
 //
-// A growth exponent is fitted for both, so a scope that grows superlinearly is as visible as a type
-// that does.
+// Both tables carry the same growth reading the rest of the suite prints — the ratio of the top
+// traced rung to the one below it, on a ladder that doubles — so a scope that grows superlinearly is
+// as visible as a type that does.
 //
 // So this is a SECOND, UNTIMED PASS over the same ladder, through a SECOND, DIFFERENTLY-COMPILED
 // binary — and both of those words are load-bearing:
@@ -35,9 +36,10 @@
 //
 // BOUNDED ON PURPOSE, AND IT SAYS SO. The top rung allocates ~37 million times, and tracing writes a
 // line for each: gigabytes of pipe traffic to answer a question the bottom rungs already answer. So
-// this covers the BOTTOM THREE RUNGS — enough to fit a per-type growth exponent, which is the whole
-// point (a type whose count grows quadratically is the smoking gun). The runner PRINTS what it
-// skipped: a silent cap reads as "we covered everything" when it did not.
+// this covers the BOTTOM THREE RUNGS — enough for a growth reading (the top traced rung over the one
+// below it), which is the whole point: a type whose count QUADRUPLES while the program doubles is the
+// smoking gun. The runner PRINTS what it skipped: a silent cap reads as "we covered everything" when
+// it did not.
 //
 // The trace is STREAMED, never collected. Rung 2 alone is ~1.7 million events; buffering that as a
 // String would cost more memory than the compile it is measuring. `StreamingSubprocess.readStderrLine`
@@ -85,8 +87,8 @@ let CorruptScopeName = "(corrupt scope tag)"
 let RawBufferTypeName = "(raw buffer)"
 
 // One KEY's allocation profile across the traced rungs — a key being a type name in one table and
-// an allocating scope in the other. `counts` and `bytes` are parallel with the rungs traced, so a
-// growth exponent is a fit like any other.
+// an allocating scope in the other. `counts` and `bytes` are parallel with the rungs traced, so the
+// growth reading is the same rung-over-rung division every other table in this suite takes.
 //
 // Nothing here is type-specific, and that is deliberate: the scope table is this same machinery
 // keyed differently, not a second copy of it.
@@ -177,7 +179,7 @@ let ScopeKeyWidth = 44 as ColumnWidth
 // The two tables the ONE stream feeds, and the reason the scope table is worth having:
 //
 //   BY TYPE   answers "what was allocated" — a quadratic `LiveIndexColumn` names the data structure
-//             behind a memory curve that bent.
+//             behind a memory number that moved.
 //   BY SCOPE  answers "which code allocated it" — and the type table structurally CANNOT. A `String`
 //             row says a String was allocated; it cannot say that 150 of them came from
 //             `emitFixedToken`, materializing the same `"("` on every token. Every constant-factor
@@ -209,13 +211,13 @@ end 'TraceTables'
 
 // Run the per-type pass over the bottom rungs of `results`.
 //
-// Its numbers are NOT the timed run's numbers and are never compared with them: the trace binary is
+// Its numbers are NOT the main run's numbers and are never compared with them: the trace binary is
 // different codegen, built from a copy of the sources at a different path, so its counts are close to
 // but not identical with the ones the trend log records. What it is FOR is naming the type — and the
-// function — behind a movement the timed run has already shown you.
+// function — behind a movement the main run has already shown you.
 export function runPerTypePass(results RungResultArray)
 	print("\n")
-	print("scale-test: --per-type — tracing WHAT was allocated (untimed, second binary).\n")
+	print("scale-test: --per-type — tracing WHAT was allocated (second binary).\n")
 
 	let tracedRungs = perTypeRungCount(results)
 	if tracedRungs < results.count() 'bounded'
@@ -223,8 +225,8 @@ export function runPerTypePass(results RungResultArray)
 		// would write gigabytes; that is a deliberate bound, and a bound nobody is told about reads
 		// as complete coverage.
 		print("  BOUNDED: tracing rungs 0-{tracedRungs - 1} of {results.count()}. The upper rungs allocate tens of millions\n")
-		print("           of times and a trace line is written for each; the bottom rungs already fit a\n")
-		print("           per-type growth exponent, which is what this pass exists to produce.\n")
+		print("           of times and a trace line is written for each; the bottom rungs already give the\n")
+		print("           per-type growth reading, which is what this pass exists to produce.\n")
 	end 'bounded'
 
 	let traceExe = try buildTraceCompiler() otherwise (error) 'noTraceExe'
@@ -582,16 +584,16 @@ end 'traceLineSize'
 // allocate Strings did it, so a constant-factor hog is INVISIBLE there — it hides among every other
 // user of its type. In the scope table it is a single named row.
 function reportPerType(tables TraceTables, results RungResultArray, tracedRungs RungCount)
-	reportTable(tables.byType, keyWidth: TypeKeyWidth, results: results, tracedRungs: tracedRungs)
-	reportTable(tables.byScope, keyWidth: ScopeKeyWidth, results: results, tracedRungs: tracedRungs)
+	reportTable(tables.byType, keyWidth: TypeKeyWidth, tracedRungs: tracedRungs)
+	reportTable(tables.byScope, keyWidth: ScopeKeyWidth, tracedRungs: tracedRungs)
 	reconcile(tables, results: results, tracedRungs: tracedRungs)
 end 'reportPerType'
 
 // One ranked table. Key-agnostic — it prints whatever the table is keyed by, under that table's own
 // heading — which is why there is one of these and not two.
-function reportTable(table AllocProfileTable, keyWidth ColumnWidth, results RungResultArray, tracedRungs RungCount)
+function reportTable(table AllocProfileTable, keyWidth ColumnWidth, tracedRungs RungCount)
 	print("\n")
-	print("  {padRight(table.keyHeading, width: keyWidth)}{padLeft("allocs", width: 12)}{padLeft("bytes", width: 14)}{padLeft("exponent", width: 11)}\n")
+	print("  {padRight(table.keyHeading, width: keyWidth)}{padLeft("allocs", width: 12)}{padLeft("bytes", width: 14)}{padLeft("x", width: 11)}\n")
 
 	let ranked = rankByTotalCount(table)
 	var shown = 0
@@ -600,30 +602,40 @@ function reportTable(table AllocProfileTable, keyWidth ColumnWidth, results Rung
 			print("  ... and {ranked.count() - PerTypeTopRows} more\n")
 			break
 		end 'enough'
-		printProfileRow(profile, keyWidth: keyWidth, results: results, tracedRungs: tracedRungs)
+		printProfileRow(profile, keyWidth: keyWidth, tracedRungs: tracedRungs)
 		shown = shown + 1
 	end 'each'
 end 'reportTable'
 
-// One row, with its own growth exponent across the traced rungs — the number this pass exists to
-// produce. A key growing as size^2 is the smoking gun behind a curve that bent; in the type table it
-// names the data structure, in the scope table the function.
-function printProfileRow(profile AllocProfile, keyWidth ColumnWidth, results RungResultArray, tracedRungs RungCount)
-	var sizes = FitPointArray.create()
-	var counts = FitPointArray.create()
-	for rung in 0 upto tracedRungs 'eachRung'
-		let result = try results.get(rung) otherwise panic("printProfileRow: results.get OOB at rung {rung}")
-		sizes.push(result.sourceBytes as Real)
-		counts.push(profile.countAt(rung as RungIndex))
-	end 'eachRung'
-
+// One row, with its own growth across the traced rungs — the number this pass exists to produce. A
+// key that QUADRUPLES while the program doubles is the smoking gun behind a movement the timed run
+// showed you: in the type table it names the data structure, in the scope table the function.
+//
+// The ladder doubles, so the ratio between the top traced rung and the one below it IS the growth,
+// and it is the same reading — the same `x2.00 is linear` — that every other table in this suite
+// prints. It replaced a fitted exponent over all the traced rungs, which was a different unit for the
+// same fact and one more thing for a reader to hold in their head.
+function printProfileRow(profile AllocProfile, keyWidth ColumnWidth, tracedRungs RungCount)
 	var totalBytes = 0 as ByteCount
 	for value in profile.bytes 'eachByte'
 		totalBytes = totalBytes + value
 	end 'eachByte'
 
-	print("  {padRight(profile.name, width: keyWidth)}{padLeft("{profile.totalCount()}", width: 12)}{padLeft("{totalBytes}", width: 14)}{padLeft(fitPowerLaw(sizes, costs: counts).exponentText(), width: 11)}\n")
+	print("  {padRight(profile.name, width: keyWidth)}{padLeft("{profile.totalCount()}", width: 12)}{padLeft("{totalBytes}", width: 14)}{padLeft(growthText(topTracedGrowth(profile, tracedRungs: tracedRungs)), width: 11)}\n")
 end 'printProfileRow'
+
+// This key's growth at the TOP of the traced range — the steepest end, and the one a key that has gone
+// superlinear shows it in first. Only the bottom rungs are traced (see `perTypeRungCount`), so this is
+// the top of what was traced, not the top of the ladder.
+function topTracedGrowth(profile AllocProfile, tracedRungs RungCount) returns GrowthReading
+	if tracedRungs < MinRungsForGrowth 'tooFewRungs'
+		return GrowthReading.noBaseline
+	end 'tooFewRungs'
+
+	let top = (tracedRungs - 1) as RungIndex
+	let below = (tracedRungs - 2) as RungIndex
+	return growthOf(profile.countAt(top), previous: profile.countAt(below))
+end 'topTracedGrowth'
 
 // Rank by total allocations, descending. A selection sort: the table has a few dozen types, and a
 // real sort would be more machinery than the thing it sorts.

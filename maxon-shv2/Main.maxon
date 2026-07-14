@@ -251,10 +251,14 @@ function printUsage()
 	print("  verify-warm-rebuild <file>    Assert the query spine is deterministic + incremental\n")
 	print("  spec-test [dir]               Run the specs-shv2 suite (default dir: specs-shv2)\n")
 	print("  scale-test                    Compile a ladder of generated programs, each rung double the\n")
-	print("                                last, and report the per-phase time + memory growth curves.\n")
-	print("                                An INSTRUMENT, not a gate: it renders no verdict, and it exits\n")
-	print("                                non-zero only when the RUN broke and measured nothing. The\n")
-	print("                                trend it feeds is {OptimizationLogRelativePath}.\n")
+	print("                                last, and report the per-phase MEMORY: allocations, frees and\n")
+	print("                                bytes. It does NOT collect time — memory is bit-for-bit\n")
+	print("                                reproducible and time is machine-dependent, so memory is the\n")
+	print("                                only thing a trend can be built out of. The ladder doubles, so\n")
+	print("                                the ratio between rungs IS the growth (x2.00 linear, x4.00\n")
+	print("                                quadratic) and nothing is fitted. An INSTRUMENT, not a gate: it\n")
+	print("                                renders no verdict, and it exits non-zero only when the RUN\n")
+	print("                                broke. The trend it feeds is {OptimizationLogRelativePath}.\n")
 	print("\n")
 	print("Options:\n")
 	print("  -o, --output=<path>           Output executable path (default: derived from input)\n")
@@ -278,22 +282,21 @@ function printUsage()
 	print("                                range {MinRungCount}-{MaxRungCount}). Each rung DOUBLES the\n")
 	print("                                program, so this is exponential in cost.\n")
 	print("  --note=<text>                 (scale-test) Record this run in {OptimizationLogRelativePath}\n")
-	print("                                — one dated row of allocations, bytes and per-phase growth\n")
-	print("                                exponents, with <text> as the reason. Without it a run reports\n")
-	print("                                and records nothing; WITH it the row is written, even if no\n")
-	print("                                allocation moved (a change that only got FASTER is exactly what\n")
-	print("                                the exponent table is for). The instrument can see exactly WHAT\n")
-	print("                                moved and can never see why; you are the only one who knows, and\n")
-	print("                                only now.\n")
-	print("  --per-type                    (scale-test) Also run the untimed --mm-trace pass, attributing\n")
+	print("                                — one dated row of the per-rung allocations and bytes, with\n")
+	print("                                <text> as the reason. Without it a run reports and records\n")
+	print("                                nothing; WITH it the row is written, moved or not, because it is\n")
+	print("                                an INSTRUCTION. The instrument can see exactly WHAT moved and can\n")
+	print("                                never see why; you are the only one who knows, and only now.\n")
+	print("  --per-type                    (scale-test) Also run the --mm-trace pass, attributing\n")
 	print("                                allocations to the TYPE allocated AND to the SCOPE that\n")
-	print("                                allocated it. Off by default: it is slow, and it is a different\n")
-	print("                                binary from the one being timed.\n")
+	print("                                allocated it — the scope table is the one that finds things. Off\n")
+	print("                                by default: it is slow, and it is a different binary from the\n")
+	print("                                one being measured.\n")
 	print("  --emit-corpus=<dir>           (scale-test) Dump the generated corpus to <dir> for inspection\n")
 	print("                                (it is otherwise built into a temp dir and thrown away).\n")
-	print("  --result-json=<path>          (scale-test) Write the whole run — per-rung metrics, per-curve\n")
-	print("                                exponents, and the deltas from the last recorded run — to <path>\n")
-	print("                                as JSON, so a tool never has to scrape the human report.\n")
+	print("  --result-json=<path>          (scale-test) Write the whole run — per-rung and per-phase memory,\n")
+	print("                                and the deltas from the last recorded run — to <path> as JSON, so\n")
+	print("                                a tool never has to scrape the human report.\n")
 end 'printUsage'
 
 // The parsed command the driver dispatches on.
@@ -349,13 +352,13 @@ export type MaxonArgs
 	// `--note=<text>` (scale-test only): RECORD this run in docs/optimization-log.md, with <text> as
 	// the reason. A run without it reports and records nothing — scale-test is run dozens of times a
 	// day against dirty trees, and a log of all of them would be a log nobody reads. WITH it the row is
-	// written, whether or not a number moved: it is an INSTRUCTION, and a change that only got faster is
-	// exactly what the exponent table exists to carry. The instrument can see exactly WHAT moved and can
+	// written, whether or not a number moved: it is an INSTRUCTION from the operator, who is the only
+	// party who knows whether the run is a datapoint. The instrument can see exactly WHAT moved and can
 	// never see why, so the reason is demanded at the one moment it is still known — see
 	// Testing/ScaleHistory.maxon.
 	export let note as String
-	// `--result-json=<path>` (scale-test only): write the run's full result — per-rung metrics,
-	// per-curve exponents, and the deltas from the last recorded run — as JSON.
+	// `--result-json=<path>` (scale-test only): write the run's full result — per-rung and per-phase
+	// memory, and the deltas from the last recorded run — as JSON.
 	//
 	// This exists so the MCP tool does not SCRAPE the human report. The report's columns are padded
 	// to be read by a person; the day a phase name outgrows its column, a scrape would silently
