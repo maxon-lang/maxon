@@ -330,10 +330,34 @@ end 'gateFitted'
 // Composites are still fitted, still reported, and still held to their (loose) budgets — but their
 // residual is not evidence about the machine and is not read as such.
 //
-// The two composites are the whole-compile total and the `regalloc` phase, which is the sum of the
-// seven sub-phases nested under it.
+// A composite need not be a PARENT curve. The three obvious ones are sums of curves nested under
+// them — the whole-compile total, its memory twin, and the `regalloc` phase over its seven
+// sub-phases — but `regalloc:liveness` is a composite too, and it is the one that matters, because
+// it is the only one whose bend crosses the threshold.
+//
+// `liveness` is a LEAF in the phase tree and a SUM in fact: `timedLiveness` (SplitLiveRanges.maxon)
+// bills two call sites into one bucket. The splitter runs one liveness up front PER FUNCTION —
+// linear in program size, summed over every function in the program — and one more AFTER EVERY
+// SPLIT, which is O(function x splits) and happens only in the pressured-loop shapes. Two power
+// laws with different exponents, added together and timed as one. It bends by construction, for
+// exactly the reason `aggregate` does, and no idle machine can straighten it.
+//
+// MEASURED, four consecutive runs on an idle machine: exponent 1.741 / 1.760 / 1.772 / 1.782
+// (reproducible to ~1%), residual 0.145 / 0.155 / 0.163 / 0.166 — straddling the 0.150 threshold,
+// so the suite returned NOISY three times and PASS once on an unchanged compiler. A coin flip is
+// not a verdict. The proof that this is curvature and not load: `memory` is bit-for-bit
+// reproducible — its points cannot move, and its residual read 0.090 in all four runs — yet it
+// carries a residual at all. A nonzero residual therefore does not imply a noisy machine, which is
+// why `memory` was exempted here already, and why `liveness` must be.
+//
+// This does NOT weaken the gate. A composite is still fitted, still reported, and still held to its
+// budget — liveness's real gate is exponent 1.77 against 2.2, and that is untouched. What is
+// dropped is only the claim that liveness's residual says something about the MACHINE. The noise
+// guard still runs on every single-operation curve (lex, parse, isel, coloring, encode...), and
+// those do respond to load — `phase:parse`'s residual moved 0.036 -> 0.206 across these same runs —
+// so a genuinely loaded machine is still caught, by the curves that can actually report it.
 function curveIsComposite(curve String) returns bool
-	return curve == BaselineCurveAggregate or curve == BaselineCurveMemory or curve == phaseCurveName(CompilePhase.regalloc)
+	return curve == BaselineCurveAggregate or curve == BaselineCurveMemory or curve == phaseCurveName(CompilePhase.regalloc) or curve == regAllocCurveName(RegAllocPhase.liveness)
 end 'curveIsComposite'
 
 function checkExponent(curve String, exponent Milli, budget Milli, failures StringArray)
