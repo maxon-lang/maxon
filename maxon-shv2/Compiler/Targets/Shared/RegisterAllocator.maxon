@@ -144,7 +144,9 @@ export type ReuseCopyPlan
 	//
 	// The register columns are filled with the out-of-file sentinel rather than register 0, so an entry
 	// whose `present` flag is false names no real register (`RegNum` is `int(0 to 16)` precisely so that
-	// `RegisterFileSize` is representable and is not one of the 0..15 the file holds).
+	// `RegisterFileSize` is representable and is not one of the 0..15 the file holds). Nothing READS it
+	// — `at()` returns `none` on a false `present` before it touches either register column — so this is
+	// a defence against a future reader, not a value any decision depends on today.
 	export function record(seq OpSeq, destReg RegNum, srcReg RegNum)
 		let noRegister = RegisterFileSize as RegNum
 		self.present.growFilled(seq + 1, value: false)

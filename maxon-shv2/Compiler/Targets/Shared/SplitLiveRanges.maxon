@@ -509,15 +509,15 @@ type PeakTree
 		end 'toPowerOfTwo'
 		self.leafBase = base
 
-		refillBoolColumn(self.found, count: blockCount, value: false)
-		refillColumn(self.pressure, count: blockCount, value: 0)
-		refillColumn(self.forwardPos, count: blockCount, value: 0)
-		refillColumn(self.peakSeq, count: blockCount, value: 0)
-		refillBoolColumn(self.clobberOnly, count: blockCount, value: false)
-		refillColumn(self.witness, count: blockCount, value: 0)
-		refillBoolColumn(self.atFixedRegisterOp, count: blockCount, value: false)
+		self.found.refill(blockCount, value: false)
+		self.pressure.refill(blockCount, value: 0)
+		self.forwardPos.refill(blockCount, value: 0)
+		self.peakSeq.refill(blockCount, value: 0)
+		self.clobberOnly.refill(blockCount, value: false)
+		self.witness.refill(blockCount, value: 0)
+		self.atFixedRegisterOp.refill(blockCount, value: false)
 		// Every node — including the PADDING leaves past `blockCount` — starts empty.
-		refillColumn(self.winner, count: base + base, value: blockCount)
+		self.winner.refill(base + base, value: blockCount)
 	end 'reset'
 
 	// Record one block's rank at its leaf. `build` (a whole-function seed) or `promote` (an incremental
@@ -602,12 +602,17 @@ end 'PeakTree'
 // reused by every iteration of the driver's loop. See the file header for why per-iteration
 // allocation was the cost.
 //
-// The ONE rule that makes reuse safe, and it is not "resize will zero it": `Array.resize` keeps its
-// capacity across a `clear()`, so growing the length back hands the previous occupant's bytes to the
-// next reader. Every buffer here is therefore either fully re-filled over the extent that iteration
-// reads (`refillColumn`, `EffectivePools.fillAll`), GROWN with its added entries explicitly
-// initialised (`Array.growFilled`, `PressureSweepScratch.widenRow`), or `clear()`ed before its first
-// push.
+// THE RULE THAT MAKES REUSE SAFE IS ABOUT VALUES, NOT ABOUT ZEROES. Every buffer here is either fully
+// re-filled over the extent that iteration reads (`Array.refill`, `EffectivePools.fillAll`), GROWN with
+// its added entries explicitly initialised (`Array.growFilled`, `PressureSweepScratch.widenRow`), or
+// `clear()`ed before its first push — so no reader ever inherits a value from the previous iteration.
+//
+// It is NOT, as this comment used to claim, that a lengthening `resize` hands back the previous
+// occupant's bytes. It does not: THE CAPACITY-SLOT INVARIANT (stdlib/Internals.maxon) zeroes a slot on
+// the way OUT of the live range, so what `resize` exposes always reads zero. Verified — see
+// `zeroColumn` in TargetLiveness.maxon. The reason these buffers are refilled is that most of them want
+// a NON-zero value in every entry (`NoStoreAnchorPressure`, a `numBlocks` "unset", an out-of-file
+// register), which no invariant will hand you.
 type SplitScratch
 	// The pressure sweep's ONE dense working row, and the operand/op buffers it steps with — shared with
 	// the liveness sweep it re-runs on a dirty block (`sweepBlockPressure`). The row is zero on entry to
@@ -1060,7 +1065,7 @@ function analyzePressure(module TargetModule, liveness LivenessResult, pool RegM
 	// it minted, and of nothing else.
 	scratch.effPools.fillAll(liveness, pool: pool)
 	// A value with no def point at all keeps this sentinel, so it is never mistaken for store-safe.
-	refillColumn(scratch.defLiveAfter, count: liveness.valueCount, value: NoStoreAnchorPressure)
+	scratch.defLiveAfter.refill(liveness.valueCount, value: NoStoreAnchorPressure)
 
 	if intoTree 'sizeTheTournament'
 		scratch.tree.reset(topo.numBlocks)
@@ -1423,16 +1428,6 @@ function zeroRow(wordsPerRow BitWordCount) returns BitWordArray
 	return row
 end 'zeroRow'
 
-// Bring a REUSED row to `wordsPerRow` zeroed words. `resize` alone will not do it: the array keeps its
-// capacity, so widening it back to a value space that has grown since the last split hands the reader
-// the previous iteration's words rather than zeroes.
-function resetRow(row BitWordArray, wordsPerRow BitWordCount)
-	row.resize(wordsPerRow)
-	for w in 0 upto wordsPerRow 'zero'
-		try row.set(w, value: 0) otherwise panic("resetRow: set OOB at word {w}")
-	end 'zero'
-end 'resetRow'
-
 // ==========================================================================
 // Choosing a victim (Belady/MIN, with remat preferred)
 // ==========================================================================
@@ -1632,7 +1627,7 @@ end 'storeFitsPool'
 // registers — so at least four confined values survive this cut.
 function usesAtPeakOp(module TargetModule, liveness LivenessResult, peak PressurePeak, scratch SplitScratch) returns BitWordArray
 	var row = scratch.usedAtPeak
-	resetRow(row, wordsPerRow: liveness.wordsPerRow)
+	row.refill(liveness.wordsPerRow, value: 0)
 	let op = try module.ops.get(peak.peakOpIdx) otherwise panic("usesAtPeakOp: peak op not in module.ops")
 	var buf = scratch.sweep.buf
 	targetOpOperands(op, buf: buf)
@@ -1914,7 +1909,7 @@ type ReachCache
 	var rows as BoolArray
 	var rowCount as ReachRow
 
-	// `rowOf` is left EMPTY here and sized by the first `retargetTo` (`refillColumn` resizes as well
+	// `rowOf` is left EMPTY here and sized by the first `retargetTo` (`Array.refill` resizes as well
 	// as fills). The overwhelmingly common function needs no split at all — 1202 of 1202 in the
 	// call-heavy benchmark — and so never reaches `chooseVictim` and never retargets. Sizing the
 	// column eagerly would put a per-function allocation, proportional to the block count, on every
@@ -1934,7 +1929,7 @@ type ReachCache
 		self.peakBlockLocal = peakBlock
 		self.rowCount = 0
 		self.rows.clear()
-		refillColumn(self.rowOf, count: self.numBlocks, value: self.numBlocks)
+		self.rowOf.refill(self.numBlocks, value: self.numBlocks)
 	end 'retargetTo'
 
 	// Is `block` reachable from the peak's SUCCESSORS without passing through `defBlock`?
@@ -1967,10 +1962,13 @@ type ReachCache
 		// and copies all `r × numBlocks` entries already there. Θ(rows² × numBlocks) BYTES for a matrix
 		// that ends up Θ(rows × numBlocks) long, and rows and numBlocks BOTH grow with the function.
 		//
-		// The fill is the same one the walk needs: it only ever SETS marks, so the row must arrive
-		// all-false, and after `retargetTo`'s `clear()` the capacity survives — so a bare length bump
-		// would hand this walk the PREVIOUS peak's marks. `growFilled` clears exactly the entries it
-		// added, and the entries it adds ARE this row (`existing == base`).
+		// The fill is the row the walk needs — it only ever SETS marks, so the row must arrive all-false —
+		// and `growFilled` adds EXACTLY this row and nothing else. Proof that its fill covers `[base,
+		// base + numBlocks)`: `rows.count() == rowCount * numBlocks` holds after every step (`create` and
+		// `retargetTo`'s `clear()` both leave 0 == 0 * numBlocks, and `growFilled` below re-establishes
+		// it), `numBlocks` never changes for a cache's life, and `markBlocksReachableFromPeak` only
+		// `set`s. So on entry `existing == rowCount_old * numBlocks == row * numBlocks == base`, and
+		// `growFilled`'s fill runs over `[existing, newLength) == [base, base + numBlocks)`.
 		let base = self.slotOf(row, block: 0)
 		self.rows.growFilled(self.rowCount * self.numBlocks, value: false)
 		markBlocksReachableFromPeak(topo, peakBlockLocal: self.peakBlockLocal, defBlock: defBlock, rows: self.rows, base: base)

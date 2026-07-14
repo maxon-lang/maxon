@@ -11,8 +11,19 @@ end 'ArrayError'
 typealias ElementCount = int(0 to u64.max)
 typealias ElementIndex = int(0 to u64.max)
 
-// THE GROWTH POLICY every geometric buffer in this tree grows by — Go's `nextslicecap`, not plain
-// doubling.
+// THE GROWTH POLICY AN `Array` GROWS BY — Go's `nextslicecap`, not plain doubling.
+//
+// ⚠ IT IS NOT THE ONLY ONE IN THE TREE, AND SAYING SO ONCE IS CHEAPER THAN THE NEXT PERSON
+// DISCOVERING IT. A `String` does NOT grow by this. `String.append` goes through the
+// `__ManagedMemory.append` BUILTIN, which the bootstrap lowers itself (`EmitGrowCapacity`,
+// maxon-sharp/Compiler/MLIR/Conversion/MaxonToStandardConversion.ManagedMemory.cs) as
+// `max(required + 1, capacity·2, 64)` — plain doubling, in bytes, in C#. `stdlib/Internals.maxon`'s
+// `__managed_mem_append` is the self-hosted runtime's twin of that, and doubles too (the bootstrap
+// never compiles Internals.maxon — see 0-Compiler.cs, which filters it out).
+//
+// So: an `Array` eases, a `String` doubles, and an edit HERE does not reach a `String`. Unifying them
+// is real work with a real measured cost of its own (a String is not an int column, and nobody has
+// seen that number yet) — it is not a refactor to smuggle in on the side.
 //
 // Doubling is right while a buffer is SMALL and wasteful once it is BIG: a 2× step leaves behind up to
 // a whole buffer's worth of capacity nobody asked for, and at a million elements that slack is the
@@ -42,7 +53,6 @@ typealias ElementIndex = int(0 to u64.max)
 // bend and not a superlinearity — but the ladder's six rungs sit inside the transition, so a reading of
 // ×2.1 on a linear phase is the expected cost of this policy and NOT a new quadratic to hunt. A reading
 // well past that still is.
-let GrowthThreshold = 256 as ElementCount
 let GrowthThreshold = 256 as ElementCount
 
 // The floor a growing buffer starts from, so that a few-element accumulation does not bounce its way
@@ -326,10 +336,16 @@ export type Array uses Element implements BuiltinArrayLiteral, Iterable with (El
 	/// This grows capacity GEOMETRICALLY instead (see `grownCapacity`), which makes the same walk
 	/// amortized linear.
 	///
-	/// The explicit fill is not paranoia. Growth that lands inside capacity the buffer ALREADY HELD
-	/// allocates nothing, and only a fresh ALLOCATION arrives zeroed — so the added entries would
-	/// otherwise read back whatever bytes last lived in them (measured: after `clear()` then a
-	/// regrow, a scalar column still held its previous occupants).
+	/// The fill writes `value`, and `value` is USUALLY NOT ZERO — a `NoStoreAnchorPressure`, an
+	/// out-of-file register sentinel, a pool popcount. That is the whole reason this exists rather
+	/// than `resize`: the added entries need a MEANING, not merely a defined bit pattern.
+	///
+	/// The entries it lands on always read zero beforehand, whether they are fresh capacity or slots
+	/// this array used before and gave up — see THE CAPACITY-SLOT INVARIANT in stdlib/Internals.maxon,
+	/// which the C# bootstrap's emitted runtime upholds too (verified: `push` × 4, `clear()`,
+	/// `resize(4)` reads back 0 0 0 0, not the previous occupants). So a caller filling with ZERO is
+	/// paying for a fill it does not need; that is the only cost of using this uniformly, and it is
+	/// worth it to keep ONE extension operation rather than two.
 	export function growFilled(newLength ElementCount, value Element)
 		let existing = managed.length()
 		if newLength <= existing 'nothingAdded'
@@ -347,6 +363,28 @@ export type Array uses Element implements BuiltinArrayLiteral, Iterable with (El
 			end 'setErr'
 		end 'fill'
 	end 'growFilled'
+
+	/// Set the length to `newLength` and write `value` into EVERY entry of `[0, newLength)`.
+	///
+	/// The twin of `growFilled`, and they divide by WHAT THEY WRITE, not by what they allocate:
+	/// `growFilled` touches only the entries an extension ADDED and leaves the rest standing, while
+	/// this one rewrites the whole column (and so also SHRINKS it). This is what a per-function
+	/// scratch buffer wants on the way in — every entry is about to be recomputed from scratch, so
+	/// only the STORAGE is being reused, never a value.
+	///
+	/// It is a METHOD for the reason `growFilled` is. A free function cannot be generic over an
+	/// array's element type, so the same idea had to be hand-written once per element type — and it
+	/// was, three times (`refillColumn` for an 8-byte int column, `refillBoolColumn` for a bool one,
+	/// `resetRow` for a bit-word one), three copies that nothing made agree.
+	export function refill(newLength ElementCount, value Element)
+		resize(newLength)
+
+		for i in 0 upto newLength 'fill'
+			try managed.set(i, value) otherwise 'setErr'
+				panic("Array.refill: set OOB at {i} — length just set to newLength")
+			end 'setErr'
+		end 'fill'
+	end 'refill'
 
 	// =========================================================================
 	// Iterable Interface

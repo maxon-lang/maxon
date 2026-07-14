@@ -142,59 +142,49 @@ export typealias RegCountColumn = Array with RegCount
 // matching's two inverse maps all share. The result unifies with every purpose-named column above.
 export function filledColumn(count ColumnLength, value DenseInt) returns DenseColumn
 	var col = DenseColumn.create()
-	refillColumn(col, count: count, value: value)
+	col.refill(count, value: value)
 	return col
 end 'filledColumn'
 
-// `filledColumn` WITHOUT the allocation: re-fill a column the caller already owns.
+// RE-FILLING A COLUMN THE CALLER ALREADY OWNS IS `Array.refill` (`stdlib/Array.maxon`).
 //
-// This is what lets a per-iteration buffer become a per-FUNCTION one. The splitter rebuilds several
+// It is what lets a per-iteration buffer become a per-FUNCTION one. The splitter rebuilds several
 // value-space columns on every split — and the value space itself grows with every split — so
 // allocating them per iteration was Θ(splits × values) of pure allocator traffic for columns whose
-// contents are recomputed from scratch each time anyway. Only the STORAGE is reused; never a value.
+// contents are recomputed from scratch each time anyway. Only the STORAGE is reused; never a value:
+// `refill` writes EVERY entry in [0, count), so nothing is inherited from the column's last life.
 //
-// EVERY entry in [0, count) is written, which is the whole safety argument: `resize` is NOT relied on
-// to zero. On a REUSED array it keeps its capacity, so growing the length back after a `clear()` hands
-// back the previous occupant's bytes, not zeroes — the trap that makes "just resize it" wrong here.
+// It replaced THREE hand-written copies of itself — `refillColumn` (an 8-byte int column),
+// `refillBoolColumn` (a bool one), and `resetRow` in SplitLiveRanges (a bit-word one) — which existed
+// only because a free function cannot be generic over an array's element type, and which nothing made
+// agree. A METHOD knows its own element type, so one of it serves every column here.
 //
-// ⚠ THE COLUMN YOU PASS MUST BE A `DenseColumn`-WIDTH COLUMN — one whose element alias is over the
-// FULL `int(0 to u64.max)` range. Every alias at the top of this file is, with ONE exception:
-// `RegNumColumn`, whose element `RegNum` is `int(0 to 16)`. A narrow range is a narrow ELEMENT
-// (`sizeof(int(0 to 16)) == 1`, against 8), so such a column is addressed one byte per entry — while
-// this function, compiled for `DenseColumn`, addresses it eight. The type checker does NOT stop you:
-// a narrower ranged alias unifies with the wider one, so the substitution is silent, and what you get
-// is memory corruption. It cost a day here (`HallCondition.HallScratch.regOfValue`, which reads as a
-// `RegNumColumn` and must not be one). Build register-number columns with `filledColumn` and keep them
-// at `DenseColumn` width.
-export function refillColumn(col DenseColumn, count ColumnLength, value DenseInt)
-	col.resize(count)
-	for i in 0 upto count 'fill'
-		try col.set(i, value: value) otherwise panic("refillColumn: set OOB")
-	end 'fill'
-end 'refillColumn'
+// (The pair ALSO carried a width trap, and that half of the story is now history: passing a
+// one-byte-per-entry `RegNumColumn` to a `DenseColumn`-typed free function used to be silent memory
+// corruption — "it cost a day here" — but a generic's ranged element type is part of its type as of
+// e4146cf8e, so the bootstrap now rejects it outright with E3005. Verified. The DUPLICATION was the
+// live problem; the corruption was already dead.)
 
-// `refillColumn` for a BOOL column. A separate function rather than a substitution into that one
-// because a `bool` element is ONE byte where a `DenseInt` is eight, and a `DenseColumn`-width write
-// into a bool column is memory corruption the type checker will not stop (see `refillColumn`).
-export function refillBoolColumn(col BoolArray, count ColumnLength, value bool)
-	col.resize(count)
-	for i in 0 upto count 'fill'
-		try col.set(i, value: value) otherwise panic("refillBoolColumn: set OOB")
-	end 'fill'
-end 'refillBoolColumn'
-
-// A dense column of `count` ZEROES. Growing a FRESH column zero-fills it, so this is just the resize —
-// whereas `filledColumn(n, 0)` would walk the whole column doing bounds-checked writes to store zeroes
-// over zeroes. The counting sorts and version stamps allocate several of these per function, so on the
-// many-small-functions shape (which is what a real codebase, and this compiler's own source, looks
-// like) that redundant pass is pure loss.
+// A dense column of `count` ZEROES — just the resize, because a `resize` that lengthens ALWAYS exposes
+// zeroes, where `filledColumn(n, 0)` would walk the whole column doing bounds-checked writes to store
+// zeroes over zeroes. The counting sorts and version stamps allocate several of these per function, so
+// on the many-small-functions shape (which is what a real codebase, and this compiler's own source,
+// looks like) that redundant pass is pure loss.
 //
-// **"FRESH" IS LOAD-BEARING, and this is the sharp edge of the whole column API.** `resize` zero-fills
-// only where it has to ALLOCATE. On a column that has already lived — one that was `clear()`ed, or
-// shrunk and regrown — the capacity survives, and `resize` hands the new length straight back over the
-// previous occupant's bytes. (Measured: after `clear()` then `resize(8)`, all 8 entries still held
-// their old values.) So this function is correct because it OWNS the allocation; anything reusing a
-// column must re-initialize it explicitly — `refillColumn`, never `resize` alone.
+// ⚠ THIS FILE USED TO SAY "FRESH IS LOAD-BEARING" — that a REUSED column keeps its capacity and so
+// hands `resize` the previous occupant's bytes rather than zeroes, "measured: after `clear()` then
+// `resize(8)`, all 8 entries still held their old values". THAT IS NOT TRUE OF THE RUNTIME WE RUN, and
+// the claim was propagated into five comments before anyone re-ran it. THE CAPACITY-SLOT INVARIANT
+// (stdlib/Internals.maxon) says every slot in [length, capacity) reads ZERO, and it is upheld by
+// zeroing on the way OUT — `clear`, `remove`/`pop`, and a shrinking `resize` each erase what they
+// vacate. The C# bootstrap's emitted runtime implements the same invariant independently
+// (MaxonToStandardConversion.EmitVacateElementRange). Verified on the bootstrap, which is what compiles
+// this compiler: `push` × 4 → `clear()` → `resize(4)` reads back `0 0 0 0`, and the same after a
+// shrinking `resize` and after popping every element.
+//
+// So `resize` alone is SAFE for zeroes on a reused column, and the reason to reach for `refill`
+// instead is that you want a NON-zero value in every entry (a sentinel, a `numBlocks` "unset"), or
+// that you want the length shortened as well. Not memory safety.
 export function zeroColumn(count ColumnLength) returns DenseColumn
 	var col = DenseColumn.create()
 	col.resize(count)
@@ -211,9 +201,8 @@ end 'zeroColumn'
 // initialises only the entries the growth added, which is what this allocator wants at every one of
 // its call sites. It is on `Array` (`stdlib/Array.maxon`) rather than here because a METHOD knows its
 // own element type: the pair of hand-rolled `DenseColumn`/`BoolArray` helpers this replaced existed
-// only because a free function could not, and a `DenseColumn`-width write into a bool column is memory
-// corruption the type checker does not stop (see `refillColumn`, which still hand-rolls and still
-// carries that trap).
+// only because a free function cannot be generic over one — which is the same reason `Array.refill`
+// replaced the THREE hand-rolled copies of the whole-column fill (see `filledColumn` above).
 //
 // It hid because the allocation COUNT stays low: one realloc per split, not thousands. The ladder's
 // BYTE column is what caught it (`regalloc:splitting` grew ×6.75 per doubling of the program, where
@@ -302,7 +291,9 @@ end 'emptyListColumn'
 // list it is used on is SHORT (the values live at one block boundary; the use sites in one block), so
 // the scan is the right implementation rather than a compromise.
 //
-// ⚠ `DenseColumn` WIDTH: every list passed here must have a full-width element. See `refillColumn`.
+// It stays a free function because it is not generic over anything it needs to be: every list it is
+// used on IS a `DenseColumn`. Handing it a narrower column is a compile error (E3005), not the silent
+// width corruption the old `refillColumn` could be tricked into — see `HallScratch.regOfValue`.
 function removeFromDenseList(list DenseColumn, value DenseInt)
 	for i in 0 upto list.count() 'each'
 		let entry = try list.get(i) otherwise panic("removeFromDenseList: list.get({i}) OOB")
@@ -2108,7 +2099,7 @@ export type BlockSet
 	// all — almost none do, and sizing it eagerly would put an O(blocks) allocation and fill on every
 	// function the allocator sees.
 	export function begin(numBlocks CfgIndex)
-		refillColumn(self.stamp, count: numBlocks, value: 0)
+		self.stamp.refill(numBlocks, value: 0)
 		self.generation = 0
 		self.members.clear()
 	end 'begin'
@@ -2168,8 +2159,8 @@ export type LivenessMarkScratch
 
 	// Size the memo for a function — deferred to the first split, exactly as `BlockSet.begin` is.
 	export function begin(numBlocks CfgIndex)
-		refillColumn(self.liveInStamp, count: numBlocks, value: 0)
-		refillColumn(self.liveOutStamp, count: numBlocks, value: 0)
+		self.liveInStamp.refill(numBlocks, value: 0)
+		self.liveOutStamp.refill(numBlocks, value: 0)
 		self.generation = 0
 	end 'begin'
 

@@ -1535,38 +1535,53 @@ parent-commit build. The exponent does **not** move, and no design in this space
 ranks by farthest-next-use, so the victim is the value whose range is *widest* at the peak — on a
 loop-carried accumulator that range **is** the function, and any "dirty region" is the whole of it.
 
-> **⚠ REUSED SCRATCH IS NOT ZEROED SCRATCH. `Array.resize` DOES NOT ZERO A BUFFER IT DID NOT
-> ALLOCATE** — and its doc comment says it does ("New elements are zero-initialized"). It is
-> `reserve()` + `setLength()`, so the zeroing you get is the ALLOCATOR's, and only on a fresh
-> allocation. Measured: push 77 eight times, `clear()`, `resize(8)` — **all eight entries read back
-> 77**. Every buffer in `HallScratch` / `SplitScratch` / `ReachCache` is therefore explicitly
-> re-initialized over the extent it will be read (`refillColumn` writes `[0, count)`; `resetRow`
-> zeroes; `bitsetCollectRow` and `targetOpOperands` `clear()` their outputs). That is LOAD-BEARING,
-> not defensive: this is the whole hazard of hoisting per-call allocation out to per-function scratch,
-> and skipping it hands the next split the previous split's answers.
+> **⚠ REUSED SCRATCH IS NOT ZEROED SCRATCH — BUT NOT FOR THE REASON THIS DOC USED TO GIVE, AND THE OLD
+> REASON IS FIXED.** This block used to warn that `Array.resize` hands back a reused buffer's old
+> bytes, citing a measurement: push 77 eight times, `clear()`, `resize(8)`, and **all eight entries
+> read back 77**. That was TRUE when it was written (`44dba203e`) and was FIXED THE SAME DAY by
+> `3504ded93` ("the slots above `length` must be ZERO — resize() was handing back the dead"), which
+> cites this exact repro as the bug it closed — for scalars it was garbage, and for MANAGED elements it
+> was a use-after-free. Re-run today the eight entries read back **0**.
 >
-> **⚠ TWO ARRAY ALIASES WITH DIFFERENT RANGED ELEMENTS UNIFY SILENTLY.** An `Array`'s element must be
-> a typealias, so the two sides are always named:
+> THE CAPACITY-SLOT INVARIANT (`stdlib/Internals.maxon`) now holds: **every slot in `[length,
+> capacity)` reads ZERO**, upheld by erasing a slot on the way OUT of the live range (`clear`,
+> `remove`/`pop`, and a shrinking `resize`). The C# bootstrap's emitted runtime implements the same
+> invariant independently (`MaxonToStandardConversion.EmitVacateElementRange`), and the bootstrap is
+> what compiles this compiler.
+>
+> So a lengthening `resize` IS safe for zeroes. The buffers in `HallScratch` / `SplitScratch` /
+> `ReachCache` are still explicitly re-initialized over the extent they are read (`Array.refill` writes
+> `[0, count)`; `Array.growFilled` writes what an extension added; `bitsetCollectRow` and
+> `targetOpOperands` `clear()` their outputs), and that IS still load-bearing — because most of them
+> need a **non-zero** value in every entry (a `NoStoreAnchorPressure`, a `numBlocks` "unset", an
+> out-of-file register sentinel), which no invariant will hand you. Reuse is safe because every reader's
+> extent is WRITTEN, not because `resize` refuses to zero.
+>
+> **⚠ TWO ARRAY ALIASES WITH DIFFERENT RANGED ELEMENTS USED TO UNIFY SILENTLY. THEY NO LONGER DO.** An
+> `Array`'s element must be a typealias, so the two sides are always named:
 >
 > ```
 > typealias Narrow = int(0 to 16)      typealias NarrowCol = Array with Narrow
 > typealias Wide   = int(0 to u64.max) typealias WideCol   = Array with Wide
 > ```
 >
-> Passing a `NarrowCol` to a parameter typed `WideCol` **compiles clean**, because
-> `HaveMatchingTypeParams` (`maxon-sharp/Compiler/2-Parser.cs:12537`) NORMALIZES a ranged element to
-> its BASE TYPE before comparing — which throws the range away, so `Narrow` and `Wide` compare equal.
+> Passing a `NarrowCol` to a parameter typed `WideCol` used to **compile clean**, because
+> `HaveMatchingTypeParams` NORMALIZED a ranged element to its BASE TYPE before comparing — throwing the
+> range away, so `Narrow` and `Wide` compared equal. Memory stayed safe (element width is
+> dictionary-passed WITH the value, so the stride was right); what you got was **silent TRUNCATION** —
+> 300 written through the wide parameter read back 44. Same root cause as
+> `specs/array-clone-element-size.md`.
 >
-> Memory stays safe: element width is dictionary-passed WITH THE VALUE, so the stride is correct and
-> neighbours are untouched (measured — writing 300 through the wide parameter smashes nothing). What
-> you get is **silent TRUNCATION**: the value reads back **44** (300 mod 256), and a 44 now lives
-> inside a `Narrow`, violating the very invariant the ranged type exists to state. The range is
-> checked at the narrow `set` sites, NOT at the wide one.
+> `e4146cf8e` ("a generic's RANGED element type is part of its type") CLOSED the argument-passing path.
+> It is now a compile error:
 >
-> This is the SAME root cause as `specs/array-clone-element-size.md` — "for a RANGED element type that
-> resolution used to throw the range away" — which produced a real miscompile (`Array.clone()` reading
-> 8 bytes at a 1-byte stride) and was fixed (`d16aeb62c`) only on the `Self`-returning-call path. The
-> ARGUMENT-PASSING path is the same class, still open.
+> ```
+> error E3005: argument type mismatch for 'col': expected 'DenseColumn', got 'RegNumColumn'
+> ```
+>
+> Verified against the current bootstrap. This is why `HallScratch.regOfValue` is finally typed
+> `RegNumColumn` — it holds register numbers, and it spent a while widened to `DenseColumn` with a
+> comment telling you not to fix the name.
 
 ### Liveness: SSA path exploration, no fixpoint, sparse sets
 

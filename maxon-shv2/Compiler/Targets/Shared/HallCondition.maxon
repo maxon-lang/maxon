@@ -120,7 +120,8 @@ export type EffectivePools
 
 	// Fill the whole column — ONCE per function, before its first split. Every entry in
 	// [0, valueCount) is written, so a longer previous life cannot leak a stale size (see
-	// `refillColumn`).
+	// `Array.refill`, which is this loop generalised; this one stays hand-written because it also
+	// counts `constrained` as it goes).
 	export function fillAll(liveness LivenessResult, pool RegMask)
 		let fullPoolSize = regMaskPopcount(pool)
 		self.sizes.resize(liveness.valueCount)
@@ -364,26 +365,27 @@ end 'valueIdListContains'
 // walks because they never overlap — `tightRegisterSet` runs only after the last `augmentValue`
 // returns.
 //
-// EVERY COLUMN HERE IS A `DenseColumn`-WIDTH COLUMN, AND `regOfValue` IS THE ONE THAT HAD TO BE SAID
-// OUT LOUD. It holds register numbers, so the name that fits it is `RegNumColumn` — and that is
-// exactly what it must NOT be. `RegNum` is `int(0 to 16)`, a NARROW range, and a narrow range is a
-// narrow ELEMENT: `sizeof(int(0 to 16)) == 1` against `sizeof(int(0 to u64.max)) == 8`. But the
-// columns below are refilled through `refillColumn`, whose parameter is a `DenseColumn` — an 8-byte
-// element — and the type checker ACCEPTS the substitution silently, because a `typealias` over a
-// narrower range unifies with the wider one. Declaring this field `RegNumColumn` therefore handed a
-// 1-byte-per-element array to code that addresses it 8 bytes per element, and the result was memory
+// `regOfValue` HOLDS REGISTER NUMBERS AND IS FINALLY TYPED AS ONE, and the story of why it was not is
+// worth keeping. `RegNum` is `int(0 to 16)`, a NARROW range, and a narrow range is a narrow ELEMENT:
+// `sizeof(int(0 to 16)) == 1` against `sizeof(int(0 to u64.max)) == 8`. This column used to be refilled
+// through `refillColumn`, a FREE function whose parameter was a `DenseColumn` — an 8-byte element — and
+// the type checker of the day accepted the substitution silently, because a `typealias` over a narrower
+// range unified with the wider one. Declaring this field `RegNumColumn` therefore handed a
+// 1-byte-per-element array to code that addressed it 8 bytes per element, and the result was memory
 // corruption whose SYMPTOM was a false `E5001` on a program that fits the machine — and whose failure
-// set MOVED when unrelated allocations elsewhere changed the heap layout.
+// set MOVED when unrelated allocations elsewhere changed the heap layout. It cost a day. So the field
+// was widened to `DenseColumn` and a comment told you not to fix the name.
 //
-// The other four columns are `int(0 to u64.max)` aliases already, so they are 8-byte and agree. This
-// one is `DenseColumn` because it is refilled as one; `RegNum`'s range still guards every value that
-// goes IN, at the `set` sites that use it.
+// BOTH halves of that are now gone. `e4146cf8e` made a generic's ranged element type part of its type,
+// so the silent substitution is a compile error (E3005) rather than corruption; and the refill is now
+// `Array.refill`, a METHOD, which is generic over the element type and cannot be handed the wrong
+// width at all. Every value that goes in is a `RegNum` — a register `0..15`, or the `noRegister`
+// sentinel, which is `RegisterFileSize` (16) and exactly why `RegNum`'s bound is 16 and not 15.
 export type HallScratch
 	// value position -> the registers it is allowed (`A(v)`), for THIS point's live list.
 	export var allowed as RegMaskColumn
-	// The matching, as its two inverse maps (positions in `live`, not ValueIds). `regOfValue` holds
-	// register numbers (`RegNum`), but at `DenseColumn` WIDTH — see the note above.
-	export var regOfValue as DenseColumn
+	// The matching, as its two inverse maps (positions in `live`, not ValueIds).
+	export var regOfValue as RegNumColumn
 	export var valueOfReg as LiveIndexColumn
 	// One augmenting search's parent links: register -> the value position that offered it.
 	export var parentOfReg as LiveIndexColumn
@@ -391,7 +393,7 @@ export type HallScratch
 	export var queue as LiveIndexColumn
 
 	export static function create() returns HallScratch
-		return Self{allowed: RegMaskColumn.create(), regOfValue: DenseColumn.create(), valueOfReg: LiveIndexColumn.create(), parentOfReg: LiveIndexColumn.create(), queue: LiveIndexColumn.create()}
+		return Self{allowed: RegMaskColumn.create(), regOfValue: RegNumColumn.create(), valueOfReg: LiveIndexColumn.create(), parentOfReg: LiveIndexColumn.create(), queue: LiveIndexColumn.create()}
 	end 'create'
 end 'HallScratch'
 
@@ -441,9 +443,9 @@ export function hallVerdictAt(liveness LivenessResult, live ValueIdArray, pool R
 	// this point's live set alone, so a dense 0..valueCount numbering is the right one. `noValue` IS
 	// `valueCount`, so `valueOfReg` must be re-filled on every call, not merely on a resize.
 	var regOfValue = scratch.regOfValue
-	refillColumn(regOfValue, count: valueCount, value: noRegister)
+	regOfValue.refill(valueCount, value: noRegister)
 	var valueOfReg = scratch.valueOfReg
-	refillColumn(valueOfReg, count: RegisterFileSize, value: noValue)
+	valueOfReg.refill(RegisterFileSize, value: noValue)
 
 	var matched = 0 as RegCount
 	for i in 0 upto valueCount 'augment'
@@ -489,7 +491,7 @@ function augmentValue(start LiveIndex, scratch HallScratch, noRegister RegNum, n
 	// this search — but the column is re-filled anyway, so a stale link can never be read even if that
 	// reasoning is ever broken by an edit.
 	var parentOfReg = scratch.parentOfReg
-	refillColumn(parentOfReg, count: RegisterFileSize, value: noValue)
+	parentOfReg.refill(RegisterFileSize, value: noValue)
 	var visited = 0 as RegMask
 	var queue = scratch.queue
 	queue.clear()
