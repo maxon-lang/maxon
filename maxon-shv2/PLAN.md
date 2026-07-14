@@ -136,7 +136,41 @@ serializable-in-order, so a future cache has a stable id space to build on rathe
 
 ### ⭐ P1.5: `Promise` MUST CARRY ITS ERROR TYPE — `Promise with (T, E)`, not `Promise with T`
 
-**Learned from a real bug in the bootstrap (2026-07-14). Do NOT port its shape.**
+> ## ✅ REVERSED, SAME DAY — **PORT THE BOOTSTRAP'S SHAPE. IT IS NOW THE RIGHT ONE** (`34b77758e`)
+>
+> This section used to say **"Do NOT port its shape"**, because the bootstrap had the broken one. **The
+> bootstrap has been FIXED**, along exactly the lines this section prescribed, so the instruction inverts:
+> **shv2 should PORT `Promise with (T, E)` from the bootstrap rather than invent it.** The design below is
+> no longer a plan — it is a working, gated implementation (C# suite 2915/0), and it is the cheapest kind
+> of prior art: *the same design, already debugged.*
+>
+> **What the fix proved, and it is stronger than the argument that predicted it:**
+> - **BOTH bits are now dead and REMOVED** — not merely unused. The proof is in the codegen: the promise
+>   box drops **24 → 8 bytes** and loses **two stores per boxed promise**, and the `otherwise` emitter
+>   loses its runtime-branched decref for the straight-line one a *static* type affords. `ErrorType` is
+>   the whole story; `Throws` is *derived* (`ErrorType != null`), so there is **no second copy to drift**.
+> - **`throws_` turned out to be WRITE-ONLY for its entire life.** Nothing ever read it — while a comment
+>   claimed *"the runtime branches on it."* The comment described a compiler nobody wrote. (The same
+>   disease as `TargetOpMeta.setsFlags` and the `xor reg,reg` idiom that never existed. **Three instances
+>   in one day.**)
+> - ⚠ **It was leaking in shv2's OWN worker pool, live.** `DrainPromise` was `Promise with StringArray`
+>   while `drainResultsThunk` throws the **union** `SubprocessError`; the box said "not a heap pointer",
+>   the conditional decref never fired, and **every dead worker leaked its error** — invisible to a green
+>   suite, because that path only runs when a worker dies. It is now `Promise with (StringArray,
+>   SubprocessError)` and binds `(e)`, which both releases the payload *and* reports which failure killed
+>   the worker.
+>
+> **`await` is LINEAR** (user decision, 2026-07-14; `E3100`): a promise is awaited **exactly once**, and a
+> second await *reachable* from the first is a compile error — flow-sensitive, keyed on the **binding**, so
+> the central `for p in promises 'each' … await p … end` idiom stays legal (the loop re-arms `p` each
+> iteration) and two awaits in **mutually exclusive branches** are fine. The double-free is now
+> **unrepresentable**, not fixed.
+> ⚠ **Known boundary, carry it into P1.5:** linearity is enforced on **bindings, not through containers** —
+> awaiting the same *array slot* twice is not statically caught. That needs ownership tracking through the
+> container, which is **shv2's ownership milestone**, and shv2 is the compiler that will have it.
+
+**Learned from a real bug in the bootstrap (2026-07-14).** *(The history below is kept because it is the
+argument for the design, and it is the reason to trust it.)*
 
 The bootstrap's `MaxonPromise` stored **two BITS distilled from the callee's `throws` clause** (`Throws`,
 `ErrorIsHeapPtr`) and **threw the type away**. Everything downstream then had to reconstruct what it
