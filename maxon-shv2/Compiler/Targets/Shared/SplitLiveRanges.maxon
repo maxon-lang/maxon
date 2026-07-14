@@ -1071,19 +1071,26 @@ end 'BeladyBest'
 // `int(0 to u64.max)` its all-ones pattern compares as negative under `>`, so Belady would collapse
 // to first-fit and evict the lowest id rather than the farthest next use.)
 //
-// The value's use entries are in ascending sequence order (the CSR was filled in layout order), so
-// the FIRST one past the peak is the nearest — O(uses of this one value), never a sweep.
+// A value's use thread is in ascending sequence order (it is appended to in layout order), so the
+// FIRST entry past the peak is the nearest — O(uses of this one value), never a sweep.
 function nextUseAfterPeak(index UseIndex, valueId ValueId, peakSeq OpSeq) returns OpSeq
-	for j in 0 upto index.useCount(valueId) 'each'
-		let record = index.useRecordAt(valueId, k: j)
-		match index.useKindAt(record) 'kind'
-			edge then continue
-			op then break 'kind'
-		end 'kind'
+	let useSites = index.useCount(valueId)
+	if useSites == 0 'neverUsed'
+		return index.seqLimit
+	end 'neverUsed'
+
+	var record = index.firstUseOf(valueId)
+	for _ in 0 upto useSites 'each'
 		let seq = index.useSeqAt(record)
-		if seq > peakSeq 'later'
+		let isOpUse = match index.useKindAt(record) 'kind'
+			op gives true
+			edge gives false
+		end 'kind'
+		// An EDGE use is not a next-use candidate: Belady ranks by the next READ THROUGH AN OP.
+		if isOpUse and seq > peakSeq 'later'
 			return seq
 		end 'later'
+		record = index.nextUseOf(record)
 	end 'each'
 	return index.seqLimit
 end 'nextUseAfterPeak'
@@ -1342,28 +1349,25 @@ end 'opIsConstMaterialization'
 //   `i`   (a header PHI, used in the header)         → header is its own def block    → allowed.
 //   `sum` (a header PHI, used after the call)        → no before-peak use at all      → allowed.
 function killsValueAtPeak(index UseIndex, topo FuncTopology, valueId ValueId, peak PressurePeak, reach ReachCache) returns bool
-	let useCount = index.useCount(valueId)
+	let useSites = index.useCount(valueId)
+	if useSites == 0 'neverUsed'
+		// No use at all, so none before the peak: nothing keeps it live across.
+		return true
+	end 'neverUsed'
 
-	var hasBeforePeakUse = false
-	for j in 0 upto useCount 'scan'
-		if index.useSeqAt(index.useRecordAt(valueId, k: j)) < peak.peakSeq 'before'
-			hasBeforePeakUse = true
-		end 'before'
-	end 'scan'
-	if not hasBeforePeakUse 'allAfter'
+	// The thread ascends by sequence, so the FIRST record decides whether any use precedes the peak.
+	if index.useSeqAt(index.firstUseOf(valueId)) >= peak.peakSeq 'allAfter'
 		// Every use follows the peak, so every one becomes a reload. The value is dead across it.
 		return true
 	end 'allAfter'
 
 	let defBlock = index.defBlockOf(valueId)
-	for j in 0 upto useCount 'check'
-		let record = index.useRecordAt(valueId, k: j)
-		if index.useSeqAt(record) >= peak.peakSeq 'afterPeak'
-			continue
-		end 'afterPeak'
-		if reach.reachableFromPeak(topo, peakBlock: peak.blockLocal, defBlock: defBlock, block: index.useBlockAt(record)) 'notKilled'
+	var record = index.firstUseOf(valueId)
+	for _ in 0 upto useSites 'check'
+		if index.useSeqAt(record) < peak.peakSeq and reach.reachableFromPeak(topo, peakBlock: peak.blockLocal, defBlock: defBlock, block: index.useBlockAt(record)) 'notKilled'
 			return false
 		end 'notKilled'
+		record = index.nextUseOf(record)
 	end 'check'
 	return true
 end 'killsValueAtPeak'
@@ -1542,7 +1546,7 @@ end 'markBlocksReachableFromPeak'
 function spillOneValue(module TargetModule, index UseIndex, cfg FuncCfg, valueId ValueId, peak PressurePeak, scope SplitScope, slot SpillSlot, nextValueId ValueId, stats RegAllocStats, lineage SplitLineage) returns ValueId
 	let peakSeq = peak.peakSeq
 	let placement = placementOf(peak)
-	let useCount = index.useCount(valueId)
+	let useSites = index.useCount(valueId)
 	let keepsOriginal = keepsOriginalBeforePeak(scope)
 
 	// STORE: at the def, which dominates every reload below — and ONCE per value. An earlier split
@@ -1564,33 +1568,38 @@ function spillOneValue(module TargetModule, index UseIndex, cfg FuncCfg, valueId
 	var freshId = nextValueId
 	var reloadCount = 0 as EventCount
 	var buf = OperandList.create()
-	var j = 0 as UseOrdinal
-	while j < useCount 'eachUse'
-		let record = index.useRecordAt(valueId, k: j)
-		let afterPeak = index.useSeqAt(record) >= peakSeq
-		if (not afterPeak) and keepsOriginal 'beforePeakUseKeepsTheOriginal'
-			j = j + 1
-			continue
-		end 'beforePeakUseKeepsTheOriginal'
+	if useSites > 0 'hasUses'
+		// A cursor over the value's use thread, and `j` counting how far along it we are — the thread is
+		// circular, so the count is what ends the walk (see `UseIndex.firstUseOf`).
+		var record = index.firstUseOf(valueId)
+		var j = 0 as UseOrdinal
+		while j < useSites 'eachUse'
+			let afterPeak = index.useSeqAt(record) >= peakSeq
+			if (not afterPeak) and keepsOriginal 'beforePeakUseKeepsTheOriginal'
+				j = j + 1
+				record = index.nextUseOf(record)
+				continue
+			end 'beforePeakUseKeepsTheOriginal'
 
-		let blockLocal = index.useBlockAt(record)
-		insertReloadFor(module, cfg: cfg, index: index, useRecord: record, valueId: valueId, freshId: freshId, slot: slot, placement: placement)
-		// The reload id derives from the value it reloads — record it so a reload id in an
-		// E5001 blocking set chases back to that value's source origin (see SplitLineage).
-		lineage.record(freshId, sourceId: valueId)
+			let blockLocal = index.useBlockAt(record)
+			insertReloadFor(module, cfg: cfg, index: index, useRecord: record, valueId: valueId, freshId: freshId, slot: slot, placement: placement)
+			// The reload id derives from the value it reloads — record it so a reload id in an
+			// E5001 blocking set chases back to that value's source origin (see SplitLineage).
+			lineage.record(freshId, sourceId: valueId)
 
-		while j < useCount and useIsInRun(index, valueId: valueId, k: j, blockLocal: blockLocal, afterPeak: afterPeak, peakSeq: peakSeq) 'sameRun'
-			let r = index.useRecordAt(valueId, k: j)
-			match index.useKindAt(r) 'kind'
-				op then rewriteOpAt(module, opIdx: index.useOpAt(r), from: valueId, to: freshId, buf: buf)
-				edge then rewriteEdgeArgsIn(module, topo: cfg.topo, blockLocal: blockLocal, from: valueId, to: freshId)
-			end 'kind'
-			j = j + 1
-		end 'sameRun'
+			while j < useSites and useIsInRun(index, record: record, blockLocal: blockLocal, afterPeak: afterPeak, peakSeq: peakSeq) 'sameRun'
+				match index.useKindAt(record) 'kind'
+					op then rewriteOpAt(module, opIdx: index.useOpAt(record), from: valueId, to: freshId, buf: buf)
+					edge then rewriteEdgeArgsIn(module, topo: cfg.topo, blockLocal: blockLocal, from: valueId, to: freshId)
+				end 'kind'
+				j = j + 1
+				record = index.nextUseOf(record)
+			end 'sameRun'
 
-		freshId = freshId + 1
-		reloadCount = reloadCount + 1
-	end 'eachUse'
+			freshId = freshId + 1
+			reloadCount = reloadCount + 1
+		end 'eachUse'
+	end 'hasUses'
 
 	stats.valuesSplit = stats.valuesSplit + 1
 	stats.reloadsInserted = stats.reloadsInserted + reloadCount
@@ -1601,12 +1610,11 @@ function spillOneValue(module TargetModule, index UseIndex, cfg FuncCfg, valueId
 	return freshId
 end 'spillOneValue'
 
-// Is `valueId`'s `k`-th use in the run one reload serves — the same block, on the same side of the
-// peak? A run may NOT straddle the peak: a reload placed before a block's before-peak use would then
-// serve its after-peak uses too, and that reloaded value would span the peak, so the pressure there
-// would never drop. (That is the whole-range-reload failure the file header names, in the small.)
-function useIsInRun(index UseIndex, valueId ValueId, k UseOrdinal, blockLocal CfgIndex, afterPeak bool, peakSeq OpSeq) returns bool
-	let record = index.useRecordAt(valueId, k: k)
+// Is `record` in the run one reload serves — the same block, on the same side of the peak? A run may
+// NOT straddle the peak: a reload placed before a block's before-peak use would then serve its
+// after-peak uses too, and that reloaded value would span the peak, so the pressure there would never
+// drop. (That is the whole-range-reload failure the file header names, in the small.)
+function useIsInRun(index UseIndex, record UseRecordIndex, blockLocal CfgIndex, afterPeak bool, peakSeq OpSeq) returns bool
 	if index.useBlockAt(record) != blockLocal 'otherBlock'
 		return false
 	end 'otherBlock'
@@ -1772,27 +1780,32 @@ function rematerializeConstant(module TargetModule, index UseIndex, topo FuncTop
 	var freshId = nextValueId
 	var haveUnrewrittenUse = false
 	var buf = OperandList.create()
-	for j in 0 upto index.useCount(valueId) 'eachUse'
-		let record = index.useRecordAt(valueId, k: j)
-		if index.useSeqAt(record) < peakSeq and keepsOriginal 'beforePeak'
-			haveUnrewrittenUse = true
-			continue
-		end 'beforePeak'
+	let useSites = index.useCount(valueId)
+	if useSites > 0 'hasUses'
+		var record = index.firstUseOf(valueId)
+		for _ in 0 upto useSites 'eachUse'
+			if index.useSeqAt(record) < peakSeq and keepsOriginal 'beforePeak'
+				haveUnrewrittenUse = true
+				record = index.nextUseOf(record)
+				continue
+			end 'beforePeak'
 
-		let useOpIdx = index.useOpAt(record)
-		var block = blockAt(module, topo: topo, local: index.useBlockAt(record))
-		let usePos = positionInBlock(block, opIdx: useOpIdx)
-		// The SAME op builder the ISel used, so the re-emitted constant is byte-identical to
-		// the one it replaces (StdToX64Conversion.constMaterializationOp) — not a second copy
-		// of the 32-vs-64-bit size choice that can drift from it.
-		insertOpRef(block, at: usePos, opIdx: appendOp(module, op: constMaterializationOp(X64VReg.virtual(freshId), value: constValue)))
-		rewriteOpAt(module, opIdx: useOpIdx, from: valueId, to: freshId, buf: buf)
-		// The re-emitted copy derives from the original constant — record it so a
-		// rematerialized id in an E5001 blocking set chases back to the constant's source
-		// span (the `let`/literal the author wrote), not a Rule-3 panic (see SplitLineage).
-		lineage.record(freshId, sourceId: valueId)
-		freshId = freshId + 1
-	end 'eachUse'
+			let useOpIdx = index.useOpAt(record)
+			var block = blockAt(module, topo: topo, local: index.useBlockAt(record))
+			let usePos = positionInBlock(block, opIdx: useOpIdx)
+			// The SAME op builder the ISel used, so the re-emitted constant is byte-identical to
+			// the one it replaces (StdToX64Conversion.constMaterializationOp) — not a second copy
+			// of the 32-vs-64-bit size choice that can drift from it.
+			insertOpRef(block, at: usePos, opIdx: appendOp(module, op: constMaterializationOp(X64VReg.virtual(freshId), value: constValue)))
+			rewriteOpAt(module, opIdx: useOpIdx, from: valueId, to: freshId, buf: buf)
+			// The re-emitted copy derives from the original constant — record it so a
+			// rematerialized id in an E5001 blocking set chases back to the constant's source
+			// span (the `let`/literal the author wrote), not a Rule-3 panic (see SplitLineage).
+			lineage.record(freshId, sourceId: valueId)
+			freshId = freshId + 1
+			record = index.nextUseOf(record)
+		end 'eachUse'
+	end 'hasUses'
 
 	if not haveUnrewrittenUse 'dropDef'
 		dropOriginalDef(module, topo: topo, defOpIdx: defOpIdx, blockLocal: index.defBlockOf(valueId))

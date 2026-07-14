@@ -105,13 +105,16 @@ end 'seqLimitFor'
 export typealias PhiIndex = int(0 to u64.max)
 
 // An index into the `UseIndex`'s parallel USE-RECORD columns — one record per (op, value) use site
-// of the whole function, in layout order. This is what a `useCsr` neighbour list holds.
+// of the whole function. This is what the `UseIndex`'s per-value and per-block lists hold.
 export typealias UseRecordIndex = int(0 to u64.max)
+export typealias UseRecordIndexArray = Array with UseRecordIndex
 
-// Which use OF ONE VALUE: the `k` of "value `v`'s k-th use", 0 .. `useCount(v)`. It is NOT a
-// `UseRecordIndex` — `useRecordAt` is the map from one to the other — and confusing them would read
-// another value's use record with this value's ordinal.
+// HOW MANY uses one value has, or one block holds — the BOUND of a walk of the `UseIndex`'s threads
+// (`useCount` / `blockUseCount`), never an index into anything. A record's identity is its
+// `UseRecordIndex`; there is no "k-th use" address, because the uses of one value are a linked thread
+// rather than a contiguous run, and an addressable k would be an O(k) walk pretending to be an index.
 export typealias UseOrdinal = int(0 to u64.max)
+export typealias UseOrdinalArray = Array with UseOrdinal
 
 // A count of things the allocator DID: functions allocated, copies inserted, hints honoured, values
 // split, liveness mark-steps taken, splitter iterations run. A statistic, never an index into
@@ -188,6 +191,70 @@ export function zeroColumn(count ColumnLength) returns DenseColumn
 	return col
 end 'zeroColumn'
 
+// A dense column of `count` entries, every entry ZERO, WITHOUT reallocating what is already there:
+// grow the column and initialise only the entries the growth ADDED. The value space grows whenever a
+// split mints reload ids, so every column keyed by value id has to follow it.
+//
+// The explicit fill is not paranoia. `resize` zero-fills only where it has to ALLOCATE (see
+// `zeroColumn`), so a column with spare capacity hands the added entries straight back over whatever
+// bytes last lived in them.
+function growZeroColumn(col DenseColumn, count ColumnLength)
+	let existing = col.count()
+	col.resize(count)
+	for i in existing upto count 'fill'
+		try col.set(i, value: 0) otherwise panic("growZeroColumn: set({i}) OOB")
+	end 'fill'
+end 'growZeroColumn'
+
+// `growZeroColumn` for a BOOL column. It is a separate function rather than a substitution into that
+// one because a `bool` element is ONE byte where a `DenseInt` is eight, and a `DenseColumn`-width
+// write into a bool column is memory corruption the type checker will not stop (see `refillColumn`).
+function growFalseColumn(col BoolArray, count ColumnLength)
+	let existing = col.count()
+	col.resize(count)
+	for i in existing upto count 'fill'
+		try col.set(i, value: false) otherwise panic("growFalseColumn: set({i}) OOB")
+	end 'fill'
+end 'growFalseColumn'
+
+// A dense column of LISTS — one EDITABLE list per key of a dense key space, which is what the
+// per-block live sets are: a flat CSR row is cheaper to build, but adding or removing ONE value in ONE
+// block shifts every later block's entries, and that O(function) edit is what a split must not pay.
+//
+// ⚠ ONE HEAP OBJECT PER KEY, so the key space must be SMALL. Blocks are; VALUES ARE NOT. The
+// `UseIndex` keys its use records by value, and a heap list per value cost a heap allocation per value
+// per liveness build — with the driver still rebuilding liveness once per split, that is
+// `splits × values` allocations (measured: +16.8M and +15% compile time at scale rung 5). Its lists
+// are therefore INTRUSIVE THREADS through flat integer columns instead, and it allocates nothing per
+// value. Reach for this only where the keys are few.
+export typealias DenseListColumn = Array with DenseColumn
+
+// `count` empty lists — the shape a per-key index is allocated as, ONCE per function. The key space
+// never grows afterwards: blocks are fixed by the time liveness runs, and it is the VALUE space a
+// split extends, which is not keyed here (see the alias).
+function emptyListColumn(count ColumnLength) returns DenseListColumn
+	var lists = DenseListColumn.create()
+	for _ in 0 upto count 'eachKey'
+		lists.push(DenseColumn.create())
+	end 'eachKey'
+	return lists
+end 'emptyListColumn'
+
+// Remove the first occurrence of `value` from `list`; a no-op if it is not there. O(list) — and every
+// list it is used on is SHORT (the values live at one block boundary; the use sites in one block), so
+// the scan is the right implementation rather than a compromise.
+//
+// ⚠ `DenseColumn` WIDTH: every list passed here must have a full-width element. See `refillColumn`.
+function removeFromDenseList(list DenseColumn, value DenseInt)
+	for i in 0 upto list.count() 'each'
+		let entry = try list.get(i) otherwise panic("removeFromDenseList: list.get({i}) OOB")
+		if entry == value 'found'
+			_ = try list.remove(i) otherwise panic("removeFromDenseList: list.remove({i}) OOB")
+			return
+		end 'found'
+	end 'each'
+end 'removeFromDenseList'
+
 // A physical-register mask per value id (`forbiddenPhys`): the registers a value
 // may NOT be colored into because an op writes them while the value is live across.
 export typealias RegMaskColumn = Array with RegMask
@@ -261,12 +328,6 @@ export type FuncCfg
 	end 'maxLoopDepth'
 end 'FuncCfg'
 
-// One EDITABLE live list per block — `[b]` is block `b`'s. A block's list is SHORT: it is bounded by
-// the values SIMULTANEOUSLY LIVE at that block boundary (tens), never by the value space, which is
-// what makes a linear scan through one the right way to find or remove a member rather than a
-// compromise.
-export typealias PerBlockLiveSets = Array with ValueIdArray
-
 // The live-in / live-out sets of every block, SPARSE and EDITABLE: `inSets[b]` holds the value ids
 // live on entry to block `b`, `outSets[b]` those live on exit. One list per block per direction —
 // never a bitset.
@@ -287,12 +348,15 @@ export typealias PerBlockLiveSets = Array with ValueIdArray
 // lists make that same edit O(1) amortised. The price is one heap object per block, allocated ONCE
 // by the walk and then mutated in place, never per split.
 export type LiveSets
-	export var inSets as PerBlockLiveSets
-	export var outSets as PerBlockLiveSets
+	// One live list per block — `[b]` is block `b`'s. A block's list is SHORT: it is bounded by the
+	// values SIMULTANEOUSLY LIVE at that block boundary (tens), never by the value space, which is what
+	// makes a linear scan through one the right way to find or remove a member rather than a compromise.
+	export var inSets as DenseListColumn
+	export var outSets as DenseListColumn
 
 	// Empty sets for a function of `numBlocks` blocks — the shape `solveLivenessSsa` fills in place.
 	export static function create(numBlocks CfgIndex) returns LiveSets
-		return Self{inSets: emptyPerBlockLists(numBlocks), outSets: emptyPerBlockLists(numBlocks)}
+		return Self{inSets: emptyListColumn(numBlocks), outSets: emptyListColumn(numBlocks)}
 	end 'create'
 
 	// The values live on ENTRY to `blockLocal`. THE LIST ITSELF, not a copy: a caller that only reads
@@ -324,23 +388,14 @@ export type LiveSets
 	// Remove `v` from a block's live-in / live-out set; a no-op if it is not in it.
 	export function removeLiveIn(blockLocal CfgIndex, v ValueId)
 		var list = self.liveIn(blockLocal)
-		removeFromLiveList(list, v: v)
+		removeFromDenseList(list, value: v)
 	end 'removeLiveIn'
 
 	export function removeLiveOut(blockLocal CfgIndex, v ValueId)
 		var list = self.liveOut(blockLocal)
-		removeFromLiveList(list, v: v)
+		removeFromDenseList(list, value: v)
 	end 'removeLiveOut'
 end 'LiveSets'
-
-// One empty list per block — allocated once per function by `LiveSets.create`.
-function emptyPerBlockLists(numBlocks CfgIndex) returns PerBlockLiveSets
-	var lists = PerBlockLiveSets.create()
-	for _ in 0 upto numBlocks 'eachBlock'
-		lists.push(ValueIdArray.create())
-	end 'eachBlock'
-	return lists
-end 'emptyPerBlockLists'
 
 // Add `v` to one block's live list unless it is already there. O(list), and a live list holds the
 // values live at ONE block boundary — tens of entries — so the membership scan is a constant beside
@@ -353,17 +408,6 @@ function addToLiveList(list ValueIdArray, v ValueId)
 	end 'each'
 	list.push(v)
 end 'addToLiveList'
-
-// Remove `v` from one block's live list; a no-op if it is not there. O(list), same bound as the add.
-function removeFromLiveList(list ValueIdArray, v ValueId)
-	for i in 0 upto list.count() 'each'
-		let u = try list.get(i) otherwise panic("removeFromLiveList: list.get({i}) OOB")
-		if u == v 'found'
-			_ = try list.remove(i) otherwise panic("removeFromLiveList: list.remove({i}) OOB")
-			return
-		end 'found'
-	end 'each'
-end 'removeFromLiveList'
 
 // Copy one block's live list into `out` (cleared first) — the O(live) read a consumer does into a
 // scratch buffer it reuses across blocks, for the cases that must not alias the stored list.
@@ -1186,10 +1230,9 @@ export union ValueSpillSlot
 end 'ValueSpillSlot'
 
 // THE function's per-value index: every question the allocator asks about a value, answered from a
-// dense column or a CSR range instead of a walk of the function.
+// dense column or one short list instead of a walk of the function.
 //
-// Built ONCE per liveness computation, in two passes (count, prefix-sum, place — a counting sort:
-// no comparison sort, no hashing, no per-value heap object), and consumed by BOTH clients:
+// Built in ONE pass over the function (`buildUseIndex`) and consumed by BOTH clients:
 //
 //  • the SSA liveness walk, which asks which BLOCKS read a value and where its def is;
 //  • the cold-spill splitter, which asks all of that plus the op and the layout SEQUENCE of each
@@ -1198,6 +1241,13 @@ end 'ValueSpillSlot'
 // It is ONE index because those are one traversal of the function. The splitter previously answered
 // every one of its questions with its own walk — per candidate value, per split — which made it
 // O(candidates × blocks × ops) per split and 61% of register allocation whenever it ran.
+//
+// It is EDITABLE, which is the other half of that. A split changes almost nothing about a function —
+// one value's live range shrinks, a few reload ids appear, a few ops are inserted into a few blocks —
+// so an index that could only be REBUILT made the splitter pay O(function) to learn O(1) of new facts,
+// once per split. Every representation choice below (the append-only record columns, the per-value and
+// per-block record lists, the growable value-space columns) is there so the edits a split makes cost
+// what a split changed.
 //
 // USE granularity is per-OP, not per-operand: an op reading a value twice yields ONE use site, and a
 // block passing a value to several phis (or on several edges) yields ONE edge use, emitted LAST for
@@ -1215,16 +1265,66 @@ export type UseIndex
 	// Strictly greater than every sequence number this function can produce (`seqLimitFor`).
 	export var seqLimit as OpSeq
 
-	// Use sites. The RECORDS are four parallel columns in LAYOUT order; `useCsr` groups them by
-	// value id — `useCsr` node `v`'s neighbours are the record indices of `v`'s uses. `buildCsr`
-	// preserves push order within a key, and the records are pushed in layout order, so a value's
-	// uses come out in ascending SEQUENCE: the order every consumer reads them in, and the order a
-	// split's before/after-the-peak partition depends on.
-	var useCsr as CsrGraph
-	var useBlock as CfgIndexArray
+	// THE RECORD ARENA. A RECORD is one (op, value) use site. Its INDEX into these columns is its
+	// identity, and the two threads below are what address it.
+	//
+	// The columns are APPEND-ONLY. `removeUseRecordsOf` unthreads a record and leaves the arena alone:
+	// compacting it would renumber every later record, and renumbering the function to drop one use is
+	// exactly the O(function) edit this representation exists to avoid.
+	//
+	// There is no `useBlock` column: a record's BLOCK is `useSeq / SeqStride` (see `seqAt` — a sequence
+	// number IS `block × SeqStride + position`). Storing it as well would be storing the same fact twice
+	// and leaving room for the two to disagree.
 	var useOpIdx as OpIndexArray
 	var useSeq as OpSeqArray
 	var useOnEdge as BoolArray
+
+	// THE TWO THREADS. Each record is on exactly two singly-linked lists — its VALUE's and its BLOCK's —
+	// and both are threaded INTRUSIVELY through flat integer columns: `nextUseOfValue[r]` is the record
+	// after `r` on its value's thread, `nextUseInBlock[r]` the record after `r` on its block's.
+	//
+	// **Flat columns, not an array of arrays.** One heap `Array` per VALUE would be a heap allocation
+	// per value per liveness build, and the driver still builds liveness once per split — that is
+	// `splits × values` allocations, which makes the quadratic BIGGER in the name of enabling its
+	// removal. (Measured, and this is why the shape is what it is: an `Array`-per-value cost +16.8M
+	// allocations and +15% compile time at scale rung 5.) A list per BLOCK is affordable — blocks are
+	// comparatively few, which is why `LiveSets` is an array of arrays and this is not. Threading costs
+	// NOTHING per value: six integer columns for the whole function, and `growTo` is a `resize`.
+	//
+	// **A value's thread is CIRCULAR and ASCENDING BY SEQUENCE, and the order is a contract**, not an
+	// accident of the build: consumers stop at the first record they want (`nextUseAfterPeak` returns the
+	// FIRST use past the peak; the before/after-the-peak partition is a prefix and a suffix), so a record
+	// out of order is a wrong ANSWER, not a slow one. Order is kept by APPENDING AT THE TAIL, and
+	// `buildUseIndex` records uses in layout order, so it comes for free. `addUseRecord` PANICS on a
+	// record that would land out of order rather than accept it silently; a split REBUILDS a value's
+	// thread (`removeUseRecordsOf`, then re-add in layout order) instead of inserting into the middle.
+	//
+	// Only the TAIL is stored, because the thread is circular: the head is `nextUseOfValue[tail]`. A
+	// circular list knows where it starts from where it ends, so a head column would be a second copy of
+	// a fact already there.
+	var useCountOfValue as UseOrdinalArray
+	var lastUseOfValue as UseRecordIndexArray
+	var nextUseOfValue as UseRecordIndexArray
+
+	// The BLOCK thread. This is the index an op INSERT needs: a sequence number is
+	// `block × SeqStride + position`, so inserting an op at position `p` of block `b` shifts the
+	// position of every op after it IN `b` and of nothing anywhere else — but that still restates the
+	// sequence number of every use record sited in `b` past `p`. Without this thread, finding those
+	// records means scanning the function's uses; with it, the repair costs only the block that changed.
+	//
+	// It is UNORDERED, which is why it is pushed at the HEAD and needs no tail column: nothing asks a
+	// block for its first use, only for all of them.
+	//
+	// ⚠ It holds every record ever SITED in the block, including ones `removeUseRecordsOf` has detached
+	// from their value. That is deliberate, and it is what the thread is for — REPAIRING SEQUENCE
+	// NUMBERS, which there is no point doing selectively. It is NOT an answer to "who uses what in this
+	// block": a detached record still names the op it used to be read at. Nothing can currently mistake
+	// one for a live use, because no record carries its value and no walk of this thread reaches one —
+	// but a consumer that wants the LIVE uses of a block would need a per-record liveness flag, which
+	// does not exist because nothing needs it yet.
+	var useCountInBlock as UseOrdinalArray
+	var firstUseInBlock as UseRecordIndexArray
+	var nextUseInBlock as UseRecordIndexArray
 
 	// Def site: an op def (`hasOpDef` + where), a phi (`isPhi` + its block), or neither.
 	var hasOpDef as BoolArray
@@ -1242,24 +1342,71 @@ export type UseIndex
 	// Appears as an operand — def OR use — of an op in a block at loop depth > 0.
 	var touchesLoop as BoolArray
 
-	static function create(valueCount ValueId, numBlocks CfgIndex, opCount OpSeq, seqLimit OpSeq, useCsr CsrGraph, useBlock CfgIndexArray, useOpIdx OpIndexArray, useSeq OpSeqArray, useOnEdge BoolArray, hasOpDef BoolArray, defOpIdx OpIndexArray, defOpBlock CfgIndexArray, isPhi BoolArray, phiBlock CfgIndexArray, edgePassed BoolArray, spillStored BoolArray, spillSlot SpillSlotArray, touchesLoop BoolArray) returns UseIndex
-		return Self{valueCount: valueCount, numBlocks: numBlocks, opCount: opCount, seqLimit: seqLimit, useCsr: useCsr, useBlock: useBlock, useOpIdx: useOpIdx, useSeq: useSeq, useOnEdge: useOnEdge, hasOpDef: hasOpDef, defOpIdx: defOpIdx, defOpBlock: defOpBlock, isPhi: isPhi, phiBlock: phiBlock, edgePassed: edgePassed, spillStored: spillStored, spillSlot: spillSlot, touchesLoop: touchesLoop}
+	// An EMPTY index over a `valueCount`-value, `numBlocks`-block function — the shape `buildUseIndex`
+	// fills in place, through the very same mutators a split edits it with.
+	static function create(valueCount ValueId, numBlocks CfgIndex) returns UseIndex
+		return Self{valueCount: valueCount, numBlocks: numBlocks, opCount: 0 as OpSeq, seqLimit: seqLimitFor(numBlocks), useOpIdx: OpIndexArray.create(), useSeq: OpSeqArray.create(), useOnEdge: BoolArray.create(), useCountOfValue: zeroColumn(valueCount), lastUseOfValue: zeroColumn(valueCount), nextUseOfValue: UseRecordIndexArray.create(), useCountInBlock: zeroColumn(numBlocks), firstUseInBlock: zeroColumn(numBlocks), nextUseInBlock: UseRecordIndexArray.create(), hasOpDef: falseColumn(valueCount), defOpIdx: zeroColumn(valueCount), defOpBlock: zeroColumn(valueCount), isPhi: falseColumn(valueCount), phiBlock: zeroColumn(valueCount), edgePassed: falseColumn(valueCount), spillStored: falseColumn(valueCount), spillSlot: zeroColumn(valueCount), touchesLoop: falseColumn(valueCount)}
 	end 'create'
 
-	// How many use sites `valueId` has. Walk them with `useRecordAt(valueId, k)` for k in 0..count.
+	// How many use sites `valueId` has — the BOUND of the walk below, and the only thing that says a
+	// thread is empty (there is no end-of-list sentinel; see the fields).
 	export function useCount(valueId ValueId) returns UseOrdinal
-		return self.useCsr.degree(valueId)
+		return try self.useCountOfValue.get(valueId) otherwise panic("UseIndex.useCount: value {valueId} out of range (valueCount={self.valueCount})")
 	end 'useCount'
 
-	// The record index of `valueId`'s `k`-th use — the key the four `use*At` columns are read with.
-	// The two index spaces are DIFFERENT and this is the one hop between them: `k` counts within one
-	// value's use list, `UseRecordIndex` addresses the function-wide record columns.
-	export function useRecordAt(valueId ValueId, k UseOrdinal) returns UseRecordIndex
-		return self.useCsr.neighbour(valueId, k: k)
-	end 'useRecordAt'
+	// Value `valueId`'s FIRST use record — the earliest by sequence, and the head of its thread, which
+	// a circular list holds one step past its tail. Walk the rest with `nextUseOf`, `useCount` times:
+	//
+	//     let useSites = index.useCount(v)
+	//     if useSites > 0 'used'
+	//         var record = index.firstUseOf(v)
+	//         for _ in 0 upto useSites 'eachUse'
+	//             …
+	//             record = index.nextUseOf(record)
+	//         end 'eachUse'
+	//     end 'used'
+	//
+	// It PANICS on a value with no uses rather than hand back a sentinel to be tested: the COUNT is the
+	// emptiness test, and a caller that walks without it is asking for the first of nothing.
+	export function firstUseOf(valueId ValueId) returns UseRecordIndex
+		if self.useCount(valueId) == 0 'neverUsed'
+			panic("UseIndex.firstUseOf: value {valueId} has no uses — walks are bounded by useCount()")
+		end 'neverUsed'
+		let tail = try self.lastUseOfValue.get(valueId) otherwise panic("UseIndex.firstUseOf: lastUseOfValue.get OOB for value {valueId}")
+		return self.nextUseOf(tail)
+	end 'firstUseOf'
 
+	// The record after `record` on its VALUE's thread. The thread is circular, so stepping off the last
+	// record hands back the first — harmless, because a walk is bounded by `useCount` and stops before
+	// it can look at what the wrap returned.
+	export function nextUseOf(record UseRecordIndex) returns UseRecordIndex
+		return try self.nextUseOfValue.get(record) otherwise panic("UseIndex.nextUseOf: use record {record} out of range")
+	end 'nextUseOf'
+
+	// How many use records are sited in `blockLocal` — the bound of the block walk. It counts every
+	// record ever sited there, including ones detached from their value (see the fields).
+	export function blockUseCount(blockLocal CfgIndex) returns UseOrdinal
+		return try self.useCountInBlock.get(blockLocal) otherwise panic("UseIndex.blockUseCount: block {blockLocal} out of range (numBlocks={self.numBlocks})")
+	end 'blockUseCount'
+
+	// The head of `blockLocal`'s record thread; walk the rest with `nextUseInBlockOf`, `blockUseCount`
+	// times, exactly as `firstUseOf` / `nextUseOf` walk a value's. Panics on a block with no records.
+	export function firstUseInBlockOf(blockLocal CfgIndex) returns UseRecordIndex
+		if self.blockUseCount(blockLocal) == 0 'noUses'
+			panic("UseIndex.firstUseInBlockOf: block {blockLocal} has no use records — walks are bounded by blockUseCount()")
+		end 'noUses'
+		return try self.firstUseInBlock.get(blockLocal) otherwise panic("UseIndex.firstUseInBlockOf: firstUseInBlock.get OOB for block {blockLocal}")
+	end 'firstUseInBlockOf'
+
+	// The record after `record` on its BLOCK's thread. The last record's entry points at ITSELF, which
+	// a `blockUseCount`-bounded walk never follows — the same discipline as `nextUseOf`.
+	export function nextUseInBlockOf(record UseRecordIndex) returns UseRecordIndex
+		return try self.nextUseInBlock.get(record) otherwise panic("UseIndex.nextUseInBlockOf: use record {record} out of range")
+	end 'nextUseInBlockOf'
+
+	// The block a use is sited in — DERIVED from its sequence number, not stored (see the arena).
 	export function useBlockAt(record UseRecordIndex) returns CfgIndex
-		return try self.useBlock.get(record) otherwise panic("UseIndex.useBlockAt: use record {record} out of range")
+		return self.useSeqAt(record) / SeqStride
 	end 'useBlockAt'
 
 	// The op the use reads through; for an EDGE use, the block's LAST op (its sequence anchor —
@@ -1350,6 +1497,212 @@ export type UseIndex
 			none then panic("UseIndex.requireDefOp: value {valueId} has no op def")
 		end 'site'
 	end 'requireDefOp'
+
+	// ----------------------------------------------------------------------
+	// EDITS — what a split changes, and nothing else
+	// ----------------------------------------------------------------------
+	//
+	// The index is built through these and edited through these. Building it through its own mutators
+	// is not tidiness: it is what keeps them honest. Every compile of the compiler threads every use
+	// record through `addUseRecord`, so a bug in the threading is a wrong program at once — not a wrong
+	// program only in the functions that happen to overflow their register pool and split.
+
+	// Count `n` more ops into the function's op total (`opCount`). `buildUseIndex` counts each block's
+	// ops as it walks; a split that INSERTS ops raises it, which is why it is added to rather than
+	// handed to the constructor.
+	export function addOps(n OpSeq)
+		self.opCount = self.opCount + n
+	end 'addOps'
+
+	// Append a use record to the arena and thread it onto BOTH lists — its value's and its block's.
+	// O(1), and it allocates nothing but the six flat column pushes.
+	//
+	// It APPENDS at each tail, which is why the value threads come out ascending by sequence for free:
+	// `buildUseIndex` records uses in layout order, and a split rebuilds a value's thread in layout
+	// order too (`removeUseRecordsOf`, then re-add). An append that would land OUT of order is a bug in
+	// the caller, not a case to handle, so it panics — silently accepting it would give
+	// `nextUseAfterPeak` a wrong answer, not a slow one.
+	//
+	// EQUAL sequence numbers are legal and do occur: an op use and an edge use of the same value in the
+	// same block both sit at the terminator's sequence number. The append keeps them in insertion order,
+	// so the op use stays first — which is right, because the edge is read after every body op.
+	export function addUseRecord(valueId ValueId, blockLocal CfgIndex, opIdx OpIndex, seq OpSeq, onEdge bool)
+		if seq / SeqStride != blockLocal 'wrongBlock'
+			panic("UseIndex.addUseRecord: use of value {valueId} is claimed to be in block {blockLocal} but its sequence number {seq} places it in block {seq / SeqStride} — a record's block IS its sequence number's block")
+		end 'wrongBlock'
+
+		if self.useCount(valueId) > 0 'appendMustNotGoBackwards'
+			let tail = try self.lastUseOfValue.get(valueId) otherwise panic("UseIndex.addUseRecord: lastUseOfValue.get OOB for value {valueId}")
+			if seq < self.useSeqAt(tail) 'outOfOrder'
+				panic("UseIndex.addUseRecord: use of value {valueId} at sequence {seq} lands before that value's last use (sequence {self.useSeqAt(tail)}) — a value's uses must be added in layout order")
+			end 'outOfOrder'
+		end 'appendMustNotGoBackwards'
+
+		let record = self.useSeq.count()
+		self.useOpIdx.push(opIdx)
+		self.useSeq.push(seq)
+		self.useOnEdge.push(onEdge)
+		// A record starts as its OWN successor on both threads — which is exactly a one-record circular
+		// list, so seating the first record on an empty thread needs no special case beyond the head.
+		self.nextUseOfValue.push(record)
+		self.nextUseInBlock.push(record)
+
+		self.appendToValueThread(valueId, record: record)
+		self.pushOntoBlockThread(blockLocal, record: record)
+	end 'addUseRecord'
+
+	// Append `record` at the TAIL of `valueId`'s circular thread — the order-preserving link, and the
+	// reason the thread stays ascending by sequence (`addUseRecord` has already refused a record that
+	// would go backwards).
+	function appendToValueThread(valueId ValueId, record UseRecordIndex)
+		let count = self.useCount(valueId)
+		if count > 0 'hasUses'
+			let tail = try self.lastUseOfValue.get(valueId) otherwise panic("UseIndex.appendToValueThread: lastUseOfValue.get OOB for value {valueId}")
+			let head = self.nextUseOf(tail)
+			try self.nextUseOfValue.set(tail, value: record) otherwise panic("UseIndex.appendToValueThread: nextUseOfValue.set OOB for record {tail}")
+			try self.nextUseOfValue.set(record, value: head) otherwise panic("UseIndex.appendToValueThread: nextUseOfValue.set OOB for record {record}")
+		end 'hasUses'
+
+		try self.lastUseOfValue.set(valueId, value: record) otherwise panic("UseIndex.appendToValueThread: lastUseOfValue.set OOB for value {valueId}")
+		try self.useCountOfValue.set(valueId, value: count + 1) otherwise panic("UseIndex.appendToValueThread: useCountOfValue.set OOB for value {valueId}")
+	end 'appendToValueThread'
+
+	// Push `record` at the HEAD of `blockLocal`'s thread. A block's records have no order to keep, so
+	// the cheap end is the right end — and it is why the block thread needs no tail column.
+	function pushOntoBlockThread(blockLocal CfgIndex, record UseRecordIndex)
+		let count = self.blockUseCount(blockLocal)
+		if count > 0 'hasUses'
+			let head = self.firstUseInBlockOf(blockLocal)
+			try self.nextUseInBlock.set(record, value: head) otherwise panic("UseIndex.pushOntoBlockThread: nextUseInBlock.set OOB for record {record}")
+		end 'hasUses'
+
+		try self.firstUseInBlock.set(blockLocal, value: record) otherwise panic("UseIndex.pushOntoBlockThread: firstUseInBlock.set OOB for block {blockLocal}")
+		try self.useCountInBlock.set(blockLocal, value: count + 1) otherwise panic("UseIndex.pushOntoBlockThread: useCountInBlock.set OOB for block {blockLocal}")
+	end 'pushOntoBlockThread'
+
+	// Does `blockLocal` already hold an EDGE use of `valueId`? A block passing one value to several phis
+	// — or to phis on several edges — must still yield exactly ONE edge use, the granularity a split's
+	// partition needs.
+	//
+	// It is answered from the value's TAIL, in O(1), and that is exact rather than lucky: edge uses are
+	// recorded LAST for a block, so if this block has already recorded one for this value, it is the most
+	// recent record the value has. A tail in an earlier block, or a tail that is an op use, both mean
+	// this block has not.
+	function blockHasEdgeUseOf(valueId ValueId, blockLocal CfgIndex) returns bool
+		if self.useCount(valueId) == 0 'neverUsed'
+			return false
+		end 'neverUsed'
+
+		let tail = try self.lastUseOfValue.get(valueId) otherwise panic("UseIndex.blockHasEdgeUseOf: lastUseOfValue.get OOB for value {valueId}")
+		if self.useBlockAt(tail) != blockLocal 'earlierBlock'
+			return false
+		end 'earlierBlock'
+
+		return match self.useKindAt(tail) 'kind'
+			edge gives true
+			op gives false
+		end 'kind'
+	end 'blockHasEdgeUseOf'
+
+	// Detach every use record of `valueId`. A split rewrites the uses past the peak to FRESH reload ids,
+	// so the value's thread is REBUILT rather than edited record by record — which is also why there is
+	// no remove-one-record: no caller wants one.
+	//
+	// O(1): the count IS the list, so zeroing it detaches the whole thread. The records stay in the
+	// append-only arena and stay on their BLOCK threads, which is correct — a block thread exists to
+	// repair sequence numbers, and a record no value points at is reachable from no value ever again
+	// (`addUseRecord` always mints a new record; a detached one is never re-threaded).
+	export function removeUseRecordsOf(valueId ValueId)
+		try self.useCountOfValue.set(valueId, value: 0) otherwise panic("UseIndex.removeUseRecordsOf: value {valueId} out of range (valueCount={self.valueCount})")
+	end 'removeUseRecordsOf'
+
+	// Repoint one record's sequence number — what an op INSERTED into a block costs its uses.
+	//
+	// It cannot disturb the ascending order the value threads are held in, and that is a property of the
+	// numbering rather than a thing to be careful about: a sequence number is
+	// `block × SeqStride + position`, so an op inserted at position `p` of block `b` shifts a SUFFIX of
+	// `b`'s records by exactly one each and touches no other block at all. A uniform shift of a suffix
+	// reorders nothing.
+	//
+	// A record may NOT be moved to another block, and this refuses to: the block a record is sited in is
+	// DERIVED from this number (there is no `useBlock` column), so a sequence number that crossed a
+	// stride boundary would silently move the use into the next block.
+	export function setUseSeq(record UseRecordIndex, seq OpSeq)
+		if seq / SeqStride != self.useBlockAt(record) 'crossesBlocks'
+			panic("UseIndex.setUseSeq: sequence {seq} would move use record {record} from block {self.useBlockAt(record)} into block {seq / SeqStride} — a resequenced use stays in its own block")
+		end 'crossesBlocks'
+
+		try self.useSeq.set(record, value: seq) otherwise panic("UseIndex.setUseSeq: use record {record} out of range")
+	end 'setUseSeq'
+
+	// Record `valueId`'s def: an op at `opIdx`, in block `blockLocal`. A split MINTS values — each
+	// reload defines a fresh id — and a fresh id has no def site until this gives it one.
+	export function setOpDef(valueId ValueId, opIdx OpIndex, blockLocal CfgIndex)
+		try self.hasOpDef.set(valueId, value: true) otherwise panic("UseIndex.setOpDef: value {valueId} out of range (valueCount={self.valueCount})")
+		try self.defOpIdx.set(valueId, value: opIdx) otherwise panic("UseIndex.setOpDef: defOpIdx.set OOB for value {valueId}")
+		try self.defOpBlock.set(valueId, value: blockLocal) otherwise panic("UseIndex.setOpDef: defOpBlock.set OOB for value {valueId}")
+	end 'setOpDef'
+
+	// Record that a `storeSlotReg` spills `valueId` into `slot` — the two facts a LATER relief of the
+	// same value needs (skip the redundant second store; reload out of the slot it already has).
+	export function setSpillStore(valueId ValueId, slot SpillSlot)
+		try self.spillStored.set(valueId, value: true) otherwise panic("UseIndex.setSpillStore: value {valueId} out of range (valueCount={self.valueCount})")
+		try self.spillSlot.set(valueId, value: slot) otherwise panic("UseIndex.setSpillStore: spillSlot.set OOB for value {valueId}")
+	end 'setSpillStore'
+
+	// `setSpillStore` for the op-level answer: the slot a `storeSlotReg` writes, or `none` for every op
+	// that is not one. Resolved ONCE per op (`spillStoreSlotOf`) rather than per operand.
+	function recordSpillStore(storeSlot ValueSpillSlot, valueId ValueId)
+		match storeSlot 'store'
+			none then break 'store'
+			slot(s) then self.setSpillStore(valueId, slot: s)
+		end 'store'
+	end 'recordSpillStore'
+
+	// Record `valueId` as a block-arg (phi) of `blockLocal`.
+	function setPhiDef(valueId ValueId, blockLocal CfgIndex)
+		try self.isPhi.set(valueId, value: true) otherwise panic("UseIndex.setPhiDef: isPhi.set OOB for phi {valueId}")
+		try self.phiBlock.set(valueId, value: blockLocal) otherwise panic("UseIndex.setPhiDef: phiBlock.set OOB for phi {valueId}")
+	end 'setPhiDef'
+
+	// Record that `valueId` is passed to a phi on some branch edge.
+	function setEdgePassed(valueId ValueId)
+		try self.edgePassed.set(valueId, value: true) otherwise panic("UseIndex.setEdgePassed: edgePassed.set OOB for value {valueId}")
+	end 'setEdgePassed'
+
+	// Record that `valueId` is an operand — def or use — of an op in a block at loop depth > 0.
+	function setTouchesLoop(valueId ValueId)
+		try self.touchesLoop.set(valueId, value: true) otherwise panic("UseIndex.setTouchesLoop: touchesLoop.set OOB for value {valueId}")
+	end 'setTouchesLoop'
+
+	// Grow the value space to `newValueCount`, keeping every column's contents. A split MINTS value ids
+	// — one per reload — and every column here is keyed by value id, so this is what lets the index
+	// SURVIVE a split instead of being rebuilt for the ids it has never heard of.
+	//
+	// The BLOCK space does not grow with it: a split inserts ops into blocks that already exist and
+	// never adds one.
+	export function growTo(newValueCount ValueId)
+		if newValueCount < self.valueCount 'shrink'
+			panic("UseIndex.growTo: cannot shrink the value space from {self.valueCount} to {newValueCount}")
+		end 'shrink'
+
+		// The value THREADS: a fresh value has no uses, and a zero count is what says so — the tail entry
+		// beside it is never read until an `addUseRecord` writes it.
+		growZeroColumn(self.useCountOfValue, count: newValueCount)
+		growZeroColumn(self.lastUseOfValue, count: newValueCount)
+
+		growFalseColumn(self.hasOpDef, count: newValueCount)
+		growZeroColumn(self.defOpIdx, count: newValueCount)
+		growZeroColumn(self.defOpBlock, count: newValueCount)
+		growFalseColumn(self.isPhi, count: newValueCount)
+		growZeroColumn(self.phiBlock, count: newValueCount)
+		growFalseColumn(self.edgePassed, count: newValueCount)
+		growFalseColumn(self.spillStored, count: newValueCount)
+		growZeroColumn(self.spillSlot, count: newValueCount)
+		growFalseColumn(self.touchesLoop, count: newValueCount)
+
+		self.valueCount = newValueCount
+	end 'growTo'
 end 'UseIndex'
 
 // A fresh BoolArray of `count` false entries (`resize` zero-fills).
@@ -1359,52 +1712,25 @@ function falseColumn(count ColumnLength) returns BoolArray
 	return col
 end 'falseColumn'
 
-// Build the index in ONE pass over the function: push a flat RECORD per use site (in layout order)
-// alongside its owning value, record every def / flag / layout sequence number on the way, then let
-// the shared `buildCsr` counting sort group the records by value id.
+
+// Build the index in ONE pass over the function: create it empty, then record every def, flag and use
+// site on the way through — through the index's own mutators, which are the ones a SPLIT edits it with
+// (see "EDITS" above).
 //
-// `buildCsr` is the SAME counting sort M5.14 hoisted out of this file, the colorer, and
-// PruneDeadBlockArgs; grouping four parallel record columns is exactly the "key -> many values"
-// shape it exists for, once the CSR's `list` holds RECORD INDICES rather than the values themselves.
-// It preserves push order within a key, which is what keeps a value's uses in ascending sequence.
+// Uses are recorded in LAYOUT ORDER, which is what the value threads' ascending-sequence contract
+// rests on: `addUseRecord` appends at the tail, so recording them in order IS keeping them in order.
 export function buildUseIndex(module TargetModule, cfg FuncCfg, valueCount ValueId) returns UseIndex
-	var hasOpDef = falseColumn(valueCount)
-	var defOpIdx = zeroColumn(valueCount)
-	var defOpBlock = zeroColumn(valueCount)
-	var isPhi = falseColumn(valueCount)
-	var phiBlock = zeroColumn(valueCount)
-	var edgePassed = falseColumn(valueCount)
-	var spillStored = falseColumn(valueCount)
-	var spillSlot = zeroColumn(valueCount)
-	var touchesLoop = falseColumn(valueCount)
-
-	// The use RECORDS, pushed in layout order. `recordValue` is the CSR key column and `recordIndex`
-	// the value column, so the CSR's neighbour lists come out as record indices.
-	var recordValue = CsrColumn.create()
-	var recordIndex = CsrColumn.create()
-	var useBlock = CfgIndexArray.create()
-	var useOpIdx = OpIndexArray.create()
-	var useSeq = OpSeqArray.create()
-	var useOnEdge = BoolArray.create()
-
-	// "Has this block already recorded an EDGE use of this value?" — a VERSION STAMP holding
-	// `blockLocal + 1`, so it needs no clearing between blocks (clearing would be O(blocks × values),
-	// the very cost this index exists to remove). A block passing one value to several phis, or to
-	// phis on several edges, still yields exactly ONE edge use — the granularity a split's partition
-	// needs.
-	var edgeStamp = zeroColumn(valueCount)
+	var index = UseIndex.create(valueCount, numBlocks: cfg.topo.numBlocks)
 
 	var buf = OperandList.create()
 	var ordered = OpIndexArray.create()
-	var opCount_total = 0 as OpSeq
 
 	for i in 0 upto cfg.topo.numBlocks 'eachBlock'
 		let block = blockAt(module, topo: cfg.topo, local: i)
 		let inLoop = (try cfg.loopDepth.get(i) otherwise panic("buildUseIndex: loopDepth.get OOB")) != 0
 
 		for arg in block.blockArgs 'eachPhi'
-			try isPhi.set(arg.valueId, value: true) otherwise panic("buildUseIndex: isPhi.set OOB for phi {arg.valueId}")
-			try phiBlock.set(arg.valueId, value: i) otherwise panic("buildUseIndex: phiBlock.set OOB for phi {arg.valueId}")
+			index.setPhiDef(arg.valueId, blockLocal: i)
 		end 'eachPhi'
 
 		ordered.clear()
@@ -1425,20 +1751,18 @@ export function buildUseIndex(module TargetModule, cfg FuncCfg, valueCount Value
 				let v = operandValueId(o)
 
 				if inLoop 'insideLoop'
-					try touchesLoop.set(v, value: true) otherwise panic("buildUseIndex: touchesLoop.set OOB for value {v}")
+					index.setTouchesLoop(v)
 				end 'insideLoop'
 
 				if operandIsDef(o) 'def'
-					try hasOpDef.set(v, value: true) otherwise panic("buildUseIndex: hasOpDef.set OOB for value {v}")
-					try defOpIdx.set(v, value: opIdx) otherwise panic("buildUseIndex: defOpIdx.set OOB for value {v}")
-					try defOpBlock.set(v, value: i) otherwise panic("buildUseIndex: defOpBlock.set OOB for value {v}")
+					index.setOpDef(v, opIdx: opIdx, blockLocal: i)
 					continue
 				end 'def'
 
-				recordSpillStore(storeSlot, spillStored: spillStored, spillSlot: spillSlot, v: v)
+				index.recordSpillStore(storeSlot, valueId: v)
 
 				if isFirstUseOfValueInOp(buf, upto: k, valueId: v) 'firstOccurrence'
-					pushUseRecord(recordValue, recordIndex: recordIndex, useBlock: useBlock, useOpIdx: useOpIdx, useSeq: useSeq, useOnEdge: useOnEdge, v: v, blockLocal: i, opIdx: opIdx, seq: seqAt(i, pos: pos), onEdge: false)
+					index.addUseRecord(v, blockLocal: i, opIdx: opIdx, seq: seqAt(i, pos: pos), onEdge: false)
 				end 'firstOccurrence'
 			end 'eachOperand'
 		end 'eachOp'
@@ -1448,62 +1772,23 @@ export function buildUseIndex(module TargetModule, cfg FuncCfg, valueCount Value
 		// before the block's first after-peak use dominate the edge too.
 		for edge in block.branchEdges 'eachEdge'
 			for argId in edge.argIds 'eachArg'
-				try edgePassed.set(argId, value: true) otherwise panic("buildUseIndex: edgePassed.set OOB for value {argId}")
-				if alreadyStampedForBlock(edgeStamp, valueId: argId, blockLocal: i) 'dedupe'
+				index.setEdgePassed(argId)
+				if index.blockHasEdgeUseOf(argId, blockLocal: i) 'dedupe'
 					continue
 				end 'dedupe'
 				if opCount == 0 'noTerminator'
 					panic("buildUseIndex: block local {i} ('{String.from(block.label)}') passes value {argId} on a branch edge but has no ops to branch with")
 				end 'noTerminator'
 				let lastOpIdx = try ordered.get(opCount - 1) otherwise panic("buildUseIndex: ordered.get OOB")
-				pushUseRecord(recordValue, recordIndex: recordIndex, useBlock: useBlock, useOpIdx: useOpIdx, useSeq: useSeq, useOnEdge: useOnEdge, v: argId, blockLocal: i, opIdx: lastOpIdx, seq: seqAt(i, pos: opCount - 1), onEdge: true)
+				index.addUseRecord(argId, blockLocal: i, opIdx: lastOpIdx, seq: seqAt(i, pos: opCount - 1), onEdge: true)
 			end 'eachArg'
 		end 'eachEdge'
 
-		opCount_total = opCount_total + opCount
+		index.addOps(opCount)
 	end 'eachBlock'
 
-	let useCsr = buildCsr(recordValue, to: recordIndex, nodeCount: valueCount)
-	return UseIndex.create(valueCount, numBlocks: cfg.topo.numBlocks, opCount: opCount_total, seqLimit: seqLimitFor(cfg.topo.numBlocks), useCsr: useCsr, useBlock: useBlock, useOpIdx: useOpIdx, useSeq: useSeq, useOnEdge: useOnEdge, hasOpDef: hasOpDef, defOpIdx: defOpIdx, defOpBlock: defOpBlock, isPhi: isPhi, phiBlock: phiBlock, edgePassed: edgePassed, spillStored: spillStored, spillSlot: spillSlot, touchesLoop: touchesLoop)
+	return index
 end 'buildUseIndex'
-
-// Record that `v` is the value a spill STORE reads, and the slot that store writes — the two facts
-// a LATER relief of the same value needs (skip the redundant second store; reload out of the slot it
-// already has). A no-op for any op that is not a store: `storeSlot` is `none` there, and it is
-// resolved ONCE per op rather than per operand.
-function recordSpillStore(storeSlot ValueSpillSlot, spillStored BoolArray, spillSlot SpillSlotArray, v ValueId)
-	match storeSlot 'store'
-		none then break 'store'
-		slot(s) then recordSpillStoreSlot(spillStored, spillSlot: spillSlot, v: v, slot: s)
-	end 'store'
-end 'recordSpillStore'
-
-function recordSpillStoreSlot(spillStored BoolArray, spillSlot SpillSlotArray, v ValueId, slot SpillSlot)
-	try spillStored.set(v, value: true) otherwise panic("recordSpillStoreSlot: spillStored.set OOB for value {v}")
-	try spillSlot.set(v, value: slot) otherwise panic("recordSpillStoreSlot: spillSlot.set OOB for value {v}")
-end 'recordSpillStoreSlot'
-
-// Append one use record and its CSR key. The record's index IS its position in the four parallel
-// columns, so the CSR built from (value, index) groups the records by value with no extra table.
-function pushUseRecord(recordValue CsrColumn, recordIndex CsrColumn, useBlock CfgIndexArray, useOpIdx OpIndexArray, useSeq OpSeqArray, useOnEdge BoolArray, v ValueId, blockLocal CfgIndex, opIdx OpIndex, seq OpSeq, onEdge bool)
-	recordValue.push(v)
-	recordIndex.push(useBlock.count())
-	useBlock.push(blockLocal)
-	useOpIdx.push(opIdx)
-	useSeq.push(seq)
-	useOnEdge.push(onEdge)
-end 'pushUseRecord'
-
-// Has `blockLocal` already recorded an edge use of `valueId`? Stamps it if not. The stamp holds
-// `blockLocal + 1` so 0 means "never stamped" and no clearing between blocks is needed.
-function alreadyStampedForBlock(stamp VersionStampColumn, valueId ValueId, blockLocal CfgIndex) returns bool
-	let cur = try stamp.get(valueId) otherwise panic("alreadyStampedForBlock: stamp.get OOB for value {valueId}")
-	if cur == blockLocal + 1 'already'
-		return true
-	end 'already'
-	try stamp.set(valueId, value: blockLocal + 1) otherwise panic("alreadyStampedForBlock: stamp.set OOB for value {valueId}")
-	return false
-end 'alreadyStampedForBlock'
 
 // Is operand `k` the FIRST virtual USE of its value in this op? An op reading one value twice must
 // still yield ONE use site — the per-OP granularity a split's before/after-the-peak partition is
@@ -1551,8 +1836,8 @@ function solveLivenessSsa(topo FuncTopology, useIndex UseIndex, valueCount Value
 
 		let defBlock = useIndex.defBlockOrNone(v)
 		worklist.clear()
-		for j in 0 upto useCount 'eachUse'
-			let record = useIndex.useRecordAt(v, k: j)
+		var record = useIndex.firstUseOf(v)
+		for _ in 0 upto useCount 'eachUse'
 			let useBlock = useIndex.useBlockAt(record)
 			match useIndex.useKindAt(record) 'kind'
 				// Read ON the edge, so it is live at the END of this predecessor — and the walk up
@@ -1561,6 +1846,7 @@ function solveLivenessSsa(topo FuncTopology, useIndex UseIndex, valueCount Value
 				op then break 'kind'
 			end 'kind'
 			worklist.push(useBlock)
+			record = useIndex.nextUseOf(record)
 		end 'eachUse'
 
 		while worklist.count() > 0 'walkUp'
