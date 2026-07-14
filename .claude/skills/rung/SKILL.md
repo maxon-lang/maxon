@@ -113,7 +113,7 @@ by grepping for a success string.
 | shv2 suite | all green, **including every pre-existing test** |
 | Worker-count invariance | `--workers=1` and `--workers=12` stdout **byte-identical** |
 | Fragments | `git status --short specs-shv2/fragments/` — **additions only**. An **`M`** is a codegen change: justify or fix. Empty diff after a spec run **proves byte-identical codegen** |
-| `scale-test` | **PASS** — mandatory after any change to a pass, the IR, or a data structure the compiler indexes by. VOID/NOISY are not passes |
+| `scale-test` | ⚠ **NOT A GATE — it is an INSTRUMENT with no verdict.** Run it after any change to a pass, the IR, or a data structure the compiler indexes by, and **read it**: the per-rung memory numbers are exact and bit-for-bit reproducible, so any movement is real. **Explain and attribute what moved**, and record the reason in `docs/optimization-log.md` — the trend table is the deliverable. There is nothing to "pass"; do not chase one, and never touch the instrument to make a number look better |
 | If `maxon-sharp/` was touched | C# suite green (**2883+**) **AND codegen neutrality**: `git status --short specs/ specs-shv2/` EMPTY |
 | Leak gate | no run exits **101** |
 

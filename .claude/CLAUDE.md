@@ -32,28 +32,26 @@ must (see Building and Testing below).
 
 Flags like `--filter`, `--update-required`, `--log`, `--mm-trace`, and `--target` are exposed as parameters on the relevant tools (`filter`, `updateRequired`, `log`, `mmTrace`, `target`). When iterating on a specific failing test, pass `filter` to `run_spec_test` or use `spec_test_outcome` for per-test detail. `target` cross-compiles to what the CHOSEN compiler can emit — the bootstrap has x64 and arm64 emitters (`"x64-windows"`, `"arm64-macos"`), and shv2 rejects the flag outright. **The wasm backend was only ever in `maxon-selfhosted`, so `target: "wasm32-wasi"` is no longer reachable through the MCP** — run it by hand against that compiler's binary if you need it.
 
-### `run_scale_test` — the scaling gate (shv2 only)
+### `run_scale_test` — the scaling INSTRUMENT (shv2 only). ⚠ NOT A GATE.
 
-`spec-test` proves the compiler is CORRECT. `scale-test` proves it is still LINEAR. It compiles a ladder of generated programs — six rungs, each double the last — and gates the growth curves. **Run it after any change to a pass, the IR, or a data structure the compiler indexes by.** A default run is ~20 s.
+**`scale-test` collects data for TREND ANALYSIS. It has no verdict, and there is nothing to pass.** It compiles a ladder of generated programs — six rungs, each double the last — measures time and memory per phase per rung, and fits a growth exponent to each. **Run it after any change to a pass, the IR, or a data structure the compiler indexes by, and READ it.** A default run is ~20 s.
 
-It returns four verdicts, and the last two are the point:
+**The artifact is the trend: `docs/optimization-log.md`** — a dated table you read downwards. The question it answers is *"what has this compiler's cost actually done, change by change?"*, not *"may I merge?"*
 
-- **PASS** / **FAIL** — a named curve blew its budget, or a per-rung memory golden moved.
-- **VOID** — the generated corpus was DEGENERATE (it folded away, so nothing was compiled and no verdict about the compiler can be drawn). Not a compiler regression.
-- **NOISY** — the machine was too loaded for the TIME curves to mean anything. Not a verdict. The memory gates, which are exact, still ran.
+⚠ **DO NOT CHASE A GREEN SCALE-TEST. There isn't one.** A curve that looks wrong is a **reading to explain**, not a light to turn green. And **never touch the instrument to make a number look better** — a past pass exempted `regalloc:liveness` from a noise check to stop it complaining, which was treating the symptom of a verdict that should not have existed. The right response to a curve that bends is to say WHY it bends. (`liveness` bills two call sites into one bucket — one per function, linear; one after every split, superlinear — so it is a *sum of two exponents* and bends on a perfectly idle machine.)
 
-What is gated, and what is not:
+⚠ **The code still carries committed memory "goldens", exponent "budgets", `--update-required` and PASS/FAIL/VOID/NOISY verdicts. That apparatus is ACCRETION — it was never the intent, and it is being removed.** Do not build on it and do not add to it.
 
-- **Per-rung memory goldens** (allocations / frees / bytes) — EXACT, committed, bit-for-bit reproducible. The strong gate. `updateRequired: true` rewrites them, and **the diff is the review** — a golden that moved means the compiler allocates differently for the same input.
+How to read the numbers:
 
-`updateRequired` REQUIRES a `note` — one sentence saying why the goldens moved. It is refused (before the ladder is even climbed) without one. The note and the before/after numbers are appended to **`docs/optimization-log.md`**, which is the running record of what the compiler's memory traffic has actually done, change by change. The suite can see exactly WHAT moved and can never see WHY, so the reason is demanded at the one moment it is still known. Nothing is logged when no golden actually moved, and a short ladder (`rungs` below the number of committed goldens) is refused rather than allowed to silently DELETE the goldens for the rungs it did not climb.
-- **Per-phase growth exponents**, in time AND in allocations — tight (~1.25) everywhere except `regalloc`'s `splitting`/`liveness`, which are KNOWN superlinear (the splitter recomputes liveness after every split — `ARCHITECTURE.md:1336-1345`) and are budgeted at 2.2.
-- **Aggregate time / memory** — reported, loosely budgeted. They are sums of curves with different exponents, so they bend by construction; the teeth are in the per-phase rows.
-- **Absolute milliseconds** — reported, never gated (machine-dependent).
+- **Per-rung memory** (allocations / frees / bytes) — **EXACT and bit-for-bit reproducible.** Load cannot move them, so any movement for the same input is REAL, every time. This is the most informative thing in the report. **Explain and attribute what moved**, and record the reason in the log at the one moment it is still known — the instrument can see exactly WHAT moved and can never see WHY.
+- **Per-phase growth exponents** (time AND allocations) — **reproducible to ~1% across runs**, which makes them a poor boolean but an **excellent tracked number**. Watch one move down the log and you see a phase go superlinear, with no threshold needed. *(`regalloc`'s `splitting`/`liveness` are KNOWN superlinear — the splitter recomputes liveness after every split, `ARCHITECTURE.md:1336-1345`.)*
+- **Aggregate time / memory** — sums of curves with different exponents, so they bend by construction. The signal is in the per-phase rows.
+- **Absolute milliseconds** — machine-dependent. Never conclude anything from them.
 
 `perType: true` adds an untimed `--mm-trace` pass that prints TWO ranked tables, each with its own growth exponent:
 
-- **by TYPE** — the way to answer "a memory gate fired, but of *what*?". Names the data structure (a `LiveIndexColumn` at exponent 2.17 is a quadratic).
+- **by TYPE** — the way to answer "the memory numbers moved, but of *what*?". Names the data structure (a `LiveIndexColumn` at exponent 2.17 is a quadratic).
 - **by SCOPE** — the function that made the allocation, which the type table structurally *cannot* tell you: a `String` row can never say that 150 of them came from `emitFixedToken`. A constant-factor hog hides inside its type; it is a single named row here. **This is the column that finds things.**
 
 It is slow (several minutes) and off by default.

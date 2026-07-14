@@ -27,33 +27,43 @@ must exist, comment *why the two cannot be one* — otherwise the reviewer will 
 - **Allocation in a hot path**, especially anything that allocates into the very `mm` stream being
   traced. (`contentHash()` allocates. `String.hash` walks the bytes in place.)
 
-## The gate is OBJECTIVE — this is not a judgement call
+## ⚠ `scale-test` IS AN INSTRUMENT. It collects data for TREND ANALYSIS. That is all it is.
 
-`./maxon-shv2/.maxon/maxon-shv2.exe scale-test` compiles a ladder of generated programs, **each rung
-double the last**, and:
+**No verdict. No goldens. No gate. Nothing to pass.** This is easy to get backwards, and getting it
+backwards makes you optimize the instrument instead of the compiler.
 
-- fits a **growth exponent to every phase's TIME *and* ALLOCATIONS** — budgeted ~**1.25** everywhere
-  except `regalloc`'s `splitting`/`liveness` (known superlinear, budgeted **2.2**);
-- checks **exact, committed per-rung memory goldens** (allocations / frees / bytes) — bit-for-bit
-  reproducible. **This is the strong gate.**
+`./maxon-shv2/.maxon/maxon-shv2.exe scale-test` compiles a ladder of generated programs — **each rung
+double the last** — measures time and memory per phase per rung, fits a growth exponent to each, and
+records it. **The artifact is the trend: `docs/optimization-log.md`, a dated table you read downwards.**
+The question it answers is *"what has this compiler's cost actually done, change by change?"* — not
+*"may I merge?"*
 
-Verdicts: **PASS** / **FAIL** / **VOID** (the generated corpus folded away — degenerate, no verdict
-about the compiler) / **NOISY** (machine too loaded for the TIME curves to mean anything — **not** a
-verdict; the exact memory gates still ran).
+- **Do NOT chase a green scale-test. There isn't one.** A curve that looks wrong is a **reading to
+  explain**, not a light to turn green.
+- **NEVER touch the instrument to make a number look better.** An earlier pass exempted
+  `regalloc:liveness` from a noise check to stop it complaining — treating the symptom of a verdict that
+  should never have existed. **The right response to a curve that bends is to say WHY it bends.**
+  (`liveness` bills two call sites into one bucket: one per function, linear; one after every split,
+  superlinear. It is a *sum of two exponents*, so it bends on a perfectly idle machine.) Write it down;
+  do not launder it.
+- ⚠ **The code currently carries committed memory "goldens", exponent "budgets", a `--update-required`
+  flag and PASS/FAIL/VOID/NOISY verdicts. That apparatus is ACCRETION — it was never the intent** and is
+  being removed. Do not build on it, and do not add to it.
 
-- **VOID and NOISY are not passes.** Re-run on an idle machine.
-- **`--update-required` rewrites the memory goldens, and THE DIFF IS THE REVIEW.** A golden that moved
-  means the compiler allocates differently for the same input — that is the event this suite exists to
-  catch. Never regenerate to make red go away; explain the diff or fix the cause.
-  ⚠ **It REFUSES to run without a `note`** — one sentence saying *why* the goldens moved. The note and
-  the before/after numbers are appended to **`docs/optimization-log.md`**, the running record of what the
-  compiler's memory traffic has actually done, change by change. The suite can see exactly *what* moved
-  and can never see *why*, so the reason is demanded at the one moment it is still known. **Write a real
-  one.** (A short ladder is also refused rather than allowed to silently delete goldens it did not climb.)
-- **`perType: true`** runs an untimed `--mm-trace` pass printing **two** ranked tables, each with its own
-  growth exponent. It is slow (minutes) and off by default — but it is how you actually find things:
-  - **by TYPE** — answers "a memory gate fired, but of *what*?" Names the data structure (a
-    `LiveIndexColumn` at exponent 2.17 **is** a quadratic).
+**How to read the numbers:**
+
+- **The per-rung memory numbers are EXACT and bit-for-bit reproducible** — load cannot move them. So a
+  change in allocations/frees/bytes for the same input is **real, every time**, and is the single most
+  informative thing in the report. It has already caught: `traceUnitOf` calling `contentHash()` (which
+  *allocates*, into the very `mm` stream it was added to trace), and a fix whose first cut cost +4
+  allocations/function because a field store boxed a union. **Explain any movement. Attribute it.**
+- **The EXPONENT reproduces to ~1% across runs** (measured 1.741 / 1.760 / 1.772 / 1.782 on an unchanged
+  compiler). A poor boolean; an **excellent tracked number**. Watch it move down the log and you see a
+  phase go superlinear with no threshold needed.
+- **Absolute milliseconds are machine-dependent.** Never conclude anything from them.
+- **`--per-type`** runs an untimed `--mm-trace` pass printing **two** ranked tables, each with its own
+  growth exponent. Slow (minutes), off by default — and it is how you actually find things:
+  - **by TYPE** — names the data structure. A `LiveIndexColumn` at exponent 2.17 **is** a quadratic.
   - **by SCOPE** — the *function* that made the allocation, which the type table structurally **cannot**
     tell you: a `String` row can never say that 150 of them came from `emitFixedToken`. A constant-factor
     hog hides inside its type and is a single named row here. **This is the column that finds things.**
@@ -61,6 +71,12 @@ verdict; the exact memory gates still ran).
 ⚠ **Measure on an IDLE machine, and measure the instrument before the subject.** This project has had a
 dominant cost hide in the *wrong timing bucket* four separate times. Load can MASK a bug, not just
 inflate numbers.
+
+⚠ **The trend log is the deliverable, and it must say WHY.** The instrument can see exactly *what* moved
+and can never see *why*. If your change moves the numbers, **record the reason in
+`docs/optimization-log.md` at the one moment it is still known** — a row that says only "-8733
+allocations" is worth a fraction of one that says which allocation stopped happening and what stopped
+making it.
 
 ## Rules of engagement
 
