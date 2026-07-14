@@ -382,14 +382,14 @@ function allocateFunction(module TargetModule, func IrFunction, funcIndex FuncIn
 	// pressure a loop genuinely cannot fit is raised as E5001 from inside the splitter.
 	// It runs FIRST because it MUTATES the IR — adding spill/reload/remat ops and
 	// fresh reload values that the liveness and coloring below then both consume. The
-	// splitter recomputes liveness internally and returns the final result (`maxPressure ≤
+	// splitter computes liveness internally and returns the final result (`maxPressure ≤
 	// pool` guaranteed), so no separate liveness pass is needed here.
-	// The splitter OWNS every liveness computation (one up front, one after each split), and it bills
-	// them to RegAllocPhase.liveness itself. Subtract that back out here so the two phases are
-	// DISJOINT and the sub-phases sum to the true total — otherwise `splitting` silently includes
-	// `liveness` and the biggest cost in the allocator hides inside the wrong bucket, which is
-	// exactly the "74% with zero sub-phase attribution" failure this instrumentation exists to
-	// prevent.
+	// The splitter OWNS the liveness computation (one whole-function build, which it then REPAIRS
+	// incrementally after each split), and it bills that build to RegAllocPhase.liveness itself.
+	// Subtract it back out here so the two phases are DISJOINT and the sub-phases sum to the true
+	// total — otherwise `splitting` silently includes `liveness` and the biggest cost in the allocator
+	// hides inside the wrong bucket, which is exactly the "74% with zero sub-phase attribution"
+	// failure this instrumentation exists to prevent.
 	//
 	// The subtraction now covers ALL FOUR quantities, not just the clock: liveness allocates as well
 	// as costs time, and billing the splitter for liveness's allocations would put the allocator's

@@ -48,7 +48,7 @@
 //     (the König–Ore deficiency), and the tight set / witness `U` falls out of the same search.
 //
 // The screen alone would NOT be exact, and the difference matters: the forbidden sets are NOT
-// laminar. `forbidEntryParamCrossRegisters` forbids each parameter its SIBLINGS' incoming registers,
+// laminar. `ParamCrossForbid` forbids each parameter its SIBLINGS' incoming registers,
 // so with three parameters the masks are `{rdx,rax}`, `{rcx,rax}`, `{rcx,rdx}` — same size,
 // pairwise INCOMPARABLE, and jointly colourable. A cardinality-only test can call such a group an
 // overflow when it fits, and the spill it would then emit is one the program did not need. The
@@ -97,42 +97,80 @@ export function valueConfinedTo(liveness LivenessResult, valueId ValueId, pool R
 	return (allowedRegistersOf(liveness, valueId: valueId, pool: pool) and not witness) == 0
 end 'valueConfinedTo'
 
-// Per-value EFFECTIVE POOL SIZE — `popcount(pool ∖ forbidden(v))` — plus whether ANY value in the
-// function is constrained at all.
+// Per-value EFFECTIVE POOL SIZE — `popcount(pool ∖ forbidden(v))` — plus how many values in the
+// function are constrained at all.
 //
-// `sizes` is one dense column, filled once per pressure sweep, so maintaining the per-op census costs
-// an array read instead of a popcount.
+// `sizes` is one dense column, so maintaining the per-op census costs an array read instead of a
+// popcount.
 //
-// `anyConstrained` is what lets a call-free function skip the census ENTIRELY. With no forbidden mask
-// anywhere, every value's allowed set IS the pool: no register subset can be tight, Hall's condition
-// cannot fail against a proper subset, and the only overflow possible is the full-pool one the caller
-// already tests on its own. Maintaining a distribution that provably cannot violate anything is pure
-// cost — and it is not a rare case: a compiler's leaf functions are mostly call-free, and the census
-// is stepped over EVERY OPERAND OF EVERY OP.
+// It is MAINTAINED, not rebuilt. A value's effective pool is a function of its `forbidden` mask, and a
+// split changes that mask for exactly two kinds of value — the victim, whose live range it cut, and the
+// fresh ids it minted. Re-deriving the whole column per split was Θ(splits × values), which is the
+// quadratic the incremental splitter exists to remove; `refresh` re-derives ONE value, and keeps the
+// constrained tally exact as it goes.
 export type EffectivePools
 	export var sizes as RegCountColumn
-	export var anyConstrained as bool
+	// How many values are CONSTRAINED (an effective pool strictly smaller than the full one). Zero in a
+	// call-free, idiv-free function, which is what lets its pressure sweeps skip the census entirely.
+	var constrained as ColumnLength
 
-	// Fill a column the CALLER owns. The splitter runs one of these per split, and the value space it
-	// spans grows with every split, so allocating the column here made it Θ(splits × values) of
-	// allocation on top of the Θ(splits × values) of arithmetic. Every entry in [0, valueCount) is
-	// written below, so a longer previous life cannot leak a stale size (see `refillColumn`).
-	export static function fill(sizes RegCountColumn, liveness LivenessResult, pool RegMask) returns EffectivePools
+	export static function create() returns EffectivePools
+		return Self{sizes: RegCountColumn.create(), constrained: 0}
+	end 'create'
+
+	// Fill the whole column — ONCE per function, before its first split. Every entry in
+	// [0, valueCount) is written, so a longer previous life cannot leak a stale size (see
+	// `refillColumn`).
+	export function fillAll(liveness LivenessResult, pool RegMask)
 		let fullPoolSize = regMaskPopcount(pool)
-		sizes.resize(liveness.valueCount)
-		var anyConstrained = false
+		self.sizes.resize(liveness.valueCount)
+		self.constrained = 0
 
 		for v in 0 upto liveness.valueCount 'eachValue'
 			let size = regMaskPopcount(allowedRegistersOf(liveness, valueId: v, pool: pool))
-			try sizes.set(v, value: size) otherwise panic("EffectivePools.fill: sizes.set OOB for value {v}")
+			try self.sizes.set(v, value: size) otherwise panic("EffectivePools.fillAll: sizes.set OOB for value {v}")
 
-			if size < fullPoolSize 'constrained'
-				anyConstrained = true
-			end 'constrained'
+			if size < fullPoolSize 'constrainedValue'
+				self.constrained = self.constrained + 1
+			end 'constrainedValue'
 		end 'eachValue'
+	end 'fillAll'
 
-		return Self{sizes: sizes, anyConstrained: anyConstrained}
-	end 'fill'
+	// Extend to the ids a split MINTED. A fresh id forbids nothing until the dirty-region sweep says
+	// otherwise, so it arrives with the FULL pool and counts as unconstrained; `refresh` corrects both
+	// the moment its mask is known.
+	export function growTo(valueCount ValueId, pool RegMask)
+		growFilledColumn(self.sizes, count: valueCount, value: regMaskPopcount(pool))
+	end 'growTo'
+
+	// Re-derive ONE value's effective pool from its (just rebuilt) forbidden mask, keeping the
+	// constrained tally exact.
+	export function refresh(liveness LivenessResult, valueId ValueId, pool RegMask)
+		let fullPoolSize = regMaskPopcount(pool)
+		let previous = try self.sizes.get(valueId) otherwise panic("EffectivePools.refresh: sizes.get OOB for value {valueId}")
+		let size = regMaskPopcount(allowedRegistersOf(liveness, valueId: valueId, pool: pool))
+		try self.sizes.set(valueId, value: size) otherwise panic("EffectivePools.refresh: sizes.set OOB for value {valueId}")
+
+		if (previous < fullPoolSize) == (size < fullPoolSize) 'sameClass'
+			return
+		end 'sameClass'
+
+		if size < fullPoolSize 'becameConstrained'
+			self.constrained = self.constrained + 1
+		end 'becameConstrained' else 'becameFree'
+			self.constrained = self.constrained - 1
+		end 'becameFree'
+	end 'refresh'
+
+	// Is ANY value in the function constrained at all? With no forbidden mask anywhere, every value's
+	// allowed set IS the pool: no register subset can be tight, Hall's condition cannot fail against a
+	// proper subset, and the only overflow possible is the full-pool one the caller already tests on its
+	// own. Maintaining a distribution that provably cannot violate anything is pure cost — and it is not
+	// a rare case: a compiler's leaf functions are mostly call-free, and the census is stepped over
+	// EVERY OPERAND OF EVERY OP.
+	export function anyConstrained() returns bool
+		return self.constrained > 0
+	end 'anyConstrained'
 end 'EffectivePools'
 
 // ==========================================================================

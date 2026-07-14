@@ -23,7 +23,59 @@
 // `constFitsBinOpImmediate`, which is the ONE place that per-opcode rule lives. A
 // constant outside it keeps its register operand, which is always a correct fallback.
 
-typealias ConstValueMap = Map with (ValueId, ParsedInt)
+// Each `const` result value id -> the constant it materializes. TWO DENSE COLUMNS, not a `Map`, and
+// for exactly the reason `StdValueUseSet` states: a ValueId is already a dense, function-local index,
+// so hashing one buys a cache miss and nothing else. This pass looks one up at every operand of every
+// `binOp` and `cmp` in the program.
+//
+// A `ParsedInt` is SIGNED (`i64.min..i64.max`), so its column is NOT a `DenseColumn` — never widen one
+// into the other.
+typealias ParsedIntArray = Array with ParsedInt
+
+type ConstValueMap
+	var isConst as BoolArray
+	var constant as ParsedIntArray
+
+	static function create() returns ConstValueMap
+		return Self{isConst: BoolArray.create(), constant: ParsedIntArray.create()}
+	end 'create'
+
+	// Record that `valueId` is a `const` materializing `value`. Both columns are grown by DOUBLING —
+	// see `widenedValueColumnLength` for why growing them to fit would be quadratic.
+	function upsert(valueId ValueId, value ParsedInt)
+		if valueId >= self.isConst.count() 'widen'
+			let existing = self.isConst.count()
+			let widened = widenedValueColumnLength(existing, valueId: valueId)
+			self.isConst.resize(widened)
+			self.constant.resize(widened)
+			// `resize` zero-fills only where it has to ALLOCATE; clear what the growth added explicitly.
+			// Only the FLAG column needs it — `constant` is never read where the flag is false.
+			for i in existing upto widened 'clearAdded'
+				try self.isConst.set(i, value: false) otherwise panic("ConstValueMap.upsert: isConst.set OOB at {i}")
+			end 'clearAdded'
+		end 'widen'
+
+		try self.isConst.set(valueId, value: true) otherwise panic("ConstValueMap.upsert: isConst.set OOB at {valueId}")
+		try self.constant.set(valueId, value: value) otherwise panic("ConstValueMap.upsert: constant.set OOB at {valueId}")
+	end 'upsert'
+
+	function contains(valueId ValueId) returns bool
+		if valueId >= self.isConst.count() 'notAConst'
+			return false
+		end 'notAConst'
+		return try self.isConst.get(valueId) otherwise panic("ConstValueMap.contains: isConst.get OOB at {valueId}")
+	end 'contains'
+
+	// The constant `valueId` materializes. Panics for a value that is not a `const` — every caller has
+	// already established that with `contains`, so there is no sentinel to return and none to mistake
+	// for a real constant (0 is one).
+	function constantOf(valueId ValueId) returns ParsedInt
+		if not self.contains(valueId) 'notAConst'
+			panic("ConstValueMap.constantOf: value {valueId} is not a `const` — check `contains` first")
+		end 'notAConst'
+		return try self.constant.get(valueId) otherwise panic("ConstValueMap.constantOf: constant.get OOB at {valueId}")
+	end 'constantOf'
+end 'ConstValueMap'
 
 // The largest shift count an x64 64-bit shift distinguishes: it masks the count to its
 // low 6 bits, so every count is taken modulo 64. Named because it is the bound BOTH
@@ -160,15 +212,21 @@ end 'flipCmpPred'
 // True iff `id` names a `const` whose value fits the immediate field of `opcode`'s
 // lowered form. Not a `const` at all ⇒ false (nothing to fold).
 function foldableBinOpImm(constMap ConstValueMap, id ValueId, opcode StdBinOpcode) returns bool
-	let v = try constMap.get(id) otherwise return false
-	return constFitsBinOpImmediate(v, opcode: opcode)
+	if not constMap.contains(id) 'notConst'
+		return false
+	end 'notConst'
+
+	return constFitsBinOpImmediate(constMap.constantOf(id), opcode: opcode)
 end 'foldableBinOpImm'
 
 // The comparison twin of `foldableBinOpImm`: `cmpRegImm32` carries the immediate verbatim
 // in a signed 32-bit field, so the whole Imm32 domain folds regardless of the predicate.
 function foldableCmpImm(constMap ConstValueMap, id ValueId) returns bool
-	let v = try constMap.get(id) otherwise return false
-	return fitsImm32(v)
+	if not constMap.contains(id) 'notConst'
+		return false
+	end 'notConst'
+
+	return fitsImm32(constMap.constantOf(id))
 end 'foldableCmpImm'
 
 // THE per-opcode immediate rule — the one place it lives, so the fold and the x64
@@ -201,11 +259,11 @@ function fitsImm32(v ParsedInt) returns bool
 	return v >= i32.min and v <= i32.max
 end 'fitsImm32'
 
-// The constant of `id` as an Imm32 — caller must have checked `constFitsImmediate`,
-// so the cast cannot overflow.
+// The constant of `id` as an Imm32 — the caller has already established it fits, via
+// `foldableBinOpImm` / `foldableCmpImm`, so the cast cannot overflow. `constantOf` panics
+// on a value that is not a `const` at all, so there is no sentinel to mistake for one.
 function constAsImmediate(constMap ConstValueMap, id ValueId) returns Imm32
-	let v = try constMap.get(id) otherwise panic("constAsImmediate: id {id} is not a const")
-	return v as Imm32
+	return constMap.constantOf(id) as Imm32
 end 'constAsImmediate'
 
 // Drop every `const` op whose result no longer appears anywhere — the rhs consts the

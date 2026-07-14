@@ -356,12 +356,84 @@ end 'StdOp'
 export typealias StdOpArray = Array with StdOp
 
 // The set of value ids a function's ops READ. Every Std-tier pass that asks "does anything
-// still read this value?" — the const DCE, the dead-block-arg prune — reads it from
-// `collectStdOpUses` below rather than re-matching the union, so a new StdOp variant is a
-// compile error in ONE place instead of a silently-missed use at each of them. (This is the
-// Std tier's counterpart to `targetOpOperands`, which plays the same role for the Target
-// tier's liveness, splitter, colorer and checker.)
-export typealias StdValueUseSet = Set with ValueId
+// still read this value?" — the const DCE, the dead-block-arg prune, the trivial-block-arg
+// elimination — reads it from `collectStdOpUses` below rather than re-matching the union, so a
+// new StdOp variant is a compile error in ONE place instead of a silently-missed use at each of
+// them. (This is the Std tier's counterpart to `targetOpOperands`, which plays the same role for
+// the Target tier's liveness, splitter, colorer and checker.)
+//
+// A DENSE COLUMN, not a `Set`. A ValueId IS a dense, function-local index — so a hash set spends a
+// hash and a probe to look up something that is already an array subscript. That is the design's
+// "NO `Set`/`Map` and NO hashing in the hot path" rule (ARCHITECTURE.md §"Data representation")
+// broken in the one place it is easiest to break it, and on the corpus's single large function it
+// showed: `foldConstOperands` grew at exponent **1.29 in TIME while its ALLOCATIONS grew at 0.99** —
+// the signature of a structure whose asymptotics are fine and whose CONSTANT degrades, because every
+// probe into a table that doubles with the program is a cache miss that the previous rung did not
+// take. It was invisible while the register allocator's quadratic dwarfed it at 87% of the compile;
+// removing that made this the phase over its budget.
+//
+// It needs no size up front — the column grows to fit the highest id it is given — so it is a drop-in
+// for the `Set` it replaces, with the same three operations and no hashing at all.
+export type StdValueUseSet
+	var member as BoolArray
+
+	export static function create() returns StdValueUseSet
+		return Self{member: BoolArray.create()}
+	end 'create'
+
+	export function insert(valueId ValueId)
+		if valueId >= self.member.count() 'widen'
+			let existing = self.member.count()
+			let widened = widenedValueColumnLength(existing, valueId: valueId)
+			self.member.resize(widened)
+			// `resize` zero-fills only where it has to ALLOCATE, so a column with spare capacity hands the
+			// added entries whatever bytes last lived in them. Clear them explicitly.
+			for i in existing upto widened 'clearAdded'
+				try self.member.set(i, value: false) otherwise panic("StdValueUseSet.insert: member.set OOB at {i}")
+			end 'clearAdded'
+		end 'widen'
+
+		try self.member.set(valueId, value: true) otherwise panic("StdValueUseSet.insert: member.set OOB at {valueId}")
+	end 'insert'
+
+	export function contains(valueId ValueId) returns bool
+		if valueId >= self.member.count() 'neverInserted'
+			return false
+		end 'neverInserted'
+		return try self.member.get(valueId) otherwise panic("StdValueUseSet.contains: member.get OOB at {valueId}")
+	end 'contains'
+end 'StdValueUseSet'
+
+// How long a per-value column must become to hold `valueId` — the current length DOUBLED until it
+// does, never merely grown to fit.
+//
+// ⚠ `Array.resize` GROWS CAPACITY TO EXACTLY THE LENGTH ASKED FOR (it goes through `Array.reserve`),
+// unlike `Array.push`, which doubles (`ensureCapacity`). So a column grown ONE ENTRY AT A TIME —
+// which is precisely what inserting value ids in increasing order does — reallocates and COPIES ON
+// EVERY INSERT: Θ(values²) of allocator traffic for a column that ends up Θ(values) long. Measured, on
+// the first cut of this very type: +4 GB at scale rung 5, with the byte curve at exponent 2.0.
+//
+// Doubling makes it amortized O(1). The surplus length is harmless: the entries past the ids actually
+// inserted are `false`, which is what "not in the set" means anyway.
+//
+// (Every other dense column in the compiler is sized ONCE, from a value count already in hand —
+// `refillColumn`, `growFilledColumn` — so none of them meets this edge. These two do, because a Std
+// value space has no count to size from without a scan.)
+typealias ValueColumnLength = int(0 to u64.max)
+
+let ValueColumnMinLength = 8 as ValueColumnLength
+
+module function widenedValueColumnLength(existing ValueColumnLength, valueId ValueId) returns ValueColumnLength
+	var length = existing
+	if length < ValueColumnMinLength 'seed'
+		length = ValueColumnMinLength
+	end 'seed'
+
+	while length <= valueId 'double'
+		length = length + length
+	end 'double'
+	return length
+end 'widenedValueColumnLength'
 
 // Add the value ids `op` READS to `referenced` — its DEFS are not uses, and neither are the
 // branch-edge args (those live on the predecessor's `IrBlock`, not on the op). Exhaustive

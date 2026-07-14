@@ -1421,23 +1421,50 @@ The splitter's own growth exponent on the intra-function shape falls from **2.07
 > compiles **2.2× faster** with **2.8× fewer allocations**, and the phase now sits on **x1.96** with
 > everything else.
 
-**What is left, and it is now the whole of it: the driver still recomputes liveness from scratch
-after every split.** That is O(function × splits) — the intra-function shape above is still
-superlinear (`regalloc:liveness` grows **x3.69** per doubling of the program, against x1.99 for
-everything outside the allocator), and `liveness` is ~80% of allocation there. Splitting itself is no
-longer the cost.
+**That last exception is GONE: the driver is now incremental, and a split costs what it changed.**
+It used to rebuild liveness AND re-sweep the whole function for pressure after every split — O(function
+× splits), with `liveness` at ~80% of the allocation there.
 
-The `--per-type` pass names the objects behind it: `LiveIndexColumn` / `__ManagedMemory_LiveIndex` and
-`DenseColumn` / `__ManagedMemory_DenseInt` — the liveness result's own dense columns, reallocated from
-scratch on every recompute, and both growing faster than the program does. That is the shape of the
-gap, in the allocator's own vocabulary.
-Making it incremental is tractable *in principle* — a split changes the liveness of exactly one
-value plus the fresh reload ids it mints, and nothing else — but the CSR live sets are deliberately
-not editable in place, the per-op layout sequence numbers all shift when an op is inserted, and the
-peak would have to be maintained rather than re-swept. It is a redesign of the allocator's core with
-a silent-miscompile failure mode, not a refactor, and it is not worth doing until a real program
-demands it (the many-small-functions shape — which is what a real codebase, and this compiler's own
-source, looks like — is already linear).
+**The ladder doubles, so the ratio between rungs IS the growth: 2× is linear, 4× is quadratic.**
+`regalloc:liveness` grew **×3.69 per doubling** — visibly on its way to quadratic — against ×1.99 for
+everything outside the allocator. It is now **×2.0**, and so is `splitting`. The allocator grows at the
+rate the program does.
+
+Three enabling changes made it possible, and each landed on its own with the byte-exact IR goldens
+unmoved: an op's sequence number became **block-relative** (so inserting one op renumbers only its own
+block), the live sets became **per-block editable lists** instead of CSR (so removing one value from one
+block is O(1), not O(function)), and the `UseIndex` became an **editable record arena** with intrusive
+per-value and per-block threads (so a split rebuilds one value's use list instead of the function's).
+
+What the driver does now is compute a **dirty region** per split — the victim's whole pre-split live
+range, its def and use blocks, and every block an op was spliced into — and re-derive only that. Each of
+the four facts it rests on is exact rather than hopeful:
+
+* **liveness** is a per-value backward walk from a value's uses to its def, so a value the split did not
+  touch walks the same blocks and marks the same sets. Only the victim (whose range shrinks) and the
+  fresh reload ids (short new ranges) move.
+* **`forbidden`** is a monotone OR-accumulation, and the ops a split inserts (`storeSlotReg`,
+  `loadRegSlot`, a constant materialization) all carry `implicitDefs == 0` and no physical def operand —
+  so re-sweeping a dirty block re-ORs bits the values there already carry. The one mask that can SHRINK
+  is the victim's, and that one is zeroed and rebuilt.
+* **sequence numbers** are block-relative, so an insert moves only its own block's, and the `UseIndex`'s
+  per-block thread finds exactly those records.
+* the per-block **dead-phi count** and **register demand** are functions of that block's own ops and live
+  sets.
+
+The global peak is found by a **tournament** over the per-block peaks (a segment tree whose combine is
+`peakOutranks` with the right child as candidate, so it reproduces the full sweep's tie-breaking exactly).
+A per-split fold over every block would merely have moved the quadratic: the block count grows with the
+function.
+
+The decisions are UNTOUCHED — same peak, same victim, same order, same code — and the byte-exact
+specs-shv2 IR goldens do not move, which is how that is checked. The failure mode of a wrong invalidation
+set is a value that silently loses a clobber bit, hence a caller-saved register across a call: a
+miscompile no test is obliged to catch. So the splitter carries a **verify mode**
+(`SplitLiveRanges.VerifyIncrementalSplit`) which, after every incremental update, also computes liveness
+and pressure from scratch and PANICS on any difference — live sets, forbidden masks, dead-phi counts,
+block demands, def-point pressures, the whole use index, and the chosen peak. It is off by default (it
+makes every split O(function) again); flip it to `true` and run the suite plus the scale corpus.
 
 ### The per-split re-analysis: what it is allowed to ALLOCATE
 
