@@ -2442,6 +2442,7 @@ public static class MonomorphizationPass {
       case MaxonEnumNameOp en: { var c = new MaxonEnumNameOp(mapValue(en.EnumValue), en.EnumTypeName); valueMap[en.Result.Id] = c.Result; return c; }
       case MaxonEnumStringRawValueOp esr: { var c = new MaxonEnumStringRawValueOp(mapValue(esr.EnumValue), esr.EnumTypeName, esr.IsChar); valueMap[esr.Result.Id] = c.Result; return c; }
       case MaxonEnumStructRawValueOp esrv: { var c = new MaxonEnumStructRawValueOp(mapValue(esrv.EnumValue), esrv.EnumTypeName, esrv.StructTypeName); valueMap[esrv.Result.Id] = c.Result; return c; }
+      case MaxonEnumStructRawFieldOp esrf: { var c = new MaxonEnumStructRawFieldOp(mapValue(esrf.EnumValue), esrf.EnumTypeName, esrf.StructTypeName, esrf.FieldName, esrf.ResultKind, esrf.ResultTypeName); valueMap[esrf.Result.Id] = c.Result; return c; }
       case MaxonEnumFunctionRawValueOp efrv: { var c = new MaxonEnumFunctionRawValueOp(mapValue(efrv.EnumValue), efrv.EnumTypeName, efrv.Signature); valueMap[efrv.Result.Id] = c.Result; return c; }
       case MaxonErrorFlagToEnumOp ef: { var c = new MaxonErrorFlagToEnumOp(mapValue(ef.ErrorFlag), ef.EnumTypeName, ef.BackingKind, ef.HasAssociatedValues); valueMap[ef.Result.Id] = c.Result; return c; }
       case MaxonGlobalLoadOp gl: { var c = new MaxonGlobalLoadOp(gl.GlobalName, gl.ValueKind); valueMap[gl.Result.Id] = c.Result; return c; }

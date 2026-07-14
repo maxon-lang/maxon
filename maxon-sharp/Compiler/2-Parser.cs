@@ -7410,6 +7410,56 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     ParseAssignment();
   }
 
+  /// <summary>
+  /// If the `.rawValue` just parsed on a struct-backed enum is immediately followed by
+  /// `.field` naming a LEAF field of the backing struct, consume that field and emit the
+  /// fused MaxonEnumStructRawFieldOp — one ordinal-to-constant select chain, no struct.
+  ///
+  /// The backing struct is a per-variant compile-time constant, so materializing it costs a
+  /// heap allocation plus a select chain for EVERY field when the reader wanted one. Fusing
+  /// here, where the pair is in front of us, is what keeps a later pass from having to
+  /// recognize the shape again.
+  ///
+  /// Returns false — leaving the token stream untouched, so the caller emits the struct — when
+  /// there is no following field, or the field is a nested STRUCT (which genuinely needs the
+  /// struct built to hold it).
+  /// </summary>
+  private bool TryEmitFusedStructRawField(
+      MaxonValue enumValue, string enumTypeName, string structTypeName, out MaxonValue? result) {
+    result = null;
+
+    if (!Check(TokenType.Dot) || PeekNext().Type != TokenType.Identifier) return false;
+    if (!_typeRegistry.TryGetValue(structTypeName, out var backing) || backing is not IrStructType structType)
+      return false;
+
+    var field = structType.GetField(PeekNext().Value);
+    if (field == null) return false;
+    if (_currentTypeName != structType.Name && !IsFieldVisibleHere(structType, field)) return false;
+
+    // A nested struct field is not a leaf: its value is a POINTER to another allocation, which
+    // only exists once the parent struct has been built. Fall back and let it be built.
+    if (field.Type is IrStructType) return false;
+
+    // Every leaf of a struct raw value is stored as an integer constant (StructRawValue holds a
+    // long per field), so the select chain hands back an i64 and the only question is what that
+    // i64 IS: a bool's 0/1, an enum's ordinal, or the integer itself. Any other kind would need
+    // a representation this has not established, so it is NOT fused — the struct path below
+    // still handles it correctly, just at the old cost.
+    var fieldKind = field.Type.ToValueKind();
+    if (fieldKind is not (MaxonValueKind.Bool or MaxonValueKind.Integer or MaxonValueKind.Enum))
+      return false;
+
+    Advance();                            // '.'
+    var fieldToken = Expect(TokenType.Identifier);
+
+    var rawFieldOp = new MaxonEnumStructRawFieldOp(
+      enumValue, enumTypeName, structTypeName, fieldToken.Value,
+      fieldKind, GetFieldStructName(field.Type));
+    _currentBlock!.AddOp(rawFieldOp);
+    result = rawFieldOp.Result;
+    return true;
+  }
+
   /// Validates field exists and is accessible, emits MaxonFieldAccessOp, returns updated current value and struct type name.
   private (MaxonValue value, string structTypeName) EmitIntermediateFieldAccess(
       MaxonValue currentValue, string currentStructTypeName, Token fieldToken) {
@@ -15811,6 +15861,13 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
             continue;
           }
           if (enumType.BackingType is IrStructBackingType sbt) {
+            // `e.rawValue.field` is fused into a single ordinal-to-constant select chain
+            // (see MaxonEnumStructRawFieldOp). Building the struct first would heap-allocate
+            // it and materialize EVERY field's chain to serve a read of one.
+            if (TryEmitFusedStructRawField(enumVal, userTypeName, sbt.StructTypeName, out var fusedField)) {
+              result = new ExprResult.Direct(fusedField!);
+              continue;
+            }
             var structRawOp = new MaxonEnumStructRawValueOp(enumVal, userTypeName, sbt.StructTypeName);
             _currentBlock!.AddOp(structRawOp);
             EmitLiteralTempAssign(structRawOp.Result);

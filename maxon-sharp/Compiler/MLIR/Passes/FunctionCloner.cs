@@ -433,6 +433,7 @@ internal class FunctionCloner {
       case MaxonEnumNameOp en: { var c = new MaxonEnumNameOp(MapValue(en.EnumValue), SubName(en.EnumTypeName)); RegisterResult(en.Result, c.Result); return c; }
       case MaxonEnumStringRawValueOp esr: { var c = new MaxonEnumStringRawValueOp(MapValue(esr.EnumValue), SubName(esr.EnumTypeName), esr.IsChar); RegisterResult(esr.Result, c.Result); return c; }
       case MaxonEnumStructRawValueOp esrv: { var c = new MaxonEnumStructRawValueOp(MapValue(esrv.EnumValue), SubName(esrv.EnumTypeName), esrv.StructTypeName); RegisterResult(esrv.Result, c.Result); return c; }
+      case MaxonEnumStructRawFieldOp esrf: { var c = new MaxonEnumStructRawFieldOp(MapValue(esrf.EnumValue), SubName(esrf.EnumTypeName), esrf.StructTypeName, esrf.FieldName, esrf.ResultKind, esrf.ResultTypeName == null ? null : SubName(esrf.ResultTypeName)); RegisterResult(esrf.Result, c.Result); return c; }
       case MaxonEnumFunctionRawValueOp efrv: { var c = new MaxonEnumFunctionRawValueOp(MapValue(efrv.EnumValue), SubName(efrv.EnumTypeName), efrv.Signature); RegisterResult(efrv.Result, c.Result); return c; }
       case MaxonErrorFlagToEnumOp ef: { var c = new MaxonErrorFlagToEnumOp(MapValue(ef.ErrorFlag), SubName(ef.EnumTypeName), ef.BackingKind, ef.HasAssociatedValues); RegisterResult(ef.Result, c.Result); return c; }
       case MaxonEnumConstructOp ec: { var c = new MaxonEnumConstructOp(SubName(ec.EnumTypeName), ec.CaseName, ec.TagValue, [.. ec.Args.Select(MapValue)]); RegisterResult(ec.Result, c.Result); return c; }

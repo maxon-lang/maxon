@@ -555,31 +555,58 @@ public static partial class MaxonToStandardConversion {
         EmitStructFieldStore(block, nestedHeapPtr, parentVarName, field.Offset, IrType.I64, varTypes);
         EmitIncrefValue(block, nestedHeapPtr, scopeName: scopeName);
       } else {
-        // Leaf field: emit select chain mapping ordinal -> field value
-        var defaultVal = new StdConstI64Op(0);
-        block.AddOp(defaultVal);
-        StdI64 currentFieldVal = defaultVal.Result;
-
-        foreach (var enumCase in enumType.Cases) {
-          if (enumCase.RawValue is not StructRawValue srv) continue;
-          long fieldValue = srv.Fields.First(f => f.FieldName == qualifiedName).Value;
-
-          var ordConst = new StdConstI64Op(enumCase.Ordinal);
-          block.AddOp(ordConst);
-          var cmpOp = new StdCmpI64Op("eq", ordinalValue, ordConst.Result);
-          block.AddOp(cmpOp);
-
-          var fieldConst = new StdConstI64Op(fieldValue);
-          block.AddOp(fieldConst);
-
-          var selectOp = new StdSelectI64Op(cmpOp.Result, fieldConst.Result, currentFieldVal);
-          block.AddOp(selectOp);
-          currentFieldVal = selectOp.Result;
-        }
-
+        var currentFieldVal = EmitStructRawValueFieldSelect(block, enumType, ordinalValue, qualifiedName);
         EmitStructFieldStore(block, currentFieldVal, parentVarName, field.Offset, field.Type, varTypes);
       }
     }
+  }
+
+  /// <summary>
+  /// The ordinal an enum operand carries at runtime. An associated-value enum is a heap
+  /// pointer whose tag sits at offset 0; every other enum IS its ordinal already.
+  /// </summary>
+  private static StdI64 EmitEnumOrdinalOperand(
+      IrBlock<StandardOp> block, StdValue enumOperand, Dictionary<string, string> varTypes) {
+    if (enumOperand is not StdHeapPtr hp) return (StdI64)enumOperand;
+
+    var heapPtr = (StdI64)EmitLoad(block, hp.VarName!, varTypes);
+    var tagLoad = new StdLoadIndirectOp(heapPtr, 0, IrType.I64);
+    block.AddOp(tagLoad);
+    return (StdI64)tagLoad.Result;
+  }
+
+  /// <summary>
+  /// The select chain for ONE leaf field of a struct-backed enum's raw value: ordinal → that
+  /// field's per-variant constant. This is the whole of what reading such a field costs, and
+  /// it allocates nothing — the raw values are compile-time constants.
+  ///
+  /// Shared by the struct-materializing lowering (which runs it once per field) and the fused
+  /// `e.rawValue.field` lowering (which runs it once, for the field actually read).
+  /// </summary>
+  private static StdI64 EmitStructRawValueFieldSelect(
+      IrBlock<StandardOp> block, IrEnumType enumType, StdI64 ordinalValue, string qualifiedFieldName) {
+    var defaultVal = new StdConstI64Op(0);
+    block.AddOp(defaultVal);
+    StdI64 currentFieldVal = defaultVal.Result;
+
+    foreach (var enumCase in enumType.Cases) {
+      if (enumCase.RawValue is not StructRawValue srv) continue;
+      long fieldValue = srv.Fields.First(f => f.FieldName == qualifiedFieldName).Value;
+
+      var ordConst = new StdConstI64Op(enumCase.Ordinal);
+      block.AddOp(ordConst);
+      var cmpOp = new StdCmpI64Op("eq", ordinalValue, ordConst.Result);
+      block.AddOp(cmpOp);
+
+      var fieldConst = new StdConstI64Op(fieldValue);
+      block.AddOp(fieldConst);
+
+      var selectOp = new StdSelectI64Op(cmpOp.Result, fieldConst.Result, currentFieldVal);
+      block.AddOp(selectOp);
+      currentFieldVal = selectOp.Result;
+    }
+
+    return currentFieldVal;
   }
 
   private static StdValue EmitLoad(IrBlock<StandardOp> block, string varName, Dictionary<string, string> varTypes) {

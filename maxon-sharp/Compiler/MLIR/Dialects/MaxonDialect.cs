@@ -153,6 +153,7 @@ public enum MaxonOpKind {
   EnumRawValue,
   EnumStringRawValue,
   EnumStructRawValue,
+  EnumStructRawField,
   EnumFunctionRawValue,
   EnumName,
   EnumOrdinal,
@@ -1063,6 +1064,41 @@ public sealed class MaxonEnumStructRawValueOp(MaxonValue enumValue, string enumT
   public string EnumTypeName { get; } = enumTypeName;
   public string StructTypeName { get; } = structTypeName;
   public MaxonStruct Result { get; } = new MaxonStruct(IrContext.Current.NextId(), structTypeName);
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  public override IReadOnlyList<string> PrintableOperands => [EnumValue.ToString()];
+}
+
+/// <summary>
+/// `e.rawValue.field` on a struct-backed enum, read as ONE scalar.
+///
+/// A struct-backed enum's raw value is a per-variant COMPILE-TIME CONSTANT — the struct
+/// literal written on each case — so reading a field of it is a pure ordinal-to-constant
+/// lookup. Materializing the struct to get there costs a heap allocation plus a select
+/// chain PER FIELD (ordinal → that field's constant), and the caller wanted one field: on
+/// shv2's `TargetOp`, whose backing struct has six fields across ~40 variants, a single
+/// `op.rawValue.implicitDefs` paid an `mm_alloc` and roughly 960 ops to produce one
+/// integer. It was the second-largest allocating type in that whole compiler.
+///
+/// So the pair is emitted FUSED, at the point the parser sees it, rather than built and
+/// then pattern-matched apart later. Only a LEAF field fuses; a nested-struct field still
+/// needs the struct materialized and falls back to MaxonEnumStructRawValueOp.
+/// </summary>
+public sealed class MaxonEnumStructRawFieldOp(
+    MaxonValue enumValue, string enumTypeName, string structTypeName, string fieldName,
+    MaxonValueKind resultKind, string? resultTypeName = null) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.EnumStructRawField;
+  public override string Mnemonic => $"maxon.enum_struct_rawfield @{EnumTypeName}.{FieldName}";
+  public MaxonValue EnumValue { get; } = enumValue;
+  public string EnumTypeName { get; } = enumTypeName;
+  public string StructTypeName { get; } = structTypeName;
+  public string FieldName { get; } = fieldName;
+  public MaxonValueKind ResultKind { get; } = resultKind;
+  public string? ResultTypeName { get; } = resultTypeName;
+  public MaxonValue Result { get; } = resultKind switch {
+    MaxonValueKind.Struct => new MaxonStruct(IrContext.Current.NextId(), resultTypeName!),
+    MaxonValueKind.Enum => new MaxonEnum(IrContext.Current.NextId(), resultTypeName!),
+    _ => resultKind.CreateValue()
+  };
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyList<string> PrintableOperands => [EnumValue.ToString()];
 }

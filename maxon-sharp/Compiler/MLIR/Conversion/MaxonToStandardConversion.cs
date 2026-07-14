@@ -779,19 +779,7 @@ public static partial class MaxonToStandardConversion {
             case MaxonEnumStructRawValueOp structRawOp: {
               var enumType = (IrEnumType)module.TypeDefs[structRawOp.EnumTypeName];
               var structType = (IrStructType)module.TypeDefs[structRawOp.StructTypeName];
-              var stdValue = valueMap[structRawOp.EnumValue];
-
-              // Extract ordinal from the enum value
-              StdI64 ordinalValue;
-              if (stdValue is StdHeapPtr rawHp) {
-                // Associated-value enum: load tag from heap offset 0
-                var heapPtr = (StdI64)EmitLoad(newBlock, rawHp.VarName!, varTypes);
-                var tagLoad = new StdLoadIndirectOp(heapPtr, 0, IrType.I64);
-                newBlock.AddOp(tagLoad);
-                ordinalValue = (StdI64)tagLoad.Result;
-              } else {
-                ordinalValue = (StdI64)stdValue;
-              }
+              var ordinalValue = EmitEnumOrdinalOperand(newBlock, valueMap[structRawOp.EnumValue], varTypes);
 
               // Allocate struct on the heap
               var tempName = temps.CreateTemp("enum_rawval", structRawOp.Result.Id, structRawOp.StructTypeName, OwnershipFlags.None);
@@ -803,6 +791,27 @@ public static partial class MaxonToStandardConversion {
                 tempName, "", temps, varTypes, func.Name, module.TypeDefs);
 
               valueMap[structRawOp.Result] = new StdHeapPtr(structRawOp.Result.Id, structRawOp.StructTypeName, tempName);
+              break;
+            }
+            case MaxonEnumStructRawFieldOp rawFieldOp: {
+              // `e.rawValue.field` — the field's ordinal→constant select chain and nothing else.
+              // No allocation: the raw values are compile-time constants, and the other fields'
+              // chains are not emitted at all because nobody asked for them.
+              var enumType = (IrEnumType)module.TypeDefs[rawFieldOp.EnumTypeName];
+              var ordinalValue = EmitEnumOrdinalOperand(newBlock, valueMap[rawFieldOp.EnumValue], varTypes);
+              var selected = EmitStructRawValueFieldSelect(newBlock, enumType, ordinalValue, rawFieldOp.FieldName);
+
+              // The chain yields the field's constant in an i64. A bool leaf is the 0/1 in that
+              // register and an enum leaf is its ordinal — the same SSA value, differently typed.
+              // The parser only fuses these three kinds (TryEmitFusedStructRawField); anything
+              // else reaching here means the two disagree about what a leaf can be.
+              valueMap[rawFieldOp.Result] = rawFieldOp.ResultKind switch {
+                MaxonValueKind.Bool => new StdBool(selected.Id),
+                MaxonValueKind.Integer or MaxonValueKind.Enum => selected,
+                _ => throw new InvalidOperationException(
+                  $"enum_struct_rawfield: field '{rawFieldOp.FieldName}' of '{rawFieldOp.StructTypeName}' "
+                  + $"has kind {rawFieldOp.ResultKind}, which the parser should not have fused")
+              };
               break;
             }
             case MaxonEnumOrdinalOp ordinalOp: {
