@@ -200,6 +200,17 @@ public static class DeadFunctionElimination {
     _ => null
   };
 
+  /// The variable a var-READ op reads, or null when the op does not read a variable.
+  /// A var has four read flavours — scalar, struct, enum and function-typed — and they are
+  /// equally reads. Naming only one of them is how a live var comes to look dead.
+  private static string? ReadVarName(MaxonOp op) => op switch {
+    MaxonVarRefOp v => v.VarName,
+    MaxonStructVarRefOp v => v.VarName,
+    MaxonEnumVarRefOp v => v.VarName,
+    MaxonFunctionVarRefOp v => v.VarName,
+    _ => null
+  };
+
   /// Remove dead stores and their producing ops from a block.
   /// First removes global_store ops for dead globals, then iteratively
   /// removes ops whose results are unused by any remaining op.
@@ -230,42 +241,45 @@ public static class DeadFunctionElimination {
         }
       }
 
-      // Collect var names actually read by `MaxonVarRefOp` ops. An assign
-      // whose var is never referenced (other than for scope-end cleanup) is
-      // dead and can be dropped — its rhs result becomes unused, which lets
-      // the call/literal it produced get DCE'd on the next iteration. This
-      // catches the dead-top-level-var pattern: `__call_tmp_N` synthetic
-      // temps created by `let/var x = T.create()` initializers whose
-      // backing globalStore was eliminated as dead.
+      // Collect var names actually read. An assign whose var is never referenced (other
+      // than for scope-end cleanup) is dead and can be dropped — its rhs result becomes
+      // unused, which lets the call/literal it produced get DCE'd on the next iteration.
+      // This catches the dead-top-level-var pattern: `__call_tmp_N` synthetic temps
+      // created by `let/var x = T.create()` initializers whose backing globalStore was
+      // eliminated as dead.
+      //
+      // ALL FOUR var-ref flavours count. Reading only `MaxonVarRefOp` was the same hole
+      // `Operands` closes for SSA operands, in the other currency: a var read solely
+      // through its struct/enum/function flavour looked unread, so the assign was dropped
+      // and the value was deleted out from under a live reader.
       var referencedVarNames = new HashSet<string>();
       foreach (var op in block.Operations) {
-        if (op is MaxonVarRefOp vr)
-          referencedVarNames.Add(vr.VarName);
+        if (ReadVarName(op) is string varName)
+          referencedVarNames.Add(varName);
       }
 
-      // Collect value IDs used by surviving ops
+      // Collect value IDs used by surviving ops.
+      //
+      // Every op reports what it reads via `MaxonOp.Operands` — the ONE place that fact
+      // lives. This scan used to hand-roll the list, naming five op kinds out of the ~80 that
+      // carry operands, and everything it forgot was invisible: `maxon.enum_construct`'s
+      // payload args were never counted, so the literal in `var g = [Op.add(1)]` looked dead,
+      // got deleted, and __module_init was left lowering an op whose operand nothing defined.
+      // Walking `op.Operands` means a new op kind cannot reintroduce that hole.
       var usedIds = new HashSet<int>(liveAssignValueIds);
       foreach (var op in block.Operations) {
-        if (op is MaxonGlobalStoreOp gs)
-          usedIds.Add(gs.Value.Id);
-        if (op is MaxonStructLiteralOp sl) {
-          foreach (var (_, val) in sl.FieldValues)
-            usedIds.Add(val.Id);
-        }
-        if (op is MaxonReturnOp ret && ret.Value != null)
-          usedIds.Add(ret.Value.Id);
-        if (op is MaxonCallOp call) {
-          foreach (var arg in call.Args)
-            usedIds.Add(arg.Id);
-        }
-        // Pin the assign's rhs only when the var is actually referenced by
-        // a downstream read. Otherwise the assign is dead and its rhs is
-        // available for removal — critical for the dead-init cleanup
-        // cascade. Array-element assigns are gated separately above.
-        if (op is MaxonAssignOp assign && !assign.VarName.StartsWith("__arr_")) {
-          if (referencedVarNames.Contains(assign.VarName))
+        // An assign is the ONE op whose operand is deliberately not pinned: its rhs stays
+        // live only while some `var_ref` still reads the var, which is what lets a dead
+        // initializer's whole producer chain dissolve. Array-element assigns are gated by
+        // `liveArrayTags` above. Both are decided there; every other op pins what it reads.
+        if (op is MaxonAssignOp assign) {
+          if (!assign.VarName.StartsWith("__arr_") && referencedVarNames.Contains(assign.VarName))
             usedIds.Add(assign.Value.Id);
+          continue;
         }
+
+        foreach (var operand in op.Operands)
+          usedIds.Add(operand.Id);
       }
 
       // Remove ops that define a value nobody uses

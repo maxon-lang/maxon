@@ -219,7 +219,26 @@ public abstract class MaxonOp : IPrintableOp {
   public abstract MaxonOpKind Kind { get; }
   public abstract string Mnemonic { get; }
   public virtual IReadOnlyList<string> PrintableResults => [];
-  public virtual IReadOnlyList<string> PrintableOperands => [];
+
+  /// The values this op READS. THE single source of truth for what an op consumes:
+  /// `PrintableOperands` renders it, and DeadFunctionElimination's liveness scan walks it.
+  ///
+  /// ABSTRACT ON PURPOSE — an op with no operands must say `=> []` out loud. This is the
+  /// Maxon tier's counterpart to `StandardOp.ReadValues`, which is abstract for the same
+  /// reason, and the difference between them is what this bug was: a virtual `=> []` default
+  /// means "reads nothing", so an op author who simply forgets gets silence instead of a
+  /// compile error. An op whose reads are invisible to liveness is not an optimizer bug, it
+  /// is a MISCOMPILE — the producer looks dead, gets deleted, and the op is left pointing at
+  /// a value nothing defines. `maxon.enum_construct` was exactly that: a union case built in
+  /// a global initializer (`var g = [Op.add(1)]`) lost the literal `1`, and `__module_init`
+  /// failed to lower.
+  public abstract IReadOnlyList<MaxonValue> Operands { get; }
+
+  /// Defaults to rendering `Operands`. Override ONLY to change how operands are DISPLAYED
+  /// (e.g. an op that already names its operand inside its `Mnemonic`) — never to change
+  /// which values the op is understood to read. That fact has one home, above.
+  public virtual IReadOnlyList<string> PrintableOperands => [.. Operands.Select(o => o.ToString())];
+
   public virtual IReadOnlyDictionary<string, IrAttribute> PrintableAttributes => new Dictionary<string, IrAttribute>();
 
 }
@@ -269,6 +288,8 @@ public sealed class MaxonLiteralOp : MaxonOp {
     BoolValue = value;
     Result = new MaxonBool(IrContext.Current.NextId());
   }
+  /// Reads nothing — a leaf op (a literal, a parameter, a var reference, or a jump).
+  public override IReadOnlyList<MaxonValue> Operands => [];
 }
 
 public sealed class MaxonAssignOp(string varName, MaxonValue value, bool isDeclaration, bool isMutable, MaxonValueKind valueKind) : MaxonOp {
@@ -282,7 +303,7 @@ public sealed class MaxonAssignOp(string varName, MaxonValue value, bool isDecla
   public OwnershipFlags? OwnerFlags { get; set; }
   /// Allocator tests need deterministic heap traces; @heap opts out of stack promotion for that variable.
   public bool ForceHeap { get; set; }
-  public override IReadOnlyList<string> PrintableOperands => [Value.ToString()];
+  public override IReadOnlyList<MaxonValue> Operands => [Value];
   public override IReadOnlyDictionary<string, IrAttribute> PrintableAttributes {
     get {
       var attrs = new Dictionary<string, IrAttribute> {
@@ -320,6 +341,8 @@ public sealed class MaxonParamOp(int index, string name, MaxonValueKind kind) : 
       return attrs;
     }
   }
+  /// Reads nothing — a leaf op (a literal, a parameter, a var reference, or a jump).
+  public override IReadOnlyList<MaxonValue> Operands => [];
 }
 
 // Struct parameter op: represents a struct being received as a function parameter.
@@ -333,6 +356,8 @@ public sealed class MaxonStructParamOp(int index, string name, string structType
   public string StructTypeName { get; set; } = structTypeName;
   public MaxonStruct Result { get; } = new MaxonStruct(IrContext.Current.NextId(), structTypeName);
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  /// Reads nothing — a leaf op (a literal, a parameter, a var reference, or a jump).
+  public override IReadOnlyList<MaxonValue> Operands => [];
 }
 
 // Function parameter op: represents a function pointer being received as a function parameter.
@@ -344,6 +369,8 @@ public sealed class MaxonFunctionParamOp(int index, string name, IrFunctionType 
   public IrFunctionType FunctionType { get; } = functionType;
   public MaxonFunctionPtr Result { get; } = new MaxonFunctionPtr(IrContext.Current.NextId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  /// Reads nothing — a leaf op (a literal, a parameter, a var reference, or a jump).
+  public override IReadOnlyList<MaxonValue> Operands => [];
 }
 
 // Function reference op: gets a pointer to a named function
@@ -354,6 +381,8 @@ public sealed class MaxonFunctionRefOp(string functionName, IrFunctionType funct
   public IrFunctionType FunctionType { get; } = functionType;
   public MaxonFunctionPtr Result { get; } = new MaxonFunctionPtr(IrContext.Current.NextId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  /// Reads nothing — a leaf op (a literal, a parameter, a var reference, or a jump).
+  public override IReadOnlyList<MaxonValue> Operands => [];
 }
 
 // Creates a closure with captured values from the enclosing scope
@@ -370,7 +399,7 @@ public sealed class MaxonClosureCreateOp(string functionName, IrFunctionType fun
   public List<string?> CapturedStructTypes { get; } = capturedStructTypes;
   public MaxonFunctionPtr Result { get; } = new MaxonFunctionPtr(IrContext.Current.NextId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
-  public override IReadOnlyList<string> PrintableOperands => [.. CapturedValues.Select(v => v.ToString())];
+  public override IReadOnlyList<MaxonValue> Operands => CapturedValues;
 }
 
 // Inside a capturing closure: loads a captured value from the environment pointer
@@ -387,6 +416,8 @@ public sealed class MaxonClosureEnvLoadOp(int index, string name, MaxonValueKind
     _ => kind.CreateValue()
   };
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  /// Reads nothing — a leaf op (a literal, a parameter, a var reference, or a jump).
+  public override IReadOnlyList<MaxonValue> Operands => [];
 }
 
 // Function var ref: loads a function pointer from a variable in a different block
@@ -397,6 +428,8 @@ public sealed class MaxonFunctionVarRefOp(string varName, IrFunctionType functio
   public IrFunctionType FunctionType { get; } = functionType;
   public MaxonFunctionPtr Result { get; } = new MaxonFunctionPtr(IrContext.Current.NextId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  /// Reads nothing — a leaf op (a literal, a parameter, a var reference, or a jump).
+  public override IReadOnlyList<MaxonValue> Operands => [];
 }
 
 // Indirect call op: calls a function through a function pointer
@@ -410,7 +443,7 @@ public sealed class MaxonIndirectCallOp : MaxonOp {
   public MaxonValueKind? ResultKind { get; }
   public string? ResultStructTypeName { get; }
   public override IReadOnlyList<string> PrintableResults => Result != null ? [Result.ToString()] : [];
-  public override IReadOnlyList<string> PrintableOperands => [.. Args.Select(a => a.ToString()).Prepend(Callee.ToString())];
+  public override IReadOnlyList<MaxonValue> Operands => [Callee, .. Args];
 
   public MaxonIndirectCallOp(MaxonValue callee, IrFunctionType calleeType, List<MaxonValue> args, MaxonValueKind? resultKind = null, string? resultStructTypeName = null) {
     Callee = callee;
@@ -446,6 +479,8 @@ public sealed class MaxonVarRefOp(string varName, MaxonValueKind kind) : MaxonOp
       return attrs;
     }
   }
+  /// Reads nothing — a leaf op (a literal, a parameter, a var reference, or a jump).
+  public override IReadOnlyList<MaxonValue> Operands => [];
 }
 
 // Struct var ref: loads a struct from a variable in a different block
@@ -456,6 +491,8 @@ public sealed class MaxonStructVarRefOp(string varName, string structTypeName) :
   public string StructTypeName { get; set; } = structTypeName;
   public MaxonStruct Result { get; } = new MaxonStruct(IrContext.Current.NextId(), structTypeName);
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  /// Reads nothing — a leaf op (a literal, a parameter, a var reference, or a jump).
+  public override IReadOnlyList<MaxonValue> Operands => [];
 }
 
 public sealed class MaxonBinOp(MaxonBinOperator op, MaxonValue lhs, MaxonValue rhs, MaxonValueKind operandKind,
@@ -472,7 +509,7 @@ public sealed class MaxonBinOp(MaxonBinOperator op, MaxonValue lhs, MaxonValue r
       ? new MaxonBool(IrContext.Current.NextId())
       : operandKind.CreateValue();
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
-  public override IReadOnlyList<string> PrintableOperands => [Lhs.ToString(), Rhs.ToString()];
+  public override IReadOnlyList<MaxonValue> Operands => [Lhs, Rhs];
   public override IReadOnlyDictionary<string, IrAttribute> PrintableAttributes {
     get {
       var attrs = new Dictionary<string, IrAttribute> {
@@ -500,7 +537,7 @@ public sealed class MaxonRefEqOp(MaxonValue lhs, MaxonValue rhs, bool negate) : 
   public bool Negate { get; } = negate;
   public MaxonBool Result { get; } = new MaxonBool(IrContext.Current.NextId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
-  public override IReadOnlyList<string> PrintableOperands => [Lhs.ToString(), Rhs.ToString()];
+  public override IReadOnlyList<MaxonValue> Operands => [Lhs, Rhs];
 }
 
 public class MaxonCallOp : MaxonOp {
@@ -557,7 +594,7 @@ public class MaxonCallOp : MaxonOp {
   }
 
   public override IReadOnlyList<string> PrintableResults => Result != null ? [Result.ToString()] : [];
-  public override IReadOnlyList<string> PrintableOperands => [.. Args.Select(a => a.ToString())];
+  public override IReadOnlyList<MaxonValue> Operands => Args;
 }
 
 // Calls a throwing function and captures both the result and error flag.
@@ -617,8 +654,7 @@ public sealed class MaxonIteratorAdvanceOp(string iterableTypeName, string itera
   public MaxonInteger ErrorFlag { get; } = new MaxonInteger(IrContext.Current.NextId());
 
   public override IReadOnlyList<string> PrintableResults => [ErrorFlag.ToString()];
-  public override IReadOnlyList<string> PrintableOperands =>
-    [.. Args.Select(a => a.ToString())];
+  public override IReadOnlyList<MaxonValue> Operands => Args;
 }
 
 /// <summary>
@@ -652,8 +688,7 @@ public sealed class MaxonIteratorCurrentOp(string iterableTypeName, string itera
 
   public override IReadOnlyList<string> PrintableResults =>
     Result != null ? [Result.ToString()] : [];
-  public override IReadOnlyList<string> PrintableOperands =>
-    [.. Args.Select(a => a.ToString())];
+  public override IReadOnlyList<MaxonValue> Operands => Args;
 }
 
 public sealed class MaxonTruncOp(MaxonValue input) : MaxonOp {
@@ -662,7 +697,7 @@ public sealed class MaxonTruncOp(MaxonValue input) : MaxonOp {
   public MaxonValue Input { get; } = input;
   public MaxonInteger Result { get; } = new MaxonInteger(IrContext.Current.NextId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
-  public override IReadOnlyList<string> PrintableOperands => [Input.ToString()];
+  public override IReadOnlyList<MaxonValue> Operands => [Input];
 }
 
 public sealed class MaxonIntToFloatOp(MaxonValue input) : MaxonOp {
@@ -671,7 +706,7 @@ public sealed class MaxonIntToFloatOp(MaxonValue input) : MaxonOp {
   public MaxonValue Input { get; } = input;
   public MaxonFloat Result { get; } = new MaxonFloat(IrContext.Current.NextId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
-  public override IReadOnlyList<string> PrintableOperands => [Input.ToString()];
+  public override IReadOnlyList<MaxonValue> Operands => [Input];
 }
 
 public sealed class MaxonCastOp(MaxonValue input, MaxonValueKind targetKind,
@@ -684,7 +719,7 @@ public sealed class MaxonCastOp(MaxonValue input, MaxonValueKind targetKind,
   public bool SourceIsUnsigned => SourceOptimalType?.IsUnsigned ?? false;
   public MaxonValue Result { get; } = targetKind.CreateValue();
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
-  public override IReadOnlyList<string> PrintableOperands => [Input.ToString()];
+  public override IReadOnlyList<MaxonValue> Operands => [Input];
   public override IReadOnlyDictionary<string, IrAttribute> PrintableAttributes =>
     new Dictionary<string, IrAttribute> { ["target"] = new TypeAttr(TargetKind.ToIrType()) };
 }
@@ -697,6 +732,8 @@ public sealed class MaxonSizeofOp(string typeName) : MaxonOp {
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyDictionary<string, IrAttribute> PrintableAttributes =>
     new Dictionary<string, IrAttribute> { ["type"] = new StringAttr(TypeName) };
+  /// Reads nothing — a leaf op (a literal, a parameter, a var reference, or a jump).
+  public override IReadOnlyList<MaxonValue> Operands => [];
 }
 
 public sealed class MaxonAbsOp(MaxonValue input) : MaxonOp {
@@ -705,7 +742,7 @@ public sealed class MaxonAbsOp(MaxonValue input) : MaxonOp {
   public MaxonValue Input { get; } = input;
   public MaxonFloat Result { get; } = new MaxonFloat(IrContext.Current.NextId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
-  public override IReadOnlyList<string> PrintableOperands => [Input.ToString()];
+  public override IReadOnlyList<MaxonValue> Operands => [Input];
 }
 
 public sealed class MaxonSqrtOp(MaxonValue input) : MaxonOp {
@@ -714,7 +751,7 @@ public sealed class MaxonSqrtOp(MaxonValue input) : MaxonOp {
   public MaxonValue Input { get; } = input;
   public MaxonFloat Result { get; } = new MaxonFloat(IrContext.Current.NextId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
-  public override IReadOnlyList<string> PrintableOperands => [Input.ToString()];
+  public override IReadOnlyList<MaxonValue> Operands => [Input];
 }
 
 public sealed class MaxonFloorOp(MaxonValue input) : MaxonOp {
@@ -723,7 +760,7 @@ public sealed class MaxonFloorOp(MaxonValue input) : MaxonOp {
   public MaxonValue Input { get; } = input;
   public MaxonFloat Result { get; } = new MaxonFloat(IrContext.Current.NextId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
-  public override IReadOnlyList<string> PrintableOperands => [Input.ToString()];
+  public override IReadOnlyList<MaxonValue> Operands => [Input];
 }
 
 public sealed class MaxonCeilOp(MaxonValue input) : MaxonOp {
@@ -732,7 +769,7 @@ public sealed class MaxonCeilOp(MaxonValue input) : MaxonOp {
   public MaxonValue Input { get; } = input;
   public MaxonFloat Result { get; } = new MaxonFloat(IrContext.Current.NextId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
-  public override IReadOnlyList<string> PrintableOperands => [Input.ToString()];
+  public override IReadOnlyList<MaxonValue> Operands => [Input];
 }
 
 public sealed class MaxonRoundOp(MaxonValue input) : MaxonOp {
@@ -741,7 +778,7 @@ public sealed class MaxonRoundOp(MaxonValue input) : MaxonOp {
   public MaxonValue Input { get; } = input;
   public MaxonFloat Result { get; } = new MaxonFloat(IrContext.Current.NextId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
-  public override IReadOnlyList<string> PrintableOperands => [Input.ToString()];
+  public override IReadOnlyList<MaxonValue> Operands => [Input];
 }
 
 public sealed class MaxonBitcastF64ToI64Op(MaxonValue input) : MaxonOp {
@@ -750,7 +787,7 @@ public sealed class MaxonBitcastF64ToI64Op(MaxonValue input) : MaxonOp {
   public MaxonValue Input { get; } = input;
   public MaxonInteger Result { get; } = new MaxonInteger(IrContext.Current.NextId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
-  public override IReadOnlyList<string> PrintableOperands => [Input.ToString()];
+  public override IReadOnlyList<MaxonValue> Operands => [Input];
 }
 
 public sealed class MaxonMinOp(MaxonValue lhs, MaxonValue rhs) : MaxonOp {
@@ -760,7 +797,7 @@ public sealed class MaxonMinOp(MaxonValue lhs, MaxonValue rhs) : MaxonOp {
   public MaxonValue Rhs { get; } = rhs;
   public MaxonFloat Result { get; } = new MaxonFloat(IrContext.Current.NextId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
-  public override IReadOnlyList<string> PrintableOperands => [Lhs.ToString(), Rhs.ToString()];
+  public override IReadOnlyList<MaxonValue> Operands => [Lhs, Rhs];
 }
 
 public sealed class MaxonMaxOp(MaxonValue lhs, MaxonValue rhs) : MaxonOp {
@@ -770,7 +807,7 @@ public sealed class MaxonMaxOp(MaxonValue lhs, MaxonValue rhs) : MaxonOp {
   public MaxonValue Rhs { get; } = rhs;
   public MaxonFloat Result { get; } = new MaxonFloat(IrContext.Current.NextId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
-  public override IReadOnlyList<string> PrintableOperands => [Lhs.ToString(), Rhs.ToString()];
+  public override IReadOnlyList<MaxonValue> Operands => [Lhs, Rhs];
 }
 
 public sealed class MaxonCondBrOp(MaxonValue condition, string thenBlock, string elseBlock) : MaxonOp {
@@ -779,12 +816,18 @@ public sealed class MaxonCondBrOp(MaxonValue condition, string thenBlock, string
   public MaxonValue Condition { get; } = condition;
   public string ThenBlock { get; } = thenBlock;
   public string ElseBlock { get; } = elseBlock;
+  public override IReadOnlyList<MaxonValue> Operands => [Condition];
+  // The mnemonic already names the condition, so rendering it again as an operand would
+  // print it twice. The READ is still declared above, which is what liveness consumes.
+  public override IReadOnlyList<string> PrintableOperands => [];
 }
 
 public sealed class MaxonBrOp(string target) : MaxonOp {
   public override MaxonOpKind Kind => MaxonOpKind.Br;
   public override string Mnemonic => $"maxon.br {Target}";
   public string Target { get; } = target;
+  /// Reads nothing — a leaf op (a literal, a parameter, a var reference, or a jump).
+  public override IReadOnlyList<MaxonValue> Operands => [];
 }
 
 /// <summary>
@@ -807,6 +850,8 @@ public sealed class MaxonScopeEndOp(IReadOnlyList<string> varsToClean, HashSet<s
   /// without needing to infer it from string prefixes.
   /// </summary>
   public IReadOnlyDictionary<string, (OwnershipFlags Flags, string? StructTypeName)>? VarMetadata { get; init; }
+  /// Reads nothing — a leaf op (a literal, a parameter, a var reference, or a jump).
+  public override IReadOnlyList<MaxonValue> Operands => [];
 }
 
 public sealed class MaxonReturnOp(MaxonValue? value = null, bool isErrorPropagation = false) : MaxonOp {
@@ -814,8 +859,7 @@ public sealed class MaxonReturnOp(MaxonValue? value = null, bool isErrorPropagat
   public override string Mnemonic => "maxon.return";
   public MaxonValue? Value { get; } = value;
   public bool IsErrorPropagation { get; } = isErrorPropagation;
-  public override IReadOnlyList<string> PrintableOperands =>
-    Value != null ? [Value.ToString()] : [];
+  public override IReadOnlyList<MaxonValue> Operands => Value != null ? [Value] : [];
 }
 
 // ============================================================================
@@ -828,7 +872,7 @@ public sealed class MaxonThrowOp(MaxonValue errorValue, string errorTypeName) : 
   public override string Mnemonic => $"maxon.throw @{ErrorTypeName}";
   public MaxonValue ErrorValue { get; } = errorValue;
   public string ErrorTypeName { get; } = errorTypeName;
-  public override IReadOnlyList<string> PrintableOperands => [ErrorValue.ToString()];
+  public override IReadOnlyList<MaxonValue> Operands => [ErrorValue];
 }
 
 // ============================================================================
@@ -843,6 +887,10 @@ public sealed class MaxonStructLiteralOp(string typeName, List<(string FieldName
   public List<(string FieldName, MaxonValue Value)> FieldValues { get; } = fieldValues;
   public MaxonStruct Result { get; } = new MaxonStruct(IrContext.Current.NextId(), typeName);
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  public override IReadOnlyList<MaxonValue> Operands => [.. FieldValues.Select(f => f.Value)];
+  // The field values are rendered as part of the struct's attributes, not as operands, so
+  // the operand line stays empty. The READS are declared above, which is what liveness uses.
+  public override IReadOnlyList<string> PrintableOperands => [];
   // For array literals: tag prefix and count of sequential element variables
   public string? ArrayLiteralTag { get; set; }
   public int ArrayLiteralCount { get; set; }
@@ -869,7 +917,7 @@ public sealed class MaxonFieldAccessOp(MaxonValue structValue, string typeName, 
     _ => resultKind.CreateValue()
   };
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
-  public override IReadOnlyList<string> PrintableOperands => [StructValue.ToString()];
+  public override IReadOnlyList<MaxonValue> Operands => [StructValue];
 }
 
 // Assigns to a field: p.x = 30
@@ -880,7 +928,7 @@ public sealed class MaxonFieldAssignOp(MaxonValue structValue, string typeName, 
   public string TypeName { get; set; } = typeName;
   public string FieldName { get; } = fieldName;
   public MaxonValue NewValue { get; } = newValue;
-  public override IReadOnlyList<string> PrintableOperands => [StructValue.ToString(), NewValue.ToString()];
+  public override IReadOnlyList<MaxonValue> Operands => [StructValue, NewValue];
 }
 
 // ============================================================================
@@ -907,6 +955,8 @@ public sealed class MaxonGlobalLoadOp(string globalName, MaxonValueKind kind, st
       ["global"] = new StringAttr(GlobalName),
       ["type"] = new TypeAttr(ValueKind is MaxonValueKind.Enum or MaxonValueKind.Struct ? IrType.I64 : ValueKind.ToIrType())
     };
+  /// Reads nothing — a leaf op (a literal, a parameter, a var reference, or a jump).
+  public override IReadOnlyList<MaxonValue> Operands => [];
 }
 
 // Creates an enum value for a specific case
@@ -936,6 +986,8 @@ public sealed class MaxonEnumLiteralOp : MaxonOp {
     FloatValue = floatValue;
     Result = new MaxonEnum(IrContext.Current.NextId(), enumTypeName);
   }
+  /// Reads nothing — a leaf op (a literal, a parameter, a var reference, or a jump).
+  public override IReadOnlyList<MaxonValue> Operands => [];
 }
 
 // Constructs an associated-value enum case: Container.value(42)
@@ -949,7 +1001,7 @@ public sealed class MaxonEnumConstructOp(string enumTypeName, string caseName, l
   public List<MaxonValue> Args { get; } = args;
   public MaxonEnum Result { get; } = new MaxonEnum(IrContext.Current.NextId(), enumTypeName);
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
-  public override IReadOnlyList<string> PrintableOperands => [.. Args.Select(a => a.ToString())];
+  public override IReadOnlyList<MaxonValue> Operands => Args;
   // Source location for trace output (e.g. "main.maxon:12")
   public string? SourceLocation { get; set; }
 }
@@ -962,7 +1014,7 @@ public sealed class MaxonEnumTagOp(MaxonValue enumValue, string enumTypeName) : 
   public string EnumTypeName { get; } = enumTypeName;
   public MaxonInteger Result { get; } = new MaxonInteger(IrContext.Current.NextId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
-  public override IReadOnlyList<string> PrintableOperands => [EnumValue.ToString()];
+  public override IReadOnlyList<MaxonValue> Operands => [EnumValue];
 }
 
 // Extracts a payload value at a given index from an associated-value enum
@@ -978,7 +1030,7 @@ public sealed class MaxonEnumPayloadOp(MaxonValue enumValue, string enumTypeName
     ? new MaxonStruct(IrContext.Current.NextId(), resultStructTypeName!)
     : resultKind.CreateValue();
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
-  public override IReadOnlyList<string> PrintableOperands => [EnumValue.ToString()];
+  public override IReadOnlyList<MaxonValue> Operands => [EnumValue];
 }
 
 // Enum parameter op: represents an enum being received as a function parameter
@@ -991,6 +1043,8 @@ public sealed class MaxonEnumParamOp(int index, string name, string enumTypeName
   public MaxonValueKind BackingKind { get; } = backingKind;
   public MaxonEnum Result { get; } = new MaxonEnum(IrContext.Current.NextId(), enumTypeName);
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  /// Reads nothing — a leaf op (a literal, a parameter, a var reference, or a jump).
+  public override IReadOnlyList<MaxonValue> Operands => [];
 }
 
 // Writes a value back to a specific payload slot in an associated-value enum's heap block
@@ -1001,7 +1055,7 @@ public sealed class MaxonEnumPayloadAssignOp(string enumVarName, string enumType
   public string EnumTypeName { get; } = enumTypeName;
   public int PayloadIndex { get; } = payloadIndex;
   public MaxonValue NewValue { get; } = newValue;
-  public override IReadOnlyList<string> PrintableOperands => [NewValue.ToString()];
+  public override IReadOnlyList<MaxonValue> Operands => [NewValue];
 }
 
 // Enum var ref: loads an enum from a variable in a different block
@@ -1013,6 +1067,8 @@ public sealed class MaxonEnumVarRefOp(string varName, string enumTypeName, Maxon
   public MaxonValueKind BackingKind { get; } = backingKind;
   public MaxonEnum Result { get; } = new MaxonEnum(IrContext.Current.NextId(), enumTypeName);
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  /// Reads nothing — a leaf op (a literal, a parameter, a var reference, or a jump).
+  public override IReadOnlyList<MaxonValue> Operands => [];
 }
 
 // Converts an error flag (ordinal+1) back to a typed enum value (ordinal)
@@ -1027,7 +1083,7 @@ public sealed class MaxonErrorFlagToEnumOp(MaxonValue errorFlag, string enumType
   public bool HasAssociatedValues { get; } = hasAssociatedValues;
   public MaxonEnum Result { get; } = new MaxonEnum(IrContext.Current.NextId(), enumTypeName);
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
-  public override IReadOnlyList<string> PrintableOperands => [ErrorFlag.ToString()];
+  public override IReadOnlyList<MaxonValue> Operands => [ErrorFlag];
 }
 
 // Accesses .rawValue on an enum value
@@ -1041,7 +1097,7 @@ public sealed class MaxonEnumRawValueOp(MaxonValue enumValue, string enumTypeNam
     ? new MaxonFloat(IrContext.Current.NextId())
     : new MaxonInteger(IrContext.Current.NextId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
-  public override IReadOnlyList<string> PrintableOperands => [EnumValue.ToString()];
+  public override IReadOnlyList<MaxonValue> Operands => [EnumValue];
 }
 
 // Accesses .rawValue on a string or char-backed enum, returning String or Character
@@ -1053,7 +1109,7 @@ public sealed class MaxonEnumStringRawValueOp(MaxonValue enumValue, string enumT
   public bool IsChar { get; } = isChar;
   public MaxonStruct Result { get; } = new MaxonStruct(IrContext.Current.NextId(), isChar ? "Character" : "String");
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
-  public override IReadOnlyList<string> PrintableOperands => [EnumValue.ToString()];
+  public override IReadOnlyList<MaxonValue> Operands => [EnumValue];
 }
 
 // Accesses .rawValue on a struct-backed enum, returning the backing struct type
@@ -1065,7 +1121,7 @@ public sealed class MaxonEnumStructRawValueOp(MaxonValue enumValue, string enumT
   public string StructTypeName { get; } = structTypeName;
   public MaxonStruct Result { get; } = new MaxonStruct(IrContext.Current.NextId(), structTypeName);
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
-  public override IReadOnlyList<string> PrintableOperands => [EnumValue.ToString()];
+  public override IReadOnlyList<MaxonValue> Operands => [EnumValue];
 }
 
 /// <summary>
@@ -1100,7 +1156,7 @@ public sealed class MaxonEnumStructRawFieldOp(
     _ => resultKind.CreateValue()
   };
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
-  public override IReadOnlyList<string> PrintableOperands => [EnumValue.ToString()];
+  public override IReadOnlyList<MaxonValue> Operands => [EnumValue];
 }
 
 // Function-backed enum .rawValue: lowers to a select chain mapping the case
@@ -1114,7 +1170,7 @@ public sealed class MaxonEnumFunctionRawValueOp(MaxonValue enumValue, string enu
   public IrFunctionType Signature { get; } = signature;
   public MaxonFunctionPtr Result { get; } = new MaxonFunctionPtr(IrContext.Current.NextId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
-  public override IReadOnlyList<string> PrintableOperands => [EnumValue.ToString()];
+  public override IReadOnlyList<MaxonValue> Operands => [EnumValue];
 }
 
 // Accesses .name on an enum value, returning the case name as a String
@@ -1125,7 +1181,7 @@ public sealed class MaxonEnumNameOp(MaxonValue enumValue, string enumTypeName) :
   public string EnumTypeName { get; } = enumTypeName;
   public MaxonStruct Result { get; } = new MaxonStruct(IrContext.Current.NextId(), "String");
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
-  public override IReadOnlyList<string> PrintableOperands => [EnumValue.ToString()];
+  public override IReadOnlyList<MaxonValue> Operands => [EnumValue];
 }
 
 // Accesses .ordinal on an enum value, returning the zero-based declaration position as i64
@@ -1136,7 +1192,7 @@ public sealed class MaxonEnumOrdinalOp(MaxonValue enumValue, string enumTypeName
   public string EnumTypeName { get; } = enumTypeName;
   public MaxonInteger Result { get; } = new MaxonInteger(IrContext.Current.NextId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
-  public override IReadOnlyList<string> PrintableOperands => [EnumValue.ToString()];
+  public override IReadOnlyList<MaxonValue> Operands => [EnumValue];
 }
 
 public sealed class MaxonGlobalStoreOp(string globalName, MaxonValue value, MaxonValueKind kind) : MaxonOp {
@@ -1145,7 +1201,7 @@ public sealed class MaxonGlobalStoreOp(string globalName, MaxonValue value, Maxo
   public string GlobalName { get; } = globalName;
   public MaxonValue Value { get; } = value;
   public MaxonValueKind ValueKind { get; } = kind;
-  public override IReadOnlyList<string> PrintableOperands => [Value.ToString()];
+  public override IReadOnlyList<MaxonValue> Operands => [Value];
   public override IReadOnlyDictionary<string, IrAttribute> PrintableAttributes =>
     new Dictionary<string, IrAttribute> {
       ["global"] = new StringAttr(GlobalName),
@@ -1266,7 +1322,7 @@ public sealed class MaxonManagedMemGetOp(MaxonValue managedStruct, MaxonValue in
   public MaxonValue Result { get; } = resultKind is MaxonValueKind.Struct or MaxonValueKind.Enum or MaxonValueKind.TypeParameter
     ? new MaxonInteger(IrContext.Current.NextId()) : resultKind.CreateValue();
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
-  public override IReadOnlyList<string> PrintableOperands => [ManagedStruct.ToString(), Index.ToString()];
+  public override IReadOnlyList<MaxonValue> Operands => [ManagedStruct, Index];
 }
 
 // Set element at index in managed buffer: managed.set(index, value)
@@ -1284,7 +1340,7 @@ public sealed class MaxonManagedMemSetOp(MaxonValue managedStruct, MaxonValue in
   public string? TypeParamName { get; init; }
   /// Optional precise element storage type for narrow ranged primitives — see MaxonManagedMemGetOp.ElementStorageType.
   public IrType? ElementStorageType { get; init; }
-  public override IReadOnlyList<string> PrintableOperands => [ManagedStruct.ToString(), Index.ToString(), Value.ToString()];
+  public override IReadOnlyList<MaxonValue> Operands => [ManagedStruct, Index, Value];
 }
 
 // Create a new heap-allocated managed memory: __ManagedMemory.create(count, elemSize)
@@ -1297,7 +1353,7 @@ public sealed class MaxonManagedMemCreateOp(MaxonValue count, int elementSize) :
   public bool IsBitPacked { get; set; }
   public MaxonStruct Result { get; } = new MaxonStruct(IrContext.Current.NextId(), "__ManagedMemory");
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
-  public override IReadOnlyList<string> PrintableOperands => [Count.ToString()];
+  public override IReadOnlyList<MaxonValue> Operands => [Count];
 }
 
 // Grow managed memory to new capacity: managed.grow(newCap)
@@ -1309,7 +1365,7 @@ public sealed class MaxonManagedMemGrowOp(MaxonValue managedStruct, MaxonValue n
   public MaxonValue NewCapacity { get; } = newCapacity;
   /// When true, elements are bit-packed bools (byte size = (cap+7)/8 instead of cap*elemSize).
   public bool IsBitPacked { get; set; }
-  public override IReadOnlyList<string> PrintableOperands => [ManagedStruct.ToString(), NewCapacity.ToString()];
+  public override IReadOnlyList<MaxonValue> Operands => [ManagedStruct, NewCapacity];
 }
 
 // Set length of managed memory with capacity validation.
@@ -1324,7 +1380,7 @@ public sealed class MaxonManagedMemSetLengthOp(MaxonValue managedStruct, MaxonVa
   public MaxonValue NewLength { get; } = newLength;
   /// True when elements are refcounted heap pointers (struct / string / union / array).
   public bool IsStructElement { get; init; }
-  public override IReadOnlyList<string> PrintableOperands => [ManagedStruct.ToString(), NewLength.ToString()];
+  public override IReadOnlyList<MaxonValue> Operands => [ManagedStruct, NewLength];
 }
 
 // Clear all elements from managed memory, decrementing struct element refcounts
@@ -1337,7 +1393,7 @@ public sealed class MaxonManagedMemClearOp(MaxonValue managedStruct) : MaxonOp {
   public string? TypeParamName { get; init; }
   /// When true, elements are bit-packed bools.
   public bool IsBitPacked { get; set; }
-  public override IReadOnlyList<string> PrintableOperands => [ManagedStruct.ToString()];
+  public override IReadOnlyList<MaxonValue> Operands => [ManagedStruct];
 }
 
 // Shift elements right/left in managed buffer
@@ -1351,7 +1407,7 @@ public sealed class MaxonManagedMemShiftOp(MaxonValue managedStruct, MaxonValue 
   public bool ShiftRight { get; } = shiftRight;
   /// When true, elements are bit-packed bools (uses bit-by-bit loop instead of memcpy).
   public bool IsBitPacked { get; set; }
-  public override IReadOnlyList<string> PrintableOperands => [ManagedStruct.ToString(), Index.ToString(), Count.ToString()];
+  public override IReadOnlyList<MaxonValue> Operands => [ManagedStruct, Index, Count];
 }
 
 // Remove element at index: load element (ownership transfer), shift left, shrink length.
@@ -1370,7 +1426,7 @@ public sealed class MaxonManagedMemRemoveOp(MaxonValue managedStruct, MaxonValue
   public MaxonValue Result { get; } = resultKind is MaxonValueKind.Struct or MaxonValueKind.Enum or MaxonValueKind.TypeParameter
     ? new MaxonInteger(IrContext.Current.NextId()) : resultKind.CreateValue();
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
-  public override IReadOnlyList<string> PrintableOperands => [ManagedStruct.ToString(), Index.ToString()];
+  public override IReadOnlyList<MaxonValue> Operands => [ManagedStruct, Index];
 }
 
 // Get byte at index in managed buffer: managed.byteAt(index)
@@ -1381,7 +1437,7 @@ public sealed class MaxonManagedMemByteGetOp(MaxonValue managedStruct, MaxonValu
   public MaxonValue Index { get; } = index;
   public MaxonByte Result { get; } = new MaxonByte(IrContext.Current.NextId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
-  public override IReadOnlyList<string> PrintableOperands => [ManagedStruct.ToString(), Index.ToString()];
+  public override IReadOnlyList<MaxonValue> Operands => [ManagedStruct, Index];
 }
 
 // Set byte at index in managed buffer: managed.setByte(index, value)
@@ -1391,7 +1447,7 @@ public sealed class MaxonManagedMemByteSetOp(MaxonValue managedStruct, MaxonValu
   public MaxonValue ManagedStruct { get; } = managedStruct;
   public MaxonValue Index { get; } = index;
   public MaxonValue Value { get; } = value;
-  public override IReadOnlyList<string> PrintableOperands => [ManagedStruct.ToString(), Index.ToString(), Value.ToString()];
+  public override IReadOnlyList<MaxonValue> Operands => [ManagedStruct, Index, Value];
 }
 
 // Panics if end > capacity (i.e. end+1 reads/writes past the buffer). Used by socket/file
@@ -1402,7 +1458,7 @@ public sealed class MaxonByteRangePanicOp(MaxonValue end, MaxonValue capacity, s
   public MaxonValue End { get; } = end;
   public MaxonValue Capacity { get; } = capacity;
   public string PanicLabel { get; } = panicLabel;
-  public override IReadOnlyList<string> PrintableOperands => [End.ToString(), Capacity.ToString()];
+  public override IReadOnlyList<MaxonValue> Operands => [End, Capacity];
 }
 
 // Loads a single byte (zero-extended to i64) from a named .ucd section blob at the given byte offset
@@ -1413,7 +1469,7 @@ public sealed class MaxonUcdByteLoadOp(string ucddataLabel, MaxonValue byteOffse
   public MaxonValue ByteOffset { get; } = byteOffset;
   public MaxonInteger Result { get; } = new MaxonInteger(IrContext.Current.NextId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
-  public override IReadOnlyList<string> PrintableOperands => [ByteOffset.ToString()];
+  public override IReadOnlyList<MaxonValue> Operands => [ByteOffset];
 }
 
 // Loads a 64-bit integer from a named .ucd section blob at position index*8
@@ -1424,7 +1480,7 @@ public sealed class MaxonUcdI64LoadOp(string ucddataLabel, MaxonValue index) : M
   public MaxonValue Index { get; } = index;
   public MaxonInteger Result { get; } = new MaxonInteger(IrContext.Current.NextId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
-  public override IReadOnlyList<string> PrintableOperands => [Index.ToString()];
+  public override IReadOnlyList<MaxonValue> Operands => [Index];
 }
 
 // String literal: stores UTF-8 bytes in rdata and creates a String struct
@@ -1435,6 +1491,8 @@ public sealed class MaxonStringLiteralOp(string value, string stringTypeName) : 
   public string StringTypeName { get; } = stringTypeName;
   public MaxonStruct Result { get; } = new MaxonStruct(IrContext.Current.NextId(), stringTypeName);
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  /// Reads nothing — a leaf op (a literal, a parameter, a var reference, or a jump).
+  public override IReadOnlyList<MaxonValue> Operands => [];
 }
 
 // Byte string literal: stores UTF-8 bytes in rdata and creates a ByteArray (Array with Byte)
@@ -1445,6 +1503,8 @@ public sealed class MaxonByteStringLiteralOp(string value, string arrayTypeName)
   public string ArrayTypeName { get; } = arrayTypeName;
   public MaxonStruct Result { get; } = new MaxonStruct(IrContext.Current.NextId(), arrayTypeName);
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  /// Reads nothing — a leaf op (a literal, a parameter, a var reference, or a jump).
+  public override IReadOnlyList<MaxonValue> Operands => [];
 }
 
 // Character literal: stores UTF-8 bytes in rdata and creates a Character struct
@@ -1455,6 +1515,8 @@ public sealed class MaxonCharLiteralOp(string value, string charTypeName) : Maxo
   public string CharTypeName { get; } = charTypeName;
   public MaxonStruct Result { get; } = new MaxonStruct(IrContext.Current.NextId(), charTypeName);
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  /// Reads nothing — a leaf op (a literal, a parameter, a var reference, or a jump).
+  public override IReadOnlyList<MaxonValue> Operands => [];
 }
 
 
@@ -1467,7 +1529,7 @@ public sealed class MaxonManagedMemAppendOp(MaxonValue managedStruct, MaxonValue
   public bool IsStructElement { get; init; }
   public string? TypeParamName { get; init; }
   public bool IsBitPacked { get; set; }
-  public override IReadOnlyList<string> PrintableOperands => [ManagedStruct.ToString(), Other.ToString()];
+  public override IReadOnlyList<MaxonValue> Operands => [ManagedStruct, Other];
 }
 
 // String interpolation: concatenates literal parts and expression values into a new String
@@ -1478,6 +1540,11 @@ public sealed class MaxonStringInterpOp(List<(bool IsLiteral, string? LiteralVal
   public string StringTypeName { get; } = stringTypeName;
   public MaxonStruct Result { get; } = new MaxonStruct(IrContext.Current.NextId(), stringTypeName);
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  // Only the interpolated EXPRESSION parts are reads; the literal chunks carry no value.
+  public override IReadOnlyList<MaxonValue> Operands =>
+    [.. Parts.Where(p => p.ExprValue != null).Select(p => p.ExprValue!)];
+  // Rendered inside the op's attributes rather than as an operand line — see StructLiteral.
+  public override IReadOnlyList<string> PrintableOperands => [];
 }
 
 // Create a slice of a __ManagedMemory buffer (start/end element positions)
@@ -1492,7 +1559,7 @@ public sealed class MaxonManagedMemSliceOp(MaxonValue managed, MaxonValue start,
   /// When true, elements are bit-packed bools.
   public bool IsBitPacked { get; set; }
   public MaxonStruct Result { get; } = new MaxonStruct(IrContext.Current.NextId(), "__ManagedMemory");
-  public override IReadOnlyList<string> PrintableOperands => [Managed.ToString(), Start.ToString(), End.ToString()];
+  public override IReadOnlyList<MaxonValue> Operands => [Managed, Start, End];
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
 }
 
@@ -1508,7 +1575,7 @@ public sealed class MaxonManagedMemCreateCursorOp(MaxonValue managedStruct) : Ma
   public MaxonValue ManagedStruct { get; } = managedStruct;
   public string? TypeParamName { get; init; }
   public MaxonStruct Result { get; } = new MaxonStruct(IrContext.Current.NextId(), "__ManagedMemoryCursor");
-  public override IReadOnlyList<string> PrintableOperands => [ManagedStruct.ToString()];
+  public override IReadOnlyList<MaxonValue> Operands => [ManagedStruct];
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
 }
 
@@ -1526,7 +1593,7 @@ public sealed class MaxonCursorCurrentOp(MaxonValue cursorStruct, MaxonValueKind
   public MaxonValue Result { get; } = resultKind is MaxonValueKind.Struct or MaxonValueKind.Enum or MaxonValueKind.TypeParameter
     ? new MaxonInteger(IrContext.Current.NextId()) : resultKind.CreateValue();
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
-  public override IReadOnlyList<string> PrintableOperands => [CursorStruct.ToString()];
+  public override IReadOnlyList<MaxonValue> Operands => [CursorStruct];
 }
 
 // Read the current position index from the cursor.
@@ -1536,7 +1603,7 @@ public sealed class MaxonCursorIndexOp(MaxonValue cursorStruct) : MaxonOp {
   public MaxonValue CursorStruct { get; } = cursorStruct;
   public MaxonInteger Result { get; } = new MaxonInteger(IrContext.Current.NextId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
-  public override IReadOnlyList<string> PrintableOperands => [CursorStruct.ToString()];
+  public override IReadOnlyList<MaxonValue> Operands => [CursorStruct];
 }
 
 // Peek at element ahead positions from current. Throws CursorError.exhausted if out of bounds.
@@ -1552,7 +1619,7 @@ public sealed class MaxonCursorPeekOp(MaxonValue cursorStruct, MaxonValue ahead,
   public MaxonValue Result { get; } = resultKind is MaxonValueKind.Struct or MaxonValueKind.Enum or MaxonValueKind.TypeParameter
     ? new MaxonInteger(IrContext.Current.NextId()) : resultKind.CreateValue();
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
-  public override IReadOnlyList<string> PrintableOperands => [CursorStruct.ToString(), Ahead.ToString()];
+  public override IReadOnlyList<MaxonValue> Operands => [CursorStruct, Ahead];
 }
 
 // Convert a C string pointer to __ManagedMemory
@@ -1561,7 +1628,7 @@ public sealed class MaxonCStringToManagedOp(MaxonValue cstrPtr) : MaxonOp {
   public override string Mnemonic => "maxon.cstring_to_managed";
   public MaxonValue CstrPtr { get; } = cstrPtr;
   public MaxonStruct Result { get; } = new MaxonStruct(IrContext.Current.NextId(), "__ManagedMemory");
-  public override IReadOnlyList<string> PrintableOperands => [CstrPtr.ToString()];
+  public override IReadOnlyList<MaxonValue> Operands => [CstrPtr];
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
 }
 
@@ -1571,7 +1638,7 @@ public sealed class MaxonManagedToCStringOp(MaxonValue managed) : MaxonOp {
   public override string Mnemonic => "maxon.managed_to_cstring";
   public MaxonValue Managed { get; } = managed;
   public MaxonCString Result { get; } = new MaxonCString(IrContext.Current.NextId());
-  public override IReadOnlyList<string> PrintableOperands => [Managed.ToString()];
+  public override IReadOnlyList<MaxonValue> Operands => [Managed];
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
 }
 
@@ -1582,7 +1649,7 @@ public sealed class MaxonManagedWriteStdoutOp(MaxonValue managed) : MaxonOp {
   public MaxonValue Managed { get; } = managed;
   public MaxonInteger Result { get; } = new MaxonInteger(IrContext.Current.NextId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
-  public override IReadOnlyList<string> PrintableOperands => [Managed.ToString()];
+  public override IReadOnlyList<MaxonValue> Operands => [Managed];
 }
 
 // Read up to MaxBytes bytes from stdin into a freshly-allocated __ManagedMemory,
@@ -1593,7 +1660,7 @@ public sealed class MaxonManagedReadStdinOp(MaxonValue maxBytes) : MaxonOp {
   public MaxonValue MaxBytes { get; } = maxBytes;
   public MaxonStruct Result { get; } = new MaxonStruct(IrContext.Current.NextId(), "__ManagedMemory");
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
-  public override IReadOnlyList<string> PrintableOperands => [MaxBytes.ToString()];
+  public override IReadOnlyList<MaxonValue> Operands => [MaxBytes];
 }
 
 // Write managed memory buffer to stderr, returns number of bytes written
@@ -1603,7 +1670,7 @@ public sealed class MaxonManagedWriteStderrOp(MaxonValue managed) : MaxonOp {
   public MaxonValue Managed { get; } = managed;
   public MaxonInteger Result { get; } = new MaxonInteger(IrContext.Current.NextId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
-  public override IReadOnlyList<string> PrintableOperands => [Managed.ToString()];
+  public override IReadOnlyList<MaxonValue> Operands => [Managed];
 }
 
 // Write error message to stderr and terminate with exit code 1
@@ -1640,6 +1707,8 @@ public sealed class MaxonPanicOp(string message, bool isStdlib) : MaxonOp {
       return label;
     }
   }
+  /// Reads nothing — a leaf op (a literal, a parameter, a var reference, or a jump).
+  public override IReadOnlyList<MaxonValue> Operands => [];
 }
 
 // Write dynamically-constructed error message (from string interpolation) to stderr and terminate
@@ -1647,7 +1716,7 @@ public sealed class MaxonPanicDynamicOp(MaxonStruct messageStruct) : MaxonOp {
   public override MaxonOpKind Kind => MaxonOpKind.PanicDynamic;
   public override string Mnemonic => "maxon.panic_dynamic";
   public MaxonStruct MessageStruct { get; } = messageStruct;
-  public override IReadOnlyList<string> PrintableOperands => [MessageStruct.ToString()];
+  public override IReadOnlyList<MaxonValue> Operands => [MessageStruct];
 }
 
 /// Generic runtime function call op for intrinsics that delegate to a runtime function.
@@ -1658,7 +1727,7 @@ public sealed class MaxonCallRuntimeOp(string functionName, List<MaxonValue> arg
   public List<MaxonValue> Args { get; } = args;
   public MaxonInteger? Result { get; } = hasResult ? new MaxonInteger(IrContext.Current.NextId()) : null;
   public override IReadOnlyList<string> PrintableResults => Result != null ? [Result.ToString()] : [];
-  public override IReadOnlyList<string> PrintableOperands => [.. Args.Select(a => a.ToString())];
+  public override IReadOnlyList<MaxonValue> Operands => Args;
 }
 
 // Create a Character from bytes within a managed buffer
@@ -1669,7 +1738,7 @@ public sealed class MaxonMakeCharFromBytesOp(MaxonValue managed, MaxonValue pos,
   public MaxonValue Pos { get; } = pos;
   public MaxonValue Len { get; } = len;
   public MaxonStruct Result { get; } = new MaxonStruct(IrContext.Current.NextId(), "Character");
-  public override IReadOnlyList<string> PrintableOperands => [Managed.ToString(), Pos.ToString(), Len.ToString()];
+  public override IReadOnlyList<MaxonValue> Operands => [Managed, Pos, Len];
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
 }
 
@@ -1683,6 +1752,8 @@ public sealed class MaxonManagedListCreateOp : MaxonOp {
   public override string Mnemonic => "maxon.managed_list_create";
   public MaxonStruct Result { get; } = new MaxonStruct(IrContext.Current.NextId(), "__ManagedList");
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  /// Reads nothing — a leaf op (a literal, a parameter, a var reference, or a jump).
+  public override IReadOnlyList<MaxonValue> Operands => [];
 }
 
 // Inserts a value at the head or tail of the managed list, creating a new node
@@ -1695,7 +1766,7 @@ public sealed class MaxonManagedListInsertValueOp(MaxonValue managedList, MaxonV
   public string ValueKind { get; set; } = valueKind;
   public MaxonStruct Result { get; } = new MaxonStruct(IrContext.Current.NextId(), "__ManagedListNode");
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
-  public override IReadOnlyList<string> PrintableOperands => [ManagedList.ToString(), Value.ToString()];
+  public override IReadOnlyList<MaxonValue> Operands => [ManagedList, Value];
 }
 
 // Inserts a value relative to a target node (before or after)
@@ -1709,7 +1780,7 @@ public sealed class MaxonManagedListInsertRelativeValueOp(MaxonValue managedList
   public string ValueKind { get; set; } = valueKind;
   public MaxonStruct Result { get; } = new MaxonStruct(IrContext.Current.NextId(), "__ManagedListNode");
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
-  public override IReadOnlyList<string> PrintableOperands => [ManagedList.ToString(), Target.ToString(), Value.ToString()];
+  public override IReadOnlyList<MaxonValue> Operands => [ManagedList, Target, Value];
 }
 
 // Detaches a node from the managed list without freeing it
@@ -1718,7 +1789,7 @@ public sealed class MaxonManagedListDetachOp(MaxonValue managedList, MaxonValue 
   public override string Mnemonic => "maxon.managed_list_detach";
   public MaxonValue ManagedList { get; } = managedList;
   public MaxonValue Node { get; } = node;
-  public override IReadOnlyList<string> PrintableOperands => [ManagedList.ToString(), Node.ToString()];
+  public override IReadOnlyList<MaxonValue> Operands => [ManagedList, Node];
 }
 
 // Removes a node from the managed list: extracts value, unlinks node, frees node memory
@@ -1732,7 +1803,7 @@ public sealed class MaxonManagedListRemoveOp(MaxonValue managedList, MaxonValue 
   public MaxonValue Result { get; } = resultKind == MaxonValueKind.Struct
     ? new MaxonStruct(IrContext.Current.NextId(), valueKind) : resultKind.CreateValue();
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
-  public override IReadOnlyList<string> PrintableOperands => [ManagedList.ToString(), Node.ToString()];
+  public override IReadOnlyList<MaxonValue> Operands => [ManagedList, Node];
 }
 
 // Returns the number of nodes in the managed list
@@ -1742,7 +1813,7 @@ public sealed class MaxonManagedListCountOp(MaxonValue managedList) : MaxonOp {
   public MaxonValue ManagedList { get; } = managedList;
   public MaxonInteger Result { get; } = new MaxonInteger(IrContext.Current.NextId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
-  public override IReadOnlyList<string> PrintableOperands => [ManagedList.ToString()];
+  public override IReadOnlyList<MaxonValue> Operands => [ManagedList];
 }
 
 // Loads the value stored in a managed list node
@@ -1755,7 +1826,7 @@ public sealed class MaxonManagedListNodeValueOp(MaxonValue node, string valueKin
   public MaxonValue Result { get; } = resultKind == MaxonValueKind.Struct
     ? new MaxonStruct(IrContext.Current.NextId(), valueKind) : resultKind.CreateValue();
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
-  public override IReadOnlyList<string> PrintableOperands => [Node.ToString()];
+  public override IReadOnlyList<MaxonValue> Operands => [Node];
 }
 
 // Replaces the value stored in a managed list node
@@ -1765,7 +1836,7 @@ public sealed class MaxonManagedListNodeSetValueOp(MaxonValue node, MaxonValue v
   public MaxonValue Node { get; } = node;
   public MaxonValue Value { get; } = value;
   public string ValueKind { get; set; } = valueKind;
-  public override IReadOnlyList<string> PrintableOperands => [Node.ToString(), Value.ToString()];
+  public override IReadOnlyList<MaxonValue> Operands => [Node, Value];
 }
 
 // Removes all nodes from the managed list, freeing each node.
@@ -1775,7 +1846,7 @@ public sealed class MaxonManagedListClearOp(MaxonValue managedList, string value
   public override string Mnemonic => "maxon.managed_list_clear";
   public MaxonValue ManagedList { get; } = managedList;
   public string ValueKind { get; set; } = valueKind;
-  public override IReadOnlyList<string> PrintableOperands => [ManagedList.ToString()];
+  public override IReadOnlyList<MaxonValue> Operands => [ManagedList];
 }
 
 // Resets the managed list's iteration cursor to null (0)
@@ -1783,7 +1854,7 @@ public sealed class MaxonManagedListCursorResetOp(MaxonValue managedList) : Maxo
   public override MaxonOpKind Kind => MaxonOpKind.ManagedListCursorReset;
   public override string Mnemonic => "maxon.managed_list_cursor_reset";
   public MaxonValue ManagedList { get; } = managedList;
-  public override IReadOnlyList<string> PrintableOperands => [ManagedList.ToString()];
+  public override IReadOnlyList<MaxonValue> Operands => [ManagedList];
 }
 
 // Reads the value at the managed list's current cursor position
@@ -1796,7 +1867,7 @@ public sealed class MaxonManagedListCursorValueOp(MaxonValue managedList, string
   public MaxonValue Result { get; } = resultKind == MaxonValueKind.Struct
     ? new MaxonStruct(IrContext.Current.NextId(), valueKind) : resultKind.CreateValue();
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
-  public override IReadOnlyList<string> PrintableOperands => [ManagedList.ToString()];
+  public override IReadOnlyList<MaxonValue> Operands => [ManagedList];
 }
 
 // Returns the head node pointer as a raw int (no refcounting)
@@ -1806,7 +1877,7 @@ public sealed class MaxonManagedListHeadPtrOp(MaxonValue managedList) : MaxonOp 
   public MaxonValue ManagedList { get; } = managedList;
   public MaxonInteger Result { get; } = new MaxonInteger(IrContext.Current.NextId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
-  public override IReadOnlyList<string> PrintableOperands => [ManagedList.ToString()];
+  public override IReadOnlyList<MaxonValue> Operands => [ManagedList];
 }
 
 // Returns cursor->next as a raw int (no refcounting). Caller must check for null.
@@ -1816,7 +1887,7 @@ public sealed class MaxonManagedListNodePtrNextOp(MaxonValue cursorPtr) : MaxonO
   public MaxonValue CursorPtr { get; } = cursorPtr;
   public MaxonInteger Result { get; } = new MaxonInteger(IrContext.Current.NextId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
-  public override IReadOnlyList<string> PrintableOperands => [CursorPtr.ToString()];
+  public override IReadOnlyList<MaxonValue> Operands => [CursorPtr];
 }
 
 // Reads the value from a node given its raw pointer. No refcounting on the node.
@@ -1829,7 +1900,7 @@ public sealed class MaxonManagedListNodePtrValueOp(MaxonValue cursorPtr, string 
   public MaxonValue Result { get; } = resultKind == MaxonValueKind.Struct
     ? new MaxonStruct(IrContext.Current.NextId(), valueKind) : resultKind.CreateValue();
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
-  public override IReadOnlyList<string> PrintableOperands => [CursorPtr.ToString()];
+  public override IReadOnlyList<MaxonValue> Operands => [CursorPtr];
 }
 
 // ========== Async/Await ops ==========
@@ -1856,7 +1927,7 @@ public sealed class MaxonAsyncCallOp(string callee, List<MaxonValue> args, Maxon
   /// The source text of the async call expression (for error messages)
   public string? CallSourceText { get; set; }
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
-  public override IReadOnlyList<string> PrintableOperands => [.. Args.Select(a => a.ToString())];
+  public override IReadOnlyList<MaxonValue> Operands => Args;
 }
 
 /// Waits for a green thread (promise) to complete and extracts its result.
@@ -1874,7 +1945,7 @@ public sealed class MaxonAwaitOp : MaxonOp {
   public int? AwaitLine { get; set; }
   public int? AwaitColumn { get; set; }
   public override IReadOnlyList<string> PrintableResults => Result != null ? [Result.ToString()] : [];
-  public override IReadOnlyList<string> PrintableOperands => [Promise.ToString()];
+  public override IReadOnlyList<MaxonValue> Operands => [Promise];
 
   public MaxonAwaitOp(MaxonValue promise, MaxonValueKind? resultKind, string? resultStructTypeName) {
     Promise = promise;
@@ -1899,7 +1970,7 @@ public sealed class MaxonTryAwaitOp : MaxonOp {
   public MaxonValueKind? ResultKind { get; }
   public string? ResultStructTypeName { get; }
   public override IReadOnlyList<string> PrintableResults => Result != null ? [Result.ToString(), ErrorFlag.ToString()] : [ErrorFlag.ToString()];
-  public override IReadOnlyList<string> PrintableOperands => [Promise.ToString()];
+  public override IReadOnlyList<MaxonValue> Operands => [Promise];
 
   // The error-flag disposition (typed binding, decref-or-not) is decided entirely
   // at the try/otherwise emitters from the awaited MaxonPromise's ErrorType, which
@@ -1924,7 +1995,7 @@ public sealed class MaxonCancelPromiseOp(MaxonValue promise) : MaxonOp {
   public override MaxonOpKind Kind => MaxonOpKind.CancelPromise;
   public override string Mnemonic => "maxon.cancel_promise";
   public MaxonValue Promise { get; } = promise;
-  public override IReadOnlyList<string> PrintableOperands => [Promise.ToString()];
+  public override IReadOnlyList<MaxonValue> Operands => [Promise];
 }
 
 // ============================================================================
@@ -1947,6 +2018,8 @@ public sealed class MaxonDebugStreamEnabledOp : MaxonOp {
   public override string Mnemonic => "maxon.debugstream_enabled";
   public MaxonBool Result { get; } = new MaxonBool(IrContext.Current.NextId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  /// Reads nothing — a leaf op (a literal, a parameter, a var reference, or a jump).
+  public override IReadOnlyList<MaxonValue> Operands => [];
 }
 
 /// A name INTERNED AT COMPILE TIME into the MXDS_STRS blob. Lowers to the u16 index —
@@ -1958,6 +2031,8 @@ public sealed class MaxonDebugStreamNameIdOp(string name) : MaxonOp {
   public string Name { get; } = name;
   public MaxonInteger Result { get; } = new MaxonInteger(IrContext.Current.NextId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  /// Reads nothing — a leaf op (a literal, a parameter, a var reference, or a jump).
+  public override IReadOnlyList<MaxonValue> Operands => [];
 }
 
 /// LOG_PHASE_BEGIN / LOG_PHASE_END: one end of a nested, per-worker, per-unit span.
@@ -1968,7 +2043,7 @@ public sealed class MaxonDebugStreamPhaseOp(bool isBegin, MaxonValue nameId, Max
   public bool IsBegin { get; } = isBegin;
   public MaxonValue NameId { get; } = nameId;
   public MaxonValue UnitId { get; } = unitId;
-  public override IReadOnlyList<string> PrintableOperands => [NameId.ToString(), UnitId.ToString()];
+  public override IReadOnlyList<MaxonValue> Operands => [NameId, UnitId];
 }
 
 /// LOG_EVENT: the structured tier. An interned name plus two numeric args — no String,
@@ -1984,8 +2059,7 @@ public sealed class MaxonDebugStreamEventOp(MaxonValue nameId, MaxonValue catego
   public MaxonValue UnitId { get; } = unitId;
   public MaxonValue Arg0 { get; } = arg0;
   public MaxonValue Arg1 { get; } = arg1;
-  public override IReadOnlyList<string> PrintableOperands =>
-    [NameId.ToString(), Category.ToString(), Level.ToString(), UnitId.ToString(), Arg0.ToString(), Arg1.ToString()];
+  public override IReadOnlyList<MaxonValue> Operands => [NameId, Category, Level, UnitId, Arg0, Arg1];
 }
 
 /// LOG_TEXT: the rare human message, as a length-prefixed UTF-8 tail read out of a
@@ -1998,6 +2072,5 @@ public sealed class MaxonDebugStreamTextOp(MaxonValue category, MaxonValue level
   public MaxonValue Level { get; } = level;
   public MaxonValue UnitId { get; } = unitId;
   public MaxonValue Managed { get; } = managed;
-  public override IReadOnlyList<string> PrintableOperands =>
-    [Category.ToString(), Level.ToString(), UnitId.ToString(), Managed.ToString()];
+  public override IReadOnlyList<MaxonValue> Operands => [Category, Level, UnitId, Managed];
 }
