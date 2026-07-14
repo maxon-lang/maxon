@@ -1,0 +1,113 @@
+// Test: not-over-a-short-circuit
+function t() returns bool
+	return true
+end 't'
+
+function f() returns bool
+	return false
+end 'f'
+
+function main() returns ExitCode
+	var code = 0
+	if not (f() or f()) 'a'
+		code = code + 1
+	end 'a'
+	if not (t() and t()) 'b'
+		code = code + 2
+	end 'b'
+	if not (t() and f()) 'c'
+		code = code + 4
+	end 'c'
+	return code
+end 'main'
+---
+ExitCode: 5
+---
+func @t {
+  entry:
+    x64.movRegImm32 r8, 1
+    x64.ret
+}
+
+func @f {
+  entry:
+    x64.movRegImm32 r8, 0
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbx
+    x64.prologue 32
+    x64.movRegImm32 rbx, 0
+    x64.callDirect f
+    x64.movRegImm32 rax, 1
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, critsplit
+    x64.jmp orrhs
+  critsplit:
+    x64.jmp scmerge
+  orrhs:
+    x64.callDirect f
+    x64.movRegReg rax, r8
+    x64.jmp scmerge
+  scmerge:
+    x64.xorRegImm32 rax, rax, 1
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, a
+    x64.jmp critsplit
+  a:
+    x64.leaRegRegImm32 rbx, rbx, 1
+    x64.jmp ifcont
+  critsplit:
+    x64.jmp ifcont
+  ifcont:
+    x64.callDirect t
+    x64.movRegImm32 rax, 0
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, andrhs
+    x64.jmp critsplit
+  andrhs:
+    x64.callDirect t
+    x64.jmp scmerge
+  critsplit:
+    x64.movRegReg r8, rax
+    x64.jmp scmerge
+  scmerge:
+    x64.xorRegImm32 r8, r8, 1
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, b
+    x64.jmp critsplit
+  b:
+    x64.leaRegRegImm32 rbx, rbx, 2
+    x64.jmp ifcont
+  critsplit:
+    x64.jmp ifcont
+  ifcont:
+    x64.callDirect t
+    x64.movRegImm32 rax, 0
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, andrhs
+    x64.jmp critsplit
+  andrhs:
+    x64.callDirect f
+    x64.jmp scmerge
+  critsplit:
+    x64.movRegReg r8, rax
+    x64.jmp scmerge
+  scmerge:
+    x64.xorRegImm32 r8, r8, 1
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, c
+    x64.jmp critsplit
+  c:
+    x64.leaRegRegImm32 r8, rbx, 4
+    x64.jmp ifcont
+  critsplit:
+    x64.movRegReg r8, rbx
+    x64.jmp ifcont
+  ifcont:
+    x64.epilogue 32
+    x64.popReg rbx
+    x64.ret
+}

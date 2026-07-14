@@ -62,11 +62,11 @@ export function maxonReturnTypeToStdReturnType(ref MaxonReturnType) returns StdR
 end 'maxonReturnTypeToStdReturnType'
 
 // Map a source-level binary operator to its width/ABI-resolved Std `binOp` opcode.
-// Only the non-trapping arithmetic set (`add`/`sub`/`mul`) maps to a `StdBinOpcode`;
-// `div`/`mod` do NOT (they lower to the OWN Std variants `StdOp.div`/`mod` because
-// idiv traps — see `lowerBinOp`), so this is called ONLY for `add`/`sub`/`mul` and
-// panics on the division family rather than inventing a bogus opcode. Exhaustive over
-// MaxonBinOp (every arm is named).
+// Every NON-TRAPPING operator maps to a `StdBinOpcode` — the arithmetic set
+// (`add`/`sub`/`mul`) and the bit set (`bitAnd`/`bitOr`/`bitXor`/`shl`/`shr`). Only
+// `div`/`mod` do NOT (they lower to the OWN Std variants `StdOp.div`/`mod` because idiv
+// traps — see `lowerBinOp`), so they panic here rather than inventing a bogus opcode.
+// Exhaustive over MaxonBinOp (every arm is named).
 export function maxonBinOpToStdOpcode(op MaxonBinOp) returns StdBinOpcode
 	match op 'map'
 		add then return StdBinOpcode.add
@@ -74,14 +74,23 @@ export function maxonBinOpToStdOpcode(op MaxonBinOp) returns StdBinOpcode
 		mul then return StdBinOpcode.mul
 		div then panic("maxonBinOpToStdOpcode: `/` (div) lowers to StdOp.div — a trapping op with its own Std variant, not a binOp opcode; lowerBinOp must route it directly")
 		mod then panic("maxonBinOpToStdOpcode: `mod` lowers to StdOp.mod — a trapping op with its own Std variant, not a binOp opcode; lowerBinOp must route it directly")
+		bitAnd then return StdBinOpcode.bitAnd
+		bitOr then return StdBinOpcode.bitOr
+		bitXor then return StdBinOpcode.bitXor
+		shl then return StdBinOpcode.shl
+		shr then return StdBinOpcode.shr
 	end 'map'
 end 'maxonBinOpToStdOpcode'
 
-// Map a source-level unary operator to its Std opcode. M3 is a 1:1 `neg` → `neg`;
-// GROWS as MaxonUnaryOp/StdUnaryOpcode gain arms. Exhaustive by construction.
+// Map a source-level unary operator to its Std opcode. A 1:1 rename in every arm —
+// the TYPE decision that split `not` into `bitNot`/`logicalNot` was already made in
+// the parser (see MaxonUnaryOp), so nothing is re-derived here. Exhaustive by
+// construction.
 export function maxonUnaryOpToStdOpcode(op MaxonUnaryOp) returns StdUnaryOpcode
 	return match op 'map'
 		neg gives StdUnaryOpcode.neg
+		bitNot gives StdUnaryOpcode.bitNot
+		logicalNot gives StdUnaryOpcode.logicalNot
 	end 'map'
 end 'maxonUnaryOpToStdOpcode'
 
@@ -268,19 +277,32 @@ type MaxonToStdLowering
 
 	// Lower a Maxon binary op to its Std counterpart. The operand and result
 	// ValueIds pass through verbatim (this pass never renumbers — see the header);
-	// only the source-level operator maps to a width/ABI-resolved Std op. The
-	// non-trapping arithmetic set (`add`/`sub`/`mul`) becomes a `StdOp.binOp` carrying
-	// the mapped opcode; the TRAPPING division family (`div`/`mod`) becomes its OWN Std
-	// variant (`StdOp.div`/`mod`) — a dedicated arm, NOT routed through the binOp-opcode
-	// helper — because idiv can fault and so needs `isPure: false` metadata a shared
-	// opcode field cannot carry (mirrors why `compare` split into `StdOp.cmp`).
+	// only the source-level operator maps to a width/ABI-resolved Std op. Every
+	// NON-TRAPPING operator becomes a `StdOp.binOp` carrying the mapped opcode; the
+	// TRAPPING division family (`div`/`mod`) becomes its OWN Std variant (`StdOp.div`/
+	// `mod`) — a dedicated arm, NOT routed through the binOp-opcode helper — because idiv
+	// can fault and so needs `isPure: false` metadata a shared opcode field cannot carry
+	// (mirrors why `compare` split into `StdOp.cmp`).
+	//
+	// TWO range arms reach `appendStdBinOp`, not one, because `div`/`mod` sit BETWEEN the
+	// arithmetic band and the bit band in `MaxonBinOp` (they were there first, and the
+	// band-append invariant forbids re-ordering an enum to make a range contiguous — a
+	// silently-swallowed variant costs far more than one extra arm).
 	function lowerBinOp(result ValueId, lhs ValueId, rhs ValueId, op MaxonBinOp, dstBlock IrBlock)
 		match op 'op'
-			add to mul then self.stdModule.appendOp(dstBlock, op: StdOp.binOp(result, lhs: lhs, rhs: rhs, opcode: maxonBinOpToStdOpcode(op)))
+			add to mul then self.appendStdBinOp(result, lhs: lhs, rhs: rhs, op: op, dstBlock: dstBlock)
 			div then self.stdModule.appendOp(dstBlock, op: StdOp.div(result, lhs: lhs, rhs: rhs))
 			mod then self.stdModule.appendOp(dstBlock, op: StdOp.mod(result, lhs: lhs, rhs: rhs))
+			bitAnd to shr then self.appendStdBinOp(result, lhs: lhs, rhs: rhs, op: op, dstBlock: dstBlock)
 		end 'op'
 	end 'lowerBinOp'
+
+	// Append the `StdOp.binOp` a non-trapping Maxon binary operator lowers to. The one
+	// emit site shared by the arithmetic and bit bands, so the two range arms above
+	// dispatch rather than duplicate.
+	function appendStdBinOp(result ValueId, lhs ValueId, rhs ValueId, op MaxonBinOp, dstBlock IrBlock)
+		self.stdModule.appendOp(dstBlock, op: StdOp.binOp(result, lhs: lhs, rhs: rhs, opcode: maxonBinOpToStdOpcode(op)))
+	end 'appendStdBinOp'
 
 	// Lower a Maxon unary op to its Std counterpart. Like lowerBinOp, the operand
 	// and result ValueIds pass through verbatim; only the source-level operator maps

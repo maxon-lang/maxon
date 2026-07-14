@@ -1296,6 +1296,10 @@ function opIsConstMaterialization(module TargetModule, opIdx OpIndex) returns bo
 		prologue to jcc gives false
 		movRegReg to idivReg gives false
 		pushReg to loadRegSlot gives false
+		// The bit band. None of these is a constant materialization: every one reads at
+		// least one register (or, for `setccReg`, EFLAGS), so re-emitting it at a use site
+		// would need those inputs live there — which is exactly what remat exists to avoid.
+		andRegReg to setccReg gives false
 	end 'k'
 end 'opIsConstMaterialization'
 
@@ -1800,6 +1804,7 @@ function constValueOfDef(module TargetModule, opIdx OpIndex) returns MachineWord
 		movRegImm32(_, value) then return value
 		prologue to jcc then panic("constValueOfDef: def is not a constant materialization")
 		movRegReg to loadRegSlot then panic("constValueOfDef: def is not a constant materialization")
+		andRegReg to setccReg then panic("constValueOfDef: def is not a constant materialization")
 	end 'k'
 end 'constValueOfDef'
 
@@ -1877,6 +1882,18 @@ function substituteValueInOp(op TargetOp, from ValueId, to ValueId) returns Targ
 		pushReg to popReg then return op
 		storeSlotReg(slot, srcReg) then return TargetOp.storeSlotReg(slot, srcReg: substituteVReg(srcReg, from: from, to: to))
 		loadRegSlot(destReg, slot) then return TargetOp.loadRegSlot(substituteVReg(destReg, from: from, to: to), slot: slot)
+		andRegReg(dest, lhs, rhs) then return TargetOp.andRegReg(substituteVReg(dest, from: from, to: to), lhs: substituteVReg(lhs, from: from, to: to), rhs: substituteVReg(rhs, from: from, to: to))
+		orRegReg(dest, lhs, rhs) then return TargetOp.orRegReg(substituteVReg(dest, from: from, to: to), lhs: substituteVReg(lhs, from: from, to: to), rhs: substituteVReg(rhs, from: from, to: to))
+		xorRegReg(dest, lhs, rhs) then return TargetOp.xorRegReg(substituteVReg(dest, from: from, to: to), lhs: substituteVReg(lhs, from: from, to: to), rhs: substituteVReg(rhs, from: from, to: to))
+		notReg(dest, src) then return TargetOp.notReg(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to))
+		andRegImm32(dest, lhs, imm) then return TargetOp.andRegImm32(substituteVReg(dest, from: from, to: to), lhs: substituteVReg(lhs, from: from, to: to), imm: imm)
+		orRegImm32(dest, lhs, imm) then return TargetOp.orRegImm32(substituteVReg(dest, from: from, to: to), lhs: substituteVReg(lhs, from: from, to: to), imm: imm)
+		xorRegImm32(dest, lhs, imm) then return TargetOp.xorRegImm32(substituteVReg(dest, from: from, to: to), lhs: substituteVReg(lhs, from: from, to: to), imm: imm)
+		shlRegImm8(dest, lhs, imm) then return TargetOp.shlRegImm8(substituteVReg(dest, from: from, to: to), lhs: substituteVReg(lhs, from: from, to: to), imm: imm)
+		sarRegImm8(dest, lhs, imm) then return TargetOp.sarRegImm8(substituteVReg(dest, from: from, to: to), lhs: substituteVReg(lhs, from: from, to: to), imm: imm)
+		shlRegCl(dest, lhs) then return TargetOp.shlRegCl(substituteVReg(dest, from: from, to: to), lhs: substituteVReg(lhs, from: from, to: to))
+		sarRegCl(dest, lhs) then return TargetOp.sarRegCl(substituteVReg(dest, from: from, to: to), lhs: substituteVReg(lhs, from: from, to: to))
+		setccReg(dest, cond) then return TargetOp.setccReg(substituteVReg(dest, from: from, to: to), cond: cond)
 	end 'rewrite'
 end 'substituteValueInOp'
 

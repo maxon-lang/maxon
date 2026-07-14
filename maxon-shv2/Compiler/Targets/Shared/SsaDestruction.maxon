@@ -318,6 +318,7 @@ function isPhysicalSelfMove(op TargetOp) returns bool
 		movReg32Reg32 to idivReg then return false
 		pushReg to popReg then return false
 		storeSlotReg to loadRegSlot then return false
+		andRegReg to setccReg then return false
 	end 'sm'
 end 'isPhysicalSelfMove'
 
@@ -535,6 +536,7 @@ function retargetControlOp(module TargetModule, predRef BlockRef, oldTarget Bloc
 			movRegImm to idivReg then panic("retargetControlOp: non-terminator op as terminator")
 			pushReg to popReg then panic("retargetControlOp: pushReg/popReg reached as a terminator — they are body ops inserted post-regalloc")
 			storeSlotReg to loadRegSlot then panic("retargetControlOp: a spill/reload reached as a terminator — the splitter inserts them as body ops, never as terminators")
+			andRegReg to setccReg then panic("retargetControlOp: non-terminator op as terminator")
 		end 'term'
 	end 'hasTerm'
 

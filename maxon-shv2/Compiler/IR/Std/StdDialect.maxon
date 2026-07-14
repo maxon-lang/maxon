@@ -136,18 +136,37 @@ end 'OpRole'
 // OWN variant (it sets `isCmp` — different metadata the per-variant backing cannot
 // reach through an opcode field) when `if` lands at M4; the trapping `div`/`mod`
 // (which set `isPure: false`) arrive at M5 with the real register allocator.
+// P1.0d.2 appends the BIT band — `bitAnd`/`bitOr`/`bitXor`/`shl`/`shr`. They share
+// `binOp`'s exact operand shape (two values in, one out) and its exact metadata
+// profile (pure, non-trapping, flag-clobbering), so per the header's "flat does NOT
+// mean one variant per opcode" rule they are opcodes, not variants. `shr` is an
+// ARITHMETIC right shift (x64 `sar`): every Std integer is signed i64, so a logical
+// shift would turn `-8 shr 1` into a huge positive number.
 export enum StdBinOpcode
 	add
 	sub
 	mul
+	bitAnd
+	bitOr
+	bitXor
+	shl
+	shr
 end 'StdBinOpcode'
 
 // The Std-tier unary-operation opcodes carried by `StdOp.unaryOp`. M3 lands `neg`
 // (integer negate). A separate opcode set from StdBinOpcode because a unary op has
 // a different operand shape (one operand, one result). Non-trapping, so `unaryOp`
 // is `isPure`.
+//
+// P1.0d.2 appends `bitNot` (x64 `not` — flip all 64 bits) and `logicalNot` (x64
+// `xor reg, 1` — flip bit 0 of a 0/1 bool). Two opcodes, not one, because they are
+// two DIFFERENT instructions: `not` on a bool would produce -1/-2, which reads as
+// truthy either way. The Maxon tier has already resolved which one the source `not`
+// meant (see MaxonUnaryOp).
 export enum StdUnaryOpcode
 	neg
+	bitNot
+	logicalNot
 end 'StdUnaryOpcode'
 
 // The Std-tier comparison predicates carried by `StdOp.cmp` (M4). Signed integer
@@ -347,7 +366,12 @@ export typealias StdValueUseSet = Set with ValueId
 // Add the value ids `op` READS to `referenced` — its DEFS are not uses, and neither are the
 // branch-edge args (those live on the predecessor's `IrBlock`, not on the op). Exhaustive
 // over StdOp, no bare `default`.
-module function collectStdOpUses(op StdOp, referenced StdValueUseSet)
+//
+// EXPORTED, not module-scoped: the Std→x64 lowering reads it too, to decide which compare
+// results are read as VALUES (and so need a `setcc`) rather than only as branch FLAGS. That
+// is exactly the question this function exists to answer in one place — a second, private
+// "what does this op read?" match inside the backend is the drift it was written to prevent.
+export function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 	match op 'u'
 		const then break 'u'
 		binOp(_, lhs, rhs, _) then insertUsePair(referenced, a: lhs, b: rhs)

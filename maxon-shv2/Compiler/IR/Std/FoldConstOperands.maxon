@@ -19,13 +19,16 @@
 //      is NOT `a - 5`, and rewriting it would silently miscompile.
 //   3. DCE the `const` op left with no remaining reference.
 //
-// A const is folded only when it fits the immediate field of the lowered op: the full
-// signed-32-bit range (i32.min..i32.max) for the DIRECT-immediate forms (`add`/`mul`/
-// `cmp`), and that range MINUS i32.min for the `sub` form — which lowers to `lea
-// [base - imm]`, a NEGATED displacement, and -(i32.min) overflows a signed 32-bit field.
-// A wider constant keeps its register operand, which is the correct fallback.
+// A const is folded only when it fits the immediate field of the lowered op — see
+// `constFitsBinOpImmediate`, which is the ONE place that per-opcode rule lives. A
+// constant outside it keeps its register operand, which is always a correct fallback.
 
 typealias ConstValueMap = Map with (ValueId, ParsedInt)
+
+// The largest shift count an x64 64-bit shift distinguishes: it masks the count to its
+// low 6 bits, so every count is taken modulo 64. Named because it is the bound BOTH
+// shift lowerings agree on (see `constFitsBinOpImmediate`), not an encoding accident.
+let MaxShiftCount = 63 as ParsedInt
 
 // The result of attempting to fold one op: either unchanged, or a replacement op
 // to write back at the same index (never a sentinel op).
@@ -106,13 +109,13 @@ end 'tryFold'
 
 // `resultId = lhs <opcode> rhs`. A const rhs folds directly. For a COMMUTATIVE op a
 // const lhs is swapped onto the rhs (`k + a` becomes `a + k`). A non-commutative op
-// with a const lhs and non-const rhs (`5 - a`) is left alone — it is not `a - 5`.
+// with a const lhs and non-const rhs (`5 - a`, `1 shl n`… where `n` is not const) is
+// left alone — it is not `a - 5` / `n shl 1`.
 function tryFoldBinOp(resultId ValueId, lhs ValueId, rhs ValueId, opcode StdBinOpcode, constMap ConstValueMap) returns FoldResult
-	let allowI32Min = not binOpcodeNegatesImmediate(opcode)
-	if constFitsImmediate(constMap, id: rhs, allowI32Min: allowI32Min) 'rhsConst'
+	if foldableBinOpImm(constMap, id: rhs, opcode: opcode) 'rhsConst'
 		return FoldResult.folded(StdOp.binOpImm(resultId, lhs: lhs, imm: constAsImmediate(constMap, id: rhs), opcode: opcode))
 	end 'rhsConst'
-	if binOpcodeIsCommutative(opcode) and constFitsImmediate(constMap, id: lhs, allowI32Min: allowI32Min) 'lhsConst'
+	if binOpcodeIsCommutative(opcode) and foldableBinOpImm(constMap, id: lhs, opcode: opcode) 'lhsConst'
 		return FoldResult.folded(StdOp.binOpImm(resultId, lhs: rhs, imm: constAsImmediate(constMap, id: lhs), opcode: opcode))
 	end 'lhsConst'
 	return FoldResult.unchanged
@@ -120,14 +123,13 @@ end 'tryFoldBinOp'
 
 // `resultId = lhs <pred> rhs`. A const rhs folds directly. A const lhs swaps operands
 // AND flips the predicate (`k < a` == `a > k`), which every comparison supports (no
-// silent-miscompile case — unlike arith `sub`).
+// silent-miscompile case — unlike arith `sub`). `cmpRegImm32` carries the immediate
+// verbatim in a signed 32-bit field, so the whole Imm32 domain folds.
 function tryFoldCmp(resultId ValueId, lhs ValueId, rhs ValueId, pred StdCmpPred, constMap ConstValueMap) returns FoldResult
-	// `cmpRegImm32` carries the immediate directly (full Imm32, i32.min included), so a
-	// compare never negates its folded constant — `allowI32Min` is always true here.
-	if constFitsImmediate(constMap, id: rhs, allowI32Min: true) 'rhsConst'
+	if foldableCmpImm(constMap, id: rhs) 'rhsConst'
 		return FoldResult.folded(StdOp.cmpImm(resultId, lhs: lhs, imm: constAsImmediate(constMap, id: rhs), pred: pred))
 	end 'rhsConst'
-	if constFitsImmediate(constMap, id: lhs, allowI32Min: true) 'lhsConst'
+	if foldableCmpImm(constMap, id: lhs) 'lhsConst'
 		return FoldResult.folded(StdOp.cmpImm(resultId, lhs: rhs, imm: constAsImmediate(constMap, id: lhs), pred: flipCmpPred(pred)))
 	end 'lhsConst'
 	return FoldResult.unchanged
@@ -138,20 +140,10 @@ function binOpcodeIsCommutative(opcode StdBinOpcode) returns bool
 		add gives true
 		mul gives true
 		sub gives false
+		bitAnd to bitXor gives true
+		shl to shr gives false
 	end 'o'
 end 'binOpcodeIsCommutative'
-
-// True iff `opcode`'s immediate form NEGATES the folded constant: only `sub` does
-// (`a - imm` lowers to `lea [base - imm]`, disp = -imm). `add` (disp = imm) and `mul`
-// (`imul r, r, imm`) carry the constant unchanged. This is what makes i32.min unfoldable
-// for `sub` (its negation overflows a signed 32-bit field) but foldable everywhere else.
-function binOpcodeNegatesImmediate(opcode StdBinOpcode) returns bool
-	return match opcode 'o'
-		add gives false
-		mul gives false
-		sub gives true
-	end 'o'
-end 'binOpcodeNegatesImmediate'
 
 // Flip a comparison predicate for an operand swap: `a <pred> b` == `b <flip(pred)> a`.
 function flipCmpPred(pred StdCmpPred) returns StdCmpPred
@@ -165,23 +157,49 @@ function flipCmpPred(pred StdCmpPred) returns StdCmpPred
 	end 'p'
 end 'flipCmpPred'
 
-// True iff `id` names a `const` whose value fits the immediate field of the op it folds
-// into. add/mul/cmp encode the immediate directly (full Imm32 = i32.min..i32.max); the
-// `sub` lowering emits `lea [base - imm]` (disp = -imm) and so cannot fold i32.min, whose
-// negation overflows a signed 32-bit field — `allowI32Min` is false only on that path.
-function constFitsImmediate(constMap ConstValueMap, id ValueId, allowI32Min bool) returns bool
-	if not constMap.contains(id) 'notConst'
-		return false
-	end 'notConst'
-	let v = try constMap.get(id) otherwise panic("constFitsImmediate: contains true but get failed for {id}")
-	if v > i32.max or v < i32.min 'outOfRange'
-		return false
-	end 'outOfRange'
-	if v == i32.min and not allowI32Min 'negationOverflows'
-		return false
-	end 'negationOverflows'
-	return true
-end 'constFitsImmediate'
+// True iff `id` names a `const` whose value fits the immediate field of `opcode`'s
+// lowered form. Not a `const` at all ⇒ false (nothing to fold).
+function foldableBinOpImm(constMap ConstValueMap, id ValueId, opcode StdBinOpcode) returns bool
+	let v = try constMap.get(id) otherwise return false
+	return constFitsBinOpImmediate(v, opcode: opcode)
+end 'foldableBinOpImm'
+
+// The comparison twin of `foldableBinOpImm`: `cmpRegImm32` carries the immediate verbatim
+// in a signed 32-bit field, so the whole Imm32 domain folds regardless of the predicate.
+function foldableCmpImm(constMap ConstValueMap, id ValueId) returns bool
+	let v = try constMap.get(id) otherwise return false
+	return fitsImm32(v)
+end 'foldableCmpImm'
+
+// THE per-opcode immediate rule — the one place it lives, so the fold and the x64
+// lowering it feeds cannot disagree about what an immediate form can carry.
+//
+//   add / mul / bitAnd / bitOr / bitXor — the immediate is encoded VERBATIM in a signed
+//       32-bit field (`lea [base + imm]`, `imul r,r,imm32`, `<alu> r/m64, imm32`), so the
+//       whole Imm32 domain folds.
+//   sub — lowers to `lea [base - imm]`, a NEGATED displacement, and -(i32.min) overflows a
+//       signed 32-bit field. i32.min alone is excluded.
+//   shl / shr — the immediate is an imm8 SHIFT COUNT, and x64 masks a 64-bit shift's count
+//       to its low 6 bits. Folding is restricted to 0..63 — the counts on which the imm8
+//       form and the `cl` form provably agree. Any other count keeps its register operand
+//       and goes through `cl`, where the HARDWARE does the masking, so the two lowerings
+//       can never disagree about what `a shl 100` means, and no compile-time truncation
+//       has to be justified.
+function constFitsBinOpImmediate(v ParsedInt, opcode StdBinOpcode) returns bool
+	return match opcode 'o'
+		add gives fitsImm32(v)
+		mul gives fitsImm32(v)
+		sub gives fitsImm32(v) and v != i32.min
+		bitAnd to bitXor gives fitsImm32(v)
+		shl to shr gives v >= 0 and v <= MaxShiftCount
+	end 'o'
+end 'constFitsBinOpImmediate'
+
+// True iff `v` fits the signed 32-bit immediate field every DIRECT-immediate x64 form
+// carries.
+function fitsImm32(v ParsedInt) returns bool
+	return v >= i32.min and v <= i32.max
+end 'fitsImm32'
 
 // The constant of `id` as an Imm32 — caller must have checked `constFitsImmediate`,
 // so the cast cannot overflow.

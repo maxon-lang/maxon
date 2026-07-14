@@ -237,6 +237,31 @@ export function targetOpOperands(op TargetOp, buf OperandList)
 		// it contributes no operand — the frame layout it names is the encoder's concern.
 		storeSlotReg(_, srcReg) then pushUse(buf, vreg: srcReg)
 		loadRegSlot(destReg, _) then pushDef(buf, vreg: destReg)
+		// The word ALU ops are genuinely two-address on x64, so they share `subRegReg`'s
+		// exact operand shape: both sources read, `dest` a REUSE-of-operand-0 def.
+		andRegReg(dest, lhs, rhs) then pushReuseBinOperands(buf, dest: dest, lhs: lhs, rhs: rhs)
+		orRegReg(dest, lhs, rhs) then pushReuseBinOperands(buf, dest: dest, lhs: lhs, rhs: rhs)
+		xorRegReg(dest, lhs, rhs) then pushReuseBinOperands(buf, dest: dest, lhs: lhs, rhs: rhs)
+		notReg(dest, src) then pushReuseUnaryOperands(buf, dest: dest, src: src)
+		// The immediate forms are two-address too (`and dest, imm` modifies dest in place),
+		// so — unlike `leaRegRegImm32`/`imulRegRegImm32`, whose destination is INDEPENDENT
+		// of their source — `dest` is a REUSE-of-`lhs` def, not a plain one. Getting this
+		// wrong would let the allocator put `dest` in a register `lhs` does not occupy and
+		// then emit no copy, so the op would read the wrong value.
+		andRegImm32(dest, lhs, _) then pushReuseUnaryOperands(buf, dest: dest, src: lhs)
+		orRegImm32(dest, lhs, _) then pushReuseUnaryOperands(buf, dest: dest, src: lhs)
+		xorRegImm32(dest, lhs, _) then pushReuseUnaryOperands(buf, dest: dest, src: lhs)
+		shlRegImm8(dest, lhs, _) then pushReuseUnaryOperands(buf, dest: dest, src: lhs)
+		sarRegImm8(dest, lhs, _) then pushReuseUnaryOperands(buf, dest: dest, src: lhs)
+		// The variable-count shifts take their count in CL and NOWHERE ELSE, so the count is
+		// not an explicit operand at all: StdToX64Conversion pre-moves it into physical RCX
+		// (as `idiv` pre-moves its dividend into RAX) and the op names RCX through its
+		// `implicitUses` mask. What is left here is the two-address `dest ⟸ lhs` pair.
+		shlRegCl(dest, lhs) then pushReuseUnaryOperands(buf, dest: dest, src: lhs)
+		sarRegCl(dest, lhs) then pushReuseUnaryOperands(buf, dest: dest, src: lhs)
+		// A boolean materialization reads EFLAGS — not a tracked register — and writes one
+		// fresh value. So: one plain def, no uses.
+		setccReg(dest, _) then pushDef(buf, vreg: dest)
 	end 'operands'
 end 'targetOpOperands'
 

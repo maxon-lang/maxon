@@ -82,8 +82,7 @@ end 'main'
 ```
 
 
-<!-- disabled-test: bool-from-comparison -->
-<!-- boolean materialization (setcc) - a comparison used as a VALUE. shv2 fuses every compare into its branch and never writes the bool to a register -->
+<!-- test: bool-from-comparison -->
 ```maxon
 function main() returns ExitCode
 	let result = 5 > 3

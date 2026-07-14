@@ -1,0 +1,25 @@
+// Test: bitwise-with-logical
+function main() returns ExitCode
+	let a = 5 and 3        // 1
+	if a > 0 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+func @main {
+  entry:
+    x64.movRegImm32 rax, 5
+    x64.andRegImm32 rax, rax, 3
+    x64.cmpRegImm32 rax, 0
+    x64.jcc greater, check
+    x64.jmp ifcont
+  check:
+    x64.movRegImm32 r8, 1
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 0
+    x64.ret
+}

@@ -176,6 +176,22 @@ function opPhysicalRegs(op TargetOp) returns RegMask
 		popReg(reg) gives regMaskOf(reg)
 		storeSlotReg(_, srcReg) gives physRegBit(srcReg)
 		loadRegSlot(destReg, _) gives physRegBit(destReg)
+		andRegReg(d, l, r) gives physRegBit(d) or physRegBit(l) or physRegBit(r)
+		orRegReg(d, l, r) gives physRegBit(d) or physRegBit(l) or physRegBit(r)
+		xorRegReg(d, l, r) gives physRegBit(d) or physRegBit(l) or physRegBit(r)
+		notReg(d, s) gives physRegBit(d) or physRegBit(s)
+		andRegImm32(d, l, _) gives physRegBit(d) or physRegBit(l)
+		orRegImm32(d, l, _) gives physRegBit(d) or physRegBit(l)
+		xorRegImm32(d, l, _) gives physRegBit(d) or physRegBit(l)
+		shlRegImm8(d, l, _) gives physRegBit(d) or physRegBit(l)
+		sarRegImm8(d, l, _) gives physRegBit(d) or physRegBit(l)
+		// RCX is NOT reported here. This function answers "which registers did the COLORING
+		// use?", so the prologue knows which callee-saved ones to preserve — and RCX is
+		// caller-saved, so it needs no preservation regardless. The shift's use of CL is an
+		// IMPLICIT one (a `TargetOpMeta.implicitUses` mask), not a coloring outcome.
+		shlRegCl(d, l) gives physRegBit(d) or physRegBit(l)
+		sarRegCl(d, l) gives physRegBit(d) or physRegBit(l)
+		setccReg(d, _) gives physRegBit(d)
 	end 'p'
 end 'opPhysicalRegs'
 
@@ -262,5 +278,6 @@ function blockEndsWithReturn(module TargetModule, block IrBlock) returns bool
 		jmp to idivReg gives false
 		pushReg to popReg gives false
 		storeSlotReg to loadRegSlot gives false
+		andRegReg to setccReg gives false
 	end 'check'
 end 'blockEndsWithReturn'

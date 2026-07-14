@@ -91,6 +91,81 @@ end 'MaxonType'
 
 export typealias MaxonTypeArray = Array with MaxonType
 
+// --- ValueTypeTag: MaxonType's discriminant, WITHOUT its payload ---
+//
+// The parser needs a source-level type for EVERY SSA value it mints — the word operators
+// (`and`/`or`/`xor`/`not`) mean one thing on `bool` and another on `int`, and a bool
+// `and`/`or` is CONTROL FLOW, so no later pass can retrofit the decision. It therefore keeps
+// a dense per-value type column.
+//
+// That column may NOT be an `Array with MaxonType`, and the reason is measured, not
+// aesthetic. **A Maxon union value is a heap object — every case, not just the ones with a
+// payload.** So each `MaxonType.integer` a type rule *constructs* is an allocation, and the
+// per-op type plumbing (`what type does this binOp yield?`, `is this operand a bool?`) put
+// one on the compiler's single hottest path. `scale-test` charged the first cut of it
+// **+4,165 allocations on the smallest rung**, and an A/B that replaced the column with a
+// freshly-constructed `MaxonType.integer` at every read made it WORSE (+5,540) — which is
+// what proved that CONSTRUCTING a union costs and READING a stored one does not.
+//
+// An `enum` is a scalar. So the column is a `ValueTypeTag` plus a parallel `TypeNameId`, two
+// DENSE INT ARRAYS that allocate nothing per value, and a `MaxonType` is materialized only
+// where something genuinely STORES one (a `literal` op's type; a binding's declared type) —
+// which is per-declaration, not per-value.
+export enum ValueTypeTag
+	boolean
+	integer
+	float
+	named
+	exitCode
+	unresolved
+end 'ValueTypeTag'
+
+export typealias ValueTypeTagArray = Array with ValueTypeTag
+export typealias TypeNameIdArray = Array with TypeNameId
+
+// The tag of a `MaxonType`. Exhaustive, so a new `MaxonType` arm cannot be added without
+// giving it one.
+export function maxonTypeTag(t MaxonType) returns ValueTypeTag
+	return match t 'k'
+		boolean gives ValueTypeTag.boolean
+		integer gives ValueTypeTag.integer
+		float gives ValueTypeTag.float
+		named gives ValueTypeTag.named
+		exitCode gives ValueTypeTag.exitCode
+		unresolved gives ValueTypeTag.unresolved
+	end 'k'
+end 'maxonTypeTag'
+
+// The interned name a `named` type refers to. Every other arm carries no name, and returns
+// `UnnamedTypeId` — which is NOT a sentinel answer: the TAG is the discriminant, and a
+// caller only reads this column on the arm where the tag says it means something (exactly as
+// the union's own payload is only reachable through its case). It is the union, unpacked.
+export function typeNameIdOf(t MaxonType) returns TypeNameId
+	return match t 'k'
+		named(id) gives id
+		boolean to float gives UnnamedTypeId
+		exitCode to unresolved gives UnnamedTypeId
+	end 'k'
+end 'typeNameIdOf'
+
+// The filler the name column carries for a type that has no name.
+export let UnnamedTypeId = 0 as TypeNameId
+
+// Rebuild a `MaxonType` from the two columns — the inverse of `maxonTypeTag` +
+// `typeNameIdOf`. THIS ALLOCATES (it constructs a union), which is why it is called only
+// where a `MaxonType` is genuinely stored: a binding's declared type, a `literal` op's type.
+// Never on a per-value or per-op path.
+export function maxonTypeOfTag(tag ValueTypeTag, nameId TypeNameId) returns MaxonType
+	return match tag 'k'
+		boolean gives MaxonType.boolean
+		integer gives MaxonType.integer
+		float gives MaxonType.float
+		named gives MaxonType.named(nameId)
+		exitCode gives MaxonType.exitCode
+		unresolved gives MaxonType.unresolved
+	end 'k'
+end 'maxonTypeOfTag'
+
 // --- MaxonReturnType: function return type slot ---
 // A function either returns nothing (void) or a value of some MaxonType. The
 // parser produces this for every function's return type; lowerMaxonToStd maps
@@ -180,20 +255,53 @@ end 'MaxonOpMeta'
 // because idiv traps and needs `isPure: false` metadata a shared opcode cannot carry
 // — the same reason a comparison splits into `StdOp.cmp`. Appended at the END of the
 // enum (band-append) so `add to mul` still names the non-trapping arithmetic set.
+//
+// P1.0d.2 appends the WORD-OPERATOR band — `and` / `or` / `xor` / `shl` / `shr`
+// (specs/bitwise-operators.md). Maxon spells these as KEYWORDS, not as `&`/`|`/`^`/
+// `<<`/`>>`, and `and`/`or`/`xor` are CONTEXT-DEPENDENT: bitwise on integers, LOGICAL
+// on bools. That duality is resolved entirely in the PARSER (which is the only tier
+// that knows an expression's source-level type), so by the time an op lands here it
+// means exactly one thing — the bit operation. A bool `and`/`or` never reaches this
+// enum at all: it is SHORT-CIRCUIT CONTROL FLOW, lowered to blocks + a merge phi (see
+// Parser.emitShortCircuit). A bool `xor` does reach it, as `bitXor`: xor cannot
+// short-circuit (no operand value makes the other redundant), and on the 0/1 domain a
+// bitwise xor IS the logical one.
+//
+// Appended at the END of the enum, after the trapping `div`/`mod` band, so the
+// existing `add to mul` range arm still names exactly the non-trapping arithmetic set
+// (the band-append invariant above).
 export enum MaxonBinOp
 	add
 	sub
 	mul
 	div
 	mod
+	bitAnd
+	bitOr
+	bitXor
+	shl
+	shr
 end 'MaxonBinOp'
 
 // The unary (prefix) operators the Maxon tier represents. M3 lands `neg` (the
 // prefix `-`) only. A unary op carries ONE operand (unlike MaxonBinOp's two), so
 // it rides its own `MaxonOp.unaryOp` variant rather than being folded into `binOp`
 // — the operand shapes differ, and a shared variant could not carry both.
+//
+// P1.0d.2 appends the two readings of the prefix keyword `not`, which — like
+// `and`/`or`/`xor` — is context-dependent on its operand's type:
+//   • `bitNot`     — INTEGER `not` (`not 5` == -6): flip every bit.
+//   • `logicalNot` — BOOL `not` (`not true` == false): flip bit 0 only.
+// They are two ENUM ARMS rather than one `not` resolved later because the choice is a
+// TYPE decision, and the parser is the only tier that has the type: shv2's Std tier is
+// width/ABI-resolved but carries no per-VALUE source type map (v1's lowering had one,
+// which is why v1 emits a single `logicalNot` and resolves it in `lowerUnop`). The
+// parser must classify `and`/`or` by operand type anyway — a bool one is control flow —
+// so classifying `not` in the same place costs nothing and keeps ONE type oracle.
 export enum MaxonUnaryOp
 	neg
+	bitNot
+	logicalNot
 end 'MaxonUnaryOp'
 
 // The comparison operators the Maxon tier represents (M4). A comparison SPLITS OUT

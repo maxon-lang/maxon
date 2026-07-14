@@ -101,6 +101,23 @@ export union ParseError implements Error
 	// falling off the end, because it is the same defect wearing a `return` keyword.
 	// Positioned at the `return`, which is where the missing value belongs.
 	returnWithoutValue(name String, line LineNumber, column ColumnNumber)
+	// A SHORT-CIRCUIT `and`/`or` whose left operand is a `bool` and whose right operand is
+	// an `int`. Renders as E3005 (a type mismatch), positioned at the operator. The word
+	// operators are context-dependent, not polymorphic: `bool and bool` is logical and
+	// `int and int` is bitwise, but `bool and int` is neither, and silently taking one
+	// reading would mean silently discarding the other operand's meaning. v1 reports the
+	// identical case with the identical message (Parser.maxon:11771).
+	operandTypeMismatch(op String, line LineNumber, column ColumnNumber)
+	// A `not` whose operand's type the parser cannot determine — reachable only for a call to
+	// a function declared in ANOTHER FILE. Renders as E3005, positioned at the `not`. It is a
+	// REJECTION rather than a guess because `not`'s two readings disagree about the VALUE: the
+	// bitwise complement of a bool is -1 or -2, and both read as TRUE (see `notOperatorFor`).
+	notOnUnknownType(line LineNumber, column ColumnNumber)
+	// A character literal whose body is not one character: `''`, or a `\` escape the
+	// decoder does not know. Renders as E3010, positioned at the literal. (A literal that
+	// is a valid but MULTI-BYTE character — `'é'`, an emoji — is not this: it is a
+	// legitimate program shv2 cannot yet compile, so it reports as `unsupported`.)
+	invalidCharacterLiteral(reason String, line LineNumber, column ColumnNumber)
 end 'ParseError'
 
 // --- Ranged-typealias range bounds ---
@@ -135,11 +152,18 @@ let I64MaxBound = i64.max as ParsedInt
 let MinBoundField = b"min"
 let MaxBoundField = b"max"
 
-// The i1 payloads of the `true` / `false` literals. `BoolFalseValue` is also the zero a
-// boolean-valued condition is truth-tested against (`emitTruthTest`) — one constant, so
-// "false" and "the value a false condition compares equal to" cannot drift apart.
+// The i1 payloads of the `true` / `false` literals. They are also the SEED values a
+// short-circuit merge takes on the skipped path — `and` seeds false, `or` seeds true — so
+// "false" and "the value `a and b` has when `a` is false" are one constant and cannot
+// drift apart.
 let BoolTrueValue = 1 as ParsedInt
 let BoolFalseValue = 0 as ParsedInt
+
+// The label of the placeholder block a Parser holds before it has parsed a function. It
+// belongs to no function and is registered in no module; `parseFunction` replaces it
+// before any op is emitted. Named so that if one ever DID reach the IR, the printed block
+// label would say exactly what went wrong.
+let DetachedBlockLabel = b"detached"
 
 // The result of resolving a `<sized>.min` / `<sized>.max` bound. A union, so the
 // caller can tell the two REJECTIONS apart and name the actual gap in its diagnostic
@@ -211,45 +235,73 @@ end 'byteArrayContains'
 //
 // M3 replaces M2's `+`-only left-fold with a precedence climber (`Parser.parseBinary`).
 // Binary precedence levels — HIGHER binds tighter. Left-associativity falls out of
-// recursing the right operand at `precedence + 1`. The table is deliberately shaped
-// so later milestones EXTEND it without reshaping the climber: M4 inserted comparison
-// BELOW additive (this commit); M5 adds `/`/`mod` at the multiplicative level. Unary
-// minus is NOT in this table — it is a prefix operator handled by `parseUnary` (the
-// leaf of the climber), so it binds tighter than every binary operator here.
+// recursing the right operand at `precedence + 1`. Unary `-` and `not` are NOT in this
+// table — they are prefix operators handled by `parseUnary` (the leaf of the climber), so
+// they bind tighter than every binary operator here.
+//
+// The LADDER, loosest to tightest, is `maxon-selfhosted`'s `infixBindingPower`
+// (Parser.maxon:21056-21077) verbatim, halved (v1 spaces its levels by two to leave room
+// for right-associative operators it never added):
+//
+//     or  <  xor  <  and  <  comparison  <  shl/shr  <  + -  <  * / mod
+//
+// Every one of those relationships is pinned by a spec case, and they are not obvious:
+// `12 and 10 or 1` is 9 (`and` binds tighter than `or`), `12 and 10 xor 3` is 11, and
+// `1 shl 3 > 5` is `(1 shl 3) > 5` — a shift binds TIGHTER than a comparison, unlike C,
+// where it is the reverse (specs/bitwise-operators.md).
 typealias InfixPrecedence = int(0 to 100)
 
-// A sentinel-free "not a binary operator": a real level is >= ComparisonPrecedence,
-// so `infixPrecedence` returning this makes the climber's loop stop (the expression
-// ends). It is a meaningful classification result, not an error sentinel.
+// A sentinel-free "not a binary operator": a real level is >= OrPrecedence, so
+// `infixPrecedence` returning this makes the climber's loop stop (the expression ends).
+// It is a meaningful classification result, not an error sentinel.
 let NotAnInfixOperator = 0 as InfixPrecedence
 
-// Comparison `==`/`!=`/`<`/`>`/`<=`/`>=` — the LOOSEST binary level. Binding below
-// additive means `x + 1 == y` groups as `(x + 1) == y`.
-//
-// The CLIMBER never consumes a comparison operator. A comparison is legal in exactly
-// one place — an `if`/`while` condition — and `parseCondition` handles it directly
-// (`cond := operand [cmpOp operand]`, each operand parsed at AdditivePrecedence, which
-// is what stops the climber short of the `==`). The level survives here so a VALUE
-// context, which starts the climber at it, still SEES the operator and rejects it with
-// the diagnostic that explains why — rather than stopping silently and blaming the next
-// statement. See `parseBinary`.
-let ComparisonPrecedence = 1 as InfixPrecedence
+// The three WORD operators, loosest first. Each is CONTEXT-DEPENDENT — bitwise on
+// integers, logical on bools — and `and`/`or` are additionally SHORT-CIRCUIT when their
+// left operand is a bool, which makes them control flow rather than ops (see
+// Parser.emitShortCircuit). Their precedence does not depend on which reading applies.
+let OrPrecedence = 1 as InfixPrecedence
+let XorPrecedence = 2 as InfixPrecedence
+let AndPrecedence = 3 as InfixPrecedence
 
-// Additive `+`/`-` — binds tighter than comparison.
-let AdditivePrecedence = 2 as InfixPrecedence
+// Comparison `==`/`!=`/`<`/`>`/`<=`/`>=`. Binds tighter than the word operators, so
+// `a > 0 and b > 0` groups as `(a > 0) and (b > 0)` — the reading that makes a
+// short-circuit `and` mean anything at all.
+let ComparisonPrecedence = 4 as InfixPrecedence
 
-// Multiplicative `*` — binds tighter than additive, so `10 + 5 * 2` groups as
+// Shift `shl`/`shr`. Binds TIGHTER than comparison (`1 shl 3 > 5` is `(1 shl 3) > 5`)
+// and LOOSER than additive (`a shl 1 + 2` is `a shl (1 + 2)`).
+let ShiftPrecedence = 5 as InfixPrecedence
+
+// Additive `+`/`-`.
+let AdditivePrecedence = 6 as InfixPrecedence
+
+// Multiplicative `*`/`/`/`mod` — the tightest binary level, so `10 + 5 * 2` groups as
 // `10 + (5 * 2)` = 20.
-let MultiplicativePrecedence = 3 as InfixPrecedence
+let MultiplicativePrecedence = 7 as InfixPrecedence
 
 // The precedence of a binary-operator token, or NotAnInfixOperator for any token
-// that does not begin a binary operation in the grammar. `*`, `/`, and `mod` all
-// bind at the multiplicative level (M5.4 joined the division family here), so
-// `2 * 6 mod 4` is left-associative `((2 * 6) mod 4)`.
+// that does not begin a binary operation in the grammar.
 function infixPrecedence(kind TokenKind) returns InfixPrecedence
+	if kind == TokenKind.or 'or'
+		return OrPrecedence
+	end 'or'
+
+	if kind == TokenKind.xor 'xor'
+		return XorPrecedence
+	end 'xor'
+
+	if kind == TokenKind.and 'and'
+		return AndPrecedence
+	end 'and'
+
 	if comparisonOperator(kind) 'comparison'
 		return ComparisonPrecedence
 	end 'comparison'
+
+	if kind == TokenKind.shl or kind == TokenKind.shr 'shift'
+		return ShiftPrecedence
+	end 'shift'
 
 	if kind == TokenKind.plus or kind == TokenKind.minus 'additive'
 		return AdditivePrecedence
@@ -263,8 +315,14 @@ function infixPrecedence(kind TokenKind) returns InfixPrecedence
 end 'infixPrecedence'
 
 // The Maxon binary operator a supported infix token maps to. Only called for tokens
-// `infixPrecedence` classified as operators (precedence != NotAnInfixOperator);
-// anything else is a climber bug, so it panics rather than guessing an operator.
+// `infixPrecedence` classified as operators (precedence != NotAnInfixOperator) and NOT
+// consumed by a more specific path first (a comparison goes to `infixCmpOp`; a bool
+// `and`/`or` never reaches an op at all — it is short-circuit control flow). Anything
+// else is a climber bug, so it panics rather than guessing an operator.
+//
+// `and`/`or`/`xor` map to the BIT ops here because that is the only reading left by the
+// time this is called: the parser has already established that the operands are not
+// bools (see `parseBinary`), and on integers the word operators ARE the bit operators.
 function infixMaxonOp(kind TokenKind) returns MaxonBinOp
 	if kind == TokenKind.plus 'add'
 		return MaxonBinOp.add
@@ -286,8 +344,190 @@ function infixMaxonOp(kind TokenKind) returns MaxonBinOp
 		return MaxonBinOp.mod
 	end 'mod'
 
+	if kind == TokenKind.and 'bitAnd'
+		return MaxonBinOp.bitAnd
+	end 'bitAnd'
+
+	if kind == TokenKind.or 'bitOr'
+		return MaxonBinOp.bitOr
+	end 'bitOr'
+
+	if kind == TokenKind.xor 'bitXor'
+		return MaxonBinOp.bitXor
+	end 'bitXor'
+
+	if kind == TokenKind.shl 'shl'
+		return MaxonBinOp.shl
+	end 'shl'
+
+	if kind == TokenKind.shr 'shr'
+		return MaxonBinOp.shr
+	end 'shr'
+
 	panic("infixMaxonOp: token '{kind.rawValue}' is not a supported binary operator — infixPrecedence must gate this call")
 end 'infixMaxonOp'
+
+// The two operators that SHORT-CIRCUIT when their operands are bools: `and` (skips the
+// right operand when the left is false) and `or` (skips it when the left is true). `xor`
+// is deliberately absent — no value of one operand makes the other redundant, so there is
+// nothing to skip, and on the 0/1 bool domain the bitwise xor already IS the logical one.
+function shortCircuitOperator(kind TokenKind) returns bool
+	return kind == TokenKind.and or kind == TokenKind.or
+end 'shortCircuitOperator'
+
+// The comparison operators (M4). Each maps to a `MaxonOp.compare`. Classifier shared by
+// the precedence table (`infixPrecedence`) and the climber's op-dispatch (`parseBinary`).
+function comparisonOperator(kind TokenKind) returns bool
+	return kind == TokenKind.equalsEquals or kind == TokenKind.bangEquals or kind == TokenKind.lessThan or kind == TokenKind.lessEquals or kind == TokenKind.greaterThan or kind == TokenKind.greaterEquals
+end 'comparisonOperator'
+
+// --- Source-level type rules, for the type-DIRECTED operators ---
+//
+// `and` / `or` / `xor` / `not` mean different things on `bool` than on `int`, and the
+// PARSER is the tier that decides which — it is the only one with an expression's
+// source-level type, and (for `and`/`or`) the decision is control flow, which cannot be
+// retrofitted by a later pass. These are the rules that decision reads.
+//
+// EVERY ONE OF THEM TAKES AND RETURNS A `ValueTypeTag`, NOT A `MaxonType`, and that is
+// load-bearing rather than incidental: a Maxon union value is a heap object (see
+// MaxonDialect's ValueTypeTag), so a rule returning `MaxonType.integer` ALLOCATES — on every
+// binary operator of every expression of every function. A tag is a scalar. `scale-test`
+// measured the difference at +4,165 allocations on the smallest rung.
+
+function tagIsBool(tag ValueTypeTag) returns bool
+	return tag == ValueTypeTag.boolean
+end 'tagIsBool'
+
+// True when a type could not be pinned at parse time. Reachable for exactly one thing
+// today: a call to a function this FILE does not declare (the signature pre-scan covers
+// every function it does, in any order). Cross-file return types resolve in
+// TypeResolution, which runs after the parser has already had to commit.
+function tagIsUnresolved(tag ValueTypeTag) returns bool
+	return tag == ValueTypeTag.unresolved
+end 'tagIsUnresolved'
+
+// The result type of a WORD operator (`and`/`or`/`xor`) — the one place the bitwise/logical
+// duality is resolved, ported from maxon-selfhosted's `binOpOperandType`
+// (Parser.maxon:11534-11542):
+//
+//   • either operand `bool` ⇒ `boolean`   — the LOGICAL reading, whose result is a bool
+//   • either operand unresolved ⇒ `unresolved` — defer rather than guess; forcing `integer`
+//     here is what made v1 type a `boolA or boolB` as an int and reject it against a `bool`
+//     parameter
+//   • otherwise ⇒ `integer`               — the BITWISE reading
+function wordOpResultTag(left ValueTypeTag, right ValueTypeTag) returns ValueTypeTag
+	if tagIsBool(left) or tagIsBool(right) 'logical'
+		return ValueTypeTag.boolean
+	end 'logical'
+	if tagIsUnresolved(left) or tagIsUnresolved(right) 'defer'
+		return ValueTypeTag.unresolved
+	end 'defer'
+	return ValueTypeTag.integer
+end 'wordOpResultTag'
+
+// True for a WORD operator with EXACTLY ONE bool operand — `flag and 5`, or `5 and flag`.
+// The word operators are CONTEXT-DEPENDENT, not polymorphic: `bool <op> bool` is the logical
+// reading and `int <op> int` is the bitwise one, but a mixture is neither, and either reading
+// silently discards what the other operand meant. `5 and flag` is the nastier direction —
+// it computes `5 & 1` = 1 and reads as `flag`, while `4 and flag` computes `4 & 1` = 0 and
+// reads as ALWAYS FALSE — so the check has to be symmetric, and it therefore lives here (on
+// the path EVERY word operator takes) rather than inside the short-circuit lowering (which
+// only sees the cases whose LEFT operand is a bool).
+//
+// An `unresolved` operand is not a mismatch: it is a type the parser could not pin (a
+// cross-file call), and pairing it with either reading is a deferral, not a contradiction.
+function wordOpMixesBoolAndInt(op MaxonBinOp, left ValueTypeTag, right ValueTypeTag) returns bool
+	if not wordOperator(op) 'notAWordOp'
+		return false
+	end 'notAWordOp'
+	if tagIsUnresolved(left) or tagIsUnresolved(right) 'deferred'
+		return false
+	end 'deferred'
+	return tagIsBool(left) != tagIsBool(right)
+end 'wordOpMixesBoolAndInt'
+
+// The three operators whose meaning follows their operands' TYPE. `shl`/`shr` are absent:
+// a shift is integral by definition, on both sides.
+function wordOperator(op MaxonBinOp) returns bool
+	return match op 'k'
+		add to mod gives false
+		bitAnd to bitXor gives true
+		shl to shr gives false
+	end 'k'
+end 'wordOperator'
+
+// The type a `binOp` yields. Arithmetic, the division family and the shifts are integral by
+// definition (v1 says the same of `shl`/`shr`/`mod`: "integer-only by definition",
+// Parser.maxon:11524). Only the WORD operators follow their operands.
+function binOpResultTag(op MaxonBinOp, left ValueTypeTag, right ValueTypeTag) returns ValueTypeTag
+	return match op 'k'
+		add to mod gives ValueTypeTag.integer
+		bitAnd to bitXor gives wordOpResultTag(left, right: right)
+		shl to shr gives ValueTypeTag.integer
+	end 'k'
+end 'binOpResultTag'
+
+// Which `not` a prefix `not` means, from its operand's type — the LOGICAL one on a bool
+// (flip bit 0), the BITWISE one on an integer (complement all 64).
+//
+// AN UNRESOLVED OPERAND HAS NO SAFE ANSWER, AND SO IS NOT GIVEN ONE. `not` is the one
+// type-directed operator whose two readings disagree about the VALUE, not merely about the
+// side effects: `and`/`or`/`xor` fall back to the bitwise reading when they cannot pin a
+// type, and on the 0/1 bool domain the bitwise answer IS the logical one (only the
+// short-circuit elision is lost). `not` has no such luck — the bitwise reading of `false` is
+// -1 and of `true` is -2, and BOTH read as TRUE in a condition, so `if not isReady()` would
+// be taken unconditionally. That is a silent miscompile, not a degradation, and it is
+// exactly what specs/short-circuit-evaluation.md's `not-over-bool-or-with-overloaded-callees`
+// case exists to forbid.
+//
+// So a `not` whose operand's type the parser cannot determine is REJECTED with a positioned
+// diagnostic. The only way to reach it today is a call to a function declared in ANOTHER FILE
+// (`scanFunctionSignatures` pins every function in this one, in any order). v1 avoids the
+// choice by emitting a single `logicalNot` and resolving it in its lowering, which re-reads
+// the operand type after TypeResolution — a route shv2's Std tier does not have, because it
+// keeps no per-value source type (see MaxonUnaryOp). The real fix is a project-wide callee
+// signature query; until then, refusing beats guessing.
+union NotOperator
+	op(kind MaxonUnaryOp, resultTag ValueTypeTag)
+	// The operand's type could not be determined, so neither reading can be chosen.
+	unknownOperandType
+end 'NotOperator'
+
+function notOperatorFor(operand ValueTypeTag) returns NotOperator
+	if tagIsBool(operand) 'logical'
+		return NotOperator.op(MaxonUnaryOp.logicalNot, resultTag: ValueTypeTag.boolean)
+	end 'logical'
+	if tagIsUnresolved(operand) 'cannotChoose'
+		return NotOperator.unknownOperandType
+	end 'cannotChoose'
+	return NotOperator.op(MaxonUnaryOp.bitNot, resultTag: ValueTypeTag.integer)
+end 'notOperatorFor'
+
+// The value a short-circuit merge takes on the SKIPPED path: `false` for `and` (a false left
+// operand determines the whole expression), `true` for `or`.
+function shortCircuitSeed(takesRhsWhenTrue bool) returns ParsedInt
+	if takesRhsWhenTrue 'isAnd'
+		return BoolFalseValue
+	end 'isAnd'
+	return BoolTrueValue
+end 'shortCircuitSeed'
+
+// The block label a short-circuit's right-hand operand is evaluated under. Distinct per
+// operator so a printed IR fragment says which one produced the block.
+function shortCircuitLabel(takesRhsWhenTrue bool) returns ByteArray
+	if takesRhsWhenTrue 'isAnd'
+		return b"andrhs"
+	end 'isAnd'
+	return b"orrhs"
+end 'shortCircuitLabel'
+
+// A one-element branch-edge argument list — the shape every short-circuit edge has (its
+// merge block carries exactly one phi: the expression's value).
+function singletonArgs(value ValueId) returns ValueIdArray
+	var args = ValueIdArray.create()
+	args.push(value)
+	return args
+end 'singletonArgs'
 
 // The Maxon comparison operator a comparison token maps to. Only called for tokens
 // `comparisonOperator` classified as comparisons; anything else is a climber bug, so
@@ -321,12 +561,149 @@ function infixCmpOp(kind TokenKind) returns MaxonCmpOp
 	panic("infixCmpOp: token '{kind.rawValue}' is not a comparison operator — comparisonOperator must gate this call")
 end 'infixCmpOp'
 
-// The comparison operators (M4). Each maps to a `MaxonOp.compare` and, since it
-// feeds an `if`, fuses with the branch at the x64 tier. Classifier shared by the
-// precedence table (`infixPrecedence`) and the climber's op-dispatch (`parseBinary`).
-function comparisonOperator(kind TokenKind) returns bool
-	return kind == TokenKind.equalsEquals or kind == TokenKind.bangEquals or kind == TokenKind.lessThan or kind == TokenKind.lessEquals or kind == TokenKind.greaterThan or kind == TokenKind.greaterEquals
-end 'comparisonOperator'
+// --- Character literals ---
+//
+// The lexer hands the parser the RAW bytes between the quotes, escapes undecoded, under
+// `TokenKind.charLiteral` — and it uses the SAME token kind for a BLOCK LABEL (`'check'`).
+// Nothing distinguishes them lexically, and nothing needs to: the two never occur in the
+// same grammatical position. A label is consumed by the statement parser at the exactly
+// one place each construct allows it (after an `if`/`while` condition, after `else`, after
+// `end`, after `break`/`continue`); a character literal is consumed by `parsePrimary`,
+// which runs only where an OPERAND is required. `if x 'check'` therefore parses `x` as the
+// condition — the climber stops at the `'check'` because a charLiteral is not an infix
+// operator — and `if cp == '-' 'dash'` parses `'-'` as the comparison's right operand
+// because that IS an operand position, then `'dash'` as the label. This is v1's
+// disambiguation, and its comment (Parser.maxon:16600) says the same thing.
+
+// What a character literal's body decodes to.
+union CharLiteralValue
+	// A single byte — an ASCII character, or an escape that produces one. It materializes
+	// as an ordinary integer literal carrying that byte, which is what makes `cp == '-'`,
+	// `cp - '0'` and `if c >= '0'` mean what they say.
+	byte(value ParsedInt)
+	// `''`. No character, and no value to give it.
+	empty
+	// A literal whose UTF-8 body is more than one byte: `'é'`, `'中'`, an emoji, an EGC.
+	// Representing one needs the `Character` TYPE (a heap value with `.bytes()`,
+	// `.asciiValue()`, EGC-aware equality) — String's cone, not this rung's.
+	multiByte
+	// A `\` escape this decoder does not know.
+	badEscape(text String)
+end 'CharLiteralValue'
+
+// Decode a character-literal body. Ported from maxon-selfhosted's `parseCharLiteralExpr`
+// (Parser.maxon:16606-16637) + `decodeStringEscapes` (11069): v1 takes the SINGLE-BYTE
+// literal as an `integer` and routes everything wider to its `Character` struct. shv2 keeps
+// the first half exactly and rejects the second with a positioned diagnostic naming the gap
+// — it has no Character type to route to yet.
+function decodeCharLiteral(raw ByteArray) returns CharLiteralValue
+	let decoded = decodeEscapes(raw)
+	match decoded 'd'
+		bytes(buf) then return charValueOf(buf)
+		unknownEscape(text) then return CharLiteralValue.badEscape(text)
+	end 'd'
+end 'decodeCharLiteral'
+
+function charValueOf(buf ByteArray) returns CharLiteralValue
+	if buf.count() == 0 'empty'
+		return CharLiteralValue.empty
+	end 'empty'
+	if buf.count() > 1 'wide'
+		return CharLiteralValue.multiByte
+	end 'wide'
+	let b = try buf.get(0) otherwise panic("charValueOf: count()==1 but get(0) failed")
+	return CharLiteralValue.byte(b as ParsedInt)
+end 'charValueOf'
+
+// The result of decoding a quoted body's escape sequences.
+union DecodedLiteral
+	bytes(buf ByteArray)
+	unknownEscape(text String)
+end 'DecodedLiteral'
+
+// The escape sequences a quoted literal accepts, decoded to their bytes. The set is
+// maxon-selfhosted's `decodeStringEscapes` (Parser.maxon:11069-11135) verbatim, so a
+// character literal and (at P1.2) a string literal read escapes the same way — which is
+// the whole reason this is a shared decoder rather than a char-only one.
+//
+// An UNRECOGNIZED escape is REPORTED, not copied through: v1 falls back to a literal copy
+// only because a separate `validateEscapes` pass has already reported it, and shv2 has no
+// such pass. Silently turning `'\q'` into two bytes would then surface as the far more
+// confusing "multi-byte character literal".
+function decodeEscapes(raw ByteArray) returns DecodedLiteral
+	var buf = ByteArray.create()
+	let len = raw.count()
+	var i = 0 as ByteOffset
+	while i < len 'decode'
+		let ch = try raw.get(i) otherwise panic("decodeEscapes: i < len just held but get({i}) failed")
+		if ch != Backslash or i + 1 >= len 'literalByte'
+			buf.push(ch)
+			i = i + 1
+			continue
+		end 'literalByte'
+
+		let next = try raw.get(i + 1) otherwise panic("decodeEscapes: i + 1 < len just held but get({i + 1}) failed")
+		match escapeByte(next) 'esc'
+			byte(b) then buf.push(b)
+			unknown then return DecodedLiteral.unknownEscape("\\{String.from(byteSlice(next))}")
+		end 'esc'
+		i = i + 2
+	end 'decode'
+	return DecodedLiteral.bytes(buf)
+end 'decodeEscapes'
+
+// The byte a two-character escape `\<c>` denotes, or `unknown`.
+union EscapeByte
+	byte(value Byte)
+	unknown
+end 'EscapeByte'
+
+function escapeByte(c Byte) returns EscapeByte
+	if c == LowerN 'newline'
+		return EscapeByte.byte(NewlineByte)
+	end 'newline'
+	if c == LowerT 'tab'
+		return EscapeByte.byte(TabByte)
+	end 'tab'
+	if c == LowerR 'carriageReturn'
+		return EscapeByte.byte(CarriageReturnByte)
+	end 'carriageReturn'
+	if c == DigitZero 'nul'
+		return EscapeByte.byte(NulByte)
+	end 'nul'
+	// The four self-escapes: a backslash, and the three delimiters a literal must be able
+	// to contain — the single quote that would close a character literal, the double quote
+	// that would close a string, and the brace that would open an interpolation.
+	if c == Backslash or c == SingleQuote or c == DoubleQuote or c == LeftBrace or c == RightBrace 'selfEscape'
+		return EscapeByte.byte(c)
+	end 'selfEscape'
+	return EscapeByte.unknown
+end 'escapeByte'
+
+// One byte as a one-element ByteArray, so an offending escape can be interpolated into a
+// diagnostic as text.
+function byteSlice(b Byte) returns ByteArray
+	var one = ByteArray.create()
+	one.push(b)
+	return one
+end 'byteSlice'
+
+// The ASCII bytes the escape decoder produces and recognizes. Named rather than spelled as
+// bare numbers or as `'\\'` character literals — the parser cannot bootstrap its own
+// character-literal syntax to define the table that decodes it.
+let Backslash = 92 as Byte
+let SingleQuote = 39 as Byte
+let DoubleQuote = 34 as Byte
+let LeftBrace = 123 as Byte
+let RightBrace = 125 as Byte
+let LowerN = 110 as Byte
+let LowerT = 116 as Byte
+let LowerR = 114 as Byte
+let DigitZero = 48 as Byte
+let NewlineByte = 10 as Byte
+let TabByte = 9 as Byte
+let CarriageReturnByte = 13 as Byte
+let NulByte = 0 as Byte
 
 // --- M4b loop / on-the-fly SSA support ---
 
@@ -413,6 +790,48 @@ export type Parser
 	// target here; a `while` pushes on entry and pops after its body. Reset per
 	// function (a stray entry across functions would be a parser bug).
 	var loops as LoopContextArray
+	// THE BLOCK EXPRESSION PARSING IS EMITTING INTO, and it MOVES. Until P1.0d.2 an
+	// expression always ended in the block it started in, so "where do ops go" could be a
+	// parameter threaded down from the statement. A short-circuit `and`/`or` ends that: it
+	// leaves control in a fresh MERGE block, and everything after it — the rest of the
+	// expression, the statement's own terminator, every statement that follows — must land
+	// there. A parameter cannot express that (a function returns one value, and the
+	// expression parser's is the ValueId), so the exit block is published here.
+	//
+	// This is `maxon-selfhosted`'s `currentBlock`, and it exists there for the same reason
+	// (its `parseExpressionBP` does `blk = currentBlock` after every recursive call).
+	//
+	// Seeded with a DETACHED placeholder: a Parser exists before any function does, so
+	// there is no entry block to point at yet. `parseFunction` overwrites it with the real
+	// entry before a single op is emitted, and every op the parser emits is emitted from
+	// inside a function body — so the placeholder is provably never written to. (The
+	// alternative, an optional-block union, would put a `match` at every emit site to
+	// handle a case that cannot occur.)
+	var currentBlock as IrBlock
+	// The source-level type of every SSA value this function's ops define, DENSE by ValueId
+	// and split into its two halves: the TAG (the discriminant) and, for a `named` type, the
+	// interned name id. The type oracle the context-dependent operators consult:
+	// `and`/`or`/`xor` and `not` mean one thing on `bool` and another on `int`, and — because
+	// a bool `and`/`or` is CONTROL FLOW, which no later pass can retrofit — the parser is the
+	// tier that must know.
+	//
+	// TWO SCALAR COLUMNS, not an `Array with MaxonType`: a Maxon union value is a heap
+	// object, so a `MaxonType` column would put an allocation on every SSA value in the
+	// program, and the type RULES that read it would put another on every operator. See
+	// MaxonDialect's `ValueTypeTag` for the measurement that settled it.
+	//
+	// Seeded with the parameter types (which own ids 0..paramCount-1) and appended in
+	// lockstep with `valueIds` by `mintValue`. Reset per function.
+	var valueTags as ValueTypeTagArray
+	var valueNameIds as TypeNameIdArray
+	// Every function DECLARED in this file, with its return type — filled by a token-level
+	// pre-scan (`scanFunctionSignatures`) BEFORE any body is parsed. Without it, a call's
+	// result type would depend on whether the callee happened to be declared earlier in the
+	// file, and so would whether `f() and g()` SHORT-CIRCUITS — moving a function to the
+	// bottom of a file would silently change its meaning. That is not a defect worth
+	// inheriting. (v1 lives with it because its TypeResolution re-derives the type later;
+	// shv2's Std tier keeps no per-value source type, so the parser gets one shot.)
+	var declaredReturnTypes as FuncReturnTypeMap
 
 	export static function create(tokens TokenArray, filePath FilePath, namespace String) returns Parser
 		return Self{
@@ -424,13 +843,19 @@ export type Parser
 			scope: Scope.create(),
 			valueIds: ValueIdRef.create(0),
 			mutableVars: VarInfoArray.create(),
-			loops: LoopContextArray.create()
+			loops: LoopContextArray.create(),
+			currentBlock: IrBlock.create(0, label: DetachedBlockLabel),
+			valueTags: ValueTypeTagArray.create(),
+			valueNameIds: TypeNameIdArray.create(),
+			declaredReturnTypes: FuncReturnTypeMap.create()
 		}
 	end 'create'
 
 	// Parse the whole file into its artifact. Top-level loop: skip blank lines,
 	// dispatch each declaration, stop at EOF.
 	export function parseModule() returns FileParseArtifact throws ParseError
+		self.scanFunctionSignatures()
+
 		while true 'top'
 			self.skipNewlines()
 			if self.isEof() 'done'
@@ -440,6 +865,70 @@ export type Parser
 		end 'top'
 		return self.artifact
 	end 'parseModule'
+
+	// Record every `function <name>(…) [returns <Type>]` in the file, in ONE token-level
+	// sweep, before any body is parsed. What it buys is the thing the rung's central
+	// warning is about: `f() and g()` short-circuits iff `f`'s return type is statically
+	// `bool`, so without this, a call to a function declared LATER in the file would be
+	// typed `unresolved`, fall back to the bitwise reading, and evaluate `g()` eagerly —
+	// the same program, the same answer, a different number of side effects, and no
+	// diagnostic anywhere. Declaration ORDER must not decide that.
+	//
+	// Deliberately TOLERANT: it records only the exact `function NAME ( … ) returns TYPE`
+	// shape and skips anything else without complaint. It is not a validator — the real
+	// parse runs next and produces the positioned diagnostic for whatever is malformed. It
+	// restores the cursor, so it is invisible to everything downstream.
+	function scanFunctionSignatures()
+		let resume = self.pos
+		self.pos = 0
+		while not self.isEof() 'scan'
+			if not self.at(TokenKind.function) 'notAFunction'
+				self.advance()
+				continue
+			end 'notAFunction'
+			self.advance()
+			self.recordScannedSignature()
+		end 'scan'
+		self.pos = resume
+	end 'scanFunctionSignatures'
+
+	// Cursor is just past `function`. Record the declared return type of the function whose
+	// name follows, if the declaration is well-formed enough to read one off.
+	function recordScannedSignature()
+		if not self.at(TokenKind.identifier) 'noName'
+			return
+		end 'noName'
+		let nameTok = self.current()
+		self.advance()
+		if not self.skipBalancedParens() 'malformedParams'
+			return
+		end 'malformedParams'
+		let returnType = try self.parseOptionalReturnType() otherwise return
+		self.declaredReturnTypes.upsert(nameTok.value, value: returnType)
+	end 'recordScannedSignature'
+
+	// Advance past a balanced `( … )` starting at the cursor. Returns false — leaving the
+	// cursor where it stopped — when the token stream does not hold one, which the real
+	// parse will report properly. Depth-counted rather than "scan to the first `)`" because
+	// a parameter's type can itself carry parentheses (`int(0 to 100)`).
+	function skipBalancedParens() returns bool
+		if not self.at(TokenKind.leftParen) 'noParen'
+			return false
+		end 'noParen'
+		var depth = 0
+		while not self.isEof() 'scan'
+			if self.at(TokenKind.leftParen) 'open'
+				depth = depth + 1
+			end 'open' else if self.at(TokenKind.rightParen) 'close'
+				depth = depth - 1
+			end 'close'
+			self.advance()
+			if depth == 0 'balanced'
+				return true
+			end 'balanced'
+		end 'scan'
+		return false
+	end 'skipBalancedParens'
 
 	// One top-level declaration: an optional `export`, then a `function` or a ranged
 	// `typealias`. Everything else (type, enum, union, extension, top-level `let`/`var`,
@@ -617,12 +1106,19 @@ export type Parser
 
 		// Fresh per-function value numbering, seeded at the function's paramCount so
 		// parameter ids occupy 0..paramCount-1 by Std-ABI convention (a body value
-		// then starts at paramCount — see IrValueId's ValueIdRef contract).
+		// then starts at paramCount — see IrValueId's ValueIdRef contract). The value-TYPE
+		// column is seeded in lockstep, with the parameters' declared types, so
+		// `valueTypes[i]` is parameter `i`'s type from the very first lookup.
 		let paramCount = paramNames.count()
 		self.scope.reset()
 		self.valueIds = ValueIdRef.create(paramCount)
 		self.mutableVars = VarInfoArray.create()
 		self.loops = LoopContextArray.create()
+		self.valueTags = ValueTypeTagArray.create()
+		self.valueNameIds = TypeNameIdArray.create()
+		for paramType in paramTypes 'seedParamTypes'
+			self.recordValueType(paramType)
+		end 'seedParamTypes'
 
 		// Bind each parameter name to its reserved ValueId (i for parameter i), so a
 		// body reference resolves straight to the parameter's SSA value — the same
@@ -638,8 +1134,11 @@ export type Parser
 		func.nameColumn = nameTok.column
 
 		// Create the entry block (registered in func.blockRefs) BEFORE pushing the
-		// function, mirroring the backend's own function-building order.
+		// function, mirroring the backend's own function-building order. It also displaces
+		// the detached placeholder `currentBlock` was created with — from here on, every op
+		// the parser emits goes to a block that belongs to a real function.
 		var entry = self.artifact.module.addBlockAt(func, label: b"entry", filePath: self.filePath.toString(), firstLine: nameTok.line)
+		self.currentBlock = entry
 
 		self.skipNewlines()
 		// parseStatements threads a "current block" that control-flow statements can
@@ -803,44 +1302,49 @@ export type Parser
 		return current
 	end 'parseStatements'
 
-	// One statement. Returns the block subsequent statements continue in — `block`
-	// itself for `return`/`let`/`var`/assignment/`break`/`continue` (straight-line),
-	// an `if`'s continuation block, or a `while`'s exit block. M4a added `if`; M4b
-	// added assignment, `while`, `break`, and `continue`.
+	// One statement. Returns the block subsequent statements continue in.
+	//
+	// EVERY arm returns `self.currentBlock`, not `block`, and that is the change P1.0d.2
+	// forces: a short-circuit `and`/`or` anywhere inside a statement's EXPRESSION leaves
+	// control in a fresh merge block, so even a "straight-line" statement — a `let`, an
+	// assignment, a bare call — can move it. Returning the incoming `block` would send the
+	// next statement's ops to a block control has already left, which reads as a wild
+	// miscompile (ops stranded on a dead path) rather than as a parse error.
+	//
+	// `break`/`continue` are the two that genuinely cannot move it: neither takes an
+	// expression. They still route through the same return so there is ONE rule here rather
+	// than an exception to remember.
 	function parseStatement(func IrFunction, block IrBlock) returns IrBlock throws ParseError
+		self.currentBlock = block
+
 		if self.at(TokenKind.return) 'ret'
 			try self.parseReturnStatement(func, block: block)
-			return block
 		end 'ret' else if self.at(TokenKind.let) 'letDecl'
-			try self.parseBinding(block, mutable: false)
-			return block
+			try self.parseBinding(func, block: block, mutable: false)
 		end 'letDecl' else if self.at(TokenKind.var) 'varDecl'
-			try self.parseBinding(block, mutable: true)
-			return block
+			try self.parseBinding(func, block: block, mutable: true)
 		end 'varDecl' else if self.at(TokenKind.if) 'ifStmt'
 			return try self.parseIfStatement(func, block: block)
 		end 'ifStmt' else if self.at(TokenKind.while) 'whileStmt'
 			return try self.parseWhileStatement(func, block: block)
 		end 'whileStmt' else if self.at(TokenKind.break) 'breakStmt'
 			try self.parseBreakStatement(block)
-			return block
 		end 'breakStmt' else if self.at(TokenKind.continue) 'continueStmt'
 			try self.parseContinueStatement(block)
-			return block
 		end 'continueStmt' else if self.at(TokenKind.identifier) and self.peekKind() == TokenKind.equals 'assign'
 			// An identifier followed by `=` is a reassignment. The two-token lookahead
 			// keeps a bare identifier from being mis-parsed as an incomplete assignment.
-			try self.parseAssignment(block)
-			return block
+			try self.parseAssignment(func, block: block)
 		end 'assign' else if self.at(TokenKind.identifier) and self.peekKind() == TokenKind.leftParen 'callStmt'
 			// An identifier followed by `(` is a bare-call statement — the call is
 			// evaluated for its effect and its result discarded (M5).
-			try self.parseCallStatement(block)
-			return block
+			_ = try self.parseCallExpression(func)
 		end 'callStmt' else 'unsupported'
 			let tok = self.current()
 			throw ParseError.unsupported("{tok.kind.rawValue} statement", line: tok.line, column: tok.column)
 		end 'unsupported'
+
+		return self.currentBlock
 	end 'parseStatement'
 
 	// Parse a `let`/`var` binding: `let <name> = <expr>`. M2 rejects a type
@@ -855,7 +1359,10 @@ export type Parser
 	// The binding lands in the INNERMOST open scope frame, so a declaration inside an
 	// `if`/`while` body is gone at its `end` — and may legally SHADOW an outer binding
 	// of the same name while it lives (specs/block-scoping.md).
-	function parseBinding(block IrBlock, mutable bool) throws ParseError
+	// The binding takes the initializer's INFERRED type, not a hardcoded `integer`. That was
+	// harmless while every value was an int; it is not any more — `let flag = a > b` binds a
+	// `bool`, and `flag and other` short-circuits only if the parser knows so.
+	function parseBinding(func IrFunction, block IrBlock, mutable bool) throws ParseError
 		if mutable 'isVar'
 			try self.consume(TokenKind.var)
 		end 'isVar' else 'isLet'
@@ -864,8 +1371,8 @@ export type Parser
 
 		let nameTok = try self.consume(TokenKind.identifier)
 		try self.consume(TokenKind.equals)
-		let value = try self.parseExpression(block)
-		var binding = self.scope.declareValueBinding(nameTok.value, varType: MaxonType.integer, mutable: mutable, value: value)
+		let value = try self.parseExpression(func, block: block)
+		var binding = self.scope.declareValueBinding(nameTok.value, varType: self.typeOf(value), mutable: mutable, value: value)
 		if mutable 'trackVar'
 			// Record `var`s in declaration order so loop headers can mint phis for every
 			// mutable binding in scope (M4b on-the-fly SSA). `let`s never join — they
@@ -919,7 +1426,7 @@ export type Parser
 	// no store op: the value model is on-the-fly SSA (the reassignment is just a
 	// rebinding of the variable's current ValueId, and the loop machinery inserts
 	// phis where the rebinding crosses a control-flow merge).
-	function parseAssignment(block IrBlock) throws ParseError
+	function parseAssignment(func IrFunction, block IrBlock) throws ParseError
 		let nameTok = try self.consume(TokenKind.identifier)
 		try self.consume(TokenKind.equals)
 		if not self.scope.contains(nameTok.value) 'undeclared'
@@ -928,7 +1435,7 @@ export type Parser
 		if not self.scope.getInfo(nameTok.value).mutable 'immutable'
 			throw ParseError.assignToImmutable(String.from(nameTok.value), line: nameTok.line, column: nameTok.column)
 		end 'immutable'
-		let value = try self.parseExpression(block)
+		let value = try self.parseExpression(func, block: block)
 		self.scope.setValue(nameTok.value, value: value)
 	end 'parseAssignment'
 
@@ -978,8 +1485,12 @@ export type Parser
 			throw ParseError.returnWithoutValue(String.from(func.name), line: retTok.line, column: retTok.column)
 		end 'noValue'
 
-		let retVal = try self.parseExpression(block)
-		self.artifact.emitTerminator(block, op: MaxonOp.ret(retVal), range: SourceRange.ofToken(retTok))
+		// The terminator goes on the block the EXPRESSION ended in, not the one it started
+		// in. `return a or b` evaluates the `or` across three blocks and leaves control in
+		// the merge; terminating `block` instead would leave the merge unterminated (a
+		// backend panic) and put the `ret` on a path the value it returns does not reach.
+		let retVal = try self.parseExpression(func, block: block)
+		self.artifact.emitTerminator(self.currentBlock, op: MaxonOp.ret(retVal), range: SourceRange.ofToken(retTok))
 	end 'parseReturnStatement'
 
 	// Parse an `if` statement (M4):
@@ -1016,10 +1527,15 @@ export type Parser
 	// `entryVals` / `thenVals` / `elseVals` positionally aligned.
 	function parseIfStatement(func IrFunction, block IrBlock) returns IrBlock throws ParseError
 		let ifTok = try self.consume(TokenKind.if)
-		let cond = try self.parseCondition(block)
+		let cond = try self.parseExpression(func, block: block)
+		// The condition's own blocks: a short-circuit `and`/`or` in it (`if a() and b()`)
+		// has already branched, and control now sits in ITS merge block. That — not the
+		// block the `if` started in — is where the two-way branch belongs, and it is the
+		// `if`'s true entry for every purpose below.
+		var entry = self.currentBlock
 		let thenLabel = try self.consume(TokenKind.charLiteral)
 
-		// Values entering the branches (the condition only reads, so `block`'s values
+		// Values entering the branches (the condition only reads, so `entry`'s values
 		// are unchanged by it). Positional over `mutableVars`, like a loop phi list.
 		let entryVals = self.snapshotMutableValues()
 
@@ -1035,14 +1551,14 @@ export type Parser
 		self.restoreValues(entryVals)
 
 		if not self.at(TokenKind.else) 'noElse'
-			return self.finalizeIfNoElse(func, entry: block, cond: cond, ifTok: ifTok, thenBlock: thenBlock, thenEnd: thenEnd, entryVals: entryVals, thenVals: thenVals)
+			return self.finalizeIfNoElse(func, entry: entry, cond: cond, ifTok: ifTok, thenBlock: thenBlock, thenEnd: thenEnd, entryVals: entryVals, thenVals: thenVals)
 		end 'noElse'
 
 		try self.consume(TokenKind.else)
 		var elseBlock = self.newBlock(func, label: b"ifelse", line: ifTok.line)
 		var elseEnd = try self.parseElseBody(func, elseBlock: elseBlock)
 		let elseVals = self.snapshotMutableValues()
-		return self.finalizeIfElse(func, entry: block, cond: cond, ifTok: ifTok, thenBlock: thenBlock, thenEnd: thenEnd, elseBlock: elseBlock, elseEnd: elseEnd, thenVals: thenVals, elseVals: elseVals)
+		return self.finalizeIfElse(func, entry: entry, cond: cond, ifTok: ifTok, thenBlock: thenBlock, thenEnd: thenEnd, elseBlock: elseBlock, elseEnd: elseEnd, thenVals: thenVals, elseVals: elseVals)
 	end 'parseIfStatement'
 
 	// Parse an `else` body into `elseBlock`: either a nested `if` (the `else if …`
@@ -1142,7 +1658,7 @@ export type Parser
 			if a == b 'same'
 				binding.boundValue = a
 			end 'same' else 'differ'
-				let phiId = self.mintPhi(cont)
+				let phiId = self.mintPhiForBinding(cont, binding: binding)
 				binding.boundValue = phiId
 				edgeArgsA.push(a)
 				edgeArgsB.push(b)
@@ -1223,18 +1739,24 @@ export type Parser
 		var phiVars = LoopPhiVarArray.create()
 		for k in 0 upto self.mutableVars.count() 'mkPhi'
 			var binding = try self.mutableVars.get(k) otherwise panic("parseWhileStatement: mutableVars.get OOB at {k}")
-			let phiId = self.mintPhi(header)
+			let phiId = self.mintPhiForBinding(header, binding: binding)
 			phiVars.push(LoopPhiVar.create(binding, phiId: phiId))
 			binding.boundValue = phiId
 		end 'mkPhi'
 
-		// Condition, emitted into the header so its flags are live for the condBranch.
-		let cond = try self.parseCondition(header)
+		// Condition, evaluated in the header — so `continue` and the back edge, which both
+		// target the header, re-evaluate it. A short-circuit `and`/`or` in the condition
+		// (`while check() and more()`) spreads that evaluation over blocks BETWEEN the
+		// header and the two-way branch; `condExit` is the block it ends in, and that is
+		// where the branch — and the exit's incoming edge — belong. The header stays the
+		// loop's entry, so nothing about `continue` or the back edge changes.
+		let cond = try self.parseExpression(func, block: header)
+		var condExit = self.currentBlock
 		let loopLabelTok = try self.consume(TokenKind.charLiteral)
 
 		var body = self.newBlock(func, label: loopLabelTok.value, line: loopLabelTok.line)
 		var exit = self.newBlock(func, label: b"whileexit", line: whileTok.line)
-		self.emitCondBranch(header, cond: cond, thenId: body.id, elseId: exit.id, ifTok: whileTok)
+		self.emitCondBranch(condExit, cond: cond, thenId: body.id, elseId: exit.id, ifTok: whileTok)
 
 		self.loops.push(LoopContext.create(loopLabelTok.value, headerId: header.id, exitId: exit.id, phiVars: phiVars))
 
@@ -1253,20 +1775,26 @@ export type Parser
 			self.emitBranch(bodyEnd, targetId: header.id)
 		end 'fallsBack'
 
-		self.wireLoopExit(header, exit: exit, ctx: ctx)
+		self.wireLoopExit(condExit, exit: exit, ctx: ctx)
 		return exit
 	end 'parseWhileStatement'
 
 	// Set up the exit block's post-loop variable values. With no `break`, the exit is
-	// reached only from the header's false edge, so each var's value there IS its
-	// header phi (no exit phi needed). With ≥1 `break`, the exit MERGES the header-
-	// false value with each break's value, so it gets its own phis and the header's
-	// false edge passes the header phi values into them (the break edges were recorded
-	// as the breaks were parsed).
+	// reached only from the condition's false edge, so each var's value there IS its
+	// header phi (no exit phi needed). With ≥1 `break`, the exit MERGES the condition-
+	// false value with each break's value, so it gets its own phis and the false edge
+	// passes the header phi values into them (the break edges were recorded as the breaks
+	// were parsed).
+	//
+	// `condExit` — the block the condition ENDED in, which carries the two-way branch — is
+	// the false edge's source, and it is only the header when the condition short-circuited
+	// nowhere. Recording the edge on the header instead would attach the exit's phi operands
+	// to a block that does not branch to the exit at all.
+	//
 	// Index-based in both loops so each phi var is a MUTABLE binding — a `for x in …`
 	// loop variable is immutable, and installing the post-loop value writes through the
 	// binding it carries.
-	function wireLoopExit(header IrBlock, exit IrBlock, ctx LoopContext)
+	function wireLoopExit(condExit IrBlock, exit IrBlock, ctx LoopContext)
 		if not ctx.hasBreak 'noBreak'
 			for k in 0 upto ctx.phiVars.count() 'inherit'
 				var pv = try ctx.phiVars.get(k) otherwise panic("wireLoopExit: phiVars.get OOB at {k}")
@@ -1278,11 +1806,11 @@ export type Parser
 		var headerVals = ValueIdArray.create()
 		for k in 0 upto ctx.phiVars.count() 'mkExitPhi'
 			var pv = try ctx.phiVars.get(k) otherwise panic("wireLoopExit: phiVars.get OOB at {k}")
-			let exitPhiId = self.mintPhi(exit)
+			let exitPhiId = self.mintPhiForBinding(exit, binding: pv.binding)
 			pv.binding.boundValue = exitPhiId
 			headerVals.push(pv.phiId)
 		end 'mkExitPhi'
-		self.recordBranchEdge(header, targetId: exit.id, argIds: headerVals)
+		self.recordBranchEdge(condExit, targetId: exit.id, argIds: headerVals)
 	end 'wireLoopExit'
 
 	// Parse `break ['label']` (M4b): branch to the target loop's EXIT block, carrying
@@ -1355,15 +1883,75 @@ export type Parser
 		return vals
 	end 'edgeArgsFor'
 
-	// Mint a phi (block-arg) on `block` and return its fresh ValueId. Every M4b merge phi
-	// — if-continuation, loop header, loop exit — is i64 (the milestone is int-only), so
-	// the block-arg width is fixed here in ONE place rather than respelled at each of the
-	// three mint sites.
-	function mintPhi(block IrBlock) returns ValueId
-		let phiId = allocValueId(self.valueIds)
+	// Mint a phi (block-arg) on `block` and return its fresh ValueId. The ONE mint site for
+	// every merge phi the parser makes — if-continuation, loop header, loop exit, and (new
+	// at P1.0d.2) the short-circuit merge — so a phi's Maxon-tier type is recorded in
+	// lockstep with its id at all four.
+	//
+	// `IrBlockArg.argType` stays `i64` for every phi, INCLUDING a bool one, and that is not
+	// an oversight: no pass reads the field (grep-verified — it is written here and nowhere
+	// else), and every value the compiler currently handles lives in a 64-bit GPR, so the
+	// declared width changes no code. Making it honest means running the Maxon→Std width
+	// collapse HERE — but `maxonTypeToStdType` panics on a `named` alias, which is exactly
+	// what a phi over a ranged-typealias `var` carries until TypeResolution runs. The field
+	// is the scaffold the float (XMM) register class will need at P1.0d.4, and that is when
+	// it acquires a consumer and a reason to be right.
+	function mintPhi(block IrBlock, tag ValueTypeTag, nameId TypeNameId) returns ValueId
+		let phiId = self.mintValue(tag, nameId: nameId)
 		block.blockArgs.push(IrBlockArg.create(phiId, argType: StdType.i64))
 		return phiId
 	end 'mintPhi'
+
+	// The phi a MERGED BINDING carries: its type is the binding's declared one, which the
+	// binding already holds as a `MaxonType`, so decomposing it constructs nothing.
+	function mintPhiForBinding(block IrBlock, binding VarInfo) returns ValueId
+		return self.mintPhi(block, tag: maxonTypeTag(binding.varType), nameId: typeNameIdOf(binding.varType))
+	end 'mintPhiForBinding'
+
+	// Allocate a fresh ValueId AND record its source-level type, in lockstep. THE only way
+	// the parser mints a value: the type columns are dense by ValueId, so an id allocated
+	// without a type would shift every later value's type by one — a silent misclassification
+	// of every operator that dispatches on type. Splitting the two would make that possible;
+	// this makes it impossible.
+	//
+	// Takes a TAG (plus the name id a `named` type carries), never a `MaxonType`: constructing
+	// a union ALLOCATES, and this is the per-VALUE path. `mintValueOfType` is the door for a
+	// caller that already holds a `MaxonType` and so constructs nothing new.
+	function mintValue(tag ValueTypeTag, nameId TypeNameId) returns ValueId
+		let id = allocValueId(self.valueIds)
+		self.valueTags.push(tag)
+		self.valueNameIds.push(nameId)
+		return id
+	end 'mintValue'
+
+	// Mint a value whose type is already in hand as a `MaxonType` — a `literal` op's type (the
+	// op stores one anyway), a call's declared return type. It DECOMPOSES an existing union
+	// rather than constructing a new one, so it allocates nothing either.
+	function mintValueOfType(valueType MaxonType) returns ValueId
+		return self.mintValue(maxonTypeTag(valueType), nameId: typeNameIdOf(valueType))
+	end 'mintValueOfType'
+
+	// Append a value's type to the columns WITHOUT allocating an id — for the parameters,
+	// whose ids (0..paramCount-1) the value numbering RESERVED rather than minted.
+	function recordValueType(valueType MaxonType)
+		self.valueTags.push(maxonTypeTag(valueType))
+		self.valueNameIds.push(typeNameIdOf(valueType))
+	end 'recordValueType'
+
+	// The TAG of an SSA value's type — the hot read, and the only thing the operator rules
+	// need. Every value the parser mints has one (the parameters are seeded from their
+	// declarations, `mintValue` records the rest), so a miss is a parser invariant break.
+	function tagOf(value ValueId) returns ValueTypeTag
+		return try self.valueTags.get(value) otherwise panic("Parser.tagOf: value v{value} has no recorded type — every SSA value must be minted through mintValue")
+	end 'tagOf'
+
+	// The full `MaxonType` of an SSA value, REBUILT from the two columns. It CONSTRUCTS a
+	// union, so it allocates — which is why it is called only where a `MaxonType` is genuinely
+	// STORED (a binding's declared type), and never on a per-value or per-operator path.
+	function typeOf(value ValueId) returns MaxonType
+		let nameId = try self.valueNameIds.get(value) otherwise panic("Parser.typeOf: value v{value} has no recorded type name — the two type columns fell out of lockstep")
+		return maxonTypeOfTag(self.tagOf(value), nameId: nameId)
+	end 'typeOf'
 
 	// Record the block-arg values `block` passes to `targetId` for the Std-tier
 	// phi-elim pass. A branch op carries only the target BlockId, so the per-edge phi
@@ -1396,64 +1984,44 @@ export type Parser
 		self.artifact.emitTerminator(block, op: MaxonOp.branch(targetId), range: SourceRange.none())
 	end 'emitBranch'
 
-	// Expression entry — a VALUE context (`let`/`var`/`return`/an argument/inside
-	// parentheses). A Pratt precedence climber (M3 replaced M2's `+`-only left-fold):
-	// it starts at the loosest binary level, `parseBinary` climbs the precedence table
-	// (`infixPrecedence`), and `parseUnary` handles prefix `-` as the climber's leaf.
-	// See the precedence table above the Parser type.
+	// Expression entry — EVERY value context: a `let`/`var` initializer, an assignment's
+	// right-hand side, a `return` value, a call argument, an `if`/`while` CONDITION, the
+	// inside of a parenthesis. There is only one now: `parseCondition` is gone.
 	//
-	// It starts at ComparisonPrecedence — the level BELOW the loosest operator it can
-	// actually accept — precisely so that a comparison written here is SEEN by the
-	// climber and rejected with the diagnostic that explains why (parseBinary), instead
-	// of being left unconsumed and blamed on whatever follows it.
-	function parseExpression(block IrBlock) returns ValueId throws ParseError
-		return try self.parseBinary(block, minPrec: ComparisonPrecedence)
+	// It was a separate, FLATTER grammar (`operand [cmpOp operand]`, operands parsed at
+	// additive precedence) that existed for exactly one reason — a comparison could only be
+	// consumed by a branch, because the backend had no way to write a boolean into a
+	// register. Two things end that. `setcc` gives it one (`let r = 5 > 3` compiles), and
+	// `and`/`or` bind LOOSER than comparison, so `if a > 0 and b > 0` cannot even be
+	// expressed by a grammar whose top level is a single comparison. One climber, one set of
+	// precedences, and a condition is simply an expression that happens to feed a branch.
+	//
+	// Seeds `currentBlock`, which every emit below targets — see the field.
+	function parseExpression(func IrFunction, block IrBlock) returns ValueId throws ParseError
+		self.currentBlock = block
+		return try self.parseBinary(func, minPrec: OrPrecedence)
 	end 'parseExpression'
 
-	// Condition entry — the `if`/`while` condition, and the ONE context where a
-	// comparison is legal, because it is the one context where its result is CONSUMED by
-	// a branch (the Std→x64 pass fuses the pair into `cmp` + `jcc` and never materializes
-	// the boolean). The grammar is flat, not climbed:
+	// The precedence-climbing core. Parse a unary/primary operand, then while the next token
+	// is a binary operator whose precedence is >= `minPrec`, consume it and recurse for the
+	// right operand at `precedence + 1` (which makes the operator LEFT-associative). A
+	// supported operator below `minPrec`, a non-operator, or the end of the expression stops
+	// the climb.
 	//
-	//     cond := operand [ cmpOp operand ]        operand := <expression at additive precedence>
+	// THREE dispatches, and the middle one is the whole rung:
 	//
-	// Parsing each operand at AdditivePrecedence is what stops the climber short of the
-	// comparison operator, so the comparison is consumed HERE and nowhere else — which
-	// is also why a chain (`a == b == c`) cannot parse: the second `==` is left where the
-	// `if`'s block label was expected.
+	//   1. a SHORT-CIRCUIT `and`/`or` over a bool left operand ⇒ not an op at all. It becomes
+	//      blocks and a merge phi, and it MOVES `currentBlock` (see emitShortCircuit), which
+	//      is why `left`'s block is re-read from the field after every recursive call.
+	//   2. a comparison ⇒ `MaxonOp.compare`, typed `boolean`.
+	//   3. everything else ⇒ `MaxonOp.binOp`. This is where a bitwise `and`/`or`/`xor` lands:
+	//      the short-circuit test above did not fire, so the operands are not bools, and on
+	//      integers the word operators ARE the bit operators.
 	//
-	// A condition that is NOT a comparison is a BOOLEAN VALUE (`if flag`, `while true`).
-	// x64 branches on FLAGS, and the fused lowering only knows the flags a `cmp` set — so
-	// the truth test is materialized as exactly that: `value != 0`.
-	function parseCondition(block IrBlock) returns ValueId throws ParseError
-		let condTok = self.current()
-		let left = try self.parseBinary(block, minPrec: AdditivePrecedence)
-
-		let opTok = self.current()
-		if not comparisonOperator(opTok.kind) 'booleanValue'
-			return self.emitTruthTest(block, value: left, condTok: condTok)
-		end 'booleanValue'
-
-		self.advance()
-		let right = try self.parseBinary(block, minPrec: AdditivePrecedence)
-		return self.emitCompare(block, lhs: left, rhs: right, op: infixCmpOp(opTok.kind), opTok: opTok)
-	end 'parseCondition'
-
-	// The precedence-climbing core. Parse a unary/primary operand, then while the
-	// next token is a binary operator whose precedence is >= `minPrec`, consume it
-	// and recurse for the right operand at `precedence + 1` (which makes the operator
-	// LEFT-associative). A supported operator below `minPrec`, a non-operator, or the
-	// end of the expression stops the climb.
-	//
-	// The climber emits ARITHMETIC only. A comparison reaching it is a comparison in a
-	// VALUE position (`let x = a == b`, `(a == b) + 1`, or the right operand of another
-	// comparison) — it would have to materialize a boolean, which the fused compare/branch
-	// lowering cannot do, so it is rejected loudly, in operator position, rather than
-	// lowered into something that reads stale EFLAGS or an unwritten result register.
-	// `parseCondition` consumes the one comparison the language currently allows before
-	// the climber ever sees it. Boolean materialization (setcc) lifts this wholesale.
-	function parseBinary(block IrBlock, minPrec InfixPrecedence) returns ValueId throws ParseError
-		var left = try self.parseUnary(block)
+	// No arm rejects anything any more. The old "a comparison is not a value" throw is gone
+	// with the machinery that forced it.
+	function parseBinary(func IrFunction, minPrec InfixPrecedence) returns ValueId throws ParseError
+		var left = try self.parseUnary(func)
 
 		while true 'climb'
 			let opTok = self.current()
@@ -1463,88 +2031,208 @@ export type Parser
 				break
 			end 'stop'
 
-			if comparisonOperator(opTok.kind) 'comparisonNotAValue'
-				throw ParseError.unsupported("operator '{opTok.kind.rawValue}' — a comparison is only valid as the sole top-level operator of an `if`/`while` condition (its result fuses into the branch; chained comparison and comparison-as-a-value arrive with boolean materialization)", line: opTok.line, column: opTok.column)
-			end 'comparisonNotAValue'
+			// The short-circuit test reads the LEFT operand's type only, and reads it BEFORE
+			// the right operand is parsed — it has to, because whether the right operand is
+			// evaluated AT ALL is the thing being decided. (v1 gates identically:
+			// Parser.maxon:11384.)
+			if shortCircuitOperator(opTok.kind) and tagIsBool(self.tagOf(left)) 'shortCircuit'
+				self.advance()
+				left = try self.emitShortCircuit(func, leftValue: left, opTok: opTok, rhsMinPrec: prec + 1)
+				continue
+			end 'shortCircuit'
 
 			self.advance()
-			let right = try self.parseBinary(block, minPrec: prec + 1)
-			left = self.emitBinOp(block, lhs: left, rhs: right, op: infixMaxonOp(opTok.kind), opTok: opTok)
+			let right = try self.parseBinary(func, minPrec: prec + 1)
+
+			if comparisonOperator(opTok.kind) 'comparison'
+				left = self.emitCompare(left, rhs: right, op: infixCmpOp(opTok.kind), opTok: opTok)
+				continue
+			end 'comparison'
+
+			left = try self.emitBinOp(left, rhs: right, op: infixMaxonOp(opTok.kind), opTok: opTok)
 		end 'climb'
 
 		return left
 	end 'parseBinary'
 
-	// Materialize the truth test a BOOLEAN-VALUED condition needs: `value != 0`, emitted
-	// as the same `compare` op a written-out comparison produces, against a `false`
-	// literal. The Std tier's const-folder collapses the pair to `cmp reg, 0` (the zero
-	// never occupies a register), and the x64 tier fuses that with the branch — so
-	// `if flag` and `if flag != false` lower identically, which is what makes a bool
-	// condition need no new machinery in the backend at all.
+	// Lower a BOOL `and`/`or` to SHORT-CIRCUIT control flow — the point of this rung. `a and
+	// b` must not evaluate `b` when `a` is false, so it is not an operator at all: it is a
+	// branch, a block, and a merge phi, minted on the same on-the-fly SSA machinery `if` and
+	// `while` mint theirs.
 	//
-	// Anchored on the condition's FIRST token: the test is synthetic (no operator token
-	// spawned it), and the condition itself is what a diagnostic about it should point at.
-	function emitTruthTest(block IrBlock, value ValueId, condTok Token) returns ValueId
-		let falseValue = self.emitLiteral(block, value: BoolFalseValue, valueType: MaxonType.boolean, range: SourceRange.ofToken(condTok))
-		return self.emitCompare(block, lhs: value, rhs: falseValue, op: MaxonCmpOp.ne, opTok: condTok)
-	end 'emitTruthTest'
+	//     entry:  <lhs already evaluated>
+	//             cond_br lhs ? rhs   : merge   -- `and`: a FALSE lhs skips the rhs
+	//             cond_br lhs ? merge : rhs     -- `or` : a TRUE  lhs skips the rhs
+	//     rhsEnd: <the rhs is evaluated HERE, and on no other path>
+	//             br merge(rhsValue)
+	//     merge:  phi <- [seed from entry] [rhsValue from rhsEnd]
+	//
+	// The SEED is the answer the skipped path already determined: `false` for `and`, `true`
+	// for `or`. Ported from maxon-selfhosted's `emitShortCircuit`
+	// (Parser.maxon:11718-11787), with two deliberate divergences:
+	//
+	//   1. v1 seeds a VAR SLOT, stores the rhs into it, and reloads it at the merge, because
+	//      v1 has slots and a `mem2reg` to promote them. shv2 has neither — its parser IS
+	//      the SSA constructor — so the merge value is a BLOCK ARG fed by each predecessor's
+	//      branch edge. The same shape, one tier earlier and with no store/load round trip.
+	//   2. v1 NEGATES the lhs for `or` (`xor lhs, 1`) so the "then" target is always the rhs,
+	//      matching its jcc-to-else convention. shv2's `condBranch` names both targets and
+	//      `lowerCondBranch` emits `jcc` + `jmp` for EVERY layout, so the targets are simply
+	//      SWAPPED — exact, and free, where v1's negation costs a literal and an xor on every
+	//      single `or`.
+	//
+	// The rhs block is created BEFORE the rhs is parsed and the merge block AFTER, so a
+	// NESTED short-circuit inside the rhs slots its own blocks between them and `.text` still
+	// lays out in evaluation order (v1 makes the same point).
+	function emitShortCircuit(func IrFunction, leftValue ValueId, opTok Token, rhsMinPrec InfixPrecedence) returns ValueId throws ParseError
+		// `var`, not `let`: the seed literal and the two-way branch are emitted INTO it, and
+		// a `let` binding cannot be forwarded to a mutating parameter (E3019).
+		var entry = self.currentBlock
+		let range = SourceRange.ofToken(opTok)
+		let takesRhsWhenTrue = opTok.kind == TokenKind.and
 
-	// A prefix-operator operand — the climber's leaf. M3 handles prefix `-` (negate).
-	// Its operand is a PRIMARY, not another unary: `- -x` therefore fails at the
-	// second `-` (parsePrimary raises E2004), matching unary-operators.md's
-	// double-negation. Because parseUnary is the leaf of parseBinary, unary minus
-	// binds tighter than every binary operator without a precedence entry of its own.
-	function parseUnary(block IrBlock) returns ValueId throws ParseError
+		// The value the SKIPPED path yields, materialized in the entry block: `false and _`
+		// is false, `true or _` is true. It is the entry edge's phi operand.
+		let seed = self.emitLiteralIn(entry, value: shortCircuitSeed(takesRhsWhenTrue), valueType: MaxonType.boolean, range: range)
+
+		let rhsBlock = self.newBlock(func, label: shortCircuitLabel(takesRhsWhenTrue), line: opTok.line)
+		self.currentBlock = rhsBlock
+		let rhsValue = try self.parseBinary(func, minPrec: rhsMinPrec)
+		// NOT `rhsBlock`: the rhs may itself have short-circuited (`a or b or c`), leaving
+		// control in a merge block of its own. That is the block the value is defined in, and
+		// the one that must branch here.
+		var rhsEnd = self.currentBlock
+
+		// The SHORT-CIRCUIT half of the same symmetric rule `emitBinOp` enforces: the left
+		// operand is a bool (that is what brought us here), so an int right operand is the
+		// `bool and int` mismatch. It cannot be caught in `emitBinOp`, because a short-circuit
+		// emits no `binOp` at all — the blocks above have already been laid down.
+		let rhsTag = self.tagOf(rhsValue)
+		if not tagIsBool(rhsTag) and not tagIsUnresolved(rhsTag) 'mixedOperands'
+			throw ParseError.operandTypeMismatch(opTok.kind.rawValue, line: opTok.line, column: opTok.column)
+		end 'mixedOperands'
+
+		var merge = self.newBlock(func, label: b"scmerge", line: opTok.line)
+		let result = self.mintPhi(merge, tag: ValueTypeTag.boolean, nameId: UnnamedTypeId)
+
+		self.recordBranchEdge(entry, targetId: merge.id, argIds: singletonArgs(seed))
+		self.recordBranchEdge(rhsEnd, targetId: merge.id, argIds: singletonArgs(rhsValue))
+		self.emitShortCircuitBranch(entry, cond: leftValue, rhsId: rhsBlock.id, mergeId: merge.id, takesRhsWhenTrue: takesRhsWhenTrue, range: range)
+		self.emitBranch(rhsEnd, targetId: merge.id)
+
+		self.currentBlock = merge
+		return result
+	end 'emitShortCircuit'
+
+	// The two-way branch out of a short-circuit's entry block. `and` takes the rhs when the
+	// lhs is TRUE; `or` takes it when the lhs is FALSE — so the two differ by nothing but
+	// which target sits in which slot.
+	function emitShortCircuitBranch(entry IrBlock, cond ValueId, rhsId BlockId, mergeId BlockId, takesRhsWhenTrue bool, range SourceRange)
+		var thenId = mergeId
+		var elseId = rhsId
+		if takesRhsWhenTrue 'isAnd'
+			thenId = rhsId
+			elseId = mergeId
+		end 'isAnd'
+		self.artifact.emitTerminator(entry, op: MaxonOp.condBranch(cond, thenBlockId: thenId, elseBlockId: elseId), range: range)
+	end 'emitShortCircuitBranch'
+
+	// A prefix-operator operand — the climber's leaf.
+	//
+	// The two prefix operators bind their operands DIFFERENTLY, and both readings are pinned
+	// by a spec:
+	//   • `-` takes a PRIMARY, so `- -x` fails at the second `-` (parsePrimary raises E2004)
+	//     — specs/unary-operators.md's double-negation case.
+	//   • `not` takes another UNARY, so `not not a` is legal and is 42 for a == 42
+	//     — specs/bitwise-operators.md's `bitwise-not-double`.
+	// v1 splits them the same way (its `-` recurses into parsePrimary, its `not` into
+	// parseUnary — Parser.maxon:12034-12055).
+	//
+	// `not` is TYPE-DIRECTED, like `and`/`or`/`xor`: on a bool it flips bit 0 (`not true` is
+	// false), on an integer it complements all 64 (`not 5` is -6). The two are different
+	// instructions, and choosing the integer one for a bool would give -1/-2 — both of which
+	// still read as TRUE in a condition. So the parser, which is the tier that knows the
+	// type, picks the opcode; the Std tier just lowers what it is given.
+	function parseUnary(func IrFunction) returns ValueId throws ParseError
 		if self.at(TokenKind.minus) 'neg'
 			let opTok = try self.consume(TokenKind.minus)
-			let operand = try self.parsePrimary(block)
-			return self.emitUnaryOp(block, operand: operand, op: MaxonUnaryOp.neg, opTok: opTok)
+			let operand = try self.parsePrimary(func)
+			return self.emitUnaryOp(operand, op: MaxonUnaryOp.neg, resultTag: self.tagOf(operand), opTok: opTok)
 		end 'neg'
 
-		return try self.parsePrimary(block)
+		if self.at(TokenKind.not) 'not'
+			let opTok = try self.consume(TokenKind.not)
+			let operand = try self.parseUnary(func)
+			match notOperatorFor(self.tagOf(operand)) 'which'
+				op(kind, resultTag) then return self.emitUnaryOp(operand, op: kind, resultTag: resultTag, opTok: opTok)
+				unknownOperandType then throw ParseError.notOnUnknownType(opTok.line, column: opTok.column)
+			end 'which'
+		end 'not'
+
+		return try self.parsePrimary(func)
 	end 'parseUnary'
 
-	// Append a `binOp` op combining two SSA values; return the ValueId it defines.
+	// Append a `binOp` op combining two SSA values; return the ValueId it defines. The
+	// result's TYPE is the operator's: arithmetic and shifts are integer; `and`/`or`/`xor`
+	// follow their operands (see `wordOpResultType`) — the ONE place a bitwise op's result
+	// could be a bool, which is what `consume(f.a or f.b)` against a `bool` parameter needs.
 	// The source range anchors on the operator token (the conventional binop anchor).
-	function emitBinOp(block IrBlock, lhs ValueId, rhs ValueId, op MaxonBinOp, opTok Token) returns ValueId
-		let result = allocValueId(self.valueIds)
-		self.artifact.emitOp(block, op: MaxonOp.binOp(result, lhs: lhs, rhs: rhs, op: op), range: SourceRange.ofToken(opTok))
+	function emitBinOp(lhs ValueId, rhs ValueId, op MaxonBinOp, opTok Token) returns ValueId throws ParseError
+		let leftTag = self.tagOf(lhs)
+		let rightTag = self.tagOf(rhs)
+		// The word operators reach here in their BITWISE reading (a bool `and`/`or` became
+		// control flow long before, and a bool `xor` is the same bit op on the 0/1 domain).
+		// So exactly one bool operand is a genuine type error, and this is the one place on
+		// the path of EVERY word operator — either operand order — where it can be caught.
+		if wordOpMixesBoolAndInt(op, left: leftTag, right: rightTag) 'mixedOperands'
+			throw ParseError.operandTypeMismatch(opTok.kind.rawValue, line: opTok.line, column: opTok.column)
+		end 'mixedOperands'
+
+		let result = self.mintValue(binOpResultTag(op, left: leftTag, right: rightTag), nameId: UnnamedTypeId)
+		self.artifact.emitOp(self.currentBlock, op: MaxonOp.binOp(result, lhs: lhs, rhs: rhs, op: op), range: SourceRange.ofToken(opTok))
 		return result
 	end 'emitBinOp'
 
-	// Append a `unaryOp` op over one SSA value; return the ValueId it defines. The
-	// source range anchors on the operator token, mirroring emitBinOp.
-	function emitUnaryOp(block IrBlock, operand ValueId, op MaxonUnaryOp, opTok Token) returns ValueId
-		let result = allocValueId(self.valueIds)
-		self.artifact.emitOp(block, op: MaxonOp.unaryOp(result, operand: operand, op: op), range: SourceRange.ofToken(opTok))
+	// Append a `unaryOp` op over one SSA value; return the ValueId it defines. The source
+	// range anchors on the operator token, mirroring emitBinOp.
+	function emitUnaryOp(operand ValueId, op MaxonUnaryOp, resultTag ValueTypeTag, opTok Token) returns ValueId
+		let result = self.mintValue(resultTag, nameId: UnnamedTypeId)
+		self.artifact.emitOp(self.currentBlock, op: MaxonOp.unaryOp(result, operand: operand, op: op), range: SourceRange.ofToken(opTok))
 		return result
 	end 'emitUnaryOp'
 
-	// Append a `compare` op over two SSA values; return the i1 ValueId it defines.
-	// Mirrors emitBinOp but emits the distinct comparison variant (a comparison is not
-	// a `binOp` — see MaxonCmpOp). The source range anchors on the comparison operator.
-	function emitCompare(block IrBlock, lhs ValueId, rhs ValueId, op MaxonCmpOp, opTok Token) returns ValueId
-		let result = allocValueId(self.valueIds)
-		self.artifact.emitOp(block, op: MaxonOp.compare(result, lhs: lhs, rhs: rhs, op: op), range: SourceRange.ofToken(opTok))
+	// Append a `compare` op over two SSA values; return the BOOLEAN ValueId it defines.
+	// Mirrors emitBinOp but emits the distinct comparison variant (a comparison is not a
+	// `binOp` — see MaxonCmpOp). The source range anchors on the comparison operator.
+	function emitCompare(lhs ValueId, rhs ValueId, op MaxonCmpOp, opTok Token) returns ValueId
+		let result = self.mintValue(ValueTypeTag.boolean, nameId: UnnamedTypeId)
+		self.artifact.emitOp(self.currentBlock, op: MaxonOp.compare(result, lhs: lhs, rhs: rhs, op: op), range: SourceRange.ofToken(opTok))
 		return result
 	end 'emitCompare'
 
-	// A primary expression: an integer literal, a `true`/`false` literal, a parenthesized
-	// sub-expression, a type-qualified numeric bound (`u16.max`), a call, or a variable
-	// reference. Anything else where an operand is required (an operator, a delimiter,
+	// A primary expression: an integer literal, a `true`/`false` literal, a CHARACTER literal,
+	// a parenthesized sub-expression, a type-qualified numeric bound (`u16.max`), a call, or a
+	// variable reference. Anything else where an operand is required (an operator, a delimiter,
 	// EOF) is E2004 — "Expected expression but got '<got>'". This is the site `- -x` hits
 	// at its second `-`: unary minus's operand is a primary, and a leading `-` is not one.
-	function parsePrimary(block IrBlock) returns ValueId throws ParseError
+	function parsePrimary(func IrFunction) returns ValueId throws ParseError
 		if self.at(TokenKind.intLiteral) 'intLit'
-			return try self.parseIntLiteral(block)
+			return try self.parseIntLiteral()
 		end 'intLit'
 
 		if self.at(TokenKind.true) or self.at(TokenKind.false) 'boolLit'
-			return try self.parseBoolLiteral(block)
+			return try self.parseBoolLiteral()
 		end 'boolLit'
 
+		// A charLiteral HERE — where an operand is required — is a character literal. The
+		// same token kind is a BLOCK LABEL elsewhere, and the two never collide because a
+		// label never sits in operand position (see the CharLiteralValue header).
+		if self.at(TokenKind.charLiteral) 'charLit'
+			return try self.parseCharLiteral()
+		end 'charLit'
+
 		if self.at(TokenKind.leftParen) 'group'
-			return try self.parseParenthesizedExpression(block)
+			return try self.parseParenthesizedExpression(func)
 		end 'group'
 
 		if self.at(TokenKind.identifier) 'namedPrimary'
@@ -1555,10 +2243,10 @@ export type Parser
 			// access lands, and the sized-type names are reserved, so the two cannot
 			// collide. Anything else is a variable reference.
 			if self.peekKind() == TokenKind.leftParen 'callExpr'
-				return try self.parseCallExpression(block)
+				return try self.parseCallExpression(func)
 			end 'callExpr'
 			if self.peekKind() == TokenKind.dot 'qualifiedBound'
-				return try self.parseTypeQualifiedBoundExpression(block)
+				return try self.parseTypeQualifiedBoundExpression()
 			end 'qualifiedBound'
 			return try self.parseVariableReference()
 		end 'namedPrimary'
@@ -1571,16 +2259,38 @@ export type Parser
 	// The parentheses produce NO op: the group's value IS the inner expression's, so the
 	// only thing they change is the shape of the tree the climber builds.
 	//
-	// The inner expression is a VALUE context, so a comparison inside parentheses is
-	// rejected exactly as one on a `let`'s right-hand side is. That is not a rule about
-	// parentheses — it is the fused compare/branch restriction (see parseBinary), and it
-	// lifts for both at once when boolean materialization lands.
-	function parseParenthesizedExpression(block IrBlock) returns ValueId throws ParseError
+	// It re-enters the climber at the LOOSEST level, so a parenthesis restores every operator
+	// — `not (a or b)` is the `or` of two bools, `(x > 0) and (y > 0)` groups explicitly. It
+	// does NOT go through `parseExpression`, which would re-seed `currentBlock` and undo any
+	// short-circuit that moved it.
+	function parseParenthesizedExpression(func IrFunction) returns ValueId throws ParseError
 		try self.consume(TokenKind.leftParen)
-		let value = try self.parseExpression(block)
+		let value = try self.parseBinary(func, minPrec: OrPrecedence)
 		try self.consume(TokenKind.rightParen)
 		return value
 	end 'parseParenthesizedExpression'
+
+	// `'a'`, `'\n'`, `'0'` — a character literal in operand position. It materializes as an
+	// ordinary INTEGER literal carrying the character's byte, which is exactly what
+	// specs/char-literal-to-int.md asks for ("the compiler automatically converts the
+	// character literal to its Unicode codepoint value at compile time") and what makes
+	// `cp == '-'`, `cp - '0'` and `if c >= '0'` compile and mean what they say.
+	//
+	// v1 does the same for the single-byte case (`parseCharLiteralExpr`, Parser.maxon:16606:
+	// *"Emits an integer literal carrying the byte value of an ASCII character"*) and routes
+	// wider literals to its `Character` struct. shv2 has no Character type — it is a heap
+	// value, and heap values arrive with String at P1.2 — so it REJECTS them with a
+	// positioned diagnostic naming the gap, exactly as v1's own comment says it must
+	// ("report them as a diagnostic instead of silently producing the wrong byte").
+	function parseCharLiteral() returns ValueId throws ParseError
+		let tok = try self.consume(TokenKind.charLiteral)
+		match decodeCharLiteral(tok.value) 'decoded'
+			byte(value) then return self.emitLiteral(value, valueType: MaxonType.integer, range: SourceRange.ofToken(tok))
+			empty then throw ParseError.invalidCharacterLiteral("a character literal must contain exactly one character", line: tok.line, column: tok.column)
+			multiByte then throw ParseError.unsupported("the multi-byte character literal '{String.from(tok.value)}' (a character wider than one byte is a `Character` — a heap value with `.bytes()` and `.asciiValue()` — which arrives with String; a single-byte literal materializes as its byte value)", line: tok.line, column: tok.column)
+			badEscape(text) then throw ParseError.invalidCharacterLiteral("unknown escape sequence '{text}'", line: tok.line, column: tok.column)
+		end 'decoded'
+	end 'parseCharLiteral'
 
 	// `true` / `false`. A bool is an i1 carrying 1 or 0 — the same `literal` op an
 	// integer uses, typed `boolean` so the Maxon→Std collapse gives it i1 rather than
@@ -1589,7 +2299,7 @@ export type Parser
 	// ONE emit site, not one per arm: the two literals differ only in the token they
 	// consume and the payload they carry, so a change to how a bool is materialized (its
 	// MaxonType, its op) lands in a single place and cannot apply to `true` but not `false`.
-	function parseBoolLiteral(block IrBlock) returns ValueId throws ParseError
+	function parseBoolLiteral() returns ValueId throws ParseError
 		let tok = self.current()
 		var value = BoolTrueValue
 		if self.at(TokenKind.true) 'isTrue'
@@ -1598,17 +2308,17 @@ export type Parser
 			try self.consume(TokenKind.false)
 			value = BoolFalseValue
 		end 'isFalse'
-		return self.emitLiteral(block, value: value, valueType: MaxonType.boolean, range: SourceRange.ofToken(tok))
+		return self.emitLiteral(value, valueType: MaxonType.boolean, range: SourceRange.ofToken(tok))
 	end 'parseBoolLiteral'
 
 	// A type-qualified numeric bound used as a VALUE (`let x = u16.max`, `if v == u64.max`).
 	// The same three tokens a range declaration's endpoint is built from, resolved through
 	// the same table — so `int(0 to u64.max)` and `v == u64.max` can never disagree about
 	// what `u64.max` is. It materializes an ordinary integer literal.
-	function parseTypeQualifiedBoundExpression(block IrBlock) returns ValueId throws ParseError
+	function parseTypeQualifiedBoundExpression() returns ValueId throws ParseError
 		let boundTok = self.current()
 		let value = try self.parseTypeQualifiedBound()
-		return self.emitLiteral(block, value: value, valueType: MaxonType.integer, range: SourceRange.ofToken(boundTok))
+		return self.emitLiteral(value, valueType: MaxonType.integer, range: SourceRange.ofToken(boundTok))
 	end 'parseTypeQualifiedBoundExpression'
 
 	// Resolve a variable reference to the SSA value its binding aliases — M2's
@@ -1619,28 +2329,25 @@ export type Parser
 		return try self.scope.lookupValue(tok.value) otherwise throw ParseError.undefinedVariable(String.from(tok.value), line: tok.line, column: tok.column)
 	end 'parseVariableReference'
 
-	// Parse a bare-call statement `callee(args…)` — the call is emitted for its effect
-	// and its freshly-minted result value is discarded (M5). Deferred result-use rules
-	// (`discarded non-void result` lints) grow at a later milestone.
-	function parseCallStatement(block IrBlock) throws ParseError
-		_ = try self.parseCallExpression(block)
-	end 'parseCallStatement'
-
-	// Parse a call expression `callee(args…)` into `block` and return the ValueId its
-	// result defines. The callee name is kept as identifier TEXT (a `ByteArray` slice
-	// per the MaxonOp value/name split); the arguments are parsed in source order with
-	// their `name:` labels. Call-site diagnostics anchor on the callee-through-`)` span.
-	function parseCallExpression(block IrBlock) returns ValueId throws ParseError
+	// Parse a call expression `callee(args…)` and return the ValueId its result defines. The
+	// callee name is kept as identifier TEXT (a `ByteArray` slice per the MaxonOp value/name
+	// split); the arguments are parsed in source order with their `name:` labels. Call-site
+	// diagnostics anchor on the callee-through-`)` span.
+	//
+	// The call op lands in `currentBlock` AFTER the arguments are parsed, because an argument
+	// can short-circuit (`f(a or b)`) and move it. Emitting into the block the call STARTED in
+	// would put the call on a path its own arguments do not reach.
+	function parseCallExpression(func IrFunction) returns ValueId throws ParseError
 		let calleeTok = try self.consume(TokenKind.identifier)
 		try self.consume(TokenKind.leftParen)
 
 		var args = ValueIdArray.create()
 		var argLabels = ByteArrayArray.create()
 		var argRanges = SourceRangeArray.create()
-		try self.parseCallArgs(block, args: args, argLabels: argLabels, argRanges: argRanges)
+		try self.parseCallArgs(func, args: args, argLabels: argLabels, argRanges: argRanges)
 
 		let rparenTok = try self.consume(TokenKind.rightParen)
-		return self.emitCall(block, calleeTok: calleeTok, args: args, argLabels: argLabels, argRanges: argRanges, rparenTok: rparenTok)
+		return self.emitCall(calleeTok, args: args, argLabels: argLabels, argRanges: argRanges, rparenTok: rparenTok)
 	end 'parseCallExpression'
 
 	// Parse a comma-separated argument list into the parallel `args`/`argLabels`/
@@ -1650,7 +2357,7 @@ export type Parser
 	// must be labelled (`consumeArgLabel` enforces both, positioned at the offending
 	// token). Whether a `name:` label actually matches a parameter is a SEMANTIC check
 	// (SemanticCheck, which has the callee's signature) — not the parser's job.
-	function parseCallArgs(block IrBlock, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray) throws ParseError
+	function parseCallArgs(func IrFunction, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray) throws ParseError
 		if self.at(TokenKind.rightParen) 'noArgs'
 			return
 		end 'noArgs'
@@ -1661,7 +2368,10 @@ export type Parser
 			// value's first token — anchors this argument's diagnostic span.
 			let argFirstTok = self.current()
 			let label = try self.consumeArgLabel(argIndex)
-			let value = try self.parseExpression(block)
+			// The climber, not `parseExpression`: an argument is parsed INSIDE an expression
+			// that has already seeded `currentBlock`, and re-seeding it would discard a
+			// short-circuit an EARLIER argument performed.
+			let value = try self.parseBinary(func, minPrec: OrPrecedence)
 
 			args.push(value)
 			argLabels.push(label)
@@ -1700,30 +2410,64 @@ export type Parser
 		return labelTok.value
 	end 'consumeArgLabel'
 
-	// Append a `call` op defining a fresh result value; return the ValueId it defines.
-	// The callee is stored as a `ByteArray` slice of its identifier token; the call span
-	// runs from the callee name through the closing `)` (the conventional call anchor).
-	function emitCall(block IrBlock, calleeTok Token, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, rparenTok Token) returns ValueId
-		let result = allocValueId(self.valueIds)
-		self.artifact.emitOp(block, op: MaxonOp.call(result, callee: calleeTok.value, args: args, argLabels: argLabels, argRanges: argRanges), range: SourceRange.between(calleeTok, last: rparenTok))
+	// Append a `call` op defining a fresh result value; return the ValueId it defines. The
+	// callee is stored as a `ByteArray` slice of its identifier token; the call span runs
+	// from the callee name through the closing `)` (the conventional call anchor).
+	//
+	// The result's TYPE is the callee's declared return type, read off the FILE-WIDE
+	// signature pre-scan — so it is exact regardless of whether the callee is declared above
+	// or below this call, which is what stops declaration order from deciding whether
+	// `f() and g()` short-circuits.
+	function emitCall(calleeTok Token, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, rparenTok Token) returns ValueId
+		let result = self.mintValueOfType(self.calleeResultType(calleeTok.value))
+		self.artifact.emitOp(self.currentBlock, op: MaxonOp.call(result, callee: calleeTok.value, args: args, argLabels: argLabels, argRanges: argRanges), range: SourceRange.between(calleeTok, last: rparenTok))
 		return result
 	end 'emitCall'
+
+	// The source-level type a call to `callee` yields.
+	//
+	// A callee this file does not declare — a cross-FILE call — is `unresolved`, and that is
+	// the honest answer rather than a guess: whether the call yields a bool decides whether an
+	// enclosing `and`/`or` short-circuits, and the parser cannot see another file's
+	// declarations. `wordOpResultType` and the short-circuit gate both treat `unresolved`
+	// conservatively (no short-circuit; defer the result type), so a cross-file bool `and`
+	// evaluates both operands and still computes the right ANSWER — v1's behaviour exactly
+	// (specs/short-circuit-evaluation.md's `not-over-bool-or-with-overloaded-callees` case
+	// documents that fallback as the language's own).
+	//
+	// A VOID callee is `unresolved` too — there is no value, and the op's result is a dead
+	// id nothing reads. (SemanticCheck rejects using a void call's result; it is not typed
+	// here.)
+	function calleeResultType(callee ByteArray) returns MaxonType
+		let declared = try self.declaredReturnTypes.get(callee) otherwise return MaxonType.unresolved
+		return match declared 'r'
+			void gives MaxonType.unresolved
+			value(inner) gives inner
+		end 'r'
+	end 'calleeResultType'
 
 	// Parse an integer literal token into a `literal` op, and return the value it defines.
 	// The token's text becomes a number through the shared `intLiteralValue`, so a literal
 	// in an expression and a literal in a range bound are read the same way.
-	function parseIntLiteral(block IrBlock) returns ValueId throws ParseError
+	function parseIntLiteral() returns ValueId throws ParseError
 		let tok = try self.consume(TokenKind.intLiteral)
 		let value = try self.intLiteralValue(tok, negated: false)
-		return self.emitLiteral(block, value: value, valueType: MaxonType.integer, range: SourceRange.ofToken(tok))
+		return self.emitLiteral(value, valueType: MaxonType.integer, range: SourceRange.ofToken(tok))
 	end 'parseIntLiteral'
 
-	// Append a `literal` op defining a fresh value; return the ValueId it defines.
-	function emitLiteral(block IrBlock, value ParsedInt, valueType MaxonType, range SourceRange) returns ValueId
-		let result = allocValueId(self.valueIds)
+	// Append a `literal` op into the CURRENT block; return the ValueId it defines.
+	function emitLiteral(value ParsedInt, valueType MaxonType, range SourceRange) returns ValueId
+		return self.emitLiteralIn(self.currentBlock, value: value, valueType: valueType, range: range)
+	end 'emitLiteral'
+
+	// Append a `literal` op into a NAMED block. The short-circuit lowering needs this: its
+	// seed literal belongs in the ENTRY block, which by the time the phi is wired is no
+	// longer the current one.
+	function emitLiteralIn(block IrBlock, value ParsedInt, valueType MaxonType, range SourceRange) returns ValueId
+		let result = self.mintValueOfType(valueType)
 		self.artifact.emitOp(block, op: MaxonOp.literal(result, value: value, valueType: valueType), range: range)
 		return result
-	end 'emitLiteral'
+	end 'emitLiteralIn'
 
 	// --- token cursor ---
 

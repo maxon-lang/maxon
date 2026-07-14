@@ -22,14 +22,17 @@
 // `encodeModRmExtDirect` (REX + opcode + `/ext` ModR/M), the `[base + disp]` address
 // assembler `emitBaseDispModRm` (ModR/M + optional SIB + disp8/disp32, the one place a
 // base+displacement operand is encoded), and the `BinaryHelpers` little-endian writers.
-// No REX/ModRM/SIB byte is hand-spelled per instruction: `mov`/`sub`/`cmp` reg-reg all
-// share `encodeRmRegDirect` (only the opcode differs), the two-byte `imul` and the
-// 3-operand `imul r, r/m, imm32` reuse `encodeModRmDirect` (only the operand-to-field
-// mapping is swapped — dest in reg, src in rm), `neg` / the `cmp r/m, imm32` group-1
-// form / the `sub rsp`/`add rsp` frame ops share `encodeModRmExtDirect` (opcode-
-// extension forms), and both `lea` forms select their ModR/M mod field through
-// `chooseDispMod` and emit their trailing displacement through `emitTrailingDisp`, so the
-// rbp/r13 zero-disp8 SIB trap is spelled in exactly ONE place for both.
+// No REX/ModRM/SIB byte is hand-spelled per instruction: `mov`/`sub`/`cmp`/`and`/`or`/
+// `xor`/`xchg` reg-reg all share `encodeRmRegDirect` (only the opcode differs), the
+// two-byte `imul` and the 3-operand `imul r, r/m, imm32` reuse `encodeModRmDirect` (only
+// the operand-to-field mapping is swapped — dest in reg, src in rm), and every
+// OPCODE-EXTENSION form routes through `encodeModRmExtDirect` behind one encoder PER
+// OPCODE GROUP rather than one per instruction — `encodeGrp1RegImm32` (cmp/and/or/xor
+// `r/m, imm32`), `encodeGrp2RegImm8` + `encodeGrp2RegCl` (shl/sar by a constant / by CL),
+// `encodeGrp3Reg` (neg/not/idiv), plus the `sub rsp`/`add rsp` frame pair. Both `lea`
+// forms select their ModR/M mod field through `chooseDispMod` and emit their trailing
+// displacement through `emitTrailingDisp`, so the rbp/r13 zero-disp8 SIB trap is spelled
+// in exactly ONE place for both.
 // Signed immediates/displacements go through `writeImm32Signed` (one two's-complement
 // converter). Opcodes, REX bits, and ModR/M/SIB constants are all NAMED below — no bare
 // hex is scattered through the emitters.
@@ -83,13 +86,19 @@ let OpcodeMovRmReg = 0x89  // mov r/m, r  (reg field = source) — the STORE for
 let OpcodeMovRegRm = 0x8B  // mov r, r/m  (reg field = dest)   — the LOAD form (reload)
 let OpcodeSubRmReg = 0x29  // sub r/m, r  (reg field = source), same shape as mov
 let OpcodeCmpRmReg = 0x39  // cmp r/m, r  (reg field = source), same shape as sub
+let OpcodeAndRmReg = 0x21  // and r/m, r  (reg field = source), same shape as sub
+let OpcodeOrRmReg = 0x09  // or  r/m, r  (reg field = source), same shape as sub
+let OpcodeXorRmReg = 0x31  // xor r/m, r  (reg field = source), same shape as sub
 let OpcodeXchgRmReg = 0x87  // xchg r/m, r (reg field = one operand), swaps r/m and r
 let OpcodeMovRegImmBase = 0xB8  // mov reg, imm  (B8+rd; 32- or 64-bit by REX.W)
 let OpcodeLea = 0x8D  // lea reg, [mem]  (reg field = dest, rm field = the address)
 let OpcodeImulRegImm = 0x69  // imul r, r/m, imm32  (3-operand; reg = dest, rm = source)
 let OpcodeGrp1Imm8 = 0x83  // group-1 ALU, r/m, imm8 (sign-extended)
 let OpcodeGrp1Imm32 = 0x81  // group-1 ALU, r/m, imm32
+let OpcodeGrp2Imm8 = 0xC1  // group-2 SHIFT, r/m, imm8 (a COUNT — never sign-extended)
+let OpcodeGrp2Cl = 0xD3  // group-2 SHIFT, r/m, cl — the count is IMPLICIT, in CL
 let OpcodeGrp3 = 0xF7  // group-3 unary ALU (TEST/NOT/NEG/MUL/IMUL/DIV/IDIV by /ext)
+let OpcodeMovzxRegRm8 = 0xB6  // movzx r, r/m8 (two-byte 0F B6 /r; reg field = dest)
 let OpcodeCqo = 0x99  // cqo: sign-extend RAX into RDX:RAX (REX.W 99), no ModR/M
 let OpcodeCallRel32 = 0xE8  // call rel32
 let OpcodeCallIndirect = 0xFF  // group-5; with ModR/M /2 = call r/m64
@@ -102,6 +111,16 @@ let OpcodePopBase = 0x58  // pop r64  (58+r) — the mirror of push
 // from X64CondCode's backing value.
 let OpcodeJccRel32Base = 0x80
 
+// Base of the two-byte `setcc r/m8` opcode: after the 0x0F escape, `0x90 | cc` gives
+// the conditional-set opcode (e.g. `0x90 | 0x4` = 0x94 = SETE). The SAME `cc` nibble a
+// `jcc` uses — one condition-code enum drives the branch and the materialization, so a
+// fused compare and a materialized one can never disagree about the predicate.
+let OpcodeSetccRm8Base = 0x90
+
+// `setcc`'s ModR/M reg field is a fixed opcode extension of ZERO (`0F 90+cc /0`) — the
+// instruction has one operand, and the reg field carries no register.
+let SetccExtNone = 0
+
 // Two-byte-opcode escape: a `0x0F` prefix byte introduces the two-byte opcode map
 // (e.g. `imul r, r/m` is `0F AF /r`). `encodeModRmDirect` emits it when asked.
 let TwoByteOpcodeEscape = 0x0F
@@ -113,10 +132,21 @@ let OpcodeImul2ndByte = 0xAF
 
 // Group-1 ALU opcode-extension (ModR/M reg field) values.
 let Grp1ExtAdd = 0  // ADD
+let Grp1ExtOr = 1  // OR  (the `or r/m, imm` immediate form)
+let Grp1ExtAnd = 4  // AND (the `and r/m, imm` immediate form)
 let Grp1ExtSub = 5  // SUB
+let Grp1ExtXor = 6  // XOR (the `xor r/m, imm` immediate form — also the LOGICAL `not`)
 let Grp1ExtCmp = 7  // CMP (the `cmp r/m, imm` immediate form)
 
+// Group-2 SHIFT opcode-extension (ModR/M reg field) values (C1 /ext ib, D3 /ext).
+// `shr` (the Maxon keyword) lowers to SAR, not SHR: Maxon's `int` is SIGNED, so a
+// logical shift would make `-8 shr 1` a huge positive number. The x86 mnemonic SHR
+// (/5) is therefore deliberately absent — nothing in the language reaches it.
+let Grp2ExtShl = 4  // SHL r/m, count
+let Grp2ExtSar = 7  // SAR r/m, count — ARITHMETIC right shift (sign-replicating)
+
 // Group-3 ALU opcode-extension (ModR/M reg field) values (F7 /ext).
+let Grp3ExtNot = 2  // NOT r/m — one's complement (writes NO flags, unlike NEG)
 let Grp3ExtNeg = 3  // NEG r/m
 let Grp3ExtIdiv = 7  // IDIV r/m — signed divide RDX:RAX by r/m (quotient→RAX, remainder→RDX)
 
@@ -149,7 +179,13 @@ end 'regIsExtended'
 // extended (r8-r15). For opcode-extension forms (ModR/M /ext) the reg field holds
 // an extension 0..7 that never needs REX.R, so callers pass a base register
 // (`X64Register.rax`) as `regField`.
-function emitRex(code ByteArray, wide bool, regField X64Register, rmField X64Register)
+//
+// `force` emits the prefix even when it carries NO bit (a bare 0x40) — required by
+// exactly one instruction shv2 emits, `setcc r/m8`. In an 8-BIT register operand, the
+// numbers 4..7 name AH/CH/DH/BH when NO REX is present and SPL/BPL/SIL/DIL when ANY
+// REX is. rsi/rdi are allocatable argument registers here, so without the forced
+// prefix `setcc sil` would silently assemble as `setcc dh` and set the wrong register.
+function emitRex(code ByteArray, wide bool, regField X64Register, rmField X64Register, force bool = false)
 	var rex = RexBase
 	if wide 'w'
 		rex = rex or RexW
@@ -160,7 +196,7 @@ function emitRex(code ByteArray, wide bool, regField X64Register, rmField X64Reg
 	if regIsExtended(rmField) 'b'
 		rex = rex or RexB
 	end 'b'
-	if wide or rex != RexBase 'needed'
+	if wide or force or rex != RexBase 'needed'
 		code.push(rex)
 	end 'needed'
 end 'emitRex'
@@ -248,14 +284,16 @@ end 'encodeModRmExtDirect'
 // Per-op encoders
 // ==========================================================================
 
-// Register-direct (mod=11) `opcode r/m, r` — the reg field is the SOURCE, the r/m
-// field the DEST — which is the shared byte shape of the reg-to-reg `mov` (0x89),
-// `add` (0x01), and `sub` (0x29), all single-byte opcodes. `wide` selects REX.W
-// (64-bit operand size) vs 32-bit (which zero-extends into the full register).
-// Callers pass the opcode so the single primitive serves the 64-bit R8 return
-// move, register-allocation copies, the 32-bit `mov ecx, r8d` ABI bridge, and the
-// 64-bit `add`/`sub result, rhs`. (imul does NOT route here — its operand-to-field
-// mapping is swapped and its opcode is two-byte; see encodeImulRegReg.)
+// Register-direct (mod=11) `opcode r/m, r` — the reg field is the SOURCE, the r/m field the
+// DEST. That is the shared byte shape of EVERY single-byte reg-to-reg ALU form shv2 emits:
+// `mov` (0x89), `sub` (0x29), `cmp` (0x39), `and` (0x21), `or` (0x09), `xor` (0x31) and
+// `xchg` (0x87). All seven dispatch straight here from their `emitTargetOp` arm with only
+// the opcode swapped — there is no per-instruction wrapper, because a function whose whole
+// body is this call with a different constant is not an abstraction, it is a copy.
+//
+// `wide` selects REX.W (64-bit) vs 32-bit (which zero-extends into the full register), which
+// is what also makes this serve the `mov ecx, r8d` ABI bridge. (`imul` does NOT route here —
+// its operand-to-field mapping is swapped and its opcode is two-byte; see encodeImulRegReg.)
 function encodeRmRegDirect(code ByteArray, opcode MachineWord, dest X64Register, src X64Register, wide bool)
 	encodeModRmDirect(code, twoByteEscape: false, opcode: opcode, regField: src, rmField: dest, wide: wide)
 end 'encodeRmRegDirect'
@@ -269,13 +307,60 @@ function encodeImulRegReg(code ByteArray, dest X64Register, src X64Register)
 	encodeModRmDirect(code, twoByteEscape: true, opcode: OpcodeImul2ndByte, regField: dest, rmField: src, wide: true)
 end 'encodeImulRegReg'
 
-// `neg reg` — group-3 unary negate `F7 /3`, `reg = -reg`, always 64-bit. An
-// opcode-extension form (the /3 rides the ModR/M reg field), so it shares
-// `encodeModRmExtDirect` with the `sub/add rsp` frame ops rather than the
-// reg-to-reg path.
-function encodeNegReg(code ByteArray, reg X64Register)
-	encodeModRmExtDirect(code, opcode: OpcodeGrp3, ext: Grp3ExtNeg, rmField: reg)
-end 'encodeNegReg'
+// The GROUP-3 unary ALU forms (`F7 /ext`, always 64-bit, in-place on one register):
+// `neg` (/3, `reg = -reg`), `not` (/2, `reg = ~reg`) and `idiv` (/7, signed divide
+// RDX:RAX by `reg`). All three are byte-identical but for the extension nibble, so they
+// share ONE encoder rather than three one-line wrappers around the same call. The /ext
+// rides the ModR/M reg field, which is why this routes through `encodeModRmExtDirect`
+// (with `sub/add rsp` and the group-1 immediate forms) and not the reg-to-reg path.
+function encodeGrp3Reg(code ByteArray, ext MachineWord, reg X64Register)
+	encodeModRmExtDirect(code, opcode: OpcodeGrp3, ext: ext, rmField: reg)
+end 'encodeGrp3Reg'
+
+// The GROUP-1 register/IMMEDIATE forms (`REX.W 81 /ext id`, a SIGN-EXTENDED imm32):
+// `cmp` (/7), `and` (/4), `or` (/1), `xor` (/6). Same prefix, same opcode, same ModR/M,
+// same trailing immediate — only the extension differs, so the four share one encoder.
+// The literal occupies no register in any of them.
+function encodeGrp1RegImm32(code ByteArray, ext MachineWord, reg X64Register, imm Imm32)
+	encodeModRmExtDirect(code, opcode: OpcodeGrp1Imm32, ext: ext, rmField: reg)
+	writeImm32Signed(code, value: imm)
+end 'encodeGrp1RegImm32'
+
+// The GROUP-2 SHIFT forms, by a CONSTANT count (`REX.W C1 /ext ib`): `shl` (/4) and
+// `sar` (/7). The trailing byte is a COUNT, not a signed immediate — it is never
+// sign-extended, and `ShiftCount`'s 0..63 range is exactly the domain x64 distinguishes
+// (it masks a 64-bit shift's count to 6 bits), so the byte is written verbatim.
+function encodeGrp2RegImm8(code ByteArray, ext MachineWord, reg X64Register, count ShiftCount)
+	encodeModRmExtDirect(code, opcode: OpcodeGrp2Imm8, ext: ext, rmField: reg)
+	code.push(count)
+end 'encodeGrp2RegImm8'
+
+// The GROUP-2 SHIFT forms, by a VARIABLE count (`REX.W D3 /ext`): `shl` (/4) and `sar`
+// (/7). The count is IMPLICIT — x64 reads it from CL and from nowhere else — so the
+// instruction has no immediate and no second register operand. StdToX64Conversion is
+// what puts the count in RCX (see `lowerShiftCl`).
+function encodeGrp2RegCl(code ByteArray, ext MachineWord, reg X64Register)
+	encodeModRmExtDirect(code, opcode: OpcodeGrp2Cl, ext: ext, rmField: reg)
+end 'encodeGrp2RegCl'
+
+// `setcc dest8` + `movzx dest, dest8` — MATERIALIZE a comparison's boolean into a full
+// 64-bit register. Two instructions from one op, because the pair is indivisible:
+// `setcc` writes only the LOW BYTE of its destination, so on its own it leaves the upper
+// 56 bits holding whatever the register carried before, and the "bool" would compare
+// unequal to both 0 and 1.
+//
+// The REX prefix is FORCED (see `emitRex`): rsi/rdi are allocatable here, and in an
+// 8-bit operand WITHOUT a REX prefix, register number 6 is DH — not SIL.
+function encodeSetccReg(code ByteArray, dest X64Register, cond X64CondCode)
+	emitRex(code, wide: false, regField: X64Register.rax, rmField: dest, force: true)
+	code.push(TwoByteOpcodeEscape)
+	code.push(OpcodeSetccRm8Base or (cond.rawValue as MachineWord))
+	emitModRmExt(code, ext: SetccExtNone, rmField: dest)
+	// `movzx dest64, dest8` (REX.W 0F B6 /r): reg field = dest (the 64-bit destination),
+	// r/m field = dest (the 8-bit source setcc just wrote). REX.W is present, so the r/m
+	// byte register uses the SPL/BPL/SIL/DIL encoding — no forced prefix needed here.
+	encodeModRmDirect(code, twoByteEscape: true, opcode: OpcodeMovzxRegRm8, regField: dest, rmField: dest, wide: true)
+end 'encodeSetccReg'
 
 // `cqo` — sign-extend RAX into RDX:RAX (REX.W 99), so the following `idiv` divides the
 // full 128-bit RDX:RAX. No ModR/M — both operands (RAX, RDX) are implicit — so it is
@@ -285,30 +370,6 @@ function encodeCqo(code ByteArray)
 	emitRex(code, wide: true, regField: X64Register.rax, rmField: X64Register.rax)
 	code.push(OpcodeCqo)
 end 'encodeCqo'
-
-// `idiv divisor` — signed divide RDX:RAX by `divisor` (`F7 /7`, always 64-bit):
-// quotient → RAX, remainder → RDX. Another group-3 opcode-extension form (the /7 rides
-// the ModR/M reg field), so it shares `encodeModRmExtDirect` with `neg` and the
-// `sub/add rsp` frame ops — only the extension differs.
-function encodeIdivReg(code ByteArray, divisor X64Register)
-	encodeModRmExtDirect(code, opcode: OpcodeGrp3, ext: Grp3ExtIdiv, rmField: divisor)
-end 'encodeIdivReg'
-
-// `cmp lhs, rhs` — register-direct 64-bit compare (`39 /r`, `lhs - rhs` discarding
-// the difference, keeping EFLAGS). Same `r/m, r` byte shape as mov/add/sub, so it
-// routes through the shared `encodeRmRegDirect` (dest=lhs in r/m, src=rhs in reg)
-// with only the opcode swapped. A signed `jcc` after it tests `lhs <cond> rhs`.
-function encodeCmpRegReg(code ByteArray, lhs X64Register, rhs X64Register)
-	encodeRmRegDirect(code, opcode: OpcodeCmpRmReg, dest: lhs, src: rhs, wide: true)
-end 'encodeCmpRegReg'
-
-// `xchg a, b` — swap two 64-bit registers (`87 /r`). The register allocator's
-// SSA-destruction step emits it to break a parallel-copy cycle with no scratch.
-// `xchg` is symmetric (reg vs r/m field placement is irrelevant), so it shares
-// the `r/m, r` assembly with mov/add/sub/cmp — only the opcode differs.
-function encodeXchgRegReg(code ByteArray, a X64Register, b X64Register)
-	encodeRmRegDirect(code, opcode: OpcodeXchgRmReg, dest: a, src: b, wide: true)
-end 'encodeXchgRegReg'
 
 // `lea dest, [base + index]` — the 3-operand `+` (REX.W 8D /r + SIB, scale 1). No
 // flags, and — because dest/base/index are independent — no copy. THE two x64 SIB
@@ -400,14 +461,6 @@ function encodeImulRegRegImm32(code ByteArray, dest X64Register, src X64Register
 	encodeModRmDirect(code, twoByteEscape: false, opcode: OpcodeImulRegImm, regField: dest, rmField: src, wide: true)
 	writeImm32Signed(code, value: imm)
 end 'encodeImulRegRegImm32'
-
-// `cmp reg, imm32` — compare a register to a signed immediate (REX.W 81 /7 id). Shares
-// the group-1 opcode-extension assembly (`encodeModRmExtDirect` + `emitModRmExt`) with
-// the `sub/add rsp` and `neg` forms; only the /ext and the trailing imm32 differ.
-function encodeCmpRegImm32(code ByteArray, reg X64Register, imm Imm32)
-	encodeModRmExtDirect(code, opcode: OpcodeGrp1Imm32, ext: Grp1ExtCmp, rmField: reg)
-	writeImm32Signed(code, value: imm)
-end 'encodeCmpRegImm32'
 
 // `mov [rsp + disp], srcReg` — SPILL a register to a stack slot (REX.W 89 /r, the `r/m, r`
 // store form: reg field = source, r/m = the `[rsp + disp]` memory operand). The base is
@@ -614,21 +667,39 @@ function emitTargetOp(op TargetOp, code ByteArray, callFixups CallFixupArray, ia
 		movReg32Reg32(destReg, srcReg) then encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: resolvePhysical(destReg), src: resolvePhysical(srcReg), wide: false)
 		subRegReg(dest, _, rhs) then encodeRmRegDirect(code, opcode: OpcodeSubRmReg, dest: resolvePhysical(dest), src: resolvePhysical(rhs), wide: true)
 		imulRegReg(dest, _, rhs) then encodeImulRegReg(code, dest: resolvePhysical(dest), src: resolvePhysical(rhs))
-		negReg(dest, _) then encodeNegReg(code, reg: resolvePhysical(dest))
-		cmpRegReg(lhsReg, rhsReg) then encodeCmpRegReg(code, lhs: resolvePhysical(lhsReg), rhs: resolvePhysical(rhsReg))
+		negReg(dest, _) then encodeGrp3Reg(code, ext: Grp3ExtNeg, reg: resolvePhysical(dest))
+		cmpRegReg(lhsReg, rhsReg) then encodeRmRegDirect(code, opcode: OpcodeCmpRmReg, dest: resolvePhysical(lhsReg), src: resolvePhysical(rhsReg), wide: true)
 		leaRegRegReg(dest, base, index) then encodeLeaRegRegReg(code, dest: resolvePhysical(dest), base: resolvePhysical(base), index: resolvePhysical(index))
 		leaRegRegImm32(dest, base, disp) then encodeLeaRegRegImm32(code, dest: resolvePhysical(dest), base: resolvePhysical(base), disp: disp)
 		imulRegRegImm32(dest, src, imm) then encodeImulRegRegImm32(code, dest: resolvePhysical(dest), src: resolvePhysical(src), imm: imm)
-		cmpRegImm32(reg, imm) then encodeCmpRegImm32(code, reg: resolvePhysical(reg), imm: imm)
-		xchgRegReg(a, b) then encodeXchgRegReg(code, a: resolvePhysical(a), b: resolvePhysical(b))
+		cmpRegImm32(reg, imm) then encodeGrp1RegImm32(code, ext: Grp1ExtCmp, reg: resolvePhysical(reg), imm: imm)
+		xchgRegReg(a, b) then encodeRmRegDirect(code, opcode: OpcodeXchgRmReg, dest: resolvePhysical(a), src: resolvePhysical(b), wide: true)
 		callDirect(targetName) then encodeCallDirect(code, callFixups: callFixups, targetName: targetName)
 		iatCall(slotIndex) then encodeIatCall(code, iatRelocs: iatRelocs, slotIndex: slotIndex)
 		cqo then encodeCqo(code)
-		idivReg(divisor) then encodeIdivReg(code, divisor: resolvePhysical(divisor))
+		idivReg(divisor) then encodeGrp3Reg(code, ext: Grp3ExtIdiv, reg: resolvePhysical(divisor))
 		pushReg(reg) then encodePushReg(code, reg: reg)
 		popReg(reg) then encodePopReg(code, reg: reg)
 		storeSlotReg(slot, srcReg) then encodeStoreSlotReg(code, srcReg: resolvePhysical(srcReg), disp: slotDisplacement(spillBaseDisp, slot: slot))
 		loadRegSlot(destReg, slot) then encodeLoadRegSlot(code, destReg: resolvePhysical(destReg), disp: slotDisplacement(spillBaseDisp, slot: slot))
+		// The two-address word ALU ops. Their `dest` already HOLDS `lhs` by the time the
+		// instruction runs (the allocator either coalesced the two into one register or
+		// materialized `mov dest, lhs`), so — exactly as for `subRegReg` — the encoded
+		// instruction names only `dest` and `rhs`, and `lhs` is deliberately ignored here.
+		andRegReg(dest, _, rhs) then encodeRmRegDirect(code, opcode: OpcodeAndRmReg, dest: resolvePhysical(dest), src: resolvePhysical(rhs), wide: true)
+		orRegReg(dest, _, rhs) then encodeRmRegDirect(code, opcode: OpcodeOrRmReg, dest: resolvePhysical(dest), src: resolvePhysical(rhs), wide: true)
+		xorRegReg(dest, _, rhs) then encodeRmRegDirect(code, opcode: OpcodeXorRmReg, dest: resolvePhysical(dest), src: resolvePhysical(rhs), wide: true)
+		notReg(dest, _) then encodeGrp3Reg(code, ext: Grp3ExtNot, reg: resolvePhysical(dest))
+		andRegImm32(dest, _, imm) then encodeGrp1RegImm32(code, ext: Grp1ExtAnd, reg: resolvePhysical(dest), imm: imm)
+		orRegImm32(dest, _, imm) then encodeGrp1RegImm32(code, ext: Grp1ExtOr, reg: resolvePhysical(dest), imm: imm)
+		xorRegImm32(dest, _, imm) then encodeGrp1RegImm32(code, ext: Grp1ExtXor, reg: resolvePhysical(dest), imm: imm)
+		shlRegImm8(dest, _, imm) then encodeGrp2RegImm8(code, ext: Grp2ExtShl, reg: resolvePhysical(dest), count: imm)
+		sarRegImm8(dest, _, imm) then encodeGrp2RegImm8(code, ext: Grp2ExtSar, reg: resolvePhysical(dest), count: imm)
+		// The variable-count shifts read their count from CL, which the lowering has already
+		// loaded — so, like the immediate forms, the encoded instruction names only `dest`.
+		shlRegCl(dest, _) then encodeGrp2RegCl(code, ext: Grp2ExtShl, reg: resolvePhysical(dest))
+		sarRegCl(dest, _) then encodeGrp2RegCl(code, ext: Grp2ExtSar, reg: resolvePhysical(dest))
+		setccReg(dest, cond) then encodeSetccReg(code, dest: resolvePhysical(dest), cond: cond)
 	end 'emit'
 end 'emitTargetOp'
 

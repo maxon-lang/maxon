@@ -1,0 +1,24 @@
+// Test: char-literal-escape-coercion
+function main() returns ExitCode
+	let cp = 10
+	if cp == '\n' 'check'
+		return 0
+	end 'check'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    x64.movRegImm32 rax, 10
+    x64.cmpRegImm32 rax, 10
+    x64.jcc equal, check
+    x64.jmp ifcont
+  check:
+    x64.movRegImm32 r8, 0
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 1
+    x64.ret
+}

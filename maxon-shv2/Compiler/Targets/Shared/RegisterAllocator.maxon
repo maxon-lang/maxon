@@ -531,6 +531,10 @@ function collectOpHints(op TargetOp, hints ColorHints)
 		subRegReg to idivReg then break 'hint'
 		pushReg to popReg then break 'hint'
 		storeSlotReg to loadRegSlot then break 'hint'
+		// The bit band carries no COPY hint: none of these ops is a move. Their two-address
+		// `dest ⟸ lhs` bias is a REUSE hint, which `collectReuseHints` reads straight off
+		// the operand model — so it covers every one of them without an arm here.
+		andRegReg to setccReg then break 'hint'
 	end 'hint'
 end 'collectOpHints'
 
@@ -1087,6 +1091,18 @@ export function colorTargetOp(op TargetOp, alloc Allocation) returns TargetOp
 		pushReg to popReg then return op
 		storeSlotReg(slot, srcReg) then return TargetOp.storeSlotReg(slot, srcReg: colorVRegWith(srcReg, alloc: alloc))
 		loadRegSlot(destReg, slot) then return TargetOp.loadRegSlot(colorVRegWith(destReg, alloc: alloc), slot: slot)
+		andRegReg(dest, lhs, rhs) then return TargetOp.andRegReg(colorVRegWith(dest, alloc: alloc), lhs: colorVRegWith(lhs, alloc: alloc), rhs: colorVRegWith(rhs, alloc: alloc))
+		orRegReg(dest, lhs, rhs) then return TargetOp.orRegReg(colorVRegWith(dest, alloc: alloc), lhs: colorVRegWith(lhs, alloc: alloc), rhs: colorVRegWith(rhs, alloc: alloc))
+		xorRegReg(dest, lhs, rhs) then return TargetOp.xorRegReg(colorVRegWith(dest, alloc: alloc), lhs: colorVRegWith(lhs, alloc: alloc), rhs: colorVRegWith(rhs, alloc: alloc))
+		notReg(dest, src) then return TargetOp.notReg(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc))
+		andRegImm32(dest, lhs, imm) then return TargetOp.andRegImm32(colorVRegWith(dest, alloc: alloc), lhs: colorVRegWith(lhs, alloc: alloc), imm: imm)
+		orRegImm32(dest, lhs, imm) then return TargetOp.orRegImm32(colorVRegWith(dest, alloc: alloc), lhs: colorVRegWith(lhs, alloc: alloc), imm: imm)
+		xorRegImm32(dest, lhs, imm) then return TargetOp.xorRegImm32(colorVRegWith(dest, alloc: alloc), lhs: colorVRegWith(lhs, alloc: alloc), imm: imm)
+		shlRegImm8(dest, lhs, imm) then return TargetOp.shlRegImm8(colorVRegWith(dest, alloc: alloc), lhs: colorVRegWith(lhs, alloc: alloc), imm: imm)
+		sarRegImm8(dest, lhs, imm) then return TargetOp.sarRegImm8(colorVRegWith(dest, alloc: alloc), lhs: colorVRegWith(lhs, alloc: alloc), imm: imm)
+		shlRegCl(dest, lhs) then return TargetOp.shlRegCl(colorVRegWith(dest, alloc: alloc), lhs: colorVRegWith(lhs, alloc: alloc))
+		sarRegCl(dest, lhs) then return TargetOp.sarRegCl(colorVRegWith(dest, alloc: alloc), lhs: colorVRegWith(lhs, alloc: alloc))
+		setccReg(dest, cond) then return TargetOp.setccReg(colorVRegWith(dest, alloc: alloc), cond: cond)
 	end 'rewrite'
 end 'colorTargetOp'
 

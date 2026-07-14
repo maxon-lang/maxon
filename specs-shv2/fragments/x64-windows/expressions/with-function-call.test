@@ -1,0 +1,31 @@
+// Test: with-function-call
+
+typealias Integer = int(i64.min to i64.max)
+
+function main() returns ExitCode
+	let x = 3
+	return 5 + add(x, b: 4)
+end 'main'
+
+function add(a Integer, b Integer) returns Integer
+	return a + b
+end 'add'
+---
+ExitCode: 12
+---
+func @main {
+  entry:
+    x64.prologue 40
+    x64.movRegImm32 rcx, 3
+    x64.movRegImm32 rdx, 4
+    x64.callDirect add
+    x64.leaRegRegImm32 r8, r8, 5
+    x64.epilogue 40
+    x64.ret
+}
+
+func @add {
+  entry:
+    x64.leaRegRegReg r8, rcx, rdx
+    x64.ret
+}

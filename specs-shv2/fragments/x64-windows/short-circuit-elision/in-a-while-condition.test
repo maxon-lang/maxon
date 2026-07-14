@@ -1,0 +1,69 @@
+// Test: in-a-while-condition
+function no() returns bool
+	return false
+end 'no'
+
+function boom() returns bool
+	let zero = 0
+	let q = 1 / zero
+	return q == 0
+end 'boom'
+
+function main() returns ExitCode
+	var n = 0
+	while no() and boom() 'loop'
+		n = n + 1
+	end 'loop'
+	return n
+end 'main'
+---
+ExitCode: 0
+---
+func @no {
+  entry:
+    x64.movRegImm32 r8, 0
+    x64.ret
+}
+
+func @boom {
+  entry:
+    x64.movRegImm32 rcx, 0
+    x64.movRegImm32 rax, 1
+    x64.cqo
+    x64.idivReg rcx
+    x64.cmpRegImm32 rax, 0
+    x64.setccReg equal, r8
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbx
+    x64.prologue 32
+    x64.movRegImm32 rbx, 0
+    x64.jmp whilehdr
+  whilehdr:
+    x64.callDirect no
+    x64.movRegImm32 rax, 0
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, andrhs
+    x64.jmp critsplit
+  andrhs:
+    x64.callDirect boom
+    x64.jmp scmerge
+  critsplit:
+    x64.movRegReg r8, rax
+    x64.jmp scmerge
+  scmerge:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, loop
+    x64.jmp whileexit
+  loop:
+    x64.leaRegRegImm32 rbx, rbx, 1
+    x64.jmp whilehdr
+  whileexit:
+    x64.movRegReg r8, rbx
+    x64.epilogue 32
+    x64.popReg rbx
+    x64.ret
+}

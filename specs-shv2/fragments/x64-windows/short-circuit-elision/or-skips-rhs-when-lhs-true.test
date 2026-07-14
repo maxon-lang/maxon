@@ -1,0 +1,64 @@
+// Test: or-skips-rhs-when-lhs-true
+function yes() returns bool
+	return true
+end 'yes'
+
+function boom() returns bool
+	let zero = 0
+	let q = 1 / zero
+	return q == 0
+end 'boom'
+
+function main() returns ExitCode
+	if yes() or boom() 'taken'
+		return 7
+	end 'taken'
+	return 9
+end 'main'
+---
+ExitCode: 7
+---
+func @yes {
+  entry:
+    x64.movRegImm32 r8, 1
+    x64.ret
+}
+
+func @boom {
+  entry:
+    x64.movRegImm32 rcx, 0
+    x64.movRegImm32 rax, 1
+    x64.cqo
+    x64.idivReg rcx
+    x64.cmpRegImm32 rax, 0
+    x64.setccReg equal, r8
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.prologue 40
+    x64.callDirect yes
+    x64.movRegImm32 rax, 1
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, critsplit
+    x64.jmp orrhs
+  critsplit:
+    x64.jmp scmerge
+  orrhs:
+    x64.callDirect boom
+    x64.movRegReg rax, r8
+    x64.jmp scmerge
+  scmerge:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, taken
+    x64.jmp ifcont
+  taken:
+    x64.movRegImm32 r8, 7
+    x64.epilogue 40
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 9
+    x64.epilogue 40
+    x64.ret
+}

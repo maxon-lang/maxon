@@ -1,0 +1,88 @@
+// Test: loop-carried-var-across-a-short-circuit-condition
+function positive(v int) returns bool
+	return v > 0
+end 'positive'
+
+function underLimit(v int) returns bool
+	return v < 4
+end 'underLimit'
+
+function main() returns ExitCode
+	var n = 1
+	var steps = 0
+	while positive(n) and underLimit(n) 'loop'
+		n = n + 1
+		steps = steps + 1
+		if steps > 10 'runaway'
+			break
+		end 'runaway'
+	end 'loop'
+	return n * 10 + steps
+end 'main'
+---
+ExitCode: 43
+---
+func @positive {
+  entry:
+    x64.cmpRegImm32 rcx, 0
+    x64.setccReg greater, r8
+    x64.ret
+}
+
+func @underLimit {
+  entry:
+    x64.cmpRegImm32 rcx, 4
+    x64.setccReg less, r8
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 40
+    x64.movRegImm32 rbx, 1
+    x64.movRegImm32 r12, 0
+    x64.jmp whilehdr
+  whilehdr:
+    x64.movRegReg rcx, rbx
+    x64.callDirect positive
+    x64.movRegImm32 rax, 0
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, andrhs
+    x64.jmp critsplit
+  andrhs:
+    x64.movRegReg rcx, rbx
+    x64.callDirect underLimit
+    x64.jmp scmerge
+  critsplit:
+    x64.movRegReg r8, rax
+    x64.jmp scmerge
+  scmerge:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, loop
+    x64.jmp critsplit
+  loop:
+    x64.leaRegRegImm32 rax, rbx, 1
+    x64.leaRegRegImm32 rcx, r12, 1
+    x64.cmpRegImm32 rcx, 10
+    x64.jcc greater, runaway
+    x64.jmp ifcont
+  runaway:
+    x64.jmp whileexit
+  ifcont:
+    x64.movRegReg rbx, rax
+    x64.movRegReg r12, rcx
+    x64.jmp whilehdr
+  critsplit:
+    x64.movRegReg rax, rbx
+    x64.movRegReg rcx, r12
+    x64.jmp whileexit
+  whileexit:
+    x64.imulRegRegImm32 rax, rax, 10
+    x64.leaRegRegReg r8, rax, rcx
+    x64.epilogue 40
+    x64.popReg r12
+    x64.popReg rbx
+    x64.ret
+}

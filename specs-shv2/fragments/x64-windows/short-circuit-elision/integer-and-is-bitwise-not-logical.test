@@ -1,0 +1,25 @@
+// Test: integer-and-is-bitwise-not-logical
+function main() returns ExitCode
+	let r = 12 and 3
+	if r == 0 'bitwise'
+		return 0
+	end 'bitwise'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    x64.movRegImm32 rax, 12
+    x64.andRegImm32 rax, rax, 3
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, bitwise
+    x64.jmp ifcont
+  bitwise:
+    x64.movRegImm32 r8, 0
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 1
+    x64.ret
+}
