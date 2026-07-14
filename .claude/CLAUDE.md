@@ -94,11 +94,16 @@ linear SSA-chordal design.)*
 `e4146cf8e` ("a generic's RANGED element type is part of its type"), which made two array typealiases
 over different ranges distinct types.
 
-**Reading and porting its source is unaffected.** But **running** it is not possible, which means the
-**wasm backend** and the complete 4-digit **`ErrorCode.maxon` registry** that `lookup_error_code` reads
-are **currently unreachable by any route**. Repairing the build is tracked work — it would also restore
-the only dictionary-passing + witness-table compiler in the tree, which is the only instrument that can
-settle whether shv2 needs a witness table for a `Hashable` constraint.
+✅ **This is ACCEPTED, and it is NOT being repaired** (user, 2026-07-14). It costs almost nothing,
+because **everything v1 is still USED for reads its source rather than runs it**:
+- **Porting its code into shv2 — its whole remaining job — is unaffected.**
+- **`lookup_error_code` still works**: it parses `ErrorCode.maxon`, it does not execute it.
+
+What is genuinely lost: you cannot **run** it. So the **wasm backend** is unreachable (it is "Beyond the
+two phases" anyway), and v1 — the only dictionary-passing + witness-table compiler in the tree — cannot
+be used to *measure* whether shv2 needs a witness slot for a `Hashable` constraint. That question
+therefore rests on an inference (under dictionary-passing there is no route to `element.hash()` on a type
+parameter except a witness slot), and shv2 will answer it definitively when it reaches generics at P1.6.
 
 Not driveable from the `maxon-dev` MCP. To attempt it by hand:
 
