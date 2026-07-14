@@ -383,6 +383,50 @@ cause. *Verify your own diagnosis; the plausible one was not it.*
 ⚠ **shv2 will hit this too** — a ternary is the natural way to write "remap only if the ids moved", and it
 is the natural way to write a dozen other things.
 
+### 15. ✅ FIXED — the bootstrap RESET the register allocator over any block that PANICS
+`RegisterManagerBase.BlockAnalysis.FindDivergingBlocks` (shared by the **x64 AND arm64** conversions) called
+any block holding an `mrt_panic` call with no terminator "diverging", and the caller then **`Reset()` the
+register allocator over it** — dropping every value's register *and* its stack home.
+
+Its own comment stated the invariant that made that safe:
+
+> *"the diverging block accesses cross-block values through variable stack slots (memref.load), not SSA refs"*
+
+**It was an ASSUMPTION, not a test, and it was false** the moment a panicking block could also be an
+*ordinary* one — the fall-through of a guard, holding a user's `panic("… {expr} …")` whose message
+interpolates a value computed BEFORE the guard:
+
+```maxon
+function f(bits Num)
+	panic("v={1 shl (bits - 1)}")   // the shift's guard splits the block; the panic block reads `bits - 1`
+end 'f'
+```
+⇒ `E9001: RegisterManager: value %3 has no register and no stack home`.
+
+**The invariant is now ENFORCED** rather than assumed: a block is diverging only if it *also* reads no SSA
+value defined in another block. Found because **maxon-shv2's own `BinaryHelpers.assertSignedReach` is exactly
+that shape** — it panics with an interpolated `1 shl (bits - 1)`.
+
+*The lesson: a comment that states a precondition is a test that was never written. This one had been true
+for as long as every panicking block was a compiler-generated trampoline.*
+
+### 16. ⚠ NEW — the bootstrap LEAKS a payload-carrying error built in a helper and thrown by its caller
+```maxon
+throw self.shiftCountNegative(folded, countStart: countStart, countEnd: countEnd)   // LEAKS the box
+```
+vs. the same error constructed at the throw site:
+```maxon
+let anchor = self.shiftCountAnchor(countStart, countEnd: countEnd)
+throw ParseError.shiftCountNegative(folded, line: anchor.line, column: anchor.column)   // clean
+```
+⇒ **`MM leak: 1 allocation(s) remain`** on every compile that raises the diagnostic. `throw <call>` — where
+the call RETURNS a payload-carrying error union — does not transfer ownership of the box to the throw.
+
+**Fails loudly** (the leak gate catches it, and the spec runner surfaced it as a *stderr mismatch* between two
+byte-identical messages, because the leak line was appended to the actual stderr). Worked around by
+constructing at the throw site. ⚠ **This is the natural way to factor a diagnostic whose position needs
+computing**, so it will recur.
+
 ## 📋 Environment / process notes that cost real time
 
 - 🟡 **IN A WORKTREE, PASS `repoRoot` TO EVERY `maxon-dev` MCP TOOL — otherwise it drives the MAIN REPO.**

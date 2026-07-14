@@ -164,6 +164,13 @@ export function tagIsUnresolved(tag ValueTypeTag) returns bool
 	return tag == ValueTypeTag.unresolved
 end 'tagIsUnresolved'
 
+// True for the tag of an `int`, and ONLY for it. The gate on the parser's constant folder: it
+// folds INTEGERS, and asking "is this definitely an int?" is the same DEFINITELY question
+// `tagIsBool` asks — an `unresolved` operand must not be guessed at and must not be folded.
+export function tagIsInteger(tag ValueTypeTag) returns bool
+	return tag == ValueTypeTag.integer
+end 'tagIsInteger'
+
 // The three operators whose MEANING follows their operands' type. `shl`/`shr` are absent: a
 // shift is integral by definition, on both sides.
 export function wordOperator(op MaxonBinOp) returns bool
@@ -175,7 +182,7 @@ export function wordOperator(op MaxonBinOp) returns bool
 end 'wordOperator'
 
 // The two operators whose RIGHT operand is not an ordinary number but a shift DISTANCE, and so
-// the two that `shiftCountInRange` below governs.
+// the two the shift rule below governs.
 export function shiftOperator(op MaxonBinOp) returns bool
 	return match op 'k'
 		add to bitXor gives false
@@ -183,32 +190,145 @@ export function shiftOperator(op MaxonBinOp) returns bool
 	end 'k'
 end 'shiftOperator'
 
-// ⭐ THE SHIFT-COUNT DOMAIN — THE CANONICAL STATEMENT OF `0..63` IN THIS COMPILER. Three rules
-// read it, and none of them restates it:
+// ⭐ THE SHIFT RULE — THE CANONICAL STATEMENT OF WHAT `shl`/`shr` MEAN IN THIS COMPILER, and the
+// only one. Four readers, and none of them restates it:
 //
-//   • the PARSER rejects a shift-count LITERAL outside it (E2054 — `Parser.requireShiftCount`);
-//   • `foldConstOperands` folds a shift immediate only inside it (`constFitsBinOpImmediate`), so
-//     a count it cannot prove legal keeps its register operand and goes through `cl`;
-//   • the x64 lowering types its imm8 shift operand by it (TargetDialect's `ShiftCount`).
+//   • the PARSER folds a count it can see, rejects a NEGATIVE one (E2054 — `Parser.emitShift`),
+//     and rewrites a count of 64-or-more into the shift it actually names;
+//   • the PARSER again, for a count it CANNOT see: it emits the guard (`Parser.emitGuardedShift`)
+//     that saturates the count at run time, because the hardware would mask it;
+//   • `foldConstOperands` folds a shift immediate only when the instruction takes it as written
+//     (`constFitsBinOpImmediate` → `shiftCountIsUnguarded`);
+//   • the x64 lowering types its imm8 shift operand by the same bound (TargetDialect's
+//     `ShiftCount`).
 //
-// The bound is not an encoding accident. A Maxon `int` is 64 BITS, so 0..63 is the whole set of
-// distances a shift can distinguish; every other count is silently MASKED into that range by the
-// hardware (x64 masks a 64-bit shift's count to its low 6 bits, and arm64's `lsl`/`asr` do the
-// same). That masking is what turned `a shl -1` — which reads to a human as "shift the other
-// way" — into the MAXIMUM LEFT SHIFT, and `a shl 64` into no shift at all.
+// Maxon follows **Go**, whose rule is deliberately NOT the hardware's:
 //
-// It lives HERE, among the source-level operand rules, because rejecting `a shl 100` is the
-// FRONT END's job: it is a program the compiler had every fact it needed to refuse. The lower
-// tiers rely on the same fact, so they ASK for it rather than re-deciding it — which is the only
-// thing that keeps the count the parser ACCEPTS and the count the backend can ENCODE from
-// drifting apart.
+//   • **THE COUNT IS NOT MASKED.** "There is no upper limit on the shift count. Shifts behave as
+//     if the left operand is shifted n times by 1 for a shift count of n." So `x shl 64` is 0 —
+//     every bit has been shifted out — and so is `x shl 100`. The hardware disagrees: x64 masks a
+//     64-bit shift's count to its low 6 bits, so `x shl 64` computes `x shl 0` (x, UNCHANGED) and
+//     `x shl 100` computes `x shl 36`. Fighting that masking is the whole content of this rule.
+//
+//   • **`shr` IS ARITHMETIC.** Go shifts a SIGNED left operand arithmetically, and every Maxon
+//     `int` is a signed i64 — there is no unsigned integer type. So `shr` sign-propagates:
+//     `(0-8) shr 60` is -1, not 15.
+//
+//   • **A NEGATIVE COUNT IS AN ERROR**, never a shift the other way — masked, `a shl -1` silently
+//     computed `a shl 63`, the MAXIMUM LEFT shift, a wrong answer with the opposite sign. A
+//     constant one is E2054; a runtime one panics in Go (see `Parser.emitGuardedShift` for why
+//     shv2 cannot panic yet, and what it does instead).
+//
+// It lives HERE, among the source-level operand rules, because the shift's meaning is a
+// FRONT-END fact. The lower tiers ask for it rather than re-deciding it — which is the only thing
+// that keeps the count the parser accepts and the count the backend can encode from drifting.
 export let MinShiftCount = 0 as ParsedInt
-export let MaxShiftCount = 63 as ParsedInt
 
-// True iff `count` names a shift a 64-bit shift actually performs.
-export function shiftCountInRange(count ParsedInt) returns bool
-	return count >= MinShiftCount and count <= MaxShiftCount
-end 'shiftCountInRange'
+// The width of the value being shifted. A count of `ShiftCountBits` or more shifts every bit out,
+// which is LEGAL and well-defined. It is not the top of a legal range — there is no top.
+export let ShiftCountBits = 64 as ParsedInt
+
+// The largest count the shift INSTRUCTION distinguishes, and so the largest that may reach an
+// unguarded `shl`/`sar`. Anything above it must be saturated by the compiler, never handed to the
+// hardware, which would mask it back into range.
+export let MaxUnguardedShiftCount = 63 as ParsedInt
+
+// The one count that is not a shift at all.
+export function shiftCountIsNegative(count ParsedInt) returns bool
+	return count < MinShiftCount
+end 'shiftCountIsNegative'
+
+// True iff the instruction may be handed this count DIRECTLY — it is non-negative, and the
+// hardware's mask would be a no-op on it. Every other count needs the guard.
+export function shiftCountIsUnguarded(count ParsedInt) returns bool
+	return count >= MinShiftCount and count <= MaxUnguardedShiftCount
+end 'shiftCountIsUnguarded'
+
+// Fold `lhs <op> count` under the rule above. `count` MUST be non-negative — a negative one is
+// E2054, and is never folded.
+//
+// The saturation is the whole of it, and it has two shapes because a shift has two fills: a shift
+// that fills with ZEROS shifts every bit out, so it saturates to 0; a shift that fills with the
+// SIGN leaves the sign behind, and `lhs shr 63` already IS the sign — which is why an out-of-range
+// arithmetic right shift is a CLAMP OF THE COUNT and not a select of the result.
+export function evalShift(lhs ParsedInt, count ParsedInt, op MaxonBinOp) returns ParsedInt
+	if shiftCountIsNegative(count) 'negative'
+		panic("evalShift: negative count {count} — a negative count is E2054 and must never reach the folder")
+	end 'negative'
+
+	if op == MaxonBinOp.shl 'left'
+		if count >= ShiftCountBits 'shiftedOut'
+			return 0
+		end 'shiftedOut'
+
+		return lhs shl count
+	end 'left'
+
+	if op != MaxonBinOp.shr 'notAShift'
+		panic("evalShift: {op.rawValue} is not a shift — only `shl`/`shr` have a count")
+	end 'notAShift'
+
+	// Arithmetic: every Maxon int is signed, so `shr` sign-fills and the clamp gives the sign.
+	if count >= ShiftCountBits 'saturate'
+		return lhs shr MaxUnguardedShiftCount
+	end 'saturate'
+
+	return lhs shr count
+end 'evalShift'
+
+// The result of asking the parser's constant folder to evaluate an operator: either the integer it
+// computed, or a refusal. A refusal is NOT a failure — it is the folder declining to answer a
+// question whose answer would be a DIAGNOSTIC rather than a value.
+export union FoldedInt
+	folded(value ParsedInt)
+	notFoldable
+end 'FoldedInt'
+
+// Fold `lhs <op> rhs` over two integers the parser already holds.
+//
+// `div`/`mod` by zero are `notFoldable`: their answer is a runtime trap, not a number, and a folder
+// that invented one would be writing down a wrong answer as a constant. The SHIFTS are
+// `notFoldable` here too, and deliberately: their rule is `evalShift`'s, it needs the count checked
+// FIRST (a negative one is E2054), and `Parser.emitShift` is the one place that asks. A second
+// shift fold here is exactly the drift this file exists to prevent.
+export function foldIntBinOp(op MaxonBinOp, lhs ParsedInt, rhs ParsedInt) returns FoldedInt
+	return match op 'o'
+		add gives FoldedInt.folded(lhs + rhs)
+		sub gives FoldedInt.folded(lhs - rhs)
+		mul gives FoldedInt.folded(lhs * rhs)
+		div gives foldIntDivision(op, lhs: lhs, rhs: rhs)
+		mod gives foldIntDivision(op, lhs: lhs, rhs: rhs)
+		bitAnd gives FoldedInt.folded(lhs and rhs)
+		bitOr gives FoldedInt.folded(lhs or rhs)
+		bitXor gives FoldedInt.folded(lhs xor rhs)
+		shl to shr gives FoldedInt.notFoldable
+	end 'o'
+end 'foldIntBinOp'
+
+// `div`/`mod`, which are the only binary integer operators that can FAIL. Division by zero traps,
+// and `i64.min / -1` overflows — neither has an answer to fold.
+function foldIntDivision(op MaxonBinOp, lhs ParsedInt, rhs ParsedInt) returns FoldedInt
+	if rhs == 0 or (lhs == i64.min and rhs == 0 - 1) 'trap'
+		return FoldedInt.notFoldable
+	end 'trap'
+
+	if op == MaxonBinOp.div 'quotient'
+		return FoldedInt.folded(lhs / rhs)
+	end 'quotient'
+
+	return FoldedInt.folded(lhs mod rhs)
+end 'foldIntDivision'
+
+// Fold a unary operator over an integer the parser already holds. `logicalNot` is a BOOL operator —
+// the parser has already resolved which `not` the source meant (see MaxonUnaryOp), so meeting it on
+// an integer is a parser bug, not a fold to decline.
+export function foldIntUnaryOp(op MaxonUnaryOp, operand ParsedInt) returns FoldedInt
+	return match op 'o'
+		neg gives FoldedInt.folded(0 - operand)
+		bitNot gives FoldedInt.folded(not operand)
+		logicalNot gives FoldedInt.notFoldable
+	end 'o'
+end 'foldIntUnaryOp'
 
 // The result type of a WORD operator (`and`/`or`/`xor`) — the one place the bitwise/logical
 // duality is resolved, ported from maxon-selfhosted's `binOpOperandType` (Parser.maxon:

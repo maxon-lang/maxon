@@ -170,15 +170,21 @@ public enum ErrorCode {
   /// </summary>
   ParserFirstArgCannotBeNamed = 2052,
   /// <summary>
-  /// A shift ('shl'/'shr') whose count is a LITERAL outside 0..63. An int is 64 bits,
-  /// so no other distance names a distinct shift, and the hardware silently MASKS the
-  /// count into that range -- which turned 'a shl -1', which a human reads as "shift
-  /// the other way", into the MAXIMUM LEFT shift. A shift by a RUNTIME value is
-  /// untouched and still legal: the compiler cannot see the count, and both lowerings
-  /// agree on what the hardware will do with it. A PARSE-time check, positioned at the
-  /// literal.
+  /// A shift ('shl'/'shr') whose count the compiler FOLDED and found NEGATIVE --
+  /// 'a shl -1', 'a shl -(1)', 'let SHIFT = -1' ... 'a shl SHIFT'. A negative count is
+  /// not a shift the other way: the hardware MASKS it, so 'a shl -1' silently computed
+  /// 'a shl 63' -- the MAXIMUM LEFT shift, a wrong answer with the opposite sign.
+  /// Maxon follows Go: the count must be non-negative; a constant one is this compile
+  /// error, and one that only appears at RUN TIME panics.
+  /// WARNING -- a count of 64 OR MORE IS NOT THIS ERROR. It is a legal, well-defined
+  /// shift that moves every bit out ('x shl 64' == 0), because Go puts no upper limit
+  /// on a shift count. This code briefly rejected it, which OVER-rejects a correct
+  /// program. The compiler SATURATES such a count instead of masking it.
+  /// A PARSE-time check, positioned at the count as WRITTEN. It asks the CONSTANT
+  /// FOLDER, not the token shape: 'let SHIFT = -1' is the same -1 as the literal, and a
+  /// check that only looked for a bare literal token missed its own motivating example.
   /// </summary>
-  ParserShiftCountOutOfRange = 2054,
+  ParserShiftCountNegative = 2054,
 
   /// <summary>
   /// The program declares no 'main' function.

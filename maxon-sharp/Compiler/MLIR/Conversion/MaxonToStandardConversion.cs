@@ -1262,7 +1262,7 @@ public static partial class MaxonToStandardConversion {
                 // Widen I32/U32 to I64 when the variable was previously stored as I64
                 // (e.g., try...otherwise where the default is I64 but the call result is U32)
                 if (mappedValue is StdI32 && varTypes.TryGetValue(assignOp.VarName, out var prevType) && prevType == "i64") {
-                  mappedValue = EnsureI64(mappedValue is StdU32 u32w ? new StdI32(u32w.Id) : mappedValue, newBlock, signExtend: mappedValue is not StdU32);
+                  mappedValue = EnsureI64(mappedValue, newBlock);
                 }
                 // A re-declaration of a name that a previous scope registered as
                 // managed (e.g. two sibling `try ... otherwise (e) 'a'/'b'` blocks
@@ -1534,6 +1534,18 @@ public static partial class MaxonToStandardConversion {
               if (rhs is StdHeapPtr rhsHpBinOp)
                 rhs = EmitLoad(newBlock, rhsHpBinOp.VarName!, varTypes);
 
+              // A shift whose count the compiler cannot see must GUARD that count: the hardware
+              // masks it, and Maxon's rule (Go's) does not. A count that IS a compile-time literal
+              // the instruction accepts as written — every `x shr 8`, every `x shl 3` — falls
+              // through to the ordinary width dispatch below, and its codegen is untouched.
+              //
+              // Placed BEFORE the narrowing on purpose: the guard reasons at full i64 width, and a
+              // count truncated to i32 would turn `x shl 4294967296` into `x shl 0`.
+              if (ShiftNeedsGuard(binOp, literalMap)) {
+                valueMap[binOp.Result] = EmitGuardedShift(binOp, lhs, rhs, newBlock);
+                break;
+              }
+
               // Use OptimalType to select narrower/unsigned ops
               if (binOp.OperandKind == MaxonValueKind.Integer && binOp.OptimalType is IrType ot) {
                 var signedOt = ot.ToSigned();
@@ -1548,8 +1560,8 @@ public static partial class MaxonToStandardConversion {
                   break;
                 }
                 if (ot.IsUnsigned) {
-                  var i64Lhs = lhs is StdI64 l64 ? l64 : (StdI64)EnsureI64(lhs is StdU32 uw ? new StdI32(uw.Id) : lhs, newBlock, signExtend: false);
-                  var i64Rhs = rhs is StdI64 r64 ? r64 : (StdI64)EnsureI64(rhs is StdU32 uw2 ? new StdI32(uw2.Id) : rhs, newBlock, signExtend: false);
+                  var i64Lhs = EnsureI64(lhs, newBlock, signExtend: false);
+                  var i64Rhs = EnsureI64(rhs, newBlock, signExtend: false);
                   var (unsignedOp, unsignedResult) = CreateUnsignedIntBinOp(binOp.Operator, i64Lhs, i64Rhs);
                   newBlock.AddOp(unsignedOp);
                   valueMap[binOp.Result] = unsignedResult;
@@ -1559,8 +1571,8 @@ public static partial class MaxonToStandardConversion {
 
               // Widen narrowed operands back to i64 for full-width integer ops
               if (binOp.OperandKind == MaxonValueKind.Integer) {
-                if (lhs is StdI32 or StdU32) lhs = EnsureI64(lhs is StdU32 u ? new StdI32(u.Id) : lhs, newBlock, signExtend: lhs is not StdU32);
-                if (rhs is StdI32 or StdU32) rhs = EnsureI64(rhs is StdU32 u2 ? new StdI32(u2.Id) : rhs, newBlock, signExtend: rhs is not StdU32);
+                if (lhs is StdI32 or StdU32) lhs = EnsureI64(lhs, newBlock);
+                if (rhs is StdI32 or StdU32) rhs = EnsureI64(rhs, newBlock);
               }
 
               // Enums are compared as integers at the standard level

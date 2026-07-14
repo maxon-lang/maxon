@@ -28,9 +28,8 @@
 // so hashing one buys a cache miss and nothing else. This pass looks one up at every operand of every
 // `binOp` and `cmp` in the program.
 //
-// A `ParsedInt` is SIGNED (`i64.min..i64.max`), so its column is NOT a `DenseColumn` — never widen one
-// into the other.
-typealias ParsedIntArray = Array with ParsedInt
+// (`ParsedIntArray` — the column of parsed integers — is declared in NumberParsing, beside the type
+// it is a column of. The parser's constant folder keeps one too.)
 
 type ConstValueMap
 	var isConst as BoolArray
@@ -232,20 +231,22 @@ end 'foldableCmpImm'
 //       whole Imm32 domain folds.
 //   sub — lowers to `lea [base - imm]`, a NEGATED displacement, and -(i32.min) overflows a
 //       signed 32-bit field. i32.min alone is excluded.
-//   shl / shr — the immediate is an imm8 SHIFT COUNT, so folding is restricted to the shift-count
-//       domain (TypeRules' `shiftCountInRange` — the canonical `0..63`, ASKED here rather than
-//       restated). Those are the counts on which the imm8 form and the `cl` form provably agree.
-//       A count OUTSIDE it still reaches this pass — the parser rejects an out-of-range LITERAL
-//       (E2054), but a RUNTIME count it cannot see is legal — and it keeps its register operand
-//       and goes through `cl`, where the HARDWARE does the masking. So the two lowerings can
-//       never disagree, and no compile-time truncation has to be justified.
+//   shl / shr — the immediate is an imm8 SHIFT COUNT, so folding is restricted to the counts the
+//       INSTRUCTION takes as written (TypeRules' `shiftCountIsUnguarded` — ASKED here rather than
+//       restated). Those are exactly the counts on which the imm8 form and the `cl` form provably
+//       agree, because the hardware's mask is a no-op on them.
+//       A count outside it never reaches this pass as a constant: the parser has already folded it
+//       (`x shl 100` IS the constant 0) or GUARDED it (`Parser.emitGuardedShift`), because the
+//       hardware would otherwise mask it and answer a different question. If one somehow did, it
+//       would keep its register operand and go through `cl` — where the guard the parser emitted
+//       is what makes that correct.
 function constFitsBinOpImmediate(v ParsedInt, opcode StdBinOpcode) returns bool
 	return match opcode 'o'
 		add gives fitsImm32(v)
 		mul gives fitsImm32(v)
 		sub gives fitsImm32(v) and v != i32.min
 		bitAnd to bitXor gives fitsImm32(v)
-		shl to shr gives shiftCountInRange(v)
+		shl to shr gives shiftCountIsUnguarded(v)
 	end 'o'
 end 'constFitsBinOpImmediate'
 

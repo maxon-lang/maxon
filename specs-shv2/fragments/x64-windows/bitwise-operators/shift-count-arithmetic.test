@@ -1,0 +1,54 @@
+// Test: shift-count-arithmetic
+function main() returns ExitCode
+	let a = 1
+	if a shl 63 + 1 != 0 'addWrong'
+		return 1
+	end 'addWrong'
+	if a shl 2 * 32 != 0 'mulWrong'
+		return 2
+	end 'mulWrong'
+	if a shl 128 / 2 != 0 'divWrong'
+		return 3
+	end 'divWrong'
+	return 42
+end 'main'
+---
+ExitCode: 42
+---
+func @main {
+  entry:
+    x64.movRegImm32 rax, 63
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.movRegImm32 rax, 0
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, addWrong
+    x64.jmp ifcont
+  addWrong:
+    x64.movRegImm32 r8, 1
+    x64.ret
+  ifcont:
+    x64.movRegImm32 rax, 2
+    x64.imulRegRegImm32 rax, rax, 32
+    x64.movRegImm32 rax, 0
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, mulWrong
+    x64.jmp ifcont
+  mulWrong:
+    x64.movRegImm32 r8, 2
+    x64.ret
+  ifcont:
+    x64.movRegImm32 rax, 128
+    x64.movRegImm32 rcx, 2
+    x64.cqo
+    x64.idivReg rcx
+    x64.movRegImm32 rax, 0
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, divWrong
+    x64.jmp ifcont
+  divWrong:
+    x64.movRegImm32 r8, 3
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 42
+    x64.ret
+}

@@ -619,17 +619,11 @@ public abstract class RegisterManagerBase<TGpr, TFp, TOp>
 /// </summary>
 public static class BlockAnalysis {
   /// <summary>
-  /// Detect diverging blocks — blocks containing a noreturn call (mrt_panic, mrt_panic_dynamic)
-  /// with no branch or return terminator. These blocks never transfer control to a successor,
-  /// so register state can be carried across them to avoid unnecessary spills.
+  /// The block each SSA value is defined in, by value id. THE one place this index is built —
+  /// both analyses below need it, and two sweeps that answered "where was this defined?"
+  /// differently would be two different CFGs.
   /// </summary>
-  /// <summary>
-  /// Identify blocks that need cross-block spill preservation. A block needs
-  /// spill preservation when an SSA value defined in it is used in a later block.
-  /// Computes [defBlock, maxUseBlock) intervals and paints the covered blocks in
-  /// a single linear sweep.
-  /// </summary>
-  public static HashSet<int> FindCrossBlockSpillBlocks(List<IrBlock<StandardOp>> sourceBlocks) {
+  private static Dictionary<int, int> MapValueDefBlocks(List<IrBlock<StandardOp>> sourceBlocks) {
     var valueDefBlock = new Dictionary<int, int>();
     for (int bi = 0; bi < sourceBlocks.Count; bi++) {
       foreach (var op in sourceBlocks[bi].Operations) {
@@ -638,6 +632,17 @@ public static class BlockAnalysis {
           valueDefBlock[resultId] = bi;
       }
     }
+    return valueDefBlock;
+  }
+
+  /// <summary>
+  /// Identify blocks that need cross-block spill preservation. A block needs
+  /// spill preservation when an SSA value defined in it is used in a later block.
+  /// Computes [defBlock, maxUseBlock) intervals and paints the covered blocks in
+  /// a single linear sweep.
+  /// </summary>
+  public static HashSet<int> FindCrossBlockSpillBlocks(List<IrBlock<StandardOp>> sourceBlocks) {
+    var valueDefBlock = MapValueDefBlocks(sourceBlocks);
 
     var spillIntervalEnd = new Dictionary<int, int>();
     for (int bi = 0; bi < sourceBlocks.Count; bi++) {
@@ -667,7 +672,27 @@ public static class BlockAnalysis {
     return needsCrossBlockSpill;
   }
 
+  /// <summary>
+  /// Detect diverging blocks — a block that panics and never transfers control to a successor,
+  /// AND that takes NO SSA input from any other block. The caller carries the register state
+  /// ACROSS such a block (snapshot, reset, restore at the next ordinary block) instead of spilling
+  /// on the happy path, and both halves of that are why both conditions are needed:
+  ///
+  ///   • no successor ⇒ nothing after it can depend on what it left in a register;
+  ///   • no cross-block SSA input ⇒ the reset that lets it allocate freely cannot lose a value
+  ///     it was going to read. Such a block reaches everything it needs through variable stack
+  ///     slots (memref.load), which survive the reset.
+  ///
+  /// ⚠ THE SECOND CONDITION WAS AN ASSUMPTION, NOT A TEST, AND IT WAS FALSE. It held only while
+  /// every panicking block was a compiler-generated trampoline (a `__range_panic_N`, whose ops are
+  /// a symdata address and the call). A block that panics can also be an ORDINARY block — the
+  /// fall-through of a guard, holding a user's `panic("… {expr} …")` whose message interpolates an
+  /// SSA value computed BEFORE the guard. Reset over one of those and the value has neither a
+  /// register nor a stack home, which is exactly the internal error it produced (E9001).
+  /// </summary>
   public static HashSet<int> FindDivergingBlocks(List<IrBlock<StandardOp>> sourceBlocks) {
+    var valueDefBlock = MapValueDefBlocks(sourceBlocks);
+
     var result = new HashSet<int>();
     for (int bi = 0; bi < sourceBlocks.Count; bi++) {
       bool hasNoreturnCall = sourceBlocks[bi].Operations
@@ -675,7 +700,14 @@ public static class BlockAnalysis {
         .Any(op => op.Callee is "mrt_panic" or "mrt_panic_dynamic");
       bool hasTerminator = sourceBlocks[bi].Operations
         .Any(op => op is StdCondBrOp or StdBrOp or StdReturnOp);
-      if (hasNoreturnCall && !hasTerminator)
+      if (!hasNoreturnCall || hasTerminator)
+        continue;
+
+      int blockIndex = bi;
+      bool readsAnotherBlocksValue = sourceBlocks[bi].Operations
+        .SelectMany(op => op.ReadValues)
+        .Any(use => valueDefBlock.TryGetValue(use.Id, out int defBlock) && defBlock != blockIndex);
+      if (!readsAnotherBlocksValue)
         result.Add(bi);
     }
     return result;

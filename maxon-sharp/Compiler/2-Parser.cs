@@ -5004,17 +5004,28 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     var lhs = EvalConstAddSub(decls, evaluated, evaluating);
     while (Check(TokenType.Shl) || Check(TokenType.Shr)) {
       var op = Advance().Type;
-      // The same shift-count rule the runtime expression parser enforces, asked here too:
-      // `let MASK = 1 shl 100` is a compile-time shift whose count C#'s own `<<` masks to
-      // its low 6 bits, so it silently evaluated to `1 shl 36`. One rule, both parse sites.
       var rhsStart = _pos;
       var rhs = EvalConstAddSub(decls, evaluated, evaluating);
-      RequireShiftCountInRange(rhsStart, _pos);
-      if (lhs is long ll && rhs is long rl) {
-        lhs = op == TokenType.Shl ? ll << (int)rl : ll >> (int)rl;
-      } else {
+      var rhsEnd = _pos;
+
+      if (lhs is not long ll || rhs is not long rl)
         throw new InvalidOperationException($"Cannot apply shift to {lhs?.GetType().Name} and {rhs?.GetType().Name}");
-      }
+
+      if (ShiftSemantics.IsNegativeCount(rl))
+        throw ShiftCountNegative(rl, rhsStart, rhsEnd);
+
+      // ShiftSemantics, asked HERE too — the second and last reader of the rule in this compiler.
+      // C#'s own `<<`/`>>` on a `long` MASK the count to its low 6 bits exactly as the hardware
+      // does, so `let MASK = 1 shl 100` used to evaluate to `1 shl 36` right here, in a folder
+      // that was holding the 100.
+      //
+      // A const-decl carries no ranged type — it is a bare integer literal expression — so its
+      // left operand is signed by construction, and `SignFills` is asked rather than assumed only
+      // so that a future unsigned const-decl cannot answer this question differently here than the
+      // expression parser answers it there.
+      var isRightShift = op == TokenType.Shr;
+      lhs = ShiftSemantics.Eval(ll, rl, isRightShift,
+        ShiftSemantics.SignFills(isRightShift, leftOperandIsUnsigned: false));
     }
     return lhs;
   }
@@ -6380,6 +6391,9 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     // — a FALSE rejection, the worse failure. (The SSA-id map needs no reset: ids are unique
     // process-wide, so an id can never be mistaken for a different function's value.)
     _capturingClosureVarFrames.Clear();
+    // A folded constant is a fact about the SSA values of ONE function. Keeping them would not be
+    // wrong (ids are unique process-wide), but it would make the map grow with the whole file.
+    _intConstValues.Clear();
     _blockCounter = 0;
 
     return func;
@@ -14745,13 +14759,12 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         }
       }
 
-      // The right operand's token span, remembered BEFORE it is parsed and read back after:
-      // the shift-count check needs to know what the count was WRITTEN as, not merely what it
-      // evaluates to. See RequireShiftCountInRange.
+      // The right operand's token span, remembered BEFORE it is parsed and read back after. It is
+      // not what the shift-count rule ASKS — that is the constant folder's job — but it is where
+      // E2054 POINTS, and the climber has already decided how far the operand reaches.
       var rhsStart = _pos;
       var rhs = ParseExpression(entry.Precedence + 1);
-      if (entry.Op is MaxonBinOperator.Shl or MaxonBinOperator.Shr)
-        RequireShiftCountInRange(rhsStart, _pos);
+      var rhsEnd = _pos;
 
       // Type parameter operands require where-clause constraints for comparison operators
       ValidateTypeParameterConstraints(lhs, rhs, entry.Op, opToken);
@@ -14955,11 +14968,27 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
           && resolvedOp is not (MaxonBinOperator.Eq or MaxonBinOperator.Ne
             or MaxonBinOperator.Lt or MaxonBinOperator.Gt
             or MaxonBinOperator.Le or MaxonBinOperator.Ge)) {
-        optimalType = GetOptimalType(promotedLhs) ?? GetOptimalType(promotedRhs);
+        // An ARITHMETIC operator is symmetric — either operand's ranged type describes the result,
+        // so either may supply it. A SHIFT IS NOT: its right operand is a DISTANCE, not a value of
+        // the shifted type, and its ranged type describes neither the result's width nor its
+        // signedness. Falling through to it made `(0-8) shr n` answer -1 for a plain `int` count
+        // and 15 for one declared `int(0 to 63)` — an unsigned optimal type, and the most natural
+        // way there is to declare a shift distance — because `MaxonBinOp.IsUnsigned` then reported
+        // the whole SHIFT as unsigned and both ShiftSemantics readers zero-filled it.
+        optimalType = resolvedOp is MaxonBinOperator.Shl or MaxonBinOperator.Shr
+          ? GetOptimalType(promotedLhs)
+          : GetOptimalType(promotedLhs) ?? GetOptimalType(promotedRhs);
       }
-      var binOp = new MaxonBinOp(resolvedOp, promotedLhs, promotedRhs, kind, optimalType);
-      _currentBlock!.AddOp(binOp);
-      lhs = new ExprResult.Direct(binOp.Result);
+      // A shift's right operand is not an ordinary number but a DISTANCE, and Maxon's rule for it
+      // (Go's) is deliberately not the hardware's. It gets its own emitter, which owns both the
+      // rule and the diagnostic. See EmitShift.
+      if (resolvedOp is MaxonBinOperator.Shl or MaxonBinOperator.Shr && IsShiftableIntKind(kind)) {
+        lhs = new ExprResult.Direct(
+          EmitShift(resolvedOp, promotedLhs, promotedRhs, kind, optimalType, rhsStart, rhsEnd));
+        continue;
+      }
+
+      lhs = new ExprResult.Direct(EmitBinOp(resolvedOp, promotedLhs, promotedRhs, kind, optimalType));
       // A comparison yields a bool, which carries no ranged-primitive identity:
       // clear any stale `_lastRangedTypeName` left by an operand so a following
       // `LITERAL as Ranged` cast is not mis-flagged as unneeded (E3010). This was
@@ -15289,13 +15318,18 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       var inner = ParsePrimary();
       var innerVal = ResolveExprValue(inner);
       var kind = DetermineValueKind(innerVal);
-      var zeroOp = kind is MaxonValueKind.Float or MaxonValueKind.Float32
-        ? new MaxonLiteralOp(0.0, kind)
-        : new MaxonLiteralOp(0L);
-      _currentBlock!.AddOp(zeroOp);
-      var subOp = new MaxonBinOp(MaxonBinOperator.Sub, zeroOp.Result, innerVal, kind);
-      _currentBlock!.AddOp(subOp);
-      return new ExprResult.Direct(subOp.Result);
+      if (kind is MaxonValueKind.Float or MaxonValueKind.Float32) {
+        var zeroFloat = new MaxonLiteralOp(0.0, kind);
+        _currentBlock!.AddOp(zeroFloat);
+        var subFloat = new MaxonBinOp(MaxonBinOperator.Sub, zeroFloat.Result, innerVal, kind);
+        _currentBlock!.AddOp(subFloat);
+        return new ExprResult.Direct(subFloat.Result);
+      }
+
+      // `-(e)` desugars to `0 - e`, so it reaches EmitBinOp and folds with everything else. That
+      // is what lets `x shl -(1)` be caught: the count is a `sub`, not a literal, and only a
+      // folder — never a token-shape test — can see that it is -1.
+      return new ExprResult.Direct(EmitBinOp(MaxonBinOperator.Sub, EmitIntLiteral(0L), innerVal, kind, null));
     }
 
     if (Check(TokenType.LeftBracket)) {
@@ -16552,6 +16586,13 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       _ => throw new InvalidOperationException($"Unsupported constant type: {constValue.GetType().Name}")
     };
     _currentBlock!.AddOp(op);
+
+    // THE choke point of the parser's constant view: every integer literal, every negated one,
+    // and every RESOLVED constant (a top-level `let` reaches expression position already folded,
+    // as a literal) is born here. See _intConstValues.
+    if (constValue is long intValue)
+      _intConstValues[op.Result] = new FoldedInt(intValue, IsLiteralOp: true);
+
     return new ExprResult.Direct(op.Result);
   }
 
@@ -20876,67 +20917,195 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     }
   }
 
-  /// ⭐ THE SHIFT-COUNT DOMAIN — the canonical statement of `0..63` in this compiler, and the
-  /// only one. Both parse sites that can meet a shift (the runtime expression parser's binary
-  /// loop, and <see cref="EvalConstShift"/>) read these; nothing restates them.
+  /// One integer the parser has FOLDED, plus whether the IR already carries it as a literal op.
   ///
-  /// The bound is not an encoding accident. A Maxon `int` is 64 BITS, so 0..63 is the whole set
-  /// of distances a shift can distinguish, and every other count is silently MASKED into that
-  /// range — by x64 (which masks a 64-bit shift's count to its low 6 bits), by arm64, and by
-  /// C#'s own `<<` in the const evaluator. That masking is what turned `a shl -1` — which reads
-  /// to a human as "shift the other way" — into the MAXIMUM LEFT SHIFT, and `a shl 64` into no
-  /// shift at all. (maxon-shv2 declares the same domain in TypeRules.maxon and enforces the
-  /// same rule under the same code and the same message text; the specs gate stderr
-  /// byte-for-byte, so the two must not drift.)
-  private const long MinShiftCount = 0;
-  private const long MaxShiftCount = 63;
+  /// The second half is what keeps the fold and the lowering from becoming two opinions. The
+  /// Maxon→Standard lowering's constant view is "the shift's right operand is a literal op" — so a
+  /// count this tier folded but did NOT materialize would be invisible over there, and the two
+  /// tiers would silently disagree about whether the count is known. <see cref="EmitShift"/>
+  /// materializes rather than let that happen.
+  private readonly record struct FoldedInt(long Value, bool IsLiteralOp);
 
-  /// Reject a shift count written as a LITERAL outside the shift-count domain (E2054).
-  /// `tokenStart`..`tokenEnd` is the half-open token span the shift's right operand consumed.
+  /// Every SSA value in the function being parsed whose integer the compiler KNOWS — the parser's
+  /// constant folder, and the thing the shift-count rule asks. Filled forward, at the three places
+  /// an integer value can be born in an expression:
   ///
-  /// The operand is identified from the TOKENS IT CONSUMED rather than by looking ahead before
-  /// it is parsed, and that is what makes the test exact: the precedence climber has already
-  /// decided how far the operand reaches, so `a shl 1 + 2` (whose count is `1 + 2`, because
-  /// additive binds TIGHTER than a shift) is correctly NOT a literal — worked out without a
-  /// second copy of the precedence ladder here to drift from the real one.
+  ///   • <see cref="EmitConstantLiteral"/> — every literal, every negated literal, AND every
+  ///     resolved constant, because a top-level `let` arrives here already folded, as a literal.
+  ///     So a count named through a `let` is a count this map holds: `let SHIFT = -1` emits
+  ///     `%n = literal -1`, and `x shl SHIFT` reads that very `%n` as its right operand.
+  ///   • the unary-minus fallback in <see cref="ParsePrimary"/>, which desugars `-(e)` to `0 - e`.
+  ///   • <see cref="EmitBinOp"/>, which folds `k1 <op> k2` — so `x shl 63 + 1` is a count of 64.
   ///
-  /// Anything that is not a bare literal — a variable, a call, `1 + 2` — is LEFT ALONE and stays
-  /// legal: it goes through `cl`, the hardware masks it, and both lowerings agree on what that
-  /// means. There was no fact for the compiler to discard. The literal is the case where it held
-  /// every fact it needed and threw the answer away.
-  private void RequireShiftCountInRange(int tokenStart, int tokenEnd) {
+  /// Cleared per function, with the rest of the per-function parse state: a constant is never a
+  /// fact about another function, and an unbounded map is not a fact about anything.
+  ///
+  /// ⚠ Its REACH is a matter of diagnostic quality, never of correctness. A count it misses is a
+  /// count the guarded lowering handles at run time, to exactly the same answer — which is the
+  /// property that lets the fold be an optimization rather than a second opinion.
+  private readonly Dictionary<MaxonValue, FoldedInt> _intConstValues = [];
+
+  /// The folded integer behind `value`, or null when the compiler genuinely cannot see it.
+  private FoldedInt? TryFoldIntConst(MaxonValue value) =>
+    _intConstValues.TryGetValue(value, out var folded) ? folded : null;
+
+  /// Fold `lhs <op> rhs` over two integers the parser already holds. Only the operators whose
+  /// folded value is TOTAL: a division by zero, and a shift (whose rule is ShiftSemantics', asked
+  /// by <see cref="EmitShift"/> and nowhere else), are decided by the code that diagnoses them —
+  /// not silently here, where a wrong answer would look like a constant.
+  private static long? TryFoldIntBinOp(MaxonBinOperator op, long lhs, long rhs) => op switch {
+    MaxonBinOperator.Add => unchecked(lhs + rhs),
+    MaxonBinOperator.Sub => unchecked(lhs - rhs),
+    MaxonBinOperator.Mul => unchecked(lhs * rhs),
+    MaxonBinOperator.Div => rhs == 0 || (lhs == long.MinValue && rhs == -1) ? null : lhs / rhs,
+    MaxonBinOperator.Mod => rhs == 0 || (lhs == long.MinValue && rhs == -1) ? null : lhs % rhs,
+    MaxonBinOperator.BitAnd => lhs & rhs,
+    MaxonBinOperator.BitOr => lhs | rhs,
+    MaxonBinOperator.BitXor => lhs ^ rhs,
+    _ => null
+  };
+
+  /// True for the operand kinds a Maxon shift is defined over — the ones that reach the i64
+  /// `shl`/`shr` lowering. `Short` is an i64 at the Standard tier exactly as `Integer` is.
+  private static bool IsShiftableIntKind(MaxonValueKind kind) =>
+    kind is MaxonValueKind.Integer or MaxonValueKind.Short;
+
+  /// Materialize `value` as a literal op, remember it, and hand back its SSA value.
+  private MaxonValue EmitIntLiteral(long value) => EmitConstantLiteral(value).Value;
+
+  /// Append a `MaxonBinOp` and fold its result when the parser holds both operands. THE one place
+  /// the expression parser builds a binary op, so the fold cannot miss one.
+  private MaxonValue EmitBinOp(MaxonBinOperator op, MaxonValue lhs, MaxonValue rhs,
+      MaxonValueKind kind, IrType? optimalType) {
+    var binOp = new MaxonBinOp(op, lhs, rhs, kind, optimalType);
+    _currentBlock!.AddOp(binOp);
+
+    if (IsShiftableIntKind(kind) && TryFoldIntConst(lhs) is { } l && TryFoldIntConst(rhs) is { } r
+        && TryFoldIntBinOp(op, l.Value, r.Value) is { } folded)
+      _intConstValues[binOp.Result] = new FoldedInt(folded, IsLiteralOp: false);
+
+    return binOp.Result;
+  }
+
+  /// ⭐ Emit `lhs <op> count` under <see cref="ShiftSemantics"/> — THE one place a source-level
+  /// shift is built. Two jobs, separate on purpose:
+  ///
+  ///   **LEGALITY.** A count the parser can FOLD is decided here: a negative one is E2054. A count
+  ///   it cannot fold gets a RUNTIME check instead, because Go's rule is that a negative count
+  ///   panics — see <see cref="EmitNegativeShiftCountCheck"/>. A count of 64 or more is legal and
+  ///   is NOT an error, which is the whole narrowing: it shifts every bit out.
+  ///
+  ///   **VALUE.** A folded count is rewritten into the shift its semantics define, so no count
+  ///   above `MaxUnguardedShiftCount` ever reaches codegen and the hardware's masking is never
+  ///   consulted. A count that could NOT be folded is left alone, and the guarded lowering
+  ///   (MaxonToStandardConversion.EmitGuardedShift) saturates it at run time — to the SAME answer.
+  ///   That the two agree is not a coincidence: both are readings of `ShiftSemantics.Eval`.
+  private MaxonValue EmitShift(MaxonBinOperator op, MaxonValue lhs, MaxonValue count,
+      MaxonValueKind kind, IrType? optimalType, int countTokenStart, int countTokenEnd) {
+    var isRightShift = op == MaxonBinOperator.Shr;
+    // ASKED, not restated. `optimalType` is the LEFT operand's ranged type (a shift takes it from
+    // nowhere else — see the shift arm of the OptimalType selection in ParseExpression), so this
+    // is the same question MaxonToStandardConversion.EmitGuardedShift asks of the same op.
+    var signFills = ShiftSemantics.SignFills(isRightShift, optimalType?.IsUnsigned ?? false);
+
+    if (TryFoldIntConst(count) is not { } folded) {
+      EmitNegativeShiftCountCheck(count, _tokens[countTokenStart].Line);
+      return EmitBinOp(op, lhs, count, kind, optimalType);
+    }
+
+    if (ShiftSemantics.IsNegativeCount(folded.Value))
+      throw ShiftCountNegative(folded.Value, countTokenStart, countTokenEnd);
+
+    if (!ShiftSemantics.IsUnguardedCount(folded.Value)) {
+      // A count that shifts every bit out. There is no instruction for it — the hardware would
+      // mask it straight back into range — so the compiler must write down what it MEANS. A
+      // zero-filling shift is then the constant 0; a sign-filling one is the SIGN, and `sar 63`
+      // already IS the sign, so it becomes a shift by `MaxUnguardedShiftCount` rather than a
+      // select. Neither is the masked shift the hardware would have performed (`x shl 64` == `x`,
+      // `x shl 100` == `x shl 36`).
+      //
+      // `lhs` keeps its ops either way: they may have side effects, and Go evaluates the left
+      // operand of a shift whatever the count turns out to be.
+      if (!signFills)
+        return EmitIntLiteral(0L);
+
+      count = EmitIntLiteral(ShiftSemantics.MaxUnguardedShiftCount);
+      folded = new FoldedInt(ShiftSemantics.MaxUnguardedShiftCount, IsLiteralOp: true);
+    } else if (!folded.IsLiteralOp) {
+      // A count the instruction takes as written, but one only THIS tier can see (`x shl 1 + 2`).
+      // Materialize it, so the lowering's constant view — literal ops — holds what the parser's
+      // does, and the two tiers cannot come to different conclusions about whether it is known.
+      count = EmitIntLiteral(folded.Value);
+    }
+
+    var result = EmitBinOp(op, lhs, count, kind, optimalType);
+
+    // The shift's own value, when the parser holds both sides — RECORDED, not rewritten. This
+    // compiler folds no other constant expression INTO the IR (`1 + 2` still emits an `add`), and
+    // a shift is not the place to start: the fragments for `x shl 3` exist to show the shift.
+    // Recording it is still worth it — it is what makes `let A = 1 shl 4` a count `x shl A` can
+    // see, and it costs one map entry.
+    if (TryFoldIntConst(lhs) is { } foldedLhs)
+      _intConstValues[result] = new FoldedInt(
+        ShiftSemantics.Eval(foldedLhs.Value, folded.Value, isRightShift, signFills), IsLiteralOp: false);
+
+    return result;
+  }
+
+  /// Go: "if the shift count is negative at run time, a run-time panic occurs". A count the parser
+  /// could not fold gets exactly that — emitted the way <see cref="EmitRuntimeRangeCheck"/> emits a
+  /// ranged typealias's bound check, which is the same shape of problem: a fact the compiler could
+  /// not prove, so the program proves it. A compare, a conditional branch, and a panic block that
+  /// never returns; one compare and one not-taken branch on the live path.
+  ///
+  /// No reload is needed after the branch: the panic block never returns, so nothing on the live
+  /// path can have been clobbered by it.
+  private void EmitNegativeShiftCountCheck(MaxonValue count, int sourceLine) {
+    var checkId = _blockCounter++;
+    var panicLabel = $"__shift_count_panic_{checkId}";
+    var continueLabel = $"__shift_count_ok_{checkId}";
+
+    var zeroLit = new MaxonLiteralOp(ShiftSemantics.MinShiftCount);
+    _currentBlock!.AddOp(zeroLit);
+    var isNegative = new MaxonBinOp(MaxonBinOperator.Lt, count, zeroLit.Result, MaxonValueKind.Integer);
+    _currentBlock!.AddOp(isNegative);
+    _currentBlock!.AddOp(new MaxonCondBrOp(isNegative.Result, panicLabel, continueLabel));
+
+    var sourceFileName = _sourceFilePath != null ? Path.GetFileName(_sourceFilePath) : "unknown";
+    var panicBlock = _currentFunction!.Body.AddBlock(panicLabel);
+    panicBlock.AddOp(new MaxonPanicOp(
+      $"panic at {sourceFileName}:{sourceLine}: negative shift count", _isStdlib));
+
+    _currentBlock = _currentFunction!.Body.AddBlock(continueLabel);
+  }
+
+  /// E2054, raised: the compiler folded this shift's count and it is NEGATIVE — the one count
+  /// that is not a shift at all. Go: "the shift count must be non-negative"; a constant one is a
+  /// compile error, a runtime one panics (see <see cref="EmitNegativeShiftCountCheck"/>).
+  ///
+  /// ⚠ A count of 64 or more is NOT an error and must not be reported here. It is a legal,
+  /// well-defined shift that moves every bit out (Go: "there is no upper limit on the shift
+  /// count"), and <see cref="EmitShift"/> folds it to what it means. The check that used to
+  /// reject it over-rejected, which is the worse failure.
+  ///
+  /// The count is positioned from the TOKENS IT CONSUMED — `[tokenStart, tokenEnd)`, the span the
+  /// precedence climber has already decided the right operand reaches — so `x shl SHIFT` points
+  /// at `SHIFT`, where the programmer would look, and not at the `let` that gave it its value.
+  private CompileError ShiftCountNegative(long count, int tokenStart, int tokenEnd) {
     var lo = tokenStart;
     var hi = tokenEnd;
 
-    // Redundant parentheses do not turn a literal into a runtime value: `a shl (100)` discards
-    // exactly the same fact as `a shl 100`. A span that merely STARTS with `(` and ENDS with `)`
-    // without being wrapped in one survives this loop as something the shape check below then
-    // refuses to call a literal, so stripping can only widen what is CAUGHT — never what is
-    // mistaken for a literal.
+    // Redundant parentheses are not part of what was written: `x shl (-1)` should point at the
+    // `-1`, not at the `(`.
     while (hi - lo >= 2 && _tokens[lo].Type == TokenType.LeftParen && _tokens[hi - 1].Type == TokenType.RightParen) {
       lo++;
       hi--;
     }
 
-    bool negated = _tokens[lo].Type == TokenType.Minus;
-    var litIdx = negated ? lo + 1 : lo;
-    if (hi != litIdx + 1 || _tokens[litIdx].Type != TokenType.IntegerLiteral)
-      return;
-
-    // The SAME readers every other literal comes through, so a hex or underscore-separated count
-    // (`a shl 0x40`) is read here exactly as it would be anywhere else — and the negated form
-    // routes to ParseNegatedIntegerLiteral rather than negating afterwards, so `i64.min`'s
-    // magnitude does not overflow on its way to being rejected.
-    var literal = _tokens[litIdx];
-    long count = negated ? ParseNegatedIntegerLiteral(literal) : ParseIntegerLiteral(literal);
-    if (count >= MinShiftCount && count <= MaxShiftCount)
-      return;
-
-    // Anchored at `lo`, not at the digits: `-1` is what the programmer wrote and what the
-    // message names, so the `-` is where the error belongs.
     var anchor = _tokens[lo];
-    throw new CompileError(ErrorCode.ParserShiftCountOutOfRange,
-      $"Shift count {count} is outside the range {MinShiftCount} to {MaxShiftCount}: an int is 64 bits, so any other count is silently masked into that range",
+
+    return new CompileError(ErrorCode.ParserShiftCountNegative,
+      ShiftSemantics.NegativeCountMessage(count),
       anchor.Line, anchor.Column) { FilePath = _sourceFilePath };
   }
 

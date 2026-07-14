@@ -61,35 +61,56 @@ var b = a shl 3  // 1000 = 8
 
 ### Right Shift (`shr`)
 
-Shifts bits right by the specified amount:
+Shifts bits right by the specified amount. `shr` is an **arithmetic** (sign-propagating) shift:
+every Maxon `int` is a *signed* 64-bit integer, so the vacated high bits are filled with the sign
+bit, not with zeros.
 
 ```maxon
 var a = 16
-var b = a shr 2  // 0100 = 4
+var b = a shr 2       // 0100 = 4      — a non-negative value zero-fills naturally
+var c = (0 - 8) shr 1 // -4, not 9223372036854775804
 ```
 
-### Shift Count Range
+Only a value whose ranged type is *unsigned* (`int(0 to u64.max)`) zero-fills.
 
-An `int` is 64 bits, so the only shift distances that name distinct results are `0` through
-`63`. A shift count written as a **literal** outside that range is a compile error (**E2054**):
+### Shift Count
+
+Maxon's shift semantics are **Go's**, and they are deliberately not the hardware's.
+
+**The count is not masked.** There is no upper limit on a shift count: a shift by `n` behaves as
+if the value were shifted one place `n` times. So a count of 64 or more shifts *every bit out*,
+and that is legal, not an error:
 
 ```maxon
-var a = 1
-var b = a shl -1   // E2054: shift count -1 is outside the range 0 to 63
-var c = a shl 64   // E2054
+let a = 1
+let b = a shl 64      // 0 — every bit shifted out
+let c = a shl 100     // 0
+let d = (0 - 1) shr 100  // -1 — a sign-filling shift leaves the sign
+let e = 8 shr 100        // 0
 ```
 
-The rule exists because the hardware does not reject an out-of-range count — it **masks** it
-into range, and the result is a plausible-looking wrong answer. `a shl -1` reads to a human as
-"shift the other way", and would silently compute `a shl 63` — the *maximum left shift*, with
-the opposite sign. `a shl 64` would silently compute `a shl 0`, leaving `a` unchanged.
+This matters because the hardware **masks** the count into `0..63` instead of rejecting it, which
+produces a plausible-looking wrong answer: unguarded, `a shl 64` would compute `a shl 0` (leaving
+`a` *unchanged*) and `a shl 100` would compute `a shl 36`. The compiler saturates the count so
+that never happens — folding it when it can see it, and guarding it at run time when it cannot.
 
-A shift by a **runtime value** is unaffected and stays legal. The count is passed in `cl`,
-where the hardware masks it, and the compiler has no fact to check:
+**A negative count is an error.** It is not a shift the other way: masked, `a shl -1` would
+silently compute `a shl 63` — the *maximum left shift*, a wrong answer with the opposite sign. A
+count the compiler can fold — a literal, a named `let`, or constant arithmetic — is a compile
+error (**E2054**); a count that only appears at run time **panics**.
+
+```maxon
+let a = 1
+let b = a shl -1      // E2054: shift count -1 is negative
+let SHIFT = -1
+let c = a shl SHIFT   // E2054 — a named constant is a constant
+```
+
+A shift by a **runtime value** is legal and is guarded, not masked:
 
 ```maxon
 let count = 64
-var d = a shl count  // legal: 64 masks to 0, so this is `a shl 0`
+let d = a shl count   // 0 — the same answer the folded form gives
 ```
 
 ## Tests
@@ -187,10 +208,43 @@ end 'main'
 11
 ```
 
+<!-- test: shr-is-arithmetic -->
+⚠ THE CASE NEITHER SPEC FILE PINNED, WHICH IS WHY THE TWO COMPILERS DIVERGED. Go: "the shift
+operators implement arithmetic shifts if the left operand is a signed integer". Every Maxon `int`
+IS a signed integer, so `shr` sign-propagates. Unpinned, the bootstrap zero-filled — `(0-8) shr 60`
+was 15 — while shv2 emitted `sar` and answered -1.
+```maxon
+function main() returns ExitCode
+	let neg = 0 - 8
+	print("{neg shr 60}\n")
+	print("{neg shr 1}\n")
+	return 0
+end 'main'
+```
+```stdout
+-1
+-4
+```
+```exitcode
+0
+```
+
+<!-- test: shr-nonnegative-zero-fills -->
+The other half of the same rule: an arithmetic shift of a NON-NEGATIVE value fills with a sign bit
+that is 0, so it zero-fills naturally. Making `shr` arithmetic did not change this.
+```maxon
+function main() returns ExitCode
+	return 8 shr 2
+end 'main'
+```
+```exitcode
+2
+```
+
 <!-- test: shl-count-negative -->
-A negative shift count reads as "shift the other way" and is not that at all: the hardware
-masks it, so `shl -1` would silently become `shl 63` — the MAXIMUM left shift, a wrong answer
-with the opposite sign. The compiler is holding the count, so it rejects it.
+A negative shift count reads as "shift the other way" and is not that at all: masked, `shl -1`
+silently became `shl 63` — the MAXIMUM left shift, a wrong answer with the opposite sign. The
+compiler is holding the count, so it rejects it.
 ```maxon
 function main() returns ExitCode
 	let a = 1
@@ -198,7 +252,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2054: specs/fragments/bitwise-operators/shl-count-negative.test:4:15: Shift count -1 is outside the range 0 to 63: an int is 64 bits, so any other count is silently masked into that range
+error E2054: specs/fragments/bitwise-operators/shl-count-negative.test:4:15: Shift count -1 is negative: a shift distance must be 0 or greater (a count of 64 or more is legal — it shifts every bit out)
 ```
 
 <!-- test: shr-count-negative -->
@@ -210,63 +264,198 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2054: specs/fragments/bitwise-operators/shr-count-negative.test:4:15: Shift count -1 is outside the range 0 to 63: an int is 64 bits, so any other count is silently masked into that range
+error E2054: specs/fragments/bitwise-operators/shr-count-negative.test:4:15: Shift count -1 is negative: a shift distance must be 0 or greater (a count of 64 or more is legal — it shifts every bit out)
+```
+
+<!-- test: shl-count-negative-named -->
+⚠ THE CASE THE CHECK'S OWN MOTIVATING EXAMPLE MISSED. The count is the same -1; only its SPELLING
+differs. A check that asks "is this token span a literal?" does not see it. A check that asks the
+CONSTANT FOLDER — which is holding the value — does.
+```maxon
+function main() returns ExitCode
+	let a = 1
+	let SHIFT = -1
+	return a shl SHIFT
+end 'main'
+```
+```maxoncstderr
+error E2054: specs/fragments/bitwise-operators/shl-count-negative-named.test:5:15: Shift count -1 is negative: a shift distance must be 0 or greater (a count of 64 or more is legal — it shifts every bit out)
+```
+
+<!-- test: shl-count-negative-parenthesized -->
+`-(1)` is -1 written so that a paren-stripping loop runs BEFORE the `-` is ever tested, and so
+never finds a literal to reject. The folder has no such blind spot.
+```maxon
+function main() returns ExitCode
+	let a = 1
+	return a shl -(1)
+end 'main'
+```
+```maxoncstderr
+error E2054: specs/fragments/bitwise-operators/shl-count-negative-parenthesized.test:4:15: Shift count -1 is negative: a shift distance must be 0 or greater (a count of 64 or more is legal — it shifts every bit out)
 ```
 
 <!-- test: shl-count-64 -->
-64 is one past the last distance a 64-bit shift distinguishes. Masked, it becomes `shl 0` —
-which leaves the value UNCHANGED, the least likely thing the author meant.
+⚠ NOT AN ERROR. 64 shifts every bit out, which is exactly what Go says it means — "there is no
+upper limit on the shift count". Rejecting it (which this compiler briefly did) OVER-rejects a
+correct program; MASKING it (which the hardware does) computes `a shl 0` and leaves `a` UNCHANGED,
+the least likely thing the author meant. It is 0.
 ```maxon
 function main() returns ExitCode
 	let a = 1
-	return a shl 64
+	print("{a shl 64}\n")
+	return 0
 end 'main'
 ```
-```maxoncstderr
-error E2054: specs/fragments/bitwise-operators/shl-count-64.test:4:15: Shift count 64 is outside the range 0 to 63: an int is 64 bits, so any other count is silently masked into that range
+```stdout
+0
+```
+```exitcode
+0
 ```
 
 <!-- test: shl-count-100 -->
+The commit message's own example — `let MASK = 1 shl 100` — through both a named constant and a
+literal. Masked, it was `1 shl 36` = 68719476736.
+```maxon
+let SHIFT = 100
+let MASK = 1 shl SHIFT
+
+function main() returns ExitCode
+	let a = 1
+	print("{MASK}\n")
+	print("{a shl 100}\n")
+	return 0
+end 'main'
+```
+```stdout
+0
+0
+```
+```exitcode
+0
+```
+
+<!-- test: shr-count-past-width -->
+A right shift past the width saturates to the SIGN, not to zero — because a sign-filling shift
+that moves every bit out leaves the sign behind. `x shr 63` already IS the sign, which is why the
+compiler saturates the COUNT here rather than selecting the result.
+```maxon
+function main() returns ExitCode
+	print("{(0 - 1) shr 100}\n")
+	print("{8 shr 100}\n")
+	return 0
+end 'main'
+```
+```stdout
+-1
+0
+```
+```exitcode
+0
+```
+
+<!-- test: shift-count-arithmetic -->
+A count the compiler can fold is a count it can check, however it is spelled. All three of these
+are a count of 64, and none of them is a literal.
 ```maxon
 function main() returns ExitCode
 	let a = 1
-	return a shl 100
+	print("{a shl 63 + 1}\n")
+	print("{a shl 2 * 32}\n")
+	print("{a shl 128 / 2}\n")
+	return 0
 end 'main'
 ```
-```maxoncstderr
-error E2054: specs/fragments/bitwise-operators/shl-count-100.test:4:15: Shift count 100 is outside the range 0 to 63: an int is 64 bits, so any other count is silently masked into that range
+```stdout
+0
+0
+0
+```
+```exitcode
+0
 ```
 
 <!-- test: shift-by-variable-count -->
-⚠ THE GUARD AGAINST OVER-REJECTING. Only a LITERAL count is checked. A count that arrives as a
-VALUE is still legal and still MASKS: it goes through `cl`, which reads only the low 6 bits. 64
-masks to 0, so this is `7 shl 0` — 7, and not a compile error. Tightening E2054 to cover this
-would break the shift-by-a-computed-distance idiom the language has always had.
+⚠ THE GUARD AGAINST OVER-REJECTING, AND THE PROOF THE FOLD AND THE CODEGEN AGREE. A count that
+arrives as a VALUE is still legal — and it must give the SAME answer the folded form gives. The
+hardware masks the `cl` count to its low 6 bits, so an unguarded `7 shl 64` would be `7 shl 0` = 7.
+It is 0.
 ```maxon
 function main() returns ExitCode
 	let a = 7
 	let count = 64
-	return a shl count
+	print("{a shl count}\n")
+	return 0
 end 'main'
 ```
+```stdout
+0
+```
 ```exitcode
-7
+0
 ```
 
 <!-- test: shift-by-parameter-count -->
-The same, with a count no pass can see at all: a parameter. 65 masks to 1, so `7 shl 65` is
-`7 shl 1` = 14.
+The same, with a count NO pass can see: a parameter. Unguarded, 65 masks to 1 and `7 shl 65` is
+14; 100 masks to 36. The guard is what makes the runtime answer match the constant-folded one.
 ```maxon
-function shiftLeft(value ExitCode, count ExitCode) returns ExitCode
+typealias Num = int(i64.min to i64.max)
+
+function shiftLeft(value Num, count Num) returns Num
+	return value shl count
+end 'shiftLeft'
+
+function shiftRight(value Num, count Num) returns Num
+	return value shr count
+end 'shiftRight'
+
+function main() returns ExitCode
+	print("{shiftLeft(7, count: 65)}\n")
+	print("{shiftLeft(7, count: 3)}\n")
+	print("{shiftRight(0 - 1, count: 100)}\n")
+	print("{shiftRight(8, count: 100)}\n")
+	print("{shiftRight(0 - 8, count: 1)}\n")
+	return 0
+end 'main'
+```
+```stdout
+0
+56
+-1
+0
+-4
+```
+```exitcode
+0
+```
+
+<!-- test: shift-by-negative-runtime-count-panics -->
+Go: "if the shift count is negative at run time, a run-time panic occurs". The compiler could not
+fold this count, so the program proves it — and refuses to compute the masked `4 shl 63` the
+hardware would otherwise have handed back.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+function shiftLeft(value Num, count Num) returns Num
 	return value shl count
 end 'shiftLeft'
 
 function main() returns ExitCode
-	return shiftLeft(7, count: 65)
+	let bad = 0 - 1
+	print("{shiftLeft(4, count: bad)}\n")
+	return 0
 end 'main'
 ```
+```stderr
+panic at shift-by-negative-runtime-count-panics.test:5: negative shift count
+Stack trace:
+  in shiftLeft
+  in main
+  in mrt_start
+```
 ```exitcode
-14
+1
 ```
 
 <!-- test: shift-vs-comparison -->

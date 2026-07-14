@@ -260,17 +260,23 @@ E2053 ParserCallArgMissingLabel
 	shv2 callArgMissingLabel
 	doc A call leaves a second-or-later argument unlabeled. Every argument after the first must carry its 'name:' label.
 
-E2054 ParserShiftCountOutOfRange
-	csharp ParserShiftCountOutOfRange
-	selfhosted parserShiftCountOutOfRange
-	shv2 shiftCountOutOfRange
-	doc A shift ('shl'/'shr') whose count is a LITERAL outside 0..63. An int is 64 bits,
-	doc so no other distance names a distinct shift, and the hardware silently MASKS the
-	doc count into that range -- which turned 'a shl -1', which a human reads as "shift
-	doc the other way", into the MAXIMUM LEFT shift. A shift by a RUNTIME value is
-	doc untouched and still legal: the compiler cannot see the count, and both lowerings
-	doc agree on what the hardware will do with it. A PARSE-time check, positioned at the
-	doc literal.
+E2054 ParserShiftCountNegative
+	csharp ParserShiftCountNegative
+	selfhosted parserShiftCountNegative
+	shv2 shiftCountNegative
+	doc A shift ('shl'/'shr') whose count the compiler FOLDED and found NEGATIVE --
+	doc 'a shl -1', 'a shl -(1)', 'let SHIFT = -1' ... 'a shl SHIFT'. A negative count is
+	doc not a shift the other way: the hardware MASKS it, so 'a shl -1' silently computed
+	doc 'a shl 63' -- the MAXIMUM LEFT shift, a wrong answer with the opposite sign.
+	doc Maxon follows Go: the count must be non-negative; a constant one is this compile
+	doc error, and one that only appears at RUN TIME panics.
+	doc WARNING -- a count of 64 OR MORE IS NOT THIS ERROR. It is a legal, well-defined
+	doc shift that moves every bit out ('x shl 64' == 0), because Go puts no upper limit
+	doc on a shift count. This code briefly rejected it, which OVER-rejects a correct
+	doc program. The compiler SATURATES such a count instead of masking it.
+	doc A PARSE-time check, positioned at the count as WRITTEN. It asks the CONSTANT
+	doc FOLDER, not the token shape: 'let SHIFT = -1' is the same -1 as the literal, and a
+	doc check that only looked for a bare literal token missed its own motivating example.
 
 E3001 SemanticNoMain
 	csharp SemanticNoMain

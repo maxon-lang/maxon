@@ -1,8 +1,24 @@
 // Test: shl-count-64
 function main() returns ExitCode
 	let a = 1
-	return a shl 64
+	if a shl 64 != 0 'wrong'
+		return 1
+	end 'wrong'
+	return 42
 end 'main'
 ---
-CompilerError:
-error E2054: <fragment>:4:15: Shift count 64 is outside the range 0 to 63: an int is 64 bits, so any other count is silently masked into that range
+ExitCode: 42
+---
+func @main {
+  entry:
+    x64.movRegImm32 rax, 0
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, wrong
+    x64.jmp ifcont
+  wrong:
+    x64.movRegImm32 r8, 1
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 42
+    x64.ret
+}

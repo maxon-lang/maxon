@@ -119,17 +119,18 @@ export union ParseError implements Error
 	// lowering and dies with an internal error (E9001 `Unsupported binop: Sub on Bool`), which
 	// is a bootstrap BUG, not a spec.
 	nonNumericNegation(operand String, line LineNumber, column ColumnNumber)
-	// A `shl`/`shr` whose count is a LITERAL outside the shift-count domain (TypeRules'
-	// `shiftCountInRange`) — `a shl -1`, `a shl 64`, `a shl 100`. Renders as E2054, positioned
-	// at the literal as written (at the `-` when there is one). The count rides along because
-	// the message names it.
+	// A `shl`/`shr` whose count the compiler FOLDED and found NEGATIVE — `a shl -1`, `a shl -(1)`,
+	// `let SHIFT = -1` … `a shl SHIFT`. Renders as E2054, positioned at the count as written. The
+	// count rides along because the message names it.
 	//
-	// Only the LITERAL case: a shift by a RUNTIME value stays legal, and must, because the
-	// compiler cannot see it and both lowerings agree on what the hardware will do with it. The
-	// literal is the case where the compiler held every fact it needed and threw the answer
-	// away — `a shl -1` reads as "shift the other way" and silently became the MAXIMUM left
-	// shift, a wrong answer with the opposite sign.
-	shiftCountOutOfRange(count ParsedInt, line LineNumber, column ColumnNumber)
+	// A negative count is not a shift the other way: masked, `a shl -1` silently became
+	// `a shl 63` — the MAXIMUM left shift, a wrong answer with the opposite sign.
+	//
+	// ⚠ A count of 64 OR MORE IS NOT THIS ERROR. It is a legal, well-defined shift that moves
+	// every bit out (`x shl 64` == 0), and `Parser.emitShift` folds it to that. Rejecting it —
+	// which this diagnostic did before the rule was narrowed to Go's — OVER-rejects a correct
+	// program, which in this codebase is the worse failure.
+	shiftCountNegative(count ParsedInt, line LineNumber, column ColumnNumber)
 	// A comparison whose operands are in different type classes (`4 < flag`). Renders as
 	// E3005 with the bootstrap's exact text — `type mismatch: 'cannot compare int with bool'`
 	// (2-Parser.cs:17777) — positioned at the comparison operator. A comparison over two
@@ -822,6 +823,26 @@ export type Parser
 	// (TypeRules' `typeClassOf`), so it stays parser-local and is dropped at the next function.
 	var valueTags as ValueTypeTagArray
 	var valueNameIds as TypeNameIdArray
+	// THE PARSER'S CONSTANT FOLDER — two more columns in lockstep with `valueTags`, holding the
+	// integer behind every SSA value the compiler KNOWS. It exists for the shift rule, which is
+	// the one rule in the language that must ask "what IS this operand?" rather than "what TYPE is
+	// it?" (TypeRules' ⭐ THE SHIFT RULE): a negative count is E2054, and a count of 64-or-more
+	// names a different shift than the hardware would perform.
+	//
+	// Filled forward, at the three places an integer value is born — `emitLiteral` (so a count
+	// named through a `let` is a count this column holds: `let SHIFT = -1` binds the name to the
+	// literal's own ValueId), `emitUnaryOp` (`-1` is `neg` of a literal, not a negative literal),
+	// and `emitBinOp` (so `x shl 63 + 1` is a count of 64).
+	//
+	// Two scalar columns rather than one column of a union, for the reason `valueTags` gives: a
+	// Maxon union value is a heap object, and this is the per-VALUE path. Re-created per function,
+	// so the cost is bounded by the largest function and not by the module.
+	//
+	// ⚠ Its REACH is a matter of diagnostic quality, never of correctness. A count it misses is a
+	// count `emitGuardedShift` saturates at run time, to exactly the same answer — which is what
+	// lets the fold be an optimization rather than a second opinion.
+	var valueConsts as ParsedIntArray
+	var valueConstKnown as BoolArray
 	// Every function declared ANYWHERE IN THE PROGRAM, with its return type — the whole-program
 	// signature index (SignatureIndex.maxon), built from every file's TOKENS before any file is
 	// parsed and handed to every Parser.
@@ -850,6 +871,8 @@ export type Parser
 			currentBlock: IrBlock.create(0, label: DetachedBlockLabel),
 			valueTags: ValueTypeTagArray.create(),
 			valueNameIds: TypeNameIdArray.create(),
+			valueConsts: ParsedIntArray.create(),
+			valueConstKnown: BoolArray.create(),
 			signatures: signatures
 		}
 	end 'create'
@@ -1131,6 +1154,8 @@ export type Parser
 		self.loops = LoopContextArray.create()
 		self.valueTags = ValueTypeTagArray.create()
 		self.valueNameIds = TypeNameIdArray.create()
+		self.valueConsts = ParsedIntArray.create()
+		self.valueConstKnown = BoolArray.create()
 		for paramType in paramTypes 'seedParamTypes'
 			self.recordValueType(paramType)
 		end 'seedParamTypes'
@@ -2135,6 +2160,11 @@ export type Parser
 		let id = allocValueId(self.valueIds)
 		self.valueTags.push(tag)
 		self.valueNameIds.push(nameId)
+		// The constant columns move in the same lockstep, seeded UNKNOWN. A value's constant is
+		// discovered by the op that DEFINES it, which is emitted after its id is minted — so the
+		// slot must exist first, and the emitter overwrites it (`recordConst`).
+		self.valueConsts.push(0)
+		self.valueConstKnown.push(false)
 		return id
 	end 'mintValue'
 
@@ -2150,7 +2180,43 @@ export type Parser
 	function recordValueType(valueType MaxonType)
 		self.valueTags.push(maxonTypeTag(valueType))
 		self.valueNameIds.push(typeNameIdOf(valueType))
+		// A parameter's value is the one thing the compiler provably cannot see.
+		self.valueConsts.push(0)
+		self.valueConstKnown.push(false)
 	end 'recordValueType'
+
+	// Remember the integer behind a value the parser has just DEFINED. Called by the emitters, on
+	// the id they minted a moment ago, so the slot is always there.
+	function recordConst(id ValueId, folded ParsedInt)
+		try self.valueConsts.set(id, value: folded) otherwise panic("Parser.recordConst: value v{id} has no constant slot — every SSA value must be minted through mintValue")
+		try self.valueConstKnown.set(id, value: true) otherwise panic("Parser.recordConst: value v{id} has no constant slot — every SSA value must be minted through mintValue")
+	end 'recordConst'
+
+	// True iff the compiler holds `id`'s integer.
+	function constIsKnown(id ValueId) returns bool
+		return try self.valueConstKnown.get(id) otherwise panic("Parser.constIsKnown: value v{id} has no constant slot — every SSA value must be minted through mintValue")
+	end 'constIsKnown'
+
+	// The integer behind `id`. Only meaningful when `constIsKnown(id)` — asking otherwise is a
+	// caller bug, and handing back the unseeded 0 as if it were a real constant is exactly the
+	// wrong answer a sentinel would give, so it panics instead.
+	function constOf(id ValueId) returns ParsedInt
+		if not self.constIsKnown(id) 'unknown'
+			panic("Parser.constOf: value v{id} is not a known constant — guard the call with constIsKnown")
+		end 'unknown'
+
+		return try self.valueConsts.get(id) otherwise panic("Parser.constOf: value v{id} has no constant slot — every SSA value must be minted through mintValue")
+	end 'constOf'
+
+	// Record a fold's result, if it produced one. `notFoldable` is a DECISION and not a gap — the
+	// folder declined an operator whose answer is a diagnostic rather than a number — so the value
+	// simply stays unknown, and the guard downstream handles it.
+	function recordFold(id ValueId, fold FoldedInt)
+		match fold 'f'
+			folded(value) then self.recordConst(id, folded: value)
+			notFoldable then return
+		end 'f'
+	end 'recordFold'
 
 	// The TAG of an SSA value's type — the hot read, and the only thing the operator rules
 	// need. Every value the parser mints has one (the parameters are seeded from their
@@ -2285,11 +2351,12 @@ export type Parser
 			end 'shortCircuit'
 
 			self.advance()
-			// The right operand's token span, remembered BEFORE it is parsed and read back
-			// after — the shift-count check needs to know what the operand was WRITTEN as, not
-			// just what it evaluates to. See `requireShiftCount`.
+			// The right operand's token span, remembered BEFORE it is parsed and read back after.
+			// It is not what the shift rule ASKS — that is the constant folder's job — but it is
+			// where E2054 POINTS, and the climber has already decided how far the operand reaches.
 			let rhsStart = self.pos
 			let right = try self.parseBinary(func, minPrec: prec + 1)
+			let rhsEnd = self.pos
 
 			if comparisonOperator(opTok.kind) 'comparison'
 				left = try self.emitCompare(left, rhs: right, op: infixCmpOp(opTok.kind), opTok: opTok)
@@ -2297,70 +2364,156 @@ export type Parser
 			end 'comparison'
 
 			let op = infixMaxonOp(opTok.kind)
-			try self.requireShiftCount(op, rhsStart: rhsStart)
+
+			// A shift's right operand is not an ordinary number but a DISTANCE, and Maxon's rule
+			// for it (Go's) is deliberately not the hardware's. It gets its own emitter, which
+			// owns the rule, the diagnostic, AND the runtime guard. See `emitShift`.
+			if shiftOperator(op) 'isShift'
+				left = try self.emitShift(left, count: right, op: op, opTok: opTok, countStart: rhsStart, countEnd: rhsEnd)
+				continue
+			end 'isShift'
+
 			left = try self.emitBinOp(left, rhs: right, op: op, opTok: opTok)
 		end 'climb'
 
 		return left
 	end 'parseBinary'
 
-	// The SHIFT-COUNT rule, RAISED (E2054): a `shl`/`shr` whose count is written as a LITERAL
-	// must name a shift a 64-bit shift actually performs — TypeRules' `shiftCountInRange`, which
-	// is the one place the `0..63` domain is declared.
+	// ⭐ Emit `lhs <op> count` under TypeRules' ⭐ THE SHIFT RULE — THE one place a source-level
+	// shift is built. Two jobs, separate on purpose:
 	//
-	// The operand is identified from the TOKENS IT CONSUMED — `[rhsStart, self.pos)` — rather
-	// than by looking ahead before it is parsed. That is what makes the test exact: the climber
-	// has already decided how far the operand reaches, so `a shl 1 + 2` (whose count is `1 + 2`,
-	// because additive binds TIGHTER than a shift) is correctly NOT a literal, and no second copy
-	// of the precedence ladder is needed here to work that out. A second copy of that ladder is
-	// precisely the kind of thing that drifts.
+	//   **LEGALITY.** A count the parser can FOLD is decided here: a negative one is E2054. A count
+	//   of 64 or more is LEGAL and is NOT an error — it shifts every bit out — which is the whole
+	//   narrowing of this diagnostic. A count the parser CANNOT fold is Go's runtime panic, which
+	//   shv2 cannot raise yet; see `emitGuardedShift`.
 	//
-	// Anything that is not a bare literal — a variable, a call, `1 + 2` — is LEFT ALONE and stays
-	// legal. It keeps its register operand, goes through `cl`, and the hardware masks it; both
-	// lowerings agree on what that means, and there was no fact for the compiler to discard.
-	function requireShiftCount(op MaxonBinOp, rhsStart TokenIndex) throws ParseError
-		if not shiftOperator(op) 'notAShift'
-			return
-		end 'notAShift'
+	//   **VALUE.** A folded count is rewritten into the shift its semantics define, so no count
+	//   above `MaxUnguardedShiftCount` ever reaches codegen and the hardware's masking is never
+	//   consulted. A count that could NOT be folded gets the GUARD, which saturates it at run time
+	//   — to the SAME answer. That the two agree is not a coincidence: both are readings of
+	//   `evalShift`.
+	function emitShift(lhs ValueId, count ValueId, op MaxonBinOp, opTok Token, countStart TokenIndex, countEnd TokenIndex) returns ValueId throws ParseError
+		// The SHIFT's OWN operand rule, asked BEFORE anything is emitted. `emitBinOp` would ask it
+		// too, but by then the guard's ops are already in the IR — and the FIRST of them is an
+		// `and`, so `4 shr flag` would be rejected as a bad `and` rather than as a bad `shr`
+		// (E3005 for the wrong operator instead of E2004 for the right one). A rejected program
+		// must also leave no ops behind.
+		try requireBinOpOperands(op, left: self.tagOf(lhs), right: self.tagOf(count), opTok: opTok)
 
-		var lo = rhsStart
-		var hi = self.pos
+		if not self.constIsKnown(count) 'dynamic'
+			return try self.emitGuardedShift(lhs, count: count, op: op, opTok: opTok)
+		end 'dynamic'
 
-		// Redundant parentheses do not turn a literal into a runtime value: `a shl (100)` is the
-		// same discarded fact as `a shl 100`, so strip matched enclosing pairs before reading the
-		// span's shape. A span that merely STARTS with `(` and ENDS with `)` without being wrapped
-		// in one — `(a + b)` vs `(a) + (b)` shows the shape — survives the loop as something the
-		// two-token check below then refuses to call a literal. So stripping can only ever widen
-		// what is CAUGHT, never what is mistaken for a literal.
+		let folded = self.constOf(count)
+		if shiftCountIsNegative(folded) 'negative'
+			// Constructed and thrown in ONE expression. A `throw self.someHelper(…)` — building the
+			// error in a helper and throwing what it returns — LEAKS the boxed union under the
+			// bootstrap's refcounting, which the suite's leak check catches as an extra stderr line.
+			let anchor = self.shiftCountAnchor(countStart, countEnd: countEnd)
+			throw ParseError.shiftCountNegative(folded, line: anchor.line, column: anchor.column)
+		end 'negative'
+
+		if not shiftCountIsUnguarded(folded) 'shiftedOut'
+			// A count that shifts every bit out. There is no instruction for it — the hardware
+			// would mask it straight back into range — so the compiler writes down what it MEANS.
+			// `shl` fills with ZEROS, so shifting every bit out leaves the constant 0. `shr` fills
+			// with the SIGN, and `x shr 63` already IS the sign, so it becomes a shift by
+			// `MaxUnguardedShiftCount`. Neither is the masked shift the hardware would have
+			// performed (`x shl 64` == `x`, `x shl 100` == `x shl 36`).
+			//
+			// `lhs` keeps its ops either way: they may have side effects, and Go evaluates the
+			// left operand of a shift whatever the count turns out to be.
+			if op == MaxonBinOp.shl 'zeroFill'
+				return self.emitLiteral(0, valueType: MaxonType.integer, range: SourceRange.ofToken(opTok))
+			end 'zeroFill'
+
+			let clamped = self.emitLiteral(MaxUnguardedShiftCount, valueType: MaxonType.integer, range: SourceRange.ofToken(opTok))
+			return try self.emitBinOp(lhs, rhs: clamped, op: op, opTok: opTok)
+		end 'shiftedOut'
+
+		// A count the instruction takes as written; the hardware's mask is a no-op on it. The
+		// operand is emitted UNCHANGED — this compiler folds no constant expression INTO the IR
+		// (`1 + 2` still emits an `add`; see FoldConstOperands' header), and a shift count that
+		// folds to 3 is a shift by 3 whether it arrives as a literal or as an `add`.
+		let result = try self.emitBinOp(lhs, rhs: count, op: op, opTok: opTok)
+
+		// The shift's own value, when the parser holds both sides — RECORDED, not rewritten. It is
+		// what makes `let A = 1 shl 4` a count that `x shl A` can see.
+		if self.constIsKnown(lhs) 'bothKnown'
+			self.recordConst(result, folded: evalShift(self.constOf(lhs), count: folded, op: op))
+		end 'bothKnown'
+
+		return result
+	end 'emitShift'
+
+	// A shift whose count the compiler could NOT fold — the runtime half of THE SHIFT RULE, and
+	// the half that has to fight the hardware.
+	//
+	// x64 masks a 64-bit shift's count to its low 6 bits, so the instruction cannot be handed the
+	// count as written: `x shl 64` would compute `x shl 0` (x, UNCHANGED) and `x shl 100` would
+	// compute `x shl 36`. The count is SATURATED first, by the same rule `evalShift` folds by, and
+	// with only the ops the Maxon tier already has (there is no `cmov` and no select in this
+	// compiler — see TargetDialect's op inventory):
+	//
+	//   outOfRange = (count and -64) != 0        — one `and` decides BOTH ends at once: a count is
+	//                                              outside 0..63 exactly when a bit above the low 6
+	//                                              is set, and a NEGATIVE count has its sign bit
+	//                                              set, so it lands out-of-range too.
+	//   mask       = (t or -t) shr 63            — an ARITHMETIC shr turns "t is non-zero" into
+	//                                              all-ones, and "t is zero" into all-zeros.
+	//   shl: (x shl count) and not mask          — a zero-filling shift saturates to 0.
+	//   shr: x shr (count or mask)               — a sign-filling shift saturates to the SIGN, and
+	//                                              a count of -1 masks to 63, which IS the sign.
+	//
+	// Cost, on top of the shift: 4 ops for the mask, plus 2 (`shl`) or 1 (`shr`). Only a count the
+	// compiler cannot see pays it — every `x shr 8` and `x shl 3` is folded and untouched.
+	//
+	// ⚠ TODO — Go PANICS on a negative count at run time ("if the shift count is negative at run
+	// time, a run-time panic occurs"), and shv2 CANNOT: it has no panic runtime, no trap op, and
+	// no fault handler (the emitted runtime is a 5-instruction entry stub). That is the first
+	// slice of **Workstream R**, and **OPEN.md #2** — `a / 0` escaping as a raw 0xC0000094
+	// hardware trap — needs the same slice and is blocked on the same thing. Until it lands, a
+	// negative count here is NOT a wrong answer: the mask above reads it as out-of-range, so
+	// `x shl -1` is 0 and `x shr -1` is the sign. That is defined, deterministic, and NOT the
+	// masked `x shl 63` this rule exists to kill — it is simply not yet the panic Go requires.
+	// `specs-shv2/bitwise-operators.md` carries the case as a `disabled-test:`, to be enabled by
+	// the rung that lands the panic runtime.
+	function emitGuardedShift(lhs ValueId, count ValueId, op MaxonBinOp, opTok Token) returns ValueId throws ParseError
+		let range = SourceRange.ofToken(opTok)
+
+		let outOfRangeBits = self.emitLiteral(0 - ShiftCountBits, valueType: MaxonType.integer, range: range)
+		let bitsAboveCount = try self.emitBinOp(count, rhs: outOfRangeBits, op: MaxonBinOp.bitAnd, opTok: opTok)
+		let negatedBits = self.emitUnaryOp(bitsAboveCount, op: MaxonUnaryOp.neg, resultTag: ValueTypeTag.integer, opTok: opTok)
+		let signCarrier = try self.emitBinOp(bitsAboveCount, rhs: negatedBits, op: MaxonBinOp.bitOr, opTok: opTok)
+		let signBit = self.emitLiteral(MaxUnguardedShiftCount, valueType: MaxonType.integer, range: range)
+		let mask = try self.emitBinOp(signCarrier, rhs: signBit, op: MaxonBinOp.shr, opTok: opTok)
+
+		if op == MaxonBinOp.shr 'signFilling'
+			// A count of -1 masks to 63 in the hardware, and `x shr 63` IS the sign — so saturating
+			// a sign-filling shift is a CLAMP OF THE COUNT, and needs no select of the result.
+			let saturatedCount = try self.emitBinOp(count, rhs: mask, op: MaxonBinOp.bitOr, opTok: opTok)
+			return try self.emitBinOp(lhs, rhs: saturatedCount, op: MaxonBinOp.shr, opTok: opTok)
+		end 'signFilling'
+
+		let raw = try self.emitBinOp(lhs, rhs: count, op: MaxonBinOp.shl, opTok: opTok)
+		let keep = self.emitUnaryOp(mask, op: MaxonUnaryOp.bitNot, resultTag: ValueTypeTag.integer, opTok: opTok)
+		return try self.emitBinOp(raw, rhs: keep, op: MaxonBinOp.bitAnd, opTok: opTok)
+	end 'emitGuardedShift'
+
+	// WHERE E2054 POINTS: the first token of the count as WRITTEN. `x shl SHIFT` points at `SHIFT`,
+	// where the programmer would look, and not at the `let` that gave it its value. Redundant
+	// parentheses are not part of what was written, so `x shl (-1)` points at the `-1`.
+	function shiftCountAnchor(countStart TokenIndex, countEnd TokenIndex) returns Token
+		var lo = countStart
+		var hi = countEnd
+
 		while lo + 2 <= hi and self.kindAt(lo) == TokenKind.leftParen and self.kindAt(hi - 1) == TokenKind.rightParen 'stripParens'
 			lo = lo + 1
 			hi = hi - 1
 		end 'stripParens'
 
-		let negated = self.kindAt(lo) == TokenKind.minus
-		var litIdx = lo
-		if negated 'skipSign'
-			litIdx = lo + 1
-		end 'skipSign'
-
-		if hi != litIdx + 1 or self.kindAt(litIdx) != TokenKind.intLiteral 'notALiteral'
-			return
-		end 'notALiteral'
-
-		// The SAME reader every other literal comes through (`intLiteralValue`), so a hex or
-		// underscore-separated count (`a shl 0x40`) is read here exactly as it would be anywhere
-		// else — and `negated` routes to `parseNegatedInt` rather than negating afterwards, so
-		// `i64.min`'s magnitude does not overflow on the way to being rejected.
-		let count = try self.intLiteralValue(self.tokenAt(litIdx), negated: negated)
-		if shiftCountInRange(count) 'legal'
-			return
-		end 'legal'
-
-		// Anchored at `lo`, not at the digits: `-1` is what the programmer wrote and what the
-		// message names, so the `-` is where the error belongs.
-		let anchor = self.tokenAt(lo)
-		throw ParseError.shiftCountOutOfRange(count, line: anchor.line, column: anchor.column)
-	end 'requireShiftCount'
+		return self.tokenAt(lo)
+	end 'shiftCountAnchor'
 
 	// Lower a BOOL `and`/`or` to SHORT-CIRCUIT control flow — the point of this rung. `a and
 	// b` must not evaluate `b` when `a` is false, so it is not an operator at all: it is a
@@ -2509,8 +2662,17 @@ export type Parser
 		let rightTag = self.tagOf(rhs)
 		try requireBinOpOperands(op, left: leftTag, right: rightTag, opTok: opTok)
 
-		let result = self.mintValue(binOpResultTag(op, left: leftTag, right: rightTag), nameId: UnnamedTypeId)
+		let resultTag = binOpResultTag(op, left: leftTag, right: rightTag)
+		let result = self.mintValue(resultTag, nameId: UnnamedTypeId)
 		self.artifact.emitOp(self.currentBlock, op: MaxonOp.binOp(result, lhs: lhs, rhs: rhs, op: op), range: SourceRange.ofToken(opTok))
+
+		// Fold, when the parser holds both operands — so `x shl 63 + 1` is a count of 64 and not an
+		// unknown. RECORDED, not rewritten: this compiler emits the `add` either way (see
+		// FoldConstOperands' header on why `foldConstants` is deferred).
+		if tagIsInteger(resultTag) and self.constIsKnown(lhs) and self.constIsKnown(rhs) 'bothKnown'
+			self.recordFold(result, fold: foldIntBinOp(op, lhs: self.constOf(lhs), rhs: self.constOf(rhs)))
+		end 'bothKnown'
+
 		return result
 	end 'emitBinOp'
 
@@ -2519,6 +2681,13 @@ export type Parser
 	function emitUnaryOp(operand ValueId, op MaxonUnaryOp, resultTag ValueTypeTag, opTok Token) returns ValueId
 		let result = self.mintValue(resultTag, nameId: UnnamedTypeId)
 		self.artifact.emitOp(self.currentBlock, op: MaxonOp.unaryOp(result, operand: operand, op: op), range: SourceRange.ofToken(opTok))
+
+		// `-1` is `neg` of the literal 1, not a negative literal — so without this arm the parser
+		// could not see the count in `x shl -1` at all.
+		if tagIsInteger(resultTag) and self.constIsKnown(operand) 'known'
+			self.recordFold(result, fold: foldIntUnaryOp(op, operand: self.constOf(operand)))
+		end 'known'
+
 		return result
 	end 'emitUnaryOp'
 
@@ -2828,6 +2997,14 @@ export type Parser
 	function emitLiteralIn(block IrBlock, value ParsedInt, valueType MaxonType, range SourceRange) returns ValueId
 		let result = self.mintValueOfType(valueType)
 		self.artifact.emitOp(block, op: MaxonOp.literal(result, value: value, valueType: valueType), range: range)
+
+		// THE root of the parser's constant view. A `let` binds its NAME to the value the
+		// initializer produced, so `let SHIFT = -1` binds `SHIFT` to this very id — which is why
+		// folding a literal is all it takes to see a count named through a `let`.
+		if tagIsInteger(maxonTypeTag(valueType)) 'integer'
+			self.recordConst(result, folded: value)
+		end 'integer'
+
 		return result
 	end 'emitLiteralIn'
 

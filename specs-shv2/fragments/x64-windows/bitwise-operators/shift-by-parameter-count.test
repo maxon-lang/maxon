@@ -1,19 +1,65 @@
 // Test: shift-by-parameter-count
-function shiftLeft(value ExitCode, count ExitCode) returns ExitCode
+typealias Num = int(i64.min to i64.max)
+
+function shiftLeft(value Num, count Num) returns Num
 	return value shl count
 end 'shiftLeft'
 
+function shiftRight(value Num, count Num) returns Num
+	return value shr count
+end 'shiftRight'
+
 function main() returns ExitCode
-	return shiftLeft(7, count: 65)
+	if shiftLeft(7, count: 65) != 0 'shlPastWidth'
+		return 1
+	end 'shlPastWidth'
+	if shiftLeft(7, count: 3) != 56 'shlInRange'
+		return 2
+	end 'shlInRange'
+	if shiftRight(0 - 1, count: 100) != 0 - 1 'shrNegPastWidth'
+		return 3
+	end 'shrNegPastWidth'
+	if shiftRight(8, count: 100) != 0 'shrPosPastWidth'
+		return 4
+	end 'shrPosPastWidth'
+	if shiftRight(0 - 8, count: 1) != 0 - 4 'shrInRange'
+		return 5
+	end 'shrInRange'
+	return 42
 end 'main'
 ---
-ExitCode: 14
+ExitCode: 42
 ---
 func @shiftLeft {
   entry:
-    x64.movRegReg r8, rcx
+    x64.movRegReg rax, rcx
     x64.movRegReg rcx, rdx
-    x64.shlRegCl r8, r8
+    x64.andRegImm32 rcx, rdx, -64
+    x64.movRegReg rsi, rcx
+    x64.negReg rsi, rcx
+    x64.orRegReg rcx, rcx, rsi
+    x64.movRegReg rsi, rcx
+    x64.sarRegImm8 rsi, rcx, 63
+    x64.movRegReg rcx, rdx
+    x64.shlRegCl rax, rax
+    x64.notReg rsi, rsi
+    x64.movRegReg r8, rax
+    x64.andRegReg r8, rax, rsi
+    x64.ret
+}
+
+func @shiftRight {
+  entry:
+    x64.movRegReg r8, rcx
+    x64.movRegReg rax, rdx
+    x64.andRegImm32 rax, rdx, -64
+    x64.movRegReg rcx, rax
+    x64.negReg rcx, rax
+    x64.orRegReg rax, rax, rcx
+    x64.sarRegImm8 rax, rax, 63
+    x64.movRegReg rcx, rdx
+    x64.orRegReg rcx, rdx, rax
+    x64.sarRegCl r8, r8
     x64.ret
 }
 
@@ -23,6 +69,65 @@ func @main {
     x64.movRegImm32 rcx, 7
     x64.movRegImm32 rdx, 65
     x64.callDirect shiftLeft
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, shlPastWidth
+    x64.jmp ifcont
+  shlPastWidth:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 40
+    x64.ret
+  ifcont:
+    x64.movRegImm32 rcx, 7
+    x64.movRegImm32 rdx, 3
+    x64.callDirect shiftLeft
+    x64.cmpRegImm32 r8, 56
+    x64.jcc notEqual, shlInRange
+    x64.jmp ifcont
+  shlInRange:
+    x64.movRegImm32 r8, 2
+    x64.epilogue 40
+    x64.ret
+  ifcont:
+    x64.movRegImm32 rax, 0
+    x64.leaRegRegImm32 rcx, rax, -1
+    x64.movRegImm32 rdx, 100
+    x64.callDirect shiftRight
+    x64.movRegImm32 rax, 0
+    x64.leaRegRegImm32 rax, rax, -1
+    x64.cmpRegReg r8, rax
+    x64.jcc notEqual, shrNegPastWidth
+    x64.jmp ifcont
+  shrNegPastWidth:
+    x64.movRegImm32 r8, 3
+    x64.epilogue 40
+    x64.ret
+  ifcont:
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 100
+    x64.callDirect shiftRight
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, shrPosPastWidth
+    x64.jmp ifcont
+  shrPosPastWidth:
+    x64.movRegImm32 r8, 4
+    x64.epilogue 40
+    x64.ret
+  ifcont:
+    x64.movRegImm32 rax, 0
+    x64.leaRegRegImm32 rcx, rax, -8
+    x64.movRegImm32 rdx, 1
+    x64.callDirect shiftRight
+    x64.movRegImm32 rax, 0
+    x64.leaRegRegImm32 rax, rax, -4
+    x64.cmpRegReg r8, rax
+    x64.jcc notEqual, shrInRange
+    x64.jmp ifcont
+  shrInRange:
+    x64.movRegImm32 r8, 5
+    x64.epilogue 40
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 42
     x64.epilogue 40
     x64.ret
 }

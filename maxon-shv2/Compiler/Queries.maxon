@@ -301,7 +301,11 @@ function reportParseError(project Project, path FilePath, error ParseError)
 		operandTypeMismatch(op, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "operator '{op}' requires both operands to be the same type (both bool or both int)", line: line, column: column, filePath: path)
 		nonNumericOperands(left, right, line, column) then reportPositioned(project, code: ErrorCode.parserExpressionError, message: "Cannot operate on {left} and {right}", line: line, column: column, filePath: path)
 		nonNumericNegation(operand, line, column) then reportPositioned(project, code: ErrorCode.parserExpressionError, message: "Cannot negate {operand}", line: line, column: column, filePath: path)
-		shiftCountOutOfRange(count, line, column) then reportPositioned(project, code: ErrorCode.shiftCountOutOfRange, message: "Shift count {count} is outside the range {MinShiftCount} to {MaxShiftCount}: an int is 64 bits, so any other count is silently masked into that range", line: line, column: column, filePath: path)
+		// ⚠ Byte-for-byte the bootstrap's text (ShiftSemantics.NegativeCountMessage) — the specs gate
+		// stderr exactly, in both suites, so the two must not drift. It names what is still LEGAL as
+		// well as what is not: `shl 64` was rejected before this rule was narrowed to Go's, and is
+		// now a perfectly good way to say "shift every bit out".
+		shiftCountNegative(count, line, column) then reportPositioned(project, code: ErrorCode.shiftCountNegative, message: "Shift count {count} is negative: a shift distance must be {MinShiftCount} or greater (a count of {ShiftCountBits} or more is legal — it shifts every bit out)", line: line, column: column, filePath: path)
 		comparisonTypeMismatch(left, right, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "type mismatch: 'cannot compare {left} with {right}'", line: line, column: column, filePath: path)
 		nonBoolCondition(keyword, got, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "'{keyword}' requires a bool condition, got '{got}'", line: line, column: column, filePath: path)
 		assignTypeMismatch(name, got, expected, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "cannot assign '{got}' to variable '{name}' of type '{expected}'", line: line, column: column, filePath: path)
