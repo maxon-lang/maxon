@@ -32,11 +32,6 @@
 // when the register allocator took over SSA destruction. `pruneDeadBlockArgs` restored its DEAD
 // half; this is the TRIVIAL half, and with both of them the promise holds again.
 //
-// TRIVIALITY IS A FIXPOINT, not a single sweep. Removing one trivial phi can make another
-// trivial: in nested loops the inner header's phi for `k` is fed by the outer header's phi for
-// `k`, which is fed by `k`'s real def. The inner one only becomes redundant once the outer one
-// has been folded away. So the pass iterates until a sweep changes nothing.
-//
 // SELF-REFERENCES ARE IGNORED, AND THAT IS THE WHOLE TRICK. A loop-header phi's back edge passes
 // the phi to ITSELF, so its incoming set is `{v, phi}` and a naive "all incoming equal" test sees
 // two distinct values and gives up. Discounting the self-reference is what recognises
@@ -45,18 +40,111 @@
 // A phi whose non-self incoming values genuinely DIFFER (a var written to different values in an
 // if/else) is NOT trivial and is left exactly where it is — it is a real merge and it needs a
 // real register.
+//
+// ===========================================================================================
+// IT IS A WORKLIST, NOT A RE-SWEEP — AND THAT IS THE DIFFERENCE BETWEEN LINEAR AND QUADRATIC
+// ===========================================================================================
+//
+// Folding one phi can make ANOTHER phi trivial, in two distinct ways:
+//
+//   1. a CHAIN — the phi's single incoming is itself a phi that is about to fold. Sequential loops
+//      make these, and they are as long as the function: an idle `var` read after a run of N loops
+//      gets a header phi in every one of them, and loop L's header phi is fed by loop L-1's EXIT
+//      phi for the same var. That is a fold chain of length ~2N.
+//   2. a MERGE THAT COLLAPSES — `p = φ(x, y)` with `x ≠ y` is a real merge and not trivial, until
+//      `x` folds to `y` and it becomes `φ(y, y)`.
+//
+// This pass used to answer both by RE-SWEEPING the whole function until a sweep changed nothing.
+// Each sweep is linear, but the SWEEP COUNT was never bounded, and on a chain it is the length of
+// the chain: `collectReadyArgs` deliberately deferred any phi whose fold TARGET was also folding
+// this sweep, so a sweep peeled exactly ONE link off the chain. N sweeps × O(function) each is
+// O(N × function) — QUADRATIC, and measured at x3.95 allocations / x4.85 bytes / x4.23 time per
+// DOUBLING on a function of N sequential loops holding one idle var. The pass folded a LINEAR
+// number of phis (2N of them) and did QUADRATIC work to find them, which is the tell.
+//
+// A worklist answers both causes exactly and once. When a phi folds, the ONLY phis whose answer
+// can change are the ones it FEEDS, and `buildPhiUserIndex` names them in O(1). So each phi is
+// re-examined only when one of its own operands actually moved, never because something unrelated
+// on the far side of the function did.
+//
+// CHAINS ARE RESOLVED BY UNION-FIND, WITH PATH COMPRESSION, so a chain of length N is flattened
+// the first time it is walked instead of once per sweep. Folding `a → b` where `b` later folds to
+// `v` needs no chain resolution and no deferral: `a`'s root simply BECOMES `v`, and the
+// substitution column handed to the rewrite is the fully-compressed forest. That is also why the
+// old "defer a phi whose target is also folding" rule is gone — it existed only to stop a
+// one-substitution-at-a-time rewrite from leaving a dangling reference to a slot it was about to
+// delete, and a root is by construction not a slot that is about to be deleted.
 
-// One trivial block-arg found in a sweep: `arg` is the phi, `target` the single value it carries.
-type TrivialArg
-	export var arg as ValueId
-	export var target as ValueId
+// What each phi carries, accumulated across the edges that feed it: has a non-self value arrived
+// yet, what was it, and did a LATER one disagree. THE TRIVIALITY RULE LIVES HERE AND NOWHERE ELSE —
+// it is asked in two different iterations (once over every edge slot in the function, and again over
+// one phi's feeders each time one of them folds) and a second copy of "what makes a phi trivial"
+// would be a second chance to disagree about it.
+//
+// `differs` is what makes a REAL merge — a var written to different values in an if/else — survive
+// untouched.
+//
+// DENSE COLUMNS, indexed by ValueId, NOT a Map: block-arg ids are function-local and dense, which is
+// the same discipline the register allocator's columns follow.
+type CarriedValues
+	var seen as BoolArray
+	var only as ValueIdArray
+	var differs as BoolArray
 
-	export static function create(arg ValueId, target ValueId) returns TrivialArg
-		return Self{arg: arg, target: target}
+	static function create(bound ValueId) returns CarriedValues
+		var seen = BoolArray.create()
+		var only = ValueIdArray.create()
+		var differs = BoolArray.create()
+		seen.resize(bound)
+		only.resize(bound)
+		differs.resize(bound)
+		return Self{seen: seen, only: only, differs: differs}
 	end 'create'
-end 'TrivialArg'
 
-typealias TrivialArgArray = Array with TrivialArg
+	// Fold one incoming value into `arg`'s accumulator.
+	//
+	// A SELF-REFERENCE IS DISCOUNTED, AND THAT IS THE WHOLE TRICK: a loop-header phi's back edge
+	// passes the phi to ITSELF, so its incoming set is `{v, phi}` and a naive "all incoming equal"
+	// test sees two distinct values and gives up. `phi = φ(v, phi)` is just `v`. Once a chain has
+	// folded, an incoming that RESOLVED back to this phi is the same thing and is discounted too.
+	function note(arg ValueId, incoming ValueId)
+		if incoming == arg 'selfReference'
+			return
+		end 'selfReference'
+
+		let alreadySeen = try self.seen.get(arg) otherwise panic("elimTrivialBlockArgs: block-arg {arg} is outside the block-arg id space")
+		if not alreadySeen 'first'
+			try self.seen.set(arg, value: true) otherwise panic("elimTrivialBlockArgs: seen.set({arg}) OOB")
+			try self.only.set(arg, value: incoming) otherwise panic("elimTrivialBlockArgs: only.set({arg}) OOB")
+			return
+		end 'first'
+
+		let carried = try self.only.get(arg) otherwise panic("elimTrivialBlockArgs: only.get({arg}) OOB")
+		if incoming != carried 'realMerge'
+			try self.differs.set(arg, value: true) otherwise panic("elimTrivialBlockArgs: differs.set({arg}) OOB")
+		end 'realMerge'
+	end 'note'
+
+	// Forget everything accumulated for `arg`, so its feeders can be re-read through the fold chain.
+	function forget(arg ValueId)
+		try self.seen.set(arg, value: false) otherwise panic("elimTrivialBlockArgs: seen.set({arg}) OOB")
+		try self.differs.set(arg, value: false) otherwise panic("elimTrivialBlockArgs: differs.set({arg}) OOB")
+	end 'forget'
+
+	// Trivial iff exactly one distinct non-self value ever arrived. A phi with NO non-self incoming
+	// at all (an unreachable block, or a phi fed only by itself) is NOT trivial: there is no value
+	// it could BE.
+	function isTrivial(arg ValueId) returns bool
+		let hasIncoming = try self.seen.get(arg) otherwise panic("elimTrivialBlockArgs: seen.get({arg}) OOB")
+		let isRealMerge = try self.differs.get(arg) otherwise panic("elimTrivialBlockArgs: differs.get({arg}) OOB")
+		return hasIncoming and not isRealMerge
+	end 'isTrivial'
+
+	// The single value a trivial `arg` carries.
+	function targetOf(arg ValueId) returns ValueId
+		return try self.only.get(arg) otherwise panic("elimTrivialBlockArgs: only.get({arg}) OOB")
+	end 'targetOf'
+end 'CarriedValues'
 
 // Fold every trivial block-arg in every function, in place.
 export function elimTrivialBlockArgs(module StdModule)
@@ -69,191 +157,203 @@ export function elimTrivialBlockArgs(module StdModule)
 	logDebug(LogCategory.ir, message: function() gives "elimTrivialBlockArgs: folded {total} trivial block-arg(s) across {module.funcCount()} function(s)")
 end 'elimTrivialBlockArgs'
 
-// Sweep one function to a fixpoint. Returns how many block-args it folded away.
+// Fold one function to its fixpoint in a SINGLE pass over the IR. Returns how many block-args it
+// folded away.
 function elimTrivialBlockArgsInFunc(module StdModule, func IrFunction) returns ValueId
-	var removed = 0 as ValueId
-
-	// Each sweep strictly removes at least one block-arg, and a function has finitely many, so
-	// the loop terminates. The bound is that count, and exceeding it means a sweep reported a
-	// removal it did not make — a bug in this pass, not a program the bound is too small for.
-	let bound = countBlockArgs(module, func: func) + 1
-	var sweeps = 0 as ValueId
-	while true 'toFixpoint'
-		let folded = foldOneSweep(module, func: func)
-		if folded == 0 'settled'
-			break
-		end 'settled'
-		removed = removed + folded
-
-		sweeps = sweeps + 1
-		if sweeps > bound 'runaway'
-			panic("elimTrivialBlockArgs: '{String.from(func.name)}' did not settle after {sweeps} sweep(s) over {bound - 1} block-arg(s)")
-		end 'runaway'
-	end 'toFixpoint'
-
-	return removed
-end 'elimTrivialBlockArgsInFunc'
-
-function countBlockArgs(module StdModule, func IrFunction) returns ValueId
-	var n = 0 as ValueId
-	for blockRef in func.blockRefs 'eachBlock'
-		let block = try module.blocks.get(blockRef) otherwise panic("elimTrivialBlockArgs: blockRef from func.blockRefs not in module.blocks")
-		n = n + block.blockArgs.count()
-	end 'eachBlock'
-	return n
-end 'countBlockArgs'
-
-// One sweep: find every trivial block-arg, rewrite its uses to the value it carries, and drop it
-// (and its slot in every incoming edge). Returns how many were folded, so the caller knows
-// whether to sweep again.
-//
-// EVERY STEP OF A SWEEP IS LINEAR IN THE IR, and it is worth saying why, because this pass did not
-// start out that way and the cost was not visible until something measured it. It used to
-//
-//   * ask each block-arg "what do my predecessors pass me?" by scanning EVERY edge of the whole
-//     function looking for the ones that target its block — O(blockArgs x edges); and
-//   * apply its substitutions ONE AT A TIME, walking every op and REBUILDING EVERY BRANCH EDGE
-//     once per substitution — O(trivial x edges), in allocations as well as in time.
-//
-// Both are quadratic, and on the shapes where this pass matters most they are quadratic in the same
-// quantity: a chain of N if/elses over one variable produces ~N blocks, ~3N edges, and ~N trivial
-// phis. The scale suite measured it at 63x the allocations for an 8x program — an exponent of 1.99
-// — and the pass at 54% of a large compile. Now the edges are scanned ONCE into a per-arg
-// accumulator, and all k substitutions are applied in ONE walk through a dense column.
-function foldOneSweep(module StdModule, func IrFunction) returns ValueId
-	let refByBlockId = buildTrivialBlockIdIndex(module, func: func)
 	let bound = blockArgIdBound(module, func: func)
 	if bound == 0 'noBlockArgs'
 		// A straight-line function has no phis to fold, and no columns to size.
 		return 0
 	end 'noBlockArgs'
 
-	let trivial = findTrivialArgs(module, func: func, refByBlockId: refByBlockId, bound: bound)
-	if trivial.count() == 0 'none'
-		return 0
-	end 'none'
+	let refByBlockId = buildBlockIdIndex(module, func: func)
+	let pairs = collectPhiOperands(module, func: func, refByBlockId: refByBlockId)
 
-	substituteEverywhere(module, func: func, subst: buildSubstitution(trivial, bound: bound))
-	dropFoldedArgs(module, func: func, refByBlockId: refByBlockId, trivial: trivial)
-	return trivial.count()
-end 'foldOneSweep'
+	// ONE pass over every edge slot in the function. Nothing has folded yet, so an incoming value
+	// stands for itself and no chain resolution is needed.
+	var carried = CarriedValues.create(bound)
+	for i in 0 upto pairs.count() 'eachSlot'
+		carried.note(pairs.argAt(i), incoming: pairs.incomingAt(i))
+	end 'eachSlot'
 
-// The trivial block-args of this function. A block-arg is trivial iff, DISCOUNTING incoming values
-// that are the arg itself (the back edge feeding a loop-header phi to itself), every predecessor
-// passes it the SAME value — and there is at least one such value.
-//
-// ONE PASS OVER THE EDGES, accumulating into dense per-arg columns. The question is asked per
-// BLOCK-ARG but the data lives per EDGE, and the naive direction — for each arg, find its edges —
-// rescans the whole function's edge list for every arg. Inverting it (for each edge, update the
-// args it feeds) answers the same question for every arg at once. This is exactly the inversion
-// `pruneDeadBlockArgs.collectArgFeeders` performs, and for exactly the reason its comment gives.
-//
-// Only args whose target is NOT itself being folded this sweep are reported. That is what keeps
-// substitution chains out of the picture: folding `inner -> outer -> v` in one sweep would rewrite
-// uses of `inner` to `outer` and then delete `outer`'s slot, leaving a dangling reference.
-// Deferring `inner` to the NEXT sweep — by which time `outer` is gone and `inner`'s incoming really
-// is `v` — needs no chain resolution at all, and the fixpoint loop above is what makes deferral
-// free.
-function findTrivialArgs(module StdModule, func IrFunction, refByBlockId ValueIdArray, bound ValueId) returns TrivialArgArray
-	// Per block-arg, accumulated across every edge that feeds it: has a non-self value arrived yet,
-	// what was it, and did a LATER one disagree. `differs` is what makes a real merge — a var
-	// written to different values in an if/else — survive untouched.
-	var seen = BoolArray.create()
-	var only = ValueIdArray.create()
-	var differs = BoolArray.create()
-	seen.resize(bound)
-	only.resize(bound)
-	differs.resize(bound)
+	// SEED THE WORKLIST, AND BAIL IF IT IS EMPTY — the common case, and worth its own exit.
+	//
+	// A phi's answer changes only when one of its OWN feeders folds. So if not one phi in the
+	// function is trivial with nothing yet folded, not one ever will be: there is no first fold to
+	// start the cascade. A function whose every merge is a REAL merge stops here — and that is most
+	// of them, including the two largest shapes the scale corpus generates (a chain of `if`s over one
+	// accumulator merges a different value on each path, every time). It stops before the feeder
+	// index, the user index, the fold chain and the whole-function rewrite are ever allocated, which
+	// is what keeps this pass's cost on ordinary code where the old re-sweep had it.
+	var queued = BoolArray.create()
+	queued.resize(bound)
 
-	for blockRef in func.blockRefs 'eachPred'
-		let pred = try module.blocks.get(blockRef) otherwise panic("elimTrivialBlockArgs: blockRef from func.blockRefs not in module.blocks")
-		for edge in pred.branchEdges 'eachEdge'
-			let target = trivialBlockById(module, refByBlockId: refByBlockId, id: edge.targetBlockId, from: pred.label)
-			for k in 0 upto target.blockArgs.count() 'eachSlot'
-				let arg = try target.blockArgs.get(k) otherwise panic("elimTrivialBlockArgs: blockArgs.get({k}) OOB on '{String.from(target.label)}'")
-				let incoming = try edge.argIds.get(k) otherwise panic("elimTrivialBlockArgs: the edge '{String.from(pred.label)}' -> '{String.from(target.label)}' passes {edge.argIds.count()} arg(s) but the target declares {target.blockArgs.count()} block-arg(s) — the positional blockArgs[k] <-> argIds[k] model is broken")
-
-				// The self-reference a loop-header phi's back edge carries. Discounting it is the
-				// whole point: `phi = φ(v, phi)` is just `v`.
-				if incoming == arg.valueId 'selfReference'
-					continue
-				end 'selfReference'
-
-				noteIncoming(seen, only: only, differs: differs, arg: arg.valueId, incoming: incoming)
-			end 'eachSlot'
-		end 'eachEdge'
-	end 'eachPred'
-
-	return collectReadyArgs(module, func: func, seen: seen, only: only, differs: differs)
-end 'findTrivialArgs'
-
-// Fold one (arg, incoming) pair into the accumulators: the first non-self value is remembered, and
-// any later one that disagrees marks the arg as a REAL merge, never to be folded.
-function noteIncoming(seen BoolArray, only ValueIdArray, differs BoolArray, arg ValueId, incoming ValueId)
-	let alreadySeen = try seen.get(arg) otherwise panic("elimTrivialBlockArgs: block-arg {arg} is outside the block-arg id space")
-	if not alreadySeen 'first'
-		try seen.set(arg, value: true) otherwise panic("elimTrivialBlockArgs: seen.set({arg}) OOB")
-		try only.set(arg, value: incoming) otherwise panic("elimTrivialBlockArgs: only.set({arg}) OOB")
-		return
-	end 'first'
-
-	let carried = try only.get(arg) otherwise panic("elimTrivialBlockArgs: only.get({arg}) OOB")
-	if incoming != carried 'realMerge'
-		try differs.set(arg, value: true) otherwise panic("elimTrivialBlockArgs: differs.set({arg}) OOB")
-	end 'realMerge'
-end 'noteIncoming'
-
-// The args that are trivial AND whose target is not itself being folded this sweep. An arg with no
-// non-self incoming at all (an unreachable block, or a phi fed only by itself) is NOT trivial:
-// there is no value to fold it TO.
-function collectReadyArgs(module StdModule, func IrFunction, seen BoolArray, only ValueIdArray, differs BoolArray) returns TrivialArgArray
-	var candidates = TrivialArgArray.create()
-	var isCandidate = StdValueUseSet.create()
-
+	var worklist = ValueIdArray.create()
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("elimTrivialBlockArgs: blockRef from func.blockRefs not in module.blocks")
 		for arg in block.blockArgs 'eachArg'
-			let hasIncoming = try seen.get(arg.valueId) otherwise panic("elimTrivialBlockArgs: seen.get({arg.valueId}) OOB")
-			let isRealMerge = try differs.get(arg.valueId) otherwise panic("elimTrivialBlockArgs: differs.get({arg.valueId}) OOB")
-			if hasIncoming and not isRealMerge 'trivial'
-				let carried = try only.get(arg.valueId) otherwise panic("elimTrivialBlockArgs: only.get({arg.valueId}) OOB")
-				candidates.push(TrivialArg.create(arg.valueId, target: carried))
-				isCandidate.insert(arg.valueId)
+			if carried.isTrivial(arg.valueId) 'trivial'
+				enqueue(arg.valueId, worklist: worklist, queued: queued)
 			end 'trivial'
 		end 'eachArg'
 	end 'eachBlock'
 
-	var ready = TrivialArgArray.create()
-	for c in candidates 'eachCandidate'
-		if not isCandidate.contains(c.target) 'targetSurvives'
-			ready.push(c)
-		end 'targetSurvives'
-	end 'eachCandidate'
-	return ready
-end 'collectReadyArgs'
+	if worklist.count() == 0 'everyMergeIsReal'
+		return 0
+	end 'everyMergeIsReal'
 
-// The sweep's substitutions as a DENSE column over the block-arg id space: `subst[v]` is what `v`
-// becomes, and `v` itself where nothing changes. Seeded with the identity so a value that is not
-// being folded maps to itself rather than to zero.
-function buildSubstitution(trivial TrivialArgArray, bound ValueId) returns ValueIdArray
-	var subst = ValueIdArray.create()
-	subst.resize(bound)
+	// Something WILL fold, so now — and only now — the machinery a fold needs.
+	//
+	//   • `feeders[arg]` — what is passed to this phi, so it can be re-read through the fold chain.
+	//   • `users[v]`     — which phis is this value passed to: the question the worklist asks after
+	//                      every fold, and the one a re-sweep answered by re-reading the FUNCTION.
+	//   • `parent`       — the fold chain, as a union-find column seeded with the identity.
+	let feeders = buildCsr(pairs.args, to: pairs.incoming, nodeCount: bound)
+	let users = buildPhiUserIndex(pairs, bound: bound)
+
+	var parent = ValueIdArray.create()
+	parent.resize(bound)
 	for v in 0 upto bound 'identity'
-		try subst.set(v, value: v) otherwise panic("elimTrivialBlockArgs: subst.set({v}) OOB against a column of {bound}")
+		try parent.set(v, value: v) otherwise panic("elimTrivialBlockArgs: parent.set({v}) OOB against a column of {bound}")
 	end 'identity'
 
-	for t in trivial 'eachFold'
-		try subst.set(t.arg, value: t.target) otherwise panic("elimTrivialBlockArgs: folded arg {t.arg} is outside the block-arg id space")
-	end 'eachFold'
-	return subst
-end 'buildSubstitution'
+	var folded = BoolArray.create()
+	folded.resize(bound)
+
+	var removed = 0 as ValueId
+	while worklist.count() > 0 'settle'
+		let arg = try worklist.pop() otherwise panic("elimTrivialBlockArgs: pop from a non-empty worklist")
+		try queued.set(arg, value: false) otherwise panic("elimTrivialBlockArgs: queued.set({arg}) OOB")
+
+		if isFolded(folded, v: arg) 'alreadyGone'
+			continue
+		end 'alreadyGone'
+		if not carried.isTrivial(arg) 'realMerge'
+			continue
+		end 'realMerge'
+
+		try folded.set(arg, value: true) otherwise panic("elimTrivialBlockArgs: folded.set({arg}) OOB")
+		try parent.set(arg, value: carried.targetOf(arg)) otherwise panic("elimTrivialBlockArgs: parent.set({arg}) OOB")
+		removed = removed + 1
+
+		// Folding `arg` changed what its users are fed, and NOTHING ELSE in the function changed.
+		// Re-reading exactly them is what a sweep spent a whole pass over the IR to discover.
+		for k in 0 upto users.degree(arg) 'eachUser'
+			let user = users.neighbour(arg, k: k)
+			reread(carried, feeders: feeders, parent: parent, arg: user, bound: bound)
+			enqueue(user, worklist: worklist, queued: queued)
+		end 'eachUser'
+	end 'settle'
+
+	// The compressed forest IS the substitution: after this, `parent[v]` is the value `v` ultimately
+	// became, and `v` itself where nothing changed. No second column, and no chains left in it.
+	compressAll(parent, bound: bound)
+	substituteEverywhere(module, func: func, subst: parent)
+	dropFoldedArgs(module, func: func, refByBlockId: refByBlockId, folded: folded)
+	return removed
+end 'elimTrivialBlockArgsInFunc'
+
+// Re-read `arg`'s feeders through the fold chain, replacing whatever was accumulated for it. Called
+// when one of its feeders has just folded — which is the only event that can change its answer.
+function reread(carried CarriedValues, feeders CsrGraph, parent ValueIdArray, arg ValueId, bound ValueId)
+	carried.forget(arg)
+	for k in 0 upto feeders.degree(arg) 'eachFeeder'
+		carried.note(arg, incoming: findRoot(parent, v: feeders.neighbour(arg, k: k), bound: bound))
+	end 'eachFeeder'
+end 'reread'
+
+// Push `arg` unless it is already waiting. Without the `queued` column a phi fed by many edges
+// would be pushed once per edge, and the worklist — not the work — would be what grew.
+function enqueue(arg ValueId, worklist ValueIdArray, queued BoolArray)
+	let waiting = try queued.get(arg) otherwise panic("elimTrivialBlockArgs: queued.get({arg}) OOB")
+	if waiting 'alreadyWaiting'
+		return
+	end 'alreadyWaiting'
+
+	try queued.set(arg, value: true) otherwise panic("elimTrivialBlockArgs: queued.set({arg}) OOB")
+	worklist.push(arg)
+end 'enqueue'
+
+// For each block-arg, the phis it FEEDS — `collectPhiOperands`' pairs read in the other direction.
+// This is the index that makes the worklist linear: when a phi folds, it names the only phis whose
+// triviality can have changed, so nothing else is re-examined.
+//
+// A feeder AT OR ABOVE the block-arg id space is an op result or a parameter. It can never fold, so
+// no fold will ever ask for its users and it needs no row — and it must be kept out of the CSR's key
+// space, which spans exactly the block-args.
+function buildPhiUserIndex(pairs PhiOperandPairs, bound ValueId) returns CsrGraph
+	var feederOf = ValueIdArray.create()
+	var userOf = ValueIdArray.create()
+
+	for i in 0 upto pairs.count() 'eachPair'
+		let incoming = pairs.incomingAt(i)
+		if incoming >= bound 'neverFolds'
+			continue
+		end 'neverFolds'
+
+		feederOf.push(incoming)
+		userOf.push(pairs.argAt(i))
+	end 'eachPair'
+
+	return buildCsr(feederOf, to: userOf, nodeCount: bound)
+end 'buildPhiUserIndex'
+
+// The value `v` ultimately becomes: follow the fold chain to the value that is not itself folded.
+//
+// PATH-COMPRESSED — every link on the path is repointed straight at the root — so a chain of length
+// N is flattened the first time it is walked and every later query on it is O(1). That is what keeps
+// the pass linear when the parser hands it a fold chain as long as the function, which a run of
+// sequential loops does (see the header).
+//
+// A value at or above `bound` is not a block-arg, cannot fold, and is its own root. That is the
+// chain's terminator, and it is why the column need only span the block-arg id space.
+function findRoot(parent ValueIdArray, v ValueId, bound ValueId) returns ValueId
+	if v >= bound 'notABlockArg'
+		return v
+	end 'notABlockArg'
+
+	var root = v
+	while root < bound 'toRoot'
+		let next = try parent.get(root) otherwise panic("elimTrivialBlockArgs: parent.get({root}) OOB against a column of {bound}")
+		if next == root 'isRoot'
+			break
+		end 'isRoot'
+		root = next
+	end 'toRoot'
+
+	var cur = v
+	while cur < bound 'compress'
+		let next = try parent.get(cur) otherwise panic("elimTrivialBlockArgs: parent.get({cur}) OOB against a column of {bound}")
+		if next == cur 'atRoot'
+			break
+		end 'atRoot'
+		try parent.set(cur, value: root) otherwise panic("elimTrivialBlockArgs: parent.set({cur}) OOB")
+		cur = next
+	end 'compress'
+
+	return root
+end 'findRoot'
+
+// Flatten the whole forest in place, so `parent` becomes a plain substitution column: one `findRoot`
+// per entry, each of which path-compresses what it walks. `substituteEverywhere` can then read it as
+// a lookup with no chains left in it — and `remappedValue` reads any value at or above `bound` as
+// itself, which is exactly right for the op results and parameters that never fold.
+function compressAll(parent ValueIdArray, bound ValueId)
+	for v in 0 upto bound 'each'
+		_ = findRoot(parent, v: v, bound: bound)
+	end 'each'
+end 'compressAll'
+
+function isFolded(folded BoolArray, v ValueId) returns bool
+	return try folded.get(v) otherwise panic("elimTrivialBlockArgs: folded.get({v}) is outside the block-arg id space")
+end 'isFolded'
 
 // Rewrite every READ mapped by `subst` — in the ops, via the dialect's `remapStdOpUses`, and in the
 // branch-edge args, which live on the predecessor blocks rather than on any op and so are this
 // pass's own responsibility.
 //
-// ONE walk, applying ALL of the sweep's substitutions. It used to be one walk PER substitution,
-// rebuilding every branch edge each time; see `foldOneSweep`'s header for what that cost.
+// ONE walk, applying ALL of the folds. It used to be one walk PER substitution, rebuilding every
+// branch edge each time.
 function substituteEverywhere(module StdModule, func IrFunction, subst ValueIdArray)
 	for opIdx in module.liveOpIndices(func) 'eachOp'
 		let op = try module.ops.get(opIdx) otherwise panic("elimTrivialBlockArgs: live op index {opIdx} not in module.ops")
@@ -280,22 +380,17 @@ end 'substituteEverywhere'
 // `pruneDeadBlockArgs.dropUselessBlockArgs` follows, and for the same reason: dropping slot `k`
 // of a block means dropping `blockArgs[k]` AND slot `k` of every incoming edge, or the positional
 // `blockArgs[k] <-> argIds[k]` correspondence the whole phi model rests on is broken.
-function dropFoldedArgs(module StdModule, func IrFunction, refByBlockId ValueIdArray, trivial TrivialArgArray)
-	var folded = StdValueUseSet.create()
-	for t in trivial 'eachFolded'
-		folded.insert(t.arg)
-	end 'eachFolded'
-
+function dropFoldedArgs(module StdModule, func IrFunction, refByBlockId ValueIdArray, folded BoolArray)
 	for blockRef in func.blockRefs 'eachPred'
 		var pred = try module.blocks.get(blockRef) otherwise panic("elimTrivialBlockArgs: blockRef from func.blockRefs not in module.blocks")
 		var newEdges = BranchEdgeArray.create()
 		for edge in pred.branchEdges 'eachEdge'
-			let target = trivialBlockById(module, refByBlockId: refByBlockId, id: edge.targetBlockId, from: pred.label)
+			let target = blockById(module, refByBlockId: refByBlockId, id: edge.targetBlockId, from: pred.label)
 			var keptArgs = ValueIdArray.create()
 			for k in 0 upto target.blockArgs.count() 'eachSlot'
 				let targetArg = try target.blockArgs.get(k) otherwise panic("elimTrivialBlockArgs: blockArgs.get({k}) OOB on '{String.from(target.label)}'")
-				if not folded.contains(targetArg.valueId) 'keep'
-					keptArgs.push(try edge.argIds.get(k) otherwise panic("elimTrivialBlockArgs: the edge '{String.from(pred.label)}' -> '{String.from(target.label)}' is missing slot {k}"))
+				if not isFolded(folded, v: targetArg.valueId) 'keep'
+					keptArgs.push(incomingArgAt(edge, k: k, pred: pred, target: target))
 				end 'keep'
 			end 'eachSlot'
 			newEdges.push(BranchEdge.create(edge.targetBlockId, argIds: keptArgs))
@@ -307,32 +402,10 @@ function dropFoldedArgs(module StdModule, func IrFunction, refByBlockId ValueIdA
 		var block = try module.blocks.get(blockRef) otherwise panic("elimTrivialBlockArgs: blockRef from func.blockRefs not in module.blocks")
 		var newArgs = IrBlockArgArray.create()
 		for arg in block.blockArgs 'eachArg'
-			if not folded.contains(arg.valueId) 'keep'
+			if not isFolded(folded, v: arg.valueId) 'keep'
 				newArgs.push(arg)
 			end 'keep'
 		end 'eachArg'
 		block.blockArgs = newArgs
 	end 'eachBlock'
 end 'dropFoldedArgs'
-
-// BlockId → `module.blocks` index PLUS ONE, dense over the function's block-id space. The +1 lets
-// a zero-filled column carry its own "not in this function" sentinel. Same shape, and same
-// motivation, as `pruneDeadBlockArgs.buildBlockIdIndex`: `IrModule.getBlockByIdIn` is a LINEAR
-// scan, and calling it once per edge would be O(edges × blocks).
-function buildTrivialBlockIdIndex(module StdModule, func IrFunction) returns ValueIdArray
-	var refByBlockId = ValueIdArray.create()
-	refByBlockId.resize(func.nextBlockId)
-	for blockRef in func.blockRefs 'eachBlock'
-		let block = try module.blocks.get(blockRef) otherwise panic("elimTrivialBlockArgs: blockRef from func.blockRefs not in module.blocks")
-		try refByBlockId.set(block.id, value: blockRef + 1) otherwise panic("elimTrivialBlockArgs: block '{String.from(block.label)}' has id {block.id}, outside its function's id space of {func.nextBlockId}")
-	end 'eachBlock'
-	return refByBlockId
-end 'buildTrivialBlockIdIndex'
-
-function trivialBlockById(module StdModule, refByBlockId ValueIdArray, id BlockId, from ByteArray) returns IrBlock
-	let refPlusOne = try refByBlockId.get(id) otherwise panic("elimTrivialBlockArgs: block '{String.from(from)}' branches to block id {id}, outside its function's block-id space")
-	if refPlusOne == 0 'notInFunction'
-		panic("elimTrivialBlockArgs: block '{String.from(from)}' branches to block id {id}, which is not registered in the function")
-	end 'notInFunction'
-	return try module.blocks.get(refPlusOne - 1) otherwise panic("elimTrivialBlockArgs: blockRef for block id {id} not in module.blocks")
-end 'trivialBlockById'

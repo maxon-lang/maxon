@@ -339,10 +339,28 @@ let MaxonIgnoreFileName = ".maxonignore"
 // The rule is the compiler's own (`MaxonIgnore.IsIgnored`): a directory holding the marker is not
 // part of the project. Re-deriving "which files are sources" any other way would be a second answer
 // to a question the compiler already answers.
+//
+// THE COPY IS A VALUE, NOT A PLACE — it is exactly the source tree, and `pruneCopiedDir` is what
+// makes that true. `.scale-tmp/` is never cleaned, and this copy used only ever to WRITE: a source
+// file DELETED from the compiler survived forever in a `mmtrace-src` left by an older run, and
+// `build <dir>` walks recursively, so the trace compiler was built from the dead file too.
+//
+// That is not hypothetical and it did not fail loudly. Retiring the scale suite's gate apparatus
+// deleted `Testing/ScaleGates.maxon`, `Testing/ScaleBaseline.maxon` and `Testing/CurveFit.maxon`
+// (commit 3e34836a8) — and every machine with a `.scale-tmp` older than that commit kept compiling
+// them, so the trace build died on `Unknown type: ScaleVerdict` and `--per-type` SKIPPED with a
+// printed line and an exit code of 0. The by-SCOPE attribution table — the one thing that can say
+// WHICH FUNCTION made an allocation — was silently unavailable on exactly the machines that had used
+// the suite before, and available only on a fresh checkout. This is `pruneRungDir`'s bug, in the one
+// directory `pruneRungDir` does not own.
 function copyMaxonTree(from FilePath, into FilePath) throws ScaleError
 	if not Directory.create(into) 'noDir'
 		throw ScaleError.reason("could not create {into.toString()}")
 	end 'noDir'
+
+	// Every name this level of the source tree owns — directories recursed into AND files written.
+	// Anything else found in `into` is residue from an older run and must not reach the build.
+	var copied = StringArray.create()
 
 	let entries = try Directory.list(from) otherwise throw ScaleError.reason("could not list {from.toString()}")
 	for entry in entries 'each'
@@ -350,12 +368,15 @@ function copyMaxonTree(from FilePath, into FilePath) throws ScaleError
 
 		if Directory.isDirectory(entry) 'isDir'
 			// A leading dot is build output (`.maxon/`), not source; a `.maxonignore` marker means the
-			// directory is deliberately not part of this project.
+			// directory is deliberately not part of this project. Neither is `copied` — an ignored
+			// directory that an OLDER copy took along is residue like any other, and the prune below
+			// empties it.
 			if name.startsWith(".") or isIgnoredDir(entry) 'skipNonSource'
 				continue
 			end 'skipNonSource'
 			let childName = try FilePath.from(name) otherwise throw ScaleError.reason("'{name}' is not a valid path component")
 			try copyMaxonTree(entry, into: into.join(childName))
+			copied.push(name)
 			continue
 		end 'isDir'
 
@@ -366,8 +387,51 @@ function copyMaxonTree(from FilePath, into FilePath) throws ScaleError
 		let content = try File.readText(entry) otherwise throw ScaleError.reason("could not read {entry.toString()}")
 		let childName = try FilePath.from(name) otherwise throw ScaleError.reason("'{name}' is not a valid path component")
 		try File.writeText(into.join(childName), content: content) otherwise throw ScaleError.reason("could not write {into.join(childName).toString()}")
+		copied.push(name)
 	end 'each'
+
+	try pruneCopiedDir(into, copied: copied)
 end 'copyMaxonTree'
+
+// Delete every `.maxon` file under `into` that the copy did not just write, so the tree the trace
+// compiler is built from is exactly the tree the compiler is built from.
+//
+// ONLY `.maxon` FILES ARE DELETED, and only they need to be: `build <dir>` compiles nothing else, so
+// a stray non-source file cannot change what the trace binary IS. (It would change what `loadProject`
+// ENUMERATES — but this directory is the compiler being built, not the corpus being measured, so its
+// own load cost is not a number this suite reports.)
+//
+// A stale SUBDIRECTORY is EMPTIED rather than removed. The stdlib has no recursive directory remove,
+// and it does not need one here: a directory holding no `.maxon` file contributes nothing to a build
+// that only ever compiles `.maxon` files, so an empty husk is as good as a deleted one and needs no
+// mechanism that does not exist. Dot-directories are left entirely alone — `.maxon/` is the trace
+// build's OWN output and cache, and reaching into it would be this function deleting the artifact it
+// exists to produce.
+function pruneCopiedDir(into FilePath, copied StringArray) throws ScaleError
+	let entries = try Directory.list(into) otherwise throw ScaleError.reason("could not list {into.toString()}")
+
+	for entry in entries 'each'
+		let name = entry.filename()
+		if copied.contains(name) 'justCopied'
+			continue
+		end 'justCopied'
+
+		if name.startsWith(".") 'buildOutput'
+			continue
+		end 'buildOutput'
+
+		if Directory.isDirectory(entry) 'staleDir'
+			try pruneCopiedDir(entry, copied: StringArray.create())
+			continue
+		end 'staleDir'
+
+		if not name.endsWith(MaxonExtension) 'notCompiled'
+			continue
+		end 'notCompiled'
+
+		try File.delete(entry) otherwise throw ScaleError.reason("could not delete the stale source {entry.toString()} from the trace tree, and `build` would compile it as part of the trace compiler")
+	end 'each'
+end 'pruneCopiedDir'
 
 function isIgnoredDir(dir FilePath) returns bool
 	let marker = try FilePath.from(MaxonIgnoreFileName) otherwise panic("isIgnoredDir: '{MaxonIgnoreFileName}' must be a valid path component")

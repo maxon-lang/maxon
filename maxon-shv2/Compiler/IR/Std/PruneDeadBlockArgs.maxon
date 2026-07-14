@@ -81,7 +81,13 @@ function pruneDeadBlockArgsInFunc(module StdModule, func IrFunction) returns Val
 	// Built ONCE and threaded through both walks that resolve an edge's target.
 	let refByBlockId = buildBlockIdIndex(module, func: func)
 
-	let feeders = collectArgFeeders(module, func: func, refByBlockId: refByBlockId, bound: bound)
+	// For each block-arg, the values its predecessors pass to it — the positional
+	// `blockArgs[k] ↔ edge.argIds[k]` correspondence INVERTED, indexed by the arg instead of by the
+	// edge, which is the direction the usefulness fixpoint walks. `buildCsr`'s counting sort buckets
+	// the pairs by arg in O(pairs + args).
+	let pairs = collectPhiOperands(module, func: func, refByBlockId: refByBlockId)
+	let feeders = buildCsr(pairs.args, to: pairs.incoming, nodeCount: bound)
+
 	let useful = computeUsefulBlockArgs(module, func: func, isBlockArg: isBlockArg, feeders: feeders, bound: bound)
 	return dropUselessBlockArgs(module, func: func, refByBlockId: refByBlockId, useful: useful)
 end 'pruneDeadBlockArgsInFunc'
@@ -125,35 +131,66 @@ function flagOf(col ValueFlagColumn, v ValueId) returns bool
 	return try col.get(v) otherwise false
 end 'flagOf'
 
-// For each block-arg, the values its predecessors pass to it: the positional `blockArgs[k] ↔
-// edge.argIds[k]` correspondence, INVERTED — indexed by the arg instead of by the edge, which
-// is the direction the usefulness fixpoint walks. One pass collects the (arg, incoming)
-// pairs; `buildCsr`'s counting sort buckets them by arg in O(pairs + args).
-function collectArgFeeders(module StdModule, func IrFunction, refByBlockId ValueIdArray, bound ValueId) returns CsrGraph
-	var argOf = ValueIdArray.create()
-	var incomingOf = ValueIdArray.create()
+// The positional (block-arg, incoming) pairs of EVERY branch edge in `func` — the phi model,
+// flattened into two parallel columns. `args[i]` names a block-arg; `incoming[i]` is the value some
+// predecessor passes to it. One entry per edge SLOT, so `blockArgs[k] ↔ edge.argIds[k]` is resolved
+// here, once, and nowhere else.
+//
+// BOTH block-arg passes need exactly this, and they need it in OPPOSITE directions —
+//   • `pruneDeadBlockArgs` reads arg → incoming ("what feeds this phi?"), and
+//   • `elimTrivialBlockArgs` reads that AND incoming → arg ("which phis must I re-examine now that
+//     THIS value has changed?"), which is what makes its worklist linear.
+// A CSR in either direction is one `buildCsr` call away from these columns, so the two passes share
+// the WALK and not the index. They used to share neither: each had written its own copy of it, and a
+// second copy of "how the edge slots line up with the block-args" is a second chance to mis-pair a
+// phi with someone else's value — the one mistake the positional model cannot survive.
+export type PhiOperandPairs
+	export var args as ValueIdArray
+	export var incoming as ValueIdArray
+
+	export static function create(args ValueIdArray, incoming ValueIdArray) returns PhiOperandPairs
+		return Self{args: args, incoming: incoming}
+	end 'create'
+
+	export function count() returns ValueId
+		return self.args.count()
+	end 'count'
+
+	export function argAt(i ValueId) returns ValueId
+		return try self.args.get(i) otherwise panic("PhiOperandPairs: args.get({i}) OOB against {self.args.count()} pair(s)")
+	end 'argAt'
+
+	export function incomingAt(i ValueId) returns ValueId
+		return try self.incoming.get(i) otherwise panic("PhiOperandPairs: incoming.get({i}) OOB against {self.incoming.count()} pair(s)")
+	end 'incomingAt'
+end 'PhiOperandPairs'
+
+// Collect them. One walk over every edge of every block, in O(edge slots).
+export function collectPhiOperands(module StdModule, func IrFunction, refByBlockId ValueIdArray) returns PhiOperandPairs
+	var args = ValueIdArray.create()
+	var incoming = ValueIdArray.create()
 
 	for blockRef in func.blockRefs 'eachPred'
-		let pred = try module.blocks.get(blockRef) otherwise panic("pruneDeadBlockArgs: blockRef from func.blockRefs not in module.blocks")
+		let pred = try module.blocks.get(blockRef) otherwise panic("collectPhiOperands: blockRef from func.blockRefs not in module.blocks")
 		for edge in pred.branchEdges 'eachEdge'
 			let target = blockById(module, refByBlockId: refByBlockId, id: edge.targetBlockId, from: pred.label)
 			for k in 0 upto target.blockArgs.count() 'eachSlot'
-				let arg = try target.blockArgs.get(k) otherwise panic("pruneDeadBlockArgs: blockArgs.get({k}) OOB on '{String.from(target.label)}'")
-				argOf.push(arg.valueId)
-				incomingOf.push(incomingArgAt(edge, k: k, pred: pred, target: target))
+				let arg = try target.blockArgs.get(k) otherwise panic("collectPhiOperands: blockArgs.get({k}) OOB on '{String.from(target.label)}'")
+				args.push(arg.valueId)
+				incoming.push(incomingArgAt(edge, k: k, pred: pred, target: target))
 			end 'eachSlot'
 		end 'eachEdge'
 	end 'eachPred'
 
-	return buildCsr(argOf, to: incomingOf, nodeCount: bound)
-end 'collectArgFeeders'
+	return PhiOperandPairs.create(args, incoming: incoming)
+end 'collectPhiOperands'
 
 // The value `edge` passes to its target's k-th block-arg. A count mismatch here is the
 // positional phi model being broken by whatever produced the edge — the parser's on-the-fly
 // SSA or a later pass — so it panics rather than silently mis-pairing a phi with someone
 // else's value.
-function incomingArgAt(edge BranchEdge, k ValueId, pred IrBlock, target IrBlock) returns ValueId
-	return try edge.argIds.get(k) otherwise panic("pruneDeadBlockArgs: the edge '{String.from(pred.label)}' -> '{String.from(target.label)}' passes {edge.argIds.count()} arg(s) but the target declares {target.blockArgs.count()} block-arg(s) — the positional blockArgs[k] <-> argIds[k] model is broken")
+export function incomingArgAt(edge BranchEdge, k ValueId, pred IrBlock, target IrBlock) returns ValueId
+	return try edge.argIds.get(k) otherwise panic("blockArgs: the edge '{String.from(pred.label)}' -> '{String.from(target.label)}' passes {edge.argIds.count()} arg(s) but the target declares {target.blockArgs.count()} block-arg(s) — the positional blockArgs[k] <-> argIds[k] model is broken")
 end 'incomingArgAt'
 
 // BlockId → `module.blocks` index PLUS ONE, dense over the function's block-id space (ids are
@@ -161,22 +198,25 @@ end 'incomingArgAt'
 // "not in this function" sentinel — `IrModule.getBlockByIdIn` is a LINEAR scan of the
 // function's blocks, and calling it once per edge would be O(edges × blocks), the shape the
 // allocator's data-representation contract exists to forbid.
-function buildBlockIdIndex(module StdModule, func IrFunction) returns ValueIdArray
+//
+// Exported, and used by `elimTrivialBlockArgs` too: it is the same index over the same id space,
+// and two copies of it were two chances to resolve an edge onto the wrong block.
+export function buildBlockIdIndex(module StdModule, func IrFunction) returns ValueIdArray
 	var refByBlockId = ValueIdArray.create()
 	refByBlockId.resize(func.nextBlockId)
 	for blockRef in func.blockRefs 'eachBlock'
-		let block = try module.blocks.get(blockRef) otherwise panic("pruneDeadBlockArgs: blockRef from func.blockRefs not in module.blocks")
-		try refByBlockId.set(block.id, value: blockRef + 1) otherwise panic("pruneDeadBlockArgs: block '{String.from(block.label)}' has id {block.id}, outside its function's id space of {func.nextBlockId}")
+		let block = try module.blocks.get(blockRef) otherwise panic("buildBlockIdIndex: blockRef from func.blockRefs not in module.blocks")
+		try refByBlockId.set(block.id, value: blockRef + 1) otherwise panic("buildBlockIdIndex: block '{String.from(block.label)}' has id {block.id}, outside its function's id space of {func.nextBlockId}")
 	end 'eachBlock'
 	return refByBlockId
 end 'buildBlockIdIndex'
 
-function blockById(module StdModule, refByBlockId ValueIdArray, id BlockId, from ByteArray) returns IrBlock
-	let refPlusOne = try refByBlockId.get(id) otherwise panic("pruneDeadBlockArgs: block '{String.from(from)}' branches to block id {id}, outside its function's block-id space")
+export function blockById(module StdModule, refByBlockId ValueIdArray, id BlockId, from ByteArray) returns IrBlock
+	let refPlusOne = try refByBlockId.get(id) otherwise panic("blockById: block '{String.from(from)}' branches to block id {id}, outside its function's block-id space")
 	if refPlusOne == 0 'notInFunction'
-		panic("pruneDeadBlockArgs: block '{String.from(from)}' branches to block id {id}, which is not registered in the function")
+		panic("blockById: block '{String.from(from)}' branches to block id {id}, which is not registered in the function")
 	end 'notInFunction'
-	return try module.blocks.get(refPlusOne - 1) otherwise panic("pruneDeadBlockArgs: blockRef for block id {id} not in module.blocks")
+	return try module.blocks.get(refPlusOne - 1) otherwise panic("blockById: blockRef for block id {id} not in module.blocks")
 end 'blockById'
 
 // The least fixpoint of "useful": an OP-read block-arg is useful, and whatever an edge passes
