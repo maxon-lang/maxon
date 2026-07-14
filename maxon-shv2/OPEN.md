@@ -316,39 +316,53 @@ returned function, and as a **statement** (which had no notion of a function val
 
 ⚠ **BEHIND IT, A SILENT MISCOMPILE THAT IS *NOT* ABOUT FIELDS — see #13.**
 
-### 13. 🔴 NEW, AND THE REAL ONE: a capturing closure that ESCAPES its frame nil-derefs, by ANY route
+### ~~13. a capturing closure that ESCAPES its frame nil-derefs, by ANY route~~ ✅ FIXED (`99a8927b9`) — and the sweep found TWO routes nobody had listed
 Closures capture **by reference** — `LowerClosureCreate` stores the *addresses of the enclosing frame's
-stack slots*. So a capturing closure that outlives its frame reads a dead frame. **It compiles clean and
-dies at runtime.** This is the classic upward-funarg problem, and **fields are only one route**:
+stack slots*. So a capturing closure that outlives its frame reads a dead frame (the classic
+upward-funarg problem): **it compiled clean and died at runtime.**
 
-```maxon
-function makeAdder(bump Integer) returns IntFn
-	let f = function(n Integer) gives n + bump
-	return f                    ⇒ compiles. Then: panic: nil pointer, in _$closure_0
-end 'makeAdder'
-```
-**Measured, not inferred** (2026-07-14, against the bootstrap).
+**E3099 was a PARTIAL FIX OF A GENERAL DEFECT** — it guarded the struct FIELD and nothing else. It is now
+the rule itself: **a closure that CAPTURES may not ESCAPE its defining frame**, refused on every route the
+parser sees *without* interprocedural analysis. `E3099` was REUSED, not renumbered — one mechanism, one
+rule, one code — and registered in BOTH registries (see #12).
 
-**Partially guarded (`3f42ecd7d`): `E3099` rejects a capturing closure stored in a struct FIELD** — at the
-struct literal, the field assignment, and the nascent-self slot, followed through a `let` binding. The
-non-capturing case needs no exception: a closure that captures nothing lowers to a plain
-`MaxonFunctionRefOp` and can never carry an env, so it passes *by construction*.
+**The enumeration is the artifact.** Each route was *run*, not reasoned about:
 
-**Still open — every other escape route:** `return`ing one (above), storing one in a **global**, in an
-**Array/Map element**, or passing one to a function that does any of those (the **interprocedural** route:
-at the store the value is a *parameter*, and whether it carries an env is a fact about the *caller*).
+| route | before | now |
+|---|---|---|
+| **`return` it** (`makeAdder` — the idiom people write) | compiles ⇒ `panic: nil pointer, in _$closure_0` | **E3099** |
+| **GLOBAL / static** | `E9001` internal cast crash at lowering | **E3099** |
+| **CONTAINER** (array/map literal element) | `E9001 Unknown MaxonValue type: MaxonFunctionPtr` | **E3099** |
+| ⭐ **union assoc-value PAYLOAD** | **COMPILED AND RAN**, env silently dropped | **E3099** |
+| ⭐ **PAYLOAD BINDING** (`run(op) then op = <closure>`) | **COMPILED AND RAN**, env silently dropped | **E3099** |
+| struct FIELD | E3099 (`3f42ecd7d`) | E3099 (message generalized) |
+| call ARGUMENT / call RETURN value | runtime nil-deref | **still open — DELIBERATELY**, see below |
+| call it, or pass it DOWN to a callee that only calls it | works | works (**must** — shv2's own `LazyMessage`) |
+| global/static **DECLARATION**, `async`, enum fn-BACKING | unreachable *by construction* | unreachable |
 
-⇒ **The single principled rule is: a closure that CAPTURES may not ESCAPE its defining frame** — and the
-mechanism that decides it is **escape analysis**, which is *exactly* shv2's **P1.5**, where capture-into-heap
-**IS** escape and closures co-land with `async` for that reason. **This is the same mechanism, found in the
-bootstrap first.** Whether to build a miniature of it in the bootstrap (which shv2 retires) or to accept a
-partial guard there is a **scope decision, not a technical one.** — only a function-typed parameter
-`spec.handler(doc, id)` ⇒ `E9001: Cannot determine function type from MaxonFieldAccessOp`
-(`2-Parser.cs:9223`). The same value calls fine once it arrives as a **parameter**. So a struct can
-*store* a function but nothing can call it from there.
-Fails **loudly** (a compile error, not a miscompile), which is the only reason it is tolerable.
-⚠ **shv2 will want exactly this shape** (a table of passes/handlers) — decide whether it supports it
-*before* a pass table gets designed around the workaround.
+⭐ **The two starred routes were found by sweeping the OPS, not the four routes on the list** — and they
+were the only two that were *silent*. A payload binding is the nastier: it **looks like a plain local** but
+is an alias INTO the enum's heap box, so assigning through it writes back. *A rule enumerated from
+symptoms finds the symptoms you already had.*
+
+**The rule is literally "escapes ITS DEFINING frame", not "is returned":** each capturing value records
+the frame its environment points into, so returning a closure an *outer* frame built stays legal — that
+environment belongs to a frame still alive. **Over-rejection is the worse failure**, and the same sweep
+found a **latent FALSE REJECT that predated all of this**: the capturing-var map is keyed by NAME and was
+never cleared between functions, so a capturing `op` in one function could make an unrelated *parameter*
+`op` in the next look like it carried an env. Cleared per function; pinned by a spec.
+
+⚠ **STILL OPEN, ON PURPOSE — the INTERPROCEDURAL route.** A capturing closure passed as a CALL ARGUMENT to
+a callee that then stores it (`Handler.create(function(n) gives n + bump)`), and symmetrically one arriving
+as a call's RETURN value. At that store the value is a **parameter**, and whether it carries an env is a
+fact about the **caller** — deciding it needs a per-parameter escape summary propagated over the call
+graph, i.e. **escape analysis proper**. That is **exactly shv2's P1.5**, where capture-into-heap **IS**
+escape and closures co-land with `async` for that reason. Scoped out of the bootstrap (which shv2 retires);
+**named in a comment at the check** so the boundary is found rather than rediscovered.
+
+*(The stray tail that used to hang off this entry — "a struct can store a function but nothing can call it
+from there" — was **stale**: it belonged to #8 and was superseded by that item's own ✅ fix (`b443f497e`),
+which made a function value callable wherever it lands. Removed.)*
 
 ---
 
