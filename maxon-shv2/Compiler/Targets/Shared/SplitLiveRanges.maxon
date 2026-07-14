@@ -606,7 +606,7 @@ end 'PeakTree'
 // capacity across a `clear()`, so growing the length back hands the previous occupant's bytes to the
 // next reader. Every buffer here is therefore either fully re-filled over the extent that iteration
 // reads (`refillColumn`, `EffectivePools.fillAll`), GROWN with its added entries explicitly
-// initialised (`growFilledColumn`, `PressureSweepScratch.widenRow`), or `clear()`ed before its first
+// initialised (`Array.growFilled`, `PressureSweepScratch.widenRow`), or `clear()`ed before its first
 // push.
 type SplitScratch
 	// The pressure sweep's ONE dense working row, and the operand/op buffers it steps with — shared with
@@ -899,7 +899,7 @@ function refreshAfterSplit(module TargetModule, cfg FuncCfg, liveness LivenessRe
 	index.growTo(cfg.valueCount)
 	liveness.growValueSpace(cfg.valueCount)
 	scratch.effPools.growTo(cfg.valueCount, pool: pool)
-	growFilledColumn(scratch.defLiveAfter, count: cfg.valueCount, value: NoStoreAnchorPressure)
+	scratch.defLiveAfter.growFilled(cfg.valueCount, value: NoStoreAnchorPressure)
 	scratch.sweep.widenRow(liveness.wordsPerRow)
 
 	// The victim's def-point pressure is INVALIDATED rather than updated, because a split can take its

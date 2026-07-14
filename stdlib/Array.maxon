@@ -11,6 +11,61 @@ end 'ArrayError'
 typealias ElementCount = int(0 to u64.max)
 typealias ElementIndex = int(0 to u64.max)
 
+// THE GROWTH POLICY every geometric buffer in this tree grows by — Go's `nextslicecap`, not plain
+// doubling.
+//
+// Doubling is right while a buffer is SMALL and wasteful once it is BIG: a 2× step leaves behind up to
+// a whole buffer's worth of capacity nobody asked for, and at a million elements that slack is the
+// dominant term in the process's peak footprint. A flat 1.25× is wrong the other way — it re-copies a
+// small buffer to death on the way up from four elements. Go takes both: DOUBLE below
+// `GrowthThreshold` elements, then EASE toward 1.25× above it. The easing formula is continuous rather
+// than a cliff — at exactly the threshold it still doubles, at 4× the threshold it is 1.30×, and by
+// 64K elements it is 1.253×.
+//
+// THE TRADE, stated plainly, because it IS a trade: a buffer grown to N elements by ratio r allocates
+// N·r/(r−1) elements over its life and holds at most r·N of them at any one instant. That is 2N
+// allocated / 100% slack held at 2×, against 5N allocated / 25% slack held at 1.25×. This policy
+// therefore allocates MORE bytes in total and keeps FEWER of them live — churn traded for footprint.
+// A cumulative-allocation number that rises after this change (the compiler's scale-test measures
+// exactly that column) is the price being paid, not a regression to hunt.
+let GrowthThreshold = 256 as ElementCount
+
+// The floor a growing buffer starts from, so that a few-element accumulation does not bounce its way
+// up through 1 → 2 → 3.
+let MinimumCapacity = 4 as ElementCount
+
+// The capacity a buffer of `current` capacity must grow to in order to hold `required` elements. This
+// is the POLICY, not a should-I-grow test: callers ask only when `required > current`, and what comes
+// back is never less than either.
+function grownCapacity(current ElementCount, required ElementCount) returns ElementCount
+	let doubled = current + current
+
+	// An ask that outruns doubling — `reserve(n)` on an empty array, `append` of a longer one — is
+	// taken at face value. Geometric slack heaped on top of an already-large ask is pure waste.
+	if required > doubled 'takeTheAskAsGiven'
+		return atLeastMinimum(required)
+	end 'takeTheAskAsGiven'
+
+	if current < GrowthThreshold 'stillSmall'
+		return atLeastMinimum(doubled)
+	end 'stillSmall'
+
+	// Ease from 2× toward 1.25×. One pass covers a `push` (which asks for a single element more than it
+	// has); the loop repeats only when `required` lands between one eased step and a full double.
+	var capacity = current
+	while capacity < required 'ease'
+		capacity = capacity + (capacity + 3 * GrowthThreshold) / 4
+	end 'ease'
+	return capacity
+end 'grownCapacity'
+
+function atLeastMinimum(capacity ElementCount) returns ElementCount
+	if capacity < MinimumCapacity 'raise'
+		return MinimumCapacity
+	end 'raise'
+	return capacity
+end 'atLeastMinimum'
+
 export type Array uses Element implements BuiltinArrayLiteral, Iterable with (Element, ArrayIter), Cloneable
 	typealias ElementMemory = __ManagedMemory with Element
 	export var managed as ElementMemory  // Compiler-managed opaque array storage
@@ -119,16 +174,8 @@ export type Array uses Element implements BuiltinArrayLiteral, Iterable with (El
 	function ensureCapacity(requiredLen ElementCount)
 		let cap = managed.capacity()
 		if requiredLen > cap 'grow'
-			// Double capacity until sufficient, minimum 4
-			var newCap = managed.capacity()
-			if newCap < 4 'min'
-				newCap = 4
-			end 'min'
-			while newCap < requiredLen 'double'
-				newCap = newCap * 2
-			end 'double'
-			try managed.grow(newCap) otherwise 'growErr'
-				panic("Array.ensureCapacity: grow failed — newCap >= current capacity guaranteed")
+			try managed.grow(grownCapacity(cap, required: requiredLen)) otherwise 'growErr'
+				panic("Array.ensureCapacity: grow failed — grownCapacity never returns below the current capacity")
 			end 'growErr'
 		end 'grow'
 	end 'ensureCapacity'
@@ -241,6 +288,40 @@ export type Array uses Element implements BuiltinArrayLiteral, Iterable with (El
 			panic("Array.resize: setLength OOB — reserve ensured capacity for newLength")
 		end 'lenErr'
 	end 'resize'
+
+	/// Grow to `newLength`, setting ONLY the entries the growth ADDED to `value`. What is already
+	/// there is untouched, and a `newLength` at or below the current length does nothing — this
+	/// GROWS; `resize` is what shrinks.
+	///
+	/// THIS IS THE OPERATION FOR A COLUMN THAT IS EXTENDED — an id space that widens as a pass mints
+	/// new ids, a row that follows a growing value count. `resize` is the trap there, and it is a
+	/// quadratic one: `resize` goes through `reserve`, which grows capacity to EXACTLY the length
+	/// asked for, so a column extended a few entries at a time is reallocated and copied IN FULL on
+	/// every extension — Θ(extensions × length) bytes, on precisely the shape that extends most.
+	/// This grows capacity GEOMETRICALLY instead (see `grownCapacity`), which makes the same walk
+	/// amortized linear.
+	///
+	/// The explicit fill is not paranoia. Growth that lands inside capacity the buffer ALREADY HELD
+	/// allocates nothing, and only a fresh ALLOCATION arrives zeroed — so the added entries would
+	/// otherwise read back whatever bytes last lived in them (measured: after `clear()` then a
+	/// regrow, a scalar column still held its previous occupants).
+	export function growFilled(newLength ElementCount, value Element)
+		let existing = managed.length()
+		if newLength <= existing 'nothingAdded'
+			return
+		end 'nothingAdded'
+
+		ensureCapacity(newLength)
+		try managed.setLength(newLength) otherwise 'lenErr'
+			panic("Array.growFilled: setLength OOB — capacity just ensured for newLength")
+		end 'lenErr'
+
+		for i in existing upto newLength 'fill'
+			try managed.set(i, value) otherwise 'setErr'
+				panic("Array.growFilled: set OOB at {i} — length just set to newLength")
+			end 'setErr'
+		end 'fill'
+	end 'growFilled'
 
 	// =========================================================================
 	// Iterable Interface

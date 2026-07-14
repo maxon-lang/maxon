@@ -39,20 +39,14 @@ type ConstValueMap
 		return Self{isConst: BoolArray.create(), constant: ParsedIntArray.create()}
 	end 'create'
 
-	// Record that `valueId` is a `const` materializing `value`. Both columns are grown by DOUBLING —
-	// see `widenedValueColumnLength` for why growing them to fit would be quadratic.
+	// Record that `valueId` is a `const` materializing `value`. Both columns are extended with
+	// `growFilled`, which grows their capacity GEOMETRICALLY — growing them to fit with `resize` (which
+	// reserves exactly the length it is given) would be quadratic in a column extended one id at a time,
+	// which is what a walk over the ops in order does. See `StdValueUseSet.insert`, the same column and
+	// the same trap.
 	function upsert(valueId ValueId, value ParsedInt)
-		if valueId >= self.isConst.count() 'widen'
-			let existing = self.isConst.count()
-			let widened = widenedValueColumnLength(existing, valueId: valueId)
-			self.isConst.resize(widened)
-			self.constant.resize(widened)
-			// `resize` zero-fills only where it has to ALLOCATE; clear what the growth added explicitly.
-			// Only the FLAG column needs it — `constant` is never read where the flag is false.
-			for i in existing upto widened 'clearAdded'
-				try self.isConst.set(i, value: false) otherwise panic("ConstValueMap.upsert: isConst.set OOB at {i}")
-			end 'clearAdded'
-		end 'widen'
+		self.isConst.growFilled(valueId + 1, value: false)
+		self.constant.growFilled(valueId + 1, value: 0)
 
 		try self.isConst.set(valueId, value: true) otherwise panic("ConstValueMap.upsert: isConst.set OOB at {valueId}")
 		try self.constant.set(valueId, value: value) otherwise panic("ConstValueMap.upsert: constant.set OOB at {valueId}")
