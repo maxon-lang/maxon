@@ -80,11 +80,36 @@ Each `if` snapshots the whole mutable-var set; each `while` mints a phi per muta
 converging on **x4.00 while the program only DOUBLES**. ValueIds are minted even for phis that are later
 pruned, so `blockArgIdBound` (and every dense column sized by it) is **O(L²)**.
 
-⇒ **FIX THE CORPUS'S REALISM, NOT THE PROBE** (user directive). `ScaleCorpus`'s `longFunction` emits
-`var acc = a` then N `if`s all mutating that **ONE** accumulator — so V=1 and O(V·B) collapses to O(B).
-Real Maxon functions carry several locals mutated across many branches. **Make the generated functions
-realistic and the cost surfaces on its own**, along with any other V-dependent cost nobody has thought
-to look for. *A knob built to expose a bug you already found only finds bugs you already found.*
+⇒ **FIX THE CORPUS'S REALISM, NOT THE PROBE** (user directive). ✅ **CORPUS DONE (`f76a145fd`)** —
+`longFunction`/`deepBlocks` emitted `var acc = a` then N `if`s all mutating that **ONE** accumulator, so
+V=1 and O(V·B) collapsed to O(B): the two knobs *named for growing branches* could not see the cost of
+growing branches. Both now carry **six** mutable locals (fixed and realistic — real functions carry a
+handful), each branch mutates a **rotating subset** (a branch that wrote *every* local would make "costs
+O(vars in scope)" and "costs O(vars assigned)" the same number, and telling those apart is exactly what
+decides whether a write-trail is worth building), and `deepBlocks`'s two arms write **different** locals
+so the join does real work. *A knob built to expose a bug you already found only finds bugs you already
+found.*
+
+⚠ **AND IT WAS BLIND A SECOND WAY, FOUND BY ACCIDENT: the corpus contained `and`/`or` NOWHERE AT ALL.**
+The `const` flags fix (#7) removed **four instructions from every short-circuit site in the language** and
+this instrument reported **zero movement on every rung** — because it compiles no short circuits. Every
+guard in the corpus is now a short-circuit `and`. **Two independent blind spots in one instrument, and
+both were silent.** (See #6's rule, which is the same lesson in the other currency.)
+
+**WHAT IT NOW SEES — the defect, exactly as predicted:** `phase:pruneDeadBlockArgs` **allocations** grow
+x1.98 x1.99 x1.995 x1.997 x1.999 — *dead linear* — while its **BYTES** grow x2.00 x2.02 x2.04 x2.09
+**x2.17**. Allocation COUNT linear while BYTES bend means **the allocations are getting BIGGER**: the
+dense columns sized by `blockArgIdBound`. `phase:parse` bends the same way, x1.97 → **x2.06**.
+**THE BYTE COLUMN CAUGHT WHAT THE ALLOC COLUMN COULD NOT** — for the second time (see the 2026-07-14 rows
+of `docs/optimization-log.md`). ⏳ The write-trail fix is in progress against this baseline.
+
+**Where the cost actually is, measured:** the `if` path is **already correct** — `mergeAtContinuation`
+mints a phi only when the value genuinely *differs* across the two paths. **`parseWhileStatement` is the
+sole ID inflater:** it mints a header phi for **every mutable var in scope**, unconditionally, *before the
+body is parsed*, so it cannot know which vars the body touches. ⇒ The fix is to mint a loop phi **lazily,
+on a var's first MENTION (read or write) inside the loop** — *not* first write, which is unsound
+(`z = x + 1` reads `x` before `x = z` would trigger the mint, so the read binds the stale pre-loop value
+and iteration 2 is wrong).
 
 ⚠ The real fix (a write-trail, so a merge costs O(assignments-in-branch)) **cannot be byte-identical on
 the loop half** — minting fewer phis renumbers values, so fragments WILL move. That is a reviewable
@@ -92,6 +117,46 @@ codegen diff, not a regression.
 
 *(Confirmed NOT a multiplier: `emitShortCircuit` mints one phi and takes no snapshot — exactly 58 parse
 allocations at V = 8, 32, 128 and 256.)*
+
+---
+
+### 9. ⚠ **STILL OPEN, AND NOW STRANGER: the `mm_incref NULL` in `__module_init` DOES NOT REPRODUCE**
+A **real** miscompile of the same class was found and fixed (`bf2823bcb`) — see below — and **it is not
+the reported one.** Recorded here rather than closed, because a symptom nobody can reproduce is not a
+symptom that has been fixed.
+
+**What was reported** (memory, 2026-07-13): adding a `Testing/`-only **union-typed `Array`** to shv2 made
+the C# bootstrap crash `__module_init` with `mm_incref called with NULL pointer`, blaming the **Lexer's**
+global `b""`-keyed keyword map — code with nothing to do with the change. Bisected; neither ingredient
+alone crashed.
+
+**What is now measured — a DIFFERENTIAL against the pre-fix bootstrap, run deliberately:**
+
+| case | pre-fix | post-fix |
+|---|---|---|
+| a global `Array` over a payload-carrying union | **FAIL** — `E9001 __module_init`, `%28` undefined | PASS |
+| a global map with union *values* | **FAIL** — `E9001 __module_init`, `%29` undefined | PASS |
+| ⚠ **global `b""`-keyed Map + union-typed `Array` — THE REPORTED COMBINATION** | **PASS** | PASS |
+| a live global surviving a dead global's pruning (control) | PASS | PASS |
+
+**The reported combination passes even BEFORE the fix**, and a fresh union-typed `Array` dropped into
+shv2's `Testing/` compiles clean on the pre-fix bootstrap too. So the fix below is real and gated — but
+**it is not established to be the fix for THIS symptom**, and the `mm_incref NULL` remains unexplained.
+
+⇒ **Do not assume it is gone.** Either something else closed it between 2026-07-13 and now, or the repro
+needed conditions that were not written down. **If it recurs, this table is the starting point** — and the
+lesson is the one this file keeps teaching: *the repro is the asset. Record it, not just the symptom.*
+
+**What WAS fixed, and it is the same hole:** `DeadFunctionElimination.EliminateDeadOps` **hand-rolled its
+operand list — naming FIVE op kinds out of the ~80 that carry operands** — so everything it forgot was
+invisible to liveness and got deleted. `maxon.enum_construct`'s payload was one of them: the literal in
+`var g = [Op.add(1)]` looked dead, was deleted, and `__module_init` was left lowering an op whose operand
+nothing defined. **An op already declares what it reads; the scan re-declared it, incompletely — ONE FACT
+WRITTEN DOWN TWICE.** `MaxonOp.Operands` is now **`abstract`** (the Std tier's `StandardOp.ReadValues`
+always was, which is the whole difference), so a new op kind *cannot* silently reintroduce the hole.
+It runs over `__module_init` **and nowhere else**, and every global's initializer lives in that **one
+shared block** — which is exactly why the blast radius is another file's global, and why this looked like
+spooky action at a distance.
 
 ---
 
@@ -110,16 +175,52 @@ allocations at V = 8, 32, 128 and 256.)*
 or removed — never inherited**. *A measurement that depends on what a previous run left behind is not a
 measurement.* Both failures were **silent**.
 
-### 7. `StdOp.const` claims `clobbersFlags`, and `TargetOpMeta.setsFlags` is written 40× / read 0×
-`mov r, imm` writes no flags. This defeats compare/branch fusion on `if a > 0 and b > 0` — **exactly 3
-wasted instructions** (`setcc` + `movzx` + a redundant `cmp`), because the short-circuit's seed literal
-sits between the compare and its branch. One line to fix, **but it moves fragment goldens**, so it wants
-the suite as its own gate.
-`TargetOpMeta.setsFlags` already **contradicts** the Std tier's `clobbersFlags` on `const`/`binOpImm`/
-`unaryOp` — two descriptions of one hardware fact, one of them dead and disagreeing. Delete it, or derive
-one from the other so they cannot drift.
-*(Also: `a shl -1` silently becomes `a shl 63` — the hardware masks CL. Defensible for a runtime value;
-not for a negative literal the compiler can see.)*
+### ~~8. The DebugStream can hand the monitor an unwritten payload~~ ✅ FIXED — and the fix had a hole, now also fixed (`b896a70bd`)
+The torn-read race itself was already closed on `main` (`4cfbba70d`: *an entry is VISIBLE when reserved,
+READABLE when committed*), verified by a stress harness that **fails against the unfixed compiler**.
+
+⚠ **But adding the commit bit was a BREAKING WIRE CHANGE THAT NEVER BUMPED `DsVersion`** — and the version
+was written by the monitor and **read by nobody**. The flags byte used to be always-zero filler; it now
+distinguishes *"payload written"* from *"not yet"*. So a **pre-`4cfbba70d` binary under today's monitor**
+never sets the bit, the monitor waits for a commit that is not coming, the ring fills until the producer
+**drops 98% of its events**, and it then steps over every entry as *"abandoned (producer died mid-entry)"*.
+**Measured, with a real v1-schema producer: `0 events decoded, 283221 dropped, 5290 abandoned` — and the
+producer had exited CLEANLY with code 42. Every number in that summary is a fiction.**
+⇒ `DsVersion = 2`, and a **two-way** handshake (the monitor announces its version; the producer announces
+its own at `DsOffProducerVersion` **before it decides whether to speak at all**, so a producer that refuses
+an incompatible monitor is *silent*, never *anonymous*). Mismatch ⇒ loud refusal, exit 3, nothing decoded.
+**An instrument that lies is worse than no instrument** — and this is the instrument the *parallel*
+compiler is meant to be debugged with.
+⭐ **shv2's backend must emit this protocol** (Workstream R1). It is a wire format two compilers must
+agree on: the commit bit and the version live in **one** place each, beside each other.
+
+### ~~7. `StdOp.const` claims `clobbersFlags`, and `TargetOpMeta.setsFlags` is written 40× / read 0×~~ ✅ FIXED (`282d08421`)
+`const` now declares `clobbersFlags: FALSE` — it lowers only to `movRegImm32`/`movRegImm`, a bare `mov`,
+which writes no EFLAGS. The `true` was justified by a comment describing an `xor reg, reg` zeroing idiom
+**the lowering does not emit and never has**. The win was bigger than the 3 instructions predicted: each
+short-circuit site drops **FOUR** — `setcc`, a redundant `cmp`, **and the phi copy** (the seed literal is
+now minted straight into the phi's register) — plus one fewer live register.
+`TargetOpMeta.setsFlags` is **deleted**. It was a **v1 PORT ARTIFACT**: v1 genuinely reads `setsFlags` off
+a *target* op (`MirToX64Conversion.maxon:409`) because it fuses compare/branch at the MIR→X64 boundary;
+shv2 moved that scan **up to the Std tier** — its answer decides what the lowering emits, so it must run
+before it — and kept v1's field anyway. Two homes for one fact, one unreachable, and the dead one was
+quietly *right*.
+⚠ **Written down while there:** the fusion rests on a precondition nobody had stated. The scan runs on
+**Std** ops, but the **allocator later inserts Target ops into the very window it just proved safe**. It
+survives only because every op the allocator can insert there — spill, reload, phi copy, `xchg`, a
+rematerialized `const` — is `mov`-class and flag-neutral. **Add a flag-writing one and the fusion becomes
+a silent miscompile the Std tier cannot see coming.**
+
+### 7b. `a shl -1` silently becomes `a shl 63` — ⏳ IN PROGRESS
+The hardware masks CL to its low 6 bits. **Verified on BOTH compilers.** Defensible for a *runtime* value
+(the compiler cannot see it, and both lowerings agree). **Not** for a literal the compiler can see: a
+negative count reads as "shift the other way" and silently becomes the *maximum left shift*.
+⇒ Being tightened to: **a shift-count LITERAL outside `0..63` is a compile error**, which also catches
+`shl 64` (≡ `shl 0`, i.e. a no-op) and `shl 100` (≡ `shl 36`). **It is free** — a tree-wide grep finds
+**zero** out-of-range shift literals in any real code. One of the three hits is corroboration:
+`maxon-selfhosted/.../ConstantArrayLiteralRdata.maxon:157` is a *comment* saying `(1 shl 64) - 1`
+"overflows i64 left-shift, so a full-width target is left unmasked" — a developer already hit this and
+worked around it in prose.
 
 ### 8. The bootstrap cannot CALL a function-typed FIELD — only a function-typed parameter
 `spec.handler(doc, id)` ⇒ `E9001: Cannot determine function type from MaxonFieldAccessOp`
@@ -133,6 +234,23 @@ Fails **loudly** (a compile error, not a miscompile), which is the only reason i
 
 ## 📋 Environment / process notes that cost real time
 
+- 🔴 **THE `maxon-dev` MCP TOOLS ALWAYS DRIVE THE *MAIN REPO*, NEVER YOUR WORKTREE — AND THEY REPORT
+  SUCCESS WHILE DOING IT.** `repoRootPath()` ([`maxon-dev-mcp/mcp/Util.maxon:149`](../maxon-dev-mcp/mcp/Util.maxon#L149))
+  resolves the root from **`Process.executablePath()` — the MCP *server's* own binary**, which lives in the
+  main repo. **It never looks at the caller's working directory, and it cannot: one server process is
+  shared by every agent.** So in a worktree, `build` returns `success: true` on a tree containing **none**
+  of your changes; `run_spec_test` runs the **main** binary against the **main** specs; **`updateRequired`
+  REWRITES THE MAIN TREE'S COMMITTED GOLDENS**; `run_scale_test` measures the **main** shv2 and `note:`
+  writes a row into the **main** optimization log; and `fmt` — which reformats the entire tree in place
+  when given arguments — runs with the **main repo** as its cwd.
+  **Only `lookup_error_code` and `mm_trace_analyze` are worktree-safe.** In a worktree, drive
+  `./bin/maxon.exe` and `./maxon-shv2/.maxon/maxon-shv2.exe` **by hand**.
+  ⚠ **`.claude/CLAUDE.md` said "PREFER THE MCP TOOLS" while the rung workflow said "work in a worktree",
+  and the two silently contradicted each other.** Caught 2026-07-14 with **five agents running against
+  it** — by an agent whose `build` succeeded on a tree with none of its work in it. **The project's own
+  signature bug — one fact written down twice — at the TOOLING level.** Documented in CLAUDE.md
+  (`13855215b`); the real fix (a `repoRoot` param, and every result **echoing the root it actually
+  used**, so a false green is *visible* rather than silent) is still to do.
 - **A FAILED BUILD LEAVES THE OLD BINARY.** `spec-test` then runs the *previous* compiler and reports a
   green suite. **Check the build's exit code before believing a test result.** Three false greens this
   session.
