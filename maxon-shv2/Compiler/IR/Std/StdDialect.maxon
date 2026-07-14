@@ -216,10 +216,28 @@ export type StdOpMeta
 	// True for ops with full call-barrier semantics (clobber caller-saved regs,
 	// may observe/modify arbitrary memory). Also true for `param`.
 	export let isCall as bool
-	// True if the op may clobber x64 EFLAGS / ARM64 NZCV once lowered. `const` is
-	// covered because its zero case lowers to the `xor reg, reg` idiom (which sets
-	// flags); that idiom itself arrives at M3. Note this is a LOWERING artifact, not
-	// a side effect — a flag-clobbering op is still `isPure`.
+	// True if the op MAY clobber x64 EFLAGS / ARM64 NZCV once lowered. A LOWERING
+	// artifact, not a side effect — a flag-clobbering op is still `isPure`.
+	//
+	// ⚠ IT IS A **MAY**-CLOBBER OVER-APPROXIMATION, DELIBERATELY, AND THE IMPRECISION IS
+	// STRUCTURAL. The x64 flags behaviour of three variants depends on their OPCODE, which
+	// per-variant metadata cannot see (see the StdOp header):
+	//
+	//   • `binOp(add)`        lowers to `lea` — writes NO flags. `sub`/`mul` do.
+	//   • `binOpImm(add|sub)` lowers to `lea` — writes NO flags. `mul`/the word ALU forms do.
+	//   • `unaryOp(bitNot)`   lowers to `not` — writes NO flags. `neg`/`logicalNot` do.
+	//
+	// `true` on those three is SOUND: the only consumer (`recordFusableCompare`) walks
+	// backward for the last flag WRITER, so over-claiming a write can only make it decline a
+	// legal fusion — never fuse an illegal one. **Do NOT "correct" them to `false`** — the
+	// answer genuinely differs per opcode, and a per-variant `false` would be a LIE for
+	// `sub`/`mul`/`neg`, which IS unsound. Making them exact means SPLITTING the variant
+	// (the dialect's own documented rule for metadata an opcode field cannot carry). That is
+	// a real option and it is priced: it buys fusion across an intervening `lea`, which no
+	// measured program does. Not taken.
+	//
+	// `const` is the one that is NOT an over-approximation and must stay exact — see its
+	// variant below.
 	export let clobbersFlags as bool
 	// A compare feeding a branch — the backends pair the two, so the classification
 	// must survive as metadata rather than being re-derived per target.
@@ -255,7 +273,25 @@ export union StdOp
 	// carries the width AND the float-ness the backend needs to pick a GP
 	// mov-immediate vs an XMM load — replacing v1's `constI64`/`constF64` opcode
 	// pair, which could not express i32/u8/f32 without new opcodes.
-	const(resultId ValueId, value ParsedInt, valueType StdType) = StdOpMeta{category: StdOpCategory.arith, role: OpRole.plain, isPure: true, isUnsupportedInInlineBody: false, isMemory: false, isStore: false, isCall: false, clobbersFlags: true, isCmp: false}
+	//
+	// ⚠ `clobbersFlags: FALSE`, and unlike its band-mates this is EXACT, not an
+	// over-approximation: `constMaterializationOp` emits `movRegImm32` or `movRegImm` and
+	// NOTHING ELSE, and `mov r, imm` writes no flags. It has no opcode field, so there is no
+	// per-opcode case to hide behind.
+	//
+	// It read `true` until 2026-07-14, justified by an `xor reg, reg` zeroing idiom for the
+	// value==0 case — an idiom the lowering DOES NOT EMIT and never has (StdToX64Conversion
+	// says so at `constMaterializationOp`: it is a deferred size/flags tradeoff). The comment
+	// described a compiler we did not write, and the cost was real: a short-circuit's seed
+	// literal sits between a compare and its branch, so the false claim broke compare/branch
+	// fusion on `if a > 0 and b > 0` — 3 wasted instructions (`setcc` + `movzx` + a redundant
+	// `cmp`) on the commonest conditional shape there is.
+	//
+	// ⚠ THE DAY THE `xor reg, reg` IDIOM LANDS, THIS MUST CHANGE — `xor` DOES write flags, so
+	// `const`'s answer becomes value-dependent (false for every value but 0) and per-variant
+	// metadata cannot express that. Split the variant, or take `true` back. The guard is
+	// repeated at the idiom's own site so whoever adds it trips over it there.
+	const(resultId ValueId, value ParsedInt, valueType StdType) = StdOpMeta{category: StdOpCategory.arith, role: OpRole.plain, isPure: true, isUnsupportedInInlineBody: false, isMemory: false, isStore: false, isCall: false, clobbersFlags: false, isCmp: false}
 	// Binary op `resultId = lhs <opcode> rhs` over two virtual registers. M3 carries
 	// `add`/`sub`/`mul`, all `isPure` (integer add/sub/mul never trap — unlike the
 	// `div` that M5 will declare `isPure: false`) and `clobbersFlags: true` (x64

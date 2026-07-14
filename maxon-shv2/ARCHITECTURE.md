@@ -1798,10 +1798,19 @@ cover any length in the band with straight-line code — no loop, and no ragged-
 handling for lengths that are not multiples of 8. Zeroing a byte twice is free; branching
 to decide whether to is not.
 
-If the memzero is a Target-dialect op rather than a raw encoder, it must declare
-**`setsFlags: true`** — the ladder `cmp`s the length to pick an arm. (v1's `memcpy` op
-declares `false`, correct for a bare `rep movsb`; copying that metadata onto memzero lets
-the scheduler hoist a `cmp` feeding a `condBranch` across it — a silent miscompile.)
+**The memzero MUST be declared FLAG-CLOBBERING** — the size ladder `cmp`s the length to pick
+an arm, so it writes EFLAGS. As a Std-dialect op that means **`clobbersFlags: true`**. (v1's
+`memcpy` op declares its flags fact `false`, correct for a bare `rep movsb`; copying that
+metadata onto memzero lets the scheduler hoist a `cmp` feeding a `condBranch` across it — a
+silent miscompile.)
+
+⚠ **Do not go looking for a `setsFlags` on `TargetOpMeta` to declare this on — there isn't
+one, deliberately** (deleted 2026-07-14: 40 writes, 0 reads, and it *contradicted* the Std
+tier). The flags fact lives **once**, at the Std tier, as `StdOpMeta.clobbersFlags`, because
+its only consumer — `recordFusableCompare`'s compare/branch fusion — runs on StdOps **before**
+lowering, since its answer is what decides what the lowering emits. See the comment on
+`TargetOpMeta` for the full story; it is a worked example of this project's most expensive
+recurring bug, *one fact written down twice*.
 
 The v1 implementation of all of the above is `stdlib/Internals.maxon` (the slab) and
 `maxon-selfhosted/Compiler/Targets/*/` (`emitX64MemzeroOp`, `arm64EmitMemzeroOp`,

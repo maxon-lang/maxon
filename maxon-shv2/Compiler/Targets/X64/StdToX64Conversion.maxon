@@ -50,8 +50,18 @@ let Imm32ZeroExtendedMin = 0 as MachineWord
 // `-7` parses as `7` under a `neg`. Type-qualified bounds (`u64.max` = -1, `i64.min`) are
 // the first negative constants to reach here.
 //
-// GROWS the value==0 `xor reg,reg` zeroing idiom when a flag-neutral-vs-shorter tradeoff
-// first matters.
+// EVERY form this emits is a `mov`, and `mov r, imm` WRITES NO FLAGS. `StdOp.const` declares
+// `clobbersFlags: false` on the strength of exactly that, and compare/branch fusion depends on
+// it: a short-circuit's seed literal sits between a compare and its branch, so a `const` that
+// claimed to clobber flags cost 3 instructions on every `if a > 0 and b > 0`.
+//
+// ⚠ SO IF YOU ADD THE value==0 `xor reg, reg` ZEROING IDIOM HERE — the shorter encoding, still
+// tempting — YOU MUST FIRST DEAL WITH `StdOp.const.clobbersFlags`. `xor` DOES write flags, so
+// `const`'s flag behaviour would become VALUE-DEPENDENT (flag-neutral for every value but 0),
+// which per-variant metadata cannot express: split the variant, or take `clobbersFlags: true`
+// back and accept the lost fusion. Landing the idiom alone is a SILENT MISCOMPILE — a `jcc`
+// would read flags the `xor` had already destroyed. This is the flag-neutral half of the
+// "flag-neutral-vs-shorter" tradeoff, and it is not free.
 export function constMaterializationOp(dest X64VReg, value MachineWord) returns TargetOp
 	if value >= Imm32ZeroExtendedMin and value <= u32.max 'fitsUnsigned32'
 		return TargetOp.movRegImm32(dest, value: value)
@@ -247,6 +257,25 @@ type StdToX64Lowering
 	// This is the guard that used to be a `panic` ("`condBranch` on a value no `cmp`
 	// defined"): a boolean condition that is a call result, a parameter or a merge phi has
 	// no flags to fuse, and it is now LOWERED (`cmp reg, 0` + `jne`) rather than rejected.
+	//
+	// ⚠ THE PRECONDITION NOBODY HAD WRITTEN DOWN, AND THE WHOLE THING RESTS ON IT: this scan
+	// runs on STD ops, but the REGISTER ALLOCATOR later inserts TARGET ops into the very
+	// window it just proved safe — the gap between a fused `cmp` and its `jcc`. The fusion
+	// survives only because **every op the allocator can insert there is flag-neutral**:
+	//
+	//     storeSlotReg · loadRegSlot (spill/reload) · movRegReg (phi copies, reuse copies) ·
+	//     xchgRegReg (permutation cycles) · a REMATERIALIZED `const` (`constMaterializationOp`,
+	//     a bare `mov r, imm`)
+	//
+	// Every one is a `mov`-class instruction that writes no EFLAGS. (`prologue`/`epilogue` DO
+	// write flags — they are a `sub`/`add rsp` — but they land at a function's entry and exit
+	// blocks, never inside a compare/branch window.)
+	//
+	// ⇒ **IF A FLAG-WRITING OP IS EVER ADDED TO WHAT THE ALLOCATOR CAN INSERT, THIS FUSION
+	// BECOMES A SILENT MISCOMPILE** — a `jcc` would read flags that op had already destroyed,
+	// and the Std-tier scan cannot see it coming, because the op does not exist at Std tier.
+	// The likeliest candidate is a spill/reload growing an address computation, or a memzero
+	// (whose size ladder `cmp`s — see ARCHITECTURE.md). Re-check this list then.
 	function computeFusedCmps(func IrFunction) returns CmpPredMap
 		var fused = CmpPredMap.create()
 		for blockRef in func.blockRefs 'eachBlock'
