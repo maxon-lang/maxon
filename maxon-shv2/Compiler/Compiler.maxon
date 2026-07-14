@@ -32,7 +32,13 @@
 // wall time measured here, so they sum to at most the total, and whatever they leave
 // over is printed as `unattributed` rather than absorbed — see CompileTimings.
 export function compile(inputPath FilePath, target Target, outputOverride String = "", emitIr bool = false, metricsPath String = "") returns FilePath throws CompileError
-	let whole = PhaseProbe.begin()
+	// Every trace event this compile emits is attributed to this unit. Derived from the input
+	// path — the same value `Project.create` derives from the root it is handed below — so the
+	// pre-project `load` bracket and everything after it agree on which compile they are.
+	let unit = traceUnitOf(inputPath)
+	setTraceUnit(unit)
+
+	let whole = PhaseProbe.begin(compilePhaseName(CompilePhase.load), unit: unit)
 
 	// Loading starts the instant the compile does, so `whole` is also the `load` phase's
 	// probe — a second set of reads here would sample the same instant.
@@ -43,12 +49,12 @@ export function compile(inputPath FilePath, target Target, outputOverride String
 
 	let outputPath = try resolveOutputPath(project, outputOverride: outputOverride)
 
-	let writeProbe = PhaseProbe.begin()
+	let writeProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.writeExe)
 	writeExecutable(codeResult, target: project.target, outputPath: outputPath)
 	recordPhase(project, phase: CompilePhase.writeExe, probe: writeProbe)
 
 	if emitIr 'emitIr'
-		let irProbe = PhaseProbe.begin()
+		let irProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.emitIr)
 		writeTargetIr(codeResult, outputPath: outputPath)
 		recordPhase(project, phase: CompilePhase.emitIr, probe: irProbe)
 	end 'emitIr'

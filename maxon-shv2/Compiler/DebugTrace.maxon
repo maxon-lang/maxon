@@ -1,0 +1,95 @@
+// DebugTrace — the compiler's own events, on the wire.
+//
+// WHY THIS EXISTS. shv2's Logger formats a String and prints it to stderr. That survives
+// exactly as long as the compiler is single-threaded. The moment the spec harness interleaves
+// N workers into one stderr (P1.0a) and green threads run under them (P1.5), a text log is not
+// degraded — it is USELESS: you cannot tell which worker, which compilation unit, or which
+// phase a line came from, and the lines themselves are torn.
+//
+// The fix is not a better text format. It is to stop emitting text on the hot path at all: a
+// binary event, into the shared-memory ring the compiled binary already carries, carrying the
+// green thread and the processor that emitted it, so the monitor can demux N workers back into
+// per-worker timelines. `maxon.exe`'s `__DebugStream` builtin is the door into that ring; this
+// file is shv2's side of it.
+//
+// TWO THINGS MAKE IT FREE ENOUGH TO LEAVE ON EVERYWHERE:
+//   * A NAME IS A NUMBER. `__DebugStream.nameId("regalloc")` is interned by the COMPILER into a
+//     blob in the executable and lowers to a u16. No String is built, nothing is allocated, and
+//     the monitor still prints "regalloc". A formatted log inside the register allocator would
+//     allocate into the very `mm` stream the trace exists to read, and cost more than the work
+//     it measures — so the structured tier does not allocate, at all.
+//   * TWO GATES, both in `maxon.exe`. Built without `--debugstream`, every call below emits ZERO
+//     instructions. Built with it but run without the monitor, each one is a load of `__ds_base`,
+//     a test, and a not-taken branch — the bail is inline, before any CALL.
+
+// A name, interned at compile time. The wire field is 16 bits (see the frozen schema in
+// ARCHITECTURE.md), so the range is the schema's, not a guess.
+export typealias TraceName = int(0 to 65535)
+
+// WHICH COMPILE a span belongs to. 32 bits on the wire. It is derived from the compile ROOT
+// rather than handed out by a counter, because a counter is shared mutable state and the whole
+// point of this file is to survive the day N compiles run at once: two workers hashing their own
+// root path race on nothing, and the same input yields the same id on every run — which is what
+// lets a normalized trace become a golden.
+export typealias TraceUnit = int(0 to u32.max)
+
+// The two numeric slots a structured event carries. Deliberately opaque: what they mean is the
+// emitting site's business, and the monitor prints them as numbers.
+export typealias TraceArg = int(0 to u64.max)
+
+// The unit id for a compile rooted at `path`.
+//
+// `String.hash` and not `contentHash`, for a reason the scale gate MEASURED: contentHash takes a
+// `toByteArray()` of its input, which ALLOCATES, and the scale test's per-rung memory goldens are
+// exact — one extra allocation per compile moved every golden in the suite. `String.hash` walks
+// the bytes in place (djb2 over `byteAt`) and allocates nothing, and its `HashValue` is already
+// the 32 bits the wire field wants, so there is nothing to fold either. An instrument that made
+// the thing it measures allocate would be exactly the failure this whole workstream exists to
+// avoid, one level down.
+export function traceUnitOf(path FilePath) returns TraceUnit
+	return path.path.hash()
+end 'traceUnitOf'
+
+// The interned name of every pipeline phase.
+//
+// EXHAUSTIVE BY CONSTRUCTION, and that is the point: a new CompilePhase does not compile until it
+// is named here, so a phase can never appear in the timing table and be anonymous in the trace.
+// The two tables are then guaranteed to describe the same set of phases.
+export function compilePhaseName(phase CompilePhase) returns TraceName
+	let id = match phase 'name'
+		load gives __DebugStream.nameId("load")
+		lex gives __DebugStream.nameId("lex")
+		parse gives __DebugStream.nameId("parse")
+		merge gives __DebugStream.nameId("merge")
+		resolveTypes gives __DebugStream.nameId("resolveTypes")
+		semanticCheck gives __DebugStream.nameId("semanticCheck")
+		lowerMaxonToStd gives __DebugStream.nameId("lowerMaxonToStd")
+		pruneDeadBlockArgs gives __DebugStream.nameId("pruneDeadBlockArgs")
+		elimTrivialBlockArgs gives __DebugStream.nameId("elimTrivialBlockArgs")
+		foldConstOperands gives __DebugStream.nameId("foldConstOperands")
+		sugarGate gives __DebugStream.nameId("sugarGate")
+		isel gives __DebugStream.nameId("isel")
+		regalloc gives __DebugStream.nameId("regalloc")
+		prologueEpilogue gives __DebugStream.nameId("prologueEpilogue")
+		runtimeAugment gives __DebugStream.nameId("runtimeAugment")
+		encode gives __DebugStream.nameId("encode")
+		link gives __DebugStream.nameId("link")
+		writeExe gives __DebugStream.nameId("writeExe")
+		emitIr gives __DebugStream.nameId("emitIr")
+	end 'name'
+	return id as TraceName
+end 'compilePhaseName'
+
+// The interned name of every register-allocator sub-phase. Same contract as above.
+export function regAllocPhaseName(phase RegAllocPhase) returns TraceName
+	let id = match phase 'name'
+		criticalEdges gives __DebugStream.nameId("regalloc.criticalEdges")
+		blockOrder gives __DebugStream.nameId("regalloc.blockOrder")
+		splitting gives __DebugStream.nameId("regalloc.splitting")
+		liveness gives __DebugStream.nameId("regalloc.liveness")
+		coloring gives __DebugStream.nameId("regalloc.coloring")
+		ssaDestruction gives __DebugStream.nameId("regalloc.ssaDestruction")
+		rewrite gives __DebugStream.nameId("regalloc.rewrite")
+	end 'name'
+	return id as TraceName
+end 'regAllocPhaseName'

@@ -1645,6 +1645,7 @@ public static class RefcountOptimizationPass {
     // Guarded runtime calls are C functions — no BorrowOnlyParamIndices annotation exists for them,
     // so no borrow-aware relaxation is possible here. mm_incref is the only safe exception.
     if (op is StdCallRuntimeIfNonnullOp grt && grt.Callee != "mm_incref") return true;
+    if (op is StdCallRuntimeIfNonzeroOp) return true;
     return false;
   }
 

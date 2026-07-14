@@ -137,6 +137,13 @@ public static class PurityAnalysisPass {
           // (e.g. __managed_file_exists / __managed_file_close / __managed_file_stat_field).
           case MaxonCallOp callOp when ImpureManagedMemBuiltins.Contains(callOp.Callee):
             return true;
+          // __DebugStream: writing an event into the ring is I/O. Only the EMITTING ops are
+          // impure — `enabled()` and `nameId()` are pure reads of compile-time/global state,
+          // and a caller that does nothing but ask them stays foldable.
+          case MaxonDebugStreamPhaseOp:
+          case MaxonDebugStreamEventOp:
+          case MaxonDebugStreamTextOp:
+            return true;
         }
       }
     }

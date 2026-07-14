@@ -11,7 +11,7 @@ namespace MaxonSharp;
 public class DebugStreamMonitor {
 
   public static int Run(string[] args) {
-    // Parse args: [--filter=mm|sched] <exe> [exe-args...]
+    // Parse args: [--filter=mm|sched|log] <exe> [exe-args...]
     string? filter = null;
     int exeIndex = 0;
 
@@ -25,7 +25,7 @@ public class DebugStreamMonitor {
     }
 
     if (exeIndex >= args.Length) {
-      Console.Error.WriteLine("Usage: maxon monitor [--filter=mm|sched] <exe> [args...]");
+      Console.Error.WriteLine("Usage: maxon monitor [--filter=mm|sched|log] <exe> [args...]");
       return 1;
     }
 
@@ -83,8 +83,11 @@ public class DebugStreamMonitor {
     long readCursor = 0;
     long bufferSize = RuntimeEmitter.DsDefaultBufferSize;
     long bufferMask = bufferSize - 1;
-    // Read tag names from the executable's .symtab section
-    string[] tagNames = ReadTagsFromExecutable(Path.GetFullPath(exePath));
+    // Read the two interned-name tables out of the executable's .symtab section: MXDS_TAGS
+    // (mm allocation type names) and MXDS_STRS (the names `__DebugStream` interned at compile
+    // time). Both exist so an event can carry a u16 and still print as a real name.
+    string[] tagNames = ReadNameTableFromExecutable(Path.GetFullPath(exePath), RuntimeEmitter.DsTagTableMagic);
+    string[] logNames = ReadNameTableFromExecutable(Path.GetFullPath(exePath), RuntimeEmitter.DsStrTableMagic);
 
     // Buffered output for event lines (avoids per-line Console.WriteLine overhead)
     using var stdout = new StreamWriter(Console.OpenStandardOutput(), bufferSize: 65536);
@@ -167,8 +170,12 @@ public class DebugStreamMonitor {
           continue;
         }
 
-        // Pre-filter before formatting
-        if (filter == "sched" && eventType <= RuntimeEmitter.DsEvMmRawFree) {
+        // Pre-filter before formatting. The families are contiguous code ranges (see the event
+        // table in RuntimeEmitter): mm below DsEvSchedSpawn, sched/dbg between it and the Log
+        // range, and the Log events — the ones USER MAXON SOURCE emitted — at the top.
+        bool isLogEvent = eventType >= RuntimeEmitter.DsEvLogPhaseBegin
+                       && eventType <= RuntimeEmitter.DsEvLogText;
+        if (filter == "sched" && (eventType <= RuntimeEmitter.DsEvMmRawFree || isLogEvent)) {
           localOffset += entrySize;
           continue;
         }
@@ -176,8 +183,12 @@ public class DebugStreamMonitor {
           localOffset += entrySize;
           continue;
         }
+        if (filter == "log" && !isLogEvent) {
+          localOffset += entrySize;
+          continue;
+        }
 
-        string? line = FormatEventFromBuffer(eventType, localBuf, (int)localOffset, tagNames);
+        string? line = FormatEventFromBuffer(eventType, localBuf, (int)localOffset, tagNames, logNames);
 
         if (line != null) {
           string indent = depth < indentCache.Length ? indentCache[depth] : new string(' ', depth * 2);
@@ -224,10 +235,12 @@ public class DebugStreamMonitor {
   }
 
   /// <summary>
-  /// Parse the PE executable to find the .symtab section, then scan for the
-  /// MXDS_TAGS magic to locate the packed tag table blob.
+  /// Parse the PE executable to find the .symtab section, then scan it for a packed name-table
+  /// blob carrying <paramref name="magic"/>. Two blobs use this: MXDS_TAGS (mm allocation type
+  /// names) and MXDS_STRS (the names `__DebugStream` interned at compile time). One parser, so
+  /// the two can never drift apart on the format.
   /// </summary>
-  private static string[] ReadTagsFromExecutable(string exePath) {
+  private static string[] ReadNameTableFromExecutable(string exePath, byte[] magic) {
     try {
       using var fs = new FileStream(exePath, FileMode.Open, FileAccess.Read, FileShare.Read);
       using var reader = new BinaryReader(fs);
@@ -262,20 +275,20 @@ public class DebugStreamMonitor {
         fs.Seek(16, SeekOrigin.Current); // skip remaining section header fields
 
         if (name == ".symtab") {
-          return ScanForTagBlob(fs, reader, rawDataPointer, rawDataSize);
+          return ScanForNameBlob(fs, reader, rawDataPointer, rawDataSize, magic);
         }
       }
     } catch {
-      // PE parsing failed — return empty tag table
+      // PE parsing failed — return an empty table; the decoder falls back to raw indices
     }
     return [];
   }
 
   /// <summary>
-  /// Scan the .symtab section bytes for the MXDS_TAGS magic prefix and decode the tag table.
+  /// Scan the .symtab section bytes for the magic prefix and decode the packed name table.
   /// </summary>
-  private static string[] ScanForTagBlob(FileStream fs, BinaryReader reader, uint sectionOffset, uint sectionSize) {
-    var magic = RuntimeEmitter.DsTagTableMagic;
+  private static string[] ScanForNameBlob(FileStream fs, BinaryReader reader, uint sectionOffset,
+      uint sectionSize, byte[] magic) {
     fs.Seek(sectionOffset, SeekOrigin.Begin);
     var sectionData = reader.ReadBytes((int)sectionSize);
 
@@ -308,26 +321,43 @@ public class DebugStreamMonitor {
     return [];
   }
 
-  private static string ResolveTag(int tagIndex, string[] tagNames) {
-    if (tagIndex > 0 && tagIndex < tagNames.Length && !string.IsNullOrEmpty(tagNames[tagIndex]))
-      return tagNames[tagIndex];
-    return $"tag={tagIndex}";
+  /// <summary>
+  /// Resolve an interned index back to the name the compiler embedded in the executable. Index 0
+  /// means "no name" in both tables, and a name may legitimately be missing (an executable built
+  /// by an older compiler), so an unresolvable index prints as `<field>=<n>` rather than throwing
+  /// — a trace with one raw number in it is still worth reading.
+  /// </summary>
+  private static string ResolveInternedName(int index, string[] names, string fieldName) {
+    if (index > 0 && index < names.Length && !string.IsNullOrEmpty(names[index]))
+      return names[index];
+    return $"{fieldName}={index}";
   }
 
-  private static string? FormatEventFromBuffer(byte eventType, byte[] buf, int offset, string[] tagNames) {
+  // The two interned-name fields the events carry. MXDS_TAGS holds mm allocation TYPE names;
+  // MXDS_STRS holds the names `__DebugStream` interned at compile time.
+  private const string TagFieldName = "tag";
+  private const string LogNameFieldName = "name";
+
+  private static string? FormatEventFromBuffer(byte eventType, byte[] buf, int offset, string[] tagNames,
+      string[] logNames) {
     switch (eventType) {
+      case RuntimeEmitter.DsEvLogPhaseBegin:
+      case RuntimeEmitter.DsEvLogPhaseEnd:
+      case RuntimeEmitter.DsEvLogEvent:
+      case RuntimeEmitter.DsEvLogText:
+        return FormatLogEvent(eventType, buf, offset, logNames);
       case RuntimeEmitter.DsEvMmAlloc: {
         long allocId = BitConverter.ToInt64(buf, offset + 8);
         long tagAndSize = BitConverter.ToInt64(buf, offset + 16);
         int tagIndex = (int)(tagAndSize & 0xFFFF);
         int size = (int)((tagAndSize >> 32) & 0xFFFFFFFF);
-        return $"mm_alloc {ResolveTag(tagIndex, tagNames)} #{allocId} size={size}";
+        return $"mm_alloc {ResolveInternedName(tagIndex, tagNames, TagFieldName)} #{allocId} size={size}";
       }
       case RuntimeEmitter.DsEvMmFree: {
         long allocId = BitConverter.ToInt64(buf, offset + 8);
         long tagField = BitConverter.ToInt64(buf, offset + 16);
         int tagIndex = (int)(tagField & 0xFFFF);
-        return $"mm_free {ResolveTag(tagIndex, tagNames)} #{allocId}";
+        return $"mm_free {ResolveInternedName(tagIndex, tagNames, TagFieldName)} #{allocId}";
       }
       case RuntimeEmitter.DsEvMmIncref:
       case RuntimeEmitter.DsEvMmDecref:
@@ -342,7 +372,7 @@ public class DebugStreamMonitor {
         long tagAndRc = BitConverter.ToInt64(buf, offset + 16);
         int tagIndex = (int)(tagAndRc & 0xFFFF);
         int rc = (int)((tagAndRc >> 32) & 0xFFFFFFFF);
-        return $"{name} {ResolveTag(tagIndex, tagNames)} #{allocId} rc={rc}";
+        return $"{name} {ResolveInternedName(tagIndex, tagNames, TagFieldName)} #{allocId} rc={rc}";
       }
       case RuntimeEmitter.DsEvMmRawAlloc: {
         long rawId = BitConverter.ToInt64(buf, offset + 8);
@@ -358,14 +388,14 @@ public class DebugStreamMonitor {
         long tagAndSize = BitConverter.ToInt64(buf, offset + 16);
         int tagIndex = (int)(tagAndSize & 0xFFFF);
         int size = (int)((tagAndSize >> 32) & 0xFFFFFFFF);
-        return $"mm_realloc {ResolveTag(tagIndex, tagNames)} #{allocId} size={size}";
+        return $"mm_realloc {ResolveInternedName(tagIndex, tagNames, TagFieldName)} #{allocId} size={size}";
       }
       case RuntimeEmitter.DsEvMmCow: {
         long allocId = BitConverter.ToInt64(buf, offset + 8);
         long tagAndSize = BitConverter.ToInt64(buf, offset + 16);
         int tagIndex = (int)(tagAndSize & 0xFFFF);
         int size = (int)((tagAndSize >> 32) & 0xFFFFFFFF);
-        return $"mm_cow {ResolveTag(tagIndex, tagNames)} #{allocId} size={size}";
+        return $"mm_cow {ResolveInternedName(tagIndex, tagNames, TagFieldName)} #{allocId} size={size}";
       }
       case RuntimeEmitter.DsEvSchedSpawn:
       case RuntimeEmitter.DsEvSchedAwait:
@@ -415,6 +445,51 @@ public class DebugStreamMonitor {
         throw new InvalidOperationException($"Event type 0x{eventType:X2} should be handled before FormatEventFromBuffer");
     }
     throw new InvalidOperationException($"Unknown debug stream event type: 0x{eventType:X2}");
+  }
+
+  /// <summary>
+  /// Decode the Log events — the ones USER MAXON SOURCE emitted through the `__DebugStream`
+  /// builtin. Every one of them carries gt + p_id + unit_id, which is what lets N interleaved
+  /// workers be demuxed back into per-worker, per-unit timelines.
+  ///
+  /// `cat` and `lvl` print numerically: the wire schema fixes them as raw bytes, and their
+  /// meaning belongs to the emitting program's own category/level enums, which the monitor
+  /// deliberately does not know. Anything the monitor DOES name — a phase, an event — is an
+  /// interned index into MXDS_STRS, so it costs the emitting program nothing to be readable.
+  /// </summary>
+  private static string FormatLogEvent(byte eventType, byte[] buf, int offset, string[] logNames) {
+    long gt = BitConverter.ToInt64(buf, offset + RuntimeEmitter.DsLogOffGt);
+    long pId = BitConverter.ToInt64(buf, offset + RuntimeEmitter.DsLogOffPid);
+    long fields = BitConverter.ToInt64(buf, offset + RuntimeEmitter.DsLogOffFields);
+    uint unitId = (uint)((fields >> RuntimeEmitter.DsLogUnitIdShift) & uint.MaxValue);
+    string who = $"gt=0x{gt:x} P{pId} unit={unitId}";
+
+    switch (eventType) {
+      case RuntimeEmitter.DsEvLogPhaseBegin:
+      case RuntimeEmitter.DsEvLogPhaseEnd: {
+        int phaseId = (int)(fields & RuntimeEmitter.DsLogU16FieldMask);
+        string verb = eventType == RuntimeEmitter.DsEvLogPhaseBegin ? "log_phase_begin" : "log_phase_end";
+        return $"{verb} {ResolveInternedName(phaseId, logNames, LogNameFieldName)} {who}";
+      }
+      case RuntimeEmitter.DsEvLogEvent: {
+        int category = (int)(fields & RuntimeEmitter.DsLogCatMask);
+        int level = (int)((fields >> RuntimeEmitter.DsLogLvlShift) & RuntimeEmitter.DsLogLvlMask);
+        int eventId = (int)((fields >> RuntimeEmitter.DsLogU16FieldShift) & RuntimeEmitter.DsLogU16FieldMask);
+        long arg0 = BitConverter.ToInt64(buf, offset + RuntimeEmitter.DsLogOffArg0);
+        long arg1 = BitConverter.ToInt64(buf, offset + RuntimeEmitter.DsLogOffArg1);
+        return $"log_event {ResolveInternedName(eventId, logNames, LogNameFieldName)} cat={category} lvl={level} {who} a0={arg0} a1={arg1}";
+      }
+      case RuntimeEmitter.DsEvLogText: {
+        int category = (int)(fields & RuntimeEmitter.DsLogCatMask);
+        int level = (int)((fields >> RuntimeEmitter.DsLogLvlShift) & RuntimeEmitter.DsLogLvlMask);
+        int len = (int)((fields >> RuntimeEmitter.DsLogU16FieldShift) & RuntimeEmitter.DsLogU16FieldMask);
+        var text = System.Text.Encoding.UTF8.GetString(buf, offset + RuntimeEmitter.DsLogOffText, len)
+          .TrimEnd('\r', '\n');
+        return $"log_text cat={category} lvl={level} {who} {text}";
+      }
+      default:
+        throw new InvalidOperationException($"Unexpected log event type: 0x{eventType:X2}");
+    }
   }
 
   private static string FormatDbgEvent(byte eventType, long gt, long pId, long arg2, long arg3, long arg4) {

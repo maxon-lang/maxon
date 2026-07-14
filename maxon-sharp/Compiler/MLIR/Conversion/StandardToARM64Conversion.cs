@@ -15,6 +15,7 @@ public static class StandardToARM64Conversion {
     result.Globals.AddRange(module.Globals);
     result.TagTable = module.TagTable;
     result.TagNames = module.TagNames;
+    result.DebugStreamNames = module.DebugStreamNames;
     foreach (var (k, v) in module.TypeDefs) result.TypeDefs[k] = v;
 
     foreach (var func in module.Functions) {
@@ -510,14 +511,18 @@ public static class StandardToARM64Conversion {
         break;
 
       case StdCallRuntimeIfNonnullOp rtCallIfNonnull:
-        // Spill before branching so values remain accessible if skipped
-        regManager.SpillAllLiveRegisters(block);
-        regManager.EmitBoolTest(rtCallIfNonnull.Args[0], block);
-        var skipLabel = $"{funcName}.__skip_guarded_{currentOpIndex}";
-        block.AddOp(new ARM64BranchCondOp(ARM64ConditionCode.Eq, skipLabel));
-        regManager.EmitCall(rtCallIfNonnull.Callee, rtCallIfNonnull.Args, rtCallIfNonnull.Result, block,
-          ConsumedArgs(rtCallIfNonnull.Args, lastUseOfValue, currentOpIndex));
-        block.AddOp(new ARM64LabelDefOp(skipLabel));
+        // Null-guarded runtime call: skip if first arg is null.
+        EmitGuardedRuntimeCall(regManager, block, funcName, guard: rtCallIfNonnull.Args[0],
+          rtCallIfNonnull.Callee, rtCallIfNonnull.Args, rtCallIfNonnull.Result,
+          lastUseOfValue, currentOpIndex);
+        break;
+
+      case StdCallRuntimeIfNonzeroOp rtCallIfNonzero:
+        // Flag-guarded runtime call: the guard is NOT an argument (the DebugStream
+        // producer's inline `__ds_base == 0` bail — see StdCallRuntimeIfNonzeroOp).
+        EmitGuardedRuntimeCall(regManager, block, funcName, rtCallIfNonzero.Guard,
+          rtCallIfNonzero.Callee, rtCallIfNonzero.Args, result: null,
+          lastUseOfValue, currentOpIndex);
         break;
 
       case StdTryCallOp tryCall:
@@ -887,6 +892,25 @@ public static class StandardToARM64Conversion {
 
   private static bool IsLastUse(Dictionary<StdValue, int> lastUseOfValue, StdValue value, int currentOpIndex) {
     return lastUseOfValue.TryGetValue(value, out var lastUse) && lastUse == currentOpIndex;
+  }
+
+  /// <summary>
+  /// Emit a runtime call the guard value branches over: test the guard, skip the whole call
+  /// when it is zero. Shared by the null-guarded refcount calls (guard = first arg) and the
+  /// DebugStream producer (guard = `__ds_base`, and NOT an argument). Mirrors the x64 twin.
+  ///
+  /// Every live register is spilled BEFORE the branch, so a value stays reachable on the
+  /// skip path — the two paths merge at the label with the same memory state.
+  /// </summary>
+  private static void EmitGuardedRuntimeCall(ARM64RegisterManager regManager, IrBlock<ARM64Op> block,
+      string funcName, StdValue guard, string callee, List<StdValue> args, StdValue? result,
+      Dictionary<StdValue, int> lastUseOfValue, int currentOpIndex) {
+    regManager.SpillAllLiveRegisters(block);
+    regManager.EmitBoolTest(guard, block);
+    var skipLabel = $"{funcName}.__skip_guarded_{currentOpIndex}";
+    block.AddOp(new ARM64BranchCondOp(ARM64ConditionCode.Eq, skipLabel));
+    regManager.EmitCall(callee, args, result, block, ConsumedArgs(args, lastUseOfValue, currentOpIndex));
+    block.AddOp(new ARM64LabelDefOp(skipLabel));
   }
 
   private static HashSet<StdValue>? ConsumedArgs(List<StdValue> args, Dictionary<StdValue, int> lastUseOfValue, int currentOpIndex) {

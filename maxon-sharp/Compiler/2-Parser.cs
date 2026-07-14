@@ -1371,6 +1371,44 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       ["self"], [mln], elem);
     RegisterBuiltinMethod("__ManagedListNode", "setValue",
       ["self", "v"], [mln, elem], null);
+
+    RegisterDebugStreamMethods(mm);
+  }
+
+  // --- __DebugStream: the builtin that puts a structured event into the DebugStream ring ---
+  //
+  // A static-only builtin: it has no instances and no state, so unlike the __Managed* family it
+  // registers no struct type — only the static methods below, dispatched through the same
+  // builtin-static path they use.
+  //
+  // `nameId` is the odd one out and deliberately so: its argument is not a Maxon *value* but a
+  // compile-time NAME, interned into the MXDS_STRS blob so that an event carries a u16 and no
+  // string is ever built at runtime. It is parsed by hand (see EmitDebugStreamNameId) rather
+  // than through the generic argument parser, exactly as __ManagedMemory.create's element size is.
+  internal const string DebugStreamTypeName = "__DebugStream";
+  internal const string DebugStreamNameIdMethod = "nameId";
+
+  /// The `__DebugStream` methods that EMIT an event and return nothing — the ones a caller
+  /// writes as a bare statement. Every other method on the type yields a value.
+  private static bool IsDebugStreamVoidMethod(string methodName) =>
+    methodName is "phaseBegin" or "phaseEnd" or "event" or "text";
+
+  private static bool IsDebugStreamStaticMethod(string methodName) =>
+    IsDebugStreamVoidMethod(methodName) || methodName is "enabled" or DebugStreamNameIdMethod;
+
+  private void RegisterDebugStreamMethods(IrType mm) {
+    RegisterBuiltinMethod(DebugStreamTypeName, "enabled",
+      [], [], IrType.I1, isStatic: true);
+    RegisterBuiltinMethod(DebugStreamTypeName, "phaseBegin",
+      ["nameId", "unitId"], [IrType.I64, IrType.I64], null, isStatic: true);
+    RegisterBuiltinMethod(DebugStreamTypeName, "phaseEnd",
+      ["nameId", "unitId"], [IrType.I64, IrType.I64], null, isStatic: true);
+    RegisterBuiltinMethod(DebugStreamTypeName, "event",
+      ["nameId", "category", "level", "unitId", "arg0", "arg1"],
+      [IrType.I64, IrType.I64, IrType.I64, IrType.I64, IrType.I64, IrType.I64], null, isStatic: true);
+    RegisterBuiltinMethod(DebugStreamTypeName, "text",
+      ["category", "level", "unitId", "message"],
+      [IrType.I64, IrType.I64, IrType.I64, mm], null, isStatic: true);
   }
 
   /// <summary>
@@ -7236,6 +7274,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
           var nextMethod = _tokens[_pos + 2].Value;
           bool isBuiltinStaticStmt = resolvedBase switch {
             "__ManagedFile" when nextMethod is "statFree" => true,
+            DebugStreamTypeName when IsDebugStreamVoidMethod(nextMethod) => true,
             _ => false,
           };
           if (isBuiltinStaticStmt) {
@@ -7246,7 +7285,11 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
             Advance(); // consume '('
             var qualifiedName2 = $"{resolvedBase}.{methodToken.Value}";
             var args = ParseBuiltinStaticMethodArgs(methodToken, qualifiedName2);
-            var (handled, _) = TryEmitBuiltinManagedFileStaticMethod(methodToken.Value, args, methodToken);
+            var (handled, _) = resolvedBase switch {
+              "__ManagedFile" => TryEmitBuiltinManagedFileStaticMethod(methodToken.Value, args, methodToken),
+              DebugStreamTypeName => TryEmitBuiltinDebugStreamStaticMethod(methodToken.Value, args, methodToken),
+              _ => throw new InvalidOperationException($"Unhandled builtin static statement type '{resolvedBase}'")
+            };
             if (handled) return;
             throw new CompileError(ErrorCode.ParserExpectedExpression,
               $"Unknown static method '{methodToken.Value}' on {resolvedBase}",
@@ -10793,6 +10836,63 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       }
     }
     return (false, null);
+  }
+
+  /// <summary>
+  /// Emits `__DebugStream.nameId("literal")`. The opening '(' has already been consumed.
+  ///
+  /// The argument is a compile-time NAME, not a runtime value: it is interned into the
+  /// MXDS_STRS blob during lowering and the call becomes the u16 index. That is the whole
+  /// reason the structured event tier can be zero-alloc — a name never exists at runtime — so
+  /// a non-literal argument is rejected here rather than silently degraded to something that
+  /// would allocate.
+  /// </summary>
+  private MaxonValue EmitDebugStreamNameId() {
+    if (!Check(TokenType.StringLiteral))
+      throw new CompileError(ErrorCode.ParserExpectedExpression,
+        $"{DebugStreamTypeName}.{DebugStreamNameIdMethod} takes a string LITERAL — the name is interned at " +
+        "compile time so the event carries only a u16, and a runtime string cannot be",
+        Current().Line, Current().Column);
+
+    var nameToken = Advance();
+    Expect(TokenType.RightParen);
+
+    var op = new MaxonDebugStreamNameIdOp(nameToken.Value);
+    _currentBlock!.AddOp(op);
+    return op.Result;
+  }
+
+  /// <summary>
+  /// Emits the `__DebugStream` static methods other than `nameId`, whose arguments are ordinary
+  /// Maxon values parsed against the registered signature. Returns (true, result) when handled;
+  /// the emitting methods are void, so only `enabled` yields a value.
+  /// </summary>
+  private (bool Handled, MaxonValue? Result) TryEmitBuiltinDebugStreamStaticMethod(
+      string methodName, List<MaxonValue> args, Token methodToken) {
+    switch (methodName) {
+      case "enabled": {
+        var op = new MaxonDebugStreamEnabledOp();
+        _currentBlock!.AddOp(op);
+        return (true, op.Result);
+      }
+      case "phaseBegin":
+      case "phaseEnd": {
+        _currentBlock!.AddOp(new MaxonDebugStreamPhaseOp(isBegin: methodName == "phaseBegin", args[0], args[1]));
+        return (true, null);
+      }
+      case "event": {
+        _currentBlock!.AddOp(new MaxonDebugStreamEventOp(args[0], args[1], args[2], args[3], args[4], args[5]));
+        return (true, null);
+      }
+      case "text": {
+        _currentBlock!.AddOp(new MaxonDebugStreamTextOp(args[0], args[1], args[2], args[3]));
+        return (true, null);
+      }
+      default:
+        throw new CompileError(ErrorCode.ParserExpectedExpression,
+          $"Unknown static method '{methodName}' on {DebugStreamTypeName}",
+          methodToken.Line, methodToken.Column);
+    }
   }
 
   /// <summary>
@@ -15050,6 +15150,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
             "__ManagedFile" when nextMethod is "openRead" or "openWrite" or "openWriteExecutable" or "exists" or "delete" or "rename" or "stat" or "statField" or "statFree" => true,
             "__ManagedDirectory" when nextMethod is "openSearch" or "exists" or "create" or "currentPath" => true,
             "__ManagedList" when nextMethod is "create" => true,
+            DebugStreamTypeName when IsDebugStreamStaticMethod(nextMethod) => true,
             _ => false,
           };
           if (isBuiltinStatic) {
@@ -15064,6 +15165,9 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
               // Special: ManagedMemory uses ParseElementSizeConstant, keep old parsing
               ValidateThrowingBuiltinCallContext("__ManagedMemory", staticMethodToken.Value, staticMethodToken);
               result = TryEmitBuiltinManagedMemoryStaticMethod(staticMethodToken.Value);
+            } else if (resolvedBase == DebugStreamTypeName && staticMethodToken.Value == DebugStreamNameIdMethod) {
+              // Special: the argument is an interned compile-time NAME, not a value.
+              result = (true, EmitDebugStreamNameId());
             } else {
               var qualifiedName2 = $"{resolvedBase}.{staticMethodToken.Value}";
               var args = ParseBuiltinStaticMethodArgs(staticMethodToken, qualifiedName2);
@@ -15072,6 +15176,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
                 "__ManagedFile" => TryEmitBuiltinManagedFileStaticMethod(staticMethodToken.Value, args, staticMethodToken),
                 "__ManagedDirectory" => TryEmitBuiltinManagedDirectoryStaticMethod(staticMethodToken.Value, args, staticMethodToken),
                 "__ManagedList" => TryEmitBuiltinManagedListStaticMethod(staticMethodToken.Value),
+                DebugStreamTypeName => TryEmitBuiltinDebugStreamStaticMethod(staticMethodToken.Value, args, staticMethodToken),
                 _ => throw new InvalidOperationException($"Unhandled builtin static type '{resolvedBase}'")
               };
             }

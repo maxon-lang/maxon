@@ -207,6 +207,11 @@ public enum MaxonOpKind {
   Await,
   TryAwait,
   CancelPromise,
+  DebugStreamEnabled,
+  DebugStreamNameId,
+  DebugStreamPhase,
+  DebugStreamEvent,
+  DebugStreamText,
 }
 
 public abstract class MaxonOp : IPrintableOp {
@@ -1798,4 +1803,79 @@ public sealed class MaxonCancelPromiseOp(MaxonValue promise) : MaxonOp {
   public override string Mnemonic => "maxon.cancel_promise";
   public MaxonValue Promise { get; } = promise;
   public override IReadOnlyList<string> PrintableOperands => [Promise.ToString()];
+}
+
+// ============================================================================
+// __DebugStream — the builtin that lets USER MAXON SOURCE put a structured event
+// into the shared-memory ring (Workstream O). Every other DebugStream event is
+// emitted by the runtime; these are the only ones a compiled program authors.
+//
+// TWO GATES, both load-bearing, and both enforced in the lowering:
+//   * COMPILE-TIME: with `--debugstream` off, every op below lowers to NOTHING.
+//     Not a branch that is never taken — no instructions at all.
+//   * RUNTIME: with the ring detached (`__ds_base == 0`), the emitting ops bail
+//     INLINE, before any CALL (StdCallRuntimeIfNonzeroOp).
+// ============================================================================
+
+/// True when the DebugStream ring is attached (`__ds_base != 0`). Lets a caller skip
+/// building a Tier-2 message that nothing would read. Folds to a constant `false`
+/// when DebugStream is off at compile time.
+public sealed class MaxonDebugStreamEnabledOp : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.DebugStreamEnabled;
+  public override string Mnemonic => "maxon.debugstream_enabled";
+  public MaxonBool Result { get; } = new MaxonBool(IrContext.Current.NextId());
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+}
+
+/// A name INTERNED AT COMPILE TIME into the MXDS_STRS blob. Lowers to the u16 index —
+/// so the event carries a number, the monitor prints the name, and the emitting program
+/// never builds a string. This is what makes the structured tier zero-alloc.
+public sealed class MaxonDebugStreamNameIdOp(string name) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.DebugStreamNameId;
+  public override string Mnemonic => $"maxon.debugstream_name_id \"{Name}\"";
+  public string Name { get; } = name;
+  public MaxonInteger Result { get; } = new MaxonInteger(IrContext.Current.NextId());
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+}
+
+/// LOG_PHASE_BEGIN / LOG_PHASE_END: one end of a nested, per-worker, per-unit span.
+/// `IsBegin` picks the event code; the payload is identical either way.
+public sealed class MaxonDebugStreamPhaseOp(bool isBegin, MaxonValue nameId, MaxonValue unitId) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.DebugStreamPhase;
+  public override string Mnemonic => IsBegin ? "maxon.debugstream_phase_begin" : "maxon.debugstream_phase_end";
+  public bool IsBegin { get; } = isBegin;
+  public MaxonValue NameId { get; } = nameId;
+  public MaxonValue UnitId { get; } = unitId;
+  public override IReadOnlyList<string> PrintableOperands => [NameId.ToString(), UnitId.ToString()];
+}
+
+/// LOG_EVENT: the structured tier. An interned name plus two numeric args — no String,
+/// no closure, no allocation, so a pass can emit one from inside the register allocator
+/// without polluting the very `mm` stream the trace exists to read.
+public sealed class MaxonDebugStreamEventOp(MaxonValue nameId, MaxonValue category, MaxonValue level,
+    MaxonValue unitId, MaxonValue arg0, MaxonValue arg1) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.DebugStreamEvent;
+  public override string Mnemonic => "maxon.debugstream_event";
+  public MaxonValue NameId { get; } = nameId;
+  public MaxonValue Category { get; } = category;
+  public MaxonValue Level { get; } = level;
+  public MaxonValue UnitId { get; } = unitId;
+  public MaxonValue Arg0 { get; } = arg0;
+  public MaxonValue Arg1 { get; } = arg1;
+  public override IReadOnlyList<string> PrintableOperands =>
+    [NameId.ToString(), Category.ToString(), Level.ToString(), UnitId.ToString(), Arg0.ToString(), Arg1.ToString()];
+}
+
+/// LOG_TEXT: the rare human message, as a length-prefixed UTF-8 tail read out of a
+/// __ManagedMemory. Allocating (the caller built the string), and it says so.
+public sealed class MaxonDebugStreamTextOp(MaxonValue category, MaxonValue level, MaxonValue unitId,
+    MaxonValue managed) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.DebugStreamText;
+  public override string Mnemonic => "maxon.debugstream_text";
+  public MaxonValue Category { get; } = category;
+  public MaxonValue Level { get; } = level;
+  public MaxonValue UnitId { get; } = unitId;
+  public MaxonValue Managed { get; } = managed;
+  public override IReadOnlyList<string> PrintableOperands =>
+    [Category.ToString(), Level.ToString(), UnitId.ToString(), Managed.ToString()];
 }

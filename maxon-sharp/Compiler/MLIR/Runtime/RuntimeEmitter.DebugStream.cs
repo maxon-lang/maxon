@@ -709,6 +709,215 @@ public partial class RuntimeEmitter {
     EmitDbgCall(DsEvDbgCsxExit, from, to, toRsp, toRbp);
   }
 
+  // =========================================================================
+  // Log events (Workstream O): the events USER MAXON SOURCE emits
+  // =========================================================================
+
+  /// <summary>
+  /// Write the emitting green thread and its owning processor id into a Log entry.
+  ///
+  /// EVERY Log event carries both, and that is the entire point of the family: it is what
+  /// lets the monitor demux N interleaved workers back into per-worker timelines instead of
+  /// a shuffled pile. The identity is read HERE rather than passed in from the call site,
+  /// so a call site costs only its own arguments — and so there is exactly one NULL guard
+  /// to get right. <see cref="IEmitterBackend.LoadCurrentP"/> returns NULL on non-scheduler
+  /// threads (the IOCP pool), where both fields correctly read 0.
+  ///
+  /// <paramref name="dataPtr"/> must be a register other than Scratch1/Scratch2.
+  /// </summary>
+  private void EmitDsStoreLogIdentity(VReg dataPtr) {
+    var pNull = UniqueLabel("ds_log_p_null");
+    var pDone = UniqueLabel("ds_log_p_done");
+
+    _b.LoadCurrentP(VReg.Scratch1);
+    _b.JumpIfZero(VReg.Scratch1, pNull);
+    _b.LoadIndirect(VReg.Scratch2, VReg.Scratch1, POffCurrentGt);
+    _b.StoreIndirect(dataPtr, DsLogOffGt, VReg.Scratch2);
+    _b.LoadIndirect(VReg.Scratch2, VReg.Scratch1, POffId);
+    _b.StoreIndirect(dataPtr, DsLogOffPid, VReg.Scratch2);
+    _b.Jump(pDone);
+
+    _b.DefineLabel(pNull);
+    _b.ZeroReg(VReg.Scratch2);
+    _b.StoreIndirect(dataPtr, DsLogOffGt, VReg.Scratch2);
+    _b.StoreIndirect(dataPtr, DsLogOffPid, VReg.Scratch2);
+
+    _b.DefineLabel(pDone);
+  }
+
+  /// <summary>
+  /// __ds_emit_log_phase(event_type, name_id, unit_id)
+  /// LOG_PHASE_BEGIN / LOG_PHASE_END. Payload: gt(8) p_id(8) phase_id(2) rsvd(2) unit_id(4).
+  ///
+  /// `name_id` indexes the MXDS_STRS blob, so the span carries a u16 and the monitor prints
+  /// the real phase name — no string is built, and nothing is allocated.
+  /// </summary>
+  public void EmitDsEmitLogPhase() {
+    _b.FunctionStart("__ds_emit_log_phase", 3, 0x60);
+    // Slots: 0=event_type, 1=name_id, 2=unit_id
+
+    _b.LoadLocal(VReg.Arg0, 0);
+    _b.MovRegImm(VReg.Arg1, DsLogPhaseEntrySize);
+    _b.Call("__ds_reserve");
+    var done = UniqueLabel("ds_log_phase_done");
+    _b.JumpIfZero(VReg.Ret, done);
+
+    EmitDsStoreLogIdentity(VReg.Ret);
+
+    // phase_id(2) | rsvd(2) | unit_id(4). rsvd stays 0 because the masked phase_id
+    // occupies only bits [0:15], and the unit_id shift discards anything above bit 31.
+    _b.LoadLocal(VReg.Scratch1, 1); // name_id
+    _b.MovRegImm(VReg.Scratch2, DsLogU16FieldMask);
+    _b.AndRegReg(VReg.Scratch1, VReg.Scratch2);
+    _b.LoadLocal(VReg.Scratch2, 2); // unit_id
+    _b.ShlRegImm(VReg.Scratch2, DsLogUnitIdShift);
+    _b.OrRegReg(VReg.Scratch1, VReg.Scratch2);
+    _b.StoreIndirect(VReg.Ret, DsLogOffFields, VReg.Scratch1);
+
+    _b.DefineLabel(done);
+    _b.FunctionEnd();
+  }
+
+  /// <summary>
+  /// __ds_emit_log_event(name_id, cat, lvl, unit_id, arg0, arg1)
+  /// LOG_EVENT — the structured, ZERO-ALLOC tier the compiler passes use. Payload reuses the
+  /// 48-byte Dbg shape: gt(8) p_id(8) cat(1) lvl(1) event_id(2) unit_id(4) arg0(8) arg1(8).
+  /// </summary>
+  public void EmitDsEmitLogEvent() {
+    _b.FunctionStart("__ds_emit_log_event", 6, 0x60);
+    // Slots: 0=name_id, 1=cat, 2=lvl, 3=unit_id, 4=arg0, 5=arg1
+
+    _b.MovRegImm(VReg.Arg0, DsEvLogEvent);
+    _b.MovRegImm(VReg.Arg1, DsLogEventEntrySize);
+    _b.Call("__ds_reserve");
+    var done = UniqueLabel("ds_log_event_done");
+    _b.JumpIfZero(VReg.Ret, done);
+
+    EmitDsStoreLogIdentity(VReg.Ret);
+
+    EmitDsPackLogFields(catSlot: 1, lvlSlot: 2, u16Slot: 0, unitSlot: 3);
+    _b.StoreIndirect(VReg.Ret, DsLogOffFields, VReg.Scratch1);
+
+    _b.LoadLocal(VReg.Scratch1, 4); // arg0
+    _b.StoreIndirect(VReg.Ret, DsLogOffArg0, VReg.Scratch1);
+    _b.LoadLocal(VReg.Scratch1, 5); // arg1
+    _b.StoreIndirect(VReg.Ret, DsLogOffArg1, VReg.Scratch1);
+
+    _b.DefineLabel(done);
+    _b.FunctionEnd();
+  }
+
+  /// <summary>
+  /// __ds_emit_log_text(cat, lvl, unit_id, ptr, len)
+  /// LOG_TEXT — the rare human message. Payload: gt(8) p_id(8) cat(1) lvl(1) len(2) unit_id(4),
+  /// then the UTF-8 bytes, zero-padded to an 8-byte boundary.
+  ///
+  /// TRUNCATE, NEVER TEAR: `entry_size` is a u16, so a message longer than
+  /// <see cref="DsLogTextMaxBytes"/> is clamped rather than split across entries — a split
+  /// would need a continuation code the frozen schema does not have, and a reader that
+  /// re-assembles it.
+  /// </summary>
+  public void EmitDsEmitLogText() {
+    _b.FunctionStart("__ds_emit_log_text", 5, 0x60);
+    // Slots: 0=cat, 1=lvl, 2=unit_id, 3=ptr, 4=len (clamped in place), 5=data_ptr
+
+    var lenOk = UniqueLabel("ds_log_text_len_ok");
+    var done = UniqueLabel("ds_log_text_done");
+    var copyLoop = UniqueLabel("ds_log_text_copy");
+    var copyDone = UniqueLabel("ds_log_text_copied");
+
+    // Clamp the length, and write it back: both the header's len field and the entry size
+    // must be computed from the SAME (clamped) value, or the reader walks off the entry.
+    _b.LoadLocal(VReg.Scratch1, 4);
+    _b.CmpRegImm(VReg.Scratch1, DsLogTextMaxBytes);
+    _b.JumpIf(Condition.BelowEqual, lenOk);
+    _b.MovRegImm(VReg.Scratch1, DsLogTextMaxBytes);
+    _b.StoreLocal(4, VReg.Scratch1);
+    _b.DefineLabel(lenOk);
+
+    // entry_size = DsLogTextFixedSize + align8(len)
+    _b.MovRegReg(VReg.Scratch2, VReg.Scratch1);
+    _b.AddRegImm(VReg.Scratch2, DsEntryAlignBias);
+    _b.MovRegImm(VReg.Scratch3, DsEntryAlignMask);
+    _b.AndRegReg(VReg.Scratch2, VReg.Scratch3);
+    _b.StoreLocal(6, VReg.Scratch2); // aligned tail size, reused by the pad-zeroing below
+    _b.AddRegImm(VReg.Scratch2, DsLogTextFixedSize);
+
+    _b.MovRegReg(VReg.Arg1, VReg.Scratch2);
+    _b.MovRegImm(VReg.Arg0, DsEvLogText);
+    _b.Call("__ds_reserve");
+    _b.JumpIfZero(VReg.Ret, done);
+    _b.StoreLocal(5, VReg.Ret); // data_ptr: the byte-copy loop below needs every scratch reg
+
+    EmitDsStoreLogIdentity(VReg.Ret);
+
+    EmitDsPackLogFields(catSlot: 0, lvlSlot: 1, u16Slot: 4, unitSlot: 2);
+    _b.StoreIndirect(VReg.Ret, DsLogOffFields, VReg.Scratch1);
+
+    // Zero the FINAL qword of the tail before copying. The ring is reused memory, so the pad
+    // bytes [len, align8(len)) would otherwise carry a previous entry's payload. Only the last
+    // qword can hold padding — align8(len) - 8 < len for every len > 0 — so one store suffices.
+    _b.LoadLocal(VReg.Scratch2, 6); // align8(len)
+    _b.JumpIfZero(VReg.Scratch2, copyDone);
+    _b.MovRegReg(VReg.Arg3, VReg.Ret);
+    _b.AddRegImm(VReg.Arg3, DsLogOffText);
+    _b.AddRegReg(VReg.Arg3, VReg.Scratch2);
+    _b.SubRegImm(VReg.Arg3, DsEntryAlign);
+    _b.ZeroReg(VReg.Scratch3);
+    _b.StoreIndirect(VReg.Arg3, 0, VReg.Scratch3);
+
+    // Byte-copy the message. The backend's indirect byte ops take a constant offset, so the
+    // cursors advance instead of being indexed.
+    _b.LoadLocal(VReg.Arg2, 3);      // src
+    _b.LoadLocal(VReg.Arg3, 5);      // data_ptr
+    _b.AddRegImm(VReg.Arg3, DsLogOffText); // dst
+    _b.LoadLocal(VReg.Scratch2, 4);  // remaining
+    _b.DefineLabel(copyLoop);
+    _b.JumpIfZero(VReg.Scratch2, copyDone);
+    _b.LoadIndirectByte(VReg.Scratch3, VReg.Arg2, 0);
+    _b.StoreIndirectByte(VReg.Arg3, 0, VReg.Scratch3);
+    _b.AddRegImm(VReg.Arg2, 1);
+    _b.AddRegImm(VReg.Arg3, 1);
+    _b.SubRegImm(VReg.Scratch2, 1);
+    _b.Jump(copyLoop);
+    _b.DefineLabel(copyDone);
+
+    _b.DefineLabel(done);
+    _b.FunctionEnd();
+  }
+
+  /// <summary>
+  /// Pack the DsLogOffFields word into Scratch1: cat(1) | lvl(1) | u16(2) | unit_id(4).
+  ///
+  /// LOG_EVENT and LOG_TEXT pack this word identically — only the meaning of the 16-bit slot
+  /// differs (an interned `event_id` for one, a byte `len` for the other) — so they pack HERE,
+  /// once. A second copy would eventually disagree with this one about a shift.
+  ///
+  /// Clobbers Scratch1..Scratch3.
+  /// </summary>
+  private void EmitDsPackLogFields(int catSlot, int lvlSlot, int u16Slot, int unitSlot) {
+    _b.LoadLocal(VReg.Scratch1, catSlot);
+    _b.MovRegImm(VReg.Scratch3, DsLogCatMask);
+    _b.AndRegReg(VReg.Scratch1, VReg.Scratch3);
+
+    _b.LoadLocal(VReg.Scratch2, lvlSlot);
+    _b.MovRegImm(VReg.Scratch3, DsLogLvlMask);
+    _b.AndRegReg(VReg.Scratch2, VReg.Scratch3);
+    _b.ShlRegImm(VReg.Scratch2, DsLogLvlShift);
+    _b.OrRegReg(VReg.Scratch1, VReg.Scratch2);
+
+    _b.LoadLocal(VReg.Scratch2, u16Slot);
+    _b.MovRegImm(VReg.Scratch3, DsLogU16FieldMask);
+    _b.AndRegReg(VReg.Scratch2, VReg.Scratch3);
+    _b.ShlRegImm(VReg.Scratch2, DsLogU16FieldShift);
+    _b.OrRegReg(VReg.Scratch1, VReg.Scratch2);
+
+    // unit_id occupies bits [32:63]; the shift itself discards anything that would not fit.
+    _b.LoadLocal(VReg.Scratch2, unitSlot);
+    _b.ShlRegImm(VReg.Scratch2, DsLogUnitIdShift);
+    _b.OrRegReg(VReg.Scratch1, VReg.Scratch2);
+  }
+
   /// <summary>
   /// __ds_emit_depth(event_type)
   /// DEPTH_INC or DEPTH_DEC: header-only event, no payload.
@@ -731,10 +940,11 @@ public partial class RuntimeEmitter {
   /// <summary>
   /// Emit all debugstream runtime functions. Call this when Compiler.DebugStream is true.
   /// </summary>
-  public void EmitDebugStreamFunctions(List<string?> tagNames) {
+  public void EmitDebugStreamFunctions(List<string?> tagNames, List<string?> logNames) {
     EmitDebugStreamGlobals();
     EmitDebugStreamWriteGlobals();
-    EmitDebugStreamTagBlob(tagNames);
+    EmitDebugStreamNameBlob(DsTagTableMagic, "__ds_tag_table", tagNames);
+    EmitDebugStreamNameBlob(DsStrTableMagic, "__ds_str_table", logNames);
     EmitDebugStreamInit();
     EmitDebugStreamShutdown();
     EmitDsReserve();
@@ -746,33 +956,39 @@ public partial class RuntimeEmitter {
     EmitDsEmitSched();
     EmitDsEmitDepth();
     EmitDsEmitDbg();
+    EmitDsEmitLogPhase();
+    EmitDsEmitLogEvent();
+    EmitDsEmitLogText();
   }
 
-  // Magic bytes at the start of the tag table blob in symdata, so the monitor can find it by scanning.
+  // Magic bytes at the start of each interned-name blob in symdata, so the monitor can find
+  // it by scanning the PE. MXDS_TAGS holds the mm allocation TYPE names; MXDS_STRS holds the
+  // names the `__DebugStream` builtin interned at compile time (phase names, event names).
+  // Two blobs, one format — a Log event carries a u16 into MXDS_STRS and stays zero-alloc.
   public static readonly byte[] DsTagTableMagic = "MXDS_TAGS\0"u8.ToArray();
+  public static readonly byte[] DsStrTableMagic = "MXDS_STRS\0"u8.ToArray();
 
   /// <summary>
-  /// Emit a packed tag table blob into symdata so the monitor can extract type names
-  /// by parsing the PE executable. The blob has a magic prefix for scanning.
-  /// Format: [magic: "MXDS_TAGS\0" (10 bytes)][count:u16][len0:u16][name0 bytes]...[lenN:u16][nameN bytes]
+  /// Emit a packed name-table blob into symdata so the monitor can resolve a u16 index back
+  /// to a real name by parsing the executable — no name is ever built at runtime.
+  /// Format: [magic (10 bytes)][count:u16][len0:u16][name0 bytes]...[lenN:u16][nameN bytes]
   /// </summary>
-  public void EmitDebugStreamTagBlob(List<string?> tagNames) {
+  public void EmitDebugStreamNameBlob(byte[] magic, string symdataLabel, List<string?> names) {
     var blob = new List<byte>();
-    blob.AddRange(DsTagTableMagic);
+    blob.AddRange(magic);
 
-    ushort count = (ushort)tagNames.Count;
+    ushort count = (ushort)names.Count;
     blob.Add((byte)(count & 0xFF));
     blob.Add((byte)(count >> 8));
 
-    for (int i = 0; i < tagNames.Count; i++) {
-      var name = tagNames[i] ?? "";
-      var nameBytes = System.Text.Encoding.UTF8.GetBytes(name);
+    foreach (var entry in names) {
+      var nameBytes = System.Text.Encoding.UTF8.GetBytes(entry ?? "");
       ushort len = (ushort)nameBytes.Length;
       blob.Add((byte)(len & 0xFF));
       blob.Add((byte)(len >> 8));
       blob.AddRange(nameBytes);
     }
 
-    _b.DefineSymdata("__ds_tag_table", [.. blob]);
+    _b.DefineSymdata(symdataLabel, [.. blob]);
   }
 }

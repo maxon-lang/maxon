@@ -136,6 +136,7 @@ public enum StdOpKind {
   CallRuntime,
   TryCallRuntime,
   CallRuntimeIfNonnull,
+  CallRuntimeIfNonzero,
   PtrToI64,
   MemCopy,
   MemCopyReverse,
@@ -1488,6 +1489,26 @@ public sealed class StdCallRuntimeIfNonnullOp(string callee, List<StdValue> args
   public override List<StdValue> ReadValues => Args;
   public override int PureResultId => -1;
   public override int AnyResultId => Result?.Id ?? -1;
+}
+
+/// <summary>
+/// Calls a void runtime function only when <see cref="Guard"/> is non-zero. The guard is a
+/// SEPARATE value, not an argument — it is never passed to the callee.
+///
+/// This is what gives the DebugStream producer its runtime gate: the emitting call sites load
+/// `__ds_base` and bail INLINE when the ring is not attached, before any CALL. (The MM events
+/// pay two real CALLs before their runtime-off check; that wart is not reproduced here.)
+/// </summary>
+public sealed class StdCallRuntimeIfNonzeroOp(StdValue guard, string callee, List<StdValue> args) : StandardOp {
+  public override StdOpKind Kind => StdOpKind.CallRuntimeIfNonzero;
+  public override string Mnemonic => $"std.call_runtime_if_nonzero @{Callee}";
+  public StdValue Guard { get; } = guard;
+  public string Callee { get; } = callee;
+  public List<StdValue> Args { get; } = args;
+  public override IReadOnlyList<string> PrintableOperands =>
+    [Guard.ToString(), .. Args.Select(a => a.ToString())];
+  public override List<StdValue> ReadValues => [Guard, .. Args];
+  public override int PureResultId => -1;
 }
 
 // ============================================================================

@@ -34,6 +34,7 @@ public static partial class MaxonToStandardConversion {
     _symdataTagCache = [];
     _tagIndexMap = [];
     _nextTagIndex = 1;
+    ResetDebugStreamNames();
     _symdataContextCache = [];
     _destructorRequests = [];
     _destructorLabelCache = [];
@@ -2155,6 +2156,23 @@ public static partial class MaxonToStandardConversion {
             case MaxonCursorIndexOp cursorIndexOp:
               LowerCursorIndex(cursorIndexOp, newBlock, valueMap, varTypes);
               break;
+            // __DebugStream: the builtin that lets user Maxon source emit into the ring.
+            // Every emitting op below is a NO-OP when DebugStream is off at compile time.
+            case MaxonDebugStreamEnabledOp dsEnabledOp:
+              LowerDebugStreamEnabled(dsEnabledOp, newBlock, valueMap);
+              break;
+            case MaxonDebugStreamNameIdOp dsNameIdOp:
+              LowerDebugStreamNameId(dsNameIdOp, newBlock, valueMap);
+              break;
+            case MaxonDebugStreamPhaseOp dsPhaseOp:
+              LowerDebugStreamPhase(dsPhaseOp, newBlock, valueMap);
+              break;
+            case MaxonDebugStreamEventOp dsEventOp:
+              LowerDebugStreamEvent(dsEventOp, newBlock, valueMap);
+              break;
+            case MaxonDebugStreamTextOp dsTextOp:
+              LowerDebugStreamText(dsTextOp, newBlock, valueMap, varTypes);
+              break;
             case MaxonCallRuntimeOp callRtOp: {
               var stdArgs = callRtOp.Args.Select(a => {
                 if (valueMap.TryGetValue(a, out var mapped)) {
@@ -2313,6 +2331,9 @@ public static partial class MaxonToStandardConversion {
 
     // Build tag table for mm-trace (maps tag_index -> symdata label)
     EmitTagTable(result);
+
+    // Build the interned-name table the `__DebugStream` Log events index into (MXDS_STRS).
+    EmitDebugStreamNameTable(result);
 
     return result;
   }

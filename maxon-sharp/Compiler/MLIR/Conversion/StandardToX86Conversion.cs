@@ -39,6 +39,7 @@ public static class StandardToX86Conversion {
     result.Globals.AddRange(module.Globals);
     result.TagTable = module.TagTable;
     result.TagNames = module.TagNames;
+    result.DebugStreamNames = module.DebugStreamNames;
     foreach (var (k, v) in module.TypeDefs) result.TypeDefs[k] = v;
 
     // Convert functions in parallel — each lowering is independent and writes
@@ -1069,20 +1070,20 @@ public static class StandardToX86Conversion {
             break;
           }
 
-          case StdCallRuntimeIfNonnullOp guardedCallOp: {
+          case StdCallRuntimeIfNonnullOp guardedCallOp:
             // Null-guarded runtime call: skip if first arg is null.
-            // Spill all live register values before the branch so values
-            // remain accessible when the branch skips the call body.
-            regManager.SpillAllLiveRegisters(x86Block);
-            var skipPrefix = _inStdlib ? "__stdlib_nn_skip" : "__nonnull_skip";
-            var skipLabel = $"{skipPrefix}_{System.Threading.Interlocked.Increment(ref _nonnullSkipCounter)}";
-            regManager.EmitBoolTest(guardedCallOp.Args[0], x86Block);
-            x86Block.AddOp(new X86JccOp("z", skipLabel));
-            regManager.EmitCall(guardedCallOp.Callee, guardedCallOp.Args, guardedCallOp.Result, x86Block,
-              ConsumedArgs(guardedCallOp.Args, lastUseOfValue, currentOpIndex));
-            x86Block.AddOp(new X86LabelDefOp(skipLabel));
+            EmitGuardedRuntimeCall(regManager, x86Block, guard: guardedCallOp.Args[0],
+              guardedCallOp.Callee, guardedCallOp.Args, guardedCallOp.Result,
+              lastUseOfValue, currentOpIndex);
             break;
-          }
+
+          case StdCallRuntimeIfNonzeroOp flagGuardedCallOp:
+            // Flag-guarded runtime call: the guard is NOT an argument (the DebugStream
+            // producer's inline `__ds_base == 0` bail — see StdCallRuntimeIfNonzeroOp).
+            EmitGuardedRuntimeCall(regManager, x86Block, flagGuardedCallOp.Guard,
+              flagGuardedCallOp.Callee, flagGuardedCallOp.Args, result: null,
+              lastUseOfValue, currentOpIndex);
+            break;
 
           case StdPtrToI64Op ptrToI64Op: {
             // Pointer is already in a GPR, just alias it as i64
@@ -1148,6 +1149,26 @@ public static class StandardToX86Conversion {
 
   private static bool IsLastUse(Dictionary<StdValue, int> lastUseOfValue, StdValue value, int currentOpIndex) {
     return lastUseOfValue.TryGetValue(value, out var lastUse) && lastUse == currentOpIndex;
+  }
+
+  /// <summary>
+  /// Emit a runtime call the guard value branches over: test the guard, skip the whole call
+  /// when it is zero. Shared by the null-guarded refcount calls (guard = first arg) and the
+  /// DebugStream producer (guard = `__ds_base`, and NOT an argument).
+  ///
+  /// Every live register is spilled BEFORE the branch, so a value stays reachable on the
+  /// skip path — the two paths merge at the label with the same memory state.
+  /// </summary>
+  private static void EmitGuardedRuntimeCall(RegisterManager regManager, IrBlock<X86Op> block,
+      StdValue guard, string callee, List<StdValue> args, StdValue? result,
+      Dictionary<StdValue, int> lastUseOfValue, int currentOpIndex) {
+    regManager.SpillAllLiveRegisters(block);
+    var skipPrefix = _inStdlib ? "__stdlib_nn_skip" : "__nonnull_skip";
+    var skipLabel = $"{skipPrefix}_{System.Threading.Interlocked.Increment(ref _nonnullSkipCounter)}";
+    regManager.EmitBoolTest(guard, block);
+    block.AddOp(new X86JccOp("z", skipLabel));
+    regManager.EmitCall(callee, args, result, block, ConsumedArgs(args, lastUseOfValue, currentOpIndex));
+    block.AddOp(new X86LabelDefOp(skipLabel));
   }
 
   /// <summary>

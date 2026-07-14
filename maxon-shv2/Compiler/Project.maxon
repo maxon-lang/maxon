@@ -277,6 +277,12 @@ export type Project
 	// TOGETHER, from one `PhaseProbe`, so a phase can never be timed at one boundary and
 	// metered at another; see PhaseProbe's header for why that is worth a type.
 	export var memory as CompileMemory
+	// WHICH COMPILE this is, on the DebugStream wire (see DebugTrace). Every trace event this
+	// build emits carries it, so a run that compiles N units in one process reads back as N
+	// timelines instead of one shuffled pile. Derived from the compile ROOT, not handed out by a
+	// counter: a counter is shared mutable state, and this field exists precisely to survive the
+	// day N compiles run at once.
+	export var traceUnit as TraceUnit
 
 	export static function create(db QueryDatabase, rootPath FilePath, target Target) returns Project
 		return Self{
@@ -291,7 +297,8 @@ export type Project
 			diagnostics: DiagnosticArray.create(),
 			globalData: GlobalDataTable.create(),
 			timings: CompileTimings.create(),
-			memory: CompileMemory.create()
+			memory: CompileMemory.create(),
+			traceUnit: traceUnitOf(rootPath)
 		}
 	end 'create'
 end 'Project'

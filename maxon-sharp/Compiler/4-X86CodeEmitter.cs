@@ -93,7 +93,7 @@ public class X86CodeEmitter {
     // Runtime helpers must be emitted before user code so call targets are resolved
     emitter.EmitRuntimeFunctions();
     var rt = new Ir.Runtime.RuntimeEmitter(emitter.CreateBackend());
-    rt.EmitAllMemoryManagerFunctions(Compiler.MmTrace, Compiler.MmDebug, module.TagTable, module.TagNames);
+    rt.EmitAllMemoryManagerFunctions(Compiler.MmTrace, Compiler.MmDebug, module.TagTable, module.TagNames, module.DebugStreamNames);
 
     // Patch all __chkstk call sites
     emitter.PatchChkstkCalls();

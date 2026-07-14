@@ -17,7 +17,8 @@ public partial class RuntimeEmitter(IEmitterBackend backend) {
   /// Emits all runtime functions shared between x86 and ARM64 code emitters.
   /// Consolidates the identical runtime emission sequence used by both platforms.
   /// </summary>
-  public void EmitAllMemoryManagerFunctions(bool mmTrace, bool mmDebug, List<string?>? tagTable, List<string?>? tagNames) {
+  public void EmitAllMemoryManagerFunctions(bool mmTrace, bool mmDebug, List<string?>? tagTable,
+      List<string?>? tagNames, List<string?>? logNames) {
     var tags = tagTable ?? [];
     EmitMmGlobals(mmTrace, mmDebug, tags);
     EmitMmTraceFunctions(mmTrace, tags);
@@ -34,7 +35,7 @@ public partial class RuntimeEmitter(IEmitterBackend backend) {
     EmitMmCounterAccessors();
     EmitManagedListFunctions(mmTrace);
     if (Compiler.DebugStream) {
-      EmitDebugStreamFunctions(tagNames ?? []);
+      EmitDebugStreamFunctions(tagNames ?? [], logNames ?? []);
     }
   }
 
@@ -146,10 +147,76 @@ public partial class RuntimeEmitter(IEmitterBackend backend) {
   public const byte DsEvDbgCsxEntry          = 0x5D;  // arg2=to_gt, arg3=from_rsp, arg4=from_rbp
   public const byte DsEvDbgCsxExit           = 0x5E;  // arg2=to_gt, arg3=to_rsp, arg4=to_rbp
 
+  // Log events (Workstream O): the events USER MAXON SOURCE puts into the ring, via the
+  // `__DebugStream` builtin. Every other family above is emitted by the runtime; these are
+  // the only ones a compiled program authors itself, and they exist because shv2 IS a Maxon
+  // program — a text log to stderr stops being readable the moment N workers interleave into
+  // one stream, and cannot say which worker / unit / phase a line came from.
+  //
+  // The wire schema is FROZEN — see maxon-shv2/ARCHITECTURE.md. Codes take the free
+  // 0x60-0x6F range. Payload after the 8-byte entry header:
+  //   0x60/0x61: gt(8) · p_id(8) · phase_id(2) rsvd(2) unit_id(4)                    — 32B
+  //   0x62:      gt(8) · p_id(8) · cat(1) lvl(1) event_id(2) unit_id(4) · a0(8) a1(8) — 48B
+  //   0x63:      gt(8) · p_id(8) · cat(1) lvl(1) len(2) unit_id(4) · UTF-8 tail        — variable
+  public const byte DsEvLogPhaseBegin = 0x60;
+  public const byte DsEvLogPhaseEnd   = 0x61;
+  public const byte DsEvLogEvent      = 0x62;
+  public const byte DsEvLogText       = 0x63;
+
   public const byte DsEvDepthInc = 0x40;
   public const byte DsEvDepthDec = 0x41;
   public const byte DsEvHeartbeat = 0xFE;
   public const byte DsEvPadding = 0xFF;
+
+  // ---- Log event payload geometry ----
+  // Offsets are from the START of the entry (i.e. they include the 8-byte entry header),
+  // so an emitter can write straight through the pointer __ds_reserve handed back.
+  public const int DsLogOffGt = 8;
+  public const int DsLogOffPid = 16;
+  /// The packed field word. Its layout differs per event (see the table above), but every
+  /// Log event has exactly one and it always sits here.
+  public const int DsLogOffFields = 24;
+  public const int DsLogOffArg0 = 32;   // LOG_EVENT only
+  public const int DsLogOffArg1 = 40;   // LOG_EVENT only
+  public const int DsLogOffText = 32;   // LOG_TEXT only: first byte of the UTF-8 tail
+
+  // Total entry sizes, header included. LOG_EVENT deliberately reuses the 48-byte Dbg shape.
+  public const int DsLogPhaseEntrySize = 32;
+  public const int DsLogEventEntrySize = 48;
+  /// The fixed part of a LOG_TEXT entry; the 8-byte-aligned UTF-8 tail follows it.
+  public const int DsLogTextFixedSize = 32;
+
+  // Field packing for the DsLogOffFields word.
+  //
+  // LOG_EVENT and LOG_TEXT pack this word IDENTICALLY — cat(1) lvl(1) u16(2) unit_id(4). Only
+  // the meaning of the 16-bit slot differs (an interned `event_id` for one, a byte `len` for
+  // the other), which is why there is ONE shift and ONE mask for it rather than a pair each.
+  // LOG_PHASE_BEGIN/END use only the u16 slot (as `phase_id`) and the unit.
+  //
+  // `unit_id` occupies the high 32 bits, so the left shift of 32 already discards anything that
+  // would not fit — it needs no mask.
+  public const long DsLogCatMask = 0xFF;
+  public const int DsLogLvlShift = 8;
+  public const long DsLogLvlMask = 0xFF;
+  public const int DsLogU16FieldShift = 16;
+  public const long DsLogU16FieldMask = 0xFFFF;
+  public const int DsLogUnitIdShift = 32;
+
+  /// The ring keeps every entry 8-byte aligned, so every entry size is rounded UP to this.
+  public const int DsEntryAlign = 8;
+  public const int DsEntryAlignBias = DsEntryAlign - 1;
+  /// Masks a biased length back DOWN to a multiple of DsEntryAlign — together, round-up.
+  public const long DsEntryAlignMask = ~(long)DsEntryAlignBias;
+
+  /// The entry header's `entry_size` is a u16, so no single entry can exceed this.
+  public const int DsEntrySizeMax = 0xFFFF;
+
+  /// The largest UTF-8 tail a LOG_TEXT entry can carry: what is left of a maximal entry after
+  /// the fixed part, rounded DOWN to the ring's alignment. A longer message is TRUNCATED to it
+  /// — never torn across two entries, which would need a continuation code the frozen schema
+  /// does not have.
+  public const int DsLogTextMaxBytes =
+    (DsEntrySizeMax - DsLogTextFixedSize) / DsEntryAlign * DsEntryAlign;
 
   // Site IDs for DsEvDbgStatusStore. Distinct constants per call site so the trace
   // attributes a torn status transition to its source.

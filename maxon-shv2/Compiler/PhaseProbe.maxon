@@ -73,13 +73,39 @@ export type PhaseProbe
 	export let allocLive as AllocCount
 	export let bytes as ByteCount
 
-	// Open a bracket. Counters first, clock last — see this file's header.
-	export static function begin() returns PhaseProbe
+	// Open a bracket, and open the matching TRACE SPAN.
+	//
+	// The span and the counters are opened by the SAME call for the same reason time and memory
+	// are: a trace whose spans were bracketed at different instants from the timers would say a
+	// phase spent its milliseconds in one place and its events in another, and the two
+	// instruments would quietly disagree. One bracket, one begin.
+	//
+	// The span is emitted FIRST, before the counters, so the trace's interval strictly contains
+	// the timed one and the emission itself lands outside what it measures. (The END is emitted
+	// by `recordPhaseDelta` / `recordRegAllocDelta` — the only writers of attribution — after
+	// `elapsed()` has closed the counters, for the same reason. `elapsed()` stays PURE, which is
+	// what lets `compile` reuse one probe as both the `load` bracket and the whole-compile total
+	// without emitting a second, unpaired END.)
+	//
+	// Counters first, clock last — see this file's header.
+	export static function begin(name TraceName, unit TraceUnit) returns PhaseProbe
+		__DebugStream.phaseBegin(name, unit)
 		let allocTotal = __Builtins.mmAllocTotal() as AllocCount
 		let allocLive = __Builtins.mmAllocLive() as AllocCount
 		let bytes = totalAllocBytes()
 		return Self{nanos: Clock.nowNanos(), allocTotal: allocTotal, allocLive: allocLive, bytes: bytes}
 	end 'begin'
+
+	// Open a bracket around a pipeline phase. The name comes from the phase, so the span the
+	// trace shows and the row the timing table shows can never disagree about which phase it is.
+	export static function beginPhase(project Project, phase CompilePhase) returns PhaseProbe
+		return Self.begin(compilePhaseName(phase), unit: project.traceUnit)
+	end 'beginPhase'
+
+	// Open a bracket around a register-allocator sub-phase. Same contract.
+	export static function beginRegAllocPhase(project Project, phase RegAllocPhase) returns PhaseProbe
+		return Self.begin(regAllocPhaseName(phase), unit: project.traceUnit)
+	end 'beginRegAllocPhase'
 
 	// Close the bracket. Clock first, counters after — see this file's header.
 	//
@@ -117,7 +143,8 @@ end 'totalAllocBytes'
 // --- Recording a closed bracket against a phase ---
 //
 // These are the ONLY writers of per-phase attribution. Both tables are written together,
-// from one delta, so time and memory can never be bracketed differently.
+// from one delta, so time and memory can never be bracketed differently. They are therefore also
+// where the trace span CLOSES — the third table, written from the same call, for the same reason.
 
 export function recordPhase(project Project, phase CompilePhase, probe PhaseProbe)
 	recordPhaseDelta(project, phase: phase, delta: probe.elapsed())
@@ -126,6 +153,7 @@ end 'recordPhase'
 export function recordPhaseDelta(project Project, phase CompilePhase, delta PhaseDelta)
 	project.timings.addPhaseNanos(phase, nanos: delta.nanos)
 	project.memory.addPhase(phase, delta: delta)
+	__DebugStream.phaseEnd(compilePhaseName(phase), project.traceUnit)
 end 'recordPhaseDelta'
 
 // Record `phase`, less whatever an INNER phase already claimed while it ran.
@@ -148,6 +176,7 @@ end 'recordRegAllocPhase'
 export function recordRegAllocDelta(project Project, phase RegAllocPhase, delta PhaseDelta)
 	project.timings.regAlloc.addPhaseNanos(phase, nanos: delta.nanos)
 	project.memory.regAlloc.addPhase(phase, delta: delta)
+	__DebugStream.phaseEnd(regAllocPhaseName(phase), project.traceUnit)
 end 'recordRegAllocDelta'
 
 // Everything a register-allocator sub-phase has claimed so far, across both tables. The

@@ -12,7 +12,7 @@ This document covers the Maxon command-line interface and project system.
 | `maxon run [function]` | Run an exported function from `build.maxon`; lists commands if omitted |
 | `maxon fmt [file\|directory]` | Format `.maxon` source files in-place (default: current directory) |
 | `maxon spec-test [options]` | Run spec tests |
-| `maxon monitor <exe> [args...]` | Launch executable with shared-memory debug stream monitor |
+| `maxon monitor [--filter=…] <exe> [args...]` | Launch executable with shared-memory debug stream monitor |
 | `maxon lsp-server` | Start the language server (LSP) |
 
 ---
@@ -43,7 +43,7 @@ maxon build [file|directory] [options]
 | `--mm-debug` | Enable runtime memory debug checks (magic, canary, poison) |
 | `--leak-check` | Wire the process-exit leak gate (`mrt_leak_check`) into the binary so it exits `101` if any allocation is still live at exit. Unlike `--mm-trace`, does NOT bypass the stdlib cache, so it reproduces the cached-build path |
 | `--async-trace` | Enable async/await runtime trace output (stderr) |
-| `--debugstream` | Enable shared-memory debug stream (use with `maxon monitor`) |
+| `--debugstream` | Enable the shared-memory debug stream (use with `maxon monitor`). Also enables the `__DebugStream` builtin: without it, every `__DebugStream` call emits zero instructions |
 | `--timing` | Print per-stage compile timings to stderr |
 | `--timing-functions=N` | Print top-N hottest functions per heavy pass (implies `--timing`) |
 
@@ -203,19 +203,48 @@ maxon spec-test --filter=string --verbose
 
 ### `maxon monitor`
 
-Launches an executable with the shared-memory debug stream monitor. Reads debug output written via `--debugstream` and prints it to the terminal.
+Launches an executable with the shared-memory debug stream monitor. Reads binary trace events written via `--debugstream` and prints them to the terminal, each prefixed with `[+SSSS.mmm]`. The child's own stdout is forwarded unchanged, so trace lines are told apart by that prefix.
 
 **Usage:**
 ```bash
-maxon monitor <exe> [args...]
+maxon monitor [--filter=mm|sched|log] <exe> [args...]
 ```
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `--filter=mm` | Memory-manager events only (`mm_alloc` / `mm_free` / `mm_incref` / …) |
+| `--filter=sched` | Scheduler and green-thread events only |
+| `--filter=log` | Only the events the program itself emitted via the `__DebugStream` builtin |
 
 **Examples:**
 ```bash
 # Build with debugstream enabled, then monitor
 maxon build app.maxon --debugstream
 maxon monitor app.exe
+
+# Just the program's own trace events
+maxon monitor --filter=log app.exe
 ```
+
+**The `__DebugStream` builtin.** Every event family above except `log` is emitted by the runtime. `__DebugStream` is what lets *user Maxon source* put an event into the same ring — which is how a compiler written in Maxon stays debuggable once its work is spread over several workers and one stderr stops being readable.
+
+| Call | Event | Notes |
+|------|-------|-------|
+| `__DebugStream.enabled()` | — | `true` when the ring is attached. Lets a caller skip building a message nothing would read. |
+| `__DebugStream.nameId("phase")` | — | Interns a name **at compile time** into the executable's `MXDS_STRS` blob and yields its `u16`. The name never exists at runtime; the monitor prints it anyway. **The argument must be a string literal.** |
+| `__DebugStream.phaseBegin(nameId, unitId)` | `LOG_PHASE_BEGIN` | Opens a nested, per-worker, per-unit span. |
+| `__DebugStream.phaseEnd(nameId, unitId)` | `LOG_PHASE_END` | Closes it. |
+| `__DebugStream.event(nameId, cat, lvl, unitId, arg0, arg1)` | `LOG_EVENT` | **Structured, zero-alloc.** An interned name plus two numbers — safe on a hot path, where a formatted message would allocate into the very `mm` stream a trace is being read to investigate. |
+| `__DebugStream.text(cat, lvl, unitId, message)` | `LOG_TEXT` | A UTF-8 message, for the rare human line. Allocating (the caller built the string); truncated, never torn, at 64 KiB. |
+
+Every Log event also carries the emitting green thread and its owning processor, so a run with several workers in flight can be demuxed back into one timeline per worker.
+
+Two gates keep this free enough to leave in place:
+
+- **Compile time** — without `--debugstream`, every call above emits **zero instructions**. Not a branch that is never taken: nothing at all.
+- **Runtime** — with the ring detached, each call is a load of `__ds_base`, a test, and a not-taken branch. The bail is inline, before any `call`.
 
 ---
 

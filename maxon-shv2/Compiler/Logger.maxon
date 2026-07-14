@@ -109,10 +109,56 @@ export function parseLogOption(option String) returns bool
 	return true
 end 'parseLogOption'
 
+// The unit every log event is attributed to — WHICH COMPILE produced the line. Set once per
+// compile by `compile()`, from the compile root (see DebugTrace.traceUnitOf).
+//
+// It is a module-level var rather than a parameter because the whole point of Workstream O1 is
+// that the CALL SITES DO NOT CHANGE: `logDebug(LogCategory.ir, ...)` reads the same in every one
+// of the ~20 places it appears, and a sink that demanded a unit argument would have rewritten all
+// of them. The event carries `gt` and `p_id` from the runtime regardless, and THOSE — not this —
+// are what demux N interleaved workers; the unit only says which compile a line belongs to.
+var currentTraceUnit = 0 as TraceUnit
+
+export function setTraceUnit(unit TraceUnit)
+	currentTraceUnit = unit
+end 'setTraceUnit'
+
+// The STRUCTURED tier: an interned name and two numbers, and nothing else. No String is built,
+// no closure is created, nothing is allocated — which is what makes it usable from inside the
+// register allocator, where a formatted message would allocate into the very `mm` stream the
+// trace exists to read (and cost more than the work it measures).
+//
+// It honours the same category/level machinery `log` does, so `--log=codegen:trace` turns these
+// on exactly as it turns text lines on. Intern the name ONCE, at a `let`, not per call:
+// `__DebugStream.nameId("...")` is a compile-time constant, so a name in a loop costs nothing —
+// but keeping it at the top makes that visible.
+export function logEvent(category LogCategory, level LogLevel, name TraceName, arg0 TraceArg = 0, arg1 TraceArg = 0)
+	let effectiveLevel = effectiveLogLevel(category)
+	if level.rawValue <= effectiveLevel 'check'
+		__DebugStream.event(name, category.ordinal, level.rawValue, currentTraceUnit, arg0, arg1)
+	end 'check'
+end 'logEvent'
+
+// The TEXT tier — and the sink swap that is the point of this file.
+//
+// When the DebugStream ring is attached, the message goes into the RING, not to stderr. Under a
+// worker pool, N interleaved stderr writers produce torn lines that cannot say which worker or
+// which compile they came from; the same message on the ring carries `gt`, `p_id` and the unit,
+// and the monitor can put it back in order. When the ring is NOT attached — every ordinary build
+// — the behaviour is exactly what it was, and the `__DebugStream` calls cost zero instructions.
+//
+// This tier allocates (the caller's thunk already built a String), and it says so. That is why
+// there is a structured tier above it.
 function log(category LogCategory, level LogLevel, message LazyMessage)
 	let effectiveLevel = effectiveLogLevel(category)
 	if level.rawValue <= effectiveLevel 'check'
 		let msg = message()
+
+		if __DebugStream.enabled() 'ring'
+			__DebugStream.text(category.ordinal, level.rawValue, currentTraceUnit, msg.managed)
+			return
+		end 'ring'
+
 		printError("[{category.rawValue}] {level.name}: {msg}\n")
 	end 'check'
 end 'log'

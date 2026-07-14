@@ -65,7 +65,7 @@ public class ARM64CodeEmitterStage {
     // Emit runtime functions
     emitter.EmitRuntimeFunctions();
     var rt = new Ir.Runtime.RuntimeEmitter(emitter.CreateBackend());
-    rt.EmitAllMemoryManagerFunctions(Compiler.MmTrace, Compiler.MmDebug, module.TagTable, module.TagNames);
+    rt.EmitAllMemoryManagerFunctions(Compiler.MmTrace, Compiler.MmDebug, module.TagTable, module.TagNames, module.DebugStreamNames);
 
     // Build symbol table (compiler-generated functions + runtime functions)
     var symbolEntries = new List<(string name, int codeOffset)>();

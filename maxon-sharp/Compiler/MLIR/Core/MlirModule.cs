@@ -428,6 +428,12 @@ public class IrModule<TOp> where TOp : IPrintableOp {
   // Same indexing as TagTable. Built during MaxonToStandard lowering.
   public List<string?> TagNames { get; set; } = [];
 
+  // Names the `__DebugStream` builtin interned at compile time (phase names, event names),
+  // indexed by the u16 a Log event carries. Index 0 = no name. Embedded in the executable as
+  // the MXDS_STRS blob, so the monitor prints a real name and the emitting program never
+  // builds a string. Built during MaxonToStandard lowering.
+  public List<string?> DebugStreamNames { get; set; } = [];
+
   // Global variable metadata for cross-file seeding (name -> kind/mutability/type info)
   public Dictionary<string, GlobalVarMetadata> GlobalVarInfos { get; } = [];
 
@@ -544,6 +550,7 @@ public class IrModule<TOp> where TOp : IPrintableOp {
     foreach (var n in AmbiguousTypeNames) clone.AmbiguousTypeNames.Add(n);
     clone.TagTable.AddRange(TagTable);
     clone.TagNames.AddRange(TagNames);
+    clone.DebugStreamNames.AddRange(DebugStreamNames);
     foreach (var (k, v) in ExportedConstants) clone.ExportedConstants[k] = v;
     foreach (var (k, v) in ModuleVisibleConstants) clone.ModuleVisibleConstants[k] = v;
     foreach (var (k, v) in ModuleConstantSourceFiles) clone.ModuleConstantSourceFiles[k] = v;
