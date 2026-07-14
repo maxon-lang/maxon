@@ -16,16 +16,22 @@ export type CommandLine
 	end 'args'
 
 	/// Extract the value from a "--key=value" argument string.
-	/// Returns the portion after the first "=" sign.
+	/// Returns EVERYTHING after the first "=" sign, including any further "=".
 	/// Throws StringError.notFound if "=" is not present.
+	///
+	/// It used to `split("=")` and return part 1 — which is the text between the
+	/// FIRST and SECOND "=", not the value. So any option value containing an "="
+	/// was SILENTLY TRUNCATED at the second one, and the caller could not tell.
+	/// It cost a committed row of `docs/optimization-log.md`: a `--note` explaining
+	/// why an allocation count moved was cut off mid-sentence at "N=128", so a
+	/// record whose entire job is to say WHY quietly stopped saying it. The doc
+	/// comment here was right all along; the code was not.
 	export static function optionValue(arg String) returns String throws StringError
-		let parts = arg.split("=")
-		if parts.count() < 2 'noEquals'
-			throw StringError.notFound
-		end 'noEquals'
-		return try parts.get(1) otherwise 'unreachable'
-			throw StringError.notFound
-		end 'unreachable'
+		// Only the FIRST "=" separates; every later one belongs to the value.
+		let optionSeparator = "="
+		let separator = try arg.findFirst(optionSeparator) otherwise throw StringError.notFound
+		let valueStart = try arg.indexAfter(separator) otherwise throw StringError.notFound
+		return arg.slice(valueStart, endIndex: arg.endIndex())
 	end 'optionValue'
 
 	/// Search the process command line for "--name=value" and return the value.
