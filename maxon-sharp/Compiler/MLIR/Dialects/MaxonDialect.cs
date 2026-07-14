@@ -1907,18 +1907,19 @@ public sealed class MaxonManagedListNodePtrValueOp(MaxonValue cursorPtr, string 
 
 /// Spawns a green thread to execute a function call.
 /// The result is a MaxonPromise that can be awaited.
-public sealed class MaxonAsyncCallOp(string callee, List<MaxonValue> args, MaxonValueKind? innerResultKind, string? innerStructTypeName, bool throws = false, IrType? errorType = null) : MaxonOp {
+public sealed class MaxonAsyncCallOp(string callee, List<MaxonValue> args, MaxonValueKind? innerResultKind, string? innerStructTypeName, IrType? errorType = null) : MaxonOp {
   public override MaxonOpKind Kind => MaxonOpKind.AsyncCall;
   public override string Mnemonic => $"maxon.async_call @{Callee}";
   public string Callee { get; } = callee;
   public List<MaxonValue> Args { get; } = args;
   /// Everything the spawned call's type says about the promise — the result kind, the
-  /// result struct name, throws-ness, and the `throws` TYPE — lives on this one value.
-  /// The op deliberately does not re-publish any of it as its own properties: the four
-  /// it used to expose were write-only, and a second copy of a fact is a second thing to
-  /// forget (which is how `errorIsHeapPtr` came to be dropped on the cross-block re-tag
-  /// in the first place). Read `asyncOp.Result.ErrorType`, not an op-level echo of it.
-  public MaxonPromise Result { get; } = new MaxonPromise(IrContext.Current.NextId(), innerResultKind, innerStructTypeName, throws, errorType);
+  /// result struct name, and the `throws` TYPE (from which throws-ness is derived) — lives
+  /// on this one value. The op deliberately does not re-publish any of it as its own
+  /// properties: the ones it used to expose were write-only, and a second copy of a fact is
+  /// a second thing to forget (which is how `errorIsHeapPtr` came to be dropped on the
+  /// cross-block re-tag in the first place). Read `asyncOp.Result.ErrorType`, not an
+  /// op-level echo of it.
+  public MaxonPromise Result { get; } = new MaxonPromise(IrContext.Current.NextId(), innerResultKind, innerStructTypeName, errorType);
   public List<bool>? ArgMutabilities { get; set; }
   public List<string?>? ArgVarNames { get; set; }
   /// Source location for error reporting (line of the 'async' keyword)
@@ -1944,6 +1945,9 @@ public sealed class MaxonAwaitOp : MaxonOp {
   /// needs somewhere to point when it does.
   public int? AwaitLine { get; set; }
   public int? AwaitColumn { get; set; }
+  /// The BINDING the awaited promise was read from — the identity in which `await` is linear.
+  /// See MaxonTryAwaitOp.PromiseVarName.
+  public string? PromiseVarName { get; set; }
   public override IReadOnlyList<string> PrintableResults => Result != null ? [Result.ToString()] : [];
   public override IReadOnlyList<MaxonValue> Operands => [Promise];
 
@@ -1969,6 +1973,23 @@ public sealed class MaxonTryAwaitOp : MaxonOp {
   public MaxonInteger ErrorFlag { get; }
   public MaxonValueKind? ResultKind { get; }
   public string? ResultStructTypeName { get; }
+  /// Source location of the `await` keyword, carried for the linear-await diagnostic (E3099).
+  public int? AwaitLine { get; set; }
+  public int? AwaitColumn { get; set; }
+  /// The BINDING the awaited promise was read from — the identity in which `await` is LINEAR
+  /// (E3099). Null when the awaited expression is not a named binding (an inline
+  /// `await async f()`), which can only be awaited once anyway.
+  ///
+  /// It is deliberately the NAME, not the promise value. Every read of a promise variable emits
+  /// a fresh MaxonVarRefOp and re-tags a fresh MaxonPromise around its result, so `await p`
+  /// twice yields two DIFFERENT promise values for one green thread — keying linearity on them
+  /// would see two unrelated promises and catch nothing.
+  ///
+  /// The binding is also the thing that gets RE-ARMED: assigning the variable puts a different
+  /// green thread in it, which is exactly what `for p in promises` does on every iteration. So
+  /// the linearity walk keys on the name and stops at any assignment to it, which makes that
+  /// central idiom's single `await p` one await per promise instead of N awaits of one.
+  public string? PromiseVarName { get; set; }
   public override IReadOnlyList<string> PrintableResults => Result != null ? [Result.ToString(), ErrorFlag.ToString()] : [ErrorFlag.ToString()];
   public override IReadOnlyList<MaxonValue> Operands => [Promise];
 

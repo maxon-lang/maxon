@@ -37,12 +37,41 @@ var r2 = await p2
 - `async` can only be used on functions that yield (contain I/O operations or await points)
 - Throwing async functions require `try await` to extract the result
 - `promise.cancel()` cancels the associated green thread
+- **`await` is LINEAR**: a promise is awaited exactly once, and a second await is a compile error (E3100)
+
+**Await is linear.**
+The thunk owns its result and hands it over at the `await`. A second await of the same promise
+would take a second reference to a payload the thunk only ever owned once, and the two releases
+would free it twice — so the compiler refuses it rather than the runtime surviving it. This is not
+about errors: a non-throwing `async` returning a `String` double-frees identically. The check is
+flow-sensitive, so two awaits in mutually exclusive branches are fine (each is the only await on
+its own path), while a single await sitting in a loop over a promise spawned *outside* the loop is
+not (it awaits the same green thread every iteration).
 
 **Typed promises:**
-Promises can be stored in collections by declaring an explicit `Promise with T` type — the compiler boxes the i64 handle into a `Promise<T>` struct at the storage site and unboxes it at the `await` site. This lets you spawn N green threads with a `for` loop, collect the promises into an `Array with (Promise with T)`, and await them in a second pass.
+A promise is typed by BOTH what its thunk returns and what its thunk throws, because both come
+back across the same `await`:
+
+| type | meaning | await |
+|---|---|---|
+| `Promise with T` | the thunk does NOT throw | `await p` |
+| `Promise with (T, E)` | the thunk `throws E` | `try await p otherwise (e)` — `e` is an `E` |
+
+Declaring such a type lets promises be stored in collections: the compiler boxes the i64 handle
+into a `Promise` struct at the storage site and unboxes it at the `await` site. This lets you spawn
+N green threads with a `for` loop, collect the promises into an array, and await them in a second
+pass.
+
+Naming `E` is load-bearing, not decorative. A promise stored in a type that names only its result
+has had its error type *erased*, and every downstream question about the error then has no answer:
+an `otherwise (e)` binding has no type to give `e`, an associated-value payload has no static type
+to release (so it leaks), and `try await` has nothing to check the enclosing function's `throws`
+against (so one enum's ordinals get reinterpreted as another's tags). Storing a throwing promise in
+a `Promise with T` is therefore refused — E3098 — and the diagnostic names the two-parameter type
+that works.
 
 ```text
-typealias IntPromise = Promise with Integer
+typealias IntPromise = Promise with Integer                  // work() does not throw
 typealias IntPromiseArray = Array with IntPromise
 
 var arr = IntPromiseArray.create()
@@ -50,6 +79,17 @@ arr.push(async work(1))
 arr.push(async work(2))
 for p in arr 'each'
     let result = await p   // unboxed automatically
+end 'each'
+
+typealias FetchPromise = Promise with (Integer, FetchError)  // fetch() throws FetchError
+typealias FetchPromiseArray = Array with FetchPromise
+
+var fetches = FetchPromiseArray.create()
+fetches.push(async fetch(1))
+for p in fetches 'each'
+    let result = try await p otherwise (e) 'failed'          // e is a FetchError
+        return match e 'why' ... end 'why'
+    end 'failed'
 end 'each'
 ```
 
@@ -473,17 +513,16 @@ end 'main'
 error E3073: specs/fragments/async-await/async-await.error.no-yield.test:9:11: 'async heavyCompute(5)' — function never yields; 'async' is for I/O-concurrent work only
 ```
 
-<!-- test: async-await.error.otherwise-bind-erased -->
-`Promise with T` names the RESULT type and nothing else, so boxing a promise
-into it drops the spawned function's error type — only a runtime bit saying
-whether the flag is a heap pointer survives (see
-`async-await.promise-array-throwing`). A promise read back out of that storage
-therefore has no error type to give an `otherwise (e)` binding, and the
-compiler says so instead of handing back the raw error flag typed `int`.
+<!-- test: async-await.storage.bind-error-through-storage -->
+The error type SURVIVES storage, so an `otherwise (e)` binding on a promise pulled back out of
+an array binds the error the thunk actually throws — a `TaskError`, matched case by case. This
+is the bug that started all of this: `e` used to come back typed `int` (it was the raw promise
+handle), so any use of it failed with "no method named ...". Then it was refused outright, because
+`Promise with T` had nowhere to keep the error type. Now the type names it, and it just works.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-typealias IntPromise = Promise with Integer
-typealias IntPromiseArray = Array with IntPromise
+typealias TaskPromise = Promise with (Integer, TaskError)
+typealias TaskPromiseArray = Array with TaskPromise
 
 enum TaskError implements Error
 		timedOut
@@ -496,7 +535,7 @@ function mayFail() returns Integer throws TaskError
 end 'mayFail'
 
 function main() returns ExitCode
-		var arr = IntPromiseArray.create()
+		var arr = TaskPromiseArray.create()
 		arr.push(async mayFail())
 		let p = try arr.get(0) otherwise panic("index 0 is in bounds by construction")
 		let r = try await p otherwise (e) 'failed'
@@ -508,8 +547,114 @@ function main() returns ExitCode
 		return r
 end 'main'
 ```
+```exitcode
+9
+```
+
+<!-- test: async-await.storage.release-union-payload-through-storage -->
+The error carried back out of storage is an associated-value union, so its flag IS a heap pointer
+to the payload. The binding takes ownership and scope-end releases it exactly once. This is the
+in-tree leak that a green suite could never show: the path only runs when a worker DIES, and when
+it did, the box said "not a heap pointer" (a bit that could not distinguish one error type from
+another), the conditional decref never fired, and every dead worker leaked its error.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias WorkPromise = Promise with (Integer, WorkError)
+typealias WorkPromiseArray = Array with WorkPromise
+
+union WorkError implements Error
+		failed(reason String)
+		refused(code Integer)
+end 'WorkError'
+
+function work(n Integer) returns Integer throws WorkError
+		_ = File.exists(FilePath from "noyield.txt")
+		if n < 0 'neg'
+				throw WorkError.failed("negative input")
+		end 'neg'
+		return n
+end 'work'
+
+function main() returns ExitCode
+		var arr = WorkPromiseArray.create()
+		arr.push(async work(-1))
+		let p = try arr.get(0) otherwise panic("index 0 is in bounds by construction")
+		let r = try await p otherwise (e) 'failed'
+				match e 'which'
+						failed(reason) then print("caught: {reason}\n")
+						refused(code) then print("refused {code}\n")
+				end 'which'
+				return 0
+		end 'failed'
+		return r
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+caught: negative input
+```
+
+<!-- test: async-await.error.storage-erases-error-type -->
+Storing a THROWING promise in a `Promise with T` is refused: that type names the result and
+nothing else, so boxing into it would erase the thunk's error type — which is what made the `(e)`
+binding untypeable, the payload unreleasable, and the propagation check uncheckable. The
+diagnostic names the two-parameter type that keeps it.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias BadPromise = Promise with Integer
+typealias BadPromiseArray = Array with BadPromise
+
+enum TaskError implements Error
+		crashed
+end 'TaskError'
+
+function mayFail() returns Integer throws TaskError
+		_ = File.exists(FilePath from "noyield.txt")
+		throw TaskError.crashed
+end 'mayFail'
+
+function main() returns ExitCode
+		var arr = BadPromiseArray.create()
+		arr.push(async mayFail())
+		return 0
+end 'main'
+```
 ```maxoncstderr
-error E3098: specs/fragments/async-await/async-await.error.otherwise-bind-erased.test:20:34: cannot bind 'e': a promise read back from a 'Promise with T' has lost the error type of the function it was spawned from — 'Promise with T' names the result type only. Await the promise where 'async' produced it to bind the error, or handle it without a binding ('otherwise <value>', 'otherwise ignore', 'otherwise 'label'')
+error E3098: specs/fragments/async-await/async-await.error.storage-erases-error-type.test:17:7: cannot store a promise from a function that throws 'TaskError' in 'BadPromise': it names the result type only, which would erase the error type — declare the storage as 'Promise with (T, TaskError)' so 'try await' can bind and release the error
+```
+
+<!-- test: async-await.error.storage-names-wrong-error-type -->
+The storage type must name the error the thunk ACTUALLY throws. A `Promise with (T, E)` whose E
+disagrees with the callee's `throws` would hand the await site one enum's ordinals under another
+enum's name — the same reinterpretation the erased form allowed, just spelled out loud.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias WrongPromise = Promise with (Integer, OtherError)
+typealias WrongPromiseArray = Array with WrongPromise
+
+enum TaskError implements Error
+		crashed
+end 'TaskError'
+
+enum OtherError implements Error
+		different
+end 'OtherError'
+
+function mayFail() returns Integer throws TaskError
+		_ = File.exists(FilePath from "noyield.txt")
+		throw TaskError.crashed
+end 'mayFail'
+
+function main() returns ExitCode
+		var arr = WrongPromiseArray.create()
+		arr.push(async mayFail())
+		return 0
+end 'main'
+```
+```maxoncstderr
+error E3098: specs/fragments/async-await/async-await.error.storage-names-wrong-error-type.test:21:7: 'WrongPromise' names the error type 'OtherError', but this promise's function throws 'TaskError'
 ```
 
 <!-- test: async-await.error.propagate-type-mismatch -->
@@ -550,19 +695,17 @@ end 'main'
 error E3059: specs/fragments/async-await/async-await.error.propagate-type-mismatch.test:20:11: try propagates 'AError' but enclosing function throws 'BError' — add 'otherwise' to convert
 ```
 
-<!-- test: async-await.error.propagate-erased -->
-The type check above needs an error type to check. A promise read back out of a
-`Promise with T` has none — storage erased it — so the check has nothing to
-compare and used to be skipped, which let the SPAWNED function's ordinals be
-re-thrown through the enclosing function's error flag. That is not a theoretical
-hazard: below, the caller's `WrapError` has associated values, so the caller
-mm_decrefs `TaskError.crashed`'s ordinal as if it were a heap pointer and the
-program dies on an invalid access. Unverifiable is not the same as fine — refuse
-it, exactly as an `(e)` binding on the same promise is refused.
+<!-- test: async-await.error.propagate-type-mismatch-through-storage -->
+The propagation type check needs an error type to check, and now it has one even when the promise
+came out of storage. This is the case that used to be a SILENT MISCOMPILE and then an outright
+refusal: `mayFail` throws `TaskError`, `viaStorage` throws `WrapError`, and re-throwing one
+through the other's error-return ABI made the caller decode `TaskError`'s ordinals as `WrapError`'s
+tags — and since `WrapError` has associated values, mm_decref an ordinal as a pointer and die. The
+storage type names `TaskError`, so the check simply fires, exactly as it does for a direct await.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-typealias IntPromise = Promise with Integer
-typealias IntPromiseArray = Array with IntPromise
+typealias TaskPromise = Promise with (Integer, TaskError)
+typealias TaskPromiseArray = Array with TaskPromise
 
 enum TaskError implements Error
 		timedOut
@@ -579,7 +722,7 @@ function mayFail() returns Integer throws TaskError
 end 'mayFail'
 
 function viaStorage() returns Integer throws WrapError
-		var arr = IntPromiseArray.create()
+		var arr = TaskPromiseArray.create()
 		arr.push(async mayFail())
 		let p = try arr.get(0) otherwise panic("index 0 is in bounds by construction")
 		let r = try await p
@@ -592,7 +735,86 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3098: specs/fragments/async-await/async-await.error.propagate-erased.test:24:11: cannot propagate: a promise read back from a 'Promise with T' has lost the error type of the function it was spawned from, so 'try await' cannot check it against this function's 'throws WrapError' — 'Promise with T' names the result type only. Handle the error here with 'otherwise' (which converts it), or await the promise where 'async' produced it
+error E3059: specs/fragments/async-await/async-await.error.propagate-type-mismatch-through-storage.test:24:11: try propagates 'TaskError' but enclosing function throws 'WrapError' — add 'otherwise' to convert
+```
+
+<!-- test: async-await.error.double-await -->
+`await` is LINEAR: a promise is awaited exactly once. The thunk owns its result and hands it over
+at the await, so a second await takes a second reference to a payload the thunk only owned once —
+the two releases underflow the refcount and free it twice ("mm_decref: refcount underflow").
+The double-free is made unrepresentable rather than fixed.
+
+Note the thunk does not throw. This is an OWNERSHIP bug, not an error-handling one: a plain
+`async` returning a managed `String` double-frees identically.
+```maxon
+function makeText() returns String
+		_ = File.exists(FilePath from "noyield.txt")
+		return "hello world"
+end 'makeText'
+
+function main() returns ExitCode
+		let p = async makeText()
+		let a = await p
+		let b = await p
+		print(a)
+		print(b)
+		return 0
+end 'main'
+```
+```maxoncstderr
+error E3100: specs/fragments/async-await/async-await.error.double-await.test:10:11: this promise has already been awaited: 'await' is linear — a promise is awaited exactly once, because the awaited thunk hands its result over and a second await would release it twice
+```
+
+<!-- test: async-await.error.double-await-in-loop -->
+The linear-await check is FLOW-SENSITIVE, and this is why it has to be. There is exactly ONE
+`await` here lexically, so a "have I seen this promise awaited before?" check finds nothing — but
+it sits in a loop over a promise spawned OUTSIDE the loop, so it awaits the same green thread on
+every iteration. Reachability catches it: the await is reachable from itself without passing
+through the `async` that would re-arm the binding.
+```maxon
+function makeText() returns String
+		_ = File.exists(FilePath from "noyield.txt")
+		return "hello"
+end 'makeText'
+
+function main() returns ExitCode
+		let p = async makeText()
+		for i in 0 upto 3 'each'
+				let s = await p
+				print("{i}={s} ")
+		end 'each'
+		return 0
+end 'main'
+```
+```maxoncstderr
+error E3100: specs/fragments/async-await/async-await.error.double-await-in-loop.test:10:13: this promise has already been awaited: 'await' is linear — a promise is awaited exactly once, because the awaited thunk hands its result over and a second await would release it twice
+```
+
+<!-- test: async-await.linear.await-in-exclusive-branches -->
+Two awaits of one promise in MUTUALLY EXCLUSIVE branches are each the only await on their own
+path, and are allowed. A lexical "already awaited" check would reject this valid program; the
+reachability check does not, because neither await can reach the other.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function makeValue() returns Integer
+		_ = File.exists(FilePath from "noyield.txt")
+		return 21
+end 'makeValue'
+
+function main() returns ExitCode
+		let p = async makeValue()
+		let flag = File.exists(FilePath from "definitely-not-here.txt")
+		if flag 'branch'
+				let a = await p
+				return a as ExitCode
+		end 'branch'
+		let b = await p
+		return (b + 1) as ExitCode
+end 'main'
+```
+```exitcode
+22
 ```
 
 <!-- test: async-await.error.await-without-try -->
@@ -705,14 +927,14 @@ end 'main'
 ```
 
 <!-- test: async-await.promise-array-throwing -->
-A stored Promise<T> is treated as throwing at the type level — its
-compile-time throws-ness is lost across storage, so `try await ... otherwise X`
-is always required at the read site. The runtime branches on a stored
-throws-bit, so awaiting a non-throwing promise via `try await ... otherwise X`
-still succeeds; the `otherwise` handler is just unused.
+`work` throws, so the storage type names what it throws: `Promise with (Integer, WorkError)`.
+Throws-ness is a property of the TYPE and survives the box, so a stored non-throwing promise
+still takes a plain `await` (see `async-await.promise-array`) and only a genuinely throwing one
+demands `try await`. It used to be that EVERY stored promise was treated as throwing, because
+the box could not say which it was.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-typealias IntPromise = Promise with Integer
+typealias IntPromise = Promise with (Integer, WorkError)
 typealias IntPromiseArray = Array with IntPromise
 
 enum WorkError implements Error
@@ -744,16 +966,18 @@ end 'main'
 ```
 
 <!-- test: async-await.promise-array-throwing-assoc-value -->
-Stored Promise<T> where the async function throws an associated-value
-enum: the heap-allocated error payload must be released on the
-`otherwise` path. Without this, the third element's `WorkError.failed`
-allocation leaks and shows up under `--mm-trace`. Exercises the
-runtime-bit `errorIsHeapPtr` field on the boxed Promise struct: the
-compile-time error type is lost across array storage, so the otherwise
-emitter has to branch on the loaded bit to decide whether to decref.
+A stored promise whose thunk throws an ASSOCIATED-VALUE union: the heap-allocated error payload
+must be released on the `otherwise` path, or the third element's `WorkError.failed` allocation
+leaks. The storage type names `WorkError`, so the release is a straight-line decref emitted from
+the static type — the same code a direct await emits.
+
+This is the spec that used to justify the `errorIsHeapPtr` bit. With the error type erased by
+storage, the compiler could not know whether the error flag was a heap pointer or a plain ordinal,
+so the box carried a runtime bit and the otherwise path BRANCHED on it. The bit is gone: naming
+the error type answers the question statically, and there is nothing left to approximate.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
-typealias IntPromise = Promise with Integer
+typealias IntPromise = Promise with (Integer, WorkError)
 typealias IntPromiseArray = Array with IntPromise
 
 union WorkError implements Error

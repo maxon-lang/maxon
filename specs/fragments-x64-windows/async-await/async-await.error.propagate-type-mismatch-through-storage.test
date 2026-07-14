@@ -1,7 +1,7 @@
-// Test: async-await.error.propagate-erased
+// Test: async-await.error.propagate-type-mismatch-through-storage
 typealias Integer = int(i64.min to i64.max)
-typealias IntPromise = Promise with Integer
-typealias IntPromiseArray = Array with IntPromise
+typealias TaskPromise = Promise with (Integer, TaskError)
+typealias TaskPromiseArray = Array with TaskPromise
 
 enum TaskError implements Error
 		timedOut
@@ -18,7 +18,7 @@ function mayFail() returns Integer throws TaskError
 end 'mayFail'
 
 function viaStorage() returns Integer throws WrapError
-		var arr = IntPromiseArray.create()
+		var arr = TaskPromiseArray.create()
 		arr.push(async mayFail())
 		let p = try arr.get(0) otherwise panic("index 0 is in bounds by construction")
 		let r = try await p
@@ -31,7 +31,7 @@ function main() returns ExitCode
 end 'main'
 ---
 MaxoncStderr: ```
-error E3098: specs/fragments/async-await/async-await.error.propagate-erased.test:24:11: cannot propagate: a promise read back from a 'Promise with T' has lost the error type of the function it was spawned from, so 'try await' cannot check it against this function's 'throws WrapError' — 'Promise with T' names the result type only. Handle the error here with 'otherwise' (which converts it), or await the promise where 'async' produced it
+error E3059: specs/fragments/async-await/async-await.error.propagate-type-mismatch-through-storage.test:24:11: try propagates 'TaskError' but enclosing function throws 'WrapError' — add 'otherwise' to convert
 ```
 ---
 ---

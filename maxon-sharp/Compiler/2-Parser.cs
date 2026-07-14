@@ -610,52 +610,87 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   }
 
   /// True if `structType` is the `Promise` type from stdlib/Builtins.maxon
-  /// or any concrete alias of `Promise with T`.
+  /// or any concrete alias of `Promise with T` / `Promise with (T, E)`.
   /// Both the generic source (`Promise`) and concrete instantiations
   /// (e.g. `Promise<Integer>`, `IntPromise`) are accepted.
   private bool IsPromiseStructType(IrStructType structType) {
-    if (structType.Name == "Promise") return true;
-    return _typeAliasSources.TryGetValue(structType.Name, out var source) && source == "Promise";
+    if (structType.Name == PromiseType.TypeName) return true;
+    return _typeAliasSources.TryGetValue(structType.Name, out var source) && source == PromiseType.TypeName;
   }
+
+  /// The error type a `Promise with (T, E)` storage type names, or null for a `Promise with T`,
+  /// which names no error and therefore stores only NON-throwing promises.
+  private static IrType? PromiseStorageErrorType(IrStructType promiseStructType) =>
+      promiseStructType.TypeParams.TryGetValue(PromiseType.ErrorParam, out var errorType) ? errorType : null;
 
   /// True if a MaxonPromise value's inner kind/struct matches the `Element`
   /// type parameter of the given `Promise with T` (or alias) struct type.
   /// Used at call sites and assignments to validate that a promise produced
   /// by `async f()` can be stored where `Promise<T>` is expected.
   private bool PromiseElementMatches(IrStructType promiseStructType, MaxonPromise argPromise) {
-    if (!promiseStructType.TypeParams.TryGetValue("Element", out var elementType))
+    if (!promiseStructType.TypeParams.TryGetValue(PromiseType.ElementParam, out var elementType))
       return true; // Unresolved Element (bare `Promise`) — accept and defer.
     return PromiseInnerTypeMatchesElement(argPromise, elementType);
   }
 
-  /// Emit a `Promise{inner: <handle>, throws_: <bit>}` struct literal that
-  /// wraps a raw MaxonPromise into the user-facing Promise<T> struct type.
-  /// Used when a promise produced by `async f()` needs to flow into storage
-  /// that expects a Promise<T> struct (array elements, struct fields, named
-  /// `let p Promise with T = ...` bindings).
+  /// Emit a `Promise{inner: <handle>}` struct literal that wraps a raw MaxonPromise into the
+  /// user-facing Promise struct type. Used when a promise produced by `async f()` flows into
+  /// storage that expects a Promise struct (array elements, struct fields, named
+  /// `let p PromiseAlias = ...` bindings).
   ///
-  /// Both fields are required so the inverse unbox
-  /// (ReconstructPromiseFromStruct) can re-tag the MaxonPromise with the
-  /// right throws-ness — `try await` checks that bit to decide whether the
-  /// original async call needs error handling.
+  /// The handle is the WHOLE box. Everything else a `try await` needs to know — whether the
+  /// thunk throws, what it throws, whether that error owns a heap payload — is read off the
+  /// storage TYPE at the await site, not carried alongside the handle. Two bits used to ride
+  /// along here (`throws_`, `errorIsHeapPtr`) precisely because the type could not say; now it
+  /// can, so the storage type must AGREE with the promise, which is what this checks.
   ///
-  /// The MaxonStructLiteralOp's field-init expects a MaxonValue. The raw i64
-  /// handle already lives in `promise` (same SSA id as the underlying async
-  /// call result), so we reference it directly via MaxonInteger rather than
-  /// emitting a fresh literal.
-  private MaxonStruct BoxPromiseIntoStruct(MaxonPromise promise, IrStructType promiseStructType) {
-    var throwsLit = new MaxonLiteralOp(promise.Throws);
-    _currentBlock!.AddOp(throwsLit);
-    var errorIsHeapPtrLit = new MaxonLiteralOp(promise.ErrorIsHeapPtr);
-    _currentBlock!.AddOp(errorIsHeapPtrLit);
+  /// The MaxonStructLiteralOp's field-init expects a MaxonValue. The raw i64 handle already
+  /// lives in `promise` (same SSA id as the underlying async call result), so we reference it
+  /// directly via MaxonInteger rather than emitting a fresh literal.
+  private MaxonStruct BoxPromiseIntoStruct(MaxonPromise promise, IrStructType promiseStructType,
+      Token errorToken) {
+    CheckPromiseStorageErrorTypeMatches(promise, promiseStructType, errorToken);
+
     var fields = new List<(string, MaxonValue)> {
-      ("inner", new MaxonInteger(promise.Id)),
-      ("throws_", throwsLit.Result),
-      ("errorIsHeapPtr", errorIsHeapPtrLit.Result)
+      (PromiseType.InnerField, new MaxonInteger(promise.Id))
     };
     var structLit = new MaxonStructLiteralOp(promiseStructType.Name, fields);
     _currentBlock!.AddOp(structLit);
     return (MaxonStruct)structLit.Result;
+  }
+
+  /// E3098: the storage type must name the same error the promise's thunk throws.
+  ///
+  /// Storing a throwing promise in a `Promise with T` is what used to ERASE the error type, and
+  /// every downstream symptom followed from it being allowed: the `(e)` binding had no type and
+  /// fell back to `int`, an associated-value payload had no static type to decref and leaked,
+  /// and `try await` had nothing to check the enclosing function's `throws` against. Refusing
+  /// the store is what makes those unrepresentable — and unlike the diagnostic this replaces,
+  /// it can name the type that DOES work, because there now is one.
+  private void CheckPromiseStorageErrorTypeMatches(MaxonPromise promise, IrStructType promiseStructType,
+      Token errorToken) {
+    var storageErrorType = PromiseStorageErrorType(promiseStructType);
+    var thunkErrorType = promise.ErrorType;
+
+    // A bare generic `Promise` (Element unbound) is a deferred generic context — accept.
+    if (!promiseStructType.TypeParams.ContainsKey(PromiseType.ElementParam)) return;
+    if (storageErrorType is IrTypeParameterType) return;
+
+    if (thunkErrorType == null && storageErrorType != null)
+      throw new CompileError(ErrorCode.SemanticPromiseErrorTypeMismatch,
+        $"'{promiseStructType.Name}' names the error type '{IrType.FormatAsSourceName(storageErrorType)}', but this promise's function does not throw — store it in a 'Promise with T' instead",
+        errorToken.Line, errorToken.Column);
+
+    if (thunkErrorType != null && storageErrorType == null)
+      throw new CompileError(ErrorCode.SemanticPromiseErrorTypeMismatch,
+        $"cannot store a promise from a function that throws '{thunkErrorType.Name}' in '{promiseStructType.Name}': it names the result type only, which would erase the error type — declare the storage as 'Promise with (T, {thunkErrorType.Name})' so 'try await' can bind and release the error",
+        errorToken.Line, errorToken.Column);
+
+    if (thunkErrorType != null && storageErrorType != null
+        && thunkErrorType.Name != storageErrorType.Name)
+      throw new CompileError(ErrorCode.SemanticPromiseErrorTypeMismatch,
+        $"'{promiseStructType.Name}' names the error type '{IrType.FormatAsSourceName(storageErrorType)}', but this promise's function throws '{thunkErrorType.Name}'",
+        errorToken.Line, errorToken.Column);
   }
 
   /// Element/inner-kind compatibility for the Promise type check above.
@@ -2618,6 +2653,12 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       SourceLine = typeNameToken.Line,
       SourceColumn = typeNameToken.Column
     };
+    // `Promise`'s trailing `ErrorType` parameter is optional — omitting it is how a
+    // NON-throwing promise is spelled (`Promise with T`). The compiler synthesises this
+    // type's representation and semantics anyway, so it is the one type that gets to say
+    // its last parameter may be left off; every other generic keeps a fixed arity.
+    if (typeName == PromiseType.TypeName)
+      completedStruct.OptionalTrailingTypeParamCount = PromiseType.OptionalTrailingTypeParams;
     // Apply any inner ranged typealiases collected during body parsing
     if (_pendingInnerRangedAliases.TryGetValue(typeName, out var pendingRanged)) {
       foreach (var (innerName, innerRanged) in pendingRanged) {
@@ -4372,47 +4413,36 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
       EnsureKeywordFollowedBySpaceBeforeParen(Expect(TokenType.With));
 
-      var concreteTypes2 = new List<IrType>();
       var constParams = new Dictionary<string, long>();
 
-      if (Check(TokenType.LeftParen)) {
-        // When expecting a single type arg, let ParseTypeRef handle it —
-        // (A, B) is a tuple type, not two separate type arguments
-        if (sourceStruct.AssociatedTypeNames.Count == 1) {
-          concreteTypes2.Add(ParseTypeRef());
-        } else {
-          Advance(); // consume '('
-          concreteTypes2.Add(ParseTypeRef());
-          while (Check(TokenType.Comma)) {
-            Advance();
-            concreteTypes2.Add(ParseTypeRef());
-          }
-          Expect(TokenType.RightParen);
-        }
-      } else {
-        // Check for "with N Type" form: integer followed by type
-        if (Check(TokenType.IntegerLiteral)) {
-          var intToken = Advance();
-          constParams["__capacity"] = ParseIntegerLiteral(intToken);
-        }
-        concreteTypes2.Add(ParseTypeRef());
-        // Parse remaining comma-separated type args for multi-parameter generics
-        while (concreteTypes2.Count < sourceStruct.AssociatedTypeNames.Count && Check(TokenType.Comma)) {
-          Advance();
-          concreteTypes2.Add(ParseTypeRef());
-        }
-      }
+      // "with N Type" const-capacity form: an integer literal prefixes the type args.
+      // Only in the unparenthesised form, where it cannot be confused with a tuple.
+      if (!Check(TokenType.LeftParen) && Check(TokenType.IntegerLiteral))
+        constParams["__capacity"] = ParseIntegerLiteral(Advance());
+
+      var concreteTypes2 = ParseWithTypeArgs(sourceStruct.AssociatedTypeNames.Count);
 
       RejectBarePrimitiveTypeArgs(concreteTypes2, aliasNameToken);
 
-      if (concreteTypes2.Count != sourceStruct.AssociatedTypeNames.Count)
+      // Trailing optional parameters may be omitted, so the arity is a RANGE. It is a range
+      // of exactly one for every type but `Promise`, whose `ErrorType` is omitted precisely
+      // when the thunk does not throw.
+      int declaredTypeParamCount = sourceStruct.AssociatedTypeNames.Count;
+      int minTypeParamCount = declaredTypeParamCount - sourceStruct.OptionalTrailingTypeParamCount;
+      if (concreteTypes2.Count < minTypeParamCount || concreteTypes2.Count > declaredTypeParamCount) {
+        var expected = minTypeParamCount == declaredTypeParamCount
+          ? $"{declaredTypeParamCount}"
+          : $"{minTypeParamCount} or {declaredTypeParamCount}";
         throw new CompileError(ErrorCode.ParserExpectedType,
-          $"Type '{sourceName}' expects {sourceStruct.AssociatedTypeNames.Count} type argument(s), got {concreteTypes2.Count}",
+          $"Type '{sourceName}' expects {expected} type argument(s), got {concreteTypes2.Count}",
           aliasNameToken.Line, aliasNameToken.Column);
+      }
 
-      // Build substitution map: associated type name -> concrete type
+      // Build substitution map: associated type name -> concrete type. An omitted optional
+      // parameter is left UNBOUND rather than given a placeholder — for `Promise`, the
+      // absence of `ErrorType` is the statement that the thunk does not throw.
       var substitution2 = new Dictionary<string, IrType>();
-      for (int i = 0; i < sourceStruct.AssociatedTypeNames.Count; i++) {
+      for (int i = 0; i < concreteTypes2.Count; i++) {
         substitution2[sourceStruct.AssociatedTypeNames[i]] = concreteTypes2[i];
       }
 
@@ -8374,17 +8404,6 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     // The type of the error this `try` may catch: the callee's `throws` for a
     // try-call, the awaited thunk's for a try-await. Both branches below set it.
     IrType? calleeThrowsType;
-    // Runtime SSA bool: when non-null, the otherwise emitters branch on this
-    // at runtime to decide whether the error flag is a heap pointer (assoc-
-    // value enum) that needs mm_decref. Set only on the storage-sourced
-    // try-await path, where the static error type is lost across the
-    // Promise<T> struct boundary. Direct-await and try-call leave this null
-    // and continue to rely on the static `calleeThrowsType` check.
-    MaxonValue? runtimeErrorIsHeapPtr = null;
-    // True when this is a try-await whose promise came out of a bare `Promise with T`,
-    // whose type has no slot for the thunk's error type. There is then no type to give
-    // an `otherwise (e)` binding, and we must say so rather than invent one.
-    var awaitErrorTypeErasedByStorage = false;
 
     // Check if this is a try-await expression (the inner parsed an await op)
     var lastOp = _currentBlock!.Operations[^1];
@@ -8400,9 +8419,15 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
           tryToken.Line, tryToken.Column);
       }
 
-      // Replace the MaxonAwaitOp with a MaxonTryAwaitOp
+      // Replace the MaxonAwaitOp with a MaxonTryAwaitOp. The await's identity and location
+      // carry across the substitution: a `try await` is still an await, and is just as
+      // linear (E3099) as a plain one.
       _currentBlock!.Operations.RemoveAt(_currentBlock!.Operations.Count - 1);
-      var tryAwaitOp = new MaxonTryAwaitOp(promise, promiseVal.InnerKind, promiseVal.InnerStructTypeName);
+      var tryAwaitOp = new MaxonTryAwaitOp(promise, promiseVal.InnerKind, promiseVal.InnerStructTypeName) {
+        AwaitLine = awaitOp.AwaitLine,
+        AwaitColumn = awaitOp.AwaitColumn,
+        PromiseVarName = awaitOp.PromiseVarName,
+      };
       _currentBlock!.AddOp(tryAwaitOp);
       InvalidateCachedSelfFields();
       _lastExprCallOp = null;
@@ -8413,13 +8438,6 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       // type, the assoc-value decref, the propagation-type check — keys off this one
       // value, so an await and a call now behave identically once it is set.
       calleeThrowsType = promiseVal.ErrorType;
-      // Storage erases the error TYPE (a bare `Promise with T` has no slot for it)
-      // but keeps one bit of it in the box. Where the type survived, the static
-      // check above is exact and this stays null.
-      runtimeErrorIsHeapPtr = promiseVal.ErrorIsHeapPtrRuntime;
-      // Throws was proven true just above, so a missing error type here can only mean
-      // storage dropped it.
-      awaitErrorTypeErasedByStorage = calleeThrowsType == null;
 
       // Void-returning async functions can't be used as values in assignments
       if (!isStatementContext && tryAwaitOp.Result == null) {
@@ -8459,12 +8477,6 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       // when the caller's type has associated values it mm_decrefs the ordinal as if it
       // were a heap pointer, and the program faults. Refuse, exactly as the `(e)` binding
       // below does, and for the same reason.
-      if (awaitErrorTypeErasedByStorage) {
-        throw new CompileError(ErrorCode.SemanticAwaitErrorTypeErased,
-          $"cannot propagate: a promise read back from a 'Promise with T' has lost the error type of the function it was spawned from, so 'try await' cannot check it against this function's 'throws {_currentFunction.ThrowsType.Name}' — 'Promise with T' names the result type only. Handle the error here with 'otherwise' (which converts it), or await the promise where 'async' produced it",
-          tryToken.Line, tryToken.Column);
-      }
-
       // Propagation re-throws the callee's error value through the enclosing function's
       // error flag. If the two error types differ, the caller decodes bits of one enum
       // as tags of another — a silent correctness bug. Require exact name match.
@@ -8490,14 +8502,14 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       Advance(); // consume 'ignore'
       // The error flag may carry a heap pointer that nobody else will decref.
       // Synthesize a one-block branch that frees it.
-      if (ErrorPathNeedsCleanup(calleeThrowsType, runtimeErrorIsHeapPtr)) {
+      if (ErrorPathNeedsCleanup(calleeThrowsType)) {
         var errorBlock = UniqueLabel("otherwise_ignore_error");
         var continueBlock = UniqueLabel("otherwise_ignore_continue");
         var errorFlagVar = StoreErrorFlagForCrossBlockAccess(tryInfo.ErrorFlag);
         EmitErrorFlagCheck(tryInfo.ErrorFlag, errorBlock, continueBlock);
         var errBlock = _currentFunction!.Body.AddBlock(errorBlock);
         _currentBlock = errBlock;
-        EmitImplicitErrorCleanupIfNeeded(errorFlagVar, calleeThrowsType, runtimeErrorIsHeapPtr);
+        EmitImplicitErrorCleanupIfNeeded(errorFlagVar, calleeThrowsType);
         _currentBlock!.AddOp(new MaxonBrOp(continueBlock));
         var contBlock = _currentFunction!.Body.AddBlock(continueBlock);
         _currentBlock = contBlock;
@@ -8512,7 +8524,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
     // Check for block handler form: otherwise 'label' ... end 'label'
     if (Check(TokenType.CharacterLiteral)) {
-      return EmitTryOtherwiseBlock(tryInfo, null, calleeThrowsType, runtimeErrorIsHeapPtr);
+      return EmitTryOtherwiseBlock(tryInfo, null, calleeThrowsType);
     }
 
     // Check for '(e)' error binding before block label
@@ -8524,26 +8536,21 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       // Binding an error we cannot type would hand back the raw error flag as an
       // `int` — a value that answers every method call with a type error naming a
       // type the user never wrote. Refuse, and say where the type went.
-      if (awaitErrorTypeErasedByStorage) {
-        throw new CompileError(ErrorCode.SemanticAwaitErrorTypeErased,
-          $"cannot bind '{errorBindingToken.Value}': a promise read back from a 'Promise with T' has lost the error type of the function it was spawned from — 'Promise with T' names the result type only. Await the promise where 'async' produced it to bind the error, or handle it without a binding ('otherwise <value>', 'otherwise ignore', 'otherwise 'label'')",
-          errorBindingToken.Line, errorBindingToken.Column);
-      }
-      return EmitTryOtherwiseBlock(tryInfo, errorBindingToken, calleeThrowsType, runtimeErrorIsHeapPtr);
+      return EmitTryOtherwiseBlock(tryInfo, errorBindingToken, calleeThrowsType);
     }
 
     // Single-statement form: otherwise return/break/continue/throw <...>
     // None of these keywords can start an expression, so there is no ambiguity
     // with the default-value form below.
     if (Check(TokenType.Return) || Check(TokenType.Break) || Check(TokenType.Continue) || Check(TokenType.Throw)) {
-      return EmitTryOtherwiseStatement(tryInfo, calleeThrowsType, runtimeErrorIsHeapPtr);
+      return EmitTryOtherwiseStatement(tryInfo, calleeThrowsType);
     }
 
     // Default value form: otherwise <expression>
-    return EmitTryOtherwiseDefault(tryInfo, tryToken, calleeThrowsType, runtimeErrorIsHeapPtr);
+    return EmitTryOtherwiseDefault(tryInfo, tryToken, calleeThrowsType);
   }
 
-  private ExprResult.Direct EmitTryOtherwiseStatement(TryResultInfo tryInfo, IrType? errorType = null, MaxonValue? runtimeErrorIsHeapPtr = null) {
+  private ExprResult.Direct EmitTryOtherwiseStatement(TryResultInfo tryInfo, IrType? errorType = null) {
     var errorBlock = UniqueLabel("otherwise_stmt");
     var continueBlock = UniqueLabel("otherwise_continue");
 
@@ -8552,7 +8559,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
     var errBlock = _currentFunction!.Body.AddBlock(errorBlock);
     _currentBlock = errBlock;
-    EmitImplicitErrorCleanupIfNeeded(errorFlagVar, errorType, runtimeErrorIsHeapPtr);
+    EmitImplicitErrorCleanupIfNeeded(errorFlagVar, errorType);
     ParseStatement();
     if (!BlockEndsWithTerminator(errBlock)) {
       _currentBlock!.AddOp(new MaxonBrOp(continueBlock));
@@ -8679,7 +8686,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     return EmitTryContinueBlock(continueBlock, resultVar, tryInfo);
   }
 
-  private ExprResult.Direct EmitTryOtherwiseBlock(TryResultInfo tryInfo, Token? errorBindingToken, IrType? errorType = null, MaxonValue? runtimeErrorIsHeapPtr = null) {
+  private ExprResult.Direct EmitTryOtherwiseBlock(TryResultInfo tryInfo, Token? errorBindingToken, IrType? errorType = null) {
     if (_inMatchArmBody) {
       var hereToken = Current();
       throw new CompileError(ErrorCode.ParserMatchBlockStatement,
@@ -8715,7 +8722,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       EmitErrorBinding(errorBindingToken.Value, errorFlagVar, errorType);
       _localVarLocations.Add((errorBindingToken.Value, errorBindingToken.Line, errorBindingToken.Column));
     } else {
-      EmitImplicitErrorCleanupIfNeeded(errorFlagVar, errorType, runtimeErrorIsHeapPtr);
+      EmitImplicitErrorCleanupIfNeeded(errorFlagVar, errorType);
     }
 
     ExpectNewline();
@@ -8785,18 +8792,14 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   }
 
   /// <summary>
-  /// True when the otherwise path needs to decref the error flag because it
-  /// may carry a heap-allocated assoc-value enum payload. Two sources:
-  ///   - Static: the callee's throws-type is a known associated-value enum
-  ///     (unconditional decref).
-  ///   - Runtime: a storage-sourced try-await loaded the boxed Promise's
-  ///     `errorIsHeapPtr` bit; the decref is gated on that bit at runtime.
-  /// Other throws (unit enums, non-enum errors) skip the cleanup and keep the
-  /// IR shape unchanged.
+  /// True when the otherwise path needs to decref the error flag because it carries a
+  /// heap-allocated assoc-value enum payload. This is a STATIC question about the error
+  /// type, and it has a static answer at every site — including a try-await on a promise
+  /// read back out of storage, which used to have to ask a runtime `errorIsHeapPtr` bit
+  /// because `Promise with T` had erased the type. `Promise with (T, E)` keeps E, so there
+  /// is one path here again. Other throws (unit enums, non-enum errors) skip the cleanup.
   /// </summary>
-  private static bool ErrorPathNeedsCleanup(IrType? errorType, MaxonValue? runtimeErrorIsHeapPtr = null) {
-    return MaxonPromise.ErrorTypeIsHeapPtr(errorType) || runtimeErrorIsHeapPtr != null;
-  }
+  private static bool ErrorPathNeedsCleanup(IrType? errorType) => MaxonPromise.ErrorTypeIsHeapPtr(errorType);
 
   /// <summary>
   /// When an otherwise handler has no explicit error binding and the callee's
@@ -8809,39 +8812,15 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// `throw self.field` — without the parent's destructor freeing the value
   /// before the caller sees it.)
   /// </summary>
-  private void EmitImplicitErrorCleanupIfNeeded(string errorFlagVar, IrType? errorType, MaxonValue? runtimeErrorIsHeapPtr = null) {
-    // Static path: the error type is known and its flag is unconditionally a heap
-    // pointer. Emit a bare decref.
-    if (MaxonPromise.ErrorTypeIsHeapPtr(errorType)) {
-      var loadForDecref = new MaxonVarRefOp(errorFlagVar, MaxonValueKind.Integer);
-      _currentBlock!.AddOp(loadForDecref);
-      var decrefOp = new MaxonCallRuntimeOp("mm_decref", [loadForDecref.Result], hasResult: false);
-      _currentBlock!.AddOp(decrefOp);
-      return;
-    }
-    // Runtime path (storage-sourced try-await): the static error type was
-    // lost across the Promise<T> struct boundary, so we have a runtime bool
-    // SSA value that says whether the error flag is a heap pointer. Branch
-    // on it and only decref on the heap-pointer arm. Reached only on the
-    // storage-sourced path; direct-await and try-call pass null here.
-    if (runtimeErrorIsHeapPtr != null) {
-      var decrefLabel = UniqueLabel("err_decref");
-      var afterLabel = UniqueLabel("err_after_decref");
-      _currentBlock!.AddOp(new MaxonCondBrOp(runtimeErrorIsHeapPtr, decrefLabel, afterLabel));
+  private void EmitImplicitErrorCleanupIfNeeded(string errorFlagVar, IrType? errorType) {
+    if (!ErrorPathNeedsCleanup(errorType)) return;
 
-      var decrefBlock = _currentFunction!.Body.AddBlock(decrefLabel);
-      _currentBlock = decrefBlock;
-      var loadForDecref = new MaxonVarRefOp(errorFlagVar, MaxonValueKind.Integer);
-      _currentBlock!.AddOp(loadForDecref);
-      _currentBlock!.AddOp(new MaxonCallRuntimeOp("mm_decref", [loadForDecref.Result], hasResult: false));
-      _currentBlock!.AddOp(new MaxonBrOp(afterLabel));
-
-      var afterBlock = _currentFunction!.Body.AddBlock(afterLabel);
-      _currentBlock = afterBlock;
-    }
+    var loadForDecref = new MaxonVarRefOp(errorFlagVar, MaxonValueKind.Integer);
+    _currentBlock!.AddOp(loadForDecref);
+    _currentBlock!.AddOp(new MaxonCallRuntimeOp("mm_decref", [loadForDecref.Result], hasResult: false));
   }
 
-  private ExprResult.Direct EmitTryOtherwiseDefault(TryResultInfo tryInfo, Token tryToken, IrType? errorType = null, MaxonValue? runtimeErrorIsHeapPtr = null) {
+  private ExprResult.Direct EmitTryOtherwiseDefault(TryResultInfo tryInfo, Token tryToken, IrType? errorType = null) {
     var defaultExpr = ParseExpression();
     var defaultValue = ResolveExprValue(defaultExpr);
 
@@ -8897,7 +8876,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       // For struct results: lazy evaluation — default is only created on error path,
       // try result is only stored on success path. This avoids incref'ing the invalid
       // error code on the error path and avoids allocating the default on the success path.
-      return EmitTryOtherwiseDefaultStruct(tryInfo, resultVarName, defaultValue, resultKind, structTypeName!, errorType, runtimeErrorIsHeapPtr);
+      return EmitTryOtherwiseDefaultStruct(tryInfo, resultVarName, defaultValue, resultKind, structTypeName!, errorType);
     }
 
     // For non-struct results: the original eager pattern is fine (no refcounting involved)
@@ -8905,7 +8884,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     _currentBlock!.AddOp(new MaxonAssignOp(defaultVarName, defaultValue, true, true, resultKind));
     _variables.Declare(defaultVarName, resultKind, true, defaultValue, _currentBlock!, structTypeName: structTypeName);
 
-    bool needsErrorCleanup = ErrorPathNeedsCleanup(errorType, runtimeErrorIsHeapPtr);
+    bool needsErrorCleanup = ErrorPathNeedsCleanup(errorType);
     string? errorFlagVar = null;
     if (needsErrorCleanup) {
       errorFlagVar = StoreErrorFlagForCrossBlockAccess(tryInfo.ErrorFlag);
@@ -8924,7 +8903,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     // Error block: adopt default value as the result
     var errBlock = _currentFunction!.Body.AddBlock(errorBlock);
     _currentBlock = errBlock;
-    if (needsErrorCleanup) EmitImplicitErrorCleanupIfNeeded(errorFlagVar!, errorType, runtimeErrorIsHeapPtr);
+    if (needsErrorCleanup) EmitImplicitErrorCleanupIfNeeded(errorFlagVar!, errorType);
     var loadedDefault = EmitVarRefOp(defaultVarName, resultKind, structTypeName);
     _currentBlock!.AddOp(new MaxonAssignOp(resultVarName, loadedDefault, false, true, resultKind));
     _currentBlock!.AddOp(new MaxonBrOp(continueBlock));
@@ -8945,8 +8924,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// </summary>
   private ExprResult.Direct EmitTryOtherwiseDefaultStruct(
     TryResultInfo tryInfo, string resultVarName, MaxonValue defaultValue,
-    MaxonValueKind resultKind, string structTypeName, IrType? errorType = null,
-    MaxonValue? runtimeErrorIsHeapPtr = null) {
+    MaxonValueKind resultKind, string structTypeName, IrType? errorType = null) {
 
     // Move the default expression ops from the current block to the error block.
     // The default expression was parsed into _currentBlock — we need to extract those ops.
@@ -8973,7 +8951,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       entryBlock.Operations.RemoveRange(tryOpIndex + 1, defaultOps.Count);
     }
 
-    bool needsErrorCleanup = ErrorPathNeedsCleanup(errorType, runtimeErrorIsHeapPtr);
+    bool needsErrorCleanup = ErrorPathNeedsCleanup(errorType);
     string? errorFlagVar = null;
     if (needsErrorCleanup) {
       errorFlagVar = StoreErrorFlagForCrossBlockAccess(tryInfo.ErrorFlag);
@@ -8989,7 +8967,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     // Error block: replay default expression ops, then assign to result var
     var errBlock = _currentFunction!.Body.AddBlock(errorBlockLabel);
     _currentBlock = errBlock;
-    if (needsErrorCleanup) EmitImplicitErrorCleanupIfNeeded(errorFlagVar!, errorType, runtimeErrorIsHeapPtr);
+    if (needsErrorCleanup) EmitImplicitErrorCleanupIfNeeded(errorFlagVar!, errorType);
     foreach (var op in defaultOps) {
       _currentBlock!.AddOp(op);
     }
@@ -17686,14 +17664,15 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         var refOp = new MaxonVarRefOp(v.VarName, info.Kind);
         _currentBlock!.AddOp(refOp);
         // Promise variables need to preserve their type metadata across blocks
-        // so await can verify the value is a promise and access InnerKind/Throws.
+        // so await can verify the value is a promise and access InnerKind/ErrorType.
         // ALL of the metadata, not some: dropping ErrorType here would re-erase the
         // error type for any `try await p` that sits in a different block from the
         // `async` that made p — which is the common shape, and which used to both
-        // mistype the `(e)` binding and leak an assoc-value payload.
+        // mistype the `(e)` binding and leak an assoc-value payload. There is now
+        // exactly one thing to carry, so there is nothing left to drop half of.
         if (info.Value is MaxonPromise origPromise) {
           return new MaxonPromise(refOp.Result.Id, origPromise.InnerKind, origPromise.InnerStructTypeName,
-              origPromise.Throws, origPromise.ErrorType, origPromise.ErrorIsHeapPtrRuntime);
+              origPromise.ErrorType);
         }
         return refOp.Result;
     }
@@ -18981,7 +18960,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
               $"argument type mismatch for '{callee.ParamNames[i]}': expected '{paramStructType.Name}' (inner type does not match the promise's result type)",
               functionNameToken.Line, functionNameToken.Column);
           }
-          args[i] = BoxPromiseIntoStruct(argPromise, paramStructType);
+          args[i] = BoxPromiseIntoStruct(argPromise, paramStructType, functionNameToken);
           continue;
         }
         // Struct parameter: arg must be a struct with matching type name
@@ -20276,7 +20255,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       needSep = true;
     }
     var sourceText = $"async {nameToken.Value}({argParts})";
-    var asyncOp = new MaxonAsyncCallOp(callee.Name, args, resultKind, resultStructTypeName, throws: callee.ThrowsType != null, errorType: callee.ThrowsType) {
+    var asyncOp = new MaxonAsyncCallOp(callee.Name, args, resultKind, resultStructTypeName, errorType: callee.ThrowsType) {
       ArgMutabilities = _lastArgMutabilities,
       ArgVarNames = _lastArgVarNames,
       CallLine = asyncToken.Line,
@@ -20294,6 +20273,11 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// Waits for the green thread to complete and returns its result.
   /// </summary>
   private ExprResult.Direct ParseAwaitExpression(Token awaitToken) {
+    // The identity `await` is LINEAR in, captured BEFORE ParsePrimary consumes the name.
+    // See MaxonTryAwaitOp.PromiseVarName: linearity is a property of the BINDING, not of the
+    // promise value, which is freshly re-tagged on every read.
+    var promiseVarName = ResolveAwaitedPromiseVarName();
+
     var inner = ParsePrimary();
     var innerVal = ResolveExprValue(inner);
 
@@ -20328,6 +20312,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     var awaitOp = new MaxonAwaitOp(promise, promise.InnerKind, promise.InnerStructTypeName) {
       AwaitLine = awaitToken.Line,
       AwaitColumn = awaitToken.Column,
+      PromiseVarName = promiseVarName,
     };
     _currentBlock!.AddOp(awaitOp);
     InvalidateCachedSelfFields();
@@ -20339,15 +20324,44 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     return new ExprResult.Direct(promise);
   }
 
-  /// Synthesize a MaxonPromise from a `Promise with T` struct value. The
-  /// struct stores its green-thread handle in the single `inner` i64 field;
-  /// we emit a MaxonFieldAccessOp to load that handle and tag the resulting
-  /// SSA value as MaxonPromise so the await machinery has the right inner
-  /// kind/struct-type drawn from the struct's Element type parameter.
+  /// The identity of the promise about to be awaited, for the linear-await check (E3099).
+  ///
+  /// `await` is linear in the promise, and a promise's stable name is the VALUE its binding
+  /// holds — `info.Value.Id`. That id survives every read of the variable and changes only
+  /// when the variable is reassigned, which is exactly when the promise becomes a different
+  /// green thread. It covers both a promise still in the hand of its `async` (a MaxonPromise)
+  /// and one that came back out of storage (a Promise struct), because the question asked is
+  /// about the BINDING, not about what shape the value in it has.
+  ///
+  /// Null when the awaited expression is not a bare binding — `await async f()`, or an await
+  /// of a call result. Such a promise has no second occurrence to be awaited from, so there is
+  /// nothing for linearity to say about it.
+  private string? ResolveAwaitedPromiseVarName() {
+    if (!CheckIdentifierLike()) return null;
+
+    // A bare name, not the head of a call or a field/method chain.
+    var next = PeekNext().Type;
+    if (next is TokenType.Dot or TokenType.LeftParen) return null;
+
+    var name = Current().Value;
+    return _variables.TryGetValue(name, out _) ? name : null;
+  }
+
+  /// Synthesize a MaxonPromise from a `Promise with T` / `Promise with (T, E)` struct value.
+  /// The struct stores its green-thread handle in the single `inner` i64 field; we emit a
+  /// MaxonFieldAccessOp to load that handle and tag the resulting SSA value as a MaxonPromise
+  /// carrying the RESULT type (`Element`) and the ERROR type (`ErrorType`) read straight off
+  /// the storage type's parameters.
+  ///
+  /// This is the whole of what "the erasure is fixed" means. A promise read back out of storage
+  /// is now indistinguishable from one still sitting at its `async` site: same result type, same
+  /// error type, same answer to whether the error owns a heap payload. It used to come back
+  /// throws=true-with-no-error-type — a shape that could not be true of any real function — and
+  /// every promise path downstream had a special case for it.
   private MaxonPromise ReconstructPromiseFromStruct(MaxonStruct structVal, IrStructType structType) {
     MaxonValueKind? innerKind = null;
     string? innerStructTypeName = null;
-    if (structType.TypeParams.TryGetValue("Element", out var elementType)) {
+    if (structType.TypeParams.TryGetValue(PromiseType.ElementParam, out var elementType)) {
       innerKind = elementType.ToValueKind();
       innerStructTypeName = elementType switch {
         IrStructType est => est.Name,
@@ -20355,29 +20369,12 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         _ => null
       };
     }
-    var loadInner = new MaxonFieldAccessOp(structVal, structType.Name, "inner", MaxonValueKind.Integer, null);
+
+    var loadInner = new MaxonFieldAccessOp(structVal, structType.Name, PromiseType.InnerField, MaxonValueKind.Integer, null);
     _currentBlock!.AddOp(loadInner);
-    // Load the `errorIsHeapPtr` bit from the boxed struct so the otherwise
-    // emitters can decide at runtime whether the error flag is a heap pointer
-    // (assoc-value enum, needs mm_decref) or a plain tag (unit enum). The
-    // static error type is lost across storage, but this one bit — written
-    // by BoxPromiseIntoStruct from the original callee's ThrowsType — is
-    // enough to drive a conditional decref.
-    var loadErrIsHeapPtr = new MaxonFieldAccessOp(structVal, structType.Name, "errorIsHeapPtr", MaxonValueKind.Bool, null);
-    _currentBlock!.AddOp(loadErrIsHeapPtr);
-    // Treat every reconstructed Promise<T> as throwing at the type level.
-    // The `throws_` field IS stored in the struct (so the runtime can branch
-    // on it) but its concrete value is only known at the boxing site — we
-    // can't preserve compile-time throws-ness through storage. Saying
-    // throws=true here means call sites must use `try await` even when the
-    // original promise came from a non-throwing async call; the runtime
-    // dispatch reads the field and routes to the non-throwing wait path,
-    // so `try await ... otherwise X` on a non-throwing promise still
-    // succeeds — it just adds an ignored error-handler the runtime never
-    // triggers.
+
     return new MaxonPromise(loadInner.Result.Id, innerKind, innerStructTypeName,
-        throws: true, errorType: null,
-        errorIsHeapPtrRuntime: loadErrIsHeapPtr.Result);
+        errorType: PromiseStorageErrorType(structType));
   }
 
   /// <summary>

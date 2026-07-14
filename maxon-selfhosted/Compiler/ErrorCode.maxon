@@ -200,6 +200,42 @@ export enum ErrorCode
 	// onward), so this shared diagnostic takes the next code free on both
 	// sides. Mirrors the C# bootstrap's `SemanticEnumAccessorComparison`.
 	semanticEnumAccessorComparison = 3097
+	// E3098: a promise stored in a Promise type that does not name the error
+	// its thunk throws. `Promise` is parameterised by BOTH what its thunk
+	// returns and what it throws — `Promise with T` is a non-throwing promise,
+	// `Promise with (T, E)` one that throws E. Storing a THROWING promise in a
+	// `Promise with T` is what used to ERASE the error type, and every symptom
+	// followed from allowing it: an `otherwise (e)` binding had no type and came
+	// back as a raw `int`; an associated-value error's payload had no static
+	// type to decref and LEAKED; and `try await` had no type to check the
+	// enclosing function's `throws` against, so a thunk throwing A could be
+	// awaited inside a function throwing B with A's ordinals reinterpreted as
+	// B's tags. The diagnostic names the two-parameter type that keeps E.
+	// Mirrors the C# bootstrap's `SemanticPromiseErrorTypeMismatch`.
+	semanticPromiseErrorTypeMismatch = 3098
+	// E3099: a closure that CAPTURES, stored into a function-typed struct
+	// field. A closure captures BY REFERENCE — its environment holds the
+	// ADDRESSES of the enclosing frame's stack slots — so a function VALUE is
+	// two words (code pointer + environment pointer). A struct FIELD is one
+	// 8-byte slot and holds the code pointer alone, so the store drops the
+	// environment, the call passes env=0, and the first captured read
+	// dereferences null. A NON-capturing closure is unaffected. Making this
+	// work needs escape analysis plus by-value capture, deferred to shv2 P1.5
+	// where it co-lands with `async` (a green-thread capture IS an escape).
+	// Mirrors the C# bootstrap's `SemanticCapturingClosureInField`.
+	semanticCapturingClosureInField = 3099
+	// E3100: a promise awaited a SECOND time. `await` is LINEAR — a promise is
+	// awaited exactly once. The thunk owns its result and HANDS IT OVER at the
+	// await, so a second await takes a second reference to a payload the thunk
+	// only ever owned once, and the two releases underflow the refcount and free
+	// it twice. It is an ownership bug, not an error-handling one: a
+	// non-throwing `async` returning a String double-frees identically. The
+	// check is flow-sensitive — two awaits in mutually exclusive branches are
+	// each the only await on their own path and are allowed; what is refused is
+	// a second await REACHABLE from a first, which is also what catches a single
+	// `await` sitting in a loop over a promise spawned outside it.
+	// Mirrors the C# bootstrap's `SemanticPromiseAlreadyAwaited`.
+	semanticPromiseAlreadyAwaited = 3100
 	// E3070: borrow conflict — a collection was mutated (e.g. `arr.push(x)`)
 	// while a reference into its backing buffer is still live (e.g.
 	// `let s = try arr.get(0) ...`). A growth could reallocate the buffer

@@ -579,7 +579,15 @@ end 'outcomeOf'
 // Promise carrying one worker's drained records. The dispatcher holds one per slot. Every drain is
 // spawned AT DISPATCH TIME, so all N overlapped stdout reads sit pending in the runtime at once
 // and a slow worker never gates a fast one.
-typealias DrainPromise = Promise with StringArray
+//
+// It names BOTH types the drain can come back with: the records on success, and the
+// SubprocessError on failure. Naming the error is what lets the dispatcher bind it below — and
+// what makes its payload get RELEASED. A `Promise with StringArray` names the result only, so
+// boxing a drain into one used to erase `SubprocessError`; the box kept a single bit saying
+// whether the error was a heap pointer, that bit read `false` for a union, and every dead
+// worker leaked the String inside its error. A green suite never showed it: the drain only
+// throws when a worker dies.
+typealias DrainPromise = Promise with (StringArray, SubprocessError)
 typealias DrainPromiseArray = Array with DrainPromise
 
 // Read record lines from `child` until its next WORKER_READY. Throws on EOF before READY — the
@@ -878,19 +886,13 @@ export function runSpecPool(compilerExe FilePath, specDir FilePath, filter Strin
 			let job = (try inFlight.get(readySlot) otherwise panic("runSpecPool: inFlight.get({readySlot}) is in bounds by construction")).clone()
 			let drain = try drains.get(readySlot) otherwise panic("runSpecPool: a busy slot always has a drain promise, and slot {readySlot} is busy")
 
-			// No `(e)` binding on this `otherwise`, and the reason is the STORAGE, not the await:
-			// `DrainPromise` is `Promise with StringArray`, whose one type parameter names the
-			// RESULT. Boxing a promise into it therefore drops the thunk's `throws` type, so by
-			// the time the drain comes back out of `drains` there is no SubprocessError left to
-			// bind — only a runtime bit saying whether the error flag is a heap pointer. The
-			// bootstrap now rejects a binding here outright (E3098) instead of quietly handing
-			// back the error flag typed `int`. Awaiting a promise where `async` produced it DOES
-			// bind the real error; recovering it across storage needs the error type to become
-			// part of the promise's type (`Promise with (T, E)`).
-			//
-			// The drain has exactly two ways to fail and both are named below, so nothing is lost.
-			let lines = try await drain otherwise 'workerDied'
-				abortOnDeadWorker(handle, job: job, reason: "its stdout gave EOF or an I/O error before {WorkerReadyMarker}")
+			// `DrainPromise` names its error type, so `e` here is the real SubprocessError the
+			// drain threw — through an array, through a re-dispatch, all the way from the `async`
+			// that spawned it. It reports WHICH failure killed the worker instead of the generic
+			// guess this site used to print, and binding it is also what RELEASES it: a union's
+			// payload is a heap pointer, and the binding is what decrefs it.
+			let lines = try await drain otherwise (e) 'workerDied'
+				abortOnDeadWorker(handle, job: job, reason: "its stdout died before {WorkerReadyMarker}: {e.displayReason()}")
 			end 'workerDied'
 
 			// Keep the slot fed BEFORE decoding what it just said. The worker has been idle since

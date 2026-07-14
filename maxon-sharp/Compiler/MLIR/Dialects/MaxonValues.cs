@@ -23,52 +23,68 @@ public sealed class MaxonEnum(int id, string typeName) : MaxonValue(id) {
 }
 public sealed class MaxonFunctionPtr(int id) : MaxonValue(id);
 
+/// The `Promise` facade type declared in stdlib/Builtins.maxon, named in one place so the
+/// compiler's promise paths key off a constant rather than a scattered string literal.
+///
+/// `Promise uses Element, ErrorType`, and `ErrorType` is an OPTIONAL trailing type parameter:
+///   `Promise with T`       — the thunk does not throw; ErrorType is absent from TypeParams.
+///   `Promise with (T, E)`  — the thunk throws E; ErrorType is bound to E and SURVIVES storage.
+public static class PromiseType {
+  public const string TypeName = "Promise";
+  /// The type of the value the thunk returns.
+  public const string ElementParam = "Element";
+  /// The type of the error the thunk throws. Absent iff the thunk does not throw.
+  public const string ErrorParam = "ErrorType";
+  /// `ErrorType` may be omitted — that omission is what spells "non-throwing".
+  public const int OptionalTrailingTypeParams = 1;
+  /// The green-thread handle. The box's only field; see the type's doc comment for why the
+  /// `throws_` and `errorIsHeapPtr` bits that used to accompany it are gone.
+  public const string InnerField = "inner";
+}
+
 /// Represents a promise (green thread handle) from an async call.
 /// Carries type info about the eventual result so await can produce the right type.
 public sealed class MaxonPromise(
     int id,
     MaxonValueKind? innerKind,
     string? innerStructTypeName,
-    bool throws = false,
-    Core.IrType? errorType = null,
-    MaxonValue? errorIsHeapPtrRuntime = null) : MaxonValue(id) {
+    Core.IrType? errorType = null) : MaxonValue(id) {
   public MaxonValueKind? InnerKind { get; } = innerKind;
   public string? InnerStructTypeName { get; } = innerStructTypeName;
-  /// Whether the spawned function is a throwing function (requires try await).
-  public bool Throws { get; } = throws;
-  /// The awaited thunk's declared `throws` type — the type an `otherwise (e)`
-  /// binding must take. Carrying the TYPE (not a bit distilled from it) is what
-  /// lets `try await p otherwise (e)` bind `e` as the error the thunk actually
-  /// throws instead of as the promise's raw i64 representation.
+
+  /// The awaited thunk's declared `throws` type, or null if the thunk does not throw.
   ///
-  /// Null in exactly two cases, which are not the same thing:
-  ///   - the spawned callee does not throw (Throws == false);
-  ///   - the promise came out of storage as a bare `Promise with T`, whose type
-  ///     has no slot for the error (Throws == true, ErrorType == null). Use
-  ///     `Promise with (T, E)` to keep E across storage.
+  /// This is the WHOLE of what a promise knows about errors. It used to be accompanied by
+  /// two bits distilled from it — `Throws` and `ErrorIsHeapPtr` — and the distillation was
+  /// the bug: a bit cannot say which enum an ordinal belongs to, so an `otherwise (e)`
+  /// binding fell back to `int`, an associated-value payload went un-decref'd, and a thunk
+  /// throwing A could be awaited inside a function throwing B with A's ordinals silently
+  /// reinterpreted as B's tags. Both bits are now DERIVED from this one field, so there is
+  /// no second copy of the fact to drift out of agreement with it.
+  ///
+  /// It survives storage. `Promise with (T, E)` names the error type in the type itself, so
+  /// boxing a promise into an array or a struct field keeps E; `Promise with T` is the type
+  /// of a NON-throwing promise, and a throwing one cannot be stored in it (E3098 says so and
+  /// names the two-parameter form). That is why there is no longer an `errorIsHeapPtr` bit
+  /// riding along in the box to paper over an erased type — nothing is erased.
   public Core.IrType? ErrorType { get; } = errorType;
+
+  /// Whether the spawned function throws — i.e. whether `try await` is required.
+  /// Derived: a promise throws exactly when it has an error type to throw.
+  public bool Throws => ErrorType != null;
 
   /// Whether an error flag of this type is a heap POINTER — an owned associated-value
   /// enum payload the error path must mm_decref — rather than a plain ordinal.
   ///
-  /// This is the single answer to that question. It is asked in three places that must
-  /// agree or the program either leaks (a payload nobody releases) or faults (an ordinal
-  /// mm_decref'd as a pointer): here, when boxing a promise into a `Promise with T`; in
-  /// the parser, when deciding whether an `otherwise` path needs a cleanup branch; and
-  /// in the parser again, when emitting that branch. They are not three tests of the
-  /// same shape any more — they are three callers of this one.
+  /// This is the single answer to that question. It is asked in the places that must agree
+  /// or the program either leaks (a payload nobody releases) or faults (an ordinal
+  /// mm_decref'd as a pointer): when the parser decides whether an `otherwise` path needs a
+  /// cleanup branch, and when it emits that branch. They are not separate tests of the same
+  /// shape — they are callers of this one.
   public static bool ErrorTypeIsHeapPtr(Core.IrType? errorType) =>
       errorType is Core.IrEnumType { HasAssociatedValues: true };
 
   /// True iff the error flag is a heap pointer that the `otherwise` path must mm_decref.
-  /// Derived from ErrorType rather than stored: a second, independently-passed bit is a
-  /// second thing to forget, and it HAS been forgotten (the cross-block promise re-tag
-  /// used to drop it).
+  /// Statically known at every await site, boxed or not, because ErrorType is.
   public bool ErrorIsHeapPtr => ErrorTypeIsHeapPtr(ErrorType);
-  /// Runtime SSA bool loaded from the boxed Promise struct's `errorIsHeapPtr`
-  /// field. Non-null only when the error TYPE was erased by storage in a bare
-  /// `Promise with T` (ReconstructPromiseFromStruct) — the one bit of the type
-  /// that survives boxing. The otherwise emitter branches on it to decide the
-  /// decref; a `Promise with (T, E)` needs no such branch because E is static.
-  public MaxonValue? ErrorIsHeapPtrRuntime { get; } = errorIsHeapPtrRuntime;
 }

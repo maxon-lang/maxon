@@ -47,6 +47,9 @@ public static class SemanticCheckPass {
     // Check that a throwing promise is awaited with `try await`, not a bare `await`
     CheckPlainAwaitOfThrowingPromise(module);
 
+    // Check that no promise is awaited twice — `await` is linear
+    CheckLinearAwait(module);
+
     // Check for redundant `if x.contains(k) ... try x.get(k) otherwise ...` pattern
     CheckRedundantContainsGet(module);
   }
@@ -264,10 +267,11 @@ public static class SemanticCheckPass {
   /// thing from `_inTryContext`, which is true across the whole of `try f(await p)` and
   /// so misses the plain, leaking await sitting in its arguments.
   ///
-  /// The gate is the error TYPE, not `Throws`: a promise reconstructed out of a
-  /// `Promise with T` reports Throws=true unconditionally (its real throws-ness died with
-  /// the box and the runtime re-reads it from the struct), so gating on `Throws` would
-  /// reject `await` on every STORED non-throwing promise too.
+  /// The gate is the error TYPE, and `Throws` is now derived from it, so the two say the same
+  /// thing. They did not always: a promise reconstructed out of a `Promise with T` used to report
+  /// Throws=true unconditionally, because its real throws-ness died with the box, and gating on
+  /// that bit would have rejected `await` on every STORED non-throwing promise. `Promise with
+  /// (T, E)` keeps the error type across storage, so there is one answer again.
   private static void CheckPlainAwaitOfThrowingPromise(IrModule<MaxonOp> module) {
     foreach (var func in module.Functions) {
       foreach (var block in func.Body.Blocks) {
@@ -282,6 +286,110 @@ public static class SemanticCheckPass {
           };
         }
       }
+    }
+  }
+  /// The await ops, of both forms, reduced to what the linear-await check needs.
+  /// `try await` is an await: it consumes the promise's result exactly as a plain one does.
+  private readonly record struct AwaitSite(string VarName, int? Line, int? Column);
+
+  private static AwaitSite? AsAwaitSite(MaxonOp op) => op switch {
+    MaxonAwaitOp { PromiseVarName: { } name } a => new AwaitSite(name, a.AwaitLine, a.AwaitColumn),
+    MaxonTryAwaitOp { PromiseVarName: { } name } t => new AwaitSite(name, t.AwaitLine, t.AwaitColumn),
+    _ => null
+  };
+
+  /// E3099: a promise awaited a SECOND time.
+  ///
+  /// `await` is LINEAR. The thunk owns its result and hands it over at the await, so a second
+  /// await takes a second reference to a payload the thunk only ever owned once: the two releases
+  /// underflow the refcount and free it twice. Making the second await a compile error is what
+  /// makes that double-free unrepresentable, rather than something the runtime survives.
+  ///
+  /// The check is FLOW-SENSITIVE, and it has to be, in both directions:
+  ///
+  ///   - two awaits of one promise in mutually exclusive branches are each the only await on
+  ///     their own path. A lexical "seen it before" check would reject them, and they are fine;
+  ///   - ONE await, sitting in a loop, over a promise spawned OUTSIDE the loop, awaits the same
+  ///     green thread on every iteration. A lexical check sees a single await and misses it.
+  ///
+  /// So: from each await, walk the CFG forward and report any await of the same binding that is
+  /// REACHABLE from it — including itself, which is what catches the loop. The walk is KILLED at
+  /// any ASSIGNMENT to that binding, because assigning it puts a different green thread in it.
+  /// That is what makes the central idiom `for p in promises 'each' ... await p ... end` legal:
+  /// the loop assigns `p` the next element on every iteration, so its single `await` is one await
+  /// per promise, not N awaits of one. It is also what makes the name safe to key on across
+  /// scopes — a re-declaration of `p` in a later scope is itself an assignment, and kills.
+  private static void CheckLinearAwait(IrModule<MaxonOp> module) {
+    foreach (var func in module.Functions) {
+      // Cheap pre-pass: most functions contain no await at all.
+      bool hasAwait = false;
+      foreach (var block in func.Body.Blocks) {
+        foreach (var op in block.Operations) {
+          if (AsAwaitSite(op) != null) { hasAwait = true; break; }
+        }
+        if (hasAwait) break;
+      }
+      if (!hasAwait) continue;
+
+      var blocksByName = func.Body.Blocks.ToDictionary(b => b.Name);
+
+      foreach (var block in func.Body.Blocks) {
+        for (int i = 0; i < block.Operations.Count; i++) {
+          if (AsAwaitSite(block.Operations[i]) is not { } first) continue;
+          if (FindReachableAwaitOf(first.VarName, block, i + 1, blocksByName) is not { } second) continue;
+
+          throw new CompileError(ErrorCode.SemanticPromiseAlreadyAwaited,
+            "this promise has already been awaited: 'await' is linear — a promise is awaited exactly once, because the awaited thunk hands its result over and a second await would release it twice",
+            second.Line, second.Column) {
+            FilePath = func.SourceFilePath
+          };
+        }
+      }
+    }
+  }
+
+  /// Forward CFG search from (startBlock, startIdx) for another await of the binding `varName`,
+  /// killing any path that ASSIGNS it (a re-armed binding holds a new promise, not the awaited one).
+  private static AwaitSite? FindReachableAwaitOf(string varName, IrBlock<MaxonOp> startBlock, int startIdx,
+      Dictionary<string, IrBlock<MaxonOp>> blocksByName) {
+    var queue = new Queue<(IrBlock<MaxonOp> Block, int Index)>();
+    queue.Enqueue((startBlock, startIdx));
+    // A block may legitimately be entered once from mid-block (the start) and once from its top
+    // (around a loop), and the second entry can see ops the first scan started past — including
+    // the assignment that kills the path, and the await that proves it double.
+    var visited = new HashSet<(string, int)> { (startBlock.Name, startIdx) };
+
+    while (queue.Count > 0) {
+      var (block, start) = queue.Dequeue();
+      bool killed = false;
+
+      for (int i = start; i < block.Operations.Count; i++) {
+        var op = block.Operations[i];
+
+        if (AsAwaitSite(op) is { } site && site.VarName == varName) return site;
+
+        if (op is MaxonAssignOp assign && assign.VarName == varName) { killed = true; break; }
+      }
+      if (killed) continue;
+
+      foreach (var successor in SuccessorNames(block)) {
+        if (!blocksByName.TryGetValue(successor, out var next)) continue;
+        if (visited.Add((next.Name, 0))) queue.Enqueue((next, 0));
+      }
+    }
+    return null;
+  }
+
+  private static IEnumerable<string> SuccessorNames(IrBlock<MaxonOp> block) {
+    if (block.Operations.Count == 0) yield break;
+    switch (block.Operations[^1]) {
+      case MaxonBrOp br:
+        yield return br.Target;
+        break;
+      case MaxonCondBrOp condBr:
+        yield return condBr.ThenBlock;
+        yield return condBr.ElseBlock;
+        break;
     }
   }
 

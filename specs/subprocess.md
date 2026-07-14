@@ -444,7 +444,7 @@ loop's interaction with multiple in-flight promises sitting on the
 P's local queue; and the TIB save/restore around each child's
 Win32 calls.
 ```maxon
-typealias SubP = Promise with CollectedOutput
+typealias SubP = Promise with (CollectedOutput, SubprocessError)
 typealias SubPArray = Array with SubP
 
 function main() returns ExitCode
@@ -506,7 +506,7 @@ catches a regression to sequential while tolerating cold-start jitter.
 The 8000ms test timeout gives generous headroom for the harness
 itself, well above the parallel-execution wall clock.
 ```maxon
-typealias SubP = Promise with CollectedOutput
+typealias SubP = Promise with (CollectedOutput, SubprocessError)
 typealias SubPArray = Array with SubP
 
 function main() returns ExitCode

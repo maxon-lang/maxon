@@ -77,34 +77,51 @@ end 'InitableFromDictionaryLiteral'
 // exists so user code can name the type — typically in a typealias to declare
 // arrays or struct fields holding promises.
 //
-//   let p = async compute(42)             // p has type `Promise with Integer`
-//   typealias IntPromiseArray = Array with (Promise with Integer)
-//   var arr = IntPromiseArray.create()
-//   arr.push(p)
+// A promise is typed by BOTH the value its thunk returns and the error its thunk
+// throws, because both come back across the same await:
+//
+//   Promise with T          the thunk does NOT throw.  `await p`
+//   Promise with (T, E)     the thunk `throws E`.      `try await p otherwise (e)` — e is an E
+//
+// The error type is part of the TYPE, not a bit stored in the box, and that is
+// load-bearing rather than tidy. A bit cannot say WHICH enum an ordinal belongs
+// to. When it was one — when this type had a single parameter naming only the
+// result — an `otherwise (e)` binding on a stored promise had no type to give `e`
+// and handed back the raw i64 handle typed `int`; an associated-value payload was
+// never decref'd and leaked; and a thunk throwing A could be awaited inside a
+// function throwing B with A's ordinals silently reinterpreted as B's tags.
+// Naming E is what makes all three unrepresentable.
+//
+//   typealias FetchPromise = Promise with (Integer, FetchError)
+//   typealias FetchPromiseArray = Array with FetchPromise
+//   var arr = FetchPromiseArray.create()
+//   arr.push(async fetch(1))            // keeps FetchError across storage
 //   for q in arr 'each'
-//       let result = await q
+//       let result = try await q otherwise (e) 'failed'
+//           return match e 'why'         // e is a FetchError, here and everywhere
+//               ...
+//           end 'why'
+//       end 'failed'
 //   end 'each'
-export type Promise uses Element
-	// Inner representation. Normally accessed via `await`, `try await`, and
-	// `.cancel()`. The compiler stores the green-thread handle in `inner` and
-	// a single throws-bit in `throws_` so the await site knows whether
-	// `try await` is required. Both fields are written by the compiler's
-	// promise-boxing path (BoxPromiseIntoStruct in the C# bootstrap) and
-	// read by the await unbox path.
+//
+// AWAIT IS LINEAR: a promise is awaited exactly once. The thunk owns its result
+// and hands it over at the await; a second await of the same promise would take a
+// second +1 on a payload the thunk only owns once, and free it twice. E3099.
+export type Promise uses Element, ErrorType
+	// Inner representation: the green-thread handle. Normally accessed via `await`,
+	// `try await`, and `.cancel()`. Written by the compiler's promise-boxing path
+	// (BoxPromiseIntoStruct in the C# bootstrap) and read by the await unbox path.
 	//
-	// `inner` is exported (read-only via `let`) so non-blocking pollers like
-	// the spec test dispatcher can peek at the underlying GT's status. Don't
-	// mutate; the field is a raw GT pointer and the compiler depends on its
-	// stability through await.
+	// It is the ONLY field. The box used to carry two more — a `throws_` bit and an
+	// `errorIsHeapPtr` bit — that existed solely because the type had nowhere to keep
+	// the error. `throws_` was write-only for its whole life (nothing ever read it);
+	// `errorIsHeapPtr` drove a runtime-branched decref that a static type does
+	// straight-line. Both are gone: `ErrorType` answers what they approximated.
+	//
+	// `inner` is exported (read-only via `let`) so non-blocking pollers like the spec
+	// test dispatcher can peek at the underlying GT's status. Don't mutate; the field
+	// is a raw GT pointer and the compiler depends on its stability through await.
 	export let inner = 0
-	let throws_ = false
-	// Compiler-managed: true iff the spawned function's error type is an
-	// associated-value enum. The await/otherwise path reads this bit to
-	// decide whether the error flag carries a heap pointer that needs to be
-	// released via mm_decref. Written by BoxPromiseIntoStruct from the
-	// callee's static ThrowsType; read at try-await sites whose static
-	// error type has been lost across storage.
-	let errorIsHeapPtr = false
 end 'Promise'
 
 // Parsable - types that can be initialized from a string representation.

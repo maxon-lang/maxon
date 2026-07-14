@@ -153,6 +153,16 @@ public class IrStructType : IrType {
   // Inner ranged primitive typealiases declared inside this generic type body.
   // Each concrete instantiation gets a nominally distinct copy of these aliases.
   public Dictionary<string, IrRangedPrimitiveType> InnerRangedAliases { get; } = [];
+  // How many of the TRAILING entries of AssociatedTypeNames may be omitted at a use site.
+  // Zero for every user type: `Map with Key` is an arity error, and should be.
+  //
+  // It is 1 for exactly one type, `Promise`, whose trailing parameter is the error its thunk
+  // throws (see PromiseType). `Promise with T` is the type of a NON-throwing promise and
+  // `Promise with (T, E)` of a throwing one, so the parameter is present precisely when there
+  // is an error to name. An omitted optional parameter is left ABSENT from TypeParams rather
+  // than bound to a placeholder: "this promise has no error type" and "this promise's error
+  // type is some stand-in" are different claims, and only the first one is true.
+  public int OptionalTrailingTypeParamCount { get; set; }
   public IrStructType(string name, List<IrStructField> fields, List<string>? associatedTypeNames = null, IEnumerable<string>? conformingInterfaces = null, Dictionary<string, long>? constParams = null, Dictionary<string, IrType>? typeParams = null, bool isTuple = false, Dictionary<string, List<string>>? whereConstraints = null, bool isInterfaceAlias = false) : base(name, ComputeSize(fields)) {
     Fields = fields;
     AssociatedTypeNames = associatedTypeNames ?? [];

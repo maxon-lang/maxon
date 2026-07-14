@@ -1,5 +1,5 @@
 // Test: subprocess-async-parallel
-typealias SubP = Promise with CollectedOutput
+typealias SubP = Promise with (CollectedOutput, SubprocessError)
 typealias SubPArray = Array with SubP
 
 function main() returns ExitCode
@@ -408,10 +408,8 @@ module {
     x64.mov r8, [rbp-264]
     x64.mov rdx, 2
     x64.call __gt_spawn
-    x64.mov rcx, 1
-    x64.mov rdx, 1
     x64.mov [rbp-272], rax
-    x64.mov rcx, 24
+    x64.mov rcx, 8
     x64.xor edx, edx
     x64.mov r8, 23
     x64.call mm_alloc
@@ -419,12 +417,6 @@ module {
     x64.mov rcx, [rbp-8]
     x64.mov rdx, [rbp-272]
     x64.mov [rcx+0], rdx
-    x64.mov rcx, [rbp-8]
-    x64.mov rdx, 1
-    x64.mov byte ptr [rcx+8], rdxb
-    x64.mov rcx, [rbp-8]
-    x64.mov rdx, 1
-    x64.mov byte ptr [rcx+16], rdxb
     x64.mov rcx, [rbp-8]
     x64.call mm_incref
     x64.mov rax, [rbp-48]
@@ -528,63 +520,54 @@ module {
     x64.call mm_incref
     x64.mov rdx, [rbp-192]
     x64.mov rbx, [rdx+0]
-    x64.mov rsi, [rbp-192]
-    x64.movzx rdi, byte ptr [rsi+16]
-    x64.mov [rbp-224], rdi
     x64.mov rcx, rbx
     x64.call __gt_try_await
     x64.mov [rbp-200], rdx
     x64.mov [rbp-208], rax
-    x64.xor r8d, r8d
-    x64.cmp rdx, r8
+    x64.xor esi, esi
+    x64.cmp rdx, rsi
     x64.je main.otherwise_continue_0
   otherwise_stmt_0:
-    x64.mov rax, [rbp-224]
-    x64.test rax, rax
-    x64.je main.err_after_decref_0
-  err_decref_0:
     x64.mov rax, [rbp-200]
     x64.mov rcx, [rbp-200]
     x64.call mm_decref
-    x64.jmp main.err_after_decref_0
-  err_after_decref_0:
-    x64.mov rax, [rbp-184]
-    x64.test rax, rax
-    x64.jz __nonnull_skip_9
     x64.mov rcx, [rbp-184]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_9
     x64.call mm_decref
     x64.label __nonnull_skip_9
-    x64.mov rcx, [rbp-208]
-    x64.test rcx, rcx
+    x64.mov rdx, [rbp-208]
+    x64.test rdx, rdx
     x64.jz __nonnull_skip_10
+    x64.mov rcx, [rbp-208]
     x64.call mm_decref
     x64.label __nonnull_skip_10
-    x64.mov rdx, [rbp-16]
-    x64.test rdx, rdx
+    x64.mov rbx, [rbp-16]
+    x64.test rbx, rbx
     x64.jz __nonnull_skip_11
     x64.mov rcx, [rbp-16]
     x64.call mm_decref
     x64.label __nonnull_skip_11
-    x64.mov rbx, [rbp-192]
-    x64.test rbx, rbx
+    x64.mov rsi, [rbp-192]
+    x64.test rsi, rsi
     x64.jz __nonnull_skip_12
     x64.mov rcx, [rbp-192]
     x64.call mm_decref
     x64.label __nonnull_skip_12
-    x64.mov rsi, [rbp-48]
-    x64.test rsi, rsi
+    x64.mov rdi, [rbp-48]
+    x64.test rdi, rdi
     x64.jz __nonnull_skip_13
     x64.mov rcx, [rbp-48]
     x64.call mm_decref
     x64.label __nonnull_skip_13
-    x64.mov rdi, [rbp-32]
-    x64.test rdi, rdi
+    x64.mov r8, [rbp-32]
+    x64.test r8, r8
     x64.jz __nonnull_skip_14
     x64.mov rcx, [rbp-32]
     x64.call mm_decref
     x64.label __nonnull_skip_14
-    x64.mov r8, [rbp-8]
-    x64.test r8, r8
+    x64.mov r9, [rbp-8]
+    x64.test r9, r9
     x64.jz __nonnull_skip_15
     x64.mov rcx, [rbp-8]
     x64.call mm_decref
