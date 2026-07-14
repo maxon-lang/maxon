@@ -60,6 +60,42 @@ export typealias LoopDepthArray = Array with LoopDepth
 export typealias OpSeq = int(0 to u64.max)
 export typealias OpSeqArray = Array with OpSeq
 
+// An `OpSeq` is `blockLocal * SeqStride + positionInBlock` — BLOCK-RELATIVE, not a dense global
+// counter, and that is what makes the splitter's per-split cost proportional to what it changed.
+//
+// A dense counter numbers ops 0,1,2,… straight through the function, so INSERTING one op (which is
+// what a split does) renumbers every op after it, in every later block. Every `useSeq` in the
+// function goes stale at once, and the only repair is to rebuild the whole index — which is the
+// O(function × splits) the splitter's driver used to pay. With a stride, an insert into block `b`
+// shifts positions only WITHIN `b`: every other block's numbers are exactly what they were.
+//
+// Nothing reads a sequence number as an INDEX; every consumer only ORDERS by it (Belady's next-use
+// distance, the before/after-the-peak partition). So the numbering may be sparse, and only its total
+// order has to match the layout — which it does, because blocks are numbered in layout order and
+// positions within a block are unchanged.
+//
+// The stride bounds a block at 2^32 ops. A block that big is not a program, so it panics rather than
+// silently aliasing into the next block's sequence space (which would make a use in block b+1 look
+// EARLIER than one in block b, and Belady would evict the wrong value — a silent miscompile).
+let SeqStride = 4294967296 as OpSeq
+
+// The sequence number of the op at forward position `pos` of local block `blockLocal`.
+export function seqAt(blockLocal CfgIndex, pos BlockOpPos) returns OpSeq
+	if pos >= SeqStride 'blockTooLong'
+		panic("seqAt: block {blockLocal} has more than {SeqStride} ops — the sequence stride cannot separate it from the next block")
+	end 'blockTooLong'
+
+	return blockLocal * SeqStride + pos
+end 'seqAt'
+
+// Strictly greater than every real sequence number in a function of `numBlocks` blocks — Belady's
+// "no later use" sentinel. It must NOT be `u64.max`: on `int(0 to u64.max)` that all-ones pattern
+// compares as negative under `>`, so Belady would collapse to first-fit and evict the lowest id
+// rather than the farthest next use.
+export function seqLimitFor(numBlocks CfgIndex) returns OpSeq
+	return numBlocks * SeqStride
+end 'seqLimitFor'
+
 // `BlockOpPos` — an op's position within one block — is an index into `block.opRefs` and so
 // belongs with the IR, not the target tier. It lives in `IrValueId.maxon`.
 
@@ -1092,10 +1128,13 @@ end 'ValueSpillSlot'
 export type UseIndex
 	export var valueCount as ValueId
 	export var numBlocks as CfgIndex
-	// Layout-ordered op count: body ops + terminators, over all blocks. It is the EXCLUSIVE UPPER
-	// BOUND of the function's `OpSeq` space, which is why Belady can use it as its "no later use"
-	// sentinel and still compare correctly under `>`.
-	export var totalOps as OpSeq
+	// Layout-ordered op count: body ops + terminators, over all blocks. A COUNT, not a bound on the
+	// sequence space — sequence numbers are block-relative and sparse (see `seqAt`), so the two are
+	// no longer the same number. This one bounds the splitter's runaway check; `seqLimit` is what
+	// Belady's "no later use" sentinel needs.
+	export var opCount as OpSeq
+	// Strictly greater than every sequence number this function can produce (`seqLimitFor`).
+	export var seqLimit as OpSeq
 
 	// Use sites. The RECORDS are four parallel columns in LAYOUT order; `useCsr` groups them by
 	// value id — `useCsr` node `v`'s neighbours are the record indices of `v`'s uses. `buildCsr`
@@ -1124,11 +1163,8 @@ export type UseIndex
 	// Appears as an operand — def OR use — of an op in a block at loop depth > 0.
 	var touchesLoop as BoolArray
 
-	// Global layout sequence -> module op index (the inverse of the numbering above).
-	var opBySeq as OpIndexArray
-
-	static function create(valueCount ValueId, numBlocks CfgIndex, totalOps OpSeq, useCsr CsrGraph, useBlock CfgIndexArray, useOpIdx OpIndexArray, useSeq OpSeqArray, useOnEdge BoolArray, hasOpDef BoolArray, defOpIdx OpIndexArray, defOpBlock CfgIndexArray, isPhi BoolArray, phiBlock CfgIndexArray, edgePassed BoolArray, spillStored BoolArray, spillSlot SpillSlotArray, touchesLoop BoolArray, opBySeq OpIndexArray) returns UseIndex
-		return Self{valueCount: valueCount, numBlocks: numBlocks, totalOps: totalOps, useCsr: useCsr, useBlock: useBlock, useOpIdx: useOpIdx, useSeq: useSeq, useOnEdge: useOnEdge, hasOpDef: hasOpDef, defOpIdx: defOpIdx, defOpBlock: defOpBlock, isPhi: isPhi, phiBlock: phiBlock, edgePassed: edgePassed, spillStored: spillStored, spillSlot: spillSlot, touchesLoop: touchesLoop, opBySeq: opBySeq}
+	static function create(valueCount ValueId, numBlocks CfgIndex, opCount OpSeq, seqLimit OpSeq, useCsr CsrGraph, useBlock CfgIndexArray, useOpIdx OpIndexArray, useSeq OpSeqArray, useOnEdge BoolArray, hasOpDef BoolArray, defOpIdx OpIndexArray, defOpBlock CfgIndexArray, isPhi BoolArray, phiBlock CfgIndexArray, edgePassed BoolArray, spillStored BoolArray, spillSlot SpillSlotArray, touchesLoop BoolArray) returns UseIndex
+		return Self{valueCount: valueCount, numBlocks: numBlocks, opCount: opCount, seqLimit: seqLimit, useCsr: useCsr, useBlock: useBlock, useOpIdx: useOpIdx, useSeq: useSeq, useOnEdge: useOnEdge, hasOpDef: hasOpDef, defOpIdx: defOpIdx, defOpBlock: defOpBlock, isPhi: isPhi, phiBlock: phiBlock, edgePassed: edgePassed, spillStored: spillStored, spillSlot: spillSlot, touchesLoop: touchesLoop}
 	end 'create'
 
 	// How many use sites `valueId` has. Walk them with `useRecordAt(valueId, k)` for k in 0..count.
@@ -1161,11 +1197,6 @@ export type UseIndex
 		let onEdge = try self.useOnEdge.get(record) otherwise panic("UseIndex.useKindAt: use record {record} out of range")
 		return UseKind.edge if onEdge else UseKind.op
 	end 'useKindAt'
-
-	// The module op index at global layout sequence `seq`.
-	export function opAtSequence(seq OpSeq) returns OpIndex
-		return try self.opBySeq.get(seq) otherwise panic("UseIndex.opAtSequence: sequence {seq} past the end of the function")
-	end 'opAtSequence'
 
 	// True iff `valueId` is a block-arg (phi) of any block in the function.
 	export function isPhiValue(valueId ValueId) returns bool
@@ -1267,7 +1298,6 @@ export function buildUseIndex(module TargetModule, cfg FuncCfg, valueCount Value
 	var spillStored = falseColumn(valueCount)
 	var spillSlot = zeroColumn(valueCount)
 	var touchesLoop = falseColumn(valueCount)
-	var opBySeq = OpIndexArray.create()
 
 	// The use RECORDS, pushed in layout order. `recordValue` is the CSR key column and `recordIndex`
 	// the value column, so the CSR's neighbour lists come out as record indices.
@@ -1287,7 +1317,7 @@ export function buildUseIndex(module TargetModule, cfg FuncCfg, valueCount Value
 
 	var buf = OperandList.create()
 	var ordered = OpIndexArray.create()
-	var seq = 0 as OpSeq
+	var opCount_total = 0 as OpSeq
 
 	for i in 0 upto cfg.topo.numBlocks 'eachBlock'
 		let block = blockAt(module, topo: cfg.topo, local: i)
@@ -1303,7 +1333,6 @@ export function buildUseIndex(module TargetModule, cfg FuncCfg, valueCount Value
 		let opCount = ordered.count()
 		for pos in 0 upto opCount 'eachOp'
 			let opIdx = try ordered.get(pos) otherwise panic("buildUseIndex: ordered.get OOB")
-			opBySeq.push(opIdx)
 
 			let op = try module.ops.get(opIdx) otherwise panic("buildUseIndex: opIdx not in module.ops")
 			targetOpOperands(op, buf: buf)
@@ -1330,7 +1359,7 @@ export function buildUseIndex(module TargetModule, cfg FuncCfg, valueCount Value
 				recordSpillStore(storeSlot, spillStored: spillStored, spillSlot: spillSlot, v: v)
 
 				if isFirstUseOfValueInOp(buf, upto: k, valueId: v) 'firstOccurrence'
-					pushUseRecord(recordValue, recordIndex: recordIndex, useBlock: useBlock, useOpIdx: useOpIdx, useSeq: useSeq, useOnEdge: useOnEdge, v: v, blockLocal: i, opIdx: opIdx, seq: seq + pos, onEdge: false)
+					pushUseRecord(recordValue, recordIndex: recordIndex, useBlock: useBlock, useOpIdx: useOpIdx, useSeq: useSeq, useOnEdge: useOnEdge, v: v, blockLocal: i, opIdx: opIdx, seq: seqAt(i, pos: pos), onEdge: false)
 				end 'firstOccurrence'
 			end 'eachOperand'
 		end 'eachOp'
@@ -1348,15 +1377,15 @@ export function buildUseIndex(module TargetModule, cfg FuncCfg, valueCount Value
 					panic("buildUseIndex: block local {i} ('{String.from(block.label)}') passes value {argId} on a branch edge but has no ops to branch with")
 				end 'noTerminator'
 				let lastOpIdx = try ordered.get(opCount - 1) otherwise panic("buildUseIndex: ordered.get OOB")
-				pushUseRecord(recordValue, recordIndex: recordIndex, useBlock: useBlock, useOpIdx: useOpIdx, useSeq: useSeq, useOnEdge: useOnEdge, v: argId, blockLocal: i, opIdx: lastOpIdx, seq: seq + opCount - 1, onEdge: true)
+				pushUseRecord(recordValue, recordIndex: recordIndex, useBlock: useBlock, useOpIdx: useOpIdx, useSeq: useSeq, useOnEdge: useOnEdge, v: argId, blockLocal: i, opIdx: lastOpIdx, seq: seqAt(i, pos: opCount - 1), onEdge: true)
 			end 'eachArg'
 		end 'eachEdge'
 
-		seq = seq + opCount
+		opCount_total = opCount_total + opCount
 	end 'eachBlock'
 
 	let useCsr = buildCsr(recordValue, to: recordIndex, nodeCount: valueCount)
-	return UseIndex.create(valueCount, numBlocks: cfg.topo.numBlocks, totalOps: seq, useCsr: useCsr, useBlock: useBlock, useOpIdx: useOpIdx, useSeq: useSeq, useOnEdge: useOnEdge, hasOpDef: hasOpDef, defOpIdx: defOpIdx, defOpBlock: defOpBlock, isPhi: isPhi, phiBlock: phiBlock, edgePassed: edgePassed, spillStored: spillStored, spillSlot: spillSlot, touchesLoop: touchesLoop, opBySeq: opBySeq)
+	return UseIndex.create(valueCount, numBlocks: cfg.topo.numBlocks, opCount: opCount_total, seqLimit: seqLimitFor(cfg.topo.numBlocks), useCsr: useCsr, useBlock: useBlock, useOpIdx: useOpIdx, useSeq: useSeq, useOnEdge: useOnEdge, hasOpDef: hasOpDef, defOpIdx: defOpIdx, defOpBlock: defOpBlock, isPhi: isPhi, phiBlock: phiBlock, edgePassed: edgePassed, spillStored: spillStored, spillSlot: spillSlot, touchesLoop: touchesLoop)
 end 'buildUseIndex'
 
 // Record that `v` is the value a spill STORE reads, and the slot that store writes — the two facts

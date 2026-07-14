@@ -207,6 +207,12 @@ export type PressurePeak
 	export var blockLocal as CfgIndex
 	export var liveBefore as BitWordArray
 	export var peakSeq as OpSeq
+	// The peak op's `module.ops` index, resolved once when the peak is materialized. `peakSeq` cannot
+	// stand in for it: sequence numbers are block-relative and SPARSE (`seqAt`), so there is no dense
+	// seq -> op map to look one up in — and there should not be, because maintaining one is exactly
+	// the whole-function rebuild an insert used to force. The ops array is append-only, so an op's
+	// index never moves and this stays valid across the mutations the split then makes.
+	export var peakOpIdx as OpIndex
 	// Which of the two overflows this point is — the distinction the amended Rule 2 turns on.
 	//
 	//  • CLOBBER-ONLY (`true`): the live values fit the FULL pool, but more of them are CONFINED to
@@ -240,8 +246,8 @@ export type PressurePeak
 	// tie-break — see `peakOutranks`.
 	export var atFixedRegisterOp as bool
 
-	static function create(found bool, pressure RegCount, blockLocal CfgIndex, liveBefore BitWordArray, peakSeq OpSeq, clobberOnly bool, witness RegMask, atFixedRegisterOp bool) returns PressurePeak
-		return Self{found: found, pressure: pressure, blockLocal: blockLocal, liveBefore: liveBefore, peakSeq: peakSeq, clobberOnly: clobberOnly, witness: witness, atFixedRegisterOp: atFixedRegisterOp}
+	static function create(found bool, pressure RegCount, blockLocal CfgIndex, liveBefore BitWordArray, peakSeq OpSeq, peakOpIdx OpIndex, clobberOnly bool, witness RegMask, atFixedRegisterOp bool) returns PressurePeak
+		return Self{found: found, pressure: pressure, blockLocal: blockLocal, liveBefore: liveBefore, peakSeq: peakSeq, peakOpIdx: peakOpIdx, clobberOnly: clobberOnly, witness: witness, atFixedRegisterOp: atFixedRegisterOp}
 	end 'create'
 end 'PressurePeak'
 
@@ -448,7 +454,7 @@ export function splitLiveRanges(module TargetModule, func IrFunction, funcIndex 
 	// this cannot be reached by correct convergence — it converts a hypothetical non-terminating
 	// splitter bug into a loud panic rather than a hang. (`valueCount` grows as fresh reload ids are
 	// minted, but the split count is bounded by the INITIAL Φ, which the initial figures bound.)
-	let iterationBound = liveness.useIndex.totalOps * (liveness.valueCount + 1) + RegisterFileSize
+	let iterationBound = liveness.useIndex.opCount * (liveness.valueCount + 1) + RegisterFileSize
 	var iterations = 0 as EventCount
 
 	// `analyzePressure` finds the worst OVER-POOL point — an op whose effective pressure exceeds
@@ -647,7 +653,6 @@ function analyzePressure(module TargetModule, liveness LivenessResult, pool RegM
 	// (`valueCount + 1`, above any real count) so it is never mistaken for store-safe.
 	var defLiveAfter = scratch.defLiveAfter
 	refillColumn(defLiveAfter, count: valueCount, value: valueCount + 1)
-	var blockBaseSeq = 0 as OpSeq
 
 	for i in 0 upto topo.numBlocks 'eachBlock'
 		let block = blockAt(module, topo: topo, local: i)
@@ -701,7 +706,7 @@ function analyzePressure(module TargetModule, liveness LivenessResult, pool RegM
 
 			let raw = liveCount
 			let effective = raw + (1 if reuseTransient else 0) + deadPhis
-			let seq = blockBaseSeq + forwardPos
+			let seq = seqAt(i, pos: forwardPos)
 
 			// TWO overflows, counting TWO different demands. Lumping them over-counts the confined
 			// case — it would over-spill at every call and inflate an E5001 deficit.
@@ -745,8 +750,6 @@ function analyzePressure(module TargetModule, liveness LivenessResult, pool RegM
 
 		// Return the working row to zero for the next block, in O(live) — see clearRowAfterSweep.
 		liveness.clearRowAfterSweep(i, block: block, row: liveRow, scratch: seedBuf)
-
-		blockBaseSeq = blockBaseSeq + opCount
 	end 'eachBlock'
 
 	return PressureAnalysis.create(materializePeak(module, liveness: liveness, rank: best, scratch: scratch), defLiveAfter: defLiveAfter)
@@ -756,11 +759,24 @@ end 'analyzePressure'
 // and the E5001 diagnostic all read. Built ONCE per sweep, for the winner alone.
 function materializePeak(module TargetModule, liveness LivenessResult, rank PeakRank, scratch SplitScratch) returns PressurePeak
 	var liveBefore = zeroRow(liveness.wordsPerRow)
+	var peakOpIdx = 0 as OpIndex
 	if rank.found 'derivePeakRow'
 		fillLiveBeforeOp(module, liveness: liveness, blockLocal: rank.blockLocal, forwardPos: rank.forwardPos, row: liveBefore, scratch: scratch)
+		peakOpIdx = opAtBlockPos(module, topo: liveness.cfg.topo, blockLocal: rank.blockLocal, forwardPos: rank.forwardPos, scratch: scratch)
 	end 'derivePeakRow'
-	return PressurePeak.create(rank.found, pressure: rank.pressure, blockLocal: rank.blockLocal, liveBefore: liveBefore, peakSeq: rank.peakSeq, clobberOnly: rank.clobberOnly, witness: rank.witness, atFixedRegisterOp: rank.atFixedRegisterOp)
+	return PressurePeak.create(rank.found, pressure: rank.pressure, blockLocal: rank.blockLocal, liveBefore: liveBefore, peakSeq: rank.peakSeq, peakOpIdx: peakOpIdx, clobberOnly: rank.clobberOnly, witness: rank.witness, atFixedRegisterOp: rank.atFixedRegisterOp)
 end 'materializePeak'
+
+// The `module.ops` index of the op at forward layout position `forwardPos` of local block
+// `blockLocal` — the block's body ops then its terminator, which is the same `collectBlockOps`
+// numbering the sweep walks and the `UseIndex` records.
+function opAtBlockPos(module TargetModule, topo FuncTopology, blockLocal CfgIndex, forwardPos BlockOpPos, scratch SplitScratch) returns OpIndex
+	let block = blockAt(module, topo: topo, local: blockLocal)
+	var ordered = scratch.ordered
+	ordered.clear()
+	collectBlockOps(block, out: ordered)
+	return try ordered.get(forwardPos) otherwise panic("opAtBlockPos: position {forwardPos} past the end of block {blockLocal}")
+end 'opAtBlockPos'
 
 // The live-BEFORE set at ONE op, re-derived by re-walking its block backward from the block's live-out
 // set down to that op. `row` must be zero on entry.
@@ -950,7 +966,7 @@ end 'resetRow'
 function chooseVictim(module TargetModule, index UseIndex, liveness LivenessResult, peak PressurePeak, defLiveAfter RegCountColumn, pool RegMask, poolSize RegCount, scratch SplitScratch) returns SpillChoice
 	let topo = liveness.cfg.topo
 	let placement = placementOf(peak)
-	var usedAtPeak = usesAtPeakOp(module, index: index, liveness: liveness, peak: peak, scratch: scratch)
+	var usedAtPeak = usesAtPeakOp(module, liveness: liveness, peak: peak, scratch: scratch)
 	var candidates = scratch.candidates
 	bitsetCollectRow(peak.liveBefore, base: 0, wordsPerRow: liveness.wordsPerRow, out: candidates)
 
@@ -1042,15 +1058,16 @@ type BeladyBest
 end 'BeladyBest'
 
 // The global sequence number of `valueId`'s FIRST OP use strictly after `peakSeq` (Belady's
-// next-use distance from the peak), or the `totalOps` sentinel for "no later use".
+// next-use distance from the peak), or the `seqLimit` sentinel for "no later use".
 //
 // EDGE uses are deliberately NOT counted — an edge arg is a use the SPLIT must rewrite, but it is
 // not a next-use DISTANCE the eviction ranks on, and the forward sweep over op OPERANDS this
 // replaces did not see them either.
 //
-// The sentinel is `totalOps`, which is strictly greater than every real sequence number (0 ..
-// totalOps-1), so a value never used again sorts as the FARTHEST next use — the best Belady
-// candidate — while still comparing correctly under `>`. (A `u64.max` sentinel does NOT: on
+// The sentinel is `seqLimit` (`numBlocks * SeqStride`), which is strictly greater than every real
+// sequence number the function can produce, so a value never used again sorts as the FARTHEST next
+// use — the best Belady candidate — while still comparing correctly under `>`. (A `u64.max`
+// sentinel does NOT: on
 // `int(0 to u64.max)` its all-ones pattern compares as negative under `>`, so Belady would collapse
 // to first-fit and evict the lowest id rather than the farthest next use.)
 //
@@ -1068,7 +1085,7 @@ function nextUseAfterPeak(index UseIndex, valueId ValueId, peakSeq OpSeq) return
 			return seq
 		end 'later'
 	end 'each'
-	return index.totalOps
+	return index.seqLimit
 end 'nextUseAfterPeak'
 
 // True iff `valueId`'s def-point live-set fits the pool. The store ALWAYS anchors at the def (that
@@ -1092,10 +1109,10 @@ end 'storeFitsPool'
 // invariant `noVictimAtPeak` asserts: an op names at most TWO virtual registers, while the tight set
 // outnumbers the witness and any witness a clobber produces holds at least the five callee-saved
 // registers — so at least four confined values survive this cut.
-function usesAtPeakOp(module TargetModule, index UseIndex, liveness LivenessResult, peak PressurePeak, scratch SplitScratch) returns BitWordArray
+function usesAtPeakOp(module TargetModule, liveness LivenessResult, peak PressurePeak, scratch SplitScratch) returns BitWordArray
 	var row = scratch.usedAtPeak
 	resetRow(row, wordsPerRow: liveness.wordsPerRow)
-	let op = try module.ops.get(index.opAtSequence(peak.peakSeq)) otherwise panic("usesAtPeakOp: peak op not in module.ops")
+	let op = try module.ops.get(peak.peakOpIdx) otherwise panic("usesAtPeakOp: peak op not in module.ops")
 	var buf = scratch.buf
 	targetOpOperands(op, buf: buf)
 	for o in buf 'eachOperand'
