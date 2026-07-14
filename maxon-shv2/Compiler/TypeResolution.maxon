@@ -4,19 +4,30 @@
 // unresolved type, and keeps the `funcReturnTypes` registry in sync with the
 // resolved module so SemanticCheck reads resolved types.
 //
-// M1 SCOPE SHORTCUT (documented per the deliverable): the only named type M1
-// resolves is the `ExitCode` builtin alias, recognized by NAME — WITHOUT loading
-// the stdlib (full stdlib type resolution is deferred until programs call stdlib
-// functions, ~M10). `ExitCode` resolves to `MaxonType.exitCode`, a width-free
-// tag whose unsigned-32-bit width is assigned at the Maxon→Std boundary (see
-// `maxonTypeToStdType`). The integer literal `42` is already typed `integer`
-// (→ i64) by the parser, so it needs no resolution. Any OTHER named type is
-// out of the M1 slice and panics loudly (user-defined types + the ranged
-// typealias registry arrive at M9); the authored M1 specs use only `ExitCode`.
+// A named type resolves through TWO sources, in order:
+//
+//   1. The BUILTIN alias `ExitCode`, recognized by NAME — WITHOUT loading the stdlib
+//      (full stdlib type resolution is deferred until programs call stdlib functions).
+//      It resolves to `MaxonType.exitCode`, a width-free tag whose unsigned-32-bit
+//      width is assigned at the Maxon→Std boundary (see `maxonTypeToStdType`).
+//   2. The project's RANGED TYPEALIAS registry — every `typealias Score = int(0 to 100)`
+//      the parser declared. An alias resolves to its UNDERLYING primitive and nothing
+//      more: two aliases over the same range are the same type, because an alias
+//      creates no nominal distinction. The range itself is not consulted here — a
+//      narrowing conversion into a ranged alias is checked at run time, which is a
+//      later milestone.
+//
+// A named type in neither is a user error (a typo, or a type this slice does not
+// have), NOT a compiler-invariant violation — but there is no diagnostic for it yet,
+// so it still panics. Giving it one needs a source span for the type REFERENCE, which
+// the parser does not record today (only ops and parameters carry spans).
+//
+// The integer literal `42` is already typed `integer` (→ i64) by the parser, so it
+// needs no resolution.
 
-// The one builtin alias M1 resolves without the stdlib. Named constant, not a
-// bare string — the alias spelling is a contract shared with the parser's
-// interner. Grows into a builtin-alias table (Character, etc.) at M9/M10.
+// The one builtin alias resolved without the stdlib. Named constant, not a bare
+// string — the alias spelling is a contract shared with the parser's interner. Grows
+// into a builtin-alias table (Character, etc.) when the stdlib cone lands.
 let ExitCodeBuiltinName = b"ExitCode"
 
 // Resolve every unresolved/named type in `module`'s function signatures to a
@@ -81,5 +92,7 @@ function resolveNamedType(project Project, id TypeNameId) returns MaxonType
 	if name.equals(ExitCodeBuiltinName) 'isExitCode'
 		return MaxonType.exitCode
 	end 'isExitCode'
-	panic("resolveTypes: unknown named type '{String.from(name)}' — M1 resolves only the ExitCode builtin (user-defined types arrive at M9)")
+
+	let alias = try project.typeAliases.get(name) otherwise panic("resolveTypes: unknown named type '{String.from(name)}' — it is neither the ExitCode builtin nor a declared typealias (user-defined types arrive with structs)")
+	return alias.underlying
 end 'resolveNamedType'

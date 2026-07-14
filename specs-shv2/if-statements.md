@@ -194,22 +194,7 @@ end 'main'
 0
 ```
 
-## Deferred
-
-Tests recorded for re-enablement at the milestone that unblocks them. They live
-in this `## Deferred` section — NOT `## Tests` — so the spec-test parser (which
-scans only `## Tests`, up to the next `## ` heading) never extracts them, and
-they carry NO `<!-- test: … -->` marker. To re-enable: move the test up into
-`## Tests` and prefix it with its `<!-- test: NAME -->` marker.
-
-### if-statements.else-if-in-helper
-
-Its original prerequisite — function parameters + calls with named args — LANDED at
-M5; what still blocks the port verbatim is its top-level `typealias`, which shv2
-rejects (`E3010: Unsupported: top-level typealias`). Re-enable once that lands. Its
-COVERAGE (every arm of a chain executed) is already held by `else-if-chain-every-arm`
-above, which is this program with `int` in place of the alias.
-
+<!-- test: if-statements.else-if-in-helper -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -238,6 +223,41 @@ end 'main'
 102
 ```
 
+
+<!-- test: if-statements.nested-if-with-multiple-returns -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+function test(c Integer, next Integer) returns Integer
+	if c == 0 'maybePrefix'
+		if next == 1 'isHex'
+			return 1
+		end 'isHex'
+		if next == 2 'isBinary'
+			return 2
+		end 'isBinary'
+	end 'maybePrefix'
+	return 42
+end 'test'
+
+function main() returns ExitCode
+	return test(5, next: 0)
+end 'main'
+```
+```exitcode
+42
+```
+
+
+## Deferred
+
+Tests recorded for re-enablement at the milestone that unblocks them. They live
+in this `## Deferred` section — NOT `## Tests` — so the spec-test parser (which
+scans only `## Tests`, up to the next `## ` heading) never extracts them, and
+they carry NO `<!-- test: … -->` marker. To re-enable: move the test up into
+`## Tests` and prefix it with its `<!-- test: NAME -->` marker.
+
 ### if-statements.nested-if-with-scoped-string
 
 Re-enable once its prerequisites land: string literals + `==` on strings + calls
@@ -265,41 +285,11 @@ end 'main'
 42
 ```
 
-### if-statements.nested-if-with-multiple-returns
-
-Its original prerequisite — function parameters + calls with named args — LANDED at
-M5; what still blocks the port verbatim is its top-level `typealias`, which shv2
-rejects (`E3010: Unsupported: top-level typealias`). Re-enable once that lands.
-
-```maxon
-
-typealias Integer = int(i64.min to i64.max)
-
-function test(c Integer, next Integer) returns Integer
-	if c == 0 'maybePrefix'
-		if next == 1 'isHex'
-			return 1
-		end 'isHex'
-		if next == 2 'isBinary'
-			return 2
-		end 'isBinary'
-	end 'maybePrefix'
-	return 42
-end 'test'
-
-function main() returns ExitCode
-	return test(5, next: 0)
-end 'main'
-```
-```exitcode
-42
-```
-
 ### if-statements.single-line-block-rejected
 
-Re-enable once its prerequisites land: a bool literal (`if true …`) AND the
-"expected newline after block label" reject (E2001); M4a is permissive about a
-label-then-statement on one line.
+Re-enable once its prerequisite lands: the "expected newline after block label"
+reject (E2001) — the parser is permissive about a label-then-statement on one
+line. (Its other prerequisite, the `true` literal, has landed.)
 
 ```maxon
 function main() returns ExitCode

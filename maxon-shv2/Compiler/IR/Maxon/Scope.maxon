@@ -1,24 +1,46 @@
-// Scope: persistent per-function symbol table.
+// Scope: persistent per-function symbol table, with LEXICAL BLOCK SCOPING.
 //
 // The parser builds this as it emits ops; when a function finishes parsing the
 // final `Scope` is handed to the `IrFunction` for downstream consumers (the
 // Maxon→Std lowerer and the future LSP name-resolution query).
 //
-// Scope exposes a flat declare/lookup API today — the nested block-scope tree
-// described in the plan is a later iteration. An O(1)-push / O(decls)-pop frame
-// stack overlays lexical scoping: pushScope opens a frame, every declare appends
-// the name to the top frame, and popScope drains that frame's names out of
-// `vars` — O(names-in-this-scope), not O(total vars).
+// A block (`if` / `else` / `while` body) opens a FRAME: every declaration inside
+// it is torn down at the block's `end`, so `if c 'b' … let x = 1 … end 'b'`
+// followed by a reference to `x` is a name-resolution failure, not a live binding
+// (specs/block-scoping.md). Frames are MARKS into flat declaration stacks, not a
+// stack of per-frame arrays: pushScope pushes the current stack length — O(1),
+// and with NO heap object per frame, which matters because a block is the most
+// numerous scope in any real program — and popScope drains back to it, still
+// O(declarations-in-this-frame). An EMPTY mark stack means function scope:
+// declarations there live for the whole function and `reset` tears them down.
 //
-// OWNERSHIP SCAFFOLD (M1, inert): parallel to `frameStack`, an `ownedStack`
-// records the names of NON-trivial (owned/borrow/shared) bindings declared in
-// the current frame. At M1 every binding is `trivial`, so nothing is ever
-// recorded and popScope drains an empty list. From M6 the Own tier drains this
-// on popScope to place `own.drop`/`own.release` at scope exit — the deterministic
-// static-drop mechanism that replaces v1's late liveness-driven refcount
-// reclamation. The recording funnels through the single `recordInCurrentFrame`
-// helper that all four declare* paths already call, so the scaffold is wired
-// once and stays inert until ownership kinds start being non-trivial.
+// SHADOWING IS LEGAL, and it is why a frame records more than names. `vars` is
+// keyed by name, so an inner `let x` OVERWRITES the outer `x`'s entry; simply
+// REMOVING the key at scope exit would delete the outer binding too, and
+// `let x = 1 / if c 'b' let x = 2 end 'b' / return x` would report `x` undefined
+// instead of returning 1. So a declaration that DISPLACES an existing binding
+// pushes the displaced `VarInfo` onto `shadowedInfos`, and popScope drains the
+// frame in REVERSE — putting each displaced binding back — which also unwinds a
+// name declared twice within one frame through its own chain.
+//
+// BINDINGS ARE MUTATED IN PLACE, NOT REPLACED. `VarInfo` is a heap `type`, so
+// `vars` stores a reference; `setValue` writes `boundValue` through it. That is
+// what lets the parser hold a DIRECT reference to a mutable binding (its loop-phi
+// list and its merge snapshots do — see Parser.mutableVars) and still address the
+// right binding when a nested block shadows its NAME. A name-keyed rebind cannot:
+// it would always resolve to the innermost binding, so a `break` out of a block
+// that shadows a loop-carried `var` would carry the SHADOW's value to the loop's
+// exit phi — a silent miscompile.
+//
+// OWNERSHIP SCAFFOLD (M1, inert): the Own tier (M6) places `own.drop`/`own.release`
+// at scope exit for every NON-trivial (owned/borrow/shared) binding a frame declared
+// — the deterministic static-drop mechanism that replaces v1's late liveness-driven
+// refcount reclamation. `popScope` is where that happens, and it needs no side list to
+// do it: draining a frame ALREADY resolves each of its declarations back to the
+// `VarInfo` being torn down, and that record carries both the `ownership` kind to test
+// and the type + slot a drop has to name. A parallel "owned names" array would be a
+// strict projection of `vars` kept in lockstep by hand — state that can drift, buying
+// nothing. At M1 every binding is `trivial`, so the hook never fires.
 
 export union ScopeLookupError implements Error
 	// String, not the raw slice: this arm exists only to be FORMATTED into a diagnostic.
@@ -34,35 +56,45 @@ export union ScopeError implements Error
 	shadowsSelfField(name String)
 end 'ScopeError'
 
-// Each scope frame tracks the names declared since the last pushScope so
-// popScope can remove them in O(decls). pushScope is O(1).
-typealias ScopeFrameNames = Array with ByteArray
-typealias ScopeFrameStack = Array with ScopeFrameNames
-
-// Parallel to the frame stack: names of owned/borrow/shared bindings in the
-// current frame, drained at scope exit to emit drops/releases (M6). Empty at M1.
-typealias ScopeOwnedNames = Array with ByteArray
-typealias ScopeOwnedStack = Array with ScopeOwnedNames
+// A frame boundary: the height of the declaration stack when the frame was
+// opened. Wide range — declaration counts are unbounded.
+export typealias ScopeMark = int(0 to u64.max)
+typealias ScopeMarkArray = Array with ScopeMark
 
 export type Scope
 	var vars as VarInfoMap
-	// Top of `frameStack` collects names declared in the current pushScope.
-	// An empty stack means function scope — declarations there live for the
-	// whole function and need no frame.
-	var frameStack as ScopeFrameStack
-	// Parallel to `frameStack`: the owned-values list for the current frame.
-	var ownedStack as ScopeOwnedStack
+	// Every declaration made while a frame was open, in declaration order —
+	// innermost frame on top. Drained back to a frame's mark by popScope.
+	var declNames as ByteArrayArray
+	// Parallel to `declNames`: did this declaration DISPLACE an existing binding of
+	// the same name? A dense bool column rather than an optional `VarInfo` per
+	// declaration, so the common (non-shadowing) case costs no heap object.
+	var declShadowed as BoolArray
+	// The displaced bindings, pushed only by the declarations `declShadowed` marks.
+	// popScope pops one per marked declaration, in reverse, and re-installs it.
+	var shadowedInfos as VarInfoArray
+	// One entry per open frame: the `declNames` height at pushScope.
+	var frameMarks as ScopeMarkArray
 	export var nextSlot as VarSlot
 
 	export static function create() returns Scope
-		return Self{vars: VarInfoMap.create(), frameStack: ScopeFrameStack.create(), ownedStack: ScopeOwnedStack.create(), nextSlot: 0}
+		return Self{
+			vars: VarInfoMap.create(),
+			declNames: ByteArrayArray.create(),
+			declShadowed: BoolArray.create(),
+			shadowedInfos: VarInfoArray.create(),
+			frameMarks: ScopeMarkArray.create(),
+			nextSlot: 0
+		}
 	end 'create'
 
 	// Reset the scope for a new function parse.
 	export function reset()
 		vars = VarInfoMap.create()
-		frameStack = ScopeFrameStack.create()
-		ownedStack = ScopeOwnedStack.create()
+		declNames = ByteArrayArray.create()
+		declShadowed = BoolArray.create()
+		shadowedInfos = VarInfoArray.create()
+		frameMarks = ScopeMarkArray.create()
 		nextSlot = 0
 	end 'reset'
 
@@ -88,9 +120,7 @@ export type Scope
 	export function declareShadowing(name ByteArray, varType MaxonType, mutable bool) returns VarSlot
 		let slot = nextSlot
 		nextSlot = nextSlot + 1
-		let info = VarInfo.create(name, varType: varType, mutable: mutable, slot: slot)
-		vars.upsert(name, value: info)
-		self.recordInCurrentFrame(info)
+		self.install(VarInfo.create(name, varType: varType, mutable: mutable, slot: slot))
 		return slot
 	end 'declareShadowing'
 
@@ -98,9 +128,7 @@ export type Scope
 	// binding onto a shared compiler slot so a single scope-exit release frees
 	// it (a separate slot would double-free).
 	export function bindExistingSlot(name ByteArray, slot VarSlot, varType MaxonType, mutable bool)
-		let info = VarInfo.create(name, varType: varType, mutable: mutable, slot: slot)
-		vars.upsert(name, value: info)
-		self.recordInCurrentFrame(info)
+		self.install(VarInfo.create(name, varType: varType, mutable: mutable, slot: slot))
 	end 'bindExistingSlot'
 
 	// Declare a self-field alias. No local backing slot is materialized — reads
@@ -119,9 +147,7 @@ export type Scope
 	export function installSelfField(name ByteArray, varType MaxonType, offset FieldOffset) returns VarSlot
 		let slot = nextSlot
 		nextSlot = nextSlot + 1
-		let info = VarInfo.createSelfField(name, varType: varType, slot: slot, offset: offset)
-		vars.upsert(name, value: info)
-		self.recordInCurrentFrame(info)
+		self.install(VarInfo.createSelfField(name, varType: varType, slot: slot, offset: offset))
 		return slot
 	end 'installSelfField'
 
@@ -139,64 +165,66 @@ export type Scope
 	export function declarePayloadBindingShadowing(name ByteArray, varType MaxonType, mutable bool, scrutineeName ByteArray, fieldIndex CaseOrdinal, caseName ByteArray) returns VarSlot
 		let slot = nextSlot
 		nextSlot = nextSlot + 1
-		let info = VarInfo.createPayloadBinding(name, varType: varType, mutable: mutable, slot: slot, scrutineeName: scrutineeName, fieldIndex: fieldIndex, caseName: caseName)
-		vars.upsert(name, value: info)
-		self.recordInCurrentFrame(info)
+		self.install(VarInfo.createPayloadBinding(name, varType: varType, mutable: mutable, slot: slot, scrutineeName: scrutineeName, fieldIndex: fieldIndex, caseName: caseName))
 		return slot
 	end 'declarePayloadBindingShadowing'
-
-	// Single funnel for all four declare* paths: record the just-declared
-	// binding in the current frame for O(decls) teardown at popScope, and — the
-	// M1 ownership scaffold — record its name in the parallel owned-values list
-	// when the binding is non-trivial (owned/borrow/shared). At M1 every binding
-	// is trivial, so the owned branch never fires; from M6 popScope drains the
-	// owned list to emit scope-exit drops/releases.
-	function recordInCurrentFrame(info VarInfo)
-		let depth = frameStack.count()
-		if depth == 0 'noFrame'
-			return
-		end 'noFrame'
-		var top = try frameStack.get(depth - 1) otherwise panic("Scope.recordInCurrentFrame: frameStack.get OOB at {depth - 1} (count={frameStack.count()})")
-		top.push(info.name)
-
-		if not isTrivialOwnership(info.ownership) 'ownedBinding'
-			var owned = try ownedStack.get(depth - 1) otherwise panic("Scope.recordInCurrentFrame: ownedStack.get OOB at {depth - 1} (count={ownedStack.count()})")
-			owned.push(info.name)
-		end 'ownedBinding'
-	end 'recordInCurrentFrame'
 
 	// Declare a value binding (M2's SSA-substitution model): bind `name` to the SSA
 	// value `value`, so a later reference resolves to it via `lookupValue`. No slot
 	// is allocated — value bindings need no stack storage (contrast the slot-based
-	// `declare*` paths that back the future mutable/mem2reg model). Funnels through
-	// `recordInCurrentFrame` so the ownership scaffold stays wired (inert at M2 —
-	// every binding is trivial). The self-field-shadow guard the slot path carries
-	// is unnecessary here: M2 has no instance methods, so no self-field alias can
-	// exist to shadow — that guard joins this path when methods land.
-	export function declareValueBinding(name ByteArray, varType MaxonType, mutable bool, value ValueId)
-		let info = VarInfo.createValueBinding(name, varType: varType, mutable: mutable, boundValue: value)
-		vars.upsert(name, value: info)
-		self.recordInCurrentFrame(info)
+	// `declare*` paths that back the future mutable/mem2reg model). The self-field-
+	// shadow guard the slot path carries is unnecessary here: M2 has no instance
+	// methods, so no self-field alias can exist to shadow — that guard joins this
+	// path when methods land.
+	//
+	// Returns the `VarInfo` it installed, because a `var` binding is tracked BY
+	// REFERENCE (see the header): the parser keeps mutable bindings in its loop-phi
+	// list as the objects themselves, so a nested block that shadows the NAME cannot
+	// misdirect a phi write to the shadow.
+	export function declareValueBinding(name ByteArray, varType MaxonType, mutable bool, value ValueId) returns VarInfo
+		var info = VarInfo.createValueBinding(name, varType: varType, mutable: mutable, boundValue: value)
+		self.install(info)
+		return info
 	end 'declareValueBinding'
 
-	// Rebind an ALREADY-DECLARED name to a new SSA value (M4b's on-the-fly SSA):
-	// a `var` reassignment (`x = expr`), a loop-header phi installation, and a
-	// merge-point phi all update the variable's CURRENT value in place. Reads
-	// (`lookupValue`) resolve to this current value, so a read after a reassignment
-	// sees the new value — `boundValue` IS the variable's current SSA version, not
-	// the initializer's. The declaration metadata (mutability, type) is untouched.
-	// Panics on an unknown name — every caller has already established the binding
-	// exists (a `var` decl, or a mutability check that fetched the VarInfo).
+	// THE single funnel for every declare* path: install the binding in `vars`, and —
+	// when a frame is open — record it for O(decls) teardown, capturing the binding it
+	// DISPLACES so popScope can put that one back.
+	//
+	// With NO frame open the declaration is at function scope: it lives for the whole
+	// function and is torn down by `reset`, so it needs no frame bookkeeping and can
+	// never be shadowed-then-restored (it IS the outermost binding of its name).
+	function install(info VarInfo)
+		if frameMarks.count() == 0 'functionScope'
+			vars.upsert(info.name, value: info)
+			return
+		end 'functionScope'
+
+		var shadowed = false
+		if let displaced = try vars.get(info.name) 'displaces'
+			shadowedInfos.push(displaced)
+			shadowed = true
+		end 'displaces'
+		declNames.push(info.name)
+		declShadowed.push(shadowed)
+		vars.upsert(info.name, value: info)
+	end 'install'
+
+	// Rebind an ALREADY-DECLARED name to a new SSA value (M4b's on-the-fly SSA): a
+	// `var` reassignment (`x = expr`). Reads (`lookupValue`) resolve to this current
+	// value, so a read after a reassignment sees the new value — `boundValue` IS the
+	// variable's current SSA version, not the initializer's. Written THROUGH the
+	// binding (a heap reference), so every holder of that `VarInfo` — the parser's
+	// loop-phi list, a merge snapshot — observes it. Panics on an unknown name: every
+	// caller has already established the binding exists (a `var` decl, or a mutability
+	// check that fetched the VarInfo).
+	//
+	// Name-keyed, so it always hits the INNERMOST binding — which is exactly right for
+	// a source-level assignment. The parser's phi machinery deliberately does NOT come
+	// through here; it writes `boundValue` on the binding it holds (see the header).
 	export function setValue(name ByteArray, value ValueId)
-		let existing = try vars.get(name) otherwise panic("Scope.setValue: '{String.from(name)}' not declared — caller must establish the binding before rebinding it")
-		// Read the two carried fields into locals FIRST so the borrow of `vars` (via
-		// `existing`) ends before the `upsert` mutates it. M4b only rebinds plain value
-		// bindings — mutable `var`s and the loop-header/exit phis — so rebuilding as a
-		// value binding preserves everything meaningful (self-field / payload bindings,
-		// which carry extra state, are never reassigned here: no methods or enums yet).
-		let varType = existing.varType
-		let mutable = existing.mutable
-		vars.upsert(name, value: VarInfo.createValueBinding(name, varType: varType, mutable: mutable, boundValue: value))
+		var info = try vars.get(name) otherwise panic("Scope.setValue: '{String.from(name)}' not declared — caller must establish the binding before rebinding it")
+		info.boundValue = value
 	end 'setValue'
 
 	// Resolve a value binding to the SSA value it aliases. Throws
@@ -262,24 +290,39 @@ export type Scope
 		nextSlot = slot
 	end 'setNextSlot'
 
-	// Open a fresh scope frame. O(1): pushes an empty name list onto the frame
-	// stack and a parallel empty owned-values list.
+	// Open a fresh scope frame — O(1), one integer, no heap object.
 	export function pushScope()
-		frameStack.push(ScopeFrameNames.create())
-		ownedStack.push(ScopeOwnedNames.create())
+		frameMarks.push(declNames.count())
 	end 'pushScope'
 
-	// Pop the current scope frame and remove its declarations from vars.
-	// O(declarations-in-this-frame). Drains the parallel owned-values list in
-	// lockstep — at M1 it is always empty; from M6 the Own tier emits a
-	// scope-exit drop/release per owned name here.
+	// Close the current scope frame: drain its declarations out of `vars`, in REVERSE,
+	// restoring each binding they displaced (see the header — reverse order is what
+	// unwinds a name declared twice in one frame through its own shadow chain).
+	// O(declarations-in-this-frame).
+	//
+	// THE OWNERSHIP HOOK LIVES HERE (M6): each iteration already holds the `VarInfo`
+	// being torn down, so `ownedInFrame` classifies it in place and the Own tier emits
+	// its `own.drop`/`own.release` at exactly this point. At M1 every binding is
+	// `trivial`, so the classifier is always false and nothing is emitted.
 	export function popScope()
-		let frameNames = try frameStack.pop() otherwise panic("Scope.popScope: frameStack is empty (unmatched popScope)")
-		for i in 0 upto frameNames.count() 'remove'
-			let key = try frameNames.get(i) otherwise panic("Scope.popScope: frameNames.get(i) failed with i in [0, count())")
-			_ = vars.remove(key)
-		end 'remove'
+		let mark = try frameMarks.pop() otherwise panic("Scope.popScope: frameMarks is empty (unmatched popScope)")
+		while declNames.count() > mark 'drain'
+			let name = try declNames.pop() otherwise panic("Scope.popScope: declNames.pop failed above the frame mark {mark}")
+			let shadowed = try declShadowed.pop() otherwise panic("Scope.popScope: declShadowed.pop failed — it must stay parallel to declNames")
 
-		_ = try ownedStack.pop() otherwise panic("Scope.popScope: ownedStack is empty (unmatched popScope) — frameStack and ownedStack must stay parallel")
+			// Drained in reverse, so `name` still resolves to the binding THIS declaration
+			// installed — the one leaving scope, and the one a drop would be emitted for.
+			let leaving = try vars.get(name) otherwise panic("Scope.popScope: '{String.from(name)}' is in the frame's declaration list but not in `vars` — the two fell out of lockstep")
+			if not isTrivialOwnership(leaving.ownership) 'dropAtScopeExit'
+				panic("Scope.popScope: binding '{String.from(name)}' leaves scope owning a value, but the Own tier that emits its drop is not built yet (M6) — no binding is non-trivial before then")
+			end 'dropAtScopeExit'
+
+			if shadowed 'restoreOuter'
+				let outer = try shadowedInfos.pop() otherwise panic("Scope.popScope: shadowedInfos.pop failed — one entry per declaration marked as shadowing")
+				vars.upsert(name, value: outer)
+			end 'restoreOuter' else 'removeOnly'
+				_ = vars.remove(name)
+			end 'removeOnly'
+		end 'drain'
 	end 'popScope'
 end 'Scope'

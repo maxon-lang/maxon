@@ -1,0 +1,26 @@
+// Test: return-literal-in-range
+typealias Score = int(0 to 100)
+
+function getScore() returns Score
+	return 42
+end 'getScore'
+
+function main() returns ExitCode
+	return getScore()
+end 'main'
+---
+ExitCode: 42
+---
+func @getScore {
+  entry:
+    x64.movRegImm32 r8, 42
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.prologue 40
+    x64.callDirect getScore
+    x64.epilogue 40
+    x64.ret
+}

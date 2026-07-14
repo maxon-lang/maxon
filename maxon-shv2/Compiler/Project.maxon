@@ -109,6 +109,51 @@ end 'VarInfo'
 
 export typealias VarInfoMap = Map with (ByteArray, VarInfo)
 
+// A list of BINDINGS, held by reference (VarInfo is a heap `type`). Scope keeps the
+// bindings a frame displaced in one; the parser keeps its mutable bindings in one.
+// Both need the binding OBJECT rather than its name — see Scope's header for why a
+// name cannot address a binding a nested block has shadowed.
+export typealias VarInfoArray = Array with VarInfo
+
+// --- Ranged typealiases ---
+//
+// `typealias Score = int(0 to 100)` — the declaration form nearly every real Maxon
+// file opens with, and the reason `int` is almost never written bare in a type
+// position. A DECLARATION, not an op: it contributes a registry entry, and
+// TypeResolution collapses every `MaxonType.named(Score)` to the primitive below.
+//
+// TWO ALIASES OVER THE SAME RANGE ARE THE SAME TYPE — an alias creates no nominal
+// distinction, so resolution needs only `underlying`. The BOUNDS are carried anyway
+// because they ARE the alias's definition: they are what a narrowing conversion is
+// checked against (the runtime range check — a later milestone), and a registry that
+// forgot them would force that milestone to re-parse the declaration. This milestone
+// emits no range check, so nothing reads them yet.
+//
+// `low`/`high` are INCLUSIVE and stored as the raw 64-bit pattern `ParsedInt` holds:
+// `upto` (an exclusive upper bound) is normalized to `high - 1` at parse time so the
+// registry has ONE representation, and an unsigned-domain bound such as `u64.max`
+// rides as the signed value with the same bits (which is exactly how a cast against
+// it must compare — see specs/ranged-typealias.md's sentinel case).
+export type RangedTypeAlias
+	export var name as ByteArray
+	// The primitive the alias resolves to — the `int` / `float` keyword it was
+	// declared over. What TypeResolution substitutes for `named(alias)`.
+	export var underlying as MaxonType
+	export var low as ParsedInt
+	export var high as ParsedInt
+
+	export static function create(name ByteArray, underlying MaxonType, low ParsedInt, high ParsedInt) returns RangedTypeAlias
+		return Self{name: name, underlying: underlying, low: low, high: high}
+	end 'create'
+end 'RangedTypeAlias'
+
+export typealias RangedTypeAliasArray = Array with RangedTypeAlias
+
+// Registry: typealias name -> its declaration. Populated by `mergeArtifact` from each
+// file's artifact (alongside `funcReturnTypes` / `funcSignatures`); read by
+// TypeResolution to collapse `MaxonType.named` to a primitive.
+export typealias RangedTypeAliasMap = Map with (ByteArray, RangedTypeAlias)
+
 // --- Project: the compiler-wide shared state (Chunk C growth) ---
 //
 // GROWTH: this is the M1 `Project`. v1's `Project` has ~90 fields and ~28
@@ -240,6 +285,9 @@ export type Project
 	// Declared function parameter signatures (names + types), keyed by name.
 	// The M5 parse-staging registry the call machinery reads (see FuncSignature).
 	export var funcSignatures as FuncSignatureMap
+	// Declared ranged typealiases, keyed by name (see RangedTypeAlias). The registry
+	// TypeResolution resolves every `MaxonType.named` against.
+	export var typeAliases as RangedTypeAliasMap
 	// id <-> name table behind every `MaxonType.named`. Folded from per-file
 	// artifact interners at merge time (see TypeNameInterner.maxon).
 	export var typeNames as TypeNameInterner
@@ -289,6 +337,7 @@ export type Project
 			db: db,
 			funcReturnTypes: FuncReturnTypeMap.create(),
 			funcSignatures: FuncSignatureMap.create(),
+			typeAliases: RangedTypeAliasMap.create(),
 			typeNames: TypeNameInterner.create(),
 			opRanges: SourceRangeTable.create(),
 			valueOrigins: ValueOriginTable.create(),

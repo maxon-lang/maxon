@@ -506,8 +506,9 @@ function encodeMovRegImm32(code ByteArray, dest X64Register, value MachineWord)
 	writeDword(code, value: value)
 end 'encodeMovRegImm32'
 
-// mov reg64, imm64 (REX.W B8+rd io). Only reached for values wider than u32 (the
-// `appendIntImmToReg` size choice routes narrower values to the 32-bit form).
+// mov reg64, imm64 (REX.W B8+rd io). Reached for a value OUTSIDE the unsigned 32-bit
+// domain — either wider than u32.max or NEGATIVE (the `constMaterializationOp` size
+// choice routes only 0..u32.max to the zero-extending 32-bit form).
 function encodeMovRegImm64(code ByteArray, dest X64Register, value MachineWord)
 	emitRex(code, wide: true, regField: X64Register.rax, rmField: dest)
 	code.push(OpcodeMovRegImmBase + regLow3(dest))

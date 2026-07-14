@@ -1,0 +1,42 @@
+// Test: break.multiple-conditions
+function main() returns ExitCode
+	var x = 5
+	var count = 0
+	while x < 100 'loop'
+		x = x + 1
+		count = count + 1
+		if count == 3 'check'
+			break
+		end 'check'
+	end 'loop'
+	return x
+end 'main'
+---
+ExitCode: 8
+---
+func @main {
+  entry:
+    x64.movRegImm32 rax, 5
+    x64.movRegImm32 rcx, 0
+    x64.jmp whilehdr
+  whilehdr:
+    x64.cmpRegImm32 rax, 100
+    x64.jcc less, loop
+    x64.jmp critsplit
+  loop:
+    x64.leaRegRegImm32 r8, rax, 1
+    x64.leaRegRegImm32 rcx, rcx, 1
+    x64.cmpRegImm32 rcx, 3
+    x64.jcc equal, check
+    x64.jmp ifcont
+  check:
+    x64.jmp whileexit
+  ifcont:
+    x64.movRegReg rax, r8
+    x64.jmp whilehdr
+  critsplit:
+    x64.movRegReg r8, rax
+    x64.jmp whileexit
+  whileexit:
+    x64.ret
+}

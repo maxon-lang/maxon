@@ -320,6 +320,18 @@ export union StdOp
 	// — a call may read/write memory and must not move or drop). APPENDED at the END of
 	// the call band, after `param`.
 	call(resultId ValueId, callee ByteArray, args ValueIdArray) = StdOpMeta{category: StdOpCategory.call, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+	// Void return terminator — the return of a function with no `returns` clause. A
+	// DISTINCT variant rather than a `ret` carrying some absent-value ValueId: `ValueId`
+	// has no "absent" value, and a sentinel one would be READ as a real use by
+	// `collectStdOpUses` (keeping a dead value live, or naming a value that was never
+	// defined). Its Maxon-tier twin `MaxonOp.retVoid` splits for the same reason.
+	//
+	// Carries no operand at all, so it reads nothing and rewrites nothing; the x64
+	// lowering emits the bare `ret` (the frame teardown is the prologue/epilogue pass's).
+	// APPENDED at the END of the call band, after `call` — which is also the end of the
+	// union, so the two range arms that stop at `call` (FoldConstOperands) had to be
+	// extended by hand. See the band-append invariant in the StdOp header.
+	retVoid = StdOpMeta{category: StdOpCategory.call, role: OpRole.ret, isPure: true, isUnsupportedInInlineBody: false, isMemory: false, isStore: false, isCall: false, clobbersFlags: false, isCmp: false}
 end 'StdOp'
 
 export typealias StdOpArray = Array with StdOp
@@ -350,6 +362,7 @@ module function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 		ret(retValId) then referenced.insert(retValId)
 		param then break 'u'
 		call(_, _, args) then insertUseArgs(referenced, args: args)
+		retVoid then break 'u'
 	end 'u'
 end 'collectStdOpUses'
 
@@ -394,6 +407,7 @@ module function remapStdOpUses(op StdOp, subst ValueIdArray) returns StdOp
 		ret(retValId) gives StdOp.ret(remappedValue(retValId, subst: subst))
 		param gives op
 		call(resultId, callee, args) gives StdOp.call(resultId, callee: callee, args: remappedArgs(args, subst: subst))
+		retVoid gives op
 	end 'r'
 end 'remapStdOpUses'
 

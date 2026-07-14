@@ -44,7 +44,7 @@ end 'StdConstInfo'
 function stdConstInfo(op StdOp) returns StdConstInfo
 	return match op 'c'
 		const(resultId, value, _) gives StdConstInfo.isConst(resultId, value: value)
-		binOp to call gives StdConstInfo.notConst
+		binOp to retVoid gives StdConstInfo.notConst
 	end 'c'
 end 'stdConstInfo'
 
@@ -90,7 +90,7 @@ end 'rewriteBinAndCmpOps'
 
 // Attempt to fold one op. Only `binOp` and `cmp` are candidates; every other op is
 // unchanged. In particular `div`/`mod` are DELIBERATELY left alone (covered by the
-// `binOpImm to ret` range below): x64 `idiv` has no immediate divisor form, and the
+// `binOpImm to retVoid` range below): x64 `idiv` has no immediate divisor form, and the
 // division family is non-commutative, so there is nothing to canonicalize or fold to
 // an immediate — both operands stay register values. Exhaustive over StdOp, no bare
 // `default`.
@@ -100,7 +100,7 @@ function tryFold(op StdOp, constMap ConstValueMap) returns FoldResult
 		binOp(resultId, lhs, rhs, opcode) gives tryFoldBinOp(resultId, lhs: lhs, rhs: rhs, opcode: opcode, constMap: constMap)
 		unaryOp gives FoldResult.unchanged
 		cmp(resultId, lhs, rhs, pred) gives tryFoldCmp(resultId, lhs: lhs, rhs: rhs, pred: pred, constMap: constMap)
-		binOpImm to call gives FoldResult.unchanged
+		binOpImm to retVoid gives FoldResult.unchanged
 	end 'f'
 end 'tryFold'
 

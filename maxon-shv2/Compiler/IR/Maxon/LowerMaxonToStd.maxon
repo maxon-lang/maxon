@@ -110,14 +110,12 @@ end 'lowerMaxonToStd'
 type MaxonToStdLowering
 	var maxonModule as MaxonModule
 	var stdModule as StdModule
-	// Qualified name of the function currently lowering — for diagnostics only.
-	var currentFuncName as ByteArray
 	// Whole-program parameter signatures (names + types), for `lowerCall`'s
 	// label→positional argument slotting.
 	var funcSignatures as FuncSignatureMap
 
 	static function create(maxonModule MaxonModule, funcSignatures FuncSignatureMap) returns MaxonToStdLowering
-		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), currentFuncName: EmptySourceText, funcSignatures: funcSignatures}
+		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), funcSignatures: funcSignatures}
 	end 'create'
 
 	function lower() returns StdModule
@@ -162,7 +160,6 @@ type MaxonToStdLowering
 		// ids need no per-function reset — the parser already numbered them densely
 		// per function, and this pass passes them through untouched.
 		for srcFunc in self.stdModule.functions 'eachFunc'
-			self.currentFuncName = srcFunc.name
 			self.emitParams(srcFunc)
 
 			for blockRef in srcFunc.blockRefs 'eachBlock'
@@ -199,7 +196,7 @@ type MaxonToStdLowering
 			call(result, callee, args, argLabels, _) then self.lowerCall(result, callee: callee, args: args, argLabels: argLabels, dstBlock: dstBlock)
 			literal(result, value, litType) then self.lowerLiteral(result, value: value, litType: litType, dstBlock: dstBlock)
 			ret(retVal) then self.emitRetOrErrorReturn(retVal, dstBlock: dstBlock, asTerminator: false)
-			retVoid then self.rejectVoidReturn()
+			retVoid then self.stdModule.appendOp(dstBlock, op: StdOp.retVoid)
 			binOp(result, lhs, rhs, op) then self.lowerBinOp(result, lhs: lhs, rhs: rhs, op: op, dstBlock: dstBlock)
 			unaryOp(result, operand, op) then self.lowerUnaryOp(result, operand: operand, op: op, dstBlock: dstBlock)
 			compare(result, lhs, rhs, op) then self.lowerCompare(result, lhs: lhs, rhs: rhs, op: op, dstBlock: dstBlock)
@@ -213,7 +210,7 @@ type MaxonToStdLowering
 	function lowerTerminator(hlOp MaxonOp, dstBlock IrBlock)
 		match hlOp 'lower'
 			ret(retVal) then self.emitRetOrErrorReturn(retVal, dstBlock: dstBlock, asTerminator: true)
-			retVoid then self.rejectVoidReturn()
+			retVoid then self.stdModule.setTerminator(dstBlock, op: StdOp.retVoid)
 			condBranch(cond, thenBlockId, elseBlockId) then self.lowerCondBranch(cond, thenBlockId: thenBlockId, elseBlockId: elseBlockId, dstBlock: dstBlock)
 			branch(targetBlockId) then self.lowerBranch(targetBlockId, dstBlock: dstBlock)
 			literal then panic("lowerMaxonToStd: a `literal` op appeared as a block terminator (parser bug — literal is never a terminator)")
@@ -333,6 +330,10 @@ type MaxonToStdLowering
 	// GROW in at M15 / M6 — once the Std dialect gains `errorReturn` and
 	// functions can throw or return interface types. `asTerminator` toggles
 	// setTerminator (block-final) vs appendOp (the rare mid-block ret).
+	//
+	// The VOID return has no such variance to carry (no value, so nothing to widen,
+	// box, or pair with an error flag), so it lowers 1:1 at its match arm — through
+	// `StdOp.retVoid` — rather than through this helper.
 	function emitRetOrErrorReturn(retVal ValueId, dstBlock IrBlock, asTerminator bool)
 		let plainOp = StdOp.ret(retVal)
 		if asTerminator 'asTerm'
@@ -341,14 +342,4 @@ type MaxonToStdLowering
 			self.stdModule.appendOp(dstBlock, op: plainOp)
 		end 'asBody'
 	end 'emitRetOrErrorReturn'
-
-	// A void `return` cannot be lowered yet: `StdOp` has no void-return variant
-	// (it arrives with the function/ABI work at M5). Reaching here means a
-	// void-returning function survived to lowering — which M1 cannot produce, as
-	// the only function it compiles is `main`, and a void `main` is rejected by
-	// E3002 before the pipeline gets this far. So this is a pipeline-ordering bug,
-	// not a user error, and it fails loudly rather than silently emitting nothing.
-	function rejectVoidReturn()
-		panic("lowerMaxonToStd: a void `return` reached lowering in func '{String.from(self.currentFuncName)}' — StdOp has no void-return variant until M5, and E3002 should have rejected a void `main` first")
-	end 'rejectVoidReturn'
 end 'MaxonToStdLowering'

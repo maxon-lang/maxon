@@ -10,7 +10,7 @@
 // only a copy of one.
 //
 // THIN for maxon-shv2 M1: lowers exactly the `return 42` slice —
-//   StdOp.const(id, v, valueType) -> appendIntImmToReg  (movRegImm32 / movRegImm)
+//   StdOp.const(id, v, valueType) -> constMaterializationOp (movRegImm32 / movRegImm)
 //   StdOp.ret(id)  terminator     -> mov R8, <retval>   + ret
 // The primary return value goes to **R8**, not RAX — Maxon's self-designed
 // calling convention (v1 does the same). Later milestones GROW the dispatch with
@@ -27,20 +27,37 @@
 // frame. This removes the emit-then-strip dance; at M1 no user function needs a
 // frame, so main lowers to a flat `mov reg,42; mov r8,reg; ret`.
 
-// Append the canonical x64 op for "load an integer immediate into a GPR".
-// Centralizes the size choice so every caller produces the same shape:
-//   0 <= value <= u32.max -> movRegImm32 (5-byte form; the imm32 zero-extends)
-//   otherwise             -> movRegImm   (full 10-byte `mov r64, imm64`)
-// GROWS the value==0 `xor reg,reg` zeroing idiom when a flag-neutral-vs-shorter
-// tradeoff first matters (arithmetic, M3); at M1 `mov r32, 0` is correct and the
-// only literal the slice materializes is 42.
-export function appendIntImmToReg(module TargetModule, dstBlock IrBlock, dest X64VReg, value MachineWord)
-	if value <= u32.max 'fitsU32'
-		module.appendOp(dstBlock, op: TargetOp.movRegImm32(dest, value: value))
-	end 'fitsU32' else 'wide'
-		module.appendOp(dstBlock, op: TargetOp.movRegImm(dest, value: value))
-	end 'wide'
-end 'appendIntImmToReg'
+// The low end of the range the 32-bit immediate form can carry. `mov r32, imm32` ZERO-
+// extends into the full 64-bit register, so it spans the UNSIGNED 32-bit domain and
+// nothing below it — see constMaterializationOp for what happens when this bound is
+// dropped.
+let Imm32ZeroExtendedMin = 0 as MachineWord
+
+// THE size choice for materializing an integer constant into a GPR — the single place it
+// is made, because two copies of it have to agree BYTE FOR BYTE: the live-range splitter
+// REMATERIALIZES a constant at each use, and the op it re-emits must be identical to the
+// one this pass emitted (SplitLiveRanges.rematerializeConstant).
+//
+//   0 <= value <= u32.max -> movRegImm32   the 5-byte `mov r32, imm32`, which ZERO-extends
+//                                          its immediate across the whole 64-bit register
+//   otherwise             -> movRegImm     the 10-byte `mov r64, imm64`
+//
+// THE LOWER BOUND IS LOAD-BEARING, and it was missing. `value <= u32.max` alone is true of
+// every NEGATIVE value as well (MachineWord is signed), so `-1` took the zero-extending
+// form and landed in the register as 0x00000000FFFFFFFF — while a later 64-bit `cmp reg,
+// -1`, whose imm32 SIGN-extends, compared it against 0xFFFFFFFFFFFFFFFF and found them
+// unequal. It stayed latent because no `const` op ever carried a negative value: a source
+// `-7` parses as `7` under a `neg`. Type-qualified bounds (`u64.max` = -1, `i64.min`) are
+// the first negative constants to reach here.
+//
+// GROWS the value==0 `xor reg,reg` zeroing idiom when a flag-neutral-vs-shorter tradeoff
+// first matters.
+export function constMaterializationOp(dest X64VReg, value MachineWord) returns TargetOp
+	if value >= Imm32ZeroExtendedMin and value <= u32.max 'fitsUnsigned32'
+		return TargetOp.movRegImm32(dest, value: value)
+	end 'fitsUnsigned32'
+	return TargetOp.movRegImm(dest, value: value)
+end 'constMaterializationOp'
 
 // The custom-ABI integer ARGUMENT registers, in slot order: argument `k` arrives in
 // (and is passed in) `argRegisters[k]`. This is v1's order MINUS its 7th slot rbx —
@@ -174,6 +191,7 @@ type StdToX64Lowering
 			param(resultId, index, _) then self.lowerParam(resultId, index: index, dstBlock: dstBlock)
 			call(resultId, callee, args) then self.lowerCall(resultId, callee: callee, args: args, dstBlock: dstBlock)
 			ret(retValId) then self.lowerReturn(retValId, dstBlock: dstBlock, returnType: returnType, asTerminator: false)
+			retVoid then self.emitRet(dstBlock, asTerminator: false)
 			condBranch then panic("lowerStdToX64: a `condBranch` appeared as a body op (lowering bug — a branch is always a block terminator)")
 			branch then panic("lowerStdToX64: a `branch` appeared as a body op (lowering bug — a branch is always a block terminator)")
 		end 'lower'
@@ -184,6 +202,7 @@ type StdToX64Lowering
 	function lowerTerminatorOp(op StdOp, dstBlock IrBlock, returnType StdReturnType)
 		match op 'lower'
 			ret(retValId) then self.lowerReturn(retValId, dstBlock: dstBlock, returnType: returnType, asTerminator: true)
+			retVoid then self.emitRet(dstBlock, asTerminator: true)
 			condBranch(condId, thenBlockId, elseBlockId) then self.lowerCondBranch(condId, thenBlockId: thenBlockId, elseBlockId: elseBlockId, dstBlock: dstBlock)
 			branch(targetBlockId) then self.lowerBranch(targetBlockId, dstBlock: dstBlock)
 			const then panic("lowerStdToX64: a `const` op appeared as a block terminator (lowering bug — a constant is never a terminator)")
@@ -206,7 +225,7 @@ type StdToX64Lowering
 		if stdTypeIsFloat(valueType) 'float'
 			panic("lowerStdToX64: float constants (XMM materialization) are not supported until M3 — the `return 42` slice is integer-only")
 		end 'float'
-		appendIntImmToReg(self.targetModule, dstBlock: dstBlock, dest: X64VReg.virtual(resultId), value: value)
+		self.targetModule.appendOp(dstBlock, op: constMaterializationOp(X64VReg.virtual(resultId), value: value))
 	end 'lowerConst'
 
 	// Lower a Std binary op (both operands registers) to x64. NO seed `mov` is emitted
@@ -361,24 +380,37 @@ type StdToX64Lowering
 		self.targetModule.setTerminator(dstBlock, op: TargetOp.jmp(targetBlockId))
 	end 'lowerBranch'
 
-	// Return: move the value into the primary-return register (R8) then emit `ret`.
-	// Void returns skip the move (callers never read the register). Frame teardown
-	// (`epilogue`) is inserted separately by the prologue/epilogue pass.
+	// Value return: move the value into the primary-return register (R8), then emit the
+	// `ret`. A VOID return (`StdOp.retVoid`) carries no value at all and goes straight to
+	// `emitRet` — it does not come through here.
 	function lowerReturn(retValId ValueId, dstBlock IrBlock, returnType StdReturnType, asTerminator bool)
 		self.emitPrimaryReturnMove(retValId, dstBlock: dstBlock, returnType: returnType)
+		self.emitRet(dstBlock, asTerminator: asTerminator)
+	end 'lowerReturn'
+
+	// The bare `ret`, shared by the value and void returns — the ONE thing they have in
+	// common. Frame teardown (`epilogue`) is inserted separately by the prologue/epilogue
+	// pass. `asTerminator` toggles setTerminator (block-final) vs appendOp (the rare
+	// mid-block ret the Maxon tier can emit for a partially-terminated block).
+	function emitRet(dstBlock IrBlock, asTerminator bool)
 		if asTerminator 'asTerm'
 			self.targetModule.setTerminator(dstBlock, op: TargetOp.ret)
 		end 'asTerm' else 'asBody'
 			self.targetModule.appendOp(dstBlock, op: TargetOp.ret)
 		end 'asBody'
-	end 'lowerReturn'
+	end 'emitRet'
 
 	// Move the primary return value into R8 (Maxon's internal calling convention
-	// returns in R8, NOT RAX). No-op for void returns. The float (XMM0) return
-	// path GROWS in at M3 when floats land.
+	// returns in R8, NOT RAX). The float (XMM0) return path GROWS in at M3 when floats
+	// land.
+	//
+	// A `void` StdReturnType reaching here means a VALUE return (`StdOp.ret`) inside a
+	// function declared void — the Maxon tier emits `retVoid` for a void function's
+	// return, so the two can no longer disagree. It is a lowering bug, not a user error,
+	// so it panics rather than silently dropping the value.
 	function emitPrimaryReturnMove(retValId ValueId, dstBlock IrBlock, returnType StdReturnType)
 		if stdReturnTypeIsVoid(returnType) 'void'
-			return
+			panic("lowerStdToX64: a value `ret` in a void-returning function — a void return lowers to `StdOp.retVoid`, which never reaches this path")
 		end 'void'
 		if stdReturnTypeIsFloat(returnType) 'float'
 			panic("lowerStdToX64: float return values (XMM0) are not supported until M3 — the `return 42` slice is integer-only")

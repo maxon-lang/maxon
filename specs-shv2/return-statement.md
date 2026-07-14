@@ -92,6 +92,24 @@ end 'main'
 7
 ```
 
+<!-- test: return-in-if-then-reachable -->
+```maxon
+function classify(x ExitCode) returns ExitCode
+	if x > 0 'positive'
+		return 1
+	end 'positive'
+	return 0
+end 'classify'
+
+function main() returns ExitCode
+	return classify(5)
+end 'main'
+```
+```exitcode
+1
+```
+
+
 ## Deferred
 
 Tests recorded for re-enablement at the milestone that unblocks them. They live
@@ -119,23 +137,3 @@ end 'main'
 error E3071: <fragment>:4:2: unreachable code after 'return'
 ```
 
-### return-in-if-then-reachable
-
-Re-enable once its prerequisites land: function parameters + calls with named
-args (M5).
-
-```maxon
-function classify(x ExitCode) returns ExitCode
-	if x > 0 'positive'
-		return 1
-	end 'positive'
-	return 0
-end 'classify'
-
-function main() returns ExitCode
-	return classify(5)
-end 'main'
-```
-```exitcode
-1
-```

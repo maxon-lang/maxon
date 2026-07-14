@@ -14,15 +14,27 @@
 //      from a second counter — paying a heap String + ByteArray per value plus a
 //      byte-keyed hash map to undo it. See MaxonDialect's MaxonOp header.
 //
-// THIN for M1: exactly the `return 42` slice —
-//   parseModule -> dispatchTopLevel(`function`) -> parseFunction
-//     -> parseOptionalReturnType (`returns ExitCode`)
-//     -> parseStatements -> parseReturnStatement
-//       -> parseExpression -> parsePrimary -> parseIntLiteral -> emitLiteral
-//     -> setTerminator(MaxonOp.ret)
-// Anything outside this slice is rejected with a positioned diagnostic (grows
-// M2+). No params, no non-`return` statements, no operators, no user types.
-// `Scope` is threaded and reset per function but stays empty (no locals at M1).
+// Anything outside the parsed slice is rejected with a positioned diagnostic. What
+// the slice covers: free functions (parameters, calls with `name:` labels, an
+// optional `returns` clause), ranged `typealias` declarations, `let`/`var` bindings
+// and reassignment, `if`/`else`/`while` with `break`/`continue`, integer and bool
+// literals, parenthesized grouping, arithmetic, comparison, and type-qualified numeric
+// bounds. What it does NOT: user types, generics, strings, floats, logical operators.
+//
+// THREE THINGS THIS FILE OWNS THAT ARE NOT OBVIOUS FROM ITS SHAPE:
+//
+//   1. NAME RESOLUTION, INCLUDING LEXICAL BLOCK SCOPING. `Scope` is threaded through
+//      the parse, and each `if`/`else`/`while` body is a scope FRAME (parseBlockBody),
+//      so a binding declared in a block is gone at its `end` and may legally shadow an
+//      outer one while it lives. An unbound name is a parse-time diagnostic.
+//   2. ON-THE-FLY SSA. There is no AST and no `mem2reg`: a `let`/`var` binds a name
+//      straight to the SSA value its initializer produced, and the block-args (phis)
+//      that merge those values across branches and loops are minted HERE, as the
+//      control flow is parsed. Mutable bindings are tracked BY REFERENCE for it — see
+//      LoopPhiVar for the shadowing hazard that forces that.
+//   3. THE IMPLICIT RETURN. A void function's body carries no `return`, so the parser
+//      supplies its terminator (closeFunctionBody) — and reports E3013 when a
+//      value-returning body can fall off its end instead.
 
 // Cursor position into the token array. Wide range: token counts are unbounded.
 typealias TokenIndex = int(0 to u64.max)
@@ -75,7 +87,104 @@ export union ParseError implements Error
 	// A call whose 2nd-or-later argument has NO `name:` label. Renders as E2053. The
 	// symmetric syntactic rule to `firstArgNamed`.
 	argMissingLabel(line LineNumber, column ColumnNumber)
+	// A VALUE-returning function whose body can fall off its end without returning.
+	// Renders as E3013, positioned at the function's name. Detected here, not in a
+	// later pass, because the parser is what knows the block its last statement left
+	// control in — and whether that block ever got a terminator.
+	missingReturn(name String, line LineNumber, column ColumnNumber)
 end 'ParseError'
+
+// --- Ranged-typealias range bounds ---
+//
+// The inclusive bounds each sized numeric type's `.min` / `.max` denotes in a range
+// declaration (`typealias Handle = int(0 to u32.max)` — specs/ranged-typealias.md).
+// Spelled with the very range identifiers they define, so the table cannot drift from
+// the language it implements.
+//
+// `u64.max` does NOT fit a signed 64-bit field, and it rides here as the SAME BIT
+// PATTERN `ParsedInt` holds for it (Maxon stores it as the signed -1). That is not a
+// lossy stand-in: it is exactly the representation a value in an unsigned-domain alias
+// has at runtime, so a future range check compares against it directly.
+let U8MaxBound = u8.max as ParsedInt
+let U16MaxBound = u16.max as ParsedInt
+let U32MaxBound = u32.max as ParsedInt
+let U64MaxBound = u64.max as ParsedInt
+
+// Every unsigned type's lower bound. One constant, not four: `u8.min` and `u64.min`
+// are the same zero, and a per-type spelling would only invite them to drift apart.
+let UnsignedMinBound = 0 as ParsedInt
+let I8MinBound = i8.min as ParsedInt
+let I8MaxBound = i8.max as ParsedInt
+let I16MinBound = i16.min as ParsedInt
+let I16MaxBound = i16.max as ParsedInt
+let I32MinBound = i32.min as ParsedInt
+let I32MaxBound = i32.max as ParsedInt
+let I64MinBound = i64.min as ParsedInt
+let I64MaxBound = i64.max as ParsedInt
+
+// The `.min` / `.max` field names a type-qualified bound may carry.
+let MinBoundField = b"min"
+let MaxBoundField = b"max"
+
+// The i1 payloads of the `true` / `false` literals. `BoolFalseValue` is also the zero a
+// boolean-valued condition is truth-tested against (`emitTruthTest`) — one constant, so
+// "false" and "the value a false condition compares equal to" cannot drift apart.
+let BoolTrueValue = 1 as ParsedInt
+let BoolFalseValue = 0 as ParsedInt
+
+// The result of resolving a `<sized>.min` / `<sized>.max` bound. A union, so the
+// caller can tell the two REJECTIONS apart and name the actual gap in its diagnostic
+// (a float bound is a missing FEATURE; an unknown name is a typo).
+union SizedTypeBound
+	value(bound ParsedInt)
+	// `f32` / `f64` — genuinely sized numeric types, but their bounds are FLOAT values
+	// this milestone cannot represent. Rejected loudly rather than silently collapsed
+	// to an integer.
+	floatBound
+	notASizedType
+end 'SizedTypeBound'
+
+// The bound `<typeName>.<min|max>` denotes, for the eight sized INTEGER types. Shared
+// by the range-declaration parser (`typealias Port = int(0 to u16.max)`) and the
+// expression parser (`let x = u16.max`), which are the same three tokens in two
+// positions — so they resolve through one table rather than two that can disagree.
+function sizedTypeBound(typeName ByteArray, wantMax bool) returns SizedTypeBound
+	if typeName.equals(b"u8") 'u8'
+		return SizedTypeBound.value(pickBound(UnsignedMinBound, high: U8MaxBound, wantMax: wantMax))
+	end 'u8'
+	if typeName.equals(b"u16") 'u16'
+		return SizedTypeBound.value(pickBound(UnsignedMinBound, high: U16MaxBound, wantMax: wantMax))
+	end 'u16'
+	if typeName.equals(b"u32") 'u32'
+		return SizedTypeBound.value(pickBound(UnsignedMinBound, high: U32MaxBound, wantMax: wantMax))
+	end 'u32'
+	if typeName.equals(b"u64") 'u64'
+		return SizedTypeBound.value(pickBound(UnsignedMinBound, high: U64MaxBound, wantMax: wantMax))
+	end 'u64'
+	if typeName.equals(b"i8") 'i8'
+		return SizedTypeBound.value(pickBound(I8MinBound, high: I8MaxBound, wantMax: wantMax))
+	end 'i8'
+	if typeName.equals(b"i16") 'i16'
+		return SizedTypeBound.value(pickBound(I16MinBound, high: I16MaxBound, wantMax: wantMax))
+	end 'i16'
+	if typeName.equals(b"i32") 'i32'
+		return SizedTypeBound.value(pickBound(I32MinBound, high: I32MaxBound, wantMax: wantMax))
+	end 'i32'
+	if typeName.equals(b"i64") 'i64'
+		return SizedTypeBound.value(pickBound(I64MinBound, high: I64MaxBound, wantMax: wantMax))
+	end 'i64'
+	if typeName.equals(b"f32") or typeName.equals(b"f64") 'float'
+		return SizedTypeBound.floatBound
+	end 'float'
+	return SizedTypeBound.notASizedType
+end 'sizedTypeBound'
+
+function pickBound(low ParsedInt, high ParsedInt, wantMax bool) returns ParsedInt
+	if wantMax 'max'
+		return high
+	end 'max'
+	return low
+end 'pickBound'
 
 // True iff `names` already holds `name`. A linear scan — parameter lists are tiny (the
 // only caller is parameter-name duplicate detection), so no membership set is worth its
@@ -105,8 +214,16 @@ typealias InfixPrecedence = int(0 to 100)
 // ends). It is a meaningful classification result, not an error sentinel.
 let NotAnInfixOperator = 0 as InfixPrecedence
 
-// Comparison `==`/`!=`/`<`/`>`/`<=`/`>=` — the LOOSEST binary level, where the climber
-// starts (M4). Binding below additive means `x + 1 == y` groups as `(x + 1) == y`.
+// Comparison `==`/`!=`/`<`/`>`/`<=`/`>=` — the LOOSEST binary level. Binding below
+// additive means `x + 1 == y` groups as `(x + 1) == y`.
+//
+// The CLIMBER never consumes a comparison operator. A comparison is legal in exactly
+// one place — an `if`/`while` condition — and `parseCondition` handles it directly
+// (`cond := operand [cmpOp operand]`, each operand parsed at AdditivePrecedence, which
+// is what stops the climber short of the `==`). The level survives here so a VALUE
+// context, which starts the climber at it, still SEES the operator and rejects it with
+// the diagnostic that explains why — rather than stopping silently and blaming the next
+// statement. See `parseBinary`.
 let ComparisonPrecedence = 1 as InfixPrecedence
 
 // Additive `+`/`-` — binds tighter than comparison.
@@ -204,16 +321,28 @@ end 'comparisonOperator'
 
 // --- M4b loop / on-the-fly SSA support ---
 
-// A loop-header (or loop-exit) phi: the mutable variable it carries, paired with
-// the block-arg ValueId minted for it. POSITIONAL — the k-th phi var corresponds
-// to `blockArgs[k]` on the merge block and to `argIds[k]` on every predecessor's
-// `BranchEdge`, so all three follow one order (mutable-var declaration order).
+// How many mutable bindings were in scope when a lexical block was opened. A `var`
+// declared inside the block joins `Parser.mutableVars`, and must LEAVE it at the
+// block's `end`: a binding no source line can name any more must not receive a loop
+// phi, nor take a slot in a merge snapshot.
+typealias MutableVarMark = int(0 to u64.max)
+
+// A loop-header (or loop-exit) phi: the mutable BINDING it carries, paired with the
+// block-arg ValueId minted for it. POSITIONAL — the k-th phi var corresponds to
+// `blockArgs[k]` on the merge block and to `argIds[k]` on every predecessor's
+// `BranchEdge`, so all three follow one order (mutable-binding declaration order).
+//
+// The binding is held as the `VarInfo` OBJECT, not as its name. A name cannot address
+// it: a block nested inside the loop may SHADOW the name, and then a name-keyed read
+// would fetch the shadow — so `break`ing out of such a block would carry the shadow's
+// value into the loop's exit phi. A silent miscompile, and the reason `Scope` mutates
+// bindings in place instead of replacing them (see Scope's header).
 type LoopPhiVar
-	export var name as ByteArray
+	export var binding as VarInfo
 	export var phiId as ValueId
 
-	export static function create(name ByteArray, phiId ValueId) returns LoopPhiVar
-		return Self{name: name, phiId: phiId}
+	export static function create(binding VarInfo, phiId ValueId) returns LoopPhiVar
+		return Self{binding: binding, phiId: phiId}
 	end 'create'
 end 'LoopPhiVar'
 
@@ -263,12 +392,14 @@ export type Parser
 	// by Std-ABI convention), so ids are dense and function-local. The parser is
 	// where value numbering is BORN — see MaxonDialect's MaxonOp header.
 	var valueIds as ValueIdRef
-	// Names of the `var` bindings declared in the current function, in declaration
-	// order (M4b). A loop header mints one phi per mutable var in scope, and the phi
-	// order follows this list so that block-args and every predecessor's BranchEdge
-	// argIds stay positionally aligned. `let` bindings never appear (they cannot be
-	// reassigned, so they carry no loop-carried phi). Reset per function.
-	var mutableVars as ByteArrayArray
+	// The `var` bindings currently IN SCOPE, in declaration order (M4b) — held as the
+	// `VarInfo` objects, for the reason LoopPhiVar documents. A loop header mints one
+	// phi per mutable binding in scope, and the phi order follows this list so that
+	// block-args and every predecessor's BranchEdge argIds stay positionally aligned.
+	// `let` bindings never appear (they cannot be reassigned, so they carry no
+	// loop-carried phi). A block's `var`s are drained off the end of this list at the
+	// block's `end` (see closeBlock). Reset per function.
+	var mutableVars as VarInfoArray
 	// The enclosing loops, innermost last (M4b). `break`/`continue` resolve their
 	// target here; a `while` pushes on entry and pops after its body. Reset per
 	// function (a stray entry across functions would be a parser bug).
@@ -283,7 +414,7 @@ export type Parser
 			artifact: FileParseArtifact.create(filePath),
 			scope: Scope.create(),
 			valueIds: ValueIdRef.create(0),
-			mutableVars: ByteArrayArray.create(),
+			mutableVars: VarInfoArray.create(),
 			loops: LoopContextArray.create()
 		}
 	end 'create'
@@ -301,9 +432,15 @@ export type Parser
 		return self.artifact
 	end 'parseModule'
 
-	// One top-level declaration. M1 accepts an optional `export`, then requires a
-	// `function`. Everything else (typealias, type, enum, ...) is out of the M1
-	// slice and rejected with a positioned error.
+	// One top-level declaration: an optional `export`, then a `function` or a ranged
+	// `typealias`. Everything else (type, enum, union, extension, top-level `let`/`var`,
+	// ...) is out of the slice and rejected with a positioned error.
+	//
+	// `visibility` is consumed only by `parseFunction`. A typealias carries one too, and
+	// it is deliberately DROPPED: alias visibility decides whether a name is reachable
+	// from another FILE, and the alias registry is whole-program until cross-file name
+	// resolution lands (see `commitTypeAliases`). Recording it now would be a field
+	// nothing reads.
 	function dispatchTopLevel() throws ParseError
 		var visibility = Visibility.file
 		if self.at(TokenKind.export) 'exported'
@@ -313,11 +450,136 @@ export type Parser
 
 		if self.at(TokenKind.function) 'isFunction'
 			try self.parseFunction(visibility)
-		end 'isFunction' else 'unsupported'
+		end 'isFunction' else if self.at(TokenKind.typealias) 'isTypeAlias'
+			try self.parseTypeAlias()
+		end 'isTypeAlias' else 'unsupported'
 			let tok = self.current()
-			throw ParseError.unsupported("top-level {tok.kind.rawValue} (M1 parses only function declarations)", line: tok.line, column: tok.column)
+			throw ParseError.unsupported("top-level {tok.kind.rawValue}", line: tok.line, column: tok.column)
 		end 'unsupported'
 	end 'dispatchTopLevel'
+
+	// Parse a ranged typealias declaration: `typealias <Name> = int(<low> to|upto <high>)`.
+	// Nearly every real Maxon file opens with one — `int` is almost never written bare in
+	// a type position (specs/ranged-typealias.md) — so this is the declaration that gates
+	// most of the corpus.
+	//
+	// It emits NO op: an alias is a DECLARATION, and its whole effect is the registry
+	// entry recorded here, which TypeResolution substitutes for every `MaxonType.named`
+	// use of the name. Two aliases over the same range are therefore the SAME type — an
+	// alias creates no nominal distinction — and a use in a type position needs no parser
+	// change at all (`parseTypeReference` already interns a bare identifier).
+	//
+	// The RANGE is recorded but not yet enforced: a narrowing conversion into a ranged
+	// alias is checked at run time, and that check is a later milestone. The corpus's
+	// ranges are overwhelmingly WIDE (`i64.min to i64.max`, `0 to u64.max`), for which no
+	// check would be emitted regardless.
+	function parseTypeAlias() throws ParseError
+		try self.consume(TokenKind.typealias)
+		let nameTok = try self.consume(TokenKind.identifier)
+		try self.consume(TokenKind.equals)
+
+		// `int(...)` only. A `float(...)` alias needs float literals for its bounds, a
+		// generic alias (`Array with T`) needs generics, and a bare `i64` is not legal
+		// Maxon at all — each is rejected here, naming its own gap, rather than being
+		// mapped onto the integer path where it would silently mean something else.
+		if not self.at(TokenKind.int) 'notInt'
+			let tok = self.current()
+			throw ParseError.unsupported("a typealias over '{tok.kind.rawValue}' (only `int(low to high)` is parsed; float, generic and bare-sized aliases arrive with the milestones that give them meaning)", line: tok.line, column: tok.column)
+		end 'notInt'
+		try self.consume(TokenKind.int)
+
+		try self.consume(TokenKind.leftParen)
+		let low = try self.parseRangeBound()
+		let high = try self.parseRangeUpperBound()
+		try self.consume(TokenKind.rightParen)
+
+		self.artifact.recordTypeAlias(RangedTypeAlias.create(nameTok.value, underlying: MaxonType.integer, low: low, high: high))
+	end 'parseTypeAlias'
+
+	// The `to <high>` / `upto <high>` half of a range, returned as an INCLUSIVE upper
+	// bound: `upto` is exclusive, so it normalizes to `high - 1` here and the registry
+	// keeps exactly one representation of a range (`0 upto 10` and `0 to 9` are the same
+	// alias, which is what the language says they are).
+	//
+	// `i64.min` has no `upto` form — its exclusive bound would be one BELOW the smallest
+	// representable value. Rejected with a positioned error, because the subtraction that
+	// normalizes it would otherwise underflow `ParsedInt` and take the COMPILER down on a
+	// source file it should merely have diagnosed.
+	function parseRangeUpperBound() returns ParsedInt throws ParseError
+		if self.at(TokenKind.upto) 'exclusive'
+			let uptoTok = try self.consume(TokenKind.upto)
+			let bound = try self.parseRangeBound()
+			if bound == I64MinBound 'unrepresentable'
+				throw ParseError.unsupported("an exclusive upper bound of i64.min — its inclusive form is one below the smallest 64-bit integer, so the range is empty and not representable", line: uptoTok.line, column: uptoTok.column)
+			end 'unrepresentable'
+			return bound - 1
+		end 'exclusive'
+
+		try self.consume(TokenKind.to)
+		return try self.parseRangeBound()
+	end 'parseRangeUpperBound'
+
+	// One endpoint of a range: an integer literal (`0`, `-273`, `0xFFFF`) or a
+	// type-qualified bound (`i64.min`, `u32.max`).
+	function parseRangeBound() returns ParsedInt throws ParseError
+		if self.at(TokenKind.minus) 'negative'
+			try self.consume(TokenKind.minus)
+			let tok = try self.consume(TokenKind.intLiteral)
+			return try self.intLiteralValue(tok, negated: true)
+		end 'negative'
+
+		if self.at(TokenKind.intLiteral) 'literal'
+			let tok = try self.consume(TokenKind.intLiteral)
+			return try self.intLiteralValue(tok, negated: false)
+		end 'literal'
+
+		return try self.parseTypeQualifiedBound()
+	end 'parseRangeBound'
+
+	// Convert an integer-literal token's text to its value, re-raising NumberParsing's
+	// overflow as a POSITIONED parse error. THE one place a literal's text becomes a
+	// number: the expression parser (`parseIntLiteral`) and the range-bound parser both
+	// come through it, so how a literal is read — the radix prefixes it accepts, the
+	// overflow it rejects — cannot come to mean one thing in `return 42` and another in
+	// `int(0 to 42)`.
+	//
+	// `negated` routes to `parseNegatedInt` rather than negating the result: `i64.min`'s
+	// magnitude does not fit a POSITIVE i64, so negating after the fact would overflow on
+	// the one bound that most needs to work.
+	function intLiteralValue(tok Token, negated bool) returns ParsedInt throws ParseError
+		if negated 'negative'
+			return try parseNegatedInt(tok.value) otherwise throw ParseError.integerOverflow(tok.line, column: tok.column)
+		end 'negative'
+		return try parseInt(tok.value) otherwise throw ParseError.integerOverflow(tok.line, column: tok.column)
+	end 'intLiteralValue'
+
+	// A type-qualified numeric bound — `<sized>.min` / `<sized>.max`, three tokens
+	// (identifier, `.`, identifier). Shared by the range-declaration parser and the
+	// expression parser, which meet the same three tokens in two positions.
+	function parseTypeQualifiedBound() returns ParsedInt throws ParseError
+		let typeTok = try self.consume(TokenKind.identifier)
+		try self.consume(TokenKind.dot)
+		let fieldTok = try self.consume(TokenKind.identifier)
+		let wantMax = try self.boundFieldIsMax(fieldTok)
+
+		match sizedTypeBound(typeTok.value, wantMax: wantMax) 'resolve'
+			value(bound) then return bound
+			floatBound then throw ParseError.unsupported("the float bound '{String.from(typeTok.value)}.{String.from(fieldTok.value)}' (float bounds arrive with floats)", line: typeTok.line, column: typeTok.column)
+			notASizedType then throw ParseError.unexpectedToken("a sized numeric type (u8/u16/u32/u64/i8/i16/i32/i64)", got: String.from(typeTok.value), line: typeTok.line, column: typeTok.column)
+		end 'resolve'
+	end 'parseTypeQualifiedBound'
+
+	// True for `.max`, false for `.min`. Any other field name is a positioned error —
+	// a sized type exposes exactly these two bounds.
+	function boundFieldIsMax(fieldTok Token) returns bool throws ParseError
+		if fieldTok.value.equals(MaxBoundField) 'max'
+			return true
+		end 'max'
+		if fieldTok.value.equals(MinBoundField) 'min'
+			return false
+		end 'min'
+		throw ParseError.unexpectedToken("'min' or 'max'", got: String.from(fieldTok.value), line: fieldTok.line, column: fieldTok.column)
+	end 'boundFieldIsMax'
 
 	// Parse a free function: `function <name>(<params>) [returns <Type>] <body> end
 	// [label]`. M5 adds parameters (`name type`, comma-separated); there is still no
@@ -350,7 +612,7 @@ export type Parser
 		let paramCount = paramNames.count()
 		self.scope.reset()
 		self.valueIds = ValueIdRef.create(paramCount)
-		self.mutableVars = ByteArrayArray.create()
+		self.mutableVars = VarInfoArray.create()
 		self.loops = LoopContextArray.create()
 
 		// Bind each parameter name to its reserved ValueId (i for parameter i), so a
@@ -372,10 +634,10 @@ export type Parser
 
 		self.skipNewlines()
 		// parseStatements threads a "current block" that control-flow statements can
-		// move forward (an `if` leaves subsequent statements in its continuation block);
-		// the final block it returns is not needed here — the function's own `end` closes
-		// the body regardless of which block it landed in.
-		_ = try self.parseStatements(func, block: entry)
+		// move forward (an `if` leaves subsequent statements in its continuation block),
+		// so the block it RETURNS — not `entry` — is the one control falls out of.
+		var bodyEnd = try self.parseStatements(func, block: entry)
+		try self.closeFunctionBody(bodyEnd, returnType: returnType, nameTok: nameTok)
 
 		try self.consume(TokenKind.end)
 		self.skipOptionalLabel()
@@ -384,6 +646,35 @@ export type Parser
 		self.artifact.recordFuncReturnType(name, returnType: returnType)
 		self.artifact.recordFuncSignature(name, signature: FuncSignature.create(paramNames, paramTypes: paramTypes), nameLine: nameTok.line, nameColumn: nameTok.column, sourceFilePath: self.filePath)
 	end 'parseFunction'
+
+	// Close a function body. `bodyEnd` is the block its last statement left control in;
+	// when that block has no terminator, control can FALL OFF THE END of the function
+	// and the parser must supply what the source did not:
+	//
+	//   • VOID function — the implicit `return`. This is why `function doNothing()
+	//     end 'doNothing'` compiles (specs/empty-block.md), and it is what every void
+	//     function needs, not just an empty one: no void body writes a trailing
+	//     `return`. Without it the block reaches the backend in `Terminator.unset`.
+	//   • VALUE-returning function — an error: control would leave with no value to
+	//     return. E3013, positioned at the function's name (specs/missing-return-error.md).
+	//
+	// An already-terminated `bodyEnd` covers the UNREACHABLE case for free: an `if`
+	// whose branches all return leaves its continuation marked `dead`, which counts as
+	// terminated — so `main` ending in a fully-returning `if`/`else` is not a missing
+	// return. The synthetic `retVoid` is anchored on the function's name for the same
+	// reason E3013 is: no source token spawned it, and the name is where a reader looks
+	// for "what does this function return?".
+	function closeFunctionBody(bodyEnd IrBlock, returnType MaxonReturnType, nameTok Token) throws ParseError
+		if bodyEnd.isTerminated() 'terminated'
+			return
+		end 'terminated'
+
+		if not maxonReturnTypeIsVoid(returnType) 'fallsOffEnd'
+			throw ParseError.missingReturn(String.from(nameTok.value), line: nameTok.line, column: nameTok.column)
+		end 'fallsOffEnd'
+
+		self.artifact.emitTerminator(bodyEnd, op: MaxonOp.retVoid, range: SourceRange.ofToken(nameTok))
+	end 'closeFunctionBody'
 
 	// Parse a comma-separated parameter list `name type[, name type]*` into the
 	// parallel `paramNames`/`paramTypes` lists (empty when the list is empty). Each
@@ -433,7 +724,9 @@ export type Parser
 			let paramName = try paramNames.get(i) otherwise panic("bindParameters: paramNames.get OOB at {i}")
 			let paramType = try paramTypes.get(i) otherwise panic("bindParameters: paramTypes.get OOB at {i}")
 			let paramRange = try paramRanges.get(i) otherwise panic("bindParameters: paramRanges.get OOB at {i}")
-			self.scope.declareValueBinding(paramName, varType: paramType, mutable: false, value: i as ValueId)
+			// The installed binding is discarded: only MUTABLE bindings are tracked by
+			// reference (for loop phis), and a parameter is immutable.
+			_ = self.scope.declareValueBinding(paramName, varType: paramType, mutable: false, value: i as ValueId)
 			// Parameter `i` owns ValueId `i`; record its declaration span so the register-pressure
 			// diagnostic can resolve the parameter to source (it is minted by no op — see
 			// ParamOriginTable — so it has no `emitOp` origin).
@@ -542,9 +835,12 @@ export type Parser
 	// contract, so no explicit `:` check is needed. The initializer's SSA value is
 	// bound to the name in the scope, so a later reference resolves straight to it
 	// (no slot, no load/store — see Scope.declareValueBinding). `mutable`
-	// distinguishes `var` from `let`; M2 has no reassignment, so it only records
-	// intent (the assignment statement — and the mutability enforcement it needs —
-	// arrives at a later milestone). `var` therefore binds exactly like `let` here.
+	// distinguishes `var` from `let`: only a `var` may be reassigned, and only a `var`
+	// carries a loop-carried phi.
+	//
+	// The binding lands in the INNERMOST open scope frame, so a declaration inside an
+	// `if`/`while` body is gone at its `end` — and may legally SHADOW an outer binding
+	// of the same name while it lives (specs/block-scoping.md).
 	function parseBinding(block IrBlock, mutable bool) throws ParseError
 		if mutable 'isVar'
 			try self.consume(TokenKind.var)
@@ -554,15 +850,52 @@ export type Parser
 
 		let nameTok = try self.consume(TokenKind.identifier)
 		try self.consume(TokenKind.equals)
-		let value = try self.parseExpression(block, permitComparison: false)
-		self.scope.declareValueBinding(nameTok.value, varType: MaxonType.integer, mutable: mutable, value: value)
+		let value = try self.parseExpression(block)
+		var binding = self.scope.declareValueBinding(nameTok.value, varType: MaxonType.integer, mutable: mutable, value: value)
 		if mutable 'trackVar'
-			// Record `var`s in declaration order so loop headers can mint phis for
-			// every mutable var in scope (M4b on-the-fly SSA). `let`s never join —
-			// they cannot be reassigned, so they carry no loop-carried phi.
-			self.mutableVars.push(nameTok.value)
+			// Record `var`s in declaration order so loop headers can mint phis for every
+			// mutable binding in scope (M4b on-the-fly SSA). `let`s never join — they
+			// cannot be reassigned, so they carry no loop-carried phi.
+			self.mutableVars.push(binding)
 		end 'trackVar'
 	end 'parseBinding'
+
+	// Open a lexical block — an `if` / `else` / `while` body. Two things are scoped to
+	// it and must be opened and closed TOGETHER: the Scope frame its declarations land
+	// in, and the height of the mutable-binding list. A `var` that leaves scope must
+	// also leave that list, or the next merge snapshot would mint a phi for a binding
+	// no source line can name. Returns the mark `closeBlock` unwinds to.
+	function openBlock() returns MutableVarMark
+		self.scope.pushScope()
+		return self.mutableVars.count()
+	end 'openBlock'
+
+	// Close a lexical block: drop its declarations out of scope (restoring anything they
+	// shadowed) and its `var`s off the mutable-binding list.
+	function closeBlock(mark MutableVarMark)
+		self.scope.popScope()
+		while self.mutableVars.count() > mark 'drain'
+			_ = try self.mutableVars.pop() otherwise panic("closeBlock: mutableVars.pop failed above the mark {mark}")
+		end 'drain'
+	end 'closeBlock'
+
+	// Parse a lexical block's statements into `block`, through its closing `end [label]`.
+	// The ONE place a block body is parsed, so the scope frame is opened and closed in
+	// one place too: an `if` body, an `else` body and a `while` body all come through
+	// here. The caller has already consumed the block's opening label.
+	//
+	// Returns the block the body's last statement left control in (which is `block`
+	// itself only for straight-line code — a nested `if` moves control into its
+	// continuation).
+	function parseBlockBody(func IrFunction, block IrBlock) returns IrBlock throws ParseError
+		let mark = self.openBlock()
+		self.skipNewlines()
+		let bodyEnd = try self.parseStatements(func, block: block)
+		try self.consume(TokenKind.end)
+		self.skipOptionalLabel()
+		self.closeBlock(mark)
+		return bodyEnd
+	end 'parseBlockBody'
 
 	// Parse a reassignment `<name> = <expr>` (M4b). The target must be a declared
 	// `var`; a `let` target is E2013, an undeclared name is `undefinedVariable`. The
@@ -581,7 +914,7 @@ export type Parser
 		if not self.scope.getInfo(nameTok.value).mutable 'immutable'
 			throw ParseError.assignToImmutable(String.from(nameTok.value), line: nameTok.line, column: nameTok.column)
 		end 'immutable'
-		let value = try self.parseExpression(block, permitComparison: false)
+		let value = try self.parseExpression(block)
 		self.scope.setValue(nameTok.value, value: value)
 	end 'parseAssignment'
 
@@ -594,7 +927,7 @@ export type Parser
 			self.artifact.emitTerminator(block, op: MaxonOp.retVoid, range: SourceRange.ofToken(retTok))
 			return
 		end 'bareReturn'
-		let retVal = try self.parseExpression(block, permitComparison: false)
+		let retVal = try self.parseExpression(block)
 		self.artifact.emitTerminator(block, op: MaxonOp.ret(retVal), range: SourceRange.ofToken(retTok))
 	end 'parseReturnStatement'
 
@@ -625,9 +958,14 @@ export type Parser
 	// a continuation PHI (the same block-arg mechanism loops use), everything else keeps
 	// its common value. Without this, a `var` written only on the taken path would leak
 	// its then-value onto the not-taken path (a real miscompile).
+	//
+	// Each branch body is a lexical BLOCK (parseBlockBody), so the three snapshots are
+	// all taken at the SAME scope depth — a `var` declared inside a branch has left
+	// `mutableVars` by the time that branch's exit values are read, which is what keeps
+	// `entryVals` / `thenVals` / `elseVals` positionally aligned.
 	function parseIfStatement(func IrFunction, block IrBlock) returns IrBlock throws ParseError
 		let ifTok = try self.consume(TokenKind.if)
-		let cond = try self.parseExpression(block, permitComparison: true)
+		let cond = try self.parseCondition(block)
 		let thenLabel = try self.consume(TokenKind.charLiteral)
 
 		// Values entering the branches (the condition only reads, so `block`'s values
@@ -638,10 +976,7 @@ export type Parser
 		// statement parser fills the block; the finalizers wire its terminator) — a
 		// `let` binding cannot be forwarded to a mutating parameter (E3019).
 		var thenBlock = self.newBlock(func, label: thenLabel.value, line: thenLabel.line)
-		self.skipNewlines()
-		var thenEnd = try self.parseStatements(func, block: thenBlock)
-		try self.consume(TokenKind.end)
-		self.skipOptionalLabel()
+		var thenEnd = try self.parseBlockBody(func, block: thenBlock)
 
 		// Snapshot the then-branch's exit values, then rewind to the entry state so the
 		// else/false path is parsed against the pre-`if` values, not the then-branch's.
@@ -664,17 +999,18 @@ export type Parser
 	// if's entry) or a plain labelled `else` block. Returns the block the else branch
 	// left control in (its own continuation for a nested if; the block its last
 	// statement filled for a plain else).
+	//
+	// The `else if` form opens NO scope frame of its own: its condition is evaluated in
+	// the ENCLOSING scope (it is not inside any block), and each of the nested if's own
+	// branches opens a frame when it is parsed. Only the plain `else 'label'` form is a
+	// block body.
 	function parseElseBody(func IrFunction, elseBlock IrBlock) returns IrBlock throws ParseError
 		if self.at(TokenKind.if) 'elseIf'
 			return try self.parseIfStatement(func, block: elseBlock)
 		end 'elseIf'
 
 		try self.consume(TokenKind.charLiteral)
-		self.skipNewlines()
-		let elseEnd = try self.parseStatements(func, block: elseBlock)
-		try self.consume(TokenKind.end)
-		self.skipOptionalLabel()
-		return elseEnd
+		return try self.parseBlockBody(func, block: elseBlock)
 	end 'parseElseBody'
 
 	// Finalize an `if` with no `else`: the false path flows straight to the
@@ -731,30 +1067,32 @@ export type Parser
 		return cont
 	end 'finalizeIfElse'
 
-	// Merge two incoming value snapshots at a continuation block. For each mutable var
-	// present on BOTH paths (the shared entry-prefix — branch-local `var`s declared in
-	// only one path are not merged; that needs block scoping, deferred), a var whose
+	// Merge two incoming value snapshots at a continuation block. A mutable binding whose
 	// value differs across the paths gets a continuation PHI (a block-arg) and each
-	// predecessor records the value it carries on its edge; a var with the same value on
-	// both paths keeps that value with no phi. The current binding of each merged var is
+	// predecessor records the value it carries on its edge; a binding with the same value
+	// on both paths keeps that value with no phi. Each merged binding's current value is
 	// set to the phi (or the common value) so code after the `if` reads the merged value.
+	//
+	// Both snapshots and `mutableVars` are the SAME length: every branch body is a
+	// lexical block, so a `var` declared inside one is out of scope — and off
+	// `mutableVars` — before its exit values are snapshotted. Anything else would mean
+	// the three fell out of step, which is a parser bug, so it panics rather than
+	// merging a prefix and silently dropping the rest.
 	function mergeAtContinuation(predA IrBlock, predB IrBlock, cont IrBlock, valsA ValueIdArray, valsB ValueIdArray)
-		var shared = valsA.count()
-		if valsB.count() < shared 'bShorter'
-			shared = valsB.count()
-		end 'bShorter'
+		self.assertSnapshotAligned(valsA, site: "mergeAtContinuation/valsA")
+		self.assertSnapshotAligned(valsB, site: "mergeAtContinuation/valsB")
 
 		var edgeArgsA = ValueIdArray.create()
 		var edgeArgsB = ValueIdArray.create()
-		for k in 0 upto shared 'eachVar'
-			let name = try self.mutableVars.get(k) otherwise panic("mergeAtContinuation: mutableVars.get OOB at {k}")
+		for k in 0 upto self.mutableVars.count() 'eachVar'
+			var binding = try self.mutableVars.get(k) otherwise panic("mergeAtContinuation: mutableVars.get OOB at {k}")
 			let a = try valsA.get(k) otherwise panic("mergeAtContinuation: valsA.get OOB at {k}")
 			let b = try valsB.get(k) otherwise panic("mergeAtContinuation: valsB.get OOB at {k}")
 			if a == b 'same'
-				self.scope.setValue(name, value: a)
+				binding.boundValue = a
 			end 'same' else 'differ'
 				let phiId = self.mintPhi(cont)
-				self.scope.setValue(name, value: phiId)
+				binding.boundValue = phiId
 				edgeArgsA.push(a)
 				edgeArgsB.push(b)
 			end 'differ'
@@ -763,18 +1101,30 @@ export type Parser
 		self.recordBranchEdge(predB, targetId: cont.id, argIds: edgeArgsB)
 	end 'mergeAtContinuation'
 
-	// Rebind each mutable var to a previously-captured snapshot value (from
+	// Rebind each mutable binding to a previously-captured snapshot value (from
 	// `snapshotMutableValues`). Used to rewind to the pre-branch state before parsing an
 	// `if`'s false path, and to select a single surviving branch's values at a
-	// continuation. A snapshot shorter than the current `mutableVars` (a var was declared
-	// after it was taken) restores only the captured prefix, leaving later vars as-is.
+	// continuation. Written THROUGH the binding, not by name, so a value is never routed
+	// to a shadow (see LoopPhiVar).
 	function restoreValues(snapshot ValueIdArray)
-		for k in 0 upto snapshot.count() 'each'
-			let name = try self.mutableVars.get(k) otherwise panic("restoreValues: mutableVars.get OOB at {k}")
-			let value = try snapshot.get(k) otherwise panic("restoreValues: snapshot.get OOB at {k}")
-			self.scope.setValue(name, value: value)
+		self.assertSnapshotAligned(snapshot, site: "restoreValues")
+		for k in 0 upto self.mutableVars.count() 'each'
+			var binding = try self.mutableVars.get(k) otherwise panic("restoreValues: mutableVars.get OOB at {k}")
+			binding.boundValue = try snapshot.get(k) otherwise panic("restoreValues: snapshot.get OOB at {k}")
 		end 'each'
 	end 'restoreValues'
+
+	// Every value snapshot is positional over `mutableVars` and must therefore have
+	// exactly its length — block scoping is what guarantees that (a branch-local `var`
+	// is drained at the block's `end`, so it can never lengthen a snapshot taken outside
+	// the block). A mismatch means the two fell out of step, which would misattribute
+	// every later binding's value by one, so it fails loudly here rather than silently.
+	function assertSnapshotAligned(snapshot ValueIdArray, site String)
+		let expected = self.mutableVars.count()
+		if snapshot.count() != expected 'drifted'
+			panic("{site}: value snapshot holds {snapshot.count()} entries but {expected} mutable bindings are in scope — the snapshot drifted out of lockstep with mutableVars")
+		end 'drifted'
+	end 'assertSnapshotAligned'
 
 	// Parse a `while` loop (M4b):
 	//   while <cond> 'label'
@@ -815,17 +1165,20 @@ export type Parser
 		self.recordBranchEdge(block, targetId: header.id, argIds: preheaderVals)
 		self.emitBranch(block, targetId: header.id)
 
-		// Mint the header phis (one per mutable var in scope, in declaration order so
-		// blockArgs and every predecessor's branchEdge argIds stay aligned).
+		// Mint the header phis (one per mutable binding in scope, in declaration order so
+		// blockArgs and every predecessor's branchEdge argIds stay aligned). Index-based
+		// so each binding is a MUTABLE reference — a `for x in …` loop variable is
+		// immutable, and installing the phi writes through the binding.
 		var phiVars = LoopPhiVarArray.create()
-		for name in self.mutableVars 'mkPhi'
+		for k in 0 upto self.mutableVars.count() 'mkPhi'
+			var binding = try self.mutableVars.get(k) otherwise panic("parseWhileStatement: mutableVars.get OOB at {k}")
 			let phiId = self.mintPhi(header)
-			phiVars.push(LoopPhiVar.create(name, phiId: phiId))
-			self.scope.setValue(name, value: phiId)
+			phiVars.push(LoopPhiVar.create(binding, phiId: phiId))
+			binding.boundValue = phiId
 		end 'mkPhi'
 
 		// Condition, emitted into the header so its flags are live for the condBranch.
-		let cond = try self.parseExpression(header, permitComparison: true)
+		let cond = try self.parseCondition(header)
 		let loopLabelTok = try self.consume(TokenKind.charLiteral)
 
 		var body = self.newBlock(func, label: loopLabelTok.value, line: loopLabelTok.line)
@@ -834,10 +1187,10 @@ export type Parser
 
 		self.loops.push(LoopContext.create(loopLabelTok.value, headerId: header.id, exitId: exit.id, phiVars: phiVars))
 
-		self.skipNewlines()
-		var bodyEnd = try self.parseStatements(func, block: body)
-		try self.consume(TokenKind.end)
-		self.skipOptionalLabel()
+		// The body is a lexical BLOCK: its declarations are gone — and its `var`s off
+		// `mutableVars` — before the back-edge args below are read, so those args name the
+		// loop's own phi bindings and never a body-local shadow.
+		var bodyEnd = try self.parseBlockBody(func, block: body)
 
 		let ctx = try self.loops.pop() otherwise panic("parseWhileStatement: loop stack empty after body of '{String.from(loopLabelTok.value)}'")
 
@@ -859,18 +1212,23 @@ export type Parser
 	// false value with each break's value, so it gets its own phis and the header's
 	// false edge passes the header phi values into them (the break edges were recorded
 	// as the breaks were parsed).
+	// Index-based in both loops so each phi var is a MUTABLE binding — a `for x in …`
+	// loop variable is immutable, and installing the post-loop value writes through the
+	// binding it carries.
 	function wireLoopExit(header IrBlock, exit IrBlock, ctx LoopContext)
 		if not ctx.hasBreak 'noBreak'
-			for pv in ctx.phiVars 'inherit'
-				self.scope.setValue(pv.name, value: pv.phiId)
+			for k in 0 upto ctx.phiVars.count() 'inherit'
+				var pv = try ctx.phiVars.get(k) otherwise panic("wireLoopExit: phiVars.get OOB at {k}")
+				pv.binding.boundValue = pv.phiId
 			end 'inherit'
 			return
 		end 'noBreak'
 
 		var headerVals = ValueIdArray.create()
-		for pv in ctx.phiVars 'mkExitPhi'
+		for k in 0 upto ctx.phiVars.count() 'mkExitPhi'
+			var pv = try ctx.phiVars.get(k) otherwise panic("wireLoopExit: phiVars.get OOB at {k}")
 			let exitPhiId = self.mintPhi(exit)
-			self.scope.setValue(pv.name, value: exitPhiId)
+			pv.binding.boundValue = exitPhiId
 			headerVals.push(pv.phiId)
 		end 'mkExitPhi'
 		self.recordBranchEdge(header, targetId: exit.id, argIds: headerVals)
@@ -923,22 +1281,25 @@ export type Parser
 		throw ParseError.unknownLoopLabel(keyword, label: String.from(labelTok.value), line: labelTok.line, column: labelTok.column)
 	end 'resolveControlTarget'
 
-	// The current SSA value of each mutable var, in declaration order — the preheader
-	// block-arg list for a loop header (their values before the loop runs).
+	// The current SSA value of each mutable binding IN SCOPE, in declaration order — the
+	// preheader block-arg list for a loop header (their values before the loop runs), and
+	// the branch snapshots an `if` merges.
 	function snapshotMutableValues() returns ValueIdArray
 		var vals = ValueIdArray.create()
-		for name in self.mutableVars 'each'
-			vals.push(self.currentValueOf(name))
+		for binding in self.mutableVars 'each'
+			vals.push(binding.boundValue)
 		end 'each'
 		return vals
 	end 'snapshotMutableValues'
 
-	// The current SSA value of each phi var, in phi order — an in-edge's block-arg list
-	// (a back-edge to the header, or a break to the exit).
+	// The current SSA value of each phi binding, in phi order — an in-edge's block-arg
+	// list (a back-edge to the header, or a break to the exit). Read off the BINDING, so
+	// a `break` out of a block that shadows a loop-carried `var` still carries the
+	// loop's own binding to the exit phi, not the shadow's value.
 	function edgeArgsFor(phiVars LoopPhiVarArray) returns ValueIdArray
 		var vals = ValueIdArray.create()
 		for pv in phiVars 'each'
-			vals.push(self.currentValueOf(pv.name))
+			vals.push(pv.binding.boundValue)
 		end 'each'
 		return vals
 	end 'edgeArgsFor'
@@ -952,14 +1313,6 @@ export type Parser
 		block.blockArgs.push(IrBlockArg.create(phiId, argType: StdType.i64))
 		return phiId
 	end 'mintPhi'
-
-	// The current SSA value bound to `name`. A mutable var tracked for phi wiring is
-	// always in scope by construction, so its absence is a compiler-invariant violation
-	// (not a user error) and panics — centralizing the lookup that `snapshotMutableValues`
-	// and `edgeArgsFor` both perform.
-	function currentValueOf(name ByteArray) returns ValueId
-		return try self.scope.lookupValue(name) otherwise panic("currentValueOf: var '{String.from(name)}' not in scope")
-	end 'currentValueOf'
 
 	// Record the block-arg values `block` passes to `targetId` for the Std-tier
 	// phi-elim pass. A branch op carries only the target BlockId, so the per-edge phi
@@ -992,41 +1345,64 @@ export type Parser
 		self.artifact.emitTerminator(block, op: MaxonOp.branch(targetId), range: SourceRange.none())
 	end 'emitBranch'
 
-	// Expression entry — a Pratt precedence climber (M3 replaced M2's `+`-only
-	// left-fold). It starts at the loosest binary level; `parseBinary` climbs the
-	// precedence table (`infixPrecedence`), and `parseUnary` handles prefix `-` as
-	// the climber's leaf. See the precedence table above the Parser type.
+	// Expression entry — a VALUE context (`let`/`var`/`return`/an argument/inside
+	// parentheses). A Pratt precedence climber (M3 replaced M2's `+`-only left-fold):
+	// it starts at the loosest binary level, `parseBinary` climbs the precedence table
+	// (`infixPrecedence`), and `parseUnary` handles prefix `-` as the climber's leaf.
+	// See the precedence table above the Parser type.
 	//
-	// `permitComparison` records whether a top-level comparison may appear here: true
-	// only for an `if` condition (where the Std→x64 pass fuses the compare into the
-	// branch), false in a value context (`let`/`var`/`return`) where a comparison
-	// result would have to be materialized as a boolean — deferred past M4. See
-	// parseBinary for why an unpermitted comparison must be rejected rather than lowered.
-	function parseExpression(block IrBlock, permitComparison bool) returns ValueId throws ParseError
-		return try self.parseBinary(block, minPrec: ComparisonPrecedence, permitComparison: permitComparison)
+	// It starts at ComparisonPrecedence — the level BELOW the loosest operator it can
+	// actually accept — precisely so that a comparison written here is SEEN by the
+	// climber and rejected with the diagnostic that explains why (parseBinary), instead
+	// of being left unconsumed and blamed on whatever follows it.
+	function parseExpression(block IrBlock) returns ValueId throws ParseError
+		return try self.parseBinary(block, minPrec: ComparisonPrecedence)
 	end 'parseExpression'
+
+	// Condition entry — the `if`/`while` condition, and the ONE context where a
+	// comparison is legal, because it is the one context where its result is CONSUMED by
+	// a branch (the Std→x64 pass fuses the pair into `cmp` + `jcc` and never materializes
+	// the boolean). The grammar is flat, not climbed:
+	//
+	//     cond := operand [ cmpOp operand ]        operand := <expression at additive precedence>
+	//
+	// Parsing each operand at AdditivePrecedence is what stops the climber short of the
+	// comparison operator, so the comparison is consumed HERE and nowhere else — which
+	// is also why a chain (`a == b == c`) cannot parse: the second `==` is left where the
+	// `if`'s block label was expected.
+	//
+	// A condition that is NOT a comparison is a BOOLEAN VALUE (`if flag`, `while true`).
+	// x64 branches on FLAGS, and the fused lowering only knows the flags a `cmp` set — so
+	// the truth test is materialized as exactly that: `value != 0`.
+	function parseCondition(block IrBlock) returns ValueId throws ParseError
+		let condTok = self.current()
+		let left = try self.parseBinary(block, minPrec: AdditivePrecedence)
+
+		let opTok = self.current()
+		if not comparisonOperator(opTok.kind) 'booleanValue'
+			return self.emitTruthTest(block, value: left, condTok: condTok)
+		end 'booleanValue'
+
+		self.advance()
+		let right = try self.parseBinary(block, minPrec: AdditivePrecedence)
+		return self.emitCompare(block, lhs: left, rhs: right, op: infixCmpOp(opTok.kind), opTok: opTok)
+	end 'parseCondition'
 
 	// The precedence-climbing core. Parse a unary/primary operand, then while the
 	// next token is a binary operator whose precedence is >= `minPrec`, consume it
 	// and recurse for the right operand at `precedence + 1` (which makes the operator
 	// LEFT-associative). A supported operator below `minPrec`, a non-operator, or the
-	// end of the expression stops the climb. A comparison operator emits the distinct
-	// `compare` op (not a `binOp`); everything else (arithmetic, including `/` and `mod`)
-	// emits `binOp`.
-	function parseBinary(block IrBlock, minPrec InfixPrecedence, permitComparison bool) returns ValueId throws ParseError
+	// end of the expression stops the climb.
+	//
+	// The climber emits ARITHMETIC only. A comparison reaching it is a comparison in a
+	// VALUE position (`let x = a == b`, `(a == b) + 1`, or the right operand of another
+	// comparison) — it would have to materialize a boolean, which the fused compare/branch
+	// lowering cannot do, so it is rejected loudly, in operator position, rather than
+	// lowered into something that reads stale EFLAGS or an unwritten result register.
+	// `parseCondition` consumes the one comparison the language currently allows before
+	// the climber ever sees it. Boolean materialization (setcc) lifts this wholesale.
+	function parseBinary(block IrBlock, minPrec InfixPrecedence) returns ValueId throws ParseError
 		var left = try self.parseUnary(block)
-
-		// A comparison's result is fused into its `if` branch and NEVER materialized as
-		// a value (see emitCompare + the Std→x64 fused cmp+jcc lowering). It is therefore
-		// valid ONLY as the sole top-level operator of an `if` condition. `canCompare`
-		// starts at `permitComparison` (true only for an `if` condition) and drops to
-		// false once one comparison is consumed. That rejects — loudly, in operator
-		// position — both a chained `a == b == c` and a comparison-as-value (`let x =
-		// a == b`, `return a == b`): either would feed a compare result somewhere other
-		// than the fused branch, which the M4 lowering cannot honor (it would read stale
-		// EFLAGS clobbered by an intervening op, or reference an unmaterialized result
-		// register). Materializing a boolean (setcc) lifts this restriction later.
-		var canCompare = permitComparison
 
 		while true 'climb'
 			let opTok = self.current()
@@ -1036,22 +1412,31 @@ export type Parser
 				break
 			end 'stop'
 
-			if comparisonOperator(opTok.kind) and not canCompare 'comparisonNotAllowed'
-				throw ParseError.unsupported("operator '{opTok.kind.rawValue}' — a comparison is only valid as the sole top-level operator of an `if` condition in M4 (its result fuses into the branch; chained comparison and boolean values arrive with materialization)", line: opTok.line, column: opTok.column)
-			end 'comparisonNotAllowed'
+			if comparisonOperator(opTok.kind) 'comparisonNotAValue'
+				throw ParseError.unsupported("operator '{opTok.kind.rawValue}' — a comparison is only valid as the sole top-level operator of an `if`/`while` condition (its result fuses into the branch; chained comparison and comparison-as-a-value arrive with boolean materialization)", line: opTok.line, column: opTok.column)
+			end 'comparisonNotAValue'
 
 			self.advance()
-			let right = try self.parseBinary(block, minPrec: prec + 1, permitComparison: false)
-			if comparisonOperator(opTok.kind) 'isCompare'
-				left = self.emitCompare(block, lhs: left, rhs: right, op: infixCmpOp(opTok.kind), opTok: opTok)
-				canCompare = false
-			end 'isCompare' else 'isArith'
-				left = self.emitBinOp(block, lhs: left, rhs: right, op: infixMaxonOp(opTok.kind), opTok: opTok)
-			end 'isArith'
+			let right = try self.parseBinary(block, minPrec: prec + 1)
+			left = self.emitBinOp(block, lhs: left, rhs: right, op: infixMaxonOp(opTok.kind), opTok: opTok)
 		end 'climb'
 
 		return left
 	end 'parseBinary'
+
+	// Materialize the truth test a BOOLEAN-VALUED condition needs: `value != 0`, emitted
+	// as the same `compare` op a written-out comparison produces, against a `false`
+	// literal. The Std tier's const-folder collapses the pair to `cmp reg, 0` (the zero
+	// never occupies a register), and the x64 tier fuses that with the branch — so
+	// `if flag` and `if flag != false` lower identically, which is what makes a bool
+	// condition need no new machinery in the backend at all.
+	//
+	// Anchored on the condition's FIRST token: the test is synthetic (no operator token
+	// spawned it), and the condition itself is what a diagnostic about it should point at.
+	function emitTruthTest(block IrBlock, value ValueId, condTok Token) returns ValueId
+		let falseValue = self.emitLiteral(block, value: BoolFalseValue, valueType: MaxonType.boolean, range: SourceRange.ofToken(condTok))
+		return self.emitCompare(block, lhs: value, rhs: falseValue, op: MaxonCmpOp.ne, opTok: condTok)
+	end 'emitTruthTest'
 
 	// A prefix-operator operand — the climber's leaf. M3 handles prefix `-` (negate).
 	// Its operand is a PRIMARY, not another unary: `- -x` therefore fails at the
@@ -1093,28 +1478,87 @@ export type Parser
 		return result
 	end 'emitCompare'
 
-	// A primary expression: an integer literal or a variable reference. Anything else
-	// where an operand is required (an operator, a delimiter, EOF) is E2004 —
-	// "Expected expression but got '<got>'". This is the site `- -x` hits at its
-	// second `-`: unary minus's operand is a primary, and a leading `-` is not one.
+	// A primary expression: an integer literal, a `true`/`false` literal, a parenthesized
+	// sub-expression, a type-qualified numeric bound (`u16.max`), a call, or a variable
+	// reference. Anything else where an operand is required (an operator, a delimiter,
+	// EOF) is E2004 — "Expected expression but got '<got>'". This is the site `- -x` hits
+	// at its second `-`: unary minus's operand is a primary, and a leading `-` is not one.
 	function parsePrimary(block IrBlock) returns ValueId throws ParseError
 		if self.at(TokenKind.intLiteral) 'intLit'
 			return try self.parseIntLiteral(block)
 		end 'intLit'
 
-		if self.at(TokenKind.identifier) 'varRef'
-			// An identifier followed by `(` is a call expression; otherwise it is a
-			// variable reference. The one-token lookahead is the same shape the
-			// statement parser uses to tell a call/assignment apart from a bare name.
+		if self.at(TokenKind.true) or self.at(TokenKind.false) 'boolLit'
+			return try self.parseBoolLiteral(block)
+		end 'boolLit'
+
+		if self.at(TokenKind.leftParen) 'group'
+			return try self.parseParenthesizedExpression(block)
+		end 'group'
+
+		if self.at(TokenKind.identifier) 'namedPrimary'
+			// Two one-token lookaheads split the three forms an identifier can open. `(`
+			// makes it a CALL (the same shape the statement parser uses to tell a call
+			// apart from a bare name); `.` makes it a type-qualified numeric bound
+			// (`u16.max`) — the only dotted expression the language has until member
+			// access lands, and the sized-type names are reserved, so the two cannot
+			// collide. Anything else is a variable reference.
 			if self.peekKind() == TokenKind.leftParen 'callExpr'
 				return try self.parseCallExpression(block)
 			end 'callExpr'
+			if self.peekKind() == TokenKind.dot 'qualifiedBound'
+				return try self.parseTypeQualifiedBoundExpression(block)
+			end 'qualifiedBound'
 			return try self.parseVariableReference()
-		end 'varRef'
+		end 'namedPrimary'
 
 		let tok = self.current()
 		throw ParseError.expectedExpression(tok.kind.rawValue, line: tok.line, column: tok.column)
 	end 'parsePrimary'
+
+	// `( <expr> )` — grouping, which is what makes `(2 + 3) * 4` mean 20 rather than 14.
+	// The parentheses produce NO op: the group's value IS the inner expression's, so the
+	// only thing they change is the shape of the tree the climber builds.
+	//
+	// The inner expression is a VALUE context, so a comparison inside parentheses is
+	// rejected exactly as one on a `let`'s right-hand side is. That is not a rule about
+	// parentheses — it is the fused compare/branch restriction (see parseBinary), and it
+	// lifts for both at once when boolean materialization lands.
+	function parseParenthesizedExpression(block IrBlock) returns ValueId throws ParseError
+		try self.consume(TokenKind.leftParen)
+		let value = try self.parseExpression(block)
+		try self.consume(TokenKind.rightParen)
+		return value
+	end 'parseParenthesizedExpression'
+
+	// `true` / `false`. A bool is an i1 carrying 1 or 0 — the same `literal` op an
+	// integer uses, typed `boolean` so the Maxon→Std collapse gives it i1 rather than
+	// i64. The `bool` TYPE already existed (a comparison produces one, an `if` consumes
+	// one); these are the literals that let a program NAME one.
+	// ONE emit site, not one per arm: the two literals differ only in the token they
+	// consume and the payload they carry, so a change to how a bool is materialized (its
+	// MaxonType, its op) lands in a single place and cannot apply to `true` but not `false`.
+	function parseBoolLiteral(block IrBlock) returns ValueId throws ParseError
+		let tok = self.current()
+		var value = BoolTrueValue
+		if self.at(TokenKind.true) 'isTrue'
+			try self.consume(TokenKind.true)
+		end 'isTrue' else 'isFalse'
+			try self.consume(TokenKind.false)
+			value = BoolFalseValue
+		end 'isFalse'
+		return self.emitLiteral(block, value: value, valueType: MaxonType.boolean, range: SourceRange.ofToken(tok))
+	end 'parseBoolLiteral'
+
+	// A type-qualified numeric bound used as a VALUE (`let x = u16.max`, `if v == u64.max`).
+	// The same three tokens a range declaration's endpoint is built from, resolved through
+	// the same table — so `int(0 to u64.max)` and `v == u64.max` can never disagree about
+	// what `u64.max` is. It materializes an ordinary integer literal.
+	function parseTypeQualifiedBoundExpression(block IrBlock) returns ValueId throws ParseError
+		let boundTok = self.current()
+		let value = try self.parseTypeQualifiedBound()
+		return self.emitLiteral(block, value: value, valueType: MaxonType.integer, range: SourceRange.ofToken(boundTok))
+	end 'parseTypeQualifiedBoundExpression'
 
 	// Resolve a variable reference to the SSA value its binding aliases — M2's
 	// value-substitution model emits NO load op; the reference simply IS the bound
@@ -1166,7 +1610,7 @@ export type Parser
 			// value's first token — anchors this argument's diagnostic span.
 			let argFirstTok = self.current()
 			let label = try self.consumeArgLabel(argIndex)
-			let value = try self.parseExpression(block, permitComparison: false)
+			let value = try self.parseExpression(block)
 
 			args.push(value)
 			argLabels.push(label)
@@ -1214,14 +1658,12 @@ export type Parser
 		return result
 	end 'emitCall'
 
-	// Parse an integer literal token, converting its text to a value via
-	// NumberParsing.parseInt (re-raising overflow as a positioned ParseError),
-	// then emit a `literal` op and return the value it defines.
+	// Parse an integer literal token into a `literal` op, and return the value it defines.
+	// The token's text becomes a number through the shared `intLiteralValue`, so a literal
+	// in an expression and a literal in a range bound are read the same way.
 	function parseIntLiteral(block IrBlock) returns ValueId throws ParseError
 		let tok = try self.consume(TokenKind.intLiteral)
-		let value = try parseInt(tok.value) otherwise 'overflow'
-			throw ParseError.integerOverflow(tok.line, column: tok.column)
-		end 'overflow'
+		let value = try self.intLiteralValue(tok, negated: false)
 		return self.emitLiteral(block, value: value, valueType: MaxonType.integer, range: SourceRange.ofToken(tok))
 	end 'parseIntLiteral'
 

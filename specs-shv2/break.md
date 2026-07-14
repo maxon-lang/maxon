@@ -49,41 +49,7 @@ end 'main'
 error E2048: <fragment>:5:12: 'continue' with label 'loop' targets its own loop; use 'continue' without a label, or 'continue' with the label of an outer loop
 ```
 
-## Deferred
-
-Tests recorded for re-enablement at the milestone that unblocks them. They live in
-this `## Deferred` section — NOT `## Tests` — so the spec-test parser (which scans
-only `## Tests`, up to the next `## ` heading) never extracts them, and they carry
-NO `<!-- test: … -->` marker. To re-enable: move the test up into `## Tests` and
-prefix it with its `<!-- test: NAME -->` marker.
-
-### break.in-loop / break.with-if / break.labeled-break-outer / break.labeled-break-triple-nested / break.error-break-own-label
-
-Re-enable once its prerequisites land: boolean-value conditions (`while true`),
-deferred past M4b (M4b's `while` condition must be a comparison). Representative case:
-
-```maxon
-function main() returns ExitCode
-	var x = 0
-	while true 'loop'
-		x = x + 1
-		if x == 5 'check'
-			break
-		end 'check'
-	end 'loop'
-	return x
-end 'main'
-```
-```exitcode
-5
-```
-
-### break.multiple-conditions
-
-Re-enable once its prerequisites land: the liveness-based register allocator (M5).
-Two loop-carried vars plus a `break` (needing a loop-exit phi) and several live
-constants exceed the placeholder allocator's 6-register pool.
-
+<!-- test: break.multiple-conditions -->
 ```maxon
 function main() returns ExitCode
 	var x = 5
@@ -102,12 +68,46 @@ end 'main'
 8
 ```
 
+
+## Deferred
+
+Tests recorded for re-enablement at the milestone that unblocks them. They live in
+this `## Deferred` section — NOT `## Tests` — so the spec-test parser (which scans
+only `## Tests`, up to the next `## ` heading) never extracts them, and they carry
+NO `<!-- test: … -->` marker. To re-enable: move the test up into `## Tests` and
+prefix it with its `<!-- test: NAME -->` marker.
+
+### break.in-loop / break.with-if / break.labeled-break-outer / break.labeled-break-triple-nested / break.error-break-own-label
+
+Their LANGUAGE prerequisite — boolean-value conditions (`while true`) — has LANDED,
+and the representative case below compiles and returns 5. What still blocks them is
+this file: it is an ADAPTATION of `specs/break.md`, not a port of it, so it does not
+carry their verbatim sources. Re-enable them by porting `specs/break.md` itself (the
+corpus port), which is where those sources live. Representative case:
+
+```maxon
+function main() returns ExitCode
+	var x = 0
+	while true 'loop'
+		x = x + 1
+		if x == 5 'check'
+			break
+		end 'check'
+	end 'loop'
+	return x
+end 'main'
+```
+```exitcode
+5
+```
+
 ### break.labeled-break-inner / break.labeled-continue-outer / break.labeled-continue-inner / break.labeled-continue-triple-nested
 
-Re-enable once its prerequisites land: the liveness-based register allocator (M5).
-These nest two or three comparison-condition loops with multiple loop-carried vars
-(and, for the continue cases, loop-body-local `var`s), well past the placeholder
-allocator's 6-register pool. Representative case:
+Their prerequisite — the liveness-based register allocator — has LANDED (M5), and the
+representative case below compiles and returns 5. Like the group above, what still
+blocks them is that this file is an ADAPTATION of `specs/break.md` rather than a port
+of it, so it does not carry their verbatim sources. Re-enable them by porting
+`specs/break.md` itself. Representative case:
 
 ```maxon
 function main() returns ExitCode

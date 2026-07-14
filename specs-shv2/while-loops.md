@@ -230,23 +230,25 @@ end 'main'
 ```
 
 
-## Deferred
+<!-- test: while-loops.break -->
+```maxon
+function main() returns ExitCode
+	var x = 5
+	while true 'loop'
+		x = x + 2
+		if x == 11 'check'
+			break
+		end 'check'
+	end 'loop'
+	return x
+end 'main'
+```
+```exitcode
+11
+```
 
-Tests recorded for re-enablement at the milestone that unblocks them. They live in
-this `## Deferred` section — NOT `## Tests` — so the spec-test parser (which scans
-only `## Tests`, up to the next `## ` heading) never extracts them, and they carry
-NO `<!-- test: … -->` marker. To re-enable: move the test up into `## Tests` and
-prefix it with its `<!-- test: NAME -->` marker.
 
-### while-loops.basic
-
-Re-enable once its prerequisites land: the liveness-based register allocator (M5).
-Two loop-carried vars plus a `break` need a loop-exit phi and several live
-constants; the distinct-value count exceeds the placeholder allocator's 6-register
-pool (a hard panic, never a miscompile). The liveness-free phi coalescing cannot
-reuse the induction variable's or the exit phi's registers, so the M5 allocator is
-the unblocker.
-
+<!-- test: while-loops.basic -->
 ```maxon
 function main() returns ExitCode
 	var x = 5
@@ -265,28 +267,14 @@ end 'main'
 11
 ```
 
-### while-loops.break
 
-Re-enable once its prerequisites land: boolean-value conditions (`while true`),
-which need the `setcc`/bool-materialization support deferred past M4b. The M4b
-`while` condition must be a comparison; `while true` is rejected at parse time
-(E2004, `true` is not yet a primary expression).
+## Deferred
 
-```maxon
-function main() returns ExitCode
-	var x = 5
-	while true 'loop'
-		x = x + 2
-		if x == 11 'check'
-			break
-		end 'check'
-	end 'loop'
-	return x
-end 'main'
-```
-```exitcode
-11
-```
+Tests recorded for re-enablement at the milestone that unblocks them. They live in
+this `## Deferred` section — NOT `## Tests` — so the spec-test parser (which scans
+only `## Tests`, up to the next `## ` heading) never extracts them, and they carry
+NO `<!-- test: … -->` marker. To re-enable: move the test up into `## Tests` and
+prefix it with its `<!-- test: NAME -->` marker.
 
 ### nested-control
 

@@ -175,6 +175,7 @@ end 'probeRebuildCacheHits'
 function resetMergeTargets(project Project)
 	project.funcReturnTypes = FuncReturnTypeMap.create()
 	project.funcSignatures = FuncSignatureMap.create()
+	project.typeAliases = RangedTypeAliasMap.create()
 	project.typeNames = TypeNameInterner.create()
 	// Must reset with the others: `mergeArtifact` appends spans to this table and
 	// asserts its count tracks the merged module's op count. The module accumulator
@@ -199,9 +200,12 @@ end 'reportLexerError'
 // Map a ParseError to a project diagnostic. The unexpected-token case is the
 // spec-gated E2010 (`parserExpectedToken`) — its exact `Expected '<x>' but got
 // '<y>'` text + positioned prefix is compared byte-for-byte by `variables.md`'s
-// type-annotation-rejection tests. The remaining arms have no spec-gated text
-// yet, so they report under the generic parser code and split off as specs need
-// them (mirrors reportLexerError).
+// type-annotation-rejection tests. `undefinedVariable` joins `expectedExpression`
+// under E2004: both are EXPRESSION-level parse failures, and E2004 is the code the
+// corpus (and both reference compilers) use for a name with no binding in scope —
+// see ErrorCode. The remaining arms have no spec-gated text yet, so they report
+// under the generic parser code and split off as specs need them (mirrors
+// reportLexerError).
 function reportParseError(project Project, path FilePath, error ParseError)
 	match error 'kind'
 		unexpectedToken(expected, got, line, column) then reportPositioned(project, code: ErrorCode.parserExpectedToken, message: "Expected '{expected}' but got '{got}'", line: line, column: column, filePath: path)
@@ -210,7 +214,8 @@ function reportParseError(project Project, path FilePath, error ParseError)
 		integerOverflow(line, column) then reportPositioned(project, code: ErrorCode.parserError, message: "Integer literal out of range", line: line, column: column, filePath: path)
 		unsupported(feature, line, column) then reportPositioned(project, code: ErrorCode.parserError, message: "Unsupported: {feature}", line: line, column: column, filePath: path)
 		duplicateParameter(name, line, column) then reportPositioned(project, code: ErrorCode.duplicateParameter, message: "duplicate parameter name '{name}'", line: line, column: column, filePath: path)
-		undefinedVariable(name, line, column) then reportPositioned(project, code: ErrorCode.parserError, message: "Undefined variable '{name}'", line: line, column: column, filePath: path)
+		undefinedVariable(name, line, column) then reportPositioned(project, code: ErrorCode.parserExpectedExpression, message: "Undefined variable '{name}'", line: line, column: column, filePath: path)
+		missingReturn(name, line, column) then reportPositioned(project, code: ErrorCode.missingReturn, message: "missing return statement: '{name}'", line: line, column: column, filePath: path)
 		assignToImmutable(name, line, column) then reportPositioned(project, code: ErrorCode.assignToImmutable, message: "cannot assign to immutable variable: '{name}'", line: line, column: column, filePath: path)
 		controlOutsideLoop(keyword, line, column) then reportPositioned(project, code: ErrorCode.controlOutsideLoop, message: "'{keyword}' can only be used inside a loop", line: line, column: column, filePath: path)
 		labelTargetsOwnLoop(keyword, label, line, column) then reportPositioned(project, code: ErrorCode.labelTargetsOwnLoop, message: "'{keyword}' with label '{label}' targets its own loop; use '{keyword}' without a label, or '{keyword}' with the label of an outer loop", line: line, column: column, filePath: path)

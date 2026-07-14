@@ -70,6 +70,12 @@ export type FileParseArtifact
 	export var funcReturnTypes as FuncReturnTypeEntryArray
 	// This file's `funcSignatures` registry contributions, in declaration order.
 	export var funcSignatures as FuncSignatureEntryArray
+	// This file's ranged-typealias declarations, in declaration order. Unlike the two
+	// registries above these carry no source position: nothing reports a diagnostic
+	// against a typealias DECLARATION yet (a same-named alias in another file is legal
+	// — specs/duplicate-typealias.md — so a merge-time collision is not an error the
+	// way a duplicate function is).
+	export var typeAliases as RangedTypeAliasArray
 	// This file's LOCAL type-name interner. Its ids are file-local; `mergeArtifact`
 	// folds them into the project interner and remaps this artifact's ids.
 	export var typeNames as TypeNameInterner
@@ -82,6 +88,7 @@ export type FileParseArtifact
 			valueOrigins: ValueOriginTable.create(),
 			funcReturnTypes: FuncReturnTypeEntryArray.create(),
 			funcSignatures: FuncSignatureEntryArray.create(),
+			typeAliases: RangedTypeAliasArray.create(),
 			typeNames: TypeNameInterner.create()
 		}
 	end 'create'
@@ -154,6 +161,13 @@ export type FileParseArtifact
 	export function recordFuncSignature(name ByteArray, signature FuncSignature, nameLine LineNumber, nameColumn ColumnNumber, sourceFilePath FilePath)
 		self.funcSignatures.push(FuncSignatureEntry.create(name, signature: signature, nameLine: nameLine, nameColumn: nameColumn, sourceFilePath: sourceFilePath))
 	end 'recordFuncSignature'
+
+	// Record a ranged-typealias declaration as this file's contribution to the
+	// project-wide `typeAliases` registry — the same NEVER-touch-Project discipline
+	// `recordFuncReturnType` / `recordFuncSignature` follow.
+	export function recordTypeAlias(alias RangedTypeAlias)
+		self.typeAliases.push(alias)
+	end 'recordTypeAlias'
 end 'FileParseArtifact'
 
 // Fold `artifact` into the whole-program build in source-path order:
@@ -197,7 +211,20 @@ export function mergeArtifact(project Project, target MaxonModule, artifact File
 	project.valueOrigins.appendFrom(artifact.valueOrigins, funcOffset: funcOffset, opOffset: opOffset)
 	commitFuncReturnTypes(project, artifact: artifact)
 	commitFuncSignatures(project, artifact: artifact)
+	commitTypeAliases(project, artifact: artifact)
 end 'mergeArtifact'
+
+// Commit the artifact's ranged-typealias declarations into the project registry. A
+// plain upsert, and DELIBERATELY not a duplicate check: a non-exported typealias is
+// FILE-LOCAL, so two files may each declare `MyInt` and neither is an error
+// (specs/duplicate-typealias.md). Honouring that needs per-file alias scoping, which
+// arrives with cross-file name resolution; until then the registry is whole-program
+// and same-named aliases must agree.
+function commitTypeAliases(project Project, artifact FileParseArtifact)
+	for alias in artifact.typeAliases 'each'
+		project.typeAliases.upsert(alias.name, value: alias)
+	end 'each'
+end 'commitTypeAliases'
 
 // Rewrite every file-local `named(id)` that a LATER pass will READ — the module's
 // function return types + param types — to its project-global id. The `funcSignatures`

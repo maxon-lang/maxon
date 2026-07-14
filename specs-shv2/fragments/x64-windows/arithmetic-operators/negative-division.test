@@ -1,0 +1,31 @@
+// Test: negative-division
+function main() returns ExitCode
+	let neg = -7
+	let a = neg / 2           // -7/2 = -3 (truncating toward zero)
+	if a == -3 'pass'
+			return 0
+	end 'pass'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    x64.movRegImm32 rax, 7
+    x64.negReg rax, rax
+    x64.movRegImm32 rcx, 2
+    x64.cqo
+    x64.idivReg rcx
+    x64.movRegImm32 rcx, 3
+    x64.negReg rcx, rcx
+    x64.cmpRegReg rax, rcx
+    x64.jcc equal, pass
+    x64.jmp ifcont
+  pass:
+    x64.movRegImm32 r8, 0
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 1
+    x64.ret
+}

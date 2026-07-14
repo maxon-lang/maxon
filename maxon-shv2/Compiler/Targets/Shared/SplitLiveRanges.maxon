@@ -1761,7 +1761,10 @@ function rematerializeConstant(module TargetModule, index UseIndex, topo FuncTop
 		let useOpIdx = index.useOpAt(record)
 		var block = blockAt(module, topo: topo, local: index.useBlockAt(record))
 		let usePos = positionInBlock(block, opIdx: useOpIdx)
-		try block.opRefs.insert(usePos, value: appendOp(module, op: constMaterializationOp(freshId, value: constValue))) otherwise panic("rematerializeConstant: opRefs.insert OOB")
+		// The SAME op builder the ISel used, so the re-emitted constant is byte-identical to
+		// the one it replaces (StdToX64Conversion.constMaterializationOp) — not a second copy
+		// of the 32-vs-64-bit size choice that can drift from it.
+		try block.opRefs.insert(usePos, value: appendOp(module, op: constMaterializationOp(X64VReg.virtual(freshId), value: constValue))) otherwise panic("rematerializeConstant: opRefs.insert OOB")
 		rewriteOpAt(module, opIdx: useOpIdx, from: valueId, to: freshId, buf: buf)
 		// The re-emitted copy derives from the original constant — record it so a
 		// rematerialized id in an E5001 blocking set chases back to the constant's source
@@ -1799,15 +1802,6 @@ function constValueOfDef(module TargetModule, opIdx OpIndex) returns MachineWord
 		movRegReg to loadRegSlot then panic("constValueOfDef: def is not a constant materialization")
 	end 'k'
 end 'constValueOfDef'
-
-// Re-emit a constant with the SAME size choice `appendIntImmToReg` makes, so a rematerialized
-// constant is byte-identical to the original (movRegImm32 for u32-fitting values, else movRegImm).
-function constMaterializationOp(destId ValueId, value MachineWord) returns TargetOp
-	if value <= u32.max 'fitsU32'
-		return TargetOp.movRegImm32(X64VReg.virtual(destId), value: value)
-	end 'fitsU32'
-	return TargetOp.movRegImm(X64VReg.virtual(destId), value: value)
-end 'constMaterializationOp'
 
 // Remove the original constant def's op ref from its block (it is now dead — every use was
 // rewritten to a rematerialized copy). The op stays in `module.ops` but unreferenced (harmless,

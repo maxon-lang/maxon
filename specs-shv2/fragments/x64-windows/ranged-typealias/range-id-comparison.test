@@ -1,0 +1,24 @@
+// Test: range-id-comparison
+function main() returns ExitCode
+	let x = i32.max
+	if x == 2147483647 'isMax'
+		return 1
+	end 'isMax'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+func @main {
+  entry:
+    x64.movRegImm32 rax, 2147483647
+    x64.cmpRegImm32 rax, 2147483647
+    x64.jcc equal, isMax
+    x64.jmp ifcont
+  isMax:
+    x64.movRegImm32 r8, 1
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 0
+    x64.ret
+}

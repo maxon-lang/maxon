@@ -1,0 +1,29 @@
+// Test: pure-function-used
+
+typealias Integer = int(i64.min to i64.max)
+
+function double(x Integer) returns Integer
+	return x * 2
+end 'double'
+
+function main() returns ExitCode
+	let result = double(5)
+	return result
+end 'main'
+---
+ExitCode: 10
+---
+func @double {
+  entry:
+    x64.imulRegRegImm32 r8, rcx, 2
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.prologue 40
+    x64.movRegImm32 rcx, 5
+    x64.callDirect double
+    x64.epilogue 40
+    x64.ret
+}

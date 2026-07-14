@@ -250,16 +250,37 @@ enclosing/matching loop), `E2048` (label names the loop's own header).
 
 ### Scope
 
-`Scope` today tracks exactly what the parser uses: value bindings (name → current SSA
-`ValueId` + mutability), via `declareValueBinding` / `setValue` / `lookupValue`.
+`Scope` tracks value bindings (name → current SSA `ValueId` + mutability) via
+`declareValueBinding` / `setValue` / `lookupValue`, and it enforces **lexical block
+scoping**: `parseBlockBody` opens a FRAME around every `if` / `else` / `while` body, so a
+binding declared inside a block is gone at its `end` (`specs/block-scoping.md`).
 
-It also carries a **block-scoping and ownership scaffold** — `frameStack`, `ownedStack`,
-`pushScope`/`popScope` (which panic on unmatched pop, since they must stay parallel), and
-a `recordInCurrentFrame` that records a binding into `ownedStack` only when it is
-non-trivial. **That scaffold is currently unreachable**: nothing calls `pushScope`, so
-there is no lexical block scoping (a `let` inside an `if` body outlives the `if`), and
-`ownedStack` is never touched. It is wired up when block scoping lands, and drained to
-emit `own.drop`/`own.release` at the ownership stage.
+A frame is a **MARK into flat declaration stacks**, not a stack of per-frame arrays:
+`pushScope` pushes the current stack height — O(1), and with no heap object per frame,
+which matters because a block is the most numerous scope in any real program — and
+`popScope` drains back to it, still O(declarations-in-this-frame). An empty mark stack
+means function scope.
+
+Two consequences are load-bearing, and both exist because **shadowing is legal**:
+
+- **`popScope` RESTORES, it does not just remove.** `vars` is keyed by name, so an inner
+  `let x` overwrites the outer `x`'s entry; deleting the key at scope exit would delete
+  the outer binding too. A declaration that DISPLACES one pushes the displaced `VarInfo`
+  onto `shadowedInfos`, and the frame is drained in **reverse** so a name declared twice
+  in one frame unwinds through its own chain.
+- **Bindings are mutated IN PLACE, not replaced.** `VarInfo` is a heap `type`, so `vars`
+  stores a reference and `setValue` writes `boundValue` through it. That is what lets the
+  parser hold a **direct reference** to a mutable binding — its loop-phi list
+  (`LoopPhiVar.binding`) and its merge snapshots do — and still address the right binding
+  when a nested block shadows the NAME. A name-keyed rebind cannot: it always resolves to
+  the innermost binding, so a `break` out of a block that shadows a loop-carried `var`
+  would carry the SHADOW's value into the loop's exit phi. A silent miscompile.
+
+**The ownership hook lives in `popScope`** (M6): draining a frame already resolves each
+declaration back to the `VarInfo` leaving scope, and that record carries both the
+`ownership` kind to test and the type + slot a drop must name — so `own.drop` /
+`own.release` are emitted right there, with no parallel "owned names" list to keep in
+lockstep. At M1 every binding is `trivial`, so the hook never fires.
 
 ### Parse-staging
 
@@ -430,7 +451,7 @@ flag-clobbering op is still `isPure`.)
 |---|---|
 | `arith` | `const`, `binOp(opcode)`, `unaryOp(opcode)`, `cmp(pred)`, `binOpImm(imm)`, `cmpImm(imm)`, `div`, `mod` |
 | `control` | `condBranch`, `branch` |
-| `call` | `ret` (role `ret`), `param` (role `param`), `call` |
+| `call` | `ret` (role `ret`), `param` (role `param`), `call`, `retVoid` (role `ret`) |
 | `memory` · `system` · `sugar` | *(empty)* |
 
 Flat does **not** mean one variant per opcode: a family sharing an operand shape
@@ -439,7 +460,10 @@ metadata* splits out — because the `StdOpMeta` backing attaches per variant an
 an opcode buried in a field. That is why `cmp` is its own variant (`isCmp: true`) and
 `div`/`mod` are their own (`isPure: false` — `idiv` traps — plus fixed-register lowering).
 `const` carries a `StdType` rather than v1's `constI64`/`constF64` opcode pair: it subsumes
-MIR's `isFloat` bool and makes i32/u8/f32 representable without new opcodes.
+MIR's `isFloat` bool and makes i32/u8/f32 representable without new opcodes. And `retVoid`
+is its own variant rather than a `ret` carrying an absent-value `ValueId` — the Maxon tier
+splits it for the same reason (below): a sentinel operand would be READ as a real use by
+`collectStdOpUses`, either holding a dead value live or naming one that was never defined.
 
 ### Bands, and the one rule with no compiler backstop
 
@@ -1884,9 +1908,11 @@ later deliverable that grows this file; today the metadata is recorded and unuse
 Things that are *implemented but incomplete*, distinct from what simply hasn't been built (for the
 latter, see `PLAN.md`):
 
-- **No lexical block scoping.** `Scope`'s `pushScope`/`popScope`/`ownedStack` are unreachable, so a
-  `let` inside an `if` body outlives the `if`, and a `var` declared on only one branch is not merged
-  at the continuation.
+- **A named type that resolves to nothing panics the compiler.** `TypeResolution` throws a `panic`
+  for a type reference that is neither the `ExitCode` builtin nor a declared `typealias` — so a TYPO
+  in a type position (`function f(x Scor)`) takes the compiler down instead of reporting E2003
+  (`Unknown type: Scor`). Giving it a diagnostic needs a source span for the type REFERENCE, and the
+  parser records spans only for ops and parameters today.
 - **`Early`/`Late` operand position is packed but never read** — sound today only because no op has
   both explicit operands and a late implicit clobber.
 - **The query dependency graph is recorded but does not drive invalidation** (content hashes do).
@@ -1894,7 +1920,11 @@ latter, see `PLAN.md`):
 - **The splitter recomputes liveness once per split**, and several of its helpers are linear scans
   inside that loop. Correct, but superlinear in a way the rest of the codebase's "no `Map`, no
   hashing in the hot path" discipline avoids. A performance follow-on, not a correctness one.
-- **A void `return` in a non-`main` function panics the compiler** — `StdOp` has no void-return
-  variant. Currently unreachable, because E3002 rejects a void `main` first.
-</content>
-</invoke>
+- **No empty-block diagnostic (E3082).** An empty `if`/`else`/`while` body is a compile error in the
+  language; shv2 accepts it and emits an empty block.
+- **A comparison cannot be a VALUE.** Every compare is FUSED into the branch that consumes it and is
+  never materialized, so `let flag = a > b`, `(a == b)` in an expression, and a chained `a == b == c`
+  are all rejected in operator position. Lifting this is one mechanism — boolean materialization
+  (`setcc`) — and it lifts all three at once. A boolean-VALUED condition (`if flag`, `while true`)
+  already works: the parser emits the truth test `flag != false`, which gives the branch the `cmp` it
+  fuses with.

@@ -16,14 +16,17 @@
 // `noMainFunction` / `mainWrongReturnType` are the two `basics.md` semantic
 // codes with exact spec-gated text. `parserExpectedToken` (E2010) is the
 // positioned "Expected X but got Y" parse diagnostic that `variables.md`'s
-// type-annotation-rejection tests gate on. `parserExpectedExpression` (E2004) is
-// the positioned "Expected expression but got X" diagnostic the parser raises when
-// a primary is required but the token stream has something else — `unary-operators.md`'s
-// double-negation test gates on it (`- -x` fails at the second `-`). `lexerError` /
-// `parserError` are generic placeholders the query layer reports the remaining
-// front-end failures under — the authored specs never trigger them (every other
-// authored program lexes and parses cleanly), so they carry no spec-gated text yet
-// and split into specific codes when a spec needs a particular front-end diagnostic.
+// type-annotation-rejection tests gate on. `parserExpectedExpression` (E2004) is the
+// EXPRESSION-LEVEL parse failure — it carries two messages, matching the reference
+// compilers (`maxon-sharp` ErrorCode.cs:27, `maxon-selfhosted` ErrorCode.maxon:19,
+// both `ParserExpectedExpression = 2004`): "Expected expression but got X" where a
+// primary was required and the token stream had something else (`unary-operators.md`'s
+// `- -x`), and "Undefined variable 'x'" where a name in an expression has no binding
+// in scope (`block-scoping.md`, every case that reaches past a closed block).
+// `lexerError` / `parserError` are generic placeholders the query layer reports the
+// remaining front-end failures under — the authored specs never trigger them (every
+// other authored program lexes and parses cleanly), so they carry no spec-gated text
+// yet and split into specific codes when a spec needs a particular front-end diagnostic.
 export enum ErrorCode
 	// Duplicate-definition codes — a name declared twice where exactly one binding is
 	// legal. `duplicateFunction` (E2001) fires at MERGE time when two functions share a
@@ -46,6 +49,13 @@ export enum ErrorCode
 	assignToImmutable = "E2013"
 	controlOutsideLoop = "E2047"
 	labelTargetsOwnLoop = "E2048"
+	// A value-returning function whose body can fall off its end without returning
+	// (`specs/missing-return-error.md`), positioned at the function's NAME. Raised by
+	// the parser, which is where the fall-through is visible: the block its last
+	// statement left control in is un-terminated. The VOID twin of this case is not an
+	// error at all — the parser synthesizes the implicit `return` (see
+	// `Parser.closeFunctionBody`).
+	missingReturn = "E3013"
 	// M5 call-argument codes. The two `E205x` codes are PARSE-time argument-label
 	// syntax errors (positioned at the offending token by the parser): a first
 	// argument cannot carry a `name:` label, and every argument after the first must.
