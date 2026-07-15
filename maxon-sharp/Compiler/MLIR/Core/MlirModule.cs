@@ -475,6 +475,19 @@ public class IrModule<TOp> where TOp : IPrintableOp {
   // Populated by StackPromotionAnalysisPass, consumed by MaxonToStandardConversion.
   public HashSet<int> StackEligibleStructs { get; } = [];
 
+  /// <summary>
+  /// Names of the functions that hand their result back in two registers rather than as a
+  /// pointer to a heap record. Populated by ValueTupleAbiPass; read by
+  /// StackPromotionAnalysisPass and MaxonToStandardConversion.
+  ///
+  /// This names the functions that DO use the value ABI, rather than the ones excluded from
+  /// it, so that the empty set — an uncomputed one — means "every function returns a heap
+  /// record". That is the pre-existing convention, so a caller and callee that never consult
+  /// this still agree. Naming the exclusions instead would make a missed analysis read as
+  /// "everything returns registers", which is a miscompile rather than a missed optimisation.
+  /// </summary>
+  public HashSet<string> ValueTupleReturnFunctions { get; } = [];
+
   public void AddFunction(IrFunction<TOp> func) {
     // Defensive: replace any existing function with the same name in place.
     // AddFunction has historically allowed silent duplicates, but downstream
@@ -563,6 +576,7 @@ public class IrModule<TOp> where TOp : IPrintableOp {
     foreach (var (k, v) in ModuleVisibleConstants) clone.ModuleVisibleConstants[k] = v;
     foreach (var (k, v) in ModuleConstantSourceFiles) clone.ModuleConstantSourceFiles[k] = v;
     foreach (var n in StackEligibleStructs) clone.StackEligibleStructs.Add(n);
+    foreach (var n in ValueTupleReturnFunctions) clone.ValueTupleReturnFunctions.Add(n);
     return clone;
   }
 

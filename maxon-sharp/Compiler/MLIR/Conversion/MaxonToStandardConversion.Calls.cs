@@ -206,10 +206,20 @@ public static partial class MaxonToStandardConversion {
     // Check if callee returns an associated-value enum (passed as heap pointer)
     bool calleeRetAssocEnum = calleeFunc.ReturnType is IrEnumType cret && cret.HasAssociatedValues;
 
+    // Two-register value tuple: the pair arrives in registers, so there is no pointer to
+    // receive. This reads ValueTupleAbiPass's module-wide verdict — the very set the callee's
+    // own return was lowered against — which is what makes the two ends agree.
+    var calleeValueTupleType = _valueTupleReturnFunctions?.Contains(calleeFunc.Name) == true
+      ? IrStructType.AsTwoRegisterValueTuple(calleeFunc.ReturnType, typeDefs)
+      : null;
+
     // Emit call or try_call
     StdValue? callResult = calleeRetStructType != null || calleeRetAssocEnum
       ? new StdI64(IrContext.Current.NextStdId())
       : ResolveCallResultType(resultKind, calleeFunc.ReturnType);
+    StdValue? callResultHigh = calleeValueTupleType != null
+      ? new StdI64(IrContext.Current.NextStdId())
+      : null;
     if (isTryCall) {
       var tryCall = new StdTryCallOp(resolvedCallee, newArgs, callResult);
       block.AddOp(tryCall);
@@ -218,7 +228,13 @@ public static partial class MaxonToStandardConversion {
         EmitStore(block, tryCall.ErrorFlag, "__error_flag", varTypes);
       }
     } else {
-      block.AddOp(new StdCallOp(resolvedCallee, newArgs, callResult));
+      block.AddOp(new StdCallOp(resolvedCallee, newArgs, callResult, callResultHigh));
+    }
+
+    if (calleeValueTupleType != null && result != null && callResult != null) {
+      MaterializeValueTupleResult(block, result, callResult, callResultHigh!, calleeValueTupleType,
+        valueMap, varTypes, temps, func.Name);
+      return;
     }
 
     // Map results
@@ -272,6 +288,60 @@ public static partial class MaxonToStandardConversion {
     // No post-call temp releases needed — scope-based cleanup handles all allocations
   }
 
+  /// <summary>
+  /// Give the two halves of a value-tuple call result somewhere to live.
+  ///
+  /// When the escape analysis cleared the result (StackPromotionAnalysisPass marked it
+  /// stack-eligible), the halves go into BulkZero stack slots: no allocation, no refcounting,
+  /// and field access reads the slots directly. That is the whole point of the ABI.
+  ///
+  /// Otherwise the result escapes — it is aliased, stored, captured, put in an array — and
+  /// callers downstream need a real record with reference identity, so the halves are written
+  /// into a heap record here. That costs exactly the allocation the old ABI made in the
+  /// CALLEE, so an escaping tuple is no worse than before, just no better.
+  /// </summary>
+  private static void MaterializeValueTupleResult(
+    IrBlock<StandardOp> block,
+    MaxonValue result,
+    StdValue low,
+    StdValue high,
+    IrStructType tupleType,
+    Dictionary<MaxonValue, StdValue> valueMap,
+    Dictionary<string, string> varTypes,
+    VarRegistry temps,
+    string funcName) {
+
+    if (_stackEligibleStructs != null && _stackEligibleStructs.Contains(result.Id)) {
+      var stackVarName = temps.CreateTemp("stack", result.Id, tupleType.Name, OwnershipFlags.None);
+      var stackTag = $"__stk_{stackVarName}";
+
+      // Slots are immediately overwritten by both halves, so skip the zero-init.
+      block.AddOp(new StdBulkZeroOp(stackTag, tupleType.Fields.Count, zeroInit: false));
+      EmitStore(block, low, StackSlotName(stackTag, tupleType, tupleType.Fields[0].Offset), varTypes);
+      EmitStore(block, high, StackSlotName(stackTag, tupleType, tupleType.Fields[1].Offset), varTypes);
+
+      valueMap[result] = new StdStackPtr(result.Id, tupleType.Name, stackVarName);
+      _stackAllocatedVars?.Add(stackVarName);
+      _stackVarTags?.Add(stackVarName, stackTag);
+      return;
+    }
+
+    var heapVarName = temps.CreateTemp("tupleret", result.Id, tupleType.Name,
+      OwnershipFlags.Orphan | OwnershipFlags.CallReturn);
+    var recordPtr = EmitAlloc(block, tupleType.SizeInBytes, tupleType.Name, scopeName: funcName);
+    EmitStore(block, recordPtr, heapVarName, varTypes);
+    EmitStructFieldStore(block, low, heapVarName, tupleType.Fields[0].Offset,
+      IrType.Resolve(tupleType.Fields[0].Type), varTypes);
+    EmitStructFieldStore(block, high, heapVarName, tupleType.Fields[1].Offset,
+      IrType.Resolve(tupleType.Fields[1].Type), varTypes);
+
+    // Establishes the scope reference that scope_end's mm_decref releases, exactly as an
+    // orphan struct literal does — this record is built here, so this frame owns it.
+    EmitIncrefValue(block, recordPtr, scopeName: funcName);
+    _varNameToStructType?.TryAdd(heapVarName, tupleType.Name);
+    valueMap[result] = new StdHeapPtr(recordPtr.Id, tupleType.Name, heapVarName);
+  }
+
   private static void LowerReturn(
     MaxonReturnOp retOp,
     IrStructType? retStructType,
@@ -281,7 +351,8 @@ public static partial class MaxonToStandardConversion {
     Dictionary<string, IrType> typeDefs,
     string funcName,
     VarRegistry temps,
-    bool functionReturnsSelf = false) {
+    bool functionReturnsSelf = false,
+    bool usesValueTupleReturn = false) {
 
     // Error propagation: forward the error flag to the caller
     if (retOp.IsErrorPropagation) {
@@ -308,6 +379,25 @@ public static partial class MaxonToStandardConversion {
       }
       var retHeapPtr = EmitLoad(block, retHp.VarName!, varTypes);
       block.AddOp(new StdReturnOp(retHeapPtr));
+      return;
+    }
+
+    // Two-register value tuple: copy both halves into the return registers.
+    //
+    // No incref and no transfer, unlike every other struct return: the caller receives VALUES,
+    // not a reference, so there is no new owner to account for.
+    //
+    // A heap record's halves were already read at scope_end, before the cleanup that may have
+    // released it; take them from there. A stack-promoted record — the common case — has no
+    // refcount and outlives cleanup untouched, so its slots are read here.
+    if (usesValueTupleReturn && retStructType != null && retOp.Value != null) {
+      var (low, high) = _valueTupleReturnStash != null
+          && _valueTupleReturnStash.TryGetValue(retOp.Value.Id, out var stashed)
+        ? stashed
+        : (EmitValueTupleHalfLoad(block, valueMap[retOp.Value], retStructType, 0, varTypes),
+           EmitValueTupleHalfLoad(block, valueMap[retOp.Value], retStructType, 1, varTypes));
+
+      block.AddOp(new StdReturnOp(low, high));
       return;
     }
 

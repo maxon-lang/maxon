@@ -57,6 +57,20 @@ public class IrType {
 
   public bool IsFloat => this == F32 || this == F64;
 
+  /// <summary>
+  /// True for the scalars that live in a general-purpose register. This is the
+  /// membership test for the two-register value ABI (see
+  /// <see cref="IrStructType.IsTwoRegisterValueTuple"/>), so it is a WHITELIST and not
+  /// `!IsHeapAllocated`: a placeholder, a type parameter and an unresolved named type all
+  /// answer false to IsHeapAllocated while being nothing of the kind, and admitting one
+  /// would hand back a register pair for a type whose layout is not yet known.
+  /// Floats are excluded because they are returned in an FP register, not a GPR.
+  /// </summary>
+  public bool IsGprScalar =>
+    this == I8 || this == I16 || this == I32 || this == I64
+    || this == U8 || this == U16 || this == U32 || this == U64
+    || this == I1 || this == CString;
+
   // Bare primitives cannot be used as type arguments in `with` clauses — users must create a ranged typealias first.
   // Excludes bool (I1) since it's already a constrained type.
   public bool IsBarePrimitive => this == I8 || this == I64 || this == F64;
@@ -225,6 +239,45 @@ public class IrStructType : IrType {
     ConstParams.TryGetValue("__capacity", out var capacity)
     && TypeParams.TryGetValue("Element", out var elemType)
     && capacity * elemType.ElementSize <= MaxStackAllocBufferBytes;
+
+  /// Number of GPRs the value-return ABI hands a small tuple back in, and the widest
+  /// record that fits them. Two is not an arbitrary limit: it is what the ABI reserves
+  /// a second return register for (RAX+R10 on x64, X0+X13 on arm64).
+  public const int ValueReturnRegisterCount = 2;
+  public const int ValueReturnMaxBytes = ValueReturnRegisterCount * 8;
+
+  /// <summary>
+  /// True when a function returning this type hands it back in two registers instead of a
+  /// heap record. Deliberately narrow — every tuple outside the gate keeps today's heap
+  /// lowering, so being outside it is slower and never unsafe.
+  ///
+  /// Only a TUPLE qualifies. A named struct is excluded even when its layout would fit,
+  /// because a struct has reference identity a user can observe (`is`, aliasing, mutation
+  /// through an alias); a tuple returned by value has no prior identity to break, since the
+  /// only way to obtain one is the call that just produced it.
+  /// </summary>
+  public bool IsTwoRegisterValueTuple =>
+    IsTuple
+    && Fields.Count == ValueReturnRegisterCount
+    && SizeInBytes <= ValueReturnMaxBytes
+    && Fields.TrueForAll(f => IrType.Resolve(f.Type).IsGprScalar);
+
+  /// <summary>
+  /// The value-return gate, resolved through the module's type table so a named tuple type is
+  /// judged on its canonical definition rather than on whatever partially-specialised copy the
+  /// use site happens to hold. Returns the tuple when a function returning it uses the
+  /// two-register ABI, and null for every type that keeps the heap-record convention.
+  ///
+  /// This is the ONE place the gate is decided. The escape analysis and the lowering both ask
+  /// it, so they cannot drift into disagreeing about which functions have which ABI — a
+  /// disagreement that would not be a missed optimisation but a miscompile.
+  /// </summary>
+  public static IrStructType? AsTwoRegisterValueTuple(IrType? type, Dictionary<string, IrType> typeDefs) {
+    if (type is not IrStructType structType) return null;
+    if (typeDefs.TryGetValue(structType.Name, out var canonical) && canonical is IrStructType canonicalStruct)
+      structType = canonicalStruct;
+    return structType.IsTwoRegisterValueTuple ? structType : null;
+  }
 
   public static IrStructType CreateTupleType(List<IrType> elementTypes) {
     // Resolve ranged primitive types to base types for consistent tuple struct layout.

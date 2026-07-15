@@ -154,10 +154,15 @@ public static class StandardToX86Conversion {
       foreach (var block in func.Body.Blocks) {
         var ops = block.Operations;
         for (int i = 0; i < ops.Count - 1; i++) {
+          // A two-register value tuple may be tail-called only when BOTH halves are forwarded
+          // unchanged: the jump leaves the callee's RAX:R10 in place as this function's own
+          // result, which is correct exactly when the pair we would have returned IS the pair
+          // the call produced. Both null is the ordinary single-value case.
           if (ops[i] is StdCallOp callOp && callOp.Result != null
               && callOp.Args.Count <= RegisterManager.RegisterParamCount
               && ops[i + 1] is StdReturnOp retOp
-              && retOp.ReturnValue == callOp.Result) {
+              && retOp.ReturnValue == callOp.Result
+              && retOp.ReturnValue2 == callOp.Result2) {
             tailCalls[ops[i + 1]] = callOp;
           }
         }
@@ -919,7 +924,8 @@ public static class StandardToX86Conversion {
           case StdCallOp callOp:
             if (!tailCalls.ContainsValue(callOp))
               regManager.EmitCall(callOp.Callee, callOp.Args, callOp.Result, x86Block,
-                ConsumedArgs(callOp.Args, lastUseOfValue, currentOpIndex));
+                ConsumedArgs(callOp.Args, lastUseOfValue, currentOpIndex),
+                result2: callOp.Result2);
             break;
 
           case StdLeaOp leaOp: {
@@ -1014,6 +1020,14 @@ public static class StandardToX86Conversion {
             if (tailCalls.TryGetValue(op, out var tailCallOp)) {
               regManager.EmitTailCall(tailCallOp.Callee, tailCallOp.Args, x86Block);
               break;
+            }
+            // Two-register value tuple: place the HIGH half first. If it happens to occupy
+            // RAX, moving it to R10 is what frees RAX for the low half below.
+            if (retOp.ReturnValue2 != null) {
+              if (retOp.ReturnValue2 is not (StdI64 or StdI32 or StdBool or StdPtr))
+                throw new InvalidOperationException(
+                  $"StandardToX86: unsupported high-half return type {retOp.ReturnValue2.GetType().Name}");
+              regManager.EnsureInSpecificRegister(retOp.ReturnValue2, RegisterManager.ValueReturnHighRegister, x86Block);
             }
             if (retOp.ReturnValue != null) {
               if (retOp.ReturnValue is StdF64 or StdF32) {

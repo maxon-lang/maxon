@@ -1368,7 +1368,15 @@ end 'main'
 ```
 
 <!-- test: rc-tuple-return-transfers-ownership -->
-Returning a tuple from a function transfers ownership to the caller.
+Returning a tuple hands the caller a fully-owned value, with no reference left behind for
+either side to release twice or forget to release once.
+
+For a tuple of two primitives — as here — it does so by transferring no ownership at all: the
+pair fits in two registers, so `makePair` copies the halves into them and never allocates a
+record. There is nothing to own. A tuple outside that gate (three fields, a heap-typed field, a
+throwing or address-taken function) is still built on the heap and its reference still moves to
+the caller. Both conventions produce 8; the ownership rule is the same because in the first one
+there is no ownership to get wrong.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 

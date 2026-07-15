@@ -195,6 +195,252 @@ end 'main'
 42
 ```
 
+<!-- test: small-tuple-return-allocates-nothing -->
+<!-- MmTrace -->
+A returned tuple of exactly two primitive fields totalling <= 16 bytes is a VALUE: it comes back
+in two registers rather than a heap record, so the call allocates nothing. The only allocation
+left is the `String` that `print` builds. Returning the pair by register is what makes this
+observable — the heap lowering is still the fallback for every tuple that does not fit the gate.
+```maxon
+typealias Num = int(0 to 1000)
+
+function pair(a Num, b Num) returns (Num, Num)
+	return (a + 1, b + 2)
+end 'pair'
+
+function main() returns ExitCode
+	let p = pair(10, b: 20)
+	print("{p._0} {p._1}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+11 22
+```
+```mm-trace
+mm_alloc String #1 size=54
+mm_incref String #1 rc=1
+mm_decref String #1 rc=0
+mm_free String #1
+```
+
+<!-- test: value-tuple-return-through-function-value -->
+A function whose address is taken is called by its TYPE, and a function type cannot say whether
+its target throws — a throwing and a non-throwing `(Num, Num) -> (Num, Num)` are the same type.
+So an indirect call cannot tell which return convention its target uses, and `pair` is held to
+the heap convention here precisely because `apply(pair)` takes its address. Returns 33.
+```maxon
+typealias Num = int(0 to 1000)
+typealias PairOp = function(Num, Num) returns (Num, Num)
+
+function pair(a Num, b Num) returns (Num, Num)
+	return (a + 1, b + 2)
+end 'pair'
+
+function apply(f PairOp) returns Num
+	let r = f(10, 20)
+	return r._0 + r._1
+end 'apply'
+
+function main() returns ExitCode
+	return apply(pair)
+end 'main'
+```
+```exitcode
+33
+```
+
+<!-- test: value-tuple-return-forwarded -->
+`return pair(...)` forwards a two-register result straight back out. The record is never bound
+to a user name, so it is stack-promoted and no allocation is made at either end. Returns 33.
+```maxon
+typealias Num = int(0 to 1000)
+
+function pair(a Num, b Num) returns (Num, Num)
+	return (a + 1, b + 2)
+end 'pair'
+
+function forward(a Num, b Num) returns (Num, Num)
+	return pair(a, b: b)
+end 'forward'
+
+function main() returns ExitCode
+	let f = forward(10, b: 20)
+	return f._0 + f._1
+end 'main'
+```
+```exitcode
+33
+```
+
+<!-- test: value-tuple-return-of-param -->
+Returning a tuple PARAM. Params keep the pointer convention, so the return reads both halves
+back out of the record rather than copying registers along. The param is borrowed — returning
+it by value must not release it. Returns 11.
+```maxon
+typealias Num = int(0 to 1000)
+
+function echo(t (Num, Num)) returns (Num, Num)
+	return t
+end 'echo'
+
+function main() returns ExitCode
+	let e = echo((5, 6))
+	return e._0 + e._1
+end 'main'
+```
+```exitcode
+11
+```
+
+<!-- test: value-tuple-escaping-into-array-stays-heap -->
+A returned tuple that ESCAPES into an array must fall back to a heap record: an array holds
+8-byte element pointers, and a stack record would die with the frame while the array still
+pointed at it. Here `p` both escapes into `xs` AND is returned by value, so the record is the
+array's while the return copies its halves out — releasing it would be a leak on one side and a
+double-free on the other. Returns 66 (11+22 from the return, 11+22 read back out of the array).
+```maxon
+typealias Num = int(0 to 1000)
+typealias Pair = (Num, Num)
+typealias PairArray = Array with Pair
+
+function pair(a Num, b Num) returns (Num, Num)
+	return (a + 1, b + 2)
+end 'pair'
+
+function stash(xs PairArray) returns (Num, Num)
+	let p = pair(10, b: 20)
+	xs.push(p)
+	return p
+end 'stash'
+
+function main() returns ExitCode
+	var xs = PairArray.create()
+	let r = stash(xs)
+	let q = try xs.get(0) otherwise panic("element 0 was just pushed")
+	return r._0 + r._1 + q._0 + q._1
+end 'main'
+```
+```exitcode
+66
+```
+
+<!-- test: throwing-value-tuple-return -->
+A THROWING tuple-returning function keeps the heap convention: a try-call's second return
+register already carries the error flag, and the error path has no tuple to hand back. The
+success path yields 33 and the error path takes the `otherwise`, giving 75.
+```maxon
+typealias Num = int(0 to 1000)
+
+enum Err
+	bad
+end 'Err'
+
+function pairThrows(a Num, b Num) returns (Num, Num) throws Err
+	if a > 900 'guard'
+		throw Err.bad
+	end 'guard'
+	return (a + 1, b + 2)
+end 'pairThrows'
+
+function run(a Num) returns Num throws Err
+	let t = try pairThrows(a, b: 20)
+	return t._0 + t._1
+end 'run'
+
+function main() returns ExitCode
+	let good = try run(10) otherwise 0
+	let bad = try run(950) otherwise 42
+	return good + bad
+end 'main'
+```
+```exitcode
+75
+```
+
+<!-- test: for-in-over-map-allocates-no-tuple -->
+<!-- MmTrace -->
+A `for` loop over a Map allocates NO tuple record per iteration. The iterator's `current()`
+returns its `(key, value)` pair in two registers, and the loop's item binding does not escape,
+so the pair lives in stack slots for the iteration and dies with it.
+
+The golden is the pin: it holds every allocation the Map machinery itself makes, and NOT ONE
+`____Tuple_Key_Value_*` line between the iterator's incref and its decref. A per-iteration
+tuple record coming back — by the value-return gate ceasing to cover `current()`, or by the
+loop's item binding ceasing to be recognised as non-escaping — puts three of them there and
+turns this red.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntMap = Map with (Integer, Integer)
+
+function sum(m IntMap) returns Integer
+	var total = 0
+	for (_, v) in m 'loop'
+		total = total + v
+	end 'loop'
+	return total
+end 'sum'
+
+function main() returns ExitCode
+	let m = [1: 10, 2: 20, 3: 30]
+	return sum(m)
+end 'main'
+```
+```exitcode
+60
+```
+```mm-trace
+mm_alloc __ManagedMemory #1 size=40
+mm_incref __ManagedMemory #1 rc=1
+mm_alloc __ManagedMemory #2 size=40
+mm_incref __ManagedMemory #2 rc=1
+mm_alloc __Array_i64 #3 size=40
+mm_incref __Array_i64 #3 rc=1
+mm_alloc __Array_i64 #4 size=40
+mm_incref __Array_i64 #4 rc=1
+mm_alloc StateArray #5 size=40
+mm_incref StateArray #5 rc=1
+mm_alloc HashSlotArray #6 size=40
+mm_incref HashSlotArray #6 rc=1
+mm_alloc __Map_i64_i64 #7 size=48
+mm_incref __Array_i64 #3 rc=2
+mm_incref __Array_i64 #4 rc=2
+mm_incref StateArray #5 rc=2
+mm_incref HashSlotArray #6 rc=2
+mm_incref __Map_i64_i64 #7 rc=1
+mm_decref HashSlotArray #6 rc=1
+mm_decref StateArray #5 rc=1
+mm_decref __Array_i64 #4 rc=1
+mm_decref __Array_i64 #3 rc=1
+mm_alloc __MapIterator_Integer_Integer #8 size=40
+mm_incref __Array_i64 #3 rc=2
+mm_incref __Array_i64 #4 rc=2
+mm_incref StateArray #5 rc=2
+mm_incref __MapIterator_Integer_Integer #8 rc=1
+mm_decref __MapIterator_Integer_Integer #8 rc=0
+mm_decref __Array_i64 #3 rc=1
+mm_decref __Array_i64 #4 rc=1
+mm_decref StateArray #5 rc=1
+mm_free __MapIterator_Integer_Integer #8
+mm_decref __Map_i64_i64 #7 rc=0
+mm_decref __Array_i64 #3 rc=0
+mm_free __Array_i64 #3
+mm_decref __Array_i64 #4 rc=0
+mm_free __Array_i64 #4
+mm_decref StateArray #5 rc=0
+mm_free StateArray #5
+mm_decref HashSlotArray #6 rc=0
+mm_free HashSlotArray #6
+mm_free __Map_i64_i64 #7
+mm_decref __ManagedMemory #1 rc=0
+mm_free __ManagedMemory #1
+mm_decref __ManagedMemory #2 rc=0
+mm_free __ManagedMemory #2
+```
+
 <!-- test: destructure-match-result-then-compare -->
 Destructuring `let (a, b) = match X { … gives (x, y) }` binds the elements of a
 tuple produced by a match-expression arm, then COMPARES each binding. The

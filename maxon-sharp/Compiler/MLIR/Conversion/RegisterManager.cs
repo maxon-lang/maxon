@@ -47,6 +47,19 @@ public class RegisterManager : RegisterManagerBase<X86Register, X86XmmRegister, 
 
   public static int RegisterParamCount => CallConvRegs.Length;
 
+  /// <summary>
+  /// Second return register of the two-register value ABI (see
+  /// <see cref="IrStructType.IsTwoRegisterValueTuple"/>). The low half stays in RAX.
+  ///
+  /// R10 is the one register that collides with nothing here: it is caller-saved (so every
+  /// call already spills and invalidates it), and it is deliberately in neither
+  /// <c>_gprPool</c> — the allocator never hands it out — nor <c>CallConvRegs</c>, so it is
+  /// not a parameter register. In particular it is NOT RDX, which carries the error flag of
+  /// a throwing call: a throwing function returning a tuple needs RAX, RDX and R10 to be
+  /// three distinct registers, and they are.
+  /// </summary>
+  public static X86Register ValueReturnHighRegister => X86Register.R10;
+
   // --- Abstract method implementations ---
 
   protected override X86Register[] GetGprPool() => _gprPool;
@@ -683,13 +696,20 @@ public class RegisterManager : RegisterManagerBase<X86Register, X86XmmRegister, 
   }
 
   public void EmitCall(string callee, List<StdValue> args, StdValue? result, IrBlock<X86Op> block,
-      HashSet<StdValue>? consumedByCall = null) {
+      HashSet<StdValue>? consumedByCall = null, StdValue? result2 = null) {
     EmitCallShared(
       args, result, block,
       preGprPlacement: null,
       emitCallOp: () => new X86CallDirectOp(callee),
       consumedByCall: consumedByCall
     );
+
+    // Two-register value tuple: the callee left the high half in R10. Claiming it costs no
+    // instruction — EmitCallShared has already spilled and invalidated every caller-saved
+    // register, R10 among them, so nothing else can be holding it. Same mechanism as
+    // EmitTryCall's error flag in RDX.
+    if (result2 != null)
+      Assign(ValueReturnHighRegister, result2);
   }
 
   public void EmitTailCall(string callee, List<StdValue> args, IrBlock<X86Op> block) {

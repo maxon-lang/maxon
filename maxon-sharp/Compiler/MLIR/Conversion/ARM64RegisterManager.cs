@@ -9,11 +9,14 @@ namespace MaxonSharp.Compiler.Ir.Conversion;
 /// </summary>
 public class ARM64RegisterManager : RegisterManagerBase<ARM64Register, ARM64FloatRegister, ARM64Op> {
   // x0-x15 are available for allocation (x16/x17 = IP0/IP1, x18 = platform, x29 = FP, x30 = LR)
+  // EXCEPT x13, which is reserved as the second return register of the two-register value ABI
+  // (see ValueReturnHighRegister). This mirrors x64, where R10 plays that role and is likewise
+  // caller-saved but absent from the allocatable pool.
   private static readonly ARM64Register[] _gprPool = [
     ARM64Register.X0, ARM64Register.X1, ARM64Register.X2, ARM64Register.X3,
     ARM64Register.X4, ARM64Register.X5, ARM64Register.X6, ARM64Register.X7,
     ARM64Register.X8, ARM64Register.X9, ARM64Register.X10, ARM64Register.X11,
-    ARM64Register.X12, ARM64Register.X13, ARM64Register.X14, ARM64Register.X15
+    ARM64Register.X12, ARM64Register.X14, ARM64Register.X15
   ];
 
   // Only D0-D7 are caller-saved and safe to allocate freely.
@@ -49,6 +52,19 @@ public class ARM64RegisterManager : RegisterManagerBase<ARM64Register, ARM64Floa
   ];
 
   public static int RegisterParamCount => CallConvRegs.Length;
+
+  /// <summary>
+  /// Second return register of the two-register value ABI (see
+  /// <see cref="IrStructType.IsTwoRegisterValueTuple"/>). The low half stays in X0.
+  ///
+  /// X13 is caller-saved (so every call already spills and invalidates it), is not a
+  /// parameter register (CallConvRegs is X0-X7), and is outside the hand-written runtime
+  /// emitter's VReg map (X9-X12) — so it cannot collide with a runtime helper's scratch.
+  /// It is also not X1, which carries the error flag of a throwing call. Unlike x64's R10 it
+  /// IS caller-saved-but-allocatable by default, so it is removed from _gprPool above; that
+  /// removal is what makes claiming it here sound.
+  /// </summary>
+  public static ARM64Register ValueReturnHighRegister => ARM64Register.X13;
 
   /// <summary>Name of the function being converted. Used to scope locally-generated
   /// labels (e.g. divide-by-zero guards) so they stay globally unique.</summary>
@@ -535,11 +551,18 @@ public class ARM64RegisterManager : RegisterManagerBase<ARM64Register, ARM64Floa
   // --- Call emission ---
 
   public void EmitCall(string callee, List<StdValue> args, StdValue? result, IrBlock<ARM64Op> block,
-      HashSet<StdValue>? consumedByCall = null) {
+      HashSet<StdValue>? consumedByCall = null, StdValue? result2 = null) {
     EmitCallShared(args, result, block,
       preGprPlacement: null,
       emitCallOp: () => new ARM64BranchLinkOp(callee),
       consumedByCall: consumedByCall);
+
+    // Two-register value tuple: the callee left the high half in X13. Claiming it costs no
+    // instruction — EmitCallShared has already spilled and invalidated every caller-saved
+    // register, X13 among them, so nothing else can be holding it. Same mechanism as
+    // EmitTryCall's error flag in X1.
+    if (result2 != null)
+      Assign(ValueReturnHighRegister, result2);
   }
 
   public void EmitTryCall(string callee, List<StdValue> args, StdValue? result, StdValue errorFlag, IrBlock<ARM64Op> block,

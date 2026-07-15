@@ -15,6 +15,19 @@ public static partial class MaxonToStandardConversion {
   // Tracks struct parameter names for the current function (not owned by us, no cleanup needed)
   [ThreadStatic] private static HashSet<string>? _structParamNames;
   [ThreadStatic] private static Dictionary<string, string>? _stackVarTags;
+  // Stack-allocated struct variables of the function being lowered, and the module's
+  // stack-eligibility verdicts. Both are needed by the call lowering (a two-register value
+  // tuple materialises into stack slots when its result does not escape), which lives in a
+  // sibling partial and does not otherwise see the per-function conversion state.
+  [ThreadStatic] private static HashSet<string>? _stackAllocatedVars;
+  [ThreadStatic] private static HashSet<int>? _stackEligibleStructs;
+  // ValueTupleAbiPass's verdict: which functions hand their result back in two registers.
+  // Empty when that pass has not run, which reads as "every function returns a heap record" —
+  // the convention that predates this ABI, so both ends still agree.
+  [ThreadStatic] private static HashSet<string>? _valueTupleReturnFunctions;
+  // Halves of a to-be-returned value tuple, read at scope_end while the record is still live.
+  // Keyed by the returned MaxonValue's id. See the scope_end lowering for why.
+  [ThreadStatic] private static Dictionary<int, (StdValue Low, StdValue High)>? _valueTupleReturnStash;
   [ThreadStatic] private static int _nextRdataId;
   [ThreadStatic] private static int _nextStdlibRdataId;
   [ThreadStatic] private static bool _rdataStdlibPhase;
@@ -30,6 +43,7 @@ public static partial class MaxonToStandardConversion {
 
   public static IrModule<StandardOp> Run(IrModule<MaxonOp> module, CompileTarget? target = null) {
     _currentTarget = target ?? CompileTarget.Default;
+    _valueTupleReturnFunctions = module.ValueTupleReturnFunctions;
     _rdataStringCache = [];
     _symdataTagCache = [];
     _tagIndexMap = [];
@@ -242,6 +256,9 @@ public static partial class MaxonToStandardConversion {
       // Maps stack-allocated variable name to its BulkZero tag (for direct field access)
       var stackVarTags = new Dictionary<string, string>();
       _stackVarTags = stackVarTags;
+      _stackAllocatedVars = stackAllocatedVars;
+      _stackEligibleStructs = module.StackEligibleStructs;
+      _valueTupleReturnStash = [];
       _varNameToStructType = varNameToStructType;
       var temps = new VarRegistry();
       // Use pre-computed constant array literal metadata from ConstantArrayAnalysisPass
@@ -1083,9 +1100,7 @@ public static partial class MaxonToStandardConversion {
                 foreach (var (fieldName, fieldVal) in structLitOp.FieldValues) {
                   var field = structType.GetField(fieldName)!;
                   var mappedVal = valueMap[fieldVal];
-                  var slotIndex = fieldCount - 1 - (field.Offset / 8);
-                  var slotName = $"{stackTag}.{slotIndex}";
-                  EmitStore(newBlock, mappedVal, slotName, varTypes);
+                  EmitStore(newBlock, mappedVal, StackSlotName(stackTag, structType, field.Offset), varTypes);
                 }
 
                 // No LEA/pointer store here — the pointer is emitted lazily
@@ -1674,9 +1689,8 @@ public static partial class MaxonToStandardConversion {
                 if (fieldDef != null && valueMap[fieldAccess.StructValue] is StdStackPtr stackPtr
                     && stackPtr.VarName != null && stackVarTags.TryGetValue(stackPtr.VarName, out var faTag)) {
                   // Stack struct: load directly from BulkZero slot (no pointer indirection)
-                  var faFieldCount = ((IrStructType)module.TypeDefs[stackPtr.TypeName]).Fields.Count;
-                  var slotName = $"{faTag}.{Math.Max(faFieldCount, 1) - 1 - (fieldDef.Offset / 8)}";
-                  var loaded = EmitLoad(newBlock, slotName, varTypes);
+                  var faStructType = (IrStructType)module.TypeDefs[stackPtr.TypeName];
+                  var loaded = EmitLoad(newBlock, StackSlotName(faTag, faStructType, fieldDef.Offset), varTypes);
                   valueMap[fieldAccess.Result] = loaded;
                 } else if (fieldDef != null) {
                   var loaded = EmitStructFieldLoad(newBlock, structName, fieldDef.Offset, fieldDef.Type, varTypes);
@@ -1711,9 +1725,8 @@ public static partial class MaxonToStandardConversion {
                   && faStackPtr.VarName != null && stackVarTags.TryGetValue(faStackPtr.VarName, out var fsTag)
                   && !faFieldDef.Type.IsHeapAllocated) {
                 // Stack struct with primitive field: store directly to BulkZero slot
-                var fsFieldCount = ((IrStructType)module.TypeDefs[faStackPtr.TypeName]).Fields.Count;
-                var slotName = $"{fsTag}.{Math.Max(fsFieldCount, 1) - 1 - (faFieldDef.Offset / 8)}";
-                EmitStore(newBlock, mappedVal, slotName, varTypes);
+                var fsStructType = (IrStructType)module.TypeDefs[faStackPtr.TypeName];
+                EmitStore(newBlock, mappedVal, StackSlotName(fsTag, fsStructType, faFieldDef.Offset), varTypes);
               } else if (faFieldDef != null) {
                 var isHeapField = faFieldDef.Type.IsHeapAllocated;
                 var storeType = isHeapField ? IrType.I64 : faFieldDef.Type;
@@ -1838,14 +1851,46 @@ public static partial class MaxonToStandardConversion {
               break;
             }
             case MaxonScopeEndOp scopeEnd: {
-              var keep = scopeEnd.KeepVars;
+              // A value-tuple return hands the caller COPIES of the two halves, so it transfers
+              // NOTHING — and this cleanup runs BEFORE the return op that reads them. Both facts
+              // matter, and together they make this the one return shape that wants no help from
+              // the machinery below:
+              //
+              //  - Read the halves HERE, while the record is still guaranteed live. Once they
+              //    are SSA values, nothing the cleanup goes on to do to the record — decref,
+              //    free, destroy the parent that owns it — can reach them. That removes the need
+              //    for the pre-incref that keeps a returned Borrowed temp alive past cleanup.
+              //  - Ignore KeepVars. It suppresses the decref of whatever the return hands over,
+              //    which is right for a returned POINTER and wrong for a returned pair of
+              //    scalars: nothing is handed over, so every binding this scope holds dies here.
+              //    Honouring it leaks exactly the record the halves were just read out of.
+              //
+              // Only a HEAP record needs the read hoisted. A stack-promoted one — the common
+              // case, and the whole point of the ABI — has no refcount and survives cleanup
+              // untouched, so LowerReturn reads its slots directly.
+              bool valueTupleReturn = _valueTupleReturnFunctions?.Contains(func.Name) == true;
+              var keep = valueTupleReturn ? null : scopeEnd.KeepVars;
+
+              if (valueTupleReturn && retStructType != null) {
+                foreach (var retId in structLitReturnIds) {
+                  foreach (var (mv, sv) in valueMap) {
+                    if (mv.Id != retId || sv is StdStackPtr || sv is not StdHeapPtr recordHp
+                        || recordHp.VarName == null) continue;
+
+                    _valueTupleReturnStash![retId] = (
+                      EmitValueTupleHalfLoad(newBlock, recordHp, retStructType, 0, varTypes),
+                      EmitValueTupleHalfLoad(newBlock, recordHp, retStructType, 1, varTypes));
+                    break;
+                  }
+                }
+              }
 
               // Pre-incref Borrowed field temps that are being returned.
               // When returning `structVar.field`, the field is loaded into a Borrowed temp.
               // The scope cleanup decrefs structVar (whose destructor decrefs the field),
               // but the Borrowed temp still holds a pointer to the field.
               // Incref the field BEFORE scope cleanup so it survives the destructor.
-              foreach (var retId in structLitReturnIds) {
+              foreach (var retId in valueTupleReturn ? [] : structLitReturnIds) {
                 foreach (var (mv, sv) in valueMap) {
                   if (mv.Id == retId && sv is StdHeapPtr retFieldHp && retFieldHp.VarName != null
                       && temps.TempHasFlag(retFieldHp.VarName, OwnershipFlags.Borrowed)) {
@@ -2333,7 +2378,8 @@ public static partial class MaxonToStandardConversion {
               }
               break;
             case MaxonReturnOp retOp: {
-              LowerReturn(retOp, retStructType, newBlock, valueMap, varTypes, module.TypeDefs, func.Name, temps, func.ReturnsSelf);
+              LowerReturn(retOp, retStructType, newBlock, valueMap, varTypes, module.TypeDefs, func.Name, temps, func.ReturnsSelf,
+                usesValueTupleReturn: module.ValueTupleReturnFunctions.Contains(func.Name));
               break;
             }
             case MaxonThrowOp throwOp: {

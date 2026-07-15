@@ -11,6 +11,42 @@ namespace MaxonSharp.Compiler.Ir.Passes;
 /// Phase 1: only structs with all-primitive fields (no heap-allocated field types).
 /// </summary>
 public static class StackPromotionAnalysisPass {
+  /// The parser interposes a binding of this prefix between a call and the user's variable
+  /// (2-Parser.cs EmitCallReturnTempAssign) purely to track the intermediate for refcounting,
+  /// then drops it from scope tracking the moment a named variable takes ownership
+  /// (FixupTempOwnership). The dead assign it leaves behind sits between a call and its real
+  /// binding, so the candidate scan must look through it.
+  private const string CallReturnTempPrefix = "__call_tmp_";
+
+  /// <summary>
+  /// Compiler-generated bindings this analysis models exactly as it models a user variable:
+  /// one name, bound once, holding one struct pointer. They may be a candidate or an alias.
+  ///
+  /// This is a WHITELIST and must stay one. A `__` name that is NOT listed here falls through
+  /// to the disqualifying arms in step 4, and that fallthrough is load-bearing: an array
+  /// literal's element slots (`__arr_&lt;tag&gt;.&lt;i&gt;`) are not bindings at all but slots of one
+  /// contiguous buffer that is memcpy'd onto the heap. Reading such a store as a harmless
+  /// alias would put a genuinely escaping record on the stack and leave the array pointing at
+  /// a dead frame. "Any temp I do not model is an escape" is the safe default; each entry
+  /// below is a specific, checked departure from it.
+  /// </summary>
+  private static readonly string[] ModelledTempPrefixes = [
+    // The iterator's `current()` result in a `for` loop. The parser declares it with exactly
+    // the flags EmitCallReturnTempAssign gives `__call_tmp_N` (IsTemp | CallReturn) — a single
+    // binding of a single call result, which is the shape this analysis already reasons about.
+    "__forin_result_",
+    // A `for (a, b) in ...` loop's item variable. It IS the loop variable, and carries a
+    // generated name only because the user wrote a destructuring pattern where an identifier
+    // would otherwise go: `for x in ...` binds the very same value to the user's own name and
+    // has always been modelled. The name is the only difference.
+    "__for_tuple_",
+  ];
+
+  /// Whether a binding is one the escape analysis can reason about — a user variable, or one
+  /// of the compiler temps that behaves exactly like one (see <see cref="ModelledTempPrefixes"/>).
+  private static bool IsModelledBinding(string varName) =>
+    !varName.StartsWith("__") || Array.Exists(ModelledTempPrefixes, varName.StartsWith);
+
   public static void Run(IrModule<MaxonOp> module) {
     var funcLookup = new Dictionary<string, IrFunction<MaxonOp>>();
     foreach (var func in module.Functions)
@@ -20,9 +56,89 @@ public static class StackPromotionAnalysisPass {
     BuildEscapingParams(module, funcLookup);
 
     foreach (var func in module.Functions) {
+      // Runs for stdlib too: the value-tuple ABI follows the SIGNATURE, so a directly-returned
+      // tuple literal must lose its heap record wherever it was compiled.
+      MarkDirectlyReturnedValueTuples(func, module);
+
       if (func.IsStdlib) continue;
       AnalyzeFunction(func, module, funcLookup);
     }
+  }
+
+  /// <summary>
+  /// A tuple record produced and returned DIRECTLY — `return (a, b)` or `return makePair(..)` —
+  /// from a function that hands the pair back in two registers needs no escape analysis and no
+  /// heap record: it is never bound to a user name, so nothing can alias it, and the return
+  /// copies its two fields into registers.
+  ///
+  /// It must lose the record, not merely be allowed to. `scope_end` runs BEFORE the return and
+  /// the parser lists such a value in its KeepVars — "ownership transferred to caller", which
+  /// is true of a returned POINTER and false of a returned pair of scalars. So a heap record
+  /// here would be released by nobody (the caller was handed values, not a reference) and leak;
+  /// decreffing it at scope_end instead would free it before the return reads its halves. A
+  /// stack record has neither problem: there is nothing to release.
+  ///
+  /// This is separate from AnalyzeFunction's candidates, which all require a binding to give
+  /// them a variable name to reason about. A directly-returned value has no name precisely
+  /// BECAUSE it cannot escape, so it is the one case that needs no analysis.
+  /// </summary>
+  private static void MarkDirectlyReturnedValueTuples(IrFunction<MaxonOp> func, IrModule<MaxonOp> module) {
+    if (!module.ValueTupleReturnFunctions.Contains(func.Name)) return;
+
+    foreach (var block in func.Body.Blocks) {
+      var ops = block.Operations;
+      for (int i = 0; i < ops.Count - 1; i++) {
+        int producerResultId;
+        switch (ops[i]) {
+          case MaxonStructLiteralOp lit when IsTypeEligible(lit, module):
+            producerResultId = lit.Result.Id;
+            break;
+
+          case MaxonCallOp call and not MaxonTryCallOp
+              when call.Result != null && ReturnsTwoRegisterValueTuple(call.Callee, module):
+            producerResultId = call.Result.Id;
+            break;
+
+          default:
+            continue;
+        }
+
+        if (IsDirectlyReturned(ops, i + 1, producerResultId))
+          module.StackEligibleStructs.Add(producerResultId);
+      }
+    }
+  }
+
+  /// <summary>
+  /// Whether a producer's result flows straight into this function's return, looking through
+  /// the two things the parser interposes: the <see cref="CallReturnTempPrefix"/> bookkeeping
+  /// binding, and the enclosing scope's `scope_end` (which names only variables, and so cannot
+  /// be a use of an unbound value).
+  ///
+  /// Adjacency modulo those two IS the proof that the return is the value's only use: nothing
+  /// earlier can reference a value that does not exist yet, and the return terminates the
+  /// block. Anything else in between means "not this shape" — and an unmodelled shape must
+  /// mean "do not promote".
+  /// </summary>
+  private static bool IsDirectlyReturned(List<MaxonOp> ops, int start, int producerResultId) {
+    for (int i = start; i < ops.Count; i++) {
+      switch (ops[i]) {
+        case MaxonReturnOp ret:
+          return ret.Value?.Id == producerResultId;
+
+        case MaxonScopeEndOp:
+          continue;
+
+        case MaxonAssignOp assign when assign.IsDeclaration
+            && assign.Value.Id == producerResultId
+            && assign.VarName.StartsWith(CallReturnTempPrefix):
+          continue;
+
+        default:
+          return false;
+      }
+    }
+    return false;
   }
 
   /// <summary>
@@ -164,21 +280,36 @@ public static class StackPromotionAnalysisPass {
   private static void AnalyzeFunction(
       IrFunction<MaxonOp> func, IrModule<MaxonOp> module,
       Dictionary<string, IrFunction<MaxonOp>> funcLookup) {
-    // Step 1: Collect candidates: struct literal immediately followed by a declaration assign.
-    var candidates = new Dictionary<string, (MaxonStructLiteralOp Literal, int BlockIndex)>();
-    for (int blockIdx = 0; blockIdx < func.Body.Blocks.Count; blockIdx++) {
-      var block = func.Body.Blocks[blockIdx];
+    // Step 1: Collect candidates — a record this frame produces, immediately bound to a
+    // declaration. Two producers qualify, on identical escape conditions:
+    //   - a struct literal, which this frame builds itself;
+    //   - a call whose callee returns a two-register value tuple, whose halves arrive in
+    //     registers and so belong to this frame the moment they land.
+    // The value-tuple call is what makes the callee's record unnecessary: nothing is handed
+    // back by pointer, so there is no allocation for the caller to keep alive.
+    var candidates = new Dictionary<string, int>();
+    foreach (var block in func.Body.Blocks) {
       var ops = block.Operations;
       for (int i = 0; i < ops.Count - 1; i++) {
-        if (ops[i] is MaxonStructLiteralOp lit
-            && ops[i + 1] is MaxonAssignOp assign
-            && assign.IsDeclaration
-            && assign.Value.Id == lit.Result.Id
-            && !assign.ForceHeap // @heap directive forces heap allocation
-            && !assign.VarName.StartsWith("__") // Skip compiler-generated temps
-            && IsTypeEligible(lit, module)) {
-          candidates[assign.VarName] = (lit, blockIdx);
+        int producerResultId;
+        switch (ops[i]) {
+          case MaxonStructLiteralOp lit when IsTypeEligible(lit, module):
+            producerResultId = lit.Result.Id;
+            break;
+
+          // A throwing call is excluded: MaxonTryCallOp's result is only valid on the
+          // success edge, and the error edge would leave the slots unwritten.
+          case MaxonCallOp call and not MaxonTryCallOp
+              when call.Result != null && ReturnsTwoRegisterValueTuple(call.Callee, module):
+            producerResultId = call.Result.Id;
+            break;
+
+          default:
+            continue;
         }
+
+        if (FindBoundVariable(ops, i + 1, producerResultId) is string varName)
+          candidates[varName] = producerResultId;
       }
     }
 
@@ -186,8 +317,8 @@ public static class StackPromotionAnalysisPass {
 
     // Step 2: Build SSA ID -> variable name map
     var ssaToVar = new Dictionary<int, string>();
-    foreach (var (varName, (lit, _)) in candidates) {
-      ssaToVar[lit.Result.Id] = varName;
+    foreach (var (varName, resultId) in candidates) {
+      ssaToVar[resultId] = varName;
     }
     foreach (var block in func.Body.Blocks) {
       foreach (var op in block.Operations) {
@@ -199,12 +330,14 @@ public static class StackPromotionAnalysisPass {
     }
 
     // Step 3: Track aliases (var b = a). Both must not escape for the original to be eligible.
-    // Skip compiler-generated temps (__arr_0.0 etc.) — they're not true aliases.
+    // Only bindings this analysis models count (see IsModelledBinding): an unmodelled compiler
+    // temp — `__arr_0.0` and friends — is NOT a true alias, and leaving it untracked here is
+    // what makes step 4 disqualify the candidate rather than wave the store through.
     var aliases = new Dictionary<string, HashSet<string>>(); // candidate -> set of alias var names
     foreach (var block in func.Body.Blocks) {
       foreach (var op in block.Operations) {
         if (op is MaxonAssignOp assign && assign.IsDeclaration
-            && !assign.VarName.StartsWith("__")
+            && IsModelledBinding(assign.VarName)
             && ssaToVar.TryGetValue(assign.Value.Id, out var srcVar)
             && assign.VarName != srcVar) {
           if (!aliases.ContainsKey(srcVar)) aliases[srcVar] = [];
@@ -255,6 +388,16 @@ public static class StackPromotionAnalysisPass {
               && aliases.TryGetValue(aliasSrc, out var aliasSet2) && aliasSet2.Contains(assign.VarName):
             break;
 
+          // WHITELISTED: the parser's refcount-bookkeeping binding (see FindBoundVariable).
+          // It is dropped from scope tracking the moment the named variable takes ownership,
+          // and even were it live it would be harmless: the assign lowering propagates
+          // stack-ness and the stack tag to an alias, so it resolves to the very slots the
+          // candidate already owns rather than to a second record.
+          case MaxonAssignOp assign when assign.IsDeclaration
+              && assign.VarName.StartsWith(CallReturnTempPrefix)
+              && ssaToVar.ContainsKey(assign.Value.Id):
+            break;
+
           // DISQUALIFIED: reassignment of candidate or alias
           case MaxonAssignOp assign when !assign.IsDeclaration && ResolveCandidate(assign.VarName) is string reassignCand:
             disqualified.Add(reassignCand);
@@ -268,6 +411,16 @@ public static class StackPromotionAnalysisPass {
 
           // WHITELISTED: struct var ref (needed for field access, calls, etc.)
           case MaxonStructVarRefOp:
+            break;
+
+          // WHITELISTED: returning a two-register value tuple does NOT escape it. The halves
+          // are copied into registers at the return, so nothing of this frame's record
+          // outlives the frame — which is precisely the constraint that forces every other
+          // returned struct onto the heap (see GetReferencedIds, where MaxonReturnOp falls
+          // through to the disqualifying default).
+          case MaxonReturnOp ret when ret.Value != null
+              && ssaToVar.ContainsKey(ret.Value.Id)
+              && module.ValueTupleReturnFunctions.Contains(func.Name):
             break;
 
           // WHITELISTED: field access on a candidate's SSA value
@@ -330,12 +483,42 @@ public static class StackPromotionAnalysisPass {
     }
 
     // Step 5: Add surviving candidates
-    foreach (var (varName, (lit, _)) in candidates) {
+    foreach (var (varName, resultId) in candidates) {
       if (!disqualified.Contains(varName)) {
-        module.StackEligibleStructs.Add(lit.Result.Id);
+        module.StackEligibleStructs.Add(resultId);
       }
     }
   }
+
+  /// <summary>
+  /// The variable a producer's result is bound to, looking through any
+  /// <see cref="CallReturnTempPrefix"/> bookkeeping binding in between.
+  ///
+  /// Null unless the result flows straight into a plain user declaration. Any other shape —
+  /// no binding at all, a `@heap` binding, some other compiler temp — is one this analysis
+  /// does not model, and not modelling a shape must mean "do not promote", never "promote
+  /// anyway".
+  /// </summary>
+  private static string? FindBoundVariable(List<MaxonOp> ops, int start, int producerResultId) {
+    for (int i = start; i < ops.Count; i++) {
+      if (ops[i] is not MaxonAssignOp assign
+          || !assign.IsDeclaration
+          || assign.Value.Id != producerResultId
+          || assign.ForceHeap) // @heap directive forces heap allocation
+        return null;
+
+      if (!assign.VarName.StartsWith(CallReturnTempPrefix))
+        return IsModelledBinding(assign.VarName) ? assign.VarName : null;
+    }
+    return null;
+  }
+
+  /// Whether a direct call to <paramref name="callee"/> hands its result back in two
+  /// registers rather than as a heap record — ValueTupleAbiPass's module-wide verdict, which
+  /// is the same one the lowering reads. An unknown callee is absent from the set and so
+  /// answers false, the conservative direction.
+  private static bool ReturnsTwoRegisterValueTuple(string callee, IrModule<MaxonOp> module) =>
+    module.ValueTupleReturnFunctions.Contains(callee);
 
   /// Check if a callee escapes the parameter at the given arg index.
   private static bool CalleeEscapesParam(

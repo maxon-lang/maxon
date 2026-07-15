@@ -502,7 +502,8 @@ public static class StandardToARM64Conversion {
       // === Calls ===
       case StdCallOp callOp:
         regManager.EmitCall(callOp.Callee, callOp.Args, callOp.Result, block,
-          ConsumedArgs(callOp.Args, lastUseOfValue, currentOpIndex));
+          ConsumedArgs(callOp.Args, lastUseOfValue, currentOpIndex),
+          result2: callOp.Result2);
         break;
 
       case StdCallRuntimeOp rtCall:
@@ -542,6 +543,14 @@ public static class StandardToARM64Conversion {
 
       // === Return ===
       case StdReturnOp retOp:
+        // Two-register value tuple: place the HIGH half first. If it happens to occupy X0,
+        // moving it to X13 is what frees X0 for the low half below.
+        if (retOp.ReturnValue2 != null) {
+          if (retOp.ReturnValue2 is StdF64 or StdF32)
+            throw new InvalidOperationException(
+              $"StandardToARM64: unsupported high-half return type {retOp.ReturnValue2.GetType().Name}");
+          regManager.EnsureInSpecificRegister(retOp.ReturnValue2, ARM64RegisterManager.ValueReturnHighRegister, block);
+        }
         if (retOp.ReturnValue != null) {
           if (retOp.ReturnValue is StdF64 or StdF32) {
             regManager.EnsureInSpecificFpRegister(retOp.ReturnValue, ARM64FloatRegister.D0, block);

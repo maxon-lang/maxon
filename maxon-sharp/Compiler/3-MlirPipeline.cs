@@ -38,6 +38,7 @@ public class IrPipeline {
       sw.Restart(); PurityAnalysisPass.Run(module);                       StageTimer.Record(timings, "purity",     sw.ElapsedMilliseconds);
       sw.Restart(); TypeCycleCheckPass.Run(module);                       StageTimer.Record(timings, "typeCycle",  sw.ElapsedMilliseconds);
       sw.Restart(); BorrowCheckPass.Run(module);                          StageTimer.Record(timings, "borrow",     sw.ElapsedMilliseconds);
+      sw.Restart(); ValueTupleAbiPass.Run(module);                        StageTimer.Record(timings, "valueTuple", sw.ElapsedMilliseconds);
       sw.Restart(); StackPromotionAnalysisPass.Run(module);               StageTimer.Record(timings, "stackProm",  sw.ElapsedMilliseconds);
       sw.Restart(); module.StaticEligibleLiteralIds = LiteralCoverageAnalysisPass.Run(module, report: Compiler.LiteralCoverage); StageTimer.Record(timings, "litStatic", sw.ElapsedMilliseconds);
     } else {
@@ -52,6 +53,7 @@ public class IrPipeline {
       PurityAnalysisPass.Run(module);
       TypeCycleCheckPass.Run(module);
       BorrowCheckPass.Run(module);
+      ValueTupleAbiPass.Run(module);
       StackPromotionAnalysisPass.Run(module);
       module.StaticEligibleLiteralIds = LiteralCoverageAnalysisPass.Run(module, report: Compiler.LiteralCoverage);
     }

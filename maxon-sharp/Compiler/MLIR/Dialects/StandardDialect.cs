@@ -1092,14 +1092,22 @@ public sealed class StdParamOp(int index, string name, StdValue result) : Standa
   public override int AnyResultId => Result.Id;
 }
 
-public sealed class StdCallOp(string callee, List<StdValue> args, StdValue? result = null) : StandardOp {
+public sealed class StdCallOp(string callee, List<StdValue> args, StdValue? result = null,
+    StdValue? result2 = null) : StandardOp {
   public override StdOpKind Kind => StdOpKind.Call;
   public override string Mnemonic => $"func.call @{Callee}";
   public string Callee { get; } = callee;
   public List<StdValue> Args { get; } = args;
   public StdValue? Result { get; } = result;
+  /// <summary>
+  /// High half of a two-register value-tuple return, in the ABI's second return register
+  /// (R10 on x64, X13 on arm64). Null for every ordinary call — the same shape as
+  /// <see cref="StdTryCallOp.ErrorFlag"/>, which is the precedent for a call producing a
+  /// second SSA result placed in a named register.
+  /// </summary>
+  public StdValue? Result2 { get; } = result2;
   public override IReadOnlyList<string> PrintableResults =>
-    Result != null ? [Result.ToString()] : [];
+    Result == null ? [] : Result2 == null ? [Result.ToString()] : [Result.ToString(), Result2.ToString()];
   public override IReadOnlyList<string> PrintableOperands =>
     [.. Args.Select(a => a.ToString())];
   public override List<StdValue> ReadValues => Args;
@@ -1134,13 +1142,19 @@ public sealed class StdIndirectCallOp(StdValue callee, List<StdValue> args, StdV
   public override int AnyResultId => Result?.Id ?? -1;
 }
 
-public sealed class StdReturnOp(StdValue? value = null) : StandardOp {
+public sealed class StdReturnOp(StdValue? value = null, StdValue? value2 = null) : StandardOp {
   public override StdOpKind Kind => StdOpKind.Return;
   public override string Mnemonic => "func.return";
   public StdValue? ReturnValue { get; } = value;
-  public override IReadOnlyList<string> PrintableOperands =>
-    ReturnValue != null ? [ReturnValue.ToString()] : [];
-  public override List<StdValue> ReadValues => ReturnValue != null ? [ReturnValue] : [];
+  /// <summary>
+  /// High half of a two-register value-tuple return. Non-null only for a function whose
+  /// return type satisfies <see cref="IrStructType.IsTwoRegisterValueTuple"/>; every other
+  /// return leaves it null and hands back a single value (or none).
+  /// </summary>
+  public StdValue? ReturnValue2 { get; } = value2;
+  public override IReadOnlyList<string> PrintableOperands => [.. ReadValues.Select(v => v.ToString())];
+  public override List<StdValue> ReadValues =>
+    ReturnValue == null ? [] : ReturnValue2 == null ? [ReturnValue] : [ReturnValue, ReturnValue2];
   public override int PureResultId => -1;
 }
 

@@ -1,0 +1,186 @@
+// Test: throwing-value-tuple-return
+typealias Num = int(0 to 1000)
+
+enum Err
+	bad
+end 'Err'
+
+function pairThrows(a Num, b Num) returns (Num, Num) throws Err
+	if a > 900 'guard'
+		throw Err.bad
+	end 'guard'
+	return (a + 1, b + 2)
+end 'pairThrows'
+
+function run(a Num) returns Num throws Err
+	let t = try pairThrows(a, b: 20)
+	return t._0 + t._1
+end 'run'
+
+function main() returns ExitCode
+	let good = try run(10) otherwise 0
+	let bad = try run(950) otherwise 42
+	return good + bad
+end 'main'
+---
+ExitCode: 75
+---
+// CompiledIR
+module {
+  func @pairThrows(a: i64, b: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=48
+    x64.mov [rbp-8], rcx
+    x64.mov [rbp-16], rdx
+    x64.mov rax, 900
+    x64.cmp rcx, rax
+    x64.jle pairThrows.guard_0.after
+  guard_0:
+    x64.xor eax, eax
+    x64.mov rcx, 1
+    x64.add rax, rcx
+    x64.mov rdx, rax
+    x64.xor eax, eax
+    x64.epilogue
+    x64.ret
+  guard_0.after:
+    x64.mov rax, 1
+    x64.mov rcx, [rbp-8]
+    x64.add rcx, rax
+    x64.mov rdx, 2
+    x64.mov rbx, [rbp-16]
+    x64.add rbx, rdx
+    x64.mov [rbp-32], rcx
+    x64.mov [rbp-40], rbx
+    x64.mov rcx, 16
+    x64.xor edx, edx
+    x64.mov r8, 1
+    x64.call mm_alloc
+    x64.mov [rbp-24], rax
+    x64.mov rsi, [rbp-24]
+    x64.mov rdi, [rbp-32]
+    x64.mov [rsi+0], rdi
+    x64.mov r8, [rbp-24]
+    x64.mov r9, [rbp-40]
+    x64.mov [r8+8], r9
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, [rbp-24]
+    x64.call mm_incref
+    x64.mov rax, [rbp-24]
+    x64.xor edx, edx
+    x64.epilogue
+    x64.ret
+  }
+  func @run(a: i64) -> u16 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov rdx, 20
+    x64.call pairThrows
+    x64.mov [rbp-8], rdx
+    x64.mov [rbp-16], rax
+    x64.xor eax, eax
+    x64.cmp rdx, rax
+    x64.je run.try_continue_0
+  propagate_error_0:
+    x64.mov rdx, [rbp-8]
+    x64.mov rax, [rbp-16]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rdx, [rbp-8]
+    x64.xor eax, eax
+    x64.epilogue
+    x64.ret
+  try_continue_0:
+    x64.mov rax, [rbp-16]
+    x64.mov [rbp-24], rax
+    x64.mov rcx, [rbp-24]
+    x64.call mm_incref
+    x64.mov rdx, [rbp-24]
+    x64.mov rbx, [rdx+0]
+    x64.mov rsi, [rbp-24]
+    x64.mov rdi, [rsi+8]
+    x64.add rbx, rdi
+    x64.xor r8d, r8d
+    x64.mov r9, 1000
+    x64.cmp rbx, r9
+    x64.jg run.__range_panic_0
+    x64.cmp rbx, r8
+    x64.jl run.__range_panic_0
+    x64.jmp run.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rax, [rbp-16]
+    x64.mov [rbp-32], rbx
+    x64.test rax, rax
+    x64.jz __nonnull_skip_1
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_1
+    x64.mov rcx, [rbp-24]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_2
+    x64.call mm_decref
+    x64.label __nonnull_skip_2
+    x64.mov rax, [rbp-32]
+    x64.xor edx, edx
+    x64.epilogue
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=48
+    x64.mov rcx, 10
+    x64.call run
+    x64.xor ecx, ecx
+    x64.mov [rbp-8], rcx
+    x64.mov [rbp-16], rax
+    x64.xor eax, eax
+    x64.cmp rdx, rax
+    x64.je main.otherwise_default_continue_0
+  otherwise_default_error_0:
+    x64.mov rax, [rbp-8]
+    x64.mov [rbp-16], rax
+    x64.jmp main.otherwise_default_continue_0
+  otherwise_default_continue_0:
+    x64.mov rax, [rbp-16]
+    x64.mov [rbp-24], rax
+    x64.mov rcx, 950
+    x64.call run
+    x64.mov rcx, 42
+    x64.mov [rbp-32], rcx
+    x64.mov [rbp-40], rax
+    x64.xor eax, eax
+    x64.cmp rdx, rax
+    x64.je main.otherwise_default_continue_1
+  otherwise_default_error_1:
+    x64.mov rax, [rbp-32]
+    x64.mov [rbp-40], rax
+    x64.jmp main.otherwise_default_continue_1
+  otherwise_default_continue_1:
+    x64.mov rax, [rbp-40]
+    x64.mov rcx, [rbp-24]
+    x64.add rcx, rax
+    x64.xor edx, edx
+    x64.mov ebx, 4294967295
+    x64.cmp rcx, rbx
+    x64.jg main.__range_panic_0
+    x64.cmp rcx, rdx
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_1]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rax, rcx
+    x64.epilogue
+    x64.ret
+  }
+}
+---

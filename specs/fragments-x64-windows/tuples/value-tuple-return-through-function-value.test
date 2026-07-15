@@ -1,0 +1,112 @@
+// Test: value-tuple-return-through-function-value
+typealias Num = int(0 to 1000)
+typealias PairOp = function(Num, Num) returns (Num, Num)
+
+function pair(a Num, b Num) returns (Num, Num)
+	return (a + 1, b + 2)
+end 'pair'
+
+function apply(f PairOp) returns Num
+	let r = f(10, 20)
+	return r._0 + r._1
+end 'apply'
+
+function main() returns ExitCode
+	return apply(pair)
+end 'main'
+---
+ExitCode: 33
+---
+// CompiledIR
+module {
+  func @pair(a: i64, b: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov rax, 1
+    x64.add rcx, rax
+    x64.mov rax, 2
+    x64.add rdx, rax
+    x64.mov [rbp-16], rcx
+    x64.mov [rbp-24], rdx
+    x64.mov rcx, 16
+    x64.xor edx, edx
+    x64.mov r8, 1
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, [rbp-16]
+    x64.mov [rcx+0], rdx
+    x64.mov rbx, [rbp-8]
+    x64.mov rsi, [rbp-24]
+    x64.mov [rbx+8], rsi
+    x64.mov rdi, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
+    x64.epilogue
+    x64.ret
+  }
+  func @apply(f: i64, __env_f: i64) -> u16 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov rax, 10
+    x64.mov rbx, 20
+    x64.mov [rbp-16], rcx
+    x64.mov r10, rcx
+    x64.mov rcx, rax
+    x64.mov r8, rdx
+    x64.mov rdx, rbx
+    x64.call r10
+    x64.mov [rbp-8], rax
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, [rcx+0]
+    x64.mov rbx, [rbp-8]
+    x64.mov rsi, [rbx+8]
+    x64.add rdx, rsi
+    x64.xor edi, edi
+    x64.mov r8, 1000
+    x64.cmp rdx, r8
+    x64.jg apply.__range_panic_0
+    x64.cmp rdx, rdi
+    x64.jl apply.__range_panic_0
+    x64.jmp apply.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rax, [rbp-8]
+    x64.mov [rbp-24], rdx
+    x64.test rax, rax
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rax, [rbp-24]
+    x64.epilogue
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.lea_func rax, [pair]
+    x64.mov rcx, rax
+    x64.xor edx, edx
+    x64.call apply
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_1]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

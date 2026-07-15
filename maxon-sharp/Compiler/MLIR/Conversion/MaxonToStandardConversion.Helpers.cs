@@ -43,6 +43,17 @@ public static partial class MaxonToStandardConversion {
   }
 
   /// <summary>
+  /// Name of the BulkZero stack slot holding the field at <paramref name="fieldOffset"/> of a
+  /// stack-allocated struct tagged <paramref name="stackTag"/>.
+  ///
+  /// Slots run in REVERSE field order because the LEA that materialises a pointer to the
+  /// record yields the lowest stack address: numbering them backwards is what puts field 0
+  /// at [ptr+0].
+  /// </summary>
+  private static string StackSlotName(string stackTag, IrStructType structType, int fieldOffset) =>
+    $"{stackTag}.{Math.Max(structType.Fields.Count, 1) - 1 - (fieldOffset / 8)}";
+
+  /// <summary>
   /// Resolve the canonical struct type for a function return type.
   /// Function return types may reference stale stub types from pre-scanning;
   /// this resolves to the full type definition from module.TypeDefs.
@@ -590,6 +601,28 @@ public static partial class MaxonToStandardConversion {
     var loadOp = new StdLoadIndirectOp(heapPtr, fieldOffset, fieldType);
     block.AddOp(loadOp);
     return loadOp.Result;
+  }
+
+  /// <summary>
+  /// Load one half of a two-register value tuple, whether it currently lives in stack slots
+  /// or in a heap record. A stack-promoted record has no pointer at all — its fields ARE
+  /// named BulkZero slots — which is why this cannot simply be a field load off a base.
+  /// </summary>
+  private static StdValue EmitValueTupleHalfLoad(
+    IrBlock<StandardOp> block, StdValue tupleValue, IrStructType tupleType, int fieldIndex,
+    Dictionary<string, string> varTypes) {
+    var field = tupleType.Fields[fieldIndex];
+
+    if (tupleValue is StdStackPtr stackPtr && stackPtr.VarName != null
+        && _stackVarTags != null && _stackVarTags.TryGetValue(stackPtr.VarName, out var stackTag))
+      return EmitLoad(block, StackSlotName(stackTag, tupleType, field.Offset), varTypes);
+
+    if (tupleValue is StdHeapPtr heapPtr && heapPtr.VarName != null)
+      return EmitStructFieldLoad(block, heapPtr.VarName, field.Offset, IrType.Resolve(field.Type), varTypes);
+
+    throw new InvalidOperationException(
+      $"Value tuple '{tupleType.Name}' half {fieldIndex} is neither a stack nor a heap record "
+      + $"(got {tupleValue.GetType().Name}) — the two-register return ABI has no way to read it");
   }
 
   /// Store a value into a field of a heap-allocated struct.
