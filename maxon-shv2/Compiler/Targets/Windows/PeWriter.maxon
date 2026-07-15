@@ -92,13 +92,19 @@ let ImportThunkPasses = 2  // the IAT and the ILT hold identical thunks
 // `AddVectoredExceptionHandler` is what lets the runtime see a `#DE` at all, since the CPU
 // raises the trap and Windows offers it to VEH before anything else.
 //
-// ⚠ All four are kernel32, so this is still ONE DLL and `Kernel32DirEntries` stays 1 —
+// `VirtualAlloc` (P1.0r) is the allocator's page source — the one OS call `__slab_alloc` makes.
+// ⭐ IT IS NAMED HERE AND NOWHERE ELSE, and that is the point of the `StdOp.osAllocPages` spelling:
+// the Std tier asks for PAGES, and only this file — the Windows PE writer — knows that pages come
+// from `VirtualAlloc` through an import table. A `mmap`/`memory.grow` backend names its own, here.
+//
+// ⚠ All five are kernel32, so this is still ONE DLL and `Kernel32DirEntries` stays 1 —
 // that constant counts import DIRECTORY entries (DLLs), not imports.
 export enum IatSlot
 	ExitProcess
 	GetStdHandle
 	WriteFile
 	AddVectoredExceptionHandler
+	VirtualAlloc
 end 'IatSlot'
 
 // The IAT slot index of an import — the `slotIndex` an `iatCall` records and the PE writer

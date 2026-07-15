@@ -526,6 +526,37 @@ export union StdOp
 	// memory, so it must order against every later load — the metadata contract's own words),
 	// `isPure: false`. APPENDED at the END of the memory band, after `loadIndirect`.
 	storeIndirect(addrId ValueId, offset ByteOffset, valueId ValueId, valueType StdType) = StdOpMeta{category: StdOpCategory.memory, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: false, isMemory: true, isStore: true, isCall: false, clobbersFlags: false, isCmp: false}
+	// --- band: system (P1.0r — the allocator's page source) ---
+	//
+	// ⭐ THE FIRST PRODUCER OF THE `system` BAND, and the band is why this op is spelled this way
+	// rather than as an `importCall(slot IatSlot, …)` in the `call` band. Two independent reasons,
+	// and both are load-bearing:
+	//
+	// 1. **TIERING.** `IatSlot` is a WINDOWS PE concept (`Targets/Windows/PeWriter.maxon`), and it
+	//    is referenced nowhere outside `Targets/`. Naming it here would put a PE import-table index
+	//    in the target-NEUTRAL mid-level tier — the tier ARCHITECTURE says the wasm backend will
+	//    consume directly. `osAllocPages` says WHAT is wanted (pages) and lets each backend say HOW
+	//    (x64-windows: `VirtualAlloc` through the IAT; Linux: `mmap`; wasm: `memory.grow`). BOTH
+	//    reference compilers independently refuse the leak: v1 has `std osAllocPages <size>`, and
+	//    the bootstrap has `IEmitterBackend.OsAllocPages` with `VirtualAlloc` appearing in zero
+	//    files above backend tier.
+	// 2. **THE BAND-APPEND INVARIANT.** The `call` band ends at `retVoid` — MID-UNION — so a variant
+	//    appended there is SILENTLY swallowed by every range arm spanning it. The `system` band sits
+	//    past `storeIndirect`, i.e. at the END of the union, where an append is LOUD: measured, this
+	//    one produced 12 E2026 non-exhaustive errors and zero silent swallows. The safer band is
+	//    also the correct one.
+	//
+	// `sizeId` is a VALUE (the byte count), not a name — the same value/name split `call`'s `callee`
+	// and `globalAddr`'s `label` sit on the other side of. The result is the base address of a
+	// freshly-committed, OS-ZEROED region, which is what lets `__slab_alloc` hand out bump slots
+	// without memzeroing them (see ARCHITECTURE.md → "Allocator: the zeroing contract").
+	//
+	// Full call-barrier metadata: it IS a call once lowered (an indirect call through the IAT), so
+	// it clobbers the caller-saved registers and may observe or modify arbitrary memory.
+	// `isUnsupportedInInlineBody: true` per that field's own contract, which names v1's
+	// `indirectCall` as its example — this lowers to exactly that, and it escapes the inliner's
+	// static-callee model.
+	osAllocPages(resultId ValueId, sizeId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 end 'StdOp'
 
 export typealias StdOpArray = Array with StdOp
@@ -605,6 +636,8 @@ export function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 		globalAddr then break 'u'
 		loadIndirect(_, addrId, _, _) then referenced.insert(addrId)
 		storeIndirect(addrId, _, valueId, _) then insertUsePair(referenced, a: addrId, b: valueId)
+		// The size is a real value operand — the only one this op reads; its result is a def.
+		osAllocPages(_, sizeId) then referenced.insert(sizeId)
 	end 'u'
 end 'collectStdOpUses'
 
@@ -655,6 +688,8 @@ module function remapStdOpUses(op StdOp, subst ValueIdArray) returns StdOp
 		globalAddr gives op
 		loadIndirect(resultId, addrId, offset, valueType) gives StdOp.loadIndirect(resultId, addrId: remappedValue(addrId, subst: subst), offset: offset, valueType: valueType)
 		storeIndirect(addrId, offset, valueId, valueType) gives StdOp.storeIndirect(remappedValue(addrId, subst: subst), offset: offset, valueId: remappedValue(valueId, subst: subst), valueType: valueType)
+		// The exact mirror of `collectStdOpUses`'s arm: the size is the one read, so it is the one rewrite.
+		osAllocPages(resultId, sizeId) gives StdOp.osAllocPages(resultId, sizeId: remappedValue(sizeId, subst: subst))
 	end 'r'
 end 'remapStdOpUses'
 

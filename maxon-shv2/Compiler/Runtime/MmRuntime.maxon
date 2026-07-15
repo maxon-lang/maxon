@@ -1,0 +1,476 @@
+// Runtime/MmRuntime.maxon — the emitted memory-management runtime (Workstream R, slice R1).
+//
+// ⭐ THIS IS A BUILDER-BUILT `StdModule`, NOT HAND-ASSEMBLED BYTES, and that was a decision taken
+// on purpose rather than by inertia (PLAN.md's R1 box exists to force exactly this). The panic
+// runtime (P1.0d.3) IS hand-assembled, and that was right for it: the OS calls a VEH thunk with a
+// raw ABI, so there is no Maxon-level spelling of "read CONTEXT.Rip". The allocator is not such a
+// case — it needs only ordinary calls, arithmetic, loads and stores. Building it as `StdOp`s means
+// it gets register allocation, the frame layout, and target-independence for FREE, and every later
+// slice of the runtime is IR rather than opcodes. v1 made the same call for the same reason: its
+// `runtime.std` is 6,049 lines of Std-level IR text and it hand-emits only the VEH thunk.
+//
+// The divergence from v1 is the ROUTE, not the form: v1 PARSES its IR from a text file (a 992-line
+// `StdParser.maxon`), shv2 builds the graph directly with builder calls. shv2 needs no parser
+// because it has no text — the two are the same `IrFunction`/`StdOp` graph, and the text was only
+// ever v1's serialization of it. `mrt_start` (`BackendDispatch.prependEntryStub`) already proves
+// the builder path end-to-end at the Target tier; this is the same idea one tier up.
+//
+// WHAT IS DELIBERATELY NOT HERE — this is a bump allocator for a program that allocates one
+// `Point`, not a Go-scale one. No size classes, no mcache/mcentral sharding, no remote-free
+// queues, and no free list at all. v1 is DEBUGGED, NOT FAST: a copy needs a reason exactly as much
+// as a divergence does, and none of that machinery has a consumer at this rung. `__mm_free`
+// therefore reclaims nothing yet — it decrements the live count and stops. That is honest rather
+// than incomplete: the counter is what the leak gate reads, and recycling is P1.2's work, arriving
+// with the free list that makes it meaningful.
+//
+// ⚠ NO `__slab_alloc_raw`. It is Go's `needzero=false` escape hatch and it has NO CONSUMER here.
+// Shipping vocabulary before its consumer is this rung's own founding lesson — it is why P1.0r and
+// P1.1a co-land at all — so the hatch arrives with `realloc`, the caller that justifies it.
+
+// The header sits IMMEDIATELY BEFORE the user pointer, so a managed pointer is usable as a plain
+// pointer: `p.x` is `[p+0]`, and nothing downstream needs to know a header exists. This is v1's
+// layout exactly (`[-24] destructor · [-16] size · [-8] refcount`), expressed from the header BASE
+// because `ByteOffset` is `int(0 to u64.max)` — UNSIGNED — so a negative displacement is not
+// representable in a `loadIndirect`. The header is addressed as `ptr - HeaderBytes` once and read
+// at positive offsets from there, which costs one `sub` per header access and keeps the offset
+// type honest. (Making `ByteOffset` signed was the alternative and is wrong: it is shared with the
+// PE writer, where a file offset genuinely cannot be negative.)
+//
+// ⚠ NOT the bootstrap's 32-byte header. Its extra word is `packedId`, which serves MM-TRACE — and
+// mm-trace does not exist in shv2. A copy needs a reason; "the bootstrap has it" is not one, and
+// the word would be 8 bytes of nothing on every allocation in the language.
+let HeaderDestructorOffset = 0 as ByteOffset
+let HeaderSizeOffset = 8 as ByteOffset
+let HeaderRefcountOffset = 16 as ByteOffset
+let HeaderBytes = 24
+
+// The arena a single `osAllocPages` request commits. 64 KiB is Windows' allocation granularity, so
+// a smaller request would round up to it anyway and simply waste the difference.
+let ArenaBytes = 0x10000
+
+// The `.data` slots the runtime owns. All three are `__`-prefixed, which is what keeps them out of
+// the spec goldens (`TargetPrinter.isRuntimeFunction`'s twin for data) and what guarantees no user
+// name can collide — Maxon reserves `__` for compiler-internal names.
+//
+// ⭐ THEIR ZERO INITIALIZER IS THE ALLOCATOR'S INITIAL STATE, not merely a default. `cursor == 0`
+// and `end == 0` mean "no arena yet", and the very first `__slab_alloc` computes `0 + size > 0` and
+// takes the grow path. That is why there is no `__slab_init` and nothing to call before `main`: the
+// `.data` image IS the initialization, so the state cannot be observed before it is established.
+export let SlabCursorLabel = b"__slab_cursor"
+export let SlabEndLabel = b"__slab_end"
+export let MmAllocCountLabel = b"__mm_alloc_count"
+
+export let SlabAllocName = b"__slab_alloc"
+export let MmAllocName = b"__mm_alloc"
+export let MmIncrefName = b"__mm_incref"
+export let MmDecrefName = b"__mm_decref"
+export let MmFreeName = b"__mm_free"
+export let MmLeakCheckName = b"__mm_leak_check"
+
+// The exit code a leaked program reports. It is the project-wide leak-gate code: a `spec-test`
+// worker is itself a leak-gated Maxon program, and `SpecWorkerPool.LeakCheckExitCode` is the same
+// number read from the other end.
+let LeakExitCode = 101
+
+// The prefix every runtime entry point shares — the single test for "does this program touch the
+// heap at all?". See `moduleUsesHeap`.
+let RuntimeCallPrefix = b"__mm_"
+
+// True iff the program actually reaches the heap, which is what decides whether ANY of this is
+// emitted. A `return 42` program must stay byte-for-byte what it was before this rung: it
+// allocates nothing, so it carries no runtime, no `.data` slots, and no leak check — and its
+// committed golden is unchanged as a result. (BackendDispatch's header states this intent
+// directly: the runtime floor is carried only by programs that need it.)
+//
+// It asks the MAXON module rather than the Std one because the answer is needed at `layOut` time,
+// BEFORE lowering — the `.data` slots must exist before the backend resolves a `globalAddr` label
+// against them. The parser emits the `__mm_alloc` call, so the fact is already present there.
+//
+// A call to any `__mm_*` entry point implies the whole runtime: `__mm_alloc` calls `__slab_alloc`,
+// `__mm_decref` calls `__mm_free`, and the leak check reads the counter the others maintain. There
+// is no useful subset, so there is one question and not four.
+export function moduleUsesHeap(module MaxonModule) returns bool
+	for func in module.functions 'eachFunc'
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise panic("moduleUsesHeap: blockRef from func.blockRefs not in module.blocks")
+			for opIdx in block.opRefs 'eachOp'
+				let op = try module.ops.get(opIdx) otherwise panic("moduleUsesHeap: opIdx {opIdx} not in module.ops")
+				if maxonOpCallsRuntime(op) 'isRuntimeCall'
+					return true
+				end 'isRuntimeCall'
+			end 'eachOp'
+		end 'eachBlock'
+	end 'eachFunc'
+	return false
+end 'moduleUsesHeap'
+
+function maxonOpCallsRuntime(op MaxonOp) returns bool
+	return match op 'op'
+		call(_, callee, _, _, _) gives bytesStartWith(callee, prefix: RuntimeCallPrefix)
+		literal to storeIndirect gives false
+	end 'op'
+end 'maxonOpCallsRuntime'
+
+// The runtime's `.data` slots, appended to the user's declared globals before `layOut` orders them.
+// They are ordinary slots in every respect — `layOut` sorts and offsets them exactly as it does a
+// user's `var`, and the image writer renders them the same way. Nothing here is special-cased.
+export function runtimeGlobals() returns DataSectionEntryArray
+	var out = DataSectionEntryArray.create()
+	out.push(DataSectionEntry.create(String.from(SlabCursorLabel), valueType: StdType.i64, value: 0))
+	out.push(DataSectionEntry.create(String.from(SlabEndLabel), valueType: StdType.i64, value: 0))
+	out.push(DataSectionEntry.create(String.from(MmAllocCountLabel), valueType: StdType.i64, value: 0))
+	return out
+end 'runtimeGlobals'
+
+// A per-function dense ValueId minter. The parser mints ids the same way and for the same reason
+// (ARCHITECTURE → "Value numbering is born here"): a ValueId IS a dense function-local index, so
+// every column the backend sizes by `blockArgIdBound` pays for the highest id minted. Parameters
+// occupy `0..paramCount-1` by construction — the Std `param` op's contract — so the counter starts
+// there rather than at zero.
+type ValueMinter
+	var next as ValueId
+
+	static function create(paramCount ParamCount) returns ValueMinter
+		return Self{next: paramCount}
+	end 'create'
+
+	function mint() returns ValueId
+		let id = self.next
+		self.next = self.next + 1
+		return id
+	end 'mint'
+end 'ValueMinter'
+
+// Install the runtime into the lowered Std module. Called only when `moduleUsesHeap` held.
+//
+// The functions are APPENDED, not prepended: only `mrt_start` must lay out first (its `.text`
+// offset is the PE entry point), and that is `augmentWithRuntime`'s job at the Target tier. Order
+// among the rest is free.
+export function installMmRuntime(module StdModule)
+	buildSlabAlloc(module)
+	buildMmAlloc(module)
+	buildMmIncref(module)
+	buildMmDecref(module)
+	buildMmFree(module)
+	buildMmLeakCheck(module)
+end 'installMmRuntime'
+
+// One i64 parameter — the shape five of the six runtime functions share.
+function oneI64Param() returns StdTypeArray
+	var types = StdTypeArray.create()
+	types.push(StdType.i64)
+	return types
+end 'oneI64Param'
+
+function twoI64Params() returns StdTypeArray
+	var types = StdTypeArray.create()
+	types.push(StdType.i64)
+	types.push(StdType.i64)
+	return types
+end 'twoI64Params'
+
+// Emit the `param` ops an entry block owes. A Std function's parameters are materialized once, at
+// entry, by the op whose `role` is `param` — the backend turns each into the move that captures the
+// incoming ABI register into its virtual register. Parameter `k` is ValueId `k`.
+function emitParams(module StdModule, block IrBlock, count ParamCount)
+	for k in 0 upto count 'each'
+		module.appendOp(block, op: StdOp.param(k as ValueId, index: k, paramType: StdType.i64))
+	end 'each'
+end 'emitParams'
+
+// `__slab_alloc(size) -> ptr` — the bump allocator.
+//
+// ⭐ IT ALWAYS RETURNS ZEROED MEMORY, AND IT PAYS NOTHING FOR IT. `VirtualAlloc(MEM_COMMIT)` hands
+// back zero-filled pages, and a bump slot has never been handed out before, so it is still
+// pristine — the region `[cursor, end)` is zero by construction and stays that way because nothing
+// ever writes into it before it is claimed. The guarantee is the ALLOCATOR's, not each caller's.
+//
+// ⚠⚠ THAT TRUST IS UNPAID-FOR DEBT THE DAY MEMORY IS RECYCLED. A slot returned to a free list holds
+// the previous occupant's bytes, and threading an intrusive free-list link through a fresh span
+// would dirty EVERY slot in it — which is precisely why there is no eager free list here. Leaving
+// the bump region pristine is the PRECONDITION for zero-elision, not an optimization. Whoever adds
+// recycling must memzero on the free-list path, or `Point.create` starts reading a dead object's
+// bytes. Non-zeroing alloc cost v1 three separately root-caused bugs, each "fixed" by bolting a
+// zeroing loop onto the caller. See ARCHITECTURE.md → "Allocator: the zeroing contract".
+function buildSlabAlloc(module StdModule)
+	var func = IrFunction.createFromStd(SlabAllocName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var grow = module.addBlock(func, label: b"grow")
+	var bump = module.addBlock(func, label: b"bump")
+
+	emitParams(module, block: entry, count: 1)
+	let size = 0 as ValueId
+
+	// `cursorAddr` and `endAddr` are computed once in the entry block and read in BOTH successors —
+	// ordinary SSA, since entry dominates them. `globalAddr` is `isPure: true` and freely
+	// rematerializable, so the allocator may choose to recompute rather than keep them live; that
+	// is its decision to make, and hoisting the address here is what lets it make one.
+	let cursorAddr = ids.mint()
+	module.appendOp(entry, op: StdOp.globalAddr(cursorAddr, label: SlabCursorLabel))
+	let cursor = ids.mint()
+	module.appendOp(entry, op: StdOp.loadIndirect(cursor, addrId: cursorAddr, offset: 0, valueType: StdType.i64))
+	let next = ids.mint()
+	module.appendOp(entry, op: StdOp.binOp(next, lhs: cursor, rhs: size, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	let endAddr = ids.mint()
+	module.appendOp(entry, op: StdOp.globalAddr(endAddr, label: SlabEndLabel))
+	let arenaEnd = ids.mint()
+	module.appendOp(entry, op: StdOp.loadIndirect(arenaEnd, addrId: endAddr, offset: 0, valueType: StdType.i64))
+	// A SIGNED compare over two ADDRESSES is correct here, and it is worth saying why rather than
+	// leaving it to look like an oversight: `StdTypeInfo` records no signedness, so every Std
+	// integer compare takes the signed family. User-mode addresses never set the high bit, so the
+	// signed and unsigned orderings agree on every value this can hold.
+	let exhausted = ids.mint()
+	module.appendOp(entry, op: StdOp.cmp(exhausted, lhs: next, rhs: arenaEnd, pred: StdCmpPred.gt, operandType: StdType.i64))
+	module.setTerminator(entry, op: StdOp.condBranch(exhausted, thenBlockId: grow.id, elseBlockId: bump.id))
+
+	// Grow: commit a fresh arena and serve this request from its base.
+	//
+	// The request is `size + ArenaBytes`, which ALWAYS fits the allocation whatever its size — no
+	// `max`, no second branch, and no unserviceable request. The cost is at most one arena of
+	// over-commit on an oversized allocation; the alternative was a branch on every grow to answer
+	// a question a single `add` answers unconditionally.
+	let arenaConst = ids.mint()
+	module.appendOp(grow, op: StdOp.const(arenaConst, value: ArenaBytes, valueType: StdType.i64))
+	let total = ids.mint()
+	module.appendOp(grow, op: StdOp.binOp(total, lhs: size, rhs: arenaConst, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	let base = ids.mint()
+	module.appendOp(grow, op: StdOp.osAllocPages(base, sizeId: total))
+	let newCursor = ids.mint()
+	module.appendOp(grow, op: StdOp.binOp(newCursor, lhs: base, rhs: size, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	module.appendOp(grow, op: StdOp.storeIndirect(cursorAddr, offset: 0, valueId: newCursor, valueType: StdType.i64))
+	let newEnd = ids.mint()
+	module.appendOp(grow, op: StdOp.binOp(newEnd, lhs: base, rhs: total, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	module.appendOp(grow, op: StdOp.storeIndirect(endAddr, offset: 0, valueId: newEnd, valueType: StdType.i64))
+	module.setTerminator(grow, op: StdOp.ret(base))
+
+	// Bump: the request fits the current arena. Publish the advanced cursor, return the old one.
+	module.appendOp(bump, op: StdOp.storeIndirect(cursorAddr, offset: 0, valueId: next, valueType: StdType.i64))
+	module.setTerminator(bump, op: StdOp.ret(cursor))
+
+	module.functions.push(func)
+end 'buildSlabAlloc'
+
+// `__mm_alloc(size, destructor) -> ptr` — a managed box: a header plus `size` bytes of payload.
+//
+// The returned pointer addresses the PAYLOAD, so a struct's field `i` is at `[ptr + i*8]` and the
+// header is invisible to every consumer. `destructor` is stored for `__mm_free` to find; for a
+// trivially-owned struct it is **0**, and that is not a placeholder — nothing about a struct of
+// scalars needs to run at death, so there is no function to point at. (Synthesizing an empty one
+// just to have a non-null pointer would be a function with no reason to exist.) The op pair that
+// TAKES a function's address and CALLS one through a register — `funcAddr`/`callIndirect` — is
+// therefore deferred to P1.2, where `__destruct_String` is a real consumer with a real reason to
+// be right: a String that does not free its buffer leaks, and the leak gate below says so.
+function buildMmAlloc(module StdModule)
+	var func = IrFunction.createFromStd(MmAllocName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry")
+	emitParams(module, block: entry, count: 2)
+	let size = 0 as ValueId
+	let destructor = 1 as ValueId
+
+	let headerConst = ids.mint()
+	module.appendOp(entry, op: StdOp.const(headerConst, value: HeaderBytes, valueType: StdType.i64))
+	let total = ids.mint()
+	module.appendOp(entry, op: StdOp.binOp(total, lhs: size, rhs: headerConst, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	let base = ids.mint()
+	module.appendOp(entry, op: StdOp.call(base, callee: SlabAllocName, args: argsOf(total)))
+
+	module.appendOp(entry, op: StdOp.storeIndirect(base, offset: HeaderDestructorOffset, valueId: destructor, valueType: StdType.i64))
+	module.appendOp(entry, op: StdOp.storeIndirect(base, offset: HeaderSizeOffset, valueId: size, valueType: StdType.i64))
+	// ⭐ THE REFCOUNT IS NOT WRITTEN, AND ITS ABSENCE IS THE ZEROING CONTRACT DOING ITS JOB. The
+	// slab guarantees zeroed memory, and 0 is exactly the initial refcount this model wants (see
+	// `__mm_decref` — 0 means ONE owner). Storing it anyway would be the caller re-establishing a
+	// guarantee the allocator already makes, which is the precise habit that let v1's non-zeroing
+	// slab survive three bugs: every call site "handled" it locally, so nobody fixed the allocator.
+	// If this line ever becomes necessary, the allocator is broken, not this function.
+
+	let countAddr = ids.mint()
+	module.appendOp(entry, op: StdOp.globalAddr(countAddr, label: MmAllocCountLabel))
+	let count = ids.mint()
+	module.appendOp(entry, op: StdOp.loadIndirect(count, addrId: countAddr, offset: 0, valueType: StdType.i64))
+	let oneConst = ids.mint()
+	module.appendOp(entry, op: StdOp.const(oneConst, value: 1, valueType: StdType.i64))
+	let raised = ids.mint()
+	module.appendOp(entry, op: StdOp.binOp(raised, lhs: count, rhs: oneConst, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	module.appendOp(entry, op: StdOp.storeIndirect(countAddr, offset: 0, valueId: raised, valueType: StdType.i64))
+
+	let payload = ids.mint()
+	module.appendOp(entry, op: StdOp.binOp(payload, lhs: base, rhs: headerConst, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	module.setTerminator(entry, op: StdOp.ret(payload))
+
+	module.functions.push(func)
+end 'buildMmAlloc'
+
+// `__mm_incref(ptr)` — one more owner.
+//
+// ⚠⚠ NON-ATOMIC, DELIBERATELY, AND THIS COMMENT IS THE DECISION RATHER THAN ITS ABSENCE. The
+// bootstrap's refcount is `LOCK INC` because it must be; shv2 is SINGLE-THREADED until **R3 @
+// P1.5** brings green threads, and a plain `add` is the whole cost until then. **THE DAY GREEN
+// THREADS LAND, THIS AND `__mm_decref` MUST BECOME `LOCK`-PREFIXED** — a shared box refcounted by
+// two threads with a plain read-modify-write loses updates and frees a live object, which is a
+// use-after-free that no test reproduces reliably. It is written here so that day is reached by
+// READING rather than by a race. (PLAN.md's R1 box exists to stop inertia making this call quietly;
+// this is the call, made out loud.)
+function buildMmIncref(module StdModule)
+	var func = IrFunction.createFromStd(MmIncrefName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	emitParams(module, block: entry, count: 1)
+	let ptr = 0 as ValueId
+
+	let header = emitHeaderBase(module, block: entry, ptr: ptr, ids: ids)
+	let rc = ids.mint()
+	module.appendOp(entry, op: StdOp.loadIndirect(rc, addrId: header, offset: HeaderRefcountOffset, valueType: StdType.i64))
+	let oneConst = ids.mint()
+	module.appendOp(entry, op: StdOp.const(oneConst, value: 1, valueType: StdType.i64))
+	let raised = ids.mint()
+	module.appendOp(entry, op: StdOp.binOp(raised, lhs: rc, rhs: oneConst, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	module.appendOp(entry, op: StdOp.storeIndirect(header, offset: HeaderRefcountOffset, valueId: raised, valueType: StdType.i64))
+	module.setTerminator(entry, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildMmIncref'
+
+// `__mm_decref(ptr)` — one fewer owner; free at the last.
+//
+// ⭐ THE REFCOUNT IS `owners - 1`, NOT `owners`, AND THAT IS WHY `__mm_alloc` WRITES NOTHING. A box
+// is born at refcount 0 meaning ONE owner, so the overwhelmingly common case — allocate, use, drop
+// — touches the refcount word exactly once, on the way out, and never on the way in. It is v1's
+// model. The cost is that "is this the last owner?" reads `rc == 0` rather than `rc == 1`, which
+// looks like an off-by-one every time it is read and is not one.
+//
+// ⚠ There is no underflow check. A decref below zero means the compiler emitted more drops than
+// owners, which is an OWNERSHIP bug, not a runtime condition — and at this rung the parser is the
+// only thing that emits a drop. The bootstrap panics here ("double-free"); shv2 gets the same
+// signal for free from the leak counter going negative, which the exit check reads as nonzero.
+function buildMmDecref(module StdModule)
+	var func = IrFunction.createFromStd(MmDecrefName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var release = module.addBlock(func, label: b"release")
+	var lower = module.addBlock(func, label: b"lower")
+
+	emitParams(module, block: entry, count: 1)
+	let ptr = 0 as ValueId
+
+	let header = emitHeaderBase(module, block: entry, ptr: ptr, ids: ids)
+	let rc = ids.mint()
+	module.appendOp(entry, op: StdOp.loadIndirect(rc, addrId: header, offset: HeaderRefcountOffset, valueType: StdType.i64))
+	let zeroConst = ids.mint()
+	module.appendOp(entry, op: StdOp.const(zeroConst, value: 0, valueType: StdType.i64))
+	let isLast = ids.mint()
+	module.appendOp(entry, op: StdOp.cmp(isLast, lhs: rc, rhs: zeroConst, pred: StdCmpPred.eq, operandType: StdType.i64))
+	module.setTerminator(entry, op: StdOp.condBranch(isLast, thenBlockId: release.id, elseBlockId: lower.id))
+
+	let freed = ids.mint()
+	module.appendOp(release, op: StdOp.call(freed, callee: MmFreeName, args: argsOf(ptr)))
+	module.setTerminator(release, op: StdOp.retVoid)
+
+	let oneConst = ids.mint()
+	module.appendOp(lower, op: StdOp.const(oneConst, value: 1, valueType: StdType.i64))
+	let lowered = ids.mint()
+	module.appendOp(lower, op: StdOp.binOp(lowered, lhs: rc, rhs: oneConst, opcode: StdBinOpcode.sub, operandType: StdType.i64))
+	module.appendOp(lower, op: StdOp.storeIndirect(header, offset: HeaderRefcountOffset, valueId: lowered, valueType: StdType.i64))
+	module.setTerminator(lower, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildMmDecref'
+
+// `__mm_free(ptr)` — the death of a box.
+//
+// It reclaims NOTHING, and that is the honest shape of a bump allocator rather than a gap: there is
+// no free list for a slot to return to, so the memory stays where it is until the process exits.
+// What it does do is the part that is observable — drop the live count — which is what the leak
+// gate reads.
+//
+// ⭐ THIS IS WHERE THE DESTRUCTOR CASCADE LANDS AT P1.2. The header already carries the destructor
+// (`__mm_alloc` stored it), so the change is local: load `[header + HeaderDestructorOffset]`, and
+// if it is non-null, call it through `callIndirect` before reclaiming. It is NOT written now
+// because every struct at this rung is trivially owned, so the pointer is always 0 and the call
+// would be code that no test can execute — emitted, never taken, and never proven right. That is
+// the `mintPhi` failure exactly, and it is the reason this rung ships one op instead of three.
+function buildMmFree(module StdModule)
+	var func = IrFunction.createFromStd(MmFreeName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	emitParams(module, block: entry, count: 1)
+
+	let countAddr = ids.mint()
+	module.appendOp(entry, op: StdOp.globalAddr(countAddr, label: MmAllocCountLabel))
+	let count = ids.mint()
+	module.appendOp(entry, op: StdOp.loadIndirect(count, addrId: countAddr, offset: 0, valueType: StdType.i64))
+	let oneConst = ids.mint()
+	module.appendOp(entry, op: StdOp.const(oneConst, value: 1, valueType: StdType.i64))
+	let lowered = ids.mint()
+	module.appendOp(entry, op: StdOp.binOp(lowered, lhs: count, rhs: oneConst, opcode: StdBinOpcode.sub, operandType: StdType.i64))
+	module.appendOp(entry, op: StdOp.storeIndirect(countAddr, offset: 0, valueId: lowered, valueType: StdType.i64))
+	module.setTerminator(entry, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildMmFree'
+
+// `__mm_leak_check(exitCode) -> exitCode` — the gate.
+//
+// ⭐ IT TAKES AND RETURNS THE EXIT CODE, which is what lets it sit on the exit path as a plain
+// function rather than as a special case inside `mrt_start`. A clean program's code passes through
+// untouched; a leaked one's is REPLACED by 101. The bootstrap's `mm_leak_check(exit_code)` has the
+// same shape for the same reason.
+//
+// It is a Std function and not hand-assembled bytes because it needs nothing a Std function lacks:
+// a load, a compare, and two returns. It notably does NOT need to call `ExitProcess` — returning
+// the code to `mrt_start`, which already makes that call, keeps the one OS-exit path in one place.
+function buildMmLeakCheck(module StdModule)
+	var func = IrFunction.createFromStd(MmLeakCheckName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var leaked = module.addBlock(func, label: b"leaked")
+	var clean = module.addBlock(func, label: b"clean")
+
+	emitParams(module, block: entry, count: 1)
+	let exitCode = 0 as ValueId
+
+	let countAddr = ids.mint()
+	module.appendOp(entry, op: StdOp.globalAddr(countAddr, label: MmAllocCountLabel))
+	let count = ids.mint()
+	module.appendOp(entry, op: StdOp.loadIndirect(count, addrId: countAddr, offset: 0, valueType: StdType.i64))
+	let zeroConst = ids.mint()
+	module.appendOp(entry, op: StdOp.const(zeroConst, value: 0, valueType: StdType.i64))
+	// `!= 0` and not `> 0`: an over-release drives the count NEGATIVE, and a gate that only caught
+	// under-release would report a clean run for a compiler emitting too many drops — the more
+	// dangerous of the two bugs, since it is a use-after-free waiting for a free list to exist.
+	let isLeaked = ids.mint()
+	module.appendOp(entry, op: StdOp.cmp(isLeaked, lhs: count, rhs: zeroConst, pred: StdCmpPred.ne, operandType: StdType.i64))
+	module.setTerminator(entry, op: StdOp.condBranch(isLeaked, thenBlockId: leaked.id, elseBlockId: clean.id))
+
+	let leakConst = ids.mint()
+	module.appendOp(leaked, op: StdOp.const(leakConst, value: LeakExitCode, valueType: StdType.i64))
+	module.setTerminator(leaked, op: StdOp.ret(leakConst))
+
+	module.setTerminator(clean, op: StdOp.ret(exitCode))
+
+	module.functions.push(func)
+end 'buildMmLeakCheck'
+
+// `ptr - HeaderBytes` — the header's base address. Every header access goes through it, so the one
+// place the payload/header relationship is expressed is here. See the header-layout note above for
+// why this is a subtraction rather than a negative `loadIndirect` offset.
+function emitHeaderBase(module StdModule, block IrBlock, ptr ValueId, ids ValueMinter) returns ValueId
+	let headerConst = ids.mint()
+	module.appendOp(block, op: StdOp.const(headerConst, value: HeaderBytes, valueType: StdType.i64))
+	let header = ids.mint()
+	module.appendOp(block, op: StdOp.binOp(header, lhs: ptr, rhs: headerConst, opcode: StdBinOpcode.sub, operandType: StdType.i64))
+	return header
+end 'emitHeaderBase'
+
+function argsOf(only ValueId) returns ValueIdArray
+	var args = ValueIdArray.create()
+	args.push(only)
+	return args
+end 'argsOf'

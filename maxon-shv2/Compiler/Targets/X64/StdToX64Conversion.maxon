@@ -78,6 +78,18 @@ end 'constMaterializationOp'
 // milestone), which the parser rejects up front (see `MaxRegisterParams`).
 let argRegisters = [X64Register.rcx, X64Register.rdx, X64Register.rax, X64Register.r9, X64Register.rsi, X64Register.rdi]
 
+// The `VirtualAlloc` call shape `lowerOsAllocPages` emits. Named rather than spelled as bare
+// hex at the call site: `0x3000` is unreadable and `MEM_COMMIT|MEM_RESERVE` is the fact.
+//
+// ⭐ `MEM_COMMIT` IS WHAT MAKES THE ZEROING CONTRACT TRUE. Windows guarantees newly-committed
+// pages are zero-filled, which is the entire basis for `__slab_alloc` handing out bump slots
+// without memzeroing them (ARCHITECTURE.md → "Allocator: the zeroing contract"). Reserving
+// without committing would hand back untouched address space, and the first read of a bump slot
+// would fault rather than answer 0. The two flags travel together for that reason.
+let VirtualAllocLetOsChooseBase = 0x0
+let VirtualAllocCommitAndReserve = 0x3000  // MEM_COMMIT (0x1000) | MEM_RESERVE (0x2000)
+let VirtualAllocPageReadWrite = 0x4        // PAGE_READWRITE
+
 // The physical register argument `index` occupies. An index past the register file is
 // a parser-cap violation (parseFunctionParameters rejects >6 parameters), so it is a
 // compiler-invariant break here, not a user error.
@@ -569,6 +581,9 @@ type StdToX64Lowering
 			// An ADDRESS is an integer, whatever the global holds.
 			globalAddr(resultId, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 			loadIndirect(resultId, _, _, valueType) then setValueClass(column, valueId: resultId, class: regClassForStdType(valueType))
+			// Same reasoning as `globalAddr`: a page base is an address, so it is an integer. It can
+			// never be float-classed, which is why it needs no `regClassForStdType` lookup.
+			osAllocPages(resultId, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 			// The ops that define NOTHING. Each is named individually rather than collapsed into a
 			// range, and that is not verbosity: `StdOp`'s declaration order is
 			// `… mod, condBranch, branch, ret, param, call, retVoid, globalAddr …`, so the tempting
@@ -754,7 +769,7 @@ type StdToX64Lowering
 			match term 'term'
 				condBranch(condId, _, _) then self.recordFusableCompare(block, condId: condId, fused: fused, floatCmps: floatCmps)
 				const to mod then break 'term'
-				branch to storeIndirect then break 'term'
+				branch to osAllocPages then break 'term'
 			end 'term'
 		end 'eachBlock'
 	end 'computeFusedCmps'
@@ -787,11 +802,17 @@ type StdToX64Lowering
 				cmpImm(defId, _, _, pred) then fuseIfDefines(fused, floatCmps: floatCmps, defId: defId, condId: condId, pred: pred, operandType: StdType.i64)
 				const to unaryOp then break 'isTheCompare'
 				binOpImm then break 'isTheCompare'
-				// Extended past `retVoid` to take in the memory band. It is reached only for an op
-				// that already answered `clobbersFlags: true`, and no memory op does — so these arms
-				// are unreachable in practice and must still be NAMED rather than swallowed: the day
-				// a flag-writing memory op exists, "is it the compare?" is a question to answer here.
-				div to storeIndirect then break 'isTheCompare'
+				// Extended past `retVoid` to take in the memory band, and past `storeIndirect` to take in
+				// the system band. It is reached only for an op that already answered `clobbersFlags:
+				// true`, and no memory op does — so the memory arms are unreachable in practice and must
+				// still be NAMED rather than swallowed: the day a flag-writing memory op exists, "is it
+				// the compare?" is a question to answer here.
+				//
+				// ⚠ `osAllocPages` is NOT in that unreachable set — it declares `clobbersFlags: true`, so it
+				// genuinely lands here as the last flag-writer before a branch, exactly as `call` already
+				// does. `break` is the right answer for the same reason it is for a call: it is not the
+				// compare, so the scan stops and no fusion is recorded. Declining a fusion is always safe.
+				div to osAllocPages then break 'isTheCompare'
 			end 'isTheCompare'
 			return
 		end 'scanBackward'
@@ -853,7 +874,7 @@ type StdToX64Lowering
 		return match term 'term'
 			condBranch(condId, _, _) gives self.cmpPreds.contains(condId)
 			const to mod gives false
-			branch to storeIndirect gives false
+			branch to osAllocPages gives false
 		end 'term'
 	end 'terminatorReadsFusedFlags'
 
@@ -879,6 +900,7 @@ type StdToX64Lowering
 			globalAddr(resultId, label) then self.lowerGlobalAddr(resultId, label: label, dstBlock: dstBlock)
 			loadIndirect(resultId, addrId, offset, valueType) then self.lowerLoadIndirect(resultId, addrId: addrId, offset: offset, valueType: valueType, dstBlock: dstBlock)
 			storeIndirect(addrId, offset, valueId, valueType) then self.lowerStoreIndirect(addrId, offset: offset, valueId: valueId, valueType: valueType, dstBlock: dstBlock)
+			osAllocPages(resultId, sizeId) then self.lowerOsAllocPages(resultId, sizeId: sizeId, dstBlock: dstBlock)
 		end 'lower'
 	end 'lowerBodyOp'
 
@@ -903,6 +925,7 @@ type StdToX64Lowering
 			param then panic("lowerStdToX64: a `param` op appeared as a block terminator (lowering bug — a parameter is an entry body op)")
 			call then panic("lowerStdToX64: a `call` op appeared as a block terminator (lowering bug — a call is a body op)")
 			globalAddr to storeIndirect then panic("lowerStdToX64: a memory-band op appeared as a block terminator (lowering bug — a global's address, load and store are all body ops)")
+			osAllocPages then panic("lowerStdToX64: an `osAllocPages` op appeared as a block terminator (lowering bug — a page allocation is a body op)")
 		end 'lower'
 	end 'lowerTerminatorOp'
 
@@ -1232,6 +1255,30 @@ type StdToX64Lowering
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(X64VReg.virtual(resultId), srcReg: X64VReg.physical(X64Register.r8)))
 	end 'lowerCall'
 
+	// Lower `osAllocPages` to the x64-windows page source: `VirtualAlloc(NULL, size,
+	// MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE)` through the IAT.
+	//
+	// ⭐ THIS IS THE ONLY PLACE THE TWO ABIs MEET, and that is why `osAllocPages` is its own op
+	// rather than a `call` with a funny callee. `lowerCall` moves arguments through Maxon's CUSTOM
+	// ABI (`argRegisters` = rcx, rdx, **rax**, r9, …) and reads the result out of **R8**. Win64 is
+	// neither: its integer arguments are rcx, rdx, **r8**, r9 and its result comes back in **RAX**.
+	// The two disagree in exactly the places that matter here — argument 3 and the return register —
+	// so routing this through `lowerCall` would put the allocation flags in the wrong register and
+	// then read the size back as the base address. Both ABIs are spelled out where they are used.
+	//
+	// The Std tier never learns any of this: it asked for PAGES. `VirtualAlloc` is named only as
+	// `IatSlot.VirtualAlloc`, whose spelling and import live in `Targets/Windows/PeWriter.maxon`.
+	function lowerOsAllocPages(resultId ValueId, sizeId ValueId, dstBlock IrBlock)
+		// lpAddress = NULL: the OS picks the base. A zeroed rcx is the request, not a missing argument.
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(X64VReg.physical(X64Register.rcx), value: VirtualAllocLetOsChooseBase))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(X64VReg.physical(X64Register.rdx), srcReg: X64VReg.virtual(sizeId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(X64VReg.physical(X64Register.r8), value: VirtualAllocCommitAndReserve))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(X64VReg.physical(X64Register.r9), value: VirtualAllocPageReadWrite))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.VirtualAlloc)))
+		// RAX, not R8 — see above. This single line is the whole reason the op exists.
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(X64VReg.virtual(resultId), srcReg: X64VReg.physical(X64Register.rax)))
+	end 'lowerOsAllocPages'
+
 	// Lower a Std `cmpImm` (constant right operand) to `cmp reg, imm32` — the same two-part
 	// protocol `lowerCmp` uses, so the fold that moved the right operand into an immediate
 	// changes only the compare INSTRUCTION, never what the compare MEANS. The literal
@@ -1552,7 +1599,7 @@ type StdToX64Lowering
 		return match term 'term'
 			condBranch(condId, _, _) gives self.settleFloatEqualityCondition(condId)
 			const to mod gives false
-			branch to storeIndirect gives false
+			branch to osAllocPages gives false
 		end 'term'
 	end 'settleFloatEqualityBranch'
 
@@ -1683,7 +1730,7 @@ type StdToX64Lowering
 		return match term 'term'
 			condBranch(condId, thenBlockId, elseBlockId) gives (condId, thenBlockId, elseBlockId)
 			const to mod panic("condBranchFieldsOf: the terminator of block ref {blockRef} is not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
-			branch to storeIndirect panic("condBranchFieldsOf: the terminator of block ref {blockRef} is not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
+			branch to osAllocPages panic("condBranchFieldsOf: the terminator of block ref {blockRef} is not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 		end 'term'
 	end 'condBranchFieldsOf'
 

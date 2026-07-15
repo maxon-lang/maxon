@@ -144,7 +144,25 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// Same discipline as `resetMergeTargets` — the arena is the source of truth, the derived table
 	// is rebuilt from it.
 	let signatures = try queryProgramSignatures(project)
-	project.globalData.layOut(signatures.declaredGlobals())
+
+	// ⭐ THE HEAP IS CARRIED ONLY BY PROGRAMS THAT REACH IT (P1.0r). A `return 42` program
+	// allocates nothing, so it gets no allocator, no `.data` slots and no leak check — and its
+	// committed golden is byte-for-byte what it was before this rung existed. That is not an
+	// optimization, it is what BackendDispatch's header already promised: the runtime floor GROWS
+	// with the program's needs rather than being unconditional.
+	//
+	// The question is asked of the MAXON module because the answer is needed HERE, before the
+	// layout — the `.data` slots must exist before the backend resolves a `globalAddr` against
+	// them. The parser has already emitted the `__mm_alloc` call by this point, so the fact is
+	// available one tier up from where it is consumed.
+	let usesHeap = moduleUsesHeap(module)
+	var declaredGlobals = signatures.declaredGlobals()
+	if usesHeap 'heapGlobals'
+		for entry in runtimeGlobals() 'each'
+			declaredGlobals.push(entry)
+		end 'each'
+	end 'heapGlobals'
+	project.globalData.layOut(declaredGlobals)
 
 	var pipeline = PassPipeline.create(project, maxonModule: module)
 	pipeline.addPasses(buildDefaultPipeline())
@@ -152,6 +170,15 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 		printDiagnostics(project)
 		throw CompileError.compileError
 	end 'pipelineFailed'
+
+	// AFTER the pipeline: the runtime is already lowered Std, so it must not be re-lowered, and it
+	// is deliberately not exposed to the Std optimization passes — it is hand-built at the tier
+	// they run on, and `foldConstOperands` would only re-derive folds it already has. It still
+	// flows through the WHOLE backend (ISel, register allocation, frames), which is the entire
+	// argument for building it as `StdOp`s rather than as bytes.
+	if usesHeap 'installRuntime'
+		installMmRuntime(pipeline.stdModule)
+	end 'installRuntime'
 
 	// The backend owns its own error gate now: the register allocator reports E5001
 	// (register pressure) onto `project.diagnostics` and throws when a loop genuinely

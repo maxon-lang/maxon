@@ -93,7 +93,9 @@ function stdConstInfo(op StdOp) returns StdConstInfo
 		// has replaced it. Folding a load into its initializer would be the same wrong answer
 		// `loadIndirect`'s `isPure: false` prevents a hoist from producing, reached by a different
 		// road: `var counter = 0` … `counter = 42` … `return counter` would return 0.
-		binOp to storeIndirect gives StdConstInfo.notConst
+		// Extended past `storeIndirect` to take in the system band. An allocation's result is an
+		// ADDRESS the OS chooses at run time — the least constant value in the language.
+		binOp to osAllocPages gives StdConstInfo.notConst
 	end 'c'
 end 'stdConstInfo'
 
@@ -160,7 +162,10 @@ function tryFold(op StdOp, constMap ConstValueMap) returns FoldResult
 		// its own operand model, splitter and colorer arms, to save one `mov` per constant store.
 		// Priced and not taken — the same call `binOpImm` made in reverse, where the win was every
 		// literal in every expression rather than the initializing store of a global.
-		binOpImm to storeIndirect gives FoldResult.unchanged
+		// Extended past `storeIndirect` to take in the system band. `osAllocPages` has no immediate
+		// form to fold INTO: its size reaches the OS in a register whatever wrote it, so a constant
+		// size buys nothing here — unlike `binOp`, where the immediate removes a register entirely.
+		binOpImm to osAllocPages gives FoldResult.unchanged
 	end 'f'
 end 'tryFold'
 

@@ -120,8 +120,21 @@ export function augmentWithRuntime(module TargetModule, target Target)
 	if target.os != Os.windows 'unsupportedOs'
 		panic("augmentWithRuntime: maxon-shv2 M1 emits an entry stub for x64-windows only (got {targetToString(target)})")
 	end 'unsupportedOs'
-	prependEntryStub(module)
+	prependEntryStub(module, checkLeaks: moduleHasFunction(module, name: MmLeakCheckName))
 end 'augmentWithRuntime'
+
+// Whether the MM runtime was installed — i.e. whether the program reaches the heap at all. The
+// entry stub asks the MODULE rather than being told, because by this point the module IS the
+// answer: `installMmRuntime` put the function there, and a second flag threaded down from
+// `compileToCodeResult` would be the same fact written down twice, free to disagree.
+function moduleHasFunction(module TargetModule, name ByteArray) returns bool
+	for func in module.functions 'eachFunc'
+		if func.name == name 'found'
+			return true
+		end 'found'
+	end 'eachFunc'
+	return false
+end 'moduleHasFunction'
 
 // Build `mrt_start` and lay it out FIRST so its `.text` offset is the PE entry
 // point. The stub bridges Maxon's custom ABI (primary return in R8) to Win64's
@@ -144,7 +157,7 @@ end 'augmentWithRuntime'
 // at: `main`'s saved rbp points here, and a walk that arrives with no frame to read stops
 // one frame short of the `in mrt_start` every backtrace in the corpus expects. Its own
 // saved rbp is whatever the loader left, and the walk's `.text` bound is what discards it.
-function prependEntryStub(module TargetModule)
+function prependEntryStub(module TargetModule, checkLeaks bool)
 	var func = IrFunction.createFromStd(EntryPointName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
 	var block = module.addBlock(func, label: b"entry")
 
@@ -153,6 +166,24 @@ function prependEntryStub(module TargetModule)
 	module.appendOp(block, op: TargetOp.prologue(EntryStubFrameBytes))
 	module.appendOp(block, op: TargetOp.callDirect(RuntimeInitName))
 	module.appendOp(block, op: TargetOp.callDirect(UserEntryName))
+
+	// ⭐ THE LEAK GATE (P1.0r) — the one seam on the exit path, and the reason `__mm_decref` has a
+	// reason to be right at all. `main` has returned its ExitCode in R8; `__mm_leak_check` takes
+	// that code and gives back either the same code (nothing outstanding) or 101 (something was
+	// allocated and never freed). Every program that touches the heap therefore checks itself, and
+	// a missing decref is a FAILING TEST rather than an invisible one.
+	//
+	// It sits between `call main` and the ExitProcess bridge because that is the only point where
+	// the program is finished AND has not yet exited. It is skipped entirely for a program with no
+	// allocator, which cannot leak — there is nothing to count.
+	//
+	// The argument goes in RCX and the result comes back in R8: `__mm_leak_check` is an ordinary
+	// Maxon-ABI function (arg 0 = rcx, primary return = r8), not a Win64 import.
+	if checkLeaks 'leakGate'
+		module.appendOp(block, op: TargetOp.movRegReg(X64VReg.physical(X64Register.rcx), srcReg: X64VReg.physical(X64Register.r8)))
+		module.appendOp(block, op: TargetOp.callDirect(MmLeakCheckName))
+	end 'leakGate'
+
 	module.appendOp(block, op: TargetOp.movReg32Reg32(X64VReg.physical(X64Register.rcx), srcReg: X64VReg.physical(X64Register.r8)))
 	module.appendOp(block, op: TargetOp.iatCall(iatSlotIndex(IatSlot.ExitProcess)))
 	module.appendOp(block, op: TargetOp.epilogue(EntryStubFrameBytes))
