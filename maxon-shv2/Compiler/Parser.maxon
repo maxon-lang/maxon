@@ -2688,14 +2688,15 @@ export type Parser
 	// at P1.0d.2) the short-circuit merge — so a phi's Maxon-tier type is recorded in
 	// lockstep with its id at all four.
 	//
-	// `IrBlockArg.argType` stays `i64` for every phi, INCLUDING a bool one, and that is not
-	// an oversight: no pass reads the field (grep-verified — it is written here and nowhere
-	// else), and every value the compiler currently handles lives in a 64-bit GPR, so the
-	// declared width changes no code. Making it honest means running the Maxon→Std width
-	// collapse HERE — but `maxonTypeToStdType` panics on a `named` alias, which is exactly
-	// what a phi over a ranged-typealias `var` carries until TypeResolution runs. The field
-	// is the scaffold the float (XMM) register class will need at P1.0d.4, and that is when
-	// it acquires a consumer and a reason to be right.
+	// The `argType` passed here is a PLACEHOLDER, overwritten before anything reads it:
+	// `LowerMaxonToStd.retypeBlockArgs` is the authority and sets every phi's Std type from the tag
+	// column (it explains why the parser is the wrong tier to decide it). A phi's Maxon-tier type is
+	// the `tag` recorded below, and that is the only type this function knows.
+	//
+	// ⚠ NOTHING OVERWROTE IT UNTIL P1.0d.4, AND THAT WAS A COMPILER CRASH: a hardcoded `i64` was
+	// harmless only while every value lived in a GPR, and the day `argType` chose a phi's REGISTER
+	// FILE, a float phi was coloured into a GPR and the SSA-destruction copy panicked the x64
+	// emitter. See `float-phi-*` in specs-shv2/float-type.md.
 	function mintPhi(block IrBlock, tag ValueTypeTag, nameId TypeNameId) returns ValueId
 		let phiId = self.mintValue(tag, nameId: nameId)
 		block.blockArgs.push(IrBlockArg.create(phiId, argType: StdType.i64))
@@ -3392,29 +3393,34 @@ export type Parser
 	// Mirrors emitBinOp but emits the distinct comparison variant (a comparison is not a
 	// `binOp` — see MaxonCmpOp). The source range anchors on the comparison operator.
 	//
-	// A comparison is CLASS-STRICT: both operands must agree (TypeRules' `typesAgree` — the same
-	// decision the word operators ask). Two bools compare fine (`a == b`); two numbers compare
-	// fine; a MIXTURE does not, because the only thing there is to compare is the bool's 0/1
-	// payload, which is not what the source wrote — `4 < flag` is `4 < 1`, i.e. always false.
-	// v1 states the identical rule at TypeResolution.maxon:2726 ("Comparisons are
-	// category-strict: both sides must land in the same CastCategory").
+	// A comparison is STRICT IN BOTH ITS CLASS AND ITS DOMAIN — `TypeRules.comparableOperands`,
+	// which is a third question and not `typesAgree`. Two bools compare fine (`a == b`); two ints
+	// compare; two floats compare. A MIXTURE does not, in either of the two ways a pair can be
+	// mixed:
+	//
+	//   • a bool against a number — the only thing there is to compare is the bool's 0/1 payload,
+	//     which is not what the source wrote: `4 < flag` is `4 < 1`, i.e. always false. v1 states
+	//     the identical rule at TypeResolution.maxon:2726 ("Comparisons are category-strict: both
+	//     sides must land in the same CastCategory").
+	//
+	//   • ⭐ an int against a FLOAT — and this one is the rule that ARITHMETIC does not share.
+	//     `5 + 2.0` promotes and is 7.0; `f > i` is E3005 (specs/contextual-literal-typing.md,
+	//     four cases). A promotion inside a comparison would be INVISIBLE — the result is a bool
+	//     either way, so nothing in the program would show that the int had been converted, and
+	//     `3.5 > i` would silently answer a question about `3.5 > 2.0` nobody asked.
+	//
+	// ⚠ THIS FUNCTION ONCE PROMOTED, and that is exactly the bug P1.0d.4 shipped and then fixed:
+	// the promotion built for `emitBinOp` was routed through here too, because a compare's
+	// operands looked like a binOp's. They are not: one produces a number, the other a verdict.
 	function emitCompare(lhs ValueId, rhs ValueId, op MaxonCmpOp, opTok Token) returns ValueId throws ParseError
 		let leftTag = self.tagOf(lhs)
 		let rightTag = self.tagOf(rhs)
-		if not typesAgree(leftTag, right: rightTag) 'mismatch'
+		if not comparableOperands(leftTag, right: rightTag) 'mismatch'
 			throw ParseError.comparisonTypeMismatch(typeTagName(leftTag), right: typeTagName(rightTag), line: opTok.line, column: opTok.column)
 		end 'mismatch'
 
-		// A comparison promotes exactly as arithmetic does — `pi > 3` compares two f64s, because
-		// `ucomisd` has no mixed form and there is no reading of the pair in which the int stays
-		// an int. The rule cannot be read off a result tag here (a comparison answers `bool`
-		// whatever its operands were), which is why `operandsAreFloat` exists as a PREDICATE
-		// beside `arithResultTag`'s type.
-		let left = self.promotedOperand(lhs, left: leftTag, right: rightTag, opTok: opTok)
-		let right = self.promotedOperand(rhs, left: leftTag, right: rightTag, opTok: opTok)
-
 		let result = self.mintValue(ValueTypeTag.boolean, nameId: UnnamedTypeId)
-		self.artifact.emitOp(self.currentBlock, op: MaxonOp.compare(result, lhs: left, rhs: right, op: op), range: SourceRange.ofToken(opTok))
+		self.artifact.emitOp(self.currentBlock, op: MaxonOp.compare(result, lhs: lhs, rhs: rhs, op: op), range: SourceRange.ofToken(opTok))
 		return result
 	end 'emitCompare'
 
@@ -3796,10 +3802,15 @@ export type Parser
 
 	// A comparison's operands must AGREE — the same class-strict rule `emitCompare` enforces, asked of
 	// the same `typesAgree`, and reported under the same code and text.
+	// The COMPARISON rule, asked of two constants — `comparableOperands`, the same decider
+	// `emitCompare` asks, so `let X = 3.5 > 2` and `f > i` in a body cannot come to disagree about
+	// whether a float may be compared with an int. It used to ask `typesAgree`, which admits the
+	// pair (float and int agree, and must), and so would have folded the mixed compare that the
+	// expression path rejects.
 	function requireConstComparable(left ConstValue, right ConstValue, opTok Token) throws ConstEvalError
-		if typesAgree(left.tag, right: right.tag) 'agree'
+		if comparableOperands(left.tag, right: right.tag) 'comparable'
 			return
-		end 'agree'
+		end 'comparable'
 
 		throw ConstEvalError.defective(ParseError.comparisonTypeMismatch(typeTagName(left.tag), right: typeTagName(right.tag), line: opTok.line, column: opTok.column))
 	end 'requireConstComparable'

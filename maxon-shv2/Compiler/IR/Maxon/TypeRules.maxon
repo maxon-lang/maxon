@@ -682,6 +682,50 @@ function arithResultTag(left ValueTypeTag, right ValueTypeTag) returns ValueType
 	return ValueTypeTag.integer
 end 'arithResultTag'
 
+// ⭐⭐ **MAY THESE TWO VALUES BE COMPARED?** — and the answer is NOT `typesAgree`, which is the
+// whole reason this function exists.
+//
+// **ARITHMETIC PROMOTES. A COMPARISON DOES NOT.** `5 + 2.0` is 7.0 — `arithResultTag` promotes the
+// int, and specs-shv2/float-type.md's `float-promotion` pins it. `f > i` is **E3005**, and
+// specs/contextual-literal-typing.md pins THAT, four times over. Both are canonical Maxon and they
+// are not in tension: an arithmetic operator produces a VALUE, and promoting to make one is a
+// conversion the author can see in the result's type; a comparison produces a BOOL, so a promotion
+// inside it is invisible — `3.5 > i` would silently answer a question about `3.5 > 2.0` that the
+// author never asked, and the int's own type would be nowhere in the answer.
+//
+// ⚠ **`typesAgree` CANNOT BE THE LEVER, AND MUST NOT BECOME IT.** An int and a float AGREE, and
+// they have to — `5 + 2.0` would not compile otherwise. Agreement is a CLASS question; this is a
+// DOMAIN question, and they are the third distinct question this file now answers about one pair
+// of tags (`typesAgree` for an operator's two operands, `checkDeclaredType` for a value meeting a
+// declared type, this for a comparison). Collapsing any two of them re-breaks the other.
+//
+// ⚠ AND IT IS THE MIRROR OF `checkDeclaredType`, NOT THE SAME RULE. There, a float meeting a
+// declared int is rejected in ONE direction (int → float is fine, being lossless). Here NEITHER
+// direction converts. They look alike and unifying them would silently re-legalise `f > i` or
+// re-break `takeFloat(5)`.
+//
+// P1.0d.4 INTRODUCED this bug and this is the fix: before floats, a mixed compare was unreachable,
+// and the promotion added for arithmetic reached `emitCompare` because both went through one
+// helper.
+export function comparableOperands(left ValueTypeTag, right ValueTypeTag) returns bool
+	if not typesAgree(left, right: right) 'disagree'
+		return false
+	end 'disagree'
+
+	// An `unresolved` operand DEFERS here exactly as it does in `typesAgree` — it is a call to a
+	// function no file declares, the program is already E3004 and never reaches codegen, and
+	// naming a DOMAIN for a type nobody could pin would report a second, invented diagnostic for
+	// it. Tested before the domain compare because `tagIsFloat(unresolved)` is `false`, which
+	// would otherwise read as "an integer" and reject `unknown() > 3.5`.
+	if tagIsUnresolved(left) or tagIsUnresolved(right) 'defer'
+		return true
+	end 'defer'
+
+	// Two floats compare; two integers compare; two bools compare (they agreed, and neither is a
+	// float). One of each does not.
+	return tagIsFloat(left) == tagIsFloat(right)
+end 'comparableOperands'
+
 // **DO THESE TWO OPERANDS MEET IN THE FLOAT DOMAIN?** The promotion rule asked as a yes/no, and
 // THE one place the "either side" half of it is written down.
 //
