@@ -32,8 +32,15 @@ export enum EdgePlacement
 end 'EdgePlacement'
 
 // One edge's parallel copy, sequenced into ordered physical moves. `moveDsts[i]` ←
-// `moveSrcs[i]` is a `mov` unless `moveIsSwap[i]` (an `xchg` breaking a cycle). All
-// values are physical register NUMBERS (0..15).
+// `moveSrcs[i]` is a `mov` unless `moveIsSwap[i]` (a SWAP breaking a cycle). All values are
+// physical register NUMBERS (0..31 — GPRs at 0-15, XMMs at 16-31; the width moved with
+// `RegisterFileSize` at P1.0d.4).
+//
+// ⭐ THIS PLAN IS CLASS-AGNOSTIC AND STAYS THAT WAY. A move is a move and a swap is a swap
+// whichever file the register names; which INSTRUCTION each becomes is decided far below, by the
+// encoder, from `regClassOf` of the register (`emitRegRegMove` / `emitRegRegSwap` in X64Backend).
+// That is why floats needed no case here: a `mov` becomes a `movsd`, and a `swap` — which x64
+// has no `xchg` form of for XMMs — becomes a triple-`xorpd`, without this file knowing either.
 export type EdgeMovePlan
 	export var predLocal as CfgIndex
 	export var succLocal as CfgIndex

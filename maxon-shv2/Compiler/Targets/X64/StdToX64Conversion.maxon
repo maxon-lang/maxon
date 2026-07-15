@@ -96,6 +96,17 @@ end 'argRegisterAt'
 // exactly one place (`computeFusedCmps`).
 typealias CmpPredMap = Map with (ValueId, StdCmpPred)
 
+// A block whose float-equality branch was split → the id of the `ordered` block minted for it.
+// See `reserveFloatEqualityBlocks`, which is the only writer, and `lowerCondBranch`, the only
+// reader. A MISS means "this block's branch is not a float equality", which `try/otherwise`
+// says without a sentinel.
+//
+// It holds the block's ID and not its ref on purpose: the walk reads this while holding a live
+// borrow of `targetModule.blocks` (its `dstBlock`), and recovering an id from a ref would need
+// a second borrow of that same array — the thing `moveBranchEdgeToSplit` scopes its helpers
+// apart to avoid. An id is a scalar and needs no borrow at all.
+typealias OrderedBlockIdMap = Map with (BlockRef, BlockId)
+
 // The immediate a boolean condition is tested against. x64 branches on FLAGS, so a
 // condition that is a VALUE (a call's `bool` return, a `param`, a short-circuit merge phi,
 // a materialized compare) must first be compared with zero: `cmp reg, 0` + `jne` is "is it
@@ -109,11 +120,47 @@ let BoolFalseImm = 0 as Imm32
 // this constant can never be applied to one by accident.
 let LogicalNotMask = 1 as Imm32
 
-// Map a Std comparison predicate to the x64 signed condition code. ONE table (not one
-// encoder per predicate), and it drives BOTH consumers of a predicate: the fused `jcc`
-// and the materializing `setcc`. They therefore cannot disagree about what `<` means.
-// Signed conditions throughout — all Std integers are signed i64.
-function condCodeForPred(pred StdCmpPred) returns X64CondCode
+// The two FIXED GPRs a materialized float equality folds its answer through — see
+// `materializeFloatEquality` for why the fold cannot touch a virtual register at all until its
+// single publishing `mov`.
+//
+// NOTHING pins these two in particular: any pair of distinct caller-saved GPRs would serve, so
+// they are named here rather than picked at the use site. RCX and RDX are the pair `lowerShiftCl`
+// and `lowerDivMod` already reach for, which keeps the set of registers this backend pins to
+// fixed roles as small as possible.
+//
+// Writing them is a PHYSICAL DEF, which is what makes them safe: liveness forbids each to every
+// value live ACROSS that write, so the fold cannot destroy anything a later op still needs.
+let FloatEqualityOrderedReg = X64Register.rcx
+let FloatEqualityParityReg = X64Register.rdx
+
+// Map a Std comparison predicate to the x64 condition code its `jcc`/`setcc` tests. ONE table
+// per FAMILY (not one encoder per predicate), and it drives BOTH consumers of a predicate: the
+// fused `jcc` and the materializing `setcc`. They therefore cannot disagree about what `<`
+// means.
+//
+// ⭐ THE FAMILY IS CHOSEN BY THE OPERAND TYPE, NOT BY THE PREDICATE — and it always was. It
+// only looked otherwise while every Std compare was a signed i64. `cmp` on two i64s is a
+// subtraction that answers in OF/SF, which the SIGNED JL/JG family reads. `ucomisd` leaves
+// OF=SF=AF=0 always and answers in ZF/PF/CF — the same three flags an UNSIGNED compare writes
+// — so a float compare branches with the UNSIGNED JB/JA family, and the same `StdCmpPred.less`
+// lowers to `jl` for an i64 and (via the operand swap) `ja` for an f64. A float compare
+// lowered to `jl` would read flags `ucomisd` never wrote.
+// `isFloat` rather than the whole `StdType`, and the distinction is the ONLY thing the operand
+// type decides here — `cmp` vs `ucomisd` is a flag-semantics question, not a width one. Taking
+// the projection lets the FUSED-branch caller answer it from a dense bool column instead of
+// carrying a full type per compare that every reader would throw all but one bit of away (see
+// `fusedFloatCmps`). The contract's point stands unchanged: the family is chosen by the operand
+// type and never by the predicate.
+function condCodeForPred(pred StdCmpPred, isFloat bool) returns X64CondCode
+	if isFloat 'float'
+		return floatCondCodeForPred(pred)
+	end 'float'
+	return signedCondCodeForPred(pred)
+end 'condCodeForPred'
+
+// The SIGNED integer condition codes — every Std integer is a signed i64.
+function signedCondCodeForPred(pred StdCmpPred) returns X64CondCode
 	return match pred 'map'
 		eq gives X64CondCode.equal
 		ne gives X64CondCode.notEqual
@@ -122,7 +169,134 @@ function condCodeForPred(pred StdCmpPred) returns X64CondCode
 		le gives X64CondCode.lessEqual
 		ge gives X64CondCode.greaterEqual
 	end 'map'
-end 'condCodeForPred'
+end 'signedCondCodeForPred'
+
+// The UNSIGNED condition codes — the family `ucomisd` answers in (ZF/PF/CF), and the exact
+// mirror of `signedCondCodeForPred`. `cmp`'s signed family reads OF/SF, which `ucomisd` leaves
+// at 0 always, so a float compare must read this one.
+function unsignedCondCodeForPred(pred StdCmpPred) returns X64CondCode
+	return match pred 'map'
+		eq gives X64CondCode.equal
+		ne gives X64CondCode.notEqual
+		lt gives X64CondCode.below
+		gt gives X64CondCode.above
+		le gives X64CondCode.belowEqual
+		ge gives X64CondCode.aboveEqual
+	end 'map'
+end 'unsignedCondCodeForPred'
+
+// ⭐⭐ THE ONE TABLE THE WHOLE FLOAT COMPARE LOWERING IS DERIVED FROM: the predicate a float
+// compare is ACTUALLY emitted as, once its operands have been put in the order `ucomisd` needs.
+//
+// A float `a < b` is emitted as `ucomisd b, a` + `ja` — i.e. it is lowered AS `b > a`. So this
+// maps `lt` to `gt` and `le` to `ge`, and leaves the other four alone. Both facts the lowering
+// needs fall out of it: WHETHER to swap (`floatCmpSwapsOperands` = "did this table move the
+// predicate?") and WHICH condition code (`floatCondCodeForPred` = the unsigned code OF the
+// swapped predicate). They cannot disagree, because there is only one of them.
+//
+// ⭐ WHY SWAP AT ALL — IT BUYS THE NaN ANSWER FOR NOTHING. IEEE-754 requires every relational
+// predicate be FALSE when either operand is NaN, and `ucomisd` SETS CF on unordered precisely so
+// the `above` family gets that free: `ja` needs CF=0 and `jae` needs CF=0, so both are NOT TAKEN
+// on a NaN — correct, with no parity test. The `below` family is exactly the opposite: `jb` needs
+// CF=1, which unordered SETS, so `a < b` lowered to `jb` would be TAKEN on a NaN and answer TRUE
+// where IEEE demands FALSE. `jbe` is worse still — unordered sets ZF too.
+//
+// ⇒ AND THAT IS NOW STRUCTURAL RATHER THAN REMEMBERED: this table's RANGE never contains `lt` or
+// `le`, so `floatCondCodeForPred` can never produce `below`/`belowEqual`. The NaN-wrong family is
+// UNREACHABLE for floats by construction, not by a rule someone has to keep in mind.
+//
+// `==`/`!=` map to themselves and are not helped: they are SYMMETRIC, so swapping their operands
+// changes nothing at all. They need the parity bit instead.
+//
+// ⚠ A `jb` lowering PASSES the obvious test — `3.5 < 9.5` is true either way. Only a NaN operand
+// tells the two apart, which is what `lt-nan-is-false` exists for.
+function floatCmpEmittedPred(pred StdCmpPred) returns StdCmpPred
+	return match pred 'p'
+		lt gives StdCmpPred.gt
+		le gives StdCmpPred.ge
+		eq gives StdCmpPred.eq
+		ne gives StdCmpPred.ne
+		gt gives StdCmpPred.gt
+		ge gives StdCmpPred.ge
+	end 'p'
+end 'floatCmpEmittedPred'
+
+// The FLOAT condition code: the UNSIGNED code of the predicate actually emitted. DERIVED, so it
+// cannot drift from the operand order — see `floatCmpEmittedPred`.
+//
+// ⚠ `eq`/`ne` ARE NOT COMPLETE ON THEIR OWN. Both alias with UNORDERED — `ucomisd` reports a NaN
+// as ZF=PF=CF=1, which is "equal" in every bit but PF — so the parity bit is a SECOND condition
+// that no single condition code can carry. `lowerFloatEqualityBranch` supplies it as a second
+// BLOCK; `materializeFloatEquality` folds it into the byte. This gives only the ORDERED half of
+// those two, and is wrong if used without the other.
+function floatCondCodeForPred(pred StdCmpPred) returns X64CondCode
+	return unsignedCondCodeForPred(floatCmpEmittedPred(pred))
+end 'floatCondCodeForPred'
+
+// Whether a float compare emits its operands SWAPPED — true exactly when the lowering had to
+// move the predicate to reach the NaN-correct family. DERIVED from the same one table, so the
+// swap and the condition code are one decision and not two that must agree.
+function floatCmpSwapsOperands(pred StdCmpPred) returns bool
+	return floatCmpEmittedPred(pred) != pred
+end 'floatCmpSwapsOperands'
+
+// `==`/`!=` — the two SYMMETRIC predicates, and exactly the two the operand swap cannot help.
+// They are the float compares that need the parity bit, and therefore a second jump.
+function predicateIsEquality(pred StdCmpPred) returns bool
+	return match pred 'p'
+		eq gives true
+		ne gives true
+		lt gives false
+		gt gives false
+		le gives false
+		ge gives false
+	end 'p'
+end 'predicateIsEquality'
+
+// ⚠ THE WHOLE SSE LOWERING IS SCALAR-DOUBLE, AND THIS IS WHERE IT SAYS SO. `movsd`, `addsd`,
+// `divsd`, `ucomisd` and an 8-byte `.rdata` island: every one of them is the `sd` (scalar-double)
+// form. An `f32` is FOUR bytes and needs the `ss` family throughout, so it is a real GAP and not a
+// spelling — and it would fail SILENTLY in the worst place: `lowerFloatConst` sizes its constant
+// island from the TYPE (4 bytes for an f32) while `movsdRegRip` unconditionally loads EIGHT,
+// reading half of whatever constant was laid down next.
+//
+// Nothing produces one — Maxon's `float` IS f64, and `x64AccessWidthFor` says the same thing for
+// the memory band — so this is unreachable today. It is asserted at each float lowering entry
+// anyway, because `stdTypeIsFloat` (the test that routes values here) is true of f32, so the day
+// one exists this fails loudly at the door instead of quietly in the constant pool.
+function requireScalarDouble(t StdType, what String)
+	if t != StdType.f64 'notDouble'
+		panic("{what}: {t.name} reached the SSE lowering, which is scalar-DOUBLE throughout (movsd/addsd/ucomisd + an 8-byte .rdata island) — an f32 needs the `ss` family and a 4-byte island, and would otherwise load 8 bytes out of a 4-byte constant. Maxon's `float` is f64, so nothing produces one.")
+	end 'notDouble'
+end 'requireScalarDouble'
+
+// The parity condition a materialized float equality folds in — the `setcc` that isolates the
+// UNORDERED answer so the other `setcc`'s aliasing can be corrected.
+//
+// `==` wants `setnp` (keep only the ORDERED answers, since `sete` is also true for a NaN); `!=`
+// wants `setp` (ADD the unordered answer, since `setne` is false for a NaN and IEEE says `!=` is
+// true there). See `materializeFloatEquality`.
+function parityCondForEquality(pred StdCmpPred) returns X64CondCode
+	return match pred 'p'
+		eq gives X64CondCode.noParity
+		ne gives X64CondCode.parity
+		lt to ge panic("parityCondForEquality: {pred.name} is an ORDERED float predicate — `ucomisd` sets CF on unordered so the `above` family is already NaN-correct, and there is no parity bit to fold")
+	end 'p'
+end 'parityCondForEquality'
+
+// The successor UNORDERED decides for — the target of the split's FIRST block `jp`.
+//
+// `nan == nan` is FALSE, so an unordered `==` takes the ELSE edge. `nan != nan` is TRUE — IEEE's
+// one predicate that HOLDS on unordered — so an unordered `!=` takes the THEN edge. That is the
+// whole of what the parity jump decides, and it is why the two are mirror images rather than one
+// jump with a different condition code.
+function parityTargetOf(pred StdCmpPred, thenBlockId BlockId, elseBlockId BlockId) returns BlockId
+	return match pred 'p'
+		eq gives elseBlockId
+		ne gives thenBlockId
+		lt to ge panic("parityTargetOf: {pred.name} is an ORDERED float predicate — it is answered by a single `ja`/`jae` on swapped operands and has no parity jump at all (see floatCmpSwapsOperands)")
+	end 'p'
+end 'parityTargetOf'
 
 // Record `condId` as fusable, but only when `pred`'s compare is the one that DEFINES it.
 //
@@ -134,11 +308,17 @@ end 'condCodeForPred'
 // lowers. The first cut of this pass did exactly that, and `scale-test` charged it ~3,500
 // allocations on the SMALLEST rung. So every classifier here either returns a `bool` or
 // writes its answer through an accumulator it is handed, and allocates nothing.
-function fuseIfDefines(fused CmpPredMap, defId ValueId, condId ValueId, pred StdCmpPred)
+// Both columns are written HERE, by this one call, which is what keeps them in lockstep — the
+// predicate and the float-ness of the compare carrying it can never disagree, because nothing
+// can write one without the other.
+function fuseIfDefines(fused CmpPredMap, floatCmps StdValueUseSet, defId ValueId, condId ValueId, pred StdCmpPred, operandType StdType)
 	if defId != condId 'someOtherCompare'
 		return
 	end 'someOtherCompare'
 	fused.upsert(condId, value: pred)
+	if stdTypeIsFloat(operandType) 'float'
+		floatCmps.insert(condId)
+	end 'float'
 end 'fuseIfDefines'
 
 // The three group-2 shift instructions x64 has, and the whole of what the shift lowering needs
@@ -152,23 +332,69 @@ enum ShiftInstruction
 	shr
 end 'ShiftInstruction'
 
-export function lowerStdToX64(stdModule StdModule) returns TargetModule
-	var lowering = StdToX64Lowering.create(stdModule)
+// The label prefix every f64 constant island carries. It is NOT one of `classifyGlobalLabel`'s
+// writable prefixes (`__data_`, `__slab_`, `__mm_`, …), so a float constant classifies as
+// read-only `.rdata` — which is what it is: an immutable IEEE bit pattern the code only ever
+// loads. The classification is by NAME, so the prefix is the whole of what puts it there.
+let FloatConstantLabelPrefix = "__fconst_"
+
+// The label every `ordered` block carries — the second half of a split float equality (see
+// `reserveFloatEqualityBlocks`). A file-scope constant, beside `CritSplitLabel`'s reasoning: one
+// slice, shared by every split, rather than a fresh allocation per branch on the lowering's path.
+let FloatOrderedLabel = b"fordered"
+
+// `globalData` is threaded in because a float CONSTANT is `.rdata` content, and `.rdata` is
+// resolved at concat time against this same table — the one the `.data` globals already live in.
+// Registering here (where the constant is first seen) and resolving there (where sections are laid
+// out) is exactly the split `leaRegGlobal` already uses for `.data`; the float path reuses it
+// rather than growing a second table with a second offset index.
+export function lowerStdToX64(stdModule StdModule, globalData GlobalDataTable) returns TargetModule
+	var lowering = StdToX64Lowering.create(stdModule, globalData: globalData)
 	lowering.prepareSkeleton()
-	for srcFunc in stdModule.functions 'eachFunc'
-		lowering.lowerFunction(srcFunc)
+	// BY INDEX, never by iteration: `lowerFunction` MUTATES the function it lowers — the
+	// float-equality split appends to its `blockRefs` and bumps its `nextBlockId` — so no
+	// `srcFunc` borrowed out of `stdModule.functions` may be handed to it. This is the rule
+	// `splitCriticalEdges` states for the identical reason, and the borrow checker enforces it
+	// (E3019).
+	for funcIdx in 0 upto stdModule.funcCount() 'eachFunc'
+		lowering.lowerFunction(funcIdx)
 	end 'eachFunc'
 	return lowering.targetModule
 end 'lowerStdToX64'
 
 type StdToX64Lowering
 	var stdModule as StdModule
+	// The backend's data table — where a float constant's `.rdata` island is registered. Shared
+	// with concat, which resolves each `movsdRegRip`'s label against it once sections are laid out.
+	var globalData as GlobalDataTable
 	// Exported so the free-function entry can read the finished module after
 	// driving the per-function loop (M5's fan-out driver reads it too).
 	export var targetModule as TargetModule
 	// Per-function `cmp`-value → predicate table for the fused compare/branch
 	// lowering. Reset at the start of each function (ValueIds are function-local).
 	var cmpPreds as CmpPredMap
+	// ⭐ THE FUSED COMPARES WHOSE OPERANDS ARE FLOATS — `cmpPreds`' second column, written at the
+	// same instant by the same call (`fuseIfDefines`).
+	//
+	// It stores the QUESTION ITS READERS ACTUALLY ASK, and that is the whole design. Both of them
+	// — the condition-code family and the parity split — need to know only whether the compare is
+	// a float one; nobody asks f32-vs-f64 or i8-vs-i64. A `Map with (ValueId, StdType)` here would
+	// store a full type per compare so that every reader could immediately throw all but one bit
+	// of it away, and MEASURED it cost ~4.7 allocations PER FUSED COMPARE — ~1,300 of a +1,528
+	// rung-0 delta — on a corpus that contains no float at all. A column nobody reads is not free.
+	//
+	// A dense bool column (`StdValueUseSet`), so an all-integer function inserts NOTHING and the
+	// backing array is never allocated: the cost is now zero for programs that use no floats,
+	// rather than proportional to their compares.
+	//
+	// ⚠ IT IS A SUBSET OF `cmpPreds`' KEYS AND IS ONLY EVER CONSULTED AFTER A `cmpPreds` HIT. That
+	// is what makes `settleFloatEqualityCondition`'s un-fuse safe without removing from it (there is no
+	// `remove` on a dense set): dropping the `cmpPreds` entry makes the entry here unreachable,
+	// because every reader gates on the predicate lookup first.
+	var fusedFloatCmps as StdValueUseSet
+	// The `ordered` block minted for each float-equality branch — see OrderedBlockIdMap and
+	// `reserveFloatEqualityBlocks`. Reset per function with the two columns above.
+	var orderedBlockIds as OrderedBlockIdMap
 	// Every value this function reads AS A VALUE — out of a REGISTER, rather than as the EFLAGS
 	// a fused branch tests. A compare whose result lands in here needs a `setcc` to write its
 	// boolean into a register; one that does not stays in the flags.
@@ -184,8 +410,8 @@ type StdToX64Lowering
 	// READ the flags rather than writing them.
 	var valuesReadFromRegisters as StdValueUseSet
 
-	static function create(stdModule StdModule) returns StdToX64Lowering
-		return Self{stdModule: stdModule, targetModule: TargetModule.create(), cmpPreds: CmpPredMap.create(), valuesReadFromRegisters: StdValueUseSet.create()}
+	static function create(stdModule StdModule, globalData GlobalDataTable) returns StdToX64Lowering
+		return Self{stdModule: stdModule, globalData: globalData, targetModule: TargetModule.create(), cmpPreds: CmpPredMap.create(), fusedFloatCmps: StdValueUseSet.create(), orderedBlockIds: OrderedBlockIdMap.create(), valuesReadFromRegisters: StdValueUseSet.create()}
 	end 'create'
 
 	// Whole-module setup: relocate every StdModule block 1:1 into `targetModule.blocks`
@@ -224,15 +450,49 @@ type StdToX64Lowering
 	// Per-function lowering: walk the function's blocks and lower each op into the
 	// matching target block (indexed by the same blockRef the function carries).
 	// The function's StdReturnType drives whether the return materializes an R8 move.
-	function lowerFunction(srcFunc IrFunction)
-		// Fresh per-function tables — a `cmp`'s ValueId only means anything within its own
-		// function, and both the fused branch and the value uses that consume it are in the
-		// same function. Both are computed BEFORE the op walk, because a compare is lowered
-		// long before the branch or the phi edge that decides what it must produce.
-		self.cmpPreds = self.computeFusedCmps(srcFunc)
-		self.valuesReadFromRegisters = self.computeValuesReadFromRegisters(srcFunc)
+	// THREE STRICTLY SEQUENTIAL PHASES, and the split between them is a BORROW boundary rather
+	// than a stylistic one: phase 2 MUTATES the function (it appends blocks), so neither the reads
+	// before it nor the walk after it may hold a borrow of it across it. The function is
+	// therefore threaded by INDEX and re-fetched inside each phase — the discipline
+	// `splitCriticalEdgesInFunc` follows for the same reason, and which E3019 enforces.
+	function lowerFunction(funcIdx FuncIndex)
+		self.prepareFunctionTables(funcIdx)
 
-		for blockRef in srcFunc.blockRefs 'eachBlock'
+		// ⚠ CAPTURED BEFORE PHASE 2, which appends its `ordered` refs to this very array. The walk
+		// must cover exactly the blocks the STD module holds: an `ordered` block exists only in
+		// `targetModule.blocks`, so its ref is out of range in `stdModule.blocks` and the walk
+		// would panic on it — and it is already emitted COMPLETE, so revisiting it would lower the
+		// original block's ops into it a second time.
+		let originalBlockCount = self.stdBlockCountOf(funcIdx)
+		self.orderedBlockIds = self.reserveFloatEqualityBlocks(funcIdx)
+		self.lowerFunctionBlocks(funcIdx, originalBlockCount: originalBlockCount)
+	end 'lowerFunction'
+
+	// Phase 1 — the per-function analyses, all READS. Fresh tables each time: a `cmp`'s ValueId
+	// only means anything within its own function, and both the fused branch and the value uses
+	// that consume it are in the same function. All are computed BEFORE the op walk, because a
+	// compare is lowered long before the branch or the phi edge that decides what it must produce.
+	function prepareFunctionTables(funcIdx FuncIndex)
+		let srcFunc = self.stdModule.getFunc(funcIdx)
+		self.cmpPreds = CmpPredMap.create()
+		self.fusedFloatCmps = StdValueUseSet.create()
+		self.computeFusedCmps(srcFunc, fused: self.cmpPreds, floatCmps: self.fusedFloatCmps)
+		self.valuesReadFromRegisters = self.computeValuesReadFromRegisters(srcFunc)
+	end 'prepareFunctionTables'
+
+	// The function's block count as the STD module knows it — a scoped read, so the caller holds
+	// no borrow of the function across the mint that follows.
+	function stdBlockCountOf(funcIdx FuncIndex) returns BlockCount
+		let srcFunc = self.stdModule.getFunc(funcIdx)
+		return srcFunc.blockRefs.count()
+	end 'stdBlockCountOf'
+
+	// Phase 3 — the op walk. `originalBlockCount` bounds it to the Std module's own blocks; see
+	// `lowerFunction`.
+	function lowerFunctionBlocks(funcIdx FuncIndex, originalBlockCount BlockCount)
+		let srcFunc = self.stdModule.getFunc(funcIdx)
+		for i in 0 upto originalBlockCount 'eachBlock'
+			let blockRef = try srcFunc.blockRefs.get(i) otherwise panic("lowerStdToX64: blockRefs.get OOB at {i} despite the captured bound")
 			let srcBlock = try self.stdModule.blocks.get(blockRef) otherwise panic("lowerStdToX64: blockRef from srcFunc.blockRefs not in stdModule.blocks")
 			var dstBlock = try self.targetModule.blocks.get(blockRef) otherwise panic("lowerStdToX64: targetModule.blocks 1:1 with stdModule.blocks but get({blockRef}) failed")
 
@@ -243,10 +503,10 @@ type StdToX64Lowering
 
 			if srcBlock.hasTerminatorOp() 'hasTerm'
 				let termOp = try self.stdModule.ops.get(srcBlock.terminatorIndex()) otherwise panic("lowerStdToX64: terminatorIndex not in stdModule.ops")
-				self.lowerTerminatorOp(termOp, dstBlock: dstBlock, returnType: srcFunc.returnType)
+				self.lowerTerminatorOp(termOp, dstBlock: dstBlock, returnType: srcFunc.returnType, blockRef: blockRef)
 			end 'hasTerm'
 		end 'eachBlock'
-	end 'lowerFunction'
+	end 'lowerFunctionBlocks'
 
 	// ==========================================================================
 	// Compare/branch fusion — which compares keep their boolean in the FLAGS, and
@@ -287,8 +547,10 @@ type StdToX64Lowering
 	// and the Std-tier scan cannot see it coming, because the op does not exist at Std tier.
 	// The likeliest candidate is a spill/reload growing an address computation, or a memzero
 	// (whose size ladder `cmp`s — see ARCHITECTURE.md). Re-check this list then.
-	function computeFusedCmps(func IrFunction) returns CmpPredMap
-		var fused = CmpPredMap.create()
+	// Fills BOTH fusion columns in one walk — see `fusedFloatCmps` for why the float-ness is a
+	// column beside the predicate rather than a field inside it. They are handed in rather than
+	// returned so the pair can only be created together.
+	function computeFusedCmps(func IrFunction, fused CmpPredMap, floatCmps StdValueUseSet)
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try self.stdModule.blocks.get(blockRef) otherwise panic("computeFusedCmps: blockRef from func.blockRefs not in stdModule.blocks")
 			if not block.hasTerminatorOp() 'noTerm'
@@ -296,18 +558,17 @@ type StdToX64Lowering
 			end 'noTerm'
 			let term = try self.stdModule.ops.get(block.terminatorIndex()) otherwise panic("computeFusedCmps: terminatorIndex not in stdModule.ops")
 			match term 'term'
-				condBranch(condId, _, _) then self.recordFusableCompare(block, condId: condId, fused: fused)
+				condBranch(condId, _, _) then self.recordFusableCompare(block, condId: condId, fused: fused, floatCmps: floatCmps)
 				const to mod then break 'term'
 				branch to storeIndirect then break 'term'
 			end 'term'
 		end 'eachBlock'
-		return fused
 	end 'computeFusedCmps'
 
 	// Record `condId` as fusable iff the LAST flag-clobbering body op of `block` is a
 	// compare that DEFINES it. Walked backward from the end of the body, because that is
 	// the order the flags are overwritten in.
-	function recordFusableCompare(block IrBlock, condId ValueId, fused CmpPredMap)
+	function recordFusableCompare(block IrBlock, condId ValueId, fused CmpPredMap, floatCmps StdValueUseSet)
 		var i = block.opRefs.count()
 		while i > 0 'scanBackward'
 			i = i - 1
@@ -324,8 +585,12 @@ type StdToX64Lowering
 			// identically: `foldConstOperands` moved the right operand into an immediate, which
 			// changed the instruction, not what the compare means.
 			match op 'isTheCompare'
-				cmp(defId, _, _, pred, _) then fuseIfDefines(fused, defId: defId, condId: condId, pred: pred)
-				cmpImm(defId, _, _, pred) then fuseIfDefines(fused, defId: defId, condId: condId, pred: pred)
+				cmp(defId, _, _, pred, operandType) then fuseIfDefines(fused, floatCmps: floatCmps, defId: defId, condId: condId, pred: pred, operandType: operandType)
+				// `cmpImm` is INTEGER BY CONSTRUCTION and `i64` is not a guess here: it carries no
+				// `operandType` field precisely because no SSE form takes an immediate, so
+				// `foldConstOperands` refuses a float rhs and a float compare can never reach this
+				// variant. The absence of the field IS the statement that the type is integral.
+				cmpImm(defId, _, _, pred) then fuseIfDefines(fused, floatCmps: floatCmps, defId: defId, condId: condId, pred: pred, operandType: StdType.i64)
 				const to unaryOp then break 'isTheCompare'
 				binOpImm then break 'isTheCompare'
 				// Extended past `retVoid` to take in the memory band. It is reached only for an op
@@ -404,9 +669,9 @@ type StdToX64Lowering
 	function lowerBodyOp(op StdOp, dstBlock IrBlock, returnType StdReturnType)
 		match op 'lower'
 			const(resultId, value, valueType) then self.lowerConst(resultId, value: value, valueType: valueType, dstBlock: dstBlock)
-			binOp(resultId, lhs, rhs, opcode, _) then self.lowerBinOp(resultId, lhs: lhs, rhs: rhs, opcode: opcode, dstBlock: dstBlock)
-			unaryOp(resultId, operand, opcode, _) then self.lowerUnaryOp(resultId, operand: operand, opcode: opcode, dstBlock: dstBlock)
-			cmp(resultId, lhs, rhs, pred, _) then self.lowerCmp(resultId, lhs: lhs, rhs: rhs, pred: pred, dstBlock: dstBlock)
+			binOp(resultId, lhs, rhs, opcode, operandType) then self.lowerBinOp(resultId, lhs: lhs, rhs: rhs, opcode: opcode, operandType: operandType, dstBlock: dstBlock)
+			unaryOp(resultId, operand, opcode, operandType) then self.lowerUnaryOp(resultId, operand: operand, opcode: opcode, operandType: operandType, dstBlock: dstBlock)
+			cmp(resultId, lhs, rhs, pred, operandType) then self.lowerCmp(resultId, lhs: lhs, rhs: rhs, pred: pred, operandType: operandType, dstBlock: dstBlock)
 			binOpImm(resultId, lhs, imm, opcode) then self.lowerBinOpImm(resultId, lhs: lhs, imm: imm, opcode: opcode, dstBlock: dstBlock)
 			cmpImm(resultId, lhs, imm, pred) then self.lowerCmpImm(resultId, lhs: lhs, imm: imm, pred: pred, dstBlock: dstBlock)
 			div(resultId, lhs, rhs) then self.lowerDivMod(resultId, lhs: lhs, rhs: rhs, resultReg: X64Register.rax, dstBlock: dstBlock)
@@ -425,11 +690,13 @@ type StdToX64Lowering
 
 	// Lower a block terminator. M4 adds the two branch terminators; `ret` stays. A
 	// `const`/`binOp`/`unaryOp`/`cmp` terminator is a lowering bug (none is a terminator).
-	function lowerTerminatorOp(op StdOp, dstBlock IrBlock, returnType StdReturnType)
+	function lowerTerminatorOp(op StdOp, dstBlock IrBlock, returnType StdReturnType, blockRef BlockRef)
 		match op 'lower'
 			ret(retValId) then self.lowerReturn(retValId, dstBlock: dstBlock, returnType: returnType, asTerminator: true)
 			retVoid then self.lowerVoidReturn(dstBlock, returnType: returnType, asTerminator: true)
-			condBranch(condId, thenBlockId, elseBlockId) then self.lowerCondBranch(condId, thenBlockId: thenBlockId, elseBlockId: elseBlockId, dstBlock: dstBlock)
+			// `blockRef` is what `lowerCondBranch` looks its reserved `ordered` block up by — the
+			// float-equality split is decided per BLOCK, before the walk, not per op.
+			condBranch(condId, thenBlockId, elseBlockId) then self.lowerCondBranch(condId, thenBlockId: thenBlockId, elseBlockId: elseBlockId, dstBlock: dstBlock, blockRef: blockRef)
 			branch(targetBlockId) then self.lowerBranch(targetBlockId, dstBlock: dstBlock)
 			const then panic("lowerStdToX64: a `const` op appeared as a block terminator (lowering bug — a constant is never a terminator)")
 			binOp then panic("lowerStdToX64: a `binOp` op appeared as a block terminator (lowering bug — a binary op is never a terminator)")
@@ -450,10 +717,34 @@ type StdToX64Lowering
 	// `constF64` opcode pair and then re-encoded as MIR's `isFloat` bool.
 	function lowerConst(resultId ValueId, value ParsedInt, valueType StdType, dstBlock IrBlock)
 		if stdTypeIsFloat(valueType) 'float'
-			panic("lowerStdToX64: float constants (XMM materialization) are not supported until M3 — the `return 42` slice is integer-only")
+			self.lowerFloatConst(resultId, value: value, valueType: valueType, dstBlock: dstBlock)
+			return
 		end 'float'
 		self.targetModule.appendOp(dstBlock, op: constMaterializationOp(X64VReg.virtual(resultId), value: value))
 	end 'lowerConst'
+
+	// Materialize a FLOAT constant: register its IEEE bits as a `.rdata` island and load them with
+	// `movsd dest, [rip + <label>]`.
+	//
+	// ⭐ A CONSTANT POOL, NOT AN IMMEDIATE, AND IT IS THE HARDWARE THAT SAYS SO: there is no
+	// `movsd xmm, imm64`. SSE has no immediate form at ALL — the same fact that makes
+	// `foldConstOperands` refuse a float rhs and `lowerBinOpImm`'s `div` arm permanently
+	// unreachable. The IEEE bits ARE an integer we are holding right here, but the only routes
+	// into an XMM are a load or a `movq` through a GPR, and the load costs no register.
+	//
+	// The bits are rendered by `scalarImage` — the very serializer the `.data` image uses for an
+	// f64 global — so a constant and a global spelled `3.14` are the same eight bytes by
+	// construction rather than by agreement.
+	//
+	// ⚠ THE OP IS NOT REMATERIALIZABLE, which is worth knowing precisely because it reads no
+	// register and therefore looks like it should be. See `movsdRegRip` in TargetDialect: rebuilding
+	// it needs a fresh RELOCATION, which the remat path has no way to express.
+	function lowerFloatConst(resultId ValueId, value ParsedInt, valueType StdType, dstBlock IrBlock)
+		requireScalarDouble(valueType, what: "lowerFloatConst")
+		let bytes = scalarImage(value, byteCount: stdTypeStorageBytes(valueType))
+		let label = self.globalData.registerRdataConstant(FloatConstantLabelPrefix, bytes: bytes)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movsdRegRip(X64VReg.virtual(resultId), label: label.toByteArray()))
+	end 'lowerFloatConst'
 
 	// Lower a Std binary op (both operands registers) to x64. NO seed `mov` is emitted
 	// (M5.2 deleted the two-address seed): `+` uses the 3-operand `lea dest, [lhs +
@@ -463,7 +754,12 @@ type StdToX64Lowering
 	// loop-carried update like `sum = sum + i` therefore emits ONE instruction. Operand
 	// ORDER matters for the non-commutative `sub`: `subRegReg(dest, lhs, rhs)` computes
 	// lhs − rhs (e.g. `20 - 8` → 12).
-	function lowerBinOp(resultId ValueId, lhs ValueId, rhs ValueId, opcode StdBinOpcode, dstBlock IrBlock)
+	function lowerBinOp(resultId ValueId, lhs ValueId, rhs ValueId, opcode StdBinOpcode, operandType StdType, dstBlock IrBlock)
+		if stdTypeIsFloat(operandType) 'float'
+			self.lowerFloatBinOp(resultId, lhs: lhs, rhs: rhs, opcode: opcode, operandType: operandType, dstBlock: dstBlock)
+			return
+		end 'float'
+
 		let dest = X64VReg.virtual(resultId)
 		let lhsReg = X64VReg.virtual(lhs)
 		let rhsReg = X64VReg.virtual(rhs)
@@ -479,9 +775,47 @@ type StdToX64Lowering
 			// One arm for all three shifts: they differ only in WHICH group-2 instruction they
 			// name, and `shiftInstructionOf` is the one place that is decided.
 			shl to shrLogical then self.lowerShiftCl(dest, lhsReg: lhsReg, countId: rhs, instr: shiftInstructionOf(opcode), dstBlock: dstBlock)
-			div then panic("lowerBinOp: `div` is the FLOAT division opcode and the SSE lowering has not landed (P1.0d.4). Unreachable until the parser accepts a float literal.")
+			// ⚠ INTEGER `binOp(div)` IS ILLEGAL, and the Std dialect's validator says so before this
+			// can fire: `binOp` is the PURE arithmetic band, and integer division is not pure —
+			// `idiv` faults on a zero divisor and on `i64.min / -1`, so it must not be reordered or
+			// eliminated. It has its own non-pure variant, `StdOp.div`. Reaching here means a float
+			// division arrived carrying an integer operand type, which would declare a trapping
+			// instruction pure.
+			div then panic("lowerBinOp: `binOp(div)` with an INTEGER operand type — float division rides the pure arith band because `divsd` cannot fault, while integer division traps and is `StdOp.div`. See StdBinOpcode.")
 		end 'op'
 	end 'lowerBinOp'
+
+	// Lower a FLOAT binary op to its SSE instruction. All four are genuinely two-address (`addsd
+	// xmm1, xmm2` — SSE has no 3-operand form without AVX), so each declares `dest` a REUSE-of-
+	// `lhs` def and the ALLOCATOR supplies `movsd dest, lhs` only when `lhs` outlives the op —
+	// exactly as `sub`/`imul` do in the integer path. No ISel seed copy.
+	//
+	// ⚠ `+` DOES NOT GET THE `lea` TREATMENT. The integer `add` lowers to the 3-operand
+	// `lea dest, [lhs + rhs]`, which is copy-free and flag-free; there is no SSE analogue, so
+	// float `+` is a two-address `addsd` like the rest. Operand ORDER therefore matters for the
+	// non-commutative pair: `subsd`/`divsd` compute `lhs - rhs` / `lhs / rhs`.
+	//
+	// ⭐ `div` IS HERE AND INTEGER DIVISION IS NOT, which looks like an exception and is not: the
+	// band's membership rule is its metadata profile, and `divsd` cannot fault (IEEE answers
+	// inf/nan) while `idiv` traps. The two divisions differ in the one property the band is
+	// defined by. See StdBinOpcode.
+	function lowerFloatBinOp(resultId ValueId, lhs ValueId, rhs ValueId, opcode StdBinOpcode, operandType StdType, dstBlock IrBlock)
+		requireScalarDouble(operandType, what: "lowerFloatBinOp")
+		let dest = X64VReg.virtual(resultId)
+		let lhsReg = X64VReg.virtual(lhs)
+		let rhsReg = X64VReg.virtual(rhs)
+		match opcode 'op'
+			add then self.targetModule.appendOp(dstBlock, op: TargetOp.addsdRegReg(dest, lhs: lhsReg, rhs: rhsReg))
+			sub then self.targetModule.appendOp(dstBlock, op: TargetOp.subsdRegReg(dest, lhs: lhsReg, rhs: rhsReg))
+			mul then self.targetModule.appendOp(dstBlock, op: TargetOp.mulsdRegReg(dest, lhs: lhsReg, rhs: rhsReg))
+			div then self.targetModule.appendOp(dstBlock, op: TargetOp.divsdRegReg(dest, lhs: lhsReg, rhs: rhsReg))
+			// The word ALU and the shifts have no float form, and it is the TYPE SYSTEM that keeps
+			// them out rather than this arm: `and`/`or`/`xor`/`shl`/`shr` are integer operators, and
+			// a float operand is rejected long before lowering. An f64 reaching here under one of
+			// them means that check is gone.
+			bitAnd to shrLogical then panic("lowerFloatBinOp: {opcode.rawValue} has no float form — the bitwise and shift operators are integer-only, and a float operand is rejected at the Maxon tier")
+		end 'op'
+	end 'lowerFloatBinOp'
 
 	// Lower a shift by a VARIABLE count. x64 has no register-register shift: the count must
 	// be in **CL**, and in no other register. So the count is a FIXED-REGISTER operand and
@@ -548,7 +882,18 @@ type StdToX64Lowering
 	//   • `logicalNot` — `xor dest, 1`: a bool is 0/1, so flipping bit 0 negates it. Using
 	//     the integer `not` here would make `not true` == -2, which still reads as TRUE in
 	//     every condition — a silent miscompile, and the reason these are two opcodes.
-	function lowerUnaryOp(resultId ValueId, operand ValueId, opcode StdUnaryOpcode, dstBlock IrBlock)
+	// ⚠ A FLOAT NEGATE IS NOT `neg`, AND IT DOES NOT ARRIVE HERE. `neg` is an integer two's
+	// complement; negating an f64 means flipping its SIGN BIT (`xorpd` against a sign mask), which
+	// is a different instruction and needs a `.rdata` mask constant. Nothing produces one yet:
+	// `-x` on a float would, and the Maxon tier does not fold it to a `unaryOp(neg)` over an f64
+	// — the spec corpus reaches negative floats through `0.0 - x` instead. This panics rather than
+	// emitting an integer `neg` on a float register, which the class check would catch anyway, but
+	// later and further from the cause.
+	function lowerUnaryOp(resultId ValueId, operand ValueId, opcode StdUnaryOpcode, operandType StdType, dstBlock IrBlock)
+		if stdTypeIsFloat(operandType) 'float'
+			panic("lowerUnaryOp: no float form of {opcode.rawValue} — an f64 negate flips the sign bit (`xorpd` against a .rdata mask), not the integer `neg`, and nothing lowers to one yet (P1.0d.4 reaches negative floats through `0.0 - x`)")
+		end 'float'
+
 		let dest = X64VReg.virtual(resultId)
 		let src = X64VReg.virtual(operand)
 		match opcode 'op'
@@ -677,7 +1022,10 @@ type StdToX64Lowering
 	// occupies no register.
 	function lowerCmpImm(resultId ValueId, lhs ValueId, imm Imm32, pred StdCmpPred, dstBlock IrBlock)
 		self.targetModule.appendOp(dstBlock, op: TargetOp.cmpRegImm32(X64VReg.virtual(lhs), imm: imm))
-		self.materializeCompareIfRead(resultId, pred: pred, dstBlock: dstBlock)
+		// INTEGER by construction, and `i64` is not a guess: `cmpImm` carries no `operandType`
+		// because no SSE form takes an immediate, so `foldConstOperands` refuses a float rhs and a
+		// float compare can never reach this variant. See `recordFusableCompare`'s twin of this.
+		self.materializeCompareIfRead(resultId, pred: pred, operandType: StdType.i64, dstBlock: dstBlock)
 	end 'lowerCmpImm'
 
 	// Lower a Std `cmp` to an x64 `cmp reg, reg`. A comparison's answer lives in the EFLAGS
@@ -693,28 +1041,108 @@ type StdToX64Lowering
 	//
 	// Both at once is legal and correct: `setcc`/`movzx` READ the flags, they do not write
 	// them, so the `jcc` at the terminator still sees the flags this `cmp` set.
-	function lowerCmp(resultId ValueId, lhs ValueId, rhs ValueId, pred StdCmpPred, dstBlock IrBlock)
+	function lowerCmp(resultId ValueId, lhs ValueId, rhs ValueId, pred StdCmpPred, operandType StdType, dstBlock IrBlock)
+		if stdTypeIsFloat(operandType) 'float'
+			self.lowerFloatCmp(resultId, lhs: lhs, rhs: rhs, pred: pred, operandType: operandType, dstBlock: dstBlock)
+			return
+		end 'float'
 		self.targetModule.appendOp(dstBlock, op: TargetOp.cmpRegReg(X64VReg.virtual(lhs), rhsReg: X64VReg.virtual(rhs)))
-		self.materializeCompareIfRead(resultId, pred: pred, dstBlock: dstBlock)
+		self.materializeCompareIfRead(resultId, pred: pred, operandType: operandType, dstBlock: dstBlock)
 	end 'lowerCmp'
+
+	// Lower a FLOAT `cmp` to `ucomisd`, with the same two independent consumers `lowerCmp`
+	// describes — the fused branch reads its flags, anything reading the result as a VALUE gets a
+	// `setcc` sequence.
+	//
+	// ⭐ THE OPERANDS MAY BE SWAPPED HERE, and that is the whole NaN story for four of the six
+	// predicates. `a < b` emits `ucomisd b, a`, and `floatCondCodeForPred` answers `above` to
+	// match — one decision, spelled in two places that MUST be read together (see
+	// `floatCmpSwapsOperands` for why `jb` would be wrong and why the swap is free).
+	function lowerFloatCmp(resultId ValueId, lhs ValueId, rhs ValueId, pred StdCmpPred, operandType StdType, dstBlock IrBlock)
+		requireScalarDouble(operandType, what: "lowerFloatCmp")
+		let swapped = floatCmpSwapsOperands(pred)
+		let cmpLhs = rhs if swapped else lhs
+		let cmpRhs = lhs if swapped else rhs
+		self.targetModule.appendOp(dstBlock, op: TargetOp.ucomisdRegReg(X64VReg.virtual(cmpLhs), rhs: X64VReg.virtual(cmpRhs)))
+		self.materializeCompareIfRead(resultId, pred: pred, operandType: operandType, dstBlock: dstBlock)
+	end 'lowerFloatCmp'
 
 	// Write a compare's boolean into its register — but only when something actually reads it
 	// as a value (`computeValuesReadFromRegisters`). A compare read ONLY by the branch it fuses with
 	// needs no register at all, which is why `if a > b` still lowers to a bare `cmp` + `jcc`.
-	function materializeCompareIfRead(resultId ValueId, pred StdCmpPred, dstBlock IrBlock)
+	function materializeCompareIfRead(resultId ValueId, pred StdCmpPred, operandType StdType, dstBlock IrBlock)
 		if not self.valuesReadFromRegisters.contains(resultId) 'flagsOnly'
 			return
 		end 'flagsOnly'
-		self.targetModule.appendOp(dstBlock, op: TargetOp.setccReg(X64VReg.virtual(resultId), cond: condCodeForPred(pred)))
+		if stdTypeIsFloat(operandType) and predicateIsEquality(pred) 'floatEquality'
+			self.materializeFloatEquality(resultId, pred: pred, dstBlock: dstBlock)
+			return
+		end 'floatEquality'
+		self.targetModule.appendOp(dstBlock, op: TargetOp.setccReg(X64VReg.virtual(resultId), cond: condCodeForPred(pred, isFloat: stdTypeIsFloat(operandType))))
 	end 'materializeCompareIfRead'
+
+	// MATERIALIZE a float `==`/`!=` — the one compare whose boolean a single `setcc` cannot write.
+	//
+	// `ucomisd` aliases UNORDERED with EQUAL in every bit but PF, so the answer is TWO conditions
+	// and the byte has to be folded from two `setcc`s:
+	//
+	//     ==   sete  dest ; setnp scratch ; and dest, scratch      equal AND ordered
+	//     !=   setne dest ; setp  scratch ; or  dest, scratch      unequal OR unordered
+	//
+	// This is the SECOND lowering of the unordered edge, not a free consequence of the branch
+	// one: a compare whose result is a VALUE has no jump to hang a parity test on, so the bit
+	// folds into the byte instead. The ORDERED predicates need none of it — they materialize with
+	// a single `seta`/`setae` on swapped operands, exactly like an integer's.
+	//
+	// ⚠⚠ THE FOLD RUNS ENTIRELY IN PHYSICAL REGISTERS, AND THAT IS A HARD SSA REQUIREMENT, not a
+	// register-pressure preference. The obvious spelling — `setcc dest` then `and dest, scratch` —
+	// DEFINES `dest` TWICE, because the two-address `and` is a REUSE-of-`lhs` def and `lhs` would
+	// BE `dest`. Std ValueIds are SSA and the colorer relies on single-def (the rule `xchgRegReg`
+	// is exempt from only because it is spliced in AFTER coloring); a second def would be
+	// discovered as a wrong answer, not a compile error. No other lowering in this file writes a
+	// vreg twice, and this one must not either.
+	//
+	// So the two `setcc`s and the fold land in FIXED registers, and exactly ONE `mov` publishes
+	// the result into its virtual — which is `lowerDivMod`'s shape, for `lowerDivMod`'s reason:
+	// the intermediate values are not SSA values at all, so they cannot violate SSA. The physical
+	// defs also carry their own safety: liveness forbids both scratches to every value live ACROSS
+	// them (the mechanism `lowerShiftCl` documents for RCX), so nothing the fold clobbers can be
+	// something a later op still needs.
+	//
+	// Both `setcc`s READ the flags and write none, so the `ucomisd`'s answer survives to the
+	// second one. The `and`/`or` DOES write flags — which is exactly why a float equality that is
+	// also branched on is un-fused first (see `settleFloatEqualityCondition`).
+	function materializeFloatEquality(resultId ValueId, pred StdCmpPred, dstBlock IrBlock)
+		let ordered = X64VReg.physical(FloatEqualityOrderedReg)
+		let parity = X64VReg.physical(FloatEqualityParityReg)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.setccReg(ordered, cond: floatCondCodeForPred(pred)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.setccReg(parity, cond: parityCondForEquality(pred)))
+		self.appendParityCombine(ordered, scratch: parity, pred: pred, dstBlock: dstBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(X64VReg.virtual(resultId), srcReg: ordered))
+	end 'materializeFloatEquality'
+
+	// `==` is `equal AND ordered`; `!=` is `unequal OR unordered`. Both operands are in the 0/1
+	// domain `setcc` produces, so the WORD `and`/`or` is also the logical one — the distinction
+	// `LogicalNotMask` documents does not bite here.
+	function appendParityCombine(dest X64VReg, scratch X64VReg, pred StdCmpPred, dstBlock IrBlock)
+		match pred 'p'
+			eq then self.targetModule.appendOp(dstBlock, op: TargetOp.andRegReg(dest, lhs: dest, rhs: scratch))
+			ne then self.targetModule.appendOp(dstBlock, op: TargetOp.orRegReg(dest, lhs: dest, rhs: scratch))
+			lt to ge then panic("appendParityCombine: {pred.name} is an ORDERED float predicate — it materializes with a single `seta`/`setae` on swapped operands and has no parity bit to fold")
+		end 'p'
+	end 'appendParityCombine'
 
 	// Lower a Std `condBranch` to `jcc <then>` + `jmp <else>`. The `jcc` is a body op and the
 	// `jmp` is the block's terminator (a two-instruction two-way branch cannot fit one
 	// terminator slot). An unconditional `jmp` to the else target is emitted for EVERY layout
 	// so correctness never depends on block ordering (a later pass may elide a fall-through).
 	//
-	// TWO shapes, and which one applies is settled by `computeFusedCmps`, never guessed here:
+	// THREE shapes, and which one applies is settled BEFORE the walk — by `computeFusedCmps` and
+	// `settleFloatEqualityBranch` — never guessed here:
 	//
+	//   • A SPLIT FLOAT EQUALITY — a fused float `==`/`!=`, which reserved an `ordered` block
+	//     because the parity bit is a second condition and a block may hold one. It takes
+	//     precedence over both below; see the float-equality split section.
 	//   • FUSED — the compare defining `condId` is the last flag-clobbering op of this block,
 	//     so the flags it set are exactly the ones the `jcc` reads. The `jcc` tests that
 	//     compare's predicate directly and nothing was materialized.
@@ -730,11 +1158,47 @@ type StdToX64Lowering
 	// index a block's then-edge is only findable by scanning every op of the block, which is
 	// what made building the CFG skeleton O(total ops) (see `CondBranch`). It also seals the
 	// block: `appendOp` refuses to append past a conditional branch.
-	function lowerCondBranch(condId ValueId, thenBlockId BlockId, elseBlockId BlockId, dstBlock IrBlock)
-		let cond = self.branchConditionCode(condId, dstBlock: dstBlock)
-		self.targetModule.appendCondBranch(dstBlock, op: TargetOp.jcc(cond, targetBlockId: thenBlockId))
-		self.targetModule.setTerminator(dstBlock, op: TargetOp.jmp(elseBlockId))
+	function lowerCondBranch(condId ValueId, thenBlockId BlockId, elseBlockId BlockId, dstBlock IrBlock, blockRef BlockRef)
+		let orderedId = try self.orderedBlockIds.get(blockRef) otherwise 'notFloatEquality'
+			let cond = self.branchConditionCode(condId, dstBlock: dstBlock)
+			self.targetModule.appendCondBranch(dstBlock, op: TargetOp.jcc(cond, targetBlockId: thenBlockId))
+			self.targetModule.setTerminator(dstBlock, op: TargetOp.jmp(elseBlockId))
+			return
+		end 'notFloatEquality'
+
+		self.lowerFloatEqualityBranch(condId, thenBlockId: thenBlockId, elseBlockId: elseBlockId, orderedId: orderedId, dstBlock: dstBlock)
 	end 'lowerCondBranch'
+
+	// The FIRST block of a split float equality: it asks "unordered?" and nothing else. The
+	// `ucomisd` is already in this block — `lowerCmp` emitted it as a body op — so all that is
+	// left is the parity jump and the fall-through into `ordered` (which
+	// `reserveFloatEqualityBlocks` has already emitted, complete).
+	function lowerFloatEqualityBranch(condId ValueId, thenBlockId BlockId, elseBlockId BlockId, orderedId BlockId, dstBlock IrBlock)
+		let pred = try self.cmpPreds.get(condId) otherwise panic("lowerFloatEqualityBranch: v{condId} is not a fused compare, but an `ordered` block was reserved for its branch")
+		let parityTarget = parityTargetOf(pred, thenBlockId: thenBlockId, elseBlockId: elseBlockId)
+		self.targetModule.appendCondBranch(dstBlock, op: TargetOp.jcc(X64CondCode.parity, targetBlockId: parityTarget))
+		self.targetModule.setTerminator(dstBlock, op: TargetOp.jmp(orderedId))
+
+		// ⚠ THE OTHER PHI EDGE MUST GO, and this is the half that makes the split honest. This
+		// block now branches to exactly two places: `parityTarget` and `ordered`. Its edge to the
+		// OTHER original successor is stale — that successor is reached only THROUGH `ordered`
+		// now, which was handed its own copy of the edge. Leaving it would have SSA destruction
+		// place that phi's moves at the end of this block, on an edge it no longer takes, writing
+		// a phi's register on the unordered path with the wrong incoming value. `ordered` itself
+		// carries no phis (it is not a join), so the edge to it needs no `BranchEdge` at all.
+		self.keepOnlyBranchEdgeIn(dstBlock, keepTarget: parityTarget)
+	end 'lowerFloatEqualityBranch'
+
+	// Drop every branch edge of `block` except the one to `keepTarget` — see the caller.
+	function keepOnlyBranchEdgeIn(block IrBlock, keepTarget BlockId)
+		var kept = BranchEdgeArray.create()
+		for edge in block.branchEdges 'each'
+			if edge.targetBlockId == keepTarget 'keep'
+				kept.push(edge)
+			end 'keep'
+		end 'each'
+		block.branchEdges = kept
+	end 'keepOnlyBranchEdgeIn'
 
 	// The condition code the branch's `jcc` tests, emitting the truth-test `cmp reg, 0` first
 	// when the condition is a value rather than a fused compare's flags.
@@ -743,8 +1207,242 @@ type StdToX64Lowering
 			self.targetModule.appendOp(dstBlock, op: TargetOp.cmpRegImm32(X64VReg.virtual(condId), imm: BoolFalseImm))
 			return X64CondCode.notEqual
 		end 'notFused'
-		return condCodeForPred(pred)
+		return condCodeForPred(pred, isFloat: self.fusedFloatCmps.contains(condId))
 	end 'branchConditionCode'
+
+	// ==========================================================================
+	// The float-equality split
+	// ==========================================================================
+	//
+	// ⭐⭐ AN f64 `==` NEEDS TWO CONDITIONAL JUMPS, AND A BLOCK MAY HAVE ONE.
+	//
+	// `ucomisd` reports UNORDERED (either operand NaN) as ZF=PF=CF=1 — the flags of "equal" but
+	// for PF. IEEE-754 says `nan == nan` is FALSE and `nan != nan` is TRUE, so PF is the ONLY bit
+	// separating those answers from equality, and a bare `je` would take the then-branch on a
+	// NaN. The parity bit is a second condition, and a second condition is a second jump.
+	//
+	// v1 SHIPPED EXACTLY THIS AS A SILENT WRONG ANSWER, and how is worth knowing. It emitted ONE
+	// block ending in TWO conditional jumps:
+	//
+	//     ucomisd a, b ; jp else ; jne else ; jmp then
+	//
+	// The IR said that block had one conditional branch and therefore ONE else edge. The machine
+	// code had two. SSA destruction places a phi's copies on an edge by rewriting the jump that
+	// takes it — so it found and rewired one of those jumps, and the other kept its original
+	// target and bypassed the copies entirely. A phi whose value arrived on the `jp` path was
+	// never written. (`project_x64_f64_compare_phi_copy_fix` — a positive double formatted as
+	// negative, plus a runaway digit loop that spewed megabytes.)
+	//
+	// ⇒ shv2 SPLITS THE COMPARE INTO TWO BLOCKS, each ending in exactly one conditional branch:
+	//
+	//     cmp:     ucomisd a, b ; jp -> <the answer unordered decides> ; jmp -> ordered
+	//     ordered:               je/jne -> then                        ; jmp -> else
+	//
+	// The machine code is the same three jumps. The difference is that the IR now SAYS what the
+	// machine code does: two edges reach the far block, from two different blocks, and they ARE
+	// two edges in the CFG. SSA destruction needs no float-specific case — it places copies on
+	// both, because both are edges — and `IrBlock.CondBranch`'s one-conditional-branch-per-block
+	// invariant is never bent. THE BUG IS NOT FIXED HERE. IT IS MADE UNREPRESENTABLE.
+	//
+	// specs-shv2/float-compare-branch.md puts a phi on the edge each of those jumps takes:
+	// `eq-nan-else-edge-phi` rides the first block's `jp`, `ne-nan-then-edge-phi` rides it to the
+	// other successor, and `eq-ordered-*-edge-phi` ride the second block's two.
+
+	// Mint the `ordered` block of every float-equality branch in the function, emitted COMPLETE:
+	// its `je`/`jne`, its `jmp`, and a copy of both of the original block's phi edges. The walk
+	// is left only the original block's half, and needs nothing from here but a block id.
+	//
+	// ⚠ IT IS A SEPARATE PASS FOR A BORROW REASON, not for taste. Minting PUSHES to
+	// `targetModule.blocks`, and the walk holds a live borrow out of that same array for the
+	// whole of every block (its `dstBlock`) — the rule `moveBranchEdgeToSplit` scopes its helpers
+	// apart to obey. It also pushes to `srcFunc.blockRefs`, which the walk reads by index.
+	// Running it before either borrow exists is what makes both safe.
+	function reserveFloatEqualityBlocks(funcIdx FuncIndex) returns OrderedBlockIdMap
+		// COLLECT FIRST, THEN MINT — `splitCriticalEdgesInFunc`'s exact discipline, and for its
+		// exact reason: the mint below fetches and MUTATES the function, so no borrow of it may
+		// still be live, and it also appends to the very `blockRefs` this would otherwise iterate.
+		// The classification is unaffected by the splits (each only adds a block), so the snapshot
+		// stays valid across all of them.
+		let toSplit = self.blocksNeedingFloatEqualitySplit(funcIdx)
+
+		var reserved = OrderedBlockIdMap.create()
+		for blockRef in toSplit 'eachSplit'
+			reserved.upsert(blockRef, value: self.buildOrderedBlock(funcIdx, blockRef: blockRef))
+		end 'eachSplit'
+		return reserved
+	end 'reserveFloatEqualityBlocks'
+
+	// SETTLE EVERY FLOAT-EQUALITY BRANCH'S SHAPE, in one walk of the function's blocks: un-fuse the
+	// ones whose boolean is also materialized, then collect the ones that still need a split.
+	//
+	// The two steps share this walk because they are one concern asked of one thing — "what shape
+	// does this branch take?" — and because their ORDER is a requirement rather than a
+	// coincidence: un-fusing must happen BEFORE the split test, or a branch that is about to lose
+	// its fusion would still be handed an `ordered` block. Doing them per block rather than in two
+	// passes makes that ordering local and structural instead of a comment about pass order, and
+	// it is sound because each branch's decision reads only its OWN condition.
+	//
+	// It is also a scoped READ of the function (the un-fuse touches only `cmpPreds`), complete
+	// before `reserveFloatEqualityBlocks` mints anything.
+	function blocksNeedingFloatEqualitySplit(funcIdx FuncIndex) returns BlockRefArray
+		let srcFunc = self.stdModule.getFunc(funcIdx)
+		var toSplit = BlockRefArray.create()
+		for blockRef in srcFunc.blockRefs 'eachBlock'
+			if self.settleFloatEqualityBranch(blockRef) 'needsSplit'
+				toSplit.push(blockRef)
+			end 'needsSplit'
+		end 'eachBlock'
+		return toSplit
+	end 'blocksNeedingFloatEqualitySplit'
+
+	// Settle ONE block's float-equality branch and answer whether it still needs a split. Both the
+	// un-fuse and the decision live here, in one terminator read, because they are one question
+	// asked of one branch — and because their order is a REQUIREMENT (un-fuse first, or a branch
+	// about to lose its fusion is still handed an `ordered` block), which is structural here
+	// instead of a note about pass ordering.
+	function settleFloatEqualityBranch(blockRef BlockRef) returns bool
+		let block = try self.stdModule.blocks.get(blockRef) otherwise panic("settleFloatEqualityBranch: blockRef {blockRef} not in stdModule.blocks")
+		if not block.hasTerminatorOp() 'noTerm'
+			return false
+		end 'noTerm'
+		let term = try self.stdModule.ops.get(block.terminatorIndex()) otherwise panic("settleFloatEqualityBranch: terminatorIndex not in stdModule.ops")
+		return match term 'term'
+			condBranch(condId, _, _) gives self.settleFloatEqualityCondition(condId)
+			const to mod gives false
+			branch to storeIndirect gives false
+		end 'term'
+	end 'settleFloatEqualityBranch'
+
+	// The decision itself, for one branch condition. Three answers, and only the first needs a
+	// second block:
+	//
+	//   • a FUSED FLOAT `==`/`!=` read ONLY by this branch ⇒ SPLIT. Its flags carry the answer and
+	//     the parity bit is a second condition, so it needs a second block to test it in.
+	//   • a fused float equality whose boolean is ALSO read as a value ⇒ UN-FUSE, no split. Its
+	//     materialization folds the parity bit with an `and`/`or` (`materializeFloatEquality`), and
+	//     that WRITES EFLAGS — destroying the very PF the split's `jp` would read. The Std-tier
+	//     fusion scan cannot see this coming: it proves the `cmp` is the last flag-clobbering STD
+	//     op before the branch, and the `and` does not exist at that tier. It is the hazard
+	//     `computeFusedCmps`' header raises for the ALLOCATOR's inserted ops, arriving from the
+	//     lowering instead. Dropping the fusion is the whole fix and costs nothing that matters:
+	//     the branch then truth-tests the materialized bool (`cmp reg, 0` + `jne`), exactly as
+	//     every other non-fused boolean condition already does. It is SELF-CONSISTENT — the value
+	//     is in `valuesReadFromRegisters` precisely because something reads it, so the `setcc` the
+	//     branch now depends on is emitted regardless of this.
+	//   • anything else ⇒ no split. An UNFUSED condition is an ordinary bool in a register; an
+	//     INTEGER compare has no unordered answer; an ORDERED float predicate is answered by a
+	//     single `ja`/`jae` on swapped operands and needs no second jump at all.
+	function settleFloatEqualityCondition(condId ValueId) returns bool
+		if not self.isFusedFloatEquality(condId) 'notFloatEquality'
+			return false
+		end 'notFloatEquality'
+		if not self.valuesReadFromRegisters.contains(condId) 'flagsOnly'
+			return true
+		end 'flagsOnly'
+
+		// The entry is provably present — `isFusedFloatEquality` just read it — so the "was it
+		// there?" answer carries no information and is discarded. Only `cmpPreds` is unwound, and
+		// that is correct rather than a half-erasure: dropping the predicate makes this value's
+		// `fusedFloatCmps` bit UNREACHABLE, because every reader of that set gates on a `cmpPreds`
+		// hit first (see the field). A dense bool column has no `remove` to call anyway.
+		_ = self.cmpPreds.remove(condId)
+		return false
+	end 'settleFloatEqualityCondition'
+
+	// True iff `condId` is defined by a FUSED compare that is a FLOAT `==` or `!=` — the one
+	// compare shape whose branch cannot be a single jump.
+	function isFusedFloatEquality(condId ValueId) returns bool
+		let pred = try self.cmpPreds.get(condId) otherwise 'notFused'
+			return false
+		end 'notFused'
+		return self.fusedFloatCmps.contains(condId) and predicateIsEquality(pred)
+	end 'isFusedFloatEquality'
+
+	// Create the `ordered` block for `blockRef`'s float-equality branch, emit it complete, and
+	// return its id.
+	//
+	// It is reached ONLY when `ucomisd` said ORDERED — the original block's `jp` has already
+	// taken the unordered answer away — so its `je`/`jne` is the plain equality test with no NaN
+	// case left in it. That is the whole trick: each block asks exactly ONE question.
+	//
+	// Every step is its own scoped helper, so no two live borrows of `targetModule.blocks` ever
+	// coexist. Reads come first, then the mint, then the writes.
+	function buildOrderedBlock(funcIdx FuncIndex, blockRef BlockRef) returns BlockId
+		let (condId, thenBlockId, elseBlockId) = self.condBranchFieldsOf(blockRef)
+		let pred = try self.cmpPreds.get(condId) otherwise panic("buildOrderedBlock: v{condId} is not a fused compare, but blockNeedsFloatEqualitySplit said its block needs a split")
+
+		// The original's phi edges, cloned BEFORE the new block exists — the walk prunes the
+		// original down to its one surviving edge later, and `ordered` needs both.
+		let inheritedEdges = self.cloneBranchEdgesOf(blockRef)
+
+		let newRef = self.addOrderedBlock(funcIdx)
+		let newId = self.blockIdOf(newRef)
+		self.emitOrderedBlockBody(newRef, cond: floatCondCodeForPred(pred), thenBlockId: thenBlockId, elseBlockId: elseBlockId, edges: inheritedEdges)
+		return newId
+	end 'buildOrderedBlock'
+
+	// Mint an empty `ordered` block: a fresh function-local id, an entry in `targetModule.blocks`,
+	// and its ref registered on the function. Mirrors `addSplitBlock` (SsaDestruction), which is
+	// the established way a Target-tier pass grows the CFG — including its deliberate omission of
+	// `blockSourceInfo`, which the Target module does not carry (`prepareSkeleton` never fills it).
+	// The function is fetched HERE, by index, and mutated directly — its borrow never escapes to a
+	// caller that could still be holding one. Same shape as `addSplitBlock`.
+	function addOrderedBlock(funcIdx FuncIndex) returns BlockRef
+		var srcFunc = self.stdModule.getFunc(funcIdx)
+		let newId = srcFunc.nextBlockId
+		srcFunc.nextBlockId = srcFunc.nextBlockId + 1
+		self.targetModule.blocks.push(IrBlock.create(newId, label: FloatOrderedLabel))
+		let newRef = self.targetModule.blocks.count() - 1
+		srcFunc.blockRefs.push(newRef)
+		return newRef
+	end 'addOrderedBlock'
+
+	// Emit the `ordered` block's whole body: the ordered equality test to `then`, the `jmp` to
+	// `else`, and the phi edges it inherited. Uniform for both `==` and `!=` — only `cond`
+	// differs (`je` vs `jne`), because the unordered answer was already decided by the `jp`.
+	function emitOrderedBlockBody(blockRef BlockRef, cond X64CondCode, thenBlockId BlockId, elseBlockId BlockId, edges BranchEdgeArray)
+		var block = try self.targetModule.blocks.get(blockRef) otherwise panic("emitOrderedBlockBody: blockRef {blockRef} not in targetModule.blocks")
+		block.branchEdges = edges
+		self.targetModule.appendCondBranch(block, op: TargetOp.jcc(cond, targetBlockId: thenBlockId))
+		self.targetModule.setTerminator(block, op: TargetOp.jmp(elseBlockId))
+	end 'emitOrderedBlockBody'
+
+	// A copy of every branch edge of `blockRef`'s block.
+	//
+	// FRESH `BranchEdge` objects, not the same ones: the Target tier OWNS its BranchEdges and
+	// REBUILDS them (`extractPredEdge` rebuilds the array to move an edge onto a split block, and
+	// `rewriteEdgeArgsIn` swaps an edge's `argIds` to repoint it at a reload), so two blocks
+	// sharing one edge object would let a later rewrite of one silently move the other. `argIds`
+	// IS shared, and that is correct — nothing mutates it in place (see `prepareSkeleton`).
+	function cloneBranchEdgesOf(blockRef BlockRef) returns BranchEdgeArray
+		let block = try self.targetModule.blocks.get(blockRef) otherwise panic("cloneBranchEdgesOf: blockRef {blockRef} not in targetModule.blocks")
+		var copied = BranchEdgeArray.create()
+		for edge in block.branchEdges 'each'
+			copied.push(BranchEdge.create(edge.targetBlockId, argIds: edge.argIds))
+		end 'each'
+		return copied
+	end 'cloneBranchEdgesOf'
+
+	// The id of `blockRef`'s block — a scoped read, so the caller never holds this borrow.
+	function blockIdOf(blockRef BlockRef) returns BlockId
+		let block = try self.targetModule.blocks.get(blockRef) otherwise panic("blockIdOf: blockRef {blockRef} not in targetModule.blocks")
+		return block.id
+	end 'blockIdOf'
+
+	// The three fields of the `condBranch` terminating `blockRef`'s Std block, in one read and one
+	// match — a TUPLE, because three one-field readers would be the same lookup and the same two
+	// panic arms written three times, and a fourth field would have to be added to all of them.
+	// (A tuple, not a payload-carrying union: `fuseIfDefines`'s heap-box warning is about unions,
+	// and this runs once per SPLIT rather than once per op regardless.)
+	function condBranchFieldsOf(blockRef BlockRef) returns (ValueId, BlockId, BlockId)
+		let block = try self.stdModule.blocks.get(blockRef) otherwise panic("condBranchFieldsOf: blockRef {blockRef} not in stdModule.blocks")
+		let term = try self.stdModule.ops.get(block.terminatorIndex()) otherwise panic("condBranchFieldsOf: terminatorIndex of block ref {blockRef} not in stdModule.ops")
+		return match term 'term'
+			condBranch(condId, thenBlockId, elseBlockId) gives (condId, thenBlockId, elseBlockId)
+			const to mod panic("condBranchFieldsOf: the terminator of block ref {blockRef} is not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
+			branch to storeIndirect panic("condBranchFieldsOf: the terminator of block ref {blockRef} is not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
+		end 'term'
+	end 'condBranchFieldsOf'
 
 	// Lower a Std unconditional `branch` to a single `jmp` terminator.
 	function lowerBranch(targetBlockId BlockId, dstBlock IrBlock)
@@ -829,13 +1527,23 @@ end 'StdToX64Lowering'
 // than i64 needs the `as` cast (P1.9) to reach a global, and the day it does, its signedness
 // decides `movzx` vs `movsx`, which is a DECISION and not a width to default into. That is the
 // same trap `StdBinOpcode`'s two right-shifts exist for.
+// ⭐ `f64` IS `word64`, AND THE WIDTH ENUM DID NOT GROW A CASE FOR IT. An f64 IS 64 bits, so
+// `word64` is the honest answer — and which INSTRUCTION moves those 64 bits (`mov` or `movsd`) is
+// already decided, at emit time, by the class of the register the value was coloured into
+// (`emitWord64Load`/`emitWord64Store`). A `float64` width would be that same fact written a
+// second time, in a second place, free to disagree with the first — this file's signature bug.
+// The width says HOW MANY BITS; the register says WHICH FILE. Two questions, two answers.
+//
+// `f32` still panics: it is 4 bytes, so it is genuinely a width this enum does not have, and it
+// would need `movss` — a real gap, not a spelling. Nothing produces one (Maxon's `float` is f64).
 function x64AccessWidthFor(t StdType) returns X64AccessWidth
 	match t 'w'
 		i1 then return X64AccessWidth.byte
 		i64 then return X64AccessWidth.word64
+		f64 then return X64AccessWidth.word64
 		i8 to i32 then panic("x64AccessWidthFor: no `.data` access form for {t.name} — a narrow integer global needs the `as` cast (P1.9), and its SIGNEDNESS then decides movzx vs movsx rather than defaulting to a width")
 		u8 to u64 then panic("x64AccessWidthFor: no `.data` access form for {t.name} — an unsigned global needs the `as` cast (P1.9)")
-		f32 to f64 then panic("x64AccessWidthFor: no `.data` access form for {t.name} — a float global loads and stores through XMM, which arrives with floats (P1.0d.4)")
+		f32 then panic("x64AccessWidthFor: no `.data` access form for {t.name} — an f32 is 4 bytes and moves through `movss`, a width this enum does not carry; Maxon's `float` is f64, so nothing produces one")
 	end 'w'
 end 'x64AccessWidthFor'
 

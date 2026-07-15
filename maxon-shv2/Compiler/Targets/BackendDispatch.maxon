@@ -66,7 +66,10 @@ export function buildBackend(stdModule StdModule, target Target, globalData Glob
 	recordPhase(project, phase: CompilePhase.sugarGate, probe: sugarProbe)
 
 	let iselProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.isel)
-	var targetModule = lowerStdToX64(stdModule)
+	// `globalData` reaches ISel because a float CONSTANT is `.rdata` content the lowering is the
+	// first to see (`lowerFloatConst`). It is the same table concat resolves those labels against
+	// once sections are laid out — see `lowerStdToX64`.
+	var targetModule = lowerStdToX64(stdModule, globalData: globalData)
 	recordPhase(project, phase: CompilePhase.isel, probe: iselProbe)
 
 	let regAllocProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.regalloc)

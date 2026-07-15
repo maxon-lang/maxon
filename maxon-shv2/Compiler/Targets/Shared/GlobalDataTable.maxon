@@ -23,6 +23,12 @@
 export typealias GlobalNameIndexMap = Map with (String, MachineWord)
 export typealias GlobalDedupMap = Map with (ByteArray, String)
 
+// An `.rdata` label → its byte offset within the section. The read-only twin of `dataIndex`, and
+// it exists for that field's reason: answering "where does this constant live?" with a linear sum
+// over every prior payload would be Θ(constants × references), which is precisely the shape this
+// file's header calls out in v1 and `sortBySizeDescendingStable` was rewritten to kill.
+export typealias RdataOffsetMap = Map with (String, ByteOffset)
+
 // The rdata payloads themselves — one raw byte blob per registered global.
 export typealias ByteArrayArray = Array with ByteArray
 
@@ -85,10 +91,85 @@ export type GlobalDataTable
 	// order and every entry's `offset`.
 	export var dataSection as DataSectionEntryArray
 	export var dataIndex as DataSectionIndexMap
+	// Each `.rdata` payload's offset, assigned AT REGISTRATION — see RdataOffsetMap and
+	// `registerRdataConstant`. `.rdata` needs no `layOut` twin: unlike `.data`, whose slots are
+	// REORDERED by size to kill padding, these are laid out in registration order and their offsets
+	// are known the moment they are appended.
+	export var rdataOffsets as RdataOffsetMap
 
 	export static function create() returns GlobalDataTable
-		return Self{names: StringArray.create(), values: ByteArrayArray.create(), nextStringId: 0, nameIndex: GlobalNameIndexMap.create(), valueDedup: GlobalDedupMap.create(), dataSection: DataSectionEntryArray.create(), dataIndex: DataSectionIndexMap.create()}
+		return Self{names: StringArray.create(), values: ByteArrayArray.create(), nextStringId: 0, nameIndex: GlobalNameIndexMap.create(), valueDedup: GlobalDedupMap.create(), dataSection: DataSectionEntryArray.create(), dataIndex: DataSectionIndexMap.create(), rdataOffsets: RdataOffsetMap.create()}
 	end 'create'
+
+	// ⭐ REGISTER a read-only constant payload, returning the label that names it — the `.rdata`
+	// twin of the `.data` half below, and the door P1.0d.4's float constants come through.
+	//
+	// IDENTICAL CONTENT RETURNS THE EXISTING LABEL, in O(1), through `valueDedup`. That is not a
+	// micro-optimization: a program mentioning `3.14` in fifty places gets ONE 8-byte island and
+	// fifty references to it, and the dedup is keyed on the rendered BYTES, so two constants that
+	// are the same number written differently (`2.0` and `2.00`) still share one island.
+	//
+	// The offset is assigned HERE, as the running total of everything registered before it, which
+	// is what keeps `rdataOffsetOf` O(1). `rdataImage` walks the same array in the same order and
+	// ASSERTS the two agree, so the offset a relocation resolves to and the offset the image
+	// actually places the bytes at cannot drift.
+	export function registerRdataConstant(prefix String, bytes ByteArray) returns String
+		return try self.valueDedup.get(bytes) otherwise 'fresh'
+			let label = "{prefix}{self.nextStringId}"
+			self.nextStringId = self.nextStringId + 1
+			self.rdataOffsets.upsert(label, value: self.rdataSizeBytes())
+			self.nameIndex.upsert(label, value: self.names.count())
+			self.names.push(label)
+			self.values.push(bytes)
+			self.valueDedup.upsert(bytes, value: label)
+			return label
+		end 'fresh'
+	end 'registerRdataConstant'
+
+	// The total bytes registered so far — which is the offset the NEXT payload lands at.
+	//
+	// It is DERIVED rather than kept as a running field, and that is deliberate: a cached total is
+	// a second copy of a fact `values` already holds, free to drift from it. It is O(entries) and
+	// called once per REGISTRATION (not per reference), so the whole build of the table stays
+	// O(entries²) in the worst case — acceptable while the corpus is float islands, and the note is
+	// here rather than absent: if `.rdata` ever holds thousands of entries (P1.2 strings), this
+	// becomes a running total maintained beside the push, with the `rdataImage` assert as its guard.
+	function rdataSizeBytes() returns ByteOffset
+		var total = 0 as ByteOffset
+		for payload in self.values 'each'
+			total = total + payload.count()
+		end 'each'
+		return total
+	end 'rdataSizeBytes'
+
+	// The byte image of `.rdata` — the payloads concatenated in registration order.
+	//
+	// The `dataSectionImage` twin, including its drift assert and for the same reason: an entry
+	// whose recorded offset disagrees with the running position means the offsets a relocation
+	// resolves against and the bytes the writer emits have parted company, which is a silently
+	// wrong constant rather than a crash.
+	//
+	// No alignment and no padding: a scalar SSE load (`movsd`) tolerates any address, so a float
+	// island needs none — the section's own RVA alignment is the PE writer's business.
+	export function rdataImage() returns ByteArray
+		var image = ByteArray.create()
+		for (iter, payload) in self.values.withIterator() 'each'
+			let label = try self.names.get(iter.index()) otherwise panic("GlobalDataTable.rdataImage: values has {self.values.count()} payloads but names has {self.names.count()} — the two columns are pushed together and cannot disagree")
+			let offset = try self.rdataOffsets.get(label) otherwise panic("GlobalDataTable.rdataImage: '{label}' has no recorded offset — every label registerRdataConstant mints gets one in the same call")
+			if image.count() != offset 'drift'
+				panic("GlobalDataTable.rdataImage: '{label}' is recorded at offset {offset} but the image has reached {image.count()} — the offsets relocations resolve against and the bytes this places have drifted")
+			end 'drift'
+			image.append(payload)
+		end 'each'
+		return image
+	end 'rdataImage'
+
+	// The byte offset of `label`'s payload within `.rdata` — the door the x64 relocation resolver
+	// asks through, and the exact mirror of `dataSectionOffsetOf`. A miss is an invariant break,
+	// not a case: every label reaching here came from a `movsdRegRip` this table minted.
+	export function rdataOffsetOf(label String) returns ByteOffset
+		return try self.rdataOffsets.get(label) otherwise panic("GlobalDataTable.rdataOffsetOf: no .rdata constant is labelled '{label}' — every label a `movsdRegRip` carries is one registerRdataConstant minted")
+	end 'rdataOffsetOf'
 
 	// ⭐ LAY OUT THE `.data` SECTION: order the slots, then assign each its offset. The SINGLE
 	// writer of `dataSection`, `dataIndex` and every entry's `offset` — so the image, the
@@ -200,6 +281,20 @@ function sortBySizeDescendingStable(declared DataSectionEntryArray) returns Data
 
 	return sorted
 end 'sortBySizeDescendingStable'
+
+// `value` rendered as a standalone `byteCount`-byte little-endian payload — what
+// `registerRdataConstant` is handed for a float island.
+//
+// ⭐ It goes through `appendScalar`, the SAME serializer the `.data` image uses, which is the
+// point: an f64 constant in `.rdata` and an f64 global in `.data` are the same 8 bytes of IEEE
+// pattern, and there is exactly one piece of code that decides what those bytes are. A second
+// renderer here would be this project's signature bug — one fact written twice — with the two
+// free to disagree about what `3.14` is.
+export function scalarImage(value ParsedInt, byteCount ByteCount) returns ByteArray
+	var bytes = ByteArray.create()
+	appendScalar(bytes, value: value, byteCount: byteCount)
+	return bytes
+end 'scalarImage'
 
 // Append `value` as `byteCount` little-endian bytes. The `.data` image's one serializer: a
 // global's initial value is a scalar of 1, 2, 4 or 8 bytes, and the width is the type's
