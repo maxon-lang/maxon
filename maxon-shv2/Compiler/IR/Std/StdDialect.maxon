@@ -50,28 +50,44 @@ end 'CastCategory'
 export type StdTypeInfo
 	export let isFloat as bool
 	export let castCategory as CastCategory
+	// The type's footprint IN MEMORY, in bytes — what a `.data` slot of it occupies and
+	// what `loadIndirect`/`storeIndirect` transfer. NOT its width in a register: an `i1`
+	// lives in a full 64-bit GPR but occupies ONE byte of storage, which is exactly what
+	// `specs/static-variables.md`'s `data-section-bool-1byte` pins.
+	//
+	// It rides the per-case BACKING rather than a `match` in a helper for the reason every
+	// other fact here does: a size table beside the enum is a second declaration of the
+	// enum, free to omit a case the day one is appended. Here a new case cannot be added
+	// without stating its size.
+	export let storageBytes as ByteCount
 end 'StdTypeInfo'
 
 // --- StdType: ABI/width-level type classification ---
 // Each case carries a StdTypeInfo backing value encoding whether the type lives
-// in a floating-point register and which cast family it belongs to.
+// in a floating-point register, which cast family it belongs to, and how many
+// bytes it occupies in memory.
 export enum StdType
-	i1 = StdTypeInfo{isFloat: false, castCategory: CastCategory.bool}
-	i8 = StdTypeInfo{isFloat: false, castCategory: CastCategory.int}
-	i16 = StdTypeInfo{isFloat: false, castCategory: CastCategory.int}
-	i32 = StdTypeInfo{isFloat: false, castCategory: CastCategory.int}
-	i64 = StdTypeInfo{isFloat: false, castCategory: CastCategory.int}
-	u8 = StdTypeInfo{isFloat: false, castCategory: CastCategory.int}
-	u16 = StdTypeInfo{isFloat: false, castCategory: CastCategory.int}
-	u32 = StdTypeInfo{isFloat: false, castCategory: CastCategory.int}
-	u64 = StdTypeInfo{isFloat: false, castCategory: CastCategory.int}
-	f32 = StdTypeInfo{isFloat: true, castCategory: CastCategory.float}
-	f64 = StdTypeInfo{isFloat: true, castCategory: CastCategory.float}
+	i1 = StdTypeInfo{isFloat: false, castCategory: CastCategory.bool, storageBytes: 1}
+	i8 = StdTypeInfo{isFloat: false, castCategory: CastCategory.int, storageBytes: 1}
+	i16 = StdTypeInfo{isFloat: false, castCategory: CastCategory.int, storageBytes: 2}
+	i32 = StdTypeInfo{isFloat: false, castCategory: CastCategory.int, storageBytes: 4}
+	i64 = StdTypeInfo{isFloat: false, castCategory: CastCategory.int, storageBytes: 8}
+	u8 = StdTypeInfo{isFloat: false, castCategory: CastCategory.int, storageBytes: 1}
+	u16 = StdTypeInfo{isFloat: false, castCategory: CastCategory.int, storageBytes: 2}
+	u32 = StdTypeInfo{isFloat: false, castCategory: CastCategory.int, storageBytes: 4}
+	u64 = StdTypeInfo{isFloat: false, castCategory: CastCategory.int, storageBytes: 8}
+	f32 = StdTypeInfo{isFloat: true, castCategory: CastCategory.float, storageBytes: 4}
+	f64 = StdTypeInfo{isFloat: true, castCategory: CastCategory.float, storageBytes: 8}
 end 'StdType'
 
 export function stdTypeIsFloat(t StdType) returns bool
 	return t.rawValue.isFloat
 end 'stdTypeIsFloat'
+
+// How many bytes a value of `t` occupies in memory — see `StdTypeInfo.storageBytes`.
+export function stdTypeStorageBytes(t StdType) returns ByteCount
+	return t.rawValue.storageBytes
+end 'stdTypeStorageBytes'
 
 // --- StdReturnType: function return type (either void or a concrete StdType) ---
 // Void-returning functions are `void`; value-returning functions carry the
@@ -394,6 +410,46 @@ export union StdOp
 	// union, so the two range arms that stop at `call` (FoldConstOperands) had to be
 	// extended by hand. See the band-append invariant in the StdOp header.
 	retVoid = StdOpMeta{category: StdOpCategory.call, role: OpRole.ret, isPure: true, isUnsupportedInInlineBody: false, isMemory: false, isStore: false, isCall: false, clobbersFlags: false, isCmp: false}
+	// --- band: memory (P1.0d.5b — top-level `var`) ---
+	//
+	// ⭐ THREE OPS, NOT A FUSED `globalLoad`/`globalStore` PAIR, and the split is the point.
+	// A global's read is `globalAddr` + `loadIndirect`, and its write is `globalAddr` +
+	// `storeIndirect` — the SAME general pair a struct field (P1.1) and a heap value (P1.2)
+	// need, reached one milestone early rather than as a special case that has to be undone.
+	// This is v1's shape verbatim (`maxon-selfhosted/Compiler/Runtime/runtime.std:30-31`:
+	// `v1 = std globalAddr __mm_alloc_count` then `v2 = std loadIndirect v1 0`), and it is
+	// what starts retiring PLAN.md's R1 blocker — that the Std tier produces only
+	// `arith`/`call`, so the Std-IR runtime route has no ops to land on.
+	//
+	// APPENDED PAST THE END OF THE UNION (`retVoid` was the last variant), which is the
+	// band-append invariant working in the reviewer's favour: every stale `… to retVoid` /
+	// `… to call` range arm now FAILS TO COMPILE until it is consciously extended. Measured:
+	// appending these produced 7 loud E2026 non-exhaustive errors and ZERO silent swallows.
+	// (The "silently swallows" danger is INSERTING MID-BAND, which this is not.)
+	//
+	// The ADDRESS of a data-section global. `label` is identifier TEXT, not a value — the
+	// same name/value split `call`'s `callee` follows — and it is the label the backend
+	// resolves against `GlobalDataTable.dataSection`. `isPure: true` (it recomputes an
+	// address that cannot change, so it is freely REMATERIALIZABLE — an x64 `lea
+	// [rip+disp32]` needs no input register at all) and `isMemory: false` (it computes an
+	// address; it does not TOUCH memory — nothing is loaded).
+	globalAddr(resultId ValueId, label ByteArray) = StdOpMeta{category: StdOpCategory.memory, role: OpRole.plain, isPure: true, isUnsupportedInInlineBody: false, isMemory: false, isStore: false, isCall: false, clobbersFlags: false, isCmp: false}
+	// Read `valueType` bytes from `addrId + offset` into `resultId`.
+	//
+	// ⚠ **`isPure: false`, AND THAT IS A CORRECTNESS CONSTRAINT, NOT A CONSERVATISM.** A load
+	// is side-effect-FREE in the everyday sense — it writes nothing — and calling it pure on
+	// that basis is precisely the trap. `isPure` here licenses a pass to DUPLICATE, REORDER or
+	// DROP the op, and a load may do none of those: what it reads is a mutable location some
+	// OTHER op writes. Declared pure, a global's read HOISTS OUT of a loop that writes the
+	// global (`specs/short-circuit-evaluation.md`'s `short-circuit-in-while-condition` reads
+	// and writes `trace` every iteration), and the loop then reads a stale value for ever.
+	// That is a SILENT WRONG ANSWER, not a crash. Purity is "may this op be moved?", and the
+	// answer for a load is no. `clobbersFlags: false` is exact: `mov`/`movzx` write no flags.
+	loadIndirect(resultId ValueId, addrId ValueId, offset ByteOffset, valueType StdType) = StdOpMeta{category: StdOpCategory.memory, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: false, isMemory: true, isStore: false, isCall: false, clobbersFlags: false, isCmp: false}
+	// Write `valueId` as `valueType` bytes to `addrId + offset`. `isStore: true` (it writes
+	// memory, so it must order against every later load — the metadata contract's own words),
+	// `isPure: false`. APPENDED at the END of the memory band, after `loadIndirect`.
+	storeIndirect(addrId ValueId, offset ByteOffset, valueId ValueId, valueType StdType) = StdOpMeta{category: StdOpCategory.memory, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: false, isMemory: true, isStore: true, isCall: false, clobbersFlags: false, isCmp: false}
 end 'StdOp'
 
 export typealias StdOpArray = Array with StdOp
@@ -467,6 +523,12 @@ export function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 		param then break 'u'
 		call(_, _, args) then insertUseArgs(referenced, args: args)
 		retVoid then break 'u'
+		// `globalAddr` reads nothing — its `label` is a NAME, not a value, so it has no
+		// operand at all (its result is a def). The other two read the address they are
+		// handed, and a store reads the value it writes as well.
+		globalAddr then break 'u'
+		loadIndirect(_, addrId, _, _) then referenced.insert(addrId)
+		storeIndirect(addrId, _, valueId, _) then insertUsePair(referenced, a: addrId, b: valueId)
 	end 'u'
 end 'collectStdOpUses'
 
@@ -512,6 +574,11 @@ module function remapStdOpUses(op StdOp, subst ValueIdArray) returns StdOp
 		param gives op
 		call(resultId, callee, args) gives StdOp.call(resultId, callee: callee, args: remappedArgs(args, subst: subst))
 		retVoid gives op
+		// The exact mirror of `collectStdOpUses`'s three arms: `globalAddr` reports no use,
+		// so it rewrites nothing and is handed back unchanged.
+		globalAddr gives op
+		loadIndirect(resultId, addrId, offset, valueType) gives StdOp.loadIndirect(resultId, addrId: remappedValue(addrId, subst: subst), offset: offset, valueType: valueType)
+		storeIndirect(addrId, offset, valueId, valueType) gives StdOp.storeIndirect(remappedValue(addrId, subst: subst), offset: offset, valueId: remappedValue(valueId, subst: subst), valueType: valueType)
 	end 'r'
 end 'remapStdOpUses'
 

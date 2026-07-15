@@ -55,6 +55,10 @@ allocator under it:
 - **Calls** — first argument positional, every later argument labelled
   (`f(a, b: x)`); call expressions and bare-call statements; recursion.
 - `let` / `var` bindings, `var` reassignment, integer literals, identifiers.
+- **Top-level `let` and `var`** — a module-scope `let` is a compile-time constant that INLINES
+  at every use; a module-scope `var` is a real `.data` slot that loads and stores. Both take
+  constant-only initializers (no calls), evaluated once by the declaration sweep. Scalars only
+  (`int`/`bool`) — a managed global needs the heap (P1.2).
 - **Arithmetic** — `+ - * / mod` with Pratt precedence, prefix `-`.
 - **Comparisons** — `== != < > <= >=`, valid *only* as the sole top-level operator
   of an `if`/`while` condition (there is no `setcc`/bool materialization yet, so a
@@ -76,12 +80,13 @@ meant two things.)
 strings/arrays/maps, floats in codegen, error handling, the runtime shv2 must
 *emit* (Workstream R), the parallel compilation driver, arm64/wasm. See `PLAN.md`.
 
-**The gate battery** (all three must be green before a commit):
+**The gate battery** (all four must be green before a commit):
 | Gate | What it proves |
 |---|---|
-| `maxon-shv2 spec-test` — the RUN | **84 passing / 0 failing** over `specs-shv2/*.md`. Each test compiles a program, **runs** it, and asserts its exit code — so an allocation that leaves a value in the wrong register computes the wrong answer and FAILS. This is the correctness gate on the register allocator. |
+| `maxon-shv2 spec-test` — the RUN | **314 passing / 0 failing** over `specs-shv2/*.md`. Each test compiles a program, **runs** it, and asserts its exit code — so an allocation that leaves a value in the wrong register computes the wrong answer and FAILS. This is the correctness gate on the register allocator. |
 | `specs-shv2/fragments/x64-windows/**` — the GOLDENS | Committed Target-IR goldens, **compared** by the same `spec-test` run (`SpecTestRunner.checkTestFragment`): a mismatch FAILS the test with `codegen changed`. This is the *quality* gate — an extra spill, a lost coalesce, a needlessly widened live range all still return the right answer, so only the pinned IR sees them. They also reach where the run cannot: one execution takes ONE path, the golden pins EVERY block. `--update-required` regenerates them, and that diff is the review. |
-| `maxon-shv2 verify-warm-rebuild <file>` | Compile determinism (byte-identical) + query-spine incrementality (content-hash cache hit) |
+| `maxon-shv2 verify-warm-rebuild <file\|dir>` | Compile determinism (byte-identical) + query-spine incrementality (content-hash cache hit) + **invalidation** (four probes: a bytes-only edit re-parses 1 file; a declaration edit re-parses all; a `let`'s VALUE edit re-parses all; a `var`'s value edit re-parses **1**) |
+| ```RequiredData``` blocks — the **BINARY** | The `.data` section read back OUT of the linked PE and byte-compared (`Testing/PeSectionReader.maxon`, a port of the C# runner's `CheckRequiredData`). The only gate that looks at what was actually LINKED rather than at what the compiler meant: it catches a section header with a wrong RVA or a raw pointer off by an alignment, which no exit code and no IR dump can see. ⚠ It was **silently ignored** until P1.0d.5b — six `static-variables` cases carried one and would have passed on their exit code alone while claiming to check their layout. |
 
 ---
 
@@ -210,6 +215,27 @@ with a fresh edge for a consumer that did not exist. Nothing ever read a bucket,
 validated one — a graph nobody reads is not wiring, it is unpaid bugs plus a `String` render and
 two `Map` writes per edge on the hot path. It went the way its own flat-array half went one commit
 earlier. If a query ever needs a dynamic edge, add the index **with its reader, in one commit**.
+
+#### ⭐ MIX WHAT A READER COPIES — and a `var` does not copy its value
+
+The index's hash keys every parse memo, so the rule for what rides it is exactly *"what does a
+reader COPY out of this declaration?"* — and `let` and `var` answer it **oppositely**, which is the
+one place they genuinely diverge:
+
+- A **`let`'s VALUE** is copied into every reader (a use becomes a `literal` op carrying the
+  number), so `let X = 7` → `8` changes what other files COMPILE TO while their own bytes never
+  move. Only this hash can carry that.
+- A **`var`'s value is copied into NOTHING.** A reader emits `globalAddr __data_X` +
+  `loadIndirect`, byte-identical whichever number the initializer held; the value reaches only the
+  `.data` image, which is rebuilt from the arena whenever the signature query misses. What a var's
+  reader DOES depend on is its **TAG** (an `i1` moves one byte, an `i64` eight) and its **LABEL**
+  (the slot the emitted `globalAddr` names) — so those ride, and the payload does not.
+
+Mixing a var's payload too would be **SOUND and WRONG**: every keystroke on any global's initial
+value would re-parse the whole program — the "sound, and useless" composite-source-hash key wearing
+a different hat. **MEASURED:** with the payload mixed, `verify-warm-rebuild`'s var probe reports
+`expected 1, got 3` while its other three properties stay green, because a pessimal key re-parses
+everything for everything and none of them can tell that from a correct one.
 
 `verify-warm-rebuild` (`Compiler/VerifyWarmRebuild.maxon`) is the standing gate over
 this spine, asserting two properties and exiting 0 iff both hold:
@@ -371,6 +397,7 @@ empty):
 |---|---|
 | `callFree` | `call(result, callee, args, argLabels, argRanges)` |
 | `plain` | `literal`, `ret`, `retVoid`, `binOp`, `unaryOp`, `compare`, `condBranch`, `branch` |
+| `varAccess` | `globalAddr`, `loadIndirect`, `storeIndirect` |
 
 Every variant is tagged `= MaxonOpMeta{category}` — a new op cannot be added without
 declaring its `OpCategory` — and obeys the band-append invariant.
@@ -488,7 +515,8 @@ flag-clobbering op is still `isPure`.)
 | `arith` | `const`, `binOp(opcode)`, `unaryOp(opcode)`, `cmp(pred)`, `binOpImm(imm)`, `cmpImm(imm)`, `div`, `mod` |
 | `control` | `condBranch`, `branch` |
 | `call` | `ret` (role `ret`), `param` (role `param`), `call`, `retVoid` (role `ret`) |
-| `memory` · `system` · `sugar` | *(empty)* |
+| `memory` | `globalAddr`, `loadIndirect`, `storeIndirect` |
+| `system` · `sugar` | *(empty)* |
 
 Flat does **not** mean one variant per opcode: a family sharing an operand shape
 (`add`/`sub`/`mul`) stays one variant with an opcode field, but a member needing *different
@@ -515,6 +543,31 @@ every range-arm site at once.
 
 (Appending at the *union* end also makes stale `… to iatCall` range arms fail to compile
 until extended — the invariant working in the reviewer's favour.)
+
+### The memory band, and the one metadata bit that is a correctness constraint
+
+`globalAddr` · `loadIndirect` · `storeIndirect` — v1's shape verbatim
+(`maxon-selfhosted/Compiler/Runtime/runtime.std:30`). **THREE ops, not a fused
+`globalLoad`/`globalStore`:** a global's read is an address then a load, which is the same general
+pair a struct field (P1.1) and a heap value (P1.2) need, reached one milestone early rather than as
+a special case that has to be undone. shv2 SKIPS v1's `unresolvedRead`/`unresolvedAssign`
+placeholder indirection entirely — v1 needs it because its parser cannot know what a bare name is
+until a later pass, and shv2's `SignatureIndex` has that answer before any file is parsed.
+
+Both `loadIndirect` and `storeIndirect` carry an `StdType` where v1 carried
+`(width, signed, isFloat)`: shv2's `StdType` already encodes all three, and its
+`StdTypeInfo.storageBytes` backing is the single source of a type's memory footprint (an `i1` is
+ONE byte, which is what `data-section-bool-1byte` pins).
+
+> ⚠ **`loadIndirect` declares `isPure: FALSE`, and that is a CORRECTNESS constraint, not
+> conservatism.** A load writes nothing, so calling it "side-effect-free" is true and useless:
+> `isPure` licenses a pass to DUPLICATE, REORDER or DROP an op, and a load may do none of those —
+> what it reads is a mutable location some other op writes. Declared pure, a global's read HOISTS
+> out of a loop that writes the global and the loop reads a stale value for ever. A **silent wrong
+> answer**, not a crash. `specs-shv2/global-load-not-hoisted.md` pins it.
+>
+> `globalAddr` is `isPure: true` and `isMemory: false` — it computes an address (a RIP-relative
+> `lea` reading no register at all) rather than touching memory.
 
 ### The sugar band
 
@@ -746,11 +799,45 @@ leaving rbp holding whatever the loader put there.
 it; it exists because the **wasm** backend will consume the machine-level IR directly instead
 of going through a target dialect — and with the MIR tier gone, Std *is* that IR.
 
-`GlobalDataTable` (`.rdata`) is threaded through the backend but **empty today** — there are no
+`GlobalDataTable` carries two sections. Its **`.rdata`** half is still **empty** — there are no
 strings or floats yet. When it fills, the rule is: the backend captures rdata constants
 chunk-locally and merges them into the shared table **single-threaded in function order**
 (idempotent-by-label dedup), with content-derived keys for all other shared appends. That is
 what keeps a parallel backend byte-deterministic.
+
+### `.data` — the top-level `var` slots (P1.0d.5b)
+
+Its **`.data`** half is live. `GlobalDataTable.layOut` is the SINGLE writer of the slot order, of
+every slot's offset, and of the label→slot index — so the image, the relocation resolver and the
+`RequiredData` gate cannot hold three opinions about where a global lives.
+
+**Slots are sorted by storage size, LARGEST FIRST, stably.** Every size is a power of two and ≤ 8,
+so laying the widest out first makes each slot naturally aligned as it is reached and the padding is
+**zero** — declaration order would put an 8-byte slot at offset 1 and need seven bytes to fix it.
+The sort is STABLE because equal-sized slots are pinned in declaration order
+(`specs/static-variables.md`'s `data-section-multiple-bools`). An entry carries its `(value, type)`
+and NOT its bytes: the image is rendered from that pair by `dataSectionImage`, once, so a value and
+a serialization of it cannot disagree.
+
+⭐ **A global's IDENTITY and its LABEL are two facts, and that is what makes file-private globals
+work.** The storage KEY is file-scoped (`SignatureIndex.topLevelStorageKey`), so two files may each
+declare `var counter` and each file's reads resolve to its OWN slot. The LABEL is DERIVED from it —
+the bare `__data_counter`, suffixed `$1`, `$2`… only on collision, in arena order — so it is
+path-free and a golden fragment never contains the temp directory it was compiled in.
+
+> ⚠ **Both reference compilers get this wrong, and it is measured, not inferred.** Their resolver is
+> file-scoped while their `.data` label is global-by-name, so two file-private `counter`s ALIAS onto
+> one slot: `specs-shv2/global-file-private-same-name.md` returns **212** under the C# bootstrap
+> where **118** is correct. v1 concedes it in its own comment — "in practice no two file-private
+> vars share a bare name" (`Parser.maxon:3206-3214`) — which is correctness resting on a property of
+> the corpus. None of v1's four bare-key sites is ported.
+
+The label minter COUNTS rather than SEARCHES (`DataLabelCountMap`): probing `$1`, `$2`, … until one
+is free is O(k) for the k-th global of a name, hence Θ(n²) for n same-named globals — exactly the
+shape the spec above is about. `$` is legal in no Maxon identifier, so the disambiguator is the only
+minter of suffixed labels and its count IS the next free ordinal. Measured off-instrument (the scale
+corpus contains no top-level `var` at all): 800 file-private globals all named `counter` compile at
+**x2.02 per doubling** across a 16x span, and produce 800 distinct slots.
 
 ## Register allocator (Std `ValueId`s → physical GPRs)
 

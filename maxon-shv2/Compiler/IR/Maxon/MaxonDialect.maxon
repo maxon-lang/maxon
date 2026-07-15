@@ -440,4 +440,40 @@ export union MaxonOp
 	// Unconditional branch terminator to `targetBlockId`. Emitted when a then/else
 	// block falls through to the merge (continuation) block rather than returning.
 	branch(targetBlockId BlockId) = MaxonOpMeta{category: OpCategory.plain}
+	// --- band: varAccess (P1.0d.5b — top-level `var`) ---
+	//
+	// The FIRST occupants of the `varAccess` band, which has been declared and empty since
+	// M1. They are the Maxon-tier twins of the Std memory band and lower to it 1:1
+	// (`lowerGlobalAddr`/`lowerLoadIndirect`/`lowerStoreIndirect`) — the same THREE-op split
+	// (address, then load or store) rather than a fused `globalLoad`, for the reason
+	// StdDialect's memory band gives: it is the general pair P1.1's field access and P1.2's
+	// heap access already need.
+	//
+	// ⚠ APPENDED AT THE END OF THE UNION — past `branch`, the old last variant — NOT into
+	// the middle of the `varAccess` band's nominal position between `panicking` and
+	// `awaiting`. The band ORDER in `OpCategory` is the declaration's intent; the union's
+	// variant order is what range arms read, and appending past the tail is the only
+	// placement the compiler can check (a mid-union insert is silently swallowed by any
+	// `… to branch` range arm). The bands stay category-contiguous because `varAccess` was
+	// EMPTY: these three are its whole membership, so they are contiguous wherever they sit.
+	//
+	// ⭐ SHV2 SKIPS v1's `unresolvedRead`/`unresolvedAssign` INDIRECTION ENTIRELY. v1 emits a
+	// placeholder op at parse time and rewrites it in TypeResolution
+	// (`rewriteUnresolvedRead`) because its parser cannot know whether a bare name is a
+	// local, a constant or a global — the declaration may be in another file it has not read.
+	// shv2's `SignatureIndex` HAS that whole-program answer before any file is parsed, so the
+	// parser emits the real op directly and there is no placeholder, no rewrite pass, and no
+	// second op union to keep in step.
+	//
+	// The ADDRESS of a data-section global. `label` is identifier TEXT (a NAME, looked up —
+	// not a value), per the MaxonOp header's value/name split, and it is the storage label
+	// `ProgramSignatures` derived — see `SignatureIndex.dataLabelFor`.
+	globalAddr(result ValueId, label ByteArray) = MaxonOpMeta{category: OpCategory.varAccess}
+	// Read a `valueType` value from `addr + offset`. `valueType` is the SOURCE-level type
+	// (integer/boolean); the width collapse to `StdType` happens only in lowering, per the
+	// MaxonType contract.
+	loadIndirect(result ValueId, addr ValueId, offset ByteOffset, valueType MaxonType) = MaxonOpMeta{category: OpCategory.varAccess}
+	// Write `value` to `addr + offset`. A STATEMENT, not an expression — it defines no
+	// result, so unlike its two band-mates it mints no ValueId.
+	storeIndirect(addr ValueId, offset ByteOffset, value ValueId, valueType MaxonType) = MaxonOpMeta{category: OpCategory.varAccess}
 end 'MaxonOp'

@@ -629,6 +629,45 @@ export function encodeLeaRegFuncAddr(code ByteArray, callFixups CallFixupArray, 
 	writeDword(code, value: 0)
 end 'encodeLeaRegFuncAddr'
 
+// `lea dest, [rip + <.data global>]` — the address of a top-level `var`'s slot (P1.0d.5b).
+// The THIRD consumer of `emitLeaRipRelPrefix`, and it files its fixup in a third table: an
+// `RdataRelocation` of kind `dataSectionRipRelDisp32`, which the PE writer resolves against
+// `.data`'s RVA once section layout is fixed.
+//
+// It cannot ride `encodeLeaRegFuncAddr`'s `CallFixup` path, and the reason is the section, not the
+// instruction: a `CallFixup` names a `.text` CHUNK and concat resolves it by walking the function
+// placements, whereas a global lives in `.data` and its offset comes from `GlobalDataTable`. Same
+// bytes, same end-of-field convention, different table to look the target up in — which is exactly
+// what `RdataRelocKind` discriminates.
+export function encodeLeaRegGlobal(code ByteArray, rdataRelocs RdataRelocationArray, dest X64Register, label ByteArray)
+	emitLeaRipRelPrefix(code, dest: dest)
+	rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: String.from(label), kind: RdataRelocKind.dataSectionRipRelDisp32))
+	writeDword(code, value: 0)
+end 'encodeLeaRegGlobal'
+
+// Load `[base + disp]` at the op's width. Both arms REUSE an encoder the spill/reload path
+// already had — `[base+disp]` addressing does not care whether the base is rsp or a global's
+// address — which is the whole reason the review that unified the three drifted `[base+disp]`
+// encoders into `encodeModRmBaseDisp` paid off here.
+//
+// The BYTE arm is `movzx`, not `mov`: a bool must arrive in the register ZERO-EXTENDED, or the
+// upper 56 bits are whatever the register last held and `if flag` tests garbage.
+function emitDataLoad(code ByteArray, dest X64Register, base X64Register, disp Imm32, width X64AccessWidth)
+	match width 'w'
+		byte then encodeMovzxRegByteBaseDisp(code, destReg: dest, base: base, disp: disp)
+		word64 then encodeLoadRegBaseDisp(code, destReg: dest, base: base, disp: disp, wide: true)
+	end 'w'
+end 'emitDataLoad'
+
+// Store `src` to `[base + disp]` at the op's width — `emitDataLoad`'s mirror, over the byte and
+// 64-bit store encoders the spill path already had.
+function emitDataStore(code ByteArray, base X64Register, disp Imm32, src X64Register, width X64AccessWidth)
+	match width 'w'
+		byte then encodeStoreBaseDispReg8(code, base: base, disp: disp, srcReg: src)
+		word64 then encodeStoreBaseDispReg(code, base: base, disp: disp, srcReg: src)
+	end 'w'
+end 'emitDataStore'
+
 // Patch a chunk-local rel32 field to the chunk-local start offset of its target.
 // The displacement is measured from the END of the 4-byte field (`codeOffset +
 // X64Disp32Width`) — the shared x64 `call`/`jmp`/`jcc` rel32 convention — so this
@@ -757,7 +796,7 @@ end 'slotDisplacement'
 // every block's offset is known (see resolveChunkRel32Fixups). `spillBaseDisp` is the
 // function's spill-area base offset from rsp (see spillSlotBaseDisp), added to each
 // spill/reload slot displacement.
-function emitTargetOp(op TargetOp, code ByteArray, callFixups CallFixupArray, iatRelocs RelocationArray, rel32Fixups ChunkRel32FixupArray, spillBaseDisp StackSize)
+function emitTargetOp(op TargetOp, code ByteArray, callFixups CallFixupArray, iatRelocs RelocationArray, rdataRelocs RdataRelocationArray, rel32Fixups ChunkRel32FixupArray, spillBaseDisp StackSize)
 	match op 'emit'
 		prologue(stackSize) then encodePrologue(code, stackSize: stackSize)
 		epilogue(stackSize) then encodeEpilogue(code, stackSize: stackSize)
@@ -805,6 +844,12 @@ function emitTargetOp(op TargetOp, code ByteArray, callFixups CallFixupArray, ia
 		sarRegCl(dest, _) then encodeGrp2RegCl(code, ext: Grp2ExtSar, reg: resolvePhysical(dest))
 		shrRegCl(dest, _) then encodeGrp2RegCl(code, ext: Grp2ExtShr, reg: resolvePhysical(dest))
 		setccReg(dest, cond) then encodeSetccReg(code, dest: resolvePhysical(dest), cond: cond)
+		// The data-section band. Each dispatches to an encoder that ALREADY EXISTED — the
+		// `[base+disp]` load/store/movzx forms the spill/reload path uses, here with a global's
+		// address in the base register instead of rsp. No second encoder is minted for them.
+		leaRegGlobal(dest, label) then encodeLeaRegGlobal(code, rdataRelocs: rdataRelocs, dest: resolvePhysical(dest), label: label)
+		loadRegBaseDisp(dest, base, disp, width) then emitDataLoad(code, dest: resolvePhysical(dest), base: resolvePhysical(base), disp: disp, width: width)
+		storeBaseDispReg(base, disp, src, width) then emitDataStore(code, base: resolvePhysical(base), disp: disp, src: resolvePhysical(src), width: width)
 	end 'emit'
 end 'emitTargetOp'
 
@@ -823,6 +868,9 @@ export function emitFunctionChunk(module TargetModule, func IrFunction) returns 
 	var code = ByteArray.create()
 	var callFixups = CallFixupArray.create()
 	var iatRelocs = RelocationArray.create()
+	// The chunk's code -> .data references, filed by `encodeLeaRegGlobal` with CHUNK-LOCAL offsets;
+	// `concatX64FunctionChunks` rebases them exactly as it rebases `callFixups` and `iatRelocs`.
+	var rdataRelocs = RdataRelocationArray.create()
 	var rel32Fixups = ChunkRel32FixupArray.create()
 	var chunkLabelOffsets = ChunkLabelOffsetMap.create()
 
@@ -841,12 +889,12 @@ export function emitFunctionChunk(module TargetModule, func IrFunction) returns 
 
 		for opIdx in block.opRefs 'eachOp'
 			let op = try module.ops.get(opIdx) otherwise panic("emitFunctionChunk: opIdx {opIdx} not in module.ops")
-			emitTargetOp(op, code: code, callFixups: callFixups, iatRelocs: iatRelocs, rel32Fixups: rel32Fixups, spillBaseDisp: spillBaseDisp)
+			emitTargetOp(op, code: code, callFixups: callFixups, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, rel32Fixups: rel32Fixups, spillBaseDisp: spillBaseDisp)
 		end 'eachOp'
 
 		if block.hasTerminatorOp() 'hasTerm'
 			let termOp = try module.ops.get(block.terminatorIndex()) otherwise panic("emitFunctionChunk: terminator not in module.ops")
-			emitTargetOp(termOp, code: code, callFixups: callFixups, iatRelocs: iatRelocs, rel32Fixups: rel32Fixups, spillBaseDisp: spillBaseDisp)
+			emitTargetOp(termOp, code: code, callFixups: callFixups, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, rel32Fixups: rel32Fixups, spillBaseDisp: spillBaseDisp)
 		end 'hasTerm'
 	end 'eachBlock'
 
@@ -854,7 +902,7 @@ export function emitFunctionChunk(module TargetModule, func IrFunction) returns 
 
 	// M1 registers no rdata constants (no float/mask islands) — those GROW in at
 	// M3 (floats) / M10 (strings).
-	return FunctionCodeChunk.createWith(func.name, code: code, callFixups: callFixups, rdataRelocs: RdataRelocationArray.create(), iatRelocs: iatRelocs, rdataConstants: GlobalDataTable.create())
+	return FunctionCodeChunk.createWith(func.name, code: code, callFixups: callFixups, rdataRelocs: rdataRelocs, iatRelocs: iatRelocs, rdataConstants: GlobalDataTable.create())
 end 'emitFunctionChunk'
 
 // ==========================================================================
@@ -956,6 +1004,7 @@ export function concatX64FunctionChunks(targetModule TargetModule, stdModule Std
 	var callFixups = CallFixupArray.create()
 	var labelOffsets = FuncLabelOffsetMap.create()
 	var debugSymbols = DebugSymbolArray.create()
+	var rdataRelocations = RdataRelocationArray.create()
 
 	for chunk in chunks 'eachChunk'
 		let funcStart = code.count()
@@ -970,6 +1019,14 @@ export function concatX64FunctionChunks(targetModule TargetModule, stdModule Std
 		for r in chunk.iatRelocs 'rebaseIat'
 			relocations.push(Relocation.create(funcStart + r.codeOffset, slotIndex: r.slotIndex))
 		end 'rebaseIat'
+		// A code -> .data reference is rebased exactly as the two above are, and RESOLVED here to
+		// its slot's offset within `.data`. The writer then adds the section's RVA — the only part
+		// of the address the backend cannot know, because sections are not laid out yet.
+		for rr in chunk.rdataRelocs 'rebaseRdata'
+			var reloc = RdataRelocation.create(funcStart + rr.codeOffset, rdataLabel: rr.rdataLabel, kind: rr.kind)
+			reloc.rdataOffset = globalData.dataSectionOffsetOf(rr.rdataLabel)
+			rdataRelocations.push(reloc)
+		end 'rebaseRdata'
 	end 'eachChunk'
 
 	// `__symtable` CLOSES `.text`, after the last function chunk — the placement the panic
@@ -997,11 +1054,13 @@ export function concatX64FunctionChunks(targetModule TargetModule, stdModule Std
 		panic("concatX64FunctionChunks: '{String.from(EntryPointName)}' must be laid out FIRST in .text but is at offset {entryOffset} — the panic runtime takes its address as `text_base` and symbolizes every frame relative to it, so anything below it would silently drop out of all backtraces")
 	end 'entryNotFirst'
 
-	// M1 registers no read-only data / globals, so rdata, rdata relocs, symdata,
-	// and covdata are all empty — they GROW back at their milestones (strings/M10,
-	// globals/M6, coverage). The IAT relocations remain for the PE writer to patch.
-	var result = CodeResult.create(code, mainCallFixupOffset: entryOffset, relocations: relocations, globalData: globalData, targetModule: targetModule, stdModule: stdModule, rdata: ByteArray.create(), rdataRelocations: RdataRelocationArray.create(), symdata: ByteArray.create(), covDataSectionBytes: ByteArray.create())
+	// rdata (strings/float islands), symdata and covdata are still empty — they GROW back at their
+	// milestones (P1.2 String, coverage). `.data` is NO LONGER among them: P1.0d.5b fills
+	// `dataPrelude` with the top-level `var` image, and `rdataRelocations` with the code -> .data
+	// references resolved above. The IAT relocations remain for the PE writer to patch.
+	var result = CodeResult.create(code, mainCallFixupOffset: entryOffset, relocations: relocations, globalData: globalData, targetModule: targetModule, stdModule: stdModule, rdata: ByteArray.create(), rdataRelocations: rdataRelocations, symdata: ByteArray.create(), covDataSectionBytes: ByteArray.create())
 	result.debugSymbols = debugSymbols
+	result.dataPrelude = globalData.dataSectionImage()
 	return result
 end 'concatX64FunctionChunks'
 

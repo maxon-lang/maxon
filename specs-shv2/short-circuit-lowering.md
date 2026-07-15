@@ -1,155 +1,45 @@
 ---
-feature: short-circuit-elision
+feature: short-circuit-lowering
 status: stable
-keywords: [and, or, short-circuit, boolean, logical, operators, lazy]
+keywords: [and, or, short-circuit, boolean, lowering, blocks, phi]
 category: operators
 ---
 
-# Short-Circuit Elision — Provable Without Globals
+# Short-Circuit Lowering — Block Structure And Merge Phis
 
 ## Documentation
 
-**This spec exists because shv2 cannot yet run the one that should cover this.**
+A bool `and`/`or` is **control flow**, not an operator: `Parser.emitShortCircuit` mints blocks
+and a merge phi, and no later pass can retrofit that. This spec pins the SHAPE that lowering
+produces, by checking VALUES a mis-placed block or a mis-wired phi would get wrong.
 
-The language's short-circuit contract is defined by
-[`specs/short-circuit-evaluation.md`](../specs/short-circuit-evaluation.md), which is ported
-into this suite verbatim — and **every one of its twelve cases is shelved**, nine of them for
-the same reason: they count side effects in a **top-level `var`**, and shv2 has no globals (no
-writable data section, no global load/store ops, no cross-function binding scope). Two more
-need the `as` cast; one needs structs.
+**It is not a test of elision**, and that distinction is why this file exists separately.
+Whether the right operand is *skipped* is pinned by
+[`short-circuit-evaluation.md`](./short-circuit-evaluation.md), which counts evaluations in a
+top-level `var` — the sharpest possible oracle, and the one the language's own spec uses.
 
-That would leave `and`/`or` shipping with **no evidence that the right operand is skipped at
-all** — and an eagerly-evaluated `and` computes the *same answer* on every input, so no
-value-checking test can catch it. It is a purely observational property, and without globals
-shv2 has exactly one observable side effect: **an integer divide by zero faults the process**
-(`STATUS_INTEGER_DIVIDE_BY_ZERO`, exit `0xC0000094`).
+These cases ask a different question: given that the lowering branches, does it branch to the
+right places? A short-circuit in a call ARGUMENT moves the block the call must be emitted
+into; one in a loop CONDITION decides which block the exit phi's operands come from; `not`
+over a merged value must pick the LOGICAL opcode, because the integer one turns `false` into
+-1 which still reads as true. Every one of those is a wrong answer with a correct-looking
+program, and none of them is about elision at all.
 
-So the oracle here is a `boom()` whose body divides by a runtime zero. A guarded
-`… and boom()` that **exits cleanly** is a proof the operand was never evaluated; a
-compiler that evaluated it eagerly would take the fault and produce a wildly different
-exit code. The counterpart cases pin the other direction — that the right operand IS
-evaluated when the left does not determine the result — by checking the value.
+## Provenance — what this file replaced, and why the replacement is narrower
 
-**Retire this file when globals land**, and enable `short-circuit-evaluation.md` in its
-place: that one tests the same property against a *count* of evaluations, which is strictly
-sharper. Until then, this is the only thing standing between the short-circuit lowering and
-a silent regression.
+These nine cases were rescued from `short-circuit-elision.md` (**deleted at P1.0d.5b**), a
+workaround that existed because shv2 had no globals. That file proved elision the only way a
+compiler with no observable side effects can: it made the guarded operand **divide by zero**,
+so a clean exit was the proof. Its own header said to retire it when globals landed, and
+`OPEN.md` #4 said the same.
+
+Globals landed, `short-circuit-evaluation.md`'s counting cases went green, and the five
+divide-by-zero cases were deleted with the file — they tested elision, worse than the spec
+that now tests elision. **These nine never used that oracle.** They check ordinary values,
+they were never a workaround for anything, and deleting them along with the hack would have
+been a silent coverage regression dressed up as a cleanup.
 
 ## Tests
-
-<!-- test: and-skips-rhs-when-lhs-false -->
-`false and boom()` must not evaluate `boom()`. A clean exit 0 is the proof: reaching
-`boom()` divides by zero and faults the process.
-
-```maxon
-function no() returns bool
-	return false
-end 'no'
-
-function boom() returns bool
-	let zero = 0
-	let q = 1 / zero
-	return q == 0
-end 'boom'
-
-function main() returns ExitCode
-	if no() and boom() 'never'
-		return 1
-	end 'never'
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-
-<!-- test: or-skips-rhs-when-lhs-true -->
-`true or boom()` must not evaluate `boom()`.
-
-```maxon
-function yes() returns bool
-	return true
-end 'yes'
-
-function boom() returns bool
-	let zero = 0
-	let q = 1 / zero
-	return q == 0
-end 'boom'
-
-function main() returns ExitCode
-	if yes() or boom() 'taken'
-		return 7
-	end 'taken'
-	return 9
-end 'main'
-```
-```exitcode
-7
-```
-
-<!-- test: and-chain-skips-every-later-operand -->
-Short-circuit composes: in `a and b and c`, a false `a` skips BOTH `b` and `c`. Two
-separate faulting operands, neither of which may run.
-
-```maxon
-function no() returns bool
-	return false
-end 'no'
-
-function boom() returns bool
-	let zero = 0
-	let q = 1 / zero
-	return q == 0
-end 'boom'
-
-function boomAgain() returns bool
-	let zero = 0
-	let q = 2 / zero
-	return q == 0
-end 'boomAgain'
-
-function main() returns ExitCode
-	if no() and boom() and boomAgain() 'never'
-		return 1
-	end 'never'
-	return 0
-end 'main'
-```
-```exitcode
-0
-```
-
-<!-- test: or-chain-skips-every-later-operand -->
-In `a or b or c`, a true `a` skips both `b` and `c`.
-
-```maxon
-function yes() returns bool
-	return true
-end 'yes'
-
-function boom() returns bool
-	let zero = 0
-	let q = 1 / zero
-	return q == 0
-end 'boom'
-
-function boomAgain() returns bool
-	let zero = 0
-	let q = 2 / zero
-	return q == 0
-end 'boomAgain'
-
-function main() returns ExitCode
-	if yes() or boom() or boomAgain() 'taken'
-		return 5
-	end 'taken'
-	return 9
-end 'main'
-```
-```exitcode
-5
-```
 
 <!-- test: rhs-is-evaluated-when-lhs-does-not-decide -->
 The other direction, and the one an over-eager elision would break: `and` MUST evaluate its
@@ -353,35 +243,6 @@ end 'main'
 ```
 ```exitcode
 3
-```
-
-<!-- test: in-a-while-condition -->
-A short-circuit in a loop CONDITION spreads the condition's evaluation over blocks between
-the loop header and its two-way branch. The header stays the `continue`/back-edge target;
-the exit's incoming edge moves to the block the condition ends in. The loop body must never
-run, and `boom()` must never be evaluated.
-
-```maxon
-function no() returns bool
-	return false
-end 'no'
-
-function boom() returns bool
-	let zero = 0
-	let q = 1 / zero
-	return q == 0
-end 'boom'
-
-function main() returns ExitCode
-	var n = 0
-	while no() and boom() 'loop'
-		n = n + 1
-	end 'loop'
-	return n
-end 'main'
-```
-```exitcode
-0
 ```
 
 <!-- test: loop-carried-var-across-a-short-circuit-condition -->

@@ -547,7 +547,9 @@ function collectOpHints(op TargetOp, hints ColorHints)
 		// The bit band carries no COPY hint: none of these ops is a move. Their two-address
 		// `dest ⟸ lhs` bias is a REUSE hint, which `collectReuseHints` reads straight off
 		// the operand model — so it covers every one of them without an arm here.
-		andRegReg to setccReg then break 'hint'
+		// The data-section band carries no COPY hint either: a `lea`, a load and a store are
+		// none of them a move, so no two of their operands want the same register.
+		andRegReg to storeBaseDispReg then break 'hint'
 	end 'hint'
 end 'collectOpHints'
 
@@ -1118,6 +1120,11 @@ export function colorTargetOp(op TargetOp, alloc Allocation) returns TargetOp
 		sarRegCl(dest, lhs) then return TargetOp.sarRegCl(colorVRegWith(dest, alloc: alloc), lhs: colorVRegWith(lhs, alloc: alloc))
 		shrRegCl(dest, lhs) then return TargetOp.shrRegCl(colorVRegWith(dest, alloc: alloc), lhs: colorVRegWith(lhs, alloc: alloc))
 		setccReg(dest, cond) then return TargetOp.setccReg(colorVRegWith(dest, alloc: alloc), cond: cond)
+		// The data-section band. `label`, `disp` and `width` are not registers and pass through; the
+		// vregs are colored exactly as every other op's are.
+		leaRegGlobal(dest, label) then return TargetOp.leaRegGlobal(colorVRegWith(dest, alloc: alloc), label: label)
+		loadRegBaseDisp(dest, base, disp, width) then return TargetOp.loadRegBaseDisp(colorVRegWith(dest, alloc: alloc), base: colorVRegWith(base, alloc: alloc), disp: disp, width: width)
+		storeBaseDispReg(base, disp, src, width) then return TargetOp.storeBaseDispReg(colorVRegWith(base, alloc: alloc), disp: disp, src: colorVRegWith(src, alloc: alloc), width: width)
 	end 'rewrite'
 end 'colorTargetOp'
 

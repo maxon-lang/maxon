@@ -41,9 +41,41 @@ let FuncHeaderPrefix = "func @"
 // The printed text grows with the PROGRAM, so both accumulators here are `StringBuilder`s: a `String`
 // owns exactly the bytes it holds and its `append` recopies all of them (stdlib/String.maxon), which
 // would make printing a module quadratic in its own output.
-export function printTargetModule(module TargetModule, includeRuntime bool) returns String
+// ⭐ THE `.data` SECTION IS PRINTED FIRST, and it is the reason `globalData` is a parameter here.
+//
+// It gives the top-level `var` feature the SAME gate every other emitted thing has: the golden
+// fragment pins the layout, so a slot that moves, changes width, or changes its initial value is a
+// FAILING TEST with a reviewable diff rather than a silent difference in a program's starting state
+// — which no exit code can see until the one path that reads that global happens to run.
+//
+// It is also the ONE rendering of the layout: `specs/static-variables.md`'s ```RequiredData blocks
+// are compared against exactly these lines (`SpecTestRunner.checkRequiredData`). A spec and a golden
+// that each rendered the section their own way would be two readings of one fact, free to disagree
+// about what `i8 1` means — and the spec's would be the one nobody ran.
+//
+// A program with no global prints NOTHING here, not an empty header: the section does not exist, and
+// every pre-existing golden is unchanged by this rung as a result.
+export function printDataSection(globalData GlobalDataTable) returns String
+	if globalData.dataSection.count() == 0 'noGlobals'
+		return ""
+	end 'noGlobals'
+
+	var out = StringBuilder.create()
+	out.append("data \{\n")
+	for entry in globalData.dataSection 'each'
+		out.append("  {entry.label}@{entry.offset} = {entry.valueType.name} {entry.value}\n")
+	end 'each'
+	out.append("}\n")
+	return out.build()
+end 'printDataSection'
+
+export function printTargetModule(module TargetModule, globalData GlobalDataTable, includeRuntime bool) returns String
 	var body = StringBuilder.create()
-	var afterFirst = false
+	let dataText = printDataSection(globalData)
+	body.append(dataText)
+	// The data block is followed by a blank line, exactly as two functions are — so a program WITH
+	// globals reads as `data { … }` then its functions, and one WITHOUT is byte-for-byte unchanged.
+	var afterFirst = dataText.byteLength() > 0
 
 	for func in module.functions 'eachFunc'
 		if not includeRuntime and isRuntimeFunction(func.name) 'skipRuntime'
@@ -151,6 +183,11 @@ function formatTargetOp(op TargetOp, blocks IrBlockArray) returns String
 		sarRegCl(dest, lhs) gives "sarRegCl {vregName(dest)}, {vregName(lhs)}"
 		shrRegCl(dest, lhs) gives "shrRegCl {vregName(dest)}, {vregName(lhs)}"
 		setccReg(dest, cond) gives "setccReg {condCodeName(cond)}, {vregName(dest)}"
+		// The data-section band. The LABEL is printed, because it is what the golden pins: a fragment
+		// showing `leaRegGlobal rax, __data_counter` is what makes a wrong slot a reviewable diff.
+		leaRegGlobal(dest, label) gives "leaRegGlobal {vregName(dest)}, {String.from(label)}"
+		loadRegBaseDisp(dest, base, disp, width) gives "loadRegBaseDisp.{accessWidthName(width)} {vregName(dest)}, [{vregName(base)} + {disp}]"
+		storeBaseDispReg(base, disp, src, width) gives "storeBaseDispReg.{accessWidthName(width)} [{vregName(base)} + {disp}], {vregName(src)}"
 	end 'op'
 end 'formatTargetOp'
 
@@ -188,6 +225,16 @@ function registerName(reg X64Register) returns String
 		r15 gives "r15"
 	end 'r'
 end 'registerName'
+
+// The printed suffix of a memory access's width — what makes a golden fragment show that a bool
+// global moved ONE byte and an int moved eight. Without it the two loads print identically and the
+// one gate that could catch a wrong-width access says nothing.
+function accessWidthName(width X64AccessWidth) returns String
+	return match width 'w'
+		byte gives "byte"
+		word64 gives "word64"
+	end 'w'
+end 'accessWidthName'
 
 // The mnemonic name of each condition code a fused `jcc` can carry. Exhaustive
 // over X64CondCode so a new comparison predicate forces a printable name.

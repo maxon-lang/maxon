@@ -1,0 +1,249 @@
+// Testing/PeSectionReader.maxon — read a named section's bytes back out of a linked PE, and parse
+// a spec's ```RequiredData block into the bytes it claims.
+//
+// **THIS IS THE SPEC SUITE'S ONLY LOOK AT WHAT WAS ACTUALLY LINKED.** Every other gate reads
+// something the compiler produced ON PURPOSE — an exit code, a diagnostic, an IR dump. Those catch
+// a wrong DECISION. They cannot catch a section header with the wrong RVA, a raw data pointer off
+// by one file alignment, or an image the writer padded where it meant to write: the compiler is
+// perfectly happy, the IR is perfectly right, and the bytes on disk are wrong. Reading the PE back
+// is the one gate that sees that layer, which is exactly why `specs/static-variables.md` pins its
+// six layouts this way rather than as an IR block.
+//
+// A faithful port of `maxon-sharp/Testing/TestRunner.cs`'s `ParsePeSections` / `ReadPeSectionData`
+// / `ParseTypedSectionValues`. It is deliberately a SEPARATE reader from `Targets/Windows/
+// PeWriter.maxon` and not a shared codec: a gate that formatted the bytes with the very code that
+// wrote them could only ever prove the writer agrees with itself. The duplication is the test — an
+// independent reading is the only kind that can disagree.
+
+// The section a top-level `var`'s image lives in. Named here rather than inlined at the call site
+// because it is a contract with `PeWriter.writeSectionHeader`, not a string.
+export let DataSectionName = ".data"
+
+// --- PE structural constants (the reader's own; see the header on why they are not shared) ---
+
+// "MZ" — the DOS header's magic, at file offset 0.
+let DosHeaderMagic = 0x5A4D
+// Where the DOS header stores the file offset of the PE signature.
+let PeSignatureOffsetField = 0x3C
+// "PE\0\0".
+let PeSignature = 0x00004550
+
+// COFF header field offsets, measured from the PE signature's end.
+let CoffNumberOfSectionsOffset = 2
+let CoffSizeOfOptionalHeaderOffset = 16
+let CoffHeaderSize = 20
+
+// One IMAGE_SECTION_HEADER is 40 bytes; its fields sit at these offsets within it.
+let SectionHeaderSize = 40
+let SectionNameBytes = 8
+let SectionVirtualSizeOffset = 8
+let SectionRawSizeOffset = 16
+let SectionRawPointerOffset = 20
+
+// Why a PE could not be read. A union rather than an empty-array sentinel: "this exe has no .data
+// section" and "this exe's .data section is empty" are different facts, and a spec pinning an empty
+// layout must be able to tell them apart.
+export union PeReadError implements Error
+	unreadable(path FilePath)
+	notAPeFile(path FilePath)
+	sectionMissing(path FilePath, sectionName String)
+	truncated(path FilePath, sectionName String)
+
+	/// Human-readable rendering, following `SubprocessError.displayReason`'s convention so every
+	/// spec-runner failure reads the same way whatever went wrong.
+	export function displayReason() returns String
+		return match self 'k'
+			unreadable(path) gives "cannot open {path.toString()}"
+			notAPeFile(path) gives "{path.toString()} is not a PE image (bad MZ/PE signature)"
+			sectionMissing(path, sectionName) gives "{path.toString()} has no {sectionName} section"
+			truncated(path, sectionName) gives "{path.toString()}'s {sectionName} section runs past the end of the file"
+		end 'k'
+	end 'displayReason'
+end 'PeReadError'
+
+// Why a ```RequiredData block could not be turned into bytes.
+export union TypedValueError implements Error
+	missingValue(line String)
+	unknownType(typeName String)
+	badNumber(typeName String, text String)
+
+	export function displayReason() returns String
+		return match self 'k'
+			missingValue(line) gives "line '{line}' is not `<type> <value>`"
+			unknownType(typeName) gives "unknown type '{typeName}' (expected i8/i16/i32/i64)"
+			badNumber(typeName, text) gives "'{text}' is not a valid {typeName}"
+		end 'k'
+	end 'displayReason'
+end 'TypedValueError'
+
+// The bytes of `sectionName` in the PE at `path`.
+//
+// It reads VIRTUAL size, not raw size, and the distinction is the whole reason a reader can catch
+// a writer bug: raw size is FILE-ALIGNED (rounded up to 512 and zero-padded), so comparing against
+// it would compare a spec's four bytes against 512 and drown the answer in padding. Virtual size is
+// what the image actually contains. `min` of the two guards a malformed header claiming more
+// virtual than it stored.
+export function readPeSectionData(path FilePath, sectionName String) returns ByteArray throws PeReadError
+	let image = try File.readBinary(path) otherwise throw PeReadError.unreadable(path)
+
+	if readU16(image, at: 0) != DosHeaderMagic 'notDos'
+		throw PeReadError.notAPeFile(path)
+	end 'notDos'
+
+	let peOffset = readU32(image, at: PeSignatureOffsetField)
+	if readU32(image, at: peOffset) != PeSignature 'notPe'
+		throw PeReadError.notAPeFile(path)
+	end 'notPe'
+
+	let coffStart = peOffset + 4
+	let sectionCount = readU16(image, at: coffStart + CoffNumberOfSectionsOffset)
+	let optionalHeaderSize = readU16(image, at: coffStart + CoffSizeOfOptionalHeaderOffset)
+	let firstSectionHeader = coffStart + CoffHeaderSize + optionalHeaderSize
+
+	for i in 0 upto sectionCount 'eachSection'
+		let header = firstSectionHeader + i * SectionHeaderSize
+		if sectionNameAt(image, at: header) != sectionName 'notThisOne'
+			continue
+		end 'notThisOne'
+
+		let virtualSize = readU32(image, at: header + SectionVirtualSizeOffset)
+		let rawSize = readU32(image, at: header + SectionRawSizeOffset)
+		let rawPointer = readU32(image, at: header + SectionRawPointerOffset)
+		let size = virtualSize if virtualSize < rawSize else rawSize
+
+		if rawPointer + size > image.count() 'runsPastEof'
+			throw PeReadError.truncated(path, sectionName: sectionName)
+		end 'runsPastEof'
+
+		return sliceBytes(image, start: rawPointer, count: size)
+	end 'eachSection'
+
+	throw PeReadError.sectionMissing(path, sectionName: sectionName)
+end 'readPeSectionData'
+
+// A section header's 8-byte name field, NUL-padding stripped.
+function sectionNameAt(image ByteArray, at ByteOffset) returns String
+	var name = ByteArray.create()
+	for i in 0 upto SectionNameBytes 'each'
+		let b = try image.get(at + i) otherwise return ""
+		if b == 0 'nulPad'
+			break
+		end 'nulPad'
+		name.push(b)
+	end 'each'
+	return String.from(name)
+end 'sectionNameAt'
+
+// ⭐ Parse a ```RequiredData block — `<type> <value>` per line — into the bytes it claims.
+// Little-endian, matching both the x64 image and the reference's `BitConverter.GetBytes`.
+//
+// Blank lines are skipped, exactly as the reference's `StringSplitOptions.RemoveEmptyEntries` does.
+//
+// It covers `i8`/`i16`/`i32`/`i64` — the reference additionally parses `f32`/`f64`, `u16` and
+// `i64[]`, and those are DELIBERATELY absent rather than stubbed: a float global needs P1.0d.4 and
+// an array global P1.7, so a spec using one is a spec shv2 cannot compile anyway. An unknown type
+// THROWS (naming it), which is what keeps this honest — the failure of the block this gate replaces
+// was precisely that an unhandled thing passed silently.
+export function parseTypedSectionValues(block String) returns ByteArray throws TypedValueError
+	var out = ByteArray.create()
+	for rawLine in block.split("\n") 'eachLine'
+		let line = rawLine.trim()
+		if line.isEmpty() 'blank'
+			continue
+		end 'blank'
+
+		let sepIdx = try line.findFirst(" ") otherwise throw TypedValueError.missingValue(line)
+		let typeName = line.slice(line.startIndex(), endIndex: sepIdx)
+		let valueStart = try line.indexAfter(sepIdx) otherwise throw TypedValueError.missingValue(line)
+		let valueText = line.slice(valueStart, endIndex: line.endIndex()).trim()
+
+		let value = try int.fromString(valueText) otherwise throw TypedValueError.badNumber(typeName, text: valueText)
+		appendLittleEndian(out, value: value, byteCount: try typedValueByteCount(typeName))
+	end 'eachLine'
+
+	return out
+end 'parseTypedSectionValues'
+
+// The byte width of a `RequiredData` type name.
+function typedValueByteCount(typeName String) returns ByteCount throws TypedValueError
+	if typeName == "i8" 'i8'
+		return 1
+	end 'i8'
+	if typeName == "i16" 'i16'
+		return 2
+	end 'i16'
+	if typeName == "i32" 'i32'
+		return 4
+	end 'i32'
+	if typeName == "i64" 'i64'
+		return 8
+	end 'i64'
+
+	throw TypedValueError.unknownType(typeName)
+end 'typedValueByteCount'
+
+function appendLittleEndian(out ByteArray, value ParsedInt, byteCount ByteCount)
+	// The value is SIGNED and the shift-and-mask is defined on the unsigned word, so it crosses
+	// once, explicitly, here — the same cast `GlobalDataTable.appendScalar` makes for the same
+	// reason, in the code this gate exists to check independently.
+	let bits = value as MachineWord
+	for i in 0 upto byteCount 'eachByte'
+		out.push((bits shr (i * 8)) and 0xFF)
+	end 'eachByte'
+end 'appendLittleEndian'
+
+// --- Little-endian scalar reads over a byte image ---
+//
+// A read past the end answers 0 rather than throwing: every caller here has already established the
+// file is a PE, and a truncated header is caught by the `runsPastEof` guard with a message that
+// names the file. A per-byte throw would push that noise through six call sites to say less.
+
+function readU16(image ByteArray, at ByteOffset) returns MachineWord
+	return byteAt(image, at: at) or (byteAt(image, at: at + 1) shl 8)
+end 'readU16'
+
+function readU32(image ByteArray, at ByteOffset) returns MachineWord
+	return readU16(image, at: at) or (readU16(image, at: at + 2) shl 16)
+end 'readU32'
+
+function byteAt(image ByteArray, at ByteOffset) returns MachineWord
+	return try image.get(at) otherwise 0
+end 'byteAt'
+
+function sliceBytes(image ByteArray, start ByteOffset, count ByteCount) returns ByteArray
+	var out = ByteArray.create()
+	for i in 0 upto count 'each'
+		out.push(try image.get(start + i) otherwise panic("sliceBytes: get OOB at {start + i} — the caller checked start+count <= image.count()"))
+	end 'each'
+	return out
+end 'sliceBytes'
+
+// --- Hex rendering for a mismatch message ---
+//
+// A `.data` mismatch is a BYTE-level failure, so it is reported in bytes: "expected 2a 00 00 00 00
+// 00 00 00, got 00 00 …" is a diff a reader can act on, where "the layout differs" is not.
+
+export function formatHexBytes(bytes ByteArray) returns String
+	var out = StringBuilder.create()
+	for (iter, b) in bytes.withIterator() 'each'
+		if iter.index() > 0 'separator'
+			out.append(" ")
+		end 'separator'
+		out.append(hexByte(b))
+	end 'each'
+	return out.build()
+end 'formatHexBytes'
+
+export function hexByte(b MachineWord) returns String
+	return "{hexDigit((b shr 4) and 0xF)}{hexDigit(b and 0xF)}"
+end 'hexByte'
+
+// One lowercase hex digit. A `ByteArray` lookup rather than a `String` index: the digits are ASCII
+// bytes and `String.from` of a one-byte array is the shortest honest route to a one-character
+// String in a language whose String is UTF-8 and whose indices are byte positions.
+function hexDigit(nibble MachineWord) returns String
+	let digits = b"0123456789abcdef"
+	var one = ByteArray.create()
+	one.push(try digits.get(nibble) otherwise panic("hexDigit: nibble {nibble} is out of range — every caller masks with 0xF"))
+	return String.from(one)
+end 'hexDigit'

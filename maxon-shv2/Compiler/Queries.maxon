@@ -81,11 +81,11 @@ end 'queryTokens'
 //
 // ⚠ **`scale-test` DOES NOT MEASURE THAT, AND STRUCTURALLY CANNOT — ITS CORPUS CONTAINS NO
 // TOP-LEVEL `let` AT ALL.** Every `let` the generator emits is body-local, so on every rung this
-// arena is EMPTY, `evaluateConstants` walks nothing, and no DFS, no lookup and no `mixConstant`
+// arena is EMPTY, `evaluateInitializers` walks nothing, and no DFS, no lookup and no `mixConstant`
 // ever runs. What the instrument reads is the P1.0d.5a slice's INERT cost: a dead-flat
 // `2 × files + 1` allocations in this phase (25/33/49/81/145/273 against 12/16/24/40/72/136 files,
 // exact on all six rungs; `+48 × files + 672` bytes, exact) — which is the one EMPTY per-file
-// `TopLevelConstDeclArray` the sweep contributes, plus this index's own two tables. That number is
+// `TopLevelDeclArray` the sweep contributes, plus this index's own two tables. That number is
 // real and it is worth having (it proves the sweep is linear in files, and `phase:parse` moves by
 // exactly 0), but it is the signature of an empty arena and it says nothing whatever about the
 // evaluator. Do not read it as if it did.
@@ -135,7 +135,7 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 	// ⭐ EVERY FILE IS FOLDED IN; NOW the top-level constants can be evaluated — and not one moment
 	// earlier. A constant's initializer may name a constant declared LATER in its own file or in a file
 	// not yet swept, so evaluation has to wait until every declaration in the program is known. This is
-	// the whole reason a forward reference works (see `ProgramSignatures.evaluateConstants`).
+	// the whole reason a forward reference works (see `ProgramSignatures.evaluateInitializers`).
 	//
 	// Billed to `signatures`, the phase whose index this completes, and INSIDE the query — its answers
 	// are part of the memoized value and of the hash that keys every parse on it.
@@ -145,7 +145,7 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 	// `Parser.foldDeclaredSignaturesInto`) and keeps this memo cacheable: a query that reported would
 	// have to suppress on a hit, exactly as `queryParseOps` must.
 	let constProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.signatures)
-	signatures.evaluateConstants()
+	signatures.evaluateInitializers()
 	recordPhase(project, phase: CompilePhase.signatures, probe: constProbe)
 
 	project.db.signatureCache = SignatureMemo.create(signatures, keyHash: compositeSourceHash(project), computed: true)

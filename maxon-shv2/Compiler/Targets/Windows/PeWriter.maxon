@@ -1,14 +1,15 @@
 // PE64 writer for Windows executables — the format-neutral CodeResult → PE seam.
 //
-// THIN for maxon-shv2 M1: writes the smallest runnable x64-windows PE — `.text`
+// THIN for maxon-shv2: writes the smallest runnable x64-windows PE — `.text`
 // (the code) + `.idata` (a single kernel32 `ExitProcess` import) + headers, with
-// an optional `.rdata` / `.symtab` section when the backend produced any (empty
-// at M1) and a trailing COFF symbol table for debuggers when debug symbols are
-// present. v1's writer additionally lays down a `.data` heap arena, a `.covdata`
-// coverage section, a `.rsrc` manifest, and an 84-slot multi-DLL import table
-// (kernel32 / shell32 / ws2_32); those GROW back at their milestones (M6 globals,
+// an optional `.rdata` / `.symtab` / `.data` section when the backend produced any
+// and a trailing COFF symbol table for debuggers when debug symbols are
+// present. P1.0d.5b added `.data`: a WRITABLE section holding the initial image of every
+// top-level `var`. v1's writer additionally lays down a heap arena in that section, a
+// `.covdata` coverage section, a `.rsrc` manifest, and an 84-slot multi-DLL import table
+// (kernel32 / shell32 / ws2_32); those GROW back at their milestones (P1.2 heap,
 // coverage, networking). The arm64 relocation paths are likewise deferred to the
-// arm64 milestone — M1 is x64 only.
+// arm64 milestone — x64 only today.
 
 typealias Rva = int(0 to u64.max)
 typealias SectionFlags = int(0 to u64.max)
@@ -30,6 +31,11 @@ let SectionTextFlags = 0x60000020  // CODE | EXECUTE | READ
 let SectionRdataFlags = 0x40000040  // INITIALIZED_DATA | READ
 let SectionIdataFlags = 0xC0000040  // INITIALIZED_DATA | READ | WRITE
 let SectionSymtabFlags = 0xC0000040  // INITIALIZED_DATA | READ | WRITE
+
+// `.data` — INITIALIZED_DATA | READ | WRITE. The WRITE bit is the whole point of the section:
+// a top-level `var` is stored to at run time, and a global in read-only `.rdata` would fault on
+// its first assignment. `classifyGlobalLabel`'s `__data_` prefix is what routes a label here.
+let SectionDataFlags = 0xC0000040  // INITIALIZED_DATA | READ | WRITE
 
 // --- Fixed header field sizes ---
 let DosAndPeSigBytes = 68  // 64-byte DOS stub + 4-byte "PE\0\0"
@@ -225,18 +231,38 @@ function patchRelocationsX86(code ByteArray, relocations RelocationArray, textRv
 	end 'patch'
 end 'patchRelocationsX86'
 
-// Patch code→rdata relocations. Empty at M1 (the `return 42` slice registers no
-// read-only data); the x64 RIP-relative arms are wired for the string/global
-// milestones. arm64 + funcAbs64 arms are deferred to their milestones.
-function patchRdataRelocationsX86(code ByteArray, rdataRelocs RdataRelocationArray, textRva Rva, rdataRva Rva)
+// Patch code→data-section relocations: a RIP-relative disp32 in the code gets the distance to its
+// target's slot. `ripRelDisp32` targets `.rdata` (still empty — strings arrive at P1.2);
+// `dataSectionRipRelDisp32` targets `.data` and is what a top-level `var`'s `lea` uses.
+//
+// The two arms differ ONLY in which section RVA they measure from, which is exactly what the kind
+// discriminates — `reloc.rdataOffset` was already resolved within its own section by the backend.
+// Every other kind still panics: arm64's four are the arm64 milestone's, `covdata`'s are coverage's,
+// and `funcAbs64InRdata` (which patches a slot INSIDE rdata rather than inside code) is the layout
+// descriptors'. Naming them one by one rather than defaulting is what makes the day one is emitted
+// a loud failure instead of a silently unpatched zero displacement.
+function patchRdataRelocationsX86(code ByteArray, rdataRelocs RdataRelocationArray, textRva Rva, rdataRva Rva, dataRva Rva)
 	for reloc in rdataRelocs 'patch'
 		let ripAtReloc = textRva + reloc.codeOffset + X64Disp32Width
 		match reloc.kind 'kind'
-			ripRelDisp32 then patchX64Rel32(code, codeOffset: reloc.codeOffset, rel: rdataRva + reloc.rdataOffset - ripAtReloc, what: PatchSite.x64RdataDisp32, targetAddr: rdataRva + reloc.rdataOffset)
-			symdataRipRelDisp32 to funcAbs64InRdata then panic("PeWriter: rdata relocation kind not supported until its milestone (M1 registers no rdata relocations)")
+			ripRelDisp32 then patchSectionRipRel(code, reloc: reloc, sectionRva: rdataRva, ripAtReloc: ripAtReloc)
+			dataSectionRipRelDisp32 then patchSectionRipRel(code, reloc: reloc, sectionRva: dataRva, ripAtReloc: ripAtReloc)
+			symdataRipRelDisp32 then panic("PeWriter: symdata relocations are not emitted yet — the symbol table is referenced by chunk name, not by an rdata relocation")
+			covdataRipRelDisp32 then panic("PeWriter: covdata relocations arrive with the coverage milestone")
+			arm64Adr to arm64LdrLiteral then panic("PeWriter: arm64 relocations arrive with the arm64 milestone — this writer is x64-only")
+			symdataArm64Adr to covdataArm64PageOff then panic("PeWriter: arm64 relocations arrive with the arm64 milestone — this writer is x64-only")
+			funcAbs64InRdata then panic("PeWriter: funcAbs64InRdata patches a slot INSIDE rdata (a layout descriptor's function-pointer slot), not a disp32 in code — it arrives with layout descriptors")
 		end 'kind'
 	end 'patch'
 end 'patchRdataRelocationsX86'
+
+// Patch one RIP-relative disp32 to `sectionRva + reloc.rdataOffset`. The two live arms above share
+// it: the arithmetic is identical and only the section differs, so writing it once means a `.data`
+// reference and an `.rdata` one cannot drift on the end-of-field convention.
+function patchSectionRipRel(code ByteArray, reloc RdataRelocation, sectionRva Rva, ripAtReloc Rva)
+	let targetRva = sectionRva + reloc.rdataOffset
+	patchX64Rel32(code, codeOffset: reloc.codeOffset, rel: targetRva - ripAtReloc, what: PatchSite.x64RdataDisp32, targetAddr: targetRva)
+end 'patchSectionRipRel'
 
 // --- Section headers ---
 
@@ -337,7 +363,7 @@ end 'writeCoffSymbolTable'
 
 // Build the emitted-section list in emission order — the section-symbol numbering
 // must match the section header order in `writePe`.
-function buildSectionList(codeSize ByteCount, hasRdata bool, rdataSize ByteCount, hasSymdata bool, symdataSize ByteCount, idataSize ByteCount) returns PeSectionList
+function buildSectionList(codeSize ByteCount, hasRdata bool, rdataSize ByteCount, hasSymdata bool, symdataSize ByteCount, hasData bool, dataSize ByteCount, idataSize ByteCount) returns PeSectionList
 	var sections = PeSectionList.create()
 	sections.push(PeSectionRec.create(".text", rawSize: codeSize))
 	if hasRdata 'rdata'
@@ -346,6 +372,9 @@ function buildSectionList(codeSize ByteCount, hasRdata bool, rdataSize ByteCount
 	if hasSymdata 'symtab'
 		sections.push(PeSectionRec.create(".symtab", rawSize: symdataSize))
 	end 'symtab'
+	if hasData 'data'
+		sections.push(PeSectionRec.create(".data", rawSize: dataSize))
+	end 'data'
 	sections.push(PeSectionRec.create(".idata", rawSize: idataSize))
 	return sections
 end 'buildSectionList'
@@ -361,10 +390,15 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 	let codeSize = code.count()
 	let rdataSize = codeResult.rdata.count()
 	let symdataSize = codeResult.symdata.count()
+	// The `.data` image: the initial bytes of every top-level `var`. Empty for a program with no
+	// global, which is most of the corpus — and the section is then OMITTED ENTIRELY, so a
+	// global-free program's binary is byte-for-byte what it was before this rung.
+	let dataSize = codeResult.dataPrelude.count()
 	let hasRdata = rdataSize > 0
 	let hasSymdata = symdataSize > 0
+	let hasData = dataSize > 0
 
-	// Sections: .text + .idata always; .rdata / .symtab only when non-empty.
+	// Sections: .text + .idata always; .rdata / .symtab / .data only when non-empty.
 	var numSections = 2
 	if hasRdata 'countRdata'
 		numSections = numSections + 1
@@ -372,6 +406,9 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 	if hasSymdata 'countSymdata'
 		numSections = numSections + 1
 	end 'countSymdata'
+	if hasData 'countData'
+		numSections = numSections + 1
+	end 'countData'
 
 	let headersSize = DosAndPeSigBytes + CoffHeaderBytes + OptionalHeaderBytes + SectionHeaderBytes * numSections
 	let headersAligned = alignUp(headersSize, alignment: FileAlignment)
@@ -397,8 +434,16 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 		symdataSizeVirtual = alignUp(symdataSize, alignment: SectionAlignment)
 	end 'symdataVirtual'
 
+	// .data (optional) — WRITABLE, and laid out between .symtab and .idata.
+	let dataRva = symdataRva + symdataSizeVirtual
+	let dataSizeAligned = alignUp(dataSize, alignment: FileAlignment)
+	var dataSizeVirtual = 0
+	if hasData 'dataVirtual'
+		dataSizeVirtual = alignUp(dataSize, alignment: SectionAlignment)
+	end 'dataVirtual'
+
 	// .idata
-	let idataRva = symdataRva + symdataSizeVirtual
+	let idataRva = dataRva + dataSizeVirtual
 	let idata = buildImportSection(idataRva)
 	let idataSize = idata.data.count()
 	let idataSizeAligned = alignUp(idataSize, alignment: FileAlignment)
@@ -408,7 +453,7 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 
 	// Patch IAT + rdata relocations in the code image before it is written.
 	patchRelocationsX86(code, relocations: codeResult.relocations, textRva: textRva, idataRva: idataRva)
-	patchRdataRelocationsX86(code, rdataRelocs: codeResult.rdataRelocations, textRva: textRva, rdataRva: rdataRva)
+	patchRdataRelocationsX86(code, rdataRelocs: codeResult.rdataRelocations, textRva: textRva, rdataRva: rdataRva, dataRva: dataRva)
 
 	// AddressOfEntryPoint = the entry stub's RVA. `mainCallFixupOffset` carries
 	// mrt_start's `.text` offset (0, since augmentWithRuntime lays it out first).
@@ -436,7 +481,7 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 	// === Optional header PE32+ (240 bytes) ===
 	pe.append(b"\x0b\x02\x0e\x00")  // Magic (PE32+), MajorLinkerVersion 14, MinorLinkerVersion 0
 	writeDword(pe, value: codeSizeAligned)  // SizeOfCode
-	writeDword(pe, value: rdataSizeAligned + symdataSizeAligned + idataSizeAligned)  // SizeOfInitializedData
+	writeDword(pe, value: rdataSizeAligned + symdataSizeAligned + dataSizeAligned + idataSizeAligned)  // SizeOfInitializedData
 	pe.append(b"\x00\x00\x00\x00")  // SizeOfUninitializedData
 	writeDword(pe, value: entryPointRva)  // AddressOfEntryPoint
 	writeDword(pe, value: textRva)  // BaseOfCode
@@ -476,6 +521,10 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 		writeSectionHeader(pe, name: ".symtab", virtualSize: symdataSize, virtualAddress: symdataRva, rawDataSize: symdataSizeAligned, rawDataPointer: nextFilePointer, characteristics: SectionSymtabFlags)
 		nextFilePointer = nextFilePointer + symdataSizeAligned
 	end 'symtabHeader'
+	if hasData 'dataHeader'
+		writeSectionHeader(pe, name: ".data", virtualSize: dataSize, virtualAddress: dataRva, rawDataSize: dataSizeAligned, rawDataPointer: nextFilePointer, characteristics: SectionDataFlags)
+		nextFilePointer = nextFilePointer + dataSizeAligned
+	end 'dataHeader'
 	writeSectionHeader(pe, name: ".idata", virtualSize: idataSize, virtualAddress: idataRva, rawDataSize: idataSizeAligned, rawDataPointer: nextFilePointer, characteristics: SectionIdataFlags)
 
 	padTo(pe, size: headersAligned)
@@ -494,13 +543,18 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 		padTo(pe, size: headersAligned + codeSizeAligned + rdataSizeAligned + symdataSizeAligned)
 	end 'writeSymdata'
 
+	if hasData 'writeData'
+		pe.append(codeResult.dataPrelude)
+		padTo(pe, size: headersAligned + codeSizeAligned + rdataSizeAligned + symdataSizeAligned + dataSizeAligned)
+	end 'writeData'
+
 	pe.append(idata.data)
-	padTo(pe, size: headersAligned + codeSizeAligned + rdataSizeAligned + symdataSizeAligned + idataSizeAligned)
+	padTo(pe, size: headersAligned + codeSizeAligned + rdataSizeAligned + symdataSizeAligned + dataSizeAligned + idataSizeAligned)
 
 	// === COFF symbol table (appended past the last loadable section) ===
 	if codeResult.debugSymbols.count() > 0 'writeCoff'
 		let symbolTableFileOffset = pe.count()
-		let sections = buildSectionList(codeSize, hasRdata: hasRdata, rdataSize: rdataSize, hasSymdata: hasSymdata, symdataSize: symdataSize, idataSize: idataSize)
+		let sections = buildSectionList(codeSize, hasRdata: hasRdata, rdataSize: rdataSize, hasSymdata: hasSymdata, symdataSize: symdataSize, hasData: hasData, dataSize: dataSize, idataSize: idataSize)
 		let totalSymbolCount = writeCoffSymbolTable(pe, debugSymbols: codeResult.debugSymbols, sections: sections)
 		patchDword(pe, offset: pointerToSymbolTableOffset, value: symbolTableFileOffset)
 		patchDword(pe, offset: numberOfSymbolsOffset, value: totalSymbolCount)

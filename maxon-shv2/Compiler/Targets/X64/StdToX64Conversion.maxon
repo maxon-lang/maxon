@@ -298,7 +298,7 @@ type StdToX64Lowering
 			match term 'term'
 				condBranch(condId, _, _) then self.recordFusableCompare(block, condId: condId, fused: fused)
 				const to mod then break 'term'
-				branch to retVoid then break 'term'
+				branch to storeIndirect then break 'term'
 			end 'term'
 		end 'eachBlock'
 		return fused
@@ -328,7 +328,11 @@ type StdToX64Lowering
 				cmpImm(defId, _, _, pred) then fuseIfDefines(fused, defId: defId, condId: condId, pred: pred)
 				const to unaryOp then break 'isTheCompare'
 				binOpImm then break 'isTheCompare'
-				div to retVoid then break 'isTheCompare'
+				// Extended past `retVoid` to take in the memory band. It is reached only for an op
+				// that already answered `clobbersFlags: true`, and no memory op does — so these arms
+				// are unreachable in practice and must still be NAMED rather than swallowed: the day
+				// a flag-writing memory op exists, "is it the compare?" is a question to answer here.
+				div to storeIndirect then break 'isTheCompare'
 			end 'isTheCompare'
 			return
 		end 'scanBackward'
@@ -390,7 +394,7 @@ type StdToX64Lowering
 		return match term 'term'
 			condBranch(condId, _, _) gives self.cmpPreds.contains(condId)
 			const to mod gives false
-			branch to retVoid gives false
+			branch to storeIndirect gives false
 		end 'term'
 	end 'terminatorReadsFusedFlags'
 
@@ -413,6 +417,9 @@ type StdToX64Lowering
 			retVoid then self.lowerVoidReturn(dstBlock, returnType: returnType, asTerminator: false)
 			condBranch then panic("lowerStdToX64: a `condBranch` appeared as a body op (lowering bug — a branch is always a block terminator)")
 			branch then panic("lowerStdToX64: a `branch` appeared as a body op (lowering bug — a branch is always a block terminator)")
+			globalAddr(resultId, label) then self.lowerGlobalAddr(resultId, label: label, dstBlock: dstBlock)
+			loadIndirect(resultId, addrId, offset, valueType) then self.lowerLoadIndirect(resultId, addrId: addrId, offset: offset, valueType: valueType, dstBlock: dstBlock)
+			storeIndirect(addrId, offset, valueId, valueType) then self.lowerStoreIndirect(addrId, offset: offset, valueId: valueId, valueType: valueType, dstBlock: dstBlock)
 		end 'lower'
 	end 'lowerBodyOp'
 
@@ -434,6 +441,7 @@ type StdToX64Lowering
 			mod then panic("lowerStdToX64: a `mod` op appeared as a block terminator (lowering bug — a modulo is never a terminator)")
 			param then panic("lowerStdToX64: a `param` op appeared as a block terminator (lowering bug — a parameter is an entry body op)")
 			call then panic("lowerStdToX64: a `call` op appeared as a block terminator (lowering bug — a call is a body op)")
+			globalAddr to storeIndirect then panic("lowerStdToX64: a memory-band op appeared as a block terminator (lowering bug — a global's address, load and store are all body ops)")
 		end 'lower'
 	end 'lowerTerminatorOp'
 
@@ -573,6 +581,28 @@ type StdToX64Lowering
 			shl to shrLogical then self.lowerShiftImm8(dest, base: base, imm: imm, instr: shiftInstructionOf(opcode), dstBlock: dstBlock)
 		end 'op'
 	end 'lowerBinOpImm'
+
+	// --- P1.0d.5b: the data-section band ---
+	//
+	// All three lower 1:1 — the Std memory band and the x64 data-section band are the same three
+	// ops, because x64 has exactly these three instructions. The only real work is the WIDTH
+	// decision (`x64AccessWidthFor`), which is the tier boundary doing its job.
+
+	// `globalAddr` → `lea dest, [rip + <label>]`. The address is computed, not loaded; the PE
+	// writer supplies the displacement once `.data` has an RVA.
+	function lowerGlobalAddr(resultId ValueId, label ByteArray, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.leaRegGlobal(X64VReg.virtual(resultId), label: label))
+	end 'lowerGlobalAddr'
+
+	// `loadIndirect` → `mov dest, [base + disp]` / `movzx dest, byte [base + disp]`.
+	function lowerLoadIndirect(resultId ValueId, addrId ValueId, offset ByteOffset, valueType StdType, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.loadRegBaseDisp(X64VReg.virtual(resultId), base: X64VReg.virtual(addrId), disp: memoryDisplacement(offset), width: x64AccessWidthFor(valueType)))
+	end 'lowerLoadIndirect'
+
+	// `storeIndirect` → `mov [base + disp], src`.
+	function lowerStoreIndirect(addrId ValueId, offset ByteOffset, valueId ValueId, valueType StdType, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(X64VReg.virtual(addrId), disp: memoryDisplacement(offset), src: X64VReg.virtual(valueId), width: x64AccessWidthFor(valueType)))
+	end 'lowerStoreIndirect'
 
 	// Lower a Std `div`/`mod` to the x64 `idiv` sequence. x64 `idiv r/m64` divides the
 	// 128-bit RDX:RAX by the divisor, leaving the QUOTIENT in RAX and the REMAINDER in
@@ -778,3 +808,37 @@ type StdToX64Lowering
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(X64VReg.physical(X64Register.r8), srcReg: X64VReg.virtual(retValId)))
 	end 'emitPrimaryReturnMove'
 end 'StdToX64Lowering'
+
+// ⭐ THE ONE DOOR from a Std type to an x64 memory-access width — the tier boundary's whole job for
+// the memory band, and the reason `X64AccessWidth` is a narrow target-tier enum rather than a
+// `StdType` passed straight through.
+//
+// `i1` is ONE byte: a bool occupies one byte of storage (`StdTypeInfo.storageBytes`), loads through
+// `movzx` so it reads back as a clean 0/1, and stores through the byte form. `i64` is the full
+// word. Those two are what the language can put in a global today.
+//
+// Every other type PANICS rather than picking a nearby width. `i8`/`u8` are byte-sized and would be
+// correct here — they are excluded anyway, because nothing PRODUCES them: a ranged alias narrower
+// than i64 needs the `as` cast (P1.9) to reach a global, and the day it does, its signedness
+// decides `movzx` vs `movsx`, which is a DECISION and not a width to default into. That is the
+// same trap `StdBinOpcode`'s two right-shifts exist for.
+function x64AccessWidthFor(t StdType) returns X64AccessWidth
+	match t 'w'
+		i1 then return X64AccessWidth.byte
+		i64 then return X64AccessWidth.word64
+		i8 to i32 then panic("x64AccessWidthFor: no `.data` access form for {t.name} — a narrow integer global needs the `as` cast (P1.9), and its SIGNEDNESS then decides movzx vs movsx rather than defaulting to a width")
+		u8 to u64 then panic("x64AccessWidthFor: no `.data` access form for {t.name} — an unsigned global needs the `as` cast (P1.9)")
+		f32 to f64 then panic("x64AccessWidthFor: no `.data` access form for {t.name} — a float global loads and stores through XMM, which arrives with floats (P1.0d.4)")
+	end 'w'
+end 'x64AccessWidthFor'
+
+// A memory-band offset as an x64 displacement. `ByteOffset` is unsigned and unbounded; a disp32 is
+// signed and 32-bit, so the narrowing is CHECKED rather than cast away. Every offset today is
+// `GlobalSlotOffset` (0), and the bound starts mattering at P1.1, where a struct field's offset
+// rides this same field.
+function memoryDisplacement(offset ByteOffset) returns Imm32
+	if offset > i32.max 'tooFar'
+		panic("memoryDisplacement: byte offset {offset} does not fit an x64 disp32 — an addressing mode reaching past 2GiB from its base needs a materialized index register")
+	end 'tooFar'
+	return offset as Imm32
+end 'memoryDisplacement'

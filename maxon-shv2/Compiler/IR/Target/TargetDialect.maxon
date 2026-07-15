@@ -409,7 +409,54 @@ export union TargetOp
 	// compare that is BOTH fused and materialized correct: the `setcc` sitting between the
 	// `cmp` and the `jcc` cannot disturb what the `jcc` reads.
 	setccReg(dest X64VReg, cond X64CondCode) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
+	// --- P1.0d.5b: the DATA-SECTION band (specs/static-variables.md) ---
+	//
+	// APPENDED AT THE END OF THE UNION, past `setccReg`, for the reason the BIT band above
+	// gives at length: every range arm over `TargetOp` stops at or before the old tail, so an
+	// op inserted anywhere else is silently swallowed by one of them. Appending past it makes
+	// each of those matches fail to compile until consciously extended.
+	//
+	// `lea dest, [rip + disp32]` to a `.data` global — the address of `label`'s slot. The
+	// disp32 is emitted ZERO and an `RdataRelocation` of kind `dataSectionRipRelDisp32` is
+	// recorded; the PE writer patches it once `.data`'s RVA is known. `label` is a name, not a
+	// value, so it is a `ByteArray` — the same shape `callDirect`'s `targetName` has, and for
+	// the same reason.
+	//
+	// ONE plain def, NO uses: a RIP-relative `lea` reads no register at all (RIP is not
+	// allocatable), which is exactly why `StdOp.globalAddr` can declare `isPure: true` — the
+	// op is rematerializable ANYWHERE, with no live input to keep alive to do it. `lea` sets
+	// no flags.
+	leaRegGlobal(dest X64VReg, label ByteArray) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
+	// `mov dest, [base + disp]` (word64) or `movzx dest, byte [base + disp]` (byte) — load,
+	// zero-extending a byte to the full 64-bit register so a bool reads as a clean 0/1.
+	//
+	// `dest` and `base` are INDEPENDENT (no reuse): the destination of a load need not be its
+	// address register, so no seed copy is ever emitted. `isMemory: true`, `isStore: false` —
+	// a pure load, which the scheduler may not move across a store. Neither encoding writes
+	// flags.
+	//
+	// The width rides an OPCODE FIELD rather than splitting the variant, per the dialect's own
+	// rule: the byte and word64 forms share this exact operand shape AND this exact metadata,
+	// and differ only in which encoder runs.
+	loadRegBaseDisp(dest X64VReg, base X64VReg, disp Imm32, width X64AccessWidth) = TargetOpMeta{isMemory: true, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
+	// `mov [base + disp], src` — store, the mirror of `loadRegBaseDisp`. TWO uses and no def.
+	// `isStore: true`. APPENDED at the END of the union, after `loadRegBaseDisp`.
+	storeBaseDispReg(base X64VReg, disp Imm32, src X64VReg, width X64AccessWidth) = TargetOpMeta{isMemory: true, isStore: true, isCall: false, implicitUses: 0, implicitDefs: 0}
 end 'TargetOp'
+
+// The memory-access widths the `.data` load/store encoders have. TWO, because two are what the
+// language can put in a global today: an `int` (`i64`, 8 bytes) and a `bool` (`i1`, 1 byte).
+//
+// A TARGET-tier enum rather than reusing `StdType`, and the narrowness is the point: it is the
+// exact domain `encodeLoadRegBaseDisp`/`encodeMovzxRegByteBaseDisp` cover, so the conversion from
+// a Std type is a CHECKED decision at one door (`x64AccessWidthFor`) that names what it cannot yet
+// encode. Passing a `StdType` straight through would let an `i16` or an `f64` reach an encoder with
+// no form for it and emit a silently wrong-width access. It grows a case per width the encoders
+// grow a form for.
+export enum X64AccessWidth
+	byte
+	word64
+end 'X64AccessWidth'
 
 export typealias TargetOpArray = Array with TargetOp
 

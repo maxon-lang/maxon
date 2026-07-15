@@ -90,7 +90,7 @@ end 'compile'
 // program's own functions. A runtime-debugging view arrives with Workstream R.
 function writeTargetIr(codeResult CodeResult, outputPath FilePath)
 	let irPath = outputPath.changeExtension(IrFileExtension)
-	let irText = printTargetModule(codeResult.targetModule, includeRuntime: false)
+	let irText = printTargetModule(codeResult.targetModule, globalData: codeResult.globalData, includeRuntime: false)
 
 	try File.writeText(irPath, content: irText) otherwise 'writeErr'
 		logError(LogCategory.binary, message: function() gives "Failed to write Target IR to {irPath}")
@@ -127,6 +127,24 @@ end 'loadProject'
 // pipeline's own fresh throw of the same arm propagates cleanly.
 export function compileToCodeResult(project Project) returns CodeResult throws CompileError
 	let module = try queryAllModule(project)
+
+	// ⭐ LAY OUT THE `.data` SECTION — once per compile, and HERE rather than inside
+	// `queryProgramSignatures`.
+	//
+	// ⚠ That placement is the whole cost story. `queryProgramSignatures` is a whole-program query
+	// sitting UNDER a per-file one, so it is ASKED once per file; doing O(globals) work inside it
+	// would be O(files × globals), the exact shape of the two quadratics this query has already
+	// grown and had removed (ARCHITECTURE's warning on it). The query is memoized, so the ARENA is
+	// built once — but the layout is not the arena's business anyway: it is a BACKEND fact (offsets,
+	// an image, a section), and it belongs at the one point that runs once and knows a backend is
+	// about to run.
+	//
+	// It REBUILDS rather than appends, so it is idempotent: `verifyWarmRebuild` compiles the same
+	// project twice, and a layout that accumulated would double every slot on the second pass.
+	// Same discipline as `resetMergeTargets` — the arena is the source of truth, the derived table
+	// is rebuilt from it.
+	let signatures = try queryProgramSignatures(project)
+	project.globalData.layOut(signatures.declaredGlobals())
 
 	var pipeline = PassPipeline.create(project, maxonModule: module)
 	pipeline.addPasses(buildDefaultPipeline())

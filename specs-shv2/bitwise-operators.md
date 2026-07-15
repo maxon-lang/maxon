@@ -684,7 +684,7 @@ end 'main'
 ```
 
 <!-- disabled-test: bitwise-not-const -->
-<!-- globals - a top-level `var`/`let`. shv2 has no writable data section, no global load/store ops, and no cross-function binding scope. The ELISION these cases test is proven by specs-shv2/short-circuit-elision.md; also P1.2 String - `print` and string interpolation -->
+<!-- P1.2 String - `print` and string interpolation. (Globals landed at P1.0d.5b; this case's remaining blocker is the printing, not the `var`.) -->
 ```maxon
 let MASK = not 0xFF
 

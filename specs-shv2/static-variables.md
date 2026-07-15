@@ -70,8 +70,7 @@ c.value = 20                        // Access instance field
 
 ## Tests
 
-<!-- disabled-test: top-level-var-basic -->
-<!-- P1.0d.5b top-level `var` (globals) -->
+<!-- test: top-level-var-basic -->
 ```maxon
 var counter = 0
 
@@ -84,8 +83,7 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: top-level-var-increment -->
-<!-- P1.0d.5b top-level `var` (globals) -->
+<!-- test: top-level-var-increment -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -106,8 +104,7 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: top-level-var-multiple -->
-<!-- P1.0d.5b top-level `var` (globals) -->
+<!-- test: top-level-var-multiple -->
 ```maxon
 var a = 1
 var b = 2
@@ -124,8 +121,7 @@ end 'main'
 60
 ```
 
-<!-- disabled-test: top-level-var-with-let -->
-<!-- P1.0d.5b top-level `var` (globals) -->
+<!-- test: top-level-var-with-let -->
 ```maxon
 let BASE = 40
 var offset = 0
@@ -239,8 +235,7 @@ end 'main'
 32
 ```
 
-<!-- disabled-test: static-var-bool -->
-<!-- P1.0d.5b top-level `var` (globals) -->
+<!-- test: static-var-bool -->
 ```maxon
 var initialized = false
 
@@ -349,8 +344,7 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: top-level-var-const-expr -->
-<!-- P1.0d.5b top-level `var` (globals) -->
+<!-- test: top-level-var-const-expr -->
 ```maxon
 let BASE = 20
 var offset = BASE + 1
@@ -443,8 +437,7 @@ end 'main'
 6
 ```
 
-<!-- disabled-test: data-section-bool-1byte -->
-<!-- P1.0d.5b top-level `var` (globals) -->
+<!-- test: data-section-bool-1byte -->
 A single bool global occupies 1 byte in the .data section.
 
 ```maxon
@@ -464,8 +457,7 @@ end 'main'
 i8 1
 ```
 
-<!-- disabled-test: data-section-i64-8byte -->
-<!-- P1.0d.5b top-level `var` (globals) -->
+<!-- test: data-section-i64-8byte -->
 A single i64 global occupies 8 bytes in the .data section.
 
 ```maxon
@@ -503,8 +495,7 @@ end 'main'
 f64 3.14
 ```
 
-<!-- disabled-test: data-section-bool-then-i64-sorted -->
-<!-- P1.0d.5b top-level `var` (globals) -->
+<!-- test: data-section-bool-then-i64-sorted -->
 A bool and i64 global: sorted largest-first, no padding needed.
 
 ```maxon
@@ -526,8 +517,7 @@ i64 42
 i8 0
 ```
 
-<!-- disabled-test: data-section-bool-true-then-i64 -->
-<!-- P1.0d.5b top-level `var` (globals) -->
+<!-- test: data-section-bool-true-then-i64 -->
 A true bool and i64: sorted largest-first, no padding needed.
 
 ```maxon
@@ -549,8 +539,7 @@ i64 99
 i8 1
 ```
 
-<!-- disabled-test: data-section-i64-then-bool -->
-<!-- P1.0d.5b top-level `var` (globals) -->
+<!-- test: data-section-i64-then-bool -->
 An i64 followed by a bool: no padding needed since bool has 1-byte alignment.
 
 ```maxon
@@ -572,8 +561,7 @@ i64 7
 i8 1
 ```
 
-<!-- disabled-test: data-section-multiple-bools -->
-<!-- P1.0d.5b top-level `var` (globals) -->
+<!-- test: data-section-multiple-bools -->
 Multiple consecutive bools occupy 1 byte each with no padding.
 
 ```maxon
@@ -664,8 +652,7 @@ end 'main'
 error E2013: <fragment>:16:3: cannot assign to immutable variable: 'origin'
 ```
 
-<!-- disabled-test: top-level-var-function-call-error -->
-<!-- P1.0d.5b top-level `var` (globals) -->
+<!-- test: top-level-var-function-call-error -->
 Function calls are not allowed in module-level `var` initializers.
 ```maxon
 typealias Integer = int(i64.min to i64.max)

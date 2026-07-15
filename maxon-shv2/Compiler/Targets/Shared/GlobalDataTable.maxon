@@ -10,10 +10,11 @@
 // (kept from v1, where per-entry linear scans drove a quadratic build cost) so
 // the append/lookup helpers B2 GROWS in stay O(1) from the start.
 //
-// v1's coverage-counter entries, .data-section globals, and rdata-internal
-// pending relocations (CovDataEntry / DataSectionEntry / pendingRdataRelocs)
-// are OMITTED until their milestones (coverage, top-level mutable globals,
-// layout descriptors) need them — they grow back as additional fields here.
+// P1.0d.5b GREW THE `.data` HALF BACK, exactly as this header said it would:
+// `dataSection` + `dataIndex` below are the top-level-mutable-globals milestone
+// arriving. v1's coverage-counter entries and rdata-internal pending relocations
+// (CovDataEntry / pendingRdataRelocs) are still OMITTED until their milestones
+// (coverage, layout descriptors) need them — they grow back the same way.
 
 // `nameIndex`: registered global name → its index in `names`/`values` (O(1)
 // membership + lookup). `valueDedup`: a previously-registered byte payload →
@@ -43,6 +44,35 @@ export function bytesStartWith(bytes ByteArray, prefix ByteArray) returns bool
 	return true
 end 'bytesStartWith'
 
+// --- The `.data` section: writable globals (P1.0d.5b) ---
+
+// `dataIndex`: a data-section label → its index in `dataSection`. The O(1) membership +
+// lookup twin of `nameIndex`, and it exists for that field's reason: v1 answered "where does
+// this label live?" with a linear scan per reference, which is Θ(globals × references).
+export typealias DataSectionIndexMap = Map with (String, MachineWord)
+
+// ONE writable `.data` slot: a top-level `var`.
+//
+// ⚠ IT CARRIES THE VALUE, NOT THE BYTES. The image is rendered from `(value, valueType)` by
+// `dataSectionImage`, once, at write time. Storing both a value and its serialized bytes
+// would be this project's signature bug — one fact written down twice — with the two free to
+// disagree about what `i8 1` is; and the RequiredData gate reads the same pair the image
+// does, so a spec cannot pin a layout the writer does not emit.
+//
+// `offset` is assigned by `layOutDataSection`, which is also the only writer of it.
+export type DataSectionEntry
+	export var label as String
+	export var valueType as StdType
+	export var value as ParsedInt
+	export var offset as ByteOffset
+
+	export static function create(label String, valueType StdType, value ParsedInt) returns DataSectionEntry
+		return Self{label: label, valueType: valueType, value: value, offset: 0}
+	end 'create'
+end 'DataSectionEntry'
+
+export typealias DataSectionEntryArray = Array with DataSectionEntry
+
 export type GlobalDataTable
 	export var names as StringArray
 	export var values as ByteArrayArray
@@ -50,8 +80,112 @@ export type GlobalDataTable
 	export var nextStringId as MachineWord
 	export var nameIndex as GlobalNameIndexMap
 	export var valueDedup as GlobalDedupMap
+	// The `.data` slots, IN LAYOUT ORDER — which is the order the image is written in and the
+	// order `RequiredData` pins. `layOutDataSection` is the single writer of both this array's
+	// order and every entry's `offset`.
+	export var dataSection as DataSectionEntryArray
+	export var dataIndex as DataSectionIndexMap
 
 	export static function create() returns GlobalDataTable
-		return Self{names: StringArray.create(), values: ByteArrayArray.create(), nextStringId: 0, nameIndex: GlobalNameIndexMap.create(), valueDedup: GlobalDedupMap.create()}
+		return Self{names: StringArray.create(), values: ByteArrayArray.create(), nextStringId: 0, nameIndex: GlobalNameIndexMap.create(), valueDedup: GlobalDedupMap.create(), dataSection: DataSectionEntryArray.create(), dataIndex: DataSectionIndexMap.create()}
 	end 'create'
+
+	// ⭐ LAY OUT THE `.data` SECTION: order the slots, then assign each its offset. The SINGLE
+	// writer of `dataSection`, `dataIndex` and every entry's `offset` — so the image, the
+	// relocation resolver and the RequiredData gate cannot hold three opinions of where a
+	// global lives.
+	//
+	// **SORTED BY STORAGE SIZE, LARGEST FIRST — which is what makes the padding zero.** Every
+	// size here is a power of two and no larger than 8, so laying the widest out first means
+	// each slot's offset is already a multiple of its own size when it is reached: the 8-byte
+	// slots fill offsets 0,8,16…, and the 1-byte slots that follow need no alignment at all.
+	// Declaration order would not do it — `var flag = false` then `var counter = 42` would put
+	// an 8-byte slot at offset 1 and force 7 bytes of padding to fix it. This is exactly what
+	// `specs/static-variables.md`'s six `RequiredData` cases pin, and the spec says so in its
+	// own words ("sorted largest-first, no padding needed").
+	//
+	// **THE SORT IS STABLE, and that is part of the contract too**: `data-section-multiple-bools`
+	// pins three equal-sized slots in DECLARATION order (`i8 1`, `i8 0`, `i8 1` for `a`,`b`,`c`).
+	// An unstable sort would order them by whatever the algorithm did that day, and the layout
+	// of a program would stop being a function of its source.
+	export function layOut(declared DataSectionEntryArray)
+		self.dataSection = sortBySizeDescendingStable(declared)
+		self.dataIndex = DataSectionIndexMap.create()
+
+		var offset = 0 as ByteOffset
+		for i in 0 upto self.dataSection.count() 'each'
+			// A `var` binding, so the entry's `offset` is written THROUGH the reference the array
+			// holds — `DataSectionEntry` is a `type`, so this is the very object the array stores,
+			// not a copy of it.
+			var entry = try self.dataSection.get(i) otherwise panic("GlobalDataTable.layOut: dataSection.get OOB at {i} despite the upto bound")
+			entry.offset = offset
+			self.dataIndex.upsert(entry.label, value: i)
+			offset = offset + stdTypeStorageBytes(entry.valueType)
+		end 'each'
+	end 'layOut'
+
+	// The byte image of the `.data` section — rendered from each slot's `(value, valueType)`,
+	// in layout order. Little-endian, matching every other integer this backend writes.
+	//
+	// It needs no padding logic and asserts that it needs none: `layOut` ordered the slots so
+	// that each lands naturally aligned, so the image is simply the concatenation. An entry
+	// whose offset disagrees with the running position means the layout and the image have
+	// drifted, which panics rather than emitting a silently misaligned global.
+	export function dataSectionImage() returns ByteArray
+		var image = ByteArray.create()
+		for entry in self.dataSection 'each'
+			if image.count() != entry.offset 'drift'
+				panic("GlobalDataTable.dataSectionImage: '{entry.label}' is laid out at offset {entry.offset} but the image has reached {image.count()} — layOut's ordering and this rendering disagree")
+			end 'drift'
+			appendScalar(image, value: entry.value, byteCount: stdTypeStorageBytes(entry.valueType))
+		end 'each'
+		return image
+	end 'dataSectionImage'
+
+	// The byte offset of `label`'s slot within `.data` — the door the x64 relocation resolver
+	// asks through. A miss is an invariant break, not a case: every label reaching here came
+	// from a `globalAddr` the parser emitted off the very arena `layOut` was fed.
+	export function dataSectionOffsetOf(label String) returns ByteOffset
+		let index = try self.dataIndex.get(label) otherwise panic("GlobalDataTable.dataSectionOffsetOf: no .data slot is labelled '{label}' — every label a `globalAddr` carries is one the top-level `var` arena declared")
+		let entry = try self.dataSection.get(index) otherwise panic("GlobalDataTable.dataSectionOffsetOf: dataIndex maps '{label}' to {index}, which dataSection does not hold — the two fell out of lockstep")
+		return entry.offset
+	end 'dataSectionOffsetOf'
 end 'GlobalDataTable'
+
+// `declared` ordered by storage size, LARGEST FIRST, preserving declaration order among equal
+// sizes — see `GlobalDataTable.layOut` for why both halves are load-bearing.
+//
+// An INSERTION sort, and the choice is deliberate rather than lazy: it is stable by
+// construction (the scan stops at the first entry that is not strictly smaller, so an equal
+// one is never stepped over), and a program's top-level `var` count is a handful — the Θ(n²)
+// worst case is over a list whose n is the number of globals in the source, not the number of
+// ops or values. A comparison sort with a hand-written stability tiebreak would be more code
+// carrying the one property this shape simply has.
+function sortBySizeDescendingStable(declared DataSectionEntryArray) returns DataSectionEntryArray
+	var sorted = DataSectionEntryArray.create()
+	for entry in declared 'each'
+		let size = stdTypeStorageBytes(entry.valueType)
+		var at = sorted.count()
+		for i in 0 upto sorted.count() 'findSlot'
+			let placed = try sorted.get(i) otherwise panic("sortBySizeDescendingStable: sorted.get OOB at {i}")
+			if stdTypeStorageBytes(placed.valueType) < size 'strictlySmaller'
+				at = i
+				break
+			end 'strictlySmaller'
+		end 'findSlot'
+		sorted.insert(at, value: entry)
+	end 'each'
+	return sorted
+end 'sortBySizeDescendingStable'
+
+// Append `value` as `byteCount` little-endian bytes. The `.data` image's one serializer: a
+// global's initial value is a scalar of 1, 2, 4 or 8 bytes, and the width is the type's
+// (`StdTypeInfo.storageBytes`), never guessed from the value.
+function appendScalar(image ByteArray, value ParsedInt, byteCount ByteCount)
+	// The value is SIGNED (a `ParsedInt`) and the shift-and-mask below is defined on the
+	// unsigned word, so it crosses once, explicitly, here.
+	let bits = value as MachineWord
+	for i in 0 upto byteCount 'eachByte'
+		image.push((bits shr (i * 8)) and 0xFF)
+	end 'eachByte'
+end 'appendScalar'

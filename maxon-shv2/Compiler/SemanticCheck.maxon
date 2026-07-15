@@ -40,7 +40,11 @@ function checkCalls(project Project, module MaxonModule)
 				let op = try module.ops.get(opIdx) otherwise panic("checkCalls: opIdx {opIdx} not in module.ops")
 				match op 'op'
 					call(_, callee, args, argLabels, argRanges) then validateCall(project, func: func, opIndex: opIdx, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges)
-					literal to branch then break 'op'
+					// Extended past `branch` to take in the varAccess band: a global's address, load and
+					// store are not calls and have nothing for this check to say. Their CALLEE-shaped
+					// question — "does this name resolve?" — was answered by `ProgramSignatures` before
+					// the op was emitted at all, which is why there is no E3004 twin for a global.
+					literal to storeIndirect then break 'op'
 				end 'op'
 			end 'eachOp'
 		end 'eachBlock'

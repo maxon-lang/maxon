@@ -282,6 +282,25 @@ let DeclarationEditText = "function __warmRebuildProbe() returns bool\n\treturn 
 let ConstantValueEditBefore = "let __warmRebuildProbeConstant = 7"
 let ConstantValueEditAfter = "let __warmRebuildProbeConstant = 8"
 
+// ⭐ **THE `var` PROBE: the SAME edit as the constant probe, asserting the OPPOSITE — and that
+// is the whole point of it.**
+//
+// `let X = 7` → `8` must re-parse EVERY file. `var X = 7` → `8` must re-parse only ONE. The two
+// declarations look identical, differ in one keyword, and have OPPOSITE correct answers — because a
+// `let`'s value is COPIED into its readers (a `literal` op) and a `var`'s is not. A reader of a
+// global emits `globalAddr __data_X` + `loadIndirect` whichever number the initializer held; the
+// value reaches only the `.data` image, which is rebuilt from the arena whenever the signature
+// query misses.
+//
+// So mixing a var's payload into the signature hash would be SOUND and would silently throw away
+// property (b): every keystroke on any global's initial value would re-parse the whole program.
+// That is the "sound, and useless" key this property exists to reject, wearing a different hat —
+// and NOTHING ELSE HERE CAN SEE IT. The constant probe asserts `fileCount` and would keep passing,
+// because a pessimal key re-parses everything for everything. Only an assertion that a var's value
+// edit re-parses ONE file can tell a correct key from an over-broad one.
+let GlobalValueEditBefore = "var __warmRebuildProbeGlobal = 7"
+let GlobalValueEditAfter = "var __warmRebuildProbeGlobal = 8"
+
 // The fewest source files on which the INVALIDATION property says anything at all. TWO, and the
 // reason is arithmetic rather than taste: the property's halves assert "a declaration edit
 // re-parses `fileCount` files" (and likewise a constant-value edit) and "a bytes-only edit
@@ -351,6 +370,16 @@ function verifyInvalidation(inputPath FilePath, target Target) returns bool thro
 	fileChanged(project, path: editedPath, content: "{original}\n{ConstantValueEditAfter}\n")
 	let constantValueEditMisses = try parseMissesOnRequery(project)
 
+	// Seat the GLOBAL probe at its BEFORE value — a declaration edit, discarded for the same
+	// reason its constant twin is: it exists only to make the NEXT transition a change of the
+	// number alone.
+	fileChanged(project, path: editedPath, content: "{original}\n{GlobalValueEditBefore}\n")
+	_ = try parseMissesOnRequery(project)
+
+	// The measurement that keeps the constant probe's answer from being "everything, always".
+	fileChanged(project, path: editedPath, content: "{original}\n{GlobalValueEditAfter}\n")
+	let globalValueEditMisses = try parseMissesOnRequery(project)
+
 	// A synthetic edit that stopped the program parsing would make BOTH assertions pass for the
 	// wrong reason — a failed parse is never cached, so it re-misses forever. Refuse to report on a
 	// probe whose premise broke.
@@ -365,9 +394,11 @@ function verifyInvalidation(inputPath FilePath, target Target) returns bool thro
 	let declarationEditInvalidatesEveryFile = assertCounterMove("a DECLARATION edit re-parses EVERY file (parseMisses)", before: NoCounterMove, after: declarationEditMisses, expectedDelta: fileCount)
 	let constantValueEditInvalidatesEveryFile = assertCounterMove("a top-level constant's VALUE edit re-parses EVERY file (parseMisses)", before: NoCounterMove, after: constantValueEditMisses, expectedDelta: fileCount)
 
-	let allOk = bytesEditIsLocal and declarationEditInvalidatesEveryFile and constantValueEditInvalidatesEveryFile
+	let globalValueEditIsLocal = assertCounterMove("a top-level VAR's value edit re-parses only the edited file (parseMisses)", before: NoCounterMove, after: globalValueEditMisses, expectedDelta: OneQuery)
+
+	let allOk = bytesEditIsLocal and declarationEditInvalidatesEveryFile and constantValueEditInvalidatesEveryFile and globalValueEditIsLocal
 	if allOk 'passed'
-		print("PASS invalidation: bytes-only edit re-parsed 1 file; declaration edit re-parsed all {fileCount}; constant-value edit re-parsed all {fileCount}\n")
+		print("PASS invalidation: bytes-only edit re-parsed 1 file; declaration edit re-parsed all {fileCount}; constant-value edit re-parsed all {fileCount}; var-value edit re-parsed 1 file\n")
 		return true
 	end 'passed'
 

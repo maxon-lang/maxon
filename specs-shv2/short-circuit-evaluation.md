@@ -38,8 +38,7 @@ Short-circuit semantics compose through chains of `and`/`or` expressions. In
 
 ## Tests
 
-<!-- disabled-test: and-skips-right-when-left-false -->
-<!-- globals - a top-level `var`/`let`. shv2 has no writable data section, no global load/store ops, and no cross-function binding scope. The ELISION these cases test is proven by specs-shv2/short-circuit-elision.md -->
+<!-- test: and-skips-right-when-left-false -->
 ```maxon
 var sideEffectCount = 0
 
@@ -60,8 +59,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: and-evaluates-right-when-left-true -->
-<!-- globals - a top-level `var`/`let`. shv2 has no writable data section, no global load/store ops, and no cross-function binding scope. The ELISION these cases test is proven by specs-shv2/short-circuit-elision.md -->
+<!-- test: and-evaluates-right-when-left-true -->
 ```maxon
 var sideEffectCount = 0
 
@@ -82,8 +80,7 @@ end 'main'
 2
 ```
 
-<!-- disabled-test: or-skips-right-when-left-true -->
-<!-- globals - a top-level `var`/`let`. shv2 has no writable data section, no global load/store ops, and no cross-function binding scope. The ELISION these cases test is proven by specs-shv2/short-circuit-elision.md -->
+<!-- test: or-skips-right-when-left-true -->
 ```maxon
 var sideEffectCount = 0
 
@@ -104,8 +101,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: or-evaluates-right-when-left-false -->
-<!-- globals - a top-level `var`/`let`. shv2 has no writable data section, no global load/store ops, and no cross-function binding scope. The ELISION these cases test is proven by specs-shv2/short-circuit-elision.md -->
+<!-- test: or-evaluates-right-when-left-false -->
 ```maxon
 var sideEffectCount = 0
 
@@ -126,8 +122,7 @@ end 'main'
 2
 ```
 
-<!-- disabled-test: and-chain-short-circuits-on-first-false -->
-<!-- globals - a top-level `var`/`let`. shv2 has no writable data section, no global load/store ops, and no cross-function binding scope. The ELISION these cases test is proven by specs-shv2/short-circuit-elision.md -->
+<!-- test: and-chain-short-circuits-on-first-false -->
 ```maxon
 var sideEffectCount = 0
 
@@ -148,8 +143,7 @@ end 'main'
 2
 ```
 
-<!-- disabled-test: or-chain-short-circuits-on-first-true -->
-<!-- globals - a top-level `var`/`let`. shv2 has no writable data section, no global load/store ops, and no cross-function binding scope. The ELISION these cases test is proven by specs-shv2/short-circuit-elision.md -->
+<!-- test: or-chain-short-circuits-on-first-true -->
 ```maxon
 var sideEffectCount = 0
 
@@ -207,7 +201,7 @@ end 'main'
 ```
 
 <!-- disabled-test: short-circuit-in-if-condition -->
-<!-- globals - a top-level `var`/`let`. shv2 has no writable data section, no global load/store ops, and no cross-function binding scope. The ELISION these cases test is proven by specs-shv2/short-circuit-elision.md -->
+<!-- P1.9 `as` cast. Globals landed at P1.0d.5b and the seven cases that needed only those are ENABLED; these two also cast (`trace as ExitCode` / a ranged alias), which the `as` operator gates. -->
 ```maxon
 typealias Integer = int(0 to u64.max)
 
@@ -229,8 +223,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: short-circuit-in-while-condition -->
-<!-- globals - a top-level `var`/`let`. shv2 has no writable data section, no global load/store ops, and no cross-function binding scope. The ELISION these cases test is proven by specs-shv2/short-circuit-elision.md -->
+<!-- test: short-circuit-in-while-condition -->
 ```maxon
 var trace = 0
 
@@ -256,7 +249,7 @@ end 'main'
 ```
 
 <!-- disabled-test: nested-short-circuit -->
-<!-- globals - a top-level `var`/`let`. shv2 has no writable data section, no global load/store ops, and no cross-function binding scope. The ELISION these cases test is proven by specs-shv2/short-circuit-elision.md -->
+<!-- P1.9 `as` cast. Globals landed at P1.0d.5b and the seven cases that needed only those are ENABLED; these two also cast (`trace as ExitCode` / a ranged alias), which the `as` operator gates. -->
 ```maxon
 var calls = 0
 

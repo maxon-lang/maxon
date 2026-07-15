@@ -212,6 +212,13 @@ type MaxonToStdLowering
 			compare(result, lhs, rhs, op) then self.lowerCompare(result, lhs: lhs, rhs: rhs, op: op, dstBlock: dstBlock)
 			condBranch then panic("lowerMaxonToStd: a `condBranch` appeared as a body op (parser bug — a branch is always a block terminator)")
 			branch then panic("lowerMaxonToStd: a `branch` appeared as a body op (parser bug — a branch is always a block terminator)")
+			// The varAccess band lowers 1:1 into the Std memory band — the two are the same three ops
+			// at two tiers, and the ONLY thing that happens here is the width collapse the tier
+			// boundary exists for (`maxonTypeToStdType`: `boolean` → `i1`, whose `storageBytes` is the
+			// 1 the `.data` image lays down). The label and the offset pass through verbatim.
+			globalAddr(result, label) then self.stdModule.appendOp(dstBlock, op: StdOp.globalAddr(result, label: label))
+			loadIndirect(result, addr, offset, valueType) then self.stdModule.appendOp(dstBlock, op: StdOp.loadIndirect(result, addrId: addr, offset: offset, valueType: maxonTypeToStdType(valueType)))
+			storeIndirect(addr, offset, value, valueType) then self.stdModule.appendOp(dstBlock, op: StdOp.storeIndirect(addr, offset: offset, valueId: value, valueType: maxonTypeToStdType(valueType)))
 		end 'lower'
 	end 'lowerOp'
 
@@ -228,6 +235,7 @@ type MaxonToStdLowering
 			unaryOp then panic("lowerMaxonToStd: a `unaryOp` op appeared as a block terminator (parser bug — a unary op is never a terminator)")
 			compare then panic("lowerMaxonToStd: a `compare` op appeared as a block terminator (parser bug — a comparison is never a terminator)")
 			call then panic("lowerMaxonToStd: a `call` op appeared as a block terminator (parser bug — a call is a body op, never a terminator)")
+			globalAddr to storeIndirect then panic("lowerMaxonToStd: a varAccess op appeared as a block terminator (parser bug — a global's address, load and store are all body ops, never terminators)")
 		end 'lower'
 	end 'lowerTerminator'
 

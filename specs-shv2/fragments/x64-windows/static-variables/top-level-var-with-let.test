@@ -1,0 +1,28 @@
+// Test: top-level-var-with-let
+let BASE = 40
+var offset = 0
+
+function main() returns ExitCode
+	offset = 2
+	return BASE + offset
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __data_offset@0 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 rax, 2
+    x64.leaRegGlobal rcx, __data_offset
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+    x64.leaRegGlobal rax, __data_offset
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.leaRegRegImm32 r8, rax, 40
+    x64.popReg rbp
+    x64.ret
+}

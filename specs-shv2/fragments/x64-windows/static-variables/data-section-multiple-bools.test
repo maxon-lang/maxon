@@ -1,0 +1,64 @@
+// Test: data-section-multiple-bools
+var a = true
+var b = false
+var c = true
+
+function main() returns ExitCode
+	if a and c and (b == false) 'read'
+		return 0
+	end 'read'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __data_a@0 = i1 1
+  __data_b@1 = i1 0
+  __data_c@2 = i1 1
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.leaRegGlobal rax, __data_a
+    x64.loadRegBaseDisp.byte rax, [rax + 0]
+    x64.movRegImm32 rcx, 0
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, andrhs
+    x64.jmp critsplit
+  andrhs:
+    x64.leaRegGlobal rax, __data_c
+    x64.loadRegBaseDisp.byte rax, [rax + 0]
+    x64.jmp scmerge
+  critsplit:
+    x64.movRegReg rax, rcx
+    x64.jmp scmerge
+  scmerge:
+    x64.movRegImm32 rcx, 0
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, andrhs
+    x64.jmp critsplit
+  andrhs:
+    x64.leaRegGlobal rax, __data_b
+    x64.loadRegBaseDisp.byte rax, [rax + 0]
+    x64.cmpRegImm32 rax, 0
+    x64.setccReg equal, rax
+    x64.jmp scmerge
+  critsplit:
+    x64.movRegReg rax, rcx
+    x64.jmp scmerge
+  scmerge:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, read
+    x64.jmp ifcont
+  read:
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+}

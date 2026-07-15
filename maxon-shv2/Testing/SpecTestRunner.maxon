@@ -515,7 +515,7 @@ function checkTestFragment(fragmentDir FilePath, test SpecTest, compile ProcessC
 	// its IR — a pinned ```stderr is an assertion about the RUN, checked there, and adding
 	// it here would move every golden for nothing.
 	let content = match test.expectation 'e'
-		run(expected, _) gives buildExitCodeFragment(test, expected: expected, irPath: irPath)
+		run(expected, _, _) gives buildExitCodeFragment(test, expected: expected, irPath: irPath)
 		compilerError gives buildErrorFragment(test, compile: compile, staged: staged)
 	end 'e'
 
@@ -608,7 +608,7 @@ end 'buildErrorFragment'
 
 function checkExpectation(test SpecTest, specName String, compile ProcessCapture, staged StagedTest, exePath FilePath) returns TestOutcome
 	return match test.expectation 'e'
-		run(expected, stderr) gives checkRun(expected, stderr: stderr, compile: compile, exePath: exePath)
+		run(expected, stderr, requiredData) gives checkRun(expected, stderr: stderr, requiredData: requiredData, compile: compile, exePath: exePath)
 		compilerError(text) gives checkCompilerError(text, specName: specName, testName: test.name, compile: compile, staged: staged)
 	end 'e'
 end 'checkExpectation'
@@ -643,10 +643,21 @@ end 'checkCompilerError'
 // A RUN test (an ```exitcode block, plus the ```stderr block that may accompany it): the
 // compile MUST succeed, then the produced exe is spawned and BOTH halves of the
 // expectation are checked against that one execution — its exit code, and what it printed.
-function checkRun(expected ExitCodeValue, stderr SpecStderr, compile ProcessCapture, exePath FilePath) returns TestOutcome
+function checkRun(expected ExitCodeValue, stderr SpecStderr, requiredData SpecRequiredData, compile ProcessCapture, exePath FilePath) returns TestOutcome
 	if compile.exitCode != 0 'compileFailed'
 		return TestOutcome.fail("compilation failed (exit {compile.exitCode}): {compile.stderr.trim()}")
 	end 'compileFailed'
+
+	// The `.data` gate reads the BINARY, so it runs before the program does — it is a property of
+	// what was linked, not of what executing it happened to touch. A layout failure reported here
+	// rather than after the run also names the actual defect: a program whose globals are laid out
+	// wrong usually still exits with some number, and "exit code mismatch" would send the reader
+	// looking in the wrong place entirely.
+	let dataOutcome = checkRequiredData(requiredData, exePath: exePath)
+	match dataOutcome 'data'
+		pass then break 'data'
+		fail then return dataOutcome
+	end 'data'
 
 	let run = try runProcess(exePath, argv: StringArray.create()) otherwise (e) 'runSpawnFailed'
 		return TestOutcome.fail("program spawn failed: {e.displayReason()}")
@@ -658,6 +669,56 @@ function checkRun(expected ExitCodeValue, stderr SpecStderr, compile ProcessCapt
 
 	return checkRunStderr(stderr, actual: run.stderr)
 end 'checkRun'
+
+// ⭐ **THE `.data` GATE — a top-level `var`'s STORAGE, checked against the LINKED BINARY.**
+//
+// ⚠ This block was SILENTLY IGNORED before P1.0d.5b (see `SpecParser.RequiredDataFence`): six
+// `specs/static-variables.md` cases carried one, the parser dropped it, and each would have passed
+// on its exit code alone while claiming to check its layout. A gate that cannot see its own
+// property must not report PASS.
+//
+// **IT READS THE PE, NOT THE COMPILER'S OPINION OF IT**, and that is the whole value. The IR
+// fragment already pins what the compiler THINKS it laid out (`printDataSection`), and pinning that
+// twice would prove only that the compiler agrees with itself. Reading the section back out of the
+// executable catches the layer between: a section header with a wrong RVA, a raw pointer off by an
+// alignment, an image the writer padded instead of wrote. This is a faithful port of
+// `TestRunner.cs`'s `CheckRequiredData` → `CheckRequiredSection`, including the PREFIX rule below.
+function checkRequiredData(requiredData SpecRequiredData, exePath FilePath) returns TestOutcome
+	match requiredData 'pin'
+		unpinned then return TestOutcome.pass
+		pinned(text) then return compareDataSection(text, exePath: exePath)
+	end 'pin'
+end 'checkRequiredData'
+
+function compareDataSection(expectedText String, exePath FilePath) returns TestOutcome
+	let expected = try parseTypedSectionValues(expectedText) otherwise (e) 'badBlock'
+		return TestOutcome.fail("RequiredData block is malformed: {e.displayReason()}")
+	end 'badBlock'
+
+	let actual = try readPeSectionData(exePath, sectionName: DataSectionName) otherwise (e) 'noSection'
+		return TestOutcome.fail("could not read the `.data` section of {exePath.toString()}: {e.displayReason()}")
+	end 'noSection'
+
+	// ⚠ **A PREFIX, NOT AN EQUALITY**, and the reference draws the line in the same place and says
+	// why: "the data section may contain additional runtime globals (e.g. green thread scheduler
+	// state) after the user data". shv2's `.data` holds only user globals TODAY, so a prefix check
+	// and an equality check agree on every current case — but the runtime that grows into this
+	// section (P1.5's scheduler) would break equality on every one of these six specs at once,
+	// for a change that says nothing about the property they pin.
+	if actual.count() < expected.count() 'tooShort'
+		return TestOutcome.fail("`.data` is shorter than RequiredData claims\n    expected ({expected.count()} bytes): {formatHexBytes(expected)}\n    actual   ({actual.count()} bytes): {formatHexBytes(actual)}")
+	end 'tooShort'
+
+	for i in 0 upto expected.count() 'eachByte'
+		let e = try expected.get(i) otherwise panic("compareDataSection: expected.get OOB at {i} despite the upto bound")
+		let a = try actual.get(i) otherwise panic("compareDataSection: actual.get OOB at {i} — the length was checked above")
+		if e != a 'differs'
+			return TestOutcome.fail("`.data` mismatch at byte {i}: expected 0x{hexByte(e)}, got 0x{hexByte(a)}\n    expected ({expected.count()} bytes): {formatHexBytes(expected)}\n    actual   ({actual.count()} bytes): {formatHexBytes(actual)}")
+		end 'differs'
+	end 'eachByte'
+
+	return TestOutcome.pass
+end 'compareDataSection'
 
 // The stderr half of a run expectation.
 //

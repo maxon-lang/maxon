@@ -1832,7 +1832,19 @@ function opIsConstMaterialization(module TargetModule, opIdx OpIndex) returns bo
 		// The bit band. None of these is a constant materialization: every one reads at
 		// least one register (or, for `setccReg`, EFLAGS), so re-emitting it at a use site
 		// would need those inputs live there — which is exactly what remat exists to avoid.
-		andRegReg to setccReg gives false
+		// ⚠ `leaRegGlobal` is the interesting `false` here. It reads NO register and computes a
+		// value that cannot change, so it IS rematerializable in principle — which is exactly what
+		// `StdOp.globalAddr`'s `isPure: true` says. But THIS predicate asks a narrower question:
+		// "can this def be rebuilt by `constValueOfDef` + a `movRegImm`?" A global's address is a
+		// LINK-TIME address, not an integer the compiler holds, so rebuilding it means re-emitting
+		// the `lea` AND a fresh relocation — which this remat path has no way to express. Answering
+		// `true` would send it to `constValueOfDef`, which would panic.
+		//
+		// So it is a real missed optimization (a spilled global address would reload from the stack
+		// where it could re-`lea` for the same size and no slot), and it is priced: taking it means
+		// generalizing remat from "a constant value" to "an op with no register inputs". Not this
+		// rung's, and recorded here rather than silently ranged over.
+		andRegReg to storeBaseDispReg gives false
 	end 'k'
 end 'opIsConstMaterialization'
 
@@ -2377,7 +2389,7 @@ function constValueOfDef(module TargetModule, opIdx OpIndex) returns MachineWord
 		movRegImm32(_, value) then return value
 		prologue to jcc then panic("constValueOfDef: def is not a constant materialization")
 		movRegReg to loadRegSlot then panic("constValueOfDef: def is not a constant materialization")
-		andRegReg to setccReg then panic("constValueOfDef: def is not a constant materialization")
+		andRegReg to storeBaseDispReg then panic("constValueOfDef: def is not a constant materialization")
 	end 'k'
 end 'constValueOfDef'
 
@@ -2471,6 +2483,10 @@ function substituteValueInOp(op TargetOp, from ValueId, to ValueId) returns Targ
 		sarRegCl(dest, lhs) then return TargetOp.sarRegCl(substituteVReg(dest, from: from, to: to), lhs: substituteVReg(lhs, from: from, to: to))
 		shrRegCl(dest, lhs) then return TargetOp.shrRegCl(substituteVReg(dest, from: from, to: to), lhs: substituteVReg(lhs, from: from, to: to))
 		setccReg(dest, cond) then return TargetOp.setccReg(substituteVReg(dest, from: from, to: to), cond: cond)
+		// The data-section band — every vreg operand substituted, mirroring `colorTargetOp`.
+		leaRegGlobal(dest, label) then return TargetOp.leaRegGlobal(substituteVReg(dest, from: from, to: to), label: label)
+		loadRegBaseDisp(dest, base, disp, width) then return TargetOp.loadRegBaseDisp(substituteVReg(dest, from: from, to: to), base: substituteVReg(base, from: from, to: to), disp: disp, width: width)
+		storeBaseDispReg(base, disp, src, width) then return TargetOp.storeBaseDispReg(substituteVReg(base, from: from, to: to), disp: disp, src: substituteVReg(src, from: from, to: to), width: width)
 	end 'rewrite'
 end 'substituteValueInOp'
 

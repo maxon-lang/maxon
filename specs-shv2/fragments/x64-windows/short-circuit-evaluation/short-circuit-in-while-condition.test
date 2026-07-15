@@ -1,0 +1,91 @@
+// Test: short-circuit-in-while-condition
+var trace = 0
+
+function check() returns bool
+	trace = trace + 1
+	return trace < 3
+end 'check'
+
+function alwaysFalse() returns bool
+	trace = trace + 100
+	return false
+end 'alwaysFalse'
+
+function main() returns ExitCode
+	while check() and alwaysFalse() 'loop'
+		return 99
+	end 'loop'
+	return trace
+end 'main'
+---
+ExitCode: 101
+---
+data {
+  __data_trace@0 = i64 0
+}
+
+func @check {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.leaRegGlobal rax, __data_trace
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.leaRegGlobal rcx, __data_trace
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+    x64.leaRegGlobal rax, __data_trace
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.cmpRegImm32 rax, 3
+    x64.setccReg less, r8
+    x64.popReg rbp
+    x64.ret
+}
+
+func @alwaysFalse {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.leaRegGlobal rax, __data_trace
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.leaRegRegImm32 rax, rax, 100
+    x64.leaRegGlobal rcx, __data_trace
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.jmp whilehdr
+  whilehdr:
+    x64.callDirect check
+    x64.movRegImm32 rax, 0
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, andrhs
+    x64.jmp critsplit
+  andrhs:
+    x64.callDirect alwaysFalse
+    x64.jmp scmerge
+  critsplit:
+    x64.movRegReg r8, rax
+    x64.jmp scmerge
+  scmerge:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, loop
+    x64.jmp whileexit
+  loop:
+    x64.movRegImm32 r8, 99
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  whileexit:
+    x64.leaRegGlobal rax, __data_trace
+    x64.loadRegBaseDisp.word64 r8, [rax + 0]
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

@@ -528,8 +528,7 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: exported-var-cross-file -->
-<!-- P1.0d.5 top-level `var` (globals) -->
+<!-- test: exported-var-cross-file -->
 Cross-file access to an exported module-level var with a simple constant value.
 ```maxon
 // --- file: api/counter.maxon
@@ -572,8 +571,7 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: error.non-exported-var-cross-file -->
-<!-- P1.0d.5 globals + export visibility -->
+<!-- test: error.non-exported-var-cross-file -->
 Non-exported module-level var should not be accessible from another file.
 ```maxon
 // --- file: state.maxon

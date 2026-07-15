@@ -241,6 +241,14 @@ function opPhysicalRegs(op TargetOp) returns RegMask
 		sarRegCl(d, l) gives physRegBit(d) or physRegBit(l)
 		shrRegCl(d, l) gives physRegBit(d) or physRegBit(l)
 		setccReg(d, _) gives physRegBit(d)
+		// ⚠ The data-section band MUST be counted here, and this is the arm where a miss is a real
+		// miscompile rather than a missed optimization: this mask is what decides which CALLEE-SAVED
+		// registers the prologue pushes. A global's address, or the value loaded out of one, can be
+		// colored into rbx or r12-r15 like any other value — and if that register is not in this mask,
+		// the prologue never saves it and the function silently clobbers its CALLER's register.
+		leaRegGlobal(d, _) gives physRegBit(d)
+		loadRegBaseDisp(d, b, _, _) gives physRegBit(d) or physRegBit(b)
+		storeBaseDispReg(b, _, s, _) gives physRegBit(b) or physRegBit(s)
 	end 'p'
 end 'opPhysicalRegs'
 
@@ -356,6 +364,6 @@ function blockEndsWithReturn(module TargetModule, block IrBlock) returns bool
 		jmp to idivReg gives false
 		pushReg to popReg gives false
 		storeSlotReg to loadRegSlot gives false
-		andRegReg to setccReg gives false
+		andRegReg to storeBaseDispReg gives false
 	end 'check'
 end 'blockEndsWithReturn'

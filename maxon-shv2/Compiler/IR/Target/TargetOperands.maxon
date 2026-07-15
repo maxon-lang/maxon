@@ -264,6 +264,19 @@ export function targetOpOperands(op TargetOp, buf OperandList)
 		// A boolean materialization reads EFLAGS — not a tracked register — and writes one
 		// fresh value. So: one plain def, no uses.
 		setccReg(dest, _) then pushDef(buf, vreg: dest)
+		// The data-section band. A RIP-relative `lea` reads NO register (RIP is not allocatable),
+		// so it is one plain def and nothing else — which is what makes `StdOp.globalAddr`
+		// rematerializable with no live input at all.
+		leaRegGlobal(dest, _) then pushDef(buf, vreg: dest)
+		// A load's `dest` is INDEPENDENT of its `base` — x64 `mov r, [m]` is not two-address — so
+		// this is `pushDefFromUse` (a plain def plus a use), NOT `pushReuseUnaryOperands`. Claiming
+		// a reuse here would tell the allocator the two MUST share a register, which is false and
+		// would cost a copy at every load; the inverse mistake (a reuse op declared independent) is
+		// the one that miscompiles, and it is why the two are never guessed.
+		loadRegBaseDisp(dest, base, _, _) then pushDefFromUse(buf, dest: dest, src: base)
+		// A store DEFINES nothing: both the address and the value are read. `pushCmpOperands` is
+		// the two-uses-no-def shape, which is exactly a store's.
+		storeBaseDispReg(base, _, src, _) then pushCmpOperands(buf, lhs: base, rhs: src)
 	end 'operands'
 end 'targetOpOperands'
 

@@ -101,6 +101,22 @@ let CompilerErrorFence = "```maxoncstderr"
 // (Checked explicitly rather than assumed, because the fence order is exactly the kind of
 // thing that is true until someone edits a literal.)
 let RuntimeStderrFence = "```stderr"
+
+// ⭐ THE `.data` SECTION'S BYTES, as typed values — `i64 42` / `i8 1` / `f64 3.14`, one per line.
+// The gate on a top-level `var`'s STORAGE: not what the compiler thinks it laid out, but what the
+// linked binary actually contains, read back out of the PE (`SpecTestRunner.checkRequiredData`).
+//
+// ⚠ **IT WAS SILENTLY IGNORED UNTIL P1.0d.5b, AND THAT IS WHY IT IS HERE.** This parser dropped
+// every ```RequiredData block on the floor — the outer scan, finding no marker in it, walked over
+// it line by line — so the SIX cases in `specs/static-variables.md` that carry one would have
+// passed on their exit code alone while CLAIMING to check their layout. A gate that cannot see its
+// own property must not report PASS; that is this project's own rule, and `verify-warm-rebuild`
+// had just been caught breaking it. Implemented rather than refused, because the reference already
+// implements it (`TestRunner.cs:CheckRequiredData` → `CheckRequiredSection`) and porting it costs
+// less than explaining why shv2 would not.
+//
+// It is order-independent of the other four fences (no prefix relation), like ```stderr.
+let RequiredDataFence = "```RequiredData"
 let FenceClose = "```"
 
 // The multi-file marker, and the ONE line the `// Test: <name>` fragment header adds above a
@@ -142,22 +158,30 @@ export union SpecStderr
 	pinned(text String)
 end 'SpecStderr'
 
+// What a spec pins about the emitted `.data` section — `SpecStderr`'s exact shape, and a union for
+// the identical reason: "this spec says nothing about `.data`" and "this spec says `.data` is
+// EMPTY" are different claims, and an empty String cannot tell them apart.
+export union SpecRequiredData
+	unpinned
+	pinned(text String)
+end 'SpecRequiredData'
+
 // The expected outcome of one test. A UNION (not a struct with presence flags)
 // so a test asserts EXACTLY one of two mutually exclusive things — the compiled
 // program RAN, OR the compiler rejected the source with `text` (a ```maxoncstderr
 // block) — with no sentinel "unset" state.
 //
-// The `run` arm carries BOTH halves of a run expectation, because a ```stderr block does
-// not replace an ```exitcode block, it ACCOMPANIES one: `specs/safety.md` asserts that
-// `100 / zero` exits 1 AND prints a panic, and those are one indivisible claim about one
-// execution. Modelling stderr as a third, parallel arm would let a test assert an exit
-// code or a stderr but never both, which is precisely what every panic spec in the corpus
-// does assert. The C# reference says the same thing with independent nullable fields
-// (`SpecParser.cs:171` — a success expectation has optional ExitCode/Stdout/Stderr,
-// mutually exclusive with a compile-error expectation); this is that shape with the
-// "unset" states the reference leaves as `null` made unrepresentable.
+// The `run` arm carries ALL THREE halves of a run expectation, because none of them replaces an
+// ```exitcode block — each ACCOMPANIES one. `specs/safety.md` asserts that `100 / zero` exits 1 AND
+// prints a panic; `specs/static-variables.md` asserts that `data-section-i64-8byte` exits 0 AND
+// lays down `i64 42`. Each is one indivisible claim about one build-and-run. Modelling stderr or
+// requiredData as parallel arms would let a test assert an exit code or a layout but never both,
+// which is precisely what those six cases do assert. The C# reference says the same thing with
+// independent nullable fields (`SpecParser.cs:171` — a success expectation has optional
+// ExitCode/Stdout/Stderr/RequiredData, mutually exclusive with a compile-error expectation); this
+// is that shape with the "unset" states the reference leaves as `null` made unrepresentable.
 export union SpecExpectation
-	run(exitCode ExitCodeValue, stderr SpecStderr)
+	run(exitCode ExitCodeValue, stderr SpecStderr, requiredData SpecRequiredData)
 	compilerError(text String)
 end 'SpecExpectation'
 
@@ -393,6 +417,7 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 	var exitCode = 0 as ExitCodeValue
 	var haveExitCode = false
 	var stderr = SpecStderr.unpinned
+	var requiredData = SpecRequiredData.unpinned
 	var i = markerIndex + 1
 
 	while i < lineCount 'blocks'
@@ -426,6 +451,13 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 			i = block.nextIndex
 			continue
 		end 'runtimeStderr'
+
+		if line.startsWith(RequiredDataFence) 'requiredDataBlock'
+			let block = readFence(lines, openIndex: i)
+			requiredData = SpecRequiredData.pinned(block.text.trim())
+			i = block.nextIndex
+			continue
+		end 'requiredDataBlock'
 
 		if line.startsWith(ExitCodeFence) 'exitCodeBlock'
 			let block = readFence(lines, openIndex: i)
@@ -468,7 +500,7 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 	// An ```exitcode block, plus whatever ```stderr accompanied it, is ONE claim about ONE
 	// execution.
 	if haveExitCode 'ran'
-		tests.push(SpecTest.create(name, source: source, expectation: SpecExpectation.run(exitCode, stderr: stderr)))
+		tests.push(SpecTest.create(name, source: source, expectation: SpecExpectation.run(exitCode, stderr: stderr, requiredData: requiredData)))
 	end 'ran'
 
 	return i

@@ -38,7 +38,7 @@
 
 // Cursor position into the token array. Wide range: token counts are unbounded. Exported because a
 // top-level constant's declaration records the token RANGE of its initializer (SignatureIndex's
-// `TopLevelConstDecl`) rather than a tree of it.
+// `TopLevelDecl`) rather than a tree of it.
 export typealias TokenIndex = int(0 to u64.max)
 
 // How many blocks are open around a token. 0 is FILE SCOPE — the depth at which a `let` is a
@@ -51,6 +51,15 @@ typealias BlockDepth = int(0 to u64.max)
 // later milestone — so the parser rejects it up front with a positioned `unsupported`
 // rather than letting it reach the backend as a crash.
 let MaxRegisterParams = 6 as ParamCount
+
+// The displacement from a top-level `var`'s `globalAddr` to the value itself: ZERO, because every
+// global is its OWN labelled `.data` slot and the label already names the exact address.
+//
+// Named rather than written `0` at the three emit sites, because the zero is a CLAIM ("this label
+// names this value, with nothing in front of it") and not an arithmetic accident — P1.1's `point.x`
+// goes through the very same `loadIndirect`/`storeIndirect` ops with a real field offset, and at
+// that point the two must be told apart by a reader.
+let GlobalSlotOffset = 0 as ByteOffset
 
 // The parser's failure modes. Distinct from NumberParsing's `ParserError` (which
 // `parseIntLiteral` catches and re-raises as `integerOverflow`). queryParseOps
@@ -1000,7 +1009,7 @@ export type Parser
 	export function foldDeclaredSignaturesInto(index ProgramSignatures)
 		var entries = FuncReturnTypeEntryArray.create()
 		var aliases = RangedTypeAliasArray.create()
-		var constants = TopLevelConstDeclArray.create()
+		var bindings = TopLevelDeclArray.create()
 
 		let resume = self.pos
 		self.pos = 0
@@ -1009,21 +1018,21 @@ export type Parser
 		// keyword however malformed the source around it is. `function` and `typealias` are reserved
 		// and appear nowhere but a declaration, so their arms need no context at all.
 		//
-		// **`let` is different — it is the most common statement in any body.** So it, and only it, is
-		// gated on depth 0. The counter tracks exactly shv2's block syntax: `function`/`if`/`while`/a
-		// non-`if` `else` open one, `end` closes one, and nothing else in the parsed slice does either
-		// (a typealias, a binding, a return, a call and an assignment are all single-line). The opener
-		// predicate is `opensBlockAt` — the one the loop scanner already uses — rather than a second
-		// list of block keywords to fall out of step with it.
+		// **`let` and `var` are different — they are the most common statements in any body.** So they,
+		// and only they, are gated on depth 0. The counter tracks exactly shv2's block syntax:
+		// `function`/`if`/`while`/a non-`if` `else` open one, `end` closes one, and nothing else in the
+		// parsed slice does either (a typealias, a binding, a return, a call and an assignment are all
+		// single-line). The opener predicate is `opensBlockAt` — the one the loop scanner already uses —
+		// rather than a second list of block keywords to fall out of step with it.
 		//
-		// The gate is BELT AND BRACES, not the guarantee: `declaredConstantOutcome` panics if this scan
-		// and the real parse ever disagree about which `let` is top level.
+		// The gate is BELT AND BRACES, not the guarantee: `declaredOutcome` panics if this scan
+		// and the real parse ever disagree about which binding is top level.
 		var depth = 0 as BlockDepth
 		while not self.isEof() 'scan'
-			if depth == 0 and self.at(TokenKind.let) 'isTopLevelConstant'
-				self.recordScannedConstant(constants)
+			if depth == 0 and self.atTopLevelBindingKeyword() 'isTopLevelBinding'
+				self.recordScannedBinding(bindings)
 				continue
-			end 'isTopLevelConstant'
+			end 'isTopLevelBinding'
 
 			if self.at(TokenKind.function) 'isFunction'
 				// A function opens a block, closed by its own `end`. Counted BEFORE the signature is
@@ -1044,8 +1053,19 @@ export type Parser
 		end 'scan'
 		self.pos = resume
 
-		index.foldFile(entries, aliases: aliases, constants: constants, fileTypeNames: self.artifact.typeNames)
+		index.foldFile(entries, aliases: aliases, bindings: bindings, fileTypeNames: self.artifact.typeNames)
 	end 'foldDeclaredSignaturesInto'
+
+	// Is the cursor on a `let` or a `var` — the two keywords that introduce a top-level binding?
+	//
+	// ONE predicate, read by BOTH the declaration sweep's depth-0 gate and `dispatchTopLevel`'s
+	// arm, for the reason `assignsAt` is one predicate: a keyword taught to one and not the other
+	// would put the sweep's idea of what is a declaration and the parser's a keyword apart. The
+	// sweep would not record the binding, and `declaredOutcome`'s drift guard would panic on a
+	// program that is perfectly correct.
+	function atTopLevelBindingKeyword() returns bool
+		return self.at(TokenKind.let) or self.at(TokenKind.var)
+	end 'atTopLevelBindingKeyword'
 
 	// The block depth after the token at the cursor. `end` FLOORS at zero rather than underflowing: a
 	// stray `end` is malformed source, and the sweep is tolerant — the real parse reports it, with a
@@ -1070,11 +1090,11 @@ export type Parser
 	// `readTopLevelConstant` — the routine the real parse reads with — so the two cannot drift on where
 	// an initializer ends. That routine consumes the `let` keyword before it can fail, so the cursor
 	// always advances and the caller's loop cannot spin.
-	function recordScannedConstant(constants TopLevelConstDeclArray)
+	function recordScannedBinding(bindings TopLevelDeclArray)
 		let visibility = self.scannedVisibility()
-		let decl = try self.readTopLevelConstant(visibility) otherwise return
-		constants.push(decl)
-	end 'recordScannedConstant'
+		let decl = try self.readTopLevelBinding(visibility) otherwise return
+		bindings.push(decl)
+	end 'recordScannedBinding'
 
 	// The visibility of the declaration at the cursor, read from the token BEFORE it.
 	//
@@ -1150,10 +1170,10 @@ export type Parser
 	end 'skipBalancedParens'
 
 	// One top-level declaration: an optional `export`, then a `function`, a ranged `typealias`, or a
-	// `let` constant. Everything else (type, enum, union, extension, top-level `var`, ...) is out of
-	// the slice and rejected with a positioned error.
+	// `let`/`var` binding. Everything else (type, enum, union, extension, ...) is out of the slice
+	// and rejected with a positioned error.
 	//
-	// `visibility` is consumed by `parseFunction` and by `readTopLevelConstant`. A typealias carries
+	// `visibility` is consumed by `parseFunction` and by `readTopLevelBinding`. A typealias carries
 	// one too, and it is deliberately DROPPED: alias visibility decides whether a name is reachable
 	// from another FILE, and the alias registry is whole-program until cross-file name resolution
 	// lands (see `commitTypeAliases`). Recording it now would be a field nothing reads.
@@ -1168,10 +1188,15 @@ export type Parser
 			try self.parseFunction(visibility)
 		end 'isFunction' else if self.at(TokenKind.typealias) 'isTypeAlias'
 			self.artifact.recordTypeAlias(try self.readTypeAliasDeclaration())
-		end 'isTypeAlias' else if self.at(TokenKind.let) 'isConstant'
-			let decl = try self.readTopLevelConstant(visibility)
-			try self.raiseConstantFailure(decl)
-		end 'isConstant' else 'unsupported'
+		end 'isTypeAlias' else if self.atTopLevelBindingKeyword() 'isBinding'
+			// The declaration EMITS NOTHING — for a `var` exactly as for a `let`. A constant inlines at
+			// every read; a var's slot is laid down by the backend from the arena
+			// (`ProgramSignatures.declaredGlobals`), and its every read and write is emitted at the USE
+			// site. So there is nothing for the real parse to build here either way, only something for
+			// it to REPORT.
+			let decl = try self.readTopLevelBinding(visibility)
+			try self.raiseBindingFailure(decl)
+		end 'isBinding' else 'unsupported'
 			let tok = self.current()
 			throw ParseError.unsupported("top-level {tok.kind.rawValue}", line: tok.line, column: tok.column)
 		end 'unsupported'
@@ -1181,7 +1206,7 @@ export type Parser
 	// LANDS — but not where its VALUE is computed.
 	//
 	// The declaration itself emits NO op and reserves NO storage. The whole-program sweep already
-	// folded this initializer to a number (`ProgramSignatures.evaluateConstants`), and every USE
+	// folded this initializer to a number (`ProgramSignatures.evaluateInitializers`), and every USE
 	// inlines that number as an ordinary `literal` (`topLevelConstantReference`). So there is nothing
 	// left for the real parse to build — only something for it to REPORT, if the fold failed.
 	//
@@ -1194,14 +1219,14 @@ export type Parser
 	// A DECL WHOSE FOLD FAILED IS REPORTED HERE, AND EXACTLY ONCE. `poisoned` is silent on purpose —
 	// its defect belongs to another declaration, which reports it (see `TopLevelConstant.poisoned`).
 	//
-	// `declaredConstantOutcome` carries the DRIFT GUARD: a `let` the real parse dispatches at top
+	// `declaredOutcome` carries the DRIFT GUARD: a `let` the real parse dispatches at top
 	// level must be one the sweep recorded, and a miss panics rather than compiling.
-	function raiseConstantFailure(decl TopLevelConstDecl) throws ParseError
+	function raiseBindingFailure(decl TopLevelDecl) throws ParseError
 		// ⚠ The outcome is bound to a LOCAL before the match, and the match's payload is bound to a
 		// second one before the throw. Neither is style. Matching the CALL directly and throwing the
 		// arm's binding —
 		//
-		//     match self.signatures.declaredConstantOutcome(decl) 'outcome'
+		//     match self.signatures.declaredOutcome(decl) 'outcome'
 		//         failed(error) then throw error
 		//
 		// — crashes the compiled compiler with `mm_incref called with NULL pointer`, because the
@@ -1209,14 +1234,36 @@ export type Parser
 		// flight. This is the sharp end of the hazard `emitShift` already documents (a `throw` of a
 		// union that was RETURNED rather than constructed inline LEAKS); here it is not a leak but a
 		// null-pointer panic. Recorded for OPEN.md.
-		let outcome = self.signatures.declaredConstantOutcome(decl)
+		let outcome = self.signatures.declaredOutcome(decl)
 		match outcome 'outcome'
-			value then break 'outcome'
+			value(_, tag) then try self.requireStorableGlobal(decl, tag: tag)
 			poisoned then break 'outcome'
 			failed(error) then try self.throwRecordedConstantError(error)
-			pending to evaluating then panic("Parser.raiseConstantFailure: top-level constant '{String.from(decl.name)}' is unevaluated — `evaluateConstants` runs to completion inside `queryProgramSignatures`, before any file is parsed")
+			pending to evaluating then panic("Parser.raiseBindingFailure: top-level binding '{String.from(decl.name)}' is unevaluated — `evaluateInitializers` runs to completion inside `queryProgramSignatures`, before any file is parsed")
 		end 'outcome'
-	end 'raiseConstantFailure'
+	end 'raiseBindingFailure'
+
+	// ⚠ **A TOP-LEVEL `var` MUST BE A SCALAR — there is no heap until P1.2.** Rejected AT THE
+	// DECLARATION, which is the line the user wrote and the only place the diagnostic can name it;
+	// a use site would report against code that is merely reading a name.
+	//
+	// It fires on nothing today and that is deliberate rather than dead: the constant evaluator folds
+	// integers and bools only, so a `var s = "hi"` is already rejected upstream as a non-constant
+	// initializer. This is the guard for the day the evaluator LEARNS a type before the backend can
+	// store one — the first of those is P1.0d.4's float, which is a scalar and will simply pass, and
+	// the one that matters is P1.2's `String`, which is a heap pointer and must not. `globalStdType`
+	// is the same decision's other half, and it panics where this reports: a decl that reached the
+	// backend unstorable is an invariant break, a decl the USER wrote unstorable is a diagnostic.
+	function requireStorableGlobal(decl TopLevelDecl, tag ValueTypeTag) throws ParseError
+		if not decl.mutable 'constantNeedsNoStorage'
+			return
+		end 'constantNeedsNoStorage'
+		if tag == ValueTypeTag.integer or tag == ValueTypeTag.boolean 'scalar'
+			return
+		end 'scalar'
+
+		throw ParseError.unsupported("a top-level `var` of type '{typeTagName(tag)}' (a global with a managed or non-scalar type needs the heap and the runtime that owns it — P1.2 String; only `int`/`bool` globals have storage today)", line: decl.nameLine, column: decl.nameColumn)
+	end 'requireStorableGlobal'
 
 	// Re-raise a diagnostic the constant evaluator recorded earlier, on another file's behalf. It
 	// exists only to give the borrowed payload a scope of its own — see `raiseConstantFailure`.
@@ -1224,19 +1271,25 @@ export type Parser
 		throw error
 	end 'throwRecordedConstantError'
 
-	// Read a top-level constant declaration: `[export] let <NAME> = <constant expression>`.
+	// Read a top-level binding declaration: `[export] (let|var) <NAME> = <constant expression>`.
 	//
 	// It READS and does not RECORD, for exactly `readTypeAliasDeclaration`'s reason: it has two
 	// callers that record differently. The tolerant declaration sweep folds what it reads into the
-	// whole-program index (`recordScannedConstant`); the real parse reads it only to ask that index
+	// whole-program index (`recordScannedBinding`); the real parse reads it only to ask that index
 	// what the initializer came to, and to raise the answer as a POSITIONED diagnostic if it failed.
 	//
 	// One reader, so the sweep and the parse can never drift on where an initializer ENDS — which is
 	// the one thing they must agree on, because the range this returns is the range the evaluator
 	// walks. Two scanners would put the sweep's idea of the initializer and the parser's idea of it a
 	// token apart, and the evaluator would fold a different expression than the one the user wrote.
-	function readTopLevelConstant(visibility Visibility) returns TopLevelConstDecl throws ParseError
-		try self.consume(TokenKind.let)
+	//
+	// ⭐ **`let` AND `var` READ IDENTICALLY, WHICH IS WHY THIS IS ONE FUNCTION.** They differ in the
+	// keyword and in nothing else: `static-variables.md` states that a top-level `var`'s initializer
+	// obeys the same constant-expression rules as a `let`'s, so the same token range feeds the same
+	// evaluator. The mutability is simply carried through to the decl, where it decides storage.
+	function readTopLevelBinding(visibility Visibility) returns TopLevelDecl throws ParseError
+		let mutable = self.at(TokenKind.var)
+		try self.consume(TokenKind.var if mutable else TokenKind.let)
 		let nameTok = try self.consume(TokenKind.identifier)
 		try self.consume(TokenKind.equals)
 
@@ -1244,8 +1297,8 @@ export type Parser
 		let initEnd = self.initializerEndIndex(initStart)
 		self.pos = initEnd
 
-		return TopLevelConstDecl.create(nameTok.value, visibility: visibility, declFilePath: self.filePath, tokens: self.tokens, initStart: initStart, initEnd: initEnd, nameLine: nameTok.line, nameColumn: nameTok.column)
-	end 'readTopLevelConstant'
+		return TopLevelDecl.create(nameTok.value, mutable: mutable, visibility: visibility, declFilePath: self.filePath, tokens: self.tokens, initStart: initStart, initEnd: initEnd, nameLine: nameTok.line, nameColumn: nameTok.column)
+	end 'readTopLevelBinding'
 
 	// One past the last token of a top-level initializer: an initializer runs to the END OF ITS LINE.
 	// Maxon has no statement terminator, so the newline IS the boundary — the bootstrap reads it the
@@ -1811,7 +1864,12 @@ export type Parser
 		let nameTok = try self.consume(TokenKind.identifier)
 		try self.consume(TokenKind.equals)
 		if not self.scope.contains(nameTok.value) 'undeclared'
-			throw ParseError.undefinedVariable(String.from(nameTok.value), line: nameTok.line, column: nameTok.column)
+			// Not a local. It may still name a top-level binding — a `var` (a STORE) or a `let` (an
+			// error, and a DIFFERENT error from "undefined"). LOCAL FIRST, exactly as
+			// `parseVariableReference` resolves a read: a local `var` shadows a top-level one, so the
+			// top level is consulted only once the name has failed to resolve as a local.
+			try self.parseTopLevelAssignment(func, block: block, nameTok: nameTok)
+			return
 		end 'undeclared'
 
 		let binding = self.scope.getInfo(nameTok.value)
@@ -1829,6 +1887,46 @@ export type Parser
 
 		self.scope.setValue(nameTok.value, value: value)
 	end 'parseAssignment'
+
+	// Assign to a name that is not a local: a top-level `var` (a STORE to its `.data` slot), a
+	// top-level `let` (E2013 — assigning to a constant), or nothing (E2004).
+	//
+	// **THE `let` ARM IS WHY THE CONSTANT IS PROBED AT ALL.** Without it a top-level `let` would
+	// resolve as neither a local nor a var and be reported "undefined variable: 'origin'" — naming a
+	// name that IS defined, three lines up, which is a diagnostic that sends the reader looking for a
+	// typo instead of at the `let` they meant to write `var`. `specs/static-variables.md`'s
+	// `top-level-let-struct-reassign-error` pins the honest one (E2013).
+	//
+	// The type check the local path applies is applied here too, and through the same
+	// `typesAgree`/`assignTypeMismatch` pair — a global is no less able to be handed a bool where it
+	// declared an int, and a laundered value in a `.data` slot is exactly as wrong as one in a
+	// register. The check happens BEFORE the store is emitted, so a rejected program emits no op.
+	function parseTopLevelAssignment(func IrFunction, block IrBlock, nameTok Token) throws ParseError
+		match self.signatures.globalDeclFor(nameTok.value, readerFilePath: self.filePath) 'global'
+			found(label, tag) then try self.emitCheckedGlobalStore(func, block: block, nameTok: nameTok, label: label, tag: tag)
+			notFound then try self.rejectNonGlobalAssignment(nameTok)
+		end 'global'
+	end 'parseTopLevelAssignment'
+
+	// Parse the right-hand side, check it against the global's declared type, and store it.
+	function emitCheckedGlobalStore(func IrFunction, block IrBlock, nameTok Token, label ByteArray, tag ValueTypeTag) throws ParseError
+		let value = try self.parseExpression(func, block: block)
+
+		let valueTag = self.tagOf(value)
+		if not typesAgree(valueTag, right: tag) 'mismatch'
+			throw ParseError.assignTypeMismatch(String.from(nameTok.value), got: typeTagName(valueTag), expected: typeTagName(tag), line: nameTok.line, column: nameTok.column)
+		end 'mismatch'
+
+		self.emitGlobalStore(label, tag: tag, value: value, range: SourceRange.ofToken(nameTok))
+	end 'emitCheckedGlobalStore'
+
+	// The name is not a local and not a top-level `var`. Say which of the two remaining things it is.
+	function rejectNonGlobalAssignment(nameTok Token) throws ParseError
+		match self.signatures.constantValueOf(nameTok.value, readerFilePath: self.filePath) 'constant'
+			found then throw ParseError.assignToImmutable(String.from(nameTok.value), line: nameTok.line, column: nameTok.column)
+			notFound then throw ParseError.undefinedVariable(String.from(nameTok.value), line: nameTok.line, column: nameTok.column)
+		end 'constant'
+	end 'rejectNonGlobalAssignment'
 
 	// `return [<expr>]`. Sets the block's terminator directly, emitting the distinct
 	// `retVoid` variant for a void return rather than a `ret` carrying some absent-value
@@ -3293,17 +3391,33 @@ export type Parser
 
 	// Resolve a variable reference to the SSA value its binding aliases — M2's
 	// value-substitution model emits NO load op; the reference simply IS the bound
-	// value. A name with no local binding may still be a TOP-LEVEL CONSTANT; only a name that is
-	// neither is a positioned parse error (undefinedVariable).
+	// value. A name with no local binding may still be a TOP-LEVEL CONSTANT (which inlines) or a
+	// TOP-LEVEL `var` (which loads); only a name that is none of the three is a positioned parse
+	// error (undefinedVariable).
 	//
 	// LOCAL FIRST. A local binding SHADOWS a top-level constant of the same name — `let OFFSET = 10`
 	// at file scope and `let OFFSET = 2` inside a function means 2 in that function, which is what
 	// every language with both scopes does and what the bootstrap does (its constants are consulted
 	// only once a bare name has failed to resolve as a local).
+	//
+	// **CONSTANT BEFORE GLOBAL, and the order costs nothing**: the two are disjoint by construction —
+	// one storage key holds ONE decl, and `constantValueOf`/`globalDeclFor` each answer only for
+	// their own kind — so at most one of the two probes can ever hit. The order is readability, not
+	// precedence.
 	function parseVariableReference() returns ValueId throws ParseError
 		let tok = try self.consume(TokenKind.identifier)
-		return try self.scope.lookupValue(tok.value) otherwise return try self.topLevelConstantReference(tok)
+		return try self.scope.lookupValue(tok.value) otherwise return try self.topLevelBindingReference(tok)
 	end 'parseVariableReference'
+
+	// A bare name that is not a local: a top-level constant, a top-level `var`, or nothing.
+	function topLevelBindingReference(tok Token) returns ValueId throws ParseError
+		match self.signatures.constantValueOf(tok.value, readerFilePath: self.filePath) 'constant'
+			found(payload, tag) then return self.emitLiteral(payload, valueType: constantValueType(tag), range: SourceRange.ofToken(tok))
+			notFound then break 'constant'
+		end 'constant'
+
+		return try self.topLevelGlobalRead(tok)
+	end 'topLevelBindingReference'
 
 	// ⭐ **A USE OF A TOP-LEVEL CONSTANT INLINES ITS VALUE, AND THAT IS THE WHOLE STORAGE MODEL.**
 	//
@@ -3323,12 +3437,61 @@ export type Parser
 	// It goes through `emitLiteral`, so an inlined INTEGER constant lands in the parser's constant
 	// column (`recordConst`) exactly as a written-out literal does — which is what keeps `let SHIFT =
 	// 1` … `x shl SHIFT` folding, and THE SHIFT RULE seeing a count it can check.
-	function topLevelConstantReference(tok Token) returns ValueId throws ParseError
-		match self.signatures.constantValueOf(tok.value, readerFilePath: self.filePath) 'constant'
-			found(payload, tag) then return self.emitLiteral(payload, valueType: constantValueType(tag), range: SourceRange.ofToken(tok))
+	//
+	// **A TOP-LEVEL `var` IS THE OTHER HALF OF THAT STORY, AND IT IS THE OPPOSITE ONE** — see
+	// `topLevelGlobalRead` directly below. It is what P1.0d.5b added: the read that does NOT
+	// disappear.
+
+	// ⭐ **A USE OF A TOP-LEVEL `var` LOADS FROM ITS `.data` SLOT.** The exact inverse of a
+	// constant's read: nothing is folded, a slot IS reserved, a relocation IS emitted, and the
+	// backend very much knows this feature exists.
+	//
+	// It emits the GENERAL PAIR — `globalAddr` then `loadIndirect` — rather than a fused
+	// `globalLoad`, per the Std memory band's contract: the same two ops a struct field (P1.1) and a
+	// heap value (P1.2) read through. The address op is its own value, so a function that reads one
+	// global twice materializes the address twice and the ordinary CSE that arrives with the Std
+	// optimization passes will fold them — `globalAddr` declares `isPure: true` precisely so that it
+	// can.
+	//
+	// ⚠ The load is NOT hoisted out of a loop that writes the same global, and that is not this
+	// function's doing — it is `loadIndirect`'s `isPure: false` (see StdDialect). Get that wrong and
+	// this emits perfectly correct IR that a later pass silently breaks.
+	function topLevelGlobalRead(tok Token) returns ValueId throws ParseError
+		match self.signatures.globalDeclFor(tok.value, readerFilePath: self.filePath) 'global'
+			found(label, tag) then return self.emitGlobalLoad(label, tag: tag, range: SourceRange.ofToken(tok))
 			notFound then throw ParseError.undefinedVariable(String.from(tok.value), line: tok.line, column: tok.column)
-		end 'constant'
-	end 'topLevelConstantReference'
+		end 'global'
+	end 'topLevelGlobalRead'
+
+	// `globalAddr <label>` then `loadIndirect <addr> 0` — the two ops a global's read is.
+	//
+	// OFFSET 0, ALWAYS: each global is its OWN labelled slot, so the label already names the exact
+	// address and there is nothing to add to it. The offset field is not dead weight — it is what
+	// P1.1's `point.x` will carry, through this same op.
+	function emitGlobalLoad(label ByteArray, tag ValueTypeTag, range SourceRange) returns ValueId
+		let valueType = constantValueType(tag)
+		let addr = self.emitGlobalAddr(label, range: range)
+		let result = self.mintValueOfType(valueType)
+		self.artifact.emitOp(self.currentBlock, op: MaxonOp.loadIndirect(result, addr: addr, offset: GlobalSlotOffset, valueType: valueType), range: range)
+		return result
+	end 'emitGlobalLoad'
+
+	// `globalAddr <label>` then `storeIndirect <addr> 0 <value>` — a global's write, the mirror of
+	// `emitGlobalLoad`. It defines no value: a store is a statement.
+	function emitGlobalStore(label ByteArray, tag ValueTypeTag, value ValueId, range SourceRange)
+		let addr = self.emitGlobalAddr(label, range: range)
+		self.artifact.emitOp(self.currentBlock, op: MaxonOp.storeIndirect(addr, offset: GlobalSlotOffset, value: value, valueType: constantValueType(tag)), range: range)
+	end 'emitGlobalStore'
+
+	// The `globalAddr` half both a read and a write open with. A POINTER, so its value is typed
+	// `integer` — the Maxon tier has no pointer type today, and an address is a machine word; the
+	// Std tier it lowers into is typeless anyway, and nothing dispatches on this value's tag (it is
+	// read only by the load/store that follows).
+	function emitGlobalAddr(label ByteArray, range SourceRange) returns ValueId
+		let addr = self.mintValue(ValueTypeTag.integer, nameId: UnnamedTypeId)
+		self.artifact.emitOp(self.currentBlock, op: MaxonOp.globalAddr(addr, label: label), range: range)
+		return addr
+	end 'emitGlobalAddr'
 
 	// --- The top-level constant evaluator (P1.0d.5a) ---
 	//
@@ -3362,7 +3525,7 @@ export type Parser
 
 	// Fold one declaration's initializer to its value. The cursor is seated on the recorded token
 	// range, and the walk must consume ALL of it — see `requireInitializerConsumed`.
-	export function evalConstInitializer(decl TopLevelConstDecl, stack ConstDeclIndexArray) returns ConstValue throws ConstEvalError
+	export function evalConstInitializer(decl TopLevelDecl, stack TopLevelDeclIndexArray) returns ConstValue throws ConstEvalError
 		self.pos = decl.initStart
 		let value = try self.evalConstBinary(stack, minPrec: OrPrecedence)
 		try self.requireInitializerConsumed(decl)
@@ -3375,7 +3538,7 @@ export type Parser
 	// quietly becomes whatever the prefix came to. It is the one failure mode the token-range model
 	// has that a tree model does not, and the bootstrap guards it in the same place and words
 	// (`ExpectConstInitializerFullyConsumed`, 2-Parser.cs:4979-4987).
-	function requireInitializerConsumed(decl TopLevelConstDecl) throws ConstEvalError
+	function requireInitializerConsumed(decl TopLevelDecl) throws ConstEvalError
 		if self.pos >= decl.initEnd 'fullyConsumed'
 			return
 		end 'fullyConsumed'
@@ -3403,7 +3566,7 @@ export type Parser
 	// The precedence-climbing core, mirroring `parseBinary`'s shape over values instead of ops. It
 	// reads the SAME precedence table, so `1 + 2 * 3` is 7 in a constant for the same reason it is 7
 	// in a function.
-	function evalConstBinary(stack ConstDeclIndexArray, minPrec InfixPrecedence) returns ConstValue throws ConstEvalError
+	function evalConstBinary(stack TopLevelDeclIndexArray, minPrec InfixPrecedence) returns ConstValue throws ConstEvalError
 		var left = try self.evalConstUnary(stack)
 
 		while true 'climb'
@@ -3504,7 +3667,7 @@ export type Parser
 
 	// A prefix `-` or `not`, mirroring `parseUnary` over values. Both readings of `not` come from
 	// `notOperatorFor`, so a constant `not` complements exactly what a runtime `not` complements.
-	function evalConstUnary(stack ConstDeclIndexArray) returns ConstValue throws ConstEvalError
+	function evalConstUnary(stack TopLevelDeclIndexArray) returns ConstValue throws ConstEvalError
 		if self.at(TokenKind.minus) 'neg'
 			let opTok = self.current()
 			self.advance()
@@ -3563,7 +3726,7 @@ export type Parser
 	// sub-expression, a type-qualified bound (`u16.max`), or a reference to another top-level
 	// constant. Every literal decoder is the one the emitting path uses, so a constant reads a
 	// literal exactly as a function body reads it.
-	function evalConstPrimary(stack ConstDeclIndexArray) returns ConstValue throws ConstEvalError
+	function evalConstPrimary(stack TopLevelDeclIndexArray) returns ConstValue throws ConstEvalError
 		if self.at(TokenKind.intLiteral) 'intLit'
 			return try self.evalConstIntLiteral()
 		end 'intLit'
@@ -3624,7 +3787,7 @@ export type Parser
 
 	// `( … )` — grouping, re-entering the climb at the LOOSEST precedence exactly as
 	// `parseParenthesizedExpression` does, so a parenthesis restores every operator.
-	function evalConstGroup(stack ConstDeclIndexArray) returns ConstValue throws ConstEvalError
+	function evalConstGroup(stack TopLevelDeclIndexArray) returns ConstValue throws ConstEvalError
 		try self.consumeConst(TokenKind.leftParen)
 		let value = try self.evalConstBinary(stack, minPrec: OrPrecedence)
 		try self.consumeConst(TokenKind.rightParen)
@@ -3635,7 +3798,7 @@ export type Parser
 	// An identifier in a constant: a CALL (rejected), a type-qualified bound (`u16.max`), or a
 	// reference to another top-level constant. The same two one-token lookaheads `parsePrimary`
 	// splits these three forms with.
-	function evalConstNamed(stack ConstDeclIndexArray) returns ConstValue throws ConstEvalError
+	function evalConstNamed(stack TopLevelDeclIndexArray) returns ConstValue throws ConstEvalError
 		let tok = self.current()
 
 		// ⚠ REJECTED BEFORE THE CALL IS READ, not after. A call's answer needs the program to be
@@ -3660,9 +3823,9 @@ export type Parser
 	// **THE FORWARD REFERENCE, AND THE CROSS-FILE ONE.** A name in an initializer resolves through the
 	// whole-program arena, which recursively evaluates whatever it finds — so declaration ORDER does
 	// not decide what a program means, and a constant in another file is as reachable as one on the
-	// line above. The cycle detection is the arena's (`ProgramSignatures.evaluateConstDecl`), which is
+	// line above. The cycle detection is the arena's (`ProgramSignatures.evaluateDecl`), which is
 	// the only place that can see one.
-	function evalConstNameRef(tok Token, stack ConstDeclIndexArray) returns ConstValue throws ConstEvalError
+	function evalConstNameRef(tok Token, stack TopLevelDeclIndexArray) returns ConstValue throws ConstEvalError
 		match self.signatures.evaluateNamed(tok.value, readerFilePath: self.filePath, stack: stack) 'resolved'
 			value(payload, tag) then return ConstValue.create(payload, tag: tag)
 			// It exists and has no value. Its own declaration carries the diagnostic, so this one stays

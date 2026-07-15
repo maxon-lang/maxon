@@ -87,7 +87,13 @@ end 'StdConstInfo'
 function stdConstInfo(op StdOp) returns StdConstInfo
 	return match op 'c'
 		const(resultId, value, _) gives StdConstInfo.isConst(resultId, value: value)
-		binOp to retVoid gives StdConstInfo.notConst
+		// ⚠ Extended past `retVoid` to take in the memory band, and `loadIndirect` is the arm that
+		// matters: a load's result is NOT a constant, however constant the global's INITIAL value in
+		// the `.data` image is. That image is the value the program STARTS with, and any store since
+		// has replaced it. Folding a load into its initializer would be the same wrong answer
+		// `loadIndirect`'s `isPure: false` prevents a hoist from producing, reached by a different
+		// road: `var counter = 0` … `counter = 42` … `return counter` would return 0.
+		binOp to storeIndirect gives StdConstInfo.notConst
 	end 'c'
 end 'stdConstInfo'
 
@@ -143,7 +149,18 @@ function tryFold(op StdOp, constMap ConstValueMap) returns FoldResult
 		binOp(resultId, lhs, rhs, opcode) gives tryFoldBinOp(resultId, lhs: lhs, rhs: rhs, opcode: opcode, constMap: constMap)
 		unaryOp gives FoldResult.unchanged
 		cmp(resultId, lhs, rhs, pred) gives tryFoldCmp(resultId, lhs: lhs, rhs: rhs, pred: pred, constMap: constMap)
-		binOpImm to retVoid gives FoldResult.unchanged
+		// Extended past `retVoid` to take in the memory band. Nothing there has an immediate form to
+		// fold INTO: `globalAddr` has no value operand at all, and a load's and a store's address is a
+		// register the `lea` produced — x64 can fold a RIP-relative address into a `mov`, but that is
+		// an addressing-mode fusion for the ISel, not a constant this pass can substitute.
+		//
+		// ⚠ A store's VALUE is deliberately not folded either, and it is the tempting one:
+		// `counter = 42` really does store a constant, and x64 really does have `mov [mem], imm32`.
+		// Taking it would mean `storeIndirect` growing an immediate twin (`storeIndirectImm`) with
+		// its own operand model, splitter and colorer arms, to save one `mov` per constant store.
+		// Priced and not taken — the same call `binOpImm` made in reverse, where the win was every
+		// literal in every expression rather than the initializing store of a global.
+		binOpImm to storeIndirect gives FoldResult.unchanged
 	end 'f'
 end 'tryFold'
 
