@@ -609,7 +609,7 @@ top-level ranged `typealias`; the corpus's ranges are wide, so the *checks* — 
 | **P1.0r** | **R1-core — the ALLOCATOR + refcounting runtime** ⭐⭐ | **← NEXT.** *(Was "R1 @ P1.2". Promoted ahead of structs 2026-07-15 — see the RESTRUCTURED box: a struct is a heap value, so the heap cannot come second.)* The slab allocator · `__mm_alloc` · `__mm_incref`/`__mm_decref` · the `__destruct_*` cascade. **The allocator ALWAYS RETURNS ZEROED MEMORY, from commit 1** — a property of the allocator, not of each caller (it cost v1 three separately root-caused bugs; see ARCHITECTURE.md → "Allocator: the zeroing contract"). ⚠ **THIS RUNG MUST DECIDE THE RUNTIME'S *FORM*** — hand-assembled machine code vs. v1's `runtime.std` (6,049 lines of Std-IR text through the ordinary backend). **The excuse for deferring it has now EXPIRED: its precondition was the Std memory band, and P1.0d.5b shipped it.** See the R1 box in Workstream R — **the named risk is inertia**, 6 hand-assembled functions becoming 5,000 by default. **Write the reason down.** ⚠ Its acceptance test is **P1.1a**, not a bespoke spec: an allocator with no heap value to allocate is untestable, so the two are adjacent on purpose |
 | **P1.1a** | **structs** — R1's DOGFOOD ⭐ | *(was the struct half of `P1.1`; its `disabled-test:` markers read correctly unchanged.)* concrete, **trivial-ownership only** — scalar/float fields, so the destructor is NULL and no field write increfs. Heap-boxed via `__mm_alloc`, **uniform 8-byte field slots** (`sizeof` PINS this: `sizeof(Point)`=16, `sizeof(Vec3)`=24, and `sizeof(Outer{p Point, n Integer})`=**16** — a struct field is a POINTER). Field access = `loadIndirect`/`storeIndirect` at a real offset, **the ops P1.0d.5b already built and whose comments NAME this rung**. Methods · `self` · `static function create` · `Self{…}` (construction is restricted to the type's own methods — **E3076**) |
 | **P1.1b** | **enums + `match`** | *(was the enum/match half of `P1.1`.)* **HEAP-FREE — this is why it is its own slice**: both references collapse a payload-free enum to an `int` typealias + constants, and `match` is a chain of two-way `condBranch` blocks (**never bend `IrBlock.CondBranch`'s one-branch-per-block invariant** — P1.0d.4's float compare already set that precedent). Payload-free `union` rides the identical path. ⭐ **RANGE ARMS USE ORDINAL ORDER** — the declaration order — **NOT the raw value** (user ruling, 2026-07-15). ⚠ **The bootstrap gets this WRONG and shv2 must not copy it**: see OPEN.md #21 |
-| **P1.2** | **`String` + ownership + drops** ⭐ | **THE CRUX.** ~~String is the FIRST heap value~~ — **FALSE, corrected 2026-07-15: a scalar struct is (P1.1a), and it is simpler.** String is the first *non-trivial* heap value, and that is still the point: real, needed by everything, and trivially-elemented so it forces no descriptor. Hardcoded `__ManagedMemory`(40B) + `String`(16B) bootstrap structs; rdata `capacity = -2` sentinel; synthesized `__destruct_String`; interpolation of **primitives**. **It rides P1.0r's `__mm_alloc` rather than introducing one** — which is the whole benefit of the reorder. mm-trace gates from here. **`own.drop` declares BOTH arms now**; the descriptor arm is unreachable until P1.6 |
+| **P1.2** | **`String` + ownership + drops** ⭐ | **THE CRUX.** ~~String is the FIRST heap value~~ — **FALSE, corrected 2026-07-15: a scalar struct is (P1.1a), and it is simpler.** String is the first *non-trivial* heap value, and that is still the point: real, needed by everything, and trivially-elemented so it forces no descriptor. **A `String` IS its `__ManagedMemory`** — ONE fused 48B record (`buffer`@0, `length`@8, `capacity`@16, `element_size`@24, `parent_ptr`@32, `isAsciiFlag`@40), NOT a 16B envelope pointing at a 40B record. The bootstrap deleted that envelope (`3e21a401a`..`c0bf9ec0d`); do not rebuild it here. An owned string's bytes live INSIDE the record at `record+48` with `parent_ptr = -3`; growth DETACHES rather than reallocating, because the record pointer IS the value and may never move. rdata `capacity = -2` sentinel; synthesized `__destruct_String`; interpolation of **primitives**. **It rides P1.0r's `__mm_alloc` rather than introducing one** — which is the whole benefit of the reorder. mm-trace gates from here. **`own.drop` declares BOTH arms now**; the descriptor arm is unreachable until P1.6 |
 | **P1.3** | **owned payloads in enums/unions** | *moved into Phase 1* — `compilerError(text String)`, `fail(reason String)`. Needs only P1.1a/P1.1b + P1.2's drops. Errors (P1.4) want it too: the harness calls `e.displayReason()` |
 | **P1.4** | moves + borrows (NLL) · **errors** | first program-rejection point. `throws`/`try`/`otherwise` (v1's dual-register `(value, errorFlag)`, verbatim) + drops on the error edge. **36 harness sites** |
 | **P1.5** | **closures + `async` + escape → `shared`** ⭐⭐ | **THE THREE ARE ONE MECHANISM, AND THEY CO-LAND — this is the plan's "do the hard things early" in its purest form.** Capture-into-heap **IS** escape: a closure captures into an env block; a green thread captures into a task frame. Escape analysis is needed for heap correctness regardless — so build all three together and `EscapeAnalysis` gets **both** capture channels *from birth*. Land escape single-threaded and add `async` later and you bolt a **second capture channel** onto it: v1's `sys.dropTypeParam` split-brain mistake, exactly. Minimal closure = int capture, 0-arg, heap env, uniform `(args, env)` ABI (v1 lifts at parse time). Minimal `async` = `async`/`await` + Promise + the worker pool's needs. Escape is the **only** place refcounts appear. **Track `% values promoted to shared`** — if it's 40%, static ownership bought nothing. **Runtime slice R3 lands here** (the GT scheduler + async subprocess stdio) |
@@ -620,6 +620,39 @@ top-level ranged `typealias`; the corpus's ranges are wide, so the *checks* — 
 | **P1.8** | `String` methods · `for-in` | real `String.equals` body (struct-`cmp` → `methodCall`); hardcoded `for-in` over Array/Range/String. ⚠ **`trim()` lands here and it is the thing that dragged `Set` in** — so P1.7a/P1.7b must precede it |
 | **P1.9** | **ranged typealiases** | *moved into Phase 1* — `ExpandCastRangeChecks` + `InsertRangeChecks`. Cheap here: the harness's ranges are wide (`0 to u64.max`), so the checks are near-vacuous — but the mechanism must exist |
 | 🚩 | **PHASE 1 GATE** | below |
+
+> ### ⭐ P1.2 — two decisions taken elsewhere that land HERE (2026-07-15)
+>
+> **1. `String.toByteArray()` is a MOVE, and the source is not mutable afterwards** (user decision).
+> This is an OWNERSHIP statement, which is why it belongs to this rung and not to the bootstrap's
+> refcounting. It **dissolves** a problem rather than managing it: with one owner there is no second
+> observer to keep consistent, so there is no aliasing question, **no copy-on-write**, and no
+> "independent value" contract to enforce.
+>
+> The bootstrap cannot do this — it has no ownership — so it takes the fallback: `toByteArray()` returns
+> an **independent** ByteArray, implemented as a COW view (`185351d1f`). **That is a stopgap for a
+> compiler without moves, not a design to port.** Two of its specs
+> (`specs/string-type-2` / `tobytearray-is-independent-of-an-owned-source`,
+> `tobytearray-survives-the-source-growing`) **use the string AFTER `toByteArray()` and must become
+> use-after-move ERRORS here.** Delete them at this rung with that reason, do not make them pass.
+>
+> The bootstrap's COW is also **one-directional** — a write through the source's raw `managed` shows
+> through a view that has not detached yet (measured). Moves make that unrepresentable. **Do not port
+> the COW view, and do not port the hole.**
+>
+> **2. ⚠ v1's two-result-capture MISCOMPILE is waiting for THIS allocator.** shv2's register allocator is
+> a deliberately different **linear SSA-chordal** design — i.e. v1's shape, where virtuals are colored
+> independently and call-result **capture movs are real**. v1 paid for this bug already
+> ([CopyResolution.maxon:377-395](maxon-selfhosted/Compiler/Targets/Shared/CopyResolution.maxon#L377-L395)):
+> the colorer can legitimately assign two result dests into a **SWAP** or **CHAIN**, which naive
+> sequential movs cannot realize — `mov x1, x0; mov x0, x1` collapsed value+flag into one register, so a
+> bounds check read the element value instead of the OOB flag and **panicked on in-bounds data** (the
+> array-sort `try get(j) otherwise` miscompile). The fix is `sequentializeCallResultCapture`: a
+> **parallel-copy sequencer with per-class cycle-break scratch**, never sequential movs.
+>
+> The **bootstrap is immune and its code is therefore NOT the model** — its `Assign(reg, value)` merely
+> pins a value into a register map and emits no capture mov at all, so it has nothing to sequence.
+> **Port v1's lesson here, not the bootstrap's shortcut.**
 
 ### 🚩 PHASE 1 GATE — the differential oracle
 
