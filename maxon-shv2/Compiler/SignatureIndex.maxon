@@ -153,10 +153,24 @@ function fileScopedDeclKey(name ByteArray, declFilePath FilePath) returns ByteAr
 	return "{declFilePath.toString()}{FileScopedKeySeparator}{String.from(name)}".toByteArray()
 end 'fileScopedDeclKey'
 
-// The prefix every top-level `var`'s `.data` label carries. NOT decoration: `classifyGlobalLabel`
-// (CodeResult.maxon) routes a global to the writable `.data` section by exactly this prefix, so a
-// label without it would be classified `rdata` and the program would fault on its first store to a
-// read-only page. The two are one fact and this is its name.
+// The prefix every top-level `var`'s `.data` label carries — a NAMESPACE, and today nothing more.
+//
+// ⚠ **IT DOES NOT ROUTE THE SECTION, and an earlier draft of this comment claimed it did.** What
+// puts a global in writable `.data` is the RELOCATION KIND: `encodeLeaRegGlobal` (X64Backend) files
+// every global's `lea` as `RdataRelocKind.dataSectionRipRelDisp32` unconditionally, and
+// `patchRdataRelocationsX86` measures that kind — and only that kind — from `.data`'s RVA. The
+// label's TEXT is never consulted on the way. MEASURED: with this constant set to `"zzz_"` the
+// suite's globals still land in `.data`, still take their stores, and the program still returns the
+// right answer. The claim it "would be classified `rdata` and fault on its first store" was false.
+//
+// So what it buys is READABILITY — `__data_counter` in a golden fragment says what it is — plus
+// v1's convention, which the day a global is registered BY NAME will matter for real.
+//
+// ⚠ **THERE IS A SECOND COPY OF THIS STRING**: `classifyGlobalLabel` (CodeResult.maxon:107) tests a
+// literal `"__data_"`. It is DEAD — zero callers, ported ahead of its use at M1-A — which is the
+// only reason the two cannot yet disagree. Whoever wires it in (the runtime's `__slab_`/`__gt_`
+// globals at P1.2/P1.5 are what it enumerates) MUST single-source it against this constant first,
+// because at that moment a rename here silently routes every user global to a read-only page.
 let DataLabelPrefix = "__data_"
 
 // ⭐ What separates a `.data` label from its collision-breaking ordinal — and the character is

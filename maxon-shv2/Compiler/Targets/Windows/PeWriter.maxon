@@ -34,7 +34,12 @@ let SectionSymtabFlags = 0xC0000040  // INITIALIZED_DATA | READ | WRITE
 
 // `.data` — INITIALIZED_DATA | READ | WRITE. The WRITE bit is the whole point of the section:
 // a top-level `var` is stored to at run time, and a global in read-only `.rdata` would fault on
-// its first assignment. `classifyGlobalLabel`'s `__data_` prefix is what routes a label here.
+// its first assignment.
+//
+// ⚠ What routes a label HERE is the RELOCATION KIND — `dataSectionRipRelDisp32`, measured from
+// `dataRva` by `patchRdataRelocationsX86` — and NOT the `__data_` name prefix. (An earlier draft
+// of this comment credited `classifyGlobalLabel`, which has no callers; see `DataLabelPrefix` in
+// SignatureIndex.maxon for the measurement that settled it.)
 let SectionDataFlags = 0xC0000040  // INITIALIZED_DATA | READ | WRITE
 
 // --- Fixed header field sizes ---

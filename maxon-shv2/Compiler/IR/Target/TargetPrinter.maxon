@@ -48,10 +48,16 @@ let FuncHeaderPrefix = "func @"
 // FAILING TEST with a reviewable diff rather than a silent difference in a program's starting state
 // — which no exit code can see until the one path that reads that global happens to run.
 //
-// It is also the ONE rendering of the layout: `specs/static-variables.md`'s ```RequiredData blocks
-// are compared against exactly these lines (`SpecTestRunner.checkRequiredData`). A spec and a golden
-// that each rendered the section their own way would be two readings of one fact, free to disagree
-// about what `i8 1` means — and the spec's would be the one nobody ran.
+// ⚠ It is NOT what a ```RequiredData block is checked against, and an earlier draft of this comment
+// said it was. `SpecTestRunner.checkRequiredData` parses that block into BYTES and compares them
+// against the `.data` section read back out of the linked PE (`PeSectionReader`) — this text is
+// never consulted. That independence is deliberate and is the gate's whole value: a spec checked
+// against the printer would only ever prove the compiler agrees with itself, and could not catch a
+// section header with a wrong RVA or a raw pointer off by an alignment. The two share the `i64 42`
+// NOTATION because it reads well in both places; they share no code, and that is the point.
+//
+// So the two gates are complementary, not redundant: this golden pins what the compiler DECIDED,
+// RequiredData pins what the linker actually WROTE.
 //
 // A program with no global prints NOTHING here, not an empty header: the section does not exist, and
 // every pre-existing golden is unchanged by this rung as a result.
