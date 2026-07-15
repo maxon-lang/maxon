@@ -17,6 +17,17 @@ export function isAsciiDigit(b Byte) returns bool
 	return b >= 0x30 and b <= 0x39
 end 'isAsciiDigit'
 
+// The bytes every path scanner in this file looks for. BOTH separators count wherever one
+// does: Windows accepts either and normalizes to `\`, POSIX takes `/` and treats `\` as an
+// ordinary character — so a scan that means "a separator" has to accept both to be right on
+// either host, and the three scanners here (`parentDirOrThrow`, `lastSegment`, `stripExtension`)
+// must agree on that. They did, as a copy of `0x2F` and `0x5C` apiece.
+let SlashByte = 0x2F as Byte
+let BackslashByte = 0x5C as Byte
+
+// The extension separator — `stripExtension`'s only reason to stop.
+let DotByte = 0x2E as Byte
+
 /// Search for `needle` as a byte subsequence of `haystack`. Returns the
 /// starting byte index. Throws `NotFound.notFound` if no match.
 export function findByteSequence(haystack ByteArray, needle String) returns BytePos throws NotFound
@@ -149,8 +160,12 @@ end 'withExeSuffix'
 // it — `repoRoot` — and when they don't, the server-derived root is the
 // (correct, unchanged) default for main-checkout use.
 //
-// Both halves ask `isMaxonCheckout` what a repo root IS, so a directory can
-// never be a root for one and not the other.
+// Both halves hold a root to the SAME bar — ABSOLUTE, and a checkout (`isMaxonCheckout`)
+// — so a directory can never be a root for one and not the other. The absolute half was
+// once asked only of the CALLER's path, which is precisely backwards: a relative path is
+// refused because it resolves against the SERVER's working directory instead of the
+// caller's, and a relative path the server DERIVED is no safer for having been derived
+// here. See `parentDirOrThrow` for the `.` that used to come back out of the walk.
 
 /// The JSON key every tool accepts to name the tree it must act on. Spelled once:
 /// the schema builder, the parser and the echo all read it from here.
@@ -221,17 +236,34 @@ export function repoRootPath() returns FilePath throws NotFound
 	let exe = try Process.executablePath() otherwise 'noExe'
 		throw NotFound.notFound
 	end 'noExe'
-	var dir = parentDir(exe)
+
+	var dir = try parentDirOrThrow(exe) otherwise 'noParent'
+		throw NotFound.notFound
+	end 'noParent'
+
 	for _ in 0 upto MaxRepoRootWalkDepth 'walk'
-		if isMaxonCheckout(dir) 'found'
+		// ABSOLUTE **and** a checkout — the same bar `resolveRepoRoot` holds a CALLER's `repoRoot`
+		// to, applied here so the two halves cannot disagree about what a root IS. That symmetry
+		// is the point: this half was the unvalidated one.
+		//
+		// It fires on exactly one path, at the top of the walk: on Windows the parent of
+		// `C:\Users` is `C:`, a DRIVE SPEC rather than a directory, and `isAbsolute()` rejects it
+		// (it wants `X:\`). Adopting it would put a root nobody can act on into every `repoRoot`
+		// echo. It is not the CWD-adoption bug — that one came from `parentDir` answering `.`,
+		// and is dead where it was born, in `parentDirOrThrow`.
+		if dir.isAbsolute() and isMaxonCheckout(dir) 'found'
 			return dir
 		end 'found'
-		let parent = parentDir(dir)
-		if parent.path.equals(dir.path) 'atRoot'
-			break
-		end 'atRoot'
-		dir = parent
+
+		// THE WALK ENDS BECAUSE THE PATH GRAMMAR SAYS IT HAS ENDED, and `parentDirOrThrow` is
+		// the one thing that knows where that is. It used to end on `parent.path.equals(dir.path)`
+		// — "have I stopped moving?" — which never fired, because the twin this replaced
+		// answered `.` rather than standing still. See `parentDirOrThrow`.
+		dir = try parentDirOrThrow(dir) otherwise 'atFilesystemRoot'
+			throw NotFound.notFound
+		end 'atFilesystemRoot'
 	end 'walk'
+
 	throw NotFound.notFound
 end 'repoRootPath'
 
@@ -295,37 +327,34 @@ export function repoRootErrorCode(err RepoRootError) returns RpcErrorCode
 	end 'e'
 end 'repoRootErrorCode'
 
-/// Return the parent directory of `path` (everything up to the last `/` or
-/// `\`). When `path` contains no separators, returns `.` so callers can keep
-/// walking without special-casing the root.
-export function parentDir(path FilePath) returns FilePath
-	let s = path.path
-	let bytes = s.toByteArray()
-	let n = bytes.count()
-	var i = n
-	while i > 0 'scan'
-		i = i - 1
-		let b = try bytes.get(i) otherwise 'gErr'
-			panic("parentDir: bytes.get OOB — i bounded by n")
-		end 'gErr'
-		if b == 0x2F or b == 0x5C 'sep'
-			let parentStr = sliceBytes(bytes, from: 0, until: i)
-			return try FilePath.from(parentStr) otherwise panic("parentDir: derived parent path '{parentStr}' is invalid")
-		end 'sep'
-	end 'scan'
-	return try FilePath.from(".") otherwise panic("parentDir: '.' is always a valid path literal")
-end 'parentDir'
-
 // =============================================================================
 // Path manipulation
 // =============================================================================
 
-/// Same as `parentDir`, but throws `NotFound.notFound` when `path` has no
-/// separator at all. Use this when "no parent" is an actual error condition
-/// rather than something to absorb silently.
+/// The parent directory of `path`, or `NotFound.notFound` when it HAS no parent —
+/// when `path` is a filesystem root, or names something with no directory part at all.
+///
+/// **THE THROW IS WHAT ENDS A WALK UP THE TREE, and it is the only thing that can.**
+///
+/// This had a twin, `parentDir`, which answered `.` for a path with no separator so that
+/// "callers can keep walking without special-casing the root". That is exactly backwards:
+/// `.` is not the parent of anything — it is the process's WORKING DIRECTORY, which for
+/// this server belongs to the MCP host and to no caller. `parentDir("C:")` returned `.`,
+/// and `.` does not equal `"C:"`, so `repoRootPath`'s "have I stopped moving?" guard never
+/// fired at a Windows drive root. The walk took one more turn and probed `./stdlib` —
+/// asking whether the HOST's working directory was a Maxon checkout, and adopting it if so,
+/// echoing `"repoRoot": "."` back to a caller who never named a tree.
+///
+/// The irony was the bug: `resolveRepoRoot` REFUSES a caller's relative `repoRoot`, loudly
+/// and correctly, because it would resolve against the server's working directory rather
+/// than theirs — while this half handed exactly such a path back unvalidated. One half of
+/// one question was checked.
+///
+/// So: one function, it says NO when there is no parent, and a walk ends because the path
+/// grammar says it has ended rather than because a sentinel happened to compare equal to
+/// itself.
 export function parentDirOrThrow(path FilePath) returns FilePath throws NotFound
-	let s = path.path
-	let bytes = s.toByteArray()
+	let bytes = path.path.toByteArray()
 	let n = bytes.count()
 	var i = n
 	while i > 0 'scan'
@@ -333,11 +362,32 @@ export function parentDirOrThrow(path FilePath) returns FilePath throws NotFound
 		let b = try bytes.get(i) otherwise 'gErr'
 			panic("parentDirOrThrow: bytes.get OOB — i bounded by n")
 		end 'gErr'
-		if b == 0x2F or b == 0x5C 'sep'
-			let parentStr = sliceBytes(bytes, from: 0, until: i)
-			return try FilePath.from(parentStr) otherwise panic("parentDirOrThrow: derived parent '{parentStr}' is invalid")
-		end 'sep'
+		if b != SlashByte and b != BackslashByte 'notSep'
+			continue
+		end 'notSep'
+
+		// A separator at index 0 is a POSIX absolute path's leading `/`. The parent of
+		// `/usr` is `/` — NOT the empty string, which is not a path at all and which
+		// `FilePath.from` would reject. And `/` itself is the root: no parent, which is
+		// what the throw is for.
+		if i == 0 'leadingSep'
+			if n == 1 'isPosixRoot'
+				throw NotFound.notFound
+			end 'isPosixRoot'
+
+			let root = sliceBytes(bytes, from: 0, until: 1)
+			return try FilePath.from(root) otherwise panic("parentDirOrThrow: a lone separator '{root}' is always a valid path")
+		end 'leadingSep'
+
+		let parentStr = sliceBytes(bytes, from: 0, until: i)
+		return try FilePath.from(parentStr) otherwise panic("parentDirOrThrow: derived parent '{parentStr}' is invalid")
 	end 'scan'
+
+	// No separator anywhere: a bare name (`maxon.exe`), or a Windows DRIVE SPEC (`C:`, which
+	// is what the loop above yields for `C:\Users`). Neither has a parent to walk to, and a
+	// drive spec is emphatically not the drive's ROOT — `C:` names the current directory on
+	// drive C. Answering `.` here, or `C:`, hands the walk a path whose meaning depends on
+	// where the process happens to be standing. There is nothing above this; say so.
 	throw NotFound.notFound
 end 'parentDirOrThrow'
 
@@ -351,7 +401,7 @@ export function lastSegment(path FilePath) returns String
 	while i > 0 'scan'
 		i = i - 1
 		let b = try bytes.get(i) otherwise panic("lastSegment: bytes.get OOB — i bounded by n")
-		if b == 0x2F or b == 0x5C 'sep'
+		if b == SlashByte or b == BackslashByte 'sep'
 			return sliceBytes(bytes, from: i + 1, until: n)
 		end 'sep'
 	end 'scan'
@@ -369,11 +419,11 @@ export function stripExtension(file FilePath) returns FilePath
 	while i > 0 'scan'
 		i = i - 1
 		let b = try bytes.get(i) otherwise panic("stripExtension: bytes.get OOB — i bounded by n")
-		if b == 0x2E 'dot'
+		if b == DotByte 'dot'
 			let base = sliceBytes(bytes, from: 0, until: i)
 			return try FilePath.from(base) otherwise panic("stripExtension: derived base '{base}' is invalid")
 		end 'dot'
-		if b == 0x2F or b == 0x5C 'sep'
+		if b == SlashByte or b == BackslashByte 'sep'
 			break
 		end 'sep'
 	end 'scan'

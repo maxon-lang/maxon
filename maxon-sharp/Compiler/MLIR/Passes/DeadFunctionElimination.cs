@@ -200,17 +200,6 @@ public static class DeadFunctionElimination {
     _ => null
   };
 
-  /// The variable a var-READ op reads, or null when the op does not read a variable.
-  /// A var has four read flavours — scalar, struct, enum and function-typed — and they are
-  /// equally reads. Naming only one of them is how a live var comes to look dead.
-  private static string? ReadVarName(MaxonOp op) => op switch {
-    MaxonVarRefOp v => v.VarName,
-    MaxonStructVarRefOp v => v.VarName,
-    MaxonEnumVarRefOp v => v.VarName,
-    MaxonFunctionVarRefOp v => v.VarName,
-    _ => null
-  };
-
   /// Remove dead stores and their producing ops from a block.
   /// First removes global_store ops for dead globals, then iteratively
   /// removes ops whose results are unused by any remaining op.
@@ -248,14 +237,18 @@ public static class DeadFunctionElimination {
       // created by `let/var x = T.create()` initializers whose backing globalStore was
       // eliminated as dead.
       //
-      // ALL FOUR var-ref flavours count. Reading only `MaxonVarRefOp` was the same hole
-      // `Operands` closes for SSA operands, in the other currency: a var read solely
-      // through its struct/enum/function flavour looked unread, so the assign was dropped
-      // and the value was deleted out from under a live reader.
+      // Every op that reads a var declares it via `IReadsVarByName` — the ONE place that fact
+      // lives, exactly as `Operands` is for SSA values. This scan used to be a `switch` here
+      // naming four op types, and it was the same hole in the other currency: a var read solely
+      // through its struct/enum/function flavour looked unread, so the assign was dropped and
+      // the value was deleted out from under a live reader. The list was ALSO already missing a
+      // fifth (`maxon.enum_payload_assign`, which loads its enum var to store through it) —
+      // which is what a list maintained away from the thing it lists always eventually does.
+      // Asking the op means a new var-reading op cannot be forgotten by this pass.
       var referencedVarNames = new HashSet<string>();
       foreach (var op in block.Operations) {
-        if (ReadVarName(op) is string varName)
-          referencedVarNames.Add(varName);
+        if (op is IReadsVarByName reader)
+          referencedVarNames.Add(reader.ReadVarName);
       }
 
       // Collect value IDs used by surviving ops.

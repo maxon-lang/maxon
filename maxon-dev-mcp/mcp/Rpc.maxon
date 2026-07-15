@@ -125,8 +125,8 @@ end 'resolveOptionalNode'
 export function writeRpcResult(requestDoc JsonDoc, idNodeId JsonNodeId, resultDoc JsonDoc, resultRoot JsonNodeId)
 	var envelope = JsonDoc.create()
 	let jsonrpcId = envelope.add(JsonNode.stringNode("2.0"))
-	let echoedId = copyNode(requestDoc, srcId: idNodeId, dst: envelope)
-	let copiedResult = copyNode(resultDoc, srcId: resultRoot, dst: envelope)
+	let echoedId = copyJsonNode(requestDoc, srcId: idNodeId, dst: envelope)
+	let copiedResult = copyJsonNode(resultDoc, srcId: resultRoot, dst: envelope)
 
 	var keys = StringArray.create()
 	var children = JsonNodeIdArray.create()
@@ -154,7 +154,7 @@ end 'writeRpcResult'
 /// handler runs.
 export function writeRpcError(requestDoc JsonDoc, idNodeId JsonNodeId, code RpcErrorCode, message String, repoRootEcho String)
 	var envelope = JsonDoc.create()
-	let echoedId = copyNode(requestDoc, srcId: idNodeId, dst: envelope)
+	let echoedId = copyJsonNode(requestDoc, srcId: idNodeId, dst: envelope)
 	writeErrorEnvelope(envelope, idNode: echoedId, code: code, message: message, repoRootEcho: repoRootEcho)
 end 'writeRpcError'
 
@@ -211,46 +211,5 @@ function repoRootDataObject(envelope JsonDoc, repoRoot String) returns JsonNodeI
 	return envelope.add(JsonNode.objectNode(keys, children: children))
 end 'repoRootDataObject'
 
-// Deep-copy a node (and all descendants) from one JsonDoc arena into another.
-// Returns the id of the new copy in `dst`. Used to splice request `id`s and
-// tool-call results into response envelopes without sharing arena slots.
-function copyNode(src JsonDoc, srcId JsonNodeId, dst JsonDoc) returns JsonNodeId
-	let node = src.get(srcId)
-	match node.kind 'k'
-		jsonNull then return dst.add(JsonNode.nullNode())
-		jsonBool then return dst.add(JsonNode.boolNode(node.boolValue))
-		jsonNumber then return dst.add(JsonNode.numberNode(node.numberValue))
-		jsonString then return dst.add(JsonNode.stringNode(node.stringValue))
-		jsonArray then return copyArray(src, node: node, dst: dst)
-		jsonObject then return copyObject(src, node: node, dst: dst)
-	end 'k'
-end 'copyNode'
-
-function copyArray(src JsonDoc, node JsonNode, dst JsonDoc) returns JsonNodeId
-	var newChildren = JsonNodeIdArray.create()
-	let n = node.children.count()
-	for i in 0 upto n 'each'
-		let childId = try node.children.get(i) otherwise 'cErr'
-			panic("copyArray: children.get OOB — i bounds-checked")
-		end 'cErr'
-		newChildren.push(copyNode(src, srcId: childId, dst: dst))
-	end 'each'
-	return dst.add(JsonNode.arrayNode(newChildren))
-end 'copyArray'
-
-function copyObject(src JsonDoc, node JsonNode, dst JsonDoc) returns JsonNodeId
-	var newKeys = StringArray.create()
-	var newChildren = JsonNodeIdArray.create()
-	let n = node.keys.count()
-	for i in 0 upto n 'each'
-		let k = try node.keys.get(i) otherwise 'kErr'
-			panic("copyObject: keys.get OOB — i bounds-checked")
-		end 'kErr'
-		let childId = try node.children.get(i) otherwise 'cErr'
-			panic("copyObject: children.get OOB — parallel arrays out of sync")
-		end 'cErr'
-		newKeys.push(k)
-		newChildren.push(copyNode(src, srcId: childId, dst: dst))
-	end 'each'
-	return dst.add(JsonNode.objectNode(newKeys, children: newChildren))
-end 'copyObject'
+// The arena-to-arena deep copy this file's envelope writers splice `id`s and results with
+// lives in `JsonCopy.maxon`. It used to live here TOO, under different names — see there.

@@ -261,6 +261,29 @@ public abstract class MaxonOp : IPrintableOp {
 
 }
 
+/// Implemented by every op that READS A VARIABLE BY NAME. THE single source of truth for that
+/// fact, in the same sense `MaxonOp.Operands` is for SSA values — and for the same reason: a var
+/// read that liveness cannot see is a MISCOMPILE, not an optimizer wart. The assign feeding the
+/// var looks dead, gets dropped, and its value is deleted out from under a live reader.
+///
+/// **The declaration belongs on the OP because that is where the var name already is.** It used
+/// to be a `switch` inside DeadFunctionElimination naming four op types — and it was WRONG, in
+/// precisely the way a list kept somewhere else always eventually is: `MaxonEnumPayloadAssignOp`
+/// reads its enum var (its lowering `EmitLoad`s it, twice) and was not on the list. It was missed
+/// because it spells the property `EnumVarName` rather than `VarName`, so it did not look like its
+/// four siblings to anyone reading the list — which is exactly the kind of thing an author sees
+/// when the contract is on the class in front of them and cannot see from another directory.
+///
+/// Contrast `Operands`, which is ABSTRACT so that an op with none must say `=> []` out loud. That
+/// bar is right there and wrong here: every op has operands to declare, while five of ~100 read a
+/// var — making the other ~95 write `=> null` would bury the five real answers in boilerplate
+/// nobody reads, and a declaration nobody reads is not a safeguard. An interface is the same
+/// contract scoped to the ops it means something for: implement it, or you do not read a var.
+public interface IReadsVarByName {
+  /// The variable this op reads. Not optional: an op implements this because it HAS one.
+  string ReadVarName { get; }
+}
+
 public sealed class MaxonLiteralOp : MaxonOp {
   public override MaxonOpKind Kind => MaxonOpKind.Literal;
   public override string Mnemonic => "maxon.literal";
@@ -441,10 +464,11 @@ public sealed class MaxonClosureEnvLoadOp(int index, string name, MaxonValueKind
 }
 
 // Function var ref: loads a function pointer from a variable in a different block
-public sealed class MaxonFunctionVarRefOp(string varName, IrFunctionType functionType) : MaxonOp {
+public sealed class MaxonFunctionVarRefOp(string varName, IrFunctionType functionType) : MaxonOp, IReadsVarByName {
   public override MaxonOpKind Kind => MaxonOpKind.FunctionVarRef;
   public override string Mnemonic => $"maxon.function_var_ref {VarName}";
   public string VarName { get; } = varName;
+  public string ReadVarName => VarName;
   public IrFunctionType FunctionType { get; } = functionType;
   public MaxonFunctionPtr Result { get; } = new MaxonFunctionPtr(IrContext.Current.NextId());
   public override IReadOnlyList<MaxonValue> Results => [Result];
@@ -480,10 +504,11 @@ public sealed class MaxonIndirectCallOp : MaxonOp {
   }
 }
 
-public sealed class MaxonVarRefOp(string varName, MaxonValueKind kind) : MaxonOp {
+public sealed class MaxonVarRefOp(string varName, MaxonValueKind kind) : MaxonOp, IReadsVarByName {
   public override MaxonOpKind Kind => MaxonOpKind.VarRef;
   public override string Mnemonic => "maxon.var_ref";
   public string VarName { get; } = varName;
+  public string ReadVarName => VarName;
   public MaxonValueKind ValueKind { get; } = kind;
   public MaxonValue Result { get; } = kind.CreateValue();
   public override IReadOnlyList<MaxonValue> Results => [Result];
@@ -504,10 +529,11 @@ public sealed class MaxonVarRefOp(string varName, MaxonValueKind kind) : MaxonOp
 }
 
 // Struct var ref: loads a struct from a variable in a different block
-public sealed class MaxonStructVarRefOp(string varName, string structTypeName) : MaxonOp {
+public sealed class MaxonStructVarRefOp(string varName, string structTypeName) : MaxonOp, IReadsVarByName {
   public override MaxonOpKind Kind => MaxonOpKind.StructVarRef;
   public override string Mnemonic => $"maxon.struct_var_ref {VarName}";
   public string VarName { get; } = varName;
+  public string ReadVarName => VarName;
   public string StructTypeName { get; set; } = structTypeName;
   public MaxonStruct Result { get; } = new MaxonStruct(IrContext.Current.NextId(), structTypeName);
   public override IReadOnlyList<MaxonValue> Results => [Result];
@@ -1072,10 +1098,15 @@ public sealed class MaxonEnumParamOp(int index, string name, string enumTypeName
 }
 
 // Writes a value back to a specific payload slot in an associated-value enum's heap block
-public sealed class MaxonEnumPayloadAssignOp(string enumVarName, string enumTypeName, int payloadIndex, MaxonValue newValue) : MaxonOp {
+public sealed class MaxonEnumPayloadAssignOp(string enumVarName, string enumTypeName, int payloadIndex, MaxonValue newValue) : MaxonOp, IReadsVarByName {
   public override MaxonOpKind Kind => MaxonOpKind.EnumPayloadAssign;
   public override string Mnemonic => $"maxon.enum_payload_assign @{EnumTypeName}[{PayloadIndex}]";
   public string EnumVarName { get; } = enumVarName;
+  /// READ, not merely written: the lowering `EmitLoad`s this var to reach the enum's heap
+  /// pointer before storing the payload into it. THE FIFTH FLAVOUR — and the one
+  /// DeadFunctionElimination's switch missed for the reason this line now removes: the
+  /// property is `EnumVarName`, so it never looked like its four `VarName` siblings.
+  public string ReadVarName => EnumVarName;
   public string EnumTypeName { get; } = enumTypeName;
   public int PayloadIndex { get; } = payloadIndex;
   public MaxonValue NewValue { get; } = newValue;
@@ -1084,10 +1115,11 @@ public sealed class MaxonEnumPayloadAssignOp(string enumVarName, string enumType
 }
 
 // Enum var ref: loads an enum from a variable in a different block
-public sealed class MaxonEnumVarRefOp(string varName, string enumTypeName, MaxonValueKind backingKind) : MaxonOp {
+public sealed class MaxonEnumVarRefOp(string varName, string enumTypeName, MaxonValueKind backingKind) : MaxonOp, IReadsVarByName {
   public override MaxonOpKind Kind => MaxonOpKind.EnumVarRef;
   public override string Mnemonic => $"maxon.enum_var_ref {VarName}";
   public string VarName { get; } = varName;
+  public string ReadVarName => VarName;
   public string EnumTypeName { get; } = enumTypeName;
   public MaxonValueKind BackingKind { get; } = backingKind;
   public MaxonEnum Result { get; } = new MaxonEnum(IrContext.Current.NextId(), enumTypeName);

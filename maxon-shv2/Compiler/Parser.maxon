@@ -227,6 +227,17 @@ let MaxBoundField = b"max"
 let BoolTrueValue = 1 as ParsedInt
 let BoolFalseValue = 0 as ParsedInt
 
+// Can a PARAMETER be written? No — a reassignment to one is E2013, and mutating a parameter needs
+// a local shadow.
+//
+// **It is NAMED because a second, distant thing depends on the answer and does not look like it
+// does**: `namesAssignedIn`, the loop-phi token scan, is exhaustive only while every write to a
+// mutable binding is spelled `identifier =` — which a `var` parameter's call-site write is not.
+// Written as a bare `false` at the binding site, that coupling was invisible from both ends. The
+// tripwire that enforces it lives in `bindParameters`, on the flag itself; this constant is what
+// it currently reads.
+let ParametersAreMutable = false
+
 // The label of the placeholder block a Parser holds before it has parsed a function. It
 // belongs to no function and is registered in no module; `parseFunction` replaces it
 // before any op is emitted. Named so that if one ever DID reach the IR, the printed block
@@ -1310,9 +1321,36 @@ export type Parser
 			let paramName = try paramNames.get(i) otherwise panic("bindParameters: paramNames.get OOB at {i}")
 			let paramType = try paramTypes.get(i) otherwise panic("bindParameters: paramTypes.get OOB at {i}")
 			let paramRange = try paramRanges.get(i) otherwise panic("bindParameters: paramRanges.get OOB at {i}")
+
+			// ⚠ THE LOOP-PHI TOKEN SCAN DEPENDS ON THIS BEING FALSE, AND NOTHING ELSE SAYS SO.
+			//
+			// `namesAssignedIn` decides which vars a loop carries a phi for by scanning TOKENS for
+			// `identifier =` (`assignsAt`). That is exhaustive only while EVERY write to a mutable
+			// binding wears that shape — and a `var` (mutating) PARAMETER does not: its write is
+			// `mutate(p)` at the CALL SITE, with no `=` anywhere in the loop for the scan to find.
+			// The loop would mint no phi for `p`, and `p` would silently RESET to its entry value
+			// on every iteration. A wrong answer, and one no drift guard can catch: unlike a
+			// `loopBodyEndIndex` mismatch, the loop's EXTENT would still be perfectly correct.
+			//
+			// **The assert is on the FLAG ACTUALLY BEING PASSED, at the site that passes it** — not
+			// on the constant somewhere else. A real `var`-parameter feature is per-parameter, so it
+			// replaces the right-hand side here with `paramIsVar.get(i)`; a tripwire that tested
+			// `ParametersAreMutable` would simply stop being read at that moment and never fire,
+			// shipping the reset it exists to stop. This one trips on any spelling, because whatever
+			// is bound mutable has to come through this line.
+			//
+			// The other write forms are covered differently: one that IS a statement (`a.b = x`,
+			// `x += 1`) has to be taught to `parseStatement`, and `assignsAt`'s comment is the
+			// standing instruction to teach the scan in the same edit. A mutating parameter is the
+			// case that instruction cannot reach, because it is not a statement at all.
+			let paramIsMutable = ParametersAreMutable
+			if paramIsMutable 'writesThisScanCannotSee'
+				panic("bindParameters: parameter '{String.from(paramName)}' is being bound MUTABLE, but `namesAssignedIn` finds a loop's carried vars by scanning tokens for `identifier =` — and a `var` parameter is written by `mutate(p)` at the CALL SITE, leaving no `=` for that scan to find. The loop would mint no phi and the parameter would silently reset to its entry value every iteration. Teach `assignsAt`/`namesAssignedIn` the new write form before binding a parameter mutable.")
+			end 'writesThisScanCannotSee'
+
 			// The installed binding is discarded: only MUTABLE bindings are tracked by
 			// reference (for loop phis), and a parameter is immutable.
-			_ = self.scope.declareValueBinding(paramName, varType: paramType, mutable: false, value: i as ValueId)
+			_ = self.scope.declareValueBinding(paramName, varType: paramType, mutable: paramIsMutable, value: i as ValueId)
 			// Parameter `i` owns ValueId `i`; record its declaration span so the register-pressure
 			// diagnostic can resolve the parameter to source (it is minted by no op — see
 			// ParamOriginTable — so it has no `emitOp` origin).
@@ -2034,6 +2072,18 @@ export type Parser
 	//     need. Costs one coalesced copy; the alternative is tracking shadowing at token level,
 	//     which is the block structure written down a THIRD time.
 	function namesAssignedIn(startIndex TokenIndex, endIndex TokenIndex) returns AssignedNameSet
+		// ⚠ THIS SCAN IS EXHAUSTIVE ONLY BECAUSE PARAMETERS ARE IMMUTABLE. Everything below reads
+		// TOKENS, so it can only ever find a write that IS tokens — `identifier =`. A `var`
+		// parameter is written by `mutate(p)` at the call site, leaving no `=` in this loop at all:
+		// the scan would return without `p`, the header would mint no phi, and `p` would reset to
+		// its entry value every iteration. Silent, and invisible to the drift panic that guards
+		// this scan's OTHER assumption (the loop's extent), because the extent would be right.
+		//
+		// The tripwire for it is in `bindParameters`, on the mutability flag itself at the moment
+		// it is passed — not here. This scan cannot enumerate parameters to check them, and a guard
+		// here reading the `ParametersAreMutable` constant would be defeated by the very change it
+		// guards against: a per-parameter feature stops reading that constant, and the guard goes
+		// quiet exactly when it was needed.
 		var assigned = AssignedNameSet.create()
 		var i = startIndex
 		while i < endIndex 'scan'
@@ -3140,6 +3190,16 @@ export type Parser
 	// iteration. A SILENT MISCOMPILE — and, unlike a `loopBodyEndIndex` mismatch, one no drift
 	// guard can see, because the loop's EXTENT would still be perfectly correct. Teaching this one
 	// predicate teaches both.
+	//
+	// ⚠ AND IT IS NOT ENOUGH TO MAKE THE NEW FORM MERELY *MATCH* — IT MUST NAME THE RIGHT VAR.
+	// `a.b = x` already fits `identifier equals`, at `b`. So the day field stores parse (they do
+	// not today — `parseStatement` rejects them as unsupported), this scan silently starts
+	// inserting **`b`**, the FIELD, and never `a`, the var that actually carries the loop value.
+	// The phi would be minted for a name nothing writes and withheld from the one that does.
+	//
+	// ⚠ A write with NO `=` ANYWHERE cannot be covered by either half of the above, because it is
+	// not a statement to teach the dispatcher about: a `var` PARAMETER is written by `mutate(p)`
+	// at the call site. `ParametersAreMutable` is the tripwire for that one — see `namesAssignedIn`.
 	function assignsAt(index TokenIndex) returns bool
 		return self.kindAt(index) == TokenKind.identifier and self.kindAt(index + 1) == TokenKind.equals
 	end 'assignsAt'

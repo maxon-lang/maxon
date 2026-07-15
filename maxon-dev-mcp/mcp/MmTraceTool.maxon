@@ -31,7 +31,8 @@ export function mmTraceAnalyzeHandler(argsDoc JsonDoc, argsId JsonNodeId, repoRo
 		return ToolOutcome.error(RpcStandardErrorCode.invalidParams.rawValue, message: "mm_trace_analyze: {sourceArgErrorReason(err)}")
 	end 'badSrc'
 
-	let csharpBinary = childPath(repoRoot, segment: "bin/maxon{exeSuffix()}")
+	// Through `compilerBinaryPath` — see FmtTool for the copy of `bin/maxon` this replaced.
+	let csharpBinary = compilerBinaryPath(repoRoot, compiler: Compiler.csharp)
 	if not File.exists(csharpBinary) 'noCsharp'
 		cleanupResolvedSource(mainFile, repoRoot: repoRoot)
 		return ToolOutcome.error(RpcStandardErrorCode.invalidRequest.rawValue, message: "mm_trace_analyze: `{csharpBinary.path}` does not exist. Build the C# bootstrap first via the `build` tool.")

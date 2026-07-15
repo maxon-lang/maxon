@@ -196,13 +196,20 @@ the source of truth, and the derived registries are rebuilt from them.
 Failure is never cached (a failed tokenize/parse, or a parse that merely reported a
 diagnostic, returns an empty result uncached), so a fixed file recompiles cleanly.
 
-The dependency graph (`recordDependency` / `clearDepsFor` / `activeQueryStack`) is
-**recorded but does not yet drive invalidation** — content hashes do. It is maintained
-from day one so that when a query genuinely depends on another file's *derived* state,
-the wiring is already there. It is **one** structure — a map from a query to the queries it
-read. It used to be that map *plus* a flat array of every edge, which nothing ever read and
-which `clearDepsFor` rebuilt (allocating a `String` per edge) on every query: the same fact
-written down twice, at a cost of O(files²).
+**There is no dependency graph, by design.** A memo names its own inputs in the one function
+that computes its key (`parseMemoKey`), so a dependency is *derived* from the input rather
+than *recorded* as it is read — which is exactly what lets per-file queries run in parallel
+with no shared mutable bookkeeping.
+
+One was recorded anyway (`depIndex` / `recordDependency` / `clearDepsFor` / `activeQueryStack`),
+kept against the day "a query genuinely depends on another file's *derived* state, so the wiring
+is already there". **That day came — and the wiring was not used.** `queryParseOps` came to depend
+on `queryProgramSignatures`, precisely that case, and the answer was to mix the index's hash into
+the parse memo's key (`232f6c80a`); nothing consulted the graph, which by then had been extended
+with a fresh edge for a consumer that did not exist. Nothing ever read a bucket, so nothing ever
+validated one — a graph nobody reads is not wiring, it is unpaid bugs plus a `String` render and
+two `Map` writes per edge on the hot path. It went the way its own flat-array half went one commit
+earlier. If a query ever needs a dynamic edge, add the index **with its reader, in one commit**.
 
 `verify-warm-rebuild` (`Compiler/VerifyWarmRebuild.maxon`) is the standing gate over
 this spine, asserting two properties and exiting 0 iff both hold:
@@ -2030,7 +2037,6 @@ latter, see `PLAN.md`):
   parser records spans only for ops and parameters today.
 - **`Early`/`Late` operand position is packed but never read** — sound today only because no op has
   both explicit operands and a late implicit clobber.
-- **The query dependency graph is recorded but does not drive invalidation** (content hashes do).
 - **No spill-slot coalescing** — every spilled value gets its own slot.
 - **The splitter recomputes liveness once per split**, and several of its helpers are linear scans
   inside that loop. Correct, but superlinear in a way the rest of the codebase's "no `Map`, no

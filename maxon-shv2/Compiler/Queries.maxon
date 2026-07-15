@@ -1,8 +1,11 @@
-// Queries — the typed, memoized query functions, one per frontend phase. Each
-// follows the classic memo pattern: record the caller's dependency on this
-// query, return the cached value if still valid (content-hash compare), else
-// push self onto the active-query stack, clear+rebuild deps, compute, pop, and
-// cache. The mechanics live in QueryEngine.maxon.
+// Queries — the typed, memoized query functions, one per frontend phase. Each is the
+// memo pattern with nothing else in it: return the cached value if still valid
+// (content-hash compare), else compute and cache. The mechanics live in QueryEngine.maxon.
+//
+// There is no dependency bookkeeping around the compute — no edge recorded, no active-query
+// stack pushed and popped — because nothing read what that bookkeeping produced, and a memo's
+// inputs are named where its KEY is computed rather than observed as it runs. See
+// QueryDatabase.maxon's header.
 //
 // The chain is:
 //   querySourceFile  (input; never computed)
@@ -25,25 +28,18 @@
 
 // --- Input query: source content (records the source-file dependency) ---
 function querySourceFile(project Project, path FilePath) returns String throws CompileError
-	recordDependency(project, dependency: QueryKey.sourceFile(path))
 	let entry = try project.db.sourceFiles.get(path) otherwise throw CompileError.fileNotFound(path)
 	return entry.content
 end 'querySourceFile'
 
 // --- Per-file query: tokenize ---
 function queryTokens(project Project, path FilePath) returns TokenArray throws CompileError
-	let key = QueryKey.tokens(path)
-	recordDependency(project, dependency: key)
-
 	if tokensCacheValid(project, path: path) 'hit'
 		let memo = try project.db.tokenCache.get(path) otherwise panic("queryTokens: tokensCacheValid true but tokenCache.get({path}) failed")
 		project.db.tokenHits = project.db.tokenHits + 1
 		return memo.value
 	end 'hit'
 	project.db.tokenMisses = project.db.tokenMisses + 1
-
-	pushQuery(project, key: key)
-	clearDepsFor(project, key: key)
 
 	let content = try querySourceFile(project, path: path)
 
@@ -54,14 +50,11 @@ function queryTokens(project Project, path FilePath) returns TokenArray throws C
 	let lexProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.lex)
 	let tokens = try tokenize(content) otherwise (lexErr) 'lexFail'
 		reportLexerError(project, path: path, error: lexErr)
-		popQuery(project)
 		// A failed tokenize is NOT cached — the diagnostic gates the build, and
 		// the next attempt must re-run against corrected source.
 		return TokenArray.create()
 	end 'lexFail'
 	recordPhase(project, phase: CompilePhase.lex, probe: lexProbe)
-
-	popQuery(project)
 
 	let entry = try project.db.sourceFiles.get(path) otherwise panic("queryTokens: source entry for {path} vanished after querySourceFile")
 	project.db.tokenCache.upsert(path, value: TokenMemo.create(tokens, keyHash: entry.contentHash))
@@ -81,16 +74,11 @@ end 'queryTokens'
 // it feeds is itself O(all declarations), so the two are the same order. Add one if a file count
 // ever makes the sweep visible; do not add one on principle.)
 export function queryProgramSignatures(project Project) returns ProgramSignatures throws CompileError
-	recordDependency(project, dependency: QueryKey.programSignatures)
-
 	if signaturesCacheValid(project) 'hit'
 		project.db.signatureHits = project.db.signatureHits + 1
 		return project.db.signatureCache.value
 	end 'hit'
 	project.db.signatureMisses = project.db.signatureMisses + 1
-
-	pushQuery(project, key: QueryKey.programSignatures)
-	clearDepsFor(project, key: QueryKey.programSignatures)
 
 	var signatures = ProgramSignatures.create()
 	for path in project.db.sourcePaths 'eachFile'
@@ -109,17 +97,12 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 		recordPhase(project, phase: CompilePhase.signatures, probe: probe)
 	end 'eachFile'
 
-	popQuery(project)
-
 	project.db.signatureCache = SignatureMemo.create(signatures, keyHash: compositeSourceHash(project), computed: true)
 	return signatures
 end 'queryProgramSignatures'
 
 // --- Per-file query: parse into a FileParseArtifact ---
 function queryParseOps(project Project, path FilePath) returns FileParseArtifact throws CompileError
-	let key = QueryKey.parseOps(path)
-	recordDependency(project, dependency: key)
-
 	// BEFORE the memo check, because HALF THE MEMO'S KEY IS THIS (see QueryEngine.parseMemoKey):
 	// a parse reads this file's tokens AND every other file's declarations, so a memo validated
 	// against the file's bytes alone would serve a stale parse after a return type changed
@@ -132,16 +115,6 @@ function queryParseOps(project Project, path FilePath) returns FileParseArtifact
 		return memo.value
 	end 'hit'
 	project.db.parseMisses = project.db.parseMisses + 1
-
-	pushQuery(project, key: key)
-	clearDepsFor(project, key: key)
-
-	// The signature edge, recorded now that THIS query is the active one: the read above happened
-	// before `pushQuery` (it had to — its result decides hit vs miss), so it attributed itself to
-	// whatever query was running then, not to this one. `clearDepsFor` has just wiped this query's
-	// edges, so the dependency set being rebuilt would otherwise be missing the one input that is
-	// not this file.
-	recordDependency(project, dependency: QueryKey.programSignatures)
 
 	let tokens = try queryTokens(project, path: path)
 
@@ -159,13 +132,10 @@ function queryParseOps(project Project, path FilePath) returns FileParseArtifact
 	let errorCountBefore = project.diagnostics.count()
 	let artifact = try parser.parseModule() otherwise (parseErr) 'parseFail'
 		reportParseError(project, path: path, error: parseErr)
-		popQuery(project)
 		// A failed parse is never cached (preserves v1's invariant): the empty
 		// artifact is returned so the caller rolls forward to the error gate.
 		return FileParseArtifact.create(path)
 	end 'parseFail'
-
-	popQuery(project)
 
 	// Only cache a clean parse — a parse that reported a diagnostic must re-run. The memo is
 	// stamped with BOTH inputs this parse read (the file's bytes and the signature index's
@@ -184,16 +154,11 @@ end 'queryParseOps'
 
 // --- Whole-program query: merge every file's artifact ---
 export function queryAllModule(project Project) returns MaxonModule throws CompileError
-	recordDependency(project, dependency: QueryKey.allModule)
-
 	if allModuleCacheValid(project) 'hit'
 		project.db.allModuleHits = project.db.allModuleHits + 1
 		return project.db.allModuleCache.value
 	end 'hit'
 	project.db.allModuleMisses = project.db.allModuleMisses + 1
-
-	pushQuery(project, key: QueryKey.allModule)
-	clearDepsFor(project, key: QueryKey.allModule)
 
 	// Artifacts are the source of truth for the derived registries; a miss
 	// rebuilds them from scratch so a warm re-run never double-commits. This is
@@ -213,8 +178,6 @@ export function queryAllModule(project Project) returns MaxonModule throws Compi
 		recordPhase(project, phase: CompilePhase.merge, probe: mergeProbe)
 	end 'eachFile'
 
-	popQuery(project)
-
 	project.db.allModuleCache = ModuleMemo.create(merged, keyHash: compositeSourceHash(project), computed: true)
 	return merged
 end 'queryAllModule'
@@ -228,8 +191,7 @@ end 'queryAllModule'
 // not recomputed), moving `tokenHits`/`parseHits` up while their MISS counts hold.
 //
 // `queryTokens`/`queryParseOps` stay file-private; this is the one exported entry
-// the gate needs. Called at top level the active-query stack is empty, so the
-// `recordDependency` calls inside these queries are no-ops — no spurious edges.
+// the gate needs.
 export function probeRebuildCacheHits(project Project) throws CompileError
 	for path in project.db.sourcePaths 'each'
 		// Both queries must run: a queryParseOps HIT returns before it would reach

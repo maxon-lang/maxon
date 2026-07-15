@@ -1,0 +1,210 @@
+// THE SERVER MUST NOT ADOPT ITS OWN WORKING DIRECTORY AS THE REPO ROOT.
+//
+// With no `repoRoot` argument, the server derives one by walking UP from its own binary until
+// it finds a checkout. The walk has to END somewhere, and its end condition was a sentinel:
+// `parentDir` answered `.` for a path with no separator, and the loop stopped when a parent
+// compared EQUAL to its child. `parentDir("C:")` is `.`, and `.` does not equal `"C:"` — so at
+// a Windows drive root the guard did not fire. The walk took one more turn with `dir = "."` and
+// asked whether `./stdlib` existed: **a question about the MCP HOST's working directory**, which
+// belongs to no caller. Where the host had been started inside a checkout the answer was yes, and
+// the server adopted it — echoing `"repoRoot": "."` to a caller who never named a tree.
+//
+// The irony is the reason this file exists: `resolveRepoRoot` REFUSES a caller's relative
+// `repoRoot`, loudly and correctly, because it would resolve against the server's working
+// directory rather than theirs. Only the caller's half of that question was ever checked. The
+// server's own half handed one back.
+//
+// **THIS IS THE ONLY TEST THAT CAN SEE IT, and it costs a binary copy to run.** Every ordinary
+// fixture spawns the server from `maxon-dev-mcp/mcp/.maxon/`, three levels inside a checkout —
+// the walk succeeds on its third step and never approaches a root. The bug needs a binary with
+// NO checkout above it, which `locateBinary`'s argv[1] override explicitly supports and which a
+// side-built copy is. So: copy the server somewhere with nothing above it, run it FROM inside the
+// checkout (the CWD it would otherwise silently adopt), and ask for a tool.
+//
+//   fixed:  refuses — "no Maxon checkout was found above it"
+//   broken: answers, and says its root is "."
+//
+// The refusal arrives from the staleness gate rather than from `resolveRepoRoot`, because that
+// gate ALSO asks `repoRootPath()` (to locate the sources this binary was built from) and it runs
+// first. Same walk, same fix, and the assertion below pins what actually matters either way: the
+// server does not answer, and it never claims `.` is a tree.
+
+let ProbeDirName = "maxon-mcp-rootwalk-probe"
+
+// The code the probe looks up. `lookup_error_code` is the cheapest tool that reads the tree it
+// is given, and any real code will do: the call must never get far enough to resolve one — if it
+// ever does, that IS the bug.
+let ProbeErrorCode = 3014
+
+// What a correctly-terminating walk says when it runs out of tree. From `Staleness.unverifiableRefusal`
+// via `repoRootPath()` throwing — see this file's header for why the staleness gate is the messenger.
+let ExpectedRefusalNeedle = "no Maxon checkout was found above it"
+
+// The root the bug adopts: the process's working directory, under the name it echoes it by.
+// Asserted explicitly rather than left to "well, it didn't refuse" — a response NAMING `.` as a
+// tree is THE symptom, and a test that only knows it wanted a refusal cannot tell that apart from
+// an unrelated crash.
+//
+// ⚠ Checked by PARSING the response, never by substring. The obvious `stdout.contains("\"repoRoot\": \".\"")`
+// is a test that cannot fail: a tool result is pretty-printed and then embedded as a JSON STRING,
+// so `Json.stringify` escapes every quote and stdout actually carries `\"repoRoot\": \".\"` —
+// while an ERROR envelope is compact and carries `"repoRoot":"."` with no space. The needle
+// matches neither, and the assertion below was written that way first. Matching another module's
+// whitespace is not an assertion about behaviour.
+let AdoptedCwdRoot = "."
+
+export function runRootWalkTermination(repoRoot FilePath, binary FilePath) returns ConformanceTally
+	print("\n[mcp-test] root walk — a server outside a checkout adopts nothing\n")
+	print("[mcp-test] rootwalk/refuses-outside-checkout: ")
+
+	let probeParent = outermostCheckoutParent(repoRoot)
+
+	// The precondition IS the test setup, so it is checked, not assumed. If this directory were
+	// itself inside a checkout the walk would find that one, the server would answer normally, and
+	// the case would pass while exercising nothing — which is the failure this whole batch is about.
+	if isMaxonCheckout(probeParent) 'nestedCheckout'
+		print("FAIL — cannot stage the probe: {probeParent.path} is itself a Maxon checkout, so a binary\n")
+		print("       placed there still has a tree above it and the walk would never reach a root.\n")
+		return ConformanceTally.create(0, failed: 1)
+	end 'nestedCheckout'
+
+	let probeDir = joinPath(probeParent, segment: ProbeDirName)
+	if not Directory.create(probeDir) 'mkFailed'
+		print("FAIL — could not create the probe directory {probeDir.path}\n")
+		return ConformanceTally.create(0, failed: 1)
+	end 'mkFailed'
+
+	let probeBinary = joinPath(probeDir, segment: "maxon-dev-mcp{exeSuffix()}")
+	let bytes = try File.readBinary(binary) otherwise 'readErr'
+		print("FAIL — could not read the server binary at {binary.path}\n")
+		return ConformanceTally.create(0, failed: 1)
+	end 'readErr'
+	try File.writeBinary(probeBinary, content: bytes, mode: FilePermission.executable) otherwise 'writeErr'
+		print("FAIL — could not stage a side-built copy at {probeBinary.path}\n")
+		return ConformanceTally.create(0, failed: 1)
+	end 'writeErr'
+
+	// CWD = the checkout. This is the directory the broken walk reaches for, so handing it the most
+	// tempting possible one is what makes a pass meaningful.
+	var c = Configuration.create(Executable.path(probeBinary))
+	c.workingDirectory = repoRoot
+	// Assembled by `buildLookupRequest` with NO `repoRoot` — naming no tree is the whole point,
+	// and the omission is what makes the server go and derive one from its own binary.
+	c.standardInput = InputSource.bytes(buildLookupRequest(ProbeErrorCode, repoRootOrEmpty: ""))
+	c.standardOutput = OutputDestination.collect(16 * 1024 * 1024)
+	c.standardError = OutputDestination.collect(1024 * 1024)
+	c.timeoutMs = perFixtureTimeoutMs
+
+	let collected = try c.run() otherwise (err) 'runErr'
+		print("FAIL — could not run the staged copy: {err.displayReason()}\n")
+		cleanupProbe(probeBinary)
+		return ConformanceTally.create(0, failed: 1)
+	end 'runErr'
+
+	let verdict = judgeRootWalk(collected.stdout, stderr: collected.stderr)
+	cleanupProbe(probeBinary)
+
+	if verdict 'pass'
+		return ConformanceTally.create(1, failed: 0)
+	end 'pass'
+	return ConformanceTally.create(0, failed: 1)
+end 'runRootWalkTermination'
+
+function judgeRootWalk(stdout String, stderr String) returns bool
+	let responses = splitJsonLines(stdout)
+	if responses.count() == 0 'noResponse'
+		print("FAIL — the staged server produced no JSON-RPC response. stderr: {stderr.trim()}\n")
+		return false
+	end 'noResponse'
+	let response = try responses.get(0) otherwise panic("judgeRootWalk: responses.get(0) OOB — count just checked")
+
+	// THE SYMPTOM, named — read out of the parsed response, not matched against its punctuation.
+	// A server that adopted its CWD reports SUCCESS and stamps `.` as the tree it used.
+	let echoed = try echoedRepoRoot(response) otherwise 'noEcho'
+		return judgeRefusal(response, stdout: stdout)
+	end 'noEcho'
+
+	if echoed.equals(AdoptedCwdRoot) 'adoptedCwd'
+		print("FAIL — the server ADOPTED ITS WORKING DIRECTORY: it answered, naming `{echoed}` as the tree.\n")
+		print("       There is no checkout above its binary; `{AdoptedCwdRoot}` is the MCP host's CWD, not a tree.\n")
+		return false
+	end 'adoptedCwd'
+
+	print("FAIL — the server ANSWERED from a binary with no checkout above it, naming `{echoed}`. It must refuse.\n")
+	return false
+end 'judgeRootWalk'
+
+// The `repoRoot` a SUCCESSFUL tool call stamped on its result. Throws when the response is not a
+// success — which is the outcome this test wants, and which `judgeRootWalk` reads as such.
+//
+// The value is inside `result.content[0].text` as a JSON document in a string (MCP's shape), so it
+// is parsed back out. `Server.withRepoRootEcho` is what puts it there, on every success.
+function echoedRepoRoot(response JsonDoc) returns String throws NotFound
+	let resultId = try response.getChild(response.root, key: "result") otherwise throw NotFound.notFound
+	let contentId = try response.getChild(resultId, key: "content") otherwise throw NotFound.notFound
+	let firstId = try response.get(contentId).children.get(0) otherwise throw NotFound.notFound
+	let text = try response.getString(firstId, key: "text") otherwise throw NotFound.notFound
+	let payload = try Json.parse(text) otherwise throw NotFound.notFound
+	return try payload.getString(payload.root, key: "repoRoot") otherwise throw NotFound.notFound
+end 'echoedRepoRoot'
+
+function judgeRefusal(response JsonDoc, stdout String) returns bool
+	let errId = try response.getChild(response.root, key: "error") otherwise 'neitherShape'
+		print("FAIL — the response is neither a refusal nor a result this test can read.\n")
+		print("       response: {stdout.trim()}\n")
+		return false
+	end 'neitherShape'
+
+	let message = try response.getString(errId, key: "message") otherwise 'noMessage'
+		print("FAIL — a JSON-RPC error must carry a `message`\n")
+		return false
+	end 'noMessage'
+
+	if not message.contains(ExpectedRefusalNeedle) 'wrongRefusal'
+		print("FAIL — it refused, but not for the right reason. Expected a refusal containing\n")
+		print("       \"{ExpectedRefusalNeedle}\". It said: {message.trim()}\n")
+		return false
+	end 'wrongRefusal'
+
+	print("OK (refused: no checkout above the binary, and `{AdoptedCwdRoot}` was not adopted)\n")
+	return true
+end 'judgeRefusal'
+
+// The parent of the OUTERMOST checkout at or above `from` — the nearest directory guaranteed to
+// have no tree above it. Derived rather than hardcoded because a worktree lives INSIDE the main
+// checkout (`.claude/worktrees/agent-x/` is itself a checkout, nested in one), so "the parent of
+// my root" is not far enough out: it would still have the main repo overhead.
+function outermostCheckoutParent(from FilePath) returns FilePath
+	var outermost = from
+	var dir = from
+	for _ in 0 upto MaxCheckoutNestingWalk 'walk'
+		let parent = try parentDirOrThrow(dir) otherwise 'atFilesystemRoot'
+			break
+		end 'atFilesystemRoot'
+		if isMaxonCheckout(parent) 'stillInATree'
+			outermost = parent
+		end 'stillInATree'
+		dir = parent
+	end 'walk'
+
+	return try parentDirOrThrow(outermost) otherwise 'noParent'
+		panic("outermostCheckoutParent: {outermost.path} is a filesystem root and a Maxon checkout at once — there is nowhere outside it to stage a probe")
+	end 'noParent'
+end 'outermostCheckoutParent'
+
+// How far up to look for a checkout nested in another. Generous: this walks to the FILESYSTEM
+// ROOT by design (it must find the OUTERMOST tree, so it cannot stop at the first), and it is
+// bounded only so a pathological path cannot spin. `parentDirOrThrow` is what actually ends it.
+let MaxCheckoutNestingWalk = 64
+
+// Remove the staged copy. Best-effort: a probe left behind is untidy, a test that FAILED because
+// its tidy-up did would be worse.
+//
+// The (now empty) directory stays — the stdlib has no `Directory.delete`, and `Directory.create`
+// is mkdir -p, so the next run reuses it. It is outside the checkout by construction, so neither
+// staging nor leaving it is ever an edit to a tree.
+function cleanupProbe(probeBinary FilePath)
+	try File.delete(probeBinary) otherwise 'binErr'
+		return
+	end 'binErr'
+end 'cleanupProbe'

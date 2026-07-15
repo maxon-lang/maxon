@@ -40,11 +40,14 @@ function main() returns ExitCode
 		return 1
 	end 'noFixtures'
 
+	let scratchRoot = materializeFixtureScratchRoot(repoRoot)
+	print("[mcp-test] scratch tree: {scratchRoot.path}\n")
+
 	var passed = 0
 	var failed = 0
 	for i in 0 upto total 'each'
 		let fixture = try fixtures.get(i) otherwise panic("main: fixtures.get OOB — i bounded by total")
-		let ok = runFixture(fixture, binary: binary, repoRoot: repoRoot)
+		let ok = runFixture(fixture, binary: binary, repoRoot: repoRoot, scratchRoot: scratchRoot)
 		if ok 'pass'
 			passed = passed + 1
 		end 'pass' else 'fail'
@@ -56,7 +59,11 @@ function main() returns ExitCode
 	passed = passed + conformance.passed
 	failed = failed + conformance.failed
 
-	let grandTotal = total + conformance.passed + conformance.failed
+	let rootWalk = runRootWalkTermination(repoRoot, binary: binary)
+	passed = passed + rootWalk.passed
+	failed = failed + rootWalk.failed
+
+	let grandTotal = total + conformance.passed + conformance.failed + rootWalk.passed + rootWalk.failed
 	print("\n[mcp-test] {passed} passed, {failed} failed (of {grandTotal})\n")
 	if failed > 0 'anyFailed'
 		return 1
@@ -91,26 +98,41 @@ end 'exeSuffix'
 // worktree look like "not a repo".
 function resolveRepoRoot() returns FilePath
 	let exe = try Process.executablePath() otherwise panic("resolveRepoRoot: Process.executablePath threw — runtime introspection unavailable")
-	var dir = parentDir(exe)
-	for _ in 0 upto 16 'walk'
+	var dir = try parentDirOrThrow(exe) otherwise panic("resolveRepoRoot: the executable path {exe.path} has no directory part")
+	for _ in 0 upto MaxRepoRootWalkDepth 'walk'
 		if isMaxonCheckout(dir) 'found'
 			return dir
 		end 'found'
-		let parent = parentDir(dir)
-		if parent.path.equals(dir.path) 'atFs'
+
+		// Ends on the THROW, exactly as `mcp/Util.maxon`'s walk does — the path grammar says
+		// there is nothing above, rather than a sentinel comparing equal to itself. The mirror
+		// is only worth having if both halves stop for the same reason.
+		dir = try parentDirOrThrow(dir) otherwise 'atFilesystemRoot'
 			break
-		end 'atFs'
-		dir = parent
+		end 'atFilesystemRoot'
 	end 'walk'
 	panic("resolveRepoRoot: could not locate a Maxon checkout above {exe.path}")
 end 'resolveRepoRoot'
 
-function isMaxonCheckout(dir FilePath) returns bool
-	if not Directory.exists(joinPath(dir, segment: "stdlib")) 'noStdlib'
-		return false
-	end 'noStdlib'
+// Deep enough for `<repo>/maxon-dev-mcp/test/.maxon/<binary>` plus room to spare, shallow enough
+// that a runner started outside a checkout fails fast. Mirrors `MaxRepoRootWalkDepth` in mcp/Util.maxon.
+let MaxRepoRootWalkDepth = 16
 
-	return Directory.exists(joinPath(dir, segment: "maxon-sharp"))
+// Through `checkoutMarkerDirs` — the same list `materializeFixtureScratchRoot` CREATES a scratch
+// tree from, so what this project builds as a checkout and what it recognizes as one cannot
+// disagree. They were two hardcoded literals and a list, which made adding a marker a three-place
+// edit and, if the detector half were missed, would stage `RootWalk`'s probe INSIDE a tree.
+export function isMaxonCheckout(dir FilePath) returns bool
+	let markers = checkoutMarkerDirs()
+	let n = markers.count()
+	for i in 0 upto n 'each'
+		let marker = try markers.get(i) otherwise panic("isMaxonCheckout: markers.get OOB — i bounded by n")
+		if not Directory.exists(joinPath(dir, segment: marker)) 'missing'
+			return false
+		end 'missing'
+	end 'each'
+
+	return true
 end 'isMaxonCheckout'
 
 function locateBinary(repoRoot FilePath) returns FilePath
@@ -176,21 +198,45 @@ end 'collectFixtures'
 // Path helpers
 // =============================================================================
 
-function parentDir(path FilePath) returns FilePath
-	let s = path.path
-	let bytes = s.toByteArray()
+// The parent of `path`, or `NotFound` when it HAS none — a filesystem root, or a bare name.
+//
+// A MIRROR of `mcp/Util.maxon`'s `parentDirOrThrow`, down to saying no by THROWING rather than by
+// handing back a sentinel: `.` there let the SERVER's walk run off a drive root and adopt its CWD
+// as a repo root, and `path`-unchanged here would only relocate that decision into every caller.
+//
+// Mirrored rather than shared because `mcp/` and `test/` are separate Maxon PROJECTS — a project
+// is one directory tree (`SourceCollector` globs `*.maxon` under it), so this binary cannot link
+// that one's code.
+export function parentDirOrThrow(path FilePath) returns FilePath throws NotFound
+	let bytes = path.path.toByteArray()
 	let n = bytes.count()
 	var i = n
 	while i > 0 'scan'
 		i = i - 1
-		let b = try bytes.get(i) otherwise panic("parentDir: bytes.get OOB — i bounded by n")
-		if b == 0x2F or b == 0x5C 'sep'
-			let parentStr = sliceBytesAsString(bytes, from: 0, until: i)
-			return try FilePath.from(parentStr) otherwise panic("parentDir: derived parent '{parentStr}' is invalid")
-		end 'sep'
+		let b = try bytes.get(i) otherwise panic("parentDirOrThrow: bytes.get OOB — i bounded by n")
+		if b != SlashByte and b != BackslashByte 'notSep'
+			continue
+		end 'notSep'
+
+		// A separator at index 0 is a POSIX absolute path's leading `/`. The parent of `/usr` is
+		// `/` — not the empty string, which `FilePath.from` rejects, and which this used to hand
+		// it: `parentDir("/home")` panicked outright on macOS and Linux. `/` itself has no parent.
+		if i == 0 'leadingSep'
+			if n == 1 'isPosixRoot'
+				throw NotFound.notFound
+			end 'isPosixRoot'
+
+			let root = sliceBytesAsString(bytes, from: 0, until: 1)
+			return try FilePath.from(root) otherwise panic("parentDirOrThrow: a lone separator '{root}' is always a valid path")
+		end 'leadingSep'
+
+		let parentStr = sliceBytesAsString(bytes, from: 0, until: i)
+		return try FilePath.from(parentStr) otherwise panic("parentDirOrThrow: derived parent '{parentStr}' is invalid")
 	end 'scan'
-	return path
-end 'parentDir'
+
+	// No separator: a bare name, or a Windows drive spec (`C:`). Neither has a parent.
+	throw NotFound.notFound
+end 'parentDirOrThrow'
 
 export function lastSegment(path FilePath) returns String
 	let s = path.path
@@ -200,7 +246,7 @@ export function lastSegment(path FilePath) returns String
 	while i > 0 'scan'
 		i = i - 1
 		let b = try bytes.get(i) otherwise panic("lastSegment: bytes.get OOB — i bounded by n")
-		if b == 0x2F or b == 0x5C 'sep'
+		if b == SlashByte or b == BackslashByte 'sep'
 			return sliceBytesAsString(bytes, from: i + 1, until: n)
 		end 'sep'
 	end 'scan'
@@ -230,6 +276,11 @@ function sliceBytesAsString(bytes ByteArray, from BytePos, until BytePos) return
 	return String.from(out)
 end 'sliceBytesAsString'
 
+// The bytes the path scanners here look for. Both count wherever one does: Windows accepts
+// either and normalizes to `\`, POSIX takes `/` and treats `\` as an ordinary character.
+let SlashByte = 0x2F as Byte
+let BackslashByte = 0x5C as Byte
+
 typealias BytePos = int(0 to i64.max)
 typealias Byte = int(0 to u8.max)
 typealias ByteArray = Array with Byte
@@ -245,22 +296,59 @@ typealias ByteArray = Array with Byte
 // this runner resolved.
 let RepoRootPlaceholder = "<REPO_ROOT>"
 
+// A SECOND, DISTINCT checkout — and it exists because `<REPO_ROOT>` alone cannot test the
+// one thing `repoRoot` is for.
+//
+// The default root the server derives IS `<REPO_ROOT>`. So a fixture that passes
+// `repoRoot: "<REPO_ROOT>"` and asserts the echo is `<REPO_ROOT>` holds whether the argument
+// was honoured or ignored — it was, and it passed, and it proved nothing. **The property is
+// "the tool acts on the tree I NAMED, not the one it would have picked", and a single tree
+// cannot express it: the two answers have to be able to differ.**
+let ScratchRootPlaceholder = "<SCRATCH_ROOT>"
+
+// Where that second tree lives. Gitignored build output, never a real tree — and note what
+// it deliberately does NOT contain: `docs/error-codes.txt`. That absence is the teeth. A
+// `lookup_error_code` aimed here must FAIL to find a registry, which a server that quietly
+// used its own root could not do — it would find the real one and answer. So the fixture
+// fails in two independent ways if the argument is dropped: the wrong root is echoed, AND a
+// call that must refuse instead succeeds.
+let FixtureScratchDir = "maxon-dev-mcp/test/.maxon/fixture-scratch"
+
+// A scratch root must look like a Maxon checkout or the server refuses `repoRoot` outright.
+// These mirror `isMaxonCheckout` (mcp/Util.maxon) — SOURCE directories, never build output,
+// which is why an empty pair of them is enough to make a root real.
+function materializeFixtureScratchRoot(repoRoot FilePath) returns FilePath
+	let scratch = joinPath(repoRoot, segment: FixtureScratchDir)
+	let markers = checkoutMarkerDirs()
+	let n = markers.count()
+	for i in 0 upto n 'eachMarker'
+		let marker = try markers.get(i) otherwise panic("materializeFixtureScratchRoot: markers.get OOB — i bounded by n")
+		if not Directory.create(joinPath(scratch, segment: marker)) 'mkFailed'
+			panic("materializeFixtureScratchRoot: could not create {marker} under {scratch.path}")
+		end 'mkFailed'
+	end 'eachMarker'
+	return scratch
+end 'materializeFixtureScratchRoot'
+
 // The substituted value is JSON-string-escaped. On Windows the path is `C:\Users\…`,
 // and a lone backslash inside a JSON string is the start of an escape sequence — so
 // pasting the path in raw would produce a fixture that either fails to parse or,
 // worse, parses into a DIFFERENT path than the one intended.
-function expandFixturePlaceholders(text String, repoRoot FilePath) returns String
-	let escaped = repoRoot.path.replace("\\", with: "\\\\").replace("\"", with: "\\\"")
-	return text.replace(RepoRootPlaceholder, with: escaped)
+function jsonEscapedPath(path FilePath) returns String
+	return path.path.replace("\\", with: "\\\\").replace("\"", with: "\\\"")
+end 'jsonEscapedPath'
+
+function expandFixturePlaceholders(text String, repoRoot FilePath, scratchRoot FilePath) returns String
+	return text.replace(RepoRootPlaceholder, with: jsonEscapedPath(repoRoot)).replace(ScratchRootPlaceholder, with: jsonEscapedPath(scratchRoot))
 end 'expandFixturePlaceholders'
 
-function runFixture(fixture Fixture, binary FilePath, repoRoot FilePath) returns bool
+function runFixture(fixture Fixture, binary FilePath, repoRoot FilePath, scratchRoot FilePath) returns bool
 	print("[mcp-test] {fixture.name}: ")
 	let rawInput = try File.readText(fixture.inputPath) otherwise 'readErr'
 		print("FAIL — cannot read {fixture.inputPath.path}\n")
 		return false
 	end 'readErr'
-	let input = expandFixturePlaceholders(rawInput, repoRoot: repoRoot)
+	let input = expandFixturePlaceholders(rawInput, repoRoot: repoRoot, scratchRoot: scratchRoot)
 
 	var c = Configuration.create(Executable.path(binary))
 	c.standardInput = InputSource.bytes(input)
@@ -277,7 +365,7 @@ function runFixture(fixture Fixture, binary FilePath, repoRoot FilePath) returns
 		print("FAIL — cannot read {fixture.assertPath.path}\n")
 		return false
 	end 'aErr'
-	let assertText = expandFixturePlaceholders(rawAssert, repoRoot: repoRoot)
+	let assertText = expandFixturePlaceholders(rawAssert, repoRoot: repoRoot, scratchRoot: scratchRoot)
 	let assertDoc = try Json.parse(assertText) otherwise (err) 'parseAErr'
 		print("FAIL — assert.json parse: {err.name}\n")
 		return false

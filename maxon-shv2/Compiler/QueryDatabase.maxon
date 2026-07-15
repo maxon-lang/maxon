@@ -11,11 +11,30 @@
 // is no shared mutable counter for concurrent per-file parse tasks to contend
 // on; a file's cache key is a pure function of its own bytes.
 //
-// The dependency graph (`dependencies` / `depIndex` / `activeQueryStack`) is
-// still recorded from day one, exactly as v1 records it — M1 has one file so it
-// never drives an invalidation, but recording it now is what lets the M2
-// warm-rebuild assertion ("edit one file → only its queries re-run") join the
-// gate without retrofitting the whole spine.
+// **THERE IS NO DEPENDENCY GRAPH, AND THAT IS THE DESIGN — NOT A GAP.** A memo names its own
+// inputs in the ONE function that computes its key (`QueryEngine.parseMemoKey`), so validity is
+// an equality test on a hash and never a graph walk. Dependencies are DERIVED from the input,
+// not RECORDED as it is read; that is what makes the per-file caches trivially parallel-safe,
+// and it is the whole shv2/v1 divergence.
+//
+// A graph WAS recorded here — `depIndex` (a map from a query to the queries it read), fed by
+// `recordDependency` off an `activeQueryStack`. **Nothing ever read a bucket.** It was kept
+// against the day "a query genuinely depends on another file's DERIVED state, so the wiring is
+// already there".
+//
+// **THAT DAY CAME, on 2026-07-14, AND THE WIRING WAS NOT USED.** `queryParseOps` came to depend
+// on `queryProgramSignatures` — one file's parse against every other file's declarations, exactly
+// the case — and the fix was to MIX THE INDEX'S HASH INTO THE PARSE MEMO'S KEY (232f6c80a). Not
+// one line consulted the graph. The commit did add an EDGE to it, under a comment explaining why
+// the edge mattered to a consumer that did not exist.
+//
+// So it went, for the reason its own other half went one commit earlier: **written, never read,
+// and therefore quietly wrong.** Unread, it had already rotted — `queryKeyString` advertised an
+// "edge dedup" nothing performed — and a graph nothing validates is not wiring, it is a structure
+// whose bugs are simply unpaid. It cost a `String` render plus two `Map` operations on every
+// dependency edge, on a compiler's hot path, to answer no question. If a query ever does need a
+// dynamic edge, add the index WITH its reader, in one commit, and let the two be reviewed
+// together.
 
 // Per-file memo: the tokenized form, stamped with the source hash it came from.
 export type TokenMemo
@@ -100,32 +119,6 @@ export typealias FilePathArray = Array with FilePath
 // query session.
 export typealias QueryCount = int(0 to u64.max)
 
-// Identifies each memoized query. M1's subset of v1's key set (the per-function
-// codegen tier arms grow at their milestone). `queryKeyString` gives each a
-// stable string for the dependency index.
-export union QueryKey
-	sourceFile(path FilePath)
-	tokens(path FilePath)
-	parseOps(path FilePath)
-	// The whole-program signature index. Not per-file: it is read off EVERY file's tokens
-	// (that is the point of it), so it has no one file to be keyed by — and `parseOps`
-	// depends on it, which is the edge that makes a parse memo's second key half real.
-	programSignatures
-	allModule
-end 'QueryKey'
-
-export typealias QueryKeyArray = Array with QueryKey
-
-// The dependency graph, and it is ONE structure: for each query — keyed by the stable string form
-// of its `QueryKey` — the queries it READ while it ran.
-//
-// It was two: a flat array of `(dependent, dependency)` edges AND this reverse index over them. The
-// edge's `dependent` is the bucket's KEY, so the flat array stored it a second time — and nothing
-// ever read the flat array. Maintaining it was O(every edge in the project) per query, which made
-// the spine QUADRATIC in the file count (see QueryEngine.clearDepsFor for the measurement that
-// found it).
-export typealias DepIndexMap = Map with (String, QueryKeyArray)
-
 export type QueryDatabase
 	// Source inputs (path -> content + hash) and insertion-ordered path list.
 	export var sourceFiles as SourceFileMap
@@ -148,12 +141,10 @@ export type QueryDatabase
 	// Whole-program merged-module memo.
 	export var allModuleCache as ModuleMemo
 
-	// Dependency graph (dependent-key -> the queries it read) + the active-query
-	// stack recordDependency reads its "current query" from.
-	export var depIndex as DepIndexMap
-	export var activeQueryStack as QueryKeyArray
-
-	// Cache hit/miss counters (drive the M2 warm-rebuild assertion + diagnostics).
+	// Cache hit/miss counters. **These are what the warm-rebuild gate reads** — the property
+	// "edit one file → only its queries re-run" is a statement about hits and misses, and it
+	// was always these that proved it, never the dependency graph that claimed to be here for
+	// it (see this file's header).
 	export var tokenHits as QueryCount
 	export var tokenMisses as QueryCount
 	export var parseHits as QueryCount
@@ -172,8 +163,6 @@ export type QueryDatabase
 			parseCache: ParseCacheMap.create(),
 			signatureCache: SignatureMemo.empty(),
 			allModuleCache: ModuleMemo.empty(),
-			depIndex: DepIndexMap.create(),
-			activeQueryStack: QueryKeyArray.create(),
 			tokenHits: 0, tokenMisses: 0,
 			parseHits: 0, parseMisses: 0,
 			signatureHits: 0, signatureMisses: 0,
@@ -182,14 +171,3 @@ export type QueryDatabase
 	end 'create'
 end 'QueryDatabase'
 
-// Stable string form of a query key, for the dependency reverse index and edge
-// dedup. The `sf:`/`tk:`/`po:`/`ps`/`am` prefixes keep the key families disjoint.
-export function queryKeyString(key QueryKey) returns String
-	return match key 'toStr'
-		sourceFile(path) gives "sf:{path}"
-		tokens(path) gives "tk:{path}"
-		parseOps(path) gives "po:{path}"
-		programSignatures gives "ps"
-		allModule gives "am"
-	end 'toStr'
-end 'queryKeyString'

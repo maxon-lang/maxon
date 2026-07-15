@@ -25,7 +25,9 @@ export function fmtHandler(argsDoc JsonDoc, argsId JsonNodeId, repoRoot FilePath
 		return ToolOutcome.error(RpcStandardErrorCode.invalidParams.rawValue, message: "fmt: {sourceArgErrorReason(err)}")
 	end 'badSrc'
 
-	let csharpBinary = childPath(repoRoot, segment: "bin/maxon{exeSuffix()}")
+	// Through `compilerBinaryPath`, which is where a compiler's binary LIVES — this hand-rolled
+	// its own `bin/maxon{exeSuffix()}` copy of that fact, as did `mm_trace_analyze`.
+	let csharpBinary = compilerBinaryPath(repoRoot, compiler: Compiler.csharp)
 	if not File.exists(csharpBinary) 'noCsharp'
 		cleanupResolvedSource(resolved, repoRoot: repoRoot)
 		return ToolOutcome.error(RpcStandardErrorCode.invalidRequest.rawValue, message: "fmt: `{csharpBinary.path}` does not exist. Build the C# bootstrap first via the `build` tool.")

@@ -41,7 +41,7 @@ let ConformanceWorkDir = "maxon-dev-mcp/test/.maxon/conformance"
 // A scratch root must look like a Maxon checkout or the server refuses `repoRoot` outright.
 // These are the markers `isMaxonCheckout` (mcp/Util.maxon) looks for — source directories,
 // never build output, which is why an empty pair of them is enough to make a root real.
-function checkoutMarkerDirs() returns StringArray
+export function checkoutMarkerDirs() returns StringArray
 	var out = StringArray.create()
 	out.push("stdlib")
 	out.push("maxon-sharp")
@@ -307,16 +307,23 @@ end 'runGate'
 // than pasted together as text. A hand-built request would have to escape a Windows path's
 // backslashes into a JSON string by hand — and a fixture that escapes its own path wrongly
 // does not fail, it silently tests a DIFFERENT tree, which is the failure this whole
-// afternoon is about.
-function buildLookupRequest(workRoot FilePath, code JsonInt) returns String
+// afternoon is about. (It also cannot be pasted: `{` opens an interpolation in a Maxon
+// string, so a literal JSON object does not survive the lexer.)
+//
+// `repoRootOrEmpty` empty means the argument is OMITTED — not sent as `""`. That is a
+// materially different request, and `RootWalk.maxon` is built on the difference: naming no
+// tree is what makes the server derive one from its own binary.
+export function buildLookupRequest(code JsonInt, repoRootOrEmpty String) returns String
 	var doc = JsonDoc.create()
 
 	var argKeys = StringArray.create()
 	var argVals = JsonNodeIdArray.create()
 	argKeys.push("code")
 	argVals.push(doc.add(JsonNode.numberNode(code)))
-	argKeys.push("repoRoot")
-	argVals.push(doc.add(JsonNode.stringNode(workRoot.path)))
+	if not repoRootOrEmpty.isEmpty() 'namesATree'
+		argKeys.push("repoRoot")
+		argVals.push(doc.add(JsonNode.stringNode(repoRootOrEmpty)))
+	end 'namesATree'
 	let argsId = doc.add(JsonNode.objectNode(argKeys, children: argVals))
 
 	var paramKeys = StringArray.create()
@@ -345,7 +352,7 @@ end 'buildLookupRequest'
 // One `lookup_error_code` call against the scratch tree, through the real server binary.
 function runLookup(binary FilePath, workRoot FilePath, code JsonInt) returns ToolVerdict
 	var c = Configuration.create(Executable.path(binary))
-	c.standardInput = InputSource.bytes(buildLookupRequest(workRoot, code: code))
+	c.standardInput = InputSource.bytes(buildLookupRequest(code, repoRootOrEmpty: workRoot.path))
 	c.standardOutput = OutputDestination.collect(16 * 1024 * 1024)
 	c.standardError = OutputDestination.collect(1024 * 1024)
 	c.timeoutMs = perFixtureTimeoutMs
