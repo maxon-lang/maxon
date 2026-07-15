@@ -474,8 +474,7 @@ end 'main'
 i64 42
 ```
 
-<!-- disabled-test: data-section-f64-8byte -->
-<!-- P1.0d.4 floats -->
+<!-- test: data-section-f64-8byte -->
 A single f64 global occupies 8 bytes in the .data section.
 
 ```maxon
@@ -585,8 +584,7 @@ i8 0
 i8 1
 ```
 
-<!-- disabled-test: data-section-mixed-types -->
-<!-- P1.0d.4 floats -->
+<!-- test: data-section-mixed-types -->
 Mixed bool, i64, f64 globals sorted largest-first, no padding.
 
 ```maxon

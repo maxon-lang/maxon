@@ -41,7 +41,7 @@ end 'main'
 ## Tests
 
 <!-- disabled-test: int-literal-to-float-param -->
-<!-- P1.0d.4 floats -->
+<!-- P1.0d.4 wave 2: float ABI (a float PARAMETER needs the xmm arg slots Wave 1 does not model) -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -60,7 +60,7 @@ end 'main'
 ```
 
 <!-- disabled-test: int-var-to-float-param -->
-<!-- P1.0d.4 floats -->
+<!-- P1.0d.4 wave 2: float ABI (a float PARAMETER needs the xmm arg slots Wave 1 does not model) -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -79,8 +79,7 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: float-to-int-param-truncates -->
-<!-- P1.0d.4 floats -->
+<!-- test: float-to-int-param-truncates -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -99,7 +98,7 @@ end 'main'
 ```
 
 <!-- disabled-test: expression-to-float-param -->
-<!-- P1.0d.4 floats -->
+<!-- P1.0d.4 wave 2: float ABI (a float PARAMETER needs the xmm arg slots Wave 1 does not model) -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -120,7 +119,7 @@ end 'main'
 ```
 
 <!-- disabled-test: math-intrinsic-int-promotion -->
-<!-- P1.0d.4 floats -->
+<!-- P1.0d.4 deferred: `sqrt` — the float REGISTER CLASS lands at P1.0d.4, but sqrt/abs/floor/ceil/round are each their own spec file and their own decision (abs needs a 16-byte andpd sign mask; floor/ceil/round need roundsd, i.e. SSE4.1 and a three-byte 0F 3A escape). Unlocked by whichever rung takes specs/math-functions.md. -->
 ```maxon
 function main() returns ExitCode
 	let result = sqrt(16)

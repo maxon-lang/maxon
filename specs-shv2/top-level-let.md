@@ -73,8 +73,7 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: basic-float-constant -->
-<!-- P1.0d.4 floats -->
+<!-- test: basic-float-constant -->
 ```maxon
 let PI = 3.14
 
