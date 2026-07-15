@@ -888,8 +888,17 @@ export let EntryPointName = b"mrt_start"
 // `nameOffset` is relative to the START of the table; the header is `4 + 8*count` bytes.
 export let SymbolTableName = b"__symtable"
 
-let SymbolTableCountBytes = 4  // the leading entry count (u32)
-let SymbolTableEntryBytes = 8  // one entry: codeOffset(u32) + nameOffset(u32)
+// The format's ONE definition. It has TWO parties — `buildSymbolTableBytes` below writes it,
+// and the panic runtime's walker READS it out of the emitted program (X64Runtime's
+// `buildPrintFrameChunk`, whose reader-side offsets are derived from these and from nothing
+// else). That is exactly the shape this project keeps getting burned by: two copies of one
+// layout, agreeing today, with nothing that MAKES them agree. Widen the count here against a
+// walker that still adds 4 and every frame symbolizes to the wrong function — no compile
+// error, no failing assert, just a backtrace that lies.
+export let SymbolTableColumnBytes = 4  // every column is a u32: the count, and each entry field
+export let SymbolTableEntryColumns = 2  // an entry is { codeOffset, nameOffset }
+export let SymbolTableCountBytes = SymbolTableColumnBytes
+export let SymbolTableEntryBytes = SymbolTableColumnBytes * SymbolTableEntryColumns
 
 // `__symtable`'s alignment within `.text`. x64 tolerates unaligned DWORD loads, so this
 // is not a correctness requirement of the reader — it matches the C# emitter's contract
@@ -915,8 +924,19 @@ function buildSymbolTableBytes(symbols DebugSymbolArray) returns ByteArray
 		end 'notAscending'
 		prevOffset = sym.codeOffset
 
+		let entryStart = table.count()
 		writeDword(table, value: sym.codeOffset)
 		writeDword(table, value: headerSize + names.count())
+
+		// These two writes are POSITIONAL — they are the only place an entry's column order
+		// is stated — so this ties them back to the declared width the walker sizes its
+		// stride from. Add a third column without widening `SymbolTableEntryColumns` and the
+		// header arithmetic above silently under-counts, putting every `nameOffset` in the
+		// table out by a multiple of the symbol count.
+		if table.count() - entryStart != SymbolTableEntryBytes 'entryWidth'
+			panic("buildSymbolTableBytes: wrote {table.count() - entryStart} bytes for '{String.from(sym.name)}' but SymbolTableEntryBytes declares {SymbolTableEntryBytes} — the emitted columns and the width the walker strides by have drifted")
+		end 'entryWidth'
+
 		names.append(sym.name)
 		names.push(0)
 	end 'entries'

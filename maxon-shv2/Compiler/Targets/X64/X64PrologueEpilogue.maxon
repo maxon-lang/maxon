@@ -51,8 +51,12 @@
 // arguments (a 7th+ parameter) and real spill slots grow the frame further at their
 // milestones; today `outgoingArgSize` is 0 and `stackSize` is 0 for every function.
 
-// x64 frames keep rsp 16-byte aligned at each call site.
-let StackFrameAlignment = 16
+// x64 frames keep rsp 16-byte aligned at each call site. Exported because the panic
+// runtime lays its own frames by hand (X64Runtime) and must land on the SAME residue: a
+// second `= 16` over there would be this fact written down twice, and the two could only
+// ever disagree silently — a misaligned rsp is not a compile error, it is a crash inside
+// kernel32's SSE, arbitrarily far from whichever copy was wrong.
+export let StackFrameAlignment = 16
 
 // `push rbp` is a push like any other, and the frame arithmetic is the one place that has
 // to know it: it moves rsp by 8 exactly as a callee-saved push does, so it counts toward
@@ -63,7 +67,7 @@ let FramePointerPushCount = 1 as RegCount
 
 // Win64 requires a caller to reserve 32 bytes of SHADOW SPACE below its outgoing args
 // — scratch the callee may use for its first four register parameters. Every function
-// that makes a call reserves it (the same reservation `mrt_start`'s 0x28 folds in).
+// that makes a call reserves it, `mrt_start`'s hand-built 0x20 frame included.
 export let ShadowSpaceBytes = 32 as StackSize
 
 // The custom-ABI callee-saved GPRs, in PUSH order (popped in reverse). The register

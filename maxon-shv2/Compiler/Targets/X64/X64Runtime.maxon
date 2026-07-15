@@ -62,7 +62,11 @@
 // file emits is aligned by construction. That matters more than it looks: kernel32 uses
 // SSE internally, and a misaligned RSP surfaces as a crash deep inside WriteFile rather
 // than anywhere near the mistake.
-let FrameAlignment = 16
+//
+// The alignment itself is `X64PrologueEpilogue.StackFrameAlignment` — the SAME constant the
+// compiled functions' frames are built from, not a local `= 16`. These frames interleave
+// with those on one stack, so they are one fact, and a second copy could only ever drift
+// into a silent misalignment.
 
 // The first outgoing STACK argument sits just above the shadow space. Only `WriteFile`
 // needs one here (its 5th parameter, `lpOverlapped`).
@@ -120,17 +124,32 @@ let FrameOffReturnAddr = 8
 let ReturnAddrSymbolBias = 1
 
 // --- Symbol table reader ---
-// Mirrors the writer in X64Backend (`buildSymbolTableBytes`): count(4), then entries of
-// { codeOffset(4), nameOffset(4) }, then the NUL-terminated names. Named here rather than
-// shared with the writer's constants because these are the READER's view — an offset the
-// emitted machine code carries in a displacement field, not a number the compiler adds up.
-let SymtabOffEntries = 4  // the entry array starts just past the count
-let SymtabEntryOffCodeOffset = 0
-let SymtabEntryOffNameOffset = 4
+// The READER of the format X64Backend's `buildSymbolTableBytes` writes: count(4), then
+// entries of { codeOffset(4), nameOffset(4) }, then the NUL-terminated names.
+//
+// Every offset here is DERIVED from that writer's constants and from nothing else. The two
+// sides are a contract, and the emitter is the party that defines it; a reader that restated
+// `4` and `8` in its own words would be the same layout written down twice, free to disagree
+// the moment either side moved — and the disagreement is not a compile error but a walker
+// striding through the table at the wrong pitch, naming the wrong function for every frame.
+let SymtabOffEntries = SymbolTableCountBytes as Imm32  // the entry array starts just past the count
+let SymtabEntryOffCodeOffset = 0 as Imm32  // an entry's first column
+let SymtabEntryOffNameOffset = SymbolTableColumnBytes as Imm32  // … and its second
 
-// log2 of the 8-byte entry stride: the entry array is indexed by `shl index, 3`, not by a
-// multiply. A SHIFT COUNT, not a size — the two are only interchangeable by accident.
+// log2 of the entry stride: the entry array is indexed by `shl index, 3`, not by a multiply.
+// A SHIFT COUNT, not a size — the two are only interchangeable by accident, so this is the
+// one value that cannot be spelled as a byte count, and `assertSymtabStride` is what keeps
+// it honest against `SymbolTableEntryBytes` rather than trusting the two to stay in step.
 let SymtabEntryShift = 3
+
+// The stride the walker actually indexes by, recomputed from the shift above. Guards the one
+// number in this file that duplicates the writer and cannot be derived from it.
+function assertSymtabStride()
+	let stride = 1 shl SymtabEntryShift
+	if stride != SymbolTableEntryBytes 'strideDrift'
+		panic("assertSymtabStride: the walker strides {stride} bytes per symbol-table entry (shl index, {SymtabEntryShift}) but X64Backend writes {SymbolTableEntryBytes} — the emitter and the walker disagree about the format, and every backtrace would name the wrong function")
+	end 'strideDrift'
+end 'assertSymtabStride'
 
 // --- Hex formatting ---
 // The panic line carries `rip=0x…` paired with `diag_base=0x…` (the runtime address of a
@@ -203,7 +222,7 @@ type X64RuntimeAsm
 	// 16, which is what keeps every `call` in the body aligned (see FrameAlignment).
 	export static function beginFunction(slots StackSize, outgoingStackArgBytes StackSize = 0) returns X64RuntimeAsm
 		let slotAreaBytes = slots * SpillSlotBytes
-		let frameBytes = alignUp(ShadowSpaceBytes + outgoingStackArgBytes + slotAreaBytes, alignment: FrameAlignment)
+		let frameBytes = alignUp(ShadowSpaceBytes + outgoingStackArgBytes + slotAreaBytes, alignment: StackFrameAlignment)
 
 		// The prologue is emitted into the buffer BEFORE the struct owns it — `Self{…}` is
 		// then a single immutable construction rather than a build-then-mutate.
@@ -491,6 +510,7 @@ function buildPrintFrameChunk() returns FunctionCodeChunk
 	let SlotCount = 2
 	let SlotIndex = 3
 	let SlotBestName = 4
+	assertSymtabStride()
 	var asm = X64RuntimeAsm.beginFunction(5)
 
 	let lookup = asm.newLabel()
