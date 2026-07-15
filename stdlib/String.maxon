@@ -33,6 +33,19 @@ typealias AsciiCaseDelta = int(-32 to 32)
 
 export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterable with (Character, StringIterator), Cloneable
 	typealias ByteMemory = __ManagedMemory with Byte
+
+	/// The raw bytes. This is the UNSAFE DOOR, and it is the only one: since the envelope collapse a
+	/// `String` IS its `__ManagedMemory`, so `managed` is not a view of the string, it is the string.
+	///
+	/// Reading through it is ordinary — that is what `cstr()` and the `__Builtins.*` intrinsics do.
+	/// WRITING through it reaches past every guarantee this type makes. In particular it is the one
+	/// way to break `toByteArray`'s independence: a view that has not yet been written is still
+	/// sharing these bytes, and a write here shows through it. Nothing in the stdlib writes through a
+	/// String's `managed`, and no spec does; every mutation in String's own API (`append`) grows, and
+	/// growing detaches.
+	///
+	/// Stage 4c of the SSO plan removes this field, which closes the hole by construction rather than
+	/// by asking callers to be careful.
 	export var managed as ByteMemory
 	var isAsciiFlag as bool
 
@@ -65,7 +78,19 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 		return String{managed: bytes.managed, isAsciiFlag: isAscii}
 	end 'fromOwnedBytes'
 
-	/// Return the raw UTF-8 bytes as a ByteArray (zero-copy, shares backing memory)
+	/// The UTF-8 bytes as a NEW, INDEPENDENT `ByteArray`. Writing to it never touches this string,
+	/// and this string growing never touches it.
+	///
+	/// The independence is the CONTRACT; the copy-on-write view behind it is an optimisation and
+	/// nothing more. Reads cost nothing and share the bytes; the first write detaches to a private
+	/// buffer. So the source can be ANYTHING — a `.rodata` literal, a fused string, a slice — and
+	/// the answer is the same, which is the point: there is one rule, not a rule per representation.
+	/// (A literal could not share for writes even if we wanted it to: literals are interned, so one
+	/// write through a shared literal would rewrite every other occurrence of it in the program.)
+	///
+	/// This comment used to read "zero-copy, shares backing memory", unqualified, and that stopped
+	/// being true when the envelope collapse made construction a slice-VIEW — a slice copies on
+	/// write. Nothing caught it because nothing pinned it. `specs/string-type-2` does now.
 	export function toByteArray() returns ByteArray
 		return ByteArray.init(managed)
 	end 'toByteArray'

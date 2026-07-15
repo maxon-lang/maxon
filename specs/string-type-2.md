@@ -767,3 +767,67 @@ end 'main'
 ```stdout
 [1+2]
 ```
+
+<!-- test: tobytearray-is-independent-of-an-owned-source -->
+`toByteArray()` returns a NEW INDEPENDENT `ByteArray`. Writing to it must not touch the string.
+The copy-on-write view behind it is an optimisation, not the contract.
+```maxon
+function main() returns ExitCode
+	let who = "ello"
+	let s = "H{who}"
+	var arr = s.toByteArray()
+	try arr.set(0, value: 74) otherwise panic("set")
+	let b0 = try arr.get(0) otherwise panic("get")
+	print("s={s} arr[0]={b0}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+s=Hello arr[0]=74
+```
+
+<!-- test: tobytearray-is-independent-of-a-literal-source -->
+The source can be ANYTHING and the rule does not change — including a static literal, where sharing
+for writes is not merely undesirable but impossible: literals are interned, so `a` and `b` here are
+ONE immortal object in read-only `.rodata`. A shared write would rewrite `b` too, and fault first.
+```maxon
+function main() returns ExitCode
+	let a = "Hello"
+	let b = "Hello"
+	var arr = a.toByteArray()
+	try arr.set(0, value: 74) otherwise panic("set")
+	let b0 = try arr.get(0) otherwise panic("get")
+	print("a={a} b={b} arr[0]={b0}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+a=Hello b=Hello arr[0]=74
+```
+
+<!-- test: tobytearray-survives-the-source-growing -->
+The independence runs both ways: growing the STRING after taking the bytes must not disturb them.
+`append` detaches the string to a fresh buffer, and the array keeps the bytes it was given.
+```maxon
+function main() returns ExitCode
+	let who = "ello"
+	var s = "H{who}"
+	let arr = s.toByteArray()
+	s.append("!!!")
+	let b0 = try arr.get(0) otherwise panic("get")
+	print("s={s} arr.count={arr.count()} arr[0]={b0}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+s=Hello!!! arr.count=5 arr[0]=72
+```
