@@ -8069,37 +8069,11 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       return value;
     }
 
-    var valueKind = DetermineValueKind(value);
-    var expectedKind = returnType.ToValueKind();
-
-    // Constants-enum → backing-type coercion. A constants-enum returned where a
-    // numeric primitive is declared (`return JsonByte.lBracket` from a `Byte`
-    // function) coerces to its raw backing value, mirroring the argument-side
-    // coercion. Extract the raw value, then fall through so the kind check /
-    // widening cast below applies to the extracted kind. Without this, the
-    // `IsWideningCast(Enum, …)` call below has no Enum arm and throws E9001.
-    if (valueKind == MaxonValueKind.Enum && IsNumericPrimitiveKind(expectedKind)
-        && TryCoerceConstantsToBackingType(value, out var coercedRaw, out var coercedBackingKind)
-        && coercedRaw != null
-        && coercedBackingKind != MaxonValueKind.Struct) {
-      value = coercedRaw;
-      valueKind = coercedBackingKind;
-    }
-
-    // The SAFE guard, not the raw table: a `return` can hand back any kind the language has, and
-    // the table only answers for the numeric ones. `return dbl` from an Integer function reached
-    // the raw table and died with an E9001 "Unhandled cast combination: Function -> Integer" — an
-    // INTERNAL error, naming no source position, for a plain type error the throw below already
-    // words correctly. The Enum arm of this same hazard is what the coercion above exists for.
-    if (valueKind == expectedKind || IsWideningCastSafe(valueKind, expectedKind))
-      return value;
-    // Float literals are F64; allow narrowing to F32 ranged types (range check validates)
-    if (valueKind == MaxonValueKind.Float && expectedKind == MaxonValueKind.Float32)
-      return value;
-
-    throw new CompileError(ErrorCode.SemanticTypeMismatch,
-      $"Cannot return '{KindToTypeName(valueKind)}' from function declared to return '{KindToTypeName(expectedKind)}'",
-      returnToken.Line, returnToken.Column);
+    // Returning into a declared return type asks the same question an assignment asks — "may this
+    // value be represented in a place of this kind?" — so it is decided by the same code.
+    return CoerceValueToExpectedKind(value, returnType.ToValueKind(),
+      returnToken.Line, returnToken.Column,
+      (actual, expected) => $"Cannot return '{actual}' from function declared to return '{expected}'");
   }
 
   private MaxonValue CheckReturnRange(MaxonValue value, Token returnToken) {
@@ -9522,17 +9496,26 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         nameToken.Line, nameToken.Column);
     }
 
+    // A local and a global differ ONLY in where the store lands. The type rule and its diagnostic
+    // are therefore decided once, here, for both: when they were decided separately a local looked
+    // like it re-inferred its type (readers forward the SSA value, so `x = "hi"` "worked") while a
+    // global could not (a typed load uses the DECLARED kind, so the same store read a String pointer
+    // back as an int). One fact, one decision, one answer.
+    var (declaredKind, declaredTypeName, place) = resolved switch {
+      ResolvedVar.Global(var g) => ((MaxonValueKind, string?, string))(g.Kind, g.TypeName, $"global '{name}'"),
+      ResolvedVar.Local(var l) => (l.Kind, l.StructTypeName, $"variable '{name}'"),
+      _ => throw new InvalidOperationException($"Unhandled resolved variable kind: {resolved.GetType().Name}")
+    };
+
+    newVal = CoerceAssignedValue(newVal, declaredKind, declaredTypeName, place,
+      nameToken.Line, nameToken.Column);
+
     if (resolved is ResolvedVar.Global(var globalInfo)) {
-      RejectFunctionValueInNonFunctionPlace(newVal, globalInfo.Kind, $"global '{name}'",
-        nameToken.Line, nameToken.Column);
       RejectEscapingCapturingClosure(newVal, $"store a closure that captures in global '{name}'",
         nameToken.Line, nameToken.Column);
       _currentBlock!.AddOp(new MaxonGlobalStoreOp(name, newVal, globalInfo.Kind));
     } else {
       var varInfo = ((ResolvedVar.Local)resolved).Info;
-
-      RejectFunctionValueInNonFunctionPlace(newVal, varInfo.Kind, $"variable '{name}'",
-        nameToken.Line, nameToken.Column);
 
       // A payload binding LOOKS like a plain local but is an alias INTO the enum's heap box:
       // assigning through it writes back (the MaxonEnumPayloadAssignOp below), so it is a
@@ -9574,8 +9557,8 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
     if (_globalVars.TryGetValue(qualifiedName, out var globalInfo)) {
       var newValue = ResolveExprValue(ParseExpression());
-      RejectFunctionValueInNonFunctionPlace(newValue, globalInfo.Kind, $"static '{qualifiedName}'",
-        typeToken.Line, typeToken.Column);
+      newValue = CoerceAssignedValue(newValue, globalInfo.Kind, globalInfo.TypeName,
+        $"static '{qualifiedName}'", typeToken.Line, typeToken.Column);
       RejectEscapingCapturingClosure(newValue,
         $"store a closure that captures in static '{qualifiedName}'",
         typeToken.Line, typeToken.Column);
@@ -9661,16 +9644,17 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     var newValue = ResolveExprValue(ParseExpression());
 
     // The nascent-self slot is written into the struct literal this factory returns, so it
-    // is a field store like any other.
+    // is a field store like any other — including for the type rule.
+    var fieldKind = field.Type.ToValueKind();
+    string? structTypeName = DeclaredTypeNameOf(field.Type);
+
+    newValue = CoerceAssignedValue(newValue, fieldKind, structTypeName,
+      $"field '{fieldToken.Value}' of '{_currentTypeName}'", fieldToken.Line, fieldToken.Column);
+
     RejectCapturingClosureStoredInField(field, newValue, _currentTypeName, fieldToken.Line, fieldToken.Column);
 
-    var fieldKind = field.Type.ToValueKind();
     var slotName = NascentSelfSlotName(fieldToken.Value);
     bool isFirstWrite = _nascentSelfAssignedFields!.Add(fieldToken.Value);
-
-    string? structTypeName = field.Type is IrStructType fst ? fst.Name
-      : field.Type is IrEnumType fut ? fut.Name
-      : null;
 
     _currentBlock!.AddOp(new MaxonAssignOp(slotName, newValue, isDeclaration: isFirstWrite, isMutable: true, fieldKind));
 
@@ -9701,16 +9685,13 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         errorToken.Line, errorToken.Column);
     }
 
-    // Phase A auto-widening: if the field is a numeric primitive whose kind is
-    // wider than the RHS value's kind, promote the RHS first so the store sees
-    // the field's declared kind. Same-kind / non-widening combinations pass
-    // through unchanged.
-    var newValueKind = DetermineValueKind(newValue);
-    var fieldKind = field.Type.ToValueKind();
-    if (newValueKind != fieldKind
-        && IsWideningCastSafe(newValueKind, fieldKind)) {
-      newValue = PromoteValue(newValue, fieldKind);
-    }
+    // A field is a place with a declared type, so it obeys the same rule a variable does: widen
+    // what may be widened, refuse the rest. This site used to carry only the widening HALF of that
+    // rule — a mismatch it could not widen was stored anyway, so `p.x = "hello"` into an Integer
+    // field compiled clean and printed a raw heap pointer. Half a rule reads exactly like a whole
+    // one until you look for the branch that is missing.
+    newValue = CoerceAssignedValue(newValue, field.Type.ToValueKind(), DeclaredTypeNameOf(field.Type),
+      $"field '{fieldToken.Value}' of '{structTypeName}'", fieldToken.Line, fieldToken.Column);
 
     RejectCapturingClosureStoredInField(field, newValue, structTypeName, fieldToken.Line, fieldToken.Column);
 
@@ -18631,9 +18612,17 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     return (sourceKind, targetKind) switch {
       (MaxonValueKind.Integer, MaxonValueKind.Float) => PromoteIntToFloat(value),
       (MaxonValueKind.Integer, MaxonValueKind.Float32) => PromoteIntToFloat(value),
+      // The narrow integer kinds already occupy an integer register at their sign-extended width,
+      // so widening among them is a no-op on the value — same as (Byte, Integer) below. These two
+      // arms are the ones IsWideningCast calls legal but PromoteValue had no answer for, which made
+      // every caller that trusted the table throw "Unhandled promotion" instead.
       (MaxonValueKind.Byte, MaxonValueKind.Integer) => value,
+      (MaxonValueKind.Byte, MaxonValueKind.Short) => value,
+      (MaxonValueKind.Short, MaxonValueKind.Integer) => value,
       (MaxonValueKind.Byte, MaxonValueKind.Float) => PromoteIntToFloat(value),
       (MaxonValueKind.Byte, MaxonValueKind.Float32) => PromoteIntToFloat(value),
+      (MaxonValueKind.Short, MaxonValueKind.Float) => PromoteIntToFloat(value),
+      (MaxonValueKind.Short, MaxonValueKind.Float32) => PromoteIntToFloat(value),
       (MaxonValueKind.Float32, MaxonValueKind.Float) => EmitCast(value, MaxonValueKind.Float),
       _ => throw new InvalidOperationException($"Unhandled promotion: {sourceKind} -> {targetKind}")
     };
@@ -19433,8 +19422,17 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   }
 
   /// <summary>
-  /// Refuses a function VALUE stored in a place that is not function-typed — `slot = dbl` where
-  /// `slot` holds an Integer.
+  /// Decides whether <paramref name="value"/> may occupy a place of <paramref name="expectedKind"/>,
+  /// and returns the value to actually store there — the one place that answers "may this value be
+  /// represented here?" for assignments and returns alike.
+  ///
+  /// It COERCES rather than merely permitting, and that is the point. A place's type and the kind of
+  /// the value sitting in it were two separate facts, and nothing made them agree: an assignment
+  /// recorded the DECLARED kind while every reader forwarded the value's OWN kind, so a widening that
+  /// was legal but unapplied left `var f = 1.5; f = 5` printing "5" instead of "5.0", and
+  /// `return 5` from a float function handing back 0.0. Promoting here means the stored value always
+  /// carries the declared kind, so the declaration stays the single source of truth and the value's
+  /// kind becomes a fact derived from it rather than a second opinion.
   ///
   /// This is a TYPE rule and nothing more, which is why it is not
   /// <see cref="RejectEscapingCapturingClosure"/>'s business and does not share its code: it fires
@@ -19449,17 +19447,89 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// simply a type mismatch. It is E3005 because E3005 already means exactly this ("a value's type
   /// does not match the type required at this position"), and it is the code the argument-passing
   /// path has always raised for the very same mistake one line away.
+  ///
+  /// <paramref name="describeMismatch"/> receives (actual, expected) type names and words the
+  /// rejection for the caller's syntax; the decision itself lives here and only here.
   /// </summary>
-  private void RejectFunctionValueInNonFunctionPlace(
-      MaxonValue value, MaxonValueKind targetKind, string place, int line, int column) {
-    if (DetermineValueKind(value) != MaxonValueKind.Function) return;
-    if (targetKind == MaxonValueKind.Function) return;
+  private MaxonValue CoerceValueToExpectedKind(
+      MaxonValue value, MaxonValueKind expectedKind, int line, int column,
+      Func<string, string, string> describeMismatch) {
+    var valueKind = DetermineValueKind(value);
 
-    throw new CompileError(ErrorCode.SemanticTypeMismatch,
-      $"cannot assign a function value to {place}, which holds "
-      + $"'{KindToTypeName(targetKind)}': a function value is only assignable to a place of a "
-      + "function type declared with 'typealias'",
-      line, column);
+    // Constants-enum → backing-type coercion. A constants-enum used where a numeric primitive is
+    // expected (`b = JsonByte.lBracket` into a Byte) coerces to its raw backing value, mirroring
+    // the argument-side coercion. Extract the raw value, then fall through so the kind check and
+    // widening below apply to the extracted kind. Without this, the widening table has no Enum arm.
+    if (valueKind == MaxonValueKind.Enum && IsNumericPrimitiveKind(expectedKind)
+        && TryCoerceConstantsToBackingType(value, out var coercedRaw, out var coercedBackingKind)
+        && coercedRaw != null
+        && coercedBackingKind != MaxonValueKind.Struct) {
+      value = coercedRaw;
+      valueKind = coercedBackingKind;
+    }
+
+    if (valueKind == expectedKind) return value;
+
+    // The SAFE guard, not the raw table: a value of any kind the language has can reach here, and
+    // the table only answers for the numeric ones. Reaching the raw table with a Function or a
+    // Struct died with an E9001 "Unhandled cast combination" — an INTERNAL error, naming no source
+    // position, for a plain type error the throw below words correctly.
+    if (IsWideningCastSafe(valueKind, expectedKind)) return PromoteValue(value, expectedKind);
+
+    // Float literals are F64; allow narrowing to F32 ranged types (the range check validates).
+    if (valueKind == MaxonValueKind.Float && expectedKind == MaxonValueKind.Float32) return value;
+
+    var message = describeMismatch(KindToTypeName(valueKind), KindToTypeName(expectedKind));
+    if (valueKind == MaxonValueKind.Function)
+      message += ": a function value is only usable where a function type declared with 'typealias' "
+        + "is expected";
+
+    throw new CompileError(ErrorCode.SemanticTypeMismatch, message, line, column);
+  }
+
+  /// <summary>
+  /// Applies the assignment type rule — `specs/assignment.md`'s "expression type must match variable
+  /// type". A variable's type is fixed by its DECLARATION and an assignment never re-infers it, so
+  /// this is the rule that makes `var x = 5; x = "hi"` an error rather than a silent retype.
+  ///
+  /// Shared by every simple assignment — local, global and qualified static — because those differ
+  /// only in where the store lands, never in what may be stored.
+  ///
+  /// <paramref name="declaredTypeName"/> is the declared STRUCT or ENUM name where there is one.
+  /// A kind alone cannot separate two structs — `Point` and `Other` are both
+  /// <see cref="MaxonValueKind.Struct"/> — so without it `var p = Point.create(1); p = Other.create(2)`
+  /// passed the kind check and died in the LOWERING as an E9001 internal error ("The given key 'p.x'
+  /// was not present in the dictionary"). Null where the declaration records no name, which is the
+  /// permissive answer: this rule refuses what it can PROVE is a different type, never what it merely
+  /// cannot identify.
+  /// </summary>
+  /// <summary>
+  /// The declared STRUCT or ENUM name carried by a type, or null where the type names no such thing
+  /// (a primitive, a ranged alias, a type parameter). Null is what makes <see cref="CoerceAssignedValue"/>
+  /// permissive rather than wrong when a declaration records no identity to compare against.
+  /// </summary>
+  private static string? DeclaredTypeNameOf(IrType type) => type switch {
+    IrStructType s => s.Name,
+    IrEnumType e => e.Name,
+    _ => null
+  };
+
+  private MaxonValue CoerceAssignedValue(
+      MaxonValue value, MaxonValueKind declaredKind, string? declaredTypeName, string place,
+      int line, int column) {
+    var coerced = CoerceValueToExpectedKind(value, declaredKind, line, column,
+      (actual, expected) => $"cannot assign a value of type '{actual}' to {place}, which holds "
+        + $"'{expected}'");
+
+    if (declaredTypeName != null && coerced is MaxonStruct assignedStruct
+        && !IsStructTypeCompatible(assignedStruct.TypeName, declaredTypeName)) {
+      throw new CompileError(ErrorCode.SemanticTypeMismatch,
+        $"cannot assign a value of type '{assignedStruct.TypeName}' to {place}, which holds "
+        + $"'{declaredTypeName}'",
+        line, column);
+    }
+
+    return coerced;
   }
 
   /// <summary>
