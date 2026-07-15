@@ -56,9 +56,15 @@
 // same discipline that makes a false E5001 the worst bug this compiler can have.
 //
 // COST. The confirmation runs only where the screen fired and the point does NOT overflow the full
-// pool — so `|live| <= |pool| <= RegisterFileSize` there, and the whole search is bounded by 16
-// values × 16 registers. Everything else on the per-op path is the O(16) prefix scan, behind a
-// zero-constrained-values gate.
+// pool — so `|live| <= |pool| <= RegisterFileSize` there, and the whole search is bounded by
+// `RegisterFileSize` values × `RegisterFileSize` registers. Everything else on the per-op path is
+// the prefix scan — bounded by `maxClassPoolSize`, ONE file's pool — behind a zero-constrained-
+// values gate.
+//
+// ⚠ THE BOUNDS ARE NAMED, NOT SPELLED. They read `16 values × 16 registers` while the file was
+// GPR-only, and P1.0d.4 doubled `RegisterFileSize` to 32 without moving them — a bare literal in a
+// comment goes stale in exactly the silence this file's own `FirstXmmRegisterNumber` exists to
+// prevent ("`regClassOf` and both class masks would otherwise each spell a bare 16").
 //
 // THAT BOUND IS ON ONE CALL, AND IT SAYS NOTHING ABOUT HOW OFTEN THE CALL HAPPENS — which is where
 // the cost actually was. Confinement is a property of a value's WHOLE LIVE RANGE, not of the clobber
@@ -471,8 +477,9 @@ end 'valueIdListContains'
 // BOTH halves of that are now gone. `e4146cf8e` made a generic's ranged element type part of its type,
 // so the silent substitution is a compile error (E3005) rather than corruption; and the refill is now
 // `Array.refill`, a METHOD, which is generic over the element type and cannot be handed the wrong
-// width at all. Every value that goes in is a `RegNum` — a register `0..15`, or the `noRegister`
-// sentinel, which is `RegisterFileSize` (16) and exactly why `RegNum`'s bound is 16 and not 15.
+// width at all. Every value that goes in is a `RegNum` — a register `0..RegisterFileSize-1` (GPRs
+// 0-15, XMMs 16-31), or the `noRegister` sentinel, which is `RegisterFileSize` itself and exactly
+// why `RegNum`'s bound is inclusive of it.
 export type HallScratch
 	// value position -> the registers it is allowed (`A(v)`), for THIS point's live list.
 	export var allowed as RegMaskColumn
@@ -507,14 +514,16 @@ end 'HallVerdict'
 // The EXACT verdict for one program point: can the values in `live` be given distinct registers they
 // are each allowed to take?
 //
-// This is a maximum bipartite matching — values on one side, the 16 physical registers on the other,
-// an edge wherever `A(v)` permits. Hall's theorem: the point colours iff the matching SATURATES the
-// values. The DEFICIT is `|live| - |matching|` (König–Ore deficiency), and the witness falls out of
-// the same alternating-path search that proved the matching maximum.
+// This is a maximum bipartite matching — values on one side, the `RegisterFileSize` physical
+// registers on the other, an edge wherever `A(v)` permits. Hall's theorem: the point colours iff the
+// matching SATURATES the values. The DEFICIT is `|live| - |matching|` (König–Ore deficiency), and the
+// witness falls out of the same alternating-path search that proved the matching maximum.
 //
 // It runs only where the cardinality screen already fired AND the point does not overflow the full
-// pool, so `live.count() <= poolSize <= RegisterFileSize`: the search is bounded by 16 values × 16
-// registers and cannot be a hot-path cost.
+// pool, so `live.count() <= poolSize <= RegisterFileSize`: the search is bounded by
+// `RegisterFileSize` values × `RegisterFileSize` registers and cannot be a hot-path cost. (The
+// register side is `valueOfReg`'s width, which is that same constant — spelling it as a literal is
+// what left this paragraph claiming 16 across the rung that made it 32.)
 //
 // It answers FEASIBILITY, not the colorer's CHOICE. The colorer is a dominance-order greedy, exact
 // for this constraint family because it prefers caller-saved registers first (so an unconstrained

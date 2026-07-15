@@ -13057,10 +13057,16 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   ///
   /// The other direction is untouched: int -> float is WIDENING, loses nothing, and stays implicit
   /// (`IsWideningCastSafe` already allows exactly it).
+  ///
+  /// ⚠ THE TARGET TEST IS `IsIntegerFamilyKind` AND MUST STAY THAT WAY — respelling its three
+  /// kinds here is how this very bug comes back. This predicate exists because the integer family
+  /// was written down twice (a call argument's own table vs. `CoerceValueToExpectedKind`) and the
+  /// two disagreed; a second, hand-copied list of the family would restore exactly that, and it
+  /// would restore it SILENTLY: a fourth integer kind added to `IsIntegerFamilyKind` alone would
+  /// make `takeNewInt(3.7)` truncate again with nothing red anywhere.
   /// </remarks>
   private static bool IsLossyFloatToInt(MaxonValueKind source, MaxonValueKind target) =>
-    source is MaxonValueKind.Float or MaxonValueKind.Float32
-      && target is MaxonValueKind.Integer or MaxonValueKind.Byte or MaxonValueKind.Short;
+    source is MaxonValueKind.Float or MaxonValueKind.Float32 && IsIntegerFamilyKind(target);
 
   /// <summary>
   /// The words, written once -- shared by the two coercion paths below, and byte-identical to
