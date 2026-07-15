@@ -1,0 +1,850 @@
+// X64Runtime — the emitted program's PANIC RUNTIME, hand-assembled into `.text`.
+//
+// When the CPU raises `#DE` on `a / 0`, Windows offers the fault to any vectored
+// exception handler BEFORE it kills the process. This file emits that handler and the
+// diagnostic it prints:
+//
+//     panic: integer divide by zero at rip=0x… diag_base=0x…
+//     Stack trace:
+//       in main
+//       in mrt_start
+//
+// The mechanism is the CPU's, not the compiler's: no divisor is ever tested. `idiv`
+// traps for free, and a divide guarded by an explicit `cmp/jz` would cost every division
+// in every program to diagnose the one that faults.
+//
+// WHY HAND-ASSEMBLED BYTES, NOT IR. Everything below is a `FunctionCodeChunk` built by
+// calling X64Backend's encoders directly, rather than a Maxon or Std function the normal
+// pipeline lowers. The Std tier at this milestone has only `arith` and `call` — it cannot
+// load from an address, cannot store to one, and cannot name a machine register — so
+// there is no Std spelling of "read CONTEXT.Rip" or "walk a saved-RBP chain". Growing the
+// Std tier a memory/system band to express six runtime functions is a decision that
+// belongs to R1 (P1.2), where the stdlib cone needs it for its own reasons; making it
+// here, as a side effect of a fault handler, would pre-empt that with the narrowest
+// possible evidence. v1 took the same view for the same code (its `runtime.std` is a
+// hand-written Std module, and its fault THUNK is hand-emitted bytes even so — see
+// X64Backend.maxon:6948).
+//
+// These chunks are appended AFTER the module's own functions, so they are laid out after
+// user code and before `__symtable` (which concat appends last). They are ordinary chunks
+// in every other respect: `call rel32` between them resolves by name, `call [rip]` through
+// the IAT resolves by slot, and `lea r64, [rip + <chunk>]` files a `CallFixup` like a call
+// — a RIP-relative disp32 and a `call rel32` measure from the same place.
+//
+// WHAT IS DELIBERATELY ABSENT, versus v1's `__gt_fault_handler_thunk`:
+//   - No CONTEXT REDIRECT. v1 rewrites the faulting thread's Rip/Rsp/Rbp to resume at a
+//     separate diagnostic function and returns EXCEPTION_CONTINUE_EXECUTION, because on a
+//     STACK OVERFLOW the faulting stack cannot be used to print anything. shv2 converts
+//     only `#DE`, whose stack is intact, so the handler prints on the spot and exits.
+//   - No FAULT GLOBALS. v1 stashes Rip/Rbp/Rsp in `__gt_fault_rip`/`_rbp`/`_rsp` because
+//     the redirect resumes at a function it cannot pass arguments to. Printing in place
+//     means the values stay in this frame and travel as ORDINARY ARGUMENTS — which is
+//     also why `mrt_fault_backtrace` takes three parameters and reads no global. shv2 has
+//     no writable-data-section pipeline, so this deletes a dependency rather than dodging
+//     one.
+//   - No RE-ENTRANCY GUARD. v1 needs `__gt_fault_in_progress` because its diagnostic
+//     resumes on the faulting thread and may fault again. Here, a fault raised inside the
+//     diagnostic could only be an access violation, which this handler declines
+//     (ContinueSearch) — so it cannot recurse into itself.
+//   - No GREEN-THREAD COUPLING. There is no scheduler until P1.5 and no `recover()`, so
+//     there is no `gt` to find and nowhere to resume TO. The handler exits the process.
+//
+// CALLING CONVENTION. Every function here uses the Win64 ABI (args in RCX/RDX/R8/R9),
+// including for its own internal calls — they interleave with kernel32 calls, and one
+// convention throughout is one fewer thing to get wrong. This is NOT Maxon's custom ABI
+// (primary return in R8); nothing here is callable from Maxon source, and `mrt_start`
+// reaches the runtime through `mrt_runtime_init`, which takes no arguments.
+
+// --- Win64 ABI ---
+// The stack pointer must be 16-byte aligned AT a `call`. Every function below opens with
+// `push rbp; mov rbp, rsp; sub rsp, <multiple of 16>`: entry is rsp ≡ 8 (mod 16), the push
+// makes it ≡ 0, and a multiple-of-16 reservation keeps it there — so every `call` this
+// file emits is aligned by construction. That matters more than it looks: kernel32 uses
+// SSE internally, and a misaligned RSP surfaces as a crash deep inside WriteFile rather
+// than anywhere near the mistake.
+let FrameAlignment = 16
+
+// The first outgoing STACK argument sits just above the shadow space. Only `WriteFile`
+// needs one here (its 5th parameter, `lpOverlapped`).
+let FirstStackArgDisp = ShadowSpaceBytes as Imm32
+
+// --- kernel32 ---
+let StdErrorHandle = 0xFFFFFFF4  // (DWORD)-12 — GetStdHandle's STD_ERROR_HANDLE
+let PanicExitCode = 1
+
+// AddVectoredExceptionHandler(First = 1, handler): 1 = call this handler BEFORE any
+// previously registered one.
+let VehHandlerFirst = 1
+
+// A vectored handler's return values. `ContinueSearch` lets the OS's default disposition
+// apply — which for a fault we did not convert is exactly what should happen.
+let VehContinueSearch = 0
+
+// EXCEPTION_INT_DIVIDE_BY_ZERO — the code Windows delivers for the `#DE` that `idiv`
+// raises on a zero divisor. This is the ONLY code this handler converts.
+let ExcCodeIntDivideByZero = 0xC0000094
+
+// EXCEPTION_POINTERS field offsets (the struct RCX points at).
+let ExcPtrsOffExceptionRecord = 0x00
+let ExcPtrsOffContextRecord = 0x08
+
+// EXCEPTION_RECORD.ExceptionCode — a DWORD at offset 0, so it must be read with a 32-bit
+// load. A 64-bit load would drag in the neighbouring ExceptionFlags field; a SIGN-extended
+// read would turn 0xC0000094 into a negative number that matches nothing.
+let ExcRecOffExceptionCode = 0x00
+
+// CONTEXT field offsets (x64). The three registers a backtrace needs.
+let ContextOffRsp = 0x098
+let ContextOffRbp = 0x0A0
+let ContextOffRip = 0x0F8
+
+// --- Frame walking ---
+// Cap on printed frames: a backtrace is a diagnostic, not a transcript, and the cap is
+// also what stops a chain that survives every validity check below from looping forever.
+let MaxBacktraceFrames = 32
+
+// The window above the faulting RSP a frame pointer must lie in to be believed:
+// 64 MiB, larger than any thread stack Windows hands out. A fault that corrupted RBP then
+// yields a SHORT trace instead of a wild read that faults again inside the diagnostic.
+let StackWindowBytes = 0x4000000
+
+// A saved-RBP frame's two words: the caller's saved RBP at [rbp+0], the return address at
+// [rbp+8]. This is the whole reason `1abbe292d` put a frame pointer on every function.
+let FrameOffSavedRbp = 0
+let FrameOffReturnAddr = 8
+
+// A return address points at the instruction AFTER the call, so when that call is a
+// function's LAST instruction the raw address lands at the start of the NEXT function.
+// Biasing by one byte resolves the frame to the calling function. Frame 0 of a FAULT
+// backtrace takes no bias — a faulting RIP already IS the faulting instruction.
+let ReturnAddrSymbolBias = 1
+
+// --- Symbol table reader ---
+// Mirrors the writer in X64Backend (`buildSymbolTableBytes`): count(4), then entries of
+// { codeOffset(4), nameOffset(4) }, then the NUL-terminated names. Named here rather than
+// shared with the writer's constants because these are the READER's view — an offset the
+// emitted machine code carries in a displacement field, not a number the compiler adds up.
+let SymtabOffEntries = 4  // the entry array starts just past the count
+let SymtabEntryOffCodeOffset = 0
+let SymtabEntryOffNameOffset = 4
+
+// log2 of the 8-byte entry stride: the entry array is indexed by `shl index, 3`, not by a
+// multiply. A SHIFT COUNT, not a size — the two are only interchangeable by accident.
+let SymtabEntryShift = 3
+
+// --- Hex formatting ---
+// The panic line carries `rip=0x…` paired with `diag_base=0x…` (the runtime address of a
+// known function) so an operator can subtract out the ASLR slide and resolve the faulting
+// instruction against `llvm-objdump -d`. The spec harness strips from " at rip=0x" to
+// end-of-line, so the FORM is free — 16 fixed zero-padded digits, no leading-zero
+// suppression to get wrong.
+let HexDigitsPerWord = 16
+// log2 of the 4 bits a hex digit carries: `index * 4` is emitted as `shl index, 2`. Spelled
+// as its own constant because a shift COUNT is not a bit-width — deriving one from the other
+// (`bits / 2`) is right for 4-bit digits and silently wrong for any other width.
+let HexBitsPerDigitShift = 2
+let HexTopDigitShift = 60  // (HexDigitsPerWord - 1) * 4 — brings the TOP nibble to bit 0
+let HexNibbleMask = 0xF
+let HexDigitTen = 10  // the nibble at which '0'+n stops working and 'a'+n-10 starts
+let AsciiZero = 0x30
+let AsciiLowerAMinusTen = 0x57  // 'a' - 10, so 'a'..'f' is one `lea` from a 10..15 nibble
+let HexBufferBytes = 17  // 16 digits + the NUL
+
+// --- Runtime function names ---
+// `mrt_` mirrors v1's runtime prefix. These are the names `call rel32` and `lea [rip]`
+// resolve against, and they are ALSO what a backtrace prints, so they are the diagnostic's
+// user-visible vocabulary.
+// `mrt_start` calls this one — the panic runtime's single entry point from module code.
+export let RuntimeInitName = b"mrt_runtime_init"
+let WriteStderrName = b"mrt_write_cstr_stderr"
+let WriteHexName = b"mrt_write_hex64"
+let PrintFrameName = b"mrt_panic_print_frame"
+let WalkFramesName = b"mrt_panic_walk_frames"
+let FaultBacktraceName = b"mrt_fault_backtrace"
+let FaultThunkName = b"mrt_fault_thunk"
+
+// ==========================================================================
+// The chunk assembler
+// ==========================================================================
+
+typealias RuntimeStringLabelMap = Map with (ByteArray, BlockId)
+typealias RuntimeStringLabelArray = Array with BlockId
+typealias RuntimeStringBytesArray = Array with ByteArray
+
+// Assembles ONE hand-written runtime function into a FunctionCodeChunk: the buffers an
+// emitter needs, a label allocator for its branches and strings, and the frame contract.
+//
+// It carries no per-instruction methods on purpose. X64Backend's encoders are the
+// instruction vocabulary and they are called directly (`encodeRmRegDirect(asm.code,
+// opcode: OpcodeMovRmReg, …)`); a method per instruction would be a wrapper whose whole
+// body is one call with a constant swapped, which is the same objection X64Backend already
+// makes to a `encodeMov`/`encodeSub`/`encodeCmp` family. What lives here is only what
+// needs STATE: labels, the string pool, and the frame.
+type X64RuntimeAsm
+	export var code as ByteArray
+	export var callFixups as CallFixupArray
+	export var iatRelocs as RelocationArray
+	export var rel32Fixups as ChunkRel32FixupArray
+	export var labelOffsets as ChunkLabelOffsetMap
+	export var nextLabel as BlockId
+	// Strings are laid down at the END of the chunk, past the `ret`, so they are data the
+	// function can address but never execute. Deduped by content within the chunk.
+	export var stringLabelOf as RuntimeStringLabelMap
+	export var stringLabels as RuntimeStringLabelArray
+	export var stringBytes as RuntimeStringBytesArray
+	export var frameBytes as StackSize
+	export var slotAreaBytes as StackSize
+
+	// Open a function: allocate its frame and emit `push rbp; mov rbp, rsp; sub rsp, N`.
+	//
+	// `slots` is how many 8-byte locals the body needs; `outgoingStackArgBytes` is space for
+	// call arguments BEYOND the four the Win64 ABI passes in registers. The frame is laid
+	// out from the bottom up — shadow space, outgoing args, then the slots — and rounded to
+	// 16, which is what keeps every `call` in the body aligned (see FrameAlignment).
+	export static function beginFunction(slots StackSize, outgoingStackArgBytes StackSize = 0) returns X64RuntimeAsm
+		let slotAreaBytes = slots * SpillSlotBytes
+		let frameBytes = alignUp(ShadowSpaceBytes + outgoingStackArgBytes + slotAreaBytes, alignment: FrameAlignment)
+
+		// The prologue is emitted into the buffer BEFORE the struct owns it — `Self{…}` is
+		// then a single immutable construction rather than a build-then-mutate.
+		var code = ByteArray.create()
+		encodePushReg(code, reg: X64Register.rbp)
+		encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: X64Register.rbp, src: X64Register.rsp, wide: true)
+		encodePrologue(code, stackSize: frameBytes)
+
+		return Self{
+			code: code,
+			callFixups: CallFixupArray.create(),
+			iatRelocs: RelocationArray.create(),
+			rel32Fixups: ChunkRel32FixupArray.create(),
+			labelOffsets: ChunkLabelOffsetMap.create(),
+			nextLabel: 0,
+			stringLabelOf: RuntimeStringLabelMap.create(),
+			stringLabels: RuntimeStringLabelArray.create(),
+			stringBytes: RuntimeStringBytesArray.create(),
+			frameBytes: frameBytes,
+			slotAreaBytes: slotAreaBytes
+		}
+	end 'beginFunction'
+
+	// Close a function: the epilogue (the exact mirror of the prologue — `add rsp` undoes
+	// the `sub`, `pop rbp` the `push`, so rsp comes home by balanced arithmetic), the `ret`,
+	// then the string pool, then resolve every chunk-local rel32 now that all of it is
+	// placed. Neither the epilogue nor `ret` touches RAX, so a function's return value
+	// survives them.
+	//
+	// ONE exit per function, by construction: an early-out branches to a label placed just
+	// before this epilogue rather than emitting a second one.
+	export function finishFunction(name ByteArray) returns FunctionCodeChunk
+		encodeEpilogue(self.code, stackSize: self.frameBytes)
+		encodePopReg(self.code, reg: X64Register.rbp)
+		self.code.push(OpcodeRet)
+
+		for (iter, bytes) in self.stringBytes.withIterator() 'strings'
+			let label = try self.stringLabels.get(iter.index()) otherwise panic("finishFunction: stringLabels and stringBytes are appended together in stringLabel(), so index {iter.index()} must exist in both")
+			self.placeLabel(label)
+			self.code.append(bytes)
+			self.code.push(0)  // the NUL every consumer here scans for
+		end 'strings'
+
+		resolveChunkRel32Fixups(self.code, labelOffsets: self.labelOffsets, rel32Fixups: self.rel32Fixups)
+
+		return FunctionCodeChunk.createWith(name, code: self.code, callFixups: self.callFixups, rdataRelocs: RdataRelocationArray.create(), iatRelocs: self.iatRelocs, rdataConstants: GlobalDataTable.create())
+	end 'finishFunction'
+
+	// Mint a fresh chunk-local label id.
+	export function newLabel() returns BlockId
+		let id = self.nextLabel
+		self.nextLabel = id + 1
+		return id
+	end 'newLabel'
+
+	// Fix `label` at the current offset. Every branch to it — already emitted or not — is
+	// patched by `finishFunction`.
+	export function placeLabel(label BlockId)
+		self.labelOffsets.upsert(label, value: self.code.count())
+	end 'placeLabel'
+
+	// The label of a NUL-terminated string constant in this chunk, laying it out on first
+	// use. Deduped by content: two `lea`s of the same bytes share one copy.
+	export function stringLabel(bytes ByteArray) returns BlockId
+		let existing = try self.stringLabelOf.get(bytes) otherwise 'fresh'
+			let label = self.newLabel()
+			self.stringLabelOf.upsert(bytes, value: label)
+			self.stringLabels.push(label)
+			self.stringBytes.push(bytes)
+			return label
+		end 'fresh'
+		return existing
+	end 'stringLabel'
+
+	// The `[rbp + disp]` displacement of local slot `index`. Slots grow DOWNWARD from rbp,
+	// so they occupy the top of the frame and can never collide with the shadow space or an
+	// outgoing argument at the bottom — which a callee is free to clobber.
+	export function slotDisp(index StackSize) returns Imm32
+		let offset = (index + 1) * SpillSlotBytes
+		if offset > self.slotAreaBytes 'outOfFrame'
+			panic("X64RuntimeAsm.slotDisp: slot {index} needs {offset} bytes but the frame reserved only {self.slotAreaBytes} — `beginFunction` was asked for too few slots")
+		end 'outOfFrame'
+		return (0 - offset) as Imm32
+	end 'slotDisp'
+end 'X64RuntimeAsm'
+
+// ==========================================================================
+// Shared emit fragments
+// ==========================================================================
+
+// `cmp reg, imm` — the zero/constant test every guard below is written in terms of. x64's
+// group-1 immediate is SIGN-extended to 64 bits, which is what makes `cmp rax, -1` (the
+// "no symbol found" marker) compare against the full-width value and not 0x00000000FFFFFFFF.
+function emitCmpRegImm(asm X64RuntimeAsm, reg X64Register, imm Imm32)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtCmp, reg: reg, imm: imm)
+end 'emitCmpRegImm'
+
+// `lea dest, [rip + <string>]` — load the address of a chunk-local string constant.
+function emitLeaString(asm X64RuntimeAsm, dest X64Register, bytes ByteArray)
+	encodeLeaRegLabel(asm.code, rel32Fixups: asm.rel32Fixups, dest: dest, targetLabel: asm.stringLabel(bytes), site: PatchSite.x64RuntimeLabelDisp32)
+end 'emitLeaString'
+
+// Print a chunk-local string constant: `lea rcx, [rip + s]; call mrt_write_cstr_stderr`.
+// The single most repeated three lines in this file.
+function emitPrintString(asm X64RuntimeAsm, bytes ByteArray)
+	emitLeaString(asm, dest: X64Register.rcx, bytes: bytes)
+	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: WriteStderrName)
+end 'emitPrintString'
+
+// `dest = <the runtime address of `mrt_start`>` — the backtrace's `text_base`. Every
+// symbolizable address is expressed relative to it, and concat asserts it is the FIRST
+// chunk in `.text` so that offset can never be negative.
+function emitLeaTextBase(asm X64RuntimeAsm, dest X64Register)
+	encodeLeaRegFuncAddr(asm.code, callFixups: asm.callFixups, dest: dest, targetName: EntryPointName)
+end 'emitLeaTextBase'
+
+// `dest = <the runtime address of `__symtable`>`. Doubles as the `.text` upper bound:
+// concat lays the table down immediately after the last function, so `__symtable -
+// mrt_start` IS the size of the code.
+function emitLeaSymtable(asm X64RuntimeAsm, dest X64Register)
+	encodeLeaRegFuncAddr(asm.code, callFixups: asm.callFixups, dest: dest, targetName: SymbolTableName)
+end 'emitLeaSymtable'
+
+// Emit the two bounds checks that decide whether `addrReg` (already reduced to a `.text`
+// offset) names code this image can symbolize, jumping to `rejectLabel` if not:
+// `0 <= offset < __symtable - mrt_start`. Signed comparisons throughout — a return address
+// into a system DLL lands either below the image (negative) or far above the code, and both
+// ends must reject. `scratchA`/`scratchB` are clobbered.
+//
+// Shared by the walker (which applies it to every return address) and the fault backtrace
+// (which applies it to the faulting RIP), because "is this offset inside our code" is one
+// question and a second copy of it could answer differently.
+function emitTextBoundsGuard(asm X64RuntimeAsm, offsetReg X64Register, scratchA X64Register, scratchB X64Register, textBaseSlot StackSize, symtableSlot StackSize, rejectLabel BlockId)
+	emitCmpRegImm(asm, reg: offsetReg, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.less, targetBlockId: rejectLabel)
+
+	encodeLoadRegBaseDisp(asm.code, destReg: scratchA, base: X64Register.rbp, disp: asm.slotDisp(symtableSlot), wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: scratchB, base: X64Register.rbp, disp: asm.slotDisp(textBaseSlot), wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeSubRmReg, dest: scratchA, src: scratchB, wide: true)  // scratchA = textSize
+	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: offsetReg, src: scratchA, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.greaterEqual, targetBlockId: rejectLabel)
+end 'emitTextBoundsGuard'
+
+// ==========================================================================
+// mrt_write_cstr_stderr(rcx = NUL-terminated string)
+// ==========================================================================
+
+// Write a C string to stderr. The emitted program links no CRT — there is no `fprintf`,
+// and stderr is a HANDLE you ask kernel32 for — so this is `GetStdHandle(-12)` plus
+// `WriteFile`, with the length measured here because a C string does not carry one.
+//
+// Slots: 0 = cstr, 1 = length, 2 = WriteFile's lpNumberOfBytesWritten out-param.
+// One outgoing stack argument: WriteFile's 5th parameter (lpOverlapped).
+function buildWriteStderrChunk() returns FunctionCodeChunk
+	let SlotCstr = 0
+	let SlotLength = 1
+	let SlotWritten = 2
+	var asm = X64RuntimeAsm.beginFunction(3, outgoingStackArgBytes: 8)
+
+	let lenLoop = asm.newLabel()
+	let lenDone = asm.newLabel()
+	let done = asm.newLabel()
+
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotCstr), srcReg: X64Register.rcx)
+
+	// strlen: walk a cursor to the NUL, then subtract. RCX holds the string start untouched
+	// across the loop, so the subtraction needs no second slot.
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rax, src: X64Register.rcx, wide: true)
+	asm.placeLabel(lenLoop)
+	encodeMovzxRegByteBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rax, disp: 0)
+	emitCmpRegImm(asm, reg: X64Register.rdx, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: lenDone)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rax, base: X64Register.rax, disp: 1)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: lenLoop)
+	asm.placeLabel(lenDone)
+	encodeRmRegDirect(asm.code, opcode: OpcodeSubRmReg, dest: X64Register.rax, src: X64Register.rcx, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotLength), srcReg: X64Register.rax)
+
+	// An empty string is a no-op — WriteFile with a zero count is legal but pointless, and
+	// skipping it keeps the empty case from depending on that.
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: done)
+
+	// GetStdHandle(STD_ERROR_HANDLE). The parameter is a DWORD, so the 32-bit `mov` — which
+	// zero-extends — puts exactly (DWORD)-12 in ECX.
+	encodeMovRegImm32(asm.code, dest: X64Register.rcx, value: StdErrorHandle)
+	encodeIatCall(asm.code, iatRelocs: asm.iatRelocs, slotIndex: iatSlotIndex(IatSlot.GetStdHandle))
+
+	// WriteFile(handle, cstr, length, &written, NULL)
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rcx, src: X64Register.rax, wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotCstr), wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r8, base: X64Register.rbp, disp: asm.slotDisp(SlotLength), wide: true)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.r9, base: X64Register.rbp, disp: asm.slotDisp(SlotWritten))
+	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rsp, disp: FirstStackArgDisp, srcReg: X64Register.rax)
+	encodeIatCall(asm.code, iatRelocs: asm.iatRelocs, slotIndex: iatSlotIndex(IatSlot.WriteFile))
+
+	asm.placeLabel(done)
+	return asm.finishFunction(WriteStderrName)
+end 'buildWriteStderrChunk'
+
+// ==========================================================================
+// mrt_write_hex64(rcx = value)
+// ==========================================================================
+
+// Print `value` as 16 zero-padded lowercase hex digits. Formats into a frame buffer and
+// hands it to `mrt_write_cstr_stderr` — one WriteFile, not sixteen.
+//
+// Slots: 0 = value, 1 = digit index, 2..4 = the 17-byte output buffer.
+function buildWriteHexChunk() returns FunctionCodeChunk
+	let SlotValue = 0
+	let SlotIndex = 1
+	let SlotBuffer = 2
+	let bufferSlots = alignUp(HexBufferBytes, alignment: SpillSlotBytes) / SpillSlotBytes
+	var asm = X64RuntimeAsm.beginFunction(SlotBuffer + bufferSlots)
+
+	let loop = asm.newLabel()
+	let loopDone = asm.newLabel()
+	let isDigit = asm.newLabel()
+	let store = asm.newLabel()
+
+	// The buffer occupies slots SlotBuffer.. upward in memory, so its first byte is at the
+	// LOWEST of them — slots grow downward from rbp, so that is the LAST slot index.
+	let bufferDisp = asm.slotDisp(SlotBuffer + bufferSlots - 1)
+
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotValue), srcReg: X64Register.rcx)
+	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotIndex), srcReg: X64Register.rax)
+
+	asm.placeLabel(loop)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotIndex), wide: true)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: HexDigitsPerWord)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.greaterEqual, targetBlockId: loopDone)
+
+	// nibble = (value shr (60 - 4*index)) and 0xF — most significant digit first.
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotValue), wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.r8, src: X64Register.rax, wide: true)
+	encodeGrp2RegImm8(asm.code, ext: Grp2ExtShl, reg: X64Register.r8, count: HexBitsPerDigitShift)
+	encodeMovRegImm32(asm.code, dest: X64Register.rcx, value: HexTopDigitShift)
+	encodeRmRegDirect(asm.code, opcode: OpcodeSubRmReg, dest: X64Register.rcx, src: X64Register.r8, wide: true)
+	// SHR, not SAR: these are the raw bits of an address, not a signed quantity — an
+	// arithmetic shift would smear the top bit across every digit of a high address.
+	encodeGrp2RegCl(asm.code, ext: Grp2ExtShr, reg: X64Register.rdx)
+	encodeGrp1RegImm32(asm.code, ext: Grp1ExtAnd, reg: X64Register.rdx, imm: HexNibbleMask)
+
+	emitCmpRegImm(asm, reg: X64Register.rdx, imm: HexDigitTen)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.less, targetBlockId: isDigit)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rdx, base: X64Register.rdx, disp: AsciiLowerAMinusTen)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: store)
+	asm.placeLabel(isDigit)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rdx, base: X64Register.rdx, disp: AsciiZero)
+
+	asm.placeLabel(store)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.r9, base: X64Register.rbp, disp: bufferDisp)
+	encodeLeaRegRegReg(asm.code, dest: X64Register.r9, base: X64Register.r9, index: X64Register.rax)
+	encodeStoreBaseDispReg8(asm.code, base: X64Register.r9, disp: 0, srcReg: X64Register.rdx)
+
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rax, base: X64Register.rax, disp: 1)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotIndex), srcReg: X64Register.rax)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: loop)
+
+	asm.placeLabel(loopDone)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.r9, base: X64Register.rbp, disp: bufferDisp)
+	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
+	encodeStoreBaseDispReg8(asm.code, base: X64Register.r9, disp: HexDigitsPerWord, srcReg: X64Register.rax)
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rcx, src: X64Register.r9, wide: true)
+	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: WriteStderrName)
+
+	return asm.finishFunction(WriteHexName)
+end 'buildWriteHexChunk'
+
+// ==========================================================================
+// mrt_panic_print_frame(rcx = text_offset, rdx = symtable_ptr)
+// ==========================================================================
+
+// Print one frame as `  in <name>\n`, resolving `text_offset` through the symbol table.
+// A linear scan keeping the LAST entry whose codeOffset is <= text_offset — which is the
+// GREATEST such entry because the table ascends (asserted where it is built). Ports v1's
+// `mrt_panic_print_frame` (runtime.std:1794-1885).
+//
+// Slots: 0 = text_offset, 1 = symtable_ptr, 2 = count, 3 = index, 4 = best name offset.
+function buildPrintFrameChunk() returns FunctionCodeChunk
+	let SlotTextOffset = 0
+	let SlotSymtable = 1
+	let SlotCount = 2
+	let SlotIndex = 3
+	let SlotBestName = 4
+	var asm = X64RuntimeAsm.beginFunction(5)
+
+	let lookup = asm.newLabel()
+	let next = asm.newLabel()
+	let lookupDone = asm.newLabel()
+	let unknown = asm.newLabel()
+	let newline = asm.newLabel()
+
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotTextOffset), srcReg: X64Register.rcx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotSymtable), srcReg: X64Register.rdx)
+
+	emitPrintString(asm, bytes: b"  in ")
+
+	// count = *(u32*)symtable — a 32-bit load, which zero-extends. v1 loads 8 bytes and
+	// masks; the narrow load is the same value in one instruction.
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotSymtable), wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rax, disp: 0, wide: false)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotCount), srcReg: X64Register.rax)
+
+	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotIndex), srcReg: X64Register.rax)
+	// -1 = "no symbol matched yet". A real nameOffset is a u32 read from the table, so it
+	// can never collide with this.
+	encodeMovRegImm64(asm.code, dest: X64Register.rax, value: u64.max)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotBestName), srcReg: X64Register.rax)
+
+	asm.placeLabel(lookup)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotIndex), wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotCount), wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.rax, src: X64Register.rdx, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.greaterEqual, targetBlockId: lookupDone)
+
+	// entry = symtable + 4 + index*8
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.r8, src: X64Register.rax, wide: true)
+	encodeGrp2RegImm8(asm.code, ext: Grp2ExtShl, reg: X64Register.r8, count: SymtabEntryShift)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r9, base: X64Register.rbp, disp: asm.slotDisp(SlotSymtable), wide: true)
+	encodeLeaRegRegReg(asm.code, dest: X64Register.r9, base: X64Register.r9, index: X64Register.r8)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.r9, base: X64Register.r9, disp: SymtabOffEntries)
+
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.r9, disp: SymtabEntryOffCodeOffset, wide: false)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotTextOffset), wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.rdx, src: X64Register.rax, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.less, targetBlockId: next)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.r9, disp: SymtabEntryOffNameOffset, wide: false)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotBestName), srcReg: X64Register.rax)
+
+	asm.placeLabel(next)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotIndex), wide: true)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rax, base: X64Register.rax, disp: 1)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotIndex), srcReg: X64Register.rax)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: lookup)
+
+	asm.placeLabel(lookupDone)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotBestName), wide: true)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0 - 1)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: unknown)
+
+	// name_ptr = symtable + best (nameOffset is relative to the table's start)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotSymtable), wide: true)
+	encodeLeaRegRegReg(asm.code, dest: X64Register.rcx, base: X64Register.rcx, index: X64Register.rax)
+	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: WriteStderrName)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: newline)
+
+	asm.placeLabel(unknown)
+	emitPrintString(asm, bytes: b"<unknown>")
+
+	asm.placeLabel(newline)
+	emitPrintString(asm, bytes: b"\n")
+
+	return asm.finishFunction(PrintFrameName)
+end 'buildPrintFrameChunk'
+
+// ==========================================================================
+// mrt_panic_walk_frames(rcx = start_frame, rdx = stack_low, r8 = stack_high)
+// ==========================================================================
+
+// Walk the saved-RBP chain from `start_frame`, printing up to 32 symbolized frames.
+//
+// ONE walker, two callers, distinguished by `stack_high` — v1's design (runtime.std:
+// 1548-1700), and the reason it is one function and not two: `stack_high == 0` trusts the
+// chain (a SOFTWARE panic, whose frames it built itself), while a non-zero `stack_high`
+// additionally requires every frame pointer to lie in [stack_low, stack_high) and to
+// STRICTLY ASCEND — so a hardware fault that corrupted RBP degrades to a short trace
+// rather than a second fault inside the diagnostic. The C# emitter ships two near-copies
+// of this walk; the difference between them is these two guards.
+//
+// (shv2 has no software `mrt_panic` yet — the `stack_high == 0` arm is unreached until
+// P1.2's `panic()`. It is here because the validated arm is the SAME walk with two extra
+// tests, and splitting them would mean writing the walk twice to save nothing.)
+//
+// Slots: 0 = frame, 1 = stack_low, 2 = stack_high, 3 = counter, 4 = text_base,
+//        5 = symtable, 6 = next frame.
+function buildWalkFramesChunk() returns FunctionCodeChunk
+	let SlotFrame = 0
+	let SlotStackLow = 1
+	let SlotStackHigh = 2
+	let SlotCounter = 3
+	let SlotTextBase = 4
+	let SlotSymtable = 5
+	let SlotNextFrame = 6
+	var asm = X64RuntimeAsm.beginFunction(7)
+
+	let loop = asm.newLabel()
+	let getReturnAddr = asm.newLabel()
+	let advance = asm.newLabel()
+	let done = asm.newLabel()
+
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFrame), srcReg: X64Register.rcx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotStackLow), srcReg: X64Register.rdx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotStackHigh), srcReg: X64Register.r8)
+
+	emitLeaTextBase(asm, dest: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotTextBase), srcReg: X64Register.rax)
+	emitLeaSymtable(asm, dest: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotSymtable), srcReg: X64Register.rax)
+
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: MaxBacktraceFrames)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotCounter), srcReg: X64Register.rax)
+
+	asm.placeLabel(loop)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotCounter), wide: true)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: done)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rax, base: X64Register.rax, disp: 0 - 1)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotCounter), srcReg: X64Register.rax)
+
+	// A null frame pointer ends the chain — `mrt_start`'s saved rbp is whatever the loader
+	// left, which on the initial thread is zero.
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotFrame), wide: true)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: done)
+
+	// stack_high == 0 disables range validation (the software-panic caller).
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotStackHigh), wide: true)
+	emitCmpRegImm(asm, reg: X64Register.rdx, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: getReturnAddr)
+
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotStackLow), wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.rax, src: X64Register.rdx, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.less, targetBlockId: done)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotStackHigh), wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.rax, src: X64Register.rdx, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.greaterEqual, targetBlockId: done)
+
+	asm.placeLabel(getReturnAddr)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotFrame), wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rax, disp: FrameOffReturnAddr, wide: true)
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: done)
+
+	// text_offset = (return_addr - 1) - text_base
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rax, base: X64Register.rax, disp: 0 - ReturnAddrSymbolBias)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotTextBase), wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeSubRmReg, dest: X64Register.rax, src: X64Register.rdx, wide: true)
+	emitTextBoundsGuard(asm, offsetReg: X64Register.rax, scratchA: X64Register.rdx, scratchB: X64Register.r8, textBaseSlot: SlotTextBase, symtableSlot: SlotSymtable, rejectLabel: done)
+
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rcx, src: X64Register.rax, wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotSymtable), wide: true)
+	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: PrintFrameName)
+
+	// next = [frame]
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotFrame), wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rax, disp: FrameOffSavedRbp, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotNextFrame), srcReg: X64Register.rax)
+
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotStackHigh), wide: true)
+	emitCmpRegImm(asm, reg: X64Register.rdx, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: advance)
+
+	// Require next > frame. The stack grows down, so a caller's frame is always at a HIGHER
+	// address; a link that does not ascend is a corrupt chain, and following it would be the
+	// wild read this walk exists to avoid.
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotFrame), wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.rdx, src: X64Register.rax, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.greaterEqual, targetBlockId: done)
+
+	asm.placeLabel(advance)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotNextFrame), wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFrame), srcReg: X64Register.rax)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: loop)
+
+	asm.placeLabel(done)
+	return asm.finishFunction(WalkFramesName)
+end 'buildWalkFramesChunk'
+
+// ==========================================================================
+// mrt_fault_backtrace(rcx = fault_rip, rdx = fault_rbp, r8 = fault_rsp)
+// ==========================================================================
+
+// Print `Stack trace:` and a symbolized backtrace for a hardware fault. Ports v1's
+// `mrt_fault_backtrace` (runtime.std:1702-1780), minus the `gt` lookup — the context
+// arrives as three arguments.
+//
+// Frame 0 is the faulting instruction, symbolized from `fault_rip` with NO bias: a fault
+// RIP already points AT the instruction that trapped, whereas a return address points past
+// its call and needs the -1 (see ReturnAddrSymbolBias). Frames 1..N come from walking the
+// saved-RBP chain, bounded to [fault_rsp, fault_rsp + 64 MiB).
+//
+// Slots: 0 = fault_rip, 1 = fault_rbp, 2 = fault_rsp, 3 = text_base, 4 = symtable.
+function buildFaultBacktraceChunk() returns FunctionCodeChunk
+	let SlotFaultRip = 0
+	let SlotFaultRbp = 1
+	let SlotFaultRsp = 2
+	let SlotTextBase = 3
+	let SlotSymtable = 4
+	var asm = X64RuntimeAsm.beginFunction(5)
+
+	let walk = asm.newLabel()
+
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFaultRip), srcReg: X64Register.rcx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFaultRbp), srcReg: X64Register.rdx)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFaultRsp), srcReg: X64Register.r8)
+
+	emitPrintString(asm, bytes: b"Stack trace:\n")
+
+	emitLeaTextBase(asm, dest: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotTextBase), srcReg: X64Register.rax)
+	emitLeaSymtable(asm, dest: X64Register.rax)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotSymtable), srcReg: X64Register.rax)
+
+	// Frame 0. A fault whose RIP is in a system DLL has no local symbol, so the bounds guard
+	// skips it and the trace starts at the RBP chain instead.
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rbp, disp: asm.slotDisp(SlotFaultRip), wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotTextBase), wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeSubRmReg, dest: X64Register.rax, src: X64Register.rdx, wide: true)
+	emitTextBoundsGuard(asm, offsetReg: X64Register.rax, scratchA: X64Register.rdx, scratchB: X64Register.r8, textBaseSlot: SlotTextBase, symtableSlot: SlotSymtable, rejectLabel: walk)
+
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rcx, src: X64Register.rax, wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotSymtable), wide: true)
+	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: PrintFrameName)
+
+	asm.placeLabel(walk)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotFaultRbp), wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotFaultRsp), wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r8, base: X64Register.rbp, disp: asm.slotDisp(SlotFaultRsp), wide: true)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: StackWindowBytes)
+	encodeLeaRegRegReg(asm.code, dest: X64Register.r8, base: X64Register.r8, index: X64Register.rax)
+	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: WalkFramesName)
+
+	return asm.finishFunction(FaultBacktraceName)
+end 'buildFaultBacktraceChunk'
+
+// ==========================================================================
+// mrt_fault_thunk(rcx = EXCEPTION_POINTERS*)  — the vectored exception handler
+// ==========================================================================
+
+// The callback `AddVectoredExceptionHandler` invokes on a hardware fault, BEFORE the OS
+// applies its default disposition. Win64 ABI: the EXCEPTION_POINTERS in RCX, a LONG back
+// in EAX.
+//
+// It converts EXCEPTION_INT_DIVIDE_BY_ZERO and NOTHING ELSE. Every other code returns
+// EXCEPTION_CONTINUE_SEARCH so the OS still handles it: a fault handler that swallowed
+// faults it was not asked about would turn every unrelated crash into this one's
+// diagnostic. (v1 additionally converts access violation / integer overflow / stack
+// overflow; those arrive with their specs, at their milestones — the classification is one
+// `cmp` per code, not a new mechanism.)
+//
+// Slots: 0 = EXCEPTION_POINTERS*, 1 = fault_rip, 2 = fault_rbp, 3 = fault_rsp.
+function buildFaultThunkChunk() returns FunctionCodeChunk
+	let SlotExcPtrs = 0
+	let SlotFaultRip = 1
+	let SlotFaultRbp = 2
+	let SlotFaultRsp = 3
+	var asm = X64RuntimeAsm.beginFunction(4)
+
+	let continueSearch = asm.newLabel()
+
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotExcPtrs), srcReg: X64Register.rcx)
+
+	// code = *(u32*)(p->ExceptionRecord). The comparand goes through a register: x64's
+	// group-1 immediate is SIGN-extended, so `cmp rax, 0xC0000094` would compare against
+	// 0xFFFFFFFFC0000094 and never match the zero-extended DWORD just loaded.
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rcx, disp: ExcPtrsOffExceptionRecord, wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rax, disp: ExcRecOffExceptionCode, wide: false)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdx, value: ExcCodeIntDivideByZero)
+	encodeRmRegDirect(asm.code, opcode: OpcodeCmpRmReg, dest: X64Register.rax, src: X64Register.rdx, wide: true)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.notEqual, targetBlockId: continueSearch)
+
+	// Stash the faulting Rip/Rbp/Rsp. The faulted frames are still mapped and untouched —
+	// the handler runs on the same thread, BELOW the faulting RSP — so this chain is walkable
+	// exactly as it stands.
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotExcPtrs), wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rcx, disp: ExcPtrsOffContextRecord, wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rax, disp: ContextOffRip, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFaultRip), srcReg: X64Register.rdx)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rax, disp: ContextOffRbp, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFaultRbp), srcReg: X64Register.rdx)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rax, disp: ContextOffRsp, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFaultRsp), srcReg: X64Register.rdx)
+
+	// The panic line. `rip` and `diag_base` together are what recover the ASLR slide; the
+	// harness strips them, an operator reads them.
+	emitPrintString(asm, bytes: b"panic: integer divide by zero at rip=0x")
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotFaultRip), wide: true)
+	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: WriteHexName)
+	emitPrintString(asm, bytes: b" diag_base=0x")
+	emitLeaTextBase(asm, dest: X64Register.rcx)
+	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: WriteHexName)
+	emitPrintString(asm, bytes: b"\n")
+
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotFaultRip), wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotFaultRbp), wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r8, base: X64Register.rbp, disp: asm.slotDisp(SlotFaultRsp), wide: true)
+	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: FaultBacktraceName)
+
+	// ExitProcess(1) — never returns. There is no `recover()` and no scheduler to resume
+	// onto, so a converted fault is terminal.
+	encodeMovRegImm32(asm.code, dest: X64Register.rcx, value: PanicExitCode)
+	encodeIatCall(asm.code, iatRelocs: asm.iatRelocs, slotIndex: iatSlotIndex(IatSlot.ExitProcess))
+
+	// Falls through: unreachable after ExitProcess, and the single `ret` every other code
+	// reaches directly.
+	asm.placeLabel(continueSearch)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: VehContinueSearch)
+
+	return asm.finishFunction(FaultThunkName)
+end 'buildFaultThunkChunk'
+
+// ==========================================================================
+// mrt_runtime_init()
+// ==========================================================================
+
+// Register the fault handler. `mrt_start` calls this before `main`, so the very first
+// instruction of user code is already covered.
+//
+// It exists as its own function because `mrt_start` is built from TargetOps, and the Target
+// tier has no op for "the address of a function" — the argument `AddVectoredExceptionHandler`
+// needs. Rather than mint a TargetOp variant for one hand-built call site (a new variant has
+// to be band-appended, and every `match` over the union pays for it forever), the address is
+// taken HERE, in a chunk that assembles its own bytes, and `mrt_start` reaches it with the
+// `callDirect` it already has. This is also where the runtime's later prelude lands — v1's
+// `mrt_start` opens with exactly this kind of init sequence.
+function buildRuntimeInitChunk() returns FunctionCodeChunk
+	var asm = X64RuntimeAsm.beginFunction(0)
+
+	encodeMovRegImm32(asm.code, dest: X64Register.rcx, value: VehHandlerFirst)
+	encodeLeaRegFuncAddr(asm.code, callFixups: asm.callFixups, dest: X64Register.rdx, targetName: FaultThunkName)
+	encodeIatCall(asm.code, iatRelocs: asm.iatRelocs, slotIndex: iatSlotIndex(IatSlot.AddVectoredExceptionHandler))
+
+	return asm.finishFunction(RuntimeInitName)
+end 'buildRuntimeInitChunk'
+
+// ==========================================================================
+// Assembly
+// ==========================================================================
+
+// Append every panic-runtime chunk. Called after the module's own functions are encoded, so
+// the runtime lays out above user code; `__symtable` closes `.text` after all of it.
+export function appendX64RuntimeChunks(chunks FunctionCodeChunkArray)
+	chunks.push(buildRuntimeInitChunk())
+	chunks.push(buildFaultThunkChunk())
+	chunks.push(buildFaultBacktraceChunk())
+	chunks.push(buildWalkFramesChunk())
+	chunks.push(buildPrintFrameChunk())
+	chunks.push(buildWriteHexChunk())
+	chunks.push(buildWriteStderrChunk())
+end 'appendX64RuntimeChunks'

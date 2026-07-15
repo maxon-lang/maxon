@@ -12,14 +12,16 @@
 // CodeResult, which is not an IR module, so it does not fit the module-field
 // dispatch model. This mirrors v1, where Phase 7 is backend-direct.
 //
-// THIN for maxon-shv2 M1 (x64-windows only). `augmentWithRuntime` currently
-// installs ONLY the minimal `mrt_start` entry stub + the single `ExitProcess`
-// import — a `return 42` program allocates nothing and spawns nothing, so it
-// carries none of v1's unconditional x64-windows runtime floor (no slab/MM init,
-// no green-thread scheduler, no IOCP, no fault handler). This function is
-// designed to GROW: M6 prepends slab/MM init, Phase F prepends the green-thread
-// scheduler. Linux/macOS/wasi entry stubs + `writeElf`/`writeMachO` dispatch
-// arrive at their milestones.
+// THIN for maxon-shv2 M1 (x64-windows only). `augmentWithRuntime` installs the
+// `mrt_start` entry stub; the PANIC RUNTIME it calls into (the `#DE` fault handler
+// and its symbolized backtrace) is appended as hand-assembled chunks during the
+// encode phase — see `buildBackend` and X64Runtime's header for why it cannot be
+// TargetOps. A `return 42` program still allocates nothing and spawns nothing, so it
+// carries none of the REST of v1's unconditional x64-windows runtime floor (no
+// slab/MM init, no green-thread scheduler, no IOCP). Both halves are designed to
+// GROW: M6 prepends slab/MM init, Phase F the green-thread scheduler.
+// Linux/macOS/wasi entry stubs + `writeElf`/`writeMachO` dispatch arrive at their
+// milestones.
 
 // The user program's entry function — `mrt_start` calls it, then bridges its
 // R8 return value to ExitProcess.
@@ -84,6 +86,11 @@ export function buildBackend(stdModule StdModule, target Target, globalData Glob
 	for func in targetModule.functions 'eachFunc'
 		chunks.push(emitFunctionChunk(targetModule, func: func))
 	end 'eachFunc'
+	// The panic runtime is hand-assembled bytes, not TargetOps, so it joins here rather than
+	// in `augmentWithRuntime` — there is no Std or Target spelling of "read CONTEXT.Rip" or
+	// "walk a saved-RBP chain" at this milestone (see X64Runtime's header). It appends AFTER
+	// user code, which keeps `mrt_start` at `.text` offset 0 where the backtrace needs it.
+	appendX64RuntimeChunks(chunks)
 	recordPhase(project, phase: CompilePhase.encode, probe: encodeProbe)
 
 	let linkProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.link)
@@ -110,6 +117,7 @@ end 'augmentWithRuntime'
 //   push rbp           open the saved-RBP chain (see below)
 //   mov rbp, rsp       … so a backtrace can name mrt_start and then stop
 //   sub rsp, 0x20      reserve shadow space (rsp is already 16-aligned by the push)
+//   call mrt_runtime_init   install the fault handler BEFORE any user code can fault
 //   call main          main returns its ExitCode in R8 (custom ABI)
 //   mov ecx, r8d       hand R8's low 32 bits to ExitProcess's ECX arg (Win64 ABI)
 //   call [ExitProcess] terminate the process with that code
@@ -131,6 +139,7 @@ function prependEntryStub(module TargetModule)
 	module.appendOp(block, op: TargetOp.pushReg(X64Register.rbp))
 	module.appendOp(block, op: framePointerSetupOp())
 	module.appendOp(block, op: TargetOp.prologue(EntryStubFrameBytes))
+	module.appendOp(block, op: TargetOp.callDirect(RuntimeInitName))
 	module.appendOp(block, op: TargetOp.callDirect(UserEntryName))
 	module.appendOp(block, op: TargetOp.movReg32Reg32(X64VReg.physical(X64Register.rcx), srcReg: X64VReg.physical(X64Register.r8)))
 	module.appendOp(block, op: TargetOp.iatCall(iatSlotIndex(IatSlot.ExitProcess)))
