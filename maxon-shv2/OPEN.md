@@ -244,6 +244,55 @@ PROBE**, so a rung that adds a construct should add its **ladder axis**. Until i
 off-instrument and SAY SO.** P1.0d.5a did (400→12,800 constants: **x2.00**; 8→128 files × 50 constants with
 cross-file `export let` — the O(files²) hazard in its live shape: **x2.00**, where the bug reads x4.00).
 
+### 4f. ⭐⭐ `scale-test` CANNOT SEE A TIME-ONLY QUADRATIC — by design, permanently. Say it out loud.
+**P1.0d.5b found a REAL Θ(globals²) that the instrument was structurally incapable of reporting.**
+`GlobalDataTable.sortBySizeDescendingStable` scanned to the first *strictly smaller* entry — and
+`StdTypeInfo.storageBytes` is only **{1,2,4,8}**, so a program whose globals are all one size (**every global
+an `int`** — the ordinary case, not the pathological one) **never stopped early** and rescanned the whole
+placed list per entry. Fixed to **four appends-in-order**, O(n), with a count invariant so a future 16-byte
+type **panics rather than silently dropping a slot**.
+
+**Measured off-instrument, 8000 globals: 619 ms → 166 ms** whole-compile. `layOut`'s bucket:
+**30.2 / 120.3 / 460.3 ms** at n=2000/4000/8000 — **x3.98, x3.83** — → **2.0 / 4.1 / 9.0 ms**.
+
+⚠ **AND ALLOCATIONS AND BYTES WERE EXACTLY x2.00 BOTH BEFORE AND AFTER.** `scale-test` was **bit-for-bit
+identical across the fix.** It collects **memory only**, deliberately — *"time is machine-dependent, so a
+dated table would compare a loaded box in July against an idle one in August; memory is exact and
+bit-for-bit reproducible, and it is the only column where a difference MEANS something."*
+⇒ **A TIME-ONLY superlinearity is invisible to it and always will be.** **This is NOT a defect and NOT a
+reason to add a time column** — it is the price of the property that makes the instrument trustworthy. But
+it is a **limit to state, not rediscover**: `scale-test` answers *"did the memory profile bend?"*, never
+*"is this algorithm linear?"* **For the latter, measure off-instrument and say so.**
+
+⚠ **The comment defending the cost is the real lesson**: *"a program's top-level `var` count is a handful"* —
+**the same appeal to an empirical corpus property that v1's aliasing bug rests on three files away**
+(*"in practice no two file-private vars share a bare name"*). **A complexity defended by what programs
+happen to look like is a bug waiting for a program.**
+
+### 4g. ⚠ Three comments claimed mechanisms that do not exist (found by P1.0d.5b's review)
+Same family as `throws_` being **write-only for its entire life** while a comment claimed *"the runtime
+branches on it"*, and `TargetOpMeta.setsFlags` (written 40× / read 0×), and the `xor reg,reg` idiom the
+lowering never emitted. **Now four instances of "a comment describing a compiler nobody wrote."**
+- ⭐ **`classifyGlobalLabel` has ZERO CALLERS** (`CodeResult.maxon:103-119`) — dead since M1-A. Its comment
+  claimed it routes globals to `.data` by the `__data_` prefix, that a label without it *"would fault on its
+  first store to a read-only page"*, and that *"the two are one fact and this is its name."* **All false**,
+  and **disproved by measurement**: set the prefix to `"zzz_"`, rebuild — globals still land in `.data`, still
+  take stores, still return the right answer. Routing is by `RdataRelocKind.dataSectionRipRelDisp32`, filed
+  unconditionally. ⚠ **And the fact IS written twice** (`DataLabelPrefix` vs the literal at
+  `CodeResult.maxon:107`) — **they cannot disagree only because one is dead.** *(Left in place: it plausibly
+  becomes live when `__slab_`/`__gt_` runtime globals arrive at P1.2/P1.5. **Delete-or-wire is that rung's
+  call**, and a comment now names what must happen first.)*
+- `PeWriter.maxon:34-37` carried the same false credit.
+- `TargetPrinter.maxon` claimed `RequiredData` blocks *"are compared against exactly these lines"* — **the
+  rung contradicted itself**: `SpecTestRunner` and `PeSectionReader` both correctly state the opposite, and
+  `compareDataSection` never touches `printDataSection`.
+
+⭐ **AND NEW CODE SHIPPED UNTESTED BEHIND A CITED PIN THAT WAS DISABLED.** `parseTopLevelAssignment`'s `let`
+arm cited `top-level-let-struct-reassign-error` as its test — **which is `disabled-test:` behind P1.1
+structs**, and `assignment.md`'s E2013 cases are all locals on a different path. The property needs no
+structs at all. ⇒ `top-level-let-scalar-reassign-error` added, verified to pass **and** to fail when
+perturbed. **A citation is not a test. Check the pin is ENABLED.**
+
 ### 4e. ⚠ Three bootstrap bugs P1.0d.5a tripped over (each cost the implementer real time)
 - ⭐ **A parameter named `end` SILENTLY DESTROYS the enclosing type's member table.**
   `function tokenTextFrom(start TokenIndex, end TokenIndex)` produced **no diagnostic** — instead **68
@@ -260,11 +309,22 @@ cross-file `export let` — the O(files²) hazard in its live shape: **x2.00**, 
 - **`self.declAt(i).outcome = x` ⇒ `E2001: unexpected token '.'`** — no field assignment through a call
   result.
 
-⚠ **It already cost coverage:** with no globals, short-circuit `and`/`or` had **no way to prove the right
-operand is SKIPPED** (an eager `and` returns the *same answer* on every input, so no value test can see it).
-`specs-shv2/short-circuit-elision.md` works around it — the guarded operand **divides by zero**, so a clean
-exit *is* the proof. **Retire that spec when globals land and the real cases can run.** *(Its trick still
-works: as of 2026-07-15 a divide by zero is a clean panic + exit 1 rather than a hardware trap — see #2.)*
+✅ **BOTH HALVES ARE NOW DONE — this entry is CLOSED.** `let` = **P1.0d.5a** (281→295); `var` = **P1.0d.5b**
+(295→**317**). ⭐ **shv2 does NOT inherit #17's aliasing bug: identity is per-FILE BY MECHANISM**
+(`fileScopedDeclKey(name, readerFilePath)`), label = bare name + `$1` **only on collision** (path-free, so
+goldens stay stable; `$` is structurally unwritable because `isAlphaNum` is `[A-Za-z0-9_]`). **The corpus had
+no `var` twin of `file-private-same-name-cross-file`, so we wrote `specs-shv2/global-file-private-same-name.md`:
+shv2 returns 118 where the bootstrap returns 212.** The Std **memory band** now exists (`globalAddr` +
+`loadIndirect` + `storeIndirect`) — ⚠ **`loadIndirect` MUST stay `isPure: false`**, or a global's read
+**hoists out of a loop that writes it** (a silent wrong answer; pinned by a spec, verified: a loop returns 10).
+
+✅ **THE WORKAROUND IS RETIRED, precisely.** `specs-shv2/short-circuit-elision.md` existed **only** because
+there were no globals: with no way to observe a side effect, it proved elision by making the guarded operand
+**divide by zero**, so a clean exit *was* the proof. It held **two** things, and only one was a workaround —
+**5** divide-by-zero cases (**deleted**, superseded by `short-circuit-evaluation.md`'s real cases) and **9
+ordinary value-checked LOWERING tests that were never a workaround** (**moved** to
+`specs-shv2/short-circuit-lowering.md`; git reports their goldens as **R100 renames**, which is the proof the
+codegen did not move). *A retirement is not a deletion: read what the file actually holds first.*
 ⚠ **It already cost coverage:** with no globals, short-circuit `and`/`or` had **no way to prove the
 right operand is SKIPPED** (an eager `and` returns the *same answer* on every input, so no value test
 can see it). `specs-shv2/short-circuit-elision.md` works around it — the guarded operand **divides by
