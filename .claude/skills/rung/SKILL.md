@@ -43,9 +43,15 @@ Never start from a claimed-green tree. Build and run:
 ## 2. PLAN IT — read BOTH reference compilers before you design anything
 
 **Write a detailed implementation plan BEFORE the contract and before any agent launches, and state it
-to the user.** A wrong approach caught here costs a paragraph; caught in the wave it costs the wave. The
-plan is yours — fan out read-only survey agents to do the reading if it is large, but you own what it
-says.
+to the user.** A wrong approach caught here costs a paragraph; caught in the wave it costs the wave.
+
+**Delegate the READING; keep the JUDGMENT.** The survey is big — 191k lines of v1, the bootstrap, ~2,700
+spec cases — and doing it inline eats the context you will need for **integration, which is the serial
+bottleneck.** So fan out **read-only** survey agents (one per reference, one over `/specs`) and have them
+return **FACTS**: file + line ranges, how it works, what it costs, which specs exist and what they cover.
+**The decisions stay yours** — take vs leave, the IR ops, the spec port list, the slicing call — because
+an agent deep in v1 is the *worst* placed to judge whether shv2 should copy it, and because **you** are
+the one who must state this plan to the user and integrate against it. **You own what it says.**
 
 > **Two reference compilers already implement what you are about to build. They answer DIFFERENT
 > questions, and the plan must consult BOTH.**
