@@ -29,6 +29,57 @@ Regenerate the golden with `--update-required`.
 
 ## Tests
 
+<!-- test: string-builder-append-allocates-no-record-per-append -->
+A `StringBuilder` must not allocate a record **per `append`**. It holds one growable buffer, and
+`build()` hands that buffer over to the finished `String` rather than copying it — so the whole build
+costs the builder's buffer, the builder, the `String`, and the builder's fresh reset buffer. Nothing
+scales with the number of appends.
+
+This golden exists because it did not: through the envelope-collapse series (Stages 1–3) each
+`sb.append(...)` quietly paid a 40-byte `ByteArray` record, because `appendBytes` wrapped its piece in
+`ByteArray.init(piece)` purely to hand it to `Array.append`, which only ever read `.managed` back out
+again. Since the collapse an `Array` **is** its `__ManagedMemory`, so that wrapper stopped being free —
+it became an allocation per append, and no test could see it. `Array.appendMemory` takes the memory
+directly. **If a `ByteArray` line appears here once per `append`, that regression is back.**
+<!-- MmTrace -->
+```maxon
+function main() returns ExitCode
+	var sb = StringBuilder.create()
+	sb.append("ab")
+	sb.append("cd")
+	let s = sb.build()
+	return s.byteLength() as ExitCode
+end 'main'
+```
+```exitcode
+4
+```
+
+```mm-trace
+mm_alloc ByteArray #1 size=40
+mm_incref ByteArray #1 rc=1
+mm_alloc StringBuilder #2 size=16
+mm_incref ByteArray #1 rc=2
+mm_decref ByteArray #1 rc=1
+mm_incref StringBuilder #2 rc=1
+mm_alloc String #3 size=48
+mm_incref ByteArray #1 rc=2
+mm_incref String #3 rc=1
+mm_alloc ByteArray #4 size=40
+mm_incref ByteArray #4 rc=1
+mm_decref ByteArray #1 rc=1
+mm_incref ByteArray #4 rc=2
+mm_decref ByteArray #4 rc=1
+mm_decref String #3 rc=0
+mm_decref ByteArray #1 rc=0
+mm_free ByteArray #1
+mm_free String #3
+mm_decref StringBuilder #2 rc=0
+mm_decref ByteArray #4 rc=0
+mm_free ByteArray #4
+mm_free StringBuilder #2
+```
+
 <!-- test: heap-alloc-free -->
 <!-- MmTrace -->
 ```maxon

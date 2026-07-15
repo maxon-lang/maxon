@@ -229,6 +229,17 @@ export type Array uses Element implements BuiltinArrayLiteral, Iterable with (El
 
 	/// Append all elements from another array
 	export function append(other Self)
+		appendMemory(other.managed)
+	end 'append'
+
+	/// Append all elements out of a raw `__ManagedMemory`, without wrapping it in an `Array` first.
+	///
+	/// This is the whole of `append` — the array half of `other` was never read. Since the envelope
+	/// collapse an `Array` IS its `__ManagedMemory`, so `Array.init(mem)` can no longer be free: it
+	/// must allocate a fresh record to view `mem` through. A caller that already holds the memory and
+	/// only wants its elements copied out was therefore paying a record per call for nothing —
+	/// `StringBuilder.appendBytes` paid one PER APPEND.
+	export function appendMemory(source ElementMemory)
 		// Copy element-by-element through `push`. The `__ManagedMemory.append`
 		// builtin runs at ~300 KB/s (it bytes-copies through a slow path),
 		// whereas `push` — backed by `ensureCapacity`'s geometric growth and a
@@ -236,13 +247,13 @@ export type Array uses Element implements BuiltinArrayLiteral, Iterable with (El
 		// front so the per-element pushes never re-grow, then push each element
 		// (which also gives each copied element correct copy semantics rather
 		// than the builtin's raw byte memcpy).
-		let otherLen = other.managed.length()
-		ensureCapacity(managed.length() + otherLen)
-		for i in 0 upto otherLen 'copy'
-			let value = try other.managed.get(i) otherwise panic("Array.append: get({i}) OOB — i < other.length")
+		let sourceLen = source.length()
+		ensureCapacity(managed.length() + sourceLen)
+		for i in 0 upto sourceLen 'copy'
+			let value = try source.get(i) otherwise panic("Array.appendMemory: get({i}) OOB — i < source.length")
 			push(value)
 		end 'copy'
-	end 'append'
+	end 'appendMemory'
 
 	/// Remove and return last element, throws if empty
 	export function pop() returns Element throws ArrayError
