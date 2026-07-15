@@ -786,7 +786,7 @@ export type Parser
 	// The token index of the `end` most recently consumed by `parseBlockBody`. It exists for
 	// the drift guard `assertScanAligned`, which both `parseWhileStatement` and `parseIfStatement`
 	// run to check the `end` the parser really closed the last body with against the one
-	// `loopBodyEndIndex` / `ifStatementEndIndex` predicted from the tokens. A nested block
+	// `blockStatementEndIndex` predicted from the tokens. A nested block
 	// finishes — and writes this — before its enclosing one does, so by the time an outer
 	// `parseBlockBody` call returns it holds the OWN `end` of the construct's last body, which
 	// is what the guard reads.
@@ -1718,7 +1718,7 @@ export type Parser
 		// every `else`/`else if` branch, through the final `end`), before a single op is
 		// emitted. Every snapshot below is positional over THIS list, so the per-branch cost
 		// is O(assigned), not O(vars in scope). `ifEnd` also feeds the drift guard.
-		let ifEnd = self.ifStatementEndIndex(ifIndex)
+		let ifEnd = self.blockStatementEndIndex(ifIndex, continuesAtElse: true)
 		let assignedBindings = self.assignedBindingsIn(ifIndex, endIndex: ifEnd)
 
 		let cond = try self.parseBoolCondition(func, block: block, kwTok: ifTok)
@@ -1955,7 +1955,7 @@ export type Parser
 		let whileTok = try self.consume(TokenKind.while)
 
 		// Decided from the tokens, before anything is emitted — see the header.
-		let bodyEndIndex = self.loopBodyEndIndex(whileIndex)
+		let bodyEndIndex = self.blockStatementEndIndex(whileIndex, continuesAtElse: false)
 		let assigned = self.namesAssignedIn(whileIndex, endIndex: bodyEndIndex)
 
 		var header = self.newBlock(func, label: b"whilehdr", line: whileTok.line)
@@ -2023,25 +2023,35 @@ export type Parser
 		return exit
 	end 'parseWhileStatement'
 
-	// The index of the `end` token that closes the `while` at `whileIndex`, found by counting
-	// block openers against `end`s — the same depth-counted token walk `skipBalancedParens`
-	// does for `(`/`)`, and run for the same reason: the answer is needed BEFORE the real parse
-	// reaches it. The cursor is not moved.
+	// The index of the `end` token that closes the block statement opening at `startIndex`,
+	// found by counting block openers against `end`s — the same depth-counted token walk
+	// `skipBalancedParens` does for `(`/`)`, and run for the same reason: the answer is needed
+	// BEFORE the real parse reaches it. The cursor is not moved.
+	//
+	// `continuesAtElse` is the ONE difference between the two constructs that call this, and it
+	// is exactly the fact that a loop's extent ends at its first depth-0 `end` while an `if`
+	// chain's does not:
+	//   • `while` passes FALSE — the first depth-0 `end` closes the loop.
+	//   • `if` passes TRUE — at each depth-0 `end` the scan PEEKS past the optional block label
+	//     (`elseFollowsEnd`); a following `else` opens the next branch (a plain `else`, or the
+	//     `if` of an `else if`), re-opens the depth, and the scan carries on, so the extent
+	//     spans the then body AND every `else`/`else if` branch through the final `end`.
 	//
 	// Deliberately TOLERANT of a malformed tail, like `scanFunctionSignatures`: an unterminated
-	// loop yields the end of the token stream rather than a diagnostic. That over-approximates
-	// the extent, which is the SAFE direction (see `parseWhileStatement`), and the real parse
-	// runs next and reports the unexpected EOF with a position.
-	function loopBodyEndIndex(whileIndex TokenIndex) returns TokenIndex
+	// construct yields the end of the token stream rather than a diagnostic. That
+	// over-approximates the extent, which is the SAFE direction (a carried set is never too
+	// SMALL — see `parseWhileStatement` / `assignedBindingsIn`), and the real parse runs next
+	// and reports the unexpected EOF with a position.
+	function blockStatementEndIndex(startIndex TokenIndex, continuesAtElse bool) returns TokenIndex
 		let count = self.tokens.count()
 		var depth = 0
-		var i = whileIndex
+		var i = startIndex
 		while i < count 'scan'
 			if self.opensBlockAt(i) 'open'
 				depth = depth + 1
 			end 'open' else if self.kindAt(i) == TokenKind.end 'close'
 				depth = depth - 1
-				if depth == 0 'matched'
+				if depth == 0 and (not continuesAtElse or not self.elseFollowsEnd(i)) 'matched'
 					return i
 				end 'matched'
 			end 'close'
@@ -2049,46 +2059,15 @@ export type Parser
 			i = i + 1
 		end 'scan'
 		return count
-	end 'loopBodyEndIndex'
-
-	// The index of the `end` token that closes the WHOLE `if` statement at `ifIndex` — its
-	// then body AND every `else` / `else if` branch, through the final `end`. The same
-	// depth-counted `opensBlockAt`/`end` walk `loopBodyEndIndex` runs, with one addition: an
-	// `if` chain does not stop at the first depth-0 `end`, because an `else` continues it. So
-	// at each depth-0 `end` the scan PEEKS past the optional block label — if an `else`
-	// follows, the branch it opens (a plain `else`, or the `if` of an `else if`) re-opens the
-	// depth and the scan carries on; otherwise this `end` closes the statement.
-	//
-	// Deliberately TOLERANT of a malformed tail, exactly like `loopBodyEndIndex`: an
-	// unterminated chain yields the end of the token stream, which OVER-approximates the
-	// extent (the safe direction — see `assignedBindingsIn`), and the real parse runs next and
-	// reports the unexpected EOF with a position. The cursor is not moved.
-	function ifStatementEndIndex(ifIndex TokenIndex) returns TokenIndex
-		let count = self.tokens.count()
-		var depth = 0
-		var i = ifIndex
-		while i < count 'scan'
-			if self.opensBlockAt(i) 'open'
-				depth = depth + 1
-			end 'open' else if self.kindAt(i) == TokenKind.end 'close'
-				depth = depth - 1
-				if depth == 0 and not self.elseFollowsEnd(i) 'matched'
-					return i
-				end 'matched'
-			end 'close'
-
-			i = i + 1
-		end 'scan'
-		return count
-	end 'ifStatementEndIndex'
+	end 'blockStatementEndIndex'
 
 	// Does an `else` follow the `end` at `endIndex` — i.e. does an `if` chain continue past
 	// it? Skips the ONE optional block label (`end 'x' else …`) that may sit between them; a
 	// bare `end else …` has none. Peeking exactly one charLiteral is enough because an `end`
 	// carries at most a single label, and the token after it is either `else` or the next
-	// statement. This is the one place `ifStatementEndIndex` decides a chain continues, so a
-	// missed `else` under-approximates the extent — which the drift guard converts to a loud
-	// panic rather than a silent lost phi.
+	// statement. This is the one place `blockStatementEndIndex` decides an `if` chain
+	// continues, so a missed `else` under-approximates the extent — which the drift guard
+	// converts to a loud panic rather than a silent lost phi.
 	function elseFollowsEnd(endIndex TokenIndex) returns bool
 		var next = endIndex + 1
 		if self.kindAt(next) == TokenKind.charLiteral 'skipLabel'
@@ -2164,7 +2143,7 @@ export type Parser
 	end 'namesAssignedIn'
 
 	// THE GUARD ON A TOKEN-EXTENT SCAN, shared by `parseWhileStatement` and `parseIfStatement`.
-	// `loopBodyEndIndex` / `ifStatementEndIndex` re-derive Maxon's block structure at the token
+	// `blockStatementEndIndex` re-derives Maxon's block structure at the token
 	// level to fix a construct's carried-variable set BEFORE its body is parsed — a SECOND copy
 	// of a fact the recursive-descent parser owns. If the two disagree the scan's extent is too
 	// SHORT, the carried set is a SUBSET, and a carried var silently loses its merge phi: a wrong
@@ -2284,7 +2263,7 @@ export type Parser
 	//
 	// Built by filtering `mutableVars` through `namesAssignedIn` — the SAME token scan the loop
 	// carried set uses. The scan OVER-approximates (a shadowing inner `let`/`var`, or a name
-	// assigned only past the extent when `ifStatementEndIndex` runs wide, is included), and that
+	// assigned only past the extent when `blockStatementEndIndex` runs wide, is included), and that
 	// is FREE: an unassigned carried binding has a == b at the merge and mints no phi, costing
 	// one snapshot slot and nothing else. UNDER-approximating would drop a real phi — a silent
 	// miscompile — so the extent errs wide and the drift guard (`assertScanAligned`) refuses a
@@ -3285,9 +3264,9 @@ export type Parser
 		return self.current().kind == kind
 	end 'at'
 
-	// The kind of the token at an ABSOLUTE index. The cursor-independent read the loop's token
-	// scan needs — `loopBodyEndIndex`, `namesAssignedIn` and `opensBlockAt` all walk the token
-	// array without moving `pos`.
+	// The kind of the token at an ABSOLUTE index. The cursor-independent read the token-extent
+	// scans need — `blockStatementEndIndex`, `namesAssignedIn` and `opensBlockAt` all walk the
+	// token array without moving `pos`.
 	function kindAt(index TokenIndex) returns TokenKind
 		return self.tokenAt(index).kind
 	end 'kindAt'
@@ -3301,7 +3280,7 @@ export type Parser
 	// Written down twice, a new write form (a compound assignment, a store through a field) taught
 	// to the dispatcher and not to the scan would compile: the statement would assign the var, the
 	// loop would mint no phi for it, and the var would reset to its pre-loop value on every
-	// iteration. A SILENT MISCOMPILE — and, unlike a `loopBodyEndIndex` mismatch, one no drift
+	// iteration. A SILENT MISCOMPILE — and, unlike a `blockStatementEndIndex` mismatch, one no drift
 	// guard can see, because the loop's EXTENT would still be perfectly correct. Teaching this one
 	// predicate teaches both.
 	//
