@@ -249,6 +249,20 @@ function opPhysicalRegs(op TargetOp) returns RegMask
 		leaRegGlobal(d, _) gives physRegBit(d)
 		loadRegBaseDisp(d, b, _, _) gives physRegBit(d) or physRegBit(b)
 		storeBaseDispReg(b, _, s, _) gives physRegBit(b) or physRegBit(s)
+		// The SSE band. Reported exactly like every other op, and DELIBERATELY not special-cased
+		// for Wave 1: every XMM is caller-saved right now, so intersecting this mask with the
+		// callee-saved set yields nothing and no XMM is ever pushed. Answering honestly here
+		// rather than short-circuiting on "floats never need saving" is what makes Wave 2 — where
+		// xmm6-15 BECOME callee-saved — a change to the callee-saved mask alone, instead of a
+		// change to the mask plus a hunt for every place that assumed otherwise.
+		addsdRegReg(d, l, r) gives physRegBit(d) or physRegBit(l) or physRegBit(r)
+		subsdRegReg(d, l, r) gives physRegBit(d) or physRegBit(l) or physRegBit(r)
+		mulsdRegReg(d, l, r) gives physRegBit(d) or physRegBit(l) or physRegBit(r)
+		divsdRegReg(d, l, r) gives physRegBit(d) or physRegBit(l) or physRegBit(r)
+		ucomisdRegReg(l, r) gives physRegBit(l) or physRegBit(r)
+		movsdRegRip(d, _) gives physRegBit(d)
+		cvtsi2sdRegReg(d, s) gives physRegBit(d) or physRegBit(s)
+		cvttsd2siRegReg(d, s) gives physRegBit(d) or physRegBit(s)
 	end 'p'
 end 'opPhysicalRegs'
 
@@ -364,6 +378,6 @@ function blockEndsWithReturn(module TargetModule, block IrBlock) returns bool
 		jmp to idivReg gives false
 		pushReg to popReg gives false
 		storeSlotReg to loadRegSlot gives false
-		andRegReg to storeBaseDispReg gives false
+		andRegReg to cvttsd2siRegReg gives false
 	end 'check'
 end 'blockEndsWithReturn'

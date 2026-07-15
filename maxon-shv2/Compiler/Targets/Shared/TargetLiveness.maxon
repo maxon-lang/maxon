@@ -1033,7 +1033,7 @@ function opIsCondBranch(op TargetOp) returns bool
 		movRegImm to idivReg gives false
 		pushReg to popReg gives false
 		storeSlotReg to loadRegSlot gives false
-		andRegReg to storeBaseDispReg gives false
+		andRegReg to cvttsd2siRegReg gives false
 	end 'check'
 end 'opIsCondBranch'
 
@@ -1048,7 +1048,7 @@ function terminatorIsJmp(module TargetModule, block IrBlock) returns bool
 		jcc to idivReg gives false
 		pushReg to popReg gives false
 		storeSlotReg to loadRegSlot gives false
-		andRegReg to storeBaseDispReg gives false
+		andRegReg to cvttsd2siRegReg gives false
 	end 'check'
 end 'terminatorIsJmp'
 
@@ -1084,7 +1084,7 @@ function collectBlockSuccessorIds(module TargetModule, block IrBlock, out BlockI
 			movRegImm to idivReg then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a non-terminator op as its terminator")
 			pushReg to popReg then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a pushReg/popReg as its terminator — those are post-regalloc body ops")
 			storeSlotReg to loadRegSlot then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a spill/reload as its terminator — the splitter inserts them as body ops")
-			andRegReg to storeBaseDispReg then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a non-terminator op as its terminator")
+			andRegReg to cvttsd2siRegReg then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a non-terminator op as its terminator")
 		end 'termCtrl'
 	end 'hasTerm'
 end 'collectBlockSuccessorIds'
@@ -2442,7 +2442,7 @@ export function collectEntryParamCaptures(module TargetModule, topo FuncTopology
 			prologue to movRegImm32 then break 'capture'
 			movReg32Reg32 to popReg then break 'capture'
 			storeSlotReg to loadRegSlot then break 'capture'
-			andRegReg to storeBaseDispReg then break 'capture'
+			andRegReg to cvttsd2siRegReg then break 'capture'
 		end 'capture'
 	end 'eachOp'
 	return captures
@@ -2717,7 +2717,7 @@ export function spillStoreSlotOf(op TargetOp) returns ValueSpillSlot
 		// "did the splitter spill a value to a stack SLOT here?", and a `.data` store answers no: it
 		// writes a global at a link-time address, not a `SpillSlot` this function's frame owns.
 		// Claiming a slot for it would hand the allocator a spill record for a value it never spilled.
-		andRegReg to storeBaseDispReg gives ValueSpillSlot.none
+		andRegReg to cvttsd2siRegReg gives ValueSpillSlot.none
 	end 'k'
 end 'spillStoreSlotOf'
 

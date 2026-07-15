@@ -549,7 +549,7 @@ function collectOpHints(op TargetOp, hints ColorHints)
 		// the operand model — so it covers every one of them without an arm here.
 		// The data-section band carries no COPY hint either: a `lea`, a load and a store are
 		// none of them a move, so no two of their operands want the same register.
-		andRegReg to storeBaseDispReg then break 'hint'
+		andRegReg to cvttsd2siRegReg then break 'hint'
 	end 'hint'
 end 'collectOpHints'
 
@@ -1125,6 +1125,18 @@ export function colorTargetOp(op TargetOp, alloc Allocation) returns TargetOp
 		leaRegGlobal(dest, label) then return TargetOp.leaRegGlobal(colorVRegWith(dest, alloc: alloc), label: label)
 		loadRegBaseDisp(dest, base, disp, width) then return TargetOp.loadRegBaseDisp(colorVRegWith(dest, alloc: alloc), base: colorVRegWith(base, alloc: alloc), disp: disp, width: width)
 		storeBaseDispReg(base, disp, src, width) then return TargetOp.storeBaseDispReg(colorVRegWith(base, alloc: alloc), disp: disp, src: colorVRegWith(src, alloc: alloc), width: width)
+		// The SSE band. Coloring is CLASS-BLIND by construction: `colorVRegWith` substitutes
+		// whatever register the allocator assigned, and the class column is what guaranteed that
+		// register is an XMM. So these arms are shape-for-shape identical to their GPR twins, and
+		// that identity is the one-enum design paying out.
+		addsdRegReg(dest, lhs, rhs) then return TargetOp.addsdRegReg(colorVRegWith(dest, alloc: alloc), lhs: colorVRegWith(lhs, alloc: alloc), rhs: colorVRegWith(rhs, alloc: alloc))
+		subsdRegReg(dest, lhs, rhs) then return TargetOp.subsdRegReg(colorVRegWith(dest, alloc: alloc), lhs: colorVRegWith(lhs, alloc: alloc), rhs: colorVRegWith(rhs, alloc: alloc))
+		mulsdRegReg(dest, lhs, rhs) then return TargetOp.mulsdRegReg(colorVRegWith(dest, alloc: alloc), lhs: colorVRegWith(lhs, alloc: alloc), rhs: colorVRegWith(rhs, alloc: alloc))
+		divsdRegReg(dest, lhs, rhs) then return TargetOp.divsdRegReg(colorVRegWith(dest, alloc: alloc), lhs: colorVRegWith(lhs, alloc: alloc), rhs: colorVRegWith(rhs, alloc: alloc))
+		ucomisdRegReg(lhs, rhs) then return TargetOp.ucomisdRegReg(colorVRegWith(lhs, alloc: alloc), rhs: colorVRegWith(rhs, alloc: alloc))
+		movsdRegRip(dest, label) then return TargetOp.movsdRegRip(colorVRegWith(dest, alloc: alloc), label: label)
+		cvtsi2sdRegReg(dest, src) then return TargetOp.cvtsi2sdRegReg(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc))
+		cvttsd2siRegReg(dest, src) then return TargetOp.cvttsd2siRegReg(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc))
 	end 'rewrite'
 end 'colorTargetOp'
 

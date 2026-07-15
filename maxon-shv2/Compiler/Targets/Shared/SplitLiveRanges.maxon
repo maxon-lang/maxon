@@ -1844,7 +1844,14 @@ function opIsConstMaterialization(module TargetModule, opIdx OpIndex) returns bo
 		// where it could re-`lea` for the same size and no slot), and it is priced: taking it means
 		// generalizing remat from "a constant value" to "an op with no register inputs". Not this
 		// rung's, and recorded here rather than silently ranged over.
-		andRegReg to storeBaseDispReg gives false
+		//
+		// ⚠ `movsdRegRip` (P1.0d.4) is the SECOND instance of that exact `false`, for that exact
+		// reason. An f64 constant reads no register and cannot change, but it lives behind a
+		// RIP-relative relocation into `.rdata`, so rebuilding it needs the `movsd` AND a fresh
+		// relocation — and there is no `movsd xmm, imm64` to rebuild it with even if the IEEE bits
+		// ARE an integer the compiler holds. `constValueOfDef` would panic. When someone
+		// generalizes remat to "an op with no register inputs", it buys BOTH of these at once.
+		andRegReg to cvttsd2siRegReg gives false
 	end 'k'
 end 'opIsConstMaterialization'
 
@@ -2389,7 +2396,7 @@ function constValueOfDef(module TargetModule, opIdx OpIndex) returns MachineWord
 		movRegImm32(_, value) then return value
 		prologue to jcc then panic("constValueOfDef: def is not a constant materialization")
 		movRegReg to loadRegSlot then panic("constValueOfDef: def is not a constant materialization")
-		andRegReg to storeBaseDispReg then panic("constValueOfDef: def is not a constant materialization")
+		andRegReg to cvttsd2siRegReg then panic("constValueOfDef: def is not a constant materialization")
 	end 'k'
 end 'constValueOfDef'
 
@@ -2487,6 +2494,17 @@ function substituteValueInOp(op TargetOp, from ValueId, to ValueId) returns Targ
 		leaRegGlobal(dest, label) then return TargetOp.leaRegGlobal(substituteVReg(dest, from: from, to: to), label: label)
 		loadRegBaseDisp(dest, base, disp, width) then return TargetOp.loadRegBaseDisp(substituteVReg(dest, from: from, to: to), base: substituteVReg(base, from: from, to: to), disp: disp, width: width)
 		storeBaseDispReg(base, disp, src, width) then return TargetOp.storeBaseDispReg(substituteVReg(base, from: from, to: to), disp: disp, src: substituteVReg(src, from: from, to: to), width: width)
+		// The SSE band. Substitution is class-blind for the same reason coloring is: a fresh id
+		// minted by a split INHERITS its victim's class, so replacing `from` with `to` can never
+		// change which file the value lives in.
+		addsdRegReg(dest, lhs, rhs) then return TargetOp.addsdRegReg(substituteVReg(dest, from: from, to: to), lhs: substituteVReg(lhs, from: from, to: to), rhs: substituteVReg(rhs, from: from, to: to))
+		subsdRegReg(dest, lhs, rhs) then return TargetOp.subsdRegReg(substituteVReg(dest, from: from, to: to), lhs: substituteVReg(lhs, from: from, to: to), rhs: substituteVReg(rhs, from: from, to: to))
+		mulsdRegReg(dest, lhs, rhs) then return TargetOp.mulsdRegReg(substituteVReg(dest, from: from, to: to), lhs: substituteVReg(lhs, from: from, to: to), rhs: substituteVReg(rhs, from: from, to: to))
+		divsdRegReg(dest, lhs, rhs) then return TargetOp.divsdRegReg(substituteVReg(dest, from: from, to: to), lhs: substituteVReg(lhs, from: from, to: to), rhs: substituteVReg(rhs, from: from, to: to))
+		ucomisdRegReg(lhs, rhs) then return TargetOp.ucomisdRegReg(substituteVReg(lhs, from: from, to: to), rhs: substituteVReg(rhs, from: from, to: to))
+		movsdRegRip(dest, label) then return TargetOp.movsdRegRip(substituteVReg(dest, from: from, to: to), label: label)
+		cvtsi2sdRegReg(dest, src) then return TargetOp.cvtsi2sdRegReg(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to))
+		cvttsd2siRegReg(dest, src) then return TargetOp.cvttsd2siRegReg(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to))
 	end 'rewrite'
 end 'substituteValueInOp'
 

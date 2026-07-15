@@ -277,6 +277,31 @@ export function targetOpOperands(op TargetOp, buf OperandList)
 		// A store DEFINES nothing: both the address and the value are read. `pushCmpOperands` is
 		// the two-uses-no-def shape, which is exactly a store's.
 		storeBaseDispReg(base, _, src, _) then pushCmpOperands(buf, lhs: base, rhs: src)
+		// --- P1.0d.4: the SSE band ---
+		//
+		// ⭐ EVERY ONE OF THESE REUSES AN EXISTING OPERAND SHAPE, and that is the design
+		// showing through rather than a coincidence. The operand model answers "which
+		// registers does this op read and write?" — a question that never mentions WHICH FILE
+		// those registers live in. `addsd` has `subRegReg`'s shape; `ucomisd` has
+		// `cmpRegReg`'s; `movsdRegRip` has `leaRegGlobal`'s. The class comes from the VALUE,
+		// through the class column, not from the op.
+		//
+		// SSE has no 3-operand form without AVX, so the four ALU ops are two-address and
+		// `dest` is a REUSE-of-`lhs` def, exactly like `subRegReg`.
+		addsdRegReg(dest, lhs, rhs) then pushReuseBinOperands(buf, dest: dest, lhs: lhs, rhs: rhs)
+		subsdRegReg(dest, lhs, rhs) then pushReuseBinOperands(buf, dest: dest, lhs: lhs, rhs: rhs)
+		mulsdRegReg(dest, lhs, rhs) then pushReuseBinOperands(buf, dest: dest, lhs: lhs, rhs: rhs)
+		divsdRegReg(dest, lhs, rhs) then pushReuseBinOperands(buf, dest: dest, lhs: lhs, rhs: rhs)
+		// Sets flags only — two uses, no def.
+		ucomisdRegReg(lhs, rhs) then pushCmpOperands(buf, lhs: lhs, rhs: rhs)
+		// ONE plain def, NO uses — RIP is not allocatable, which is what makes it
+		// rematerializable anywhere. `leaRegGlobal`'s shape exactly.
+		movsdRegRip(dest, _) then pushDef(buf, vreg: dest)
+		// The two cross-class converts. PLAIN defs (dest independent of src) ⇒ no seed copy.
+		// The operand model states two registers and says nothing about their files; each
+		// value's class is answered from its own Std type.
+		cvtsi2sdRegReg(dest, src) then pushDefFromUse(buf, dest: dest, src: src)
+		cvttsd2siRegReg(dest, src) then pushDefFromUse(buf, dest: dest, src: src)
 	end 'operands'
 end 'targetOpOperands'
 

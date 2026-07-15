@@ -523,6 +523,81 @@ export union TargetOp
 	// `mov [base + disp], src` — store, the mirror of `loadRegBaseDisp`. TWO uses and no def.
 	// `isStore: true`. APPENDED at the END of the union, after `loadRegBaseDisp`.
 	storeBaseDispReg(base X64VReg, disp Imm32, src X64VReg, width X64AccessWidth) = TargetOpMeta{isMemory: true, isStore: true, isCall: false, implicitUses: 0, implicitDefs: 0}
+	// --- P1.0d.4: the SSE band (specs-shv2/float-type.md, specs-shv2/float-compare-branch.md) ---
+	//
+	// APPENDED AT THE END OF THE UNION, after `storeBaseDispReg`, per the band-append
+	// invariant documented on the bit band above — every range arm over `TargetOp` stops at
+	// or before `loadRegSlot`, so anything inserted elsewhere is SILENTLY swallowed.
+	//
+	// ⭐⭐ THIS BAND IS SMALL FOR A REASON, AND THE REASON IS THE ONE-ENUM DESIGN.
+	// There is no `movsdRegReg`, no float spill, no float reload, and no float `xchg` here —
+	// because a MOVE, a SPILL, a RELOAD and a SWAP are class-agnostic CONCEPTS. v1 mints a
+	// second register enum and therefore needs a parallel op for every one of them. shv2 puts
+	// both files in ONE enum, so `movRegReg` / `storeSlotReg` / `loadRegSlot` / `xchgRegReg`
+	// already say everything those ops need to say, and the ENCODER picks `mov` vs `movsd`
+	// (and `xchg` vs a triple-`xorpd`) from `regClassOf` of the RESOLVED register.
+	// ⇒ **CLASS-AGNOSTIC OPS, CLASS-DISPATCHED ENCODERS.** That one rule is why SSA
+	// destruction needs no float case, the splitter needs no float spill op, and the
+	// allocator's spill/reload machinery is untouched by this rung. A spill slot is 8 bytes
+	// and an f64 is 8 bytes, so even the frame layout is unchanged.
+	//
+	// ⚠⚠ AND HERE IS WHAT THAT DESIGN COSTS — A NEW SILENT-WRONG-ANSWER SITE.
+	// `resolvePhysical` returns an `X64Register` and asks no questions. `storeSlotReg` encodes
+	// `mov [rsp+disp], src` from it — hand that encoder `xmm3` (rawValue 19) and the low
+	// nibble is 3, so it assembles **`mov [rsp+disp], rbx`**: a GPR spill of a register nobody
+	// named, with no error at any layer. The one-enum trade buys uniformity everywhere above
+	// the encoder and pays for it in exactly this spot, where a bare rawValue can mean either
+	// file. ⇒ **A GPR-ONLY ENCODER MUST RESOLVE THROUGH A CLASS-CHECKING ACCESSOR that panics
+	// on an XMM (and vice versa), and a class-agnostic op MUST dispatch on `regClassOf`.**
+	// Never hand a raw `resolvePhysical` result to a fixed-class encoder.
+	//
+	// The four ALU ops are genuinely two-address on SSE (`addsd xmm1, xmm2/m64` — no
+	// 3-operand form without AVX), so — exactly like `subRegReg` — `dest` is a REUSE-of-`lhs`
+	// def: the allocator gives `dest` `lhs`'s register when `lhs` dies here, else materializes
+	// the copy first. ⚠ NONE of them writes EFLAGS — which is why `StdOp.binOp`'s
+	// `clobbersFlags: true` is an over-approximation for floats (see StdOpMeta.clobbersFlags).
+	addsdRegReg(dest X64VReg, lhs X64VReg, rhs X64VReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
+	subsdRegReg(dest X64VReg, lhs X64VReg, rhs X64VReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
+	mulsdRegReg(dest X64VReg, lhs X64VReg, rhs X64VReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
+	// Float division. Its Std source is `binOp(div)`, NOT `StdOp.div`: `idiv` faults and
+	// `divsd` does not (IEEE answers inf/nan), so float division is pure and rides the
+	// non-trapping band. See StdBinOpcode.
+	divsdRegReg(dest X64VReg, lhs X64VReg, rhs X64VReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
+	// The float compare. TWO uses, NO def — it sets flags only, exactly like `cmpRegReg`.
+	// ⚠ It writes ZF/PF/CF and leaves OF=SF=AF=0, so its branch is the UNSIGNED `ja`/`jae`
+	// family, never the signed `jl`/`jg` one. `<` and `<=` are lowered by SWAPPING the
+	// operands into that already-NaN-correct family; only `==`/`!=` need the parity bit, and
+	// they get it as a second BLOCK, never a second conditional jump in one block. See
+	// X64CondCode and specs-shv2/float-compare-branch.md.
+	ucomisdRegReg(lhs X64VReg, rhs X64VReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
+	// `movsd dest, [rip + disp32]` — load an f64 constant from `.rdata`. The float twin of
+	// `leaRegGlobal`, and it shares that op's every property: ONE plain def, NO uses, reading
+	// no allocatable register at all (RIP is not allocatable).
+	//
+	// ⚠ IT IS **NOT** A CONST MATERIALIZATION, and it inherits `leaRegGlobal`'s reasoning
+	// verbatim — read that comment in `opIsConstMaterialization`. It reads no register and its
+	// value cannot change, so it IS rematerializable *in principle*. But that predicate asks a
+	// NARROWER question: *"can this def be rebuilt by `constValueOfDef` + a `movRegImm`?"* An
+	// f64 constant lives behind a RIP-relative RELOCATION into `.rdata`, so rebuilding it means
+	// re-emitting the `movsd` AND a fresh relocation — which the remat path has no way to
+	// express, and there is no `movsd xmm, imm64` to fall back on. Answering `true` would send
+	// it to `constValueOfDef`, which would PANIC.
+	// ⇒ It is a real missed optimization, and it is the SAME one `leaRegGlobal` already prices:
+	// taking either means generalizing remat from "a constant value" to "an op with no register
+	// inputs". Not this rung's. Recorded here rather than silently ranged over.
+	movsdRegRip(dest X64VReg, label ByteArray) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
+	// ⚠⚠ THE ONLY TWO CROSS-CLASS OPS IN THE DIALECT — they read one file and write the other.
+	// `cvtsi2sd xmm, r64` (int → f64, `float-promotion`'s widening) and `cvttsd2si r64, xmm`
+	// (f64 → int, TRUNCATING toward zero — the `trunc()` builtin, and the `t` in its mnemonic
+	// is the whole reason it is the right instruction for a spec that says `3.99` gives `3`).
+	// Both are PLAIN defs (dest independent of src), so no seed copy is emitted.
+	//
+	// They need NO special class machinery: a value's class comes from its Std type, and these
+	// ops sit exactly where the type changes — `cvtsi2sd`'s operand IS an i64 value (gpr) and
+	// its result IS an f64 value (xmm). The operand model states the two registers; the class
+	// column answers each from its own value. This is what the class-per-value design buys.
+	cvtsi2sdRegReg(dest X64VReg, src X64VReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
+	cvttsd2siRegReg(dest X64VReg, src X64VReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 end 'TargetOp'
 
 // The memory-access widths the `.data` load/store encoders have. TWO, because two are what the
