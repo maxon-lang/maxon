@@ -146,9 +146,9 @@ end 'rewriteBinAndCmpOps'
 function tryFold(op StdOp, constMap ConstValueMap) returns FoldResult
 	return match op 'f'
 		const gives FoldResult.unchanged
-		binOp(resultId, lhs, rhs, opcode) gives tryFoldBinOp(resultId, lhs: lhs, rhs: rhs, opcode: opcode, constMap: constMap)
+		binOp(resultId, lhs, rhs, opcode, operandType) gives tryFoldBinOp(resultId, lhs: lhs, rhs: rhs, opcode: opcode, operandType: operandType, constMap: constMap)
 		unaryOp gives FoldResult.unchanged
-		cmp(resultId, lhs, rhs, pred) gives tryFoldCmp(resultId, lhs: lhs, rhs: rhs, pred: pred, constMap: constMap)
+		cmp(resultId, lhs, rhs, pred, operandType) gives tryFoldCmp(resultId, lhs: lhs, rhs: rhs, pred: pred, operandType: operandType, constMap: constMap)
 		// Extended past `retVoid` to take in the memory band. Nothing there has an immediate form to
 		// fold INTO: `globalAddr` has no value operand at all, and a load's and a store's address is a
 		// register the `lea` produced — x64 can fold a RIP-relative address into a `mov`, but that is
@@ -168,7 +168,15 @@ end 'tryFold'
 // const lhs is swapped onto the rhs (`k + a` becomes `a + k`). A non-commutative op
 // with a const lhs and non-const rhs (`5 - a`, `1 shl n`… where `n` is not const) is
 // left alone — it is not `a - 5` / `n shl 1`.
-function tryFoldBinOp(resultId ValueId, lhs ValueId, rhs ValueId, opcode StdBinOpcode, constMap ConstValueMap) returns FoldResult
+//
+// ⚠ A FLOAT NEVER FOLDS, and this guard is why `binOpImm` carries no operand type:
+// there is no SSE instruction that takes an immediate operand, so there is no float
+// form to fold INTO. Without the guard the operands' IEEE bit patterns would ride an
+// INTEGER `add reg, imm32` / `imul` — a silent wrong answer.
+function tryFoldBinOp(resultId ValueId, lhs ValueId, rhs ValueId, opcode StdBinOpcode, operandType StdType, constMap ConstValueMap) returns FoldResult
+	if stdTypeIsFloat(operandType) 'float'
+		return FoldResult.unchanged
+	end 'float'
 	if foldableBinOpImm(constMap, id: rhs, opcode: opcode) 'rhsConst'
 		return FoldResult.folded(StdOp.binOpImm(resultId, lhs: lhs, imm: constAsImmediate(constMap, id: rhs), opcode: opcode))
 	end 'rhsConst'
@@ -182,7 +190,19 @@ end 'tryFoldBinOp'
 // AND flips the predicate (`k < a` == `a > k`), which every comparison supports (no
 // silent-miscompile case — unlike arith `sub`). `cmpRegImm32` carries the immediate
 // verbatim in a signed 32-bit field, so the whole Imm32 domain folds.
-function tryFoldCmp(resultId ValueId, lhs ValueId, rhs ValueId, pred StdCmpPred, constMap ConstValueMap) returns FoldResult
+//
+// ⚠⚠ A FLOAT NEVER FOLDS — and this is the guard most likely to be believed unnecessary,
+// because removing it PASSES the obvious test. `ucomisd` has no immediate form, so a
+// folded float compare becomes an integer `cmp reg, imm32` over IEEE bit patterns. For
+// two POSITIVE doubles that still answers correctly — sign-magnitude bit patterns happen
+// to order the same way as the values — so `3.5 > 9.5` is green and the bug hides. It
+// surfaces only on a negative operand (whose sign bit inverts the integer order) or a
+// NaN (which no integer compare can report as unordered).
+// specs-shv2/float-compare-branch.md `lt-nan-is-false` is the case that catches it.
+function tryFoldCmp(resultId ValueId, lhs ValueId, rhs ValueId, pred StdCmpPred, operandType StdType, constMap ConstValueMap) returns FoldResult
+	if stdTypeIsFloat(operandType) 'float'
+		return FoldResult.unchanged
+	end 'float'
 	if foldableCmpImm(constMap, id: rhs) 'rhsConst'
 		return FoldResult.folded(StdOp.cmpImm(resultId, lhs: lhs, imm: constAsImmediate(constMap, id: rhs), pred: pred))
 	end 'rhsConst'
@@ -199,6 +219,10 @@ function binOpcodeIsCommutative(opcode StdBinOpcode) returns bool
 		sub gives false
 		bitAnd to bitXor gives true
 		shl to shrLogical gives false
+		// Float division. Unreachable — `tryFoldBinOp` returns early for a float operand
+		// type, and `div` is float-only — but the answer is stated rather than defaulted:
+		// `a / b` is not `b / a`.
+		div gives false
 	end 'o'
 end 'binOpcodeIsCommutative'
 
@@ -258,6 +282,10 @@ function constFitsBinOpImmediate(v ParsedInt, opcode StdBinOpcode) returns bool
 		sub gives fitsImm32(v) and v != i32.min
 		bitAnd to bitXor gives fitsImm32(v)
 		shl to shrLogical gives shiftCountIsUnguarded(v)
+		// Float division — NO constant fits, because there is no `divsd` form that takes an
+		// immediate at all. Unreachable (the float guard in `tryFoldBinOp` returns first),
+		// and `false` is the answer that stays correct if it ever stops being unreachable.
+		div gives false
 	end 'o'
 end 'constFitsBinOpImmediate'
 

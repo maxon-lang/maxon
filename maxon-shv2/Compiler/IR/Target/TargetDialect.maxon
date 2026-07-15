@@ -24,9 +24,24 @@
 // register-allocator `OpPattern` + implicit-register masks when it ports the
 // allocator (deferred here because they drag in the whole regalloc scaffold).
 
-// The 16 general-purpose registers of x86-64, in encoding order (0=rax .. 15=r15).
-// B2's register allocator colors virtual registers into this set; the return
-// value lands in R8 per Maxon's internal calling convention.
+// Every physical register the allocator colors into: the 16 general-purpose
+// registers of x86-64 in encoding order (0=rax .. 15=r15), then the 16 SSE
+// registers (16=xmm0 .. 31=xmm15). The return value lands in R8 per Maxon's
+// internal calling convention.
+//
+// ⭐ ONE ENUM, TWO CLASSES — not two enums. A register's CLASS (`RegClass`) is a
+// property of the register, so it is derived from the rawValue here and written
+// down nowhere else. v1 mints a SECOND enum for its FP file and pays for it in
+// every structure that names a register: a parallel spill op, a parallel reload,
+// a parallel move, a parallel mask type. The allocator's machinery — `RegMask`,
+// the forbidden mask, the spill slot, the Hall witness — is all class-agnostic
+// bit work that does not care WHICH file a bit names, and one enum is what lets
+// it stay that way.
+//
+// ⚠ The low 4 bits of an XMM's rawValue are its ENCODING number (xmm3 = 19 =
+// 0b10011 → reg field 3), so `rawValue and 0xF` encodes and bit 4 classifies.
+// That is deliberate: it is why an emitter can form a ModRM reg field without a
+// lookup table, exactly as `X64CondCode`'s backing value IS the jcc nibble.
 export enum X64Register
 	rax
 	rcx
@@ -44,7 +59,47 @@ export enum X64Register
 	r13
 	r14
 	r15
+	xmm0 = 16
+	xmm1
+	xmm2
+	xmm3
+	xmm4
+	xmm5
+	xmm6
+	xmm7
+	xmm8
+	xmm9
+	xmm10
+	xmm11
+	xmm12
+	xmm13
+	xmm14
+	xmm15
 end 'X64Register'
+
+// Which register FILE a value lives in. A value's class is what the value IS —
+// intrinsic and permanent, fixed by its type at birth: an f64 lives in an XMM and
+// an i64 lives in a GPR, and no amount of spilling, splitting, or recoloring
+// changes that.
+//
+// ⭐⭐ THE CLASS IS NOT A FORBIDDEN MASK, AND THIS IS THE RUNG'S CENTRAL
+// DISTINCTION. It is tempting to spend no new column and encode "not a GPR" as
+// 16 set bits in a value's `forbidden` mask. That is WRONG, and it fails
+// silently — `LivenessResult.clearForbidden` ZEROES that mask, and
+// `SplitLiveRanges` calls it on every spill victim and every fresh id, so the
+// class would be wiped mid-allocation and the float would be colored into a GPR.
+// And the wipe is CORRECT and must stay: `forbidden` is what the ops a value
+// crosses TOOK AWAY — contextual, and recomputable precisely BECAUSE a split cuts
+// the live range that earned it. Two facts with two different lifetimes cannot
+// share one column.
+// `regClassOf` — the ONE place the GPR/XMM boundary is decided — lives in RegBits
+// beside the pool masks, because it is keyed on `RegNum` and RegBits is what owns
+// that type. This enum stays here: it names a dialect concept and depends on
+// nothing.
+export enum RegClass
+	gpr
+	xmm
+end 'RegClass'
 
 // A machine register operand: either a concrete physical GPR or a virtual
 // register identified by the SSA ValueId that defined it. Every `movImm`
@@ -57,24 +112,50 @@ end 'X64VReg'
 
 // x64 condition codes — the `tttn` nibble of a `jcc`/`setcc` opcode. The backing
 // value IS the nibble, so the `jcc` encoder forms its opcode as `0x80 | rawValue`
-// (e.g. `equal` = 0x4 → `0F 84` = JE) with no separate lookup table. M4 emits only
-// the SIGNED integer comparisons (`less`/`greater`/… are the signed JL/JG family,
-// not the unsigned JB/JA family) — all Std integers are signed i64. StdToX64Conversion
-// maps each `StdCmpPred` to one of these when it fuses a compare with its branch.
+// (e.g. `equal` = 0x4 → `0F 84` = JE) with no separate lookup table.
+//
+// ⭐ THE FAMILY IS CHOSEN BY THE COMPARE'S OPERAND TYPE, NOT BY ITS PREDICATE.
+// `cmp` on two i64s is a subtraction and answers in OF/SF, which the SIGNED JL/JG
+// family reads. `ucomisd` on two f64s leaves OF=SF=AF=0 always and answers in
+// ZF/PF/CF — the same three flags an UNSIGNED compare writes — so a float compare
+// branches with the UNSIGNED JB/JA family, and lowering one to `jl` would read
+// flags `ucomisd` never wrote. `StdCmpPred.less` alone therefore does NOT
+// determine the condition code and never did; it only looked that way while every
+// Std compare was a signed i64. `condCodeForPred` takes the operand type.
+//
+// ⚠ `parity`/`noParity` exist for the FOURTH answer a float compare has and an
+// integer compare does not: UNORDERED, the result when either operand is NaN.
+// `ucomisd` reports it as ZF=PF=CF=1 — the same flags as "equal" but for PF — so
+// PF is the only bit that distinguishes NaN from equality, and IEEE-754 requires
+// every relational predicate be FALSE on unordered. See specs-shv2/float-compare-branch.md.
 export enum X64CondCode
+	below = 0x2  // JB  (unsigned <,  float <)
+	aboveEqual = 0x3  // JAE (unsigned >=, float >=)
 	equal = 0x4  // JE  / JZ
 	notEqual = 0x5  // JNE / JNZ
+	belowEqual = 0x6  // JBE (unsigned <=, float <=)
+	above = 0x7  // JA  (unsigned >,  float >)
+	parity = 0xA  // JP  (PF=1 — the float compare's UNORDERED/NaN edge)
+	noParity = 0xB  // JNP (PF=0 — ORDERED: neither operand is NaN)
 	less = 0xC  // JL  (signed <)
 	greaterEqual = 0xD  // JGE (signed >=)
 	lessEqual = 0xE  // JLE (signed <=)
 	greater = 0xF  // JG  (signed >)
 end 'X64CondCode'
 
-// A set of physical GPRs as a 16-bit mask: bit `i` is set iff `X64Register`
-// number `i` (its `rawValue`) is in the set. Used for an op's implicit register
-// reads/writes — the registers it touches WITHOUT naming them as an explicit
-// operand. Picking / testing a register is a single bit op, no set iteration.
-// A full machine word so bit-complement (`not pool`) never overflows the range.
+// A set of physical registers: bit `i` is set iff `X64Register` number `i` (its
+// `rawValue`) is in the set — so bits 0-15 name GPRs and bits 16-31 name XMMs, and
+// a mask spans BOTH classes. Used for an op's implicit register reads/writes — the
+// registers it touches WITHOUT naming them as an explicit operand. Picking /
+// testing a register is a single bit op, no set iteration. A full machine word so
+// bit-complement (`not pool`) never overflows the range.
+//
+// ⚠ A RegMask is CLASS-AGNOSTIC: it is a bag of bits and it does not know which
+// file they name. That is what lets one mask type serve both classes — and it is
+// exactly why every PREDICATE over a mask ("is this value confined to that set?",
+// "is the pool full?") must be asked PER CLASS, against a class-filtered mask.
+// A cross-class mask compared against a whole-file `fullRegisterMask()` answers a
+// question nobody asked.
 export typealias RegMask = int(0 to u64.max)
 
 // A spill-slot index: the k-th 8-byte slot the cold-spill live-range splitter

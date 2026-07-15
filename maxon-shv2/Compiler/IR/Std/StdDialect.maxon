@@ -164,6 +164,18 @@ end 'OpRole'
 // left operand's declared type (TypeRules' ⭐ THE SHIFT RULE — Go's rule: a signed left
 // operand shifts arithmetically, an unsigned one logically). Collapsing them into one
 // opcode is what made `u64.max shr 60` answer -1 in shv2 and 15 in the bootstrap.
+//
+// P1.0d.4 appends `div` — and it is FLOAT-ONLY, which looks like an exception and is not.
+// The band's membership rule is its METADATA profile, and the rule that keeps the trapping
+// integer `div` out is `isPure: false`: `idiv` faults on a zero divisor (and on
+// `i64.min / -1`), so it must not be reordered or eliminated, and it needs its own variant
+// to say so. `divsd` does not fault — IEEE-754 answers `inf`/`nan` instead — so float
+// division is pure, non-trapping, and shares `binOp`'s exact operand shape. By the dialect's
+// own rule it is an opcode, not a variant. The two divisions differ in the one property the
+// band is defined by, so they land on opposite sides of it; that is the rule WORKING.
+//
+// ⚠ `binOp(div)` with an INTEGER `operandType` is ILLEGAL and the validator throws on it —
+// it would declare a trapping instruction pure. Integer division stays `StdOp.div`.
 export enum StdBinOpcode
 	add
 	sub
@@ -174,6 +186,7 @@ export enum StdBinOpcode
 	shl
 	shr
 	shrLogical
+	div
 end 'StdBinOpcode'
 
 // The Std-tier unary-operation opcodes carried by `StdOp.unaryOp`. M3 lands `neg`
@@ -317,21 +330,45 @@ export union StdOp
 	const(resultId ValueId, value ParsedInt, valueType StdType) = StdOpMeta{category: StdOpCategory.arith, role: OpRole.plain, isPure: true, isUnsupportedInInlineBody: false, isMemory: false, isStore: false, isCall: false, clobbersFlags: false, isCmp: false}
 	// Binary op `resultId = lhs <opcode> rhs` over two virtual registers. M3 carries
 	// `add`/`sub`/`mul`, all `isPure` (integer add/sub/mul never trap — unlike the
-	// `div` that M5 will declare `isPure: false`) and `clobbersFlags: true` (x64
-	// `add`/`sub`/`imul` write EFLAGS). Appended at the END of the arith band,
+	// trapping `div` below, which declares `isPure: false`) and `clobbersFlags: true`
+	// (x64 `add`/`sub`/`imul` write EFLAGS). Appended at the END of the arith band,
 	// honoring the band-append invariant; `cmp` splits out as its own variant at M4.
-	binOp(resultId ValueId, lhs ValueId, rhs ValueId, opcode StdBinOpcode) = StdOpMeta{category: StdOpCategory.arith, role: OpRole.plain, isPure: true, isUnsupportedInInlineBody: false, isMemory: false, isStore: false, isCall: false, clobbersFlags: true, isCmp: false}
+	//
+	// ⭐ `operandType` is what the op COMPUTES IN, and P1.0d.4 added it because without
+	// it this tier could not tell `add` from `addsd`. A Std value USED to be a typeless
+	// i64 and the band could stay silent about type; a float breaks that, and the
+	// alternative to a field here is the backend re-deriving the type from the operands'
+	// defs — a second type system, in the tier furthest from the source. It is a FIELD,
+	// not a variant, exactly as `const.valueType` is: the operand shape and the metadata
+	// profile do not change with the type.
+	//
+	// ⚠ `clobbersFlags: true` is an OVER-APPROXIMATION for floats and is deliberately
+	// left that way: `addsd`/`subsd`/`mulsd`/`divsd` write NO flags. `true` costs a
+	// scheduling barrier that is not needed and can never cost correctness, whereas
+	// making the answer depend on `operandType` would put value-dependent metadata in a
+	// per-variant table that cannot express it — the same trap `const` documents above.
+	// Tightening it means splitting the variant.
+	binOp(resultId ValueId, lhs ValueId, rhs ValueId, opcode StdBinOpcode, operandType StdType) = StdOpMeta{category: StdOpCategory.arith, role: OpRole.plain, isPure: true, isUnsupportedInInlineBody: false, isMemory: false, isStore: false, isCall: false, clobbersFlags: true, isCmp: false}
 	// Unary op `resultId = <opcode> operand` over one virtual register. M3 carries
 	// `neg`, which is `isPure` (integer negate never traps) and `clobbersFlags: true`
 	// (x64 `neg` writes EFLAGS). Appended at the END of the arith band, after `binOp`,
-	// honoring the band-append invariant.
-	unaryOp(resultId ValueId, operand ValueId, opcode StdUnaryOpcode) = StdOpMeta{category: StdOpCategory.arith, role: OpRole.plain, isPure: true, isUnsupportedInInlineBody: false, isMemory: false, isStore: false, isCall: false, clobbersFlags: true, isCmp: false}
-	// Integer comparison `resultId = lhs <pred> rhs`, producing an i1. M4's `if`
-	// condition. `isCmp: true` (the metadata the x64 backend pairs with the following
-	// branch); `isPure: true` (a compare never traps); `clobbersFlags: true` (x64 `cmp`
-	// writes EFLAGS). SPLIT OUT of `binOp` at the END of the arith band because it needs
-	// this different metadata — see StdCmpPred and the StdOp header.
-	cmp(resultId ValueId, lhs ValueId, rhs ValueId, pred StdCmpPred) = StdOpMeta{category: StdOpCategory.arith, role: OpRole.plain, isPure: true, isUnsupportedInInlineBody: false, isMemory: false, isStore: false, isCall: false, clobbersFlags: true, isCmp: true}
+	// honoring the band-append invariant. `operandType` per `binOp` above.
+	unaryOp(resultId ValueId, operand ValueId, opcode StdUnaryOpcode, operandType StdType) = StdOpMeta{category: StdOpCategory.arith, role: OpRole.plain, isPure: true, isUnsupportedInInlineBody: false, isMemory: false, isStore: false, isCall: false, clobbersFlags: true, isCmp: false}
+	// Comparison `resultId = lhs <pred> rhs`, producing an i1. M4's `if` condition.
+	// `isCmp: true` (the metadata the x64 backend pairs with the following branch);
+	// `isPure: true` (a compare never traps); `clobbersFlags: true` (x64 `cmp` and
+	// `ucomisd` both write EFLAGS — exact here, not an approximation). SPLIT OUT of
+	// `binOp` at the END of the arith band because it needs this different metadata —
+	// see StdCmpPred and the StdOp header.
+	//
+	// ⭐ `operandType` DECIDES THE CONDITION-CODE FAMILY, and it is not optional. `cmp`
+	// answers in OF/SF, which the signed JL/JG family reads; `ucomisd` leaves OF=SF=0
+	// always and answers in ZF/PF/CF, which the UNSIGNED JB/JA family reads. So the same
+	// `StdCmpPred.less` lowers to `jl` for an i64 and `jb` for an f64, and a float
+	// compare lowered to `jl` reads flags that were never written. The predicate alone
+	// never determined the condition code; it only looked that way while every Std
+	// compare was a signed i64. See X64CondCode and specs-shv2/float-compare-branch.md.
+	cmp(resultId ValueId, lhs ValueId, rhs ValueId, pred StdCmpPred, operandType StdType) = StdOpMeta{category: StdOpCategory.arith, role: OpRole.plain, isPure: true, isUnsupportedInInlineBody: false, isMemory: false, isStore: false, isCall: false, clobbersFlags: true, isCmp: true}
 	// Binary op with a CONSTANT right operand folded to an immediate: `resultId =
 	// lhs <opcode> imm`. Produced by `foldConstOperands` from a `binOp` whose rhs
 	// was a `const` (the const op is then DCE'd), so the literal never occupies a
@@ -342,6 +379,18 @@ export union StdOp
 	// `imul` lowering writes EFLAGS; the `lea` forms do not, but the flag is a "may
 	// clobber" over-approximation the scheduler treats as a barrier). APPENDED at the
 	// END of the arith band, after `cmp`, honoring the band-append invariant.
+	//
+	// ⭐⭐ INTEGER ONLY — it carries NO `operandType`, and that is a statement about the
+	// HARDWARE, not a convention. There is no SSE form that takes an immediate: `addsd`
+	// reads its right operand from a register or from memory, never from an encoded
+	// constant. So a float `binOp` CANNOT fold to this op, `foldConstOperands` must
+	// refuse a float rhs, and the absence of the field is what says so.
+	//
+	// ⚠ THE FOLD IS A WRONG-ANSWER SITE IF IT DOES NOT CHECK. Fold `3.5 > 9.5` and the
+	// IEEE bit patterns go through an INTEGER `cmp reg, imm32`. It would even give the
+	// right answer for most inputs — positive doubles happen to order correctly when
+	// compared as sign-magnitude integers — so the tests that would catch it are the
+	// ones with a negative operand or a NaN, not the ones named "float comparison".
 	binOpImm(resultId ValueId, lhs ValueId, imm Imm32, opcode StdBinOpcode) = StdOpMeta{category: StdOpCategory.arith, role: OpRole.plain, isPure: true, isUnsupportedInInlineBody: false, isMemory: false, isStore: false, isCall: false, clobbersFlags: true, isCmp: false}
 	// Comparison with a CONSTANT right operand folded to an immediate: `resultId =
 	// lhs <pred> imm`, producing an i1. Produced by `foldConstOperands` from a `cmp`
@@ -510,9 +559,9 @@ end 'StdValueUseSet'
 export function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 	match op 'u'
 		const then break 'u'
-		binOp(_, lhs, rhs, _) then insertUsePair(referenced, a: lhs, b: rhs)
-		unaryOp(_, operand, _) then referenced.insert(operand)
-		cmp(_, lhs, rhs, _) then insertUsePair(referenced, a: lhs, b: rhs)
+		binOp(_, lhs, rhs, _, _) then insertUsePair(referenced, a: lhs, b: rhs)
+		unaryOp(_, operand, _, _) then referenced.insert(operand)
+		cmp(_, lhs, rhs, _, _) then insertUsePair(referenced, a: lhs, b: rhs)
 		binOpImm(_, lhs, _, _) then referenced.insert(lhs)
 		cmpImm(_, lhs, _, _) then referenced.insert(lhs)
 		div(_, lhs, rhs) then insertUsePair(referenced, a: lhs, b: rhs)
@@ -561,9 +610,9 @@ end 'insertUsePair'
 module function remapStdOpUses(op StdOp, subst ValueIdArray) returns StdOp
 	return match op 'r'
 		const gives op
-		binOp(resultId, lhs, rhs, opcode) gives StdOp.binOp(resultId, lhs: remappedValue(lhs, subst: subst), rhs: remappedValue(rhs, subst: subst), opcode: opcode)
-		unaryOp(resultId, operand, opcode) gives StdOp.unaryOp(resultId, operand: remappedValue(operand, subst: subst), opcode: opcode)
-		cmp(resultId, lhs, rhs, pred) gives StdOp.cmp(resultId, lhs: remappedValue(lhs, subst: subst), rhs: remappedValue(rhs, subst: subst), pred: pred)
+		binOp(resultId, lhs, rhs, opcode, operandType) gives StdOp.binOp(resultId, lhs: remappedValue(lhs, subst: subst), rhs: remappedValue(rhs, subst: subst), opcode: opcode, operandType: operandType)
+		unaryOp(resultId, operand, opcode, operandType) gives StdOp.unaryOp(resultId, operand: remappedValue(operand, subst: subst), opcode: opcode, operandType: operandType)
+		cmp(resultId, lhs, rhs, pred, operandType) gives StdOp.cmp(resultId, lhs: remappedValue(lhs, subst: subst), rhs: remappedValue(rhs, subst: subst), pred: pred, operandType: operandType)
 		binOpImm(resultId, lhs, imm, opcode) gives StdOp.binOpImm(resultId, lhs: remappedValue(lhs, subst: subst), imm: imm, opcode: opcode)
 		cmpImm(resultId, lhs, imm, pred) gives StdOp.cmpImm(resultId, lhs: remappedValue(lhs, subst: subst), imm: imm, pred: pred)
 		div(resultId, lhs, rhs) gives StdOp.div(resultId, lhs: remappedValue(lhs, subst: subst), rhs: remappedValue(rhs, subst: subst))

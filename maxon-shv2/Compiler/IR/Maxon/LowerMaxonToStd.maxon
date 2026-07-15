@@ -310,7 +310,7 @@ type MaxonToStdLowering
 	// emit site shared by the arithmetic and bit bands, so the two range arms above
 	// dispatch rather than duplicate.
 	function appendStdBinOp(result ValueId, lhs ValueId, rhs ValueId, op MaxonBinOp, dstBlock IrBlock)
-		self.stdModule.appendOp(dstBlock, op: StdOp.binOp(result, lhs: lhs, rhs: rhs, opcode: maxonBinOpToStdOpcode(op)))
+		self.stdModule.appendOp(dstBlock, op: StdOp.binOp(result, lhs: lhs, rhs: rhs, opcode: maxonBinOpToStdOpcode(op), operandType: StdType.i64))
 	end 'appendStdBinOp'
 
 	// Lower a Maxon unary op to its Std counterpart. Like lowerBinOp, the operand
@@ -318,14 +318,14 @@ type MaxonToStdLowering
 	// to a width/ABI-resolved Std opcode.
 	function lowerUnaryOp(result ValueId, operand ValueId, op MaxonUnaryOp, dstBlock IrBlock)
 		let opcode = maxonUnaryOpToStdOpcode(op)
-		self.stdModule.appendOp(dstBlock, op: StdOp.unaryOp(result, operand: operand, opcode: opcode))
+		self.stdModule.appendOp(dstBlock, op: StdOp.unaryOp(result, operand: operand, opcode: opcode, operandType: StdType.i64))
 	end 'lowerUnaryOp'
 
 	// Lower a Maxon comparison to `StdOp.cmp`. Operand/result ValueIds pass through
 	// verbatim; only the source-level comparison operator maps to a Std predicate.
 	function lowerCompare(result ValueId, lhs ValueId, rhs ValueId, op MaxonCmpOp, dstBlock IrBlock)
 		let pred = maxonCmpOpToStdPred(op)
-		self.stdModule.appendOp(dstBlock, op: StdOp.cmp(result, lhs: lhs, rhs: rhs, pred: pred))
+		self.stdModule.appendOp(dstBlock, op: StdOp.cmp(result, lhs: lhs, rhs: rhs, pred: pred, operandType: StdType.i64))
 	end 'lowerCompare'
 
 	// Lower a Maxon conditional branch to its Std counterpart, as the block's

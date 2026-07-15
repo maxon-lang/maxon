@@ -1,6 +1,6 @@
 // RegBits — the bit primitives the register allocator is built on: a value-id BITSET and a
-// physical-register MASK (a `u16`-shaped word, one bit per GPR). NO `Set` and NO hashing anywhere
-// in the allocator's hot path (design §"Data representation").
+// physical-register MASK (one bit per register, GPRs at bits 0-15 and XMMs at 16-31). NO `Set`
+// and NO hashing anywhere in the allocator's hot path (design §"Data representation").
 //
 // **A bitset is the right shape INSIDE a block, and the wrong shape ACROSS blocks.** Within a
 // block's backward sweep, bits flip at every op, so a dense row is exactly right. But per-block
@@ -173,17 +173,18 @@ function popcountWord(word MachineWord) returns WordBitCount
 end 'popcountWord'
 
 // ==========================================================================
-// Physical-register masks (a `u16`, one bit per X64Register number 0..15)
+// Physical-register masks (one bit per X64Register number 0..31)
 // ==========================================================================
 
-// The 16 x64 GPRs. A RegMask (TargetDialect) is a bit per register number.
+// The 32 x64 registers the allocator colors into: 16 GPRs (0..15) then 16 XMMs
+// (16..31). A RegMask (TargetDialect) is a bit per register number, spanning both.
 //
-// `RegNum`'s upper bound is this same 16, RESPELLED as a literal because a typealias range bound
+// `RegNum`'s upper bound is this same 32, RESPELLED as a literal because a typealias range bound
 // must be a literal (E2010) — a range cannot name a constant. The two must move together; the
-// `fullRegisterMask` / `RegNum` pair is the whole of what "the register file is 16 wide" means
+// `fullRegisterMask` / `RegNum` pair is the whole of what "the register file is 32 wide" means
 // here, and a widened file with a stale `RegNum` would range-check-panic on the new registers
 // rather than silently mis-encode them.
-export let RegisterFileSize = 16
+export let RegisterFileSize = 32
 
 // Bytes per spill slot: one 64-bit machine word. Every Std value is a signed i64, so a
 // spilled value occupies exactly 8 bytes. The cold-spill splitter (SplitLiveRanges) sets
@@ -209,11 +210,59 @@ export typealias RegCount = int(0 to u64.max)
 // It was `MachineWord` — the alias for a raw 64-bit word, which is also what a `movRegImm`
 // IMMEDIATE and a bitset WORD are. A register number and a 64-bit constant are not the same kind
 // of thing, and this is the narrowest range in the allocator, so it is the one worth stating.
-export typealias RegNum = int(0 to 16)
+export typealias RegNum = int(0 to 32)
 
-// The mask with every allocatable-file bit set (bits 0..RegisterFileSize-1). Derived
+// The FIRST XMM's register number — the boundary between the two files, and the bit that
+// classifies one. Named because `regClassOf` and both class masks would otherwise each spell
+// a bare 16, which is the same fact written three times.
+//
+// RESPELLED as a literal rather than read off `X64Register.xmm0.rawValue`, for the same
+// reason `RegNum`'s bound is (see below): a top-level `let` is const-evaluated, and the
+// evaluator does not fold `.rawValue` (E2045). The enum and this constant must move
+// together; `regClassOf` is the only reader, and a spec pins the pairing
+// (specs-shv2/float-type.md exercises both files in one function).
+export let FirstXmmRegisterNumber = 16 as RegNum
+
+// The CLASS of a physical register, derived from its number — the ONE place the GPR/XMM
+// boundary is decided.
+export function regClassOf(reg RegNum) returns RegClass
+	return RegClass.xmm if reg >= FirstXmmRegisterNumber else RegClass.gpr
+end 'regClassOf'
+
+// The mask with every bit of ONE register file set. This — not `fullRegisterMask` — is what
+// "the whole pool" means for any value, because a value can only ever take a register from
+// its own class.
+//
+// ⚠⚠ EVERY POOL-SIZE TEST MUST BE PER CLASS, AND THE TWO FAILURES ARE OPPOSITE. Ask an
+// int's 14 allowed registers whether they are "the whole pool" against a 32-wide
+// `fullRegisterMask()` and the answer is always no ⇒ EVERY value reads CONSTRAINED ⇒ the
+// allocator runs a permanent census over every operand of every op. That is a pure TIME
+// regression, and `scale-test` measures MEMORY, so nothing in the gate battery would see it.
+// Ask the same question per class and the answer is right — but `constrained == 0` comes
+// back for 15 live ints, and the per-class FULL-POOL PIGEONHOLE becomes the only thing that
+// still catches them. Both halves, or one failure survives.
+export function classRegisterMask(class RegClass) returns RegMask
+	return match class 'class'
+		gpr gives (1 shl FirstXmmRegisterNumber) - 1
+		xmm gives ((1 shl RegisterFileSize) - 1) and not ((1 shl FirstXmmRegisterNumber) - 1)
+	end 'class'
+end 'classRegisterMask'
+
+// How many registers a value of this class could take if nothing were blocked — the
+// denominator of every "is this value constrained?" and "is this pool full?" test.
+export function classPoolSize(class RegClass) returns RegCount
+	return regMaskPopcount(classRegisterMask(class))
+end 'classPoolSize'
+
+// The mask with every allocatable bit of BOTH files set (bits 0..RegisterFileSize-1). Derived
 // from `RegisterFileSize` so the file width lives in exactly one place; the "not in
 // the pool" complement is `fullRegisterMask() and not pool`.
+//
+// ⚠ This is the WHOLE MACHINE, not "the pool" of any value — no value may take a register
+// outside its own class, so a per-value question answered against this mask is answering
+// about registers the value can never have. Use `classRegisterMask(regClassOf(v))`. The
+// remaining honest uses are whole-machine ones: complementing a pool to block everything
+// outside it, and forming a scratch mask.
 export function fullRegisterMask() returns RegMask
 	return (1 shl RegisterFileSize) - 1
 end 'fullRegisterMask'
@@ -243,9 +292,14 @@ export function regMaskPopcount(mask RegMask) returns RegCount
 	return popcountWord(mask)
 end 'regMaskPopcount'
 
-// The LOWEST register number (0..15) whose bit is CLEAR in `blocked`, or
-// `RegisterFileSize` (16) if every register is blocked. Picking a register is this
+// The LOWEST register number (0..31) whose bit is CLEAR in `blocked`, or
+// `RegisterFileSize` (32) if every register is blocked. Picking a register is this
 // single call — no set iteration, no interference-graph neighbour walk.
+//
+// ⚠ It scans BOTH files, so `blocked` must already exclude the other class — the caller
+// blocks everything outside the value's pool (`fullRegisterMask() and not pool`) and the
+// pool is class-filtered. Hand it a mask that does not, and it will hand back an XMM for
+// an int whose GPRs are all taken.
 export function lowestClearRegister(blocked RegMask) returns RegNum
 	for regNum in 0 upto RegisterFileSize 'scan'
 		if not regMaskContains(blocked, regNum: regNum) 'free'

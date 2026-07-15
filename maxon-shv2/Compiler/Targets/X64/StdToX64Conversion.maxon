@@ -324,7 +324,7 @@ type StdToX64Lowering
 			// identically: `foldConstOperands` moved the right operand into an immediate, which
 			// changed the instruction, not what the compare means.
 			match op 'isTheCompare'
-				cmp(defId, _, _, pred) then fuseIfDefines(fused, defId: defId, condId: condId, pred: pred)
+				cmp(defId, _, _, pred, _) then fuseIfDefines(fused, defId: defId, condId: condId, pred: pred)
 				cmpImm(defId, _, _, pred) then fuseIfDefines(fused, defId: defId, condId: condId, pred: pred)
 				const to unaryOp then break 'isTheCompare'
 				binOpImm then break 'isTheCompare'
@@ -404,9 +404,9 @@ type StdToX64Lowering
 	function lowerBodyOp(op StdOp, dstBlock IrBlock, returnType StdReturnType)
 		match op 'lower'
 			const(resultId, value, valueType) then self.lowerConst(resultId, value: value, valueType: valueType, dstBlock: dstBlock)
-			binOp(resultId, lhs, rhs, opcode) then self.lowerBinOp(resultId, lhs: lhs, rhs: rhs, opcode: opcode, dstBlock: dstBlock)
-			unaryOp(resultId, operand, opcode) then self.lowerUnaryOp(resultId, operand: operand, opcode: opcode, dstBlock: dstBlock)
-			cmp(resultId, lhs, rhs, pred) then self.lowerCmp(resultId, lhs: lhs, rhs: rhs, pred: pred, dstBlock: dstBlock)
+			binOp(resultId, lhs, rhs, opcode, _) then self.lowerBinOp(resultId, lhs: lhs, rhs: rhs, opcode: opcode, dstBlock: dstBlock)
+			unaryOp(resultId, operand, opcode, _) then self.lowerUnaryOp(resultId, operand: operand, opcode: opcode, dstBlock: dstBlock)
+			cmp(resultId, lhs, rhs, pred, _) then self.lowerCmp(resultId, lhs: lhs, rhs: rhs, pred: pred, dstBlock: dstBlock)
 			binOpImm(resultId, lhs, imm, opcode) then self.lowerBinOpImm(resultId, lhs: lhs, imm: imm, opcode: opcode, dstBlock: dstBlock)
 			cmpImm(resultId, lhs, imm, pred) then self.lowerCmpImm(resultId, lhs: lhs, imm: imm, pred: pred, dstBlock: dstBlock)
 			div(resultId, lhs, rhs) then self.lowerDivMod(resultId, lhs: lhs, rhs: rhs, resultReg: X64Register.rax, dstBlock: dstBlock)
@@ -479,6 +479,7 @@ type StdToX64Lowering
 			// One arm for all three shifts: they differ only in WHICH group-2 instruction they
 			// name, and `shiftInstructionOf` is the one place that is decided.
 			shl to shrLogical then self.lowerShiftCl(dest, lhsReg: lhsReg, countId: rhs, instr: shiftInstructionOf(opcode), dstBlock: dstBlock)
+			div then panic("lowerBinOp: `div` is the FLOAT division opcode and the SSE lowering has not landed (P1.0d.4). Unreachable until the parser accepts a float literal.")
 		end 'op'
 	end 'lowerBinOp'
 
@@ -511,6 +512,7 @@ type StdToX64Lowering
 			shr gives ShiftInstruction.sar
 			shrLogical gives ShiftInstruction.shr
 			add to bitXor panic("shiftInstructionOf: {opcode.rawValue} is not a shift — only `shl`/`shr`/`shrLogical` name a group-2 instruction")
+			div panic("shiftInstructionOf: `div` is float division, not a shift — only `shl`/`shr`/`shrLogical` name a group-2 instruction")
 		end 'o'
 	end 'shiftInstructionOf'
 
@@ -579,6 +581,11 @@ type StdToX64Lowering
 			// A CONSTANT shift count needs no RCX at all — the whole reason `foldConstOperands`
 			// bothers to fold it.
 			shl to shrLogical then self.lowerShiftImm8(dest, base: base, imm: imm, instr: shiftInstructionOf(opcode), dstBlock: dstBlock)
+			// PERMANENTLY unreachable, and it is the hardware that says so: no SSE instruction
+			// takes an immediate operand, so a float `binOp` has no immediate form to fold to
+			// and `foldConstOperands` refuses one. If this ever fires, that guard is gone and
+			// IEEE bit patterns are riding the integer ALU.
+			div then panic("lowerBinOpImm: `div` is float division and no SSE form takes an immediate — foldConstOperands must never produce this")
 		end 'op'
 	end 'lowerBinOpImm'
 
