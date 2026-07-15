@@ -954,7 +954,19 @@ error E3099: specs/fragments/first-class-functions/first-class-function.capturin
 ```
 
 <!-- test: first-class-function.capturing-closure-in-global-errors -->
-A GLOBAL outlives every frame, so a capturing closure stored in one dangles by definition.
+A global outlives every frame, so a capturing closure stored in one would dangle — but the
+program never gets that far, and the reason is worth stating exactly, because this test used to
+claim otherwise.
+
+A global cannot BE function-typed: it takes no type annotation (`var handler UnaryOp = dbl` is a
+parse error) and a function reference is not a constant initializer, so `handler` here is an
+`int`. The value therefore fails the TYPE rule before the escape rule is ever asked, and E3005 is
+the honest answer: it is the one whose advice works. E3099's — "use a function reference" —
+does NOT fix this program, because `handler = dbl` is refused by the very same type rule.
+
+So the escape rule's GLOBAL route is unreachable while globals cannot hold a function, and the
+rule is carried by the routes that CAN: a struct field, a container, a union payload, a payload
+binding, a return, and a ternary arm — each with its own test above.
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -968,7 +980,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3099: specs/fragments/first-class-functions/first-class-function.capturing-closure-in-global-errors.test:9:2: cannot store a closure that captures in global 'handler': captures are taken by reference to the enclosing function's frame, so a closure that captures cannot outlive that frame. Use a function reference, or a closure that captures nothing
+error E3005: specs/fragments/first-class-functions/first-class-function.capturing-closure-in-global-errors.test:9:2: cannot assign a function value to global 'handler', which holds 'int': a function value is only assignable to a place of a function type declared with 'typealias'
 ```
 
 <!-- test: first-class-function.capturing-closure-in-container-errors -->
@@ -1078,6 +1090,204 @@ end 'main'
 ```
 ```exitcode
 62
+```
+
+<!-- test: first-class-function.capturing-closure-called-from-nested-block -->
+The same closure, called from a DIFFERENT block of the same frame. This is not an escape and
+must not be confused with one: the call happens inside `main`, the frame is alive, and nothing
+outlives anything — the only thing that changed is which block the call sits in.
+
+It is a separate test from `capturing-closure-used-in-frame` because that one calls `f` in the
+block that binds it, and a same-block call reuses the SSA value the `closure_create` produced,
+which still knows its environment. Crossing a block boundary forces the value to be re-read from
+the variable, and THAT is the route that was broken: the environment reached a callee only from
+that SSA value or from a slot the lowering paired with a PARAMETER, so a capturing closure bound
+to a LOCAL was called with an environment of 0 and nil-dereffed inside `_$closure_0`. Both arms
+of the `if` are exercised so neither the taken nor the untaken path can hide it.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+function main() returns ExitCode
+	let bump = 5
+	let f = function(n Integer) gives n + bump
+	var total = 0 as Integer
+
+	total = total + f(1)
+
+	if total > 0 'taken'
+		total = total + f(10)
+	end 'taken'
+
+	var i = 0 as Integer
+	while i < 2 'loop'
+		total = total + f(100)
+		i = i + 1
+	end 'loop'
+
+	return total as ExitCode
+end 'main'
+```
+```exitcode
+231
+```
+
+<!-- test: first-class-function.capturing-closure-bound-outside-loop-called-inside -->
+The shape people actually write, and the one the two tests around it both miss: the closure is
+bound OUTSIDE the loop and called INSIDE it, so ONE environment must survive being read on many
+iterations. `capturing-closure-rebound-in-loop` binds afresh each iteration and never carries an
+environment across one; `capturing-closure-called-from-nested-block` crosses a block but not a
+scope_end that runs repeatedly.
+
+This asserts the VALUES, not just a clean exit, because the failure it guards is a
+USE-AFTER-FREE and a freed block is not immediately a wrong one: every `maxon.scope_end` sweeps
+every orphan temp in the whole function, so the loop body's scope_end released an environment
+the enclosing scope still owned. The first read after the free still found the old bytes and
+answered correctly; the reads after `print` had recycled the block returned garbage that CHANGED
+per iteration. Exactly two correct iterations, then nonsense.
+
+⚠ A leak gate cannot see this. `mm_alloc == mm_free` balances perfectly here — the block IS
+freed, exactly once, just far too early. Freed-too-early and never-freed are different faults,
+and only one of them is a leak. `print` is load-bearing: it churns the heap, which is what turns
+a silent read of dead memory into a visible wrong answer.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+function main() returns ExitCode
+	let bump = 5 as Integer
+	let f = function(n Integer) gives n + bump
+	var i = 0 as Integer
+	var acc = 0 as Integer
+
+	while i < 5 'loop'
+		let r = f(i)
+		print("i={i} -> {r}\n")
+		acc = acc + r
+		i = i + 1
+	end 'loop'
+
+	return acc as ExitCode
+end 'main'
+```
+```exitcode
+35
+```
+```stdout
+i=0 -> 5
+i=1 -> 6
+i=2 -> 7
+i=3 -> 8
+i=4 -> 9
+```
+
+<!-- test: first-class-function.capturing-closure-bound-outside-loop-passed-down -->
+The same environment, read across iterations through a CALLEE rather than directly. The callee
+receives the closure as a parameter, so its environment arrives as the caller's — borrowed for
+the length of the call. The callee must not release it: its own scope_end cleans a parameter
+named just like a binding, and treating the two alike would free the CALLER's live environment
+on the first call and leave every later iteration reading dead memory.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+typealias UnaryOp = function(Integer) returns Integer
+
+function apply(f UnaryOp, x Integer) returns Integer
+	return f(x)
+end 'apply'
+
+function main() returns ExitCode
+	let bump = 5 as Integer
+	let f = function(n Integer) gives n + bump
+	var i = 0 as Integer
+	var acc = 0 as Integer
+
+	while i < 5 'loop'
+		acc = acc + apply(f, x: i)
+		i = i + 1
+	end 'loop'
+
+	return acc as ExitCode
+end 'main'
+```
+```exitcode
+35
+```
+
+<!-- test: first-class-function.capturing-closure-passed-to-try-call -->
+A capturing closure handed to a THROWING callee, through `try`. A try-call flattens its arguments
+exactly as a plain call does, but it was never given the maps that say what environment a function
+value carries, so it could only answer 0 — and this failed in ANY block, including the one that
+bound the closure, which is why no loop is needed to show it.
+
+That the plain-call and try-call paths could disagree at all is the point: both ask "what
+environment travels with this value?", and the answer is now written once, in one helper, rather
+than once per call shape.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+typealias UnaryOp = function(Integer) returns Integer
+
+enum ApplyError implements Error
+	negative = "n must not be negative"
+end 'ApplyError'
+
+function applyChecked(f UnaryOp, n Integer) returns Integer throws ApplyError
+	if n < 0 'guard'
+		throw ApplyError.negative
+	end 'guard'
+
+	return f(n)
+end 'applyChecked'
+
+function main() returns ExitCode
+	let bump = 5 as Integer
+	let f = function(n Integer) gives n + bump
+
+	let ok = try applyChecked(f, n: 10) otherwise 0
+	let bad = try applyChecked(f, n: -1) otherwise 99
+
+	return (ok + bad) as ExitCode
+end 'main'
+```
+```exitcode
+114
+```
+
+<!-- test: first-class-function.capturing-closure-rebound-in-loop -->
+A closure bound afresh on every iteration and called from a block NESTED inside that loop. The
+environment is per-iteration, so each call must see its OWN `bump` rather than the first or the
+last — a single environment slot reused across iterations would still pass the cross-block test
+above while quietly reading a stale frame here.
+
+It also pins the refcount discipline: the variable's environment slot is a BORROWED alias, and
+the reference stays owned by the temp the `closure_create` allocated. Five iterations therefore
+allocate five environments and free five — an owning alias would double-free them, and a second
+incref would leak them.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+function main() returns ExitCode
+	var total = 0 as Integer
+	var i = 0 as Integer
+
+	while i < 5 'l'
+		let bump = i * 10
+		let f = function(n Integer) gives n + bump
+
+		if true 'inner'
+			total = total + f(1)
+		end 'inner'
+
+		i = i + 1
+	end 'l'
+
+	return total as ExitCode
+end 'main'
+```
+```exitcode
+105
 ```
 
 <!-- test: first-class-function.capturing-closure-name-not-leaked -->
@@ -1296,4 +1506,100 @@ end 'main'
 ```
 ```exitcode
 42
+```
+
+## A function value only fits a function-typed place
+
+A function value is assignable to a place declared with a function `typealias`, and to nothing
+else. This is a TYPE rule, and it is deliberately NOT the escape rule above: it fires for a
+plain top-level function that captures nothing and escapes nowhere, and it would fire just the
+same if closures did not exist. "May this value be represented here?" and "may this value
+OUTLIVE here?" are separate questions, and a place can fail either, both, or neither.
+
+<!-- test: first-class-function.function-value-into-int-global-errors -->
+Unchecked, this store reached the LOWERING, where a function pointer and an integer slot have
+different representations and the cast between them failed as an E9001 internal error — quoting
+a .NET type name, naming no source position, and describing no defect in the program. An
+internal error is by definition a compiler bug when a user program can provoke it.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+var slot = 0 as Integer
+
+function dbl(n Integer) returns Integer
+	return n * 2
+end 'dbl'
+
+function main() returns ExitCode
+	slot = dbl
+	return 0 as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/first-class-functions/first-class-function.function-value-into-int-global-errors.test:12:2: cannot assign a function value to global 'slot', which holds 'int': a function value is only assignable to a place of a function type declared with 'typealias'
+```
+
+<!-- test: first-class-function.function-value-into-int-local-errors -->
+The same rule for a LOCAL. This one was worse than an internal error: with the value never
+read, the whole program compiled CLEAN and the mismatch was never reported at all.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+function dbl(n Integer) returns Integer
+	return n * 2
+end 'dbl'
+
+function main() returns ExitCode
+	var loc = 0 as Integer
+	loc = dbl
+	return 0 as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/first-class-functions/first-class-function.function-value-into-int-local-errors.test:11:2: cannot assign a function value to variable 'loc', which holds 'int': a function value is only assignable to a place of a function type declared with 'typealias'
+```
+
+<!-- test: first-class-function.capturing-closure-into-int-local-errors -->
+A CLOSURE into the same int local. It is the type rule that answers, not the escape rule: the
+value never leaves the frame, so there is no escape to report — it simply does not fit.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+function main() returns ExitCode
+	let bump = 5 as Integer
+	var loc = 0 as Integer
+	loc = function(n Integer) gives n + bump
+	return 0 as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/first-class-functions/first-class-function.capturing-closure-into-int-local-errors.test:8:2: cannot assign a function value to variable 'loc', which holds 'int': a function value is only assignable to a place of a function type declared with 'typealias'
+```
+
+<!-- test: first-class-function.function-value-returned-as-int-errors -->
+The RETURN position reaches the same mismatch by a different road: the return check consulted
+the numeric widening table directly, and that table answers only for numeric kinds, so a
+function kind fell off the end of it as an E9001 "Unhandled cast combination: Function ->
+Integer". The correctly worded type error was already written one line below it.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+function dbl(n Integer) returns Integer
+	return n * 2
+end 'dbl'
+
+function bad() returns Integer
+	return dbl
+end 'bad'
+
+function main() returns ExitCode
+	return bad() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/first-class-functions/first-class-function.function-value-returned-as-int-errors.test:10:2: Cannot return 'function' from function declared to return 'int'
 ```

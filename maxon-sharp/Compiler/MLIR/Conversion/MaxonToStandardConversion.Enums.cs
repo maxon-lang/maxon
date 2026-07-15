@@ -346,6 +346,7 @@ public static partial class MaxonToStandardConversion {
     List<StdValue> newArgs,
     string calleeName,
     Dictionary<int, string>? fnEnvVarNames = null,
+    Dictionary<int, StdI64>? fnEnvDirectValues = null,
     List<string?>? argVarNames = null) {
     bool calleeIsEnumInstance = IsEnumInstanceMethod(calleeFunc);
 
@@ -453,18 +454,10 @@ public static partial class MaxonToStandardConversion {
         // Struct/interface arg from managed memory get — the value is already a pointer
         newArgs.Add(rawPtrValue);
       } else if (calleeFunc.ParamTypes[i] is IrFunctionType) {
-        // Function-typed arg: pass fn_ptr + env_ptr
-        newArgs.Add(valueMap[arg]);
-        // Look up and pass the associated env_ptr
+        // Function-typed arg: pass fn_ptr + env_ptr, the two halves of one value.
         var fnStdVal = valueMap[arg];
-        if (fnEnvVarNames != null && fnEnvVarNames.TryGetValue(fnStdVal.Id, out var envVarName)) {
-          var envPtr = EmitLoad(block, envVarName, varTypes);
-          newArgs.Add(envPtr);
-        } else {
-          var zeroConst = new StdConstI64Op(0);
-          block.AddOp(zeroConst);
-          newArgs.Add(zeroConst.Result);
-        }
+        newArgs.Add(fnStdVal);
+        newArgs.Add(ResolveClosureEnvArg(fnStdVal.Id, block, varTypes, fnEnvVarNames, fnEnvDirectValues));
       } else if (calleeFunc.ParamTypes[i] is not IrStructType and not IrInterfaceType and not IrEnumType) {
         newArgs.Add(valueMap[arg]);
       } else {

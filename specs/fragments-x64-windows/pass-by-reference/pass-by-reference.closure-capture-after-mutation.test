@@ -31,11 +31,11 @@ module {
   }
   func @main() -> u32 {
   entry:
-    x64.prologue stack_size=32
+    x64.prologue stack_size=48
     x64.mov rax, 10
     x64.mov [rbp-8], rax
     x64.lea_func rcx, [_$closure_1]
-    x64.mov [rbp-24], rcx
+    x64.mov [rbp-32], rcx
     x64.mov rcx, 8
     x64.xor edx, edx
     x64.mov r8, 14
@@ -46,17 +46,24 @@ module {
     x64.mov [rbp-16], rax
     x64.mov rcx, [rbp-16]
     x64.call mm_incref
-    x64.mov rsi, 99
-    x64.mov [rbp-8], rsi
-    x64.mov rdi, [rbp-16]
+    x64.mov rsi, [rbp-16]
+    x64.mov [rbp-24], rsi
+    x64.test rsi, rsi
+    x64.jz __nonnull_skip_0
     x64.mov rcx, [rbp-24]
+    x64.call mm_incref
+    x64.label __nonnull_skip_0
+    x64.mov rdi, 99
+    x64.mov [rbp-8], rdi
+    x64.mov r8, [rbp-16]
+    x64.mov rcx, [rbp-32]
     x64.mov rdx, [rbp-16]
     x64.call apply
-    x64.xor r8d, r8d
-    x64.mov r9, 4294967295
-    x64.cmp rax, r9
+    x64.xor r9d, r9d
+    x64.mov ecx, 4294967295
+    x64.cmp rax, rcx
     x64.jg main.__range_panic_0
-    x64.cmp rax, r8
+    x64.cmp rax, r9
     x64.jl main.__range_panic_0
     x64.jmp main.__range_ok_0
   __range_panic_0:
@@ -64,13 +71,20 @@ module {
     x64.mov rcx, rax
     x64.call mrt_panic
   __range_ok_0:
-    x64.mov rcx, [rbp-16]
-    x64.mov [rbp-32], rax
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_0
+    x64.mov rdx, [rbp-24]
+    x64.mov [rbp-40], rax
+    x64.test rdx, rdx
+    x64.jz __nonnull_skip_1
+    x64.mov rcx, [rbp-24]
     x64.call mm_decref
-    x64.label __nonnull_skip_0
-    x64.mov rax, [rbp-32]
+    x64.label __nonnull_skip_1
+    x64.mov rax, [rbp-16]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_2
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_2
+    x64.mov rax, [rbp-40]
     x64.epilogue
     x64.ret
   }

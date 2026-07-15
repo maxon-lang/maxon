@@ -540,7 +540,7 @@ public static partial class MaxonToStandardConversion {
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
     Dictionary<int, string> fnEnvVarNames,
-    Dictionary<int, StdValue> fnEnvDirectValues,
+    Dictionary<int, StdI64> fnEnvDirectValues,
     Dictionary<int, int> paramFlatIndex) {
     int flatIdx = paramFlatIndex.GetValueOrDefault(paramIndex, paramIndex);
     var paramOp = new StdParamOp(flatIdx, paramName, new StdPtr(IrContext.Current.NextStdId()));
@@ -550,12 +550,146 @@ public static partial class MaxonToStandardConversion {
     block.AddOp(new StdStorePtrOp((StdPtr)paramOp.Result, paramName));
     varTypes[paramName] = "ptr";
     // Receive the hidden env_ptr (next parameter slot)
-    var envVarName = $"__env_{paramName}";
-    var envParamOp = new StdParamOp(flatIdx + 1, envVarName, new StdI64(IrContext.Current.NextStdId()));
+    var envVarName = ClosureEnvSlotName(paramName);
+    var envValue = new StdI64(IrContext.Current.NextStdId());
+    var envParamOp = new StdParamOp(flatIdx + 1, envVarName, envValue);
     block.AddOp(envParamOp);
     EmitStore(block, envParamOp.Result, envVarName, varTypes);
     fnEnvVarNames[paramOp.Result.Id] = envVarName;
-    fnEnvDirectValues[paramOp.Result.Id] = envParamOp.Result;
+    fnEnvDirectValues[paramOp.Result.Id] = envValue;
+  }
+
+  /// <summary>
+  /// The slot that carries the capture ENVIRONMENT of the function value held by
+  /// <paramref name="varName"/>. Naming it here, once, is what lets a function value's pointer and
+  /// its environment travel together: whoever BINDS the value writes this slot, and whoever READS
+  /// the variable in another block finds it. Spelling the prefix at each site instead is how the
+  /// two halves came apart — the binder wrote an environment only for a PARAMETER, and a local's
+  /// reader dutifully looked up a slot nobody had created and passed 0.
+  /// </summary>
+  private static string ClosureEnvSlotName(string varName) => $"__env_{varName}";
+
+  /// <summary>
+  /// The capture environment belonging to the function value <paramref name="fnValueId"/>, or null
+  /// when the value carries none (a plain function reference, which ignores the argument anyway).
+  ///
+  /// A direct value is preferred over a slot because a PARAMETER's environment arrives as an SSA
+  /// value that is already correct in every block; a slot must be re-loaded where it is read.
+  /// </summary>
+  private static StdI64? ResolveClosureEnvPtr(
+    int fnValueId,
+    IrBlock<StandardOp> block,
+    Dictionary<string, string> varTypes,
+    Dictionary<int, string>? fnEnvVarNames,
+    Dictionary<int, StdI64>? fnEnvDirectValues) {
+    if (fnEnvDirectValues != null && fnEnvDirectValues.TryGetValue(fnValueId, out var directEnvPtr))
+      return directEnvPtr;
+
+    if (fnEnvVarNames == null || !fnEnvVarNames.TryGetValue(fnValueId, out var envVarName)) return null;
+
+    // Every environment slot is written as a raw pointer, so its load is always in the i64 family
+    // (`EmitLoad` answers StdHeapPtr for a slot registered as managed, which derives from StdI64).
+    return EmitLoad(block, envVarName, varTypes) as StdI64
+      ?? throw new InvalidOperationException($"closure env slot '{envVarName}' is not pointer-typed");
+  }
+
+  /// <summary>
+  /// The hidden environment ARGUMENT accompanying a function value that is being handed to a callee
+  /// — as the callee of an indirect call, or as an argument to a direct one. Zero when the value
+  /// carries no environment, which every callee tolerates because a function that captures nothing
+  /// never reads the parameter.
+  ///
+  /// This is the ONLY place that answers "what environment travels with this function value?", and
+  /// it is a deliberate consolidation. The answer was written out three times — once per call shape
+  /// — and the copies disagreed: the argument path could not see an environment at all unless it was
+  /// handed the map, and the TRY-call path was never handed it, so `try apply(f, ...)` passed 0 and
+  /// nil-dereffed. A fact spelled once per caller is a fact that will differ per caller.
+  /// </summary>
+  private static StdI64 ResolveClosureEnvArg(
+    int fnValueId,
+    IrBlock<StandardOp> block,
+    Dictionary<string, string> varTypes,
+    Dictionary<int, string>? fnEnvVarNames,
+    Dictionary<int, StdI64>? fnEnvDirectValues) {
+    var envPtr = ResolveClosureEnvPtr(fnValueId, block, varTypes, fnEnvVarNames, fnEnvDirectValues);
+    if (envPtr != null) return envPtr;
+
+    var zeroConst = new StdConstI64Op(0);
+    block.AddOp(zeroConst);
+
+    return zeroConst.Result;
+  }
+
+  /// <summary>
+  /// Binds <paramref name="envPtr"/> as the environment of the function value now held by
+  /// <paramref name="varName"/>, so a read of that variable in ANOTHER block still reaches it.
+  ///
+  /// The binding TAKES A REFERENCE, and <see cref="ReleaseClosureEnvSlot"/> drops it when the
+  /// binding's scope ends. Treating the slot as a borrowed alias of the `closure_create` temp
+  /// instead — which is what this did first — is a USE-AFTER-FREE: every `maxon.scope_end` sweeps
+  /// EVERY orphan temp in the function (`VarRegistry.OrphanTemps` is one flat per-function set with
+  /// no scope attached), so the temp's reference is dropped by the FIRST scope_end reached, which
+  /// for a closure bound outside a loop and called inside it is the loop body's — while the
+  /// variable, and this slot, live on in the enclosing scope. Two iterations then read a freed
+  /// block: the first still finds the old bytes intact, the next reads whatever reused them.
+  ///
+  /// The reference is what makes the binding's lifetime the env's lifetime, independently of
+  /// whichever scope_end happens to sweep the temp first.
+  ///
+  /// <paramref name="ownedEnvSlots"/> records that THIS binding owns its slot's reference, and the
+  /// distinction is load-bearing: <see cref="LowerFunctionParam"/> writes a slot of the same NAME
+  /// for a function-typed parameter, but that one holds the CALLER's environment, which the callee
+  /// borrows for the length of the call and must never incref, decref, or release.
+  /// </summary>
+  private static void BindClosureEnvSlot(
+    IrBlock<StandardOp> block,
+    StdI64 envPtr,
+    string varName,
+    Dictionary<string, string> varTypes,
+    HashSet<string> ownedEnvSlots,
+    string scopeName) {
+    var slotName = ClosureEnvSlotName(varName);
+
+    // Rebinding (`var f = <closure>` then `f = <other>`) drops the environment this binding still
+    // holds. Guarded by ownership: on a function PARAMETER's slot the outgoing value belongs to the
+    // caller, and releasing it here would free a live environment out from under them.
+    if (ownedEnvSlots.Contains(varName)) {
+      var outgoingEnv = (StdI64)EmitLoad(block, slotName, varTypes);
+      EmitDecrefValueIfNonnull(block, outgoingEnv, scopeName: scopeName);
+    }
+
+    block.AddOp(new StdStoreI64Op(envPtr, slotName));
+    varTypes[slotName] = "i64";
+    EmitIncrefValueIfNonnull(block, envPtr, scopeName: scopeName);
+    ownedEnvSlots.Add(varName);
+  }
+
+  /// <summary>
+  /// Drops the reference <see cref="BindClosureEnvSlot"/> took, at the scope_end that cleans the
+  /// BINDING — which is the one scope that knows the environment can no longer be reached, because
+  /// the only thing that could reach it was the variable now going out of scope.
+  ///
+  /// Silent for anything this lowering does not own: a function parameter's identically-named slot
+  /// (the caller's environment), and any variable that never held a closure.
+  /// </summary>
+  private static void ReleaseClosureEnvSlot(
+    IrBlock<StandardOp> block,
+    string varName,
+    Dictionary<string, string> varTypes,
+    HashSet<string> ownedEnvSlots,
+    string scopeName) {
+    if (!ownedEnvSlots.Contains(varName)) return;
+
+    var slotName = ClosureEnvSlotName(varName);
+    if (!varTypes.ContainsKey(slotName)) return;
+
+    var envPtr = (StdI64)EmitLoad(block, slotName, varTypes);
+    EmitDecrefValueIfNonnull(block, envPtr, scopeName: scopeName);
+
+    // Zero the slot so a second scope_end over the same name cannot release it twice.
+    var zeroOp = new StdConstI64Op(0);
+    block.AddOp(zeroOp);
+    block.AddOp(new StdStoreI64Op(zeroOp.Result, slotName));
   }
 
   private static void LowerFunctionVarRef(
@@ -569,7 +703,7 @@ public static partial class MaxonToStandardConversion {
     block.AddOp(loadOp);
     valueMap[fnVarRefOp.Result] = loadOp.Result;
     // Also load and track the associated env_ptr
-    var srcEnvVarName = $"__env_{fnVarRefOp.VarName}";
+    var srcEnvVarName = ClosureEnvSlotName(fnVarRefOp.VarName);
     if (varTypes.ContainsKey(srcEnvVarName)) {
       fnEnvVarNames[loadOp.Result.Id] = srcEnvVarName;
     }
@@ -582,7 +716,7 @@ public static partial class MaxonToStandardConversion {
     Dictionary<string, string> varTypes,
     Dictionary<string, IrType> typeDefs,
     Dictionary<int, string> fnEnvVarNames,
-    Dictionary<int, StdValue> fnEnvDirectValues,
+    Dictionary<int, StdI64> fnEnvDirectValues,
     VarRegistry temps) {
     var calleeValue = valueMap[indirectCallOp.Callee];
     var newArgs = new List<StdValue>();
@@ -599,17 +733,7 @@ public static partial class MaxonToStandardConversion {
     }
 
     // Append hidden env_ptr argument for closure support
-    if (fnEnvDirectValues.TryGetValue(calleeValue.Id, out var directEnvPtr)) {
-      newArgs.Add(directEnvPtr);
-    } else if (fnEnvVarNames.TryGetValue(calleeValue.Id, out var envVarName)) {
-      var envPtr = EmitLoad(block, envVarName, varTypes);
-      newArgs.Add(envPtr);
-    } else {
-      // No env tracked — pass 0 (no captures)
-      var zeroConst = new StdConstI64Op(0);
-      block.AddOp(zeroConst);
-      newArgs.Add(zeroConst.Result);
-    }
+    newArgs.Add(ResolveClosureEnvArg(calleeValue.Id, block, varTypes, fnEnvVarNames, fnEnvDirectValues));
 
     // Which returns come back as an OWNED heap pointer, and so must land in a registered
     // temp slot — without one, scope-end cleanup has nothing to decref. A direct call

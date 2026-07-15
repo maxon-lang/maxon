@@ -8086,7 +8086,12 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       valueKind = coercedBackingKind;
     }
 
-    if (valueKind == expectedKind || IsWideningCast(valueKind, expectedKind))
+    // The SAFE guard, not the raw table: a `return` can hand back any kind the language has, and
+    // the table only answers for the numeric ones. `return dbl` from an Integer function reached
+    // the raw table and died with an E9001 "Unhandled cast combination: Function -> Integer" — an
+    // INTERNAL error, naming no source position, for a plain type error the throw below already
+    // words correctly. The Enum arm of this same hazard is what the coercion above exists for.
+    if (valueKind == expectedKind || IsWideningCastSafe(valueKind, expectedKind))
       return value;
     // Float literals are F64; allow narrowing to F32 ranged types (range check validates)
     if (valueKind == MaxonValueKind.Float && expectedKind == MaxonValueKind.Float32)
@@ -9518,11 +9523,16 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     }
 
     if (resolved is ResolvedVar.Global(var globalInfo)) {
+      RejectFunctionValueInNonFunctionPlace(newVal, globalInfo.Kind, $"global '{name}'",
+        nameToken.Line, nameToken.Column);
       RejectEscapingCapturingClosure(newVal, $"store a closure that captures in global '{name}'",
         nameToken.Line, nameToken.Column);
       _currentBlock!.AddOp(new MaxonGlobalStoreOp(name, newVal, globalInfo.Kind));
     } else {
       var varInfo = ((ResolvedVar.Local)resolved).Info;
+
+      RejectFunctionValueInNonFunctionPlace(newVal, varInfo.Kind, $"variable '{name}'",
+        nameToken.Line, nameToken.Column);
 
       // A payload binding LOOKS like a plain local but is an alias INTO the enum's heap box:
       // assigning through it writes back (the MaxonEnumPayloadAssignOp below), so it is a
@@ -9564,6 +9574,8 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
     if (_globalVars.TryGetValue(qualifiedName, out var globalInfo)) {
       var newValue = ResolveExprValue(ParseExpression());
+      RejectFunctionValueInNonFunctionPlace(newValue, globalInfo.Kind, $"static '{qualifiedName}'",
+        typeToken.Line, typeToken.Column);
       RejectEscapingCapturingClosure(newValue,
         $"store a closure that captures in static '{qualifiedName}'",
         typeToken.Line, typeToken.Column);
@@ -15562,10 +15574,12 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   ///
   /// The merge writes the winning arm's function POINTER into a slot and reads it back in the merge
   /// block. Nothing writes the environment: an environment reaches a callee either as the SSA value
-  /// the `closure_create` produced (same block) or through the `__env_&lt;name&gt;` slot the lowering
-  /// pairs with a function PARAMETER — and a ternary's result temp is neither. So the merged value
-  /// is a closure whose environment is unreachable, on EVERY path, whether or not the result ever
-  /// leaves the frame. `let h = f if c else dbl` then `h(2)` compiled and nil-dereffed in `_$closure_0`.
+  /// the `closure_create` produced (same block) or through the `__env_&lt;name&gt;` slot that the
+  /// lowering pairs with a function PARAMETER or writes when a function value is BOUND to a variable
+  /// — and a ternary's result temp is neither, because the merge stores the pointer through a path
+  /// of its own rather than binding either arm. So the merged value is a closure whose environment
+  /// is unreachable, on EVERY path, whether or not the result ever leaves the frame.
+  /// `let h = f if c else dbl` then `h(2)` compiled and nil-dereffed in `_$closure_0`.
   ///
   /// So this is not merely an escape: the merge DROPS a fact it cannot carry, and the honest thing
   /// is to refuse the input rather than emit the wrong answer. It is E3099 because it is E3099's
@@ -18143,6 +18157,21 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
           _currentBlock!.AddOp(enumRefOp);
           return enumRefOp.Result;
         }
+        // A function value needs the function-specific load for the same reason a struct and an
+        // enum need theirs: it is not one machine word. It is a POINTER PAIRED WITH AN ENVIRONMENT,
+        // and only MaxonFunctionVarRefOp re-associates the two during lowering. A generic var_ref
+        // reads the pointer and silently drops the environment — so `apply(f, x: i)` in a loop body
+        // called `f` with an environment of 0 and nil-dereffed on the FIRST iteration, while the
+        // same call outside a loop worked, because there the read is in the binding's own block and
+        // returns the `closure_create` value whole.
+        //
+        // Routing every read through one loader is the point: this path used to carry HALF the fact
+        // — `CarryCapturingClosureMark` below kept the parser's escape mark travelling while the
+        // environment the mark is ABOUT did not, so E3099 knew the value had captures at a site that
+        // could no longer reach them.
+        if (info.Kind == MaxonValueKind.Function && info.FnType != null) {
+          return LoadFunctionVarValue(v.VarName, info, info.FnType);
+        }
         if (info.DefinedInBlock == _currentBlock) {
           return info.Value;
         }
@@ -19400,6 +19429,36 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       $"cannot {destination}: captures are taken by reference to the enclosing function's "
       + "frame, so a closure that captures cannot outlive that frame. Use a function reference, "
       + "or a closure that captures nothing",
+      line, column);
+  }
+
+  /// <summary>
+  /// Refuses a function VALUE stored in a place that is not function-typed — `slot = dbl` where
+  /// `slot` holds an Integer.
+  ///
+  /// This is a TYPE rule and nothing more, which is why it is not
+  /// <see cref="RejectEscapingCapturingClosure"/>'s business and does not share its code: it fires
+  /// for a plain top-level `dbl` that captures nothing and escapes nowhere, and it would fire just
+  /// the same if closures did not exist. The two questions — "may this value be represented here?"
+  /// and "may this value OUTLIVE here?" — are independent, and a place can fail either, both, or
+  /// neither.
+  ///
+  /// Unchecked, the store reached the lowering, where a function pointer is a StdPtr and an Integer
+  /// slot wants a StdI64; the cast between them failed as an E9001 INTERNAL error, quoting a .NET
+  /// type name, naming no source position, and describing no defect in the program — for what is
+  /// simply a type mismatch. It is E3005 because E3005 already means exactly this ("a value's type
+  /// does not match the type required at this position"), and it is the code the argument-passing
+  /// path has always raised for the very same mistake one line away.
+  /// </summary>
+  private void RejectFunctionValueInNonFunctionPlace(
+      MaxonValue value, MaxonValueKind targetKind, string place, int line, int column) {
+    if (DetermineValueKind(value) != MaxonValueKind.Function) return;
+    if (targetKind == MaxonValueKind.Function) return;
+
+    throw new CompileError(ErrorCode.SemanticTypeMismatch,
+      $"cannot assign a function value to {place}, which holds "
+      + $"'{KindToTypeName(targetKind)}': a function value is only assignable to a place of a "
+      + "function type declared with 'typealias'",
       line, column);
   }
 

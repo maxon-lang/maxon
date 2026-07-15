@@ -189,7 +189,7 @@ public static partial class MaxonToStandardConversion {
           newParamNames.Add(func.ParamNames[i]);
           newParamTypes.Add(IrType.I64);
           flatIdx++;
-          newParamNames.Add($"__env_{func.ParamNames[i]}");
+          newParamNames.Add(ClosureEnvSlotName(func.ParamNames[i]));
           newParamTypes.Add(IrType.I64);
           flatIdx++;
         } else if (func.ParamTypes[i] is not IrStructType and not IrEnumType) {
@@ -227,7 +227,11 @@ public static partial class MaxonToStandardConversion {
       // Maps function pointer StdValue IDs to the variable name holding the env_ptr
       var fnEnvVarNames = new Dictionary<int, string>();
       // Direct env_ptr values (avoids store/load when value is already in a register)
-      var fnEnvDirectValues = new Dictionary<int, StdValue>();
+      var fnEnvDirectValues = new Dictionary<int, StdI64>();
+      // Bindings whose closure-env slot holds a reference THIS function took, and must drop at the
+      // binding's scope_end. A function-typed PARAMETER's slot is deliberately absent: it names the
+      // caller's environment, which is borrowed for the call and released by whoever owns it.
+      var ownedEnvSlots = new HashSet<string>();
       // Maps variable names to their resolved struct prefix (for cross-block references)
       var varNameToStructPrefix = new Dictionary<string, string>();
       // Maps variable names to their struct type name (for monomorphized type parameter vars)
@@ -1282,6 +1286,23 @@ public static partial class MaxonToStandardConversion {
                 } else {
                   EmitStore(newBlock, mappedValue, assignOp.VarName, varTypes);
                 }
+                // A function value is a PAIR — a pointer and the environment its captures live in —
+                // and a variable must carry both halves or neither. Binding only the pointer is what
+                // made `let f = <closure>` work when called from the binding's own block (the call
+                // reused the `closure_create` SSA value, which still knew its environment) and
+                // nil-deref when called from any OTHER block, where the only route left is this slot.
+                if (assignOp.ValueKind == MaxonValueKind.Function) {
+                  var boundEnvPtr = ResolveClosureEnvPtr(mappedValue.Id, newBlock, varTypes, fnEnvVarNames, fnEnvDirectValues);
+                  // Rebinding to a value with NO environment must CLEAR the slot, not leave the
+                  // previous closure's: the reader cannot tell a live environment from a stale one.
+                  if (boundEnvPtr == null && varTypes.ContainsKey(ClosureEnvSlotName(assignOp.VarName))) {
+                    var noEnv = new StdConstI64Op(0);
+                    newBlock.AddOp(noEnv);
+                    boundEnvPtr = noEnv.Result;
+                  }
+                  if (boundEnvPtr != null)
+                    BindClosureEnvSlot(newBlock, boundEnvPtr, assignOp.VarName, varTypes, ownedEnvSlots, func.Name);
+                }
                 // For struct-typed values that bypassed the StdHeapPtr path (e.g., try-await
                 // results which are raw StdI64 heap pointers), register in varNameToStructType
                 // so that scope_end emits mm_decref.
@@ -1653,6 +1674,13 @@ public static partial class MaxonToStandardConversion {
                   }
                   continue;
                 }
+                // A function-typed binding is not "managed" — it holds a code pointer, and every
+                // check below skips it — but the capture ENVIRONMENT paired with it is heap, and
+                // this is the scope that ends its reachability. It must be released here and not
+                // by the orphan sweep below, which would drop it at whichever scope_end runs first
+                // however many scopes early that is.
+                ReleaseClosureEnvSlot(newBlock, v, varTypes, ownedEnvSlots, func.Name);
+
                 if (_structParamNames != null && _structParamNames.Contains(v)) continue;
                 // Self fields are owned by the heap-allocated struct; the struct destructor
                 // handles their cleanup when self is freed. Decref'ing them here would
@@ -2021,7 +2049,8 @@ public static partial class MaxonToStandardConversion {
               break;
             }
             case MaxonTryCallOp tryCallOp:
-              LowerTryCall(tryCallOp, funcLookup, newFunc, ref newBlock, valueMap, varTypes, module.TypeDefs, temps);
+              LowerTryCall(tryCallOp, funcLookup, newFunc, ref newBlock, valueMap, varTypes, module.TypeDefs, temps,
+                fnEnvVarNames: fnEnvVarNames, fnEnvDirectValues: fnEnvDirectValues);
               if (isStructInstanceMethod) {
                 selfFieldCache.Clear();
                 ReloadSelfFieldLocals(selfStructType!, newBlock, varTypes, selfFieldTempVars);
@@ -2041,7 +2070,8 @@ public static partial class MaxonToStandardConversion {
               break;
             case MaxonCallOp callOp:
               if (TryLowerPrimitiveMethod(callOp, newBlock, valueMap)) break;
-              LowerCall(callOp, funcLookup, newFunc, ref newBlock, valueMap, varTypes, module.TypeDefs, fnEnvVarNames: fnEnvVarNames, temps: temps);
+              LowerCall(callOp, funcLookup, newFunc, ref newBlock, valueMap, varTypes, module.TypeDefs,
+                fnEnvVarNames: fnEnvVarNames, fnEnvDirectValues: fnEnvDirectValues, temps: temps);
               // Method calls may mutate self-fields (e.g. grow() reallocates arrays),
               // so cached self-field loads must be invalidated and struct-typed
               // field locals must be reloaded from the self pointer

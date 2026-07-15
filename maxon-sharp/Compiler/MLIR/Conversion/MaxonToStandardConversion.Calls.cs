@@ -88,10 +88,12 @@ public static partial class MaxonToStandardConversion {
     Dictionary<string, string> varTypes,
     Dictionary<string, IrType> typeDefs,
     VarRegistry temps,
-    Dictionary<int, string>? fnEnvVarNames = null) {
+    Dictionary<int, string>? fnEnvVarNames = null,
+    Dictionary<int, StdI64>? fnEnvDirectValues = null) {
     LowerCallCore(callOp.Callee, callOp.Args, callOp.Result, callOp.ResultKind,
       isTryCall: false, funcLookup, func, ref block, valueMap, varTypes,
       typeDefs, temps, sourceCallOp: callOp, fnEnvVarNames: fnEnvVarNames,
+      fnEnvDirectValues: fnEnvDirectValues,
       argMutabilities: callOp.ArgMutabilities, argVarNames: callOp.ArgVarNames,
       callLine: callOp.CallLine, callColumn: callOp.CallColumn);
   }
@@ -117,6 +119,7 @@ public static partial class MaxonToStandardConversion {
     MaxonCallOp? sourceCallOp = null,
     MaxonValue? errorFlagValue = null,
     Dictionary<int, string>? fnEnvVarNames = null,
+    Dictionary<int, StdI64>? fnEnvDirectValues = null,
     List<bool>? argMutabilities = null,
     List<string?>? argVarNames = null,
     int? callLine = null,
@@ -197,7 +200,8 @@ public static partial class MaxonToStandardConversion {
       }
     }
 
-    FlattenCallArgs(args, calleeFunc, block, valueMap, varTypes, newArgs, callee, fnEnvVarNames, argVarNames);
+    FlattenCallArgs(args, calleeFunc, block, valueMap, varTypes, newArgs, callee,
+      fnEnvVarNames: fnEnvVarNames, fnEnvDirectValues: fnEnvDirectValues, argVarNames: argVarNames);
 
     // Check if callee returns an associated-value enum (passed as heap pointer)
     bool calleeRetAssocEnum = calleeFunc.ReturnType is IrEnumType cret && cret.HasAssociatedValues;
@@ -389,7 +393,9 @@ public static partial class MaxonToStandardConversion {
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
     Dictionary<string, IrType> typeDefs,
-    VarRegistry temps) {
+    VarRegistry temps,
+    Dictionary<int, string>? fnEnvVarNames = null,
+    Dictionary<int, StdI64>? fnEnvDirectValues = null) {
     // Intercept synthetic enum static method calls
     if (tryCallOp.Callee.StartsWith("__enum_fromRawValue:")) {
       var enumTypeName = tryCallOp.Callee["__enum_fromRawValue:".Length..];
@@ -411,6 +417,11 @@ public static partial class MaxonToStandardConversion {
       temps,
       sourceCallOp: tryCallOp,
       errorFlagValue: tryCallOp.ErrorFlag,
+      // A try-call carries a function argument's environment exactly as a plain call does. It used
+      // to pass neither map, so FlattenCallArgs could only answer 0: `try apply(f, ...)` with a
+      // capturing `f` nil-dereffed, in ANY block, including the one that bound it.
+      fnEnvVarNames: fnEnvVarNames,
+      fnEnvDirectValues: fnEnvDirectValues,
       argMutabilities: tryCallOp.ArgMutabilities, argVarNames: tryCallOp.ArgVarNames,
       callLine: tryCallOp.CallLine, callColumn: tryCallOp.CallColumn);
   }
