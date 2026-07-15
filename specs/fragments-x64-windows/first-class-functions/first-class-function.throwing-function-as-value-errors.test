@@ -1,0 +1,26 @@
+// Test: first-class-function.throwing-function-as-value-errors
+typealias Num = int(0 to 1000)
+
+enum Err implements Error
+	bad
+end 'Err'
+
+function risky(a Num) returns Num throws Err
+	if a > 5 'guard'
+		throw Err.bad
+	end 'guard'
+	return a + 1
+end 'risky'
+
+function main() returns ExitCode
+	let f = risky
+	let r = f(99)
+	print("unreachable: {r}")
+	return 0
+end 'main'
+---
+MaxoncStderr: ```
+error E3101: specs/fragments/first-class-functions/first-class-function.throwing-function-as-value-errors.test:16:10: Cannot use throwing function 'risky' as a value: it throws 'Err', and a function type cannot express 'throws'. Wrap the call in a non-throwing function that handles the error with 'try'.
+```
+---
+---

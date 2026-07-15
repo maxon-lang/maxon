@@ -1,6 +1,6 @@
 {
   "generatedFrom": "docs/error-codes.txt",
-  "sourceHash": "8feb6d75fcf1e5fe",
+  "sourceHash": "eec5cf9bc55c924c",
   "note": "GENERATED. Do not edit. Run `maxon error-codes generate`. A reader MUST hash generatedFrom's bytes (FNV-1a 64, hex) and refuse to answer unless it equals sourceHash.",
   "compilers": ["csharp", "selfhosted", "shv2"],
   "codes": [
@@ -1055,6 +1055,15 @@
       "stage": "semantic",
       "doc": "A promise is awaited a SECOND time. `await` is LINEAR: a promise is awaited exactly once.\n3100 rather than 3099: E3099 is SemanticCapturingClosureEscapes, which landed on main while\nthis was in review. Both of us picked \"the next code free\" and both of us were right, because\nthe registry is written down TWICE -- here and in maxon-selfhosted/Compiler/ErrorCode.maxon --\nand neither copy sees the other's pending codes. Same disease as the promise's two bits, one\nlevel up. Keep the two files in step until there is only one of them.\nThe thunk owns its result and HANDS IT OVER at the await -- that is the ownership model the\nlanguage already has everywhere else. A second await would take a second +1 on a payload the\nthunk only ever owned once, and the two releases underflow the refcount and free it twice\n(\"mm_decref: refcount underflow (already zero)\"). It is not an error-handling bug and does\nnot need a throwing thunk: a plain `async` returning a String double-frees identically.\nSo the double-free is made UNREPRESENTABLE rather than fixed. The check is flow-sensitive --\ntwo awaits of the same promise in mutually exclusive branches are each the only await on\ntheir own path, and are allowed; what is refused is a second await REACHABLE from a first.",
       "emittedBy": {"csharp": "SemanticPromiseAlreadyAwaited"},
+      "notEmittedBy": ["selfhosted", "shv2"]
+    },
+    {
+      "code": 3101,
+      "tag": "E3101",
+      "name": "SemanticThrowingFunctionAsValue",
+      "stage": "semantic",
+      "doc": "A `throws` function is referenced as a VALUE (`let f = risky`). A function type cannot\nexpress `throws` -- the grammar is `function(T) returns U`, with no throws clause -- so the\nbinding silently drops it, and there is no indirect try-call to carry it: `StdIndirectCallOp`\nhas no ErrorFlag, unlike `StdTryCallOp`.\nBefore this check the call was not merely unchecked, it was WRONG. The callee took the error\nreturn (ordinal in RDX, `xor rax, rax` in RAX); the indirect caller read RAX and ignored RDX,\nso the throw vanished and the caller received 0 -- the dummy -- as a normal result. `try` was\nbypassed entirely by round-tripping the function through a value.\nRefused rather than supported, on evidence: no spec, no stdlib file, and none of\nmaxon-selfhosted's 191,487 lines ever wanted a throwing function value. Adding `throws` to\nthe function-type grammar plus an indirect try-call ABI is a FEATURE, and would be built for\nnobody. If a real need appears, that is the shape -- and this code is what says so.",
+      "emittedBy": {"csharp": "SemanticThrowingFunctionAsValue"},
       "notEmittedBy": ["selfhosted", "shv2"]
     },
     {

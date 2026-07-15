@@ -16349,6 +16349,18 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       }
 
       if (referencedFunc != null) {
+        // A function type cannot say `throws`, so taking a throwing function as a value would drop
+        // it here silently -- and the indirect call has no channel to carry it back (StdIndirectCallOp
+        // has no ErrorFlag). The callee would still take its error return, and the caller would read
+        // the RAX dummy as a normal result. Refuse the reference rather than compile the throw away.
+        if (referencedFunc.ThrowsType != null) {
+          throw new CompileError(ErrorCode.SemanticThrowingFunctionAsValue,
+            $"Cannot use throwing function '{token.Value}' as a value: it throws "
+              + $"'{IrType.FormatAsSourceName(referencedFunc.ThrowsType)}', and a function type cannot express 'throws'. "
+              + "Wrap the call in a non-throwing function that handles the error with 'try'.",
+            token.Line, token.Column);
+        }
+
         var fnType = GetFunctionType(referencedFunc);
         var fnRefOp = new MaxonFunctionRefOp(referencedFunc.Name, fnType);
         _currentBlock!.AddOp(fnRefOp);

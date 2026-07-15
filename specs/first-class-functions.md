@@ -1603,3 +1603,63 @@ end 'main'
 ```maxoncstderr
 error E3005: specs/fragments/first-class-functions/first-class-function.function-value-returned-as-int-errors.test:10:2: Cannot return 'function' from function declared to return 'int': a function value is only usable where a function type declared with 'typealias' is expected
 ```
+
+<!-- test: first-class-function.throwing-function-as-value-errors -->
+A **`throws` function cannot be taken as a value.** A function type has no throws clause — the
+grammar is `function(T) returns U` — so the binding would drop it, and there is no channel to carry
+it back: `StdIndirectCallOp` has no error flag, unlike `StdTryCallOp`.
+
+Before this check the indirect call was not merely unchecked, it was **wrong**. `risky(99)` took its
+error return (ordinal in RDX, `xor rax, rax` in RAX); the caller read RAX, ignored RDX, and received
+**0 — the dummy — as a normal result**. `try` was bypassed entirely by round-tripping the function
+through a value.
+
+It is refused rather than supported on evidence: no spec, no stdlib file, and none of
+maxon-selfhosted's 191,487 lines ever wanted a throwing function value.
+```maxon
+typealias Num = int(0 to 1000)
+
+enum Err implements Error
+	bad
+end 'Err'
+
+function risky(a Num) returns Num throws Err
+	if a > 5 'guard'
+		throw Err.bad
+	end 'guard'
+	return a + 1
+end 'risky'
+
+function main() returns ExitCode
+	let f = risky
+	let r = f(99)
+	print("unreachable: {r}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3101: specs/fragments/first-class-functions/first-class-function.throwing-function-as-value-errors.test:16:10: Cannot use throwing function 'risky' as a value: it throws 'Err', and a function type cannot express 'throws'. Wrap the call in a non-throwing function that handles the error with 'try'.
+```
+
+<!-- test: first-class-function.non-throwing-function-as-value-still-works -->
+The guard above is about `throws` and nothing else — an ordinary function value is untouched.
+```maxon
+typealias Num = int(0 to 200)
+typealias Op = function(Num) returns Num
+
+function double(a Num) returns Num
+	return a * 2
+end 'double'
+
+function apply(f Op, x Num) returns Num
+	return f(x)
+end 'apply'
+
+function main() returns ExitCode
+	let f = double
+	return apply(f, x: 21)
+end 'main'
+```
+```exitcode
+42
+```

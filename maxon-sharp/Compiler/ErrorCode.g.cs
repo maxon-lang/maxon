@@ -588,6 +588,21 @@ public enum ErrorCode {
   /// their own path, and are allowed; what is refused is a second await REACHABLE from a first.
   /// </summary>
   SemanticPromiseAlreadyAwaited = 3100,
+  /// <summary>
+  /// A `throws` function is referenced as a VALUE (`let f = risky`). A function type cannot
+  /// express `throws` -- the grammar is `function(T) returns U`, with no throws clause -- so the
+  /// binding silently drops it, and there is no indirect try-call to carry it: `StdIndirectCallOp`
+  /// has no ErrorFlag, unlike `StdTryCallOp`.
+  /// Before this check the call was not merely unchecked, it was WRONG. The callee took the error
+  /// return (ordinal in RDX, `xor rax, rax` in RAX); the indirect caller read RAX and ignored RDX,
+  /// so the throw vanished and the caller received 0 -- the dummy -- as a normal result. `try` was
+  /// bypassed entirely by round-tripping the function through a value.
+  /// Refused rather than supported, on evidence: no spec, no stdlib file, and none of
+  /// maxon-selfhosted's 191,487 lines ever wanted a throwing function value. Adding `throws` to
+  /// the function-type grammar plus an indirect try-call ABI is a FEATURE, and would be built for
+  /// nobody. If a real need appears, that is the shape -- and this code is what says so.
+  /// </summary>
+  SemanticThrowingFunctionAsValue = 3101,
 
   /// <summary>
   /// The IR builder met an expression form it cannot lower.
