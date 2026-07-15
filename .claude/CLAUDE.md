@@ -126,13 +126,21 @@ The shv2 compiler binary is at `./maxon-shv2/.maxon/maxon-shv2.exe` (Windows) or
 
 ### Self-hosted compiler (maxon-selfhosted) — DEPRECATED as a PRODUCT, not as a SOURCE
 
-**⭐ READ AND PORT FROM IT.** It is **191,487 lines of working, debugged Maxon**, written against the
-same language and the **same `stdlib/`** shv2 uses. Every hard mechanism on the shv2 ladder — ownership,
-closures, generics + layout descriptors, witness tables, `async`/green threads, the emitted runtime —
-already exists there with its bugs paid for. **When implementing anything in shv2, find the v1 file that
-already does it, and reuse its code where it fits.** Justify divergences.
-*(One exception: the register allocator ports **lessons**, not code — shv2's is a deliberately different
-linear SSA-chordal design.)*
+**⭐ READ IT. It is 191,487 lines of working, debugged Maxon**, written against the same language and the
+**same `stdlib/`** shv2 uses. Every hard mechanism on the shv2 ladder — ownership, closures, generics +
+layout descriptors, witness tables, `async`/green threads, the emitted runtime — already exists there
+with its bugs paid for. **When implementing anything in shv2, find the v1 file that already does it and
+read it first.** Not re-deriving that knowledge is the plan.
+
+⚠ **But do NOT blindly copy it. shv2 is a deliberate rewrite, and a number of things it does are BETTER**
+— block args not phi nodes, parser-minted `ValueId`s not name strings, 3 tiers (Maxon → Std → Target) not
+4, static ownership from commit 1, the flat `StdOp`. **Where shv2 departs, the departure IS the thesis**,
+and v1 is merely how the old one happened to do it. **Both directions are decisions and both need a
+reason: a divergence needs one, and so does a copy** — *"it works in v1"* is not a reason, because **v1 is
+debugged, not FAST** (its register allocator was ~74% of self-compile time — port an algorithm and you
+port its cost curve).
+*(The clearest case: the register allocator ports **lessons**, not code — shv2's is a deliberately
+different linear SSA-chordal design. Keep v1's correctness traps, not its reactive spill loop.)*
 
 ⚠ **IT NO LONGER BUILDS** (verified 2026-07-13). It has bit-rotted against the current bootstrap:
 `error E3005: Cannot return 'TypeNameIdArray' from function declared to return 'RegIntArray'` in

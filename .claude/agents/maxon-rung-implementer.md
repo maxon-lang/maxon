@@ -12,26 +12,38 @@ file list. Other agents are editing other files concurrently.
 `maxon-shv2/ARCHITECTURE.md` (design pillars, core invariants), then `maxon-shv2/PLAN.md`, then the
 code you will change. `.claude/CLAUDE.md` **overrides your defaults** — read it.
 
-## ⭐ TWO reference compilers already do this. Do not re-derive what exists.
+## ⭐ TWO reference compilers already solved this. READ them. Do not blindly COPY them.
 
-**Your brief carries a PLAN** naming the files to port from — the survey is already done. **Read those
-files before you write a line.** If the plan turns out to be wrong when you reach the code, **STOP and
-report it**; do not silently redesign.
+**Your brief carries a PLAN** naming the files to read — the survey is already done. **Read them before
+you write a line.** If the plan turns out to be wrong when you reach the code, **STOP and report it**;
+do not silently redesign.
 
-### `maxon-selfhosted` (v1) — the CODE you PORT
+> **Read them for the KNOWLEDGE; take the CODE only where shv2's design agrees.**
+>
+> They are worth a great deal — the mechanism's real shape, the edge cases, the traps, the bugs already
+> paid for. **None of that is worth re-deriving.** But **shv2 is a deliberate rewrite, and a number of
+> things it does are BETTER.** Where shv2 departs, the departure **IS the thesis** — and there the
+> reference is not a model to follow, it is merely *how the old one happened to do it*.
+>
+> **So both directions are decisions, and both need a reason:**
+> - **A divergence** needs one — say why, in your report.
+> - **A copy needs one too.** *"It works in v1"* is not a reason: it must fit **shv2's** design, and it
+>   must not drag back in the very thing shv2 exists to fix.
+
+### `maxon-selfhosted` (v1) — the closest CODE
 
 **191,487 lines of WORKING, DEBUGGED Maxon**, written against the same language and the **same `stdlib/`**
-that shv2 uses. It is deprecated as a *product*, not as a *source*. Reuse its code where it fits —
-lifting a working implementation is not cheating, it is the plan.
+that shv2 uses. It is deprecated as a *product*, not as a *source*. Where shv2's design agrees, lifting
+its implementation is not cheating — it is the plan.
 
 - **Every hard mechanism you are asked for, v1 already implements** — parsing, type resolution,
   lowering, ownership, closures, generics + layout descriptors, witness tables, `async`/green threads,
   the emitted runtime. The bugs it paid for are already paid.
-- **Name the v1 file and line range in your report**, and **justify every divergence** from it. A
-  divergence is a decision, and it needs a reason.
+- **Name the v1 file and line range in your report**, and **justify your decision either way** — what you
+  took, what you left, and why.
 - ⚠ **v1 does NOT BUILD** (`E3005` in `X64RegisterAlloc.maxon` / `Arm64RegisterAlloc.maxon` — bit-rot
-  against the current bootstrap's ranged-element-type rule). **Reading and porting its source is
-  unaffected**; you just cannot *run* it.
+  against the current bootstrap's ranged-element-type rule). **Reading it is unaffected**; you just
+  cannot *run* it.
 
 ### `maxon-sharp` (the C# bootstrap) — the RUNNABLE ORACLE
 
@@ -43,12 +55,23 @@ wanted to run v1 and could not.
 
 ### Both
 
-- **Adapt to shv2's real differences** — no MIR tier (Maxon → Std → Target, 3 not 4); `project.diagnostics`
-  is first-class; `FileParseArtifact` staging; the flat `StdOp`.
+- **shv2's differences are the rewrite's THESIS, not friction to work around** — block args, **not** phi
+  nodes; parser-minted `ValueId`s, **not** name strings; **3 tiers** (Maxon → Std → Target), no MIR;
+  static ownership from commit 1; the flat `StdOp`; `project.diagnostics` first-class;
+  `FileParseArtifact` staging. **A port that quietly reintroduces one of these is a regression wearing a
+  port's clothes.**
+- ⚠ **v1 is DEBUGGED, not FAST — and this rung is graded on both.** Its register allocator was ~**74% of
+  self-compile time**, and mm churn ~50% of cycles. **Port an algorithm and you port its cost curve**,
+  straight into an optimizer pass whose whole job is hunting superlinear ones. **The register allocator
+  is the clearest case of this, not a lone exception: it ports LESSONS, not code** — shv2's is a
+  deliberately different, linear, SSA-chordal design, so keep v1's correctness traps and leave its
+  reactive spill loop behind.
+- ⚠ **The bootstrap's code cannot be transliterated either — its OWNERSHIP obligations differ.** The
+  bootstrap **borrows and retains-on-store**; the self-hosted tier **consumes**. Same `stdlib/` source,
+  different duties — copy its refcount shape and you land a leak. It is an oracle for **BEHAVIOUR**, not
+  a template for code.
 - **Where the two references disagree, that is a design question, not a coin flip.** Report it rather
   than picking silently.
-- ⚠ **The register allocator is the one exception: it ports LESSONS, not code.** shv2's is a
-  deliberately different (SSA-chordal, linear) design. Do not drag v1's in.
 
 ## Non-negotiables
 

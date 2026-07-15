@@ -52,19 +52,33 @@ says.
 >
 > | | |
 > |---|---|
-> | **`maxon-selfhosted` (v1) — the CODE** | **191,487 lines of working, debugged Maxon**, same language, same `stdlib/`, closest to shv2's shape. **This is what you PORT**; its bugs are already paid for. ⚠ It does **NOT build** — you can read it, never run it |
+> | **`maxon-selfhosted` (v1) — the closest CODE** | **191,487 lines of working, debugged Maxon**, same language, same `stdlib/`, closest to shv2's shape. Its bugs are already paid for. ⚠ It does **NOT build** — you can read it, never run it |
 > | **`maxon-sharp` (bootstrap) — the RUNNABLE ORACLE** | Different language (C#), but it **builds, runs, and is canonical for `/specs`**. It is the one you can execute on a sample program, `dump_ir` (`dumpStages: true`, csharp-only), and diff behaviour against. **When the question is "what should this actually DO?", the bootstrap answers by RUNNING — v1 can only answer by reading** |
 >
 > **Where the two disagree, that IS the design question** — resolve it in the plan, not in the wave.
+>
+> ### ⚠ READ them for the knowledge. Do not BLINDLY COPY them.
+>
+> Their knowledge — the mechanism's real shape, the edge cases, the traps — is expensive and already
+> paid for, and **none of it is worth re-deriving.** But **shv2 is a deliberate rewrite, and a number of
+> things it does are BETTER.** Where shv2 departs, **the departure IS the thesis**, and the reference is
+> merely how the old one happened to do it. **So the plan must justify BOTH directions:** a divergence
+> needs a reason, and **a copy needs one too** — *"it works in v1"* is not one. Two concrete traps:
+> **v1 is debugged, not FAST** (its regalloc was ~74% of self-compile; port an algorithm and you port its
+> cost curve), and **the bootstrap's code cannot be transliterated** (it borrows and retains-on-store
+> where the self-hosted tier consumes — same stdlib, different obligations).
 
 The plan must name, per layer:
 
-- **the v1 file + line ranges** that already implement this, and **the `maxon-sharp` file(s)** — plus
-  **every divergence from them, with its reason.** A divergence is a decision.
-  *(⚠ Exception: the register allocator ports **LESSONS, not code** — shv2's is a deliberately different,
-  linear, SSA-chordal design. Do not drag v1's in.)*
-- **the shv2 differences to adapt to** — no MIR tier (**Maxon → Std → Target**, 3 not 4);
-  `project.diagnostics` is first-class; `FileParseArtifact` staging; the flat `StdOp`.
+- **the v1 file + line ranges** that already implement this, and **the `maxon-sharp` file(s)** — plus,
+  for each, **what to TAKE and what to LEAVE, with the reason.** Both are decisions.
+  *(⚠ The clearest "leave it": the register allocator ports **LESSONS, not code** — shv2's is a
+  deliberately different, linear, SSA-chordal design. Keep v1's correctness traps, not its reactive
+  spill loop.)*
+- **the shv2 differences — the rewrite's THESIS, which the reference will not have** — block args, not
+  phi nodes; parser-minted `ValueId`s, not name strings; **Maxon → Std → Target** (3 tiers, no MIR);
+  static ownership from commit 1; the flat `StdOp`; `project.diagnostics` first-class;
+  `FileParseArtifact` staging. **A port that reintroduces one of these is a regression, not a port.**
 - **the new IR ops needed** → these ARE the contract (step 3).
 - **the exclusive file list per agent** → steps 4–5. One file, one owner.
 - **the `/specs` files to port as acceptance tests** → 5(d).
@@ -93,9 +107,10 @@ cp -r bin ../maxon-<rung>/bin        # bin/ is GITIGNORED — a worktree has no 
 agent its share of it rather than making it re-derive one.
 
 Every brief MUST carry:
-- **(a) the port targets from the plan** — the specific **v1 file + line numbers** to PORT, the
-  **`maxon-sharp` file** that shows the behaviour running, and the **shv2 divergences to adapt to** —
-  *except* where the design deliberately departs (the register allocator ports lessons, not code);
+- **(a) the reference targets from the plan** — the specific **v1 file + line numbers** to READ, the
+  **`maxon-sharp` file** that shows the behaviour running, **what to TAKE and what to LEAVE**, and the
+  **shv2 differences to design to**. Say plainly where the reference is *wrong for shv2*, so the agent
+  does not "fix" its own correct code to match it;
 - **(b) the exclusive file list**, and the files it must NOT touch;
 - **(c) the traps** for that area;
 - **(d) the `/specs` files to port as its acceptance tests** (on demand — the corpus is **not**
