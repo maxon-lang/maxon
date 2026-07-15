@@ -85,6 +85,12 @@ export union ParseError implements Error
 	// `TypeRules.operatorIsIntegral`, which is where the operator set is decided, and
 	// `notOperatorFor`'s float arm.
 	nonIntegralOperands(op String, operand String, line LineNumber, column ColumnNumber)
+	// ⭐ A float meeting a declared INTEGER — at a `return`, an assignment, or a global store.
+	// ONE variant for every coercion site the parser owns, because they are one rule
+	// (`TypeRules.checkDeclaredType`) and one fact, and the message must not vary with the site
+	// that noticed. The call-argument site is SemanticCheck's — the callee's signature is not the
+	// parser's to see — and it reports the same code with the same words.
+	implicitNarrowing(sourceType String, targetType String, line LineNumber, column ColumnNumber)
 	// A compiler BUILTIN called with the wrong number of arguments. It is the parser's to report
 	// and not SemanticCheck's, because a builtin has no entry in the signature registry that
 	// SemanticCheck's arity check reads — there is nothing there to disagree with.
@@ -1924,9 +1930,7 @@ export type Parser
 
 		let valueTag = self.tagOf(value)
 		let declaredTag = maxonTypeTag(binding.varType)
-		if not typesAgree(valueTag, right: declaredTag) 'mismatch'
-			throw ParseError.assignTypeMismatch(String.from(nameTok.value), got: typeTagName(valueTag), expected: typeTagName(declaredTag), line: nameTok.line, column: nameTok.column)
-		end 'mismatch'
+		try self.requireAssignable(nameTok, value: valueTag, declared: declaredTag)
 
 		self.scope.setValue(nameTok.value, value: value)
 	end 'parseAssignment'
@@ -1955,13 +1959,22 @@ export type Parser
 	function emitCheckedGlobalStore(func IrFunction, block IrBlock, nameTok Token, label ByteArray, tag ValueTypeTag) throws ParseError
 		let value = try self.parseExpression(func, block: block)
 
-		let valueTag = self.tagOf(value)
-		if not typesAgree(valueTag, right: tag) 'mismatch'
-			throw ParseError.assignTypeMismatch(String.from(nameTok.value), got: typeTagName(valueTag), expected: typeTagName(tag), line: nameTok.line, column: nameTok.column)
-		end 'mismatch'
+		try self.requireAssignable(nameTok, value: self.tagOf(value), declared: tag)
 
 		self.emitGlobalStore(label, tag: tag, value: value, range: SourceRange.ofToken(nameTok))
 	end 'emitCheckedGlobalStore'
+
+	// The COERCION rule for an ASSIGNMENT — shared by the local path and the global one, which
+	// were already two copies of the same three lines and would now have been two copies of the
+	// same five. A global is no less able to be handed a bool where it declared an int, or a float
+	// where it declared an int, than a local is; both anchor the diagnostic on the assigned NAME.
+	function requireAssignable(nameTok Token, value ValueTypeTag, declared ValueTypeTag) throws ParseError
+		match checkDeclaredType(value, declared: declared) 'declared'
+			ok then break 'declared'
+			mismatch then throw ParseError.assignTypeMismatch(String.from(nameTok.value), got: typeTagName(value), expected: typeTagName(declared), line: nameTok.line, column: nameTok.column)
+			narrowsFloatToInt then throw ParseError.implicitNarrowing(typeTagName(value), targetType: typeTagName(declared), line: nameTok.line, column: nameTok.column)
+		end 'declared'
+	end 'requireAssignable'
 
 	// The name is not a local and not a top-level `var`. Say which of the two remaining things it is.
 	function rejectNonGlobalAssignment(nameTok Token) throws ParseError
@@ -2023,19 +2036,23 @@ export type Parser
 		// backend panic) and put the `ret` on a path the value it returns does not reach.
 		let retVal = try self.parseExpression(func, block: block)
 
-		// The value must AGREE with what the function PROMISED — the same `typesAgree` rule the
-		// operators and the call arguments ask. `return flag` from a function declared
-		// `returns Integer` is the argument-position bug in reverse: the bool's 1 payload would
-		// be handed back through the return register as the integer 1.
+		// The value must satisfy what the function PROMISED — `checkDeclaredType`, the same
+		// COERCION-SITE rule the call arguments and the assignments ask, and deliberately not the
+		// symmetric `typesAgree` an operator's two operands ask. `return flag` from a function
+		// declared `returns Integer` is the argument-position bug in reverse: the bool's 1 payload
+		// would be handed back through the return register as the integer 1. And `return 3.7` from
+		// one is the LOSSY half — the classes agree, so only a one-sided rule can see it.
 		//
 		// The declared type here is the RAW parse-time one (a `named` alias, not yet resolved),
 		// which is exactly what `typeClassOf` is built to take — every alias shv2 can declare is
 		// a ranged int, and `typeTagName` prints the resolved primitive the bootstrap prints.
 		let retTag = self.tagOf(retVal)
 		let declaredTag = maxonReturnTypeTag(func.maxonReturnType)
-		if not typesAgree(retTag, right: declaredTag) 'mismatch'
-			throw ParseError.returnTypeMismatch(typeTagName(retTag), expected: typeTagName(declaredTag), line: retTok.line, column: retTok.column)
-		end 'mismatch'
+		match checkDeclaredType(retTag, declared: declaredTag) 'declared'
+			ok then break 'declared'
+			mismatch then throw ParseError.returnTypeMismatch(typeTagName(retTag), expected: typeTagName(declaredTag), line: retTok.line, column: retTok.column)
+			narrowsFloatToInt then throw ParseError.implicitNarrowing(typeTagName(retTag), targetType: typeTagName(declaredTag), line: retTok.line, column: retTok.column)
+		end 'declared'
 
 		self.artifact.emitTerminator(self.currentBlock, op: MaxonOp.ret(retVal), range: SourceRange.ofToken(retTok))
 	end 'parseReturnStatement'

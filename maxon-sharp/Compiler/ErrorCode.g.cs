@@ -199,7 +199,15 @@ public enum ErrorCode {
   /// </summary>
   SemanticSymbolNotExported = 3008,
   /// <summary>
-  /// A cast cannot be proven safe -- the source range does not fit the destination.
+  /// A conversion that cannot be proven safe: an explicit cast whose source range does
+  /// not fit the destination (`256 as Byte`), an explicit cast that is lossy or
+  /// meaningless (`5.0 as int`, `true as int`), or the SAME lossy conversion reached
+  /// IMPLICITLY, where a value meets a declared type it cannot reach without loss
+  /// (`takeInt(3.7)`, `return 3.7` from a `returns int`). One code, because it is one
+  /// fact: the answer to every one of them is an explicit `trunc`/`round`/`floor`/`ceil`.
+  /// The implicit half was a WRONG ANSWER until P1.0d.4 -- specs/type-casting.md
+  /// rejected `5.0 as int` while specs/implicit-type-conversion.md silently truncated
+  /// the identical conversion at a call argument.
   /// </summary>
   SemanticUnsafeCast = 3009,
   /// <summary>

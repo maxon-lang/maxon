@@ -13042,6 +13042,39 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   private static bool IsIntegerFamilyKind(MaxonValueKind kind) =>
     kind is MaxonValueKind.Integer or MaxonValueKind.Byte or MaxonValueKind.Short;
 
+  /// <summary>
+  /// Is this conversion a LOSSY float -> integer narrowing -- the one numeric conversion Maxon
+  /// refuses to perform implicitly?
+  /// </summary>
+  /// <remarks>
+  /// A float holds a fraction and an integer does not, so the conversion throws part of the value
+  /// away, and WHICH part is a decision the author has to make: trunc(-2.5) is -2 and floor(-2.5)
+  /// is -3. The language already says so for the explicit spelling -- specs/type-casting.md rejects
+  /// `5.0 as int` with this same E3009 and answers "use trunc/round/floor/ceil instead" -- so
+  /// performing it silently whenever the `as` is absent gave one conversion two rules, and the
+  /// silent one won at every function boundary. specs/implicit-type-conversion.md documented the
+  /// truncation as a feature until P1.0d.4; it is an error now, in this compiler and in shv2.
+  ///
+  /// The other direction is untouched: int -> float is WIDENING, loses nothing, and stays implicit
+  /// (`IsWideningCastSafe` already allows exactly it).
+  /// </remarks>
+  private static bool IsLossyFloatToInt(MaxonValueKind source, MaxonValueKind target) =>
+    source is MaxonValueKind.Float or MaxonValueKind.Float32
+      && target is MaxonValueKind.Integer or MaxonValueKind.Byte or MaxonValueKind.Short;
+
+  /// <summary>
+  /// The words, written once -- shared by the two coercion paths below, and byte-identical to
+  /// shv2's `TypeRules.implicitNarrowingMessage`, because specs/implicit-type-conversion.md gates
+  /// the text and both compilers answer it.
+  /// </summary>
+  private static CompileError LossyNarrowingError(MaxonValueKind source, MaxonValueKind target,
+      string prefix, int line, int column) =>
+    new CompileError(ErrorCode.SemanticUnsafeCast,
+      $"{prefix}cannot implicitly convert '{KindToTypeName(source)}' to '{KindToTypeName(target)}': "
+        + "the conversion is lossy and must be explicit — use trunc(x) to truncate toward zero "
+        + "(or round/floor/ceil)",
+      line, column);
+
   private static string KindToTypeName(MaxonValueKind kind) => kind switch {
     MaxonValueKind.Integer => "int",
     MaxonValueKind.Float => "float",
@@ -19500,6 +19533,17 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     // Float literals are F64; allow narrowing to F32 ranged types (the range check validates).
     if (valueKind == MaxonValueKind.Float && expectedKind == MaxonValueKind.Float32) return value;
 
+    // A LOSSY float -> int narrowing gets E3009 and the `trunc` advice rather than the bare
+    // mismatch below, because it is not a mismatch: the two types are both numbers and the value
+    // simply cannot get there without a decision. `describeMismatch`'s wording ("Cannot return
+    // 'float' from ...") states the problem and not the fix; this one names `trunc`, which is what
+    // the identical EXPLICIT cast is already told (specs/type-casting.md, same code).
+    //
+    // It sits after the widening gate deliberately: everything reaching here has already failed to
+    // be a safe widening, so this only re-classifies a rejection the guard above had made anyway.
+    if (IsLossyFloatToInt(valueKind, expectedKind))
+      throw LossyNarrowingError(valueKind, expectedKind, "", line, column);
+
     var message = describeMismatch(KindToTypeName(valueKind), KindToTypeName(expectedKind));
     if (valueKind == MaxonValueKind.Function)
       message += ": a function value is only usable where a function type declared with 'typealias' "
@@ -19794,17 +19838,31 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   }
 
 
+  /// <summary>
+  /// Convert a call argument to its parameter's kind.
+  /// </summary>
+  /// <remarks>
+  /// ⚠ A LOSSY float -> int narrowing is REFUSED here, and until P1.0d.4 it was this table's four
+  /// quietest arms: `(Float, Integer)`, `(Float32, Integer)`, `(Float, Byte)`, `(Float32, Byte)`
+  /// each emitted a truncating cast, so `takeInt(3.7)` passed 3 and said nothing.
+  ///
+  /// It was ONE FACT WRITTEN DOWN TWICE, inside one compiler: `CoerceValueToExpectedKind` — which
+  /// decides the very same question for a `return` and for an assignment — gates on
+  /// `IsWideningCastSafe` and had ALWAYS rejected this ("Cannot return 'float' from function
+  /// declared to return 'int'"). So the same conversion was an error at a `return`, an error at an
+  /// assignment, and a silent truncation at a call argument, purely because the argument path had
+  /// its own table. The two now answer through one predicate.
+  /// </remarks>
   private MaxonValue ConvertArgToParamType(MaxonValue arg, MaxonValueKind argKind, MaxonValueKind paramKind,
       string paramName, Token callToken) {
+    if (IsLossyFloatToInt(argKind, paramKind))
+      throw LossyNarrowingError(argKind, paramKind, $"argument '{paramName}': ", callToken.Line, callToken.Column);
+
     return (argKind, paramKind) switch {
       (MaxonValueKind.Integer, MaxonValueKind.Float) => EmitCast(arg, MaxonValueKind.Float),
       (MaxonValueKind.Integer, MaxonValueKind.Float32) => EmitCast(arg, MaxonValueKind.Float32),
-      (MaxonValueKind.Float, MaxonValueKind.Integer) => EmitCast(arg, MaxonValueKind.Integer),
-      (MaxonValueKind.Float32, MaxonValueKind.Integer) => EmitCast(arg, MaxonValueKind.Integer),
       (MaxonValueKind.Integer, MaxonValueKind.Byte) => EmitCast(arg, MaxonValueKind.Byte),
       (MaxonValueKind.Integer, MaxonValueKind.Short) => EmitCast(arg, MaxonValueKind.Short),
-      (MaxonValueKind.Float, MaxonValueKind.Byte) => EmitCast(arg, MaxonValueKind.Byte),
-      (MaxonValueKind.Float32, MaxonValueKind.Byte) => EmitCast(arg, MaxonValueKind.Byte),
       (MaxonValueKind.Float32, MaxonValueKind.Float) => EmitCast(arg, MaxonValueKind.Float),
       (MaxonValueKind.Float, MaxonValueKind.Float32) => EmitCast(arg, MaxonValueKind.Float32),
       (MaxonValueKind.Byte, MaxonValueKind.Integer) => arg, // byte is stored as i64 internally

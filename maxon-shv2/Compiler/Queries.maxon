@@ -308,6 +308,11 @@ function reportParseError(project Project, path FilePath, error ParseError)
 		// permanent shape of the rule: `mod` and the bit operators have no float meaning to add
 		// later (TypeRules.operatorIsIntegral).
 		nonIntegralOperands(op, operand, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "operator '{op}' requires integer operands, but this one is {operand}", line: line, column: column, filePath: path)
+		// ⭐ E3009, the SAME code the explicit `5.0 as int` gets — because it is the same fact, and
+		// their disagreeing is the bug this rung removed. `SemanticCheck.checkArgTypes` emits this
+		// exact code and message for a call argument, so the four coercion sites speak with one
+		// voice. `implicitNarrowingMessage` is where the words live, once.
+		implicitNarrowing(sourceType, targetType, line, column) then reportPositioned(project, code: ErrorCode.semanticUnsafeCast, message: implicitNarrowingMessage(sourceType, targetType: targetType), line: line, column: column, filePath: path)
 		builtinArity(name, expected, got, line, column) then reportPositioned(project, code: ErrorCode.callArgCountMismatch, message: "'{name}' takes exactly {expected} argument, but {got} were given", line: line, column: column, filePath: path)
 		builtinOperandType(name, got, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "'{name}' requires a number, but its argument is {got}", line: line, column: column, filePath: path)
 		unsupported(feature, line, column) then reportPositioned(project, code: ErrorCode.parserUnsupportedFeature, message: "Unsupported: {feature}", line: line, column: column, filePath: path)

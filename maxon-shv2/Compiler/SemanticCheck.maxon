@@ -102,12 +102,21 @@ function checkArgTypes(project Project, func IrFunction, sig FuncSignature, argI
 		let argTag = try func.valueTags.get(argId) otherwise panic("checkArgTypes: value v{argId} of function '{String.from(func.name)}' has no recorded type — every SSA value must be minted through Parser.mintValue")
 
 		let paramTag = maxonTypeTag(paramType)
-		if typesAgree(argTag, right: paramTag) 'agree'
-			continue
-		end 'agree'
-
 		let paramName = try sig.paramNames.get(i) otherwise panic("checkArgTypes: paramNames.get OOB at {i}")
-		reportPositioned(project, code: ErrorCode.typeMismatch, message: "argument type mismatch for '{String.from(paramName)}': expected '{typeTagName(paramTag)}', got '{typeTagName(argTag)}'", line: callRange.line, column: callRange.column, filePath: filePath)
+
+		// `checkDeclaredType`, not `typesAgree` — an argument meeting its parameter is a COERCION
+		// SITE, and the symmetric rule cannot see a direction. A float and an int AGREE (they must,
+		// or `5 + 2.0` would not compile), so `takeInt(3.7)` passed this check and the float reached
+		// the x64 emitter as an f64 headed for a GPR argument register. The same rule now answers
+		// here, at the `return` and at both assignments.
+		match checkDeclaredType(argTag, declared: paramTag) 'declared'
+			ok then continue
+			mismatch then reportPositioned(project, code: ErrorCode.typeMismatch, message: "argument type mismatch for '{String.from(paramName)}': expected '{typeTagName(paramTag)}', got '{typeTagName(argTag)}'", line: callRange.line, column: callRange.column, filePath: filePath)
+			// The parameter is NAMED, unlike the parser's three sites, because the reader's next
+			// question is which argument — but the rule's own sentence is `implicitNarrowingMessage`'s,
+			// shared verbatim, so the four sites cannot come to explain one rule four ways.
+			narrowsFloatToInt then reportPositioned(project, code: ErrorCode.semanticUnsafeCast, message: "argument '{String.from(paramName)}': {implicitNarrowingMessage(typeTagName(argTag), targetType: typeTagName(paramTag))}", line: callRange.line, column: callRange.column, filePath: filePath)
+		end 'declared'
 	end 'eachArg'
 end 'checkArgTypes'
 

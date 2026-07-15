@@ -113,6 +113,109 @@ export function typeClassAdmits(required TypeClass, tag ValueTypeTag) returns bo
 	return typeClassesAgree(required, right: typeClassOf(tag))
 end 'typeClassAdmits'
 
+// --- The COERCION SITES ---
+//
+// ⭐ **A COERCION SITE IS NOT A SYMMETRIC ONE, AND THE DIFFERENCE IS THE WHOLE OF THIS SECTION.**
+//
+// `typesAgree` asks whether two values may MEET — `a == b`, `a and b`. Neither side is in charge,
+// and that is right for an operator. But four places in this compiler ask a DIFFERENT question:
+// may this VALUE stand where THAT DECLARED TYPE is demanded? A call argument against its
+// parameter, a `return` against its function's declared return type, an assignment against its
+// binding's type, a store against a global's. There, one side is a promise the program already
+// made, and the other has to keep it.
+//
+// The two questions had ONE rule, and the difference is exactly where the language's contradiction
+// lived: agreement is symmetric, so it cannot see a direction, and a lossy conversion is nothing
+// but a direction. `float` and `int` agree — they must, or `5 + 2.0` would not compile — so
+// `takeInt(3.7)` agreed too, and the float reached codegen as an f64 in a GPR.
+
+// The verdict on a value meeting a DECLARED type.
+//
+// An `enum`, not a `union`, for the reason `BinOpOperands` gives: no arm carries a payload, a
+// Maxon union value is a heap object even for a payload-free case, and this is asked once per
+// call argument, per return, per assignment.
+export enum DeclaredTypeMatch
+	ok
+	// Different classes — a bool where a number is declared, or the reverse. The rule
+	// `typesAgree` already owned.
+	mismatch
+	// ⭐ **A FLOAT MEETING A DECLARED INTEGER.** The classes AGREE — both numeric — and the
+	// conversion is still forbidden, which is why no symmetric rule could ever have caught it.
+	//
+	// It is rejected rather than truncated, and the language had already said so twice over:
+	// `specs/type-casting.md` rejects the EXPLICIT `5.0 as int` with E3009 and answers "use
+	// trunc/round/floor/ceil instead", and `trunc(x)` EXISTS as a builtin for exactly this. A
+	// language that makes you say `trunc` when you write `as`, and then truncates silently when
+	// you write nothing at all, has two rules for one conversion and one of them is invisible.
+	// (`specs/implicit-type-conversion.md` used to be the invisible one: `float → int: Truncate
+	// toward zero`. P1.0d.4 deleted that row.)
+	//
+	// ⚠ THE OTHER DIRECTION IS FINE AND IS NOT HERE. `int → float` is WIDENING and loses nothing,
+	// `type-casting.md` blesses even the explicit `100 as float`, and `arithResultTag` promotes on
+	// it. Only the lossy direction is a lie.
+	narrowsFloatToInt
+end 'DeclaredTypeMatch'
+
+// **THE COERCION RULE.** Every site where a value meets a declared type asks this, and none of
+// them restates it — which is what keeps a `return` and a call argument from disagreeing about
+// what a float may become.
+//
+// The order is load-bearing: a class mismatch is reported as a mismatch (`return flag` from a
+// `returns int` is not a "narrowing"), so agreement is established FIRST and the narrowing rule
+// then runs on a pair already known to be two numbers.
+export function checkDeclaredType(value ValueTypeTag, declared ValueTypeTag) returns DeclaredTypeMatch
+	if not typesAgree(value, right: declared) 'disagree'
+		return DeclaredTypeMatch.mismatch
+	end 'disagree'
+
+	if tagIsFloat(value) and tagIsIntegral(declared) 'narrowing'
+		return DeclaredTypeMatch.narrowsFloatToInt
+	end 'narrowing'
+
+	return DeclaredTypeMatch.ok
+end 'checkDeclaredType'
+
+// **THE WORDS**, written once. Two files report this — `Queries.reportParseError` for the three
+// sites the parser owns (`return`, assignment, global store) and `SemanticCheck.checkArgTypes` for
+// the call argument it cannot — and they must not phrase one rule two ways. The message is the
+// user's whole explanation of a rejection they did not ask for, so it names the LOSS (why), and it
+// names `trunc` (what to do instead), which is what `specs/type-casting.md` already answers for the
+// explicit `5.0 as int`.
+//
+// `round`/`floor`/`ceil` are named because they are the LANGUAGE's answer (type-casting.md lists
+// all four), not shv2's — shv2 has only `trunc` until whichever rung takes specs/math-functions.md.
+// Naming a function the reader cannot call yet is the lesser evil: the alternative is a message
+// that goes stale the day the others land, and `trunc` — the one that works — is named first.
+export function implicitNarrowingMessage(sourceType String, targetType String) returns String
+	return "cannot implicitly convert '{sourceType}' to '{targetType}': the conversion is lossy and must be explicit — use trunc(x) to truncate toward zero (or round/floor/ceil)"
+end 'implicitNarrowingMessage'
+
+// True for every tag that is DEFINITELY an integer — `int`, a ranged alias, `ExitCode`. It is the
+// `numeric` class minus `float`, and it is the half a float cannot reach without dropping its
+// fraction.
+//
+// A `match`, not `typeClassAdmits(numeric, …) and not tagIsFloat(…)`, and that is this file's own
+// lesson applied: the composed form answers TRUE for `unresolved` (which agrees with everything by
+// deferral) and would call `takeUnknown(3.7)` a narrowing — naming a conversion for a type nobody
+// has pinned. `notOperatorFor` reintroduced a silent fall-through through a RANGE arm; naming
+// every tag is the only spelling that cannot.
+export function tagIsIntegral(tag ValueTypeTag) returns bool
+	return match tag 'k'
+		boolean gives false
+		integer gives true
+		float gives false
+		// Every alias shv2 can declare is a ranged INT (`Parser.parseTypeAlias` accepts only
+		// `int(low to high)`) — the same theorem `typeClassOf` and `notOperatorFor` state, and it
+		// is what makes `takeInt(x Integer)` an integer parameter here.
+		named gives true
+		exitCode gives true
+		// NOT integral, and this is the arm the composed spelling gets wrong: `unresolved` agrees
+		// with everything, so it must not be mistaken for a type a float has to convert INTO.
+		unresolved gives false
+		void gives false
+	end 'k'
+end 'tagIsIntegral'
+
 // The name a type prints under in a diagnostic: the RESOLVED PRIMITIVE, never the alias the
 // source wrote. That is what both reference compilers print — the C# bootstrap reports a
 // parameter declared `Integer` (a `typealias Integer = int(i64.min to i64.max)`) as
