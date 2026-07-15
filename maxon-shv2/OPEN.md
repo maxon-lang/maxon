@@ -903,6 +903,44 @@ special-case is **deleted**, not mirrored — one rule where there were two that
 `x < 2` → `x <= 1` (same instruction count, provably equivalent — the bound is now a real tag).
 ⚠ **shv2 must implement ORDINAL order at P1.1b. Do not port the raw-value reading.**
 
+### 23. 🔴🔴 **THREE GREEN INSTRUMENTS SAT ON A 1000× MEMORY BUG — and the SIXTH consecutive rung was invisible to `scale-test`**
+
+**The bug** *(fixed at P1.0r, `ac512711a`)*: `TargetDialect.iatCall` carried **`implicitDefs: 0`** under a
+comment reading *"Full call-barrier semantics."* **ONE FACT WRITTEN TWICE, DISAGREEING** — in the op
+metadata, which is exactly where the compiler trusts it most. Liveness folds `implicitDefs` into
+`forbiddenPhys`, and `iatCall` has no explicit operands either, so **nothing at all was forbidden across an
+OS call.**
+
+**INERT for its whole life** — the only `iatCall` in the tree was `mrt_start`'s hand-built `ExitProcess`
+stub, which has no virtual register live across it. **P1.0r put one inside a register-allocated function and
+it went live the same day.** In `__slab_alloc`'s grow block, `VirtualAlloc` clobbered the register holding
+`size`, so the cursor published `base + base` instead of `base + size` ⇒ `next > end` on every later call ⇒
+**the bump path is never taken again: one 64 KiB VirtualAlloc per object.** Measured **133.74 MB** for 2,000
+Points → **412 KB** fixed.
+
+### ⚠⚠ THE POINT IS NOT THE BUG. IT IS THAT EVERY GATE WAS GREEN OVER IT.
+
+**It never produced a wrong USER-VISIBLE answer**, so:
+- **`specs-shv2` 357/0** — green.
+- **worker-count invariance** (`-j1` vs `-j12`, byte-identical) — green.
+- **`scale-test`** — green, **and structurally could not have seen it**: its corpus manifest says
+  `NOT GENERATED … structs` **in its own words**. Not one line of `osAllocPages`, the slab, the refcount
+  runtime or the leak gate is executed by any number in that table (`phase:runtimeAugment` is flat 54→58 —
+  the runtime is correctly never installed). **Everything this rung shipped was measured OFF-instrument.**
+
+⇒ **Only reading the emitted machine code found it**, and only because an INDEPENDENT reviewer read it. The
+author, the optimizer, and three gates all passed over it.
+
+⇒ **THIS IS #4d's "THIRD instance" — NOW THE SIXTH.** *"The scale corpus is systematically blind to the
+feature just landed."* At P1.0d.4 that hole hid a compiler crash (`var f = 0.0` in a loop). Here it hid a
+1000× memory regression. **It is now the highest-value gap in the tooling, and the next rung should close it
+before adding a feature.** The fix is not subtle — the corpus generator must emit the constructs the rung
+just landed.
+
+⚠ **And note WHICH instrument would have caught it**: `scale-test` measures **memory**, exactly, bit-for-bit
+— a 1000× allocation blow-up is the *one thing it is built to see*. It missed it purely because its corpus
+does not contain a struct. **The instrument was right and pointed at the wrong program.**
+
 ### 22. ⚠⚠ `bin/maxon.exe` IS GITIGNORED AND NOTHING REBUILDS IT — **a baseline can measure a tree that does not exist**
 
 **Found 2026-07-15, and it nearly bought a fabricated entry in the optimization log.** The rung skill's

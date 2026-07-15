@@ -84,7 +84,63 @@ was missing grouping, `true`/`false`, `not`/`and`/`or`, block scoping, void func
 > ### ✅ **P1.0d IS CLOSED (2026-07-15). The scalar core is done — MEASURED this time: `specs-shv2` 355/355.**
 > Every gap the 2026-07-13 sweep found is fixed, floats last (P1.0d.4: an XMM register class, the SSE
 > backend, `trunc`, and the conversion band). **`main` is 355/0; the C# bootstrap is 3004/0.**
-> **⇒ THE LIVE WORK IS NOW `P1.0r` (the ALLOCATOR + refcounting runtime — Workstream R1's core).**
+> ### ✅ **`P1.0r` IS CLOSED (2026-07-15) — shv2 HAS A HEAP. `specs-shv2` 355 → 357/0.**
+> `osAllocPages` (the `system` band's FIRST producer) · a VirtualAlloc bump allocator, **always zeroed** ·
+> `__mm_alloc`/`__mm_decref`/`__mm_free` as a **builder-built `StdModule` through the ordinary backend** —
+> no IR text, no parser · `__mm_alloc_count` + **a leak gate that fires** · and the first heap value:
+> `type` · layout · `Self{}` · `static create` · field access. **`Point.create(3, y: 4)` ⇒ 7.**
+> **⇒ THE LIVE WORK IS NOW `P1.1a` wave 2** (struct mutability + field defaults), then `P1.1b` (enums + `match`).
+>
+> ⚠⚠ **READ THIS BEFORE THE NEXT RUNG — the rung was RE-SLICED TWICE and the CONTRACT was wrong FOUR times,
+> every one the SAME error: SOMETHING SHIPPED WITHOUT A CONSUMER.**
+> - The plan said structs before the heap. **A struct IS a heap value** (measured: aliasing ⇒ 95 not 6;
+>   `sizeof(Outer{p Point, n Integer})` ⇒ **16** not 24 ⇒ a struct field is a POINTER). The dependency was
+>   inverted, and *"String is the FIRST heap value"* was false.
+> - Then `P1.0r.1 = the vocabulary` — **all four items had NO consumer**, so it was `mintPhi` one step
+>   earlier. Slice by **CONSUMER, never by layer.**
+> - Then the contract's golden emitted `funcAddr __destruct_Point` while its **own footnote** said a
+>   trivial struct passes `const 0` — **the footnote deleted the golden's only consumer.** The
+>   coordinator committed the exact error it had warned the implementer about **one paragraph earlier**.
+>   ⇒ `funcAddr`/`callIndirect` **deferred to P1.2**, where `__destruct_String` is a real consumer.
+> - Then the contract mandated **`__mm_incref`, which the review found had ZERO call sites** — emitted into
+>   every binary, never executed. **Deleted.** Its call site is decided by the borrow-vs-consume ruling that
+>   does not exist yet: **it had no correct call site to be missing.**
+>
+> ⭐ **What made the absence CORRECT rather than merely unused:** the refcount word is written by **NOTHING**
+> — *the slab's zeroing contract is its only initializer* — so with no incref anywhere, `rc` is **provably 0
+> at every drop**. The zeroing contract is load-bearing for the refcount model itself.
+>
+> ### 🔴 THE FIND: `iatCall` SAID "full call-barrier semantics" AND CLOBBERED NOTHING
+> `TargetDialect.iatCall` carried **`implicitDefs: 0`** under a comment reading *"Full call-barrier
+> semantics."* **ONE FACT WRITTEN TWICE, DISAGREEING** — in the op metadata. Inert while the only `iatCall`
+> was `mrt_start`'s hand-built `ExitProcess` (nothing live across it); **P1.0r put one inside a
+> register-allocated function and it went live the same day.** `__slab_alloc` published `base+base` instead
+> of `base+size` ⇒ `next > end` forever ⇒ the bump path never runs again ⇒ **one 64 KiB VirtualAlloc per
+> object. 133.74 MB for 2,000 Points → 412 KB fixed.**
+> ⚠⚠ **It never produced a wrong USER-VISIBLE answer — which is why `specs-shv2` 357/0, the worker-invariance
+> gate, AND `scale-test` were ALL GREEN OVER IT. Only reading the emitted machine code found it.**
+> *(Also fixed: a void function falling off the end never dropped ⇒ **101 on a valid program** — the drop hung
+> only off `parseReturnStatement`; and a diagnostic hardcoded `float` under a comment calling it "the only tag
+> that can trip this rule" — **a theorem P1.0r falsified in the same commit, without touching the line it
+> falsified.**)*
+>
+> ### ⚠ KNOWN GAPS, named not hidden
+> - **A struct declared in a NESTED BLOCK and not returned LEAKS** (verified: a valid program returning 7
+>   gives **101**). `closeBlock` emits no drop **deliberately**: a drop there cannot be correct without
+>   deciding whether `q = p` retains, and that IS the P1.4 ruling. Wrong here is a **use-after-free**; the gap
+>   is a **loud 101**. Fail-safe over untested — reviewed and agreed.
+> - **`struct-param` · `struct-return` · `struct-literal-as-arg` stay `disabled-test:` — P1.4, USER RULING
+>   2026-07-15.** A struct crossing a call boundary as a PARAMETER forces the **borrow-vs-consume** choice,
+>   and **the two references genuinely disagree**: the bootstrap **BORROWS + retains-on-store** (*"on a throw
+>   nothing was ever retained, so nothing is owed"*); v1 **CONSUMES** — which is documented as what MADE its
+>   member-alias leak. `ARCHITECTURE.md:453`'s `OwnershipKind` lattice expresses both and is *"present but
+>   inert."* ⭐ **The leak gate is what made this observable a rung EARLY** — that is the gate working.
+> - **`__mm_decref`'s `rc-1` arm is unreachable** (nothing can make `rc` nonzero). **Kept, deliberately**:
+>   deleting it collapses decref into a thin wrapper over `__mm_free` and unwinds the 24-byte header. The
+>   distinction from `__mm_incref`: incref was never *asked* anything; decref's *"am I the last owner?"* is
+>   asked and answered on every drop — the "no" arm is unreachable by the **program set**, not speculative.
+> - **Cross-file struct id-remap**: written, sabotage-probed by the reviewer (fires at 2 files, correct — 57),
+>   but **no spec case covers it** because the corpus port's enabled set is under user ruling.
 >
 > ⚠ **Read P1.0d.4's ledger rows before starting the next rung** — the contract was wrong TEN times, nine of
 > them ONE FACT WRITTEN DOWN TWICE, and the rung shipped two of its OWN features (float negation,
