@@ -155,17 +155,14 @@ public static partial class MaxonToStandardConversion {
 		return globalLabel;
 	}
 
-	/// Lower a static-eligible managed literal to a reference to its SHARED immortal record:
-	/// ZERO per-evaluation allocation. Materializes the record's user pointer (= &blob +
-	/// MmHeaderSize, past the header, exactly like an mm_alloc result) into a temp and returns it.
-	private static StdHeapPtr EmitStaticManagedLiteral(
-	  string value, int resultId, string typeName, bool isString, bool isAscii,
-	  string rdataPrefix, string tempPrefix, System.Text.Encoding? encoding,
+	/// Materialize a static record's user pointer (= &blob + MmHeaderSize, past the header, exactly
+	/// like an mm_alloc result) into a temp and return it as a heap pointer. The shared tail of every
+	/// static-literal lowering — string/char (EmitStaticManagedLiteral), constant array
+	/// (EmitStaticArrayLiteral), and managed-element array (EmitStaticManagedArrayLiteral).
+	private static StdHeapPtr EmitStaticRecordUserPtr(
+	  string globalLabel, string typeName, int resultId, string tempPrefix,
 	  IrBlock<StandardOp> block, Dictionary<string, string> varTypes,
-	  IrModule<StandardOp> result, VarRegistry temps, string? inlineTarget) {
-
-		var globalLabel = InternStaticLiteralRecord(value, typeName, isString, isAscii, rdataPrefix, encoding, result);
-		_staticLiteralLabelByResultId![resultId] = globalLabel;
+	  VarRegistry temps, string? inlineTarget) {
 
 		var baseLea = new StdLeaGlobalOp(globalLabel);
 		block.AddOp(baseLea);
@@ -179,6 +176,20 @@ public static partial class MaxonToStandardConversion {
 		var tempName = inlineTarget ?? temps.CreateTemp(tempPrefix, resultId, typeName, OwnershipFlags.None);
 		EmitStore(block, userPtr.Result, tempName, varTypes);
 		return new StdHeapPtr(userPtr.Result.Id, typeName, tempName);
+	}
+
+	/// Lower a static-eligible managed literal to a reference to its SHARED immortal record:
+	/// ZERO per-evaluation allocation (the record's user pointer, materialized by
+	/// EmitStaticRecordUserPtr — no allocation, exactly like an mm_alloc result).
+	private static StdHeapPtr EmitStaticManagedLiteral(
+	  string value, int resultId, string typeName, bool isString, bool isAscii,
+	  string rdataPrefix, string tempPrefix, System.Text.Encoding? encoding,
+	  IrBlock<StandardOp> block, Dictionary<string, string> varTypes,
+	  IrModule<StandardOp> result, VarRegistry temps, string? inlineTarget) {
+
+		var globalLabel = InternStaticLiteralRecord(value, typeName, isString, isAscii, rdataPrefix, encoding, result);
+		_staticLiteralLabelByResultId![resultId] = globalLabel;
+		return EmitStaticRecordUserPtr(globalLabel, typeName, resultId, tempPrefix, block, varTypes, temps, inlineTarget);
 	}
 
 	/// Pack a constant array literal's element values into a little-endian rdata blob at the element
@@ -237,18 +248,7 @@ public static partial class MaxonToStandardConversion {
 			_staticRecordLabels[key] = globalLabel;
 		}
 
-		var baseLea = new StdLeaGlobalOp(globalLabel);
-		block.AddOp(baseLea);
-		var baseI64 = new StdPtrToI64Op(baseLea.Result);
-		block.AddOp(baseI64);
-		var hdrOff = new StdConstI64Op(Rt.MmHeaderSize);
-		block.AddOp(hdrOff);
-		var userPtr = new StdAddI64Op(baseI64.Result, hdrOff.Result);
-		block.AddOp(userPtr);
-
-		var tempName = inlineTarget ?? temps.CreateTemp("sarr", resultId, typeName, OwnershipFlags.None);
-		EmitStore(block, userPtr.Result, tempName, varTypes);
-		return new StdHeapPtr(userPtr.Result.Id, typeName, tempName);
+		return EmitStaticRecordUserPtr(globalLabel, typeName, resultId, "sarr", block, varTypes, temps, inlineTarget);
 	}
 
 	// A managed element is an 8-byte refcounted heap pointer (matches RuntimeEmitter's
@@ -278,19 +278,7 @@ public static partial class MaxonToStandardConversion {
 			_staticRecordLabels[key] = globalLabel;
 		}
 		_staticLiteralLabelByResultId![resultId] = globalLabel;
-
-		var baseLea = new StdLeaGlobalOp(globalLabel);
-		block.AddOp(baseLea);
-		var baseI64 = new StdPtrToI64Op(baseLea.Result);
-		block.AddOp(baseI64);
-		var hdrOff = new StdConstI64Op(Rt.MmHeaderSize);
-		block.AddOp(hdrOff);
-		var userPtr = new StdAddI64Op(baseI64.Result, hdrOff.Result);
-		block.AddOp(userPtr);
-
-		var tempName = inlineTarget ?? temps.CreateTemp("smarr", resultId, typeName, OwnershipFlags.None);
-		EmitStore(block, userPtr.Result, tempName, varTypes);
-		return new StdHeapPtr(userPtr.Result.Id, typeName, tempName);
+		return EmitStaticRecordUserPtr(globalLabel, typeName, resultId, "smarr", block, varTypes, temps, inlineTarget);
 	}
 
 	/// For a managed-element array literal, return its elements' static-record labels in order if

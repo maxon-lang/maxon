@@ -508,7 +508,13 @@ private record SourceComment(string Text, bool WholeLine);
 
       // Emit token text
       if (tok.Type == TokenType.DocComment) {
-        sb.Append("/// "); sb.Append(tok.Value);
+        // A doc comment is `/// text`. An EMPTY one (`///`, a paragraph break inside a
+        // doc block) must emit bare `///` with NO trailing space; trailing whitespace in
+        // the text is dropped too, so formatting is idempotent (re-formatting a formatted
+        // file is a no-op instead of accreting a trailing space on every blank doc line).
+        var docText = tok.Value.TrimEnd();
+        sb.Append(docText.Length == 0 ? "///" : "/// ");
+        sb.Append(docText);
       } else if (tok.Type == TokenType.CharacterLiteral) {
         sb.Append('\''); sb.Append(tok.Value); sb.Append('\'');
       } else if (tok.Type == TokenType.StringLiteral || tok.Type == TokenType.StringInterp) {

@@ -448,12 +448,6 @@ public partial class RuntimeEmitter {
     _b.Call("mrt_panic");
     _b.DefineLabel(notNull);
 
-    // IMMORTAL fast-path: a static-literal record carries MmImmortalRefcount in its refcount
-    // slot. Decrementing it is a no-op — return before the underflow check, the atomic dec,
-    // the destructor, and mm_free, so a shared immortal is never counted and never freed.
-    // Placed before the invalid-pointer guard so an immortal exits on the cheapest path.
-    EmitImmortalReturnGuard("mm_decref_immortal");
-
     // Invalid pointer guard: catch pointers that obviously aren't heap addresses.
     // Rejects negatives (kernel space, -1 sentinel, etc.) via a signed compare,
     // then also rejects small positive values (< 0x10000 — the kernel reserves
@@ -490,6 +484,15 @@ public partial class RuntimeEmitter {
       _b.Call("mrt_panic");
       _b.DefineLabel(notPoison);
     }
+
+    // IMMORTAL fast-path: a static-literal record carries MmImmortalRefcount in its refcount
+    // slot. Decrementing it is a no-op — return before the trace, the underflow check, the atomic
+    // dec, the destructor, and mm_free, so a shared immortal is never counted and never freed.
+    // Placed AFTER the invalid-pointer guards: this loads [ptr-8], and those guards (which only
+    // compare the pointer VALUE) must reject a misrouted non-pointer — e.g. a negative sentinel —
+    // before anything dereferences it, or the load here would fault instead of panicking cleanly.
+    // An immortal record is a positive high .data address, so it passes every guard untouched.
+    EmitImmortalReturnGuard("mm_decref_immortal");
 
     // Trace decref before modifying refcount (prints rc-1)
     if (mmTrace) {
@@ -1466,12 +1469,12 @@ public partial class RuntimeEmitter {
     _b.ZeroReg(VReg.Arg0);
     _b.StoreIndirect(VReg.Scratch1, 32, VReg.Arg0); // new.parentPtr = 0
 
-    // Step 5: Set refcount on new struct to 1 (mm_alloc initializes to 0)
+    // Step 6: Set refcount on new struct to 1 (mm_alloc initializes to 0)
     _b.LoadLocal(VReg.Scratch1, 2); // new struct
     _b.MovRegImm(VReg.Arg0, 1);
     _b.StoreIndirect(VReg.Scratch1, MmOffRefcount, VReg.Arg0); // refcount = 1
 
-    // Step 6: Decref old struct (drops one reference; slices still hold theirs)
+    // Step 7: Decref old struct (drops one reference; slices still hold theirs)
     _b.LoadLocal(VReg.Arg0, 0); // old managedPtr
     if (mmTrace) _b.ZeroReg(VReg.Arg1); // scope = NULL
     _b.Call("mm_decref");
