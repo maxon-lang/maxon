@@ -141,6 +141,139 @@ export typealias RegCountColumn = Array with RegCount
 // in TargetDialect rather than here: the lowering PRODUCES it and the allocator only consumes it, so
 // it is a dialect fact that crosses the tier boundary, not an allocator-local one.)
 
+// ==========================================================================
+// Per-class rows — every register-count question, answered per FILE
+// ==========================================================================
+//
+// TWO FILES, ONE SWEEP. Every figure the allocator compares against a pool — a live population, an
+// op's pressure, a block's demand, a function's peak — is now a ROW with one entry per register
+// class, because the files are independent: 15 live ints do not fit 14 GPRs however many XMMs are
+// idle. One MIXED figure against one MIXED pool (30) cannot see that, and it does not fail quietly —
+// it panicked the colorer on 19 pressure tests the moment the pool was widened.
+//
+// ⭐ WHAT MUST NOT FORK IS THE SWEEP. These rows are per-class DATA threaded through the SAME single
+// backward walk; nothing here runs twice, once per class. v1 buckets its interval events once and
+// then runs a class pass over them per file; this never runs a second pass at all, because
+// `stepRowBackwardOverOperands` already knows each flip INLINE (it is the code that flips the bit),
+// so a per-class tally costs one array read per FLIPPED operand and zero extra walks.
+
+// How many register FILES there are — the width of every class row and the stride of every
+// per-(block, class) row.
+//
+// ⚠⚠ RESPELLED AS A LITERAL, AND `RegClass.allCases.count()` IS THE BUG IT REPLACES. `allCases`
+// BUILDS A FRESH HEAP ARRAY ON EVERY EVALUATION (the bootstrap's `EmitEnumAllCases` emits an array
+// literal, not a constant), so naming it in a per-op loop puts a heap allocation on the allocator's
+// hottest path. Measured, on the scale corpus: `allCases` in the sweeps and in `classRowIndex` cost
+// **+5.6 MILLION allocations at rung 5, +66%** — the growth stayed linear (x1.99) because it is a
+// constant factor, which is exactly why no exponent could have caught it.
+//
+// This is the same trap `MaxonDialect`'s ValueTypeTag column documents ("a Maxon union value is a heap
+// object — every case, not just the ones with a payload... put one on the compiler's hottest path"),
+// and the same answer `RegisterFileSize`/`RegNum` already give: state the number, and ASSERT it against
+// the thing it mirrors. `assertRegClassCountMatches` runs once per module, so the two cannot drift.
+export let RegClassCount = 2
+
+// The register file with this ordinal — the allocation-free way to walk the files. `for class in
+// RegClass.allCases` allocates an array per evaluation (see `RegClassCount`); this is a range loop over
+// `0 upto RegClassCount` plus one `fromRawValue`, which allocates nothing.
+export function regClassAt(ordinal RegCount) returns RegClass
+	return try RegClass.fromRawValue(ordinal) otherwise panic("regClassAt: {ordinal} is not a register-class ordinal — RegClassCount ({RegClassCount}) and the RegClass enum have drifted apart")
+end 'regClassAt'
+
+// `RegClassCount` is a respelled literal; this is what keeps it honest. Once per module, so free.
+export function assertRegClassCountMatches()
+	if RegClassCount != RegClass.allCases.count() 'drift'
+		panic("assertRegClassCountMatches: RegClassCount is {RegClassCount} but the RegClass enum has {RegClass.allCases.count()} cases — a register file was added and every class row is now too narrow, so each would silently read its neighbour's cell. Widen RegClassCount with the enum.")
+	end 'drift'
+end 'assertRegClassCountMatches'
+
+// The index of one (block, class) cell in a per-block PER-CLASS row (`deadPhis`, `blockPressure`).
+// This is the one place the layout is stated; every reader goes through the accessors on
+// `LivenessResult`.
+export function classRowIndex(local CfgIndex, class RegClass) returns ColumnLength
+	return local * RegClassCount + class.ordinal
+end 'classRowIndex'
+
+// A zeroed per-CLASS row: one entry per register file, indexed by `RegClass.ordinal`.
+export function zeroClassRow() returns RegCountColumn
+	return zeroColumn(RegClassCount)
+end 'zeroClassRow'
+
+export function classRowGet(row RegCountColumn, class RegClass) returns RegCount
+	return try row.get(class.ordinal) otherwise panic("classRowGet: row has no entry for the {class.name} file")
+end 'classRowGet'
+
+export function classRowSet(row RegCountColumn, class RegClass, value RegCount)
+	try row.set(class.ordinal, value: value) otherwise panic("classRowSet: row has no entry for the {class.name} file")
+end 'classRowSet'
+
+export function classRowZero(row RegCountColumn)
+	for classOrdinal in 0 upto RegClassCount 'eachClass'
+		let class = regClassAt(classOrdinal)
+		classRowSet(row, class: class, value: 0)
+	end 'eachClass'
+end 'classRowZero'
+
+// The largest entry across every file — the "how hard was this?" summary, for a REPORT. It is never a
+// feasibility test: two files do not pool their registers, so a max is a description and never a
+// denominator.
+export function classRowMax(row RegCountColumn) returns RegCount
+	var widest = 0 as RegCount
+	for n in row 'eachClass'
+		widest = maxOf(widest, b: n)
+	end 'eachClass'
+	return widest
+end 'classRowMax'
+
+// The population across every file. Derived rather than carried alongside, so there is no second
+// counter to drift out of step with the per-class row it summarises.
+export function classRowTotal(row RegCountColumn) returns RegCount
+	var total = 0 as RegCount
+	for n in row 'eachClass'
+		total = total + n
+	end 'eachClass'
+	return total
+end 'classRowTotal'
+
+// The register FILE an operand's register belongs to: a PHYSICAL operand names its file directly (a
+// register number classifies itself), a VIRTUAL one takes its value's declared class.
+export function operandClass(o Operand, classes ValueClassColumn) returns RegClass
+	if not operandIsVirtual(o) 'physical'
+		return regClassOf(operandRegister(o).rawValue)
+	end 'physical'
+	return try classes.get(operandValueId(o)) otherwise panic("operandClass: value {operandValueId(o)} has no recorded register class — the lowering's class column does not cover it")
+end 'operandClass'
+
+// Move `v` into or out of ITS OWN file's live tally. ONE implementation for both directions: the
+// direction is the only thing that differs, and two functions would be the same read-modify-write
+// written twice.
+//
+// The underflow panic mirrors `RegPoolCensus.remove`'s and exists for the same reason: this tally is
+// MAINTAINED, never rebuilt, so a drift from the row it mirrors would silently corrupt every pressure
+// figure downstream of it rather than fail where it happened.
+export function stepClassLive(liveByClass RegCountColumn, classes ValueClassColumn, v ValueId, entering bool)
+	let class = try classes.get(v) otherwise panic("stepClassLive: value {v} has no recorded register class — the lowering's class column does not cover it")
+	let cur = classRowGet(liveByClass, class: class)
+	if entering 'entered'
+		classRowSet(liveByClass, class: class, value: cur + 1)
+		return
+	end 'entered'
+
+	if cur == 0 'underflow'
+		panic("stepClassLive: value {v} left the live set of the {class.name} file but that file's tally is already zero — the per-class live tally has drifted from the bit row it mirrors")
+	end 'underflow'
+	classRowSet(liveByClass, class: class, value: cur - 1)
+end 'stepClassLive'
+
+// Seed a per-class live tally from a sparse live list — the O(live) counterpart of seeding the bit
+// row, and the only honest way to start a tally whose decrements panic on underflow.
+export function seedClassLive(liveByClass RegCountColumn, classes ValueClassColumn, values ValueIdArray)
+	classRowZero(liveByClass)
+	for v in values 'eachLive'
+		stepClassLive(liveByClass, classes: classes, v: v, entering: true)
+	end 'eachLive'
+end 'seedClassLive'
+
 // Build a dense column of `count` entries, every entry set to `value` — the "resize a column then
 // fill a sentinel" pattern the allocator's color/hint columns, the flat BlockId index, and the Hall
 // matching's two inverse maps all share. The result unifies with every purpose-named column above.
@@ -491,21 +624,29 @@ export type LivenessResult
 	// recomputable precisely BECAUSE a split cuts the live range that earned it. Two facts with two
 	// different lifetimes cannot share one column.
 	export var valueClass as ValueClassColumn
-	export var maxPressure as RegCount
+	// Peak simultaneous register demand PER CLASS (a class row) — the exact χ = ω each register file
+	// must satisfy on its own.
+	export var maxPressure as RegCountColumn
 	// Block-marking steps taken by the SSA path exploration — the honest cost counter. (There is
 	// no fixpoint, so there is no iteration count to report.)
 	export var livenessMarkSteps as EventCount
-	// Per-block DEAD block-arg count — a block-arg with no use in the block and not live-out. The
-	// colorer still reserves a register for each across the WHOLE block (a dead phi never appears
-	// as an operand, so it never dies and its register frees only at the block boundary), so it
-	// counts toward the block's true register demand even though it is never "live".
+	// Per-block, PER-CLASS DEAD block-arg count — a block-arg with no use in the block and not
+	// live-out. The colorer still reserves a register for each across the WHOLE block (a dead phi
+	// never appears as an operand, so it never dies and its register frees only at the block
+	// boundary), so it counts toward that block's true demand FOR ITS OWN FILE even though it is
+	// never "live".
 	//
 	// Recorded HERE, for free, by the backward sweep that already computes it — the splitter's
 	// peak-finder needs the same number at every op of every block, and recomputing it per block
 	// meant re-sweeping the whole block and heap-allocating two arrays per call.
+	//
+	// A 2-WIDE ROW PER BLOCK (`classRowIndex`), not a column per class: same allocation count as the
+	// single column it replaces, and the stride is derived from the enum.
 	export var deadPhis as RegCountColumn
-	// Per-block REGISTER DEMAND: the block's peak simultaneous live count (carrying the reuse-copy
-	// transient) plus its dead-phi reservations. `maxPressure` is the MAX over this column.
+	// Per-block, PER-CLASS REGISTER DEMAND: the block's peak simultaneous live count of that file
+	// (carrying the reuse-copy transient, in the file the transient's own destination register
+	// belongs to) plus that file's dead-phi reservations. `maxPressure` is the MAX over this column,
+	// per class. Same 2-wide row as `deadPhis`.
 	//
 	// It is kept as a column, and not merely folded away, because a split changes the demand of only
 	// the blocks it touched — so the splitter re-derives those few and takes the max ONCE, at the end,
@@ -516,32 +657,47 @@ export type LivenessResult
 	// answers EVERY per-value question from it rather than re-walking the function per candidate.
 	export var useIndex as UseIndex
 
-	export static function create(cfg FuncCfg, valueCount ValueId, wordsPerRow BitWordCount, live LiveSets, forbidden RegMaskColumn, valueClass ValueClassColumn, maxPressure RegCount, livenessMarkSteps EventCount, deadPhis RegCountColumn, blockPressure RegCountColumn, useIndex UseIndex) returns LivenessResult
+	export static function create(cfg FuncCfg, valueCount ValueId, wordsPerRow BitWordCount, live LiveSets, forbidden RegMaskColumn, valueClass ValueClassColumn, maxPressure RegCountColumn, livenessMarkSteps EventCount, deadPhis RegCountColumn, blockPressure RegCountColumn, useIndex UseIndex) returns LivenessResult
 		return Self{cfg: cfg, valueCount: valueCount, wordsPerRow: wordsPerRow, live: live, forbidden: forbidden, valueClass: valueClass, maxPressure: maxPressure, livenessMarkSteps: livenessMarkSteps, deadPhis: deadPhis, blockPressure: blockPressure, useIndex: useIndex}
 	end 'create'
 
-	// The dead block-arg count of local block `local`.
-	export function deadPhiCountOf(local CfgIndex) returns RegCount
-		return try self.deadPhis.get(local) otherwise panic("LivenessResult.deadPhiCountOf: block {local} out of range")
+	// The dead block-arg count of local block `local`, for ONE register file.
+	export function deadPhiCountOf(local CfgIndex, class RegClass) returns RegCount
+		return try self.deadPhis.get(classRowIndex(local, class: class)) otherwise panic("LivenessResult.deadPhiCountOf: block {local} out of range")
 	end 'deadPhiCountOf'
 
 	// ----------------------------------------------------------------------
 	// EDITS — what a live-range split changes, and nothing else
 	// ----------------------------------------------------------------------
 
-	// Re-derive `maxPressure` from the per-block demands. O(blocks), and the splitter calls it ONCE,
-	// after its last split — never per split, which is the whole point of keeping the column.
+	// Re-derive `maxPressure` from the per-block demands, PER CLASS. O(blocks), and the splitter calls
+	// it ONCE, after its last split — never per split, which is the whole point of keeping the column.
+	//
+	// ONE walk of the 2-wide rows, not one walk per class: the row index carries the class, so every
+	// entry is read once and folded into its own file's max.
 	export function refreshMaxPressure()
-		var m = 0 as RegCount
-		for demand in self.blockPressure 'eachBlock'
-			m = maxOf(m, b: demand)
+		classRowZero(self.maxPressure)
+		for local in 0 upto self.cfg.topo.numBlocks 'eachBlock'
+			for classOrdinal in 0 upto RegClassCount 'eachClass'
+				let class = regClassAt(classOrdinal)
+				classRowSet(self.maxPressure, class: class, value: maxOf(self.maxPressureOf(class), b: self.blockPressureOf(local, class: class)))
+			end 'eachClass'
 		end 'eachBlock'
-		self.maxPressure = m
 	end 'refreshMaxPressure'
 
-	// Record one block's re-derived register demand (`sweepBlockPressure`'s answer).
-	export function setBlockPressure(local CfgIndex, demand RegCount)
-		try self.blockPressure.set(local, value: demand) otherwise panic("LivenessResult.setBlockPressure: block {local} out of range")
+	// The function's peak simultaneous demand for ONE register file.
+	export function maxPressureOf(class RegClass) returns RegCount
+		return classRowGet(self.maxPressure, class: class)
+	end 'maxPressureOf'
+
+	// One block's register demand for ONE file.
+	export function blockPressureOf(local CfgIndex, class RegClass) returns RegCount
+		return try self.blockPressure.get(classRowIndex(local, class: class)) otherwise panic("LivenessResult.blockPressureOf: block {local} out of range")
+	end 'blockPressureOf'
+
+	// Record one block's re-derived register demand for ONE file (`sweepBlockPressure`'s answer).
+	export function setBlockPressure(local CfgIndex, class RegClass, demand RegCount)
+		try self.blockPressure.set(classRowIndex(local, class: class), value: demand) otherwise panic("LivenessResult.setBlockPressure: block {local} out of range")
 	end 'setBlockPressure'
 
 	// Grow the value space to the ids a split MINTED. Every value-keyed column follows it, and the
@@ -734,16 +890,21 @@ export function computeLivenessOn(module TargetModule, cfg FuncCfg, func IrFunct
 
 	var forbidden = makeRegMaskColumn(valueCount)
 	assertClassColumnCovers(valueClass, valueCount: valueCount, func: func)
-	var deadPhis = zeroColumn(numBlocks)
-	var blockPressure = zeroColumn(numBlocks)
+	let classRowWidth = RegClassCount
+	var deadPhis = zeroColumn(numBlocks * classRowWidth)
+	var blockPressure = zeroColumn(numBlocks * classRowWidth)
 	var sweep = PressureSweepScratch.create()
 	sweep.widenRow(wordsPerRow)
 
-	var maxPressure = 0 as RegCount
+	var maxPressure = zeroClassRow()
+	var demand = zeroClassRow()
 	for i in 0 upto numBlocks 'eachBlock'
-		let demand = sweepBlockPressure(module, topo: cfg.topo, blockLocal: i, live: walk.live, forbidden: forbidden, deadPhis: deadPhis, wordsPerRow: wordsPerRow, scratch: sweep)
-		try blockPressure.set(i, value: demand) otherwise panic("computeLivenessOn: blockPressure.set OOB for block {i}")
-		maxPressure = maxOf(maxPressure, b: demand)
+		sweepBlockPressure(module, topo: cfg.topo, blockLocal: i, live: walk.live, forbidden: forbidden, classes: valueClass, deadPhis: deadPhis, wordsPerRow: wordsPerRow, scratch: sweep, demandOut: demand)
+		for classOrdinal in 0 upto RegClassCount 'eachClass'
+			let class = regClassAt(classOrdinal)
+			try blockPressure.set(classRowIndex(i, class: class), value: classRowGet(demand, class: class)) otherwise panic("computeLivenessOn: blockPressure.set OOB for block {i}")
+			classRowSet(maxPressure, class: class, value: maxOf(classRowGet(maxPressure, class: class), b: classRowGet(demand, class: class)))
+		end 'eachClass'
 	end 'eachBlock'
 
 	let paramCross = ParamCrossForbid.resolve(module, topo: cfg.topo, paramCount: func.paramCount)
@@ -2367,8 +2528,16 @@ export type PressureSweepScratch
 	export var liveBuf as ValueIdArray
 	export var ordered as OpIndexArray
 
+	// The per-class working rows: the live population being swept, one op's pressure, and the block's
+	// running max. Allocated once per function and reused across every block and every op — the same
+	// scratch discipline the rest of the allocator follows, and the reason a per-class figure costs no
+	// allocation at all.
+	export var liveByClass as RegCountColumn
+	export var opPressure as RegCountColumn
+	export var blockMax as RegCountColumn
+
 	export static function create() returns PressureSweepScratch
-		return Self{liveRow: BitWordArray.create(), buf: OperandList.create(), liveBuf: ValueIdArray.create(), ordered: OpIndexArray.create()}
+		return Self{liveRow: BitWordArray.create(), buf: OperandList.create(), liveBuf: ValueIdArray.create(), ordered: OpIndexArray.create(), liveByClass: zeroClassRow(), opPressure: zeroClassRow(), blockMax: zeroClassRow()}
 	end 'create'
 
 	// Widen the working row to `wordsPerRow`, ZEROING only the words the growth added — the rest of the
@@ -2404,35 +2573,43 @@ end 'PressureSweepScratch'
 // exact χ the colorer needs, so the "coloring cannot fail when maxPressure <= pool" invariant — and the
 // E5001 deficit count — stay sound. The count is RECORDED per block, not just folded into the max: the
 // splitter's peak-finder needs the same number at every op of the block.
-export function sweepBlockPressure(module TargetModule, topo FuncTopology, blockLocal CfgIndex, live LiveSets, forbidden RegMaskColumn, deadPhis RegCountColumn, wordsPerRow BitWordCount, scratch PressureSweepScratch) returns RegCount
+export function sweepBlockPressure(module TargetModule, topo FuncTopology, blockLocal CfgIndex, live LiveSets, forbidden RegMaskColumn, classes ValueClassColumn, deadPhis RegCountColumn, wordsPerRow BitWordCount, scratch PressureSweepScratch, demandOut RegCountColumn)
 	let block = blockAt(module, topo: topo, local: blockLocal)
 	var liveRow = scratch.liveRow
 	var buf = scratch.buf
 	var liveBuf = scratch.liveBuf
 	var ordered = scratch.ordered
+	var liveByClass = scratch.liveByClass
+	var opPressure = scratch.opPressure
+	var blockMax = scratch.blockMax
 
 	// The stored list itself, not a copy into a scratch buffer: this sweep only READS the live sets,
-	// so there is nothing to copy it away from.
+	// so there is nothing to copy it away from. The per-class tally is seeded from the same list, in
+	// the same O(live) walk that seeds the bit row.
 	let liveOutList = live.liveOut(blockLocal)
 	for v in liveOutList 'seedLiveOut'
 		bitsetAdd(liveRow, base: 0, bit: v)
 	end 'seedLiveOut'
-	var blockMax = liveOutList.count()
+	seedClassLive(liveByClass, classes: classes, values: liveOutList)
+	for classOrdinal in 0 upto RegClassCount 'seedMax'
+		let class = regClassAt(classOrdinal)
+		classRowSet(blockMax, class: class, value: classRowGet(liveByClass, class: class))
+	end 'seedMax'
 
 	ordered.clear()
 	collectBlockOps(block, out: ordered)
-	var liveCount = blockMax
 	for ri in 0 upto ordered.count() 'eachOpRev'
 		let opIdx = try ordered.get(ordered.count() - 1 - ri) otherwise panic("sweepBlockPressure: ordered.get OOB")
-		let at = stepBackwardOverOp(module, opIdx: opIdx, liveRow: liveRow, forbidden: forbidden, buf: buf, wordsPerRow: wordsPerRow, liveBuf: liveBuf, liveCount: liveCount)
-		liveCount = at.liveBefore
-		blockMax = maxOf(blockMax, b: at.pressure)
+		stepBackwardOverOp(module, opIdx: opIdx, liveRow: liveRow, forbidden: forbidden, buf: buf, wordsPerRow: wordsPerRow, liveBuf: liveBuf, liveByClass: liveByClass, classes: classes, pressureOut: opPressure)
+		for classOrdinal in 0 upto RegClassCount 'eachClass'
+			let class = regClassAt(classOrdinal)
+			classRowSet(blockMax, class: class, value: maxOf(classRowGet(blockMax, class: class), b: classRowGet(opPressure, class: class)))
+		end 'eachClass'
 	end 'eachOpRev'
 
 	// After the backward sweep `liveRow` is the live-IN view: a block-arg is present iff it is live
 	// (used here or live-out); a dead phi is absent.
-	let blockDeadPhis = countDeadPhis(block, liveRow: liveRow)
-	try deadPhis.set(blockLocal, value: blockDeadPhis) otherwise panic("sweepBlockPressure: deadPhis.set OOB")
+	countDeadPhis(block, liveRow: liveRow, classes: classes, deadPhis: deadPhis, blockLocal: blockLocal)
 
 	// Return the working row to zero for the next block, in O(live). What it holds now is the block's
 	// LIVE-IN set plus any of its own block-args the sweep re-added (a phi read by an op in the block),
@@ -2445,21 +2622,35 @@ export function sweepBlockPressure(module TargetModule, topo FuncTopology, block
 		bitsetRemove(liveRow, base: 0, bit: arg.valueId)
 	end 'clearPhis'
 
-	return blockMax + blockDeadPhis
+	// The block's demand, per file: that file's peak simultaneous count plus its own dead-phi
+	// reservations. A dead phi of one file reserves a register of THAT file and competes for nothing
+	// in the other.
+	for classOrdinal in 0 upto RegClassCount 'demand'
+		let class = regClassAt(classOrdinal)
+		classRowSet(demandOut, class: class, value: classRowGet(blockMax, class: class) + (try deadPhis.get(classRowIndex(blockLocal, class: class)) otherwise panic("sweepBlockPressure: deadPhis.get OOB for block {blockLocal}")))
+	end 'demand'
 end 'sweepBlockPressure'
 
-// The number of DEAD block-arg phis of `block`: block-args absent from `liveRow` (the
-// live-in view the backward sweep leaves), i.e. with no use in the block and not
-// live-out. The colorer reserves a register for each across the whole block, so they
-// count toward the block's true register demand even though they are never live.
-function countDeadPhis(block IrBlock, liveRow BitWordArray) returns RegCount
-	var dead = 0 as RegCount
+// The DEAD block-arg phis of `block`, tallied PER FILE into `deadPhis`' row for this block:
+// block-args absent from `liveRow` (the live-in view the backward sweep leaves), i.e. with no use in
+// the block and not live-out. The colorer reserves a register for each across the whole block, so
+// they count toward that file's true register demand even though they are never live.
+//
+// It WRITES the row rather than returning a count, because the answer is per class and a per-op
+// return value would be a heap object on the sweep's hottest path.
+function countDeadPhis(block IrBlock, liveRow BitWordArray, classes ValueClassColumn, deadPhis RegCountColumn, blockLocal CfgIndex)
+	for classOrdinal in 0 upto RegClassCount 'zeroRow'
+		let class = regClassAt(classOrdinal)
+		try deadPhis.set(classRowIndex(blockLocal, class: class), value: 0) otherwise panic("countDeadPhis: deadPhis.set OOB for block {blockLocal}")
+	end 'zeroRow'
+
 	for arg in block.blockArgs 'each'
 		if not bitsetTest(liveRow, base: 0, bit: arg.valueId) 'deadPhi'
-			dead = dead + 1
+			let class = try classes.get(arg.valueId) otherwise panic("countDeadPhis: block-arg value {arg.valueId} has no recorded register class")
+			let idx = classRowIndex(blockLocal, class: class)
+			try deadPhis.set(idx, value: (try deadPhis.get(idx) otherwise panic("countDeadPhis: deadPhis.get OOB")) + 1) otherwise panic("countDeadPhis: deadPhis.set OOB")
 		end 'deadPhi'
 	end 'each'
-	return dead
 end 'countDeadPhis'
 
 // ==========================================================================
@@ -2585,14 +2776,16 @@ end 'ParamCrossForbid'
 // live across it, then transform `liveRow` from live-after to live-before. Returns the
 // pressure this op contributes — the live-before population, PLUS one for the reuse-copy
 // transient when the op's reuse input outlives it (see reuseInputOutlivesOp).
-function stepBackwardOverOp(module TargetModule, opIdx OpIndex, liveRow BitWordArray, forbidden RegMaskColumn, buf OperandList, wordsPerRow BitWordCount, liveBuf ValueIdArray, liveCount RegCount) returns OpPressure
+function stepBackwardOverOp(module TargetModule, opIdx OpIndex, liveRow BitWordArray, forbidden RegMaskColumn, buf OperandList, wordsPerRow BitWordCount, liveBuf ValueIdArray, liveByClass RegCountColumn, classes ValueClassColumn, pressureOut RegCountColumn)
 	let op = try module.ops.get(opIdx) otherwise panic("stepBackwardOverOp: opIdx not in module.ops")
 	targetOpOperands(op, buf: buf)
 
 	// Read the reuse-copy transient BEFORE the backward step mutates `liveRow` — it still
 	// holds the live-AFTER set here, which is where "does the reuse input outlive the op?"
-	// is decided.
-	let reuseTransient = reuseInputOutlivesOp(buf, liveRow: liveRow)
+	// is decided. `pressureOut` starts as the transient alone and the live-before population is
+	// added after the step, so the two halves are each counted in the file they actually occupy.
+	classRowZero(pressureOut)
+	addReuseTransientPressure(buf, liveRow: liveRow, classes: classes, pressureOut: pressureOut)
 
 	// Registers this op writes without being a virtual def: physical def operands +
 	// the implicit-def mask (a call's clobbers, M5; `idiv`'s RAX/RDX). Values live
@@ -2620,40 +2813,45 @@ function stepBackwardOverOp(module TargetModule, opIdx OpIndex, liveRow BitWordA
 		forbidOperandsFromImplicit(forbidden, buf: buf, implicitMask: implicitTouch)
 	end 'hasImplicit'
 
-	let liveBefore = stepRowBackwardOverOperands(liveRow, base: 0, buf: buf, liveCount: liveCount)
+	stepRowBackwardOverOperands(liveRow, base: 0, buf: buf, liveByClass: liveByClass, classes: classes)
 
-	var pressure = liveBefore
-	if reuseTransient 'reuseCopyTransient'
-		// The allocator inserts `mov dest, input` BEFORE the op, where `dest` holds
-		// input's value while input (outliving), the other operand, and every value live
-		// across are all still live — a pressure of |live-before-op| + 1 that the op-
-		// boundary popcounts alone would miss (the analogue of the dead-phi undercount the
-		// block-level correction handles).
-		pressure = pressure + 1
-	end 'reuseCopyTransient'
-	return OpPressure.create(pressure, liveBefore: liveBefore)
+	// This op's pressure, per file: the live-BEFORE population of that file, plus the reuse-copy
+	// transient already folded in above if its destination register belongs to that file.
+	for classOrdinal in 0 upto RegClassCount 'eachClass'
+		let class = regClassAt(classOrdinal)
+		classRowSet(pressureOut, class: class, value: classRowGet(pressureOut, class: class) + classRowGet(liveByClass, class: class))
+	end 'eachClass'
 end 'stepBackwardOverOp'
 
-// True iff `buf` (an op's operands) holds a reuse def whose reuse INPUT (operand 0) is
-// live AFTER the op — the case where the allocator materializes `mov dest, input` BEFORE
-// the op (`allocateReuseDef`), so `dest` co-exists with everything live entering the op.
-// `liveRow` must still be the live-AFTER set (test it BEFORE the backward step, where a
-// live-after input is present and a use has not yet been re-added). Reuse-ness and the
-// input value come from the operand model, never from hardcoded opcodes. Exported so the
-// cold-spill splitter's peak-finder counts the SAME reuse-copy transient this pass folds
-// into `maxPressure` — the two must agree or the splitter false-panics (see
-// SplitLiveRanges.analyzePressure).
-export function reuseInputOutlivesOp(buf OperandList, liveRow BitWordArray) returns bool
+// Add the REUSE-COPY TRANSIENT to `pressureOut`, in the FILE its destination register belongs to.
+//
+// The allocator materializes `mov dest, input` BEFORE an op whose reuse INPUT is live AFTER it
+// (`allocateReuseDef`), so `dest` co-exists with everything live entering the op — a pressure of
+// |live-before-op| + 1 that the op-boundary popcounts alone would miss (the analogue of the dead-phi
+// undercount the block-level correction handles). `liveRow` must still be the live-AFTER set (call it
+// BEFORE the backward step, where a live-after input is present and a use has not yet been re-added).
+// Reuse-ness and the input value come from the operand model, never from hardcoded opcodes.
+//
+// THE TRANSIENT IS THE DESTINATION'S REGISTER, so it belongs to the DESTINATION's file — not the
+// input's, and not "the pool". They are the same file for every two-address op, but the fact that
+// decides it is the one the copy actually allocates.
+//
+// It ADDS to a row rather than returning a bool, so the splitter's peak-finder and this pass call the
+// ONE implementation and cannot disagree about where the transient lands — the two must agree or the
+// splitter false-panics (see SplitLiveRanges.analyzePressure). At most one is added: the first reuse
+// def whose input outlives is the copy the allocator emits.
+export function addReuseTransientPressure(buf OperandList, liveRow BitWordArray, classes ValueClassColumn, pressureOut RegCountColumn)
 	for o in buf 'each'
 		if operandIsReuseDef(o) 'reuseDef'
 			let inputId = operandReuseInputValueId(o, buf: buf)
 			if bitsetTest(liveRow, base: 0, bit: inputId) 'inputLiveAfter'
-				return true
+				let destClass = operandClass(o, classes: classes)
+				classRowSet(pressureOut, class: destClass, value: classRowGet(pressureOut, class: destClass) + 1)
+				return
 			end 'inputLiveAfter'
 		end 'reuseDef'
 	end 'each'
-	return false
-end 'reuseInputOutlivesOp'
+end 'addReuseTransientPressure'
 
 // Transform a live/seen bitset ROW from live-AFTER an op to live-BEFORE it: remove the
 // op's virtual defs, then add its virtual uses. Defs are removed FIRST so a read-
@@ -2661,33 +2859,34 @@ end 'reuseInputOutlivesOp'
 // must already hold the op's operands. Shared by the liveness pressure sweep
 // (`stepBackwardOverOp`) and the colorer's per-block death computation — an identical
 // backward SSA transfer that must not drift between the two.
-// What one backward step over an op yields: the op's register PRESSURE (which carries the +1 for a
-// reuse-copy transient), and the row's true live POPULATION before the op (which does NOT — the
-// transient is a register the colorer holds, not a live value). Keeping them apart is what lets the
-// live count be maintained incrementally across ops while the pressure figure stays exact.
-type OpPressure
-	export var pressure as RegCount
-	export var liveBefore as RegCount
-
-	static function create(pressure RegCount, liveBefore RegCount) returns OpPressure
-		return Self{pressure: pressure, liveBefore: liveBefore}
-	end 'create'
-end 'OpPressure'
+// (`OpPressure` is gone. It paired an op's PRESSURE with the live POPULATION before it, as two
+// scalars, when both are now per-class ROWS: `liveByClass` IS the live-before population — the step
+// leaves it there — and `pressureOut` is the pressure. Two caller-owned rows, mutated in place, and a
+// per-op heap object off the allocator's hottest path.)
 
 // Takes the row's live POPULATION before the step and returns it after — maintained INCREMENTALLY,
 // by counting only the bits that actually flip. Recomputing it with a popcount over the whole row
 // instead would be O(values/64) at EVERY op — O(ops × values/64) per function, the last quadratic in
 // the allocator and, on a large function, the single biggest remaining cost. A step flips at most
 // the op's own operands, so the count is O(operands).
-export function stepRowBackwardOverOperands(row BitWordArray, base BitWordIndex, buf OperandList, liveCount RegCount) returns RegCount
-	var count = liveCount
-
+// ⭐ THE PER-CLASS TALLY COSTS ZERO EXTRA WALKS, and that is why it lives HERE rather than in a
+// second pass. This function IS the code that flips the bit, so it already knows — inline, at the
+// only place the fact exists — which values entered and left. A tally maintained here is one array
+// read per FLIPPED operand; the alternatives are a snapshot/compare pass (a second walk) or a
+// re-derivation of "def && was live" somewhere else, which would duplicate this transfer function
+// into a second place and let the two drift silently apart. That drift is the class of pressure bug
+// the whole sparse design exists to end.
+//
+// `liveByClass` IS the population — the caller reads it after the step, and the total is
+// `classRowTotal`. There is no separate count to return and therefore no second counter to disagree
+// with the row it summarises.
+export function stepRowBackwardOverOperands(row BitWordArray, base BitWordIndex, buf OperandList, liveByClass RegCountColumn, classes ValueClassColumn)
 	for o in buf 'removeDefs'
 		if operandIsDef(o) and operandIsVirtual(o) 'vd'
 			let v = operandValueId(o)
 			if bitsetTest(row, base: base, bit: v) 'wasLive'
 				bitsetRemove(row, base: base, bit: v)
-				count = count - 1
+				stepClassLive(liveByClass, classes: classes, v: v, entering: false)
 			end 'wasLive'
 		end 'vd'
 	end 'removeDefs'
@@ -2697,12 +2896,10 @@ export function stepRowBackwardOverOperands(row BitWordArray, base BitWordIndex,
 			let v = operandValueId(o)
 			if not bitsetTest(row, base: base, bit: v) 'wasDead'
 				bitsetAdd(row, base: base, bit: v)
-				count = count + 1
+				stepClassLive(liveByClass, classes: classes, v: v, entering: true)
 			end 'wasDead'
 		end 'vu'
 	end 'addUses'
-
-	return count
 end 'stepRowBackwardOverOperands'
 
 // For each value LIVE ACROSS this op (in `liveRow`, and not one of the op's own
@@ -2794,7 +2991,7 @@ end 'collectBlockOps'
 // Larger of two non-negative integers. Stated in the shared REPRESENTATION (`DenseInt`) rather than
 // in any one index space, because it is genuinely generic over several: the value-count scan takes
 // the max of two ValueIds with it, the pressure sweep the max of two RegCounts. See `DenseInt`.
-function maxOf(a DenseInt, b DenseInt) returns DenseInt
+export function maxOf(a DenseInt, b DenseInt) returns DenseInt
 	return a if a >= b else b
 end 'maxOf'
 

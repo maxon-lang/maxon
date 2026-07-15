@@ -264,12 +264,19 @@ export type PressurePeak
 	// `pressure - popcount(witness)`: measured against any other pool it is not the number of values
 	// the author must actually remove.
 	export var witness as RegMask
+	// The register FILE the witness names. A witness is a bag of bits and cannot say which file it
+	// belongs to, but every question asked of it is per file: `chooseVictim` may only offer values of
+	// THIS class, because a value of the other file can never relieve this overflow however it is
+	// spilled. Carried rather than derived, because an EMPTY witness (a float live across a call is
+	// forbidden every XMM, so Hall's tight set can be ∅) names no bits at all and would be
+	// underivable.
+	export var witnessClass as RegClass
 	// Is the peak op ITSELF a fixed-register point (does it carry implicit clobbers)? The ranking
 	// tie-break — see `peakOutranks`.
 	export var atFixedRegisterOp as bool
 
-	static function create(found bool, pressure RegCount, blockLocal CfgIndex, liveBefore BitWordArray, peakSeq OpSeq, peakOpIdx OpIndex, clobberOnly bool, witness RegMask, atFixedRegisterOp bool) returns PressurePeak
-		return Self{found: found, pressure: pressure, blockLocal: blockLocal, liveBefore: liveBefore, peakSeq: peakSeq, peakOpIdx: peakOpIdx, clobberOnly: clobberOnly, witness: witness, atFixedRegisterOp: atFixedRegisterOp}
+	static function create(found bool, pressure RegCount, blockLocal CfgIndex, liveBefore BitWordArray, peakSeq OpSeq, peakOpIdx OpIndex, clobberOnly bool, witness RegMask, witnessClass RegClass, atFixedRegisterOp bool) returns PressurePeak
+		return Self{found: found, pressure: pressure, blockLocal: blockLocal, liveBefore: liveBefore, peakSeq: peakSeq, peakOpIdx: peakOpIdx, clobberOnly: clobberOnly, witness: witness, witnessClass: witnessClass, atFixedRegisterOp: atFixedRegisterOp}
 	end 'create'
 end 'PressurePeak'
 
@@ -295,10 +302,17 @@ type PeakRank
 	export var peakSeq as OpSeq
 	export var clobberOnly as bool
 	export var witness as RegMask
+	// The register FILE the witness names. A witness is a bag of bits and cannot say which file it
+	// belongs to, but every question asked of it is per file: `chooseVictim` may only offer values of
+	// THIS class, because a value of the other file can never relieve this overflow however it is
+	// spilled. Carried rather than derived, because an EMPTY witness (a float live across a call is
+	// forbidden every XMM, so Hall's tight set can be ∅) names no bits at all and would be
+	// underivable.
+	export var witnessClass as RegClass
 	export var atFixedRegisterOp as bool
 
-	static function create(found bool, pressure RegCount, blockLocal CfgIndex, forwardPos BlockOpPos, peakSeq OpSeq, clobberOnly bool, witness RegMask, atFixedRegisterOp bool) returns PeakRank
-		return Self{found: found, pressure: pressure, blockLocal: blockLocal, forwardPos: forwardPos, peakSeq: peakSeq, clobberOnly: clobberOnly, witness: witness, atFixedRegisterOp: atFixedRegisterOp}
+	static function create(found bool, pressure RegCount, blockLocal CfgIndex, forwardPos BlockOpPos, peakSeq OpSeq, clobberOnly bool, witness RegMask, witnessClass RegClass, atFixedRegisterOp bool) returns PeakRank
+		return Self{found: found, pressure: pressure, blockLocal: blockLocal, forwardPos: forwardPos, peakSeq: peakSeq, clobberOnly: clobberOnly, witness: witness, witnessClass: witnessClass, atFixedRegisterOp: atFixedRegisterOp}
 	end 'create'
 end 'PeakRank'
 
@@ -488,6 +502,7 @@ type PeakTree
 	var peakSeq as OpSeqArray
 	var clobberOnly as BoolArray
 	var witness as RegMaskColumn
+	var witnessClass as ValueClassColumn
 	var atFixedRegisterOp as BoolArray
 	// `winner[node]` — the BLOCK whose rank wins that subtree, or `numBlocks` for "no peak in it". Node
 	// 1 is the root; leaf `b` is at `leafBase + b`.
@@ -496,7 +511,7 @@ type PeakTree
 	var leafBase as ColumnLength
 
 	static function create() returns PeakTree
-		return Self{numBlocks: 0, found: BoolArray.create(), pressure: RegCountColumn.create(), forwardPos: BlockOpPosArray.create(), peakSeq: OpSeqArray.create(), clobberOnly: BoolArray.create(), witness: RegMaskColumn.create(), atFixedRegisterOp: BoolArray.create(), winner: CfgIndexArray.create(), leafBase: 1}
+		return Self{numBlocks: 0, found: BoolArray.create(), pressure: RegCountColumn.create(), forwardPos: BlockOpPosArray.create(), peakSeq: OpSeqArray.create(), clobberOnly: BoolArray.create(), witness: RegMaskColumn.create(), witnessClass: ValueClassColumn.create(), atFixedRegisterOp: BoolArray.create(), winner: CfgIndexArray.create(), leafBase: 1}
 	end 'create'
 
 	// Size the tree for a function, with every leaf empty. The full sweep then sets each leaf and calls
@@ -515,6 +530,7 @@ type PeakTree
 		self.peakSeq.refill(blockCount, value: 0)
 		self.clobberOnly.refill(blockCount, value: false)
 		self.witness.refill(blockCount, value: 0)
+		self.witnessClass.refill(blockCount, value: RegClass.gpr)
 		self.atFixedRegisterOp.refill(blockCount, value: false)
 		// Every node — including the PADDING leaves past `blockCount` — starts empty.
 		self.winner.refill(base + base, value: blockCount)
@@ -529,6 +545,7 @@ type PeakTree
 		try self.peakSeq.set(blockLocal, value: rank.peakSeq) otherwise panic("PeakTree.setLeaf: peakSeq.set OOB for block {blockLocal}")
 		try self.clobberOnly.set(blockLocal, value: rank.clobberOnly) otherwise panic("PeakTree.setLeaf: clobberOnly.set OOB for block {blockLocal}")
 		try self.witness.set(blockLocal, value: rank.witness) otherwise panic("PeakTree.setLeaf: witness.set OOB for block {blockLocal}")
+		try self.witnessClass.set(blockLocal, value: rank.witnessClass) otherwise panic("PeakTree.setLeaf: witnessClass.set OOB for block {blockLocal}")
 		try self.atFixedRegisterOp.set(blockLocal, value: rank.atFixedRegisterOp) otherwise panic("PeakTree.setLeaf: atFixedRegisterOp.set OOB for block {blockLocal}")
 		try self.winner.set(self.leafBase + blockLocal, value: blockLocal if rank.found else self.numBlocks) otherwise panic("PeakTree.setLeaf: winner.set OOB for block {blockLocal}")
 	end 'setLeaf'
@@ -584,15 +601,16 @@ type PeakTree
 		let seq = try self.peakSeq.get(blockLocal) otherwise panic("PeakTree.rankOf: peakSeq.get OOB for block {blockLocal}")
 		let confined = try self.clobberOnly.get(blockLocal) otherwise panic("PeakTree.rankOf: clobberOnly.get OOB for block {blockLocal}")
 		let tightSet = try self.witness.get(blockLocal) otherwise panic("PeakTree.rankOf: witness.get OOB for block {blockLocal}")
+		let tightClass = try self.witnessClass.get(blockLocal) otherwise panic("PeakTree.rankOf: witnessClass.get OOB for block {blockLocal}")
 		let atClobber = try self.atFixedRegisterOp.get(blockLocal) otherwise panic("PeakTree.rankOf: atFixedRegisterOp.get OOB for block {blockLocal}")
-		return PeakRank.create(isPeak, pressure: demand, blockLocal: blockLocal, forwardPos: pos, peakSeq: seq, clobberOnly: confined, witness: tightSet, atFixedRegisterOp: atClobber)
+		return PeakRank.create(isPeak, pressure: demand, blockLocal: blockLocal, forwardPos: pos, peakSeq: seq, clobberOnly: confined, witness: tightSet, witnessClass: tightClass, atFixedRegisterOp: atClobber)
 	end 'rankOf'
 
 	// The function's peak — the root of the tournament.
 	export function best() returns PeakRank
 		let champion = try self.winner.get(1) otherwise panic("PeakTree.best: the tree has no root — `reset` must run before any query")
 		if champion == self.numBlocks 'noPeak'
-			return PeakRank.create(false, pressure: 0, blockLocal: 0, forwardPos: 0, peakSeq: 0, clobberOnly: false, witness: 0, atFixedRegisterOp: false)
+			return PeakRank.create(false, pressure: 0, blockLocal: 0, forwardPos: 0, peakSeq: 0, clobberOnly: false, witness: 0, witnessClass: RegClass.gpr, atFixedRegisterOp: false)
 		end 'noPeak'
 		return self.rankOf(champion)
 	end 'best'
@@ -643,9 +661,13 @@ type SplitScratch
 	export var dirty as BlockSet
 	export var edits as SplitEdits
 	export var marks as LivenessMarkScratch
+	// One block's per-class demand, and one op's per-class effective pressure — caller-owned rows the
+	// sweeps write into, allocated once per function like every other buffer here.
+	export var blockDemand as RegCountColumn
+	export var opEffective as RegCountColumn
 
 	static function create(numBlocks CfgIndex) returns SplitScratch
-		return Self{sweep: PressureSweepScratch.create(), seedBuf: ValueIdArray.create(), effPools: EffectivePools.create(), census: RegPoolCensus.create(), censusIds: ValueIdArray.create(), censusWasLive: BoolArray.create(), liveAtOp: ValueIdArray.create(), hall: HallScratch.create(), defLiveAfter: RegCountColumn.create(), usedAtPeak: BitWordArray.create(), candidates: ValueIdArray.create(), reach: ReachCache.create(numBlocks), tree: PeakTree.create(), dirty: BlockSet.create(), edits: SplitEdits.create(), marks: LivenessMarkScratch.create()}
+		return Self{sweep: PressureSweepScratch.create(), seedBuf: ValueIdArray.create(), effPools: EffectivePools.create(), census: RegPoolCensus.create(), censusIds: ValueIdArray.create(), censusWasLive: BoolArray.create(), liveAtOp: ValueIdArray.create(), hall: HallScratch.create(), defLiveAfter: RegCountColumn.create(), usedAtPeak: BitWordArray.create(), candidates: ValueIdArray.create(), reach: ReachCache.create(numBlocks), tree: PeakTree.create(), dirty: BlockSet.create(), edits: SplitEdits.create(), marks: LivenessMarkScratch.create(), blockDemand: zeroClassRow(), opEffective: zeroClassRow()}
 	end 'create'
 
 	// Size the two block-keyed memos the incremental update needs. Deferred until the function turns out
@@ -671,7 +693,6 @@ end 'SplitScratch'
 // panic. `project` (its `opRanges`/`valueOrigins` tables) + `funcIndex` are what the E5001
 // diagnostic maps each blocking Target ValueId back to its source span through.
 export function splitLiveRanges(module TargetModule, func IrFunction, funcIndex FuncIndex, topo FuncTopology, pool RegMask, valueClass ValueClassColumn, stats RegAllocStats, project Project) returns LivenessResult throws CompileError
-	let poolSize = regMaskPopcount(pool)
 	// Fresh-id -> source-value map for the E5001 diagnostic: every reload/remat id the loop
 	// below mints is recorded here so a fresh id in a blocking set resolves to source, not a
 	// Rule-3 panic (see SplitLineage).
@@ -744,7 +765,7 @@ export function splitLiveRanges(module TargetModule, func IrFunction, funcIndex 
 
 		let peak = analysis.peak
 		let index = liveness.useIndex
-		let choice = chooseVictim(module, index: index, liveness: liveness, peak: peak, defLiveAfter: analysis.defLiveAfter, pool: pool, poolSize: poolSize, scratch: scratch)
+		let choice = chooseVictim(module, index: index, liveness: liveness, peak: peak, defLiveAfter: analysis.defLiveAfter, pool: pool, scratch: scratch)
 		// A `none` choice does not come back: at a FULL-pool peak it is the E5001 this design exists to
 		// raise, and at a CONFINED one it is a splitter bug (`noVictimAtPeak`).
 		let victim = try victimAtPeak(choice, project: project, module: module, func: func, funcIndex: funcIndex, liveness: liveness, peak: peak, pool: pool, lineage: lineage)
@@ -800,9 +821,18 @@ export function splitLiveRanges(module TargetModule, func IrFunction, funcIndex 
 	// visit — so a full-pool overflow the peak-finder somehow missed still fails here rather than as a
 	// colorer panic. (The reduced-pool half has no separate maxPressure analogue; the loop's
 	// `analyzePressure`-based exit is its guarantee.)
-	if liveness.maxPressure > poolSize 'residual'
-		panic("splitLiveRanges: '{String.from(func.name)}' finished with maxPressure {liveness.maxPressure} still > pool {poolSize} — the splitter's post-condition (every point within its pool) was violated")
-	end 'residual'
+	//
+	// PER CLASS, because the files are independent and a mixed figure against a mixed pool is the
+	// comparison that made this guard stop firing at all: with 30 registers nominally available, 15
+	// live ints never trip `15 > 30`, and the colorer panics instead. Each file is checked against
+	// ITS OWN pool.
+	for classOrdinal in 0 upto RegClassCount 'eachClass'
+		let class = regClassAt(classOrdinal)
+		let classPoolSize = classPoolSizeOf(pool, class: class)
+		if liveness.maxPressureOf(class) > classPoolSize 'residual'
+			panic("splitLiveRanges: '{String.from(func.name)}' finished with {class.name} maxPressure {liveness.maxPressureOf(class)} still > the {class.name} pool {classPoolSize} — the splitter's post-condition (every point within its pool, per register file) was violated")
+		end 'residual'
+	end 'eachClass'
 
 	return liveness
 end 'splitLiveRanges'
@@ -959,9 +989,14 @@ function refreshAfterSplit(module TargetModule, cfg FuncCfg, liveness LivenessRe
 	end 'regionGrewAfterTheRebuild'
 
 	// Re-sweep the dirty blocks: `forbidden`, the dead-phi counts, and the per-block register demand.
+	var demand = scratch.blockDemand
 	for k in 0 upto dirty.count() 'eachDirtyBlock'
 		let blockLocal = dirty.at(k)
-		liveness.setBlockPressure(blockLocal, demand: sweepBlockPressure(module, topo: topo, blockLocal: blockLocal, live: liveness.live, forbidden: liveness.forbidden, deadPhis: liveness.deadPhis, wordsPerRow: liveness.wordsPerRow, scratch: scratch.sweep))
+		sweepBlockPressure(module, topo: topo, blockLocal: blockLocal, live: liveness.live, forbidden: liveness.forbidden, classes: liveness.valueClass, deadPhis: liveness.deadPhis, wordsPerRow: liveness.wordsPerRow, scratch: scratch.sweep, demandOut: demand)
+		for classOrdinal in 0 upto RegClassCount 'eachClass'
+			let class = regClassAt(classOrdinal)
+			liveness.setBlockPressure(blockLocal, class: class, demand: classRowGet(demand, class: class))
+		end 'eachClass'
 	end 'eachDirtyBlock'
 
 	// Their effective pools follow their new masks — and no other value's mask moved, so no other
@@ -1024,7 +1059,7 @@ end 'refreshPeak'
 //     here; an op names at most two virtual registers. At least four candidates always remain.
 function noVictimAtPeak(project Project, module TargetModule, func IrFunction, funcIndex FuncIndex, liveness LivenessResult, peak PressurePeak, pool RegMask, lineage SplitLineage) throws CompileError
 	if peak.clobberOnly 'splitterBug'
-		panic("noVictimAtPeak: '{String.from(func.name)}' has a CONFINED overflow ({peak.pressure} values confined to the {regMaskPopcount(peak.witness)} registers of witness {peak.witness}, which the full pool of {regMaskPopcount(pool)} would fit) yet `chooseVictim` refused every one of them. The invariant that must hold: a confined value the peak op does not itself read is ALWAYS relievable — it has a store anchor (an op def or a phi block entry), its store fits the pool (full-pool peaks are relieved FIRST, so no def point is over-pool by now), and reloading its after-peak uses — or, when a before-peak use is still reachable from the peak around a back edge, EVERY use — makes it dead across the peak. The tight set outnumbers the witness and the peak op names at most two virtual registers, so candidates always remain. Refusing them all is a SPLITTER BUG in `hasStoreAnchor` / `storeFitsPool` / `killsValueAtPeak` / `analyzePressure` — not user register pressure. It must never surface as E5001: this program fits the machine.")
+		panic("noVictimAtPeak: '{String.from(func.name)}' has a CONFINED overflow ({peak.pressure} values confined to the {regMaskPopcount(peak.witness)} registers of witness {peak.witness}, which the full {peak.witnessClass.name} pool of {classPoolSizeOf(pool, class: peak.witnessClass)} would fit) yet `chooseVictim` refused every one of them. The invariant that must hold: a confined value the peak op does not itself read is ALWAYS relievable — it has a store anchor (an op def or a phi block entry), its store fits the pool (full-pool peaks are relieved FIRST, so no def point is over-pool by now), and reloading its after-peak uses — or, when a before-peak use is still reachable from the peak around a back edge, EVERY use — makes it dead across the peak. The tight set outnumbers the witness and the peak op names at most two virtual registers, so candidates always remain. Refusing them all is a SPLITTER BUG in `hasStoreAnchor` / `storeFitsPool` / `killsValueAtPeak` / `analyzePressure` — not user register pressure. It must never surface as E5001: this program fits the machine.")
 	end 'splitterBug'
 
 	try raiseRegisterPressure(project, module: module, func: func, funcIndex: funcIndex, liveness: liveness, peak: peak, pool: pool, lineage: lineage)
@@ -1081,7 +1116,7 @@ function analyzePressure(module TargetModule, liveness LivenessResult, pool RegM
 
 	// Blocks in ASCENDING index, and `betterRank` replaces on an exact tie — so the winner is the LAST
 	// maximal rank offered. The tournament reproduces exactly that (see `PeakTree`).
-	var best = PeakRank.create(false, pressure: 0, blockLocal: 0, forwardPos: 0, peakSeq: 0, clobberOnly: false, witness: pool, atFixedRegisterOp: false)
+	var best = PeakRank.create(false, pressure: 0, blockLocal: 0, forwardPos: 0, peakSeq: 0, clobberOnly: false, witness: pool, witnessClass: RegClass.gpr, atFixedRegisterOp: false)
 	for i in 0 upto topo.numBlocks 'eachBlock'
 		let rank = analyzeBlockPressure(module, liveness: liveness, pool: pool, scratch: scratch, blockLocal: i)
 		best = betterRank(best, candidate: rank)
@@ -1166,37 +1201,42 @@ function analyzeBlockPressure(module TargetModule, liveness LivenessResult, pool
 	var buf = scratch.sweep.buf
 	var ordered = scratch.sweep.ordered
 	var seedBuf = scratch.seedBuf
-	let fullPoolSize = regMaskPopcount(pool)
 
 	let effPoolSizes = scratch.effPools.sizes
 	// Nothing in this function is confined to a register subset (no call, no idiv, no argument
 	// pre-move), so Hall's condition cannot fail against a proper subset of the pool and the census
 	// would be bookkeeping for a question whose answer is already known. Skipping it takes the census
 	// off the per-operand path entirely — see `EffectivePools`.
-	let censusNeeded = scratch.effPools.anyConstrained()
+	// ALSO when the function holds a float: the census is what maintains the per-file live tally the
+	// per-class pigeonhole reads, so it must run whenever the two files can disagree — not only when
+	// something is confined. With no float and nothing constrained, the XMM half of every figure is
+	// identically zero and this stays off, exactly as it was when there was one register file.
+	let censusNeeded = scratch.effPools.anyConstrained() or scratch.effPools.anyXmm()
 	var census = scratch.census
 	var censusIds = scratch.censusIds
 	var censusWasLive = scratch.censusWasLive
 	var liveAtOp = scratch.liveAtOp
 	var defLiveAfter = scratch.defLiveAfter
 
-	var best = PeakRank.create(false, pressure: 0, blockLocal: blockLocal, forwardPos: 0, peakSeq: 0, clobberOnly: false, witness: pool, atFixedRegisterOp: false)
+	var best = PeakRank.create(false, pressure: 0, blockLocal: blockLocal, forwardPos: 0, peakSeq: 0, clobberOnly: false, witness: pool, witnessClass: RegClass.gpr, atFixedRegisterOp: false)
 
 	let i = blockLocal
 	let block = blockAt(module, topo: topo, local: i)
 	// Seed the ONE dense working row from the SPARSE live-out list — O(live), not a full
 	// value-space row copy per block. `clearRowAfterSweep` below returns it to zero the same way.
 	liveness.seedRowFromLiveOut(i, row: liveRow, scratch: seedBuf)
-	// The row's live population, maintained INCREMENTALLY across the block's ops. A popcount over
-	// the whole row at every op would be O(values/64) per op — O(ops × values/64) per function,
-	// and on a large function the single biggest cost left in the allocator.
-	var liveCount = seedBuf.count()
+	// The row's live population, PER FILE, maintained INCREMENTALLY across the block's ops by the same
+	// step that flips the bits. A popcount over the whole row at every op would be O(values/64) per op
+	// — O(ops × values/64) per function, and on a large function the single biggest cost left in the
+	// allocator. `classRowTotal` is the mixed population when one is wanted; it is derived, so there is
+	// no second counter to drift.
+	seedClassLive(scratch.sweep.liveByClass, classes: liveness.valueClass, values: seedBuf)
 
 	// The census tracks the SAME set as `liveRow`, so it is seeded and cleared with it.
 	if censusNeeded 'seedTheCensus'
-		census.reset()
+		census.reset(pool)
 		for v in seedBuf 'seedCensus'
-			census.add(try effPoolSizes.get(v) otherwise panic("analyzeBlockPressure: live-out value {v} is outside the function's value space"), fullPoolSize: fullPoolSize)
+			census.add(try effPoolSizes.get(v) otherwise panic("analyzeBlockPressure: live-out value {v} is outside the function's value space"), class: liveness.classOf(v))
 		end 'seedCensus'
 	end 'seedTheCensus'
 
@@ -1204,7 +1244,9 @@ function analyzeBlockPressure(module TargetModule, liveness LivenessResult, pool
 	// register for each dead block-arg across the WHOLE block. Read from the column the
 	// liveness sweep already filled; recomputing it here meant re-sweeping the whole block and
 	// heap-allocating two arrays, once per block, on every splitter iteration.
-	let deadPhis = liveness.deadPhiCountOf(i)
+	// PER CLASS: a dead phi reserves a register of ITS OWN file and competes for nothing in the other.
+	var liveByClass = scratch.sweep.liveByClass
+	var effective = scratch.opEffective
 
 	ordered.clear()
 	collectBlockOps(block, out: ordered)
@@ -1219,21 +1261,28 @@ function analyzeBlockPressure(module TargetModule, liveness LivenessResult, pool
 		targetOpOperands(op, buf: buf)
 
 		// `liveRow` here is this op's live-AFTER set (the store point for anything it defines), and
-		// `liveCount` is its population — no popcount needed.
-		recordDefLiveAfter(defLiveAfter, buf: buf, afterCount: liveCount)
+		// `liveByClass` is its population — no popcount needed. The store anchor competes for the whole
+		// machine, so its pressure is the MIXED total.
+		recordDefLiveAfter(defLiveAfter, buf: buf, liveByClass: liveByClass, classes: liveness.valueClass)
 
 		// The reuse-copy transient is decided on the live-AFTER set — BEFORE the backward step
-		// re-adds this op's uses — exactly as TargetLiveness.stepBackwardOverOp reads it.
-		let reuseTransient = reuseInputOutlivesOp(buf, liveRow: liveRow)
+		// re-adds this op's uses — exactly as TargetLiveness.stepBackwardOverOp reads it, through the
+		// same one implementation, so the two cannot disagree about which FILE it lands in.
+		classRowZero(effective)
+		addReuseTransientPressure(buf, liveRow: liveRow, classes: liveness.valueClass, pressureOut: effective)
 
 		if censusNeeded 'stepWithCensus'
-			liveCount = stepCensusBackwardOverOp(liveRow, buf: buf, liveCount: liveCount, census: census, effPoolSizes: effPoolSizes, fullPoolSize: fullPoolSize, ids: censusIds, wasLive: censusWasLive)
+			stepCensusBackwardOverOp(liveRow, buf: buf, census: census, effPoolSizes: effPoolSizes, classes: liveness.valueClass, liveByClass: liveByClass, ids: censusIds, wasLive: censusWasLive)
 		end 'stepWithCensus' else 'stepPlain'
-			liveCount = stepRowBackwardOverOperands(liveRow, base: 0, buf: buf, liveCount: liveCount)
+			stepRowBackwardOverOperands(liveRow, base: 0, buf: buf, liveByClass: liveByClass, classes: liveness.valueClass)
 		end 'stepPlain'
 
-		let raw = liveCount
-		let effective = raw + (1 if reuseTransient else 0) + deadPhis
+		// This op's EFFECTIVE demand, per file: the live-before population of that file, plus the
+		// transient already folded in above, plus that file's dead-phi reservations.
+		for classOrdinal in 0 upto RegClassCount 'eachClass'
+			let class = regClassAt(classOrdinal)
+			classRowSet(effective, class: class, value: classRowGet(effective, class: class) + classRowGet(liveByClass, class: class) + liveness.deadPhiCountOf(i, class: class))
+		end 'eachClass'
 		let seq = seqAt(i, pos: forwardPos)
 
 		// TWO overflows, counting TWO different demands. Lumping them over-counts the confined
@@ -1256,11 +1305,29 @@ function analyzeBlockPressure(module TargetModule, liveness LivenessResult, pool
 		// one is reached, no program point exceeds the full pool, so every value's def-point
 		// pressure fits and a store anchor is always available.
 		let atFixedRegisterOp = opIsFixedRegisterPoint(op)
-		if effective > fullPoolSize 'fullPoolOverflow'
-			best = betterPeak(best, pressure: effective, blockLocal: i, forwardPos: forwardPos, peakSeq: seq, clobberOnly: false, witness: pool, atFixedRegisterOp: atFixedRegisterOp)
-		end 'fullPoolOverflow' else if censusNeeded and census.screenViolates(fullPoolSize) 'maybeConfined'
-			bitsetCollectRow(liveRow, base: 0, wordsPerRow: wordsPerRow, out: liveAtOp)
-			best = confinedPeakAt(liveness, live: liveAtOp, pool: pool, best: best, blockLocal: i, forwardPos: forwardPos, peakSeq: seq, atFixedRegisterOp: atFixedRegisterOp, hall: scratch.hall)
+
+		// THE FULL-POOL PIGEONHOLE, PER FILE. Each file is checked against ITS OWN pool, and its
+		// witness is ITS OWN pool — every value of that class is confined to it, so the overflow is
+		// plain pigeonhole and no Hall search is needed. Asking one MIXED figure against one MIXED
+		// pool is what stops this firing at all: 15 live ints never trip `15 > 30`, the splitter
+		// relieves nothing, and the colorer panics with every register blocked.
+		var anyFullPoolOverflow = false
+		for classOrdinal in 0 upto RegClassCount 'eachClass'
+			let class = regClassAt(classOrdinal)
+			if classRowGet(effective, class: class) > classPoolSizeOf(pool, class: class) 'fullPoolOverflow'
+				anyFullPoolOverflow = true
+				best = betterPeak(best, pressure: classRowGet(effective, class: class), blockLocal: i, forwardPos: forwardPos, peakSeq: seq, clobberOnly: false, witness: poolOfClass(pool, class: class), witnessClass: class, atFixedRegisterOp: atFixedRegisterOp)
+			end 'fullPoolOverflow'
+		end 'eachClass'
+
+		// CONFINED demand is Hall's, over the LIVE values only, against a proper subset of one file's
+		// pool. Checked only where NO file overflows its own pool — which also bounds each file's live
+		// set at its pool size, so the exact confirmation can never be a hot-path cost.
+		if not anyFullPoolOverflow 'maybeConfined'
+			if censusNeeded and census.screenViolates(maxClassPoolSize(pool)) 'screenFired'
+				bitsetCollectRow(liveRow, base: 0, wordsPerRow: wordsPerRow, out: liveAtOp)
+				best = confinedPeakAt(liveness, live: liveAtOp, pool: pool, best: best, blockLocal: i, forwardPos: forwardPos, peakSeq: seq, atFixedRegisterOp: atFixedRegisterOp, hall: scratch.hall)
+			end 'screenFired'
 		end 'maybeConfined'
 	end 'eachOpRev'
 
@@ -1274,7 +1341,7 @@ function analyzeBlockPressure(module TargetModule, liveness LivenessResult, pool
 	// rejects it forever, and NO loop-carried accumulator could ever be spilled at a call — which
 	// is precisely the false E5001 the amended Rule 2 exists to eliminate (`sum = sum + f(i)`
 	// makes `sum` a phi). `noVictimAtPeak`'s clobber-only panic is what caught this.
-	recordPhiDefLiveAfter(defLiveAfter, block: block, liveInCount: liveCount)
+	recordPhiDefLiveAfter(defLiveAfter, block: block, liveInByClass: liveByClass, classes: liveness.valueClass)
 
 	// Return the working row to zero for the next block, in O(live) — see clearRowAfterSweep.
 	liveness.clearRowAfterSweep(i, block: block, row: liveRow, scratch: seedBuf)
@@ -1291,7 +1358,7 @@ function materializePeak(module TargetModule, liveness LivenessResult, rank Peak
 		fillLiveBeforeOp(module, liveness: liveness, blockLocal: rank.blockLocal, forwardPos: rank.forwardPos, row: liveBefore, scratch: scratch)
 		peakOpIdx = opAtBlockPos(module, topo: liveness.cfg.topo, blockLocal: rank.blockLocal, forwardPos: rank.forwardPos, scratch: scratch)
 	end 'derivePeakRow'
-	return PressurePeak.create(rank.found, pressure: rank.pressure, blockLocal: rank.blockLocal, liveBefore: liveBefore, peakSeq: rank.peakSeq, peakOpIdx: peakOpIdx, clobberOnly: rank.clobberOnly, witness: rank.witness, atFixedRegisterOp: rank.atFixedRegisterOp)
+	return PressurePeak.create(rank.found, pressure: rank.pressure, blockLocal: rank.blockLocal, liveBefore: liveBefore, peakSeq: rank.peakSeq, peakOpIdx: peakOpIdx, clobberOnly: rank.clobberOnly, witness: rank.witness, witnessClass: rank.witnessClass, atFixedRegisterOp: rank.atFixedRegisterOp)
 end 'materializePeak'
 
 // The `module.ops` index of the op at forward layout position `forwardPos` of local block
@@ -1318,7 +1385,9 @@ end 'opAtBlockPos'
 function fillLiveBeforeOp(module TargetModule, liveness LivenessResult, blockLocal CfgIndex, forwardPos BlockOpPos, row BitWordArray, scratch SplitScratch)
 	let block = blockAt(module, topo: liveness.cfg.topo, local: blockLocal)
 	liveness.seedRowFromLiveOut(blockLocal, row: row, scratch: scratch.seedBuf)
-	var liveCount = scratch.seedBuf.count()
+	// This walk wants the ROW alone, but the step maintains the per-class tally as it flips bits and
+	// that tally panics on underflow — so seed it truthfully, as every other sweep does.
+	seedClassLive(scratch.sweep.liveByClass, classes: liveness.valueClass, values: scratch.seedBuf)
 
 	scratch.sweep.ordered.clear()
 	collectBlockOps(block, out: scratch.sweep.ordered)
@@ -1329,7 +1398,7 @@ function fillLiveBeforeOp(module TargetModule, liveness LivenessResult, blockLoc
 		let opIdx = try scratch.sweep.ordered.get(opCount - 1 - ri) otherwise panic("fillLiveBeforeOp: ordered.get OOB")
 		let op = try module.ops.get(opIdx) otherwise panic("fillLiveBeforeOp: opIdx not in module.ops")
 		targetOpOperands(op, buf: scratch.sweep.buf)
-		liveCount = stepRowBackwardOverOperands(row, base: 0, buf: scratch.sweep.buf, liveCount: liveCount)
+		stepRowBackwardOverOperands(row, base: 0, buf: scratch.sweep.buf, liveByClass: scratch.sweep.liveByClass, classes: liveness.valueClass)
 	end 'stepBackToPeak'
 end 'fillLiveBeforeOp'
 
@@ -1338,20 +1407,54 @@ end 'fillLiveBeforeOp'
 // (the forbidden masks are not laminar — see `HallCondition`), so the exact verdict decides. A false
 // peak here would spill a value the program could have coloured, which is the same class of harm as
 // a false E5001 in a smaller key: pressure relief added to code that was already fine.
+// ⚠ PER CLASS, OVER A CLASS-FILTERED LIVE LIST, AND BOTH HALVES MATTER. Hall's condition is a
+// matching between values and registers, and the two files share no register — so a matching run over
+// a MIXED live list is two independent problems solved as one, and its witness is a set no single
+// file's values are confined to. The consistency assert would still pass: with 6 ints and 3 floats,
+// `popcount(witness) + (valueCount - matched)` can equal `tight` by coincidence (3 float + 1 int),
+// and the deficit that comes back is right by accident and structurally meaningless. `chooseVictim`
+// then spills 4 ints to relieve a peak that needed a float moved, or a float to relieve a GPR peak —
+// freeing a register no confined value can use, so the peak survives and the driver re-picks forever.
+//
+// Running it once per file, over that file's values alone, makes every figure it returns a fact about
+// one register file: the witness is a subset of that file, the deficit is that file's, and the
+// victims `chooseVictim` may offer are exactly the values that can relieve it.
 function confinedPeakAt(liveness LivenessResult, live ValueIdArray, pool RegMask, best PeakRank, blockLocal CfgIndex, forwardPos BlockOpPos, peakSeq OpSeq, atFixedRegisterOp bool, hall HallScratch) returns PeakRank
-	return match hallVerdictAt(liveness, live: live, pool: pool, scratch: hall) 'verdict'
-		feasible gives best
-		overflow(witness, tight) gives betterPeak(best, pressure: tight, blockLocal: blockLocal, forwardPos: forwardPos, peakSeq: peakSeq, clobberOnly: true, witness: witness, atFixedRegisterOp: atFixedRegisterOp)
-	end 'verdict'
+	var winner = best
+	for classOrdinal in 0 upto RegClassCount 'eachClass'
+		let class = regClassAt(classOrdinal)
+		classFilterLive(liveness, live: live, class: class, out: hall.classLive)
+		if hall.classLive.count() == 0 'noValuesOfThisFile'
+			continue
+		end 'noValuesOfThisFile'
+
+		match hallVerdictAt(liveness, live: hall.classLive, pool: poolOfClass(pool, class: class), scratch: hall) 'verdict'
+			feasible then continue
+			overflow(witness, tight) then winner = betterPeak(winner, pressure: tight, blockLocal: blockLocal, forwardPos: forwardPos, peakSeq: peakSeq, clobberOnly: true, witness: witness, witnessClass: class, atFixedRegisterOp: atFixedRegisterOp)
+		end 'verdict'
+	end 'eachClass'
+	return winner
 end 'confinedPeakAt'
+
+// The live values of ONE file, in the ascending id order `bitsetCollectRow` produced — so the
+// matching's augmenting order, and therefore its witness and every tie-break downstream of it, stay
+// deterministic.
+function classFilterLive(liveness LivenessResult, live ValueIdArray, class RegClass, out ValueIdArray)
+	out.clear()
+	for v in live 'eachLive'
+		if liveness.classOf(v) == class 'thisFile'
+			out.push(v)
+		end 'thisFile'
+	end 'eachLive'
+end 'classFilterLive'
 
 // `best`, replaced by the candidate peak iff the candidate outranks it. The ONE place a `PeakRank` is
 // minted from a candidate, so both overflow kinds agree on the ranking.
-function betterPeak(best PeakRank, pressure RegCount, blockLocal CfgIndex, forwardPos BlockOpPos, peakSeq OpSeq, clobberOnly bool, witness RegMask, atFixedRegisterOp bool) returns PeakRank
+function betterPeak(best PeakRank, pressure RegCount, blockLocal CfgIndex, forwardPos BlockOpPos, peakSeq OpSeq, clobberOnly bool, witness RegMask, witnessClass RegClass, atFixedRegisterOp bool) returns PeakRank
 	if not peakOutranks(not clobberOnly, atFixedRegisterOp: atFixedRegisterOp, pressure: pressure, best: best) 'keepBest'
 		return best
 	end 'keepBest'
-	return PeakRank.create(true, pressure: pressure, blockLocal: blockLocal, forwardPos: forwardPos, peakSeq: peakSeq, clobberOnly: clobberOnly, witness: witness, atFixedRegisterOp: atFixedRegisterOp)
+	return PeakRank.create(true, pressure: pressure, blockLocal: blockLocal, forwardPos: forwardPos, peakSeq: peakSeq, clobberOnly: clobberOnly, witness: witness, witnessClass: witnessClass, atFixedRegisterOp: atFixedRegisterOp)
 end 'betterPeak'
 
 // Is `op` itself a FIXED-REGISTER point — does it clobber registers implicitly (a call's 9
@@ -1414,18 +1517,25 @@ function peakOutranks(fullOverflow bool, atFixedRegisterOp bool, pressure RegCou
 end 'peakOutranks'
 
 // Record each block-arg's def-point live count — the block's live-in population (see the caller).
-function recordPhiDefLiveAfter(defLiveAfter RegCountColumn, block IrBlock, liveInCount RegCount)
+function recordPhiDefLiveAfter(defLiveAfter RegCountColumn, block IrBlock, liveInByClass RegCountColumn, classes ValueClassColumn)
 	for arg in block.blockArgs 'eachPhi'
-		try defLiveAfter.set(arg.valueId, value: liveInCount) otherwise panic("recordPhiDefLiveAfter: defLiveAfter.set OOB for phi {arg.valueId}")
+		let class = try classes.get(arg.valueId) otherwise panic("recordPhiDefLiveAfter: phi {arg.valueId} has no recorded register class")
+		try defLiveAfter.set(arg.valueId, value: classRowGet(liveInByClass, class: class)) otherwise panic("recordPhiDefLiveAfter: defLiveAfter.set OOB for phi {arg.valueId}")
 	end 'eachPhi'
 end 'recordPhiDefLiveAfter'
 
-// Record each of the op's virtual defs as living-after at `afterCount` (its store point). `buf`
-// already holds the op's operands.
-function recordDefLiveAfter(defLiveAfter RegCountColumn, buf OperandList, afterCount RegCount)
+// Record each of the op's virtual defs as living-after at the pressure of ITS OWN FILE (its store
+// point). `buf` already holds the op's operands, and `liveByClass` is still the live-AFTER tally.
+//
+// ⚠ PER FILE, because `storeFitsPool` asks whether the store has a register-free ANCHOR, and a
+// register of the other file is no anchor at all: a float's store needs an XMM free at its def, and
+// fourteen idle GPRs do not provide one. Recorded as the MIXED total, the question becomes "does the
+// whole machine have a register spare", which is both too weak (30 is never exceeded, so every value
+// looks anchorable) and about the wrong thing.
+function recordDefLiveAfter(defLiveAfter RegCountColumn, buf OperandList, liveByClass RegCountColumn, classes ValueClassColumn)
 	for o in buf 'eachOperand'
 		if operandIsDef(o) and operandIsVirtual(o) 'def'
-			try defLiveAfter.set(operandValueId(o), value: afterCount) otherwise panic("recordDefLiveAfter: set OOB")
+			try defLiveAfter.set(operandValueId(o), value: classRowGet(liveByClass, class: operandClass(o, classes: classes))) otherwise panic("recordDefLiveAfter: set OOB")
 		end 'def'
 	end 'eachOperand'
 end 'recordDefLiveAfter'
@@ -1480,8 +1590,12 @@ end 'zeroRow'
 // to the lowest id). Iterating `0 upto valueCount` instead — testing each id for liveness — was
 // O(values) per split for an answer of size O(pressure), and every eligibility question it then
 // asked walked the whole function. That is what the `UseIndex` retires.
-function chooseVictim(module TargetModule, index UseIndex, liveness LivenessResult, peak PressurePeak, defLiveAfter RegCountColumn, pool RegMask, poolSize RegCount, scratch SplitScratch) returns SpillChoice
+function chooseVictim(module TargetModule, index UseIndex, liveness LivenessResult, peak PressurePeak, defLiveAfter RegCountColumn, pool RegMask, scratch SplitScratch) returns SpillChoice
 	let topo = liveness.cfg.topo
+	// Every candidate below is of the peak's own file (the class gate in the loop), so the pool a
+	// store anchor is measured against is THAT file's — 14 for an int, 16 for a float, never the 30
+	// the two files hold between them.
+	let poolSize = classPoolSizeOf(pool, class: peak.witnessClass)
 	let placement = placementOf(peak)
 	var usedAtPeak = usesAtPeakOp(module, liveness: liveness, peak: peak, scratch: scratch)
 	var candidates = scratch.candidates
@@ -1506,6 +1620,14 @@ function chooseVictim(module TargetModule, index UseIndex, liveness LivenessResu
 		if bitsetTest(usedAtPeak, base: 0, bit: v) 'consumedHere'
 			continue
 		end 'consumedHere'
+		if liveness.classOf(v) != peak.witnessClass 'otherFile'
+			// A value of the OTHER file can never relieve this overflow: spilling it frees a register no
+			// confined value here is able to take, so the peak survives, the potential Φ does not fall,
+			// and the driver re-picks forever. The witness carries its file for exactly this test —
+			// deriving it from the mask cannot work, because a float live across a call is forbidden every
+			// XMM and Hall's tight set for it is EMPTY, naming no bits at all.
+			continue
+		end 'otherFile'
 		if not valueConfinedTo(liveness, valueId: v, pool: pool, witness: peak.witness) 'notConfinedByThisPeak'
 			// Only a value the overflow CONFINES can relieve it. At a CONFINED peak the witness is a
 			// proper subset of the pool (the 5 callee-saved registers at a call), and spilling a value
@@ -2606,15 +2728,19 @@ function verifyIncremental(module TargetModule, cfg FuncCfg, func IrFunction, li
 		verifyLiveSet(liveness.live.liveIn(b), fresh: fresh.live.liveIn(b), onEntry: true, blockLocal: b, name: name, iterations: iterations)
 		verifyLiveSet(liveness.live.liveOut(b), fresh: fresh.live.liveOut(b), onEntry: false, blockLocal: b, name: name, iterations: iterations)
 
-		if liveness.deadPhiCountOf(b) != fresh.deadPhiCountOf(b) 'deadPhis'
-			panic("verifyIncremental ('{name}', after split {iterations}): block {b} has {liveness.deadPhiCountOf(b)} dead phis but a full rebuild says {fresh.deadPhiCountOf(b)}")
-		end 'deadPhis'
+		for classOrdinal in 0 upto RegClassCount 'eachClass'
+			let class = regClassAt(classOrdinal)
+			if liveness.deadPhiCountOf(b, class: class) != fresh.deadPhiCountOf(b, class: class) 'deadPhis'
+				panic("verifyIncremental ('{name}', after split {iterations}): block {b} has {liveness.deadPhiCountOf(b, class: class)} dead {class.name} phis but a full rebuild says {fresh.deadPhiCountOf(b, class: class)}")
+			end 'deadPhis'
+		end 'eachClass'
 
-		let demand = try liveness.blockPressure.get(b) otherwise panic("verifyIncremental: blockPressure.get OOB for block {b}")
-		let freshDemand = try fresh.blockPressure.get(b) otherwise panic("verifyIncremental: blockPressure.get OOB for block {b}")
-		if demand != freshDemand 'blockPressure'
-			panic("verifyIncremental ('{name}', after split {iterations}): block {b} demands {demand} registers but a full rebuild says {freshDemand}")
-		end 'blockPressure'
+		for classOrdinal in 0 upto RegClassCount 'eachClass'
+			let class = regClassAt(classOrdinal)
+			if liveness.blockPressureOf(b, class: class) != fresh.blockPressureOf(b, class: class) 'blockPressure'
+				panic("verifyIncremental ('{name}', after split {iterations}): block {b} demands {liveness.blockPressureOf(b, class: class)} {class.name} registers but a full rebuild says {fresh.blockPressureOf(b, class: class)}")
+			end 'blockPressure'
+		end 'eachClass'
 	end 'eachBlock'
 
 	for v in 0 upto liveness.valueCount 'eachValue'

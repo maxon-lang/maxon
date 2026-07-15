@@ -200,6 +200,11 @@ end 'RegAllocPhase'
 
 export typealias DurationNanosArray = Array with DurationNanos
 
+// The function name whose pressure was worst, per register class — a class row of names. `stdlib`'s
+// `StringArray` is namespaced to Build and not visible here, and a name is not a `RegCount`, so the
+// class rows above cannot carry it.
+export typealias PressureFuncByClass = Array with String
+
 // Per-run counters + timers, logged under LogCategory.codegen. Counters matter more
 // than the clock at M5.1's sub-millisecond functions (design §"Stats").
 export type RegAllocStats
@@ -208,8 +213,11 @@ export type RegAllocStats
 	// SSA path-exploration cost (there is no liveness fixpoint — see TargetLiveness).
 	export var livenessMarkStepsTotal as EventCount
 	export var livenessMarkStepsMax as EventCount
-	export var maxPressure as RegCount
-	export var maxPressureFunc as String
+	// The worst per-FILE pressure seen, and the function it was seen in — one entry per register
+	// class, because the peak of a mixed figure is no file's peak. `maxPressureFunc` names the
+	// function per class for the same reason.
+	export var maxPressure as RegCountColumn
+	export var maxPressureFunc as PressureFuncByClass
 	export var maxLoopDepth as LoopDepth
 	export var copiesInserted as EventCount
 	export var hintsHonoured as EventCount
@@ -231,7 +239,11 @@ export type RegAllocStats
 	export static function create() returns RegAllocStats
 		var phaseNanos = DurationNanosArray.create()
 		phaseNanos.resize(RegAllocPhase.allCases.count())
-		return Self{phaseNanos: phaseNanos, functionsAllocated: 0, livenessMarkStepsTotal: 0, livenessMarkStepsMax: 0, maxPressure: 0, maxPressureFunc: "", maxLoopDepth: 0, copiesInserted: 0, hintsHonoured: 0, hintsMissed: 0, valuesColored: 0, registersUsed: 0, valuesSplit: 0, reloadsInserted: 0, rematerialized: 0, forcedSpills: 0}
+		var maxPressureFunc = PressureFuncByClass.create()
+		for _ in 0 upto RegClassCount 'eachClass'
+			maxPressureFunc.push("")
+		end 'eachClass'
+		return Self{phaseNanos: phaseNanos, functionsAllocated: 0, livenessMarkStepsTotal: 0, livenessMarkStepsMax: 0, maxPressure: zeroClassRow(), maxPressureFunc: maxPressureFunc, maxLoopDepth: 0, copiesInserted: 0, hintsHonoured: 0, hintsMissed: 0, valuesColored: 0, registersUsed: 0, valuesSplit: 0, reloadsInserted: 0, rematerialized: 0, forcedSpills: 0}
 	end 'create'
 
 	export function addPhaseNanos(phase RegAllocPhase, nanos DurationNanos)
@@ -251,10 +263,10 @@ export type RegAllocStats
 		end 'newMax'
 	end 'recordLivenessMarkSteps'
 
-	export function recordPressure(pressure RegCount, funcName ByteArray)
-		if pressure > self.maxPressure 'newMax'
-			self.maxPressure = pressure
-			self.maxPressureFunc = String.from(funcName)
+	export function recordPressure(pressure RegCount, class RegClass, funcName ByteArray)
+		if pressure > classRowGet(self.maxPressure, class: class) 'newMax'
+			classRowSet(self.maxPressure, class: class, value: pressure)
+			try self.maxPressureFunc.set(class.ordinal, value: String.from(funcName)) otherwise panic("RegAllocStats.recordPressure: no maxPressureFunc entry for the {class.name} file")
 		end 'newMax'
 	end 'recordPressure'
 
@@ -284,7 +296,7 @@ export function allocatablePool(target Target) returns RegMask
 	if target.os != Os.windows 'unsupported'
 		panic("allocatablePool: maxon-shv2 allocates for x64-windows only (got {targetToString(target)})")
 	end 'unsupported'
-	return callerSavedMask() or calleeSavedMask()
+	return callerSavedMask() or calleeSavedMask() or classRegisterMask(RegClass.xmm)
 end 'allocatablePool'
 
 // The registers of ONE class that `pool` makes available — and the pool EVERY per-value question must
@@ -333,12 +345,19 @@ function assertCallClobberConsistent()
 	end 'rbxClobbered'
 end 'assertCallClobberConsistent'
 
-// The 9 CALLER-saved GPRs the custom ABI clobbers across a call — the same set
-// `callDirect`'s `implicitDefs` mask (0xFC7) names, kept in ONE place so the pool and
+// Every CALLER-saved register the custom ABI clobbers across a call — the same set
+// `callDirect`'s `implicitDefs` mask (0xFFFF0FC7) names, kept in ONE place so the pool and
 // the clobber mask cannot drift (asserted equal by `assertCallClobberConsistent`). A
 // value live across a call is forbidden all of these.
+//
+// ⭐ ALL SIXTEEN XMMs ARE CALLER-SAVED (Wave 1), so a float live across a call is forbidden its
+// ENTIRE file, has NO register left, and force-spills. That is bought deliberately: it is what makes
+// an EMPTY allowed set reachable, which is the case `valueConfinedTo` exists to guard (∅ is a subset
+// of every set, so an empty allowed set must never read as confined to a GPR witness). Taking
+// xmm6-15 as callee-saved is Wave 2 and is not a tweak — Win64 preserves all 128 bits of them while
+// `movsd` zeroes bits 64-127, so it needs 16-byte spill slots and leaf frame alignment together.
 export function callerSavedMask() returns RegMask
-	var mask = 0 as RegMask
+	var mask = classRegisterMask(RegClass.xmm)
 	mask = mask or regMaskOf(X64Register.rax)
 	mask = mask or regMaskOf(X64Register.rcx)
 	mask = mask or regMaskOf(X64Register.rdx)
@@ -405,6 +424,7 @@ end 'allGprValueClasses'
 export function allocateRegisters(module TargetModule, target Target, project Project, valueClasses ValueClassColumns) throws CompileError
 	logDebug(LogCategory.codegen, message: function() gives "Register allocation ({targetToString(target)}): {module.funcCount()} function(s)")
 	assertCallClobberConsistent()
+	assertRegClassCountMatches()
 
 	// The stats object is the PROJECT's, not a fresh one: its sub-phase timers are a
 	// breakdown of the `regalloc` phase `buildBackend` measures around this call, and the
@@ -412,7 +432,7 @@ export function allocateRegisters(module TargetModule, target Target, project Pr
 	// they do not claim — the driver loop itself — surfaces as a nested `(unattributed)`
 	// row rather than vanishing). A locally-created stats object would be a second,
 	// disconnected accounting of the same wall time.
-	let stats = project.timings.regAlloc
+	var stats = project.timings.regAlloc
 	let pool = allocatablePool(target)
 
 	// Split every phi-carrying CRITICAL edge before coloring, so SSA destruction
@@ -477,7 +497,13 @@ function allocateFunction(module TargetModule, func IrFunction, funcIndex FuncIn
 	recordPhaseExcluding(project, phase: RegAllocPhase.splitting, probe: splitProbe, innerPhase: RegAllocPhase.liveness, innerBefore: livenessBefore)
 
 	stats.recordLivenessMarkSteps(liveness.livenessMarkSteps)
-	stats.recordPressure(liveness.maxPressure, funcName: func.name)
+	// PER CLASS, so the report names the file that was tight rather than a mixed figure that is no
+	// file's peak. A function with 14 live ints and 14 live floats is at its limit in BOTH files and
+	// over its limit in neither; one number cannot say that.
+	for classOrdinal in 0 upto RegClassCount 'eachClass'
+		let class = regClassAt(classOrdinal)
+		stats.recordPressure(liveness.maxPressureOf(class), class: class, funcName: func.name)
+	end 'eachClass'
 	stats.recordLoopDepth(liveness.cfg.maxLoopDepth())
 
 	// Reuse-def copies the colorer materializes (two-address inputs that outlive their
@@ -509,7 +535,7 @@ function allocateFunction(module TargetModule, func IrFunction, funcIndex FuncIn
 	// so the name below never exists at runtime — which is the whole reason the structured tier
 	// exists, and why it can sit on a per-function path at all.
 	let event = __DebugStream.nameId("regalloc.functionAllocated") as TraceName
-	logEvent(LogCategory.codegen, level: LogLevel.TRACE, name: event, arg0: liveness.maxPressure as TraceArg, arg1: stats.valuesSplit)
+	logEvent(LogCategory.codegen, level: LogLevel.TRACE, name: event, arg0: classRowMax(liveness.maxPressure), arg1: stats.valuesSplit)
 end 'allocateFunction'
 
 // ==========================================================================
@@ -694,6 +720,11 @@ function colorFunction(module TargetModule, liveness LivenessResult, pool RegMas
 	var ordered = OpIndexArray.create()
 	var seenBelow = BitWordArray.create()
 	seenBelow.resize(wordsPerRow)
+	// The death scan's per-class live tally. It is never READ — the scan wants the row alone — but the
+	// backward step maintains it as it flips bits and its decrements panic on underflow, so it must be
+	// real and truthfully seeded. Allocated HERE and reused across every block, like every other
+	// buffer in this sweep.
+	var deathsLiveByClass = zeroClassRow()
 	// The op's LAYOUT SEQUENCE across the whole function — the key `reuseCopies` is recorded
 	// under, and the same numbering the rewrite re-derives from `collectBlockOps`.
 	var blockBaseSeq = 0 as OpSeq
@@ -710,7 +741,7 @@ function colorFunction(module TargetModule, liveness LivenessResult, pool RegMas
 
 		ordered.clear()
 		collectBlockOps(block, out: ordered)
-		let deaths = computeBlockDeaths(module, ordered: ordered, liveness: liveness, local: local, block: block, buf: buf, seenBelow: seenBelow, seedBuf: seedBuf)
+		let deaths = computeBlockDeaths(module, ordered: ordered, liveness: liveness, local: local, block: block, buf: buf, seenBelow: seenBelow, seedBuf: seedBuf, liveByClass: deathsLiveByClass)
 
 		for pos in 0 upto ordered.count() 'eachOp'
 			let opIdx = try ordered.get(pos) otherwise panic("colorFunction: ordered.get OOB")
@@ -1130,16 +1161,26 @@ end 'BlockDeaths'
 // is not live below it. `seenBelow` is a single dense row (bits flip at every op, so a bitset is the
 // right shape INSIDE a block) — seeded from the SPARSE live-out list and cleared back to zero in
 // O(live) by the caller, never copied a full value-space row at a time.
-function computeBlockDeaths(module TargetModule, ordered OpIndexArray, liveness LivenessResult, local CfgIndex, block IrBlock, buf OperandList, seenBelow BitWordArray, seedBuf ValueIdArray) returns BlockDeaths
+function computeBlockDeaths(module TargetModule, ordered OpIndexArray, liveness LivenessResult, local CfgIndex, block IrBlock, buf OperandList, seenBelow BitWordArray, seedBuf ValueIdArray, liveByClass RegCountColumn) returns BlockDeaths
 	let n = ordered.count()
 
 	liveness.liveOutInto(local, out: seedBuf)
 	for v in seedBuf 'seed'
 		bitsetAdd(seenBelow, base: 0, bit: v)
 	end 'seed'
-	// The death scan does not use the live count, but `stepRowBackwardOverOperands` maintains one and
-	// a count may never go negative — so seed it truthfully from the live-out population.
-	var liveCount = seedBuf.count()
+	// ⚠ `liveByClass` HERE TALLIES THE ROW, AND THIS ROW IS NOT A LIVE SET. `seenBelow` means "seen
+	// below this op", and the death scan ADDS to it itself (below) for values that die — so its
+	// population is not the live population and its tally is not a pressure. Nothing reads it: the
+	// scan wants the row alone.
+	//
+	// It is maintained anyway, exactly, because `stepRowBackwardOverOperands` maintains a tally OF THE
+	// ROW as it flips bits, and that tally's decrements PANIC on underflow. That guard is not
+	// negotiable — it is what makes the per-class figures elsewhere trustworthy — so the contract is
+	// simply that every mutator of a row keeps its tally in step, including this one. Seeding it
+	// truthfully and bumping it on the scan's own adds costs one class read per death and keeps the
+	// invariant exact; the alternative is a second step function that skips the tally, which is the
+	// forked sweep this design exists to avoid.
+	seedClassLive(liveByClass, classes: liveness.valueClass, values: seedBuf)
 
 	// Collected backward as (pos, value) pairs, then bucketed by position — the scan discovers them
 	// in reverse, and a counting sort restores order in O(pairs + ops). `posOf` is the CSR KEY column
@@ -1160,15 +1201,16 @@ function computeBlockDeaths(module TargetModule, ordered OpIndexArray, liveness 
 					posOf.push(pos)
 					valueOf.push(v)
 					// Mark it seen, so the SAME value appearing twice in this op (`sub x, x`) is
-					// recorded as dying ONCE.
+					// recorded as dying ONCE. The row's tally follows the row — see the note above.
 					bitsetAdd(seenBelow, base: 0, bit: v)
+					stepClassLive(liveByClass, classes: liveness.valueClass, v: v, entering: true)
 				end 'dies'
 			end 'virt'
 		end 'markDeaths'
 
 		// Transform `seenBelow` from live-below-this-op to live-below-the-op-above it —
 		// the same backward SSA transfer the liveness pressure sweep uses.
-		liveCount = stepRowBackwardOverOperands(seenBelow, base: 0, buf: buf, liveCount: liveCount)
+		stepRowBackwardOverOperands(seenBelow, base: 0, buf: buf, liveByClass: liveByClass, classes: liveness.valueClass)
 	end 'eachOpRev'
 
 	// Return the row to zero for the next block, in O(live + phis): what it holds now is this
@@ -1265,7 +1307,14 @@ end 'colorTargetOp'
 function regAllocStatsMessage(stats RegAllocStats) returns String
 	var msg = StringBuilder.create()
 	msg.append("regalloc stats: {stats.functionsAllocated} func(s), {stats.valuesColored} values colored, {regMaskPopcount(stats.registersUsed)} distinct regs used\n")
-	msg.append("  pressure: maxPressure={stats.maxPressure} (in '{stats.maxPressureFunc}'); maxLoopDepth={stats.maxLoopDepth}; liveness mark-steps total={stats.livenessMarkStepsTotal} max={stats.livenessMarkStepsMax}\n")
+	// Iterated per class, not hand-listed: a hand-written pair of lines silently omits any register
+	// file added later, which is the same way an unmeasured cost hides in the phase table below.
+	msg.append("  pressure:")
+	for classOrdinal in 0 upto RegClassCount 'eachClass'
+		let class = regClassAt(classOrdinal)
+		msg.append(" max {class.name}={classRowGet(stats.maxPressure, class: class)} (in '{try stats.maxPressureFunc.get(class.ordinal) otherwise panic("regAllocStatsMessage: no maxPressureFunc entry for the {class.name} file")}');")
+	end 'eachClass'
+	msg.append(" maxLoopDepth={stats.maxLoopDepth}; liveness mark-steps total={stats.livenessMarkStepsTotal} max={stats.livenessMarkStepsMax}\n")
 	msg.append("  splitter: valuesSplit={stats.valuesSplit} (forced at fixed-reg points={stats.forcedSpills}); reloadsInserted={stats.reloadsInserted}; rematerialized={stats.rematerialized}\n")
 	msg.append("  copies inserted={stats.copiesInserted}; hints honoured={stats.hintsHonoured} missed={stats.hintsMissed}\n")
 	// Iterated, not hand-listed: a hand-written line silently omits any phase added

@@ -93,6 +93,22 @@ export function allowedRegistersOf(liveness LivenessResult, valueId ValueId, poo
 	return poolOfClass(pool, class: liveness.classOf(valueId)) and not liveness.forbiddenOf(valueId)
 end 'allowedRegistersOf'
 
+// The widest pool any single register file offers — the bound the CARDINALITY SCREEN scans to.
+//
+// The screen is allowed to over-fire (it calls for an exact confirmation, never a verdict), so one
+// bound over both files is sound: a violation against a witness of size |U| in EITHER file shows up
+// at `p = |U| <= maxClassPoolSize`, so nothing is missed. Scanning to the MIXED pool size instead
+// would be unsound in the other direction — it would treat one file's full-pool overflow as a
+// confined one, which is the pigeonhole's job and outranks it.
+export function maxClassPoolSize(pool RegMask) returns RegCount
+	var widest = 0 as RegCount
+	for classOrdinal in 0 upto RegClassCount 'eachClass'
+		let class = regClassAt(classOrdinal)
+		widest = maxOf(widest, b: classPoolSizeOf(pool, class: class))
+	end 'eachClass'
+	return widest
+end 'maxClassPoolSize'
+
 // Is `valueId` confined to `witness` — is EVERY register it could take inside that set? This is
 // membership of the tight set an overflow is about, and it is what makes a victim choice
 // meaningful: spilling a value that could have taken a register OUTSIDE the witness frees nothing
@@ -137,9 +153,12 @@ export type EffectivePools
 	// one). Zero in a call-free, idiv-free function, which is what lets its pressure sweeps skip the
 	// census entirely.
 	var constrained as ColumnLength
+	// How many values live in the XMM file. It is what lets a function with no float at all skip the
+	// census entirely — see `anyXmm`.
+	var xmmValues as ColumnLength
 
 	export static function create() returns EffectivePools
-		return Self{sizes: RegCountColumn.create(), constrained: 0}
+		return Self{sizes: RegCountColumn.create(), constrained: 0, xmmValues: 0}
 	end 'create'
 
 	// Fill the whole column — ONCE per function, before its first split. Every entry in
@@ -149,14 +168,19 @@ export type EffectivePools
 	export function fillAll(liveness LivenessResult, pool RegMask)
 		self.sizes.resize(liveness.valueCount)
 		self.constrained = 0
+		self.xmmValues = 0
 
 		for v in 0 upto liveness.valueCount 'eachValue'
+			let class = liveness.classOf(v)
 			let size = regMaskPopcount(allowedRegistersOf(liveness, valueId: v, pool: pool))
 			try self.sizes.set(v, value: size) otherwise panic("EffectivePools.fillAll: sizes.set OOB for value {v}")
 
-			if size < classPoolSizeOf(pool, class: liveness.classOf(v)) 'constrainedValue'
+			if size < classPoolSizeOf(pool, class: class) 'constrainedValue'
 				self.constrained = self.constrained + 1
 			end 'constrainedValue'
+			if class == RegClass.xmm 'xmmValue'
+				self.xmmValues = self.xmmValues + 1
+			end 'xmmValue'
 		end 'eachValue'
 	end 'fillAll'
 
@@ -165,7 +189,15 @@ export type EffectivePools
 	// corrects both the moment its mask is known. `class` is the victim's — see
 	// `LivenessResult.growValueSpace`, which is where a fresh id's class comes from and why.
 	export function growTo(valueCount ValueId, pool RegMask, class RegClass)
+		// Counted from what `growFilled` ACTUALLY added, never as `valueCount - count()`: that
+		// subtraction reads as an enormous positive on a `ColumnLength` the moment the column is
+		// already long enough, and it would corrupt the tally silently.
+		let before = self.sizes.count()
 		self.sizes.growFilled(valueCount, value: classPoolSizeOf(pool, class: class))
+
+		if class == RegClass.xmm 'xmmValues'
+			self.xmmValues = self.xmmValues + (self.sizes.count() - before)
+		end 'xmmValues'
 	end 'growTo'
 
 	// Re-derive ONE value's effective pool from its (just rebuilt) forbidden mask, keeping the
@@ -199,6 +231,14 @@ export type EffectivePools
 	export function anyConstrained() returns bool
 		return self.constrained > 0
 	end 'anyConstrained'
+
+	// Does ANY value in the function live in the XMM file? The census must run when one does, even if
+	// nothing is constrained: it is what maintains the per-file live tally the pigeonhole reads. When
+	// nothing does, the XMM half of every figure is identically zero and the sweep runs exactly the
+	// arithmetic it ran when there was one file.
+	export function anyXmm() returns bool
+		return self.xmmValues > 0
+	end 'anyXmm'
 end 'EffectivePools'
 
 // ==========================================================================
@@ -220,23 +260,39 @@ export type RegPoolCensus
 	// pool among the live values is a trailing-zero count instead of a scan for the first non-empty
 	// bucket — see `screenViolates`, which needs it on every op.
 	var occupied as MachineWord
-	// How many live values are CONSTRAINED (effective pool strictly smaller than the full pool).
-	// Zero at every op of a call-free, idiv-free function.
+	// How many live values are CONSTRAINED (effective pool strictly smaller than THEIR OWN FILE's full
+	// pool). Zero at every op of a call-free, idiv-free function.
 	var constrained as RegCount
+	// The allocatable pool size of each file — this function's constants, set once at `reset` so the
+	// per-value "is it constrained?" test is a row read rather than a popcount at every flip.
+	var classPoolSizes as RegCountColumn
 
 	export static function create() returns RegPoolCensus
-		return Self{byPoolSize: zeroColumn(RegisterFileSize + 1), occupied: 0, constrained: 0}
+		return Self{byPoolSize: zeroColumn(RegisterFileSize + 1), occupied: 0, constrained: 0, classPoolSizes: zeroClassRow()}
 	end 'create'
 
-	export function reset()
+	export function reset(pool RegMask)
 		for size in 0 upto RegisterFileSize + 1 'eachSize'
 			try self.byPoolSize.set(size, value: 0) otherwise panic("RegPoolCensus.reset: byPoolSize.set OOB at {size}")
 		end 'eachSize'
 		self.occupied = 0
 		self.constrained = 0
+		for classOrdinal in 0 upto RegClassCount 'eachClass'
+			let class = regClassAt(classOrdinal)
+			classRowSet(self.classPoolSizes, class: class, value: classPoolSizeOf(pool, class: class))
+		end 'eachClass'
 	end 'reset'
 
-	export function add(poolSize RegCount, fullPoolSize RegCount)
+	// A value is CONSTRAINED when its effective pool is smaller than the pool OF ITS OWN FILE — 14 for
+	// a GPR value, not the 16 its file is wide and not the 30 both files hold between them. Measured
+	// against the mixed pool, every unconstrained int reads `14 < 30` and the census is maintained at
+	// every operand of every op forever, which is a pure TIME cost that `scale-test` measures no part
+	// of.
+	function isConstrained(poolSize RegCount, class RegClass) returns bool
+		return poolSize < classRowGet(self.classPoolSizes, class: class)
+	end 'isConstrained'
+
+	export function add(poolSize RegCount, class RegClass)
 		let current = try self.byPoolSize.get(poolSize) otherwise panic("RegPoolCensus.add: pool size {poolSize} out of range")
 		try self.byPoolSize.set(poolSize, value: current + 1) otherwise panic("RegPoolCensus.add: byPoolSize.set OOB")
 
@@ -244,12 +300,12 @@ export type RegPoolCensus
 			self.occupied = self.occupied or (1 shl poolSize)
 		end 'bucketBecameOccupied'
 
-		if poolSize < fullPoolSize 'constrainedValue'
+		if self.isConstrained(poolSize, class: class) 'constrainedValue'
 			self.constrained = self.constrained + 1
 		end 'constrainedValue'
 	end 'add'
 
-	export function remove(poolSize RegCount, fullPoolSize RegCount)
+	export function remove(poolSize RegCount, class RegClass)
 		let current = try self.byPoolSize.get(poolSize) otherwise panic("RegPoolCensus.remove: pool size {poolSize} out of range")
 		if current == 0 'underflow'
 			panic("RegPoolCensus.remove: no live value has an effective pool of {poolSize} — the census has drifted from the live row it mirrors")
@@ -260,7 +316,7 @@ export type RegPoolCensus
 			self.occupied = self.occupied and not (1 shl poolSize)
 		end 'bucketBecameEmpty'
 
-		if poolSize < fullPoolSize 'constrainedValue'
+		if self.isConstrained(poolSize, class: class) 'constrainedValue'
 			self.constrained = self.constrained - 1
 		end 'constrainedValue'
 	end 'remove'
@@ -325,7 +381,7 @@ end 'RegPoolCensus'
 // sweep. The snapshot DEDUPES: an op may name one value twice (`x + x`, or a reuse def whose input
 // is also its use), and counting a single flip twice would corrupt the census for the rest of the
 // block.
-export function stepCensusBackwardOverOp(row BitWordArray, buf OperandList, liveCount RegCount, census RegPoolCensus, effPoolSizes RegCountColumn, fullPoolSize RegCount, ids ValueIdArray, wasLive BoolArray) returns RegCount
+export function stepCensusBackwardOverOp(row BitWordArray, buf OperandList, census RegPoolCensus, effPoolSizes RegCountColumn, classes ValueClassColumn, liveByClass RegCountColumn, ids ValueIdArray, wasLive BoolArray)
 	ids.clear()
 	wasLive.clear()
 	for o in buf 'snapshot'
@@ -340,7 +396,7 @@ export function stepCensusBackwardOverOp(row BitWordArray, buf OperandList, live
 		wasLive.push(bitsetTest(row, base: 0, bit: v))
 	end 'snapshot'
 
-	let liveBefore = stepRowBackwardOverOperands(row, base: 0, buf: buf, liveCount: liveCount)
+	stepRowBackwardOverOperands(row, base: 0, buf: buf, liveByClass: liveByClass, classes: classes)
 
 	for k in 0 upto ids.count() 'applyDelta'
 		let v = try ids.get(k) otherwise panic("stepCensusBackwardOverOp: ids.get OOB at {k}")
@@ -351,14 +407,13 @@ export function stepCensusBackwardOverOp(row BitWordArray, buf OperandList, live
 		end 'unchanged'
 
 		let size = try effPoolSizes.get(v) otherwise panic("stepCensusBackwardOverOp: value {v} is outside the function's value space")
+		let class = try classes.get(v) otherwise panic("stepCensusBackwardOverOp: value {v} has no recorded register class")
 		if now 'entered'
-			census.add(size, fullPoolSize: fullPoolSize)
+			census.add(size, class: class)
 		end 'entered' else 'left'
-			census.remove(size, fullPoolSize: fullPoolSize)
+			census.remove(size, class: class)
 		end 'left'
 	end 'applyDelta'
-
-	return liveBefore
 end 'stepCensusBackwardOverOp'
 
 // Is `valueId` already in `ids`? A linear scan, and deliberately so: `ids` holds one op's distinct
@@ -418,9 +473,12 @@ export type HallScratch
 	export var parentOfReg as LiveIndexColumn
 	// The worklist both alternating-path walks drive off.
 	export var queue as LiveIndexColumn
+	// One point's live values, filtered to ONE register file — the list the per-class verdict runs
+	// over. Allocated once with the rest of the scratch, for the same reason.
+	export var classLive as ValueIdArray
 
 	export static function create() returns HallScratch
-		return Self{allowed: RegMaskColumn.create(), regOfValue: RegNumColumn.create(), valueOfReg: LiveIndexColumn.create(), parentOfReg: LiveIndexColumn.create(), queue: LiveIndexColumn.create()}
+		return Self{allowed: RegMaskColumn.create(), regOfValue: RegNumColumn.create(), valueOfReg: LiveIndexColumn.create(), parentOfReg: LiveIndexColumn.create(), queue: LiveIndexColumn.create(), classLive: ValueIdArray.create()}
 	end 'create'
 end 'HallScratch'
 
