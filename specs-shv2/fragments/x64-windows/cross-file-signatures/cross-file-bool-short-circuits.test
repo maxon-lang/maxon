@@ -23,24 +23,32 @@ ExitCode: 42
 ---
 func @ready {
   entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
     x64.movRegImm32 r8, 0
+    x64.popReg rbp
     x64.ret
 }
 
 func @enabled {
   entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
     x64.movRegImm32 rcx, 0
     x64.movRegImm32 rax, 1
     x64.cqo
     x64.idivReg rcx
     x64.cmpRegImm32 rax, 0
     x64.setccReg equal, r8
+    x64.popReg rbp
     x64.ret
 }
 
 func @main {
   entry:
-    x64.prologue 40
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
     x64.callDirect ready
     x64.movRegImm32 rax, 0
     x64.cmpRegImm32 r8, 0
@@ -59,10 +67,12 @@ func @main {
     x64.jmp ifcont
   skipped:
     x64.movRegImm32 r8, 42
-    x64.epilogue 40
+    x64.epilogue 32
+    x64.popReg rbp
     x64.ret
   ifcont:
     x64.movRegImm32 r8, 1
-    x64.epilogue 40
+    x64.epilogue 32
+    x64.popReg rbp
     x64.ret
 }

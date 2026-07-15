@@ -25,10 +25,18 @@
 // R8 return value to ExitProcess.
 export let UserEntryName = "main"
 
-// `mrt_start`'s frame: 32 bytes of Win64 shadow space for the calls it makes,
-// plus 8 bytes so rsp is 16-byte aligned at each `call` (the OS enters the stub
-// with rsp ≡ 8 (mod 16), as if via `call`; `sub rsp, 0x28` restores 16-alignment).
-let EntryStubFrameBytes = 0x28
+// `mrt_start`'s frame: 32 bytes of Win64 shadow space for the calls it makes, and
+// NOTHING else. The OS enters the stub with rsp ≡ 8 (mod 16), as if via `call`; the
+// stub's own `push rbp` moves it to ≡ 0, so an exact-multiple-of-16 reservation keeps
+// it aligned at each `call` and no odd 8 is needed.
+//
+// ⚠ This USED to be 0x28 (32 + 8) — the 8 was the alignment correction for a stub that
+// pushed nothing. The frame pointer's push now supplies that parity, so the same
+// arithmetic `computeFrameBytes` does for every other function (entry ≡ 8, one push ⇒ an
+// even reservation) gives 0x20 here. Keeping 0x28 would leave rsp ≡ 8 AT the call — a
+// misalignment nothing on this path reads today, and that would start corrupting the
+// moment anything below it spills an XMM register (P1.0d.4 floats).
+let EntryStubFrameBytes = 0x20
 
 // Run the full backend: Std → Target → register allocation → prologue/epilogue →
 // runtime augmentation → machine-code emission → CodeResult.
@@ -99,19 +107,35 @@ end 'augmentWithRuntime'
 // Build `mrt_start` and lay it out FIRST so its `.text` offset is the PE entry
 // point. The stub bridges Maxon's custom ABI (primary return in R8) to Win64's
 // ExitProcess (UINT arg in ECX):
-//   sub rsp, 0x28      reserve shadow space + restore 16-byte alignment
+//   push rbp           open the saved-RBP chain (see below)
+//   mov rbp, rsp       … so a backtrace can name mrt_start and then stop
+//   sub rsp, 0x20      reserve shadow space (rsp is already 16-aligned by the push)
 //   call main          main returns its ExitCode in R8 (custom ABI)
 //   mov ecx, r8d       hand R8's low 32 bits to ExitProcess's ECX arg (Win64 ABI)
 //   call [ExitProcess] terminate the process with that code
+//   add rsp, 0x20      release the frame — dead, but the mirror must be total
+//   pop rbp            restore the caller's frame pointer
 //   ret                dead (ExitProcess never returns); kept for well-formedness
+//
+// This stub is built AFTER `insertPrologueEpilogue`, so it does not inherit that pass's
+// frame and must lay its own. It builds the SAME frame that pass builds — `push rbp` /
+// `mov rbp, rsp` through the shared `framePointerSetupOp`, so the chain's defining
+// instruction is spelled in one place — because `mrt_start` is the frame the chain ENDS
+// at: `main`'s saved rbp points here, and a walk that arrives with no frame to read stops
+// one frame short of the `in mrt_start` every backtrace in the corpus expects. Its own
+// saved rbp is whatever the loader left, and the walk's `.text` bound is what discards it.
 function prependEntryStub(module TargetModule)
 	var func = IrFunction.createFromStd(EntryPointName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
 	var block = module.addBlock(func, label: b"entry")
 
+	module.appendOp(block, op: TargetOp.pushReg(X64Register.rbp))
+	module.appendOp(block, op: framePointerSetupOp())
 	module.appendOp(block, op: TargetOp.prologue(EntryStubFrameBytes))
 	module.appendOp(block, op: TargetOp.callDirect(UserEntryName))
 	module.appendOp(block, op: TargetOp.movReg32Reg32(X64VReg.physical(X64Register.rcx), srcReg: X64VReg.physical(X64Register.r8)))
 	module.appendOp(block, op: TargetOp.iatCall(exitProcessIatSlot()))
+	module.appendOp(block, op: TargetOp.epilogue(EntryStubFrameBytes))
+	module.appendOp(block, op: TargetOp.popReg(X64Register.rbp))
 	module.setTerminator(block, op: TargetOp.ret)
 
 	prependFunction(module, func: func)

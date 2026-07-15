@@ -26,11 +26,14 @@ ExitCode: 102
 ---
 func @classify {
   entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
     x64.cmpRegImm32 rcx, 0
     x64.jcc equal, zero
     x64.jmp ifelse
   zero:
     x64.movRegImm32 r8, 0
+    x64.popReg rbp
     x64.ret
   ifelse:
     x64.cmpRegImm32 rcx, 10
@@ -38,6 +41,7 @@ func @classify {
     x64.jmp ifelse
   small:
     x64.movRegImm32 r8, 1
+    x64.popReg rbp
     x64.ret
   ifelse:
     x64.cmpRegImm32 rcx, 100
@@ -45,9 +49,11 @@ func @classify {
     x64.jmp ifelse
   medium:
     x64.movRegImm32 r8, 2
+    x64.popReg rbp
     x64.ret
   ifelse:
     x64.movRegImm32 r8, 3
+    x64.popReg rbp
     x64.ret
   ifcont:
   ifcont:
@@ -56,10 +62,12 @@ func @classify {
 
 func @main {
   entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.pushReg r12
     x64.pushReg r13
-    x64.prologue 32
+    x64.prologue 40
     x64.movRegImm32 rcx, 0
     x64.callDirect classify
     x64.movRegReg rbx, r8
@@ -77,9 +85,10 @@ func @main {
     x64.leaRegRegReg rax, rax, rcx
     x64.imulRegRegImm32 rcx, r8, 27
     x64.leaRegRegReg r8, rax, rcx
-    x64.epilogue 32
+    x64.epilogue 40
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
+    x64.popReg rbp
     x64.ret
 }

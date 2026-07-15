@@ -15,19 +15,27 @@ ExitCode: 10
 ---
 func @zero {
   entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
     x64.movRegImm32 r8, 7
+    x64.popReg rbp
     x64.ret
 }
 
 func @inc {
   entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
     x64.leaRegRegImm32 r8, rcx, 1
+    x64.popReg rbp
     x64.ret
 }
 
 func @main {
   entry:
-    x64.prologue 40
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
     x64.callDirect zero
     x64.movRegReg rcx, r8
     x64.callDirect inc
@@ -35,6 +43,7 @@ func @main {
     x64.callDirect inc
     x64.movRegReg rcx, r8
     x64.callDirect inc
-    x64.epilogue 40
+    x64.epilogue 32
+    x64.popReg rbp
     x64.ret
 }

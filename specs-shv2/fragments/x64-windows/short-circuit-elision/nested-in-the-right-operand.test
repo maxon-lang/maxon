@@ -25,20 +25,28 @@ ExitCode: 3
 ---
 func @t {
   entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
     x64.movRegImm32 r8, 1
+    x64.popReg rbp
     x64.ret
 }
 
 func @f {
   entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
     x64.movRegImm32 r8, 0
+    x64.popReg rbp
     x64.ret
 }
 
 func @main {
   entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
     x64.pushReg rbx
-    x64.prologue 32
+    x64.prologue 40
     x64.movRegImm32 rbx, 0
     x64.callDirect f
     x64.movRegImm32 rax, 1
@@ -136,7 +144,8 @@ func @main {
     x64.movRegReg r8, rbx
     x64.jmp ifcont
   ifcont:
-    x64.epilogue 32
+    x64.epilogue 40
     x64.popReg rbx
+    x64.popReg rbp
     x64.ret
 }

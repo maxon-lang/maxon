@@ -383,6 +383,20 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 		symdataSizeVirtual = alignUp(symdataSize, alignment: SectionAlignment)
 	end 'symdataVirtual'
 
+	// The runtime's frame walkers bound `.text` from above by SUBTRACTING the symbol table's
+	// address from `mrt_start`'s (`textSize = __symtable - text_base`) — that is how a walk
+	// decides a return address is code it can symbolize rather than a stray word. That
+	// arithmetic is only meaningful if `.symtab` is laid out ABOVE `.text`, which the RVA
+	// chain above happens to guarantee (text → rdata → symtab, each stacked on the last).
+	//
+	// "Happens to" is the problem: it is an ordering property of six `let`s, and reordering
+	// the sections is an ordinary-looking edit that would silently turn every backtrace into
+	// either an empty trace or a wild read. So it is asserted HERE, at the one place the
+	// layout is decided, rather than left as a comment in the runtime that reads it.
+	if symdataRva <= textRva 'symtabBelowText'
+		panic("writePe: .symtab (RVA {symdataRva}) must lie ABOVE .text (RVA {textRva}) — the runtime's frame walkers compute .text's size as `__symtable - mrt_start` (see emitPanicWalkFrames), so a .symtab laid out below .text makes that subtraction negative and every backtrace wrong")
+	end 'symtabBelowText'
+
 	// .idata
 	let idataRva = symdataRva + symdataSizeVirtual
 	let idata = buildImportSection(idataRva)

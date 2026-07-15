@@ -22,6 +22,8 @@ ExitCode: 42
 ---
 func @test {
   entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
     x64.cmpRegImm32 rcx, 0
     x64.jcc equal, maybePrefix
     x64.jmp ifcont
@@ -31,6 +33,7 @@ func @test {
     x64.jmp ifcont
   isHex:
     x64.movRegImm32 r8, 1
+    x64.popReg rbp
     x64.ret
   ifcont:
     x64.cmpRegImm32 rdx, 2
@@ -38,20 +41,25 @@ func @test {
     x64.jmp ifcont
   isBinary:
     x64.movRegImm32 r8, 2
+    x64.popReg rbp
     x64.ret
   ifcont:
     x64.jmp ifcont
   ifcont:
     x64.movRegImm32 r8, 42
+    x64.popReg rbp
     x64.ret
 }
 
 func @main {
   entry:
-    x64.prologue 40
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
     x64.movRegImm32 rcx, 5
     x64.movRegImm32 rdx, 0
     x64.callDirect test
-    x64.epilogue 40
+    x64.epilogue 32
+    x64.popReg rbp
     x64.ret
 }

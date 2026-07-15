@@ -19,23 +19,31 @@ ExitCode: 0
 ---
 func @diff {
   entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
     x64.movRegReg r8, rcx
     x64.subRegReg r8, rcx, rdx
+    x64.popReg rbp
     x64.ret
 }
 
 func @chainDiff {
   entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
     x64.subRegReg rcx, rcx, rdx
     x64.movRegReg r8, rcx
     x64.subRegReg r8, rcx, rax
+    x64.popReg rbp
     x64.ret
 }
 
 func @main {
   entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
     x64.pushReg rbx
-    x64.prologue 32
+    x64.prologue 40
     x64.movRegImm32 rcx, 200
     x64.movRegImm32 rdx, 137
     x64.callDirect diff
@@ -50,12 +58,14 @@ func @main {
     x64.jmp ifcont
   ok:
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
+    x64.epilogue 40
     x64.popReg rbx
+    x64.popReg rbp
     x64.ret
   ifcont:
     x64.movRegImm32 r8, 99
-    x64.epilogue 32
+    x64.epilogue 40
     x64.popReg rbx
+    x64.popReg rbp
     x64.ret
 }

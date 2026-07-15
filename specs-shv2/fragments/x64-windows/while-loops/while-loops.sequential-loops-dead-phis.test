@@ -52,18 +52,23 @@ ExitCode: 114
 ---
 func @work {
   entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
     x64.leaRegRegImm32 r8, rcx, 1
+    x64.popReg rbp
     x64.ret
 }
 
 func @big {
   entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.pushReg r12
     x64.pushReg r13
     x64.pushReg r14
     x64.pushReg r15
-    x64.prologue 96
+    x64.prologue 88
     x64.movRegReg rbx, rcx
     x64.movRegImm32 r12, 1
     x64.movRegImm32 r13, 2
@@ -143,20 +148,24 @@ func @big {
     x64.leaRegRegReg rax, rax, rcx
     x64.loadRegSlot rcx, slot3
     x64.leaRegRegReg r8, rax, rcx
-    x64.epilogue 96
+    x64.epilogue 88
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
+    x64.popReg rbp
     x64.ret
 }
 
 func @main {
   entry:
-    x64.prologue 40
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
     x64.movRegImm32 rcx, 3
     x64.callDirect big
-    x64.epilogue 40
+    x64.epilogue 32
+    x64.popReg rbp
     x64.ret
 }

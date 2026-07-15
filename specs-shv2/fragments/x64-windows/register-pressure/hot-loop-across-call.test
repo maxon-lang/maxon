@@ -30,18 +30,23 @@ ExitCode: 65
 ---
 func @sink {
   entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
     x64.movRegReg r8, rcx
+    x64.popReg rbp
     x64.ret
 }
 
 func @hotCall {
   entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.pushReg r12
     x64.pushReg r13
     x64.pushReg r14
     x64.pushReg r15
-    x64.prologue 48
+    x64.prologue 40
     x64.movRegImm32 rbx, 1
     x64.movRegImm32 r12, 2
     x64.movRegImm32 r13, 3
@@ -69,20 +74,24 @@ func @hotCall {
     x64.leaRegRegReg rax, rax, r13
     x64.leaRegRegReg rax, rax, r14
     x64.leaRegRegReg r8, rax, r15
-    x64.epilogue 48
+    x64.epilogue 40
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
+    x64.popReg rbp
     x64.ret
 }
 
 func @main {
   entry:
-    x64.prologue 40
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
     x64.movRegImm32 rcx, 0
     x64.callDirect hotCall
-    x64.epilogue 40
+    x64.epilogue 32
+    x64.popReg rbp
     x64.ret
 }

@@ -701,9 +701,46 @@ parser's "a comparison is only valid as the sole top-level operator of an `if`/`
 condition" restriction protects: it guarantees the `cmp` is the last flag-setter before the
 branch.
 
-`X64PrologueEpilogue` pushes and pops **exactly** the callee-saved registers the coloring
-actually used, and reserves an aligned frame (32-byte shadow space + spill slots + parity
-padding, so `rsp ≡ 0 mod 16` at a call).
+`X64PrologueEpilogue` gives **every function a real frame pointer** — `push rbp` / `mov rbp,
+rsp` opens the prologue and `pop rbp` closes the epilogue — then pushes and pops **exactly**
+the callee-saved registers the coloring actually used, and reserves an aligned frame (32-byte
+shadow space + spill slots + parity padding, so `rsp ≡ 0 mod 16` at a call). The frame
+pointer's push counts toward that parity, so it *inverts* the residue the reservation must
+correct for; get that wrong and the misalignment is silent until something spills an XMM
+register.
+
+### The frame pointer exists for the SAVED-RBP CHAIN, not for addressing
+
+Locals and spill slots are addressed off **`rsp`** (`spillSlotBaseDisp`), and that does not
+change — rbp addresses nothing. What it provides is the **chain**: `[rbp]` is the caller's
+rbp and `[rbp+8]` is the return address, so a live thread's frames form a linked list that
+can be **walked**. Two mechanisms need exactly that list:
+
+1. **The panic backtrace** — `mrt_panic_walk_frames` follows it to symbolize a fault's or a
+   panic's callers. Frame 0 comes from the faulting RIP; every frame above it comes from
+   the chain.
+2. **Growable green-thread stacks** (R3 @ P1.5) — a Go-style `morestack` allocates a bigger
+   stack, **copies** the old one onto it, and must then find and fix every interior frame
+   pointer, all of which have just moved. The chain is *how it finds them*: v1's
+   `__gt_morestack` walks it and adds the relocation offset to each saved rbp
+   (`maxon-selfhosted/Compiler/Targets/X64/X64Backend.maxon:7094`, step 6b at `:7172`). A
+   relocating stack with no chain cannot enumerate the pointers it just invalidated.
+
+**Leaves are framed too.** A frameless leaf cannot be unwound out of, so it truncates any
+walk that reaches it — and a chain with a hole is not a chain. The frame *pointer* is
+therefore unconditional; only the frame *reservation* (`sub rsp, N`) is still elided when
+there is nothing to reserve, which is most leaves.
+
+**It costs no register.** `allocatablePool` has always excluded rsp/rbp as "the frame", so
+the 14-GPR pool is unchanged — shv2 was already paying a frame pointer's full price while
+leaving rbp holding whatever the loader put there.
+
+> ⚠ **This REPLACES the frame-pointer-omitted (rsp-only) design shv2 shipped with**, which was
+> chosen before the `morestack` requirement above was on the table and left rbp reserved but
+> dead — a strictly dominated state. Adopting it moved all 221 IR-bearing goldens **once**
+> (P1.0d.3); retrofitting it at P1.5 would move the same goldens *then*, on top of a runtime
+> that had already shipped against the chain's absence. That is the retrofit this rewrite
+> exists to avoid.
 
 `CodeResult.stdModule` carries the mid-level module the backend lowered FROM. x64/PE ignore
 it; it exists because the **wasm** backend will consume the machine-level IR directly instead

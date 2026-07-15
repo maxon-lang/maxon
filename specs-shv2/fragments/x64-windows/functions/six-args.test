@@ -11,17 +11,22 @@ ExitCode: 21
 ---
 func @sum6 {
   entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
     x64.leaRegRegReg rcx, rcx, rdx
     x64.leaRegRegReg rax, rcx, rax
     x64.leaRegRegReg rax, rax, r9
     x64.leaRegRegReg rax, rax, rsi
     x64.leaRegRegReg r8, rax, rdi
+    x64.popReg rbp
     x64.ret
 }
 
 func @main {
   entry:
-    x64.prologue 40
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
     x64.movRegImm32 rcx, 1
     x64.movRegImm32 rdx, 2
     x64.movRegImm32 rax, 3
@@ -29,6 +34,7 @@ func @main {
     x64.movRegImm32 rsi, 5
     x64.movRegImm32 rdi, 6
     x64.callDirect sum6
-    x64.epilogue 40
+    x64.epilogue 32
+    x64.popReg rbp
     x64.ret
 }

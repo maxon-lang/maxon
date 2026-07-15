@@ -29,18 +29,23 @@ ExitCode: 129
 ---
 func @sink {
   entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
     x64.movRegReg r8, rcx
+    x64.popReg rbp
     x64.ret
 }
 
 func @invariantsAcrossCall {
   entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.pushReg r12
     x64.pushReg r13
     x64.pushReg r14
     x64.pushReg r15
-    x64.prologue 64
+    x64.prologue 56
     x64.leaRegRegImm32 rbx, rcx, 1
     x64.leaRegRegImm32 r12, rcx, 2
     x64.leaRegRegImm32 r13, rcx, 3
@@ -79,20 +84,24 @@ func @invariantsAcrossCall {
     x64.leaRegRegImm32 rcx, rax, 1
     x64.jmp whilehdr
   whileexit:
-    x64.epilogue 64
+    x64.epilogue 56
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
+    x64.popReg rbp
     x64.ret
 }
 
 func @main {
   entry:
-    x64.prologue 40
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
     x64.movRegImm32 rcx, 0
     x64.callDirect invariantsAcrossCall
-    x64.epilogue 40
+    x64.epilogue 32
+    x64.popReg rbp
     x64.ret
 }

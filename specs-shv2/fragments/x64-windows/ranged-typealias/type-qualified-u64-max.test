@@ -17,23 +17,30 @@ ExitCode: 0
 ---
 func @getValue {
   entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
     x64.movRegImm r8, -1
+    x64.popReg rbp
     x64.ret
 }
 
 func @main {
   entry:
-    x64.prologue 40
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
     x64.callDirect getValue
     x64.cmpRegImm32 r8, -1
     x64.jcc equal, check
     x64.jmp ifcont
   check:
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
+    x64.epilogue 32
+    x64.popReg rbp
     x64.ret
   ifcont:
     x64.movRegImm32 r8, 1
-    x64.epilogue 40
+    x64.epilogue 32
+    x64.popReg rbp
     x64.ret
 }

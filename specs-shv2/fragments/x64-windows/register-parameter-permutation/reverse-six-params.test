@@ -19,6 +19,8 @@ ExitCode: 0
 ---
 func @digits6 {
   entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
     x64.imulRegRegImm32 rcx, rcx, 100000
     x64.imulRegRegImm32 rdx, rdx, 10000
     x64.leaRegRegReg rcx, rcx, rdx
@@ -29,12 +31,15 @@ func @digits6 {
     x64.imulRegRegImm32 rcx, rsi, 10
     x64.leaRegRegReg rax, rax, rcx
     x64.leaRegRegReg r8, rax, rdi
+    x64.popReg rbp
     x64.ret
 }
 
 func @reverse6 {
   entry:
-    x64.prologue 40
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
     x64.movRegReg r8, rcx
     x64.movRegReg r10, rdx
     x64.movRegReg r11, rax
@@ -45,13 +50,16 @@ func @reverse6 {
     x64.movRegReg rsi, r10
     x64.movRegReg rdi, r8
     x64.callDirect digits6
-    x64.epilogue 40
+    x64.epilogue 32
+    x64.popReg rbp
     x64.ret
 }
 
 func @main {
   entry:
-    x64.prologue 40
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
     x64.movRegImm32 rcx, 1
     x64.movRegImm32 rdx, 2
     x64.movRegImm32 rax, 3
@@ -64,10 +72,12 @@ func @main {
     x64.jmp ifcont
   ok:
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
+    x64.epilogue 32
+    x64.popReg rbp
     x64.ret
   ifcont:
     x64.movRegImm32 r8, 99
-    x64.epilogue 40
+    x64.epilogue 32
+    x64.popReg rbp
     x64.ret
 }

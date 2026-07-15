@@ -20,6 +20,8 @@ ExitCode: 0
 ---
 func @digits6 {
   entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
     x64.imulRegRegImm32 rcx, rcx, 100000
     x64.imulRegRegImm32 rdx, rdx, 10000
     x64.leaRegRegReg rcx, rcx, rdx
@@ -30,17 +32,20 @@ func @digits6 {
     x64.imulRegRegImm32 rcx, rsi, 10
     x64.leaRegRegReg rax, rax, rcx
     x64.leaRegRegReg r8, rax, rdi
+    x64.popReg rbp
     x64.ret
 }
 
 func @keepAll {
   entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.pushReg r12
     x64.pushReg r13
     x64.pushReg r14
     x64.pushReg r15
-    x64.prologue 48
+    x64.prologue 40
     x64.movRegReg rbx, rcx
     x64.movRegReg r12, rdx
     x64.movRegReg r13, rax
@@ -66,18 +71,21 @@ func @keepAll {
     x64.leaRegRegReg rax, rax, rcx
     x64.loadRegSlot rcx, slot0
     x64.leaRegRegReg r8, rax, rcx
-    x64.epilogue 48
+    x64.epilogue 40
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
+    x64.popReg rbp
     x64.ret
 }
 
 func @main {
   entry:
-    x64.prologue 40
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
     x64.movRegImm32 rcx, 1
     x64.movRegImm32 rdx, 2
     x64.movRegImm32 rax, 3
@@ -90,10 +98,12 @@ func @main {
     x64.jmp ifcont
   ok:
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
+    x64.epilogue 32
+    x64.popReg rbp
     x64.ret
   ifcont:
     x64.movRegImm32 r8, 99
-    x64.epilogue 40
+    x64.epilogue 32
+    x64.popReg rbp
     x64.ret
 }

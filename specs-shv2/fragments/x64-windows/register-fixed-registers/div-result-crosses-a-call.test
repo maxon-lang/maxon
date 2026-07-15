@@ -19,14 +19,19 @@ ExitCode: 0
 ---
 func @twice {
   entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
     x64.leaRegRegReg r8, rcx, rcx
+    x64.popReg rbp
     x64.ret
 }
 
 func @main {
   entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
     x64.pushReg rbx
-    x64.prologue 32
+    x64.prologue 40
     x64.movRegImm32 rax, 1000
     x64.movRegImm32 rcx, 7
     x64.cqo
@@ -40,12 +45,14 @@ func @main {
     x64.jmp ifcont
   ok:
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
+    x64.epilogue 40
     x64.popReg rbx
+    x64.popReg rbp
     x64.ret
   ifcont:
     x64.movRegImm32 r8, 99
-    x64.epilogue 32
+    x64.epilogue 40
     x64.popReg rbx
+    x64.popReg rbp
     x64.ret
 }

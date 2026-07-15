@@ -1,26 +1,65 @@
 // X64PrologueEpilogue — inserts frame setup/teardown ops after register
-// allocation. shv2 uses a frame-pointer-omitted (rsp-only) frame: the `prologue`
-// op reserves the frame with `sub rsp, N`, the `epilogue` op releases it with
-// `add rsp, N`, and `pushReg`/`popReg` save/restore the callee-saved registers the
-// coloring used. This pass owns ALL of it — unlike v1, where ISel pre-emits an
+// allocation. EVERY function gets a REAL FRAME POINTER: the prologue opens with
+// `push rbp` / `mov rbp, rsp`, then pushes the callee-saved registers the coloring
+// used, then reserves the frame with `sub rsp, N`; the epilogue mirrors all three
+// before each `ret`. This pass owns ALL of it — unlike v1, where ISel pre-emits an
 // `epilogue` at each return and this pass strips/re-emits it. shv2's return
 // lowering emits only the R8 move + `ret`.
 //
-// A function gets a frame when it (a) reserves stack (locals / spills), (b) makes a
-// CALL — which forces a 16-byte-aligned frame with 32 bytes of Win64 shadow space so
-// `rsp` is aligned at the call, or (c) used a CALLEE-saved register (which M5 now
-// colors into for values live across a call), which must be preserved. The prologue
-// then pushes exactly those callee-saved registers and reserves the frame; the
-// epilogue mirrors both before each `ret`. A leaf that needs none — a frameless
-// `main` like `return 42`, or a call-free arithmetic function — is left untouched.
+// ⭐ WHY A FRAME POINTER, AND WHY ON EVERY FUNCTION INCLUDING LEAVES
 //
-// The runtime entry stub `mrt_start` builds its own `sub rsp, 0x28` frame directly in
-// `augmentWithRuntime` (which runs AFTER this pass), so this pass never sees it. Stack
+// The frame pointer's job is not addressing — every local and spill slot here is
+// addressed off `rsp` (see `spillSlotBaseDisp`), and that does not change. Its job is
+// the SAVED-RBP CHAIN: `[rbp]` is the caller's rbp and `[rbp+8]` is the return address,
+// so the frames of a live thread form a linked list that can be WALKED. Two things need
+// exactly that list, and neither can be served by anything cheaper:
+//
+//   1. The PANIC BACKTRACE (P1.0d.3, here). `mrt_panic_walk_frames` follows the chain to
+//      symbolize the callers of a fault or a panic. Frame 0 comes from the faulting RIP,
+//      but every frame above it comes from the chain.
+//   2. GROWABLE GREEN-THREAD STACKS (R3 @ P1.5, PLAN.md). A Go-style `morestack` allocates
+//      a larger stack, COPIES the old one onto it, and must then find and fix every
+//      interior frame pointer — which have all just moved. The chain is HOW it finds them:
+//      v1's `__gt_morestack` walks it and adds the relocation offset to each saved rbp
+//      (`maxon-selfhosted/Compiler/Targets/X64/X64Backend.maxon:7094` — "fixes the
+//      saved-RBP chain + the entry RSP by the relocation offset"; step 6b at :7172 is the
+//      walk itself). A relocating stack without a frame-pointer chain has no way to
+//      enumerate the pointers it just invalidated.
+//
+// So shv2 needs this at P1.5 regardless of stack traces, and building it now costs the
+// committed goldens ONCE instead of moving them again later on top of a shipped runtime.
+//
+// LEAVES ARE INCLUDED, and that is the point rather than an oversight: a frameless leaf
+// cannot be unwound OUT of, so it terminates any walk that reaches it — and the faulting
+// `main` of `specs-shv2/safety.md` IS a frameless leaf. A chain with a hole in it is not a
+// chain. There is therefore no `needsFrame` test any more: the frame POINTER is
+// unconditional, while the frame RESERVATION (`sub rsp, N`) is still elided when there is
+// nothing to reserve.
+//
+// It costs NO register. `allocatablePool` already excludes rsp/rbp ("the frame") and
+// always has, so shv2 was paying a frame pointer's full price — 14 allocatable GPRs, not
+// 15 — while leaving rbp holding whatever the loader put there. The pool is unchanged;
+// this is the same 14 registers, now with the benefit collected.
+//
+// (This REPLACES the frame-pointer-omitted design this file used to describe. That choice
+// predated the morestack requirement above; see ARCHITECTURE.md's backend section.)
+//
+// The runtime entry stub `mrt_start` builds its own frame directly in
+// `augmentWithRuntime` (which runs AFTER this pass), so this pass never sees it — it
+// sets up the same `push rbp` / `mov rbp, rsp` by hand, because the chain has to start
+// somewhere and a trace that cannot name `mrt_start` stops one frame short. Stack
 // arguments (a 7th+ parameter) and real spill slots grow the frame further at their
 // milestones; today `outgoingArgSize` is 0 and `stackSize` is 0 for every function.
 
 // x64 frames keep rsp 16-byte aligned at each call site.
 let StackFrameAlignment = 16
+
+// `push rbp` is a push like any other, and the frame arithmetic is the one place that has
+// to know it: it moves rsp by 8 exactly as a callee-saved push does, so it counts toward
+// the parity that decides how much `sub rsp` must reserve to land 16-aligned AT the call.
+// Named rather than folded into a `+ 1`, because a bare 1 in that expression is exactly
+// the magic value that makes an alignment bug invisible.
+let FramePointerPushCount = 1 as RegCount
 
 // Win64 requires a caller to reserve 32 bytes of SHADOW SPACE below its outgoing args
 // — scratch the callee may use for its first four register parameters. Every function
@@ -43,17 +82,19 @@ export function insertPrologueEpilogue(module TargetModule, target Target)
 	end 'eachFunc'
 end 'insertPrologueEpilogue'
 
-// Insert a function's frame: push the callee-saved registers its coloring used, reserve
-// its frame (`sub rsp`), and mirror both on every return. A function needs a frame if it
-// reserves stack (locals / spills), makes a call (16-byte alignment + shadow space), or
-// used a callee-saved register (which must be preserved). A leaf with none is untouched.
+// Insert a function's frame: establish the frame pointer, push the callee-saved registers
+// its coloring used, reserve its frame (`sub rsp`), and mirror all three on every return.
+//
+// EVERY function is framed, leaves included — the saved-RBP chain is only a chain if it has
+// no holes (see this file's header). The frame RESERVATION is still conditional: a leaf that
+// reserves nothing emits no `sub rsp`, since `computeFrameBytes` returns 0 and both
+// `encodePrologue` and `encodeEpilogue` skip a zero-size frame.
+//
+// `usedCalleeSavedRegs` is read BEFORE anything is inserted, so it reports what the COLORING
+// used and never sees this pass's own `push rbp`.
 function insertFrameForFunction(module TargetModule, func IrFunction)
 	let usedCallee = usedCalleeSavedRegs(module, func: func)
 	let makesCall = functionMakesCall(module, func: func)
-	let needsFrame = func.stackSize > 0 or makesCall or usedCallee.count() > 0
-	if not needsFrame 'frameless'
-		return
-	end 'frameless'
 
 	let frameBytes = computeFrameBytes(func, makesCall: makesCall, pushCount: usedCallee.count())
 
@@ -73,19 +114,21 @@ function insertFrameForFunction(module TargetModule, func IrFunction)
 end 'insertFrameForFunction'
 
 // The bytes to reserve with `sub rsp, N`.
-//   • A CALLER must leave rsp 16-byte aligned AT the call. Entry rsp ≡ 8 (mod 16); each
-//     of `pushCount` callee-saved pushes moves it by 8, and the `sub` must land it on ≡ 0
-//     — so the reservation is ≡ (8 − 8·pushCount) (mod 16): 8 when pushCount is even, 0
-//     when odd. It must also cover shadow space + locals + any stack-passed args (0 at
-//     M5). `mrt_start`'s 0x28 IS this formula with pushCount 0, stackSize 0 (32 + 8).
-//   • A LEAF that needs a frame only for locals / callee-saved has no call, so alignment
-//     is irrelevant; it reserves just its (16-rounded) locals. push/pop alone balance rsp.
+//   • A CALLER must leave rsp 16-byte aligned AT the call. Entry rsp ≡ 8 (mod 16) — the
+//     `call` that reached us pushed the return address. Every push then moves it by 8, and
+//     the `sub` must land it on ≡ 0. The pushes are `push rbp` PLUS the `pushCount`
+//     callee-saved ones, which is the whole reason the frame pointer appears in this
+//     arithmetic: it is one more push, so it INVERTS the parity the reservation must
+//     correct for. It must also cover shadow space + locals + any stack-passed args (0 at
+//     M5). `mrt_start`'s hand-built frame IS this formula with pushCount 0, stackSize 0.
+//   • A LEAF has no call, so alignment is irrelevant; it reserves just its (16-rounded)
+//     locals — 0 for the leaves that have none. push/pop alone balance rsp.
 function computeFrameBytes(func IrFunction, makesCall bool, pushCount RegCount) returns StackSize
 	if not makesCall 'leaf'
 		return alignUp(func.stackSize, alignment: StackFrameAlignment)
 	end 'leaf'
 	let base = func.stackSize + func.outgoingArgSize + ShadowSpaceBytes
-	let targetMod = frameAlignTarget(pushCount)
+	let targetMod = frameAlignTarget(pushCount + FramePointerPushCount)
 	return roundUpToMod(base, targetMod: targetMod, modulus: StackFrameAlignment)
 end 'computeFrameBytes'
 
@@ -107,9 +150,9 @@ export function spillSlotBaseDisp(module TargetModule, func IrFunction) returns 
 	return 0
 end 'spillSlotBaseDisp'
 
-// The `sub rsp` size's required residue mod 16 for a caller with `pushCount` callee-saved
-// pushes: 8 when even (entry rsp ≡ 8 stays ≡ 8 after an even number of pushes, so an 8
-// (mod 16) sub reaches ≡ 0), 0 when odd.
+// The `sub rsp` size's required residue mod 16 for a caller with `pushCount` TOTAL pushes
+// (the frame pointer's own included — see `computeFrameBytes`): 8 when even (entry rsp ≡ 8
+// stays ≡ 8 after an even number of pushes, so an 8 (mod 16) sub reaches ≡ 0), 0 when odd.
 function frameAlignTarget(pushCount RegCount) returns StackSize
 	if pushCount mod 2 == 0 'even'
 		return 8
@@ -206,9 +249,17 @@ function physRegBit(vreg X64VReg) returns RegMask
 	end 'v'
 end 'physRegBit'
 
-// Prepend the callee-saved pushes then the frame `sub` to the entry block, so at runtime
-// they run push-first then sub. Built by inserting at index 0 in reverse (`sub` first,
-// then each push before it) so the final order is push₀ … pushₙ, sub.
+// Prepend the frame-pointer setup, then the callee-saved pushes, then the frame `sub` to
+// the entry block, so at runtime they run in that order. Built by inserting at index 0 in
+// REVERSE (`sub` first, then each push before it, then the frame pointer before them all),
+// so the final order is: push rbp, mov rbp/rsp, push₀ … pushₙ, sub.
+//
+// The frame pointer is established FIRST, before any callee-saved push, and that ordering
+// is what makes the chain well-formed: at `mov rbp, rsp` the only things below the return
+// address are the caller's saved rbp, so `[rbp]` is the caller's frame pointer and
+// `[rbp+8]` is the return address — the two loads `mrt_panic_walk_frames` does. Pushing a
+// callee-saved register first would bury the return address one slot deeper per push, and
+// the walker has no way to know how many.
 function insertPrologueAtEntry(module TargetModule, block IrBlock, usedCallee X64RegisterArray, frameBytes StackSize)
 	if frameBytes > 0 'reserve'
 		prependOp(module, block: block, op: TargetOp.prologue(frameBytes))
@@ -217,11 +268,22 @@ function insertPrologueAtEntry(module TargetModule, block IrBlock, usedCallee X6
 		let reg = try usedCallee.get(usedCallee.count() - 1 - ri) otherwise panic("insertPrologueAtEntry: usedCallee.get OOB")
 		prependOp(module, block: block, op: TargetOp.pushReg(reg))
 	end 'eachPushRev'
+	prependOp(module, block: block, op: framePointerSetupOp())
+	prependOp(module, block: block, op: TargetOp.pushReg(X64Register.rbp))
 end 'insertPrologueAtEntry'
 
-// Append the frame teardown before the `ret` terminator: release the frame (`add rsp`),
-// then pop the callee-saved registers in REVERSE push order (LIFO), so the caller's
-// values are restored. Appended to the body, which runs before the `ret` terminator.
+// Append the frame teardown before the `ret` terminator, mirroring the prologue exactly in
+// reverse: release the frame (`add rsp`), pop the callee-saved registers in REVERSE push
+// order (LIFO), then restore the caller's frame pointer. Appended to the body, which runs
+// before the `ret` terminator.
+//
+// `pop rbp` is reached with rsp back at the value `mov rbp, rsp` captured, because the
+// `add rsp` and the pops undo the `sub` and the pushes one for one. (v1 and the C#
+// reference instead spell the epilogue `mov rsp, rbp; pop rbp`, which restores rsp from the
+// frame pointer rather than by balanced arithmetic — but that form CANNOT also restore the
+// callee-saved registers, which sit below rbp and would be skipped over. shv2 pushes them
+// after the frame pointer, so it unwinds them explicitly and the balance is what carries
+// rsp home.)
 function appendEpilogueBeforeReturn(module TargetModule, block IrBlock, usedCallee X64RegisterArray, frameBytes StackSize)
 	if frameBytes > 0 'release'
 		module.appendOp(block, op: TargetOp.epilogue(frameBytes))
@@ -230,7 +292,17 @@ function appendEpilogueBeforeReturn(module TargetModule, block IrBlock, usedCall
 		let reg = try usedCallee.get(usedCallee.count() - 1 - ri) otherwise panic("appendEpilogueBeforeReturn: usedCallee.get OOB")
 		module.appendOp(block, op: TargetOp.popReg(reg))
 	end 'eachPopRev'
+	module.appendOp(block, op: TargetOp.popReg(X64Register.rbp))
 end 'appendEpilogueBeforeReturn'
+
+// `mov rbp, rsp` — the instruction that makes rbp name this frame. Reuses the existing
+// 64-bit reg-reg move rather than minting a TargetOp variant for it: the bytes are an
+// ordinary `mov r/m64, r64`, and a new variant would have to be band-appended for no
+// encoding it does not already have. Shared by this pass and `mrt_start`'s hand-built
+// frame, so the two cannot spell the frame's defining instruction differently.
+export function framePointerSetupOp() returns TargetOp
+	return TargetOp.movRegReg(X64VReg.physical(X64Register.rbp), srcReg: X64VReg.physical(X64Register.rsp))
+end 'framePointerSetupOp'
 
 // Insert `op` at the front of `block`'s op list (a fresh `module.ops` slot). The shared
 // "prepend a new op" helper the prologue's pushes and `sub` both use.

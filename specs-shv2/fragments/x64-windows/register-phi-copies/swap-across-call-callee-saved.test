@@ -28,16 +28,21 @@ ExitCode: 0
 ---
 func @sink {
   entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
     x64.movRegReg r8, rcx
+    x64.popReg rbp
     x64.ret
 }
 
 func @swapAcrossCall {
   entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.pushReg r12
     x64.pushReg r13
-    x64.prologue 32
+    x64.prologue 40
     x64.leaRegRegImm32 rbx, rcx, 1
     x64.leaRegRegImm32 r12, rcx, 2
     x64.movRegImm32 r13, 0
@@ -55,16 +60,19 @@ func @swapAcrossCall {
   whileexit:
     x64.imulRegRegImm32 rax, rbx, 10
     x64.leaRegRegReg r8, rax, r12
-    x64.epilogue 32
+    x64.epilogue 40
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
+    x64.popReg rbp
     x64.ret
 }
 
 func @main {
   entry:
-    x64.prologue 40
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
     x64.movRegImm32 rcx, 0
     x64.callDirect swapAcrossCall
     x64.cmpRegImm32 r8, 21
@@ -72,10 +80,12 @@ func @main {
     x64.jmp ifcont
   ok:
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
+    x64.epilogue 32
+    x64.popReg rbp
     x64.ret
   ifcont:
     x64.movRegImm32 r8, 99
-    x64.epilogue 40
+    x64.epilogue 32
+    x64.popReg rbp
     x64.ret
 }

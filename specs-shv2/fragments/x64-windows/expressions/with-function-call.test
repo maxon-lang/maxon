@@ -15,17 +15,23 @@ ExitCode: 12
 ---
 func @main {
   entry:
-    x64.prologue 40
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
     x64.movRegImm32 rcx, 3
     x64.movRegImm32 rdx, 4
     x64.callDirect add
     x64.leaRegRegImm32 r8, r8, 5
-    x64.epilogue 40
+    x64.epilogue 32
+    x64.popReg rbp
     x64.ret
 }
 
 func @add {
   entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
     x64.leaRegRegReg r8, rcx, rdx
+    x64.popReg rbp
     x64.ret
 }

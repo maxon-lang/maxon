@@ -22,15 +22,20 @@ ExitCode: 0
 ---
 func @sink {
   entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
     x64.leaRegRegImm32 r8, rcx, 1
+    x64.popReg rbp
     x64.ret
 }
 
 func @f {
   entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.pushReg r12
-    x64.prologue 40
+    x64.prologue 32
     x64.leaRegRegImm32 rbx, rcx, 100
     x64.movRegImm32 rcx, 7
     x64.movRegReg rax, rbx
@@ -41,15 +46,18 @@ func @f {
     x64.callDirect sink
     x64.leaRegRegReg rax, rbx, r12
     x64.leaRegRegReg r8, rax, r8
-    x64.epilogue 40
+    x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx
+    x64.popReg rbp
     x64.ret
 }
 
 func @main {
   entry:
-    x64.prologue 40
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
     x64.movRegImm32 rcx, 0
     x64.callDirect f
     x64.cmpRegImm32 r8, 118
@@ -57,10 +65,12 @@ func @main {
     x64.jmp ifcont
   ok:
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
+    x64.epilogue 32
+    x64.popReg rbp
     x64.ret
   ifcont:
     x64.movRegImm32 r8, 99
-    x64.epilogue 40
+    x64.epilogue 32
+    x64.popReg rbp
     x64.ret
 }
