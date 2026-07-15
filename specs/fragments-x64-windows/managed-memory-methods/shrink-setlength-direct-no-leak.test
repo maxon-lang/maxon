@@ -19,32 +19,32 @@ module {
     x64.prologue stack_size=96
     x64.call StrArray.create
     x64.mov [rbp-8], rax
-    x64.lea_rdata rax, [__str_0]
-    x64.mov rcx, rax
-    x64.mov rdx, 58
+    x64.lea_rdata rcx, [__str_0]
+    x64.mov rdx, rcx
+    x64.mov rcx, 58
     x64.lea_func rbx, [__destruct_String]
     x64.mov rsi, rbx
-    x64.mov [rbp-56], rcx
+    x64.mov [rbp-56], rdx
     x64.mov rdx, rsi
     x64.mov rcx, 48
     x64.mov r8, 2
     x64.call mm_alloc
     x64.mov [rbp-16], rax
-    x64.mov rdi, -2
-    x64.mov r8, 1
-    x64.xor r9d, r9d
+    x64.mov rax, -2
+    x64.mov rcx, 1
+    x64.xor edx, edx
+    x64.mov rbx, [rbp-16]
+    x64.mov rsi, [rbp-56]
+    x64.mov [rbx+0], rsi
+    x64.mov rdi, [rbp-16]
+    x64.mov r8, 58
+    x64.mov [rdi+8], r8
+    x64.mov r9, [rbp-16]
+    x64.mov [r9+16], rax
     x64.mov rax, [rbp-16]
-    x64.mov rcx, [rbp-56]
-    x64.mov [rax+0], rcx
+    x64.mov [rax+24], rcx
     x64.mov rax, [rbp-16]
-    x64.mov rcx, 58
-    x64.mov [rax+8], rcx
-    x64.mov rax, [rbp-16]
-    x64.mov [rax+16], rdi
-    x64.mov rax, [rbp-16]
-    x64.mov [rax+24], r8
-    x64.mov rax, [rbp-16]
-    x64.mov [rax+32], r9
+    x64.mov [rax+32], rdx
     x64.mov rax, 1
     x64.mov rcx, [rbp-16]
     x64.mov [rcx+40], rax
@@ -131,8 +131,7 @@ module {
     x64.mov rdx, [rbp-32]
     x64.call StrArray.push
     x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+0]
-    x64.mov [rbp-40], rcx
+    x64.mov [rbp-40], rax
     x64.mov rax, 1
     x64.mov rcx, [rbp-40]
     x64.mov rdx, [rcx+16]
@@ -181,15 +180,14 @@ module {
     x64.call mrt_panic
   otherwise_continue_0:
     x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+0]
-    x64.mov [rbp-48], rcx
-    x64.mov rdx, [rbp-48]
-    x64.mov rbx, [rdx+8]
-    x64.xor esi, esi
-    x64.mov edi, 4294967295
-    x64.cmp rbx, rdi
+    x64.mov [rbp-48], rax
+    x64.mov rcx, [rbp-48]
+    x64.mov rdx, [rcx+8]
+    x64.xor ebx, ebx
+    x64.mov esi, 4294967295
+    x64.cmp rdx, rsi
     x64.jg main.__range_panic_0
-    x64.cmp rbx, rsi
+    x64.cmp rdx, rbx
     x64.jl main.__range_panic_0
     x64.jmp main.__range_ok_0
   __range_panic_0:
@@ -199,9 +197,9 @@ module {
   __range_ok_0:
     x64.xor eax, eax
     x64.mov ecx, 4294967295
-    x64.cmp rbx, rcx
+    x64.cmp rdx, rcx
     x64.jg main.__range_panic_1
-    x64.cmp rbx, rax
+    x64.cmp rdx, rax
     x64.jl main.__range_panic_1
     x64.jmp main.__range_ok_1
   __range_panic_1:
@@ -209,9 +207,9 @@ module {
     x64.mov rcx, rax
     x64.call mrt_panic
   __range_ok_1:
-    x64.mov rdx, [rbp-32]
-    x64.mov [rbp-96], rbx
-    x64.test rdx, rdx
+    x64.mov rdi, [rbp-32]
+    x64.mov [rbp-96], rdx
+    x64.test rdi, rdi
     x64.jz __nonnull_skip_0
     x64.mov rcx, [rbp-32]
     x64.call mm_decref
@@ -242,12 +240,35 @@ module {
     x64.prologue stack_size=16
     x64.mov [rbp-8], rcx
     x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+0]
+    x64.mov rcx, [rax+16]
+    x64.mov rdx, -1
+    x64.cmp rcx, rdx
+    x64.jne __destruct_StrArray.check_owned_0
+  slice_cleanup_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+32]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
     x64.jz __nonnull_skip_0
     x64.call mm_decref
     x64.label __nonnull_skip_0
+    x64.jmp __destruct_StrArray.skip_buf_0
+  check_owned_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+16]
+    x64.mov rdx, -2
+    x64.cmp rcx, rdx
+    x64.je __destruct_StrArray.skip_buf_0
+  free_buf_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref_managed_elements
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, [rcx+0]
+    x64.mov rcx, rdx
+    x64.call mm_raw_free
+    x64.jmp __destruct_StrArray.skip_buf_0
+  skip_buf_0:
     x64.jmp __destruct_StrArray.done
   done:
     x64.epilogue

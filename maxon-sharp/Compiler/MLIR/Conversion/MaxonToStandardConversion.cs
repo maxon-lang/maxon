@@ -335,6 +335,35 @@ public static partial class MaxonToStandardConversion {
           }
         }
 
+        // Pre-scan: envelope collapse for fused Array/Vector. An array literal `[a,b,c]` and an
+        // empty `Array.create()` both lower as `Array{managed: M}` where M is a FRESH __ManagedMemory
+        // struct literal (holding element_size and, for a literal, the element buffer). Since the
+        // fused Array IS its __ManagedMemory, M's separate allocation is redundant: the wrapper's
+        // construction writes M's fields inline (and sets up the buffer on itself). Map the wrapper's
+        // result id -> M's op, and mark M for suppression so it never allocates. `Self{managed: X}`
+        // where X is a REAL source (init/clone/slice) is NOT absorbed — it becomes a view instead.
+        var absorbedManagedLit = new Dictionary<int, MaxonStructLiteralOp>();
+        var suppressedStructLitIds = new HashSet<int>();
+        {
+          var structLitByResult = new Dictionary<int, MaxonStructLiteralOp>();
+          foreach (var op in block.Operations)
+            if (op is MaxonStructLiteralOp sl) structLitByResult[sl.Result.Id] = sl;
+          foreach (var op in block.Operations) {
+            if (op is not MaxonStructLiteralOp wrapper) continue;
+            if (!module.TypeDefs.TryGetValue(wrapper.TypeName, out var wtd)
+                || wtd is not IrStructType wst
+                || !wst.ConformingInterfaces.Contains("BuiltinArrayLiteral")) continue;
+            MaxonValue? managedVal = null;
+            foreach (var (fn, fv) in wrapper.FieldValues) if (fn == "managed") managedVal = fv;
+            if (managedVal != null
+                && structLitByResult.TryGetValue(managedVal.Id, out var innerLit)
+                && TypeAliasInfo.IsManagedMemoryType(innerLit.TypeName, module.TypeAliasSources)) {
+              absorbedManagedLit[wrapper.Result.Id] = innerLit;
+              suppressedStructLitIds.Add(innerLit.Result.Id);
+            }
+          }
+        }
+
         // Pre-scan: detect contiguous zero-init array element sequences that can
         // be replaced with a single StdBulkZeroOp during lowering.
         var bulkZeroSkipOps = new HashSet<MaxonOp>();
@@ -922,20 +951,39 @@ public static partial class MaxonToStandardConversion {
               if (module.TypeDefs[structLitOp.TypeName] is not IrStructType structType)
                 throw new InvalidOperationException($"StructLiteral type '{structLitOp.TypeName}' resolved to {module.TypeDefs[structLitOp.TypeName].GetType().Name} in func '{func.Name}'");
 
-              // Envelope collapse: a fused String/Character IS its __ManagedMemory. Construction
-              // does not allocate a fresh record — it aliases (or, for a bare source, views) the
-              // `managed` value. Intercept before the stack/heap generic paths, which would wrongly
-              // store the managed POINTER at offset 0.
-              if (structType.ConformingInterfaces.Contains("BuiltinStringLiteral")
-                  || structType.ConformingInterfaces.Contains("BuiltinCharLiteral")) {
-                LowerFusedStringConstruction(structLitOp,
-                  structType.ConformingInterfaces.Contains("BuiltinStringLiteral"),
-                  newBlock, valueMap, varTypes, temps, inlineTargets, func.Name);
-                break;
+              // Suppressed inner __ManagedMemory struct literal of a fused Array/Vector literal /
+              // create() (see the absorb pre-scan). Its wrapper writes its fields inline and owns
+              // the buffer, so this record must never allocate.
+              if (suppressedStructLitIds.Contains(structLitOp.Result.Id)) break;
+
+              // Envelope collapse: a fused String/Character/Array IS its __ManagedMemory. Construction
+              // does not allocate a nested record — it writes the managed fields inline. Intercept
+              // before the stack/heap generic paths, which would wrongly store a POINTER at offset 0.
+              //
+              //  - An absorbed Array/Vector literal or create() (`Array{managed: M}`, M a fresh
+              //    __ManagedMemory struct literal) falls through to the HEAP path below, which now
+              //    treats a fused array as buffer-direct and stores M's fields inline into self.
+              //  - Everything else — String/Character, and `Array{managed: X}` where X is a real
+              //    source — is a zero-copy slice VIEW (fresh record, capacity=-1, parent=X, incref X).
+              bool isFusedArrayLiteral = false;
+              MaxonStructLiteralOp? absorbedInnerManaged = null;
+              if (structType.ConformsToBuiltinManagedWrapper) {
+                if (structType.ConformingInterfaces.Contains("BuiltinArrayLiteral")
+                    && absorbedManagedLit.TryGetValue(structLitOp.Result.Id, out var inner)) {
+                  isFusedArrayLiteral = true;
+                  absorbedInnerManaged = inner;
+                } else {
+                  LowerFusedWrapperConstruction(structLitOp,
+                    structType.ConformingInterfaces.Contains("BuiltinStringLiteral"),
+                    structType.ConformingInterfaces.Contains("BuiltinArrayLiteral"),
+                    newBlock, valueMap, varTypes, temps, inlineTargets, func.Name);
+                  break;
+                }
               }
 
-              // Stack allocation path: decompose struct into named field variables
-              if (module.StackEligibleStructs.Contains(structLitOp.Result.Id)) {
+              // Stack allocation path: decompose struct into named field variables.
+              // Fused array literals are refcounted heap records — never stack-eligible.
+              if (!isFusedArrayLiteral && module.StackEligibleStructs.Contains(structLitOp.Result.Id)) {
                 // Stack-allocate: reserve contiguous stack space and use a pointer,
                 // identical to heap structs but without mm_alloc/refcounting.
                 // Find the target variable name from the immediately following declaration assign
@@ -987,6 +1035,15 @@ public static partial class MaxonToStandardConversion {
               EmitStore(newBlock, structPtr, tempName, varTypes);
 
               foreach (var (fieldName, fieldVal) in structLitOp.FieldValues) {
+                // Fused Array/Vector: the inline `managed` __ManagedMemory occupies offsets 0..32 of
+                // self, not an 8-byte pointer. Write the absorbed inner struct literal's five fields
+                // (buffer/length/capacity/element_size/parent_ptr) directly into self; the buffer and
+                // capacity are then overwritten by the buffer set-up below (for a tagged literal).
+                if (isFusedArrayLiteral && fieldName == "managed") {
+                  foreach (var (mfName, mfVal) in absorbedInnerManaged!.FieldValues)
+                    EmitStructFieldStore(newBlock, valueMap[mfVal], tempName, ManagedFieldOffsetByName(mfName), IrType.I64, varTypes);
+                  continue;
+                }
                 var field = structType.GetField(fieldName)!;
                 if (valueMap.TryGetValue(fieldVal, out var nestedStructNameSv) && nestedStructNameSv is StdHeapPtr nestedStructNameHp) {
                   // Struct or associated-value enum field: both are heap pointers now
@@ -1007,9 +1064,18 @@ public static partial class MaxonToStandardConversion {
                 }
               }
 
+              // A fused Array/Vector literal has the same __ManagedMemory layout as a bare
+              // __ManagedMemory (buffer@0 … parent_ptr@32), so the buffer/element_size machinery
+              // below operates on `self` directly rather than on a nested `managed` pointer.
+              bool managedMemoryLayout = TypeAliasInfo.IsManagedMemoryType(structLitOp.TypeName, module.TypeAliasSources)
+                || isFusedArrayLiteral;
+              // A bit-packed bool buffer uses element_size==0 as its sentinel. For an absorbed array
+              // the flag lives on the inner managed literal; for a bare literal it is on this op.
+              bool isBitPackedLayout = structLitOp.IsBitPacked || (absorbedInnerManaged?.IsBitPacked ?? false);
+
               // Runtime guard: panic if __ManagedMemory is created with element_size == 0
               // (skip for bit-packed bools where element_size = 0 is the valid sentinel)
-              if (TypeAliasInfo.IsManagedMemoryType(structLitOp.TypeName, module.TypeAliasSources) && !structLitOp.IsBitPacked) {
+              if (managedMemoryLayout && !isBitPackedLayout) {
                 var elemSizeCheck = (StdI64)EmitStructFieldLoad(newBlock, tempName, ManagedFieldElementSize, IrType.I64, varTypes);
                 var zeroConst = new StdConstI64Op(0);
                 newBlock.AddOp(zeroConst);
@@ -1083,7 +1149,7 @@ public static partial class MaxonToStandardConversion {
 
                   // Load element_size from the managed memory struct that was already lowered
                   StdI64 elemSizeVal;
-                  if (TypeAliasInfo.IsManagedMemoryType(structLitOp.TypeName, module.TypeAliasSources)) {
+                  if (managedMemoryLayout) {
                     elemSizeVal = (StdI64)EmitStructFieldLoad(newBlock, tempName, ManagedFieldElementSize, IrType.I64, varTypes);
                   } else {
                     var managedFieldForSize = structType.GetField("managed")!;
@@ -1097,7 +1163,7 @@ public static partial class MaxonToStandardConversion {
                   newBlock.AddOp(countOp);
                   StdI64 totalSize;
                   StdI64 copySize;
-                  if (structLitOp.IsBitPacked) {
+                  if (isBitPackedLayout) {
                     // Bit-packed bools: byte size = (count + 7) >> 3
                     totalSize = ComputeBitPackedByteSize(newBlock, countOp.Result);
                     // Stack still has 1 byte per element, so copy count bytes from stack
@@ -1111,7 +1177,7 @@ public static partial class MaxonToStandardConversion {
 
                   // Allocate heap buffer as raw memory (no refcount header)
                   var heapBuf = EmitRawAlloc(newBlock, totalSize, label: "cow.buf", scopeName: _currentFuncName);
-                  if (structLitOp.IsBitPacked) {
+                  if (isBitPackedLayout) {
                     // Pack bool values from stack (byte-per-element) into bit-packed heap buffer.
                     // Zero the heap buffer first, then set each bit from the stack elements.
                     // Since count is known at compile time, we unroll the loop.
@@ -1146,10 +1212,9 @@ public static partial class MaxonToStandardConversion {
                 // skipZeroInit buffers are stack-allocated (not heap) — capacity must be -2 so the destructor
                 // does not call mm_raw_free on a stack address (which would corrupt the process heap).
                 bool bufferIsWritable = !isConstantBuffer && !structLitOp.SkipZeroInit;
-                if (TypeAliasInfo.IsManagedMemoryType(structLitOp.TypeName, module.TypeAliasSources)) {
-                  // buffer is directly on this struct at offset 0
-                  var bufferField = structType.GetField("buffer")!;
-                  EmitStructFieldStore(newBlock, rdataPtr, tempName, bufferField.Offset, IrType.I64, varTypes);
+                if (managedMemoryLayout) {
+                  // buffer is directly on this record at offset 0 (bare __ManagedMemory or fused Array)
+                  EmitStructFieldStore(newBlock, rdataPtr, tempName, ManagedFieldBuffer, IrType.I64, varTypes);
                   var capOp = new StdConstI64Op(bufferIsWritable ? structLitOp.ArrayLiteralCount : -2);
                   newBlock.AddOp(capOp);
                   EmitStructFieldStore(newBlock, capOp.Result, tempName, ManagedFieldCapacity, IrType.I64, varTypes);
@@ -1367,12 +1432,11 @@ public static partial class MaxonToStandardConversion {
               // For struct-typed self fields, load the nested heap pointer and store in a temp var.
               // Cache the load so repeated references to the same self field reuse the temp var.
               string resolvedName;
-              // Fused String/Character: a bare `managed` reference IS `self` (the inline
+              // Fused String/Character/Array: a bare `managed` reference IS `self` (the inline
               // __ManagedMemory sits at offset 0), so it resolves to the receiver pointer itself,
-              // typed as the owner so construction can alias it as a 48/40-byte record.
+              // typed as the owner so construction can view it as a 48/40-byte record.
               if (structVarRef.VarName == "managed" && isStructInstanceMethod && selfStructType != null
-                  && (selfStructType.ConformingInterfaces.Contains("BuiltinStringLiteral")
-                      || selfStructType.ConformingInterfaces.Contains("BuiltinCharLiteral"))) {
+                  && selfStructType.ConformsToBuiltinManagedWrapper) {
                 valueMap[structVarRef.Result] = new StdHeapPtr(structVarRef.Result.Id, selfStructType.Name, "self");
                 break;
               }
@@ -1428,14 +1492,14 @@ public static partial class MaxonToStandardConversion {
                 }
               }
 
-              // Fused String/Character: `self.managed` IS `self`. The managed __ManagedMemory
+              // Fused String/Character/Array: `self.managed` IS `self`. The managed __ManagedMemory
               // is embedded at offset 0, so its address equals the receiver pointer — yield that
-              // pointer rather than loading a nested one. Typed as the owner (String/Character) so
-              // slice sizing and construction can tell it is a 48/40-byte record, not a bare 40-byte
-              // __ManagedMemory. Byte-level managed ops are element-type-agnostic, so this is safe.
+              // pointer rather than loading a nested one. Typed as the owner (String/Character/Array)
+              // so slice sizing, construction and cursor creation can tell it is a 48/40-byte record,
+              // not a bare 40-byte __ManagedMemory. For an Array the type carries the real `Element`
+              // param, so element-typed managed ops (push/get/decref) see the correct stride.
               if (parentStructType != null && fieldAccess.FieldName == "managed"
-                  && (parentStructType.ConformingInterfaces.Contains("BuiltinStringLiteral")
-                      || parentStructType.ConformingInterfaces.Contains("BuiltinCharLiteral"))) {
+                  && parentStructType.ConformsToBuiltinManagedWrapper) {
                 var managedTempName = temps.CreateTemp("managed", fieldAccess.Result.Id, parentTypeName!, OwnershipFlags.Borrowed);
                 var selfPtr = EmitLoad(newBlock, structName, varTypes);
                 EmitStore(newBlock, selfPtr, managedTempName, varTypes);
@@ -1446,13 +1510,12 @@ public static partial class MaxonToStandardConversion {
                 break;
               }
 
-              // Fused String/Character expose their inline __ManagedMemory fields (length, buffer,
-              // capacity, ...) at the same offsets, but the String/Character type itself declares
-              // only `managed`/`isAsciiFlag`. Resolve those fields against the op's declared parent
-              // type (__ManagedMemory), whose layout matches the embedded record byte-for-byte.
+              // Fused String/Character/Array expose their inline __ManagedMemory fields (length,
+              // buffer, capacity, ...) at the same offsets, but the wrapper type itself declares
+              // only `managed` (+ `isAsciiFlag` for String). Resolve those fields against the op's
+              // declared parent type (__ManagedMemory), whose layout matches the embedded record.
               if (fieldDef == null && parentStructType != null
-                  && (parentStructType.ConformingInterfaces.Contains("BuiltinStringLiteral")
-                      || parentStructType.ConformingInterfaces.Contains("BuiltinCharLiteral"))
+                  && parentStructType.ConformsToBuiltinManagedWrapper
                   && module.TypeDefs.TryGetValue(fieldAccess.TypeName, out var declaredMmDef)
                   && declaredMmDef is IrStructType declaredMmStruct) {
                 fieldDef = declaredMmStruct.GetField(fieldAccess.FieldName);
@@ -2291,10 +2354,10 @@ public static partial class MaxonToStandardConversion {
                   if (mapped is StdHeapPtr hp && hp.VarName != null) {
                     var typeName = hp.TypeName;
                     // Load buffer from managed struct via heap pointer indirection. A fused
-                    // String/Character IS its own __ManagedMemory (buffer at offset 0), so it is
-                    // handled identically to a bare __ManagedMemory here.
+                    // String/Character/Array IS its own __ManagedMemory (buffer at offset 0), so it
+                    // is handled identically to a bare __ManagedMemory here.
                     if (TypeAliasInfo.IsManagedMemoryType(typeName, module.TypeAliasSources)
-                        || IsFusedStringType(typeName) || IsFusedCharType(typeName)) {
+                        || IsFusedManagedWrapper(typeName)) {
                       // hp.VarName IS the __ManagedMemory heap pointer, buffer at offset 0
                       return (StdValue)(StdI64)EmitStructFieldLoad(newBlock, hp.VarName, ManagedFieldBuffer, IrType.I64, varTypes);
                     } else if (typeName == "__ManagedFile") {
@@ -2532,6 +2595,25 @@ public static partial class MaxonToStandardConversion {
   }
 
   /// <summary>
+  /// True when a managed-memory-shaped type's Element is genuinely heap-allocated, so its buffer
+  /// holds pointers that must be mm_decref'd before the buffer is freed. Pairs the element-type
+  /// probe (HasManagedElementType) with a resolve-through-TypeDefs cross-check that rejects stale
+  /// non-heap placeholders (e.g. RegInt registered as an IrStructType rather than a ranged prim).
+  /// Shared by the bare-__ManagedMemory destructor and the fused Array/Vector destructor.
+  /// </summary>
+  private static bool ComputeNeedsManagedElementCleanup(string typeName, IrStructType resolved) {
+    if (!HasManagedElementType(typeName, resolved)) return false;
+    var typeAliasSources = _resultModule!.TypeAliasSources;
+    IrType? elemType = null;
+    if (typeAliasSources.TryGetValue(typeName, out var mmInfo) && mmInfo.TypeParams != null
+        && mmInfo.TypeParams.TryGetValue("Element", out var et))
+      elemType = et;
+    if (elemType == null && resolved.TypeParams.TryGetValue("Element", out var selfEt))
+      elemType = selfEt;
+    return elemType == null || ResolveCanonicalType(elemType).IsHeapAllocated;
+  }
+
+  /// <summary>
   /// Registers a type for destructor generation. Looks up the type in typeDefs and
   /// records its managed fields so a destructor function can be synthesized.
   /// </summary>
@@ -2561,6 +2643,18 @@ public static partial class MaxonToStandardConversion {
         return;
       }
 
+      // Envelope collapse: a fused Array/Vector IS its own __ManagedMemory too, so its destructor
+      // is the SAME raw-buffer dispatch on `self`. Unlike String (raw bytes), an Array's buffer may
+      // hold heap POINTERS (Array with String), which must be mm_decref'd before the buffer is
+      // freed — so NeedsManagedElementCleanup is COMPUTED from the Element type, not hardcoded false.
+      if (structType.ConformingInterfaces.Contains("BuiltinArrayLiteral")) {
+        var resolvedArr = ResolveStructType(structType, typeDefs);
+        _destructorRequests[typeName] = new DestructorRequest(typeName,
+          [(ManagedFieldBuffer, "raw_buffer", true)],
+          NeedsManagedElementCleanup: ComputeNeedsManagedElementCleanup(typeName, resolvedArr));
+        return;
+      }
+
       var resolved = ResolveStructType(structType, typeDefs);
       bool isManagedMemory = TypeAliasInfo.IsManagedMemoryType(typeName, typeAliasSources);
       bool isManagedList = TypeAliasInfo.IsManagedListType(typeName, typeAliasSources);
@@ -2574,23 +2668,8 @@ public static partial class MaxonToStandardConversion {
         return;
       }
 
-      // Check if this __ManagedMemory type holds heap-allocated elements
-      bool needsManagedElementCleanup = isManagedMemory && HasManagedElementType(typeName, resolved);
-
-      // Safety cross-check: verify element type is genuinely heap-allocated after
-      // resolving through TypeDefs (catches stale placeholders like RegInt registered
-      // as IrStructType instead of IrRangedPrimitiveType).
-      if (needsManagedElementCleanup && isManagedMemory) {
-        IrType? elemType = null;
-        if (typeAliasSources.TryGetValue(typeName, out var mmInfo) && mmInfo.TypeParams != null
-            && mmInfo.TypeParams.TryGetValue("Element", out var et))
-          elemType = et;
-        if (elemType == null && resolved.TypeParams.TryGetValue("Element", out var selfEt))
-          elemType = selfEt;
-        if (elemType != null && !ResolveCanonicalType(elemType).IsHeapAllocated) {
-          needsManagedElementCleanup = false;
-        }
-      }
+      // Check if this __ManagedMemory type holds heap-allocated elements (needs per-element decref).
+      bool needsManagedElementCleanup = isManagedMemory && ComputeNeedsManagedElementCleanup(typeName, resolved);
 
       bool isManagedCursor = TypeAliasInfo.IsManagedCursorType(typeName, typeAliasSources);
 

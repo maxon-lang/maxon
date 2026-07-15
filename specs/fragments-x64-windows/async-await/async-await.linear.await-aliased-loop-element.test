@@ -40,7 +40,7 @@ module {
     x64.mov [rbp-104], rdx
     x64.mov rdx, rsi
     x64.mov rcx, 48
-    x64.mov r8, 8
+    x64.mov r8, 7
     x64.call mm_alloc
     x64.mov [rbp-8], rax
     x64.mov rcx, -2
@@ -91,7 +91,7 @@ module {
     x64.mov [rbp-136], rbx
     x64.mov rdx, rdi
     x64.mov rcx, 48
-    x64.mov r8, 8
+    x64.mov r8, 7
     x64.call mm_alloc
     x64.mov [rbp-32], rax
     x64.mov rax, 1
@@ -213,7 +213,7 @@ module {
     x64.mov [rbp-160], rax
     x64.mov rcx, 8
     x64.xor edx, edx
-    x64.mov r8, 11
+    x64.mov r8, 10
     x64.call mm_alloc
     x64.mov [rbp-8], rax
     x64.mov rdi, [rbp-8]
@@ -243,10 +243,9 @@ module {
     x64.jmp main.spawn_0.header
   spawn_0.exit:
     x64.mov rax, [rbp-16]
-    x64.mov rcx, [rax+0]
-    x64.mov [rbp-40], rcx
-    x64.xor edx, edx
-    x64.mov [rbp-48], rdx
+    x64.mov [rbp-40], rax
+    x64.xor ecx, ecx
+    x64.mov [rbp-48], rcx
     x64.jmp main.await_0.header
   await_0.header:
     x64.mov rax, [rbp-40]
@@ -312,7 +311,7 @@ module {
     x64.mov [rbp-184], r9
     x64.mov rdx, rdi
     x64.mov rcx, 48
-    x64.mov r8, 8
+    x64.mov r8, 7
     x64.call mm_alloc
     x64.mov [rbp-96], rax
     x64.mov rax, 1
@@ -539,7 +538,7 @@ module {
     x64.epilogue
     x64.ret
   }
-  func @__destruct___ManagedMemory_Character(ptr: i64) {
+  func @__destruct___Array_Character(ptr: i64) {
   entry:
     x64.prologue stack_size=16
     x64.mov [rbp-8], rcx
@@ -547,7 +546,7 @@ module {
     x64.mov rcx, [rax+16]
     x64.mov rdx, -1
     x64.cmp rcx, rdx
-    x64.jne __destruct___ManagedMemory_Character.check_owned_0
+    x64.jne __destruct___Array_Character.check_owned_0
   slice_cleanup_0:
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rax+32]
@@ -556,13 +555,13 @@ module {
     x64.jz __nonnull_skip_0
     x64.call mm_decref
     x64.label __nonnull_skip_0
-    x64.jmp __destruct___ManagedMemory_Character.skip_buf_0
+    x64.jmp __destruct___Array_Character.skip_buf_0
   check_owned_0:
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rax+16]
     x64.mov rdx, -2
     x64.cmp rcx, rdx
-    x64.je __destruct___ManagedMemory_Character.skip_buf_0
+    x64.je __destruct___Array_Character.skip_buf_0
   free_buf_0:
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rbp-8]
@@ -571,25 +570,9 @@ module {
     x64.mov rdx, [rcx+0]
     x64.mov rcx, rdx
     x64.call mm_raw_free
-    x64.jmp __destruct___ManagedMemory_Character.skip_buf_0
+    x64.jmp __destruct___Array_Character.skip_buf_0
   skip_buf_0:
-    x64.jmp __destruct___ManagedMemory_Character.done
-  done:
-    x64.epilogue
-    x64.ret
-  }
-  func @__destruct_Array(ptr: i64) {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-8], rcx
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+0]
-    x64.mov [rbp-16], rcx
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_0
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
-    x64.jmp __destruct_Array.done
+    x64.jmp __destruct___Array_Character.done
   done:
     x64.epilogue
     x64.ret
@@ -742,26 +725,10 @@ module {
     x64.prologue stack_size=16
     x64.mov [rbp-8], rcx
     x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+0]
-    x64.mov [rbp-16], rcx
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_0
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
-    x64.jmp __destruct_Array_Character.done
-  done:
-    x64.epilogue
-    x64.ret
-  }
-  func @__destruct___ManagedMemory_SetSlotState(ptr: i64) {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-8], rcx
-    x64.mov rax, [rbp-8]
     x64.mov rcx, [rax+16]
     x64.mov rdx, -1
     x64.cmp rcx, rdx
-    x64.jne __destruct___ManagedMemory_SetSlotState.check_owned_0
+    x64.jne __destruct_Array_Character.check_owned_0
   slice_cleanup_0:
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rax+32]
@@ -770,20 +737,24 @@ module {
     x64.jz __nonnull_skip_0
     x64.call mm_decref
     x64.label __nonnull_skip_0
-    x64.jmp __destruct___ManagedMemory_SetSlotState.skip_buf_0
+    x64.jmp __destruct_Array_Character.skip_buf_0
   check_owned_0:
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rax+16]
     x64.mov rdx, -2
     x64.cmp rcx, rdx
-    x64.je __destruct___ManagedMemory_SetSlotState.skip_buf_0
+    x64.je __destruct_Array_Character.skip_buf_0
   free_buf_0:
     x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+0]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref_managed_elements
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, [rcx+0]
+    x64.mov rcx, rdx
     x64.call mm_raw_free
-    x64.jmp __destruct___ManagedMemory_SetSlotState.skip_buf_0
+    x64.jmp __destruct_Array_Character.skip_buf_0
   skip_buf_0:
-    x64.jmp __destruct___ManagedMemory_SetSlotState.done
+    x64.jmp __destruct_Array_Character.done
   done:
     x64.epilogue
     x64.ret
@@ -793,26 +764,10 @@ module {
     x64.prologue stack_size=16
     x64.mov [rbp-8], rcx
     x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+0]
-    x64.mov [rbp-16], rcx
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_0
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
-    x64.jmp __destruct_StateArray.done
-  done:
-    x64.epilogue
-    x64.ret
-  }
-  func @__destruct___ManagedMemory_HashValue(ptr: i64) {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-8], rcx
-    x64.mov rax, [rbp-8]
     x64.mov rcx, [rax+16]
     x64.mov rdx, -1
     x64.cmp rcx, rdx
-    x64.jne __destruct___ManagedMemory_HashValue.check_owned_0
+    x64.jne __destruct_StateArray.check_owned_0
   slice_cleanup_0:
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rax+32]
@@ -821,20 +776,20 @@ module {
     x64.jz __nonnull_skip_0
     x64.call mm_decref
     x64.label __nonnull_skip_0
-    x64.jmp __destruct___ManagedMemory_HashValue.skip_buf_0
+    x64.jmp __destruct_StateArray.skip_buf_0
   check_owned_0:
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rax+16]
     x64.mov rdx, -2
     x64.cmp rcx, rdx
-    x64.je __destruct___ManagedMemory_HashValue.skip_buf_0
+    x64.je __destruct_StateArray.skip_buf_0
   free_buf_0:
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rax+0]
     x64.call mm_raw_free
-    x64.jmp __destruct___ManagedMemory_HashValue.skip_buf_0
+    x64.jmp __destruct_StateArray.skip_buf_0
   skip_buf_0:
-    x64.jmp __destruct___ManagedMemory_HashValue.done
+    x64.jmp __destruct_StateArray.done
   done:
     x64.epilogue
     x64.ret
@@ -844,12 +799,31 @@ module {
     x64.prologue stack_size=16
     x64.mov [rbp-8], rcx
     x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+0]
+    x64.mov rcx, [rax+16]
+    x64.mov rdx, -1
+    x64.cmp rcx, rdx
+    x64.jne __destruct_HashSlotArray.check_owned_0
+  slice_cleanup_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+32]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
     x64.jz __nonnull_skip_0
     x64.call mm_decref
     x64.label __nonnull_skip_0
+    x64.jmp __destruct_HashSlotArray.skip_buf_0
+  check_owned_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+16]
+    x64.mov rdx, -2
+    x64.cmp rcx, rdx
+    x64.je __destruct_HashSlotArray.skip_buf_0
+  free_buf_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.call mm_raw_free
+    x64.jmp __destruct_HashSlotArray.skip_buf_0
+  skip_buf_0:
     x64.jmp __destruct_HashSlotArray.done
   done:
     x64.epilogue
@@ -892,87 +866,32 @@ module {
     x64.prologue stack_size=16
     x64.mov [rbp-8], rcx
     x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+0]
+    x64.mov rcx, [rax+16]
+    x64.mov rdx, -1
+    x64.cmp rcx, rdx
+    x64.jne __destruct_ByteArray.check_owned_0
+  slice_cleanup_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+32]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
     x64.jz __nonnull_skip_0
     x64.call mm_decref
     x64.label __nonnull_skip_0
+    x64.jmp __destruct_ByteArray.skip_buf_0
+  check_owned_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+16]
+    x64.mov rdx, -2
+    x64.cmp rcx, rdx
+    x64.je __destruct_ByteArray.skip_buf_0
+  free_buf_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.call mm_raw_free
+    x64.jmp __destruct_ByteArray.skip_buf_0
+  skip_buf_0:
     x64.jmp __destruct_ByteArray.done
-  done:
-    x64.epilogue
-    x64.ret
-  }
-  func @__destruct_ByteBuffer(ptr: i64) {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-8], rcx
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+16]
-    x64.mov rdx, -1
-    x64.cmp rcx, rdx
-    x64.jne __destruct_ByteBuffer.check_owned_0
-  slice_cleanup_0:
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+32]
-    x64.mov [rbp-16], rcx
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_0
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
-    x64.jmp __destruct_ByteBuffer.skip_buf_0
-  check_owned_0:
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+16]
-    x64.mov rdx, -2
-    x64.cmp rcx, rdx
-    x64.je __destruct_ByteBuffer.skip_buf_0
-  free_buf_0:
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+0]
-    x64.call mm_raw_free
-    x64.jmp __destruct_ByteBuffer.skip_buf_0
-  skip_buf_0:
-    x64.jmp __destruct_ByteBuffer.done
-  done:
-    x64.epilogue
-    x64.ret
-  }
-  func @__destruct___ManagedMemory_StrPromise(ptr: i64) {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-8], rcx
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+16]
-    x64.mov rdx, -1
-    x64.cmp rcx, rdx
-    x64.jne __destruct___ManagedMemory_StrPromise.check_owned_0
-  slice_cleanup_0:
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+32]
-    x64.mov [rbp-16], rcx
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_0
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
-    x64.jmp __destruct___ManagedMemory_StrPromise.skip_buf_0
-  check_owned_0:
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+16]
-    x64.mov rdx, -2
-    x64.cmp rcx, rdx
-    x64.je __destruct___ManagedMemory_StrPromise.skip_buf_0
-  free_buf_0:
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rbp-8]
-    x64.call mm_decref_managed_elements
-    x64.mov rcx, [rbp-8]
-    x64.mov rdx, [rcx+0]
-    x64.mov rcx, rdx
-    x64.call mm_raw_free
-    x64.jmp __destruct___ManagedMemory_StrPromise.skip_buf_0
-  skip_buf_0:
-    x64.jmp __destruct___ManagedMemory_StrPromise.done
   done:
     x64.epilogue
     x64.ret
@@ -982,12 +901,35 @@ module {
     x64.prologue stack_size=16
     x64.mov [rbp-8], rcx
     x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+0]
+    x64.mov rcx, [rax+16]
+    x64.mov rdx, -1
+    x64.cmp rcx, rdx
+    x64.jne __destruct_StrPromiseArray.check_owned_0
+  slice_cleanup_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+32]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
     x64.jz __nonnull_skip_0
     x64.call mm_decref
     x64.label __nonnull_skip_0
+    x64.jmp __destruct_StrPromiseArray.skip_buf_0
+  check_owned_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+16]
+    x64.mov rdx, -2
+    x64.cmp rcx, rdx
+    x64.je __destruct_StrPromiseArray.skip_buf_0
+  free_buf_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref_managed_elements
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, [rcx+0]
+    x64.mov rcx, rdx
+    x64.call mm_raw_free
+    x64.jmp __destruct_StrPromiseArray.skip_buf_0
+  skip_buf_0:
     x64.jmp __destruct_StrPromiseArray.done
   done:
     x64.epilogue

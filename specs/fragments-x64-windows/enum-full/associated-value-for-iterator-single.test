@@ -31,7 +31,7 @@ module {
     x64.prologue stack_size=96
     x64.call BoxArray.create
     x64.mov [rbp-8], rax
-    x64.mov rax, 42
+    x64.mov rcx, 42
     x64.mov rcx, 16
     x64.xor edx, edx
     x64.mov r8, 10
@@ -39,22 +39,21 @@ module {
     x64.mov [rbp-16], rax
     x64.mov rcx, 1
     x64.mov [rax+0], rcx
-    x64.mov rdx, 42
-    x64.mov [rax+8], rdx
+    x64.mov rcx, 42
+    x64.mov [rax+8], rcx
     x64.mov rcx, [rbp-16]
     x64.call mm_incref
-    x64.mov rbx, [rbp-8]
-    x64.mov rsi, [rbp-16]
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-16]
     x64.mov rcx, [rbp-8]
     x64.mov rdx, [rbp-16]
     x64.call BoxArray.push
-    x64.xor edi, edi
-    x64.mov [rbp-24], rdi
-    x64.mov r8, [rbp-8]
-    x64.mov r9, [r8+0]
-    x64.mov [rbp-32], r9
-    x64.xor eax, eax
-    x64.mov [rbp-40], rax
+    x64.xor edx, edx
+    x64.mov [rbp-24], rdx
+    x64.mov rbx, [rbp-8]
+    x64.mov [rbp-32], rbx
+    x64.xor esi, esi
+    x64.mov [rbp-40], rsi
     x64.jmp main.loop_0.header
   loop_0.header:
     x64.mov rax, [rbp-32]
@@ -208,7 +207,7 @@ module {
   done:
     x64.ret
   }
-  func @__destruct___ManagedMemory_Box(ptr: i64) {
+  func @__destruct_BoxArray(ptr: i64) {
   entry:
     x64.prologue stack_size=16
     x64.mov [rbp-8], rcx
@@ -216,7 +215,7 @@ module {
     x64.mov rcx, [rax+16]
     x64.mov rdx, -1
     x64.cmp rcx, rdx
-    x64.jne __destruct___ManagedMemory_Box.check_owned_0
+    x64.jne __destruct_BoxArray.check_owned_0
   slice_cleanup_0:
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rax+32]
@@ -225,13 +224,13 @@ module {
     x64.jz __nonnull_skip_0
     x64.call mm_decref
     x64.label __nonnull_skip_0
-    x64.jmp __destruct___ManagedMemory_Box.skip_buf_0
+    x64.jmp __destruct_BoxArray.skip_buf_0
   check_owned_0:
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rax+16]
     x64.mov rdx, -2
     x64.cmp rcx, rdx
-    x64.je __destruct___ManagedMemory_Box.skip_buf_0
+    x64.je __destruct_BoxArray.skip_buf_0
   free_buf_0:
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rbp-8]
@@ -240,24 +239,8 @@ module {
     x64.mov rdx, [rcx+0]
     x64.mov rcx, rdx
     x64.call mm_raw_free
-    x64.jmp __destruct___ManagedMemory_Box.skip_buf_0
+    x64.jmp __destruct_BoxArray.skip_buf_0
   skip_buf_0:
-    x64.jmp __destruct___ManagedMemory_Box.done
-  done:
-    x64.epilogue
-    x64.ret
-  }
-  func @__destruct_BoxArray(ptr: i64) {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-8], rcx
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+0]
-    x64.mov [rbp-16], rcx
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_0
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
     x64.jmp __destruct_BoxArray.done
   done:
     x64.epilogue

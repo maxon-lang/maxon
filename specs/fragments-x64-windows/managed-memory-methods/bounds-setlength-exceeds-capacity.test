@@ -20,28 +20,26 @@ module {
     x64.prologue stack_size=32
     x64.call IntArray.create
     x64.mov [rbp-8], rax
-    x64.mov rax, [rbp-8]
     x64.mov rcx, [rbp-8]
     x64.mov rdx, 1
     x64.call IntArray.push
-    x64.mov rcx, [rbp-8]
-    x64.mov rdx, [rcx+0]
-    x64.mov [rbp-16], rdx
-    x64.mov rbx, 100
-    x64.mov rsi, [rbp-16]
-    x64.mov rdi, [rsi+16]
-    x64.mov r8, 1
-    x64.add rdi, r8
-    x64.cmp rbx, rdi
-    x64.setae r9
-    x64.movzx r9, r9b
-    x64.mov rax, 3
-    x64.xor ecx, ecx
-    x64.test r9, r9
-    x64.mov rdx, rcx
-    x64.cmovne rdx, rax
-    x64.test r9, r9
-    x64.mov [rbp-24], rdx
+    x64.mov rax, [rbp-8]
+    x64.mov [rbp-16], rax
+    x64.mov rcx, 100
+    x64.mov rdx, [rbp-16]
+    x64.mov rbx, [rdx+16]
+    x64.mov rsi, 1
+    x64.add rbx, rsi
+    x64.cmp rcx, rbx
+    x64.setae rdi
+    x64.movzx rdi, rdib
+    x64.mov r8, 3
+    x64.xor r9d, r9d
+    x64.test rdi, rdi
+    x64.mov rax, r9
+    x64.cmovne rax, r8
+    x64.test rdi, rdi
+    x64.mov [rbp-24], rax
     x64.je main.__setlen_ok_0
   __setlen_err_0:
     x64.jmp main.__setlen_merge_0
@@ -90,7 +88,7 @@ module {
     x64.epilogue
     x64.ret
   }
-  func @__destruct___ManagedMemory_Int(ptr: i64) {
+  func @__destruct_IntArray(ptr: i64) {
   entry:
     x64.prologue stack_size=16
     x64.mov [rbp-8], rcx
@@ -98,7 +96,7 @@ module {
     x64.mov rcx, [rax+16]
     x64.mov rdx, -1
     x64.cmp rcx, rdx
-    x64.jne __destruct___ManagedMemory_Int.check_owned_0
+    x64.jne __destruct_IntArray.check_owned_0
   slice_cleanup_0:
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rax+32]
@@ -107,35 +105,19 @@ module {
     x64.jz __nonnull_skip_0
     x64.call mm_decref
     x64.label __nonnull_skip_0
-    x64.jmp __destruct___ManagedMemory_Int.skip_buf_0
+    x64.jmp __destruct_IntArray.skip_buf_0
   check_owned_0:
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rax+16]
     x64.mov rdx, -2
     x64.cmp rcx, rdx
-    x64.je __destruct___ManagedMemory_Int.skip_buf_0
+    x64.je __destruct_IntArray.skip_buf_0
   free_buf_0:
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rax+0]
     x64.call mm_raw_free
-    x64.jmp __destruct___ManagedMemory_Int.skip_buf_0
+    x64.jmp __destruct_IntArray.skip_buf_0
   skip_buf_0:
-    x64.jmp __destruct___ManagedMemory_Int.done
-  done:
-    x64.epilogue
-    x64.ret
-  }
-  func @__destruct_IntArray(ptr: i64) {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-8], rcx
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+0]
-    x64.mov [rbp-16], rcx
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_0
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
     x64.jmp __destruct_IntArray.done
   done:
     x64.epilogue

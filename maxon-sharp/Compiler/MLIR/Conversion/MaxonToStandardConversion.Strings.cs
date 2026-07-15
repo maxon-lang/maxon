@@ -35,25 +35,24 @@ public static partial class MaxonToStandardConversion {
 		return (ptrOp.Result, lenOp.Result);
 	}
 
-	/// Allocates a __ManagedMemory struct, stores the 4 managed fields
-	/// (buffer, length, capacity=-2 (rdata), elementSize=1), and stores the pointer in the outer struct.
-	private static string EmitManagedField(
-	  string tempName, string managedName,
-	  StdI64 bufferPtr, StdI64 lengthVal, int managedFieldOffset,
+	/// Envelope collapse: build a fused managed-wrapper record (String/Character/ByteArray) directly
+	/// over an already-computed rdata buffer — ONE allocation, no separate __ManagedMemory. Writes
+	/// buffer/length/capacity(-2, the rdata sentinel: read-only, destructor frees nothing)/
+	/// element_size(1, one byte per element)/parent(0) inline at offsets 0..32. The record's own
+	/// size follows its type (a String is 48 bytes for the trailing isAsciiFlag, others 40).
+	private static StdHeapPtr EmitFusedRdataRecord(
+	  StdI64 bufferPtr, StdI64 lengthVal, string allocTag, string tempName,
 	  IrBlock<StandardOp> block, Dictionary<string, string> varTypes) {
-		var managedPtr = EmitAlloc(block, ManagedMemoryStructSize, "__ManagedMemory", scopeName: _currentFuncName);
-		EmitStore(block, managedPtr, managedName, varTypes);
+		var outerPtr = (StdHeapPtr)EmitAlloc(block, FusedManagedRecordSize(allocTag), allocTag, scopeName: _currentFuncName);
+		EmitStore(block, outerPtr, tempName, varTypes);
 		var capConst = new StdConstI64Op(-2);
 		block.AddOp(capConst);
 		var elemSizeConst = new StdConstI64Op(1);
 		block.AddOp(elemSizeConst);
 		var parentZero = new StdConstI64Op(0);
 		block.AddOp(parentZero);
-		EmitInitManagedMemory(block, managedName, bufferPtr, lengthVal, capConst.Result, elemSizeConst.Result, parentZero.Result, varTypes);
-		var managedPtrReload = EmitLoad(block, managedName, varTypes);
-		EmitStructFieldStore(block, managedPtrReload, tempName, managedFieldOffset, IrType.I64, varTypes);
-		EmitIncref(block, managedName, varTypes, scopeName: _currentFuncName);
-		return managedName;
+		EmitInitManagedMemory(block, tempName, bufferPtr, lengthVal, capConst.Result, elemSizeConst.Result, parentZero.Result, varTypes);
+		return new StdHeapPtr(outerPtr.Id, outerPtr.TypeName, tempName);
 	}
 
 	private static StdHeapPtr EmitManagedMemoryLiteral(
@@ -72,20 +71,7 @@ public static partial class MaxonToStandardConversion {
 
 		var tempName = inlineTarget
 			?? temps.CreateTemp(tempPrefix, resultId, allocTag ?? "unknown", OwnershipFlags.None);
-		int outerSize = allocTag == "String" ? StringStructSize : CharacterStructSize;
-		// Envelope collapse: ONE allocation. The record IS its own __ManagedMemory — write
-		// buffer/length/capacity(-2, rdata)/element_size(1)/parent(0) inline at offsets 0..32.
-		var outerPtr = (StdHeapPtr)EmitAlloc(block, outerSize, allocTag, scopeName: _currentFuncName);
-		EmitStore(block, outerPtr, tempName, varTypes);
-		var capConst = new StdConstI64Op(-2);
-		block.AddOp(capConst);
-		var elemSizeConst = new StdConstI64Op(1);
-		block.AddOp(elemSizeConst);
-		var parentZero = new StdConstI64Op(0);
-		block.AddOp(parentZero);
-		EmitInitManagedMemory(block, tempName, bufferPtr, lengthVal, capConst.Result, elemSizeConst.Result, parentZero.Result, varTypes);
-
-		return new StdHeapPtr(outerPtr.Id, outerPtr.TypeName, tempName);
+		return EmitFusedRdataRecord(bufferPtr, lengthVal, allocTag ?? "unknown", tempName, block, varTypes);
 	}
 
 	private static void LowerStringLiteral(
@@ -124,15 +110,12 @@ public static partial class MaxonToStandardConversion {
 		var (bufferPtr, lengthVal) = EmitRdataLiteral(op.Value, rdataLabel, block, result,
 		  System.Text.Encoding.Latin1);
 
+		// Envelope collapse: the ByteArray IS its own __ManagedMemory over the rdata bytes — ONE
+		// allocation, element_size=1 (Byte). Its `Byte` elements are raw bytes, so the fused
+		// destructor's managed-element cleanup is a no-op (correct: nothing to decref).
 		var tempName = inlineTarget
 			?? temps.CreateTemp("bstrtmp", op.Result.Id, op.ArrayTypeName, OwnershipFlags.None);
-		var outerPtr = (StdHeapPtr)EmitAlloc(block, 8, op.ArrayTypeName, scopeName: _currentFuncName);
-		EmitStore(block, outerPtr, tempName, varTypes);
-
-		var managedName = $"__bstrtmp_managed_{op.Result.Id}";
-		EmitManagedField(tempName, managedName, bufferPtr, lengthVal, 0, block, varTypes);
-
-		valueMap[op.Result] = new StdHeapPtr(outerPtr.Id, outerPtr.TypeName, tempName);
+		valueMap[op.Result] = EmitFusedRdataRecord(bufferPtr, lengthVal, op.ArrayTypeName, tempName, block, varTypes);
 	}
 
 	private static void LowerCharLiteral(
@@ -623,12 +606,14 @@ public static partial class MaxonToStandardConversion {
 		return new StdHeapPtr(outerPtr.Id, outerPtr.TypeName, tempName);
 	}
 
-	/// Envelope-collapse construction of `String{managed: X, isAsciiFlag: A}` / `Character{managed: X}`.
-	/// See the method body: the result is a fresh slice-VIEW of the source, matching the pre-collapse
-	/// envelope's refcount shape. The allocation removed per String/Character is the separate
-	/// __ManagedMemory that literals and producing operations no longer emit.
-	private static void LowerFusedStringConstruction(
-	  MaxonStructLiteralOp op, bool isString,
+	/// Envelope-collapse construction of a fused managed wrapper from a REAL source:
+	/// `String{managed: X, isAsciiFlag: A}` / `Character{managed: X}` / `Array{managed: X}` (init,
+	/// clone, slice — X is a parameter or method result, not a fresh literal). The result is a fresh
+	/// slice-VIEW of the source, matching the pre-collapse envelope's refcount shape. Array/Vector
+	/// literals and empty `create()` are handled separately (absorbed into a single record — see the
+	/// struct-literal lowering); this method is never reached for those.
+	private static void LowerFusedWrapperConstruction(
+	  MaxonStructLiteralOp op, bool isString, bool isFusedArray,
 	  IrBlock<StandardOp> block,
 	  Dictionary<MaxonValue, StdValue> valueMap,
 	  Dictionary<string, string> varTypes,
@@ -650,22 +635,30 @@ public static partial class MaxonToStandardConversion {
 
 		var resultVarName = inlineTargets.TryGetValue(op.Result.Id, out var it)
 			? it
-			: temps.CreateTemp("str", op.Result.Id, op.TypeName, OwnershipFlags.None);
+			: temps.CreateTemp("view", op.Result.Id, op.TypeName, OwnershipFlags.None);
 
 		// VIEW: a fresh record that shares the source's buffer (capacity=-1) and holds a reference
 		// to it (parent=source, incref source). This is the exact refcount shape of the pre-collapse
 		// envelope — a distinct object referencing the underlying bytes — so the ownership discipline
 		// balances unchanged, and copy-on-write protects the shared buffer against later mutation.
-		var viewPtr = (StdHeapPtr)EmitAlloc(block, isString ? StringStructSize : CharacterStructSize, op.TypeName, scopeName: scopeName);
+		var viewPtr = (StdHeapPtr)EmitAlloc(block, FusedManagedRecordSize(op.TypeName), op.TypeName, scopeName: scopeName);
 		EmitStore(block, viewPtr, resultVarName, varTypes);
 		var srcBuf = (StdI64)EmitStructFieldLoad(block, srcVarName, ManagedFieldBuffer, IrType.I64, varTypes);
 		var srcLen = (StdI64)EmitStructFieldLoad(block, srcVarName, ManagedFieldLength, IrType.I64, varTypes);
 		var negOne = new StdConstI64Op(-1);
 		block.AddOp(negOne);
-		var oneElem = new StdConstI64Op(1);
-		block.AddOp(oneElem);
+		// Element stride: String/Character are UTF-8 byte buffers (1); an Array/Vector view must
+		// preserve the source's element_size so indexing/iteration keeps the right stride.
+		StdI64 viewElemSize;
+		if (isFusedArray) {
+			viewElemSize = (StdI64)EmitStructFieldLoad(block, srcVarName, ManagedFieldElementSize, IrType.I64, varTypes);
+		} else {
+			var oneElem = new StdConstI64Op(1);
+			block.AddOp(oneElem);
+			viewElemSize = oneElem.Result;
+		}
 		var srcParent = (StdI64)EmitLoad(block, srcVarName, varTypes);
-		EmitInitManagedMemory(block, resultVarName, srcBuf, srcLen, negOne.Result, oneElem.Result, srcParent, varTypes);
+		EmitInitManagedMemory(block, resultVarName, srcBuf, srcLen, negOne.Result, viewElemSize, srcParent, varTypes);
 		EmitIncrefValue(block, srcParent, scopeName: scopeName);
 		if (isString) {
 			var (viewFlag, viewFlagType) = ResolveIsAsciiFlag(isAsciiVal, valueMap, block);

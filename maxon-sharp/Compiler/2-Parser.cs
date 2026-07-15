@@ -17884,7 +17884,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     // collection-from-array syntax does the narrowing once for the whole
     // literal.
     IrRangedPrimitiveType? targetRangedElement = ResolveTargetRangedElementType(sourceStruct);
-    var (managedStruct, arrayTag, elementCount, _, _) = EmitArrayLiteralElements(targetRangedElement);
+    var (managedStruct, arrayTag, elementCount, initElementKind, initElementStructTypeName) = EmitArrayLiteralElements(targetRangedElement);
     // The ArrayLiteralTag goes on the OUTER wrapping struct (the Array
     // / SourceType-shaped struct emitted below), not on the inner managed
     // memory. Lowering uses the tag to decide between .rdata lifting and
@@ -17928,14 +17928,21 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     }
 
     // InitableFromArrayLiteral path: wrap the managed memory in an Array
-    // struct (so it's typed `Array`, the parameter type the init method
-    // expects) and let the user-defined init do whatever transformation
-    // it wants. The .rdata lifting is forfeited here since init's body
-    // is opaque.
+    // struct (the parameter type the init method expects) and let the
+    // user-defined init do whatever transformation it wants. The .rdata
+    // lifting is forfeited here since init's body is opaque.
+    //
+    // The wrapper is typed with the CONCRETE element-bearing array alias
+    // (`__Array_<Element>`), not the generic `Array`: under the envelope
+    // collapse the wrapper IS its __ManagedMemory, so ITS destructor must
+    // decref managed elements — and only a concrete type carries the Element
+    // parameter that decision reads. A generic `Array` destructor cannot tell
+    // a pointer element from an i64 and would leak the elements.
+    var initArrayTypeName = FindArrayTypeAliasForElement(initElementKind, initElementStructTypeName);
     var initArrayFields = new List<(string Name, MaxonValue Value)> {
       ("managed", managedStruct.Result)
     };
-    var initArrayStruct = new MaxonStructLiteralOp("Array", initArrayFields);
+    var initArrayStruct = new MaxonStructLiteralOp(initArrayTypeName, initArrayFields);
     _currentBlock!.AddOp(initArrayStruct);
     initArrayStruct.ArrayLiteralTag = arrayTag;
     initArrayStruct.ArrayLiteralCount = elementCount;

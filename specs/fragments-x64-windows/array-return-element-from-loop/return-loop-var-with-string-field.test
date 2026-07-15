@@ -92,26 +92,26 @@ module {
   }
   func @findEntry(entries: i64, key: i64) -> i64 {
   entry:
-    x64.prologue stack_size=96
-    x64.mov [rbp-8], rcx
-    x64.mov [rbp-16], rdx
-    x64.mov rax, [rbp-8]
-    x64.mov rbx, [rax+0]
-    x64.mov [rbp-24], rbx
-    x64.xor eax, eax
-    x64.mov [rbp-32], rax
+    x64.prologue stack_size=80
+    x64.mov [rbp-8], rdx
+    x64.mov [rbp-16], rcx
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, [rbp-16]
+    x64.call mm_incref
+    x64.xor ecx, ecx
+    x64.mov [rbp-24], rcx
     x64.jmp findEntry.search_0.header
   search_0.header:
-    x64.mov rax, [rbp-24]
+    x64.mov rax, [rbp-16]
     x64.mov rcx, [rax+8]
-    x64.mov rdx, [rbp-32]
+    x64.mov rdx, [rbp-24]
     x64.cmp rdx, rcx
     x64.jge findEntry.search_0.exit
   search_0:
-    x64.mov rax, [rbp-32]
-    x64.mov rcx, [rbp-24]
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, [rbp-16]
     x64.mov rdx, [rcx+24]
-    x64.mov rbx, [rbp-24]
+    x64.mov rbx, [rbp-16]
     x64.mov rsi, [rbx+0]
     x64.imul rax, rdx
     x64.add rsi, rax
@@ -121,62 +121,67 @@ module {
     x64.sete r9
     x64.movzx r9, r9b
     x64.xor eax, eax
-    x64.mov [rbp-40], rax
+    x64.mov [rbp-32], rax
     x64.test r9, r9
-    x64.mov [rbp-88], rdi
+    x64.mov [rbp-80], rdi
     x64.je findEntry.__slot_nonnull_0
   __slot_empty_0:
     x64.jmp findEntry.__slot_merge_0
   __slot_nonnull_0:
-    x64.mov rcx, [rbp-88]
+    x64.mov rcx, [rbp-80]
     x64.call mm_incref
-    x64.mov rax, [rbp-88]
-    x64.mov [rbp-40], rax
+    x64.mov rax, [rbp-80]
+    x64.mov [rbp-32], rax
     x64.jmp findEntry.__slot_merge_0
   __slot_merge_0:
-    x64.mov rax, [rbp-40]
+    x64.mov rax, [rbp-32]
+    x64.mov [rbp-40], rax
     x64.mov [rbp-48], rax
-    x64.mov [rbp-56], rax
-    x64.mov rcx, [rbp-56]
+    x64.mov rcx, [rbp-48]
     x64.call mm_incref
-    x64.mov rdx, [rbp-56]
+    x64.mov rdx, [rbp-48]
     x64.mov rbx, [rdx+0]
-    x64.mov [rbp-64], rbx
-    x64.mov rsi, [rbp-64]
-    x64.mov rdi, [rbp-16]
-    x64.mov rcx, [rbp-64]
-    x64.mov rdx, [rbp-16]
+    x64.mov [rbp-56], rbx
+    x64.mov rsi, [rbp-56]
+    x64.mov rdi, [rbp-8]
+    x64.mov rcx, [rbp-56]
+    x64.mov rdx, [rbp-8]
     x64.call stdlib.String.equals
     x64.test rax, rax
     x64.je findEntry.found_0.after
   found_0:
-    x64.mov rax, [rbp-48]
+    x64.mov rax, [rbp-40]
     x64.test rax, rax
     x64.jz __nonnull_skip_0
-    x64.mov rcx, [rbp-48]
+    x64.mov rcx, [rbp-40]
     x64.call mm_decref
     x64.label __nonnull_skip_0
-    x64.mov rax, [rbp-56]
+    x64.mov rcx, [rbp-16]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_1
+    x64.call mm_decref
+    x64.label __nonnull_skip_1
+    x64.mov rax, [rbp-48]
     x64.epilogue
     x64.ret
   found_0.after:
-    x64.mov rax, [rbp-56]
+    x64.mov rax, [rbp-48]
     x64.test rax, rax
-    x64.jz __nonnull_skip_1
-    x64.mov rcx, [rbp-56]
-    x64.call mm_decref
-    x64.label __nonnull_skip_1
-    x64.mov rcx, [rbp-48]
-    x64.test rcx, rcx
     x64.jz __nonnull_skip_2
+    x64.mov rcx, [rbp-48]
     x64.call mm_decref
     x64.label __nonnull_skip_2
+    x64.mov rcx, [rbp-40]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_3
+    x64.call mm_decref
+    x64.label __nonnull_skip_3
     x64.jmp findEntry.search_0.incr
   search_0.incr:
-    x64.mov rax, [rbp-32]
+    x64.mov rax, [rbp-24]
     x64.mov rcx, 1
     x64.add rax, rcx
-    x64.mov [rbp-32], rax
+    x64.mov [rbp-24], rax
     x64.jmp findEntry.search_0.header
   search_0.exit:
     x64.lea_rdata rax, [__str_0]
@@ -184,44 +189,50 @@ module {
     x64.xor edx, edx
     x64.lea_func rbx, [__destruct_String]
     x64.mov rsi, rbx
-    x64.mov [rbp-88], rcx
+    x64.mov [rbp-80], rcx
     x64.mov rdx, rsi
     x64.mov rcx, 48
     x64.mov r8, 2
     x64.call mm_alloc
-    x64.mov [rbp-72], rax
+    x64.mov [rbp-64], rax
     x64.mov rdi, -2
     x64.mov r8, 1
     x64.xor r9d, r9d
-    x64.mov rax, [rbp-72]
-    x64.mov rcx, [rbp-88]
+    x64.mov rax, [rbp-64]
+    x64.mov rcx, [rbp-80]
     x64.mov [rax+0], rcx
-    x64.mov rax, [rbp-72]
+    x64.mov rax, [rbp-64]
     x64.xor ecx, ecx
     x64.mov [rax+8], rcx
-    x64.mov rax, [rbp-72]
+    x64.mov rax, [rbp-64]
     x64.mov [rax+16], rdi
-    x64.mov rax, [rbp-72]
+    x64.mov rax, [rbp-64]
     x64.mov [rax+24], r8
-    x64.mov rax, [rbp-72]
+    x64.mov rax, [rbp-64]
     x64.mov [rax+32], r9
     x64.mov rax, 1
-    x64.mov rcx, [rbp-72]
+    x64.mov rcx, [rbp-64]
     x64.mov [rcx+40], rax
-    x64.mov rax, [rbp-72]
-    x64.mov rcx, [rbp-72]
+    x64.mov rax, [rbp-64]
+    x64.mov rcx, [rbp-64]
     x64.call mm_incref
-    x64.mov rax, [rbp-72]
-    x64.mov rcx, [rbp-72]
+    x64.mov rax, [rbp-64]
+    x64.mov rcx, [rbp-64]
     x64.call Entry.create
-    x64.mov [rbp-80], rax
-    x64.mov rax, [rbp-72]
+    x64.mov [rbp-72], rax
+    x64.mov rax, [rbp-64]
     x64.test rax, rax
-    x64.jz __nonnull_skip_3
-    x64.mov rcx, [rbp-72]
+    x64.jz __nonnull_skip_4
+    x64.mov rcx, [rbp-64]
     x64.call mm_decref
-    x64.label __nonnull_skip_3
-    x64.mov rax, [rbp-80]
+    x64.label __nonnull_skip_4
+    x64.mov rax, [rbp-16]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_5
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_5
+    x64.mov rax, [rbp-72]
     x64.epilogue
     x64.ret
   }
@@ -530,7 +541,7 @@ module {
     x64.epilogue
     x64.ret
   }
-  func @__destruct___ManagedMemory_Entry(ptr: i64) {
+  func @__destruct_EntryArray(ptr: i64) {
   entry:
     x64.prologue stack_size=16
     x64.mov [rbp-8], rcx
@@ -538,7 +549,7 @@ module {
     x64.mov rcx, [rax+16]
     x64.mov rdx, -1
     x64.cmp rcx, rdx
-    x64.jne __destruct___ManagedMemory_Entry.check_owned_0
+    x64.jne __destruct_EntryArray.check_owned_0
   slice_cleanup_0:
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rax+32]
@@ -547,13 +558,13 @@ module {
     x64.jz __nonnull_skip_0
     x64.call mm_decref
     x64.label __nonnull_skip_0
-    x64.jmp __destruct___ManagedMemory_Entry.skip_buf_0
+    x64.jmp __destruct_EntryArray.skip_buf_0
   check_owned_0:
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rax+16]
     x64.mov rdx, -2
     x64.cmp rcx, rdx
-    x64.je __destruct___ManagedMemory_Entry.skip_buf_0
+    x64.je __destruct_EntryArray.skip_buf_0
   free_buf_0:
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rbp-8]
@@ -562,24 +573,8 @@ module {
     x64.mov rdx, [rcx+0]
     x64.mov rcx, rdx
     x64.call mm_raw_free
-    x64.jmp __destruct___ManagedMemory_Entry.skip_buf_0
+    x64.jmp __destruct_EntryArray.skip_buf_0
   skip_buf_0:
-    x64.jmp __destruct___ManagedMemory_Entry.done
-  done:
-    x64.epilogue
-    x64.ret
-  }
-  func @__destruct_EntryArray(ptr: i64) {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-8], rcx
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+0]
-    x64.mov [rbp-16], rcx
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_0
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
     x64.jmp __destruct_EntryArray.done
   done:
     x64.epilogue

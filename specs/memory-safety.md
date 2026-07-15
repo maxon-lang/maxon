@@ -959,7 +959,7 @@ module {
   done:
     func.return
   }
-  func @__destruct___ManagedMemory_Item(ptr: i64) {
+  func @__destruct_ItemArray(ptr: i64) {
   entry:
     %57 = func.param ptr : StdI64
     memref.store %57, __destr_ptr
@@ -987,17 +987,6 @@ module {
     std.call_runtime @mm_raw_free %72
     cf.br skip_buf_0
   skip_buf_0:
-    cf.br done
-  done:
-    func.return
-  }
-  func @__destruct_ItemArray(ptr: i64) {
-  entry:
-    %73 = func.param ptr : StdI64
-    memref.store %73, __destr_ptr
-    %74 = memref.load __destr_ptr : i64
-    %75 = memref.load_indirect %74+0
-    std.call_runtime_if_nonnull @mm_decref %75
     cf.br done
   done:
     func.return
@@ -1127,7 +1116,7 @@ module {
   done:
     x64.ret
   }
-  func @__destruct___ManagedMemory_Item(ptr: i64) {
+  func @__destruct_ItemArray(ptr: i64) {
   entry:
     x64.prologue stack_size=16
     x64.mov [rbp-8], rcx
@@ -1135,7 +1124,7 @@ module {
     x64.mov rcx, [rax+16]
     x64.mov rdx, -1
     x64.cmp rcx, rdx
-    x64.jne __destruct___ManagedMemory_Item.check_owned_0
+    x64.jne __destruct_ItemArray.check_owned_0
   slice_cleanup_0:
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rax+32]
@@ -1144,13 +1133,13 @@ module {
     x64.jz __nonnull_skip_0
     x64.call mm_decref
     x64.label __nonnull_skip_0
-    x64.jmp __destruct___ManagedMemory_Item.skip_buf_0
+    x64.jmp __destruct_ItemArray.skip_buf_0
   check_owned_0:
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rax+16]
     x64.mov rdx, -2
     x64.cmp rcx, rdx
-    x64.je __destruct___ManagedMemory_Item.skip_buf_0
+    x64.je __destruct_ItemArray.skip_buf_0
   free_buf_0:
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rbp-8]
@@ -1159,24 +1148,8 @@ module {
     x64.mov rdx, [rcx+0]
     x64.mov rcx, rdx
     x64.call mm_raw_free
-    x64.jmp __destruct___ManagedMemory_Item.skip_buf_0
+    x64.jmp __destruct_ItemArray.skip_buf_0
   skip_buf_0:
-    x64.jmp __destruct___ManagedMemory_Item.done
-  done:
-    x64.epilogue
-    x64.ret
-  }
-  func @__destruct_ItemArray(ptr: i64) {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-8], rcx
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+0]
-    x64.mov [rbp-16], rcx
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_0
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
     x64.jmp __destruct_ItemArray.done
   done:
     x64.epilogue

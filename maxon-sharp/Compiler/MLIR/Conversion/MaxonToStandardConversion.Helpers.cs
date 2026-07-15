@@ -513,13 +513,36 @@ public static partial class MaxonToStandardConversion {
     && _resultModule!.TypeDefs.TryGetValue(typeName, out var td)
     && td is IrStructType st && st.ConformingInterfaces.Contains("BuiltinCharLiteral");
 
+  /// True for a fused Array/Vector type (conforms to BuiltinArrayLiteral): a 40-byte record
+  /// identical in layout to a __ManagedMemory, whose `Element` type param IS its buffer element.
+  private static bool IsFusedArrayType(string? typeName) =>
+    typeName != null
+    && _resultModule!.TypeDefs.TryGetValue(typeName, out var td)
+    && td is IrStructType st && st.ConformingInterfaces.Contains("BuiltinArrayLiteral");
+
+  /// True for any of the three fused managed-wrapper types (String, Character, Array/Vector):
+  /// a record whose first 40 bytes ARE a __ManagedMemory (buffer@0 … parent_ptr@32).
+  private static bool IsFusedManagedWrapper(string? typeName) =>
+    IsFusedStringType(typeName) || IsFusedCharType(typeName) || IsFusedArrayType(typeName);
+
   /// Allocation size of a managed-memory-shaped record: a fused String is 48 bytes (trailing
-  /// isAsciiFlag), a fused Character 40, a bare __ManagedMemory 40. Used so a slice preserves
-  /// its source's shape/size (a slice of a String is itself a 48-byte String).
+  /// isAsciiFlag), a fused Character/Array 40, a bare __ManagedMemory 40. Used so a slice
+  /// preserves its source's shape/size (a slice of a String is itself a 48-byte String).
   private static int FusedManagedRecordSize(string? typeName) =>
     IsFusedStringType(typeName) ? StringStructSize
     : IsFusedCharType(typeName) ? CharacterStructSize
     : ManagedMemoryStructSize;
+
+  /// Byte offset of a __ManagedMemory field by its source-level name. Used when writing an
+  /// absorbed inner managed struct literal's fields inline into a fused Array/Vector record.
+  private static int ManagedFieldOffsetByName(string fieldName) => fieldName switch {
+    "buffer" => ManagedFieldBuffer,
+    "length" => ManagedFieldLength,
+    "capacity" => ManagedFieldCapacity,
+    "element_size" => ManagedFieldElementSize,
+    "parent_ptr" => ManagedFieldParentPtr,
+    _ => throw new InvalidOperationException($"Unknown __ManagedMemory field '{fieldName}'")
+  };
 
   /// Store all five fields of a __ManagedMemory struct.
   private static void EmitInitManagedMemory(

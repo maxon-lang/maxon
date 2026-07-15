@@ -209,10 +209,9 @@ module {
     x64.jmp main.pf_0.merge
   pf_0.merge:
     x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+0]
-    x64.mov [rbp-80], rcx
-    x64.xor edx, edx
-    x64.mov [rbp-88], rdx
+    x64.mov [rbp-80], rax
+    x64.xor ecx, ecx
+    x64.mov [rbp-88], rcx
     x64.jmp main.p_0.header
   p_0.header:
     x64.mov rax, [rbp-80]
@@ -406,7 +405,7 @@ module {
     x64.epilogue
     x64.ret
   }
-  func @__destruct___ManagedMemory_Integer(ptr: i64) {
+  func @__destruct_IntArray(ptr: i64) {
   entry:
     x64.prologue stack_size=16
     x64.mov [rbp-8], rcx
@@ -414,7 +413,7 @@ module {
     x64.mov rcx, [rax+16]
     x64.mov rdx, -1
     x64.cmp rcx, rdx
-    x64.jne __destruct___ManagedMemory_Integer.check_owned_0
+    x64.jne __destruct_IntArray.check_owned_0
   slice_cleanup_0:
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rax+32]
@@ -423,35 +422,19 @@ module {
     x64.jz __nonnull_skip_0
     x64.call mm_decref
     x64.label __nonnull_skip_0
-    x64.jmp __destruct___ManagedMemory_Integer.skip_buf_0
+    x64.jmp __destruct_IntArray.skip_buf_0
   check_owned_0:
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rax+16]
     x64.mov rdx, -2
     x64.cmp rcx, rdx
-    x64.je __destruct___ManagedMemory_Integer.skip_buf_0
+    x64.je __destruct_IntArray.skip_buf_0
   free_buf_0:
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rax+0]
     x64.call mm_raw_free
-    x64.jmp __destruct___ManagedMemory_Integer.skip_buf_0
+    x64.jmp __destruct_IntArray.skip_buf_0
   skip_buf_0:
-    x64.jmp __destruct___ManagedMemory_Integer.done
-  done:
-    x64.epilogue
-    x64.ret
-  }
-  func @__destruct_IntArray(ptr: i64) {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-8], rcx
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+0]
-    x64.mov [rbp-16], rcx
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_0
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
     x64.jmp __destruct_IntArray.done
   done:
     x64.epilogue
@@ -462,12 +445,31 @@ module {
     x64.prologue stack_size=16
     x64.mov [rbp-8], rcx
     x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+0]
+    x64.mov rcx, [rax+16]
+    x64.mov rdx, -1
+    x64.cmp rcx, rdx
+    x64.jne __destruct_ScratchArr.check_owned_0
+  slice_cleanup_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+32]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
     x64.jz __nonnull_skip_0
     x64.call mm_decref
     x64.label __nonnull_skip_0
+    x64.jmp __destruct_ScratchArr.skip_buf_0
+  check_owned_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+16]
+    x64.mov rdx, -2
+    x64.cmp rcx, rdx
+    x64.je __destruct_ScratchArr.skip_buf_0
+  free_buf_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.call mm_raw_free
+    x64.jmp __destruct_ScratchArr.skip_buf_0
+  skip_buf_0:
     x64.jmp __destruct_ScratchArr.done
   done:
     x64.epilogue

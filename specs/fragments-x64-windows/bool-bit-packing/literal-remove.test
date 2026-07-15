@@ -34,11 +34,11 @@ module {
     x64.mov [rbp-8], rax
     x64.xor eax, eax
     x64.mov [rbp-16], rax
-    x64.mov rax, [rbp-24]
-    x64.mov rdx, [rax+0]
-    x64.mov [rbp-32], rdx
-    x64.xor eax, eax
-    x64.mov [rbp-40], rax
+    x64.mov [rbp-32], rcx
+    x64.mov rcx, [rbp-32]
+    x64.call mm_incref
+    x64.xor edx, edx
+    x64.mov [rbp-40], rdx
     x64.jmp printBits.each_0.header
   each_0.header:
     x64.mov rax, [rbp-32]
@@ -82,7 +82,7 @@ module {
     x64.mov [rbp-145], rcx
     x64.mov rdx, rsi
     x64.mov rcx, 48
-    x64.mov r8, 3
+    x64.mov r8, 2
     x64.call mm_alloc
     x64.mov [rbp-8], rax
     x64.mov rdi, -2
@@ -126,7 +126,7 @@ module {
     x64.mov [rbp-145], rcx
     x64.mov rdx, rsi
     x64.mov rcx, 48
-    x64.mov r8, 3
+    x64.mov r8, 2
     x64.call mm_alloc
     x64.mov [rbp-16], rax
     x64.mov rdi, -2
@@ -222,7 +222,7 @@ module {
     x64.mov [rbp-177], r8
     x64.mov rdx, rdi
     x64.mov rcx, 48
-    x64.mov r8, 3
+    x64.mov r8, 2
     x64.call mm_alloc
     x64.mov [rbp-65], rax
     x64.mov rax, 1
@@ -319,18 +319,24 @@ module {
     x64.mov rcx, [rbp-65]
     x64.call mm_decref
     x64.label __nonnull_skip_5
+    x64.mov rax, [rbp-32]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_6
+    x64.mov rcx, [rbp-32]
+    x64.call mm_decref
+    x64.label __nonnull_skip_6
     x64.epilogue
     x64.ret
   }
   func @main() -> u32 {
   entry:
-    x64.prologue stack_size=32
+    x64.prologue stack_size=16
     x64.xor eax, eax
     x64.mov rcx, 5
     x64.xor edx, edx
     x64.xor ebx, ebx
     x64.xor esi, esi
-    x64.lea_func rdi, [__destruct___ManagedMemory]
+    x64.lea_func rdi, [__destruct___Array_i1]
     x64.mov r8, rdi
     x64.mov rdx, r8
     x64.mov rcx, 40
@@ -352,30 +358,18 @@ module {
     x64.mov rax, [rbp-8]
     x64.xor ecx, ecx
     x64.mov [rax+32], rcx
-    x64.lea_func rax, [__destruct___Array_i1]
-    x64.mov rcx, rax
-    x64.mov rdx, rcx
-    x64.mov rcx, 8
-    x64.mov r8, 2
-    x64.call mm_alloc
-    x64.mov [rbp-16], rax
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rbp-16]
-    x64.mov [rcx+0], rax
-    x64.mov rcx, [rbp-8]
-    x64.call mm_incref
     x64.lea_rdata rax, [__const_array_main_a]
     x64.mov rcx, rax
-    x64.mov rax, [rbp-16]
-    x64.mov rdx, [rax+0]
-    x64.mov [rdx+0], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov [rax+0], rcx
     x64.mov rax, -2
-    x64.mov [rdx+16], rax
-    x64.mov rax, [rbp-16]
-    x64.mov rcx, [rbp-16]
+    x64.mov rcx, [rbp-8]
+    x64.mov [rcx+16], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
     x64.call mm_incref
-    x64.mov rax, [rbp-16]
-    x64.mov rcx, [rbp-16]
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
     x64.mov rdx, 1
     x64.call __Array_i1.remove
     x64.xor ecx, ecx
@@ -386,13 +380,13 @@ module {
     x64.mov rcx, rax
     x64.call mrt_panic
   otherwise_continue_0:
-    x64.mov rcx, [rbp-16]
-    x64.mov [rbp-24], rax
+    x64.mov rcx, [rbp-8]
+    x64.mov [rbp-16], rax
     x64.call printBits
-    x64.mov rax, [rbp-16]
+    x64.mov rax, [rbp-8]
     x64.test rax, rax
     x64.jz __nonnull_skip_0
-    x64.mov rcx, [rbp-16]
+    x64.mov rcx, [rbp-8]
     x64.call mm_decref
     x64.label __nonnull_skip_0
     x64.xor eax, eax

@@ -189,14 +189,21 @@ public class IrStructType : IrType {
   // in the lowering. The record IS its own __ManagedMemory (envelope-collapse change).
   private const int InlineManagedMemoryBytes = 40;
 
-  // The `managed` field of a String/Character is stored inline (the __ManagedMemory
-  // embedded at offset 0), not as an 8-byte heap pointer, so that `isAsciiFlag` lands
-  // at offset 40 and the record's first 40 bytes ARE a valid __ManagedMemory. Detected
-  // by conformance so that e.g. StringIterator.managed (a plain pointer) is unaffected.
+  // The three types whose `managed` __ManagedMemory is collapsed inline (envelope collapse):
+  // String / Character (BuiltinStringLiteral / BuiltinCharLiteral) and Array / Vector
+  // (BuiltinArrayLiteral). Each IS its own __ManagedMemory; the record's first 40 bytes ARE
+  // a valid __ManagedMemory. Detected by conformance so plain-pointer `managed` fields (e.g.
+  // StringIterator.managed, ArrayIterator's cursor source) are unaffected.
+  public bool ConformsToBuiltinManagedWrapper =>
+    ConformingInterfaces.Contains("BuiltinStringLiteral")
+    || ConformingInterfaces.Contains("BuiltinCharLiteral")
+    || ConformingInterfaces.Contains("BuiltinArrayLiteral");
+
+  // The `managed` field of such a wrapper is stored inline (the __ManagedMemory embedded at
+  // offset 0), not as an 8-byte heap pointer, so that a String's `isAsciiFlag` lands at offset
+  // 40 and an Array is exactly a 40-byte __ManagedMemory.
   private bool IsInlineManagedField(IrStructField field) =>
-    field.Name == "managed"
-    && (ConformingInterfaces.Contains("BuiltinStringLiteral")
-        || ConformingInterfaces.Contains("BuiltinCharLiteral"));
+    field.Name == "managed" && ConformsToBuiltinManagedWrapper;
 
   // Storage slot a field occupies: 8-byte 64-bit slots (scalars inline, heap types as
   // pointers) except the inline `managed` __ManagedMemory, which is embedded whole.

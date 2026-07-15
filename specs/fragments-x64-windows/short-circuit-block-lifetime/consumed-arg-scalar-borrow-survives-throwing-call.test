@@ -230,30 +230,27 @@ module {
   }
   func @Module.sumIds(__self_ptr: i64) -> u64 {
   entry:
-    x64.prologue stack_size=80
+    x64.prologue stack_size=64
     x64.mov [rbp-8], rcx
     x64.xor eax, eax
     x64.mov [rbp-16], rax
     x64.mov rax, [rbp-8]
     x64.mov rdx, [rax+0]
     x64.mov [rbp-24], rdx
-    x64.mov rax, [rbp-24]
-    x64.mov rdx, [rax+0]
-    x64.mov [rbp-32], rdx
     x64.xor eax, eax
-    x64.mov [rbp-40], rax
+    x64.mov [rbp-32], rax
     x64.jmp Module.sumIds.each_0.header
   each_0.header:
-    x64.mov rax, [rbp-32]
+    x64.mov rax, [rbp-24]
     x64.mov rcx, [rax+8]
-    x64.mov rdx, [rbp-40]
+    x64.mov rdx, [rbp-32]
     x64.cmp rdx, rcx
     x64.jge Module.sumIds.each_0.exit
   each_0:
-    x64.mov rax, [rbp-40]
-    x64.mov rcx, [rbp-32]
+    x64.mov rax, [rbp-32]
+    x64.mov rcx, [rbp-24]
     x64.mov rdx, [rcx+24]
-    x64.mov rbx, [rbp-32]
+    x64.mov rbx, [rbp-24]
     x64.mov rsi, [rbx+0]
     x64.imul rax, rdx
     x64.add rsi, rax
@@ -263,39 +260,39 @@ module {
     x64.sete r9
     x64.movzx r9, r9b
     x64.xor eax, eax
-    x64.mov [rbp-48], rax
+    x64.mov [rbp-40], rax
     x64.test r9, r9
-    x64.mov [rbp-72], rdi
+    x64.mov [rbp-64], rdi
     x64.je Module.sumIds.__slot_nonnull_0
   __slot_empty_0:
     x64.jmp Module.sumIds.__slot_merge_0
   __slot_nonnull_0:
-    x64.mov rcx, [rbp-72]
+    x64.mov rcx, [rbp-64]
     x64.call mm_incref
-    x64.mov rax, [rbp-72]
-    x64.mov [rbp-48], rax
+    x64.mov rax, [rbp-64]
+    x64.mov [rbp-40], rax
     x64.jmp Module.sumIds.__slot_merge_0
   __slot_merge_0:
-    x64.mov rax, [rbp-48]
+    x64.mov rax, [rbp-40]
+    x64.mov [rbp-48], rax
     x64.mov [rbp-56], rax
-    x64.mov [rbp-64], rax
-    x64.mov rcx, [rbp-64]
+    x64.mov rcx, [rbp-56]
     x64.mov rdx, [rcx+0]
     x64.mov rbx, [rbp-16]
     x64.add rbx, rdx
     x64.mov [rbp-16], rbx
-    x64.mov rsi, [rbp-56]
+    x64.mov rsi, [rbp-48]
     x64.test rsi, rsi
     x64.jz __nonnull_skip_0
-    x64.mov rcx, [rbp-56]
+    x64.mov rcx, [rbp-48]
     x64.call mm_decref
     x64.label __nonnull_skip_0
     x64.jmp Module.sumIds.each_0.incr
   each_0.incr:
-    x64.mov rax, [rbp-40]
+    x64.mov rax, [rbp-32]
     x64.mov rcx, 1
     x64.add rax, rcx
-    x64.mov [rbp-40], rax
+    x64.mov [rbp-32], rax
     x64.jmp Module.sumIds.each_0.header
   each_0.exit:
     x64.mov rax, [rbp-16]
@@ -953,7 +950,7 @@ module {
     x64.epilogue
     x64.ret
   }
-  func @__destruct___ManagedMemory_Blk(ptr: i64) {
+  func @__destruct_BlkArray(ptr: i64) {
   entry:
     x64.prologue stack_size=16
     x64.mov [rbp-8], rcx
@@ -961,7 +958,7 @@ module {
     x64.mov rcx, [rax+16]
     x64.mov rdx, -1
     x64.cmp rcx, rdx
-    x64.jne __destruct___ManagedMemory_Blk.check_owned_0
+    x64.jne __destruct_BlkArray.check_owned_0
   slice_cleanup_0:
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rax+32]
@@ -970,13 +967,13 @@ module {
     x64.jz __nonnull_skip_0
     x64.call mm_decref
     x64.label __nonnull_skip_0
-    x64.jmp __destruct___ManagedMemory_Blk.skip_buf_0
+    x64.jmp __destruct_BlkArray.skip_buf_0
   check_owned_0:
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rax+16]
     x64.mov rdx, -2
     x64.cmp rcx, rdx
-    x64.je __destruct___ManagedMemory_Blk.skip_buf_0
+    x64.je __destruct_BlkArray.skip_buf_0
   free_buf_0:
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rbp-8]
@@ -985,24 +982,8 @@ module {
     x64.mov rdx, [rcx+0]
     x64.mov rcx, rdx
     x64.call mm_raw_free
-    x64.jmp __destruct___ManagedMemory_Blk.skip_buf_0
+    x64.jmp __destruct_BlkArray.skip_buf_0
   skip_buf_0:
-    x64.jmp __destruct___ManagedMemory_Blk.done
-  done:
-    x64.epilogue
-    x64.ret
-  }
-  func @__destruct_BlkArray(ptr: i64) {
-  entry:
-    x64.prologue stack_size=16
-    x64.mov [rbp-8], rcx
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rax+0]
-    x64.mov [rbp-16], rcx
-    x64.test rcx, rcx
-    x64.jz __nonnull_skip_0
-    x64.call mm_decref
-    x64.label __nonnull_skip_0
     x64.jmp __destruct_BlkArray.done
   done:
     x64.epilogue
