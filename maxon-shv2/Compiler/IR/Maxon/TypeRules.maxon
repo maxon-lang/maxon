@@ -853,6 +853,11 @@ export enum BinOpOperands
 	// asked, `wordOpResultTag`'s int-default types the result `integer`, and the pair lowers to an
 	// `and` over two BOX ADDRESSES. Same shape as the float bug, arrived at from the opposite side
 	// of `checkBinOpOperands`.
+	//
+	// ⚠ **IT CANNOT CARRY THE OFFENDING OPERAND — THIS IS AN `enum` FOR A MEASURED REASON** (see
+	// the header). The raise site asks `nonIntegralOperandOf` for the tag to NAME, on the failure
+	// path only, rather than the hot path paying an allocation to carry a fact only a diagnostic
+	// reads. That question has ONE home, next to the rule that decides it.
 	nonIntegralOperands
 end 'BinOpOperands'
 
@@ -921,12 +926,54 @@ function integralOperandsFor(op MaxonBinOp, left ValueTypeTag, right ValueTypeTa
 		return BinOpOperands.ok
 	end 'floatAllowed'
 
-	if operandsAreFloat(left, right: right) or operandsAreStructRef(left, right: right) 'noIntegralReading'
+	if lacksIntegralReading(left) or lacksIntegralReading(right) 'noIntegralReading'
 		return BinOpOperands.nonIntegralOperands
 	end 'noIntegralReading'
 
 	return BinOpOperands.ok
 end 'integralOperandsFor'
+
+// ⭐ **DOES THIS TAG HAVE NO INTEGRAL READING?** THE one statement of the domain
+// `BinOpOperands.nonIntegralOperands` covers, and it has TWO readers that must never disagree:
+// `integralOperandsFor` (which DECIDES the rejection) and `nonIntegralOperandOf` (which NAMES the
+// operand for the message). A float's bits are a sign/exponent/mantissa triple, not a magnitude;
+// a struct reference is a box's ADDRESS, not a magnitude either. Neither is a bit pattern the
+// source meant to mask or shift.
+//
+// ⚠ Written as the union of the two DOMAINS rather than as `not tagIsIntegral(tag)`, per
+// `tagIsIntegral`'s own warning: the negated form is TRUE for `unresolved`, which agrees with
+// everything by deferral, so `x and undeclaredCall()` — already reported as E3004 at its call
+// site — would collect a second, invented diagnostic naming a type nobody pinned.
+function lacksIntegralReading(tag ValueTypeTag) returns bool
+	return tagIsFloat(tag) or tagIsStructRef(tag)
+end 'lacksIntegralReading'
+
+// **WHICH OPERAND THE `nonIntegralOperands` DIAGNOSTIC MUST NAME** — the first one with no
+// integral reading, left before right.
+//
+// ⭐ It exists because the raise site used to GUESS, and the guess went stale the moment the rule
+// grew: `Parser.requireBinOpOperands` hardcoded `float` under a comment calling it "the only tag
+// that can trip this rule", and P1.0r admitted `structRef` to the very same rule — so `p and q`
+// reported "but this one is float" about two structs. A rule and the message that reports it are
+// one fact, so they are answered from one predicate (`lacksIntegralReading`) rather than from a
+// theorem restated at the raise site.
+//
+// It is asked ONLY on the failure path, which is why the verdict stays a payload-free `enum` (see
+// `BinOpOperands`): the hot path must not allocate to carry a tag that only a diagnostic reads.
+//
+// A precondition, not a case: every caller reached here through a `nonIntegralOperands` verdict,
+// which `integralOperandsFor` returns only when one of the two answered `lacksIntegralReading`.
+export function nonIntegralOperandOf(left ValueTypeTag, right ValueTypeTag) returns ValueTypeTag
+	if lacksIntegralReading(left) 'leftOffends'
+		return left
+	end 'leftOffends'
+
+	if lacksIntegralReading(right) 'rightOffends'
+		return right
+	end 'rightOffends'
+
+	panic("nonIntegralOperandOf: neither '{typeTagName(left)}' nor '{typeTagName(right)}' lacks an integral reading — this is only asked after `integralOperandsFor` returned `nonIntegralOperands`, which it does only when one of them does")
+end 'nonIntegralOperandOf'
 
 // Which `not` a prefix `not` means, from its operand's type — the LOGICAL one on a bool (flip
 // bit 0), the BITWISE one on an integer (complement all 64).

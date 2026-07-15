@@ -389,8 +389,28 @@ export union TargetOp
 	callDirect(targetName ByteArray) = TargetOpMeta{isMemory: true, isStore: true, isCall: true, implicitUses: 0, implicitDefs: 0xFFFF0FC7}
 	// Indirect call through an Import Address Table slot (`call [rip+disp32]`).
 	// `slotIndex` names the IAT entry the PE writer patches to. `mrt_start` uses
-	// this to `call ExitProcess`. Full call-barrier semantics.
-	iatCall(slotIndex RelocSlotIndex) = TargetOpMeta{isMemory: true, isStore: true, isCall: true, implicitUses: 0, implicitDefs: 0}
+	// this to `call ExitProcess`; `lowerOsAllocPages` uses it to `call VirtualAlloc`.
+	//
+	// ⚠⚠ **THE SAME CLOBBER MASK AS `callDirect`, AND IT MUST STAY THAT WAY.** This field read 0
+	// until P1.0r while the line above it said "full call-barrier semantics" — the sentence and
+	// the mask were one fact written twice, and they disagreed. It was INERT only because the
+	// single `iatCall` in the tree was `mrt_start`'s `ExitProcess`, a hand-built stub with no
+	// virtual register live across anything. `osAllocPages` put an `iatCall` inside a REGISTER-
+	// ALLOCATED function (`__slab_alloc`'s grow block) and the zero became a miscompile the same
+	// day: `size` coloured RAX and `total` coloured R10, both clobbered by `VirtualAlloc`, so
+	// `__slab_cursor` was published as `base + base` and the bump path was never taken again —
+	// 64 KiB committed per allocation, measured at 133 MB for 2,000 Points.
+	//
+	// The mask is the CUSTOM ABI's caller-saved set, not Win64's, and that is deliberate rather
+	// than sloppy: Win64's volatile GPRs {rax, rcx, rdx, r8–r11} are a strict SUBSET of the custom
+	// ABI's {rax, rcx, rdx, rsi, rdi, r8–r11} (Win64 PRESERVES rsi/rdi), so this over-forbids by
+	// exactly two registers and can never under-forbid. A second, Win64-exact mask would be a
+	// third copy of "which registers a call destroys" — the very shape that caused this bug — and
+	// it would buy two registers at a call site that has five callee-saved ones spare.
+	// `assertCallClobberConsistent` asserts BOTH call ops against `callerSavedMask()`, so the
+	// three cannot drift. A union-backing literal cannot reference a named `let`, which is why the
+	// mask is spelled inline here and guarded there rather than shared.
+	iatCall(slotIndex RelocSlotIndex) = TargetOpMeta{isMemory: true, isStore: true, isCall: true, implicitUses: 0, implicitDefs: 0xFFFF0FC7}
 	// Sign-extend RAX into RDX:RAX (`cqo`, REX.W 99) so the following `idiv` divides the
 	// full 128-bit RDX:RAX by its operand. Both registers are IMPLICIT (no explicit
 	// operand): implicitUses = 0x1 (the RAX bit — `X64Register.rax.rawValue` == 0, so

@@ -646,9 +646,12 @@ function requireBinOpOperands(op MaxonBinOp, left ValueTypeTag, right ValueTypeT
 		ok then break 'operands'
 		mixedWordOperands then throw ParseError.operandTypeMismatch(opTok.kind.rawValue, line: opTok.line, column: opTok.column)
 		nonNumericOperands then throw ParseError.nonNumericOperands(typeTagName(left), right: typeTagName(right), line: opTok.line, column: opTok.column)
-		// It names the FLOAT — the only tag that can trip this rule (`operatorIsIntegral` fires on
-		// nothing else), so whichever side carries it, that is the type the message must print.
-		nonIntegralOperands then throw ParseError.nonIntegralOperands(opTok.kind.rawValue, operand: typeTagName(ValueTypeTag.float), line: opTok.line, column: opTok.column)
+		// The offending tag is ASKED FOR, not assumed. This line named `float` outright, under a
+		// comment calling it "the only tag that can trip this rule" — true when written, and
+		// falsified by P1.0r admitting `structRef` to the same rule, which left `p and q`
+		// reporting "but this one is float" about two structs. `nonIntegralOperandOf` answers it
+		// from the same predicate the rule itself decides by, so the two cannot drift again.
+		nonIntegralOperands then throw ParseError.nonIntegralOperands(opTok.kind.rawValue, operand: typeTagName(nonIntegralOperandOf(left, right: right)), line: opTok.line, column: opTok.column)
 	end 'operands'
 end 'requireBinOpOperands'
 
@@ -1997,6 +2000,24 @@ export type Parser
 			throw ParseError.missingReturn(String.from(nameTok.value), line: nameTok.line, column: nameTok.column)
 		end 'fallsOffEnd'
 
+		// ⭐ **THE IMPLICIT RETURN IS A RETURN, AND IT OWES THE SAME DROPS** — this is the THIRD
+		// exit path a function has, and it was the one that leaked. `emitScopeDrops` hung only off
+		// `parseReturnStatement`, so a void function that simply ENDS —
+		//
+		//     function helper()
+		//         let p = Point.create(1, y: 2)
+		//     end 'helper'
+		//
+		// — never dropped `p` and reported exit 101 on a perfectly valid program. It is exactly the
+		// case this routine exists for: "no void body writes a trailing `return`" is the sentence
+		// three lines up, and it is precisely why the drop cannot live only where `return` is
+		// WRITTEN. A VALUE function cannot reach here (E3013 above), so the leak was void-only,
+		// which is why no acceptance case saw it.
+		//
+		// `bodyEnd` IS `self.currentBlock` — `parseStatement` returns the latter and `parseStatements`
+		// threads it — so the drops land in the block this terminator ends. The already-terminated
+		// case returned above, so a `return` that has dropped cannot be dropped a second time here.
+		self.emitScopeDrops(nameTok)
 		self.artifact.emitTerminator(bodyEnd, op: MaxonOp.retVoid, range: SourceRange.ofToken(nameTok))
 	end 'closeFunctionBody'
 

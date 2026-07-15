@@ -327,7 +327,7 @@ export function classPoolSizeOf(pool RegMask, class RegClass) returns RegCount
 	return regMaskPopcount(poolOfClass(pool, class: class))
 end 'classPoolSizeOf'
 
-// Guard the load-bearing invariant that `callDirect`'s inline `implicitDefs` clobber
+// Guard the load-bearing invariant that a call op's inline `implicitDefs` clobber
 // mask (which the liveness pass forbids for every value live across a call) equals the
 // CALLER-saved half of the allocatable pool: a value live across a call is forbidden the
 // former and must find a home in `pool ∖ caller-saved` = the callee-saved half. If they
@@ -335,15 +335,35 @@ end 'classPoolSizeOf'
 // mask is read from the op's own metadata (not re-spelled), and rbx is checked out of it
 // explicitly (a shipped v1 bug — project_regalloc_crosscall_spill_fixes). Runs once per
 // module, so the check is free.
+//
+// ⭐ **BOTH CALL OPS ARE CHECKED, AND `iatCall` IS WHY THIS LOOP EXISTS.** It carried
+// `implicitDefs: 0` while its own comment said "full call-barrier semantics" — inert for as long
+// as the only `iatCall` was `mrt_start`'s hand-built `ExitProcess`, and a miscompile the day
+// P1.0r put `VirtualAlloc` inside `__slab_alloc` with values live across it. Checking only the
+// op that happened to be right is what let the other be wrong for four milestones; a call is a
+// call, so every op that IS one answers to this.
+//
+// The ops are named one by one because `TargetOp` offers no way to enumerate its arms. The one
+// thing that can go wrong is a NEW call op landing without a line here — `isCall: true` is the
+// property to grep for when adding one. The payloads are throwaway: only the metadata is read.
 function assertCallClobberConsistent()
-	let clobber = TargetOp.callDirect("").rawValue.implicitDefs
-	if clobber != callerSavedMask() 'drift'
-		panic("assertCallClobberConsistent: callDirect clobber mask {clobber} != caller-saved pool {callerSavedMask()} — TargetDialect.callDirect's implicitDefs and RegisterAllocator.callerSavedMask drifted apart")
-	end 'drift'
-	if regMaskContains(clobber, regNum: X64Register.rbx.rawValue) 'rbxClobbered'
-		panic("assertCallClobberConsistent: callDirect clobber mask wrongly includes rbx, which is CALLEE-saved (project_regalloc_crosscall_spill_fixes shipped exactly this bug in v1)")
-	end 'rbxClobbered'
+	assertOneCallClobber(TargetOp.callDirect(""), name: "callDirect")
+	assertOneCallClobber(TargetOp.iatCall(0), name: "iatCall")
 end 'assertCallClobberConsistent'
+
+// One call op's clobber mask against the pool. `name` is carried rather than derived because a
+// union case cannot name itself, and a panic that cannot say WHICH op drifted would send a reader
+// to the wrong line of TargetDialect.
+function assertOneCallClobber(op TargetOp, name String)
+	let clobber = op.rawValue.implicitDefs
+	if clobber != callerSavedMask() 'drift'
+		panic("assertCallClobberConsistent: {name} clobber mask {clobber} != caller-saved pool {callerSavedMask()} — TargetDialect.{name}'s implicitDefs and RegisterAllocator.callerSavedMask drifted apart")
+	end 'drift'
+
+	if regMaskContains(clobber, regNum: X64Register.rbx.rawValue) 'rbxClobbered'
+		panic("assertCallClobberConsistent: {name} clobber mask wrongly includes rbx, which is CALLEE-saved (project_regalloc_crosscall_spill_fixes shipped exactly this bug in v1)")
+	end 'rbxClobbered'
+end 'assertOneCallClobber'
 
 // Every CALLER-saved register the custom ABI clobbers across a call — the same set
 // `callDirect`'s `implicitDefs` mask (0xFFFF0FC7) names, kept in ONE place so the pool and
