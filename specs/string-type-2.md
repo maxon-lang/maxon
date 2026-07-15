@@ -279,6 +279,52 @@ end 'main'
 hello
 ```
 
+<!-- test: case-conversion-does-not-mutate-receiver -->
+### toLower / toUpper return a new string and leave the receiver unchanged
+Regression guard. `toLower`/`toUpper` used to rewrite the receiver's bytes in place and
+return the SAME buffer, so `let b = a.toLower()` silently lowercased `a` too. They now
+transform an independent copy: the receiver reads back unchanged even after both calls,
+and — because they no longer mutate `self` — they are callable on a `let` binding.
+```maxon
+function main() returns ExitCode
+	var a = "Hello World"
+	let lower = a.toLower()
+	let upper = a.toUpper()
+	print("{a}\n")
+	print("{lower}\n")
+	print("{upper}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+Hello World
+hello world
+HELLO WORLD
+```
+
+<!-- test: case-conversion-on-let-binding -->
+### toLower / toUpper are non-mutating, so they work on an immutable binding
+```maxon
+function main() returns ExitCode
+	let a = "MixedCase"
+	print("{a.toLower()}\n")
+	print("{a.toUpper()}\n")
+	print("{a}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+mixedcase
+MIXEDCASE
+MixedCase
+```
+
 <!-- test: bytes-count-method -->
 ### bytes().count() Method
 ```maxon

@@ -27,6 +27,10 @@ typealias ByteArray = Array with Byte
 // it, so it is said once here.
 typealias ByteBuffer = __ManagedMemory with Byte
 
+// The signed shift between an ASCII letter and its opposite case: +32 upper->lower, -32 lower->upper.
+// `String.mapAsciiCase` adds it to a byte in the A-Z / a-z range.
+typealias AsciiCaseDelta = int(-32 to 32)
+
 export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterable with (Character, StringIterator), Cloneable
 	typealias ByteMemory = __ManagedMemory with Byte
 	export var managed as ByteMemory
@@ -409,37 +413,39 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 		return result
 	end 'split'
 
-	// Case conversion
-	export function toLower() returns String
+	// Case conversion. Both return a NEW String and leave the receiver UNCHANGED — the transform
+	// runs on an independent copy of the bytes. `managed.slice(0, len)` hands back a buffer that is
+	// either already private (an owned source is copied eagerly) or shares the source's bytes until
+	// the first `setByte`, at which point COW detaches it — so a literal, a slice, or a buffer some
+	// other String is aliasing is never written through. Returning `managed` after mutating it, as
+	// this used to, made `let b = a.toLower()` silently lowercase `a` as well.
+	function mapAsciiCase(lo Byte, hi Byte, delta AsciiCaseDelta) returns String
 		let len = managed.length()
 		if len == 0 'empty'
 			return String{managed: managed, isAsciiFlag: isAsciiFlag}
 		end 'empty'
 
+		var work = try managed.slice(0, len) otherwise 'sliceErr'
+			panic("String.mapAsciiCase: slice 0..len is always valid")
+		end 'sliceErr'
+
 		for i in 0 upto len 'convert'
-			let b = try managed.byteAt(i) otherwise panic("String.toLower: byteAt OOB — i < len invariant")
-			// ASCII uppercase A-Z (65-90) -> lowercase a-z (97-122)
-			if b >= 65 and b <= 90 'is_upper'
-				try managed.setByte(i, b + 32) otherwise panic("String.toLower: setByte OOB — i < len invariant")
-			end 'is_upper'
+			let b = try work.byteAt(i) otherwise panic("String.mapAsciiCase: byteAt OOB — i < len invariant")
+			if b >= lo and b <= hi 'inRange'
+				try work.setByte(i, b + delta) otherwise panic("String.mapAsciiCase: setByte OOB — i < len invariant")
+			end 'inRange'
 		end 'convert'
-		return String{managed: managed, isAsciiFlag: isAsciiFlag}
+		return String{managed: work, isAsciiFlag: isAsciiFlag}
+	end 'mapAsciiCase'
+
+	// ASCII uppercase A-Z (65-90) -> lowercase a-z (97-122)
+	export function toLower() returns String
+		return mapAsciiCase(65, hi: 90, delta: 32)
 	end 'toLower'
 
+	// ASCII lowercase a-z (97-122) -> uppercase A-Z (65-90)
 	export function toUpper() returns String
-		let len = managed.length()
-		if len == 0 'empty'
-			return String{managed: managed, isAsciiFlag: isAsciiFlag}
-		end 'empty'
-
-		for i in 0 upto len 'convert'
-			let b = try managed.byteAt(i) otherwise panic("String.toUpper: byteAt OOB — i < len invariant")
-			// ASCII lowercase a-z (97-122) -> uppercase A-Z (65-90)
-			if b >= 97 and b <= 122 'is_lower'
-				try managed.setByte(i, b - 32) otherwise panic("String.toUpper: setByte OOB — i < len invariant")
-			end 'is_lower'
-		end 'convert'
-		return String{managed: managed, isAsciiFlag: isAsciiFlag}
+		return mapAsciiCase(97, hi: 122, delta: -32)
 	end 'toUpper'
 
 	/// Trim characters in the given set from both ends of the string.
