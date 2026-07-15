@@ -759,6 +759,92 @@ the runtime *shv2's backend hand-assembles*; a shv2-compiled harness cannot **ru
 Sequencing it after the ladder would contradict P1.2's own mm-trace gate, so it lands in slices,
 each WITH the milestone that first needs it:
 
+> ### ✅ DECIDED 2026-07-15 @ P1.0r — **BUILDER-BUILT `StdModule` THROUGH THE ORDINARY BACKEND.** Hand-assembly is reserved for raw-ABI escapes.
+>
+> **The box below framed this as TWO choices. There are THREE, and the one v1 actually uses for THIS
+> code is the one the box never names:**
+>
+> | | route | v1's use | size, allocator+refcount |
+> |---|---|---|---|
+> | **(a)** | **hand-assembled bytes** | the VEH thunk + ~93 x64 fns (GT/IOCP/subprocess) | **~3,900 lines of C#** (bootstrap) |
+> | **(b)** | **Std-IR TEXT** → `StdParser` → ordinary backend | `runtime.std`, 6,049 lines — panic/backtrace/glue **only** | — |
+> | **(c)** | **plain Maxon source** over a bounded intrinsic surface | ⭐ **`stdlib/Internals.maxon` — where the slab + refcount ACTUALLY live** | **~2,730 lines of Maxon** |
+>
+> ⭐⭐ **THE DECISIVE FACT: v1 MIGRATED the allocator and `__mm_incref`/`__mm_decref` OUT of (b) INTO (c),
+> and left its reasons in the source.** `runtime.std`'s `mm_incref` is now a **3-op delegator** (`call
+> __mm_incref`) whose comment reads *"single source of truth… lives in stdlib/Internals.maxon"*.
+> - [Internals.maxon:19](stdlib/Internals.maxon#L19) — *"Migrated from runtime.std's mm_incref **so the
+>   inliner can see this 2-op body at every call site**."*
+> - [Internals.maxon:1-7](stdlib/Internals.maxon#L1) — they live in stdlib because they *"participate in
+>   the full optimization pipeline (canonicalize, cse, licm, dce, Stage A const hoist, inliner) — **that's
+>   why they live in stdlib rather than runtime.std (which only gets mem2reg)**."*
+> - [runtime.std:4102](maxon-selfhosted/Compiler/Runtime/runtime.std#L4102) — *"an UNCONDITIONAL call
+>   because **runtime.std has no conditional compilation**"* ⇒ `--rc-sanitize`/`--leak-report` pay a call
+>   on the DISABLED path forever.
+>
+> ⇒ **(b) is a route v1 TRIED for exactly this code and ABANDONED.** Adopting it would re-walk a path whose
+> exit is documented. **And (c) is already LOCKED OUT** by §Context's runtime-binding decision (*"exclude
+> `Internals.maxon`, emit natively"*). So the choice is **(a) vs (b)** — with (b)'s one fatal flaw, no
+> inlining, **applying EQUALLY to (a): hand-assembled bytes can never be inlined either.** The thing that
+> killed `runtime.std` for v1 **cannot decide between the two candidates shv2 actually has.**
+>
+> **⇒ Decide on what DOES differ — and shv2 gets a fourth option v1 never had:**
+>
+> **(b′) BUILD THE `StdModule` DIRECTLY, in Maxon, with builder calls — no text, no parser.** v1 wrote IR
+> *text* because it wanted to edit it as text; that cost it a **992-line `StdParser`**, a file-path walk
+> that **panics if `runtime.std` is missing**, and a stdlib-checksum dependency. shv2 needs none of it:
+> - **The pipeline is ALREADY REACHABLE, and `mrt_start` PROVES it** — it is hand-built from raw
+>   `TargetOp`s and flows through the same `emitFunctionChunk` as every user function
+>   ([BackendDispatch.maxon:149-175](maxon-shv2/Compiler/Targets/BackendDispatch.maxon#L149)).
+>   `IrFunction.createFromStd` ([IrFunction.maxon:175](maxon-shv2/Compiler/IR/IrFunction.maxon#L175))
+>   needs **no `FileParseArtifact`, no source position, no `MaxonType`**. ⇒ **The blocker was never the
+>   architecture. It is the VOCABULARY.**
+> - It is **type-checked by the compiler** rather than parsed at runtime, and it is **one spelling for
+>   x64 and arm64** — where (a) duplicates the subsystem per target *by hand* (v1 did: `Arm64MacosGreenThread.maxon`
+>   re-implements 3,853 lines of the same thing in AArch64).
+> - **(a) buys NO CAPABILITY here.** Everything genuinely impossible in ordinary IR — the VEH thunk, GT
+>   context switch, `__gt_morestack`, the OS worker-thread entry — belongs to the **fault handler (already
+>   hand-assembled at P1.0d.3, correctly)** and the **GT scheduler (R3 @ P1.5)**. The allocator + refcount
+>   core needs **only** atomics, OS-import calls, and ordinary internal calls.
+> - ⚠ **(a) STRUCTURALLY INVITES THIS PROJECT'S SIGNATURE BUG, and it already did — in shv2, at P1.0d.3.**
+>   The review (`651b4ea80`) caught the hand-assembled walker having **independently re-spelled the symbol
+>   table's layout that the emitter writes** — *"widen the count and the walker still adds 4, striding the
+>   table at the wrong pitch and naming the wrong function for every frame."* The fix had to be a **runtime
+>   assertion** (`assertSymtabStride`) because **hand-assembly has no compiler-checked contract with the
+>   tier that produced the data.** ONE FACT WRITTEN DOWN TWICE, structurally, forever.
+>
+> ### ⇒ P1.0r's REAL WORK IS THE VOCABULARY — and **"the precondition is satisfied" was FALSE**
+> P1.0d.5b shipped the `memory` band, and the box below treats that as the whole gate. **It is not.** Four
+> things are missing or wrong, and the first two are **the language's own semantics, not a tax the form
+> chose** — `__destruct_*` dispatch reads a destructor pointer *out of the object header* and calls it, in
+> **every** form:
+> 1. ⛔ **NO REGISTER-INDIRECT CALL.** `TargetOp` has only `callDirect` + `iatCall`; `FF /2` with `mod=11`
+>    (`call rax`) **has no encoder path at all**. **This is the hard blocker** — it is how a destructor is
+>    reached.
+> 2. ⛔ **NO `funcAddr`** — needed to *store* that pointer. Already named missing in-tree
+>    ([X64Runtime.maxon:838](maxon-shv2/Compiler/Targets/X64/X64Runtime.maxon#L838)).
+> 3. ⛔ **NO OS-import call from Std** — `VirtualAlloc` is not among `PeWriter`'s four kernel32 imports, and
+>    `iatCall` is Target-tier only, unreachable from a Std op.
+> 4. ⚠ **`StdTypeInfo` RECORDS NO SIGNEDNESS.** It carries `isFloat`/`castCategory`/`storageBytes`, so
+>    `condCodeForPred` **cannot ask**, and every `u64` compare silently takes the SIGNED family
+>    ([StdToX64Conversion.maxon:167](maxon-shv2/Compiler/Targets/X64/StdToX64Conversion.maxon#L167):
+>    *"every Std integer is a signed i64"* — false; `StdType` has `u8`/`u16`/`u32`/`u64`). **Latent** (nothing
+>    emits a `u64` cmp yet) and it does **not** bite Win64 pointers (user-mode addresses never set the high
+>    bit, so both families agree) — **but it bites P1.2's `capacity = -2` rdata sentinel**, which is unsigned
+>    and enormous. The fix is the file's own idiom: **put `isSigned` in the BACKING**, so *"a new case cannot
+>    be added without stating"* it — exactly the argument `storageBytes` already makes at
+>    [StdDialect.maxon:55-62](maxon-shv2/Compiler/IR/Std/StdDialect.maxon#L55).
+>
+> ⇒ **SLICE: `P1.0r.1` = the vocabulary** (indirect call · `funcAddr` · OS-import call · signedness), each
+> red-pinnable on its own; **`P1.0r.2` = the allocator + refcount**, built on it.
+> ⚠ **Atomics are NOT in P1.0r.** The refcount is atomic in the bootstrap (`LOCK INC`), but shv2 is
+> single-threaded until R3 @ P1.5 brings green threads. **State the decision when P1.0r.2 lands** — do not
+> let it be made by inertia, which is precisely what this box exists to prevent.
+>
+> ---
+> *(The original box is kept below: it is the argument that forced the survey, and its instruction —
+> "choose then, with the ops in hand, and write the reason down here" — is what the section above is.)*
+>
 > ### ⭐ R1 @ P1.2 MUST DECIDE THE RUNTIME'S **FORM**. P1.0d.3 DEFERRED IT — DELIBERATELY, NOT BY INERTIA.
 >
 > **The panic runtime (P1.0d.3) is HAND-ASSEMBLED machine code**, per the budget line above and the C#
