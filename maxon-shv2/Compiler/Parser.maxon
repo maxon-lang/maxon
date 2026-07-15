@@ -775,19 +775,21 @@ export type Parser
 	// loop-carried phi). A block's `var`s are drained off the end of this list at the
 	// block's `end` (see closeBlock). Reset per function.
 	//
-	// An `if`'s merge snapshots, by contrast, ARE positional over this whole list — they
-	// compare the two paths' values and mint a phi only where they differ, so an untouched
-	// var costs a snapshot slot but no ValueId (see mergeAtContinuation).
+	// An `if`'s merge works the same way (`assignedBindingsIn`): its snapshots are positional
+	// over the SUBSET of this list its branches assign, in this list's order, and it mints a
+	// phi only where the two paths differ.
 	var mutableVars as VarInfoArray
 	// The enclosing loops, innermost last (M4b). `break`/`continue` resolve their
 	// target here; a `while` pushes on entry and pops after its body. Reset per
 	// function (a stray entry across functions would be a parser bug).
 	var loops as LoopContextArray
 	// The token index of the `end` most recently consumed by `parseBlockBody`. It exists for
-	// ONE reader: `parseWhileStatement`'s drift guard, which checks the `end` the parser really
-	// closed a loop body with against the one `loopBodyEndIndex` predicted from the tokens. A
-	// nested block finishes — and writes this — before its enclosing one does, so by the time a
-	// `parseBlockBody` call returns it holds that call's OWN `end`, which is what the guard reads.
+	// the drift guard `assertScanAligned`, which both `parseWhileStatement` and `parseIfStatement`
+	// run to check the `end` the parser really closed the last body with against the one
+	// `loopBodyEndIndex` / `ifStatementEndIndex` predicted from the tokens. A nested block
+	// finishes — and writes this — before its enclosing one does, so by the time an outer
+	// `parseBlockBody` call returns it holds the OWN `end` of the construct's last body, which
+	// is what the guard reads.
 	var lastBlockBodyEnd as TokenIndex
 	// THE BLOCK EXPRESSION PARSING IS EMITTING INTO, and it MOVES. Until P1.0d.2 an
 	// expression always ended in the block it started in, so "where do ops go" could be a
@@ -1686,19 +1688,39 @@ export type Parser
 	//
 	// M4b VALUE MERGE: because a `var` may be reassigned inside a branch, the value of
 	// a variable at the continuation depends on which path ran. The parser snapshots
-	// each mutable var's value entering the branches, RESTORES it before the else/false
+	// each carried var's value entering the branches, RESTORES it before the else/false
 	// path (so that path resumes from the pre-`if` state), and at the continuation
 	// merges the two incoming snapshots — a variable that differs across the paths gets
 	// a continuation PHI (the same block-arg mechanism loops use), everything else keeps
 	// its common value. Without this, a `var` written only on the taken path would leak
 	// its then-value onto the not-taken path (a real miscompile).
 	//
+	// THE CARRIED SET IS THE VARS THE STATEMENT ASSIGNS, decided from the tokens before
+	// anything is emitted (`assignedBindingsIn` over the whole if's extent) — a SUBSET of
+	// `mutableVars`, in that list's declaration order. A var no branch assigns holds one
+	// value on entry, then-exit AND else-exit, so it can never differ at the merge: it
+	// needs neither a phi nor a snapshot slot, and is left out of all three. This is the
+	// exact analogue of `parseWhileStatement`'s carried set, and it replaces snapshotting
+	// the WHOLE mutable-var set at every branch — which was O(vars in scope) per `if`, and
+	// with the scope-filler count doubling on the scale corpus made `phase:parse` BYTES
+	// bend quadratically while its ALLOCATIONS stayed linear (bigger snapshots, not more).
+	//
 	// Each branch body is a lexical BLOCK (parseBlockBody), so the three snapshots are
 	// all taken at the SAME scope depth — a `var` declared inside a branch has left
-	// `mutableVars` by the time that branch's exit values are read, which is what keeps
-	// `entryVals` / `thenVals` / `elseVals` positionally aligned.
+	// `mutableVars` by the time that branch's exit values are read, and is skipped by
+	// `assignedBindingsIn` (not bound at entry), which keeps `entryVals` / `thenVals` /
+	// `elseVals` positionally aligned with `assignedBindings`.
 	function parseIfStatement(func IrFunction, block IrBlock) returns IrBlock throws ParseError
+		let ifIndex = self.pos
 		let ifTok = try self.consume(TokenKind.if)
+
+		// The carried bindings — read off the tokens covering the WHOLE statement (then plus
+		// every `else`/`else if` branch, through the final `end`), before a single op is
+		// emitted. Every snapshot below is positional over THIS list, so the per-branch cost
+		// is O(assigned), not O(vars in scope). `ifEnd` also feeds the drift guard.
+		let ifEnd = self.ifStatementEndIndex(ifIndex)
+		let assignedBindings = self.assignedBindingsIn(ifIndex, endIndex: ifEnd)
+
 		let cond = try self.parseBoolCondition(func, block: block, kwTok: ifTok)
 		// The condition's own blocks: a short-circuit `and`/`or` in it (`if a() and b()`)
 		// has already branched, and control now sits in ITS merge block. That — not the
@@ -1708,8 +1730,8 @@ export type Parser
 		let thenLabel = try self.consume(TokenKind.charLiteral)
 
 		// Values entering the branches (the condition only reads, so `entry`'s values
-		// are unchanged by it). Positional over `mutableVars`, like a loop phi list.
-		let entryVals = self.snapshotMutableValues()
+		// are unchanged by it). Positional over `assignedBindings`.
+		let entryVals = self.snapshotBindings(assignedBindings)
 
 		// `var` because these blocks are passed to functions that mutate them (the
 		// statement parser fills the block; the finalizers wire its terminator) — a
@@ -1719,18 +1741,22 @@ export type Parser
 
 		// Snapshot the then-branch's exit values, then rewind to the entry state so the
 		// else/false path is parsed against the pre-`if` values, not the then-branch's.
-		let thenVals = self.snapshotMutableValues()
-		self.restoreValues(entryVals)
+		let thenVals = self.snapshotBindings(assignedBindings)
+		self.restoreBindings(assignedBindings, snapshot: entryVals)
 
 		if not self.at(TokenKind.else) 'noElse'
-			return self.finalizeIfNoElse(func, entry: entry, cond: cond, ifTok: ifTok, thenBlock: thenBlock, thenEnd: thenEnd, entryVals: entryVals, thenVals: thenVals)
+			let cont = self.finalizeIfNoElse(func, entry: entry, cond: cond, ifTok: ifTok, thenBlock: thenBlock, thenEnd: thenEnd, bindings: assignedBindings, entryVals: entryVals, thenVals: thenVals)
+			self.assertScanAligned("parseIfStatement", predictedEnd: ifEnd)
+			return cont
 		end 'noElse'
 
 		try self.consume(TokenKind.else)
 		var elseBlock = self.newBlock(func, label: b"ifelse", line: ifTok.line)
 		var elseEnd = try self.parseElseBody(func, elseBlock: elseBlock)
-		let elseVals = self.snapshotMutableValues()
-		return self.finalizeIfElse(func, entry: entry, cond: cond, ifTok: ifTok, thenBlock: thenBlock, thenEnd: thenEnd, elseBlock: elseBlock, elseEnd: elseEnd, thenVals: thenVals, elseVals: elseVals)
+		let elseVals = self.snapshotBindings(assignedBindings)
+		let cont = self.finalizeIfElse(func, entry: entry, cond: cond, ifTok: ifTok, thenBlock: thenBlock, thenEnd: thenEnd, elseBlock: elseBlock, elseEnd: elseEnd, bindings: assignedBindings, thenVals: thenVals, elseVals: elseVals)
+		self.assertScanAligned("parseIfStatement", predictedEnd: ifEnd)
+		return cont
 	end 'parseIfStatement'
 
 	// Parse an `else` body into `elseBlock`: either a nested `if` (the `else if …`
@@ -1759,11 +1785,11 @@ export type Parser
 	// exit values (`thenVals`) — a differing var gets a continuation phi. When the then
 	// branch returns, the continuation is reached only from the false edge, whose values
 	// are already the restored `entryVals`.
-	function finalizeIfNoElse(func IrFunction, entry IrBlock, cond ValueId, ifTok Token, thenBlock IrBlock, thenEnd IrBlock, entryVals ValueIdArray, thenVals ValueIdArray) returns IrBlock
+	function finalizeIfNoElse(func IrFunction, entry IrBlock, cond ValueId, ifTok Token, thenBlock IrBlock, thenEnd IrBlock, bindings VarInfoArray, entryVals ValueIdArray, thenVals ValueIdArray) returns IrBlock
 		var cont = self.newBlock(func, label: b"ifcont", line: ifTok.line)
 		self.emitCondBranch(entry, cond: cond, thenId: thenBlock.id, elseId: cont.id, ifTok: ifTok)
 		if not thenEnd.isTerminated() 'thenFallsThrough'
-			self.mergeAtContinuation(entry, predB: thenEnd, cont: cont, valsA: entryVals, valsB: thenVals)
+			self.mergeAtContinuation(entry, predB: thenEnd, cont: cont, bindings: bindings, valsA: entryVals, valsB: thenVals)
 			self.emitBranch(thenEnd, targetId: cont.id)
 		end 'thenFallsThrough'
 		return cont
@@ -1775,7 +1801,7 @@ export type Parser
 	// merges their exit values (`thenVals`/`elseVals`) with phis for the vars that
 	// differ. When only ONE falls through, the continuation simply carries that branch's
 	// values (no phi — a single predecessor).
-	function finalizeIfElse(func IrFunction, entry IrBlock, cond ValueId, ifTok Token, thenBlock IrBlock, thenEnd IrBlock, elseBlock IrBlock, elseEnd IrBlock, thenVals ValueIdArray, elseVals ValueIdArray) returns IrBlock
+	function finalizeIfElse(func IrFunction, entry IrBlock, cond ValueId, ifTok Token, thenBlock IrBlock, thenEnd IrBlock, elseBlock IrBlock, elseEnd IrBlock, bindings VarInfoArray, thenVals ValueIdArray, elseVals ValueIdArray) returns IrBlock
 		self.emitCondBranch(entry, cond: cond, thenId: thenBlock.id, elseId: elseBlock.id, ifTok: ifTok)
 		let thenTerminated = thenEnd.isTerminated()
 		let elseTerminated = elseEnd.isTerminated()
@@ -1790,41 +1816,44 @@ export type Parser
 
 		var cont = self.newBlock(func, label: b"ifcont", line: ifTok.line)
 		if not thenTerminated and not elseTerminated 'bothFallThrough'
-			self.mergeAtContinuation(thenEnd, predB: elseEnd, cont: cont, valsA: thenVals, valsB: elseVals)
+			self.mergeAtContinuation(thenEnd, predB: elseEnd, cont: cont, bindings: bindings, valsA: thenVals, valsB: elseVals)
 			self.emitBranch(thenEnd, targetId: cont.id)
 			self.emitBranch(elseEnd, targetId: cont.id)
 		end 'bothFallThrough' else if not thenTerminated 'onlyThen'
 			// Only the then branch reaches the continuation — its values carry through.
-			self.restoreValues(thenVals)
+			self.restoreBindings(bindings, snapshot: thenVals)
 			self.emitBranch(thenEnd, targetId: cont.id)
 		end 'onlyThen' else 'onlyElse'
 			// Only the else branch reaches the continuation (its values are already the
 			// current bindings after parsing it, but restore explicitly for symmetry).
-			self.restoreValues(elseVals)
+			self.restoreBindings(bindings, snapshot: elseVals)
 			self.emitBranch(elseEnd, targetId: cont.id)
 		end 'onlyElse'
 		return cont
 	end 'finalizeIfElse'
 
-	// Merge two incoming value snapshots at a continuation block. A mutable binding whose
+	// Merge two incoming value snapshots at a continuation block. A carried binding whose
 	// value differs across the paths gets a continuation PHI (a block-arg) and each
 	// predecessor records the value it carries on its edge; a binding with the same value
 	// on both paths keeps that value with no phi. Each merged binding's current value is
 	// set to the phi (or the common value) so code after the `if` reads the merged value.
 	//
-	// Both snapshots and `mutableVars` are the SAME length: every branch body is a
-	// lexical block, so a `var` declared inside one is out of scope — and off
-	// `mutableVars` — before its exit values are snapshotted. Anything else would mean
-	// the three fell out of step, which is a parser bug, so it panics rather than
-	// merging a prefix and silently dropping the rest.
-	function mergeAtContinuation(predA IrBlock, predB IrBlock, cont IrBlock, valsA ValueIdArray, valsB ValueIdArray)
-		self.assertSnapshotAligned(valsA, site: "mergeAtContinuation/valsA")
-		self.assertSnapshotAligned(valsB, site: "mergeAtContinuation/valsB")
+	// `bindings` is the statement's carried set (`assignedBindings`) in `mutableVars`
+	// declaration order, and both snapshots are positional over it. Phis are therefore
+	// minted in that same order — which is what makes the emitted code identical to the
+	// old whole-`mutableVars` merge: a var no branch assigned had a == b there and got no
+	// phi, so leaving it out of `bindings` changes no decision, only the work done to
+	// reach it. Both snapshots and `bindings` are the SAME length (asserted): every branch
+	// body is a lexical block, so a `var` declared inside one is off `mutableVars` — and so
+	// never entered `bindings` — before its exit values are snapshotted.
+	function mergeAtContinuation(predA IrBlock, predB IrBlock, cont IrBlock, bindings VarInfoArray, valsA ValueIdArray, valsB ValueIdArray)
+		self.assertSnapshotAligned(bindings, snapshot: valsA, site: "mergeAtContinuation/valsA")
+		self.assertSnapshotAligned(bindings, snapshot: valsB, site: "mergeAtContinuation/valsB")
 
 		var edgeArgsA = ValueIdArray.create()
 		var edgeArgsB = ValueIdArray.create()
-		for k in 0 upto self.mutableVars.count() 'eachVar'
-			var binding = try self.mutableVars.get(k) otherwise panic("mergeAtContinuation: mutableVars.get OOB at {k}")
+		for k in 0 upto bindings.count() 'eachVar'
+			var binding = try bindings.get(k) otherwise panic("mergeAtContinuation: bindings.get OOB at {k}")
 			let a = try valsA.get(k) otherwise panic("mergeAtContinuation: valsA.get OOB at {k}")
 			let b = try valsB.get(k) otherwise panic("mergeAtContinuation: valsB.get OOB at {k}")
 			if a == b 'same'
@@ -1840,28 +1869,30 @@ export type Parser
 		self.recordBranchEdge(predB, targetId: cont.id, argIds: edgeArgsB)
 	end 'mergeAtContinuation'
 
-	// Rebind each mutable binding to a previously-captured snapshot value (from
-	// `snapshotMutableValues`). Used to rewind to the pre-branch state before parsing an
-	// `if`'s false path, and to select a single surviving branch's values at a
-	// continuation. Written THROUGH the binding, not by name, so a value is never routed
-	// to a shadow (see LoopPhiVar).
-	function restoreValues(snapshot ValueIdArray)
-		self.assertSnapshotAligned(snapshot, site: "restoreValues")
-		for k in 0 upto self.mutableVars.count() 'each'
-			var binding = try self.mutableVars.get(k) otherwise panic("restoreValues: mutableVars.get OOB at {k}")
-			binding.boundValue = try snapshot.get(k) otherwise panic("restoreValues: snapshot.get OOB at {k}")
+	// Rebind each carried binding to a previously-captured snapshot value (from
+	// `snapshotBindings` over the SAME `bindings` list). Used to rewind to the pre-branch
+	// state before parsing an `if`'s false path, and to select a single surviving branch's
+	// values at a continuation. Written THROUGH the binding, not by name, so a value is
+	// never routed to a shadow (see LoopPhiVar). A var not in `bindings` is assigned by no
+	// branch, so its value is already the one every path agrees on — nothing to restore.
+	function restoreBindings(bindings VarInfoArray, snapshot ValueIdArray)
+		self.assertSnapshotAligned(bindings, snapshot: snapshot, site: "restoreBindings")
+		for k in 0 upto bindings.count() 'each'
+			var binding = try bindings.get(k) otherwise panic("restoreBindings: bindings.get OOB at {k}")
+			binding.boundValue = try snapshot.get(k) otherwise panic("restoreBindings: snapshot.get OOB at {k}")
 		end 'each'
-	end 'restoreValues'
+	end 'restoreBindings'
 
-	// Every value snapshot is positional over `mutableVars` and must therefore have
-	// exactly its length — block scoping is what guarantees that (a branch-local `var`
-	// is drained at the block's `end`, so it can never lengthen a snapshot taken outside
-	// the block). A mismatch means the two fell out of step, which would misattribute
-	// every later binding's value by one, so it fails loudly here rather than silently.
-	function assertSnapshotAligned(snapshot ValueIdArray, site String)
-		let expected = self.mutableVars.count()
+	// Every value snapshot is positional over the carried `bindings` list and must
+	// therefore have exactly its length — block scoping is what guarantees that (a
+	// branch-local `var` is drained at the block's `end`, so it never entered `bindings`
+	// and can never lengthen a snapshot taken outside the block). A mismatch means the two
+	// fell out of step, which would misattribute every later binding's value by one, so it
+	// fails loudly here rather than silently.
+	function assertSnapshotAligned(bindings VarInfoArray, snapshot ValueIdArray, site String)
+		let expected = bindings.count()
 		if snapshot.count() != expected 'drifted'
-			panic("{site}: value snapshot holds {snapshot.count()} entries but {expected} mutable bindings are in scope — the snapshot drifted out of lockstep with mutableVars")
+			panic("{site}: value snapshot holds {snapshot.count()} entries but the if carries {expected} assigned bindings — the snapshot drifted out of lockstep with the carried-bindings list")
 		end 'drifted'
 	end 'assertSnapshotAligned'
 
@@ -1975,19 +2006,8 @@ export type Parser
 		// loop's own phi bindings and never a body-local shadow.
 		var bodyEnd = try self.parseBlockBody(func, block: body)
 
-		// THE GUARD ON THE TOKEN SCAN. `loopBodyEndIndex` re-derives Maxon's block structure at
-		// the token level, so it holds a SECOND copy of a fact the recursive-descent parser owns
-		// — and if the two ever disagree, the scan's extent is too SHORT, the carried set is a
-		// SUBSET, and a loop-carried var silently loses its phi. That failure is a wrong answer
-		// with no diagnostic, so it is converted into a loud one here: the `end` the parser
-		// actually consumed to close this body must be the one the scan predicted.
-		//
-		// This is what makes the duplication safe to keep. A future block statement (`for`,
-		// `match`) added to `parseStatement` without teaching `opensBlockAt` about it trips this
-		// panic on the first spec that nests it inside a loop, instead of miscompiling it.
-		if self.lastBlockBodyEnd != bodyEndIndex 'scanDrifted'
-			panic("parseWhileStatement: the token scan predicted this loop's `end` at token {bodyEndIndex} but the parser closed the body at token {self.lastBlockBodyEnd} — `opensBlockAt` does not know every statement that opens a block, so the carried-variable set it computed may be missing a loop-carried var")
-		end 'scanDrifted'
+		// Guard the token scan against the parse it predicted — see `assertScanAligned`.
+		self.assertScanAligned("parseWhileStatement", predictedEnd: bodyEndIndex)
 
 		let ctx = try self.loops.pop() otherwise panic("parseWhileStatement: loop stack empty after body of '{String.from(loopLabelTok.value)}'")
 
@@ -2030,6 +2050,53 @@ export type Parser
 		end 'scan'
 		return count
 	end 'loopBodyEndIndex'
+
+	// The index of the `end` token that closes the WHOLE `if` statement at `ifIndex` — its
+	// then body AND every `else` / `else if` branch, through the final `end`. The same
+	// depth-counted `opensBlockAt`/`end` walk `loopBodyEndIndex` runs, with one addition: an
+	// `if` chain does not stop at the first depth-0 `end`, because an `else` continues it. So
+	// at each depth-0 `end` the scan PEEKS past the optional block label — if an `else`
+	// follows, the branch it opens (a plain `else`, or the `if` of an `else if`) re-opens the
+	// depth and the scan carries on; otherwise this `end` closes the statement.
+	//
+	// Deliberately TOLERANT of a malformed tail, exactly like `loopBodyEndIndex`: an
+	// unterminated chain yields the end of the token stream, which OVER-approximates the
+	// extent (the safe direction — see `assignedBindingsIn`), and the real parse runs next and
+	// reports the unexpected EOF with a position. The cursor is not moved.
+	function ifStatementEndIndex(ifIndex TokenIndex) returns TokenIndex
+		let count = self.tokens.count()
+		var depth = 0
+		var i = ifIndex
+		while i < count 'scan'
+			if self.opensBlockAt(i) 'open'
+				depth = depth + 1
+			end 'open' else if self.kindAt(i) == TokenKind.end 'close'
+				depth = depth - 1
+				if depth == 0 and not self.elseFollowsEnd(i) 'matched'
+					return i
+				end 'matched'
+			end 'close'
+
+			i = i + 1
+		end 'scan'
+		return count
+	end 'ifStatementEndIndex'
+
+	// Does an `else` follow the `end` at `endIndex` — i.e. does an `if` chain continue past
+	// it? Skips the ONE optional block label (`end 'x' else …`) that may sit between them; a
+	// bare `end else …` has none. Peeking exactly one charLiteral is enough because an `end`
+	// carries at most a single label, and the token after it is either `else` or the next
+	// statement. This is the one place `ifStatementEndIndex` decides a chain continues, so a
+	// missed `else` under-approximates the extent — which the drift guard converts to a loud
+	// panic rather than a silent lost phi.
+	function elseFollowsEnd(endIndex TokenIndex) returns bool
+		var next = endIndex + 1
+		if self.kindAt(next) == TokenKind.charLiteral 'skipLabel'
+			next = next + 1
+		end 'skipLabel'
+
+		return self.kindAt(next) == TokenKind.else
+	end 'elseFollowsEnd'
 
 	// Does the token at `index` open a block that a matching `end` closes?
 	//
@@ -2095,6 +2162,25 @@ export type Parser
 		end 'scan'
 		return assigned
 	end 'namesAssignedIn'
+
+	// THE GUARD ON A TOKEN-EXTENT SCAN, shared by `parseWhileStatement` and `parseIfStatement`.
+	// `loopBodyEndIndex` / `ifStatementEndIndex` re-derive Maxon's block structure at the token
+	// level to fix a construct's carried-variable set BEFORE its body is parsed — a SECOND copy
+	// of a fact the recursive-descent parser owns. If the two disagree the scan's extent is too
+	// SHORT, the carried set is a SUBSET, and a carried var silently loses its merge phi: a wrong
+	// answer with no diagnostic. This converts it into a loud one — the `end` the parser actually
+	// consumed to close the last body (`lastBlockBodyEnd`) must be the one the scan predicted.
+	//
+	// It is what makes the duplication safe to keep. A future block statement (`for`, `match`)
+	// added to `parseStatement` without teaching `opensBlockAt` about it trips this panic on the
+	// first spec that nests it in a loop or an `if`, instead of miscompiling it. (Over-shooting
+	// the extent cannot hide here: it never under-counts the carried set, and it would make the
+	// prediction miss the actual `end` and panic too — so the scan is pinned from both sides.)
+	function assertScanAligned(construct String, predictedEnd TokenIndex)
+		if self.lastBlockBodyEnd != predictedEnd 'scanDrifted'
+			panic("{construct}: the token scan predicted the closing `end` at token {predictedEnd} but the parser closed the last body at token {self.lastBlockBodyEnd} — `opensBlockAt` does not know every statement that opens a block, so the carried-variable set it computed may be missing a carried var")
+		end 'scanDrifted'
+	end 'assertScanAligned'
 
 	// Set up the exit block's post-loop variable values. With no `break`, the exit is
 	// reached only from the condition's false edge, so each var's value there IS its
@@ -2177,16 +2263,44 @@ export type Parser
 		throw ParseError.unknownLoopLabel(keyword, label: String.from(labelTok.value), line: labelTok.line, column: labelTok.column)
 	end 'resolveControlTarget'
 
-	// The current SSA value of each mutable binding IN SCOPE, in declaration order — the
-	// preheader block-arg list for a loop header (their values before the loop runs), and
-	// the branch snapshots an `if` merges.
-	function snapshotMutableValues() returns ValueIdArray
+	// The current SSA value of each binding in `bindings`, in the list's order — one of an
+	// `if`'s three merge snapshots (entry / then-exit / else-exit), positional over the
+	// statement's carried set (`assignedBindings`).
+	function snapshotBindings(bindings VarInfoArray) returns ValueIdArray
 		var vals = ValueIdArray.create()
-		for binding in self.mutableVars 'each'
+		for binding in bindings 'each'
 			vals.push(binding.boundValue)
 		end 'each'
 		return vals
-	end 'snapshotMutableValues'
+	end 'snapshotBindings'
+
+	// The mutable bindings an `if` statement's token extent ASSIGNS — its carried set, the
+	// SUBSET of `mutableVars` a continuation phi can be minted for, returned in `mutableVars`
+	// DECLARATION ORDER. That order is load-bearing: the phis a merge mints follow it, and it
+	// is what makes the sparse merge emit byte-identical code to the old one that iterated the
+	// whole `mutableVars` list (see mergeAtContinuation). Token/assignment order would permute
+	// two phis of one `if` and move codegen — the scale corpus's rotating write set proves it
+	// (`w5 = …; w0 = …` assigns in the order 5, 0 but must merge in the order 0, 5).
+	//
+	// Built by filtering `mutableVars` through `namesAssignedIn` — the SAME token scan the loop
+	// carried set uses. The scan OVER-approximates (a shadowing inner `let`/`var`, or a name
+	// assigned only past the extent when `ifStatementEndIndex` runs wide, is included), and that
+	// is FREE: an unassigned carried binding has a == b at the merge and mints no phi, costing
+	// one snapshot slot and nothing else. UNDER-approximating would drop a real phi — a silent
+	// miscompile — so the extent errs wide and the drift guard (`assertScanAligned`) refuses a
+	// too-short one. A name in scope but NOT mutable, or not bound at entry (a branch-local
+	// `var`), matches no `mutableVars` entry and is correctly absent.
+	function assignedBindingsIn(startIndex TokenIndex, endIndex TokenIndex) returns VarInfoArray
+		let assigned = self.namesAssignedIn(startIndex, endIndex: endIndex)
+		var bindings = VarInfoArray.create()
+		for k in 0 upto self.mutableVars.count() 'each'
+			var binding = try self.mutableVars.get(k) otherwise panic("assignedBindingsIn: mutableVars.get OOB at {k}")
+			if assigned.contains(binding.name) 'isAssigned'
+				bindings.push(binding)
+			end 'isAssigned'
+		end 'each'
+		return bindings
+	end 'assignedBindingsIn'
 
 	// The current SSA value of each phi binding, in phi order — an in-edge's block-arg
 	// list (a back-edge to the header, or a break to the exit). Read off the BINDING, so
