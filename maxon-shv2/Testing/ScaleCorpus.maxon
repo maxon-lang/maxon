@@ -1,10 +1,17 @@
 // ScaleCorpus — the generated ladder the scale suite measures.
 //
-// ONE PROGRAM PER RUNG, and each rung DOUBLES all six structural knobs at once. Six rungs is a
-// 32x span in six compiles. The alternative — a matrix, one axis per knob — would be six ladders
-// and thirty-six compiles to learn the same thing, because the question is never "which knob is
+// ONE PROGRAM PER RUNG, and each rung DOUBLES all eight structural knobs at once. Six rungs is a
+// 32x span in six compiles. The alternative — a matrix, one axis per knob — would be eight ladders
+// and forty-eight compiles to learn the same thing, because the question is never "which knob is
 // the compiler slow in" (the per-phase table answers that already) but "does the whole thing stay
-// linear as a program grows", and a program grows in every direction at once.
+// linear as a program grows", and a program grows in every direction at once. (Two SHIFT shapes ride
+// along that are COVERAGE, not knobs — they are fixed-size and do not double; see `shiftCoverageSource`.)
+//
+// ⚠ THE CORPUS NOW DECLARES ITSELF. Every run prints `printCorpusManifest` — the constructs it
+// generates, the dimensions it scales, and, load-bearing, the ones it structurally CANNOT see (it
+// measures memory, never time; it compiles a subset of Maxon, not the whole language). The corpus was
+// blind in four measured dimensions at once and every blind spot was silent; an instrument that cannot
+// name what it cannot see keeps producing confident zeros.
 //
 // ARCHITECTURE.md claims compilation is linear in program size, and quotes measurements to back it —
 // 1.96 -> ~1.0 for a 3,200-`if` function, 40x faster, a 19,200-block function that used to
@@ -70,8 +77,10 @@
 // `--emit-corpus=<dir>` dumps a ladder anywhere you want to look at it.
 //
 // THE SUBSET: shv2 implements `int` arithmetic, functions (<=6 params), `if`, `while`, `break`,
-// `return`, `let`, `var`. No `print`, no structs, no arrays, no strings, no `for`. Everything below
-// stays inside it — see the 15 specs in `specs-shv2/`.
+// `return`, `let`, `var`, bitwise + shifts (`and`/`shl`/`shr`), and ranged typealiases. No `print`, no
+// structs, no arrays, no strings, no `for`, no `as` casts. Everything below stays inside it — and
+// `printCorpusManifest` states exactly this boundary on every run, so a construct outside it (and the
+// codegen change to it that would be invisible) is NAMED rather than silently absent.
 
 // Which rung of the ladder, and how many of them. A rung DOUBLES the one below it, so these are
 // exponents, not sizes: `--rungs=20` would not be a big run, it would be a program a hundred
@@ -119,12 +128,12 @@ end 'parseRungCount'
 export typealias KnobSize = int(1 to 1048576)
 
 // ===========================================================================================
-// The six knobs, and their rung-0 sizes
+// The eight knobs, and their rung-0 sizes
 // ===========================================================================================
 //
 // Each is `base << rung`. The bases are tuned so that rung 0 clears fixed process + stdlib
-// overhead (a rung that compiles in 3 ms measures the OS, not the compiler) and rung 5 stays near
-// a second. They are the ONE place to retune if the ladder gets too slow or too fast.
+// overhead (a rung that compiles in 3 ms measures the OS, not the compiler) while the top rung stays
+// tractable. They are the ONE place to retune if the ladder gets too slow or too fast.
 
 // The realistic codebase shape: many small functions. Each is a few ops — a couple of arithmetic
 // ops and a branch — which is what most real functions are.
@@ -157,52 +166,130 @@ let CallChainBase = 8 as KnobSize
 // the allocator sits on x1.99.
 let PressuredLoopsBase = 2 as KnobSize
 
-// How many MUTABLE LOCALS a long generated function carries. NOT a doubling knob — it is a fixed,
-// realistic number, and that is the whole point.
+// ONE function, ONE chain of loops NESTED to depth N — distinct from `pressuredLoops`, which grows
+// loop COUNT at depth 1. Depth is what the loop-phi token pre-scan climbs: `parseWhileStatement`
+// re-derives each loop's extent from the tokens (`loopBodyEndIndex`) and reads its assigned names off
+// them (`namesAssignedIn`), and a loop NESTED inside another has its tokens re-scanned once per
+// enclosing loop. So D nested loops make the scan O(depth x tokens) — quadratic in TIME.
 //
-// ⚠ THIS EXISTS BECAUSE THE CORPUS WAS BLIND, AND IT WAS BLIND IN THE ONE DIMENSION THAT MATTERS.
-// The parser builds SSA on the fly, and it cost **O(vars-in-scope)** at every branch: each `if`
-// SNAPSHOTS the whole mutable-var set, and each `while` MINTED A PHI PER MUTABLE VAR IN SCOPE. So the
-// real cost was O(V x B) — and `longFunction` and `deepBlocks` each declared exactly **ONE**
-// accumulator and mutated it in every branch. **V = 1, so O(V x B) collapsed to O(B), and the entire
-// V dimension was unmeasurable.** The knob named for growing branches could not see the cost of
-// growing branches.
+// ⚠ IT WILL LIKELY READ ~LINEAR HERE ANYWAY, AND THAT IS THE POINT OF THE BLIND-SPOT DECLARATION. The
+// scan allocates ~one small `AssignedNameSet` per loop and mints one phi per carried var per loop —
+// both LINEAR in depth — so its cost is in TIME, which scale-test does not measure. The knob exists so
+// the shape is present the day the scan starts ALLOCATING per token; until then the manifest names it
+// as the canonical example of a superlinearity this instrument cannot see. See `printCorpusManifest`.
 //
-// ⇒ It saw it the moment it stopped being blind: the `while` half is FIXED (a loop now carries a phi
-// only for the vars its token extent ASSIGNS — see Parser.parseWhileStatement), which took
-// `pruneDeadBlockArgs` from x2.17 bytes per doubling to x1.99. **KEEP THIS KNOB HONEST ANYWAY.** The
-// `if` half is still O(V) snapshots per branch, and this is the only thing that can see it.
-//
-// A knob built to expose a bug you already found only finds bugs you already found. So the fix is to
-// make the generated functions REALISTIC — real Maxon functions carry a handful of locals mutated
-// across many branches — and let the cost surface on its own, along with any other V-dependent cost
-// nobody has thought to look for.
-//
-// SIX is chosen, not round: enough that a snapshot is not a special case (V=1 and V=2 both flatter
-// the parser), few enough to stay honest about what a function really holds, and well inside the
-// 14-GPR pool so this knob provokes no spill and stays a measurement of the PARSER rather than an
-// accidental second copy of `pressuredLoops`.
-let LocalsPerFunction = 6 as KnobSize
+// Its base is the smallest of any knob: the loops all carry the SINGLE accumulator `acc`, so peak
+// register pressure is one value at ANY depth (an E5001-safe deep nest — a per-level counter would be
+// live across every enclosing loop and trip E5001 at depth ~14). Base 2 reaches depth 64 at rung 5 —
+// realistic in shape (real code nests loops to depth 3), super-realistic in magnitude, exactly as
+// `longFunction`'s 3,200 ifs are.
+let LoopNestBase = 2 as KnobSize
 
-// Declare the mutable locals, each seeded from the parameter `a` so the folder cannot see through
-// them and constant-fold the function away.
-function mutableLocalsDecl() returns String
+// How many SCOPE-FILLER locals a long generated function carries — the V DIMENSION, and it DOUBLES.
+//
+// ⚠ THIS DOUBLES BECAUSE THE CORPUS WAS BLIND, AND IT WAS BLIND IN THE ONE DIMENSION IT NAMED ITSELF
+// FOR. The parser builds SSA on the fly and pays a cost O(vars-in-scope) at every branch: each `if`
+// SNAPSHOTS the whole mutable-var set, and — until it was fixed — every `ParseExpression` snapshotted
+// the variable registry too. `longFunction` and `deepBlocks` carried a FIXED handful of locals, so V
+// never grew and no O(V·anything) cost could ever surface. **A fixed V is a V dimension the ladder
+// cannot climb.** The comment that used to sit here defended the constant as "realistic, and that is
+// the whole point" — and a review DISPROVED exactly that reasoning: real IS the shape, but the
+// MAGNITUDE must be scaled past real, or the instrument sees nothing. `longFunction` already does this
+// with 3,200 `if`s; this does it with locals.
+//
+// So V doubles, and the base is picked so the TOP rung reaches ~4,096 locals — into the thousands,
+// which is where the deleted `ParseExpression` snapshot's O(V) cost actually bit (~4,000). Real
+// functions top out near ~30 locals (measured across maxon-shv2 + stdlib: p99 = 16, max = 44), so
+// this is deliberately super-realistic in magnitude and realistic in shape.
+//
+// WHAT THE LADDER NOW SEES (measured on current `main`, both V and the ifs doubling):
+//   • `phase:parse` ALLOCATIONS grow x2.00 — LINEAR. The `ParseExpression` HashSet snapshot that went
+//     O(V) per call is GONE (deleted with the ternary short-circuit), so this column is now a
+//     REGRESSION GUARD, and its being linear is that fix being CONFIRMED, not the knob being idle.
+//   • `phase:parse` BYTES grow ~x3.9 — QUADRATIC. That is the `if`-half snapshot, which copies the
+//     whole mutable-var set (O(V)) at every branch: O(V) per if × O(ifs) ifs = O(V·ifs), and with both
+//     doubling that is x4. KNOWN and deliberately unfixed (a surplus copy that mints no ValueId);
+//     visible for the first time because V finally moves. Flattening it is a SEPARATE rung.
+let LocalsPerFunctionBase = 128 as KnobSize
+
+// The BOUNDED set of accumulators the generated branches actually MUTATE — the "assigned" set, held
+// apart from the "in-scope" set above so the two dimensions stay distinct.
+//
+// It is a small constant on purpose: values live across the branches must fit the 14-GPR pool, so the
+// knob measures the PARSER (O(vars in scope)) and never accidentally becomes a second `pressuredLoops`
+// by spilling. The V scope-fillers each fold into one of these the instant they are declared (see
+// `fillerLocalsDecl`), so a filler's live range is length ~1 and the machine only ever holds these
+// six — while all V+6 remain IN SCOPE for every branch's snapshot. That gap between "in scope" (V+6)
+// and "live" (6) is the whole trick that lets V climb into the thousands without tripping E5001.
+let WorkingLocalsPerFunction = 6 as KnobSize
+
+// Declare the bounded working accumulators — the set the generated branches MUTATE — each seeded from
+// the parameter `a` so the folder cannot see through them and fold the function away.
+function workingLocalsDecl() returns String
 	var out = ""
-	for v in 0 upto LocalsPerFunction 'decl'
-		out.append("\tvar l{v} = a + {v + 1}\n")
+	for w in 0 upto WorkingLocalsPerFunction 'decl'
+		out.append("\tvar w{w} = a + {w + 1}\n")
 	end 'decl'
 	return out
-end 'mutableLocalsDecl'
+end 'workingLocalsDecl'
 
-// Read every local back into a sum. Without this the later ones are DEAD, and a dead var is a var a
-// future pass may legitimately drop — which would silently take the V dimension away again.
-function mutableLocalsSum() returns String
-	var out = "\tvar sum = a\n"
-	for v in 0 upto LocalsPerFunction 'sum'
-		out.append("\tsum = sum + l{v}\n")
-	end 'sum'
+// Declare `localCount` SCOPE-FILLER locals — the V dimension. Each is folded into a working
+// accumulator the instant it is declared, which is load-bearing in two independent ways:
+//
+//   IN SCOPE, NOT LIVE. Once declared, a filler stays in the parser's mutable-var set until the
+//     function ends, so every later branch snapshots it — that is the O(V) parser cost this knob
+//     exists to grow. But its VALUE is dead after the fold one line down, so the backend holds it for
+//     a single instruction and never spills it. Declaring all V at the top and reading them at the END
+//     instead (the old `sum`) makes all V LIVE at once and trips E5001 at V > ~13 — which is why that
+//     shape could never have carried a doubling V at all.
+//   NOT DEAD. The fold USES the filler, so no dead-code pass may drop it and quietly take the V
+//     dimension away again.
+function fillerLocalsDecl(localCount KnobSize) returns String
+	var out = ""
+	for v in 0 upto localCount 'fill'
+		out.append("\tvar l{v} = a + {v + 1}\n")
+		out.append("\tw{v mod WorkingLocalsPerFunction} = w{v mod WorkingLocalsPerFunction} + l{v}\n")
+	end 'fill'
 	return out
-end 'mutableLocalsSum'
+end 'fillerLocalsDecl'
+
+// The full local prelude a scaling function opens with: the bounded working set the branches mutate,
+// then `localCount` scope-fillers. Shared by `longFunction` and `deepBlocks` so the two measure the
+// SAME V dimension against different CFG shapes rather than each spelling the prelude out.
+function scopedLocalsDecl(localCount KnobSize) returns String
+	var out = workingLocalsDecl()
+	out.append(fillerLocalsDecl(localCount))
+	return out
+end 'scopedLocalsDecl'
+
+// The shared epilogue: sum the bounded working accumulators and RETURN the total. Only these six are
+// read here, so peak pressure at the end stays at six — the fillers are long dead and cost nothing.
+// It emits the `return` too, so `longFunction` and `deepBlocks` share the whole tail, not just the sum.
+function workingLocalsSumAndReturn() returns String
+	var out = "\tvar sum = a\n"
+	for w in 0 upto WorkingLocalsPerFunction 'sum'
+		out.append("\tsum = sum + w{w}\n")
+	end 'sum'
+	out.append("\treturn sum\n")
+	return out
+end 'workingLocalsSumAndReturn'
+
+// A nesting-indent depth: bounded well above `LoopNestBase << MaxRungCount` plus the couple of levels
+// the generator adds, so `d + 2` for the deepest loop stays in range.
+typealias TabCount = int(0 to 2097152)
+
+// `count` tab characters — the cosmetic indentation for the nested-loop knob. Maxon blocks are
+// delimited by `end 'label'`, not by indentation, so this is purely for a human reading a dumped
+// corpus; the parser's loop-phi scan counts `while`/`end` TOKENS and never looks at it.
+function tabs(count TabCount) returns String
+	var out = ""
+	var n = count
+	while n > 0 'each'
+		out.append("\t")
+		n = n - 1
+	end 'each'
+	return out
+end 'tabs'
 
 // How many accumulators each pressured loop holds live ACROSS a call.
 //
@@ -281,19 +368,24 @@ function generateRung(root FilePath, rung RungIndex) returns ScaleRung throws Sc
 
 	let fileCount = knobAt(FilesBase, rung: rung)
 	let funcCount = knobAt(FunctionsBase, rung: rung)
+	let localCount = knobAt(LocalsPerFunctionBase, rung: rung)
 
 	var sourceBytes = 0 as SourceByteCount
 	var written = StringArray.create()
+	// The `manyFunctions` names, in call order — filled by `writeManyFunctions`, read back by `main`.
+	var funcNames = StringArray.create()
 
 	// `a_` / `b_` / ... prefixes only order the directory listing for a human reading a dumped
 	// corpus; shv2 merges files in listing order and the merge is order-independent.
 	sourceBytes = sourceBytes + try writeRungFile(dir, name: "a_seed", source: seedSource(), written: written)
-	sourceBytes = sourceBytes + try writeManyFunctions(dir, fileCount: fileCount, funcCount: funcCount, written: written)
-	sourceBytes = sourceBytes + try writeRungFile(dir, name: "c_long", source: longFunctionSource(knobAt(LongIfsBase, rung: rung)), written: written)
-	sourceBytes = sourceBytes + try writeRungFile(dir, name: "d_blocks", source: deepBlocksSource(knobAt(DeepBlocksBase, rung: rung)), written: written)
+	sourceBytes = sourceBytes + try writeManyFunctions(dir, fileCount: fileCount, funcCount: funcCount, written: written, funcNames: funcNames)
+	sourceBytes = sourceBytes + try writeRungFile(dir, name: "c_long", source: longFunctionSource(knobAt(LongIfsBase, rung: rung), localCount: localCount), written: written)
+	sourceBytes = sourceBytes + try writeRungFile(dir, name: "d_blocks", source: deepBlocksSource(knobAt(DeepBlocksBase, rung: rung), localCount: localCount), written: written)
 	sourceBytes = sourceBytes + try writeRungFile(dir, name: "e_chain", source: callChainSource(knobAt(CallChainBase, rung: rung)), written: written)
 	sourceBytes = sourceBytes + try writeRungFile(dir, name: "f_loops", source: pressuredLoopsSource(knobAt(PressuredLoopsBase, rung: rung)), written: written)
-	sourceBytes = sourceBytes + try writeRungFile(dir, name: "g_main", source: mainSource(fileCount, funcCount: funcCount, chainLength: knobAt(CallChainBase, rung: rung)), written: written)
+	sourceBytes = sourceBytes + try writeRungFile(dir, name: "g_nested", source: nestedLoopsSource(knobAt(LoopNestBase, rung: rung)), written: written)
+	sourceBytes = sourceBytes + try writeRungFile(dir, name: "h_shifts", source: shiftCoverageSource(), written: written)
+	sourceBytes = sourceBytes + try writeRungFile(dir, name: "i_main", source: mainSource(funcNames, chainLength: knobAt(CallChainBase, rung: rung)), written: written)
 
 	try pruneRungDir(dir, generated: written)
 
@@ -377,7 +469,13 @@ end 'seedSource'
 // The `manyFunctions` + `manyFiles` knobs, which are one piece of work: N functions spread over M
 // real files. Both double per rung, so functions-per-file is constant and the two knobs stay
 // independent — M is what `load`/`merge`/the query spine see, N is what the pass pipeline sees.
-function writeManyFunctions(dir FilePath, fileCount KnobSize, funcCount KnobSize, written StringArray) returns SourceByteCount throws ScaleError
+//
+// It appends every function's NAME to `funcNames`, in the order it generated them. `main` calls them
+// back from that list — so the enumeration (the ceiling division and the `>= funcCount` break) lives
+// HERE, once. When it lived twice, `main`'s copy had to reproduce this one's names exactly or it would
+// call an undefined `sfX_Y` (a broken run) or skip one (an uncalled function a future DCE deletes,
+// silently flattening the knob — the very failure `mainSource` guards against).
+function writeManyFunctions(dir FilePath, fileCount KnobSize, funcCount KnobSize, written StringArray, funcNames StringArray) returns SourceByteCount throws ScaleError
 	// Ceiling division: the last file takes the remainder, and no function is dropped because the
 	// counts did not divide evenly.
 	let perFile = (funcCount + fileCount - 1) / fileCount
@@ -390,6 +488,7 @@ function writeManyFunctions(dir FilePath, fileCount KnobSize, funcCount KnobSize
 			if funcIndex >= funcCount 'past'
 				break
 			end 'past'
+			funcNames.push(smallFunctionName(fileIndex, slot: slot))
 			out.append(smallFunctionSource(fileIndex, slot: slot, salt: funcIndex))
 		end 'eachFunc'
 		total = total + try writeRungFile(dir, name: "b_funcs_{fileIndex}", source: out, written: written)
@@ -426,38 +525,38 @@ function smallFunctionName(fileIndex KnobSize, slot KnobSize) returns String
 	return "sf{fileIndex}_{slot}"
 end 'smallFunctionName'
 
-// The `longFunction` knob: ONE function, N sequential `if`s over `LocalsPerFunction` mutable locals.
-// At rung 5 this is the 3,200-`if` benchmark ARCHITECTURE.md quotes a measurement for. It grows OPS
-// in a near-straight line; the CFG grows with it but stays a simple chain.
+// The `longFunction` knob: ONE function, N sequential `if`s, over a bounded working set and
+// `localCount` scope-fillers. At rung 5 this is the 3,200-`if` benchmark ARCHITECTURE.md quotes a
+// measurement for. It grows OPS in a near-straight line; the CFG grows with it but stays a simple
+// chain.
 //
-// Two things here are load-bearing, and the knob measured nothing without them (see
-// `LocalsPerFunction`):
+// Three things here are load-bearing, and the knob measured nothing without the first two (see
+// `LocalsPerFunctionBase`):
 //
-//   • SEVERAL locals, so V > 1 and the parser's per-branch O(vars-in-scope) snapshot is visible at
-//     all. It used to be one `var acc`.
-//   • Each branch mutates a ROTATING SUBSET, never all of them. A branch that wrote EVERY local
-//     would make "cost O(vars in scope)" and "cost O(vars actually assigned)" the same number, and
-//     the corpus could not tell the two apart — which is precisely the distinction that decides
-//     whether a write-trail is worth building.
-//
-// The guard is a SHORT-CIRCUIT `and`, which is what real code writes and which — measured
-// 2026-07-14, while fixing the `const` flags bug — appeared in this corpus **exactly nowhere**. A
-// codegen change to the commonest conditional shape in the language was invisible to the instrument.
-function longFunctionSource(ifCount KnobSize) returns String
-	var out = "// Generated by ScaleCorpus: the long-function knob — {ifCount} sequential ifs over {LocalsPerFunction} locals.\n"
+//   • `localCount` SCOPE-FILLERS, so V climbs and the parser's per-branch O(vars-in-scope) snapshot
+//     has something to climb WITH. Every filler is in scope at every `if` below it, and there are V of
+//     them at the top rung. It used to be a fixed handful.
+//   • Each branch mutates a ROTATING SUBSET of the bounded WORKING set, never the whole thing. A branch
+//     that wrote every var in scope would make "cost O(vars in scope)" and "cost O(vars assigned)" the
+//     same number, and the corpus could not tell the two apart — precisely the distinction that
+//     decides whether a write-trail is worth building. Here in-scope is V+6 and assigned is ≤3.
+//   • The guard is a SHORT-CIRCUIT `and`, which is what real code writes and which — measured
+//     2026-07-14, while fixing the `const` flags bug — appeared in this corpus exactly nowhere. A
+//     codegen change to the commonest conditional shape in the language was invisible to the instrument.
+function longFunctionSource(ifCount KnobSize, localCount KnobSize) returns String
+	var out = "// Generated by ScaleCorpus: the long-function knob — {ifCount} sequential ifs over {WorkingLocalsPerFunction} working locals and {localCount} scope-fillers.\n"
 	out.append("function scaleLongIf(a int) returns int\n")
-	out.append(mutableLocalsDecl())
+	out.append(scopedLocalsDecl(localCount))
 	for i in 0 upto ifCount 'eachIf'
-		let p = i mod LocalsPerFunction
-		let q = (i + 1) mod LocalsPerFunction
-		let r = (i + 2) mod LocalsPerFunction
-		out.append("\tif l{p} > {i} and l{q} < l{r} 'c{i}'\n")
-		out.append("\t\tl{p} = l{p} + {i mod 5 + 1}\n")
-		out.append("\t\tl{q} = l{q} + l{r}\n")
+		let p = i mod WorkingLocalsPerFunction
+		let q = (i + 1) mod WorkingLocalsPerFunction
+		let r = (i + 2) mod WorkingLocalsPerFunction
+		out.append("\tif w{p} > {i} and w{q} < w{r} 'c{i}'\n")
+		out.append("\t\tw{p} = w{p} + {i mod 5 + 1}\n")
+		out.append("\t\tw{q} = w{q} + w{r}\n")
 		out.append("\tend 'c{i}'\n")
 	end 'eachIf'
-	out.append(mutableLocalsSum())
-	out.append("\treturn sum\n")
+	out.append(workingLocalsSumAndReturn())
 	out.append("end 'scaleLongIf'\n")
 	return out
 end 'longFunctionSource'
@@ -465,26 +564,27 @@ end 'longFunctionSource'
 // The `deepBlocks` knob: ONE function whose BLOCK count is huge. Each if/else is three blocks (then,
 // else, continuation), so this lands near 3x its knob — ~19,200 blocks at rung 5, which is the
 // shape that used to SIGSEGV and the reason "no CFG traversal may recurse" is a rule rather than a
-// preference. Distinct from `longFunction`: that grows ops along a chain, this grows the CFG.
-// ⚠ THE TWO ARMS MUTATE DIFFERENT LOCALS, DELIBERATELY. That is what makes the merge do real work:
-// each arm leaves a different subset of the locals changed, so the join genuinely has to reconcile
-// them. When both arms wrote the SAME single `acc`, every merge was the trivial one-phi case and the
+// preference. Distinct from `longFunction`: that grows ops along a chain, this grows the CFG. It
+// carries the same `localCount` scope-fillers, so the V dimension is measured against a DIAMOND CFG
+// here and a straight chain there.
+// ⚠ THE TWO ARMS MUTATE DIFFERENT WORKING LOCALS, DELIBERATELY. That is what makes the merge do real
+// work: each arm leaves a different subset changed, so the join genuinely has to reconcile them. When
+// both arms wrote the SAME single `acc`, every merge was the trivial one-phi case and the
 // snapshot-and-reconcile cost this knob is supposed to provoke never appeared.
-function deepBlocksSource(ifElseCount KnobSize) returns String
-	var out = "// Generated by ScaleCorpus: the deep-blocks knob — {ifElseCount} if/elses, ~{ifElseCount * 3} blocks, {LocalsPerFunction} locals.\n"
+function deepBlocksSource(ifElseCount KnobSize, localCount KnobSize) returns String
+	var out = "// Generated by ScaleCorpus: the deep-blocks knob — {ifElseCount} if/elses, ~{ifElseCount * 3} blocks, {WorkingLocalsPerFunction} working locals and {localCount} scope-fillers.\n"
 	out.append("function scaleDeepBlocks(a int) returns int\n")
-	out.append(mutableLocalsDecl())
+	out.append(scopedLocalsDecl(localCount))
 	for i in 0 upto ifElseCount 'eachIfElse'
-		let p = i mod LocalsPerFunction
-		let q = (i + 1) mod LocalsPerFunction
-		out.append("\tif l{p} > {i} 'd{i}'\n")
-		out.append("\t\tl{p} = l{p} + {i mod 3 + 1}\n")
+		let p = i mod WorkingLocalsPerFunction
+		let q = (i + 1) mod WorkingLocalsPerFunction
+		out.append("\tif w{p} > {i} 'd{i}'\n")
+		out.append("\t\tw{p} = w{p} + {i mod 3 + 1}\n")
 		out.append("\tend 'd{i}' else 'e{i}'\n")
-		out.append("\t\tl{q} = l{q} - {i mod 2 + 1}\n")
+		out.append("\t\tw{q} = w{q} - {i mod 2 + 1}\n")
 		out.append("\tend 'e{i}'\n")
 	end 'eachIfElse'
-	out.append(mutableLocalsSum())
-	out.append("\treturn sum\n")
+	out.append(workingLocalsSumAndReturn())
 	out.append("end 'scaleDeepBlocks'\n")
 	return out
 end 'deepBlocksSource'
@@ -553,32 +653,138 @@ function pressuredLoopsSource(loopCount KnobSize) returns String
 	return out
 end 'pressuredLoopsSource'
 
+// The condition every nested loop tests. Large enough that the loop is not trivially one iteration —
+// the compiler never RUNS these programs, so the exact bound is irrelevant to the measurement; only
+// the loop's SHAPE is. It is compared against the opaque `acc`, so the folder cannot see through it.
+let NestedLoopLimit = 1000000
+
+// The `loopNest` knob: ONE function, ONE chain of loops NESTED to `depth`. Distinct from
+// `pressuredLoops` (loop COUNT at depth 1): this grows loop DEPTH, which is what the loop-phi token
+// pre-scan climbs — `parseWhileStatement` re-scans a loop's whole token extent, and a loop nested
+// inside another is re-scanned once per enclosing loop, so this drives that scan O(depth x tokens).
+//
+// EVERY loop tests and mutates the SINGLE carried accumulator `acc`. That is deliberate: it keeps peak
+// register pressure at one value however deep the nest goes (a per-level counter would be live across
+// every enclosing loop and trip E5001 at depth ~14 — see `LoopNestBase`), and it keeps the loops
+// fold-resistant, because `acc` originates in the opaque seed.
+//
+// ⚠ EXPECT THIS TO READ ~LINEAR IN MEMORY EVEN IF THE SCAN IS QUADRATIC IN TIME. The scan allocates
+// ~one `AssignedNameSet` per loop (linear in depth) and each loop mints one phi for `acc` (linear in
+// depth); its O(depth x tokens) cost is spent WALKING tokens, which allocates nothing. scale-test
+// measures memory only, so a time-only superlinearity is invisible here BY DESIGN — this knob is the
+// manifest's worked example of that blind spot, not a curve expected to bend.
+function nestedLoopsSource(depth KnobSize) returns String
+	var out = "// Generated by ScaleCorpus: the loop-nest knob — one chain of {depth} loops nested to depth {depth}, all carrying one accumulator.\n"
+	out.append("function scaleNested(a int) returns int\n")
+	out.append("\tvar acc = a\n")
+
+	// One pass: append each loop's opener, and PREPEND its `end` to a separate string. Prepending is
+	// what puts the closers in innermost-first order (`n{depth-1}` … `n0`) with no reverse index — a
+	// backward count would have to reach 0, which a ranged loop counter cannot represent.
+	var closes = ""
+	for d in 0 upto depth 'open'
+		out.append("{tabs(d + 1)}while acc < {NestedLoopLimit} 'n{d}'\n")
+		out.append("{tabs(d + 2)}acc = acc + {d + 1}\n")
+		closes = "{tabs(d + 1)}end 'n{d}'\n{closes}"
+	end 'open'
+
+	out.append(closes)
+	out.append("\treturn acc\n")
+	out.append("end 'scaleNested'\n")
+	return out
+end 'nestedLoopsSource'
+
+// The mask that bounds a dynamic shift COUNT to a sane, non-negative range. A count derived this way
+// is a runtime value the folder cannot see, so it takes the GUARDED shift path — the 6-7 ops that
+// saturate an out-of-range count — which a constant count folds away and which nothing in this corpus
+// exercised before. This is also the corpus's bitwise `and` on plain ints (the guards' `and` is the
+// short-circuit one, over bools).
+let ShiftCountMask = 63
+
+// The shift COVERAGE shapes. These do NOT scale — they are about COVERAGE, not the ladder: their
+// value is that a future codegen change to shifts is no longer invisible, the way the `const`-flags
+// fix was invisible because the corpus had no `and`/`or`. A shift codegen change moves these functions'
+// emitted bytes, and the trend delta reports ANY movement, constant or not.
+//
+// Four axes are covered that the corpus had at ZERO before:
+//   • CONSTANT count (folded at compile time) vs DYNAMIC count (a runtime value, guarded).
+//   • SIGNED operand (arithmetic / sign fill) vs RANGED `int(0 to u64.max)` operand (logical / zero
+//     fill). The fill is decided by the LEFT operand's type, and this is the shape that once hid a
+//     fold-vs-codegen disagreement (const=0 vs dyn=-4294967296).
+function shiftCoverageSource() returns String
+	var out = "// Generated by ScaleCorpus: shift COVERAGE (fixed, not scaled) — const/dynamic counts over signed and ranged operands.\n"
+	out.append("typealias ScaleWide = int(0 to u64.max)\n")
+	out.append("typealias ScaleSigned = int(i64.min to i64.max)\n")
+	out.append("\n")
+
+	// Dynamic count, signed operand: the guarded shl then shr.
+	out.append("function scaleShiftDyn(v ScaleSigned, c ScaleSigned) returns int\n")
+	out.append("\tlet x = v shl c\n")
+	out.append("\treturn x shr c\n")
+	out.append("end 'scaleShiftDyn'\n")
+	out.append("\n")
+
+	// Constant count, ranged (unsigned) operand: zero-fill decided by the LEFT operand's range.
+	out.append("function scaleShiftWideConst(v ScaleWide) returns int\n")
+	out.append("\treturn v shr 60\n")
+	out.append("end 'scaleShiftWideConst'\n")
+	out.append("\n")
+
+	// Dynamic count, ranged operand: guarded, and the fill still decided by the operand's range.
+	out.append("function scaleShiftWideDyn(v ScaleWide, c ScaleSigned) returns int\n")
+	out.append("\treturn v shr c\n")
+	out.append("end 'scaleShiftWideDyn'\n")
+	out.append("\n")
+
+	// Constant count, signed operand: arithmetic (sign) fill.
+	out.append("function scaleShiftSignedConst(v ScaleSigned) returns int\n")
+	out.append("\treturn v shr 60\n")
+	out.append("end 'scaleShiftSignedConst'\n")
+	out.append("\n")
+
+	// The driver threads the opaque seed through every shift function. The seed `a` flows straight into
+	// every operand, signed OR ranged: shv2's argument check is CLASS-based (numeric agrees with
+	// numeric), so a plain `int` coerces into a `ScaleWide` parameter with no cast and no mask. The
+	// operand's VALUE never matters here — the shift codegen inside each callee is exercised because the
+	// parameter is opaque (shv2 has no interprocedural constant propagation), not because of what flows
+	// in. Dynamic counts are the seed masked to a small non-negative range so they stay runtime values.
+	out.append("function scaleShifts(a int) returns int\n")
+	out.append("\tvar acc = a\n")
+	out.append("\tacc = acc + scaleShiftWideConst(a)\n")
+	out.append("\tacc = acc + scaleShiftWideDyn(a, c: acc and {ShiftCountMask})\n")
+	out.append("\tacc = acc + scaleShiftSignedConst(acc)\n")
+	out.append("\tacc = acc + scaleShiftDyn(acc, c: acc and {ShiftCountMask})\n")
+	out.append("\tacc = acc + (acc shl 3)\n")
+	out.append("\tacc = acc + (acc shr 2)\n")
+	out.append("\treturn acc\n")
+	out.append("end 'scaleShifts'\n")
+	return out
+end 'shiftCoverageSource'
+
 // `main`, which threads the seed through every generated function.
 //
 // It calls all of them ON PURPOSE. An uncalled function is a function a future dead-code pass could
 // legitimately delete, and the day that pass lands, the `manyFunctions` knob would silently
 // evaporate and the ladder would go flat — reporting perfect linearity because it had stopped
 // compiling anything. Threading `acc` through every call makes each one load-bearing.
-function mainSource(fileCount KnobSize, funcCount KnobSize, chainLength KnobSize) returns String
-	let perFile = (funcCount + fileCount - 1) / fileCount
-
+//
+// The `manyFunctions` names come from `funcNames`, the exact list `writeManyFunctions` generated — so
+// the enumeration is not written down a second time here and cannot drift from the names on disk.
+function mainSource(funcNames StringArray, chainLength KnobSize) returns String
 	var out = "// Generated by ScaleCorpus: threads the opaque seed through every generated function.\n"
 	out.append("function main() returns ExitCode\n")
 	out.append("\tvar acc = scaleSeed()\n")
 
-	for fileIndex in 0 upto fileCount 'eachFile'
-		for slot in 0 upto perFile 'eachFunc'
-			if fileIndex * perFile + slot >= funcCount 'past'
-				break
-			end 'past'
-			out.append("\tacc = {smallFunctionName(fileIndex, slot: slot)}(acc)\n")
-		end 'eachFunc'
-	end 'eachFile'
+	for name in funcNames 'eachFunc'
+		out.append("\tacc = {name}(acc)\n")
+	end 'eachFunc'
 
 	out.append("\tacc = scaleLongIf(acc)\n")
 	out.append("\tacc = scaleDeepBlocks(acc)\n")
 	out.append("\tacc = scaleChain{chainLength - 1}(acc)\n")
 	out.append("\tacc = scalePressured(acc)\n")
+	out.append("\tacc = scaleNested(acc)\n")
+	out.append("\tacc = scaleShifts(acc)\n")
 	out.append("\tif acc > 0 'ok'\n")
 	out.append("\t\treturn 0\n")
 	out.append("\tend 'ok'\n")
@@ -654,3 +860,56 @@ export function codeGrowthAt(results RungResultArray, rung LadderIndex) returns 
 	let here = try results.get(rung) otherwise panic("codeGrowthAt: results.get({rung}) failed")
 	return growthOf(here.codeBytes, previous: below.codeBytes)
 end 'codeGrowthAt'
+
+// ===========================================================================================
+// THE INSTRUMENT DECLARES WHAT IT CAN SEE — AND WHAT IT STRUCTURALLY CANNOT
+// ===========================================================================================
+//
+// PRINTED ON EVERY RUN. An instrument that cannot state its own blind spots produces confident zeros:
+// this corpus was blind in four measured dimensions at once — it grew no locals, nested no loops,
+// shifted by no runtime value, and shifted no ranged operand — and every one of those blind spots was
+// SILENT. Two independent reviews found five compiler defects the corpus could see NONE of. The
+// through-line was always the same: the corpus finds only bugs someone already thought to generate. So
+// the corpus now SAYS what it generates and, more importantly, what it does not and what it cannot —
+// because the gaps are the part a reader cannot otherwise know, and a gap nobody is told about reads as
+// coverage.
+//
+// TWO of these are STRUCTURAL — no knob can close them, so they are stated as blind spots rather than
+// filed as TODOs:
+//   • MEMORY ONLY. scale-test measures allocations and bytes, never time; a time-only superlinearity
+//     is invisible here by construction, and the loop-nest knob's own scan is the worked example.
+//   • THE SUBSET. shv2 compiles a fragment of Maxon, so whole language features generate nothing at
+//     all, and a codegen change to any of them moves no number here.
+export function printCorpusManifest()
+	print("\n")
+	print("scale-test: CORPUS MANIFEST — what this ladder exercises, and what it structurally cannot see.\n")
+	print("\n")
+	print("  CONSTRUCTS GENERATED (a codegen change to one of these moves the memory numbers):\n")
+	print("    int arithmetic (+ - *), comparisons, let / var, return\n")
+	print("    if, if/else, while, and NESTED while (to a doubling depth)\n")
+	print("    functions (<=6 params), cross-file merge, chained calls holding values live across them\n")
+	print("    short-circuit `and` (the two-condition guards), bitwise `and` (shift-count masks)\n")
+	print("    shl / shr with: a CONSTANT count (folded) AND a DYNAMIC count (runtime-guarded), over a\n")
+	print("      SIGNED operand (arithmetic/sign fill) AND a ranged int(0 to u64.max) operand (zero fill)\n")
+	print("    ranged typealiases\n")
+	print("\n")
+	print("  COST DIMENSIONS ON THE DOUBLING LADDER (each DOUBLES per rung; the rung-over-rung RATIO is\n")
+	print("  the growth — x2 linear, x4 quadratic — read straight off the counts):\n")
+	print("    function count, file count, sequential-if ops, block/CFG count, call-chain depth,\n")
+	print("    pressured-loop COUNT, loop-nest DEPTH, and locals-in-scope per function (the V dimension)\n")
+	print("\n")
+	print("  NOT GENERATED — a codegen change to any of these is INVISIBLE here (structural blind spot):\n")
+	print("    `break` (in the subset, but no generated loop exits early); integer `/` and `mod` (idiv);\n")
+	print("    `or` / `xor` / `not`; float arithmetic; print, structs, arrays, strings, `for`, `match`;\n")
+	print("    closures, async, generics; `as` casts. What the corpus GENERATES is int `+ - *`, functions,\n")
+	print("    if/if-else/while, return/let/var, `and` + `shl`/`shr`, and ranged typealiases — nothing else.\n")
+	print("\n")
+	print("  !! MEASURES MEMORY ONLY — a TIME-only superlinearity is invisible here BY DESIGN. Time is not\n")
+	print("     reproducible, so it cannot be trended; a cost that re-walks tokens or chases pointers but\n")
+	print("     allocates little will read FLAT in these columns even when it is quadratic in time. The\n")
+	print("     worked example is IN this corpus: the loop-nest knob drives the loop-phi token pre-scan\n")
+	print("     (Parser.loopBodyEndIndex + namesAssignedIn) to O(depth x tokens), yet that scan allocates\n")
+	print("     ~one small set per loop and reads roughly LINEAR here. For the time view of one compile,\n")
+	print("     use `--log=compiler:debug` or `--metrics=<path>` — this instrument will not show it.\n")
+	print("\n")
+end 'printCorpusManifest'
