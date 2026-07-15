@@ -25,9 +25,11 @@ public static partial class MaxonToStandardConversion {
 
 	// One immortal literal record's compile-time-known contents. buffer@0 is filled at init
 	// (RdataLabel), everything else is a constant written there too (see EmitStaticRecordInit).
+	// ElementSize is 1 for a string/byte/char (one byte per element) and the element width for a
+	// constant array literal (8 for int, 4/2/1 for narrower, 0 for a bit-packed bool array).
 	private sealed record StaticLiteralRecord(
 		string GlobalLabel, string RdataLabel, int RecordSize, int AllocSize,
-		int TagIndex, int Length, bool IsString, bool IsAscii);
+		int TagIndex, int Length, int ElementSize, bool IsString, bool IsAscii);
 
 	/// Reset the static-literal state for a fresh module lowering, seeding the eligibility set
 	/// computed by LiteralCoverageAnalysisPass (a sound lower bound; null when the pass did not run).
@@ -141,7 +143,7 @@ public static partial class MaxonToStandardConversion {
 		result.Globals.Add(new IrGlobal(globalLabel, new IrType("__StaticLiteralRecord", allocSize)));
 
 		_staticLiteralRecords!.Add(new StaticLiteralRecord(
-			globalLabel, label, recordSize, allocSize, EnsureTagIndex(typeName), byteLen, isString, isAscii));
+			globalLabel, label, recordSize, allocSize, EnsureTagIndex(typeName), byteLen, 1, isString, isAscii));
 		_staticRecordLabels[key] = globalLabel;
 		return globalLabel;
 	}
@@ -167,6 +169,76 @@ public static partial class MaxonToStandardConversion {
 		block.AddOp(userPtr);
 
 		var tempName = inlineTarget ?? temps.CreateTemp(tempPrefix, resultId, typeName, OwnershipFlags.None);
+		EmitStore(block, userPtr.Result, tempName, varTypes);
+		return new StdHeapPtr(userPtr.Result.Id, typeName, tempName);
+	}
+
+	/// Pack a constant array literal's element values into a little-endian rdata blob at the element
+	/// width (or one bit per element for a bit-packed bool array), returning the bytes and their
+	/// alignment. Shared by the per-evaluation lowering and the static-immortal-record lowering.
+	private static (byte[] Bytes, int Alignment) PackConstArrayBytes(ConstantArrayLiteralInfo info) {
+		if (info.IsBitPacked) {
+			var bits = new byte[(info.Values.Length + 7) / 8];
+			for (int i = 0; i < info.Values.Length; i++)
+				if (info.Values[i] != 0) bits[i >> 3] |= (byte)(1 << (i & 7));
+			return (bits, 1);
+		}
+		int elemSize = info.ElementSize;
+		var bytes = new byte[info.Values.Length * elemSize];
+		for (int i = 0; i < info.Values.Length; i++) {
+			switch (elemSize) {
+				case 1: bytes[i] = (byte)info.Values[i]; break;
+				case 2: BitConverter.GetBytes((ushort)info.Values[i]).CopyTo(bytes, i * elemSize); break;
+				case 4: BitConverter.GetBytes((int)info.Values[i]).CopyTo(bytes, i * elemSize); break;
+				case 8: BitConverter.GetBytes(info.Values[i]).CopyTo(bytes, i * elemSize); break;
+				default: throw new InvalidOperationException($"Unsupported constant array element size: {elemSize}");
+			}
+		}
+		return (bytes, elemSize);
+	}
+
+	/// Lower a static-eligible CONSTANT array literal (`[1,2,3]`, `sha256KTable = [...]`) to a
+	/// reference to its SHARED immortal record — zero per-evaluation allocation, the array analogue
+	/// of EmitStaticManagedLiteral. The already-constant element bytes go to rdata (interned by
+	/// content); `length` is the element COUNT and `element_size` the width (0 = bit-packed bool).
+	/// Only primitive-element arrays reach here (their elements are compile-time constants); a
+	/// managed-element array is never a ConstantArrayLiteral and stays on the heap path.
+	private static StdHeapPtr EmitStaticArrayLiteral(
+	  ConstantArrayLiteralInfo info, string typeName, int resultId,
+	  IrBlock<StandardOp> block, Dictionary<string, string> varTypes,
+	  IrModule<StandardOp> result, VarRegistry temps, string? inlineTarget) {
+
+		var (packed, alignment) = PackConstArrayBytes(info);
+		// element_size == 0 is the bit-packed-bool sentinel (one bit per element); otherwise the width.
+		int elementSize = info.IsBitPacked ? 0 : info.ElementSize;
+
+		// Intern by (packed-byte signature, typeName) so identical constant arrays share one record.
+		// The base64 signature cannot collide with a string literal's value at the same typeName —
+		// array type names (`__Array_*`) are distinct from String/ByteArray/Character.
+		var key = (System.Convert.ToBase64String(packed), typeName);
+		if (!_staticRecordLabels!.TryGetValue(key, out var globalLabel)) {
+			var rdataLabel = $"__sarr_{NextRdataId()}";
+			result.RdataEntries.Add((rdataLabel, packed, alignment));
+			globalLabel = $"__static_lit_{_nextStaticLiteralId++}";
+			int recordSize = FusedManagedRecordSize(typeName);
+			int allocSize = Rt.MmHeaderSize + recordSize;
+			result.Globals.Add(new IrGlobal(globalLabel, new IrType("__StaticLiteralRecord", allocSize)));
+			_staticLiteralRecords!.Add(new StaticLiteralRecord(
+				globalLabel, rdataLabel, recordSize, allocSize, EnsureTagIndex(typeName),
+				info.Values.Length, elementSize, /*isString*/ false, /*isAscii*/ false));
+			_staticRecordLabels[key] = globalLabel;
+		}
+
+		var baseLea = new StdLeaGlobalOp(globalLabel);
+		block.AddOp(baseLea);
+		var baseI64 = new StdPtrToI64Op(baseLea.Result);
+		block.AddOp(baseI64);
+		var hdrOff = new StdConstI64Op(Rt.MmHeaderSize);
+		block.AddOp(hdrOff);
+		var userPtr = new StdAddI64Op(baseI64.Result, hdrOff.Result);
+		block.AddOp(userPtr);
+
+		var tempName = inlineTarget ?? temps.CreateTemp("sarr", resultId, typeName, OwnershipFlags.None);
 		EmitStore(block, userPtr.Result, tempName, varTypes);
 		return new StdHeapPtr(userPtr.Result.Id, typeName, tempName);
 	}
@@ -232,7 +304,7 @@ public static partial class MaxonToStandardConversion {
 		ops.Add(new StdStoreIndirectOp(bufI64.Result, baseI64.Result, rec0 + ManagedFieldBuffer, IrType.I64));
 		Store(rec.Length, rec0 + ManagedFieldLength);
 		Store(-2, rec0 + ManagedFieldCapacity);          // rdata-backed sentinel: never freed/grown
-		Store(1, rec0 + ManagedFieldElementSize);        // one byte per element
+		Store(rec.ElementSize, rec0 + ManagedFieldElementSize); // 1 for a string; the element width for an array (0 = bit-packed bool)
 		Store(0, rec0 + ManagedFieldParentPtr);
 		if (rec.IsString) {
 			Store(rec.IsAscii ? 1 : 0, rec0 + StringFieldIsAscii);

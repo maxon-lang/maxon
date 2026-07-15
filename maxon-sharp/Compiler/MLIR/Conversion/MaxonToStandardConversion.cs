@@ -988,6 +988,27 @@ public static partial class MaxonToStandardConversion {
                 }
               }
 
+              // Static literals: a CONSTANT array literal proved never-mutated becomes a shared
+              // immortal record (zero allocations), the array analogue of a static string literal.
+              // Its elements are already compile-time constants in rdata; the escape analysis gates
+              // it — a mutated array is absent from the eligible set and falls through to the heap
+              // path below (which allocates and, for a var, permits push/set). Managed-element arrays
+              // are never ConstantArrayLiterals, so this only fires for primitive-element arrays.
+              // `IsMutable` marks a constant array bound to a MUTABLE GLOBAL. The escape analysis
+              // tracks per-function variable flow, so it cannot see a global mutated in another
+              // function; excluding mutable globals keeps the static path sound (a mutable global
+              // array stays heap and COWs on first write). Local mutations are still caught by the
+              // escape analysis, and an immutable (`let`) binding cannot be mutated at all.
+              if (module.ConstantArrayLiterals.TryGetValue(structLitOp.Result.Id, out var staticArrInfo)
+                  && !staticArrInfo.IsMutable
+                  && IsStaticEligibleLiteral(structLitOp.Result.Id)) {
+                inlineTargets.TryGetValue(structLitOp.Result.Id, out var staticArrTarget);
+                valueMap[structLitOp.Result] = EmitStaticArrayLiteral(
+                  staticArrInfo, structLitOp.TypeName, structLitOp.Result.Id,
+                  newBlock, varTypes, result, temps, staticArrTarget);
+                break;
+              }
+
               // Byte-fusion: a small OWNED array/vector literal stores its elements INLINE in the
               // record's own allocation (buffer = self + recordSize, parent_ptr = MmParentInline)
               // instead of taking a second heap buffer. Only when the buffer is writable (not an

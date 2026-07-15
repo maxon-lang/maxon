@@ -49,7 +49,7 @@ public static class LiteralCoverageAnalysisPass {
     "__managed_mem_append", "__managed_mem_clear",
   ];
 
-  private enum LitKind { String, ByteString, Char }
+  private enum LitKind { String, ByteString, Char, Array }
 
   private enum Reason { Eligible, MutatingIntrinsicTarget, PassedToMutatingParam, ConservativeIndirect, Aliased }
 
@@ -238,6 +238,17 @@ public static class LiteralCoverageAnalysisPass {
           // String{managed: X} / ByteArray{managed: X} aliases X (zero-copy).
           foreach (var (fieldName, value) in sl.FieldValues) {
             if (fieldName == "managed") Union(ValueNode(sl.Result.Id), ValueNode(value.Id));
+          }
+          // A CONSTANT array literal (`[1,2,3]`, `sha256KTable = [...]`) is a literal site too: its
+          // elements are already compile-time constants in rdata, so a never-mutated one can be a
+          // shared immortal record. Only constant arrays are recorded — a runtime-valued array
+          // literal has nothing static to share. Managed-element arrays (`["a","b"]`) are NOT
+          // constant arrays and are left to the heap path (3c, not covered here). A constant array
+          // bound to a MUTABLE GLOBAL (IsMutable) is skipped: this per-function analysis cannot see
+          // a global mutated in another function, so those stay on the heap (the lowering enforces
+          // the same guard).
+          if (_module.ConstantArrayLiterals.TryGetValue(sl.Result.Id, out var cai) && !cai.IsMutable) {
+            ctx.Literals.Add((LitKind.Array, sl.Result.Id, Preview(sl.ArrayLiteralTag ?? "[array]")));
           }
           break;
 
@@ -475,7 +486,7 @@ public static class LiteralCoverageAnalysisPass {
     private static void AppendScope(StringBuilder sb, string name, Tally t) {
       sb.AppendLine(
         $"literal-coverage [{name}]: {t.Static}/{t.Total} static-eligible " +
-        $"(strings {t.StrStatic}/{t.StrTotal}, bytestrings {t.ByteStatic}/{t.ByteTotal}, chars {t.CharStatic}/{t.CharTotal})");
+        $"(strings {t.StrStatic}/{t.StrTotal}, bytestrings {t.ByteStatic}/{t.ByteTotal}, chars {t.CharStatic}/{t.CharTotal}, constarrays {t.ArrStatic}/{t.ArrTotal})");
       if (t.Total > t.Static) {
         sb.AppendLine(
           $"  rejected: mutating-intrinsic-target={t.RejIntrinsic} passed-to-mutating-param={t.RejParam} " +
@@ -485,7 +496,7 @@ public static class LiteralCoverageAnalysisPass {
 
     private sealed class Tally {
       public int Total, Static;
-      public int StrTotal, StrStatic, ByteTotal, ByteStatic, CharTotal, CharStatic;
+      public int StrTotal, StrStatic, ByteTotal, ByteStatic, CharTotal, CharStatic, ArrTotal, ArrStatic;
       public int RejIntrinsic, RejParam, RejAliased, RejIndirect;
 
       public void Add(LitKind kind, Reason reason) {
@@ -496,6 +507,7 @@ public static class LiteralCoverageAnalysisPass {
           case LitKind.String: StrTotal++; if (ok) StrStatic++; break;
           case LitKind.ByteString: ByteTotal++; if (ok) ByteStatic++; break;
           case LitKind.Char: CharTotal++; if (ok) CharStatic++; break;
+          case LitKind.Array: ArrTotal++; if (ok) ArrStatic++; break;
         }
         switch (reason) {
           case Reason.MutatingIntrinsicTarget: RejIntrinsic++; break;
