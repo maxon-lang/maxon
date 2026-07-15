@@ -75,11 +75,39 @@ end 'queryTokens'
 // ever makes the sweep visible; do not add one on principle.)
 //
 // ⚠ **THIS IS A WHOLE-PROGRAM QUERY SITTING UNDER A PER-FILE ONE, SO ANYTHING O(FILES) INSIDE IT
-// WOULD BE O(FILES²).** It is not: the memo makes it run once per build, and the constant evaluation
-// below is O(declarations), not O(files) per file. `scale-test` MEASURES that rather than trusting
-// it — the P1.0d.5a constant slice reads a dead-flat `2 × files + 1` allocations in this phase
-// (25/33/49/81/145/273 against 12/16/24/40/72/136 files, exact on all six rungs), which is the one
-// empty per-file `TopLevelConstDeclArray` the sweep contributes. Under the quadratic it would bend.
+// WOULD BE O(FILES²).** It is not: the memo makes it run once per build (`signaturesCacheValid`,
+// itself O(1) after the first call because `compositeSourceHash` carries a dirty flag), and the
+// constant evaluation below is O(declarations), not O(files) per file.
+//
+// ⚠ **`scale-test` DOES NOT MEASURE THAT, AND STRUCTURALLY CANNOT — ITS CORPUS CONTAINS NO
+// TOP-LEVEL `let` AT ALL.** Every `let` the generator emits is body-local, so on every rung this
+// arena is EMPTY, `evaluateConstants` walks nothing, and no DFS, no lookup and no `mixConstant`
+// ever runs. What the instrument reads is the P1.0d.5a slice's INERT cost: a dead-flat
+// `2 × files + 1` allocations in this phase (25/33/49/81/145/273 against 12/16/24/40/72/136 files,
+// exact on all six rungs; `+48 × files + 672` bytes, exact) — which is the one EMPTY per-file
+// `TopLevelConstDeclArray` the sweep contributes, plus this index's own two tables. That number is
+// real and it is worth having (it proves the sweep is linear in files, and `phase:parse` moves by
+// exactly 0), but it is the signature of an empty arena and it says nothing whatever about the
+// evaluator. Do not read it as if it did.
+//
+// The evaluator's linearity is MEASURED, off-instrument, because the instrument is blind to it
+// (optimizer, 2026-07-15 — ladders in the report, not committed):
+//   • 400 → 12,800 constants in one file: x2.00 allocations and x2.00 bytes per doubling, flat
+//     across a 32x span. The memo on `TopLevelConstant` holds; a memo that did not stick would
+//     re-walk per reference and bend immediately.
+//   • 8 → 128 FILES at 50 constants each, with cross-file `export let` references and a NON-empty
+//     arena — the shape this warning is actually about: x2.00 allocations and x2.00 bytes. Under
+//     the once-per-file bug this reads x4.00. The hazard is refuted by measurement, not by reading.
+//
+// ⚠ WHAT IS NOT BOUNDED IS THE DFS's RECURSION DEPTH, and it is a live crash rather than a curve:
+// a FORWARD-reference chain ~700 deep exhausts the stack and the compiler dies with SIGSEGV and no
+// diagnostic (800 constants at depth 800 faults; the same 800 constants as 8 chains of depth 100
+// compile fine, so it is depth and not count). A cycle that long faults before `recordCycle` can
+// raise E2012. The bootstrap has the identical unbounded recursion in the code shv2 ported this
+// from — it overflows on the same inputs at ~385 frames of `Parser.EvalConstAsCast` — so this is
+// an inherited property of the design and not an shv2 regression. Fixing it needs an explicit
+// worklist or a depth cap plus a diagnostic, in both compilers; it is not an optimization and it
+// is recorded here rather than silently carried.
 export function queryProgramSignatures(project Project) returns ProgramSignatures throws CompileError
 	if signaturesCacheValid(project) 'hit'
 		project.db.signatureHits = project.db.signatureHits + 1
