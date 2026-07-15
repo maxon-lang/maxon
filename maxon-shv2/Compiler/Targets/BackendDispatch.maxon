@@ -72,8 +72,19 @@ export function buildBackend(stdModule StdModule, target Target, globalData Glob
 	var targetModule = lowerStdToX64(stdModule, globalData: globalData)
 	recordPhase(project, phase: CompilePhase.isel, probe: iselProbe)
 
+	// THE CLASS COLUMN CROSSES THE TIER BOUNDARY HERE, and it travels FORWARD: `lowerStdToX64` above is
+	// the last pass that can see a Std type, so it is the only one that can say which register FILE a
+	// value lives in. The allocator consumes that answer and never re-derives it — `movRegReg`,
+	// `loadRegSlot` and `xchgRegReg` are class-agnostic by design, so a copy's class is knowable only
+	// from its source (see TargetDialect's `ValueClassColumn`).
+	//
+	// ⚠ `allGprValueClasses` IS A PLACEHOLDER FOR THE PRODUCER, not the producer. It is correct only
+	// while no float can reach the backend — which is checkable today: the parser has no float arm and
+	// `lowerStdToX64` still panics on a float const. When the lowering learns floats it must RECORD each
+	// vreg's class as it mints it and be handed here instead; leaving the placeholder would classify
+	// every f64 as `gpr`, silently, all the way to `addsd rax, rcx`.
 	let regAllocProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.regalloc)
-	try allocateRegisters(targetModule, target: target, project: project)
+	try allocateRegisters(targetModule, target: target, project: project, valueClasses: allGprValueClasses(targetModule))
 	recordPhase(project, phase: CompilePhase.regalloc, probe: regAllocProbe)
 
 	let prologueProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.prologueEpilogue)

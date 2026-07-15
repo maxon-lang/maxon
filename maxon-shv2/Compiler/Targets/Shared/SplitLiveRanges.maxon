@@ -670,7 +670,7 @@ end 'SplitScratch'
 // crossing value is cold-spillable — is E5001 (`raiseRegisterPressure`), not a placeholder
 // panic. `project` (its `opRanges`/`valueOrigins` tables) + `funcIndex` are what the E5001
 // diagnostic maps each blocking Target ValueId back to its source span through.
-export function splitLiveRanges(module TargetModule, func IrFunction, funcIndex FuncIndex, topo FuncTopology, pool RegMask, stats RegAllocStats, project Project) returns LivenessResult throws CompileError
+export function splitLiveRanges(module TargetModule, func IrFunction, funcIndex FuncIndex, topo FuncTopology, pool RegMask, valueClass ValueClassColumn, stats RegAllocStats, project Project) returns LivenessResult throws CompileError
 	let poolSize = regMaskPopcount(pool)
 	// Fresh-id -> source-value map for the E5001 diagnostic: every reload/remat id the loop
 	// below mints is recorded here so a fresh id in a blocking set resolves to source, not a
@@ -697,7 +697,7 @@ export function splitLiveRanges(module TargetModule, func IrFunction, funcIndex 
 	// The ONE liveness build. Everything after it is an incremental repair of the region a split
 	// dirtied (`refreshAfterSplit`) — the whole-function rebuild this used to run per split was the
 	// O(function × splits) quadratic.
-	var liveness = timedLiveness(module, cfg: cfg, func: func, project: project)
+	var liveness = timedLiveness(module, cfg: cfg, func: func, valueClass: valueClass, project: project)
 	// One set of working buffers for every iteration below — the sweep and the victim choice allocate
 	// nothing per split (see `SplitScratch`). It is sized off the CFG, which splitting cannot change.
 	var scratch = SplitScratch.create(cfg.topo.numBlocks)
@@ -901,9 +901,17 @@ function refreshAfterSplit(module TargetModule, cfg FuncCfg, liveness LivenessRe
 	scratch.edits.apply(index, dirty: dirty)
 
 	// The value space grew by the ids the split minted; every column keyed by it follows.
+	//
+	// THE FRESH IDS INHERIT THE VICTIM'S CLASS. Every id this split minted is a reload or a
+	// rematerialization OF THE VICTIM, so it carries the victim's value and therefore lives in the
+	// victim's register file. It cannot be classified from the op that defines it: `loadRegSlot` and
+	// `movRegImm` are class-POLYMORPHIC (`mov r64, [slot]` for an int, `movsd xmm, [slot]` for a
+	// float), so their own variant answers GPR for both and would silently mis-file a float's reload.
+	// `growValueSpace` therefore DEMANDS the class rather than defaulting it.
+	let victimClass = liveness.classOf(split.victim)
 	index.growTo(cfg.valueCount)
-	liveness.growValueSpace(cfg.valueCount)
-	scratch.effPools.growTo(cfg.valueCount, pool: pool)
+	liveness.growValueSpace(cfg.valueCount, class: victimClass)
+	scratch.effPools.growTo(cfg.valueCount, pool: pool, class: victimClass)
 	scratch.defLiveAfter.growFilled(cfg.valueCount, value: NoStoreAnchorPressure)
 	scratch.sweep.widenRow(liveness.wordsPerRow)
 
@@ -1037,9 +1045,9 @@ end 'noVictimAtPeak'
 // whole-function build. The per-split REPAIR of that build (`refreshAfterSplit`) is billed to
 // `splitting`, which is where it belongs: it is proportional to what the split changed, not to the
 // function, and it is the splitter's own bookkeeping.
-function timedLiveness(module TargetModule, cfg FuncCfg, func IrFunction, project Project) returns LivenessResult
+function timedLiveness(module TargetModule, cfg FuncCfg, func IrFunction, valueClass ValueClassColumn, project Project) returns LivenessResult
 	let probe = PhaseProbe.beginRegAllocPhase(project, phase: RegAllocPhase.liveness)
-	let liveness = computeLivenessOn(module, cfg: cfg, func: func)
+	let liveness = computeLivenessOn(module, cfg: cfg, func: func, valueClass: valueClass)
 	recordRegAllocPhase(project, phase: RegAllocPhase.liveness, probe: probe)
 	return liveness
 end 'timedLiveness'
@@ -2576,7 +2584,12 @@ end 'assertPlacementLegal'
 // produced. Panics on the first divergence, naming the function, the split, and the fact that moved.
 function verifyIncremental(module TargetModule, cfg FuncCfg, func IrFunction, liveness LivenessResult, analysis PressureAnalysis, pool RegMask, iterations EventCount)
 	let name = String.from(func.name)
-	let fresh = computeLivenessOn(module, cfg: cfg, func: func)
+	// The CURRENT class column, not the lowering's original: it has grown by the ids each split minted,
+	// and a fresh id's class is inherited, never re-derived (`growValueSpace`). A rebuild from the
+	// original column would be short by exactly those ids and trip `assertClassColumnCovers` — so this
+	// is the one place the verifier must read the incremental state rather than reconstruct it. It is
+	// sound because a class cannot drift: nothing after lowering ever WRITES an existing entry.
+	let fresh = computeLivenessOn(module, cfg: cfg, func: func, valueClass: liveness.valueClass)
 	var freshScratch = SplitScratch.create(cfg.topo.numBlocks)
 	let freshAnalysis = analyzePressure(module, liveness: fresh, pool: pool, scratch: freshScratch, intoTree: false)
 

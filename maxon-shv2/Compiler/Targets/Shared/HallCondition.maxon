@@ -80,21 +80,44 @@
 typealias LiveIndex = int(0 to u64.max)
 typealias LiveIndexColumn = Array with LiveIndex
 
-// The registers `valueId` may actually be coloured into: the pool minus every register an op wrote
-// while the value was live across it (`forbidden` — a call's 9 caller-saved, an `idiv`'s RAX/RDX,
-// an argument pre-move's target). This is the ONE definition of a value's effective pool; the
-// colorer blocks on the same mask (`chooseRegister`), so the two cannot disagree about what fits.
+// The registers `valueId` may actually be coloured into: the registers of ITS OWN CLASS that the pool
+// offers, minus every register an op wrote while the value was live across it (`forbidden` — a call's
+// 9 caller-saved, an `idiv`'s RAX/RDX, an argument pre-move's target). This is the ONE definition of a
+// value's effective pool; the colorer blocks on the same mask (`chooseRegister`), so the two cannot
+// disagree about what fits.
+//
+// ⚠ THE CLASS FILTER IS PART OF THE DEFINITION, NOT A REFINEMENT OF IT. Without it an f64's allowed
+// set is computed from the GPR pool it can never touch, and every downstream question inherits the
+// error — `valueConfinedTo` most damagingly (see there).
 export function allowedRegistersOf(liveness LivenessResult, valueId ValueId, pool RegMask) returns RegMask
-	return pool and not liveness.forbiddenOf(valueId)
+	return poolOfClass(pool, class: liveness.classOf(valueId)) and not liveness.forbiddenOf(valueId)
 end 'allowedRegistersOf'
 
 // Is `valueId` confined to `witness` — is EVERY register it could take inside that set? This is
 // membership of the tight set an overflow is about, and it is what makes a victim choice
 // meaningful: spilling a value that could have taken a register OUTSIDE the witness frees nothing
-// the confined values were able to use. For a FULL-pool peak the witness IS the pool, so every value
-// is confined to it and the test is a no-op — which is why the E5001 path is untouched by it.
+// the confined values were able to use. For a FULL-pool peak the witness IS the class's whole pool, so
+// every value of that class is confined to it and the test is a no-op — which is why the E5001 path is
+// untouched by it.
+//
+// ⚠⚠ THE EMPTY ALLOWED SET IS THE ONE HOLE IN THE SUBSET TEST, AND IT IS A SILENT WRONG ANSWER.
+// `witness` is a bag of bits that does not know which file it names, so the subset test spans both —
+// and ∅ IS A SUBSET OF EVERY SET. An f64 live across a call is forbidden every XMM, so its allowed set
+// is EMPTY, so it would test CONFINED to a callee-saved GPR witness produced by an int-only overflow.
+// `chooseVictim` would then spill a FLOAT to relieve a GPR peak, freeing an XMM no int can use: the
+// peak survives, the potential Φ does not fall, and the driver re-picks forever.
+//
+// Closing it needs no witness class, because a class-filtered `allowedRegistersOf` (see above) makes
+// every NON-EMPTY allowed set a subset of its own file — and two files are disjoint, so such a set can
+// never be confined to a foreign witness. ∅ is the only mask that is confined to a witness it shares
+// no file with, and a value with no legal register at all is not "confined to" anything: it is
+// unrelievable in place, which is a question about the value and not about this witness.
 export function valueConfinedTo(liveness LivenessResult, valueId ValueId, pool RegMask, witness RegMask) returns bool
-	return (allowedRegistersOf(liveness, valueId: valueId, pool: pool) and not witness) == 0
+	let allowed = allowedRegistersOf(liveness, valueId: valueId, pool: pool)
+	if allowed == 0 'noLegalRegisterAtAll'
+		return false
+	end 'noLegalRegisterAtAll'
+	return (allowed and not witness) == 0
 end 'valueConfinedTo'
 
 // Per-value EFFECTIVE POOL SIZE — `popcount(pool ∖ forbidden(v))` — plus how many values in the
@@ -110,8 +133,9 @@ end 'valueConfinedTo'
 // constrained tally exact as it goes.
 export type EffectivePools
 	export var sizes as RegCountColumn
-	// How many values are CONSTRAINED (an effective pool strictly smaller than the full one). Zero in a
-	// call-free, idiv-free function, which is what lets its pressure sweeps skip the census entirely.
+	// How many values are CONSTRAINED (an effective pool strictly smaller than THEIR OWN CLASS's full
+	// one). Zero in a call-free, idiv-free function, which is what lets its pressure sweeps skip the
+	// census entirely.
 	var constrained as ColumnLength
 
 	export static function create() returns EffectivePools
@@ -123,7 +147,6 @@ export type EffectivePools
 	// `Array.refill`, which is this loop generalised; this one stays hand-written because it also
 	// counts `constrained` as it goes).
 	export function fillAll(liveness LivenessResult, pool RegMask)
-		let fullPoolSize = regMaskPopcount(pool)
 		self.sizes.resize(liveness.valueCount)
 		self.constrained = 0
 
@@ -131,30 +154,34 @@ export type EffectivePools
 			let size = regMaskPopcount(allowedRegistersOf(liveness, valueId: v, pool: pool))
 			try self.sizes.set(v, value: size) otherwise panic("EffectivePools.fillAll: sizes.set OOB for value {v}")
 
-			if size < fullPoolSize 'constrainedValue'
+			if size < classPoolSizeOf(pool, class: liveness.classOf(v)) 'constrainedValue'
 				self.constrained = self.constrained + 1
 			end 'constrainedValue'
 		end 'eachValue'
 	end 'fillAll'
 
 	// Extend to the ids a split MINTED. A fresh id forbids nothing until the dirty-region sweep says
-	// otherwise, so it arrives with the FULL pool and counts as unconstrained; `refresh` corrects both
-	// the moment its mask is known.
-	export function growTo(valueCount ValueId, pool RegMask)
-		self.sizes.growFilled(valueCount, value: regMaskPopcount(pool))
+	// otherwise, so it arrives with the full pool OF ITS CLASS and counts as unconstrained; `refresh`
+	// corrects both the moment its mask is known. `class` is the victim's — see
+	// `LivenessResult.growValueSpace`, which is where a fresh id's class comes from and why.
+	export function growTo(valueCount ValueId, pool RegMask, class RegClass)
+		self.sizes.growFilled(valueCount, value: classPoolSizeOf(pool, class: class))
 	end 'growTo'
 
 	// Re-derive ONE value's effective pool from its (just rebuilt) forbidden mask, keeping the
-	// constrained tally exact.
+	// constrained tally exact. A value's CLASS needs no maintenance here and never will: it is
+	// intrinsic and permanent, so a split — which only ever cuts a live range and rebuilds a forbidden
+	// mask — cannot move a value between files. That is the same property that keeps the class out of
+	// `forbidden` entirely.
 	export function refresh(liveness LivenessResult, valueId ValueId, pool RegMask)
-		let fullPoolSize = regMaskPopcount(pool)
+		let fullPoolSize = classPoolSizeOf(pool, class: liveness.classOf(valueId))
 		let previous = try self.sizes.get(valueId) otherwise panic("EffectivePools.refresh: sizes.get OOB for value {valueId}")
 		let size = regMaskPopcount(allowedRegistersOf(liveness, valueId: valueId, pool: pool))
 		try self.sizes.set(valueId, value: size) otherwise panic("EffectivePools.refresh: sizes.set OOB for value {valueId}")
 
-		if (previous < fullPoolSize) == (size < fullPoolSize) 'sameClass'
+		if (previous < fullPoolSize) == (size < fullPoolSize) 'sameConstraintClass'
 			return
-		end 'sameClass'
+		end 'sameConstraintClass'
 
 		if size < fullPoolSize 'becameConstrained'
 			self.constrained = self.constrained + 1
@@ -424,8 +451,10 @@ end 'HallVerdict'
 // It answers FEASIBILITY, not the colorer's CHOICE. The colorer is a dominance-order greedy, exact
 // for this constraint family because it prefers caller-saved registers first (so an unconstrained
 // value never takes a callee-saved one while a caller-saved one is free) and because a copy hint may
-// never take a register outside a value's preferred class while that class still has one free
-// (`preferredClassMask`, M5.12). A point this call declares feasible is one the colorer can colour.
+// never take a register outside a value's preferred VOLATILITY while that half still has one free
+// (`preferredVolatilityMask`, M5.12). A point this call declares feasible is one the colorer can
+// colour. (Both are read within the value's own register FILE — a class-agnostic pool question is
+// exactly the confusion the volatility rename exists to end.)
 export function hallVerdictAt(liveness LivenessResult, live ValueIdArray, pool RegMask, scratch HallScratch) returns HallVerdict
 	let valueCount = live.count()
 	// "No register" / "no value" markers, each one past the last valid index of its side.

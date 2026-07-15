@@ -287,6 +287,31 @@ export function allocatablePool(target Target) returns RegMask
 	return callerSavedMask() or calleeSavedMask()
 end 'allocatablePool'
 
+// The registers of ONE class that `pool` makes available — and the pool EVERY per-value question must
+// be asked against, because a value can only ever take a register from its own file.
+//
+// ⚠ `allocatablePool` is the WHOLE MACHINE's pool, spanning both files. Asking a per-value question
+// against it answers about registers the value can never have, and the two failures are OPPOSITE: an
+// int's 14 allowed registers measured against a 30-register pool read CONSTRAINED forever (a
+// permanent census over every operand of every op — a pure TIME cost, which `scale-test` measures no
+// part of), while a 15-live-int pigeonhole measured against the same 30 never fires at all and lets
+// the colorer run out of registers. Both are the same mistake: a class-agnostic denominator.
+export function poolOfClass(pool RegMask, class RegClass) returns RegMask
+	return pool and classRegisterMask(class)
+end 'poolOfClass'
+
+// How many registers a value of `class` could take if nothing were blocked — the denominator of every
+// "is this value constrained?" and "is this point over its pool?" test.
+//
+// ⚠ NOT `RegBits.classPoolSize`, WHICH IS THE FILE'S WIDTH AND NOT THE POOL'S. The GPR file is 16
+// wide but rsp/rbp are the frame and are never allocatable, so a GPR value's pool is FOURTEEN.
+// Measuring `constrained` against 16 would report every unconstrained int as constrained — the exact
+// permanent-census regression the per-class denominator exists to prevent, reintroduced by a
+// denominator that is off by two.
+export function classPoolSizeOf(pool RegMask, class RegClass) returns RegCount
+	return regMaskPopcount(poolOfClass(pool, class: class))
+end 'classPoolSizeOf'
+
 // Guard the load-bearing invariant that `callDirect`'s inline `implicitDefs` clobber
 // mask (which the liveness pass forbids for every value live across a call) equals the
 // CALLER-saved half of the allocatable pool: a value live across a call is forbidden the
@@ -340,7 +365,41 @@ end 'calleeSavedMask'
 // functions are present here — `mrt_start` is prepended AFTER this pass by
 // augmentWithRuntime (it is hand-built in physical registers). `throws CompileError`
 // because a genuine hot-loop overflow is E5001, reported onto `project.diagnostics`.
-export function allocateRegisters(module TargetModule, target Target, project Project) throws CompileError
+// One `ValueClassColumn` PER FUNCTION, indexed by the same function index `module.functions` is —
+// the shape the allocator's entry point takes the lowering's class output in.
+//
+// ⚠ IT IS PER FUNCTION BECAUSE A ValueId IS. "Function-local and dense, allocated from a per-function
+// counter" (IrValueId) — so function 0's value 3 and function 1's value 3 are different values, and a
+// single module-wide column indexed by ValueId would alias them onto one class. The `ValueClassColumn`
+// the contract declares is therefore ONE function's; this is the carrier that says which.
+export typealias ValueClassColumns = Array with ValueClassColumn
+
+// Every value of every function classified `gpr` — the placeholder the lowering's real class output
+// replaces.
+//
+// ⚠ THIS IS A TEMPORARY STAND-IN FOR A PRODUCER THAT DOES NOT EXIST YET, and it is correct ONLY while
+// no float can reach the backend. It is honest today for a checkable reason: `StdToX64Conversion`
+// still PANICS on a float const, and the parser has no float arm at all, so every value the Target
+// tier can currently hold is an i64/bool/char in a GPR. It is a lie the instant either changes.
+//
+// ⇒ WHEN `StdToX64Conversion` LEARNS TO LOWER A FLOAT, IT MUST RECORD THE CLASS AS IT MINTS EACH VREG
+// (`stdTypeIsFloat` → `RegClass.xmm`) AND THIS FUNCTION MUST DIE. Leaving it in place would classify
+// every f64 as `gpr`, and that failure is SILENT all the way to `addsd rax, rcx` — the allocator's
+// asserts compare a colour against the DECLARED class, so a uniformly-wrong declaration agrees with
+// itself. See `TargetDialect.ValueClassColumn`, which states the producer/consumer direction, and
+// `assertClassColumnCovers`, which catches a SHORT column but cannot catch a wrong one.
+export function allGprValueClasses(module TargetModule) returns ValueClassColumns
+	var columns = ValueClassColumns.create()
+	for funcIndex in 0 upto module.funcCount() 'eachFunc'
+		let func = try module.functions.get(funcIndex) otherwise panic("allGprValueClasses: functions.get OOB at {funcIndex}")
+		var column = ValueClassColumn.create()
+		column.refill(scanFunctionValueCount(module, func: func), value: RegClass.gpr)
+		columns.push(column)
+	end 'eachFunc'
+	return columns
+end 'allGprValueClasses'
+
+export function allocateRegisters(module TargetModule, target Target, project Project, valueClasses ValueClassColumns) throws CompileError
 	logDebug(LogCategory.codegen, message: function() gives "Register allocation ({targetToString(target)}): {module.funcCount()} function(s)")
 	assertCallClobberConsistent()
 
@@ -368,12 +427,13 @@ export function allocateRegisters(module TargetModule, target Target, project Pr
 	// index to `ValueOriginTable.lookup` to map a value back to its source op.
 	for funcIndex in 0 upto module.funcCount() 'eachFunc'
 		var func = try module.functions.get(funcIndex) otherwise panic("allocateRegisters: functions.get OOB at {funcIndex}")
-		try allocateFunction(module, func: func, funcIndex: funcIndex, pool: pool, stats: stats, project: project)
+		let classes = try valueClasses.get(funcIndex) otherwise panic("allocateRegisters: the lowering produced class columns for {valueClasses.count()} function(s) but the module has {module.funcCount()} — every function's vregs are classified as they are minted, so the two counts are the same walk of the same module")
+		try allocateFunction(module, func: func, funcIndex: funcIndex, pool: pool, valueClass: classes, stats: stats, project: project)
 	end 'eachFunc'
 	logDebug(LogCategory.codegen, message: function() gives regAllocStatsMessage(stats))
 end 'allocateRegisters'
 
-function allocateFunction(module TargetModule, func IrFunction, funcIndex FuncIndex, pool RegMask, stats RegAllocStats, project Project) throws CompileError
+function allocateFunction(module TargetModule, func IrFunction, funcIndex FuncIndex, pool RegMask, valueClass ValueClassColumn, stats RegAllocStats, project Project) throws CompileError
 	// Lay the blocks out in reverse-postorder FIRST, so layout order matches execution order.
 	// The cold-spill splitter's before/after-peak classification (and the colorer's dominance
 	// walk) rest on that; the parser emits a nested loop's exit before its inner blocks, which
@@ -410,7 +470,7 @@ function allocateFunction(module TargetModule, func IrFunction, funcIndex FuncIn
 	// does it in one place for all four (see PhaseProbe).
 	let livenessBefore = regAllocAccumulated(project, phase: RegAllocPhase.liveness)
 	let splitProbe = PhaseProbe.beginRegAllocPhase(project, phase: RegAllocPhase.splitting)
-	let liveness = try splitLiveRanges(module, func: func, funcIndex: funcIndex, topo: topo, pool: pool, stats: stats, project: project)
+	let liveness = try splitLiveRanges(module, func: func, funcIndex: funcIndex, topo: topo, pool: pool, valueClass: valueClass, stats: stats, project: project)
 	recordPhaseExcluding(project, phase: RegAllocPhase.splitting, probe: splitProbe, innerPhase: RegAllocPhase.liveness, innerBefore: livenessBefore)
 
 	stats.recordLivenessMarkSteps(liveness.livenessMarkSteps)
@@ -690,13 +750,38 @@ function allocateDef(v ValueId, working RegMask, dyingRegs RegMask, hints ColorH
 	if alloc.isColored(v) 'doubleDef'
 		panic("allocateDef: value {v} is already colored — a value has two defs, violating the single-def SSA invariant (RULE 1)")
 	end 'doubleDef'
-	let blocked = (working and not dyingRegs) or liveness.forbiddenOf(v) or (fullRegisterMask() and not pool)
-	let reg = chooseRegister(v, blocked: blocked, dyingRegs: dyingRegs, hints: hints, alloc: alloc, liveness: liveness, stats: stats)
+
+	// `v`'s POOL IS ITS OWN FILE'S, and blocking everything outside it is the ONE structural guard
+	// that keeps an int out of an XMM. Every register `v` could take flows from this mask: the hint
+	// paths test it (`hintIsTakeable`), and the fallback picks the lowest bit CLEAR in it
+	// (`lowestClearRegister` scans both files and trusts the caller to have excluded the other one).
+	// So a class filter here covers every route to a register, and the alternative — filtering at each
+	// route — is the same fact written down four times, one of which will be forgotten.
+	let class = liveness.classOf(v)
+	let classPool = poolOfClass(pool, class: class)
+	let blocked = (working and not dyingRegs) or liveness.forbiddenOf(v) or (fullRegisterMask() and not classPool)
+	let reg = chooseRegister(v, classPool: classPool, blocked: blocked, dyingRegs: dyingRegs, hints: hints, alloc: alloc, liveness: liveness, stats: stats)
+	assertColouredInClass(v, reg: reg, class: class)
 	alloc.assign(v, regNum: reg)
 	stats.valuesColored = stats.valuesColored + 1
 	stats.noteRegisterUse(reg)
 	return regMaskAdd(working, regNum: reg)
 end 'allocateDef'
+
+// The colour `v` just took must be a register of `v`'s OWN file. This is the backstop on the class
+// filter in `allocateDef`: every route to a register runs through that one `blocked` mask, so this
+// can only fire if a route learned to bypass it — which is precisely what `pickPreferredRegister` and
+// the hint path did when they each spelled "the whole pool" as `fullRegisterMask()`.
+//
+// ⚠ IT CANNOT CATCH A MIS-DECLARED CLASS. It compares the colour against the DECLARED class, so a
+// float that was never declared `xmm` is coloured into a GPR and agrees with itself here. Declaring
+// the class correctly is the op's job and nothing downstream can check it — see
+// `TargetLiveness.makeRegClassColumn`.
+function assertColouredInClass(v ValueId, reg RegNum, class RegClass)
+	if regClassOf(reg) != class 'wrongFile'
+		panic("assertColouredInClass: value {v} is a {class.name} value but was coloured into register {reg}, which is in the {regClassOf(reg).name} file — a route to a register bypassed the class filter in `allocateDef`'s `blocked` mask. An int in an XMM (or a float in a GPR) encodes to a different instruction, so this is a silent miscompile, not a performance bug.")
+	end 'wrongFile'
+end 'assertColouredInClass'
 
 // Pick a register for `v`. The hints come first, in this order — each is the register `v` must take
 // for SOME copy to elide, most-certain first:
@@ -706,8 +791,8 @@ end 'allocateDef'
 //      over the phi's register: this is what keeps a loop body copy-free).
 //   3. its copy partner's PIN, when the partner is NOT yet colored (`pinnedPartnerRegister`).
 //
-// and the fallback is the lowest free register of `v`'s COPY GROUP's preferred class
-// (`copyGroupBlocked`). Hints 3 and the group class are the BACKWARD half: a forward sweep in
+// and the fallback is the lowest free register of `v`'s COPY GROUP's preferred VOLATILITY
+// (`copyGroupBlocked`). Hints 3 and the group volatility are the BACKWARD half: a forward sweep in
 // dominance order colors the def before the phi, so without them a phi's constraints can never
 // reach the value that feeds it, and the pair costs two registers.
 //
@@ -724,18 +809,18 @@ end 'allocateDef'
 //    that register is CALLEE-SAVED and `v`'s copy group does not need one (nothing in it survives a
 //    call), it has taken one of only FIVE registers that are the sole home for values which cross a
 //    call. A value that can live NOWHERE else then finds none, and the colorer dies with every
-//    register blocked. Gate this by the copy group's preferred class.
+//    register blocked. Gate this by the copy group's preferred volatility.
 //
 // The failure is not a pressure problem and the splitter cannot see it: at the failing point the
 // values FIT (five confined values, five callee-saved registers). It is a COLORING ORDER problem —
 // the place the chordal-exactness argument does not reach. χ = ω is a theorem for the UNCONSTRAINED
-// problem; forbidden sets make this LIST colouring, where greedy is exact only if the scarce class
-// is protected. Two sequential loops containing calls were enough to hit it
+// problem; forbidden sets make this LIST colouring, where greedy is exact only if the scarce
+// callee-saved half is protected. Two sequential loops containing calls were enough to hit it
 // (`while-loops.sequential-loops-across-a-call`).
-function chooseRegister(v ValueId, blocked RegMask, dyingRegs RegMask, hints ColorHints, alloc Allocation, liveness LivenessResult, stats RegAllocStats) returns RegNum
-	// The class is the COPY GROUP's, not `v`'s alone — see `copyGroupBlocked`.
+function chooseRegister(v ValueId, classPool RegMask, blocked RegMask, dyingRegs RegMask, hints ColorHints, alloc Allocation, liveness LivenessResult, stats RegAllocStats) returns RegNum
+	// The volatility preference is the COPY GROUP's, not `v`'s alone — see `copyGroupBlocked`.
 	let groupBlocked = copyGroupBlocked(v, blocked: blocked, hints: hints, alloc: alloc, liveness: liveness)
-	let takeable = preferredClassMask(groupBlocked) or dyingRegs
+	let takeable = preferredVolatilityMask(groupBlocked, classPool: classPool) or dyingRegs
 
 	if hints.hasFixed(v) 'fixed'
 		let fr = hints.fixedOf(v)
@@ -767,17 +852,23 @@ function chooseRegister(v ValueId, blocked RegMask, dyingRegs RegMask, hints Col
 		stats.hintsMissed = stats.hintsMissed + 1
 	end 'missed'
 
-	// Prefer the copy group's class. If nothing in it is free, `v` cannot coalesce with its
+	// Prefer the copy group's volatility. If nothing in it is free, `v` cannot coalesce with its
 	// partner however it is colored, so fall back to `v`'s OWN constraint and let SSA destruction
 	// emit the copy — which is strictly what would have happened without the group at all.
-	let grouped = pickPreferredRegister(groupBlocked)
+	let grouped = pickPreferredRegister(groupBlocked, classPool: classPool)
 	if grouped != RegisterFileSize 'gotGrouped'
 		return grouped
 	end 'gotGrouped'
 
-	let reg = pickPreferredRegister(blocked)
+	let reg = pickPreferredRegister(blocked, classPool: classPool)
 	if reg == RegisterFileSize 'exhausted'
-		panic("chooseRegister: no free register for value {v} (blocked mask {blocked}) — the cold-spill splitter (M5.3) is supposed to relieve EVERY over-pool point before coloring, including the REDUCED pool at a FIXED-REGISTER point (a value live across a call is confined to the {regMaskPopcount(calleeSavedMask())} callee-saved registers; an idiv reserves RAX/RDX for its own operands). Reaching this means the splitter left a point unrelieved — a SPLITTER BUG (its `analyzePressure` reduced-pool check, `pool ∖ op.implicitDefs`, missed this op), not a colorer limitation.")
+		// AN EMPTY CLASS POOL IS NOT A SPLITTER BUG, and blaming one would send the reader to the
+		// wrong pass entirely. No amount of spilling can free a register from a file the pool does not
+		// offer, so this is a MISSING POOL, diagnosed apart from a genuine over-pool point.
+		if classPool == 0 'noPoolForThisClass'
+			panic("chooseRegister: value {v} is a {liveness.classOf(v).name} value but the allocatable pool offers NO register of that file (pool mask {classPool}). This is not pressure and no split can relieve it — the {liveness.classOf(v).name} pool is simply not enabled. If this is an XMM value, `allocatablePool` is still GPR-only: enabling the XMM half requires the 16 XMM bits in BOTH `callerSavedMask` and `TargetDialect.callDirect`'s `implicitDefs` (they are asserted equal), or a float would silently survive a call in a register the callee clobbers.")
+		end 'noPoolForThisClass'
+		panic("chooseRegister: no free register for value {v} (blocked mask {blocked}, {liveness.classOf(v).name} pool {classPool}) — the cold-spill splitter (M5.3) is supposed to relieve EVERY over-pool point before coloring, including the REDUCED pool at a FIXED-REGISTER point (a value live across a call is confined to the {regMaskPopcount(calleeSavedMask())} callee-saved registers; an idiv reserves RAX/RDX for its own operands). Reaching this means the splitter left a point unrelieved — a SPLITTER BUG (its `analyzePressure` reduced-pool check, `pool ∖ op.implicitDefs`, missed this op), not a colorer limitation.")
 	end 'exhausted'
 	return reg
 end 'chooseRegister'
@@ -820,7 +911,7 @@ end 'pinnedPartnerRegister'
 // `blocked`, WIDENED by the forbidden set of the copy partner `v` has not been colored with yet —
 // so `v` picks a register its partner can also take, and the two coalesce.
 //
-// **A copy-related pair must be colored out of the class BOTH ends can hold, or it costs two
+// **A copy-related pair must be colored out of the registers BOTH ends can hold, or it costs two
 // registers instead of one — and a wasted register is a false E5001 waiting to happen.** The hint
 // path above can only fire when the partner is ALREADY colored, and a forward sweep in dominance
 // order colors the DEFINITION first: a loop-carried accumulator's initial value is defined in the
@@ -840,7 +931,7 @@ end 'pinnedPartnerRegister'
 // keeps M5.12's scarce-class protection exactly as it was.
 //
 // It cannot over-constrain: the widened mask is only a PREFERENCE (`chooseRegister` falls back to
-// `blocked` when the group's class is full), never a legality claim.
+// `blocked` when the group's preferred volatility is full), never a legality claim.
 function copyGroupBlocked(v ValueId, blocked RegMask, hints ColorHints, alloc Allocation, liveness LivenessResult) returns RegMask
 	if not hints.hasCopy(v) 'noPartner'
 		return blocked
@@ -854,21 +945,35 @@ function copyGroupBlocked(v ValueId, blocked RegMask, hints ColorHints, alloc Al
 	return blocked or liveness.forbiddenOf(p)
 end 'copyGroupBlocked'
 
-// The class of registers a value with this `blocked` mask should take from: the CALLER-saved half
-// when any of it is free (nothing in the value's copy group survives a call, so none of it needs a
-// callee-saved register), otherwise the whole pool (the group is confined, and the callee-saved half
-// is its only home).
+// The registers a value with this `blocked` mask should take from, BY VOLATILITY: the CALLER-saved
+// (volatile) part of its own class pool when any of it is free (nothing in the value's copy group
+// survives a call, so none of it needs a callee-saved register), otherwise the whole class pool (the
+// group is confined, and the callee-saved half is its only home).
 //
-// This is `pickPreferredRegister`'s choice, named — so a HINT can be held to the same class. The
+// This is `pickPreferredRegister`'s choice, named — so a HINT can be held to the same preference. The
 // two must agree, or the hint path quietly bypasses the very protection the fallback path provides.
-function preferredClassMask(blocked RegMask) returns RegMask
-	let anyCallerFree = lowestClearRegister(blocked or (fullRegisterMask() and not callerSavedMask())) != RegisterFileSize
-	return callerSavedMask() if anyCallerFree else fullRegisterMask()
-end 'preferredClassMask'
+//
+// ⚠ "VOLATILITY", NOT "CLASS", AND THE RENAME IS THE POINT. This pair used to say "class" for the
+// caller/callee-saved split, which now collides head-on with a register's CLASS — the file it lives
+// in — and the collision is not cosmetic: both functions spelled "the whole pool" as
+// `fullRegisterMask()`, which was harmless while the file was 16 wide and the pool was every GPR, and
+// becomes "hand an int an XMM" the moment the file spans two classes. `classPool` is now the pool
+// argument and `fullRegisterMask()` appears here only as the complement base — the one honest
+// whole-machine use, complementing a mask to block everything outside it.
+function preferredVolatilityMask(blocked RegMask, classPool RegMask) returns RegMask
+	let volatilePart = classPool and callerSavedMask()
+	let anyVolatileFree = lowestClearRegister(blocked or (fullRegisterMask() and not volatilePart)) != RegisterFileSize
+	return volatilePart if anyVolatileFree else classPool
+end 'preferredVolatilityMask'
 
-// A hinted register is takeable iff it is free AND either inside the value's preferred class or
-// being VACATED at this op — those are different acts, and only allocating outside the class is
+// A hinted register is takeable iff it is free AND either inside the value's preferred volatility or
+// being VACATED at this op — those are different acts, and only allocating outside the preference is
 // harmful (see `chooseRegister`).
+//
+// It needs no class filter of its own: `blocked` already excludes every register outside the value's
+// class pool (`allocateDef`), so a hint naming a foreign-file register is refused as "not free". The
+// `takeable` mask may name foreign registers via `dyingRegs` — a value of the other class dying at
+// this very op — and `blocked` is what stops one being taken.
 function hintIsTakeable(reg RegNum, blocked RegMask, takeable RegMask) returns bool
 	if regMaskContains(blocked, regNum: reg) 'notFree'
 		return false
@@ -876,18 +981,28 @@ function hintIsTakeable(reg RegNum, blocked RegMask, takeable RegMask) returns b
 	return regMaskContains(takeable, regNum: reg)
 end 'hintIsTakeable'
 
-// Pick a free register, preferring a CALLER-saved one — it needs no prologue push/pop,
-// so a value that does NOT outlive a call stays cheap. A value live ACROSS a call is
-// forbidden every caller-saved register (it is in `blocked`), so none is free here and
-// the pick falls through to the full pool — landing it in the callee-saved half, which
-// the prologue then preserves. This is the standard "allocate volatiles first" bias; it
-// keeps leaf and call-free functions off the callee-saved registers entirely.
-function pickPreferredRegister(blocked RegMask) returns RegNum
-	let nonCallerSaved = fullRegisterMask() and not callerSavedMask()
-	let callerPick = lowestClearRegister(blocked or nonCallerSaved)
-	if callerPick != RegisterFileSize 'gotCaller'
-		return callerPick
-	end 'gotCaller'
+// Pick a free register of the value's OWN class, preferring a CALLER-saved (volatile) one — it needs
+// no prologue push/pop, so a value that does NOT outlive a call stays cheap. A value live ACROSS a
+// call is forbidden every caller-saved register (it is in `blocked`), so none is free here and the
+// pick falls through to the whole class pool — landing it in the callee-saved half, which the
+// prologue then preserves. This is the standard "allocate volatiles first" bias; it keeps leaf and
+// call-free functions off the callee-saved registers entirely.
+//
+// The final fallback scans `blocked` alone and is class-safe BECAUSE of it: `allocateDef` put
+// `fullRegisterMask() and not classPool` into that mask, so every foreign-file register is already
+// blocked and `lowestClearRegister` — which scans all 32 — cannot reach one.
+//
+// It ASKS `preferredVolatilityMask` rather than re-deriving the same preference, so the hint path and
+// this one cannot disagree about what a value should take. They used to spell the volatile probe
+// twice, which is what made "the two must agree" a comment instead of a property — and a second
+// spelling of a pool is exactly how `fullRegisterMask()` came to stand in for "the whole pool" in one
+// of them and not the other.
+function pickPreferredRegister(blocked RegMask, classPool RegMask) returns RegNum
+	let preferred = preferredVolatilityMask(blocked, classPool: classPool)
+	let pick = lowestClearRegister(blocked or (fullRegisterMask() and not preferred))
+	if pick != RegisterFileSize 'gotPreferred'
+		return pick
+	end 'gotPreferred'
 	return lowestClearRegister(blocked)
 end 'pickPreferredRegister'
 

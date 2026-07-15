@@ -137,6 +137,10 @@ export typealias RegNumColumn = Array with RegNum
 // `CfgIndexArray`, which said "block index" about numbers that are nothing of the sort.
 export typealias RegCountColumn = Array with RegCount
 
+// (A dense per-value register-class column is `ValueClassColumn`, and it is declared with `RegClass`
+// in TargetDialect rather than here: the lowering PRODUCES it and the allocator only consumes it, so
+// it is a dialect fact that crosses the tier boundary, not an allocator-local one.)
+
 // Build a dense column of `count` entries, every entry set to `value` — the "resize a column then
 // fill a sentinel" pattern the allocator's color/hint columns, the flat BlockId index, and the Hall
 // matching's two inverse maps all share. The result unifies with every purpose-named column above.
@@ -475,6 +479,18 @@ export type LivenessResult
 	export var wordsPerRow as BitWordCount
 	export var live as LiveSets
 	export var forbidden as RegMaskColumn
+	// Which register FILE each value lives in — dense, by value id. PRODUCED BY THE LOWERING and
+	// handed to the allocator (see `allocateRegisters`); the allocator never derives it.
+	//
+	// ⭐ ITS OWN COLUMN, NOT A FORBIDDEN MASK, AND THE DISTINCTION IS THE WHOLE POINT. Encoding "not
+	// a GPR" as 16 set bits in `forbidden` costs no new column and is WRONG: `clearForbidden` ZEROES
+	// that mask, and the splitter calls it on every spill victim and every fresh id, so the class
+	// would be WIPED mid-allocation and a float would be coloured into a GPR. The wipe is CORRECT and
+	// must stay (see `clearForbidden`). The class is what a value IS — intrinsic, permanent, fixed by
+	// its Std type at birth. `forbidden` is what the ops it crosses TOOK AWAY — contextual, and
+	// recomputable precisely BECAUSE a split cuts the live range that earned it. Two facts with two
+	// different lifetimes cannot share one column.
+	export var valueClass as ValueClassColumn
 	export var maxPressure as RegCount
 	// Block-marking steps taken by the SSA path exploration — the honest cost counter. (There is
 	// no fixpoint, so there is no iteration count to report.)
@@ -500,8 +516,8 @@ export type LivenessResult
 	// answers EVERY per-value question from it rather than re-walking the function per candidate.
 	export var useIndex as UseIndex
 
-	export static function create(cfg FuncCfg, valueCount ValueId, wordsPerRow BitWordCount, live LiveSets, forbidden RegMaskColumn, maxPressure RegCount, livenessMarkSteps EventCount, deadPhis RegCountColumn, blockPressure RegCountColumn, useIndex UseIndex) returns LivenessResult
-		return Self{cfg: cfg, valueCount: valueCount, wordsPerRow: wordsPerRow, live: live, forbidden: forbidden, maxPressure: maxPressure, livenessMarkSteps: livenessMarkSteps, deadPhis: deadPhis, blockPressure: blockPressure, useIndex: useIndex}
+	export static function create(cfg FuncCfg, valueCount ValueId, wordsPerRow BitWordCount, live LiveSets, forbidden RegMaskColumn, valueClass ValueClassColumn, maxPressure RegCount, livenessMarkSteps EventCount, deadPhis RegCountColumn, blockPressure RegCountColumn, useIndex UseIndex) returns LivenessResult
+		return Self{cfg: cfg, valueCount: valueCount, wordsPerRow: wordsPerRow, live: live, forbidden: forbidden, valueClass: valueClass, maxPressure: maxPressure, livenessMarkSteps: livenessMarkSteps, deadPhis: deadPhis, blockPressure: blockPressure, useIndex: useIndex}
 	end 'create'
 
 	// The dead block-arg count of local block `local`.
@@ -531,12 +547,22 @@ export type LivenessResult
 	// Grow the value space to the ids a split MINTED. Every value-keyed column follows it, and the
 	// working rows widen with `wordsPerRow`. A fresh id forbids nothing until the dirty-region sweep
 	// says otherwise, so the added entries are zero.
-	export function growValueSpace(newValueCount ValueId)
+	//
+	// ⭐ `class` IS REQUIRED, AND THAT IS WHY IT IS A PARAMETER RATHER THAN A DEFAULT. Every id one
+	// split mints derives from that split's ONE victim — a reload of it, or a rematerialization of it
+	// — so it holds the victim's value and therefore its class. THIS IS THE ONLY PLACE A NEW VALUE'S
+	// CLASS COMES FROM, because the ops a split inserts cannot say: `loadRegSlot` is
+	// class-POLYMORPHIC (it is `mov r64, [slot]` for an int and `movsd xmm, [slot]` for a float), so
+	// classifying a reload by its own op would answer GPR for a float and colour it into the wrong
+	// file. Defaulting the added entries to `gpr` would make that a SILENT wrong answer; making the
+	// caller name the class makes forgetting it a compile error.
+	export function growValueSpace(newValueCount ValueId, class RegClass)
 		if newValueCount < self.valueCount 'shrink'
 			panic("LivenessResult.growValueSpace: cannot shrink the value space from {self.valueCount} to {newValueCount}")
 		end 'shrink'
 
 		self.forbidden.growFilled(newValueCount, value: 0)
+		self.valueClass.growFilled(newValueCount, value: class)
 		self.valueCount = newValueCount
 		self.wordsPerRow = bitsetWordsFor(newValueCount)
 	end 'growValueSpace'
@@ -548,6 +574,10 @@ export type LivenessResult
 	// SHRINK is the split victim's: its live range is cut at the peak, so it is no longer live across
 	// the call that forbade it the caller-saved registers. A mask that only ever grows would keep
 	// saying it was — and the value would be denied a register it can now legally take.
+	//
+	// ⚠ THIS IS EXACTLY WHY A VALUE'S CLASS IS NOT IN THIS MASK (see `valueClass`). This zeroing is
+	// correct and load-bearing, and it runs on every victim and every fresh id — so a class encoded
+	// here would be erased mid-allocation, and the float that lost it would be coloured into a GPR.
 	export function clearForbidden(v ValueId)
 		try self.forbidden.set(v, value: 0) otherwise panic("LivenessResult.clearForbidden: value {v} out of range (valueCount={self.valueCount})")
 	end 'clearForbidden'
@@ -599,6 +629,13 @@ export type LivenessResult
 	export function forbiddenOf(v ValueId) returns RegMask
 		return try self.forbidden.get(v) otherwise panic("LivenessResult.forbiddenOf: value {v} out of range (valueCount={self.valueCount})")
 	end 'forbiddenOf'
+
+	// The register FILE `v` lives in. Every per-value pool question — what may it take, is it
+	// confined, is its pool full — is asked against THIS class's registers and never against the
+	// whole machine (see `RegBits.classRegisterMask`).
+	export function classOf(v ValueId) returns RegClass
+		return try self.valueClass.get(v) otherwise panic("LivenessResult.classOf: value {v} out of range (valueCount={self.valueCount})")
+	end 'classOf'
 end 'LivenessResult'
 
 // The local index of a function-local `BlockId`, via the O(1) flat `FuncTopology` index —
@@ -679,7 +716,7 @@ let DfsBlack = 2 as DfsColor
 // value space grows, and the splitter knows exactly how (it minted the ids). Rebuilding the CFG
 // per split re-scanned the whole function, re-derived both CSR graphs, and re-walked one natural
 // loop per loop header, for an answer that could not have changed.
-export function computeLivenessOn(module TargetModule, cfg FuncCfg, func IrFunction) returns LivenessResult
+export function computeLivenessOn(module TargetModule, cfg FuncCfg, func IrFunction, valueClass ValueClassColumn) returns LivenessResult
 	let valueCount = cfg.valueCount
 	let wordsPerRow = bitsetWordsFor(valueCount)
 	let numBlocks = cfg.topo.numBlocks
@@ -696,6 +733,7 @@ export function computeLivenessOn(module TargetModule, cfg FuncCfg, func IrFunct
 	let walk = solveLivenessSsa(cfg.topo, useIndex: useIndex, valueCount: valueCount, marks: marks, touched: touched)
 
 	var forbidden = makeRegMaskColumn(valueCount)
+	assertClassColumnCovers(valueClass, valueCount: valueCount, func: func)
 	var deadPhis = zeroColumn(numBlocks)
 	var blockPressure = zeroColumn(numBlocks)
 	var sweep = PressureSweepScratch.create()
@@ -711,7 +749,7 @@ export function computeLivenessOn(module TargetModule, cfg FuncCfg, func IrFunct
 	let paramCross = ParamCrossForbid.resolve(module, topo: cfg.topo, paramCount: func.paramCount)
 	paramCross.applyTo(forbidden)
 
-	return LivenessResult.create(cfg, valueCount: valueCount, wordsPerRow: wordsPerRow, live: walk.live, forbidden: forbidden, maxPressure: maxPressure, livenessMarkSteps: walk.markSteps, deadPhis: deadPhis, blockPressure: blockPressure, useIndex: useIndex)
+	return LivenessResult.create(cfg, valueCount: valueCount, wordsPerRow: wordsPerRow, live: walk.live, forbidden: forbidden, valueClass: valueClass, maxPressure: maxPressure, livenessMarkSteps: walk.markSteps, deadPhis: deadPhis, blockPressure: blockPressure, useIndex: useIndex)
 end 'computeLivenessOn'
 
 // A zeroed per-value register-mask column.
@@ -720,6 +758,24 @@ function makeRegMaskColumn(valueCount ValueId) returns RegMaskColumn
 	col.resize(valueCount)
 	return col
 end 'makeRegMaskColumn'
+
+// The class column the LOWERING produced must name every value this function has.
+//
+// It is a real check on real data, not a formality: the column is written as each vreg is minted, and
+// the allocator's own `scanFunctionValueCount` is an INDEPENDENT count of the same value space. A
+// producer that mints a vreg without recording its class leaves a SHORT column, and every read past
+// its end is a value whose file nobody stated. Catching that here — once per function, O(1) — is what
+// makes "the class is produced, never derived" an enforced invariant rather than a convention.
+//
+// ⚠ It cannot catch a column that is long enough but WRONG (an f64 recorded as `gpr`). Nothing
+// downstream can: `assertColouredInClass` compares a colour against the DECLARED class, so a wrong
+// declaration is self-consistent all the way to `addsd rax, rcx`. Stating the class correctly, from
+// the Std type, at the moment the vreg is minted, is the whole defence.
+function assertClassColumnCovers(valueClass ValueClassColumn, valueCount ValueId, func IrFunction)
+	if valueClass.count() < valueCount 'shortColumn'
+		panic("computeLivenessOn: '{String.from(func.name)}' has {valueCount} values but the lowering recorded classes for only {valueClass.count()} of them. Every virtual register's class is written as it is minted (StdToX64Conversion); a short column means a vreg was minted without one, and the values past the end have no register file stated. The allocator cannot derive it — `movRegReg`/`loadRegSlot`/`xchgRegReg` are class-agnostic by design, so a copy's class is knowable only from its source.")
+	end 'shortColumn'
+end 'assertClassColumnCovers'
 
 // ==========================================================================
 // CFG construction
@@ -1104,7 +1160,11 @@ end 'condBranchTargetOf'
 // The number of distinct value ids in the function (columns for the dense state):
 // max id appearing as an op operand, block-arg, or branch-edge arg, plus one. A
 // function always has at least a return value, so the count is never zero.
-function scanFunctionValueCount(module TargetModule, func IrFunction) returns ValueId
+// The function's value space: one past the highest ValueId any of its blocks, edges or ops names.
+// Exported because it is also the width the LOWERING's class column must cover — an INDEPENDENT count
+// of the same value space, which is what lets `assertClassColumnCovers` catch a vreg minted without a
+// class rather than read past the end of the column.
+export function scanFunctionValueCount(module TargetModule, func IrFunction) returns ValueId
 	var maxId = 0 as ValueId
 	var buf = OperandList.create()
 	for blockRef in func.blockRefs 'eachBlock'
