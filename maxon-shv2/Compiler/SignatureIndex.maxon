@@ -1,8 +1,9 @@
-// SignatureIndex — the WHOLE-PROGRAM DECLARATION index: every function and every ranged typealias
-// DECLARED in any file, read straight off the TOKENS before any body is parsed.
+// SignatureIndex — the WHOLE-PROGRAM DECLARATION index: every function, every ranged typealias and
+// every top-level constant DECLARED in any file, read straight off the TOKENS before any body is
+// parsed.
 //
-// WHY IT MUST EXIST, AND WHY IN THE PARSER. Two source-level decisions cannot be postponed past the
-// parser, and each needs a declaration that may live in another file:
+// WHY IT MUST EXIST, AND WHY IN THE PARSER. Three source-level decisions cannot be postponed past
+// the parser, and each needs a declaration that may live in another file:
 //
 //   • A CALL'S RESULT TYPE. A bool `and`/`or` is CONTROL FLOW (`Parser.emitShortCircuit` — blocks
 //     and a merge phi, which no later pass can retrofit); `not` picks a different OPCODE per
@@ -16,10 +17,17 @@
 //     an i64 there carries no signedness — so the opcode must be chosen while the declared type is
 //     still in view, which is here. `u64.max shr 60` is 15 or -1 depending on it.
 //
-// So the RANGES travel beside the return types. An alias declared in `a.maxon` and used in
-// `b.maxon` has to reach `b`'s parse, or the shift in `b` is a silent wrong answer — and reading
-// the file-local alias table instead would be the identical mistake this index exists to fix,
-// wearing a different hat.
+//   • A TOP-LEVEL CONSTANT'S VALUE. A `let` at module scope is a COMPILE-TIME CONSTANT that every
+//     use INLINES as a literal (`Parser.topLevelConstantReference`), so the parser needs the NUMBER,
+//     not a promise of one. It cannot fold the initializer itself: a forward reference
+//     (`let TOTAL = FIRST + SECOND` above `let FIRST = 30`) and a cross-file `export let` are both
+//     ordinary, and neither is in view while one file is parsed. So the fold happens HERE, after
+//     every file's declarations are known — see `evaluateConstants`.
+//
+// So the RANGES travel beside the return types, and the CONSTANTS beside both. An alias declared in
+// `a.maxon` and used in `b.maxon` has to reach `b`'s parse, or the shift in `b` is a silent wrong
+// answer — and reading the file-local alias table instead would be the identical mistake this index
+// exists to fix, wearing a different hat.
 //
 // The FILE-LOCAL version of this — one token sweep of the file being parsed — is why the
 // single-file case was right. Cross-file it was not, and the failure was a WRONG ANSWER, not a
@@ -67,6 +75,188 @@ let TypeShapeUnresolved = 8 as ContentHash
 // rather than colliding two differently-shaped declarations on it.
 let DeclShapeAlias = 9 as ContentHash
 
+// The two shapes a top-level constant's ANSWER hashes under: it evaluated to a value, or it did
+// not. Their own discriminators for `DeclShapeAlias`'s reason — a name that stops being a function
+// and starts being a constant must move the hash rather than collide.
+let ConstShapeValue = 10 as ContentHash
+let ConstShapeNoValue = 11 as ContentHash
+
+// The separator between a file's path and a constant's bare name in a FILE-PRIVATE constant's
+// storage key. `|` is legal in neither a Maxon identifier nor a Windows path, so the composite is
+// unambiguous. Ported verbatim from v1's `fileScopedTopLevelKey` (Project.maxon:189-191), which
+// solves the identical problem the identical way.
+let FileScopedKeySeparator = "|"
+
+// An index into the constant ARENA (`ProgramSignatures.constDecls`). Wide range: declaration counts
+// are unbounded.
+export typealias ConstDeclIndex = int(0 to u64.max)
+export typealias ConstDeclIndexArray = Array with ConstDeclIndex
+typealias ConstDeclIndexMap = Map with (ByteArray, ConstDeclIndex)
+
+// WHERE a top-level constant is filed, and the ONE place a constant's visibility becomes a fact
+// about its NAME.
+//
+// A FILE-PRIVATE constant is filed under a key carrying its declaring file's path; an EXPORTED one
+// under its bare name. That single distinction is what makes `file-private-same-name-cross-file`
+// work — two files may each declare `let SHARED` with a different value, and each file's reads
+// resolve to its OWN — and it is why "reject duplicates" is not merely unnecessary here but
+// FORBIDDEN by the spec.
+//
+// Ported from v1's `topLevelConstStorageName` (Parser.maxon:3221-3226) + `fileScopedTopLevelKey`
+// (Project.maxon:189-191). v1's rule has three conditions (a bare name, file-private, immutable);
+// shv2's has one, because the other two are not yet expressible — it has no static fields to
+// qualify a name with, and a top-level `var` is a separate rung (P1.0d.5b).
+//
+// ⚠ WHEN THAT RUNG LANDS IT MUST NOT EXTEND THIS SCOPING TO A `var`. A constant DISAPPEARS at every
+// read — it inlines as a literal — so its scoped key never reaches the IR and can be any string at
+// all. A var's slot name IS its IR identity, so scoping it means rewriting every load and store
+// that names it. That asymmetry is why v1 leaves file-private vars sharing one bare key
+// (Parser.maxon:3206-3214, which concedes the latent collision), and it is exactly the aliasing
+// OPEN.md #17 records against the bootstrap.
+function topLevelConstStorageKey(name ByteArray, visibility Visibility, declFilePath FilePath) returns ByteArray
+	if visibility == Visibility.file 'filePrivate'
+		return fileScopedConstKey(name, declFilePath: declFilePath)
+	end 'filePrivate'
+	return name
+end 'topLevelConstStorageKey'
+
+// The key a FILE-PRIVATE constant is filed under. Also the first probe `constDeclFor` makes, which
+// is why it is a function and not an inlined interpolation at the two sites: a reader and a writer
+// that spelled this key differently would file a constant nothing could ever find.
+function fileScopedConstKey(name ByteArray, declFilePath FilePath) returns ByteArray
+	return "{declFilePath.toString()}{FileScopedKeySeparator}{String.from(name)}".toByteArray()
+end 'fileScopedConstKey'
+
+// A top-level constant's state, from `pending` through to its answer. ONE union rather than a value
+// table plus a side set of in-progress names, because the two questions the evaluator asks — "what
+// is this worth?" and "am I already inside it?" — are the same question asked at different times,
+// and a name that could be in one structure but not the other is exactly how a cycle goes undetected.
+export union TopLevelConstant
+	// Read by the sweep, not yet evaluated. Every decl starts here.
+	pending
+	// On the current evaluation's DFS stack: a reference that reaches this decl again is a CYCLE.
+	evaluating
+	// It evaluated. `payload` is the number (a bool's is its 0/1 — TypeRules' `BoolTrueValue`), and
+	// `tag` says which of the two it is. This is what a use INLINES.
+	value(payload ParsedInt, tag ValueTypeTag)
+	// THIS declaration is defective, and `error` is the positioned diagnostic for it. Held rather
+	// than reported, because the sweep that found it is deliberately TOLERANT and has no business
+	// vetoing a program (see `foldDeclaredSignaturesInto`). The REAL parse raises it, once, when it
+	// reaches this line — which is also the only place that knows the diagnostic is about source the
+	// user actually wrote rather than a name some other file mentioned.
+	failed(error ParseError)
+	// It has no value only because a constant it READS has none. Silent by design: a second
+	// diagnostic here would name a line whose only fault is mentioning a broken name. v1 does the
+	// same, dropping cycle victims so their readers see a plain "Undefined name" rather than a
+	// cascade (TypeResolution.maxon:8332-8338).
+	poisoned
+end 'TopLevelConstant'
+
+// A top-level `let`, as the declaration sweep found it: WHAT it is called, WHERE it was written, and
+// the TOKEN RANGE of its initializer — read, never evaluated on the spot.
+//
+// **THE RANGE, AND NOT A TREE.** v1 lowers each initializer into a flat arena of structural nodes
+// (`Project.unresolvedConstExprs`, Project.maxon:3361-3432) because its parse and its resolution are
+// separated by whole passes: by the time TypeResolution evaluates a constant, the Parser that read it
+// is long gone. shv2 has no such gap — the sweep and the evaluation are two halves of ONE query
+// (`Queries.queryProgramSignatures`), and the token memo is live throughout — so the range is
+// enough, and a node union would be a THIRD representation of an expression this compiler already
+// has two of. The C# bootstrap makes the same call for the same reason: its `ConstantDecl` is a
+// `(TokenStart, TokenEnd)` pair (2-Parser.cs:1678) and `EvaluateConstant` rewinds a cursor onto it
+// (2-Parser.cs:4960-4964).
+//
+// `tokens` is the DECLARING file's token array, carried so that a reference FROM ANOTHER FILE can be
+// resolved without reaching back into the query layer for it. It is a reference to the very array
+// `queryTokens` memoized, never a copy — the token cache retains it for the whole build regardless,
+// so carrying it here costs one pointer.
+export type TopLevelConstDecl
+	// The key this constant is filed under — `topLevelConstStorageKey`'s answer, computed once at
+	// construction so that the sweep's write and every later read cannot spell it differently.
+	export var storageKey as ByteArray
+	// The BARE name, kept for the diagnostics that must print what the user wrote rather than the
+	// path-qualified key the compiler files it under. (v1 needs a `displayTopLevelKey` to strip that
+	// prefix back off at E2012 time; carrying the bare name costs one pointer and needs no stripping.)
+	export var name as ByteArray
+	export var declFilePath as FilePath
+	export var tokens as TokenArray
+	export var initStart as TokenIndex
+	export var initEnd as TokenIndex
+	// The NAME's position — where a diagnostic about this declaration points.
+	export var nameLine as LineNumber
+	export var nameColumn as ColumnNumber
+	// The evaluator's answer, mutated in place as the DFS reaches and leaves this decl.
+	export var outcome as TopLevelConstant
+
+	export static function create(name ByteArray, visibility Visibility, declFilePath FilePath, tokens TokenArray, initStart TokenIndex, initEnd TokenIndex, nameLine LineNumber, nameColumn ColumnNumber) returns TopLevelConstDecl
+		return Self{
+			storageKey: topLevelConstStorageKey(name, visibility: visibility, declFilePath: declFilePath),
+			name: name,
+			declFilePath: declFilePath,
+			tokens: tokens,
+			initStart: initStart,
+			initEnd: initEnd,
+			nameLine: nameLine,
+			nameColumn: nameColumn,
+			outcome: TopLevelConstant.pending
+		}
+	end 'create'
+end 'TopLevelConstDecl'
+
+export typealias TopLevelConstDeclArray = Array with TopLevelConstDecl
+
+// What the arena knows about a bare name — `CalleeReturn`'s twin, and a union for its reason: "no
+// constant of this name is visible here" is an ANSWER (the name is probably a local), not a failure.
+union ConstDeclLookup
+	found(index ConstDeclIndex)
+	notFound
+end 'ConstDeclLookup'
+
+// What a constant expression evaluates to: the PAYLOAD, and the TAG that says what the payload
+// means. A bool's payload is its 0/1 (TypeRules' `BoolTrueValue`), which is why one integer field
+// serves both — and why the tag is not optional: a `boolean` 1 and an `integer` 1 are the same
+// number and different values.
+//
+// A `type` (so, one heap object per operand folded), which the per-VALUE rules in TypeRules go to
+// real lengths to avoid — and the trade is the other way here. Those run on every operator of every
+// expression of every function; this runs once per top-level constant DECLARATION, of which a
+// program has a handful. A tagged pair is what the code wants to say, and there is no hot path to
+// pay for it.
+export type ConstValue
+	export var payload as ParsedInt
+	export var tag as ValueTypeTag
+
+	export static function create(payload ParsedInt, tag ValueTypeTag) returns ConstValue
+		return Self{payload: payload, tag: tag}
+	end 'create'
+end 'ConstValue'
+
+// The result of asking the evaluator for a constant's value. `failed` is not an error to report — the
+// diagnostic is already recorded on the decl that owns it — it is the instruction to STOP.
+export union ConstEvalOutcome
+	value(payload ParsedInt, tag ValueTypeTag)
+	failed
+	notFound
+end 'ConstEvalOutcome'
+
+// Why a constant's initializer produced no value. Distinct from `ParseError` because the evaluator
+// has one outcome `ParseError` cannot express: "the defect is somewhere else, and is already
+// reported".
+export union ConstEvalError implements Error
+	// THIS initializer is defective; `error` is the positioned diagnostic for it.
+	defective(error ParseError)
+	// A constant this one READS has already been diagnosed. Carries no diagnostic of its own — see
+	// `TopLevelConstant.poisoned`.
+	dependencyFailed
+end 'ConstEvalError'
+
+// The outcome of a USE-SITE constant lookup, after evaluation has finished. Deliberately NOT
+// `ConstEvalOutcome`: a use site cannot trigger an evaluation (they are all done by then) and must
+// not be able to, so it is given a type with no `failed` arm to mishandle.
+export union TopLevelConstantLookup
+	found(payload ParsedInt, tag ValueTypeTag)
+	notFound
+end 'TopLevelConstantLookup'
+
 // What the index knows about a callee — the TWO outcomes the old `MaxonType.unresolved` sentinel
 // collapsed into one, plus the third (`void`) that it dropped on the floor.
 export union CalleeReturn
@@ -108,6 +298,19 @@ export type ProgramSignatures
 	// The interner every `named` id in `returnTypes` belongs to. PRIVATE, and it has to be: an id
 	// may not leave this type. `returnTypeOf` re-interns it into the caller's own table.
 	var typeNames as TypeNameInterner
+	// THE TOP-LEVEL CONSTANT ARENA — every `let` declared at module scope in any file, in
+	// DECLARATION order (source-path order, then in-file order).
+	//
+	// An ARRAY is the driver and a map is only the index into it, which is the opposite of the two
+	// tables above and is deliberate: the E2012 cycle message names its members in the order the DFS
+	// met them, so the evaluation order is part of what the compiler PRINTS. Driving from a map would
+	// make it depend on hash order — v1 drives from a map and has to sort the names back into
+	// declaration order to undo exactly that (`sortTopLevelNamesByPosition`,
+	// TypeResolution.maxon:8268-8304). Here there is nothing to sort: the sweep builds the array in
+	// the order the message needs.
+	var constDecls as TopLevelConstDeclArray
+	// Storage key -> its index in `constDecls`. FIRST-WINS on a duplicate key (see `recordConstant`).
+	var constIndex as ConstDeclIndexMap
 	// The content hash OF THE DECLARATIONS — not of the source they were read from. This is the
 	// second half of a parse memo's key (`QueryEngine.parseMemoKey`), and hashing the folded
 	// ENTRIES rather than the FILES is the whole point of it:
@@ -117,10 +320,18 @@ export type ProgramSignatures
 	//     right: every call to that function, in any file, may have changed meaning.
 	// Keying the parse memo on the composite SOURCE hash instead would be sound and would throw
 	// away the first property — one file's edit would re-parse the whole program.
+	//
+	// ⚠ A TOP-LEVEL CONSTANT PUTS ITS **VALUE** IN HERE, NOT JUST ITS NAME, AND THAT IS LOAD-BEARING
+	// (`mixConstant`). A constant is the one declaration whose value is COPIED INTO its readers — a
+	// use inlines it as a literal — so editing `export let MAGIC = 42` to `43` changes what every
+	// other file COMPILES TO while leaving those files' own bytes, and so their own content hashes,
+	// untouched. Only this hash can carry that. Measured, not assumed: with the warm-rebuild gate's
+	// declaration probe pointed at a constant, a 7 → 8 edit re-parses every file in the project; the
+	// gate's `invalidation` property is what keeps it that way.
 	export var hash as ContentHash
 
 	export static function create() returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedTypeAliasMap.create(), typeNames: TypeNameInterner.create(), hash: fnvOffsetBasis()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedTypeAliasMap.create(), typeNames: TypeNameInterner.create(), constDecls: TopLevelConstDeclArray.create(), constIndex: ConstDeclIndexMap.create(), hash: fnvOffsetBasis()}
 	end 'create'
 
 	// Fold ONE file's scanned declarations into the index. Called in SOURCE-PATH order, so the
@@ -132,10 +343,16 @@ export type ProgramSignatures
 	// machinery `mergeArtifact` uses for the identical job — `TypeNameInterner.foldInto` +
 	// `remapMaxonReturnType`. One mechanism, two callers: a second copy of "reconcile a file's ids
 	// into a bigger table" would be free to disagree with this one about what an id means.
-	export function foldFile(scanned FuncReturnTypeEntryArray, aliases RangedTypeAliasArray, fileTypeNames TypeNameInterner)
+	export function foldFile(scanned FuncReturnTypeEntryArray, aliases RangedTypeAliasArray, constants TopLevelConstDeclArray, fileTypeNames TypeNameInterner)
 		for alias in aliases 'eachAlias'
 			self.recordAlias(alias)
 		end 'eachAlias'
+
+		// Constants are RECORDED here and EVALUATED later (`evaluateConstants`), and the gap between
+		// the two is the whole reason a forward reference works — see that function.
+		for constant in constants 'eachConstant'
+			self.recordConstant(constant)
+		end 'eachConstant'
 
 		let remap = self.typeNames.foldInto(fileTypeNames)
 
@@ -186,6 +403,317 @@ export type ProgramSignatures
 		let named = mixBytes(mix(self.hash, value: DeclShapeAlias), bytes: alias.name)
 		self.hash = mix(mix(named, value: low), value: high)
 	end 'recordAlias'
+
+	// Add one top-level constant DECLARATION to the arena. No value yet: `evaluateConstants` supplies
+	// that once every file has been folded in.
+	//
+	// FIRST-WINS on a duplicate storage key, matching the bootstrap's `decls.FirstOrDefault(d =>
+	// d.Name == name)` (2-Parser.cs:4950). ⚠ A file that declares the same constant twice is NOT yet
+	// diagnosed — the second declaration is silently unreachable. That is a real gap and it is not
+	// this rung's: it needs the positioned duplicate check `commitFuncSignatures` does for functions
+	// (E3006), and no spec case covers it. It is NOT the cross-file same-name case, which is legal and
+	// which `topLevelConstStorageKey` handles by giving the two decls different keys.
+	function recordConstant(decl TopLevelConstDecl)
+		if self.constIndex.contains(decl.storageKey) 'duplicate'
+			return
+		end 'duplicate'
+
+		self.constIndex.upsert(decl.storageKey, value: self.constDecls.count())
+		self.constDecls.push(decl)
+	end 'recordConstant'
+
+	// ⭐ EVALUATE EVERY TOP-LEVEL CONSTANT IN THE PROGRAM, and fold each answer into the index's hash.
+	// Called once, by `queryProgramSignatures`, AFTER every file's declarations have been folded in.
+	//
+	// **THAT ORDERING IS THE FEATURE.** A forward reference — `let TOTAL = FIRST + SECOND` written
+	// above `let FIRST = 30` — resolves precisely because nothing is evaluated until every declaration
+	// is KNOWN. A single forward pass cannot do it, and neither reference compiler tries: v1 defers
+	// the whole job to TypeResolution, and the bootstrap pre-scans the entire token stream before it
+	// parses a line (`CollectAndEvaluateTopLevelDecls`, 2-Parser.cs:1680-1784).
+	//
+	// Driving over the ARENA in declaration order is what makes the cycle message deterministic — see
+	// the `constDecls` field.
+	export function evaluateConstants()
+		for i in 0 upto self.constDecls.count() 'eachDecl'
+			let decl = self.declAt(i)
+			match decl.outcome 'state'
+				// Already settled by an earlier decl's DFS — it referenced this one.
+				value to poisoned then break 'state'
+				evaluating then panic("ProgramSignatures.evaluateConstants: '{String.from(decl.name)}' is still marked `evaluating` between two top-level walks — every DFS pops what it pushes")
+				pending then self.startConstDecl(i)
+			end 'state'
+		end 'eachDecl'
+
+		// The hash covers the ANSWERS, folded in arena order once they all exist. It cannot be done
+		// inside the loop above: a decl's outcome is not final until every DFS that could reach it has
+		// run (a cycle rewrites its members' outcomes from the inside).
+		for j in 0 upto self.constDecls.count() 'eachOutcome'
+			let decl = self.declAt(j)
+			self.hash = self.mixConstant(self.hash, decl: decl)
+		end 'eachOutcome'
+	end 'evaluateConstants'
+
+	// Open a fresh DFS at arena index `index`. The stack is per-ROOT rather than shared across the
+	// whole loop, which costs one empty array per unevaluated root and buys the invariant the panic
+	// above checks: a walk that ends leaves nothing marked `evaluating`.
+	function startConstDecl(index ConstDeclIndex)
+		var stack = ConstDeclIndexArray.create()
+		_ = self.evaluateConstDecl(index, stack: stack)
+	end 'startConstDecl'
+
+	// Evaluate the constant at arena index `index` — MEMOIZED, and with CYCLE DETECTION.
+	//
+	// The answer is recorded ON THE DECL and only summarized in the return: a failure's diagnostic
+	// belongs to the declaration that caused it, and is raised (once) by the real parse when it
+	// reaches that line. Callers get `failed` — an instruction to stop, not an error to report.
+	function evaluateConstDecl(index ConstDeclIndex, stack ConstDeclIndexArray) returns ConstEvalOutcome
+		var decl = self.declAt(index)
+
+		match decl.outcome 'state'
+			value(payload, tag) then return ConstEvalOutcome.value(payload, tag: tag)
+			failed to poisoned then return ConstEvalOutcome.failed
+			// Reached a decl already on this walk's stack: the reference chain has closed on itself.
+			evaluating then return self.recordCycle(index, stack: stack)
+			pending then break 'state'
+		end 'state'
+
+		decl.outcome = TopLevelConstant.evaluating
+		stack.push(index)
+		let outcome = self.walkConstInitializer(decl, stack: stack)
+		_ = try stack.pop() otherwise panic("ProgramSignatures.evaluateConstDecl: stack.pop failed for '{String.from(decl.name)}' — every push is matched here")
+
+		return outcome
+	end 'evaluateConstDecl'
+
+	// Walk one initializer's tokens and settle its decl's outcome.
+	//
+	// A transient `Parser` is what walks them, and that is the point: the evaluator needs a token
+	// cursor, integer-literal decoding, `u16.max` bound resolution, character-literal decoding, and
+	// the operator precedence table — every one of which a `Parser` already has and single-sources.
+	// Re-spelling any of them here would be a second reading of the grammar, which is the duplication
+	// this compiler pays for hardest (see TypeRules' header). The parser it builds emits NO ops: a
+	// constant's initializer produces a NUMBER, not code.
+	//
+	// It is created per DECL, not per file, and per decl is per-constant-in-the-program — this runs
+	// once per declaration, never per reference (the memo above sees to that). Programs with no
+	// top-level constant build no parser here at all.
+	function walkConstInitializer(decl TopLevelConstDecl, stack ConstDeclIndexArray) returns ConstEvalOutcome
+		var parser = Parser.create(decl.tokens, filePath: decl.declFilePath, namespace: "", signatures: self)
+		let value = try parser.evalConstInitializer(decl, stack: stack) otherwise (err) 'noValue'
+			return self.recordConstFailure(decl, error: err)
+		end 'noValue'
+
+		decl.outcome = TopLevelConstant.value(value.payload, tag: value.tag)
+		return ConstEvalOutcome.value(value.payload, tag: value.tag)
+	end 'walkConstInitializer'
+
+	// Settle a decl that produced no value: it either OWNS the defect or merely inherited one.
+	function recordConstFailure(decl TopLevelConstDecl, error ConstEvalError) returns ConstEvalOutcome
+		match error 'kind'
+			defective(parseError) then decl.outcome = TopLevelConstant.failed(parseError)
+			dependencyFailed then self.poisonIfUndecided(decl)
+		end 'kind'
+
+		return ConstEvalOutcome.failed
+	end 'recordConstFailure'
+
+	// Mark a decl as a casualty of someone else's defect — UNLESS a verdict was already handed to it.
+	// `recordCycle` settles every member of a cycle from the inside, and those decls then unwind
+	// through here carrying `dependencyFailed`; overwriting would blank the one diagnostic the cycle
+	// produced.
+	function poisonIfUndecided(decl TopLevelConstDecl)
+		match decl.outcome 'state'
+			// `recordCycle` already ruled on this decl.
+			failed to poisoned then break 'state'
+			evaluating then decl.outcome = TopLevelConstant.poisoned
+			value then panic("ProgramSignatures.poisonIfUndecided: '{String.from(decl.name)}' holds a value AND failed to evaluate — an initializer produces one or the other")
+			pending then panic("ProgramSignatures.poisonIfUndecided: '{String.from(decl.name)}' is `pending` while unwinding its own evaluation — `evaluateConstDecl` marks it `evaluating` before the walk")
+		end 'state'
+	end 'poisonIfUndecided'
+
+	// **THE CYCLE.** `index` is already on `stack`, so the arc from its first appearance to the top is
+	// a closed reference chain in which no member can ever be evaluated. Settle all of them here,
+	// from the inside, and give exactly ONE the diagnostic.
+	//
+	// WHICH ONE: the LAST-DECLARED member. `stack` holds arena indices and the arena is in declaration
+	// order, so that is simply the largest index in the arc — no source positions to compare. The
+	// bootstrap picks the same declaration (`decls.Last(d => evaluating.Contains(d.Name))`,
+	// 2-Parser.cs:4954) and anchors on its NAME token, which is what `specs/top-level-let.md`'s
+	// `circular-dependency-error` gates byte-for-byte (`3:5` — the `B` of `let B = A + 1`). Every
+	// other member is POISONED, so the program reports one E2012 and not one per member.
+	//
+	// ⚠ DIVERGENCE FROM THE BOOTSTRAP, and it is deliberate. It names the whole in-progress set
+	// (`string.Join(", ", evaluating)`), which for `X -> A -> B -> A` prints "X, A, B" — but `X` is
+	// not circular, it merely LEADS to a cycle, and a message that says it is is simply wrong. shv2
+	// names the ARC (`A, B`). The two agree on every cycle whose root is a member — which is every
+	// cycle the corpus has, including the spec's — and disagree only where the bootstrap is
+	// misreporting.
+	function recordCycle(index ConstDeclIndex, stack ConstDeclIndexArray) returns ConstEvalOutcome
+		let arcStart = self.stackPositionOf(index, stack: stack)
+
+		var names = ""
+		var owner = index
+		for i in arcStart upto stack.count() 'eachMember'
+			let member = try stack.get(i) otherwise panic("ProgramSignatures.recordCycle: stack.get OOB at {i}")
+			if i > arcStart 'separator'
+				names = "{names}, "
+			end 'separator'
+			let memberDecl = self.declAt(member)
+			names = "{names}{String.from(memberDecl.name)}"
+			if member > owner 'laterDeclaration'
+				owner = member
+			end 'laterDeclaration'
+		end 'eachMember'
+
+		var ownerDecl = self.declAt(owner)
+		ownerDecl.outcome = TopLevelConstant.failed(ParseError.circularConstants(names, line: ownerDecl.nameLine, column: ownerDecl.nameColumn))
+
+		for j in arcStart upto stack.count() 'eachVictim'
+			let member = try stack.get(j) otherwise panic("ProgramSignatures.recordCycle: stack.get OOB at {j}")
+			if member == owner 'ownsTheDiagnostic'
+				continue
+			end 'ownsTheDiagnostic'
+			var victim = self.declAt(member)
+			victim.outcome = TopLevelConstant.poisoned
+		end 'eachVictim'
+
+		return ConstEvalOutcome.failed
+	end 'recordCycle'
+
+	// Where `index` sits on the DFS stack. Its presence is a precondition — `recordCycle` is reached
+	// only from the `evaluating` arm, which means this decl is on the current walk — so a miss is an
+	// invariant break and not a case to handle.
+	function stackPositionOf(index ConstDeclIndex, stack ConstDeclIndexArray) returns ConstDeclIndex
+		for i in 0 upto stack.count() 'each'
+			let member = try stack.get(i) otherwise panic("ProgramSignatures.stackPositionOf: stack.get OOB at {i}")
+			if member == index 'found'
+				return i
+			end 'found'
+		end 'each'
+
+		let target = self.declAt(index)
+		panic("ProgramSignatures.stackPositionOf: '{String.from(target.name)}' is marked `evaluating` but is not on the DFS stack — the mark and the stack fell out of lockstep")
+	end 'stackPositionOf'
+
+	// Resolve `name` from `readerFilePath` and evaluate what it denotes — the door `Parser`'s
+	// constant evaluator asks a NAME REFERENCE through, and the recursion that makes a forward
+	// reference (and a cross-file one) work.
+	export function evaluateNamed(name ByteArray, readerFilePath FilePath, stack ConstDeclIndexArray) returns ConstEvalOutcome
+		match self.constDeclFor(name, readerFilePath: readerFilePath) 'lookup'
+			found(index) then return self.evaluateConstDecl(index, stack: stack)
+			notFound then return ConstEvalOutcome.notFound
+		end 'lookup'
+	end 'evaluateNamed'
+
+	// The value `name` denotes when read from `readerFilePath` — the door a USE SITE asks through
+	// (`Parser.topLevelConstantReference`), after every constant has been evaluated.
+	//
+	// A constant that FAILED reads as `notFound`, so its reader reports a plain undefined-name error
+	// rather than inlining a value that does not exist. v1 does exactly this, and says why: it drops
+	// the cycle's victims from its registry "so readers get a plain 'Undefined name'"
+	// (TypeResolution.maxon:8332-8338). The declaration's own diagnostic has already failed the build,
+	// so nothing is lost by the reader being vague about it.
+	export function constantValueOf(name ByteArray, readerFilePath FilePath) returns TopLevelConstantLookup
+		match self.constDeclFor(name, readerFilePath: readerFilePath) 'lookup'
+			found(index) then return self.resolvedValueOf(index)
+			notFound then return TopLevelConstantLookup.notFound
+		end 'lookup'
+	end 'constantValueOf'
+
+	// What the DECLARATION the real parse just read came to — the door `Parser.raiseConstantFailure`
+	// asks through, keyed on the decl's own storage key rather than on a bare name (a declaration
+	// resolves to ITSELF, never through the scoped-then-bare probe a USE goes through).
+	//
+	// **THE DRIFT GUARD LIVES HERE.** The sweep decides what is top level by counting block depth over
+	// tokens (`Parser.foldDeclaredSignaturesInto`); the real parse decides it by actually parsing.
+	// Those are two readings of one question, and a miss means they disagreed — after which the
+	// constant is absent from the index, every use of it reports "undefined variable", and a correct
+	// program is rejected for a reason that names nothing the user wrote. It panics instead, naming
+	// the drift, in the discipline `mergeArtifact`'s span-lockstep assert follows.
+	export function declaredConstantOutcome(decl TopLevelConstDecl) returns TopLevelConstant
+		let index = try self.constIndex.get(decl.storageKey) otherwise panic("ProgramSignatures.declaredConstantOutcome: the declaration sweep never recorded top-level constant '{String.from(decl.name)}' of {decl.declFilePath.toString()}, which the parser is dispatching at top level — the sweep's block-depth gate and the parser's structure disagree about what is top level")
+		let declared = self.declAt(index)
+		return declared.outcome
+	end 'declaredConstantOutcome'
+
+	function resolvedValueOf(index ConstDeclIndex) returns TopLevelConstantLookup
+		let decl = self.declAt(index)
+		match decl.outcome 'state'
+			value(payload, tag) then return TopLevelConstantLookup.found(payload, tag: tag)
+			failed to poisoned then return TopLevelConstantLookup.notFound
+			pending to evaluating then panic("ProgramSignatures.resolvedValueOf: '{String.from(decl.name)}' is unevaluated at a use site — `evaluateConstants` runs to completion before any file is parsed")
+		end 'state'
+	end 'resolvedValueOf'
+
+	// **THE RESOLUTION RULE for a bare name that might be a top-level constant** — and the reason two
+	// files may each declare `let SHARED` with a different value.
+	//
+	// SCOPED FIRST, BARE SECOND. A file-private constant is filed under a key carrying its declaring
+	// file's path, so this file's own `SHARED` is found before anyone's exported one of that name.
+	// Ported from v1's `lookupTopLevelConst` (TypeResolution.maxon:2857-2868), which orders the two
+	// probes identically and for the identical reason.
+	function constDeclFor(name ByteArray, readerFilePath FilePath) returns ConstDeclLookup
+		if let scoped = try self.constIndex.get(fileScopedConstKey(name, declFilePath: readerFilePath)) 'filePrivate'
+			return ConstDeclLookup.found(scoped)
+		end 'filePrivate'
+
+		// The BARE key holds only EXPORTED constants (`topLevelConstStorageKey`), so a hit here is
+		// visible BY CONSTRUCTION and there is no second visibility test to get wrong. v1 needs one
+		// (`isVisibleFrom`) because it files module- and global-visible constants under the bare key
+		// and must tell them apart; shv2 has a single exported visibility until namespaces land, and
+		// gains that test on the day it gains the distinction.
+		if let exported = try self.constIndex.get(name) 'exported'
+			return ConstDeclLookup.found(exported)
+		end 'exported'
+
+		return ConstDeclLookup.notFound
+	end 'constDeclFor'
+
+	function declAt(index ConstDeclIndex) returns TopLevelConstDecl
+		return try self.constDecls.get(index) otherwise panic("ProgramSignatures.declAt: constDecls.get OOB at {index} — every index handed out is one this arena minted")
+	end 'declAt'
+
+	// Mix one top-level constant's ANSWER into the running hash: the key it is filed under, then its
+	// VALUE.
+	//
+	// ⚠ **THE VALUE, AND NOT MERELY THE NAME.** This is the half a READER's parse memo depends on, and
+	// the easy half to leave out. A use INLINES the constant — it becomes a `literal` op carrying the
+	// number — so a file that merely reads `MAGIC` compiles differently when `MAGIC` changes, while
+	// its OWN bytes, and therefore its own content hash, do not move at all. Without this, editing
+	// `export let MAGIC = 42` to `43` would re-parse the declaring file and hand every reader a memo
+	// with 42 still baked into it. (`QueryEngine.parseMemoKey` is the other half — see the `hash`
+	// field.)
+	function mixConstant(state ContentHash, decl TopLevelConstDecl) returns ContentHash
+		let keyed = mixBytes(state, bytes: decl.storageKey)
+		match decl.outcome 'o'
+			value(payload, tag) then return self.mixConstantValue(keyed, payload: payload, tag: tag)
+			// A constant with no value bakes no number into a reader, so every failure hashes alike —
+			// but it must still hash differently from every VALUE, or `let X = compute()` becoming
+			// `let X = 0` would leave a reader's memo valid. The failure's DETAILS are deliberately not
+			// mixed: the build fails either way, and no reader's code depends on which diagnostic it
+			// failed with.
+			failed to poisoned then return mix(keyed, value: ConstShapeNoValue)
+			pending to evaluating then panic("ProgramSignatures.mixConstant: '{String.from(decl.name)}' is unevaluated — `evaluateConstants` folds the hash only after every walk has finished")
+		end 'o'
+	end 'mixConstant'
+
+	// The TAG rides the hash beside the payload: a `boolean` 1 and an `integer` 1 are the same number
+	// and different values, and they compile to different code (an i1 versus an i64).
+	//
+	// Exhaustive over `ValueTypeTag`, and the four unreachable arms panic rather than hashing: the
+	// evaluator produces `integer` and `boolean` and nothing else (its literals are ints, chars and
+	// bools; `foldIntCompare` yields a bool; `binOpResultTag` yields one of the two given two of the
+	// two). Hashing them "just in case" would be inventing a key for a value that cannot exist, and
+	// the day one can, this is where it must be decided rather than defaulted.
+	function mixConstantValue(state ContentHash, payload ParsedInt, tag ValueTypeTag) returns ContentHash
+		let shaped = mix(state, value: ConstShapeValue)
+		match tag 'k'
+			integer then return mix(mix(shaped, value: TypeShapeInteger), value: payload as ContentHash)
+			boolean then return mix(mix(shaped, value: TypeShapeBoolean), value: payload as ContentHash)
+			float to named then panic("ProgramSignatures.mixConstantValue: a top-level constant is tagged '{typeTagName(tag)}' — the evaluator folds integers and bools only (a float constant needs P1.0d.4)")
+			exitCode to void then panic("ProgramSignatures.mixConstantValue: a top-level constant is tagged '{typeTagName(tag)}' — the evaluator folds integers and bools only")
+		end 'k'
+	end 'mixConstantValue'
 
 	// The ranged typealias `name` denotes, declared in ANY file. THE door the shift rule asks
 	// through — see `Parser.valueIsUnsigned`.

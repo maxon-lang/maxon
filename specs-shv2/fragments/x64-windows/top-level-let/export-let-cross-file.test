@@ -1,0 +1,21 @@
+// Test: export-let-cross-file
+// --- file: api/constants.maxon
+export let MAGIC = 42
+export let OFFSET = -10
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return MAGIC + OFFSET
+end 'main'
+---
+ExitCode: 32
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 rax, 42
+    x64.leaRegRegImm32 r8, rax, -10
+    x64.popReg rbp
+    x64.ret
+}

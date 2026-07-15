@@ -149,6 +149,70 @@ end 'typeTagName'
 // source-level type, and (for `and`/`or`) the decision is CONTROL FLOW, which no later pass
 // can retrofit. These are the rules that decision reads.
 
+// ⭐ **WHAT A BOOL IS, AS A NUMBER.** A `bool` is an i1 carrying 1 or 0, and these are those two
+// values. Every reader of the convention is below or beside this line:
+//
+//   • the `true` / `false` literals (`Parser.parseBoolLiteral`);
+//   • the SEED a short-circuit merge takes on its skipped path (`Parser.shortCircuitSeed`) — `and`
+//     seeds false, `or` seeds true, so "false" and "the value `a and b` has when `a` is false" are
+//     ONE constant and cannot drift apart;
+//   • the payload a folded comparison yields (`foldIntCompare`);
+//   • the flip a folded logical `not` performs (`foldLogicalNot`).
+//
+// They live HERE rather than in the parser because this file is what already answers "is this a
+// bool?" (`tagIsBool`, `typeClassOf`), and because the FOLDS below need them — TypeRules is the
+// lower layer, so the constants had to move down to it rather than the rules reaching up into the
+// parser for them.
+export let BoolTrueValue = 1 as ParsedInt
+export let BoolFalseValue = 0 as ParsedInt
+
+// The 0/1 payload of a `bool` the compiler computed. The one place a Maxon `bool` becomes the
+// number a `boolean`-tagged value carries, so the two constants above are never re-spelled at a
+// fold site.
+function boolPayload(value bool) returns ParsedInt
+	if value 'true'
+		return BoolTrueValue
+	end 'true'
+	return BoolFalseValue
+end 'boolPayload'
+
+// Fold `lhs <op> rhs` over two integers the compiler already holds, yielding the comparison's
+// answer as the 0/1 payload a `boolean` value carries.
+//
+// It returns a `ParsedInt` rather than a `bool` because its caller — the top-level constant
+// evaluator — carries every constant as a (payload, tag) pair, and a comparison's payload IS that
+// 0/1. Handing back a `bool` would only make the caller convert it, and the conversion is where
+// the convention would get written down a second time.
+//
+// TOTAL, unlike `foldIntBinOp`: no comparison can fail. There is no division to trap and no count
+// to reject, so there is nothing to decline and no `FoldedInt` to return.
+//
+// ⚠ NOTHING ELSE IN THIS COMPILER FOLDS A COMPARISON — the parser emits `MaxonOp.compare` and
+// leaves the answer to the hardware's `setcc`. So this is the FIRST statement of the rule, not a
+// second one. The day the parser gains a comparison fold, it must call THIS rather than restate
+// it, exactly as `emitShift` and `evalShift` share one shift rule.
+export function foldIntCompare(op MaxonCmpOp, lhs ParsedInt, rhs ParsedInt) returns ParsedInt
+	return match op 'o'
+		eq gives boolPayload(lhs == rhs)
+		ne gives boolPayload(lhs != rhs)
+		lt gives boolPayload(lhs < rhs)
+		gt gives boolPayload(lhs > rhs)
+		le gives boolPayload(lhs <= rhs)
+		ge gives boolPayload(lhs >= rhs)
+	end 'o'
+end 'foldIntCompare'
+
+// Fold a LOGICAL `not` over the 0/1 payload of a bool the compiler already holds.
+//
+// Separate from `foldIntUnaryOp`, which declines `logicalNot` outright — and the split is the
+// rule, not an accident. That function folds over INTEGERS, where a `logicalNot` is a parser bug
+// (`not 5` is the bitwise complement, `bitNot`); this one folds over the BOOL domain, where the
+// operator is meaningful and total. `notOperatorFor` is what tells the two apart, and every caller
+// reaches these through it rather than choosing for itself.
+export function foldLogicalNot(operand ParsedInt) returns ParsedInt
+	return boolPayload(operand == BoolFalseValue)
+end 'foldLogicalNot'
+
 // True for the tag of a `bool`, and ONLY for it. Distinct from
 // `typeClassAdmits(TypeClass.boolean, …)`, and the difference is load-bearing: this asks "is
 // this DEFINITELY a bool?", which is what the short-circuit gate and the `not` opcode choice

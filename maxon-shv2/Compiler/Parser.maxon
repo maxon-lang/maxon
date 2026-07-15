@@ -36,8 +36,15 @@
 //      supplies its terminator (closeFunctionBody) — and reports E3013 when a
 //      value-returning body can fall off its end instead.
 
-// Cursor position into the token array. Wide range: token counts are unbounded.
-typealias TokenIndex = int(0 to u64.max)
+// Cursor position into the token array. Wide range: token counts are unbounded. Exported because a
+// top-level constant's declaration records the token RANGE of its initializer (SignatureIndex's
+// `TopLevelConstDecl`) rather than a tree of it.
+export typealias TokenIndex = int(0 to u64.max)
+
+// How many blocks are open around a token. 0 is FILE SCOPE — the depth at which a `let` is a
+// top-level constant rather than a body-local binding (see `foldDeclaredSignaturesInto`). Wide
+// range: nesting is unbounded.
+typealias BlockDepth = int(0 to u64.max)
 
 // The custom ABI passes arguments in six registers (StdToX64Conversion.argRegisters), so
 // M5 caps a function at six parameters. A seventh would need a stack argument slot — a
@@ -186,6 +193,57 @@ export union ParseError implements Error
 	// is a valid but MULTI-BYTE character — `'é'`, an emoji — is not this: it is a
 	// legitimate program shv2 cannot yet compile, so it reports as `unsupported`.)
 	invalidCharacterLiteral(reason String, line LineNumber, column ColumnNumber)
+	// --- The top-level constant arms (P1.0d.5a) ---
+	//
+	// All three are raised by the CONSTANT EVALUATOR, which runs inside the whole-program
+	// declaration sweep and so has no business reporting anything itself (`foldDeclaredSignaturesInto`
+	// is deliberately tolerant). They are recorded on the declaration and re-thrown here, by the real
+	// parse, when it reaches the `let` that owns them — see `TopLevelConstant.failed`. That they are
+	// ParseErrors and not a private error space is the point: `reportParseError` is already the one
+	// place a parse-time diagnostic becomes a project diagnostic, and a second mapper would be a
+	// second opinion about which code means what.
+	//
+	// A set of top-level constants that reference each other in a closed chain, so none of them can
+	// be evaluated. `names` lists the cycle's members in the order the evaluator met them. Renders as
+	// E2012, positioned at the LAST-DECLARED member's name — see `ProgramSignatures.recordCycle`.
+	circularConstants(names String, line LineNumber, column ColumnNumber)
+	// A CALL in a top-level constant's initializer (`let RESULT = compute()`). Renders as E2045,
+	// positioned at the callee's name. A call is not a constant expression: its answer needs the
+	// program to be RUNNING, and a top-level `let` is folded before any of it exists. Both reference
+	// compilers reject it with this exact text (2-Parser.cs:5280-5284; v1's `rejectCallInitializer`,
+	// Parser.maxon:3971-3982).
+	functionCallInConstant(callee String, line LineNumber, column ColumnNumber)
+	// A top-level constant's initializer that the evaluator folded only in PART — it stopped at a
+	// token it could not evaluate, with more of the line still to go. Renders as E2045, positioned at
+	// the first token it could not fold.
+	//
+	// ⚠ WITHOUT THIS THE REMAINDER IS SILENTLY DISCARDED, and the declared value quietly becomes
+	// something else. It is the failure mode the token-range model has and a tree model does not, and
+	// the bootstrap pays for it in the same coin (`ExpectConstInitializerFullyConsumed`,
+	// 2-Parser.cs:4971-4987, whose comment records `let B = "lit".toByteArray()` folding to the String
+	// "lit" and only surfacing far away, at a use site, as a type mismatch).
+	nonConstantInitializer(name String, leftover String, line LineNumber, column ColumnNumber)
+	// A name in a top-level constant's initializer that no visible constant declares. Renders as
+	// E2004 with the bootstrap's own text (2-Parser.cs:4950) — the same code its sibling
+	// `undefinedVariable` reports under, because it is the same defect: a name with no binding. It is
+	// a DISTINCT arm because the two are found by different machinery and say different words: at file
+	// scope there is no `Scope` to have looked in, and "variable" would name something the source did
+	// not write.
+	undefinedConstant(name String, line LineNumber, column ColumnNumber)
+	// A `/` or `mod` BY ZERO in a top-level constant's initializer (`let X = 1 / 0`), or the one other
+	// integer division with no answer (`i64.min / -1`). Renders as E2045, positioned at the operator.
+	//
+	// A runtime `x / 0` is a trap, and shv2 lets it reach the hardware (OPEN.md #2). A CONSTANT one
+	// cannot: there is no run time to trap in, because the fold happens before the program exists. So
+	// there is no answer to give and no later pass that could give one, and the only honest move is to
+	// reject it where it is written.
+	//
+	// AUTHORED, not ported — neither reference compiler gets this right. The bootstrap evaluates a
+	// constant `1 / 0` through C#'s DOUBLE division and silently declares the constant Infinity
+	// (2-Parser.cs:5113-5137); v1 has no division in constant expressions at all (its
+	// `UnresolvedConstExpr` union carries `add`/`sub`/`mul` and no `div` — Project.maxon:3401-3423),
+	// so the question never reaches it.
+	constantDivisionByZero(op String, line LineNumber, column ColumnNumber)
 end 'ParseError'
 
 // --- Ranged-typealias range bounds ---
@@ -219,13 +277,6 @@ let I64MaxBound = i64.max as ParsedInt
 // The `.min` / `.max` field names a type-qualified bound may carry.
 let MinBoundField = b"min"
 let MaxBoundField = b"max"
-
-// The i1 payloads of the `true` / `false` literals. They are also the SEED values a
-// short-circuit merge takes on the skipped path — `and` seeds false, `or` seeds true — so
-// "false" and "the value `a and b` has when `a` is false" are one constant and cannot
-// drift apart.
-let BoolTrueValue = 1 as ParsedInt
-let BoolFalseValue = 0 as ParsedInt
 
 // Can a PARAMETER be written? No — a reassignment to one is E2013, and mutating a parameter needs
 // a local shadow.
@@ -453,6 +504,27 @@ end 'infixMaxonOp'
 function shortCircuitOperator(kind TokenKind) returns bool
 	return kind == TokenKind.and or kind == TokenKind.or
 end 'shortCircuitOperator'
+
+// The `MaxonType` an INLINED top-level constant's literal carries — the one place a folded
+// constant's tag becomes the type its `literal` op declares.
+//
+// Total over what can arrive, and it panics on what cannot: the constant evaluator produces
+// `integer` and `boolean` and nothing else (its literals are ints, chars and bools; a comparison
+// folds to a bool; `binOpResultTag` over two of the two yields one of the two). A `float` constant is
+// P1.0d.4's; the remaining tags name things no constant expression can contain — a `named` alias
+// needs an `as` cast (P1.9), and `unresolved`/`void` are call results, which are rejected as E2045
+// before their type is ever asked for.
+function constantValueType(tag ValueTypeTag) returns MaxonType
+	if tag == ValueTypeTag.boolean 'bool'
+		return MaxonType.boolean
+	end 'bool'
+
+	if tag == ValueTypeTag.integer 'int'
+		return MaxonType.integer
+	end 'int'
+
+	panic("constantValueType: a top-level constant is tagged '{typeTagName(tag)}' — the evaluator folds integers and bools only")
+end 'constantValueType'
 
 // The comparison operators (M4). Each maps to a `MaxonOp.compare`. Classifier shared by
 // the precedence table (`infixPrecedence`) and the climber's op-dispatch (`parseBinary`).
@@ -928,11 +1000,35 @@ export type Parser
 	export function foldDeclaredSignaturesInto(index ProgramSignatures)
 		var entries = FuncReturnTypeEntryArray.create()
 		var aliases = RangedTypeAliasArray.create()
+		var constants = TopLevelConstDeclArray.create()
 
 		let resume = self.pos
 		self.pos = 0
+		// ⚠ **BLOCK DEPTH, AND THE ONE ARM THAT NEEDS IT.** This loop walks EVERY token in the file,
+		// function bodies included, and that is what makes it robust: it cannot miss a `function`
+		// keyword however malformed the source around it is. `function` and `typealias` are reserved
+		// and appear nowhere but a declaration, so their arms need no context at all.
+		//
+		// **`let` is different — it is the most common statement in any body.** So it, and only it, is
+		// gated on depth 0. The counter tracks exactly shv2's block syntax: `function`/`if`/`while`/a
+		// non-`if` `else` open one, `end` closes one, and nothing else in the parsed slice does either
+		// (a typealias, a binding, a return, a call and an assignment are all single-line). The opener
+		// predicate is `opensBlockAt` — the one the loop scanner already uses — rather than a second
+		// list of block keywords to fall out of step with it.
+		//
+		// The gate is BELT AND BRACES, not the guarantee: `declaredConstantOutcome` panics if this scan
+		// and the real parse ever disagree about which `let` is top level.
+		var depth = 0 as BlockDepth
 		while not self.isEof() 'scan'
+			if depth == 0 and self.at(TokenKind.let) 'isTopLevelConstant'
+				self.recordScannedConstant(constants)
+				continue
+			end 'isTopLevelConstant'
+
 			if self.at(TokenKind.function) 'isFunction'
+				// A function opens a block, closed by its own `end`. Counted BEFORE the signature is
+				// read, because reading it moves the cursor past the `function` keyword.
+				depth = depth + 1
 				self.advance()
 				self.recordScannedSignature(entries)
 				continue
@@ -943,12 +1039,61 @@ export type Parser
 				continue
 			end 'isTypeAlias'
 
+			depth = self.blockDepthAfter(depth)
 			self.advance()
 		end 'scan'
 		self.pos = resume
 
-		index.foldFile(entries, aliases: aliases, fileTypeNames: self.artifact.typeNames)
+		index.foldFile(entries, aliases: aliases, constants: constants, fileTypeNames: self.artifact.typeNames)
 	end 'foldDeclaredSignaturesInto'
+
+	// The block depth after the token at the cursor. `end` FLOORS at zero rather than underflowing: a
+	// stray `end` is malformed source, and the sweep is tolerant — the real parse reports it, with a
+	// position. (`BlockDepth` is unsigned, so an underflow would not merely be wrong, it would take the
+	// compiler down on a file it should have diagnosed.)
+	function blockDepthAfter(depth BlockDepth) returns BlockDepth
+		if self.opensBlockAt(self.pos) 'opens'
+			return depth + 1
+		end 'opens'
+
+		if self.at(TokenKind.end) and depth > 0 'closes'
+			return depth - 1
+		end 'closes'
+
+		return depth
+	end 'blockDepthAfter'
+
+	// Cursor is AT a top-level `let`. Append the constant it declares.
+	//
+	// TOLERANT, exactly as `recordScannedSignature` and `recordScannedTypeAlias` are, and for the same
+	// reason: a malformed declaration is the REAL parse's to report, with a position. It reads through
+	// `readTopLevelConstant` — the routine the real parse reads with — so the two cannot drift on where
+	// an initializer ends. That routine consumes the `let` keyword before it can fail, so the cursor
+	// always advances and the caller's loop cannot spin.
+	function recordScannedConstant(constants TopLevelConstDeclArray)
+		let visibility = self.scannedVisibility()
+		let decl = try self.readTopLevelConstant(visibility) otherwise return
+		constants.push(decl)
+	end 'recordScannedConstant'
+
+	// The visibility of the declaration at the cursor, read from the token BEFORE it.
+	//
+	// Backwards, rather than by tracking an `export` flag forward across the scan loop: a flag would
+	// have to be CLEARED on every token that is not a declaration, and the one clear that got missed
+	// would silently export the next declaration — a visibility bug, which is a wrong answer about
+	// what another file can see. `dispatchTopLevel` consumes `export` and the keyword adjacently, so
+	// the previous token is exactly the modifier and nothing else can sit between them.
+	function scannedVisibility() returns Visibility
+		if self.pos == 0 'atFileStart'
+			return Visibility.file
+		end 'atFileStart'
+
+		if self.kindAt(self.pos - 1) == TokenKind.export 'exported'
+			return Visibility.module
+		end 'exported'
+
+		return Visibility.file
+	end 'scannedVisibility'
 
 	// Cursor is just past `function`. Append the declared return type of the function whose
 	// name follows, if the declaration is well-formed enough to read one off.
@@ -1004,15 +1149,14 @@ export type Parser
 		return false
 	end 'skipBalancedParens'
 
-	// One top-level declaration: an optional `export`, then a `function` or a ranged
-	// `typealias`. Everything else (type, enum, union, extension, top-level `let`/`var`,
-	// ...) is out of the slice and rejected with a positioned error.
+	// One top-level declaration: an optional `export`, then a `function`, a ranged `typealias`, or a
+	// `let` constant. Everything else (type, enum, union, extension, top-level `var`, ...) is out of
+	// the slice and rejected with a positioned error.
 	//
-	// `visibility` is consumed only by `parseFunction`. A typealias carries one too, and
-	// it is deliberately DROPPED: alias visibility decides whether a name is reachable
-	// from another FILE, and the alias registry is whole-program until cross-file name
-	// resolution lands (see `commitTypeAliases`). Recording it now would be a field
-	// nothing reads.
+	// `visibility` is consumed by `parseFunction` and by `readTopLevelConstant`. A typealias carries
+	// one too, and it is deliberately DROPPED: alias visibility decides whether a name is reachable
+	// from another FILE, and the alias registry is whole-program until cross-file name resolution
+	// lands (see `commitTypeAliases`). Recording it now would be a field nothing reads.
 	function dispatchTopLevel() throws ParseError
 		var visibility = Visibility.file
 		if self.at(TokenKind.export) 'exported'
@@ -1024,11 +1168,99 @@ export type Parser
 			try self.parseFunction(visibility)
 		end 'isFunction' else if self.at(TokenKind.typealias) 'isTypeAlias'
 			self.artifact.recordTypeAlias(try self.readTypeAliasDeclaration())
-		end 'isTypeAlias' else 'unsupported'
+		end 'isTypeAlias' else if self.at(TokenKind.let) 'isConstant'
+			let decl = try self.readTopLevelConstant(visibility)
+			try self.raiseConstantFailure(decl)
+		end 'isConstant' else 'unsupported'
 			let tok = self.current()
 			throw ParseError.unsupported("top-level {tok.kind.rawValue}", line: tok.line, column: tok.column)
 		end 'unsupported'
 	end 'dispatchTopLevel'
+
+	// ⭐ A TOP-LEVEL `let` IS A COMPILE-TIME CONSTANT, AND THE DECLARATION IS WHERE ITS DIAGNOSTIC
+	// LANDS — but not where its VALUE is computed.
+	//
+	// The declaration itself emits NO op and reserves NO storage. The whole-program sweep already
+	// folded this initializer to a number (`ProgramSignatures.evaluateConstants`), and every USE
+	// inlines that number as an ordinary `literal` (`topLevelConstantReference`). So there is nothing
+	// left for the real parse to build — only something for it to REPORT, if the fold failed.
+	//
+	// That split is why the value is not simply computed here: this file's parse can see this file's
+	// initializer, and neither a forward reference (`let TOTAL = FIRST + SECOND` above `FIRST`) nor a
+	// cross-file `export let` is visible to it. Both are ordinary in the corpus, so the fold has to
+	// happen where every declaration is already in view, and that is the sweep. v1 splits it exactly
+	// here too — its parser records an unresolved initializer and TypeResolution evaluates it.
+	//
+	// A DECL WHOSE FOLD FAILED IS REPORTED HERE, AND EXACTLY ONCE. `poisoned` is silent on purpose —
+	// its defect belongs to another declaration, which reports it (see `TopLevelConstant.poisoned`).
+	//
+	// `declaredConstantOutcome` carries the DRIFT GUARD: a `let` the real parse dispatches at top
+	// level must be one the sweep recorded, and a miss panics rather than compiling.
+	function raiseConstantFailure(decl TopLevelConstDecl) throws ParseError
+		// ⚠ The outcome is bound to a LOCAL before the match, and the match's payload is bound to a
+		// second one before the throw. Neither is style. Matching the CALL directly and throwing the
+		// arm's binding —
+		//
+		//     match self.signatures.declaredConstantOutcome(decl) 'outcome'
+		//         failed(error) then throw error
+		//
+		// — crashes the compiled compiler with `mm_incref called with NULL pointer`, because the
+		// bootstrap drops the temporary scrutinee's box while the payload it lent out is still in
+		// flight. This is the sharp end of the hazard `emitShift` already documents (a `throw` of a
+		// union that was RETURNED rather than constructed inline LEAKS); here it is not a leak but a
+		// null-pointer panic. Recorded for OPEN.md.
+		let outcome = self.signatures.declaredConstantOutcome(decl)
+		match outcome 'outcome'
+			value then break 'outcome'
+			poisoned then break 'outcome'
+			failed(error) then try self.throwRecordedConstantError(error)
+			pending to evaluating then panic("Parser.raiseConstantFailure: top-level constant '{String.from(decl.name)}' is unevaluated — `evaluateConstants` runs to completion inside `queryProgramSignatures`, before any file is parsed")
+		end 'outcome'
+	end 'raiseConstantFailure'
+
+	// Re-raise a diagnostic the constant evaluator recorded earlier, on another file's behalf. It
+	// exists only to give the borrowed payload a scope of its own — see `raiseConstantFailure`.
+	function throwRecordedConstantError(error ParseError) throws ParseError
+		throw error
+	end 'throwRecordedConstantError'
+
+	// Read a top-level constant declaration: `[export] let <NAME> = <constant expression>`.
+	//
+	// It READS and does not RECORD, for exactly `readTypeAliasDeclaration`'s reason: it has two
+	// callers that record differently. The tolerant declaration sweep folds what it reads into the
+	// whole-program index (`recordScannedConstant`); the real parse reads it only to ask that index
+	// what the initializer came to, and to raise the answer as a POSITIONED diagnostic if it failed.
+	//
+	// One reader, so the sweep and the parse can never drift on where an initializer ENDS — which is
+	// the one thing they must agree on, because the range this returns is the range the evaluator
+	// walks. Two scanners would put the sweep's idea of the initializer and the parser's idea of it a
+	// token apart, and the evaluator would fold a different expression than the one the user wrote.
+	function readTopLevelConstant(visibility Visibility) returns TopLevelConstDecl throws ParseError
+		try self.consume(TokenKind.let)
+		let nameTok = try self.consume(TokenKind.identifier)
+		try self.consume(TokenKind.equals)
+
+		let initStart = self.pos
+		let initEnd = self.initializerEndIndex(initStart)
+		self.pos = initEnd
+
+		return TopLevelConstDecl.create(nameTok.value, visibility: visibility, declFilePath: self.filePath, tokens: self.tokens, initStart: initStart, initEnd: initEnd, nameLine: nameTok.line, nameColumn: nameTok.column)
+	end 'readTopLevelConstant'
+
+	// One past the last token of a top-level initializer: an initializer runs to the END OF ITS LINE.
+	// Maxon has no statement terminator, so the newline IS the boundary — the bootstrap reads it the
+	// same way (`SkipToEndOfLine`, 2-Parser.cs:1701).
+	//
+	// It cannot run away: `kindAt` answers `eof` past the end of the token array (see `tokenAt`), so
+	// an unterminated last line stops at the file's end rather than walking off it.
+	function initializerEndIndex(start TokenIndex) returns TokenIndex
+		var i = start
+		while self.kindAt(i) != TokenKind.newline and self.kindAt(i) != TokenKind.eof 'scan'
+			i = i + 1
+		end 'scan'
+
+		return i
+	end 'initializerEndIndex'
 
 	// Parse a ranged typealias declaration: `typealias <Name> = int(<low> to|upto <high>)`.
 	// Nearly every real Maxon file opens with one — `int` is almost never written bare in
@@ -3061,11 +3293,385 @@ export type Parser
 
 	// Resolve a variable reference to the SSA value its binding aliases — M2's
 	// value-substitution model emits NO load op; the reference simply IS the bound
-	// value. An unbound name is a positioned parse error (undefinedVariable).
+	// value. A name with no local binding may still be a TOP-LEVEL CONSTANT; only a name that is
+	// neither is a positioned parse error (undefinedVariable).
+	//
+	// LOCAL FIRST. A local binding SHADOWS a top-level constant of the same name — `let OFFSET = 10`
+	// at file scope and `let OFFSET = 2` inside a function means 2 in that function, which is what
+	// every language with both scopes does and what the bootstrap does (its constants are consulted
+	// only once a bare name has failed to resolve as a local).
 	function parseVariableReference() returns ValueId throws ParseError
 		let tok = try self.consume(TokenKind.identifier)
-		return try self.scope.lookupValue(tok.value) otherwise throw ParseError.undefinedVariable(String.from(tok.value), line: tok.line, column: tok.column)
+		return try self.scope.lookupValue(tok.value) otherwise return try self.topLevelConstantReference(tok)
 	end 'parseVariableReference'
+
+	// ⭐ **A USE OF A TOP-LEVEL CONSTANT INLINES ITS VALUE, AND THAT IS THE WHOLE STORAGE MODEL.**
+	//
+	// The constant was folded to a number by the declaration sweep, so the reference materializes as
+	// an ordinary `literal` op carrying it — indistinguishable, from here down, from a program that
+	// wrote the number out. Nothing is loaded, no `.data` slot is reserved, no relocation is emitted
+	// and no backend knows this feature exists: `return ANSWER` compiles to exactly what `return 42`
+	// compiles to.
+	//
+	// Both reference compilers do precisely this. v1 rewrites the read op in place into a `literal`
+	// (`rewriteUnresolvedRead`, TypeResolution.maxon:2915-2925) and its `.data` emitter walks
+	// `topLevelVars` only — a constant is in a different map and the emitter never sees it. The
+	// bootstrap mints a fresh literal per use (`EmitConstantLiteral`, 2-Parser.cs:16870-16900), whose
+	// comment says it outright: "a top-level `let` reaches expression position already folded, as a
+	// literal". Storage is what a top-level `var` needs, and that is P1.0d.5b.
+	//
+	// It goes through `emitLiteral`, so an inlined INTEGER constant lands in the parser's constant
+	// column (`recordConst`) exactly as a written-out literal does — which is what keeps `let SHIFT =
+	// 1` … `x shl SHIFT` folding, and THE SHIFT RULE seeing a count it can check.
+	function topLevelConstantReference(tok Token) returns ValueId throws ParseError
+		match self.signatures.constantValueOf(tok.value, readerFilePath: self.filePath) 'constant'
+			found(payload, tag) then return self.emitLiteral(payload, valueType: constantValueType(tag), range: SourceRange.ofToken(tok))
+			notFound then throw ParseError.undefinedVariable(String.from(tok.value), line: tok.line, column: tok.column)
+		end 'constant'
+	end 'topLevelConstantReference'
+
+	// --- The top-level constant evaluator (P1.0d.5a) ---
+	//
+	// ⭐ **ONE GRAMMAR, TWO OUTPUTS.** Below is a second walk over the same expression syntax
+	// `parseBinary` walks — and it is the minimum irreducible duplication of this rung, so it is worth
+	// being exact about what is and is not shared.
+	//
+	// SHARED, because every one of them is a DECISION: the precedence table (`infixPrecedence`), the
+	// operator maps (`infixMaxonOp`, `infixCmpOp`, `comparisonOperator`), the operand rules
+	// (`requireBinOpOperands`), the result types (`binOpResultTag`, `wordOpResultTag`), the folds
+	// (`foldIntBinOp`, `foldIntUnaryOp`, `foldIntCompare`, `foldLogicalNot`), THE SHIFT RULE
+	// (`shiftFillsWithSign` → `shiftOpcodeFor` → `evalShift`), the `not` reading (`notOperatorFor`),
+	// the cursor, the literal decoders, and the bound table. A constant expression and a runtime one
+	// therefore cannot come to MEAN different things — which is the failure that matters, because
+	// `let X = 1 shl 64` folding to 1 while `x shl 64` computes 0 is a silent wrong answer, not a
+	// compile error.
+	//
+	// NOT SHARED: the climb loop itself, because the two produce different things. `parseBinary`
+	// EMITS OPS and yields a `ValueId`; this yields a NUMBER. They cannot be one function, and the
+	// reason is not the return type — it is `and`/`or`. Over bools those are CONTROL FLOW in a
+	// function body (`emitShortCircuit` mints blocks and a merge phi, and the phi is by construction
+	// not a constant), while a top-level `let BOTH = true and true` must be the value `true`. The op
+	// path is *right* to branch and this path is *right* to fold, so the fork is real. Both reference
+	// compilers keep the same two walks for the same reason (2-Parser.cs's `EvalConstOr` ladder;
+	// v1's `evaluateUnresolvedConstExpr`).
+	//
+	// The evaluator lives on `Parser` because everything it reads is a Parser's: the token cursor,
+	// `intLiteralValue`, `parseTypeQualifiedBound`, `decodeCharLiteral`. It is driven from
+	// `ProgramSignatures.walkConstInitializer`, which builds a throwaway Parser per declaration and
+	// keeps the ARENA and the recursion. It emits no ops and touches no artifact.
+
+	// Fold one declaration's initializer to its value. The cursor is seated on the recorded token
+	// range, and the walk must consume ALL of it — see `requireInitializerConsumed`.
+	export function evalConstInitializer(decl TopLevelConstDecl, stack ConstDeclIndexArray) returns ConstValue throws ConstEvalError
+		self.pos = decl.initStart
+		let value = try self.evalConstBinary(stack, minPrec: OrPrecedence)
+		try self.requireInitializerConsumed(decl)
+
+		return value
+	end 'evalConstInitializer'
+
+	// ⚠ A PARTLY-FOLDED INITIALIZER IS AN ERROR, NOT A TRUNCATION. The walk stops at the first token
+	// it cannot fold; without this check the rest of the line is silently DISCARDED and the constant
+	// quietly becomes whatever the prefix came to. It is the one failure mode the token-range model
+	// has that a tree model does not, and the bootstrap guards it in the same place and words
+	// (`ExpectConstInitializerFullyConsumed`, 2-Parser.cs:4979-4987).
+	function requireInitializerConsumed(decl TopLevelConstDecl) throws ConstEvalError
+		if self.pos >= decl.initEnd 'fullyConsumed'
+			return
+		end 'fullyConsumed'
+
+		let tok = self.current()
+		throw ConstEvalError.defective(ParseError.nonConstantInitializer(String.from(decl.name), leftover: self.tokenTextFrom(self.pos, endIndex: decl.initEnd), line: tok.line, column: tok.column))
+	end 'requireInitializerConsumed'
+
+	// The source text of a token range, as the diagnostic prints it. Space-joined rather than
+	// reconstructed from byte offsets: this is a COLD path (a rejected program), and the tokens are
+	// what the evaluator actually choked on.
+	function tokenTextFrom(start TokenIndex, endIndex TokenIndex) returns String
+		var text = ""
+		for i in start upto endIndex 'each'
+			let tok = self.tokenAt(i)
+			if i > start 'separator'
+				text = "{text} "
+			end 'separator'
+			text = "{text}{String.from(tok.value)}"
+		end 'each'
+
+		return text
+	end 'tokenTextFrom'
+
+	// The precedence-climbing core, mirroring `parseBinary`'s shape over values instead of ops. It
+	// reads the SAME precedence table, so `1 + 2 * 3` is 7 in a constant for the same reason it is 7
+	// in a function.
+	function evalConstBinary(stack ConstDeclIndexArray, minPrec InfixPrecedence) returns ConstValue throws ConstEvalError
+		var left = try self.evalConstUnary(stack)
+
+		while true 'climb'
+			let opTok = self.current()
+			let prec = infixPrecedence(opTok.kind)
+			if prec == NotAnInfixOperator or prec < minPrec 'stop'
+				break
+			end 'stop'
+
+			self.advance()
+			let rhsStart = self.pos
+			let right = try self.evalConstBinary(stack, minPrec: prec + 1)
+			left = try self.foldConstBinOp(left, right: right, opTok: opTok, countStart: rhsStart)
+		end 'climb'
+
+		return left
+	end 'evalConstBinary'
+
+	// Apply one binary operator to two constants, under the very rules the emitting path applies.
+	//
+	// **`and`/`or`/`xor` NEED NO SPECIAL CASE HERE, AND THAT IS NOT LUCK.** A bool's payload IS 0 or 1
+	// (TypeRules' `BoolTrueValue`), so the BITWISE fold of two bools is already the LOGICAL answer —
+	// `1 and 1` is 1, `0 or 1` is 1 — and `wordOpResultTag` supplies the `boolean` tag that says which
+	// reading it was. The bootstrap writes the two readings out separately (`lhs is bool lb && rhs is
+	// bool rb ? lb && rb : ll & rl`, 2-Parser.cs:4997-5031) and computes the identical answer both
+	// ways. What is lost by folding rather than branching is only the ELISION, and a constant has no
+	// side effect to elide.
+	function foldConstBinOp(left ConstValue, right ConstValue, opTok Token, countStart TokenIndex) returns ConstValue throws ConstEvalError
+		if comparisonOperator(opTok.kind) 'comparison'
+			try self.requireConstComparable(left, right: right, opTok: opTok)
+			return ConstValue.create(foldIntCompare(infixCmpOp(opTok.kind), lhs: left.payload, rhs: right.payload), tag: ValueTypeTag.boolean)
+		end 'comparison'
+
+		let op = infixMaxonOp(opTok.kind)
+		try self.requireConstOperands(op, left: left, right: right, opTok: opTok)
+
+		if shiftOperator(op) 'shift'
+			return try self.foldConstShift(left, count: right, op: op, countStart: countStart)
+		end 'shift'
+
+		match foldIntBinOp(op, lhs: left.payload, rhs: right.payload) 'folded'
+			folded(value) then return ConstValue.create(value, tag: binOpResultTag(op, left: left.tag, right: right.tag))
+			// `foldIntBinOp` declines exactly one family here — a division or modulo whose answer is a
+			// TRAP rather than a number (`1 / 0`, `i64.min / -1`); the shifts it also declines are
+			// handled above (`shiftOperator`). A runtime `x / 0` panics, but a top-level constant has no
+			// run time to panic IN: it is folded before the program exists, so there is no answer to
+			// give and no later pass that could give one.
+			notFoldable then throw ConstEvalError.defective(ParseError.constantDivisionByZero(opTok.kind.rawValue, line: opTok.line, column: opTok.column))
+		end 'folded'
+	end 'foldConstBinOp'
+
+	// ⭐ THE SHIFT RULE, asked of a constant. Every part of the answer comes from TypeRules — the fill,
+	// the opcode, the legality of the count, and the fold — so a shift in a `let` and a shift in a
+	// function body cannot disagree. `1 shl 64` is 0 in both, and `1 shl -1` is E2054 in both.
+	//
+	// `leftOperandIsUnsigned` is FALSE, and asked rather than assumed. A top-level constant carries no
+	// ranged type — its initializer is a bare expression and shv2 infers `int` or `bool`, nothing else
+	// — so its left operand is signed by construction. The rule is still routed through
+	// `shiftFillsWithSign` so that the day a constant CAN be unsigned, this answers it the same way
+	// the expression parser does instead of having quietly hard-coded the fill. The bootstrap makes
+	// exactly this call, and says so at 2-Parser.cs:5062-5068.
+	function foldConstShift(left ConstValue, count ConstValue, op MaxonBinOp, countStart TokenIndex) returns ConstValue throws ConstEvalError
+		if shiftCountIsNegative(count.payload) 'negative'
+			let anchor = self.shiftCountAnchor(countStart, countEnd: self.pos)
+			throw ConstEvalError.defective(ParseError.shiftCountNegative(count.payload, line: anchor.line, column: anchor.column))
+		end 'negative'
+
+		let shiftOp = shiftOpcodeFor(op, signFills: shiftFillsWithSign(op, leftOperandIsUnsigned: false))
+		return ConstValue.create(evalShift(left.payload, count: count.payload, op: shiftOp), tag: ValueTypeTag.integer)
+	end 'foldConstShift'
+
+	// A comparison's operands must AGREE — the same class-strict rule `emitCompare` enforces, asked of
+	// the same `typesAgree`, and reported under the same code and text.
+	function requireConstComparable(left ConstValue, right ConstValue, opTok Token) throws ConstEvalError
+		if typesAgree(left.tag, right: right.tag) 'agree'
+			return
+		end 'agree'
+
+		throw ConstEvalError.defective(ParseError.comparisonTypeMismatch(typeTagName(left.tag), right: typeTagName(right.tag), line: opTok.line, column: opTok.column))
+	end 'requireConstComparable'
+
+	// Every other binary operator's operand rule, asked of `requireBinOpOperands` — the one classifier
+	// the emitting path asks. It throws a `ParseError`; the evaluator's failures are wrapped, so the
+	// two paths reject `let X = 4 + true` and `y = 4 + true` with the identical diagnostic.
+	function requireConstOperands(op MaxonBinOp, left ConstValue, right ConstValue, opTok Token) throws ConstEvalError
+		try requireBinOpOperands(op, left: left.tag, right: right.tag, opTok: opTok) otherwise (err) 'rejected'
+			throw ConstEvalError.defective(err)
+		end 'rejected'
+	end 'requireConstOperands'
+
+	// A prefix `-` or `not`, mirroring `parseUnary` over values. Both readings of `not` come from
+	// `notOperatorFor`, so a constant `not` complements exactly what a runtime `not` complements.
+	function evalConstUnary(stack ConstDeclIndexArray) returns ConstValue throws ConstEvalError
+		if self.at(TokenKind.minus) 'neg'
+			let opTok = self.current()
+			self.advance()
+			let operand = try self.evalConstPrimary(stack)
+			if not typeClassAdmits(TypeClass.numeric, tag: operand.tag) 'notANumber'
+				throw ConstEvalError.defective(ParseError.nonNumericNegation(typeTagName(operand.tag), line: opTok.line, column: opTok.column))
+			end 'notANumber'
+
+			return ConstValue.create(try self.foldConstUnary(MaxonUnaryOp.neg, operand: operand.payload, opTok: opTok), tag: operand.tag)
+		end 'neg'
+
+		if self.at(TokenKind.not) 'not'
+			let opTok = self.current()
+			self.advance()
+			let operand = try self.evalConstUnary(stack)
+			return try self.foldConstNot(operand, opTok: opTok)
+		end 'not'
+
+		return try self.evalConstPrimary(stack)
+	end 'evalConstUnary'
+
+	// Which `not` this is, and the fold for it — one question, asked of `notOperatorFor`.
+	//
+	// `logicalNot` cannot come through `foldIntUnaryOp`, which declines it: that folder's domain is
+	// the INTEGERS, where a logical not is a parser bug. Over the bool domain it is meaningful and
+	// total, which is `foldLogicalNot`. The two live side by side in TypeRules, and this is the split
+	// they exist for.
+	function foldConstNot(operand ConstValue, opTok Token) returns ConstValue throws ConstEvalError
+		match notOperatorFor(operand.tag) 'which'
+			op(kind, resultTag) then return ConstValue.create(try self.foldConstUnary(kind, operand: operand.payload, opTok: opTok), tag: resultTag)
+			// Unreachable from a constant: `unresolved` is a call to a function no file declares and
+			// `void` a call to one returning nothing, and NO call reaches this evaluator at all — a call
+			// in an initializer is rejected as E2045 before its type is ever asked for. It is kept as a
+			// case rather than a panic because it is the truthful answer if a second route to an untyped
+			// operand ever appears.
+			unknownOperandType then throw ConstEvalError.defective(ParseError.notOnUnknownType(opTok.line, column: opTok.column))
+		end 'which'
+	end 'foldConstNot'
+
+	// The unary folds, both routed through TypeRules. `neg` and `bitNot` are `foldIntUnaryOp`'s;
+	// `logicalNot` is `foldLogicalNot`'s (see `foldConstNot`).
+	function foldConstUnary(op MaxonUnaryOp, operand ParsedInt, opTok Token) returns ParsedInt throws ConstEvalError
+		if op == MaxonUnaryOp.logicalNot 'logical'
+			return foldLogicalNot(operand)
+		end 'logical'
+
+		match foldIntUnaryOp(op, operand: operand) 'folded'
+			folded(value) then return value
+			// `foldIntUnaryOp` declines only `logicalNot`, which the guard above already took. Reaching
+			// here means a unary operator was added to the enum without being given a fold.
+			notFoldable then panic("Parser.foldConstUnary: TypeRules declined to fold '{op.rawValue}' over the integer {operand} at {opTok.line}:{opTok.column} — only `logicalNot` is declinable there, and it is handled above")
+		end 'folded'
+	end 'foldConstUnary'
+
+	// A constant PRIMARY: an integer literal, `true`/`false`, a character literal, a parenthesized
+	// sub-expression, a type-qualified bound (`u16.max`), or a reference to another top-level
+	// constant. Every literal decoder is the one the emitting path uses, so a constant reads a
+	// literal exactly as a function body reads it.
+	function evalConstPrimary(stack ConstDeclIndexArray) returns ConstValue throws ConstEvalError
+		if self.at(TokenKind.intLiteral) 'intLit'
+			return try self.evalConstIntLiteral()
+		end 'intLit'
+
+		if self.at(TokenKind.true) or self.at(TokenKind.false) 'boolLit'
+			return self.evalConstBoolLiteral()
+		end 'boolLit'
+
+		if self.at(TokenKind.charLiteral) 'charLit'
+			return try self.evalConstCharLiteral()
+		end 'charLit'
+
+		if self.at(TokenKind.leftParen) 'group'
+			return try self.evalConstGroup(stack)
+		end 'group'
+
+		if self.at(TokenKind.identifier) 'namedPrimary'
+			return try self.evalConstNamed(stack)
+		end 'namedPrimary'
+
+		let tok = self.current()
+		throw ConstEvalError.defective(ParseError.expectedExpression(tok.kind.rawValue, line: tok.line, column: tok.column))
+	end 'evalConstPrimary'
+
+	function evalConstIntLiteral() returns ConstValue throws ConstEvalError
+		let tok = self.current()
+		self.advance()
+		let value = try self.intLiteralValue(tok, negated: false) otherwise (err) 'overflow'
+			throw ConstEvalError.defective(err)
+		end 'overflow'
+
+		return ConstValue.create(value, tag: ValueTypeTag.integer)
+	end 'evalConstIntLiteral'
+
+	function evalConstBoolLiteral() returns ConstValue
+		let isTrue = self.at(TokenKind.true)
+		self.advance()
+		if isTrue 'true'
+			return ConstValue.create(BoolTrueValue, tag: ValueTypeTag.boolean)
+		end 'true'
+
+		return ConstValue.create(BoolFalseValue, tag: ValueTypeTag.boolean)
+	end 'evalConstBoolLiteral'
+
+	// A character literal is an INTEGER carrying its byte — the same reading `parseCharLiteral` gives
+	// it, through the same decoder, so `let DASH = '-'` and `c == '-'` cannot disagree about what a
+	// dash is.
+	function evalConstCharLiteral() returns ConstValue throws ConstEvalError
+		let tok = self.current()
+		self.advance()
+		match decodeCharLiteral(tok.value) 'decoded'
+			byte(value) then return ConstValue.create(value, tag: ValueTypeTag.integer)
+			empty then throw ConstEvalError.defective(ParseError.invalidCharacterLiteral("a character literal must contain exactly one character", line: tok.line, column: tok.column))
+			multiByte then throw ConstEvalError.defective(ParseError.unsupported("the multi-byte character literal '{String.from(tok.value)}' (a character wider than one byte is a `Character` — a heap value — which arrives with String; a single-byte literal materializes as its byte value)", line: tok.line, column: tok.column))
+			badEscape(text) then throw ConstEvalError.defective(ParseError.invalidCharacterLiteral("unknown escape sequence '{text}'", line: tok.line, column: tok.column))
+		end 'decoded'
+	end 'evalConstCharLiteral'
+
+	// `( … )` — grouping, re-entering the climb at the LOOSEST precedence exactly as
+	// `parseParenthesizedExpression` does, so a parenthesis restores every operator.
+	function evalConstGroup(stack ConstDeclIndexArray) returns ConstValue throws ConstEvalError
+		try self.consumeConst(TokenKind.leftParen)
+		let value = try self.evalConstBinary(stack, minPrec: OrPrecedence)
+		try self.consumeConst(TokenKind.rightParen)
+
+		return value
+	end 'evalConstGroup'
+
+	// An identifier in a constant: a CALL (rejected), a type-qualified bound (`u16.max`), or a
+	// reference to another top-level constant. The same two one-token lookaheads `parsePrimary`
+	// splits these three forms with.
+	function evalConstNamed(stack ConstDeclIndexArray) returns ConstValue throws ConstEvalError
+		let tok = self.current()
+
+		// ⚠ REJECTED BEFORE THE CALL IS READ, not after. A call's answer needs the program to be
+		// RUNNING, and a top-level `let` is folded before any of it exists — so there is nothing to
+		// fold and no later pass that could supply one. Both reference compilers reject it here with
+		// this exact text.
+		if self.peekKind() == TokenKind.leftParen 'call'
+			throw ConstEvalError.defective(ParseError.functionCallInConstant(String.from(tok.value), line: tok.line, column: tok.column))
+		end 'call'
+
+		if self.peekKind() == TokenKind.dot 'qualifiedBound'
+			let value = try self.parseTypeQualifiedBound() otherwise (err) 'badBound'
+				throw ConstEvalError.defective(err)
+			end 'badBound'
+			return ConstValue.create(value, tag: ValueTypeTag.integer)
+		end 'qualifiedBound'
+
+		self.advance()
+		return try self.evalConstNameRef(tok, stack: stack)
+	end 'evalConstNamed'
+
+	// **THE FORWARD REFERENCE, AND THE CROSS-FILE ONE.** A name in an initializer resolves through the
+	// whole-program arena, which recursively evaluates whatever it finds — so declaration ORDER does
+	// not decide what a program means, and a constant in another file is as reachable as one on the
+	// line above. The cycle detection is the arena's (`ProgramSignatures.evaluateConstDecl`), which is
+	// the only place that can see one.
+	function evalConstNameRef(tok Token, stack ConstDeclIndexArray) returns ConstValue throws ConstEvalError
+		match self.signatures.evaluateNamed(tok.value, readerFilePath: self.filePath, stack: stack) 'resolved'
+			value(payload, tag) then return ConstValue.create(payload, tag: tag)
+			// It exists and has no value. Its own declaration carries the diagnostic, so this one stays
+			// quiet — see `TopLevelConstant.poisoned`.
+			failed then throw ConstEvalError.dependencyFailed
+			notFound then throw ConstEvalError.defective(ParseError.undefinedConstant(String.from(tok.value), line: tok.line, column: tok.column))
+		end 'resolved'
+	end 'evalConstNameRef'
+
+	// `consume`, wrapped for the evaluator's error type. The evaluator cannot use `consume` directly:
+	// it throws `ParseError`, and a `ParseError` raised HERE is a defect in THIS initializer that must
+	// be recorded on its declaration rather than thrown at whatever file happens to be parsing.
+	function consumeConst(kind TokenKind) returns Token throws ConstEvalError
+		return try self.consume(kind) otherwise (err) 'unexpected'
+			throw ConstEvalError.defective(err)
+		end 'unexpected'
+	end 'consumeConst'
 
 	// Parse a call expression `callee(args…)` and return the ValueId its result defines. The
 	// callee name is kept as identifier TEXT (a `ByteArray` slice per the MaxonOp value/name

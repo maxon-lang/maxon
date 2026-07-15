@@ -73,6 +73,13 @@ end 'queryTokens'
 // (A per-file signature memo would save that sweep and buy nothing else: the whole-program fold
 // it feeds is itself O(all declarations), so the two are the same order. Add one if a file count
 // ever makes the sweep visible; do not add one on principle.)
+//
+// ⚠ **THIS IS A WHOLE-PROGRAM QUERY SITTING UNDER A PER-FILE ONE, SO ANYTHING O(FILES) INSIDE IT
+// WOULD BE O(FILES²).** It is not: the memo makes it run once per build, and the constant evaluation
+// below is O(declarations), not O(files) per file. `scale-test` MEASURES that rather than trusting
+// it — the P1.0d.5a constant slice reads a dead-flat `2 × files + 1` allocations in this phase
+// (25/33/49/81/145/273 against 12/16/24/40/72/136 files, exact on all six rungs), which is the one
+// empty per-file `TopLevelConstDeclArray` the sweep contributes. Under the quadratic it would bend.
 export function queryProgramSignatures(project Project) returns ProgramSignatures throws CompileError
 	if signaturesCacheValid(project) 'hit'
 		project.db.signatureHits = project.db.signatureHits + 1
@@ -96,6 +103,22 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 		scanner.foldDeclaredSignaturesInto(signatures)
 		recordPhase(project, phase: CompilePhase.signatures, probe: probe)
 	end 'eachFile'
+
+	// ⭐ EVERY FILE IS FOLDED IN; NOW the top-level constants can be evaluated — and not one moment
+	// earlier. A constant's initializer may name a constant declared LATER in its own file or in a file
+	// not yet swept, so evaluation has to wait until every declaration in the program is known. This is
+	// the whole reason a forward reference works (see `ProgramSignatures.evaluateConstants`).
+	//
+	// Billed to `signatures`, the phase whose index this completes, and INSIDE the query — its answers
+	// are part of the memoized value and of the hash that keys every parse on it.
+	//
+	// It reports NOTHING. A defective initializer is recorded on its declaration and raised, with a
+	// position, by the real parse when it reaches that line — which keeps this sweep tolerant (see
+	// `Parser.foldDeclaredSignaturesInto`) and keeps this memo cacheable: a query that reported would
+	// have to suppress on a hit, exactly as `queryParseOps` must.
+	let constProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.signatures)
+	signatures.evaluateConstants()
+	recordPhase(project, phase: CompilePhase.signatures, probe: constProbe)
 
 	project.db.signatureCache = SignatureMemo.create(signatures, keyHash: compositeSourceHash(project), computed: true)
 	return signatures
@@ -275,5 +298,13 @@ function reportParseError(project Project, path FilePath, error ParseError)
 		invalidCharacterLiteral(reason, line, column) then reportPositioned(project, code: ErrorCode.parserInvalidCharacterLiteral, message: "invalid character literal: {reason}", line: line, column: column, filePath: path)
 		notOnUnknownType(line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "'not' needs its operand's type: `not` is a bit-flip on a bool and a 64-bit complement on an int, and this operand's type is not known (it is a call to a function no file in the program declares)", line: line, column: column, filePath: path)
 		voidCallResultUsed(name, line, column) then reportPositioned(project, code: ErrorCode.parserExpressionError, message: "Function '{name}' does not return a value", line: line, column: column, filePath: path)
+		// ⚠ The three top-level-constant arms carry the BOOTSTRAP'S EXACT TEXT — `specs-shv2/top-level-let.md`
+		// gates two of them byte-for-byte, and both suites compare stderr exactly, so the two compilers
+		// must not drift. (2-Parser.cs:4955-4957, :5281-5283, :4984-4986.)
+		circularConstants(names, line, column) then reportPositioned(project, code: ErrorCode.parserCircularDependency, message: "Circular dependency detected among global constants: {names}", line: line, column: column, filePath: path)
+		functionCallInConstant(callee, line, column) then reportPositioned(project, code: ErrorCode.parserNonConstantInitializer, message: "Function calls are not allowed in global variable initializers; '{callee}()' is not a constant expression", line: line, column: column, filePath: path)
+		nonConstantInitializer(name, leftover, line, column) then reportPositioned(project, code: ErrorCode.parserNonConstantInitializer, message: "Global initializer for '{name}' is not a constant expression: '{leftover}' cannot be evaluated at compile time", line: line, column: column, filePath: path)
+		undefinedConstant(name, line, column) then reportPositioned(project, code: ErrorCode.parserExpressionError, message: "Undefined constant '{name}'", line: line, column: column, filePath: path)
+		constantDivisionByZero(op, line, column) then reportPositioned(project, code: ErrorCode.parserNonConstantInitializer, message: "'{op}' by zero has no value: a global initializer is folded at compile time, so there is no run time for it to trap in", line: line, column: column, filePath: path)
 	end 'kind'
 end 'reportParseError'

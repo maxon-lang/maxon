@@ -58,7 +58,7 @@ public enum ErrorCode {
   /// </summary>
   ParserLiteralOverflow = 2011,
   /// <summary>
-  /// Two or more source files import each other in a cycle.
+  /// A declaration cycle: something is defined in terms of itself. Broader than 'import cycle', which is only one of the shapes all three compilers report under it -- the other is a cycle among top-level constants ('let A = B + 1' / 'let B = A + 1'), where no initializer can be evaluated because each waits on the other.
   /// </summary>
   ParserCircularDependency = 2012,
   /// <summary>
