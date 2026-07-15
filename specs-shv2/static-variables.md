@@ -1,0 +1,685 @@
+---
+feature: static-variables
+status: experimental
+keywords: [static, var, global, mutable, module, type]
+category: language
+---
+# Static Variables
+
+## Documentation
+
+### Top-Level `var` Declarations
+
+Top-level `var` declarations define mutable module-level variables. Unlike `let` constants which are compile-time evaluated and stored in read-only memory, `var` declarations create mutable storage in the program's data section.
+
+#### Syntax
+
+```maxon
+var counter = 0
+export var globalState = false
+```
+
+#### Features
+
+- **Runtime storage**: Variables are stored in the writable data section
+- **Initialization**: Initializers are evaluated at program start before `main`
+- **Type inference**: Type is inferred from the initializer
+- **Export support**: Use `export var` to make variables available to other modules
+
+#### Initializer Requirements
+
+Top-level `var` initializers must be constant expressions (same rules as `let`):
+- Literals: integers, floats, booleans, strings, bytes, characters
+- Arithmetic and logical operations on constants
+- References to other top-level constants
+- Enum member access
+
+Function calls and runtime expressions are not allowed in initializers.
+
+### Static Fields in Types
+
+Types can have static fields that are shared across all instances. Static fields use the `static` keyword before `var` or `let`.
+
+#### Syntax
+
+```maxon
+typealias Score = int(i64.min to i64.max)
+
+type Counter
+	static var count = 0       // Mutable static field
+	static let MAX = 100       // Compile-time static constant
+
+	export var value as Score       // Instance field
+end 'Counter'
+```
+
+#### Features
+
+- **Shared storage**: One copy exists for the type, not per instance
+- **Direct access**: Access via `TypeName.fieldName` syntax
+- **Static let**: Compile-time constant (same as top-level `let`)
+- **Static var**: Mutable storage (same as top-level `var`)
+
+#### Access Patterns
+
+```maxon
+Counter.count = Counter.count + 1   // Access static field
+var c = Counter.create(10)          // Create instance
+c.value = 20                        // Access instance field
+```
+
+## Tests
+
+<!-- disabled-test: top-level-var-basic -->
+<!-- P1.0d.5b top-level `var` (globals) -->
+```maxon
+var counter = 0
+
+function main() returns ExitCode
+	counter = 42
+	return counter
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- disabled-test: top-level-var-increment -->
+<!-- P1.0d.5b top-level `var` (globals) -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+var total = 10
+
+function add(n Integer)
+	total = total + n
+end 'add'
+
+function main() returns ExitCode
+	add(5)
+	add(27)
+	return total
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- disabled-test: top-level-var-multiple -->
+<!-- P1.0d.5b top-level `var` (globals) -->
+```maxon
+var a = 1
+var b = 2
+var c = 3
+
+function main() returns ExitCode
+	a = a * 10
+	b = b * 10
+	c = c * 10
+	return a + b + c
+end 'main'
+```
+```exitcode
+60
+```
+
+<!-- disabled-test: top-level-var-with-let -->
+<!-- P1.0d.5b top-level `var` (globals) -->
+```maxon
+let BASE = 40
+var offset = 0
+
+function main() returns ExitCode
+	offset = 2
+	return BASE + offset
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- disabled-test: static-var-basic -->
+<!-- P1.1 structs — a `static var` field in a `type` -->
+```maxon
+type Counter
+	static var count = 0
+end 'Counter'
+
+function main() returns ExitCode
+	Counter.count = 42
+	return Counter.count
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- disabled-test: static-var-increment -->
+<!-- P1.1 structs — a `static var` field in a `type` -->
+```maxon
+type Counter
+	static var count = 0
+
+	static function increment()
+		Counter.count = Counter.count + 1
+	end 'increment'
+end 'Counter'
+
+function main() returns ExitCode
+	Counter.increment()
+	Counter.increment()
+	Counter.increment()
+	return Counter.count
+end 'main'
+```
+```exitcode
+3
+```
+
+<!-- disabled-test: static-let-basic -->
+<!-- P1.1 structs — a `static let` field in a `type` -->
+```maxon
+type Config
+	static let MAX_SIZE = 42
+end 'Config'
+
+function main() returns ExitCode
+	return Config.MAX_SIZE
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- disabled-test: static-var-multiple-types -->
+<!-- P1.1 structs — a `static var` field in a `type` -->
+```maxon
+type TypeA
+	static var value = 10
+end 'TypeA'
+
+type TypeB
+	static var value = 20
+end 'TypeB'
+
+function main() returns ExitCode
+	TypeA.value = TypeA.value + 2
+	TypeB.value = TypeB.value + 10
+	return TypeA.value + TypeB.value
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- disabled-test: static-and-instance-fields -->
+<!-- P1.1 structs — static AND instance fields -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+type Thing
+	static var created = 0
+	export var id as Integer
+
+	static function make(n Integer) returns Thing
+		Thing.created = Thing.created + 1
+		return Thing{id: n}
+	end 'make'
+end 'Thing'
+
+function main() returns ExitCode
+	let a = Thing.make(10)
+	let b = Thing.make(20)
+	return Thing.created + a.id + b.id
+end 'main'
+```
+```exitcode
+32
+```
+
+<!-- disabled-test: static-var-bool -->
+<!-- P1.0d.5b top-level `var` (globals) -->
+```maxon
+var initialized = false
+
+function init()
+	initialized = true
+end 'init'
+
+function main() returns ExitCode
+	if initialized 'check1'
+		return 1
+	end 'check1'
+	init()
+	if initialized 'check2'
+		return 42
+	end 'check2'
+	return 0
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- disabled-test: static-var-bool-adjacent-globals -->
+<!-- P1.2 String — the `print` builtin -->
+Bool global followed by non-zero global must not bleed adjacent data.
+
+```maxon
+var flag = false
+var counter = 42
+
+function main() returns ExitCode
+	if flag 'checkFalse'
+		print("flag should be false\n")
+		return 1
+	end 'checkFalse'
+	if counter == 42 'checkCounter'
+		return 0
+	end 'checkCounter'
+	print("counter wrong\n")
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- disabled-test: top-level-var-enum-initializer -->
+<!-- P1.1 enums + `match` -->
+```maxon
+enum Color
+		Red
+		Green
+		Blue
+end 'Color'
+
+var current = Color.Green
+
+function main() returns ExitCode
+	let isGreen = match current 'check'
+		Green gives true
+		Red gives false
+		Blue gives false
+	end 'check'
+	if isGreen 'check'
+		current = Color.Blue
+		let isBlue = match current 'check2'
+			Blue gives true
+			Red gives false
+			Green gives false
+		end 'check2'
+		if isBlue 'check2'
+			return 42
+		end 'check2'
+	end 'check'
+	return 0
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- disabled-test: top-level-var-enum-initializer-cross-file -->
+<!-- P1.1 enums + `match` -->
+Cross-file: enum defined in one file, top-level var initialized with it in another.
+```maxon
+// --- file: api/defs.maxon
+export enum CpuArch
+	x64
+	arm64
+	wasm32
+end 'CpuArch'
+
+// --- file: app/main.maxon
+var currentCpu = CpuArch.x64
+
+function main() returns ExitCode
+	let result = match currentCpu 'check'
+		x64 gives 42
+		arm64 gives 1
+		wasm32 gives 2
+	end 'check'
+	return result
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- disabled-test: top-level-var-const-expr -->
+<!-- P1.0d.5b top-level `var` (globals) -->
+```maxon
+let BASE = 20
+var offset = BASE + 1
+
+function main() returns ExitCode
+	offset = offset * 2
+	return offset
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- disabled-test: top-level-var-array-literal -->
+<!-- P1.7 Array -->
+```maxon
+var items = [10, 20, 30]
+
+function main() returns ExitCode
+	try items.set(1, value: 12) otherwise panic("test invariant: set OOB")
+	let a = try items.get(0) otherwise 0
+	let b = try items.get(1) otherwise 0
+	let c = try items.get(2) otherwise 0
+	return a + b + c
+end 'main'
+```
+```exitcode
+52
+```
+
+<!-- disabled-test: top-level-var-array-cross-function -->
+<!-- P1.7 Array -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+var scores = [10, 20, 30]
+
+function getTotal() returns Integer
+	let a = try scores.get(0) otherwise 0
+	let b = try scores.get(1) otherwise 0
+	let c = try scores.get(2) otherwise 0
+	return a + b + c
+end 'getTotal'
+
+function setScore(index Integer, value Integer)
+	try scores.set(index, value: value) otherwise panic("test invariant: set OOB")
+end 'setScore'
+
+function main() returns ExitCode
+	setScore(1, value: 12)
+	return getTotal()
+end 'main'
+```
+```exitcode
+52
+```
+
+<!-- disabled-test: top-level-var-array-mutate-cross-function -->
+<!-- P1.7 Array -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+var counters = [0, 0, 0]
+
+function increment(index Integer)
+	let current = try counters.get(index) otherwise 0
+	try counters.set(index, value: current + 1) otherwise panic("test invariant: set OOB")
+end 'increment'
+
+function total() returns Integer
+	let a = try counters.get(0) otherwise 0
+	let b = try counters.get(1) otherwise 0
+	let c = try counters.get(2) otherwise 0
+	return a + b + c
+end 'total'
+
+function main() returns ExitCode
+	increment(0)
+	increment(0)
+	increment(1)
+	increment(2)
+	increment(2)
+	increment(2)
+	return total()
+end 'main'
+```
+```exitcode
+6
+```
+
+<!-- disabled-test: data-section-bool-1byte -->
+<!-- P1.0d.5b top-level `var` (globals) -->
+A single bool global occupies 1 byte in the .data section.
+
+```maxon
+var flag = true
+
+function main() returns ExitCode
+	if flag 'read'
+		return 0
+	end 'read'
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+```RequiredData
+i8 1
+```
+
+<!-- disabled-test: data-section-i64-8byte -->
+<!-- P1.0d.5b top-level `var` (globals) -->
+A single i64 global occupies 8 bytes in the .data section.
+
+```maxon
+var counter = 42
+
+function main() returns ExitCode
+	return counter - 42
+end 'main'
+```
+```exitcode
+0
+```
+```RequiredData
+i64 42
+```
+
+<!-- disabled-test: data-section-f64-8byte -->
+<!-- P1.0d.4 floats -->
+A single f64 global occupies 8 bytes in the .data section.
+
+```maxon
+var pi = 3.14
+
+function main() returns ExitCode
+	if pi > 3.0 'read'
+		return 0
+	end 'read'
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+```RequiredData
+f64 3.14
+```
+
+<!-- disabled-test: data-section-bool-then-i64-sorted -->
+<!-- P1.0d.5b top-level `var` (globals) -->
+A bool and i64 global: sorted largest-first, no padding needed.
+
+```maxon
+var flag = false
+var counter = 42
+
+function main() returns ExitCode
+	if flag 'read'
+		return 1
+	end 'read'
+	return counter - 42
+end 'main'
+```
+```exitcode
+0
+```
+```RequiredData
+i64 42
+i8 0
+```
+
+<!-- disabled-test: data-section-bool-true-then-i64 -->
+<!-- P1.0d.5b top-level `var` (globals) -->
+A true bool and i64: sorted largest-first, no padding needed.
+
+```maxon
+var flag = true
+var counter = 99
+
+function main() returns ExitCode
+	if flag 'read'
+		return counter - 99
+	end 'read'
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+```RequiredData
+i64 99
+i8 1
+```
+
+<!-- disabled-test: data-section-i64-then-bool -->
+<!-- P1.0d.5b top-level `var` (globals) -->
+An i64 followed by a bool: no padding needed since bool has 1-byte alignment.
+
+```maxon
+var counter = 7
+var flag = true
+
+function main() returns ExitCode
+	if flag 'read'
+		return counter - 7
+	end 'read'
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+```RequiredData
+i64 7
+i8 1
+```
+
+<!-- disabled-test: data-section-multiple-bools -->
+<!-- P1.0d.5b top-level `var` (globals) -->
+Multiple consecutive bools occupy 1 byte each with no padding.
+
+```maxon
+var a = true
+var b = false
+var c = true
+
+function main() returns ExitCode
+	if a and c and (b == false) 'read'
+		return 0
+	end 'read'
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+```RequiredData
+i8 1
+i8 0
+i8 1
+```
+
+<!-- disabled-test: data-section-mixed-types -->
+<!-- P1.0d.4 floats -->
+Mixed bool, i64, f64 globals sorted largest-first, no padding.
+
+```maxon
+var flag = true
+var count = 10
+var ratio = 2.5
+
+function main() returns ExitCode
+	if flag and (count == 10) and (ratio > 2.0) 'read'
+		return 0
+	end 'read'
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+```RequiredData
+i64 10
+f64 2.5
+i8 1
+```
+
+<!-- disabled-test: top-level-var-byte-ranged-type -->
+<!-- P1.9 `as` cast -->
+Module-level var with a byte-sized ranged type.
+```maxon
+typealias SmallInt = int(0 to u8.max)
+
+var counter = 42 as SmallInt
+
+function main() returns ExitCode
+		return counter
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- disabled-test: top-level-let-struct-reassign-error -->
+<!-- P1.1 structs — the `let` holds a `Point.create(...)`, a runtime initializer -->
+Reassigning an immutable top-level `let` struct variable should error.
+```maxon
+typealias SmallInt = int(0 to u8.max)
+
+type Point
+		export var x as SmallInt
+		export var y as SmallInt
+
+		static function create(x SmallInt, y SmallInt) returns Self
+			return Self{x: x, y: y}
+		end 'create'
+end 'Point'
+
+let origin = Point.create(0, y: 0)
+
+function main() returns ExitCode
+		origin = Point.create(1, y: 1)
+		return 0
+end 'main'
+```
+```maxoncstderr
+error E2013: <fragment>:16:3: cannot assign to immutable variable: 'origin'
+```
+
+<!-- disabled-test: top-level-var-function-call-error -->
+<!-- P1.0d.5b top-level `var` (globals) -->
+Function calls are not allowed in module-level `var` initializers.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function getDefault() returns Integer
+	return 42
+end 'getDefault'
+
+var value = getDefault()
+
+function main() returns ExitCode
+	return value
+end 'main'
+```
+```maxoncstderr
+error E2045: <fragment>:8:13: Function calls are not allowed in global variable initializers; 'getDefault()' is not a constant expression
+```
