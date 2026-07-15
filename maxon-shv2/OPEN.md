@@ -124,15 +124,78 @@ second), or incref per await. **LOAD-BEARING FOR P1.5** — decide it *before* s
 alongside `Promise with (T, E)` (see PLAN.md). A promise that carries its error type **and** has a
 defined await-arity has no representable version of either bug.
 
+### 17. ⚠ NEW — the bootstrap ALIASES two file-private `var`s of the same name into ONE `.data` slot
+**Measured 2026-07-15**, three files, each `var` file-private (never exported):
+```maxon
+// featA/a.maxon    var counter = 7      export function getA() returns Num  → counter
+// featB/b.maxon    var counter = 100    export function getB() returns Num  → counter
+// app/main.maxon   return getA() + getB()
+```
+⇒ **expected 107. Got `200` = 100 + 100.** `getA()` silently returns **100**. Compiles clean, build exit 0,
+no diagnostic. **A silent wrong answer.**
+
+**It is this file's through-line, in the reference compiler: the NAME RESOLVER is file-scoped — a cross-file
+read of a non-exported decl is a correct `E2004` — but the `.data` LABEL is global-by-name.** *"Which
+variable is this?"* is answered in two places, and they disagree. The later file's initializer wins the
+slot and both readers get it.
+
+⚠ **AND THE CORPUS STRUCTURALLY CANNOT SEE IT.** `specs/top-level-let.md`'s
+**`file-private-same-name-cross-file`** pins exactly this shape — two files, same bare name, different
+values, *"Each file's reads resolve to its OWN constant"*, exit **92** — and it **PASSES 19/19**. It passes
+because a top-level **`let` is INLINED at its use sites**, so there is no label to collide. **There is no
+`var` twin of that case anywhere in `/specs`** (grep: `file-private-same-name` appears only under
+`top-level-let`). *The one case that would catch this tests the one construct that cannot exhibit it.*
+
+⇒ **LOAD-BEARING FOR P1.0d.5b (top-level `var`) — shv2 MUST NOT PORT THIS.** A file-private global needs a
+**label identity that is per-file, not per-name**. Note the obvious workaround is *forbidden by the spec*:
+`top-level-let.md` states two files **may** declare the same private name with different values, so
+"reject duplicates" is not available. Deterministic disambiguation (suffix on collision, in source-path
+order) keeps goldens stable. **Write the `var` twin of `file-private-same-name-cross-file` as the
+acceptance test** — it is the case the corpus is missing, and shv2 is the compiler that should have it.
+
 ---
 
 ## ⚠ Gaps the plan never listed — all found by the corpus
 
-### 4. Top-level `var` (GLOBALS) is missing entirely  *(= PLAN.md's P1.0d.5)*
-`specs/short-circuit-evaluation.md` is **0/12, and NINE of the twelve need a global** — a global is how
-most spec files *observe a side effect*, so expect it to gate a wide slice.
-**Not merely a parser rule:** storage (rdata/data), initialization order, and — for a managed global —
-a lifetime.
+### 4. Top-level `var` (GLOBALS) — **and top-level `let`** — are missing entirely  *(= PLAN.md's P1.0d.5)*
+```
+var counter = 0   ⇒ error E2015: Unsupported: top-level var
+let BASE = 10     ⇒ error E2015: Unsupported: top-level let
+```
+⚠ **TOP-LEVEL `let` WAS NOT ON THE LADDER EITHER** (found 2026-07-15, probing). It joins parens, block
+scoping and globals as a gap the corpus knew about and the plan did not — and it has **its own stable spec,
+`specs/top-level-let.md`, 19 cases, which the bootstrap passes 19/19.** *(It was missed twice: a grep for
+`global|static|module|init` does not match the filename. **Check the corpus for the feature's own spec by
+NAME before believing it has none.**)*
+
+**MEASURED corpus impact: 118 of 276 `/specs` files use a top-level decl — 99 use `var`, 37 use `let`.**
+`specs/short-circuit-evaluation.md` is **0/12, and NINE of the twelve need a global** — a global is how most
+spec files *observe a side effect*.
+
+**Two of the three costs this entry used to list are RETIRED by measurement:**
+- ✅ **Initialization order is VACUOUS.** `specs/static-variables.md`: *"Top-level `var` initializers must be
+  constant expressions… Function calls and runtime expressions are not allowed."* Confirmed against the
+  bootstrap: `var b = a + 1` where `a` is a **`var`** ⇒ **`E2004: Undefined constant 'a'`**, while
+  `var derived = BASE * 2` over a `let` works (and **forward references work**, so the resolver needs an
+  arena + deferred resolution, not a single forward pass). ⇒ **Every initializer is compile-time evaluable;
+  the compiler emits the BYTES into `.data`. There is NO `__module_init` to build.**
+- ✅ **A managed global is IMPOSSIBLE** before P1.2 — no heap ⇒ scalars only.
+⇒ **What is actually left is storage**: the Std **memory band** (`StdOpCategory` declares `memory`/`system`
+but `StdOp` has only `arith`/`control`/`call`), a `.data` section (PeWriter has none), and the
+`dataSectionRipRelDisp32` reloc — **all three already scaffolded and named for this milestone**
+(`GlobalDataTable`: *".data-section globals … OMITTED until their milestones … they grow back as additional
+fields here"*; `RdataRelocKind.dataSectionRipRelDisp32` and `GlobalLabelClass.dataSection` already exist;
+`PeWriter.maxon:236` panics *"not supported until its milestone"*).
+
+⚠ **`let` needs NO storage at all** — it is compile-time evaluated and inlines at its use sites (which is
+exactly why it dodges **#17**'s aliasing bug). ⇒ **SLICE IT: `let` first** (front-end only, no IR ops, no
+codegen, its own stable spec), **then `var`** (where the risk actually lives — see **#17**).
+
+⚠ **It already cost coverage:** with no globals, short-circuit `and`/`or` had **no way to prove the right
+operand is SKIPPED** (an eager `and` returns the *same answer* on every input, so no value test can see it).
+`specs-shv2/short-circuit-elision.md` works around it — the guarded operand **divides by zero**, so a clean
+exit *is* the proof. **Retire that spec when globals land and the real cases can run.** *(Its trick still
+works: as of 2026-07-15 a divide by zero is a clean panic + exit 1 rather than a hardware trap — see #2.)*
 ⚠ **It already cost coverage:** with no globals, short-circuit `and`/`or` had **no way to prove the
 right operand is SKIPPED** (an eager `and` returns the *same answer* on every input, so no value test
 can see it). `specs-shv2/short-circuit-elision.md` works around it — the guarded operand **divides by
