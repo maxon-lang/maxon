@@ -483,6 +483,18 @@ public static partial class MaxonToStandardConversion {
   private const int ManagedFieldParentPtr = 32;
   private const int ManagedMemoryStructSize = 40;
 
+  // Byte-fusion (inline storage). An OWNED record whose element/byte buffer lives INLINE in the
+  // SAME allocation — right after the record fields, so buffer@0 == self + recordSize — is marked
+  // by parent_ptr == MmParentInline. Capacity stays >= 0 (a non-pointer parent sentinel like
+  // ROOT/RDATA, not a capacity sentinel), so bounds checks and the COW no-copy fast path keep
+  // working. The inline bytes are reclaimed with the record's own slot; there is no separate
+  // buffer to free. The first grow past inline capacity DETACHES to a normal external buffer.
+  // Arrays fuse only when their element bytes fit MmInlineCapBytes (they grow geometrically, so a
+  // larger array keeps an external buffer); strings have no cap. Ports the self-hosted runtime's
+  // MM_PARENT_INLINE / MM_INLINE_CAP_BYTES (stdlib/Internals.maxon).
+  private const int MmParentInline = -3;
+  private const int MmInlineCapBytes = 64;
+
   // __ManagedMemoryCursor struct field offsets (all fields are 8 bytes)
   private const int CursorFieldBuffer = 0;
   private const int CursorFieldPosition = 8;
@@ -543,6 +555,19 @@ public static partial class MaxonToStandardConversion {
     "parent_ptr" => ManagedFieldParentPtr,
     _ => throw new InvalidOperationException($"Unknown __ManagedMemory field '{fieldName}'")
   };
+
+  /// The inline element/byte buffer of a byte-fused record: buffer == self + recordSize, living in
+  /// the record's own allocation. Recomputed from the record's stack slot at each use because a
+  /// preceding runtime call (e.g. a toString conversion) may have clobbered any earlier copy.
+  private static StdI64 EmitInlineBufferPtr(
+    IrBlock<StandardOp> block, string managedVarName, int recordSize, Dictionary<string, string> varTypes) {
+    var recSize = new StdConstI64Op(recordSize);
+    block.AddOp(recSize);
+    var self = (StdI64)EmitLoad(block, managedVarName, varTypes);
+    var buf = new StdAddI64Op(self, recSize.Result);
+    block.AddOp(buf);
+    return buf.Result;
+  }
 
   /// Store all five fields of a __ManagedMemory struct.
   private static void EmitInitManagedMemory(

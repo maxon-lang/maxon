@@ -692,7 +692,8 @@ public static partial class MaxonToStandardConversion {
   /// </summary>
   private static void LowerManagedMemCreate(
     MaxonManagedMemCreateOp op,
-    IrBlock<StandardOp> block,
+    IrFunction<StandardOp> func,
+    ref IrBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
     VarRegistry temps,
@@ -736,16 +737,54 @@ public static partial class MaxonToStandardConversion {
       elemSizeValue = sizeOp.Result;
     }
 
-    // Allocate __ManagedMemory struct, then raw buffer
     var tempName = inlineTarget
       ?? temps.CreateTemp("managed_create", op.Result.Id, "__ManagedMemory", OwnershipFlags.None);
-    var managedPtr = EmitAlloc(block, ManagedMemoryStructSize, "__ManagedMemory", scopeName: _currentFuncName);
-    EmitStore(block, managedPtr, tempName, varTypes);
-    var allocResult = EmitRawAlloc(block, byteSize, label: "ManagedMemory.buf", scopeName: _currentFuncName);
-    var createParentZero = new StdConstI64Op(0);
-    block.AddOp(createParentZero);
-    EmitInitManagedMemory(block, tempName, allocResult, count, count, elemSizeValue, createParentZero.Result, varTypes);
-    valueMap[op.Result] = new StdHeapPtr(managedPtr.Id, "__ManagedMemory", tempName);
+
+    // Byte-fusion: when the element bytes fit MmInlineCapBytes, allocate the record AND its buffer
+    // as ONE mm_alloc with the buffer INLINE (buffer = self + recordSize, parent_ptr = MmParentInline);
+    // otherwise the record plus a separate raw buffer. The count is a runtime value, so the cap test
+    // is a runtime branch (mirrors the self-hosted __managed_mem_create_managed). The first grow past
+    // the inline capacity detaches to an external buffer; the record's own slot reclaims the bytes.
+    var uid = IrContext.Current.NextId();
+    var capConst = new StdConstI64Op(MmInlineCapBytes);
+    block.AddOp(capConst);
+    var byteSizeNonZero = new StdCmpU64Op("ne", byteSize, zero.Result);
+    block.AddOp(byteSizeNonZero);
+    var fitsCap = new StdCmpU64Op("ule", byteSize, capConst.Result);
+    block.AddOp(fitsCap);
+    var doInline = new StdAndI1Op(byteSizeNonZero.Result, fitsCap.Result);
+    block.AddOp(doInline);
+    var inlineLabel = $"__mmcreate_inline_{uid}";
+    var externalLabel = $"__mmcreate_external_{uid}";
+    var mergeLabel = $"__mmcreate_merge_{uid}";
+    block.AddOp(new StdCondBrOp(doInline.Result, inlineLabel, externalLabel));
+
+    // Inline: record + buffer in one allocation; buffer points into the record's own slot.
+    var inlineBlock = func.Body.AddBlock(inlineLabel);
+    var recSizeConst = new StdConstI64Op(ManagedMemoryStructSize);
+    inlineBlock.AddOp(recSizeConst);
+    var fusedSize = new StdAddI64Op(byteSize, recSizeConst.Result);
+    inlineBlock.AddOp(fusedSize);
+    var inlineSelf = EmitAlloc(inlineBlock, fusedSize.Result, "__ManagedMemory", scopeName: _currentFuncName);
+    EmitStore(inlineBlock, inlineSelf, tempName, varTypes);
+    var inlineBuf = EmitInlineBufferPtr(inlineBlock, tempName, ManagedMemoryStructSize, varTypes);
+    var inlineParent = new StdConstI64Op(MmParentInline);
+    inlineBlock.AddOp(inlineParent);
+    EmitInitManagedMemory(inlineBlock, tempName, inlineBuf, count, count, elemSizeValue, inlineParent.Result, varTypes);
+    inlineBlock.AddOp(new StdBrOp(mergeLabel));
+
+    // External: record + a separate raw buffer (a larger array that will keep growing).
+    var externalBlock = func.Body.AddBlock(externalLabel);
+    var externalSelf = EmitAlloc(externalBlock, ManagedMemoryStructSize, "__ManagedMemory", scopeName: _currentFuncName);
+    EmitStore(externalBlock, externalSelf, tempName, varTypes);
+    var externalBuf = EmitRawAlloc(externalBlock, byteSize, label: "ManagedMemory.buf", scopeName: _currentFuncName);
+    var externalParent = new StdConstI64Op(0);
+    externalBlock.AddOp(externalParent);
+    EmitInitManagedMemory(externalBlock, tempName, externalBuf, count, count, elemSizeValue, externalParent.Result, varTypes);
+    externalBlock.AddOp(new StdBrOp(mergeLabel));
+
+    block = func.Body.AddBlock(mergeLabel);
+    valueMap[op.Result] = new StdHeapPtr(op.Result.Id, "__ManagedMemory", tempName);
   }
 
   /// <summary>
@@ -1105,6 +1144,38 @@ public static partial class MaxonToStandardConversion {
   /// Updates buffer and capacity fields on the managed struct (and writes through to self if needed).
   /// Element size is passed dynamically (read from the struct's element_size field).
   /// </summary>
+  /// After a maxon_string_ensure_cap grow that may have DETACHED the buffer, make the record a
+  /// plain ROOT owner of the fresh external buffer and release whatever parent it held. A detach is
+  /// signalled by the buffer pointer having changed (a grow that fit in place keeps everything).
+  /// On detach the record no longer shares its old buffer, so:
+  ///   - a real heap parent (a slice's source, parent_ptr > 0) is mm_decref'd — otherwise it and
+  ///     its owned buffer leak (this is what makes `slice.append(...)` balance);
+  ///   - the inline sentinel (MmParentInline) is simply cleared — nothing to decref;
+  ///   - a root (0) needs nothing.
+  /// In every detached case parent_ptr ends at 0. Companion to the parentPtr guard in
+  /// maxon_string_ensure_cap, which skips freeing an inline (or slice-owned) old buffer.
+  private static void EmitReleaseParentOnDetach(
+    IrBlock<StandardOp> block, string managedVarName, StdI64 oldBuf, StdI64 newBuf,
+    Dictionary<string, string> varTypes) {
+    var parentPtr = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldParentPtr, IrType.I64, varTypes);
+    var bufChanged = new StdCmpI64Op("ne", oldBuf, newBuf);
+    block.AddOp(bufChanged);
+    var zeroPtr = new StdConstI64Op(0);
+    block.AddOp(zeroPtr);
+    // Decref only a REAL heap parent (a slice source: parent_ptr > 0); sentinels (0, -3) are not pointers.
+    var isRealParent = new StdCmpI64Op("gt", parentPtr, zeroPtr.Result);
+    block.AddOp(isRealParent);
+    var shouldDecref = new StdAndI1Op(bufChanged.Result, isRealParent.Result);
+    block.AddOp(shouldDecref);
+    var parentToDecref = new StdSelectI64Op(shouldDecref.Result, parentPtr, zeroPtr.Result);
+    block.AddOp(parentToDecref);
+    EmitDecrefValueIfNonnull(block, parentToDecref.Result, scopeName: _currentFuncName);
+    // Any detach makes the record a ROOT owner of the fresh buffer.
+    var newParent = new StdSelectI64Op(bufChanged.Result, zeroPtr.Result, parentPtr);
+    block.AddOp(newParent);
+    EmitStructFieldStore(block, newParent.Result, managedVarName, ManagedFieldParentPtr, IrType.I64, varTypes);
+  }
+
   private static void EmitCowCheck(
     IrBlock<StandardOp> block,
     string managedVarName,
@@ -1383,10 +1454,15 @@ public static partial class MaxonToStandardConversion {
     fixBlock.AddOp(oneConst);
     var requiredCap = new StdAddI64Op(fixLen, oneConst.Result);
     fixBlock.AddOp(requiredCap);
+    // parent_ptr lets ensure_cap skip freeing an inline/slice-owned buffer (see EmitReleaseParentOnDetach).
+    var fixParent = (StdI64)EmitStructFieldLoad(fixBlock, managedVarName, ManagedFieldParentPtr, IrType.I64, varTypes);
     var grownBuf = new StdI64(IrContext.Current.NextStdId());
-    fixBlock.AddOp(new StdCallRuntimeOp("maxon_string_ensure_cap", [fixBuf, fixLen, fixCap, requiredCap.Result], grownBuf));
+    fixBlock.AddOp(new StdCallRuntimeOp("maxon_string_ensure_cap", [fixBuf, fixLen, fixCap, requiredCap.Result, fixParent], grownBuf));
     EmitStructFieldStore(fixBlock, grownBuf, managedVarName, ManagedFieldBuffer, IrType.I64, varTypes);
     EmitStructFieldStore(fixBlock, requiredCap.Result, managedVarName, ManagedFieldCapacity, IrType.I64, varTypes);
+    // A record detached by this grow (buffer changed) becomes a plain external root owner
+    // (the earlier EmitCowCheck already resolved any slice, so here parent is root or inline).
+    EmitReleaseParentOnDetach(fixBlock, managedVarName, fixBuf, grownBuf, varTypes);
     // Write null terminator: buffer[length] = 0
     var fixLenReload = (StdI64)EmitStructFieldLoad(fixBlock, managedVarName, ManagedFieldLength, IrType.I64, varTypes);
     var termAddr = new StdAddI64Op(grownBuf, fixLenReload);
@@ -1445,13 +1521,14 @@ public static partial class MaxonToStandardConversion {
   /// </summary>
   private static void LowerManagedReadStdin(
     MaxonManagedReadStdinOp op,
-    IrBlock<StandardOp> block,
+    IrFunction<StandardOp> func,
+    ref IrBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
     VarRegistry temps) {
     // 1. Allocate the MM with elementSize=1 (byte buffer) and capacity=maxBytes.
     var createOp = new MaxonManagedMemCreateOp(op.MaxBytes, elementSize: 1);
-    LowerManagedMemCreate(createOp, block, valueMap, varTypes, temps, inlineTarget: null);
+    LowerManagedMemCreate(createOp, func, ref block, valueMap, varTypes, temps, inlineTarget: null);
 
     // The created MM lives behind valueMap[createOp.Result] as a StdHeapPtr
     // whose VarName is the temp slot holding the MM pointer. Resolve once.
@@ -1681,9 +1758,13 @@ public static partial class MaxonToStandardConversion {
       // Pass original (unclamped) capacity so ensure_cap correctly skips free for rdata/slice.
       // For bit-packed, selfCap is in elements but ensure_cap only checks sign, so passing
       // the raw element capacity (which is -2 or -1 for rdata/slice) works correctly.
+      // parent_ptr lets ensure_cap skip freeing an inline/slice-owned buffer (see EmitReleaseParentOnDetach).
+      var selfParent = (StdI64)EmitStructFieldLoad(appendBlock, selfVarName, ManagedFieldParentPtr, IrType.I64, varTypes);
       var newBuf = new StdI64(IrContext.Current.NextStdId());
       appendBlock.AddOp(new StdCallRuntimeOp("maxon_string_ensure_cap",
-        [selfBuf, selfByteSize, selfCap, growCap], newBuf));
+        [selfBuf, selfByteSize, selfCap, growCap, selfParent], newBuf));
+      // An inline array detached by this grow (buffer changed) becomes a plain external owner.
+      EmitReleaseParentOnDetach(appendBlock, selfVarName, selfBuf, newBuf, varTypes);
 
       // Spill values for the loop
       var newBufVar = $"__append_buf_{uid}";
@@ -1792,11 +1873,15 @@ public static partial class MaxonToStandardConversion {
       var callLen = selfLenBytes.Result;
       var callCap = selfCap;
       var callGrow = (StdI64)EmitLoad(appendBlock, growByteCapVar, varTypes);
+      // parent_ptr lets ensure_cap skip freeing an inline/slice-owned buffer (see EmitReleaseParentOnDetach).
+      var callParent = (StdI64)EmitStructFieldLoad(appendBlock, selfVarName, ManagedFieldParentPtr, IrType.I64, varTypes);
       var newBuf = new StdI64(IrContext.Current.NextStdId());
       appendBlock.AddOp(new StdCallRuntimeOp("maxon_string_ensure_cap",
-        [callBuf, callLen, callCap, callGrow], newBuf));
+        [callBuf, callLen, callCap, callGrow, callParent], newBuf));
       var newBufVar = $"__append_buf_{uid}";
       EmitStore(appendBlock, newBuf, newBufVar, varTypes);
+      // An inline array/string detached by this grow (buffer changed) becomes a plain external owner.
+      EmitReleaseParentOnDetach(appendBlock, selfVarName, callBuf, newBuf, varTypes);
 
       // Memcpy: other.buffer -> newBuffer + selfLen * elemSize
       var reloadSelfLen = (StdI64)EmitLoad(appendBlock, selfLenVar, varTypes);
@@ -2095,7 +2180,7 @@ public static partial class MaxonToStandardConversion {
         var createOp = new MaxonManagedMemCreateOp(args[0], createMeta.ElementSize) {
           IsBitPacked = createMeta.IsBitPacked
         };
-        LowerManagedMemCreate(createOp, block, valueMap, varTypes, temps,
+        LowerManagedMemCreate(createOp, func, ref block, valueMap, varTypes, temps,
           inlineTarget: null, errorFlagValue: errorFlagValue);
         createResult.TypeName = "__ManagedMemory";
         if (valueMap.TryGetValue(createOp.Result, out var createMapped))

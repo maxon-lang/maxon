@@ -67,6 +67,14 @@ public partial class RuntimeEmitter(IEmitterBackend backend) {
   public const int MmemOffLength = 8;
   public const int MmemOffCapacity = 16;
   public const int MmemOffElementSize = 24;
+  public const int MmemOffParent = 32;
+
+  // Byte-fusion sentinel (parent_ptr value). An owned record whose element/byte buffer lives
+  // INLINE in the record's own allocation (buffer == self + recordSize) carries this in parent_ptr
+  // instead of a heap parent or ROOT(0). Its buffer must never be mm_raw_free'd or mm_raw_realloc'd
+  // in place — it is not a slab slot base. A grow DETACHES it to an external buffer. Mirrors
+  // MmParentInline in the conversion layer and MM_PARENT_INLINE in stdlib/Internals.maxon.
+  public const int MmParentInline = -3;
 
   // element_size == 0 is the SUB-BYTE BIT-PACKED sentinel (`Array with bool`):
   // capacity and length stay element counts, but the buffer is (count + 7) / 8

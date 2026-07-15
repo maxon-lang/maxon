@@ -292,25 +292,25 @@ module {
     x64.mov r9, r8
     x64.mov rax, 1
     x64.lea rcx, [rdi + rax]
+    x64.mov rdx, 49
+    x64.lea rsi, [rcx + rdx]
     x64.lea_func rdx, [__destruct_String]
-    x64.mov rsi, rdx
+    x64.mov r8, rdx
     x64.mov [rbp-160], rcx
     x64.mov [rbp-168], rbx
     x64.mov [rbp-176], rdi
     x64.mov [rbp-184], r9
-    x64.mov rdx, rsi
-    x64.mov rcx, 48
+    x64.mov rcx, rsi
+    x64.mov rdx, r8
     x64.mov r8, 4
     x64.call mm_alloc
     x64.mov [rbp-96], rax
-    x64.mov rax, 1
-    x64.mov rcx, [rbp-160]
-    x64.lea rdx, [rcx + rax]
-    x64.mov rcx, rdx
-    x64.call mm_raw_alloc
-    x64.xor ecx, ecx
-    x64.mov [rbp-104], rcx
-    x64.mov [rbp-112], rax
+    x64.mov rax, 48
+    x64.mov rcx, [rbp-96]
+    x64.add rcx, rax
+    x64.xor eax, eax
+    x64.mov [rbp-104], rax
+    x64.mov [rbp-112], rcx
     x64.mov rax, [rbp-160]
     x64.mov [rbp-120], rax
     x64.mov rax, [rbp-168]
@@ -351,7 +351,7 @@ module {
     x64.mov rax, [rbp-112]
     x64.mov rcx, [rbp-120]
     x64.mov rdx, 1
-    x64.xor ebx, ebx
+    x64.mov rbx, -3
     x64.mov rsi, [rbp-96]
     x64.mov [rsi+0], rax
     x64.mov rax, [rbp-96]
@@ -465,8 +465,13 @@ module {
     x64.mov rcx, [rbp-8]
     x64.call mm_decref_managed_elements
     x64.mov rcx, [rbp-8]
-    x64.mov rdx, [rcx+0]
-    x64.mov rcx, rdx
+    x64.mov rdx, [rcx+32]
+    x64.mov rbx, -3
+    x64.cmp rdx, rbx
+    x64.je __destruct_StringArray.skip_buf_0
+  raw_free_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
     x64.call mm_raw_free
     x64.jmp __destruct_StringArray.skip_buf_0
   skip_buf_0:

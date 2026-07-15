@@ -55,7 +55,7 @@ module {
   }
   func @makePoints() -> i64 {
   entry:
-    x64.prologue stack_size=80
+    x64.prologue stack_size=64
     x64.mov rcx, 1
     x64.mov rdx, 2
     x64.call Point.create
@@ -81,7 +81,7 @@ module {
     x64.lea_func rax, [__destruct___Array_Point]
     x64.mov rcx, rax
     x64.mov rdx, rcx
-    x64.mov rcx, 40
+    x64.mov rcx, 56
     x64.mov r8, 6
     x64.call mm_alloc
     x64.mov [rbp-40], rax
@@ -114,24 +114,26 @@ module {
     x64.mov rdx, [rax+24]
     x64.mov rax, 2
     x64.imul rax, rdx
-    x64.mov [rbp-48], rax
-    x64.mov [rbp-56], rcx
+    x64.mov rdx, 40
+    x64.mov rbx, [rbp-40]
+    x64.add rbx, rdx
+    x64.mov [rbp-48], rbx
+    x64.mov rdx, rcx
+    x64.mov r8, rax
     x64.mov rcx, [rbp-48]
-    x64.call mm_raw_alloc
-    x64.mov [rbp-64], rax
-    x64.mov rcx, [rbp-64]
-    x64.mov rdx, [rbp-56]
-    x64.mov r8, [rbp-48]
     x64.call maxon_memcpy
     x64.mov rcx, [rbp-24]
-    x64.mov [rbp-72], rax
+    x64.mov [rbp-56], rax
     x64.call mm_incref
     x64.mov rax, [rbp-40]
-    x64.mov rcx, [rbp-64]
+    x64.mov rcx, [rbp-48]
     x64.mov [rax+0], rcx
     x64.mov rax, 2
     x64.mov rcx, [rbp-40]
     x64.mov [rcx+16], rax
+    x64.mov rax, -3
+    x64.mov rcx, [rbp-40]
+    x64.mov [rcx+32], rax
     x64.xor eax, eax
     x64.mov [rbp-32], rax
     x64.mov rax, [rbp-24]
@@ -338,8 +340,13 @@ module {
     x64.mov rcx, [rbp-8]
     x64.call mm_decref_managed_elements
     x64.mov rcx, [rbp-8]
-    x64.mov rdx, [rcx+0]
-    x64.mov rcx, rdx
+    x64.mov rdx, [rcx+32]
+    x64.mov rbx, -3
+    x64.cmp rdx, rbx
+    x64.je __destruct___Array_Point.skip_buf_0
+  raw_free_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
     x64.call mm_raw_free
     x64.jmp __destruct___Array_Point.skip_buf_0
   skip_buf_0:

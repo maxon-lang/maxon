@@ -19,7 +19,7 @@ ExitCode: 1
 module {
   func @main() -> u32 {
   entry:
-    x64.prologue stack_size=64
+    x64.prologue stack_size=48
     x64.xor eax, eax
     x64.mov rcx, 1
     x64.mov rdx, 2
@@ -34,7 +34,7 @@ module {
     x64.lea_func rax, [__destruct___Array_Color]
     x64.mov rcx, rax
     x64.mov rdx, rcx
-    x64.mov rcx, 40
+    x64.mov rcx, 64
     x64.mov r8, 3
     x64.call mm_alloc
     x64.mov [rbp-32], rax
@@ -66,22 +66,24 @@ module {
     x64.mov rdx, [rax+24]
     x64.mov rax, 3
     x64.imul rax, rdx
-    x64.mov [rbp-40], rax
-    x64.mov [rbp-48], rcx
+    x64.mov rdx, 40
+    x64.mov rbx, [rbp-32]
+    x64.add rbx, rdx
+    x64.mov [rbp-40], rbx
+    x64.mov rdx, rcx
+    x64.mov r8, rax
     x64.mov rcx, [rbp-40]
-    x64.call mm_raw_alloc
-    x64.mov [rbp-56], rax
-    x64.mov rcx, [rbp-56]
-    x64.mov rdx, [rbp-48]
-    x64.mov r8, [rbp-40]
     x64.call maxon_memcpy
     x64.mov rcx, [rbp-32]
-    x64.mov rdx, [rbp-56]
+    x64.mov rdx, [rbp-40]
     x64.mov [rcx+0], rdx
     x64.mov rcx, 3
     x64.mov rdx, [rbp-32]
     x64.mov [rdx+16], rcx
-    x64.mov [rbp-64], rax
+    x64.mov rcx, -3
+    x64.mov rdx, [rbp-32]
+    x64.mov [rdx+32], rcx
+    x64.mov [rbp-48], rax
     x64.mov rcx, [rbp-32]
     x64.call mm_incref
     x64.mov rax, [rbp-32]
@@ -136,6 +138,12 @@ module {
     x64.cmp rcx, rdx
     x64.je __destruct___Array_Color.skip_buf_0
   free_buf_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+32]
+    x64.mov rdx, -3
+    x64.cmp rcx, rdx
+    x64.je __destruct___Array_Color.skip_buf_0
+  raw_free_0:
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rax+0]
     x64.call mm_raw_free

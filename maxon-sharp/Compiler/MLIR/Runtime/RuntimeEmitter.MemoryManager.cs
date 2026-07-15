@@ -1253,10 +1253,30 @@ public partial class RuntimeEmitter {
     _b.LoadLocal(VReg.Arg2, 4); // Arg2 = old_byte_size (count)
     _b.Call("maxon_memcpy");
 
-    // Step 4: Free old buffer via mm_raw_free(old_ptr, scope=[realloc])
+    // Step 4: Free the old buffer — UNLESS it is INLINE (parent_ptr == MmParentInline). An inline
+    // buffer lives inside the record's own allocation (self + recordSize), not a slab slot base, so
+    // mm_raw_free'ing it would corrupt the heap. A realloc DETACHES it: new_ptr above is a normal
+    // external slab allocation, so the record becomes a plain ROOT owner (parent_ptr = 0) and the
+    // old inline bytes simply die with the record's own slot when it is freed.
+    _b.LoadLocal(VReg.Scratch0, 2); // Scratch0 = managedPtr
+    _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, MmemOffParent); // Scratch1 = parent_ptr
+    _b.CmpRegImm(VReg.Scratch1, MmParentInline);
+    var inlineDetach = UniqueLabel("mm_raw_realloc_inline_detach");
+    var afterFree = UniqueLabel("mm_raw_realloc_after_free");
+    _b.JumpIf(Condition.Equal, inlineDetach);
+
+    // External buffer: free it normally.
     _b.LoadLocal(VReg.Arg0, 0); // Arg0 = old_ptr
     if (mmTrace) _b.LeaSymdata(VReg.Arg1, "__mm_scope_realloc");
     _b.Call("mm_raw_free");
+    _b.Jump(afterFree);
+
+    // Inline buffer: skip the free and clear the inline sentinel — the record now owns new_ptr.
+    _b.DefineLabel(inlineDetach);
+    _b.LoadLocal(VReg.Scratch0, 2); // managedPtr
+    _b.ZeroReg(VReg.Scratch1);
+    _b.StoreIndirect(VReg.Scratch0, MmemOffParent, VReg.Scratch1); // parent_ptr = 0 (ROOT)
+    _b.DefineLabel(afterFree);
 
     if (mmTrace) {
       EmitTraceDepthDec();
@@ -1268,7 +1288,7 @@ public partial class RuntimeEmitter {
   }
 
   // =========================================================================
-  // maxon_string_ensure_cap(buffer, length, capacity, requiredCap) -> buffer
+  // maxon_string_ensure_cap(buffer, length, capacity, requiredCap, parentPtr) -> buffer
   //
   // Ensures a string's backing buffer has at least requiredCap bytes of capacity.
   // Three cases:
@@ -1276,11 +1296,16 @@ public partial class RuntimeEmitter {
   //   2. capacity < 0 (rdata/slice): alloc requiredCap bytes, copy length bytes from old buffer
   //   3. capacity < requiredCap (heap): realloc via mm_raw_alloc + memcpy + mm_raw_free
   // Returns the (possibly new) buffer pointer.
+  //
+  // parentPtr is the record's parent_ptr field. When it is MmParentInline (-3) the old buffer is
+  // INLINE in the record's own allocation (not a slab slot base), so it must NOT be mm_raw_free'd
+  // even though capacity >= 0 — the grow DETACHES the record to the freshly-allocated external
+  // buffer and the caller resets parent_ptr to 0. The inline bytes die with the record's own slot.
   // =========================================================================
-  // Stack slots: 0=buffer, 1=length, 2=capacity, 3=requiredCap
-  //              4=new_buffer (scratch)
+  // Stack slots: 0=buffer, 1=length, 2=capacity, 3=requiredCap, 4=parentPtr
+  //              5=new_buffer (scratch)
   public void EmitStringEnsureCap(bool mmTrace) {
-    _b.FunctionStart("maxon_string_ensure_cap", 4, mmTrace ? 0x50 : 0x40);
+    _b.FunctionStart("maxon_string_ensure_cap", 5, mmTrace ? 0x60 : 0x50);
 
     // If capacity < 0 (signed), always need growth:
     //   capacity == -2 (rdata) or capacity == -1 (slice) can't be used in-place
@@ -1303,27 +1328,32 @@ public partial class RuntimeEmitter {
     _b.LoadLocal(VReg.Arg0, 3); // Arg0 = requiredCap
     if (mmTrace) _b.LeaSymdata(VReg.Arg1, "__mm_scope_realloc");
     _b.Call("mm_raw_alloc");
-    _b.StoreLocal(4, VReg.Scratch0); // slot 4 = new_buffer
+    _b.StoreLocal(5, VReg.Scratch0); // slot 5 = new_buffer
 
     // Copy length bytes from old buffer to new buffer
-    _b.LoadLocal(VReg.Arg0, 4); // Arg0 = new_buffer (dst)
+    _b.LoadLocal(VReg.Arg0, 5); // Arg0 = new_buffer (dst)
     _b.LoadLocal(VReg.Arg1, 0); // Arg1 = old_buffer (src)
     _b.LoadLocal(VReg.Arg2, 1); // Arg2 = length (count)
     _b.Call("maxon_memcpy");
 
-    // Free old buffer only if capacity >= 0 (owned heap buffer)
-    // Skip for capacity == -2 (rdata) and capacity == -1 (slice — buffer belongs to parent)
+    // Free old buffer only if it is an owned heap buffer:
+    //   capacity < 0            (rdata/slice)  → don't free (buffer belongs to parent / is static)
+    //   parent_ptr == MmParentInline (inline)  → don't free (inline in the record's own slot); the
+    //                                             grow has DETACHED to new_buffer, caller resets parent
     _b.LoadLocal(VReg.Scratch0, 2); // Scratch0 = capacity
     _b.CmpRegImm(VReg.Scratch0, 0);
     var skipFree = UniqueLabel("str_ensure_skip_free");
     _b.JumpIf(Condition.Less, skipFree); // signed: capacity < 0 → don't free
+    _b.LoadLocal(VReg.Scratch0, 4); // Scratch0 = parentPtr
+    _b.CmpRegImm(VReg.Scratch0, MmParentInline);
+    _b.JumpIf(Condition.Equal, skipFree); // inline buffer → don't free
     _b.LoadLocal(VReg.Arg0, 0); // Arg0 = old_buffer
     if (mmTrace) _b.LeaSymdata(VReg.Arg1, "__mm_scope_realloc");
     _b.Call("mm_raw_free");
     _b.DefineLabel(skipFree);
 
     // Return new_buffer
-    _b.LoadLocal(VReg.Scratch0, 4);
+    _b.LoadLocal(VReg.Scratch0, 5);
     _b.ReturnValue(VReg.Scratch0);
   }
 

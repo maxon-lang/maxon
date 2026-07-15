@@ -983,8 +983,14 @@ module {
     %70 = memref.load __destr_ptr : i64
     std.call_runtime @mm_decref_managed_elements %70
     %71 = memref.load __destr_ptr : i64
-    %72 = memref.load_indirect %71+0
-    std.call_runtime @mm_raw_free %72
+    %72 = memref.load_indirect %71+32
+    %73 = arith.constant {value = -3 : i64}
+    %74 = arith.cmpi ne %72, %73
+    cf.cond_br %74 [then: raw_free_0, else: skip_buf_0]
+  raw_free_0:
+    %75 = memref.load __destr_ptr : i64
+    %76 = memref.load_indirect %75+0
+    std.call_runtime @mm_raw_free %76
     cf.br skip_buf_0
   skip_buf_0:
     cf.br done
@@ -1145,8 +1151,13 @@ module {
     x64.mov rcx, [rbp-8]
     x64.call mm_decref_managed_elements
     x64.mov rcx, [rbp-8]
-    x64.mov rdx, [rcx+0]
-    x64.mov rcx, rdx
+    x64.mov rdx, [rcx+32]
+    x64.mov rbx, -3
+    x64.cmp rdx, rbx
+    x64.je __destruct_ItemArray.skip_buf_0
+  raw_free_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
     x64.call mm_raw_free
     x64.jmp __destruct_ItemArray.skip_buf_0
   skip_buf_0:

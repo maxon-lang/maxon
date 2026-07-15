@@ -10,7 +10,7 @@ ExitCode: 1
 module {
   func @main() -> u32 {
   entry:
-    x64.prologue stack_size=64
+    x64.prologue stack_size=48
     x64.mov rax, 42
     x64.mov [rbp-8], rax
     x64.xor ecx, ecx
@@ -21,7 +21,7 @@ module {
     x64.lea_func r8, [__destruct_Array__b_empty_set_Int]
     x64.mov r9, r8
     x64.mov rdx, r9
-    x64.mov rcx, 40
+    x64.mov rcx, 48
     x64.mov r8, 1
     x64.call mm_alloc
     x64.mov [rbp-16], rax
@@ -53,22 +53,24 @@ module {
     x64.mov rdx, [rax+24]
     x64.mov rax, 1
     x64.imul rax, rdx
-    x64.mov [rbp-32], rax
-    x64.mov [rbp-40], rcx
+    x64.mov rdx, 40
+    x64.mov rbx, [rbp-16]
+    x64.add rbx, rdx
+    x64.mov [rbp-32], rbx
+    x64.mov rdx, rcx
+    x64.mov r8, rax
     x64.mov rcx, [rbp-32]
-    x64.call mm_raw_alloc
-    x64.mov [rbp-48], rax
-    x64.mov rcx, [rbp-48]
-    x64.mov rdx, [rbp-40]
-    x64.mov r8, [rbp-32]
     x64.call maxon_memcpy
     x64.mov rcx, [rbp-16]
-    x64.mov rdx, [rbp-48]
+    x64.mov rdx, [rbp-32]
     x64.mov [rcx+0], rdx
     x64.mov rcx, 1
     x64.mov rdx, [rbp-16]
     x64.mov [rdx+16], rcx
-    x64.mov [rbp-56], rax
+    x64.mov rcx, -3
+    x64.mov rdx, [rbp-16]
+    x64.mov [rdx+32], rcx
+    x64.mov [rbp-40], rax
     x64.mov rcx, [rbp-16]
     x64.call mm_incref
     x64.mov rax, [rbp-16]
@@ -91,7 +93,7 @@ module {
     x64.call mrt_panic
   __range_ok_0:
     x64.mov rbx, [rbp-24]
-    x64.mov [rbp-64], rax
+    x64.mov [rbp-48], rax
     x64.test rbx, rbx
     x64.jz __nonnull_skip_0
     x64.mov rcx, [rbp-24]
@@ -103,7 +105,7 @@ module {
     x64.mov rcx, [rbp-16]
     x64.call mm_decref
     x64.label __nonnull_skip_1
-    x64.mov rax, [rbp-64]
+    x64.mov rax, [rbp-48]
     x64.epilogue
     x64.ret
   }

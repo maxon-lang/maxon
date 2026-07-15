@@ -114,24 +114,23 @@ module {
     x64.add r8, r9
     x64.add r8, rax
     x64.add r8, rdx
+    x64.mov rdi, 49
+    x64.lea r9, [r8 + rdi]
     x64.lea_func rdi, [__destruct_String]
-    x64.mov r9, rdi
+    x64.mov rdx, rdi
     x64.mov [rbp-184], rax
     x64.mov [rbp-192], rbx
     x64.mov [rbp-200], r8
-    x64.mov rdx, r9
-    x64.mov rcx, 48
+    x64.mov rcx, r9
     x64.mov r8, 1
     x64.call mm_alloc
     x64.mov [rbp-32], rax
-    x64.mov rax, 1
-    x64.mov rcx, [rbp-200]
-    x64.lea rdx, [rcx + rax]
-    x64.mov rcx, rdx
-    x64.call mm_raw_alloc
-    x64.xor ecx, ecx
-    x64.mov [rbp-40], rcx
-    x64.mov [rbp-48], rax
+    x64.mov rax, 48
+    x64.mov rcx, [rbp-32]
+    x64.add rcx, rax
+    x64.xor eax, eax
+    x64.mov [rbp-40], rax
+    x64.mov [rbp-48], rcx
     x64.mov rax, [rbp-200]
     x64.mov [rbp-56], rax
     x64.mov rax, [rbp-160]
@@ -229,7 +228,7 @@ module {
     x64.mov rax, [rbp-48]
     x64.mov rcx, [rbp-56]
     x64.mov rdx, 1
-    x64.xor ebx, ebx
+    x64.mov rbx, -3
     x64.mov rsi, [rbp-32]
     x64.mov [rsi+0], rax
     x64.mov rax, [rbp-32]
@@ -390,6 +389,12 @@ module {
     x64.je __destruct_String.skip_buf_0
   free_buf_0:
     x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+32]
+    x64.mov rdx, -3
+    x64.cmp rcx, rdx
+    x64.je __destruct_String.skip_buf_0
+  raw_free_0:
+    x64.mov rax, [rbp-8]
     x64.mov rcx, [rax+0]
     x64.call mm_raw_free
     x64.jmp __destruct_String.skip_buf_0
@@ -428,8 +433,13 @@ module {
     x64.mov rcx, [rbp-8]
     x64.call mm_decref_managed_elements
     x64.mov rcx, [rbp-8]
-    x64.mov rdx, [rcx+0]
-    x64.mov rcx, rdx
+    x64.mov rdx, [rcx+32]
+    x64.mov rbx, -3
+    x64.cmp rdx, rbx
+    x64.je __destruct_ItemArray.skip_buf_0
+  raw_free_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
     x64.call mm_raw_free
     x64.jmp __destruct_ItemArray.skip_buf_0
   skip_buf_0:
@@ -487,6 +497,12 @@ module {
     x64.cmp rcx, rdx
     x64.je __destruct_Array_Integer.skip_buf_0
   free_buf_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+32]
+    x64.mov rdx, -3
+    x64.cmp rcx, rdx
+    x64.je __destruct_Array_Integer.skip_buf_0
+  raw_free_0:
     x64.mov rax, [rbp-8]
     x64.mov rcx, [rax+0]
     x64.call mm_raw_free

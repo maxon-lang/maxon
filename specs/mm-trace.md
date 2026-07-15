@@ -44,7 +44,7 @@ end 'main'
 ```
 
 ```mm-trace
-mm_alloc String #1 size=48
+mm_alloc String #1 size=57
 mm_incref String #1 rc=1
 mm_incref String #1 rc=2
 mm_decref String #1 rc=1

@@ -344,6 +344,12 @@ public static partial class MaxonToStandardConversion {
         // where X is a REAL source (init/clone/slice) is NOT absorbed — it becomes a view instead.
         var absorbedManagedLit = new Dictionary<int, MaxonStructLiteralOp>();
         var suppressedStructLitIds = new HashSet<int>();
+        // Integer literal constants by result id — lets the array-fusion decision read an absorbed
+        // managed literal's compile-time `element_size` (and hence the inline byte budget) directly.
+        var intLiteralByResult = new Dictionary<int, long>();
+        foreach (var op in block.Operations)
+          if (op is MaxonLiteralOp lit && lit.ValueKind == MaxonValueKind.Integer)
+            intLiteralByResult[lit.Result.Id] = lit.IntValue;
         {
           var structLitByResult = new Dictionary<int, MaxonStructLiteralOp>();
           foreach (var op in block.Operations)
@@ -981,6 +987,32 @@ public static partial class MaxonToStandardConversion {
                 }
               }
 
+              // Byte-fusion: a small OWNED array/vector literal stores its elements INLINE in the
+              // record's own allocation (buffer = self + recordSize, parent_ptr = MmParentInline)
+              // instead of taking a second heap buffer. Only when the buffer is writable (not an
+              // rdata constant or stack scratch) and the element bytes fit MmInlineCapBytes — arrays
+              // grow geometrically, so a larger one keeps an external buffer and the first push
+              // detaches. Decided here (compile-time) so the record is allocated at the fused size;
+              // wired into the buffer set-up below (arrayInlineBytes > 0 == fuse).
+              int arrayInlineBytes = 0;
+              if (isFusedArrayLiteral && structLitOp.ArrayLiteralTag != null
+                  && !module.ConstantArrayLiterals.ContainsKey(structLitOp.Result.Id)
+                  && !structLitOp.SkipZeroInit) {
+                bool fusedBitPacked = structLitOp.IsBitPacked || (absorbedInnerManaged?.IsBitPacked ?? false);
+                int fusedCount = structLitOp.ArrayLiteralCount;
+                int totalInlineBytes;
+                if (fusedBitPacked) {
+                  totalInlineBytes = (fusedCount + 7) / 8;
+                } else {
+                  long elemBytes = 0;
+                  foreach (var (mfName, mfVal) in absorbedInnerManaged!.FieldValues)
+                    if (mfName == "element_size" && intLiteralByResult.TryGetValue(mfVal.Id, out var esz)) elemBytes = esz;
+                  totalInlineBytes = (int)(fusedCount * elemBytes);
+                }
+                if (totalInlineBytes > 0 && totalInlineBytes <= MmInlineCapBytes)
+                  arrayInlineBytes = totalInlineBytes;
+              }
+
               // Stack allocation path: decompose struct into named field variables.
               // Fused array literals are refcounted heap records — never stack-eligible.
               if (!isFusedArrayLiteral && module.StackEligibleStructs.Contains(structLitOp.Result.Id)) {
@@ -1030,8 +1062,10 @@ public static partial class MaxonToStandardConversion {
                 ? inlineTarget
                 : temps.CreateTemp("struct", structLitOp.Result.Id, structLitOp.TypeName, OwnershipFlags.None);
 
-              // Allocate memory for the struct on the heap
-              var structPtr = EmitAlloc(newBlock, structType.SizeInBytes, structLitOp.TypeName, scopeName: func.Name);
+              // Allocate memory for the struct on the heap. A byte-fused array literal reserves its
+              // inline element bytes right after the record fields in the SAME allocation.
+              var recordAllocSize = structType.SizeInBytes + arrayInlineBytes;
+              var structPtr = EmitAlloc(newBlock, recordAllocSize, structLitOp.TypeName, scopeName: func.Name);
               EmitStore(newBlock, structPtr, tempName, varTypes);
 
               foreach (var (fieldName, fieldVal) in structLitOp.FieldValues) {
@@ -1175,12 +1209,15 @@ public static partial class MaxonToStandardConversion {
                     copySize = mulOp.Result;
                   }
 
-                  // Allocate heap buffer as raw memory (no refcount header)
-                  var heapBuf = EmitRawAlloc(newBlock, totalSize, label: "cow.buf", scopeName: _currentFuncName);
+                  // Byte-fusion: a small owned array puts its elements INLINE (buffer = self +
+                  // recordSize) in the record's own allocation; otherwise take a separate raw buffer.
+                  StdI64 heapBuf = arrayInlineBytes > 0
+                    ? EmitInlineBufferPtr(newBlock, tempName, structType.SizeInBytes, varTypes)
+                    : EmitRawAlloc(newBlock, totalSize, label: "cow.buf", scopeName: _currentFuncName);
                   if (isBitPackedLayout) {
                     // Pack bool values from stack (byte-per-element) into bit-packed heap buffer.
-                    // Zero the heap buffer first, then set each bit from the stack elements.
-                    // Since count is known at compile time, we unroll the loop.
+                    // The inline region comes from mm_alloc (zeroed); a raw buffer needs no pre-zero
+                    // because every bit is set below. Since count is known at compile time, unroll.
                     for (int bi = 0; bi < structLitOp.ArrayLiteralCount; bi++) {
                       var elemVar = $"{structLitOp.ArrayLiteralTag}.{bi}";
                       var elemVal = (StdI64)EmitLoad(newBlock, elemVar, varTypes);
@@ -1218,6 +1255,13 @@ public static partial class MaxonToStandardConversion {
                   var capOp = new StdConstI64Op(bufferIsWritable ? structLitOp.ArrayLiteralCount : -2);
                   newBlock.AddOp(capOp);
                   EmitStructFieldStore(newBlock, capOp.Result, tempName, ManagedFieldCapacity, IrType.I64, varTypes);
+                  // A byte-fused array marks its inline buffer so the destructor skips the raw free
+                  // and the first grow detaches (the absorbed managed literal wrote parent_ptr = 0).
+                  if (arrayInlineBytes > 0) {
+                    var inlineParentOp = new StdConstI64Op(MmParentInline);
+                    newBlock.AddOp(inlineParentOp);
+                    EmitStructFieldStore(newBlock, inlineParentOp.Result, tempName, ManagedFieldParentPtr, IrType.I64, varTypes);
+                  }
                 } else {
                   // Outer struct (Array, Vector): load the managed field's heap pointer, then store buffer on it
                   var managedField = structType.GetField("managed")!;
@@ -2294,7 +2338,7 @@ public static partial class MaxonToStandardConversion {
               LowerManagedWriteStderr(managedWriteStderrOp, newBlock, valueMap, varTypes);
               break;
             case MaxonManagedReadStdinOp managedReadStdinOp:
-              LowerManagedReadStdin(managedReadStdinOp, newBlock, valueMap, varTypes, temps);
+              LowerManagedReadStdin(managedReadStdinOp, newFunc, ref newBlock, valueMap, varTypes, temps);
               break;
             case MaxonPanicOp panicOp:
               LowerPanic(panicOp, newBlock, result);
@@ -2820,19 +2864,37 @@ public static partial class MaxonToStandardConversion {
             var freeBody = func.Body.AddBlock(freeBlock);
 
             // Heap-backed buffer with managed elements: decref each element
-            // before freeing (COW copy owns its own element references)
+            // before freeing (COW copy owns its own element references).
+            // Runs for both external and inline buffers — the elements are references either way.
             if (request.NeedsManagedElementCleanup) {
               var selfPtr = new StdLoadI64Op("__destr_ptr");
               freeBody.AddOp(selfPtr);
               freeBody.AddOp(new StdCallRuntimeOp("mm_decref_managed_elements", [selfPtr.Result], null));
             }
 
+            // Byte-fusion: an INLINE buffer (parent_ptr == MmParentInline) lives in the record's
+            // own allocation (self + recordSize), so there is no separate raw buffer to free — it
+            // dies with the record's slot. Only an EXTERNAL owned buffer is mm_raw_free'd. The
+            // "should free" predicate is the branch's TRUE target so rawFreeBlock (created next) is
+            // the fallthrough, matching the capacity-!= -2 dispatch above.
+            var inlParentLoad = new StdLoadI64Op("__destr_ptr");
+            freeBody.AddOp(inlParentLoad);
+            var inlParentVal = new StdLoadIndirectOp(inlParentLoad.Result, ManagedFieldParentPtr, IrType.I64);
+            freeBody.AddOp(inlParentVal);
+            var inlineSentinel = new StdConstI64Op(MmParentInline);
+            freeBody.AddOp(inlineSentinel);
+            var notInline = new StdCmpI64Op("ne", (StdI64)inlParentVal.Result, inlineSentinel.Result);
+            freeBody.AddOp(notInline);
+            var rawFreeBlock = $"raw_free_{fieldIdx}";
+            freeBody.AddOp(new StdCondBrOp(notInline.Result, rawFreeBlock, skipBlock));
+
+            var rawFreeBody = func.Body.AddBlock(rawFreeBlock);
             var bufPtrLoad = new StdLoadI64Op("__destr_ptr");
-            freeBody.AddOp(bufPtrLoad);
+            rawFreeBody.AddOp(bufPtrLoad);
             var bufLoad = new StdLoadIndirectOp(bufPtrLoad.Result, offset, IrType.I64);
-            freeBody.AddOp(bufLoad);
-            EmitRawFree(freeBody, (StdI64)bufLoad.Result);
-            freeBody.AddOp(new StdBrOp(skipBlock));
+            rawFreeBody.AddOp(bufLoad);
+            EmitRawFree(rawFreeBody, (StdI64)bufLoad.Result);
+            rawFreeBody.AddOp(new StdBrOp(skipBlock));
 
             entry = func.Body.AddBlock(skipBlock);
           } else {

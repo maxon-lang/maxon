@@ -139,6 +139,41 @@ public static partial class MaxonToStandardConversion {
 	  VarRegistry temps,
 	  string? inlineTarget = null) {
 
+		// Byte-fusion fast path: a lone numeric/bool part (`n.toString()` == "{n}") writes its decimal
+		// text STRAIGHT into the String record's inline buffer — one allocation, no digit scratch.
+		if (op.Parts.Count == 1) {
+			var (singleIsLit, _, singleExpr, singleFmt, singleOpt) = op.Parts[0];
+			var maxBytes = SingleNumericToStringMaxBytes(singleExpr, singleIsLit, singleFmt, valueMap);
+			if (maxBytes != null) {
+				var toStrTemp = inlineTarget
+					?? temps.CreateTemp("interptmp", op.Result.Id, "String", OwnershipFlags.None);
+				// ONE allocation: record (StringStructSize) + inline digit buffer (maxBytes) + NUL.
+				var toStrSelf = (StdHeapPtr)EmitAlloc(block, StringStructSize + maxBytes.Value + 1, "String", scopeName: _currentFuncName);
+				EmitStore(block, toStrSelf, toStrTemp, varTypes);
+				var toStrBuf = EmitInlineBufferPtr(block, toStrTemp, StringStructSize, varTypes);
+				var toStrLen = EmitSingleNumericToStringInto(singleExpr!, singleFmt, singleOpt, toStrBuf, block, valueMap, varTypes, result);
+				// The runtime call clobbers registers, so recompute buffer = self + StringStructSize.
+				var toStrBufR = EmitInlineBufferPtr(block, toStrTemp, StringStructSize, varTypes);
+				// NUL terminator at buffer[len]
+				var nulAddr = new StdAddI64Op(toStrBufR, toStrLen);
+				block.AddOp(nulAddr);
+				var nulZero = new StdConstI64Op(0);
+				block.AddOp(nulZero);
+				block.AddOp(new StdStoreIndirectOp(nulZero.Result, nulAddr.Result, 0, IrType.I8));
+				// Inline managed fields: capacity == length (exact), parent_ptr = MmParentInline.
+				var elemOne = new StdConstI64Op(1);
+				block.AddOp(elemOne);
+				var parentInline = new StdConstI64Op(MmParentInline);
+				block.AddOp(parentInline);
+				EmitInitManagedMemory(block, toStrTemp, toStrBufR, toStrLen, toStrLen, elemOne.Result, parentInline.Result, varTypes);
+				var toStrAscii = new StdConstI64Op(0);
+				block.AddOp(toStrAscii);
+				EmitStructFieldStore(block, toStrAscii.Result, toStrTemp, StringFieldIsAscii, IrType.I64, varTypes);
+				valueMap[op.Result] = new StdHeapPtr(toStrSelf.Id, toStrSelf.TypeName, toStrTemp);
+				return;
+			}
+		}
+
 		var (partInfos, interpTempBufVars) = EmitInterpParts(op.Parts, "interp", block, valueMap, varTypes, result);
 
 		if (partInfos.Count == 0) {
@@ -165,20 +200,25 @@ public static partial class MaxonToStandardConversion {
 			}
 		}
 
-		// Envelope collapse: ONE String allocation (the record IS its own __ManagedMemory),
-		// plus the owned byte buffer. No separate __ManagedMemory record.
+		// Byte-fusion: ONE String allocation holds BOTH the record AND its UTF-8 bytes. The record
+		// is StringStructSize bytes; the buffer lives INLINE right after it (buffer = self +
+		// StringStructSize) in the SAME allocation, so an owned interpolation result is a single
+		// mm_alloc rather than a record plus a separate raw buffer. parent_ptr = MmParentInline
+		// marks it; the bytes die with the record's slot (no buffer to free), and a later append
+		// DETACHES to an external buffer. There is no cap on a fused string (built once, read many).
 		var tempName2 = inlineTarget
 			?? temps.CreateTemp("interptmp", op.Result.Id, "String", OwnershipFlags.None);
-		var interpOuterPtr = (StdHeapPtr)EmitAlloc(block, StringStructSize, "String", scopeName: _currentFuncName);
+
+		// fusedSize = StringStructSize + totalLen + 1 (trailing NUL)
+		var recPlusNulOp = new StdConstI64Op(StringStructSize + 1);
+		block.AddOp(recPlusNulOp);
+		var fusedSize = new StdAddI64Op(totalLen, recPlusNulOp.Result);
+		block.AddOp(fusedSize);
+		var interpOuterPtr = (StdHeapPtr)EmitAlloc(block, fusedSize.Result, "String", scopeName: _currentFuncName);
 		EmitStore(block, interpOuterPtr, tempName2, varTypes);
 
-		// Allocate buffer (totalLen + 1 for null terminator) as raw heap allocation
-		var oneOp = new StdConstI64Op(1);
-		block.AddOp(oneOp);
-		var allocSize = new StdAddI64Op(totalLen, oneOp.Result);
-		block.AddOp(allocSize);
-
-		var allocResult = EmitRawAlloc(block, allocSize.Result, label: "interp.buf", scopeName: _currentFuncName);
+		// buffer = self + StringStructSize (the inline region)
+		var inlineBuf = EmitInlineBufferPtr(block, tempName2, StringStructSize, varTypes);
 
 		// Store all values to stack variables since rep movsb clobbers RSI, RDI, RCX
 		var interpOffsetVar = $"__interp_offset_{op.Result.Id}";
@@ -187,7 +227,7 @@ public static partial class MaxonToStandardConversion {
 		var zeroOp = new StdConstI64Op(0);
 		block.AddOp(zeroOp);
 		EmitStore(block, zeroOp.Result, interpOffsetVar, varTypes);
-		EmitStore(block, allocResult, interpBufVar, varTypes);
+		EmitStore(block, inlineBuf, interpBufVar, varTypes);
 		EmitStore(block, totalLen, interpTotalLenVar, varTypes);
 
 		// Store each part's buffer and length to stack variables
@@ -235,15 +275,16 @@ public static partial class MaxonToStandardConversion {
 			EmitRawFree(block, bufPtr);
 		}
 
-		// Write the managed fields inline into the String record. The buffer is freshly
-		// raw-alloc'd and owned, so capacity == length (owned mode: destructor frees it).
+		// Write the managed fields inline into the String record. The buffer is INLINE and owned, so
+		// capacity == length (exact) and parent_ptr = MmParentInline: the destructor skips the raw
+		// free (the bytes die with the record's slot), and a later append detaches to an external buffer.
 		var finalBuf = (StdI64)EmitLoad(block, interpBufVar, varTypes);
 		var finalLen = (StdI64)EmitLoad(block, interpTotalLenVar, varTypes);
 		var elemSizeConst2 = new StdConstI64Op(1);
 		block.AddOp(elemSizeConst2);
-		var interpParentZero = new StdConstI64Op(0);
-		block.AddOp(interpParentZero);
-		EmitInitManagedMemory(block, tempName2, finalBuf, finalLen, finalLen, elemSizeConst2.Result, interpParentZero.Result, varTypes);
+		var interpParentInline = new StdConstI64Op(MmParentInline);
+		block.AddOp(interpParentInline);
+		EmitInitManagedMemory(block, tempName2, finalBuf, finalLen, finalLen, elemSizeConst2.Result, interpParentInline.Result, varTypes);
 
 		// Store isAscii = 0 (conservative default)
 		var isAsciiConst2 = new StdConstI64Op(0);
@@ -322,6 +363,56 @@ public static partial class MaxonToStandardConversion {
 		return (partInfos, tempBufVars);
 	}
 
+	/// Inline byte reservation for a lone numeric/bool interpolation part fused into a String record
+	/// (`n.toString()` == "{n}"), or null when the part is not a plain numeric/bool — a String/struct
+	/// (StdHeapPtr) or an enum goes through the general record-fusing path instead. Mirrors the byte
+	/// budgets the corresponding EmitRuntimeToString call would have allocated for its scratch.
+	private static int? SingleNumericToStringMaxBytes(
+	  MaxonValue? exprValue, bool isLiteral, string? formatSpec,
+	  Dictionary<MaxonValue, StdValue> valueMap) {
+		if (isLiteral || exprValue == null) return null;
+		if (valueMap.TryGetValue(exprValue, out var v) && v is StdHeapPtr) return null;
+		if (formatSpec != null && exprValue is MaxonInteger or MaxonByte or MaxonShort or MaxonFloat)
+			return ToStringFormattedMaxBytes;
+		return exprValue switch {
+			MaxonInteger or MaxonByte or MaxonShort => I64ToStringMaxBytes,
+			MaxonFloat => F64ToStringMaxBytes,
+			MaxonBool => BoolToStringMaxBytes,
+			_ => null,
+		};
+	}
+
+	/// Converts a single numeric/bool interpolation expr straight into destBuffer (a String record's
+	/// inline region) and returns its text length — the digit-buffer half of `n.toString()`'s single
+	/// allocation. Mirrors the numeric dispatch in EmitInterpParts, but writes to a caller-owned
+	/// buffer rather than a freshly-allocated scratch. Only reached for parts SingleNumericToStringMaxBytes accepts.
+	private static StdI64 EmitSingleNumericToStringInto(
+	  MaxonValue exprValue, string? formatSpec, IrType? optimalType, StdI64 destBuffer,
+	  IrBlock<StandardOp> block, Dictionary<MaxonValue, StdValue> valueMap,
+	  Dictionary<string, string> varTypes, IrModule<StandardOp> result) {
+		if (exprValue is MaxonInteger or MaxonByte or MaxonShort) {
+			var stdVal = valueMap[exprValue];
+			if (stdVal is StdU32 u32) stdVal = EnsureI64(new StdI32(u32.Id), block, signExtend: false);
+			else if (stdVal is StdI32) stdVal = EnsureI64(stdVal, block, signExtend: true);
+			bool isUnsigned = (optimalType?.IsUnsigned ?? false) || stdVal is StdU64;
+			if (formatSpec != null)
+				return isUnsigned ? EmitU64ToStringFormatted(stdVal, formatSpec, block, varTypes, result, destBuffer).Length
+								  : EmitI64ToStringFormatted(stdVal, formatSpec, block, varTypes, result, destBuffer).Length;
+			return isUnsigned ? EmitU64ToString(stdVal, block, varTypes, destBuffer).Length
+							  : EmitI64ToString(stdVal, block, varTypes, destBuffer).Length;
+		}
+		if (exprValue is MaxonFloat && valueMap[exprValue] is StdF32 f32) {
+			var promote = new StdF32ToF64Op(f32);
+			block.AddOp(promote);
+			return formatSpec != null ? EmitF64ToStringFormatted(promote.Result, formatSpec, block, varTypes, result, destBuffer).Length
+									  : EmitF64ToString(promote.Result, block, varTypes, destBuffer).Length;
+		}
+		if (exprValue is MaxonFloat)
+			return formatSpec != null ? EmitF64ToStringFormatted((StdF64)valueMap[exprValue], formatSpec, block, varTypes, result, destBuffer).Length
+									  : EmitF64ToString((StdF64)valueMap[exprValue], block, varTypes, destBuffer).Length;
+		return EmitBoolToString((StdBool)valueMap[exprValue], block, varTypes, destBuffer).Length;
+	}
+
 	/// <summary>
 	/// <summary>
 	/// Allocates a buffer, calls a runtime conversion function, and returns (buffer, length).
@@ -333,7 +424,17 @@ public static partial class MaxonToStandardConversion {
 	  string runtimeFuncName,
 	  int bufferSize,
 	  IrBlock<StandardOp> block,
-	  Dictionary<string, string> varTypes) {
+	  Dictionary<string, string> varTypes,
+	  StdI64? destBuffer = null) {
+
+		// Byte-fusion: when destBuffer is supplied the digits are written STRAIGHT into it (the
+		// String record's own inline region), so `n.toString()` needs no scratch buffer at all.
+		// The caller owns destBuffer and recomputes it after the call (registers are clobbered).
+		if (destBuffer != null) {
+			var lenInline = new StdI64(IrContext.Current.NextStdId());
+			block.AddOp(new StdCallRuntimeOp(runtimeFuncName, [value, destBuffer], lenInline));
+			return (destBuffer, lenInline, "");
+		}
 
 		var sizeOp = new StdConstI64Op(bufferSize);
 		block.AddOp(sizeOp);
@@ -350,17 +451,25 @@ public static partial class MaxonToStandardConversion {
 		return (finalBuf, lenResult, bufVarName);
 	}
 
+	// Max decimal-text byte budgets for each runtime conversion, reused as the inline reservation
+	// when a `n.toString()` is fused into a String record (see TryEmitSingleNumericToStringInline).
+	private const int I64ToStringMaxBytes = 21;   // "-9223372036854775808"
+	private const int U64ToStringMaxBytes = 21;   // "18446744073709551615"
+	private const int F64ToStringMaxBytes = 32;
+	private const int BoolToStringMaxBytes = 6;   // "false"
+	private const int ToStringFormattedMaxBytes = 72;
+
 	private static (StdI64 Buffer, StdI64 Length, string BufVarName) EmitI64ToString(
-	  StdValue intValue, IrBlock<StandardOp> block, Dictionary<string, string> varTypes) =>
-	  EmitRuntimeToString(intValue, "maxon_i64_to_string", 21, block, varTypes);
+	  StdValue intValue, IrBlock<StandardOp> block, Dictionary<string, string> varTypes, StdI64? destBuffer = null) =>
+	  EmitRuntimeToString(intValue, "maxon_i64_to_string", I64ToStringMaxBytes, block, varTypes, destBuffer);
 
 	private static (StdI64 Buffer, StdI64 Length, string BufVarName) EmitU64ToString(
-	  StdValue intValue, IrBlock<StandardOp> block, Dictionary<string, string> varTypes) =>
-	  EmitRuntimeToString(intValue, "maxon_u64_to_string", 21, block, varTypes);
+	  StdValue intValue, IrBlock<StandardOp> block, Dictionary<string, string> varTypes, StdI64? destBuffer = null) =>
+	  EmitRuntimeToString(intValue, "maxon_u64_to_string", U64ToStringMaxBytes, block, varTypes, destBuffer);
 
 	private static (StdI64 Buffer, StdI64 Length, string BufVarName) EmitF64ToString(
-	  StdF64 floatValue, IrBlock<StandardOp> block, Dictionary<string, string> varTypes) =>
-	  EmitRuntimeToString(floatValue, "maxon_f64_to_string", 32, block, varTypes);
+	  StdF64 floatValue, IrBlock<StandardOp> block, Dictionary<string, string> varTypes, StdI64? destBuffer = null) =>
+	  EmitRuntimeToString(floatValue, "maxon_f64_to_string", F64ToStringMaxBytes, block, varTypes, destBuffer);
 
 	/// <summary>
 	/// Allocates a buffer, emits the format spec as rdata, calls a formatted runtime conversion function,
@@ -373,15 +482,8 @@ public static partial class MaxonToStandardConversion {
 	  string formatSpec,
 	  IrBlock<StandardOp> block,
 	  Dictionary<string, string> varTypes,
-	  IrModule<StandardOp> result) {
-
-		var fmtSizeOp = new StdConstI64Op(bufferSize);
-		block.AddOp(fmtSizeOp);
-		var bufResult = EmitRawAlloc(block, fmtSizeOp.Result, label: "fmt.buf", scopeName: _currentFuncName);
-
-		// Store buffer pointer so it survives the runtime call
-		var bufVarName = $"__tostr_buf_{bufResult.Id}";
-		EmitStore(block, bufResult, bufVarName, varTypes);
+	  IrModule<StandardOp> result,
+	  StdI64? destBuffer = null) {
 
 		// Emit format spec as rdata literal
 		var fmtId = NextRdataId();
@@ -390,6 +492,21 @@ public static partial class MaxonToStandardConversion {
 		var fmtNull = new byte[fmtUtf8.Length + 1];
 		Array.Copy(fmtUtf8, fmtNull, fmtUtf8.Length);
 		result.RdataEntries.Add((fmtLabel, fmtNull, 1));
+
+		StdI64 bufResult;
+		string bufVarName;
+		if (destBuffer != null) {
+			// Byte-fusion: write formatted digits straight into the caller's inline buffer, no scratch.
+			bufResult = destBuffer;
+			bufVarName = "";
+		} else {
+			var fmtSizeOp = new StdConstI64Op(bufferSize);
+			block.AddOp(fmtSizeOp);
+			bufResult = EmitRawAlloc(block, fmtSizeOp.Result, label: "fmt.buf", scopeName: _currentFuncName);
+			// Store buffer pointer so it survives the runtime call
+			bufVarName = $"__tostr_buf_{bufResult.Id}";
+			EmitStore(block, bufResult, bufVarName, varTypes);
+		}
 
 		var fmtLea = new StdLeaRdataOp(fmtLabel);
 		block.AddOp(fmtLea);
@@ -401,24 +518,25 @@ public static partial class MaxonToStandardConversion {
 		var lenResult = new StdI64(IrContext.Current.NextStdId());
 		block.AddOp(new StdCallRuntimeOp(runtimeFuncName, [value, bufResult, fmtPtr.Result, fmtLen.Result], lenResult));
 
+		if (destBuffer != null) return (destBuffer, lenResult, "");
 		var finalBuf = (StdI64)EmitLoad(block, bufVarName, varTypes);
 		return (finalBuf, lenResult, bufVarName);
 	}
 
 	private static (StdI64 Buffer, StdI64 Length, string BufVarName) EmitI64ToStringFormatted(
 	  StdValue intValue, string formatSpec, IrBlock<StandardOp> block,
-	  Dictionary<string, string> varTypes, IrModule<StandardOp> result) =>
-	  EmitRuntimeToStringFormatted(intValue, "maxon_i64_to_string_fmt", 72, formatSpec, block, varTypes, result);
+	  Dictionary<string, string> varTypes, IrModule<StandardOp> result, StdI64? destBuffer = null) =>
+	  EmitRuntimeToStringFormatted(intValue, "maxon_i64_to_string_fmt", ToStringFormattedMaxBytes, formatSpec, block, varTypes, result, destBuffer);
 
 	private static (StdI64 Buffer, StdI64 Length, string BufVarName) EmitU64ToStringFormatted(
 	  StdValue intValue, string formatSpec, IrBlock<StandardOp> block,
-	  Dictionary<string, string> varTypes, IrModule<StandardOp> result) =>
-	  EmitRuntimeToStringFormatted(intValue, "maxon_u64_to_string_fmt", 72, formatSpec, block, varTypes, result);
+	  Dictionary<string, string> varTypes, IrModule<StandardOp> result, StdI64? destBuffer = null) =>
+	  EmitRuntimeToStringFormatted(intValue, "maxon_u64_to_string_fmt", ToStringFormattedMaxBytes, formatSpec, block, varTypes, result, destBuffer);
 
 	private static (StdI64 Buffer, StdI64 Length, string BufVarName) EmitF64ToStringFormatted(
 	  StdValue floatValue, string formatSpec, IrBlock<StandardOp> block,
-	  Dictionary<string, string> varTypes, IrModule<StandardOp> result) =>
-	  EmitRuntimeToStringFormatted(floatValue, "maxon_f64_to_string_fmt", 72, formatSpec, block, varTypes, result);
+	  Dictionary<string, string> varTypes, IrModule<StandardOp> result, StdI64? destBuffer = null) =>
+	  EmitRuntimeToStringFormatted(floatValue, "maxon_f64_to_string_fmt", ToStringFormattedMaxBytes, formatSpec, block, varTypes, result, destBuffer);
 
 	/// <summary>
 	/// Handles interpolation of struct values. For String/Character types (which have buffer/length
@@ -799,8 +917,8 @@ public static partial class MaxonToStandardConversion {
 	/// a boolean value to "true" or "false". Returns (buffer, length).
 	/// </summary>
 	private static (StdI64 Buffer, StdI64 Length, string BufVarName) EmitBoolToString(
-	  StdBool boolValue, IrBlock<StandardOp> block, Dictionary<string, string> varTypes) =>
-	  EmitRuntimeToString(boolValue, "maxon_bool_to_string", 6, block, varTypes);
+	  StdBool boolValue, IrBlock<StandardOp> block, Dictionary<string, string> varTypes, StdI64? destBuffer = null) =>
+	  EmitRuntimeToString(boolValue, "maxon_bool_to_string", BoolToStringMaxBytes, block, varTypes, destBuffer);
 
 	private static void LowerManagedMemSlice(
 	  MaxonManagedMemSliceOp op,
