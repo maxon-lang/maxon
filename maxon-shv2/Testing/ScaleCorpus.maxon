@@ -204,28 +204,31 @@ let LoopNestBase = 2 as KnobSize
 // How many SCOPE-FILLER locals a long generated function carries — the V DIMENSION, and it DOUBLES.
 //
 // ⚠ THIS DOUBLES BECAUSE THE CORPUS WAS BLIND, AND IT WAS BLIND IN THE ONE DIMENSION IT NAMED ITSELF
-// FOR. The parser builds SSA on the fly and pays a cost O(vars-in-scope) at every branch: each `if`
-// SNAPSHOTS the whole mutable-var set, and — until it was fixed — every `ParseExpression` snapshotted
-// the variable registry too. `longFunction` and `deepBlocks` carried a FIXED handful of locals, so V
-// never grew and no O(V·anything) cost could ever surface. **A fixed V is a V dimension the ladder
-// cannot climb.** The comment that used to sit here defended the constant as "realistic, and that is
-// the whole point" — and a review DISPROVED exactly that reasoning: real IS the shape, but the
-// MAGNITUDE must be scaled past real, or the instrument sees nothing. `longFunction` already does this
-// with 3,200 `if`s; this does it with locals.
+// FOR. The parser builds SSA on the fly at a cost O(vars-in-scope) per branch — and until each was
+// fixed, that cost was in BYTES: every `ParseExpression` snapshotted the variable registry (fixed with
+// the ternary work), and every `if` snapshotted the whole mutable-var set (fixed by 8e10ce333). Both
+// hid because `longFunction` and `deepBlocks` carried a FIXED handful of locals, so V never grew and no
+// O(V·anything) cost could surface. **A fixed V is a V dimension the ladder cannot climb.** The comment
+// that used to sit here defended the constant as "realistic, and that is the whole point" — and a review
+// DISPROVED exactly that reasoning: real IS the shape, but the MAGNITUDE must be scaled past real, or
+// the instrument sees nothing. `longFunction` already does this with 3,200 `if`s; this does it with locals.
 //
 // So V doubles, and the base is picked so the TOP rung reaches ~4,096 locals — into the thousands,
 // which is where the deleted `ParseExpression` snapshot's O(V) cost actually bit (~4,000). Real
 // functions top out near ~30 locals (measured across maxon-shv2 + stdlib: p99 = 16, max = 44), so
 // this is deliberately super-realistic in magnitude and realistic in shape.
 //
-// WHAT THE LADDER NOW SEES (measured on current `main`, both V and the ifs doubling):
+// WHAT THE LADDER NOW SEES (measured on current `main`, both V and the ifs doubling) — and this knob is
+// now a REGRESSION GUARD on two fixes it first exposed:
 //   • `phase:parse` ALLOCATIONS grow x2.00 — LINEAR. The `ParseExpression` HashSet snapshot that went
-//     O(V) per call is GONE (deleted with the ternary short-circuit), so this column is now a
-//     REGRESSION GUARD, and its being linear is that fix being CONFIRMED, not the knob being idle.
-//   • `phase:parse` BYTES grow ~x3.9 — QUADRATIC. That is the `if`-half snapshot, which copies the
-//     whole mutable-var set (O(V)) at every branch: O(V) per if × O(ifs) ifs = O(V·ifs), and with both
-//     doubling that is x4. KNOWN and deliberately unfixed (a surplus copy that mints no ValueId);
-//     visible for the first time because V finally moves. Flattening it is a SEPARATE rung.
+//     O(V) per call is GONE (deleted with the ternary short-circuit); its being linear confirms that.
+//   • `phase:parse` BYTES grow ~x2.0 — LINEAR too, since 8e10ce333. This knob EXPOSED an O(V·ifs) BYTE
+//     quadratic here (parse bytes read x3.9): each `if` snapshotted the whole mutable-var set — O(V) per
+//     branch × O(ifs) = O(V·ifs) — invisible until V doubled. FIXED the way loops were (11b9bbcba): an
+//     `if` now carries only the vars its token extent ASSIGNS, so the snapshot is O(assigned) and parse
+//     bytes read x2.03. What is LEFT is an O(V)-per-`if` TIME scan of `mutableVars` (`assignedBindingsIn`)
+//     that allocates nothing and is invisible to this memory instrument BY DESIGN — so if a future change
+//     reintroduces an O(V) per-branch ALLOCATION, this column is what catches it.
 let LocalsPerFunctionBase = 128 as KnobSize
 
 // The BOUNDED set of accumulators the generated branches actually MUTATE — the "assigned" set, held
