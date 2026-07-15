@@ -116,24 +116,34 @@ end 'maxClassPoolSize'
 // every value of that class is confined to it and the test is a no-op — which is why the E5001 path is
 // untouched by it.
 //
-// ⚠⚠ THE EMPTY ALLOWED SET IS THE ONE HOLE IN THE SUBSET TEST, AND IT IS A SILENT WRONG ANSWER.
-// `witness` is a bag of bits that does not know which file it names, so the subset test spans both —
-// and ∅ IS A SUBSET OF EVERY SET. An f64 live across a call is forbidden every XMM, so its allowed set
-// is EMPTY, so it would test CONFINED to a callee-saved GPR witness produced by an int-only overflow.
-// `chooseVictim` would then spill a FLOAT to relieve a GPR peak, freeing an XMM no int can use: the
-// peak survives, the potential Φ does not fall, and the driver re-picks forever.
+// ⚠⚠ AN EMPTY ALLOWED SET IS CONFINED — VACUOUSLY, AND THAT IS THE ANSWER, not a hole.
+// ∅ ⊆ every set, and a value with no legal register at all is the MOST confined value there is: it
+// cannot be coloured anywhere, so it is always part of the overflow it is live across, and it is
+// always the one that must be relieved. An f64 live across a call is exactly this — Wave 1 makes
+// every XMM caller-saved, so the call forbids all sixteen.
 //
-// Closing it needs no witness class, because a class-filtered `allowedRegistersOf` (see above) makes
-// every NON-EMPTY allowed set a subset of its own file — and two files are disjoint, so such a set can
-// never be confined to a foreign witness. ∅ is the only mask that is confined to a witness it shares
-// no file with, and a value with no legal register at all is not "confined to" anything: it is
-// unrelievable in place, which is a question about the value and not about this witness.
+// ⚠ IT USED TO ANSWER `false` HERE, AND THAT WAS A REAL BUG — the force-spill path could not run at
+// all. The reasoning was sound about a hazard that is real: `witness` is a bag of bits that does not
+// know which file it names, so ∅ would also test CONFINED to a callee-saved GPR witness from an
+// int-only overflow, and `chooseVictim` would spill a FLOAT to relieve a GPR peak — freeing an XMM
+// no int can use, so the peak survives, the potential Φ never falls, and the driver re-picks
+// forever. But answering `false` bought that at the price of the case it was reasoning about: the
+// float could then never be chosen for its OWN peak either, so `chooseVictim` refused every
+// candidate and `noVictimAtPeak` panicked on the first float that crossed a call.
+//
+// ⇒ THE CROSS-FILE HAZARD IS THE WITNESS CLASS'S JOB, AND IT ALREADY DOES IT. `chooseVictim` gates
+// on `liveness.classOf(v) != peak.witnessClass` before it ever asks this, and its comment gives
+// this exact reason: *"deriving it from the mask cannot work, because a float live across a call is
+// forbidden every XMM and Hall's tight set for it is EMPTY, naming no bits at all."* A candidate
+// reaching here already shares the witness's file, so ∅ can only be confined to a witness of its
+// OWN class — which is the true answer.
+//
+// It also settles a DISAGREEMENT, which is how it surfaced: `analyzePressure` counts a value with
+// no legal register as confined (that is what finds the overflow — the panic said "1 values
+// confined to the 0 registers of witness 0"), and this said it was not. One fact, two places,
+// opposite answers; the peak existed and nothing was allowed to relieve it.
 export function valueConfinedTo(liveness LivenessResult, valueId ValueId, pool RegMask, witness RegMask) returns bool
-	let allowed = allowedRegistersOf(liveness, valueId: valueId, pool: pool)
-	if allowed == 0 'noLegalRegisterAtAll'
-		return false
-	end 'noLegalRegisterAtAll'
-	return (allowed and not witness) == 0
+	return (allowedRegistersOf(liveness, valueId: valueId, pool: pool) and not witness) == 0
 end 'valueConfinedTo'
 
 // Per-value EFFECTIVE POOL SIZE — `popcount(pool ∖ forbidden(v))` — plus how many values in the

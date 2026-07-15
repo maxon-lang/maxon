@@ -69,22 +69,20 @@ export function buildBackend(stdModule StdModule, target Target, globalData Glob
 	// `globalData` reaches ISel because a float CONSTANT is `.rdata` content the lowering is the
 	// first to see (`lowerFloatConst`). It is the same table concat resolves those labels against
 	// once sections are laid out — see `lowerStdToX64`.
-	var targetModule = lowerStdToX64(stdModule, globalData: globalData)
-	recordPhase(project, phase: CompilePhase.isel, probe: iselProbe)
-
-	// THE CLASS COLUMN CROSSES THE TIER BOUNDARY HERE, and it travels FORWARD: `lowerStdToX64` above is
-	// the last pass that can see a Std type, so it is the only one that can say which register FILE a
-	// value lives in. The allocator consumes that answer and never re-derives it — `movRegReg`,
+	// THE CLASS COLUMN CROSSES THE TIER BOUNDARY HERE, and it travels FORWARD, WITH the module: this
+	// call is the last pass that can see a Std type, so it is the only one that can say which register
+	// FILE a value lives in. The allocator consumes that answer and never re-derives it — `movRegReg`,
 	// `loadRegSlot` and `xchgRegReg` are class-agnostic by design, so a copy's class is knowable only
 	// from its source (see TargetDialect's `ValueClassColumn`).
 	//
-	// ⚠ `allGprValueClasses` IS A PLACEHOLDER FOR THE PRODUCER, not the producer. It is correct only
-	// while no float can reach the backend — which is checkable today: the parser has no float arm and
-	// `lowerStdToX64` still panics on a float const. When the lowering learns floats it must RECORD each
-	// vreg's class as it mints it and be handed here instead; leaving the placeholder would classify
-	// every f64 as `gpr`, silently, all the way to `addsd rax, rcx`.
+	// The two come back TOGETHER because a `TargetModule` alone is not a complete answer: it carries no
+	// types, so nothing downstream could say what file any of its values belongs in. Returning the pair
+	// is what makes it impossible to hand the allocator one without the other.
+	var (targetModule, valueClasses) = lowerStdToX64(stdModule, globalData: globalData)
+	recordPhase(project, phase: CompilePhase.isel, probe: iselProbe)
+
 	let regAllocProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.regalloc)
-	try allocateRegisters(targetModule, target: target, project: project, valueClasses: allGprValueClasses(targetModule))
+	try allocateRegisters(targetModule, target: target, project: project, valueClasses: valueClasses)
 	recordPhase(project, phase: CompilePhase.regalloc, probe: regAllocProbe)
 
 	let prologueProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.prologueEpilogue)

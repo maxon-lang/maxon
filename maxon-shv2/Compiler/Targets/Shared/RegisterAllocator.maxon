@@ -396,31 +396,6 @@ end 'calleeSavedMask'
 // the contract declares is therefore ONE function's; this is the carrier that says which.
 export typealias ValueClassColumns = Array with ValueClassColumn
 
-// Every value of every function classified `gpr` — the placeholder the lowering's real class output
-// replaces.
-//
-// ⚠ THIS IS A TEMPORARY STAND-IN FOR A PRODUCER THAT DOES NOT EXIST YET, and it is correct ONLY while
-// no float can reach the backend. It is honest today for a checkable reason: `StdToX64Conversion`
-// still PANICS on a float const, and the parser has no float arm at all, so every value the Target
-// tier can currently hold is an i64/bool/char in a GPR. It is a lie the instant either changes.
-//
-// ⇒ WHEN `StdToX64Conversion` LEARNS TO LOWER A FLOAT, IT MUST RECORD THE CLASS AS IT MINTS EACH VREG
-// (`stdTypeIsFloat` → `RegClass.xmm`) AND THIS FUNCTION MUST DIE. Leaving it in place would classify
-// every f64 as `gpr`, and that failure is SILENT all the way to `addsd rax, rcx` — the allocator's
-// asserts compare a colour against the DECLARED class, so a uniformly-wrong declaration agrees with
-// itself. See `TargetDialect.ValueClassColumn`, which states the producer/consumer direction, and
-// `assertClassColumnCovers`, which catches a SHORT column but cannot catch a wrong one.
-export function allGprValueClasses(module TargetModule) returns ValueClassColumns
-	var columns = ValueClassColumns.create()
-	for funcIndex in 0 upto module.funcCount() 'eachFunc'
-		let func = try module.functions.get(funcIndex) otherwise panic("allGprValueClasses: functions.get OOB at {funcIndex}")
-		var column = ValueClassColumn.create()
-		column.refill(scanFunctionValueCount(module, func: func), value: RegClass.gpr)
-		columns.push(column)
-	end 'eachFunc'
-	return columns
-end 'allGprValueClasses'
-
 export function allocateRegisters(module TargetModule, target Target, project Project, valueClasses ValueClassColumns) throws CompileError
 	logDebug(LogCategory.codegen, message: function() gives "Register allocation ({targetToString(target)}): {module.funcCount()} function(s)")
 	assertCallClobberConsistent()

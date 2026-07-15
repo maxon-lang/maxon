@@ -1,0 +1,44 @@
+// Test: gt-nan-is-false
+var zeroA = 0.0
+var zeroB = 0.0
+
+function main() returns ExitCode
+	var r = 7
+	let nan = zeroA / zeroB
+	let x = 5.0
+	if nan > x 'check'
+		r = 1
+	end 'check'
+	return r
+end 'main'
+---
+ExitCode: 7
+---
+data {
+  __data_zeroA@0 = f64 0
+  __data_zeroB@8 = f64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 7
+    x64.leaRegGlobal rax, __data_zeroA
+    x64.loadRegBaseDisp.word64 xmm0, [rax + 0]
+    x64.leaRegGlobal rax, __data_zeroB
+    x64.loadRegBaseDisp.word64 xmm1, [rax + 0]
+    x64.divsdRegReg xmm0, xmm0, xmm1
+    x64.movsdRegRip xmm1, [rip + __fconst_0]
+    x64.ucomisdRegReg xmm0, xmm1
+    x64.jcc above, check
+    x64.jmp critsplit
+  check:
+    x64.movRegImm32 r8, 1
+    x64.jmp ifcont
+  critsplit:
+    x64.jmp ifcont
+  ifcont:
+    x64.popReg rbp
+    x64.ret
+}

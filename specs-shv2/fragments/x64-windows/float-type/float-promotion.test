@@ -1,0 +1,22 @@
+// Test: float-promotion
+function main() returns ExitCode
+	let x = 5
+	let y = 2.0
+	let result = x + y
+	return trunc(result)
+end 'main'
+---
+ExitCode: 7
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 rax, 5
+    x64.movsdRegRip xmm0, [rip + __fconst_0]
+    x64.cvtsi2sdRegReg xmm1, rax
+    x64.addsdRegReg xmm1, xmm1, xmm0
+    x64.cvttsd2siRegReg r8, xmm1
+    x64.popReg rbp
+    x64.ret
+}

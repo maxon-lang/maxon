@@ -107,6 +107,11 @@ typealias CmpPredMap = Map with (ValueId, StdCmpPred)
 // apart to avoid. An id is a scalar and needs no borrow at all.
 typealias OrderedBlockIdMap = Map with (BlockRef, BlockId)
 
+// Callee name -> the register FILE its return value lands in. Built once per module
+// (`buildCalleeResultClasses`), so a call's result class is an O(1) lookup rather than a scan of
+// `stdModule.functions` per call site.
+typealias CalleeResultClassMap = Map with (ByteArray, RegClass)
+
 // The immediate a boolean condition is tested against. x64 branches on FLAGS, so a
 // condition that is a VALUE (a call's `bool` return, a `param`, a short-circuit merge phi,
 // a materialized compare) must first be compared with zero: `cmp reg, 0` + `jne` is "is it
@@ -120,19 +125,19 @@ let BoolFalseImm = 0 as Imm32
 // this constant can never be applied to one by accident.
 let LogicalNotMask = 1 as Imm32
 
-// The two FIXED GPRs a materialized float equality folds its answer through — see
-// `materializeFloatEquality` for why the fold cannot touch a virtual register at all until its
-// single publishing `mov`.
+// The two FIXED GPRs a materialized float `!=` builds its two halves in — the `setne` answer and
+// the `setp` (unordered) answer, which `appendFloatInequality` then sums with an `lea`. See
+// `materializeFloatEquality` for why the halves cannot live in virtuals.
 //
-// NOTHING pins these two in particular: any pair of distinct caller-saved GPRs would serve, so
+// NOTHING pins these two in particular: any pair of DISTINCT caller-saved GPRs would serve, so
 // they are named here rather than picked at the use site. RCX and RDX are the pair `lowerShiftCl`
-// and `lowerDivMod` already reach for, which keeps the set of registers this backend pins to
-// fixed roles as small as possible.
+// and `lowerDivMod` already reach for, which keeps the set of registers this backend pins to fixed
+// roles as small as possible. They must be distinct — the `lea` sums them.
 //
 // Writing them is a PHYSICAL DEF, which is what makes them safe: liveness forbids each to every
 // value live ACROSS that write, so the fold cannot destroy anything a later op still needs.
-let FloatEqualityOrderedReg = X64Register.rcx
-let FloatEqualityParityReg = X64Register.rdx
+let FloatInequalityUnequalReg = X64Register.rcx
+let FloatInequalityUnorderedReg = X64Register.rdx
 
 // Map a Std comparison predicate to the x64 condition code its `jcc`/`setcc` tests. ONE table
 // per FAMILY (not one encoder per predicate), and it drives BOTH consumers of a predicate: the
@@ -253,6 +258,47 @@ function predicateIsEquality(pred StdCmpPred) returns bool
 	end 'p'
 end 'predicateIsEquality'
 
+// ⭐ THE ONE DOOR from a Std type to a register FILE. A value's class is what its TYPE says, and
+// nothing else — that is the whole content of `ValueClassColumn`'s "produced by the lowering, not
+// derived in the backend".
+function regClassForStdType(t StdType) returns RegClass
+	return RegClass.xmm if stdTypeIsFloat(t) else RegClass.gpr
+end 'regClassForStdType'
+
+// The class of a UNARY op's result, which is NOT its operand's whenever the op crosses files.
+//
+// ⚠⚠ THE CONVERSIONS INVERT, AND THIS IS THE ONE PLACE THAT SURVIVES READING `operandType` AS THE
+// RESULT. `siToFp`'s operand is an INT and its result is an f64; `fpToSi`'s operand is an f64 and
+// its result is an int. `operandType` is the SOURCE by definition — that is what makes the
+// conversion band's ops the only ops in the dialect whose result type is not on the op at all, and
+// it is why `unaryOpcodeCrossesFiles` exists rather than a float test on the operand.
+//
+// `neg`/`bitNot`/`logicalNot` stay in their operand's file: they compute what they consume.
+function unaryResultClass(opcode StdUnaryOpcode, operandType StdType) returns RegClass
+	return match opcode 'k'
+		neg to logicalNot gives regClassForStdType(operandType)
+		// int -> f64: the result lives in an XMM though `operandType` is an integer.
+		siToFp gives RegClass.xmm
+		// f64 -> int: the result lives in a GPR though `operandType` is f64.
+		fpToSi gives RegClass.gpr
+	end 'k'
+end 'unaryResultClass'
+
+// The class a function's RETURN lands in. `void` is `gpr` because a void call still defines a
+// value — see `calleeResultClass`.
+function returnTypeResultClass(returnType StdReturnType) returns RegClass
+	return match returnType 'r'
+		void gives RegClass.gpr
+		value(inner) gives regClassForStdType(inner)
+	end 'r'
+end 'returnTypeResultClass'
+
+// Write `valueId`'s class into the column. A write past the end is an invariant break, not a case:
+// the column was sized by `scanFunctionValueCount` over the very ops this walks.
+function setValueClass(column ValueClassColumn, valueId ValueId, class RegClass)
+	try column.set(valueId, value: class) otherwise panic("setValueClass: v{valueId} is outside the {column.count()}-wide class column — the column is sized by scanFunctionValueCount over the same ops this walk reads, so the two have fallen out of step")
+end 'setValueClass'
+
 // ⚠ THE WHOLE SSE LOWERING IS SCALAR-DOUBLE, AND THIS IS WHERE IT SAYS SO. `movsd`, `addsd`,
 // `divsd`, `ucomisd` and an 8-byte `.rdata` island: every one of them is the `sd` (scalar-double)
 // form. An `f32` is FOUR bytes and needs the `ss` family throughout, so it is a real GAP and not a
@@ -269,20 +315,6 @@ function requireScalarDouble(t StdType, what String)
 		panic("{what}: {t.name} reached the SSE lowering, which is scalar-DOUBLE throughout (movsd/addsd/ucomisd + an 8-byte .rdata island) — an f32 needs the `ss` family and a 4-byte island, and would otherwise load 8 bytes out of a 4-byte constant. Maxon's `float` is f64, so nothing produces one.")
 	end 'notDouble'
 end 'requireScalarDouble'
-
-// The parity condition a materialized float equality folds in — the `setcc` that isolates the
-// UNORDERED answer so the other `setcc`'s aliasing can be corrected.
-//
-// `==` wants `setnp` (keep only the ORDERED answers, since `sete` is also true for a NaN); `!=`
-// wants `setp` (ADD the unordered answer, since `setne` is false for a NaN and IEEE says `!=` is
-// true there). See `materializeFloatEquality`.
-function parityCondForEquality(pred StdCmpPred) returns X64CondCode
-	return match pred 'p'
-		eq gives X64CondCode.noParity
-		ne gives X64CondCode.parity
-		lt to ge panic("parityCondForEquality: {pred.name} is an ORDERED float predicate — `ucomisd` sets CF on unordered so the `above` family is already NaN-correct, and there is no parity bit to fold")
-	end 'p'
-end 'parityCondForEquality'
 
 // The successor UNORDERED decides for — the target of the split's FIRST block `jp`.
 //
@@ -348,9 +380,14 @@ let FloatOrderedLabel = b"fordered"
 // Registering here (where the constant is first seen) and resolving there (where sections are laid
 // out) is exactly the split `leaRegGlobal` already uses for `.data`; the float path reuses it
 // rather than growing a second table with a second offset index.
-export function lowerStdToX64(stdModule StdModule, globalData GlobalDataTable) returns TargetModule
+// ⭐ IT RETURNS THE CLASS COLUMN WITH THE MODULE, because the two are one artifact: the Target tier
+// carries no types, so a `TargetModule` alone does not say which file any of its values lives in,
+// and the allocator cannot recover it (see `ValueClassColumn`). Handing them back together is what
+// makes it impossible to have one without the other.
+export function lowerStdToX64(stdModule StdModule, globalData GlobalDataTable) returns (TargetModule, ValueClassColumns)
 	var lowering = StdToX64Lowering.create(stdModule, globalData: globalData)
 	lowering.prepareSkeleton()
+	lowering.buildCalleeResultClasses()
 	// BY INDEX, never by iteration: `lowerFunction` MUTATES the function it lowers — the
 	// float-equality split appends to its `blockRefs` and bumps its `nextBlockId` — so no
 	// `srcFunc` borrowed out of `stdModule.functions` may be handed to it. This is the rule
@@ -359,7 +396,10 @@ export function lowerStdToX64(stdModule StdModule, globalData GlobalDataTable) r
 	for funcIdx in 0 upto stdModule.funcCount() 'eachFunc'
 		lowering.lowerFunction(funcIdx)
 	end 'eachFunc'
-	return lowering.targetModule
+
+	// AFTER the walk, not during it: the column is sized by `scanFunctionValueCount` over the
+	// TARGET ops, so every op has to exist before it can be measured.
+	return (lowering.targetModule, lowering.buildValueClasses())
 end 'lowerStdToX64'
 
 type StdToX64Lowering
@@ -409,10 +449,164 @@ type StdToX64Lowering
 	// binds it), and then it emits `cmp` + `setcc` + `jcc` — sound because `setcc` and `movzx`
 	// READ the flags rather than writing them.
 	var valuesReadFromRegisters as StdValueUseSet
+	// Callee name -> result class, for the value-class producer. Whole-module and built once — see
+	// CalleeResultClassMap.
+	var calleeResultClasses as CalleeResultClassMap
 
 	static function create(stdModule StdModule, globalData GlobalDataTable) returns StdToX64Lowering
-		return Self{stdModule: stdModule, globalData: globalData, targetModule: TargetModule.create(), cmpPreds: CmpPredMap.create(), fusedFloatCmps: StdValueUseSet.create(), orderedBlockIds: OrderedBlockIdMap.create(), valuesReadFromRegisters: StdValueUseSet.create()}
+		return Self{stdModule: stdModule, globalData: globalData, targetModule: TargetModule.create(), cmpPreds: CmpPredMap.create(), fusedFloatCmps: StdValueUseSet.create(), orderedBlockIds: OrderedBlockIdMap.create(), valuesReadFromRegisters: StdValueUseSet.create(), calleeResultClasses: CalleeResultClassMap.create()}
 	end 'create'
+
+	// ==========================================================================
+	// The value-class column — the producer
+	// ==========================================================================
+	//
+	// ⭐⭐ THIS IS THE ONLY PLACE IN THE COMPILER THAT ANSWERS "WHAT TYPE DOES THIS OP'S RESULT
+	// HAVE?", and it is here because it can be nowhere else: a value's register file is fixed by
+	// its Std TYPE, and this pass is the LAST that can see a type at all — the Target tier carries
+	// none (`TargetModule` has no type column; `TargetLiveness` never mentions `StdType`). See
+	// `ValueClassColumn` in TargetDialect for why recovering it downstream cannot work.
+	//
+	// EXHAUSTIVE over `StdOp`, with no bare `default`, so a new op that defines a value cannot be
+	// forgotten — it fails to compile here instead of defaulting a float into a GPR.
+	//
+	// ⚠ THE RESULT TYPE IS NOT `operandType`, AND THE EXCEPTIONS ARE THE WHOLE POINT:
+	//   • `cmp` produces an **i1**, never its operand type. A float compare's answer is a GPR bool.
+	//   • the CONVERSIONS INVERT: `siToFp`'s operandType is an INT and its result is an f64 (xmm);
+	//     `fpToSi`'s operandType is f64 and its result is an int (gpr). Reading `operandType` as
+	//     the result on those gives precisely the wrong file, silently.
+	//   • `globalAddr` produces an ADDRESS — a gpr — whatever the global's own type is.
+	//
+	// The column is dense by ValueId and FUNCTION-LOCAL, because ValueIds are (`IrFunction`'s
+	// `valueTags` is dense per function from a per-function counter). One column per function.
+	function buildValueClasses() returns ValueClassColumns
+		var columns = ValueClassColumns.create()
+		for funcIndex in 0 upto self.stdModule.funcCount() 'eachFunc'
+			columns.push(self.buildFunctionValueClasses(funcIndex))
+		end 'eachFunc'
+		return columns
+	end 'buildValueClasses'
+
+	// One function's column. Sized from `scanFunctionValueCount` — the SAME count the allocator
+	// derives, asked of the same (Target) module, so the column cannot come up short of the value
+	// space it must cover (`assertClassColumnCovers` is the gate that says so).
+	//
+	// It walks the STD ops, which is sound because this lowering mints NO fresh ValueIds: every
+	// Target virtual is a Std virtual, so one column covers both tiers. (The float-equality fold is
+	// what makes that true — it builds its halves in fixed registers precisely so it needs no new
+	// id; see `materializeFloatEquality`.)
+	//
+	// `gpr` is the FILL, not a default anyone reasoned about: every id the walk does not name is one
+	// no op defines, so nothing is ever coloured for it. The ids that matter are each written below.
+	function buildFunctionValueClasses(funcIndex FuncIndex) returns ValueClassColumn
+		let srcFunc = self.stdModule.getFunc(funcIndex)
+		var column = ValueClassColumn.create()
+		column.refill(scanFunctionValueCount(self.targetModule, func: srcFunc), value: RegClass.gpr)
+
+		for blockRef in srcFunc.blockRefs 'eachBlock'
+			// ⚠ SKIP THE TARGET-ONLY BLOCKS. By the time this runs, `srcFunc.blockRefs` also holds the
+			// `ordered` blocks the float-equality split minted — and those exist ONLY in
+			// `targetModule.blocks`, so looking one up in `stdModule.blocks` is out of range.
+			//
+			// Skipping them is not merely safe, it is CORRECT: an `ordered` block holds a `jcc` and a
+			// `jmp` and defines no value at all, so it contributes nothing to a column of value classes.
+			// `prepareSkeleton` made the two block arrays 1:1 and everything appended after is
+			// Target-only, which is exactly what this bound means.
+			if blockRef >= self.stdModule.blocks.count() 'targetOnlyBlock'
+				continue
+			end 'targetOnlyBlock'
+
+			// A PHI declares its own type, so its class needs no inference from its incoming values —
+			// which is what lets this stay a single forward walk with no propagation.
+			self.recordBlockArgClasses(blockRef, column: column)
+			self.recordBlockOpClasses(blockRef, column: column)
+		end 'eachBlock'
+
+		return column
+	end 'buildFunctionValueClasses'
+
+	function recordBlockArgClasses(blockRef BlockRef, column ValueClassColumn)
+		let block = try self.stdModule.blocks.get(blockRef) otherwise panic("recordBlockArgClasses: blockRef {blockRef} not in stdModule.blocks")
+		for arg in block.blockArgs 'eachArg'
+			setValueClass(column, valueId: arg.valueId, class: regClassForStdType(arg.argType))
+		end 'eachArg'
+	end 'recordBlockArgClasses'
+
+	function recordBlockOpClasses(blockRef BlockRef, column ValueClassColumn)
+		let block = try self.stdModule.blocks.get(blockRef) otherwise panic("recordBlockOpClasses: blockRef {blockRef} not in stdModule.blocks")
+		for opIdx in block.opRefs 'eachOp'
+			let op = try self.stdModule.ops.get(opIdx) otherwise panic("recordBlockOpClasses: opIdx {opIdx} not in stdModule.ops")
+			self.recordOpResultClass(op, column: column)
+		end 'eachOp'
+
+		if block.hasTerminatorOp() 'hasTerm'
+			// A terminator defines nothing today, but it goes through the same exhaustive match rather
+			// than being skipped — so an op that both terminates and defines would be a compile error
+			// here rather than a value with no class.
+			let term = try self.stdModule.ops.get(block.terminatorIndex()) otherwise panic("recordBlockOpClasses: terminatorIndex not in stdModule.ops")
+			self.recordOpResultClass(term, column: column)
+		end 'hasTerm'
+	end 'recordBlockOpClasses'
+
+	function recordOpResultClass(op StdOp, column ValueClassColumn)
+		match op 'result'
+			// The op's own type IS the result's — `lowerConst`'s comment has said so since M3.
+			const(resultId, _, valueType) then setValueClass(column, valueId: resultId, class: regClassForStdType(valueType))
+			// add/sub/mul/div all produce what they consume.
+			binOp(resultId, _, _, _, operandType) then setValueClass(column, valueId: resultId, class: regClassForStdType(operandType))
+			unaryOp(resultId, _, opcode, operandType) then setValueClass(column, valueId: resultId, class: unaryResultClass(opcode, operandType: operandType))
+			// ⚠ AN i1, NEVER THE OPERAND TYPE. `ucomisd`'s answer is a bool in a GPR.
+			cmp(resultId, _, _, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+			// The immediate forms are INTEGER by construction — no SSE op takes an immediate, so
+			// `foldConstOperands` cannot produce a float one (see `binOpImm` in StdDialect).
+			binOpImm(resultId, _, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+			cmpImm(resultId, _, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+			// The TRAPPING integer division; float division is `binOp(div)` above.
+			div(resultId, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+			mod(resultId, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+			param(resultId, _, paramType) then setValueClass(column, valueId: resultId, class: regClassForStdType(paramType))
+			call(resultId, callee, _) then setValueClass(column, valueId: resultId, class: self.calleeResultClass(callee))
+			// An ADDRESS is an integer, whatever the global holds.
+			globalAddr(resultId, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+			loadIndirect(resultId, _, _, valueType) then setValueClass(column, valueId: resultId, class: regClassForStdType(valueType))
+			// The ops that define NOTHING. Each is named individually rather than collapsed into a
+			// range, and that is not verbosity: `StdOp`'s declaration order is
+			// `… mod, condBranch, branch, ret, param, call, retVoid, globalAddr …`, so the tempting
+			// `ret to retVoid` SPANS `param` and `call` — two ops that very much do define a value, one
+			// of them the only float-capable one in the band. The compiler caught it (E2027), which is
+			// the band-append rule working; naming them keeps it caught forever.
+			condBranch to branch then break 'result'
+			ret then break 'result'
+			retVoid then break 'result'
+			storeIndirect then break 'result'
+		end 'result'
+	end 'recordOpResultClass'
+
+	// The class of a CALL's result — the callee's return type, looked up by name.
+	//
+	// ⚠ A VOID call still DEFINES a value (`lowerCall` moves R8 into it unconditionally, and the
+	// `void-call-result` specs bind it), so a miss on `void` is `gpr` and not an error: the value is
+	// a garbage integer nobody may read, which is exactly what R8 holds.
+	//
+	// It is a MAP and not a scan, and that is the whole reason this function exists: asking
+	// `stdModule.functions` by name per call site is Θ(calls × functions), the shape
+	// `sortBySizeDescendingStable` was rewritten to kill three files away.
+	function calleeResultClass(callee ByteArray) returns RegClass
+		return try self.calleeResultClasses.get(callee) otherwise panic("calleeResultClass: no Std function is named '{String.from(callee)}' — every callee reaching the lowering is one LowerMaxonToStd resolved against the merged module")
+	end 'calleeResultClass'
+
+	// Build the callee name → RESULT CLASS index, once per module.
+	//
+	// It stores the CLASS and not the `StdReturnType`, deliberately: `StdReturnType` is a
+	// payload-carrying UNION, so a `Map with (ByteArray, StdReturnType)` would heap-box one object
+	// per function (the trap `fuseIfDefines` measures). The class is a scalar enum, and it is the
+	// only thing any reader asks for.
+	function buildCalleeResultClasses()
+		self.calleeResultClasses = CalleeResultClassMap.create()
+		for func in self.stdModule.functions 'eachFunc'
+			self.calleeResultClasses.upsert(func.name, value: returnTypeResultClass(func.returnType))
+		end 'eachFunc'
+	end 'buildCalleeResultClasses'
 
 	// Whole-module setup: relocate every StdModule block 1:1 into `targetModule.blocks`
 	// (preserving the flat-block indices `IrFunction.blockRefs` references) and
@@ -1105,54 +1299,81 @@ type StdToX64Lowering
 
 	// MATERIALIZE a float `==`/`!=` — the one compare whose boolean a single `setcc` cannot write.
 	//
-	// `ucomisd` aliases UNORDERED with EQUAL in every bit but PF, so the answer is TWO conditions
-	// and the byte has to be folded from two `setcc`s:
+	// `ucomisd` aliases UNORDERED with EQUAL in every bit but PF, so the answer is TWO conditions,
+	// and this is the SECOND lowering of the unordered edge rather than a free consequence of the
+	// branch one: a compare whose result is a VALUE has no jump to hang a parity test on, so the
+	// bit must fold into the byte instead. The ORDERED predicates need none of it — they
+	// materialize with a single `seta`/`setae` on swapped operands, exactly like an integer's.
 	//
-	//     ==   sete  dest ; setnp scratch ; and dest, scratch      equal AND ordered
-	//     !=   setne dest ; setp  scratch ; or  dest, scratch      unequal OR unordered
+	// ⭐⭐ BOTH FORMS ARE BUILT FROM `!=`, AND `!=` IS AN `lea`, BECAUSE ITS TWO `setcc`s ARE
+	// MUTUALLY EXCLUSIVE. `!=` is `setne OR setp`, and unordered SETS ZF — so `setne` is 0 in
+	// exactly the case `setp` is 1, and the two can never both be 1:
 	//
-	// This is the SECOND lowering of the unordered edge, not a free consequence of the branch
-	// one: a compare whose result is a VALUE has no jump to hang a parity test on, so the bit
-	// folds into the byte instead. The ORDERED predicates need none of it — they materialize with
-	// a single `seta`/`setae` on swapped operands, exactly like an integer's.
+	//     ordered a==b   ZF=1 PF=0   ->  0 + 0 = 0   != is FALSE
+	//     ordered a<b    ZF=0 PF=0   ->  1 + 0 = 1   != is TRUE
+	//     ordered a>b    ZF=0 PF=0   ->  1 + 0 = 1   != is TRUE
+	//     unordered      ZF=1 PF=1   ->  0 + 1 = 1   != is TRUE   (IEEE: nan != nan)
 	//
-	// ⚠⚠ THE FOLD RUNS ENTIRELY IN PHYSICAL REGISTERS, AND THAT IS A HARD SSA REQUIREMENT, not a
-	// register-pressure preference. The obvious spelling — `setcc dest` then `and dest, scratch` —
-	// DEFINES `dest` TWICE, because the two-address `and` is a REUSE-of-`lhs` def and `lhs` would
-	// BE `dest`. Std ValueIds are SSA and the colorer relies on single-def (the rule `xchgRegReg`
-	// is exempt from only because it is spliced in AFTER coloring); a second def would be
-	// discovered as a wrong answer, not a compile error. No other lowering in this file writes a
-	// vreg twice, and this one must not either.
+	// Their OR is therefore their SUM, and a sum of two registers is `lea dest, [ne + p]` — a
+	// THREE-OPERAND op whose destination is INDEPENDENT of its inputs, which writes no flags and
+	// needs no copy. `==` is its complement, spelled as one: truth-test the `!=` value against
+	// zero and `sete`.
 	//
-	// So the two `setcc`s and the fold land in FIXED registers, and exactly ONE `mov` publishes
-	// the result into its virtual — which is `lowerDivMod`'s shape, for `lowerDivMod`'s reason:
-	// the intermediate values are not SSA values at all, so they cannot violate SSA. The physical
-	// defs also carry their own safety: liveness forbids both scratches to every value live ACROSS
-	// them (the mechanism `lowerShiftCl` documents for RCX), so nothing the fold clobbers can be
-	// something a later op still needs.
+	// ⚠⚠ THE `lea` IS NOT A STYLE CHOICE — IT IS THE ONLY LEGAL SHAPE, and the two constraints
+	// that force it are worth naming because each rejects an obvious alternative:
 	//
-	// Both `setcc`s READ the flags and write none, so the `ucomisd`'s answer survives to the
-	// second one. The `and`/`or` DOES write flags — which is exactly why a float equality that is
-	// also branched on is un-fused first (see `settleFloatEqualityCondition`).
+	//   1. `setcc dest` + `and dest, scratch` DEFINES `dest` TWICE. The two-address `and` is a
+	//      REUSE-of-`lhs` def and `lhs` would BE `dest`; Std ValueIds are SSA and the colorer
+	//      relies on single-def (`xchgRegReg` is exempt only because it is spliced in AFTER
+	//      coloring). No other lowering in this file writes a vreg twice.
+	//   2. Moving the fold into FIXED registers to dodge (1) trades it for the opposite bug:
+	//      `operandReuseInputValueId` PANICS on a reuse op with a physical input — *"no reuse op
+	//      carries a physical input at coloring time"* (TargetOperands.maxon). A two-address op is
+	//      simply not available here in either spelling.
+	//
+	// And the lowering cannot mint a fresh virtual to escape between them: the parser owns the
+	// value space (`IrFunction.valueTags` is dense by ValueId) and `growValueSpace` belongs to the
+	// splitter, which runs after liveness. `lea`'s independent destination is what threads the
+	// needle — no reuse, no second def, no new id.
+	//
+	// The two `setcc`s READ the flags and write none, so the `ucomisd`'s answer survives to the
+	// second. `lea` writes none either. The `==` form's `cmp` DOES write flags — which is why a
+	// float equality that is also branched on is un-fused first (`settleFloatEqualityCondition`).
 	function materializeFloatEquality(resultId ValueId, pred StdCmpPred, dstBlock IrBlock)
-		let ordered = X64VReg.physical(FloatEqualityOrderedReg)
-		let parity = X64VReg.physical(FloatEqualityParityReg)
-		self.targetModule.appendOp(dstBlock, op: TargetOp.setccReg(ordered, cond: floatCondCodeForPred(pred)))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.setccReg(parity, cond: parityCondForEquality(pred)))
-		self.appendParityCombine(ordered, scratch: parity, pred: pred, dstBlock: dstBlock)
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(X64VReg.virtual(resultId), srcReg: ordered))
+		match pred 'p'
+			// `!=` IS the inequality value — it lands straight in its own virtual, one def, done.
+			ne then self.appendFloatInequality(X64VReg.virtual(resultId), dstBlock: dstBlock)
+			eq then self.appendFloatEqualityAsNotInequality(resultId, dstBlock: dstBlock)
+			lt to ge then panic("materializeFloatEquality: {pred.name} is an ORDERED float predicate — it materializes with a single `seta`/`setae` on swapped operands and has no parity bit to fold")
+		end 'p'
 	end 'materializeFloatEquality'
 
-	// `==` is `equal AND ordered`; `!=` is `unequal OR unordered`. Both operands are in the 0/1
-	// domain `setcc` produces, so the WORD `and`/`or` is also the logical one — the distinction
-	// `LogicalNotMask` documents does not bite here.
-	function appendParityCombine(dest X64VReg, scratch X64VReg, pred StdCmpPred, dstBlock IrBlock)
-		match pred 'p'
-			eq then self.targetModule.appendOp(dstBlock, op: TargetOp.andRegReg(dest, lhs: dest, rhs: scratch))
-			ne then self.targetModule.appendOp(dstBlock, op: TargetOp.orRegReg(dest, lhs: dest, rhs: scratch))
-			lt to ge then panic("appendParityCombine: {pred.name} is an ORDERED float predicate — it materializes with a single `seta`/`setae` on swapped operands and has no parity bit to fold")
-		end 'p'
-	end 'appendParityCombine'
+	// IEEE `a != b` into `dest`: `setne` + `setp` summed with an `lea`. See the header for why the
+	// sum IS the OR, and why `lea` is the only shape the operand model permits here.
+	//
+	// The two `setcc`s write FIXED registers, which is safe by the mechanism `lowerShiftCl`
+	// documents: a physical def has liveness forbid that register to every value live ACROSS it, so
+	// the fold cannot destroy anything a later op still needs. `dest` itself is defined AT the
+	// `lea`, so it is not live across either — it may legally be coloured into one of them, and
+	// `lea dest, [rcx + rdx]` reads both inputs before writing its destination.
+	function appendFloatInequality(dest X64VReg, dstBlock IrBlock)
+		let unequal = X64VReg.physical(FloatInequalityUnequalReg)
+		let unordered = X64VReg.physical(FloatInequalityUnorderedReg)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.setccReg(unequal, cond: X64CondCode.notEqual))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.setccReg(unordered, cond: X64CondCode.parity))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.leaRegRegReg(dest, base: unequal, index: unordered))
+	end 'appendFloatInequality'
+
+	// IEEE `a == b` = NOT `a != b`. The inequality is built in a fixed register and then
+	// truth-tested against zero — the same `cmp reg, 0` idiom every non-fused boolean condition
+	// already uses (`BoolFalseImm`), and the reason the complement needs no `xor`: `xorRegImm32` is
+	// two-address, so it would want a reuse input, which is the shape the header rules out.
+	function appendFloatEqualityAsNotInequality(resultId ValueId, dstBlock IrBlock)
+		let inequality = X64VReg.physical(FloatInequalityUnequalReg)
+		self.appendFloatInequality(inequality, dstBlock: dstBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.cmpRegImm32(inequality, imm: BoolFalseImm))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.setccReg(X64VReg.virtual(resultId), cond: X64CondCode.equal))
+	end 'appendFloatEqualityAsNotInequality'
 
 	// Lower a Std `condBranch` to `jcc <then>` + `jmp <else>`. The `jcc` is a body op and the
 	// `jmp` is the block's terminator (a two-instruction two-way branch cannot fit one

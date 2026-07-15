@@ -1,0 +1,68 @@
+// Test: float-cmp-materialized
+var zeroA = 0.0
+var zeroB = 0.0
+
+function main() returns ExitCode
+	let nan = zeroA / zeroB
+	let a = nan == nan
+	let b = nan != nan
+	var r = 0
+	if a 'isEq'
+		r = r + 1
+	end 'isEq'
+	if b 'isNe'
+		r = r + 2
+	end 'isNe'
+	return r
+end 'main'
+---
+ExitCode: 2
+---
+data {
+  __data_zeroA@0 = f64 0
+  __data_zeroB@8 = f64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.leaRegGlobal rax, __data_zeroA
+    x64.loadRegBaseDisp.word64 xmm0, [rax + 0]
+    x64.leaRegGlobal rax, __data_zeroB
+    x64.loadRegBaseDisp.word64 xmm1, [rax + 0]
+    x64.divsdRegReg xmm0, xmm0, xmm1
+    x64.ucomisdRegReg xmm0, xmm0
+    x64.setccReg notEqual, rcx
+    x64.setccReg parity, rdx
+    x64.leaRegRegReg rcx, rcx, rdx
+    x64.cmpRegImm32 rcx, 0
+    x64.setccReg equal, rax
+    x64.ucomisdRegReg xmm0, xmm0
+    x64.setccReg notEqual, rcx
+    x64.setccReg parity, rdx
+    x64.leaRegRegReg rcx, rcx, rdx
+    x64.movRegImm32 rdx, 0
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, isEq
+    x64.jmp critsplit
+  isEq:
+    x64.leaRegRegImm32 rax, rdx, 1
+    x64.jmp ifcont
+  critsplit:
+    x64.movRegReg rax, rdx
+    x64.jmp ifcont
+  ifcont:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, isNe
+    x64.jmp critsplit
+  isNe:
+    x64.leaRegRegImm32 r8, rax, 2
+    x64.jmp ifcont
+  critsplit:
+    x64.movRegReg r8, rax
+    x64.jmp ifcont
+  ifcont:
+    x64.popReg rbp
+    x64.ret
+}

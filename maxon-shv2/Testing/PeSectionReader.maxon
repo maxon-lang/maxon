@@ -23,8 +23,10 @@ export let DataSectionName = ".data"
 
 // "MZ" — the DOS header's magic, at file offset 0.
 let DosHeaderMagic = 0x5A4D
+
 // Where the DOS header stores the file offset of the PE signature.
 let PeSignatureOffsetField = 0x3C
+
 // "PE\0\0".
 let PeSignature = 0x00004550
 
@@ -70,7 +72,7 @@ export union TypedValueError implements Error
 	export function displayReason() returns String
 		return match self 'k'
 			missingValue(line) gives "line '{line}' is not `<type> <value>`"
-			unknownType(typeName) gives "unknown type '{typeName}' (expected i8/i16/i32/i64)"
+			unknownType(typeName) gives "unknown type '{typeName}' (expected i8/i16/i32/i64/f64)"
 			badNumber(typeName, text) gives "'{text}' is not a valid {typeName}"
 		end 'k'
 	end 'displayReason'
@@ -139,11 +141,15 @@ end 'sectionNameAt'
 //
 // Blank lines are skipped, exactly as the reference's `StringSplitOptions.RemoveEmptyEntries` does.
 //
-// It covers `i8`/`i16`/`i32`/`i64` — the reference additionally parses `f32`/`f64`, `u16` and
-// `i64[]`, and those are DELIBERATELY absent rather than stubbed: a float global needs P1.0d.4 and
-// an array global P1.7, so a spec using one is a spec shv2 cannot compile anyway. An unknown type
-// THROWS (naming it), which is what keeps this honest — the failure of the block this gate replaces
-// was precisely that an unhandled thing passed silently.
+// It covers `i8`/`i16`/`i32`/`i64` and `f64` — the reference additionally parses `f32`, `u16` and
+// `i64[]`, and those are DELIBERATELY absent rather than stubbed: an array global needs P1.7 and
+// Maxon's `float` is f64 so nothing produces an f32, which makes a spec using either a spec shv2
+// cannot compile anyway. An unknown type THROWS (naming it), which is what keeps this honest — the
+// failure of the block this gate replaces was precisely that an unhandled thing passed silently.
+//
+// ⭐ `f64` ARRIVED WITH P1.0d.4, WHICH IS WHAT THIS COMMENT SAID IT WAS WAITING FOR. It was shelved
+// because a float global could not be compiled at all; it can now, and the two `data-section-f64-*`
+// cases that were parked behind it are the gate on the eight bytes `3.14` actually lays down.
 export function parseTypedSectionValues(block String) returns ByteArray throws TypedValueError
 	var out = ByteArray.create()
 	for rawLine in block.split("\n") 'eachLine'
@@ -157,12 +163,33 @@ export function parseTypedSectionValues(block String) returns ByteArray throws T
 		let valueStart = try line.indexAfter(sepIdx) otherwise throw TypedValueError.missingValue(line)
 		let valueText = line.slice(valueStart, endIndex: line.endIndex()).trim()
 
-		let value = try int.fromString(valueText) otherwise throw TypedValueError.badNumber(typeName, text: valueText)
-		appendLittleEndian(out, value: value, byteCount: try typedValueByteCount(typeName))
+		// The WIDTH first, so an unknown type is reported as one rather than as whatever its value
+		// failed to parse as.
+		let byteCount = try typedValueByteCount(typeName)
+		appendLittleEndian(out, value: try parseTypedValueBits(typeName, text: valueText), byteCount: byteCount)
 	end 'eachLine'
 
 	return out
 end 'parseTypedSectionValues'
+
+// The type name whose value is a FLOAT literal rather than an integer one. Named because two
+// places ask it — the width and the parse — and they must agree.
+let F64TypeName = "f64"
+
+// The BITS of one line's value, little-endian-ready.
+//
+// ⭐ AN `f64` GOES THROUGH THE COMPILER'S OWN LITERAL PARSER, and that is the whole point of this
+// gate rather than an implementation detail of it: a spec writes `f64 3.14` in the SAME spelling
+// the source writes `3.14`, so the bytes this expects have to be the bytes that literal MEANS.
+// Re-deriving them here — a second opinion about what `3.14` is, rounding and all — would let the
+// gate and the compiler agree on a wrong answer, or disagree on a right one. `int.fromString`
+// cannot read it at all, which is the reported reason these two cases sat disabled.
+function parseTypedValueBits(typeName String, text String) returns ParsedInt throws TypedValueError
+	if typeName == F64TypeName 'float'
+		return try parseFloatBits(text.toByteArray()) otherwise throw TypedValueError.badNumber(typeName, text: text)
+	end 'float'
+	return try int.fromString(text) otherwise throw TypedValueError.badNumber(typeName, text: text)
+end 'parseTypedValueBits'
 
 // The byte width of a `RequiredData` type name.
 function typedValueByteCount(typeName String) returns ByteCount throws TypedValueError
@@ -178,6 +205,9 @@ function typedValueByteCount(typeName String) returns ByteCount throws TypedValu
 	if typeName == "i64" 'i64'
 		return 8
 	end 'i64'
+	if typeName == F64TypeName 'f64'
+		return 8
+	end 'f64'
 
 	throw TypedValueError.unknownType(typeName)
 end 'typedValueByteCount'

@@ -1,0 +1,32 @@
+// Test: gt-else-edge-phi
+function main() returns ExitCode
+	var r = 7
+	let x = 3.5
+	let y = 9.5
+	if x > y 'check'
+		r = 1
+	end 'check'
+	return r
+end 'main'
+---
+ExitCode: 7
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 7
+    x64.movsdRegRip xmm0, [rip + __fconst_0]
+    x64.movsdRegRip xmm1, [rip + __fconst_1]
+    x64.ucomisdRegReg xmm0, xmm1
+    x64.jcc above, check
+    x64.jmp critsplit
+  check:
+    x64.movRegImm32 r8, 1
+    x64.jmp ifcont
+  critsplit:
+    x64.jmp ifcont
+  ifcont:
+    x64.popReg rbp
+    x64.ret
+}
