@@ -60,9 +60,10 @@ export let SlabCursorLabel = b"__slab_cursor"
 export let SlabEndLabel = b"__slab_end"
 export let MmAllocCountLabel = b"__mm_alloc_count"
 
+// No `MmIncrefName`: there is no `__mm_incref` until P1.4 gives it a caller — see `buildMmDecref`'s
+// neighbour note for why it cannot be written correctly before that ruling exists.
 export let SlabAllocName = b"__slab_alloc"
 export let MmAllocName = b"__mm_alloc"
-export let MmIncrefName = b"__mm_incref"
 export let MmDecrefName = b"__mm_decref"
 export let MmFreeName = b"__mm_free"
 export let MmLeakCheckName = b"__mm_leak_check"
@@ -173,7 +174,6 @@ end 'ValueMinter'
 export function installMmRuntime(module StdModule)
 	buildSlabAlloc(module)
 	buildMmAlloc(module)
-	buildMmIncref(module)
 	buildMmDecref(module)
 	buildMmFree(module)
 	buildMmLeakCheck(module)
@@ -328,36 +328,25 @@ function buildMmAlloc(module StdModule)
 	module.functions.push(func)
 end 'buildMmAlloc'
 
-// `__mm_incref(ptr)` — one more owner.
+// ⛔ **THERE IS NO `__mm_incref`, AND ITS ABSENCE IS THE POINT — IT COMES BACK AT P1.4.**
 //
-// ⚠⚠ NON-ATOMIC, DELIBERATELY, AND THIS COMMENT IS THE DECISION RATHER THAN ITS ABSENCE. The
-// bootstrap's refcount is `LOCK INC` because it must be; shv2 is SINGLE-THREADED until **R3 @
-// P1.5** brings green threads, and a plain `add` is the whole cost until then. **THE DAY GREEN
-// THREADS LAND, THIS AND `__mm_decref` MUST BECOME `LOCK`-PREFIXED** — a shared box refcounted by
-// two threads with a plain read-modify-write loses updates and frees a live object, which is a
-// use-after-free that no test reproduces reliably. It is written here so that day is reached by
-// READING rather than by a race. (PLAN.md's R1 box exists to stop inertia making this call quietly;
-// this is the call, made out loud.)
-function buildMmIncref(module StdModule)
-	var func = IrFunction.createFromStd(MmIncrefName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
-	var ids = ValueMinter.create(1)
-
-	var entry = module.addBlock(func, label: b"entry")
-	emitParams(module, block: entry, count: 1)
-	let ptr = 0 as ValueId
-
-	let header = emitHeaderBase(module, block: entry, ptr: ptr, ids: ids)
-	let rc = ids.mint()
-	module.appendOp(entry, op: StdOp.loadIndirect(rc, addrId: header, offset: HeaderRefcountOffset, valueType: StdType.i64))
-	let oneConst = ids.mint()
-	module.appendOp(entry, op: StdOp.const(oneConst, value: 1, valueType: StdType.i64))
-	let raised = ids.mint()
-	module.appendOp(entry, op: StdOp.binOp(raised, lhs: rc, rhs: oneConst, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	module.appendOp(entry, op: StdOp.storeIndirect(header, offset: HeaderRefcountOffset, valueId: raised, valueType: StdType.i64))
-	module.setTerminator(entry, op: StdOp.retVoid)
-
-	module.functions.push(func)
-end 'buildMmIncref'
+// It was built here and NOTHING CALLED IT. Not one `callq __mm_incref` in any emitted binary: 31
+// bytes of `.text` in every heap-using program, never executed, never proven right. That is this
+// rung's own founding lesson worn as a mistake — the `mintPhi` shape the contract spent a
+// paragraph warning against and then committed anyway, which is why `funcAddr`/`callIndirect` are
+// deferred to P1.2 for the identical reason: **vocabulary must not ship ahead of its consumer.**
+//
+// ⭐ ITS CONSUMER IS A SECOND OWNER, AND NOTHING AT THIS RUNG CAN MAKE ONE. A box gets a second
+// owner only by being ALIASED (`q = p`) or by CROSSING A CALL BOUNDARY — and which of those
+// increfs, the caller or the callee, IS shv2's ownership calling convention, **deferred to P1.4 by
+// user ruling** (the two reference compilers disagree: the C# bootstrap BORROWS + retains-on-store,
+// v1 CONSUMES). So incref cannot be written correctly here even in principle: the rule that would
+// say WHERE to call it does not exist yet. It returns at P1.4 with that ruling, a call site, and a
+// test that executes it.
+//
+// ⚠⚠ **WHEN IT RETURNS, IT IS NON-ATOMIC AND THAT IS A DECISION, NOT AN OVERSIGHT** — the same one
+// `__mm_decref` below already carries, which is why the note lives there now rather than leaving
+// with this function. See `buildMmDecref`.
 
 // `__mm_decref(ptr)` — one fewer owner; free at the last.
 //
@@ -371,6 +360,21 @@ end 'buildMmIncref'
 // owners, which is an OWNERSHIP bug, not a runtime condition — and at this rung the parser is the
 // only thing that emits a drop. The bootstrap panics here ("double-free"); shv2 gets the same
 // signal for free from the leak counter going negative, which the exit check reads as nonzero.
+//
+// ⚠⚠ **NON-ATOMIC, DELIBERATELY, AND THIS COMMENT IS THE DECISION RATHER THAN ITS ABSENCE.** The
+// bootstrap's refcount is `LOCK`-prefixed because it must be; shv2 is SINGLE-THREADED until **R3 @
+// P1.5** brings green threads, and a plain `sub` is the whole cost until then. **THE DAY GREEN
+// THREADS LAND, THIS — AND THE `__mm_incref` THAT RETURNS AT P1.4 — MUST BECOME `LOCK`-PREFIXED**:
+// a shared box refcounted by two threads with a plain read-modify-write loses updates and frees a
+// live object, which is a use-after-free that no test reproduces reliably. It is written here so
+// that day is reached by READING rather than by a race. (PLAN.md's R1 box exists to stop inertia
+// making this call quietly; this is the call, made out loud.)
+//
+// The note lives on THIS function because this is where the surviving refcount read-modify-write
+// is — it arrived with `__mm_incref` and had to outlive it. `__mm_alloc` and `__mm_free` do the
+// same unlocked RMW on `__mm_alloc_count`, and they become `LOCK`-prefixed on the same day for the
+// same reason: a counter that loses an update reports a leak that did not happen, or hides one
+// that did.
 function buildMmDecref(module StdModule)
 	var func = IrFunction.createFromStd(MmDecrefName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
