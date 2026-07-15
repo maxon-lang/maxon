@@ -636,13 +636,14 @@ function callChainSource(length KnobSize) returns String
 end 'callChainSource'
 
 // The `pressuredLoops` knob: ONE function, N loops, each holding PressuredValuesPerLoop
-// accumulators live across a call to `scaleOpaque`.
+// accumulators live across a call to `scaleOpaque`. The splitter must spill the accumulators that do
+// not fit the five callee-saved registers, so this is the knob that exercises the splitter hardest.
 //
-// This is the knob that is KNOWN SUPERLINEAR. The splitter must spill the accumulators that do not
-// fit the five callee-saved registers, and its driver recomputes liveness from scratch after every
-// split — so its cost is O(function x splits) and it overtakes everything else as the ladder climbs.
-// That cost lands in exactly two sub-phases (`splitting` and `liveness`), and they are the only two
-// rows of the per-phase table whose growth sits above x2.00 while every other row sits on it.
+// ⚠ IT IS LINEAR NOW — see `PressuredLoopsBase`, which carries the full history. It USED to be the
+// superlinear knob, because the splitter's driver recomputed liveness from scratch after every split
+// (O(function × splits)); `49b160ce2` made that driver incremental and `regalloc:splitting` /
+// `regalloc:liveness` both read ~x2.0 since. Do not restore a "KNOWN SUPERLINEAR" claim here without
+// measuring it: that claim outlived its bug twice already (once here, once at the parser).
 //
 // It does NOT trip E5001 — see PressuredValuesPerLoop.
 function pressuredLoopsSource(loopCount KnobSize) returns String
