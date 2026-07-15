@@ -222,6 +222,19 @@ public static class LiteralCoverageAnalysisPass {
           // The stored value flows into the variable.
           Union(ValueNode(a.Value.Id), VarNode(f.Name, a.VarName));
           break;
+
+        case MaxonGlobalStoreOp gs:
+          // A value stored into a MUTABLE GLOBAL escapes this per-function analysis: another
+          // function can mutate the global in place (`g.append(...)`), which the local var graph
+          // cannot see. Treat it as mutated so its literal is never made a shared immortal record
+          // (which would leak the COW buffer and corrupt other occurrences of the literal). A `let`
+          // global is immutable, so its initializer stays eligible. Mirrors the IsMutable guard on
+          // constant array literals.
+          if (_module.GlobalVarInfos.TryGetValue(gs.GlobalName, out var gvi) && gvi.Mutable) {
+            ctx.IntrinsicSinks.Add(ValueNode(gs.Value.Id));
+            ctx.IntrinsicSinkValueIds.Add(gs.Value.Id);
+          }
+          break;
         case MaxonFieldAccessOp fa when fa.Result != null:
           if (fa.FieldName == "managed") {
             // self.managed IS the record (post envelope-collapse).

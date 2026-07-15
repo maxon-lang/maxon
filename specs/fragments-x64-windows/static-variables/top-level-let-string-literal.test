@@ -1,0 +1,28 @@
+// Test: top-level-let-string-literal
+let name = "Ada"
+
+function main() returns ExitCode
+	print(name)
+	return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+Ada
+```
+---
+// CompiledIR
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rax, qword [rip+name]
+    x64.mov [rbp-8], rax
+    x64.mov rcx, [rbp-8]
+    x64.call stdlib.print
+    x64.xor eax, eax
+    x64.epilogue
+    x64.ret
+  }
+}
+---

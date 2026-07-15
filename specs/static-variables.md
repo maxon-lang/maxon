@@ -426,6 +426,66 @@ end 'main'
 6
 ```
 
+<!-- test: top-level-var-string-literal -->
+A top-level `var` string is valid and reassignable — it materializes once at startup, like an
+array-literal global.
+```maxon
+var greeting = "hello"
+
+function main() returns ExitCode
+	print("{greeting} ")
+	greeting = "world"
+	print(greeting)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+hello world
+```
+
+<!-- test: top-level-var-string-mutate-cross-function -->
+A `var` string global mutated in place across a function boundary must NOT be shared as an
+immortal static record: it mutates correctly and frees cleanly (no leaked copy-on-write buffer).
+```maxon
+var msg = "hi"
+
+function bump()
+	msg.append("!")
+end 'bump'
+
+function main() returns ExitCode
+	bump()
+	bump()
+	print(msg)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+hi!!
+```
+
+<!-- test: top-level-let-string-literal -->
+```maxon
+let name = "Ada"
+
+function main() returns ExitCode
+	print(name)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+Ada
+```
+
 <!-- test: data-section-bool-1byte -->
 A single bool global occupies 1 byte in the .data section.
 

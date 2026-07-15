@@ -1863,11 +1863,21 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// </summary>
   private bool IsComplexInitializer(int exprStart) {
     if (_tokens[exprStart].Type == TokenType.LeftBracket) return true;
-    // A byte string literal builds a heap ByteArray, so it has no representation as a
-    // compile-time constant attribute — it is materialized once at startup like an array
-    // or map literal global, and every reference then loads the global instead of
-    // re-allocating the array.
+    // A byte string literal builds a heap ByteArray, and a string literal builds a heap
+    // String, so neither has a representation as a compile-time constant attribute — each is
+    // materialized once at startup like an array or map literal global, and every reference
+    // then loads the global instead of re-allocating. (Routing string literals here is also
+    // what makes a top-level `var s = "..."` valid: the scalar-only const-fold path below has
+    // no String case, so a simple string var otherwise failed with E2004.)
     if (_tokens[exprStart].Type == TokenType.ByteStringLiteral) return true;
+    // Only a BARE string literal (no trailing `.method()` or `[index]`) — a chain like
+    // `"lit".toByteArray()` has a different result type (ByteArray, Character, ...) that the
+    // deferred type-inference cannot read from the leading string token, so those stay on the
+    // const-fold path (which rejects a non-constant global initializer, as before).
+    if (_tokens[exprStart].Type == TokenType.StringLiteral) {
+      var after = exprStart + 1 < _tokens.Count ? _tokens[exprStart + 1].Type : TokenType.Eof;
+      if (after != TokenType.Dot && after != TokenType.LeftBracket) return true;
+    }
     if (_tokens[exprStart].Type == TokenType.Identifier
         && exprStart + 1 < _tokens.Count
         && _tokens[exprStart + 1].Type == TokenType.LeftBrace) {
@@ -1950,6 +1960,10 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       return InferArrayTypeAlias(deferred.TokenStart);
     if (_tokens[deferred.TokenStart].Type == TokenType.ByteStringLiteral)
       return FindByteArrayTypeAlias(_tokens[deferred.TokenStart]);
+    // A string literal initializer (`let s = "..."` / `var s = "..."`) is a String — the type
+    // that implements BuiltinStringLiteral (String, barring an override).
+    if (_tokens[deferred.TokenStart].Type == TokenType.StringLiteral)
+      return FindTypeImplementingInterface("BuiltinStringLiteral") ?? "String";
     var startToken = _tokens[deferred.TokenStart];
     throw new CompileError(ErrorCode.ParserExpectedExpression,
       $"Cannot infer type of global initializer from '{startToken.Type}' token",
