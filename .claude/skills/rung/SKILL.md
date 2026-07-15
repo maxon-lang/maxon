@@ -76,8 +76,9 @@ Every brief MUST carry:
 - **(c) the traps** for that area;
 - **(d) the `/specs` files to port as its acceptance tests** (on demand — the corpus is **not**
   bulk-ported);
-- **(e) reproduced evidence** for every bug it is asked to fix. Never hand an agent a symptom you have
-  not seen yourself.
+- **(e) reproduced evidence** for every bug it is asked to fix, **captured as a failing spec wherever
+  one can be** — hand the agent the RED, so its contract is "make this spec green," not "fix, then stash
+  to prove you fixed it." Never hand an agent a symptom you have not seen yourself.
 
 ## 5. Optimize — `maxon-rung-optimizer`
 

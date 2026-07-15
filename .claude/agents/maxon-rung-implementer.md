@@ -45,6 +45,27 @@ working implementation is not cheating, it is the plan.
 - Stay inside your exclusive file list. If you believe you must touch a file outside it, **STOP and
   report why** rather than doing it.
 
+## Reproduce first — a red spec, THEN the fix. Do NOT stash to prove a fix.
+
+The verification you owe for a bug fix is *red-before-green*, and you get it for **one** build, not three:
+
+1. **Write / port / enable the spec that captures the bug FIRST**, and run it against the compiler **as
+   it stands, before you touch a line of code.** A spec is **data — no rebuild** — so **watching it fail
+   (RED) is free.** If it does not fail, you have not captured the bug: fix the spec, not the compiler.
+2. **Then make the fix, rebuild ONCE, and run the same spec.** It passes (GREEN).
+
+Red-before-your-change plus green-after-your-change is *exactly* the proof that your change — and nothing
+else — is what fixed it. That is the same thing the old stash dance proved, at a third of the builds.
+
+⚠ **DO NOT** finish a fix and then stash it, rebuild, run a test you expect to fail, unstash, rebuild
+again, and re-run. That is **two extra full builds** to re-derive a red you could have had for free by
+writing the spec first. Once you hold a red spec, you are **done the instant it goes green** — there is
+nothing left to confirm.
+
+The one half you must not skip: the RED run happens against the **unchanged** compiler, **before** you
+edit. A spec that only ever ran green proves nothing — it might pass for a reason unrelated to your
+change. That single run is the whole guarantee.
+
 ## Driving the compilers (by hand — the `maxon-dev` MCP tools point at the MAIN tree, not your worktree)
 
 From your worktree root. `bin/` is gitignored, so it is copied in for you.
