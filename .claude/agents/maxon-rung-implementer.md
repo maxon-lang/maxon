@@ -158,9 +158,18 @@ This has produced a false green in this project more than once.
 
 ## Spec tests are ported ON DEMAND, from `/specs`
 
-The corpus is **not** bulk-ported. **Your rung copies in exactly the `/specs` files it needs**, and they
-are the acceptance test — a spec authored fresh tests what its author remembered; a ported one tests
-what the language actually promises.
+**Your brief carries a SPEC PORT LIST** — the exact `/specs` files to copy into `specs-shv2/`, and which
+cases you must unlock. **Execute that list; do not substitute your own.** The corpus is **not**
+bulk-ported, and these specs are your acceptance test — a spec authored fresh tests what its author
+remembered, while a ported one tests what the language actually promises. *(A "finished" scalar core with
+126 self-authored tests scored **48 of 2,746** against the real corpus. Not one of the 126 had ever used
+a parenthesis.)*
+
+**They are also your RED.** They fail against the tree as you receive it — run them and see it — and the
+rung is done when they go green.
+
+**If the list is wrong** — a file that does not exist, a case you cannot unlock, a case you *can* unlock
+that it left disabled — **STOP and report it.** Do not quietly widen or narrow your own coverage.
 
 - Copy **BYTE-IDENTICAL**. The **only** sanctioned edit is the marker flip.
 - A case your rung does not unlock: `<!-- test: N -->` → `<!-- disabled-test: N -->`, with **the rung

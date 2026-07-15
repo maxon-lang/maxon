@@ -81,13 +81,29 @@ The plan must name, per layer:
   `FileParseArtifact` staging. **A port that reintroduces one of these is a regression, not a port.**
 - **the new IR ops needed** → these ARE the contract (step 3).
 - **the exclusive file list per agent** → steps 4–5. One file, one owner.
-- **the `/specs` files to port as acceptance tests** → 5(d).
-- **the RED baseline** — which specs fail today, and how → 5(e).
+- **the RED baseline for every BUG the rung fixes** — reproduced by you, captured as a failing spec → 5(e).
 
-**A rung may be too big for one wave, and the survey is what tells you.** If it is, **SLICE it and say
-so**: land the cheap, high-unlock, low-risk part first (P1.0d's front-end slice unlocked 1080 corpus
-cases with no new IR ops and no codegen), and keep the deep part (a new register bank for floats) as its
-own slice. **Each slice runs the full loop below.**
+### ⭐ The SPEC PORT LIST — name the `/specs` files, and what each one unlocks
+
+**The plan MUST list the exact `/specs` files this rung ports into `specs-shv2/`**, and per file, **which
+cases the rung UNLOCKS versus which stay `disabled-test:`, and on which later rung.** That list is the
+rung's acceptance criteria *and* its deliverable (step 11).
+
+**It is the COORDINATOR's call, not the agent's.** An agent left to choose its own coverage tests what it
+remembered — which is exactly how a "finished" scalar core scored **48 of 2,746** (see the closing
+section). Survey `/specs` yourself and hand the list down.
+
+- **Port REAL specs, never invented ones.** The corpus is **not** bulk-ported: the rung copies exactly the
+  files it needs, **byte-identical**, and the agent's only sanctioned edit is the marker flip → 5(d).
+- **The list must go RED before the wave.** Run the candidates against today's compiler and watch them
+  fail — that IS the rung's red baseline, and **the rung is DONE when they go green.**
+- **Never plan to disable a case the rung should pass.** For each one that stays disabled, name the
+  **missing mechanism** and the rung that supplies it.
+
+**A rung may be too big for one wave, and the survey — the length of that spec list included — is what
+tells you.** If it is, **SLICE it and say so**: land the cheap, high-unlock, low-risk part first (P1.0d's
+front-end slice unlocked 1080 corpus cases with no new IR ops and no codegen), and keep the deep part (a
+new register bank for floats) as its own slice. **Each slice runs the full loop below.**
 
 ## 3. Write the contract (if the rung needs new IR ops)
 
@@ -113,8 +129,10 @@ Every brief MUST carry:
   does not "fix" its own correct code to match it;
 - **(b) the exclusive file list**, and the files it must NOT touch;
 - **(c) the traps** for that area;
-- **(d) the `/specs` files to port as its acceptance tests** (on demand — the corpus is **not**
-  bulk-ported);
+- **(d) its share of the plan's SPEC PORT LIST** — the exact `/specs` files to copy in, and **which cases
+  it must unlock vs which stay `disabled-test:`** (on demand — the corpus is **not** bulk-ported). The
+  agent executes this list; it does not get to choose its own coverage, and **a case it should pass is
+  never disabled**;
 - **(e) reproduced evidence** for every bug it is asked to fix, **captured as a failing spec wherever
   one can be** — hand the agent the RED, so its contract is "make this spec green," not "fix, then stash
   to prove you fixed it." Never hand an agent a symptom you have not seen yourself.
