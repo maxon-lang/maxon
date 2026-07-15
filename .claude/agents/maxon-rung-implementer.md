@@ -12,25 +12,43 @@ file list. Other agents are editing other files concurrently.
 `maxon-shv2/ARCHITECTURE.md` (design pillars, core invariants), then `maxon-shv2/PLAN.md`, then the
 code you will change. `.claude/CLAUDE.md` **overrides your defaults** — read it.
 
-## ⭐ PORT FROM `maxon-selfhosted` (v1). Do not re-derive what already exists.
+## ⭐ TWO reference compilers already do this. Do not re-derive what exists.
 
-**v1 is 191,487 lines of WORKING, DEBUGGED Maxon**, written against the same language and the **same
-`stdlib/`** that shv2 uses. It is deprecated as a *product*, not as a *source*. **Before you write a
-line, find the v1 file that already does this and read it.** Reuse its code where it fits — lifting a
-working implementation is not cheating, it is the plan.
+**Your brief carries a PLAN** naming the files to port from — the survey is already done. **Read those
+files before you write a line.** If the plan turns out to be wrong when you reach the code, **STOP and
+report it**; do not silently redesign.
+
+### `maxon-selfhosted` (v1) — the CODE you PORT
+
+**191,487 lines of WORKING, DEBUGGED Maxon**, written against the same language and the **same `stdlib/`**
+that shv2 uses. It is deprecated as a *product*, not as a *source*. Reuse its code where it fits —
+lifting a working implementation is not cheating, it is the plan.
 
 - **Every hard mechanism you are asked for, v1 already implements** — parsing, type resolution,
   lowering, ownership, closures, generics + layout descriptors, witness tables, `async`/green threads,
   the emitted runtime. The bugs it paid for are already paid.
 - **Name the v1 file and line range in your report**, and **justify every divergence** from it. A
   divergence is a decision, and it needs a reason.
+- ⚠ **v1 does NOT BUILD** (`E3005` in `X64RegisterAlloc.maxon` / `Arm64RegisterAlloc.maxon` — bit-rot
+  against the current bootstrap's ranged-element-type rule). **Reading and porting its source is
+  unaffected**; you just cannot *run* it.
+
+### `maxon-sharp` (the C# bootstrap) — the RUNNABLE ORACLE
+
+A different language, but it **builds, runs, and is canonical for `/specs`.** It is the reference you can
+**execute**: run it on a sample program, dump its IR (`--dump-stages` for per-stage artifacts — csharp
+only), and diff its behaviour against yours. **When the question is "what should this actually DO?", the
+bootstrap answers by RUNNING — v1 can only answer by reading.** Reach for it whenever you would have
+wanted to run v1 and could not.
+
+### Both
+
 - **Adapt to shv2's real differences** — no MIR tier (Maxon → Std → Target, 3 not 4); `project.diagnostics`
   is first-class; `FileParseArtifact` staging; the flat `StdOp`.
+- **Where the two references disagree, that is a design question, not a coin flip.** Report it rather
+  than picking silently.
 - ⚠ **The register allocator is the one exception: it ports LESSONS, not code.** shv2's is a
   deliberately different (SSA-chordal, linear) design. Do not drag v1's in.
-- ⚠ **v1 currently does NOT BUILD** (`E3005` in `X64RegisterAlloc.maxon` / `Arm64RegisterAlloc.maxon` —
-  bit-rot against the current bootstrap's ranged-element-type rule). **Reading and porting its source is
-  unaffected**; you just cannot *run* it to compare behaviour.
 
 ## Non-negotiables
 
