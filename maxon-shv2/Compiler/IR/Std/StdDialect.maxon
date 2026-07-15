@@ -199,10 +199,37 @@ end 'StdBinOpcode'
 // two DIFFERENT instructions: `not` on a bool would produce -1/-2, which reads as
 // truthy either way. The Maxon tier has already resolved which one the source `not`
 // meant (see MaxonUnaryOp).
+//
+// ⭐⭐ P1.0d.4 appends the CONVERSION PAIR, and without it a float can neither enter
+// nor leave the float domain. This is the band that makes `trunc()` — the f64→ExitCode
+// bridge nearly every case in specs-shv2/float-type.md ends on — expressible at all, and
+// the band that lets `5 + 2.0` promote. Both reference compilers model these as UNARY
+// opcodes and shv2 follows: v1 as `StdArithUnaryOpcode.{siToFpF64, fpToSiI64}`, the
+// bootstrap as `MaxonTruncOp`. A conversion has a unary op's exact shape — one operand in,
+// one result out, non-trapping, pure — so per the header's rule it is an opcode, not a
+// variant.
+//
+// ⚠⚠ THESE TWO ARE THE ONLY OPCODES WHOSE RESULT TYPE DIFFERS FROM THEIR `operandType`,
+// and that is the fact to hold on to. For `neg`/`bitNot`/`logicalNot` the two coincide, so
+// nothing has ever had to distinguish them. Here they cannot: **`operandType` is always the
+// SOURCE — what the instruction reads — and the OPCODE names the result.** `siToFp` reads
+// an integer and produces f64; `fpToSi` reads f64 and produces an integer. Read
+// `operandType` as "the result type" on these and you get exactly the wrong register file.
+//
+// ⚠ `siToFp` with a float `operandType`, or `fpToSi` with an integer one, is ILLEGAL — it
+// would name a conversion from a type to itself, and the x64 instruction for it does not
+// exist. Throw rather than emit.
+//
+// ⭐ `fpToSi` TRUNCATES TOWARD ZERO, and the `t` in its instruction (`cvttsd2si`, not
+// `cvtsd2si`) is the whole reason it is the right one: `cvtsd2si` rounds under MXCSR's
+// current mode — banker's rounding by default — so `trunc(3.99)` would answer **4**.
+// The spec says 3. The two mnemonics differ by one letter and by a wrong answer.
 export enum StdUnaryOpcode
 	neg
 	bitNot
 	logicalNot
+	siToFp
+	fpToSi
 end 'StdUnaryOpcode'
 
 // The Std-tier comparison predicates carried by `StdOp.cmp` (M4). Signed integer
