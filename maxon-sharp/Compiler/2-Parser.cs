@@ -7493,7 +7493,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
           // Try builtin type method interception before normal method resolution
           var baseTypeName = ResolveBaseTypeName(structTypeName);
-          if (IsBuiltinMethodType(baseTypeName)) {
+          if (IsBuiltinMethodType(baseTypeName, methodFieldName)) {
             Advance(); // consume variable name
             Advance(); // consume '.'
             var methodToken = Advance(); // consume method name
@@ -7669,6 +7669,21 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         fieldToken.Line, fieldToken.Column);
     }
 
+    return EmitFieldRead(currentValue, currentStructTypeName, fieldToken);
+  }
+
+  /// The field read itself, with NO visibility check — `EmitIntermediateFieldAccess` is the
+  /// user-facing path and checks first. Split out for the String byte intrinsics, which read
+  /// String's unexported `managed` from wherever the CALL is: that is the compiler reading a type's
+  /// own field while inlining its own method, not user code reaching past E3014.
+  private (MaxonValue value, string structTypeName) EmitFieldRead(
+      MaxonValue currentValue, string currentStructTypeName, Token fieldToken) {
+    var structType = (IrStructType)_typeRegistry[currentStructTypeName];
+    var field = structType.GetField(fieldToken.Value)
+      ?? throw new CompileError(ErrorCode.IrInvalidFieldAccess,
+        $"Type '{structType.Name}' has no field named '{fieldToken.Value}'",
+        fieldToken.Line, fieldToken.Column);
+
     var fieldKind = field.Type.ToValueKind();
     var fieldStructName = GetFieldStructName(field.Type);
     var accessOp = new MaxonFieldAccessOp(currentValue, currentStructTypeName, fieldToken.Value, fieldKind, fieldStructName);
@@ -7789,7 +7804,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       if (Check(TokenType.LeftParen)) {
         // Try builtin type method
         var baseNestedType = ResolveBaseTypeName(currentStructTypeName);
-        if (IsBuiltinMethodType(baseNestedType)) {
+        if (IsBuiltinMethodType(baseNestedType, fieldToken.Value)) {
           TrackBuiltinMutation(nameToken.Value, baseNestedType, fieldToken.Value);
           Advance(); // consume '('
           var builtinArgs = ParseBuiltinMethodArgs(fieldToken, $"{currentStructTypeName}.{fieldToken.Value}", currentValue);
@@ -7866,7 +7881,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       // self.method(...)
       // Try builtin type method
       var baseSelfType = ResolveBaseTypeName(selfInfo.StructTypeName!);
-      if (IsBuiltinMethodType(baseSelfType)) {
+      if (IsBuiltinMethodType(baseSelfType, fieldToken.Value)) {
         Advance(); // consume '('
         var selfVal = ResolveExprValue(new ExprResult.VarRef("self", selfInfo));
         var builtinArgs = ParseBuiltinMethodArgs(fieldToken, $"{selfInfo.StructTypeName!}.{fieldToken.Value}", selfVal);
@@ -7917,7 +7932,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         if (Check(TokenType.LeftParen)) {
           // Try builtin type method
           var baseChainType = ResolveBaseTypeName(currentStructTypeName);
-          if (IsBuiltinMethodType(baseChainType)) {
+          if (IsBuiltinMethodType(baseChainType, nextFieldToken.Value)) {
             Advance(); // consume '('
             var builtinArgs = ParseBuiltinMethodArgs(nextFieldToken, $"{currentStructTypeName}.{nextFieldToken.Value}", currentValue);
             _builtinReceiverVarName = prevFieldName;
@@ -10558,8 +10573,41 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     return (false, null); // not a builtin managed list method
   }
 
-  private static bool IsBuiltinMethodType(string baseTypeName) =>
+  // String's two byte-access primitives, and the private field they read through. Named rather
+  // than spelled inline: five call sites and two lowering hops share them.
+  private const string StringTypeName = "String";
+  private const string StringManagedFieldName = "managed";
+  private const string StringByteAtMethodName = "byteAt";
+  private const string StringByteLengthMethodName = "byteLength";
+
+  /// The compiler-internal managed types: the user cannot construct one (E3072), and every method
+  /// they have is an inlined builtin. Membership is a property of the TYPE alone — which is why
+  /// this is separate from `IsBuiltinMethodType`, whose answer now depends on the method too.
+  private static bool IsCompilerInternalManagedType(string baseTypeName) =>
     baseTypeName is "__ManagedList" or "__ManagedListNode" or "__ManagedMemory" or "__ManagedMemoryCursor" or "__ManagedSocket" or "__ManagedFile" or "__ManagedDirectory";
+
+  /// Does this method call get emitted inline instead of becoming a call?
+  ///
+  /// `String.byteAt`/`byteLength` are declared in `stdlib/String.maxon` but never CALLED — they are
+  /// INLINED (see TryEmitBuiltinStringMethod). Unlike the `__Managed*` types, `String` is an
+  /// ordinary stdlib struct whose OTHER methods are ordinary calls, so this predicate is
+  /// method-aware: the guard commits to the builtin path BEFORE the method name is known and
+  /// cannot back out once the args are parsed, so answering `true` for `String.hash` would strand
+  /// it somewhere that cannot emit it.
+  private static bool IsBuiltinMethodType(string baseTypeName, string methodName) =>
+    IsCompilerInternalManagedType(baseTypeName) || IsInlinedStringByteMethod(baseTypeName, methodName);
+
+  private static bool IsInlinedStringByteMethod(string baseTypeName, string methodName) =>
+    baseTypeName == StringTypeName
+    && methodName is StringByteAtMethodName or StringByteLengthMethodName;
+
+  /// The `__ManagedMemory` builtin each String byte primitive inlines to. `byteLength` is `length`
+  /// on the buffer; `byteAt` keeps its name.
+  private static string ManagedMemMethodForStringByteMethod(string methodName) => methodName switch {
+    StringByteAtMethodName => "byteAt",
+    StringByteLengthMethodName => "length",
+    _ => throw new InvalidOperationException($"not an inlined String byte method: '{methodName}'")
+  };
 
   private static bool IsMutatingBuiltinMethod(string baseTypeName, string methodName) =>
     baseTypeName switch {
@@ -10623,7 +10671,33 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       return TryEmitBuiltinManagedFileMethod(methodName, args, methodToken);
     if (baseType == "__ManagedDirectory")
       return TryEmitBuiltinManagedDirectoryMethod(methodName, args, methodToken);
+    if (IsInlinedStringByteMethod(baseType, methodName))
+      return TryEmitBuiltinStringMethod(structTypeName, methodName, args, methodToken);
     throw new InvalidOperationException($"TryEmitBuiltinTypeMethod called for non-builtin type '{baseType}'");
+  }
+
+  /// Inlines `String.byteAt(i)` / `String.byteLength()` to exactly what their `stdlib/String.maxon`
+  /// bodies say: a read of String's `managed` field, then the corresponding `__ManagedMemory`
+  /// builtin. The Maxon declarations stay — they carry the signature, the `module` visibility and
+  /// the docs, and they remain the normative definition of what this emits — but they are never
+  /// CALLED.
+  ///
+  /// WHY THEY MUST BE INLINE, MEASURED, NOT ASSUMED: the bootstrap has NO inlining pass, so a
+  /// forwarding stdlib method is a real call PER BYTE. Stage 4b-1 routed every byte-walker in the
+  /// stdlib (`hash`, `equals`, `startsWith`, `find`, `split`, path and URL parsing) through these
+  /// two, so their cost is multiplied by every byte of every string. On a ~60M byte-visit
+  /// hash/equals/find workload: 383ms with `managed.byteAt(i)` inline, 604ms with the same code
+  /// behind a forwarding `String.byteAt` (+58%) — while mm-trace stayed byte-identical, so no
+  /// allocation gate could see it. Stage 4b-2 makes a small String carry its bytes INLINE in a
+  /// 16-byte value, and this is the one place that has to learn the discriminant.
+  private (bool Handled, MaxonValue? Result) TryEmitBuiltinStringMethod(
+      string structTypeName, string methodName, List<MaxonValue> args, Token methodToken) {
+    var managedToken = new Token(TokenType.Identifier, StringManagedFieldName, methodToken.Line, methodToken.Column);
+    var (managedValue, managedTypeName) = EmitFieldRead(args[0], structTypeName, managedToken);
+    var managedArgs = new List<MaxonValue> { managedValue };
+    managedArgs.AddRange(args.Skip(1));
+    return TryEmitBuiltinManagedMemoryMethod(
+      managedTypeName, ManagedMemMethodForStringByteMethod(methodName), managedArgs, methodToken);
   }
 
   /// Emits builtin __ManagedMemory instance method calls as MaxonOps.
@@ -16703,7 +16777,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       if (Check(TokenType.LeftParen)) {
         // Try builtin type method
         var baseExprType = ResolveBaseTypeName(userTypeName);
-        if (IsBuiltinMethodType(baseExprType)) {
+        if (IsBuiltinMethodType(baseExprType, fieldName)) {
           TrackBuiltinMutation(rootVarName, baseExprType, fieldName);
           Advance(); // consume '('
           var structVal = ResolveExprValue(result);
@@ -17842,7 +17916,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       // For __ManagedMemory, element_size comes from the enclosing type's Element
       // parameter so later growth/allocation knows the stride.
       if (field.Type is IrStructType builtinType
-          && IsBuiltinMethodType(ResolveBaseTypeName(builtinType.Name))) {
+          && IsCompilerInternalManagedType(ResolveBaseTypeName(builtinType.Name))) {
         var builtinValue = EmitEmptyBuiltinManagedLiteral(builtinType, structType);
         fieldValues.Add((field.Name, builtinValue));
         continue;

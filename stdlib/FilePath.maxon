@@ -16,15 +16,9 @@ export enum FilePathError implements Error
 	noParent
 end 'FilePathError'
 
-typealias FpByte = int(0 to 255)
 typealias PathByteOffset = int(0 to u64.max)
 
 // Caller guarantees index is in bounds
-function fpByteAt(managed __ManagedMemory, index PathByteOffset) returns FpByte
-	return try managed.byteAt(index) otherwise 'err'
-		panic("fpByteAt: index out of bounds — caller guarantees valid index")
-	end 'err'
-end 'fpByteAt'
 
 export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, Stringable
 	export let path as String
@@ -57,10 +51,9 @@ export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 		/// control chars (0x01-0x1F), <, >, ", |, ?, *
 		static function hasInvalidChars(path String) returns bool
 			let len = path.byteLength()
-			let bytes = path.addressableBytes()
 			var i = 0
 			while i < len 'scan'
-				let b = fpByteAt(bytes, index: i)
+				let b = path.byteAtOrPanic(i)
 				if b >= 1 and b <= 31 'control'
 					return true
 				end 'control'
@@ -81,11 +74,10 @@ export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 			return path
 		end 'empty'
 		// Scan for any non-native separator byte
-		let bytes = path.addressableBytes()
 		var hasOther = false
 		var i = 0
 		while i < len 'scan'
-			if fpByteAt(bytes, index: i) == otherSeparatorByte 'found'
+			if path.byteAtOrPanic(i) == otherSeparatorByte 'found'
 				hasOther = true
 				break
 			end 'found'
@@ -107,14 +99,13 @@ export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 	static function resolveFileURL(input String) returns String throws FilePathError
 		// Quick check: must contain "://" to be a URL
 		let len = input.byteLength()
-		let inputBytes = input.addressableBytes()
 		var hasScheme = false
 		var i = 0
 		while i + 2 < len 'scan'
 			// ':' = 58, '/' = 47
-			if fpByteAt(inputBytes, index: i) == 58 'colon'
-				if fpByteAt(inputBytes, index: i + 1) == 47 'slash1'
-					if fpByteAt(inputBytes, index: i + 2) == 47 'slash2'
+			if input.byteAtOrPanic(i) == 58 'colon'
+				if input.byteAtOrPanic(i + 1) == 47 'slash1'
+					if input.byteAtOrPanic(i + 2) == 47 'slash2'
 						hasScheme = true
 						break
 					end 'slash2'
@@ -140,9 +131,9 @@ export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 			if pathLen >= 3 'checkDrive'
 				// Check for /X: pattern (slash + alpha + colon)
 				let urlPathBytes = filePath.addressableBytes()
-				if fpByteAt(urlPathBytes, index: 0) == 47 'leadingSlash'
-					let driveByte = fpByteAt(urlPathBytes, index: 1)
-					if fpByteAt(urlPathBytes, index: 2) == 58 'hasColon'
+				if filePath.byteAtOrPanic(0) == 47 'leadingSlash'
+					let driveByte = filePath.byteAtOrPanic(1)
+					if filePath.byteAtOrPanic(2) == 58 'hasColon'
 						if (driveByte >= 65 and driveByte <= 90) or (driveByte >= 97 and driveByte <= 122) 'isDrive'
 							let trimmed = try urlPathBytes.slice(1, pathLen) otherwise panic("FilePath: drive-strip slice — pathLen >= 3 guaranteed")
 							filePath = String.init(trimmed)
@@ -229,12 +220,11 @@ export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 	export function isAbsolute() returns bool
 		let len = path.byteLength()
 		#if os(Windows)
-			let bytes = path.addressableBytes()
 			// Drive letter: X:\ (e.g. C:\)
 			if len >= 3 'checkDrive'
-				let b0 = fpByteAt(bytes, index: 0)
-				let b1 = fpByteAt(bytes, index: 1)
-				let b2 = fpByteAt(bytes, index: 2)
+				let b0 = path.byteAtOrPanic(0)
+				let b1 = path.byteAtOrPanic(1)
+				let b2 = path.byteAtOrPanic(2)
 				// ':' = 58, '\' = 92 (path is normalized, so only native separator)
 				if b1 == 58 and b2 == 92 'hasDriveColon'
 					// a-z = 97-122, A-Z = 65-90
@@ -245,22 +235,22 @@ export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 			end 'checkDrive'
 			// UNC path: starts with \\
 			if len >= 2 'checkUNC'
-				let u0 = fpByteAt(bytes, index: 0)
-				let u1 = fpByteAt(bytes, index: 1)
+				let u0 = path.byteAtOrPanic(0)
+				let u1 = path.byteAtOrPanic(1)
 				if u0 == 92 and u1 == 92 'isUNC'
 					return true
 				end 'isUNC'
 			end 'checkUNC'
 			// Rooted path: starts with single backslash (e.g. \path — absolute to current drive)
 			if len >= 1 'checkRooted'
-				if fpByteAt(bytes, index: 0) == 92 'isRooted'
+				if path.byteAtOrPanic(0) == 92 'isRooted'
 					return true
 				end 'isRooted'
 			end 'checkRooted'
 		#else
 			// Unix: starts with /
 			if len >= 1 'checkSlash'
-				if fpByteAt(path.addressableBytes(), index: 0) == 47 'isAbsUnix'
+				if path.byteAtOrPanic(0) == 47 'isAbsUnix'
 					return true
 				end 'isAbsUnix'
 			end 'checkSlash'
@@ -281,11 +271,10 @@ export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 		if len == 0 'empty'
 			return 0
 		end 'empty'
-		let bytes = path.addressableBytes()
 		var i = path.byteLength()
 		while i > 0 'scan'
 			i = i - 1
-			if fpByteAt(bytes, index: i) == pathSeparatorByte 'isSep'
+			if path.byteAtOrPanic(i) == pathSeparatorByte 'isSep'
 				return i + 1
 			end 'isSep'
 		end 'scan'
@@ -318,7 +307,7 @@ export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 		var i = name.byteLength()
 		while i > 1 'scan'
 			i = i - 1
-			if fpByteAt(nameBytes, index: i) == 46 'isDot'
+			if name.byteAtOrPanic(i) == 46 'isDot'
 				let extManaged = try nameBytes.slice(i, nameLen) otherwise 'extSliceErr'
 					panic("FilePath.fileExtension: slice — i from backwards scan, always <= nameLen")
 				end 'extSliceErr'
@@ -339,7 +328,7 @@ export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 		var i = name.byteLength()
 		while i > 1 'scan'
 			i = i - 1
-			if fpByteAt(nameBytes, index: i) == 46 'isDot'
+			if name.byteAtOrPanic(i) == 46 'isDot'
 				let stemManaged = try nameBytes.slice(0, i) otherwise 'stemSliceErr'
 					panic("FilePath.stem: slice — i from backwards scan, always < nameLen")
 				end 'stemSliceErr'
@@ -371,7 +360,7 @@ export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 		end 'emptyBase'
 		let normalized = normalizeSeparators(component)
 		// Check if path already ends with a separator
-		let lastByte = fpByteAt(path.addressableBytes(), index: path.byteLength() - 1)
+		let lastByte = path.byteAtOrPanic(path.byteLength() - 1)
 		if lastByte == pathSeparatorByte 'hasSep'
 			return FilePath{path: "{path}{normalized}"}
 		end 'hasSep'
@@ -397,7 +386,7 @@ export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 			var i = name.byteLength()
 			while i > 1 'scan'
 				i = i - 1
-				if fpByteAt(nameBytes, index: i) == 46 'isDot'
+				if name.byteAtOrPanic(i) == 46 'isDot'
 					dotPos = i
 					foundDot = true
 					break
@@ -468,7 +457,7 @@ export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 		var trimmedBase = base
 		if baseLen > 0 'maybeTrim'
 			let baseBytes = basePath.addressableBytes()
-			let lastByte = fpByteAt(baseBytes, index: baseLen - 1)
+			let lastByte = basePath.byteAtOrPanic(baseLen - 1)
 			if lastByte == pathSeparatorByte or lastByte == otherSeparatorByte 'trailingSep'
 				let trimmedManaged = try baseBytes.slice(0, baseLen - 1) otherwise 'trimErr'
 					panic("FilePath.relativeTo: trim slice — baseLen > 0 guaranteed")
@@ -487,7 +476,7 @@ export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 		// startsWith guarantees the byte at trimmedLen is a separator. Skip it.
 		var start = trimmedLen
 		let selfBytes = path.addressableBytes()
-		let firstByte = fpByteAt(selfBytes, index: start)
+		let firstByte = path.byteAtOrPanic(start)
 		if firstByte == pathSeparatorByte or firstByte == otherSeparatorByte 'hasSep'
 			start = start + 1
 		end 'hasSep'
@@ -514,7 +503,7 @@ export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 		if prefixLen == selfLen 'exact'
 			return true
 		end 'exact'
-		let nextByte = fpByteAt(selfStr.addressableBytes(), index: prefixLen)
+		let nextByte = selfStr.byteAtOrPanic(prefixLen)
 		return nextByte == pathSeparatorByte or nextByte == otherSeparatorByte
 	end 'startsWith'
 end 'FilePath'

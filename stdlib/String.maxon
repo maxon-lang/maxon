@@ -149,19 +149,69 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 
 	/// Create a deep copy of this string with independent backing storage
 	export function clone() returns String
-		let len = managed.length()
+		let len = byteLength()
 		let newManaged = try managed.slice(0, len) otherwise 'sliceErr'
 			panic("String.clone: slice OOB — 0..len is always valid")
 		end 'sliceErr'
 		return String{managed: newManaged, isAsciiFlag: isAsciiFlag}
 	end 'clone'
 
+	/// THE byte-access primitives, and the only way anything inside `String` is allowed to read a
+	/// byte. `hash`, `equals`, `startsWith`, `endsWith`, `find`, `replace`, `split` and `scanIsAscii`
+	/// all walk bytes through these two and through nothing else.
+	///
+	/// WHY, AND IT IS NOT TIDINESS: Stage 4b-2 makes a SMALL `String` a 16-byte VALUE carrying up to
+	/// 15 bytes INLINE — and nothing can index a register. These two are the seam where that is
+	/// absorbed: their lowering becomes discriminant-aware (inline bytes vs. heap buffer), and every
+	/// byte-walker above them keeps working without being touched. That is the whole point of routing
+	/// through them now, while `String` is still unchanged.
+	///
+	/// ⚠ REACHING THE BYTES ANY OTHER WAY FROM INSIDE `String` WILL ALLOCATE UNDER 4b-2. `managed`,
+	/// and `addressableBytes()` handed to a byte loop, both need a real `__ManagedMemory` record at a
+	/// real address — which a small string will not have, so one would be MATERIALIZED per call. That
+	/// is precisely the cost Stage 4 exists to remove: route `hash` that way and a
+	/// `Map with (String, V)` allocates once per key lookup, and the stage is a net loss.
+	/// `addressableBytes()` is for genuine intrinsic boundaries only — see its doc.
+	///
+	/// ⚠ BOTH ARE INLINED BY THE COMPILER AND NEVER CALLED. The bootstrap has no inliner, so a
+	/// forwarding method here would be a real call PER BYTE — measured at +58% on a byte-walk
+	/// workload, with mm-trace byte-identical, so no allocation gate could see it. The bodies below
+	/// stay as the NORMATIVE definition of what the compiler emits for them (2-Parser.cs,
+	/// TryEmitBuiltinStringMethod), and are what any future compiler must reproduce.
 	export function byteLength() returns ByteCount
 		return managed.length()
 	end 'byteLength'
 
+	/// Throws rather than panicking so the bounds contract stays the CALLER's to state: every caller
+	/// has already established `index < byteLength()` and says so with `otherwise panic`.
+	///
+	/// `__ManagedMemoryError` because that is what this ACTUALLY RAISES. The bootstrap inlines this
+	/// method to the `managed.byteAt` it forwards to (2-Parser.cs, TryEmitBuiltinStringMethod), so
+	/// declaring a `StringError` here would be a signature the emitted code does not honour — and
+	/// translating the error would mean a second copy of the bounds-check-and-load lowering, which
+	/// is the duplication this project's rules exist to prevent. 4b-2 rewrites that lowering; the
+	/// error type is its to revisit, honestly, then.
+	module function byteAt(index BytePos) returns Byte throws __ManagedMemoryError
+		return try managed.byteAt(index)
+	end 'byteAt'
+
+	/// `byteAt` for a caller that has ALREADY bounds-checked and has no meaningful answer to an
+	/// out-of-range index — which is every byte-walker in the stdlib outside this file.
+	///
+	/// This existed THREE times before this rung — `fpByteAt` in `FilePath`, `urlByteAt` in `URL`,
+	/// `safeByteAt` in `helpers/url` — each an identical `try managed.byteAt(i) otherwise panic`.
+	/// Three copies of a wrapper is the tell that the wrapper belonged next to the thing it wraps.
+	///
+	/// It exists rather than `try s.byteAt(i) otherwise panic(...)` at each site because those sites
+	/// read bytes inside NESTED CONDITIONS (`if s.byteAtOrPanic(pos) == 46`), and a `try` cannot go
+	/// there. Unlike `byteAt` this is a real CALL, so a loop that CAN phrase its bounds inline should
+	/// use `byteAt` directly — String's own helpers do.
+	module function byteAtOrPanic(index BytePos) returns Byte
+		return try byteAt(index) otherwise panic("String.byteAtOrPanic: index out of bounds — caller guarantees index < byteLength()")
+	end 'byteAtOrPanic'
+
 	export function isEmpty() returns bool
-		return managed.length() == 0
+		return byteLength() == 0
 	end 'isEmpty'
 
 	/// Get grapheme cluster count (number of user-perceived characters).
@@ -172,23 +222,15 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	end 'count'
 
 	export function hash() returns HashValue
-		return hashManagedString(managed)
+		return hashString(self)
 	end 'hash'
 
 	export function equals(other String) returns bool
-		let lenA = managed.length()
-		let lenB = other.managed.length()
-		if lenA != lenB 'lenMismatch'
+		let len = byteLength()
+		if len != other.byteLength() 'lenMismatch'
 			return false
 		end 'lenMismatch'
-		for i in 0 upto lenA 'byteCheck'
-			let ab = try managed.byteAt(i) otherwise panic("String.equals: byteAt OOB — i < lenA invariant")
-			let bb = try other.managed.byteAt(i) otherwise panic("String.equals: byteAt OOB — i < lenB invariant")
-			if ab != bb 'mismatch'
-				return false
-			end 'mismatch'
-		end 'byteCheck'
-		return true
+		return bytesEqual(self, aOffset: 0, b: other, bOffset: 0, len: len)
 	end 'equals'
 
 	/// Create a fresh iterator for grapheme cluster traversal.
@@ -208,7 +250,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 
 	export function endIndex() returns StringIndex
 		let charCount = count()
-		return StringIndex.create(charCount, bytePos: managed.length())
+		return StringIndex.create(charCount, bytePos: byteLength())
 	end 'endIndex'
 
 	/// Get character at the given index. Returns the grapheme cluster at that position.
@@ -217,7 +259,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 			return makeCharFromBytesAt(idx.bytePos(), len: 1)
 		end 'asciiPath'
 		// Calculate the byte length of this grapheme at the given byte position
-		let len = managed.length()
+		let len = byteLength()
 		let byteStart = idx.bytePos()
 		let endPos = findGraphemeEndManagedRange(managed, offset: 0, startPos: byteStart, len: len)
 		let byteLen = endPos - byteStart
@@ -226,7 +268,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 
 	/// Get the index after the given position (for iteration)
 	export function indexAfter(idx StringIndex) returns StringIndex throws StringError
-		let len = managed.length()
+		let len = byteLength()
 		if idx.bytePos() >= len 'atEnd'
 			throw StringError.invalidIndex
 		end 'atEnd'
@@ -255,6 +297,14 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	end 'indexBefore'
 
 	/// Append another string's content to this string in place.
+	///
+	/// `other.managed`, NOT `other.addressableBytes()`, and this is not an oversight to tidy up.
+	/// A bulk `append` copies the bytes with a memcpy, so it needs a real record whichever spelling
+	/// is used — `addressableBytes()` buys no encapsulation here (same type, its own field) and is
+	/// not free: it is a CALL RETURNING A MANAGED VALUE, so the returned-value ownership convention
+	/// makes the caller retain it. Routing this one line through it added an `mm_incref`/`mm_decref`
+	/// pair around the RECEIVER at every `String.append` call site in user code — visible as a moved
+	/// golden in `specs/fragments-x64-windows/static-variables/`. A field read costs nothing.
 	export function append(other String)
 		managed.append(other.managed)
 		if not other.isAsciiFlag 'clearAscii'
@@ -264,15 +314,24 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 
 	// Search methods
 	export function startsWith(prefix String) returns bool
-		return startsWithManaged(managed, offset: 0, len: managed.length(), needle: prefix.managed)
+		let prefixLen = prefix.byteLength()
+		if prefixLen > byteLength() 'tooLong'
+			return false
+		end 'tooLong'
+		return bytesEqual(self, aOffset: 0, b: prefix, bOffset: 0, len: prefixLen)
 	end 'startsWith'
 
 	export function endsWith(suffix String) returns bool
-		return endsWithManaged(managed, offset: 0, len: managed.length(), needle: suffix.managed)
+		let suffixLen = suffix.byteLength()
+		let len = byteLength()
+		if suffixLen > len 'tooLong'
+			return false
+		end 'tooLong'
+		return bytesEqual(self, aOffset: len - suffixLen, b: suffix, bOffset: 0, len: suffixLen)
 	end 'endsWith'
 
 	export function contains(needle String) returns bool
-		if try findManaged(managed, offset: 0, len: managed.length(), needle: needle.managed) 'found'
+		if try findIn(self, offset: 0, len: byteLength(), needle: needle) 'found'
 			return true
 		end 'found'
 		return false
@@ -280,14 +339,14 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 
 	export function contains(character Character) returns bool
 		let charStr = character.toString()
-		if try findManaged(managed, offset: 0, len: managed.length(), needle: charStr.managed) 'found'
+		if try findIn(self, offset: 0, len: byteLength(), needle: charStr) 'found'
 			return true
 		end 'found'
 		return false
 	end 'contains'
 
 	export function findFirst(needle String) returns StringIndex throws StringError
-		let byteIdx = try findManaged(managed, offset: 0, len: managed.length(), needle: needle.managed)
+		let byteIdx = try findIn(self, offset: 0, len: byteLength(), needle: needle)
 		if isAsciiFlag 'asciiPath'
 			return StringIndex.create(byteIdx, bytePos: byteIdx)
 		end 'asciiPath'
@@ -296,7 +355,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	end 'findFirst'
 
 	export function findLast(needle String) returns StringIndex throws StringError
-		let byteIdx = try findLastManaged(managed, offset: 0, len: managed.length(), needle: needle.managed)
+		let byteIdx = try findLastIn(self, needle: needle)
 		if isAsciiFlag 'asciiPath'
 			return StringIndex.create(byteIdx, bytePos: byteIdx)
 		end 'asciiPath'
@@ -344,18 +403,18 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 
 	// Replace methods
 	export function replace(old String, with String) returns String
-		let oldLen = old.managed.length()
+		let oldLen = old.byteLength()
 		if oldLen == 0 'empty_old'
 			return String{managed: managed, isAsciiFlag: isAsciiFlag}
 		end 'empty_old'
 
-		let selfLen = managed.length()
+		let selfLen = byteLength()
 
 		// First pass: count matches
 		var matchCount = 0
 		var searchPos = 0
 		while searchPos <= selfLen - oldLen 'count_loop'
-			if let idx = try findManaged(managed, offset: searchPos, len: selfLen - searchPos, needle: old.managed) 'try_count'
+			if let idx = try findIn(self, offset: searchPos, len: selfLen - searchPos, needle: old) 'try_count'
 				matchCount = matchCount + 1
 				searchPos = searchPos + idx + oldLen
 			end 'try_count' else 'done_count'
@@ -372,21 +431,21 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 		// told the answer never grows at all. (Appending the pieces to a `String` instead would copy the
 		// whole result back and forth once per match: `String.append` is exact, by design. See
 		// `StringBuilder`.)
-		let withLen = with.managed.length()
+		let withLen = with.byteLength()
 		var out = StringBuilder.create()
 		out.reserve(selfLen + matchCount * withLen - matchCount * oldLen)
 
 		var pos = 0
 		while pos <= selfLen - oldLen 'search'
-			if let idx = try findManaged(managed, offset: pos, len: selfLen - pos, needle: old.managed) 'try_find'
+			if let idx = try findIn(self, offset: pos, len: selfLen - pos, needle: old) 'try_find'
 				let matchPos = pos + idx
 				if matchPos > pos 'has_prefix'
 					let prefixSlice = try managed.slice(pos, matchPos) otherwise 'prefixSliceErr'
-						panic("String.replace: prefix slice — pos and matchPos within bounds from findManaged")
+						panic("String.replace: prefix slice — pos and matchPos within bounds from findIn")
 					end 'prefixSliceErr'
 					out.appendBytes(prefixSlice, isAscii: isAsciiFlag)
 				end 'has_prefix'
-				out.appendBytes(with.managed, isAscii: with.isAsciiFlag)
+				out.append(with)
 				pos = matchPos + oldLen
 			end 'try_find' else 'no_more'
 				break
@@ -405,13 +464,13 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	end 'replace'
 
 	export function replaceFirst(old String, with String) returns String
-		let oldLen = old.managed.length()
+		let oldLen = old.byteLength()
 		if oldLen == 0 'empty_old'
 			return String{managed: managed, isAsciiFlag: isAsciiFlag}
 		end 'empty_old'
 
-		let selfLen = managed.length()
-		let idx = try findManaged(managed, offset: 0, len: selfLen, needle: old.managed) otherwise 'no_match'
+		let selfLen = byteLength()
+		let idx = try findIn(self, offset: 0, len: selfLen, needle: old) otherwise 'no_match'
 			return String{managed: managed, isAsciiFlag: isAsciiFlag}
 		end 'no_match'
 
@@ -420,16 +479,16 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 		// and a builder that is told the answer allocates once and never grows. Growing the head slice
 		// by two exact appends instead (what this used to do) reallocated and recopied the whole
 		// result twice.
-		let withLen = with.managed.length()
+		let withLen = with.byteLength()
 		var out = StringBuilder.create()
 		out.reserve(selfLen - oldLen + withLen)
 
 		let head = try managed.slice(0, idx) otherwise 'rfHeadSliceErr'
-			panic("String.replaceFirst: head slice — idx from findManaged, always in bounds")
+			panic("String.replaceFirst: head slice — idx from findIn, always in bounds")
 		end 'rfHeadSliceErr'
 		out.appendBytes(head, isAscii: isAsciiFlag)
 
-		out.appendBytes(with.managed, isAscii: with.isAsciiFlag)
+		out.append(with)
 
 		let tail = try managed.slice(idx + oldLen, selfLen) otherwise 'rfTailSliceErr'
 			panic("String.replaceFirst: tail slice — idx+oldLen <= selfLen guaranteed")
@@ -444,7 +503,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 
 	export function split(delimiter String) returns StringArray
 		var result = StringArray.create()
-		let delimLen = delimiter.managed.length()
+		let delimLen = delimiter.byteLength()
 
 		// Empty delimiter: return single-element array with original string
 		if delimLen == 0 'empty_delim'
@@ -452,14 +511,14 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 			return result
 		end 'empty_delim'
 
-		let selfLen = managed.length()
+		let selfLen = byteLength()
 		var pos = 0
 
 		while pos <= selfLen - delimLen 'search'
-			if let idx = try findManaged(managed, offset: pos, len: selfLen - pos, needle: delimiter.managed) 'try_find'
+			if let idx = try findIn(self, offset: pos, len: selfLen - pos, needle: delimiter) 'try_find'
 				let matchPos = pos + idx
 				let part = try managed.slice(pos, matchPos) otherwise 'partSliceErr'
-					panic("String.split: part slice — pos and matchPos from findManaged, always in bounds")
+					panic("String.split: part slice — pos and matchPos from findIn, always in bounds")
 				end 'partSliceErr'
 				result.push(String{managed: part, isAsciiFlag: isAsciiFlag})
 				pos = matchPos + delimLen
@@ -484,7 +543,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	// other String is aliasing is never written through. Returning `managed` after mutating it, as
 	// this used to, made `let b = a.toLower()` silently lowercase `a` as well.
 	function mapAsciiCase(lo Byte, hi Byte, delta AsciiCaseDelta) returns String
-		let len = managed.length()
+		let len = byteLength()
 		if len == 0 'empty'
 			return String{managed: managed, isAsciiFlag: isAsciiFlag}
 		end 'empty'
@@ -514,7 +573,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 
 	/// Trim characters in the given set from both ends of the string.
 	export function trim(chars CharacterSet) returns String
-		let len = managed.length()
+		let len = byteLength()
 		if len == 0 'empty'
 			return String{managed: managed, isAsciiFlag: isAsciiFlag}
 		end 'empty'
@@ -538,7 +597,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 			end 'allMatchAscii'
 
 			// Backward scan
-			var endPos = managed.length()
+			var endPos = byteLength()
 			while endPos > start 'scanEndAscii'
 				endPos = endPos - 1
 				let ch = makeCharacterFromManagedRange(managed, pos: endPos, len: 1)
@@ -574,7 +633,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 		end 'all_match'
 
 		// Backward scan from end: find last non-matching grapheme
-		var endPos = managed.length()
+		var endPos = byteLength()
 		while endPos > start 'scan_end'
 			let graphemeStart = findGraphemeStartManaged(managed, offset: 0, beforePos: endPos)
 			let graphemeLen = endPos - graphemeStart
@@ -593,7 +652,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 
 	/// Trim characters in the given set from the start of the string.
 	export function trimStart(chars CharacterSet) returns String
-		let len = managed.length()
+		let len = byteLength()
 		if len == 0 'empty'
 			return String{managed: managed, isAsciiFlag: isAsciiFlag}
 		end 'empty'
@@ -647,13 +706,13 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 
 	/// Trim characters in the given set from the end of the string.
 	export function trimEnd(chars CharacterSet) returns String
-		let len = managed.length()
+		let len = byteLength()
 		if len == 0 'empty'
 			return String{managed: managed, isAsciiFlag: isAsciiFlag}
 		end 'empty'
 
 		if isAsciiFlag 'asciiPath'
-			var pos = managed.length()
+			var pos = byteLength()
 			while pos > 0 'scanAscii'
 				pos = pos - 1
 				let ch = makeCharacterFromManagedRange(managed, pos: pos, len: 1)
@@ -671,7 +730,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 		end 'asciiPath'
 
 		// Backward scan from end: find first non-matching grapheme
-		var pos = managed.length()
+		var pos = byteLength()
 		while pos > 0 'scan'
 			let graphemeStart = findGraphemeStartManaged(managed, offset: 0, beforePos: pos)
 			let graphemeLen = pos - graphemeStart
@@ -878,51 +937,40 @@ export type StringIndex implements Equatable, Comparable
 	end 'compare'
 end 'StringIndex'
 
-function startsWithManaged(haystack __ManagedMemory, offset BytePos, len ByteCount, needle __ManagedMemory) returns bool
-	let prefixLen = needle.length()
-
-	if prefixLen > len 'length_check'
-		return false
-	end 'length_check'
-
-	for i in 0 upto prefixLen 'compare_loop'
-		let hb = try haystack.byteAt(offset + i) otherwise 'hByteErr'
-			break
-		end 'hByteErr'
-		let nb = try needle.byteAt(i) otherwise 'nByteErr'
-			break
-		end 'nByteErr'
-		if hb != nb 'byte_check'
+/// THE byte-range comparison. `equals`, `startsWith`, `endsWith` and both searches are all one
+/// question — "are these `len` bytes the same?" — asked at different offsets, and each used to carry
+/// its own copy of this loop. Four copies, plus a fifth that had rotted: `helpers/string/hash.maxon`
+/// exported an `equalsManagedString` with this exact body and NOBODY had called it since `equals`
+/// grew its own inline duplicate.
+///
+/// The `otherwise panic` is the point of the rewrite, not decoration. Every copy of this loop used
+/// to answer an out-of-range byte with a bare `break`, which fell out of the loop and returned
+/// TRUE — an OOB read would have reported a MATCH. The length checks above every caller made it
+/// unreachable, so it was a silent wrong answer waiting for the first caller that got them wrong.
+function bytesEqual(a String, aOffset BytePos, b String, bOffset BytePos, len ByteCount) returns bool
+	for i in 0 upto len 'compare_loop'
+		let ab = try a.byteAt(aOffset + i) otherwise panic("bytesEqual: byteAt OOB — caller guarantees aOffset + len <= a.byteLength()")
+		let bb = try b.byteAt(bOffset + i) otherwise panic("bytesEqual: byteAt OOB — caller guarantees bOffset + len <= b.byteLength()")
+		if ab != bb 'byte_check'
 			return false
 		end 'byte_check'
 	end 'compare_loop'
 	return true
-end 'startsWithManaged'
+end 'bytesEqual'
 
-function endsWithManaged(haystack __ManagedMemory, offset BytePos, len ByteCount, needle __ManagedMemory) returns bool
-	let suffixLen = needle.length()
-
-	if suffixLen > len 'length_check'
-		return false
-	end 'length_check'
-
-	let start = offset + (len - suffixLen)
-	for i in 0 upto suffixLen 'compare_loop'
-		let hb = try haystack.byteAt(start + i) otherwise 'hByteErr'
-			break
-		end 'hByteErr'
-		let nb = try needle.byteAt(i) otherwise 'nByteErr'
-			break
-		end 'nByteErr'
-		if hb != nb 'byte_check'
-			return false
-		end 'byte_check'
-	end 'compare_loop'
-	return true
-end 'endsWithManaged'
-
-function findManaged(haystack __ManagedMemory, offset BytePos, len ByteCount, needle __ManagedMemory) returns BytePos throws StringError
-	let needleLen = needle.length()
+/// Search a WINDOW of `haystack` — `offset` and `len` are load-bearing here and only here:
+/// `replace`, `replaceFirst` and `split` walk a string by re-searching the tail after each match.
+/// (`startsWith`, `endsWith` and `findLastIn` only ever wanted the whole string, and each used to
+/// pass `offset: 0, len: length()` at every call site to say so.)
+///
+/// The FIRST-BYTE CHECK before `bytesEqual` is not a micro-optimisation, it is what pays for the
+/// shared compare loop. `bytesEqual` is a real CALL — the bootstrap has no inliner — and nearly
+/// every candidate position mismatches on byte 0, so calling it per position spends a call to
+/// compare one byte. Measured: without this check, a 576K-position miss ran ~4% slower than the
+/// old code, which had the compare loop written out inline here (one of the five copies this
+/// rung removed). With it, the dedup costs nothing and the search is faster than what it replaced.
+function findIn(haystack String, offset BytePos, len ByteCount, needle String) returns BytePos throws StringError
+	let needleLen = needle.byteLength()
 
 	if needleLen == 0 'empty_needle'
 		return 0
@@ -932,30 +980,21 @@ function findManaged(haystack __ManagedMemory, offset BytePos, len ByteCount, ne
 		throw StringError.notFound
 	end 'too_long'
 
+	let firstNeedleByte = try needle.byteAt(0) otherwise panic("findIn: byteAt(0) OOB — needleLen > 0 checked above")
 	for i in 0 to (len - needleLen) 'search_loop'
-		var found = true
-		for j in 0 upto needleLen 'compare_loop'
-			let hb = try haystack.byteAt(offset + i + j) otherwise 'hByteErr'
-				break
-			end 'hByteErr'
-			let nb = try needle.byteAt(j) otherwise 'nByteErr'
-				break
-			end 'nByteErr'
-			if hb != nb 'byte_check'
-				found = false
-				break
-			end 'byte_check'
-		end 'compare_loop'
-
-		if found 'found_check'
-			return i
-		end 'found_check'
+		let candidate = try haystack.byteAt(offset + i) otherwise panic("findIn: byteAt OOB — i <= len - needleLen invariant")
+		if candidate == firstNeedleByte 'firstByteMatch'
+			if bytesEqual(haystack, aOffset: offset + i, b: needle, bOffset: 0, len: needleLen) 'found_check'
+				return i
+			end 'found_check'
+		end 'firstByteMatch'
 	end 'search_loop'
 	throw StringError.notFound
-end 'findManaged'
+end 'findIn'
 
-function findLastManaged(haystack __ManagedMemory, offset BytePos, len ByteCount, needle __ManagedMemory) returns BytePos throws StringError
-	let needleLen = needle.length()
+function findLastIn(haystack String, needle String) returns BytePos throws StringError
+	let len = haystack.byteLength()
+	let needleLen = needle.byteLength()
 
 	if needleLen == 0 'empty_needle'
 		return len
@@ -965,31 +1004,26 @@ function findLastManaged(haystack __ManagedMemory, offset BytePos, len ByteCount
 		throw StringError.notFound
 	end 'too_long'
 
+	let firstNeedleByte = try needle.byteAt(0) otherwise panic("findLastIn: byteAt(0) OOB — needleLen > 0 checked above")
 	var i = len - needleLen
 	while i >= 0 'search_loop'
-		var found = true
-		for j in 0 upto needleLen 'compare_loop'
-			let hb = try haystack.byteAt(offset + i + j) otherwise 'hByteErr'
-				break
-			end 'hByteErr'
-			let nb = try needle.byteAt(j) otherwise 'nByteErr'
-				break
-			end 'nByteErr'
-			if hb != nb 'byte_check'
-				found = false
-				break
-			end 'byte_check'
-		end 'compare_loop'
-
-		if found 'found_check'
-			return i
-		end 'found_check'
+		let candidate = try haystack.byteAt(i) otherwise panic("findLastIn: byteAt OOB — i <= len - needleLen invariant")
+		if candidate == firstNeedleByte 'firstByteMatch'
+			if bytesEqual(haystack, aOffset: i, b: needle, bOffset: 0, len: needleLen) 'found_check'
+				return i
+			end 'found_check'
+		end 'firstByteMatch'
 
 		i = i - 1
 	end 'search_loop'
 	throw StringError.notFound
-end 'findLastManaged'
+end 'findLastIn'
 
+/// Takes the raw bytes, and MUST: this runs while a `String` is being CONSTRUCTED from them
+/// (`init`, `from`), so `isAsciiFlag` has no value yet and there is no `String` to ask. Its callers
+/// are already holding a real `__ManagedMemory` — the one they are building the string out of — so
+/// there is nothing to materialize here under 4b-2 and nothing to route through `byteAt`. This is a
+/// construction boundary, in the same family as `addressableBytes()`'s intrinsic callers.
 function scanIsAscii(managed __ManagedMemory) returns bool
 	let len = managed.length()
 	for i in 0 upto len 'scan'

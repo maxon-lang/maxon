@@ -37,13 +37,13 @@ ExitCode: 99
 module {
   func @Money.fromString(input: i64) -> i64 {
   entry:
-    x64.prologue stack_size=32
+    x64.prologue stack_size=48
     x64.mov [rbp-8], rcx
-    x64.mov rax, [rbp-8]
-    x64.mov rcx, [rbp-8]
-    x64.call stdlib.String.byteLength
-    x64.xor ecx, ecx
-    x64.cmp rax, rcx
+    x64.mov [rbp-16], rcx
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, [rax+8]
+    x64.xor edx, edx
+    x64.cmp rcx, rdx
     x64.jne Money.fromString.empty_0.after
   empty_0:
     x64.mov rax, 1
@@ -58,20 +58,20 @@ module {
     x64.mov rcx, rax
     x64.mov rdx, 32
     x64.add rcx, rdx
-    x64.mov [rbp-16], rcx
-    x64.mov rbx, [rbp-16]
-    x64.mov rcx, [rbp-16]
+    x64.mov [rbp-24], rcx
+    x64.mov rbx, [rbp-24]
+    x64.mov rcx, [rbp-24]
     x64.call mm_incref
     x64.mov rsi, [rbp-8]
-    x64.mov rdi, [rbp-16]
+    x64.mov rdi, [rbp-24]
     x64.mov rcx, [rbp-8]
-    x64.mov rdx, [rbp-16]
+    x64.mov rdx, [rbp-24]
     x64.call stdlib.String.startsWith
     x64.test rax, rax
     x64.je Money.fromString.negative_0.after
   negative_0:
     x64.mov rax, 2
-    x64.mov rcx, [rbp-16]
+    x64.mov rcx, [rbp-24]
     x64.test rcx, rcx
     x64.jz __nonnull_skip_0
     x64.call mm_decref
@@ -84,27 +84,28 @@ module {
     x64.ret
   negative_0.after:
     x64.mov rax, [rbp-8]
-    x64.mov rcx, [rbp-8]
-    x64.call stdlib.String.byteLength
     x64.mov [rbp-32], rax
+    x64.mov rcx, [rbp-32]
+    x64.mov rdx, [rcx+8]
+    x64.mov [rbp-48], rdx
     x64.mov rcx, 8
     x64.xor edx, edx
     x64.mov r8, 6
     x64.call mm_alloc
-    x64.mov [rbp-24], rax
-    x64.mov rcx, [rbp-24]
-    x64.mov rdx, [rbp-32]
-    x64.mov [rcx+0], rdx
-    x64.mov rbx, [rbp-16]
-    x64.test rbx, rbx
+    x64.mov [rbp-40], rax
+    x64.mov rbx, [rbp-40]
+    x64.mov rsi, [rbp-48]
+    x64.mov [rbx+0], rsi
+    x64.mov rdi, [rbp-24]
+    x64.test rdi, rdi
     x64.jz __nonnull_skip_1
-    x64.mov rcx, [rbp-16]
+    x64.mov rcx, [rbp-24]
     x64.call mm_decref
     x64.label __nonnull_skip_1
-    x64.mov rsi, [rbp-24]
-    x64.mov rcx, [rbp-24]
+    x64.mov r8, [rbp-40]
+    x64.mov rcx, [rbp-40]
     x64.call mm_incref
-    x64.mov rax, [rbp-24]
+    x64.mov rax, [rbp-40]
     x64.xor edx, edx
     x64.epilogue
     x64.ret
