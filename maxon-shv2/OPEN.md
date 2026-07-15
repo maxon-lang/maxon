@@ -75,10 +75,45 @@ the whole check.
 > **The lesson is about THIS FILE:** a gap in *our* implementation was written down as a limit of *the
 > format*. One `grep` would have caught it. Check the corpus before believing a claim about the corpus.
 
-### 2. `a / 0` is a raw hardware trap, not a panic  *(= PLAN.md's P1.0d.3)*
-Escapes as `0xC0000094`. `specs/safety.md` demands exit **1** + `panic: integer divide by zero` on
-stderr. Same for `mod`. ⇒ Needs a **minimal emitted panic runtime** (write to stderr + exit) — the first
-slice of **Workstream R**, arriving early because a correctness gap forces it.
+### ~~2. `a / 0` is a raw hardware trap, not a panic~~ ✅ **FIXED 2026-07-15** *(= PLAN.md's P1.0d.3)*
+It escaped as `0xC0000094` with **empty stderr**. Now exit **1** and a **VEH thunk** converts the `#DE`:
+```
+panic: integer divide by zero at rip=0x0000000140001031 diag_base=0x0000000140001000
+Stack trace:
+  in main
+  in mrt_start
+```
+`specs/safety.md`'s `divide-by-zero` + `mod-by-zero` are ported and ENABLED (suite **279 → 281**). Emitted
+code for a trivial program went **38 → 1434 bytes** — shv2-compiled binaries had **no runtime at all**
+before this; this is **Workstream R's first slice**.
+
+**Three things it settled that are bigger than the divide:**
+- **A VEH fault handler, not a divisor check.** shv2 is x64-only and the CPU raises `#DE` for free; a
+  `cmp`/`branch` before every `idiv` would be the "cheap path that avoids a hard mechanism" the PRINCIPLE
+  names. ⭐ **NO green-thread coupling:** the reference's fault path rides `gt`/`fault_redirect_*` (P1.5),
+  so it prints and exits **in place** — which means the context travels as ordinary **arguments** and the
+  fault globals v1 needs **do not exist here at all**. v1 needs them only because its CONTEXT redirect
+  resumes at a function it cannot pass arguments to.
+- ⭐ **FRAME POINTERS on every function** — see PLAN.md. **The forcing reason is P1.5's `__gt_morestack`,
+  not the trace:** a relocating GT stack fixes up the **saved-RBP chain**, so shv2 needs it there anyway.
+- **The harness could not pin a program's RUNTIME stderr.** ` ```maxoncstderr ` is the COMPILER's. Now
+  there is a ` ```stderr ` fence (+ `stripFaultRipSuffix`, mirroring the reference's `TestRunner.cs:1427`).
+  ⚠ **And PLAN.md had claimed shv2 accepted a ` ```stdout ` fence it never had** — the plan committing this
+  file's own through-line bug. Corrected there.
+
+⚠ **What is NOT covered, and the ported prose over-promises it:** `specs/safety.md`'s documentation
+(lines 11–32) describes v1's runtime — integer overflow, nil-pointer, stack overflow, macOS `sigaction`,
+arm64 `SIGFPE` classification. **shv2 converts `#DE` and nothing else**, as `X64Runtime.maxon:744` correctly
+says. The file is kept byte-identical to `/specs` per Workstream S (marker flips are the only sanctioned
+edit), and `force-segfault` is `disabled-test:` behind P1.2 — but **a reader of the ported spec would
+believe more is implemented than is.**
+
+**A real bug the fence work found, of this file's exact class:** `SpecParser.scanTestFromMarker` **returned
+at the first expected block**, so a trailing ` ```stderr ` would have been walked over by the outer scan and
+**silently dropped** — a spec pinning a panic would have passed **on its exit code alone**. ⚠ **Still open,
+inverted:** it now scans to the next marker, so a *second* ` ```maxon ` fence in one test region **silently
+overwrites** the first (last-block-wins). No spec trips it today; it wants a policy call (panic on a
+duplicate fence?) rather than a ride-along fix.
 
 ### 3. Awaiting one promise TWICE double-frees its managed result
 `mm_decref: refcount underflow (already zero)`. The payload is handed out as an owned **+1 per await**
@@ -448,6 +483,18 @@ computing**, so it will recur.
   workflow said "work in a worktree", and the two silently contradicted each other — **the project's own
   signature bug, one fact written down twice, at the TOOLING level.** Documented `13855215b`, fixed the
   same day: `repoRoot` is that fact, written down once, by the only party who knows it.)*
+- ⚠ **NEW 2026-07-15 — THE MCP STALENESS GUARD HAS A HOLE THE SHAPE OF THE RUNNING PROCESS.** The guard
+  compares the **binary's** mtime against **its sources** and refuses if a source is newer. It cannot see
+  the **running process**, so *rebuild-without-restart* — the one failure `.claude/CLAUDE.md` explicitly
+  warns about (*"a rebuild alone does not replace the running process"*) — **sails straight through it**:
+  no source is newer than the binary, so nothing refuses, and a **stale server keeps serving stale tool
+  schemas**. Measured this session: `build` returned `success: true` and echoed **no `repoRoot`**, and
+  `ToolSearch` showed `build` with **no `repoRoot` parameter** — while the on-disk binary contained it and
+  268 source references existed. It reads exactly like "the feature was never built." **It was; the process
+  predated it.** ⇒ **If a tool's schema or result disagrees with its source, suspect the PROCESS before the
+  code**: compare the server's `StartTime` against the binary's mtime (`Get-Process maxon-dev-mcp`), and
+  restart it. The guard is worth extending to refuse when the **binary is newer than the process's start
+  time** — that is the same fact the guard already believes it is checking.
 - **A FAILED BUILD LEAVES THE OLD BINARY.** `spec-test` then runs the *previous* compiler and reports a
   green suite. **Check the build's exit code before believing a test result.** Three false greens this
   session.

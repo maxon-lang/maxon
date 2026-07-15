@@ -70,7 +70,8 @@ budgets**. Old "Stage 0" (tooling) is **CLOSED**. Old "Stage 4" (broaden) is **B
 ## Context
 
 `maxon-shv2` is the ground-up rewrite of `maxon-selfhosted` (v1, 191,487 lines). shv2 is at
-**21,038 lines**, with a working `spec-test` runner (**specs-shv2 126/0 across 19 files**), a
+**21,038 lines**, with a working `spec-test` runner (**specs-shv2 281/0** as of 2026-07-15 — it was
+126/0 across 19 files when this plan was written; Workstream S's on-demand ports are what grew it), a
 warm-rebuild determinism gate, the full scalar core, and a **linear** SSA-chordal register
 allocator. The bones are good — content-hash query spine, parse-staging, 3 IR tiers
 (Maxon→Std→Target, no MIR), flat `StdOp`, x64/PE backend.
@@ -82,7 +83,7 @@ is missing grouping, `true`/`false`, `not`/`and`/`or`, block scoping, void funct
 work is P1.0d (complete the scalar core); P1.1 (structs) follows it.** See the ladder.
 
 > **Note the two senses of "shv2 runs its spec tests."** shv2 *already* has a `spec-test`
-> command (126/0) — but that harness is compiled by **`maxon.exe`**, the C# bootstrap. Phase 1
+> command (281/0) — but that harness is compiled by **`maxon.exe`**, the C# bootstrap. Phase 1
 > is the other sense, the one `maxon-selfhosted` has and shv2 does not: **shv2 compiles the
 > harness itself.** That is the whole difference, and it is the entire mechanism ladder.
 
@@ -431,9 +432,9 @@ green build.
 | **P1.0a** | **grow the harness's parallel worker pool back** | **The acceptance target must exist before it can be a target.** Port `maxon-selfhosted`'s [`runAllSpecTestsParallel`](maxon-selfhosted/Testing/SpecTestRunner.maxon#L3401) worker pool into `maxon-shv2/Testing/`. Written in Maxon, compiled by **`maxon.exe`**, green under today's gates — so it lands *now*, and every later rung is measured against the real Phase-1 target instead of the serial stub. **Workstream S is what makes it pay:** the corpus takes the suite from 126 tests to thousands |
 | **P1.0b** | **Workstream S — the `disabled-test:` marker, and ON-DEMAND porting** ⭐ | *(see Workstream S.)* The marker is SHIPPED (`362b07b72`). **The bulk port is NOT, and will not be** (user directive): spec files are copied from `/specs` **on demand, by the rung that needs them**, not as a corpus dump. A trial bulk sweep was run once, as a MEASUREMENT, and then discarded — see P1.0d, which is what it found |
 | **P1.0d** | **complete the SCALAR CORE** ⭐⭐ | **NEW, and it exists because the sweep proved this plan's central claim false.** See "The scalar core is NOT done" below. **SLICE 1 ✅ DONE** (parens · `true`/`false` · block scoping · void fns · top-level `typealias`) — suite **126 → 159**. **SLICES REMAINING ← NEXT:** see below |
-| **P1.0d.2** | `not` / `and` / `or` · bitwise · character literals | **← NEXT.** Short-circuit `and`/`or` is control flow, so it lands as blocks + phis on the parser's on-the-fly SSA. Bitwise + chars are new `StdOp`s in the existing integer register class — **APPEND them at the END of a band** (a `match` range arm silently swallows anything inserted mid-band) |
-| **P1.0d.3** | **`a / 0` ⇒ a clean panic** | Today it escapes as a raw `0xC0000094` hardware trap. `specs/safety.md` demands exit **1** + `panic: integer divide by zero` on stderr. ⇒ needs a **minimal emitted panic runtime** (write to stderr + exit) — the first slice of **Workstream R**, arriving early because a correctness gap forces it |
-| **P1.0d.5** | **top-level `var` (GLOBALS)** ⚠ **another one the plan never listed** | The corpus found it, exactly as it found parens and block scoping: `specs/short-circuit-evaluation.md` is **0/12, and NINE of the twelve need a global.** A global is how most spec files *observe a side effect*, so expect it to gate a wide slice. **Not merely a parser rule** — it needs storage (rdata/data), initialization order, and, for a managed global, a lifetime. ⚠ It already cost real test coverage: with no globals, short-circuit `and`/`or` had **no way to prove the right operand is SKIPPED** — an eager `and` returns the *same answer* on every input, so no value test can see it. P1.0d.2 had to author a bespoke spec whose guarded operand **divides by zero**, so a clean exit *is* the proof. **Retire that spec when globals land and the real cases can run** |
+| **P1.0d.2** | `not` / `and` / `or` · bitwise · character literals | ✅ **DONE.** Short-circuit `and`/`or` is control flow, so it landed as blocks + phis on the parser's on-the-fly SSA. Bitwise + chars are new `StdOp`s in the existing integer register class — **APPENDED at the END of a band** (a `match` range arm silently swallows anything inserted mid-band) |
+| **P1.0d.3** | **`a / 0` ⇒ a clean panic** | ✅ **DONE 2026-07-15** — suite **279 → 281**. It escaped as a raw `0xC0000094` with **empty stderr**; it is now exit **1** + `panic: integer divide by zero` + a symbolized backtrace, and `specs/safety.md`'s `divide-by-zero` + `mod-by-zero` are ported and ENABLED. **Workstream R's first slice.** Three things this rung settled, each bigger than the divide: (1) **the fault is caught by a VEH thunk, not a divisor check** — shv2 is x64-only and the CPU raises `#DE` for free, so a `cmp`/`branch` before every `idiv` would be the scope cut the PRINCIPLE names; **NO gt redirect** (the reference's fault path rides green threads, which arrive at P1.5) — the thunk prints and exits in place, so the context travels as ordinary arguments and needs no fault globals at all. (2) ⭐ **FRAME POINTERS, on every function, leaves included** — see below. (3) the harness grew a ` ```stderr ` fence: `maxoncstderr` is the COMPILER's stderr, and a program's **RUNTIME** stderr was a thing no spec could pin |
+| **P1.0d.5** | **top-level `var` (GLOBALS)** ⚠ **another one the plan never listed** | **← NEXT.** The corpus found it, exactly as it found parens and block scoping: `specs/short-circuit-evaluation.md` is **0/12, and NINE of the twelve need a global.** A global is how most spec files *observe a side effect*, so expect it to gate a wide slice. **Not merely a parser rule** — it needs storage (rdata/data), initialization order, and, for a managed global, a lifetime. ⚠ It already cost real test coverage: with no globals, short-circuit `and`/`or` had **no way to prove the right operand is SKIPPED** — an eager `and` returns the *same answer* on every input, so no value test can see it. P1.0d.2 had to author a bespoke spec whose guarded operand **divides by zero**, so a clean exit *is* the proof. **Retire that spec when globals land and the real cases can run** |
 | **P1.0d.4** | **floats (f64)** | **The deep one — do it LAST.** There is **no XMM/float register class in the allocator at all**, so this is a whole new register bank (+ SSE emitters, float rdata, `NumberParsing` already lexes the literals). 67 corpus cases |
 | **P1.0c** | **measure the stdlib cone** | against the **upgraded** harness. Cheap, and it sets the boundary — see above |
 
@@ -455,6 +456,31 @@ first run.** Every item below was reproduced against the compiler, not inferred:
 | **void functions** | **ANY** void function panics the compiler, *even if never called* (`IrBlock.maxon:238`, no terminator). A second, distinct panic fires on an explicit bare `return` (`LowerMaxonToStd.maxon:352`), whose own message wrongly assumes only `main` can be void |
 | **`a / 0`** | escapes as a raw `0xC0000094` hardware trap. `specs/safety.md` requires a clean `panic` + exit 1 |
 | **floats · chars · bitwise** | had **no rung anywhere on the ladder**. Folded into P1.0d (user decision): they are scalar primitives, not mechanisms |
+
+### ⭐ FRAME POINTERS, on every function — decided at P1.0d.3, but the forcing reason is **P1.5**
+
+**shv2 now emits `push rbp` / `mov rbp, rsp` in EVERY prologue, leaves included** (user decision,
+2026-07-15). It previously used frame-pointer-omitted (rsp-only) frames **while still reserving rbp** —
+a **strictly dominated** state: it paid the register cost and took none of the benefit. **rbp stays
+NON-allocatable; the pool is unchanged at 14.** Addressing stays **rsp-relative** — the divergence from
+v1 is deliberate and narrow: **rbp is for the CHAIN, not for addressing.**
+
+**The stack trace only EXPOSED this. The reason it is not a P1.0d.3 detail is
+[`__gt_morestack`](maxon-selfhosted/Compiler/Targets/X64/X64Backend.maxon#L7094):** v1 grows a green-thread
+stack by allocating 2×, copying, and then **FIXING THE SAVED-RBP CHAIN by the relocation offset** (step 6b
+walks the chain on the new stack, adjusting every saved rbp in the old range). GT stacks are 2 KB initial
+and **RELOCATE** on growth, Go-`runtime.morestack`-style. ⇒ **A relocating stack must find and fix every
+interior frame pointer, and the chain is how it finds them.** **R3 @ P1.5 commits shv2 to exactly that
+model**, so shv2 needs frame pointers there *regardless of panics*. Landing them now moved all 279 goldens
+**once**; retrofitting at P1.5 moves the same goldens **then**, onto a shipped runtime. *Do the hard things
+early.*
+
+⚠ **A frameless leaf could not be spared:** you cannot unwind OUT of one without knowing its frame layout,
+and the faulting `main` **is** one — so framing only "framed" functions does not help. (And because no shv2
+function ever wrote rbp, rbp was *invariant program-wide*: walking `[rbp]` gave garbage, not a short trace.)
+**`.pdata`/`.xdata` + `RtlVirtualUnwind` is the FPO-correct alternative and was rejected: NO compiler in
+this tree emits unwind info**, so it has no port source and is its own rung — and it does **not** solve
+morestack's fixup, which needs the chain anyway.
 
 ⇒ **P1.0d lands before P1.1**, and it pulls the **declaration half of P1.9 forward** (parse + resolve a
 top-level ranged `typealias`; the corpus's ranges are wide, so the *checks* — `ExpandCastRangeChecks` /
@@ -514,10 +540,25 @@ had not seen, they turned up **two real bugs** in code that was green.
 
 **The formats are IDENTICAL — porting is `cp`.** shv2's `SpecParser` was modeled on the main suite
 and shares its every convention: **275 of the 276** `/specs` files already use the same
-`<!-- test: <name> -->` markers under the same `## Tests` heading, and the four fences shv2 accepts
-(` ```maxon ` / ` ```exitcode ` / ` ```stdout ` / ` ```maxoncstderr `) cover **~6,980 of the 7,875
-fences** in the corpus. The remainder is ` ```text ` (243, mostly prose), ` ```stderr ` (31), and
-` ```mm-trace ` (1) — triage, not a porting layer. **There is no translation step to build.**
+`<!-- test: <name> -->` markers under the same `## Tests` heading.
+
+> ⚠ **CORRECTED 2026-07-15 — this paragraph asserted a capability that was never built, which is this
+> plan committing the project's own signature bug.** It claimed *"the **four** fences shv2 accepts
+> (` ```maxon ` / ` ```exitcode ` / ` ```stdout ` / ` ```maxoncstderr `) cover ~6,980 of 7,875 fences"*
+> and dismissed ` ```stderr ` as *"triage, not a porting layer."* **Measured against the source:**
+> - **There is NO ` ```stdout ` fence. There never was.** `SpecParser.maxon` defines exactly
+>   `SourceFence` / `ExitCodeFence` / `CompilerErrorFence` — **three**. `/specs` has **711** ` ```stdout `
+>   blocks. It is moot only because a shv2 program **cannot yet produce stdout** (no `print`, no `String`
+>   until **P1.2**) — so it is P1.2's obligation, not a gap today. **Do not let the count be re-asserted
+>   from this document.**
+> - ` ```stderr ` was **32 blocks, and it was NOT triage** — it is a program's **RUNTIME** stderr, wholly
+>   distinct from ` ```maxoncstderr ` (the COMPILER's). It is what `specs/safety.md` pins a panic with, so
+>   **P1.0d.3 had to build it** (`bdff8491f`). ✅ **Now shipped**, with `stripFaultRipSuffix` mirroring the
+>   reference's `TestRunner.cs:1427`.
+>
+> ⇒ **Fences shv2 accepts today: FOUR** — ` ```maxon ` · ` ```exitcode ` · ` ```maxoncstderr ` ·
+> ` ```stderr `. **Missing: ` ```stdout ` (711 blocks, gated on P1.2)**, ` ```text ` (243, mostly prose),
+> ` ```mm-trace ` (1). **There is still no translation step to build.**
 
 ### ⚠ The hard part: port at TEST granularity, not FILE granularity
 
@@ -660,6 +701,29 @@ re-open the compass decision.
 the runtime *shv2's backend hand-assembles*; a shv2-compiled harness cannot **run** without it.
 Sequencing it after the ladder would contradict P1.2's own mm-trace gate, so it lands in slices,
 each WITH the milestone that first needs it:
+
+> ### ⭐ R1 @ P1.2 MUST DECIDE THE RUNTIME'S **FORM**. P1.0d.3 DEFERRED IT — DELIBERATELY, NOT BY INERTIA.
+>
+> **The panic runtime (P1.0d.3) is HAND-ASSEMBLED machine code**, per the budget line above and the C#
+> bootstrap's approach. That was a **user decision (2026-07-15), taken with the alternative on the table**,
+> and it was scoped to *that rung* — ~6 functions, needing **zero** new Std ops. **It is NOT a decision
+> about the other ~5–7k lines, and R1 must make that one on purpose.**
+>
+> **The alternative, and it is real: v1 does NOT hand-assemble its runtime.**
+> [`maxon-selfhosted/Compiler/Runtime/runtime.std`](maxon-selfhosted/Compiler/Runtime/runtime.std) is
+> **6,049 lines of Std-level IR text**, parsed by
+> [`StdParser.maxon`](maxon-selfhosted/Compiler/Runtime/StdParser.maxon) (992 lines) into `IrFunction`s
+> and pushed through the ordinary backend — so **the runtime gets register allocation and
+> target-independence for free**, and every later slice is IR text rather than bytes. v1 hand-emits
+> **only** the VEH thunk (`X64Backend.maxon:6948`), because the OS calls it with a raw ABI. **That hybrid
+> is the shape to weigh.**
+>
+> **Why it was NOT adopted at P1.0d.3:** shv2's Std tier declares `memory`/`system` bands but **only
+> produces `arith` and `call`** — no `globalAddr`, `loadIndirect`, `funcAddr`, `osWrite`, `osExit`. The IR
+> route needs those, and they are **P1.2's own work**. ⇒ **At R1 the precondition is satisfied and the
+> excuse expires. Choose then, with the ops in hand, and write the reason down here.**
+> ⚠ **The named risk is inertia: 6 hand-assembled functions becoming 5,000 by default.** This box exists
+> so that cannot happen quietly.
 
 - **R1 @ P1.2** — slab allocator · `__mm_incref`/`__mm_decref` · the `__destruct_*` cascade ·
   `__ManagedMemory` · the **string runtime** (`mrt_alloc_with_dtor`, `memcpy`,
@@ -931,7 +995,7 @@ it is retired.**
 
 ## Verification
 
-- **Per rung:** `maxon-shv2 spec-test` stays green (**126/0** as of 2026-07-13, and growing with
+- **Per rung:** `maxon-shv2 spec-test` stays green (**281/0** as of 2026-07-15, and growing with
   every Workstream-S port); ownership rungs (P1.2+) also assert an `mm-trace` block via
   `maxon monitor`.
 - **The ratchet (Workstream S):** **an ENABLED spec case may never be re-disabled.** Behavioural,
