@@ -626,6 +626,28 @@ end 'main'
 42
 ```
 
+<!-- test: top-level-let-scalar-reassign-error -->
+Assigning to an immutable top-level `let` is E2013 — and the diagnostic names the `let` the
+author actually wrote, rather than reporting a name that is defined two lines up as undefined.
+
+That distinction is the whole reason the assignment path probes for a constant at all: a name
+that is neither a local nor a top-level `var` would otherwise fall through to "undefined
+variable", sending the reader hunting for a typo instead of at the `let` they meant to make a
+`var`. The struct twin below pins the same arm but is blocked on P1.1 — a scalar `let` reaches
+it today, so the property is pinned now rather than on structs' schedule.
+
+```maxon
+let origin = 5
+
+function main() returns ExitCode
+	origin = 6
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2013: <fragment>:5:2: cannot assign to immutable variable: 'origin'
+```
+
 <!-- disabled-test: top-level-let-struct-reassign-error -->
 <!-- P1.1 structs — the `let` holds a `Point.create(...)`, a runtime initializer -->
 Reassigning an immutable top-level `let` struct variable should error.
