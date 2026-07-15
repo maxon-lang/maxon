@@ -364,6 +364,25 @@ public partial class RuntimeEmitter {
   }
 
   // =========================================================================
+  // Immortal fast-path shared by mm_incref and mm_decref.
+  //
+  // Emits: if [user_ptr - 8] == MmImmortalRefcount, return immediately (the object is a
+  // shared static-literal record — incref/decref are no-ops and it is never freed). Assumes
+  // user_ptr is in slot 0 and already known non-null. Clobbers Scratch0/1/2; both callers
+  // reload what they need afterwards.
+  // =========================================================================
+  private void EmitImmortalReturnGuard(string labelPrefix) {
+    _b.LoadLocal(VReg.Scratch0, 0);                          // Scratch0 = user_ptr
+    _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, MmOffRefcount); // Scratch1 = refcount
+    _b.MovRegImm(VReg.Scratch2, MmImmortalRefcount);
+    _b.CmpRegReg(VReg.Scratch1, VReg.Scratch2);
+    var notImmortal = UniqueLabel(labelPrefix + "_not_immortal");
+    _b.JumpIf(Condition.NotEqual, notImmortal);
+    _b.FunctionEnd();                                        // immortal: no-op return
+    _b.DefineLabel(notImmortal);
+  }
+
+  // =========================================================================
   // mm_incref(user_ptr, [scope_cstr]) -> void
   // Increments refcount at [ptr-8]. Panics on NULL pointer.
   // =========================================================================
@@ -379,6 +398,11 @@ public partial class RuntimeEmitter {
     _b.LeaSymdata(VReg.Arg0, "__mm_panic_incref_null");
     _b.Call("mrt_panic");
     _b.DefineLabel(notNull);
+
+    // IMMORTAL fast-path: a static-literal record carries MmImmortalRefcount in its refcount
+    // slot. Incrementing a shared immortal object is a no-op — return before touching the
+    // atomic. One extra load+movabs+cmp+branch on the hot path (measured negligible).
+    EmitImmortalReturnGuard("mm_incref_immortal");
 
     // Atomic increment refcount at [user_ptr - 8]
     _b.LoadLocal(VReg.Scratch0, 0);
@@ -423,6 +447,12 @@ public partial class RuntimeEmitter {
     _b.LeaSymdata(VReg.Arg0, "__mm_panic_decref_null");
     _b.Call("mrt_panic");
     _b.DefineLabel(notNull);
+
+    // IMMORTAL fast-path: a static-literal record carries MmImmortalRefcount in its refcount
+    // slot. Decrementing it is a no-op — return before the underflow check, the atomic dec,
+    // the destructor, and mm_free, so a shared immortal is never counted and never freed.
+    // Placed before the invalid-pointer guard so an immortal exits on the cheapest path.
+    EmitImmortalReturnGuard("mm_decref_immortal");
 
     // Invalid pointer guard: catch pointers that obviously aren't heap addresses.
     // Rejects negatives (kernel space, -1 sentinel, etc.) via a signed compare,

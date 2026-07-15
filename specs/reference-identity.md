@@ -36,6 +36,7 @@ areSame(p, b: p)  // true  — same reference passed twice
 - `is` and `is not` work on struct-typed values (including String, Array, and user-defined types).
 - Using `is` or `is not` on primitive types (int, float, bool, byte) is a compile error — primitives are values, not references.
 - Both operands must be the same type.
+- **Literal interning:** identical string/byte/character literals that are provably never mutated are emitted once as a single shared immortal object. Two such literals with the same value therefore refer to the same object, so `is` returns `true` for them (e.g. `"hello" is "hello"`). This is safe precisely because the shared object is immutable; a literal that *is* mutated gets its own independent object.
 
 ## Tests
 
@@ -229,6 +230,8 @@ end 'main'
 <!-- test: string-identity -->
 ```maxon
 function main() returns ExitCode
+	// Two identical string literals are INTERNED: a never-mutated literal is emitted once as a
+	// shared immortal object, so `a` and `b` refer to the same object and `a is b` is true.
 	let a = "hello"
 	let b = "hello"
 	var result = 0
@@ -242,7 +245,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```exitcode
-1
+11
 ```
 
 <!-- test: mutation-through-alias -->

@@ -80,6 +80,7 @@ public static class PeepholePass {
       case X86JmpOp:
       case X86RetOp:
       case X86GlobalLoadOp:
+      case X86GlobalLeaOp:
       case X86CvttFloat2SiOp:
         break;
       // Single GPR read

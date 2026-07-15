@@ -115,6 +115,7 @@ public enum StdOpKind {
   LeaRdata,
   LeaSymdata,
   LeaUcddata,
+  LeaGlobal,
   StoreIndirect,
   LoadIndirect,
   NullSafeLoadI64,
@@ -1228,6 +1229,21 @@ public sealed class StdLeaUcddataOp(string ucddataLabel) : StandardOp {
   public override StdOpKind Kind => StdOpKind.LeaUcddata;
   public override string Mnemonic => $"memref.lea_ucddata {UcddataLabel}";
   public string UcddataLabel { get; } = ucddataLabel;
+  public StdPtr Result { get; } = new StdPtr(IrContext.Current.NextStdId());
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  public override List<StdValue> ReadValues => [];
+  public override int PureResultId => Result.Id;
+}
+
+// Gets the ADDRESS of a writable .data global via RIP-relative (x64) / ADRP+ADD (arm64)
+// addressing. Unlike StdGlobalLoad*, which loads the VALUE at the global, this yields the
+// global's own address — used to reach the immortal static-literal record blobs, which live
+// in .data as raw managed objects (32-byte MM header + record fields) whose address is
+// computed at their use sites and whose buffer pointer is fixed up once at __module_init.
+public sealed class StdLeaGlobalOp(string globalName) : StandardOp {
+  public override StdOpKind Kind => StdOpKind.LeaGlobal;
+  public override string Mnemonic => $"memref.lea_global {GlobalName}";
+  public string GlobalName { get; } = globalName;
   public StdPtr Result { get; } = new StdPtr(IrContext.Current.NextStdId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override List<StdValue> ReadValues => [];

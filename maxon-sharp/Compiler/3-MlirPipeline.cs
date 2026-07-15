@@ -39,6 +39,7 @@ public class IrPipeline {
       sw.Restart(); TypeCycleCheckPass.Run(module);                       StageTimer.Record(timings, "typeCycle",  sw.ElapsedMilliseconds);
       sw.Restart(); BorrowCheckPass.Run(module);                          StageTimer.Record(timings, "borrow",     sw.ElapsedMilliseconds);
       sw.Restart(); StackPromotionAnalysisPass.Run(module);               StageTimer.Record(timings, "stackProm",  sw.ElapsedMilliseconds);
+      sw.Restart(); module.StaticEligibleLiteralIds = LiteralCoverageAnalysisPass.Run(module, report: Compiler.LiteralCoverage); StageTimer.Record(timings, "litStatic", sw.ElapsedMilliseconds);
     } else {
       ParameterMutationAnalysisPass.Run(module);
       PurityAnalysisPass.Run(module);
@@ -52,15 +53,16 @@ public class IrPipeline {
       TypeCycleCheckPass.Run(module);
       BorrowCheckPass.Run(module);
       StackPromotionAnalysisPass.Run(module);
+      module.StaticEligibleLiteralIds = LiteralCoverageAnalysisPass.Run(module, report: Compiler.LiteralCoverage);
     }
 
-    // MEASUREMENT-ONLY (off by default): report static-eligibility of managed literal
-    // sites. Runs after monomorphization + DFE so it sees the concrete, reachable set
-    // of literals, and before lowering so literals are still MaxonStringLiteralOp etc.
-    // It reads the IR and writes only to stderr — the lowering below is untouched.
-    if (Compiler.LiteralCoverage) {
-      LiteralCoverageAnalysisPass.Run(module);
-    }
+    // Static-literal escape analysis (ALWAYS runs — it is the eligibility the lowering below
+    // consumes to emit shared immortal .data records for never-mutated string/byte/char
+    // literals). Runs after monomorphization + DFE so it sees the concrete, reachable literal
+    // set, and before lowering so literals are still MaxonStringLiteralOp etc. Under
+    // `--literal-coverage` it ALSO prints the coverage report to stderr (measurement only);
+    // the report flag changes nothing the lowering reads. The pass is a whole-program union
+    // find + call-graph fixpoint — linear in program size and cheap (see litStatic timing).
 
     // Capture maxon stage
     if (returnIr || dumpStagesBasePath != null) {

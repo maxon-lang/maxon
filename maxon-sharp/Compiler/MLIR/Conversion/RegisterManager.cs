@@ -931,6 +931,11 @@ public class RegisterManager : RegisterManagerBase<X86Register, X86XmmRegister, 
     block.AddOp(new X86LeaRipRelOp(gpr, rdataLabel));
   }
 
+  public void EmitLeaGlobal(StdPtr result, string globalName, IrBlock<X86Op> block) {
+    var gpr = AllocateRegister(result, block);
+    block.AddOp(new X86GlobalLeaOp(globalName, gpr));
+  }
+
   public void EmitLeaSymdataRelative(StdPtr result, string symdataLabel, IrBlock<X86Op> block) {
     var gpr = AllocateRegister(result, block);
     block.AddOp(new X86LeaSymdataRelOp(gpr, symdataLabel));

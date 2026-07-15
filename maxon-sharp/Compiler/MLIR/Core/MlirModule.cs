@@ -409,6 +409,14 @@ public class IrModule<TOp> where TOp : IPrintableOp {
   // Deferred global var/let initializations from all source files, emitted at start of main()
   public List<DeferredGlobalInit> DeferredGlobalInits { get; } = [];
 
+  // Static-literal escape analysis result (LiteralCoverageAnalysisPass): the MaxonValue result
+  // ids of string/byte/char literal sites proven never-mutated, so the lowering may emit each
+  // as ONE shared immortal .data record instead of a per-evaluation heap allocation. A sound
+  // LOWER BOUND — an id's absence only ever costs a heap allocation, never correctness. Null
+  // means the analysis has not run (e.g. a unit test bypassing the pipeline); the lowering
+  // then treats every literal as non-eligible.
+  public HashSet<int>? StaticEligibleLiteralIds { get; set; }
+
   // Source files containing interface extensions that found no conforming types
   // during initial pre-scan (due to file ordering). Rescanned after all pre-scans.
   public HashSet<string> DeferredExtensionFiles { get; } = [];

@@ -409,6 +409,9 @@ public partial class X86CodeEmitter() {
       case X86GlobalLoadOp globalLoad:
         EmitGlobalLoadReg(globalLoad.Dest, globalLoad.GlobalName, globalLoad.Size);
         break;
+      case X86GlobalLeaOp globalLea:
+        EmitGlobalLeaReg(globalLea.Dest, globalLea.GlobalName);
+        break;
       case X86GlobalStoreOp globalStore:
         EmitGlobalStoreReg(globalStore.Src, globalStore.GlobalName, globalStore.Size);
         break;

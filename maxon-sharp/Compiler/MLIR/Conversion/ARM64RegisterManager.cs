@@ -382,6 +382,11 @@ public class ARM64RegisterManager : RegisterManagerBase<ARM64Register, ARM64Floa
     block.AddOp(new ARM64AdrpAddRdataOp(gpr, rdataLabel));
   }
 
+  public void EmitLeaGlobal(StdValue result, string globalName, IrBlock<ARM64Op> block) {
+    var gpr = AllocateRegister(result, block);
+    block.AddOp(new ARM64AdrpAddGlobalOp(gpr, globalName));
+  }
+
   public void EmitLeaSymdata(StdValue result, string symdataLabel, IrBlock<ARM64Op> block) {
     var gpr = AllocateRegister(result, block);
     block.AddOp(new ARM64AdrpAddSymdataOp(gpr, symdataLabel));

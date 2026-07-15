@@ -53,11 +53,18 @@ public static class LiteralCoverageAnalysisPass {
 
   private enum Reason { Eligible, MutatingIntrinsicTarget, PassedToMutatingParam, ConservativeIndirect, Aliased }
 
-  public static void Run(IrModule<MaxonOp> module) {
+  /// Runs the whole-program escape analysis and returns the SET of static-eligible literal
+  /// site ids (the MaxonValue result id of each provably-never-mutated string/byte/char
+  /// literal). This is the sound lower bound the static-literal lowering consumes: a site in
+  /// the set is safe to emit as one shared immortal record; a site absent from it falls back
+  /// to a per-evaluation heap allocation. When <paramref name="report"/> is set, also prints
+  /// the coverage report to stderr (the `--literal-coverage` measurement path).
+  public static HashSet<int> Run(IrModule<MaxonOp> module, bool report) {
     var analysis = new Analysis(module);
     analysis.BuildGraphs();
     analysis.Solve();
-    analysis.Report();
+    if (report) analysis.Report();
+    return analysis.CollectEligible();
   }
 
   private sealed class Analysis {
@@ -395,6 +402,23 @@ public static class LiteralCoverageAnalysisPass {
         foreach (var rn in ctx.ReturnNodes) mutatedRoots.Add(Find(rn));
       }
       return (mutatedRoots, mpSinkValueIds);
+    }
+
+    /// The static-eligible literal site ids — every literal whose value never reaches a
+    /// mutation, computed with the exact same Classify the report counts. A LOWER BOUND
+    /// (all imprecision rejects), so the lowering that reads it can only ever be conservative.
+    public HashSet<int> CollectEligible() {
+      var eligible = new HashSet<int>();
+      foreach (var ctx in _ctxs) {
+        if (ctx.Literals.Count == 0) continue;
+        var (mutatedRoots, mpSinkValueIds) = FinalMutation(ctx);
+        foreach (var (_, valueId, _) in ctx.Literals) {
+          if (Classify(ctx, valueId, mutatedRoots, mpSinkValueIds) == Reason.Eligible) {
+            eligible.Add(valueId);
+          }
+        }
+      }
+      return eligible;
     }
 
     public void Report() {

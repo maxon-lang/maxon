@@ -95,6 +95,7 @@ public enum X86OpKind {
   MovDwordIndirectReg,
   MovWordIndirectReg,
   GlobalLoad,
+  GlobalLea,
   GlobalStore,
   GlobalLoadXmm,
   GlobalStoreXmm,
@@ -739,6 +740,14 @@ public sealed class X86GlobalLoadOp(string globalName, X86Register dest, int siz
     4 => $"x64.mov {Dest.ToString().ToLower()}, dword [rip+{GlobalName}]",
     _ => $"x64.mov {Dest.ToString().ToLower()}, qword [rip+{GlobalName}]"
   };
+}
+
+// LEA dest, [rip + globalName] - load effective ADDRESS of a .data global
+public sealed class X86GlobalLeaOp(string globalName, X86Register dest) : X86Op {
+  public override X86OpKind Kind => X86OpKind.GlobalLea;
+  public string GlobalName { get; } = globalName;
+  public X86Register Dest { get; } = dest;
+  public override string Mnemonic => $"x64.lea {Dest.ToString().ToLower()}, [rip+{GlobalName}]";
 }
 
 // MOV [rip + globalName], src - store integer/bool global (size: 1, 2, 4, or 8 bytes)

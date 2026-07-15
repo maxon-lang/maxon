@@ -935,6 +935,11 @@ public static class StandardToX86Conversion {
             break;
           }
 
+          case StdLeaGlobalOp leaGlobalOp: {
+            regManager.EmitLeaGlobal(leaGlobalOp.Result, leaGlobalOp.GlobalName, x86Block);
+            break;
+          }
+
           case StdLeaSymdataOp leaSymdataOp: {
             regManager.EmitLeaSymdataRelative(leaSymdataOp.Result, leaSymdataOp.SymdataLabel, x86Block);
             break;

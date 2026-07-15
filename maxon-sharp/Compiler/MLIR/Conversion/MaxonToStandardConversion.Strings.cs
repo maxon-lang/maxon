@@ -1,9 +1,63 @@
 using MaxonSharp.Compiler.Ir.Core;
 using MaxonSharp.Compiler.Ir.Dialects;
+using Rt = MaxonSharp.Compiler.Ir.Runtime.RuntimeEmitter;
 
 namespace MaxonSharp.Compiler.Ir.Conversion;
 
 public static partial class MaxonToStandardConversion {
+	// ---- Static (immortal) literal records --------------------------------------------------
+	// A string/byte/char literal SITE that LiteralCoverageAnalysisPass proved never-mutated is
+	// lowered not to a per-evaluation `mm_alloc` of a managed record, but to a reference to ONE
+	// shared, immortal record living in .data (a 32-byte MM header + the record fields). The
+	// records are interned by (value, typeName) so identical literals share a single blob, and
+	// materialized once at __module_init (only the buffer pointer, an ASLR-relocated data->data
+	// pointer, cannot be baked into .data and is stored there at startup). See the design in the
+	// module-scope materialization helper below.
+
+	// Set of static-eligible literal result ids for the module being lowered (from the module's
+	// StaticEligibleLiteralIds; null => treat every literal as non-eligible / heap-allocated).
+	[ThreadStatic] private static HashSet<int>? _staticEligibleLiterals;
+	// Interns a shared record by (value, typeName) -> its .data global label.
+	[ThreadStatic] private static Dictionary<(string Value, string TypeName), string>? _staticRecordLabels;
+	// The records to materialize at __module_init (order preserved for stable codegen).
+	[ThreadStatic] private static List<StaticLiteralRecord>? _staticLiteralRecords;
+	[ThreadStatic] private static int _nextStaticLiteralId;
+
+	// One immortal literal record's compile-time-known contents. buffer@0 is filled at init
+	// (RdataLabel), everything else is a constant written there too (see EmitStaticRecordInit).
+	private sealed record StaticLiteralRecord(
+		string GlobalLabel, string RdataLabel, int RecordSize, int AllocSize,
+		int TagIndex, int Length, bool IsString, bool IsAscii);
+
+	/// Reset the static-literal state for a fresh module lowering, seeding the eligibility set
+	/// computed by LiteralCoverageAnalysisPass (a sound lower bound; null when the pass did not run).
+	private static void ResetStaticLiteralState(HashSet<int>? eligible) {
+		_staticEligibleLiterals = eligible;
+		_staticRecordLabels = [];
+		_staticLiteralRecords = [];
+		_nextStaticLiteralId = 0;
+	}
+
+	private static bool IsStaticEligibleLiteral(int resultId) =>
+		_staticEligibleLiterals != null && _staticEligibleLiterals.Contains(resultId);
+
+	/// Intern a literal's encoded bytes into .rodata (NUL-terminated), returning the label to
+	/// address them by and the byte length. Deduplicated by value via _rdataStringCache, exactly
+	/// as the emitting path was — factored out so the static-literal record materialization can
+	/// reference the SAME bytes by label without also emitting a per-site LEA.
+	private static (string Label, int ByteLen) InternRdataLiteral(
+	  string value, string rdataLabel, IrModule<StandardOp> result, System.Text.Encoding? encoding = null) {
+		var bytes = (encoding ?? System.Text.Encoding.UTF8).GetBytes(value);
+		if (_rdataStringCache!.TryGetValue(value, out var existingLabel)) {
+			return (existingLabel, bytes.Length);
+		}
+		var nullTerminated = new byte[bytes.Length + 1];
+		Array.Copy(bytes, nullTerminated, bytes.Length);
+		result.RdataEntries.Add((rdataLabel, nullTerminated, 1));
+		_rdataStringCache[value] = rdataLabel;
+		return (rdataLabel, bytes.Length);
+	}
+
 	/// <summary>
 	/// Encode a string literal into rdata and emit LEA + PtrToI64 to get a buffer pointer and length.
 	/// </summary>
@@ -13,23 +67,14 @@ public static partial class MaxonToStandardConversion {
 	  IrBlock<StandardOp> block,
 	  IrModule<StandardOp> result,
 	  System.Text.Encoding? encoding = null) {
-		var utf8Bytes = (encoding ?? System.Text.Encoding.UTF8).GetBytes(value);
+		var (label, byteLen) = InternRdataLiteral(value, rdataLabel, result, encoding);
 
-		if (_rdataStringCache!.TryGetValue(value, out var existingLabel)) {
-			rdataLabel = existingLabel;
-		} else {
-			var nullTerminated = new byte[utf8Bytes.Length + 1];
-			Array.Copy(utf8Bytes, nullTerminated, utf8Bytes.Length);
-			result.RdataEntries.Add((rdataLabel, nullTerminated, 1));
-			_rdataStringCache[value] = rdataLabel;
-		}
-
-		var leaOp = new StdLeaRdataOp(rdataLabel);
+		var leaOp = new StdLeaRdataOp(label);
 		block.AddOp(leaOp);
 		var ptrOp = new StdPtrToI64Op(leaOp.Result);
 		block.AddOp(ptrOp);
 
-		var lenOp = new StdConstI64Op(utf8Bytes.Length);
+		var lenOp = new StdConstI64Op(byteLen);
 		block.AddOp(lenOp);
 
 		return (ptrOp.Result, lenOp.Result);
@@ -74,6 +119,126 @@ public static partial class MaxonToStandardConversion {
 		return EmitFusedRdataRecord(bufferPtr, lengthVal, allocTag ?? "unknown", tempName, block, varTypes);
 	}
 
+	/// Intern the shared immortal record for (value, typeName), creating it — rdata bytes, a
+	/// zero-initialized .data blob global, and a module-init materialization request — on first
+	/// sight, and returning its .data global label. The record's byte length comes from the
+	/// interned rdata; its size/tag from the type. isAscii is only meaningful (and only baked)
+	/// for a String.
+	private static string InternStaticLiteralRecord(
+	  string value, string typeName, bool isString, bool isAscii,
+	  string rdataPrefix, System.Text.Encoding? encoding, IrModule<StandardOp> result) {
+
+		var key = (value, typeName);
+		if (_staticRecordLabels!.TryGetValue(key, out var existing)) return existing;
+
+		var rdataLabel = $"__{rdataPrefix}_{NextRdataId()}";
+		var (label, byteLen) = InternRdataLiteral(value, rdataLabel, result, encoding);
+
+		var globalLabel = $"__static_lit_{_nextStaticLiteralId++}";
+		int recordSize = FusedManagedRecordSize(typeName);
+		int allocSize = Rt.MmHeaderSize + recordSize;
+		// A raw, zero-initialized .data blob (writable — its buffer field is fixed up at init).
+		result.Globals.Add(new IrGlobal(globalLabel, new IrType("__StaticLiteralRecord", allocSize)));
+
+		_staticLiteralRecords!.Add(new StaticLiteralRecord(
+			globalLabel, label, recordSize, allocSize, EnsureTagIndex(typeName), byteLen, isString, isAscii));
+		_staticRecordLabels[key] = globalLabel;
+		return globalLabel;
+	}
+
+	/// Lower a static-eligible managed literal to a reference to its SHARED immortal record:
+	/// ZERO per-evaluation allocation. Materializes the record's user pointer (= &blob +
+	/// MmHeaderSize, past the header, exactly like an mm_alloc result) into a temp and returns it.
+	private static StdHeapPtr EmitStaticManagedLiteral(
+	  string value, int resultId, string typeName, bool isString, bool isAscii,
+	  string rdataPrefix, string tempPrefix, System.Text.Encoding? encoding,
+	  IrBlock<StandardOp> block, Dictionary<string, string> varTypes,
+	  IrModule<StandardOp> result, VarRegistry temps, string? inlineTarget) {
+
+		var globalLabel = InternStaticLiteralRecord(value, typeName, isString, isAscii, rdataPrefix, encoding, result);
+
+		var baseLea = new StdLeaGlobalOp(globalLabel);
+		block.AddOp(baseLea);
+		var baseI64 = new StdPtrToI64Op(baseLea.Result);
+		block.AddOp(baseI64);
+		var hdrOff = new StdConstI64Op(Rt.MmHeaderSize);
+		block.AddOp(hdrOff);
+		var userPtr = new StdAddI64Op(baseI64.Result, hdrOff.Result);
+		block.AddOp(userPtr);
+
+		var tempName = inlineTarget ?? temps.CreateTemp(tempPrefix, resultId, typeName, OwnershipFlags.None);
+		EmitStore(block, userPtr.Result, tempName, varTypes);
+		return new StdHeapPtr(userPtr.Result.Id, typeName, tempName);
+	}
+
+	/// Materialize every interned static literal record into __module_init: for each record,
+	/// write its MM header (alloc_size, packed_id, destructor=0, refcount=IMMORTAL) and its
+	/// record fields (buffer=&rdata, length, capacity=-2, element_size=1, parent=0, [isAscii])
+	/// into its .data blob. Only the buffer pointer genuinely REQUIRES runtime materialization
+	/// (a data->data pointer the loader relocates under ASLR); the constants are written the same
+	/// way for uniformity and are cheap (one-time, at startup). Prepended to __module_init so the
+	/// records are live before any other init code or main runs. Creates __module_init if absent.
+	private static void MaterializeStaticLiteralRecords(IrModule<StandardOp> result) {
+		if (_staticLiteralRecords == null || _staticLiteralRecords.Count == 0) return;
+
+		var initFunc = result.Functions.FirstOrDefault(f => f.Name == "__module_init");
+		bool created = initFunc == null;
+		if (initFunc == null) {
+			initFunc = new IrFunction<StandardOp>("__module_init", [], [], null, null);
+			initFunc.Body.AddBlock("entry");
+		}
+		var entry = initFunc.Body.Blocks[0];
+
+		var initOps = new List<StandardOp>();
+		foreach (var rec in _staticLiteralRecords) {
+			EmitStaticRecordInit(rec, initOps);
+		}
+		entry.Operations.InsertRange(0, initOps);
+
+		if (created) {
+			entry.AddOp(new StdReturnOp(null));
+			result.AddFunction(initFunc);
+		}
+	}
+
+	/// Emit the store sequence that fills one static record's .data blob. Offsets are relative to
+	/// the blob base (= raw allocation pointer); the header sits at [base..base+MmHeaderSize) and
+	/// the record fields at [base+MmHeaderSize..]. Header offsets are written as MmHeaderSize +
+	/// the NEGATIVE MmOff* (which are user-pointer-relative), so they resolve to 0/8/16/24.
+	private static void EmitStaticRecordInit(StaticLiteralRecord rec, List<StandardOp> ops) {
+		var baseLea = new StdLeaGlobalOp(rec.GlobalLabel);
+		ops.Add(baseLea);
+		var baseI64 = new StdPtrToI64Op(baseLea.Result);
+		ops.Add(baseI64);
+
+		void Store(long value, int offset) {
+			var c = new StdConstI64Op(value);
+			ops.Add(c);
+			ops.Add(new StdStoreIndirectOp(c.Result, baseI64.Result, offset, IrType.I64));
+		}
+
+		// 32-byte MM header.
+		Store(rec.AllocSize, Rt.MmHeaderSize + Rt.MmOffAllocSize);       // -> 0
+		Store(rec.TagIndex, Rt.MmHeaderSize + Rt.MmOffPackedId);         // -> 8  (alloc_id 0 | tag)
+		Store(0, Rt.MmHeaderSize + Rt.MmOffDestructor);                  // -> 16 (never runs)
+		Store(Rt.MmImmortalRefcount, Rt.MmHeaderSize + Rt.MmOffRefcount);// -> 24 (immortal sentinel)
+
+		// Record fields (base + MmHeaderSize + ManagedField*).
+		int rec0 = Rt.MmHeaderSize;
+		var bufLea = new StdLeaRdataOp(rec.RdataLabel);
+		ops.Add(bufLea);
+		var bufI64 = new StdPtrToI64Op(bufLea.Result);
+		ops.Add(bufI64);
+		ops.Add(new StdStoreIndirectOp(bufI64.Result, baseI64.Result, rec0 + ManagedFieldBuffer, IrType.I64));
+		Store(rec.Length, rec0 + ManagedFieldLength);
+		Store(-2, rec0 + ManagedFieldCapacity);          // rdata-backed sentinel: never freed/grown
+		Store(1, rec0 + ManagedFieldElementSize);        // one byte per element
+		Store(0, rec0 + ManagedFieldParentPtr);
+		if (rec.IsString) {
+			Store(rec.IsAscii ? 1 : 0, rec0 + StringFieldIsAscii);
+		}
+	}
+
 	private static void LowerStringLiteral(
 	  MaxonStringLiteralOp op,
 	  IrBlock<StandardOp> block,
@@ -82,11 +247,21 @@ public static partial class MaxonToStandardConversion {
 	  IrModule<StandardOp> result,
 	  VarRegistry temps,
 	  string? inlineTarget = null) {
+
+		// Compute isAscii at compile time (used by both the static and heap paths).
+		bool isAscii = op.Value.All(c => c < 128);
+
+		// Static-eligible: share one immortal .data record — no allocation. isAscii is baked
+		// into that record at init, so nothing to store here.
+		if (IsStaticEligibleLiteral(op.Result.Id)) {
+			valueMap[op.Result] = EmitStaticManagedLiteral(
+				op.Value, op.Result.Id, "String", isString: true, isAscii, "str", "strtmp", null,
+				block, varTypes, result, temps, inlineTarget);
+			return;
+		}
+
 		var heapPtr = EmitManagedMemoryLiteral(op.Value, op.Result.Id, "str", "strtmp", block, varTypes, result, temps, "String", inlineTarget);
 		valueMap[op.Result] = heapPtr;
-
-		// Compute isAscii at compile time
-		bool isAscii = op.Value.All(c => c < 128);
 
 		// Store isAscii
 		var isAsciiConst = new StdConstI64Op(isAscii ? 1 : 0);
@@ -106,6 +281,16 @@ public static partial class MaxonToStandardConversion {
 		// static element type is `int(0 to u8.max)`; OptimalType narrows that to
 		// U8, so `__managed_mem_get`/`__managed_mem_set` emit 1-byte loads/stores
 		// that match the 1-byte rdata storage written below.
+
+		// Static-eligible: share one immortal .data record — no allocation. b"..." bytes are
+		// Latin1-encoded (one byte per element), matching the heap path below.
+		if (IsStaticEligibleLiteral(op.Result.Id)) {
+			valueMap[op.Result] = EmitStaticManagedLiteral(
+				op.Value, op.Result.Id, op.ArrayTypeName, isString: false, isAscii: false, "bstr", "bstrtmp",
+				System.Text.Encoding.Latin1, block, varTypes, result, temps, inlineTarget);
+			return;
+		}
+
 		var rdataLabel = $"__bstr_{NextRdataId()}";
 		var (bufferPtr, lengthVal) = EmitRdataLiteral(op.Value, rdataLabel, block, result,
 		  System.Text.Encoding.Latin1);
@@ -126,6 +311,15 @@ public static partial class MaxonToStandardConversion {
 	  IrModule<StandardOp> result,
 	  VarRegistry temps,
 	  string? inlineTarget = null) {
+
+		// Static-eligible: share one immortal .data record — no allocation.
+		if (IsStaticEligibleLiteral(op.Result.Id)) {
+			valueMap[op.Result] = EmitStaticManagedLiteral(
+				op.Value, op.Result.Id, "Character", isString: false, isAscii: false, "chr", "chrtmp", null,
+				block, varTypes, result, temps, inlineTarget);
+			return;
+		}
+
 		var heapPtr = EmitManagedMemoryLiteral(op.Value, op.Result.Id, "chr", "chrtmp", block, varTypes, result, temps, "Character", inlineTarget);
 		valueMap[op.Result] = heapPtr;
 	}

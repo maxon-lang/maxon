@@ -42,6 +42,7 @@ public static partial class MaxonToStandardConversion {
     _rdataStdlibPhase = true;
     _nextStdlibRdataId = 0;
     _nextRdataId = 0;
+    ResetStaticLiteralState(module.StaticEligibleLiteralIds);
     var result = new IrModule<StandardOp>();
     _resultModule = result;
     result.EntryFunctionName = module.EntryFunctionName;
@@ -2543,6 +2544,11 @@ public static partial class MaxonToStandardConversion {
     // Reset the per-function lowering mode so the post-loop helpers and any subsequent
     // pass (StandardToX86 etc.) mint user-side ids by default.
     IrContext.Current.StdlibLoweringMode = false;
+
+    // Materialize the shared immortal records for every static-eligible literal site into
+    // __module_init (creating it if there were no deferred globals). Must run after the
+    // function loop so it has seen every eligible literal.
+    MaterializeStaticLiteralRecords(result);
 
     // Generate __maxon_global_cleanup to release module-level struct variables at exit
     GenerateGlobalCleanup(module, result);

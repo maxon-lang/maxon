@@ -719,6 +719,10 @@ public static class StandardToARM64Conversion {
         regManager.EmitLeaRdata(leaRdata.Result, leaRdata.RdataLabel, block);
         break;
 
+      case StdLeaGlobalOp leaGlobal:
+        regManager.EmitLeaGlobal(leaGlobal.Result, leaGlobal.GlobalName, block);
+        break;
+
       case StdLeaSymdataOp leaSymdata:
         regManager.EmitLeaSymdata(leaSymdata.Result, leaSymdata.SymdataLabel, block);
         break;

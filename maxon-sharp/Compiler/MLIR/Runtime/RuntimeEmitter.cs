@@ -57,6 +57,20 @@ public partial class RuntimeEmitter(IEmitterBackend backend) {
   public const int MmOffDestructor = -16;
   public const int MmOffRefcount = -8;
 
+  // IMMORTAL sentinel refcount. Static literal records (string/byte/char literals proven
+  // never-mutated by LiteralCoverageAnalysisPass) are emitted ONCE as shared .data blobs
+  // with this value baked into their refcount slot. mm_incref/mm_decref recognise it right
+  // after the null check and return immediately — so an immortal is never atomically
+  // counted, never runs its destructor, and is never freed (the OS reclaims it at exit).
+  //
+  // The value is 2^62: unmistakable, and a value a REAL refcount can never reach — a program
+  // would need 2^62 simultaneous live references to a single object. It is also far from 0
+  // (the underflow-panic value) and far from wrapping, so a stray inc/dec that somehow slipped
+  // past the guard could not collide with it either. It needs a movabs to compare against
+  // (no cmp r64,imm64), which is the ~4-instruction cost the immortal check adds to the
+  // incref/decref hot path; measured negligible on a refcount-heavy, literal-free workload.
+  public const long MmImmortalRefcount = 0x4000_0000_0000_0000L;
+
   // __ManagedMemory RECORD layout, relative to the record pointer. This is the
   // container header the array/string builtins operate on — not to be confused
   // with the allocation header above, which lives at NEGATIVE offsets from a user
