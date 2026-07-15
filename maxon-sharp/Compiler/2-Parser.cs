@@ -12704,33 +12704,93 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
               patternLine, patternCol);
           }
 
-          // Mark all covered cases for exhaustiveness checking, detecting overlaps
-          var lowerOrdinal = enumCase.Ordinal;
-          var upperOrdinal = upperCase.Ordinal;
-          foreach (var c in enumType.Cases) {
-            if (c.Ordinal >= lowerOrdinal && (upperInclusive ? c.Ordinal <= upperOrdinal : c.Ordinal < upperOrdinal)) {
-              if (!seenEnumCases.Add(c.Name)) {
-                throw new CompileError(ErrorCode.ParserMatchDuplicatePattern,
-                  $"overlapping pattern in match: '{c.Name}' is already covered",
-                  patternLine, patternCol);
-              }
+          // A range arm covers the cases whose DECLARATION POSITION lies between the two named
+          // endpoints -- specs/enum-match-range.md: "Ranges use the enum's ordinal order (the
+          // order cases are declared)". So the bounds are indices into the enum's own case
+          // list, and MUST NOT be IrEnumCase.Ordinal: `Ordinal` is the auto-increment TAG
+          // counter, which an explicit `= N` resets to `rawValue + 1` (that reset is what gives
+          // `enum E { a = 5  b }` the tag 6, so it cannot simply be removed). For an int-backed
+          // enum `Ordinal` is therefore neither the declaration position nor the raw value:
+          // `enum Level { low = 10  medium = 20 }` stores ordinals 0 and 11. Reading it as a
+          // position compiled `low to medium` into the bounds [0, 11], which excluded medium's
+          // own tag (20) -- the arm silently matched nothing while the exhaustiveness checker,
+          // reading the same broken numbers, called the match total.
+          var lowerIndex = enumType.Cases.FindIndex(c => c.Name == enumCase.Name);
+          var upperIndex = enumType.Cases.FindIndex(c => c.Name == upperCase.Name);
+          if (upperIndex < lowerIndex) {
+            throw new CompileError(ErrorCode.ParserMatchDuplicatePattern,
+              $"range pattern '{rangeDisplayName}' is empty: '{upperCase.Name}' is declared before '{enumCase.Name}'",
+              patternLine, patternCol);
+          }
+
+          var coveredCases = new List<IrEnumCase>();
+          for (int i = lowerIndex; upperInclusive ? i <= upperIndex : i < upperIndex; i++) {
+            coveredCases.Add(enumType.Cases[i]);
+          }
+          if (coveredCases.Count == 0) {
+            throw new CompileError(ErrorCode.ParserMatchDuplicatePattern,
+              $"range pattern '{rangeDisplayName}' covers no cases",
+              patternLine, patternCol);
+          }
+          if (coveredCases.Count == 1) {
+            throw new CompileError(ErrorCode.ParserMatchDuplicatePattern,
+              $"range pattern '{rangeDisplayName}' covers a single value; use the bare value instead",
+              patternLine, patternCol);
+          }
+
+          foreach (var c in coveredCases) {
+            if (!seenEnumCases.Add(c.Name)) {
+              throw new CompileError(ErrorCode.ParserMatchDuplicatePattern,
+                $"overlapping pattern in match: '{c.Name}' is already covered",
+                patternLine, patternCol);
             }
           }
 
-          // For enum range patterns, the comparison is always on ordinals — we always use
-          // IntRangeBound here so the single-value check catches both `red to red` and
-          // `red upto green` (adjacent ordinals).
-          var enumLower = new IntRangeBound(enumCase.Ordinal);
-          var enumUpper = new IntRangeBound(upperCase.Ordinal);
-          RejectSingleValueRange(enumLower, enumUpper, upperInclusive, rangeDisplayName, patternLine, patternCol);
-          if (enumType.BackingType == IrType.F64) {
-            patterns.Add(new RangePattern(
-              new FloatRangeBound((double)enumCase.RawValue!),
-              new FloatRangeBound((double)upperCase.RawValue!),
-              upperInclusive, rangeDisplayName, patternLine, patternCol));
+          // The arm MEANS the OR of the cases it covers: each compares against its own tag, down
+          // the identical path a bare case name takes, so there is never a second opinion about
+          // what a case's tag is -- which is what the bug above was.
+          //
+          // But the OR costs one compare per case, and a wide dispatch (`arith to arm64`) must not
+          // compile to thirty of them. A two-compare RANGE over the tag says exactly the same thing
+          // whenever no UNCOVERED case's tag falls between the covered tags' extremes -- which is
+          // every auto-increment enum, since its tags are 0..n and a covered declaration span is
+          // then contiguous. So take the range where it is EXPRESSIBLE and the OR only where it is
+          // not: `ok = 500  notFound = 200` spans the tags [200, 500], which would silently swallow
+          // an uncovered `serverError = 404`, and no range compare can describe that set.
+          //
+          // The synthesized bounds are always inclusive -- they are real tag values (the min and max
+          // of the covered set), so `upto` is already accounted for by which cases are covered.
+          // A range arm never binds payloads, so Bindings stays null.
+          int coveredHiIndex = upperInclusive ? upperIndex : upperIndex - 1;
+          bool CaseIsCovered(int i) => i >= lowerIndex && i <= coveredHiIndex;
+          bool useRangeCompare;
+
+          if (enumType.BackingType == IrType.F64 && coveredCases.All(c => c.AssociatedValues is null or { Count: 0 })) {
+            // Float-backed: the emitted compare is against the double raw value, so the span is too.
+            double loF = coveredCases.Min(c => (double)c.RawValue!);
+            double hiF = coveredCases.Max(c => (double)c.RawValue!);
+            useRangeCompare = !enumType.Cases.Where((c, i) => !CaseIsCovered(i))
+              .Any(c => (double)c.RawValue! >= loF && (double)c.RawValue! <= hiF);
+            if (useRangeCompare) {
+              patterns.Add(new RangePattern(new FloatRangeBound(loF), new FloatRangeBound(hiF),
+                true, rangeDisplayName, patternLine, patternCol));
+            }
           } else {
-            patterns.Add(new RangePattern(enumLower, enumUpper,
-              upperInclusive, rangeDisplayName, patternLine, patternCol));
+            long loI = coveredCases.Min(GetCaseTagValue);
+            long hiI = coveredCases.Max(GetCaseTagValue);
+            useRangeCompare = !enumType.Cases.Where((c, i) => !CaseIsCovered(i))
+              .Any(c => GetCaseTagValue(c) >= loI && GetCaseTagValue(c) <= hiI);
+            if (useRangeCompare) {
+              patterns.Add(new RangePattern(new IntRangeBound(loI), new IntRangeBound(hiI),
+                true, rangeDisplayName, patternLine, patternCol));
+            }
+          }
+
+          if (!useRangeCompare) {
+            foreach (var c in coveredCases) {
+              patterns.Add(new EnumCasePattern(c.Ordinal, c.Name, c.RawValue, null,
+                c.AssociatedValues, c.Name, patternLine, patternCol));
+            }
           }
         } else {
           var displayName = caseNameToken.Value;

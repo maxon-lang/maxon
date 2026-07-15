@@ -108,6 +108,126 @@ end 'main'
 1
 ```
 
+<!-- test: enum-exhaustive.int-backed-range-covers-upper-bound -->
+```maxon
+enum Level
+	low = 10
+	medium = 20
+	high = 30
+end 'Level'
+
+function classify(l Level) returns ExitCode
+	let r = match l 'm'
+		low to medium gives 41
+		high gives 42
+	end 'm'
+	return r
+end 'classify'
+
+function main() returns ExitCode
+	return classify(Level.medium)
+end 'main'
+```
+```exitcode
+41
+```
+
+<!-- test: enum-exhaustive.int-backed-range-covers-lower-bound -->
+```maxon
+enum Level
+	low = 10
+	medium = 20
+	high = 30
+end 'Level'
+
+function classify(l Level) returns ExitCode
+	let r = match l 'm'
+		low to medium gives 41
+		high gives 42
+	end 'm'
+	return r
+end 'classify'
+
+function main() returns ExitCode
+	return classify(Level.low)
+end 'main'
+```
+```exitcode
+41
+```
+
+<!-- test: enum-exhaustive.int-backed-range-excludes-outside-case -->
+```maxon
+enum Level
+	low = 10
+	medium = 20
+	high = 30
+end 'Level'
+
+function classify(l Level) returns ExitCode
+	let r = match l 'm'
+		low to medium gives 41
+		high gives 42
+	end 'm'
+	return r
+end 'classify'
+
+function main() returns ExitCode
+	return classify(Level.high)
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: enum-exhaustive.int-backed-range-is-declaration-order-not-raw-order -->
+```maxon
+enum Code
+	ok = 500
+	notFound = 200
+	serverError = 404
+end 'Code'
+
+function classify(c Code) returns ExitCode
+	let r = match c 'm'
+		ok to notFound gives 41
+		serverError gives 42
+	end 'm'
+	return r
+end 'classify'
+
+function main() returns ExitCode
+	return classify(Code.serverError)
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: enum-exhaustive.int-backed-range-declaration-order-matches-second-case -->
+```maxon
+enum Code
+	ok = 500
+	notFound = 200
+	serverError = 404
+end 'Code'
+
+function classify(c Code) returns ExitCode
+	let r = match c 'm'
+		ok to notFound gives 41
+		serverError gives 42
+	end 'm'
+	return r
+end 'classify'
+
+function main() returns ExitCode
+	return classify(Code.notFound)
+end 'main'
+```
+```exitcode
+41
+```
+
 <!-- test: enum-exhaustive.expression -->
 ```maxon
 enum Status

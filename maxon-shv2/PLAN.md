@@ -84,12 +84,51 @@ was missing grouping, `true`/`false`, `not`/`and`/`or`, block scoping, void func
 > ### ✅ **P1.0d IS CLOSED (2026-07-15). The scalar core is done — MEASURED this time: `specs-shv2` 355/355.**
 > Every gap the 2026-07-13 sweep found is fixed, floats last (P1.0d.4: an XMM register class, the SSE
 > backend, `trunc`, and the conversion band). **`main` is 355/0; the C# bootstrap is 3004/0.**
-> **⇒ THE LIVE WORK IS NOW `P1.1` (structs · enums · unions · `match`).**
+> **⇒ THE LIVE WORK IS NOW `P1.0r` (the ALLOCATOR + refcounting runtime — Workstream R1's core).**
 >
-> ⚠ **Read P1.0d.4's ledger rows before starting P1.1** — the contract was wrong TEN times, nine of
+> ⚠ **Read P1.0d.4's ledger rows before starting the next rung** — the contract was wrong TEN times, nine of
 > them ONE FACT WRITTEN DOWN TWICE, and the rung shipped two of its OWN features (float negation,
 > float phis) with zero coverage until the corpus and the instrument were made to look. **Step 0 is
 > the SPEC PORT LIST, and it is the coordinator's.**
+
+> ## ⭐⭐ RESTRUCTURED 2026-07-15 — **P1.1 COULD NOT BE BUILT AS WRITTEN. A STRUCT IS A HEAP VALUE.**
+>
+> **The old ladder said `P1.1` structs ("concrete, trivial-ownership only") came BEFORE `P1.2`'s heap, and
+> that `String` is "the FIRST heap value". Both are FALSE, and they were falsified by MEASURING the
+> bootstrap** — the oracle — not by reading it:
+>
+> | Probe | Result | What it proves |
+> |---|---|---|
+> | `mutate(p)` writes `q.x = 90`, caller reads `p.x` | **95** (=90+5), not 6 | a struct **ALIASES** — reference semantics, not value |
+> | `sizeof(Outer)`, `Outer{p Point, n Integer}` | **16**, not 24 | a struct-typed field is an **8-byte POINTER**, never inlined |
+> | `var q = p` where `p` is `let` | **E3078** *"…or use `clone()`"* | the language **POLICES** struct aliasing — it knows |
+> | both reference compilers | `IsHeapAllocated => true` **unconditionally**; v1 `__mm_alloc` + `freshRc0` | they AGREE, with no exception for scalar fields |
+>
+> ⇒ **A struct needs `__mm_alloc` ⇒ it needs Workstream R1 ⇒ which the plan scheduled AFTER it.** The
+> dependency was inverted. **And `String` is NOT the first heap value — a scalar struct is, and it is a
+> far SIMPLER one**: no rdata `capacity = -2` sentinel, no interning, no 40-byte `__ManagedMemory`
+> record, no interpolation memcpy chain, no `BuiltinStringLiteral` marker-interface discovery. A struct
+> is `__mm_alloc(size, null)` + `loadIndirect`/`storeIndirect` at an offset. **That is the whole thing.**
+>
+> ⚠ **The stack/value-struct escape hatch is CLOSED, on evidence rather than taste**: it returns **6
+> instead of 95** and **24 instead of 16** — wrong answers on cases already in the port list — and
+> nested structs force the heap regardless (an 8-byte field slot cannot inline a 16-byte `Point`). It is
+> also the retrofit the PRINCIPLE forbids. **v1 independently confirms the direction**: *"Plain structs
+> used to leak… conflating drop-tracked vs heap-managed is what leaked every plain heap struct (it was
+> allocated untracked via `mrt_alloc`)"* — **v1 TRIED the cheap non-refcounted struct path, and it leaked.**
+>
+> **⇒ THE ORDER IS NOW: heap → structs → enums+`match` → `String`** (user ruling, 2026-07-15).
+>
+> ### ⚠ WHY THE NUMBERS DID NOT CHANGE — and this is load-bearing
+> **The rungs are NOT renumbered, deliberately.** `specs-shv2/` carries **153 `disabled-test:` reason
+> markers that cite a rung BY NUMBER** (41 × `P1.2`, 33 × `P1.9`, 24 × `P1.1`, 21 × `P1.7`, 12 × `P1.4`,
+> 9 × `P1.8`) — and §"the disabled-test reasons ARE the ranked roadmap" is what makes them the roadmap.
+> **Renumbering would silently re-point 77+ of them at the wrong rung** — the project's own signature bug
+> (ONE FACT WRITTEN DOWN TWICE) at the ladder level, and the markers would go on looking right.
+> ⇒ The allocator takes a **NEW** number in the established pre-P1.1 slice convention (`P1.0a`…`P1.0d`):
+> **`P1.0r`** — `r` for Workstream **R**. `P1.1` splits into **`P1.1a` structs** / **`P1.1b` enums+`match`**,
+> both of which its 24 markers already read correctly. **`P1.2` KEEPS ITS NUMBER** and keeps meaning
+> `String`; it merely stops being *first*. Every existing marker still resolves.
 
 > **Note the two senses of "shv2 runs its spec tests."** shv2 *already* has a `spec-test`
 > command (281/0) — but that harness is compiled by **`maxon.exe`**, the C# bootstrap. Phase 1
@@ -502,9 +541,11 @@ morestack's fixup, which needs the chain anyway.
 top-level ranged `typealias`; the corpus's ranges are wide, so the *checks* — `ExpandCastRangeChecks` /
 `InsertRangeChecks` — stay at P1.9 where they belong). Floats need a whole new register bank (there is
 **no XMM class** in the allocator today), so they are the last slice of the rung, not the first.
-| **P1.1** | structs · enums · unions · `match` | concrete, trivial-ownership only. **← NEXT** |
-| **P1.2** | **heap + ownership + drops + `String`** ⭐ | **THE CRUX, and String is the FIRST heap value** — real, needed by everything, and trivially-elemented so it forces no descriptor. Hardcoded `__ManagedMemory`(40B) + `String`(16B) bootstrap structs; rdata `capacity = -2` sentinel; synthesized `__destruct_String`; interpolation of **primitives**. Runtime slice **R1** lands here — mm-trace gates from here and **cannot run without it**. **`own.drop` declares BOTH arms now**; the descriptor arm is unreachable until P1.6 |
-| **P1.3** | **owned payloads in enums/unions** | *moved into Phase 1* — `compilerError(text String)`, `fail(reason String)`. Needs only P1.1 + P1.2's drops. Errors (P1.4) want it too: the harness calls `e.displayReason()` |
+| **P1.0r** | **R1-core — the ALLOCATOR + refcounting runtime** ⭐⭐ | **← NEXT.** *(Was "R1 @ P1.2". Promoted ahead of structs 2026-07-15 — see the RESTRUCTURED box: a struct is a heap value, so the heap cannot come second.)* The slab allocator · `__mm_alloc` · `__mm_incref`/`__mm_decref` · the `__destruct_*` cascade. **The allocator ALWAYS RETURNS ZEROED MEMORY, from commit 1** — a property of the allocator, not of each caller (it cost v1 three separately root-caused bugs; see ARCHITECTURE.md → "Allocator: the zeroing contract"). ⚠ **THIS RUNG MUST DECIDE THE RUNTIME'S *FORM*** — hand-assembled machine code vs. v1's `runtime.std` (6,049 lines of Std-IR text through the ordinary backend). **The excuse for deferring it has now EXPIRED: its precondition was the Std memory band, and P1.0d.5b shipped it.** See the R1 box in Workstream R — **the named risk is inertia**, 6 hand-assembled functions becoming 5,000 by default. **Write the reason down.** ⚠ Its acceptance test is **P1.1a**, not a bespoke spec: an allocator with no heap value to allocate is untestable, so the two are adjacent on purpose |
+| **P1.1a** | **structs** — R1's DOGFOOD ⭐ | *(was the struct half of `P1.1`; its `disabled-test:` markers read correctly unchanged.)* concrete, **trivial-ownership only** — scalar/float fields, so the destructor is NULL and no field write increfs. Heap-boxed via `__mm_alloc`, **uniform 8-byte field slots** (`sizeof` PINS this: `sizeof(Point)`=16, `sizeof(Vec3)`=24, and `sizeof(Outer{p Point, n Integer})`=**16** — a struct field is a POINTER). Field access = `loadIndirect`/`storeIndirect` at a real offset, **the ops P1.0d.5b already built and whose comments NAME this rung**. Methods · `self` · `static function create` · `Self{…}` (construction is restricted to the type's own methods — **E3076**) |
+| **P1.1b** | **enums + `match`** | *(was the enum/match half of `P1.1`.)* **HEAP-FREE — this is why it is its own slice**: both references collapse a payload-free enum to an `int` typealias + constants, and `match` is a chain of two-way `condBranch` blocks (**never bend `IrBlock.CondBranch`'s one-branch-per-block invariant** — P1.0d.4's float compare already set that precedent). Payload-free `union` rides the identical path. ⭐ **RANGE ARMS USE ORDINAL ORDER** — the declaration order — **NOT the raw value** (user ruling, 2026-07-15). ⚠ **The bootstrap gets this WRONG and shv2 must not copy it**: see OPEN.md #21 |
+| **P1.2** | **`String` + ownership + drops** ⭐ | **THE CRUX.** ~~String is the FIRST heap value~~ — **FALSE, corrected 2026-07-15: a scalar struct is (P1.1a), and it is simpler.** String is the first *non-trivial* heap value, and that is still the point: real, needed by everything, and trivially-elemented so it forces no descriptor. Hardcoded `__ManagedMemory`(40B) + `String`(16B) bootstrap structs; rdata `capacity = -2` sentinel; synthesized `__destruct_String`; interpolation of **primitives**. **It rides P1.0r's `__mm_alloc` rather than introducing one** — which is the whole benefit of the reorder. mm-trace gates from here. **`own.drop` declares BOTH arms now**; the descriptor arm is unreachable until P1.6 |
+| **P1.3** | **owned payloads in enums/unions** | *moved into Phase 1* — `compilerError(text String)`, `fail(reason String)`. Needs only P1.1a/P1.1b + P1.2's drops. Errors (P1.4) want it too: the harness calls `e.displayReason()` |
 | **P1.4** | moves + borrows (NLL) · **errors** | first program-rejection point. `throws`/`try`/`otherwise` (v1's dual-register `(value, errorFlag)`, verbatim) + drops on the error edge. **36 harness sites** |
 | **P1.5** | **closures + `async` + escape → `shared`** ⭐⭐ | **THE THREE ARE ONE MECHANISM, AND THEY CO-LAND — this is the plan's "do the hard things early" in its purest form.** Capture-into-heap **IS** escape: a closure captures into an env block; a green thread captures into a task frame. Escape analysis is needed for heap correctness regardless — so build all three together and `EscapeAnalysis` gets **both** capture channels *from birth*. Land escape single-threaded and add `async` later and you bolt a **second capture channel** onto it: v1's `sys.dropTypeParam` split-brain mistake, exactly. Minimal closure = int capture, 0-arg, heap env, uniform `(args, env)` ABI (v1 lifts at parse time). Minimal `async` = `async`/`await` + Promise + the worker pool's needs. Escape is the **only** place refcounts appear. **Track `% values promoted to shared`** — if it's 40%, static ownership bought nothing. **Runtime slice R3 lands here** (the GT scheduler + async subprocess stdio) |
 | **P1.6** | **generics + layout descriptors** ⭐ | declarations + instantiation. ⇒ `own.drop`'s descriptor arm goes **LIVE** here |

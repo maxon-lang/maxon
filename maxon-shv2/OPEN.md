@@ -859,6 +859,81 @@ byte-identical messages, because the leak line was appended to the actual stderr
 constructing at the throw site. ⚠ **This is the natural way to factor a diagnostic whose position needs
 computing**, so it will recur.
 
+### 21. ~~⭐ An enum range arm over an EXPLICIT-int-backed enum matched NOTHING — silently~~ ✅ FIXED 2026-07-15 (bootstrap)
+
+**Found while PLANNING P1.1, by probing the oracle rather than reading it.** `IrEnumCase.Ordinal` was
+**ONE FIELD WITH TWO MEANINGS** — the project's signature bug, again:
+
+- it is the **auto-increment TAG counter**, which an explicit `= N` resets to `rawValue + 1`
+  ([2-Parser.cs:3328](maxon-sharp/Compiler/2-Parser.cs#L3328)). **That reset is CORRECT and load-bearing** —
+  it is what gives `enum E { a = 5  b }` the tag **6** (measured), so it cannot simply be deleted.
+- but the **range-arm code read it as a DECLARATION POSITION** — for both the coverage loop and the
+  comparison bounds.
+
+⇒ For `enum Level { low = 10  medium = 20  high = 30 }` the stored ordinals are **0, 11, 21** — neither the
+declaration position nor the raw value. **A third number that means nothing.** So `low to medium` compiled
+to the bounds **[0, 11]**, which exclude `medium`'s own tag (**20**):
+
+```maxon
+match l 'm'
+    low to medium gives 41      // <- medium is covered by THIS arm
+    high gives 42
+end 'm'
+// classify(Level.medium) returned 0. Not 41. Exit 0, no diagnostic, no crash.
+```
+
+⚠ **It compiled clean, ran clean, and returned the wrong answer** — and the exhaustiveness checker called
+the match total **while reading the same broken numbers**. The two agreed because they were wrong the same
+way. The third witness: `.ordinal` the ACCESSOR returns the true declaration position (measured: `1`, `2`),
+so the accessor and the field **disagreed about what "ordinal" means**.
+
+**Why it survived:** the corpus had **no** case pairing an explicit *int* backing with a range arm — the
+one explicit-value enum in `enum-match-exhaustive.md` is **float**-backed, and the float arm took a
+*different* path that read `RawValue`. **One function, two opinions, and the tested half was the right one.**
+
+✅ **FIXED**: a range arm is now the **OR of the cases it covers**, by declaration index — which is what
+`/specs`'s *"ranges use the enum's ordinal order (the order cases are declared)"* means (**user ruling,
+2026-07-15**: the doc is right, the code was wrong). ⭐ **The OR is the MEANING, not the codegen**: a
+two-compare range over the tag says the same thing whenever no *uncovered* case's tag falls between the
+covered tags' extremes — true of every auto-increment enum — so the range is kept where it is EXPRESSIBLE
+and the OR paid only where it is not (`ok = 500  notFound = 200` spans the tags [200,500] and would swallow
+an uncovered `serverError = 404`). **Measured: 15 fragments moved without that rule, 1 with it.** The float
+special-case is **deleted**, not mirrored — one rule where there were two that disagreed.
+**Gates: C# 3009/0** (3004 + 5 new), **shv2 355/0**, `specs-shv2/` untouched, the single remaining `M` is
+`x < 2` → `x <= 1` (same instruction count, provably equivalent — the bound is now a real tag).
+⚠ **shv2 must implement ORDINAL order at P1.1b. Do not port the raw-value reading.**
+
+### 22. ⚠⚠ `bin/maxon.exe` IS GITIGNORED AND NOTHING REBUILDS IT — **a baseline can measure a tree that does not exist**
+
+**Found 2026-07-15, and it nearly bought a fabricated entry in the optimization log.** The rung skill's
+step 1 says *"never start from a claimed-green tree — build and run it yourself."* **I did, and it was still
+not `main`:** `maxon build maxon-shv2` drives **`./bin/maxon.exe`**, which is **gitignored**, so it is
+whatever some earlier session last built. It predated commits already on `main`.
+
+The symptom was a **276 KB swing that looked exactly like my own change**: after I edited the bootstrap's
+match lowering, shv2's binary went **3,152,748 → 2,876,696 bytes of code** (−8.8%) and **6,552 → 61,856
+bytes of data** (+55 KB ≈ 6,900 eight-byte slots — *the signature of jump tables forming*). Every instinct
+said "your range arms became equality chains and the jump-table pass ate them."
+
+**All of it was false.** Two measurements killed it:
+- **`dump_ir` on a dense enum**: `add to divide` still compiled to the intended **2-instruction range
+  compare** `[0,3]` (`setge`/`setle`). No OR-chain, no jump table. The change was a **no-op** for the shape
+  shv2's source actually uses.
+- **Stash the change, rebuild the bootstrap, rebuild shv2**: **2,876,696 bytes — byte-identical.** The swing
+  was `bin/maxon.exe` being stale, and my `build csharp` merely *refreshing* it.
+
+⇒ **Two lessons, and the second is the sharp one:**
+1. **A binary that nothing rebuilds is a THIRD copy of the source.** This is the same disease as the MCP
+   server's binary (CLAUDE.md has a whole box on it) and the error-code enums — **ONE FACT WRITTEN DOWN
+   TWICE.** The MCP box exists because *"a tool that answers confidently from stale code is worse than one
+   that refuses."* `bin/maxon.exe` has **no such guard**, and it is the compiler every gate runs through.
+   ⇒ **`build csharp` FIRST, before any baseline you intend to trust.**
+2. ⭐ **Attribution is not a story that fits — it is a measurement.** The jump-table explanation was
+   coherent, mechanically plausible, and matched the numbers in both binaries. **It was still wrong.**
+   `docs/optimization-log.md` exists to record *why* a number moved, at the one moment it is still known;
+   **the instrument can see WHAT moved and can never see WHY**, and a confident narrative is exactly what
+   that gap fills itself with if you let it.
+
 ## 📋 Environment / process notes that cost real time
 
 - 🟡 **IN A WORKTREE, PASS `repoRoot` TO EVERY `maxon-dev` MCP TOOL — otherwise it drives the MAIN REPO.**
