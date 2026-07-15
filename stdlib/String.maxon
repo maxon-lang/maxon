@@ -34,19 +34,23 @@ typealias AsciiCaseDelta = int(-32 to 32)
 export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterable with (Character, StringIterator), Cloneable
 	typealias ByteMemory = __ManagedMemory with Byte
 
-	/// The raw bytes. This is the UNSAFE DOOR, and it is the only one: since the envelope collapse a
-	/// `String` IS its `__ManagedMemory`, so `managed` is not a view of the string, it is the string.
+	/// The raw bytes. Since the envelope collapse a `String` IS its `__ManagedMemory`, so this is not
+	/// a view of the string, it is the string — which is exactly why nobody outside `String` may hold
+	/// it. Reaching the bytes from elsewhere in the stdlib goes through `addressableBytes()`.
 	///
-	/// Reading through it is ordinary — that is what `cstr()` and the `__Builtins.*` intrinsics do.
-	/// WRITING through it reaches past every guarantee this type makes. In particular it is the one
-	/// way to break `toByteArray`'s independence: a view that has not yet been written is still
-	/// sharing these bytes, and a write here shows through it. Nothing in the stdlib writes through a
-	/// String's `managed`, and no spec does; every mutation in String's own API (`append`) grows, and
-	/// growing detaches.
+	/// This was `export var` until Stage 4c. Exported, it was a WRITE door that reached past every
+	/// guarantee this type makes: it was the one way to break `toByteArray`'s independence, since a
+	/// view that has not yet been written is still sharing these bytes and a write here would show
+	/// through it. Unexporting removed the spelling a caller would reach for by accident, and left
+	/// `toByteArray()` — which copies on write — as the route user code is offered.
 	///
-	/// Stage 4c of the SSO plan removes this field, which closes the hole by construction rather than
-	/// by asking callers to be careful.
-	export var managed as ByteMemory
+	/// The field is now genuinely unreachable from user code (E3014), and `addressableBytes()` —
+	/// the stdlib's replacement door — is genuinely internal (E3008). Both took removing the
+	/// stdlib force-export; see that method's doc.
+	///
+	/// The field STAYS, and stays first: field order is the ABI, and literal initialization writes
+	/// these two fields directly.
+	var managed as ByteMemory
 	var isAsciiFlag as bool
 
 	/// Check whether this string contains only ASCII bytes
@@ -74,6 +78,13 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	//
 	// Not exported: "take these bytes and trust me about them" is not a promise the stdlib can let
 	// arbitrary code make.
+	//
+	// ⚠ AND THE COMPILER DOES NOT YET HOLD US TO THAT. This is reachable from user code today, not
+	// because of anything here but because a non-exported STATIC method is unchecked: a
+	// type-qualified name skips the visibility filter deliberately (so a hidden TYPE reports E4006
+	// instead of a confusing not-exported on its method) and the static path never re-applies it.
+	// Instance methods ARE checked, so the sentence above is true of `mapAsciiCase` and false of
+	// this. Fixing it is a narrow change gated on getting that diagnostic ordering right.
 	static function fromOwnedBytes(bytes ByteArray, isAscii bool) returns String
 		return String{managed: bytes.managed, isAsciiFlag: isAscii}
 	end 'fromOwnedBytes'
@@ -94,6 +105,32 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	export function toByteArray() returns ByteArray
 		return ByteArray.init(managed)
 	end 'toByteArray'
+
+	/// The UTF-8 bytes as a `__ManagedMemory` an intrinsic can take: a real record, at a real address,
+	/// that stays put for the duration of the call. Use it when the intrinsic's parameter is declared
+	/// `__ManagedMemory`; when it is declared `cstring`, use `cstr()`.
+	///
+	/// `module`, not `export`, and deliberately so: this is meant to be the stdlib's own door to the
+	/// bytes — open to `stdlib/` and its subdirectories, shut to everyone else. The marker is
+	/// load-bearing already, and not decoration: `helpers/http` and `helpers/url` live in
+	/// SUBDIRECTORIES of `stdlib/` and reach this, which file-private visibility would refuse.
+	///
+	/// This is ENFORCED. It was not, when this method was first written: `StdlibLoader` used to
+	/// force-export EVERY stdlib function after the stdlib's own compile, so no stdlib function
+	/// could be internal whatever it declared, and this door was de-facto public — the raw-write
+	/// hole rebuilt under a new name. Removing that force-export cost three `export` keywords
+	/// (`Iterable.map`/`filter`/`contains`, genuine public API that had been riding it), and now a
+	/// declared visibility means what it says.
+	///
+	/// ⚠ One gap remains and it is NOT this method's: a non-exported STATIC method is still
+	/// callable from anywhere, because a type-qualified name skips the visibility filter on purpose
+	/// (so a hidden TYPE reports E4006 rather than a confusing not-exported on its method) and the
+	/// static path never re-applies it. `fromOwnedBytes` below is reachable for exactly that reason.
+	/// Instance methods — this one — are checked.
+	///
+	module function addressableBytes() returns ByteMemory
+		return managed
+	end 'addressableBytes'
 
 	/// Return a NUL-terminated `cstring` view of the UTF-8 bytes. Use this when
 	/// passing the string to a `__Builtins.*` runtime intrinsic whose parameter
@@ -714,7 +751,7 @@ export type StringBuilder
 	end 'reserve'
 
 	export function append(other String)
-		appendBytes(other.managed, isAscii: other.isAscii())
+		appendBytes(other.addressableBytes(), isAscii: other.isAscii())
 	end 'append'
 
 	/// Append a raw UTF-8 byte range whose ASCII-ness the caller ALREADY KNOWS — a slice cut out of a

@@ -101,9 +101,12 @@ function parseDecimal(text String, fallback Integer) returns Integer
 	var value = 0
 	var i = 0
 	let n = text.byteLength()
+	// One view for the whole scan: `String.addressableBytes()` is stdlib-internal, so code out here
+	// reaches the bytes through an independent `toByteArray()`.
+	let bytes = text.toByteArray()
 
 	while i < n 'digits'
-		let b = try text.managed.byteAt(i) otherwise panic("parseDecimal: byteAt OOB — i < byteLength invariant")
+		let b = try bytes.managed.byteAt(i) otherwise panic("parseDecimal: byteAt OOB — i < byteLength invariant")
 		let digit = (b as Integer) - asciiZero
 
 		if digit < 0 or digit > asciiNine - asciiZero 'nonDigit'
@@ -175,8 +178,9 @@ function emitBurst(idx Integer, events Integer, texts Integer, pad String, spin 
 		// from a previous ring generation shows up as a duplicate.
 		if sinceText == eventsPerText and textSeq < texts 'text'
 			let msg = "t{idx}s{textSeq}-{pad}"
+			let msgBytes = msg.toByteArray()
 
-			__DebugStream.text(logCategory, logLevel, unit, msg.managed)
+			__DebugStream.text(logCategory, logLevel, unit, msgBytes.managed)
 
 			textSeq = textSeq + 1
 			sinceText = 0

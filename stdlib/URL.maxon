@@ -116,8 +116,11 @@ export type URL implements Equatable, Stringable
 		var hasFragment = false
 
 		// 4. Extract scheme
+		// Materialized once for the whole parse: every component below is found by scanning these
+		// bytes and cut out by slicing them, and under Stage 4b each ask would allocate and copy.
+		let urlBytes = trimmed.addressableBytes()
 		// First byte: if it's ':', that's invalid (://missing-scheme)
-		let firstByte = urlByteAt(trimmed.managed, index: 0)
+		let firstByte = urlByteAt(urlBytes, index: 0)
 		if firstByte == 58 'colonFirst'
 			throw URLError.invalidScheme
 		end 'colonFirst'
@@ -127,7 +130,7 @@ export type URL implements Equatable, Stringable
 		var foundColon = false
 		var scanPos = 0
 		while scanPos < len 'schemeSearch'
-			let b = urlByteAt(trimmed.managed, index: scanPos)
+			let b = urlByteAt(urlBytes, index: scanPos)
 			if b == 58 'colon'
 				colonPos = scanPos
 				foundColon = true
@@ -148,13 +151,13 @@ export type URL implements Equatable, Stringable
 			// Remaining chars must be valid scheme chars
 			var vi = 1
 			while vi < colonPos 'validateScheme'
-				if not urlIsSchemeChar(urlByteAt(trimmed.managed, index: vi)) 'badChar'
+				if not urlIsSchemeChar(urlByteAt(urlBytes, index: vi)) 'badChar'
 					throw URLError.invalidScheme
 				end 'badChar'
 				vi = vi + 1
 			end 'validateScheme'
 			// Extract and lowercase the scheme
-			let schemeSlice = try trimmed.managed.slice(0, colonPos) otherwise panic("URL.parse: scheme slice — colonPos from scan, always <= len")
+			let schemeSlice = try urlBytes.slice(0, colonPos) otherwise panic("URL.parse: scheme slice — colonPos from scan, always <= len")
 			var rawScheme = String.init(schemeSlice)
 			scheme = rawScheme.toLower()
 			pos = colonPos + 1
@@ -162,15 +165,15 @@ export type URL implements Equatable, Stringable
 
 		// 5. Check for authority ("//")
 		if pos + 1 < len 'checkAuth'
-			if urlByteAt(trimmed.managed, index: pos) == 47 'slash1'
-				if urlByteAt(trimmed.managed, index: pos + 1) == 47 'slash2'
+			if urlByteAt(urlBytes, index: pos) == 47 'slash1'
+				if urlByteAt(urlBytes, index: pos + 1) == 47 'slash2'
 					pos = pos + 2
 					hasHost = true
 
 					// Find end of authority: first '/', '?', '#', or end
 					var authEnd = pos
 					while authEnd < len 'findAuthEnd'
-						let ab = urlByteAt(trimmed.managed, index: authEnd)
+						let ab = urlByteAt(urlBytes, index: authEnd)
 						if ab == 47 or ab == 63 or ab == 35 'delim'
 							break
 						end 'delim'
@@ -184,7 +187,7 @@ export type URL implements Equatable, Stringable
 					var atPos = authStart
 					var foundAt = false
 					while atPos < authEnd 'findAt'
-						if urlByteAt(trimmed.managed, index: atPos) == 64 'at'
+						if urlByteAt(urlBytes, index: atPos) == 64 'at'
 							foundAt = true
 							break
 						end 'at'
@@ -193,20 +196,20 @@ export type URL implements Equatable, Stringable
 
 					if foundAt 'hasUserinfo'
 						hasUserinfo = true
-						let uiSlice = try trimmed.managed.slice(authStart, atPos) otherwise panic("URL.parse: userinfo slice — atPos from scan, always valid")
+						let uiSlice = try urlBytes.slice(authStart, atPos) otherwise panic("URL.parse: userinfo slice — atPos from scan, always valid")
 						userinfo = String.init(uiSlice)
 						authStart = atPos + 1
 					end 'hasUserinfo'
 
 					// Parse host
 					if authStart < authEnd 'hasHostChars'
-						let hostFirstByte = urlByteAt(trimmed.managed, index: authStart)
+						let hostFirstByte = urlByteAt(urlBytes, index: authStart)
 						if hostFirstByte == 91 'ipv6'
 							// IPv6: scan for ']'
 							var bracketEnd = authStart + 1
 							var foundBracket = false
 							while bracketEnd < authEnd 'findBracket'
-								if urlByteAt(trimmed.managed, index: bracketEnd) == 93 'closeBracket'
+								if urlByteAt(urlBytes, index: bracketEnd) == 93 'closeBracket'
 									foundBracket = true
 									break
 								end 'closeBracket'
@@ -215,19 +218,19 @@ export type URL implements Equatable, Stringable
 							if not foundBracket 'noBracket'
 								throw URLError.invalidHost
 							end 'noBracket'
-							let hostSlice = try trimmed.managed.slice(authStart, bracketEnd + 1) otherwise panic("URL.parse: IPv6 host slice — bracketEnd from scan, always valid")
+							let hostSlice = try urlBytes.slice(authStart, bracketEnd + 1) otherwise panic("URL.parse: IPv6 host slice — bracketEnd from scan, always valid")
 							host = String.init(hostSlice)
 							authStart = bracketEnd + 1
 						end 'ipv6' else 'notIpv6'
 							// Regular host: scan until ':' or end of authority
 							var hostEnd = authStart
 							while hostEnd < authEnd 'findHostEnd'
-								if urlByteAt(trimmed.managed, index: hostEnd) == 58 'colon2'
+								if urlByteAt(urlBytes, index: hostEnd) == 58 'colon2'
 									break
 								end 'colon2'
 								hostEnd = hostEnd + 1
 							end 'findHostEnd'
-							let hostSlice = try trimmed.managed.slice(authStart, hostEnd) otherwise panic("URL.parse: host slice — hostEnd from scan, always valid")
+							let hostSlice = try urlBytes.slice(authStart, hostEnd) otherwise panic("URL.parse: host slice — hostEnd from scan, always valid")
 							host = String.init(hostSlice)
 							authStart = hostEnd
 						end 'notIpv6'
@@ -235,14 +238,14 @@ export type URL implements Equatable, Stringable
 
 					// Parse port
 					if authStart < authEnd 'maybePort'
-						if urlByteAt(trimmed.managed, index: authStart) == 58 'colonPort'
+						if urlByteAt(urlBytes, index: authStart) == 58 'colonPort'
 							authStart = authStart + 1
 							// Port: remaining chars in authority must be digits
 							if authStart < authEnd 'hasPortDigits'
 								var portVal = 0
 								var pi = authStart
 								while pi < authEnd 'parsePort'
-									let pb = urlByteAt(trimmed.managed, index: pi)
+									let pb = urlByteAt(urlBytes, index: pi)
 									if not urlIsDigit(pb) 'notDigit'
 										throw URLError.invalidPort
 									end 'notDigit'
@@ -267,40 +270,40 @@ export type URL implements Equatable, Stringable
 		// 6. Parse path: collect until '?', '#', or end
 		let pathStart = pos
 		while pos < len 'parsePath'
-			let pb = urlByteAt(trimmed.managed, index: pos)
+			let pb = urlByteAt(urlBytes, index: pos)
 			if pb == 63 or pb == 35 'delim2'
 				break
 			end 'delim2'
 			pos = pos + 1
 		end 'parsePath'
 		if pos > pathStart 'hasPath'
-			let pathSlice = try trimmed.managed.slice(pathStart, pos) otherwise panic("URL.parse: path slice — pathStart and pos within len")
+			let pathSlice = try urlBytes.slice(pathStart, pos) otherwise panic("URL.parse: path slice — pathStart and pos within len")
 			path = String.init(pathSlice)
 		end 'hasPath'
 
 		// 7. Parse query
 		if pos < len 'checkQuery'
-			if urlByteAt(trimmed.managed, index: pos) == 63 'questionMark'
+			if urlByteAt(urlBytes, index: pos) == 63 'questionMark'
 				hasQuery = true
 				pos = pos + 1
 				let queryStart = pos
 				while pos < len 'parseQuery'
-					if urlByteAt(trimmed.managed, index: pos) == 35 'hash'
+					if urlByteAt(urlBytes, index: pos) == 35 'hash'
 						break
 					end 'hash'
 					pos = pos + 1
 				end 'parseQuery'
-				let querySlice = try trimmed.managed.slice(queryStart, pos) otherwise panic("URL.parse: query slice — queryStart and pos within len")
+				let querySlice = try urlBytes.slice(queryStart, pos) otherwise panic("URL.parse: query slice — queryStart and pos within len")
 				query = String.init(querySlice)
 			end 'questionMark'
 		end 'checkQuery'
 
 		// 8. Parse fragment
 		if pos < len 'checkFragment'
-			if urlByteAt(trimmed.managed, index: pos) == 35 'hashMark'
+			if urlByteAt(urlBytes, index: pos) == 35 'hashMark'
 				hasFragment = true
 				pos = pos + 1
-				let fragSlice = try trimmed.managed.slice(pos, len) otherwise panic("URL.parse: fragment slice — pos within len")
+				let fragSlice = try urlBytes.slice(pos, len) otherwise panic("URL.parse: fragment slice — pos within len")
 				fragment = String.init(fragSlice)
 			end 'hashMark'
 		end 'checkFragment'
@@ -431,7 +434,7 @@ export type URL implements Equatable, Stringable
 					end 'noRefQuery'
 				end 'emptyPath' else 'hasRefPath'
 					if r.path.byteLength() > 0 'checkAbsolute'
-						if urlByteAt(r.path.managed, index: 0) == 47 'absolutePath'
+						if urlByteAt(r.path.addressableBytes(), index: 0) == 47 'absolutePath'
 							tPath = urlRemoveDotSegments(r.path)
 						end 'absolutePath' else 'relativePath'
 							let merged = urlMergeBasePath(base.path, hasAuthority: base.hasHost, refPath: r.path)

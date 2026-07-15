@@ -811,6 +811,34 @@ end 'main'
 a=Hello b=Hello arr[0]=74
 ```
 
+<!-- test: tobytearray-is-independent-through-the-raw-managed-door -->
+The independence holds through the RAW door too, and that is what makes `s.toByteArray().managed` the
+sanctioned way for code outside the stdlib to hand a string's bytes to an intrinsic that wants a
+`__ManagedMemory`. `Array` still exports `managed`; `String` stopped exporting it in Stage 4c of the
+SSO plan. So this is the one remaining route from a string to a writable buffer — and it detaches,
+where reaching through the string's own field did not.
+
+This is pinned separately from the tests above because they go through `Array.set`, which is
+COW-aware by construction. `arr.managed.set` bypasses that and writes the buffer directly, so it is
+the case that would actually alias if the view had not already detached.
+```maxon
+function main() returns ExitCode
+	let who = "ello"
+	let s = "H{who}"
+	let arr = s.toByteArray()
+	try arr.managed.set(0, 74) otherwise panic("set")
+	let b0 = try arr.get(0) otherwise panic("get")
+	print("s={s} arr[0]={b0}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+s=Hello arr[0]=74
+```
+
 <!-- test: tobytearray-survives-the-source-growing -->
 The independence runs both ways: growing the STRING after taking the bytes must not disturb them.
 `append` detaches the string to a fresh buffer, and the array keeps the bytes it was given.

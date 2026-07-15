@@ -20,7 +20,7 @@ export type TcpClient
 	/// Resolves the hostname, creates a TCP socket, and connects.
 	/// The returned TcpClient auto-closes when it goes out of scope.
 	export static function connect(host String, port NetworkPort) returns TcpClient throws NetworkError
-		let sock = try __ManagedSocket.tcpConnect(host.managed, port) otherwise (e) 'connErr'
+		let sock = try __ManagedSocket.tcpConnect(host.addressableBytes(), port) otherwise (e) 'connErr'
 			match e 'matchConn'
 				resolveFailed then throw NetworkError.resolveFailed
 				default throws NetworkError.connectFailed
@@ -33,11 +33,14 @@ export type TcpClient
 	/// Loops internally to handle partial sends.
 	/// Returns the total number of bytes sent.
 	export function send(data String) returns ByteCount throws NetworkError
+		// Materialized ONCE, outside the loop: a partial send drives this round again, and under
+		// Stage 4b asking a short string for its bytes allocates and copies. Per-string, not per-send.
+		let bytes = data.addressableBytes()
 		var totalSent = 0
-		var remaining = data.managed.length()
+		var remaining = bytes.length()
 		while remaining > 0 'send_loop'
-			// bufferOutOfBounds is impossible here: remaining <= data.managed.length() by loop invariant.
-			let sent = try socket.sendFrom(data.managed, totalSent, remaining) otherwise (e) 'sendErr'
+			// bufferOutOfBounds is impossible here: remaining <= bytes.length() by loop invariant.
+			let sent = try socket.sendFrom(bytes, totalSent, remaining) otherwise (e) 'sendErr'
 				match e 'matchSend'
 					bufferOutOfBounds then panic("TcpClient.send: sendFrom OOB — loop invariant violated")
 					default throws NetworkError.sendFailed

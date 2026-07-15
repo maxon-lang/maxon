@@ -201,6 +201,10 @@ A returned tuple of exactly two primitive fields totalling <= 16 bytes is a VALU
 in two registers rather than a heap record, so the call allocates nothing. The only allocation
 left is the `String` that `print` builds. Returning the pair by register is what makes this
 observable — the heap lowering is still the fallback for every tuple that does not fit the gate.
+
+The single `mm_alloc` is the assertion here; the refcount lines around it are not. `print`'s
+`incref`/`decref` pair is the owned reference returned by `String.addressableBytes()`, the
+stdlib-internal door that replaced the raw `.managed` field in Stage 4c — see `specs/mm-trace.md`.
 ```maxon
 typealias Num = int(0 to 1000)
 
@@ -223,6 +227,8 @@ end 'main'
 ```mm-trace
 mm_alloc String #1 size=54
 mm_incref String #1 rc=1
+mm_incref String #1 rc=2
+mm_decref String #1 rc=1
 mm_decref String #1 rc=0
 mm_free String #1
 ```

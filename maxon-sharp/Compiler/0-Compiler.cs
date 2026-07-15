@@ -837,9 +837,6 @@ public static class StdlibLoader {
       if (stdlibErrors.Count > 0) throw stdlibErrors[0];
       foreach (var func in module.Functions) {
         func.IsStdlib = true;
-        func.IsExported = true;
-        // Stdlib symbols are globally visible; collapse any module-scoped flag.
-        func.IsModuleVisible = false;
       }
       // Snapshot the stdlib counters so user compiles can seed their stdlib-namespace
       // counters past these and avoid id collisions during stdlib function lowering.

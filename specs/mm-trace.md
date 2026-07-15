@@ -81,6 +81,16 @@ mm_free StringBuilder #2
 ```
 
 <!-- test: heap-alloc-free -->
+An interpolated `String` costs ONE record: one `mm_alloc`, one `mm_free`, and a balanced refcount
+column in between. That is what this pins — the allocation count, not the retain count.
+
+The middle `incref`/`decref` pair belongs to `print`. Since Stage 4c of the SSO plan `print` reaches
+the bytes through `value.addressableBytes()` rather than the raw `.managed` field, and a callee that
+returns a value hands its caller an OWNED reference — so it increfs on the way out and `print`
+releases at scope end, where a field read was a borrow and did neither. It buys the thing Stage 4b
+needs: one named call site per materialization, which is where a short string's allocation will
+appear once its bytes live inline in a register. **If an `mm_alloc` line appears here per `print`,
+that is the regression to chase — not this pair.**
 <!-- MmTrace -->
 ```maxon
 function main() returns ExitCode
@@ -98,6 +108,8 @@ end 'main'
 mm_alloc String #1 size=57
 mm_incref String #1 rc=1
 mm_incref String #1 rc=2
+mm_incref String #1 rc=3
+mm_decref String #1 rc=2
 mm_decref String #1 rc=1
 mm_decref String #1 rc=0
 mm_free String #1

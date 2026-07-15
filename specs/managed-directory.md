@@ -46,7 +46,7 @@ type DirSearch
   var dir as __ManagedDirectory
 
   static function open(pattern String) returns DirSearch throws SearchError
-    let result = try __ManagedDirectory.openSearch(pattern.managed) otherwise throw SearchError.notFound
+    let result = try __ManagedDirectory.openSearch(pattern.toByteArray().managed) otherwise throw SearchError.notFound
     return DirSearch{dir: result}
   end
 
@@ -63,7 +63,7 @@ end
 function main() returns ExitCode
 	let cwd = try __ManagedDirectory.currentPath() otherwise return 1
 	let cwdStr = String.init(cwd)
-	let exists = __ManagedDirectory.exists(cwdStr.managed)
+	let exists = __ManagedDirectory.exists(cwdStr.toByteArray().managed)
 	if exists 'check'
 		return 42
 	end 'check'
@@ -77,7 +77,7 @@ end 'main'
 <!-- test: managed-directory.not-exists -->
 ```maxon
 function main() returns ExitCode
-	let exists = __ManagedDirectory.exists("nonexistent_dir_xyz_99999".managed)
+	let exists = __ManagedDirectory.exists("nonexistent_dir_xyz_99999".toByteArray().managed)
 	if not exists 'check'
 		return 42
 	end 'check'
@@ -106,7 +106,7 @@ end 'main'
 <!-- test: managed-directory.open-search-nonexistent -->
 ```maxon
 function main() returns ExitCode
-	try __ManagedDirectory.openSearch("nonexistent_dir_xyz_88888/*".managed) otherwise 'notFound'
+	try __ManagedDirectory.openSearch("nonexistent_dir_xyz_88888/*".toByteArray().managed) otherwise 'notFound'
 		print("not found")
 		return 42
 	end 'notFound'
@@ -123,7 +123,7 @@ not found
 <!-- test: managed-directory.open-search-throws -->
 ```maxon
 function main() returns ExitCode
-	try __ManagedDirectory.openSearch("nonexistent_dir_xyz_88888_throws/*".managed) otherwise 'err'
+	try __ManagedDirectory.openSearch("nonexistent_dir_xyz_88888_throws/*".toByteArray().managed) otherwise 'err'
 		return 42
 	end 'err'
 	return 0
@@ -136,7 +136,7 @@ end 'main'
 <!-- test: managed-directory.create-throws -->
 ```maxon
 function main() returns ExitCode
-	try __ManagedDirectory.create("nonexistent_parent_xyz_88888/child".managed) otherwise 'err'
+	try __ManagedDirectory.create("nonexistent_parent_xyz_88888/child".toByteArray().managed) otherwise 'err'
 		return 42
 	end 'err'
 	return 0
@@ -149,7 +149,7 @@ end 'main'
 <!-- test: managed-directory.next-without-try -->
 ```maxon
 function main() returns ExitCode
-	let dir = try __ManagedDirectory.openSearch("./*".managed) otherwise return 1
+	let dir = try __ManagedDirectory.openSearch("./*".toByteArray().managed) otherwise return 1
 	_ = dir.next()
 	return 0
 end 'main'
@@ -191,8 +191,8 @@ type TestDir
 end 'TestDir'
 
 function createFile(path String, content String) throws TestFileError
-	var f = try TestFile.openWrite(path.managed)
-	try f.file.write(content.managed) otherwise 'err'
+	var f = try TestFile.openWrite(path.toByteArray().managed)
+	try f.file.write(content.toByteArray().managed) otherwise 'err'
 		f.file.close()
 		panic("write failed")
 	end 'err'
@@ -202,8 +202,8 @@ end 'createFile'
 function main() returns ExitCode
 	// Create a temp directory (may already exist from previous run)
 	let dirPath = "test_managed_dir_search"
-	if not __ManagedDirectory.exists(dirPath.managed) 'needCreate'
-		try __ManagedDirectory.create(dirPath.managed) otherwise 'createFail'
+	if not __ManagedDirectory.exists(dirPath.toByteArray().managed) 'needCreate'
+		try __ManagedDirectory.create(dirPath.toByteArray().managed) otherwise 'createFail'
 			print("create failed")
 			return 1
 		end 'createFail'
@@ -217,7 +217,7 @@ function main() returns ExitCode
 	end 'c2Err'
 
 	// Search the directory
-	var dir = try TestDir.search("{dirPath}/*".managed) otherwise 'searchFail'
+	var dir = try TestDir.search("{dirPath}/*".toByteArray().managed) otherwise 'searchFail'
 		print("search failed")
 		return 2
 	end 'searchFail'
@@ -229,10 +229,10 @@ function main() returns ExitCode
 	dir.dir.close()
 
 	// Clean up
-	try __ManagedFile.delete("{dirPath}/file1.txt".managed) otherwise 'del1Err'
+	try __ManagedFile.delete("{dirPath}/file1.txt".toByteArray().managed) otherwise 'del1Err'
 		return 4
 	end 'del1Err'
-	try __ManagedFile.delete("{dirPath}/file2.txt".managed) otherwise 'del2Err'
+	try __ManagedFile.delete("{dirPath}/file2.txt".toByteArray().managed) otherwise 'del2Err'
 		return 4
 	end 'del2Err'
 
@@ -257,7 +257,7 @@ sync worker (Win32 ERROR_FILE_NOT_FOUND=2 / ERROR_PATH_NOT_FOUND=3, POSIX ENOENT
 ```maxon
 function main() returns ExitCode
 	var result = 0
-	try __ManagedDirectory.openSearch("nonexistent_phaseB_search_xyz/*".managed) otherwise (e) 'h'
+	try __ManagedDirectory.openSearch("nonexistent_phaseB_search_xyz/*".toByteArray().managed) otherwise (e) 'h'
 		match e 'k'
 			notFound then result = 42
 			default panic("expected notFound")

@@ -1,19 +1,19 @@
 /// Launch and manage child processes.
-/// 
+///
 /// Modeled after Swift's `Subprocess` (swift-foundation SF-0007). The hot path
 /// is `Subprocess.run(.name("git"), arguments: ["status"])`, which captures
 /// stdout/stderr into a `CollectedOutput` value. For more control, build a
 /// `Configuration` and call `.run()` on it.
-/// 
+///
 /// Async use: `let p = async Subprocess.run(...); let r = try await p`. The
 /// same `Subprocess.run` is callable from both sync and async contexts —
 /// from a green thread it yields to the scheduler at the wait, from a plain
 /// call it blocks the OS thread.
-/// 
+///
 /// Not available on `wasm32-wasi` — WASI has no process-spawn primitives.
 /// Code that needs to compile on every supported target must `#if os(Wasi)`
 /// around its Subprocess use.
-/// 
+///
 /// @category System
 // Subprocess: child-process execution. Not supported on WASI; do not target WASI from code that uses Subprocess.
 
@@ -120,12 +120,12 @@ end 'Executable'
 typealias EnvMap = Map with String, String
 
 /// How the child process's environment is constructed.
-/// 
+///
 /// - `inherit` — the child sees the parent's environment unchanged.
 /// - `inheritUpdating(map)` — the child inherits, then `map`'s entries
 ///   overwrite any colliding keys.
 /// - `custom(map)` — the child sees exactly `map` and nothing else.
-/// 
+///
 /// The three-arm union (rather than a single `Map` field) makes
 /// `inherit`-vs-empty unambiguous.
 export union Environment
@@ -139,12 +139,12 @@ end 'Environment'
 // =============================================================================
 
 /// What the child reads on stdin.
-/// 
+///
 /// - `none` — stdin is closed immediately.
 /// - `inherit` — pass through the parent's stdin.
 /// - `bytes(s)` — write `s` to stdin, then close.
 /// - `file(p)` — read stdin from a file on disk.
-/// 
+///
 /// Each variant routes its payload through the `subprocessSpawn` stdio
 /// triple; the runtime stubs currently fail spawns with -1 until the real
 /// OS-side implementation lands.
@@ -156,13 +156,13 @@ export union InputSource
 end 'InputSource'
 
 /// Where the child's stdout (or stderr) is sent.
-/// 
+///
 /// - `discard` — output is dropped.
 /// - `inherit` — pass through to the parent's stream.
 /// - `collect(limitBytes)` — read into the `CollectedOutput.stdout`/`.stderr`
 ///   field, truncated at `limitBytes`.
 /// - `file(p)` — redirect to a file on disk.
-/// 
+///
 /// Each variant routes through the `subprocessSpawn` stdio triple; the
 /// runtime stubs currently fail spawns with -1 until the real OS-side
 /// implementation lands.
@@ -178,14 +178,14 @@ end 'OutputDestination'
 // =============================================================================
 
 /// How the child terminated.
-/// 
+///
 /// - `exited(code)` — the child called `exit(code)` (or its main returned
 ///   `code`). On Windows this includes any value `GetExitCodeProcess` returned
 ///   that isn't an NTSTATUS-class abnormal exit.
 /// - `signalled(code)` — Unix: the child was killed by signal `code`. Windows:
 ///   the child terminated abnormally with NTSTATUS exit code `code` (e.g.
 ///   `0xC0000005` for an access violation).
-/// 
+///
 /// The current runtime stubs never produce `signalled`; that decoding lands
 /// alongside the real OS implementation of `subprocessWaitCollect`.
 export union TerminationStatus
@@ -377,7 +377,7 @@ export type Subprocess
 		let stderrTriple = outputTripleFromDestination(config.standardError)
 		let flags = attachedFlagsFor(config.platformOptions)
 
-		let handle = __Builtins.subprocessSpawn(argvBlob.managed, argc, config.workingDirectory.toString().cstr(), emptyMm, 1, stdinTriple.kind, stdinTriple.data.cstr(), stdoutTriple.kind, stdoutTriple.data.cstr(), stdoutTriple.limit, stderrTriple.kind, stderrTriple.data.cstr(), stderrTriple.limit, flags)
+		let handle = __Builtins.subprocessSpawn(argvBlob.addressableBytes(), argc, config.workingDirectory.toString().cstr(), emptyMm, 1, stdinTriple.kind, stdinTriple.data.cstr(), stdoutTriple.kind, stdoutTriple.data.cstr(), stdoutTriple.limit, stderrTriple.kind, stderrTriple.data.cstr(), stderrTriple.limit, flags)
 		if handle == -1 'spawnFailed'
 			throw SubprocessError.spawnFailed(lastErrorMessage())
 		end 'spawnFailed'
@@ -419,7 +419,7 @@ export type Subprocess
 		try requireInheritEnv(config.environment)
 		let flags = attachedFlagsFor(config.platformOptions) or SpawnFlag.detach.rawValue
 
-		let pid = __Builtins.subprocessDetach(argvBlob.managed, argc, config.workingDirectory.toString().cstr(), emptyMm, 1, StdinKind.none.rawValue, emptyCStr, OutputKind.discard.rawValue, emptyCStr, 0, OutputKind.discard.rawValue, emptyCStr, 0, flags)
+		let pid = __Builtins.subprocessDetach(argvBlob.addressableBytes(), argc, config.workingDirectory.toString().cstr(), emptyMm, 1, StdinKind.none.rawValue, emptyCStr, OutputKind.discard.rawValue, emptyCStr, 0, OutputKind.discard.rawValue, emptyCStr, 0, flags)
 		if pid == -1 'spawnFailed'
 			throw SubprocessError.spawnFailed(lastErrorMessage())
 		end 'spawnFailed'
@@ -490,7 +490,7 @@ end 'resolveByName'
 
 /// Pack argc strings (executable name + argv) back-to-back into a single
 /// NUL-separated buffer. Each token contributes `utf-8 bytes + 0x00`. The
-/// resulting String wraps the buffer; callers pass `.managed` to the builtin.
+/// resulting String wraps the buffer; callers pass `.addressableBytes()` to the builtin.
 /// The runtime walks the blob using argc as the token count (NUL bytes act as
 /// separators; the runtime advances past each NUL between tokens).
 function buildArgvBlob(executablePath String, args StringArray) returns String
@@ -521,10 +521,12 @@ end 'appendNulTerminated'
 /// avoids re-walking ASCII-scan logic for an empty string literal.
 function subprocessEmptyManaged() returns __ManagedMemory
 	// MUST return an OWNED record (`create`'s rc=1 contract), not a borrow of a
-	// local: `let empty = ""; return empty.managed` handed back the inner MM of
-	// a String RELEASED at this function's exit — the record was freed before
+	// local: `let empty = ""; return empty.addressableBytes()` hands back the record
+	// of a String RELEASED at this function's exit — the record was freed before
 	// the caller passed it to spawn, and the caller's release of the
 	// callReturnRc1-classified result then drove the freed header negative.
+	// (Spelled with today's door: the trap is unchanged, because while a String IS
+	// its record `addressableBytes()` hands out a borrow of it, not a copy.)
 	// Capacity 1 (not 0) so the record carries a real, zero-filled buffer —
 	// the runtime reads the slot as a leading-NUL cstring, and a NULL buffer
 	// pointer faulted inside spawn.
@@ -615,14 +617,14 @@ end 'lastErrorMessage'
 typealias StreamingHandle = int(0 to i64.max)
 
 /// A child process whose stdin / stdout / stderr the caller drives by hand.
-/// 
+///
 /// Unlike `Subprocess.run(...)` (which fires the process, drains both output
 /// streams via background threads, and returns a `CollectedOutput` when the
 /// child exits), `StreamingSubprocess` keeps the pipes open and exposes
 /// per-line `writeStdinLine` / `readStdoutLine` / `readStderrLine` operations.
 /// Use it when the parent needs interactive request/response with a long-lived
 /// child — e.g. a worker pool that handles many jobs over its lifetime.
-/// 
+///
 /// Lifecycle:
 ///   let child = try StreamingSubprocess.spawn(Executable.path(p), arguments: argv)
 ///   try child.writeStdinLine("JOB:1")
@@ -631,7 +633,7 @@ typealias StreamingHandle = int(0 to i64.max)
 ///   child.closeStdin()  // optional — signals EOF to child
 ///   let code = try child.wait()  // blocks until child exits
 ///   child.release()  // frees the OS handle
-/// 
+///
 /// Forgetting `release()` leaks the handle and an OS process slot. Treat
 /// `release()` like `close()` on a file.
 export type StreamingSubprocess
@@ -661,7 +663,7 @@ export type StreamingSubprocess
 		// pipes open — and don't take platform-options today, so the field is
 		// always 0. Environment is implicitly inherited by the runtime (the
 		// streaming variant of `__subp_spawn_core` hardcodes inherit-env).
-		let rawHandle = __Builtins.subprocessSpawnStreaming(argvBlob.managed, argc, workingDirectory.toString().cstr(), 0)
+		let rawHandle = __Builtins.subprocessSpawnStreaming(argvBlob.addressableBytes(), argc, workingDirectory.toString().cstr(), 0)
 		if rawHandle == -1 'spawnFailed'
 			throw SubprocessError.spawnFailed(lastErrorMessage())
 		end 'spawnFailed'
@@ -685,7 +687,7 @@ export type StreamingSubprocess
 	/// and this method additionally strips a stray CR so callers don't see
 	/// Windows CRLF artifacts). Returns an empty string on EOF; the runtime
 	/// remembers the EOF state, so a second call after EOF also returns "".
-	/// 
+	///
 	/// Blocks until a line is available or EOF is reached. Lines longer than
 	/// `maxBytes` are truncated and the remainder is delivered on the next
 	/// call. Default cap is 1 MiB which suits log-line / IPC-frame workloads.
@@ -775,20 +777,23 @@ function stripTrailingCR(s String) returns String
 	if len == 0 'empty'
 		return s
 	end 'empty'
-	let last = try s.managed.byteAt(len - 1) otherwise panic("stripTrailingCR: byteAt OOB — len-1 < len invariant")
+	// One materialization for the whole scan-and-slice, taken after the empty check so an empty
+	// string never pays for it. See `String.addressableBytes`.
+	let bytes = s.addressableBytes()
+	let last = try bytes.byteAt(len - 1) otherwise panic("stripTrailingCR: byteAt OOB — len-1 < len invariant")
 	if last == 10 'hasLf'
 		len = len - 1
 	end 'hasLf'
 	if len == 0 'allConsumed'
 		return ""
 	end 'allConsumed'
-	let beforeLf = try s.managed.byteAt(len - 1) otherwise panic("stripTrailingCR: byteAt OOB — len-1 < len invariant")
+	let beforeLf = try bytes.byteAt(len - 1) otherwise panic("stripTrailingCR: byteAt OOB — len-1 < len invariant")
 	if beforeLf == 13 'hasCr'
 		len = len - 1
 	end 'hasCr'
 	if len == s.byteLength() 'noTrim'
 		return s
 	end 'noTrim'
-	let trimmed = try s.managed.slice(0, len) otherwise panic("stripTrailingCR: slice OOB — 0..len always valid")
+	let trimmed = try bytes.slice(0, len) otherwise panic("stripTrailingCR: slice OOB — 0..len always valid")
 	return String.init(trimmed)
 end 'stripTrailingCR'

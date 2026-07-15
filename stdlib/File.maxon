@@ -57,7 +57,7 @@ type FileReader
 
 	/// Open file for reading, throwing if not found
 	static function open(path String) returns FileReader throws FileReadError
-		let result = try __ManagedFile.openRead(path.managed) otherwise 'notFound'
+		let result = try __ManagedFile.openRead(path.addressableBytes()) otherwise 'notFound'
 			throw FileReadError.notFound
 		end 'notFound'
 		return FileReader{file: result}
@@ -137,25 +137,25 @@ export type File
 
 	/// Write string content to a text file
 	export static function writeText(path FilePath, content String, mode FilePermission = FilePermission.normal) throws FileWriteError
-		var writer = try FileWriter.open(path.path.managed, mode: mode)
-		try writer.writeAll(content.managed)
+		var writer = try FileWriter.open(path.path.addressableBytes(), mode: mode)
+		try writer.writeAll(content.addressableBytes())
 	end 'writeText'
 
 	/// Write binary content to a file
 	export static function writeBinary(path FilePath, content ByteArray, mode FilePermission = FilePermission.normal) throws FileWriteError
-		var writer = try FileWriter.open(path.path.managed, mode: mode)
+		var writer = try FileWriter.open(path.path.addressableBytes(), mode: mode)
 		try writer.writeAll(content.managed)
 	end 'writeBinary'
 
 	/// Check if a file exists at the given path
 	export static function exists(path FilePath) returns bool
-		let result = __ManagedFile.exists(path.path.managed)
+		let result = __ManagedFile.exists(path.path.addressableBytes())
 		return result != 0
 	end 'exists'
 
 	/// Delete a file at the given path
 	export static function delete(path FilePath) throws FileDeleteError
-		try __ManagedFile.delete(path.path.managed) otherwise 'failed'
+		try __ManagedFile.delete(path.path.addressableBytes()) otherwise 'failed'
 			throw FileDeleteError.notFound
 		end 'failed'
 	end 'delete'
@@ -165,14 +165,14 @@ export type File
 	/// destination never observes a partially written file. Used to publish
 	/// freshly written files (e.g. cache entries) without a torn-read window.
 	export static function rename(from FilePath, to FilePath) throws FileRenameError
-		try __ManagedFile.rename(from.path.managed, to.path.managed) otherwise 'failed'
+		try __ManagedFile.rename(from.path.addressableBytes(), to.path.addressableBytes()) otherwise 'failed'
 			throw FileRenameError.failed
 		end 'failed'
 	end 'rename'
 
 	/// Get file metadata
 	export static function info(path FilePath) returns FileInfo throws FileInfoError
-		let statResult = try __ManagedFile.stat(path.path.managed) otherwise 'notFound'
+		let statResult = try __ManagedFile.stat(path.path.addressableBytes()) otherwise 'notFound'
 			throw FileInfoError.notFound
 		end 'notFound'
 		let fileSize = __ManagedFile.statField(statResult, 0) as FileSize

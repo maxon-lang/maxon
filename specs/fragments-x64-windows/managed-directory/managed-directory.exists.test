@@ -2,7 +2,7 @@
 function main() returns ExitCode
 	let cwd = try __ManagedDirectory.currentPath() otherwise return 1
 	let cwdStr = String.init(cwd)
-	let exists = __ManagedDirectory.exists(cwdStr.managed)
+	let exists = __ManagedDirectory.exists(cwdStr.toByteArray().managed)
 	if exists 'check'
 		return 42
 	end 'check'
@@ -21,8 +21,8 @@ module {
     x64.cmp rax, rcx
     x64.sete rcx
     x64.movzx rcx, rcxb
-    x64.mov [rbp-104], rax
-    x64.mov [rbp-112], rcx
+    x64.mov [rbp-112], rax
+    x64.mov [rbp-120], rcx
     x64.call __io_get_last_error
     x64.mov rcx, 8
     x64.mov rdx, 2
@@ -58,15 +58,15 @@ module {
     x64.mov rdx, rsi
     x64.cmovne rdx, rcx
     x64.xor ebx, ebx
-    x64.mov rsi, [rbp-112]
+    x64.mov rsi, [rbp-120]
     x64.test rsi, rsi
     x64.mov rdi, rbx
     x64.cmovne rdi, rdx
-    x64.mov [rbp-120], rdi
-    x64.mov rcx, [rbp-104]
+    x64.mov [rbp-128], rdi
+    x64.mov rcx, [rbp-112]
     x64.call maxon_strlen
     x64.mov [rbp-8], rax
-    x64.mov r8, [rbp-104]
+    x64.mov r8, [rbp-112]
     x64.mov [rbp-16], r8
     x64.lea_func r9, [__destruct___ManagedMemory]
     x64.mov rax, r9
@@ -105,7 +105,7 @@ module {
     x64.mov [rcx+24], rbx
     x64.mov rcx, [rbp-24]
     x64.mov [rcx+32], rdi
-    x64.mov [rbp-128], rax
+    x64.mov [rbp-136], rax
     x64.mov rcx, [rbp-16]
     x64.call mm_raw_free
     x64.mov rax, [rbp-24]
@@ -114,7 +114,7 @@ module {
     x64.mov rcx, [rbp-40]
     x64.call mm_incref
     x64.xor eax, eax
-    x64.mov rcx, [rbp-120]
+    x64.mov rcx, [rbp-128]
     x64.cmp rcx, rax
     x64.je main.otherwise_continue_0
   otherwise_stmt_0:
@@ -136,106 +136,110 @@ module {
     x64.mov rcx, [rbp-48]
     x64.call stdlib.String.init
     x64.mov [rbp-56], rax
+    x64.mov rbx, [rbp-56]
+    x64.mov rcx, [rbp-56]
+    x64.call stdlib.String.toByteArray
     x64.mov [rbp-64], rax
-    x64.mov rbx, [rbp-64]
-    x64.mov rsi, [rbx+0]
-    x64.mov rdi, [rbp-64]
-    x64.mov r8, [rdi+8]
-    x64.add rsi, r8
-    x64.movzx r9, byte ptr [rsi+0]
-    x64.xor eax, eax
-    x64.cmp r9, rax
+    x64.mov [rbp-72], rax
+    x64.mov rsi, [rbp-72]
+    x64.mov rdi, [rsi+0]
+    x64.mov r8, [rbp-72]
+    x64.mov r9, [r8+8]
+    x64.add rdi, r9
+    x64.movzx rax, byte ptr [rdi+0]
+    x64.xor ecx, ecx
+    x64.cmp rax, rcx
     x64.jne main.__cstr_fix_0
   __cstr_ok_0:
-    x64.mov rax, [rbp-64]
+    x64.mov rax, [rbp-72]
     x64.mov rcx, [rax+0]
-    x64.mov [rbp-72], rcx
+    x64.mov [rbp-80], rcx
     x64.jmp main.__cstr_done_0
   __cstr_fix_0:
-    x64.mov rax, [rbp-64]
+    x64.mov rax, [rbp-72]
     x64.mov rcx, [rax+24]
-    x64.mov rdx, [rbp-64]
+    x64.mov rdx, [rbp-72]
     x64.mov rbx, [rdx+16]
-    x64.mov rsi, [rbp-64]
+    x64.mov rsi, [rbp-72]
     x64.mov rdi, [rsi+8]
-    x64.mov [rbp-80], rdi
-    x64.mov [rbp-88], rbx
-    x64.mov r8, [rbp-64]
+    x64.mov [rbp-88], rdi
+    x64.mov [rbp-96], rbx
+    x64.mov r8, [rbp-72]
     x64.mov r9, [r8+0]
-    x64.mov [rbp-96], r9
-    x64.mov rax, [rbp-64]
+    x64.mov [rbp-104], r9
+    x64.mov rax, [rbp-72]
     x64.imul rdi, rcx
-    x64.mov rcx, [rbp-64]
+    x64.mov rcx, [rbp-72]
     x64.mov rdx, [rcx+0]
     x64.mov rcx, rdx
-    x64.mov rdx, [rbp-88]
-    x64.mov r8, rdi
-    x64.mov r9, [rbp-64]
-    x64.call maxon_cow_check
-    x64.mov rcx, [rbp-64]
-    x64.mov [rcx+0], rax
-    x64.mov rcx, [rbp-88]
     x64.mov rdx, [rbp-96]
+    x64.mov r8, rdi
+    x64.mov r9, [rbp-72]
+    x64.call maxon_cow_check
+    x64.mov rcx, [rbp-72]
+    x64.mov [rcx+0], rax
+    x64.mov rcx, [rbp-96]
+    x64.mov rdx, [rbp-104]
     x64.cmp rdx, rax
     x64.setne rax
     x64.movzx rax, raxb
-    x64.mov rdx, [rbp-80]
+    x64.mov rdx, [rbp-88]
     x64.test rax, rax
     x64.mov rbx, rcx
     x64.cmovne rbx, rdx
-    x64.mov rdx, [rbp-64]
+    x64.mov rdx, [rbp-72]
     x64.mov [rdx+16], rbx
     x64.mov rdx, -1
     x64.cmp rcx, rdx
     x64.sete rcx
     x64.movzx rcx, rcxb
     x64.and rax, rcx
-    x64.mov rcx, [rbp-64]
+    x64.mov rcx, [rbp-72]
     x64.mov rdx, [rcx+32]
     x64.xor ecx, ecx
     x64.test rax, rax
     x64.mov rbx, rcx
     x64.cmovne rbx, rdx
-    x64.mov [rbp-104], rax
-    x64.mov [rbp-112], rdx
-    x64.mov [rbp-120], rbx
+    x64.mov [rbp-112], rax
+    x64.mov [rbp-120], rdx
+    x64.mov [rbp-128], rbx
     x64.test rbx, rbx
     x64.jz __nonnull_skip_1
-    x64.mov rcx, [rbp-120]
+    x64.mov rcx, [rbp-128]
     x64.call mm_decref
     x64.label __nonnull_skip_1
     x64.xor eax, eax
-    x64.mov rcx, [rbp-112]
-    x64.mov rdx, [rbp-104]
+    x64.mov rcx, [rbp-120]
+    x64.mov rdx, [rbp-112]
     x64.test rdx, rdx
     x64.mov rbx, rcx
     x64.cmovne rbx, rax
-    x64.mov rax, [rbp-64]
+    x64.mov rax, [rbp-72]
     x64.mov [rax+32], rbx
-    x64.mov rax, [rbp-64]
+    x64.mov rax, [rbp-72]
     x64.mov rcx, [rax+0]
-    x64.mov rax, [rbp-64]
+    x64.mov rax, [rbp-72]
     x64.mov rdx, [rax+8]
-    x64.mov rax, [rbp-64]
+    x64.mov rax, [rbp-72]
     x64.mov rbx, [rax+16]
     x64.mov rax, 1
     x64.lea rsi, [rdx + rax]
-    x64.mov rax, [rbp-64]
+    x64.mov rax, [rbp-72]
     x64.mov rdi, [rax+32]
-    x64.mov [rbp-128], rcx
-    x64.mov [rbp-136], rsi
+    x64.mov [rbp-136], rcx
+    x64.mov [rbp-144], rsi
     x64.mov r8, rbx
-    x64.mov r9, [rbp-136]
+    x64.mov r9, [rbp-144]
     x64.mov rsi, rdi
     x64.call maxon_string_ensure_cap
-    x64.mov rcx, [rbp-64]
+    x64.mov rcx, [rbp-72]
     x64.mov [rcx+0], rax
-    x64.mov rcx, [rbp-64]
-    x64.mov rdx, [rbp-136]
+    x64.mov rcx, [rbp-72]
+    x64.mov rdx, [rbp-144]
     x64.mov [rcx+16], rdx
-    x64.mov rcx, [rbp-64]
+    x64.mov rcx, [rbp-72]
     x64.mov rdx, [rcx+32]
-    x64.mov rcx, [rbp-128]
+    x64.mov rcx, [rbp-136]
     x64.cmp rcx, rax
     x64.setne rcx
     x64.movzx rcx, rcxb
@@ -248,77 +252,89 @@ module {
     x64.test rdi, rdi
     x64.mov rsi, rbx
     x64.cmovne rsi, rdx
-    x64.mov [rbp-144], rax
-    x64.mov [rbp-152], rcx
-    x64.mov [rbp-160], rdx
-    x64.mov [rbp-168], rsi
+    x64.mov [rbp-152], rax
+    x64.mov [rbp-160], rcx
+    x64.mov [rbp-168], rdx
+    x64.mov [rbp-176], rsi
     x64.test rsi, rsi
     x64.jz __nonnull_skip_2
-    x64.mov rcx, [rbp-168]
+    x64.mov rcx, [rbp-176]
     x64.call mm_decref
     x64.label __nonnull_skip_2
     x64.xor eax, eax
-    x64.mov rcx, [rbp-160]
-    x64.mov rdx, [rbp-152]
+    x64.mov rcx, [rbp-168]
+    x64.mov rdx, [rbp-160]
     x64.test rdx, rdx
     x64.mov rbx, rcx
     x64.cmovne rbx, rax
-    x64.mov rax, [rbp-64]
+    x64.mov rax, [rbp-72]
     x64.mov [rax+32], rbx
-    x64.mov rax, [rbp-64]
+    x64.mov rax, [rbp-72]
     x64.mov rcx, [rax+8]
-    x64.mov rax, [rbp-144]
+    x64.mov rax, [rbp-152]
     x64.lea rdx, [rax + rcx]
     x64.xor ecx, ecx
     x64.mov byte ptr [rdx+0], rcxb
-    x64.mov [rbp-72], rax
+    x64.mov [rbp-80], rax
     x64.jmp main.__cstr_done_0
   __cstr_done_0:
-    x64.mov rax, [rbp-72]
-    x64.mov rcx, [rbp-72]
+    x64.mov rax, [rbp-80]
+    x64.mov rcx, [rbp-80]
     x64.call maxon_directory_exists
     x64.xor ecx, ecx
     x64.cmp rax, rcx
     x64.je main.check_0.after
   check_0:
-    x64.mov rax, [rbp-40]
+    x64.mov rax, [rbp-64]
     x64.test rax, rax
     x64.jz __nonnull_skip_3
-    x64.mov rcx, [rbp-40]
+    x64.mov rcx, [rbp-64]
     x64.call mm_decref
     x64.label __nonnull_skip_3
-    x64.mov rcx, [rbp-56]
+    x64.mov rcx, [rbp-40]
     x64.test rcx, rcx
     x64.jz __nonnull_skip_4
     x64.call mm_decref
     x64.label __nonnull_skip_4
-    x64.mov rdx, [rbp-48]
+    x64.mov rdx, [rbp-56]
     x64.test rdx, rdx
     x64.jz __nonnull_skip_5
-    x64.mov rcx, [rbp-48]
+    x64.mov rcx, [rbp-56]
     x64.call mm_decref
     x64.label __nonnull_skip_5
+    x64.mov rbx, [rbp-48]
+    x64.test rbx, rbx
+    x64.jz __nonnull_skip_6
+    x64.mov rcx, [rbp-48]
+    x64.call mm_decref
+    x64.label __nonnull_skip_6
     x64.mov rax, 42
     x64.epilogue
     x64.ret
   check_0.after:
-    x64.mov rax, [rbp-40]
+    x64.mov rax, [rbp-64]
     x64.test rax, rax
-    x64.jz __nonnull_skip_6
-    x64.mov rcx, [rbp-40]
-    x64.call mm_decref
-    x64.label __nonnull_skip_6
-    x64.mov rcx, [rbp-56]
-    x64.test rcx, rcx
     x64.jz __nonnull_skip_7
+    x64.mov rcx, [rbp-64]
     x64.call mm_decref
     x64.label __nonnull_skip_7
-    x64.mov rdx, [rbp-48]
-    x64.test rdx, rdx
+    x64.mov rcx, [rbp-40]
+    x64.test rcx, rcx
     x64.jz __nonnull_skip_8
-    x64.mov rcx, [rbp-48]
     x64.call mm_decref
     x64.label __nonnull_skip_8
+    x64.mov rdx, [rbp-56]
+    x64.test rdx, rdx
+    x64.jz __nonnull_skip_9
+    x64.mov rcx, [rbp-56]
+    x64.call mm_decref
+    x64.label __nonnull_skip_9
+    x64.mov rbx, [rbp-48]
+    x64.test rbx, rbx
+    x64.jz __nonnull_skip_10
+    x64.mov rcx, [rbp-48]
+    x64.call mm_decref
+    x64.label __nonnull_skip_10
     x64.mov rax, 1
     x64.epilogue
     x64.ret

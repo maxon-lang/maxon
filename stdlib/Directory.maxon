@@ -16,7 +16,7 @@ export type Directory
 	export static function list(path FilePath) returns FilePathArray throws DirectoryListError
 		let pattern = "{path.path}{FilePath.separator()}*"
 		var search = Directory{
-			dir: try __ManagedDirectory.openSearch(pattern.managed) otherwise 'open'
+			dir: try __ManagedDirectory.openSearch(pattern.addressableBytes()) otherwise 'open'
 				throw DirectoryListError.notFound
 			end 'open'
 		}
@@ -31,7 +31,7 @@ export type Directory
 
 	/// Check if a path exists and is a directory
 	export static function exists(path FilePath) returns bool
-		return __ManagedDirectory.exists(path.path.managed)
+		return __ManagedDirectory.exists(path.path.addressableBytes())
 	end 'exists'
 
 	/// Alternative name for discoverability
@@ -51,7 +51,7 @@ export type Directory
 				_ = Directory.create(parent)
 			end 'nonEmpty'
 		end 'hasParent'
-		try __ManagedDirectory.create(path.path.managed) otherwise return false
+		try __ManagedDirectory.create(path.path.addressableBytes()) otherwise return false
 		return true
 	end 'create'
 

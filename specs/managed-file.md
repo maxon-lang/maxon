@@ -45,7 +45,7 @@ type FileWrapper
   export var file as __ManagedFile
 
   static function open(path String) returns FileWrapper throws FileError
-    let result = try __ManagedFile.openRead(path.managed) otherwise throw FileError.notFound
+    let result = try __ManagedFile.openRead(path.toByteArray().managed) otherwise throw FileError.notFound
     return FileWrapper{_file: result}
   end
 
@@ -60,7 +60,7 @@ end
 <!-- test: managed-file.open-read-nonexistent -->
 ```maxon
 function main() returns ExitCode
-	try __ManagedFile.openRead("nonexistent_file_xyz_98765.txt".managed) otherwise 'notFound'
+	try __ManagedFile.openRead("nonexistent_file_xyz_98765.txt".toByteArray().managed) otherwise 'notFound'
 		print("not found")
 		return 42
 	end 'notFound'
@@ -101,19 +101,19 @@ end 'TestFile'
 function main() returns ExitCode
 	let path = "test_managed_file_rw.txt"
 	// Write a file
-	var wf = try TestFile.openWrite(path.managed) otherwise 'writeFail'
+	var wf = try TestFile.openWrite(path.toByteArray().managed) otherwise 'writeFail'
 		print("write open failed")
 		return 1
 	end 'writeFail'
 	let content = "Hello Managed"
-	try wf.file.write(content.managed) otherwise 'wErr'
+	try wf.file.write(content.toByteArray().managed) otherwise 'wErr'
 		wf.file.close()
 		return 3
 	end 'wErr'
 	wf.file.close()
 
 	// Read it back
-	var rf = try TestFile.openRead(path.managed) otherwise 'readFail'
+	var rf = try TestFile.openRead(path.toByteArray().managed) otherwise 'readFail'
 		print("read open failed")
 		return 2
 	end 'readFail'
@@ -145,7 +145,7 @@ function main() returns ExitCode
 	print("{readContent}")
 
 	// Clean up
-	try __ManagedFile.delete(path.managed) otherwise 'delErr'
+	try __ManagedFile.delete(path.toByteArray().managed) otherwise 'delErr'
 		return 4
 	end 'delErr'
 
@@ -177,13 +177,13 @@ type TestFile
 end 'TestFile'
 
 function createEmptyFile(path String) throws TestFileError
-	var f = try TestFile.openWrite(path.managed)
+	var f = try TestFile.openWrite(path.toByteArray().managed)
 	f.file.close()
 end 'createEmptyFile'
 
 function main() returns ExitCode
 	// Non-existent file
-	let e1 = __ManagedFile.exists("nonexistent_xyz_managed_12345.txt".managed)
+	let e1 = __ManagedFile.exists("nonexistent_xyz_managed_12345.txt".toByteArray().managed)
 	if e1 != 0 'check1'
 		return 1
 	end 'check1'
@@ -193,11 +193,11 @@ function main() returns ExitCode
 	try createEmptyFile(path) otherwise 'createFail'
 		return 10
 	end 'createFail'
-	let e2 = __ManagedFile.exists(path.managed)
+	let e2 = __ManagedFile.exists(path.toByteArray().managed)
 	if e2 != 1 'check2'
 		return 2
 	end 'check2'
-	try __ManagedFile.delete(path.managed) otherwise 'delErr'
+	try __ManagedFile.delete(path.toByteArray().managed) otherwise 'delErr'
 		return 4
 	end 'delErr'
 	return 42
@@ -210,7 +210,7 @@ end 'main'
 <!-- test: managed-file.delete-nonexistent -->
 ```maxon
 function main() returns ExitCode
-	try __ManagedFile.delete("nonexistent_delete_xyz.txt".managed) otherwise 'checkFail'
+	try __ManagedFile.delete("nonexistent_delete_xyz.txt".toByteArray().managed) otherwise 'checkFail'
 		print("delete failed as expected")
 		return 42
 	end 'checkFail'
@@ -249,8 +249,8 @@ type TestFile
 end 'TestFile'
 
 function writeFile(path String)
-	let wf = try TestFile.openWrite(path.managed) otherwise panic("write open failed")
-	try wf.file.write("auto".managed) otherwise panic("write failed")
+	let wf = try TestFile.openWrite(path.toByteArray().managed) otherwise panic("write open failed")
+	try wf.file.write("auto".toByteArray().managed) otherwise panic("write failed")
 	// wf goes out of scope here, destructor closes handle
 end 'writeFile'
 
@@ -259,7 +259,7 @@ function main() returns ExitCode
 	writeFile(path)
 
 	// Verify we can read it (file was properly closed by destructor)
-	var rf = try TestFile.openRead(path.managed) otherwise 'readFail'
+	var rf = try TestFile.openRead(path.toByteArray().managed) otherwise 'readFail'
 		print("read failed")
 		return 1
 	end 'readFail'
@@ -267,7 +267,7 @@ function main() returns ExitCode
 		return 3
 	end 'sizeErr'
 	rf.file.close()
-	try __ManagedFile.delete(path.managed) otherwise 'delErr'
+	try __ManagedFile.delete(path.toByteArray().managed) otherwise 'delErr'
 		return 2
 	end 'delErr'
 	if size == 4 'sizeOk'
@@ -290,7 +290,7 @@ Backed by `gt->io_error_code` populated by the runtime sync worker
 ```maxon
 function main() returns ExitCode
 	var result = 0
-	try __ManagedFile.openRead("nonexistent_phaseB_open_xyz.txt".managed) otherwise (e) 'h'
+	try __ManagedFile.openRead("nonexistent_phaseB_open_xyz.txt".toByteArray().managed) otherwise (e) 'h'
 		match e 'k'
 			notFound then result = 42
 			default panic("expected notFound")
@@ -307,7 +307,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	var result = 0
-	try __ManagedFile.delete("nonexistent_phaseB_delete_xyz.txt".managed) otherwise (e) 'h'
+	try __ManagedFile.delete("nonexistent_phaseB_delete_xyz.txt".toByteArray().managed) otherwise (e) 'h'
 		match e 'k'
 			notFound then result = 42
 			default panic("expected notFound")
@@ -324,7 +324,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	var result = 0
-	try __ManagedFile.stat("nonexistent_phaseB_stat_xyz.txt".managed) otherwise (e) 'h'
+	try __ManagedFile.stat("nonexistent_phaseB_stat_xyz.txt".toByteArray().managed) otherwise (e) 'h'
 		match e 'k'
 			notFound then result = 42
 			default panic("expected notFound")

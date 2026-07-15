@@ -155,7 +155,12 @@ function log(category LogCategory, level LogLevel, message LazyMessage)
 		let msg = message()
 
 		if __DebugStream.enabled() 'ring'
-			__DebugStream.text(category.ordinal, level.rawValue, currentTraceUnit, msg.managed)
+			// `String.addressableBytes()` is stdlib-internal, so the bytes are reached the way all
+			// code outside the stdlib reaches them: through an independent `toByteArray()` view.
+			// Bound to a local rather than passed inline so the view is unambiguously still alive
+			// while the intrinsic reads it.
+			let msgBytes = msg.toByteArray()
+			__DebugStream.text(category.ordinal, level.rawValue, currentTraceUnit, msgBytes.managed)
 			return
 		end 'ring'
 

@@ -581,3 +581,26 @@ end 'main'
 ```exitcode
 42
 ```
+
+<!-- test: error.stdlib-non-exported-method-is-not-callable -->
+**A stdlib declaration's visibility means what it says.** It did not used to: `StdlibLoader`
+force-exported every stdlib function after the stdlib's own compile (`func.IsExported = true;
+func.IsModuleVisible = false`, "Stdlib symbols are globally visible"), so **no stdlib function could
+be internal whatever it declared** — `String.mapAsciiCase` here, and `String.addressableBytes`, the
+stdlib's own raw door to a string's bytes, which Stage 4c had just introduced *precisely* to stop
+user code reaching those bytes. The door was reachable the day it was built.
+
+Removing the force-export cost exactly ten `export` keywords across the stdlib — `Iterable.map` /
+`filter` / `contains`, `Stdin.readLine`, and six `JsonDoc` accessors — all genuine public API that had
+been riding it rather than declaring itself. Nothing else in the stdlib wanted to be public.
+```maxon
+function main() returns ExitCode
+	let s = "HELLO"
+	let x = s.mapAsciiCase(65, hi: 90, delta: 32)
+	print("{x}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3008: specs/fragments/export-keyword/error.stdlib-non-exported-method-is-not-callable.test:4:12: function 'stdlib.String.mapAsciiCase' is not exported
+```

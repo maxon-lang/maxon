@@ -45,7 +45,7 @@ error E3072: specs/fragments/managed-socket/managed-socket.error-direct-construc
 ```maxon
 function main() returns ExitCode
 	let host = "no-such-host-xyz-98765.invalid"
-	try __ManagedSocket.tcpConnect(host.managed, 80) otherwise (e) 'connErr'
+	try __ManagedSocket.tcpConnect(host.toByteArray().managed, 80) otherwise (e) 'connErr'
 		match e 'check'
 			resolveFailed then print("resolve failed")
 			default throws __ManagedSocketError.connectFailed
@@ -66,7 +66,7 @@ resolve failed
 ```maxon
 function main() returns ExitCode
 	let host = "192.0.2.1"
-	try __ManagedSocket.tcpConnect(host.managed, 1) otherwise (e) 'connErr'
+	try __ManagedSocket.tcpConnect(host.toByteArray().managed, 1) otherwise (e) 'connErr'
 		match e 'check'
 			connectFailed then print("connect failed")
 			default throws __ManagedSocketError.resolveFailed

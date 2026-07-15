@@ -44,7 +44,7 @@ type TestFile
 	export var file as __ManagedFile
 
 	export static function open(path String) returns TestFile throws TestFileError
-		let handle = try __ManagedFile.openRead(path.managed) otherwise 'f'
+		let handle = try __ManagedFile.openRead(path.toByteArray().managed) otherwise 'f'
 			throw TestFileError.openFailed
 		end 'f'
 		return TestFile{file: handle}
@@ -122,16 +122,27 @@ and COWs if not. The type check is what makes the conversion mandatory at
 the source level — it is the gap that hid the original Subprocess `cwd`
 NUL-termination bug.
 
+For a `String` the conversion has a name of its own: `s.cstr()`. It is the
+whole of `mm.toCString()` with the buffer already in hand, and since Stage 4c
+of the SSO plan it is also the spelling to reach for: `String` no longer
+exports its raw-buffer field, so reaching through that field to call
+`toCString()` on it no longer compiles.
+Code that genuinely needs the bytes as a `__ManagedMemory` asks for
+`s.toByteArray().managed`, which hands back an INDEPENDENT view — writing
+through it cannot alter the string.
+
 <!-- test: builtin-type-checking.error-subprocess-resolve-on-path-managed -->
 ```maxon
 function main() returns ExitCode
 	let s = "ls"
-	let result = __Builtins.subprocessResolveOnPath(s.managed)
+	// A `__ManagedMemory` reached the only way user code can reach a string's bytes: an independent
+	// `toByteArray()` view. It is still the wrong TYPE here, which is the point of the test.
+	let result = __Builtins.subprocessResolveOnPath(s.toByteArray().managed)
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/builtin-type-checking/builtin-type-checking.error-subprocess-resolve-on-path-managed.test:4:50: type mismatch: __Builtins.maxon_subprocess_resolve_on_path argument 0 expects 'cstring' but got 'ByteMemory'
+error E3005: specs/fragments/builtin-type-checking/builtin-type-checking.error-subprocess-resolve-on-path-managed.test:6:50: type mismatch: __Builtins.maxon_subprocess_resolve_on_path argument 0 expects 'cstring' but got 'ByteBuffer'
 ```
 
 <!-- test: builtin-type-checking.error-subprocess-resolve-on-path-int -->
@@ -149,7 +160,7 @@ error E3005: specs/fragments/builtin-type-checking/builtin-type-checking.error-s
 ```maxon
 function main() returns ExitCode
 	let s = "abc"
-	let cs = s.managed.toCString()
+	let cs = s.cstr()
 	let result = __Builtins.subprocessGetPid(cs)
 	return 0
 end 'main'

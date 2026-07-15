@@ -137,7 +137,7 @@ result must be explicitly discarded with `_ =`.
 ```maxon
 function main() returns ExitCode
 	let s = "direct\n"
-	_ = __Builtins.writeStdout(s.managed)
+	_ = __Builtins.writeStdout(s.toByteArray().managed)
 	return 0
 end 'main'
 ```
