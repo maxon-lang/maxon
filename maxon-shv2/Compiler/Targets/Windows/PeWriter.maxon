@@ -68,21 +68,35 @@ let Kernel32DirEntries = 1  // M1 imports from kernel32 only
 let ImportThunkPasses = 2  // the IAT and the ILT hold identical thunks
 
 // --- IAT slots ---
-// M1 needs a single Win32 import: kernel32!ExitProcess, so `mrt_start` can
-// terminate the process with main's return code. Each case is named EXACTLY as
-// its Win32 symbol, so `.name` is the import string and `.ordinal` is the IAT
-// slot index — the two facets the call-site relocation and the import-table
-// builder need, with no parallel array to keep in lockstep. GROWS one appended
-// case per new import (WriteFile, VirtualAlloc, …) at its milestone.
+// The Win32 imports the emitted runtime needs. Each case is named EXACTLY as its Win32
+// symbol, so `.name` is the import string and `.ordinal` is the IAT slot index — the two
+// facets the call-site relocation and the import-table builder need, with no parallel
+// array to keep in lockstep. GROWS one appended case per new import at its milestone;
+// everything downstream (the thunk table, the Hint/Name table, the IAT size) sizes itself
+// off `allCases`, so appending a case is the whole change.
+//
+// `ExitProcess` terminates with main's return code. The other three are the panic runtime
+// (P1.0d.3): `GetStdHandle` + `WriteFile` are how a panic reaches stderr — the emitted
+// program links no CRT, so there is no `fprintf` and stderr is a HANDLE you ask for — and
+// `AddVectoredExceptionHandler` is what lets the runtime see a `#DE` at all, since the CPU
+// raises the trap and Windows offers it to VEH before anything else.
+//
+// ⚠ All four are kernel32, so this is still ONE DLL and `Kernel32DirEntries` stays 1 —
+// that constant counts import DIRECTORY entries (DLLs), not imports.
 export enum IatSlot
 	ExitProcess
+	GetStdHandle
+	WriteFile
+	AddVectoredExceptionHandler
 end 'IatSlot'
 
-// The IAT slot index of the ExitProcess import — the `slotIndex` the entry stub's
-// `iatCall` records and the PE writer patches against.
-export function exitProcessIatSlot() returns RelocSlotIndex
-	return IatSlot.ExitProcess.ordinal as RelocSlotIndex
-end 'exitProcessIatSlot'
+// The IAT slot index of an import — the `slotIndex` an `iatCall` records and the PE writer
+// patches against. ONE accessor over the enum rather than a named function per import: a
+// per-slot wrapper would be a thin wrapper around `.ordinal`, and four of them would be
+// four places to get the mapping wrong.
+export function iatSlotIndex(slot IatSlot) returns RelocSlotIndex
+	return slot.ordinal as RelocSlotIndex
+end 'iatSlotIndex'
 
 // kernel32 import names in slot (declaration) order.
 function kernel32ImportNames() returns StringArray
