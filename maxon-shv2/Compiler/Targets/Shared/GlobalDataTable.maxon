@@ -152,29 +152,52 @@ export type GlobalDataTable
 	end 'dataSectionOffsetOf'
 end 'GlobalDataTable'
 
+// The widest a `.data` slot can be. `StdTypeInfo.storageBytes` tops out at 8 (`i64`/`u64`/`f64`)
+// and every value it can take is a power of two — the SAME fact `GlobalDataTable.layOut` already
+// rests its zero-padding claim on, named here because `sortBySizeDescendingStable` is the code
+// that walks the size classes and would otherwise re-state the bound as a literal.
+let MaxDataSlotBytes = 8 as ByteCount
+
 // `declared` ordered by storage size, LARGEST FIRST, preserving declaration order among equal
 // sizes — see `GlobalDataTable.layOut` for why both halves are load-bearing.
 //
-// An INSERTION sort, and the choice is deliberate rather than lazy: it is stable by
-// construction (the scan stops at the first entry that is not strictly smaller, so an equal
-// one is never stepped over), and a program's top-level `var` count is a handful — the Θ(n²)
-// worst case is over a list whose n is the number of globals in the source, not the number of
-// ops or values. A comparison sort with a hand-written stability tiebreak would be more code
-// carrying the one property this shape simply has.
+// ⭐ **ONE STABLE PASS PER SIZE CLASS — O(globals), not Θ(globals²).** The sizes are not an open
+// set to be compared pairwise: `StdTypeInfo.storageBytes` is one of 1, 2, 4, 8 and nothing else
+// (see `MaxDataSlotBytes`), so "largest first" is FOUR appends-in-order, not a sort. Each pass
+// appends the entries of one class in declaration order, which is what makes it stable by
+// construction — `data-section-multiple-bools` pins three equal-sized slots in declaration order,
+// and nothing here can reorder them because nothing here compares them.
+//
+// ⚠ IT WAS AN INSERTION SORT, AND THAT WAS Θ(n²) IN THE ORDINARY CASE, NOT THE PATHOLOGICAL ONE.
+// The old scan stopped at the first STRICTLY smaller entry, so a program whose globals are all
+// one size — every global an `int`, the commonest program there is — never stopped early and
+// rescanned the whole placed list for every entry. MEASURED at 500→8000 all-`i64` globals: the
+// compile's unattributed bucket read 30/120/460 ms for n=2000/4000/8000, x3.98 then x3.83 per
+// doubling. This shape reads x2.0. The old comment defended the cost as "a program's top-level
+// `var` count is a handful" — which is the same appeal to a property of the corpus that
+// `topLevelStorageKey` refuses on v1's behalf three files away, and it is worth no more here.
 function sortBySizeDescendingStable(declared DataSectionEntryArray) returns DataSectionEntryArray
 	var sorted = DataSectionEntryArray.create()
-	for entry in declared 'each'
-		let size = stdTypeStorageBytes(entry.valueType)
-		var at = sorted.count()
-		for i in 0 upto sorted.count() 'findSlot'
-			let placed = try sorted.get(i) otherwise panic("sortBySizeDescendingStable: sorted.get OOB at {i}")
-			if stdTypeStorageBytes(placed.valueType) < size 'strictlySmaller'
-				at = i
-				break
-			end 'strictlySmaller'
-		end 'findSlot'
-		sorted.insert(at, value: entry)
-	end 'each'
+	var size = MaxDataSlotBytes
+	while size > 0 'eachSizeClass'
+		for entry in declared 'each'
+			if stdTypeStorageBytes(entry.valueType) == size 'thisClass'
+				sorted.push(entry)
+			end 'thisClass'
+		end 'each'
+		size = size shr 1
+	end 'eachSizeClass'
+
+	// Every entry landed in exactly one class, or the walk above does not cover the type table.
+	// It cannot today — the passes are 8/4/2/1 and `StdTypeInfo` declares nothing else — but a
+	// dropped entry would be SILENT and it would be a wrong answer, not a crash: the slot would
+	// vanish from `dataSection` while `dataIndex` never learned it, and the first `globalAddr`
+	// naming it would panic somewhere else entirely. The day a 16-byte `StdType` is declared, this
+	// says so here, where the fix is.
+	if sorted.count() != declared.count() 'droppedAnEntry'
+		panic("sortBySizeDescendingStable: laid out {sorted.count()} of {declared.count()} .data slot(s) — a global's storage size is not one of the {MaxDataSlotBytes}/4/2/1-byte classes this walks, so StdTypeInfo has grown a width the layout does not cover")
+	end 'droppedAnEntry'
+
 	return sorted
 end 'sortBySizeDescendingStable'
 
