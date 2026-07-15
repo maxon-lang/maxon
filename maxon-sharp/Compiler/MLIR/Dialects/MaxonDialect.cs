@@ -477,31 +477,23 @@ public sealed class MaxonFunctionVarRefOp(string varName, IrFunctionType functio
 }
 
 // Indirect call op: calls a function through a function pointer
-public sealed class MaxonIndirectCallOp : MaxonOp {
+public sealed class MaxonIndirectCallOp(MaxonValue callee, IrFunctionType calleeType, List<MaxonValue> args,
+    MaxonValueKind? resultKind = null, string? resultStructTypeName = null) : MaxonOp {
   public override MaxonOpKind Kind => MaxonOpKind.IndirectCall;
   public override string Mnemonic => "maxon.indirect_call";
-  public MaxonValue Callee { get; }
-  public IrFunctionType CalleeType { get; }
-  public List<MaxonValue> Args { get; }
-  public MaxonValue? Result { get; }
-  public MaxonValueKind? ResultKind { get; }
-  public string? ResultStructTypeName { get; }
+  public MaxonValue Callee { get; } = callee;
+  public IrFunctionType CalleeType { get; } = calleeType;
+  public List<MaxonValue> Args { get; } = args;
+  // The SAME result-construction a direct call uses. This used to be a second,
+  // hand-rolled copy that named only the Struct case, so an indirect call whose
+  // return type was an enum or a union produced a bare MaxonInteger with the type
+  // name dropped: `report(handler(x))` was rejected as "expected 'Outcome', got
+  // 'int'", and a `match` on the result died with "Expected pattern value".
+  public MaxonValue? Result { get; } = MaxonCallOp.CreateResult(resultKind, resultStructTypeName);
+  public MaxonValueKind? ResultKind { get; } = resultKind;
+  public string? ResultStructTypeName { get; } = resultStructTypeName;
   public override IReadOnlyList<MaxonValue> Results => Result != null ? [Result] : [];
   public override IReadOnlyList<MaxonValue> Operands => [Callee, .. Args];
-
-  public MaxonIndirectCallOp(MaxonValue callee, IrFunctionType calleeType, List<MaxonValue> args, MaxonValueKind? resultKind = null, string? resultStructTypeName = null) {
-    Callee = callee;
-    CalleeType = calleeType;
-    Args = args;
-    ResultKind = resultKind;
-    ResultStructTypeName = resultStructTypeName;
-    // The SAME result-construction a direct call uses. This used to be a second,
-    // hand-rolled copy that named only the Struct case, so an indirect call whose
-    // return type was an enum or a union produced a bare MaxonInteger with the type
-    // name dropped: `report(handler(x))` was rejected as "expected 'Outcome', got
-    // 'int'", and a `match` on the result died with "Expected pattern value".
-    Result = MaxonCallOp.CreateResult(resultKind, resultStructTypeName);
-  }
 }
 
 public sealed class MaxonVarRefOp(string varName, MaxonValueKind kind) : MaxonOp, IReadsVarByName {

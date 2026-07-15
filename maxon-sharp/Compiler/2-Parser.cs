@@ -675,7 +675,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// and `try await` had nothing to check the enclosing function's `throws` against. Refusing
   /// the store is what makes those unrepresentable — and unlike the diagnostic this replaces,
   /// it can name the type that DOES work, because there now is one.
-  private void CheckPromiseStorageErrorTypeMatches(MaxonPromise promise, IrStructType promiseStructType,
+  private static void CheckPromiseStorageErrorTypeMatches(MaxonPromise promise, IrStructType promiseStructType,
       Token errorToken) {
     var storageErrorType = PromiseStorageErrorType(promiseStructType);
     var thunkErrorType = promise.ErrorType;
@@ -11193,7 +11193,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// a non-literal argument is rejected here rather than silently degraded to something that
   /// would allocate.
   /// </summary>
-  private MaxonValue EmitDebugStreamNameId() {
+  private MaxonInteger EmitDebugStreamNameId() {
     if (!Check(TokenType.StringLiteral))
       throw new CompileError(ErrorCode.ParserExpectedExpression,
         $"{DebugStreamTypeName}.{DebugStreamNameIdMethod} takes a string LITERAL — the name is interned at " +
@@ -15525,7 +15525,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// it — a caller of the result would otherwise be checked against a signature the value might not
   /// have. Kind equality is not enough here for the same reason it is not enough for structs.
   /// </summary>
-  private IrFunctionType? MergeTernaryArmFnTypes(IrFunctionType? trueFnType, IrFunctionType? falseFnType, Token ifToken) {
+  private static IrFunctionType? MergeTernaryArmFnTypes(IrFunctionType? trueFnType, IrFunctionType? falseFnType, Token ifToken) {
     if (trueFnType == null && falseFnType == null) return null;
 
     if (trueFnType == null || falseFnType == null)

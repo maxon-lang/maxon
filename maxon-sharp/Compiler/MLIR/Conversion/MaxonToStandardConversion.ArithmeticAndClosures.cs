@@ -234,7 +234,7 @@ public static partial class MaxonToStandardConversion {
   /// A count the compiler CAN see and the instruction accepts as written pays none of the
   /// saturation: it gets the bare shift, and that is the only thing constant-count lowering still
   /// buys. Everything else about the two is identical, which is why they are one routine.
-  private static StdValue EmitShift(
+  private static StdI64 EmitShift(
     MaxonBinOp binOp, StdValue lhs, StdValue rhs,
     Dictionary<MaxonValue, MaxonLiteralOp> literalMap, IrBlock<StandardOp> block) {
 

@@ -429,7 +429,7 @@ public static class ErrorCodeRegistry {
     var stringBacked = row.Compiler == Compiler.Shv2;
     var b = new StringBuilder();
     foreach (var line in Banner.Split('\n')) b.Append(line.Length == 0 ? "//\n" : $"// {line}\n");
-    b.Append("\n");
+    b.Append('\n');
     b.Append("// Error codes grouped by compilation stage:\n");
     b.Append("// 1xxx lexer, 2xxx parser, 3xxx semantic, 4xxx IR, 5xxx code emitter,\n");
     b.Append("// 6xxx PE writer, 9xxx internal.\n");
