@@ -1009,6 +1009,25 @@ public static partial class MaxonToStandardConversion {
                 break;
               }
 
+              // 3c: a MANAGED-ELEMENT array literal (`["a","b"]`) whose elements are ALL static
+              // string/char literals, and which is never mutated, becomes a shared immortal record
+              // too — its inline pointer table references the elements' own static records (filled at
+              // __module_init). Not a ConstantArrayLiteral (managed pointers aren't compile-time
+              // constants), so eligibility is the escape analysis plus every element being static.
+              if (structLitOp.ArrayLiteralTag != null && structLitOp.ArrayLiteralCount > 0
+                  && !structLitOp.IsBitPacked
+                  && !module.ConstantArrayLiterals.ContainsKey(structLitOp.Result.Id)
+                  && IsStaticEligibleLiteral(structLitOp.Result.Id)) {
+                var elementLabels = CollectStaticElementLabels(structLitOp, block);
+                if (elementLabels != null) {
+                  inlineTargets.TryGetValue(structLitOp.Result.Id, out var smArrTarget);
+                  valueMap[structLitOp.Result] = EmitStaticManagedArrayLiteral(
+                    elementLabels, structLitOp.TypeName, structLitOp.Result.Id,
+                    newBlock, varTypes, result, temps, smArrTarget);
+                  break;
+                }
+              }
+
               // Byte-fusion: a small OWNED array/vector literal stores its elements INLINE in the
               // record's own allocation (buffer = self + recordSize, parent_ptr = MmParentInline)
               // instead of taking a second heap buffer. Only when the buffer is writable (not an

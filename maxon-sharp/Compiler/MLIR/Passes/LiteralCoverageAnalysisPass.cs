@@ -252,16 +252,18 @@ public static class LiteralCoverageAnalysisPass {
           foreach (var (fieldName, value) in sl.FieldValues) {
             if (fieldName == "managed") Union(ValueNode(sl.Result.Id), ValueNode(value.Id));
           }
-          // A CONSTANT array literal (`[1,2,3]`, `sha256KTable = [...]`) is a literal site too: its
-          // elements are already compile-time constants in rdata, so a never-mutated one can be a
-          // shared immortal record. Only constant arrays are recorded — a runtime-valued array
-          // literal has nothing static to share. Managed-element arrays (`["a","b"]`) are NOT
-          // constant arrays and are left to the heap path (3c, not covered here). A constant array
-          // bound to a MUTABLE GLOBAL (IsMutable) is skipped: this per-function analysis cannot see
-          // a global mutated in another function, so those stay on the heap (the lowering enforces
-          // the same guard).
-          if (_module.ConstantArrayLiterals.TryGetValue(sl.Result.Id, out var cai) && !cai.IsMutable) {
-            ctx.Literals.Add((LitKind.Array, sl.Result.Id, Preview(sl.ArrayLiteralTag ?? "[array]")));
+          // An ARRAY literal is a literal site too: a never-mutated one can be a shared immortal
+          // record — a CONSTANT primitive array (`[1,2,3]`, elements packed in rdata; 3b) or a
+          // MANAGED-element array (`["a","b"]`, whose elements are themselves static literals; 3c).
+          // A constant array bound to a MUTABLE GLOBAL is skipped here: this per-function analysis
+          // cannot see a global mutated in another function (the lowering enforces the same
+          // IsMutable guard). A managed array in a mutable global is instead caught by the
+          // GlobalStore sink below, so it needs no special case here.
+          if (sl.ArrayLiteralTag != null) {
+            bool constMutableGlobal =
+              _module.ConstantArrayLiterals.TryGetValue(sl.Result.Id, out var cai) && cai.IsMutable;
+            if (!constMutableGlobal)
+              ctx.Literals.Add((LitKind.Array, sl.Result.Id, Preview(sl.ArrayLiteralTag)));
           }
           break;
 

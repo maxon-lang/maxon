@@ -311,3 +311,26 @@ end 'main'
 ```maxoncstderr
 error E3068: specs/fragments/reference-identity/primitive-error.test:5:7: 'is' requires reference types (structs), not primitive values
 ```
+
+<!-- test: static-array-of-literals -->
+An array of never-mutated string literals is a shared immortal record: its inline pointer table
+references the elements' own static records. Iterating and indexing it allocate nothing, the
+elements stay valid, and going out of scope frees nothing extra (no leak).
+```maxon
+function main() returns ExitCode
+	let colors = ["red", "green", "blue"]
+	var joined = ""
+	for c in colors 'each'
+		joined = "{joined}{c} "
+	end 'each'
+	let mid = try colors.get(1) otherwise "?"
+	print("{joined}| {mid} | {colors.count()}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+red green blue | green | 3
+```

@@ -22,14 +22,20 @@ public static partial class MaxonToStandardConversion {
 	// The records to materialize at __module_init (order preserved for stable codegen).
 	[ThreadStatic] private static List<StaticLiteralRecord>? _staticLiteralRecords;
 	[ThreadStatic] private static int _nextStaticLiteralId;
+	// Maps a static-eligible literal's RESULT id -> its .data global label, so a managed-element
+	// array literal (`["a","b"]`) can reference its elements' static records when it too is made
+	// static (3c). Populated when a string/char/array literal is lowered to a static record.
+	[ThreadStatic] private static Dictionary<int, string>? _staticLiteralLabelByResultId;
 
-	// One immortal literal record's compile-time-known contents. buffer@0 is filled at init
-	// (RdataLabel), everything else is a constant written there too (see EmitStaticRecordInit).
-	// ElementSize is 1 for a string/byte/char (one byte per element) and the element width for a
-	// constant array literal (8 for int, 4/2/1 for narrower, 0 for a bit-packed bool array).
+	// One immortal literal record's compile-time-known contents. Written into its .data blob at
+	// __module_init (see EmitStaticRecordInit). ElementSize is 1 for a string/byte/char, the element
+	// width for a constant array (8/4/2/1, or 0 = bit-packed bool). When ElementLabels is non-null the
+	// record is a managed-element array whose buffer is an INLINE pointer table (in the same blob),
+	// each slot filled at init with an element static record's user pointer; RdataLabel is then unused.
 	private sealed record StaticLiteralRecord(
 		string GlobalLabel, string RdataLabel, int RecordSize, int AllocSize,
-		int TagIndex, int Length, int ElementSize, bool IsString, bool IsAscii);
+		int TagIndex, int Length, int ElementSize, bool IsString, bool IsAscii,
+		string[]? ElementLabels = null);
 
 	/// Reset the static-literal state for a fresh module lowering, seeding the eligibility set
 	/// computed by LiteralCoverageAnalysisPass (a sound lower bound; null when the pass did not run).
@@ -37,6 +43,7 @@ public static partial class MaxonToStandardConversion {
 		_staticEligibleLiterals = eligible;
 		_staticRecordLabels = [];
 		_staticLiteralRecords = [];
+		_staticLiteralLabelByResultId = [];
 		_nextStaticLiteralId = 0;
 	}
 
@@ -158,6 +165,7 @@ public static partial class MaxonToStandardConversion {
 	  IrModule<StandardOp> result, VarRegistry temps, string? inlineTarget) {
 
 		var globalLabel = InternStaticLiteralRecord(value, typeName, isString, isAscii, rdataPrefix, encoding, result);
+		_staticLiteralLabelByResultId![resultId] = globalLabel;
 
 		var baseLea = new StdLeaGlobalOp(globalLabel);
 		block.AddOp(baseLea);
@@ -243,6 +251,71 @@ public static partial class MaxonToStandardConversion {
 		return new StdHeapPtr(userPtr.Result.Id, typeName, tempName);
 	}
 
+	// A managed element is an 8-byte refcounted heap pointer (matches RuntimeEmitter's
+	// MmemManagedElementSize) — the stride of a fused array's inline pointer table.
+	private const int StaticManagedElementSize = 8;
+
+	/// Lower a static-eligible MANAGED-ELEMENT array literal (`["a","b"]`, every element a static
+	/// string/char literal) to a reference to its shared immortal record — zero allocations. The
+	/// record is a .data blob: the 32-byte header + the 40-byte array record + an inline N*8 pointer
+	/// table; at __module_init the table slots are filled with the elements' static-record user
+	/// pointers. The elements are themselves immortal, so nothing here is ever allocated or freed.
+	private static StdHeapPtr EmitStaticManagedArrayLiteral(
+	  string[] elementLabels, string typeName, int resultId,
+	  IrBlock<StandardOp> block, Dictionary<string, string> varTypes,
+	  IrModule<StandardOp> result, VarRegistry temps, string? inlineTarget) {
+
+		// Intern by (element-label signature, typeName): arrays of the same literals share one record.
+		var key = (string.Join(",", elementLabels), typeName);
+		if (!_staticRecordLabels!.TryGetValue(key, out var globalLabel)) {
+			globalLabel = $"__static_lit_{_nextStaticLiteralId++}";
+			int recordSize = FusedManagedRecordSize(typeName);   // 40 for an Array
+			int allocSize = Rt.MmHeaderSize + recordSize + elementLabels.Length * StaticManagedElementSize;
+			result.Globals.Add(new IrGlobal(globalLabel, new IrType("__StaticLiteralRecord", allocSize)));
+			_staticLiteralRecords!.Add(new StaticLiteralRecord(
+				globalLabel, "", recordSize, allocSize, EnsureTagIndex(typeName),
+				elementLabels.Length, StaticManagedElementSize, /*isString*/ false, /*isAscii*/ false, elementLabels));
+			_staticRecordLabels[key] = globalLabel;
+		}
+		_staticLiteralLabelByResultId![resultId] = globalLabel;
+
+		var baseLea = new StdLeaGlobalOp(globalLabel);
+		block.AddOp(baseLea);
+		var baseI64 = new StdPtrToI64Op(baseLea.Result);
+		block.AddOp(baseI64);
+		var hdrOff = new StdConstI64Op(Rt.MmHeaderSize);
+		block.AddOp(hdrOff);
+		var userPtr = new StdAddI64Op(baseI64.Result, hdrOff.Result);
+		block.AddOp(userPtr);
+
+		var tempName = inlineTarget ?? temps.CreateTemp("smarr", resultId, typeName, OwnershipFlags.None);
+		EmitStore(block, userPtr.Result, tempName, varTypes);
+		return new StdHeapPtr(userPtr.Result.Id, typeName, tempName);
+	}
+
+	/// For a managed-element array literal, return its elements' static-record labels in order if
+	/// EVERY element is a static string/char literal, else null (so the caller falls back to the heap
+	/// path). Elements reach the block as `maxon.assign %elem {var = <ArrayLiteralTag>.<i>}`; an
+	/// element is static iff its result id was recorded by a static-literal lowering that ran earlier
+	/// in this block. Any non-literal or non-eligible element leaves a hole and disqualifies the array.
+	private static string[]? CollectStaticElementLabels(MaxonStructLiteralOp arr, IrBlock<MaxonOp> block) {
+		var tagPrefix = arr.ArrayLiteralTag! + ".";
+		var labels = new string[arr.ArrayLiteralCount];
+		var filled = new bool[arr.ArrayLiteralCount];
+		foreach (var op in block.Operations) {
+			if (op is not MaxonAssignOp a || !a.VarName.StartsWith(tagPrefix)) continue;
+			if (!int.TryParse(a.VarName.AsSpan(tagPrefix.Length), out var idx) || idx < 0 || idx >= labels.Length)
+				continue;
+			if (_staticLiteralLabelByResultId!.TryGetValue(a.Value.Id, out var lbl)) {
+				labels[idx] = lbl;
+				filled[idx] = true;
+			}
+		}
+		for (int i = 0; i < filled.Length; i++)
+			if (!filled[i]) return null;
+		return labels;
+	}
+
 	/// Materialize every interned static literal record into __module_init: for each record,
 	/// write its MM header (alloc_size, packed_id, destructor=0, refcount=IMMORTAL) and its
 	/// record fields (buffer=&rdata, length, capacity=-2, element_size=1, parent=0, [isAscii])
@@ -297,6 +370,36 @@ public static partial class MaxonToStandardConversion {
 
 		// Record fields (base + MmHeaderSize + ManagedField*).
 		int rec0 = Rt.MmHeaderSize;
+
+		if (rec.ElementLabels != null) {
+			// Managed-element array (`["a","b"]`): the buffer is an INLINE pointer table right after
+			// the record fields, in this same blob. Point `buffer` at it, and fill each slot with an
+			// element's static-record user pointer (&element_blob + MmHeaderSize). The array is
+			// immortal, so its destructor never runs — capacity/parent are only what reads need.
+			int tableOff = rec0 + rec.RecordSize;
+			var tableOffConst = new StdConstI64Op(tableOff);
+			ops.Add(tableOffConst);
+			var tableAddr = new StdAddI64Op(baseI64.Result, tableOffConst.Result);
+			ops.Add(tableAddr);
+			ops.Add(new StdStoreIndirectOp(tableAddr.Result, baseI64.Result, rec0 + ManagedFieldBuffer, IrType.I64));
+			Store(rec.Length, rec0 + ManagedFieldLength);
+			Store(rec.Length, rec0 + ManagedFieldCapacity);          // owned element count (>= length)
+			Store(rec.ElementSize, rec0 + ManagedFieldElementSize);  // 8 — managed element pointers
+			Store(MmParentInline, rec0 + ManagedFieldParentPtr);     // inline-buffer sentinel
+			for (int i = 0; i < rec.ElementLabels.Length; i++) {
+				var elemLea = new StdLeaGlobalOp(rec.ElementLabels[i]);
+				ops.Add(elemLea);
+				var elemI64 = new StdPtrToI64Op(elemLea.Result);
+				ops.Add(elemI64);
+				var elemHdr = new StdConstI64Op(Rt.MmHeaderSize);
+				ops.Add(elemHdr);
+				var elemUserPtr = new StdAddI64Op(elemI64.Result, elemHdr.Result);
+				ops.Add(elemUserPtr);
+				ops.Add(new StdStoreIndirectOp(elemUserPtr.Result, baseI64.Result, tableOff + i * 8, IrType.I64));
+			}
+			return;
+		}
+
 		var bufLea = new StdLeaRdataOp(rec.RdataLabel);
 		ops.Add(bufLea);
 		var bufI64 = new StdPtrToI64Op(bufLea.Result);
