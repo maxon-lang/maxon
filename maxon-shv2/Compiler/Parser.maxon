@@ -3472,7 +3472,15 @@ export type Parser
 		end 'negative'
 
 		let shiftOp = shiftOpcodeFor(op, signFills: shiftFillsWithSign(op, leftOperandIsUnsigned: false))
-		return ConstValue.create(evalShift(left.payload, count: count.payload, op: shiftOp), tag: ValueTypeTag.integer)
+
+		// The TAG is ASKED of `binOpResultTag` — the same decider, handed the same rewritten opcode,
+		// that `emitShift`'s `emitBinOp` asks — and not restated as a literal `integer` here. It
+		// answers `integer` for every shift today, so this is not a bug being fixed; it is the second
+		// decider not being created. `emitShortCircuit` records what restating one costs: a word
+		// operator's result type ended up with one decider per path and nothing making them agree,
+		// and the day the rule moves, the path that ASSERTS goes on asserting. A wrong tag is not a
+		// compile error, it is a wrong answer at whatever reads the tag next.
+		return ConstValue.create(evalShift(left.payload, count: count.payload, op: shiftOp), tag: binOpResultTag(shiftOp, left: left.tag, right: count.tag))
 	end 'foldConstShift'
 
 	// A comparison's operands must AGREE — the same class-strict rule `emitCompare` enforces, asked of

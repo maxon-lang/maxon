@@ -252,9 +252,9 @@ end 'verifyCacheHit'
 
 // --- Property 3: invalidation (a parse memo tracks BOTH of its inputs) ---
 
-// The two synthetic edits property 3 makes. Each is APPENDED to a real source file that has
-// already been shown to parse, so both leave it a valid Maxon file — and they differ in exactly
-// the one way the parse memo's key has to be able to tell apart:
+// The synthetic edits property 3 makes. Each is APPENDED to a real source file that has
+// already been shown to parse, so all of them leave it a valid Maxon file — and they differ in
+// exactly the ways the parse memo's key has to be able to tell apart:
 //
 //   • a COMMENT changes the file's BYTES and nothing it DECLARES;
 //   • a FUNCTION changes both.
@@ -264,11 +264,30 @@ end 'verifyCacheHit'
 let BytesOnlyEditText = "// verify-warm-rebuild: bytes moved, declarations did not."
 let DeclarationEditText = "function __warmRebuildProbe() returns bool\n\treturn true\nend '__warmRebuildProbe'"
 
+// ⭐ **THE CONSTANT-VALUE PROBE: the same declaration twice, differing ONLY in the NUMBER.**
+//
+// The two edits above move a declaration's IDENTITY — a name appears that did not exist before —
+// so they are satisfied by a signature hash that mixes only NAMES. A top-level constant is the one
+// declaration for which that is not enough: a use INLINES its value as a literal
+// (`Parser.topLevelConstantReference`), so `let X = 7` becoming `let X = 8` changes what every
+// OTHER file COMPILES TO while moving neither those files' bytes nor any name in the program.
+// `ProgramSignatures.mixConstant` is what carries the value into the key; NOTHING ABOVE CAN SEE
+// WHETHER IT STILL DOES.
+//
+// Measured, not argued (2026-07-15): with `mixConstant`'s value arm deleted — the whole regression
+// — the two probes above still reported `PASS invalidation: … declaration edit re-parsed all 2`
+// and the spec suite still reported 295/0. Both gates were blind, because both edits ADD A NAME
+// and a name-only key moves on that. Only an edit that holds the name FIXED and moves the number
+// can tell the two keys apart, which is what these two are for.
+let ConstantValueEditBefore = "let __warmRebuildProbeConstant = 7"
+let ConstantValueEditAfter = "let __warmRebuildProbeConstant = 8"
+
 // The fewest source files on which the INVALIDATION property says anything at all. TWO, and the
-// reason is arithmetic rather than taste: the property's two halves assert "a declaration edit
-// re-parses `fileCount` files" and "a bytes-only edit re-parses 1 file", and at `fileCount == 1`
-// those are the same assertion — so the file's-own-bytes key that this property exists to REJECT
-// satisfies both. Named, so the refusal below and the reason for it are one fact.
+// reason is arithmetic rather than taste: the property's halves assert "a declaration edit
+// re-parses `fileCount` files" (and likewise a constant-value edit) and "a bytes-only edit
+// re-parses 1 file", and at `fileCount == 1` those are the same assertion — so the file's-own-bytes
+// key that this property exists to REJECT satisfies them all. Named, so the refusal below and the
+// reason for it are one fact.
 let MinFilesForInvalidation = 2 as QueryCount
 
 // **THE PROPERTY THE SIGNATURE INDEX'S PARSE KEY EXISTS FOR** — and the two halves of it pull in
@@ -282,14 +301,19 @@ let MinFilesForInvalidation = 2 as QueryCount
 //   (b) EDIT ONLY BYTES (a comment, a body) ⇒ ONLY that file's parse may be invalidated. This is
 //       the half a lazy fix throws away: keying the parse on the COMPOSITE SOURCE hash would pass
 //       (a) and re-parse the entire program on every keystroke — sound, and useless.
+//   (c) EDIT A TOP-LEVEL CONSTANT'S **VALUE** ⇒ EVERY file's parse must be invalidated. Not a
+//       special case of (a): (a) moves a NAME, and a key mixing only names passes it. A constant
+//       is the one declaration whose VALUE is copied into its readers, so `let X = 7` → `8` must
+//       move the key while no name in the program moves at all. See `ConstantValueEditBefore`.
 //
-// Both are asserted here, on ONE fresh project, by editing a real file in the query database and
-// re-querying.
+// All three are asserted here, on ONE fresh project, by editing a real file in the query database
+// and re-querying.
 //
 // ⚠ AND ON A SINGLE-FILE INPUT THIS PROPERTY PROVES NOTHING, SO IT REFUSES TO CLAIM IT DID.
-// With `fileCount == 1` the two assertions above collapse into the SAME assertion — (a) expects
+// With `fileCount == 1` the assertions above collapse into the SAME assertion — (a) and (c) expect
 // `fileCount` re-parses and (b) expects 1, and those are the same number — so a key that tracks only
-// the file's own bytes, which is EXACTLY the bug this property exists to catch, sails through both.
+// the file's own bytes, which is EXACTLY the bug this property exists to catch, sails through all
+// three.
 // This file used to say so in a comment and print PASS anyway, which is the worst of both: a gate
 // that knows it is vacuous and reports green. **A gate you cannot see fail is not a gate.**
 // It now FAILS, and says what to point it at.
@@ -317,6 +341,16 @@ function verifyInvalidation(inputPath FilePath, target Target) returns bool thro
 	fileChanged(project, path: editedPath, content: "{original}\n{DeclarationEditText}\n")
 	let declarationEditMisses = try parseMissesOnRequery(project)
 
+	// Seat the constant probe at its BEFORE value. This transition adds a declaration, so it is an
+	// ordinary declaration edit and its miss count asserts nothing new — it exists only to make the
+	// NEXT transition a change of the number ALONE. Discarded for that reason.
+	fileChanged(project, path: editedPath, content: "{original}\n{ConstantValueEditBefore}\n")
+	_ = try parseMissesOnRequery(project)
+
+	// The measurement: same file, same declaration, same NAME — only the value moved.
+	fileChanged(project, path: editedPath, content: "{original}\n{ConstantValueEditAfter}\n")
+	let constantValueEditMisses = try parseMissesOnRequery(project)
+
 	// A synthetic edit that stopped the program parsing would make BOTH assertions pass for the
 	// wrong reason — a failed parse is never cached, so it re-misses forever. Refuse to report on a
 	// probe whose premise broke.
@@ -329,10 +363,11 @@ function verifyInvalidation(inputPath FilePath, target Target) returns bool thro
 	// caused. Routed through the same reporter as property 2 so a failure prints the same way.
 	let bytesEditIsLocal = assertCounterMove("a BYTES-ONLY edit re-parses only the edited file (parseMisses)", before: NoCounterMove, after: bytesEditMisses, expectedDelta: OneQuery)
 	let declarationEditInvalidatesEveryFile = assertCounterMove("a DECLARATION edit re-parses EVERY file (parseMisses)", before: NoCounterMove, after: declarationEditMisses, expectedDelta: fileCount)
+	let constantValueEditInvalidatesEveryFile = assertCounterMove("a top-level constant's VALUE edit re-parses EVERY file (parseMisses)", before: NoCounterMove, after: constantValueEditMisses, expectedDelta: fileCount)
 
-	let allOk = bytesEditIsLocal and declarationEditInvalidatesEveryFile
+	let allOk = bytesEditIsLocal and declarationEditInvalidatesEveryFile and constantValueEditInvalidatesEveryFile
 	if allOk 'passed'
-		print("PASS invalidation: bytes-only edit re-parsed 1 file; declaration edit re-parsed all {fileCount}\n")
+		print("PASS invalidation: bytes-only edit re-parsed 1 file; declaration edit re-parsed all {fileCount}; constant-value edit re-parsed all {fileCount}\n")
 		return true
 	end 'passed'
 
