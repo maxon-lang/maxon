@@ -75,6 +75,23 @@ export union ParseError implements Error
 	expectedExpression(got String, line LineNumber, column ColumnNumber)
 	unexpectedEof(line LineNumber, column ColumnNumber)
 	integerOverflow(line LineNumber, column ColumnNumber)
+	// A float literal whose magnitude exceeds what an f64 can represent (`1e400`). A SEPARATE
+	// variant from `integerOverflow` rather than a reuse of it: they share an error CODE (the
+	// literal is out of its type's range either way), and they must not share a MESSAGE, because
+	// "Integer literal out of range" pointed at `1e400` names the wrong type and the wrong limit.
+	floatLiteralOverflow(line LineNumber, column ColumnNumber)
+	// An INTEGRAL-ONLY operator (`mod`, the bit band, or a prefix `not`) applied to a float. Both
+	// the binary and the unary raiser reach it, because it is one rule — see
+	// `TypeRules.operatorIsIntegral`, which is where the operator set is decided, and
+	// `notOperatorFor`'s float arm.
+	nonIntegralOperands(op String, operand String, line LineNumber, column ColumnNumber)
+	// A compiler BUILTIN called with the wrong number of arguments. It is the parser's to report
+	// and not SemanticCheck's, because a builtin has no entry in the signature registry that
+	// SemanticCheck's arity check reads — there is nothing there to disagree with.
+	builtinArity(name String, expected ParamCount, got ParamCount, line LineNumber, column ColumnNumber)
+	// A compiler builtin whose argument is the wrong type (`trunc(flag)`). Same reason as
+	// `builtinArity`: no signature exists for the ordinary argument check to consult.
+	builtinOperandType(name String, got String, line LineNumber, column ColumnNumber)
 	unsupported(feature String, line LineNumber, column ColumnNumber)
 	// A parameter list that repeats a name (`function f(x int, x int)`). The second
 	// binding would be a dead, uncallable parameter, so it is rejected at parse time.
@@ -518,11 +535,16 @@ end 'shortCircuitOperator'
 // constant's tag becomes the type its `literal` op declares.
 //
 // Total over what can arrive, and it panics on what cannot: the constant evaluator produces
-// `integer` and `boolean` and nothing else (its literals are ints, chars and bools; a comparison
-// folds to a bool; `binOpResultTag` over two of the two yields one of the two). A `float` constant is
-// P1.0d.4's; the remaining tags name things no constant expression can contain — a `named` alias
-// needs an `as` cast (P1.9), and `unresolved`/`void` are call results, which are rejected as E2045
-// before their type is ever asked for.
+// `integer`, `boolean` and `float` and nothing else (its literals are ints, chars, bools and
+// floats; a comparison folds to a bool; `binOpResultTag` over two of them yields one of them). The
+// remaining tags name things no constant expression can contain — a `named` alias needs an `as`
+// cast (P1.9), and `unresolved`/`void` are call results, which are rejected as E2045 before their
+// type is ever asked for.
+//
+// A `float` constant reaches here only as a LITERAL — `requireConstNotFloat` refuses every fold
+// over one — so its payload is the bit pattern `parseFloatBits` produced, and the `MaxonType.float`
+// this hands back is what tells `lowerLiteral` to lay those 8 bytes down as an f64 rather than an
+// i64. That is the whole of `let PI = 3.14` and `var ratio = 2.5`.
 function constantValueType(tag ValueTypeTag) returns MaxonType
 	if tag == ValueTypeTag.boolean 'bool'
 		return MaxonType.boolean
@@ -532,7 +554,11 @@ function constantValueType(tag ValueTypeTag) returns MaxonType
 		return MaxonType.integer
 	end 'int'
 
-	panic("constantValueType: a top-level constant is tagged '{typeTagName(tag)}' — the evaluator folds integers and bools only")
+	if tag == ValueTypeTag.float 'float'
+		return MaxonType.float
+	end 'float'
+
+	panic("constantValueType: a top-level constant is tagged '{typeTagName(tag)}' — the evaluator folds integers, bools and floats only")
 end 'constantValueType'
 
 // The comparison operators (M4). Each maps to a `MaxonOp.compare`. Classifier shared by
@@ -559,8 +585,22 @@ function requireBinOpOperands(op MaxonBinOp, left ValueTypeTag, right ValueTypeT
 		ok then break 'operands'
 		mixedWordOperands then throw ParseError.operandTypeMismatch(opTok.kind.rawValue, line: opTok.line, column: opTok.column)
 		nonNumericOperands then throw ParseError.nonNumericOperands(typeTagName(left), right: typeTagName(right), line: opTok.line, column: opTok.column)
+		// It names the FLOAT — the only tag that can trip this rule (`operatorIsIntegral` fires on
+		// nothing else), so whichever side carries it, that is the type the message must print.
+		nonIntegralOperands then throw ParseError.nonIntegralOperands(opTok.kind.rawValue, operand: typeTagName(ValueTypeTag.float), line: opTok.line, column: opTok.column)
 	end 'operands'
 end 'requireBinOpOperands'
+
+// **THE `trunc` BUILTIN'S NAME**, and the whole of what makes it one. A `b""` literal, matched
+// against the callee token's bytes — the same shape `TypeResolution`'s `ExitCodeBuiltinName` and
+// `SemanticCheck`'s `MainFunctionName` use for the same job, which is the compiler recognizing one
+// of its own names in user source.
+let TruncBuiltinName = b"trunc"
+
+// `trunc` takes exactly one argument. Named because `emitTrunc` states it twice — once as the
+// check and once as the message's `expected` — and a bare `1` in either would be a magic value in
+// the more literal sense: the number that says what the builtin IS.
+let TruncArity = 1 as ParamCount
 
 // The value a short-circuit merge takes on the SKIPPED path: `false` for `and` (a false left
 // operand determines the whole expression), `true` for `or`.
@@ -1258,11 +1298,14 @@ export type Parser
 		if not decl.mutable 'constantNeedsNoStorage'
 			return
 		end 'constantNeedsNoStorage'
-		if tag == ValueTypeTag.integer or tag == ValueTypeTag.boolean 'scalar'
+		// A float is a SCALAR — 8 bytes of `.data`, exactly as an `int` is, and `globalStdType` gets
+		// the width from the same table the lowering uses. What the rule is really asking is
+		// "does this type need the HEAP?", and a double no more needs one than an i64 does.
+		if tag == ValueTypeTag.integer or tag == ValueTypeTag.boolean or tag == ValueTypeTag.float 'scalar'
 			return
 		end 'scalar'
 
-		throw ParseError.unsupported("a top-level `var` of type '{typeTagName(tag)}' (a global with a managed or non-scalar type needs the heap and the runtime that owns it — P1.2 String; only `int`/`bool` globals have storage today)", line: decl.nameLine, column: decl.nameColumn)
+		throw ParseError.unsupported("a top-level `var` of type '{typeTagName(tag)}' (a global with a managed or non-scalar type needs the heap and the runtime that owns it — P1.2 String; only `int`/`bool`/`float` globals have storage today)", line: decl.nameLine, column: decl.nameColumn)
 	end 'requireStorableGlobal'
 
 	// Re-raise a diagnostic the constant evaluator recorded earlier, on another file's behalf. It
@@ -3200,15 +3243,21 @@ export type Parser
 				throw ParseError.nonNumericNegation(typeTagName(operandTag), line: opTok.line, column: opTok.column)
 			end 'notANumber'
 
+			if tagIsFloat(operandTag) 'float'
+				return try self.emitFloatNegation(operand, opTok: opTok)
+			end 'float'
+
 			return self.emitUnaryOp(operand, op: MaxonUnaryOp.neg, resultTag: operandTag, opTok: opTok)
 		end 'neg'
 
 		if self.at(TokenKind.not) 'not'
 			let opTok = try self.consume(TokenKind.not)
 			let operand = try self.parseUnary(func)
-			match notOperatorFor(self.tagOf(operand)) 'which'
+			let operandTag = self.tagOf(operand)
+			match notOperatorFor(operandTag) 'which'
 				op(kind, resultTag) then return self.emitUnaryOp(operand, op: kind, resultTag: resultTag, opTok: opTok)
 				unknownOperandType then throw ParseError.notOnUnknownType(opTok.line, column: opTok.column)
+				nonIntegralOperand then throw ParseError.nonIntegralOperands(opTok.kind.rawValue, operand: typeTagName(operandTag), line: opTok.line, column: opTok.column)
 			end 'which'
 		end 'not'
 
@@ -3226,18 +3275,86 @@ export type Parser
 		try requireBinOpOperands(op, left: leftTag, right: rightTag, opTok: opTok)
 
 		let resultTag = binOpResultTag(op, left: leftTag, right: rightTag)
+
+		// ⭐ **NUMERIC PROMOTION, PAID FOR.** `TypeRules.arithResultTag` answering `float` is a
+		// PROMISE that both operands are already in the float domain, and this is the one place
+		// it is kept: an i64 in a GPR is not an f64 in an XMM, and `addsd` cannot read one. It
+		// happens HERE, in the parser, because this is the last tier that knows each operand's
+		// source type — by the Std tier `operandType` is a single answer for the whole op, and
+		// there is no longer a mixed pair to see.
+		let left = self.promotedOperand(lhs, left: leftTag, right: rightTag, opTok: opTok)
+		let right = self.promotedOperand(rhs, left: leftTag, right: rightTag, opTok: opTok)
+
 		let result = self.mintValue(resultTag, nameId: UnnamedTypeId)
-		self.artifact.emitOp(self.currentBlock, op: MaxonOp.binOp(result, lhs: lhs, rhs: rhs, op: op), range: SourceRange.ofToken(opTok))
+		self.artifact.emitOp(self.currentBlock, op: MaxonOp.binOp(result, lhs: left, rhs: right, op: op), range: SourceRange.ofToken(opTok))
 
 		// Fold, when the parser holds both operands — so `x shl 63 + 1` is a count of 64 and not an
 		// unknown. RECORDED, not rewritten: this compiler emits the `add` either way (see
 		// FoldConstOperands' header on why `foldConstants` is deferred).
+		//
+		// It reads the ORIGINAL ids, not the promoted ones, and it cannot confuse the two: the
+		// gate is `tagIsInteger(resultTag)`, and a promotion happens only when the result is a
+		// float — so on every path that folds, `left`/`right` ARE `lhs`/`rhs`.
 		if tagIsInteger(resultTag) and self.constIsKnown(lhs) and self.constIsKnown(rhs) 'bothKnown'
 			self.recordFold(result, fold: foldIntBinOp(op, lhs: self.constOf(lhs), rhs: self.constOf(rhs)))
 		end 'bothKnown'
 
 		return result
 	end 'emitBinOp'
+
+	// One operand of a binary op or comparison, moved into the float domain if the PAIR meets
+	// there. Takes both tags because promotion is a property of the pair, not of the operand —
+	// `5` stays an int in `5 + 3` and becomes an f64 in `5 + 2.0`, and only the other side says
+	// which.
+	//
+	// Both operands go through it unconditionally, and `promoteToFloat` is idempotent, so the
+	// already-float side costs nothing and no caller has to work out which side to convert.
+	function promotedOperand(value ValueId, left ValueTypeTag, right ValueTypeTag, opTok Token) returns ValueId
+		if not operandsAreFloat(left, right: right) 'integral'
+			return value
+		end 'integral'
+
+		return self.promoteToFloat(value, opTok: opTok)
+	end 'promotedOperand'
+
+	// Move a value into the float domain — the int→f64 half of the implicit-conversion lattice.
+	// `TypeRules.arithResultTag` states the TYPE rule; this emits the INSTRUCTION that makes it
+	// true (`cvtsi2sd`, via `MaxonUnaryOp.promoteToFloat`).
+	//
+	// A value already there is returned untouched, which is what makes it idempotent — and it is
+	// also what keeps `siToFp` from ever naming a float→float conversion (`lowerUnaryOp`'s
+	// `assertConversionCrossesDomain` is the backstop that says so).
+	//
+	// Ported from v1's `promoteToFloat` (LowerMaxonToStd.maxon:3459). ONE divergence, and it is
+	// the reason shv2 has one type oracle instead of two: v1 promotes during LOWERING, off an
+	// `isFloat` side-map it maintains there because by then the source types are gone. shv2
+	// promotes in the PARSER, off the `valueTags` column it already keeps for the word operators.
+	// Same op, same place in the value graph, one fewer table.
+	function promoteToFloat(value ValueId, opTok Token) returns ValueId
+		if tagIsFloat(self.tagOf(value)) 'alreadyFloat'
+			return value
+		end 'alreadyFloat'
+
+		return self.emitUnaryOp(value, op: MaxonUnaryOp.promoteToFloat, resultTag: ValueTypeTag.float, opTok: opTok)
+	end 'promoteToFloat'
+
+	// ⭐ **FLOAT NEGATION IS A SUBTRACT FROM ZERO**, and that is a PORT, not a shortcut — v1 says
+	// the same of its own parser ("Float negation is normally lowered by the parser as `0.0 - x`",
+	// LowerMaxonToStd.maxon:5964).
+	//
+	// x64 has NO `neg` for an XMM register. The hardware spelling of a sign flip is `xorpd`
+	// against a sign-bit mask that has to be materialized in rdata — a new opcode, a new constant,
+	// and a new relocation — whereas `subsd` is already in the band this rung landed. So `-x`
+	// costs nothing new, and `MaxonUnaryOp.neg` stays what it has always been: the INTEGER negate.
+	//
+	// ⚠ It differs from a true negation on exactly one input, and it is worth naming rather than
+	// discovering: `0.0 - (+0.0)` is `+0.0`, where `-(+0.0)` is `-0.0`. Nothing in the language
+	// can yet observe a zero's sign — that needs `print`, which is P1.2's — and v1 has shipped
+	// this trade for its whole life. `0.0 - nan` is `nan`, so the unordered case is unaffected.
+	function emitFloatNegation(operand ValueId, opTok Token) returns ValueId throws ParseError
+		let zero = self.emitLiteral(FloatZeroBits, valueType: MaxonType.float, range: SourceRange.ofToken(opTok))
+		return try self.emitBinOp(zero, rhs: operand, op: MaxonBinOp.sub, opTok: opTok)
+	end 'emitFloatNegation'
 
 	// Append a `unaryOp` op over one SSA value; return the ValueId it defines. The source
 	// range anchors on the operator token, mirroring emitBinOp.
@@ -3271,8 +3388,16 @@ export type Parser
 			throw ParseError.comparisonTypeMismatch(typeTagName(leftTag), right: typeTagName(rightTag), line: opTok.line, column: opTok.column)
 		end 'mismatch'
 
+		// A comparison promotes exactly as arithmetic does — `pi > 3` compares two f64s, because
+		// `ucomisd` has no mixed form and there is no reading of the pair in which the int stays
+		// an int. The rule cannot be read off a result tag here (a comparison answers `bool`
+		// whatever its operands were), which is why `operandsAreFloat` exists as a PREDICATE
+		// beside `arithResultTag`'s type.
+		let left = self.promotedOperand(lhs, left: leftTag, right: rightTag, opTok: opTok)
+		let right = self.promotedOperand(rhs, left: leftTag, right: rightTag, opTok: opTok)
+
 		let result = self.mintValue(ValueTypeTag.boolean, nameId: UnnamedTypeId)
-		self.artifact.emitOp(self.currentBlock, op: MaxonOp.compare(result, lhs: lhs, rhs: rhs, op: op), range: SourceRange.ofToken(opTok))
+		self.artifact.emitOp(self.currentBlock, op: MaxonOp.compare(result, lhs: left, rhs: right, op: op), range: SourceRange.ofToken(opTok))
 		return result
 	end 'emitCompare'
 
@@ -3285,6 +3410,10 @@ export type Parser
 		if self.at(TokenKind.intLiteral) 'intLit'
 			return try self.parseIntLiteral()
 		end 'intLit'
+
+		if self.at(TokenKind.floatLiteral) 'floatLit'
+			return try self.parseFloatLiteral()
+		end 'floatLit'
 
 		if self.at(TokenKind.true) or self.at(TokenKind.false) 'boolLit'
 			return try self.parseBoolLiteral()
@@ -3597,11 +3726,13 @@ export type Parser
 	function foldConstBinOp(left ConstValue, right ConstValue, opTok Token, countStart TokenIndex) returns ConstValue throws ConstEvalError
 		if comparisonOperator(opTok.kind) 'comparison'
 			try self.requireConstComparable(left, right: right, opTok: opTok)
+			try self.requireConstNotFloat(left, right: right, opTok: opTok)
 			return ConstValue.create(foldIntCompare(infixCmpOp(opTok.kind), lhs: left.payload, rhs: right.payload), tag: ValueTypeTag.boolean)
 		end 'comparison'
 
 		let op = infixMaxonOp(opTok.kind)
 		try self.requireConstOperands(op, left: left, right: right, opTok: opTok)
+		try self.requireConstNotFloat(left, right: right, opTok: opTok)
 
 		if shiftOperator(op) 'shift'
 			return try self.foldConstShift(left, count: right, op: op, countStart: countStart)
@@ -3665,6 +3796,36 @@ export type Parser
 		end 'rejected'
 	end 'requireConstOperands'
 
+	// ⛔ **A FLOAT IS NEVER FOLDED**, and this is the guard that says so — on the arithmetic path
+	// and the comparison path both, which is why it is one function called twice rather than two
+	// conditions.
+	//
+	// A `ConstValue`'s payload is a `ParsedInt`, and for a float it holds the IEEE-754 BIT
+	// PATTERN. Every fold this evaluator owns is INTEGER arithmetic over that payload
+	// (`foldIntBinOp`, `foldIntCompare`), so folding `3.14 + 2.0` would add two bit patterns and
+	// label the sum a float — a wrong answer computed before the program exists, with no run time
+	// left in which to be wrong.
+	//
+	// ⚠ **The COMPARISON is the subtler half, and the one that would survive testing.** Two
+	// POSITIVE doubles order exactly as their bit patterns do, so `3.5 > 2.5` folds to the RIGHT
+	// answer and the guard looks unnecessary; only a negative operand (whose sign bit inverts the
+	// integer order) or a NaN (which no integer compare can call unordered) shows it. StdDialect's
+	// `binOpImm` documents the identical trap one tier down, and `FoldConstOperands` carries the
+	// identical guard for the identical reason — three places, one fact, because a float's bits
+	// are reachable from three different folders.
+	//
+	// Doing better needs software IEEE-754 arithmetic inside the compiler — a real thing, not this
+	// rung's, and v1 does not fold them either. A float LITERAL is unaffected, and a literal is
+	// what every float constant in the corpus is: `let PI = 3.14`, `var ratio = 2.5`,
+	// `var zeroA = 0.0`. The bits are CARRIED, never computed on.
+	function requireConstNotFloat(left ConstValue, right ConstValue, opTok Token) throws ConstEvalError
+		if not operandsAreFloat(left.tag, right: right.tag) 'integral'
+			return
+		end 'integral'
+
+		throw ConstEvalError.defective(ParseError.unsupported("folding '{opTok.kind.rawValue}' over a float in a constant initializer (a float constant is held as its IEEE-754 bit pattern and the evaluator folds with integer arithmetic only, so the answer would be a bit pattern rather than a number — a float constant must be a literal)", line: opTok.line, column: opTok.column))
+	end 'requireConstNotFloat'
+
 	// A prefix `-` or `not`, mirroring `parseUnary` over values. Both readings of `not` come from
 	// `notOperatorFor`, so a constant `not` complements exactly what a runtime `not` complements.
 	function evalConstUnary(stack TopLevelDeclIndexArray) returns ConstValue throws ConstEvalError
@@ -3675,6 +3836,14 @@ export type Parser
 			if not typeClassAdmits(TypeClass.numeric, tag: operand.tag) 'notANumber'
 				throw ConstEvalError.defective(ParseError.nonNumericNegation(typeTagName(operand.tag), line: opTok.line, column: opTok.column))
 			end 'notANumber'
+
+			// `-3.14` in a constant would `0 - bits` the IEEE pattern, which is not the negation of
+			// anything. The EXPRESSION path spells float negation `0.0 - x` and lets `subsd` answer
+			// it (`emitFloatNegation`) — a constant has no run time to do that in, and the correct
+			// compile-time answer (flip bit 63) is the one float operation this evaluator could
+			// perform, which is not a reason to let it perform exactly one. Same line as
+			// `requireConstNotFloat`, drawn in the same place.
+			try self.requireConstNotFloat(operand, right: operand, opTok: opTok)
 
 			return ConstValue.create(try self.foldConstUnary(MaxonUnaryOp.neg, operand: operand.payload, opTok: opTok), tag: operand.tag)
 		end 'neg'
@@ -3704,6 +3873,9 @@ export type Parser
 			// case rather than a panic because it is the truthful answer if a second route to an untyped
 			// operand ever appears.
 			unknownOperandType then throw ConstEvalError.defective(ParseError.notOnUnknownType(opTok.line, column: opTok.column))
+			// `not 3.14` — reachable here, unlike the two above: a float literal IS a constant.
+			// Same rule and same message as the expression path's, because it is the same rule.
+			nonIntegralOperand then throw ConstEvalError.defective(ParseError.nonIntegralOperands(opTok.kind.rawValue, operand: typeTagName(operand.tag), line: opTok.line, column: opTok.column))
 		end 'which'
 	end 'foldConstNot'
 
@@ -3730,6 +3902,10 @@ export type Parser
 		if self.at(TokenKind.intLiteral) 'intLit'
 			return try self.evalConstIntLiteral()
 		end 'intLit'
+
+		if self.at(TokenKind.floatLiteral) 'floatLit'
+			return try self.evalConstFloatLiteral()
+		end 'floatLit'
 
 		if self.at(TokenKind.true) or self.at(TokenKind.false) 'boolLit'
 			return self.evalConstBoolLiteral()
@@ -3760,6 +3936,24 @@ export type Parser
 
 		return ConstValue.create(value, tag: ValueTypeTag.integer)
 	end 'evalConstIntLiteral'
+
+	// A float literal in a constant initializer — `let PI = 3.14`, `var zeroA = 0.0`. It carries
+	// the IEEE-754 bit pattern in the same `ParsedInt` payload every other constant uses, exactly
+	// as `parseFloatLiteral` does in an expression, and through the same `parseFloatBits` — so the
+	// bits of a float in a `let` and a float in a body cannot come to differ.
+	//
+	// ⚠ It is the ONLY float a constant can contain, and `requireConstNotFloat` is what enforces
+	// that. The payload is a bit pattern, and every fold this evaluator has is integer arithmetic
+	// over it.
+	function evalConstFloatLiteral() returns ConstValue throws ConstEvalError
+		let tok = self.current()
+		self.advance()
+		let bits = try parseFloatBits(tok.value) otherwise 'overflow'
+			throw ConstEvalError.defective(ParseError.floatLiteralOverflow(tok.line, column: tok.column))
+		end 'overflow'
+
+		return ConstValue.create(bits, tag: ValueTypeTag.float)
+	end 'evalConstFloatLiteral'
 
 	function evalConstBoolLiteral() returns ConstValue
 		let isTrue = self.at(TokenKind.true)
@@ -3868,8 +4062,56 @@ export type Parser
 		try self.parseCallArgs(func, args: args, argLabels: argLabels, argRanges: argRanges)
 
 		let rparenTok = try self.consume(TokenKind.rightParen)
+
+		// A BUILTIN is recognized by name, AFTER its arguments are parsed — so it takes the
+		// ordinary call syntax and the ordinary argument rules, and only the emit differs. The
+		// check sits here rather than in `emitCall` because a builtin emits no `MaxonOp.call` at
+		// all: it has no signature to slot arguments against and no symbol to link.
+		if calleeTok.value.equals(TruncBuiltinName) 'truncBuiltin'
+			return try self.emitTrunc(args, calleeTok: calleeTok)
+		end 'truncBuiltin'
+
 		return try self.emitCall(calleeTok, args: args, argLabels: argLabels, argRanges: argRanges, rparenTok: rparenTok, resultUsed: resultUsed)
 	end 'parseCall'
+
+	// `trunc(x)` — **THE f64 → int BRIDGE**, and a compiler BUILTIN rather than a stdlib function.
+	//
+	// It is a builtin in both reference compilers (v1: `mathIntrinsicTarget` →
+	// `StdArithUnaryOpcode.fpToSiI64`, LowerMaxonToStd.maxon:13888; the bootstrap: `MaxonTruncOp`,
+	// 2-Parser.cs:804). For shv2 the reason is sharper than inheritance: it lowers to ONE
+	// instruction, so a call would be a call/ret wrapped around a single `cvttsd2si` — and,
+	// decisively at THIS rung, a stdlib `trunc` would drag in the stdlib cone, which is P1.0b's.
+	// specs-shv2/float-type.md ends nearly every case on it, so it is the difference between the
+	// float corpus running and not running at all.
+	//
+	// ⚠ **`trunc(int)` IS THE IDENTITY, and answering it with the operand is CORRECTNESS, not an
+	// optimization.** An int → f64 → int round trip loses precision above f64's 53-bit mantissa,
+	// so `trunc(i64.max)` would answer a number that is not `i64.max`. v1 makes the same call for
+	// the same reason ("trunc(int) is identity — alias the result to the operand directly",
+	// LowerMaxonToStd.maxon:7778). It is also what keeps `fpToSi` from ever naming an int → int
+	// conversion, which `lowerUnaryOp` panics on.
+	//
+	// ⚠ The name is RESERVED wherever a call is parsed: a user function called `trunc` is
+	// shadowed by this and never linked. v1 has the same property for its whole math-intrinsic
+	// set, and the same absence of a diagnostic for it.
+	function emitTrunc(args ValueIdArray, calleeTok Token) returns ValueId throws ParseError
+		if args.count() != TruncArity 'arity'
+			throw ParseError.builtinArity(String.from(TruncBuiltinName), expected: TruncArity, got: args.count(), line: calleeTok.line, column: calleeTok.column)
+		end 'arity'
+
+		let operand = try args.get(0) otherwise panic("emitTrunc: args.count() == TruncArity just checked but get(0) failed")
+		let operandTag = self.tagOf(operand)
+		if not typeClassAdmits(TypeClass.numeric, tag: operandTag) 'notANumber'
+			throw ParseError.builtinOperandType(String.from(TruncBuiltinName), got: typeTagName(operandTag), line: calleeTok.line, column: calleeTok.column)
+		end 'notANumber'
+
+		// Already an integer: `trunc` has nothing to truncate. See the precision note above.
+		if not tagIsFloat(operandTag) 'identity'
+			return operand
+		end 'identity'
+
+		return self.emitUnaryOp(operand, op: MaxonUnaryOp.trunc, resultTag: ValueTypeTag.integer, opTok: calleeTok)
+	end 'emitTrunc'
 
 	// Parse a comma-separated argument list into the parallel `args`/`argLabels`/
 	// `argRanges` lists (all empty for `()`). The caller has consumed `(`; this leaves
@@ -3995,6 +4237,25 @@ export type Parser
 		let value = try self.intLiteralValue(tok, negated: false)
 		return self.emitLiteral(value, valueType: MaxonType.integer, range: SourceRange.ofToken(tok))
 	end 'parseIntLiteral'
+
+	// Parse a FLOAT literal token into a `literal` op, and return the value it defines.
+	//
+	// ⭐ **THE LITERAL'S VALUE IS ITS IEEE-754 BIT PATTERN**, carried in the very same `ParsedInt`
+	// payload an integer literal uses — and that is why a float costs NO new op at either tier.
+	// `MaxonOp.literal` and `StdOp.const` already carry a `valueType` beside the bits, and the
+	// type is what says how to READ them; 64 bits are 64 bits. v1 mints a second literal op
+	// (`constF64`) and pays for it in every pass that has to match one.
+	//
+	// ⚠ These bits are deliberately NOT recorded as a parser constant, and the guard that stops it
+	// is `emitLiteralIn`'s `tagIsInteger` — already there, written for the bool case, and load-
+	// bearing here for a different one. A float in the fold columns would let `foldIntBinOp` ADD
+	// TWO IEEE PATTERNS AS INTEGERS: `3.14 + 2.0` would fold to a number that is neither 5.14 nor
+	// anything else, silently, at compile time.
+	function parseFloatLiteral() returns ValueId throws ParseError
+		let tok = try self.consume(TokenKind.floatLiteral)
+		let bits = try parseFloatBits(tok.value) otherwise throw ParseError.floatLiteralOverflow(tok.line, column: tok.column)
+		return self.emitLiteral(bits, valueType: MaxonType.float, range: SourceRange.ofToken(tok))
+	end 'parseFloatLiteral'
 
 	// Append a `literal` op into the CURRENT block; return the ValueId it defines.
 	function emitLiteral(value ParsedInt, valueType MaxonType, range SourceRange) returns ValueId

@@ -494,6 +494,19 @@ export function foldIntUnaryOp(op MaxonUnaryOp, operand ParsedInt) returns Folde
 		neg gives FoldedInt.folded(0 - operand)
 		bitNot gives FoldedInt.folded(not operand)
 		logicalNot gives FoldedInt.notFoldable
+		// The CONVERSIONS never fold, and neither arm is an omission.
+		//
+		// `trunc` cannot ARRIVE here with an integer to fold: `Parser.emitTrunc` answers
+		// `trunc(int)` with the operand itself and emits no op at all, so the only `trunc` in the
+		// stream has a float operand — whose `ParsedInt` is an IEEE BIT PATTERN, not the number.
+		// Folding it as an integer is precisely the wrong answer this column is gated against.
+		//
+		// `promoteToFloat` is unreachable for the structural reason: this folder runs only when
+		// `tagIsInteger(resultTag)` (see `Parser.emitUnaryOp`), and a promotion's result tag is
+		// float by construction. Constant-folding a promotion would mean computing an IEEE
+		// encoding at compile time — a real thing to want, and a `ParsedInt` column that cannot
+		// say which of its entries are bit patterns is not the place to put it.
+		trunc to promoteToFloat gives FoldedInt.notFoldable
 	end 'o'
 end 'foldIntUnaryOp'
 
@@ -559,12 +572,30 @@ end 'wordOpResultTag'
 // here would buy an honest tag on a program that is already rejected at the cost of moving a
 // live rule.
 function arithResultTag(left ValueTypeTag, right ValueTypeTag) returns ValueTypeTag
-	if tagIsFloat(left) or tagIsFloat(right) 'promote'
+	if operandsAreFloat(left, right: right) 'promote'
 		return ValueTypeTag.float
 	end 'promote'
 
 	return ValueTypeTag.integer
 end 'arithResultTag'
+
+// **DO THESE TWO OPERANDS MEET IN THE FLOAT DOMAIN?** The promotion rule asked as a yes/no, and
+// THE one place the "either side" half of it is written down.
+//
+// `arithResultTag` answers the same question as a TYPE, and a comparison cannot read the answer
+// off a result tag — `x > y` is a bool whatever its operands were — so the predicate has to exist
+// separately from the type. Two callers, one sentence: promote iff either side is already there.
+export function operandsAreFloat(left ValueTypeTag, right ValueTypeTag) returns bool
+	return tagIsFloat(left) or tagIsFloat(right)
+end 'operandsAreFloat'
+
+// ⭐ **WHAT A FLOAT ZERO IS, AS BITS** — IEEE-754 `+0.0`, whose encoding is all 64 bits clear.
+//
+// It lives beside `BoolTrueValue`/`BoolFalseValue` because it is the same kind of fact: the one
+// place a Maxon value of a given type becomes the number the compiler carries for it. Its single
+// reader is `Parser.emitFloatNegation`, which spells `-x` as `0.0 - x` — so the zero that
+// negation subtracts from and the bit pattern a float literal carries are one constant, not two.
+export let FloatZeroBits = 0 as ParsedInt
 
 // The type a `binOp` yields. The ARITHMETIC family (`+`/`-`/`*`/`/`/`mod`) promotes (see
 // `arithResultTag`); the shifts are integral by definition on both sides (v1 says the same of
@@ -602,7 +633,42 @@ export enum BinOpOperands
 	// bool on EITHER side — and for two bools (`true + false`), which merely AGREE with each
 	// other and would sail past a pure agreement rule. Agreement is necessary, not sufficient.
 	nonNumericOperands
+	// An INTEGRAL-ONLY operator (`mod`, and the whole bit band) with a FLOAT operand — see
+	// `operatorIsIntegral` for which operators those are and why.
+	//
+	// ⚠ **NUMERIC IS NOT INTEGRAL, AND THIS CASE IS THE DIFFERENCE.** A float and an int share
+	// `TypeClass.numeric` — that is exactly what makes `5 + 2.0` a legal program — so a float
+	// sails through the `nonNumericOperands` check above and reaches an operator that has no
+	// float reading. Without this case `3.14 and 2.0` is typed `integer` by `wordOpResultTag`
+	// (whose bool-first/int-default chain has no float arm) and lowers to an `and` over two IEEE
+	// bit patterns: it computes a number, reports nothing, and means nothing. `mod` is the same
+	// shape one level down — it would ride `StdOp.mod`'s `idiv` over the same bits.
+	nonIntegralOperands
 end 'BinOpOperands'
+
+// **WHICH BINARY OPERATORS ARE INTEGRAL BY DEFINITION** — the ones with no float reading at all,
+// and so the ones a float operand must be turned away from. THE one place that is decided.
+//
+// This is not a statement about what shv2 has implemented yet; it is a statement about the
+// language, and every one of these is a permanent rejection rather than a gap waiting on an
+// instruction. Go draws the identical line, for the identical reasons.
+export function operatorIsIntegral(op MaxonBinOp) returns bool
+	return match op 'k'
+		// `+` `-` `*` `/` all have a direct SSE form (`addsd`/`subsd`/`mulsd`/`divsd`), so a float
+		// is not merely allowed here — it is the whole point of the rung.
+		add to div gives false
+		// `mod` does NOT, and it is the one arm that looks like it belongs with its neighbours and
+		// does not. x64 has no `fmod` instruction: an IEEE remainder is a RUNTIME CALL (v1 routes
+		// it through one), which is a stdlib cone this rung does not have — but the reason to
+		// reject it is the LANGUAGE's, not the schedule's, so this arm does not move when the cone
+		// lands.
+		mod gives true
+		// The bit band. A double's bits are a sign/exponent/mantissa TRIPLE, not a magnitude, so a
+		// bit operation on them cannot mean what the source said — `3.14 shl 1` is not `6.28`, and
+		// `3.14 and 2.0` is not any number the author had in mind.
+		bitAnd to shrLogical gives true
+	end 'k'
+end 'operatorIsIntegral'
 
 // The operand rule for EVERY binary operator, in one classifier. Which of the two questions is
 // asked depends only on the operator's family, and both bottom out in `typeClassesAgree`.
@@ -613,17 +679,38 @@ end 'BinOpOperands'
 // 4 and 16. Every binary operator now comes through here.
 export function checkBinOpOperands(op MaxonBinOp, left ValueTypeTag, right ValueTypeTag) returns BinOpOperands
 	if wordOperator(op) 'word'
-		if typesAgree(left, right: right) 'agree'
-			return BinOpOperands.ok
-		end 'agree'
-		return BinOpOperands.mixedWordOperands
+		if not typesAgree(left, right: right) 'mixed'
+			return BinOpOperands.mixedWordOperands
+		end 'mixed'
+		return integralOperandsFor(op, left: left, right: right)
 	end 'word'
 
-	if typeClassAdmits(TypeClass.numeric, tag: left) and typeClassAdmits(TypeClass.numeric, tag: right) 'numeric'
-		return BinOpOperands.ok
-	end 'numeric'
-	return BinOpOperands.nonNumericOperands
+	if not typeClassAdmits(TypeClass.numeric, tag: left) or not typeClassAdmits(TypeClass.numeric, tag: right) 'nonNumeric'
+		return BinOpOperands.nonNumericOperands
+	end 'nonNumeric'
+
+	return integralOperandsFor(op, left: left, right: right)
 end 'checkBinOpOperands'
+
+// The SECOND gate every binary operator passes, after its own family's rule: an operator with no
+// float reading may not have a float operand.
+//
+// It runs on BOTH paths rather than only the numeric one, and that is load-bearing: `and`/`or`/
+// `xor` are word operators, so they never reach the numeric check — two floats AGREE with each
+// other, which is all the word rule asks — and `3.14 and 2.0` would otherwise be accepted by the
+// only rule that looked at it. One helper, called from both arms, is what keeps the two families
+// from needing two copies of the same sentence.
+function integralOperandsFor(op MaxonBinOp, left ValueTypeTag, right ValueTypeTag) returns BinOpOperands
+	if not operatorIsIntegral(op) 'floatAllowed'
+		return BinOpOperands.ok
+	end 'floatAllowed'
+
+	if operandsAreFloat(left, right: right) 'float'
+		return BinOpOperands.nonIntegralOperands
+	end 'float'
+
+	return BinOpOperands.ok
+end 'integralOperandsFor'
 
 // Which `not` a prefix `not` means, from its operand's type — the LOGICAL one on a bool (flip
 // bit 0), the BITWISE one on an integer (complement all 64).
@@ -653,17 +740,43 @@ export union NotOperator
 	op(kind MaxonUnaryOp, resultTag ValueTypeTag)
 	// The operand's type could not be determined, so neither reading can be chosen.
 	unknownOperandType
+	// The operand is a FLOAT, which has neither reading. See `notOperatorFor`.
+	nonIntegralOperand
 end 'NotOperator'
 
 // A `match`, not an if-chain, so the tag space is covered EXHAUSTIVELY: the fall-through form
 // silently answered `bitNot` for any tag it had not been told about, which is the shape of every
 // bug this file exists to prevent.
+//
+// ⚠⚠ **AND THE RANGE ARM PUT THE FALL-THROUGH STRAIGHT BACK.** `float` sits BETWEEN `integer` and
+// `exitCode` in `ValueTypeTag`, so `integer to exitCode` silently swallowed it and answered
+// `bitNot` — the exact bug the paragraph above congratulates this function for having fixed, in
+// the exact function that fixed it, reintroduced by the range that replaced the fall-through.
+// A `match` is only exhaustive over the arms you NAME; a range names its endpoints and adopts
+// whatever is later inserted between them (MaxonDialect's band-append invariant, which has no
+// compiler backstop).
+//
+// The old comment was not even wrong about the CLASS — `typeClassOf` really does map `float` to
+// `numeric`, and that is the point: **`numeric` licenses arithmetic, it does not license
+// bit-complementing an IEEE pattern.** `not 3.14` would have flipped all 64 bits of a
+// sign/exponent/mantissa triple and called the result an `integer`. Caught before a float could
+// reach it; it was unreachable only because no float literal parsed.
 export function notOperatorFor(operand ValueTypeTag) returns NotOperator
 	return match operand 'k'
 		boolean gives NotOperator.op(MaxonUnaryOp.logicalNot, resultTag: ValueTypeTag.boolean)
-		// Every NUMBER takes the bitwise reading (`not 5` is -6) — `integer` through `exitCode` is
-		// exactly `TypeClass.numeric` (see `typeClassOf`).
-		integer to exitCode gives NotOperator.op(MaxonUnaryOp.bitNot, resultTag: ValueTypeTag.integer)
+		// Every INTEGER takes the bitwise reading (`not 5` is -6).
+		integer gives NotOperator.op(MaxonUnaryOp.bitNot, resultTag: ValueTypeTag.integer)
+		// A FLOAT has NEITHER reading, and this is the arm the range used to swallow. It is not a
+		// missing feature waiting on an instruction: `not` on a double is meaningless in the
+		// source language, exactly as `3.14 and 2.0` is (see `BinOpOperands.nonIntegralOperands`),
+		// and no hardware would help.
+		float gives NotOperator.nonIntegralOperand
+		// `named` is a ranged typealias, and every alias shv2 can declare is a ranged INT
+		// (`Parser.parseTypeAlias` accepts only `int(low to high)`) — so the bitwise reading is
+		// right, and this arm is a THEOREM about the current compiler exactly as `typeClassOf`'s
+		// is. `exitCode` is `int(0 to u32.max)`, an integer by the same token. The day a `float`
+		// alias becomes legal, THIS arm becomes the bug that `float` above just was.
+		named to exitCode gives NotOperator.op(MaxonUnaryOp.bitNot, resultTag: ValueTypeTag.integer)
 		// `unresolved` — a call to a function no file declares (there is no reading to choose).
 		// `void` — a call to a function that returns nothing; `Parser.parseCall` rejects it at the
 		// call site, so it cannot arrive here, and if a second route to a void value ever appeared

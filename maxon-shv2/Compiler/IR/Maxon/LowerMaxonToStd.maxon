@@ -135,8 +135,32 @@ export function maxonUnaryOpToStdOpcode(op MaxonUnaryOp) returns StdUnaryOpcode
 		neg gives StdUnaryOpcode.neg
 		bitNot gives StdUnaryOpcode.bitNot
 		logicalNot gives StdUnaryOpcode.logicalNot
+		// The conversion pair — still a 1:1 rename, and still no decision made here: the parser
+		// chose the DIRECTION (it is the tier that knows the operand is a float), and the Std
+		// opcode only renames it. `trunc` is the source builtin; `promoteToFloat` is inserted.
+		trunc gives StdUnaryOpcode.fpToSi
+		promoteToFloat gives StdUnaryOpcode.siToFp
 	end 'map'
 end 'maxonUnaryOpToStdOpcode'
+
+// **A CONVERSION MUST CROSS THE DOMAIN IT NAMES.** `siToFp` reading a float, or `fpToSi` reading
+// an integer, names a conversion from a type to ITSELF — there is no x64 instruction for it, and
+// there is nothing for one to do. It is unreachable by construction (`Parser.emitTrunc` emits a
+// `trunc` only for a float operand, and `Parser.promoteToFloat` returns early on one), so this is
+// what stops "unreachable" from quietly becoming "unwritten" the day either gate moves.
+//
+// It reads `operandType`, which for these two opcodes is the SOURCE and never the result — the
+// one fact StdUnaryOpcode's header exists to hammer, and the one that would send a value to the
+// wrong register file if it were read backwards.
+function assertConversionCrossesDomain(opcode StdUnaryOpcode, operandType StdType)
+	if opcode == StdUnaryOpcode.siToFp and stdTypeIsFloat(operandType) 'floatToFloat'
+		panic("lowerUnaryOp: `siToFp` over a FLOAT operand converts a float to a float — `operandType` on a conversion is the SOURCE, and the parser must not promote a value already in the float domain (Parser.promoteToFloat returns early on one)")
+	end 'floatToFloat'
+
+	if opcode == StdUnaryOpcode.fpToSi and not stdTypeIsFloat(operandType) 'intToInt'
+		panic("lowerUnaryOp: `fpToSi` over an INTEGER operand converts an int to an int — `trunc(int)` is the identity and Parser.emitTrunc must answer it with the operand itself rather than an op")
+	end 'intToInt'
+end 'assertConversionCrossesDomain'
 
 // Map a source-level comparison operator to its Std predicate. M4 is a 1:1 mapping;
 // exhaustive by construction (every MaxonCmpOp arm is named). The x64 tier turns the
@@ -423,9 +447,15 @@ type MaxonToStdLowering
 	// Lower a Maxon unary op to its Std counterpart. Like lowerBinOp, the operand
 	// and result ValueIds pass through verbatim; only the source-level operator maps
 	// to a width/ABI-resolved Std opcode.
+	// ⭐ `operandType` IS THE OPERAND'S TYPE — the SOURCE the instruction reads — and on the two
+	// CONVERSION opcodes that is emphatically not the result's: `trunc` reads an f64 and produces
+	// an i64, `promoteToFloat` the reverse. Taking it from `operand` rather than from `result` is
+	// therefore correct for all five opcodes at once, and is the only spelling that is.
 	function lowerUnaryOp(result ValueId, operand ValueId, op MaxonUnaryOp, dstBlock IrBlock)
 		let opcode = maxonUnaryOpToStdOpcode(op)
-		self.stdModule.appendOp(dstBlock, op: StdOp.unaryOp(result, operand: operand, opcode: opcode, operandType: self.stdTypeOf(operand)))
+		let operandType = self.stdTypeOf(operand)
+		assertConversionCrossesDomain(opcode, operandType: operandType)
+		self.stdModule.appendOp(dstBlock, op: StdOp.unaryOp(result, operand: operand, opcode: opcode, operandType: operandType))
 	end 'lowerUnaryOp'
 
 	// Lower a Maxon comparison to `StdOp.cmp`. Operand/result ValueIds pass through

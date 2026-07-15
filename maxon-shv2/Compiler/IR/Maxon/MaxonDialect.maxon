@@ -345,10 +345,34 @@ end 'MaxonBinOp'
 // which is why v1 emits a single `logicalNot` and resolves it in `lowerUnop`). The
 // parser must classify `and`/`or` by operand type anyway — a bool one is control flow —
 // so classifying `not` in the same place costs nothing and keeps ONE type oracle.
+//
+// P1.0d.4 appends the CONVERSION PAIR — the two ops that move a value BETWEEN the integer and
+// float domains, and the reason a float can be computed with at all. They are unary ops rather
+// than a dedicated `MaxonOp.convert` variant because a conversion has a unary op's exact shape
+// (one operand in, one result out, non-trapping), and the dialect's rule is that shape decides.
+// Both reference compilers agree: v1 lowers them to `StdArithUnaryOpcode.{fpToSiI64, siToFpF64}`,
+// the bootstrap mints a `MaxonTruncOp`.
+//
+// ⭐ THEY ARE THE ONLY UNARY OPS WHOSE RESULT TYPE DIFFERS FROM THEIR OPERAND'S. `neg`/`bitNot`/
+// `logicalNot` all answer in the type they were given, which is why `emitUnaryOp` could take the
+// operand's own tag as the result tag and nothing ever noticed. These cannot — so their result
+// tag is passed EXPLICITLY at the emit site, and the Std tier says the same thing a tier down
+// (StdUnaryOpcode: "`operandType` is always the SOURCE, and the OPCODE names the result").
+//
+//   • `trunc`          — SOURCE-LEVEL, the `trunc(x)` builtin: f64 → int, TRUNCATING TOWARD ZERO
+//                        (x64 `cvttsd2si`; the rounding `cvtsd2si` would answer 4 for
+//                        `trunc(3.99)`). The one bridge out of the float domain the language has
+//                        at this rung, and what nearly every case in specs-shv2/float-type.md
+//                        ends on.
+//   • `promoteToFloat` — COMPILER-INSERTED, never written by a user: int → f64 (x64 `cvtsi2sd`).
+//                        It is what makes `5 + 2.0` mean 7.0, and `TypeRules.arithResultTag`
+//                        answering `float` is the promise this op keeps.
 export enum MaxonUnaryOp
 	neg
 	bitNot
 	logicalNot
+	trunc
+	promoteToFloat
 end 'MaxonUnaryOp'
 
 // The comparison operators the Maxon tier represents (M4). A comparison SPLITS OUT
