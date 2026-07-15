@@ -890,7 +890,7 @@ type StdToX64Lowering
 	// emitting an integer `neg` on a float register, which the class check would catch anyway, but
 	// later and further from the cause.
 	function lowerUnaryOp(resultId ValueId, operand ValueId, opcode StdUnaryOpcode, operandType StdType, dstBlock IrBlock)
-		if stdTypeIsFloat(operandType) 'float'
+		if stdTypeIsFloat(operandType) and not unaryOpcodeCrossesFiles(opcode) 'float'
 			panic("lowerUnaryOp: no float form of {opcode.rawValue} — an f64 negate flips the sign bit (`xorpd` against a .rdata mask), not the integer `neg`, and nothing lowers to one yet (P1.0d.4 reaches negative floats through `0.0 - x`)")
 		end 'float'
 
@@ -900,12 +900,30 @@ type StdToX64Lowering
 			neg then self.targetModule.appendOp(dstBlock, op: TargetOp.negReg(dest, src: src))
 			bitNot then self.targetModule.appendOp(dstBlock, op: TargetOp.notReg(dest, src: src))
 			logicalNot then self.targetModule.appendOp(dstBlock, op: TargetOp.xorRegImm32(dest, lhs: src, imm: LogicalNotMask))
-			// The conversion pair. `siToFp` is `cvtsi2sdRegReg` and `fpToSi` is
-			// `cvttsd2siRegReg` — both TargetOps already exist; only this wiring is P1.0d.4's
-			// backend slice. Unreachable until the parser accepts a float literal.
-			siToFp to fpToSi then panic("lowerUnaryOp: the conversion pair has no x64 lowering yet (P1.0d.4 backend slice) — `siToFp` is cvtsi2sdRegReg, `fpToSi` is cvttsd2siRegReg")
+			// The CONVERSION PAIR — the only two ops in the dialect that read one register file
+			// and write the other. `operandType` is the SOURCE, and the OPCODE names the result:
+			// `siToFp` reads a GPR and writes an XMM, `fpToSi` the reverse. Both are PLAIN defs
+			// (dest independent of src), so no seed copy is emitted.
+			//
+			// ⭐ `cvtTsd2si` — the second `t` is TRUNCATE, and it is why this is the right
+			// instruction for `trunc()`. `cvtsd2si` rounds under MXCSR's current mode (banker's
+			// rounding by default), so `trunc(3.99)` would answer 4. The spec says 3. Two
+			// mnemonics one letter apart, and a wrong answer between them.
+			siToFp then self.targetModule.appendOp(dstBlock, op: TargetOp.cvtsi2sdRegReg(dest, src: src))
+			fpToSi then self.targetModule.appendOp(dstBlock, op: TargetOp.cvttsd2siRegReg(dest, src: src))
 		end 'op'
 	end 'lowerUnaryOp'
+
+	// The unary opcodes that CROSS the register files — the two conversions, and only them.
+	// Everything else computes IN one file, which is what the float guard above is about: a float
+	// `operandType` on `neg` is an unsupported float negate, but a float `operandType` on `fpToSi`
+	// is not merely legal, it is REQUIRED — that op reads an f64 by definition.
+	function unaryOpcodeCrossesFiles(opcode StdUnaryOpcode) returns bool
+		return match opcode 'k'
+			neg to logicalNot gives false
+			siToFp to fpToSi gives true
+		end 'k'
+	end 'unaryOpcodeCrossesFiles'
 
 	// Lower a Std `binOpImm` (constant right operand) to a copy-free immediate form:
 	// `add`/`sub` to `lea dest, [lhs + disp]` (disp = imm for add, −imm for sub — the
