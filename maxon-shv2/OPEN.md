@@ -191,6 +191,75 @@ fields here"*; `RdataRelocKind.dataSectionRipRelDisp32` and `GlobalLabelClass.da
 exactly why it dodges **#17**'s aliasing bug). ⇒ **SLICE IT: `let` first** (front-end only, no IR ops, no
 codegen, its own stable spec), **then `var`** (where the risk actually lives — see **#17**).
 
+> ### ✅ **THE `let` HALF IS DONE (P1.0d.5a, 2026-07-15)** — suite **281 → 295**, zero goldens moved.
+> **shv2's `let` scoping is per-FILE and correct — it does NOT have #17's bug**, proven by running it: two
+> files each declaring `let SHARED` (99 / 7), `getA() - getB()` ⇒ **exit 92**. A name-keyed table gives 0.
+> ⚠ **But nothing in the suite PINS it** — the upstream case needs `as` (P1.9) and is `disabled-test:`.
+> **`var` (P1.0d.5b) is still open, and #17 is its landmine.**
+
+### 4b. ⚠ Three things P1.0d.5a left open — found by the independent review/optimizer, deliberately NOT fixed
+- ⭐ **The constant DFS's recursion depth is UNBOUNDED — SIGSEGV, no diagnostic, and it DEFEATS `E2012`.**
+  A forward chain of depth **700 compiles; 800 SIGSEGVs (139)**. A cycle of 100 raises `E2012`; **a cycle of
+  800 faults before `recordCycle` can raise it.** It is **depth, not count** (800 constants as 8 chains of
+  depth 100 compile fine). **INHERITED, not a regression — and shv2 is strictly BETTER: the bootstrap
+  stack-overflows at depth 700, which shv2 compiles.** ⚠ **The tempting cheap fix is a TRAP:** pre-scanning
+  each initializer's identifiers to build a dependency graph is **a second reading of the initializer
+  grammar — a THIRD evaluator** — exactly the duplication P1.0d.5a carefully avoided. The right fix is an
+  explicit **worklist** (a design change, its own rung, in **both** compilers); a depth cap is a workaround.
+- **A DUPLICATE top-level constant is silently accepted:** `let A = 1` / `let A = 2` compiles and returns
+  **1**. A duplicate *function* is `E3006`. Needs a spec case.
+- **Assigning to a constant reports the WRONG thing:** `A = 5` where `A` is a top-level `let` ⇒
+  `E2004: Undefined variable 'A'`. Correctly rejected, but `A` is plainly *defined* — it is **immutable**.
+  `E2013 ParserImmutableVariable` is the right code.
+
+### 4c. ⚠⚠ A GATE REPORTED **PASS** WHILE STRUCTURALLY BLIND — and only a SABOTAGE found it
+**`verify-warm-rebuild`'s whole battery could not see whether a top-level constant's VALUE rides the parse
+memo key.** The reviewer deleted the value arm of `mixConstant` and rebuilt: **`verify-warm-rebuild` PASS
+(exit 0), spec suite 295/0.** Everything green, the property gone.
+
+**The reason is precise, and it generalises: both existing probes ADD A NAME** (a comment; then
+`function __warmRebuildProbe`) — **and a name-only key moves on that.** *"Declaration edit re-parsed all 2"*
+therefore proves nothing about a **value**. **Only an edit that holds the NAME fixed and moves the NUMBER
+can discriminate.** ⇒ property **3(c)** added (`let __warmRebuildProbeConstant = 7` → `8`): red on the
+sabotage (*"expected 0+2=2, got 1"*), green as shipped.
+⚠ **The optimizer's evidence for this was WRONG though its conclusion was right** — it cited the *function*
+probe. **This is `22f534e78`'s lesson ("a gate that knows it is vacuous must not report PASS") one level up:
+a gate that does NOT know it is vacuous is worse. When a gate asserts a property, ask what edit would break
+it — and make that edit.**
+
+### 4d. ⚠ THE SCALE CORPUS IS SYSTEMATICALLY BLIND TO THE FEATURE JUST LANDED — **THIRD instance**
+`scale-test` reported P1.0d.5a's cost as `2 × files + 1`, exact on all six rungs. **It measured the feature
+INERT: the corpus contains NO top-level `let` at all** — verified by emitting it (**0** column-0 `let`, 56
+body-local) — so the arena is empty on every rung and the DFS, the lookup and `mixConstant` never run.
+`2 × files + 1` is *the signature of an empty arena*: it proves the per-file SWEEP is linear and says
+nothing about the evaluator.
+
+**The prior two, which make this a pattern rather than a coincidence:** the corpus contained **`and`/`or`
+NOWHERE** (#5 — so the `const`-flags fix, which removed **four instructions from every short-circuit site in
+the language**, read as *zero movement on every rung*), and it generates **no `/` or `mod`** (so it
+structurally cannot see the divide path P1.0d.3 was built for). ⇒ **THE CORPUS IS GROWN TO EXPOSE THE LAST
+BUG, SO IT IS BLIND TO THE NEXT ONE.** *A knob built to expose a bug you already found only finds bugs you
+already found* (#5). **The standing rule — user directive, #5 — is FIX THE CORPUS'S REALISM, NOT THE
+PROBE**, so a rung that adds a construct should add its **ladder axis**. Until it does: **measure
+off-instrument and SAY SO.** P1.0d.5a did (400→12,800 constants: **x2.00**; 8→128 files × 50 constants with
+cross-file `export let` — the O(files²) hazard in its live shape: **x2.00**, where the bug reads x4.00).
+
+### 4e. ⚠ Three bootstrap bugs P1.0d.5a tripped over (each cost the implementer real time)
+- ⭐ **A parameter named `end` SILENTLY DESTROYS the enclosing type's member table.**
+  `function tokenTextFrom(start TokenIndex, end TokenIndex)` produced **no diagnostic** — instead **68
+  cascading `E4006: Type 'Parser' has no field named 'at'/'consume'/'emitLiteral'`**, pointing at innocent,
+  untouched lines **hundreds of lines away**. Cost a full bisect. The codebase dodges it **by convention**
+  (`endIndex`, `countEnd`), which is why nobody had hit it. *(Compare `feedback_type_param_keyword_collision`:
+  `type`/`enum`/`union`/`interface` as param names were fixed in 2026-04-11 — **`end` was not.**)*
+- **`throw` of a union payload matched from a CALL RESULT ⇒ `mm_incref called with NULL pointer`.**
+  `match self.f() 'o' … failed(error) then throw error` crashes the compiled compiler: the bootstrap drops
+  the temporary scrutinee's box while the payload is in flight. **This is the sharp end of the hazard
+  `emitShift` already documents as a *leak* — here it is a null-pointer panic.** Worked around by binding
+  both the scrutinee and the payload to locals. *(Same family as #14/#16 — a temporary's ownership is not
+  reconciled.)*
+- **`self.declAt(i).outcome = x` ⇒ `E2001: unexpected token '.'`** — no field assignment through a call
+  result.
+
 ⚠ **It already cost coverage:** with no globals, short-circuit `and`/`or` had **no way to prove the right
 operand is SKIPPED** (an eager `and` returns the *same answer* on every input, so no value test can see it).
 `specs-shv2/short-circuit-elision.md` works around it — the guarded operand **divides by zero**, so a clean
