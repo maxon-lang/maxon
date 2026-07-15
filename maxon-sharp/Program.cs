@@ -51,6 +51,7 @@ class Program {
     Console.WriteLine("  --dump-stages            Write IR at each pipeline stage (.1-maxon.ir, etc.)");
     Console.WriteLine("  --mm-trace               Enable runtime memory manager trace output (stderr)");
     Console.WriteLine("  --mm-debug               Enable runtime memory debug checks (magic, canary, poison)");
+    Console.WriteLine("  --literal-coverage       Report static-eligibility of managed literal sites to stderr (measurement only)");
     Console.WriteLine("  --async-trace            Enable async/await runtime trace output (stderr)");
     Console.WriteLine("  --debugstream            Enable shared-memory debug stream (use with 'maxon monitor')");
     Console.WriteLine("  --timing                 Print per-stage compile timings to stderr");
@@ -99,6 +100,8 @@ class Program {
         Compiler.Compiler.MmTraceRawOnly = true;
       } else if (arg == "--mm-debug") {
         Compiler.Compiler.MmDebug = true;
+      } else if (arg == "--literal-coverage") {
+        Compiler.Compiler.LiteralCoverage = true;
       } else if (arg == "--async-trace") {
         Compiler.Compiler.AsyncTrace = true;
       } else if (arg == "--debugstream") {

@@ -91,6 +91,13 @@ public class Compiler {
   [ThreadStatic] private static bool _testing;
   public static bool Testing { get => _testing; set => _testing = value; }
 
+  // MEASUREMENT-ONLY: when set, the pipeline runs LiteralCoverageAnalysisPass, which
+  // reports (to stderr) what fraction of managed literal sites are provably
+  // never-mutated. Off by default; it sets no property the lowering reads, so a
+  // normal build is byte-identical whether or not the analysis ran.
+  [ThreadStatic] private static bool _literalCoverage;
+  public static bool LiteralCoverage { get => _literalCoverage; set => _literalCoverage = value; }
+
   /// <summary>
   /// Resets process-wide compile state that would otherwise drift across
   /// independent compiles. The CLI calls this once per invocation; the LSP

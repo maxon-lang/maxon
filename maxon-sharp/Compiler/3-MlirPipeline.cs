@@ -54,6 +54,14 @@ public class IrPipeline {
       StackPromotionAnalysisPass.Run(module);
     }
 
+    // MEASUREMENT-ONLY (off by default): report static-eligibility of managed literal
+    // sites. Runs after monomorphization + DFE so it sees the concrete, reachable set
+    // of literals, and before lowering so literals are still MaxonStringLiteralOp etc.
+    // It reads the IR and writes only to stderr — the lowering below is untouched.
+    if (Compiler.LiteralCoverage) {
+      LiteralCoverageAnalysisPass.Run(module);
+    }
+
     // Capture maxon stage
     if (returnIr || dumpStagesBasePath != null) {
       if (returnIr) {
