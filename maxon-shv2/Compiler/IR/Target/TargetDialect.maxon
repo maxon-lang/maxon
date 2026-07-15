@@ -101,6 +101,31 @@ export enum RegClass
 	xmm
 end 'RegClass'
 
+// Every value's register class, indexed by ValueId — the allocator's answer to "which
+// file does this value live in?", and the thing that keeps an f64 out of a GPR.
+//
+// ⭐⭐ IT IS PRODUCED BY THE LOWERING, NOT DERIVED IN THE BACKEND, and that direction is
+// the whole design. A value's class is fixed by its Std TYPE (`stdTypeIsFloat`), and
+// `StdToX64Conversion` is the last pass that can see a type at all — the Target tier
+// carries none. `lowerConst`'s own comment has said so since M3: *"The op's own StdType
+// picks the register file (GP vs XMM)"*. So the lowering writes this column at the moment
+// it mints each virtual register, and Std ValueIds pass through unchanged, which is what
+// lets one dense array serve both tiers.
+//
+// ⚠ THE ALTERNATIVE — recovering the class in the allocator by walking the ops — LOOKS
+// cheaper and is the trap. It cannot work locally: `movRegReg`, `loadRegSlot` and
+// `xchgRegReg` are CLASS-AGNOSTIC by design (that is what one enum buys), so a copy's
+// class is only knowable from its source, and a reload's only from whatever was spilled.
+// Recovering it means a propagation pass that reconstructs, approximately and late,
+// exactly what the Std type stated exactly and early. That is a second type system in the
+// tier furthest from the source — the same argument `StdOp.binOp.operandType` is built on,
+// and it has the same answer: state the fact once, where it is known.
+//
+// ⚠ A FRESH ID MINTED BY A SPLIT INHERITS ITS VICTIM'S CLASS. A split cuts a live range;
+// it does not change what the value IS. This is the one place a value's class is set
+// after lowering, and it is a copy, never a re-derivation.
+export typealias ValueClassColumn = Array with RegClass
+
 // A machine register operand: either a concrete physical GPR or a virtual
 // register identified by the SSA ValueId that defined it. Every `movImm`
 // result arrives as a `virtual`; B2's register allocator rewrites each into a
