@@ -18,6 +18,34 @@ and the verification. Agents own layers.
 Integration is inherently serial and is the real limit on wave size: **beyond ~4–5 agents, integration
 dominates and adding agents makes it slower.**
 
+## ⛔ HALT AND ASK — the things that are NOT yours to decide
+
+**This skill is built to run unattended, rung after rung (`/loop /rung` — the no-argument form in step 0
+exists for exactly that).** That stays safe only if it stops at the right things. **The danger is never
+one rung failing — it is a rung landing WRONG and the next rung building on top of it.** *(The scalar
+core was **claimed** done at 126/0. Measured against the real corpus it was **48 of 2,746**. A loop would
+have marched straight past that and built P1.1 on it.)*
+
+**STOP, report, and ask when:**
+
+- **Any gate is red** — a non-zero build, a non-green suite, a worker-count mismatch, exit **101**, or an
+  unjustified **`M`** on a pre-existing fragment. **Never turn a gate green by narrowing what it tests.**
+- **A DESIGN RULING is needed** — the corpus contradicts itself, the two references disagree and the plan
+  cannot settle it, or the spec is genuinely ambiguous. **You must not guess.** *(`/specs` said both
+  "lossy conversions are not allowed" **and** `takeInt(3.7)` ⇒ silently `3` — and the bootstrap passed
+  BOTH. Either reading was defensible. It took a user ruling.)*
+- **An agent reports the plan was wrong at the code** (step 5) — a wrong plan invalidates the wave, not
+  just that agent.
+- **A case would have to be disabled that the rung should pass** — the failure mode of this entire
+  process. **A green suite that tests nothing is the most expensive lie a test runner can tell.**
+- **The rung needs SLICING and the boundary is not obvious.**
+- **`PLAN.md`'s next rung is ambiguous** — the no-argument form depends on that ladder being current. Say
+  so; do not pick for yourself.
+
+**Everything else runs unattended.** Landing a clean rung — the plan, the wave, the gates, the merge,
+**the push (step 10)**, and the `PLAN.md` update (step 11) — needs no permission. Report what you did;
+ask only when the list above fires.
+
 ## 0. Which rung, and orient
 
 **If an argument was given** (`/rung P1.2`, `/rung structs`, `/rung fix the divide-by-zero trap`), that
