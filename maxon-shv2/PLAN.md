@@ -835,8 +835,44 @@ each WITH the milestone that first needs it:
 >    be added without stating"* it — exactly the argument `storageBytes` already makes at
 >    [StdDialect.maxon:55-62](maxon-shv2/Compiler/IR/Std/StdDialect.maxon#L55).
 >
-> ⇒ **SLICE: `P1.0r.1` = the vocabulary** (indirect call · `funcAddr` · OS-import call · signedness), each
-> red-pinnable on its own; **`P1.0r.2` = the allocator + refcount**, built on it.
+> ### ⛔ THAT SLICE WAS WRONG, AND IT WAS WRONG THE `mintPhi` WAY — corrected within the hour
+>
+> ~~SLICE: `P1.0r.1` = the vocabulary (indirect call · `funcAddr` · OS-import call · signedness), each
+> red-pinnable on its own; `P1.0r.2` = the allocator + refcount, built on it.~~
+>
+> **"Each red-pinnable on its own" was ASSERTED, not measured. It is false — measured, all four:**
+>
+> | item | its only consumer | red-pinnable alone? |
+> |---|---|---|
+> | `indirectCall` · `funcAddr` | `__destruct_*` dispatch | ❌ the allocator |
+> | OS-import call | `VirtualAlloc` | ❌ the allocator |
+> | **signedness** | `capacity = -2` | ❌ **P1.2's String — not this rung** |
+> | **the allocator itself** | a heap value to allocate | ❌ ⇒ **structs** |
+>
+> ⭐ **The signedness row was measured and it is the sharpest**: a `u64` above `i64.max` **cannot be
+> constructed at all** — `typealias Big = int(0 to u64.max)` + the literal `9223372036854775808` is
+> **E2011** in BOTH compilers (*"outside the range of int (-9223372036854775808 to 9223372036854775807)"*),
+> because the literal is range-checked against **i64**, never against the declared target range that
+> contains it. So no program can reach the signed/unsigned divergence, and a "red spec" for it is
+> unwritable. *(That the literal check ignores the target's declared range is arguably its own bug — but
+> both compilers agree, so it is the language's de facto rule and it is not this rung's.)*
+>
+> ⇒ **A vocabulary-only rung is EXACTLY `mintPhi`, one step earlier.** That scaffold got *a consumer and
+> not a reason to be right*, and `var f = 0.0` in a loop crashed the emitter. **Four ops with NO consumer
+> is the same disease with nothing to catch it at all** — nothing would prove `indirectCall` calls the
+> right address until the allocator dispatched a destructor through it, one rung later, on shipped code.
+>
+> ⇒ **CORRECTED SLICE — by CONSUMER, never by layer. `P1.0r` and `P1.1a` CO-LAND as ONE rung:**
+> ### **"the heap and its first value"** — the allocator + refcount + **exactly the ops it consumes** +
+> the minimal struct that is **the reason each of them has to be right**.
+> **Acceptance is a REAL corpus case, not a bespoke one**: [`specs/structs.md`](specs/structs.md)'s
+> `simple-type` — `let p = Point.create(3, y: 4)  return p.x + p.y` ⇒ **7**. It exercises the whole chain
+> in one line: parse · layout · `__slab_alloc` · field store · field load · the struct-return ABI · and
+> the **decref at scope end** that keeps the leak gate (exit **101**) green. **Then** `struct-field-access`
+> (50), `sizeof.struct` (16), and the rest of the ~72 portable struct cases.
+> ⚠ **This is what §"the acceptance test is P1.1a, not a bespoke spec" already said.** The layered slice
+> contradicted it the same day it was written — *the plan disagreeing with itself, in the file whose own
+> through-line is ONE FACT WRITTEN DOWN TWICE.*
 > ⚠ **Atomics are NOT in P1.0r.** The refcount is atomic in the bootstrap (`LOCK INC`), but shv2 is
 > single-threaded until R3 @ P1.5 brings green threads. **State the decision when P1.0r.2 lands** — do not
 > let it be made by inertia, which is precisely what this box exists to prevent.
