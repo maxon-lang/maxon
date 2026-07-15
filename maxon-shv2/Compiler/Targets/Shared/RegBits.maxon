@@ -229,9 +229,8 @@ export function regClassOf(reg RegNum) returns RegClass
 	return RegClass.xmm if reg >= FirstXmmRegisterNumber else RegClass.gpr
 end 'regClassOf'
 
-// The mask with every bit of ONE register file set. This — not `fullRegisterMask` — is what
-// "the whole pool" means for any value, because a value can only ever take a register from
-// its own class.
+// The mask with every bit of ONE register FILE set — every register the hardware has of that
+// class, allocatable or not.
 //
 // ⚠⚠ EVERY POOL-SIZE TEST MUST BE PER CLASS, AND THE TWO FAILURES ARE OPPOSITE. Ask an
 // int's 14 allowed registers whether they are "the whole pool" against a 32-wide
@@ -241,18 +240,21 @@ end 'regClassOf'
 // Ask the same question per class and the answer is right — but `constrained == 0` comes
 // back for 15 live ints, and the per-class FULL-POOL PIGEONHOLE becomes the only thing that
 // still catches them. Both halves, or one failure survives.
+//
+// ⚠ THIS IS THE FILE, NOT THE POOL, AND THE DIFFERENCE IS TWO REGISTERS. rsp and rbp are the
+// frame and are never allocatable, so the GPR FILE is 16 and a GPR value's POOL is 14. The
+// denominator of a "is this constrained / is this pool full?" test is the POOL's width —
+// `RegisterAllocator.classPoolSizeOf(pool, class)`, which intersects this mask with the pool
+// the target actually offers. A `classPoolSize(class)` returning 16 lived here briefly and was
+// exactly the trap the paragraph above describes, at smaller scale: every unconstrained int
+// reads `14 < 16` ⇒ constrained. The width of a file and the width of a pool are two facts;
+// only one of them is a denominator.
 export function classRegisterMask(class RegClass) returns RegMask
 	return match class 'class'
 		gpr gives (1 shl FirstXmmRegisterNumber) - 1
 		xmm gives ((1 shl RegisterFileSize) - 1) and not ((1 shl FirstXmmRegisterNumber) - 1)
 	end 'class'
 end 'classRegisterMask'
-
-// How many registers a value of this class could take if nothing were blocked — the
-// denominator of every "is this value constrained?" and "is this pool full?" test.
-export function classPoolSize(class RegClass) returns RegCount
-	return regMaskPopcount(classRegisterMask(class))
-end 'classPoolSize'
 
 // The mask with every allocatable bit of BOTH files set (bits 0..RegisterFileSize-1). Derived
 // from `RegisterFileSize` so the file width lives in exactly one place; the "not in

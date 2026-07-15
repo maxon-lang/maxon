@@ -303,11 +303,14 @@ end 'poolOfClass'
 // How many registers a value of `class` could take if nothing were blocked — the denominator of every
 // "is this value constrained?" and "is this point over its pool?" test.
 //
-// ⚠ NOT `RegBits.classPoolSize`, WHICH IS THE FILE'S WIDTH AND NOT THE POOL'S. The GPR file is 16
-// wide but rsp/rbp are the frame and are never allocatable, so a GPR value's pool is FOURTEEN.
-// Measuring `constrained` against 16 would report every unconstrained int as constrained — the exact
-// permanent-census regression the per-class denominator exists to prevent, reintroduced by a
-// denominator that is off by two.
+// ⚠ IT TAKES THE POOL, AND THAT IS THE WHOLE POINT: A FILE'S WIDTH IS NOT A POOL'S. The GPR file is
+// 16 wide, but rsp/rbp are the frame and are never allocatable, so a GPR value's pool is FOURTEEN.
+// A `classPoolSize(class)` reading the width off `classRegisterMask` alone briefly lived in RegBits
+// and returned 16 — under a comment that itself said "an int's 14 allowed registers". Measuring
+// `constrained` against it reports every unconstrained int as constrained (14 < 16), which is the
+// exact permanent-census regression the per-class denominator exists to prevent, reintroduced by a
+// denominator off by two. v1 reaches the same shape independently: its `poolSizeFor(regClass, desc)`
+// reads the pool size off the TARGET DESCRIPTOR, never off the register file.
 export function classPoolSizeOf(pool RegMask, class RegClass) returns RegCount
 	return regMaskPopcount(poolOfClass(pool, class: class))
 end 'classPoolSizeOf'
