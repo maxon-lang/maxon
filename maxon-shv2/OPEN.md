@@ -440,6 +440,88 @@ It runs over `__module_init` **and nowhere else**, and every global's initialize
 shared block** — which is exactly why the blast radius is another file's global, and why this looked like
 spooky action at a distance.
 
+### 18. ⭐⭐ P1.0d.4 (FLOATS) — the design, and FOUR contract errors caught by reading the code
+**IN PROGRESS on branch `p10d4-floats` (`fd9ef0e51`, specs only — NOT merged).** **RED is banked: 317/19**,
+every failure `E2004: Expected expression but got 'float literal'` — **the lexer makes the token, the parser
+has no arm.** `NumberParsing.parseFloatBits` already returns IEEE bits **as a `ParsedInt`**, so
+`MaxonOp.literal(value, valueType)` and `StdOp.const` carry a float **with no new op**; `StdType.f64` /
+`stdTypeIsFloat` / `storageBytes: 8` are live. **73 of 276 `/specs` files use a float literal.**
+
+**Settled design:** ONE `X64Register` enum (xmm0-15 at rawValue 16-31 — v1 mints a second enum and pays with
+a parallel op for every spill/reload/move); `RegMask` is **already** `int(0 to u64.max)` so bits 16-31 are
+free (**the "u16" prose has drifted from the type — fix it**); the Std **arith band carries no operand type**
+and must get one (a *field*, as `const`/`param`/`loadIndirect` already have — the alternative is a second type
+system in the backend); cond codes are **purely additive** (the enum's backing value IS the nibble); **REX
+must follow the mandatory prefix** (one optional param, not a new path); float constants → **`.rdata`**
+(read-only; its reloc arm is live, its image renderer is the `.data` twin that landed 2026-07-15); **`trunc`
+is a compiler BUILTIN**, so no stdlib cone. **Wave 1 = an ALL-CALLER-SAVED XMM pool** (a float across a call
+**force-spills**, free via §3 below); **Wave 2 = the float ABI** — because Win64 preserves **all 128 bits** of
+xmm6-15 and **`movsd` ZEROES bits 64-127**, so taking them drags in 16-byte slots + the leaf misalignment
+together.
+
+> ### ⚠⚠ FOUR TIMES THE COORDINATOR'S CONTRACT WAS WRONG, AND FOUR TIMES AN AGENT REFUTED IT FROM THE SOURCE.
+> **Every one is a SILENT WRONG ANSWER, and none is visible to `scale-test`.** Recorded because the *reasons*
+> are the asset — a fifth attempt that re-derives them pays twice.
+>
+> 1. ⭐ **"Class = a forbidden mask, no new column" — WRONG. The class needs its OWN column.**
+>    `clearForbidden` sets the mask to **0** (`TargetLiveness.maxon:551`) and the splitter calls it on the
+>    victim (`SplitLiveRanges.maxon:929`) and **every fresh id** (`:936`) ⇒ a class stored there is **WIPED**
+>    ⇒ **a float in a GPR**. And **the wipe is CORRECT and must stay** — its own comment: *"its live range is
+>    cut at the peak, so it is no longer live across the call that forbade it… A mask that only ever grows
+>    would keep saying it was."* ⇒ **THE DISTINCTION: the CLASS is what the value IS — intrinsic, permanent.
+>    `forbidden` is what the ops it crosses TOOK AWAY — contextual, recomputable.** This is the through-line's
+>    **DUAL**: not one fact written twice, but **TWO FACTS WRITTEN IN ONE PLACE**.
+> 2. ⭐ **"`witness:` becomes the class pool" — NECESSARY BUT NOT SUFFICIENT. `hallVerdictAt` must run PER
+>    CLASS over a class-FILTERED live list.** `valueConfinedTo = (allowed and not witness) == 0`
+>    (`HallCondition.maxon:96`) — and a float across a call has `allowed = ∅`, which §3 buys **deliberately**.
+>    **∅ is a subset of EVERY set**, so that float tests CONFINED against *any* witness, including a
+>    callee-saved **GPR** witness from an int-only overflow. ⚠ **And the consistency assert PASSES**:
+>    6 ints + 3 floats gives `expected = popcount(witness) + (valueCount − matched) = 5 + 4 = 9 == tight`
+>    (`:469-472`). Deficit 4 is right **by coincidence** (3 float + 1 int) and structurally wrong —
+>    `chooseVictim` may spill 4 ints (floats never spill ⇒ colorer panics) or a float to relieve a **GPR**
+>    peak (freeing an XMM no int can use ⇒ pressure does not drop ⇒ the re-pick loop `:21` warns of).
+> 3. **§1 and §2 INTERLOCK — neither alone is safe.** After §1's fix an int's `|A|`=14 against
+>    `fullPoolSize = popcount(pool)` = 30 ⇒ **every value reads CONSTRAINED** ⇒ permanent census over every
+>    operand of every op — **a TIME regression `scale-test` cannot see.** Fix: `constrained` is
+>    `size < classPoolSize(class(v))`. **But that restores `constrained == 0` for 15 live ints, so the
+>    per-class full-pool pigeonhole is then the ONLY thing that catches them** (`effective > fullPoolSize`,
+>    `:1251`; also `:674`, the residual guard `:803`, and `witness:` `:1252`). **Both halves, or one failure
+>    survives.**
+> 4. **`pickPreferredRegister`/`preferredClassMask` are a WRONG-ANSWER site, not a name clash.** Both use
+>    `fullRegisterMask()` as "the whole pool" (`RegisterAllocator.maxon:864,886`) ⇒ widened, an **int** whose
+>    GPRs are all blocked is handed an **XMM**. ⚠ Their own comment — *"so a HINT can be held to the same
+>    class; the two must agree, or the hint path quietly bypasses the very protection the fallback provides"*
+>    — uses **"class" for caller/callee-saved**, which collides with *register* class head-on. **Rename one.**
+
+**Three more, unflagged in any contract so far:**
+- ⚠ **`FoldConstOperands` rewrites a const-rhs `cmp` into `cmpImm`** (an **integer** `cmp reg, imm32`).
+  **A float compare must be excluded, or `3.5 > 9.5` folds through an integer immediate compare on IEEE bit
+  patterns.** ⭐ **And `float-type/float-comparison` would likely still PASS — BY LUCK**, because positive
+  doubles order correctly as sign-magnitude integers. **`float-compare-branch/lt-nan-is-false` catches it.**
+  Same exclusion for `binOpImm`.
+- ⚠ **`binOpResultTag` (`TypeRules.maxon:530-536`) returns `integer` for ALL arithmetic** — **that IS the
+  `float-promotion` bug**, and the fix is numeric promotion **there**, not in the backend.
+- **Float `/` must NOT ride `StdOp.div`**: that variant is `isPure: false` because **`idiv` faults** and
+  **`divsd` does not** ⇒ by the dialect's own rule it belongs as a `StdBinOpcode` on `binOp`.
+
+**⚠ TWO SILENT-WRONG-ANSWER HAZARDS, each falsifying a design property an shv2 file STATES:**
+- ⭐ **An f64 compare lowers to TWO conditional jumps** (`jp` + an ordered jump, both to the same else
+  successor). **`SsaDestruction` assumes ONE per block** — `IrBlock.CondBranch`: *"the block's SECOND
+  successor is named by a body op"* (**singular**). **v1 SHIPPED this as a miscompile** (rewired only one
+  jump ⇒ a phi's copy was skipped), documented **in the spec itself** (`specs/float-type.md:130-135`) and in
+  `project_x64_f64_compare_phi_copy_fix`. ✅ **`specs-shv2/float-compare-branch.md` is authored and RED for
+  exactly this** — and its `float-cmp-materialized` case pins the **`setcc`-with-parity** path, which is a
+  **second lowering**, not a free consequence of the branch one.
+- **There is NO `xchg xmm, xmm`.** `SsaDestruction.maxon:7` states *"Copy CYCLES are broken with
+  `xchgRegReg` — no scratch."* v1 reserves xmm15. **Decide: a reserved scratch, or 3 moves through a slot.**
+
+⭐ **Do NOT inherit v1's FP warts:** `createX64CallerSavedFps()` takes **no `os` param** while its GPR twin
+does (*"Windows differs from SysV"*) — **a SysV table applied to Win64**, declaring xmm6/7 caller-saved when
+they are **not** and never saving them; its FP callee-saved half is **literally ZERO** (so every float across
+a call spills — which surfaces as v1's own **disabled tests**, `specs/float-type.md:157`); and
+`emitRematConst` **panics for FP** (*"not needed for any current case"*) — **shv2's splitter DOES
+rematerialize**, so a float const must remat to `movsd reg,[rip+const]`.
+
 ---
 
 ## 🔧 Instrument & tooling
