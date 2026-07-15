@@ -73,11 +73,17 @@ public static partial class MaxonToStandardConversion {
 		var tempName = inlineTarget
 			?? temps.CreateTemp(tempPrefix, resultId, allocTag ?? "unknown", OwnershipFlags.None);
 		int outerSize = allocTag == "String" ? StringStructSize : CharacterStructSize;
+		// Envelope collapse: ONE allocation. The record IS its own __ManagedMemory — write
+		// buffer/length/capacity(-2, rdata)/element_size(1)/parent(0) inline at offsets 0..32.
 		var outerPtr = (StdHeapPtr)EmitAlloc(block, outerSize, allocTag, scopeName: _currentFuncName);
 		EmitStore(block, outerPtr, tempName, varTypes);
-
-		var managedName = $"__{tempPrefix}_managed_{resultId}";
-		EmitManagedField(tempName, managedName, bufferPtr, lengthVal, 0, block, varTypes);
+		var capConst = new StdConstI64Op(-2);
+		block.AddOp(capConst);
+		var elemSizeConst = new StdConstI64Op(1);
+		block.AddOp(elemSizeConst);
+		var parentZero = new StdConstI64Op(0);
+		block.AddOp(parentZero);
+		EmitInitManagedMemory(block, tempName, bufferPtr, lengthVal, capConst.Result, elemSizeConst.Result, parentZero.Result, varTypes);
 
 		return new StdHeapPtr(outerPtr.Id, outerPtr.TypeName, tempName);
 	}
@@ -176,15 +182,12 @@ public static partial class MaxonToStandardConversion {
 			}
 		}
 
-		// Allocate outer String struct, then ManagedMemory, then raw buffer
+		// Envelope collapse: ONE String allocation (the record IS its own __ManagedMemory),
+		// plus the owned byte buffer. No separate __ManagedMemory record.
 		var tempName2 = inlineTarget
 			?? temps.CreateTemp("interptmp", op.Result.Id, "String", OwnershipFlags.None);
 		var interpOuterPtr = (StdHeapPtr)EmitAlloc(block, StringStructSize, "String", scopeName: _currentFuncName);
 		EmitStore(block, interpOuterPtr, tempName2, varTypes);
-
-		var interpManagedName = $"__interp_managed_{op.Result.Id}";
-		var interpManagedPtr = EmitAlloc(block, ManagedMemoryStructSize, "__ManagedMemory", scopeName: _currentFuncName);
-		EmitStore(block, interpManagedPtr, interpManagedName, varTypes);
 
 		// Allocate buffer (totalLen + 1 for null terminator) as raw heap allocation
 		var oneOp = new StdConstI64Op(1);
@@ -249,19 +252,15 @@ public static partial class MaxonToStandardConversion {
 			EmitRawFree(block, bufPtr);
 		}
 
-		// Store ManagedMemory fields
+		// Write the managed fields inline into the String record. The buffer is freshly
+		// raw-alloc'd and owned, so capacity == length (owned mode: destructor frees it).
 		var finalBuf = (StdI64)EmitLoad(block, interpBufVar, varTypes);
 		var finalLen = (StdI64)EmitLoad(block, interpTotalLenVar, varTypes);
 		var elemSizeConst2 = new StdConstI64Op(1);
 		block.AddOp(elemSizeConst2);
 		var interpParentZero = new StdConstI64Op(0);
 		block.AddOp(interpParentZero);
-		EmitInitManagedMemory(block, interpManagedName, finalBuf, finalLen, finalLen, elemSizeConst2.Result, interpParentZero.Result, varTypes);
-
-		// Store _managed heap pointer at offset 0 and incref it
-		var interpManagedReload = EmitLoad(block, interpManagedName, varTypes);
-		EmitStructFieldStore(block, interpManagedReload, tempName2, StringFieldManaged, IrType.I64, varTypes);
-		EmitIncref(block, interpManagedName, varTypes, scopeName: _currentFuncName);
+		EmitInitManagedMemory(block, tempName2, finalBuf, finalLen, finalLen, elemSizeConst2.Result, interpParentZero.Result, varTypes);
 
 		// Store isAscii = 0 (conservative default)
 		var isAsciiConst2 = new StdConstI64Op(0);
@@ -448,16 +447,10 @@ public static partial class MaxonToStandardConversion {
 	  IrBlock<StandardOp> block,
 	  Dictionary<string, string> varTypes) {
 
-		// With heap refs, the String struct has _managed at offset 0.
-		// Load the _managed heap pointer, then load buffer and length from it.
-		// For types that are __ManagedMemory directly, managedVarName IS the managed struct.
-		// Try loading _managed field first (outer struct), then fall back to direct (bare __ManagedMemory).
-		var managedPtr = (StdI64)EmitStructFieldLoad(block, managedVarName, 0, IrType.I64, varTypes);
-		// Save the managed pointer so we can use it for both loads
-		var managedTempVar = $"__interp_managed_ptr_{IrContext.Current.NextId()}";
-		EmitStore(block, managedPtr, managedTempVar, varTypes);
-		var bufLoad = (StdI64)EmitStructFieldLoad(block, managedTempVar, ManagedFieldBuffer, IrType.I64, varTypes);
-		var lenLoad = (StdI64)EmitStructFieldLoad(block, managedTempVar, ManagedFieldLength, IrType.I64, varTypes);
+		// Envelope collapse: a String/Character IS its __ManagedMemory, so buffer and length sit
+		// inline at offsets 0 and 8 of the value itself — read them directly, no pointer chase.
+		var bufLoad = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldBuffer, IrType.I64, varTypes);
+		var lenLoad = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldLength, IrType.I64, varTypes);
 		return (bufLoad, lenLoad);
 	}
 
@@ -609,11 +602,17 @@ public static partial class MaxonToStandardConversion {
 	  Dictionary<string, string> varTypes,
 	  string? allocTag = null) {
 		int outerSize = isString ? StringStructSize : CharacterStructSize;
+		// Envelope collapse: ONE allocation. The (buffer, length) here always name rdata
+		// (enum case names / string-backed raw values), so capacity == -2 (static, never freed).
 		var outerPtr = (StdHeapPtr)EmitAlloc(block, outerSize, allocTag, scopeName: _currentFuncName);
 		EmitStore(block, outerPtr, tempName, varTypes);
-
-		var managedName = $"{tempName}__managed";
-		EmitManagedField(tempName, managedName, bufferPtr, lengthVal, 0, block, varTypes);
+		var capConst = new StdConstI64Op(-2);
+		block.AddOp(capConst);
+		var elemSizeConst = new StdConstI64Op(1);
+		block.AddOp(elemSizeConst);
+		var parentZero = new StdConstI64Op(0);
+		block.AddOp(parentZero);
+		EmitInitManagedMemory(block, tempName, bufferPtr, lengthVal, capConst.Result, elemSizeConst.Result, parentZero.Result, varTypes);
 
 		if (isString) {
 			var isAsciiConst = new StdConstI64Op(0);
@@ -622,6 +621,69 @@ public static partial class MaxonToStandardConversion {
 		}
 
 		return new StdHeapPtr(outerPtr.Id, outerPtr.TypeName, tempName);
+	}
+
+	/// Envelope-collapse construction of `String{managed: X, isAsciiFlag: A}` / `Character{managed: X}`.
+	/// See the method body: the result is a fresh slice-VIEW of the source, matching the pre-collapse
+	/// envelope's refcount shape. The allocation removed per String/Character is the separate
+	/// __ManagedMemory that literals and producing operations no longer emit.
+	private static void LowerFusedStringConstruction(
+	  MaxonStructLiteralOp op, bool isString,
+	  IrBlock<StandardOp> block,
+	  Dictionary<MaxonValue, StdValue> valueMap,
+	  Dictionary<string, string> varTypes,
+	  VarRegistry temps,
+	  Dictionary<int, string> inlineTargets,
+	  string scopeName) {
+
+		MaxonValue? managedVal = null;
+		MaxonValue? isAsciiVal = null;
+		foreach (var (fieldName, fieldVal) in op.FieldValues) {
+			if (fieldName == "managed") managedVal = fieldVal;
+			else if (fieldName == "isAsciiFlag") isAsciiVal = fieldVal;
+		}
+		if (managedVal == null)
+			throw new InvalidOperationException($"{op.TypeName} construction missing 'managed' field in '{scopeName}'");
+		if (valueMap[managedVal] is not StdHeapPtr srcHp)
+			throw new InvalidOperationException($"{op.TypeName} construction: 'managed' value %{managedVal.Id} is not a heap pointer in '{scopeName}'");
+		var srcVarName = srcHp.VarName!;
+
+		var resultVarName = inlineTargets.TryGetValue(op.Result.Id, out var it)
+			? it
+			: temps.CreateTemp("str", op.Result.Id, op.TypeName, OwnershipFlags.None);
+
+		// VIEW: a fresh record that shares the source's buffer (capacity=-1) and holds a reference
+		// to it (parent=source, incref source). This is the exact refcount shape of the pre-collapse
+		// envelope — a distinct object referencing the underlying bytes — so the ownership discipline
+		// balances unchanged, and copy-on-write protects the shared buffer against later mutation.
+		var viewPtr = (StdHeapPtr)EmitAlloc(block, isString ? StringStructSize : CharacterStructSize, op.TypeName, scopeName: scopeName);
+		EmitStore(block, viewPtr, resultVarName, varTypes);
+		var srcBuf = (StdI64)EmitStructFieldLoad(block, srcVarName, ManagedFieldBuffer, IrType.I64, varTypes);
+		var srcLen = (StdI64)EmitStructFieldLoad(block, srcVarName, ManagedFieldLength, IrType.I64, varTypes);
+		var negOne = new StdConstI64Op(-1);
+		block.AddOp(negOne);
+		var oneElem = new StdConstI64Op(1);
+		block.AddOp(oneElem);
+		var srcParent = (StdI64)EmitLoad(block, srcVarName, varTypes);
+		EmitInitManagedMemory(block, resultVarName, srcBuf, srcLen, negOne.Result, oneElem.Result, srcParent, varTypes);
+		EmitIncrefValue(block, srcParent, scopeName: scopeName);
+		if (isString) {
+			var (viewFlag, viewFlagType) = ResolveIsAsciiFlag(isAsciiVal, valueMap, block);
+			EmitStructFieldStore(block, viewFlag, resultVarName, StringFieldIsAscii, viewFlagType, varTypes);
+		}
+		valueMap[op.Result] = new StdHeapPtr(op.Result.Id, op.TypeName, resultVarName);
+	}
+
+	/// The isAsciiFlag value + its storage width for a String construction. Stored at its natural
+	/// width; the low byte is read back as the `bool` field. Defaults to 0 (conservative) if absent.
+	private static (StdValue Value, IrType Type) ResolveIsAsciiFlag(
+	  MaxonValue? isAsciiVal, Dictionary<MaxonValue, StdValue> valueMap, IrBlock<StandardOp> block) {
+		if (isAsciiVal != null && valueMap.TryGetValue(isAsciiVal, out var v)) {
+			return v is StdBool ? (v, IrType.I1) : (v, IrType.I64);
+		}
+		var zero = new StdConstI64Op(0);
+		block.AddOp(zero);
+		return (zero.Result, IrType.I64);
 	}
 
 	/// Converts an int-backed enum raw value to its ordinal via a select chain.
@@ -802,7 +864,7 @@ public static partial class MaxonToStandardConversion {
 			var managedTypeName = op.Result.TypeName;
 			var tempName = inlineTarget
 				?? temps.CreateTemp("slice", op.Result.Id, managedTypeName, OwnershipFlags.None);
-			var slicePtr = (StdHeapPtr)EmitAlloc(block, ManagedMemoryStructSize, managedTypeName, tag: "Slice", scopeName: _currentFuncName);
+			var slicePtr = (StdHeapPtr)EmitAlloc(block, FusedManagedRecordSize(managedTypeName), managedTypeName, tag: "Slice", scopeName: _currentFuncName);
 			EmitStore(block, slicePtr, tempName, varTypes);
 
 			var newBuffer = EmitRawAlloc(block, sliceByteSize, label: "slice.buf", scopeName: _currentFuncName);
@@ -887,7 +949,7 @@ public static partial class MaxonToStandardConversion {
 			var managedTypeName = op.Result.TypeName;
 			var tempName = inlineTarget
 				?? temps.CreateTemp("slice", op.Result.Id, managedTypeName, OwnershipFlags.None);
-			var slicePtr = (StdHeapPtr)EmitAlloc(block, ManagedMemoryStructSize, managedTypeName, tag: "Slice", scopeName: _currentFuncName);
+			var slicePtr = (StdHeapPtr)EmitAlloc(block, FusedManagedRecordSize(managedTypeName), managedTypeName, tag: "Slice", scopeName: _currentFuncName);
 			EmitStore(block, slicePtr, tempName, varTypes);
 
 			// Store buffer (pointer into parent's data) and length
@@ -1024,14 +1086,11 @@ public static partial class MaxonToStandardConversion {
 		var srcAddrVar = $"__mkchar_src_{op.Result.Id}";
 		EmitStore(block, srcAddrOp.Result, srcAddrVar, varTypes);
 
-		// Allocate outer Character struct, then ManagedMemory, then raw buffer
+		// Envelope collapse: ONE Character allocation (the record IS its own __ManagedMemory),
+		// plus the owned byte buffer. No separate __ManagedMemory record.
 		var charVarName = temps.CreateTemp("char", op.Result.Id, "Character", OwnershipFlags.None);
-		var charOuterPtr = (StdHeapPtr)EmitAlloc(block, 8, "Character", scopeName: _currentFuncName);
+		var charOuterPtr = (StdHeapPtr)EmitAlloc(block, CharacterStructSize, "Character", scopeName: _currentFuncName);
 		EmitStore(block, charOuterPtr, charVarName, varTypes);
-
-		var charManagedName = $"__char_managed_{op.Result.Id}";
-		var charManagedPtr = EmitAlloc(block, ManagedMemoryStructSize, "__ManagedMemory", scopeName: _currentFuncName);
-		EmitStore(block, charManagedPtr, charManagedName, varTypes);
 
 		// Reload len for buffer allocation (alloc clobbers registers)
 		var lenForAlloc = (StdI64)EmitLoad(block, lenVar, varTypes);
@@ -1053,17 +1112,14 @@ public static partial class MaxonToStandardConversion {
 		var finalLen = (StdI64)EmitLoad(block, lenVar, varTypes);
 		var finalBuf = (StdI64)EmitLoad(block, dstBufVar, varTypes);
 
-		// Store ManagedMemory fields
+		// Write the managed fields inline into the Character record. The buffer is freshly
+		// raw-alloc'd and owned, so capacity == length (owned mode: destructor frees it).
 		var elemSizeConst = new StdConstI64Op(1);
 		block.AddOp(elemSizeConst);
 		var charParentZero = new StdConstI64Op(0);
 		block.AddOp(charParentZero);
-		EmitInitManagedMemory(block, charManagedName, finalBuf, finalLen, finalLen, elemSizeConst.Result, charParentZero.Result, varTypes);
+		EmitInitManagedMemory(block, charVarName, finalBuf, finalLen, finalLen, elemSizeConst.Result, charParentZero.Result, varTypes);
 
-		// Store _managed heap pointer at offset 0 and incref it (Character now owns a reference)
-		var charManagedReload = EmitLoad(block, charManagedName, varTypes);
-		EmitStructFieldStore(block, charManagedReload, charVarName, 0, IrType.I64, varTypes);
-		EmitIncrefValue(block, (StdI64)charManagedReload, scopeName: _currentFuncName);
 		valueMap[op.Result] = new StdHeapPtr(charOuterPtr.Id, charOuterPtr.TypeName, charVarName);
 	}
 }

@@ -163,7 +163,7 @@ public class IrStructType : IrType {
   // than bound to a placeholder: "this promise has no error type" and "this promise's error
   // type is some stand-in" are different claims, and only the first one is true.
   public int OptionalTrailingTypeParamCount { get; set; }
-  public IrStructType(string name, List<IrStructField> fields, List<string>? associatedTypeNames = null, IEnumerable<string>? conformingInterfaces = null, Dictionary<string, long>? constParams = null, Dictionary<string, IrType>? typeParams = null, bool isTuple = false, Dictionary<string, List<string>>? whereConstraints = null, bool isInterfaceAlias = false) : base(name, ComputeSize(fields)) {
+  public IrStructType(string name, List<IrStructField> fields, List<string>? associatedTypeNames = null, IEnumerable<string>? conformingInterfaces = null, Dictionary<string, long>? constParams = null, Dictionary<string, IrType>? typeParams = null, bool isTuple = false, Dictionary<string, List<string>>? whereConstraints = null, bool isInterfaceAlias = false) : base(name) {
     Fields = fields;
     AssociatedTypeNames = associatedTypeNames ?? [];
     ConformingInterfaces = conformingInterfaces is null ? [] : [.. conformingInterfaces];
@@ -175,15 +175,35 @@ public class IrStructType : IrType {
     int offset = 0;
     foreach (var field in Fields) {
       field.Offset = offset;
-      // All fields are 8 bytes: scalars use 64-bit slots, struct fields store heap pointers
-      offset += 8;
+      offset += FieldSlotSize(field);
     }
+    // Minimum 8 bytes so zero-field structs can still be heap-allocated. Computed once here
+    // (as the original ComputeSize did) rather than per access.
+    _sizeInBytes = Math.Max(offset, 8);
   }
 
-  private static int ComputeSize(List<IrStructField> fields) {
-    // Minimum 8 bytes so zero-field structs can still be heap-allocated
-    return Math.Max(fields.Count * 8, 8);
-  }
+  private readonly int _sizeInBytes;
+
+  // The 40-byte __ManagedMemory embedded whole at offset 0 of a fused String/Character:
+  // buffer, length, capacity, element_size, parent_ptr. Matches ManagedMemoryStructSize
+  // in the lowering. The record IS its own __ManagedMemory (envelope-collapse change).
+  private const int InlineManagedMemoryBytes = 40;
+
+  // The `managed` field of a String/Character is stored inline (the __ManagedMemory
+  // embedded at offset 0), not as an 8-byte heap pointer, so that `isAsciiFlag` lands
+  // at offset 40 and the record's first 40 bytes ARE a valid __ManagedMemory. Detected
+  // by conformance so that e.g. StringIterator.managed (a plain pointer) is unaffected.
+  private bool IsInlineManagedField(IrStructField field) =>
+    field.Name == "managed"
+    && (ConformingInterfaces.Contains("BuiltinStringLiteral")
+        || ConformingInterfaces.Contains("BuiltinCharLiteral"));
+
+  // Storage slot a field occupies: 8-byte 64-bit slots (scalars inline, heap types as
+  // pointers) except the inline `managed` __ManagedMemory, which is embedded whole.
+  private int FieldSlotSize(IrStructField field) =>
+    IsInlineManagedField(field) ? InlineManagedMemoryBytes : 8;
+
+  public override int SizeInBytes => _sizeInBytes;
 
   // When stored as array elements, structs are heap pointers (8 bytes)
   public override int ElementSize => 8;

@@ -1616,17 +1616,11 @@ public static partial class MaxonToStandardConversion {
     IrBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes) {
-    // The interpolated String struct has _managed (a __ManagedMemory pointer) at field 0.
-    // We need two levels of dereference: String -> __ManagedMemory -> buffer.
-    // The buffer is null-terminated from LowerStringInterp.
+    // Envelope collapse: the interpolated String IS its __ManagedMemory, so the raw buffer
+    // pointer (a null-terminated C string from LowerStringInterp) is read straight off the
+    // value at offset 0 — no nested managed pointer to chase.
     var stringVarName = ResolveManagedVarName(op.MessageStruct, valueMap);
-    // Load field 0 of String = __ManagedMemory pointer
-    var managedPtr = (StdI64)EmitStructFieldLoad(block, stringVarName, 0, IrType.I64, varTypes);
-    // Store to temp so we can load fields from it
-    var managedTempVar = $"__panic_managed_{IrContext.Current.NextId()}";
-    EmitStore(block, managedPtr, managedTempVar, varTypes);
-    // Load field 0 of __ManagedMemory = raw buffer pointer (C string)
-    var buffer = (StdI64)EmitStructFieldLoad(block, managedTempVar, ManagedFieldBuffer, IrType.I64, varTypes);
+    var buffer = (StdI64)EmitStructFieldLoad(block, stringVarName, ManagedFieldBuffer, IrType.I64, varTypes);
     block.AddOp(new StdCallRuntimeOp("mrt_panic", [buffer], null));
   }
 
@@ -1916,6 +1910,11 @@ public static partial class MaxonToStandardConversion {
     Dictionary<string, IrType> typeDefs) {
     var structTypeName = (valueMap[managedArg] as StdHeapPtr)?.TypeName
       ?? throw new InvalidOperationException($"Managed arg %{managedArg.Id} has no TypeName in valueMap");
+    // A fused String/Character IS its own __ManagedMemory of UTF-8 BYTES. Its type carries an
+    // `Element` type param from `Iterable with Character`, but that is the grapheme it yields, NOT
+    // its buffer element — treating the bytes as Character pointers would incref raw text. Bytes.
+    if (IsFusedStringType(structTypeName) || IsFusedCharType(structTypeName))
+      return (MaxonValueKind.Integer, null, false, false, null, null);
     if (typeDefs.TryGetValue(structTypeName, out var typeInfo)
       && typeInfo is IrStructType structType
       && structType.TypeParams.TryGetValue("Element", out var elemType)) {

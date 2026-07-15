@@ -922,6 +922,18 @@ public static partial class MaxonToStandardConversion {
               if (module.TypeDefs[structLitOp.TypeName] is not IrStructType structType)
                 throw new InvalidOperationException($"StructLiteral type '{structLitOp.TypeName}' resolved to {module.TypeDefs[structLitOp.TypeName].GetType().Name} in func '{func.Name}'");
 
+              // Envelope collapse: a fused String/Character IS its __ManagedMemory. Construction
+              // does not allocate a fresh record — it aliases (or, for a bare source, views) the
+              // `managed` value. Intercept before the stack/heap generic paths, which would wrongly
+              // store the managed POINTER at offset 0.
+              if (structType.ConformingInterfaces.Contains("BuiltinStringLiteral")
+                  || structType.ConformingInterfaces.Contains("BuiltinCharLiteral")) {
+                LowerFusedStringConstruction(structLitOp,
+                  structType.ConformingInterfaces.Contains("BuiltinStringLiteral"),
+                  newBlock, valueMap, varTypes, temps, inlineTargets, func.Name);
+                break;
+              }
+
               // Stack allocation path: decompose struct into named field variables
               if (module.StackEligibleStructs.Contains(structLitOp.Result.Id)) {
                 // Stack-allocate: reserve contiguous stack space and use a pointer,
@@ -1355,6 +1367,15 @@ public static partial class MaxonToStandardConversion {
               // For struct-typed self fields, load the nested heap pointer and store in a temp var.
               // Cache the load so repeated references to the same self field reuse the temp var.
               string resolvedName;
+              // Fused String/Character: a bare `managed` reference IS `self` (the inline
+              // __ManagedMemory sits at offset 0), so it resolves to the receiver pointer itself,
+              // typed as the owner so construction can alias it as a 48/40-byte record.
+              if (structVarRef.VarName == "managed" && isStructInstanceMethod && selfStructType != null
+                  && (selfStructType.ConformingInterfaces.Contains("BuiltinStringLiteral")
+                      || selfStructType.ConformingInterfaces.Contains("BuiltinCharLiteral"))) {
+                valueMap[structVarRef.Result] = new StdHeapPtr(structVarRef.Result.Id, selfStructType.Name, "self");
+                break;
+              }
               if (IsSelfField(isStructInstanceMethod, selfStructType, structVarRef.VarName)) {
                 if (selfFieldCache.TryGetValue(structVarRef.VarName, out var cachedName)) {
                   resolvedName = cachedName;
@@ -1405,6 +1426,36 @@ public static partial class MaxonToStandardConversion {
                     }
                   }
                 }
+              }
+
+              // Fused String/Character: `self.managed` IS `self`. The managed __ManagedMemory
+              // is embedded at offset 0, so its address equals the receiver pointer — yield that
+              // pointer rather than loading a nested one. Typed as the owner (String/Character) so
+              // slice sizing and construction can tell it is a 48/40-byte record, not a bare 40-byte
+              // __ManagedMemory. Byte-level managed ops are element-type-agnostic, so this is safe.
+              if (parentStructType != null && fieldAccess.FieldName == "managed"
+                  && (parentStructType.ConformingInterfaces.Contains("BuiltinStringLiteral")
+                      || parentStructType.ConformingInterfaces.Contains("BuiltinCharLiteral"))) {
+                var managedTempName = temps.CreateTemp("managed", fieldAccess.Result.Id, parentTypeName!, OwnershipFlags.Borrowed);
+                var selfPtr = EmitLoad(newBlock, structName, varTypes);
+                EmitStore(newBlock, selfPtr, managedTempName, varTypes);
+                valueMap[fieldAccess.Result] = new StdHeapPtr(fieldAccess.Result.Id, parentTypeName!, managedTempName);
+                if (structName == "self" && !varTypes.ContainsKey(fieldAccess.FieldName)) {
+                  varNameToStructPrefix[fieldAccess.FieldName] = managedTempName;
+                }
+                break;
+              }
+
+              // Fused String/Character expose their inline __ManagedMemory fields (length, buffer,
+              // capacity, ...) at the same offsets, but the String/Character type itself declares
+              // only `managed`/`isAsciiFlag`. Resolve those fields against the op's declared parent
+              // type (__ManagedMemory), whose layout matches the embedded record byte-for-byte.
+              if (fieldDef == null && parentStructType != null
+                  && (parentStructType.ConformingInterfaces.Contains("BuiltinStringLiteral")
+                      || parentStructType.ConformingInterfaces.Contains("BuiltinCharLiteral"))
+                  && module.TypeDefs.TryGetValue(fieldAccess.TypeName, out var declaredMmDef)
+                  && declaredMmDef is IrStructType declaredMmStruct) {
+                fieldDef = declaredMmStruct.GetField(fieldAccess.FieldName);
               }
 
               if (fieldAccess.ResultKind == MaxonValueKind.Struct) {
@@ -2239,8 +2290,11 @@ public static partial class MaxonToStandardConversion {
                 if (valueMap.TryGetValue(a, out var mapped)) {
                   if (mapped is StdHeapPtr hp && hp.VarName != null) {
                     var typeName = hp.TypeName;
-                    // Load buffer from managed struct via heap pointer indirection
-                    if (TypeAliasInfo.IsManagedMemoryType(typeName, module.TypeAliasSources)) {
+                    // Load buffer from managed struct via heap pointer indirection. A fused
+                    // String/Character IS its own __ManagedMemory (buffer at offset 0), so it is
+                    // handled identically to a bare __ManagedMemory here.
+                    if (TypeAliasInfo.IsManagedMemoryType(typeName, module.TypeAliasSources)
+                        || IsFusedStringType(typeName) || IsFusedCharType(typeName)) {
                       // hp.VarName IS the __ManagedMemory heap pointer, buffer at offset 0
                       return (StdValue)(StdI64)EmitStructFieldLoad(newBlock, hp.VarName, ManagedFieldBuffer, IrType.I64, varTypes);
                     } else if (typeName == "__ManagedFile") {
@@ -2495,6 +2549,18 @@ public static partial class MaxonToStandardConversion {
     if (typeName is "__ManagedSocket" or "__ManagedDirectory" or "__ManagedFile") return;
 
     if (typeDef is IrStructType structType) {
+      // Envelope collapse: a fused String/Character IS its own __ManagedMemory (buffer@0,
+      // capacity@16, parent_ptr@32). Its destructor is the __ManagedMemory raw-buffer dispatch
+      // run on `self`: capacity==-1 → decref parent; ==-2 → nothing; >=0 → free buffer. The
+      // `managed` field must NOT be treated as a heap pointer (offset 0 is the buffer, not a ptr).
+      if (structType.ConformingInterfaces.Contains("BuiltinStringLiteral")
+          || structType.ConformingInterfaces.Contains("BuiltinCharLiteral")) {
+        _destructorRequests[typeName] = new DestructorRequest(typeName,
+          [(ManagedFieldBuffer, "raw_buffer", true)],
+          NeedsManagedElementCleanup: false);
+        return;
+      }
+
       var resolved = ResolveStructType(structType, typeDefs);
       bool isManagedMemory = TypeAliasInfo.IsManagedMemoryType(typeName, typeAliasSources);
       bool isManagedList = TypeAliasInfo.IsManagedListType(typeName, typeAliasSources);

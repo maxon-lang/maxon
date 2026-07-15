@@ -102,13 +102,11 @@ public static partial class MaxonToStandardConversion {
     Dictionary<string, string> varTypes) {
 
     var inputArg = tryCallOp.Args[0];
-    // Input is a String or Character managed struct - load _managed heap pointer, then buffer and length
+    // Envelope collapse: the String/Character IS its __ManagedMemory, so buffer and length are
+    // read straight off the value at offsets 0 and 8 — no nested managed pointer to chase.
     var inputStructName = ((StdHeapPtr)valueMap[inputArg]).VarName!;
-    var inputManagedPtr = (StdI64)EmitStructFieldLoad(block, inputStructName, 0, IrType.I64, varTypes);
-    var inputManagedVar = $"__frv_managed_{IrContext.Current.NextId()}";
-    EmitStore(block, inputManagedPtr, inputManagedVar, varTypes);
-    var inputBuf = (StdI64)EmitStructFieldLoad(block, inputManagedVar, ManagedFieldBuffer, IrType.I64, varTypes);
-    var inputLen = (StdI64)EmitStructFieldLoad(block, inputManagedVar, ManagedFieldLength, IrType.I64, varTypes);
+    var inputBuf = (StdI64)EmitStructFieldLoad(block, inputStructName, ManagedFieldBuffer, IrType.I64, varTypes);
+    var inputLen = (StdI64)EmitStructFieldLoad(block, inputStructName, ManagedFieldLength, IrType.I64, varTypes);
 
     var noMatchFlag = new StdConstI64Op(1);
     block.AddOp(noMatchFlag);
@@ -156,13 +154,11 @@ public static partial class MaxonToStandardConversion {
     VarRegistry temps) {
 
     var nameArg = tryCallOp.Args[0];
-    // Name is always a String managed struct - load _managed heap pointer, then buffer and length
+    // Envelope collapse: the String IS its __ManagedMemory, so buffer and length are read
+    // straight off the value at offsets 0 and 8 — no nested managed pointer to chase.
     var nameStructName = ((StdHeapPtr)valueMap[nameArg]).VarName!;
-    var nameManagedPtr = (StdI64)EmitStructFieldLoad(block, nameStructName, 0, IrType.I64, varTypes);
-    var nameManagedVar = $"__fn_managed_{IrContext.Current.NextId()}";
-    EmitStore(block, nameManagedPtr, nameManagedVar, varTypes);
-    var nameBuf = (StdI64)EmitStructFieldLoad(block, nameManagedVar, ManagedFieldBuffer, IrType.I64, varTypes);
-    var nameLen = (StdI64)EmitStructFieldLoad(block, nameManagedVar, ManagedFieldLength, IrType.I64, varTypes);
+    var nameBuf = (StdI64)EmitStructFieldLoad(block, nameStructName, ManagedFieldBuffer, IrType.I64, varTypes);
+    var nameLen = (StdI64)EmitStructFieldLoad(block, nameStructName, ManagedFieldLength, IrType.I64, varTypes);
 
     bool hasAssociatedValues = enumType.HasAssociatedValues;
     bool hasExtraArgs = tryCallOp.Args.Count > 1;

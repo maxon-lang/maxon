@@ -44,14 +44,10 @@ end 'main'
 ```
 
 ```mm-trace
-mm_alloc String #1 size=16
-mm_alloc __ManagedMemory #2 size=40
-mm_incref __ManagedMemory #2 rc=1
+mm_alloc String #1 size=48
 mm_incref String #1 rc=1
 mm_incref String #1 rc=2
 mm_decref String #1 rc=1
 mm_decref String #1 rc=0
-mm_decref __ManagedMemory #2 rc=0
-mm_free __ManagedMemory #2
 mm_free String #1
 ```

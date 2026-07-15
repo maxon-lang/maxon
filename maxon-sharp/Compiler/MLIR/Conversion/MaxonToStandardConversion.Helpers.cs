@@ -491,11 +491,35 @@ public static partial class MaxonToStandardConversion {
   private const int CursorFieldSourcePtr = 32;
   private const int CursorStructSize = 40;
 
-  // String struct field offsets (all fields are 8 bytes)
-  private const int StringFieldManaged = 0;
-  private const int StringFieldIsAscii = 8;
-  private const int StringStructSize = 16;
-  private const int CharacterStructSize = 8;
+  // Fused String/Character layout (envelope collapse): the record IS a __ManagedMemory
+  // (buffer@0, length@8, capacity@16, element_size@24, parent_ptr@32) plus, for String, a
+  // trailing isAsciiFlag@40. So `self.managed == self`, and the managed field offsets above
+  // apply to `self` directly. Character is exactly a __ManagedMemory (40 bytes, no flag).
+  private const int StringFieldIsAscii = 40;
+  private const int StringStructSize = 48;
+  private const int CharacterStructSize = 40;
+
+  /// True for a fused String type (conforms to BuiltinStringLiteral): a 48-byte record
+  /// whose first 40 bytes are a __ManagedMemory, with isAsciiFlag at offset 40.
+  private static bool IsFusedStringType(string? typeName) =>
+    typeName != null
+    && _resultModule!.TypeDefs.TryGetValue(typeName, out var td)
+    && td is IrStructType st && st.ConformingInterfaces.Contains("BuiltinStringLiteral");
+
+  /// True for a fused Character type (conforms to BuiltinCharLiteral): a 40-byte record
+  /// identical in layout to a __ManagedMemory.
+  private static bool IsFusedCharType(string? typeName) =>
+    typeName != null
+    && _resultModule!.TypeDefs.TryGetValue(typeName, out var td)
+    && td is IrStructType st && st.ConformingInterfaces.Contains("BuiltinCharLiteral");
+
+  /// Allocation size of a managed-memory-shaped record: a fused String is 48 bytes (trailing
+  /// isAsciiFlag), a fused Character 40, a bare __ManagedMemory 40. Used so a slice preserves
+  /// its source's shape/size (a slice of a String is itself a 48-byte String).
+  private static int FusedManagedRecordSize(string? typeName) =>
+    IsFusedStringType(typeName) ? StringStructSize
+    : IsFusedCharType(typeName) ? CharacterStructSize
+    : ManagedMemoryStructSize;
 
   /// Store all five fields of a __ManagedMemory struct.
   private static void EmitInitManagedMemory(
