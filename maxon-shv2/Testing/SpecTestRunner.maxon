@@ -86,6 +86,11 @@ let PathSplitHalves = 2
 // Compiler output is line-oriented — one diagnostic, one line — and the renumbering walks it that way.
 let LineSeparator = "\n"
 
+// Where a CPU-fault panic line stops being a claim and starts being an address. See
+// `stripFaultRipSuffix`. Named beside the other format contracts because it is one: the
+// runtime writes this exact spelling and the runner recognizes exactly it.
+let FaultRipSuffixMarker = " at rip=0x"
+
 // The offset for a file whose line numbers ARE the fragment's — every single-file test, where the
 // compiled file IS the fragment. Named because it is a real value in the mapping, not an absence.
 let NoLineOffset = 0 as LineIndex
@@ -506,8 +511,11 @@ end 'isSafeRelativeName'
 // `--update-required` regenerates instead of comparing. That is the one door through which a change
 // enters, and it is deliberately a door you have to open: the diff is the review.
 function checkTestFragment(fragmentDir FilePath, test SpecTest, compile ProcessCapture, staged StagedTest, irPath FilePath, updateRequired bool) returns TestOutcome
+	// The fragment pins the CODE, so a run expectation contributes only its exit code and
+	// its IR — a pinned ```stderr is an assertion about the RUN, checked there, and adding
+	// it here would move every golden for nothing.
 	let content = match test.expectation 'e'
-		exitCode(expected) gives buildExitCodeFragment(test, expected: expected, irPath: irPath)
+		run(expected, _) gives buildExitCodeFragment(test, expected: expected, irPath: irPath)
 		compilerError gives buildErrorFragment(test, compile: compile, staged: staged)
 	end 'e'
 
@@ -600,7 +608,7 @@ end 'buildErrorFragment'
 
 function checkExpectation(test SpecTest, specName String, compile ProcessCapture, staged StagedTest, exePath FilePath) returns TestOutcome
 	return match test.expectation 'e'
-		exitCode(expected) gives checkExitCode(expected, compile: compile, exePath: exePath)
+		run(expected, stderr) gives checkRun(expected, stderr: stderr, compile: compile, exePath: exePath)
 		compilerError(text) gives checkCompilerError(text, specName: specName, testName: test.name, compile: compile, staged: staged)
 	end 'e'
 end 'checkExpectation'
@@ -632,9 +640,10 @@ function checkCompilerError(expectedText String, specName String, testName Strin
 	return TestOutcome.fail("compiler-error mismatch\n    expected: {expected}\n    actual:   {actual}")
 end 'checkCompilerError'
 
-// An ```exitcode test: the compile MUST succeed, then the produced exe is
-// spawned and its process exit code compared to the expected value.
-function checkExitCode(expected ExitCodeValue, compile ProcessCapture, exePath FilePath) returns TestOutcome
+// A RUN test (an ```exitcode block, plus the ```stderr block that may accompany it): the
+// compile MUST succeed, then the produced exe is spawned and BOTH halves of the
+// expectation are checked against that one execution — its exit code, and what it printed.
+function checkRun(expected ExitCodeValue, stderr SpecStderr, compile ProcessCapture, exePath FilePath) returns TestOutcome
 	if compile.exitCode != 0 'compileFailed'
 		return TestOutcome.fail("compilation failed (exit {compile.exitCode}): {compile.stderr.trim()}")
 	end 'compileFailed'
@@ -643,12 +652,74 @@ function checkExitCode(expected ExitCodeValue, compile ProcessCapture, exePath F
 		return TestOutcome.fail("program spawn failed: {e.displayReason()}")
 	end 'runSpawnFailed'
 
-	if run.exitCode == expected 'matched'
+	if run.exitCode != expected 'exitMismatch'
+		return TestOutcome.fail("exit code mismatch: expected {expected}, got {run.exitCode}")
+	end 'exitMismatch'
+
+	return checkRunStderr(stderr, actual: run.stderr)
+end 'checkRun'
+
+// The stderr half of a run expectation.
+//
+// The `unpinned` arm is NOT "ignore stderr" — it asserts the program printed NOTHING, which
+// is what a spec that declines to mention stderr is saying about a program that should have
+// no diagnostic to print. The C# reference draws the line in exactly this place
+// (`TestRunner.cs:920` — "Unexpected stderr output" when `Stderr == null` and the stream is
+// non-blank), and the alternative is worse than lax: a panic regression in any of the specs
+// that pin only an exit code would print its diagnostic into a stream nothing reads, and the
+// suite would stay green while the compiler started faulting.
+function checkRunStderr(stderr SpecStderr, actual String) returns TestOutcome
+	let cleaned = stripFaultRipSuffix(actual).trim()
+	return match stderr 'pin'
+		unpinned gives checkStderrSilent(cleaned)
+		pinned(text) gives checkStderrMatches(text.trim(), actual: cleaned)
+	end 'pin'
+end 'checkRunStderr'
+
+// A program whose spec pins no stderr must print none.
+function checkStderrSilent(actual String) returns TestOutcome
+	if actual.isEmpty() 'silent'
+		return TestOutcome.pass
+	end 'silent'
+	return TestOutcome.fail("unexpected stderr output:\n{actual}")
+end 'checkStderrSilent'
+
+// A program whose spec pins stderr must print exactly it.
+function checkStderrMatches(expected String, actual String) returns TestOutcome
+	if actual == expected 'matched'
 		return TestOutcome.pass
 	end 'matched'
+	return TestOutcome.fail("stderr mismatch\n    expected: {expected}\n    actual:   {actual}")
+end 'checkStderrMatches'
 
-	return TestOutcome.fail("exit code mismatch: expected {expected}, got {run.exitCode}")
-end 'checkExitCode'
+// Drop the ` at rip=0xHEX diag_base=0xHEX` tail a CPU-fault panic line carries.
+//
+// The tail is the whole point of the tag and the whole reason it cannot be compared: it names
+// the faulting instruction and the image's load address, which is what lets an operator
+// recover the ASLR slide and resolve the fault against `llvm-objdump -d` — and which is
+// therefore different on every run of every build. Everything a spec DOES claim sits to the
+// left of it. Mirrors the C# reference's `StripFaultRipSuffix` (`TestRunner.cs:1427`), which
+// is why the corpus's ```stderr blocks are portable byte-for-byte.
+//
+// A no-op on a line without the marker, so it costs nothing on the 279 tests that never fault.
+function stripFaultRipSuffix(text String) returns String
+	if not text.contains(FaultRipSuffixMarker) 'noFault'
+		return text
+	end 'noFault'
+
+	var out = LineJoiner.create()
+	for line in text.split(LineSeparator) 'eachLine'
+		out.push(stripFaultRipFromLine(line))
+	end 'eachLine'
+	return out.build()
+end 'stripFaultRipSuffix'
+
+// One line, cut at the fault tag. Unchanged when it carries none — only the panic LINE does,
+// so every other line of a stack trace passes through whole.
+function stripFaultRipFromLine(line String) returns String
+	let cut = try line.findFirst(FaultRipSuffixMarker) otherwise return line
+	return line.slice(line.startIndex(), endIndex: cut)
+end 'stripFaultRipFromLine'
 
 // Write the compiled fragment to `fragmentPath` — `fragmentSource` and nothing else, so the bytes
 // on disk are the bytes the golden shows (see `fragmentSource`).

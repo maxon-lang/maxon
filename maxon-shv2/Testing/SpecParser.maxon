@@ -88,6 +88,19 @@ let TestMarkerEnd = " -->"
 let SourceFence = "```maxon"
 let ExitCodeFence = "```exitcode"
 let CompilerErrorFence = "```maxoncstderr"
+
+// The RUN's stderr — what the COMPILED PROGRAM printed, not what the compiler said about
+// it. That distinction is the whole reason this is a separate fence from
+// `CompilerErrorFence` and not a spelling of it: `maxoncstderr` asserts the compile FAILED
+// and pins the diagnostic, while this asserts the compile SUCCEEDED, the program RAN, and
+// pins what it wrote — the panic path. 32 blocks in `/specs` use it.
+//
+// It is order-INDEPENDENT of the other three: "```stderr" is neither a prefix nor an
+// extension of "```maxon" / "```maxoncstderr" / "```exitcode", so unlike the
+// maxoncstderr-before-maxon rule above, no arm can swallow it and it can swallow none.
+// (Checked explicitly rather than assumed, because the fence order is exactly the kind of
+// thing that is true until someone edits a literal.)
+let RuntimeStderrFence = "```stderr"
 let FenceClose = "```"
 
 // The multi-file marker, and the ONE line the `// Test: <name>` fragment header adds above a
@@ -120,12 +133,31 @@ export typealias DisabledTestCount = int(0 to u64.max)
 // runner names the `SpecExpectation.exitCode` payload in its own signatures.
 export typealias ExitCodeValue = int(i64.min to i64.max)
 
+// What a spec pins about the RUN's stderr. A UNION, not an empty `String`: "this spec
+// says nothing about stderr" and "this spec says stderr is EMPTY" are different claims,
+// and an empty String cannot tell them apart — it would be exactly the sentinel the
+// project forbids. Most tests pin nothing; the panic specs pin the diagnostic.
+export union SpecStderr
+	unpinned
+	pinned(text String)
+end 'SpecStderr'
+
 // The expected outcome of one test. A UNION (not a struct with presence flags)
 // so a test asserts EXACTLY one of two mutually exclusive things — the compiled
-// program exits with `value`, OR the compiler rejects the source with `text` (a
-// ```maxoncstderr block) — with no sentinel "unset" state.
+// program RAN, OR the compiler rejected the source with `text` (a ```maxoncstderr
+// block) — with no sentinel "unset" state.
+//
+// The `run` arm carries BOTH halves of a run expectation, because a ```stderr block does
+// not replace an ```exitcode block, it ACCOMPANIES one: `specs/safety.md` asserts that
+// `100 / zero` exits 1 AND prints a panic, and those are one indivisible claim about one
+// execution. Modelling stderr as a third, parallel arm would let a test assert an exit
+// code or a stderr but never both, which is precisely what every panic spec in the corpus
+// does assert. The C# reference says the same thing with independent nullable fields
+// (`SpecParser.cs:171` — a success expectation has optional ExitCode/Stdout/Stderr,
+// mutually exclusive with a compile-error expectation); this is that shape with the
+// "unset" states the reference leaves as `null` made unrepresentable.
 export union SpecExpectation
-	exitCode(value ExitCodeValue)
+	run(exitCode ExitCodeValue, stderr SpecStderr)
 	compilerError(text String)
 end 'SpecExpectation'
 
@@ -343,11 +375,24 @@ end 'extractTests'
 // were seen before the next marker / section boundary (the "marker + source +
 // expected, contiguous" active-test contract) — an incomplete run of blocks is not
 // a runnable test and is silently left out rather than half-built.
+//
+// The scan reads the test's WHOLE block run and builds the expectation once at the end,
+// rather than returning at the first expected block it recognizes. It has to: a run
+// expectation is spread across TWO fences (```exitcode then ```stderr — see
+// `SpecExpectation`), so a scan that returned at the exitcode would leave the stderr
+// block to the outer loop, which — finding no marker in it — would walk over it line by
+// line and silently drop the assertion. A spec that pins a panic would then pass on the
+// exit code alone, which is the one failure mode a panic spec exists to catch.
 function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine String, tests SpecTestArray, active bool) returns LineIndex
 	let lineCount = lines.count()
 	let name = markerValue(markerLine)
 	var source = ""
 	var haveSource = false
+	var compilerError = ""
+	var haveCompilerError = false
+	var exitCode = 0 as ExitCodeValue
+	var haveExitCode = false
+	var stderr = SpecStderr.unpinned
 	var i = markerIndex + 1
 
 	while i < lineCount 'blocks'
@@ -365,25 +410,34 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 		end 'nextMarker'
 
 		// CompilerError MUST be checked before Source: "```maxoncstderr" also
-		// startsWith "```maxon", so the source arm would otherwise consume it.
+		// startsWith "```maxon", so the source arm would otherwise consume it. The
+		// runtime-stderr fence is order-independent of all three (see RuntimeStderrFence).
 		if line.startsWith(CompilerErrorFence) 'compilerErr'
 			let block = readFence(lines, openIndex: i)
-			if haveSource and active 'errComplete'
-				tests.push(SpecTest.create(name, source: source, expectation: SpecExpectation.compilerError(block.text.trim())))
-			end 'errComplete'
-			return block.nextIndex
+			compilerError = block.text.trim()
+			haveCompilerError = true
+			i = block.nextIndex
+			continue
 		end 'compilerErr'
 
-		if line.startsWith(ExitCodeFence) 'exitCode'
+		if line.startsWith(RuntimeStderrFence) 'runtimeStderr'
+			let block = readFence(lines, openIndex: i)
+			stderr = SpecStderr.pinned(block.text.trim())
+			i = block.nextIndex
+			continue
+		end 'runtimeStderr'
+
+		if line.startsWith(ExitCodeFence) 'exitCodeBlock'
 			let block = readFence(lines, openIndex: i)
 			let parsed = try int.fromString(block.text.trim()) otherwise 'badExitCode'
-				return block.nextIndex
+				i = block.nextIndex
+				continue
 			end 'badExitCode'
-			if haveSource and active 'exitComplete'
-				tests.push(SpecTest.create(name, source: source, expectation: SpecExpectation.exitCode(parsed)))
-			end 'exitComplete'
-			return block.nextIndex
-		end 'exitCode'
+			exitCode = parsed
+			haveExitCode = true
+			i = block.nextIndex
+			continue
+		end 'exitCodeBlock'
 
 		if line.startsWith(SourceFence) 'source'
 			let block = readFence(lines, openIndex: i)
@@ -395,6 +449,27 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 
 		i = i + 1
 	end 'blocks'
+
+	// A DISABLED case has now consumed exactly the blocks a live one would have, which was
+	// the entire point of scanning it; it contributes no test. A case with no source block
+	// is not runnable either.
+	if not active or not haveSource 'notRunnable'
+		return i
+	end 'notRunnable'
+
+	// A ```maxoncstderr block WINS over an ```exitcode one: the two are mutually exclusive,
+	// and a spec carrying both is asserting the compile FAILS — which no exit code of the
+	// program it never produced could also be true of.
+	if haveCompilerError 'rejected'
+		tests.push(SpecTest.create(name, source: source, expectation: SpecExpectation.compilerError(compilerError)))
+		return i
+	end 'rejected'
+
+	// An ```exitcode block, plus whatever ```stderr accompanied it, is ONE claim about ONE
+	// execution.
+	if haveExitCode 'ran'
+		tests.push(SpecTest.create(name, source: source, expectation: SpecExpectation.run(exitCode, stderr: stderr)))
+	end 'ran'
 
 	return i
 end 'scanTestFromMarker'
