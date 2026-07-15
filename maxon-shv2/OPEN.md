@@ -440,8 +440,49 @@ It runs over `__module_init` **and nowhere else**, and every global's initialize
 shared block** — which is exactly why the blast radius is another file's global, and why this looked like
 spooky action at a distance.
 
-### 18. ⭐⭐ P1.0d.4 (FLOATS) — the design, and FOUR contract errors caught by reading the code
-**IN PROGRESS on branch `p10d4-floats` (`fd9ef0e51`, specs only — NOT merged).** **RED is banked: 317/19**,
+### ~~18. ⭐⭐ P1.0d.4 (FLOATS) — the design, and FOUR contract errors caught by reading the code~~ ✅ DONE 2026-07-15, MERGED — **and the contract was wrong TEN times, not four**
+
+> **✅ SHIPPED: `specs-shv2` 317/19 → 355/0, bootstrap 3004/0, 38 goldens added and ZERO modified.**
+> The design below survived contact — **one register enum; class-agnostic OPS, class-dispatched
+> ENCODERS; the class column travels FORWARD from the lowering.** What did not survive is the *count*.
+>
+> **SIX MORE contract errors, all mine, and they share ONE shape the four below already hinted at:**
+> **I specified TYPE surfaces and not OPERATIONS.** `operandType` with no ops consuming it. A register
+> enum with no instructions. A float type with no conversions — **`trunc` had 0 hits in shv2**.
+> *Types are what a design looks like written down; operations are what it looks like when it RUNS.*
+> A contract with only the first compiles, passes its gates, and blocks every agent at its first edit.
+>
+> - **#5 no SSE `TargetOp`s** — an encoder needs an op to dispatch from. Adding the band forced **15
+>   exhaustive matches across 6 files**: cross-cutting by design, so it cannot be split by owner.
+> - **#6 the brief contradicted the spec** on the two-jump lowering (see the ⚠ below — the spec was right).
+> - **#7 `movsdRegRip` is NOT rematerializable.** I asserted it must be; `opIsConstMaterialization` asks
+>   a NARROWER question — *"can `constValueOfDef` + a `movRegImm` rebuild it?"* — and `leaRegGlobal` is
+>   already a priced `false` for the identical reason (a RIP relocation; `true` would PANIC).
+> - **#8 no conversion band** (`siToFp`/`fpToSi`), so a float could not enter or leave the float domain.
+> - **#9 `classPoolSize` returned the FILE's width (16) where the POOL's (14) was meant** — and the
+>   comment I wrote directly above it says *"an int's **14** allowed registers"*. **The worst one.**
+> - **#10 `ValueClassColumn` "indexed by ValueId" is only well-defined PER FUNCTION** — `IrValueId.maxon`
+>   says so outright. Two agents caught it independently.
+>
+> ⭐⭐ **AND THE ONE THAT MATTERS MOST: `Parser.mintPhi` hardcoded `argType: i64`, and its comment on
+> `main` NAMED THIS RUNG** — *"the scaffold the float (XMM) register class will need at P1.0d.4, and
+> that is when it acquires **a consumer and a reason to be right**."* **The rung gave it the consumer
+> and not the reason.** `var f = 0.0` in a loop crashed the emitter. Three nets missed it: the contract
+> (I never read the comment addressed to me), the AUTHORED spec (`float-compare-branch.md` puts phis on
+> a float compare's *edges*, but the values they carry are **ints** — a float-*typed* phi had zero
+> coverage), and the instrument (blind to floats for five rungs). **Only fixing the instrument found it.**
+> ⇒ **READ THE COMMENT THAT NAMES YOUR RUNG.**
+>
+> ⚠ **The rung also shipped `0.0 - x` float negation with ZERO coverage** — the first test anywhere is
+> `unary-negation.md`, found only by porting the corpus. **Two of the rung's own features were untested
+> until someone went looking.** ⇒ **Step 0 is the SPEC PORT LIST, and it is the coordinator's**
+> (now in the rung skill).
+>
+> **Deferred, named:** Wave 2's float ABI (float param/return — **measured**: the callee cannot receive
+> one); `floor`/`ceil`/`round` (SSE4.1); float const-folding (needs software IEEE-754; v1 has none);
+> **`f64→f32` still coerces implicitly** — the same lossy narrowing, unresolved (see §19).
+
+**~~IN PROGRESS on branch `p10d4-floats`~~ — MERGED.** ~~**RED is banked: 317/19**,~~
 every failure `E2004: Expected expression but got 'float literal'` — **the lexer makes the token, the parser
 has no arm.** `NumberParsing.parseFloatBits` already returns IEEE bits **as a `ParsedInt`**, so
 `MaxonOp.literal(value, valueType)` and `StdOp.const` carry a float **with no new op**; `StdType.f64` /
@@ -524,7 +565,89 @@ rematerialize**, so a float const must remat to `movsd reg,[rip+const]`.
 
 ---
 
+### 19. ⭐ `/specs` CONTRADICTED ITSELF on lossy narrowing — half fixed, half OPEN
+
+**The through-line — ONE FACT WRITTEN DOWN TWICE — is in the CORPUS, not just a compiler.** Found
+2026-07-15 at P1.0d.4, by the **user**, against my own (wrong) conclusion:
+
+| Spec | Said |
+|---|---|
+| `specs/type-casting.md` | *"**Lossy conversions are not allowed.**"* `5.0 as int` ⇒ **E3009 — "use trunc/round/floor/ceil instead"** |
+| `specs/implicit-type-conversion.md` | a doc TABLE: `float → int: **Truncate toward zero**`. `takeInt(3.7)` ⇒ **exitcode 3** |
+
+⇒ Maxon **rejected an explicit `5.0 as int`, telling you to write `trunc()` — then silently performed
+that exact truncation implicitly.** The explicit path demands you say what you mean; the implicit path
+did it behind your back. **`trunc()` already existing is the argument**: silent truncation gives the
+language two ways to narrow, one invisible, and makes the explicit one redundant exactly where the
+silent one fires.
+
+**✅ FIXED (float→int only), all three: spec + shv2 + bootstrap.** Rule drawn **WHOLE** — a coercion
+site is anywhere a value meets a declared type, so `return f` too, **and that mattered: `return f`
+panicked the x64 emitter**, one site over from the call a narrower fix would have covered. **E3009
+reused**, not a new code. **`int→float` is untouched** — widening, lossless, and `type-casting.md`
+blesses it.
+
+**⭐ The bootstrap DISAGREED WITH ITSELF, which is what proves it was a bug and never a design:**
+`CoerceValueToExpectedKind` (return + assignment) had **always** rejected float→int via
+`IsWideningCastSafe`; `ConvertArgToParamType` carried its own table that truncated. **One conversion,
+two rules, one compiler — only the call path was wrong.**
+
+**⚠ STILL OPEN — `f64 → f32` coerces implicitly in BOTH compilers.** Also lossy, also silent, also
+absent from `type-casting.md`'s E3009 list. It is float→**float**, so it sat outside the ruling and was
+flagged rather than swept in. **It is the same bug wearing a different pair of types.**
+
+**⚠ ALSO OPEN — three rules now answer three questions about one pair of tags** (`typesAgree` = may
+they meet · `checkDeclaredType` = may a value meet a declared type · `comparableOperands` = may they be
+compared). **Deliberately NOT unified — merging any two collapses them into each other's bugs**
+(1+3 kills `5 + 2.0`; 2+3 re-legalises `f > i`). Verified distinct by the review. **Do not "simplify".**
+
+⚠ **METHOD, and it is the reusable part:** I concluded "canonical, implement it" from **the test's NAME**
+(`float-to-int-param-truncates`) plus *"the bootstrap passes it"* — **before reading the expectation**.
+**A compiler passing a spec proves only that it implements what the spec says, contradiction included.**
+**A test NAME is the thing most likely to be a lie once behaviour changes.** ⇒ **Read the EXPECTATION,
+and when two specs could cover one rule, GREP FOR THE OTHER ONE.** The user said *"I'm pretty sure the
+spec tests are clear about this"* and was right — the clarity was in a file I had never opened.
+
+### 20. ⚠ arm64 / wasm fragments cannot be regenerated on a Windows host — STRUCTURAL
+
+`spec-test --target=arm64-macos` **crashes** (`Win32Exception 193: not a valid application for this OS
+platform`): the runner cross-compiles and then tries to **EXECUTE**. Reproduced identically on
+`while-loops`, so it is **not** float-specific and not P1.0d.4's.
+
+⇒ **A compile-ERROR test still emits its fragment** (never executed), which is why
+`float-to-int-param-rejected` has arm64/wasm fragments while the executing
+`float-to-int-param-explicit-trunc` does not. P1.0d.4 left `specs/fragments-{arm64-macos,wasm32-wasi}/`
+short by exactly that one file, and **hand-writing it was refused** — it needs an on-target run.
+Same class as [[project_arm64_pending_verification]].
+
 ## 🔧 Instrument & tooling
+
+### ~~7. The corpus is blind to the feature just landed~~ ✅ FIXED for floats at P1.0d.4 — after **FIVE** rungs, and it was hiding a compiler crash
+
+**`ScaleCorpus` printed its own blind spot** — *"NOT GENERATED — a codegen change to any of these is
+INVISIBLE here (structural blind spot): … **float arithmetic**; …"* — so a float rung measured
+**byte-identical**, and that zero was **not a result**: it was the integer path not regressing, and no
+evidence whatever about floats.
+
+**The consequence nobody had drawn: the rung process GATES THE OPTIMIZER on `scale-test`.** An
+optimizer told to hunt superlinear algorithms *"gated objectively by scale-test"* had **no instrument
+for the code the rung just wrote**. ⇒ **Extending the corpus is a PRECONDITION of the optimize step.**
+
+⚠ **This is NOT "touching the instrument to make a number look better"** (the forbidden thing —
+`regalloc:liveness` was once exempted from a check to stop it complaining). **Making the instrument SEE
+is the opposite of silencing one it has.** The distinction is the whole entry.
+
+**✅ P1.0d.4 grew `floatOps` + `floatSpill` knobs that DOUBLE like every other** (so the rung-over-rung
+ratio IS the growth), covering float arith, both compare forms, float phis, promotion, `trunc`, and **4
+floats live across a call** (`allowed = ∅` ⇒ Wave 1's forced spill). Int knobs byte-identical, so the
+log's columns stay readable downwards. **The FIRST thing it saw was a compiler crash** (`var f = 0.0` in
+a loop — see §18's `mintPhi`). Floats are now **22.9%** of allocations at rung 5; nothing superlinear
+(≤32.01× across a 32× ladder).
+
+⚠ **The pattern was logged at 3× and reached 5× before anyone fixed the tool** — because everyone who
+hit it treated it as a footnote about *their* measurement rather than a defect in *the instrument*.
+**The corpus is grown to expose the LAST bug, so it is blind to the NEXT one.** The remaining blind
+spots are still printed in its manifest: **read them before trusting a zero.**
 
 ### 6. The scale instrument keeps silently dying on its own leftovers — **TWICE now**
 - `compileRung` wrote `metrics.tsv` / `rung.exe` **into the directory it was measuring** ⇒ cold and warm
