@@ -4,7 +4,7 @@
 // unresolved type, and keeps the `funcReturnTypes` registry in sync with the
 // resolved module so SemanticCheck reads resolved types.
 //
-// A named type resolves through TWO sources, in order:
+// A named type resolves through THREE sources, in order:
 //
 //   1. The BUILTIN alias `ExitCode`, recognized by NAME — WITHOUT loading the stdlib
 //      (full stdlib type resolution is deferred until programs call stdlib functions).
@@ -16,9 +16,14 @@
 //      creates no nominal distinction. The range itself is not consulted here — a
 //      narrowing conversion into a ranged alias is checked at run time, which is a
 //      later milestone.
+//   3. The project's DECLARED STRUCT registry — every `type Point` the parser declared. It
+//      resolves to `MaxonType.structRef(id)`, KEEPING the name id, which is the opposite of
+//      what an alias does and is the whole distinction between the two: an alias creates no
+//      nominal identity, and a `type` is nothing BUT one. `Point` and `Rect` are different
+//      types however identical their fields, and the id is what says so.
 //
-// A named type in neither is a USER error (a typo, or a type this slice does not have),
-// not a compiler-invariant violation, and it reports E3011 — unpositioned, because the
+// A named type in none of the three is a USER error (a typo, or a type this slice does not
+// have), not a compiler-invariant violation, and it reports E3011 — unpositioned, because the
 // parser records no source span for a type REFERENCE (only ops and parameter NAMES carry
 // one). See `resolveNamedType` for why an unpositioned diagnostic is the right trade and
 // what positioning it would cost.
@@ -85,6 +90,14 @@ function resolveType(project Project, t MaxonType) returns MaxonType
 		exitCode then return t
 		named(id) then return resolveNamedType(project, id: id)
 		unresolved then panic("resolveTypes: `unresolved` reached type resolution — the parser emits no unresolved placeholders at M1")
+		// Already resolved, and by the PARSER: `Parser.parseTypeReference` mints a `structRef`
+		// directly for `Self` (and for the enclosing type's own name) inside a `type` body, because
+		// that mapping is SYNTACTIC — it needs the enclosing declaration and no registry, so the
+		// token sweep and the real parse can both make it and cannot drift. This arm is the OTHER
+		// half of that: what `resolveNamedType` produces below for a `type` named from outside its
+		// own body, arriving back here through a second `resolveTypes` over a re-resolved signature
+		// would find it idempotent. Nothing to do either way.
+		structRef then return t
 	end 'r'
 end 'resolveType'
 
@@ -94,7 +107,26 @@ function resolveNamedType(project Project, id TypeNameId) returns MaxonType
 		return MaxonType.exitCode
 	end 'isExitCode'
 
-	// A name in NEITHER source is a USER error — a typo (`Scor` for `Score`), a bare
+	// ⭐ A DECLARED `type` KEEPS ITS NAME ID, and that one line is the difference between the two
+	// registries this function consults. An alias RESOLVES AWAY — `Score` becomes `int`, and
+	// nothing downstream can tell it was ever written — because an alias creates no nominal
+	// distinction. A struct is nothing but a nominal distinction: `p.x` needs to know WHICH type
+	// `p` is to find `x`'s slot (`Parser.emitFieldLoad` reads the id back out and asks
+	// `structOf`), and two structs with identical fields are still two types. So the id survives,
+	// carried by `structRef`.
+	//
+	// It is tested BEFORE the alias registry only for readability: a name cannot be both — a
+	// `typealias` and a `type` of one name would be a duplicate declaration, and (⚠) that is NOT
+	// yet diagnosed. It is a real gap, it belongs with the duplicate-`type` gap `commitStructTypes`
+	// records, and neither is this rung's.
+	// `contains`, not a fetch: the layout itself is not wanted here. Resolution answers WHICH TYPE
+	// this name is, and the answer is the id the reference already carries. The fields are the
+	// parser's question, asked of the signature index at the use site.
+	if project.structTypes.contains(name) 'isStruct'
+		return MaxonType.structRef(id)
+	end 'isStruct'
+
+	// A name in NONE of the three sources is a USER error — a typo (`Scor` for `Score`), a bare
 	// sized type (`u8` is not a type in Maxon; a ranged alias over it is), or a
 	// user-defined type this slice does not have. It panicked until now, which was a
 	// tolerable bargain only while `ExitCode` was the sole legal named type and no

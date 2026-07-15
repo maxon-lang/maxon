@@ -96,8 +96,8 @@ export type TypeNameRemap
 	end 'apply'
 end 'TypeNameRemap'
 
-// Rewrite the one named-type reference a `MaxonType` may carry through a remap.
-// Only the `named` arm is id-bearing; every other arm passes through unchanged.
+// Rewrite the named-type references a `MaxonType` may carry through a remap.
+// Only the `named` and `structRef` arms are id-bearing; every other arm passes through unchanged.
 // Shared by the artifact's function-signature and registry rewrites at merge.
 export function remapMaxonType(t MaxonType, remap TypeNameRemap) returns MaxonType
 	return match t 'r'
@@ -107,6 +107,11 @@ export function remapMaxonType(t MaxonType, remap TypeNameRemap) returns MaxonTy
 		exitCode gives t
 		named(id) gives MaxonType.named(remap.apply(id))
 		unresolved gives t
+		// A struct reference carries a name id for the same reason `named` does — it is the key
+		// `StructLayoutMap` is read by — so it moves through a merge for the same reason and by the
+		// same rule. Missing it would leave a `Point` reference in a second file indexing the
+		// project interner at whatever name happened to take that id first.
+		structRef(id) gives MaxonType.structRef(remap.apply(id))
 	end 'r'
 end 'remapMaxonType'
 
@@ -117,3 +122,22 @@ export function remapMaxonReturnType(rt MaxonReturnType, remap TypeNameRemap) re
 		value(inner) gives MaxonReturnType.value(remapMaxonType(inner, remap: remap))
 	end 'r'
 end 'remapMaxonReturnType'
+
+// Rewrite a declared struct's field types through a remap, IN PLACE.
+//
+// Two callers reconcile a file's struct layouts into a bigger table — `mergeArtifact`'s
+// `remapArtifact` (into `Project`) and `ProgramSignatures.foldFile` (into the signature index) —
+// and they must not come to disagree about what a field's declared type means. One mechanism, two
+// callers, exactly as `foldInto` + `remapMaxonReturnType` already are for a signature.
+//
+// It mutates rather than returning a copy because `StructLayout` is a heap `type` and both callers
+// own the array they are folding: rebuilding the record would allocate a second layout per declared
+// type to hold data neither caller keeps. The struct's NAME needs no remap — it is a `ByteArray`,
+// and names travel (see SignatureIndex's header on the id problem).
+export function remapStructLayoutFieldTypes(layout StructLayout, remap TypeNameRemap)
+	var remapped = MaxonTypeArray.create()
+	for fieldType in layout.fieldTypes 'each'
+		remapped.push(remapMaxonType(fieldType, remap: remap))
+	end 'each'
+	layout.fieldTypes = remapped
+end 'remapStructLayoutFieldTypes'

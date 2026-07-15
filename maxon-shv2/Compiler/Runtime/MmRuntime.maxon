@@ -106,10 +106,34 @@ end 'moduleUsesHeap'
 
 function maxonOpCallsRuntime(op MaxonOp) returns bool
 	return match op 'op'
-		call(_, callee, _, _, _) gives bytesStartWith(callee, prefix: RuntimeCallPrefix)
+		call(_, callee, _, _, _) gives isRuntimeCallee(callee)
 		literal to storeIndirect gives false
 	end 'op'
 end 'maxonOpCallsRuntime'
+
+// ⭐ **IS THIS CALLEE ONE OF THE COMPILER'S OWN?** THE one predicate, and it has FOUR readers that
+// must never disagree — which is exactly why it is a function and not a prefix test spelled at each
+// of them:
+//
+//   • `moduleUsesHeap` (above) — does this program carry the runtime at all?
+//   • `Parser.emitRuntimeCall` — the door that emits one, typing its result itself because no
+//     signature exists to type it from.
+//   • `SemanticCheck.validateCall` — which must NOT report E3004 for it. Nothing declares
+//     `__mm_alloc`; the user never wrote it; there is no source to point at.
+//   • `LowerMaxonToStd.lowerCall` — which must NOT slot its arguments against a signature that does
+//     not exist, and does not need to: the compiler wrote them, in declaration order.
+//
+// A runtime entry point is DECLARED BY NOTHING. It is built at the Std tier, after lowering
+// (`installMmRuntime`), so it is absent from every registry the frontend consults — and the three
+// readers above are the three places that would otherwise each conclude, separately and wrongly,
+// that the program calls a function that does not exist.
+//
+// The `__` prefix is what makes this safe to decide by NAME: Maxon reserves it for compiler-internal
+// names, so no user function can collide with one. It is the same reservation `TargetPrinter.
+// isRuntimeFunction` keeps the runtime out of the spec goldens by.
+export function isRuntimeCallee(callee ByteArray) returns bool
+	return bytesStartWith(callee, prefix: RuntimeCallPrefix)
+end 'isRuntimeCallee'
 
 // The runtime's `.data` slots, appended to the user's declared globals before `layOut` orders them.
 // They are ordinary slots in every respect — `layOut` sorts and offsets them exactly as it does a

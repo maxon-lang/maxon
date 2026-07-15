@@ -30,8 +30,17 @@ end 'Visibility'
 
 // Byte offset of a field within a struct's heap layout. Bounded by the max
 // struct size the layout descriptor can address. Used by `VarInfo` for the
-// self-field-alias fast path (reads/writes lower to fieldLoad/fieldStore
+// self-field-alias fast path (reads/writes lower to loadIndirect/storeIndirect
 // through `__self` + this offset rather than a materialized local slot).
+//
+// ⚠ **STILL ZERO CALLERS AT P1.0r, AND STRUCTS DID NOT CHANGE THAT** — which is worth saying,
+// because they look like the same feature and are not. This is the INSTANCE-METHOD alias: inside
+// `function area()` of `type Rect`, the bare name `width` means `self.width`, so a name with no
+// dot resolves to an offset. P1.0r has only `static function create`, no `self`, and no bare
+// field name — its field access is `p.x`, an EXPRESSION over an ordinary value binding, which
+// reads the struct's `StructLayout` through the binding's `structRef` type and never touches this
+// record (`Parser.emitFieldLoad`). Wiring it here anyway would have given the scaffold a consumer
+// and no reason to be right — the `mintPhi` trap, which cost a rung. It waits for instance methods.
 export typealias FieldOffset = int(0 to 65520)
 
 // Ordinal of a union case (and, for a payload binding, the field index within
@@ -73,7 +82,9 @@ export type VarInfo
 	// Present-but-inert: designed in from the first commit, not retrofitted.
 	export var ownership as OwnershipKind
 	// True when this name is a self-field alias inside an instance method.
-	// Reads emit fieldLoad via __self + fieldOffset; writes emit fieldStore.
+	// Reads emit loadIndirect via __self + fieldOffset; writes emit storeIndirect — the SAME two
+	// ops `p.x` already rides (there is no `fieldLoad`/`fieldStore` op and there is not going to
+	// be one; the memory band is the general pair, per StdDialect).
 	export var isSelfField as bool
 	export var fieldOffset as FieldOffset
 	// True when this name was introduced as a match-arm binding on a union
@@ -153,6 +164,95 @@ export typealias RangedTypeAliasArray = Array with RangedTypeAlias
 // file's artifact (alongside `funcReturnTypes` / `funcSignatures`); read by
 // TypeResolution to collapse `MaxonType.named` to a primitive.
 export typealias RangedTypeAliasMap = Map with (ByteArray, RangedTypeAlias)
+
+// --- Declared struct types (P1.0r) ---
+
+// The index of a field within its struct's declaration order. It IS the field's identity — the
+// offset is derived from it (`StructLayout.offsetOfField`) rather than stored, so there is no
+// second number to keep in step. Bounded by the fields a struct may declare.
+export typealias FieldIndex = int(0 to 65535)
+
+// ⭐ **EVERY FIELD OCCUPIES ONE 8-BYTE SLOT, WHATEVER ITS DECLARED TYPE**, and this constant is
+// that decision. It is not an alignment convenience: a struct FIELD of struct type is a POINTER
+// (`valueTagToStdType(structRef)` → i64), so `sizeof(Outer{p Point, n Integer})` is 16 rather than
+// 24 — which is exactly what `specs/sizeof.md` pins, and what makes the layout a function of the
+// field COUNT alone. A packed layout would have to know each field's width, which is a Std-tier
+// fact this Maxon-tier record deliberately does not carry.
+let FieldSlotBytes = 8 as ByteOffset
+
+// The size of a struct with NO fields. A zero-byte allocation would hand two distinct empty
+// structs the SAME address (the bump allocator advances by nothing), so identity would collapse
+// and a decref of one would free the other. One slot is the floor, and it costs a program that
+// declares an empty struct exactly 8 bytes it will never read.
+let EmptyStructBytes = FieldSlotBytes
+
+// StructLayout — one declared `type T`: what it is called, and its fields IN DECLARATION ORDER.
+//
+// It is the struct twin of `FuncSignature` (parallel name/type arrays, a linear index-of lookup),
+// and it is homed here for the same reason: it is a parse-staging registry entry, written by the
+// parser into a `FileParseArtifact` and folded into `Project` by `mergeArtifact` — never touched
+// by the parser on `Project` directly.
+//
+// ⚠ **IT LIVES IN TWO REGISTRIES, DELIBERATELY, AND THAT IS `RangedTypeAlias`'s ARRANGEMENT
+// EXACTLY.** `ProgramSignatures.structOf` answers the PARSER, before any file is parsed, from the
+// whole-program TOKEN sweep — because `p.x` needs the field's offset at PARSE time and the
+// declaration may be below it or in another file. `Project.structTypes` answers TYPE RESOLUTION,
+// after the real parse, and it is the AUTHORITY — a name in neither registry is E3011, and a
+// tolerant token sweep must never own a veto (see SignatureIndex's `CalleeReturn.undeclared`).
+// Two readers, two moments, one record type.
+export type StructLayout
+	export var name as ByteArray
+	// Parallel arrays, in DECLARATION order: `fieldNames[i]` is declared `fieldTypes[i]`. The
+	// declared type, NOT a resolved one — the sweep that records it cannot resolve anything (the
+	// alias it names may be in a file not yet folded), and the parser resolves it at the use site
+	// through the same `aliasOf` door the shift rule already asks.
+	export var fieldNames as ByteArrayArray
+	export var fieldTypes as MaxonTypeArray
+
+	export static function create(name ByteArray, fieldNames ByteArrayArray, fieldTypes MaxonTypeArray) returns StructLayout
+		return Self{name: name, fieldNames: fieldNames, fieldTypes: fieldTypes}
+	end 'create'
+
+	export function fieldCount() returns FieldIndex
+		return self.fieldNames.count()
+	end 'fieldCount'
+
+	// The declaration index of the field named `wanted`, or `fieldCount()` when the struct declares
+	// no such field. A linear scan, for `FuncSignature.indexOfParam`'s reason and with its
+	// measurement behind it: field counts are tiny, and a per-layout name→index map would be a
+	// heap object per declared type bought to serve a handful of lookups.
+	export function indexOfField(wanted ByteArray) returns FieldIndex
+		for i in 0 upto self.fieldNames.count() 'each'
+			let fieldName = try self.fieldNames.get(i) otherwise panic("StructLayout.indexOfField: fieldNames.get OOB at {i}")
+			if fieldName.equals(wanted) 'match'
+				return i
+			end 'match'
+		end 'each'
+		return self.fieldNames.count()
+	end 'indexOfField'
+
+	// The byte displacement of field `index` from the box's PAYLOAD pointer — which is what
+	// `__mm_alloc` returns, so the header is invisible here and the first field sits at 0.
+	export function offsetOfField(index FieldIndex) returns ByteOffset
+		return index * FieldSlotBytes
+	end 'offsetOfField'
+
+	// The payload bytes `__mm_alloc` must be asked for. THE one place the size is computed, so the
+	// allocation and the field stores that fill it cannot come to disagree about how big the box is.
+	export function sizeBytes() returns ByteOffset
+		if self.fieldNames.count() == 0 'empty'
+			return EmptyStructBytes
+		end 'empty'
+		return self.fieldNames.count() * FieldSlotBytes
+	end 'sizeBytes'
+end 'StructLayout'
+
+export typealias StructLayoutArray = Array with StructLayout
+
+// Registry: struct-type name -> its declaration. The twin of `RangedTypeAliasMap`, filled from
+// each file's artifact by `mergeArtifact` and read by TypeResolution to turn `MaxonType.named` for
+// a declared `type` into `MaxonType.structRef`.
+export typealias StructLayoutMap = Map with (ByteArray, StructLayout)
 
 // --- Project: the compiler-wide shared state (Chunk C growth) ---
 //
@@ -288,6 +388,10 @@ export type Project
 	// Declared ranged typealiases, keyed by name (see RangedTypeAlias). The registry
 	// TypeResolution resolves every `MaxonType.named` against.
 	export var typeAliases as RangedTypeAliasMap
+	// Declared struct types, keyed by name (see StructLayout). The registry's OTHER half: a
+	// `MaxonType.named` resolves against the aliases above OR against this, and a name in neither
+	// is E3011.
+	export var structTypes as StructLayoutMap
 	// id <-> name table behind every `MaxonType.named`. Folded from per-file
 	// artifact interners at merge time (see TypeNameInterner.maxon).
 	export var typeNames as TypeNameInterner
@@ -338,6 +442,7 @@ export type Project
 			funcReturnTypes: FuncReturnTypeMap.create(),
 			funcSignatures: FuncSignatureMap.create(),
 			typeAliases: RangedTypeAliasMap.create(),
+			structTypes: StructLayoutMap.create(),
 			typeNames: TypeNameInterner.create(),
 			opRanges: SourceRangeTable.create(),
 			valueOrigins: ValueOriginTable.create(),

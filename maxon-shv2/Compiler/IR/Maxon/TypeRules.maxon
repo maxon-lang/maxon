@@ -49,11 +49,26 @@
 //   • `noValue` — the class of the `void` tag: a ValueId that names no value at all. It agrees
 //     with NOTHING, not even itself, which is the exact opposite of `unknown` and the reason
 //     the two must never share a tag again (they did: see `ValueTypeTag.void`).
+//   • `structRef` — a reference to a declared struct type. It converts to nothing and nothing
+//     converts to it, which is what keeps `p + 1`, `return p` from an `ExitCode` function, `if p`
+//     and `takeInt(p)` out of the language: all four are one error, and all four would have
+//     compiled had a struct been filed under `named` (see MaxonType's `structRef` arm).
+//
+//     ⚠ **IT IS THE ONE CLASS THAT IS COARSER THAN THE TYPE, AND THAT IS A KNOWN GAP, NOT A
+//     RULE.** Two DIFFERENT structs land in this one class, so `typeClassesAgree` says a `Point`
+//     and a `Rect` agree — they do not. The fix is the one `typeClassOf`'s `named` arm already
+//     prescribes for its own eventual break: the rules are stated over a TAG, which is a scalar
+//     and carries no name, so telling two structs apart needs the parser's `valueNameIds` column
+//     PUBLISHED alongside `valueTags` and read here. That is a change to every rule's signature
+//     and it buys nothing at P1.0r — no program can put two struct values at one site, because a
+//     struct cannot yet be a parameter (P1.4's ownership ruling), a return type, or a field. **The
+//     day any of those lands, this arm is the bug.**
 export enum TypeClass
 	boolean
 	numeric
 	unknown
 	noValue
+	structRef
 end 'TypeClass'
 
 // The class a source-level type belongs to. Exhaustive over `ValueTypeTag`, so a new type
@@ -75,6 +90,9 @@ function typeClassOf(tag ValueTypeTag) returns TypeClass
 		exitCode gives TypeClass.numeric
 		unresolved gives TypeClass.unknown
 		void gives TypeClass.noValue
+		// A declared struct type. NOT `numeric` — a struct is a POINTER, and the arm above is a
+		// theorem about ALIASES that a struct would have falsified. See TypeClass's `structRef`.
+		structRef gives TypeClass.structRef
 	end 'k'
 end 'typeClassOf'
 
@@ -213,6 +231,11 @@ export function tagIsIntegral(tag ValueTypeTag) returns bool
 		// with everything, so it must not be mistaken for a type a float has to convert INTO.
 		unresolved gives false
 		void gives false
+		// A struct is a pointer, and a pointer is not a number the language will convert anything
+		// INTO. Nothing narrows to a struct, so this arm is never the target of a coercion — it is
+		// `false` because the statement "a struct is an integer" is false, not because the site is
+		// unreachable.
+		structRef gives false
 	end 'k'
 end 'tagIsIntegral'
 
@@ -242,6 +265,12 @@ export function typeTagName(tag ValueTypeTag) returns String
 		// so this name reaches no diagnostic today — it is what the operand rules would print if a
 		// second route to a void value ever appeared, and "void" is the only honest word for it.
 		void gives "void"
+		// ⚠ It names the KIND, not the type: `return p` from an `ExitCode` function reports "got
+		// 'struct'" where the bootstrap reports "got 'Point'". A tag is a scalar and carries no
+		// name (see this file's header on why every rule is stated over one), so the name is not
+		// here to print. It arrives with the `valueNameIds` publication that `TypeClass.structRef`
+		// already names as its own fix — one change, two things it repairs.
+		structRef gives "struct"
 	end 'k'
 end 'typeTagName'
 
@@ -721,6 +750,18 @@ export function comparableOperands(left ValueTypeTag, right ValueTypeTag) return
 		return true
 	end 'defer'
 
+	// ⚠ **TWO STRUCTS AGREE AND STILL DO NOT COMPARE**, and this is the third question about one
+	// pair of tags that `typesAgree` cannot answer (see the header). They share a class, so the
+	// agreement gate above passes them; `tagIsFloat` is false for both, so the domain test below
+	// would pass them too — and `p == q` would lower to a compare of two BOX ADDRESSES. That is
+	// REFERENCE equality silently answering a question the author asked about VALUES: `Point.create(3,
+	// y: 4) == Point.create(3, y: 4)` would be **false**. Structural equality is a real feature with a
+	// real definition (field-by-field, recursively) and shv2 does not have it, so the honest move is
+	// to reject the operator rather than to answer a different question with it.
+	if operandsAreStructRef(left, right: right) 'noStructuralEquality'
+		return false
+	end 'noStructuralEquality'
+
 	// Two floats compare; two integers compare; two bools compare (they agreed, and neither is a
 	// float). One of each does not.
 	return tagIsFloat(left) == tagIsFloat(right)
@@ -735,6 +776,20 @@ end 'comparableOperands'
 export function operandsAreFloat(left ValueTypeTag, right ValueTypeTag) returns bool
 	return tagIsFloat(left) or tagIsFloat(right)
 end 'operandsAreFloat'
+
+// True for the tag of a declared struct type, and ONLY for it — the same DEFINITELY question
+// `tagIsBool` / `tagIsInteger` / `tagIsFloat` ask, for the type that is a POINTER rather than a
+// number.
+export function tagIsStructRef(tag ValueTypeTag) returns bool
+	return tag == ValueTypeTag.structRef
+end 'tagIsStructRef'
+
+// **DOES EITHER OPERAND NAME A STRUCT?** `operandsAreFloat`'s twin, and it exists for the same
+// reason: the operators that have no reading for one of them have no reading for the other, and
+// both `integralOperandsFor` and `comparableOperands` have to ask.
+export function operandsAreStructRef(left ValueTypeTag, right ValueTypeTag) returns bool
+	return tagIsStructRef(left) or tagIsStructRef(right)
+end 'operandsAreStructRef'
 
 // ⭐ **WHAT A FLOAT ZERO IS, AS BITS** — IEEE-754 `+0.0`, whose encoding is all 64 bits clear.
 //
@@ -780,8 +835,9 @@ export enum BinOpOperands
 	// bool on EITHER side — and for two bools (`true + false`), which merely AGREE with each
 	// other and would sail past a pure agreement rule. Agreement is necessary, not sufficient.
 	nonNumericOperands
-	// An INTEGRAL-ONLY operator (`mod`, and the whole bit band) with a FLOAT operand — see
-	// `operatorIsIntegral` for which operators those are and why.
+	// An INTEGRAL-ONLY operator (`mod`, and the whole bit band) with an operand that has no
+	// integral reading — a FLOAT or a STRUCT REFERENCE. See `operatorIsIntegral` for which
+	// operators those are and why.
 	//
 	// ⚠ **NUMERIC IS NOT INTEGRAL, AND THIS CASE IS THE DIFFERENCE.** A float and an int share
 	// `TypeClass.numeric` — that is exactly what makes `5 + 2.0` a legal program — so a float
@@ -790,6 +846,13 @@ export enum BinOpOperands
 	// (whose bool-first/int-default chain has no float arm) and lowers to an `and` over two IEEE
 	// bit patterns: it computes a number, reports nothing, and means nothing. `mod` is the same
 	// shape one level down — it would ride `StdOp.mod`'s `idiv` over the same bits.
+	//
+	// ⚠⚠ **A STRUCT REACHES IT BY THE OTHER ROUTE, AND `TypeClass` CANNOT STOP IT.** `p and q` is a
+	// WORD operator, whose only rule is that its operands AGREE — and two `structRef`s agree (they
+	// share a class; see `TypeClass.structRef`). So the `nonNumericOperands` gate is never even
+	// asked, `wordOpResultTag`'s int-default types the result `integer`, and the pair lowers to an
+	// `and` over two BOX ADDRESSES. Same shape as the float bug, arrived at from the opposite side
+	// of `checkBinOpOperands`.
 	nonIntegralOperands
 end 'BinOpOperands'
 
@@ -840,21 +903,27 @@ export function checkBinOpOperands(op MaxonBinOp, left ValueTypeTag, right Value
 end 'checkBinOpOperands'
 
 // The SECOND gate every binary operator passes, after its own family's rule: an operator with no
-// float reading may not have a float operand.
+// integral reading may not have an operand that has none either.
 //
 // It runs on BOTH paths rather than only the numeric one, and that is load-bearing: `and`/`or`/
-// `xor` are word operators, so they never reach the numeric check — two floats AGREE with each
-// other, which is all the word rule asks — and `3.14 and 2.0` would otherwise be accepted by the
-// only rule that looked at it. One helper, called from both arms, is what keeps the two families
-// from needing two copies of the same sentence.
+// `xor` are word operators, so they never reach the numeric check — two floats (or two structs)
+// AGREE with each other, which is all the word rule asks — and `3.14 and 2.0` / `p and q` would
+// otherwise be accepted by the only rule that looked at them. One helper, called from both arms,
+// is what keeps the two families from needing two copies of the same sentence.
+//
+// ⚠ It names the two domains EXPLICITLY rather than asking `not tagIsIntegral(left) or not
+// tagIsIntegral(right)`, and that is `tagIsIntegral`'s own warning applied: the composed form is
+// TRUE for `unresolved`, which agrees with everything by deferral — so `x and undeclaredCall()`,
+// a program already reported as E3004 at its call site, would collect a second, invented
+// diagnostic naming a type nobody pinned.
 function integralOperandsFor(op MaxonBinOp, left ValueTypeTag, right ValueTypeTag) returns BinOpOperands
 	if not operatorIsIntegral(op) 'floatAllowed'
 		return BinOpOperands.ok
 	end 'floatAllowed'
 
-	if operandsAreFloat(left, right: right) 'float'
+	if operandsAreFloat(left, right: right) or operandsAreStructRef(left, right: right) 'noIntegralReading'
 		return BinOpOperands.nonIntegralOperands
-	end 'float'
+	end 'noIntegralReading'
 
 	return BinOpOperands.ok
 end 'integralOperandsFor'
@@ -887,7 +956,10 @@ export union NotOperator
 	op(kind MaxonUnaryOp, resultTag ValueTypeTag)
 	// The operand's type could not be determined, so neither reading can be chosen.
 	unknownOperandType
-	// The operand is a FLOAT, which has neither reading. See `notOperatorFor`.
+	// The operand has neither reading — a FLOAT (an IEEE triple is not a magnitude) or a STRUCT
+	// REFERENCE (a pointer is not a magnitude either). One arm, because it is one rejection and
+	// one message: `not` is defined on the bool domain and on the integer domain, and on nothing
+	// else. See `notOperatorFor`.
 	nonIntegralOperand
 end 'NotOperator'
 
@@ -929,5 +1001,11 @@ export function notOperatorFor(operand ValueTypeTag) returns NotOperator
 		// call site, so it cannot arrive here, and if a second route to a void value ever appeared
 		// this is still the only truthful answer: there is no operand to complement.
 		unresolved to void gives NotOperator.unknownOperandType
+		// A STRUCT REFERENCE — rejected for the FLOAT arm's reason, not the `unresolved` arm's: the
+		// type is perfectly well known, and `not` simply has no reading on it. Complementing a box's
+		// address is not a wrong answer waiting on an instruction, it is not a question. Had a struct
+		// been filed under `named`, the arm two lines up would have complemented it and called the
+		// result an `integer` — which is precisely the bug the `float` arm above records.
+		structRef gives NotOperator.nonIntegralOperand
 	end 'k'
 end 'notOperatorFor'

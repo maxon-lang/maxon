@@ -78,6 +78,29 @@ export typealias TypeNameId = int(0 to u64.max)
 // a general `builtinAlias(kind)` arm) grow at M9/M10 when user types + the
 // ranged-typealias registry land.
 //
+// `structRef` is a reference to a DECLARED STRUCT TYPE (`type Point`) — an 8-byte pointer to a
+// heap-allocated, refcounted box (P1.0r). It is a SEPARATE ARM FROM `named`, and that separation
+// is the whole reason this rung could add structs without breaking six rules at once.
+//
+// ⭐ **`named` MEANS "A RANGED INT ALIAS", AND FIVE PLACES DEPEND ON IT BEING A THEOREM.**
+// `TypeRules.typeClassOf` calls a `named` type `numeric`; `tagIsIntegral` calls it integral;
+// `typeTagName` prints it as `int`; `notOperatorFor` gives it the BITWISE `not`; and
+// `valueTagToStdType` collapses it to i64. Every one of those says, in its own words, that it is a
+// theorem resting on `Parser.readTypeAliasDeclaration` accepting only `int(low to high)`. Filing a
+// struct under `named` would have made all five FALSE at once and silently: `p + 1` would compile
+// to pointer arithmetic, `return p` from an `ExitCode` function would hand back the box's address,
+// and `not p` would complement it. The tag is what the rules read, so the tag is where the
+// distinction has to live.
+//
+// Its width IS assigned at the Maxon→Std boundary like every other arm's (`valueTagToStdType` →
+// i64), so this arm keeps MaxonType width-free exactly as `exitCode` does — a pointer is a machine
+// word, and which word is the Std tier's business.
+//
+// ⚠ APPENDED AT THE END OF THE UNION, past `unresolved`, per the band-append invariant
+// (MaxonDialect's MaxonOp header states it for ops; a type union has the same range arms and the
+// same silence). `boolean to float` and `exitCode to unresolved` are the two ranges that name this
+// union's arms, and appending past the tail is the only placement the compiler can check.
+//
 // Void is NOT a MaxonType — a non-value can't be a value-type. Function return
 // types use MaxonReturnType (below).
 export union MaxonType
@@ -87,6 +110,7 @@ export union MaxonType
 	named(id TypeNameId)
 	exitCode
 	unresolved
+	structRef(id TypeNameId)
 end 'MaxonType'
 
 export typealias MaxonTypeArray = Array with MaxonType
@@ -127,6 +151,13 @@ export typealias MaxonTypeArray = Array with MaxonType
 // discarded and never enters a scope — and a call in VALUE position to a void callee is
 // REJECTED there with a positioned diagnostic. So no rule can ever be asked about a `void` tag,
 // and every rule that could be says so with a panic rather than an answer.
+//
+// `structRef` is the tag of a reference to a declared struct type — see MaxonType's `structRef`
+// arm for why it is not `named`. It is APPENDED AT THE END, past `void`, for the same reason every
+// other append in this file is: `unresolved to void` and `named to exitCode` are range arms, and a
+// range adopts whatever is inserted between its endpoints without a word (`notOperatorFor`'s
+// `float` bug is the standing proof). Appending past the tail is the one placement the compiler
+// reports on.
 export enum ValueTypeTag
 	boolean
 	integer
@@ -135,6 +166,7 @@ export enum ValueTypeTag
 	exitCode
 	unresolved
 	void
+	structRef
 end 'ValueTypeTag'
 
 export typealias ValueTypeTagArray = Array with ValueTypeTag
@@ -150,16 +182,22 @@ export function maxonTypeTag(t MaxonType) returns ValueTypeTag
 		named gives ValueTypeTag.named
 		exitCode gives ValueTypeTag.exitCode
 		unresolved gives ValueTypeTag.unresolved
+		structRef gives ValueTypeTag.structRef
 	end 'k'
 end 'maxonTypeTag'
 
-// The interned name a `named` type refers to. Every other arm carries no name, and returns
-// `UnnamedTypeId` — which is NOT a sentinel answer: the TAG is the discriminant, and a
+// The interned name a `named` or `structRef` type refers to. Every other arm carries no name, and
+// returns `UnnamedTypeId` — which is NOT a sentinel answer: the TAG is the discriminant, and a
 // caller only reads this column on the arm where the tag says it means something (exactly as
 // the union's own payload is only reachable through its case). It is the union, unpacked.
+//
+// The two id-bearing arms are NOT collapsed into one range: `exitCode` and `unresolved` sit
+// between them, and `named to structRef` would swallow both — the band-append invariant read from
+// the other end.
 export function typeNameIdOf(t MaxonType) returns TypeNameId
 	return match t 'k'
 		named(id) gives id
+		structRef(id) gives id
 		boolean to float gives UnnamedTypeId
 		exitCode to unresolved gives UnnamedTypeId
 	end 'k'
@@ -186,6 +224,11 @@ export function maxonTypeOfTag(tag ValueTypeTag, nameId TypeNameId) returns Maxo
 		exitCode then return MaxonType.exitCode
 		unresolved then return MaxonType.unresolved
 		void then panic("maxonTypeOfTag: a `void` tag names no value, so there is no MaxonType to rebuild — a void call's result is only ever a discarded statement result (Parser.parseCall), never a bound value")
+		// A struct reference rebuilds from the same name column `named` does — the struct's name id
+		// IS what makes `p.x` resolvable, since it is what `Parser.emitFieldLoad` looks the layout up
+		// by. `Parser.parseBinding` is the caller that matters: `let p = Point.create(…)` types the
+		// binding from this, and the binding's type is the only record of WHICH struct `p` is.
+		structRef then return MaxonType.structRef(nameId)
 	end 'k'
 end 'maxonTypeOfTag'
 

@@ -49,6 +49,13 @@ export function maxonTypeToStdType(ref MaxonType) returns StdType
 		unresolved then panic("maxonTypeToStdType: an `unresolved` type reached lowering (TypeResolution did not run)")
 		boolean to float then break 'residue'
 		exitCode then break 'residue'
+		// A struct reference is NOT a residue — it is what `resolveNamedType` PRODUCES for a
+		// declared `type`, and it is already concrete. Its width is a machine word, assigned one
+		// line down by the same table every other arm's comes from. (`named` is checked above and
+		// this is not, because they are two different questions about one union: a `named` type
+		// surviving to here means resolution left work undone; a `structRef` means resolution DID
+		// its work.)
+		structRef then break 'residue'
 	end 'residue'
 
 	return valueTagToStdType(maxonTypeTag(ref))
@@ -87,6 +94,13 @@ export function valueTagToStdType(tag ValueTypeTag) returns StdType
 		exitCode then return StdType.u32
 		unresolved then panic("valueTagToStdType: an `unresolved` tag reached lowering — it is a call to a function no file in the program declares, which SemanticCheck reports as E3004 and which therefore never reaches codegen")
 		void then panic("valueTagToStdType: a `void` tag names no value, so it has no width — a void call's result is a discarded statement result (Parser.parseCall) and can never be an operand")
+		// ⭐ A STRUCT IS A POINTER, AND THIS LINE IS THE WHOLE OF THAT DECISION. `type Point` is a
+		// heap-allocated refcounted box (`Parser.emitStructLiteral` → `__mm_alloc`), and a value of
+		// that type is the box's ADDRESS — one machine word, in a GPR, passed and returned like any
+		// other i64. It is why `sizeof(Outer{p Point, n Integer})` is 16 and not 24: a struct FIELD
+		// is a pointer too. Nothing above this line knows the width, which is the point — MaxonType
+		// stays width-free (see MaxonDialect) and the machine word is named exactly once, here.
+		structRef then return StdType.i64
 	end 'collapse'
 end 'valueTagToStdType'
 
@@ -390,6 +404,16 @@ type MaxonToStdLowering
 	// The `argRanges` on the Maxon op are diagnostics-only (consumed by SemanticCheck),
 	// so lowering ignores them.
 	function lowerCall(result ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, dstBlock IrBlock)
+		// ⭐ A RUNTIME CALL HAS NO SIGNATURE TO SLOT AGAINST, and needs none: `Parser.emitRuntimeCall`
+		// wrote its arguments itself, positionally, in declaration order — so the reordering below
+		// would be the identity, and the registry lookup it needs first would panic on a callee no
+		// file declares. `SemanticCheck.validateCall` skips it for the same reason, keyed on the same
+		// predicate.
+		if isRuntimeCallee(callee) 'compilerOwnCall'
+			self.lowerRuntimeCall(result, callee: callee, args: args, argLabels: argLabels, dstBlock: dstBlock)
+			return
+		end 'compilerOwnCall'
+
 		let sig = try self.funcSignatures.get(callee) otherwise panic("lowerCall: callee '{String.from(callee)}' has no signature — SemanticCheck must reject an unknown callee before lowering")
 		match slotCallArgs(sig, args: args, argLabels: argLabels) 'slot'
 			ordered(argIds) then self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: callee, args: argIds))
@@ -398,6 +422,24 @@ type MaxonToStdLowering
 			duplicateArg then panic("lowerCall: duplicate argument for '{String.from(callee)}' reached lowering — SemanticCheck must gate it")
 		end 'slot'
 	end 'lowerCall'
+
+	// Lower a call to an emitted runtime entry point: the arguments pass through VERBATIM.
+	//
+	// ⚠ The label guard is what stops "positional by construction" from quietly becoming "positional
+	// by habit". `Parser.emitRuntimeCall` builds an all-empty label column (`emptyArgLabels`), so a
+	// label here means someone taught the parser to write one — and since there is no signature to
+	// match it against, the argument would be dropped into the position it happened to occupy rather
+	// than the one it named. That is a wrong answer with no diagnostic anywhere, so it panics at the
+	// one place that could still see it.
+	function lowerRuntimeCall(result ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, dstBlock IrBlock)
+		for label in argLabels 'eachLabel'
+			if not label.isEmpty() 'labelled'
+				panic("lowerRuntimeCall: the call to '{String.from(callee)}' carries the argument label '{String.from(label)}' — a runtime entry point is declared by nothing, so there is no signature to slot a label against and the argument would silently fill the position it was WRITTEN in. Runtime calls are positional: see Parser.emitRuntimeCall")
+			end 'labelled'
+		end 'eachLabel'
+
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: callee, args: args))
+	end 'lowerRuntimeCall'
 
 	// Lower a Maxon binary op to its Std counterpart. The operand and result
 	// ValueIds pass through verbatim (this pass never renumbers — see the header);

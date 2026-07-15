@@ -60,6 +60,15 @@ function validateCall(project Project, func IrFunction, opIndex OpIndex, callee 
 	let callRange = project.opRanges.get(opIndex)
 	let filePath = func.sourceFilePath
 
+	// ⭐ A RUNTIME CALL HAS NOTHING FOR THIS CHECK TO SAY. `__mm_alloc` is emitted by the PARSER
+	// (`Parser.emitRuntimeCall`) and built at the Std tier long after this pass, so it is in no
+	// registry — every check below would fire, and each would report a defect in code the user did
+	// not write. Its arguments are the compiler's own: their count is fixed at the emit site and
+	// their types are `MmRuntime`'s, not a signature's.
+	if isRuntimeCallee(callee) 'compilerOwnCall'
+		return
+	end 'compilerOwnCall'
+
 	if not project.funcSignatures.contains(callee) 'unknownFn'
 		reportPositioned(project, code: ErrorCode.callUnknownFunction, message: "call to undefined function '{String.from(callee)}'", line: callRange.line, column: callRange.column, filePath: filePath)
 		return
@@ -158,5 +167,6 @@ function isExitCodeType(t MaxonType) returns bool
 		float gives false
 		named gives false
 		unresolved gives false
+		structRef gives false
 	end 'r'
 end 'isExitCodeType'

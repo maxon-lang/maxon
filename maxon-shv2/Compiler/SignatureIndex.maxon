@@ -75,6 +75,16 @@ let TypeShapeUnresolved = 8 as ContentHash
 // rather than colliding two differently-shaped declarations on it.
 let DeclShapeAlias = 9 as ContentHash
 
+// A declared struct type's shape discriminator — `DeclShapeAlias`'s twin, for its reason: a name
+// that stops being a `typealias` and starts being a `type` must move the hash, not collide on it.
+let DeclShapeStruct = 14 as ContentHash
+
+// The `MaxonType.structRef` arm's discriminator. It is DISTINCT from `TypeShapeNamed`, and that is
+// load-bearing rather than tidy: `named(Point)` and `structRef(Point)` carry the same NAME and mean
+// different things in every reader — one is a ranged int, the other a pointer — so a hash that
+// could not tell them apart would hand a reader a memo built under the wrong one.
+let TypeShapeStructRef = 15 as ContentHash
+
 // The two shapes a top-level constant's ANSWER hashes under: it evaluated to a value, or it did
 // not. Their own discriminators for `DeclShapeAlias`'s reason — a name that stops being a function
 // and starts being a constant must move the hash rather than collide.
@@ -410,6 +420,13 @@ function globalStdType(tag ValueTypeTag, name ByteArray) returns StdType
 		boolean to float then break 'reachable'
 		named then panic("globalStdType: top-level var '{String.from(name)}' is tagged '{typeTagName(tag)}' — a global's type is inferred from a bare constant initializer, so it is never a ranged alias (that needs an `as` cast, P1.9)")
 		exitCode to void then panic("globalStdType: top-level var '{String.from(name)}' is tagged '{typeTagName(tag)}' — the constant evaluator folds integers, bools and floats only")
+		// A STRUCT GLOBAL is the case this guard's header was written FOR, arriving one rung early.
+		// It is unreachable by the same route the others are — the constant evaluator folds no
+		// `T.create(…)`, because a call in a top-level initializer is E2045 — so a struct's tag
+		// cannot get this far. Were it to, the honest answer is still not a width: a struct global
+		// needs a `.data` slot holding a POINTER to a box allocated before `main`, which is module
+		// initialization, and shv2 has none.
+		structRef then panic("globalStdType: top-level var '{String.from(name)}' is tagged '{typeTagName(tag)}' — a struct global would need its box allocated before `main` runs, which needs module initialization (not built); a call in a top-level initializer is rejected as E2045 long before this")
 	end 'reachable'
 
 	return valueTagToStdType(tag)
@@ -443,6 +460,16 @@ export union DeclaredAlias
 	undeclared
 end 'DeclaredAlias'
 
+// What the index knows about a declared STRUCT TYPE — `DeclaredAlias`'s twin, and a union for the
+// identical reason. "No file declares a `type` of this name" is an ANSWER: the name is probably a
+// ranged alias, or `ExitCode`, or a typo — and each of those is somebody else's question. Handing
+// back an empty layout instead would make an undeclared name read as a struct with NO FIELDS, so
+// `p.x` would report "no field 'x'" for a type that is not a struct at all.
+export union DeclaredStruct
+	declared(layout StructLayout)
+	undeclared
+end 'DeclaredStruct'
+
 export type ProgramSignatures
 	// Function name -> its declared return type. Last-wins on a duplicate name, exactly as the
 	// project's own `funcReturnTypes` registry is; the duplicate itself is reported by
@@ -453,6 +480,18 @@ export type ProgramSignatures
 	// so unlike `returnTypes` it needs no interner and no remap: it travels by name and arrives by
 	// name.
 	var typeAliases as RangedTypeAliasMap
+	// ⭐ Struct-type name -> its declaration, with the FIELD ORDER the parser needs. THE door `p.x`
+	// asks through, and the reason it must be here rather than in `Project`: a field's offset is
+	// needed at PARSE time, and `type Point` may be declared BELOW the function that reads a
+	// `Point` or in another file entirely. The same argument the header makes for a callee's return
+	// type, about a different declaration.
+	//
+	// ⚠ **UNLIKE `typeAliases`, IT CARRIES IDS** — a field's declared type is a `MaxonType`, and
+	// `named(Integer)` is meaningless outside the interner that minted it. So it obeys the header's
+	// ID PROBLEM: `foldFile` remaps each file's ids into `typeNames` on the way in, and
+	// `fieldTypeOf` re-interns on the way out. It is the second table to need that treatment, and
+	// it needs it for exactly `returnTypes`' reason.
+	var structTypes as StructLayoutMap
 	// The interner every `named` id in `returnTypes` belongs to. PRIVATE, and it has to be: an id
 	// may not leave this type. `returnTypeOf` re-interns it into the caller's own table.
 	var typeNames as TypeNameInterner
@@ -489,7 +528,7 @@ export type ProgramSignatures
 	export var hash as ContentHash
 
 	export static function create() returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedTypeAliasMap.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), hash: fnvOffsetBasis()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedTypeAliasMap.create(), structTypes: StructLayoutMap.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), hash: fnvOffsetBasis()}
 	end 'create'
 
 	// Fold ONE file's scanned declarations into the index. Called in SOURCE-PATH order, so the
@@ -501,7 +540,7 @@ export type ProgramSignatures
 	// machinery `mergeArtifact` uses for the identical job — `TypeNameInterner.foldInto` +
 	// `remapMaxonReturnType`. One mechanism, two callers: a second copy of "reconcile a file's ids
 	// into a bigger table" would be free to disagree with this one about what an id means.
-	export function foldFile(scanned FuncReturnTypeEntryArray, aliases RangedTypeAliasArray, bindings TopLevelDeclArray, fileTypeNames TypeNameInterner)
+	export function foldFile(scanned FuncReturnTypeEntryArray, aliases RangedTypeAliasArray, structs StructLayoutArray, bindings TopLevelDeclArray, fileTypeNames TypeNameInterner)
 		for alias in aliases 'eachAlias'
 			self.recordAlias(alias)
 		end 'eachAlias'
@@ -514,6 +553,24 @@ export type ProgramSignatures
 		end 'eachBinding'
 
 		let remap = self.typeNames.foldInto(fileTypeNames)
+
+		// A declared struct's field types are reconciled IN PLACE, before the record loop below, so
+		// there is ONE recording path rather than a mapped and an unmapped one. That is the opposite
+		// shape from the signatures below, and the difference is what each fold owns: a
+		// `MaxonReturnType` is a union VALUE, so remapping it can only mean constructing a new one
+		// (hence the two loops, and the identity fast path that skips an allocation per declared
+		// function); a `StructLayout` is a heap `type` this sweep just built and still owns, so its
+		// field list is simply rewritten. `remapStructLayoutFieldTypes` is the single mechanism
+		// `mergeArtifact` folds the same records with.
+		if not remap.isIdentity 'structIdsMoved'
+			for layout in structs 'eachMovedStruct'
+				remapStructLayoutFieldTypes(layout, remap: remap)
+			end 'eachMovedStruct'
+		end 'structIdsMoved'
+
+		for layout in structs 'eachStruct'
+			self.recordStruct(layout)
+		end 'eachStruct'
 
 		// The remap is loop-INVARIANT, so the identity test is hoisted OUT of the per-declaration
 		// loop rather than asked once per function — the same shape `mergeArtifact` uses for the same
@@ -544,6 +601,29 @@ export type ProgramSignatures
 		self.returnTypes.upsert(name, value: returnType)
 		self.hash = self.mixDeclaration(self.hash, name: name, returnType: returnType)
 	end 'record'
+
+	// Add one declared struct type to the index AND fold it into the hash. The one write, for
+	// `record`'s reason: the table and the hash that keys every parse memo on it cannot disagree
+	// about what the index contains.
+	//
+	// ⚠ **THE HASH CARRIES THE FIELD LIST, NOT MERELY THE NAME**, and that is `recordAlias`'s
+	// argument about ranges applied to a layout. Every reader of `type Point` COPIES its layout into
+	// its own code — `p.y` becomes `loadIndirect … offset 8`, and `Point.create` becomes an
+	// `__mm_alloc` of 16 — while the reading file's own bytes never move. So reordering Point's
+	// fields, renaming one, or adding a third changes what every other file COMPILES TO, and only
+	// this hash can carry it. Without it, adding a field would leave every reader inlining the old
+	// offsets against a box that is now a different shape: a silent out-of-bounds read.
+	function recordStruct(layout StructLayout)
+		self.structTypes.upsert(layout.name, value: layout)
+
+		var state = mixBytes(mix(self.hash, value: DeclShapeStruct), bytes: layout.name)
+		for i in 0 upto layout.fieldNames.count() 'eachField'
+			let fieldName = try layout.fieldNames.get(i) otherwise panic("ProgramSignatures.recordStruct: fieldNames.get OOB at {i}")
+			let fieldType = try layout.fieldTypes.get(i) otherwise panic("ProgramSignatures.recordStruct: fieldTypes.get OOB at {i} — the two field columns fell out of lockstep")
+			state = self.mixType(mixBytes(state, bytes: fieldName), t: fieldType)
+		end 'eachField'
+		self.hash = state
+	end 'recordStruct'
 
 	// Add one ranged typealias to the index AND fold it into the hash. The hash carries the RANGE
 	// and not merely the name, and that is load-bearing: widening `int(0 to 100)` to
@@ -1074,6 +1154,13 @@ export type ProgramSignatures
 			// `int`/`bool`/`float` from it, never an alias — that needs an `as` cast (P1.9).
 			named then panic("ProgramSignatures.mixValueTag: a top-level binding is tagged '{typeTagName(tag)}' — a constant's type is inferred from a bare initializer, so it is never a ranged alias (that needs an `as` cast, P1.9)")
 			exitCode to void then panic("ProgramSignatures.mixValueTag: a top-level binding is tagged '{typeTagName(tag)}' — the evaluator folds integers, bools and floats only")
+			// A struct is unreachable here for `globalStdType`'s reason and one more: the only way to
+			// build one is `T.create(…)`, and a CALL in a top-level initializer is E2045 in every
+			// compiler in the tree. It stays out of the hash rather than being given a key "just in
+			// case" — inventing one for a value that cannot exist is what `mixValueTag` has refused to
+			// do since it was written, and the day a struct constant is legal the question is which of
+			// its FIELDS a reader copies, which is a decision, not a default.
+			structRef then panic("ProgramSignatures.mixValueTag: a top-level binding is tagged '{typeTagName(tag)}' — a struct constant would have to be folded from a `T.create(…)` call, and a call in a constant initializer is E2045")
 		end 'k'
 	end 'mixValueTag'
 
@@ -1083,6 +1170,35 @@ export type ProgramSignatures
 		let alias = try self.typeAliases.get(name) otherwise return DeclaredAlias.undeclared
 		return DeclaredAlias.declared(alias)
 	end 'aliasOf'
+
+	// The struct type `name` denotes, declared in ANY file — `aliasOf`'s twin, and the door the
+	// PARSER asks every struct question through: is this name a `type`? how big is its box? which
+	// slot is `x`?
+	//
+	// ⚠ **THE LAYOUT IT HANDS BACK CARRIES THIS INDEX'S IDS, so a caller may read its NAMES, its
+	// COUNT and its OFFSETS but never its field TYPES.** Those are `MaxonType`s minted against
+	// `self.typeNames`, which is private and stays private (the header's ID PROBLEM). `fieldTypeOf`
+	// is the one door a field's type comes out of, and it re-interns on the way. The split is not
+	// a nicety: `indexOfField`/`offsetOfField`/`sizeBytes` are pure arithmetic over the name column
+	// and need no interner at all, so making every caller adopt a whole layout to ask "which slot?"
+	// would allocate a copy per field access to answer a question about integers.
+	export function structOf(name ByteArray) returns DeclaredStruct
+		let layout = try self.structTypes.get(name) otherwise return DeclaredStruct.undeclared
+		return DeclaredStruct.declared(layout)
+	end 'structOf'
+
+	// The DECLARED type of field `index` of struct `structName`, ADOPTED into `into` — the calling
+	// file's own artifact interner. `returnTypeOf`'s exact shape and exact reason: a `named` type
+	// crosses by NAME and is re-interned on arrival, so the id the parser stores is one its own
+	// file's merge will resolve.
+	//
+	// The struct and the index are preconditions, not cases: every caller reached here through a
+	// `structOf` that answered `declared`, and `index` is one `indexOfField` handed out.
+	export function fieldTypeOf(structName ByteArray, index FieldIndex, into TypeNameInterner) returns MaxonType
+		let layout = try self.structTypes.get(structName) otherwise panic("ProgramSignatures.fieldTypeOf: no `type {String.from(structName)}` is declared — every caller asks `structOf` first")
+		let declared = try layout.fieldTypes.get(index) otherwise panic("ProgramSignatures.fieldTypeOf: field {index} is out of range for `type {String.from(structName)}`, which declares {layout.fieldCount()} — every index handed out came from `indexOfField`")
+		return self.adoptType(declared, into: into)
+	end 'fieldTypeOf'
 
 	// The declared return type of `callee`, ADOPTED into `into` — the calling file's own artifact
 	// interner. THE one door out of this index (see the header): a `named` type crosses by NAME and
@@ -1100,17 +1216,42 @@ export type ProgramSignatures
 		end 'r'
 	end 'adoptReturnType'
 
-	// Only a `named` type carries an id, so only it is rebuilt. Every other return type is already
-	// interner-free, and the STORED union is handed straight back — which is what keeps the per-call
-	// path from allocating a fresh `MaxonReturnType` for every `returns bool` in the program (a
-	// Maxon union value is a heap object, every case — see MaxonDialect's ValueTypeTag header).
+	// Only the ID-BEARING arms are rebuilt. Every other return type is already interner-free, and
+	// the STORED union is handed straight back — which is what keeps the per-call path from
+	// allocating a fresh `MaxonReturnType` for every `returns bool` in the program (a Maxon union
+	// value is a heap object, every case — see MaxonDialect's ValueTypeTag header).
+	//
+	// ⚠ It cannot simply delegate to `adoptType` and re-wrap unconditionally: that would CONSTRUCT a
+	// `MaxonReturnType.value(...)` for every callee in the program, id-bearing or not, which is the
+	// allocation the `rt` pass-through exists to avoid. So the id-free arms answer with `rt` here,
+	// and `adoptType` answers with `t` there — two functions, one rule, each returning the union it
+	// was actually handed.
+	//
+	// ⚠ The two id-bearing arms are written out, NOT collapsed to a `named to structRef` range:
+	// `exitCode` and `unresolved` sit BETWEEN them in `MaxonType`, so that range would silently
+	// swallow both and re-wrap them into a freshly allocated union — the band-append invariant,
+	// costing an allocation rather than a wrong answer this time.
 	function adoptValueReturn(rt MaxonReturnType, inner MaxonType, into TypeNameInterner) returns MaxonReturnType
 		return match inner 'r'
-			named(id) gives MaxonReturnType.value(MaxonType.named(into.intern(self.nameOfId(id))))
+			named gives MaxonReturnType.value(self.adoptType(inner, into: into))
+			structRef gives MaxonReturnType.value(self.adoptType(inner, into: into))
 			boolean to float gives rt
 			exitCode to unresolved gives rt
 		end 'r'
 	end 'adoptValueReturn'
+
+	// Re-intern the name an id-bearing `MaxonType` carries into `into`, so the type is
+	// indistinguishable from one the calling file had parsed itself. THE one place this index's ids
+	// cross out of it (see the header's ID PROBLEM); `returnTypeOf` and `fieldTypeOf` are its two
+	// callers, and neither re-derives it.
+	function adoptType(t MaxonType, into TypeNameInterner) returns MaxonType
+		return match t 'r'
+			named(id) gives MaxonType.named(into.intern(self.nameOfId(id)))
+			structRef(id) gives MaxonType.structRef(into.intern(self.nameOfId(id)))
+			boolean to float gives t
+			exitCode to unresolved gives t
+		end 'r'
+	end 'adoptType'
 
 	// Mix one declaration into the running hash: the function's NAME, then its return type's SHAPE,
 	// then — for a named type — that TYPE's name. Names, never ids: an id depends on the order the
@@ -1140,6 +1281,12 @@ export type ProgramSignatures
 			// hashes rather than panicking so that a future producer of `unresolved` signatures is a
 			// cache-key question, not a crash.
 			unresolved gives mix(state, value: TypeShapeUnresolved)
+			// A struct reference, which a scanned signature very much CAN carry: `static function
+			// create(…) returns Self` inside `type Point` is recorded as `structRef(Point)` by
+			// `Parser.parseTypeReference`, so every declared factory in the program hashes through
+			// here. Its own shape (see `TypeShapeStructRef`) and then its NAME — never its id, for
+			// `mixDeclaration`'s reason.
+			structRef(id) gives mixBytes(mix(state, value: TypeShapeStructRef), bytes: self.nameOfId(id))
 		end 'r'
 	end 'mixType'
 

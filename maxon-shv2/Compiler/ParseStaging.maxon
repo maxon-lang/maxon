@@ -76,6 +76,12 @@ export type FileParseArtifact
 	// — specs/duplicate-typealias.md — so a merge-time collision is not an error the
 	// way a duplicate function is).
 	export var typeAliases as RangedTypeAliasArray
+	// This file's declared struct types (`type Point`), in declaration order. The twin of
+	// `typeAliases`, and positionless for the same reason: nothing reports a diagnostic against a
+	// `type` DECLARATION yet. (A duplicate `type` name across files IS a real gap — it is not
+	// diagnosed, and the merge is last-wins. It needs the positioned check `commitFuncSignatures`
+	// does for functions, and no spec case covers it; see `commitStructTypes`.)
+	export var structTypes as StructLayoutArray
 	// This file's LOCAL type-name interner. Its ids are file-local; `mergeArtifact`
 	// folds them into the project interner and remaps this artifact's ids.
 	export var typeNames as TypeNameInterner
@@ -89,6 +95,7 @@ export type FileParseArtifact
 			funcReturnTypes: FuncReturnTypeEntryArray.create(),
 			funcSignatures: FuncSignatureEntryArray.create(),
 			typeAliases: RangedTypeAliasArray.create(),
+			structTypes: StructLayoutArray.create(),
 			typeNames: TypeNameInterner.create()
 		}
 	end 'create'
@@ -168,6 +175,12 @@ export type FileParseArtifact
 	export function recordTypeAlias(alias RangedTypeAlias)
 		self.typeAliases.push(alias)
 	end 'recordTypeAlias'
+
+	// Record a declared struct type as this file's contribution to the project-wide `structTypes`
+	// registry — the same NEVER-touch-Project discipline every `record*` above follows.
+	export function recordStructType(layout StructLayout)
+		self.structTypes.push(layout)
+	end 'recordStructType'
 end 'FileParseArtifact'
 
 // Fold `artifact` into the whole-program build in source-path order:
@@ -212,7 +225,25 @@ export function mergeArtifact(project Project, target MaxonModule, artifact File
 	commitFuncReturnTypes(project, artifact: artifact)
 	commitFuncSignatures(project, artifact: artifact)
 	commitTypeAliases(project, artifact: artifact)
+	commitStructTypes(project, artifact: artifact)
 end 'mergeArtifact'
+
+// Commit the artifact's declared struct types into the project registry — the registry
+// `TypeResolution.resolveNamedType` turns a `MaxonType.named` for a declared `type` into a
+// `structRef` against.
+//
+// A plain upsert, matching `commitTypeAliases`. ⚠ Two files declaring the same `type` name is
+// therefore LAST-WINS and silent. That is a real gap and it is not this rung's: unlike a
+// typealias — where a same-named file-local alias is LEGAL (specs/duplicate-typealias.md) and so a
+// collision must not be reported — two structs of one name are a genuine duplicate and want the
+// positioned E3006 `commitFuncSignatures` raises for functions. It needs per-file type scoping to
+// tell the legal case from the illegal one, which arrives with cross-file name resolution, and no
+// spec case covers it today.
+function commitStructTypes(project Project, artifact FileParseArtifact)
+	for layout in artifact.structTypes 'each'
+		project.structTypes.upsert(layout.name, value: layout)
+	end 'each'
+end 'commitStructTypes'
 
 // Commit the artifact's ranged-typealias declarations into the project registry. A
 // plain upsert, and DELIBERATELY not a duplicate check: a non-exported typealias is
@@ -250,6 +281,17 @@ function remapArtifact(artifact FileParseArtifact, remap TypeNameRemap)
 		var entry = try artifact.funcReturnTypes.get(j) otherwise panic("remapArtifact: funcReturnTypes.get OOB at {j}")
 		entry.returnType = remapMaxonReturnType(entry.returnType, remap: remap)
 	end 'eachEntry'
+
+	// A declared struct's FIELD TYPES are remapped, and the contrast with `funcSignatures` two
+	// paragraphs up is the whole reason to say so. That one is skipped because `syncResolvedSignature`
+	// OVERWRITES every param type before anything reads it — the stale ids are provably erased. Nothing
+	// erases these: they land in `project.structTypes` and stay. `TypeResolution` happens to read only
+	// the registry's KEY today (`is this name a declared type?`), so a stale id would be silent — which
+	// makes it a TRAP rather than dead data, and the difference between the two is a reader arriving
+	// later. The cost is one pass over the types a file declares, on the multi-file path only.
+	for layout in artifact.structTypes 'eachStruct'
+		remapStructLayoutFieldTypes(layout, remap: remap)
+	end 'eachStruct'
 end 'remapArtifact'
 
 // Commit the artifact's `funcReturnTypes` contributions into the project registry.

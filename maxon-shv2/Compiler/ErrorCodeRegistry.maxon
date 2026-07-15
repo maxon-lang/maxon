@@ -100,12 +100,30 @@ export enum ErrorCode
 	unknownType = "E3011"
 	// A value-returning function can reach its end without returning, or a 'return' in it carries no value.
 	missingReturn = "E3013"
+	// A field access names a field the type does not have.
+	semanticUnknownField = "E3018"
 	// A call passes a different number of arguments than the callee declares parameters.
 	callArgCountMismatch = "E3036"
 	// A call's 'name:' label names no parameter of the callee.
 	callUnknownArgLabel = "E3037"
 	// Two arguments of one call target the same parameter.
 	callDuplicateArg = "E3038"
+	// a struct literal (`Type{...}`) is written outside the type's own
+	// methods. Construction is restricted to the type's own methods / static
+	// factories so invariants can be enforced at the single construction point;
+	// external callers must go through a `static function create(...)`. Exempt:
+	// `Self{...}` and `Type{...}` inside `Type`'s own body, plus construction
+	// through a typealias visible at the site (inner alias of the current
+	// type/extension, or a top-level alias). Emitted by `parseStructLiteral`.
+	// Mirrors the C# bootstrap's `SemanticConstructorRestriction`.
+	semanticConstructorRestriction = "E3076"
+	// a struct literal omits a field that has no default value, is not a
+	// compiler-synthesized managed builtin, and (for a return-site `Self{...}`
+	// in a static factory) was not proven definitely assigned via `self.field =
+	// expr` on every control-flow path to the literal. Emitted from the parser's
+	// struct-literal field-init checks and the post-body definite-assignment
+	// dataflow pass.
+	semanticFieldNotInitialized = "E3086"
 
 	// Register pressure: a value set live across a call, an idiv, or a loop genuinely needs more registers than the target has, after the cold-spill splitter has moved every idle value out and rematerialized every constant. Only the programmer can resolve a hot overflow, so the compiler refuses rather than guessing.
 	registerPressure = "E5001"
