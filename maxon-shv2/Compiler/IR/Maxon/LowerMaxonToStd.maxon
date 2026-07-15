@@ -39,18 +39,56 @@
 // than silently guessing a width. GROWS at Chunk C to resolve `named` widths
 // through the registry once that registry exists.
 export function maxonTypeToStdType(ref MaxonType) returns StdType
-	match ref 'collapse'
+	// The two arms TypeResolution was supposed to eliminate. They are a PIPELINE-ORDERING bug
+	// (that pass did not run, or left a residue) rather than a user error, and they are checked
+	// HERE rather than in `valueTagToStdType` because the two functions are asked different
+	// questions about the same arm — see that function's header on why a `named` TAG is normal
+	// while a `named` TYPE at this point is not.
+	match ref 'residue'
+		named then panic("maxonTypeToStdType: a `named` type must be resolved to a primitive before lowering (TypeResolution did not run)")
+		unresolved then panic("maxonTypeToStdType: an `unresolved` type reached lowering (TypeResolution did not run)")
+		boolean to float then break 'residue'
+		exitCode then break 'residue'
+	end 'residue'
+
+	return valueTagToStdType(maxonTypeTag(ref))
+end 'maxonTypeToStdType'
+
+// ⭐ THE WIDTH/ABI COLLAPSE, STATED OVER THE PARSER'S DENSE TAG COLUMN — and the form the
+// per-OPERAND path must use. `maxonTypeToStdType` is the same collapse asked of a `MaxonType`,
+// and it DELEGATES here rather than restating the lattice: this boundary's whole content is that
+// one table, and two copies of it are the drift that would let a `literal`'s width and its
+// operand's width come to disagree.
+//
+// It takes a TAG, and the reason is measured rather than aesthetic: the alternative spelling —
+// `maxonTypeToStdType(maxonTypeOfTag(tag, …))` — REBUILDS A `MaxonType`, and **a Maxon union
+// value is a heap object** (MaxonDialect's ValueTypeTag header has the measurement: the first cut
+// of exactly this shape cost +4,165 allocations on scale-test's smallest rung). `operandType` is
+// read for every operand of every arithmetic op in the program — the compiler's hottest path — so
+// the answer has to be a scalar computed from a scalar.
+//
+// ⚠ `named` collapses to `i64` here and PANICS there, and that asymmetry is deliberate. A
+// `MaxonType.named` reaching lowering means TypeResolution left a residue; a `named` TAG is
+// perfectly ordinary, because `TypeResolution.resolveTypes` rewrites function SIGNATURES and
+// never the parser's `valueTags` column — so a parameter declared with a ranged alias still
+// carries a `named` tag right here. It is an INT because every alias shv2 can declare is a ranged
+// int: `Parser.parseTypeAlias` accepts only `int(low to high)`. TypeRules' `typeClassOf` states
+// the identical theorem from the identical fact, and the day a `float` alias becomes legal both
+// must resolve through the alias registry instead.
+export function valueTagToStdType(tag ValueTypeTag) returns StdType
+	match tag 'collapse'
 		boolean then return StdType.i1
 		integer then return StdType.i64
 		float then return StdType.f64
+		named then return StdType.i64
 		// `exitCode` is the resolved `ExitCode` builtin alias. Its width is
 		// assigned HERE (unsigned 32-bit) — this is the sole place ExitCode's
 		// width lives, keeping MaxonType itself width-free (see MaxonDialect).
 		exitCode then return StdType.u32
-		named then panic("maxonTypeToStdType: a `named` type must be resolved to a primitive before lowering (TypeResolution did not run)")
-		unresolved then panic("maxonTypeToStdType: an `unresolved` type reached lowering (TypeResolution did not run)")
+		unresolved then panic("valueTagToStdType: an `unresolved` tag reached lowering — it is a call to a function no file in the program declares, which SemanticCheck reports as E3004 and which therefore never reaches codegen")
+		void then panic("valueTagToStdType: a `void` tag names no value, so it has no width — a void call's result is a discarded statement result (Parser.parseCall) and can never be an operand")
 	end 'collapse'
-end 'maxonTypeToStdType'
+end 'valueTagToStdType'
 
 // Collapse a function's MaxonReturnType to its StdReturnType. `void` maps
 // straight across; a value return collapses its inner type via maxonTypeToStdType.
@@ -63,16 +101,21 @@ end 'maxonReturnTypeToStdReturnType'
 
 // Map a source-level binary operator to its width/ABI-resolved Std `binOp` opcode.
 // Every NON-TRAPPING operator maps to a `StdBinOpcode` — the arithmetic set
-// (`add`/`sub`/`mul`) and the bit set (`bitAnd`/`bitOr`/`bitXor`/`shl`/`shr`). Only
-// `div`/`mod` do NOT (they lower to the OWN Std variants `StdOp.div`/`mod` because idiv
-// traps — see `lowerBinOp`), so they panic here rather than inventing a bogus opcode.
+// (`add`/`sub`/`mul`), the bit set (`bitAnd`/`bitOr`/`bitXor`/`shl`/`shr`), and the FLOAT
+// division. `mod` does NOT (it lowers to its own `StdOp.mod` variant because idiv traps —
+// see `lowerBinOp`), so it panics here rather than inventing a bogus opcode.
 // Exhaustive over MaxonBinOp (every arm is named).
+//
+// ⚠ `div` IS FLOAT-ONLY, and this function CANNOT enforce that — it sees an operator, not an
+// operand type. `lowerDivision` is the one place a `/` picks its Std op, and `appendStdBinOp`
+// carries the guard that makes an integer `binOp(div)` unrepresentable rather than merely
+// unwritten. Do not call this with `div` from anywhere else.
 export function maxonBinOpToStdOpcode(op MaxonBinOp) returns StdBinOpcode
 	match op 'map'
 		add then return StdBinOpcode.add
 		sub then return StdBinOpcode.sub
 		mul then return StdBinOpcode.mul
-		div then panic("maxonBinOpToStdOpcode: `/` (div) lowers to StdOp.div — a trapping op with its own Std variant, not a binOp opcode; lowerBinOp must route it directly")
+		div then return StdBinOpcode.div
 		mod then panic("maxonBinOpToStdOpcode: `mod` lowers to StdOp.mod — a trapping op with its own Std variant, not a binOp opcode; lowerBinOp must route it directly")
 		bitAnd then return StdBinOpcode.bitAnd
 		bitOr then return StdBinOpcode.bitOr
@@ -123,10 +166,31 @@ type MaxonToStdLowering
 	// Whole-program parameter signatures (names + types), for `lowerCall`'s
 	// label→positional argument slotting.
 	var funcSignatures as FuncSignatureMap
+	// ⭐ THE TYPE ORACLE FOR THE FUNCTION CURRENTLY BEING LOWERED — the parser's per-value
+	// `ValueTypeTag` column, published on `IrFunction.valueTags` and re-pointed at each function
+	// by `lower`. It is what fills the Std arith band's `operandType`.
+	//
+	// Reading it is ASKING THE ONE ORACLE, not building a second one. The parser decided every
+	// value's source-level type (it must — a bool `and` is control flow), and it publishes the
+	// column precisely so a later pass need not re-derive one. The alternative — recovering an
+	// operand's type by walking back to its defining op — is a SECOND TYPE SYSTEM in the tier
+	// furthest from the source, which is the exact thing `operandType` was added to prevent (see
+	// StdDialect's `binOp` header).
+	//
+	// It is a per-function BINDING rather than a parameter threaded through `lowerOp`, because
+	// every op in a function shares one column and the walk is already per-function.
+	var valueTags as ValueTypeTagArray
 
 	static function create(maxonModule MaxonModule, funcSignatures FuncSignatureMap) returns MaxonToStdLowering
-		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), funcSignatures: funcSignatures}
+		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), funcSignatures: funcSignatures, valueTags: ValueTypeTagArray.create()}
 	end 'create'
+
+	// The Std type a VALUE computes in — the truth the arith band's `operandType` carries, and a
+	// single indexed read of the column `lower` pointed at this function.
+	function stdTypeOf(value ValueId) returns StdType
+		let tag = try self.valueTags.get(value) otherwise panic("stdTypeOf: value v{value} has no recorded type — every SSA value must be minted through Parser.mintValue, and `lower` must point `valueTags` at the function being walked")
+		return valueTagToStdType(tag)
+	end 'stdTypeOf'
 
 	function lower() returns StdModule
 		// Relocate blocks 1:1 first so blockRef indices stay aligned between the
@@ -170,6 +234,9 @@ type MaxonToStdLowering
 		// ids need no per-function reset — the parser already numbered them densely
 		// per function, and this pass passes them through untouched.
 		for srcFunc in self.stdModule.functions 'eachFunc'
+			// Point the type oracle at THIS function before any of its ops are lowered — the
+			// column is dense per function, so every `stdTypeOf` below reads the right one.
+			self.valueTags = srcFunc.valueTags
 			self.emitParams(srcFunc)
 
 			for blockRef in srcFunc.blockRefs 'eachBlock'
@@ -300,17 +367,57 @@ type MaxonToStdLowering
 	function lowerBinOp(result ValueId, lhs ValueId, rhs ValueId, op MaxonBinOp, dstBlock IrBlock)
 		match op 'op'
 			add to mul then self.appendStdBinOp(result, lhs: lhs, rhs: rhs, op: op, dstBlock: dstBlock)
-			div then self.stdModule.appendOp(dstBlock, op: StdOp.div(result, lhs: lhs, rhs: rhs))
+			div then self.lowerDivision(result, lhs: lhs, rhs: rhs, dstBlock: dstBlock)
 			mod then self.stdModule.appendOp(dstBlock, op: StdOp.mod(result, lhs: lhs, rhs: rhs))
 			bitAnd to shrLogical then self.appendStdBinOp(result, lhs: lhs, rhs: rhs, op: op, dstBlock: dstBlock)
 		end 'op'
 	end 'lowerBinOp'
 
+	// ⭐ **THE TWO DIVISIONS ARE DIFFERENT OPS**, and the operand type alone decides which one a
+	// source `/` becomes. They differ in the single property the arith band's membership rule is
+	// defined by — PURITY — so they land on opposite sides of it, which is the rule WORKING
+	// rather than an exception to it (see StdDialect's StdBinOpcode header):
+	//
+	//   • INTEGER `/` traps. `idiv` faults on a zero divisor and on `i64.min / -1`, so it must
+	//     never be reordered or dropped, and it needs `StdOp.div`'s own `isPure: false` to say
+	//     so — metadata a shared opcode field cannot carry.
+	//   • FLOAT `/` cannot trap. `divsd` answers `inf`/`nan` per IEEE-754, so it is pure, it
+	//     shares `binOp`'s exact operand shape, and it rides `StdBinOpcode.div`.
+	function lowerDivision(result ValueId, lhs ValueId, rhs ValueId, dstBlock IrBlock)
+		if stdTypeIsFloat(self.stdTypeOf(lhs)) 'float'
+			self.appendStdBinOp(result, lhs: lhs, rhs: rhs, op: MaxonBinOp.div, dstBlock: dstBlock)
+			return
+		end 'float'
+
+		self.stdModule.appendOp(dstBlock, op: StdOp.div(result, lhs: lhs, rhs: rhs))
+	end 'lowerDivision'
+
 	// Append the `StdOp.binOp` a non-trapping Maxon binary operator lowers to. The one
 	// emit site shared by the arithmetic and bit bands, so the two range arms above
 	// dispatch rather than duplicate.
+	//
+	// ⭐ `operandType` IS THE OPERAND'S REAL TYPE, read from the parser's oracle — the backend
+	// selects `addsd` over `add` from this field and nothing else, so a placeholder here is a
+	// silent wrong answer rather than a missing feature.
+	//
+	// It is the LEFT operand's type, which is exact for every operator that reaches here and not
+	// merely a convention: the arithmetic and word operators have already been checked to agree
+	// (`checkBinOpOperands`), and a SHIFT deliberately does not — its right operand is a
+	// DISTANCE, whose type says nothing about anything, and the value being shifted is the only
+	// one that decides (TypeRules' ⭐ THE SHIFT RULE).
 	function appendStdBinOp(result ValueId, lhs ValueId, rhs ValueId, op MaxonBinOp, dstBlock IrBlock)
-		self.stdModule.appendOp(dstBlock, op: StdOp.binOp(result, lhs: lhs, rhs: rhs, opcode: maxonBinOpToStdOpcode(op), operandType: StdType.i64))
+		let opcode = maxonBinOpToStdOpcode(op)
+		let operandType = self.stdTypeOf(lhs)
+
+		// `binOp(div)` is FLOAT-ONLY, and an integer one here would declare `idiv` PURE — a
+		// trapping instruction the scheduler is then free to reorder or delete. `lowerDivision`
+		// is the gate that makes this unreachable; the guard is what stops it being merely
+		// unwritten. Not representable beats not written down.
+		if opcode == StdBinOpcode.div and not stdTypeIsFloat(operandType) 'trappingDivAsBinOp'
+			panic("appendStdBinOp: `binOp(div)` over an INTEGER operand type would declare the trapping `idiv` pure — integer division lowers to `StdOp.div`, and `lowerDivision` is the one place that decides")
+		end 'trappingDivAsBinOp'
+
+		self.stdModule.appendOp(dstBlock, op: StdOp.binOp(result, lhs: lhs, rhs: rhs, opcode: opcode, operandType: operandType))
 	end 'appendStdBinOp'
 
 	// Lower a Maxon unary op to its Std counterpart. Like lowerBinOp, the operand
@@ -318,14 +425,22 @@ type MaxonToStdLowering
 	// to a width/ABI-resolved Std opcode.
 	function lowerUnaryOp(result ValueId, operand ValueId, op MaxonUnaryOp, dstBlock IrBlock)
 		let opcode = maxonUnaryOpToStdOpcode(op)
-		self.stdModule.appendOp(dstBlock, op: StdOp.unaryOp(result, operand: operand, opcode: opcode, operandType: StdType.i64))
+		self.stdModule.appendOp(dstBlock, op: StdOp.unaryOp(result, operand: operand, opcode: opcode, operandType: self.stdTypeOf(operand)))
 	end 'lowerUnaryOp'
 
 	// Lower a Maxon comparison to `StdOp.cmp`. Operand/result ValueIds pass through
 	// verbatim; only the source-level comparison operator maps to a Std predicate.
+	//
+	// ⭐ `operandType` DECIDES THE CONDITION-CODE FAMILY, so on a compare it is not merely
+	// descriptive: `cmp` answers in OF/SF (which the signed `jl`/`jg` family reads) and `ucomisd`
+	// leaves OF=SF=0 and answers in ZF/PF/CF (which the UNSIGNED `jb`/`ja` family reads). The
+	// same `StdCmpPred.less` therefore lowers to `jl` for an i64 and `jb` for an f64, and a float
+	// compare lowered to `jl` would read flags that were never written. The result is a bool, so
+	// the type must come from an OPERAND — `lhs`, which `emitCompare` has already required to
+	// agree with `rhs`. See specs-shv2/float-compare-branch.md.
 	function lowerCompare(result ValueId, lhs ValueId, rhs ValueId, op MaxonCmpOp, dstBlock IrBlock)
 		let pred = maxonCmpOpToStdPred(op)
-		self.stdModule.appendOp(dstBlock, op: StdOp.cmp(result, lhs: lhs, rhs: rhs, pred: pred, operandType: StdType.i64))
+		self.stdModule.appendOp(dstBlock, op: StdOp.cmp(result, lhs: lhs, rhs: rhs, pred: pred, operandType: self.stdTypeOf(lhs)))
 	end 'lowerCompare'
 
 	// Lower a Maxon conditional branch to its Std counterpart, as the block's

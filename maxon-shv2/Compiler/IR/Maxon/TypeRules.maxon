@@ -235,6 +235,18 @@ export function tagIsInteger(tag ValueTypeTag) returns bool
 	return tag == ValueTypeTag.integer
 end 'tagIsInteger'
 
+// True for the tag of a `float`, and ONLY for it — the same DEFINITELY question `tagIsBool` and
+// `tagIsInteger` ask, for the type whose operations are a different INSTRUCTION SET rather than a
+// different reading of the same bits.
+//
+// ⚠ It is deliberately NOT `typeClassAdmits(TypeClass.numeric, …)`, and the two must never be
+// confused: a float and an int share the `numeric` CLASS (that is what makes `5 + 2.0` a legal
+// program rather than a type error), and share nothing at all in the hardware. The class answers
+// "may these operands meet?"; this answers "which instruction does the meeting?".
+export function tagIsFloat(tag ValueTypeTag) returns bool
+	return tag == ValueTypeTag.float
+end 'tagIsFloat'
+
 // The three operators whose MEANING follows their operands' type. `shl`/`shr` are absent: a
 // shift is integral by definition, on both sides.
 export function wordOperator(op MaxonBinOp) returns bool
@@ -524,12 +536,43 @@ export function wordOpResultTag(left ValueTypeTag, right ValueTypeTag) returns V
 	return ValueTypeTag.integer
 end 'wordOpResultTag'
 
-// The type a `binOp` yields. Arithmetic, the division family and the shifts are integral by
-// definition (v1 says the same of `shl`/`shr`/`mod`: "integer-only by definition",
-// Parser.maxon:11524). Only the WORD operators follow their operands.
+// ⭐ **NUMERIC PROMOTION** — the type an ARITHMETIC operator yields, and THE one place the
+// int→float half of the implicit-conversion lattice is stated.
+//
+// `float` wins over every integer type, because that is the direction the conversion is exact
+// in: every i32 and every ranged alias's value is representable as an f64, while the reverse
+// truncates. specs/implicit-type-conversion.md states the rule ("an int promotes to a float") and
+// specs-shv2/float-type.md's `float-promotion` pins it — `let x = 5` / `let y = 2.0` / `x + y` is
+// **7.0**, not 7 and not 5.
+//
+// ⚠ **A PROMOTED RESULT TAG IS A PROMISE THE EMITTER MUST KEEP.** This function answers a TYPE
+// question, and answering it `float` obliges whoever emits the op to have already MOVED the
+// integer operand into the float domain — an i64 in a GPR and an f64 in an XMM are not two
+// readings of one value, they are two different registers, and `addsd` cannot read the first.
+// Saying `float` here while a raw integer still reaches the op is a SILENT WRONG ANSWER, not a
+// missing feature. `Parser.emitBinOp` is the emitter, and it is what gates on this.
+//
+// The `unresolved` case is deliberately NOT deferred to, and this is the one asymmetry with
+// `wordOpResultTag` (whose header argues the same trade at length): `integer` has been the answer
+// for a mixed `(integer, unresolved)` pair since M3, an `unresolved` operand can only be a call
+// no file declares (E3004, which gates the pipeline before codegen), and widening the deferral
+// here would buy an honest tag on a program that is already rejected at the cost of moving a
+// live rule.
+function arithResultTag(left ValueTypeTag, right ValueTypeTag) returns ValueTypeTag
+	if tagIsFloat(left) or tagIsFloat(right) 'promote'
+		return ValueTypeTag.float
+	end 'promote'
+
+	return ValueTypeTag.integer
+end 'arithResultTag'
+
+// The type a `binOp` yields. The ARITHMETIC family (`+`/`-`/`*`/`/`/`mod`) promotes (see
+// `arithResultTag`); the shifts are integral by definition on both sides (v1 says the same of
+// `shl`/`shr`/`mod`: "integer-only by definition", Parser.maxon:11524). Only the WORD operators
+// follow their operands' bool/int duality.
 export function binOpResultTag(op MaxonBinOp, left ValueTypeTag, right ValueTypeTag) returns ValueTypeTag
 	return match op 'k'
-		add to mod gives ValueTypeTag.integer
+		add to mod gives arithResultTag(left, right: right)
 		bitAnd to bitXor gives wordOpResultTag(left, right: right)
 		shl to shrLogical gives ValueTypeTag.integer
 	end 'k'
