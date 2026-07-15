@@ -118,9 +118,11 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	/// This is ENFORCED. It was not, when this method was first written: `StdlibLoader` used to
 	/// force-export EVERY stdlib function after the stdlib's own compile, so no stdlib function
 	/// could be internal whatever it declared, and this door was de-facto public — the raw-write
-	/// hole rebuilt under a new name. Removing that force-export cost three `export` keywords
-	/// (`Iterable.map`/`filter`/`contains`, genuine public API that had been riding it), and now a
-	/// declared visibility means what it says.
+	/// hole rebuilt under a new name. Removing that force-export cost exactly TEN `export` keywords
+	/// across the whole stdlib — `Iterable.map`/`filter`/`contains`, `Stdin.readLine`, and six
+	/// `JsonDoc` accessors — all genuine public API that had been riding it rather than declaring
+	/// itself. Nothing else in the stdlib wanted to be public. No single gate saw them all: the C#
+	/// suite found three, `build shv2` found one, the MCP server found six.
 	///
 	/// ⚠ One gap remains and it is NOT this method's: a non-exported STATIC method is still
 	/// callable from anywhere, because a type-qualified name skips the visibility filter on purpose
