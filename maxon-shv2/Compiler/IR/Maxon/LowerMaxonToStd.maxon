@@ -267,6 +267,8 @@ type MaxonToStdLowering
 				let srcBlock = try self.maxonModule.blocks.get(blockRef) otherwise panic("lowerMaxonToStd: blockRef from srcFunc.blockRefs not in maxonModule.blocks")
 				var dstBlock = try self.stdModule.blocks.get(blockRef) otherwise panic("lowerMaxonToStd: stdModule.blocks 1:1 with maxonModule.blocks but get({blockRef}) failed")
 
+				self.retypeBlockArgs(dstBlock)
+
 				for opIdx in srcBlock.opRefs 'eachOp'
 					let hlOp = try self.maxonModule.ops.get(opIdx) otherwise panic("lowerMaxonToStd: opIdx from srcBlock.opRefs not in maxonModule.ops")
 					self.lowerOp(hlOp, dstBlock: dstBlock)
@@ -287,6 +289,28 @@ type MaxonToStdLowering
 
 		return self.stdModule
 	end 'lower'
+
+	// Give every phi on this block the Std type its VALUE computes in — from `stdTypeOf`, the same
+	// one oracle every operand's `operandType` comes from. A phi and its incoming values are then
+	// typed by one fact rather than two that must agree.
+	//
+	// ⚠ THE PARSER CANNOT DO THIS, which is why it is here and not at the mint site. `Parser.mintPhi`
+	// holds the phi's Maxon TAG and looks like the obvious place, but the collapse is only TOTAL
+	// once SemanticCheck and TypeResolution have run: at parse time a tag may still be `unresolved`
+	// (a call to a function no file declares — that is E3004's job) or `named` (a ranged alias, until
+	// TypeResolution rewrites the signature). `valueTagToStdType` panics on the first and would have
+	// crashed the compiler on a program with a clean diagnostic already waiting for it. By this pass
+	// both residues are gone, and that is exactly what earns `stdTypeOf` the right to panic on them.
+	//
+	// It MUTATES the block-arg list `relocateBlocks` shares with the Maxon block, and that is this
+	// pass's business rather than a violation of the sharing rule: the boundary is where Std facts
+	// are established, `argType` IS a Std fact, and no Maxon-tier pass reads it.
+	function retypeBlockArgs(block IrBlock)
+		for i in 0 upto block.blockArgs.count() 'eachArg'
+			var arg = try block.blockArgs.get(i) otherwise panic("retypeBlockArgs: i < count() but blockArgs.get({i}) failed")
+			arg.argType = self.stdTypeOf(arg.valueId)
+		end 'eachArg'
+	end 'retypeBlockArgs'
 
 	// Lower a regular (non-terminator) Maxon body op. A `ret`/`retVoid` reaching
 	// here (mid-block) is the rare body-op form (v1 hits it for partially-

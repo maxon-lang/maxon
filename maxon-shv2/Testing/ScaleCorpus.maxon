@@ -1,8 +1,8 @@
 // ScaleCorpus — the generated ladder the scale suite measures.
 //
-// ONE PROGRAM PER RUNG, and each rung DOUBLES all eight structural knobs at once. Six rungs is a
-// 32x span in six compiles. The alternative — a matrix, one axis per knob — would be eight ladders
-// and forty-eight compiles to learn the same thing, because the question is never "which knob is
+// ONE PROGRAM PER RUNG, and each rung DOUBLES all ten structural knobs at once. Six rungs is a
+// 32x span in six compiles. The alternative — a matrix, one axis per knob — would be ten ladders
+// and sixty compiles to learn the same thing, because the question is never "which knob is
 // the compiler slow in" (the per-phase table answers that already) but "does the whole thing stay
 // linear as a program grows", and a program grows in every direction at once. (Two SHIFT shapes ride
 // along that are COVERAGE, not knobs — they are fixed-size and do not double; see `shiftCoverageSource`.)
@@ -76,11 +76,15 @@
 // deterministic, so the corpus is a pure function of this file, and this file IS the corpus.
 // `--emit-corpus=<dir>` dumps a ladder anywhere you want to look at it.
 //
-// THE SUBSET: shv2 implements `int` arithmetic, functions (<=6 params), `if`, `while`, `break`,
-// `return`, `let`, `var`, bitwise + shifts (`and`/`shl`/`shr`), and ranged typealiases. No `print`, no
-// structs, no arrays, no strings, no `for`, no `as` casts. Everything below stays inside it — and
-// `printCorpusManifest` states exactly this boundary on every run, so a construct outside it (and the
-// codegen change to it that would be invisible) is NAMED rather than silently absent.
+// THE SUBSET: shv2 implements `int` AND `float` arithmetic, functions (<=6 params), `if`, `while`,
+// `break`, `return`, `let`, `var`, bitwise + shifts (`and`/`shl`/`shr`), and ranged typealiases. No
+// `print`, no structs, no arrays, no strings, no `for`, no `as` casts. Everything below stays inside
+// it — and `printCorpusManifest` states exactly this boundary on every run, so a construct outside it
+// (and the codegen change to it that would be invisible) is NAMED rather than silently absent.
+//
+// ⚠ THE SUBSET AND THE CORPUS ARE TWO DIFFERENT SETS, AND THE GAP BETWEEN THEM IS WHERE BUGS LIVE.
+// `float` was in the subset for a full rung before one line of this file generated any, and the
+// manifest named it as a blind spot the whole time. See `FloatOpsBase` for what that cost.
 
 // Which rung of the ladder, and how many of them. A rung DOUBLES the one below it, so these are
 // exponents, not sizes: `--rungs=20` would not be a big run, it would be a program a hundred
@@ -128,7 +132,7 @@ end 'parseRungCount'
 export typealias KnobSize = int(1 to 1048576)
 
 // ===========================================================================================
-// The eight knobs, and their rung-0 sizes
+// The ten knobs, and their rung-0 sizes
 // ===========================================================================================
 //
 // Each is `base << rung`. The bases are tuned so that rung 0 clears fixed process + stdlib
@@ -200,6 +204,48 @@ let PressuredLoopsBase = 2 as KnobSize
 // realistic in shape (real code nests loops to depth 3), super-realistic in magnitude, exactly as
 // `longFunction`'s 3,200 ifs are.
 let LoopNestBase = 2 as KnobSize
+
+// ONE function, N float ARITHMETIC/COMPARE groups — the float twin of `longFunction`.
+//
+// ⚠ THE CORPUS GENERATED NO FLOAT AT ALL UNTIL 2026-07-15, AND THAT IS THE FIFTH CONSECUTIVE RUNG
+// THIS LADDER WAS BLIND TO WHAT LANDED. P1.0d.4 built an entire SSE backend — a second register
+// FILE, a second pool, a conversion band, a NaN-correct compare lowering — and every float number
+// this instrument printed was byte-identical BY CONSTRUCTION, because nothing in the ladder emitted
+// one float instruction. The manifest even SAID so, in plain text, under NOT GENERATED. It was read
+// five times as a footnote about the reader's own measurement instead of a defect in the tool, and
+// the corpus finds only bugs someone already thought to generate.
+//
+// WHAT IT COST: `float-phi-*` in specs-shv2/float-type.md. A float `var` mutated in a branch or a
+// loop — `var f = 0.0` — PANICKED the x64 emitter, because `Parser.mintPhi` hardcoded every phi's
+// `argType` to `i64` and P1.0d.4 turned that field into the phi's REGISTER FILE. The commonest float
+// idiom there is, and both the suite and this ladder were blind to it. This knob generates float
+// phis by construction, so that class of bug cannot hide here again.
+let FloatOpsBase = 64 as KnobSize
+
+// ONE function, N loops, each holding `FloatsLivePerSpillLoop` floats live ACROSS a call — the most
+// expensive thing a float does on this target, and a shape no GPR knob can stand in for.
+//
+// EVERY XMM REGISTER IS CALLER-SAVED in shv2's Wave-1 pool: `callerSavedMask` takes all of
+// `classRegisterMask(RegClass.xmm)`, and taking xmm6-15 as callee-saved is Wave 2 (Win64 preserves
+// all 128 bits of them while `movsd` zeroes 64-127, so it needs 16-byte slots and leaf frame
+// alignment together). So a float live across a call has an allowed set of EXACTLY ∅ and MUST go to
+// memory — where `callChain`'s GPRs in the same position still have five callee-saved registers to
+// hide in. This is the float FORCE-SPILL path, and it is forced spilling rather than E5001: the
+// amended Rule 2 permits a spill whose placement is forced by a call bracket.
+let FloatSpillLoopsBase = 2 as KnobSize
+
+// The bounded set of float accumulators `scaleFloats` mutates — four, against a 16-register XMM file
+// (`RegisterFileSize` 32 less `FirstXmmRegisterNumber` 16). Small on purpose: the straight-line
+// arithmetic must never spill, so this knob measures float ARITHMETIC and cannot quietly become a
+// second spill knob. That shape is `scaleFloatSpill`'s job, and holding the two apart is the same
+// separation `WorkingLocalsPerFunction` keeps against `pressuredLoops`.
+let WorkingFloatsPerFunction = 4 as KnobSize
+
+// How many floats each spill loop holds live across its call. Every one of them spills (allowed =
+// ∅), so this is exactly the number of forced store/reload brackets per loop — the float twin of
+// `PressuredValuesPerLoop`, and it needs no headroom calculation because the XMM file's answer for a
+// value live across a call is ∅ at any pool size.
+let FloatsLivePerSpillLoop = 4 as KnobSize
 
 // How many SCOPE-FILLER locals a long generated function carries — the V DIMENSION, and it DOUBLES.
 //
@@ -406,7 +452,9 @@ function generateRung(root FilePath, rung RungIndex) returns ScaleRung throws Sc
 	sourceBytes = sourceBytes + try writeRungFile(dir, name: "f_loops", source: pressuredLoopsSource(knobAt(PressuredLoopsBase, rung: rung)), written: written)
 	sourceBytes = sourceBytes + try writeRungFile(dir, name: "g_nested", source: nestedLoopsSource(knobAt(LoopNestBase, rung: rung)), written: written)
 	sourceBytes = sourceBytes + try writeRungFile(dir, name: "h_shifts", source: shiftCoverageSource(), written: written)
-	sourceBytes = sourceBytes + try writeRungFile(dir, name: "i_main", source: mainSource(funcNames, chainLength: knobAt(CallChainBase, rung: rung)), written: written)
+	sourceBytes = sourceBytes + try writeRungFile(dir, name: "i_floats", source: floatOpsSource(knobAt(FloatOpsBase, rung: rung)), written: written)
+	sourceBytes = sourceBytes + try writeRungFile(dir, name: "j_fspill", source: floatSpillSource(knobAt(FloatSpillLoopsBase, rung: rung)), written: written)
+	sourceBytes = sourceBytes + try writeRungFile(dir, name: "k_main", source: mainSource(funcNames, chainLength: knobAt(CallChainBase, rung: rung)), written: written)
 
 	try pruneRungDir(dir, generated: written)
 
@@ -724,6 +772,148 @@ function nestedLoopsSource(depth KnobSize) returns String
 	return out.build()
 end 'nestedLoopsSource'
 
+// The float knob's OPAQUE ORIGIN, and the conversion band's first direction.
+//
+// `a + 0.5` promotes the opaque int PARAMETER into the float domain, so a float seed is
+// fold-resistant for exactly the reason every other value in this corpus is — shv2 has no
+// interprocedural constant propagation, so `a` is opaque at every call site. A pile of arithmetic on
+// float LITERALS would fold to nothing and measure an empty compile, which is this file's founding
+// trap.
+//
+// It is also the int→float promotion itself (`5 + 2.0` is 7.0 — specs-shv2/float-type.md's
+// `float-promotion`), so the way into the float domain is exercised by the same line that defeats
+// the folder. `trunc` is the way out, and `floatSumAndReturn` is where every float function takes it.
+function floatWorkingDecl() returns String
+	var out = StringBuilder.create()
+	for f in 0 upto WorkingFloatsPerFunction 'decl'
+		out.append("\tvar f{f} = a + {f}.5\n")
+	end 'decl'
+	return out.build()
+end 'floatWorkingDecl'
+
+// The shared float epilogue: sum the accumulators and LEAVE the float domain through `trunc`.
+//
+// `trunc` is not a flourish, it is the only exit: a float RETURN needs the xmm0 return slot Wave 1
+// does not model (specs-shv2/float-type.md's disabled `float-return-from-function`), so an `int`
+// return through `fpToSi` is how a float value reaches `main` at all — and it is the conversion
+// band's second direction, the one `floatWorkingDecl` does not cover.
+function floatSumAndReturn() returns String
+	var out = StringBuilder.create()
+	out.append("\tvar fsum = 0.0\n")
+	for f in 0 upto WorkingFloatsPerFunction 'sum'
+		out.append("\tfsum = fsum + f{f}\n")
+	end 'sum'
+	out.append("\treturn trunc(fsum)\n")
+	return out.build()
+end 'floatSumAndReturn'
+
+// The `floatOps` knob: ONE function, N groups of float arithmetic and float compares over a bounded
+// set of float accumulators. The float twin of `longFunction` — it grows float ops along a chain.
+//
+// Each group covers, deliberately, the things a float codegen change can move:
+//   • ALL FOUR arithmetic ops. `/` matters most: it is the ONE operator whose float form is a
+//     different Std op from its integer form (integer `/` traps and lowers to `StdOp.div`; float `/`
+//     is `binOp(div)`), so a corpus without it measures three quarters of the arithmetic band.
+//   • A float compare in BRANCH form, feeding a `jcc` — and the FLOAT PHI its merge takes, because
+//     the accumulator is assigned on one arm only.
+//   • The same compare MATERIALIZED as a bool, which is a different lowering: it lands `ucomisd`'s
+//     answer in a GPR instead of feeding a jump, and it is the shape that crosses register FILES.
+function floatOpsSource(groupCount KnobSize) returns String
+	var out = StringBuilder.create()
+	out.append("// Generated by ScaleCorpus: the float-ops knob — {groupCount} float arith/compare groups over {WorkingFloatsPerFunction} float accumulators.\n")
+	out.append("function scaleFloats(a int) returns int\n")
+	out.append(floatWorkingDecl())
+
+	for i in 0 upto groupCount 'eachGroup'
+		let p = i mod WorkingFloatsPerFunction
+		let q = (i + 1) mod WorkingFloatsPerFunction
+		let r = (i + 2) mod WorkingFloatsPerFunction
+
+		out.append("\tf{p} = f{p} + f{q}\n")
+		out.append("\tf{q} = f{q} - f{r}\n")
+		out.append("\tf{p} = f{p} * {i mod 3 + 2}.5\n")
+		out.append("\tf{r} = f{r} / {i mod 4 + 2}.25\n")
+
+		// The compare that feeds a branch, and the float phi the continuation takes for `f{p}`.
+		out.append("\tif f{p} > f{q} 'fc{i}'\n")
+		out.append("\t\tf{p} = f{p} + 1.5\n")
+		out.append("\tend 'fc{i}'\n")
+
+		// The compare whose answer becomes a bool VALUE in a GPR before anything branches on it.
+		out.append("\tlet fb{i} = f{r} < f{q}\n")
+		out.append("\tif fb{i} 'fm{i}'\n")
+		out.append("\t\tf{r} = f{r} + 0.25\n")
+		out.append("\tend 'fm{i}'\n")
+	end 'eachGroup'
+
+	out.append(floatSumAndReturn())
+	out.append("end 'scaleFloats'\n")
+	return out.build()
+end 'floatOpsSource'
+
+// The `floatSpill` knob: ONE function, N loops, each holding `FloatsLivePerSpillLoop` floats live
+// across a call to `scaleOpaque`. Every one of them is a FORCED spill — see `FloatSpillLoopsBase`
+// for why the allowed set is ∅ rather than merely small.
+//
+// The call is an INTEGER function, and that is not a compromise: a float ARGUMENT and a float RETURN
+// are both Wave 2, so an int callee is the only call a float can currently be live across — and it
+// is precisely the shape that forces the spill, because the floats are live across the bracket and
+// have nowhere caller-saved to survive it.
+//
+// Its accumulators are assigned INSIDE the loop, so each is a loop-carried FLOAT PHI. Before the
+// `mintPhi` fix this knob's every rung would have panicked the x64 emitter outright — which is the
+// most direct evidence available that the ladder needed this dimension.
+//
+// ⚠ WHY THIS IS NOT `pressuredLoopsSource` WITH A PREFIX PARAMETER, though the two emit the same
+// SHAPE (declare, loop, call, update, sum). They are the same shape asked of two register files that
+// answer it DIFFERENTLY, and the difference is the entire point of having both:
+//
+//   • `pressuredLoops` measures a CHOICE. Its eight GPRs have five callee-saved registers to compete
+//     for, so the allocator decides which three go to memory, and the knob is tuned (eight, against a
+//     14-GPR pool) to make exactly five spills fall out of that competition.
+//   • `floatSpill` measures NO CHOICE. Its allowed set is ∅, so every float spills at every call at
+//     any pool size and any knob value — there is nothing to tune and nothing to compete for.
+//
+// Merging them would take a `varPrefix`, a `counterPrefix`, a `resultPrefix`, a per-loop count, a
+// literal suffix, an accumulator initializer and a return expression — seven parameters to fold two
+// twenty-line text emitters, and the merged body would state neither reason above. Worse, the merge
+// would couple them: retuning the GPR knob to keep provoking five spills would silently retune a
+// float knob for which the number is irrelevant. Two knobs that a future change must be free to move
+// independently are not one knob. (The file already works this way — `longFunction` and `deepBlocks`
+// share a shape and stay apart for the same kind of reason.)
+function floatSpillSource(loopCount KnobSize) returns String
+	var out = StringBuilder.create()
+	out.append("// Generated by ScaleCorpus: the float-spill knob — {loopCount} loops, {FloatsLivePerSpillLoop} floats live across a call in each (allowed = ∅, so every one is a forced spill).\n")
+	out.append("function scaleFloatSpill(a int) returns int\n")
+	out.append("\tvar total = 0.0\n")
+
+	for loopIndex in 0 upto loopCount 'eachLoop'
+		// Fresh names per loop, so the loops' live ranges do not overlap and peak XMM pressure stays
+		// at one loop's worth however many loops there are — `pressuredLoops`' rule, in the other file.
+		for v in 0 upto FloatsLivePerSpillLoop 'declValues'
+			out.append("\tvar g{loopIndex}_{v} = a + {v + 1}.25\n")
+		end 'declValues'
+		out.append("\tvar j{loopIndex} = 0\n")
+		out.append("\twhile j{loopIndex} < {GeneratedLoopTrips} 'q{loopIndex}'\n")
+		out.append("\t\tlet k{loopIndex} = scaleOpaque(j{loopIndex})\n")
+
+		for v in 0 upto FloatsLivePerSpillLoop 'updateValues'
+			out.append("\t\tg{loopIndex}_{v} = g{loopIndex}_{v} + (k{loopIndex} + 0.5)\n")
+		end 'updateValues'
+
+		out.append("\t\tj{loopIndex} = j{loopIndex} + 1\n")
+		out.append("\tend 'q{loopIndex}'\n")
+
+		for v in 0 upto FloatsLivePerSpillLoop 'sumValues'
+			out.append("\ttotal = total + g{loopIndex}_{v}\n")
+		end 'sumValues'
+	end 'eachLoop'
+
+	out.append("\treturn trunc(total)\n")
+	out.append("end 'scaleFloatSpill'\n")
+	return out.build()
+end 'floatSpillSource'
+
 // The mask that bounds a dynamic shift COUNT to a sane, non-negative range. A count derived this way
 // is a runtime value the folder cannot see, so it takes the GUARDED shift path — the 6-7 ops that
 // saturate an out-of-range count — which a constant count folds away and which nothing in this corpus
@@ -817,6 +1007,11 @@ function mainSource(funcNames StringArray, chainLength KnobSize) returns String
 	out.append("\tacc = scalePressured(acc)\n")
 	out.append("\tacc = scaleNested(acc)\n")
 	out.append("\tacc = scaleShifts(acc)\n")
+	// The float knobs thread the seed exactly as the int ones do — each takes the opaque `acc` and
+	// hands back a `trunc`ed int, so a float function is as load-bearing as any other and no DCE
+	// pass could take the float dimension away again.
+	out.append("\tacc = scaleFloats(acc)\n")
+	out.append("\tacc = scaleFloatSpill(acc)\n")
 	out.append("\tif acc > 0 'ok'\n")
 	out.append("\t\treturn 0\n")
 	out.append("\tend 'ok'\n")
@@ -924,17 +1119,23 @@ export function printCorpusManifest()
 	print("    shl / shr with: a CONSTANT count (folded) AND a DYNAMIC count (runtime-guarded), over a\n")
 	print("      SIGNED operand (arithmetic/sign fill) AND a ranged int(0 to u64.max) operand (zero fill)\n")
 	print("    ranged typealiases\n")
+	print("    FLOAT (the SSE band): + - * / , compares in BOTH forms (feeding a jcc, and materialized\n")
+	print("      as a bool), float PHIs (branch-merged and loop-carried), int->float promotion and\n")
+	print("      trunc (the conversion band's two directions), and floats live ACROSS A CALL — whose\n")
+	print("      allowed set is EXACTLY empty, so every one is a forced spill\n")
 	print("\n")
 	print("  COST DIMENSIONS ON THE DOUBLING LADDER (each DOUBLES per rung; the rung-over-rung RATIO is\n")
 	print("  the growth — x2 linear, x4 quadratic — read straight off the counts):\n")
 	print("    function count, file count, sequential-if ops, block/CFG count, call-chain depth,\n")
-	print("    pressured-loop COUNT, loop-nest DEPTH, and locals-in-scope per function (the V dimension)\n")
+	print("    pressured-loop COUNT, loop-nest DEPTH, locals-in-scope per function (the V dimension),\n")
+	print("    float-op groups, and float-spill loop COUNT\n")
 	print("\n")
 	print("  NOT GENERATED — a codegen change to any of these is INVISIBLE here (structural blind spot):\n")
 	print("    `break` (in the subset, but no generated loop exits early); integer `/` and `mod` (idiv);\n")
-	print("    `or` / `xor` / `not`; float arithmetic; print, structs, arrays, strings, `for`, `match`;\n")
-	print("    closures, async, generics; `as` casts. What the corpus GENERATES is int `+ - *`, functions,\n")
-	print("    if/if-else/while, return/let/var, `and` + `shl`/`shr`, and ranged typealiases — nothing else.\n")
+	print("    `or` / `xor` / `not`; print, structs, arrays, strings, `for`, `match`; closures, async,\n")
+	print("    generics; `as` casts. Float ARGUMENTS and float RETURNS are absent because they do not\n")
+	print("    exist yet (Wave 2 — the xmm0 ABI slot); every float here enters by promotion and leaves\n")
+	print("    through trunc, which is the whole of what Wave 1 can express.\n")
 	print("\n")
 	print("  !! MEASURES MEMORY ONLY — a TIME-only superlinearity is invisible here BY DESIGN. Time is not\n")
 	print("     reproducible, so it cannot be trended; a cost that re-walks tokens or chases pointers but\n")

@@ -102,6 +102,72 @@ end 'main'
 ```
 
 
+<!-- test: float-phi-loop-carried -->
+A float ACCUMULATOR — the commonest float idiom there is. The loop header takes a phi whose
+value is a float, so the phi's own register class must be XMM. Every other float test in this
+suite keeps its floats in straight-line code, where no phi is minted at all.
+```maxon
+function main() returns ExitCode
+	var f = 0.0
+	var i = 0
+	while i < 4 'loop'
+		f = f + 2.5
+		i = i + 1
+	end 'loop'
+	return trunc(f)
+end 'main'
+```
+```exitcode
+10
+```
+
+
+<!-- test: float-phi-through-branch -->
+An if-merge phi carrying a float, guarded by an INT compare. The int guard is the point: it
+isolates the phi's class from the float-compare lowering, so a failure here can only be the
+phi. `float-compare-branch.md` puts a phi on a float compare's edges, but the value it carries
+is an `int` — so a float-TYPED phi was covered by nothing.
+```maxon
+function work(a int) returns int
+	var f = a + 0.0
+	if a > 5 'gt'
+		f = f + 1.5
+	end 'gt'
+	return trunc(f)
+end 'work'
+
+function main() returns ExitCode
+	return work(19)
+end 'main'
+```
+```exitcode
+20
+```
+
+
+<!-- test: float-phi-both-arms -->
+Both arms assign the float, so the merge phi has two real incoming values rather than one
+incoming plus the fall-through definition.
+```maxon
+function work(a int) returns int
+	var f = a + 0.0
+	if a > 100 'big'
+		f = f * 2.0
+	end 'big' else 'small'
+		f = f - 4.5
+	end 'small'
+	return trunc(f)
+end 'work'
+
+function main() returns ExitCode
+	return work(19)
+end 'main'
+```
+```exitcode
+14
+```
+
+
 <!-- disabled-test: float-return-from-function -->
 <!-- P1.0d.4 wave 2: float ABI (a float RETURN needs the xmm0 return slot Wave 1 does not model) -->
 ```maxon
