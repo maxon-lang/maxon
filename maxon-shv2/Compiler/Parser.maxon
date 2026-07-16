@@ -3532,13 +3532,26 @@ export type Parser
 		//   • MOVE the owned return OUT of both drop sets. It belongs to the caller now: out of
 		//     `ownedBindings` so `emitScopeDrops` does not double-free `return t`, and out of
 		//     `pendingTempDrops` so the interp/promoted temporary is not dropped on the dead path the
-		//     `ret` leaves behind.
+		//     `ret` leaves behind. The `pendingTempDrops` removal is PERMANENT — that list is
+		//     statement-local and this return drains-and-resets it below, so no other path reads it.
+		//     The `ownedBindings` removal is SCOPED to this return's drops and UNDONE after them
+		//     (`savedOwnedBindings`, restored past `emitScopeDrops`): `ownedBindings` OUTLIVES the
+		//     `return`, and the returned binding may sit in an enclosing block with other LIVE exit
+		//     edges — a loop body's per-iteration fall-through, a `break`/`continue`, a sibling `return`
+		//     on the other branch — whose drops are emitted LATER in the parse and still own it on their
+		//     runtime path. Removing it permanently stripped it from those edges too, so every
+		//     non-returning iteration of `while … 'l' let c = build(i); if … return c end 'l'` leaked its
+		//     copy — the leak gate's exit 101 on a program that prints the right answer.
+		//     `removeFromOwnedBindings` builds a NEW array, so `savedOwnedBindings` names the untouched
+		//     original those sibling edges go on to read.
 		var returned = retVal
 		if tagIsText(retTag) and not self.valueIsOwnedHeap(returned) 'promoteBorrowed'
 			returned = self.promoteToOwnedString(returned, range: SourceRange.ofToken(retTok))
 		end 'promoteBorrowed'
 
-		if self.valueIsOwnedHeap(returned) 'moveOut'
+		let movedOut = self.valueIsOwnedHeap(returned)
+		let savedOwnedBindings = self.ownedBindings
+		if movedOut 'moveOut'
 			self.removeFromOwnedBindings(returned)
 			self.removeFromPendingTemps(returned)
 		end 'moveOut'
@@ -3579,6 +3592,11 @@ export type Parser
 		end 'dropReturnTemps'
 
 		self.emitScopeDrops(WholeFunctionScopeFloor, anchor: retTok)
+
+		// Undo the scoped owned-binding move-out: sibling exit edges of an enclosing block still own
+		// the returned binding on their runtime path and their drops are emitted after this `ret`.
+		self.ownedBindings = savedOwnedBindings
+
 		self.artifact.emitTerminator(self.currentBlock, op: MaxonOp.ret(returned), range: SourceRange.ofToken(retTok))
 	end 'parseReturnStatement'
 

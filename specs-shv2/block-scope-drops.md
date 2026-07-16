@@ -207,6 +207,47 @@ end 'main'
 v5neg
 ```
 
+### Returning a Loop-Local Binding Frees the Non-Returning Iterations
+
+A `return` inside a loop hands ONE iteration's owned binding to the caller, but the binding
+is declared fresh each time round: every OTHER iteration builds a copy that falls through the
+loop body's `end` and must be dropped there. Moving the returned value out of the drop set must
+not also strip it from that per-iteration fall-through — `firstHit(2)`, whose `return` is never
+even reached, still allocates a `cand` each iteration and must free it.
+
+<!-- test: return-loop-local-frees-iterations -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function build(x Integer) returns String
+	return "v{x}"
+end 'build'
+
+function firstHit(n Integer) returns String
+	var i = 0
+	while i < n 'loop'
+		let cand = build(i)
+		if i == 2 'hit'
+			return cand
+		end 'hit'
+		i = i + 1
+	end 'loop'
+	return "none"
+end 'firstHit'
+
+function main() returns ExitCode
+	print(firstHit(10))
+	print(firstHit(2))
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+v2none
+```
+
 ### Struct Bound in a Block Is Released
 
 <!-- test: owned-struct-in-block -->
