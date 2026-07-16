@@ -1550,7 +1550,9 @@ gap rather than shipping an untested guard; the coordinator closed it). `closure
 `MmRuntime.CompilerInternalPrefix`, `TargetPrinter.isRuntimeFunction`) — the same namespace marker at 3 tiers;
 a single shared language-level constant is a worthwhile small cleanup, deferred (spans TargetPrinter).
 
-### 35. 🔴 NEW 2026-07-16 (P1.2 Wave A) — **a USER `__`-prefixed function SILENTLY MISCOMPILES; shv2 needs E2051. THE IMMEDIATE P1.2 FOLLOW-UP.**
+### 35. ~~🔴 (P1.2 Wave A) — a USER `__`-prefixed function SILENTLY MISCOMPILES; shv2 needs E2051.~~ ✅ FIXED 2026-07-16 (`abb6bde17`, 523→533)
+
+**✅ CLOSED:** E2051 now emitted at all reserved-`__` declaration sites via one `requireUnreservedName` helper; `specs-shv2/reserved-double-underscore.md` ports the 9 bootstrap cases + 2 coordinator-authored (enum/union name). The `__` predicate is now SOUND (no user `__` name can exist). Original finding below, kept for the lesson.
 
 **Found by the INDEPENDENT review** (the implementer's self-review missed it — the fifth time this rung the
 independent pass caught what the self-review did not). Wave A widened `MmRuntime.isCompilerInternalCallee`
@@ -1581,3 +1583,24 @@ bootstrap spec `specs/reserved-double-underscore.md`, 9 cases) + the shv2 regist
 port. ⇒ **DO THIS FIRST, before Wave B.** The review already corrected `MmRuntime.maxon:95-107`'s comment,
 which had asserted the false invariant *"no user function can begin with `__`"* — so the code no longer LIES,
 but the hole is open until E2051 lands.
+
+### 36. ~~🔴 (P1.2 Wave B) — a valid program PANICS the backend when a fused compare is the function's highest ValueId~~ ✅ FIXED 2026-07-16 (`837b948d2`)
+
+**Coordinator-found while reviewing the implementer's own workaround** — it is the signature bug (ONE FACT WRITTEN TWICE) at the backend. The value-class column was sized by `scanFunctionValueCount`, which counts the highest ValueId used as a target **OPERAND** (correct for the allocator — it only ever indexes live/register values). But `recordOpResultClass` writes a class for every value an op **DEFINES**, and a fused loop-test `cmp` defines its boolean yet is consumed only as the EFLAGS a `jcc` reads — a def that is never an operand, and invisible among the target ops entirely. When that boolean is the function's highest id the column comes up one short and the class write runs off the end:
+
+| program | before | after |
+|---|---|---|
+| `if a < b 'l' return c end 'l' return a` (both branches return an already-bound value ⇒ nothing minted after the compare ⇒ the compare IS the top id) | 🔴 `panic StdToX64Conversion:344: v3 outside the 3-wide class column` | ✅ compiles + runs |
+
+Wave B only DODGED this for `__int_to_string` (a header-guarded write loop kept the compare off the top id — "avoids it by luck"); **any user function of this shape crashed.** Fixed at the source: `setValueClass` grows the column with `growFilled` (amortized-linear) to cover every defined id; the `scanFunctionValueCount` pre-size stays as the allocator-coverage lower bound (so `assertClassColumnCovers`, a `>=` check, still holds). No second copy of "which ops define values" — `recordOpResultClass` remains the sole authority. Regression `comparison-operators/fused-compare-is-highest-value` (proven RED: `v2 outside the 2-wide column` with the grow disabled). The StringRuntime write-loop comment was corrected — the header-guard is now style/consistency, no longer load-bearing.
+
+### 37. 🔴 NEW 2026-07-16 (P1.2 Wave B) — **returning an OWNED interpolation String across a call LEAKS (exit 101). P1.4 borrow-vs-consume (caller side).**
+
+**Found by the INDEPENDENT review by PROBING** (no enabled test returns an owned String, so no gate catches it — the review wrote the program). CONFIRMED:
+
+| program | shv2 | why |
+|---|---|---|
+| `function build(x) returns String  return "val {x}"` + `let s = build(5); print(s)` | prints `val 5` then **exit 101** (leak) | callee correctly does NOT drop the returned owned String (a move-out), but the caller cannot recover ownership |
+| `function greet() returns String  return "hello"` (a LITERAL) | **exit 0**, clean | a borrowed immortal-rdata literal is never owned, never dropped |
+
+**Root cause:** a String's `ValueTypeTag.string` conflates owned-heap with borrowed-immortal, and the new `valueOwnsHeap` provenance column is **per-function**, so a returned owned String reads `false` in the caller and is never freed. Structs already recover cross-function ownership via `tagIsStructRef` (`let p = Point.create(...)` → exit 0, verified); String needs the same at the call boundary. **This is the caller-side half of borrow-vs-consume, DEFERRED to P1.4** (same class as the already-disabled `structs/struct-return` through-binding case, which `parseReturnStatement`'s own comment flags) — a proper fix needs a return-ownership convention + heap-promotion of literal returns + its own spec coverage. **⚠ It is NOT silent — the runtime leak checker exits 101** — so the core "no silent leak" invariant holds, but it is a real reachable leak this wave INTRODUCED (before Wave B there was no owned heap String to leak). **P1.4 must rule: reject `return <owned String>` cleanly in the interim, or implement the convention.** Lower-severity sibling, also P1.4/Wave C: `var s = "{y}"` reassignment currently exits 0 with correct output only because the bump allocator masks a use-after-free (the reassigned temp drops at statement end; the original at scope exit; counts balance by luck) — already tracked as the disabled `string-type-2/reassigned-var-equality-not-const-folded` (tagged "P1.2 wave C").
