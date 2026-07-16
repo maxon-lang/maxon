@@ -381,5 +381,16 @@ function reportParseError(project Project, path FilePath, error ParseError)
 		matchMissingBlockId(line, column) then reportPositioned(project, code: ErrorCode.matchMissingBlockId, message: "missing block identifier", line: line, column: column, filePath: path)
 		matchMismatchedBlockId(expected, got, line, column) then reportPositioned(project, code: ErrorCode.matchMismatchedBlockId, message: "block identifier mismatch: expected '{expected}', got '{got}'", line: line, column: column, filePath: path)
 		matchBlockStatement(keyword, line, column) then reportPositioned(project, code: ErrorCode.matchBlockStatement, message: "block-opening statement '{keyword}' is not allowed in a match arm; use a function call instead", line: line, column: column, filePath: path)
+		// The enum/union arms (P1.1b wave B). Each message is byte-for-byte the reference compilers' —
+		// the `maxoncstderr` goldens in the ported enum specs gate them exactly.
+		enumDuplicateCase(caseName, line, column) then reportPositioned(project, code: ErrorCode.enumDuplicateCase, message: "duplicate enum case: '{caseName}'", line: line, column: column, filePath: path)
+		enumDuplicateRawValue(rawValue, line, column) then reportPositioned(project, code: ErrorCode.enumDuplicateRawValue, message: "duplicate raw value: '{rawValue}'", line: line, column: column, filePath: path)
+		enumRawValueTypeMismatch(detail, line, column) then reportPositioned(project, code: ErrorCode.enumRawValueTypeMismatch, message: "raw value type mismatch: '{detail}'", line: line, column: column, filePath: path)
+		enumUnknownCase(caseName, line, column) then reportPositioned(project, code: ErrorCode.enumUnknownCase, message: "unknown enum case: '{caseName}'", line: line, column: column, filePath: path)
+		matchQualifiedCaseName(bare, qualified, line, column) then reportPositioned(project, code: ErrorCode.matchQualifiedCaseName, message: "use '{bare}' instead of '{qualified}' in match", line: line, column: column, filePath: path)
+		matchDefaultEnumMustThrow(kindWord, typeName, line, column) then reportPositioned(project, code: ErrorCode.matchDefaultEnumMustThrow, message: "'default' in a match on {kindWord} '{typeName}' must be followed by 'throws <error>' or 'panic(\"message\")'", line: line, column: column, filePath: path)
+		enumMatchNotExhaustive(kindWord, typeName, missing, line, column) then reportPositioned(project, code: ErrorCode.matchNotExhaustive, message: "match on {kindWord} '{typeName}' is not exhaustive, missing: {missing}", line: line, column: column, filePath: path)
+		matchOverlappingCase(caseName, line, column) then reportPositioned(project, code: ErrorCode.matchDuplicatePattern, message: "overlapping pattern in match: '{caseName}' is already covered", line: line, column: column, filePath: path)
+		matchEmptyRange(low, high, line, column) then reportPositioned(project, code: ErrorCode.matchDuplicatePattern, message: "range pattern '{low} to {high}' is empty: '{high}' is declared before '{low}'", line: line, column: column, filePath: path)
 	end 'kind'
 end 'reportParseError'

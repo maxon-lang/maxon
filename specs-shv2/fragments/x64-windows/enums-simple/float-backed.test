@@ -1,0 +1,52 @@
+// Test: float-backed
+enum FloatBacked
+	North = 1.1
+	South = 2.2
+	East = 3.3
+end 'FloatBacked'
+
+function main() returns ExitCode
+	let f = FloatBacked.North
+	let result = match f 'check'
+		North gives 1
+		South gives 0
+		East gives 0
+	end 'check'
+	return result
+end 'main'
+---
+ExitCode: 1
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm rax, 4607632778762754458
+    x64.movRegImm rcx, 4607632778762754458
+    x64.cmpRegReg rax, rcx
+    x64.jcc equal, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.movRegImm32 r8, 1
+    x64.jmp matchcont
+  matchnext:
+    x64.movRegImm rcx, 4612136378390124954
+    x64.cmpRegReg rax, rcx
+    x64.jcc equal, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.movRegImm32 r8, 0
+    x64.jmp matchcont
+  matchnext:
+    x64.movRegImm rcx, 4614613358185178726
+    x64.cmpRegReg rax, rcx
+    x64.jcc equal, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.movRegImm32 r8, 0
+    x64.jmp matchcont
+  matchcont:
+    x64.popReg rbp
+    x64.ret
+  matchnext:
+}

@@ -185,6 +185,12 @@ export typealias RangedTypeAliasMap = Map with (ByteArray, RangedTypeAlias)
 // second number to keep in step. Bounded by the fields a struct may declare.
 export typealias FieldIndex = int(0 to 65535)
 
+// The index of a case within its enum's declaration order — the enum twin of `FieldIndex`, and
+// bounded the same way (the cases an enum may declare). It IS the case's identity: an enum RANGE
+// arm is a slice of this index (OPEN #21), never of the tag, which is the whole point of storing
+// cases in declaration order.
+export typealias CaseIndex = int(0 to 65535)
+
 // ⭐ **EVERY FIELD OCCUPIES ONE 8-BYTE SLOT, WHATEVER ITS DECLARED TYPE**, and this constant is
 // that decision. It is not an alignment convenience: a struct FIELD of struct type is a POINTER
 // (`valueTagToStdType(structRef)` → i64), so `sizeof(Outer{p Point, n Integer})` is 16 rather than
@@ -341,6 +347,93 @@ export typealias StructLayoutArray = Array with StructLayout
 // a declared `type` into `MaxonType.structRef`.
 export typealias StructLayoutMap = Map with (ByteArray, StructLayout)
 
+// EnumLayout — one declared `enum`/`union`: what it is called, whether it is a `union` (the ONLY
+// thing that separates the two — identical lowering, different diagnostic wording), and its cases
+// IN DECLARATION ORDER.
+//
+// ⭐⭐ **THE PARALLEL-COLUMN SHAPE IS THE DERIVE-TIER FIX FOR OPEN #21** — the "one field with two
+// meanings" hazard both reference compilers carry. The bootstrap's `IrEnumCase.Ordinal` is the
+// auto-increment TAG counter that an explicit `= N` resets, and its range code once read it as a
+// DECLARATION POSITION — a silent wrong answer (`ok = 500  notFound = 200` matched nothing). Here
+// the case's DECLARATION INDEX is the array position (`indexOfCase`, derived, never stored) and the
+// case's TAG is the `caseTags[i]` column. The two are SEPARATE BY CONSTRUCTION: no field can carry
+// both, so a range arm reading the index against a tag-valued scrutinee — the exact bug — cannot be
+// written. It is the enum twin of `StructLayout`'s field columns, and `addCase` is the SOLE writer
+// for `StructLayout.addField`'s reason: a caller that pushed a name and forgot a tag would shift
+// every later case's tag onto the wrong case.
+//
+// **TAGS ARE UNIFORMLY `ParsedInt` (i64), for int AND float backing.** An int-backed case's tag is
+// its raw value; a FLOAT-backed case's tag is its IEEE-754 BIT PATTERN — the same representation
+// `FieldDefault.literal` stores a float default as. An enum value is therefore always an i64 (the
+// tag, or the float bits), matched by an i64 compare, so an enum needs no float register class and
+// no second code path. (`.rawValue` — the accessor that would decode the bits back to a float — is
+// a later rung.)
+export type EnumLayout
+	export var name as ByteArray
+	// `union U` vs `enum E`. The lowering is identical; this bit only chooses the word a diagnostic
+	// prints ("union" vs "enum"), which is exactly what `/specs` says separates the two for a
+	// payload-free union.
+	export var isUnion as bool
+	// Parallel arrays, in DECLARATION order: case `i` is named `caseNames[i]` and carries tag
+	// `caseTags[i]`. NEVER appended to directly — `addCase` is the one writer (see the header).
+	export var caseNames as ByteArrayArray
+	export var caseTags as ParsedIntArray
+
+	export static function create(name ByteArray, isUnion bool) returns EnumLayout
+		return Self{name: name, isUnion: isUnion, caseNames: ByteArrayArray.create(), caseTags: ParsedIntArray.create()}
+	end 'create'
+
+	// Append one declared case. THE one writer of both columns, so they cannot drift.
+	export function addCase(caseName ByteArray, tag ParsedInt)
+		self.caseNames.push(caseName)
+		self.caseTags.push(tag)
+	end 'addCase'
+
+	export function caseCount() returns CaseIndex
+		return self.caseNames.count()
+	end 'caseCount'
+
+	// The name of case `index`.
+	export function caseNameAt(index CaseIndex) returns ByteArray
+		return try self.caseNames.get(index) otherwise panic("EnumLayout.caseNameAt: caseNames.get OOB at {index} for `{self.kindWord()} {String.from(self.name)}`, which declares {self.caseCount()} cases")
+	end 'caseNameAt'
+
+	// The tag of case `index` — its raw value (int backing) or IEEE-754 bit pattern (float backing).
+	export function tagOfIndex(index CaseIndex) returns ParsedInt
+		return try self.caseTags.get(index) otherwise panic("EnumLayout.tagOfIndex: caseTags.get OOB at {index} for `{self.kindWord()} {String.from(self.name)}`, which declares {self.caseCount()} cases")
+	end 'tagOfIndex'
+
+	// The declaration index of the case named `wanted`, or `caseCount()` when no case carries that
+	// name. A linear scan for `StructLayout.indexOfField`'s reason: case counts are tiny.
+	export function indexOfCase(wanted ByteArray) returns CaseIndex
+		for i in 0 upto self.caseNames.count() 'each'
+			let caseName = try self.caseNames.get(i) otherwise panic("EnumLayout.indexOfCase: caseNames.get OOB at {i}")
+			if caseName.equals(wanted) 'match'
+				return i
+			end 'match'
+		end 'each'
+		return self.caseNames.count()
+	end 'indexOfCase'
+
+	// Does this enum declare a case named `wanted`?
+	export function hasCase(wanted ByteArray) returns bool
+		return self.indexOfCase(wanted) < self.caseCount()
+	end 'hasCase'
+
+	// The declaring keyword, for a diagnostic — `union` vs `enum`. One place, so a message can never
+	// call the same declaration by both names.
+	export function kindWord() returns String
+		return "union" if self.isUnion else "enum"
+	end 'kindWord'
+end 'EnumLayout'
+
+export typealias EnumLayoutArray = Array with EnumLayout
+
+// Registry: enum/union name -> its declaration. The twin of `StructLayoutMap`, filled from each
+// file's artifact by `mergeArtifact` and read by TypeResolution to resolve `MaxonType.named` for a
+// declared `enum`/`union` to its integer representation (an enum value IS its i64 tag).
+export typealias EnumLayoutMap = Map with (ByteArray, EnumLayout)
+
 // --- Project: the compiler-wide shared state (Chunk C growth) ---
 //
 // GROWTH: this is the M1 `Project`. v1's `Project` has ~90 fields and ~28
@@ -479,6 +572,10 @@ export type Project
 	// `MaxonType.named` resolves against the aliases above OR against this, and a name in neither
 	// is E3011.
 	export var structTypes as StructLayoutMap
+	// Declared enum/union types, keyed by name (see EnumLayout). The struct registry's twin: a
+	// `MaxonType.named` naming a declared `enum`/`union` resolves to `integer` here (an enum value
+	// is its i64 tag), and the parser reads the cases through the whole-program signature index.
+	export var enumTypes as EnumLayoutMap
 	// id <-> name table behind every `MaxonType.named`. Folded from per-file
 	// artifact interners at merge time (see TypeNameInterner.maxon).
 	export var typeNames as TypeNameInterner
@@ -530,6 +627,7 @@ export type Project
 			funcSignatures: FuncSignatureMap.create(),
 			typeAliases: RangedTypeAliasMap.create(),
 			structTypes: StructLayoutMap.create(),
+			enumTypes: EnumLayoutMap.create(),
 			typeNames: TypeNameInterner.create(),
 			opRanges: SourceRangeTable.create(),
 			valueOrigins: ValueOriginTable.create(),

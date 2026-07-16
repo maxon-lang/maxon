@@ -82,6 +82,12 @@ export type FileParseArtifact
 	// diagnosed, and the merge is last-wins. It needs the positioned check `commitFuncSignatures`
 	// does for functions, and no spec case covers it; see `commitStructTypes`.)
 	export var structTypes as StructLayoutArray
+	// This file's declared enum/union types, in declaration order. The twin of `structTypes`, but
+	// UNLIKE it carries no type-name ids — a case is a plain NAME and a tag is a plain INT, so
+	// `mergeArtifact` needs no remap for these (contrast `remapArtifact`, which rewrites struct
+	// field types). Positionless for `structTypes`' reason: no diagnostic is raised against an
+	// enum DECLARATION at merge time.
+	export var enumTypes as EnumLayoutArray
 	// This file's LOCAL type-name interner. Its ids are file-local; `mergeArtifact`
 	// folds them into the project interner and remaps this artifact's ids.
 	export var typeNames as TypeNameInterner
@@ -96,6 +102,7 @@ export type FileParseArtifact
 			funcSignatures: FuncSignatureEntryArray.create(),
 			typeAliases: RangedTypeAliasArray.create(),
 			structTypes: StructLayoutArray.create(),
+			enumTypes: EnumLayoutArray.create(),
 			typeNames: TypeNameInterner.create()
 		}
 	end 'create'
@@ -181,6 +188,12 @@ export type FileParseArtifact
 	export function recordStructType(layout StructLayout)
 		self.structTypes.push(layout)
 	end 'recordStructType'
+
+	// Record a declared enum/union type as this file's contribution to the project-wide `enumTypes`
+	// registry — the same NEVER-touch-Project discipline every `record*` above follows.
+	export function recordEnumType(layout EnumLayout)
+		self.enumTypes.push(layout)
+	end 'recordEnumType'
 end 'FileParseArtifact'
 
 // Fold `artifact` into the whole-program build in source-path order:
@@ -226,6 +239,7 @@ export function mergeArtifact(project Project, target MaxonModule, artifact File
 	commitFuncSignatures(project, artifact: artifact)
 	commitTypeAliases(project, artifact: artifact)
 	commitStructTypes(project, artifact: artifact)
+	commitEnumTypes(project, artifact: artifact)
 end 'mergeArtifact'
 
 // Commit the artifact's declared struct types into the project registry — the registry
@@ -244,6 +258,17 @@ function commitStructTypes(project Project, artifact FileParseArtifact)
 		project.structTypes.upsert(layout.name, value: layout)
 	end 'each'
 end 'commitStructTypes'
+
+// Commit the artifact's declared enum/union types into the project registry — the registry
+// `TypeResolution.resolveNamedType` reads to resolve a `MaxonType.named` naming a declared
+// `enum`/`union` to `integer`. A plain upsert, matching `commitStructTypes`, and LAST-WINS on a
+// same-named collision for the same (unfixed) reason: cross-file type scoping, which no spec case
+// covers, is the prerequisite for the positioned duplicate check.
+function commitEnumTypes(project Project, artifact FileParseArtifact)
+	for layout in artifact.enumTypes 'each'
+		project.enumTypes.upsert(layout.name, value: layout)
+	end 'each'
+end 'commitEnumTypes'
 
 // Commit the artifact's ranged-typealias declarations into the project registry. A
 // plain upsert, and DELIBERATELY not a duplicate check: a non-exported typealias is

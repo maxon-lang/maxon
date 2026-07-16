@@ -4,25 +4,29 @@
 // unresolved type, and keeps the `funcReturnTypes` registry in sync with the
 // resolved module so SemanticCheck reads resolved types.
 //
-// A named type resolves through THREE sources, in order:
+// A named type resolves through FOUR sources, in order:
 //
 //   1. The BUILTIN alias `ExitCode`, recognized by NAME — WITHOUT loading the stdlib
 //      (full stdlib type resolution is deferred until programs call stdlib functions).
 //      It resolves to `MaxonType.exitCode`, a width-free tag whose unsigned-32-bit
 //      width is assigned at the Maxon→Std boundary (see `maxonTypeToStdType`).
-//   2. The project's RANGED TYPEALIAS registry — every `typealias Score = int(0 to 100)`
+//   2. The project's DECLARED STRUCT registry — every `type Point` the parser declared. It
+//      resolves to `MaxonType.structRef(id)`, KEEPING the name id, which is the opposite of
+//      what an alias does and is the whole distinction between the two: an alias creates no
+//      nominal identity, and a `type` is nothing BUT one. `Point` and `Rect` are different
+//      types however identical their fields, and the id is what says so.
+//   3. The project's DECLARED ENUM/UNION registry — every `enum`/`union` the parser declared. It
+//      resolves to `MaxonType.integer` (an enum value is its i64 tag), DROPPING the id like an
+//      alias does: nothing downstream needs to know a value was a `Color`, because only `match`
+//      inspects an enum and it reads the enum by name from the signature index at parse time.
+//   4. The project's RANGED TYPEALIAS registry — every `typealias Score = int(0 to 100)`
 //      the parser declared. An alias resolves to its UNDERLYING primitive and nothing
 //      more: two aliases over the same range are the same type, because an alias
 //      creates no nominal distinction. The range itself is not consulted here — a
 //      narrowing conversion into a ranged alias is checked at run time, which is a
 //      later milestone.
-//   3. The project's DECLARED STRUCT registry — every `type Point` the parser declared. It
-//      resolves to `MaxonType.structRef(id)`, KEEPING the name id, which is the opposite of
-//      what an alias does and is the whole distinction between the two: an alias creates no
-//      nominal identity, and a `type` is nothing BUT one. `Point` and `Rect` are different
-//      types however identical their fields, and the id is what says so.
 //
-// A named type in none of the three is a USER error (a typo, or a type this slice does not
+// A named type in none of the four is a USER error (a typo, or a type this slice does not
 // have), not a compiler-invariant violation, and it reports E3011 — unpositioned, because the
 // parser records no source span for a type REFERENCE (only ops and parameter NAMES carry
 // one). See `resolveNamedType` for why an unpositioned diagnostic is the right trade and
@@ -172,7 +176,19 @@ function resolveNamedType(project Project, id TypeNameId) returns MaxonType
 		return MaxonType.structRef(id)
 	end 'isStruct'
 
-	// A name in NONE of the three sources is a USER error — a typo (`Scor` for `Score`), a bare
+	// ⭐ A DECLARED `enum`/`union` RESOLVES AWAY TO `integer`, the OPPOSITE of a struct — and for the
+	// same reason an alias does. An enum value IS its i64 tag (int backing) or its float BIT PATTERN
+	// (float backing), never a heap box, so the type carries no nominal identity downstream: after
+	// resolution nothing needs to know a value was a `Color` rather than a bare int, because the
+	// only thing that inspects an enum — `match` — reads the enum by NAME from the whole-program
+	// signature index at PARSE time, long before this pass runs. So the id is dropped, exactly as a
+	// ranged alias's is. (Float-backed enums resolve to `integer` too: the bits ARE an i64, matched
+	// by an i64 compare — see EnumLayout.)
+	if project.enumTypes.contains(name) 'isEnum'
+		return MaxonType.integer
+	end 'isEnum'
+
+	// A name in NONE of the sources is a USER error — a typo (`Scor` for `Score`), a bare
 	// sized type (`u8` is not a type in Maxon; a ranged alias over it is), or a
 	// user-defined type this slice does not have. It panicked until now, which was a
 	// tolerable bargain only while `ExitCode` was the sole legal named type and no

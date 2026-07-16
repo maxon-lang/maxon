@@ -378,6 +378,39 @@ export union ParseError implements Error
 	// **E2049**, positioned at the opening keyword. Each arm body is a single statement; a
 	// block-opener would need a nested scope a single-line arm has no place for.
 	matchBlockStatement(keyword String, line LineNumber, column ColumnNumber)
+	// --- The enum/union arms (P1.1b wave B) ---
+	//
+	// An enum/union declares one case name twice. Renders as **E3030**, positioned at the second
+	// declaration.
+	enumDuplicateCase(caseName String, line LineNumber, column ColumnNumber)
+	// Two enum/union cases declare the same raw value (`ok = 200  success = 200`). Renders as
+	// **E3031**, positioned at the second case. `rawValue` is the value as the bootstrap prints it.
+	enumDuplicateRawValue(rawValue String, line LineNumber, column ColumnNumber)
+	// An enum/union case's raw value has a type other than the enum's declared backing (`ok = 100
+	// fail = 5.0`). Renders as **E3032**, positioned at the offending case. `detail` is the
+	// bootstrap's exact `expected <x>, got <y>` phrasing.
+	enumRawValueTypeMismatch(detail String, line LineNumber, column ColumnNumber)
+	// A `Color.red` literal, or a match arm, names a case the enum does not have. Renders as
+	// **E3034**, positioned at the case name.
+	enumUnknownCase(caseName String, line LineNumber, column ColumnNumber)
+	// A match arm names a case in QUALIFIED form (`Color.red`). Renders as **E3075**, positioned at
+	// the type name — the scrutinee's enum is already known, so the bare name suffices.
+	matchQualifiedCaseName(bare String, qualified String, line LineNumber, column ColumnNumber)
+	// A `default` arm on an ENUM match that is not `default throws`/`default panic`. Renders as
+	// **E2046**, positioned at the `default` — an enum match is exhaustive by listing every case, so
+	// a plain catch-all is forbidden (it would silently mask a case added later). `kindWord` is
+	// "enum" or "union"; `typeName` the enum's name.
+	matchDefaultEnumMustThrow(kindWord String, typeName String, line LineNumber, column ColumnNumber)
+	// An enum/union match does not cover every case and has no `default throws`. Renders as **E2026**,
+	// positioned at the closing `end`. `missing` is the comma-joined names of the uncovered cases, in
+	// declaration order — the enum twin of `matchNotExhaustive`.
+	enumMatchNotExhaustive(kindWord String, typeName String, missing String, line LineNumber, column ColumnNumber)
+	// Two arms cover the same enum case — a bare name repeated, or a case covered by both a range and
+	// a later arm. Renders as **E2027**, positioned at the second (overlapping) arm.
+	matchOverlappingCase(caseName String, line LineNumber, column ColumnNumber)
+	// A range arm `high to low` whose upper case is declared BEFORE its lower case, so it covers no
+	// cases. Renders as **E2027**, positioned at the range. `low`/`high` are the case names written.
+	matchEmptyRange(low String, high String, line LineNumber, column ColumnNumber)
 end 'ParseError'
 
 // **THE NAME OF THE RECEIVER PARAMETER.** An instance method's parameter 0, pushed by
@@ -1148,6 +1181,76 @@ union MatchGiveValue
 	value(id ValueId)
 end 'MatchGiveValue'
 
+// The stateful bookkeeping a single enum/union declaration's case loop threads across its cases:
+// the auto-increment TAG counter, and the BACKING (int vs float) that the first explicitly-typed
+// case fixes.
+//
+// A `type` (one heap object per declaration, on the cold declaration path) rather than three
+// out-params, which Maxon has no clean spelling for: the counter and the backing decision must
+// PERSIST across cases (a bare `b` after `a = 5` must read `6`), so a caller that read them back by
+// value would lose the update. `backingResolved` gates `backingIsFloat` — the latter is meaningless
+// until the first `= <literal>` sets it, exactly as `StructLayout` has no field until `addField`.
+type EnumBackingState
+	// The tag the NEXT bare (or first) case takes. Starts at 0; an explicit `= N` resets it to N+1,
+	// which is what gives `enum E { a = 5  b }` the tag 6.
+	export var nextTag as ParsedInt
+	// Has any case fixed the backing yet? Until one does, a case of either kind is accepted and sets
+	// it; after, a mismatch is E3032.
+	export var backingResolved as bool
+	// Which backing, once resolved: float (`= 1.5`) or int (bare, or `= 5`). Read only when
+	// `backingResolved`.
+	export var backingIsFloat as bool
+
+	export static function create() returns EnumBackingState
+		return Self{nextTag: 0, backingResolved: false, backingIsFloat: false}
+	end 'create'
+end 'EnumBackingState'
+
+// Is `kind` a LITERAL token — an int/float/string/char/byte-string literal? Used to tell a keyword
+// used as a case NAME (`keyword-as-case-name.md`: `function`, `end`, ...) from a literal, which the
+// lexer emits as its own kind carrying its text. THE one list, so the case-name reader and any
+// later reader cannot drift on what counts as a literal.
+function tokenIsLiteralKind(kind TokenKind) returns bool
+	return kind == TokenKind.intLiteral or kind == TokenKind.floatLiteral or kind == TokenKind.stringLiteral or kind == TokenKind.charLiteral or kind == TokenKind.byteStringLiteral
+end 'tokenIsLiteralKind'
+
+// Can `tok` serve as an enum/union CASE NAME? An identifier, or a KEYWORD used as one — `enum
+// TokenType { function return end if … }` is legal (`keyword-as-case-name.md`), and a keyword
+// carries its source spelling in `.value` (the lexer emits it through the same path an identifier
+// takes). The signal that a token is word-shaped rather than punctuation is that it carries text: a
+// punctuator, `newline` and EOF all carry the shared EMPTY slice (see Token.value), while a literal
+// carries text but is ruled out by its KIND. So a case name is an identifier, or any non-literal
+// token that carries a spelling.
+function tokenNamesEnumCase(tok Token) returns bool
+	if tok.kind == TokenKind.identifier 'plainIdentifier'
+		return true
+	end 'plainIdentifier'
+	if tok.value.isEmpty() 'punctuationOrEof'
+		return false
+	end 'punctuationOrEof'
+	return not tokenIsLiteralKind(tok.kind)
+end 'tokenNamesEnumCase'
+
+// Does a scrutinee's type name resolve to a declared enum/union? The predicate `parseMatchCommon`
+// branches enum-vs-scalar on, factored out so the flag and the layout extraction below cannot come
+// to disagree about what "is an enum match" means.
+function enumMatchIsDeclared(decl DeclaredEnum) returns bool
+	return match decl 'kind'
+		declared gives true
+		undeclared gives false
+	end 'kind'
+end 'enumMatchIsDeclared'
+
+// The layout behind a `declared` enum match — called ONLY where `enumMatchIsDeclared` already
+// answered true, so `undeclared` is a caller-guard break, not a program error. Returns the layout
+// REFERENCE (no allocation), so re-extracting it at each of the three enum branch sites is free.
+function requireEnumLayout(decl DeclaredEnum) returns EnumLayout
+	match decl 'kind'
+		declared(layout) then return layout
+		undeclared then panic("requireEnumLayout: called on a scalar match — guard with enumMatchIsDeclared")
+	end 'kind'
+end 'requireEnumLayout'
+
 // A match arm that reaches the merge block — its exit block, the carried-variable values it
 // leaves scope with, and (expression form only) the value it `gives`. Collected as the arms are
 // parsed and drained by `finalizeMatchMerge`, which mints the merge's phis from the whole set.
@@ -1416,6 +1519,7 @@ export type Parser
 		var entries = FuncReturnTypeEntryArray.create()
 		var aliases = RangedTypeAliasArray.create()
 		var structs = StructLayoutArray.create()
+		var enums = EnumLayoutArray.create()
 		var bindings = TopLevelDeclArray.create()
 
 		let resume = self.pos
@@ -1472,12 +1576,22 @@ export type Parser
 				continue
 			end 'isTypeDecl'
 
+			// An `enum`/`union` DECLARATION, gated on depth 0 for `type`'s exact reason: both are
+			// reserved keywords that are nonetheless legal as PARAMETER NAMES, so a bare `enum`/`union`
+			// token can sit inside a parameter list (which `recordScannedSignature` skips wholesale). At
+			// depth 0 it is a declaration and nothing else. `recordScannedEnum` consumes the whole
+			// declaration — cursor past its `end` — so the loop's depth invariant is untouched.
+			if depth == 0 and (self.at(TokenKind.enum) or self.at(TokenKind.union)) 'isEnumDecl'
+				self.recordScannedEnum(enums, isUnion: self.at(TokenKind.union))
+				continue
+			end 'isEnumDecl'
+
 			depth = self.blockDepthAfter(depth)
 			self.advance()
 		end 'scan'
 		self.pos = resume
 
-		index.foldFile(entries, aliases: aliases, structs: structs, bindings: bindings, fileTypeNames: self.artifact.typeNames)
+		index.foldFile(entries, aliases: aliases, structs: structs, enums: enums, bindings: bindings, fileTypeNames: self.artifact.typeNames)
 	end 'foldDeclaredSignaturesInto'
 
 	// Is the cursor on a `let` or a `var` — the two keywords that introduce a top-level binding?
@@ -1500,7 +1614,8 @@ export type Parser
 			return depth + 1
 		end 'opens'
 
-		if self.at(TokenKind.end) and depth > 0 'closes'
+		// A keyword case-name arm (`end gives …`) is not a block close — see `keywordIsMatchCaseName`.
+		if self.at(TokenKind.end) and depth > 0 and not self.keywordIsMatchCaseName(self.pos) 'closes'
 			return depth - 1
 		end 'closes'
 
@@ -1642,6 +1757,47 @@ export type Parser
 		structs.push(layout)
 		self.enclosingType = EmptySourceText
 	end 'recordScannedType'
+
+	// Cursor is AT `enum`/`union`. Append the enum/union it declares and leave the cursor PAST the
+	// declaration's `end` — `recordScannedType`'s twin.
+	//
+	// TOLERANT, for `recordScannedType`'s reason: a malformed enum is the REAL parse's to report,
+	// with a position. It shares `readEnumCaseInto` and `atEnumBodyEnd` with `parseEnumDeclaration`,
+	// so the sweep and the parse cannot drift on how a case's TAG is assigned — the fact the parser
+	// reads back at every `Color.red` and every `match`. `readEnumCaseInto` consumes the keyword
+	// before it can fail (below), so the cursor always advances and the caller's loop cannot spin.
+	//
+	// It walks the body ITSELF (like `recordScannedType`) rather than letting the caller's loop do
+	// it: a case named `end` means only `atEnumBodyEnd`'s label-lookahead rule can tell the
+	// terminator from a case, which the caller's generic `blockDepthAfter` cannot.
+	function recordScannedEnum(enums EnumLayoutArray, isUnion bool)
+		try self.consume(TokenKind.union if isUnion else TokenKind.enum) otherwise return
+		let nameTok = try self.consume(TokenKind.identifier) otherwise return
+
+		var layout = EnumLayout.create(nameTok.value, isUnion: isUnion)
+		var state = EnumBackingState.create()
+
+		while not self.isEof() 'body'
+			self.skipNewlines()
+			if self.atEnumBodyEnd() 'closes'
+				self.advance()
+				self.skipOptionalLabel()
+				break
+			end 'closes'
+
+			// A method (`function <name>(`) — stop, tolerantly; the real parse rejects it with a
+			// position. `function` ALONE is a legal case name, so only a real method-start stops here.
+			if self.atEnumMethodStart() 'method'
+				break
+			end 'method'
+
+			// A case the sweep cannot read leaves the layout SHORT, which would misassign every later
+			// case's tag — so the scan stops rather than recording a layout it knows is wrong.
+			try self.readEnumCaseInto(layout, state: state) otherwise break
+		end 'body'
+
+		enums.push(layout)
+	end 'recordScannedEnum'
 
 	// `type <Name>` — the two tokens every type declaration opens with, read by BOTH the tolerant
 	// sweep and the real parse. One reader, so the two can never disagree about what a type is
@@ -1851,7 +2007,9 @@ export type Parser
 			self.artifact.recordTypeAlias(try self.readTypeAliasDeclaration())
 		end 'isTypeAlias' else if self.at(TokenKind.type) 'isTypeDecl'
 			try self.parseTypeDeclaration()
-		end 'isTypeDecl' else if self.atTopLevelBindingKeyword() 'isBinding'
+		end 'isTypeDecl' else if self.at(TokenKind.enum) or self.at(TokenKind.union) 'isEnumDecl'
+			try self.parseEnumDeclaration(self.at(TokenKind.union))
+		end 'isEnumDecl' else if self.atTopLevelBindingKeyword() 'isBinding'
 			// The declaration EMITS NOTHING — for a `var` exactly as for a `let`. A constant inlines at
 			// every read; a var's slot is laid down by the backend from the arena
 			// (`ProgramSignatures.declaredGlobals`), and its every read and write is emitted at the USE
@@ -2161,6 +2319,209 @@ export type Parser
 		self.artifact.recordStructType(layout)
 		self.enclosingType = EmptySourceText
 	end 'parseTypeDeclaration'
+
+	// Parse an `enum`/`union` declaration (P1.1b wave B):
+	//
+	//     enum Color
+	//         red
+	//         green = 5
+	//         blue
+	//     end 'Color'
+	//
+	// ⭐ **THE DECLARATION EMITS NOTHING** — like a `type`, its whole effect is the `EnumLayout`
+	// recorded below, which `Color.red` reads a case's TAG out of and an enum `match` reads the case
+	// SET out of. `union` and `enum` share this routine entirely: only the diagnostic wording later
+	// differs, carried by `layout.isUnion`.
+	//
+	// PAYLOAD-FREE ONLY. A payload (`case foo(x Int)`), a string/char/struct/function backing, and a
+	// method inside the body each name their own later rung rather than being mapped onto the integer
+	// path where they would silently mean something else.
+	function parseEnumDeclaration(isUnion bool) throws ParseError
+		try self.consume(TokenKind.union if isUnion else TokenKind.enum)
+		let nameTok = try self.consume(TokenKind.identifier)
+
+		var layout = EnumLayout.create(nameTok.value, isUnion: isUnion)
+		var state = EnumBackingState.create()
+
+		while true 'cases'
+			self.skipNewlines()
+			if self.atEnumBodyEnd() 'closes'
+				break
+			end 'closes'
+			if self.isEof() 'eof'
+				let tok = self.current()
+				throw ParseError.unexpectedEof(tok.line, column: tok.column)
+			end 'eof'
+
+			// A method inside an enum/union body — its whole surface (a receiver bound to an enum
+			// value, `match self`) is a later rung. Rejected here, positioned, rather than silently
+			// skipped (which would strand the method's `end` and misparse the rest). `function` alone
+			// is a legal CASE name, so only `function <name>(` is a method (`atEnumMethodStart`).
+			if self.atEnumMethodStart() 'method'
+				let tok = self.current()
+				throw ParseError.unsupported("a method on `{layout.kindWord()} {String.from(nameTok.value)}` (methods on an enum/union — a receiver bound to an enum value, `match self` — arrive with a later rung)", line: tok.line, column: tok.column)
+			end 'method'
+
+			try self.readEnumCaseInto(layout, state: state)
+		end 'cases'
+
+		try self.consume(TokenKind.end)
+		self.skipOptionalLabel()
+
+		self.artifact.recordEnumType(layout)
+	end 'parseEnumDeclaration'
+
+	// Is the cursor on the `end` that CLOSES an enum/union body — as opposed to a case NAMED `end`?
+	//
+	// ⚠ **`end` IS A LEGAL CASE NAME** (`keyword-as-case-name.md` declares one), so the terminator
+	// cannot be recognized by the `end` keyword alone. The rule, mirrored byte-for-byte from the
+	// bootstrap (`IsEndOfBlock`, 2-Parser.cs:3173): a terminating `end` is followed by the block
+	// LABEL (a character literal) or by end-of-file; an `end` followed by anything else — a newline,
+	// another case — is the case named `end`. Every corpus enum closes with a labelled `end 'Name'`,
+	// which this recognizes; a bare unlabelled `end` mid-body would be read as a case, exactly as the
+	// bootstrap reads it.
+	function atEnumBodyEnd() returns bool
+		if not self.at(TokenKind.end) 'notEnd'
+			return false
+		end 'notEnd'
+		let next = self.kindAt(self.pos + 1)
+		return next == TokenKind.charLiteral or next == TokenKind.eof
+	end 'atEnumBodyEnd'
+
+	// Does the cursor open a METHOD inside an enum/union body — `[export|static] function <name>(`?
+	//
+	// ⚠ **`function` IS ALSO A LEGAL CASE NAME** (`keyword-as-case-name.md` declares one), so a bare
+	// `function` keyword does NOT open a method: a method is `function` followed by a NAME and a `(`.
+	// Mirrors the bootstrap's `IsEnumMethodStart` (2-Parser.cs:3155). Methods on an enum are a later
+	// rung, so this predicate exists only to REJECT one cleanly rather than misparse it.
+	function atEnumMethodStart() returns bool
+		var p = self.pos
+		if self.kindAt(p) == TokenKind.export or self.kindAt(p) == TokenKind.static 'modifier'
+			p = p + 1
+		end 'modifier'
+		if self.kindAt(p) != TokenKind.function 'notFunction'
+			return false
+		end 'notFunction'
+		return self.kindAt(p + 1) == TokenKind.identifier and self.kindAt(p + 2) == TokenKind.leftParen
+	end 'atEnumMethodStart'
+
+	// Read ONE enum/union case into `layout`, threading the tag counter + backing through `state`.
+	// Reports the three declaration diagnostics: E3030 (duplicate case name), E3031 (duplicate raw
+	// value), E3032 (raw value type mismatch). SHARED by the real parse and the tolerant sweep
+	// (`recordScannedEnum`), which wraps it in `otherwise` — so the two cannot drift on how a tag is
+	// assigned, the one fact they MUST agree on (the sweep's layout is what the parser reads tags
+	// from at a use site).
+	function readEnumCaseInto(layout EnumLayout, state EnumBackingState) throws ParseError
+		let nameTok = try self.readEnumCaseNameToken()
+		let caseName = nameTok.value
+
+		// E3030 — checked at the second declaration, as the bootstrap positions it.
+		if layout.hasCase(caseName) 'duplicateCase'
+			throw ParseError.enumDuplicateCase(String.from(caseName), line: nameTok.line, column: nameTok.column)
+		end 'duplicateCase'
+
+		// A payload (`case foo(x Int)`) — P1.3. Rejected here so the case list stays payload-free.
+		if self.at(TokenKind.leftParen) 'payload'
+			throw ParseError.unsupported("a payload on case '{String.from(caseName)}' (enum/union payloads — `case foo(x Int)` and their `foo(let x)` bindings — arrive at P1.3)", line: nameTok.line, column: nameTok.column)
+		end 'payload'
+
+		if not self.at(TokenKind.equals) 'bareName'
+			// A bare case takes the auto-increment tag and requires integer backing.
+			try self.requireIntBacking(state, caseTok: nameTok)
+			let tag = state.nextTag
+			state.nextTag = state.nextTag + 1
+			try self.appendEnumCase(layout, caseName: caseName, tag: tag, rawDisplay: "{tag}", caseTok: nameTok)
+			return
+		end 'bareName'
+
+		try self.consume(TokenKind.equals)
+
+		// A FLOAT raw value: its tag is the IEEE-754 BIT PATTERN (matched by an i64 compare, exactly
+		// as an int tag is), and its display is the float's source text.
+		if self.at(TokenKind.floatLiteral) 'floatValue'
+			let floatTok = try self.consume(TokenKind.floatLiteral)
+			let bits = try parseFloatBits(floatTok.value) otherwise throw ParseError.floatLiteralOverflow(floatTok.line, column: floatTok.column)
+			try self.requireFloatBacking(state, caseTok: nameTok)
+			try self.appendEnumCase(layout, caseName: caseName, tag: bits, rawDisplay: String.from(floatTok.value), caseTok: nameTok)
+			return
+		end 'floatValue'
+
+		// An INTEGER raw value (possibly negated). It resets the auto-increment counter to value + 1,
+		// which is what makes `enum E { a = 5  b }` give `b` the tag 6.
+		let intValue = try self.readEnumIntRawValue()
+		try self.requireIntBacking(state, caseTok: nameTok)
+		state.nextTag = intValue + 1
+		try self.appendEnumCase(layout, caseName: caseName, tag: intValue, rawDisplay: "{intValue}", caseTok: nameTok)
+	end 'readEnumCaseInto'
+
+	// Read the token that NAMES a case — an identifier, or a keyword used as one. A string/char
+	// literal here is a string/char BACKING (a later rung), reported as such rather than as a bad
+	// name; anything else is malformed.
+	function readEnumCaseNameToken() returns Token throws ParseError
+		let tok = self.current()
+
+		if self.at(TokenKind.stringLiteral) or self.at(TokenKind.charLiteral) 'stringCharBacking'
+			throw ParseError.unsupported("a string- or char-backed enum/union case ({String.from(tok.value)}) — string/char backing, and the `.rawValue`/`.name` accessors that read it, arrive with String (P1.2)", line: tok.line, column: tok.column)
+		end 'stringCharBacking'
+
+		if not tokenNamesEnumCase(tok) 'notACaseName'
+			throw ParseError.unexpectedToken("an enum case name", got: tok.kind.rawValue, line: tok.line, column: tok.column)
+		end 'notACaseName'
+
+		self.advance()
+		return tok
+	end 'readEnumCaseNameToken'
+
+	// Parse an INTEGER raw value (`= 200`, `= -1`) — the same literal reading `parseRangeBound` does,
+	// minus the type-qualified bounds a raw value cannot be. A string/identifier/struct raw value is
+	// a backing this rung does not have, named rather than silently mapped onto the int path.
+	function readEnumIntRawValue() returns ParsedInt throws ParseError
+		if self.at(TokenKind.minus) 'negative'
+			try self.consume(TokenKind.minus)
+			let tok = try self.consume(TokenKind.intLiteral)
+			return try self.intLiteralValue(tok, negated: true)
+		end 'negative'
+
+		if self.at(TokenKind.intLiteral) 'literal'
+			let tok = try self.consume(TokenKind.intLiteral)
+			return try self.intLiteralValue(tok, negated: false)
+		end 'literal'
+
+		let tok = self.current()
+		throw ParseError.unsupported("a raw value of kind '{tok.kind.rawValue}' (only integer and float raw values are parsed; string, char, struct and function backings arrive with later rungs)", line: tok.line, column: tok.column)
+	end 'readEnumIntRawValue'
+
+	// Fix the backing to INTEGER, or raise E3032 if a FLOAT backing was already fixed. `caseTok`
+	// positions the diagnostic — the bootstrap anchors a mismatch at the offending case.
+	function requireIntBacking(state EnumBackingState, caseTok Token) throws ParseError
+		if state.backingResolved and state.backingIsFloat 'mismatch'
+			throw ParseError.enumRawValueTypeMismatch("expected float, got int", line: caseTok.line, column: caseTok.column)
+		end 'mismatch'
+		state.backingResolved = true
+		state.backingIsFloat = false
+	end 'requireIntBacking'
+
+	// Fix the backing to FLOAT, or raise E3032 if an INTEGER backing was already fixed. The exact
+	// `expected int, got float` phrasing is the bootstrap's, gated by `error.raw-value-type-mismatch`.
+	function requireFloatBacking(state EnumBackingState, caseTok Token) throws ParseError
+		if state.backingResolved and not state.backingIsFloat 'mismatch'
+			throw ParseError.enumRawValueTypeMismatch("expected int, got float", line: caseTok.line, column: caseTok.column)
+		end 'mismatch'
+		state.backingResolved = true
+		state.backingIsFloat = true
+	end 'requireFloatBacking'
+
+	// Append a case after checking E3031 (duplicate raw value) — a linear scan of the tags recorded
+	// so far, positioned at the offending case. `rawDisplay` is how the value is written (the int, or
+	// the float's source text), which is what the message prints.
+	function appendEnumCase(layout EnumLayout, caseName ByteArray, tag ParsedInt, rawDisplay String, caseTok Token) throws ParseError
+		for i in 0 upto layout.caseCount() 'eachExisting'
+			if layout.tagOfIndex(i) == tag 'duplicateRawValue'
+				throw ParseError.enumDuplicateRawValue(rawDisplay, line: caseTok.line, column: caseTok.column)
+			end 'duplicateRawValue'
+		end 'eachExisting'
+		layout.addCase(caseName, tag: tag)
+	end 'appendEnumCase'
 
 	// One member of a type body that is not a field: `[export] [static] function …`.
 	//
@@ -3416,7 +3777,7 @@ export type Parser
 		while i < count 'scan'
 			if self.opensBlockAt(i) 'open'
 				depth = depth + 1
-			end 'open' else if self.kindAt(i) == TokenKind.end 'close'
+			end 'open' else if self.kindAt(i) == TokenKind.end and not self.keywordIsMatchCaseName(i) 'close'
 				depth = depth - 1
 				if depth == 0 and (not continuesAtElse or not self.elseFollowsEnd(i)) 'matched'
 					return i
@@ -3459,15 +3820,32 @@ export type Parser
 	function opensBlockAt(index TokenIndex) returns bool
 		let kind = self.kindAt(index)
 		if kind == TokenKind.if or kind == TokenKind.while or kind == TokenKind.match 'alwaysOpens'
-			return true
+			return not self.keywordIsMatchCaseName(index)
 		end 'alwaysOpens'
 
 		if kind != TokenKind.else 'notElse'
 			return false
 		end 'notElse'
 
-		return self.kindAt(index + 1) != TokenKind.if
+		return self.kindAt(index + 1) != TokenKind.if and not self.keywordIsMatchCaseName(index)
 	end 'opensBlockAt'
+
+	// Is the keyword at `index` being used as a match-arm CASE NAME rather than as control flow?
+	//
+	// ⚠ **AN ENUM CASE MAY BE SPELLED WITH A KEYWORD** (`enum TokenType { function if else end … }`,
+	// keyword-as-case-name.md), and a match over such an enum writes `if gives …`, `end then …`,
+	// `else to critical then …`. The block-extent token scans (`opensBlockAt`,
+	// `blockStatementEndIndex`, the sweep's `blockDepthAfter`) read `if`/`else`/`end`/`while`/`match`
+	// as block STRUCTURE, and would miscount those case-name arms — the match's end would be
+	// mispredicted and the drift guard would fire (or the arm loop would stop early). A control
+	// keyword is NEVER followed by a match-arm SEPARATOR in real control flow (`if` takes a condition,
+	// `end` a label or newline, `while` a condition), so a keyword immediately followed by
+	// `gives`/`then`/`to`/`upto`/`or` is unambiguously a case name. That single lookahead is what lets
+	// every one of those scans skip a keyword case arm without re-deriving the grammar.
+	function keywordIsMatchCaseName(index TokenIndex) returns bool
+		let next = self.kindAt(index + 1)
+		return next == TokenKind.gives or next == TokenKind.then or next == TokenKind.to or next == TokenKind.upto or next == TokenKind.or
+	end 'keywordIsMatchCaseName'
 
 	// The names ASSIGNED anywhere in `[startIndex, endIndex)` — the loop's carried-variable
 	// set, read straight off the tokens (see `parseWhileStatement` for why it must be known
@@ -3745,13 +4123,44 @@ export type Parser
 		var seenValues = ParsedIntArray.create()
 		var reachingArms = MatchArmExitArray.create()
 
+		// ⭐ ENUM vs SCALAR is decided ONCE, from the scrutinee's type. A `named(X)` scrutinee whose
+		// name is a declared enum/union takes the enum path — case-name patterns, the OPEN #21 range
+		// rule, coverage over the case set; every other scrutinee is a scalar match (Wave A). The two
+		// share this whole dispatch engine (the `condBranch` chain, the arm bodies, the merge); only
+		// the PATTERN emission, the `default` rule, and the exhaustiveness check branch on it.
+		let enumMatch = self.enumMatchFor(scrut)
+		let isEnumMatch = enumMatchIsDeclared(enumMatch)
+		// One coverage bit per case, in declaration order — the enum twin of `seenValues`. Populated
+		// only for an enum match; a bare case marks its bit, a range marks the slice it covers, and a
+		// second mark on one bit is E2027. Its all-true state IS exhaustiveness.
+		var enumCovered = BoolArray.create()
+		if isEnumMatch 'initEnumCoverage'
+			let layout = requireEnumLayout(enumMatch)
+			for _ in 0 upto layout.caseCount() 'eachCase'
+				enumCovered.push(false)
+			end 'eachCase'
+		end 'initEnumCoverage'
+
 		while true 'arms'
 			self.skipNewlines()
-			if self.at(TokenKind.end) 'endOfArms'
+			// The closing `end` — unless it is a keyword CASE NAME arm (`end gives …`) on an enum
+			// whose case is spelled `end`. See `keywordIsMatchCaseName`.
+			if self.at(TokenKind.end) and not self.keywordIsMatchCaseName(self.pos) 'endOfArms'
 				break
 			end 'endOfArms'
 
 			if self.at(TokenKind.default) 'defaultArm'
+				// ⚠ **A `default` ON AN ENUM MATCH IS E2046** — an enum match is exhaustive by listing
+				// every case, so a plain catch-all is forbidden (it would silently mask a case added
+				// later). The only legal enum default is `default throws`/`default panic`, neither of
+				// which shv2 has yet, so EVERY enum `default` is this error at this rung. Positioned at
+				// the `default`, before the scalar default machinery below runs.
+				if isEnumMatch 'enumDefault'
+					let defTok = self.current()
+					let layout = requireEnumLayout(enumMatch)
+					throw ParseError.matchDefaultEnumMustThrow(layout.kindWord(), typeName: String.from(layout.name), line: defTok.line, column: defTok.column)
+				end 'enumDefault'
+
 				// A second `default`, or any `default` that is not last, is E2029 — reported when a
 				// pattern arm FOLLOWS a default (below); a default following a default is the same rule.
 				if sawDefault 'defaultAfterDefault'
@@ -3796,9 +4205,15 @@ export type Parser
 				let nextTest = self.newBlock(func, label: b"matchnext", line: patternTok.line)
 
 				// Emit the pattern condition into the current test block. A pattern never
-				// short-circuits (eager bitwise fold), so `currentBlock` does not move.
+				// short-circuits (eager bitwise fold), so `currentBlock` does not move. Enum patterns
+				// are case names + the #21 range rule; scalar patterns are literals + ranges (Wave A).
 				self.currentBlock = currentTestBlock
-				let cond = try self.emitPatternCondition(scrut, scrutTag: scrutTag, seenValues: seenValues)
+				var cond = 0 as ValueId
+				if isEnumMatch 'enumPattern'
+					cond = try self.emitEnumPatternCondition(scrut, layout: requireEnumLayout(enumMatch), covered: enumCovered)
+				end 'enumPattern' else 'scalarPattern'
+					cond = try self.emitPatternCondition(scrut, scrutTag: scrutTag, seenValues: seenValues)
+				end 'scalarPattern'
 
 				var matchEdgeArgs = ValueIdArray.create()
 				if prevFallthrough 'armIsFtTarget'
@@ -3828,9 +4243,21 @@ export type Parser
 			end 'patternArm'
 		end 'arms'
 
-		// A non-enum match is exhaustive only through a `default` — without one it would silently do
-		// nothing for an unmatched value. Anchored at the closing `end`, as both references anchor it.
-		if not sawDefault 'notExhaustive'
+		// ⚠ An exhaustive enum match's FINAL `else` target — the last arm's fail edge — is UNREACHABLE
+		// (every value matches some arm), but the last arm's `condBranch` named it, so the CFG edge
+		// exists and the block needs a terminator. `dead` marks it unreachable, the same terminator the
+		// parser gives code after a fully-terminated `if`/`else`. A scalar match cannot reach here with
+		// a dangling block: it is exhaustive only through a `default`, whose BODY consumes this block.
+		if isEnumMatch 'enumFallOffUnreachable'
+			currentTestBlock.terminator = Terminator.dead
+		end 'enumFallOffUnreachable'
+
+		// EXHAUSTIVENESS. An enum match must cover every case (E2026 listing the missing ones); a
+		// scalar match is exhaustive only through a `default` (without one it would silently do nothing
+		// for an unmatched value). Both are anchored at the closing `end`, as both references anchor it.
+		if isEnumMatch 'enumExhaustive'
+			try self.checkEnumExhaustive(requireEnumLayout(enumMatch), covered: enumCovered)
+		end 'enumExhaustive' else if not sawDefault 'notExhaustive'
 			var subject = "match"
 			if isExpression 'exprSubject'
 				subject = "match expression"
@@ -4236,6 +4663,200 @@ export type Parser
 	function isOpenBoundIdentifier(tok Token, marker ByteArray) returns bool
 		return tok.kind == TokenKind.identifier and tok.value.equals(marker)
 	end 'isOpenBoundIdentifier'
+
+	// ============================================================================================
+	// ENUM `match` — case-name patterns + the OPEN #21 range rule (P1.1b wave B).
+	//
+	// Everything here feeds the SAME dispatch engine the scalar match uses (`parseMatchCommon`'s arm
+	// loop, `condBranch` chain and merge): the only difference is that a pattern is a case NAME
+	// resolved to a tag rather than a literal, and that coverage is a bitmap over the case set rather
+	// than a default arm. NO new IR op — a case compare is the same `compare`/`condBranch` a scalar
+	// arm emits.
+	// ============================================================================================
+
+	// The enum/union a match scrutinee belongs to, or `undeclared` for a scalar scrutinee. Read from
+	// the scrutinee's TYPE — a `named(X)` value whose name is in the enum registry — so it works
+	// uniformly for a parameter (`c Code`), a local (`let c = Color.red`) and a returned enum. The
+	// enum's own name is on the value even after TypeResolution collapses the SIGNATURE type to
+	// `integer`, because a value's tag is set by the parser and never rewritten.
+	function enumMatchFor(scrut ValueId) returns DeclaredEnum
+		if self.tagOf(scrut) != ValueTypeTag.named 'notNamed'
+			return DeclaredEnum.undeclared
+		end 'notNamed'
+		let nameId = try self.valueNameIds.get(scrut) otherwise panic("enumMatchFor: value v{scrut} has no recorded type name — the two type columns fell out of lockstep")
+		let name = try self.artifact.typeNames.nameOf(nameId) otherwise panic("enumMatchFor: type-name id {nameId} is not in this file's interner — every `named` tag is minted with an id from it")
+		return self.signatures.enumOf(name)
+	end 'enumMatchFor'
+
+	// One arm's enum pattern as a single boolean, OR-folding alternatives (`red or blue`) exactly as
+	// the scalar path does — a bitwise `or` over the `bool`s, eager because a pattern has no side
+	// effects.
+	function emitEnumPatternCondition(scrut ValueId, layout EnumLayout, covered BoolArray) returns ValueId throws ParseError
+		var cond = try self.emitEnumPatternAtom(scrut, layout: layout, covered: covered)
+		while self.at(TokenKind.or) 'orChain'
+			let orTok = try self.consume(TokenKind.or)
+			let rhs = try self.emitEnumPatternAtom(scrut, layout: layout, covered: covered)
+			cond = try self.emitBinOp(cond, rhs: rhs, op: MaxonBinOp.bitOr, opTok: orTok)
+		end 'orChain'
+		return cond
+	end 'emitEnumPatternCondition'
+
+	// One alternative: a single case (`red`) or a case-name range (`low to high`, `low upto high`).
+	function emitEnumPatternAtom(scrut ValueId, layout EnumLayout, covered BoolArray) returns ValueId throws ParseError
+		let patternTok = self.current()
+		let lowIndex = try self.resolveEnumArmCase(layout)
+
+		if self.at(TokenKind.to) or self.at(TokenKind.upto) 'rangeArm'
+			let isUpto = self.at(TokenKind.upto)
+			self.advance()
+			let highIndex = try self.resolveEnumArmCase(layout)
+			return try self.emitEnumRange(scrut, layout: layout, lowIndex: lowIndex, highIndex: highIndex, isUpto: isUpto, covered: covered, patternTok: patternTok)
+		end 'rangeArm'
+
+		try self.markEnumCovered(covered, index: lowIndex, layout: layout, patternTok: patternTok)
+		return try self.emitEnumTagCompare(scrut, layout: layout, index: lowIndex, opTok: patternTok)
+	end 'emitEnumPatternAtom'
+
+	// Resolve a case NAME in a match arm to its declaration index. A QUALIFIED name (`Color.red`) is
+	// E3075 — the scrutinee's enum is already known, so the bare name suffices — positioned at the
+	// type name (the bootstrap's anchor). An unknown case is E3034, at the case name.
+	function resolveEnumArmCase(layout EnumLayout) returns CaseIndex throws ParseError
+		let caseTok = self.current()
+		if not tokenNamesEnumCase(caseTok) 'notACaseName'
+			throw ParseError.expectedExpression(caseTok.kind.rawValue, line: caseTok.line, column: caseTok.column)
+		end 'notACaseName'
+
+		if self.kindAt(self.pos + 1) == TokenKind.dot 'qualified'
+			self.advance()
+			try self.consume(TokenKind.dot)
+			let realCaseTok = self.current()
+			throw ParseError.matchQualifiedCaseName(String.from(realCaseTok.value), qualified: "{String.from(caseTok.value)}.{String.from(realCaseTok.value)}", line: caseTok.line, column: caseTok.column)
+		end 'qualified'
+
+		self.advance()
+		let index = layout.indexOfCase(caseTok.value)
+		if index >= layout.caseCount() 'unknownCase'
+			throw ParseError.enumUnknownCase(String.from(caseTok.value), line: caseTok.line, column: caseTok.column)
+		end 'unknownCase'
+		return index
+	end 'resolveEnumArmCase'
+
+	// Mark case `index` covered, or raise E2027 if a prior arm already covered it. The overlap is
+	// positioned at the CURRENT arm's pattern token (`patternTok`), naming the case that collides —
+	// the bootstrap's exact anchor and message.
+	function markEnumCovered(covered BoolArray, index CaseIndex, layout EnumLayout, patternTok Token) throws ParseError
+		let already = try covered.get(index) otherwise panic("markEnumCovered: covered.get OOB at {index} — the bitmap is sized to the enum's case count")
+		if already 'overlap'
+			throw ParseError.matchOverlappingCase(String.from(layout.caseNameAt(index)), line: patternTok.line, column: patternTok.column)
+		end 'overlap'
+		try covered.set(index, value: true) otherwise panic("markEnumCovered: covered.set OOB at {index}")
+	end 'markEnumCovered'
+
+	// `scrut == tag(index)` — one case's compare, the same `compare` a bare scalar pattern emits. The
+	// tag literal is `integer`-typed (a plain number): the scrutinee is `named` (→ i64) and the tag
+	// i64, so the compare is an i64 equality, for an int backing and a float backing alike (a float
+	// tag IS its bit pattern — see EnumLayout).
+	function emitEnumTagCompare(scrut ValueId, layout EnumLayout, index CaseIndex, opTok Token) returns ValueId throws ParseError
+		let tagLit = self.emitLiteral(layout.tagOfIndex(index), valueType: MaxonType.integer, range: SourceRange.ofToken(opTok))
+		return try self.emitCompare(scrut, rhs: tagLit, op: MaxonCmpOp.eq, opTok: opTok)
+	end 'emitEnumTagCompare'
+
+	// ⭐⭐⭐ THE OPEN #21 RANGE RULE. A range arm `low to high` MEANS the OR of the cases it covers,
+	// selected BY DECLARATION INDEX — the slice `[indexOfCase(low), indexOfCase(high)]` (`upto` drops
+	// the upper). It is NOT a raw-value range over the tags.
+	//
+	// The optimization (and the trap): emit a two-compare TAG range `[min tag, max tag]` over the
+	// covered set ONLY where no UNCOVERED case's tag falls inside that closed interval; otherwise the
+	// OR of the covered cases (one `== tag` each). For an auto-increment enum the tags equal the
+	// indices, so the covered span is contiguous and the range always fits; explicit out-of-order
+	// tags (`ok = 500  notFound = 200` spanning [200,500] over an uncovered `serverError = 404`) are
+	// where the OR is forced. The synthesized bounds are the real min/max TAGS, so they are inclusive
+	// and `upto` is already accounted for by which cases the slice covers.
+	function emitEnumRange(scrut ValueId, layout EnumLayout, lowIndex CaseIndex, highIndex CaseIndex, isUpto bool, covered BoolArray, patternTok Token) returns ValueId throws ParseError
+		// An empty range: `upto` whose upper is at or before the lower, or a reversed `to` (upper
+		// declared before lower). Computed before `lastCovered` so its subtraction cannot underflow.
+		let coversNothing = (isUpto and highIndex <= lowIndex) or ((not isUpto) and highIndex < lowIndex)
+		if coversNothing 'empty'
+			throw ParseError.matchEmptyRange(String.from(layout.caseNameAt(lowIndex)), high: String.from(layout.caseNameAt(highIndex)), line: patternTok.line, column: patternTok.column)
+		end 'empty'
+
+		let lastCovered = (highIndex - 1) if isUpto else highIndex
+
+		// Mark the covered slice (overlap-checked) and gather the min/max TAG over it.
+		var loTag = layout.tagOfIndex(lowIndex)
+		var hiTag = loTag
+		var i = lowIndex
+		while i <= lastCovered 'coverEach'
+			try self.markEnumCovered(covered, index: i, layout: layout, patternTok: patternTok)
+			let t = layout.tagOfIndex(i)
+			if t < loTag 'newLo'
+				loTag = t
+			end 'newLo'
+			if t > hiTag 'newHi'
+				hiTag = t
+			end 'newHi'
+			i = i + 1
+		end 'coverEach'
+
+		if self.tagRangeCovers(layout, lowIndex: lowIndex, lastCovered: lastCovered, loTag: loTag, hiTag: hiTag) 'expressibleAsRange'
+			let loLit = self.emitLiteral(loTag, valueType: MaxonType.integer, range: SourceRange.ofToken(patternTok))
+			let hiLit = self.emitLiteral(hiTag, valueType: MaxonType.integer, range: SourceRange.ofToken(patternTok))
+			let loCmp = try self.emitCompare(scrut, rhs: loLit, op: MaxonCmpOp.ge, opTok: patternTok)
+			let hiCmp = try self.emitCompare(scrut, rhs: hiLit, op: MaxonCmpOp.le, opTok: patternTok)
+			return try self.emitBinOp(loCmp, rhs: hiCmp, op: MaxonBinOp.bitAnd, opTok: patternTok)
+		end 'expressibleAsRange'
+
+		// The OR of the covered cases — the same path a bare case name takes, one compare each.
+		var cond = try self.emitEnumTagCompare(scrut, layout: layout, index: lowIndex, opTok: patternTok)
+		var j = lowIndex + 1
+		while j <= lastCovered 'orEach'
+			let rhs = try self.emitEnumTagCompare(scrut, layout: layout, index: j, opTok: patternTok)
+			cond = try self.emitBinOp(cond, rhs: rhs, op: MaxonBinOp.bitOr, opTok: patternTok)
+			j = j + 1
+		end 'orEach'
+		return cond
+	end 'emitEnumRange'
+
+	// Is a two-compare tag range `[loTag, hiTag]` faithful to the covered slice — i.e. does NO
+	// uncovered case's tag fall inside that closed interval? The predicate at the heart of OPEN #21:
+	// where it holds, `serverError`'s 404 does not sit between `ok`'s 500 and `notFound`'s 200, so the
+	// range means exactly the covered set and is safe to emit; where it fails, the OR is forced.
+	function tagRangeCovers(layout EnumLayout, lowIndex CaseIndex, lastCovered CaseIndex, loTag ParsedInt, hiTag ParsedInt) returns bool
+		for j in 0 upto layout.caseCount() 'eachCase'
+			if j >= lowIndex and j <= lastCovered 'isCovered'
+				continue
+			end 'isCovered'
+			let t = layout.tagOfIndex(j)
+			if t >= loTag and t <= hiTag 'insideInterval'
+				return false
+			end 'insideInterval'
+		end 'eachCase'
+		return true
+	end 'tagRangeCovers'
+
+	// An enum match must cover EVERY case. The uncovered ones (in declaration order) become E2026's
+	// `missing:` list, positioned at the closing `end` — the enum twin of the scalar exhaustiveness
+	// gate, and the mechanism that makes adding a case force every match site to handle it.
+	function checkEnumExhaustive(layout EnumLayout, covered BoolArray) throws ParseError
+		var missing = ""
+		var hasMissing = false
+		for i in 0 upto layout.caseCount() 'eachCase'
+			let isCovered = try covered.get(i) otherwise panic("checkEnumExhaustive: covered.get OOB at {i} — the bitmap is sized to the enum's case count")
+			if not isCovered 'uncovered'
+				if hasMissing 'notFirst'
+					missing = "{missing}, {String.from(layout.caseNameAt(i))}"
+				end 'notFirst' else 'first'
+					missing = String.from(layout.caseNameAt(i))
+				end 'first'
+				hasMissing = true
+			end 'uncovered'
+		end 'eachCase'
+
+		if hasMissing 'incomplete'
+			let endTok = self.current()
+			throw ParseError.enumMatchNotExhaustive(layout.kindWord(), typeName: String.from(layout.name), missing: missing, line: endTok.line, column: endTok.column)
+		end 'incomplete'
+	end 'checkEnumExhaustive'
 
 	// Mint a phi (block-arg) on `block` and return its fresh ValueId. The ONE mint site for
 	// every merge phi the parser makes — if-continuation, loop header, loop exit, and (new
@@ -5405,8 +6026,56 @@ export type Parser
 			return try self.parseQualifiedCall(func)
 		end 'qualifiedCall'
 
+		// `Color.red` — an ENUM CASE reference, the value being the case's tag. Asked AFTER the three
+		// forms above (a bound base outranks a type name, exactly as `u16.max` is the last resort) and
+		// BEFORE the sized-bound fallback, because a declared enum name is not a sized type and would
+		// otherwise report "expected a sized numeric type" for a perfectly good case reference.
+		match self.signatures.enumOf(self.current().value) 'enumRef'
+			declared(layout) then return try self.parseEnumLiteral(layout)
+			undeclared then break 'enumRef'
+		end 'enumRef'
+
 		return try self.parseTypeQualifiedBoundExpression()
 	end 'parseDottedPrimary'
+
+	// `Color.red` — the value of an enum/union case: its TAG, as an i64 `literal` (the raw value for
+	// an int backing, the IEEE-754 bit pattern for a float). Named `Color.green` for a case the enum
+	// does not have is E3034, positioned at the TYPE name (the bootstrap's anchor, measured).
+	//
+	// ⭐ The value is TAGGED `named(Color)` while its literal op is typed `integer`, and the two are
+	// deliberately different: the TAG carries the enum's name so a `match` can recognize the scrutinee
+	// as a `Color`, and the OP's `integer` type is what the Std lowering reads to give it an i64
+	// (a `named` op-type would hit `maxonTypeToStdType`'s panic). Both collapse to i64, so the value's
+	// register class and its lowering agree — see `emitEnumTagLiteral`.
+	function parseEnumLiteral(layout EnumLayout) returns ValueId throws ParseError
+		let typeTok = try self.consume(TokenKind.identifier)
+		try self.consume(TokenKind.dot)
+
+		let caseTok = self.current()
+		if not tokenNamesEnumCase(caseTok) 'notACaseName'
+			throw ParseError.unexpectedToken("an enum case name", got: caseTok.kind.rawValue, line: caseTok.line, column: caseTok.column)
+		end 'notACaseName'
+		self.advance()
+
+		let index = layout.indexOfCase(caseTok.value)
+		if index >= layout.caseCount() 'unknownCase'
+			throw ParseError.enumUnknownCase(String.from(caseTok.value), line: typeTok.line, column: typeTok.column)
+		end 'unknownCase'
+
+		return self.emitEnumTagLiteral(layout.name, tag: layout.tagOfIndex(index), range: SourceRange.ofToken(typeTok))
+	end 'parseEnumLiteral'
+
+	// Emit a case's TAG as an i64 `literal` whose VALUE tag is `named(<enum>)`. The one site that
+	// mints an enum value, so the tag/op-type split (see `parseEnumLiteral`) lives in exactly one
+	// place. The const is deliberately NOT recorded (an enum value is not folded into arithmetic — it
+	// is only ever a `match` scrutinee), mirroring `emitLiteralIn`, which records a constant only for
+	// an `integer`-TAGGED value.
+	function emitEnumTagLiteral(enumName ByteArray, tag ParsedInt, range SourceRange) returns ValueId
+		let nameId = self.artifact.typeNames.intern(enumName)
+		let result = self.mintValue(ValueTypeTag.named, nameId: nameId)
+		self.artifact.emitOp(self.currentBlock, op: MaxonOp.literal(result, value: tag, valueType: MaxonType.integer), range: range)
+		return result
+	end 'emitEnumTagLiteral'
 
 	// `Point.create(3, y: 4)` — a call to a type's static method.
 	//

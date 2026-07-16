@@ -401,8 +401,7 @@ end 'main'
 40
 ```
 
-<!-- disabled-test: match-enum.exhaustive -->
-<!-- Wave B (enums) -->
+<!-- test: match-enum.exhaustive -->
 ```maxon
 enum Color
 	red
@@ -423,8 +422,7 @@ end 'main'
 2
 ```
 
-<!-- disabled-test: error.match-enum-default -->
-<!-- Wave B (enums) -->
+<!-- test: error.match-enum-default -->
 ```maxon
 enum Color
 	red
@@ -444,8 +442,7 @@ end 'main'
 error E2046: specs/fragments/match-simple/error.match-enum-default.test:12:3: 'default' in a match on enum 'Color' must be followed by 'throws <error>' or 'panic("message")'
 ```
 
-<!-- disabled-test: match-enum.expression -->
-<!-- Wave B (enums) -->
+<!-- test: match-enum.expression -->
 ```maxon
 enum Status
 	pending
@@ -512,8 +509,7 @@ end 'main'
 error E2025: specs/fragments/match-simple/error.match-fallthrough-with-return.test:5:20: match fallthrough with return: 'cannot combine 'fallthrough' with 'return''
 ```
 
-<!-- disabled-test: error.match-enum-not-exhaustive -->
-<!-- Wave B (enums) -->
+<!-- test: error.match-enum-not-exhaustive -->
 ```maxon
 enum Color
 	red

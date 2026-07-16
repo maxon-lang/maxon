@@ -79,6 +79,17 @@ let DeclShapeAlias = 9 as ContentHash
 // that stops being a `typealias` and starts being a `type` must move the hash, not collide on it.
 let DeclShapeStruct = 14 as ContentHash
 
+// A declared enum/union's shape discriminator — `DeclShapeStruct`'s twin, for its reason: a name
+// that stops being a `type` and starts being an `enum` must move the hash rather than collide.
+let DeclShapeEnum = 20 as ContentHash
+
+// Whether a declared type is a `union` (vs an `enum`), mixed into the hash beside its name. Two
+// distinct constants because the only thing separating a payload-free union from an enum is the
+// diagnostic WORDING, and a reader that meets a non-exhaustive match must re-parse — and so print
+// "union" rather than "enum" — when `enum` becomes `union`.
+let EnumKindEnum = 21 as ContentHash
+let EnumKindUnion = 22 as ContentHash
+
 // The `MaxonType.structRef` arm's discriminator. It is DISTINCT from `TypeShapeNamed`, and that is
 // load-bearing rather than tidy: `named(Point)` and `structRef(Point)` carry the same NAME and mean
 // different things in every reader — one is a ranged int, the other a pointer — so a hash that
@@ -488,6 +499,15 @@ export union DeclaredStruct
 	undeclared
 end 'DeclaredStruct'
 
+// What the index knows about a declared ENUM/UNION type — `DeclaredStruct`'s twin, and a union for
+// the identical reason. "No file declares an `enum`/`union` of this name" is an ANSWER: the name is
+// probably a struct, a ranged alias, or a typo — each somebody else's question. THE door the parser
+// asks every enum question through: is this scrutinee an enum? what are its cases and tags?
+export union DeclaredEnum
+	declared(layout EnumLayout)
+	undeclared
+end 'DeclaredEnum'
+
 export type ProgramSignatures
 	// Function name -> its declared return type. Last-wins on a duplicate name, exactly as the
 	// project's own `funcReturnTypes` registry is; the duplicate itself is reported by
@@ -510,6 +530,13 @@ export type ProgramSignatures
 	// `fieldTypeOf` re-interns on the way out. It is the second table to need that treatment, and
 	// it needs it for exactly `returnTypes`' reason.
 	var structTypes as StructLayoutMap
+	// ⭐ Enum/union name -> its declaration, with the CASE ORDER and TAGS the parser needs. THE door
+	// an enum `match` asks through — is `c` an enum? what tag is `red`? which cases does `low to
+	// high` cover? — and here for `structTypes`' reason: the answer is needed at PARSE time and the
+	// `enum` may be declared below its use or in another file. UNLIKE `structTypes` it carries no
+	// ids: a case is a plain NAME and a tag a plain INT, so it travels by name and arrives by name,
+	// needing no interner and no remap (contrast `foldFile`'s `remapStructLayoutFieldTypes`).
+	var enumTypes as EnumLayoutMap
 	// The interner every `named` id in `returnTypes` belongs to. PRIVATE, and it has to be: an id
 	// may not leave this type. `returnTypeOf` re-interns it into the caller's own table.
 	var typeNames as TypeNameInterner
@@ -546,7 +573,7 @@ export type ProgramSignatures
 	export var hash as ContentHash
 
 	export static function create() returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedTypeAliasMap.create(), structTypes: StructLayoutMap.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), hash: fnvOffsetBasis()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedTypeAliasMap.create(), structTypes: StructLayoutMap.create(), enumTypes: EnumLayoutMap.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), hash: fnvOffsetBasis()}
 	end 'create'
 
 	// Fold ONE file's scanned declarations into the index. Called in SOURCE-PATH order, so the
@@ -558,10 +585,17 @@ export type ProgramSignatures
 	// machinery `mergeArtifact` uses for the identical job — `TypeNameInterner.foldInto` +
 	// `remapMaxonReturnType`. One mechanism, two callers: a second copy of "reconcile a file's ids
 	// into a bigger table" would be free to disagree with this one about what an id means.
-	export function foldFile(scanned FuncReturnTypeEntryArray, aliases RangedTypeAliasArray, structs StructLayoutArray, bindings TopLevelDeclArray, fileTypeNames TypeNameInterner)
+	export function foldFile(scanned FuncReturnTypeEntryArray, aliases RangedTypeAliasArray, structs StructLayoutArray, enums EnumLayoutArray, bindings TopLevelDeclArray, fileTypeNames TypeNameInterner)
 		for alias in aliases 'eachAlias'
 			self.recordAlias(alias)
 		end 'eachAlias'
+
+		// Enums carry no ids (a case is a name, a tag an int), so they are recorded BEFORE the
+		// interner fold below and need no remap — unlike the structs, whose field types are
+		// reconciled through it.
+		for enumLayout in enums 'eachEnum'
+			self.recordEnum(enumLayout)
+		end 'eachEnum'
 
 		// Bindings — `let` and `var` alike — are RECORDED here and EVALUATED later
 		// (`evaluateInitializers`), and the gap between the two is the whole reason a forward
@@ -652,6 +686,37 @@ export type ProgramSignatures
 		end 'eachField'
 		self.hash = state
 	end 'recordStruct'
+
+	// Add one declared enum/union to the index AND fold it into the hash — `recordStruct`'s twin.
+	//
+	// ⚠ **THE HASH CARRIES THE CASE LIST AND THE TAGS, NOT MERELY THE NAME**, for `recordStruct`'s
+	// reason applied to an enum. Every reader of `enum Color` COPIES its facts into its own code:
+	// `Color.red` becomes an i64 `literal` of the tag, and a `match` over it becomes a chain of
+	// compares against the tags plus an exhaustiveness check over the case NAMES. So changing a tag
+	// (`red = 5`), reordering the cases (which moves a range arm's coverage), renaming one, or adding
+	// a case changes what every other file COMPILES TO — while the reading file's own bytes never
+	// move. Only this hash can carry it. The `isUnion` bit rides too: `enum` → `union` changes the
+	// word a non-exhaustive-match diagnostic prints, and a reader that met that diagnostic must
+	// re-parse to reprint it.
+	function recordEnum(layout EnumLayout)
+		self.enumTypes.upsert(layout.name, value: layout)
+
+		var state = mix(mixBytes(mix(self.hash, value: DeclShapeEnum), bytes: layout.name), value: EnumKindUnion if layout.isUnion else EnumKindEnum)
+		for i in 0 upto layout.caseCount() 'eachCase'
+			state = self.mixEnumCase(state, layout: layout, index: i)
+		end 'eachCase'
+		self.hash = state
+	end 'recordEnum'
+
+	// Fold one case's NAME and TAG into the enum's hash. Split out so the SIGNED tag (`ParsedInt`)
+	// crosses to the UNSIGNED hash domain through a local — `recordAlias`/`mixDefaultPayload` have
+	// the same two lines for the same reason (the bootstrap rejects the cast as unneeded, E3010, when
+	// it is written inline as a nested `mix` argument).
+	function mixEnumCase(state ContentHash, layout EnumLayout, index CaseIndex) returns ContentHash
+		let named = mixBytes(state, bytes: layout.caseNameAt(index))
+		let tagBits = layout.tagOfIndex(index) as ContentHash
+		return mix(named, value: tagBits)
+	end 'mixEnumCase'
 
 	// Fold EVERYTHING the compiler reads off field `index` into the index's hash. See `recordStruct`
 	// for why each fact must ride, and why they must all ride from one place.
@@ -1247,6 +1312,15 @@ export type ProgramSignatures
 		let layout = try self.structTypes.get(name) otherwise return DeclaredStruct.undeclared
 		return DeclaredStruct.declared(layout)
 	end 'structOf'
+
+	// The enum/union `name` denotes, declared in ANY file — `structOf`'s twin, and the door the
+	// PARSER asks every enum question through: is this scrutinee an enum? what tag is a case? which
+	// cases does a range arm cover? The layout it hands back carries plain NAMES and INTS (no ids),
+	// so every one of those questions is answered with no interner at all.
+	export function enumOf(name ByteArray) returns DeclaredEnum
+		let layout = try self.enumTypes.get(name) otherwise return DeclaredEnum.undeclared
+		return DeclaredEnum.declared(layout)
+	end 'enumOf'
 
 	// The DECLARED type of field `index` of struct `structName`, ADOPTED into `into` — the calling
 	// file's own artifact interner. `returnTypeOf`'s exact shape and exact reason: a `named` type
