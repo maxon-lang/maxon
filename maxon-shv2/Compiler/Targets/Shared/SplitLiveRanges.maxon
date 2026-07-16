@@ -1981,7 +1981,7 @@ function opIsConstMaterialization(module TargetModule, opIdx OpIndex) returns bo
 		// relocation — and there is no `movsd xmm, imm64` to rebuild it with even if the IEEE bits
 		// ARE an integer the compiler holds. `constValueOfDef` would panic. When someone
 		// generalizes remat to "an op with no register inputs", it buys BOTH of these at once.
-		andRegReg to cvttsd2siRegReg gives false
+		andRegReg to leaRegRdata gives false
 	end 'k'
 end 'opIsConstMaterialization'
 
@@ -2526,7 +2526,7 @@ function constValueOfDef(module TargetModule, opIdx OpIndex) returns MachineWord
 		movRegImm32(_, value) then return value
 		prologue to jcc then panic("constValueOfDef: def is not a constant materialization")
 		movRegReg to loadRegSlot then panic("constValueOfDef: def is not a constant materialization")
-		andRegReg to cvttsd2siRegReg then panic("constValueOfDef: def is not a constant materialization")
+		andRegReg to leaRegRdata then panic("constValueOfDef: def is not a constant materialization")
 	end 'k'
 end 'constValueOfDef'
 
@@ -2635,6 +2635,8 @@ function substituteValueInOp(op TargetOp, from ValueId, to ValueId) returns Targ
 		movsdRegRip(dest, label) then return TargetOp.movsdRegRip(substituteVReg(dest, from: from, to: to), label: label)
 		cvtsi2sdRegReg(dest, src) then return TargetOp.cvtsi2sdRegReg(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to))
 		cvttsd2siRegReg(dest, src) then return TargetOp.cvttsd2siRegReg(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to))
+		// The `.rdata` address `lea` (P1.2 wave A) — substitutes its GPR dest, exactly like `leaRegGlobal`.
+		leaRegRdata(dest, label) then return TargetOp.leaRegRdata(substituteVReg(dest, from: from, to: to), label: label)
 	end 'rewrite'
 end 'substituteValueInOp'
 

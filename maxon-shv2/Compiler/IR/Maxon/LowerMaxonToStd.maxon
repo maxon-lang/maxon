@@ -56,6 +56,10 @@ export function maxonTypeToStdType(ref MaxonType) returns StdType
 		// surviving to here means resolution left work undone; a `structRef` means resolution DID
 		// its work.)
 		structRef then break 'residue'
+		// A String is NOT a residue — `Parser.parseTypeReference` produces `MaxonType.string` for the
+		// `String` builtin directly (syntactically, like `Self`), so it is already concrete. Its width
+		// is a machine word (a pointer), assigned one line down by the same table every arm's comes from.
+		string then break 'residue'
 	end 'residue'
 
 	return valueTagToStdType(maxonTypeTag(ref))
@@ -101,6 +105,10 @@ export function valueTagToStdType(tag ValueTypeTag) returns StdType
 		// is a pointer too. Nothing above this line knows the width, which is the point — MaxonType
 		// stays width-free (see MaxonDialect) and the machine word is named exactly once, here.
 		structRef then return StdType.i64
+		// ⭐ A STRING IS A POINTER — to the fused 48-byte rdata record. One machine word, in a GPR,
+		// passed and returned like any other i64. Nothing above this line knows the width, which is the
+		// point: MaxonType stays width-free and the machine word is named exactly once, here.
+		string then return StdType.i64
 	end 'collapse'
 end 'valueTagToStdType'
 
@@ -194,8 +202,8 @@ end 'maxonCmpOpToStdPred'
 // `funcSignatures` registry so `lowerCall` can reorder each call's labelled arguments
 // to the callee's declaration order (the registry is the only whole-program source of
 // parameter names — `IrFunction` carries types but not names).
-export function lowerMaxonToStd(maxonModule MaxonModule, funcSignatures FuncSignatureMap) returns StdModule
-	return MaxonToStdLowering.create(maxonModule, funcSignatures: funcSignatures).lower()
+export function lowerMaxonToStd(maxonModule MaxonModule, funcSignatures FuncSignatureMap, globalData GlobalDataTable) returns StdModule
+	return MaxonToStdLowering.create(maxonModule, funcSignatures: funcSignatures, globalData: globalData).lower()
 end 'lowerMaxonToStd'
 
 type MaxonToStdLowering
@@ -204,6 +212,12 @@ type MaxonToStdLowering
 	// Whole-program parameter signatures (names + types), for `lowerCall`'s
 	// label→positional argument slotting.
 	var funcSignatures as FuncSignatureMap
+	// The backend's `.rdata` table — where `stringLiteral` registers its immortal 48-byte record and
+	// its NUL-terminated byte blob (P1.2 wave A). It is the SAME table the backend later resolves the
+	// emitted `rdataAddr` label against, and the one that carries the buffer fixups to the PE writer.
+	// Threaded here rather than a field on some later pass because this is the FIRST tier that turns a
+	// source literal into rdata bytes.
+	var globalData as GlobalDataTable
 	// ⭐ THE TYPE ORACLE FOR THE FUNCTION CURRENTLY BEING LOWERED — the parser's per-value
 	// `ValueTypeTag` column, published on `IrFunction.valueTags` and re-pointed at each function
 	// by `lower`. It is what fills the Std arith band's `operandType`.
@@ -219,8 +233,8 @@ type MaxonToStdLowering
 	// every op in a function shares one column and the walk is already per-function.
 	var valueTags as ValueTypeTagArray
 
-	static function create(maxonModule MaxonModule, funcSignatures FuncSignatureMap) returns MaxonToStdLowering
-		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), funcSignatures: funcSignatures, valueTags: ValueTypeTagArray.create()}
+	static function create(maxonModule MaxonModule, funcSignatures FuncSignatureMap, globalData GlobalDataTable) returns MaxonToStdLowering
+		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), funcSignatures: funcSignatures, globalData: globalData, valueTags: ValueTypeTagArray.create()}
 	end 'create'
 
 	// The Std type a VALUE computes in — the truth the arith band's `operandType` carries, and a
@@ -348,6 +362,7 @@ type MaxonToStdLowering
 			globalAddr(result, label) then self.stdModule.appendOp(dstBlock, op: StdOp.globalAddr(result, label: label))
 			loadIndirect(result, addr, offset, valueType) then self.stdModule.appendOp(dstBlock, op: StdOp.loadIndirect(result, addrId: addr, offset: offset, valueType: maxonTypeToStdType(valueType)))
 			storeIndirect(addr, offset, value, valueType) then self.stdModule.appendOp(dstBlock, op: StdOp.storeIndirect(addr, offset: offset, valueId: value, valueType: maxonTypeToStdType(valueType)))
+			stringLiteral(result, bytes) then self.lowerStringLiteral(result, bytes: bytes, dstBlock: dstBlock)
 		end 'lower'
 	end 'lowerOp'
 
@@ -365,6 +380,7 @@ type MaxonToStdLowering
 			compare then panic("lowerMaxonToStd: a `compare` op appeared as a block terminator (parser bug — a comparison is never a terminator)")
 			call then panic("lowerMaxonToStd: a `call` op appeared as a block terminator (parser bug — a call is a body op, never a terminator)")
 			globalAddr to storeIndirect then panic("lowerMaxonToStd: a varAccess op appeared as a block terminator (parser bug — a global's address, load and store are all body ops, never terminators)")
+			stringLiteral then panic("lowerMaxonToStd: a `stringLiteral` op appeared as a block terminator (parser bug — a string literal is a value-producing body op, never a terminator)")
 		end 'lower'
 	end 'lowerTerminator'
 
@@ -377,6 +393,27 @@ type MaxonToStdLowering
 		let stdType = maxonTypeToStdType(litType)
 		self.stdModule.appendOp(dstBlock, op: StdOp.const(result, value: value, valueType: stdType))
 	end 'lowerLiteral'
+
+	// ⭐ **A STRING LITERAL BECOMES IMMORTAL RDATA + A `lea`** (P1.2 wave A). Two `.rdata` entries are
+	// registered — the NUL-terminated byte blob, and the 48-byte record whose `buffer@0` points at it —
+	// and the result is the RIP-relative ADDRESS of the record. `registerRdataConstant` DEDUPES both by
+	// bytes, so every occurrence of the same literal shares one blob and one record.
+	//
+	// The record's `buffer@0` cannot be filled here: it is the blob's ABSOLUTE VA, and no VA exists
+	// until the PE writer lays out `.rdata`. So the field is a placeholder and a `(record, blob)` fixup
+	// is recorded on the data table for the writer to patch (`GlobalDataTable.recordStringBufferFixup`
+	// → `PeWriter`). NOTHING is heap-allocated: no `__mm_alloc`, no MM header, no drop.
+	//
+	// ⚠ It emits `StdOp.rdataAddr`, NOT `StdOp.globalAddr`: `globalAddr` lowers to a `.data`-section
+	// relocation (`dataSectionRipRelDisp32`), and the record lives in read-only `.rdata`
+	// (`ripRelDisp32`). The two differ only in the section they measure from — which is exactly what
+	// the relocation kind discriminates.
+	function lowerStringLiteral(result ValueId, bytes ByteArray, dstBlock IrBlock)
+		let blobLabel = registerStringBlob(self.globalData, bytes: bytes)
+		let recordLabel = registerStringRecord(self.globalData, blobLabel: blobLabel, byteLength: bytes.count(), isAscii: bytesAreAscii(bytes))
+		self.globalData.recordStringBufferFixup(recordLabel, blobLabel: blobLabel)
+		self.stdModule.appendOp(dstBlock, op: StdOp.rdataAddr(result, label: recordLabel.toByteArray()))
+	end 'lowerStringLiteral'
 
 	// Emit one `StdOp.param` per parameter at the function's ENTRY block, before any
 	// body op. Parameter `i` is ValueId `i` (the ids the parser reserved), of the
@@ -404,12 +441,12 @@ type MaxonToStdLowering
 	// The `argRanges` on the Maxon op are diagnostics-only (consumed by SemanticCheck),
 	// so lowering ignores them.
 	function lowerCall(result ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, dstBlock IrBlock)
-		// ⭐ A RUNTIME CALL HAS NO SIGNATURE TO SLOT AGAINST, and needs none: `Parser.emitRuntimeCall`
-		// wrote its arguments itself, positionally, in declaration order — so the reordering below
-		// would be the identity, and the registry lookup it needs first would panic on a callee no
-		// file declares. `SemanticCheck.validateCall` skips it for the same reason, keyed on the same
-		// predicate.
-		if isRuntimeCallee(callee) 'compilerOwnCall'
+		// ⭐ A COMPILER-INTERNAL CALL HAS NO SIGNATURE TO SLOT AGAINST, and needs none:
+		// `Parser.emitRuntimeCall` wrote its arguments itself, positionally, in declaration order — so
+		// the reordering below would be the identity, and the registry lookup it needs first would panic
+		// on a callee no file declares. `SemanticCheck.validateCall` skips it for the same reason, keyed
+		// on the same predicate (`__print_string`/`__str_eq` are compiler-internal too, not just `__mm_`).
+		if isCompilerInternalCallee(callee) 'compilerOwnCall'
 			self.lowerRuntimeCall(result, callee: callee, args: args, argLabels: argLabels, dstBlock: dstBlock)
 			return
 		end 'compilerOwnCall'

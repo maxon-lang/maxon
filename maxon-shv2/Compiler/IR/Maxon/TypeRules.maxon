@@ -63,12 +63,21 @@
 //     and it buys nothing at P1.0r — no program can put two struct values at one site, because a
 //     struct cannot yet be a parameter (P1.4's ownership ruling), a return type, or a field. **The
 //     day any of those lands, this arm is the bug.**
+//   • `text` — the class of a `String` (P1.2 wave A). Like `structRef`, it converts to nothing and
+//     nothing converts to it: a String is a pointer to a byte record, not a number and not a bool, so
+//     `s + 1`, `return s` from an `ExitCode` function, `if s` and `takeInt(s)` are all one error and
+//     all rejected here. Its ONLY operators are `==`/`!=` (a runtime byte compare, handled in
+//     `Parser.emitCompare` BEFORE `comparableOperands` is ever asked) and `print` — so two texts
+//     AGREE (both `text`), but they do not `comparableOperands` (ordering is meaningless), which is
+//     the guard that keeps `s < t` out of the language. Unlike `structRef`, `text` is NOT coarser
+//     than the type: there is exactly one String type, so two `text` tags naming one type is exact.
 export enum TypeClass
 	boolean
 	numeric
 	unknown
 	noValue
 	structRef
+	text
 end 'TypeClass'
 
 // The class a source-level type belongs to. Exhaustive over `ValueTypeTag`, so a new type
@@ -93,6 +102,10 @@ function typeClassOf(tag ValueTypeTag) returns TypeClass
 		// A declared struct type. NOT `numeric` — a struct is a POINTER, and the arm above is a
 		// theorem about ALIASES that a struct would have falsified. See TypeClass's `structRef`.
 		structRef gives TypeClass.structRef
+		// A String. NOT `numeric` (it is a pointer, not a number) and NOT `structRef` (it is a
+		// builtin, not a declared `type`, and must not be admitted to `p == q`'s reference-equality
+		// rejection or a struct's field lookup). Its own class, agreeing only with itself.
+		string gives TypeClass.text
 	end 'k'
 end 'typeClassOf'
 
@@ -236,6 +249,9 @@ export function tagIsIntegral(tag ValueTypeTag) returns bool
 		// `false` because the statement "a struct is an integer" is false, not because the site is
 		// unreachable.
 		structRef gives false
+		// A String is a pointer, not a number the language will convert anything INTO. Nothing narrows
+		// to a String, so `false` here is the statement "a String is not an integer".
+		string gives false
 	end 'k'
 end 'tagIsIntegral'
 
@@ -271,6 +287,9 @@ export function typeTagName(tag ValueTypeTag) returns String
 		// here to print. It arrives with the `valueNameIds` publication that `TypeClass.structRef`
 		// already names as its own fix — one change, two things it repairs.
 		structRef gives "struct"
+		// The `String` builtin. Both reference compilers print the builtin's name here (the bootstrap's
+		// `E3005: operator '+' is not defined for type 'String'`), so a String type error names `String`.
+		string gives "String"
 	end 'k'
 end 'typeTagName'
 
@@ -779,6 +798,17 @@ export function comparableOperands(left ValueTypeTag, right ValueTypeTag) return
 		return false
 	end 'noStructuralEquality'
 
+	// ⚠ **TWO STRINGS AGREE AND STILL DO NOT `comparableOperands`**, and this is what keeps ORDERING
+	// (`s < t`, `s >= t`) out of the language. `==`/`!=` on strings never reach here — `Parser.emitCompare`
+	// special-cases a both-`string` pair at its TOP, routing it to the `__str_eq` runtime call before
+	// this rule is asked. So the only comparison that arrives here with a `string` operand is an
+	// ORDERING one (which has no meaning on a byte pointer) or a `string`-vs-non-`string` mismatch
+	// (already rejected by the agreement gate above). Both are `false`. The bootstrap rejects ordering
+	// on String identically.
+	if operandsAreText(left, right: right) 'noStringOrdering'
+		return false
+	end 'noStringOrdering'
+
 	// Two floats compare; two integers compare; two bools compare (they agreed, and neither is a
 	// float). One of each does not.
 	return tagIsFloat(left) == tagIsFloat(right)
@@ -800,6 +830,20 @@ end 'operandsAreFloat'
 export function tagIsStructRef(tag ValueTypeTag) returns bool
 	return tag == ValueTypeTag.structRef
 end 'tagIsStructRef'
+
+// True for the tag of a `String`, and ONLY for it — the same DEFINITELY question `tagIsBool` /
+// `tagIsInteger` / `tagIsStructRef` ask, for the builtin that is a POINTER to a byte record and whose
+// only comparison is a runtime byte `==`.
+export function tagIsText(tag ValueTypeTag) returns bool
+	return tag == ValueTypeTag.string
+end 'tagIsText'
+
+// **DOES EITHER OPERAND NAME A STRING?** `operandsAreStructRef`'s twin, and it exists for the same
+// reason: an operator with no reading for a String (arithmetic, ordering, the bit ops) has none for
+// either side, so both `lacksIntegralReading` and `comparableOperands` have to ask.
+export function operandsAreText(left ValueTypeTag, right ValueTypeTag) returns bool
+	return tagIsText(left) or tagIsText(right)
+end 'operandsAreText'
 
 // **DOES EITHER OPERAND NAME A STRUCT?** `operandsAreFloat`'s twin, and it exists for the same
 // reason: the operators that have no reading for one of them have no reading for the other, and
@@ -962,7 +1006,7 @@ end 'integralOperandsFor'
 // everything by deferral, so `x and undeclaredCall()` — already reported as E3004 at its call
 // site — would collect a second, invented diagnostic naming a type nobody pinned.
 function lacksIntegralReading(tag ValueTypeTag) returns bool
-	return tagIsFloat(tag) or tagIsStructRef(tag)
+	return tagIsFloat(tag) or tagIsStructRef(tag) or tagIsText(tag)
 end 'lacksIntegralReading'
 
 // **WHICH OPERAND THE `nonIntegralOperands` DIAGNOSTIC MUST NAME** — the first one with no
@@ -1071,5 +1115,8 @@ export function notOperatorFor(operand ValueTypeTag) returns NotOperator
 		// been filed under `named`, the arm two lines up would have complemented it and called the
 		// result an `integer` — which is precisely the bug the `float` arm above records.
 		structRef gives NotOperator.nonIntegralOperand
+		// A STRING — rejected for the FLOAT/struct arm's reason: `not` is defined on the bool domain
+		// and the integer domain, and on nothing else. Complementing a byte pointer is not a question.
+		string gives NotOperator.nonIntegralOperand
 	end 'k'
 end 'notOperatorFor'

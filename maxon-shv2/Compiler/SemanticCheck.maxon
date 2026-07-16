@@ -40,11 +40,12 @@ function checkCalls(project Project, module MaxonModule)
 				let op = try module.ops.get(opIdx) otherwise panic("checkCalls: opIdx {opIdx} not in module.ops")
 				match op 'op'
 					call(_, callee, args, argLabels, argRanges) then validateCall(project, func: func, opIndex: opIdx, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges)
-					// Extended past `branch` to take in the varAccess band: a global's address, load and
-					// store are not calls and have nothing for this check to say. Their CALLEE-shaped
-					// question — "does this name resolve?" — was answered by `ProgramSignatures` before
-					// the op was emitted at all, which is why there is no E3004 twin for a global.
-					literal to storeIndirect then break 'op'
+					// Extended past `branch` to take in the varAccess band and the `stringLiteral` op: a
+					// global's address/load/store and a string literal are not calls and have nothing for
+					// this check to say. Their CALLEE-shaped question — "does this name resolve?" — was
+					// answered before the op was emitted (`ProgramSignatures` for a global; a literal
+					// resolves nothing), which is why there is no E3004 twin for either.
+					literal to stringLiteral then break 'op'
 				end 'op'
 			end 'eachOp'
 		end 'eachBlock'
@@ -60,12 +61,13 @@ function validateCall(project Project, func IrFunction, opIndex OpIndex, callee 
 	let callRange = project.opRanges.get(opIndex)
 	let filePath = func.sourceFilePath
 
-	// ⭐ A RUNTIME CALL HAS NOTHING FOR THIS CHECK TO SAY. `__mm_alloc` is emitted by the PARSER
-	// (`Parser.emitRuntimeCall`) and built at the Std tier long after this pass, so it is in no
-	// registry — every check below would fire, and each would report a defect in code the user did
-	// not write. Its arguments are the compiler's own: their count is fixed at the emit site and
-	// their types are `MmRuntime`'s, not a signature's.
-	if isRuntimeCallee(callee) 'compilerOwnCall'
+	// ⭐ A COMPILER-INTERNAL CALL HAS NOTHING FOR THIS CHECK TO SAY. A `__`-prefixed callee
+	// (`__mm_alloc`, `__print_string`, `__str_eq`) is emitted by the PARSER (`Parser.emitRuntimeCall`)
+	// and built at the Std tier long after this pass, so it is in no registry — every check below would
+	// fire, and each would report a defect in code the user did not write. Its arguments are the
+	// compiler's own: their count is fixed at the emit site and their types are the runtime's, not a
+	// signature's.
+	if isCompilerInternalCallee(callee) 'compilerOwnCall'
 		return
 	end 'compilerOwnCall'
 
@@ -168,5 +170,6 @@ function isExitCodeType(t MaxonType) returns bool
 		named gives false
 		unresolved gives false
 		structRef gives false
+		string gives false
 	end 'r'
 end 'isExitCodeType'

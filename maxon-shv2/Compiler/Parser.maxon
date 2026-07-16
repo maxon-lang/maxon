@@ -95,9 +95,11 @@ export union ParseError implements Error
 	// and not SemanticCheck's, because a builtin has no entry in the signature registry that
 	// SemanticCheck's arity check reads — there is nothing there to disagree with.
 	builtinArity(name String, expected ParamCount, got ParamCount, line LineNumber, column ColumnNumber)
-	// A compiler builtin whose argument is the wrong type (`trunc(flag)`). Same reason as
-	// `builtinArity`: no signature exists for the ordinary argument check to consult.
-	builtinOperandType(name String, got String, line LineNumber, column ColumnNumber)
+	// A compiler builtin whose argument is the wrong type (`trunc(flag)`, `print(5)`). Same reason as
+	// `builtinArity`: no signature exists for the ordinary argument check to consult. `required` names
+	// what the builtin DOES accept ("number" for `trunc`, "String" for `print`), because the two differ
+	// and a fixed word would be wrong for one of them.
+	builtinOperandType(name String, required String, got String, line LineNumber, column ColumnNumber)
 	unsupported(feature String, line LineNumber, column ColumnNumber)
 	// A parameter list that repeats a name (`function f(x int, x int)`). The second
 	// binding would be a dead, uncallable parameter, so it is rejected at parse time.
@@ -841,6 +843,23 @@ let TruncBuiltinName = b"trunc"
 // check and once as the message's `expected` — and a bare `1` in either would be a magic value in
 // the more literal sense: the number that says what the builtin IS.
 let TruncArity = 1 as ParamCount
+
+// **THE `String` BUILTIN TYPE'S NAME** (P1.2 wave A). Recognized SYNTACTICALLY in `parseTypeReference`
+// — like `Self`, a pure token test with no registry — so `function f(s String)` tags `s`'s value
+// `string` at PARSE time, which is what `s == t` / `print(s)` read. Recognizing it here (not only in
+// `TypeResolution`, the way `ExitCode` is) is load-bearing: `resolveTypes` rewrites SIGNATURES, never
+// the parser's `valueTags` column, so a String tagged `named` at parse time would stay `named` on the
+// value and the String operators would never see it.
+let StringBuiltinName = b"String"
+
+// **THE `print` BUILTIN'S NAME** (P1.2 wave A). Like `trunc`, recognized by name after its arguments
+// are parsed (`parseCallNamed`): it takes ordinary call syntax but emits no `MaxonOp.call` to a user
+// function — it routes to the `__print_string` runtime entry.
+let PrintBuiltinName = b"print"
+
+// `print` takes exactly one argument (a String). Named for the same reason `TruncArity` is: `emitPrint`
+// states it as both the check and the diagnostic's `expected`.
+let PrintArity = 1 as ParamCount
 
 // The value a short-circuit merge takes on the SKIPPED path: `false` for `and` (a false left
 // operand determines the whole expression), `true` for `or`.
@@ -2876,6 +2895,13 @@ export type Parser
 
 		if self.at(TokenKind.identifier) 'named'
 			let tok = try self.consume(TokenKind.identifier)
+			// The `String` BUILTIN — recognized SYNTACTICALLY, like `Self` below, so it needs no registry
+			// and both the declaration sweep and the real parse answer it identically. It resolves to its
+			// own `MaxonType.string` arm (NEVER `named`), which is what tags a `String` parameter's value
+			// `string` at parse time. See `StringBuiltinName`.
+			if tok.value.equals(StringBuiltinName) 'stringBuiltin'
+				return MaxonType.string
+			end 'stringBuiltin'
 			// The type's own name inside its own body means what `Self` means. Both spellings are
 			// legal Maxon and they must not resolve differently — one `structRef`, one `named` —
 			// because the second would type `create`'s result as an integer and `p.x` would fail
@@ -4586,7 +4612,17 @@ export type Parser
 	function emitPatternValue(scrutTag ValueTypeTag) returns ValueId throws ParseError
 		let firstTok = self.current()
 
+		// A STRING LITERAL pattern — legal only against a `string` scrutinee (P1.2 wave A). Its
+		// condition is `__str_eq(scrut, "literal")`: `emitPatternAtom`'s single-value path emits the
+		// literal here and then `emitCompare(scrut, lo, eq)`, which — both operands `string` — routes to
+		// the `__str_eq` runtime call, feeding the SAME bool the scalar `or`/`default`/expression-merge
+		// machinery consumes for an integer pattern. So `match name { "alice" then … }` reuses the whole
+		// scalar dispatch unchanged; only "what a pattern atom IS" differs. Against a NON-string
+		// scrutinee it stays the E2028 mismatch (`"one"` on an `int`).
 		if self.at(TokenKind.stringLiteral) 'stringPattern'
+			if tagIsText(scrutTag) 'stringScrutinee'
+				return try self.parseStringLiteral()
+			end 'stringScrutinee'
 			throw ParseError.matchPatternTypeMismatch("String", scrutineeType: typeTagName(scrutTag), line: firstTok.line, column: firstTok.column)
 		end 'stringPattern'
 
@@ -5623,6 +5659,17 @@ export type Parser
 	function emitCompare(lhs ValueId, rhs ValueId, op MaxonCmpOp, opTok Token) returns ValueId throws ParseError
 		let leftTag = self.tagOf(lhs)
 		let rightTag = self.tagOf(rhs)
+
+		// ⭐ STRING `==`/`!=` IS A RUNTIME BYTE COMPARE, not a `compare` op (which would compare two box
+		// POINTERS — reference equality answering a question about VALUES). Handled at the TOP, before
+		// `comparableOperands`: two strings do NOT `comparableOperands` (that rule governs ORDERING,
+		// which strings have none of), so a both-`string` pair must be intercepted here or it would be
+		// rejected as a mismatch. A string-vs-non-string pair is NOT both-`string`, so it falls through
+		// to the mismatch gate below — a clean type error, not a crash.
+		if tagIsText(leftTag) and tagIsText(rightTag) 'stringCompare'
+			return try self.emitStringCompare(lhs, rhs: rhs, op: op, opTok: opTok)
+		end 'stringCompare'
+
 		if not comparableOperands(leftTag, right: rightTag) 'mismatch'
 			throw ParseError.comparisonTypeMismatch(typeTagName(leftTag), right: typeTagName(rightTag), line: opTok.line, column: opTok.column)
 		end 'mismatch'
@@ -5631,6 +5678,30 @@ export type Parser
 		self.artifact.emitOp(self.currentBlock, op: MaxonOp.compare(result, lhs: lhs, rhs: rhs, op: op), range: SourceRange.ofToken(opTok))
 		return result
 	end 'emitCompare'
+
+	// The two String comparisons — the ONLY operators String has. `==` is the `__str_eq` runtime call
+	// (content equality: equal lengths, then equal bytes); `!=` is its logical negation, built from the
+	// same call so the two can never disagree about what equality means. ORDERING (`<`/`>`/`<=`/`>=`)
+	// has no meaning on a byte record and is rejected — the bootstrap rejects it identically.
+	function emitStringCompare(lhs ValueId, rhs ValueId, op MaxonCmpOp, opTok Token) returns ValueId throws ParseError
+		match op 'op'
+			eq then return self.emitStrEqCall(lhs, rhs: rhs, opTok: opTok)
+			ne then return self.emitUnaryOp(self.emitStrEqCall(lhs, rhs: rhs, opTok: opTok), op: MaxonUnaryOp.logicalNot, resultTag: ValueTypeTag.boolean, opTok: opTok)
+			// `lt`/`gt`/`le`/`ge` — ordering on a String. Reported as a comparison type mismatch (there
+			// is no ordering to fall through to), which is the acceptable existing diagnostic; a String
+			// is orderable by no operator this rung provides.
+			lt to ge then throw ParseError.comparisonTypeMismatch(typeTagName(ValueTypeTag.string), right: typeTagName(ValueTypeTag.string), line: opTok.line, column: opTok.column)
+		end 'op'
+	end 'emitStringCompare'
+
+	// Emit the `__str_eq(lhs, rhs)` runtime call, typed `boolean` (its i64 result is 0/1). The one
+	// caller-typed emit site for both `==` and `!=`, and for a `string`-scrutinee `match` pattern.
+	function emitStrEqCall(lhs ValueId, rhs ValueId, opTok Token) returns ValueId
+		var args = ValueIdArray.create()
+		args.push(lhs)
+		args.push(rhs)
+		return self.emitRuntimeCall(StrEqName, args: args, resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(opTok))
+	end 'emitStrEqCall'
 
 	// A primary expression: an integer literal, a `true`/`false` literal, a CHARACTER literal,
 	// a parenthesized sub-expression, a type-qualified numeric bound (`u16.max`), a call, or a
@@ -5656,6 +5727,13 @@ export type Parser
 		if self.at(TokenKind.charLiteral) 'charLit'
 			return try self.parseCharLiteral()
 		end 'charLit'
+
+		// A `String` LITERAL (P1.2 wave A). A pure literal is a SINGLE `stringLiteral` token; an
+		// INTERPOLATED string (`"{x}"`) is the same token followed by `stringInterpStart`, which is
+		// Wave B — `parseStringLiteral` rejects it.
+		if self.at(TokenKind.stringLiteral) 'strLit'
+			return try self.parseStringLiteral()
+		end 'strLit'
 
 		if self.at(TokenKind.leftParen) 'group'
 			return try self.parseParenthesizedExpression(func)
@@ -5743,6 +5821,41 @@ export type Parser
 			badEscape(text) then throw ParseError.invalidCharacterLiteral("unknown escape sequence '{text}'", line: tok.line, column: tok.column)
 		end 'decoded'
 	end 'parseCharLiteral'
+
+	// `"hello"`, `""`, `"Use \{expr\} for interpolation"` — a `String` LITERAL in operand position (P1.2
+	// wave A). It materializes as a `stringLiteral` op carrying the DECODED bytes, typed `string`;
+	// lowering turns it into an immortal `.rdata` record + a `lea` of its address (see
+	// `LowerMaxonToStd.lowerStringLiteral`). No heap, no ownership — a literal is never allocated or
+	// dropped.
+	//
+	// ⚠ AN INTERPOLATED STRING IS DEFERRED. The lexer splits `"a{x}b"` into `stringLiteral("a")`,
+	// `stringInterpStart`, the `x` tokens, `stringInterpEnd`, `stringLiteral("b")` — so a `stringLiteral`
+	// token FOLLOWED BY `stringInterpStart` is an interpolation, which builds an owned HEAP string and is
+	// Wave B. `escaped-braces` (`\{`/`\}`) is NOT interpolation: the lexer's escape handling means the
+	// braces never open one, so it is a single `stringLiteral` fragment and `decodeEscapes` turns `\{`
+	// into `{` here.
+	function parseStringLiteral() returns ValueId throws ParseError
+		let tok = self.current()
+		if self.peekKind() == TokenKind.stringInterpStart 'interpolated'
+			throw ParseError.unsupported("string interpolation (a string with an interpolated expression) — the first owned heap String, which arrives at P1.2 wave B; a plain string literal is supported", line: tok.line, column: tok.column)
+		end 'interpolated'
+
+		try self.consume(TokenKind.stringLiteral)
+		match decodeEscapes(tok.value) 'decoded'
+			bytes(buf) then return self.emitStringLiteral(buf, range: SourceRange.ofToken(tok))
+			unknownEscape(text) then throw ParseError.unsupported("the escape sequence '{text}' in a string literal is not a recognized escape", line: tok.line, column: tok.column)
+		end 'decoded'
+	end 'parseStringLiteral'
+
+	// Append a `stringLiteral` op carrying the DECODED bytes; return the `string`-typed ValueId it
+	// defines. The one emit site, so a caller that already holds decoded bytes (none today, but the
+	// interpolation path at Wave B will hand a materialized buffer here) reaches the type + op in one
+	// place.
+	function emitStringLiteral(bytes ByteArray, range SourceRange) returns ValueId
+		let result = self.mintValue(ValueTypeTag.string, nameId: UnnamedTypeId)
+		self.artifact.emitOp(self.currentBlock, op: MaxonOp.stringLiteral(result, bytes: bytes), range: range)
+		return result
+	end 'emitStringLiteral'
 
 	// `true` / `false`. A bool is an i1 carrying 1 or 0 — the same `literal` op an
 	// integer uses, typed `boolean` so the Maxon→Std collapse gives it i1 rather than
@@ -6675,6 +6788,10 @@ export type Parser
 			exitCode then return declared
 			structRef then return declared
 			unresolved then panic("fieldStorageType: a field is declared `unresolved` — `parseTypeReference` produces only `named`, `structRef` and the three primitive keywords, so no field declaration can carry one")
+			// A String field stores an i64 POINTER, exactly like a struct-ref field — `maxonTypeToStdType`
+			// gives it the machine word. (No enabled case declares one; a String field can only hold an
+			// immortal literal at Wave A, and the owned-heap-String field is Wave B's.)
+			string then return declared
 			named then break 'kind'
 		end 'kind'
 
@@ -7324,6 +7441,10 @@ export type Parser
 			return try self.emitTrunc(args, calleeTok: anchor)
 		end 'truncBuiltin'
 
+		if callee.equals(PrintBuiltinName) 'printBuiltin'
+			return try self.emitPrint(args, calleeTok: anchor, resultUsed: resultUsed)
+		end 'printBuiltin'
+
 		return try self.emitCall(callee, anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, rparenTok: rparenTok, resultUsed: resultUsed)
 	end 'parseCallNamed'
 
@@ -7355,7 +7476,7 @@ export type Parser
 		let operand = try args.get(0) otherwise panic("emitTrunc: args.count() == TruncArity just checked but get(0) failed")
 		let operandTag = self.tagOf(operand)
 		if not typeClassAdmits(TypeClass.numeric, tag: operandTag) 'notANumber'
-			throw ParseError.builtinOperandType(String.from(TruncBuiltinName), got: typeTagName(operandTag), line: calleeTok.line, column: calleeTok.column)
+			throw ParseError.builtinOperandType(String.from(TruncBuiltinName), required: "number", got: typeTagName(operandTag), line: calleeTok.line, column: calleeTok.column)
 		end 'notANumber'
 
 		// Already an integer: `trunc` has nothing to truncate. See the precision note above.
@@ -7365,6 +7486,35 @@ export type Parser
 
 		return self.emitUnaryOp(operand, op: MaxonUnaryOp.trunc, resultTag: ValueTypeTag.integer, opTok: calleeTok)
 	end 'emitTrunc'
+
+	// `print(s)` — **WRITE A STRING TO STDOUT**, no trailing newline (P1.2 wave A). A compiler BUILTIN
+	// like `trunc`: it takes ordinary call syntax but emits no `MaxonOp.call` to a user function — it
+	// routes to the `__print_string` runtime entry (which loads `buffer@0`/`length@8` and writes them).
+	//
+	// It requires exactly one `String` argument and returns VOID, so a call in VALUE position is
+	// rejected exactly as a void user-call is (`mintDeclaredCallResult`'s `voidCallResultUsed`), and at
+	// the same anchor.
+	function emitPrint(args ValueIdArray, calleeTok Token, resultUsed bool) returns ValueId throws ParseError
+		if args.count() != PrintArity 'arity'
+			throw ParseError.builtinArity(String.from(PrintBuiltinName), expected: PrintArity, got: args.count(), line: calleeTok.line, column: calleeTok.column)
+		end 'arity'
+
+		let arg = try args.get(0) otherwise panic("emitPrint: args.count() == PrintArity just checked but get(0) failed")
+		let argTag = self.tagOf(arg)
+		if not tagIsText(argTag) 'notAString'
+			throw ParseError.builtinOperandType(String.from(PrintBuiltinName), required: typeTagName(ValueTypeTag.string), got: typeTagName(argTag), line: calleeTok.line, column: calleeTok.column)
+		end 'notAString'
+
+		// `print` returns nothing, so using its result is using a value that is not there — the same
+		// error a void user-call gets in value position.
+		if resultUsed 'noValueToUse'
+			throw ParseError.voidCallResultUsed(String.from(PrintBuiltinName), line: calleeTok.line, column: calleeTok.column)
+		end 'noValueToUse'
+
+		var callArgs = ValueIdArray.create()
+		callArgs.push(arg)
+		return self.emitRuntimeCall(PrintStringName, args: callArgs, resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(calleeTok))
+	end 'emitPrint'
 
 	// Parse a comma-separated argument list into the parallel `args`/`argLabels`/
 	// `argRanges` lists (all empty for `()`). The caller has consumed `(`; this leaves

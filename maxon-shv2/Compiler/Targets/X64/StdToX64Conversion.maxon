@@ -90,6 +90,39 @@ let VirtualAllocLetOsChooseBase = 0x0
 let VirtualAllocCommitAndReserve = 0x3000  // MEM_COMMIT (0x1000) | MEM_RESERVE (0x2000)
 let VirtualAllocPageReadWrite = 0x4        // PAGE_READWRITE
 
+// `GetStdHandle(STD_OUTPUT_HANDLE)` — the handle `osWriteStdout` writes to (P1.2 wave A). The
+// parameter is a DWORD, so the 32-bit `mov` (which zero-extends) puts exactly (DWORD)-11 in ECX. The
+// panic path's `StdErrorHandle` is (DWORD)-12; this is its stdout sibling.
+let StdOutputHandle = 0xFFFFFFF5  // (DWORD)-11 — GetStdHandle's STD_OUTPUT_HANDLE
+// WriteFile's `lpOverlapped` — NULL for a synchronous write.
+let NullPointer = 0x0
+// The two WriteFile outgoing stack SLOTS `__print_string`'s frame reserves, past the shadow space:
+// slot 0 = the 5th argument `lpOverlapped` (NULL), slot 1 = a scratch DWORD `lpNumberOfBytesWritten`
+// points at (WriteFile writes the count there; it must be a valid pointer, not NULL). These are SLOT
+// INDICES, not byte displacements — `writeFileArgDisp` turns each into `[rsp + shadow + slot*8]`, and
+// `stringPrintOutgoingArgBytes` sizes the frame region — so the byte layout lives with ShadowSpaceBytes/
+// SpillSlotBytes rather than being respelled as a literal.
+let WriteFileOverlappedSlot = 0
+let WriteFileBytesWrittenSlot = 1
+let WriteFileOutgoingSlots = 2
+
+// The `[rsp + disp]` displacement of a WriteFile outgoing stack slot — past the 32-byte shadow space,
+// one `SpillSlotBytes`-sized slot per index. `spillSlotBaseDisp` places every spill slot ABOVE
+// `ShadowSpaceBytes + outgoingArgSize`, so these never overlap a spill. Computed here (not a top-level
+// const) so the two cross-file frame constants are read at runtime — the same reads `computeFrameBytes`
+// makes — rather than folded, which a cross-file constant initializer cannot do.
+function writeFileArgDisp(slot MachineWord) returns Imm32
+	return (ShadowSpaceBytes + slot * SpillSlotBytes) as Imm32
+end 'writeFileArgDisp'
+
+// The frame region `__print_string` reserves for WriteFile's outgoing stack args — the two slots
+// `writeFileArgDisp` addresses. Exported: `StringRuntime.buildPrintString` sets the function's
+// `outgoingArgSize` from it, so the size the frame reserves and the slots this lowering writes are ONE
+// fact. A FUNCTION rather than a const so the `SpillSlotBytes` read is at runtime (see above).
+export function stringPrintOutgoingArgBytes() returns StackSize
+	return (WriteFileOutgoingSlots * SpillSlotBytes) as StackSize
+end 'stringPrintOutgoingArgBytes'
+
 // The physical register argument `index` occupies. An index past the register file is
 // a parser-cap violation (parseFunctionParameters rejects >6 parameters), so it is a
 // compiler-invariant break here, not a user error.
@@ -589,6 +622,8 @@ type StdToX64Lowering
 			// Same reasoning as `globalAddr`: a page base is an address, so it is an integer. It can
 			// never be float-classed, which is why it needs no `regClassForStdType` lookup.
 			osAllocPages(resultId, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+			// Same reasoning as `globalAddr`: an `.rdata` address is an integer, never float-classed.
+			rdataAddr(resultId, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 			// The ops that define NOTHING. Each is named individually rather than collapsed into a
 			// range, and that is not verbosity: `StdOp`'s declaration order is
 			// `… mod, condBranch, branch, ret, param, call, retVoid, globalAddr …`, so the tempting
@@ -599,6 +634,8 @@ type StdToX64Lowering
 			ret then break 'result'
 			retVoid then break 'result'
 			storeIndirect then break 'result'
+			// `osWriteStdout` defines no value — `print` returns void.
+			osWriteStdout then break 'result'
 		end 'result'
 	end 'recordOpResultClass'
 
@@ -774,7 +811,7 @@ type StdToX64Lowering
 			match term 'term'
 				condBranch(condId, _, _) then self.recordFusableCompare(block, condId: condId, fused: fused, floatCmps: floatCmps)
 				const to mod then break 'term'
-				branch to osAllocPages then break 'term'
+				branch to rdataAddr then break 'term'
 			end 'term'
 		end 'eachBlock'
 	end 'computeFusedCmps'
@@ -813,11 +850,13 @@ type StdToX64Lowering
 				// still be NAMED rather than swallowed: the day a flag-writing memory op exists, "is it
 				// the compare?" is a question to answer here.
 				//
-				// ⚠ `osAllocPages` is NOT in that unreachable set — it declares `clobbersFlags: true`, so it
-				// genuinely lands here as the last flag-writer before a branch, exactly as `call` already
-				// does. `break` is the right answer for the same reason it is for a call: it is not the
-				// compare, so the scan stops and no fusion is recorded. Declining a fusion is always safe.
-				div to osAllocPages then break 'isTheCompare'
+				// ⚠ `osAllocPages`/`osWriteStdout` are NOT in that unreachable set — they declare
+				// `clobbersFlags: true`, so either genuinely lands here as the last flag-writer before a
+				// branch, exactly as `call` already does. `break` is the right answer for the same reason
+				// it is for a call: it is not the compare, so the scan stops and no fusion is recorded.
+				// Declining a fusion is always safe. (`rdataAddr` never reaches here — the loop guards on
+				// `clobbersFlags` and it sets none — but it is named rather than swallowed.)
+				div to rdataAddr then break 'isTheCompare'
 			end 'isTheCompare'
 			return
 		end 'scanBackward'
@@ -879,7 +918,7 @@ type StdToX64Lowering
 		return match term 'term'
 			condBranch(condId, _, _) gives self.cmpPreds.contains(condId)
 			const to mod gives false
-			branch to osAllocPages gives false
+			branch to rdataAddr gives false
 		end 'term'
 	end 'terminatorReadsFusedFlags'
 
@@ -906,6 +945,8 @@ type StdToX64Lowering
 			loadIndirect(resultId, addrId, offset, valueType) then self.lowerLoadIndirect(resultId, addrId: addrId, offset: offset, valueType: valueType, dstBlock: dstBlock)
 			storeIndirect(addrId, offset, valueId, valueType) then self.lowerStoreIndirect(addrId, offset: offset, valueId: valueId, valueType: valueType, dstBlock: dstBlock)
 			osAllocPages(resultId, sizeId) then self.lowerOsAllocPages(resultId, sizeId: sizeId, dstBlock: dstBlock)
+			osWriteStdout(bufId, lenId) then self.lowerOsWriteStdout(bufId, lenId: lenId, dstBlock: dstBlock)
+			rdataAddr(resultId, label) then self.targetModule.appendOp(dstBlock, op: TargetOp.leaRegRdata(X64VReg.virtual(resultId), label: label))
 		end 'lower'
 	end 'lowerBodyOp'
 
@@ -931,6 +972,8 @@ type StdToX64Lowering
 			call then panic("lowerStdToX64: a `call` op appeared as a block terminator (lowering bug — a call is a body op)")
 			globalAddr to storeIndirect then panic("lowerStdToX64: a memory-band op appeared as a block terminator (lowering bug — a global's address, load and store are all body ops)")
 			osAllocPages then panic("lowerStdToX64: an `osAllocPages` op appeared as a block terminator (lowering bug — a page allocation is a body op)")
+			osWriteStdout then panic("lowerStdToX64: an `osWriteStdout` op appeared as a block terminator (lowering bug — a stdout write is a body op)")
+			rdataAddr then panic("lowerStdToX64: an `rdataAddr` op appeared as a block terminator (lowering bug — an rdata address is a value-producing body op)")
 		end 'lower'
 	end 'lowerTerminatorOp'
 
@@ -1284,6 +1327,35 @@ type StdToX64Lowering
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(X64VReg.virtual(resultId), srcReg: X64VReg.physical(X64Register.rax)))
 	end 'lowerOsAllocPages'
 
+	// Lower `osWriteStdout(buf, len)` to `GetStdHandle(STD_OUTPUT_HANDLE)` + `WriteFile(handle, buf,
+	// len, &written, NULL)`, both through the IAT (P1.2 wave A — `print`).
+	//
+	// ⭐ EVERYTHING GOES THROUGH THE CLOBBER-CORRECT `iatCall`. `iatCall` declares `implicitDefs:
+	// 0xFFFF0FC7` (the caller-saved set), so `buf`/`len` — the two virtual registers live ACROSS the
+	// GetStdHandle call — are spilled or forced into callee-saved registers by the allocator with no
+	// hand-holding. This is exactly the path `lowerOsAllocPages` takes; hand-assembling the call (as the
+	// PANIC runtime does, where there are no live virtuals) would bypass the clobber and miscompile.
+	//
+	// Win64 ABI (NOT Maxon's): args rcx/rdx/r8/r9 then stack, result in RAX. The 5th arg (`lpOverlapped
+	// = NULL`) is a stack argument at `[rsp + StringWriteOverlappedDisp]`; the 4th (`lpNumberOfBytesWritten`)
+	// must be a valid pointer (WriteFile writes the count there), so r9 points at a scratch slot at
+	// `[rsp + StringWriteBytesWrittenDisp]`. Both live in `__print_string`'s `outgoingArgSize` region.
+	function lowerOsWriteStdout(bufId ValueId, lenId ValueId, dstBlock IrBlock)
+		// GetStdHandle(STD_OUTPUT_HANDLE) -> RAX (the handle).
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(X64VReg.physical(X64Register.rcx), value: StdOutputHandle))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.GetStdHandle)))
+
+		// WriteFile(handle, buffer, length, &written, NULL). The handle move (rcx <- rax) FIRST, before
+		// rax is reused as the NULL scratch below.
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(X64VReg.physical(X64Register.rcx), srcReg: X64VReg.physical(X64Register.rax)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(X64VReg.physical(X64Register.rdx), srcReg: X64VReg.virtual(bufId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(X64VReg.physical(X64Register.r8), srcReg: X64VReg.virtual(lenId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.leaRegRegImm32(X64VReg.physical(X64Register.r9), base: X64VReg.physical(X64Register.rsp), disp: writeFileArgDisp(WriteFileBytesWrittenSlot)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(X64VReg.physical(X64Register.rax), value: NullPointer))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(X64VReg.physical(X64Register.rsp), disp: writeFileArgDisp(WriteFileOverlappedSlot), src: X64VReg.physical(X64Register.rax), width: X64AccessWidth.word64))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.WriteFile)))
+	end 'lowerOsWriteStdout'
+
 	// Lower a Std `cmpImm` (constant right operand) to `cmp reg, imm32` — the same two-part
 	// protocol `lowerCmp` uses, so the fold that moved the right operand into an immediate
 	// changes only the compare INSTRUCTION, never what the compare MEANS. The literal
@@ -1604,7 +1676,7 @@ type StdToX64Lowering
 		return match term 'term'
 			condBranch(condId, _, _) gives self.settleFloatEqualityCondition(condId)
 			const to mod gives false
-			branch to osAllocPages gives false
+			branch to rdataAddr gives false
 		end 'term'
 	end 'settleFloatEqualityBranch'
 
@@ -1735,7 +1807,7 @@ type StdToX64Lowering
 		return match term 'term'
 			condBranch(condId, thenBlockId, elseBlockId) gives (condId, thenBlockId, elseBlockId)
 			const to mod panic("condBranchFieldsOf: the terminator of block ref {blockRef} is not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
-			branch to osAllocPages panic("condBranchFieldsOf: the terminator of block ref {blockRef} is not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
+			branch to rdataAddr panic("condBranchFieldsOf: the terminator of block ref {blockRef} is not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 		end 'term'
 	end 'condBranchFieldsOf'
 
@@ -1837,7 +1909,12 @@ function x64AccessWidthFor(t StdType) returns X64AccessWidth
 		i64 then return X64AccessWidth.word64
 		f64 then return X64AccessWidth.word64
 		i8 to i32 then panic("x64AccessWidthFor: no `.data` access form for {t.name} — a narrow integer global needs the `as` cast (P1.9), and its SIGNEDNESS then decides movzx vs movsx rather than defaulting to a width")
-		u8 to u64 then panic("x64AccessWidthFor: no `.data` access form for {t.name} — an unsigned global needs the `as` cast (P1.9)")
+		// A `u8` load is `movzx byte` — the byte arm — and that is unambiguous BECAUSE it is unsigned:
+		// zero-extension is always correct, so there is no signed/unsigned choice to defer (unlike `i8`
+		// above). `__str_eq` reads a String's bytes this way (P1.2 wave A). The wider unsigned types
+		// still have no access form and stay deferred.
+		u8 then return X64AccessWidth.byte
+		u16 to u64 then panic("x64AccessWidthFor: no `.data` access form for {t.name} — an unsigned global wider than a byte needs the `as` cast (P1.9)")
 		f32 then panic("x64AccessWidthFor: no `.data` access form for {t.name} — an f32 is 4 bytes and moves through `movss`, a width this enum does not carry; Maxon's `float` is f64, so nothing produces one")
 	end 'w'
 end 'x64AccessWidthFor'

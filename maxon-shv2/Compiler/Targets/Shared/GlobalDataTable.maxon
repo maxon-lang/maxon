@@ -29,6 +29,26 @@ export typealias GlobalDedupMap = Map with (ByteArray, String)
 // file's header calls out in v1 and `sortBySizeDescendingStable` was rewritten to kill.
 export typealias RdataOffsetMap = Map with (String, ByteOffset)
 
+// ⭐ A DATA→DATA FIXUP for a String literal's record (P1.2 wave A): the record's `buffer@0` field must
+// hold the ABSOLUTE VA of its byte blob, and no VA exists until the PE writer lays out `.rdata`. So the
+// `LowerMaxonToStd` lowering emits `buffer@0 = 0` and records this `(record, blob)` pair; the writer
+// patches `record`'s first 8 bytes with `ImageBase + rdataRva + blobOffset` once `rdataRva` is known.
+// Both labels are `.rdata` labels this same table minted, so their offsets come from `rdataOffsetOf`.
+//
+// This is the mechanism `RdataRelocKind.funcAbs64InRdata` was scaffolded for (a code→text-VA-in-rdata
+// patch); this is its DATA→DATA sibling, and it is carried on the data table (not the code relocation
+// list) because it patches the rdata IMAGE, not the `.text` bytes.
+export type StringBufferFixup
+	export let recordLabel as String
+	export let blobLabel as String
+
+	export static function create(recordLabel String, blobLabel String) returns StringBufferFixup
+		return Self{recordLabel: recordLabel, blobLabel: blobLabel}
+	end 'create'
+end 'StringBufferFixup'
+
+export typealias StringBufferFixupArray = Array with StringBufferFixup
+
 // The rdata payloads themselves — one raw byte blob per registered global.
 export typealias ByteArrayArray = Array with ByteArray
 
@@ -96,9 +116,12 @@ export type GlobalDataTable
 	// REORDERED by size to kill padding, these are laid out in registration order and their offsets
 	// are known the moment they are appended.
 	export var rdataOffsets as RdataOffsetMap
+	// The `(record, blob)` pairs the PE writer patches to bake each String literal's `buffer@0` — see
+	// StringBufferFixup. Empty for a program with no string literal, which is most of the corpus.
+	export var stringBufferFixups as StringBufferFixupArray
 
 	export static function create() returns GlobalDataTable
-		return Self{names: StringArray.create(), values: ByteArrayArray.create(), nextStringId: 0, nameIndex: GlobalNameIndexMap.create(), valueDedup: GlobalDedupMap.create(), dataSection: DataSectionEntryArray.create(), dataIndex: DataSectionIndexMap.create(), rdataOffsets: RdataOffsetMap.create()}
+		return Self{names: StringArray.create(), values: ByteArrayArray.create(), nextStringId: 0, nameIndex: GlobalNameIndexMap.create(), valueDedup: GlobalDedupMap.create(), dataSection: DataSectionEntryArray.create(), dataIndex: DataSectionIndexMap.create(), rdataOffsets: RdataOffsetMap.create(), stringBufferFixups: StringBufferFixupArray.create()}
 	end 'create'
 
 	// ⭐ REGISTER a read-only constant payload, returning the label that names it — the `.rdata`
@@ -125,6 +148,13 @@ export type GlobalDataTable
 			return label
 		end 'fresh'
 	end 'registerRdataConstant'
+
+	// Record that `recordLabel`'s `buffer@0` must be patched with `blobLabel`'s absolute VA — see
+	// StringBufferFixup. Both are `.rdata` labels this table minted; the writer resolves their offsets
+	// through `rdataOffsetOf`.
+	export function recordStringBufferFixup(recordLabel String, blobLabel String)
+		self.stringBufferFixups.push(StringBufferFixup.create(recordLabel, blobLabel: blobLabel))
+	end 'recordStringBufferFixup'
 
 	// The total bytes registered so far — which is the offset the NEXT payload lands at.
 	//

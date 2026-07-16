@@ -73,68 +73,45 @@ export let MmLeakCheckName = b"__mm_leak_check"
 // number read from the other end.
 let LeakExitCode = 101
 
-// The prefix every runtime entry point shares — the single test for "does this program touch the
-// heap at all?". See `moduleUsesHeap`.
+// The prefix every HEAP runtime entry point shares — the single test for "does this program touch the
+// heap at all?", which `StringRuntime.scanRuntimeUsage` reads for its `usesHeap` bit.
 let RuntimeCallPrefix = b"__mm_"
 
-// True iff the program actually reaches the heap, which is what decides whether ANY of this is
-// emitted. A `return 42` program must stay byte-for-byte what it was before this rung: it
-// allocates nothing, so it carries no runtime, no `.data` slots, and no leak check — and its
-// committed golden is unchanged as a result. (BackendDispatch's header states this intent
-// directly: the runtime floor is carried only by programs that need it.)
+// ⭐ **IS THIS CALLEE A HEAP-RUNTIME ENTRY POINT?** The `__mm_`-only test that decides whether the
+// program carries the ALLOCATOR + the leak check. It is DELIBERATELY narrower than
+// `isCompilerInternalCallee` (below): a call to any `__mm_*` entry point implies the whole heap
+// runtime (`__mm_alloc` calls `__slab_alloc`, `__mm_decref` calls `__mm_free`, the leak check reads
+// the counter the others maintain), while a `__print_string`/`__str_eq` call implies NEITHER — a
+// print-only program must not drag in the heap floor or the leak gate.
 //
-// It asks the MAXON module rather than the Std one because the answer is needed at `layOut` time,
-// BEFORE lowering — the `.data` slots must exist before the backend resolves a `globalAddr` label
-// against them. The parser emits the `__mm_alloc` call, so the fact is already present there.
-//
-// A call to any `__mm_*` entry point implies the whole runtime: `__mm_alloc` calls `__slab_alloc`,
-// `__mm_decref` calls `__mm_free`, and the leak check reads the counter the others maintain. There
-// is no useful subset, so there is one question and not four.
-export function moduleUsesHeap(module MaxonModule) returns bool
-	for func in module.functions 'eachFunc'
-		for blockRef in func.blockRefs 'eachBlock'
-			let block = try module.blocks.get(blockRef) otherwise panic("moduleUsesHeap: blockRef from func.blockRefs not in module.blocks")
-			for opIdx in block.opRefs 'eachOp'
-				let op = try module.ops.get(opIdx) otherwise panic("moduleUsesHeap: opIdx {opIdx} not in module.ops")
-				if maxonOpCallsRuntime(op) 'isRuntimeCall'
-					return true
-				end 'isRuntimeCall'
-			end 'eachOp'
-		end 'eachBlock'
-	end 'eachFunc'
-	return false
-end 'moduleUsesHeap'
-
-function maxonOpCallsRuntime(op MaxonOp) returns bool
-	return match op 'op'
-		call(_, callee, _, _, _) gives isRuntimeCallee(callee)
-		literal to storeIndirect gives false
-	end 'op'
-end 'maxonOpCallsRuntime'
-
-// ⭐ **IS THIS CALLEE ONE OF THE COMPILER'S OWN?** THE one predicate, and it has FOUR readers that
-// must never disagree — which is exactly why it is a function and not a prefix test spelled at each
-// of them:
-//
-//   • `moduleUsesHeap` (above) — does this program carry the runtime at all?
-//   • `Parser.emitRuntimeCall` — the door that emits one, typing its result itself because no
-//     signature exists to type it from.
-//   • `SemanticCheck.validateCall` — which must NOT report E3004 for it. Nothing declares
-//     `__mm_alloc`; the user never wrote it; there is no source to point at.
-//   • `LowerMaxonToStd.lowerCall` — which must NOT slot its arguments against a signature that does
-//     not exist, and does not need to: the compiler wrote them, in declaration order.
-//
-// A runtime entry point is DECLARED BY NOTHING. It is built at the Std tier, after lowering
-// (`installMmRuntime`), so it is absent from every registry the frontend consults — and the three
-// readers above are the three places that would otherwise each conclude, separately and wrongly,
-// that the program calls a function that does not exist.
-//
-// The `__` prefix is what makes this safe to decide by NAME: Maxon reserves it for compiler-internal
-// names, so no user function can collide with one. It is the same reservation `TargetPrinter.
-// isRuntimeFunction` keeps the runtime out of the spec goldens by.
+// A runtime entry point is DECLARED BY NOTHING — built at the Std tier after lowering — so the `__`
+// prefix is what makes deciding it by NAME safe: Maxon reserves `__` for compiler-internal names, so
+// no user function can collide. It is the same reservation `TargetPrinter.isRuntimeFunction` keeps the
+// runtime out of the spec goldens by.
 export function isRuntimeCallee(callee ByteArray) returns bool
 	return bytesStartWith(callee, prefix: RuntimeCallPrefix)
 end 'isRuntimeCallee'
+
+// The prefix Maxon reserves for compiler-internal names — every runtime entry point the compiler
+// EMITS (`__mm_alloc`, `__print_string`, `__str_eq`, …) starts with it, and no user function can,
+// because `isAlphaNum` admits `_` but an identifier cannot BEGIN with two of them in any construct
+// the parser accepts as a callee.
+let CompilerInternalPrefix = b"__"
+
+// ⭐ **IS THIS CALLEE ONE OF THE COMPILER'S OWN?** The GENERAL predicate — a superset of
+// `isRuntimeCallee` — read by the three places that must NOT treat a compiler-emitted callee as a
+// user function: `SemanticCheck.validateCall` (no E3004 — nothing declares it), `LowerMaxonToStd.lowerCall`
+// (no signature slotting — the compiler wrote its arguments positionally), and, in spirit, the parser,
+// which emits such calls through `emitRuntimeCall` rather than `emitCall`.
+//
+// It is DISTINCT FROM `isRuntimeCallee` (which stays `__mm_`-only) because the two answer different
+// questions. `isRuntimeCallee` decides whether the program carries the HEAP RUNTIME + leak check — a
+// print-only or string-`==`-only program must NOT, so that decision cannot widen to every `__` name.
+// This one decides only "skip the user-function checks", which is true of `__print_string`/`__str_eq`
+// just as much as of `__mm_alloc`.
+export function isCompilerInternalCallee(callee ByteArray) returns bool
+	return bytesStartWith(callee, prefix: CompilerInternalPrefix)
+end 'isCompilerInternalCallee'
 
 // The runtime's `.data` slots, appended to the user's declared globals before `layOut` orders them.
 // They are ordinary slots in every respect — `layOut` sorts and offsets them exactly as it does a
@@ -152,14 +129,14 @@ end 'runtimeGlobals'
 // every column the backend sizes by `blockArgIdBound` pays for the highest id minted. Parameters
 // occupy `0..paramCount-1` by construction — the Std `param` op's contract — so the counter starts
 // there rather than at zero.
-type ValueMinter
+export type ValueMinter
 	var next as ValueId
 
-	static function create(paramCount ParamCount) returns ValueMinter
+	export static function create(paramCount ParamCount) returns ValueMinter
 		return Self{next: paramCount}
 	end 'create'
 
-	function mint() returns ValueId
+	export function mint() returns ValueId
 		let id = self.next
 		self.next = self.next + 1
 		return id
@@ -179,14 +156,17 @@ export function installMmRuntime(module StdModule)
 	buildMmLeakCheck(module)
 end 'installMmRuntime'
 
-// One i64 parameter — the shape five of the six runtime functions share.
-function oneI64Param() returns StdTypeArray
+// One i64 parameter — the shape five of the six runtime functions share. Exported: the String
+// runtime's `__print_string` (one string pointer) shares it, so it is the same helper rather than a
+// second copy.
+export function oneI64Param() returns StdTypeArray
 	var types = StdTypeArray.create()
 	types.push(StdType.i64)
 	return types
 end 'oneI64Param'
 
-function twoI64Params() returns StdTypeArray
+// Two i64 parameters — `__mm_alloc(size, destructor)` and the String runtime's `__str_eq(a, b)`.
+export function twoI64Params() returns StdTypeArray
 	var types = StdTypeArray.create()
 	types.push(StdType.i64)
 	types.push(StdType.i64)
@@ -196,7 +176,7 @@ end 'twoI64Params'
 // Emit the `param` ops an entry block owes. A Std function's parameters are materialized once, at
 // entry, by the op whose `role` is `param` — the backend turns each into the move that captures the
 // incoming ABI register into its virtual register. Parameter `k` is ValueId `k`.
-function emitParams(module StdModule, block IrBlock, count ParamCount)
+export function emitParams(module StdModule, block IrBlock, count ParamCount)
 	for k in 0 upto count 'each'
 		module.appendOp(block, op: StdOp.param(k as ValueId, index: k, paramType: StdType.i64))
 	end 'each'
@@ -497,7 +477,7 @@ function emitHeaderBase(module StdModule, block IrBlock, ptr ValueId, ids ValueM
 	return header
 end 'emitHeaderBase'
 
-function argsOf(only ValueId) returns ValueIdArray
+export function argsOf(only ValueId) returns ValueIdArray
 	var args = ValueIdArray.create()
 	args.push(only)
 	return args

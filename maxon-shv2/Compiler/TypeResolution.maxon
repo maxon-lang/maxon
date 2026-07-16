@@ -148,6 +148,11 @@ function resolveType(project Project, t MaxonType) returns MaxonType
 		// own body, arriving back here through a second `resolveTypes` over a re-resolved signature
 		// would find it idempotent. Nothing to do either way.
 		structRef then return t
+		// Already resolved, and by the PARSER: `Parser.parseTypeReference` mints `MaxonType.string`
+		// directly for the `String` builtin (syntactically, like `Self` → `structRef`), so it never
+		// arrives here as a `named` to resolve. This arm is what makes that concrete type idempotent
+		// under a second `resolveTypes` — there is nothing to do.
+		string then return t
 	end 'r'
 end 'resolveType'
 

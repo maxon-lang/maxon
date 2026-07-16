@@ -1,0 +1,319 @@
+// Runtime/StringRuntime.maxon — the String value representation (P1.2 wave A) and the two builder-built
+// Std runtime functions a String needs before ownership exists: `__print_string` and `__str_eq`.
+//
+// ⭐ A WAVE-A STRING IS IMMORTAL RDATA. A string LITERAL lowers to a pointer to a fused 48-byte record
+// whose `buffer@0` points at a separate NUL-terminated byte blob — BOTH in read-only `.rdata`. Nothing
+// is heap-allocated, refcounted or freed, so neither runtime function touches the MM runtime: a
+// print-only or string-`==`-only program stays leak-gate-free (see `scanRuntimeUsage`). The owned heap
+// String, its destructor, and drop-at-scope-exit are Wave B.
+//
+// This file owns TWO things and their single source is here:
+//   1. the RECORD LAYOUT — the offsets `__print_string`/`__str_eq` read (`buffer@0`, `length@8`) AND
+//      the offsets `LowerMaxonToStd` writes when it assembles a literal's record. One set of constants,
+//      read from both ends, so the reader and the writer cannot drift (`buildStringRecordBytes` asserts
+//      each field lands at its named offset).
+//   2. the two runtime functions, built as `StdOp` graphs exactly as `MmRuntime` builds the allocator
+//      — so they get register allocation, frames and the whole backend for free — reusing that file's
+//      `ValueMinter`/`emitParams`/`oneI64Param`/`twoI64Params`/`argsOf` rather than a second copy.
+
+// --- The fused 48-byte String record (bootstrap `MaxonToStandardConversion.Helpers.cs:503-536`) ---
+//
+// Every field is an 8-byte slot, so the six offsets are 0/8/16/24/32/40 and the record is 48 bytes.
+// `buffer@0` is the ABSOLUTE VA of the byte blob — emitted as a PLACEHOLDER 0 and patched by the PE
+// writer once `.rdata`'s RVA is known (a fixed-base image, so the VA is compile-time computable). The
+// blob is a SEPARATE `.rdata` entry, NUL-terminated, and `length@8` EXCLUDES the NUL.
+export let StringBufferOffset = 0 as ByteOffset
+export let StringLengthOffset = 8 as ByteOffset
+let StringCapacityOffset = 16 as ByteOffset
+let StringElementSizeOffset = 24 as ByteOffset
+let StringParentPtrOffset = 32 as ByteOffset
+let StringIsAsciiOffset = 40 as ByteOffset
+export let StringRecordBytes = 48 as ByteCount
+let StringFieldBytes = 8 as ByteCount
+
+// `capacity = -2` is the RDATA SENTINEL: read-only, never grown, never freed. `parent_ptr = 0` marks a
+// literal with no owning parent. `element_size = 1` — a String's elements are bytes. These are the
+// values the (Wave-B) destructor will read to decide "free nothing"; at Wave A nothing reads them,
+// they are simply the honest contents of the record.
+let RdataCapacitySentinel = 0 - 2 as ParsedInt
+let RdataParentPtr = 0 as ParsedInt
+let StringElementSize = 1 as ParsedInt
+
+// `isAsciiFlag@40` — 1 iff every byte is < 128 (a compile-time scan). An empty string is vacuously
+// ASCII. The high-bit threshold and the two flag values are named rather than bare so the scan reads
+// as the property it computes.
+let AsciiHighBit = 128 as Byte
+let AsciiFlagTrue = 1 as ParsedInt
+let AsciiFlagFalse = 0 as ParsedInt
+
+// The blob is the payload bytes followed by a single NUL — a C string, so the record's pointer is
+// usable by any consumer that wants a NUL-terminated buffer, while `length@8` is what Maxon reads.
+let NulTerminator = 0 as Byte
+
+// The `.rdata` label prefixes for a literal's blob and its record. Distinct so a reader of the section
+// can tell the two apart; `__`-prefixed so they never collide with a user name and stay out of the
+// spec goldens (`TargetPrinter.isRuntimeFunction`'s data twin).
+let StringBlobPrefix = "__str_blob_"
+let StringRecordPrefix = "__str_rec_"
+
+// The two runtime entry points this file installs. `__`-prefixed (`isCompilerInternalCallee` treats
+// them as the compiler's own — no E3004, no signature slotting), but NOT `__mm_`-prefixed, so
+// `isRuntimeCallee` leaves them out of the heap-runtime decision: a program that only prints or only
+// compares strings carries neither the allocator nor the leak check.
+export let PrintStringName = b"__print_string"
+export let StrEqName = b"__str_eq"
+
+// The bool `__str_eq` returns, as the i64 a Std `value(i64)` return carries: 1 when equal, 0 otherwise.
+let StrEqEqual = 1 as ParsedInt
+let StrEqNotEqual = 0 as ParsedInt
+
+// True iff every byte is ASCII (< 128) — the `isAsciiFlag@40` scan, run once per distinct literal at
+// lower time (the cold path), never per value.
+export function bytesAreAscii(bytes ByteArray) returns bool
+	for b in bytes 'each'
+		if b >= AsciiHighBit 'high'
+			return false
+		end 'high'
+	end 'each'
+	return true
+end 'bytesAreAscii'
+
+// The NUL-terminated blob for a literal's payload — the bytes, then one NUL.
+export function stringBlobBytes(bytes ByteArray) returns ByteArray
+	var blob = ByteArray.create()
+	blob.append(bytes)
+	blob.push(NulTerminator)
+	return blob
+end 'stringBlobBytes'
+
+// Build the 48-byte record for a literal. `byteLength` EXCLUDES the NUL (it is the payload count);
+// `isAscii` is `bytesAreAscii`'s answer.
+//
+// ⚠ **`buffer@0` HOLDS THE BLOB'S RDATA OFFSET, NOT 0, AND THIS IS LOAD-BEARING FOR DEDUP.** The PE
+// writer OVERWRITES `buffer@0` with the blob's absolute VA (`ImageBase + rdataRva + blobOffset`), so
+// the value stored here is irrelevant to what the program reads. But it is NOT irrelevant to
+// `registerRdataConstant`, which DEDUPES records by their bytes: two different strings of the same
+// length and ascii-ness have byte-identical records EXCEPT for `buffer@0`, so a placeholder of 0 would
+// collapse `"hello"` and `"world"` into ONE record pointing at ONE blob — a silent wrong answer where
+// every same-length string compares equal. Seeding `buffer@0` with the blob's own offset (distinct per
+// distinct blob, shared by identical strings that already dedup their blob) makes records dedup EXACTLY
+// when their strings are identical.
+//
+// ⭐ EACH FIELD IS APPENDED AT ITS NAMED OFFSET AND THE APPENDER ASSERTS IT LANDS THERE, so the offsets
+// the runtime functions load by (`StringBufferOffset`, `StringLengthOffset`) and the offsets this
+// writes are ONE set of constants that cannot drift: reorder a field or mis-size one and this panics
+// rather than shipping a record the runtime reads wrong.
+export function buildStringRecordBytes(blobOffset ByteOffset, byteLength ByteCount, isAscii bool) returns ByteArray
+	var record = ByteArray.create()
+	appendRecordField(record, expectedOffset: StringBufferOffset, value: blobOffset as ParsedInt)
+	appendRecordField(record, expectedOffset: StringLengthOffset, value: byteLength as ParsedInt)
+	appendRecordField(record, expectedOffset: StringCapacityOffset, value: RdataCapacitySentinel)
+	appendRecordField(record, expectedOffset: StringElementSizeOffset, value: StringElementSize)
+	appendRecordField(record, expectedOffset: StringParentPtrOffset, value: RdataParentPtr)
+	appendRecordField(record, expectedOffset: StringIsAsciiOffset, value: asciiFlagValue(isAscii))
+
+	if record.count() != StringRecordBytes 'sizeDrift'
+		panic("buildStringRecordBytes: assembled {record.count()} bytes, not {StringRecordBytes} — a field's width does not match its offset spacing")
+	end 'sizeDrift'
+	return record
+end 'buildStringRecordBytes'
+
+function appendRecordField(record ByteArray, expectedOffset ByteOffset, value ParsedInt)
+	if record.count() != expectedOffset 'offsetDrift'
+		panic("buildStringRecordBytes: a record field is being written at offset {record.count()} but its constant says {expectedOffset} — the record layout the runtime reads and this writes have drifted")
+	end 'offsetDrift'
+	record.append(scalarImage(value, byteCount: StringFieldBytes))
+end 'appendRecordField'
+
+function asciiFlagValue(isAscii bool) returns ParsedInt
+	if isAscii 'ascii'
+		return AsciiFlagTrue
+	end 'ascii'
+	return AsciiFlagFalse
+end 'asciiFlagValue'
+
+// The `.rdata` labels a literal's blob and record register under. Split out so the two prefixes are
+// named at the one place that uses them and `LowerMaxonToStd` names neither.
+export function registerStringBlob(globalData GlobalDataTable, bytes ByteArray) returns String
+	return globalData.registerRdataConstant(StringBlobPrefix, bytes: stringBlobBytes(bytes))
+end 'registerStringBlob'
+
+// Register a literal's record, seeded with its blob's offset (see `buildStringRecordBytes` for why the
+// offset, not 0). `blobLabel` must already be registered — its offset is read back here.
+export function registerStringRecord(globalData GlobalDataTable, blobLabel String, byteLength ByteCount, isAscii bool) returns String
+	let blobOffset = globalData.rdataOffsetOf(blobLabel)
+	return globalData.registerRdataConstant(StringRecordPrefix, bytes: buildStringRecordBytes(blobOffset, byteLength: byteLength, isAscii: isAscii))
+end 'registerStringRecord'
+
+// --- Which compiler-internal runtime functions a module references ---
+//
+// ⭐ ONE WALK, THREE ANSWERS. `moduleUsesHeap`'s job (does this program touch the heap?) and the two
+// String questions (does it print? does it compare strings?) are the SAME traversal — every call op,
+// once — so they are answered together rather than by three near-identical walks. Each answer keys a
+// DIFFERENT installation, and the heap answer stays `__mm_`-specific: a print-only program must carry
+// NO allocator and NO leak check, so `usesHeap` reads `isRuntimeCallee` (the `__mm_` prefix), never
+// "any compiler-internal callee".
+//
+// It asks the MAXON module because the answers are needed BEFORE lowering — the heap decision drives
+// `.data` layout, and all three drive which functions get installed into the Std module.
+export type RuntimeUsage
+	export var usesHeap as bool
+	export var usesPrint as bool
+	export var usesStrEq as bool
+
+	static function create() returns RuntimeUsage
+		return Self{usesHeap: false, usesPrint: false, usesStrEq: false}
+	end 'create'
+end 'RuntimeUsage'
+
+export function scanRuntimeUsage(module MaxonModule) returns RuntimeUsage
+	var usage = RuntimeUsage.create()
+	for func in module.functions 'eachFunc'
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise panic("scanRuntimeUsage: blockRef from func.blockRefs not in module.blocks")
+			for opIdx in block.opRefs 'eachOp'
+				let op = try module.ops.get(opIdx) otherwise panic("scanRuntimeUsage: opIdx {opIdx} not in module.ops")
+				classifyRuntimeCall(op, usage: usage)
+			end 'eachOp'
+		end 'eachBlock'
+	end 'eachFunc'
+	return usage
+end 'scanRuntimeUsage'
+
+function classifyRuntimeCall(op MaxonOp, usage RuntimeUsage)
+	match op 'op'
+		call(_, callee, _, _, _) then recordCallUsage(callee, usage: usage)
+		literal to stringLiteral then break 'op'
+	end 'op'
+end 'classifyRuntimeCall'
+
+function recordCallUsage(callee ByteArray, usage RuntimeUsage)
+	if isRuntimeCallee(callee) 'heap'
+		usage.usesHeap = true
+	end 'heap'
+	if callee.equals(PrintStringName) 'print'
+		usage.usesPrint = true
+	end 'print'
+	if callee.equals(StrEqName) 'streq'
+		usage.usesStrEq = true
+	end 'streq'
+end 'recordCallUsage'
+
+// Install the referenced String runtime functions into the lowered Std module. Called AFTER the
+// pipeline (like `installMmRuntime`), so these are appended already-lowered and never re-optimized.
+// Each is installed ONLY when referenced — vocabulary does not ship ahead of its consumer.
+export function installStringRuntime(module StdModule, usage RuntimeUsage)
+	if usage.usesPrint 'print'
+		buildPrintString(module)
+	end 'print'
+	if usage.usesStrEq 'streq'
+		buildStrEq(module)
+	end 'streq'
+end 'installStringRuntime'
+
+// `__print_string(strPtr)` — write a String's bytes to stdout, no trailing newline.
+//
+// It loads `buffer@0` and `length@8` from the record and hands them to the `osWriteStdout` system op,
+// which lowers (x64-windows) to `GetStdHandle(STD_OUTPUT_HANDLE)` + `WriteFile` through the IAT. The
+// op is target-neutral — a wasm/linux backend writes its own way — so this function itself names no
+// Win32 symbol. `outgoingArgSize` reserves WriteFile's stack-arg space (its 5th parameter plus a
+// scratch slot for the bytes-written out-param); that need is the x64 lowering's, so its size comes
+// from there (`stringPrintOutgoingArgBytes`).
+function buildPrintString(module StdModule)
+	var func = IrFunction.createFromStd(PrintStringName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	func.outgoingArgSize = stringPrintOutgoingArgBytes()
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	emitParams(module, block: entry, count: 1)
+	let strPtr = 0 as ValueId
+
+	let buffer = ids.mint()
+	module.appendOp(entry, op: StdOp.loadIndirect(buffer, addrId: strPtr, offset: StringBufferOffset, valueType: StdType.i64))
+	let length = ids.mint()
+	module.appendOp(entry, op: StdOp.loadIndirect(length, addrId: strPtr, offset: StringLengthOffset, valueType: StdType.i64))
+	module.appendOp(entry, op: StdOp.osWriteStdout(buffer, lenId: length))
+	module.setTerminator(entry, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildPrintString'
+
+// `__str_eq(a, b) -> i64(bool)` — content equality: equal LENGTHS and equal BYTES.
+//
+// This is the bootstrap's `bytesEqual` (a length check, then a byte loop), NOT the enum `memcmp`
+// helper. It allocates nothing. Empty strings: length 0 == length 0 → the loop runs zero times →
+// return 1.
+//
+// The byte loop carries its index `i` as a loop-header block-arg (a phi), entering as 0 from the
+// length-match edge and as `i+1` from the back edge — the same on-the-fly SSA shape the parser mints
+// for a `while`, here built directly because a runtime function has no parser. The header's phi
+// `argType` is set to i64 explicitly: `retypeBlockArgs` runs in `lowerMaxonToStd`, which these
+// post-pipeline functions never pass through.
+function buildStrEq(module StdModule)
+	var func = IrFunction.createFromStd(StrEqName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var notEqual = module.addBlock(func, label: b"notEqual")
+	var header = module.addBlock(func, label: b"header")
+	var body = module.addBlock(func, label: b"body")
+	var allMatch = module.addBlock(func, label: b"allMatch")
+
+	emitParams(module, block: entry, count: 2)
+	let a = 0 as ValueId
+	let b = 1 as ValueId
+
+	// entry: lengths differ ⇒ not equal; else fall into the loop with `i = 0`.
+	let aLen = ids.mint()
+	module.appendOp(entry, op: StdOp.loadIndirect(aLen, addrId: a, offset: StringLengthOffset, valueType: StdType.i64))
+	let bLen = ids.mint()
+	module.appendOp(entry, op: StdOp.loadIndirect(bLen, addrId: b, offset: StringLengthOffset, valueType: StdType.i64))
+	let aBuf = ids.mint()
+	module.appendOp(entry, op: StdOp.loadIndirect(aBuf, addrId: a, offset: StringBufferOffset, valueType: StdType.i64))
+	let bBuf = ids.mint()
+	module.appendOp(entry, op: StdOp.loadIndirect(bBuf, addrId: b, offset: StringBufferOffset, valueType: StdType.i64))
+	let zero = ids.mint()
+	module.appendOp(entry, op: StdOp.const(zero, value: 0, valueType: StdType.i64))
+	let lenEq = ids.mint()
+	module.appendOp(entry, op: StdOp.cmp(lenEq, lhs: aLen, rhs: bLen, pred: StdCmpPred.eq, operandType: StdType.i64))
+	module.setTerminator(entry, op: StdOp.condBranch(lenEq, thenBlockId: header.id, elseBlockId: notEqual.id))
+
+	// The loop index `i` is the header's phi.
+	let i = ids.mint()
+	header.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
+	entry.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(zero)))
+
+	// header: `i >= len` ⇒ every byte matched.
+	let atEnd = ids.mint()
+	module.appendOp(header, op: StdOp.cmp(atEnd, lhs: i, rhs: aLen, pred: StdCmpPred.ge, operandType: StdType.i64))
+	module.setTerminator(header, op: StdOp.condBranch(atEnd, thenBlockId: allMatch.id, elseBlockId: body.id))
+
+	// body: compare `a[i]` vs `b[i]`; equal ⇒ continue with `i+1`, else not equal. The compare is the
+	// LAST flag writer before the branch, so it fuses to a `jcc`.
+	let aAddr = ids.mint()
+	module.appendOp(body, op: StdOp.binOp(aAddr, lhs: aBuf, rhs: i, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	let aByte = ids.mint()
+	module.appendOp(body, op: StdOp.loadIndirect(aByte, addrId: aAddr, offset: 0, valueType: StdType.u8))
+	let bAddr = ids.mint()
+	module.appendOp(body, op: StdOp.binOp(bAddr, lhs: bBuf, rhs: i, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	let bByte = ids.mint()
+	module.appendOp(body, op: StdOp.loadIndirect(bByte, addrId: bAddr, offset: 0, valueType: StdType.u8))
+	let one = ids.mint()
+	module.appendOp(body, op: StdOp.const(one, value: 1, valueType: StdType.i64))
+	let iNext = ids.mint()
+	module.appendOp(body, op: StdOp.binOp(iNext, lhs: i, rhs: one, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	let byteEq = ids.mint()
+	module.appendOp(body, op: StdOp.cmp(byteEq, lhs: aByte, rhs: bByte, pred: StdCmpPred.eq, operandType: StdType.i64))
+	module.setTerminator(body, op: StdOp.condBranch(byteEq, thenBlockId: header.id, elseBlockId: notEqual.id))
+	body.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(iNext)))
+
+	let matchResult = ids.mint()
+	module.appendOp(allMatch, op: StdOp.const(matchResult, value: StrEqEqual, valueType: StdType.i64))
+	module.setTerminator(allMatch, op: StdOp.ret(matchResult))
+
+	let mismatchResult = ids.mint()
+	module.appendOp(notEqual, op: StdOp.const(mismatchResult, value: StrEqNotEqual, valueType: StdType.i64))
+	module.setTerminator(notEqual, op: StdOp.ret(mismatchResult))
+
+	module.functions.push(func)
+end 'buildStrEq'

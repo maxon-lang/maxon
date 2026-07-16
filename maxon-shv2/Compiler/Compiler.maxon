@@ -155,9 +155,13 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// layout — the `.data` slots must exist before the backend resolves a `globalAddr` against
 	// them. The parser has already emitted the `__mm_alloc` call by this point, so the fact is
 	// available one tier up from where it is consumed.
-	let usesHeap = moduleUsesHeap(module)
+	// ONE walk of the Maxon module answers all three "which runtime does this program carry?" questions
+	// (heap / print / string-`==`). The HEAP answer alone drives `.data` layout — the `.data` slots must
+	// exist before the backend resolves a `globalAddr`, so it is needed here, before lowering — and it
+	// stays `__mm_`-specific: a print-only program adds no `.data` slots and no leak check.
+	let usage = scanRuntimeUsage(module)
 	var declaredGlobals = signatures.declaredGlobals()
-	if usesHeap 'heapGlobals'
+	if usage.usesHeap 'heapGlobals'
 		for entry in runtimeGlobals() 'each'
 			declaredGlobals.push(entry)
 		end 'each'
@@ -176,9 +180,15 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// they run on, and `foldConstOperands` would only re-derive folds it already has. It still
 	// flows through the WHOLE backend (ISel, register allocation, frames), which is the entire
 	// argument for building it as `StdOp`s rather than as bytes.
-	if usesHeap 'installRuntime'
+	if usage.usesHeap 'installMm'
 		installMmRuntime(pipeline.stdModule)
-	end 'installRuntime'
+	end 'installMm'
+	// The String runtime (`__print_string`/`__str_eq`) is installed the SAME way and for the same
+	// reason — already-lowered Std, appended after the pipeline so it is never re-optimized — but it is
+	// keyed on its OWN usage bits, not on `usesHeap`: a Wave-A literal is immortal rdata, so a
+	// print-only or string-`==`-only program pulls in NEITHER the allocator NOR the leak check.
+	// `installStringRuntime` installs only the referenced functions (a no-op when neither is used).
+	installStringRuntime(pipeline.stdModule, usage: usage)
 
 	// The backend owns its own error gate now: the register allocator reports E5001
 	// (register pressure) onto `project.diagnostics` and throws when a loop genuinely

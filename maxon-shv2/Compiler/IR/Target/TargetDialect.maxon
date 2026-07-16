@@ -660,6 +660,18 @@ export union TargetOp
 	// column answers each from its own value. This is what the class-per-value design buys.
 	cvtsi2sdRegReg(dest X64VReg, src X64VReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 	cvttsd2siRegReg(dest X64VReg, src X64VReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
+	// `lea dest, [rip + disp32]` to an `.rdata` constant — the address of a String literal's 48-byte
+	// record (P1.2 wave A). The `.rdata` twin of `leaRegGlobal` (which targets `.data`), and it shares
+	// that op's every property: ONE plain def, NO uses, reads no allocatable register at all (RIP is
+	// not allocatable), sets no flags. The disp32 is emitted ZERO and an `RdataRelocation` of kind
+	// `ripRelDisp32` is recorded; the PE writer patches it once `.rdata`'s RVA is known. `label` is a
+	// name, not a value, so it is a `ByteArray` — the same shape `leaRegGlobal`'s carries.
+	//
+	// APPENDED AT THE END OF THE UNION, past `cvttsd2siRegReg`, per the band-append invariant: every
+	// `andRegReg to cvttsd2siRegReg` range arm (which covers `leaRegGlobal` today) now fails to compile
+	// until it is consciously extended to `andRegReg to leaRegRdata`, exactly where `leaRegGlobal`
+	// already sits inside it.
+	leaRegRdata(dest X64VReg, label ByteArray) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 end 'TargetOp'
 
 // The memory-access widths the `.data` load/store encoders have. TWO, because two are what the

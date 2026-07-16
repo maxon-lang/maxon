@@ -577,6 +577,25 @@ export union StdOp
 	// `indirectCall` as its example — this lowers to exactly that, and it escapes the inliner's
 	// static-callee model.
 	osAllocPages(resultId ValueId, sizeId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+	// Write `lenId` bytes starting at `bufId` to STDOUT (P1.2 wave A — `print`). A `system`-band op for
+	// the same two reasons `osAllocPages` is: it says WHAT is wanted (bytes to stdout) and lets each
+	// backend say HOW (x64-windows: `GetStdHandle`+`WriteFile` through the IAT; a wasm backend would
+	// name its own), keeping the Win32 import table out of the target-neutral tier; and it appends at
+	// the END of the union, where the append is LOUD (every `… to osAllocPages` range arm fails to
+	// compile until consciously extended). It DEFINES NO VALUE — `print` returns void — so it carries
+	// no result id. Full call-barrier metadata (it IS an indirect call once lowered), exactly like
+	// `osAllocPages`.
+	osWriteStdout(bufId ValueId, lenId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+	// The RIP-relative ADDRESS of an `.rdata` constant — a String literal's 48-byte record (P1.2 wave
+	// A). The `.rdata` twin of `globalAddr`: identical operand shape (a `label` NAME, one plain def, no
+	// value use) and identical metadata (`isPure: true` — it recomputes an address that cannot change,
+	// freely rematerializable; `isMemory: false` — a `lea` touches no memory). They are TWO ops rather
+	// than one with a section field because the section is the whole difference the relocation kind
+	// carries: `globalAddr` lowers to a `.data` relocation (`dataSectionRipRelDisp32`), this to an
+	// `.rdata` one (`ripRelDisp32`). APPENDED at the END of the union, past `osWriteStdout` — its
+	// `memory` category is metadata independent of this position, and a mid-band insert would be
+	// silently swallowed by the `branch to osAllocPages` full-tail range arms in the backend.
+	rdataAddr(resultId ValueId, label ByteArray) = StdOpMeta{category: StdOpCategory.memory, role: OpRole.plain, isPure: true, isUnsupportedInInlineBody: false, isMemory: false, isStore: false, isCall: false, clobbersFlags: false, isCmp: false}
 end 'StdOp'
 
 export typealias StdOpArray = Array with StdOp
@@ -658,6 +677,11 @@ export function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 		storeIndirect(addrId, _, valueId, _) then insertUsePair(referenced, a: addrId, b: valueId)
 		// The size is a real value operand — the only one this op reads; its result is a def.
 		osAllocPages(_, sizeId) then referenced.insert(sizeId)
+		// Both the buffer and the length are real value operands; this op defines nothing.
+		osWriteStdout(bufId, lenId) then insertUsePair(referenced, a: bufId, b: lenId)
+		// `rdataAddr` reads nothing — its `label` is a NAME, not a value (its result is a def), exactly
+		// like `globalAddr`.
+		rdataAddr then break 'u'
 	end 'u'
 end 'collectStdOpUses'
 
@@ -710,6 +734,11 @@ module function remapStdOpUses(op StdOp, subst ValueIdArray) returns StdOp
 		storeIndirect(addrId, offset, valueId, valueType) gives StdOp.storeIndirect(remappedValue(addrId, subst: subst), offset: offset, valueId: remappedValue(valueId, subst: subst), valueType: valueType)
 		// The exact mirror of `collectStdOpUses`'s arm: the size is the one read, so it is the one rewrite.
 		osAllocPages(resultId, sizeId) gives StdOp.osAllocPages(resultId, sizeId: remappedValue(sizeId, subst: subst))
+		// The mirror of `collectStdOpUses`: both operands are reads, so both are rewritten.
+		osWriteStdout(bufId, lenId) gives StdOp.osWriteStdout(remappedValue(bufId, subst: subst), lenId: remappedValue(lenId, subst: subst))
+		// `rdataAddr` reports no use (its `label` is a name), so it rewrites nothing and is handed back
+		// unchanged — the exact mirror of `collectStdOpUses`'s `globalAddr`/`rdataAddr` arms.
+		rdataAddr gives op
 	end 'r'
 end 'remapStdOpUses'
 

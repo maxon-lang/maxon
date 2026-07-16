@@ -103,6 +103,22 @@ export typealias TypeNameId = int(0 to u64.max)
 //
 // Void is NOT a MaxonType — a non-value can't be a value-type. Function return
 // types use MaxonReturnType (below).
+// `string` is the `String` BUILTIN — a POINTER to a fused 48-byte record (P1.2 wave A). It is its
+// OWN arm, NEVER `named`, for the identical reason `structRef` is: the five rules that read `named`
+// (`typeClassOf`, `tagIsIntegral`, `typeTagName`, `notOperatorFor`, `valueTagToStdType`) all treat it
+// as a ranged INT, and filing String under `named` would make `s + t`, `not s` and `return s` from an
+// `ExitCode` function all compile as integer/pointer arithmetic. A String is neither numeric nor a
+// declared struct: it is `TypeClass.text`, agreeing only with itself, and its only operators are
+// `==`/`!=` (a runtime byte compare) and `print`.
+//
+// Its width is a machine word, assigned at the Maxon→Std boundary (`valueTagToStdType` → i64) exactly
+// as every other arm's is, so MaxonType stays width-free. Unlike a Wave-B heap String it carries no
+// ownership: a Wave-A literal is immortal rdata (`capacity=-2`, `parent_ptr=0`), never allocated,
+// refcounted or dropped.
+//
+// ⚠ APPENDED AT THE END OF THE UNION, past `structRef`, per the band-append invariant — the same
+// range arms (`boolean to float`, `exitCode to unresolved`) that guard `structRef`'s placement guard
+// this one, and appending past the tail is the only placement the compiler can check.
 export union MaxonType
 	boolean
 	integer
@@ -111,6 +127,7 @@ export union MaxonType
 	exitCode
 	unresolved
 	structRef(id TypeNameId)
+	string
 end 'MaxonType'
 
 export typealias MaxonTypeArray = Array with MaxonType
@@ -167,6 +184,11 @@ export enum ValueTypeTag
 	unresolved
 	void
 	structRef
+	// The tag of a `String` value — a pointer to the fused 48-byte record (see MaxonType's `string`
+	// arm for why it is not `named`). APPENDED AT THE END, past `structRef`, for the same reason
+	// every other append here is: `unresolved to void` and `named to exitCode` are range arms, and a
+	// range adopts whatever is inserted between its endpoints without a word.
+	string
 end 'ValueTypeTag'
 
 export typealias ValueTypeTagArray = Array with ValueTypeTag
@@ -183,6 +205,7 @@ export function maxonTypeTag(t MaxonType) returns ValueTypeTag
 		exitCode gives ValueTypeTag.exitCode
 		unresolved gives ValueTypeTag.unresolved
 		structRef gives ValueTypeTag.structRef
+		string gives ValueTypeTag.string
 	end 'k'
 end 'maxonTypeTag'
 
@@ -200,6 +223,8 @@ export function typeNameIdOf(t MaxonType) returns TypeNameId
 		structRef(id) gives id
 		boolean to float gives UnnamedTypeId
 		exitCode to unresolved gives UnnamedTypeId
+		// A String is a builtin with no interned name — its identity is the `string` tag, not a name.
+		string gives UnnamedTypeId
 	end 'k'
 end 'typeNameIdOf'
 
@@ -229,6 +254,10 @@ export function maxonTypeOfTag(tag ValueTypeTag, nameId TypeNameId) returns Maxo
 		// by. `Parser.parseBinding` is the caller that matters: `let p = Point.create(…)` types the
 		// binding from this, and the binding's type is the only record of WHICH struct `p` is.
 		structRef then return MaxonType.structRef(nameId)
+		// A String builtin rebuilds from the tag alone — it carries no name (its `nameId` is
+		// `UnnamedTypeId`). `Parser.parseBinding` is the caller that matters: `let s = "hello"` types
+		// the binding from this.
+		string then return MaxonType.string
 	end 'k'
 end 'maxonTypeOfTag'
 
@@ -543,4 +572,21 @@ export union MaxonOp
 	// Write `value` to `addr + offset`. A STATEMENT, not an expression — it defines no
 	// result, so unlike its two band-mates it mints no ValueId.
 	storeIndirect(addr ValueId, offset ByteOffset, value ValueId, valueType MaxonType) = MaxonOpMeta{category: OpCategory.varAccess}
+	// A `String` LITERAL (P1.2 wave A): `result` is a pointer to an IMMORTAL 48-byte rdata record.
+	// `bytes` is the literal's DECODED UTF-8 payload — the parser has already resolved every escape
+	// (`decodeEscapes`), so what rides here is the exact byte sequence the record's blob will hold.
+	//
+	// The bytes ride the op inline, exactly as `literal`'s `ParsedInt value` does — a string literal
+	// is DATA, not a name to look up, and it is not on any hot path (one op per literal occurrence).
+	// A per-artifact string registry (with the id-remap-on-merge machinery `named` types need) would
+	// be strictly more moving parts for no benefit: `LowerMaxonToStd` registers the rdata and
+	// `GlobalDataTable.registerRdataConstant` already DEDUPES identical blobs, so the record and its
+	// blob are shared across every occurrence of the same literal regardless.
+	//
+	// It carries NO ownership: a literal is never allocated, refcounted or dropped, so category
+	// `plain` (it stands alone, matched by variant). ⚠ APPENDED AT THE END OF THE UNION, past
+	// `storeIndirect`, per the band-append invariant: `literal to storeIndirect` is a range arm
+	// (SemanticCheck, MmRuntime) and appending past the tail is the only placement the compiler
+	// reports on.
+	stringLiteral(result ValueId, bytes ByteArray) = MaxonOpMeta{category: OpCategory.plain}
 end 'MaxonOp'

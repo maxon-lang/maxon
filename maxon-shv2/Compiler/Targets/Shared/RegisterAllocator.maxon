@@ -641,7 +641,7 @@ function collectOpHints(op TargetOp, hints ColorHints)
 		// the operand model — so it covers every one of them without an arm here.
 		// The data-section band carries no COPY hint either: a `lea`, a load and a store are
 		// none of them a move, so no two of their operands want the same register.
-		andRegReg to cvttsd2siRegReg then break 'hint'
+		andRegReg to leaRegRdata then break 'hint'
 	end 'hint'
 end 'collectOpHints'
 
@@ -1300,6 +1300,8 @@ export function colorTargetOp(op TargetOp, alloc Allocation) returns TargetOp
 		movsdRegRip(dest, label) then return TargetOp.movsdRegRip(colorVRegWith(dest, alloc: alloc), label: label)
 		cvtsi2sdRegReg(dest, src) then return TargetOp.cvtsi2sdRegReg(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc))
 		cvttsd2siRegReg(dest, src) then return TargetOp.cvttsd2siRegReg(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc))
+		// The `.rdata` address `lea` (P1.2 wave A) — colors its GPR dest, exactly like `leaRegGlobal`.
+		leaRegRdata(dest, label) then return TargetOp.leaRegRdata(colorVRegWith(dest, alloc: alloc), label: label)
 	end 'rewrite'
 end 'colorTargetOp'
 

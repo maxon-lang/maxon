@@ -263,6 +263,9 @@ function opPhysicalRegs(op TargetOp) returns RegMask
 		movsdRegRip(d, _) gives physRegBit(d)
 		cvtsi2sdRegReg(d, s) gives physRegBit(d) or physRegBit(s)
 		cvttsd2siRegReg(d, s) gives physRegBit(d) or physRegBit(s)
+		// The `.rdata` address `lea` (P1.2 wave A) — its GPR dest can be colored into a callee-saved
+		// register, so it MUST be counted here, exactly like `leaRegGlobal` above.
+		leaRegRdata(d, _) gives physRegBit(d)
 	end 'p'
 end 'opPhysicalRegs'
 
@@ -378,6 +381,6 @@ function blockEndsWithReturn(module TargetModule, block IrBlock) returns bool
 		jmp to idivReg gives false
 		pushReg to popReg gives false
 		storeSlotReg to loadRegSlot gives false
-		andRegReg to cvttsd2siRegReg gives false
+		andRegReg to leaRegRdata gives false
 	end 'check'
 end 'blockEndsWithReturn'

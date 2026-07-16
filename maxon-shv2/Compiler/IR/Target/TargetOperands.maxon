@@ -302,6 +302,9 @@ export function targetOpOperands(op TargetOp, buf OperandList)
 		// value's class is answered from its own Std type.
 		cvtsi2sdRegReg(dest, src) then pushDefFromUse(buf, dest: dest, src: src)
 		cvttsd2siRegReg(dest, src) then pushDefFromUse(buf, dest: dest, src: src)
+		// The `.rdata` address `lea` (P1.2 wave A) — one plain def, no uses, exactly like
+		// `leaRegGlobal`: a RIP-relative `lea` reads no allocatable register.
+		leaRegRdata(dest, _) then pushDef(buf, vreg: dest)
 	end 'operands'
 end 'targetOpOperands'
 

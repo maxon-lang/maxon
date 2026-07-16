@@ -96,6 +96,11 @@ let EnumKindUnion = 22 as ContentHash
 // could not tell them apart would hand a reader a memo built under the wrong one.
 let TypeShapeStructRef = 15 as ContentHash
 
+// The `MaxonType.string` arm's discriminator (P1.2 wave A). Distinct like every other shape: a
+// `String` return type hashes differently from an `int` one, so a memo built under one cannot be
+// served for the other.
+let TypeShapeString = 23 as ContentHash
+
 // A declared FIELD's mutability, mixed into the hash beside its name and type (P1.1a wave 2). The
 // struct twin of `DeclShapeConstant`/`DeclShapeMutable`, and distinct constants rather than a reuse
 // of them: those two discriminate a top-level `let` from a `var`, and colliding a field's `let` with
@@ -456,6 +461,10 @@ function globalStdType(tag ValueTypeTag, name ByteArray) returns StdType
 		// needs a `.data` slot holding a POINTER to a box allocated before `main`, which is module
 		// initialization, and shv2 has none.
 		structRef then panic("globalStdType: top-level var '{String.from(name)}' is tagged '{typeTagName(tag)}' — a struct global would need its box allocated before `main` runs, which needs module initialization (not built); a call in a top-level initializer is rejected as E2045 long before this")
+		// A String global is rejected at parse (`requireStorableGlobal` — only int/bool/float have
+		// `.data` storage; a String is a heap/rdata pointer that a `.data` image cannot hold as a
+		// constant), so it never reaches here.
+		string then panic("globalStdType: top-level var '{String.from(name)}' is tagged '{typeTagName(tag)}' — a String global is a pointer a constant `.data` image cannot hold, rejected at parse by requireStorableGlobal")
 	end 'reachable'
 
 	return valueTagToStdType(tag)
@@ -1287,6 +1296,10 @@ export type ProgramSignatures
 			// do since it was written, and the day a struct constant is legal the question is which of
 			// its FIELDS a reader copies, which is a decision, not a default.
 			structRef then panic("ProgramSignatures.mixValueTag: a top-level binding is tagged '{typeTagName(tag)}' — a struct constant would have to be folded from a `T.create(…)` call, and a call in a constant initializer is E2045")
+			// A String top-level binding never reaches here: a String `var` is rejected by
+			// `requireStorableGlobal`, and a String `let` initializer (a string literal) is not a
+			// foldable constant, so the const evaluator rejects it upstream.
+			string then panic("ProgramSignatures.mixValueTag: a top-level binding is tagged '{typeTagName(tag)}' — a String global is rejected at parse (requireStorableGlobal), and a string-literal constant is not foldable")
 		end 'k'
 	end 'mixValueTag'
 
@@ -1372,6 +1385,9 @@ export type ProgramSignatures
 			structRef gives MaxonReturnType.value(self.adoptType(inner, into: into))
 			boolean to float gives rt
 			exitCode to unresolved gives rt
+			// A `String` return type carries no interned name (it is a builtin, like a primitive), so
+			// crossing files needs no re-interning — it passes through unchanged.
+			string gives rt
 		end 'r'
 	end 'adoptValueReturn'
 
@@ -1385,6 +1401,8 @@ export type ProgramSignatures
 			structRef(id) gives MaxonType.structRef(into.intern(self.nameOfId(id)))
 			boolean to float gives t
 			exitCode to unresolved gives t
+			// A `String` carries no name id, so like a primitive it passes through unchanged.
+			string gives t
 		end 'r'
 	end 'adoptType'
 
@@ -1422,6 +1440,9 @@ export type ProgramSignatures
 			// here. Its own shape (see `TypeShapeStructRef`) and then its NAME — never its id, for
 			// `mixDeclaration`'s reason.
 			structRef(id) gives mixBytes(mix(state, value: TypeShapeStructRef), bytes: self.nameOfId(id))
+			// A `String` (P1.2 wave A) — its own shape, and no name to mix (a builtin carries none). A
+			// signature declaring `returns String` hashes distinctly from every other return type.
+			string gives mix(state, value: TypeShapeString)
 		end 'r'
 	end 'mixType'
 

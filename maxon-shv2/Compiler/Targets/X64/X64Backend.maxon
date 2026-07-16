@@ -949,6 +949,17 @@ export function encodeLeaRegGlobal(code ByteArray, rdataRelocs RdataRelocationAr
 	writeDword(code, value: 0)
 end 'encodeLeaRegGlobal'
 
+// `lea dest, [rip + <.rdata constant>]` — the address of a String literal's record (P1.2 wave A). The
+// `.rdata` twin of `encodeLeaRegGlobal`: same instruction, same end-of-field convention, and it files
+// the SAME `RdataRelocation` — only the kind differs (`ripRelDisp32` for `.rdata` vs
+// `dataSectionRipRelDisp32` for `.data`), which is exactly what routes the PE writer to measure the
+// disp32 from `.rdata`'s RVA rather than `.data`'s.
+export function encodeLeaRegRdata(code ByteArray, rdataRelocs RdataRelocationArray, dest X64Register, label ByteArray)
+	emitLeaRipRelPrefix(code, dest: dest)
+	rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: String.from(label), kind: RdataRelocKind.ripRelDisp32))
+	writeDword(code, value: 0)
+end 'encodeLeaRegRdata'
+
 // Load `[base + disp]` at the op's width. Both arms REUSE an encoder the spill/reload path
 // already had — `[base+disp]` addressing does not care whether the base is rsp or a global's
 // address — which is the whole reason the review that unified the three drifted `[base+disp]`
@@ -1228,6 +1239,9 @@ function emitTargetOp(op TargetOp, code ByteArray, callFixups CallFixupArray, ia
 		// operand size the mandatory prefix already chose.
 		cvtsi2sdRegReg(dest, src) then encodeSseRegReg(code, prefix: SseMandatoryPrefix.scalarDouble, opcode: OpcodeCvtsi2sd, dest: resolveXmm(dest), src: resolveGpr(src), wide: true)
 		cvttsd2siRegReg(dest, src) then encodeSseRegReg(code, prefix: SseMandatoryPrefix.scalarDouble, opcode: OpcodeCvttsd2si, dest: resolveGpr(dest), src: resolveXmm(src), wide: true)
+		// The `.rdata` address `lea` (P1.2 wave A) — `leaRegGlobal`'s twin, GPR dest, its label filed
+		// as an `.rdata` relocation. See `encodeLeaRegRdata`.
+		leaRegRdata(dest, label) then encodeLeaRegRdata(code, rdataRelocs: rdataRelocs, dest: resolveGpr(dest), label: label)
 	end 'emit'
 end 'emitTargetOp'
 
