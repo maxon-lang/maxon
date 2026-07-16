@@ -1457,11 +1457,15 @@ export type Parser
 	// temp-drop. Structs need no entry: every struct is heap, so `tagIsStructRef` already answers for them;
 	// this is only the String owned/borrowed split the tag conflates.
 	//
-	// A SPARSE list, not a per-value column: owned heap values are a HANDFUL per function (the columns in
-	// lockstep with `valueTags` pay for every value, and provenance is true for almost none of them), so a
-	// short list scanned by `valueIsOwnedHeap` — called once per binding — costs far less than a bool on
-	// every SSA value across a self-compile. Reset per function.
-	var ownedHeapValues as ValueIdArray
+	// A PER-VALUE bool column, indexed by ValueId in lockstep with `valueTags`/`valueConstKnown` (pushed
+	// `false` in `mintValue`/`recordValueType`, set `true` in `trackOwnedTemp`, read by `valueIsOwnedHeap`).
+	// It is a set-MEMBERSHIP fact and nothing more — never iterated, order-independent — so the O(1) column
+	// read is the right shape and the earlier sparse list was not: that list was scanned once per binding
+	// and grew by one per interpolation, never pruned within a function, so a function with N bound
+	// interpolations paid Σk = O(N²) — a `findFirst`-in-a-loop quadratic in one function's size. The column
+	// makes each query O(1); its one added bool per value is strictly linear and dwarfed by the four sibling
+	// columns already carried per value. Reset per function.
+	var valueOwnsHeap as BoolArray
 	// Every function declared ANYWHERE IN THE PROGRAM, with its return type — the whole-program
 	// signature index (SignatureIndex.maxon), built from every file's TOKENS before any file is
 	// parsed and handed to every Parser.
@@ -1547,7 +1551,7 @@ export type Parser
 			valueNameIds: TypeNameIdArray.create(),
 			valueConsts: ParsedIntArray.create(),
 			valueConstKnown: BoolArray.create(),
-			ownedHeapValues: ValueIdArray.create(),
+			valueOwnsHeap: BoolArray.create(),
 			signatures: signatures,
 			enclosingType: EmptySourceText,
 			ownedBindings: VarInfoArray.create(),
@@ -2728,7 +2732,7 @@ export type Parser
 		self.valueNameIds = TypeNameIdArray.create()
 		self.valueConsts = ParsedIntArray.create()
 		self.valueConstKnown = BoolArray.create()
-		self.ownedHeapValues = ValueIdArray.create()
+		self.valueOwnsHeap = BoolArray.create()
 		for paramType in paramTypes 'seedParamTypes'
 			self.recordValueType(paramType)
 		end 'seedParamTypes'
@@ -3565,21 +3569,16 @@ export type Parser
 	// the statement's pending-drop list (so an UNBOUND result is dropped at statement end). Both from one
 	// call, so the two facts — "this value owns heap" and "someone must drop it" — cannot be set apart.
 	function trackOwnedTemp(value ValueId)
-		self.ownedHeapValues.push(value)
+		try self.valueOwnsHeap.set(value, value: true) otherwise panic("trackOwnedTemp: v{value} has no owned-heap slot — every SSA value must be minted through mintValue, which seeds the column")
 		self.pendingTempDrops.push(value)
 	end 'trackOwnedTemp'
 
 	// Does `value` own a droppable heap allocation? Read by `parseBinding` (the String half of "is this
 	// binding owned?") and by the reassignment/return paths as they arrive. It is provenance, NOT the type
-	// tag — see `ownedHeapValues`'s header for why the tag cannot answer. A scan of the sparse owned list;
-	// it holds a handful of interpolation results per function, so the linear membership test is cheap.
+	// tag — see `valueOwnsHeap`'s header for why the tag cannot answer. An O(1) column read, seeded `false`
+	// for every minted value and set `true` by `trackOwnedTemp`.
 	function valueIsOwnedHeap(value ValueId) returns bool
-		for owned in self.ownedHeapValues 'each'
-			if owned == value 'match'
-				return true
-			end 'match'
-		end 'each'
-		return false
+		return try self.valueOwnsHeap.get(value) otherwise panic("valueIsOwnedHeap: v{value} has no owned-heap slot — every SSA value must be minted through mintValue, which seeds the column")
 	end 'valueIsOwnedHeap'
 
 	// Ownership of `value` has been TRANSFERRED to a binding, so the statement no longer owes its drop:
@@ -5155,6 +5154,10 @@ export type Parser
 		// slot must exist first, and the emitter overwrites it (`recordConst`).
 		self.valueConsts.push(0)
 		self.valueConstKnown.push(false)
+		// Owned-heap provenance rides the same lockstep: seeded NOT owned, set true by `trackOwnedTemp`
+		// on the one value an interpolation allocates. The slot must exist before that call, exactly as
+		// the constant slot must exist before `recordConst`.
+		self.valueOwnsHeap.push(false)
 		return id
 	end 'mintValue'
 
@@ -5173,6 +5176,9 @@ export type Parser
 		// A parameter's value is the one thing the compiler provably cannot see.
 		self.valueConsts.push(0)
 		self.valueConstKnown.push(false)
+		// A parameter is never a fresh interpolation result, so it starts NOT owned — but its slot must
+		// exist so the column stays indexable by every ValueId, params included.
+		self.valueOwnsHeap.push(false)
 	end 'recordValueType'
 
 	// Remember the integer behind a value the parser has just DEFINED. Called by the emitters, on
