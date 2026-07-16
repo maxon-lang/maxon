@@ -1175,6 +1175,73 @@ does not contain a struct. **The instrument was right and pointed at the wrong p
 > **That is why the review is independent and why it runs LAST.** A plausible number with a citation attached
 > is exactly what #22 warns of, and it very nearly went into the log.
 
+### 25. 🔴 NEW 2026-07-16 — **shv2 SILENTLY ACCEPTS A PRIVATE FIELD READ, and the comment excusing it states a FALSE reason**
+
+**Found while planning P1.1a wave 2, by porting-surveying `specs/export-var-fields.md`. Measured both ways,
+same file, same program:**
+
+```maxon
+type Value
+	var private as Integer          // NOT exported
+	static function create() returns Self
+		return Value{private: 42}
+	end 'create'
+end 'Value'
+function main() returns ExitCode
+	let v = Value.create()
+	return v.private                // ← outside the type
+end 'main'
+```
+
+| | |
+|---|---|
+| **bootstrap** (the oracle) | `error E3014: cannot access unexported field: 'private' outside of type 'Value'` |
+| **shv2** | compiles clean, **returns 42** |
+
+**⇒ shv2 accepts a program the language rejects.** The `export` bit is read and dropped by
+[`readStructFieldInto`](maxon-shv2/Compiler/Parser.maxon#L1471), and the comment above it
+([`Parser.maxon:1469-1470`](maxon-shv2/Compiler/Parser.maxon#L1469)) justifies the drop like this:
+
+> *"`export` is consumed and dropped for a different reason: field visibility gates cross-FILE access
+> (E3014), and shv2 has no cross-file name resolution to gate."*
+
+**⚠ THAT REASON IS FALSE, and the corpus proves it: field visibility gates access from outside the TYPE,
+in the SAME FILE.** `error.unexported-field-read` / `error.unexported-field-write` are both single-file
+fragments. So the dropped bit **has a live consumer today**, and its own comment is what denies it —
+this file's signature disease, wearing the mask of the founding lesson it cites. *(The neighbouring
+`let`/`var` drop at :1462-1467 is the honest twin: it names its consumer and the rung that supplies it.)*
+
+**Not folded into P1.1a wave 2 — deliberately, and named not hidden.** Visibility is a third mechanism
+(wave 2 is mutability + defaults), and **E3014 has no shv2 claim in the registry** (`notEmittedBy:
+[shv2]`) so it needs a registry edit + `maxon error-codes generate`. The machinery is nearly all present:
+`requireConstructible` (E3076) already computes *"am I inside type T's methods?"*, which is the same
+question E3014 asks. **⇒ P1.1a wave 3**, whose port is `specs/export-var-fields.md` (2 error cases; 3 of
+its remaining 6 need instance methods). The RED above is already captured — do not re-derive it.
+
+### 26. ⚠ NEW 2026-07-16 — **FUNCTION OVERLOADING IS ON NO RUNG OF THE LADDER, and a marker blames the wrong one**
+
+`specs-shv2/structs.md`'s `struct-field-default` is marked *"P1.1a wave 2 — field defaults"*. **It is not
+blocked by field defaults.** It declares two `create` overloads (arity 0 and 2), and shv2 answers:
+
+```
+error E3006: duplicate definition of function 'Counter.create'
+```
+
+**Overloading appears NOWHERE**: zero hits across `PLAN.md`, `ARCHITECTURE.md`, this file, and
+`maxon-shv2/Compiler/`. Yet the corpus needs it, and **PLAN.md:487 already leans on it** — *"`Subprocess.run(exe,
+arguments:)` — never the env-map overload"* — i.e. the stdlib shv2 must eventually compile has overload sets.
+
+**This is the `top-level let`/`var` shape again** (P1.0d.5a/5b: *"the plan never listed this one either… found
+by probing, not by the ladder"*), and it is a **third** instance of the same discovery route: **a marker's
+stated reason is not its real blocker, and nothing checks a marker against the compiler.** A `disabled-test:`
+reason is prose — §"the disabled-test reasons ARE the ranked roadmap" makes 153 of them the roadmap, and
+**nothing verifies that the rung named is the rung that unblocks it.** ⇒ The roadmap can be wrong in exactly
+the way this file is about, and would go on looking right.
+
+**Wave 2 corrects THIS marker's reason to name E3006/overloading. It does not implement overloading, and it
+does not survey the other 152.** Where overloading belongs on the ladder is a **PLAN decision, not a rung's** —
+it is orthogonal to structs (it is function resolution), and it needs a number.
+
 ### 22. ⚠⚠ `bin/maxon.exe` IS GITIGNORED AND NOTHING REBUILDS IT — **a baseline can measure a tree that does not exist**
 
 **Found 2026-07-15, and it nearly bought a fabricated entry in the optimization log.** The rung skill's
