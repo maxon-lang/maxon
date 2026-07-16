@@ -1537,3 +1537,35 @@ P1.3). So shv2 is MORE internally consistent than the oracle, and nothing tests 
 consistent behavior (documented in `Queries.maxon`). ⇒ **Coordinator's call when P1.3's union cases land**:
 author union E2026/E2046 spec tests pinning shv2's "union", or decide to reproduce the bootstrap's "enum".
 Not a blocker — an unpinned wording detail on a diagnostic no case currently reaches.
+
+### 35. 🔴 NEW 2026-07-16 (P1.2 Wave A) — **a USER `__`-prefixed function SILENTLY MISCOMPILES; shv2 needs E2051. THE IMMEDIATE P1.2 FOLLOW-UP.**
+
+**Found by the INDEPENDENT review** (the implementer's self-review missed it — the fifth time this rung the
+independent pass caught what the self-review did not). Wave A widened `MmRuntime.isCompilerInternalCallee`
+from `__mm_`-only to **any `__` prefix** — NECESSARY, because the new runtime callees `__print_string`/
+`__str_eq` have no signature to slot, so `SemanticCheck.validateCall` and `LowerMaxonToStd.lowerCall` must
+skip the user-function checks for them. **But shv2 has NEVER emitted E2051 (`ParserReservedIdentifier`)** — it
+is `notEmittedBy: [shv2]` in the registry — so the `__` namespace is NOT enforced, and the widened predicate
+now routes a USER `__`-prefixed call past validation:
+
+| program | shv2 | bootstrap (oracle) |
+|---|---|---|
+| `function __add(a,b)` + `return __add(7)` (missing arg) | 🔴 **compiles, runs, exit 65543** (2nd arg uninit) | `E2051: identifier '__add' is reserved` |
+| `return __foo()` (undefined `__` name) | 🔴 **backend panic** (`no Std function named '__foo'`) | rejects cleanly |
+
+**⚠ It is a REGRESSION this rung introduced:** before the widening, `__add` got normal arity validation (a
+clean error); after, it is skipped. **But it affects NO in-language program** — `__` is the reserved
+compiler-internal namespace, no valid program declares one, and no corpus case exercises it — which is why it
+is DEFERRED, not a Wave-A blocker.
+
+**Why not fixed in Wave A (both surgical routes fail):** (a) narrowing the predicate to an explicit runtime-fn
+list needs `PrintStringName`/`StrEqName`, which live in `StringRuntime` — and `StringRuntime` already depends
+on `MmRuntime`, so referencing them back from `MmRuntime.isCompilerInternalCallee` is a **circular
+dependency**; (b) "is it a user-declared function?" threading fixes the miscompile but not the undefined-`__`
+panic. **The clean fix is E2051 itself** — it keeps the `__` prefix predicate and makes it SOUND (the DERIVE
+tier: no user `__` name can exist, so skipping validation for a `__` call is provably safe). That is a
+**6-declaration-site feature** (function name, parameter, `let`, `var`, `type`, type-field — per the existing
+bootstrap spec `specs/reserved-double-underscore.md`, 9 cases) + the shv2 registry claim + a red-before-green
+port. ⇒ **DO THIS FIRST, before Wave B.** The review already corrected `MmRuntime.maxon:95-107`'s comment,
+which had asserted the false invariant *"no user function can begin with `__`"* — so the code no longer LIES,
+but the hole is open until E2051 lands.
