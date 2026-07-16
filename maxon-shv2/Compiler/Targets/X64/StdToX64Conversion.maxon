@@ -1337,9 +1337,10 @@ type StdToX64Lowering
 	// PANIC runtime does, where there are no live virtuals) would bypass the clobber and miscompile.
 	//
 	// Win64 ABI (NOT Maxon's): args rcx/rdx/r8/r9 then stack, result in RAX. The 5th arg (`lpOverlapped
-	// = NULL`) is a stack argument at `[rsp + StringWriteOverlappedDisp]`; the 4th (`lpNumberOfBytesWritten`)
-	// must be a valid pointer (WriteFile writes the count there), so r9 points at a scratch slot at
-	// `[rsp + StringWriteBytesWrittenDisp]`. Both live in `__print_string`'s `outgoingArgSize` region.
+	// = NULL`) is a stack argument at `[rsp + writeFileArgDisp(WriteFileOverlappedSlot)]`; the 4th
+	// (`lpNumberOfBytesWritten`) must be a valid pointer (WriteFile writes the count there), so r9 points
+	// at a scratch slot at `[rsp + writeFileArgDisp(WriteFileBytesWrittenSlot)]`. Both live in
+	// `__print_string`'s `outgoingArgSize` region.
 	function lowerOsWriteStdout(bufId ValueId, lenId ValueId, dstBlock IrBlock)
 		// GetStdHandle(STD_OUTPUT_HANDLE) -> RAX (the handle).
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(X64VReg.physical(X64Register.rcx), value: StdOutputHandle))
