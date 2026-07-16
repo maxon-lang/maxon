@@ -7140,6 +7140,15 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     return IsFileInModuleScope(declarerPath, _sourceFilePath);
   }
 
+  /// Whether the TYPE a qualified call names is itself hidden here — i.e. whether a not-exported
+  /// diagnostic about its METHOD would be answering the wrong question. `callee.Name` is
+  /// `<Type>.<method>` for a static call; a bare name has no receiver to hide behind, so nothing is
+  /// hidden and the function's own visibility is the only question.
+  private bool StaticCallReceiverIsHidden(IrFunction<MaxonOp> callee) {
+    var dot = callee.Name.LastIndexOf('.');
+    return dot > 0 && IsNonExportedCrossFileType(callee.Name[..dot]);
+  }
+
   private bool IsNonExportedCrossFileType(string typeName) {
     if (seedModule == null || _sourceFilePath == null) return false;
     // If this parser has locally defined or registered the type (e.g. a non-exported
@@ -19472,6 +19481,23 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       if (staticCandidates.Count > 0) candidates = staticCandidates;
     }
     var callee = SelectOverloadByNamedArgs(candidates, functionNameToken);
+
+    // A TYPE-QUALIFIED name (`String.fromOwnedBytes`) is let through ResolveFunctionOverloads'
+    // visibility filter deliberately, so that a hidden TYPE reports E4006 rather than a confusing
+    // not-exported about its method. Once the name has resolved, the function's OWN visibility still
+    // applies — and only the INSTANCE path was applying it (see the method-call lowering). The static
+    // path never did, so a non-exported static method was callable from anywhere: `fromOwnedBytes`
+    // documents itself "Not exported: 'take these bytes and trust me about them' is not a promise the
+    // stdlib can let arbitrary code make", and user code could call it.
+    //
+    // Only once the declaring TYPE is visible, though — otherwise this preempts E4006 and answers a
+    // question nobody asked ("its method is not exported" when the type itself is unreachable here).
+    // That ordering is the whole reason the qualified name skips the filter above, so honour it.
+    if (!IsFunctionVisible(callee) && !StaticCallReceiverIsHidden(callee)) {
+      throw new CompileError(ErrorCode.SemanticSymbolNotExported,
+        $"function '{callee.Name}' is not exported",
+        functionNameToken.Line, functionNameToken.Column);
+    }
 
     if (Check(TokenType.RightParen)) {
       Advance();

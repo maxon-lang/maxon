@@ -604,3 +604,24 @@ end 'main'
 ```maxoncstderr
 error E3008: specs/fragments/export-keyword/error.stdlib-non-exported-method-is-not-callable.test:4:12: function 'stdlib.String.mapAsciiCase' is not exported
 ```
+
+<!-- test: error.stdlib-non-exported-static-method-is-not-callable -->
+A non-exported **static** method is not callable either. It used to be: a type-qualified name skips
+`ResolveFunctionOverloads`' visibility filter **on purpose**, so that a hidden TYPE reports E4006
+rather than a confusing not-exported about its method — but only the INSTANCE path re-applied the
+function's own visibility afterwards, and the static path never did.
+
+So `String.fromOwnedBytes` was callable from anywhere while documenting itself *"Not exported: 'take
+these bytes and trust me about them' is not a promise the stdlib can let arbitrary code make."*
+```maxon
+function main() returns ExitCode
+	var bytes = ByteArray.create()
+	bytes.push(74)
+	let s = String.fromOwnedBytes(bytes, isAscii: true)
+	print("{s}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3008: specs/fragments/export-keyword/error.stdlib-non-exported-static-method-is-not-callable.test:5:17: function 'stdlib.String.fromOwnedBytes' is not exported
+```

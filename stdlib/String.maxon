@@ -79,12 +79,10 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	// Not exported: "take these bytes and trust me about them" is not a promise the stdlib can let
 	// arbitrary code make.
 	//
-	// ⚠ AND THE COMPILER DOES NOT YET HOLD US TO THAT. This is reachable from user code today, not
-	// because of anything here but because a non-exported STATIC method is unchecked: a
-	// type-qualified name skips the visibility filter deliberately (so a hidden TYPE reports E4006
-	// instead of a confusing not-exported on its method) and the static path never re-applies it.
-	// Instance methods ARE checked, so the sentence above is true of `mapAsciiCase` and false of
-	// this. Fixing it is a narrow change gated on getting that diagnostic ordering right.
+	// And the compiler holds us to it: E3008. It did not until the static-call path learned to
+	// re-apply a function's own visibility — a type-qualified name skips the filter on purpose, so
+	// that a hidden TYPE reports E4006 rather than a confusing not-exported about its method, and
+	// only the instance path had been re-checking afterwards.
 	static function fromOwnedBytes(bytes ByteArray, isAscii bool) returns String
 		return String{managed: bytes.managed, isAsciiFlag: isAscii}
 	end 'fromOwnedBytes'
@@ -123,12 +121,6 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	/// `JsonDoc` accessors — all genuine public API that had been riding it rather than declaring
 	/// itself. Nothing else in the stdlib wanted to be public. No single gate saw them all: the C#
 	/// suite found three, `build shv2` found one, the MCP server found six.
-	///
-	/// ⚠ One gap remains and it is NOT this method's: a non-exported STATIC method is still
-	/// callable from anywhere, because a type-qualified name skips the visibility filter on purpose
-	/// (so a hidden TYPE reports E4006 rather than a confusing not-exported on its method) and the
-	/// static path never re-applies it. `fromOwnedBytes` below is reachable for exactly that reason.
-	/// Instance methods — this one — are checked.
 	///
 	module function addressableBytes() returns ByteMemory
 		return managed
