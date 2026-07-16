@@ -1,0 +1,161 @@
+// Test: shr-signed-operand-still-sign-fills
+typealias Num = int(i64.min to i64.max)
+
+function shrConst(v Num) returns Num
+	return v shr 60
+end 'shrConst'
+
+function shrDynamic(v Num, d Num) returns Num
+	return v shr d
+end 'shrDynamic'
+
+function shrPastWidth(v Num) returns Num
+	return v shr 100
+end 'shrPastWidth'
+
+function main() returns ExitCode
+	if shrConst(0 - 8) != 0 - 1 'foldedCount'
+		return 1
+	end 'foldedCount'
+	if shrDynamic(0 - 8, d: 60) != 0 - 1 'dynamicCount'
+		return 2
+	end 'dynamicCount'
+
+	// A sign-filling shift saturates to the SIGN, not to 0: `x shr 63` already IS the sign.
+	if shrPastWidth(0 - 8) != 0 - 1 'foldedPastWidth'
+		return 3
+	end 'foldedPastWidth'
+	if shrDynamic(0 - 8, d: 100) != 0 - 1 'dynamicPastWidth'
+		return 4
+	end 'dynamicPastWidth'
+
+	return 42
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @shrConst(v: i64) -> i64 {
+  entry:
+    arm64.mov x1, #60
+    arm64.asrv x2, x0, x1
+    arm64.mov x0, x2
+    arm64.ret
+  }
+  func @shrDynamic(v: i64, d: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x3, lt
+    arm64.cmp x3, #0
+    arm64.b.ne shrDynamic.__shift_count_panic_0
+    arm64.b shrDynamic.__shift_count_ok_0
+  __shift_count_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_19
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __shift_count_ok_0:
+    arm64.mov x2, #64
+    arm64.cmp x1, x2
+    arm64.cset x3, lo
+    arm64.mov x2, #63
+    arm64.cmp x3, #0
+    arm64.csel x4, x1, x2, ne
+    arm64.asrv x1, x0, x4
+    arm64.mov x0, x1
+    arm64.epilogue stack_size=16
+    arm64.ret
+  }
+  func @shrPastWidth(v: i64) -> i64 {
+  entry:
+    arm64.mov x1, #63
+    arm64.asrv x2, x0, x1
+    arm64.mov x0, x2
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x0, #0
+    arm64.mov x1, #8
+    arm64.sub x2, x0, x1
+    arm64.mov x0, x2
+    arm64.bl shrConst
+    arm64.mov x3, #0
+    arm64.mov x4, #1
+    arm64.sub x5, x3, x4
+    arm64.cmp x0, x5
+    arm64.cset x6, ne
+    arm64.cmp x6, #0
+    arm64.b.ne main.foldedCount_0
+    arm64.b main.foldedCount_0.after
+  foldedCount_0:
+    arm64.mov x0, #1
+    arm64.epilogue stack_size=16
+    arm64.ret
+  foldedCount_0.after:
+    arm64.mov x0, #0
+    arm64.mov x1, #8
+    arm64.sub x2, x0, x1
+    arm64.mov x0, x2
+    arm64.mov x1, #60
+    arm64.bl shrDynamic
+    arm64.mov x3, #0
+    arm64.mov x4, #1
+    arm64.sub x5, x3, x4
+    arm64.cmp x0, x5
+    arm64.cset x6, ne
+    arm64.cmp x6, #0
+    arm64.b.ne main.dynamicCount_0
+    arm64.b main.dynamicCount_0.after
+  dynamicCount_0:
+    arm64.mov x0, #2
+    arm64.epilogue stack_size=16
+    arm64.ret
+  dynamicCount_0.after:
+    arm64.mov x0, #0
+    arm64.mov x1, #8
+    arm64.sub x2, x0, x1
+    arm64.mov x0, x2
+    arm64.bl shrPastWidth
+    arm64.mov x3, #0
+    arm64.mov x4, #1
+    arm64.sub x5, x3, x4
+    arm64.cmp x0, x5
+    arm64.cset x6, ne
+    arm64.cmp x6, #0
+    arm64.b.ne main.foldedPastWidth_0
+    arm64.b main.foldedPastWidth_0.after
+  foldedPastWidth_0:
+    arm64.mov x0, #3
+    arm64.epilogue stack_size=16
+    arm64.ret
+  foldedPastWidth_0.after:
+    arm64.mov x0, #0
+    arm64.mov x1, #8
+    arm64.sub x2, x0, x1
+    arm64.mov x0, x2
+    arm64.mov x1, #100
+    arm64.bl shrDynamic
+    arm64.mov x3, #0
+    arm64.mov x4, #1
+    arm64.sub x5, x3, x4
+    arm64.cmp x0, x5
+    arm64.cset x6, ne
+    arm64.cmp x6, #0
+    arm64.b.ne main.dynamicPastWidth_0
+    arm64.b main.dynamicPastWidth_0.after
+  dynamicPastWidth_0:
+    arm64.mov x0, #4
+    arm64.epilogue stack_size=16
+    arm64.ret
+  dynamicPastWidth_0.after:
+    arm64.mov x0, #42
+    arm64.epilogue stack_size=16
+    arm64.ret
+  }
+}
+---

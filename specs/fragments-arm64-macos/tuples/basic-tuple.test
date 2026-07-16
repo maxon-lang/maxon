@@ -11,30 +11,35 @@ module {
   func @main() -> u8 {
   entry:
     arm64.prologue stack_size=48
-    arm64.mov x1, #0
-    arm64.mov x0, #16
-    arm64.bl stdlib.__mm_alloc
-    arm64.mov x19, x0
     arm64.mov x0, #10
-    arm64.str x0, [x19, #0] (8b)
-    arm64.mov x0, #32
-    arm64.str x0, [x19, #8] (8b)
-    arm64.ldr x20, [x19, #8] (8b)
-    arm64.ldr x21, [x19, #0] (8b)
-    arm64.mov x0, x19
-    arm64.bl mm_drop
-    arm64.mov x1, #255
-    arm64.add x0, x21, x20
-    arm64.cmp x0, x1
-    arm64.cset x1, hi
-    arm64.b.ls __range_ok_0
+    arm64.mov x1, #32
+    arm64.mov x2, #0
+    arm64.str x2, [x29, #-8]
+    arm64.mov x3, #0
+    arm64.str x3, [x29, #-16]
+    arm64.str x0, [x29, #-16]
+    arm64.str x1, [x29, #-8]
+    arm64.ldr x4, [x29, #-16]
+    arm64.ldr x5, [x29, #-8]
+    arm64.add x6, x4, x5
+    arm64.mov x7, #0
+    arm64.cmp x6, x7
+    arm64.cset x8, lt
+    arm64.mov x9, #255
+    arm64.cmp x6, x9
+    arm64.cset x10, gt
+    arm64.orr x11, x8, x10
+    arm64.cmp x11, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
   __range_panic_0:
-    arm64.adrp_add_rdata x0, __panic_msg_255aff3deb0a5b16
-    arm64.ldr x19, [x29, #16]
-    arm64.mov x0, x19
+    arm64.adrp_add_symdata x0, __panic_msg_0
+    arm64.mov x1, x0
+    arm64.mov x0, x1
     arm64.bl mrt_panic
   __range_ok_0:
-    arm64.epilogue
+    arm64.mov x0, x6
+    arm64.epilogue stack_size=48
     arm64.ret
   }
 }

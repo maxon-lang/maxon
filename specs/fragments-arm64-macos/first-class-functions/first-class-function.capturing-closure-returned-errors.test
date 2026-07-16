@@ -1,0 +1,20 @@
+// Test: first-class-function.capturing-closure-returned-errors
+
+typealias Integer = int(i64.min to i64.max)
+typealias UnaryOp = function(Integer) returns Integer
+
+function makeAdder(bump Integer) returns UnaryOp
+	let f = function(n Integer) gives n + bump
+	return f
+end 'makeAdder'
+
+function main() returns ExitCode
+	let add = makeAdder(20)
+	return add(22)
+end 'main'
+---
+MaxoncStderr: ```
+error E3099: specs/fragments/first-class-functions/first-class-function.capturing-closure-returned-errors.test:8:2: cannot return a closure that captures: captures are taken by reference to the enclosing function's frame, so a closure that captures cannot outlive that frame. Use a function reference, or a closure that captures nothing
+```
+---
+---

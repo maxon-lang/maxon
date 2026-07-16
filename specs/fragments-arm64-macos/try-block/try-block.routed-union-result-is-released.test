@@ -1,0 +1,285 @@
+// Test: try-block.routed-union-result-is-released
+typealias Num = int(0 to 1000)
+
+union Shape
+    circle(r Num)
+    square(s Num)
+end 'Shape'
+
+union ShapeError
+    tooBig(limit Num)
+end 'ShapeError'
+
+function makeShape(r Num) returns Shape throws ShapeError
+    if r > 500 'tooBig'
+        throw ShapeError.tooBig(500)
+    end 'tooBig'
+
+    return Shape.circle(r)
+end 'makeShape'
+
+function classify(r Num) returns Num
+    var out = 0
+
+    // The success path must FALL OUT of the try block rather than return from inside it.
+    // An early return runs the function-exit cleanup, which released the routed temp anyway;
+    // only falling through reaches the try block's own inner scope-end, which is the one that
+    // dropped it.
+    try 'blk'
+        let s = makeShape(r)
+        match s 'm'
+            circle(v) then out = v
+            square(v) then out = 0
+        end 'm'
+    end 'blk' otherwise (e) 'h'
+        match e 'k'
+            tooBig(limit) then out = limit - 499
+        end 'k'
+    end 'h'
+
+    return out
+end 'classify'
+
+function main() returns ExitCode
+    var total = 0
+    total = total + classify(3)
+    total = total + classify(4)
+    total = total + classify(900)
+    return total
+end 'main'
+---
+ExitCode: 8
+---
+// CompiledIR
+module {
+  func @makeShape(r: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=80
+    arm64.str x0, [x29, #-8]
+    arm64.mov x1, #500
+    arm64.cmp x0, x1
+    arm64.cset x2, gt
+    arm64.cmp x2, #0
+    arm64.b.ne makeShape.tooBig_0
+    arm64.b makeShape.tooBig_0.after
+  tooBig_0:
+    arm64.mov x0, #500
+    arm64.mov x0, #16
+    arm64.mov x1, #0
+    arm64.mov x2, #8
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-16]
+    arm64.mov x1, #0
+    arm64.str x1, [x0, #0]
+    arm64.mov x2, #500
+    arm64.str x2, [x0, #8]
+    arm64.ldr x3, [x29, #-16]
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_incref
+    arm64.ldr x4, [x29, #-16]
+    arm64.mov x1, x4
+    arm64.mov x0, #0
+    arm64.epilogue stack_size=80
+    arm64.ret
+  tooBig_0.after:
+    arm64.ldr x0, [x29, #-8]
+    arm64.mov x0, #16
+    arm64.mov x1, #0
+    arm64.mov x2, #9
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-24]
+    arm64.mov x1, #0
+    arm64.str x1, [x0, #0]
+    arm64.ldr x2, [x29, #-8]
+    arm64.str x2, [x0, #8]
+    arm64.ldr x3, [x29, #-24]
+    arm64.ldr x0, [x29, #-24]
+    arm64.bl mm_incref
+    arm64.ldr x4, [x29, #-24]
+    arm64.mov x0, x4
+    arm64.mov x1, #0
+    arm64.epilogue stack_size=80
+    arm64.ret
+  }
+  func @classify(r: i64) -> u16 {
+  entry:
+    arm64.prologue stack_size=176
+    arm64.mov x1, #0
+    arm64.str x1, [x29, #-8]
+    arm64.bl makeShape
+    arm64.str x0, [x29, #-16]
+    arm64.str x1, [x29, #-24]
+    arm64.mov x0, #0
+    arm64.cmp x1, x0
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne classify.try_block_continue_0
+    arm64.b classify.try_block_throw_0
+  try_block_continue_0:
+    arm64.ldr x0, [x29, #-16]
+    arm64.str x0, [x29, #-32]
+    arm64.ldr x1, [x29, #-32]
+    arm64.ldr x0, [x29, #-32]
+    arm64.bl mm_incref
+    arm64.ldr x2, [x29, #-32]
+    arm64.ldr x3, [x2, #0]
+    arm64.ldr x4, [x29, #-32]
+    arm64.str x4, [x29, #-40]
+    arm64.str x3, [x29, #-48]
+    arm64.b classify.m_0.cmp0
+  m_0.cmp0:
+    arm64.ldr x0, [x29, #-48]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne classify.m_0.case0
+    arm64.b classify.m_0.cmp1
+  m_0.case0:
+    arm64.ldr x0, [x29, #-40]
+    arm64.ldr x1, [x0, #8]
+    arm64.str x1, [x29, #-8]
+    arm64.b classify.m_0.merge
+  m_0.cmp1:
+    arm64.ldr x0, [x29, #-48]
+    arm64.mov x1, #1
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne classify.m_0.case1
+    arm64.b classify.m_0.merge
+  m_0.case1:
+    arm64.mov x0, #0
+    arm64.str x0, [x29, #-8]
+    arm64.b classify.m_0.merge
+  m_0.merge:
+    arm64.ldr x0, [x29, #-32]
+    arm64.cmp x0, #0
+    arm64.b.eq classify.__skip_guarded_34
+    arm64.bl mm_decref
+    arm64.label classify.__skip_guarded_34
+    arm64.ldr x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq classify.__skip_guarded_36
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label classify.__skip_guarded_36
+    arm64.b classify.try_block_after_0
+  try_block_throw_0:
+    arm64.ldr x0, [x29, #-16]
+    arm64.cmp x0, #0
+    arm64.b.eq classify.__skip_guarded_39
+    arm64.bl mm_decref
+    arm64.label classify.__skip_guarded_39
+    arm64.b classify.try_block_err_0
+  try_block_err_0:
+    arm64.ldr x0, [x29, #-24]
+    arm64.str x0, [x29, #-56]
+    arm64.ldr x1, [x29, #-56]
+    arm64.ldr x2, [x1, #0]
+    arm64.str x0, [x29, #-64]
+    arm64.ldr x3, [x29, #-64]
+    arm64.str x2, [x29, #-80]
+    arm64.ldr x0, [x29, #-64]
+    arm64.bl mm_incref
+    arm64.ldr x4, [x29, #-80]
+    arm64.str x4, [x29, #-72]
+    arm64.b classify.k_0.cmp0
+  k_0.cmp0:
+    arm64.ldr x0, [x29, #-72]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne classify.k_0.case0
+    arm64.b classify.k_0.merge
+  k_0.case0:
+    arm64.ldr x0, [x29, #-64]
+    arm64.ldr x1, [x0, #8]
+    arm64.mov x2, #499
+    arm64.sub x3, x1, x2
+    arm64.str x3, [x29, #-8]
+    arm64.b classify.k_0.merge
+  k_0.merge:
+    arm64.ldr x0, [x29, #-56]
+    arm64.cmp x0, #0
+    arm64.b.eq classify.__skip_guarded_61
+    arm64.bl mm_decref
+    arm64.label classify.__skip_guarded_61
+    arm64.ldr x1, [x29, #-64]
+    arm64.cmp x1, #0
+    arm64.b.eq classify.__skip_guarded_63
+    arm64.ldr x0, [x29, #-64]
+    arm64.bl mm_decref
+    arm64.label classify.__skip_guarded_63
+    arm64.b classify.try_block_after_0
+  try_block_after_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x3, #1000
+    arm64.cmp x0, x3
+    arm64.cset x4, gt
+    arm64.orr x5, x2, x4
+    arm64.cmp x5, #0
+    arm64.b.ne classify.__range_panic_0
+    arm64.b classify.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_32
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue stack_size=176
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=32
+    arm64.mov x0, #3
+    arm64.bl classify
+    arm64.str x0, [x29, #-8]
+    arm64.mov x0, #4
+    arm64.bl classify
+    arm64.ldr x1, [x29, #-8]
+    arm64.add x2, x1, x0
+    arm64.str x2, [x29, #-16]
+    arm64.mov x0, #900
+    arm64.bl classify
+    arm64.ldr x1, [x29, #-16]
+    arm64.add x2, x1, x0
+    arm64.mov x0, #0
+    arm64.cmp x2, x0
+    arm64.cset x1, lt
+    arm64.mov x0, #255
+    arm64.cmp x2, x0
+    arm64.cset x3, gt
+    arm64.orr x0, x1, x3
+    arm64.cmp x0, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_33
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.mov x0, x2
+    arm64.epilogue stack_size=32
+    arm64.ret
+  }
+  func @__destruct_ShapeError(ptr: i64) {
+  entry:
+    arm64.b __destruct_ShapeError.done
+  done:
+    arm64.ret
+  }
+  func @__destruct_Shape(ptr: i64) {
+  entry:
+    arm64.b __destruct_Shape.done
+  done:
+    arm64.ret
+  }
+}
+---

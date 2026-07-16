@@ -29,7 +29,7 @@ module {
     arm64.str x0, [x29, #-16]
     arm64.mov x0, #8
     arm64.mov x1, #0
-    arm64.mov x2, #13
+    arm64.mov x2, #11
     arm64.bl mm_alloc
     arm64.str x0, [x29, #-8]
     arm64.ldr x0, [x29, #-8]
@@ -196,7 +196,7 @@ module {
   done:
     arm64.ret
   }
-  func @__destruct___ManagedMemory_Wrapper(ptr: i64) {
+  func @__destruct_WrapperArray(ptr: i64) {
   entry:
     arm64.prologue stack_size=48
     arm64.str x0, [x29, #-8]
@@ -206,18 +206,18 @@ module {
     arm64.cmp x1, x2
     arm64.cset x3, eq
     arm64.cmp x3, #0
-    arm64.b.ne __destruct___ManagedMemory_Wrapper.slice_cleanup_0
-    arm64.b __destruct___ManagedMemory_Wrapper.check_owned_0
+    arm64.b.ne __destruct_WrapperArray.slice_cleanup_0
+    arm64.b __destruct_WrapperArray.check_owned_0
   slice_cleanup_0:
     arm64.ldr x0, [x29, #-8]
     arm64.ldr x1, [x0, #32]
     arm64.str x1, [x29, #-16]
     arm64.cmp x1, #0
-    arm64.b.eq __destruct___ManagedMemory_Wrapper.__skip_guarded_9
+    arm64.b.eq __destruct_WrapperArray.__skip_guarded_9
     arm64.ldr x0, [x29, #-16]
     arm64.bl mm_decref
-    arm64.label __destruct___ManagedMemory_Wrapper.__skip_guarded_9
-    arm64.b __destruct___ManagedMemory_Wrapper.skip_buf_0
+    arm64.label __destruct_WrapperArray.__skip_guarded_9
+    arm64.b __destruct_WrapperArray.skip_buf_0
   check_owned_0:
     arm64.ldr x0, [x29, #-8]
     arm64.ldr x1, [x0, #16]
@@ -225,34 +225,26 @@ module {
     arm64.cmp x1, x2
     arm64.cset x3, ne
     arm64.cmp x3, #0
-    arm64.b.ne __destruct___ManagedMemory_Wrapper.free_buf_0
-    arm64.b __destruct___ManagedMemory_Wrapper.skip_buf_0
+    arm64.b.ne __destruct_WrapperArray.free_buf_0
+    arm64.b __destruct_WrapperArray.skip_buf_0
   free_buf_0:
     arm64.ldr x0, [x29, #-8]
     arm64.bl mm_decref_managed_elements
     arm64.ldr x1, [x29, #-8]
-    arm64.ldr x2, [x1, #0]
-    arm64.mov x0, x2
-    arm64.bl mm_raw_free
-    arm64.b __destruct___ManagedMemory_Wrapper.skip_buf_0
-  skip_buf_0:
-    arm64.b __destruct___ManagedMemory_Wrapper.done
-  done:
-    arm64.epilogue stack_size=48
-    arm64.ret
-  }
-  func @__destruct_WrapperArray(ptr: i64) {
-  entry:
-    arm64.prologue stack_size=48
-    arm64.str x0, [x29, #-8]
+    arm64.ldr x2, [x1, #32]
+    arm64.mov x3, #-3
+    arm64.cmp x2, x3
+    arm64.cset x4, ne
+    arm64.cmp x4, #0
+    arm64.b.ne __destruct_WrapperArray.raw_free_0
+    arm64.b __destruct_WrapperArray.skip_buf_0
+  raw_free_0:
     arm64.ldr x0, [x29, #-8]
     arm64.ldr x1, [x0, #0]
-    arm64.str x1, [x29, #-16]
-    arm64.cmp x1, #0
-    arm64.b.eq __destruct_WrapperArray.__skip_guarded_4
-    arm64.ldr x0, [x29, #-16]
-    arm64.bl mm_decref
-    arm64.label __destruct_WrapperArray.__skip_guarded_4
+    arm64.mov x0, x1
+    arm64.bl mm_raw_free
+    arm64.b __destruct_WrapperArray.skip_buf_0
+  skip_buf_0:
     arm64.b __destruct_WrapperArray.done
   done:
     arm64.epilogue stack_size=48

@@ -1,0 +1,165 @@
+// Test: shr-unsigned-operand-zero-fills
+typealias Wide = int(0 to u64.max)
+typealias Num = int(i64.min to i64.max)
+
+function shrConst(v Wide) returns Wide
+	return v shr 60
+end 'shrConst'
+
+function shrDynamic(v Wide, d Num) returns Wide
+	return v shr d
+end 'shrDynamic'
+
+function shrPastWidth(v Wide) returns Wide
+	return v shr 64
+end 'shrPastWidth'
+
+function main() returns ExitCode
+	// An UNSIGNED left operand zero-fills. Folded count, then a count the compiler cannot see.
+	if shrConst(u64.max) != 15 'foldedCount'
+		return 1
+	end 'foldedCount'
+	if shrDynamic(u64.max, d: 60) != 15 'dynamicCount'
+		return 2
+	end 'dynamicCount'
+
+	// Zero-filling, so shifting every bit out leaves 0 — NOT the sign, and NOT the masked shift
+	// the hardware would have performed.
+	if shrPastWidth(u64.max) != 0 'foldedPastWidth'
+		return 3
+	end 'foldedPastWidth'
+	if shrDynamic(u64.max, d: 100) != 0 'dynamicPastWidth'
+		return 4
+	end 'dynamicPastWidth'
+
+	// A count of 0 is the identity, under either fill.
+	if shrDynamic(u64.max, d: 0) != u64.max 'zeroCount'
+		return 5
+	end 'zeroCount'
+
+	return 42
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @shrConst(v: i64) -> u64 {
+  entry:
+    arm64.mov x1, #60
+    arm64.lsrv x2, x0, x1
+    arm64.mov x0, x2
+    arm64.ret
+  }
+  func @shrDynamic(v: i64, d: i64) -> u64 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x3, lt
+    arm64.cmp x3, #0
+    arm64.b.ne shrDynamic.__shift_count_panic_0
+    arm64.b shrDynamic.__shift_count_ok_0
+  __shift_count_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_18
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __shift_count_ok_0:
+    arm64.mov x2, #64
+    arm64.cmp x1, x2
+    arm64.cset x3, lo
+    arm64.lsrv x2, x0, x1
+    arm64.mov x0, #0
+    arm64.cmp x3, #0
+    arm64.csel x1, x2, x0, ne
+    arm64.mov x0, x1
+    arm64.epilogue stack_size=16
+    arm64.ret
+  }
+  func @shrPastWidth(v: i64) -> u64 {
+  entry:
+    arm64.prologue stack_size=32
+    arm64.mov x1, #0
+    arm64.str x0, [x29, #-8]
+    arm64.mov x0, x1
+    arm64.epilogue stack_size=32
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x0, #-1
+    arm64.bl shrConst
+    arm64.mov x1, #15
+    arm64.cmp x0, x1
+    arm64.cset x2, ne
+    arm64.cmp x2, #0
+    arm64.b.ne main.foldedCount_0
+    arm64.b main.foldedCount_0.after
+  foldedCount_0:
+    arm64.mov x0, #1
+    arm64.epilogue stack_size=16
+    arm64.ret
+  foldedCount_0.after:
+    arm64.mov x0, #-1
+    arm64.mov x1, #60
+    arm64.bl shrDynamic
+    arm64.mov x1, #15
+    arm64.cmp x0, x1
+    arm64.cset x2, ne
+    arm64.cmp x2, #0
+    arm64.b.ne main.dynamicCount_0
+    arm64.b main.dynamicCount_0.after
+  dynamicCount_0:
+    arm64.mov x0, #2
+    arm64.epilogue stack_size=16
+    arm64.ret
+  dynamicCount_0.after:
+    arm64.mov x0, #-1
+    arm64.bl shrPastWidth
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, ne
+    arm64.cmp x2, #0
+    arm64.b.ne main.foldedPastWidth_0
+    arm64.b main.foldedPastWidth_0.after
+  foldedPastWidth_0:
+    arm64.mov x0, #3
+    arm64.epilogue stack_size=16
+    arm64.ret
+  foldedPastWidth_0.after:
+    arm64.mov x0, #-1
+    arm64.mov x1, #100
+    arm64.bl shrDynamic
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, ne
+    arm64.cmp x2, #0
+    arm64.b.ne main.dynamicPastWidth_0
+    arm64.b main.dynamicPastWidth_0.after
+  dynamicPastWidth_0:
+    arm64.mov x0, #4
+    arm64.epilogue stack_size=16
+    arm64.ret
+  dynamicPastWidth_0.after:
+    arm64.mov x0, #-1
+    arm64.mov x1, #0
+    arm64.bl shrDynamic
+    arm64.mov x1, #-1
+    arm64.cmp x0, x1
+    arm64.cset x2, ne
+    arm64.cmp x2, #0
+    arm64.b.ne main.zeroCount_0
+    arm64.b main.zeroCount_0.after
+  zeroCount_0:
+    arm64.mov x0, #5
+    arm64.epilogue stack_size=16
+    arm64.ret
+  zeroCount_0.after:
+    arm64.mov x0, #42
+    arm64.epilogue stack_size=16
+    arm64.ret
+  }
+}
+---

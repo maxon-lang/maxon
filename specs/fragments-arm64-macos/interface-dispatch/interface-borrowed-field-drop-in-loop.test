@@ -1,0 +1,443 @@
+// Test: interface-borrowed-field-drop-in-loop
+typealias StrArray = Array with String
+typealias Tag = int(0 to u64.max)
+
+interface Query
+	function score() returns bool
+end 'Query'
+
+type ConcreteQuery implements Query
+	export let tag as Tag
+
+	static function create(tag Tag) returns ConcreteQuery
+		return Self{tag: tag}
+	end 'create'
+
+	function score() returns bool
+		return self.tag >= 0
+	end 'score'
+end 'ConcreteQuery'
+
+// `Allocator` stores a BORROWED interface value into a field, alongside enough
+// fresh state that its constructor exceeds the inline budget (a real non-inlined
+// constructor, like the compiler's own `FunctionRegAllocator`). The allocator is a
+// short-lived local dropped at the end of `allocateFor`, and its synthesized
+// destructor decrefs the interface field. The conformer passed in is OWNED by
+// `main` and kept alive across the whole loop, so the field holds only a BORROW —
+// the destructor must NOT release it. Before interface values were refcount-managed
+// consistently (the field is drop-tracked, but the borrowed value stored into it
+// got no store-incref), the destructor over-released the caller's conformer — the
+// `__destruct_FunctionRegAllocator` `regTarget`/`opQuery` over-release that blocked
+// the self-hosted bootstrap. Runs under the suite's leak gate (and `--rc-sanitize`),
+// so an over-release or leak fails it.
+type Allocator
+	export var query as Query
+	export var f0 as StrArray
+	export var f1 as StrArray
+	export var f2 as StrArray
+	export var f3 as StrArray
+	export var f4 as StrArray
+	export var f5 as StrArray
+
+	static function create(query Query) returns Allocator
+		return Self{query: query, f0: StrArray.create(), f1: StrArray.create(), f2: StrArray.create(), f3: StrArray.create(), f4: StrArray.create(), f5: StrArray.create()}
+	end 'create'
+
+	function run() returns bool
+		return self.query.score() and self.f0.count() == 0
+	end 'run'
+end 'Allocator'
+
+function allocateFor(query Query) returns bool
+	var allocator = Allocator.create(query)
+	return allocator.run()
+end 'allocateFor'
+
+function main() returns ExitCode
+	let concrete = ConcreteQuery.create(7)
+	var trueCount = 0
+	var i = 0
+	while i < 4 'loop'
+		if allocateFor(concrete) 'ok'
+			trueCount = trueCount + 1
+		end 'ok'
+		i = i + 1
+	end 'loop'
+	return trueCount
+end 'main'
+---
+ExitCode: 4
+---
+// CompiledIR
+module {
+  func @ConcreteQuery.create(tag: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-16]
+    arm64.mov x0, #8
+    arm64.mov x1, #0
+    arm64.mov x2, #1
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-16]
+    arm64.str x1, [x0, #0]
+    arm64.ldr x2, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x3, [x29, #-8]
+    arm64.mov x0, x3
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @ConcreteQuery.score(__self_ptr: i64) -> i1 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x3, ge
+    arm64.mov x0, x3
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=80
+    arm64.mov x0, #7
+    arm64.bl ConcreteQuery.create
+    arm64.str x0, [x29, #-8]
+    arm64.mov x0, #0
+    arm64.str x0, [x29, #-16]
+    arm64.mov x1, #0
+    arm64.str x1, [x29, #-24]
+    arm64.b main.loop_0.header
+  loop_0.header:
+    arm64.mov x0, #4
+    arm64.ldr x1, [x29, #-24]
+    arm64.cmp x1, x0
+    arm64.cset x2, lt
+    arm64.cmp x2, #0
+    arm64.b.ne main.loop_0
+    arm64.b main.loop_0.exit
+  loop_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl allocateFor$ConcreteQuery
+    arm64.cmp x0, #0
+    arm64.b.ne main.ok_0
+    arm64.b main.ok_0.merge
+  ok_0:
+    arm64.mov x0, #1
+    arm64.ldr x1, [x29, #-16]
+    arm64.add x2, x1, x0
+    arm64.str x2, [x29, #-16]
+    arm64.b main.ok_0.merge
+  ok_0.merge:
+    arm64.mov x0, #1
+    arm64.ldr x1, [x29, #-24]
+    arm64.add x2, x1, x0
+    arm64.str x2, [x29, #-24]
+    arm64.b main.loop_0.header
+  loop_0.exit:
+    arm64.ldr x0, [x29, #-16]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x3, #255
+    arm64.cmp x0, x3
+    arm64.cset x4, gt
+    arm64.orr x5, x2, x4
+    arm64.cmp x5, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_0
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.ldr x1, [x29, #-8]
+    arm64.cmp x1, #0
+    arm64.b.eq main.__skip_guarded_36
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_36
+    arm64.ldr x0, [x29, #-16]
+    arm64.epilogue stack_size=80
+    arm64.ret
+  }
+  func @allocateFor$ConcreteQuery(query: i64) -> i1 {
+  entry:
+    arm64.prologue stack_size=64
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl Allocator.create$ConcreteQuery
+    arm64.str x0, [x29, #-16]
+    arm64.ldr x1, [x29, #-16]
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl Allocator.run$ConcreteQuery
+    arm64.ldr x2, [x29, #-16]
+    arm64.str x0, [x29, #-24]
+    arm64.cmp x2, #0
+    arm64.b.eq allocateFor$ConcreteQuery.__skip_guarded_8
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label allocateFor$ConcreteQuery.__skip_guarded_8
+    arm64.ldr x0, [x29, #-24]
+    arm64.epilogue stack_size=64
+    arm64.ret
+  }
+  func @Allocator.create$ConcreteQuery(query: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=144
+    arm64.str x0, [x29, #-8]
+    arm64.bl StrArray.create
+    arm64.str x0, [x29, #-16]
+    arm64.bl StrArray.create
+    arm64.str x0, [x29, #-24]
+    arm64.bl StrArray.create
+    arm64.str x0, [x29, #-32]
+    arm64.bl StrArray.create
+    arm64.str x0, [x29, #-40]
+    arm64.bl StrArray.create
+    arm64.str x0, [x29, #-48]
+    arm64.bl StrArray.create
+    arm64.str x0, [x29, #-56]
+    arm64.adrp_add_func x0, __destruct_Allocator
+    arm64.mov x1, x0
+    arm64.mov x0, #56
+    arm64.mov x2, #3
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-64]
+    arm64.ldr x2, [x29, #-8]
+    arm64.ldr x3, [x29, #-64]
+    arm64.str x2, [x3, #0]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x4, [x29, #-16]
+    arm64.ldr x5, [x29, #-64]
+    arm64.str x4, [x5, #8]
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_incref
+    arm64.ldr x6, [x29, #-24]
+    arm64.ldr x7, [x29, #-64]
+    arm64.str x6, [x7, #16]
+    arm64.ldr x0, [x29, #-24]
+    arm64.bl mm_incref
+    arm64.ldr x8, [x29, #-32]
+    arm64.ldr x9, [x29, #-64]
+    arm64.str x8, [x9, #24]
+    arm64.ldr x0, [x29, #-32]
+    arm64.bl mm_incref
+    arm64.ldr x10, [x29, #-40]
+    arm64.ldr x11, [x29, #-64]
+    arm64.str x10, [x11, #32]
+    arm64.ldr x0, [x29, #-40]
+    arm64.bl mm_incref
+    arm64.ldr x12, [x29, #-48]
+    arm64.ldr x14, [x29, #-64]
+    arm64.str x12, [x14, #40]
+    arm64.ldr x0, [x29, #-48]
+    arm64.bl mm_incref
+    arm64.ldr x15, [x29, #-56]
+    arm64.ldr x0, [x29, #-64]
+    arm64.str x15, [x0, #48]
+    arm64.ldr x0, [x29, #-56]
+    arm64.bl mm_incref
+    arm64.ldr x0, [x29, #-56]
+    arm64.cmp x0, #0
+    arm64.b.eq Allocator.create$ConcreteQuery.__skip_guarded_49
+    arm64.bl mm_decref
+    arm64.label Allocator.create$ConcreteQuery.__skip_guarded_49
+    arm64.ldr x0, [x29, #-48]
+    arm64.cmp x0, #0
+    arm64.b.eq Allocator.create$ConcreteQuery.__skip_guarded_51
+    arm64.bl mm_decref
+    arm64.label Allocator.create$ConcreteQuery.__skip_guarded_51
+    arm64.ldr x0, [x29, #-40]
+    arm64.cmp x0, #0
+    arm64.b.eq Allocator.create$ConcreteQuery.__skip_guarded_53
+    arm64.bl mm_decref
+    arm64.label Allocator.create$ConcreteQuery.__skip_guarded_53
+    arm64.ldr x0, [x29, #-32]
+    arm64.cmp x0, #0
+    arm64.b.eq Allocator.create$ConcreteQuery.__skip_guarded_55
+    arm64.bl mm_decref
+    arm64.label Allocator.create$ConcreteQuery.__skip_guarded_55
+    arm64.ldr x0, [x29, #-24]
+    arm64.cmp x0, #0
+    arm64.b.eq Allocator.create$ConcreteQuery.__skip_guarded_57
+    arm64.bl mm_decref
+    arm64.label Allocator.create$ConcreteQuery.__skip_guarded_57
+    arm64.ldr x0, [x29, #-16]
+    arm64.cmp x0, #0
+    arm64.b.eq Allocator.create$ConcreteQuery.__skip_guarded_59
+    arm64.bl mm_decref
+    arm64.label Allocator.create$ConcreteQuery.__skip_guarded_59
+    arm64.ldr x0, [x29, #-64]
+    arm64.bl mm_incref
+    arm64.ldr x0, [x29, #-64]
+    arm64.epilogue stack_size=144
+    arm64.ret
+  }
+  func @Allocator.run$ConcreteQuery(__self_ptr: i64) -> i1 {
+  entry:
+    arm64.prologue stack_size=80
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.str x1, [x29, #-16]
+    arm64.ldr x2, [x29, #-16]
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl ConcreteQuery.score
+    arm64.mov x3, #0
+    arm64.str x3, [x29, #-24]
+    arm64.cmp x0, #0
+    arm64.b.ne Allocator.run$ConcreteQuery.shortAnd_0.rhs
+    arm64.b Allocator.run$ConcreteQuery.shortAnd_0.merge
+  shortAnd_0.rhs:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #8]
+    arm64.str x1, [x29, #-32]
+    arm64.ldr x2, [x29, #-32]
+    arm64.ldr x0, [x29, #-32]
+    arm64.bl StrArray.count
+    arm64.mov x3, #0
+    arm64.cmp x0, x3
+    arm64.cset x4, eq
+    arm64.str x4, [x29, #-24]
+    arm64.b Allocator.run$ConcreteQuery.shortAnd_0.merge
+  shortAnd_0.merge:
+    arm64.ldr x0, [x29, #-24]
+    arm64.epilogue stack_size=80
+    arm64.ret
+  }
+  func @__destruct_ConcreteQuery(ptr: i64) {
+  entry:
+    arm64.b __destruct_ConcreteQuery.done
+  done:
+    arm64.ret
+  }
+  func @__destruct_StrArray(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #16]
+    arm64.mov x2, #-1
+    arm64.cmp x1, x2
+    arm64.cset x3, eq
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct_StrArray.slice_cleanup_0
+    arm64.b __destruct_StrArray.check_owned_0
+  slice_cleanup_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #32]
+    arm64.str x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq __destruct_StrArray.__skip_guarded_9
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label __destruct_StrArray.__skip_guarded_9
+    arm64.b __destruct_StrArray.skip_buf_0
+  check_owned_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #16]
+    arm64.mov x2, #-2
+    arm64.cmp x1, x2
+    arm64.cset x3, ne
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct_StrArray.free_buf_0
+    arm64.b __destruct_StrArray.skip_buf_0
+  free_buf_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref_managed_elements
+    arm64.ldr x1, [x29, #-8]
+    arm64.ldr x2, [x1, #32]
+    arm64.mov x3, #-3
+    arm64.cmp x2, x3
+    arm64.cset x4, ne
+    arm64.cmp x4, #0
+    arm64.b.ne __destruct_StrArray.raw_free_0
+    arm64.b __destruct_StrArray.skip_buf_0
+  raw_free_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.mov x0, x1
+    arm64.bl mm_raw_free
+    arm64.b __destruct_StrArray.skip_buf_0
+  skip_buf_0:
+    arm64.b __destruct_StrArray.done
+  done:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @__destruct_Allocator(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=96
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.str x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq __destruct_Allocator.__skip_guarded_4
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label __destruct_Allocator.__skip_guarded_4
+    arm64.ldr x2, [x29, #-8]
+    arm64.ldr x3, [x2, #8]
+    arm64.str x3, [x29, #-24]
+    arm64.cmp x3, #0
+    arm64.b.eq __destruct_Allocator.__skip_guarded_7
+    arm64.ldr x0, [x29, #-24]
+    arm64.bl mm_decref
+    arm64.label __destruct_Allocator.__skip_guarded_7
+    arm64.ldr x4, [x29, #-8]
+    arm64.ldr x5, [x4, #16]
+    arm64.str x5, [x29, #-32]
+    arm64.cmp x5, #0
+    arm64.b.eq __destruct_Allocator.__skip_guarded_10
+    arm64.ldr x0, [x29, #-32]
+    arm64.bl mm_decref
+    arm64.label __destruct_Allocator.__skip_guarded_10
+    arm64.ldr x6, [x29, #-8]
+    arm64.ldr x7, [x6, #24]
+    arm64.str x7, [x29, #-40]
+    arm64.cmp x7, #0
+    arm64.b.eq __destruct_Allocator.__skip_guarded_13
+    arm64.ldr x0, [x29, #-40]
+    arm64.bl mm_decref
+    arm64.label __destruct_Allocator.__skip_guarded_13
+    arm64.ldr x8, [x29, #-8]
+    arm64.ldr x9, [x8, #32]
+    arm64.str x9, [x29, #-48]
+    arm64.cmp x9, #0
+    arm64.b.eq __destruct_Allocator.__skip_guarded_16
+    arm64.ldr x0, [x29, #-48]
+    arm64.bl mm_decref
+    arm64.label __destruct_Allocator.__skip_guarded_16
+    arm64.ldr x10, [x29, #-8]
+    arm64.ldr x11, [x10, #40]
+    arm64.str x11, [x29, #-56]
+    arm64.cmp x11, #0
+    arm64.b.eq __destruct_Allocator.__skip_guarded_19
+    arm64.ldr x0, [x29, #-56]
+    arm64.bl mm_decref
+    arm64.label __destruct_Allocator.__skip_guarded_19
+    arm64.ldr x12, [x29, #-8]
+    arm64.ldr x14, [x12, #48]
+    arm64.str x14, [x29, #-64]
+    arm64.cmp x14, #0
+    arm64.b.eq __destruct_Allocator.__skip_guarded_22
+    arm64.ldr x0, [x29, #-64]
+    arm64.bl mm_decref
+    arm64.label __destruct_Allocator.__skip_guarded_22
+    arm64.b __destruct_Allocator.done
+  done:
+    arm64.epilogue stack_size=96
+    arm64.ret
+  }
+}
+---

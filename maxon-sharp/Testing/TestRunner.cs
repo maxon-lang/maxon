@@ -825,7 +825,28 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
       // child's own stdout, so a plain Stdout block (if present) is checked via
       // a separate untraced run rather than against the monitor output.
       if (fragment.MmTrace) {
-        var (monitorExit, monitorStdout) = CaptureMmTrace(exePath, fragment.TimeoutMs ?? DefaultTestTimeoutMs);
+        var (monitorExit, monitorStdout, monitorStderr) =
+          CaptureMmTrace(exePath, fragment.TimeoutMs ?? DefaultTestTimeoutMs);
+
+        // THE EXIT CODE COMES FIRST. It is the monitor's, and so the child's —
+        // but only if the monitor got as far as running one. A monitor that died
+        // on its own produces a trace that is EMPTY rather than wrong, and an
+        // empty trace compared first reports "mm-trace mismatch" — the symptom —
+        // while the exit code that names it as a CRASH is never reached. That is
+        // how a monitor exiting 134 against `ExitCode: 0` was read for as long as
+        // it was as a program that allocated nothing.
+        if (successExpectation.ExitCode.HasValue) {
+          var exitError = CheckExitCode(successExpectation.ExitCode.Value, monitorExit);
+          if (exitError != null) {
+            return new TestResult {
+              TestName = fragment.TestName,
+              Passed = false,
+              ErrorMessage = WithMonitorStderr(exitError, monitorStderr),
+              Duration = sw.Elapsed,
+              FilePath = fragment.FilePath
+            };
+          }
+        }
 
         var expectedTrace = NormalizeMmTrace(successExpectation.MmTraceExpected ?? "");
         var actualTrace = NormalizeMmTrace(monitorStdout);
@@ -833,25 +854,11 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
           return new TestResult {
             TestName = fragment.TestName,
             Passed = false,
-            ErrorMessage = $"mm-trace mismatch:\nExpected:\n{expectedTrace}\nActual:\n{actualTrace}",
+            ErrorMessage = WithMonitorStderr(
+              $"mm-trace mismatch:\nExpected:\n{expectedTrace}\nActual:\n{actualTrace}", monitorStderr),
             Duration = sw.Elapsed,
             FilePath = fragment.FilePath
           };
-        }
-
-        // The exit-code expectation checks against the monitor's returned exit
-        // code (which is the child's).
-        if (successExpectation.ExitCode.HasValue) {
-          var exitError = CheckExitCode(successExpectation.ExitCode.Value, monitorExit);
-          if (exitError != null) {
-            return new TestResult {
-              TestName = fragment.TestName,
-              Passed = false,
-              ErrorMessage = exitError,
-              Duration = sw.Elapsed,
-              FilePath = fragment.FilePath
-            };
-          }
         }
 
         if (successExpectation.Stdout != null) {
@@ -1121,8 +1128,16 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
   /// child's exit code). The monitor sets the child's MAXON_DEBUGSTREAM, so
   /// we don't. Normalize the returned stdout with <see cref="NormalizeMmTrace"/>
   /// before comparing against a golden.
+  ///
+  /// STDERR IS RETURNED, NOT DISCARDED. It carries the `[debugstream]` event
+  /// summary, the child's own stderr, and — the reason this matters — the
+  /// monitor's unhandled-exception message and stack trace. Dropping it made a
+  /// monitor that CRASHED before spawning the child indistinguishable from a
+  /// program that simply allocated nothing: the mm-trace goldens failed against
+  /// an empty trace while the `PlatformNotSupportedException` explaining it was
+  /// thrown away by this very call.
   /// </summary>
-  private static (int ExitCode, string Stdout) CaptureMmTrace(string exePath, int timeoutMs) {
+  private static (int ExitCode, string Stdout, string Stderr) CaptureMmTrace(string exePath, int timeoutMs) {
     // Self-invoke the running maxon.exe as the monitor: ProcessPath is the
     // host compiler binary, which carries the DebugStreamMonitor CLI.
     var monitorExe = Environment.ProcessPath
@@ -1134,9 +1149,18 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
     psi.ArgumentList.Add(exePath);
     psi.EnvironmentVariables[MaxProcsEnvVar] = SingleWorkerProcCount;
 
-    var (exitCode, stdout, _) = RunProcessCaptured(psi, timeoutMs);
-    return (exitCode, stdout);
+    return RunProcessCaptured(psi, timeoutMs);
   }
+
+  /// <summary>
+  /// Attach the monitor's stderr to an mm-trace failure message. Every mm-trace
+  /// verdict goes through here, so no failure can report a symptom while the
+  /// cause sits unread in a discarded stream.
+  /// </summary>
+  private static string WithMonitorStderr(string message, string monitorStderr) =>
+    string.IsNullOrWhiteSpace(monitorStderr)
+      ? message
+      : $"{message}\nMonitor stderr:\n{monitorStderr.TrimEnd()}";
 
   /// <summary>
   /// Start a redirected child process, enroll it in the runner-lifetime job,
@@ -1891,7 +1915,7 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
             var result = new Compiler.Compiler().Compile(sources, exePath, target: _target);
 
             if (result.Success) {
-              var (_, monitorStdout) = CaptureMmTrace(exePath, test.TimeoutMs ?? DefaultTestTimeoutMs);
+              var (_, monitorStdout, _) = CaptureMmTrace(exePath, test.TimeoutMs ?? DefaultTestTimeoutMs);
               var newTrace = NormalizeMmTrace(monitorStdout);
               var oldTrace = NormalizeMmTrace(success.MmTraceExpected ?? "");
               if (oldTrace != newTrace || success.MmTraceExpected == null) {

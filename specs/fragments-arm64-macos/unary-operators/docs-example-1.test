@@ -5,6 +5,7 @@ function main() returns ExitCode
 	let z = -y      // z is 42
 	return z
 end 'main'
+
 ---
 ExitCode: 42
 ---
@@ -14,19 +15,28 @@ module {
   entry:
     arm64.prologue stack_size=16
     arm64.mov x0, #42
-    arm64.neg x1, x0
-    arm64.mov x2, #255
-    arm64.neg x0, x1
-    arm64.cmp x0, x2
-    arm64.cset x1, hi
-    arm64.b.ls __range_ok_0
+    arm64.mov x1, #0
+    arm64.sub x2, x1, x0
+    arm64.mov x3, #0
+    arm64.sub x4, x3, x2
+    arm64.mov x5, #0
+    arm64.cmp x4, x5
+    arm64.cset x6, lt
+    arm64.mov x7, #255
+    arm64.cmp x4, x7
+    arm64.cset x8, gt
+    arm64.orr x9, x6, x8
+    arm64.cmp x9, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
   __range_panic_0:
-    arm64.adrp_add_rdata x0, __panic_msg_251fcb064d13e43a
-    arm64.ldr x19, [x29, #16]
-    arm64.mov x0, x19
+    arm64.adrp_add_symdata x0, __panic_msg_0
+    arm64.mov x1, x0
+    arm64.mov x0, x1
     arm64.bl mrt_panic
   __range_ok_0:
-    arm64.epilogue
+    arm64.mov x0, x4
+    arm64.epilogue stack_size=16
     arm64.ret
   }
 }

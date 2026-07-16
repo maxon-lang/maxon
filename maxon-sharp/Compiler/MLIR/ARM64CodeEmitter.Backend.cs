@@ -530,11 +530,17 @@ public partial class ARM64CodeEmitter {
       // Save size in callee-saved register X19 across calls
       _e.EmitMovRegReg(ARM64Register.X19, R(size));
 
-      // shm_open(name, O_RDWR, 0) -> fd
+      // open(path, O_RDWR) -> fd. MAXON_DEBUGSTREAM carries a PATH here, not a POSIX shm name:
+      // the monitor backs the segment with a temp file because .NET cannot create a named map off
+      // Windows (see DebugStreamMonitor.SharedMapping). `shm_open` is deliberately NOT used —
+      // it is variadic, and on Apple arm64 variadic arguments do not travel in X2, so the `mode`
+      // this call site puts there is never read: the object would be created with mode 0 and every
+      // later open would fail EACCES. `open` reads `mode` only under O_CREAT, which is absent, so
+      // the X2=0 below is unread by either function and the call is ABI-correct as written.
       _e.EmitMovRegReg(ARM64Register.X0, R(name_ptr));
       _e.EmitMovRegImm(ARM64Register.X1, 2); // O_RDWR
       _e.EmitMovRegImm(ARM64Register.X2, 0);
-      var resolvedOpen = ResolveImport("shm_open");
+      var resolvedOpen = ResolveImport("open");
       _e.EmitCallImport(resolvedOpen);
       // X0 = fd (-1 on failure)
       var failLabel = $"__ds_shm_fail_{_e._uniqueLabelCounter++}";
@@ -752,10 +758,8 @@ public partial class ARM64CodeEmitter {
       _e.EmitFaultHandlerEpilog();
     }
 
-    // arm64-macOS has no frame-walking fault diagnostic yet: the sigaction-based
-    // path prints only the panic line. No-op so the shared EmitGtFaultDiagnostic
-    // stays backend-agnostic (the x64-Windows backend supplies the real walk).
     public void EmitFaultBacktrace() {
+      _e.EmitBranchLink("mrt_fault_backtrace");
     }
 
     // ---- Import resolution ----

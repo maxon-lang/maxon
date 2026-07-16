@@ -24,53 +24,62 @@ ExitCode: 42
 ---
 // CompiledIR
 module {
-  func @doubleFn(x0: i64) -> i64 {
+  func @doubleFn(x: i64) -> i64 {
   entry:
-    arm64.mov x1, x0
-    arm64.mov x2, #2
-    arm64.mul x3, x1, x2
-    arm64.mov x0, x3
+    arm64.mov x1, #2
+    arm64.mul x2, x0, x1
+    arm64.mov x0, x2
     arm64.ret
   }
-  func @tripleFn(x0: i64) -> i64 {
+  func @tripleFn(x: i64) -> i64 {
   entry:
-    arm64.mov x1, x0
-    arm64.mov x2, #3
-    arm64.mul x3, x1, x2
-    arm64.mov x0, x3
+    arm64.mov x1, #3
+    arm64.mul x2, x0, x1
+    arm64.mov x0, x2
     arm64.ret
   }
   func @main() -> u8 {
   entry:
     arm64.prologue stack_size=32
     arm64.mov x0, #0
-  inlined___enum_Op_fnRaw_0_0:
     arm64.mov x1, #0
-    arm64.cmp x0, x1
-    arm64.cset x0, eq
-    arm64.b.ne inlined___enum_Op_fnRaw_3_0
-  inlined___enum_Op_fnRaw_1_0:
-    arm64.adrp+add x0, __fnref_doubleFn
-    arm64.mov x19, x0
-    arm64.b inline_cont_main_0
-  inlined___enum_Op_fnRaw_3_0:
-    arm64.adrp+add x0, __fnref_tripleFn
-    arm64.mov x19, x0
-  inline_cont_main_0:
-    arm64.mov x1, #0
-    arm64.mov x0, #21
-    arm64.blr x19
-    arm64.mov x1, #255
-    arm64.cmp x0, x1
-    arm64.cset x1, hi
-    arm64.b.ls __range_ok_0
+    arm64.mov x2, #0
+    arm64.cmp x0, x2
+    arm64.cset x3, eq
+    arm64.adrp_add_func x4, doubleFn
+    arm64.mov x5, x4
+    arm64.cmp x3, #0
+    arm64.csel x6, x5, x1, ne
+    arm64.mov x7, #1
+    arm64.cmp x0, x7
+    arm64.cset x8, eq
+    arm64.adrp_add_func x9, tripleFn
+    arm64.mov x10, x9
+    arm64.cmp x8, #0
+    arm64.csel x11, x10, x6, ne
+    arm64.mov x12, #21
+    arm64.mov x14, #0
+    arm64.str x11, [x29, #-8]
+    arm64.mov x0, x12
+    arm64.mov x1, x14
+    arm64.blr x11
+    arm64.mov x15, #0
+    arm64.cmp x0, x15
+    arm64.cset x1, lt
+    arm64.mov x2, #255
+    arm64.cmp x0, x2
+    arm64.cset x3, gt
+    arm64.orr x2, x1, x3
+    arm64.cmp x2, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
   __range_panic_0:
-    arm64.adrp_add_rdata x0, __panic_msg_aeedf83eae0b2768
-    arm64.ldr x19, [x29, #16]
-    arm64.mov x0, x19
+    arm64.adrp_add_symdata x0, __panic_msg_4
+    arm64.mov x1, x0
+    arm64.mov x0, x1
     arm64.bl mrt_panic
   __range_ok_0:
-    arm64.epilogue
+    arm64.epilogue stack_size=32
     arm64.ret
   }
 }

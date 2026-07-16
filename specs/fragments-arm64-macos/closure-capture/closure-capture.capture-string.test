@@ -21,74 +21,100 @@ hello
 ---
 // CompiledIR
 module {
-  func @main$closure_0(x0: i64, x1: i64) -> i64 {
+  func @apply(f: i64, __env_f: i64, x: i64) -> i64 {
   entry:
-    arm64.prologue stack_size=16
-    arm64.ldr x2, [x1, #0] (8b)
-    arm64.ldr x19, [x2, #0] (8b)
-    arm64.mov x0, x19
-    arm64.bl stdlib.__mm_incref
-    arm64.mov x0, x19
-    arm64.epilogue
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-16]
+    arm64.mov x9, x0
+    arm64.mov x0, x2
+    arm64.blr x9
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.epilogue stack_size=48
     arm64.ret
   }
   func @main() -> u8 {
   entry:
     arm64.prologue stack_size=96
-    arm64.mov x19, #0
-    arm64.str x19, [x29, #16]
-    arm64.adrp+add x1, stdlib.__destruct___ManagedMemory
+    arm64.adrp_add_rdata x0, __str_1
+    arm64.mov x1, x0
+    arm64.mov x2, #5
+    arm64.adrp_add_func x3, __destruct_String
+    arm64.mov x4, x3
+    arm64.str x1, [x29, #-40]
+    arm64.mov x1, x4
     arm64.mov x0, #48
-    arm64.bl mrt_alloc_with_dtor
-    arm64.mov x20, x0
-    arm64.str x19, [x20, #40] (8b)
-    arm64.adrp_add_rdata x0, __istr_501
-    arm64.ldr x0, [x29, #40]
-    arm64.str x0, [x20, #0] (8b)
-    arm64.mov x0, #5
-    arm64.str x0, [x20, #8] (8b)
-    arm64.mov x0, #-2
-    arm64.str x0, [x20, #16] (8b)
-    arm64.mov x0, #1
-    arm64.str x0, [x20, #24] (8b)
-    arm64.str x19, [x20, #32] (8b)
-    arm64.adrp+add x1, __destruct_String
-    arm64.mov x0, #16
-    arm64.bl stdlib.__mm_alloc
-    arm64.mov x21, x0
-    arm64.mov x0, x21
-    arm64.bl stdlib.__mm_incref
-    arm64.str x20, [x21, #0] (8b)
-    arm64.mov x0, #1
-    arm64.str x0, [x21, #8] (8b)
-    arm64.ldr x0, [x29, #16]
-    arm64.bl __mm_decref_maybenull_helper
-    arm64.str x21, [x29, #16]
+    arm64.mov x2, #5
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-8]
+    arm64.mov x5, #-2
+    arm64.mov x6, #1
+    arm64.mov x7, #0
+    arm64.ldr x8, [x29, #-8]
+    arm64.ldr x9, [x29, #-40]
+    arm64.str x9, [x8, #0]
+    arm64.ldr x10, [x29, #-8]
+    arm64.mov x11, #5
+    arm64.str x11, [x10, #8]
+    arm64.ldr x12, [x29, #-8]
+    arm64.str x5, [x12, #16]
+    arm64.ldr x14, [x29, #-8]
+    arm64.str x6, [x14, #24]
+    arm64.ldr x15, [x29, #-8]
+    arm64.str x7, [x15, #32]
+    arm64.mov x1, #1
+    arm64.ldr x2, [x29, #-8]
+    arm64.str x1, [x2, #40]
+    arm64.ldr x1, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x0, [x29, #-8]
+    arm64.str x0, [x29, #-16]
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_incref
+    arm64.adrp_add_func x0, _$closure_6
+    arm64.str x0, [x29, #-48]
     arm64.mov x0, #8
-    arm64.mov x1, x19
-    arm64.bl stdlib.__mm_alloc
-    arm64.mov x20, x0
-    arm64.add x0, x29, #16
-    arm64.ldr x0, [x29, #48]
-    arm64.str x0, [x20, #0] (8b)
-    arm64.adrp+add x21, main$closure_0
-    arm64.mov x0, x19
-    arm64.mov x1, x20
-    arm64.blr x21
-    arm64.mov x21, x0
-    arm64.mov x0, x20
-    arm64.bl mm_drop
-    arm64.ldr x0, [x21, #0] (8b)
-    arm64.ldr x1, [x0, #8] (8b)
-    arm64.ldr x20, [x0, #0] (8b)
-    arm64.mov x0, x20
-    arm64.bl mrt_write_stdout
-    arm64.ldr x0, [x29, #16]
-    arm64.bl __mm_decref_maybenull_helper
-    arm64.mov x0, x21
-    arm64.bl __mm_decref_maybenull_helper
-    arm64.mov x0, x19
-    arm64.epilogue
+    arm64.mov x1, #0
+    arm64.mov x2, #1
+    arm64.bl mm_alloc
+    arm64.add x1, x29, #-16
+    arm64.mov x2, x1
+    arm64.str x2, [x0, #0]
+    arm64.str x0, [x29, #-24]
+    arm64.bl mm_incref
+    arm64.ldr x0, [x29, #-24]
+    arm64.ldr x0, [x29, #-48]
+    arm64.ldr x1, [x29, #-24]
+    arm64.mov x2, #0
+    arm64.bl apply
+    arm64.str x0, [x29, #-32]
+    arm64.ldr x0, [x29, #-32]
+    arm64.bl stdlib.print
+    arm64.ldr x0, [x29, #-8]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_48
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_48
+    arm64.ldr x0, [x29, #-32]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_50
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_50
+    arm64.ldr x0, [x29, #-16]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_52
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_52
+    arm64.mov x0, #0
+    arm64.str x0, [x29, #-16]
+    arm64.ldr x0, [x29, #-24]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_56
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_56
+    arm64.mov x0, #0
+    arm64.epilogue stack_size=96
     arm64.ret
   }
 }

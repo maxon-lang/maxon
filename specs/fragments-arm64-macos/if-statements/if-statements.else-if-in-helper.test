@@ -26,141 +26,92 @@ ExitCode: 102
 ---
 // CompiledIR
 module {
+  func @classify(x: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne classify.zero_0
+    arm64.b classify.zero_0.elseif
+  zero_0:
+    arm64.mov x0, #0
+    arm64.epilogue stack_size=48
+    arm64.ret
+  zero_0.elseif:
+    arm64.mov x0, #10
+    arm64.ldr x1, [x29, #-8]
+    arm64.cmp x1, x0
+    arm64.cset x2, lt
+    arm64.cmp x2, #0
+    arm64.b.ne classify.small_0
+    arm64.b classify.small_0.elseif
+  small_0:
+    arm64.mov x0, #1
+    arm64.epilogue stack_size=48
+    arm64.ret
+  small_0.elseif:
+    arm64.mov x0, #100
+    arm64.ldr x1, [x29, #-8]
+    arm64.cmp x1, x0
+    arm64.cset x2, lt
+    arm64.cmp x2, #0
+    arm64.b.ne classify.medium_0
+    arm64.b classify.large_0
+  medium_0:
+    arm64.mov x0, #2
+    arm64.epilogue stack_size=48
+    arm64.ret
+  large_0:
+    arm64.mov x0, #3
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
   func @main() -> u8 {
   entry:
-    arm64.prologue stack_size=16
+    arm64.prologue stack_size=48
     arm64.mov x0, #0
-  inlined_classify_0_0:
-    arm64.mov x1, #0
-    arm64.cmp x0, x1
-    arm64.cset x1, eq
-    arm64.b.ne inlined_classify_2_0
-  inlined_classify_1_0:
-    arm64.mov x0, #0
-    arm64.b inline_cont_main_0
-  inlined_classify_2_0:
-    arm64.mov x1, #10
-    arm64.cmp x0, x1
-    arm64.cset x1, lt
-    arm64.b.ge inlined_classify_4_0
-  inlined_classify_3_0:
-    arm64.mov x0, #1
-    arm64.b inline_cont_main_0
-  inlined_classify_4_0:
-    arm64.mov x1, #100
-    arm64.cmp x0, x1
-    arm64.cset x0, lt
-    arm64.b.ge inlined_classify_6_0
-  inlined_classify_5_0:
-    arm64.mov x0, #2
-    arm64.b inline_cont_main_0
-  inlined_classify_6_0:
-    arm64.mov x0, #3
-  inline_cont_main_0:
-    arm64.mov x1, #5
-  inlined_classify_0_1:
-    arm64.mov x2, #0
-    arm64.cmp x1, x2
-    arm64.cset x2, eq
-    arm64.b.ne inlined_classify_2_1
-  inlined_classify_1_1:
-    arm64.mov x1, #0
-    arm64.b inline_cont_main_1
-  inlined_classify_2_1:
-    arm64.mov x2, #10
-    arm64.cmp x1, x2
-    arm64.cset x2, lt
-    arm64.b.ge inlined_classify_4_1
-  inlined_classify_3_1:
-    arm64.mov x1, #1
-    arm64.b inline_cont_main_1
-  inlined_classify_4_1:
-    arm64.mov x2, #100
-    arm64.cmp x1, x2
-    arm64.cset x1, lt
-    arm64.b.ge inlined_classify_6_1
-  inlined_classify_5_1:
-    arm64.mov x1, #2
-    arm64.b inline_cont_main_1
-  inlined_classify_6_1:
+    arm64.bl classify
+    arm64.str x0, [x29, #-8]
+    arm64.mov x0, #5
+    arm64.bl classify
+    arm64.str x0, [x29, #-16]
+    arm64.mov x0, #50
+    arm64.bl classify
+    arm64.str x0, [x29, #-24]
+    arm64.mov x0, #200
+    arm64.bl classify
     arm64.mov x1, #3
-  inline_cont_main_1:
-    arm64.mov x2, #50
-  inlined_classify_0_2:
-    arm64.mov x3, #0
-    arm64.cmp x2, x3
-    arm64.cset x3, eq
-    arm64.b.ne inlined_classify_2_2
-  inlined_classify_1_2:
-    arm64.mov x2, #0
-    arm64.b inline_cont_main_2
-  inlined_classify_2_2:
-    arm64.mov x3, #10
-    arm64.cmp x2, x3
-    arm64.cset x3, lt
-    arm64.b.ge inlined_classify_4_2
-  inlined_classify_3_2:
-    arm64.mov x2, #1
-    arm64.b inline_cont_main_2
-  inlined_classify_4_2:
-    arm64.mov x3, #100
-    arm64.cmp x2, x3
-    arm64.cset x2, lt
-    arm64.b.ge inlined_classify_6_2
-  inlined_classify_5_2:
-    arm64.mov x2, #2
-    arm64.b inline_cont_main_2
-  inlined_classify_6_2:
-    arm64.mov x2, #3
-  inline_cont_main_2:
-    arm64.mov x3, #200
-  inlined_classify_0_3:
-    arm64.mov x4, #0
-    arm64.cmp x3, x4
-    arm64.cset x4, eq
-    arm64.b.ne inlined_classify_2_3
-  inlined_classify_1_3:
-    arm64.mov x3, #0
-    arm64.b inline_cont_main_3
-  inlined_classify_2_3:
-    arm64.mov x4, #10
-    arm64.cmp x3, x4
-    arm64.cset x4, lt
-    arm64.b.ge inlined_classify_4_3
-  inlined_classify_3_3:
-    arm64.mov x3, #1
-    arm64.b inline_cont_main_3
-  inlined_classify_4_3:
-    arm64.mov x4, #100
-    arm64.cmp x3, x4
-    arm64.cset x3, lt
-    arm64.b.ge inlined_classify_6_3
-  inlined_classify_5_3:
-    arm64.mov x3, #2
-    arm64.b inline_cont_main_3
-  inlined_classify_6_3:
-    arm64.mov x3, #3
-  inline_cont_main_3:
-    arm64.mov x4, #3
-    arm64.mul x5, x1, x4
+    arm64.ldr x2, [x29, #-16]
+    arm64.mul x3, x2, x1
+    arm64.ldr x1, [x29, #-8]
+    arm64.add x2, x1, x3
     arm64.mov x1, #9
-    arm64.mul x4, x2, x1
-    arm64.mov x1, #27
-    arm64.mul x2, x3, x1
-    arm64.add x1, x0, x5
-    arm64.add x3, x1, x4
-    arm64.mov x1, #255
-    arm64.add x0, x3, x2
+    arm64.ldr x3, [x29, #-24]
+    arm64.mul x4, x3, x1
+    arm64.add x1, x2, x4
+    arm64.mov x2, #27
+    arm64.mul x3, x0, x2
+    arm64.add x0, x1, x3
+    arm64.mov x1, #0
     arm64.cmp x0, x1
-    arm64.cset x1, hi
-    arm64.b.ls __range_ok_0
+    arm64.cset x2, lt
+    arm64.mov x3, #255
+    arm64.cmp x0, x3
+    arm64.cset x4, gt
+    arm64.orr x5, x2, x4
+    arm64.cmp x5, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
   __range_panic_0:
-    arm64.adrp_add_rdata x0, __panic_msg_dffe3b400b7daefe
-    arm64.ldr x19, [x29, #16]
-    arm64.mov x0, x19
+    arm64.adrp_add_symdata x0, __panic_msg_0
+    arm64.mov x1, x0
+    arm64.mov x0, x1
     arm64.bl mrt_panic
   __range_ok_0:
-    arm64.epilogue
+    arm64.epilogue stack_size=48
     arm64.ret
   }
 }

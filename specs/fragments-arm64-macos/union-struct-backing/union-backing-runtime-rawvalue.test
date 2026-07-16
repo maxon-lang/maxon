@@ -1,0 +1,191 @@
+// Test: union-backing-runtime-rawvalue
+typealias Latency = int(0 to 50)
+typealias ID = int(i64.min to i64.max)
+
+type OpMeta
+	export let latency as Latency
+
+	static function create(latency Latency) returns Self
+		return Self{latency: latency}
+	end 'create'
+end 'OpMeta'
+
+union TestOp
+	add(dest ID, src ID) = OpMeta.create(1)
+	mul(dest ID, src ID) = OpMeta.create(3)
+	nop = OpMeta.create(0)
+end 'TestOp'
+
+// Read the struct-backing metadata off a RUNTIME union value (a parameter),
+// not a constant case. A payload-bearing union is heap-boxed, so its i64 tag
+// lives at offset 0 of the box; the boxed-union `.rawValue` lowering must load
+// that tag before the per-case select-chain compares it against each case
+// ordinal. Without the load the box pointer was compared instead, no case
+// matched, and `.rawValue.latency` summed to 0 for every input.
+function latencyOf(op TestOp) returns Latency
+	return op.rawValue.latency
+end 'latencyOf'
+
+function main() returns ExitCode
+	let a = TestOp.add(10, src: 20)
+	let m = TestOp.mul(1, src: 2)
+	let n = TestOp.nop
+	return latencyOf(a) + latencyOf(m) + latencyOf(n)
+end 'main'
+---
+ExitCode: 4
+---
+// CompiledIR
+module {
+  func @latencyOf(op: i64) -> u8 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.mov x2, #0
+    arm64.mov x3, #0
+    arm64.cmp x1, x3
+    arm64.cset x4, eq
+    arm64.mov x5, #1
+    arm64.cmp x4, #0
+    arm64.csel x6, x5, x2, ne
+    arm64.mov x7, #1
+    arm64.cmp x1, x7
+    arm64.cset x8, eq
+    arm64.mov x9, #3
+    arm64.cmp x8, #0
+    arm64.csel x10, x9, x6, ne
+    arm64.mov x11, #2
+    arm64.cmp x1, x11
+    arm64.cset x12, eq
+    arm64.mov x14, #0
+    arm64.cmp x12, #0
+    arm64.csel x15, x14, x10, ne
+    arm64.mov x0, #0
+    arm64.cmp x15, x0
+    arm64.cset x1, lt
+    arm64.mov x0, #50
+    arm64.cmp x15, x0
+    arm64.cset x2, gt
+    arm64.orr x0, x1, x2
+    arm64.cmp x0, #0
+    arm64.b.ne latencyOf.__range_panic_0
+    arm64.b latencyOf.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_6
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.mov x0, x15
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=96
+    arm64.mov x0, #10
+    arm64.mov x1, #20
+    arm64.mov x0, #24
+    arm64.mov x1, #0
+    arm64.mov x2, #5
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-8]
+    arm64.mov x2, #0
+    arm64.str x2, [x0, #0]
+    arm64.mov x3, #10
+    arm64.str x3, [x0, #8]
+    arm64.mov x4, #20
+    arm64.str x4, [x0, #16]
+    arm64.ldr x5, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.mov x6, #1
+    arm64.mov x7, #2
+    arm64.mov x0, #24
+    arm64.mov x1, #0
+    arm64.mov x2, #5
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-16]
+    arm64.mov x8, #1
+    arm64.str x8, [x0, #0]
+    arm64.mov x9, #1
+    arm64.str x9, [x0, #8]
+    arm64.mov x10, #2
+    arm64.str x10, [x0, #16]
+    arm64.ldr x11, [x29, #-16]
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_incref
+    arm64.mov x0, #24
+    arm64.mov x1, #0
+    arm64.mov x2, #5
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-24]
+    arm64.mov x12, #2
+    arm64.str x12, [x0, #0]
+    arm64.mov x14, #0
+    arm64.str x14, [x0, #8]
+    arm64.mov x15, #0
+    arm64.str x15, [x0, #16]
+    arm64.ldr x0, [x29, #-24]
+    arm64.bl mm_incref
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl latencyOf
+    arm64.ldr x1, [x29, #-16]
+    arm64.str x0, [x29, #-32]
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl latencyOf
+    arm64.ldr x1, [x29, #-32]
+    arm64.add x2, x1, x0
+    arm64.ldr x0, [x29, #-24]
+    arm64.str x2, [x29, #-40]
+    arm64.bl latencyOf
+    arm64.ldr x1, [x29, #-40]
+    arm64.add x2, x1, x0
+    arm64.mov x0, #0
+    arm64.cmp x2, x0
+    arm64.cset x1, lt
+    arm64.mov x0, #255
+    arm64.cmp x2, x0
+    arm64.cset x3, gt
+    arm64.orr x0, x1, x3
+    arm64.cmp x0, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_7
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.ldr x0, [x29, #-24]
+    arm64.str x2, [x29, #-48]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_57
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_57
+    arm64.ldr x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq main.__skip_guarded_59
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_59
+    arm64.ldr x2, [x29, #-8]
+    arm64.cmp x2, #0
+    arm64.b.eq main.__skip_guarded_61
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_61
+    arm64.ldr x0, [x29, #-48]
+    arm64.epilogue stack_size=96
+    arm64.ret
+  }
+  func @__destruct_TestOp(ptr: i64) {
+  entry:
+    arm64.b __destruct_TestOp.done
+  done:
+    arm64.ret
+  }
+}
+---

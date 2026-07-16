@@ -1311,7 +1311,7 @@ module {
   done:
     func.return
   }
-  func @__destruct___ManagedMemory_Item(ptr: i64) {
+  func @__destruct_ItemArray(ptr: i64) {
   entry:
     %57 = func.param ptr : StdI64
     memref.store %57, __destr_ptr
@@ -1335,21 +1335,16 @@ module {
     %70 = memref.load __destr_ptr : i64
     std.call_runtime @mm_decref_managed_elements %70
     %71 = memref.load __destr_ptr : i64
-    %72 = memref.load_indirect %71+0
-    std.call_runtime @mm_raw_free %72
+    %72 = memref.load_indirect %71+32
+    %73 = arith.constant {value = -3 : i64}
+    %74 = arith.cmpi ne %72, %73
+    cf.cond_br %74 [then: raw_free_0, else: skip_buf_0]
+  raw_free_0:
+    %75 = memref.load __destr_ptr : i64
+    %76 = memref.load_indirect %75+0
+    std.call_runtime @mm_raw_free %76
     cf.br skip_buf_0
   skip_buf_0:
-    cf.br done
-  done:
-    func.return
-  }
-  func @__destruct_ItemArray(ptr: i64) {
-  entry:
-    %73 = func.param ptr : StdI64
-    memref.store %73, __destr_ptr
-    %74 = memref.load __destr_ptr : i64
-    %75 = memref.load_indirect %74+0
-    std.call_runtime_if_nonnull @mm_decref %75
     cf.br done
   done:
     func.return
@@ -1486,7 +1481,7 @@ module {
   done:
     arm64.ret
   }
-  func @__destruct___ManagedMemory_Item(ptr: i64) {
+  func @__destruct_ItemArray(ptr: i64) {
   entry:
     arm64.prologue stack_size=48
     arm64.str x0, [x29, #-8]
@@ -1496,18 +1491,18 @@ module {
     arm64.cmp x1, x2
     arm64.cset x3, eq
     arm64.cmp x3, #0
-    arm64.b.ne __destruct___ManagedMemory_Item.slice_cleanup_0
-    arm64.b __destruct___ManagedMemory_Item.check_owned_0
+    arm64.b.ne __destruct_ItemArray.slice_cleanup_0
+    arm64.b __destruct_ItemArray.check_owned_0
   slice_cleanup_0:
     arm64.ldr x0, [x29, #-8]
     arm64.ldr x1, [x0, #32]
     arm64.str x1, [x29, #-16]
     arm64.cmp x1, #0
-    arm64.b.eq __destruct___ManagedMemory_Item.__skip_guarded_9
+    arm64.b.eq __destruct_ItemArray.__skip_guarded_9
     arm64.ldr x0, [x29, #-16]
     arm64.bl mm_decref
-    arm64.label __destruct___ManagedMemory_Item.__skip_guarded_9
-    arm64.b __destruct___ManagedMemory_Item.skip_buf_0
+    arm64.label __destruct_ItemArray.__skip_guarded_9
+    arm64.b __destruct_ItemArray.skip_buf_0
   check_owned_0:
     arm64.ldr x0, [x29, #-8]
     arm64.ldr x1, [x0, #16]
@@ -1515,34 +1510,26 @@ module {
     arm64.cmp x1, x2
     arm64.cset x3, ne
     arm64.cmp x3, #0
-    arm64.b.ne __destruct___ManagedMemory_Item.free_buf_0
-    arm64.b __destruct___ManagedMemory_Item.skip_buf_0
+    arm64.b.ne __destruct_ItemArray.free_buf_0
+    arm64.b __destruct_ItemArray.skip_buf_0
   free_buf_0:
     arm64.ldr x0, [x29, #-8]
     arm64.bl mm_decref_managed_elements
     arm64.ldr x1, [x29, #-8]
-    arm64.ldr x2, [x1, #0]
-    arm64.mov x0, x2
-    arm64.bl mm_raw_free
-    arm64.b __destruct___ManagedMemory_Item.skip_buf_0
-  skip_buf_0:
-    arm64.b __destruct___ManagedMemory_Item.done
-  done:
-    arm64.epilogue stack_size=48
-    arm64.ret
-  }
-  func @__destruct_ItemArray(ptr: i64) {
-  entry:
-    arm64.prologue stack_size=48
-    arm64.str x0, [x29, #-8]
+    arm64.ldr x2, [x1, #32]
+    arm64.mov x3, #-3
+    arm64.cmp x2, x3
+    arm64.cset x4, ne
+    arm64.cmp x4, #0
+    arm64.b.ne __destruct_ItemArray.raw_free_0
+    arm64.b __destruct_ItemArray.skip_buf_0
+  raw_free_0:
     arm64.ldr x0, [x29, #-8]
     arm64.ldr x1, [x0, #0]
-    arm64.str x1, [x29, #-16]
-    arm64.cmp x1, #0
-    arm64.b.eq __destruct_ItemArray.__skip_guarded_4
-    arm64.ldr x0, [x29, #-16]
-    arm64.bl mm_decref
-    arm64.label __destruct_ItemArray.__skip_guarded_4
+    arm64.mov x0, x1
+    arm64.bl mm_raw_free
+    arm64.b __destruct_ItemArray.skip_buf_0
+  skip_buf_0:
     arm64.b __destruct_ItemArray.done
   done:
     arm64.epilogue stack_size=48

@@ -27,65 +27,114 @@ ExitCode: 1
 ---
 // CompiledIR
 module {
-  func @classify(x0: u8) -> u8 {
+  func @classify(c: i64) -> u8 {
   entry:
-    arm64.mov x2, x0
-    arm64.mov x0, #0
-    arm64.mov x3, #0
-    arm64.cmp x2, x0
-    arm64.cset x0, eq
-    arm64.b.ne eval_0.next0
-    arm64.b eval_0.case0
-  eval_0.merge:
+    arm64.prologue stack_size=80
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
     arm64.mov x1, #0
-    arm64.ret
+    arm64.str x1, [x29, #-16]
+    arm64.str x0, [x29, #-24]
+    arm64.b classify.eval_0.cmp0
+  eval_0.cmp0:
+    arm64.ldr x0, [x29, #-24]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne classify.eval_0.case0
+    arm64.b classify.eval_0.cmp1
   eval_0.case0:
-    arm64.mov x1, #1
     arm64.mov x0, #0
+    arm64.mov x1, #1
+    arm64.add x2, x0, x1
+    arm64.mov x1, x2
+    arm64.mov x0, #0
+    arm64.epilogue stack_size=80
     arm64.ret
-  eval_0.next0:
-    arm64.mov x0, #1
-    arm64.cmp x2, x0
-    arm64.cset x0, eq
-    arm64.b.ne eval_0.next1
+  eval_0.cmp1:
+    arm64.ldr x0, [x29, #-24]
+    arm64.mov x1, #1
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne classify.eval_0.case1
+    arm64.b classify.eval_0.cmp2
   eval_0.case1:
     arm64.mov x0, #1
-    arm64.b eval_0.merge
-  eval_0.next1:
-    arm64.mov x0, #2
-    arm64.cmp x2, x0
-    arm64.cset x0, eq
-    arm64.b.ne __phi_trampoline_5_0
+    arm64.str x0, [x29, #-16]
+    arm64.b classify.eval_0.merge
+  eval_0.cmp2:
+    arm64.ldr x0, [x29, #-24]
+    arm64.mov x1, #2
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne classify.eval_0.case2
+    arm64.b classify.eval_0.merge
   eval_0.case2:
     arm64.mov x0, #2
-    arm64.b eval_0.merge
-  __phi_trampoline_5_0:
-    arm64.mov x0, x3
-    arm64.b eval_0.merge
+    arm64.str x0, [x29, #-16]
+    arm64.b classify.eval_0.merge
+  eval_0.merge:
+    arm64.ldr x0, [x29, #-16]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x3, #255
+    arm64.cmp x0, x3
+    arm64.cset x4, gt
+    arm64.orr x5, x2, x4
+    arm64.cmp x5, #0
+    arm64.b.ne classify.__range_panic_0
+    arm64.b classify.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_8
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.mov x1, #0
+    arm64.epilogue stack_size=80
+    arm64.ret
   }
   func @main() -> u8 {
   entry:
-    arm64.prologue stack_size=16
+    arm64.prologue stack_size=48
     arm64.mov x0, #1
     arm64.bl classify
-    arm64.mov x2, #0
-    arm64.cmp x1, x2
-    arm64.cset x1, ne
-    arm64.b.eq try_0.merge
-  try_0.otherwise:
-    arm64.mov x0, #99
-  try_0.merge:
-    arm64.mov x1, #255
+    arm64.mov x2, #99
+    arm64.str x2, [x29, #-8]
+    arm64.str x0, [x29, #-16]
+    arm64.mov x0, #0
+    arm64.cmp x1, x0
+    arm64.cset x2, ne
+    arm64.cmp x2, #0
+    arm64.b.ne main.otherwise_default_error_0
+    arm64.b main.otherwise_default_continue_0
+  otherwise_default_error_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.str x0, [x29, #-16]
+    arm64.b main.otherwise_default_continue_0
+  otherwise_default_continue_0:
+    arm64.ldr x0, [x29, #-16]
+    arm64.mov x1, #0
     arm64.cmp x0, x1
-    arm64.cset x1, hi
-    arm64.b.ls __range_ok_0
+    arm64.cset x2, lt
+    arm64.mov x3, #255
+    arm64.cmp x0, x3
+    arm64.cset x4, gt
+    arm64.orr x5, x2, x4
+    arm64.cmp x5, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
   __range_panic_0:
-    arm64.adrp_add_rdata x0, __panic_msg_dfc8ba0fc26a3a78
-    arm64.ldr x19, [x29, #16]
-    arm64.mov x0, x19
+    arm64.adrp_add_symdata x0, __panic_msg_9
+    arm64.mov x1, x0
+    arm64.mov x0, x1
     arm64.bl mrt_panic
   __range_ok_0:
-    arm64.epilogue
+    arm64.epilogue stack_size=48
     arm64.ret
   }
 }

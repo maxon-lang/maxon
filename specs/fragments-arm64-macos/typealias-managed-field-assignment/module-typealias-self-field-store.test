@@ -1,0 +1,234 @@
+// Test: module-typealias-self-field-store
+typealias Num = int(i64.min to i64.max)
+typealias NumArray = Array with Num
+
+type Blk
+	export var args as NumArray
+
+	export static function create() returns Blk
+		return Self{args: NumArray.create()}
+	end 'create'
+
+	export function setArgs(x NumArray)
+		self.args = x
+	end 'setArgs'
+end 'Blk'
+
+function main() returns ExitCode
+	var i = 0
+
+	while i < 3000 'l'
+		var a = Blk.create()
+		a.args.push(i)
+		var b = Blk.create()
+		b.setArgs(a.args)
+		i = i + 1
+	end 'l'
+
+	print("done")
+	return 0
+end 'main'
+---
+Stdout: ```
+done
+```
+---
+// CompiledIR
+module {
+  func @Blk.create() -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.bl NumArray.create
+    arm64.str x0, [x29, #-8]
+    arm64.adrp_add_func x0, __destruct_Blk
+    arm64.mov x1, x0
+    arm64.mov x0, #8
+    arm64.mov x2, #3
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-16]
+    arm64.ldr x2, [x29, #-8]
+    arm64.ldr x3, [x29, #-16]
+    arm64.str x2, [x3, #0]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x4, [x29, #-8]
+    arm64.cmp x4, #0
+    arm64.b.eq Blk.create.__skip_guarded_13
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label Blk.create.__skip_guarded_13
+    arm64.ldr x5, [x29, #-16]
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_incref
+    arm64.ldr x6, [x29, #-16]
+    arm64.mov x0, x6
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @Blk.setArgs(__self_ptr: i64, x: i64) {
+  entry:
+    arm64.prologue stack_size=64
+    arm64.str x0, [x29, #-8]
+    arm64.str x1, [x29, #-16]
+    arm64.ldr x0, [x29, #-16]
+    arm64.ldr x1, [x29, #-8]
+    arm64.ldr x2, [x1, #0]
+    arm64.str x2, [x29, #-24]
+    arm64.cmp x2, #0
+    arm64.b.eq Blk.setArgs.__skip_guarded_7
+    arm64.ldr x0, [x29, #-24]
+    arm64.bl mm_decref
+    arm64.label Blk.setArgs.__skip_guarded_7
+    arm64.ldr x3, [x29, #-8]
+    arm64.ldr x4, [x29, #-16]
+    arm64.str x4, [x3, #0]
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_incref
+    arm64.epilogue stack_size=64
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=112
+    arm64.mov x0, #0
+    arm64.str x0, [x29, #-8]
+    arm64.b main.l_0.header
+  l_0.header:
+    arm64.mov x0, #3000
+    arm64.ldr x1, [x29, #-8]
+    arm64.cmp x1, x0
+    arm64.cset x2, lt
+    arm64.cmp x2, #0
+    arm64.b.ne main.l_0
+    arm64.b main.l_0.exit
+  l_0:
+    arm64.bl Blk.create
+    arm64.str x0, [x29, #-16]
+    arm64.ldr x0, [x29, #-16]
+    arm64.ldr x1, [x0, #0]
+    arm64.str x1, [x29, #-24]
+    arm64.ldr x2, [x29, #-8]
+    arm64.ldr x3, [x29, #-24]
+    arm64.ldr x0, [x29, #-24]
+    arm64.ldr x1, [x29, #-8]
+    arm64.bl NumArray.push
+    arm64.bl Blk.create
+    arm64.str x0, [x29, #-32]
+    arm64.ldr x4, [x29, #-16]
+    arm64.ldr x5, [x4, #0]
+    arm64.str x5, [x29, #-40]
+    arm64.ldr x6, [x29, #-32]
+    arm64.ldr x7, [x29, #-40]
+    arm64.ldr x0, [x29, #-32]
+    arm64.ldr x1, [x29, #-40]
+    arm64.bl Blk.setArgs
+    arm64.mov x8, #1
+    arm64.ldr x9, [x29, #-8]
+    arm64.add x10, x9, x8
+    arm64.str x10, [x29, #-8]
+    arm64.ldr x11, [x29, #-32]
+    arm64.cmp x11, #0
+    arm64.b.eq main.__skip_guarded_28
+    arm64.ldr x0, [x29, #-32]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_28
+    arm64.ldr x12, [x29, #-16]
+    arm64.cmp x12, #0
+    arm64.b.eq main.__skip_guarded_30
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_30
+    arm64.b main.l_0.header
+  l_0.exit:
+    arm64.adrp_add_global x0, __static_lit_0
+    arm64.mov x1, x0
+    arm64.mov x2, #32
+    arm64.add x3, x1, x2
+    arm64.str x3, [x29, #-48]
+    arm64.ldr x4, [x29, #-48]
+    arm64.ldr x0, [x29, #-48]
+    arm64.bl mm_incref
+    arm64.ldr x5, [x29, #-48]
+    arm64.ldr x0, [x29, #-48]
+    arm64.bl stdlib.print
+    arm64.ldr x6, [x29, #-48]
+    arm64.cmp x6, #0
+    arm64.b.eq main.__skip_guarded_43
+    arm64.ldr x0, [x29, #-48]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_43
+    arm64.mov x0, #0
+    arm64.epilogue stack_size=112
+    arm64.ret
+  }
+  func @__destruct_Blk(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.str x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq __destruct_Blk.__skip_guarded_4
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label __destruct_Blk.__skip_guarded_4
+    arm64.b __destruct_Blk.done
+  done:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @__destruct_NumArray(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #16]
+    arm64.mov x2, #-1
+    arm64.cmp x1, x2
+    arm64.cset x3, eq
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct_NumArray.slice_cleanup_0
+    arm64.b __destruct_NumArray.check_owned_0
+  slice_cleanup_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #32]
+    arm64.str x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq __destruct_NumArray.__skip_guarded_9
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label __destruct_NumArray.__skip_guarded_9
+    arm64.b __destruct_NumArray.skip_buf_0
+  check_owned_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #16]
+    arm64.mov x2, #-2
+    arm64.cmp x1, x2
+    arm64.cset x3, ne
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct_NumArray.free_buf_0
+    arm64.b __destruct_NumArray.skip_buf_0
+  free_buf_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #32]
+    arm64.mov x2, #-3
+    arm64.cmp x1, x2
+    arm64.cset x3, ne
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct_NumArray.raw_free_0
+    arm64.b __destruct_NumArray.skip_buf_0
+  raw_free_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.mov x0, x1
+    arm64.bl mm_raw_free
+    arm64.b __destruct_NumArray.skip_buf_0
+  skip_buf_0:
+    arm64.b __destruct_NumArray.done
+  done:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+}
+---

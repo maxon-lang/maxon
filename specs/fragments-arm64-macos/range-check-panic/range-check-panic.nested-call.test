@@ -26,39 +26,49 @@ Stack trace:
 ---
 // CompiledIR
 module {
-  func @validate(x0: u8) -> u8 {
+  func @validate(s: i64) -> u8 {
   entry:
     arm64.prologue stack_size=16
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
     arm64.mov x1, #100
     arm64.cmp x0, x1
-    arm64.cset x1, hi
-    arm64.b.ls __range_ok_0
+    arm64.cset x3, gt
+    arm64.orr x1, x2, x3
+    arm64.cmp x1, #0
+    arm64.b.ne validate.__range_panic_0
+    arm64.b validate.__range_ok_0
   __range_panic_0:
-    arm64.adrp_add_rdata x0, __panic_msg_33d96781b639d6e2
-    arm64.ldr x19, [x29, #16]
-    arm64.mov x0, x19
-    arm64.bl mrt_panic
-  __range_ok_0:
-    arm64.epilogue
-    arm64.ret
-  }
-  func @process(x0: u8) -> u8 {
-  entry:
-    arm64.prologue stack_size=16
+    arm64.adrp_add_symdata x0, __panic_msg_0
     arm64.mov x1, x0
     arm64.mov x0, x1
-    arm64.bl validate
-    arm64.mov x1, #100
-    arm64.cmp x0, x1
-    arm64.cset x1, hi
-    arm64.b.ls __range_ok_0
-  __range_panic_0:
-    arm64.adrp_add_rdata x0, __panic_msg_158a72b60057a176
-    arm64.ldr x19, [x29, #16]
-    arm64.mov x0, x19
     arm64.bl mrt_panic
   __range_ok_0:
-    arm64.epilogue
+    arm64.epilogue stack_size=16
+    arm64.ret
+  }
+  func @process(x: i64) -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.bl validate
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x1, #100
+    arm64.cmp x0, x1
+    arm64.cset x3, gt
+    arm64.orr x1, x2, x3
+    arm64.cmp x1, #0
+    arm64.b.ne process.__range_panic_0
+    arm64.b process.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_1
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue stack_size=16
     arm64.ret
   }
   func @main() -> u8 {
@@ -66,17 +76,23 @@ module {
     arm64.prologue stack_size=16
     arm64.mov x0, #200
     arm64.bl process
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
     arm64.mov x1, #255
     arm64.cmp x0, x1
-    arm64.cset x1, hi
-    arm64.b.ls __range_ok_0
+    arm64.cset x3, gt
+    arm64.orr x1, x2, x3
+    arm64.cmp x1, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
   __range_panic_0:
-    arm64.adrp_add_rdata x0, __panic_msg_d06783f4cda46583
-    arm64.ldr x19, [x29, #16]
-    arm64.mov x0, x19
+    arm64.adrp_add_symdata x0, __panic_msg_2
+    arm64.mov x1, x0
+    arm64.mov x0, x1
     arm64.bl mrt_panic
   __range_ok_0:
-    arm64.epilogue
+    arm64.epilogue stack_size=16
     arm64.ret
   }
 }

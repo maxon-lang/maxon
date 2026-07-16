@@ -18,30 +18,40 @@ ExitCode: 1
 ---
 // CompiledIR
 module {
+  func @test_bool_param(flag: i1) -> i64 {
+  entry:
+    arm64.cmp x0, #0
+    arm64.b.ne test_bool_param.check_0
+    arm64.b test_bool_param.else_check_0
+  check_0:
+    arm64.mov x0, #1
+    arm64.ret
+  else_check_0:
+    arm64.mov x0, #0
+    arm64.ret
+  }
   func @main() -> u8 {
   entry:
     arm64.prologue stack_size=16
     arm64.mov x0, #1
-  inlined_test_bool_param_0_0:
-    arm64.cmp x0, #0
-    arm64.b.eq inlined_test_bool_param_2_0
-  inlined_test_bool_param_1_0:
-    arm64.mov x0, #1
-    arm64.b inline_cont_main_0
-  inlined_test_bool_param_2_0:
-    arm64.mov x0, #0
-  inline_cont_main_0:
+    arm64.bl test_bool_param
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
     arm64.mov x1, #255
     arm64.cmp x0, x1
-    arm64.cset x1, hi
-    arm64.b.ls __range_ok_0
+    arm64.cset x3, gt
+    arm64.orr x1, x2, x3
+    arm64.cmp x1, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
   __range_panic_0:
-    arm64.adrp_add_rdata x0, __panic_msg_85c48eb7fd53102a
-    arm64.ldr x19, [x29, #16]
-    arm64.mov x0, x19
+    arm64.adrp_add_symdata x0, __panic_msg_0
+    arm64.mov x1, x0
+    arm64.mov x0, x1
     arm64.bl mrt_panic
   __range_ok_0:
-    arm64.epilogue
+    arm64.epilogue stack_size=16
     arm64.ret
   }
 }

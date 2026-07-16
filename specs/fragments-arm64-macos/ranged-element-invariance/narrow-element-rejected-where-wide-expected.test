@@ -1,0 +1,22 @@
+// Test: narrow-element-rejected-where-wide-expected
+typealias Narrow = int(0 to 16)
+typealias NarrowCol = Array with Narrow
+typealias Wide = int(0 to u64.max)
+typealias WideCol = Array with Wide
+
+function writeThrough(col WideCol, value Wide)
+	try col.set(0, value: value) otherwise panic("set")
+end 'writeThrough'
+
+function main() returns ExitCode
+	var narrow = NarrowCol.create()
+	narrow.push(1)
+	writeThrough(narrow, value: 300)
+	return 0
+end 'main'
+---
+MaxoncStderr: ```
+error E3005: specs/fragments/ranged-element-invariance/narrow-element-rejected-where-wide-expected.test:14:2: argument type mismatch for 'col': expected 'WideCol', got 'NarrowCol'
+```
+---
+---

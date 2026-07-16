@@ -1,0 +1,63 @@
+// Test: pass-by-reference.enum-float-backed-ref
+
+enum Ratio
+	half = 0.5
+	quarter = 0.25
+end 'Ratio'
+
+function switchRatio(r Ratio)
+	r = Ratio.quarter
+end 'switchRatio'
+
+function main() returns ExitCode
+	var r = Ratio.half
+	switchRatio(r)
+	if r == Ratio.quarter 'changed'
+		return 1
+	end 'changed'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+// CompiledIR
+module {
+  func @switchRatio(r: i64) {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.fldr d0, [__float_0.25]
+    arm64.fstr d0, [x29, #-16]
+    arm64.ldr x0, [x29, #-8]
+    arm64.fldr d1, [x29, #-16]
+    arm64.fstr d1, [x0, #0]
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.fldr d0, [__float_0.5]
+    arm64.fstr d0, [x29, #-8]
+    arm64.add x0, x29, #-8
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl switchRatio
+    arm64.fldr d1, [__float_0.25]
+    arm64.fldr d2, [x29, #-8]
+    arm64.fcmp d2, d1
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne main.changed_0
+    arm64.b main.changed_0.after
+  changed_0:
+    arm64.mov x0, #1
+    arm64.epilogue stack_size=48
+    arm64.ret
+  changed_0.after:
+    arm64.mov x0, #0
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+}
+---

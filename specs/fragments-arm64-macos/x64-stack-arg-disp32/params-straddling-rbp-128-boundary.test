@@ -1,0 +1,141 @@
+// Test: params-straddling-rbp-128-boundary
+
+typealias Integer = int(i64.min to i64.max)
+
+// Sum the three parameters straddling the boundary: a20 at [rbp+112], a21 at
+// [rbp+120], a22 at [rbp+128]. A miscompiled a22 load corrupts the total.
+function sum22(a1 Integer, a2 Integer, a3 Integer, a4 Integer, a5 Integer, a6 Integer, a7 Integer, a8 Integer, a9 Integer, a10 Integer, a11 Integer, a12 Integer, a13 Integer, a14 Integer, a15 Integer, a16 Integer, a17 Integer, a18 Integer, a19 Integer, a20 Integer, a21 Integer, a22 Integer) returns Integer
+	return a1 + a2 + a3 + a4 + a5 + a6 + a7 + a8 + a9 + a10 + a11 + a12 + a13 + a14 + a15 + a16 + a17 + a18 + a19 + a20 + a21 + a22
+end 'sum22'
+
+function main() returns ExitCode
+	return sum22(0, a2: 0, a3: 0, a4: 0, a5: 0, a6: 0, a7: 0, a8: 0, a9: 0, a10: 0, a11: 0, a12: 0, a13: 0, a14: 0, a15: 0, a16: 0, a17: 0, a18: 0, a19: 0, a20: 40, a21: 50, a22: 60)
+end 'main'
+---
+ExitCode: 150
+---
+// CompiledIR
+module {
+  func @sum22(a1: i64, a2: i64, a3: i64, a4: i64, a5: i64, a6: i64, a7: i64, a8: i64, a9: i64, a10: i64, a11: i64, a12: i64, a13: i64, a14: i64, a15: i64, a16: i64, a17: i64, a18: i64, a19: i64, a20: i64, a21: i64, a22: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=96
+    arm64.ldr x8, [x29, #16]
+    arm64.ldr x9, [x29, #24]
+    arm64.ldr x10, [x29, #32]
+    arm64.ldr x11, [x29, #40]
+    arm64.ldr x12, [x29, #48]
+    arm64.ldr x14, [x29, #56]
+    arm64.ldr x15, [x29, #64]
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #72]
+    arm64.str x0, [x29, #-16]
+    arm64.ldr x0, [x29, #80]
+    arm64.str x0, [x29, #-24]
+    arm64.ldr x0, [x29, #88]
+    arm64.str x0, [x29, #-32]
+    arm64.ldr x0, [x29, #96]
+    arm64.str x0, [x29, #-40]
+    arm64.ldr x0, [x29, #104]
+    arm64.str x0, [x29, #-48]
+    arm64.ldr x0, [x29, #112]
+    arm64.str x0, [x29, #-56]
+    arm64.ldr x0, [x29, #120]
+    arm64.str x0, [x29, #-64]
+    arm64.ldr x0, [x29, #-8]
+    arm64.str x2, [x29, #-72]
+    arm64.add x2, x0, x1
+    arm64.ldr x0, [x29, #-72]
+    arm64.add x1, x2, x0
+    arm64.add x2, x1, x3
+    arm64.add x3, x2, x4
+    arm64.add x4, x3, x5
+    arm64.add x5, x4, x6
+    arm64.add x6, x5, x7
+    arm64.add x7, x6, x8
+    arm64.add x8, x7, x9
+    arm64.add x9, x8, x10
+    arm64.add x10, x9, x11
+    arm64.add x11, x10, x12
+    arm64.add x12, x11, x14
+    arm64.add x14, x12, x15
+    arm64.ldr x15, [x29, #-16]
+    arm64.add x0, x14, x15
+    arm64.ldr x1, [x29, #-24]
+    arm64.add x2, x0, x1
+    arm64.ldr x0, [x29, #-32]
+    arm64.add x1, x2, x0
+    arm64.ldr x0, [x29, #-40]
+    arm64.add x2, x1, x0
+    arm64.ldr x0, [x29, #-48]
+    arm64.add x1, x2, x0
+    arm64.ldr x0, [x29, #-56]
+    arm64.add x2, x1, x0
+    arm64.ldr x0, [x29, #-64]
+    arm64.add x1, x2, x0
+    arm64.mov x0, x1
+    arm64.epilogue stack_size=96
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.sub sp, sp, #112
+    arm64.mov x0, #0
+    arm64.str x0, [sp, #0]
+    arm64.mov x1, #0
+    arm64.str x1, [sp, #8]
+    arm64.mov x2, #0
+    arm64.str x2, [sp, #16]
+    arm64.mov x3, #0
+    arm64.str x3, [sp, #24]
+    arm64.mov x4, #0
+    arm64.str x4, [sp, #32]
+    arm64.mov x5, #0
+    arm64.str x5, [sp, #40]
+    arm64.mov x6, #0
+    arm64.str x6, [sp, #48]
+    arm64.mov x7, #0
+    arm64.str x7, [sp, #56]
+    arm64.mov x8, #0
+    arm64.str x8, [sp, #64]
+    arm64.mov x9, #0
+    arm64.str x9, [sp, #72]
+    arm64.mov x10, #0
+    arm64.str x10, [sp, #80]
+    arm64.mov x11, #40
+    arm64.str x11, [sp, #88]
+    arm64.mov x12, #50
+    arm64.str x12, [sp, #96]
+    arm64.mov x14, #60
+    arm64.str x14, [sp, #104]
+    arm64.mov x0, #0
+    arm64.mov x1, #0
+    arm64.mov x2, #0
+    arm64.mov x3, #0
+    arm64.mov x4, #0
+    arm64.mov x5, #0
+    arm64.mov x6, #0
+    arm64.mov x7, #0
+    arm64.bl sum22
+    arm64.add sp, sp, #112
+    arm64.mov x15, #0
+    arm64.cmp x0, x15
+    arm64.cset x1, lt
+    arm64.mov x2, #255
+    arm64.cmp x0, x2
+    arm64.cset x3, gt
+    arm64.orr x2, x1, x3
+    arm64.cmp x2, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_1
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue stack_size=16
+    arm64.ret
+  }
+}
+---

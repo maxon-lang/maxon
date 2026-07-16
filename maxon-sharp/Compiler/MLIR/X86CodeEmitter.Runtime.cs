@@ -353,15 +353,6 @@ public partial class X86CodeEmitter {
     EmitRuntimeFunctionEnd();
   }
 
-  // Cap the RBP-chain walk at 32 frames so a corrupt or cyclic chain can't spin the
-  // backtrace forever.
-  private const int MaxBacktraceFrames = 32;
-
-  // Sane upper bound on a single stack's span — larger than any OS thread or grown
-  // green-thread stack. A faulting-thread RBP outside [fault_rsp, fault_rsp + this) is
-  // treated as corrupt and ends the walk instead of dereferencing an unmapped page.
-  private const long FaultStackWindowBytes = 0x4000000; // 64 MiB
-
   /// <summary>
   /// Emit the stack-trace preamble shared by mrt_panic and mrt_fault_backtrace: cache
   /// text_base (&mrt_start) @ [rbp-0x10], the symtable pointer @ [rbp-0x18] and its entry

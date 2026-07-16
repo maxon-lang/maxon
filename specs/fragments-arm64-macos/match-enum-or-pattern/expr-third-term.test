@@ -1,0 +1,113 @@
+// Test: expr-third-term
+enum E
+	a
+	b
+	c
+	d
+end 'E'
+
+function pick(v E) returns ExitCode
+	return match v 'm'
+		a or b or c gives 7
+		d gives 9
+	end 'm'
+end 'pick'
+
+function main() returns ExitCode
+	return pick(E.c)
+end 'main'
+---
+ExitCode: 7
+---
+// CompiledIR
+module {
+  func @pick(v: i64) -> u8 {
+  entry:
+    arm64.prologue stack_size=80
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.mov x1, #0
+    arm64.str x1, [x29, #-16]
+    arm64.str x0, [x29, #-24]
+    arm64.b pick.m_0.cmp0
+  m_0.cmp0:
+    arm64.ldr x0, [x29, #-24]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.ldr x3, [x29, #-24]
+    arm64.mov x4, #1
+    arm64.cmp x3, x4
+    arm64.cset x5, eq
+    arm64.orr x6, x2, x5
+    arm64.ldr x7, [x29, #-24]
+    arm64.mov x8, #2
+    arm64.cmp x7, x8
+    arm64.cset x9, eq
+    arm64.orr x10, x6, x9
+    arm64.cmp x10, #0
+    arm64.b.ne pick.m_0.case0
+    arm64.b pick.m_0.cmp1
+  m_0.case0:
+    arm64.mov x0, #7
+    arm64.str x0, [x29, #-16]
+    arm64.b pick.m_0.merge
+  m_0.cmp1:
+    arm64.ldr x0, [x29, #-24]
+    arm64.mov x1, #3
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne pick.m_0.case1
+    arm64.b pick.m_0.merge
+  m_0.case1:
+    arm64.mov x0, #9
+    arm64.str x0, [x29, #-16]
+    arm64.b pick.m_0.merge
+  m_0.merge:
+    arm64.ldr x0, [x29, #-16]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x3, #255
+    arm64.cmp x0, x3
+    arm64.cset x4, gt
+    arm64.orr x5, x2, x4
+    arm64.cmp x5, #0
+    arm64.b.ne pick.__range_panic_0
+    arm64.b pick.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_2
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue stack_size=80
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x0, #2
+    arm64.bl pick
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x1, #255
+    arm64.cmp x0, x1
+    arm64.cset x3, gt
+    arm64.orr x1, x2, x3
+    arm64.cmp x1, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_3
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue stack_size=16
+    arm64.ret
+  }
+}
+---

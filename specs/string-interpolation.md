@@ -957,6 +957,42 @@ FF
 ffff
 ```
 
+### Integer Format Specifier - Zero-padded unsigned bases
+
+Zero-padding shifts the converted digits right and fills the gap, and it starts the fill
+after a `-` sign when there is one. An unsigned base never writes a sign, so it must say
+so: arm64 left its `is_negative` slot holding the hex letter base ('a'), the fill read
+that as "negative", started at index 1, and overwrote the digit it had just shifted —
+`{255:08x}` printed `f000000f`. Width alone did not catch it (`{high:016x}` is already 16
+chars wide, so it never pads); only a value SHORTER than its field reaches the fill loop.
+
+<!-- test: int-format-zero-padded-unsigned -->
+```maxon
+function main() returns ExitCode
+	let n = 255
+	print("{n:08x}\n")
+	print("{n:08X}\n")
+	print("{n:06o}\n")
+	print("{n:012b}\n")
+	// Space fill and the signed path share the same shift-and-fill code.
+	print("{n:8x}\n")
+	let neg = 0 - 42
+	print("{neg:08d}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+000000ff
+000000FF
+000377
+000011111111
+      ff
+-0000042
+```
+
 ### Integer Format Specifier - Hex High Bit (unsigned bases)
 
 <!-- test: int-format-high-bit-unsigned -->

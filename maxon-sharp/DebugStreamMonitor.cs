@@ -29,7 +29,23 @@ public class DebugStreamMonitor {
   private const string FilterLog = "log";
   private const string UsageLine = "Usage: maxon monitor [--filter=mm|sched|log] <exe> [args...]";
 
+  /// <summary>
+  /// Report a failure and exit nonzero rather than dumping a raw .NET stack trace at whoever
+  /// ran the command. This is NOT the blanket catch that hid the Mach-O parse failure: that one
+  /// swallowed the error and returned an empty name table, so the monitor carried on printing
+  /// `tag=1` for every event as though nothing had happened. This one prints the reason and
+  /// FAILS, which is the whole difference between reporting and swallowing.
+  /// </summary>
   public static int Run(string[] args) {
+    try {
+      return RunMonitor(args);
+    } catch (Exception ex) {
+      Console.Error.WriteLine($"maxon monitor: {ex.Message}");
+      return 1;
+    }
+  }
+
+  private static int RunMonitor(string[] args) {
     // Parse args: [--filter=mm|sched|log] <exe> [exe-args...]
     const string FilterOption = "--filter=";
     string? filter = null;
@@ -63,15 +79,12 @@ public class DebugStreamMonitor {
       return 1;
     }
 
-    // Generate unique named shared memory segment
-    var shmName = $"maxon_ds_{Environment.ProcessId}_{Random.Shared.Next():x8}";
-
     // The producer MAPS exactly this many bytes (EmitDebugStreamInit), so it is not the monitor's
     // number to choose — it is the shared layout contract, and it has one definition.
     long totalSize = RuntimeEmitter.DsSharedMemorySize;
 
-    using var mmf = MemoryMappedFile.CreateNew(shmName, totalSize);
-    using var accessor = mmf.CreateViewAccessor(0, totalSize);
+    using var mapping = SharedMapping.Create(totalSize);
+    using var accessor = mapping.Map.CreateViewAccessor(0, totalSize);
 
     // Write header
     accessor.Write(RuntimeEmitter.DsOffMagic, RuntimeEmitter.DsMagic);
@@ -105,7 +118,7 @@ public class DebugStreamMonitor {
     foreach (var arg in exeArgs) {
       psi.ArgumentList.Add(arg);
     }
-    psi.EnvironmentVariables["MAXON_DEBUGSTREAM"] = shmName;
+    psi.EnvironmentVariables["MAXON_DEBUGSTREAM"] = mapping.DebugStreamName;
 
     var process = new System.Diagnostics.Process { StartInfo = psi };
     process.Start();
@@ -307,6 +320,68 @@ public class DebugStreamMonitor {
     return process.ExitCode;
   }
 
+  /// The stem of the segment name / backing-file name. Carries the monitor's pid and a random
+  /// suffix so that concurrent spec-test workers cannot collide on it.
+  private const string SharedSegmentPrefix = "maxon_ds_";
+
+  /// <summary>
+  /// The shared segment the monitor writes and the producer maps, whatever backs it, and the
+  /// MAXON_DEBUGSTREAM value that tells the producer where to find it.
+  ///
+  /// The two platforms name a shared mapping differently, and .NET implements only one of them.
+  /// <c>MemoryMappedFile.CreateNew(name, ...)</c> creates a Win32 SECTION OBJECT — a Windows
+  /// concept — and everywhere else it throws `PlatformNotSupportedException: Named maps are not
+  /// supported`. The monitor died on that line before it ever spawned the child, so every
+  /// mm-trace test on macOS saw an EMPTY TRACE and read it as "the program allocated nothing".
+  ///
+  /// So off Windows the segment is a plain temp FILE mapped MAP_SHARED, and MAXON_DEBUGSTREAM
+  /// carries its PATH instead of a name. That costs the producer exactly one token — `open(path,
+  /// O_RDWR)` where Windows opens a section by name — because file-backed MAP_SHARED pages are
+  /// shared between processes in precisely the way a named segment's are. It deliberately does
+  /// NOT use POSIX `shm_open`: that is variadic, and on Apple arm64 a variadic call made through
+  /// the fixed-register path silently passes garbage for `mode`, creating the object with mode 0
+  /// and failing every subsequent open with EACCES.
+  /// </summary>
+  private sealed class SharedMapping : IDisposable {
+    public required MemoryMappedFile Map { get; init; }
+
+    /// The MAXON_DEBUGSTREAM value: a segment NAME on Windows, a file PATH everywhere else.
+    public required string DebugStreamName { get; init; }
+
+    /// The temp file backing the mapping off Windows, to be unlinked when the monitor is done.
+    /// Null on Windows, where a section object has no filesystem presence to clean up.
+    private string? BackingFilePath { get; init; }
+
+    public static SharedMapping Create(long totalSize) {
+      var id = $"{SharedSegmentPrefix}{Environment.ProcessId}_{Random.Shared.Next():x8}";
+
+      if (OperatingSystem.IsWindows()) {
+        return new SharedMapping {
+          Map = MemoryMappedFile.CreateNew(id, totalSize),
+          DebugStreamName = id,
+          BackingFilePath = null
+        };
+      }
+
+      var path = Path.Combine(Path.GetTempPath(), id);
+      return new SharedMapping {
+        Map = MemoryMappedFile.CreateFromFile(path, FileMode.CreateNew, mapName: null, totalSize,
+          MemoryMappedFileAccess.ReadWrite),
+        DebugStreamName = path,
+        BackingFilePath = path
+      };
+    }
+
+    public void Dispose() {
+      Map.Dispose();
+
+      // Unlink the backing file so a monitor run does not leave DsSharedMemorySize bytes behind in
+      // the temp directory. Unix keeps the pages alive until the last munmap regardless of the
+      // directory entry, so this is safe even if the child is somehow still mapped.
+      if (BackingFilePath != null) File.Delete(BackingFilePath);
+    }
+  }
+
   /// The timestamp on the wire is a millisecond delta; the trace prints it as `+SSSS.mmm`.
   private const uint MillisecondsPerSecond = 1000;
 
@@ -461,57 +536,161 @@ public class DebugStreamMonitor {
   /// Section header: Name(8) VirtualSize(4) VirtualAddress(4), then SizeOfRawData and
   /// PointerToRawData back to back — which is why one seek here reads both.
   private const int SectionOffRawDataSize = 16;
-  /// Where the compiler puts its symdata, and so where both name blobs live.
+  /// Where the compiler puts its symdata in a PE image, and so where both name blobs live.
   private const string SymtabSectionName = ".symtab";
+  /// The DOS stub's "MZ", the first two bytes of every PE image.
+  private const ushort DosMzMagic = 0x5A4D;
+
+  // The slice of the Mach-O format this parser walks: mach_header_64 -> load commands ->
+  // LC_SEGMENT_64 -> its section_64 table. Named for the same reason the PE offsets above are:
+  // a bare `Seek(64)` in the middle of a walk is unverifiable by reading it.
+  private const uint MachO64Magic = 0xFEEDFACF;
+  private const int MachOHeaderSize = 32;
+  private const int MachOOffNumberOfCommands = 16;  // mach_header_64: ncmds
+  private const uint MachOLcSegment64 = 0x19;
+  private const int MachOSegmentOffName = 8;        // segment_command_64: cmd(4) cmdsize(4) segname(16)
+  private const int MachOSegmentOffNumberOfSections = 64;
+  /// sizeof(segment_command_64). Its section_64 table begins immediately after it.
+  private const int MachOSegmentHeaderSize = 72;
+  private const int MachOSectionHeaderSize = 80;
+  /// section_64's sectname and segname, and segment_command_64's segname, are all char[16].
+  private const int MachONameSize = 16;
+  /// section_64: sectname(16) segname(16) addr(8), then size and offset.
+  private const int MachOSectionOffSize = 40;
+  private const int MachOSectionOffFileOffset = 48;
+  /// Mach-O has no `.symtab`: 6-MachOWriter merges rdata, ucddata and symdata into ONE
+  /// __TEXT,__const section, so that is where both name blobs live.
+  private const string MachOTextSegmentName = "__TEXT";
+  private const string MachOConstSectionName = "__const";
 
   /// <summary>
-  /// Parse the PE executable to find the .symtab section, then scan it for a packed name-table
-  /// blob carrying <paramref name="magic"/>. Two blobs use this: MXDS_TAGS (mm allocation type
-  /// names) and MXDS_STRS (the names `__DebugStream` interned at compile time). One parser, so
-  /// the two can never drift apart on the format.
+  /// Find the section carrying the compiler's symdata, then scan it for a packed name-table blob
+  /// carrying <paramref name="magic"/>. Two blobs use this: MXDS_TAGS (mm allocation type names)
+  /// and MXDS_STRS (the names `__DebugStream` interned at compile time). ONE entry point and ONE
+  /// <see cref="ScanForNameBlob"/> under both container formats, so neither the two blobs nor the
+  /// two containers can drift apart on the format.
+  ///
+  /// The container is chosen by the file's MAGIC rather than by the monitor's own OS: the
+  /// compiler cross-compiles, so the executable in front of us need not match the machine reading
+  /// it. This dispatch did not exist — the parser was PE-only, and on a Mach-O binary it read
+  /// `e_lfanew`@0x3C as 0, believed the file had 256 sections and a 920-byte optional header,
+  /// found no `.symtab` in the megabyte of unrelated bytes it then walked, and a blanket catch
+  /// turned all of it into an empty table. Every name in the trace quietly became `tag=1`.
   /// </summary>
   private static string[] ReadNameTableFromExecutable(string exePath, byte[] magic) {
-    try {
-      using var fs = new FileStream(exePath, FileMode.Open, FileAccess.Read, FileShare.Read);
-      using var reader = new BinaryReader(fs);
+    using var fs = new FileStream(exePath, FileMode.Open, FileAccess.Read, FileShare.Read);
+    using var reader = new BinaryReader(fs);
 
-      fs.Seek(DosOffPeSignaturePointer, SeekOrigin.Begin);
-      long coff = reader.ReadUInt32() + PeSignatureSize;
+    uint fileMagic = reader.ReadUInt32();
 
-      // Each field is seeked to ABSOLUTELY, off the COFF base and its own named offset. This used
-      // to be a chain of relative reads and skips, and the chain was one field out of step:
-      // `numberOfSections` was seeked to COFF+0 and so actually read MACHINE — 0x8664 on x64. The
-      // section walk below was bounded by 34404 instead of 6, and only ever terminated because
-      // `.symtab` happens to appear early and returns. In a binary WITHOUT it, the walk reads a
-      // megabyte of unrelated file bytes as section headers, and any eight of them that spell
-      // ".symtab" hand ScanForNameBlob a garbage offset and length. The blanket catch below then
-      // turns that into an empty table — the names quietly stop resolving, and the trace lies.
-      fs.Seek(coff + CoffOffNumberOfSections, SeekOrigin.Begin);
-      int numberOfSections = reader.ReadUInt16();
+    // A failure here is LOUD. An executable whose name tables cannot be located is not an
+    // executable with no names in it: it is a monitor that will print `tag=1` for every event and
+    // a golden that will fail without ever saying why. That silence is what hid this bug.
+    var (sectionOffset, sectionSize) =
+      fileMagic == MachO64Magic ? FindMachOSymdataSection(fs, reader, exePath)
+      : (fileMagic & ushort.MaxValue) == DosMzMagic ? FindPeSymdataSection(fs, reader, exePath)
+      : throw new InvalidOperationException(
+          $"DebugStream: cannot read the interned name tables from '{exePath}': expected a PE "
+          + $"image (MZ) or a 64-bit Mach-O executable (magic 0x{MachO64Magic:X8}), but the file "
+          + $"begins 0x{fileMagic:X8}.");
 
-      fs.Seek(coff + CoffOffSizeOfOptionalHeader, SeekOrigin.Begin);
-      int sizeOfOptionalHeader = reader.ReadUInt16();
+    return ScanForNameBlob(fs, reader, sectionOffset, sectionSize, magic);
+  }
 
-      // The section table follows the optional header, whose size is the field just read.
-      long sectionTable = coff + CoffHeaderSize + sizeOfOptionalHeader;
+  /// <summary>
+  /// A NUL-PADDED fixed-width name field: PE's 8-byte section name, Mach-O's 16-byte segname and
+  /// sectname. All three pad rather than terminate, so the trailing NULs are trimmed off the full
+  /// width rather than scanned for.
+  /// </summary>
+  private static string ReadFixedName(FileStream fs, BinaryReader reader, long offset, int size) {
+    fs.Seek(offset, SeekOrigin.Begin);
+    return System.Text.Encoding.UTF8.GetString(reader.ReadBytes(size)).TrimEnd('\0');
+  }
 
-      for (int i = 0; i < numberOfSections; i++) {
-        long header = sectionTable + (long)i * SectionHeaderSize;
+  /// <summary>
+  /// The file offset and size of the PE image's <see cref="SymtabSectionName"/> section.
+  /// </summary>
+  private static (uint Offset, uint Size) FindPeSymdataSection(FileStream fs, BinaryReader reader,
+      string exePath) {
+    fs.Seek(DosOffPeSignaturePointer, SeekOrigin.Begin);
+    long coff = reader.ReadUInt32() + PeSignatureSize;
 
-        fs.Seek(header, SeekOrigin.Begin);
-        var name = System.Text.Encoding.UTF8.GetString(reader.ReadBytes(SectionNameSize)).TrimEnd('\0');
-        if (name != SymtabSectionName) continue;
+    // Each field is seeked to ABSOLUTELY, off the COFF base and its own named offset. This used
+    // to be a chain of relative reads and skips, and the chain was one field out of step:
+    // `numberOfSections` was seeked to COFF+0 and so actually read MACHINE — 0x8664 on x64. The
+    // section walk below was bounded by 34404 instead of 6, and only ever terminated because
+    // `.symtab` happens to appear early and returns.
+    fs.Seek(coff + CoffOffNumberOfSections, SeekOrigin.Begin);
+    int numberOfSections = reader.ReadUInt16();
 
-        fs.Seek(header + SectionOffRawDataSize, SeekOrigin.Begin);
-        uint rawDataSize = reader.ReadUInt32();
-        uint rawDataPointer = reader.ReadUInt32();
+    fs.Seek(coff + CoffOffSizeOfOptionalHeader, SeekOrigin.Begin);
+    int sizeOfOptionalHeader = reader.ReadUInt16();
 
-        return ScanForNameBlob(fs, reader, rawDataPointer, rawDataSize, magic);
-      }
-    } catch {
-      // PE parsing failed — return an empty table; the decoder falls back to raw indices
+    // The section table follows the optional header, whose size is the field just read.
+    long sectionTable = coff + CoffHeaderSize + sizeOfOptionalHeader;
+
+    for (int i = 0; i < numberOfSections; i++) {
+      long header = sectionTable + (long)i * SectionHeaderSize;
+      if (ReadFixedName(fs, reader, header, SectionNameSize) != SymtabSectionName) continue;
+
+      fs.Seek(header + SectionOffRawDataSize, SeekOrigin.Begin);
+      uint rawDataSize = reader.ReadUInt32();
+      uint rawDataPointer = reader.ReadUInt32();
+      return (rawDataPointer, rawDataSize);
     }
-    return [];
+
+    throw new InvalidOperationException(
+      $"DebugStream: PE image '{exePath}' has no '{SymtabSectionName}' section among its "
+      + $"{numberOfSections} sections; the interned name tables live there.");
+  }
+
+  /// <summary>
+  /// The file offset and size of <see cref="MachOTextSegmentName"/>,<see cref="MachOConstSectionName"/>
+  /// in a 64-bit Mach-O executable — the section 6-MachOWriter merges the compiler's symdata into.
+  /// </summary>
+  private static (uint Offset, uint Size) FindMachOSymdataSection(FileStream fs, BinaryReader reader,
+      string exePath) {
+    fs.Seek(MachOOffNumberOfCommands, SeekOrigin.Begin);
+    uint commandCount = reader.ReadUInt32();
+
+    long command = MachOHeaderSize;
+    for (uint i = 0; i < commandCount; i++) {
+      fs.Seek(command, SeekOrigin.Begin);
+      uint cmd = reader.ReadUInt32();
+      uint cmdSize = reader.ReadUInt32();
+
+      // Every load command advances the walk by its OWN size, so a zero-sized one does not merely
+      // mean a corrupt file — it means this loop never terminates. Say so instead of hanging.
+      if (cmdSize == 0)
+        throw new InvalidOperationException(
+          $"DebugStream: Mach-O '{exePath}' is corrupt: load command {i} (cmd 0x{cmd:X}) at file "
+          + $"offset {command} declares size 0.");
+
+      if (cmd == MachOLcSegment64
+          && ReadFixedName(fs, reader, command + MachOSegmentOffName, MachONameSize) == MachOTextSegmentName) {
+        fs.Seek(command + MachOSegmentOffNumberOfSections, SeekOrigin.Begin);
+        uint sectionCount = reader.ReadUInt32();
+
+        for (uint s = 0; s < sectionCount; s++) {
+          long section = command + MachOSegmentHeaderSize + (long)s * MachOSectionHeaderSize;
+          if (ReadFixedName(fs, reader, section, MachONameSize) != MachOConstSectionName) continue;
+
+          fs.Seek(section + MachOSectionOffSize, SeekOrigin.Begin);
+          ulong size = reader.ReadUInt64();
+
+          fs.Seek(section + MachOSectionOffFileOffset, SeekOrigin.Begin);
+          uint offset = reader.ReadUInt32();
+          return (offset, (uint)size);
+        }
+      }
+
+      command += cmdSize;
+    }
+
+    throw new InvalidOperationException(
+      $"DebugStream: Mach-O '{exePath}' has no '{MachOConstSectionName}' section in its "
+      + $"'{MachOTextSegmentName}' segment among its {commandCount} load commands; the interned "
+      + "name tables live there.");
   }
 
   /// <summary>

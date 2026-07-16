@@ -93,6 +93,18 @@ public static class GtLayout {
   public const int GtOffFaultRedirectFp = 0xD0;   // resume FP/RBP
   public const int GtStructSize = 0xD8;      // 216 bytes
 
+  // ---- Backtrace walk limits (shared by every backend's mrt_fault_backtrace) ----
+
+  // Cap the frame-pointer-chain walk so a corrupt or cyclic chain can't spin the
+  // backtrace forever.
+  public const int MaxBacktraceFrames = 32;
+
+  // Sane upper bound on a single stack's span — larger than any OS thread or grown
+  // green-thread stack. A faulting-thread frame pointer outside
+  // [fault_sp, fault_sp + this) is treated as corrupt and ends the walk instead of
+  // dereferencing an unmapped page.
+  public const long FaultStackWindowBytes = 0x4000000; // 64 MiB
+
   // ---- GT status values ----
   public const int GtStatusReady = 0;
   public const int GtStatusRunning = 1;

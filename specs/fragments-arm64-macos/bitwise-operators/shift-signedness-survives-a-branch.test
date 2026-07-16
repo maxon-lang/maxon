@@ -1,0 +1,124 @@
+// Test: shift-signedness-survives-a-branch
+typealias Wide = int(0 to u64.max)
+typealias Num = int(i64.min to i64.max)
+
+function afterBranch(v Wide, flag bool) returns Wide
+	if flag 'taken'
+		return v shr 60
+	end 'taken'
+	return 0
+end 'afterBranch'
+
+function insideLoop(v Wide, n Num) returns Wide
+	var acc = 0
+	var i = 0
+	while i < n 'each'
+		acc = v shr 60
+		i = i + 1
+	end 'each'
+	return acc
+end 'insideLoop'
+
+function main() returns ExitCode
+	if afterBranch(u64.max, flag: true) != 15 'branch'
+		return 1
+	end 'branch'
+	if insideLoop(u64.max, n: 3) != 15 'loop'
+		return 2
+	end 'loop'
+	return 42
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @afterBranch(v: i64, flag: i1) -> u64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.cmp x1, #0
+    arm64.b.ne afterBranch.taken_0
+    arm64.b afterBranch.taken_0.after
+  taken_0:
+    arm64.mov x0, #60
+    arm64.ldr x1, [x29, #-8]
+    arm64.lsrv x2, x1, x0
+    arm64.mov x0, x2
+    arm64.epilogue stack_size=48
+    arm64.ret
+  taken_0.after:
+    arm64.mov x0, #0
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @insideLoop(v: i64, n: i64) -> u64 {
+  entry:
+    arm64.prologue stack_size=80
+    arm64.str x0, [x29, #-8]
+    arm64.str x1, [x29, #-16]
+    arm64.mov x0, #0
+    arm64.str x0, [x29, #-24]
+    arm64.mov x1, #0
+    arm64.str x1, [x29, #-32]
+    arm64.b insideLoop.each_0.header
+  each_0.header:
+    arm64.ldr x0, [x29, #-32]
+    arm64.ldr x1, [x29, #-16]
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.cmp x2, #0
+    arm64.b.ne insideLoop.each_0
+    arm64.b insideLoop.each_0.exit
+  each_0:
+    arm64.mov x0, #60
+    arm64.ldr x1, [x29, #-8]
+    arm64.lsrv x2, x1, x0
+    arm64.str x2, [x29, #-24]
+    arm64.mov x3, #1
+    arm64.ldr x4, [x29, #-32]
+    arm64.add x5, x4, x3
+    arm64.str x5, [x29, #-32]
+    arm64.b insideLoop.each_0.header
+  each_0.exit:
+    arm64.ldr x0, [x29, #-24]
+    arm64.epilogue stack_size=80
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x0, #-1
+    arm64.mov x1, #1
+    arm64.bl afterBranch
+    arm64.mov x1, #15
+    arm64.cmp x0, x1
+    arm64.cset x2, ne
+    arm64.cmp x2, #0
+    arm64.b.ne main.branch_0
+    arm64.b main.branch_0.after
+  branch_0:
+    arm64.mov x0, #1
+    arm64.epilogue stack_size=16
+    arm64.ret
+  branch_0.after:
+    arm64.mov x0, #-1
+    arm64.mov x1, #3
+    arm64.bl insideLoop
+    arm64.mov x1, #15
+    arm64.cmp x0, x1
+    arm64.cset x2, ne
+    arm64.cmp x2, #0
+    arm64.b.ne main.loop_0
+    arm64.b main.loop_0.after
+  loop_0:
+    arm64.mov x0, #2
+    arm64.epilogue stack_size=16
+    arm64.ret
+  loop_0.after:
+    arm64.mov x0, #42
+    arm64.epilogue stack_size=16
+    arm64.ret
+  }
+}
+---

@@ -1,0 +1,279 @@
+// Test: bare-union-case-as-struct-field-init
+union Env
+	inherit
+	set(vars StringArray)
+end 'Env'
+
+union In
+	none
+	bytes(data String)
+end 'In'
+
+type Cfg
+	export var env as Env
+	export var input as In
+
+	export static function create() returns Cfg
+		return Cfg{env: Env.inherit, input: In.none}
+	end 'create'
+end 'Cfg'
+
+function main() returns ExitCode
+	let c = Cfg.create()
+	let e = match c.env 'e'
+		inherit gives 0
+		set(v) gives v.count()
+	end 'e'
+	let i = match c.input 'i'
+		none gives 0
+		bytes(d) gives d.byteLength()
+	end 'i'
+	return e + i
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @Cfg.create() -> i64 {
+  entry:
+    arm64.prologue stack_size=80
+    arm64.adrp_add_func x0, __destruct_Env
+    arm64.mov x1, x0
+    arm64.mov x0, #16
+    arm64.mov x2, #2
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-8]
+    arm64.mov x2, #0
+    arm64.str x2, [x0, #0]
+    arm64.mov x3, #0
+    arm64.str x3, [x0, #8]
+    arm64.adrp_add_func x4, __destruct_In
+    arm64.mov x5, x4
+    arm64.mov x1, x5
+    arm64.mov x0, #16
+    arm64.mov x2, #3
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-16]
+    arm64.mov x6, #0
+    arm64.str x6, [x0, #0]
+    arm64.mov x7, #0
+    arm64.str x7, [x0, #8]
+    arm64.adrp_add_func x8, __destruct_Cfg
+    arm64.mov x9, x8
+    arm64.mov x1, x9
+    arm64.mov x0, #16
+    arm64.mov x2, #4
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-24]
+    arm64.ldr x10, [x29, #-8]
+    arm64.ldr x11, [x29, #-24]
+    arm64.str x10, [x11, #0]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x12, [x29, #-16]
+    arm64.ldr x14, [x29, #-24]
+    arm64.str x12, [x14, #8]
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_incref
+    arm64.ldr x15, [x29, #-24]
+    arm64.ldr x0, [x29, #-24]
+    arm64.bl mm_incref
+    arm64.ldr x0, [x29, #-24]
+    arm64.epilogue stack_size=80
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=224
+    arm64.bl Cfg.create
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.str x1, [x29, #-16]
+    arm64.ldr x2, [x29, #-16]
+    arm64.ldr x3, [x2, #0]
+    arm64.str x1, [x29, #-24]
+    arm64.mov x4, #0
+    arm64.str x4, [x29, #-32]
+    arm64.str x3, [x29, #-40]
+    arm64.b main.e_0.cmp0
+  e_0.cmp0:
+    arm64.ldr x0, [x29, #-40]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne main.e_0.case0
+    arm64.b main.e_0.cmp1
+  e_0.case0:
+    arm64.mov x0, #0
+    arm64.str x0, [x29, #-32]
+    arm64.b main.e_0.merge
+  e_0.cmp1:
+    arm64.ldr x0, [x29, #-40]
+    arm64.mov x1, #1
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne main.e_0.case1
+    arm64.b main.e_0.merge
+  e_0.case1:
+    arm64.ldr x0, [x29, #-24]
+    arm64.ldr x1, [x0, #8]
+    arm64.str x1, [x29, #-48]
+    arm64.ldr x2, [x29, #-48]
+    arm64.ldr x0, [x29, #-48]
+    arm64.bl StringArray.count
+    arm64.str x0, [x29, #-32]
+    arm64.b main.e_0.merge
+  e_0.merge:
+    arm64.ldr x0, [x29, #-32]
+    arm64.str x0, [x29, #-56]
+    arm64.ldr x1, [x29, #-8]
+    arm64.ldr x2, [x1, #8]
+    arm64.str x2, [x29, #-64]
+    arm64.ldr x3, [x29, #-64]
+    arm64.ldr x4, [x3, #0]
+    arm64.str x2, [x29, #-72]
+    arm64.mov x5, #0
+    arm64.str x5, [x29, #-80]
+    arm64.str x4, [x29, #-88]
+    arm64.b main.i_0.cmp0
+  i_0.cmp0:
+    arm64.ldr x0, [x29, #-88]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne main.i_0.case0
+    arm64.b main.i_0.cmp1
+  i_0.case0:
+    arm64.mov x0, #0
+    arm64.str x0, [x29, #-80]
+    arm64.b main.i_0.merge
+  i_0.cmp1:
+    arm64.ldr x0, [x29, #-88]
+    arm64.mov x1, #1
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne main.i_0.case1
+    arm64.b main.i_0.merge
+  i_0.case1:
+    arm64.ldr x0, [x29, #-72]
+    arm64.ldr x1, [x0, #8]
+    arm64.str x1, [x29, #-96]
+    arm64.ldr x2, [x29, #-96]
+    arm64.ldr x3, [x2, #8]
+    arm64.str x3, [x29, #-80]
+    arm64.b main.i_0.merge
+  i_0.merge:
+    arm64.ldr x0, [x29, #-80]
+    arm64.ldr x1, [x29, #-56]
+    arm64.add x2, x1, x0
+    arm64.mov x3, #0
+    arm64.cmp x2, x3
+    arm64.cset x4, lt
+    arm64.mov x5, #255
+    arm64.cmp x2, x5
+    arm64.cset x6, gt
+    arm64.orr x7, x4, x6
+    arm64.cmp x7, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_2
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.str x2, [x29, #-104]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_73
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_73
+    arm64.ldr x0, [x29, #-104]
+    arm64.epilogue stack_size=224
+    arm64.ret
+  }
+  func @__destruct_Env(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.mov x2, #1
+    arm64.cmp x1, x2
+    arm64.cset x3, eq
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct_Env.case_0
+    arm64.b __destruct_Env.done
+  case_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #8]
+    arm64.str x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq __destruct_Env.__skip_guarded_9
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label __destruct_Env.__skip_guarded_9
+    arm64.b __destruct_Env.done
+  done:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @__destruct_In(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.mov x2, #1
+    arm64.cmp x1, x2
+    arm64.cset x3, eq
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct_In.case_0
+    arm64.b __destruct_In.done
+  case_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #8]
+    arm64.str x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq __destruct_In.__skip_guarded_9
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label __destruct_In.__skip_guarded_9
+    arm64.b __destruct_In.done
+  done:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @__destruct_Cfg(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=64
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.str x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq __destruct_Cfg.__skip_guarded_4
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label __destruct_Cfg.__skip_guarded_4
+    arm64.ldr x2, [x29, #-8]
+    arm64.ldr x3, [x2, #8]
+    arm64.str x3, [x29, #-24]
+    arm64.cmp x3, #0
+    arm64.b.eq __destruct_Cfg.__skip_guarded_7
+    arm64.ldr x0, [x29, #-24]
+    arm64.bl mm_decref
+    arm64.label __destruct_Cfg.__skip_guarded_7
+    arm64.b __destruct_Cfg.done
+  done:
+    arm64.epilogue stack_size=64
+    arm64.ret
+  }
+}
+---

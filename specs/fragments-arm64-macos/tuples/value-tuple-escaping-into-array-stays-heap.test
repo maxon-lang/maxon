@@ -1,0 +1,235 @@
+// Test: value-tuple-escaping-into-array-stays-heap
+typealias Num = int(0 to 1000)
+typealias Pair = (Num, Num)
+typealias PairArray = Array with Pair
+
+function pair(a Num, b Num) returns (Num, Num)
+	return (a + 1, b + 2)
+end 'pair'
+
+function stash(xs PairArray) returns (Num, Num)
+	let p = pair(10, b: 20)
+	xs.push(p)
+	return p
+end 'stash'
+
+function main() returns ExitCode
+	var xs = PairArray.create()
+	let r = stash(xs)
+	let q = try xs.get(0) otherwise panic("element 0 was just pushed")
+	return r._0 + r._1 + q._0 + q._1
+end 'main'
+---
+ExitCode: 66
+---
+// CompiledIR
+module {
+  func @pair(a: i64, b: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x2, #1
+    arm64.add x3, x0, x2
+    arm64.mov x0, #2
+    arm64.add x2, x1, x0
+    arm64.mov x1, #0
+    arm64.str x1, [x29, #-8]
+    arm64.mov x0, #0
+    arm64.str x0, [x29, #-16]
+    arm64.str x3, [x29, #-16]
+    arm64.str x2, [x29, #-8]
+    arm64.ldr x2, [x29, #-16]
+    arm64.ldr x3, [x29, #-8]
+    arm64.mov x13, x3
+    arm64.mov x0, x2
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @stash(xs: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=112
+    arm64.str x0, [x29, #-8]
+    arm64.mov x0, #10
+    arm64.mov x1, #20
+    arm64.bl pair
+    arm64.str x0, [x29, #-32]
+    arm64.str x13, [x29, #-40]
+    arm64.mov x0, #16
+    arm64.mov x1, #0
+    arm64.mov x2, #1
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-16]
+    arm64.ldr x1, [x29, #-16]
+    arm64.ldr x2, [x29, #-32]
+    arm64.str x2, [x1, #0]
+    arm64.ldr x1, [x29, #-16]
+    arm64.ldr x2, [x29, #-40]
+    arm64.str x2, [x1, #8]
+    arm64.bl mm_incref
+    arm64.ldr x0, [x29, #-16]
+    arm64.str x0, [x29, #-24]
+    arm64.ldr x1, [x29, #-8]
+    arm64.ldr x2, [x29, #-24]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-24]
+    arm64.bl PairArray.push
+    arm64.ldr x3, [x29, #-24]
+    arm64.ldr x4, [x3, #0]
+    arm64.ldr x5, [x29, #-24]
+    arm64.ldr x6, [x5, #8]
+    arm64.ldr x7, [x29, #-24]
+    arm64.str x4, [x29, #-48]
+    arm64.str x6, [x29, #-56]
+    arm64.cmp x7, #0
+    arm64.b.eq stash.__skip_guarded_24
+    arm64.ldr x0, [x29, #-24]
+    arm64.bl mm_decref
+    arm64.label stash.__skip_guarded_24
+    arm64.ldr x13, [x29, #-56]
+    arm64.ldr x0, [x29, #-48]
+    arm64.epilogue stack_size=112
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=112
+    arm64.bl PairArray.create
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl stash
+    arm64.mov x1, #0
+    arm64.str x1, [x29, #-16]
+    arm64.mov x2, #0
+    arm64.str x2, [x29, #-24]
+    arm64.str x0, [x29, #-24]
+    arm64.str x13, [x29, #-16]
+    arm64.ldr x3, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.mov x1, #0
+    arm64.bl PairArray.get
+    arm64.str x0, [x29, #-32]
+    arm64.mov x4, #0
+    arm64.cmp x1, x4
+    arm64.cset x5, ne
+    arm64.cmp x5, #0
+    arm64.b.ne main.otherwise_panic_0
+    arm64.b main.otherwise_continue_0
+  otherwise_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_0
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  otherwise_continue_0:
+    arm64.ldr x0, [x29, #-32]
+    arm64.str x0, [x29, #-40]
+    arm64.ldr x1, [x29, #-40]
+    arm64.ldr x0, [x29, #-40]
+    arm64.bl mm_incref
+    arm64.ldr x2, [x29, #-24]
+    arm64.ldr x3, [x29, #-16]
+    arm64.add x4, x2, x3
+    arm64.ldr x5, [x29, #-40]
+    arm64.ldr x6, [x5, #0]
+    arm64.add x7, x4, x6
+    arm64.ldr x8, [x29, #-40]
+    arm64.ldr x9, [x8, #8]
+    arm64.add x10, x7, x9
+    arm64.mov x11, #0
+    arm64.cmp x10, x11
+    arm64.cset x12, lt
+    arm64.mov x14, #255
+    arm64.cmp x10, x14
+    arm64.cset x15, gt
+    arm64.orr x0, x12, x15
+    arm64.cmp x0, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_1
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.ldr x0, [x29, #-32]
+    arm64.str x10, [x29, #-48]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_40
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_40
+    arm64.ldr x1, [x29, #-40]
+    arm64.cmp x1, #0
+    arm64.b.eq main.__skip_guarded_42
+    arm64.ldr x0, [x29, #-40]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_42
+    arm64.ldr x2, [x29, #-8]
+    arm64.cmp x2, #0
+    arm64.b.eq main.__skip_guarded_44
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_44
+    arm64.ldr x0, [x29, #-48]
+    arm64.epilogue stack_size=112
+    arm64.ret
+  }
+  func @__destruct___Tuple_i64_i64(ptr: i64) {
+  entry:
+    arm64.b __destruct___Tuple_i64_i64.done
+  done:
+    arm64.ret
+  }
+  func @__destruct_PairArray(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #16]
+    arm64.mov x2, #-1
+    arm64.cmp x1, x2
+    arm64.cset x3, eq
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct_PairArray.slice_cleanup_0
+    arm64.b __destruct_PairArray.check_owned_0
+  slice_cleanup_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #32]
+    arm64.str x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq __destruct_PairArray.__skip_guarded_9
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label __destruct_PairArray.__skip_guarded_9
+    arm64.b __destruct_PairArray.skip_buf_0
+  check_owned_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #16]
+    arm64.mov x2, #-2
+    arm64.cmp x1, x2
+    arm64.cset x3, ne
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct_PairArray.free_buf_0
+    arm64.b __destruct_PairArray.skip_buf_0
+  free_buf_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref_managed_elements
+    arm64.ldr x1, [x29, #-8]
+    arm64.ldr x2, [x1, #32]
+    arm64.mov x3, #-3
+    arm64.cmp x2, x3
+    arm64.cset x4, ne
+    arm64.cmp x4, #0
+    arm64.b.ne __destruct_PairArray.raw_free_0
+    arm64.b __destruct_PairArray.skip_buf_0
+  raw_free_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.mov x0, x1
+    arm64.bl mm_raw_free
+    arm64.b __destruct_PairArray.skip_buf_0
+  skip_buf_0:
+    arm64.b __destruct_PairArray.done
+  done:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+}
+---

@@ -1,0 +1,118 @@
+// Test: first-class-function.non-capturing-closure-in-union-payload
+
+typealias Integer = int(i64.min to i64.max)
+typealias UnaryOp = function(Integer) returns Integer
+
+union Action
+	run(op UnaryOp)
+	idle
+end 'Action'
+
+function make() returns Action
+	return Action.run(function(n Integer) gives n + 1)
+end 'make'
+
+function main() returns ExitCode
+	let a = make()
+	match a 'go'
+		run then return 42
+		idle then return 1
+	end 'go'
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @make() -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.adrp_add_func x0, _$closure_12
+    arm64.str x0, [x29, #-16]
+    arm64.mov x0, #16
+    arm64.mov x1, #0
+    arm64.mov x2, #11
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-8]
+    arm64.mov x1, #0
+    arm64.str x1, [x0, #0]
+    arm64.ldr x2, [x29, #-16]
+    arm64.str x2, [x0, #8]
+    arm64.ldr x3, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x4, [x29, #-8]
+    arm64.mov x0, x4
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=80
+    arm64.bl make
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-8]
+    arm64.ldr x2, [x1, #0]
+    arm64.str x0, [x29, #-16]
+    arm64.ldr x0, [x29, #-16]
+    arm64.str x2, [x29, #-32]
+    arm64.bl mm_incref
+    arm64.ldr x1, [x29, #-32]
+    arm64.str x1, [x29, #-24]
+    arm64.b main.go_0.cmp0
+  go_0.cmp0:
+    arm64.ldr x0, [x29, #-24]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne main.go_0.case0
+    arm64.b main.go_0.cmp1
+  go_0.case0:
+    arm64.ldr x0, [x29, #-16]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_15
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_15
+    arm64.ldr x1, [x29, #-8]
+    arm64.cmp x1, #0
+    arm64.b.eq main.__skip_guarded_17
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_17
+    arm64.mov x0, #42
+    arm64.epilogue stack_size=80
+    arm64.ret
+  go_0.cmp1:
+    arm64.ldr x0, [x29, #-24]
+    arm64.mov x1, #1
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne main.go_0.case1
+    arm64.b main.go_0.merge
+  go_0.case1:
+    arm64.ldr x0, [x29, #-16]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_25
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_25
+    arm64.ldr x1, [x29, #-8]
+    arm64.cmp x1, #0
+    arm64.b.eq main.__skip_guarded_27
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_27
+    arm64.mov x0, #1
+    arm64.epilogue stack_size=80
+    arm64.ret
+  go_0.merge:
+  }
+  func @__destruct_Action(ptr: i64) {
+  entry:
+    arm64.b __destruct_Action.done
+  done:
+    arm64.ret
+  }
+}
+---

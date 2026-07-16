@@ -55,181 +55,376 @@ ExitCode: 1
 ---
 // CompiledIR
 module {
-  func @IntList.current(x0: i64) -> i64 {
+  func @IntList.has(__self_ptr: i64, target: i64) -> i1 {
   entry:
-    arm64.prologue stack_size=16
-    arm64.ldr x1, [x0, #8] (8b)
-    arm64.ldr x2, [x0, #0] (8b)
-  inlined_Array.get_0_0:
-    arm64.ldr x0, [x2, #0] (8b)
-    arm64.bl stdlib.__managed_mem_get
-    arm64.mov x2, #0
-    arm64.cmp x1, x2
-    arm64.cset x1, ne
-    arm64.b.eq inlined_Array.get_3_0
-  inlined_Array.get_1_0:
-    arm64.mov x1, #1
+    arm64.prologue stack_size=80
+    arm64.str x1, [x29, #-8]
+    arm64.str x0, [x29, #-16]
+    arm64.b IntList.has.loop_0.preamble
+  loop_0.preamble:
+    arm64.b IntList.has.loop_0
+  loop_0.header:
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl IntList.advance
     arm64.mov x0, #0
-    arm64.b inline_cont_IntList.current_0
-  inlined_Array.get_3_0:
-    arm64.mov x1, #0
-  inline_cont_IntList.current_0:
-    arm64.mov x2, #0
+    arm64.cmp x1, x0
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne IntList.has.loop_0
+    arm64.b IntList.has.loop_0.exit
+  loop_0:
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl IntList.current
+    arm64.str x0, [x29, #-24]
+    arm64.ldr x1, [x29, #-24]
+    arm64.ldr x2, [x29, #-8]
     arm64.cmp x1, x2
-    arm64.cset x1, ne
-    arm64.b.eq try_0.merge
-  try_0.otherwise:
-    arm64.adrp_add_rdata x0, __panic_msg_ac4bee69670cfe07
-    arm64.ldr x19, [x29, #16]
-    arm64.mov x0, x19
-    arm64.bl mrt_panic
-    arm64.mov x0, #0
-    arm64.epilogue
+    arm64.cset x3, eq
+    arm64.cmp x3, #0
+    arm64.b.ne IntList.has.found_0
+    arm64.b IntList.has.found_0.after
+  found_0:
+    arm64.mov x0, #1
+    arm64.epilogue stack_size=80
     arm64.ret
-  try_0.merge:
-    arm64.epilogue
+  found_0.after:
+    arm64.b IntList.has.loop_0.header
+  loop_0.exit:
+    arm64.mov x0, #0
+    arm64.epilogue stack_size=80
     arm64.ret
   }
-  func @IntList.create(x0: i64) -> i64 {
+  func @IntList.current(__self_ptr: i64) -> i64 {
   entry:
-    arm64.prologue stack_size=32
-    arm64.mov x19, x0
-    arm64.adrp_add_rdata x0, __layout_Array_Integer
-    arm64.ldr x1, [x29, #16]
-    arm64.mov x0, x19
-    arm64.bl Array.count
+    arm64.prologue stack_size=80
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #8]
+    arm64.ldr x2, [x29, #-8]
+    arm64.ldr x3, [x2, #0]
+    arm64.str x3, [x29, #-16]
+    arm64.ldr x4, [x29, #-16]
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl IntegerArray.get
+    arm64.str x0, [x29, #-24]
+    arm64.mov x5, #0
+    arm64.cmp x1, x5
+    arm64.cset x6, ne
+    arm64.cmp x6, #0
+    arm64.b.ne IntList.current.otherwise_panic_0
+    arm64.b IntList.current.otherwise_continue_0
+  otherwise_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_0
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  otherwise_continue_0:
+    arm64.ldr x0, [x29, #-24]
+    arm64.epilogue stack_size=80
+    arm64.ret
+  }
+  func @IntList.advance(__self_ptr: i64) {
+  entry:
+    arm64.prologue stack_size=64
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #8]
+    arm64.mov x2, #1
+    arm64.add x3, x1, x2
+    arm64.ldr x4, [x29, #-8]
+    arm64.ldr x5, [x4, #0]
+    arm64.str x5, [x29, #-16]
+    arm64.ldr x6, [x29, #-16]
+    arm64.str x3, [x29, #-24]
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl IntegerArray.count
+    arm64.ldr x7, [x29, #-24]
+    arm64.cmp x7, x0
+    arm64.cset x8, ge
+    arm64.cmp x8, #0
+    arm64.b.ne IntList.advance.done_0
+    arm64.b IntList.advance.done_0.after
+  done_0:
+    arm64.mov x0, #0
+    arm64.mov x1, #1
+    arm64.add x2, x0, x1
+    arm64.mov x1, x2
+    arm64.mov x0, #0
+    arm64.epilogue stack_size=64
+    arm64.ret
+  done_0.after:
+    arm64.mov x0, #1
+    arm64.ldr x1, [x29, #-8]
+    arm64.ldr x2, [x1, #8]
+    arm64.add x3, x2, x0
+    arm64.ldr x4, [x29, #-8]
+    arm64.str x3, [x4, #8]
+    arm64.mov x1, #0
+    arm64.epilogue stack_size=64
+    arm64.ret
+  }
+  func @IntList.create(data: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl IntegerArray.count
     arm64.mov x1, #0
     arm64.cmp x0, x1
-    arm64.cset x0, eq
-    arm64.b.ne empty_0.after
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne IntList.create.empty_0
+    arm64.b IntList.create.empty_0.after
   empty_0:
-    arm64.mov x0, x19
-    arm64.bl __mm_decref_maybenull_helper
-    arm64.mov x1, #1
     arm64.mov x0, #0
-    arm64.epilogue
+    arm64.mov x1, #1
+    arm64.add x2, x0, x1
+    arm64.mov x1, x2
+    arm64.mov x0, #0
+    arm64.epilogue stack_size=48
     arm64.ret
   empty_0.after:
-    arm64.adrp+add x1, __destruct_IntList
+    arm64.mov x0, #0
+    arm64.adrp_add_func x1, __destruct_IntList
+    arm64.mov x2, x1
+    arm64.mov x1, x2
     arm64.mov x0, #16
-    arm64.bl stdlib.__mm_alloc
-    arm64.mov x20, x0
-    arm64.mov x0, x20
-    arm64.bl stdlib.__mm_incref
-    arm64.mov x0, #0
-    arm64.str x0, [x20, #0] (8b)
-    arm64.str x19, [x20, #0] (8b)
-    arm64.mov x0, #0
-    arm64.str x0, [x20, #8] (8b)
+    arm64.mov x2, #1
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-16]
+    arm64.ldr x3, [x29, #-8]
+    arm64.ldr x4, [x29, #-16]
+    arm64.str x3, [x4, #0]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x5, [x29, #-16]
+    arm64.mov x6, #0
+    arm64.str x6, [x5, #8]
+    arm64.ldr x7, [x29, #-16]
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_incref
+    arm64.ldr x8, [x29, #-16]
+    arm64.mov x0, x8
     arm64.mov x1, #0
-    arm64.mov x0, x20
-    arm64.epilogue
+    arm64.epilogue stack_size=48
     arm64.ret
   }
   func @main() -> u8 {
   entry:
-    arm64.prologue stack_size=48
-    arm64.adrp+add x1, stdlib.__destruct___ManagedMemory
-    arm64.mov x0, #48
-    arm64.bl stdlib.__mm_alloc
-    arm64.mov x19, x0
-    arm64.mov x0, x19
-    arm64.bl stdlib.__mm_incref
-    arm64.adrp_add_rdata x0, __rdata_arr_main_0
-    arm64.ldr x0, [x29, #16]
-    arm64.str x0, [x19, #0] (8b)
-    arm64.mov x0, #3
-    arm64.str x0, [x19, #8] (8b)
-    arm64.mov x0, #-2
-    arm64.str x0, [x19, #16] (8b)
-    arm64.mov x0, #8
-    arm64.str x0, [x19, #24] (8b)
-    arm64.mov x0, #-2
-    arm64.str x0, [x19, #32] (8b)
-    arm64.mov x20, #0
-    arm64.str x20, [x19, #40] (8b)
-    arm64.adrp_add_rdata x0, __layout_Array_Int
-    arm64.ldr x1, [x29, #16]
-    arm64.mov x0, x19
-    arm64.bl Array.init
-    arm64.bl IntList.create
-    arm64.mov x19, x0
-    arm64.mov x0, x1
-    arm64.cmp x0, x20
-    arm64.cset x0, ne
-    arm64.b.eq try_0.merge
-  try_0.otherwise:
-    arm64.mov x0, #2
-    arm64.epilogue
-    arm64.ret
-  try_0.merge:
+    arm64.prologue stack_size=128
+    arm64.mov x0, #10
     arm64.mov x1, #20
-    arm64.mov x0, x19
-    arm64.bl IntList.has
-    arm64.mov x21, x0
-    arm64.mov x0, x19
-    arm64.bl __mm_decref_maybenull_helper
-    arm64.cmp x21, #0
-    arm64.b.eq yes_0.after
-  yes_0:
-    arm64.mov x0, #1
-    arm64.epilogue
-    arm64.ret
-  yes_0.after:
-    arm64.mov x0, x20
-    arm64.epilogue
-    arm64.ret
-  }
-  func @IntList.has(x0: i64, x1: i64) -> i1 {
-  entry:
-    arm64.prologue stack_size=48
-    arm64.mov x19, x0
-    arm64.mov x20, x1
-    arm64.b loop_0
-  inlined_IntList.advance_0_0:
-    arm64.ldr x1, [x19, #0] (8b)
-    arm64.ldr x21, [x19, #8] (8b)
-    arm64.adrp_add_rdata x0, __layout_Array_Integer
-    arm64.ldr x2, [x29, #16]
-    arm64.mov x0, x1
-    arm64.mov x1, x2
-    arm64.bl Array.count
-    arm64.mov x1, #1
-    arm64.add x2, x21, x1
-    arm64.cmp x2, x0
-    arm64.cset x0, ge
-    arm64.b.lt inlined_IntList.advance_2_0
-  inlined_IntList.advance_1_0:
-    arm64.mov x1, #1
-    arm64.mov x0, #0
-    arm64.b inline_cont_IntList.has_0
-  inlined_IntList.advance_2_0:
-    arm64.ldr x0, [x19, #8] (8b)
-    arm64.mov x1, #1
-    arm64.add x2, x0, x1
-    arm64.str x2, [x19, #8] (8b)
+    arm64.mov x2, #30
+    arm64.str x2, [x29, #-8]
+    arm64.str x1, [x29, #-16]
+    arm64.str x0, [x29, #-24]
+    arm64.mov x3, #0
+    arm64.mov x4, #3
+    arm64.mov x5, #0
+    arm64.mov x6, #8
+    arm64.mov x7, #0
+    arm64.adrp_add_func x8, __destruct___Array_i64
+    arm64.mov x9, x8
+    arm64.mov x1, x9
+    arm64.mov x0, #64
+    arm64.mov x2, #2
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-32]
+    arm64.ldr x10, [x29, #-32]
+    arm64.mov x11, #0
+    arm64.str x11, [x10, #0]
+    arm64.ldr x12, [x29, #-32]
+    arm64.mov x14, #3
+    arm64.str x14, [x12, #8]
+    arm64.ldr x15, [x29, #-32]
     arm64.mov x1, #0
+    arm64.str x1, [x15, #16]
+    arm64.ldr x1, [x29, #-32]
+    arm64.mov x2, #8
+    arm64.str x2, [x1, #24]
+    arm64.ldr x1, [x29, #-32]
+    arm64.mov x2, #0
+    arm64.str x2, [x1, #32]
+    arm64.ldr x1, [x29, #-32]
+    arm64.ldr x2, [x1, #24]
+    arm64.adrp_add_symdata x1, __mm_panic_element_size_zero
+    arm64.mov x3, x1
+    arm64.mov x1, x2
+    arm64.mov x2, x3
     arm64.mov x0, #0
-  inline_cont_IntList.has_0:
+    arm64.bl maxon_bounds_check
+    arm64.add x0, x29, #-24
+    arm64.mov x1, x0
+    arm64.ldr x0, [x29, #-32]
+    arm64.ldr x2, [x0, #24]
+    arm64.mov x0, #3
+    arm64.mul x3, x0, x2
+    arm64.mov x0, #40
+    arm64.ldr x2, [x29, #-32]
+    arm64.add x4, x2, x0
+    arm64.str x4, [x29, #-56]
+    arm64.ldr x0, [x29, #-56]
+    arm64.mov x2, x3
+    arm64.bl maxon_memcpy
+    arm64.ldr x1, [x29, #-32]
+    arm64.ldr x2, [x29, #-56]
+    arm64.str x2, [x1, #0]
+    arm64.mov x1, #3
+    arm64.ldr x2, [x29, #-32]
+    arm64.str x1, [x2, #16]
+    arm64.mov x1, #-3
+    arm64.ldr x2, [x29, #-32]
+    arm64.str x1, [x2, #32]
+    arm64.str x0, [x29, #-64]
+    arm64.ldr x0, [x29, #-32]
+    arm64.bl mm_incref
+    arm64.ldr x0, [x29, #-32]
+    arm64.bl IntList.create
+    arm64.str x0, [x29, #-40]
     arm64.mov x0, #0
     arm64.cmp x1, x0
-    arm64.cset x0, ne
-    arm64.b.eq loop_0
-    arm64.b loop_0.exit
-  loop_0:
-    arm64.mov x0, x19
-    arm64.bl IntList.current
-    arm64.cmp x0, x20
-    arm64.cset x0, eq
-    arm64.b.ne inlined_IntList.advance_0_0
-    arm64.b found_0
-  loop_0.exit:
-    arm64.mov x0, #0
-    arm64.epilogue
+    arm64.cset x2, ne
+    arm64.cmp x2, #0
+    arm64.b.ne main.otherwise_stmt_0
+    arm64.b main.otherwise_continue_0
+  otherwise_stmt_0:
+    arm64.ldr x0, [x29, #-40]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_60
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_60
+    arm64.ldr x1, [x29, #-32]
+    arm64.cmp x1, #0
+    arm64.b.eq main.__skip_guarded_62
+    arm64.ldr x0, [x29, #-32]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_62
+    arm64.mov x0, #2
+    arm64.epilogue stack_size=128
     arm64.ret
-  found_0:
+  otherwise_continue_0:
+    arm64.ldr x0, [x29, #-40]
+    arm64.str x0, [x29, #-48]
+    arm64.ldr x1, [x29, #-48]
+    arm64.ldr x0, [x29, #-48]
+    arm64.bl mm_incref
+    arm64.ldr x2, [x29, #-48]
+    arm64.ldr x0, [x29, #-48]
+    arm64.mov x1, #20
+    arm64.bl IntList.has
+    arm64.cmp x0, #0
+    arm64.b.ne main.yes_0
+    arm64.b main.yes_0.after
+  yes_0:
+    arm64.ldr x0, [x29, #-40]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_74
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_74
+    arm64.ldr x1, [x29, #-48]
+    arm64.cmp x1, #0
+    arm64.b.eq main.__skip_guarded_76
+    arm64.ldr x0, [x29, #-48]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_76
+    arm64.ldr x2, [x29, #-32]
+    arm64.cmp x2, #0
+    arm64.b.eq main.__skip_guarded_78
+    arm64.ldr x0, [x29, #-32]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_78
     arm64.mov x0, #1
-    arm64.epilogue
+    arm64.epilogue stack_size=128
+    arm64.ret
+  yes_0.after:
+    arm64.ldr x0, [x29, #-40]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_82
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_82
+    arm64.ldr x1, [x29, #-48]
+    arm64.cmp x1, #0
+    arm64.b.eq main.__skip_guarded_84
+    arm64.ldr x0, [x29, #-48]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_84
+    arm64.ldr x2, [x29, #-32]
+    arm64.cmp x2, #0
+    arm64.b.eq main.__skip_guarded_86
+    arm64.ldr x0, [x29, #-32]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_86
+    arm64.mov x0, #0
+    arm64.epilogue stack_size=128
+    arm64.ret
+  }
+  func @__destruct_IntList(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.str x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq __destruct_IntList.__skip_guarded_4
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label __destruct_IntList.__skip_guarded_4
+    arm64.b __destruct_IntList.done
+  done:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @__destruct___Array_i64(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #16]
+    arm64.mov x2, #-1
+    arm64.cmp x1, x2
+    arm64.cset x3, eq
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct___Array_i64.slice_cleanup_0
+    arm64.b __destruct___Array_i64.check_owned_0
+  slice_cleanup_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #32]
+    arm64.str x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq __destruct___Array_i64.__skip_guarded_9
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label __destruct___Array_i64.__skip_guarded_9
+    arm64.b __destruct___Array_i64.skip_buf_0
+  check_owned_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #16]
+    arm64.mov x2, #-2
+    arm64.cmp x1, x2
+    arm64.cset x3, ne
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct___Array_i64.free_buf_0
+    arm64.b __destruct___Array_i64.skip_buf_0
+  free_buf_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #32]
+    arm64.mov x2, #-3
+    arm64.cmp x1, x2
+    arm64.cset x3, ne
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct___Array_i64.raw_free_0
+    arm64.b __destruct___Array_i64.skip_buf_0
+  raw_free_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.mov x0, x1
+    arm64.bl mm_raw_free
+    arm64.b __destruct___Array_i64.skip_buf_0
+  skip_buf_0:
+    arm64.b __destruct___Array_i64.done
+  done:
+    arm64.epilogue stack_size=48
     arm64.ret
   }
 }

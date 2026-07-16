@@ -15,51 +15,41 @@ module {
   func @main() -> u8 {
   entry:
     arm64.prologue stack_size=48
-    arm64.adrp+add x1, stdlib.__destruct___ManagedMemory
-    arm64.mov x0, #48
-    arm64.bl stdlib.__mm_alloc
-    arm64.mov x19, x0
-    arm64.mov x0, x19
-    arm64.bl stdlib.__mm_incref
-    arm64.adrp_add_rdata x0, __rdata_arr_main_0
-    arm64.ldr x0, [x29, #16]
-    arm64.str x0, [x19, #0] (8b)
-    arm64.mov x0, #3
-    arm64.str x0, [x19, #8] (8b)
-    arm64.mov x0, #-2
-    arm64.str x0, [x19, #16] (8b)
-    arm64.mov x0, #8
-    arm64.str x0, [x19, #24] (8b)
-    arm64.mov x0, #-2
-    arm64.str x0, [x19, #32] (8b)
-    arm64.mov x20, #0
-    arm64.str x20, [x19, #40] (8b)
-    arm64.adrp_add_rdata x0, __layout_Array_Int
-    arm64.ldr x1, [x29, #16]
-    arm64.mov x0, x19
-    arm64.bl Array.init
-    arm64.mov x19, x0
-    arm64.adrp_add_rdata x0, __witness_int_Equatable
-    arm64.ldr x3, [x29, #16]
-    arm64.adrp_add_rdata x0, __witness_int_Hashable
-    arm64.ldr x2, [x29, #16]
-    arm64.adrp_add_rdata x0, __layout_Array_Int
-    arm64.ldr x1, [x29, #16]
-    arm64.mov x0, x19
-    arm64.bl Array.hash
-    arm64.mov x21, x0
-    arm64.mov x0, x19
-    arm64.bl __mm_decref_maybenull_helper
-    arm64.cmp x21, x20
-    arm64.cset x0, ne
-    arm64.b.eq nonzero_0.after
+    arm64.adrp_add_global x0, __static_lit_0
+    arm64.mov x1, x0
+    arm64.mov x2, #32
+    arm64.add x3, x1, x2
+    arm64.str x3, [x29, #-8]
+    arm64.ldr x4, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x5, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl __Array_i64.hash
+    arm64.mov x6, x0
+    arm64.mov x7, #0
+    arm64.cmp x6, x7
+    arm64.cset x8, ne
+    arm64.cmp x8, #0
+    arm64.b.ne main.nonzero_0
+    arm64.b main.nonzero_0.after
   nonzero_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_15
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_15
     arm64.mov x0, #1
-    arm64.epilogue
+    arm64.epilogue stack_size=48
     arm64.ret
   nonzero_0.after:
-    arm64.mov x0, x20
-    arm64.epilogue
+    arm64.ldr x0, [x29, #-8]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_19
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_19
+    arm64.mov x0, #0
+    arm64.epilogue stack_size=48
     arm64.ret
   }
 }

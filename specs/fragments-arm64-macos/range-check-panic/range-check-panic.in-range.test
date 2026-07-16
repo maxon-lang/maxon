@@ -13,20 +13,26 @@ ExitCode: 5
 ---
 // CompiledIR
 module {
-  func @check(x0: u8) -> u8 {
+  func @check(x: i64) -> u8 {
   entry:
     arm64.prologue stack_size=16
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
     arm64.mov x1, #10
     arm64.cmp x0, x1
-    arm64.cset x1, hi
-    arm64.b.ls __range_ok_0
+    arm64.cset x3, gt
+    arm64.orr x1, x2, x3
+    arm64.cmp x1, #0
+    arm64.b.ne check.__range_panic_0
+    arm64.b check.__range_ok_0
   __range_panic_0:
-    arm64.adrp_add_rdata x0, __panic_msg_a92843a2ec0937fd
-    arm64.ldr x19, [x29, #16]
-    arm64.mov x0, x19
+    arm64.adrp_add_symdata x0, __panic_msg_0
+    arm64.mov x1, x0
+    arm64.mov x0, x1
     arm64.bl mrt_panic
   __range_ok_0:
-    arm64.epilogue
+    arm64.epilogue stack_size=16
     arm64.ret
   }
   func @main() -> u8 {
@@ -34,17 +40,23 @@ module {
     arm64.prologue stack_size=16
     arm64.mov x0, #5
     arm64.bl check
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
     arm64.mov x1, #255
     arm64.cmp x0, x1
-    arm64.cset x1, hi
-    arm64.b.ls __range_ok_0
+    arm64.cset x3, gt
+    arm64.orr x1, x2, x3
+    arm64.cmp x1, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
   __range_panic_0:
-    arm64.adrp_add_rdata x0, __panic_msg_883f5897d18498b0
-    arm64.ldr x19, [x29, #16]
-    arm64.mov x0, x19
+    arm64.adrp_add_symdata x0, __panic_msg_1
+    arm64.mov x1, x0
+    arm64.mov x0, x1
     arm64.bl mrt_panic
   __range_ok_0:
-    arm64.epilogue
+    arm64.epilogue stack_size=16
     arm64.ret
   }
 }

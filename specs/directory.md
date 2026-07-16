@@ -147,6 +147,56 @@ end 'main'
 42
 ```
 
+### Listing filters the `.` and `..` pseudo-entries
+
+`Directory.list` never yields `.` or `..`. The runtime's find-next owns that filtering on
+every target — the stdlib pushes whatever it is handed — so a leaked dot reaches callers as
+a real name, and a leaked `..` walks *upward out of the tree*, which is how
+`collectMaxonFilesUnder` recursed forever.
+
+This pins both halves, because they have been traded against each other twice. Removing the
+filter fixed empty directories and broke listing; adding it back to only some targets fixed
+listing and left arm64-macOS unfiltered for a month. The existing tests above could not see
+it: they assert membership and `count() >= 1`, which stay true while two bogus entries ride
+along. **Only an exact count catches this.**
+
+<!-- test: list-filters-dot-entries -->
+```maxon
+function main() returns ExitCode
+	let oneFile = FilePath from "test_dots_one"
+	_ = Directory.create(oneFile)
+	var f = try __ManagedFile.openWrite("test_dots_one/only.txt".toByteArray().managed) otherwise return 1
+	try f.write("x".toByteArray().managed) otherwise return 2
+	f.close()
+
+	let entries = try Directory.list(oneFile) otherwise return 3
+	for e in entries 'each'
+		let name = e.filename()
+		if name == "." or name == ".." 'dot'
+			return 4
+		end 'dot'
+	end 'each'
+	if entries.count() != 1 'countOne'
+		return 5
+	end 'countOne'
+	try __ManagedFile.delete("test_dots_one/only.txt".toByteArray().managed) otherwise return 6
+
+	// An empty directory holds ONLY "." and "..". Filtering them must leave an
+	// empty list — not a spurious entry read from an unwritten name buffer.
+	let emptyDir = FilePath from "test_dots_empty"
+	_ = Directory.create(emptyDir)
+	let none = try Directory.list(emptyDir) otherwise return 7
+	if none.count() != 0 'countZero'
+		return 8
+	end 'countZero'
+
+	return 42
+end 'main'
+```
+```exitcode
+42
+```
+
 <!-- test: list-nonexistent-directory -->
 ```maxon
 function main() returns ExitCode

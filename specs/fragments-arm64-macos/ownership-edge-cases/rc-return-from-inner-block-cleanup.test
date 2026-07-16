@@ -26,41 +26,74 @@ ExitCode: 3
 ---
 // CompiledIR
 module {
-  func @compute(x0: i1) -> i64 {
+  func @Step.create(n: i64) -> i64 {
   entry:
-    arm64.prologue stack_size=32
-    arm64.mov x19, x0
-    arm64.mov x1, #0
-    arm64.mov x2, #8
-    arm64.mov x0, x2
-    arm64.bl stdlib.__mm_alloc
-    arm64.mov x20, x0
-    arm64.mov x0, #1
-    arm64.str x0, [x20, #0] (8b)
-    arm64.cmp x19, #0
-    arm64.b.eq inner_0.after
-  inner_0:
-    arm64.mov x1, #0
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-16]
     arm64.mov x0, #8
-    arm64.bl stdlib.__mm_alloc
-    arm64.mov x19, x0
+    arm64.mov x1, #0
+    arm64.mov x2, #1
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-16]
+    arm64.str x1, [x0, #0]
+    arm64.ldr x2, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x3, [x29, #-8]
+    arm64.mov x0, x3
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @compute(flag: i1) -> i64 {
+  entry:
+    arm64.prologue stack_size=64
+    arm64.str x0, [x29, #-24]
+    arm64.mov x0, #1
+    arm64.bl Step.create
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-24]
+    arm64.cmp x0, #0
+    arm64.b.ne compute.inner_0
+    arm64.b compute.inner_0.after
+  inner_0:
     arm64.mov x0, #2
-    arm64.str x0, [x19, #0] (8b)
-    arm64.ldr x21, [x19, #0] (8b)
-    arm64.ldr x22, [x20, #0] (8b)
-    arm64.mov x0, x20
-    arm64.bl mm_drop
-    arm64.mov x0, x19
-    arm64.bl mm_drop
-    arm64.add x0, x22, x21
-    arm64.epilogue
+    arm64.bl Step.create
+    arm64.str x0, [x29, #-16]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.ldr x2, [x29, #-16]
+    arm64.ldr x3, [x2, #0]
+    arm64.add x4, x1, x3
+    arm64.ldr x5, [x29, #-16]
+    arm64.str x4, [x29, #-24]
+    arm64.cmp x5, #0
+    arm64.b.eq compute.__skip_guarded_14
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label compute.__skip_guarded_14
+    arm64.ldr x6, [x29, #-8]
+    arm64.cmp x6, #0
+    arm64.b.eq compute.__skip_guarded_16
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label compute.__skip_guarded_16
+    arm64.ldr x0, [x29, #-24]
+    arm64.epilogue stack_size=64
     arm64.ret
   inner_0.after:
-    arm64.ldr x19, [x20, #0] (8b)
-    arm64.mov x0, x20
-    arm64.bl mm_drop
-    arm64.mov x0, x19
-    arm64.epilogue
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.ldr x2, [x29, #-8]
+    arm64.str x1, [x29, #-24]
+    arm64.cmp x2, #0
+    arm64.b.eq compute.__skip_guarded_21
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label compute.__skip_guarded_21
+    arm64.ldr x0, [x29, #-24]
+    arm64.epilogue stack_size=64
     arm64.ret
   }
   func @main() -> u8 {
@@ -68,17 +101,29 @@ module {
     arm64.prologue stack_size=16
     arm64.mov x0, #1
     arm64.bl compute
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
     arm64.mov x1, #255
     arm64.cmp x0, x1
-    arm64.cset x1, hi
-    arm64.b.ls __range_ok_0
+    arm64.cset x3, gt
+    arm64.orr x1, x2, x3
+    arm64.cmp x1, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
   __range_panic_0:
-    arm64.adrp_add_rdata x0, __panic_msg_e5c0a2e6d8bc05e6
-    arm64.ldr x19, [x29, #16]
-    arm64.mov x0, x19
+    arm64.adrp_add_symdata x0, __panic_msg_0
+    arm64.mov x1, x0
+    arm64.mov x0, x1
     arm64.bl mrt_panic
   __range_ok_0:
-    arm64.epilogue
+    arm64.epilogue stack_size=16
+    arm64.ret
+  }
+  func @__destruct_Step(ptr: i64) {
+  entry:
+    arm64.b __destruct_Step.done
+  done:
     arm64.ret
   }
 }

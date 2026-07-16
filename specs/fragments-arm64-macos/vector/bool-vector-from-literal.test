@@ -1,0 +1,101 @@
+// Test: bool-vector-from-literal
+function main() returns ExitCode
+	let v = Vector from [true, false, true, true, false, true, false, false, true]
+	var count = 0
+	for bit in v 'each'
+		if bit 'isSet'
+			count = count + 1
+		end 'isSet'
+	end 'each'
+	return count
+end 'main'
+---
+ExitCode: 5
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=80
+    arm64.adrp_add_global x0, __static_lit_3
+    arm64.mov x1, x0
+    arm64.mov x2, #32
+    arm64.add x3, x1, x2
+    arm64.str x3, [x29, #-8]
+    arm64.ldr x4, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.mov x5, #0
+    arm64.str x5, [x29, #-16]
+    arm64.ldr x6, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl __Vector_9_i1.createIterator
+    arm64.str x0, [x29, #-24]
+    arm64.mov x7, #0
+    arm64.cmp x1, x7
+    arm64.cset x8, eq
+    arm64.cmp x8, #0
+    arm64.b.ne main.each_0.preamble
+    arm64.b main.each_0.exit
+  each_0.preamble:
+    arm64.b main.each_0
+  each_0.header:
+    arm64.ldr x0, [x29, #-24]
+    arm64.bl __ArrayIterator_i1.advance
+    arm64.mov x0, #0
+    arm64.cmp x1, x0
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne main.each_0
+    arm64.b main.each_0.exit
+  each_0:
+    arm64.ldr x0, [x29, #-24]
+    arm64.bl __ArrayIterator_i1.current
+    arm64.str x0, [x29, #-32]
+    arm64.ldr x1, [x29, #-32]
+    arm64.cmp x1, #0
+    arm64.b.ne main.isSet_0
+    arm64.b main.isSet_0.merge
+  isSet_0:
+    arm64.mov x0, #1
+    arm64.ldr x1, [x29, #-16]
+    arm64.add x2, x1, x0
+    arm64.str x2, [x29, #-16]
+    arm64.b main.isSet_0.merge
+  isSet_0.merge:
+    arm64.b main.each_0.header
+  each_0.exit:
+    arm64.ldr x0, [x29, #-16]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x3, #255
+    arm64.cmp x0, x3
+    arm64.cset x4, gt
+    arm64.orr x5, x2, x4
+    arm64.cmp x5, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_64
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.ldr x1, [x29, #-24]
+    arm64.cmp x1, #0
+    arm64.b.eq main.__skip_guarded_43
+    arm64.ldr x0, [x29, #-24]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_43
+    arm64.ldr x0, [x29, #-8]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_45
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_45
+    arm64.ldr x0, [x29, #-16]
+    arm64.epilogue stack_size=80
+    arm64.ret
+  }
+}
+---

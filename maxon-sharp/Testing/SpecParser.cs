@@ -131,6 +131,32 @@ public static partial class SpecParser {
         continue;
       }
 
+      // `<!-- targets: a, b -->` restricts a test to the named target keys; on any
+      // other target it is skipped. A blank or absent directive means no
+      // restriction. The spec format is shared with the self-hosted runner
+      // (maxon-selfhosted/Testing/SpecParser.maxon parses the same directive), and
+      // this side ignoring it is not a no-op: the x64-only fault tests ran on
+      // arm64-macOS and failed there for a year on an assertion their own spec
+      // said did not apply.
+      //
+      // With no targetKey there is no target to test membership against, so the
+      // restriction cannot be evaluated and the test runs — matching the
+      // behavior of every other target-qualified lookup in this parser.
+      var targetsMatch = TargetsDirectiveRegex().Match(testSection);
+      if (targetsMatch.Success && targetKey != null) {
+        var onlyTargets = targetsMatch.Groups[1].Value
+          .Split(',')
+          .Select(t => t.Trim())
+          .Where(t => t.Length > 0)
+          .ToList();
+
+        if (onlyTargets.Count > 0 && !onlyTargets.Contains(targetKey)) {
+          Logger.Debug(LogCategory.Testing,
+            $"Skipping test '{testName}': restricted to {string.Join(", ", onlyTargets)}, running {targetKey}");
+          continue;
+        }
+      }
+
       int? timeoutMs = null;
       var timeoutMatch = TimeoutMsDirectiveRegex().Match(testSection);
       if (timeoutMatch.Success) {
@@ -352,6 +378,9 @@ public static partial class SpecParser {
 
   [GeneratedRegex(@"<!--\s*SelfhostedOnly\s*-->")]
   private static partial Regex SelfhostedOnlyDirectiveRegex();
+
+  [GeneratedRegex(@"<!--\s*targets:\s*(.*?)\s*-->")]
+  private static partial Regex TargetsDirectiveRegex();
 
   [GeneratedRegex(@"<!--\s*AsyncTrace\s*-->")]
   private static partial Regex AsyncTraceDirectiveRegex();

@@ -1,0 +1,435 @@
+// Test: two-sink-persist-and-transient
+typealias Payload = int(0 to u64.max)
+typealias ChunkArray = Array with Chunk
+
+// A managed struct returned BY VALUE from a witness-dispatched method — the plain
+// (non-fat) witness-return path. Freshly created it owns rc 1.
+type Chunk
+	export var payload as Payload
+
+	static function create(payload Payload) returns Chunk
+		return Self{payload: payload}
+	end 'create'
+end 'Chunk'
+
+interface ChunkMaker
+	function makeChunk() returns Chunk
+end 'ChunkMaker'
+
+type Backend implements ChunkMaker
+	export let seed as Payload
+
+	static function create(seed Payload) returns Backend
+		return Self{seed: seed}
+	end 'create'
+
+	function makeChunk() returns Chunk
+		return Chunk.create(self.seed)
+	end 'makeChunk'
+end 'Backend'
+
+// The long-lived sink. `populate` persists the witness-dispatched chunk into
+// `self.saved` AND pushes the SAME chunk into a transient local array that is
+// freed at the method's scope exit — before `main` reads `self.saved`.
+type Store
+	export var saved as Chunk
+
+	static function create() returns Store
+		return Self{saved: Chunk.create(0)}
+	end 'create'
+
+	function populate(maker ChunkMaker)
+		var transient = ChunkArray.create()
+		let chunk = maker.makeChunk()
+		self.saved = chunk
+		transient.push(chunk)
+	end 'populate'
+
+	function readSaved() returns Payload
+		return self.saved.payload
+	end 'readSaved'
+end 'Store'
+
+// Returns an INTERFACE value so the callee's static receiver type is the bare
+// interface — forcing `maker.makeChunk()` to dispatch through the witness table
+// rather than a monomorphized direct call.
+function obtainMaker(seed Payload) returns ChunkMaker
+	return Backend.create(seed)
+end 'obtainMaker'
+
+function main() returns ExitCode
+	var store = Store.create()
+	let maker = obtainMaker(42)
+	store.populate(maker)
+	print("{store.readSaved()}\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+42
+```
+---
+// CompiledIR
+module {
+  func @Chunk.create(payload: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-16]
+    arm64.mov x0, #8
+    arm64.mov x1, #0
+    arm64.mov x2, #1
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-16]
+    arm64.str x1, [x0, #0]
+    arm64.ldr x2, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x3, [x29, #-8]
+    arm64.mov x0, x3
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @Backend.create(seed: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-16]
+    arm64.mov x0, #8
+    arm64.mov x1, #0
+    arm64.mov x2, #2
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-16]
+    arm64.str x1, [x0, #0]
+    arm64.ldr x2, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x3, [x29, #-8]
+    arm64.mov x0, x3
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @Backend.makeChunk(__self_ptr: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.mov x0, x1
+    arm64.bl Chunk.create
+    arm64.str x0, [x29, #-16]
+    arm64.ldr x2, [x29, #-16]
+    arm64.mov x0, x2
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @Store.create() -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x0, #0
+    arm64.bl Chunk.create
+    arm64.str x0, [x29, #-8]
+    arm64.adrp_add_func x0, __destruct_Store
+    arm64.mov x1, x0
+    arm64.mov x0, #8
+    arm64.mov x2, #3
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-16]
+    arm64.ldr x2, [x29, #-8]
+    arm64.ldr x3, [x29, #-16]
+    arm64.str x2, [x3, #0]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x4, [x29, #-8]
+    arm64.cmp x4, #0
+    arm64.b.eq Store.create.__skip_guarded_14
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label Store.create.__skip_guarded_14
+    arm64.ldr x5, [x29, #-16]
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_incref
+    arm64.ldr x6, [x29, #-16]
+    arm64.mov x0, x6
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @Store.readSaved(__self_ptr: i64) -> u64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.str x1, [x29, #-16]
+    arm64.ldr x2, [x29, #-16]
+    arm64.ldr x3, [x2, #0]
+    arm64.mov x0, x3
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @obtainMaker(seed: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.bl Backend.create
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=256
+    arm64.bl Store.create
+    arm64.str x0, [x29, #-8]
+    arm64.mov x0, #42
+    arm64.bl obtainMaker
+    arm64.str x0, [x29, #-16]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-16]
+    arm64.bl Store.populate$Backend
+    arm64.ldr x2, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl Store.readSaved
+    arm64.str x0, [x29, #-96]
+    arm64.mov x0, #21
+    arm64.bl mm_raw_alloc
+    arm64.str x0, [x29, #-24]
+    arm64.ldr x0, [x29, #-96]
+    arm64.ldr x1, [x29, #-24]
+    arm64.bl maxon_i64_to_string
+    arm64.ldr x3, [x29, #-24]
+    arm64.adrp_add_rdata x4, __interp_lit_0
+    arm64.mov x5, x4
+    arm64.mov x6, #1
+    arm64.add x7, x0, x6
+    arm64.mov x8, #49
+    arm64.add x9, x7, x8
+    arm64.adrp_add_func x10, __destruct_String
+    arm64.mov x11, x10
+    arm64.str x0, [x29, #-104]
+    arm64.str x5, [x29, #-112]
+    arm64.str x7, [x29, #-120]
+    arm64.mov x0, x9
+    arm64.mov x1, x11
+    arm64.mov x2, #4
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-32]
+    arm64.mov x12, #48
+    arm64.ldr x14, [x29, #-32]
+    arm64.add x15, x14, x12
+    arm64.mov x0, #0
+    arm64.str x0, [x29, #-40]
+    arm64.str x15, [x29, #-48]
+    arm64.ldr x0, [x29, #-120]
+    arm64.str x0, [x29, #-56]
+    arm64.ldr x0, [x29, #-24]
+    arm64.str x0, [x29, #-64]
+    arm64.ldr x0, [x29, #-104]
+    arm64.str x0, [x29, #-72]
+    arm64.ldr x0, [x29, #-112]
+    arm64.str x0, [x29, #-80]
+    arm64.mov x0, #1
+    arm64.str x0, [x29, #-88]
+    arm64.ldr x0, [x29, #-48]
+    arm64.ldr x1, [x29, #-40]
+    arm64.add x2, x0, x1
+    arm64.ldr x0, [x29, #-64]
+    arm64.ldr x1, [x29, #-72]
+    arm64.str x2, [x29, #-128]
+    arm64.ldr x0, [x29, #-128]
+    arm64.ldr x1, [x29, #-64]
+    arm64.ldr x2, [x29, #-72]
+    arm64.memcpy
+    arm64.ldr x0, [x29, #-40]
+    arm64.ldr x1, [x29, #-72]
+    arm64.add x2, x0, x1
+    arm64.str x2, [x29, #-40]
+    arm64.ldr x0, [x29, #-48]
+    arm64.ldr x1, [x29, #-40]
+    arm64.add x2, x0, x1
+    arm64.ldr x0, [x29, #-80]
+    arm64.ldr x1, [x29, #-88]
+    arm64.str x2, [x29, #-136]
+    arm64.ldr x0, [x29, #-136]
+    arm64.ldr x1, [x29, #-80]
+    arm64.ldr x2, [x29, #-88]
+    arm64.memcpy
+    arm64.ldr x0, [x29, #-48]
+    arm64.ldr x1, [x29, #-56]
+    arm64.add x2, x0, x1
+    arm64.mov x0, #0
+    arm64.strb x0, [x2, #0]
+    arm64.ldr x0, [x29, #-24]
+    arm64.bl mm_raw_free
+    arm64.ldr x0, [x29, #-48]
+    arm64.ldr x1, [x29, #-56]
+    arm64.mov x2, #1
+    arm64.mov x3, #-3
+    arm64.ldr x4, [x29, #-32]
+    arm64.str x0, [x4, #0]
+    arm64.ldr x0, [x29, #-32]
+    arm64.str x1, [x0, #8]
+    arm64.ldr x0, [x29, #-32]
+    arm64.str x1, [x0, #16]
+    arm64.ldr x0, [x29, #-32]
+    arm64.str x2, [x0, #24]
+    arm64.ldr x0, [x29, #-32]
+    arm64.str x3, [x0, #32]
+    arm64.mov x0, #0
+    arm64.ldr x1, [x29, #-32]
+    arm64.str x0, [x1, #40]
+    arm64.ldr x0, [x29, #-32]
+    arm64.bl mm_incref
+    arm64.ldr x0, [x29, #-32]
+    arm64.bl stdlib.print
+    arm64.ldr x0, [x29, #-32]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_83
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_83
+    arm64.ldr x0, [x29, #-16]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_85
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_85
+    arm64.ldr x0, [x29, #-8]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_87
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_87
+    arm64.mov x0, #0
+    arm64.epilogue stack_size=256
+    arm64.ret
+  }
+  func @Store.populate$Backend(__self_ptr: i64, maker: i64) {
+  entry:
+    arm64.prologue stack_size=96
+    arm64.str x0, [x29, #-8]
+    arm64.str x1, [x29, #-16]
+    arm64.bl ChunkArray.create
+    arm64.str x0, [x29, #-24]
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl Backend.makeChunk
+    arm64.str x0, [x29, #-32]
+    arm64.ldr x1, [x29, #-32]
+    arm64.ldr x2, [x29, #-8]
+    arm64.ldr x3, [x2, #0]
+    arm64.str x3, [x29, #-40]
+    arm64.cmp x3, #0
+    arm64.b.eq Store.populate$Backend.__skip_guarded_12
+    arm64.ldr x0, [x29, #-40]
+    arm64.bl mm_decref
+    arm64.label Store.populate$Backend.__skip_guarded_12
+    arm64.ldr x4, [x29, #-8]
+    arm64.ldr x5, [x29, #-32]
+    arm64.str x5, [x4, #0]
+    arm64.ldr x0, [x29, #-32]
+    arm64.bl mm_incref
+    arm64.ldr x6, [x29, #-24]
+    arm64.ldr x7, [x29, #-32]
+    arm64.ldr x0, [x29, #-24]
+    arm64.ldr x1, [x29, #-32]
+    arm64.bl ChunkArray.push
+    arm64.ldr x8, [x29, #-24]
+    arm64.cmp x8, #0
+    arm64.b.eq Store.populate$Backend.__skip_guarded_20
+    arm64.ldr x0, [x29, #-24]
+    arm64.bl mm_decref
+    arm64.label Store.populate$Backend.__skip_guarded_20
+    arm64.ldr x9, [x29, #-32]
+    arm64.cmp x9, #0
+    arm64.b.eq Store.populate$Backend.__skip_guarded_22
+    arm64.ldr x0, [x29, #-32]
+    arm64.bl mm_decref
+    arm64.label Store.populate$Backend.__skip_guarded_22
+    arm64.epilogue stack_size=96
+    arm64.ret
+  }
+  func @__destruct_Chunk(ptr: i64) {
+  entry:
+    arm64.b __destruct_Chunk.done
+  done:
+    arm64.ret
+  }
+  func @__destruct_Backend(ptr: i64) {
+  entry:
+    arm64.b __destruct_Backend.done
+  done:
+    arm64.ret
+  }
+  func @__destruct_Store(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.str x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq __destruct_Store.__skip_guarded_4
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label __destruct_Store.__skip_guarded_4
+    arm64.b __destruct_Store.done
+  done:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @__destruct_ChunkArray(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #16]
+    arm64.mov x2, #-1
+    arm64.cmp x1, x2
+    arm64.cset x3, eq
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct_ChunkArray.slice_cleanup_0
+    arm64.b __destruct_ChunkArray.check_owned_0
+  slice_cleanup_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #32]
+    arm64.str x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq __destruct_ChunkArray.__skip_guarded_9
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label __destruct_ChunkArray.__skip_guarded_9
+    arm64.b __destruct_ChunkArray.skip_buf_0
+  check_owned_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #16]
+    arm64.mov x2, #-2
+    arm64.cmp x1, x2
+    arm64.cset x3, ne
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct_ChunkArray.free_buf_0
+    arm64.b __destruct_ChunkArray.skip_buf_0
+  free_buf_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref_managed_elements
+    arm64.ldr x1, [x29, #-8]
+    arm64.ldr x2, [x1, #32]
+    arm64.mov x3, #-3
+    arm64.cmp x2, x3
+    arm64.cset x4, ne
+    arm64.cmp x4, #0
+    arm64.b.ne __destruct_ChunkArray.raw_free_0
+    arm64.b __destruct_ChunkArray.skip_buf_0
+  raw_free_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.mov x0, x1
+    arm64.bl mm_raw_free
+    arm64.b __destruct_ChunkArray.skip_buf_0
+  skip_buf_0:
+    arm64.b __destruct_ChunkArray.done
+  done:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+}
+---

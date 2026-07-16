@@ -28,60 +28,85 @@ ExitCode: 42
 module {
   func @main() -> u8 {
   entry:
-    arm64.prologue stack_size=144
+    arm64.prologue stack_size=192
     arm64.bl BoxArray.create
     arm64.str x0, [x29, #-8]
-    arm64.mov x0, #42
+    arm64.mov x1, #42
     arm64.mov x0, #16
     arm64.mov x1, #0
-    arm64.mov x2, #13
+    arm64.mov x2, #10
     arm64.bl mm_alloc
     arm64.str x0, [x29, #-16]
     arm64.mov x1, #1
     arm64.str x1, [x0, #0]
-    arm64.mov x2, #42
-    arm64.str x2, [x0, #8]
+    arm64.mov x1, #42
+    arm64.str x1, [x0, #8]
     arm64.bl mm_incref
-    arm64.ldr x3, [x29, #-8]
-    arm64.ldr x4, [x29, #-16]
     arm64.ldr x0, [x29, #-8]
     arm64.ldr x1, [x29, #-16]
     arm64.bl BoxArray.push
-    arm64.mov x5, #0
-    arm64.str x5, [x29, #-24]
-    arm64.ldr x6, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
-    arm64.bl BoxArray.createIterator
-    arm64.str x0, [x29, #-32]
-    arm64.mov x7, #0
-    arm64.cmp x1, x7
-    arm64.cset x8, eq
-    arm64.cmp x8, #0
-    arm64.b.ne main.loop_0.preamble
-    arm64.b main.loop_0.exit
-  loop_0.preamble:
-    arm64.b main.loop_0
+    arm64.mov x2, #0
+    arm64.str x2, [x29, #-24]
+    arm64.ldr x3, [x29, #-8]
+    arm64.str x3, [x29, #-32]
+    arm64.mov x4, #0
+    arm64.str x4, [x29, #-40]
+    arm64.b main.loop_0.header
   loop_0.header:
     arm64.ldr x0, [x29, #-32]
-    arm64.bl __ArrayIterator_Box.advance
-    arm64.mov x0, #0
-    arm64.cmp x1, x0
-    arm64.cset x2, eq
-    arm64.cmp x2, #0
+    arm64.ldr x1, [x0, #8]
+    arm64.ldr x2, [x29, #-40]
+    arm64.cmp x2, x1
+    arm64.cset x3, lt
+    arm64.cmp x3, #0
     arm64.b.ne main.loop_0
     arm64.b main.loop_0.exit
   loop_0:
-    arm64.ldr x0, [x29, #-32]
-    arm64.bl __ArrayIterator_Box.current
-    arm64.str x0, [x29, #-40]
+    arm64.ldr x0, [x29, #-40]
+    arm64.ldr x1, [x29, #-32]
+    arm64.ldr x2, [x1, #24]
+    arm64.ldr x3, [x29, #-32]
+    arm64.ldr x4, [x3, #0]
+    arm64.mul x5, x0, x2
+    arm64.add x6, x4, x5
+    arm64.ldr x7, [x6, #0]
+    arm64.mov x8, #0
+    arm64.cmp x7, x8
+    arm64.cset x9, eq
+    arm64.mov x10, #0
+    arm64.str x10, [x29, #-48]
+    arm64.cmp x9, #0
+    arm64.str x7, [x29, #-88]
+    arm64.b.ne main.__slot_empty_0
+    arm64.b main.__slot_nonnull_0
+  __slot_empty_0:
+    arm64.b main.__slot_merge_0
+  __slot_nonnull_0:
+    arm64.ldr x0, [x29, #-88]
+    arm64.bl mm_incref
+    arm64.ldr x0, [x29, #-88]
     arm64.str x0, [x29, #-48]
-    arm64.ldr x1, [x29, #-48]
-    arm64.ldr x2, [x1, #0]
+    arm64.b main.__slot_merge_0
+  __slot_merge_0:
+    arm64.ldr x0, [x29, #-48]
     arm64.str x0, [x29, #-56]
-    arm64.str x2, [x29, #-64]
+    arm64.str x0, [x29, #-64]
+    arm64.ldr x1, [x29, #-64]
+    arm64.ldr x0, [x29, #-64]
+    arm64.bl mm_incref
+    arm64.ldr x2, [x29, #-64]
+    arm64.ldr x3, [x2, #0]
+    arm64.ldr x4, [x29, #-64]
+    arm64.str x4, [x29, #-72]
+    arm64.ldr x5, [x29, #-72]
+    arm64.str x3, [x29, #-88]
+    arm64.ldr x0, [x29, #-72]
+    arm64.bl mm_incref
+    arm64.ldr x6, [x29, #-88]
+    arm64.str x6, [x29, #-80]
     arm64.b main.check_0.cmp0
   check_0.cmp0:
-    arm64.ldr x0, [x29, #-64]
+    arm64.ldr x0, [x29, #-80]
     arm64.mov x1, #0
     arm64.cmp x0, x1
     arm64.cset x2, eq
@@ -93,15 +118,15 @@ module {
     arm64.str x0, [x29, #-24]
     arm64.ldr x1, [x29, #-16]
     arm64.cmp x1, #0
-    arm64.b.eq main.__skip_guarded_45
+    arm64.b.eq main.__skip_guarded_62
     arm64.ldr x0, [x29, #-16]
     arm64.bl mm_decref
-    arm64.label main.__skip_guarded_45
+    arm64.label main.__skip_guarded_62
     arm64.mov x2, #0
     arm64.str x2, [x29, #-16]
     arm64.b main.check_0.merge
   check_0.cmp1:
-    arm64.ldr x0, [x29, #-64]
+    arm64.ldr x0, [x29, #-80]
     arm64.mov x1, #1
     arm64.cmp x0, x1
     arm64.cset x2, eq
@@ -109,32 +134,50 @@ module {
     arm64.b.ne main.check_0.case1
     arm64.b main.check_0.merge
   check_0.case1:
-    arm64.ldr x0, [x29, #-56]
+    arm64.ldr x0, [x29, #-72]
     arm64.ldr x1, [x0, #8]
     arm64.str x1, [x29, #-24]
     arm64.ldr x2, [x29, #-16]
     arm64.cmp x2, #0
-    arm64.b.eq main.__skip_guarded_57
+    arm64.b.eq main.__skip_guarded_74
     arm64.ldr x0, [x29, #-16]
     arm64.bl mm_decref
-    arm64.label main.__skip_guarded_57
+    arm64.label main.__skip_guarded_74
     arm64.mov x3, #0
     arm64.str x3, [x29, #-16]
     arm64.b main.check_0.merge
   check_0.merge:
-    arm64.ldr x0, [x29, #-40]
+    arm64.ldr x0, [x29, #-72]
     arm64.cmp x0, #0
-    arm64.b.eq main.__skip_guarded_62
+    arm64.b.eq main.__skip_guarded_79
     arm64.bl mm_decref
-    arm64.label main.__skip_guarded_62
-    arm64.ldr x1, [x29, #-16]
+    arm64.label main.__skip_guarded_79
+    arm64.ldr x1, [x29, #-64]
     arm64.cmp x1, #0
-    arm64.b.eq main.__skip_guarded_64
+    arm64.b.eq main.__skip_guarded_81
+    arm64.ldr x0, [x29, #-64]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_81
+    arm64.ldr x2, [x29, #-56]
+    arm64.cmp x2, #0
+    arm64.b.eq main.__skip_guarded_83
+    arm64.ldr x0, [x29, #-56]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_83
+    arm64.ldr x3, [x29, #-16]
+    arm64.cmp x3, #0
+    arm64.b.eq main.__skip_guarded_85
     arm64.ldr x0, [x29, #-16]
     arm64.bl mm_decref
-    arm64.label main.__skip_guarded_64
-    arm64.mov x2, #0
-    arm64.str x2, [x29, #-16]
+    arm64.label main.__skip_guarded_85
+    arm64.mov x4, #0
+    arm64.str x4, [x29, #-16]
+    arm64.b main.loop_0.incr
+  loop_0.incr:
+    arm64.ldr x0, [x29, #-40]
+    arm64.mov x1, #1
+    arm64.add x2, x0, x1
+    arm64.str x2, [x29, #-40]
     arm64.b main.loop_0.header
   loop_0.exit:
     arm64.ldr x0, [x29, #-24]
@@ -154,25 +197,19 @@ module {
     arm64.mov x0, x1
     arm64.bl mrt_panic
   __range_ok_0:
-    arm64.ldr x1, [x29, #-32]
+    arm64.ldr x1, [x29, #-8]
     arm64.cmp x1, #0
-    arm64.b.eq main.__skip_guarded_79
-    arm64.ldr x0, [x29, #-32]
-    arm64.bl mm_decref
-    arm64.label main.__skip_guarded_79
+    arm64.b.eq main.__skip_guarded_105
     arm64.ldr x0, [x29, #-8]
-    arm64.cmp x0, #0
-    arm64.b.eq main.__skip_guarded_81
     arm64.bl mm_decref
-    arm64.label main.__skip_guarded_81
-    arm64.ldr x1, [x29, #-16]
-    arm64.cmp x1, #0
-    arm64.b.eq main.__skip_guarded_83
+    arm64.label main.__skip_guarded_105
     arm64.ldr x0, [x29, #-16]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_107
     arm64.bl mm_decref
-    arm64.label main.__skip_guarded_83
+    arm64.label main.__skip_guarded_107
     arm64.ldr x0, [x29, #-24]
-    arm64.epilogue stack_size=144
+    arm64.epilogue stack_size=192
     arm64.ret
   }
   func @__destruct_Box(ptr: i64) {
@@ -181,7 +218,7 @@ module {
   done:
     arm64.ret
   }
-  func @__destruct___ManagedMemory_Box(ptr: i64) {
+  func @__destruct_BoxArray(ptr: i64) {
   entry:
     arm64.prologue stack_size=48
     arm64.str x0, [x29, #-8]
@@ -191,18 +228,18 @@ module {
     arm64.cmp x1, x2
     arm64.cset x3, eq
     arm64.cmp x3, #0
-    arm64.b.ne __destruct___ManagedMemory_Box.slice_cleanup_0
-    arm64.b __destruct___ManagedMemory_Box.check_owned_0
+    arm64.b.ne __destruct_BoxArray.slice_cleanup_0
+    arm64.b __destruct_BoxArray.check_owned_0
   slice_cleanup_0:
     arm64.ldr x0, [x29, #-8]
     arm64.ldr x1, [x0, #32]
     arm64.str x1, [x29, #-16]
     arm64.cmp x1, #0
-    arm64.b.eq __destruct___ManagedMemory_Box.__skip_guarded_9
+    arm64.b.eq __destruct_BoxArray.__skip_guarded_9
     arm64.ldr x0, [x29, #-16]
     arm64.bl mm_decref
-    arm64.label __destruct___ManagedMemory_Box.__skip_guarded_9
-    arm64.b __destruct___ManagedMemory_Box.skip_buf_0
+    arm64.label __destruct_BoxArray.__skip_guarded_9
+    arm64.b __destruct_BoxArray.skip_buf_0
   check_owned_0:
     arm64.ldr x0, [x29, #-8]
     arm64.ldr x1, [x0, #16]
@@ -210,34 +247,26 @@ module {
     arm64.cmp x1, x2
     arm64.cset x3, ne
     arm64.cmp x3, #0
-    arm64.b.ne __destruct___ManagedMemory_Box.free_buf_0
-    arm64.b __destruct___ManagedMemory_Box.skip_buf_0
+    arm64.b.ne __destruct_BoxArray.free_buf_0
+    arm64.b __destruct_BoxArray.skip_buf_0
   free_buf_0:
     arm64.ldr x0, [x29, #-8]
     arm64.bl mm_decref_managed_elements
     arm64.ldr x1, [x29, #-8]
-    arm64.ldr x2, [x1, #0]
-    arm64.mov x0, x2
-    arm64.bl mm_raw_free
-    arm64.b __destruct___ManagedMemory_Box.skip_buf_0
-  skip_buf_0:
-    arm64.b __destruct___ManagedMemory_Box.done
-  done:
-    arm64.epilogue stack_size=48
-    arm64.ret
-  }
-  func @__destruct_BoxArray(ptr: i64) {
-  entry:
-    arm64.prologue stack_size=48
-    arm64.str x0, [x29, #-8]
+    arm64.ldr x2, [x1, #32]
+    arm64.mov x3, #-3
+    arm64.cmp x2, x3
+    arm64.cset x4, ne
+    arm64.cmp x4, #0
+    arm64.b.ne __destruct_BoxArray.raw_free_0
+    arm64.b __destruct_BoxArray.skip_buf_0
+  raw_free_0:
     arm64.ldr x0, [x29, #-8]
     arm64.ldr x1, [x0, #0]
-    arm64.str x1, [x29, #-16]
-    arm64.cmp x1, #0
-    arm64.b.eq __destruct_BoxArray.__skip_guarded_4
-    arm64.ldr x0, [x29, #-16]
-    arm64.bl mm_decref
-    arm64.label __destruct_BoxArray.__skip_guarded_4
+    arm64.mov x0, x1
+    arm64.bl mm_raw_free
+    arm64.b __destruct_BoxArray.skip_buf_0
+  skip_buf_0:
     arm64.b __destruct_BoxArray.done
   done:
     arm64.epilogue stack_size=48

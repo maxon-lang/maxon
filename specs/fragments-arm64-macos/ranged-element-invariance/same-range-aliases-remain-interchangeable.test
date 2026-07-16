@@ -1,0 +1,190 @@
+// Test: same-range-aliases-remain-interchangeable
+typealias Small = int(0 to 100)
+typealias SmallCol = Array with Small
+typealias AlsoSmall = int(0 to 100)
+typealias AlsoSmallCol = Array with AlsoSmall
+
+function sum(col SmallCol) returns Small
+	var total = 0
+	for v in col 'each'
+		total = total + v
+	end 'each'
+	return total
+end 'sum'
+
+function main() returns ExitCode
+	var a = AlsoSmallCol.create()
+	a.push(30)
+	a.push(12)
+	return sum(a)
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @sum(col: i64) -> u8 {
+  entry:
+    arm64.prologue stack_size=80
+    arm64.mov x1, #0
+    arm64.str x1, [x29, #-8]
+    arm64.str x0, [x29, #-16]
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_incref
+    arm64.mov x1, #0
+    arm64.str x1, [x29, #-24]
+    arm64.b sum.each_0.header
+  each_0.header:
+    arm64.ldr x0, [x29, #-16]
+    arm64.ldr x1, [x0, #8]
+    arm64.ldr x2, [x29, #-24]
+    arm64.cmp x2, x1
+    arm64.cset x3, lt
+    arm64.cmp x3, #0
+    arm64.b.ne sum.each_0
+    arm64.b sum.each_0.exit
+  each_0:
+    arm64.ldr x0, [x29, #-24]
+    arm64.ldr x1, [x29, #-16]
+    arm64.ldr x2, [x1, #24]
+    arm64.ldr x3, [x29, #-16]
+    arm64.ldr x4, [x3, #0]
+    arm64.mul x5, x0, x2
+    arm64.add x6, x4, x5
+    arm64.ldrb x7, [x6, #0]
+    arm64.str x7, [x29, #-32]
+    arm64.ldr x8, [x29, #-32]
+    arm64.ldr x9, [x29, #-8]
+    arm64.add x10, x9, x8
+    arm64.str x10, [x29, #-8]
+    arm64.b sum.each_0.incr
+  each_0.incr:
+    arm64.ldr x0, [x29, #-24]
+    arm64.mov x1, #1
+    arm64.add x2, x0, x1
+    arm64.str x2, [x29, #-24]
+    arm64.b sum.each_0.header
+  each_0.exit:
+    arm64.ldr x0, [x29, #-8]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x3, #100
+    arm64.cmp x0, x3
+    arm64.cset x4, gt
+    arm64.orr x5, x2, x4
+    arm64.cmp x5, #0
+    arm64.b.ne sum.__range_panic_0
+    arm64.b sum.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_0
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.ldr x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq sum.__skip_guarded_44
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label sum.__skip_guarded_44
+    arm64.ldr x0, [x29, #-8]
+    arm64.epilogue stack_size=80
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.bl AlsoSmallCol.create
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.mov x1, #30
+    arm64.bl AlsoSmallCol.push
+    arm64.ldr x1, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.mov x1, #12
+    arm64.bl AlsoSmallCol.push
+    arm64.ldr x2, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl sum
+    arm64.mov x3, #0
+    arm64.cmp x0, x3
+    arm64.cset x4, lt
+    arm64.mov x5, #255
+    arm64.cmp x0, x5
+    arm64.cset x6, gt
+    arm64.orr x7, x4, x6
+    arm64.cmp x7, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_1
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.ldr x1, [x29, #-8]
+    arm64.str x0, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq main.__skip_guarded_20
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_20
+    arm64.ldr x0, [x29, #-16]
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @__destruct_AlsoSmallCol(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #16]
+    arm64.mov x2, #-1
+    arm64.cmp x1, x2
+    arm64.cset x3, eq
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct_AlsoSmallCol.slice_cleanup_0
+    arm64.b __destruct_AlsoSmallCol.check_owned_0
+  slice_cleanup_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #32]
+    arm64.str x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq __destruct_AlsoSmallCol.__skip_guarded_9
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label __destruct_AlsoSmallCol.__skip_guarded_9
+    arm64.b __destruct_AlsoSmallCol.skip_buf_0
+  check_owned_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #16]
+    arm64.mov x2, #-2
+    arm64.cmp x1, x2
+    arm64.cset x3, ne
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct_AlsoSmallCol.free_buf_0
+    arm64.b __destruct_AlsoSmallCol.skip_buf_0
+  free_buf_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #32]
+    arm64.mov x2, #-3
+    arm64.cmp x1, x2
+    arm64.cset x3, ne
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct_AlsoSmallCol.raw_free_0
+    arm64.b __destruct_AlsoSmallCol.skip_buf_0
+  raw_free_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.mov x0, x1
+    arm64.bl mm_raw_free
+    arm64.b __destruct_AlsoSmallCol.skip_buf_0
+  skip_buf_0:
+    arm64.b __destruct_AlsoSmallCol.done
+  done:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+}
+---

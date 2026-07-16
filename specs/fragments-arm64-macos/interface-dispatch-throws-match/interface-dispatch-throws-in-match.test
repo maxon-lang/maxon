@@ -64,170 +64,298 @@ ExitCode: 83
 ---
 // CompiledIR
 module {
-  func @AlphaBackend.compute(x0: i64, x1: i64) -> i64 {
+  func @AlphaBackend.compute(__self_ptr: i64, x: i64) -> i64 {
   entry:
+    arm64.prologue stack_size=32
     arm64.mov x2, #1
     arm64.add x3, x1, x2
+    arm64.str x0, [x29, #-8]
     arm64.mov x0, x3
+    arm64.epilogue stack_size=32
     arm64.ret
   }
-  func @BetaBackend.compute(x0: i64, x1: i64) -> i64 {
+  func @AlphaBackend.create() -> i64 {
   entry:
+    arm64.prologue stack_size=48
+    arm64.mov x0, #0
+    arm64.mov x0, #8
+    arm64.mov x1, #0
+    arm64.mov x2, #1
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-8]
+    arm64.mov x2, #0
+    arm64.str x2, [x1, #0]
+    arm64.ldr x3, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x4, [x29, #-8]
+    arm64.mov x0, x4
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @BetaBackend.compute(__self_ptr: i64, x: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=32
     arm64.mov x2, #2
     arm64.add x3, x1, x2
+    arm64.str x0, [x29, #-8]
     arm64.mov x0, x3
+    arm64.epilogue stack_size=32
     arm64.ret
   }
-  func @helperThatThrows(x0: i64, x1: i64, x2: i64) -> i64 {
+  func @BetaBackend.create() -> i64 {
   entry:
-    arm64.prologue stack_size=16
-    arm64.mov x3, x0
-    arm64.str x1, [x29, #16]
-    arm64.mov x1, x2
-    arm64.str x1, [x29, #24]
-    arm64.ldr x2, [x29, #24]
-    arm64.ldr x1, [x29, #16]
-    arm64.mov x0, x1
-    arm64.mov x1, x3
-    arm64.ldr x16, [x2, #24] (8b)
-    arm64.blr x16
-    arm64.mov x2, x0
+    arm64.prologue stack_size=48
     arm64.mov x0, #0
-    arm64.cmp x2, x0
-    arm64.cset x0, lt
-    arm64.b.ge bad_0.after
-  bad_0:
-    arm64.mov x1, #1
-    arm64.mov x0, #0
-    arm64.epilogue
-    arm64.ret
-  bad_0.after:
-    arm64.mov x1, #0
-    arm64.mov x0, x2
-    arm64.epilogue
-    arm64.ret
-  }
-  func @dispatchWithReturnTry(x0: u8, x1: i64) -> i64 {
-  entry:
-    arm64.prologue stack_size=64
-    arm64.mov x19, x1
-    arm64.mov x20, #0
-    arm64.cmp x0, x20
-    arm64.cset x1, eq
-    arm64.b.ne dispatch_0.next0
-  dispatch_0.case0:
-    arm64.mov x1, #0
     arm64.mov x0, #8
-    arm64.bl stdlib.__mm_alloc
-    arm64.mov x21, x0
+    arm64.mov x1, #0
+    arm64.mov x2, #2
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-8]
+    arm64.mov x2, #0
+    arm64.str x2, [x1, #0]
+    arm64.ldr x3, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x4, [x29, #-8]
+    arm64.mov x0, x4
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @dispatchWithReturnTry(kind: i64, value: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=144
+    arm64.str x1, [x29, #-8]
+    arm64.str x0, [x29, #-16]
+    arm64.b dispatchWithReturnTry.dispatch_0.cmp0
+  dispatch_0.cmp0:
+    arm64.ldr x0, [x29, #-16]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne dispatchWithReturnTry.dispatch_0.case0
+    arm64.b dispatchWithReturnTry.dispatch_0.cmp1
+  dispatch_0.case0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl AlphaBackend.create
+    arm64.str x0, [x29, #-24]
+    arm64.ldr x1, [x29, #-24]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl helperThatThrows$AlphaBackend
+    arm64.str x1, [x29, #-32]
+    arm64.str x0, [x29, #-40]
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x3, ne
+    arm64.cmp x3, #0
+    arm64.b.ne dispatchWithReturnTry.propagate_error_0
+    arm64.b dispatchWithReturnTry.try_continue_0
+  propagate_error_0:
+    arm64.ldr x0, [x29, #-32]
+    arm64.ldr x1, [x29, #-24]
+    arm64.cmp x1, #0
+    arm64.b.eq dispatchWithReturnTry.__skip_guarded_21
+    arm64.ldr x0, [x29, #-24]
+    arm64.bl mm_decref
+    arm64.label dispatchWithReturnTry.__skip_guarded_21
+    arm64.ldr x1, [x29, #-32]
     arm64.mov x0, #0
-    arm64.str x0, [x21, #0] (8b)
-    arm64.adrp_add_rdata x0, __witness_AlphaBackend_Backend
-    arm64.ldr x2, [x29, #16]
-    arm64.mov x0, x19
-    arm64.mov x1, x21
-    arm64.bl helperThatThrows
-    arm64.mov x22, x0
-    arm64.mov x23, x1
-    arm64.mov x0, x21
-    arm64.bl mm_drop
-    arm64.cmp x23, x20
-    arm64.cset x0, ne
-    arm64.b.eq try_0.cont
-    arm64.b try_0.err
-  dispatch_0.next0:
+    arm64.epilogue stack_size=144
+    arm64.ret
+  try_continue_0:
+    arm64.ldr x0, [x29, #-40]
+    arm64.ldr x1, [x29, #-24]
+    arm64.cmp x1, #0
+    arm64.b.eq dispatchWithReturnTry.__skip_guarded_25
+    arm64.ldr x0, [x29, #-24]
+    arm64.bl mm_decref
+    arm64.label dispatchWithReturnTry.__skip_guarded_25
+    arm64.ldr x0, [x29, #-40]
+    arm64.mov x1, #0
+    arm64.epilogue stack_size=144
+    arm64.ret
+  dispatch_0.cmp1:
+    arm64.ldr x0, [x29, #-16]
     arm64.mov x1, #1
     arm64.cmp x0, x1
-    arm64.cset x0, eq
-    arm64.b.ne dispatch_0.next1
-    arm64.b dispatch_0.case1
-  try_0.err:
-    arm64.mov x0, x20
-    arm64.mov x1, x23
-    arm64.epilogue
-    arm64.ret
-  try_0.cont:
-    arm64.mov x0, x22
-    arm64.mov x1, x20
-    arm64.epilogue
-    arm64.ret
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne dispatchWithReturnTry.dispatch_0.case1
+    arm64.b dispatchWithReturnTry.dispatch_0.merge
   dispatch_0.case1:
-    arm64.mov x1, #0
-    arm64.mov x0, #8
-    arm64.bl stdlib.__mm_alloc
-    arm64.mov x21, x0
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl BetaBackend.create
+    arm64.str x0, [x29, #-48]
+    arm64.ldr x1, [x29, #-48]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl helperThatThrows$BetaBackend
+    arm64.str x1, [x29, #-56]
+    arm64.str x0, [x29, #-64]
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x3, ne
+    arm64.cmp x3, #0
+    arm64.b.ne dispatchWithReturnTry.propagate_error_1
+    arm64.b dispatchWithReturnTry.try_continue_1
+  propagate_error_1:
+    arm64.ldr x0, [x29, #-56]
+    arm64.ldr x1, [x29, #-48]
+    arm64.cmp x1, #0
+    arm64.b.eq dispatchWithReturnTry.__skip_guarded_43
+    arm64.ldr x0, [x29, #-48]
+    arm64.bl mm_decref
+    arm64.label dispatchWithReturnTry.__skip_guarded_43
+    arm64.ldr x1, [x29, #-56]
     arm64.mov x0, #0
-    arm64.str x0, [x21, #0] (8b)
-    arm64.adrp_add_rdata x0, __witness_BetaBackend_Backend
-    arm64.ldr x2, [x29, #16]
-    arm64.mov x0, x19
-    arm64.mov x1, x21
-    arm64.bl helperThatThrows
-    arm64.mov x19, x0
-    arm64.mov x22, x1
-    arm64.mov x0, x21
-    arm64.bl mm_drop
-    arm64.cmp x22, x20
-    arm64.cset x0, ne
-    arm64.b.eq try_1.cont
-    arm64.b try_1.err
-  dispatch_0.next1:
-    arm64.adrp_add_rdata x0, __panic_msg_96c7daeb3f9a871f
-    arm64.ldr x19, [x29, #16]
-    arm64.mov x0, x19
-    arm64.bl mrt_panic
-    arm64.mov x0, x20
-    arm64.mov x1, x20
-    arm64.epilogue
+    arm64.epilogue stack_size=144
     arm64.ret
-  try_1.err:
-    arm64.mov x0, x20
-    arm64.mov x1, x22
-    arm64.epilogue
+  try_continue_1:
+    arm64.ldr x0, [x29, #-64]
+    arm64.ldr x1, [x29, #-48]
+    arm64.cmp x1, #0
+    arm64.b.eq dispatchWithReturnTry.__skip_guarded_47
+    arm64.ldr x0, [x29, #-48]
+    arm64.bl mm_decref
+    arm64.label dispatchWithReturnTry.__skip_guarded_47
+    arm64.ldr x0, [x29, #-64]
+    arm64.mov x1, #0
+    arm64.epilogue stack_size=144
     arm64.ret
-  try_1.cont:
-    arm64.mov x0, x19
-    arm64.mov x1, x20
-    arm64.epilogue
-    arm64.ret
+  dispatch_0.merge:
   }
   func @main() -> u8 {
   entry:
-    arm64.prologue stack_size=32
+    arm64.prologue stack_size=112
+    arm64.mov x0, #0
     arm64.mov x1, #40
-    arm64.mov x19, #0
-    arm64.mov x0, x19
     arm64.bl dispatchWithReturnTry
-    arm64.cmp x1, x19
-    arm64.cset x1, ne
-    arm64.b.eq try_0.ok
-    arm64.mov x20, x19
-    arm64.b try_0.merge
-  try_0.ok:
-    arm64.mov x20, x0
-  try_0.merge:
-    arm64.mov x1, #40
+    arm64.mov x2, #0
+    arm64.str x2, [x29, #-8]
+    arm64.str x0, [x29, #-16]
+    arm64.mov x0, #0
+    arm64.cmp x1, x0
+    arm64.cset x2, ne
+    arm64.cmp x2, #0
+    arm64.b.ne main.otherwise_default_error_0
+    arm64.b main.otherwise_default_continue_0
+  otherwise_default_error_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.str x0, [x29, #-16]
+    arm64.b main.otherwise_default_continue_0
+  otherwise_default_continue_0:
+    arm64.ldr x0, [x29, #-16]
+    arm64.str x0, [x29, #-24]
     arm64.mov x0, #1
+    arm64.mov x1, #40
     arm64.bl dispatchWithReturnTry
-    arm64.cmp x1, x19
-    arm64.cset x1, ne
-    arm64.b.eq try_1.ok
-    arm64.b try_1.merge
-  try_1.ok:
-    arm64.mov x19, x0
-  try_1.merge:
-    arm64.mov x1, #255
-    arm64.add x0, x20, x19
-    arm64.cmp x0, x1
-    arm64.cset x1, hi
-    arm64.b.ls __range_ok_0
+    arm64.mov x2, #0
+    arm64.str x2, [x29, #-32]
+    arm64.str x0, [x29, #-40]
+    arm64.mov x0, #0
+    arm64.cmp x1, x0
+    arm64.cset x2, ne
+    arm64.cmp x2, #0
+    arm64.b.ne main.otherwise_default_error_1
+    arm64.b main.otherwise_default_continue_1
+  otherwise_default_error_1:
+    arm64.ldr x0, [x29, #-32]
+    arm64.str x0, [x29, #-40]
+    arm64.b main.otherwise_default_continue_1
+  otherwise_default_continue_1:
+    arm64.ldr x0, [x29, #-40]
+    arm64.ldr x1, [x29, #-24]
+    arm64.add x2, x1, x0
+    arm64.mov x3, #0
+    arm64.cmp x2, x3
+    arm64.cset x4, lt
+    arm64.mov x5, #255
+    arm64.cmp x2, x5
+    arm64.cset x6, gt
+    arm64.orr x7, x4, x6
+    arm64.cmp x7, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
   __range_panic_0:
-    arm64.adrp_add_rdata x0, __panic_msg_b72f8feeb66c0977
-    arm64.ldr x19, [x29, #16]
-    arm64.mov x0, x19
+    arm64.adrp_add_symdata x0, __panic_msg_0
+    arm64.mov x1, x0
+    arm64.mov x0, x1
     arm64.bl mrt_panic
   __range_ok_0:
-    arm64.epilogue
+    arm64.mov x0, x2
+    arm64.epilogue stack_size=112
+    arm64.ret
+  }
+  func @helperThatThrows$AlphaBackend(value: i64, backend: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x1, [x29, #-8]
+    arm64.ldr x1, [x29, #-8]
+    arm64.mov x1, x0
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl AlphaBackend.compute
+    arm64.str x0, [x29, #-16]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.cmp x2, #0
+    arm64.b.ne helperThatThrows$AlphaBackend.bad_0
+    arm64.b helperThatThrows$AlphaBackend.bad_0.after
+  bad_0:
+    arm64.mov x0, #0
+    arm64.mov x1, #1
+    arm64.add x2, x0, x1
+    arm64.mov x1, x2
+    arm64.mov x0, #0
+    arm64.epilogue stack_size=48
+    arm64.ret
+  bad_0.after:
+    arm64.ldr x0, [x29, #-16]
+    arm64.mov x1, #0
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @helperThatThrows$BetaBackend(value: i64, backend: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x1, [x29, #-8]
+    arm64.ldr x1, [x29, #-8]
+    arm64.mov x1, x0
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl BetaBackend.compute
+    arm64.str x0, [x29, #-16]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.cmp x2, #0
+    arm64.b.ne helperThatThrows$BetaBackend.bad_0
+    arm64.b helperThatThrows$BetaBackend.bad_0.after
+  bad_0:
+    arm64.mov x0, #0
+    arm64.mov x1, #1
+    arm64.add x2, x0, x1
+    arm64.mov x1, x2
+    arm64.mov x0, #0
+    arm64.epilogue stack_size=48
+    arm64.ret
+  bad_0.after:
+    arm64.ldr x0, [x29, #-16]
+    arm64.mov x1, #0
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @__destruct_AlphaBackend(ptr: i64) {
+  entry:
+    arm64.b __destruct_AlphaBackend.done
+  done:
+    arm64.ret
+  }
+  func @__destruct_BetaBackend(ptr: i64) {
+  entry:
+    arm64.b __destruct_BetaBackend.done
+  done:
     arm64.ret
   }
 }

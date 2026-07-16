@@ -21,28 +21,33 @@ dialog.
 The fault-handler infrastructure does not yet support `recover()` — once a fault
 fires, the process always exits.
 
-Integer divide-by-zero and modulo-by-zero are only caught on targets whose CPU
-traps the operation. On x64 the `idiv` instruction raises `#DE` (delivered as a
-Windows `EXCEPTION_INT_DIVIDE_BY_ZERO` / a POSIX `SIGFPE`), which the handler
-converts to the panic below. AArch64 integer `SDIV`/`UDIV` by zero is defined to
-return 0 with NO trap, so there is no fault to catch and the divide/modulo-by-zero
-tests are gated to `x64-windows`. The handler still classifies a `SIGFPE` it does
-receive (e.g. a floating-point trap) to the divide-by-zero panic. The nil-pointer
-(`SIGSEGV`/`SIGBUS`) path traps identically on both architectures, so the
-`force-segfault` test runs on `arm64-macos` as well as `x64-windows`.
+Integer divide-by-zero and modulo-by-zero panic on both architectures, by different
+routes. On x64 the `idiv` instruction raises `#DE` (delivered as a Windows
+`EXCEPTION_INT_DIVIDE_BY_ZERO` / a POSIX `SIGFPE`), which the handler converts to the
+panic below. AArch64 integer `SDIV`/`UDIV` by zero is defined to return 0 with NO
+trap — so the AArch64 backend does not rely on one: it emits an explicit divisor-zero
+check before every divide and remainder, and branches to `mrt_div_by_zero`, which
+reports through `mrt_panic`. There is no CPU fault involved, and the diagnostic is
+identical either way. The handler still classifies a `SIGFPE` it does receive (e.g. a
+floating-point trap) to the divide-by-zero panic. The nil-pointer (`SIGSEGV`/`SIGBUS`)
+path traps identically on both architectures.
 
 ## Tests
 
-On x64-Windows the diagnostic also walks the faulting thread's saved-RBP chain and
-prints a symbolized stack trace after the panic line (frame 0 is the faulting
-instruction, resolved from the faulting RIP; the remaining frames are the callers).
-This mirrors the ordinary `mrt_panic` software-panic trace. The frame addresses
-themselves are non-deterministic (ASLR), so only the resolved function names are
-asserted. arm64-macOS has no frame-walking fault diagnostic yet, so its tests
-assert only the panic line.
+The diagnostic also walks the faulting thread's saved frame-pointer chain and prints a
+symbolized stack trace after the panic line (frame 0 is the faulting instruction,
+resolved from the faulting RIP/PC; the remaining frames are the callers). This mirrors
+the ordinary `mrt_panic` software-panic trace. The frame addresses themselves are
+non-deterministic (ASLR), so only the resolved function names are asserted — the
+runner strips the ` at rip=…` suffix the fault diagnostic appends to the panic line.
+
+Both architectures walk: x64-Windows via `__gt_fault_last_rbp`, arm64-macOS via the
+same stash filled from `mcontext->__ss`. Each bounds the chain to the faulting stack
+and requires it to strictly ascend, so a corrupt frame pointer shortens the trace
+rather than faulting a second time inside the handler.
 
 <!-- test: divide-by-zero -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 ### Integer divide-by-zero produces a clean panic
 ```maxon
 function main() returns ExitCode
@@ -62,7 +67,7 @@ Stack trace:
 ```
 
 <!-- test: mod-by-zero -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 ### Integer modulo-by-zero produces a clean panic
 ```maxon
 function main() returns ExitCode
@@ -82,7 +87,7 @@ Stack trace:
 ```
 
 <!-- test: force-segfault -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, arm64-macos -->
 ### Deliberate access violation produces a clean panic with backtrace
 ```maxon
 function main() returns ExitCode
@@ -99,21 +104,4 @@ Stack trace:
   in maxon_force_segfault
   in main
   in mrt_start
-```
-
-<!-- test: force-segfault-macos -->
-<!-- targets: arm64-macos -->
-<!-- SelfhostedOnly -->
-### Deliberate access violation produces a clean panic (arm64-macOS)
-```maxon
-function main() returns ExitCode
-	__Builtins.forceSegfault()
-	return 0
-end 'main'
-```
-```exitcode
-1
-```
-```stderr
-panic: nil pointer or invalid memory access
 ```

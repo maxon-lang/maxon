@@ -25,54 +25,82 @@ ExitCode: 2
 ---
 // CompiledIR
 module {
-  func @main() -> u8 {
+  func @colorCode(c: i64) -> i64 {
   entry:
-    arm64.prologue stack_size=16
-    arm64.mov x0, #1
-  inlined_colorCode_0_0:
+    arm64.prologue stack_size=80
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
     arm64.mov x1, #0
-    arm64.mov x2, #0
+    arm64.str x1, [x29, #-16]
+    arm64.str x0, [x29, #-24]
+    arm64.b colorCode.pick_0.cmp0
+  pick_0.cmp0:
+    arm64.ldr x0, [x29, #-24]
+    arm64.mov x1, #0
     arm64.cmp x0, x1
-    arm64.cset x1, eq
-    arm64.b.ne inlined_colorCode_3_0
-    arm64.b inlined_colorCode_2_0
-  inlined_colorCode_1_0:
-    arm64.b inline_cont_main_0
-  inlined_colorCode_2_0:
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne colorCode.pick_0.case0
+    arm64.b colorCode.pick_0.cmp1
+  pick_0.case0:
     arm64.mov x0, #1
-    arm64.b inlined_colorCode_1_0
-  inlined_colorCode_3_0:
+    arm64.str x0, [x29, #-16]
+    arm64.b colorCode.pick_0.merge
+  pick_0.cmp1:
+    arm64.ldr x0, [x29, #-24]
     arm64.mov x1, #1
     arm64.cmp x0, x1
-    arm64.cset x1, eq
-    arm64.b.ne inlined_colorCode_5_0
-  inlined_colorCode_4_0:
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne colorCode.pick_0.case1
+    arm64.b colorCode.pick_0.cmp2
+  pick_0.case1:
     arm64.mov x0, #2
-    arm64.b inlined_colorCode_1_0
-  inlined_colorCode_5_0:
+    arm64.str x0, [x29, #-16]
+    arm64.b colorCode.pick_0.merge
+  pick_0.cmp2:
+    arm64.ldr x0, [x29, #-24]
     arm64.mov x1, #2
     arm64.cmp x0, x1
-    arm64.cset x0, eq
-    arm64.b.ne __phi_trampoline_6_0
-  inlined_colorCode_6_0:
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne colorCode.pick_0.case2
+    arm64.b colorCode.pick_0.merge
+  pick_0.case2:
     arm64.mov x0, #3
-    arm64.b inlined_colorCode_1_0
-  inline_cont_main_0:
-    arm64.mov x1, #255
-    arm64.cmp x0, x1
-    arm64.cset x1, hi
-    arm64.b.ls __range_ok_0
+    arm64.str x0, [x29, #-16]
+    arm64.b colorCode.pick_0.merge
+  pick_0.merge:
+    arm64.ldr x0, [x29, #-16]
+    arm64.epilogue stack_size=80
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x0, #1
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl colorCode
+    arm64.mov x2, #0
+    arm64.cmp x0, x2
+    arm64.cset x3, lt
+    arm64.mov x4, #255
+    arm64.cmp x0, x4
+    arm64.cset x5, gt
+    arm64.orr x6, x3, x5
+    arm64.cmp x6, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
   __range_panic_0:
-    arm64.adrp_add_rdata x0, __panic_msg_e290b910c88b8c98
-    arm64.ldr x19, [x29, #16]
-    arm64.mov x0, x19
+    arm64.adrp_add_symdata x0, __panic_msg_0
+    arm64.mov x1, x0
+    arm64.mov x0, x1
     arm64.bl mrt_panic
   __range_ok_0:
-    arm64.epilogue
+    arm64.epilogue stack_size=48
     arm64.ret
-  __phi_trampoline_6_0:
-    arm64.mov x0, x2
-    arm64.b inlined_colorCode_1_0
   }
 }
 ---

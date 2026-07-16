@@ -1,0 +1,108 @@
+// Test: enum-exhaustive.int-backed-range-covers-lower-bound
+enum Level
+	low = 10
+	medium = 20
+	high = 30
+end 'Level'
+
+function classify(l Level) returns ExitCode
+	let r = match l 'm'
+		low to medium gives 41
+		high gives 42
+	end 'm'
+	return r
+end 'classify'
+
+function main() returns ExitCode
+	return classify(Level.low)
+end 'main'
+---
+ExitCode: 41
+---
+// CompiledIR
+module {
+  func @classify(l: i64) -> u8 {
+  entry:
+    arm64.prologue stack_size=80
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.mov x1, #0
+    arm64.str x1, [x29, #-16]
+    arm64.str x0, [x29, #-24]
+    arm64.b classify.m_0.cmp0
+  m_0.cmp0:
+    arm64.ldr x0, [x29, #-24]
+    arm64.mov x1, #10
+    arm64.cmp x0, x1
+    arm64.cset x2, ge
+    arm64.ldr x3, [x29, #-24]
+    arm64.mov x4, #20
+    arm64.cmp x3, x4
+    arm64.cset x5, le
+    arm64.and x6, x2, x5
+    arm64.cmp x6, #0
+    arm64.b.ne classify.m_0.case0
+    arm64.b classify.m_0.cmp1
+  m_0.case0:
+    arm64.mov x0, #41
+    arm64.str x0, [x29, #-16]
+    arm64.b classify.m_0.merge
+  m_0.cmp1:
+    arm64.ldr x0, [x29, #-24]
+    arm64.mov x1, #30
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne classify.m_0.case1
+    arm64.b classify.m_0.merge
+  m_0.case1:
+    arm64.mov x0, #42
+    arm64.str x0, [x29, #-16]
+    arm64.b classify.m_0.merge
+  m_0.merge:
+    arm64.ldr x0, [x29, #-16]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x3, #255
+    arm64.cmp x0, x3
+    arm64.cset x4, gt
+    arm64.orr x5, x2, x4
+    arm64.cmp x5, #0
+    arm64.b.ne classify.__range_panic_0
+    arm64.b classify.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_0
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue stack_size=80
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x0, #10
+    arm64.bl classify
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x1, #255
+    arm64.cmp x0, x1
+    arm64.cset x3, gt
+    arm64.orr x1, x2, x3
+    arm64.cmp x1, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_1
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue stack_size=16
+    arm64.ret
+  }
+}
+---

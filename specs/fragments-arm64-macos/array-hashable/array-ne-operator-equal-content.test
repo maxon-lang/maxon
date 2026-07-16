@@ -1,0 +1,76 @@
+// Test: array-ne-operator-equal-content
+function main() returns ExitCode
+	let a = [7, 8, 9]
+	let b = [7, 8, 9]
+	if a != b 'ne'
+		return 1
+	end 'ne'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.adrp_add_global x0, __static_lit_4
+    arm64.mov x1, x0
+    arm64.mov x2, #32
+    arm64.add x3, x1, x2
+    arm64.str x3, [x29, #-8]
+    arm64.ldr x4, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.adrp_add_global x5, __static_lit_4
+    arm64.mov x6, x5
+    arm64.mov x7, #32
+    arm64.add x8, x6, x7
+    arm64.str x8, [x29, #-16]
+    arm64.ldr x9, [x29, #-16]
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_incref
+    arm64.ldr x10, [x29, #-8]
+    arm64.ldr x11, [x29, #-16]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-16]
+    arm64.bl __Array_i64.equals
+    arm64.mov x12, #1
+    arm64.eor x14, x0, x12
+    arm64.cmp x14, #0
+    arm64.b.ne main.ne_0
+    arm64.b main.ne_0.after
+  ne_0:
+    arm64.ldr x0, [x29, #-16]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_22
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_22
+    arm64.ldr x1, [x29, #-8]
+    arm64.cmp x1, #0
+    arm64.b.eq main.__skip_guarded_24
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_24
+    arm64.mov x0, #1
+    arm64.epilogue stack_size=48
+    arm64.ret
+  ne_0.after:
+    arm64.ldr x0, [x29, #-16]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_28
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_28
+    arm64.ldr x1, [x29, #-8]
+    arm64.cmp x1, #0
+    arm64.b.eq main.__skip_guarded_30
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_30
+    arm64.mov x0, #0
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+}
+---

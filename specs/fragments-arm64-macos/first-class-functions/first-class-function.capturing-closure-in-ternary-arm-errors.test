@@ -1,0 +1,21 @@
+// Test: first-class-function.capturing-closure-in-ternary-arm-errors
+
+typealias Integer = int(i64.min to i64.max)
+typealias UnaryOp = function(Integer) returns Integer
+
+function makeAdder(bump Integer) returns UnaryOp
+	let inc = function(n Integer) gives n + bump
+	let dbl = function(n Integer) gives n * 2
+	return inc if bump > 0 else dbl
+end 'makeAdder'
+
+function main() returns ExitCode
+	let f = makeAdder(20)
+	return f(22)
+end 'main'
+---
+MaxoncStderr: ```
+error E3099: specs/fragments/first-class-functions/first-class-function.capturing-closure-in-ternary-arm-errors.test:9:13: cannot use a closure that captures as an arm of a conditional expression: the two arms merge through a single slot, which carries the function pointer but not the capture environment, so the closure would be called with no environment. Use a function reference, or a closure that captures nothing
+```
+---
+---

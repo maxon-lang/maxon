@@ -18,39 +18,38 @@ ExitCode: 42
 ---
 // CompiledIR
 module {
+  func @add(n: i64) {
+  entry:
+    arm64.global_load x1, [total]
+    arm64.add x2, x1, x0
+    arm64.global_store [total], x2
+    arm64.ret
+  }
   func @main() -> u8 {
   entry:
     arm64.prologue stack_size=16
-    arm64.adrp_add_rdata x0, __data_total
-    arm64.ldr x0, [x29, #16]
-    arm64.ldr x1, [x0, #0] (8b)
-    arm64.mov x2, #5
-    arm64.adrp_add_rdata x0, __data_total
-    arm64.ldr x0, [x29, #16]
-    arm64.add x3, x1, x2
-    arm64.str x3, [x0, #0] (8b)
-    arm64.adrp_add_rdata x0, __data_total
-    arm64.ldr x0, [x29, #16]
-    arm64.ldr x1, [x0, #0] (8b)
-    arm64.mov x2, #27
-    arm64.adrp_add_rdata x0, __data_total
-    arm64.ldr x0, [x29, #16]
-    arm64.add x3, x1, x2
-    arm64.str x3, [x0, #0] (8b)
-    arm64.adrp_add_rdata x0, __data_total
-    arm64.ldr x1, [x29, #16]
-    arm64.ldr x0, [x1, #0] (8b)
-    arm64.mov x1, #255
+    arm64.mov x0, #5
+    arm64.bl add
+    arm64.mov x0, #27
+    arm64.bl add
+    arm64.global_load x0, [total]
+    arm64.mov x1, #0
     arm64.cmp x0, x1
-    arm64.cset x1, hi
-    arm64.b.ls __range_ok_0
+    arm64.cset x2, lt
+    arm64.mov x3, #255
+    arm64.cmp x0, x3
+    arm64.cset x4, gt
+    arm64.orr x5, x2, x4
+    arm64.cmp x5, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
   __range_panic_0:
-    arm64.adrp_add_rdata x0, __panic_msg_e8a4bb171c93875b
-    arm64.ldr x19, [x29, #16]
-    arm64.mov x0, x19
+    arm64.adrp_add_symdata x0, __panic_msg_1
+    arm64.mov x1, x0
+    arm64.mov x0, x1
     arm64.bl mrt_panic
   __range_ok_0:
-    arm64.epilogue
+    arm64.epilogue stack_size=16
     arm64.ret
   }
 }

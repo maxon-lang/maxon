@@ -15,119 +15,121 @@ ExitCode: 2
 module {
   func @main() -> u8 {
   entry:
-    arm64.prologue stack_size=48
-    arm64.adrp+add x1, stdlib.__destruct___ManagedMemory
+    arm64.prologue stack_size=112
+    arm64.mov x0, #0
+    arm64.str x0, [x29, #-8]
+    arm64.adrp_add_rdata x1, __str_1
+    arm64.mov x2, x1
+    arm64.mov x3, #5
+    arm64.adrp_add_func x4, __destruct_String
+    arm64.mov x5, x4
+    arm64.str x2, [x29, #-48]
+    arm64.mov x1, x5
     arm64.mov x0, #48
-    arm64.bl mrt_alloc_with_dtor
-    arm64.mov x19, x0
-    arm64.mov x20, #0
-    arm64.str x20, [x19, #40] (8b)
-    arm64.adrp_add_rdata x0, __istr_501
-    arm64.ldr x0, [x29, #16]
-    arm64.str x0, [x19, #0] (8b)
-    arm64.mov x0, #5
-    arm64.str x0, [x19, #8] (8b)
-    arm64.mov x0, #-2
-    arm64.str x0, [x19, #16] (8b)
+    arm64.mov x2, #4
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-16]
+    arm64.mov x6, #-2
+    arm64.mov x7, #1
+    arm64.mov x8, #0
+    arm64.ldr x9, [x29, #-16]
+    arm64.ldr x10, [x29, #-48]
+    arm64.str x10, [x9, #0]
+    arm64.ldr x11, [x29, #-16]
+    arm64.mov x12, #5
+    arm64.str x12, [x11, #8]
+    arm64.ldr x14, [x29, #-16]
+    arm64.str x6, [x14, #16]
+    arm64.ldr x15, [x29, #-16]
+    arm64.str x7, [x15, #24]
+    arm64.ldr x0, [x29, #-16]
+    arm64.str x8, [x0, #32]
     arm64.mov x0, #1
-    arm64.str x0, [x19, #24] (8b)
-    arm64.str x20, [x19, #32] (8b)
-    arm64.adrp+add x1, __destruct_String
-    arm64.mov x0, #16
-    arm64.bl stdlib.__mm_alloc
-    arm64.mov x21, x0
-    arm64.str x19, [x21, #0] (8b)
-    arm64.mov x0, #1
-    arm64.str x0, [x21, #8] (8b)
-    arm64.ldr x0, [x21, #0] (8b)
-    arm64.mov x1, #8
-    arm64.sub x2, x0, x1
-    arm64.atomic_inc [x2]
-    arm64.bl CodepointView.create
-    arm64.mov x19, x0
-    arm64.mov x0, x21
-    arm64.bl mm_drop
-    arm64.mov x0, x19
-    arm64.bl CodepointView.createIterator
-    arm64.mov x21, x0
-    arm64.mov x0, x1
-    arm64.cmp x0, x20
-    arm64.cset x0, ne
-    arm64.b.eq __phi_trampoline_0_0
-    arm64.b __rc_edge_0_0
-  inlined_CodepointIterator.advance_0_0:
-    arm64.ldr x0, [x21, #0] (8b)
-    arm64.ldrb x1, [x21, #20] (1b)
-    arm64.ldr x2, [x21, #8] (8b)
-    arm64.ldr x3, [x0, #8] (8b)
-    arm64.add x0, x2, x1
-    arm64.cmp x0, x3
-    arm64.cset x1, ge
-    arm64.b.lt inlined_CodepointIterator.advance_2_0
-  inlined_CodepointIterator.advance_1_0:
-    arm64.mov x1, #1
+    arm64.ldr x1, [x29, #-16]
+    arm64.str x0, [x1, #40]
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_incref
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl stdlib.String.codepoints
+    arm64.str x0, [x29, #-24]
+    arm64.ldr x0, [x29, #-24]
+    arm64.bl stdlib.helpers.string.CodepointView.createIterator
+    arm64.str x0, [x29, #-32]
     arm64.mov x0, #0
-    arm64.b inline_cont_main_0
-  inlined_CodepointIterator.advance_2_0:
-    arm64.str x0, [x21, #8] (8b)
-    arm64.ldr x1, [x21, #8] (8b)
-    arm64.ldr x0, [x21, #0] (8b)
-    arm64.bl stdlib.helpers.string.utf8DecodeAt
-    arm64.str x0, [x21, #16] (4b)
-    arm64.ldr x1, [x21, #8] (8b)
-    arm64.ldr x0, [x21, #0] (8b)
-    arm64.bl stdlib.helpers.string.utf8ByteLengthAt
-    arm64.str x0, [x21, #20] (1b)
-    arm64.mov x1, #0
+    arm64.cmp x1, x0
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne main.chars_0.preamble
+    arm64.b main.chars_0.exit
+  chars_0.preamble:
+    arm64.b main.chars_0
+  chars_0.header:
+    arm64.ldr x0, [x29, #-32]
+    arm64.bl stdlib.helpers.string.CodepointIterator.advance
     arm64.mov x0, #0
-  inline_cont_main_0:
-    arm64.cmp x1, x20
-    arm64.cset x0, ne
-    arm64.b.eq chars_0
-    arm64.b __rc_edge_10_0
+    arm64.cmp x1, x0
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne main.chars_0
+    arm64.b main.chars_0.exit
   chars_0:
-    arm64.mov x0, x21
-    arm64.bl CodepointIterator.current
-    arm64.mov x1, #45
-    arm64.cmp x0, x1
-    arm64.cset x0, eq
-    arm64.b.ne dash_0.after
-    arm64.b dash_0
-  chars_0.exit:
-    arm64.mov x1, #255
-    arm64.cmp x0, x1
-    arm64.cset x1, hi
-    arm64.b.ls __range_ok_0
-    arm64.b __range_panic_0
+    arm64.ldr x0, [x29, #-32]
+    arm64.bl stdlib.helpers.string.CodepointIterator.current
+    arm64.mov x1, x0
+    arm64.str x1, [x29, #-40]
+    arm64.ldr x2, [x29, #-40]
+    arm64.mov x3, #45
+    arm64.cmp x2, x3
+    arm64.cset x4, eq
+    arm64.cmp x4, #0
+    arm64.b.ne main.dash_0
+    arm64.b main.dash_0.merge
   dash_0:
     arm64.mov x0, #1
-    arm64.add x1, x22, x0
-    arm64.mov x22, x1
-  dash_0.after:
-    arm64.b inlined_CodepointIterator.advance_0_0
-  __rc_edge_0_0:
-    arm64.mov x0, x19
-    arm64.bl __mm_decref_maybenull_helper
-    arm64.mov x0, x20
-    arm64.b chars_0.exit
-  __rc_edge_10_0:
-    arm64.mov x0, x21
-    arm64.bl __mm_decref_maybenull_helper
-    arm64.mov x0, x19
-    arm64.bl __mm_decref_maybenull_helper
-    arm64.mov x0, x22
-    arm64.b chars_0.exit
+    arm64.ldr x1, [x29, #-8]
+    arm64.add x2, x1, x0
+    arm64.str x2, [x29, #-8]
+    arm64.b main.dash_0.merge
+  dash_0.merge:
+    arm64.b main.chars_0.header
+  chars_0.exit:
+    arm64.ldr x0, [x29, #-8]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x3, #255
+    arm64.cmp x0, x3
+    arm64.cset x4, gt
+    arm64.orr x5, x2, x4
+    arm64.cmp x5, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
   __range_panic_0:
-    arm64.adrp_add_rdata x0, __panic_msg_2b656b6c9153ad15
-    arm64.ldr x19, [x29, #16]
-    arm64.mov x0, x19
+    arm64.adrp_add_symdata x0, __panic_msg_1
+    arm64.mov x1, x0
+    arm64.mov x0, x1
     arm64.bl mrt_panic
   __range_ok_0:
-    arm64.epilogue
+    arm64.ldr x1, [x29, #-32]
+    arm64.cmp x1, #0
+    arm64.b.eq main.__skip_guarded_69
+    arm64.ldr x0, [x29, #-32]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_69
+    arm64.ldr x0, [x29, #-24]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_71
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_71
+    arm64.ldr x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq main.__skip_guarded_73
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_73
+    arm64.ldr x0, [x29, #-8]
+    arm64.epilogue stack_size=112
     arm64.ret
-  __phi_trampoline_0_0:
-    arm64.mov x22, x20
-    arm64.b chars_0
   }
 }
 ---

@@ -16,49 +16,53 @@ module {
   entry:
     arm64.prologue stack_size=48
     arm64.mov x0, #1
-    arm64.bl bool.toString
-    arm64.mov x19, x0
-    arm64.adrp+add x1, stdlib.__destruct___ManagedMemory
-    arm64.mov x0, #48
-    arm64.bl mrt_alloc_with_dtor
-    arm64.mov x20, x0
-    arm64.mov x0, #0
-    arm64.str x0, [x20, #40] (8b)
-    arm64.adrp_add_rdata x0, __istr_67
-    arm64.ldr x0, [x29, #16]
-    arm64.str x0, [x20, #0] (8b)
-    arm64.mov x0, #4
-    arm64.str x0, [x20, #8] (8b)
-    arm64.mov x0, #-2
-    arm64.str x0, [x20, #16] (8b)
-    arm64.mov x0, #1
-    arm64.str x0, [x20, #24] (8b)
-    arm64.mov x0, #0
-    arm64.str x0, [x20, #32] (8b)
-    arm64.adrp+add x1, __destruct_String
-    arm64.mov x0, #16
-    arm64.bl stdlib.__mm_alloc
-    arm64.mov x21, x0
-    arm64.str x20, [x21, #0] (8b)
-    arm64.mov x0, #1
-    arm64.str x0, [x21, #8] (8b)
-    arm64.mov x0, x19
-    arm64.mov x1, x21
-    arm64.bl String.equals
-    arm64.mov x20, x0
-    arm64.mov x0, x19
-    arm64.bl __mm_decref_maybenull_helper
-    arm64.mov x0, x21
-    arm64.bl mm_drop
-    arm64.cmp x20, #0
-    arm64.b.eq ok_0.after
+    arm64.bl stdlib.bool.toString
+    arm64.str x0, [x29, #-8]
+    arm64.adrp_add_global x0, __static_lit_2
+    arm64.mov x1, x0
+    arm64.mov x2, #32
+    arm64.add x3, x1, x2
+    arm64.str x3, [x29, #-16]
+    arm64.ldr x4, [x29, #-16]
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_incref
+    arm64.ldr x5, [x29, #-8]
+    arm64.ldr x6, [x29, #-16]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-16]
+    arm64.bl stdlib.String.equals
+    arm64.cmp x0, #0
+    arm64.b.ne main.ok_0
+    arm64.b main.ok_0.after
   ok_0:
+    arm64.ldr x0, [x29, #-16]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_16
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_16
+    arm64.ldr x1, [x29, #-8]
+    arm64.cmp x1, #0
+    arm64.b.eq main.__skip_guarded_18
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_18
     arm64.mov x0, #1
-    arm64.epilogue
+    arm64.epilogue stack_size=48
     arm64.ret
   ok_0.after:
+    arm64.ldr x0, [x29, #-16]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_22
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_22
+    arm64.ldr x1, [x29, #-8]
+    arm64.cmp x1, #0
+    arm64.b.eq main.__skip_guarded_24
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_24
     arm64.mov x0, #0
-    arm64.epilogue
+    arm64.epilogue stack_size=48
     arm64.ret
   }
 }

@@ -145,19 +145,27 @@ public partial class ARM64CodeEmitter {
   /// <summary>
   /// mrt_div_by_zero(): ARM64 SDIV/UDIV yield 0 on a zero divisor rather than faulting,
   /// unlike x86's hardware #DE. The backend emits an explicit divisor==0 check before each
-  /// divide/remainder and tail-calls here when it trips. Prints the same diagnostic the
-  /// hardware-trap fault handler produces ("panic: integer divide by zero") and exits with
-  /// status 1. No stack trace — matching the x86 fault-handler path. Never returns.
+  /// divide/remainder and branches here when it trips. Hands off to mrt_panic, which prints
+  /// the message and the symbolized backtrace and exits 1 — so a divide by zero reports the
+  /// same way here as it does on x86, where the CPU trap's fault diagnostic prints the same
+  /// message and walks the same kind of frame chain. Never returns.
+  ///
+  /// A TRAMPOLINE, deliberately: no prologue, and B rather than BL. mrt_panic symbolizes its
+  /// own return address as frame 0 and walks from its caller's saved FP, so leaving x29/x30
+  /// untouched hands it the DIVIDE SITE's frame — the trace starts at the function that
+  /// divided. Giving this function a frame of its own would insert `in mrt_div_by_zero` at
+  /// the top of every such trace.
   /// </summary>
   private void EmitMaxonDivByZero() {
-    EmitRuntimeFunctionStart("mrt_div_by_zero", 0, 0x20);
-    EmitAdrpAddFixup(ARM64Register.X0, _symdataAdrpFixups, "__gt_panic_msg_div_zero");
-    EmitBranchLink("rt_write_cstr_stderr");
-    EmitAdrpAddFixup(ARM64Register.X0, _symdataAdrpFixups, "__gt_panic_msg_nl");
-    EmitBranchLink("rt_write_cstr_stderr");
-    EmitMovRegImm(ARM64Register.X0, 1);
-    EmitCallImport("_exit");
-    EmitWord(0xD4200000); // BRK #0
+    // mrt_panic prints its message as a complete line; the shared __gt_panic_msg_div_zero
+    // has no newline because x86's diagnostic appends ` at rip=…` fields to it.
+    DefineSymdata("__gt_panic_msg_div_zero_line",
+      System.Text.Encoding.UTF8.GetBytes(Runtime.RuntimeEmitter.DivZeroPanicText + "\n\0"));
+
+    DefineLabel("mrt_div_by_zero");
+    _runtimeFunctionLabels.Add("mrt_div_by_zero");
+    EmitAdrpAddFixup(ARM64Register.X0, _symdataAdrpFixups, "__gt_panic_msg_div_zero_line");
+    EmitBranch("mrt_panic");
   }
 
   // Reload argument from stack
@@ -479,6 +487,7 @@ public partial class ARM64CodeEmitter {
     EmitMaxonExit();
     EmitWriteCstrToStderr();
     EmitMaxonPanic();
+    EmitMaxonFaultBacktrace();
     EmitMaxonPanicPrintFrame();
     EmitMaxonBoundsCheck();
     EmitMaxonI64ToString();
@@ -735,11 +744,45 @@ public partial class ARM64CodeEmitter {
   //   [x29+64] = text_offset (current frame)
   //   [x29+72] = saved X19 (callee-saved)
   //   [x29+80] = symdata_base (addr of __symdata_base)
-  private void EmitMaxonPanic() {
-    DefineRdata("__newline", [(byte)'\n']);
-    // Ensure __symdata_base label exists at offset 0 of symdata for name resolution
+  /// <summary>
+  /// Emit the stack-trace preamble shared by mrt_panic and mrt_fault_backtrace: cache
+  /// text_base (&amp;mrt_start) @ [x29+24], the symtab pointer @ [x29+32] and its entry count
+  /// @ [x29+56], symdata_base @ [x29+80], then print "Stack trace:\n". Both callers use the
+  /// identical [x29+*] contract mrt_panic_print_frame reads back through its caller's saved
+  /// X29, so their frames must keep these four slots at these offsets.
+  ///
+  /// The FP-chain WALK that follows is deliberately NOT shared: mrt_panic trusts a
+  /// well-formed chain, while mrt_fault_backtrace range-validates a possibly-corrupt one
+  /// (stack bounds + strict ascent) — a fault is exactly the case where the chain may be
+  /// the thing that broke.
+  /// </summary>
+  private void EmitStackTraceHeader() {
+    if (!_symdataLabels.ContainsKey("__panic_stacktrace"))
+      DefineSymdata("__panic_stacktrace", System.Text.Encoding.UTF8.GetBytes("Stack trace:\n\0"));
+    // Name resolution measures every offset from symdata's base. Registered here rather
+    // than in one caller so this stays self-contained for the other.
     if (!_symdataLabels.ContainsKey("__symdata_base"))
       _symdataLabels["__symdata_base"] = 0;
+
+    // text_base = address of mrt_start
+    EmitAdrpAddFixup(ARM64Register.X0, _funcAddrAdrpFixups, "mrt_start");
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 24, 8);
+
+    // symtab pointer, and count = [symtab_ptr] (first 8 bytes)
+    EmitAdrpAddFixup(ARM64Register.X0, _symdataAdrpFixups, "__symtab");
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 32, 8);
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X0, 0, 8);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X29, 56, 8);
+
+    EmitAdrpAddFixup(ARM64Register.X0, _symdataAdrpFixups, "__symdata_base");
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 80, 8);
+
+    EmitAdrpAddFixup(ARM64Register.X0, _symdataAdrpFixups, "__panic_stacktrace");
+    EmitBranchLink("rt_write_cstr_stderr");
+  }
+
+  private void EmitMaxonPanic() {
+    DefineRdata("__newline", [(byte)'\n']);
 
     EmitRuntimeFunctionStart("mrt_panic", 1, 0x60);
 
@@ -750,25 +793,8 @@ public partial class ARM64CodeEmitter {
     EmitReloadArg(0); // X0 = msg_ptr
     EmitBranchLink("rt_write_cstr_stderr");
 
-    // Step 2: Compute text_base = address of mrt_start
-    EmitAdrpAddFixup(ARM64Register.X0, _funcAddrAdrpFixups, "mrt_start");
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 24, 8);
-
-    // Step 3: Load symtab pointer and count
-    EmitAdrpAddFixup(ARM64Register.X0, _symdataAdrpFixups, "__symtab");
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 32, 8);
-    // Load count = [symtab_ptr] (first 8 bytes)
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X0, 0, 8);
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X29, 56, 8);
-
-    // Load symdata_base
-    EmitAdrpAddFixup(ARM64Register.X0, _symdataAdrpFixups, "__symdata_base");
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 80, 8);
-
-    // Step 4: Print "Stack trace:\n"
-    DefineSymdata("__panic_stacktrace", System.Text.Encoding.UTF8.GetBytes("Stack trace:\n\0"));
-    EmitAdrpAddFixup(ARM64Register.X0, _symdataAdrpFixups, "__panic_stacktrace");
-    EmitBranchLink("rt_write_cstr_stderr");
+    // Steps 2-4: cache text_base/symtab/symdata_base, print "Stack trace:"
+    EmitStackTraceHeader();
 
     // Step 5: Print first frame (the function that called panic)
     // [x29+8] = saved LR = return addr back to the function that called panic
@@ -856,6 +882,116 @@ public partial class ARM64CodeEmitter {
     EmitMovRegImm(ARM64Register.X0, 1);
     EmitCallImport("_exit");
     EmitWord(0xD4200000); // BRK #0
+  }
+
+  /// <summary>
+  /// mrt_fault_backtrace(): print "Stack trace:\n" + a symbolized backtrace for a CPU
+  /// fault, then return (the diagnostic exits afterward). Frame 0 is the faulting
+  /// instruction, symbolized from P-&gt;currentGt-&gt;fault_rip; the remaining frames come from
+  /// walking the faulting thread's saved-FP chain (__gt_fault_last_rbp upward),
+  /// range-validated against [__gt_fault_last_rsp, +FaultStackWindowBytes) and required to
+  /// strictly ascend so a corrupt FP degrades to a short trace instead of faulting a second
+  /// time inside the handler. Reuses mrt_panic_print_frame via its caller-frame contract,
+  /// so the slots below must match mrt_panic's. Mirrors the x86 mrt_fault_backtrace so both
+  /// architectures print an identical trace. Takes no args.
+  ///
+  /// Our own FP is meaningless here (the handler redirected us with FP=0), which is why the
+  /// walk starts from the stashed globals rather than x29.
+  ///
+  /// Stack layout (positive offsets from x29):
+  ///   [+24] = text_base (addr of mrt_start)
+  ///   [+32] = symtab_ptr                      (read by mrt_panic_print_frame)
+  ///   [+40] = current frame fp
+  ///   [+48] = frame counter (counts down)
+  ///   [+56] = symtab count                    (read by mrt_panic_print_frame)
+  ///   [+64] = text_offset                     (read by mrt_panic_print_frame)
+  ///   [+80] = symdata_base                    (read by mrt_panic_print_frame)
+  ///   [+88] = stack_low  (fault SP)
+  ///   [+96] = stack_high (fault SP + FaultStackWindowBytes)
+  /// </summary>
+  private void EmitMaxonFaultBacktrace() {
+    EmitRuntimeFunctionStart("mrt_fault_backtrace", 0, 0x70);
+
+    EmitStackTraceHeader();
+
+    // ---- Frame 0: the faulting instruction (P->currentGt->fault_rip) ----
+    // No ret_addr-1 bias here: fault_rip IS the faulting instruction, not a return
+    // address, so it symbolizes to the correct function directly.
+    EmitLoadCurrentGt(ARM64Register.X0);
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X0, GtOffFaultRip, 8);
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X2, ARM64Register.X29, 24, 8); // text_base
+    EmitAluRegReg(0xCB000000, ARM64Register.X1, ARM64Register.X1, ARM64Register.X2); // text_offset
+    // textsize = symtab_ptr - text_base. One UNSIGNED compare rejects both a
+    // negative offset (wraps huge) and one past the end of .text.
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X3, ARM64Register.X29, 32, 8);
+    EmitAluRegReg(0xCB000000, ARM64Register.X3, ARM64Register.X3, ARM64Register.X2);
+    EmitWord(0xEB00001F | (Reg(ARM64Register.X3) << 16) | (Reg(ARM64Register.X1) << 5)); // CMP
+    EmitBranchCond(ARM64ConditionCode.Hs, "rt_fbt_after_pc");
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X29, 64, 8);
+    EmitBranchLink("mrt_panic_print_frame");
+
+    DefineLabel("rt_fbt_after_pc");
+
+    // ---- Frames 1..N: walk the saved-FP chain ----
+    EmitGlobalLoadReg(ARM64Register.X0, "__gt_fault_last_rsp");
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 88, 8); // stack_low
+    EmitMovRegImm(ARM64Register.X1, FaultStackWindowBytes);
+    EmitAluRegReg(0x8B000000, ARM64Register.X0, ARM64Register.X0, ARM64Register.X1);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 96, 8); // stack_high
+
+    EmitGlobalLoadReg(ARM64Register.X0, "__gt_fault_last_rbp");
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 40, 8); // current frame
+    EmitMovRegImm(ARM64Register.X0, MaxBacktraceFrames);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 48, 8); // counter
+
+    DefineLabel("rt_fbt_walk_loop");
+    // counter == 0 → done, else counter--
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 48, 8);
+    EmitCbz(ARM64Register.X0, "rt_fbt_walk_done");
+    EmitAddSubImm(ARM64Register.X0, ARM64Register.X0, 1, isAdd: false);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 48, 8);
+
+    // frame == 0 → done
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 40, 8);
+    EmitCbz(ARM64Register.X0, "rt_fbt_walk_done");
+
+    // frame outside [stack_low, stack_high) → done (corrupt; don't deref it)
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X29, 88, 8);
+    EmitWord(0xEB00001F | (Reg(ARM64Register.X1) << 16) | (Reg(ARM64Register.X0) << 5)); // CMP
+    EmitBranchCond(ARM64ConditionCode.Lo, "rt_fbt_walk_done");
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X29, 96, 8);
+    EmitWord(0xEB00001F | (Reg(ARM64Register.X1) << 16) | (Reg(ARM64Register.X0) << 5)); // CMP
+    EmitBranchCond(ARM64ConditionCode.Hs, "rt_fbt_walk_done");
+
+    // ret_addr = [frame + 8] (saved LR)
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X2, ARM64Register.X0, 8, 8);
+    EmitCbz(ARM64Register.X2, "rt_fbt_walk_done");
+
+    // Symbolize ret_addr - 1 so a call as a function's final instruction resolves to the
+    // calling function rather than the next one (matches mrt_panic's walk bias).
+    EmitAddSubImm(ARM64Register.X2, ARM64Register.X2, 1, isAdd: false);
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X3, ARM64Register.X29, 24, 8); // text_base
+    EmitAluRegReg(0xCB000000, ARM64Register.X2, ARM64Register.X2, ARM64Register.X3);
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X4, ARM64Register.X29, 32, 8); // symtab_ptr
+    EmitAluRegReg(0xCB000000, ARM64Register.X4, ARM64Register.X4, ARM64Register.X3); // textsize
+    EmitWord(0xEB00001F | (Reg(ARM64Register.X4) << 16) | (Reg(ARM64Register.X2) << 5)); // CMP
+    EmitBranchCond(ARM64ConditionCode.Hs, "rt_fbt_walk_done");
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X2, ARM64Register.X29, 64, 8); // text_offset
+
+    // Advance the frame BEFORE printing (print_frame clobbers scratch), with an ascending
+    // guard: next = [frame]; if next <= frame, use 0 so the walk stops after this frame.
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X5, ARM64Register.X0, 0, 8);
+    EmitWord(0xEB00001F | (Reg(ARM64Register.X0) << 16) | (Reg(ARM64Register.X5) << 5)); // CMP next, frame
+    EmitBranchCond(ARM64ConditionCode.Hi, "rt_fbt_adv_ok");
+    EmitMovRegImm(ARM64Register.X5, 0);
+    DefineLabel("rt_fbt_adv_ok");
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X5, ARM64Register.X29, 40, 8);
+
+    EmitBranchLink("mrt_panic_print_frame");
+    EmitBranch("rt_fbt_walk_loop");
+
+    DefineLabel("rt_fbt_walk_done");
+    EmitRuntimeFunctionEnd();
   }
 
   // --- mrt_panic_print_frame ---
@@ -1150,6 +1286,10 @@ public partial class ARM64CodeEmitter {
   ///   [+16] = value, [+24] = buffer, [+32] = fmt_ptr, [+40] = fmt_len
   ///   [+48] = fill_char, [+56] = min_width, [+64] = type_char
   ///   [+72] = digit_start, [+80] = write_pos/end, [+88] = is_negative
+  ///
+  /// x/X/b/o all share one unsigned power-of-two-base loop, parameterized by a
+  /// shift (4/1/3) and mask held in registers across it. The alpha arm is only
+  /// reachable for hex: base 2 and base 8 cannot produce a digit >= 10.
   /// </summary>
   private void EmitMaxonI64ToStringFmt() {
     var noFmtLabel = $"__i64fmt_nofmt_{_uniqueLabelCounter}";
@@ -1158,8 +1298,10 @@ public partial class ARM64CodeEmitter {
     var positiveLabel = $"__i64fmt_positive_{_uniqueLabelCounter}";
     var hexLowerLabel = $"__i64fmt_hexlower_{_uniqueLabelCounter}";
     var hexUpperLabel = $"__i64fmt_hexupper_{_uniqueLabelCounter}";
+    var binaryLabel = $"__i64fmt_binary_{_uniqueLabelCounter}";
+    var octalLabel = $"__i64fmt_octal_{_uniqueLabelCounter}";
     var decimalLabel = $"__i64fmt_decimal_{_uniqueLabelCounter}";
-    var hexConvertLabel = $"__i64fmt_hexconv_{_uniqueLabelCounter}";
+    var unsignedConvertLabel = $"__i64fmt_unsignedconv_{_uniqueLabelCounter}";
     var decConvertLabel = $"__i64fmt_decconv_{_uniqueLabelCounter}";
     var reverseLabel = $"__i64fmt_reverse_{_uniqueLabelCounter}";
     var reverseDoneLabel = $"__i64fmt_revdone_{_uniqueLabelCounter}";
@@ -1240,63 +1382,73 @@ public partial class ARM64CodeEmitter {
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X29, 24, 8);
     EmitMovRegReg(ARM64Register.X3, ARM64Register.X1); // X3 = write position
 
-    // Check type: 'x' (0x78) or 'X' (0x58) = hex
+    // Dispatch on the type char: 'x'/'X' hex, 'b' binary, 'o' octal, else decimal.
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X5, ARM64Register.X29, 64, 8);
-    EmitMovRegImm(ARM64Register.X6, (long)'x');
-    EmitWord(0xEB00001F | (Reg(ARM64Register.X6) << 16) | (Reg(ARM64Register.X5) << 5));
-    _condBranchFixups.Add((_code.Count, hexLowerLabel));
-    EmitWord(0x54000000 | CondCode(ARM64ConditionCode.Eq));
-    EmitMovRegImm(ARM64Register.X6, (long)'X');
-    EmitWord(0xEB00001F | (Reg(ARM64Register.X6) << 16) | (Reg(ARM64Register.X5) << 5));
-    _condBranchFixups.Add((_code.Count, hexUpperLabel));
-    EmitWord(0x54000000 | CondCode(ARM64ConditionCode.Eq));
+    foreach (var (typeChar, target) in new[] {
+      ('x', hexLowerLabel), ('X', hexUpperLabel), ('b', binaryLabel), ('o', octalLabel),
+    }) {
+      EmitMovRegImm(ARM64Register.X6, (long)typeChar);
+      EmitWord(0xEB00001F | (Reg(ARM64Register.X6) << 16) | (Reg(ARM64Register.X5) << 5)); // CMP X5, X6
+      _condBranchFixups.Add((_code.Count, target));
+      EmitWord(0x54000000 | CondCode(ARM64ConditionCode.Eq));
+    }
     EmitBranch(decimalLabel);
 
-    // --- Hex lower ---
+    // --- Unsigned base setup: X9 = alpha base, X7 = shift, X8 = digit mask ---
+    // The convert loop below clobbers only X0/X3/X4/X6, so these three survive it.
     DefineLabel(hexLowerLabel);
-    EmitMovRegImm(ARM64Register.X5, (long)'a');
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X5, ARM64Register.X29, 88, 8); // hex_base = 'a'
-    EmitBranch(hexConvertLabel);
+    EmitUnsignedBaseSetup('a', shift: 4);
+    EmitBranch(unsignedConvertLabel);
 
-    // --- Hex upper ---
     DefineLabel(hexUpperLabel);
-    EmitMovRegImm(ARM64Register.X5, (long)'A');
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X5, ARM64Register.X29, 88, 8); // hex_base = 'A'
+    EmitUnsignedBaseSetup('A', shift: 4);
+    EmitBranch(unsignedConvertLabel);
 
-    // --- Hex conversion ---
-    DefineLabel(hexConvertLabel);
+    DefineLabel(binaryLabel);
+    EmitUnsignedBaseSetup('a', shift: 1);
+    EmitBranch(unsignedConvertLabel);
+
+    DefineLabel(octalLabel);
+    EmitUnsignedBaseSetup('a', shift: 3);
+
+    // --- Unsigned conversion (hex/octal/binary) ---
+    DefineLabel(unsignedConvertLabel);
+    // An unsigned base never writes a '-', and the padding code reads [+88] to
+    // decide whether zero-fill starts after a sign. Say so explicitly: leaving it
+    // unset made zero-padded hex fill from index 1 and corrupt its own digits.
+    EmitMovRegImm(ARM64Register.X5, 0);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X5, ARM64Register.X29, 88, 8); // is_negative = 0
     // Save digit start
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X3, ARM64Register.X29, 72, 8);
     // X0 = value (treat as unsigned)
-    // Convert loop: extract nibble, write digit
-    var hexLoopLabel = $"__i64fmt_hexloop_{_uniqueLabelCounter - 1}";
-    DefineLabel(hexLoopLabel);
-    // digit = X0 & 0xF
-    EmitWord(0x92400C00 | (Reg(ARM64Register.X0) << 5) | Reg(ARM64Register.X4)); // AND X4, X0, #0xF
-    // X0 = X0 >> 4
-    EmitWord(0xD344FC00 | (Reg(ARM64Register.X0) << 5) | Reg(ARM64Register.X0)); // LSR X0, X0, #4
-    // if digit < 10: char = digit + '0', else char = digit - 10 + hex_base
+    // Convert loop: extract low digit, write it, shift the value down
+    var unsignedLoopLabel = $"__i64fmt_unsignedloop_{_uniqueLabelCounter - 1}";
+    DefineLabel(unsignedLoopLabel);
+    // digit = X0 & mask
+    EmitWord(0x8A000000 | (Reg(ARM64Register.X8) << 16) | (Reg(ARM64Register.X0) << 5) | Reg(ARM64Register.X4)); // AND X4, X0, X8
+    // X0 = X0 >> shift (logical: the value is unsigned, so the high bit shifts in as 0)
+    EmitWord(0x9AC02400 | (Reg(ARM64Register.X7) << 16) | (Reg(ARM64Register.X0) << 5) | Reg(ARM64Register.X0)); // LSRV X0, X0, X7
+    // if digit < 10: char = digit + '0', else char = digit - 10 + alpha_base
     EmitMovRegImm(ARM64Register.X6, 10);
     EmitWord(0xEB00001F | (Reg(ARM64Register.X6) << 16) | (Reg(ARM64Register.X4) << 5)); // CMP X4, 10
-    var hexAlphaLabel = $"__i64fmt_hexalpha_{_uniqueLabelCounter - 1}";
-    var hexWriteLabel = $"__i64fmt_hexwrite_{_uniqueLabelCounter - 1}";
-    _condBranchFixups.Add((_code.Count, hexAlphaLabel));
-    EmitWord(0x54000000 | CondCode(ARM64ConditionCode.Ge)); // B.GE hexAlpha
+    var alphaLabel = $"__i64fmt_alpha_{_uniqueLabelCounter - 1}";
+    var writeLabel = $"__i64fmt_write_{_uniqueLabelCounter - 1}";
+    _condBranchFixups.Add((_code.Count, alphaLabel));
+    EmitWord(0x54000000 | CondCode(ARM64ConditionCode.Ge)); // B.GE alpha
     // Digit 0-9
     EmitAddSubImm(ARM64Register.X4, ARM64Register.X4, (long)'0', isAdd: true);
-    EmitBranch(hexWriteLabel);
-    DefineLabel(hexAlphaLabel);
-    // Digit A-F
+    EmitBranch(writeLabel);
+    DefineLabel(alphaLabel);
+    // Digit A-F — hex only; base 2 and base 8 never reach here.
     EmitAddSubImm(ARM64Register.X4, ARM64Register.X4, 10, isAdd: false);
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X6, ARM64Register.X29, 88, 8); // hex_base
-    EmitWord(0x8B000000 | (Reg(ARM64Register.X6) << 16) | (Reg(ARM64Register.X4) << 5) | Reg(ARM64Register.X4)); // ADD X4, X4, X6
-    DefineLabel(hexWriteLabel);
+    EmitWord(0x8B000000 | (Reg(ARM64Register.X9) << 16) | (Reg(ARM64Register.X4) << 5) | Reg(ARM64Register.X4)); // ADD X4, X4, X9
+    DefineLabel(writeLabel);
     // STRB W4, [X3]
     EmitWord(0x39000000 | (Reg(ARM64Register.X3) << 5) | Reg(ARM64Register.X4));
     EmitAddSubImm(ARM64Register.X3, ARM64Register.X3, 1, isAdd: true);
     // Continue if X0 != 0
-    _condBranchFixups.Add((_code.Count, hexLoopLabel));
-    EmitWord(0xB5000000 | Reg(ARM64Register.X0)); // CBNZ X0, hexLoop
+    _condBranchFixups.Add((_code.Count, unsignedLoopLabel));
+    EmitWord(0xB5000000 | Reg(ARM64Register.X0)); // CBNZ X0, unsignedLoop
     EmitBranch(reverseLabel);
 
     // --- Decimal conversion ---
@@ -1440,6 +1592,18 @@ public partial class ARM64CodeEmitter {
     EmitMovRegImm(ARM64Register.X4, 0);
     EmitWord(0x39000000 | (Reg(ARM64Register.X3) << 5) | Reg(ARM64Register.X4)); // STRB 0, [end]
     EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// Load the per-base constants the shared unsigned convert loop reads:
+  /// X9 = the letter digits start from ('a'/'A', hex only), X7 = bits consumed per
+  /// digit, X8 = the mask selecting one digit. Base is a power of two, so the mask
+  /// is exactly the low `shift` bits.
+  /// </summary>
+  private void EmitUnsignedBaseSetup(char alphaBase, int shift) {
+    EmitMovRegImm(ARM64Register.X9, (long)alphaBase);
+    EmitMovRegImm(ARM64Register.X7, shift);
+    EmitMovRegImm(ARM64Register.X8, (1L << shift) - 1);
   }
 
   /// <summary>
@@ -2764,6 +2928,8 @@ public partial class ARM64CodeEmitter {
   private const int DirentNamelen = 18; // d_namlen, 2 bytes
   private const int DirentName = 21;   // d_name, variable
 
+  private const long DotByte = 0x2E; // '.'
+
   // --- maxon_managed_dir_open_search(pattern_cstring) -> block_ptr or 0 ---
   // On macOS: strips trailing "/*" or "\*" from pattern, opens directory with open(),
   // does initial getdirentries64 read, skips "." and "..".
@@ -3049,18 +3215,40 @@ public partial class ARM64CodeEmitter {
     // Get d_name pointer = entry_ptr + 21
     EmitAddSubImm(ARM64Register.X6, ARM64Register.X3, DirentName, isAdd: true);
 
-    // NOTE: "." and ".." are deliberately NOT skipped here. The stdlib
-    // (Directory.list) filters them itself and — crucially — assumes the OS
-    // always yields at least one entry per open so its read-then-advance loop's
-    // `hasEntry = true` priming is valid (it reads the current name before the
-    // first `next()`). The x86/Windows backend returns "." / ".." verbatim from
-    // FindFirstFile/FindNextFile, so an empty directory still surfaces "." and
-    // ".." (which the stdlib drops) rather than a stale/empty name buffer.
-    // Skipping them here made an empty directory (only "." and "..") return zero
-    // OS entries with an uninitialised name buffer, which the stdlib then pushed
-    // as a spurious "<dir>/" entry — causing collectMaxonFilesUnder to recurse
-    // forever. Returning every entry matches x86 and lets the stdlib do the
-    // filtering.
+    // Skip "." and "..". The runtime owns this filtering on every target — the
+    // stdlib's Directory.list does none (`while next() != 0` pushes whatever it
+    // gets), so a dot leaking out of here reaches callers as a real entry, and a
+    // ".." one escapes upward out of the tree being walked. Mirrors x86's
+    // rt_fnf_dotcheck: only a NUL-terminated "." or ".." is a pseudo-entry, so
+    // ".x" and "..x" are real names and must survive.
+    //
+    // Safe against the read-more loop because buf_offset was already advanced
+    // above: branching to retry moves to the NEXT entry rather than re-reading
+    // this one.
+
+    // byte0 != '.' → real entry
+    EmitWord(0x39400000 | (Reg(ARM64Register.X6) << 5) | Reg(ARM64Register.X7)); // LDRB W7, [X6]
+    EmitMovRegImm(ARM64Register.X8, DotByte);
+    EmitWord(0xEB00001F | (Reg(ARM64Register.X8) << 16) | (Reg(ARM64Register.X7) << 5)); // CMP byte0, '.'
+    _condBranchFixups.Add((_code.Count, foundLabel));
+    EmitWord(0x54000000 | CondCode(ARM64ConditionCode.Ne)); // B.NE found
+
+    // byte0 == '.': inspect byte1.
+    EmitWord(0x39400400 | (Reg(ARM64Register.X6) << 5) | Reg(ARM64Register.X7)); // LDRB W7, [X6, #1]
+    EmitWord(0xF100001F | (Reg(ARM64Register.X7) << 5)); // CMP byte1, #0
+    _condBranchFixups.Add((_code.Count, retryLabel));
+    EmitWord(0x54000000 | CondCode(ARM64ConditionCode.Eq)); // B.EQ retry — "." → skip
+
+    EmitWord(0xEB00001F | (Reg(ARM64Register.X8) << 16) | (Reg(ARM64Register.X7) << 5)); // CMP byte1, '.'
+    _condBranchFixups.Add((_code.Count, foundLabel));
+    EmitWord(0x54000000 | CondCode(ARM64ConditionCode.Ne)); // B.NE found — ".x" → real
+
+    // byte0 == '.' && byte1 == '.': ".." only if byte2 is NUL.
+    EmitWord(0x39400800 | (Reg(ARM64Register.X6) << 5) | Reg(ARM64Register.X7)); // LDRB W7, [X6, #2]
+    EmitWord(0xF100001F | (Reg(ARM64Register.X7) << 5)); // CMP byte2, #0
+    _condBranchFixups.Add((_code.Count, retryLabel));
+    EmitWord(0x54000000 | CondCode(ARM64ConditionCode.Eq)); // B.EQ retry — ".." → skip
+    // "..x" → real entry, falls through.
 
     DefineLabel(foundLabel);
     // Copy filename to name buffer in block

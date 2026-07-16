@@ -22,7 +22,7 @@ class Program {
       "build" => RunBuild(args[1..]),
       "run" => RunRun(args[1..]),
       "fmt" => RunFmt(args[1..]),
-      "monitor" => RunMonitor(args[1..]),
+      "monitor" => DebugStreamMonitor.Run(args[1..]),
       "spec-test" => RunSpecTests(args[1..]),
       "error-codes" => ErrorCodeRegistry.Run(args[1..]),
       "batch-rewriter-test" => BatchRewriterTests.RunAll(),
@@ -555,10 +555,6 @@ class Program {
     }
 
     return results;
-  }
-
-  static int RunMonitor(string[] args) {
-    return DebugStreamMonitor.Run(args);
   }
 
   /// <summary>

@@ -14,12 +14,14 @@ ExitCode: 1
 ---
 // CompiledIR
 module {
-  func @classify(x0: u8) -> u8 {
+  func @classify(x: i64) -> u8 {
   entry:
     arm64.mov x1, #0
     arm64.cmp x0, x1
-    arm64.cset x0, gt
-    arm64.b.le positive_0.after
+    arm64.cset x2, gt
+    arm64.cmp x2, #0
+    arm64.b.ne classify.positive_0
+    arm64.b classify.positive_0.after
   positive_0:
     arm64.mov x0, #1
     arm64.ret
@@ -32,17 +34,23 @@ module {
     arm64.prologue stack_size=16
     arm64.mov x0, #5
     arm64.bl classify
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
     arm64.mov x1, #255
     arm64.cmp x0, x1
-    arm64.cset x1, hi
-    arm64.b.ls __range_ok_0
+    arm64.cset x3, gt
+    arm64.orr x1, x2, x3
+    arm64.cmp x1, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
   __range_panic_0:
-    arm64.adrp_add_rdata x0, __panic_msg_5ddadb253efb62df
-    arm64.ldr x19, [x29, #16]
-    arm64.mov x0, x19
+    arm64.adrp_add_symdata x0, __panic_msg_1
+    arm64.mov x1, x0
+    arm64.mov x0, x1
     arm64.bl mrt_panic
   __range_ok_0:
-    arm64.epilogue
+    arm64.epilogue stack_size=16
     arm64.ret
   }
 }

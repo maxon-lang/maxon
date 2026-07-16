@@ -22,11 +22,21 @@ public partial class RuntimeEmitter {
   //
   // Messages omit a trailing newline because the diagnostic appends " at rip="
   // and a hex address before the newline.
+  /// <summary>
+  /// The divide-by-zero panic text, shared by the two routes that can reach it.
+  /// x64 gets here from a CPU trap, so the fault diagnostic prints this text and
+  /// appends ` at rip=…` fields to the same line. AArch64's SDIV/UDIV do not trap,
+  /// so its backend calls mrt_panic from an explicit divisor check and needs the
+  /// text newline-terminated as a standalone line. Same words either way — spelling
+  /// them twice is how the two diagnostics would drift apart.
+  /// </summary>
+  public const string DivZeroPanicText = "panic: integer divide by zero";
+
   public void EmitFaultHandlerData() {
     _b.DefineSymdata("__gt_panic_msg_nil_deref",
       "panic: nil pointer or invalid memory access\0"u8.ToArray());
     _b.DefineSymdata("__gt_panic_msg_div_zero",
-      "panic: integer divide by zero\0"u8.ToArray());
+      System.Text.Encoding.UTF8.GetBytes(DivZeroPanicText + "\0"));
     _b.DefineSymdata("__gt_panic_msg_int_overflow",
       "panic: integer overflow\0"u8.ToArray());
     _b.DefineSymdata("__gt_panic_msg_stack_overflow",

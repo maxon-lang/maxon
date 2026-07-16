@@ -33,72 +33,158 @@ ExitCode: 1
 ---
 // CompiledIR
 module {
-  func @isCircle(x0: i64) -> i1 {
+  func @Drawing.create(shape: i64) -> i64 {
   entry:
-    arm64.prologue stack_size=16
-    arm64.ldr x1, [x0, #0] (8b)
-    arm64.ldr x0, [x1, #0] (8b)
-    arm64.mov x2, #0
-    arm64.cmp x0, x2
-    arm64.cset x0, eq
-    arm64.b.ne ms_0.next0
-  ms_0.case0:
-    arm64.mov x0, #1
-    arm64.epilogue
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.adrp_add_func x0, __destruct_Drawing
+    arm64.mov x1, x0
+    arm64.mov x0, #8
+    arm64.mov x2, #3
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-16]
+    arm64.ldr x2, [x29, #-8]
+    arm64.ldr x3, [x29, #-16]
+    arm64.str x2, [x3, #0]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x4, [x29, #-16]
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_incref
+    arm64.ldr x5, [x29, #-16]
+    arm64.mov x0, x5
+    arm64.epilogue stack_size=48
     arm64.ret
-  ms_0.next0:
-    arm64.ldr x0, [x1, #0] (8b)
+  }
+  func @isCircle(d: i64) -> i1 {
+  entry:
+    arm64.prologue stack_size=96
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.str x1, [x29, #-16]
+    arm64.ldr x2, [x29, #-16]
+    arm64.ldr x3, [x2, #0]
+    arm64.str x1, [x29, #-24]
+    arm64.ldr x4, [x29, #-24]
+    arm64.str x3, [x29, #-40]
+    arm64.ldr x0, [x29, #-24]
+    arm64.bl mm_incref
+    arm64.ldr x5, [x29, #-40]
+    arm64.str x5, [x29, #-32]
+    arm64.b isCircle.ms_0.cmp0
+  ms_0.cmp0:
+    arm64.ldr x0, [x29, #-32]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne isCircle.ms_0.case0
+    arm64.b isCircle.ms_0.cmp1
+  ms_0.case0:
+    arm64.ldr x0, [x29, #-24]
+    arm64.cmp x0, #0
+    arm64.b.eq isCircle.__skip_guarded_18
+    arm64.bl mm_decref
+    arm64.label isCircle.__skip_guarded_18
+    arm64.mov x0, #1
+    arm64.epilogue stack_size=96
+    arm64.ret
+  ms_0.cmp1:
+    arm64.ldr x0, [x29, #-32]
     arm64.mov x1, #1
     arm64.cmp x0, x1
-    arm64.cset x0, eq
-    arm64.b.ne ms_0.next1
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne isCircle.ms_0.case1
+    arm64.b isCircle.ms_0.merge
   ms_0.case1:
+    arm64.ldr x0, [x29, #-24]
+    arm64.cmp x0, #0
+    arm64.b.eq isCircle.__skip_guarded_26
+    arm64.bl mm_decref
+    arm64.label isCircle.__skip_guarded_26
     arm64.mov x0, #0
-    arm64.epilogue
+    arm64.epilogue stack_size=96
     arm64.ret
-  ms_0.next1:
-    arm64.adrp_add_rdata x0, __panic_msg_96c7daeb3f9a871f
-    arm64.ldr x19, [x29, #16]
-    arm64.mov x0, x19
-    arm64.bl mrt_panic
-    arm64.mov x0, #0
-    arm64.epilogue
-    arm64.ret
+  ms_0.merge:
   }
   func @main() -> u8 {
   entry:
-    arm64.prologue stack_size=16
-    arm64.mov x1, #0
-    arm64.mov x0, #16
-    arm64.bl stdlib.__mm_alloc
-    arm64.mov x19, x0
-    arm64.mov x0, x19
-    arm64.bl stdlib.__mm_incref
-    arm64.mov x0, #0
-    arm64.str x0, [x19, #0] (8b)
+    arm64.prologue stack_size=48
     arm64.mov x0, #10
-    arm64.str x0, [x19, #8] (8b)
-    arm64.adrp+add x1, __destruct_Drawing
-    arm64.mov x0, #8
-    arm64.bl stdlib.__mm_alloc
-    arm64.mov x20, x0
-    arm64.mov x0, #0
-    arm64.str x0, [x20, #0] (8b)
-    arm64.str x19, [x20, #0] (8b)
-    arm64.mov x0, x20
+    arm64.mov x0, #16
+    arm64.mov x1, #0
+    arm64.mov x2, #4
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-8]
+    arm64.mov x1, #0
+    arm64.str x1, [x0, #0]
+    arm64.mov x2, #10
+    arm64.str x2, [x0, #8]
+    arm64.bl mm_incref
+    arm64.ldr x3, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl Drawing.create
+    arm64.str x0, [x29, #-16]
+    arm64.ldr x4, [x29, #-16]
+    arm64.ldr x0, [x29, #-16]
     arm64.bl isCircle
-    arm64.mov x19, x0
-    arm64.mov x0, x20
-    arm64.bl mm_drop
-    arm64.cmp x19, #0
-    arm64.b.eq ok_0.after
+    arm64.cmp x0, #0
+    arm64.b.ne main.ok_0
+    arm64.b main.ok_0.after
   ok_0:
+    arm64.ldr x0, [x29, #-16]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_18
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_18
+    arm64.ldr x1, [x29, #-8]
+    arm64.cmp x1, #0
+    arm64.b.eq main.__skip_guarded_20
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_20
     arm64.mov x0, #1
-    arm64.epilogue
+    arm64.epilogue stack_size=48
     arm64.ret
   ok_0.after:
+    arm64.ldr x0, [x29, #-16]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_24
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_24
+    arm64.ldr x1, [x29, #-8]
+    arm64.cmp x1, #0
+    arm64.b.eq main.__skip_guarded_26
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_26
     arm64.mov x0, #0
-    arm64.epilogue
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @__destruct_Drawing(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.str x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq __destruct_Drawing.__skip_guarded_4
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label __destruct_Drawing.__skip_guarded_4
+    arm64.b __destruct_Drawing.done
+  done:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @__destruct_Shape(ptr: i64) {
+  entry:
+    arm64.b __destruct_Shape.done
+  done:
     arm64.ret
   }
 }

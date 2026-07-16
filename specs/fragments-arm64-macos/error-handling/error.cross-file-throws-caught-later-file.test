@@ -38,75 +38,130 @@ ExitCode: 7
 module {
   func @main() -> u8 {
   entry:
-    arm64.prologue stack_size=32
+    arm64.prologue stack_size=112
+    arm64.mov x0, #0
+    arm64.str x0, [x29, #-8]
     arm64.mov x0, #9
-    arm64.mov x19, #0
-  inlined_risky_0_0:
-    arm64.mov x1, #5
+    arm64.bl risky
+    arm64.str x1, [x29, #-16]
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x3, ne
+    arm64.cmp x3, #0
+    arm64.b.ne main.otherwise_error_0
+    arm64.b main.otherwise_continue_0
+  otherwise_error_0:
+    arm64.ldr x0, [x29, #-16]
+    arm64.str x0, [x29, #-24]
+    arm64.ldr x1, [x29, #-24]
+    arm64.ldr x2, [x1, #0]
+    arm64.str x0, [x29, #-32]
+    arm64.ldr x3, [x29, #-32]
+    arm64.str x2, [x29, #-48]
+    arm64.ldr x0, [x29, #-32]
+    arm64.bl mm_incref
+    arm64.ldr x4, [x29, #-48]
+    arm64.str x4, [x29, #-40]
+    arm64.b main.check_0.cmp0
+  check_0.cmp0:
+    arm64.ldr x0, [x29, #-40]
+    arm64.mov x1, #0
     arm64.cmp x0, x1
-    arm64.cset x1, gt
-    arm64.b.le inlined_risky_2_0
-  inlined_risky_1_0:
-    arm64.mov x1, #0
-    arm64.mov x0, #16
-    arm64.bl stdlib.__mm_alloc
-    arm64.mov x20, x0
-    arm64.mov x0, #0
-    arm64.str x0, [x20, #0] (8b)
-    arm64.mov x0, #7
-    arm64.str x0, [x20, #8] (8b)
-    arm64.mov x0, x20
-    arm64.bl mm_drop
-    arm64.mov x0, #0
-    arm64.b inline_cont_main_0
-  inlined_risky_2_0:
-    arm64.mov x1, #0
-    arm64.mov x20, x1
-  inline_cont_main_0:
-    arm64.cmp x20, x19
-    arm64.cset x1, ne
-    arm64.b.eq __phi_trampoline_12_0
-  try_0.otherwise:
-    arm64.ldr x0, [x20, #0] (8b)
-    arm64.cmp x0, x19
-    arm64.cset x0, eq
-    arm64.b.ne check_0.next0
-    arm64.b check_0.case0
-  check_0.merge:
-    arm64.mov x1, x19
-    arm64.b try_0.merge
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne main.check_0.case0
+    arm64.b main.check_0.cmp1
   check_0.case0:
-    arm64.ldr x0, [x20, #8] (8b)
-    arm64.b check_0.merge
-  check_0.next0:
-    arm64.ldr x0, [x20, #0] (8b)
+    arm64.ldr x0, [x29, #-32]
+    arm64.ldr x1, [x0, #8]
+    arm64.str x1, [x29, #-8]
+    arm64.b main.check_0.merge
+  check_0.cmp1:
+    arm64.ldr x0, [x29, #-40]
     arm64.mov x1, #1
     arm64.cmp x0, x1
-    arm64.cset x0, eq
-    arm64.b.ne __phi_trampoline_5_0
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne main.check_0.case1
+    arm64.b main.check_0.merge
   check_0.case1:
     arm64.mov x0, #1
-    arm64.b check_0.merge
-  try_0.merge:
-    arm64.mov x1, #255
+    arm64.str x0, [x29, #-8]
+    arm64.b main.check_0.merge
+  check_0.merge:
+    arm64.ldr x0, [x29, #-32]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_33
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_33
+    arm64.ldr x1, [x29, #-24]
+    arm64.cmp x1, #0
+    arm64.b.eq main.__skip_guarded_35
+    arm64.ldr x0, [x29, #-24]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_35
+    arm64.b main.otherwise_continue_0
+  otherwise_continue_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.mov x1, #0
     arm64.cmp x0, x1
-    arm64.cset x1, hi
-    arm64.b.ls __range_ok_0
+    arm64.cset x2, lt
+    arm64.mov x3, #255
+    arm64.cmp x0, x3
+    arm64.cset x4, gt
+    arm64.orr x5, x2, x4
+    arm64.cmp x5, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
   __range_panic_0:
-    arm64.adrp_add_rdata x0, __panic_msg_994c23b3b64fd85b
-    arm64.ldr x19, [x29, #16]
-    arm64.mov x0, x19
+    arm64.adrp_add_symdata x0, __panic_msg_0
+    arm64.mov x1, x0
+    arm64.mov x0, x1
     arm64.bl mrt_panic
   __range_ok_0:
-    arm64.epilogue
+    arm64.epilogue stack_size=112
     arm64.ret
-  __phi_trampoline_12_0:
-    arm64.mov x1, x0
-    arm64.mov x0, x19
-    arm64.b try_0.merge
-  __phi_trampoline_5_0:
-    arm64.mov x0, x19
-    arm64.b check_0.merge
+  }
+  func @risky(n: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.mov x1, #5
+    arm64.cmp x0, x1
+    arm64.cset x2, gt
+    arm64.cmp x2, #0
+    arm64.b.ne risky.big_0
+    arm64.b risky.big_0.after
+  big_0:
+    arm64.mov x0, #7
+    arm64.mov x0, #16
+    arm64.mov x1, #0
+    arm64.mov x2, #1
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-16]
+    arm64.mov x1, #0
+    arm64.str x1, [x0, #0]
+    arm64.mov x2, #7
+    arm64.str x2, [x0, #8]
+    arm64.ldr x3, [x29, #-16]
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_incref
+    arm64.ldr x4, [x29, #-16]
+    arm64.mov x1, x4
+    arm64.mov x0, #0
+    arm64.epilogue stack_size=48
+    arm64.ret
+  big_0.after:
+    arm64.ldr x0, [x29, #-8]
+    arm64.mov x1, #0
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @__destruct_Woe(ptr: i64) {
+  entry:
+    arm64.b __destruct_Woe.done
+  done:
+    arm64.ret
   }
 }
 ---

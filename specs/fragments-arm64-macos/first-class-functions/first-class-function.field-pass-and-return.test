@@ -1,0 +1,144 @@
+// Test: first-class-function.field-pass-and-return
+
+typealias Integer = int(i64.min to i64.max)
+typealias UnaryOp = function(Integer) returns Integer
+
+type Handler
+	export var op as UnaryOp
+
+	static function create(op UnaryOp) returns Self
+		return Self{op: op}
+	end 'create'
+end 'Handler'
+
+function double(x Integer) returns Integer
+	return x * 2
+end 'double'
+
+function apply(f UnaryOp, x Integer) returns Integer
+	return f(x)
+end 'apply'
+
+function pick(h Handler) returns UnaryOp
+	return h.op
+end 'pick'
+
+function main() returns ExitCode
+	let h = Handler.create(double)
+	let viaArg = apply(h.op, x: 10)
+	let returned = pick(h)
+	return viaArg + returned(11)
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @Handler.create(op: i64, __env_op: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=64
+    arm64.str x0, [x29, #-16]
+    arm64.str x1, [x29, #-24]
+    arm64.mov x0, #8
+    arm64.mov x1, #0
+    arm64.mov x2, #3
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-16]
+    arm64.str x1, [x0, #0]
+    arm64.ldr x2, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x3, [x29, #-8]
+    arm64.mov x0, x3
+    arm64.epilogue stack_size=64
+    arm64.ret
+  }
+  func @double(x: i64) -> i64 {
+  entry:
+    arm64.mov x1, #2
+    arm64.mul x2, x0, x1
+    arm64.mov x0, x2
+    arm64.ret
+  }
+  func @apply(f: i64, __env_f: i64, x: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=32
+    arm64.str x0, [x29, #-8]
+    arm64.mov x9, x0
+    arm64.mov x0, x2
+    arm64.blr x9
+    arm64.epilogue stack_size=32
+    arm64.ret
+  }
+  func @pick(h: i64) -> fn(Integer) returns Integer {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.mov x0, x1
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=64
+    arm64.adrp_add_func x0, double
+    arm64.mov x1, #0
+    arm64.bl Handler.create
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-8]
+    arm64.ldr x2, [x1, #0]
+    arm64.mov x0, x2
+    arm64.mov x1, #0
+    arm64.mov x2, #10
+    arm64.bl apply
+    arm64.ldr x3, [x29, #-8]
+    arm64.str x0, [x29, #-16]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl pick
+    arm64.mov x4, #11
+    arm64.mov x5, #0
+    arm64.str x0, [x29, #-24]
+    arm64.mov x9, x0
+    arm64.mov x0, x4
+    arm64.mov x1, x5
+    arm64.blr x9
+    arm64.ldr x6, [x29, #-16]
+    arm64.add x7, x6, x0
+    arm64.mov x8, #0
+    arm64.cmp x7, x8
+    arm64.cset x9, lt
+    arm64.mov x10, #255
+    arm64.cmp x7, x10
+    arm64.cset x11, gt
+    arm64.orr x12, x9, x11
+    arm64.cmp x12, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_14
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.str x7, [x29, #-32]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_25
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_25
+    arm64.ldr x0, [x29, #-32]
+    arm64.epilogue stack_size=64
+    arm64.ret
+  }
+  func @__destruct_Handler(ptr: i64) {
+  entry:
+    arm64.b __destruct_Handler.done
+  done:
+    arm64.ret
+  }
+}
+---

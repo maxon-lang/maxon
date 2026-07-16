@@ -1,0 +1,202 @@
+// Test: struct-payload-dispatch
+typealias Val = int(0 to 1000)
+
+type Wrapped
+	export var n as Val
+
+	static function create(x Val) returns Wrapped
+		return Self{n: x}
+	end 'create'
+end 'Wrapped'
+
+union Holder
+	full(w Wrapped)
+	empty
+end 'Holder'
+
+function get(h Holder) returns Val
+	return match h 'm'
+		full(w) gives w.n
+		empty gives 0
+	end 'm'
+end 'get'
+
+function main() returns ExitCode
+	return get(Holder.full(Wrapped.create(7)))
+end 'main'
+---
+ExitCode: 7
+---
+// CompiledIR
+module {
+  func @Wrapped.create(x: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-16]
+    arm64.mov x0, #8
+    arm64.mov x1, #0
+    arm64.mov x2, #1
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-16]
+    arm64.str x1, [x0, #0]
+    arm64.ldr x2, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x3, [x29, #-8]
+    arm64.mov x0, x3
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @get(h: i64) -> u16 {
+  entry:
+    arm64.prologue stack_size=112
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-8]
+    arm64.ldr x2, [x1, #0]
+    arm64.str x0, [x29, #-16]
+    arm64.mov x0, #0
+    arm64.str x0, [x29, #-24]
+    arm64.str x2, [x29, #-32]
+    arm64.b get.m_0.cmp0
+  m_0.cmp0:
+    arm64.ldr x0, [x29, #-32]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne get.m_0.case0
+    arm64.b get.m_0.cmp1
+  m_0.case0:
+    arm64.ldr x0, [x29, #-16]
+    arm64.ldr x1, [x0, #8]
+    arm64.str x1, [x29, #-40]
+    arm64.ldr x2, [x29, #-40]
+    arm64.ldr x3, [x2, #0]
+    arm64.str x3, [x29, #-24]
+    arm64.b get.m_0.merge
+  m_0.cmp1:
+    arm64.ldr x0, [x29, #-32]
+    arm64.mov x1, #1
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne get.m_0.case1
+    arm64.b get.m_0.merge
+  m_0.case1:
+    arm64.mov x0, #0
+    arm64.str x0, [x29, #-24]
+    arm64.b get.m_0.merge
+  m_0.merge:
+    arm64.ldr x0, [x29, #-24]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x3, #1000
+    arm64.cmp x0, x3
+    arm64.cset x4, gt
+    arm64.orr x5, x2, x4
+    arm64.cmp x5, #0
+    arm64.b.ne get.__range_panic_0
+    arm64.b get.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_0
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.epilogue stack_size=112
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=64
+    arm64.mov x0, #7
+    arm64.bl Wrapped.create
+    arm64.str x0, [x29, #-8]
+    arm64.adrp_add_func x0, __destruct_Holder
+    arm64.mov x1, x0
+    arm64.mov x0, #16
+    arm64.mov x2, #2
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-16]
+    arm64.mov x2, #0
+    arm64.str x2, [x0, #0]
+    arm64.ldr x3, [x29, #-8]
+    arm64.str x3, [x0, #8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_incref
+    arm64.ldr x4, [x29, #-16]
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl get
+    arm64.mov x5, #0
+    arm64.cmp x0, x5
+    arm64.cset x6, lt
+    arm64.mov x7, #255
+    arm64.cmp x0, x7
+    arm64.cset x8, gt
+    arm64.orr x9, x6, x8
+    arm64.cmp x9, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_1
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.ldr x1, [x29, #-8]
+    arm64.str x0, [x29, #-24]
+    arm64.cmp x1, #0
+    arm64.b.eq main.__skip_guarded_27
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_27
+    arm64.ldr x0, [x29, #-16]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_29
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_29
+    arm64.ldr x0, [x29, #-24]
+    arm64.epilogue stack_size=64
+    arm64.ret
+  }
+  func @__destruct_Wrapped(ptr: i64) {
+  entry:
+    arm64.b __destruct_Wrapped.done
+  done:
+    arm64.ret
+  }
+  func @__destruct_Holder(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x3, eq
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct_Holder.case_0
+    arm64.b __destruct_Holder.check_0
+  case_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #8]
+    arm64.str x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq __destruct_Holder.__skip_guarded_9
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label __destruct_Holder.__skip_guarded_9
+    arm64.b __destruct_Holder.done
+  check_0:
+    arm64.b __destruct_Holder.done
+  done:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+}
+---

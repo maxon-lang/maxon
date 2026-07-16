@@ -23,38 +23,71 @@ ExitCode: 1
 ---
 // CompiledIR
 module {
-  func @getOrdinal(x0: u8) -> u8 {
+  func @getOrdinal(p: i64) -> u8 {
   entry:
-    arm64.prologue stack_size=16
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.mov x1, #0
+    arm64.mov x2, #0
+    arm64.cmp x0, x2
+    arm64.cset x3, eq
+    arm64.mov x4, #0
+    arm64.cmp x3, #0
+    arm64.csel x5, x4, x1, ne
+    arm64.mov x6, #1
+    arm64.cmp x0, x6
+    arm64.cset x7, eq
+    arm64.mov x8, #1
+    arm64.cmp x7, #0
+    arm64.csel x9, x8, x5, ne
+    arm64.mov x10, #2
+    arm64.cmp x0, x10
+    arm64.cset x11, eq
+    arm64.mov x12, #2
+    arm64.cmp x11, #0
+    arm64.csel x14, x12, x9, ne
+    arm64.mov x15, #0
+    arm64.cmp x14, x15
+    arm64.cset x0, lt
     arm64.mov x1, #100
-    arm64.cmp x0, x1
-    arm64.cset x1, hi
-    arm64.b.ls __range_ok_0
+    arm64.cmp x14, x1
+    arm64.cset x2, gt
+    arm64.orr x1, x0, x2
+    arm64.cmp x1, #0
+    arm64.b.ne getOrdinal.__range_panic_0
+    arm64.b getOrdinal.__range_ok_0
   __range_panic_0:
-    arm64.adrp_add_rdata x0, __panic_msg_a4cd10096b430f36
-    arm64.ldr x19, [x29, #16]
-    arm64.mov x0, x19
+    arm64.adrp_add_symdata x0, __panic_msg_6
+    arm64.mov x1, x0
+    arm64.mov x0, x1
     arm64.bl mrt_panic
   __range_ok_0:
-    arm64.epilogue
+    arm64.mov x0, x14
+    arm64.epilogue stack_size=48
     arm64.ret
   }
   func @main() -> u8 {
   entry:
-    arm64.prologue stack_size=16
+    arm64.prologue stack_size=48
     arm64.mov x0, #2
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
     arm64.bl getOrdinal
-    arm64.mov x1, #2
-    arm64.cmp x0, x1
-    arm64.cset x0, eq
-    arm64.b.ne check_0.after
+    arm64.mov x2, #2
+    arm64.cmp x0, x2
+    arm64.cset x3, eq
+    arm64.cmp x3, #0
+    arm64.b.ne main.check_0
+    arm64.b main.check_0.after
   check_0:
     arm64.mov x0, #1
-    arm64.epilogue
+    arm64.epilogue stack_size=48
     arm64.ret
   check_0.after:
     arm64.mov x0, #0
-    arm64.epilogue
+    arm64.epilogue stack_size=48
     arm64.ret
   }
 }

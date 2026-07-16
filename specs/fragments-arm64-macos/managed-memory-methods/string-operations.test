@@ -10,48 +10,43 @@ ExitCode: 11
 module {
   func @main() -> u8 {
   entry:
-    arm64.prologue stack_size=32
-    arm64.adrp+add x1, stdlib.__destruct___ManagedMemory
-    arm64.mov x0, #48
-    arm64.bl mrt_alloc_with_dtor
-    arm64.mov x19, x0
-    arm64.mov x0, #0
-    arm64.str x0, [x19, #40] (8b)
-    arm64.adrp_add_rdata x0, __istr_501
-    arm64.ldr x0, [x29, #16]
-    arm64.str x0, [x19, #0] (8b)
-    arm64.mov x0, #11
-    arm64.str x0, [x19, #8] (8b)
-    arm64.mov x0, #-2
-    arm64.str x0, [x19, #16] (8b)
-    arm64.mov x0, #1
-    arm64.str x0, [x19, #24] (8b)
-    arm64.mov x0, #0
-    arm64.str x0, [x19, #32] (8b)
-    arm64.adrp+add x1, __destruct_String
-    arm64.mov x0, #16
-    arm64.bl stdlib.__mm_alloc
-    arm64.mov x20, x0
-    arm64.str x19, [x20, #0] (8b)
-    arm64.mov x0, #1
-    arm64.str x0, [x20, #8] (8b)
-    arm64.mov x0, x20
-    arm64.bl String.byteLength
-    arm64.mov x19, x0
-    arm64.mov x0, x20
-    arm64.bl mm_drop
-    arm64.mov x0, #255
-    arm64.cmp x19, x0
-    arm64.cset x0, hi
-    arm64.b.ls __range_ok_0
+    arm64.prologue stack_size=64
+    arm64.adrp_add_global x0, __static_lit_0
+    arm64.mov x1, x0
+    arm64.mov x2, #32
+    arm64.add x3, x1, x2
+    arm64.str x3, [x29, #-8]
+    arm64.ldr x4, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x5, [x29, #-8]
+    arm64.str x5, [x29, #-16]
+    arm64.ldr x6, [x29, #-16]
+    arm64.ldr x7, [x6, #8]
+    arm64.mov x8, #0
+    arm64.cmp x7, x8
+    arm64.cset x9, lt
+    arm64.mov x10, #255
+    arm64.cmp x7, x10
+    arm64.cset x11, gt
+    arm64.orr x12, x9, x11
+    arm64.cmp x12, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
   __range_panic_0:
-    arm64.adrp_add_rdata x0, __panic_msg_a995f7a70620ad07
-    arm64.ldr x19, [x29, #16]
-    arm64.mov x0, x19
+    arm64.adrp_add_symdata x0, __panic_msg_5
+    arm64.mov x1, x0
+    arm64.mov x0, x1
     arm64.bl mrt_panic
   __range_ok_0:
-    arm64.mov x0, x19
-    arm64.epilogue
+    arm64.ldr x0, [x29, #-8]
+    arm64.str x7, [x29, #-24]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_20
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_20
+    arm64.ldr x0, [x29, #-24]
+    arm64.epilogue stack_size=64
     arm64.ret
   }
 }

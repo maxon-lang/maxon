@@ -28,35 +28,73 @@ ExitCode: 1
 module {
   func @main() -> u8 {
   entry:
-    arm64.prologue stack_size=32
-    arm64.adrp_add_rdata x0, __layout_Box_Int
-    arm64.ldr x0, [x29, #16]
-    arm64.ldr x1, [x0, #40] (8b)
-    arm64.mov x0, #8
-    arm64.bl stdlib.__mm_alloc
-    arm64.mov x19, x0
+    arm64.prologue stack_size=48
     arm64.mov x0, #42
-    arm64.str x0, [x19, #0] (8b)
-    arm64.ldr x1, [x19, #0] (8b)
-    arm64.mov x2, #42
-    arm64.adrp_add_rdata x0, __witness_int_Equatable
-    arm64.ldr x3, [x29, #16]
-    arm64.mov x0, x1
-    arm64.mov x1, x2
-    arm64.ldr x16, [x3, #24] (8b)
-    arm64.blr x16
-    arm64.mov x20, x0
-    arm64.mov x0, x19
-    arm64.bl mm_drop
-    arm64.cmp x20, #0
-    arm64.b.eq yes_0.after
+    arm64.bl IntBox.create
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.mov x1, #42
+    arm64.bl IntBox.eq
+    arm64.cmp x0, #0
+    arm64.b.ne main.yes_0
+    arm64.b main.yes_0.after
   yes_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_9
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_9
     arm64.mov x0, #1
-    arm64.epilogue
+    arm64.epilogue stack_size=48
     arm64.ret
   yes_0.after:
+    arm64.ldr x0, [x29, #-8]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_13
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_13
     arm64.mov x0, #0
-    arm64.epilogue
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @IntBox.create(item: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-16]
+    arm64.mov x0, #8
+    arm64.mov x1, #0
+    arm64.mov x2, #14
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-16]
+    arm64.str x1, [x0, #0]
+    arm64.ldr x2, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x3, [x29, #-8]
+    arm64.mov x0, x3
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @IntBox.eq(__self_ptr: i64, other: i64) -> i1 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x2, [x0, #0]
+    arm64.str x2, [x29, #-16]
+    arm64.ldr x0, [x29, #-16]
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.mov x0, x2
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @__destruct_IntBox(ptr: i64) {
+  entry:
+    arm64.b __destruct_IntBox.done
+  done:
     arm64.ret
   }
 }
