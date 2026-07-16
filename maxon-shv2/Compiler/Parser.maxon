@@ -3124,7 +3124,12 @@ export type Parser
 		// and bare-call statements, neither of which terminates — so this drops every one of them. Should a
 		// later rung return an owned temporary, the leak gate names it loudly rather than a wrong drop hiding
 		// it, which is the same trade `closeBlock` makes for a nested-block binding.
-		if not self.currentBlock.isTerminated() 'dropTemps'
+		//
+		// The `count() > 0` half is what keeps a statement that produced NO temporary — every statement in a
+		// program with no interpolation — from paying anything: `drainPendingTemps` reallocates the list, so
+		// calling it per statement would be one allocation on every line of the whole compiler. Almost no
+		// statement enrolls a temporary, so the common path skips the call entirely.
+		if not self.currentBlock.isTerminated() and self.pendingTempDrops.count() > 0 'dropTemps'
 			self.drainPendingTemps(stmtTok)
 		end 'dropTemps'
 
