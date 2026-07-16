@@ -1509,3 +1509,31 @@ membership set is worth its heap object"*); a `Set` would allocate a heap object
 scan, contradicting that precedent and adding a parse-phase allocation the instrument tracks. **Same class as
 `indexOfField`'s O(F²) (#28)** — real superlinear term, invisible dimension, correctly left. Revisit only if a
 real program ever writes a match with hundreds of literal arms (none does).
+
+### 33. ⚠ NEW 2026-07-16 (P1.1b Wave B) — **a NEGATIVE float-backed enum raw value rejects with a MISLEADING E2010 where the bootstrap accepts**
+
+`enum T { a = -1.0  b = 0.0  c = 1.0 }` — shv2 rejects at the declaration with **E2010 "Expected integer
+literal but got float literal"**; the bootstrap accepts and runs. A real divergence, but a **CLEAN reject —
+no crash, no wrong answer**, and no corpus case exercises it. The cause: `= -x.y` takes the minus→int parse
+path and fails `consume(intLiteral)` (POSITIVE float tags like `a = 1.1` parse fine — the limitation is
+*negative* floats specifically, via that one parse path).
+
+**The message is the actual wart:** it says "integer literal" when positive floats ARE accepted, so it
+misrepresents the limitation. **⭐ The implementer's stated reason for deferring was ALSO wrong and the review
+corrected it:** it worried negative float tags would "misorder as signed i64" in a range — but the range
+logic is set-membership over signed i64 (compile-time min/max and runtime signed compare AGREE on
+signedness), so negatives would be handled CORRECTLY *if they parsed*. ⇒ Follow-up: either support them
+(correct under the signed logic already in place) or emit a clear `unsupported` message naming the real gap —
+needs its own spec + oracle cross-check. Left as a bounded clean reject, not a blocker.
+
+### 34. ⚠ NEW 2026-07-16 (P1.1b Wave B) — **union `E2026`/`E2046` wording: shv2 says "union" consistently; the bootstrap hardcodes "enum"; nothing pins either**
+
+After the review's E3034 fix (which threaded the enum/union noun through `EnumLayout.kindWord()` — see the
+Wave B box), shv2 says **"union"** across all three match diagnostics (E3034 unknown-case, E2026
+non-exhaustive, E2046 default-must-throw) for a union scrutinee. **The bootstrap hardcodes `{"enum"}` in E2026
+and E2046** (`2-Parser.cs:13684/13960`) — an apparent oversight, since its E3034 IS conditional on `IsUnion`.
+**No corpus golden pins union E2026/E2046 wording** (the corpus's union cases are payload unions, deferred to
+P1.3). So shv2 is MORE internally consistent than the oracle, and nothing tests it either way. Left as shv2's
+consistent behavior (documented in `Queries.maxon`). ⇒ **Coordinator's call when P1.3's union cases land**:
+author union E2026/E2046 spec tests pinning shv2's "union", or decide to reproduce the bootstrap's "enum".
+Not a blocker — an unpinned wording detail on a diagnostic no case currently reaches.
