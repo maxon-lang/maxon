@@ -173,3 +173,38 @@ end 'main'
 ```maxoncstderr
 error E2051: specs/fragments/reserved-double-underscore/closure-parameter.test:9:19: identifier '__n' is reserved: declarations starting with '__' are reserved for compiler internals
 ```
+
+<!-- test: enum-name -->
+The bootstrap spec omits the enum/union NAME (only the enum CASE is covered), but the bootstrap rejects
+a `__`-prefixed enum name just as it does every other declaration — measured `E2051 @1:6`. shv2 guards it
+at `parseEnumDeclaration`'s name consume, the site distinct from `readEnumCaseInto` (which covers cases).
+```maxon
+enum __Color
+	red
+	green
+end '__Color'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2051: specs/fragments/reserved-double-underscore/enum-name.test:2:6: identifier '__Color' is reserved: declarations starting with '__' are reserved for compiler internals
+```
+
+<!-- test: union-name -->
+The same guard covers a `union` name — `parseEnumDeclaration` handles both via `isUnion`, so ONE
+`requireUnreservedName` call reserves both.
+```maxon
+union __Shape
+	circle
+	square
+end '__Shape'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2051: specs/fragments/reserved-double-underscore/union-name.test:2:7: identifier '__Shape' is reserved: declarations starting with '__' are reserved for compiler internals
+```
