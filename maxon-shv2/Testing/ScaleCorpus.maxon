@@ -1,8 +1,8 @@
 // ScaleCorpus — the generated ladder the scale suite measures.
 //
-// ONE PROGRAM PER RUNG, and each rung DOUBLES all ten structural knobs at once. Six rungs is a
-// 32x span in six compiles. The alternative — a matrix, one axis per knob — would be ten ladders
-// and sixty compiles to learn the same thing, because the question is never "which knob is
+// ONE PROGRAM PER RUNG, and each rung DOUBLES all fifteen structural knobs at once. Six rungs is a
+// 32x span in six compiles. The alternative — a matrix, one axis per knob — would be fifteen ladders
+// and ninety compiles to learn the same thing, because the question is never "which knob is
 // the compiler slow in" (the per-phase table answers that already) but "does the whole thing stay
 // linear as a program grows", and a program grows in every direction at once. (Two SHIFT shapes ride
 // along that are COVERAGE, not knobs — they are fixed-size and do not double; see `shiftCoverageSource`.)
@@ -76,15 +76,26 @@
 // deterministic, so the corpus is a pure function of this file, and this file IS the corpus.
 // `--emit-corpus=<dir>` dumps a ladder anywhere you want to look at it.
 //
-// THE SUBSET: shv2 implements `int` AND `float` arithmetic, functions (<=6 params), `if`, `while`,
-// `break`, `return`, `let`, `var`, bitwise + shifts (`and`/`shl`/`shr`), and ranged typealiases. No
-// `print`, no structs, no arrays, no strings, no `for`, no `as` casts. Everything below stays inside
-// it — and `printCorpusManifest` states exactly this boundary on every run, so a construct outside it
-// (and the codegen change to it that would be invisible) is NAMED rather than silently absent.
+// THE SUBSET: shv2 implements `int` AND `float` arithmetic (including integer `/` and `mod`),
+// functions (<=6 params), `if`, `while`, `break`, `return`, body-local `let`/`var`, TOP-LEVEL
+// `let`/`var`, `type` declarations with field reads, bitwise + shifts (`and`/`shl`/`shr`), and ranged
+// typealiases. No `print`, no arrays, no strings, no `for`, no `match`, no `as` casts. Everything
+// below stays inside it — and `printCorpusManifest` states exactly this boundary on every run, so a
+// construct outside it (and the codegen change to it that would be invisible) is NAMED rather than
+// silently absent.
 //
 // ⚠ THE SUBSET AND THE CORPUS ARE TWO DIFFERENT SETS, AND THE GAP BETWEEN THEM IS WHERE BUGS LIVE.
-// `float` was in the subset for a full rung before one line of this file generated any, and the
-// manifest named it as a blind spot the whole time. See `FloatOpsBase` for what that cost.
+// This is the file's most durable defect, and it has now recurred FOUR times:
+//   • `float` was in the subset for a full rung before one line of this file generated any. See
+//     `FloatOpsBase` for what that cost (a panicking emitter, shipped).
+//   • integer `/` and `mod` were in it since P1.0d.3 — the entire `idiv` fixed-register path — and
+//     every `/` the corpus emitted was a FLOAT `/`. See `IntDivideBase`.
+//   • top-level `let` and `var` were in it for TWO rungs, 36 spec tests' worth. See `GlobalConstsBase`.
+//   • `type` declarations were in it from P1.0r, the rung that gave shv2 a HEAP. See `StructTypesBase`.
+//
+// The manifest named the first two as blind spots the whole time and they were read as footnotes. It
+// did not name the last two AT ALL — see `printCorpusManifest`, which is now the load-bearing half of
+// this file rather than its documentation.
 
 // Which rung of the ladder, and how many of them. A rung DOUBLES the one below it, so these are
 // exponents, not sizes: `--rungs=20` would not be a big run, it would be a program a hundred
@@ -132,7 +143,7 @@ end 'parseRungCount'
 export typealias KnobSize = int(1 to 1048576)
 
 // ===========================================================================================
-// The ten knobs, and their rung-0 sizes
+// The fifteen knobs, and their rung-0 sizes
 // ===========================================================================================
 //
 // Each is `base << rung`. The bases are tuned so that rung 0 clears fixed process + stdlib
@@ -246,6 +257,92 @@ let WorkingFloatsPerFunction = 4 as KnobSize
 // `PressuredValuesPerLoop`, and it needs no headroom calculation because the XMM file's answer for a
 // value live across a call is ∅ at any pool size.
 let FloatsLivePerSpillLoop = 4 as KnobSize
+
+// ONE file, N top-level `let` constants — the constant ARENA, the initializer DFS and its memo.
+//
+// ⚠ TWO WHOLE RUNGS WERE INVISIBLE HERE, AND THE MANIFEST DID NOT MERELY MISS THEM — IT REPORTED THEM
+// AS COVERED. P1.0d.5a landed top-level `let` (the suite went 281 -> 295) and P1.0d.5b landed
+// top-level `var` (295 -> 317). This corpus generated NEITHER, at any rung. The float case at least
+// printed "no float" in plain text under NOT GENERATED for five rungs, and was read as a footnote
+// about the reader's own measurement. This one was worse: the manifest listed `let / var` under
+// CONSTRUCTS GENERATED — meaning the BODY-LOCAL kind, the only kind the corpus had — and named the
+// top-level kind under NEITHER heading. A gap nobody is told about reads as coverage; a gap filed
+// under the wrong heading reads as coverage and cannot be caught by reading the manifest at all.
+//
+// ⚠ BASE >= 2. The two seed constants are literals and every other derives from the two below it (see
+// `globalConstsSource`), so a base below two would emit more constants than the knob claims to.
+let GlobalConstsBase = 32 as KnobSize
+
+// Keeps the constant DAG's values bounded — see `globalConstsSource`. The DAG is Fibonacci-shaped, so
+// without a modulus its values would leave i64 many times over by the top rung's thousandth term. Any
+// modulus whose successors stay well inside i64 would do; a thousand keeps the emitted literals short.
+let GlobalConstModulus = 1000
+
+// ONE file, N top-level `var`s — `.data` slots, `GlobalDataTable.layOut`, and a
+// `globalAddr`/`loadIndirect`/`storeIndirect` triple per access.
+//
+// ⚠ NOT `globalConsts` WITH A DIFFERENT KEYWORD. The two share a syntax and NOTHING else, which is
+// exactly the trap that let both go unmeasured behind one manifest line. A `let` is folded into its
+// uses and has NO BACKEND AT ALL; a `var` is storage that survives to the linker, lays out a section,
+// and loads through an impure op. A change to the data-section layout moves this knob and cannot move
+// that one. Two knobs that a future change must be free to move independently are not one knob — the
+// rule `floatSpill` states against `pressuredLoops`.
+let GlobalVarsBase = 32 as KnobSize
+
+// The value each global `var` is seeded with, cycled so the `.data` image is not one repeated byte
+// pattern. A top-level `var`'s initializer MUST be a constant expression (E2045 otherwise), so this is
+// a literal and CANNOT be seeded from `scaleSeed()` — and it does not need to be. See
+// `globalVarsSource` for why a global is fold-resistant for free.
+let GlobalVarSeedModulus = 7
+
+// ONE file, N `type` declarations — the PER-TYPE cost: the type table and the layout descriptor.
+//
+// ⚠ P1.0r GAVE SHV2 A HEAP AND THIS LADDER GENERATED NO `type` AT ALL. The tell was printed on every
+// run and read six times as a flat line: `phase:runtimeAugment` went 54 -> 58 across the WHOLE
+// ladder. That was never a runtime that scaled beautifully — it was a runtime that was never
+// INSTALLED, because nothing in the corpus allocated.
+//
+// ⚠ AND THAT PHASE STILL WILL NOT MOVE WITH THIS KNOB — it is fixed-cost BY CONSTRUCTION, so do not
+// read it as this knob's report card. `phase:runtimeAugment` times `augmentWithRuntime` only, which is
+// `prependEntryStub`: ONE hand-built entry stub. The heap runtime proper (`installMmRuntime`, five
+// fixed functions) is called at Compiler.maxon:180, OUTSIDE every `PhaseProbe`, so it is billed to no
+// phase at all. What DOES prove the runtime is installed is the leak gate: a struct in a block exits
+// 101, which is unreachable unless `__mm_leak_check` was linked in. This knob's real cost lands in
+// `lowerMaxonToStd`, `isel`, `regalloc` and `encode`, where the work actually is.
+let StructTypesBase = 8 as KnobSize
+
+// ONE file, M `create` sites over a BOUNDED set of types — the PER-SITE cost: an `__mm_alloc` call, a
+// field store per field, and the release the value's death forces.
+//
+// ⚠ NOT `structTypes` WITH A BIGGER NUMBER. One knob grows how many types the compiler must LAY OUT;
+// this one grows how many times a type is BUILT. P1.1a wave 2 (field writes) moves this one and not
+// that one; a change to the layout descriptor moves that one and not this one. Same rule as
+// `globalVars` above, and as `floatSpill` against `pressuredLoops`.
+let StructAllocsBase = 32 as KnobSize
+
+// The bounded set of types `scaleStructAllocs` rotates over. CONSTANT on purpose: were the alloc knob
+// to grow its own types it would BE `structTypes`, the two would move together for ever, and the
+// separation defended above would exist only in the comments.
+let AllocStructTypeCount = 4 as KnobSize
+
+// ONE file, N `/` and `mod` groups — `StdOp.div`, and the x64 `idiv` path whose RAX/RDX pinning is the
+// only HARD fixed-physical-register constraint in the language.
+//
+// ⚠ P1.0d.3 BUILT THAT WHOLE PATH — `cqo`, and the implicit-def masks that keep the divisor and every
+// value live across the `idiv` out of RAX and RDX — and the corpus measured none of it. It was not
+// even an obvious zero: the corpus was FULL of `/`, and every one of them was a FLOAT `/`, which is a
+// different Std op entirely (`binOp(div)` — no fixed registers, no trap, a different register file).
+// Counting the operator would have said "covered"; only counting its TYPE says otherwise.
+let IntDivideBase = 32 as KnobSize
+
+// Masks the opaque seed into a divisor that is provably in 1..8: `(acc and DivisorMask) + 1`.
+//
+// BOTH HALVES ARE LOAD-BEARING. A CONSTANT divisor folds to a shift and measures no `idiv` at all, so
+// it must derive from the seed. And it must not reach ZERO: these programs are compiled and never run,
+// so a `#DE` would never be observed here — which is precisely why it would be wrong to leave in. A
+// corpus is a claim about the shape of real code, and real code does not divide by zero. Being
+// non-negative also keeps it clear of `i64.min / -1`, the `idiv` path's other trap.
+let DivisorMask = 7
 
 // How many SCOPE-FILLER locals a long generated function carries — the V DIMENSION, and it DOUBLES.
 //
@@ -454,7 +551,16 @@ function generateRung(root FilePath, rung RungIndex) returns ScaleRung throws Sc
 	sourceBytes = sourceBytes + try writeRungFile(dir, name: "h_shifts", source: shiftCoverageSource(), written: written)
 	sourceBytes = sourceBytes + try writeRungFile(dir, name: "i_floats", source: floatOpsSource(knobAt(FloatOpsBase, rung: rung)), written: written)
 	sourceBytes = sourceBytes + try writeRungFile(dir, name: "j_fspill", source: floatSpillSource(knobAt(FloatSpillLoopsBase, rung: rung)), written: written)
-	sourceBytes = sourceBytes + try writeRungFile(dir, name: "k_main", source: mainSource(funcNames, chainLength: knobAt(CallChainBase, rung: rung)), written: written)
+	sourceBytes = sourceBytes + try writeRungFile(dir, name: "l_consts", source: globalConstsSource(knobAt(GlobalConstsBase, rung: rung)), written: written)
+	sourceBytes = sourceBytes + try writeRungFile(dir, name: "m_globals", source: globalVarsSource(knobAt(GlobalVarsBase, rung: rung)), written: written)
+	sourceBytes = sourceBytes + try writeRungFile(dir, name: "n_stypes", source: structTypesSource(knobAt(StructTypesBase, rung: rung)), written: written)
+	sourceBytes = sourceBytes + try writeRungFile(dir, name: "o_sallocs", source: structAllocsSource(knobAt(StructAllocsBase, rung: rung)), written: written)
+	sourceBytes = sourceBytes + try writeRungFile(dir, name: "p_divide", source: intDivideSource(knobAt(IntDivideBase, rung: rung)), written: written)
+	// `z_`, not `k_`, so `main` sorts last however many knobs are added above it. The prefixes are
+	// cosmetic (shv2 merges in listing order and the merge is order-independent), but a `main` wedged
+	// mid-alphabet would have to be renamed by every future knob, and `pruneRungDir` deletes the old
+	// `k_main.maxon` from a stale rung directory rather than leaving it to join the measurement.
+	sourceBytes = sourceBytes + try writeRungFile(dir, name: "z_main", source: mainSource(funcNames, chainLength: knobAt(CallChainBase, rung: rung)), written: written)
 
 	try pruneRungDir(dir, generated: written)
 
@@ -914,6 +1020,240 @@ function floatSpillSource(loopCount KnobSize) returns String
 	return out.build()
 end 'floatSpillSource'
 
+// The name prefixes the five knobs below declare and then read back. Each is spelled in a DECLARATION
+// and in a USE many lines apart, so it is named once here for the reason `smallFunctionName` exists: a
+// prefix written down twice is a prefix that can drift, and the failure is not a bad measurement but a
+// generated program that does not compile at all.
+let GlobalConstPrefix = "gc"
+let GlobalVarPrefix = "gv"
+let StructTypePrefix = "ScaleType"
+let AllocTypePrefix = "ScaleAlloc"
+
+// The `globalConsts` knob: N top-level `let`s, each derived from the TWO below it, and a function
+// that reads every one of them.
+//
+// ⚠ THIS KNOB EMITS ALMOST NO CODE FOR ITS SIZE, AND THAT IS THE FOLDER DOING ITS JOB RATHER THAN
+// BEATING THE CORPUS. This file's founding trap — a benchmark that folds away — does NOT apply here,
+// and a reader who "fixes" these to be fold-resistant will have made them not-constants and measured
+// something else. A top-level `let` IS a constant: `let A = 5` then `acc + A` folds to `acc + 5`, and
+// the fold is CORRECT. What this knob measures is the FRONT END — the constant arena, the initializer
+// DFS, the memo key — all of which are reached at DECLARATION, before codegen has an opinion. The
+// other knobs carry `assertCorpusCompiled`'s code-growth floor; this one is not asked to.
+//
+// It is still USED, on purpose: an unread constant is one a future pass may drop before the arena is
+// ever built, which would take the dimension away again exactly as an uncalled function would (see
+// `mainSource`). Reading it is what makes the declaration load-bearing.
+//
+// EACH CONSTANT REFERENCES THE TWO BELOW IT, and that is the property here worth defending. Over a
+// CHAIN a DFS is O(N) whether it memoizes or not, so a chain cannot tell the two apart. Over a
+// 2-PARENT DAG the memoized DFS is O(N) and the unmemoized one is O(2^N) — so if a change ever drops
+// the memo, this knob does not bend politely, it HANGS at the first rung where 2^N stops being
+// payable. That is the loudest failure this file can arrange for a cost that is otherwise invisible:
+// the DFS allocates almost nothing, and a memory instrument would never see it bend.
+function globalConstsSource(constCount KnobSize) returns String
+	var out = StringBuilder.create()
+	out.append("// Generated by ScaleCorpus: the global-consts knob — {constCount} top-level `let`s, each derived from the two below it.\n")
+
+	// The two seeds are literals; every constant above them derives from its two predecessors, which
+	// is what makes the initializer graph a DAG rather than a chain.
+	out.append("let {GlobalConstPrefix}0 = 1\n")
+	out.append("let {GlobalConstPrefix}1 = 2\n")
+	for c in 2 upto constCount 'eachConst'
+		out.append("let {GlobalConstPrefix}{c} = ({GlobalConstPrefix}{c - 1} + {GlobalConstPrefix}{c - 2}) mod {GlobalConstModulus}\n")
+	end 'eachConst'
+
+	out.append("\n")
+	out.append("function scaleGlobalConsts(a int) returns int\n")
+	out.append("\tvar acc = a\n")
+	for c in 0 upto constCount 'eachUse'
+		out.append("\tacc = acc + {GlobalConstPrefix}{c}\n")
+	end 'eachUse'
+	out.append("\treturn acc\n")
+	out.append("end 'scaleGlobalConsts'\n")
+	return out.build()
+end 'globalConstsSource'
+
+// The `globalVars` knob: N top-level `var`s, each stored to and loaded back through the opaque seed.
+//
+// ⚠ A GLOBAL IS FOLD-RESISTANT FOR FREE, AND IT HAS TO BE, BECAUSE IT CANNOT BE SEEDED. A top-level
+// `var`'s initializer must be a CONSTANT expression — `var b = scaleSeed()` is E2045, and even
+// `var b = a + 1` over another global is E2004 (`Undefined constant 'a'`) — so the two tricks the rest
+// of this corpus relies on (a loop-carried var, a call result) are both unavailable at the point of
+// declaration. They are also unnecessary: `StdOp.loadIndirect` is `isPure: false`, so a global READ is
+// opaque to the folder no matter what the global was initialized to. The store below writes the opaque
+// `acc`, and the load reads a location the folder must assume anything could have written.
+//
+// That impurity is a PROPERTY, not an accident, and it is pinned by specs-shv2/global-load-not-hoisted.md
+// — a pure `loadIndirect` gets hoisted out of a loop that writes it, and the program then reads a stale
+// value for ever. It is a silent wrong answer, so this knob must never be "fixed" by making the load
+// pure to tidy up a number.
+//
+// Only `acc` and one loaded value are ever live, so the knob measures `.data` layout and the
+// address/load/store triple, and can never quietly become a register-pressure knob and trip E5001.
+function globalVarsSource(varCount KnobSize) returns String
+	var out = StringBuilder.create()
+	out.append("// Generated by ScaleCorpus: the global-vars knob — {varCount} top-level `var`s in .data, each stored to and loaded back.\n")
+	for v in 0 upto varCount 'eachVar'
+		out.append("var {GlobalVarPrefix}{v} = {v mod GlobalVarSeedModulus}\n")
+	end 'eachVar'
+
+	out.append("\n")
+	out.append("function scaleGlobalVars(a int) returns int\n")
+	out.append("\tvar acc = a\n")
+	for v in 0 upto varCount 'eachUse'
+		out.append("\t{GlobalVarPrefix}{v} = {GlobalVarPrefix}{v} + acc\n")
+		out.append("\tacc = acc + {GlobalVarPrefix}{v}\n")
+	end 'eachUse'
+	out.append("\treturn acc\n")
+	out.append("end 'scaleGlobalVars'\n")
+	return out.build()
+end 'globalVarsSource'
+
+// One `type` declaration: two fields, and the explicit `static create` that is the only way to build
+// one today.
+//
+// ⚠ THE `static create` IS NOT OPTIONAL, AND ITS ABSENCE IS NOT A DIAGNOSTIC YOU WOULD ENJOY. A `type`
+// with no explicit `static function create` does not resolve at the USE site, and the field read fails
+// with `E2015: a field access on 'p', which is declared 'unknown'` — a diagnostic that points at the
+// reader of the field rather than at the missing constructor. (Measured, while writing this knob.)
+//
+// The fields are plain `int` rather than a ranged typealias. specs-shv2/structs.md reaches for an
+// alias, but every generated function in this corpus already takes `a int`, an `int` field lays out
+// the same 8-byte slot the alias would, and going without drops a file-private typealias from each
+// struct file for no loss of coverage — ranged typealiases are `shiftCoverageSource`'s job.
+//
+// SHARED BY BOTH STRUCT KNOBS, so the two measure the SAME declaration against different dimensions:
+// how many of them exist, and how many times one is built.
+function structTypeDecl(name String) returns String
+	var out = StringBuilder.create()
+	out.append("\ntype {name}\n")
+	out.append("\texport var x as int\n")
+	out.append("\texport var y as int\n")
+	out.append("\n")
+	out.append("\tstatic function create(x int, y int) returns Self\n")
+	out.append("\t\treturn Self\{x: x, y: y\}\n")
+	out.append("\tend 'create'\n")
+	out.append("end '{name}'\n")
+	return out.build()
+end 'structTypeDecl'
+
+// ⭐ EVERY `create` IN THIS FILE SITS IN ITS OWN BLOCK, AND THE REASON IS MEASURED, NOT STYLISTIC.
+// Both struct knobs emit through here, so the rule is stated once.
+//
+// A STRUCT BINDING IS OWNED, AND AN OWNED BINDING DOES NOT DIE WHEN YOU STOP READING IT. At
+// function-body scope it stays on the parser's `ownedBindings` list until the `return`, where
+// `emitScopeDrops` (Parser.maxon:2524) decrefs every one of them. So N creates at function scope put
+// N struct pointers LIVE SIMULTANEOUSLY at the return, against a 14-GPR pool — and the splitter must
+// then spill nearly all of them. It does not refuse (they are spillable, so this is never E5001); it
+// goes QUADRATIC.
+//
+// MEASURED, on a private ladder of 32/64/128/256/512 creates in one function:
+//   • at function scope: `regalloc:splitting` reads x3.49, x3.70, x3.84, x3.91 per doubling —
+//     converging on x4.00, and 65% of the whole compile at the top rung.
+//   • in per-create blocks: x1.82, x1.90, x1.95, x1.97. LINEAR, and the knob measures what it says.
+// The mechanism is `SplitLiveRanges`' driver: it is incremental in DIRTY BLOCKS, so one enormous
+// block means every one of the ~N splits re-sweeps all O(N) of its ops.
+//
+// ⚠ IT DOES NOT DEPEND ON THE `closeBlock` LEAK, WHICH IS THE FIRST THING A READER WILL SUSPECT.
+// `closeBlock` (Parser.maxon:2343) drains the binding and deliberately emits NO drop, so a struct in
+// a block leaks today (exit 101, a stated P1.4 gap this instrument never observes because it COMPILES
+// these programs and never RUNS them). That leak is not what bounds the live range, and the knob does
+// not want it to be: when P1.4 emits the drop at the block's END, the live range is bounded by the
+// block either way. Correct before the fix and after it — which is the only reason it is safe to lean
+// on a construct with a known gap in it.
+//
+// The `if` is SCOPE SCAFFOLDING, not a CFG dimension — `deepBlocks` owns that one, and this adds ~1
+// branch per create against its ~3 blocks per if/else. `pressuredLoops` uses `while` the same way, for
+// the same reason: a knob may spend control flow to set up the thing it actually measures.
+function structCreateInBlock(index KnobSize, typeName String, binding String) returns String
+	var out = StringBuilder.create()
+	out.append("\tif acc > 0 'g{index}'\n")
+	out.append("\t\tlet {binding} = {typeName}.create(acc, y: acc + {index mod 5 + 1})\n")
+	out.append("\t\tacc = acc + {binding}.x + {binding}.y\n")
+	out.append("\tend 'g{index}'\n")
+	return out.build()
+end 'structCreateInBlock'
+
+// The `structTypes` knob: N `type` declarations, each built exactly ONCE.
+//
+// The per-TYPE cost is the point — the type table and the layout descriptor — so what doubles is how
+// many types EXIST, not how hard they are used. Each is instantiated once anyway, because a type
+// nothing ever builds is a type a future pass may legitimately never lay out, and the dimension would
+// evaporate silently. That is `mainSource`'s rule one level down: an unbuilt type is an uncalled
+// function's twin.
+//
+// ⚠ THERE IS NO `__destruct_*` CASCADE TO MEASURE YET, whatever this knob's name suggests. The heap's
+// runtime is five FIXED functions (`installMmRuntime`), and a per-type destructor is a later rung —
+// `LowerMaxonToStd.maxon:9` names it as future work ("an `own.drop` into a `__destruct_T` call"). When
+// it lands it will be a per-TYPE cost, and this is the knob it will show up in.
+function structTypesSource(typeCount KnobSize) returns String
+	var out = StringBuilder.create()
+	out.append("// Generated by ScaleCorpus: the struct-types knob — {typeCount} type declarations, each built once.\n")
+	for t in 0 upto typeCount 'eachType'
+		out.append(structTypeDecl("{StructTypePrefix}{t}"))
+	end 'eachType'
+
+	out.append("\nfunction scaleStructTypes(a int) returns int\n")
+	out.append("\tvar acc = a\n")
+	for t in 0 upto typeCount 'eachUse'
+		out.append(structCreateInBlock(t, typeName: "{StructTypePrefix}{t}", binding: "s{t}"))
+	end 'eachUse'
+	out.append("\treturn acc\n")
+	out.append("end 'scaleStructTypes'\n")
+	return out.build()
+end 'structTypesSource'
+
+// The `structAllocs` knob: M `create` sites over a FIXED `AllocStructTypeCount` types.
+//
+// The per-SITE cost is the point — an `__mm_alloc` call, a field store per field, and the release the
+// value's death forces — so what doubles is the number of ALLOCATION SITES while the number of types
+// stays put. That is the whole of the difference from `structTypes`, and the reason the two are not one
+// knob with a bigger number: this is the column that moves when P1.1a wave 2 changes what a `create`
+// emits, and that one is the column that moves when the layout descriptor changes.
+//
+// Every create is block-scoped for the reason `structCreateInBlock` states — measured at x3.96 per
+// doubling without it, x1.97 with it.
+function structAllocsSource(allocCount KnobSize) returns String
+	var out = StringBuilder.create()
+	out.append("// Generated by ScaleCorpus: the struct-allocs knob — {allocCount} create sites over {AllocStructTypeCount} types.\n")
+	for t in 0 upto AllocStructTypeCount 'eachType'
+		out.append(structTypeDecl("{AllocTypePrefix}{t}"))
+	end 'eachType'
+
+	out.append("\nfunction scaleStructAllocs(a int) returns int\n")
+	out.append("\tvar acc = a\n")
+	for i in 0 upto allocCount 'eachAlloc'
+		out.append(structCreateInBlock(i, typeName: "{AllocTypePrefix}{i mod AllocStructTypeCount}", binding: "p{i}"))
+	end 'eachAlloc'
+	out.append("\treturn acc\n")
+	out.append("end 'scaleStructAllocs'\n")
+	return out.build()
+end 'structAllocsSource'
+
+// The `intDivide` knob: N `/` and `mod` groups over a divisor derived from the opaque seed.
+//
+// BOTH OPERATORS, because they share one `idiv` and read DIFFERENT result registers — the quotient
+// from RAX, the remainder from RDX. A corpus with only one of them measures half the lowering.
+//
+// The dividend is `acc`, which the group has just written and the next group will read, so `acc` is
+// live ACROSS an `idiv` that clobbers both RAX and RDX. That is the constraint the whole path exists
+// to satisfy, and a corpus of `20 / 4` could never provoke it — that folds before it reaches an
+// allocator at all.
+function intDivideSource(groupCount KnobSize) returns String
+	var out = StringBuilder.create()
+	out.append("// Generated by ScaleCorpus: the int-divide knob — {groupCount} `/` and `mod` groups over an opaque, non-zero divisor.\n")
+	out.append("function scaleDivide(a int) returns int\n")
+	out.append("\tvar acc = a\n")
+	for i in 0 upto groupCount 'eachGroup'
+		out.append("\tlet d{i} = (acc and {DivisorMask}) + 1\n")
+		out.append("\tacc = acc + acc / d{i}\n")
+		out.append("\tacc = acc + acc mod d{i}\n")
+	end 'eachGroup'
+	out.append("\treturn acc\n")
+	out.append("end 'scaleDivide'\n")
+	return out.build()
+end 'intDivideSource'
+
 // The mask that bounds a dynamic shift COUNT to a sane, non-negative range. A count derived this way
 // is a runtime value the folder cannot see, so it takes the GUARDED shift path — the 6-7 ops that
 // saturate an out-of-range count — which a constant count folds away and which nothing in this corpus
@@ -1012,6 +1352,14 @@ function mainSource(funcNames StringArray, chainLength KnobSize) returns String
 	// pass could take the float dimension away again.
 	out.append("\tacc = scaleFloats(acc)\n")
 	out.append("\tacc = scaleFloatSpill(acc)\n")
+	// The five knobs that close the measured blind spots. `scaleGlobalConsts` is threaded exactly as
+	// the others are even though the folder eats its constants: the call keeps the DECLARATIONS alive,
+	// which is the whole of what that knob measures (see `globalConstsSource`).
+	out.append("\tacc = scaleGlobalConsts(acc)\n")
+	out.append("\tacc = scaleGlobalVars(acc)\n")
+	out.append("\tacc = scaleStructTypes(acc)\n")
+	out.append("\tacc = scaleStructAllocs(acc)\n")
+	out.append("\tacc = scaleDivide(acc)\n")
 	out.append("\tif acc > 0 'ok'\n")
 	out.append("\t\treturn 0\n")
 	out.append("\tend 'ok'\n")
@@ -1101,6 +1449,18 @@ end 'codeGrowthAt'
 // because the gaps are the part a reader cannot otherwise know, and a gap nobody is told about reads as
 // coverage.
 //
+// ⚠ AND A MANIFEST CAN LIE BY OMISSION, WHICH IS WORSE THAN THE SILENCE IT REPLACED. This list read
+// `let / var` under CONSTRUCTS GENERATED and meant the BODY-LOCAL kind — the only kind the corpus had.
+// Top-level `let` and `var` were named under NEITHER heading, so two landed rungs and 36 spec tests
+// read as covered by a reader doing exactly what this manifest asks of them. `structs` sat under NOT
+// GENERATED for a rung after P1.0r implemented them, and integer `/` and `mod` sat there for three
+// after P1.0d.3 built the entire idiv path.
+//
+// ⇒ THE RULE THIS LIST IS NOW HELD TO: every construct in the subset appears under EXACTLY ONE
+// heading, and a construct that is PARTLY generated (structs — reads yes, writes no) says which part
+// under GENERATED rather than being filed whole under either. A heading is a claim; an omission is a
+// claim too, and it is the one nobody audits.
+//
 // TWO of these are STRUCTURAL — no knob can close them, so they are stated as blind spots rather than
 // filed as TODOs:
 //   • MEMORY ONLY. scale-test measures allocations and bytes, never time; a time-only superlinearity
@@ -1112,7 +1472,19 @@ export function printCorpusManifest()
 	print("scale-test: CORPUS MANIFEST — what this ladder exercises, and what it structurally cannot see.\n")
 	print("\n")
 	print("  CONSTRUCTS GENERATED (a codegen change to one of these moves the memory numbers):\n")
-	print("    int arithmetic (+ - *), comparisons, let / var, return\n")
+	print("    int arithmetic (+ - *), comparisons, BODY-LOCAL let / var, return\n")
+	print("    integer / and mod — the idiv path, over an OPAQUE non-zero divisor, with the dividend\n")
+	print("      live across the RAX/RDX clobber (a constant divisor folds and measures nothing)\n")
+	print("    TOP-LEVEL let — the constant arena and its initializer DFS, as a 2-PARENT DAG so an\n")
+	print("      unmemoized DFS would go exponential rather than merely slow. It is FOLDED into every\n")
+	print("      use and emits almost no code: that is correct, and it is the front end being measured\n")
+	print("    TOP-LEVEL var — .data slots, GlobalDataTable.layOut, globalAddr/loadIndirect/storeIndirect\n")
+	print("    STRUCTS (the heap): `type` declarations, an explicit `static create`, Self\{\} construction,\n")
+	print("      field READS, and the __mm_alloc site each create emits. TWO BLIND SPOTS LIVE INSIDE\n")
+	print("      THIS ONE and no knob here can close them: field WRITES (`p.x = 30`) are P1.1a wave 2\n")
+	print("      and NOT IMPLEMENTED, and a struct crossing a CALL boundary (as a parameter or a\n")
+	print("      return) is P1.4, deferred on the borrow-vs-consume ruling. A codegen change to either\n")
+	print("      is invisible here even though structs are otherwise generated\n")
 	print("    if, if/else, while, and NESTED while (to a doubling depth)\n")
 	print("    functions (<=6 params), cross-file merge, chained calls holding values live across them\n")
 	print("    short-circuit `and` (the two-condition guards), bitwise `and` (shift-count masks)\n")
@@ -1128,14 +1500,18 @@ export function printCorpusManifest()
 	print("  the growth — x2 linear, x4 quadratic — read straight off the counts):\n")
 	print("    function count, file count, sequential-if ops, block/CFG count, call-chain depth,\n")
 	print("    pressured-loop COUNT, loop-nest DEPTH, locals-in-scope per function (the V dimension),\n")
-	print("    float-op groups, and float-spill loop COUNT\n")
+	print("    float-op groups, float-spill loop COUNT, top-level `let` COUNT, top-level `var` COUNT,\n")
+	print("    `type` declaration COUNT (a per-TYPE cost), struct `create` SITE count (a per-SITE cost,\n")
+	print("    over a FIXED set of types, so the two move independently), and int-divide groups\n")
 	print("\n")
 	print("  NOT GENERATED — a codegen change to any of these is INVISIBLE here (structural blind spot):\n")
-	print("    `break` (in the subset, but no generated loop exits early); integer `/` and `mod` (idiv);\n")
-	print("    `or` / `xor` / `not`; print, structs, arrays, strings, `for`, `match`; closures, async,\n")
-	print("    generics; `as` casts. Float ARGUMENTS and float RETURNS are absent because they do not\n")
-	print("    exist yet (Wave 2 — the xmm0 ABI slot); every float here enters by promotion and leaves\n")
-	print("    through trunc, which is the whole of what Wave 1 can express.\n")
+	print("    `break` (in the subset, but no generated loop exits early); `or` / `xor` / `not`;\n")
+	print("    print, arrays, strings, `for`, `match`; closures, async, generics; `as` casts.\n")
+	print("    Float ARGUMENTS and float RETURNS are absent because they do not exist yet (Wave 2 —\n")
+	print("    the xmm0 ABI slot); every float here enters by promotion and leaves through trunc,\n")
+	print("    which is the whole of what Wave 1 can express. Struct field WRITES and structs across a\n")
+	print("    CALL are absent for the same reason — see the struct entry above, which names them\n")
+	print("    where a reader looking up structs will actually find them.\n")
 	print("\n")
 	print("  !! MEASURES MEMORY ONLY — a TIME-only superlinearity is invisible here BY DESIGN. Time is not\n")
 	print("     reproducible, so it cannot be trended; a cost that re-walks tokens or chases pointers but\n")
