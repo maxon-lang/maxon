@@ -1178,6 +1178,8 @@ does not contain a struct. **The instrument was right and pointed at the wrong p
 > **That is why the review is independent and why it runs LAST.** A plausible number with a citation attached
 > is exactly what #22 warns of, and it very nearly went into the log.
 
+### ~~25. 🔴 shv2 SILENTLY ACCEPTS A PRIVATE FIELD READ, and the comment excusing it states a FALSE reason~~ ✅ **FIXED 2026-07-16 (P1.1a wave 3)** — E3014 now lives in `Parser.requireFieldAccessible`, one home / two callers (read + write), TYPE-scoped. **⚠ But the fix's OWN comment then asserted "the gate is the TYPE, not the FILE" while NOTHING checked it** — the whole corpus reaches the field from `main()`, so the type-vs-file half was unpinned and a sabotage kept the suite at 392/0. Closed for real by `field-visibility-is-type-scoped.md` (see the wave-3 box in PLAN.md). The registry `doc` line was ALSO wrong the same way ("from another file") and is corrected.
+
 ### 25. 🔴 NEW 2026-07-16 — **shv2 SILENTLY ACCEPTS A PRIVATE FIELD READ, and the comment excusing it states a FALSE reason**
 
 **Found while planning P1.1a wave 2, by porting-surveying `specs/export-var-fields.md`. Measured both ways,
@@ -1427,3 +1429,46 @@ said "your range arms became equality chains and the jump-table pass ate them."
 - ⚠ **The C# network specs (`async-tcp`, `tcp-client`) currently TIME OUT (~12 s) on this machine** —
   2893/2 rather than 2895/0. **Environmental, not a regression:** `398c89488`, which measured 2895/0
   earlier the same day, fails identically. A fresh box should restore it.
+
+### 29. ⚠ NEW 2026-07-16 — **two receiver-ownership facts from P1.1a wave 3, both LEFT for the ownership rung, both stated where load-bearing**
+
+Both surfaced in the wave-3 independent review, both FIXED-or-INERT now, recorded so the ownership rung
+(P1.4) does not rediscover them at 5× cost.
+
+**(a) `next.a` compiled to `self.a` — the fixed one, kept here for its SHAPE.** A self-field alias has
+`VarInfo.boundValue == 0` (a read is a `loadIndirect` through the receiver, not a value reference) **and
+ValueId 0 IS the receiver** (`__self` is param 0). `parseVariableReference` guarded exactly this for the
+bare-name path; three OTHER sites (`parseFieldAccess`, `parseMethodCall`, `parseFieldAssignment`) each
+re-read `binding.boundValue` themselves. **One fact, four homes** — reachable via a self-referential `var
+next as Node` (`parseTypeReference` mints a `structRef` for the enclosing type's own name, so the struct
+gate admits box = 0). `return next.a` emitted `[rcx+0]` = `return self.a`; `next.readA()` emitted a bare
+`callDirect` with no arg setup = `self.readA()`; both exit 0, no diagnostic. **Fixed by DERIVE, not a
+fourth guard:** `requireStructBase` returns the box WITH the layout (`type StructBase`), so it is the one
+reader of a base's `boundValue` and no caller can hold a proved layout beside an assumed box. A
+struct-typed field base is REFUSED (E2015) rather than loaded — reading it correctly is the `mintPhi` trap
+(no struct-typed field can be constructed here to observe the load). Pinned: `self-field-struct-typed.md`.
+
+**(b) The receiver-borrow REASON was false; the CONCLUSION holds for a different reason.** `parseMethodCall`
+claimed the consume sink is unreachable "because this rung has scalar and float fields only." **Measured
+false:** `function link(other Node) → next = other` lowers to `storeBaseDispReg [rcx+8], rdx` — a struct
+pointer into heap storage, **no incref**. The conclusion (receiver borrowed, no leak) survives, but only
+because **bare `self`-as-a-value is refused** (E2015, naming the P1.4 deferral) and **a struct-typed field
+is uninstantiable** (`next: 0` → E3005, `next` omitted → E3086, no `Node` value obtainable) — so no live
+struct pointer ever reaches a field. That is #27's shape (a property holding for a reason other than the
+one written). The un-increfed store is **left for P1.4**: fixing it needs the full consume analysis, not a
+rung's parser work. Both the false reason and the real one are now written where they are load-bearing.
+
+### 30. ⚠ NEW 2026-07-16 — **`scale-test` is BLIND to the instance-method mechanism P1.1a wave 3 just landed**
+
+The wave-3 optimizer measured **zero** allocation attributable to the instance-method path — the receiver,
+the self-field aliases, the method-call lowering — because **the scale corpus emits no methods**. Every
+allocation in its +148→+3,496 delta is the field-DECLARATION path (which the corpus does generate). So the
+mechanism this rung exists to add is bounded by *reading the code*, not by the instrument.
+
+**This is #4d's shape exactly** (the scale corpus systematically blind to the feature just landed), which
+was CLOSED for structs/heap/globals/idiv by adding generator knobs (`74ea57d1f`, `726a606f1`). **Methods
+are the knob nobody added.** The optimizer correctly did NOT touch the instrument to paper over it (that is
+the cardinal sin — see #23's "an agent edited the instrument to stop it complaining"). ⇒ A corpus knob that
+emits a type with an instance method and calls it, so the next rung's method work is measurable rather than
+argued. Not urgent — the method path is O(1)/O(fields) by inspection — but it is the same recurring gap and
+it should be closed the same way, once, deliberately.
