@@ -93,9 +93,18 @@ export function isRuntimeCallee(callee ByteArray) returns bool
 end 'isRuntimeCallee'
 
 // The prefix Maxon reserves for compiler-internal names — every runtime entry point the compiler
-// EMITS (`__mm_alloc`, `__print_string`, `__str_eq`, …) starts with it, and no user function can,
-// because `isAlphaNum` admits `_` but an identifier cannot BEGIN with two of them in any construct
-// the parser accepts as a callee.
+// EMITS (`__mm_alloc`, `__print_string`, `__str_eq`, …) starts with it. The bootstrap enforces the
+// reservation at parse time (`E2051 ParserReservedIdentifier` — "declarations starting with '__' are
+// reserved for compiler internals"), so no user name can collide there.
+//
+// ⚠ **shv2 DOES NOT YET EMIT E2051** (`docs/error-codes.txt` lists no `shv2` claim on it), so this
+// predicate is NOT a proof the callee is compiler-owned — it is only a "skip the user-function checks"
+// test. A user CAN today declare and call a `__`-prefixed function, and `isCompilerInternalCallee`
+// then routes that call past `validateCall`'s arity/label checks: a SILENT MISCOMPILE (measured —
+// `__add(7)` against a two-parameter `__add` compiles and runs with the second argument uninitialised,
+// where the bootstrap rejects the declaration outright). The predicate is safe only once shv2 emits
+// E2051 for `__`-prefixed declarations; until then this is a known gap and MUST NOT be relied on as a
+// user/compiler boundary.
 let CompilerInternalPrefix = b"__"
 
 // ⭐ **IS THIS CALLEE ONE OF THE COMPILER'S OWN?** The GENERAL predicate — a superset of
