@@ -1508,9 +1508,24 @@ export type Parser
 	//
 	// Neither `as` nor `=` is E2010 — the `consume(equals)` below reporting the token it wanted.
 	//
-	// `let` vs `var` decides FIELD MUTABILITY (`c.version = 2` on a `let` field is E2013), and
-	// `export` is still consumed and DROPPED: field visibility gates cross-FILE access (E3014), and
-	// shv2 has no cross-file name resolution to gate.
+	// `let` vs `var` decides FIELD MUTABILITY (`c.version = 2` on a `let` field is E2013), which is
+	// this rung, and the bit is now kept — see `StructLayout.fieldMutable`.
+	//
+	// ⚠ **`export` IS STILL CONSUMED AND DROPPED, AND THE REASON THIS COMMENT USED TO GIVE FOR THAT
+	// WAS FALSE.** It said *"field visibility gates cross-FILE access (E3014), and shv2 has no
+	// cross-file name resolution to gate"* — which would make the bit unreadable today and its drop
+	// free. **The corpus disproves it:** visibility gates access from outside the TYPE, in the SAME
+	// FILE, and `specs/export-var-fields.md`'s `error.unexported-field-read` /
+	// `error.unexported-field-write` are both single-file fragments. So the dropped bit HAS a live
+	// consumer, and shv2 silently accepts a program the language rejects (measured: a private field
+	// read compiles and returns 42 where the bootstrap says E3014). OPEN.md #25.
+	//
+	// It is dropped anyway, and NOT quietly: visibility is a third mechanism (this rung is
+	// mutability + defaults), and E3014 carries no shv2 claim in the registry — it needs a registry
+	// edit and `maxon error-codes generate`, which is a rung's worth of its own. ⇒ **P1.1a wave 3**,
+	// whose port is `specs/export-var-fields.md`. The machinery is nearly all here:
+	// `requireConstructible` already computes "am I inside type T's methods?", the same question
+	// E3014 asks.
 	function readStructFieldInto(layout StructLayout) throws ParseError
 		if self.at(TokenKind.export) 'exported'
 			self.advance()
