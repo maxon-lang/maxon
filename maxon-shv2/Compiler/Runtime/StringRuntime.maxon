@@ -24,10 +24,13 @@
 // blob is a SEPARATE `.rdata` entry, NUL-terminated, and `length@8` EXCLUDES the NUL.
 export let StringBufferOffset = 0 as ByteOffset
 export let StringLengthOffset = 8 as ByteOffset
-let StringCapacityOffset = 16 as ByteOffset
-let StringElementSizeOffset = 24 as ByteOffset
-let StringParentPtrOffset = 32 as ByteOffset
-let StringIsAsciiOffset = 40 as ByteOffset
+// Exported for `Parser.emitStringInterp`, which WRITES all six fields of an owned heap String's record
+// (the literal path here only ever writes rdata). One set of offsets, read by the runtime and written by
+// the interpolation lowering, so a reader and a writer of the same record cannot drift.
+export let StringCapacityOffset = 16 as ByteOffset
+export let StringElementSizeOffset = 24 as ByteOffset
+export let StringParentPtrOffset = 32 as ByteOffset
+export let StringIsAsciiOffset = 40 as ByteOffset
 export let StringRecordBytes = 48 as ByteCount
 let StringFieldBytes = 8 as ByteCount
 
@@ -37,7 +40,27 @@ let StringFieldBytes = 8 as ByteCount
 // they are simply the honest contents of the record.
 let RdataCapacitySentinel = 0 - 2 as ParsedInt
 let RdataParentPtr = 0 as ParsedInt
-let StringElementSize = 1 as ParsedInt
+export let StringElementSize = 1 as ParsedInt
+
+// ⭐ AN OWNED INTERPOLATION RESULT IS A HEAP STRING, and its bytes live INLINE — right after the 48-byte
+// record, in the SAME `__mm_alloc` payload (`buffer@0 = record + StringRecordBytes`). So the whole thing
+// is one allocation: `__mm_decref` → `__mm_free` reclaims the record AND its bytes together, and the
+// destructor a struct passes (`TrivialDestructor`, 0) is exactly right — there is no external buffer to
+// free. `capacity@16 = length` (the bytes are exact, never grown at this rung) and `parent_ptr@32 =
+// InlineParentSentinel`.
+//
+// `parent_ptr = -3` is the value the bootstrap writes for an inline String (`MmParentInline`) and the one
+// a future destructor / `append` reads to mean "the bytes die with the record's slot; free no external
+// buffer, and DETACH before growing". Nothing reads it at THIS rung — an inline String needs no
+// destructor cascade, because the bump allocator reclaims nothing and the bytes are part of the record's
+// own payload — so it is an honest forward-compatible marker rather than a live branch selector. See
+// `Parser.emitStringInterp`.
+export let InlineParentSentinel = 0 - 3 as ParsedInt
+
+// The fixed bytes an owned interpolation result allocates BEYOND its text: the 48-byte record the bytes
+// live inline behind, plus one trailing NUL (which the slab's zeroing supplies for free — nothing writes
+// it). `Parser.emitStringInterp` sizes its one `__mm_alloc` as `totalLen + StringInterpOverheadBytes`.
+export let StringInterpOverheadBytes = (StringRecordBytes as ParsedInt) + 1
 
 // `isAsciiFlag@40` — 1 iff every byte is < 128 (a compile-time scan). An empty string is vacuously
 // ASCII. The high-bit threshold and the two flag values are named rather than bare so the scan reads
@@ -49,6 +72,24 @@ let AsciiFlagFalse = 0 as ParsedInt
 // The blob is the payload bytes followed by a single NUL — a C string, so the record's pointer is
 // usable by any consumer that wants a NUL-terminated buffer, while `length@8` is what Maxon reads.
 let NulTerminator = 0 as Byte
+
+// `__int_to_string`'s decimal machinery. The digits are rendered without ever NEGATING the value, so
+// `i64.min` is handled with no overflow: signed `%`/`/` keep the value's sign (`x % 10 ∈ [-9,0]` for a
+// negative `x`), and the per-digit magnitude is recovered by MULTIPLYING by `sign = 1 - 2*neg` (`+1` for
+// a non-negative value, `-1` for a negative one) rather than by an `abs` that `i64.min` would overflow.
+let AsciiZeroDigit = 48 as ParsedInt
+let AsciiMinusSign = 45 as ParsedInt
+let DecimalRadix = 10 as ParsedInt
+// `value >>logical 63` is `1` exactly when the sign bit is set — the branch-free `isNegative` the sign
+// and the leading `-` are both derived from.
+let SignBitPosition = 63 as ParsedInt
+let SignMultiplierBase = 1 as ParsedInt
+let SignMultiplierSpan = 2 as ParsedInt
+
+// The scratch an integer part reserves before `__int_to_string` fills it: `i64.min` renders as
+// "-9223372036854775808", 20 digits and a sign = 21 bytes, and no i64 is wider. `Parser.emitStringInterp`
+// allocates this, the converter fills `len ≤ 21` bytes, and the caller frees it after the copy.
+export let IntToStringScratchBytes = 21 as ParsedInt
 
 // The `.rdata` label prefixes for a literal's blob and its record. Distinct so a reader of the section
 // can tell the two apart; `__`-prefixed so they never collide with a user name and stay out of the
@@ -62,6 +103,15 @@ let StringRecordPrefix = "__str_rec_"
 // compares strings carries neither the allocator nor the leak check.
 export let PrintStringName = b"__print_string"
 export let StrEqName = b"__str_eq"
+
+// The two runtime entry points an interpolation lowers CALLS to (`Parser.emitStringInterp`). `__str_copy`
+// blits one part's bytes into the result buffer; `__int_to_string` renders an integer part's decimal text
+// into a scratch buffer. Both are `__`-prefixed compiler-internal (no E3004, no signature slotting) but NOT
+// `__mm_`-prefixed — like `__print_string`/`__str_eq`, they touch no allocator, so they never widen the
+// heap-runtime decision. The heap decision is driven by the interpolation's OWN `__mm_alloc` calls, which
+// `scanRuntimeUsage` already sees.
+export let StrCopyName = b"__str_copy"
+export let IntToStringName = b"__int_to_string"
 
 // The bool `__str_eq` returns, as the i64 a Std `value(i64)` return carries: 1 when equal, 0 otherwise.
 let StrEqEqual = 1 as ParsedInt
@@ -160,9 +210,11 @@ export type RuntimeUsage
 	export var usesHeap as bool
 	export var usesPrint as bool
 	export var usesStrEq as bool
+	export var usesStrCopy as bool
+	export var usesIntToString as bool
 
 	static function create() returns RuntimeUsage
-		return Self{usesHeap: false, usesPrint: false, usesStrEq: false}
+		return Self{usesHeap: false, usesPrint: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false}
 	end 'create'
 end 'RuntimeUsage'
 
@@ -197,6 +249,12 @@ function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 	if callee.equals(StrEqName) 'streq'
 		usage.usesStrEq = true
 	end 'streq'
+	if callee.equals(StrCopyName) 'strcopy'
+		usage.usesStrCopy = true
+	end 'strcopy'
+	if callee.equals(IntToStringName) 'inttostr'
+		usage.usesIntToString = true
+	end 'inttostr'
 end 'recordCallUsage'
 
 // Install the referenced String runtime functions into the lowered Std module. Called AFTER the
@@ -209,6 +267,12 @@ export function installStringRuntime(module StdModule, usage RuntimeUsage)
 	if usage.usesStrEq 'streq'
 		buildStrEq(module)
 	end 'streq'
+	if usage.usesStrCopy 'strcopy'
+		buildStrCopy(module)
+	end 'strcopy'
+	if usage.usesIntToString 'inttostr'
+		buildIntToString(module)
+	end 'inttostr'
 end 'installStringRuntime'
 
 // `__print_string(strPtr)` — write a String's bytes to stdout, no trailing newline.
@@ -317,3 +381,223 @@ function buildStrEq(module StdModule)
 
 	module.functions.push(func)
 end 'buildStrEq'
+
+// `__str_copy(dest, src, len)` — blit `len` bytes from `src` into `dest`. The one thing an interpolation
+// does with every part: each part is materialized to a `(buffer, length)` pair and copied into the fused
+// result buffer at a running cursor. A byte loop rather than a `rep movsb`/memcpy op because there is no
+// memory-move op in the Std tier (`system` holds only `osAllocPages`/`osWriteStdout`), and a byte loop
+// needs nothing the tier lacks. `len == 0` copies nothing (the header guard is `i >= len`, true at once).
+//
+// The loop index `i` is the header's phi — 0 from entry, `i+1` from the back edge — the same on-the-fly
+// SSA shape `buildStrEq` builds directly because a runtime function has no parser.
+function buildStrCopy(module StdModule)
+	var func = IrFunction.createFromStd(StrCopyName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(3)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var header = module.addBlock(func, label: b"header")
+	var body = module.addBlock(func, label: b"body")
+	var done = module.addBlock(func, label: b"done")
+
+	emitParams(module, block: entry, count: 3)
+	let dest = 0 as ValueId
+	let src = 1 as ValueId
+	let len = 2 as ValueId
+
+	let zero = ids.mint()
+	module.appendOp(entry, op: StdOp.const(zero, value: 0, valueType: StdType.i64))
+	module.setTerminator(entry, op: StdOp.branch(header.id))
+
+	let i = ids.mint()
+	header.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
+	entry.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(zero)))
+
+	let atEnd = ids.mint()
+	module.appendOp(header, op: StdOp.cmp(atEnd, lhs: i, rhs: len, pred: StdCmpPred.ge, operandType: StdType.i64))
+	module.setTerminator(header, op: StdOp.condBranch(atEnd, thenBlockId: done.id, elseBlockId: body.id))
+
+	let srcAddr = ids.mint()
+	module.appendOp(body, op: StdOp.binOp(srcAddr, lhs: src, rhs: i, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	let srcByte = ids.mint()
+	module.appendOp(body, op: StdOp.loadIndirect(srcByte, addrId: srcAddr, offset: 0, valueType: StdType.u8))
+	let dstAddr = ids.mint()
+	module.appendOp(body, op: StdOp.binOp(dstAddr, lhs: dest, rhs: i, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	module.appendOp(body, op: StdOp.storeIndirect(dstAddr, offset: 0, valueId: srcByte, valueType: StdType.u8))
+	let one = ids.mint()
+	module.appendOp(body, op: StdOp.const(one, value: 1, valueType: StdType.i64))
+	let iNext = ids.mint()
+	module.appendOp(body, op: StdOp.binOp(iNext, lhs: i, rhs: one, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	module.setTerminator(body, op: StdOp.branch(header.id))
+	body.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(iNext)))
+
+	module.setTerminator(done, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildStrCopy'
+
+// `__int_to_string(value, dest) -> len` — render `value`'s signed decimal text into `dest`, returning the
+// byte count written (never a NUL — the caller's buffer is zeroed and it copies exactly `len` bytes).
+//
+// ⭐ IT NEVER NEGATES, so `i64.min` needs no special case. `neg = value >>logical 63` is the sign bit as a
+// 0/1. A leading `-` is written UNCONDITIONALLY at `dest[0]` and then OVERWRITTEN by the most-significant
+// digit when the value is non-negative (that digit lands at `dest[start]` with `start = neg = 0`), so the
+// sign costs no branch. Each digit is `value % 10` — which carries the value's sign — turned positive by
+// MULTIPLYING by `sign = 1 - 2*neg` (`+1`/`-1`), again avoiding the `abs` that `i64.min` would overflow.
+//
+// Values dominating from `entry`/`setup` (`value`, `dest`, `neg`, `sign`) are read directly in the loop
+// blocks those dominate; only the loop-variant `digits`/`v`/`pos` ride block-args. `len` is computed once
+// in `writeSetup`, which dominates `done`.
+function buildIntToString(module StdModule)
+	var func = IrFunction.createFromStd(IntToStringName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var zeroCase = module.addBlock(func, label: b"zeroCase")
+	var setup = module.addBlock(func, label: b"setup")
+	var countLoop = module.addBlock(func, label: b"countLoop")
+	var writeSetup = module.addBlock(func, label: b"writeSetup")
+	// The write loop is HEADER-GUARDED (test at the top, `buildStrEq`/`buildStrCopy`'s shape) rather than
+	// bottom-tested, and that is load-bearing beyond style. A fused loop-test `cmp` materializes NO target
+	// op (it sets flags the `jcc` reads), so it is invisible to `scanFunctionValueCount` — which sizes the
+	// value-class column by the target ops — while `recordOpResultClass` still classes it off the Std op.
+	// If that `cmp` result were the function's HIGHEST-numbered value, the column would come up one short
+	// (`setValueClass: v_N outside the N-wide column`). A header guard keeps the loop BODY — all
+	// materialized, all counted — as the last values minted, so the top-tested `cmp` is never the maximum.
+	var writeHeader = module.addBlock(func, label: b"writeHeader")
+	var writeBody = module.addBlock(func, label: b"writeBody")
+	var done = module.addBlock(func, label: b"done")
+
+	emitParams(module, block: entry, count: 2)
+	let value = 0 as ValueId
+	let dest = 1 as ValueId
+
+	// entry: `value == 0` prints a lone '0' (the count/write loops assume at least one non-zero step).
+	let zeroConst = ids.mint()
+	module.appendOp(entry, op: StdOp.const(zeroConst, value: 0, valueType: StdType.i64))
+	let isZero = ids.mint()
+	module.appendOp(entry, op: StdOp.cmp(isZero, lhs: value, rhs: zeroConst, pred: StdCmpPred.eq, operandType: StdType.i64))
+	module.setTerminator(entry, op: StdOp.condBranch(isZero, thenBlockId: zeroCase.id, elseBlockId: setup.id))
+
+	let zeroDigitConst = ids.mint()
+	module.appendOp(zeroCase, op: StdOp.const(zeroDigitConst, value: AsciiZeroDigit, valueType: StdType.i64))
+	module.appendOp(zeroCase, op: StdOp.storeIndirect(dest, offset: 0, valueId: zeroDigitConst, valueType: StdType.u8))
+	let oneLen = ids.mint()
+	module.appendOp(zeroCase, op: StdOp.const(oneLen, value: 1, valueType: StdType.i64))
+	module.setTerminator(zeroCase, op: StdOp.ret(oneLen))
+
+	// setup: derive `neg` (0/1) and `sign` (+1/-1), and write the provisional '-' at dest[0].
+	let signBitConst = ids.mint()
+	module.appendOp(setup, op: StdOp.const(signBitConst, value: SignBitPosition, valueType: StdType.i64))
+	let neg = ids.mint()
+	module.appendOp(setup, op: StdOp.binOp(neg, lhs: value, rhs: signBitConst, opcode: StdBinOpcode.shrLogical, operandType: StdType.i64))
+	let minusConst = ids.mint()
+	module.appendOp(setup, op: StdOp.const(minusConst, value: AsciiMinusSign, valueType: StdType.i64))
+	module.appendOp(setup, op: StdOp.storeIndirect(dest, offset: 0, valueId: minusConst, valueType: StdType.u8))
+	let spanConst = ids.mint()
+	module.appendOp(setup, op: StdOp.const(spanConst, value: SignMultiplierSpan, valueType: StdType.i64))
+	let twoNeg = ids.mint()
+	module.appendOp(setup, op: StdOp.binOp(twoNeg, lhs: spanConst, rhs: neg, opcode: StdBinOpcode.mul, operandType: StdType.i64))
+	let signBaseConst = ids.mint()
+	module.appendOp(setup, op: StdOp.const(signBaseConst, value: SignMultiplierBase, valueType: StdType.i64))
+	let sign = ids.mint()
+	module.appendOp(setup, op: StdOp.binOp(sign, lhs: signBaseConst, rhs: twoNeg, opcode: StdBinOpcode.sub, operandType: StdType.i64))
+	let digitsZero = ids.mint()
+	module.appendOp(setup, op: StdOp.const(digitsZero, value: 0, valueType: StdType.i64))
+	module.setTerminator(setup, op: StdOp.branch(countLoop.id))
+
+	// countLoop(digits, v): count decimal digits — do { v = v/10; digits += 1 } while v != 0.
+	let digits = ids.mint()
+	let v = ids.mint()
+	countLoop.blockArgs.push(IrBlockArg.create(digits, argType: StdType.i64))
+	countLoop.blockArgs.push(IrBlockArg.create(v, argType: StdType.i64))
+	setup.branchEdges.push(BranchEdge.create(countLoop.id, argIds: twoArgs(digitsZero, second: value)))
+
+	let radixCount = ids.mint()
+	module.appendOp(countLoop, op: StdOp.const(radixCount, value: DecimalRadix, valueType: StdType.i64))
+	let vNext = ids.mint()
+	module.appendOp(countLoop, op: StdOp.div(vNext, lhs: v, rhs: radixCount))
+	let oneCount = ids.mint()
+	module.appendOp(countLoop, op: StdOp.const(oneCount, value: 1, valueType: StdType.i64))
+	let digitsNext = ids.mint()
+	module.appendOp(countLoop, op: StdOp.binOp(digitsNext, lhs: digits, rhs: oneCount, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	let countZero = ids.mint()
+	module.appendOp(countLoop, op: StdOp.const(countZero, value: 0, valueType: StdType.i64))
+	let countDone = ids.mint()
+	module.appendOp(countLoop, op: StdOp.cmp(countDone, lhs: vNext, rhs: countZero, pred: StdCmpPred.eq, operandType: StdType.i64))
+	module.setTerminator(countLoop, op: StdOp.condBranch(countDone, thenBlockId: writeSetup.id, elseBlockId: countLoop.id))
+	countLoop.branchEdges.push(BranchEdge.create(countLoop.id, argIds: twoArgs(digitsNext, second: vNext)))
+
+	// writeSetup: len = digits + neg; the last write position is len - 1. `digitsNext` is read straight —
+	// `countLoop` defines it and dominates `writeSetup`, so the last iteration's count reaches here with no
+	// exit phi (only the loop-carried `digits`/`v` recurrence needs a header phi). Then fall into the write
+	// loop with the cursor at `lastPos` and the value to render.
+	let len = ids.mint()
+	module.appendOp(writeSetup, op: StdOp.binOp(len, lhs: digitsNext, rhs: neg, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	let oneWrite = ids.mint()
+	module.appendOp(writeSetup, op: StdOp.const(oneWrite, value: 1, valueType: StdType.i64))
+	let lastPos = ids.mint()
+	module.appendOp(writeSetup, op: StdOp.binOp(lastPos, lhs: len, rhs: oneWrite, opcode: StdBinOpcode.sub, operandType: StdType.i64))
+	module.setTerminator(writeSetup, op: StdOp.branch(writeHeader.id))
+
+	// writeHeader(pos, wv): stop when `wv == 0` — every digit has been consumed. The top-tested guard is
+	// what keeps `writeBody`'s materialized values (not this `cmp`) the last minted; see the block header.
+	let pos = ids.mint()
+	let wv = ids.mint()
+	writeHeader.blockArgs.push(IrBlockArg.create(pos, argType: StdType.i64))
+	writeHeader.blockArgs.push(IrBlockArg.create(wv, argType: StdType.i64))
+	writeSetup.branchEdges.push(BranchEdge.create(writeHeader.id, argIds: twoArgs(lastPos, second: value)))
+
+	let writeZero = ids.mint()
+	module.appendOp(writeHeader, op: StdOp.const(writeZero, value: 0, valueType: StdType.i64))
+	let writeDone = ids.mint()
+	module.appendOp(writeHeader, op: StdOp.cmp(writeDone, lhs: wv, rhs: writeZero, pred: StdCmpPred.eq, operandType: StdType.i64))
+	module.setTerminator(writeHeader, op: StdOp.condBranch(writeDone, thenBlockId: done.id, elseBlockId: writeBody.id))
+
+	// writeBody: dest[pos] = '0' + (wv % 10)*sign, then wv /= 10, pos -= 1, and back to the header. `pos`
+	// and `wv` are read straight from `writeHeader`, which dominates this block.
+	let radixWrite = ids.mint()
+	module.appendOp(writeBody, op: StdOp.const(radixWrite, value: DecimalRadix, valueType: StdType.i64))
+	let digit = ids.mint()
+	module.appendOp(writeBody, op: StdOp.mod(digit, lhs: wv, rhs: radixWrite))
+	let digitAbs = ids.mint()
+	module.appendOp(writeBody, op: StdOp.binOp(digitAbs, lhs: digit, rhs: sign, opcode: StdBinOpcode.mul, operandType: StdType.i64))
+	let asciiZero = ids.mint()
+	module.appendOp(writeBody, op: StdOp.const(asciiZero, value: AsciiZeroDigit, valueType: StdType.i64))
+	let digitChar = ids.mint()
+	module.appendOp(writeBody, op: StdOp.binOp(digitChar, lhs: digitAbs, rhs: asciiZero, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	let writeAddr = ids.mint()
+	module.appendOp(writeBody, op: StdOp.binOp(writeAddr, lhs: dest, rhs: pos, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	module.appendOp(writeBody, op: StdOp.storeIndirect(writeAddr, offset: 0, valueId: digitChar, valueType: StdType.u8))
+	let wvRadix = ids.mint()
+	module.appendOp(writeBody, op: StdOp.const(wvRadix, value: DecimalRadix, valueType: StdType.i64))
+	let wvNext = ids.mint()
+	module.appendOp(writeBody, op: StdOp.div(wvNext, lhs: wv, rhs: wvRadix))
+	let oneWriteStep = ids.mint()
+	module.appendOp(writeBody, op: StdOp.const(oneWriteStep, value: 1, valueType: StdType.i64))
+	let posNext = ids.mint()
+	module.appendOp(writeBody, op: StdOp.binOp(posNext, lhs: pos, rhs: oneWriteStep, opcode: StdBinOpcode.sub, operandType: StdType.i64))
+	module.setTerminator(writeBody, op: StdOp.branch(writeHeader.id))
+	writeBody.branchEdges.push(BranchEdge.create(writeHeader.id, argIds: twoArgs(posNext, second: wvNext)))
+
+	module.setTerminator(done, op: StdOp.ret(len))
+
+	module.functions.push(func)
+end 'buildIntToString'
+
+// Three i64 parameters — `__str_copy(dest, src, len)`. The one runtime function that needs a third; the
+// shared `oneI64Param`/`twoI64Params` cover the rest.
+function threeI64Params() returns StdTypeArray
+	var types = StdTypeArray.create()
+	types.push(StdType.i64)
+	types.push(StdType.i64)
+	types.push(StdType.i64)
+	return types
+end 'threeI64Params'
+
+// The two-argument branch-edge helper — `argsOf`'s pair sibling, for the loops that carry two values.
+function twoArgs(first ValueId, second ValueId) returns ValueIdArray
+	var args = ValueIdArray.create()
+	args.push(first)
+	args.push(second)
+	return args
+end 'twoArgs'

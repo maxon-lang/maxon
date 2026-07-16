@@ -1447,6 +1447,17 @@ export type Parser
 	// lets the fold be an optimization rather than a second opinion.
 	var valueConsts as ParsedIntArray
 	var valueConstKnown as BoolArray
+	// ⭐ **THE OWNED-HEAP PROVENANCE BIT — one per SSA value, in lockstep with `valueTags`.** True iff the
+	// value is a FRESH owned heap allocation this function is responsible for dropping — today, an
+	// interpolation RESULT (`emitStringInterp`). It exists because ownership CANNOT be read off the type
+	// tag: an owned interpolation String and a borrowed-immortal rdata literal String share
+	// `ValueTypeTag.string`, so keying a drop on the tag would either decref an immortal literal (a wrong
+	// decref of unowned `.rdata`) or leak an interpolation result. The bit is the provenance the tag cannot
+	// carry — set by the ONE expression that allocates a String, cleared (never set) by the literal path —
+	// and it is read by `parseBinding` (does this binding OWN a drop?) and by the statement-scoped
+	// temp-drop (`drainPendingTemps`). Structs need no such bit: every struct is heap, so `tagIsStructRef`
+	// already answers for them; this is only the String owned/borrowed split the tag conflates.
+	var valueOwnsHeap as BoolArray
 	// Every function declared ANYWHERE IN THE PROGRAM, with its return type — the whole-program
 	// signature index (SignatureIndex.maxon), built from every file's TOKENS before any file is
 	// parsed and handed to every Parser.
@@ -1500,6 +1511,20 @@ export type Parser
 	// ORDER is the third reason, and `vars` could not give it either: `Scope.allVars` hands back a
 	// hash MAP, so draining it would emit the drops in hash order and no golden would reproduce.
 	var ownedBindings as VarInfoArray
+	// ⭐ **THE OWNED HEAP TEMPORARIES CREATED BY THE STATEMENT BEING PARSED, awaiting their drop.** An
+	// UNBOUND owned value — `print("{x}")`, where the interpolation result is consumed by `print` (which
+	// BORROWS it) and bound to no name — has, under static single-owner, exactly one possible owner: the
+	// STATEMENT that produced it. `emitStringInterp` pushes each result here; `parseStatement` drains it at
+	// the statement's end, emitting a `__mm_decref` per entry into `currentBlock` — so the drop lands in the
+	// LOOP BODY per iteration (`while … print("{i}") …`), the `if`-branch block, or a short-circuit merge,
+	// wherever control is when the statement finishes. This is what makes `print("{x}")` — the dominant
+	// interpolation shape — leak-free without binding it to a name.
+	//
+	// A value that IS bound (`let s = "{x}"`) has its ownership TRANSFERRED to the binding: `parseBinding`
+	// removes it from here and adds it to `ownedBindings`, so it drops at SCOPE exit (`emitScopeDrops`), not
+	// statement end. Reset per function, like every other per-function column. It holds only owned RESULTS —
+	// the interpolation's internal scratch buffers are freed inside `emitStringInterp`, never tracked here.
+	var pendingTempDrops as ValueIdArray
 
 	export static function create(tokens TokenArray, filePath FilePath, namespace String, signatures ProgramSignatures) returns Parser
 		return Self{
@@ -1518,9 +1543,11 @@ export type Parser
 			valueNameIds: TypeNameIdArray.create(),
 			valueConsts: ParsedIntArray.create(),
 			valueConstKnown: BoolArray.create(),
+			valueOwnsHeap: BoolArray.create(),
 			signatures: signatures,
 			enclosingType: EmptySourceText,
-			ownedBindings: VarInfoArray.create()
+			ownedBindings: VarInfoArray.create(),
+			pendingTempDrops: ValueIdArray.create()
 		}
 	end 'create'
 
@@ -2689,11 +2716,15 @@ export type Parser
 		// PREVIOUS function's SSA space — a wild pointer, and one the leak gate could not even
 		// report, because the count would still balance.
 		self.ownedBindings = VarInfoArray.create()
+		// Re-created per function for the same reason `ownedBindings` is: a stray pending temp carried
+		// across a function boundary would decref a value from the PREVIOUS function's SSA space.
+		self.pendingTempDrops = ValueIdArray.create()
 		self.loops = LoopContextArray.create()
 		self.valueTags = ValueTypeTagArray.create()
 		self.valueNameIds = TypeNameIdArray.create()
 		self.valueConsts = ParsedIntArray.create()
 		self.valueConstKnown = BoolArray.create()
+		self.valueOwnsHeap = BoolArray.create()
 		for paramType in paramTypes 'seedParamTypes'
 			self.recordValueType(paramType)
 		end 'seedParamTypes'
@@ -3026,6 +3057,10 @@ export type Parser
 	function parseStatement(func IrFunction, block IrBlock) returns IrBlock throws ParseError
 		self.currentBlock = block
 
+		// The statement's first token — the anchor `drainPendingTemps` gives the drops it emits (no source
+		// token spawns a drop). Captured before parsing advances the cursor.
+		let stmtTok = self.current()
+
 		if self.at(TokenKind.return) 'ret'
 			try self.parseReturnStatement(func, block: block)
 		end 'ret' else if self.at(TokenKind.let) 'letDecl'
@@ -3072,6 +3107,22 @@ export type Parser
 			let tok = self.current()
 			throw ParseError.unsupported("{tok.kind.rawValue} statement", line: tok.line, column: tok.column)
 		end 'unsupported'
+
+		// ⭐ **DROP THE STATEMENT'S UNCONSUMED OWNED TEMPORARIES.** `print("{x}")` created an interpolation
+		// result that `print` only BORROWED; under static single-owner it is owned by this statement and
+		// dies here. A binding transferred its result out already (`parseBinding` cleared it), so a `let s =
+		// "{x}"` drains nothing — `s` drops at scope exit instead.
+		//
+		// ⚠ Guarded on the block NOT being terminated, and that is the fail-safe: `return`/`break`/`continue`
+		// have already ended the block, and a `__mm_decref` emitted after a terminator would sit on a dead
+		// path (a leak the gate would shout, not a wrong answer). No enabled statement creates a temporary in
+		// a terminating position — the only owned temporaries at this rung are interpolation results in `let`
+		// and bare-call statements, neither of which terminates — so this drops every one of them. Should a
+		// later rung return an owned temporary, the leak gate names it loudly rather than a wrong drop hiding
+		// it, which is the same trade `closeBlock` makes for a nested-block binding.
+		if not self.currentBlock.isTerminated() 'dropTemps'
+			self.drainPendingTemps(stmtTok)
+		end 'dropTemps'
 
 		return self.currentBlock
 	end 'parseStatement'
@@ -3121,8 +3172,19 @@ export type Parser
 		// came from. So a binding is owned iff it holds a struct, whatever expression produced it —
 		// and there is no second question to get wrong the day a struct arrives from somewhere other
 		// than a factory call.
-		if tagIsStructRef(self.tagOf(value)) 'trackOwned'
+		// A binding OWNS a drop iff its value is a FRESH owned heap allocation — a struct box (every struct
+		// is heap, so the tag answers, `tagIsStructRef`) or an owned interpolation String (`valueIsOwnedHeap`
+		// provenance, because the tag conflates it with a borrowed-immortal literal — see `valueOwnsHeap`).
+		// `let s = "hi"` is NOT owned: a literal sets no provenance bit, so the binding is borrowed and never
+		// dropped, exactly as an immortal rdata String must be. `let` and `var` alike: ownership is a
+		// property of the VALUE, never the mutability.
+		if tagIsStructRef(self.tagOf(value)) or self.valueIsOwnedHeap(value) 'trackOwned'
 			self.ownedBindings.push(binding)
+			// Ownership TRANSFERS from the statement to the binding, so the statement must no longer drop it
+			// — a second drop of the box the binding now owns is a double-free. A struct box is never in the
+			// pending list (only `emitStringInterp` enrolls); an owned interpolation result is, so this is
+			// what moves its drop from statement-end to scope-exit.
+			self.removeFromPendingTemps(value)
 		end 'trackOwned'
 	end 'parseBinding'
 
@@ -3488,6 +3550,53 @@ export type Parser
 		self.artifact.emitOp(self.currentBlock, op: MaxonOp.call(result, callee: callee, args: args, argLabels: emptyArgLabels(args), argRanges: uniformArgRanges(args, range: range)), range: range)
 		return result
 	end 'emitRuntimeCall'
+
+	// ⭐ **TRACK A FRESH OWNED HEAP TEMPORARY.** The one door `emitStringInterp` reaches ownership through:
+	// it sets the value's provenance bit (so `parseBinding` knows the binding owns a drop) AND enrolls it in
+	// the statement's pending-drop list (so an UNBOUND result is dropped at statement end). Both from one
+	// call, so the two facts — "this value owns heap" and "someone must drop it" — cannot be set apart.
+	function trackOwnedTemp(value ValueId)
+		try self.valueOwnsHeap.set(value, value: true) otherwise panic("trackOwnedTemp: value v{value} has no ownership slot — every SSA value must be minted through mintValue")
+		self.pendingTempDrops.push(value)
+	end 'trackOwnedTemp'
+
+	// Does `value` own a droppable heap allocation? Read by `parseBinding` (the String half of "is this
+	// binding owned?") and by the reassignment/return paths as they arrive. It is provenance, NOT the type
+	// tag — see `valueOwnsHeap`'s header for why the tag cannot answer.
+	function valueIsOwnedHeap(value ValueId) returns bool
+		return try self.valueOwnsHeap.get(value) otherwise panic("valueIsOwnedHeap: value v{value} has no ownership slot — every SSA value must be minted through mintValue")
+	end 'valueIsOwnedHeap'
+
+	// Ownership of `value` has been TRANSFERRED to a binding, so the statement no longer owes its drop:
+	// remove it from the pending list. A filter-rebuild rather than a pop because, while the transferred
+	// value is normally the last one pushed (a binding's initializer is the statement's final expression),
+	// keying on identity rather than position is what stays correct if that ever stops holding.
+	function removeFromPendingTemps(value ValueId)
+		var kept = ValueIdArray.create()
+		for pending in self.pendingTempDrops 'each'
+			if pending != value 'notTransferred'
+				kept.push(pending)
+			end 'notTransferred'
+		end 'each'
+		self.pendingTempDrops = kept
+	end 'removeFromPendingTemps'
+
+	// ⭐ **DROP EVERY OWNED TEMPORARY THE STATEMENT LEFT UNCONSUMED**, in REVERSE creation order (the
+	// `emitScopeDrops` convention — the last built is the first torn down), into `currentBlock`. Called at
+	// the end of a statement, so the drop lands exactly where control is when the statement finishes: a loop
+	// body, an `if` branch, a short-circuit merge. Clears the list — a temporary belongs to ONE statement.
+	//
+	// `anchor` is the statement's own token; no source token spawns a drop, so it rides the statement that
+	// made control leave the temporary's lifetime, exactly as `emitScopeDrops` rides the `return`.
+	function drainPendingTemps(anchor Token)
+		var i = self.pendingTempDrops.count()
+		while i > 0 'eachTemp'
+			i = i - 1
+			let temp = try self.pendingTempDrops.get(i) otherwise panic("drainPendingTemps: pendingTempDrops.get OOB at {i} — the list is only appended to and drained here")
+			_ = self.emitRuntimeCall(MmDecrefName, args: singletonArgs(temp), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(anchor))
+		end 'eachTemp'
+		self.pendingTempDrops = ValueIdArray.create()
+	end 'drainPendingTemps'
 
 	// Parse an `if` statement (M4):
 	//   if <cond> 'thenLabel'
@@ -4686,7 +4795,12 @@ export type Parser
 		// scrutinee it stays the E2028 mismatch (`"one"` on an `int`).
 		if self.at(TokenKind.stringLiteral) 'stringPattern'
 			if tagIsText(scrutTag) 'stringScrutinee'
-				return try self.parseStringLiteral()
+				// A pattern is a COMPILE-TIME literal — an interpolation there has no meaning (there is
+				// nothing to match a runtime-built string against), so it is rejected rather than built.
+				if self.peekKind() == TokenKind.stringInterpStart 'interpolatedPattern'
+					throw ParseError.unsupported("an interpolated string as a match pattern — a `match` pattern must be a compile-time string literal", line: firstTok.line, column: firstTok.column)
+				end 'interpolatedPattern'
+				return try self.consumeStringLiteralValue()
 			end 'stringScrutinee'
 			throw ParseError.matchPatternTypeMismatch("String", scrutineeType: typeTagName(scrutTag), line: firstTok.line, column: firstTok.column)
 		end 'stringPattern'
@@ -5026,6 +5140,8 @@ export type Parser
 		// slot must exist first, and the emitter overwrites it (`recordConst`).
 		self.valueConsts.push(0)
 		self.valueConstKnown.push(false)
+		// Borrowed by default: only `markOwnsHeap` sets it. A value that allocates nothing owns no drop.
+		self.valueOwnsHeap.push(false)
 		return id
 	end 'mintValue'
 
@@ -5044,6 +5160,9 @@ export type Parser
 		// A parameter's value is the one thing the compiler provably cannot see.
 		self.valueConsts.push(0)
 		self.valueConstKnown.push(false)
+		// A parameter is a BORROW at this rung (the consume-vs-borrow calling convention is P1.4), so it
+		// owns no drop — the column stays in lockstep either way.
+		self.valueOwnsHeap.push(false)
 	end 'recordValueType'
 
 	// Remember the integer behind a value the parser has just DEFINED. Called by the emitters, on
@@ -5797,7 +5916,7 @@ export type Parser
 		// INTERPOLATED string (`"{x}"`) is the same token followed by `stringInterpStart`, which is
 		// Wave B — `parseStringLiteral` rejects it.
 		if self.at(TokenKind.stringLiteral) 'strLit'
-			return try self.parseStringLiteral()
+			return try self.parseStringLiteral(func)
 		end 'strLit'
 
 		if self.at(TokenKind.leftParen) 'group'
@@ -5899,18 +6018,27 @@ export type Parser
 	// Wave B. `escaped-braces` (`\{`/`\}`) is NOT interpolation: the lexer's escape handling means the
 	// braces never open one, so it is a single `stringLiteral` fragment and `decodeEscapes` turns `\{`
 	// into `{` here.
-	function parseStringLiteral() returns ValueId throws ParseError
-		let tok = self.current()
+	function parseStringLiteral(func IrFunction) returns ValueId throws ParseError
+		// A `stringLiteral` FOLLOWED BY `stringInterpStart` is an interpolation (`"a{x}b"`), which builds
+		// the first OWNED heap String (P1.2 wave B). A lone `stringLiteral` is an immortal rdata literal.
 		if self.peekKind() == TokenKind.stringInterpStart 'interpolated'
-			throw ParseError.unsupported("string interpolation (a string with an interpolated expression) — the first owned heap String, which arrives at P1.2 wave B; a plain string literal is supported", line: tok.line, column: tok.column)
+			return try self.parseStringInterpolation(func)
 		end 'interpolated'
 
-		try self.consume(TokenKind.stringLiteral)
+		return try self.consumeStringLiteralValue()
+	end 'parseStringLiteral'
+
+	// Consume the current NON-interpolated `stringLiteral` token and emit its decoded bytes as an immortal
+	// rdata String. The shared body of the two callers that reach a plain literal — value position
+	// (`parseStringLiteral`) and match-pattern position (`emitPatternValue`) — so the decode-and-emit lives
+	// in one place.
+	function consumeStringLiteralValue() returns ValueId throws ParseError
+		let tok = try self.consume(TokenKind.stringLiteral)
 		match decodeEscapes(tok.value) 'decoded'
 			bytes(buf) then return self.emitStringLiteral(buf, range: SourceRange.ofToken(tok))
 			unknownEscape(text) then throw ParseError.unsupported("the escape sequence '{text}' in a string literal is not a recognized escape", line: tok.line, column: tok.column)
 		end 'decoded'
-	end 'parseStringLiteral'
+	end 'consumeStringLiteralValue'
 
 	// Append a `stringLiteral` op carrying the DECODED bytes; return the `string`-typed ValueId it
 	// defines. The one emit site, so a caller that already holds decoded bytes (none today, but the
@@ -5921,6 +6049,202 @@ export type Parser
 		self.artifact.emitOp(self.currentBlock, op: MaxonOp.stringLiteral(result, bytes: bytes), range: range)
 		return result
 	end 'emitStringLiteral'
+
+	// ⭐⭐ **`"prefix {x} suffix"` — WHERE THE FIRST OWNED HEAP STRING IS BUILT.** An interpolation lowers to
+	// ONE `__mm_alloc`'d fused record: the 48-byte String record with its UTF-8 bytes INLINE right behind it
+	// (`buffer@0 = record + StringRecordBytes`), the concatenation of every part's bytes. It is an owned
+	// TEMPORARY — `emitStringInterp` enrolls it for the statement-scoped drop — so `print("{x}")` frees it
+	// at statement end and `let s = "{x}"` transfers it to a scope-exit drop (`parseBinding`).
+	//
+	// The lexer splits `"a{x}b"` into `stringLiteral("a") stringInterpStart <expr> stringInterpEnd
+	// stringLiteral("b")` — a leading fragment, then any number of `(expr, fragment)` pairs. Each part is
+	// materialized to a `(buffer, length)` pair as it is parsed (a literal fragment and a `{s}` String part
+	// alike load `buffer@0`/`length@8` from a String record; a primitive renders into a freed scratch
+	// buffer), and `emitStringInterp` sums the lengths, allocates once, and copies the parts in.
+	//
+	// Each `{expr}` is parsed in the block control CURRENTLY occupies, not the entry block — an expression
+	// that opens blocks (a short-circuit `{a and b}`) leaves control in its merge, and the next part and the
+	// assembly must chain off that merge (the `multiple-try-fragments` regression, deferred here for `try`).
+	function parseStringInterpolation(func IrFunction) returns ValueId throws ParseError
+		let startTok = self.current()
+		let range = SourceRange.ofToken(startTok)
+
+		var partBufs = ValueIdArray.create()
+		var partLens = ValueIdArray.create()
+		// The OWNED scratch buffers a primitive part rendered into. Freed after the copy in
+		// `emitStringInterp` — they are consumed by the blit and otherwise leak (the interp-scratch-buffer
+		// leak the leak gate would catch). A literal or String part collects none (its bytes are borrowed).
+		var scratchIds = ValueIdArray.create()
+
+		try self.materializeLiteralFragment(partBufs, partLens: partLens, range: range)
+		while self.at(TokenKind.stringInterpStart) 'parts'
+			try self.consume(TokenKind.stringInterpStart)
+			let exprTok = self.current()
+			let exprVal = try self.parseExpression(func, block: self.currentBlock)
+			try self.consume(TokenKind.stringInterpEnd)
+			try self.materializeInterpExpr(exprVal, exprTok: exprTok, partBufs: partBufs, partLens: partLens, scratchIds: scratchIds, range: range)
+			try self.materializeLiteralFragment(partBufs, partLens: partLens, range: range)
+		end 'parts'
+
+		return self.emitStringInterp(partBufs, partLens: partLens, scratchIds: scratchIds, range: range)
+	end 'parseStringInterpolation'
+
+	// Consume the current literal fragment token and, if it decodes to a non-empty byte run, materialize it
+	// as a part. An EMPTY fragment (the `""` the lexer emits around adjacent interpolations, `"{a}{b}"`)
+	// contributes nothing and is skipped — the bootstrap's `if (string.IsNullOrEmpty(...)) continue`.
+	function materializeLiteralFragment(partBufs ValueIdArray, partLens ValueIdArray, range SourceRange) throws ParseError
+		let tok = try self.consume(TokenKind.stringLiteral)
+		match decodeEscapes(tok.value) 'decoded'
+			bytes(buf) then self.materializeFragmentBytes(buf, partBufs: partBufs, partLens: partLens, range: range)
+			unknownEscape(text) then throw ParseError.unsupported("the escape sequence '{text}' in a string literal is not a recognized escape", line: tok.line, column: tok.column)
+		end 'decoded'
+	end 'materializeLiteralFragment'
+
+	function materializeFragmentBytes(buf ByteArray, partBufs ValueIdArray, partLens ValueIdArray, range SourceRange)
+		if buf.count() == 0 'empty'
+			return
+		end 'empty'
+		self.materializeStringRecordPart(self.emitStringLiteral(buf, range: range), partBufs: partBufs, partLens: partLens, range: range)
+	end 'materializeFragmentBytes'
+
+	// A `{expr}` part. A String value (a literal or an interpolation result) is copied by its bytes exactly
+	// as a literal fragment is — `materializeStringRecordPart` reads `buffer@0`/`length@8` from either. An
+	// integer renders to decimal text via `__int_to_string` into a scratch buffer. bool/float/enum are the
+	// next waves; a Stringable struct is P1.7a.
+	function materializeInterpExpr(exprVal ValueId, exprTok Token, partBufs ValueIdArray, partLens ValueIdArray, scratchIds ValueIdArray, range SourceRange) throws ParseError
+		let tag = self.tagOf(exprVal)
+		if tagIsText(tag) 'stringPart'
+			self.materializeStringRecordPart(exprVal, partBufs: partBufs, partLens: partLens, range: range)
+			return
+		end 'stringPart'
+
+		if tagIsIntegral(tag) 'intPart'
+			self.materializeIntPart(exprVal, partBufs: partBufs, partLens: partLens, scratchIds: scratchIds, range: range)
+			return
+		end 'intPart'
+
+		throw ParseError.unsupported("interpolating a value of type '{typeTagName(tag)}' — P1.2 wave B interpolates String and integer expressions; bool and float arrive next, and a Stringable struct at P1.7a", line: exprTok.line, column: exprTok.column)
+	end 'materializeInterpExpr'
+
+	// A String-record part: load `buffer@0` and `length@8` off the record. Shared by literal fragments and
+	// `{s}` String parts — both are pointers to the fused 48-byte record, so both read the same two fields.
+	function materializeStringRecordPart(rec ValueId, partBufs ValueIdArray, partLens ValueIdArray, range SourceRange)
+		partBufs.push(self.emitLoadStringField(rec, offset: StringBufferOffset, range: range))
+		partLens.push(self.emitLoadStringField(rec, offset: StringLengthOffset, range: range))
+	end 'materializeStringRecordPart'
+
+	// An integer part: render `exprVal`'s decimal text into a freshly `__mm_alloc`'d scratch buffer via
+	// `__int_to_string`, which returns the byte count. The scratch is enrolled for the post-copy free — it
+	// is an owned buffer the blit consumes. `IntToStringScratchBytes` covers every i64 (`i64.min` is 21
+	// bytes). A `named` integer alias is already i64, so no widening is needed at this rung.
+	function materializeIntPart(exprVal ValueId, partBufs ValueIdArray, partLens ValueIdArray, scratchIds ValueIdArray, range SourceRange)
+		let scratchSize = self.emitLiteral(IntToStringScratchBytes, valueType: MaxonType.integer, range: range)
+		let destructor = self.emitLiteral(TrivialDestructor, valueType: MaxonType.integer, range: range)
+		var allocArgs = ValueIdArray.create()
+		allocArgs.push(scratchSize)
+		allocArgs.push(destructor)
+		let scratch = self.emitRuntimeCall(MmAllocName, args: allocArgs, resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+
+		var convArgs = ValueIdArray.create()
+		convArgs.push(exprVal)
+		convArgs.push(scratch)
+		let length = self.emitRuntimeCall(IntToStringName, args: convArgs, resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+
+		partBufs.push(scratch)
+		partLens.push(length)
+		scratchIds.push(scratch)
+	end 'materializeIntPart'
+
+	// ⭐ **ASSEMBLE THE FUSED OWNED STRING.** Sum the part lengths, allocate ONE `__mm_alloc` record big
+	// enough for the 48-byte record + the bytes + a NUL, copy every part into the inline region at a running
+	// cursor, write the record fields, and free the scratch. The result is an owned temporary
+	// (`trackOwnedTemp`) — an inline String (`parent_ptr = InlineParentSentinel`) whose bytes die with the
+	// record's slot, so its destructor is `TrivialDestructor` (0), exactly a struct's: `__mm_decref` →
+	// `__mm_free` reclaims record and bytes together, with no external buffer and no destructor cascade.
+	function emitStringInterp(partBufs ValueIdArray, partLens ValueIdArray, scratchIds ValueIdArray, range SourceRange) returns ValueId
+		let totalLen = self.sumPartLengths(partLens, range: range)
+
+		let overhead = self.emitLiteral(StringInterpOverheadBytes, valueType: MaxonType.integer, range: range)
+		let allocSize = self.emitInterpArith(totalLen, rhs: overhead, range: range)
+		let destructor = self.emitLiteral(TrivialDestructor, valueType: MaxonType.integer, range: range)
+		var allocArgs = ValueIdArray.create()
+		allocArgs.push(allocSize)
+		allocArgs.push(destructor)
+		let result = self.emitRuntimeCall(MmAllocName, args: allocArgs, resultTag: ValueTypeTag.string, resultNameId: UnnamedTypeId, range: range)
+		self.trackOwnedTemp(result)
+
+		// The inline byte region begins right after the record. Copy each part in at a cursor that advances
+		// by the part's length; the NUL at `buffer[totalLen]` is already zero (the slab zeroes the payload).
+		let recordBytes = self.emitLiteral(StringRecordBytes as ParsedInt, valueType: MaxonType.integer, range: range)
+		let inlineBuf = self.emitInterpArith(result, rhs: recordBytes, range: range)
+		var cursor = inlineBuf
+		for i in 0 upto partBufs.count() 'copyParts'
+			let buf = try partBufs.get(i) otherwise panic("emitStringInterp: partBufs.get OOB at {i} — partBufs and partLens grow in lockstep")
+			let length = try partLens.get(i) otherwise panic("emitStringInterp: partLens.get OOB at {i} — partBufs and partLens grow in lockstep")
+			var copyArgs = ValueIdArray.create()
+			copyArgs.push(cursor)
+			copyArgs.push(buf)
+			copyArgs.push(length)
+			_ = self.emitRuntimeCall(StrCopyName, args: copyArgs, resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+			cursor = self.emitInterpArith(cursor, rhs: length, range: range)
+		end 'copyParts'
+
+		self.emitStoreStringField(result, offset: StringBufferOffset, value: inlineBuf, range: range)
+		self.emitStoreStringField(result, offset: StringLengthOffset, value: totalLen, range: range)
+		// capacity == length: the bytes are exact and never grown at this rung. `append` (Wave D) detaches.
+		self.emitStoreStringField(result, offset: StringCapacityOffset, value: totalLen, range: range)
+		let elementSize = self.emitLiteral(StringElementSize, valueType: MaxonType.integer, range: range)
+		self.emitStoreStringField(result, offset: StringElementSizeOffset, value: elementSize, range: range)
+		let parent = self.emitLiteral(InlineParentSentinel, valueType: MaxonType.integer, range: range)
+		self.emitStoreStringField(result, offset: StringParentPtrOffset, value: parent, range: range)
+		// `isAscii@40 = 0` (conservative) comes from the slab's zeroing — grapheme/ascii refinement is P1.7.
+
+		// Free the owned scratch now its bytes are copied. A `__mm_decref` (rc 0 → `__mm_free`), never a raw
+		// free, so the leak counter stays balanced — the same door `emitScopeDrops` drops through.
+		for i in 0 upto scratchIds.count() 'freeScratch'
+			let scratch = try scratchIds.get(i) otherwise panic("emitStringInterp: scratchIds.get OOB at {i}")
+			_ = self.emitRuntimeCall(MmDecrefName, args: singletonArgs(scratch), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+		end 'freeScratch'
+
+		return result
+	end 'emitStringInterp'
+
+	// Sum the parts' lengths into a single value. At least one part exists — a real interpolation carries a
+	// `{expr}`, so `parseStringInterpolation` always materialized one before calling here.
+	function sumPartLengths(partLens ValueIdArray, range SourceRange) returns ValueId
+		var total = try partLens.get(0) otherwise panic("sumPartLengths: an interpolation materialized no parts — parseStringInterpolation only reaches emitStringInterp after materializing at least one interpolated part")
+		for i in 1 upto partLens.count() 'sum'
+			let length = try partLens.get(i) otherwise panic("sumPartLengths: partLens.get OOB at {i}")
+			total = self.emitInterpArith(total, rhs: length, range: range)
+		end 'sum'
+		return total
+	end 'sumPartLengths'
+
+	// `lhs + rhs` as raw i64 pointer/length arithmetic — the interpolation's cursor advance, buffer offset
+	// and size math. It emits `MaxonOp.binOp(add)` DIRECTLY, bypassing `emitBinOp`'s operand type rules,
+	// because the operands are a String pointer (`result + StringRecordBytes`) or lengths the interpolation
+	// controls, not a source-level `a + b`. The result is integer-tagged (a machine word); the Std tier
+	// reads a String lhs as its i64 pointer (`valueTagToStdType`), so the `add` is a clean i64 add.
+	function emitInterpArith(lhs ValueId, rhs ValueId, range SourceRange) returns ValueId
+		let result = self.mintValue(ValueTypeTag.integer, nameId: UnnamedTypeId)
+		self.artifact.emitOp(self.currentBlock, op: MaxonOp.binOp(result, lhs: lhs, rhs: rhs, op: MaxonBinOp.add), range: range)
+		return result
+	end 'emitInterpArith'
+
+	// Load an 8-byte field of a String record — `buffer@0`, `length@8`. Integer-tagged: the values are a raw
+	// pointer and a byte count. The `rec` addr is a String pointer, read by the Std tier as an i64.
+	function emitLoadStringField(rec ValueId, offset ByteOffset, range SourceRange) returns ValueId
+		let result = self.mintValue(ValueTypeTag.integer, nameId: UnnamedTypeId)
+		self.artifact.emitOp(self.currentBlock, op: MaxonOp.loadIndirect(result, addr: rec, offset: offset, valueType: MaxonType.integer), range: range)
+		return result
+	end 'emitLoadStringField'
+
+	// Store an 8-byte field of a String record — the mirror of `emitLoadStringField`, the one place
+	// `emitStringInterp` writes the fused record's six fields (five explicitly; `isAscii@40` rides the
+	// slab's zeroing).
+	function emitStoreStringField(rec ValueId, offset ByteOffset, value ValueId, range SourceRange)
+		self.artifact.emitOp(self.currentBlock, op: MaxonOp.storeIndirect(rec, offset: offset, value: value, valueType: MaxonType.integer), range: range)
+	end 'emitStoreStringField'
 
 	// `true` / `false`. A bool is an i1 carrying 1 or 0 — the same `literal` op an
 	// integer uses, typed `boolean` so the Maxon→Std collapse gives it i1 rather than
