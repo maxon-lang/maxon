@@ -5103,6 +5103,18 @@ export type Parser
 	// measurement (it gates on `structName == enclosingType`, TypeResolution.maxon:8204) and only
 	// its prose does not. `docs/error-codes.txt`'s doc line is corrected to match.
 	//
+	// ⚠ **AND THAT SENTENCE IS PINNED BY A SPEC, BECAUSE FOR ONE REVIEW-ROUND IT WAS NOT.** As
+	// first written this comment asserted the type-vs-file rule while **nothing in the suite could
+	// tell the two apart**: every corpus case reaches the field from `main()`, which is inside no
+	// type, so they pin only *"outside ANY type ⇒ reject"*. Weakening the test below to
+	// `not self.enclosingType.isEmpty()` — a compiler where every method reads every type's private
+	// state — left `specs-shv2` at **392/0**, both corpus E3014 cases included (measured, not
+	// argued). That is OPEN.md #27's shape exactly: the reason written down enforced nothing while
+	// the property held for a reason nobody had written. `specs-shv2/field-visibility-is-type-scoped.md`
+	// is the sabotage's red, kept: two cases that fail under that edit, plus the positive companion
+	// (a type reaching its OWN private field through a LOCAL, which the self-field path never sees)
+	// so the rule is pinned in the ADMIT direction too. **Do not delete it to make a refactor green.**
+	//
 	// **ONE HOME, TWO CALLERS** — the field READ and the field WRITE. It is one rule; written at
 	// both sites, a future answer to what "accessible" means (a `module`-visible field, a friend
 	// type) taught to one and not the other would let a private field be WRITTEN where reading it
