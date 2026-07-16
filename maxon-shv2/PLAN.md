@@ -181,8 +181,13 @@ was missing grouping, `true`/`false`, `not`/`and`/`or`, block scoping, void func
 > use-after-move), then D (growth/`append`/detach). ⚠ **`__destruct_String` NOT built in B** — every B interp
 > result is INLINE, so `__mm_free` reclaims record+bytes together and the destructor is `TrivialDestructor` (0);
 > it arrives with the external-buffer consumer in Wave D. **See OPEN.md — the value-class column fix (a backend
-> panic on a valid program, coordinator-found), the O(N²) provenance find (optimizer), and the return-of-owned-
-> String LEAK (reviewer, P1.4 borrow-vs-consume).**
+> panic on a valid program, coordinator-found) and the O(N²) provenance find (optimizer).**
+>
+> ### ✅ **THE OWNERSHIP / DROP MODEL WAS HARDENED post-Wave-B (2026-07-16, user: "leaks are not ok"), 564 → 578/0, merged (`deac21315`).** Three MANIFESTING leaks (exit 101), all fixed:
+> - **Returning an OWNED String across a call** (OPEN #37): a `returns String` fn now hands back a uniformly OWNED String — the CALLER owns the result (`mintOwnedCallResult`→`trackOwnedTemp`), the callee MOVES an owned return out, a borrowed literal/param return is heap-PROMOTED to owned (`promoteToOwnedString`). String PARAMS are reachable and promote. (This is the caller-side of borrow-vs-consume, PULLED FORWARD from P1.4 because the user won't ship a leak; the full param borrow-vs-consume ruling still stays P1.4.)
+> - **Owned bindings in a nested block** (OPEN #38): the Wave B `closeBlock` "fail-safe leak" is retired — owned bindings drop on every edge that leaves a block ALIVE, exactly once (fall-through, `break`/`continue` down to `LoopContext.ownedFloor`; `emitScopeDrops` gained a `floor` param). `while … let s = build(i) … end` and struct-in-block no longer leak.
+> - **A returned loop-local binding** — the sibling non-returning iterations leaked (the return move-out permanently stripped `ownedBindings`, which the fall-through drop also reads): found + fixed by the INDEPENDENT review (`deac21315`), the signature "one fact, two readers" bug.
+> - ⇒ **REMAINING: OPEN #39 — reassigning a `var` owned binding does not drop the old box (MASKED, exit 0 today; drop-on-reassign, FORCED by single-owner). The LAST reachable owned-String leak category. NEXT.**
 >
 > ### ⚠ WAVE A — worth carrying (a big slice; the process caught the finds):
 > - **The plan was WRONG at the code, TWICE, both forced+implemented:** (1) `buffer@0` is a data→data pointer
