@@ -116,12 +116,18 @@ export type GlobalDataTable
 	// REORDERED by size to kill padding, these are laid out in registration order and their offsets
 	// are known the moment they are appended.
 	export var rdataOffsets as RdataOffsetMap
+	// The running total bytes registered so far — the offset the NEXT `.rdata` payload lands at,
+	// maintained beside every push rather than re-summed. It is a SECOND copy of a fact `values`
+	// already holds (the concatenated length), so `rdataImage`'s drift assert is what keeps the two
+	// honest: it walks the payloads and panics if any recorded offset disagrees with the actual image
+	// position. See `registerRdataConstant` for why the copy is worth its guard.
+	var rdataSizeSoFar as ByteOffset
 	// The `(record, blob)` pairs the PE writer patches to bake each String literal's `buffer@0` — see
 	// StringBufferFixup. Empty for a program with no string literal, which is most of the corpus.
 	export var stringBufferFixups as StringBufferFixupArray
 
 	export static function create() returns GlobalDataTable
-		return Self{names: StringArray.create(), values: ByteArrayArray.create(), nextStringId: 0, nameIndex: GlobalNameIndexMap.create(), valueDedup: GlobalDedupMap.create(), dataSection: DataSectionEntryArray.create(), dataIndex: DataSectionIndexMap.create(), rdataOffsets: RdataOffsetMap.create(), stringBufferFixups: StringBufferFixupArray.create()}
+		return Self{names: StringArray.create(), values: ByteArrayArray.create(), nextStringId: 0, nameIndex: GlobalNameIndexMap.create(), valueDedup: GlobalDedupMap.create(), dataSection: DataSectionEntryArray.create(), dataIndex: DataSectionIndexMap.create(), rdataOffsets: RdataOffsetMap.create(), rdataSizeSoFar: 0, stringBufferFixups: StringBufferFixupArray.create()}
 	end 'create'
 
 	// ⭐ REGISTER a read-only constant payload, returning the label that names it — the `.rdata`
@@ -132,15 +138,20 @@ export type GlobalDataTable
 	// fifty references to it, and the dedup is keyed on the rendered BYTES, so two constants that
 	// are the same number written differently (`2.0` and `2.00`) still share one island.
 	//
-	// The offset is assigned HERE, as the running total of everything registered before it, which
-	// is what keeps `rdataOffsetOf` O(1). `rdataImage` walks the same array in the same order and
-	// ASSERTS the two agree, so the offset a relocation resolves to and the offset the image
-	// actually places the bytes at cannot drift.
+	// The offset is assigned HERE, as `rdataSizeSoFar` — the running total of everything registered
+	// before it, advanced by this payload's own length AS it is pushed. That keeps both
+	// `rdataOffsetOf` AND the registration itself O(1): re-deriving the offset by summing every prior
+	// payload made the build of N distinct constants Θ(N²), which the field this replaces flagged as
+	// debt to pay "if `.rdata` ever holds thousands of entries (P1.2 strings)" — and a String literal
+	// registers TWO constants (blob + record) with literals-per-program unbounded, so P1.2 is that
+	// moment. `rdataImage` walks the same array in the same order and ASSERTS the recorded offset
+	// agrees with the image position, so the running total and the bytes it names cannot drift.
 	export function registerRdataConstant(prefix String, bytes ByteArray) returns String
 		return try self.valueDedup.get(bytes) otherwise 'fresh'
 			let label = "{prefix}{self.nextStringId}"
 			self.nextStringId = self.nextStringId + 1
-			self.rdataOffsets.upsert(label, value: self.rdataSizeBytes())
+			self.rdataOffsets.upsert(label, value: self.rdataSizeSoFar)
+			self.rdataSizeSoFar = self.rdataSizeSoFar + bytes.count()
 			self.nameIndex.upsert(label, value: self.names.count())
 			self.names.push(label)
 			self.values.push(bytes)
@@ -155,22 +166,6 @@ export type GlobalDataTable
 	export function recordStringBufferFixup(recordLabel String, blobLabel String)
 		self.stringBufferFixups.push(StringBufferFixup.create(recordLabel, blobLabel: blobLabel))
 	end 'recordStringBufferFixup'
-
-	// The total bytes registered so far — which is the offset the NEXT payload lands at.
-	//
-	// It is DERIVED rather than kept as a running field, and that is deliberate: a cached total is
-	// a second copy of a fact `values` already holds, free to drift from it. It is O(entries) and
-	// called once per REGISTRATION (not per reference), so the whole build of the table stays
-	// O(entries²) in the worst case — acceptable while the corpus is float islands, and the note is
-	// here rather than absent: if `.rdata` ever holds thousands of entries (P1.2 strings), this
-	// becomes a running total maintained beside the push, with the `rdataImage` assert as its guard.
-	function rdataSizeBytes() returns ByteOffset
-		var total = 0 as ByteOffset
-		for payload in self.values 'each'
-			total = total + payload.count()
-		end 'each'
-		return total
-	end 'rdataSizeBytes'
 
 	// The byte image of `.rdata` — the payloads concatenated in registration order.
 	//
