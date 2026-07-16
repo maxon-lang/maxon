@@ -613,15 +613,20 @@ function shortCircuitOperator(kind TokenKind) returns bool
 	return kind == TokenKind.and or kind == TokenKind.or
 end 'shortCircuitOperator'
 
-// The `MaxonType` an INLINED top-level constant's literal carries — the one place a folded
-// constant's tag becomes the type its `literal` op declares.
+// The `MaxonType` a folded literal's TAG denotes — the one place a tag becomes the type a
+// declaration carries. TWO callers, and they are the two places a literal's value outlives the
+// token that wrote it: an INLINED top-level constant (`literal`'s declared type) and a shorthand
+// FIELD DEFAULT (`export var value = 0` — the field's declared type, since there is no annotation
+// to read it off). One mapping, so `let X = 0` and `var x = 0` cannot come to disagree about what
+// an integer literal IS.
 //
-// Total over what can arrive, and it panics on what cannot: the constant evaluator produces
-// `integer`, `boolean` and `float` and nothing else (its literals are ints, chars, bools and
-// floats; a comparison folds to a bool; `binOpResultTag` over two of them yields one of them). The
-// remaining tags name things no constant expression can contain — a `named` alias needs an `as`
-// cast (P1.9), and `unresolved`/`void` are call results, which are rejected as E2045 before their
-// type is ever asked for.
+// Total over what can arrive, and it panics on what cannot: both producers yield `integer`,
+// `boolean` and `float` and nothing else (the evaluator's literals are ints, chars, bools and
+// floats; a comparison folds to a bool; `binOpResultTag` over two of them yields one of them; and
+// `readFieldDefaultLiteral` accepts exactly those three token kinds). The remaining tags name things
+// no constant expression can contain — a `named` alias needs an `as` cast (P1.9), and
+// `unresolved`/`void` are call results, which are rejected as E2045 before their type is ever asked
+// for.
 //
 // A `float` constant reaches here only as a LITERAL — `requireConstNotFloat` refuses every fold
 // over one — so its payload is the bit pattern `parseFloatBits` produced, and the `MaxonType.float`
@@ -642,17 +647,6 @@ function constantValueType(tag ValueTypeTag) returns MaxonType
 
 	panic("constantValueType: a top-level constant is tagged '{typeTagName(tag)}' — the evaluator folds integers, bools and floats only")
 end 'constantValueType'
-
-// The literal a field DEFAULT is: its VALUE, and the type its TOKEN KIND denotes. See
-// `Parser.readFieldDefaultLiteral`, which is the only thing that builds one.
-type FieldDefaultLiteral
-	export var payload as ParsedInt
-	export var declaredType as MaxonType
-
-	export static function create(payload ParsedInt, declaredType MaxonType) returns FieldDefaultLiteral
-		return Self{payload: payload, declaredType: declaredType}
-	end 'create'
-end 'FieldDefaultLiteral'
 
 // IEEE-754's sign bit — the top bit of the 64-bit pattern. Negating a float literal FLIPS it; it is
 // not an arithmetic negate, because a `ParsedInt` holding a float carries the BITS (see
@@ -1532,7 +1526,7 @@ export type Parser
 			// the whole of the type inference — see `readFieldDefaultLiteral`.
 			try self.consume(TokenKind.equals)
 			let inferred = try self.readFieldDefaultLiteral()
-			layout.addField(nameTok.value, declaredType: inferred.declaredType, mutable: mutable, defaultValue: FieldDefault.literal(inferred.payload))
+			layout.addField(nameTok.value, declaredType: constantValueType(inferred.tag), mutable: mutable, defaultValue: FieldDefault.literal(inferred.payload))
 			return
 		end 'typeFromLiteral'
 
@@ -1549,20 +1543,29 @@ export type Parser
 		// asks the same rule (`requireAssignable`) rather than a second opinion about floats.
 		try self.consume(TokenKind.equals)
 		let given = try self.readFieldDefaultLiteral()
-		try self.requireAssignable(nameTok, value: maxonTypeTag(given.declaredType), declared: maxonTypeTag(fieldType))
+		try self.requireAssignable(nameTok, value: given.tag, declared: maxonTypeTag(fieldType))
 		layout.addField(nameTok.value, declaredType: fieldType, mutable: mutable, defaultValue: FieldDefault.literal(given.payload))
 	end 'readStructFieldInto'
 
-	// The literal a field default is: its VALUE, and the type its TOKEN KIND denotes. Both come off
-	// the same token and are returned together, so a caller cannot read one without the other —
-	// which is the point, because shape 2 above derives the field's declared type from nothing else.
+	// The literal a field default is, as the SAME tagged pair the constant evaluator speaks in — its
+	// VALUE and its TAG, off one token, returned together so a caller cannot read one without the
+	// other. `constantValueType` turns the tag into the field's declared type, which is the point:
+	// shape 2 above derives that type from nothing but this token.
+	//
+	// It is a `ConstValue` and not a private record because it IS one — payload plus tag — and the
+	// tag→`MaxonType` mapping already exists for the other producer of folded literals. A second
+	// pair would have been a second answer to "what type is an integer literal".
 	//
 	// ⭐ **TYPE INFERENCE HERE IS A TOKEN-KIND LOOKUP, NOT CONSTANT EVALUATION**, and it has to be:
 	// the type must be known when `ProgramSignatures.recordStruct` hashes the layout, and that runs
 	// inside the declaration SWEEP — before `evaluateInitializers` has folded a single constant. A
 	// token kind is available at scan time; a constant's value is not. (v1 infers it the same way,
 	// from the same three token kinds: `inferShorthandFieldType`, Parser.maxon:3634-3665.)
-	function readFieldDefaultLiteral() returns FieldDefaultLiteral throws ParseError
+	//
+	// The three literal DECODERS are the emitting path's own (`intLiteralValue`, `parseFloatBits`,
+	// `BoolTrueValue`) — the same ones `evalConstIntLiteral` and friends call, for their stated
+	// reason: a field default must read a literal exactly as a function body reads it.
+	function readFieldDefaultLiteral() returns ConstValue throws ParseError
 		let negated = self.at(TokenKind.minus)
 		if negated 'signed'
 			self.advance()
@@ -1570,13 +1573,13 @@ export type Parser
 
 		if self.at(TokenKind.intLiteral) 'intLit'
 			let tok = try self.consume(TokenKind.intLiteral)
-			return FieldDefaultLiteral.create(try self.intLiteralValue(tok, negated: negated), declaredType: MaxonType.integer)
+			return ConstValue.create(try self.intLiteralValue(tok, negated: negated), tag: ValueTypeTag.integer)
 		end 'intLit'
 
 		if self.at(TokenKind.floatLiteral) 'floatLit'
 			let tok = try self.consume(TokenKind.floatLiteral)
 			let bits = try parseFloatBits(tok.value) otherwise throw ParseError.floatLiteralOverflow(tok.line, column: tok.column)
-			return FieldDefaultLiteral.create(negatedFloatBits(bits) if negated else bits, declaredType: MaxonType.float)
+			return ConstValue.create(negatedFloatBits(bits) if negated else bits, tag: ValueTypeTag.float)
 		end 'floatLit'
 
 		if self.at(TokenKind.true) or self.at(TokenKind.false) 'boolLit'
@@ -1589,14 +1592,14 @@ export type Parser
 
 	// `= true` / `= false`. A leading `-` is not a sign here — there is no negative bool — so it is
 	// rejected as the non-literal it is rather than silently ignored.
-	function readBoolFieldDefault(negated bool) returns FieldDefaultLiteral throws ParseError
+	function readBoolFieldDefault(negated bool) returns ConstValue throws ParseError
 		if negated 'negatedBool'
 			throw self.rejectNonLiteralFieldDefault()
 		end 'negatedBool'
 
 		let isTrue = self.at(TokenKind.true)
 		self.advance()
-		return FieldDefaultLiteral.create(BoolTrueValue if isTrue else BoolFalseValue, declaredType: MaxonType.boolean)
+		return ConstValue.create(BoolTrueValue if isTrue else BoolFalseValue, tag: ValueTypeTag.boolean)
 	end 'readBoolFieldDefault'
 
 	// ⚠ **A NON-LITERAL DEFAULT IS DEFERRED, AND IT IS DEFERRED LOUDLY** — positioned at the token
@@ -4363,10 +4366,7 @@ export type Parser
 			let nameTok = try self.consume(TokenKind.identifier)
 			try self.consume(TokenKind.colon)
 
-			let index = layout.indexOfField(nameTok.value)
-			if index >= layout.fieldCount() 'noSuchField'
-				throw ParseError.unknownField(String.from(layout.name), fieldName: String.from(nameTok.value), line: nameTok.line, column: nameTok.column)
-			end 'noSuchField'
+			let index = try self.requireFieldIndex(layout, fieldTok: nameTok)
 
 			let alreadyFilled = try filled.get(index) otherwise panic("parseStructLiteralFields: filled.get OOB at {index} — the columns are sized to the layout's field count")
 			if alreadyFilled 'duplicate'
@@ -4563,11 +4563,7 @@ export type Parser
 		// one record. Asking `Scope` twice would be two hash lookups for one answer.
 		let binding = self.scope.getInfo(baseTok.value)
 		let layout = try self.requireStructBinding(binding, baseTok: baseTok)
-
-		let index = layout.indexOfField(fieldTok.value)
-		if index >= layout.fieldCount() 'noSuchField'
-			throw ParseError.unknownField(String.from(layout.name), fieldName: String.from(fieldTok.value), line: fieldTok.line, column: fieldTok.column)
-		end 'noSuchField'
+		let index = try self.requireFieldIndex(layout, fieldTok: fieldTok)
 
 		return self.emitFieldLoad(binding.boundValue, layout: layout, index: index, range: SourceRange.between(baseTok, last: fieldTok))
 	end 'parseFieldAccess'
@@ -4609,10 +4605,7 @@ export type Parser
 		end 'immutableInstance'
 
 		let layout = try self.requireStructBinding(binding, baseTok: baseTok)
-		let index = layout.indexOfField(fieldTok.value)
-		if index >= layout.fieldCount() 'noSuchField'
-			throw ParseError.unknownField(String.from(layout.name), fieldName: String.from(fieldTok.value), line: fieldTok.line, column: fieldTok.column)
-		end 'noSuchField'
+		let index = try self.requireFieldIndex(layout, fieldTok: fieldTok)
 
 		if not layout.fieldIsMutable(index) 'immutableField'
 			throw ParseError.assignToImmutableField(String.from(layout.name), fieldName: String.from(fieldTok.value), line: baseTok.line, column: baseTok.column)
@@ -4625,6 +4618,24 @@ export type Parser
 
 		self.emitFieldStore(binding.boundValue, layout: layout, index: index, value: value, range: SourceRange.between(baseTok, last: fieldTok))
 	end 'parseFieldAssignment'
+
+	// **The declaration index `fieldTok` names in `layout`, or E3018** — asked by every one of the
+	// three places a field is named: the struct literal's `x:` label, the field READ, and the field
+	// WRITE. One home, because it is one question, and the three must not come to disagree about
+	// what "this type has no such field" means or where the diagnostic points (the FIELD token — the
+	// token that is wrong, never the value it is read from).
+	//
+	// It is also the one place `indexOfField`'s "not found" convention is READ. That answer is
+	// `fieldCount()` — an index one past the end — and every caller comparing against it by hand was
+	// a caller that could get the comparison subtly wrong (`>` rather than `>=`) and index a
+	// neighbouring field's slot instead of reporting an error. Now the convention is decoded once.
+	function requireFieldIndex(layout StructLayout, fieldTok Token) returns FieldIndex throws ParseError
+		let index = layout.indexOfField(fieldTok.value)
+		if index >= layout.fieldCount() 'noSuchField'
+			throw ParseError.unknownField(String.from(layout.name), fieldName: String.from(fieldTok.value), line: fieldTok.line, column: fieldTok.column)
+		end 'noSuchField'
+		return index
+	end 'requireFieldIndex'
 
 	// The `StructLayout` of `binding` — the two-step every field access takes: the binding's declared
 	// type must BE a struct, and that struct must be one some file declares.
