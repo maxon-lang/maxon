@@ -255,8 +255,24 @@ export type StdOpMeta
 	export let category as StdOpCategory
 	export let role as OpRole
 	// Side-effect-free: the op can be duplicated, reordered, or dropped when its
-	// result is unused. The inliner's callee-body purity gate reads this (v1:
-	// `Inliner.isPureOp`), and DCE/CSE/LICM will too.
+	// result is unused.
+	//
+	// ⚠⚠ **THIS FIELD HAS NO READER TODAY — IT IS A DECLARATION AWAITING ONE, AND
+	// EVERY OP'S VALUE MUST STILL BE RIGHT.** Measured 2026-07-15: a sweep of all
+	// nine `StdOpMeta` fields finds `isPure` read NOWHERE (`op.rawValue` is never
+	// even aliased to a local, so the sweep is complete), and a SABOTAGE confirms it
+	// — `loadIndirect` flipped to `isPure: true` leaves `specs-shv2` at **371/0,
+	// exit 0**, including both `*-load-not-hoisted` specs. Its readers are the
+	// inliner's callee-body purity gate (v1: `Inliner.isPureOp`) and DCE/CSE/LICM;
+	// all are SCHEDULED and none exist (`buildDefaultPipeline` hoists nothing).
+	//
+	// ⇒ **No spec can gate this field, so the values are held by REVIEW alone.** That
+	// is why each variant's value is argued at its own line rather than asserted, and
+	// why a wrong one is invisible until the first hoisting pass makes it a silent
+	// wrong answer in every program at once. **OPEN.md #27** carries the finding and
+	// the keep-vs-delete question for this field's FIVE equally unread siblings
+	// (`role`, `isUnsupportedInInlineBody`, `isMemory`, `isStore`, `isCmp` — only
+	// `category`, `isCall` and `clobbersFlags` have a reader).
 	//
 	// Declared PER VARIANT, which is the flat union's payoff: v1 could only answer
 	// this by CATEGORY at the match site (`arith gives true; control gives true;
@@ -512,15 +528,19 @@ export union StdOp
 	globalAddr(resultId ValueId, label ByteArray) = StdOpMeta{category: StdOpCategory.memory, role: OpRole.plain, isPure: true, isUnsupportedInInlineBody: false, isMemory: false, isStore: false, isCall: false, clobbersFlags: false, isCmp: false}
 	// Read `valueType` bytes from `addrId + offset` into `resultId`.
 	//
-	// ⚠ **`isPure: false`, AND THAT IS A CORRECTNESS CONSTRAINT, NOT A CONSERVATISM.** A load
+	// ⚠ **`isPure: false`, AND THAT IS THE CORRECT DECLARATION, NOT A CONSERVATISM.** A load
 	// is side-effect-FREE in the everyday sense — it writes nothing — and calling it pure on
 	// that basis is precisely the trap. `isPure` here licenses a pass to DUPLICATE, REORDER or
 	// DROP the op, and a load may do none of those: what it reads is a mutable location some
-	// OTHER op writes. Declared pure, a global's read HOISTS OUT of a loop that writes the
+	// OTHER op writes. Declared pure, a global's read would HOIST OUT of a loop that writes the
 	// global (`specs/short-circuit-evaluation.md`'s `short-circuit-in-while-condition` reads
-	// and writes `trace` every iteration), and the loop then reads a stale value for ever.
+	// and writes `trace` every iteration), and the loop would then read a stale value for ever.
 	// That is a SILENT WRONG ANSWER, not a crash. Purity is "may this op be moved?", and the
 	// answer for a load is no. `clobbersFlags: false` is exact: `mov`/`movzx` write no flags.
+	//
+	// ⚠ **NOTHING READS THIS FLAG YET — see the `isPure` field's own note and OPEN.md #27.** The
+	// value above is right and must stay right; it is simply not what makes the property hold
+	// today. Do not "verify" it by running a spec: none can fail on it.
 	loadIndirect(resultId ValueId, addrId ValueId, offset ByteOffset, valueType StdType) = StdOpMeta{category: StdOpCategory.memory, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: false, isMemory: true, isStore: false, isCall: false, clobbersFlags: false, isCmp: false}
 	// Write `valueId` as `valueType` bytes to `addrId + offset`. `isStore: true` (it writes
 	// memory, so it must order against every later load — the metadata contract's own words),

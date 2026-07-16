@@ -1175,14 +1175,19 @@ let GlobalVarsDriver = "scaleGlobalVars"
 // `var`'s initializer must be a CONSTANT expression — `var b = scaleSeed()` is E2045, and even
 // `var b = a + 1` over another global is E2004 (`Undefined constant 'a'`) — so the two tricks the rest
 // of this corpus relies on (a loop-carried var, a call result) are both unavailable at the point of
-// declaration. They are also unnecessary: `StdOp.loadIndirect` is `isPure: false`, so a global READ is
-// opaque to the folder no matter what the global was initialized to. The store below writes the opaque
+// declaration. They are also unnecessary: a global READ is opaque to the folder no matter what the
+// global was initialized to, because `FoldConstOperands.stdConstInfo` answers `notConst` for the whole
+// `binOp to osAllocPages` band — the arm `loadIndirect` falls in. The store below writes the opaque
 // `acc`, and the load reads a location the folder must assume anything could have written.
 //
-// That impurity is a PROPERTY, not an accident, and it is pinned by specs-shv2/global-load-not-hoisted.md
-// — a pure `loadIndirect` gets hoisted out of a loop that writes it, and the program then reads a stale
-// value for ever. It is a silent wrong answer, so this knob must never be "fixed" by making the load
-// pure to tidy up a number.
+// That opacity is a PROPERTY, not an accident, and `specs-shv2/global-load-not-hoisted.md` verifies the
+// ANSWER a program gets. ⚠ **This comment used to name `StdOp.loadIndirect`'s `isPure: false` as the
+// mechanism. IT IS NOT: `StdOpMeta.isPure` has ZERO readers (OPEN.md #27)**, so it holds nothing off —
+// the folder is stopped by the match arm named above, and nothing HOISTS because no pass hoists.
+//
+// The knob must still never be "fixed" by making the load pure to tidy up a number: that declaration
+// starts being read the moment DCE/CSE/LICM or the inliner lands, and a wrong one is a silent wrong
+// answer — and it would be read long before anyone re-read this comment.
 //
 // Only `acc` and one loaded value are ever live, so the knob measures `.data` layout and the
 // address/load/store triple, and can never quietly become a register-pressure knob and trip E5001.

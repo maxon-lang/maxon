@@ -90,9 +90,15 @@ function stdConstInfo(op StdOp) returns StdConstInfo
 		// ⚠ Extended past `retVoid` to take in the memory band, and `loadIndirect` is the arm that
 		// matters: a load's result is NOT a constant, however constant the global's INITIAL value in
 		// the `.data` image is. That image is the value the program STARTS with, and any store since
-		// has replaced it. Folding a load into its initializer would be the same wrong answer
-		// `loadIndirect`'s `isPure: false` prevents a hoist from producing, reached by a different
-		// road: `var counter = 0` … `counter = 42` … `return counter` would return 0.
+		// has replaced it. Folding a load into its initializer would be the wrong answer
+		// `loadIndirect`'s `isPure: false` DESCRIBES — `var counter = 0` … `counter = 42` … `return
+		// counter` would return 0 — reached by a different road.
+		//
+		// ⚠ **"describes", not "prevents": `StdOpMeta.isPure` has ZERO readers** (see OPEN.md #27), so
+		// it stops nothing, here or anywhere. **THIS ARM IS THE ONLY THING STANDING BETWEEN THAT WRONG
+		// ANSWER AND THE PROGRAM** — it is a real check with a real reader (`stdConstInfo`), and the
+		// purity flag beside it is a declaration awaiting its own. Do not read the flag's existence as
+		// cover for narrowing this arm.
 		// Extended past `storeIndirect` to take in the system band. An allocation's result is an
 		// ADDRESS the OS chooses at run time — the least constant value in the language.
 		binOp to osAllocPages gives StdConstInfo.notConst

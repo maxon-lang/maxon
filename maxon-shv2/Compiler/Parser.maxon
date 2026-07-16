@@ -2578,9 +2578,7 @@ export type Parser
 		end 'undeclared'
 
 		let binding = self.scope.getInfo(nameTok.value)
-		if not binding.mutable 'immutable'
-			throw ParseError.assignToImmutable(String.from(nameTok.value), line: nameTok.line, column: nameTok.column)
-		end 'immutable'
+		try self.requireMutableBinding(binding, nameTok: nameTok)
 
 		let value = try self.parseExpression(func, block: block)
 
@@ -2619,6 +2617,23 @@ export type Parser
 
 		self.emitGlobalStore(label, tag: tag, value: value, range: SourceRange.ofToken(nameTok))
 	end 'emitCheckedGlobalStore'
+
+	// **THE MUTABILITY RULE FOR A LOCAL BINDING — asked by both statements that write one**: the
+	// reassignment (`x = 5`, the binding itself) and the field store (`p.x = 5`, its INSTANCE). One
+	// home, because it is one rule — a binding declared `let` does not accept a write — and the
+	// diagnostic names that binding and anchors on the token that names it.
+	//
+	// ⚠ Written down twice, a future answer to what "writable" MEANS — a captured closure variable
+	// (P1.4), a moved-from binding under static ownership — taught to one site and not the other
+	// would let `p.x = 5` silently compile where `p = q` correctly reports. An ACCEPTED write that
+	// should have been refused is a WRONG ANSWER, not a compile error, and neither site would read
+	// as wrong on its own. The bootstrap is the cautionary tale: it spells this rule at FOUR sites
+	// and reads `VarInfo.Mutable` in three unrelated places.
+	function requireMutableBinding(binding VarInfo, nameTok Token) throws ParseError
+		if not binding.mutable 'immutable'
+			throw ParseError.assignToImmutable(String.from(nameTok.value), line: nameTok.line, column: nameTok.column)
+		end 'immutable'
+	end 'requireMutableBinding'
 
 	// The COERCION rule for an ASSIGNMENT — shared by the local path and the global one, which
 	// were already two copies of the same three lines and would now have been two copies of the
@@ -4594,13 +4609,29 @@ export type Parser
 	// accept one. Both anchor at the ROOT VARIABLE token and not at the field, which is measured
 	// from the bootstrap and pinned by `structs.md`'s two `error.*` cases at `:16:2`.
 	//
-	// ⚠ **THE INSTANCE CHECK RUNS FIRST, AND THE ORDER IS A DECISION.** When both fail — a `let`
-	// instance holding a `let` field — the instance wins. In the bootstrap this is a positional
+	// ⭐ **RESOLVE, THEN PERMIT — AND THE ORDER IS THE WHOLE DIAGNOSTIC CONTRACT.** The checks below
+	// run in two bands, and the band boundary is what makes every message name a change that
+	// actually fixes the program:
+	//
+	//   1. RESOLUTION — is `p` a struct, and does it have a field `x`? Asked FIRST, and asked in the
+	//      same order and through the same two helpers `parseFieldAccess` asks them, so a field
+	//      WRITE and a field READ can never come to disagree about what `p.x` even DENOTES.
+	//   2. PERMISSION — may this write happen? The instance, then the field.
+	//
+	// ⚠ A PERMISSION message can only ever advise "declare it `var`", so asking permission about a
+	// write that does not RESOLVE names a change that does not work: `let n = 5` then `n.x = 1` once
+	// reported *"cannot assign to immutable variable: 'n'"*, sending the reader to write `var n` —
+	// which changes nothing, because an `int` has no fields. It now reports the not-a-struct error
+	// the READ path always reported for the same three tokens. Same defect, same message, whichever
+	// way the program touches the field.
+	//
+	// ⚠ **WITHIN the permission band, THE INSTANCE STILL OUTRANKS THE FIELD, and that too is a
+	// decision.** When both fail — a `let` instance holding a `let` field — telling a reader to
+	// write `var version` would not fix `let p`. In the bootstrap this ranking is a positional
 	// ACCIDENT (`ResolveStructVariable(requireMutable: true)` happens to throw before
-	// `RequireMutableField` runs) and nothing there declares it; here it is deliberate, and it is
-	// the honest one: telling a reader to write `var version` would not fix `let p`, so the
-	// diagnostic would name a change that does not work. `struct-field-assign-precedence.md` pins
-	// it, because a rule stated only in the order of two `if`s is a rule the next edit reorders.
+	// `RequireMutableField` runs) and nothing there declares it. `struct-field-assign-precedence.md`
+	// pins BOTH ranks, because a rule stated only in the order of two `if`s is a rule the next edit
+	// reorders.
 	function parseFieldAssignment(func IrFunction, block IrBlock) throws ParseError
 		let baseTok = try self.consume(TokenKind.identifier)
 		try self.consume(TokenKind.dot)
@@ -4615,12 +4646,10 @@ export type Parser
 		end 'undeclared'
 
 		let binding = self.scope.getInfo(baseTok.value)
-		if not binding.mutable 'immutableInstance'
-			throw ParseError.assignToImmutable(String.from(baseTok.value), line: baseTok.line, column: baseTok.column)
-		end 'immutableInstance'
-
 		let layout = try self.requireStructBinding(binding, baseTok: baseTok)
 		let index = try self.requireFieldIndex(layout, fieldTok: fieldTok)
+
+		try self.requireMutableBinding(binding, nameTok: baseTok)
 
 		if not layout.fieldIsMutable(index) 'immutableField'
 			throw ParseError.assignToImmutableField(String.from(layout.name), fieldName: String.from(fieldTok.value), line: baseTok.line, column: baseTok.column)
@@ -5599,9 +5628,17 @@ export type Parser
 	// only this one, and that is CORRECT rather than an omission: **a field store assigns no
 	// binding.** `p` is a box pointer that `p.x = 5` never reassigns — the write goes to MEMORY,
 	// through `storeIndirect`, and the box's address is the same value afterwards. So there is no
-	// loop-carried value to merge and no phi to mint. (`c.value = c.value + 1` does make this scan
-	// insert `value`, at the field token — harmless, and already covered by the over-approximation
-	// note above: `value` binds nothing at the header, so it selects nothing.)
+	// loop-carried value to merge and no phi to mint.
+	//
+	// ⚠ `c.value = c.value + 1` DOES make this scan insert `value`, at the field token, and it is
+	// harmless — but **for the over-approximation note's SHADOWING reason, not its "selects nothing"
+	// one**, and the difference is worth stating because only one of the two survives a local of the
+	// same name. With no local called `value`, the name binds nothing at the header and selects
+	// nothing. With `var value` ALSO in scope it DOES select, and a header phi IS minted for a var
+	// the loop never writes. That phi CARRIES NOTHING — every incoming value is the same one,
+	// precisely because nothing assigns it — which is the shape `elimTrivialBlockArgs` exists to fold
+	// away (see PassPipeline). MEASURED rather than argued: that program returns 102, the right
+	// answer.
 	//
 	// ⚠ A write with NO `=` ANYWHERE cannot be covered by either half of the above, because it is
 	// not a statement to teach the dispatcher about: a `var` PARAMETER is written by `mutate(p)`

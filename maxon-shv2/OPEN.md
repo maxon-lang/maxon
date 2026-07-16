@@ -465,7 +465,10 @@ goldens stay stable; `$` is structurally unwritable because `isAlphaNum` is `[A-
 no `var` twin of `file-private-same-name-cross-file`, so we wrote `specs-shv2/global-file-private-same-name.md`:
 shv2 returns 118 where the bootstrap returns 212.** The Std **memory band** now exists (`globalAddr` +
 `loadIndirect` + `storeIndirect`) — ⚠ **`loadIndirect` MUST stay `isPure: false`**, or a global's read
-**hoists out of a loop that writes it** (a silent wrong answer; pinned by a spec, verified: a loop returns 10).
+**would hoist out of a loop that writes it** (a silent wrong answer). ⚠ **CORRECTED 2026-07-15: this said
+"pinned by a spec", and it is NOT — `StdOpMeta.isPure` has ZERO readers, so no spec can pin it. The spec
+verifies the ANSWER (a loop returns 10), which is true and worth having, but it stays green with the flag
+INVERTED. See #27.**
 
 ✅ **THE WORKAROUND IS RETIRED, precisely.** `specs-shv2/short-circuit-elision.md` existed **only** because
 there were no globals: with no way to observe a side effect, it proved elision by making the guarded operand
@@ -1241,6 +1244,106 @@ the way this file is about, and would go on looking right.
 **Wave 2 corrects THIS marker's reason to name E3006/overloading. It does not implement overloading, and it
 does not survey the other 152.** Where overloading belongs on the ladder is a **PLAN decision, not a rung's** —
 it is orthogonal to structs (it is function resolution), and it needs a number.
+
+### 27. 🔴 NEW 2026-07-16 — **`StdOpMeta.isPure` HAS ZERO READERS, and SIX places called it a live correctness constraint**
+
+**Found during the P1.1a-wave-2 review, by SABOTAGE. It is the THIRD instance of #4c's shape — a gate
+reporting PASS while structurally blind — after #4c itself and #23.**
+
+`StdOp.loadIndirect` declares `isPure: false`. Six places said, in the present tense, that this
+*prevents* a hoist and that a spec *pins* it. **Nothing reads the field.** Measured three ways, each
+independent:
+
+1. **A sweep of all NINE `StdOpMeta` fields** (`StdDialect.maxon:254-308`) for readers. Only **three**
+   have one: `category` (`StdDialect.maxon:743`), `isCall` (`X64PrologueEpilogue.maxon:366`),
+   `clobbersFlags` (`StdToX64Conversion.maxon:791`). **Six are read NOWHERE: `role`, `isPure`,
+   `isUnsupportedInInlineBody`, `isMemory`, `isStore`, `isCmp`.** The sweep is COMPLETE rather than
+   merely negative: `op.rawValue` is never bound to a local anywhere in the compiler, so
+   `rawValue.<field>` is the only access route there is, and `.isPure` matches nothing but a COMMENT and
+   `IrFunction.maxon:231`'s `isPure: src.isPure` — **a different struct's field** (`IrFunction.isPure`,
+   for inlining, and *that* one is dormant too: written `true` twice, copied once, branched on never).
+2. **The pipeline cannot hoist.** `buildDefaultPipeline` is `resolveTypes → semanticCheck →
+   lowerMaxonToStd → pruneDeadBlockArgs → elimTrivialBlockArgs → foldConstOperands`. No LICM, no CSE, no
+   DCE beyond `foldConstOperands`' const-DCE, no inliner.
+3. ⭐ **THE SABOTAGE, which is the only one of the three that could have surprised us.** `loadIndirect`
+   flipped to `isPure: true` — the exact edit all six sites call a silent-wrong-answer bug — and the
+   full suite reads **371 passed / 0 failed, exit 0, memoryLeak false**, including
+   `global-load-not-hoisted` (P1.0d.5b's three cases) and wave 2's own
+   `struct-field-load-not-hoisted`.
+
+**The property holds because NOTHING HOISTS, not because of the flag.** The two `*-load-not-hoisted`
+specs are **STANDING GUARDS, not live gates** — they pin the ANSWER (a loop returns 10; a counter
+returns 5), which is worth pinning against the day a hoister lands, and they cannot fail on the flag.
+
+✅ **FIXED: the PROSE, at all seven sites** — `ARCHITECTURE.md`, `PLAN.md` (P1.0d.5b's row), this file's
+P1.0d.5b entry, `Testing/ScaleCorpus.maxon`, `Compiler/IR/Std/FoldConstOperands.maxon`,
+`specs-shv2/struct-field-load-not-hoisted.md`, and `StdDialect.maxon` itself (both the `isPure` field's
+own note and `loadIndirect`'s). Each now says what is true: the declaration is CORRECT and awaits its
+reader. Two sites were worse than merely stale and are now precise about the mechanism that IS live:
+- `FoldConstOperands.stdConstInfo`'s `binOp to osAllocPages gives notConst` arm is **the only thing
+  actually stopping a load from folding to its `.data` initializer**. It read as a mere echo of the
+  purity flag; it is the real check, and it has a real reader.
+- `ScaleCorpus`'s `globalVars` knob credited its fold-resistance to `isPure`. Same correction: the arm
+  above is what makes a global read opaque.
+
+❌ **NOT DELETED, deliberately, and #7 is the precedent that does NOT transfer.** `TargetOpMeta.setsFlags`
+was deleted (`282d08421`) because it was a **SECOND home** for a fact already live at the Std tier as
+`clobbersFlags` — *"two homes for one fact, one unreachable, and the dead one was quietly right"*, a v1
+port artifact whose reader had MOVED. **`isPure` is the SOLE declaration of each op's purity and its
+reader is SCHEDULED, not relocated.** Deleting it destroys the correct answer for ~20 ops and forces
+re-derivation — per-variant, which is the flat union's whole payoff over v1's by-category blanket — on
+the day the inliner lands. Keep it.
+
+⚠ **The real cost is that these values are now held by REVIEW ALONE, and that is not written down
+anywhere a reviewer must look.** No spec can fail on them; a wrong one is invisible until the first
+hoisting pass makes it a silent wrong answer in every program at once. The mitigation shipped here is
+the field's own note (`StdDialect.maxon`) saying so at the point of edit.
+
+⇒ **NOT ANSWERED HERE, and it needs a rung: what to do with the five other unread fields.** `role`,
+`isUnsupportedInInlineBody`, `isMemory`, `isStore`, `isCmp` are in the identical position, and the
+keep-vs-delete answer is **not uniform** — `isMemory`/`isStore` are the scheduler's barrier facts and
+`isCmp` is the backends' compare/branch pairing, each with a different future reader and a different
+re-derivation cost. It is a **survey with a decision per field**, it is orthogonal to structs, and it
+needs a number. #24's precedent applies: **a rung named without a measurement is a rung that cannot
+move the number**, so none is named here.
+
+### 28. ⚠ NEW 2026-07-16 — **the corpus generates structs with a HARDCODED field count, so the one struct dimension with a superlinear term is invisible**
+
+**Found by the P1.1a-wave-2 optimizer, confirmed by this review. It is the corpus-blindness class again
+(#4d, #7, #23) — but a FINER form, and the finer form is the interesting part: #4d was closed by teaching
+the corpus to generate structs, and the corpus it produced LOOKS like it covers them.**
+
+`Testing/ScaleCorpus.maxon:1228` (`structTypeDecl`) emits **exactly two fields — `x` and `y` — on every
+generated type, at every rung, in both struct knobs.** Its own comment states the design: the two knobs
+measure *"how many of them exist, and how many times one is built"*. **Field COUNT is not a dimension of
+either.** So F = 2 on every measurement this instrument has ever taken.
+
+**That is precisely where the superlinear term is.** `StructLayout.indexOfField` (`Project.maxon`) is a
+LINEAR SCAN, and P1.1a wave 2 made it hotter: every field read, every field write and every `Self{…}`
+label now asks it, so a literal filling all F fields of a type costs **O(F²)**. The ladder doubles the
+NUMBER of types, which grows the O(F²) term by a constant factor of 4 per type and never bends the curve.
+⇒ **A quadratic in F cannot be seen by an instrument that holds F at 2.**
+
+✅ **The optimizer did NOT touch the instrument, which is correct** (CLAUDE.md: never edit the instrument
+to move a number), and it did not call the scan a defect either. It **measured** instead, and the debt
+judgment is sound and is recorded in `docs/optimization-log.md`:
+- across all **166** `type` declarations in `maxon-shv2/` + `stdlib/`: F max **22**, mean **4.14**;
+- the P1.0r row independently measured v1's **369** types at mean **5.4**, median **3** — and v1 is 3.5×
+  larger than shv2 while its median F is LOWER.
+⇒ **Programs grow by adding TYPES, not by widening them.** A per-layout name→index hash map would buy a
+heap Map per declared type plus a name hash per lookup to save ~4 byte-compares. **DEBT, not a bug.**
+
+⚠ **What is worth recording is the BLIND SPOT, not the scan.** The re-measure trigger is a
+**machine-GENERATED struct** — a wide type no human writes — and the corpus is the one thing that could
+produce one. Today it cannot: `structTypeDecl` would need a field-count knob. No rung is named, per #24's
+precedent (**a rung named without a measurement is a rung that cannot move the number** — #24's first
+draft named two that could not).
+
+⇒ **The general lesson, and it outranks the specific one: closing a corpus gap by generating a construct
+does NOT close it by DIMENSION.** #4d was closed by making structs appear. They appear at one width, one
+shape, one field count — and "the corpus now covers structs" reads as though it covers them. **A grep for
+a construct is not a measurement of it** (project_scale_corpus_blind_sixth's own words), and neither is a
+generator that emits it at a single point in its parameter space.
 
 ### 22. ⚠⚠ `bin/maxon.exe` IS GITIGNORED AND NOTHING REBUILDS IT — **a baseline can measure a tree that does not exist**
 

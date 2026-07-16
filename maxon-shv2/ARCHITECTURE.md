@@ -559,12 +559,24 @@ Both `loadIndirect` and `storeIndirect` carry an `StdType` where v1 carried
 `StdTypeInfo.storageBytes` backing is the single source of a type's memory footprint (an `i1` is
 ONE byte, which is what `data-section-bool-1byte` pins).
 
-> ⚠ **`loadIndirect` declares `isPure: FALSE`, and that is a CORRECTNESS constraint, not
-> conservatism.** A load writes nothing, so calling it "side-effect-free" is true and useless:
-> `isPure` licenses a pass to DUPLICATE, REORDER or DROP an op, and a load may do none of those —
-> what it reads is a mutable location some other op writes. Declared pure, a global's read HOISTS
-> out of a loop that writes the global and the loop reads a stale value for ever. A **silent wrong
-> answer**, not a crash. `specs-shv2/global-load-not-hoisted.md` pins it.
+> ⚠ **`loadIndirect` declares `isPure: FALSE`, and that is the CORRECT declaration — but it is a
+> declaration AWAITING ITS READER, not a constraint anything enforces today.** A load writes
+> nothing, so calling it "side-effect-free" is true and useless: `isPure` licenses a pass to
+> DUPLICATE, REORDER or DROP an op, and a load may do none of those — what it reads is a mutable
+> location some other op writes. Declared pure, a global's read *would* hoist out of a loop that
+> writes the global and the loop *would* read a stale value for ever: a **silent wrong answer**, not
+> a crash. That is why the value must stay `false`.
+>
+> ⚠ **BUT `StdOpMeta.isPure` HAS ZERO READERS** (measured 2026-07-15: a per-field sweep of all nine
+> `StdOpMeta` fields, plus a SABOTAGE — with `loadIndirect` flipped to `isPure: true`, `specs-shv2`
+> still passes **371/0, exit 0**). Its readers — DCE/CSE/LICM and the inliner — are **scheduled, not
+> present**: the pipeline is `resolveTypes → semanticCheck → lowerMaxonToStd → pruneDeadBlockArgs →
+> elimTrivialBlockArgs → foldConstOperands`, and **nothing in it hoists**. So the no-hoist property
+> holds today **because there is no hoister**, not because of this flag.
+> `specs-shv2/global-load-not-hoisted.md` and `struct-field-load-not-hoisted.md` are **STANDING
+> GUARDS that will earn their keep when the first hoisting pass lands** — they pin the ANSWER, which
+> is worth pinning, but they are not gates on the flag and structurally cannot be. Keep the
+> declaration correct; do not mistake it for something enforced. **See OPEN.md #27.**
 >
 > `globalAddr` is `isPure: true` and `isMemory: false` — it computes an address (a RIP-relative
 > `lea` reading no register at all) rather than touching memory.
