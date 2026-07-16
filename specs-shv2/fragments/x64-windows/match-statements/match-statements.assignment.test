@@ -1,0 +1,39 @@
+// Test: match-statements.assignment
+function main() returns ExitCode
+	let x = 2
+	var result = 0
+	match x 'process'
+		1 then result = 60
+		2 then result = 120
+		default then result = 0
+	end 'process'
+	return result
+end 'main'
+---
+ExitCode: 120
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 rax, 2
+    x64.cmpRegImm32 rax, 1
+    x64.jcc equal, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.movRegImm32 r8, 60
+    x64.jmp matchcont
+  matchnext:
+    x64.cmpRegImm32 rax, 2
+    x64.jcc equal, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.movRegImm32 r8, 120
+    x64.jmp matchcont
+  matchnext:
+    x64.movRegImm32 r8, 0
+    x64.jmp matchcont
+  matchcont:
+    x64.popReg rbp
+    x64.ret
+}

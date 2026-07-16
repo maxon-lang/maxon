@@ -18,6 +18,8 @@ export enum ErrorCode
 	// A '#' compiler directive names a directive the lexer does not know.
 	lexerUnknownDirective = "E1009"
 
+	// The parser met a token that cannot appear at this point in the grammar.
+	parserUnexpectedToken = "E2001"
 	// An expression is not well formed. Broader than its C#/v1 name (ParserExpectedExpression) suggests: all three compilers report four distinct message families under it -- a primary was required and the token stream had something else; a name in an expression has no binding in scope; a binary arithmetic/shift operator got a non-numeric operand; a unary '-' got a non-numeric operand.
 	parserExpressionError = "E2004"
 	// The parser reached end-of-file with a construct still open.
@@ -36,6 +38,24 @@ export enum ErrorCode
 	parserUnsupportedFeature = "E2015"
 	// A character literal is malformed (empty, or holding more than one character).
 	parserInvalidCharacterLiteral = "E2016"
+	// A match arm falls through to the next arm while the enclosing function still owes a return.
+	matchFallthroughWithReturn = "E2025"
+	// A match does not cover every case of its scrutinee and has no default arm.
+	matchNotExhaustive = "E2026"
+	// Two match arms test the same pattern; the second can never run.
+	matchDuplicatePattern = "E2027"
+	// A match's arms, or a ternary's two branches, produce different types (or a ternary condition is not bool).
+	// a match arm or postfix-ternary's two arms produce different types,
+	// or a ternary condition is not bool. Mirrors the C# bootstrap's
+	// ParserMatchTypeMismatch -- thrown at parse time so it wins over the
+	// body-finish unused-variable check (E3012).
+	matchTypeMismatch = "E2028"
+	// A match's 'default' arm is not the last arm.
+	matchDefaultNotLast = "E2029"
+	// A match arm opens a block but gives it no block label.
+	matchMissingBlockId = "E2042"
+	// A match arm's block label does not match the label its arm opened.
+	matchMismatchedBlockId = "E2043"
 	// A top-level constant's initializer is not a compile-time constant.
 	parserNonConstantInitializer = "E2045"
 	// 'break' or 'continue' appears outside any loop, or targets a label that names no enclosing loop.
@@ -46,6 +66,13 @@ export enum ErrorCode
 	// label is redundant -- unlabeled `break`/`continue` already targets
 	// that loop. Emitted from `resolveBreakTarget` / `resolveContinueTarget`.
 	labelTargetsOwnLoop = "E2048"
+	// A match arm's body is a block-opening statement. Each arm body must be a single statement.
+	// Phase 9 Stage 0: a match arm body cannot be a block-opening
+	// statement (`if` / `while` / `for` / `match` / block-form `try`).
+	// Each arm body is a single statement; block-form constructs would
+	// allocate persistent slots that leak on every error path through
+	// the match.
+	matchBlockStatement = "E2049"
 	// A call labels its first argument. The first argument is positional; only the second and later arguments take 'name:' labels.
 	// a call site labeled its first argument (`f(name: value, ...)`).
 	// The first argument is positional-only; only the second and subsequent

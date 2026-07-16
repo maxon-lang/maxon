@@ -340,6 +340,44 @@ export union ParseError implements Error
 	// is deliberately NOT `assignToImmutableField`'s root-variable anchor: that one is advice
 	// about the BINDING (`var p`), this one is about the field itself.
 	unexportedFieldAccess(typeName String, fieldName String, line LineNumber, column ColumnNumber)
+	// --- The scalar-match arms (P1.1b wave A) ---
+	//
+	// A stray token where a match EXPRESSION arm has finished — the `and` of an `and fallthrough`
+	// after a `gives` arm. Renders as **E2001** `unexpected token: '<got>'`, positioned at the
+	// stray token, exactly as both reference compilers reject it (v1
+	// `rejectFallthroughInMatchExpression`; 2-Parser.cs:14860-14864): fallthrough is meaningless
+	// where every arm must yield a value, and the Pratt climber has already stopped at the `and`
+	// (see `parseBinary`), so the arm parser meets it as a leftover rather than as an operator.
+	matchExpressionStrayToken(got String, line LineNumber, column ColumnNumber)
+	// An arm body that both `return`s and falls through (`1 then return 10 and fallthrough`).
+	// Renders as **E2025**, positioned at the `and`. The two cannot combine: a `return` has already
+	// left the arm, so there is nothing for the fallthrough to carry control out of.
+	matchFallthroughWithReturn(line LineNumber, column ColumnNumber)
+	// A non-enum match with no `default` arm. Renders as **E2026**, positioned at the closing `end`.
+	// `subject` is "match" or "match expression" so the one rule phrases the statement and
+	// expression forms as both reference compilers do. A scalar match is exhaustive only through a
+	// default: the language will not silently do nothing for an unmatched value.
+	matchNotExhaustive(subject String, line LineNumber, column ColumnNumber)
+	// Two arms test the same single value (`1 then … 1 then …`). Renders as **E2027**, positioned at
+	// the duplicate pattern. `pattern` is the value as written, for the message.
+	matchDuplicatePattern(pattern String, line LineNumber, column ColumnNumber)
+	// A pattern whose type cannot be compared to the scrutinee's — a `"string"` pattern on an `int`
+	// scrutinee, say. Renders as **E2028**, positioned at the pattern. Both type names ride along
+	// because the message names both.
+	matchPatternTypeMismatch(patternType String, scrutineeType String, line LineNumber, column ColumnNumber)
+	// A pattern arm that follows the `default` arm. Renders as **E2029**, positioned at the stray
+	// arm's pattern — `default` must be the last case so its catch-all cannot mask a later one.
+	matchDefaultNotLast(line LineNumber, column ColumnNumber)
+	// A `match <expr>` with no block label after the scrutinee. Renders as **E2042**, positioned at
+	// the token where the label belongs (the one just past the scrutinee).
+	matchMissingBlockId(line LineNumber, column ColumnNumber)
+	// A `match … 'a' … end 'b'` whose closing label does not match the one it opened. Renders as
+	// **E2043**, positioned at the `end` (not the wrong label) — both references anchor it there.
+	matchMismatchedBlockId(expected String, got String, line LineNumber, column ColumnNumber)
+	// A `then` arm body that is a block-opening statement (`if`/`while`/`for`/`match`). Renders as
+	// **E2049**, positioned at the opening keyword. Each arm body is a single statement; a
+	// block-opener would need a nested scope a single-line arm has no place for.
+	matchBlockStatement(keyword String, line LineNumber, column ColumnNumber)
 end 'ParseError'
 
 // **THE NAME OF THE RECEIVER PARAMETER.** An instance method's parameter 0, pushed by
@@ -1100,6 +1138,64 @@ type LoopContext
 end 'LoopContext'
 
 typealias LoopContextArray = Array with LoopContext
+
+// The value a match arm produces, if any: `none` for a `then` (statement) arm, `value` for a
+// `gives` (expression) arm. A union rather than a `ValueId` plus a bool — for the reason
+// `ReceiverArg` is one: a `ValueId` has no empty value, and a sentinel would be READ downstream
+// as a real operand.
+union MatchGiveValue
+	none
+	value(id ValueId)
+end 'MatchGiveValue'
+
+// A match arm that reaches the merge block — its exit block, the carried-variable values it
+// leaves scope with, and (expression form only) the value it `gives`. Collected as the arms are
+// parsed and drained by `finalizeMatchMerge`, which mints the merge's phis from the whole set.
+//
+// ⭐ This IS shv2's departure from both references: v1 and the bootstrap join a match's arms
+// through a mutable result SLOT (a store per arm, one load at the merge, promoted later by
+// mem2reg). shv2 has neither slots nor mem2reg, so it threads each arm's value to the merge as a
+// BLOCK-ARG — exactly as `if`/`while` thread a `var` across their joins. A port of the slot would
+// reintroduce the very machinery the rewrite exists to avoid.
+type MatchArmExit
+	export var exitBlock as IrBlock
+	export var exitVals as ValueIdArray
+	export var give as MatchGiveValue
+
+	export static function create(exitBlock IrBlock, exitVals ValueIdArray, give MatchGiveValue) returns MatchArmExit
+		return Self{exitBlock: exitBlock, exitVals: exitVals, give: give}
+	end 'create'
+end 'MatchArmExit'
+
+typealias MatchArmExitArray = Array with MatchArmExit
+
+// How control left one arm's body, plus the exit snapshot the merge (or the next arm's
+// fallthrough phi) needs. `fellThrough` and `reachesMerge` are mutually exclusive with each
+// other and with a terminated exit: an arm either flows to the next arm's body (`and
+// fallthrough`), reaches the merge, or returns/breaks — exactly one.
+type MatchArmBody
+	export var fellThrough as bool
+	export var reachesMerge as bool
+	export var exitBlock as IrBlock
+	export var exitVals as ValueIdArray
+	export var give as MatchGiveValue
+
+	export static function create(fellThrough bool, reachesMerge bool, exitBlock IrBlock, exitVals ValueIdArray, give MatchGiveValue) returns MatchArmBody
+		return Self{fellThrough: fellThrough, reachesMerge: reachesMerge, exitBlock: exitBlock, exitVals: exitVals, give: give}
+	end 'create'
+end 'MatchArmBody'
+
+// What a parsed match leaves behind: the continuation block control resumes in (`cont`, which
+// becomes `currentBlock`), and the value it produced — `none` for a statement match, `value(phi)`
+// for an expression match. Both entry points read `cont`; only the expression entry reads `result`.
+type MatchOutcome
+	export var cont as IrBlock
+	export var result as MatchGiveValue
+
+	export static function create(cont IrBlock, result MatchGiveValue) returns MatchOutcome
+		return Self{cont: cont, result: result}
+	end 'create'
+end 'MatchOutcome'
 
 export type Parser
 	var tokens as TokenArray
@@ -2508,7 +2604,9 @@ export type Parser
 			return try self.parseIfStatement(func, block: block)
 		end 'ifStmt' else if self.at(TokenKind.while) 'whileStmt'
 			return try self.parseWhileStatement(func, block: block)
-		end 'whileStmt' else if self.at(TokenKind.break) 'breakStmt'
+		end 'whileStmt' else if self.at(TokenKind.match) 'matchStmt'
+			return try self.parseMatchStatement(func, block: block)
+		end 'matchStmt' else if self.at(TokenKind.break) 'breakStmt'
 			try self.parseBreakStatement(block)
 		end 'breakStmt' else if self.at(TokenKind.continue) 'continueStmt'
 			try self.parseContinueStatement(block)
@@ -3360,7 +3458,7 @@ export type Parser
 	// wrong; counting it correctly keeps the scan exact and the drift guard meaningful.
 	function opensBlockAt(index TokenIndex) returns bool
 		let kind = self.kindAt(index)
-		if kind == TokenKind.if or kind == TokenKind.while 'alwaysOpens'
+		if kind == TokenKind.if or kind == TokenKind.while or kind == TokenKind.match 'alwaysOpens'
 			return true
 		end 'alwaysOpens'
 
@@ -3561,6 +3659,553 @@ export type Parser
 		end 'each'
 		return vals
 	end 'edgeArgsFor'
+
+	// ============================================================================================
+	// `match` on SCALAR scrutinees (int/bool/float) — P1.1b wave A. No enums.
+	//
+	// A match lowers to a CHAIN of two-way `condBranch` test blocks and a block-arg join — the
+	// exact primitives `if`/`else`/`while` already use. There is NO new IR op:
+	//
+	//   test0:  <pattern0 → bool cond0> ; condBranch(cond0, then: body0, else: test1)
+	//   test1:  <pattern1 → bool cond1> ; condBranch(cond1, then: body1, else: test2)
+	//   ...
+	//   testN:  <the default body — the last real arm's `else` target>
+	//   body0:  <arm 0's body> ; branch merge   (or → next body on `and fallthrough`)
+	//   ...
+	//   merge:  phi(s) ; <the result, for a `gives` match>
+	//
+	// A pattern is OR-folded into ONE boolean, exactly as both reference compilers do: a single
+	// value is `scrut == v`, a range `lo to hi` is `(scrut >= lo) and (scrut <= hi)` (a bitwise
+	// `and` over the two `bool`s — eager, since a pattern has no side effects), an `or` is a
+	// bitwise `or` of the alternatives, `upto` uses `<` for the upper bound, and `min`/`max` drop
+	// the corresponding compare.
+	//
+	// ⭐ The `gives` result and every cross-arm `var` mutation join through BLOCK-ARGS, not v1's /
+	// the bootstrap's mutable result SLOT — see MatchArmExit's header. shv2 has no slots and no
+	// mem2reg, so the parser threads each reaching arm's value to the merge as a block-arg, the
+	// same on-the-fly SSA `if`/`while` use.
+	// ============================================================================================
+
+	// The STATEMENT form: `match <expr> 'l' <arms> end 'l'`. Returns the continuation control
+	// resumes in — reachable when an arm falls through to it, `dead` when every arm terminates.
+	function parseMatchStatement(func IrFunction, block IrBlock) returns IrBlock throws ParseError
+		let outcome = try self.parseMatchCommon(func, block: block, isExpression: false)
+		return outcome.cont
+	end 'parseMatchStatement'
+
+	// The EXPRESSION form: `let r = match …`, `match … * 2`. Yields the merge's result phi and
+	// leaves control in the merge, exactly as `emitShortCircuit` does — so the climber continues
+	// from `currentBlock` after it.
+	function parseMatchExpression(func IrFunction) returns ValueId throws ParseError
+		let outcome = try self.parseMatchCommon(func, block: self.currentBlock, isExpression: true)
+		match outcome.result 'r'
+			value(id) then return id
+			none then panic("parseMatchExpression: an expression match produced no value — every `gives` arm must reach the merge")
+		end 'r'
+	end 'parseMatchExpression'
+
+	// The shared core, driving both forms off `isExpression` (which decides `then` vs `gives` and
+	// whether the merge carries a result phi). The single owner of the scrutinee, the block label,
+	// the arm loop, exhaustiveness, and the merge join.
+	function parseMatchCommon(func IrFunction, block IrBlock, isExpression bool) returns MatchOutcome throws ParseError
+		let matchIndex = self.pos
+		let matchTok = try self.consume(TokenKind.match)
+
+		// The carried-variable set — the mutable bindings the WHOLE match assigns, read off the
+		// tokens before anything is emitted, exactly as `if`/`while` read theirs. `matchEnd` feeds
+		// the drift guard below.
+		let matchEnd = self.blockStatementEndIndex(matchIndex, continuesAtElse: false)
+		let carried = self.assignedBindingsIn(matchIndex, endIndex: matchEnd)
+
+		// The scrutinee. It may itself short-circuit and move `currentBlock`, so the first arm's
+		// test goes into wherever the scrutinee left control — its exit block, not `block`.
+		let scrut = try self.parseExpression(func, block: block)
+		let scrutTag = self.tagOf(scrut)
+
+		if not self.at(TokenKind.charLiteral) 'noLabel'
+			let missing = self.current()
+			throw ParseError.matchMissingBlockId(missing.line, column: missing.column)
+		end 'noLabel'
+		let labelTok = try self.consume(TokenKind.charLiteral)
+		let matchLabel = labelTok.value
+
+		let entryVals = self.snapshotBindings(carried)
+
+		// Arm-loop state. The first arm's test goes into the block the scrutinee left control in
+		// (`self.currentBlock`); `prevTestBlock`/`prevExitBlock` are seeded with it too and read only
+		// under the flag that makes them meaningful (`hasRealArm` / `prevFallthrough`) — a block has
+		// no empty value, and a sentinel would be a lie a later read could believe.
+		var currentTestBlock = self.currentBlock
+		var prevTestBlock = self.currentBlock
+		var hasRealArm = false
+		var sawDefault = false
+		var prevFallthrough = false
+		var prevExitBlock = self.currentBlock
+		var prevExitVals = ValueIdArray.create()
+		var seenValues = ParsedIntArray.create()
+		var reachingArms = MatchArmExitArray.create()
+
+		while true 'arms'
+			self.skipNewlines()
+			if self.at(TokenKind.end) 'endOfArms'
+				break
+			end 'endOfArms'
+
+			if self.at(TokenKind.default) 'defaultArm'
+				// A second `default`, or any `default` that is not last, is E2029 — reported when a
+				// pattern arm FOLLOWS a default (below); a default following a default is the same rule.
+				if sawDefault 'defaultAfterDefault'
+					let dupTok = self.current()
+					throw ParseError.matchDefaultNotLast(dupTok.line, column: dupTok.column)
+				end 'defaultAfterDefault'
+
+				try self.consume(TokenKind.default)
+				// The default's body IS the last real arm's `else` target (or the entry block when the
+				// match is default-only): there is no pattern to test. `var` because `parseArmBody`
+				// mutates the block it fills.
+				var defaultBody = currentTestBlock
+				if prevFallthrough 'defaultIsFtTarget'
+					let matchEdgeArgs = self.setupFallthroughTargetPhis(defaultBody, carried: carried, entryVals: entryVals, prevExitBlock: prevExitBlock, prevExitVals: prevExitVals)
+					// The fail edge into the default body — the last real arm's `condBranch` else,
+					// already emitted; only its phi args are recorded now.
+					if hasRealArm 'defaultFailEdge'
+						self.recordBranchEdge(prevTestBlock, targetId: defaultBody.id, argIds: matchEdgeArgs)
+					end 'defaultFailEdge'
+				end 'defaultIsFtTarget' else 'defaultFresh'
+					self.restoreBindings(carried, snapshot: entryVals)
+				end 'defaultFresh'
+
+				let defaultArmBody = try self.parseArmBody(func, bodyBlock: defaultBody, isExpression: isExpression, carried: carried)
+				// `default` is the last arm, so a fall-through has no next arm to reach — it simply
+				// continues to the merge. So the test is "did control leave?", not `reachesMerge`.
+				if not defaultArmBody.exitBlock.isTerminated() 'defaultReaches'
+					reachingArms.push(MatchArmExit.create(defaultArmBody.exitBlock, exitVals: defaultArmBody.exitVals, give: defaultArmBody.give))
+				end 'defaultReaches'
+				sawDefault = true
+				prevFallthrough = false
+			end 'defaultArm' else 'patternArm'
+				if sawDefault 'armAfterDefault'
+					let strayTok = self.current()
+					throw ParseError.matchDefaultNotLast(strayTok.line, column: strayTok.column)
+				end 'armAfterDefault'
+
+				let patternTok = self.current()
+				// `var` because both blocks are forwarded to functions that fill them (the pattern's
+				// phis, the arm body, the next arm's test) — a `let` cannot back a mutating parameter.
+				var bodyBlock = self.newBlock(func, label: b"matcharm", line: patternTok.line)
+				let nextTest = self.newBlock(func, label: b"matchnext", line: patternTok.line)
+
+				// Emit the pattern condition into the current test block. A pattern never
+				// short-circuits (eager bitwise fold), so `currentBlock` does not move.
+				self.currentBlock = currentTestBlock
+				let cond = try self.emitPatternCondition(scrut, scrutTag: scrutTag, seenValues: seenValues)
+
+				var matchEdgeArgs = ValueIdArray.create()
+				if prevFallthrough 'armIsFtTarget'
+					matchEdgeArgs = self.setupFallthroughTargetPhis(bodyBlock, carried: carried, entryVals: entryVals, prevExitBlock: prevExitBlock, prevExitVals: prevExitVals)
+				end 'armIsFtTarget' else 'armFresh'
+					self.restoreBindings(carried, snapshot: entryVals)
+				end 'armFresh'
+
+				self.recordBranchEdge(currentTestBlock, targetId: bodyBlock.id, argIds: matchEdgeArgs)
+				self.emitCondBranch(currentTestBlock, cond: cond, thenId: bodyBlock.id, elseId: nextTest.id, ifTok: patternTok)
+
+				let armBody = try self.parseArmBody(func, bodyBlock: bodyBlock, isExpression: isExpression, carried: carried)
+				if armBody.fellThrough 'fellThrough'
+					prevFallthrough = true
+					prevExitBlock = armBody.exitBlock
+					prevExitVals = armBody.exitVals
+				end 'fellThrough' else 'notFallThrough'
+					prevFallthrough = false
+					if armBody.reachesMerge 'armReaches'
+						reachingArms.push(MatchArmExit.create(armBody.exitBlock, exitVals: armBody.exitVals, give: armBody.give))
+					end 'armReaches'
+				end 'notFallThrough'
+
+				prevTestBlock = currentTestBlock
+				hasRealArm = true
+				currentTestBlock = nextTest
+			end 'patternArm'
+		end 'arms'
+
+		// A non-enum match is exhaustive only through a `default` — without one it would silently do
+		// nothing for an unmatched value. Anchored at the closing `end`, as both references anchor it.
+		if not sawDefault 'notExhaustive'
+			var subject = "match"
+			if isExpression 'exprSubject'
+				subject = "match expression"
+			end 'exprSubject'
+			let endMissing = self.current()
+			throw ParseError.matchNotExhaustive(subject, line: endMissing.line, column: endMissing.column)
+		end 'notExhaustive'
+
+		// Drift guard, mirroring the `if`/`while` token-extent scans: the `end` the parser reached
+		// must be the one `blockStatementEndIndex` predicted, or `opensBlockAt` misclassified a
+		// construct nested in the arms and the carried set may be short.
+		self.lastBlockBodyEnd = self.pos
+		let endTok = try self.consume(TokenKind.end)
+		self.assertScanAligned("parseMatch", predictedEnd: matchEnd)
+
+		if self.at(TokenKind.charLiteral) 'endLabel'
+			let closeTok = try self.consume(TokenKind.charLiteral)
+			if not closeTok.value.equals(matchLabel) 'labelMismatch'
+				throw ParseError.matchMismatchedBlockId(String.from(matchLabel), got: String.from(closeTok.value), line: endTok.line, column: endTok.column)
+			end 'labelMismatch'
+		end 'endLabel'
+
+		let outcome = self.finalizeMatchMerge(func, matchTok: matchTok, carried: carried, reachingArms: reachingArms, isExpression: isExpression)
+		self.currentBlock = outcome.cont
+		return outcome
+	end 'parseMatchCommon'
+
+	// Parse ONE arm's body. A `gives` arm is a single expression (its value feeds the merge phi); a
+	// `then` arm is a single statement, and `and fallthrough` may follow it. Reports E2049 for a
+	// block-opening statement body, E2025 for `return … and fallthrough`, and E2001 for a stray
+	// `and` after a `gives` arm.
+	function parseArmBody(func IrFunction, bodyBlock IrBlock, isExpression bool, carried VarInfoArray) returns MatchArmBody throws ParseError
+		self.currentBlock = bodyBlock
+
+		if isExpression 'givesArm'
+			try self.consume(TokenKind.gives)
+			let value = try self.parseExpression(func, block: self.currentBlock)
+			let exitBlock = self.currentBlock
+			// `and fallthrough` is meaningless where every arm must yield a value. The climber
+			// already stopped at the `and` (see parseBinary), so it sits here as a stray token.
+			if self.at(TokenKind.and) 'strayAnd'
+				let andTok = self.current()
+				throw ParseError.matchExpressionStrayToken(andTok.kind.rawValue, line: andTok.line, column: andTok.column)
+			end 'strayAnd'
+			return MatchArmBody.create(false, reachesMerge: not exitBlock.isTerminated(), exitBlock: exitBlock, exitVals: self.snapshotBindings(carried), give: MatchGiveValue.value(value))
+		end 'givesArm'
+
+		try self.consume(TokenKind.then)
+
+		// Each arm body is a single statement — a block-opening one (`if`/`while`/`for`/`match`)
+		// has no place for its nested scope on a single-line arm.
+		let firstTok = self.current()
+		if self.isBlockOpeningStatement(firstTok.kind) 'blockOpener'
+			throw ParseError.matchBlockStatement(firstTok.kind.rawValue, line: firstTok.line, column: firstTok.column)
+		end 'blockOpener'
+
+		// Whether the body is a `return` is read BEFORE it is parsed — `and fallthrough` after a
+		// `return` cannot combine (the `return` has already left the arm).
+		let isReturn = self.at(TokenKind.return)
+		let exitBlock = try self.parseStatement(func, block: self.currentBlock)
+
+		var fellThrough = false
+		if self.at(TokenKind.and) and self.peekKind() == TokenKind.fallthrough 'fallthroughSuffix'
+			let andTok = self.current()
+			if isReturn 'ftReturn'
+				throw ParseError.matchFallthroughWithReturn(andTok.line, column: andTok.column)
+			end 'ftReturn'
+			try self.consume(TokenKind.and)
+			try self.consume(TokenKind.fallthrough)
+			fellThrough = true
+		end 'fallthroughSuffix'
+
+		let reachesMerge = not exitBlock.isTerminated() and not fellThrough
+		return MatchArmBody.create(fellThrough, reachesMerge: reachesMerge, exitBlock: exitBlock, exitVals: self.snapshotBindings(carried), give: MatchGiveValue.none)
+	end 'parseArmBody'
+
+	// The block-opening statement keywords — an arm body may not start with one (E2049). `try`'s
+	// block form is also one, but `try` is a later rung and cannot appear here yet.
+	function isBlockOpeningStatement(kind TokenKind) returns bool
+		return kind == TokenKind.if or kind == TokenKind.while or kind == TokenKind.for or kind == TokenKind.match
+	end 'isBlockOpeningStatement'
+
+	// Set up the phis of a FALLTHROUGH-TARGET body block — one reached both by its match edge(s)
+	// (carrying the pre-match `entryVals`) and by the previous arm's fallthrough edge (carrying
+	// that arm's exit values). A carried var gets a merge phi exactly where the two disagree; the
+	// fallthrough edge is recorded and emitted here, and the differing `entryVals` are RETURNED for
+	// the caller to record on the match edge (a regular arm's `condBranch` then-edge, or the
+	// default's fail edge).
+	function setupFallthroughTargetPhis(bodyBlock IrBlock, carried VarInfoArray, entryVals ValueIdArray, prevExitBlock IrBlock, prevExitVals ValueIdArray) returns ValueIdArray
+		var matchEdgeArgs = ValueIdArray.create()
+		var fallthroughEdgeArgs = ValueIdArray.create()
+		for k in 0 upto carried.count() 'each'
+			var binding = try carried.get(k) otherwise panic("setupFallthroughTargetPhis: carried.get OOB at {k}")
+			let entryV = try entryVals.get(k) otherwise panic("setupFallthroughTargetPhis: entryVals.get OOB at {k}")
+			let prevV = try prevExitVals.get(k) otherwise panic("setupFallthroughTargetPhis: prevExitVals.get OOB at {k}")
+			if entryV == prevV 'same'
+				binding.boundValue = entryV
+			end 'same' else 'differ'
+				let phiId = self.mintPhiForBinding(bodyBlock, binding: binding)
+				binding.boundValue = phiId
+				matchEdgeArgs.push(entryV)
+				fallthroughEdgeArgs.push(prevV)
+			end 'differ'
+		end 'each'
+		self.recordBranchEdge(prevExitBlock, targetId: bodyBlock.id, argIds: fallthroughEdgeArgs)
+		self.emitBranch(prevExitBlock, targetId: bodyBlock.id)
+		return matchEdgeArgs
+	end 'setupFallthroughTargetPhis'
+
+	// Create the merge block LAST (so it lays out after every arm body) and join the reaching arms
+	// into it. An empty set means every arm terminated — the merge is `dead`. Otherwise mint the
+	// block-args in order — the result phi (expression form) first, then one phi per carried var
+	// that differs across the reaching arms — and record each arm's edge in the SAME order.
+	function finalizeMatchMerge(func IrFunction, matchTok Token, carried VarInfoArray, reachingArms MatchArmExitArray, isExpression bool) returns MatchOutcome
+		var merge = self.newBlock(func, label: b"matchcont", line: matchTok.line)
+
+		if reachingArms.count() == 0 'allTerminate'
+			merge.terminator = Terminator.dead
+			if isExpression 'exprNoValue'
+				panic("finalizeMatchMerge: a match expression reached no value-producing arm — every `gives` arm must reach the merge (diverging arms are a later rung)")
+			end 'exprNoValue'
+			return MatchOutcome.create(merge, result: MatchGiveValue.none)
+		end 'allTerminate'
+
+		// The first reaching arm is the reference every "do the arms differ / what is the common
+		// value" question is asked against, so it is fetched once here (the count check above proves
+		// it exists).
+		let firstArm = try reachingArms.get(0) otherwise panic("finalizeMatchMerge: reachingArms.get(0) failed after count check")
+
+		// Every reaching arm branches to the merge (its exit block is, by definition, unterminated).
+		for i in 0 upto reachingArms.count() 'branchToMerge'
+			var arm = try reachingArms.get(i) otherwise panic("finalizeMatchMerge: reachingArms.get OOB at {i}")
+			self.emitBranch(arm.exitBlock, targetId: merge.id)
+		end 'branchToMerge'
+
+		// A carried var needs a merge phi iff its value is not identical across every reaching arm.
+		var differs = BoolArray.create()
+		for k in 0 upto carried.count() 'eachVar'
+			let v0 = try firstArm.exitVals.get(k) otherwise panic("finalizeMatchMerge: exitVals.get OOB at {k}")
+			var anyDiff = false
+			for i in 1 upto reachingArms.count() 'eachArm'
+				let arm = try reachingArms.get(i) otherwise panic("finalizeMatchMerge: reachingArms.get OOB at {i}")
+				let vi = try arm.exitVals.get(k) otherwise panic("finalizeMatchMerge: exitVals.get OOB at {k}")
+				if vi != v0 'diff'
+					anyDiff = true
+				end 'diff'
+			end 'eachArm'
+			differs.push(anyDiff)
+		end 'eachVar'
+
+		// Mint the merge block-args. The result phi (if any) leads, so it is block-arg 0 and every
+		// edge lists its `gives` value first.
+		var result = MatchGiveValue.none
+		if isExpression 'resultPhi'
+			let firstGive = self.giveValueOf(firstArm)
+			let giveType = self.typeOf(firstGive)
+			let phiId = self.mintPhi(merge, tag: maxonTypeTag(giveType), nameId: typeNameIdOf(giveType))
+			result = MatchGiveValue.value(phiId)
+		end 'resultPhi'
+
+		for k in 0 upto carried.count() 'setBindings'
+			var binding = try carried.get(k) otherwise panic("finalizeMatchMerge: carried.get OOB at {k}")
+			let isDifferent = try differs.get(k) otherwise panic("finalizeMatchMerge: differs.get OOB at {k}")
+			if isDifferent 'phiVar'
+				binding.boundValue = self.mintPhiForBinding(merge, binding: binding)
+			end 'phiVar' else 'common'
+				binding.boundValue = try firstArm.exitVals.get(k) otherwise panic("finalizeMatchMerge: exitVals.get OOB at {k}")
+			end 'common'
+		end 'setBindings'
+
+		// Record each reaching arm's edge args, in the block-arg order minted above.
+		for i in 0 upto reachingArms.count() 'recordEdges'
+			var arm = try reachingArms.get(i) otherwise panic("finalizeMatchMerge: reachingArms.get OOB at {i}")
+			var argIds = ValueIdArray.create()
+			if isExpression 'giveArg'
+				argIds.push(self.giveValueOf(arm))
+			end 'giveArg'
+			for k in 0 upto carried.count() 'eachVarArg'
+				let isDifferent = try differs.get(k) otherwise panic("finalizeMatchMerge: differs.get OOB at {k}")
+				if isDifferent 'diffArg'
+					argIds.push(try arm.exitVals.get(k) otherwise panic("finalizeMatchMerge: exitVals.get OOB at {k}"))
+				end 'diffArg'
+			end 'eachVarArg'
+			self.recordBranchEdge(arm.exitBlock, targetId: merge.id, argIds: argIds)
+		end 'recordEdges'
+
+		return MatchOutcome.create(merge, result: result)
+	end 'finalizeMatchMerge'
+
+	// The `gives` value an expression arm carries. Only ever asked of an expression-match arm, so a
+	// `none` is a parser invariant break, not a program error.
+	function giveValueOf(arm MatchArmExit) returns ValueId
+		match arm.give 'g'
+			value(id) then return id
+			none then panic("giveValueOf: an expression-match arm carries no `gives` value")
+		end 'g'
+	end 'giveValueOf'
+
+	// Emit one arm's pattern as a single boolean condition, OR-folding the alternatives (`1 or 2 or
+	// 3`). Records single-value patterns for the duplicate check and rejects a pattern whose type
+	// cannot be compared to the scrutinee (E2028). Emits into `currentBlock`.
+	function emitPatternCondition(scrut ValueId, scrutTag ValueTypeTag, seenValues ParsedIntArray) returns ValueId throws ParseError
+		var cond = try self.emitPatternAtom(scrut, scrutTag: scrutTag, seenValues: seenValues)
+		while self.at(TokenKind.or) 'orChain'
+			let orTok = try self.consume(TokenKind.or)
+			let rhs = try self.emitPatternAtom(scrut, scrutTag: scrutTag, seenValues: seenValues)
+			cond = try self.emitBinOp(cond, rhs: rhs, op: MaxonBinOp.bitOr, opTok: orTok)
+		end 'orChain'
+		return cond
+	end 'emitPatternCondition'
+
+	// One alternative of a pattern: an open-lower range (`min to/upto hi`), a closed/open-upper
+	// range (`lo to/upto hi`, `lo to max`), or a single value.
+	function emitPatternAtom(scrut ValueId, scrutTag ValueTypeTag, seenValues ParsedIntArray) returns ValueId throws ParseError
+		let startTok = self.current()
+
+		if self.isOpenBoundIdentifier(startTok, marker: MinBoundField) 'openLower'
+			self.advance()
+			return try self.emitOpenLowerRange(scrut, scrutTag: scrutTag)
+		end 'openLower'
+
+		let lo = try self.emitPatternValue(scrutTag)
+
+		if self.at(TokenKind.to) or self.at(TokenKind.upto) 'rangeArm'
+			let isUpto = self.at(TokenKind.upto)
+			let rangeTok = self.current()
+			self.advance()
+			return try self.emitClosedRange(scrut, scrutTag: scrutTag, loValue: lo, isUpto: isUpto, rangeTok: rangeTok)
+		end 'rangeArm'
+
+		// A single value: `scrut == lo`.
+		try self.checkAndRecordDuplicate(lo, seenValues: seenValues, patternTok: startTok)
+		return try self.emitCompare(scrut, rhs: lo, op: MaxonCmpOp.eq, opTok: startTok)
+	end 'emitPatternAtom'
+
+	// `min to/upto <hi>` — the lower bound is open, so the condition is just the upper compare. A
+	// `min to max` covers every value: a constant `true`.
+	function emitOpenLowerRange(scrut ValueId, scrutTag ValueTypeTag) returns ValueId throws ParseError
+		if not (self.at(TokenKind.to) or self.at(TokenKind.upto)) 'notRange'
+			let notRangeTok = self.current()
+			throw ParseError.unexpectedToken(TokenKind.to.rawValue, got: notRangeTok.kind.rawValue, line: notRangeTok.line, column: notRangeTok.column)
+		end 'notRange'
+		let isUpto = self.at(TokenKind.upto)
+		let rangeTok = self.current()
+		self.advance()
+
+		if self.isOpenBoundIdentifier(self.current(), marker: MaxBoundField) 'openBoth'
+			self.advance()
+			return self.emitLiteral(BoolTrueValue, valueType: MaxonType.boolean, range: SourceRange.ofToken(rangeTok))
+		end 'openBoth'
+
+		let hi = try self.emitPatternValue(scrutTag)
+		return try self.emitCompare(scrut, rhs: hi, op: self.rangeUpperCmpOp(isUpto), opTok: rangeTok)
+	end 'emitOpenLowerRange'
+
+	// `lo to/upto <hi>` where `lo` is already emitted — a two-compare AND, or (`lo to max`) just the
+	// lower compare.
+	function emitClosedRange(scrut ValueId, scrutTag ValueTypeTag, loValue ValueId, isUpto bool, rangeTok Token) returns ValueId throws ParseError
+		if self.isOpenBoundIdentifier(self.current(), marker: MaxBoundField) 'openUpper'
+			self.advance()
+			return try self.emitCompare(scrut, rhs: loValue, op: MaxonCmpOp.ge, opTok: rangeTok)
+		end 'openUpper'
+
+		let hi = try self.emitPatternValue(scrutTag)
+		let loCmp = try self.emitCompare(scrut, rhs: loValue, op: MaxonCmpOp.ge, opTok: rangeTok)
+		let hiCmp = try self.emitCompare(scrut, rhs: hi, op: self.rangeUpperCmpOp(isUpto), opTok: rangeTok)
+		return try self.emitBinOp(loCmp, rhs: hiCmp, op: MaxonBinOp.bitAnd, opTok: rangeTok)
+	end 'emitClosedRange'
+
+	// The upper-bound comparison: `<` for `upto` (exclusive), `<=` for `to` (inclusive).
+	function rangeUpperCmpOp(isUpto bool) returns MaxonCmpOp
+		if isUpto 'exclusive'
+			return MaxonCmpOp.lt
+		end 'exclusive'
+		return MaxonCmpOp.le
+	end 'rangeUpperCmpOp'
+
+	// Parse a pattern LITERAL (a value or a range bound): an optional `-`, then an int/float/bool/
+	// character literal. Emits it and checks it is comparable to the scrutinee (E2028). A string
+	// literal is E2028 (`"one"` on an `int` scrutinee); `min`/`max` are the caller's, not a value.
+	function emitPatternValue(scrutTag ValueTypeTag) returns ValueId throws ParseError
+		let firstTok = self.current()
+
+		if self.at(TokenKind.stringLiteral) 'stringPattern'
+			throw ParseError.matchPatternTypeMismatch("String", scrutineeType: typeTagName(scrutTag), line: firstTok.line, column: firstTok.column)
+		end 'stringPattern'
+
+		if self.at(TokenKind.minus) 'negated'
+			try self.consume(TokenKind.minus)
+			let negValue = try self.emitNegatedPatternValue(firstTok)
+			return try self.checkPatternType(negValue, scrutTag: scrutTag, patternTok: firstTok)
+		end 'negated'
+
+		if self.at(TokenKind.intLiteral) 'intPattern'
+			let intValue = try self.parseIntLiteral()
+			return try self.checkPatternType(intValue, scrutTag: scrutTag, patternTok: firstTok)
+		end 'intPattern'
+
+		if self.at(TokenKind.floatLiteral) 'floatPattern'
+			let floatValue = try self.parseFloatLiteral()
+			return try self.checkPatternType(floatValue, scrutTag: scrutTag, patternTok: firstTok)
+		end 'floatPattern'
+
+		if self.at(TokenKind.true) or self.at(TokenKind.false) 'boolPattern'
+			let boolValue = try self.parseBoolLiteral()
+			return try self.checkPatternType(boolValue, scrutTag: scrutTag, patternTok: firstTok)
+		end 'boolPattern'
+
+		if self.at(TokenKind.charLiteral) 'charPattern'
+			let charValue = try self.parseCharLiteral()
+			return try self.checkPatternType(charValue, scrutTag: scrutTag, patternTok: firstTok)
+		end 'charPattern'
+
+		// A bare identifier (that is not `min`/`max`, handled by the caller) is an enum-case pattern.
+		if self.at(TokenKind.identifier) 'enumCasePattern'
+			throw ParseError.unsupported("a match pattern naming '{String.from(firstTok.value)}' (only literal, range, and 'or' patterns over a scalar are supported; enum-case patterns arrive in a later wave)", line: firstTok.line, column: firstTok.column)
+		end 'enumCasePattern'
+
+		throw ParseError.expectedExpression(firstTok.kind.rawValue, line: firstTok.line, column: firstTok.column)
+	end 'emitPatternValue'
+
+	// The value after a pattern's `-`: a negated int, or `0.0 - x` for a float. Any other token
+	// after `-` has no numeric meaning to negate.
+	function emitNegatedPatternValue(minusTok Token) returns ValueId throws ParseError
+		if self.at(TokenKind.intLiteral) 'negInt'
+			let tok = try self.consume(TokenKind.intLiteral)
+			let v = try self.intLiteralValue(tok, negated: true)
+			return self.emitLiteral(v, valueType: MaxonType.integer, range: SourceRange.ofToken(minusTok))
+		end 'negInt'
+
+		if self.at(TokenKind.floatLiteral) 'negFloat'
+			let base = try self.parseFloatLiteral()
+			return try self.emitFloatNegation(base, opTok: minusTok)
+		end 'negFloat'
+
+		let operandTok = self.current()
+		throw ParseError.nonNumericNegation(operandTok.kind.rawValue, line: minusTok.line, column: minusTok.column)
+	end 'emitNegatedPatternValue'
+
+	// A pattern value must be comparable to the scrutinee — the same DOMAIN rule `emitCompare`
+	// applies, asked HERE so the failure is the match-specific E2028 rather than the comparison's
+	// E3005. `emitCompare` therefore never rejects a pattern it is handed.
+	function checkPatternType(value ValueId, scrutTag ValueTypeTag, patternTok Token) returns ValueId throws ParseError
+		let valTag = self.tagOf(value)
+		if not comparableOperands(scrutTag, right: valTag) 'mismatch'
+			throw ParseError.matchPatternTypeMismatch(typeTagName(valTag), scrutineeType: typeTagName(scrutTag), line: patternTok.line, column: patternTok.column)
+		end 'mismatch'
+		return value
+	end 'checkPatternType'
+
+	// Record a single-value pattern for duplicate detection, or raise E2027 if it repeats one. Only
+	// KNOWN-constant patterns (integer literals) participate; a float literal's bits are not tracked
+	// as a constant (see `parseFloatLiteral`), and no corpus case tests a duplicate float.
+	function checkAndRecordDuplicate(value ValueId, seenValues ParsedIntArray, patternTok Token) throws ParseError
+		if not self.constIsKnown(value) 'notConst'
+			return
+		end 'notConst'
+
+		let folded = self.constOf(value)
+		for i in 0 upto seenValues.count() 'seen'
+			let prev = try seenValues.get(i) otherwise panic("checkAndRecordDuplicate: seenValues.get OOB at {i}")
+			if prev == folded 'duplicate'
+				throw ParseError.matchDuplicatePattern("{folded}", line: patternTok.line, column: patternTok.column)
+			end 'duplicate'
+		end 'seen'
+		seenValues.push(folded)
+	end 'checkAndRecordDuplicate'
+
+	// Does `tok` name an open range bound (`min` / `max`) — an identifier whose text is the marker?
+	// `min`/`max` lex as identifiers (they are not keywords), and appear only in a range, so their
+	// text alone decides it. The bound-field constants spell the same two words the ranged-typealias
+	// `.min` / `.max` do, deliberately: it is one lexical fact, not two.
+	function isOpenBoundIdentifier(tok Token, marker ByteArray) returns bool
+		return tok.kind == TokenKind.identifier and tok.value.equals(marker)
+	end 'isOpenBoundIdentifier'
 
 	// Mint a phi (block-arg) on `block` and return its fresh ValueId. The ONE mint site for
 	// every merge phi the parser makes — if-continuation, loop header, loop exit, and (new
@@ -3820,6 +4465,16 @@ export type Parser
 			if prec == NotAnInfixOperator or prec < minPrec 'stop'
 				break
 			end 'stop'
+
+			// `and fallthrough` ends a match arm's body — it is the fallthrough SUFFIX, not a
+			// bitwise `and`. `fallthrough` is a keyword and can never be a variable, so `and
+			// fallthrough` has no reading as an expression ANYWHERE in the language; stopping the
+			// climb here hands the suffix intact to the match arm parser (P1.1b wave A), which either
+			// consumes it or — in a match EXPRESSION arm — rejects the stray `and` (E2001). No mode
+			// flag is needed precisely because the pairing is unambiguous everywhere.
+			if opTok.kind == TokenKind.and and self.peekKind() == TokenKind.fallthrough 'fallthroughSuffix'
+				break
+			end 'fallthroughSuffix'
 
 			// The short-circuit test reads the LEFT operand's type only, and reads it BEFORE
 			// the right operand is parsed — it has to, because whether the right operand is
@@ -4331,6 +4986,15 @@ export type Parser
 		if self.at(TokenKind.leftParen) 'group'
 			return try self.parseParenthesizedExpression(func)
 		end 'group'
+
+		// `match <expr> 'label' … end 'label'` in value position — `let r = match …`, `return
+		// match …`, `match … * 2`. A distinct parser gap from the statement form: the expression
+		// parser had no `match` arm at all (E2004 `Expected expression but got 'match'`), where the
+		// statement parser reached lowering before failing (E2015). It leaves control in the merge
+		// block and yields the merge's result phi, exactly as `emitShortCircuit` does.
+		if self.at(TokenKind.match) 'matchExpr'
+			return try self.parseMatchExpression(func)
+		end 'matchExpr'
 
 		// `Self{…}` — a struct literal naming the enclosing type. `Self` is its own KEYWORD token, not
 		// an identifier, so it cannot ride the identifier arm below; and `{` is what tells it from

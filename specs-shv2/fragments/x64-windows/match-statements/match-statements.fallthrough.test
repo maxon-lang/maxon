@@ -1,0 +1,43 @@
+// Test: match-statements.fallthrough
+function main() returns ExitCode
+	let x = 1
+	var result = 0
+	match x 'check'
+		1 then result = result + 10 and fallthrough
+		2 then result = result + 20
+		default then result = result + 100
+	end 'check'
+	return result
+end 'main'
+---
+ExitCode: 30
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 rax, 1
+    x64.movRegImm32 rcx, 0
+    x64.cmpRegImm32 rax, 1
+    x64.jcc equal, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.leaRegRegImm32 rax, rcx, 10
+    x64.jmp matcharm
+  matchnext:
+    x64.cmpRegImm32 rax, 2
+    x64.jcc equal, critsplit
+    x64.jmp matchnext
+  critsplit:
+    x64.movRegReg rax, rcx
+    x64.jmp matcharm
+  matcharm:
+    x64.leaRegRegImm32 r8, rax, 20
+    x64.jmp matchcont
+  matchnext:
+    x64.leaRegRegImm32 r8, rcx, 100
+    x64.jmp matchcont
+  matchcont:
+    x64.popReg rbp
+    x64.ret
+}

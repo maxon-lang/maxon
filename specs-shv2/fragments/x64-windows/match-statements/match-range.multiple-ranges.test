@@ -1,0 +1,62 @@
+// Test: match-range.multiple-ranges
+function main() returns ExitCode
+	let score = 85
+	match score 'grade'
+		90 to 100 then return 65
+		80 upto 90 then return 66
+		70 upto 80 then return 67
+		default then return 70
+	end 'grade'
+end 'main'
+---
+ExitCode: 66
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 rax, 85
+    x64.cmpRegImm32 rax, 90
+    x64.setccReg greaterEqual, rcx
+    x64.cmpRegImm32 rax, 100
+    x64.setccReg lessEqual, rdx
+    x64.andRegReg rcx, rcx, rdx
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.movRegImm32 r8, 65
+    x64.popReg rbp
+    x64.ret
+  matchnext:
+    x64.cmpRegImm32 rax, 80
+    x64.setccReg greaterEqual, rcx
+    x64.cmpRegImm32 rax, 90
+    x64.setccReg less, rdx
+    x64.andRegReg rcx, rcx, rdx
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.movRegImm32 r8, 66
+    x64.popReg rbp
+    x64.ret
+  matchnext:
+    x64.cmpRegImm32 rax, 70
+    x64.setccReg greaterEqual, rcx
+    x64.cmpRegImm32 rax, 80
+    x64.setccReg less, rax
+    x64.andRegReg rcx, rcx, rax
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.movRegImm32 r8, 67
+    x64.popReg rbp
+    x64.ret
+  matchnext:
+    x64.movRegImm32 r8, 70
+    x64.popReg rbp
+    x64.ret
+  matchcont:
+}

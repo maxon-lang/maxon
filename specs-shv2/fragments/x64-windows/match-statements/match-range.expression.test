@@ -1,0 +1,64 @@
+// Test: match-range.expression
+function main() returns ExitCode
+	let temp = 22
+	let category = match temp 'weather'
+		min upto 0 gives 1
+		0 upto 15 gives 2
+		15 upto 25 gives 3
+		25 to max gives 4
+		default gives 0
+	end 'weather'
+	return category
+end 'main'
+---
+ExitCode: 3
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 rax, 22
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.movRegImm32 r8, 1
+    x64.jmp matchcont
+  matchnext:
+    x64.cmpRegImm32 rax, 0
+    x64.setccReg greaterEqual, rcx
+    x64.cmpRegImm32 rax, 15
+    x64.setccReg less, rdx
+    x64.andRegReg rcx, rcx, rdx
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.movRegImm32 r8, 2
+    x64.jmp matchcont
+  matchnext:
+    x64.cmpRegImm32 rax, 15
+    x64.setccReg greaterEqual, rcx
+    x64.cmpRegImm32 rax, 25
+    x64.setccReg less, rdx
+    x64.andRegReg rcx, rcx, rdx
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.movRegImm32 r8, 3
+    x64.jmp matchcont
+  matchnext:
+    x64.cmpRegImm32 rax, 25
+    x64.jcc greaterEqual, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.movRegImm32 r8, 4
+    x64.jmp matchcont
+  matchnext:
+    x64.movRegImm32 r8, 0
+    x64.jmp matchcont
+  matchcont:
+    x64.popReg rbp
+    x64.ret
+}

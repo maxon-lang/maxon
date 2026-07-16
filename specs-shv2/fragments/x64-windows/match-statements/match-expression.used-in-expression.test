@@ -1,0 +1,39 @@
+// Test: match-expression.used-in-expression
+function main() returns ExitCode
+	let x = 2
+	let doubled = match x 'eval'
+		1 gives 10
+		2 gives 20
+		default gives 0
+	end 'eval' * 2
+	return doubled
+end 'main'
+---
+ExitCode: 40
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 rax, 2
+    x64.cmpRegImm32 rax, 1
+    x64.jcc equal, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.movRegImm32 rax, 10
+    x64.jmp matchcont
+  matchnext:
+    x64.cmpRegImm32 rax, 2
+    x64.jcc equal, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.movRegImm32 rax, 20
+    x64.jmp matchcont
+  matchnext:
+    x64.movRegImm32 rax, 0
+    x64.jmp matchcont
+  matchcont:
+    x64.imulRegRegImm32 r8, rax, 2
+    x64.popReg rbp
+    x64.ret
+}
