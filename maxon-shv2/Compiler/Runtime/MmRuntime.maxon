@@ -97,14 +97,18 @@ end 'isRuntimeCallee'
 // reservation at parse time (`E2051 ParserReservedIdentifier` — "declarations starting with '__' are
 // reserved for compiler internals"), so no user name can collide there.
 //
-// ⚠ **shv2 DOES NOT YET EMIT E2051** (`docs/error-codes.txt` lists no `shv2` claim on it), so this
-// predicate is NOT a proof the callee is compiler-owned — it is only a "skip the user-function checks"
-// test. A user CAN today declare and call a `__`-prefixed function, and `isCompilerInternalCallee`
-// then routes that call past `validateCall`'s arity/label checks: a SILENT MISCOMPILE (measured —
-// `__add(7)` against a two-parameter `__add` compiles and runs with the second argument uninitialised,
-// where the bootstrap rejects the declaration outright). The predicate is safe only once shv2 emits
-// E2051 for `__`-prefixed declarations; until then this is a known gap and MUST NOT be relied on as a
-// user/compiler boundary.
+// ⭐ **THE RESERVATION IS NOW ENFORCED, SO THIS PREDICATE IS SOUND** (OPEN.md #35, CLOSED). shv2 emits
+// E2051 for any `__`-prefixed DECLARATION (`Parser.requireUnreservedName`, at all eight binding sites;
+// the shv2 claim is in `docs/error-codes.txt` and the `reserved-double-underscore.md` suite pins it).
+// Because no user name can be DECLARED with this prefix, a `__` CALLEE is provably compiler-owned, and
+// skipping its user-function checks below is safe rather than hopeful — this reservation is the missing
+// precondition the widened predicate was always written to depend on.
+//
+// It closed a SILENT MISCOMPILE the widening had opened: before E2051, a user could declare and call a
+// `__`-prefixed function (measured — `__add(7)` against a two-parameter `__add` compiled and ran with
+// the second argument uninitialised, exit 65543, where the bootstrap rejects the declaration outright),
+// because `isCompilerInternalCallee` routed that call past `validateCall`'s arity/label checks. The
+// declaration is now rejected at parse time, so the call can never form.
 let CompilerInternalPrefix = b"__"
 
 // ⭐ **IS THIS CALLEE ONE OF THE COMPILER'S OWN?** The GENERAL predicate — a superset of

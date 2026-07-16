@@ -416,6 +416,15 @@ export union ParseError implements Error
 	// A range arm `high to low` whose upper case is declared BEFORE its lower case, so it covers no
 	// cases. Renders as **E2027**, positioned at the range. `low`/`high` are the case names written.
 	matchEmptyRange(low String, high String, line LineNumber, column ColumnNumber)
+	// --- The reserved-name arm (P1.2 follow-up) ---
+	//
+	// A user DECLARATION whose name starts with `__` — the prefix Maxon reserves for compiler
+	// internals (`__mm_alloc`, `__print_string`, `__destruct_String`, the `__discard_*` temporaries).
+	// Renders as **E2051**, positioned at the declared name. Raised by `requireUnreservedName` at every
+	// binding site — see there for why one call cannot be traded for eight copies of the check, and
+	// why this reservation is what makes `MmRuntime.isCompilerInternalCallee` sound rather than a
+	// hopeful shortcut. `name` is the offending identifier, for the message.
+	reservedIdentifier(name String, line LineNumber, column ColumnNumber)
 end 'ParseError'
 
 // **THE NAME OF THE RECEIVER PARAMETER.** An instance method's parameter 0, pushed by
@@ -432,6 +441,19 @@ end 'ParseError'
 // KEYWORD's own text, which no parameter can ever be called) closes it for free but departs from
 // both references' convention, so it is recorded here rather than taken unilaterally.
 let SelfParamName = b"__self"
+
+// The prefix Maxon RESERVES for compiler-internal names — every symbol the compiler emits
+// (`__mm_alloc`, `__print_string`, `__destruct_String`, the `__discard_*` parser temporaries, and
+// `__self` above) starts with it. `requireUnreservedName` forbids a USER DECLARATION from taking it.
+//
+// It is the same value `MmRuntime.CompilerInternalPrefix` tests a CALLEE against, and deliberately so:
+// the two are the two ends of one fact. That predicate skips a `__`-named callee's user-function
+// checks on the promise that no user `__` name exists — a promise ONLY this reservation can keep. The
+// value is duplicated across the two modules rather than shared because they answer opposite questions
+// at opposite tiers (a parser reading USER TOKENS; a lowering reading EMITTED CALLEES) and a runtime
+// module owning the parser's reservation, or the reverse, would be the worse coupling. The language
+// rule that `__` is reserved is what binds them, not a shared symbol.
+let ReservedNamePrefix = b"__"
 
 // The receiver a call carries, if any. A union rather than a `ValueId` plus a bool, and rather
 // than a reserved id: `ValueId` has no empty value and a sentinel would be READ as a real argument
@@ -1881,6 +1903,10 @@ export type Parser
 		try self.consume(TokenKind.var if mutable else TokenKind.let)
 
 		let nameTok = try self.consume(TokenKind.identifier)
+		// A `__`-prefixed field is reserved. This reader is shared with the tolerant sweep
+		// (`recordScannedType`), which swallows the throw (`otherwise break`) and leaves the positioned
+		// diagnostic to the real parse — the sweep is not a validator.
+		try self.requireUnreservedName(nameTok)
 
 		if not self.at(TokenKind.as) 'typeFromLiteral'
 			// Shape 2. There is no annotation to read the type off, so the literal's TOKEN KIND is
@@ -2137,6 +2163,7 @@ export type Parser
 		let mutable = self.at(TokenKind.var)
 		try self.consume(TokenKind.var if mutable else TokenKind.let)
 		let nameTok = try self.consume(TokenKind.identifier)
+		try self.requireUnreservedName(nameTok)
 		try self.consume(TokenKind.equals)
 
 		let initStart = self.pos
@@ -2184,6 +2211,7 @@ export type Parser
 	function readTypeAliasDeclaration() returns RangedTypeAlias throws ParseError
 		try self.consume(TokenKind.typealias)
 		let nameTok = try self.consume(TokenKind.identifier)
+		try self.requireUnreservedName(nameTok)
 		try self.consume(TokenKind.equals)
 
 		// `int(...)` only. A `float(...)` alias needs float literals for its bounds, a
@@ -2313,6 +2341,9 @@ export type Parser
 	// are declared BELOW its methods parses identically to one that declares them above.
 	function parseTypeDeclaration() throws ParseError
 		let nameTok = try self.readTypeHeader()
+		// The real parse alone rejects a reserved `type __T` — `readTypeHeader` stays a pure reader
+		// shared with the tolerant sweep, which is not a validator (see `recordScannedType`).
+		try self.requireUnreservedName(nameTok)
 		self.enclosingType = nameTok.value
 
 		var layout = StructLayout.create(nameTok.value)
@@ -2436,6 +2467,11 @@ export type Parser
 	function readEnumCaseInto(layout EnumLayout, state EnumBackingState) throws ParseError
 		let nameTok = try self.readEnumCaseNameToken()
 		let caseName = nameTok.value
+
+		// A `__`-prefixed case is reserved. Checked before the duplicate/backing rules so the
+		// reservation is reported at the name, and — as with the field reader — the tolerant sweep
+		// (`recordScannedEnum`) swallows the throw and leaves the diagnostic to the real parse.
+		try self.requireUnreservedName(nameTok)
 
 		// E3030 — checked at the second declaration, as the bootstrap positions it.
 		if layout.hasCase(caseName) 'duplicateCase'
@@ -2591,6 +2627,10 @@ export type Parser
 	function parseFunction(visibility Visibility, takesReceiver bool) throws ParseError
 		try self.consume(TokenKind.function)
 		let nameTok = try self.consume(TokenKind.identifier)
+		// The BARE name only — a method's `Type.` qualification is applied below by
+		// `declaredMethodName`, so `Point.create` is checked as `create` and the reserved test never
+		// sees the type prefix (`Self` is fine; a `__method` name is not).
+		try self.requireUnreservedName(nameTok)
 		// `Point.create` inside `type Point`, the bare token at file scope. The SAME derivation the
 		// declaration sweep records the signature under, so the key an `IrFunction` carries and the
 		// key `mintCallResult` types a call from are one name.
@@ -2773,6 +2813,7 @@ export type Parser
 
 		while true 'paramLoop'
 			let nameTok = try self.consume(TokenKind.identifier)
+			try self.requireUnreservedName(nameTok)
 			let paramType = try self.parseTypeReference()
 
 			if self.at(TokenKind.equals) 'hasDefault'
@@ -3057,6 +3098,7 @@ export type Parser
 		end 'isLet'
 
 		let nameTok = try self.consume(TokenKind.identifier)
+		try self.requireUnreservedName(nameTok)
 		try self.consume(TokenKind.equals)
 		let value = try self.parseExpression(func, block: block)
 		// A local taking the name of a field of the enclosing type is E3006, not a shadow — see
@@ -3262,6 +3304,28 @@ export type Parser
 			throw ParseError.assignToImmutable(String.from(nameTok.value), line: nameTok.line, column: nameTok.column)
 		end 'immutable'
 	end 'requireMutableBinding'
+
+	// **THE `__`-RESERVATION RULE, IN ONE PLACE.** A user may not DECLARE a name that starts with the
+	// prefix Maxon reserves for compiler internals (see `ReservedNamePrefix`). Raised as E2051 at the
+	// declared name — the token the user has to change.
+	//
+	// ⚠ It is called at EIGHT binding sites — function/method name, parameter, top-level and body
+	// `let`/`var`, `type` name, struct field, `typealias` name, enum/union case — and it is ONE call
+	// at each, never eight copies of `bytesStartWith(…, b"__")` + the message. That the rule reads
+	// once is the whole point: eight copies is this project's signature bug, and a reservation that
+	// held at seven sites and lapsed at the eighth would be a SILENT hole (a user `__`-name accepted
+	// there), not a compile error — exactly the class of defect this rung exists to close.
+	//
+	// ⭐ It sees only USER SOURCE TOKENS, which is why it does not — and structurally CANNOT — reject
+	// the compiler's own `__` functions: `__mm_alloc`, `__print_string`, `__destruct_*` are built by
+	// `IrFunction.createFromStd` and never pass through the parser. That is what makes the reservation
+	// safe to lean on: once no user `__` name can be declared, `MmRuntime.isCompilerInternalCallee`'s
+	// "skip the user-function checks" shortcut is provably sound rather than a hopeful one.
+	function requireUnreservedName(nameTok Token) throws ParseError
+		if bytesStartWith(nameTok.value, prefix: ReservedNamePrefix) 'reserved'
+			throw ParseError.reservedIdentifier(String.from(nameTok.value), line: nameTok.line, column: nameTok.column)
+		end 'reserved'
+	end 'requireUnreservedName'
 
 	// The COERCION rule for an ASSIGNMENT — shared by the local path and the global one, which
 	// were already two copies of the same three lines and would now have been two copies of the
