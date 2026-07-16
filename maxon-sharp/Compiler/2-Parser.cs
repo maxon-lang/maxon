@@ -10573,12 +10573,14 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     return (false, null); // not a builtin managed list method
   }
 
-  // String's two byte-access primitives, and the private field they read through. Named rather
-  // than spelled inline: five call sites and two lowering hops share them.
+  // String's byte-access primitives, and the private field they read through. Named rather
+  // than spelled inline: several call sites and two lowering hops share them.
   private const string StringTypeName = "String";
   private const string StringManagedFieldName = "managed";
   private const string StringByteAtMethodName = "byteAt";
   private const string StringByteLengthMethodName = "byteLength";
+  private const string StringMakeCharFromBytesMethodName = "makeCharFromBytes";
+  private const string StringSetByteMethodName = "setByte";
 
   /// The compiler-internal managed types: the user cannot construct one (E3072), and every method
   /// they have is an inlined builtin. Membership is a property of the TYPE alone — which is why
@@ -10599,18 +10601,25 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
   private static bool IsInlinedStringByteMethod(string baseTypeName, string methodName) =>
     baseTypeName == StringTypeName
-    && methodName is StringByteAtMethodName or StringByteLengthMethodName;
+    && methodName is StringByteAtMethodName or StringByteLengthMethodName
+      or StringMakeCharFromBytesMethodName or StringSetByteMethodName;
 
   /// The `__ManagedMemory` builtin each String byte primitive inlines to. `byteLength` is `length`
-  /// on the buffer; `byteAt` keeps its name.
+  /// on the buffer; the rest keep their names.
   private static string ManagedMemMethodForStringByteMethod(string methodName) => methodName switch {
     StringByteAtMethodName => "byteAt",
     StringByteLengthMethodName => "length",
+    StringMakeCharFromBytesMethodName => "makeCharFromBytes",
+    StringSetByteMethodName => "setByte",
     _ => throw new InvalidOperationException($"not an inlined String byte method: '{methodName}'")
   };
 
   private static bool IsMutatingBuiltinMethod(string baseTypeName, string methodName) =>
     baseTypeName switch {
+      // String's only inlined primitive that WRITES. It reaches the same `__ManagedMemory.setByte`
+      // below, so it has to be declared mutating in both spellings or `var` tracking would miss the
+      // String one and report the receiver as a `var` that is never reassigned.
+      StringTypeName => methodName is StringSetByteMethodName,
       "__ManagedMemory" => methodName is "set" or "remove" or "clear" or "setLength" or "grow"
         or "shiftRight" or "shiftLeft" or "swap" or "setByte" or "append",
       "__ManagedList" => methodName is "insertFirst" or "insertLast" or "insertAfter" or "insertBefore"
@@ -10676,11 +10685,17 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     throw new InvalidOperationException($"TryEmitBuiltinTypeMethod called for non-builtin type '{baseType}'");
   }
 
-  /// Inlines `String.byteAt(i)` / `String.byteLength()` to exactly what their `stdlib/String.maxon`
-  /// bodies say: a read of String's `managed` field, then the corresponding `__ManagedMemory`
-  /// builtin. The Maxon declarations stay — they carry the signature, the `module` visibility and
-  /// the docs, and they remain the normative definition of what this emits — but they are never
-  /// CALLED.
+  /// Inlines `String.byteAt(i)` / `String.byteLength()` / `String.makeCharFromBytes(pos, len)` to
+  /// exactly what their `stdlib/String.maxon` bodies say: a read of String's `managed` field, then
+  /// the corresponding `__ManagedMemory` builtin. The Maxon declarations stay — they carry the
+  /// signature, the `module` visibility and the docs, and they remain the normative definition of
+  /// what this emits — but they are never CALLED.
+  ///
+  /// `makeCharFromBytes` joined them in Stage 4b-1b. It is the one byte read whose RESULT is a
+  /// managed object rather than a scalar: every `Character` the language produces from a string —
+  /// `charAt`, `trim`, and every step of `for c in s` — comes through it. It has to be here for the
+  /// same reason the other two do. `String.maxon` may not reach `managed` to build a Character, and
+  /// a forwarding method would put a call on the per-grapheme path.
   ///
   /// WHY THEY MUST BE INLINE, MEASURED, NOT ASSUMED: the bootstrap has NO inlining pass, so a
   /// forwarding stdlib method is a real call PER BYTE. Stage 4b-1 routed every byte-walker in the
@@ -19207,11 +19222,42 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
     if (matching.Count == 1) return matching[0];
 
+    // Last resort: an UNQUALIFIED call written inside a type means THAT type's method, if it has a
+    // matching one. Candidates come from a short-name lookup across the whole program, so every
+    // `X.create` in the stdlib is a candidate for a bare `create(...)` — and once two types have a
+    // `create` taking the same parameter type, nothing above can separate them: they are identical
+    // signatures, and only the CALL SITE says which was meant.
+    //
+    // Deliberately placed after every other filter and immediately before the throw, so it can only
+    // ever turn an error into a resolution. It cannot rebind a call that resolves today, which is
+    // the whole reason it is safe to add to a resolution rule this old.
+    //
+    // Found by Stage 4b-1b: giving the string views a `create(s String)` made `FilePath.init`'s bare
+    // `create(value)` ambiguous against six of them, in a file the rung never touched. The trap was
+    // always there — the views just happened to take a `__ManagedMemory` before.
+    if (matching.Count > 1 && _currentTypeName != null) {
+      var ownedByCurrentType = matching.Where(c => IsMethodOfType(c, _currentTypeName)).ToList();
+      if (ownedByCurrentType.Count == 1) return ownedByCurrentType[0];
+    }
+
     var matchInfo = string.Join(", ", matching.Select(c =>
       FormatOverloadSignature(c)));
     throw new CompileError(ErrorCode.SemanticAmbiguousFunctionCall,
       $"Ambiguous overload for '{UnmangleName(callToken.Value)}': multiple overloads match. Candidates: {matchInfo}",
       callToken.Line, callToken.Column);
+  }
+
+  /// Is `func` a method of `typeName`? Its name is fully qualified (`stdlib.FilePath.create`) and
+  /// may carry an overload mangling (`create$format`), so the owner is everything before the last
+  /// dot of the un-mangled name.
+  private static bool IsMethodOfType(IrFunction<MaxonOp> func, string typeName) {
+    var name = func.Name;
+    var dollarIdx = name.IndexOf('$');
+    if (dollarIdx >= 0) name = name[..dollarIdx];
+    var lastDot = name.LastIndexOf('.');
+    if (lastDot < 0) return false;
+    var owner = name[..lastDot];
+    return owner == typeName || owner.EndsWith($".{typeName}", StringComparison.Ordinal);
   }
 
   private static string FormatOverloadSignature(IrFunction<MaxonOp> func) {

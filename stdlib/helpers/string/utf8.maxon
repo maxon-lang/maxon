@@ -88,12 +88,18 @@ export function utf8IsValidCodepoint(cp Codepoint) returns bool
 end 'utf8IsValidCodepoint'
 
 // ============================================
-// __ManagedMemory helpers (for internal use by string views)
+// String helpers (for internal use by string views and grapheme scanning)
 // ============================================
+//
+// These take the `String`, not its `__ManagedMemory`, and reach its bytes only through
+// `String.byteAt` — the inline primitive. Stage 4b-2 makes a small `String` a 16-byte VALUE with no
+// record to hand out, so a `__ManagedMemory` parameter here would force one to be MATERIALIZED per
+// call: `utf8DecodeAt` is called once per codepoint by every grapheme scan in the stdlib, so that
+// would be an allocation per codepoint. See `String.byteAt`'s doc for the whole rule.
 
-/// Get the UTF-8 sequence length from the lead byte in a __ManagedMemory
-export function utf8ByteLengthAt(managed __ManagedMemory, pos BytePos) returns ByteWidth
-	let b0 = try managed.byteAt(pos) otherwise 'b0Err'
+/// Get the UTF-8 sequence length from the lead byte at `pos`
+export function utf8ByteLengthAt(s String, pos BytePos) returns ByteWidth
+	let b0 = try s.byteAt(pos) otherwise 'b0Err'
 		panic("utf8ByteLengthAt: pos out of bounds — caller guarantees valid position")
 	end 'b0Err'
 	if b0 < 128 'ascii'
@@ -108,36 +114,36 @@ export function utf8ByteLengthAt(managed __ManagedMemory, pos BytePos) returns B
 	return 4
 end 'utf8ByteLengthAt'
 
-/// Decode a UTF-8 codepoint from a __ManagedMemory at the given position
-export function utf8DecodeAt(managed __ManagedMemory, pos BytePos) returns Codepoint
-	let b0 = try managed.byteAt(pos) otherwise 'b0Err'
+/// Decode the UTF-8 codepoint at the given byte position
+export function utf8DecodeAt(s String, pos BytePos) returns Codepoint
+	let b0 = try s.byteAt(pos) otherwise 'b0Err'
 		panic("utf8DecodeAt: pos out of bounds — caller guarantees valid position")
 	end 'b0Err'
 	if b0 < 128 'ascii'
 		return b0
 	end 'ascii'
 	if b0 < 224 'two'
-		let b1 = try managed.byteAt(pos + 1) otherwise 'b1Err'
+		let b1 = try s.byteAt(pos + 1) otherwise 'b1Err'
 			panic("utf8DecodeAt: 2-byte seq continuation out of bounds")
 		end 'b1Err'
 		return ((b0 mod 32) * 64) + (b1 mod 64)
 	end 'two'
 	if b0 < 240 'three'
-		let b1 = try managed.byteAt(pos + 1) otherwise 'b1Err2'
+		let b1 = try s.byteAt(pos + 1) otherwise 'b1Err2'
 			panic("utf8DecodeAt: 3-byte seq byte 1 out of bounds")
 		end 'b1Err2'
-		let b2 = try managed.byteAt(pos + 2) otherwise 'b2Err'
+		let b2 = try s.byteAt(pos + 2) otherwise 'b2Err'
 			panic("utf8DecodeAt: 3-byte seq byte 2 out of bounds")
 		end 'b2Err'
 		return ((b0 mod 16) * 4096) + ((b1 mod 64) * 64) + (b2 mod 64)
 	end 'three'
-	let b1 = try managed.byteAt(pos + 1) otherwise 'b1Err3'
+	let b1 = try s.byteAt(pos + 1) otherwise 'b1Err3'
 		panic("utf8DecodeAt: 4-byte seq byte 1 out of bounds")
 	end 'b1Err3'
-	let b2 = try managed.byteAt(pos + 2) otherwise 'b2Err2'
+	let b2 = try s.byteAt(pos + 2) otherwise 'b2Err2'
 		panic("utf8DecodeAt: 4-byte seq byte 2 out of bounds")
 	end 'b2Err2'
-	let b3 = try managed.byteAt(pos + 3) otherwise 'b3Err'
+	let b3 = try s.byteAt(pos + 3) otherwise 'b3Err'
 		panic("utf8DecodeAt: 4-byte seq byte 3 out of bounds")
 	end 'b3Err'
 	return ((b0 mod 8) * 262144) + ((b1 mod 64) * 4096) + ((b2 mod 64) * 64) + (b3 mod 64)

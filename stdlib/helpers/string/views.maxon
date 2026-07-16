@@ -5,6 +5,18 @@
 // The view itself is cheap to construct — creating a view does not throw.
 // All iterators maintain the Iterator invariant: current() is infallible;
 // advance() throws IterationError.exhausted at end.
+//
+// A view and its iterator hold the `String`, not its `__ManagedMemory`, and this is the whole
+// reason they were touched in Stage 4b-1b. A record reference here ESCAPES THE FRAME — the view
+// outlives the `s.bytes()` call that made it — so under 4b-2, where a small `String` is a 16-byte
+// VALUE with no record, the field would have to be MATERIALIZED to be stored, and the caller-frame
+// spill that makes `byteAt` work cannot reach a field that outlives the frame. A `String` field is
+// the value itself: 16 bytes, copied, nothing allocated. Same reasoning as `StringIterator`.
+//
+// The cost lands on `Character.bytes()` / `Character.codepoints()`, whose source is a Character —
+// a record forever, unaffected by 4b-2 — and which now pay a `toString()` to be iterated. That is
+// the right side to charge: a Character holds one grapheme and is rarely iterated byte-wise, while
+// String iteration is everywhere and is exactly what SSO exists to make free.
 
 // ByteCount, BytePos exported by stdlib/String.maxon.
 typealias CodepointCount = int(0 to u64.max)
@@ -17,35 +29,35 @@ typealias Byte = int(0 to u8.max)
 // ============================================
 
 export type ByteView implements Iterable with (Byte, ByteIterator)
-	var managed as __ManagedMemory
+	var s as String
 
-	export static function create(managed __ManagedMemory) returns ByteView
-		return ByteView{managed: managed}
+	export static function create(s String) returns ByteView
+		return ByteView{s: s}
 	end 'create'
 
 	export function createIterator() returns ByteIterator throws IterationError
-		return try ByteIterator.create(managed)
+		return try ByteIterator.create(s)
 	end 'createIterator'
 
 	/// Number of bytes
 	export function count() returns ByteCount
-		return managed.length()
+		return s.byteLength()
 	end 'count'
 end 'ByteView'
 
 export type ByteIterator implements Iterator with Byte
-	var managed as __ManagedMemory
+	var s as String
 	var pos as BytePos
 	var currentByte as Byte
 
-	export static function create(managed __ManagedMemory) returns Self throws IterationError
-		if managed.length() == 0 'empty'
+	export static function create(s String) returns Self throws IterationError
+		if s.byteLength() == 0 'empty'
 			throw IterationError.exhausted
 		end 'empty'
-		let firstByte = try managed.byteAt(0) otherwise 'byteErr'
-			panic("ByteIterator.create: managed empty after length check — impossible")
+		let firstByte = try s.byteAt(0) otherwise 'byteErr'
+			panic("ByteIterator.create: string empty after length check — impossible")
 		end 'byteErr'
-		return Self{managed: managed, pos: 0, currentByte: firstByte}
+		return Self{s: s, pos: 0, currentByte: firstByte}
 	end 'create'
 
 	export function current() returns Byte
@@ -54,11 +66,11 @@ export type ByteIterator implements Iterator with Byte
 
 	export function advance() throws IterationError
 		let nextPos = pos + 1
-		if nextPos >= managed.length() 'done'
+		if nextPos >= s.byteLength() 'done'
 			throw IterationError.exhausted
 		end 'done'
 		pos = nextPos
-		currentByte = try managed.byteAt(pos) otherwise 'byteErr'
+		currentByte = try s.byteAt(pos) otherwise 'byteErr'
 			panic("ByteIterator.advance: nextPos just validated as < length — impossible")
 		end 'byteErr'
 	end 'advance'
@@ -69,23 +81,23 @@ end 'ByteIterator'
 // ============================================
 
 export type CodepointView implements Iterable with (Codepoint, CodepointIterator)
-	var managed as __ManagedMemory
+	var s as String
 
-	export static function create(managed __ManagedMemory) returns CodepointView
-		return CodepointView{managed: managed}
+	export static function create(s String) returns CodepointView
+		return CodepointView{s: s}
 	end 'create'
 
 	export function createIterator() returns CodepointIterator throws IterationError
-		return try CodepointIterator.create(managed)
+		return try CodepointIterator.create(s)
 	end 'createIterator'
 
 	/// Number of codepoints (linear scan)
 	export function count() returns CodepointCount
 		var count = 0
 		var pos = 0
-		let len = managed.length()
+		let len = s.byteLength()
 		while pos < len 'count_loop'
-			let bytes = utf8ByteLengthAt(managed, pos: pos)
+			let bytes = utf8ByteLengthAt(s, pos: pos)
 			pos = pos + bytes
 			count = count + 1
 		end 'count_loop'
@@ -94,18 +106,18 @@ export type CodepointView implements Iterable with (Codepoint, CodepointIterator
 end 'CodepointView'
 
 export type CodepointIterator implements Iterator with Codepoint
-	var managed as __ManagedMemory
+	var s as String
 	var pos as BytePos
 	var cp as Codepoint
 	var cpByteLen as Utf8ByteWidth
 
-	export static function create(managed __ManagedMemory) returns Self throws IterationError
-		if managed.length() == 0 'empty'
+	export static function create(s String) returns Self throws IterationError
+		if s.byteLength() == 0 'empty'
 			throw IterationError.exhausted
 		end 'empty'
-		let cp = utf8DecodeAt(managed, pos: 0)
-		let len = utf8ByteLengthAt(managed, pos: 0)
-		return Self{managed: managed, pos: 0, cp: cp, cpByteLen: len}
+		let cp = utf8DecodeAt(s, pos: 0)
+		let len = utf8ByteLengthAt(s, pos: 0)
+		return Self{s: s, pos: 0, cp: cp, cpByteLen: len}
 	end 'create'
 
 	export function current() returns Codepoint
@@ -114,12 +126,12 @@ export type CodepointIterator implements Iterator with Codepoint
 
 	export function advance() throws IterationError
 		let nextPos = pos + cpByteLen
-		if nextPos >= managed.length() 'done'
+		if nextPos >= s.byteLength() 'done'
 			throw IterationError.exhausted
 		end 'done'
 		pos = nextPos
-		cp = utf8DecodeAt(managed, pos: pos)
-		cpByteLen = utf8ByteLengthAt(managed, pos: pos)
+		cp = utf8DecodeAt(s, pos: pos)
+		cpByteLen = utf8ByteLengthAt(s, pos: pos)
 	end 'advance'
 end 'CodepointIterator'
 
@@ -133,24 +145,24 @@ end 'CodepointIterator'
 //   onTrailSurrogate = true  → current() returns the trail surrogate of the pending supplementary
 
 export type UTF16View implements Iterable with (CodeUnit16, UTF16Iterator)
-	var managed as __ManagedMemory
+	var s as String
 
-	export static function create(managed __ManagedMemory) returns UTF16View
-		return UTF16View{managed: managed}
+	export static function create(s String) returns UTF16View
+		return UTF16View{s: s}
 	end 'create'
 
 	export function createIterator() returns UTF16Iterator throws IterationError
-		return try UTF16Iterator.create(managed)
+		return try UTF16Iterator.create(s)
 	end 'createIterator'
 
 	/// Number of UTF-16 code units (linear scan)
 	export function count() returns Utf16UnitCount
 		var count = 0
 		var pos = 0
-		let len = managed.length()
+		let len = s.byteLength()
 		while pos < len 'count_loop'
-			let cp = utf8DecodeAt(managed, pos: pos)
-			let bytes = utf8ByteLengthAt(managed, pos: pos)
+			let cp = utf8DecodeAt(s, pos: pos)
+			let bytes = utf8ByteLengthAt(s, pos: pos)
 			pos = pos + bytes
 			if cp < 65536 'bmp'
 				count = count + 1
@@ -163,19 +175,19 @@ export type UTF16View implements Iterable with (CodeUnit16, UTF16Iterator)
 end 'UTF16View'
 
 export type UTF16Iterator implements Iterator with CodeUnit16
-	var managed as __ManagedMemory
+	var s as String
 	var bytePos as BytePos
 	var cp as Codepoint
 	var cpByteLen as Utf8ByteWidth
 	var onTrailSurrogate as bool
 
-	export static function create(managed __ManagedMemory) returns Self throws IterationError
-		if managed.length() == 0 'empty'
+	export static function create(s String) returns Self throws IterationError
+		if s.byteLength() == 0 'empty'
 			throw IterationError.exhausted
 		end 'empty'
-		let cp = utf8DecodeAt(managed, pos: 0)
-		let len = utf8ByteLengthAt(managed, pos: 0)
-		return Self{managed: managed, bytePos: 0, cp: cp, cpByteLen: len, onTrailSurrogate: false}
+		let cp = utf8DecodeAt(s, pos: 0)
+		let len = utf8ByteLengthAt(s, pos: 0)
+		return Self{s: s, bytePos: 0, cp: cp, cpByteLen: len, onTrailSurrogate: false}
 	end 'create'
 
 	export function current() returns CodeUnit16
@@ -194,12 +206,12 @@ export type UTF16Iterator implements Iterator with CodeUnit16
 			return
 		end 'emitTrail'
 		let nextPos = bytePos + cpByteLen
-		if nextPos >= managed.length() 'done'
+		if nextPos >= s.byteLength() 'done'
 			throw IterationError.exhausted
 		end 'done'
 		bytePos = nextPos
-		cp = utf8DecodeAt(managed, pos: bytePos)
-		cpByteLen = utf8ByteLengthAt(managed, pos: bytePos)
+		cp = utf8DecodeAt(s, pos: bytePos)
+		cpByteLen = utf8ByteLengthAt(s, pos: bytePos)
 		onTrailSurrogate = false
 	end 'advance'
 end 'UTF16Iterator'

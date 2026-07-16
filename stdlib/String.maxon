@@ -147,21 +147,33 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 		return managed.toCString()
 	end 'cstr'
 
-	/// Create a deep copy of this string with independent backing storage
+	/// An independent `String` holding this one's bytes: writing to either never shows through the
+	/// other. The copy-on-write view behind it is an optimisation — see `toByteArray`, which makes
+	/// the same promise the same way.
+	///
+	/// ALSO THE ANSWER TO "return self, unchanged". Nine places used to spell out
+	/// `String{managed: managed, isAsciiFlag: isAsciiFlag}` for that — `replace` with no match,
+	/// `split` on an empty delimiter, each `trim` of an empty string — and every one of them was
+	/// this method, written out. They call it now.
+	///
+	/// It cannot be `return self`, and that is not a subtlety to optimise away later: `self` is the
+	/// same record, so the caller's `append` would mutate the original. That was the Stage 0 bug —
+	/// `let b = a.toLower()` lowercased `a`.
+	///
+	/// This used to slice first (`String{managed: managed.slice(0, len), ...}`), which built the view
+	/// TWICE — a slice record, then a String viewing the slice — for one COW view of the same bytes.
+	/// Constructing straight from `managed` is the same thing in one allocation.
 	export function clone() returns String
-		let len = byteLength()
-		let newManaged = try managed.slice(0, len) otherwise 'sliceErr'
-			panic("String.clone: slice OOB — 0..len is always valid")
-		end 'sliceErr'
-		return String{managed: newManaged, isAsciiFlag: isAsciiFlag}
+		return String{managed: managed, isAsciiFlag: isAsciiFlag}
 	end 'clone'
 
 	/// THE byte-access primitives, and the only way anything inside `String` is allowed to read a
 	/// byte. `hash`, `equals`, `startsWith`, `endsWith`, `find`, `replace`, `split` and `scanIsAscii`
-	/// all walk bytes through these two and through nothing else.
+	/// all walk bytes through these and through nothing else — as do the grapheme scans in
+	/// `helpers/string/`, which take the `String` for exactly this reason.
 	///
 	/// WHY, AND IT IS NOT TIDINESS: Stage 4b-2 makes a SMALL `String` a 16-byte VALUE carrying up to
-	/// 15 bytes INLINE — and nothing can index a register. These two are the seam where that is
+	/// 15 bytes INLINE — and nothing can index a register. These are the seam where that is
 	/// absorbed: their lowering becomes discriminant-aware (inline bytes vs. heap buffer), and every
 	/// byte-walker above them keeps working without being touched. That is the whole point of routing
 	/// through them now, while `String` is still unchanged.
@@ -173,7 +185,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	/// `Map with (String, V)` allocates once per key lookup, and the stage is a net loss.
 	/// `addressableBytes()` is for genuine intrinsic boundaries only — see its doc.
 	///
-	/// ⚠ BOTH ARE INLINED BY THE COMPILER AND NEVER CALLED. The bootstrap has no inliner, so a
+	/// ⚠ ALL THREE ARE INLINED BY THE COMPILER AND NEVER CALLED. The bootstrap has no inliner, so a
 	/// forwarding method here would be a real call PER BYTE — measured at +58% on a byte-walk
 	/// workload, with mm-trace byte-identical, so no allocation gate could see it. The bodies below
 	/// stay as the NORMATIVE definition of what the compiler emits for them (2-Parser.cs,
@@ -210,6 +222,60 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 		return try byteAt(index) otherwise panic("String.byteAtOrPanic: index out of bounds — caller guarantees index < byteLength()")
 	end 'byteAtOrPanic'
 
+	/// The third byte primitive, and the only one whose result is an OBJECT: a `Character` owning a
+	/// private copy of the `len` bytes at `pos`. Every Character the language derives from a string
+	/// comes through here — `charAt`, the three `trim`s, and every step of `for c in s`.
+	///
+	/// Inlined like `byteAt`, and for both of its reasons: `String.maxon` may not reach `managed` to
+	/// build a Character (4b-2 leaves a small String with no record to reach), and a forwarding
+	/// method would put a real call on the per-grapheme path.
+	///
+	/// It COPIES the bytes. It replaced `makeCharacterFromManagedRange`, which sliced a VIEW —
+	/// `Character.init(source.slice(pos, pos + len))` — and a view cannot point into a register, so
+	/// the view could not survive 4b-2 whatever it was spelled. The copy is not the price of the
+	/// move, it is a discount: the view was TWO records (the slice, then the Character viewing it)
+	/// plus an incref, and it PINNED the entire source string alive behind one grapheme. This is one
+	/// allocation that owns its bytes and references nothing.
+	///
+	/// Callers must guarantee `pos + len <= byteLength()`; the lowering's bounds check panics.
+	module function makeCharFromBytes(pos BytePos, len ByteCount) returns Character
+		return managed.makeCharFromBytes(pos, len)
+	end 'makeCharFromBytes'
+
+	/// The one byte primitive that WRITES, and the only mutation `String` performs on itself besides
+	/// `append`. `mapAsciiCase` is the only caller: it takes a private copy of the bytes and maps it.
+	///
+	/// Writing through a string that is SHARING its bytes is safe — copy-on-write detaches the buffer
+	/// on the first write, so a literal, a slice, or a buffer another String is viewing is never
+	/// written through. That is what makes `toLower()` on a `let` sound.
+	///
+	/// Inlined for the same reason as the others, and it is the reason `toLower` can keep its SSO:
+	/// under 4b-2 this writes a small string's INLINE bytes in place, so `sliceBytes` + `setByte`
+	/// maps a short string with no record and no allocation at all. Reaching a mutable buffer via
+	/// `addressableBytes()` instead would materialize one per call.
+	module function setByte(index BytePos, value Byte) throws __ManagedMemoryError
+		try managed.setByte(index, value)
+	end 'setByte'
+
+	/// A new `String` over the bytes in [start, end) of this one — THE way this type derives a string
+	/// from part of itself. `slice`, `split`, `trim`/`trimStart`/`trimEnd` and `mapAsciiCase` all come
+	/// through here.
+	///
+	/// `isAscii` is the CALLER's to state, because the caller always knows and re-deriving it would
+	/// cost O(n) for an answer already in hand: any slice of an ASCII string is ASCII, and an empty
+	/// slice is ASCII whatever the source was. (`String.from` pays that scan; `fromOwnedBytes` exists
+	/// precisely to let a caller who knows skip it.)
+	///
+	/// THE ONLY `managed.slice` LEFT INSIDE `String`, and deliberately so: FOURTEEN sites used to
+	/// spell this out, which meant fourteen separate reach-throughs for Stage 4b-2 to teach the
+	/// discriminant. Now there is one. Under 4b-2 a range of 15 bytes or fewer becomes a SMALL String
+	/// with those bytes copied inline and no reference to `self` at all — which is exactly why
+	/// "always build large" was refused: `split` and `trim` are how strings get short.
+	function sliceBytes(start BytePos, endPos BytePos, isAscii bool) returns String
+		let result = try managed.slice(start, endPos) otherwise panic("String.sliceBytes: caller guarantees 0 <= start <= end <= byteLength()")
+		return String{managed: result, isAsciiFlag: isAscii}
+	end 'sliceBytes'
+
 	export function isEmpty() returns bool
 		return byteLength() == 0
 	end 'isEmpty'
@@ -218,7 +284,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	/// Cost is O(n) in the byte length for non-ASCII strings; callers that
 	/// need the count repeatedly should cache it themselves.
 	export function count() returns GraphemeCount
-		return countGraphemesManaged(managed)
+		return countGraphemes(self)
 	end 'count'
 
 	export function hash() returns HashValue
@@ -236,12 +302,8 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	/// Create a fresh iterator for grapheme cluster traversal.
 	/// Throws IterationError.exhausted if the string is empty.
 	export function createIterator() returns StringIterator throws IterationError
-		return try StringIterator.create(managed, isAsciiFlag: isAsciiFlag)
+		return try StringIterator.create(self, isAsciiFlag: isAsciiFlag)
 	end 'createIterator'
-
-	function makeCharFromBytesAt(pos BytePos, len ByteCount) returns Character
-		return makeCharacterFromManagedRange(managed, pos: pos, len: len)
-	end 'makeCharFromBytesAt'
 
 	// String index methods
 	export function startIndex() returns StringIndex
@@ -256,14 +318,12 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	/// Get character at the given index. Returns the grapheme cluster at that position.
 	export function charAt(idx StringIndex) returns Character
 		if isAsciiFlag 'asciiPath'
-			return makeCharFromBytesAt(idx.bytePos(), len: 1)
+			return makeCharFromBytes(idx.bytePos(), len: 1)
 		end 'asciiPath'
 		// Calculate the byte length of this grapheme at the given byte position
-		let len = byteLength()
 		let byteStart = idx.bytePos()
-		let endPos = findGraphemeEndManagedRange(managed, offset: 0, startPos: byteStart, len: len)
-		let byteLen = endPos - byteStart
-		return makeCharFromBytesAt(byteStart, len: byteLen)
+		let endPos = findGraphemeEnd(self, startPos: byteStart)
+		return makeCharFromBytes(byteStart, len: endPos - byteStart)
 	end 'charAt'
 
 	/// Get the index after the given position (for iteration)
@@ -276,7 +336,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 			return StringIndex.create(idx.charIndex() + 1, bytePos: idx.bytePos() + 1)
 		end 'asciiPath'
 		let byteStart = idx.bytePos()
-		let endPos = findGraphemeEndManagedRange(managed, offset: 0, startPos: byteStart, len: len)
+		let endPos = findGraphemeEnd(self, startPos: byteStart)
 		let byteLen = endPos - byteStart
 		return StringIndex.create(idx.charIndex() + 1, bytePos: byteStart + byteLen)
 	end 'indexAfter'
@@ -292,7 +352,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 		if isAsciiFlag 'asciiPath'
 			return StringIndex.create(idx.charIndex() - 1, bytePos: idx.bytePos() - 1)
 		end 'asciiPath'
-		let graphemeStart = findGraphemeStartManaged(managed, offset: 0, beforePos: idx.bytePos())
+		let graphemeStart = findGraphemeStart(self, beforePos: idx.bytePos())
 		return StringIndex.create(idx.charIndex() - 1, bytePos: graphemeStart)
 	end 'indexBefore'
 
@@ -350,7 +410,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 		if isAsciiFlag 'asciiPath'
 			return StringIndex.create(byteIdx, bytePos: byteIdx)
 		end 'asciiPath'
-		let charIdx = byteIndexToGraphemeIndex(managed, byteIdx: byteIdx)
+		let charIdx = byteIndexToGraphemeIndex(self, byteIdx: byteIdx)
 		return StringIndex.create(charIdx, bytePos: byteIdx)
 	end 'findFirst'
 
@@ -359,53 +419,44 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 		if isAsciiFlag 'asciiPath'
 			return StringIndex.create(byteIdx, bytePos: byteIdx)
 		end 'asciiPath'
-		let charIdx = byteIndexToGraphemeIndex(managed, byteIdx: byteIdx)
+		let charIdx = byteIndexToGraphemeIndex(self, byteIdx: byteIdx)
 		return StringIndex.create(charIdx, bytePos: byteIdx)
 	end 'findLast'
 
 	// Slicing - returns a new String backed by slice into this string's buffer
 	// Use endIndex for end position, or length for character count
 	export function slice(start StringIndex, endIndex StringIndex) returns String
-		let result = try managed.slice(start.bytePos(), endIndex.bytePos()) otherwise 'sliceErr'
-			panic("String.slice: byte positions derived from valid StringIndex — always in bounds")
-		end 'sliceErr'
-		return String{managed: result, isAsciiFlag: isAsciiFlag}
+		return sliceBytes(start.bytePos(), endPos: endIndex.bytePos(), isAscii: isAsciiFlag)
 	end 'slice'
 
 	export function slice(start StringIndex, length GraphemeCount) returns String
 		if isAsciiFlag 'asciiPath'
-			let endBytePos = start.bytePos() + length
-			let result = try managed.slice(start.bytePos(), endBytePos) otherwise 'sliceErrA'
-				panic("String.slice: ASCII slice — byte positions are valid")
-			end 'sliceErrA'
-			return String{managed: result, isAsciiFlag: true}
+			// Every ASCII grapheme is one byte, so the grapheme count IS the byte count.
+			return sliceBytes(start.bytePos(), endPos: start.bytePos() + length, isAscii: true)
 		end 'asciiPath'
-		let endBytePos = graphemeOffsetToBytePos(managed, startBytePos: start.bytePos(), count: length)
-		let result = try managed.slice(start.bytePos(), endBytePos) otherwise 'sliceErrU'
-			panic("String.slice: Unicode slice — byte positions derived from valid grapheme offsets")
-		end 'sliceErrU'
-		return String{managed: result, isAsciiFlag: isAsciiFlag}
+		let endBytePos = graphemeOffsetToBytePos(self, startBytePos: start.bytePos(), count: length)
+		return sliceBytes(start.bytePos(), endPos: endBytePos, isAscii: isAsciiFlag)
 	end 'slice'
 
 	// View methods - returns lazy Iterable views over bytes/codepoints/UTF-16
 	// code units. View construction is cheap; iterating an empty view yields zero elements.
 	export function bytes() returns ByteView
-		return ByteView.create(managed)
+		return ByteView.create(self)
 	end 'bytes'
 
 	export function codepoints() returns CodepointView
-		return CodepointView.create(managed)
+		return CodepointView.create(self)
 	end 'codepoints'
 
 	export function utf16() returns UTF16View
-		return UTF16View.create(managed)
+		return UTF16View.create(self)
 	end 'utf16'
 
 	// Replace methods
 	export function replace(old String, with String) returns String
 		let oldLen = old.byteLength()
 		if oldLen == 0 'empty_old'
-			return String{managed: managed, isAsciiFlag: isAsciiFlag}
+			return clone()
 		end 'empty_old'
 
 		let selfLen = byteLength()
@@ -423,7 +474,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 		end 'count_loop'
 
 		if matchCount == 0 'no_matches'
-			return String{managed: managed, isAsciiFlag: isAsciiFlag}
+			return clone()
 		end 'no_matches'
 
 		// Build the result in ONE allocation. The first pass counted the matches, so the final size is
@@ -435,12 +486,22 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 		var out = StringBuilder.create()
 		out.reserve(selfLen + matchCount * withLen - matchCount * oldLen)
 
+		// ONE of the few places inside `String` that genuinely needs a real `__ManagedMemory`, and the
+		// reason is `StringBuilder`: it takes each piece by BULK MEMCPY, which needs the bytes at an
+		// address. `byteAt` cannot serve that — copying a piece a byte at a time would trade the memcpy
+		// this type exists to get for a per-byte loop, on the strings `replace` is actually used on.
+		//
+		// So it materializes, and under 4b-2 a SMALL receiver will allocate a record here. Hoisted out
+		// of the loop deliberately: that makes it once per `replace` CALL rather than once per match,
+		// and a `replace` already allocates a builder and its buffer, so one more is noise beside them.
+		let selfBytes = addressableBytes()
+
 		var pos = 0
 		while pos <= selfLen - oldLen 'search'
 			if let idx = try findIn(self, offset: pos, len: selfLen - pos, needle: old) 'try_find'
 				let matchPos = pos + idx
 				if matchPos > pos 'has_prefix'
-					let prefixSlice = try managed.slice(pos, matchPos) otherwise 'prefixSliceErr'
+					let prefixSlice = try selfBytes.slice(pos, matchPos) otherwise 'prefixSliceErr'
 						panic("String.replace: prefix slice — pos and matchPos within bounds from findIn")
 					end 'prefixSliceErr'
 					out.appendBytes(prefixSlice, isAscii: isAsciiFlag)
@@ -454,7 +515,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 
 		// Append remaining suffix
 		if pos < selfLen 'has_suffix'
-			let suffixSlice = try managed.slice(pos, selfLen) otherwise 'suffixSliceErr'
+			let suffixSlice = try selfBytes.slice(pos, selfLen) otherwise 'suffixSliceErr'
 				panic("String.replace: suffix slice — pos < selfLen guaranteed")
 			end 'suffixSliceErr'
 			out.appendBytes(suffixSlice, isAscii: isAsciiFlag)
@@ -466,12 +527,12 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	export function replaceFirst(old String, with String) returns String
 		let oldLen = old.byteLength()
 		if oldLen == 0 'empty_old'
-			return String{managed: managed, isAsciiFlag: isAsciiFlag}
+			return clone()
 		end 'empty_old'
 
 		let selfLen = byteLength()
 		let idx = try findIn(self, offset: 0, len: selfLen, needle: old) otherwise 'no_match'
-			return String{managed: managed, isAsciiFlag: isAsciiFlag}
+			return clone()
 		end 'no_match'
 
 		// `replace`'s three-piece build, with the counting pass it does not need: there is exactly one
@@ -483,14 +544,17 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 		var out = StringBuilder.create()
 		out.reserve(selfLen - oldLen + withLen)
 
-		let head = try managed.slice(0, idx) otherwise 'rfHeadSliceErr'
+		// A real record, for `replace`'s reason — see the comment there.
+		let selfBytes = addressableBytes()
+
+		let head = try selfBytes.slice(0, idx) otherwise 'rfHeadSliceErr'
 			panic("String.replaceFirst: head slice — idx from findIn, always in bounds")
 		end 'rfHeadSliceErr'
 		out.appendBytes(head, isAscii: isAsciiFlag)
 
 		out.append(with)
 
-		let tail = try managed.slice(idx + oldLen, selfLen) otherwise 'rfTailSliceErr'
+		let tail = try selfBytes.slice(idx + oldLen, selfLen) otherwise 'rfTailSliceErr'
 			panic("String.replaceFirst: tail slice — idx+oldLen <= selfLen guaranteed")
 		end 'rfTailSliceErr'
 		out.appendBytes(tail, isAscii: isAsciiFlag)
@@ -507,7 +571,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 
 		// Empty delimiter: return single-element array with original string
 		if delimLen == 0 'empty_delim'
-			result.push(String{managed: managed, isAsciiFlag: isAsciiFlag})
+			result.push(clone())
 			return result
 		end 'empty_delim'
 
@@ -517,10 +581,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 		while pos <= selfLen - delimLen 'search'
 			if let idx = try findIn(self, offset: pos, len: selfLen - pos, needle: delimiter) 'try_find'
 				let matchPos = pos + idx
-				let part = try managed.slice(pos, matchPos) otherwise 'partSliceErr'
-					panic("String.split: part slice — pos and matchPos from findIn, always in bounds")
-				end 'partSliceErr'
-				result.push(String{managed: part, isAsciiFlag: isAsciiFlag})
+				result.push(sliceBytes(pos, endPos: matchPos, isAscii: isAsciiFlag))
 				pos = matchPos + delimLen
 			end 'try_find' else 'no_more'
 				break
@@ -528,29 +589,30 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 		end 'search'
 
 		// Append remaining suffix (always — even if empty, to handle trailing delimiters)
-		let tail = try managed.slice(pos, selfLen) otherwise 'tailSliceErr'
-			panic("String.split: tail slice — pos <= selfLen guaranteed by loop")
-		end 'tailSliceErr'
-		result.push(String{managed: tail, isAsciiFlag: isAsciiFlag})
+		result.push(sliceBytes(pos, endPos: selfLen, isAscii: isAsciiFlag))
 
 		return result
 	end 'split'
 
 	// Case conversion. Both return a NEW String and leave the receiver UNCHANGED — the transform
-	// runs on an independent copy of the bytes. `managed.slice(0, len)` hands back a buffer that is
+	// runs on an independent copy of the bytes. `sliceBytes` hands back a String whose buffer is
 	// either already private (an owned source is copied eagerly) or shares the source's bytes until
 	// the first `setByte`, at which point COW detaches it — so a literal, a slice, or a buffer some
 	// other String is aliasing is never written through. Returning `managed` after mutating it, as
 	// this used to, made `let b = a.toLower()` silently lowercase `a` as well.
+	//
+	// `work` is a String and is mapped through `byteAt`/`setByte`, NOT a `__ManagedMemory` reached
+	// through `addressableBytes()`. That is what keeps SSO: under 4b-2 a short `toLower()` is a small
+	// String whose inline bytes are written in place — no record, no allocation. Materializing a
+	// mutable buffer instead would allocate on every `toLower` of a short string, and short derived
+	// strings are precisely what SSO exists for.
 	function mapAsciiCase(lo Byte, hi Byte, delta AsciiCaseDelta) returns String
 		let len = byteLength()
 		if len == 0 'empty'
-			return String{managed: managed, isAsciiFlag: isAsciiFlag}
+			return clone()
 		end 'empty'
 
-		var work = try managed.slice(0, len) otherwise 'sliceErr'
-			panic("String.mapAsciiCase: slice 0..len is always valid")
-		end 'sliceErr'
+		var work = sliceBytes(0, endPos: len, isAscii: isAsciiFlag)
 
 		for i in 0 upto len 'convert'
 			let b = try work.byteAt(i) otherwise panic("String.mapAsciiCase: byteAt OOB — i < len invariant")
@@ -558,7 +620,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 				try work.setByte(i, b + delta) otherwise panic("String.mapAsciiCase: setByte OOB — i < len invariant")
 			end 'inRange'
 		end 'convert'
-		return String{managed: work, isAsciiFlag: isAsciiFlag}
+		return work
 	end 'mapAsciiCase'
 
 	// ASCII uppercase A-Z (65-90) -> lowercase a-z (97-122)
@@ -575,14 +637,14 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	export function trim(chars CharacterSet) returns String
 		let len = byteLength()
 		if len == 0 'empty'
-			return String{managed: managed, isAsciiFlag: isAsciiFlag}
+			return clone()
 		end 'empty'
 
 		if isAsciiFlag 'asciiPath'
 			// Forward scan: each ASCII byte is one grapheme
 			var start = 0
 			while start < len 'scanStartAscii'
-				let ch = makeCharacterFromManagedRange(managed, pos: start, len: 1)
+				let ch = makeCharFromBytes(start, len: 1)
 				if not chars.contains(ch) 'foundStartAscii'
 					break
 				end 'foundStartAscii'
@@ -590,35 +652,29 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 			end 'scanStartAscii'
 
 			if start >= len 'allMatchAscii'
-				let empty = try managed.slice(0, 0) otherwise 'emptySliceErr1'
-					panic("String.trim: slice(0,0) always valid")
-				end 'emptySliceErr1'
-				return String{managed: empty, isAsciiFlag: true}
+				return sliceBytes(0, endPos: 0, isAscii: true)
 			end 'allMatchAscii'
 
 			// Backward scan
 			var endPos = byteLength()
 			while endPos > start 'scanEndAscii'
 				endPos = endPos - 1
-				let ch = makeCharacterFromManagedRange(managed, pos: endPos, len: 1)
+				let ch = makeCharFromBytes(endPos, len: 1)
 				if not chars.contains(ch) 'foundEndAscii'
 					endPos = endPos + 1
 					break
 				end 'foundEndAscii'
 			end 'scanEndAscii'
 
-			let result = try managed.slice(start, endPos) otherwise 'asciiSliceErr'
-				panic("String.trim: ASCII trim slice — start and endPos bounded by scan")
-			end 'asciiSliceErr'
-			return String{managed: result, isAsciiFlag: true}
+			return sliceBytes(start, endPos: endPos, isAscii: true)
 		end 'asciiPath'
 
 		// Forward scan: find first non-matching grapheme
 		var start = 0
 		while start < len 'scan_start'
-			let endByte = findGraphemeEndManagedRange(managed, offset: 0, startPos: start, len: len)
+			let endByte = findGraphemeEnd(self, startPos: start)
 			let graphemeLen = endByte - start
-			let ch = makeCharacterFromManagedRange(managed, pos: start, len: graphemeLen)
+			let ch = makeCharFromBytes(start, len: graphemeLen)
 			if not chars.contains(ch) 'found_start'
 				break
 			end 'found_start'
@@ -626,41 +682,35 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 		end 'scan_start'
 
 		if start >= len 'all_match'
-			let empty = try managed.slice(0, 0) otherwise 'emptySliceErr2'
-				panic("String.trim: slice(0,0) always valid")
-			end 'emptySliceErr2'
-			return String{managed: empty, isAsciiFlag: true}
+			return sliceBytes(0, endPos: 0, isAscii: true)
 		end 'all_match'
 
 		// Backward scan from end: find last non-matching grapheme
 		var endPos = byteLength()
 		while endPos > start 'scan_end'
-			let graphemeStart = findGraphemeStartManaged(managed, offset: 0, beforePos: endPos)
+			let graphemeStart = findGraphemeStart(self, beforePos: endPos)
 			let graphemeLen = endPos - graphemeStart
-			let ch = makeCharacterFromManagedRange(managed, pos: graphemeStart, len: graphemeLen)
+			let ch = makeCharFromBytes(graphemeStart, len: graphemeLen)
 			if not chars.contains(ch) 'found_end'
 				break
 			end 'found_end'
 			endPos = graphemeStart
 		end 'scan_end'
 
-		let result = try managed.slice(start, endPos) otherwise 'trimSliceErr'
-			panic("String.trim: trim slice — start and endPos bounded by scan")
-		end 'trimSliceErr'
-		return String{managed: result, isAsciiFlag: isAsciiFlag}
+		return sliceBytes(start, endPos: endPos, isAscii: isAsciiFlag)
 	end 'trim'
 
 	/// Trim characters in the given set from the start of the string.
 	export function trimStart(chars CharacterSet) returns String
 		let len = byteLength()
 		if len == 0 'empty'
-			return String{managed: managed, isAsciiFlag: isAsciiFlag}
+			return clone()
 		end 'empty'
 
 		if isAsciiFlag 'asciiPath'
 			var start = 0
 			while start < len 'scanStartAscii'
-				let ch = makeCharacterFromManagedRange(managed, pos: start, len: 1)
+				let ch = makeCharFromBytes(start, len: 1)
 				if not chars.contains(ch) 'foundStartAscii'
 					break
 				end 'foundStartAscii'
@@ -668,23 +718,17 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 			end 'scanStartAscii'
 
 			if start >= len 'allMatchAscii'
-				let empty = try managed.slice(0, 0) otherwise 'emptySliceErr3'
-					panic("String.trimStart: slice(0,0) always valid")
-				end 'emptySliceErr3'
-				return String{managed: empty, isAsciiFlag: true}
+				return sliceBytes(0, endPos: 0, isAscii: true)
 			end 'allMatchAscii'
 
-			let result = try managed.slice(start, len) otherwise 'tsAsciiSliceErr'
-				panic("String.trimStart: ASCII start slice — start bounded by scan")
-			end 'tsAsciiSliceErr'
-			return String{managed: result, isAsciiFlag: true}
+			return sliceBytes(start, endPos: len, isAscii: true)
 		end 'asciiPath'
 
 		var start = 0
 		while start < len 'scan_start'
-			let endByte = findGraphemeEndManagedRange(managed, offset: 0, startPos: start, len: len)
+			let endByte = findGraphemeEnd(self, startPos: start)
 			let graphemeLen = endByte - start
-			let ch = makeCharacterFromManagedRange(managed, pos: start, len: graphemeLen)
+			let ch = makeCharFromBytes(start, len: graphemeLen)
 			if not chars.contains(ch) 'found_start'
 				break
 			end 'found_start'
@@ -692,49 +736,37 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 		end 'scan_start'
 
 		if start >= len 'all_match'
-			let empty = try managed.slice(0, 0) otherwise 'emptySliceErr4'
-				panic("String.trimStart: slice(0,0) always valid")
-			end 'emptySliceErr4'
-			return String{managed: empty, isAsciiFlag: true}
+			return sliceBytes(0, endPos: 0, isAscii: true)
 		end 'all_match'
 
-		let result = try managed.slice(start, len) otherwise 'tsUnicodeSliceErr'
-			panic("String.trimStart: Unicode start slice — start bounded by scan")
-		end 'tsUnicodeSliceErr'
-		return String{managed: result, isAsciiFlag: isAsciiFlag}
+		return sliceBytes(start, endPos: len, isAscii: isAsciiFlag)
 	end 'trimStart'
 
 	/// Trim characters in the given set from the end of the string.
 	export function trimEnd(chars CharacterSet) returns String
 		let len = byteLength()
 		if len == 0 'empty'
-			return String{managed: managed, isAsciiFlag: isAsciiFlag}
+			return clone()
 		end 'empty'
 
 		if isAsciiFlag 'asciiPath'
 			var pos = byteLength()
 			while pos > 0 'scanAscii'
 				pos = pos - 1
-				let ch = makeCharacterFromManagedRange(managed, pos: pos, len: 1)
+				let ch = makeCharFromBytes(pos, len: 1)
 				if not chars.contains(ch) 'notMatch'
-					let result = try managed.slice(0, pos + 1) otherwise 'teAsciiSliceErr'
-						panic("String.trimEnd: ASCII end slice — pos bounded by scan")
-					end 'teAsciiSliceErr'
-					return String{managed: result, isAsciiFlag: true}
+					return sliceBytes(0, endPos: pos + 1, isAscii: true)
 				end 'notMatch'
 			end 'scanAscii'
-			let empty = try managed.slice(0, 0) otherwise 'emptySliceErr5'
-				panic("String.trimEnd: slice(0,0) always valid")
-			end 'emptySliceErr5'
-			return String{managed: empty, isAsciiFlag: true}
+			return sliceBytes(0, endPos: 0, isAscii: true)
 		end 'asciiPath'
 
 		// Backward scan from end: find first non-matching grapheme
 		var pos = byteLength()
 		while pos > 0 'scan'
-			let graphemeStart = findGraphemeStartManaged(managed, offset: 0, beforePos: pos)
+			let graphemeStart = findGraphemeStart(self, beforePos: pos)
 			let graphemeLen = pos - graphemeStart
-			let ch = makeCharacterFromManagedRange(managed, pos: graphemeStart, len: graphemeLen)
+			let ch = makeCharFromBytes(graphemeStart, len: graphemeLen)
 			if not chars.contains(ch) 'not_match'
 				break
 			end 'not_match'
@@ -742,16 +774,10 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 		end 'scan'
 
 		if pos == 0 'all_match'
-			let empty = try managed.slice(0, 0) otherwise 'emptySliceErr6'
-				panic("String.trimEnd: slice(0,0) always valid")
-			end 'emptySliceErr6'
-			return String{managed: empty, isAsciiFlag: true}
+			return sliceBytes(0, endPos: 0, isAscii: true)
 		end 'all_match'
 
-		let result = try managed.slice(0, pos) otherwise 'teUnicodeSliceErr'
-			panic("String.trimEnd: Unicode end slice — pos bounded by scan")
-		end 'teUnicodeSliceErr'
-		return String{managed: result, isAsciiFlag: isAsciiFlag}
+		return sliceBytes(0, endPos: pos, isAscii: isAsciiFlag)
 	end 'trimEnd'
 
 	/// Trim Unicode whitespace from both ends.
@@ -867,42 +893,53 @@ end 'StringBuilder'
 /// Positioning invariant: iterPos always points at the start of a valid grapheme,
 /// and graphemeLen holds that grapheme's byte length. current() returns it without
 /// recomputing boundaries; advance() moves past it.
+///
+/// IT HOLDS THE `String`, NOT ITS BYTES, and that is what Stage 4b-1b came here for. This field
+/// used to be `var managed as ByteMemory` — a record reference that ESCAPES THE FRAME, since the
+/// iterator outlives the `createIterator()` that built it. Under 4b-2 a small String is a 16-byte
+/// VALUE with no record to store, and the caller-frame spill that lets `byteAt` reach a register's
+/// bytes cannot help: there is no frame here to spill into that outlives the iterator. A `String`
+/// field is the value itself — 16 bytes, copied in, nothing allocated, nothing to keep alive.
+///
+/// The fear that stopped an earlier attempt was that this would move materialization from create()
+/// (once) to current() (per character), which would have been worse than leaving it alone. It does
+/// not, and the reason is that both of the things current() needs are now INLINE primitives:
+/// `makeCharFromBytes` copies the grapheme's bytes straight out of whichever representation the
+/// String has, and `byteLength` is a field load. Neither reaches for a record, so there is nothing
+/// to materialize on either path. Measured, not assumed — `for c in s` was timed across this change.
 export type StringIterator implements Iterator with Character
-	typealias ByteMemory = __ManagedMemory with Byte
-	var managed as ByteMemory
+	var s as String
 	var iterPos as BytePos
 	var graphemeLen as ByteCount
 	var isAsciiFlag as bool
 
-	export static function create(managed ByteMemory, isAsciiFlag bool) returns Self throws IterationError
-		if managed.length() == 0 'empty'
+	export static function create(s String, isAsciiFlag bool) returns Self throws IterationError
+		if s.byteLength() == 0 'empty'
 			throw IterationError.exhausted
 		end 'empty'
-		let len = computeGraphemeLen(managed, pos: 0, isAsciiFlag: isAsciiFlag)
-		return Self{managed: managed, iterPos: 0, graphemeLen: len, isAsciiFlag: isAsciiFlag}
+		let len = computeGraphemeLen(s, pos: 0, isAsciiFlag: isAsciiFlag)
+		return Self{s: s, iterPos: 0, graphemeLen: len, isAsciiFlag: isAsciiFlag}
 	end 'create'
 
 	export function current() returns Character
-		return makeCharacterFromManagedRange(managed, pos: iterPos, len: graphemeLen)
+		return s.makeCharFromBytes(iterPos, len: graphemeLen)
 	end 'current'
 
 	export function advance() throws IterationError
 		let nextPos = iterPos + graphemeLen
-		if nextPos >= managed.length() 'done'
+		if nextPos >= s.byteLength() 'done'
 			throw IterationError.exhausted
 		end 'done'
 		iterPos = nextPos
-		graphemeLen = computeGraphemeLen(managed, pos: iterPos, isAsciiFlag: isAsciiFlag)
+		graphemeLen = computeGraphemeLen(s, pos: iterPos, isAsciiFlag: isAsciiFlag)
 	end 'advance'
 end 'StringIterator'
 
-function computeGraphemeLen(managed __ManagedMemory, pos BytePos, isAsciiFlag bool) returns ByteCount
+function computeGraphemeLen(s String, pos BytePos, isAsciiFlag bool) returns ByteCount
 	if isAsciiFlag 'ascii'
 		return 1
 	end 'ascii'
-	let len = managed.length()
-	let endPos = findGraphemeEndManagedRange(managed, offset: 0, startPos: pos, len: len)
-	return endPos - pos
+	return findGraphemeEnd(s, startPos: pos) - pos
 end 'computeGraphemeLen'
 
 // StringIndex type - type-safe string position

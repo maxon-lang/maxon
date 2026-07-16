@@ -54,15 +54,30 @@ public static class TypeCycleCheckPass {
         foreach (var field in structType.Fields) {
           AddTypeReferenceEdge(edges, field.Name, field.Type, module);
         }
-        // Monomorphized container types reference their element type through TypeParams
-        // (e.g. FolderArray has TypeParams["Element"] = Folder), creating ownership edges
+        // A monomorphized container owns its elements in its BUFFER, not in any declared field, so
+        // the element binding in TypeParams is a real ownership edge (`FolderArray` has
+        // TypeParams["Element"] = Folder, and that is what makes `Folder -> children: FolderArray ->
+        // Folder` a cycle).
+        //
+        // ONLY the bindings the type actually STORES. TypeParams also carries the bindings of every
+        // interface the type conforms to, and those are not storage: `String implements Iterable with
+        // (Character, StringIterator)` leaves String with TypeParams [Element=Character,
+        // Iter=StringIterator] while a String contains neither and its destructor touches neither.
+        // Counting those made `String -> StringIterator -> s: String` a "cycle" the moment
+        // StringIterator came to hold its String (Stage 4b-1b), for an object graph that is plainly
+        // acyclic — a String references no iterator, ever.
+        //
+        // What separates them is whether a FIELD parameterizes on the binding. `FolderArray` stores
+        // `managed as __ManagedMemory with Folder`, so Folder is genuinely inside it; `String` stores
+        // `managed as __ManagedMemory with Byte`, and neither Character nor StringIterator appears in
+        // any field of it at any depth. That question — "do I actually hold one?" — IS the ownership
+        // question the pass is asking, so it is the right one to answer here.
+        var storedTypeNames = StoredTypeParamNames(structType);
         foreach (var (_, paramType) in structType.TypeParams) {
-          var paramTargetName = paramType switch {
-            IrStructType s => s.Name,
-            IrEnumType u => u.Name,
-            _ => (string?)null
-          };
-          if (paramTargetName != null && module.TypeDefs.ContainsKey(paramTargetName)) {
+          var paramTargetName = TypeReferenceName(paramType);
+          if (paramTargetName != null
+              && storedTypeNames.Contains(paramTargetName)
+              && module.TypeDefs.ContainsKey(paramTargetName)) {
             edges.Add((paramTargetName, paramTargetName));
           }
         }
@@ -92,15 +107,33 @@ public static class TypeCycleCheckPass {
   /// requires acyclic type graphs to guarantee deterministic destruction.
   /// </summary>
   private static void AddTypeReferenceEdge(List<(string Label, string Target)> edges, string fieldName, IrType type, IrModule<MaxonOp> module) {
-    string? targetName = type switch {
-      IrStructType s => s.Name,
-      IrEnumType u => u.Name,
-      _ => null
-    };
+    var targetName = TypeReferenceName(type);
     if (targetName != null && module.TypeDefs.ContainsKey(targetName)) {
       var typeDisplay = FormatTypeDisplay(type);
       edges.Add(($"{fieldName}: {typeDisplay}", targetName));
     }
+  }
+
+  /// The named type a reference resolves to, or null for primitives and unresolved type parameters.
+  private static string? TypeReferenceName(IrType type) => type switch {
+    IrStructType s => s.Name,
+    IrEnumType u => u.Name,
+    _ => null
+  };
+
+  /// Every type this struct's own FIELDS parameterize on — i.e. what it actually holds. A field
+  /// declared `__ManagedMemory with Folder` puts Folder in here; a conformance binding never does,
+  /// because a conformance is not a field.
+  private static HashSet<string> StoredTypeParamNames(IrStructType structType) {
+    var stored = new HashSet<string>();
+    foreach (var field in structType.Fields) {
+      if (field.Type is not IrStructType fieldStruct) continue;
+      foreach (var (_, paramType) in fieldStruct.TypeParams) {
+        var name = TypeReferenceName(paramType);
+        if (name != null) stored.Add(name);
+      }
+    }
+    return stored;
   }
 
   private static string FormatTypeDisplay(IrType type) {

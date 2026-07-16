@@ -1517,8 +1517,20 @@ public static partial class MaxonToStandardConversion {
 	}
 
 	/// <summary>
-	/// __make_char_from_bytes(managed, pos, len): create a Character from bytes in managed memory.
-	/// Allocates a new buffer, copies len bytes from source at pos, and creates a Character struct.
+	/// `makeCharFromBytes(pos, len)`: a Character owning a private COPY of `len` bytes taken from the
+	/// receiver at `pos`. THE way the language turns part of a string into a Character — `charAt`,
+	/// `trim`, and every step of `for c in s` land here (via the inlined `String.makeCharFromBytes`,
+	/// see TryEmitBuiltinStringMethod).
+	///
+	/// It COPIES rather than slicing a view, and that is what makes it Stage 4b-2-ready: a small
+	/// String will carry its bytes in a REGISTER, and a view cannot point into one. A copy can be
+	/// made from either representation, so 4b-2 changes how the source bytes are addressed here and
+	/// nothing above it moves.
+	///
+	/// The copy is not a cost — it is cheaper than the view it replaced. `Character.init(src.slice(
+	/// pos, pos+len))` was TWO records (the slice, then the Character viewing it) plus an incref, and
+	/// it PINNED the whole source string alive behind a 1-4 byte grapheme. This is ONE allocation
+	/// that owns its bytes and references nothing.
 	/// </summary>
 	private static void LowerMakeCharFromBytes(
 	  MaxonMakeCharFromBytesOp op,
@@ -1554,39 +1566,51 @@ public static partial class MaxonToStandardConversion {
 		var srcAddrVar = $"__mkchar_src_{op.Result.Id}";
 		EmitStore(block, srcAddrOp.Result, srcAddrVar, varTypes);
 
-		// Envelope collapse: ONE Character allocation (the record IS its own __ManagedMemory),
-		// plus the owned byte buffer. No separate __ManagedMemory record.
+		// Byte-fusion: ONE allocation holds BOTH the Character record AND its bytes, which live
+		// INLINE right after it (buffer = self + CharacterStructSize) marked by
+		// parent_ptr = MmParentInline. The bytes die with the record's slot — the destructor's
+		// inline-sentinel check skips the raw free — so there is no second object to free.
+		// fusedSize = CharacterStructSize + len + 1 (trailing NUL, so `toCString` never re-copies).
 		var charVarName = temps.CreateTemp("char", op.Result.Id, "Character", OwnershipFlags.None);
-		var charOuterPtr = (StdHeapPtr)EmitAlloc(block, CharacterStructSize, "Character", scopeName: _currentFuncName);
+		var lenForAlloc = (StdI64)EmitLoad(block, lenVar, varTypes);
+		var recPlusNulOp = new StdConstI64Op(CharacterStructSize + 1);
+		block.AddOp(recPlusNulOp);
+		var fusedSize = new StdAddI64Op(lenForAlloc, recPlusNulOp.Result);
+		block.AddOp(fusedSize);
+		var charOuterPtr = (StdHeapPtr)EmitAlloc(block, fusedSize.Result, "Character", scopeName: _currentFuncName);
 		EmitStore(block, charOuterPtr, charVarName, varTypes);
 
-		// Reload len for buffer allocation (alloc clobbers registers)
-		var lenForAlloc = (StdI64)EmitLoad(block, lenVar, varTypes);
-		var newBuf = EmitRawAlloc(block, lenForAlloc, label: "mkChar.buf", scopeName: _currentFuncName);
-
-		// Store the new buffer pointer (alloc clobbers registers)
+		// buffer = self + CharacterStructSize (the inline region)
 		var dstBufVar = $"__mkchar_dst_{op.Result.Id}";
-		EmitStore(block, newBuf, dstBufVar, varTypes);
+		var inlineBuf = EmitInlineBufferPtr(block, charVarName, CharacterStructSize, varTypes);
+		EmitStore(block, inlineBuf, dstBufVar, varTypes);
 
 		// Reload values for memcopy (alloc clobbers registers)
 		var reloadLen = (StdI64)EmitLoad(block, lenVar, varTypes);
 		var reloadSrc = (StdI64)EmitLoad(block, srcAddrVar, varTypes);
 		var reloadDst = (StdI64)EmitLoad(block, dstBufVar, varTypes);
 
-		// Copy bytes from source to new buffer
+		// Copy bytes from source to the inline buffer
 		block.AddOp(new StdMemCopyOp(reloadSrc, reloadDst, reloadLen));
 
 		// Reload all values again after memcopy (rep movsb clobbers RSI/RDI/RCX)
 		var finalLen = (StdI64)EmitLoad(block, lenVar, varTypes);
 		var finalBuf = (StdI64)EmitLoad(block, dstBufVar, varTypes);
 
-		// Write the managed fields inline into the Character record. The buffer is freshly
-		// raw-alloc'd and owned, so capacity == length (owned mode: destructor frees it).
+		// Write the null terminator at buffer[len]
+		var ntAddr = new StdAddI64Op(finalBuf, finalLen);
+		block.AddOp(ntAddr);
+		var ntZero = new StdConstI64Op(0);
+		block.AddOp(ntZero);
+		block.AddOp(new StdStoreIndirectOp(ntZero.Result, ntAddr.Result, 0, IrType.I8));
+
+		// Write the managed fields inline into the Character record. The buffer is INLINE and owned,
+		// so capacity == length (exact) and parent_ptr = MmParentInline.
 		var elemSizeConst = new StdConstI64Op(1);
 		block.AddOp(elemSizeConst);
-		var charParentZero = new StdConstI64Op(0);
-		block.AddOp(charParentZero);
-		EmitInitManagedMemory(block, charVarName, finalBuf, finalLen, finalLen, elemSizeConst.Result, charParentZero.Result, varTypes);
+		var charParentInline = new StdConstI64Op(MmParentInline);
+		block.AddOp(charParentInline);
+		EmitInitManagedMemory(block, charVarName, finalBuf, finalLen, finalLen, elemSizeConst.Result, charParentInline.Result, varTypes);
 
 		valueMap[op.Result] = new StdHeapPtr(charOuterPtr.Id, charOuterPtr.TypeName, charVarName);
 	}
