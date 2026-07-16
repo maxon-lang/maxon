@@ -176,11 +176,13 @@ end 'fileScopedDeclKey'
 // So what it buys is READABILITY — `__data_counter` in a golden fragment says what it is — plus
 // v1's convention, which the day a global is registered BY NAME will matter for real.
 //
-// ⚠ **THERE IS A SECOND COPY OF THIS STRING**: `classifyGlobalLabel` (CodeResult.maxon:107) tests a
-// literal `"__data_"`. It is DEAD — zero callers, ported ahead of its use at M1-A — which is the
-// only reason the two cannot yet disagree. Whoever wires it in (the runtime's `__slab_`/`__gt_`
-// globals at P1.2/P1.5 are what it enumerates) MUST single-source it against this constant first,
-// because at that moment a rename here silently routes every user global to a read-only page.
+// ⭐ **THIS IS NOW THE ONLY COPY OF THIS STRING.** There was a second — a literal `"__data_"` inside
+// `classifyGlobalLabel` (CodeResult.maxon) — and the two could not disagree only because that whole
+// family was DEAD: zero callers, ported ahead of a use that never came. It was left in place on the
+// prediction that it "plausibly becomes live when the `__slab_`/`__gt_` runtime globals arrive"; P1.0r
+// then shipped `__slab_cursor` and `__slab_end` and wired nothing to it, which falsified the
+// prediction, so the family was deleted rather than kept as a copy waiting to go stale. A future
+// name-based classifier single-sources its prefix HERE.
 let DataLabelPrefix = "__data_"
 
 // ⭐ What separates a `.data` label from its collision-breaking ordinal — and the character is

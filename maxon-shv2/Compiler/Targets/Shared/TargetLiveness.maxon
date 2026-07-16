@@ -2,7 +2,8 @@
 // the per-function CFG (built ONCE), loop structure from back edges, and live-in/live-out by
 // SSA PATH EXPLORATION. Everything is dense (design §"Data representation"): `Array`-indexed
 // columns keyed by the dense function-local block index / value id, live-in/out as one SPARSE,
-// editable value list per block, u16 register masks — NO `Map` and NO hashing in the hot path.
+// editable value list per block, one-bit-per-register `RegMask` words — NO `Map` and NO hashing in
+// the hot path.
 //
 // **There is NO dataflow fixpoint.** In strict SSA a value's def dominates every use, so liveness
 // is exactly "the CFG paths running backward from each use up to the def" — walk them and stop.
@@ -169,8 +170,13 @@ export typealias RegCountColumn = Array with RegCount
 //
 // This is the same trap `MaxonDialect`'s ValueTypeTag column documents ("a Maxon union value is a heap
 // object — every case, not just the ones with a payload... put one on the compiler's hottest path"),
-// and the same answer `RegisterFileSize`/`RegNum` already give: state the number, and ASSERT it against
-// the thing it mirrors. `assertRegClassCountMatches` runs once per module, so the two cannot drift.
+// and the same answer `RegisterFileSize` gives: state the number, and ASSERT it against the thing it
+// mirrors (`assertRegisterFileMatchesEnum`, RegBits). `assertRegClassCountMatches` below does that for
+// this constant, once per module, so it and the enum cannot drift.
+//
+// ⚠ `RegNum`'s bound is the one respelled number NO assert reaches — a typealias range bound is
+// readable by no expression — so it is not in this discipline and this comment used to claim it was.
+// It moves by hand; see `RegisterFileSize`.
 export let RegClassCount = 2
 
 // The register file with this ordinal — the allocation-free way to walk the files. `for class in

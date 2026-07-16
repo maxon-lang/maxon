@@ -245,8 +245,8 @@ let FloatOpsBase = 64 as KnobSize
 // amended Rule 2 permits a spill whose placement is forced by a call bracket.
 let FloatSpillLoopsBase = 2 as KnobSize
 
-// The bounded set of float accumulators `scaleFloats` mutates — four, against a 16-register XMM file
-// (`RegisterFileSize` 32 less `FirstXmmRegisterNumber` 16). Small on purpose: the straight-line
+// The bounded set of float accumulators `scaleFloats` mutates — four, against an XMM file of
+// `RegisterFileSize - FirstXmmRegisterNumber`. Small on purpose: the straight-line
 // arithmetic must never spill, so this knob measures float ARITHMETIC and cannot quietly become a
 // second spill knob. That shape is `scaleFloatSpill`'s job, and holding the two apart is the same
 // separation `WorkingLocalsPerFunction` keeps against `pressuredLoops`.
@@ -534,47 +534,86 @@ function generateRung(root FilePath, rung RungIndex) returns ScaleRung throws Sc
 	let funcCount = knobAt(FunctionsBase, rung: rung)
 	let localCount = knobAt(LocalsPerFunctionBase, rung: rung)
 
+	let chainLength = knobAt(CallChainBase, rung: rung)
+
 	var sourceBytes = 0 as SourceByteCount
 	var written = StringArray.create()
-	// The `manyFunctions` names, in call order — filled by `writeManyFunctions`, read back by `main`.
-	var funcNames = StringArray.create()
+	// Every generated entry point `main` threads the accumulator through, IN CALL ORDER — filled by
+	// the `writeRungFile` calls below as each file is written, read back by `main`. The generation
+	// order below IS the call order, which is what lets one append-as-you-go list serve both.
+	var drivers = StringArray.create()
 
 	// `a_` / `b_` / ... prefixes only order the directory listing for a human reading a dumped
 	// corpus; shv2 merges files in listing order and the merge is order-independent.
-	sourceBytes = sourceBytes + try writeRungFile(dir, name: "a_seed", source: seedSource(), written: written)
-	sourceBytes = sourceBytes + try writeManyFunctions(dir, fileCount: fileCount, funcCount: funcCount, written: written, funcNames: funcNames)
-	sourceBytes = sourceBytes + try writeRungFile(dir, name: "c_long", source: longFunctionSource(knobAt(LongIfsBase, rung: rung), localCount: localCount), written: written)
-	sourceBytes = sourceBytes + try writeRungFile(dir, name: "d_blocks", source: deepBlocksSource(knobAt(DeepBlocksBase, rung: rung), localCount: localCount), written: written)
-	sourceBytes = sourceBytes + try writeRungFile(dir, name: "e_chain", source: callChainSource(knobAt(CallChainBase, rung: rung)), written: written)
-	sourceBytes = sourceBytes + try writeRungFile(dir, name: "f_loops", source: pressuredLoopsSource(knobAt(PressuredLoopsBase, rung: rung)), written: written)
-	sourceBytes = sourceBytes + try writeRungFile(dir, name: "g_nested", source: nestedLoopsSource(knobAt(LoopNestBase, rung: rung)), written: written)
-	sourceBytes = sourceBytes + try writeRungFile(dir, name: "h_shifts", source: shiftCoverageSource(), written: written)
-	sourceBytes = sourceBytes + try writeRungFile(dir, name: "i_floats", source: floatOpsSource(knobAt(FloatOpsBase, rung: rung)), written: written)
-	sourceBytes = sourceBytes + try writeRungFile(dir, name: "j_fspill", source: floatSpillSource(knobAt(FloatSpillLoopsBase, rung: rung)), written: written)
-	sourceBytes = sourceBytes + try writeRungFile(dir, name: "l_consts", source: globalConstsSource(knobAt(GlobalConstsBase, rung: rung)), written: written)
-	sourceBytes = sourceBytes + try writeRungFile(dir, name: "m_globals", source: globalVarsSource(knobAt(GlobalVarsBase, rung: rung)), written: written)
-	sourceBytes = sourceBytes + try writeRungFile(dir, name: "n_stypes", source: structTypesSource(knobAt(StructTypesBase, rung: rung)), written: written)
-	sourceBytes = sourceBytes + try writeRungFile(dir, name: "o_sallocs", source: structAllocsSource(knobAt(StructAllocsBase, rung: rung)), written: written)
-	sourceBytes = sourceBytes + try writeRungFile(dir, name: "p_divide", source: intDivideSource(knobAt(IntDivideBase, rung: rung)), written: written)
+	sourceBytes = sourceBytes + try writeRungFile(dir, name: "a_seed", source: seedSource(), written: written, drivers: drivers, driver: RungDriver.threadsNothing)
+	sourceBytes = sourceBytes + try writeManyFunctions(dir, fileCount: fileCount, funcCount: funcCount, written: written, drivers: drivers)
+	sourceBytes = sourceBytes + try writeRungFile(dir, name: "c_long", source: longFunctionSource(knobAt(LongIfsBase, rung: rung), localCount: localCount), written: written, drivers: drivers, driver: RungDriver.threads(LongIfDriver))
+	sourceBytes = sourceBytes + try writeRungFile(dir, name: "d_blocks", source: deepBlocksSource(knobAt(DeepBlocksBase, rung: rung), localCount: localCount), written: written, drivers: drivers, driver: RungDriver.threads(DeepBlocksDriver))
+	// The chain's driver is its TOP link, whose name depends on the knob's size — so it is asked for
+	// by the same function that generates the links, never respelled from the shape of the name.
+	sourceBytes = sourceBytes + try writeRungFile(dir, name: "e_chain", source: callChainSource(chainLength), written: written, drivers: drivers, driver: RungDriver.threads(chainTopName(chainLength)))
+	sourceBytes = sourceBytes + try writeRungFile(dir, name: "f_loops", source: pressuredLoopsSource(knobAt(PressuredLoopsBase, rung: rung)), written: written, drivers: drivers, driver: RungDriver.threads(PressuredDriver))
+	sourceBytes = sourceBytes + try writeRungFile(dir, name: "g_nested", source: nestedLoopsSource(knobAt(LoopNestBase, rung: rung)), written: written, drivers: drivers, driver: RungDriver.threads(NestedDriver))
+	sourceBytes = sourceBytes + try writeRungFile(dir, name: "h_shifts", source: shiftCoverageSource(), written: written, drivers: drivers, driver: RungDriver.threads(ShiftsDriver))
+	// The float knobs thread the seed exactly as the int ones do — each takes the opaque `acc` and
+	// hands back a `trunc`ed int, so a float function is as load-bearing as any other and no DCE pass
+	// could take the float dimension away again.
+	sourceBytes = sourceBytes + try writeRungFile(dir, name: "i_floats", source: floatOpsSource(knobAt(FloatOpsBase, rung: rung)), written: written, drivers: drivers, driver: RungDriver.threads(FloatsDriver))
+	sourceBytes = sourceBytes + try writeRungFile(dir, name: "j_fspill", source: floatSpillSource(knobAt(FloatSpillLoopsBase, rung: rung)), written: written, drivers: drivers, driver: RungDriver.threads(FloatSpillDriver))
+	// `scaleGlobalConsts` is threaded exactly as the others are even though the folder eats its
+	// constants: the call keeps the DECLARATIONS alive, which is the whole of what that knob measures
+	// (see `globalConstsSource`).
+	sourceBytes = sourceBytes + try writeRungFile(dir, name: "l_consts", source: globalConstsSource(knobAt(GlobalConstsBase, rung: rung)), written: written, drivers: drivers, driver: RungDriver.threads(GlobalConstsDriver))
+	sourceBytes = sourceBytes + try writeRungFile(dir, name: "m_globals", source: globalVarsSource(knobAt(GlobalVarsBase, rung: rung)), written: written, drivers: drivers, driver: RungDriver.threads(GlobalVarsDriver))
+	sourceBytes = sourceBytes + try writeRungFile(dir, name: "n_stypes", source: structTypesSource(knobAt(StructTypesBase, rung: rung)), written: written, drivers: drivers, driver: RungDriver.threads(StructTypesDriver))
+	sourceBytes = sourceBytes + try writeRungFile(dir, name: "o_sallocs", source: structAllocsSource(knobAt(StructAllocsBase, rung: rung)), written: written, drivers: drivers, driver: RungDriver.threads(StructAllocsDriver))
+	sourceBytes = sourceBytes + try writeRungFile(dir, name: "p_divide", source: intDivideSource(knobAt(IntDivideBase, rung: rung)), written: written, drivers: drivers, driver: RungDriver.threads(DivideDriver))
 	// `z_`, not `k_`, so `main` sorts last however many knobs are added above it. The prefixes are
 	// cosmetic (shv2 merges in listing order and the merge is order-independent), but a `main` wedged
 	// mid-alphabet would have to be renamed by every future knob, and `pruneRungDir` deletes the old
 	// `k_main.maxon` from a stale rung directory rather than leaving it to join the measurement.
-	sourceBytes = sourceBytes + try writeRungFile(dir, name: "z_main", source: mainSource(funcNames, chainLength: knobAt(CallChainBase, rung: rung)), written: written)
+	sourceBytes = sourceBytes + try writeRungFile(dir, name: "z_main", source: mainSource(drivers), written: written, drivers: drivers, driver: RungDriver.threadsNothing)
 
 	try pruneRungDir(dir, generated: written)
 
 	return ScaleRung.create(rung, dir: dir, sourceBytes: sourceBytes)
 end 'generateRung'
 
+// WHAT `main` CALLS IN ONE GENERATED FILE — the question every `writeRungFile` must answer, so that a
+// knob CANNOT be added without deciding it.
+//
+// It is a REQUIRED parameter rather than a convention because the failure it prevents is silent. The
+// call list used to be re-spelled by hand in `mainSource`, one line per knob; a knob whose author
+// forgot the line still compiled, still generated its file, and still measured — right up until a DCE
+// pass lands, at which point its now-uncalled function is legitimately deleted and that knob's
+// dimension vanishes from the ladder while the numbers go on looking perfectly linear. There is no
+// DCE today, which is exactly why this had to be fixed before there is.
+union RungDriver
+	// The file's single entry point, which `main` threads the accumulator through: `acc = name(acc)`.
+	threads(name String)
+
+	// The file contributes no single entry point of its own. Two shapes qualify, both real:
+	// `writeManyFunctions`, whose N functions register themselves BY NAME as they are generated (one
+	// file holds many, so the file has no one driver); and the two files `main` does not thread at all
+	// — `a_seed`, whose `scaleSeed()` SEEDS the accumulator rather than taking it, and `z_main`, which
+	// IS `main`.
+	threadsNothing
+end 'RungDriver'
+
 // Write one generated file, returning its byte length so the caller can total the rung's source
-// size without stat-ing the directory back, and recording its NAME so the prune below knows it
-// belongs there.
-function writeRungFile(dir FilePath, name String, source String, written StringArray) returns SourceByteCount throws ScaleError
+// size without stat-ing the directory back, recording its NAME so the prune below knows it belongs
+// there, and registering its entry point so `main` can call it without re-spelling the name.
+function writeRungFile(dir FilePath, name String, source String, written StringArray, drivers StringArray, driver RungDriver) returns SourceByteCount throws ScaleError
 	let fileName = "{name}{MaxonExtension}"
 	let path = dir.join(fileName)
 	try File.writeText(path, content: source) otherwise throw ScaleError.reason("could not write {path.toString()}")
 	written.push(fileName)
+
+	match driver 'driver'
+		threads(driverName) then drivers.push(driverName)
+		threadsNothing then break 'driver'
+	end 'driver'
+
 	return source.byteLength() as SourceByteCount
 end 'writeRungFile'
 
@@ -609,6 +648,13 @@ end 'pruneRungDir'
 // The knobs, as source
 // ===========================================================================================
 
+// The seed, and the opaque callee — the two generated functions OTHER emitters name. `main` seeds the
+// accumulator with `SeedName` (which is why `a_seed` is `threadsNothing`: it PRODUCES the accumulator
+// rather than taking it), and the two spill knobs call `OpaqueCalleeName` across their live values.
+// Named here, beside the generator that defines them, so a rename cannot leave a caller behind.
+let SeedName = "scaleSeed"
+let OpaqueCalleeName = "scaleOpaque"
+
 // THE ORIGIN OF EVERY VALUE IN THE CORPUS, and the reason none of it folds away.
 //
 // `acc` is a loop-carried `var`: at the top of the loop it is a phi of its initializer and what the
@@ -621,7 +667,7 @@ end 'pruneRungDir'
 function seedSource() returns String
 	var out = StringBuilder.create()
 	out.append("// Generated by ScaleCorpus. The opaque seed every other value derives from.\n")
-	out.append("function scaleSeed() returns int\n")
+	out.append("function {SeedName}() returns int\n")
 	out.append("\tvar acc = 1\n")
 	out.append("\tvar i = 0\n")
 	out.append("\twhile i < {GeneratedLoopTrips} 'seedLoop'\n")
@@ -629,16 +675,16 @@ function seedSource() returns String
 	out.append("\t\ti = i + 1\n")
 	out.append("\tend 'seedLoop'\n")
 	out.append("\treturn acc\n")
-	out.append("end 'scaleSeed'\n")
+	out.append("end '{SeedName}'\n")
 	out.append("\n")
 	// A callee with a branch in it, so a call to it is neither trivially foldable nor free. Every
 	// pressured loop calls this ACROSS its live accumulators, which is what forces the spills.
-	out.append("function scaleOpaque(a int) returns int\n")
+	out.append("function {OpaqueCalleeName}(a int) returns int\n")
 	out.append("\tif a > 100 'big'\n")
 	out.append("\t\treturn a - 100\n")
 	out.append("\tend 'big'\n")
 	out.append("\treturn a + 1\n")
-	out.append("end 'scaleOpaque'\n")
+	out.append("end '{OpaqueCalleeName}'\n")
 	return out.build()
 end 'seedSource'
 
@@ -646,12 +692,16 @@ end 'seedSource'
 // real files. Both double per rung, so functions-per-file is constant and the two knobs stay
 // independent — M is what `load`/`merge`/the query spine see, N is what the pass pipeline sees.
 //
-// It appends every function's NAME to `funcNames`, in the order it generated them. `main` calls them
+// It appends every function's NAME to `drivers`, in the order it generated them. `main` calls them
 // back from that list — so the enumeration (the ceiling division and the `>= funcCount` break) lives
 // HERE, once. When it lived twice, `main`'s copy had to reproduce this one's names exactly or it would
 // call an undefined `sfX_Y` (a broken run) or skip one (an uncalled function a future DCE deletes,
-// silently flattening the knob — the very failure `mainSource` guards against).
-function writeManyFunctions(dir FilePath, fileCount KnobSize, funcCount KnobSize, written StringArray, funcNames StringArray) returns SourceByteCount throws ScaleError
+// silently flattening the knob — the very failure `RungDriver` now generalises to every knob).
+//
+// This is the ONE file whose functions register individually rather than through `writeRungFile`'s
+// `driver` parameter: it writes N files holding N*k functions, so there is no single entry point to
+// declare, and the names are known only inside the loop that mints them.
+function writeManyFunctions(dir FilePath, fileCount KnobSize, funcCount KnobSize, written StringArray, drivers StringArray) returns SourceByteCount throws ScaleError
 	// Ceiling division: the last file takes the remainder, and no function is dropped because the
 	// counts did not divide evenly.
 	let perFile = (funcCount + fileCount - 1) / fileCount
@@ -665,10 +715,10 @@ function writeManyFunctions(dir FilePath, fileCount KnobSize, funcCount KnobSize
 			if funcIndex >= funcCount 'past'
 				break
 			end 'past'
-			funcNames.push(smallFunctionName(fileIndex, slot: slot))
+			drivers.push(smallFunctionName(fileIndex, slot: slot))
 			out.append(smallFunctionSource(fileIndex, slot: slot, salt: funcIndex))
 		end 'eachFunc'
-		total = total + try writeRungFile(dir, name: "b_funcs_{fileIndex}", source: out.build(), written: written)
+		total = total + try writeRungFile(dir, name: "b_funcs_{fileIndex}", source: out.build(), written: written, drivers: drivers, driver: RungDriver.threadsNothing)
 	end 'eachFile'
 	return total
 end 'writeManyFunctions'
@@ -703,6 +753,12 @@ function smallFunctionName(fileIndex KnobSize, slot KnobSize) returns String
 	return "sf{fileIndex}_{slot}"
 end 'smallFunctionName'
 
+// Each knob's ENTRY POINT is named once, in a constant like this one, and read by the two parties that
+// must agree: the generator below, which emits the function under this name, and `generateRung`, which
+// registers it as the knob's `RungDriver` so `main` calls it. They cannot drift, because there is
+// nothing to drift from. (The chain knob is the exception, and it says why at `chainTopName`.)
+let LongIfDriver = "scaleLongIf"
+
 // The `longFunction` knob: ONE function, N sequential `if`s, over a bounded working set and
 // `localCount` scope-fillers. At rung 5 this is the 3,200-`if` benchmark ARCHITECTURE.md quotes a
 // measurement for. It grows OPS in a near-straight line; the CFG grows with it but stays a simple
@@ -724,7 +780,7 @@ end 'smallFunctionName'
 function longFunctionSource(ifCount KnobSize, localCount KnobSize) returns String
 	var out = StringBuilder.create()
 	out.append("// Generated by ScaleCorpus: the long-function knob — {ifCount} sequential ifs over {WorkingLocalsPerFunction} working locals and {localCount} scope-fillers.\n")
-	out.append("function scaleLongIf(a int) returns int\n")
+	out.append("function {LongIfDriver}(a int) returns int\n")
 	out.append(scopedLocalsDecl(localCount))
 	for i in 0 upto ifCount 'eachIf'
 		let p = i mod WorkingLocalsPerFunction
@@ -736,9 +792,11 @@ function longFunctionSource(ifCount KnobSize, localCount KnobSize) returns Strin
 		out.append("\tend 'c{i}'\n")
 	end 'eachIf'
 	out.append(workingLocalsSumAndReturn())
-	out.append("end 'scaleLongIf'\n")
+	out.append("end '{LongIfDriver}'\n")
 	return out.build()
 end 'longFunctionSource'
+
+let DeepBlocksDriver = "scaleDeepBlocks"
 
 // The `deepBlocks` knob: ONE function whose BLOCK count is huge. Each if/else is three blocks (then,
 // else, continuation), so this lands near 3x its knob — ~19,200 blocks at rung 5, which is the
@@ -753,7 +811,7 @@ end 'longFunctionSource'
 function deepBlocksSource(ifElseCount KnobSize, localCount KnobSize) returns String
 	var out = StringBuilder.create()
 	out.append("// Generated by ScaleCorpus: the deep-blocks knob — {ifElseCount} if/elses, ~{ifElseCount * 3} blocks, {WorkingLocalsPerFunction} working locals and {localCount} scope-fillers.\n")
-	out.append("function scaleDeepBlocks(a int) returns int\n")
+	out.append("function {DeepBlocksDriver}(a int) returns int\n")
 	out.append(scopedLocalsDecl(localCount))
 	for i in 0 upto ifElseCount 'eachIfElse'
 		let p = i mod WorkingLocalsPerFunction
@@ -765,32 +823,56 @@ function deepBlocksSource(ifElseCount KnobSize, localCount KnobSize) returns Str
 		out.append("\tend 'e{i}'\n")
 	end 'eachIfElse'
 	out.append(workingLocalsSumAndReturn())
-	out.append("end 'scaleDeepBlocks'\n")
+	out.append("end '{DeepBlocksDriver}'\n")
 	return out.build()
 end 'deepBlocksSource'
+
+// One link of the chain, by index — the `smallFunctionName` pattern: ONE name function, read by the
+// generator that emits the links and by the driver lookup below. The chain takes a name FUNCTION
+// where every other knob takes a name constant, because it generates N functions rather than one.
+function chainLinkName(link KnobSize) returns String
+	return "scaleChain{link}"
+end 'chainLinkName'
+
+// The chain's DRIVER: its TOP link, the only one `main` calls (it reaches the rest by recursion).
+//
+// This is the awkward knob — its entry point's name is a function of the knob's SIZE, so it cannot be
+// a constant like every other driver. It is a named function rather than a `chainLinkName(length - 1)`
+// spelled at the call site because "the top link is `length - 1`" is a fact about the GENERATOR's
+// numbering, and it belongs beside the loop that decides it: widen that loop and this moves with it,
+// where a `- 1` sitting in `generateRung` would quietly go on naming a link in the middle.
+function chainTopName(length KnobSize) returns String
+	return chainLinkName(length - 1)
+end 'chainTopName'
 
 // The `callChain` knob: N functions, each calling the one below it and holding values LIVE ACROSS
 // that call. The live values are the point — a bare call chain would measure call lowering, but
 // values live across a call can only live in the 5 callee-saved registers, so this is what
 // exercises the cross-call spill bracket.
+//
+// ⚠ IT NUMBERS THE LINKS 0..length-1, WHICH IS THE FACT `chainTopName` READS. Change the numbering
+// here and change it there; nothing checks the pair, and a stale `chainTopName` names a MIDDLE link
+// silently (`main` would still call a real function, and the knob would quietly shorten).
 function callChainSource(length KnobSize) returns String
 	var out = StringBuilder.create()
 	out.append("// Generated by ScaleCorpus: the call-chain knob — {length} chained calls, values live across each.\n")
 	// The base of the chain: takes no call, so the recursion of generated text terminates.
-	out.append("function scaleChain0(a int) returns int\n")
+	out.append("function {chainLinkName(0)}(a int) returns int\n")
 	out.append("\treturn a + 1\n")
-	out.append("end 'scaleChain0'\n")
+	out.append("end '{chainLinkName(0)}'\n")
 
 	for i in 1 upto length 'eachLink'
-		out.append("\nfunction scaleChain{i}(a int) returns int\n")
+		out.append("\nfunction {chainLinkName(i)}(a int) returns int\n")
 		out.append("\tlet x = a + {i mod 9 + 1}\n")
 		out.append("\tlet y = a * 2\n")
-		out.append("\tlet z = scaleChain{i - 1}(a)\n")
+		out.append("\tlet z = {chainLinkName(i - 1)}(a)\n")
 		out.append("\treturn x + y + z\n")
-		out.append("end 'scaleChain{i}'\n")
+		out.append("end '{chainLinkName(i)}'\n")
 	end 'eachLink'
 	return out.build()
 end 'callChainSource'
+
+let PressuredDriver = "scalePressured"
 
 // The `pressuredLoops` knob: ONE function, N loops, each holding PressuredValuesPerLoop
 // accumulators live across a call to `scaleOpaque`. The splitter must spill the accumulators that do
@@ -806,7 +888,7 @@ end 'callChainSource'
 function pressuredLoopsSource(loopCount KnobSize) returns String
 	var out = StringBuilder.create()
 	out.append("// Generated by ScaleCorpus: the pressured-loops knob — {loopCount} loops, {PressuredValuesPerLoop} values live across a call in each.\n")
-	out.append("function scalePressured(a int) returns int\n")
+	out.append("function {PressuredDriver}(a int) returns int\n")
 	out.append("\tvar total = a\n")
 
 	for loopIndex in 0 upto loopCount 'eachLoop'
@@ -819,7 +901,7 @@ function pressuredLoopsSource(loopCount KnobSize) returns String
 		out.append("\twhile i{loopIndex} < {GeneratedLoopTrips} 'p{loopIndex}'\n")
 		// The call is what makes the loop pressured: every accumulator is live across it, and a
 		// value live across a call is forbidden all 9 caller-saved registers.
-		out.append("\t\tlet r{loopIndex} = scaleOpaque(i{loopIndex})\n")
+		out.append("\t\tlet r{loopIndex} = {OpaqueCalleeName}(i{loopIndex})\n")
 		for v in 0 upto PressuredValuesPerLoop 'updateValues'
 			out.append("\t\ts{loopIndex}_{v} = s{loopIndex}_{v} + r{loopIndex}\n")
 		end 'updateValues'
@@ -832,7 +914,7 @@ function pressuredLoopsSource(loopCount KnobSize) returns String
 	end 'eachLoop'
 
 	out.append("\treturn total\n")
-	out.append("end 'scalePressured'\n")
+	out.append("end '{PressuredDriver}'\n")
 	return out.build()
 end 'pressuredLoopsSource'
 
@@ -840,6 +922,8 @@ end 'pressuredLoopsSource'
 // the compiler never RUNS these programs, so the exact bound is irrelevant to the measurement; only
 // the loop's SHAPE is. It is compared against the opaque `acc`, so the folder cannot see through it.
 let NestedLoopLimit = 1000000
+
+let NestedDriver = "scaleNested"
 
 // The `loopNest` knob: ONE function, ONE chain of loops NESTED to `depth`. Distinct from
 // `pressuredLoops` (loop COUNT at depth 1): this grows loop DEPTH, which is what the loop-phi token
@@ -859,7 +943,7 @@ let NestedLoopLimit = 1000000
 function nestedLoopsSource(depth KnobSize) returns String
 	var out = StringBuilder.create()
 	out.append("// Generated by ScaleCorpus: the loop-nest knob — one chain of {depth} loops nested to depth {depth}, all carrying one accumulator.\n")
-	out.append("function scaleNested(a int) returns int\n")
+	out.append("function {NestedDriver}(a int) returns int\n")
 	out.append("\tvar acc = a\n")
 
 	// One pass: append each loop's opener, and PREPEND its `end` to a separate string. Prepending is
@@ -874,7 +958,7 @@ function nestedLoopsSource(depth KnobSize) returns String
 
 	out.append(closes)
 	out.append("\treturn acc\n")
-	out.append("end 'scaleNested'\n")
+	out.append("end '{NestedDriver}'\n")
 	return out.build()
 end 'nestedLoopsSource'
 
@@ -913,6 +997,8 @@ function floatSumAndReturn() returns String
 	return out.build()
 end 'floatSumAndReturn'
 
+let FloatsDriver = "scaleFloats"
+
 // The `floatOps` knob: ONE function, N groups of float arithmetic and float compares over a bounded
 // set of float accumulators. The float twin of `longFunction` — it grows float ops along a chain.
 //
@@ -927,7 +1013,7 @@ end 'floatSumAndReturn'
 function floatOpsSource(groupCount KnobSize) returns String
 	var out = StringBuilder.create()
 	out.append("// Generated by ScaleCorpus: the float-ops knob — {groupCount} float arith/compare groups over {WorkingFloatsPerFunction} float accumulators.\n")
-	out.append("function scaleFloats(a int) returns int\n")
+	out.append("function {FloatsDriver}(a int) returns int\n")
 	out.append(floatWorkingDecl())
 
 	for i in 0 upto groupCount 'eachGroup'
@@ -953,9 +1039,11 @@ function floatOpsSource(groupCount KnobSize) returns String
 	end 'eachGroup'
 
 	out.append(floatSumAndReturn())
-	out.append("end 'scaleFloats'\n")
+	out.append("end '{FloatsDriver}'\n")
 	return out.build()
 end 'floatOpsSource'
+
+let FloatSpillDriver = "scaleFloatSpill"
 
 // The `floatSpill` knob: ONE function, N loops, each holding `FloatsLivePerSpillLoop` floats live
 // across a call to `scaleOpaque`. Every one of them is a FORCED spill — see `FloatSpillLoopsBase`
@@ -990,7 +1078,7 @@ end 'floatOpsSource'
 function floatSpillSource(loopCount KnobSize) returns String
 	var out = StringBuilder.create()
 	out.append("// Generated by ScaleCorpus: the float-spill knob — {loopCount} loops, {FloatsLivePerSpillLoop} floats live across a call in each (allowed = ∅, so every one is a forced spill).\n")
-	out.append("function scaleFloatSpill(a int) returns int\n")
+	out.append("function {FloatSpillDriver}(a int) returns int\n")
 	out.append("\tvar total = 0.0\n")
 
 	for loopIndex in 0 upto loopCount 'eachLoop'
@@ -1001,7 +1089,7 @@ function floatSpillSource(loopCount KnobSize) returns String
 		end 'declValues'
 		out.append("\tvar j{loopIndex} = 0\n")
 		out.append("\twhile j{loopIndex} < {GeneratedLoopTrips} 'q{loopIndex}'\n")
-		out.append("\t\tlet k{loopIndex} = scaleOpaque(j{loopIndex})\n")
+		out.append("\t\tlet k{loopIndex} = {OpaqueCalleeName}(j{loopIndex})\n")
 
 		for v in 0 upto FloatsLivePerSpillLoop 'updateValues'
 			out.append("\t\tg{loopIndex}_{v} = g{loopIndex}_{v} + (k{loopIndex} + 0.5)\n")
@@ -1016,7 +1104,7 @@ function floatSpillSource(loopCount KnobSize) returns String
 	end 'eachLoop'
 
 	out.append("\treturn trunc(total)\n")
-	out.append("end 'scaleFloatSpill'\n")
+	out.append("end '{FloatSpillDriver}'\n")
 	return out.build()
 end 'floatSpillSource'
 
@@ -1028,6 +1116,8 @@ let GlobalConstPrefix = "gc"
 let GlobalVarPrefix = "gv"
 let StructTypePrefix = "ScaleType"
 let AllocTypePrefix = "ScaleAlloc"
+
+let GlobalConstsDriver = "scaleGlobalConsts"
 
 // The `globalConsts` knob: N top-level `let`s, each derived from the TWO below it, and a function
 // that reads every one of them.
@@ -1063,15 +1153,17 @@ function globalConstsSource(constCount KnobSize) returns String
 	end 'eachConst'
 
 	out.append("\n")
-	out.append("function scaleGlobalConsts(a int) returns int\n")
+	out.append("function {GlobalConstsDriver}(a int) returns int\n")
 	out.append("\tvar acc = a\n")
 	for c in 0 upto constCount 'eachUse'
 		out.append("\tacc = acc + {GlobalConstPrefix}{c}\n")
 	end 'eachUse'
 	out.append("\treturn acc\n")
-	out.append("end 'scaleGlobalConsts'\n")
+	out.append("end '{GlobalConstsDriver}'\n")
 	return out.build()
 end 'globalConstsSource'
+
+let GlobalVarsDriver = "scaleGlobalVars"
 
 // The `globalVars` knob: N top-level `var`s, each stored to and loaded back through the opaque seed.
 //
@@ -1098,14 +1190,14 @@ function globalVarsSource(varCount KnobSize) returns String
 	end 'eachVar'
 
 	out.append("\n")
-	out.append("function scaleGlobalVars(a int) returns int\n")
+	out.append("function {GlobalVarsDriver}(a int) returns int\n")
 	out.append("\tvar acc = a\n")
 	for v in 0 upto varCount 'eachUse'
 		out.append("\t{GlobalVarPrefix}{v} = {GlobalVarPrefix}{v} + acc\n")
 		out.append("\tacc = acc + {GlobalVarPrefix}{v}\n")
 	end 'eachUse'
 	out.append("\treturn acc\n")
-	out.append("end 'scaleGlobalVars'\n")
+	out.append("end '{GlobalVarsDriver}'\n")
 	return out.build()
 end 'globalVarsSource'
 
@@ -1174,6 +1266,8 @@ function structCreateInBlock(index KnobSize, typeName String, binding String) re
 	return out.build()
 end 'structCreateInBlock'
 
+let StructTypesDriver = "scaleStructTypes"
+
 // The `structTypes` knob: N `type` declarations, each built exactly ONCE.
 //
 // The per-TYPE cost is the point — the type table and the layout descriptor — so what doubles is how
@@ -1193,15 +1287,17 @@ function structTypesSource(typeCount KnobSize) returns String
 		out.append(structTypeDecl("{StructTypePrefix}{t}"))
 	end 'eachType'
 
-	out.append("\nfunction scaleStructTypes(a int) returns int\n")
+	out.append("\nfunction {StructTypesDriver}(a int) returns int\n")
 	out.append("\tvar acc = a\n")
 	for t in 0 upto typeCount 'eachUse'
 		out.append(structCreateInBlock(t, typeName: "{StructTypePrefix}{t}", binding: "s{t}"))
 	end 'eachUse'
 	out.append("\treturn acc\n")
-	out.append("end 'scaleStructTypes'\n")
+	out.append("end '{StructTypesDriver}'\n")
 	return out.build()
 end 'structTypesSource'
+
+let StructAllocsDriver = "scaleStructAllocs"
 
 // The `structAllocs` knob: M `create` sites over a FIXED `AllocStructTypeCount` types.
 //
@@ -1220,15 +1316,17 @@ function structAllocsSource(allocCount KnobSize) returns String
 		out.append(structTypeDecl("{AllocTypePrefix}{t}"))
 	end 'eachType'
 
-	out.append("\nfunction scaleStructAllocs(a int) returns int\n")
+	out.append("\nfunction {StructAllocsDriver}(a int) returns int\n")
 	out.append("\tvar acc = a\n")
 	for i in 0 upto allocCount 'eachAlloc'
 		out.append(structCreateInBlock(i, typeName: "{AllocTypePrefix}{i mod AllocStructTypeCount}", binding: "p{i}"))
 	end 'eachAlloc'
 	out.append("\treturn acc\n")
-	out.append("end 'scaleStructAllocs'\n")
+	out.append("end '{StructAllocsDriver}'\n")
 	return out.build()
 end 'structAllocsSource'
+
+let DivideDriver = "scaleDivide"
 
 // The `intDivide` knob: N `/` and `mod` groups over a divisor derived from the opaque seed.
 //
@@ -1242,7 +1340,7 @@ end 'structAllocsSource'
 function intDivideSource(groupCount KnobSize) returns String
 	var out = StringBuilder.create()
 	out.append("// Generated by ScaleCorpus: the int-divide knob — {groupCount} `/` and `mod` groups over an opaque, non-zero divisor.\n")
-	out.append("function scaleDivide(a int) returns int\n")
+	out.append("function {DivideDriver}(a int) returns int\n")
 	out.append("\tvar acc = a\n")
 	for i in 0 upto groupCount 'eachGroup'
 		out.append("\tlet d{i} = (acc and {DivisorMask}) + 1\n")
@@ -1250,7 +1348,7 @@ function intDivideSource(groupCount KnobSize) returns String
 		out.append("\tacc = acc + acc mod d{i}\n")
 	end 'eachGroup'
 	out.append("\treturn acc\n")
-	out.append("end 'scaleDivide'\n")
+	out.append("end '{DivideDriver}'\n")
 	return out.build()
 end 'intDivideSource'
 
@@ -1260,6 +1358,8 @@ end 'intDivideSource'
 // exercised before. This is also the corpus's bitwise `and` on plain ints (the guards' `and` is the
 // short-circuit one, over bools).
 let ShiftCountMask = 63
+
+let ShiftsDriver = "scaleShifts"
 
 // The shift COVERAGE shapes. These do NOT scale — they are about COVERAGE, not the ladder: their
 // value is that a future codegen change to shifts is no longer invisible, the way the `const`-flags
@@ -1309,7 +1409,7 @@ function shiftCoverageSource() returns String
 	// operand's VALUE never matters here — the shift codegen inside each callee is exercised because the
 	// parameter is opaque (shv2 has no interprocedural constant propagation), not because of what flows
 	// in. Dynamic counts are the seed masked to a small non-negative range so they stay runtime values.
-	out.append("function scaleShifts(a int) returns int\n")
+	out.append("function {ShiftsDriver}(a int) returns int\n")
 	out.append("\tvar acc = a\n")
 	out.append("\tacc = acc + scaleShiftWideConst(a)\n")
 	out.append("\tacc = acc + scaleShiftWideDyn(a, c: acc and {ShiftCountMask})\n")
@@ -1318,7 +1418,7 @@ function shiftCoverageSource() returns String
 	out.append("\tacc = acc + (acc shl 3)\n")
 	out.append("\tacc = acc + (acc shr 2)\n")
 	out.append("\treturn acc\n")
-	out.append("end 'scaleShifts'\n")
+	out.append("end '{ShiftsDriver}'\n")
 	return out.build()
 end 'shiftCoverageSource'
 
@@ -1329,37 +1429,22 @@ end 'shiftCoverageSource'
 // evaporate and the ladder would go flat — reporting perfect linearity because it had stopped
 // compiling anything. Threading `acc` through every call makes each one load-bearing.
 //
-// The `manyFunctions` names come from `funcNames`, the exact list `writeManyFunctions` generated — so
-// the enumeration is not written down a second time here and cannot drift from the names on disk.
-function mainSource(funcNames StringArray, chainLength KnobSize) returns String
+// ⭐ EVERY name comes from `drivers`, the exact list the generators registered as they wrote each
+// file — so NO enumeration is written down a second time here and none can drift from the names on
+// disk. It used to be true of the `manyFunctions` loop alone, and this comment said so while the
+// thirteen lines directly beneath it re-spelled every other knob's driver by hand: a comment
+// contradicted by the code it sat on. Those thirteen are now `RungDriver.threads(...)` arguments at
+// the site that writes each file, which is a place the compiler makes you fill in.
+function mainSource(drivers StringArray) returns String
 	var out = StringBuilder.create()
 	out.append("// Generated by ScaleCorpus: threads the opaque seed through every generated function.\n")
 	out.append("function main() returns ExitCode\n")
-	out.append("\tvar acc = scaleSeed()\n")
+	out.append("\tvar acc = {SeedName}()\n")
 
-	for name in funcNames 'eachFunc'
+	for name in drivers 'eachDriver'
 		out.append("\tacc = {name}(acc)\n")
-	end 'eachFunc'
+	end 'eachDriver'
 
-	out.append("\tacc = scaleLongIf(acc)\n")
-	out.append("\tacc = scaleDeepBlocks(acc)\n")
-	out.append("\tacc = scaleChain{chainLength - 1}(acc)\n")
-	out.append("\tacc = scalePressured(acc)\n")
-	out.append("\tacc = scaleNested(acc)\n")
-	out.append("\tacc = scaleShifts(acc)\n")
-	// The float knobs thread the seed exactly as the int ones do — each takes the opaque `acc` and
-	// hands back a `trunc`ed int, so a float function is as load-bearing as any other and no DCE
-	// pass could take the float dimension away again.
-	out.append("\tacc = scaleFloats(acc)\n")
-	out.append("\tacc = scaleFloatSpill(acc)\n")
-	// The five knobs that close the measured blind spots. `scaleGlobalConsts` is threaded exactly as
-	// the others are even though the folder eats its constants: the call keeps the DECLARATIONS alive,
-	// which is the whole of what that knob measures (see `globalConstsSource`).
-	out.append("\tacc = scaleGlobalConsts(acc)\n")
-	out.append("\tacc = scaleGlobalVars(acc)\n")
-	out.append("\tacc = scaleStructTypes(acc)\n")
-	out.append("\tacc = scaleStructAllocs(acc)\n")
-	out.append("\tacc = scaleDivide(acc)\n")
 	out.append("\tif acc > 0 'ok'\n")
 	out.append("\t\treturn 0\n")
 	out.append("\tend 'ok'\n")

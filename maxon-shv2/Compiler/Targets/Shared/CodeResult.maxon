@@ -85,39 +85,6 @@ export union RdataRelocKind
 	funcAbs64InRdata(funcName String, rdataLabel String, offsetInLabel ByteOffset)
 end 'RdataRelocKind'
 
-// Output-section class of a global label, by name prefix. SHARED by every
-// backend's reloc-kind selection so the writable-.data / heap-global set lives
-// in exactly one place.
-export union GlobalLabelClass
-	covData
-	dataSection
-	rdata
-end 'GlobalLabelClass'
-
-// Classify a global label into its output section by name prefix. Data-section
-// (writable) globals are the runtime's mutable state: user globals + static
-// fields (`__data_`), the slab/MM allocator, the argv cache, and the
-// green-thread / scheduler / async runtime. `__data_cov_` coverage counters get
-// their own .covdata section and MUST be checked first (their prefix is a
-// superset of `__data_`). Everything else is read-only .rdata.
-export function classifyGlobalLabel(label String) returns GlobalLabelClass
-	if label.startsWith("__data_cov_") 'cov'
-		return GlobalLabelClass.covData
-	end 'cov'
-	if label.startsWith("__data_") 'data'
-		return GlobalLabelClass.dataSection
-	end 'data'
-	if isRuntimeMutableGlobalLabel(label) 'mutable'
-		return GlobalLabelClass.dataSection
-	end 'mutable'
-	return GlobalLabelClass.rdata
-end 'classifyGlobalLabel'
-
-// True for the runtime's writable mutable-state global prefixes.
-function isRuntimeMutableGlobalLabel(label String) returns bool
-	return label.startsWith("__slab_") or label.startsWith("__mm_") or label.startsWith("__mrt_") or label.startsWith("__gt_") or label.startsWith("__sched_") or label.startsWith("__at_") or label.startsWith("__subp_") or label.startsWith("__io_")
-end 'isRuntimeMutableGlobalLabel'
-
 // A relocation from code to a data section (.rdata / .symtab / .data / .covdata).
 // `rdataLabel` names the global data entry; `rdataOffset` is resolved during
 // serialization.

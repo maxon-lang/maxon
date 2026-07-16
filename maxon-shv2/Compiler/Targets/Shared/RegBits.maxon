@@ -179,11 +179,16 @@ end 'popcountWord'
 // The 32 x64 registers the allocator colors into: 16 GPRs (0..15) then 16 XMMs
 // (16..31). A RegMask (TargetDialect) is a bit per register number, spanning both.
 //
-// `RegNum`'s upper bound is this same 32, RESPELLED as a literal because a typealias range bound
-// must be a literal (E2010) — a range cannot name a constant. The two must move together; the
-// `fullRegisterMask` / `RegNum` pair is the whole of what "the register file is 32 wide" means
-// here, and a widened file with a stale `RegNum` would range-check-panic on the new registers
-// rather than silently mis-encode them.
+// This number is the X64Register enum's case count, and `assertRegisterFileMatchesEnum` holds it to
+// that once per module — so of the three copies of "the register file is 32 wide", this one cannot
+// drift from the enum that defines it.
+//
+// `RegNum`'s upper bound is the same 32 a THIRD time, RESPELLED as a literal because a typealias
+// range bound must be a literal (E2010) — a range cannot name a constant. It is the one copy NOTHING
+// can check: a range bound is erased into the range check itself and is readable by no expression,
+// so there is nothing to compare against. It must be moved BY HAND with the other two; the failure
+// is at least loud rather than silent (a widened file with a stale `RegNum` range-check-panics on
+// the new registers rather than mis-encoding them).
 export let RegisterFileSize = 32
 
 // Bytes per spill slot: one 64-bit machine word. Every Std value is a signed i64, so a
@@ -216,12 +221,67 @@ export typealias RegNum = int(0 to 32)
 // classifies one. Named because `regClassOf` and both class masks would otherwise each spell
 // a bare 16, which is the same fact written three times.
 //
-// RESPELLED as a literal rather than read off `X64Register.xmm0.rawValue`, for the same
-// reason `RegNum`'s bound is (see below): a top-level `let` is const-evaluated, and the
-// evaluator does not fold `.rawValue` (E2045). The enum and this constant must move
-// together; `regClassOf` is the only reader, and a spec pins the pairing
-// (specs-shv2/float-type.md exercises both files in one function).
+// RESPELLED as a literal rather than read off `X64Register.xmm0.rawValue`: a top-level
+// `let` is const-evaluated, and the evaluator does not fold `.rawValue` (E2045, verified —
+// *"Global initializer for 'FirstXmm' is not a constant expression"*). That is a DIFFERENT
+// wall from the one `RegNum`'s bound hits (E2010, a range bound must be a literal), and
+// both end in a respelled number for reasons neither can route around. The enum and this
+// constant must therefore move together — and `assertRegisterFileMatchesEnum` is what makes
+// them, rather than the spec that used to be the only thing watching.
 export let FirstXmmRegisterNumber = 16 as RegNum
+
+// `RegisterFileSize` and `FirstXmmRegisterNumber` are respelled literals; this is what keeps them
+// honest. E2045 forbids reading the enum in their INITIALIZERS, but it binds CONST-EVALUATION of a
+// top-level `let` and nothing else — a function body may interrogate the enum (`allCases`,
+// `fromRawValue`), which is the whole reason a check can exist where a derivation cannot. (Where a
+// derivation CAN exist it is strictly better and there is no assert: see
+// `TypeRules.MaxUnguardedShiftCount`.)
+//
+// ⚠ IT COSTS EXACTLY +2 ALLOCATIONS AND +296 BYTES PER COMPILE, AND THAT IS THE WHOLE PRICE.
+// MEASURED, by removing this call and re-running scale-test: every rung moved by that constant and
+// no other number moved at all. `X64Register.allCases` builds a fresh heap array (the bootstrap
+// emits an array literal, not a constant) — the Array plus its buffer is the 2, and 40 bytes of
+// header plus 32 registers x 8 bytes is the 296. It is FLAT across all six rungs because this runs
+// once per module, which is the difference between it and the trap `RegClassCount` documents: that
+// one is `allCases` on the PER-OP path and cost +5.6M allocations. Same call, four orders of
+// magnitude apart, and the position is the whole of the difference.
+//
+// ⚠ `allCases.count()` is the right comparand only because X64Register is CONTIGUOUS and holds
+// nothing but registers (rax=0..r15=15, xmm0=16..xmm15=31). `RegisterFileSize` means "one past the
+// highest register NUMBER" — a bit width — and a case COUNT equals that only under those two
+// properties. Add a non-register case or a gap and this check starts lying: fix it then, do not
+// widen the constant to satisfy it.
+export function assertRegisterFileMatchesEnum()
+	if RegisterFileSize != X64Register.allCases.count() 'fileSize'
+		panic("assertRegisterFileMatchesEnum: RegisterFileSize is {RegisterFileSize} but the X64Register enum has {X64Register.allCases.count()} cases — every mask built from `1 shl RegisterFileSize` is now the wrong width, so a register outside it is unaddressable by `fullRegisterMask` and a `RegNum` past the typealias bound range-check-panics. Move RegisterFileSize, RegNum's bound and the enum together.")
+	end 'fileSize'
+
+	// ⭐ ASKED AS "THE REGISTER AT THE BOUNDARY IS xmm0", NOT AS A COMPARISON OF TWO NUMBERS — which is
+	// `value == Type.case`, the form E3097 demands. That is not a workaround for the diagnostic; it is
+	// the better question, and the numeric form was a trap twice over:
+	//
+	//   • `FirstXmmRegisterNumber != X64Register.xmm0.rawValue` is E3097 outright, and a bare local
+	//     does NOT dodge it (measured — the checker traces the binding). Only a NARROWING cast does,
+	//     and only because the range check hides the accessor; `as int(0 to u64.max)` is elided and
+	//     E3097 returns. A comparison that compiles only because a cast happens to launder it is a
+	//     line nobody can safely tidy.
+	//   • Worse, that cast PRE-EMPTS this function's whole purpose. `xmm0.rawValue as RegNum` on an
+	//     enum whose xmm0 drifted ABOVE the file range-check-panics *"value outside typealias
+	//     'RegNum'"* (measured) — naming a typealias instead of the two things that disagree, which is
+	//     precisely the "accuse the wrong party" failure the call-order comment in RegisterAllocator
+	//     exists to stop. A check that reports the wrong culprit for half its drifts is half a check.
+	//
+	// ⭐ THE `otherwise` CANNOT FIRE, AND THAT IS THE BEST OUTCOME HERE, NOT A GAP. `FirstXmmRegisterNumber`
+	// is a top-level constant, so the bootstrap folds this lookup and REFUSES A BOUNDARY THAT NAMES NO
+	// REGISTER AT BUILD TIME — verified by sabotage: setting it to 32 does not panic, it fails to
+	// compile with *"E3034: no enum case with raw value '32'"*. The arm exists because the language
+	// requires it, and it panics rather than inventing a register, per the try/otherwise rule.
+	let atBoundary = try X64Register.fromRawValue(FirstXmmRegisterNumber) otherwise panic("assertRegisterFileMatchesEnum: FirstXmmRegisterNumber is {FirstXmmRegisterNumber}, which names no X64Register at all — and E3034 should have refused this at compile time, so reaching here means the constant stopped being constant-folded. Move FirstXmmRegisterNumber and the enum together.")
+
+	if atBoundary != X64Register.xmm0 'xmmBoundary'
+		panic("assertRegisterFileMatchesEnum: FirstXmmRegisterNumber is {FirstXmmRegisterNumber}, but the register the enum puts at that number is not xmm0 — `regClassOf` is THE place the GPR/XMM boundary is decided, so a drifted boundary files a register in the wrong class: an f64 would be colored into a GPR, and `classRegisterMask` would hand out the wrong file twice more. Move FirstXmmRegisterNumber and the enum together.")
+	end 'xmmBoundary'
+end 'assertRegisterFileMatchesEnum'
 
 // The CLASS of a physical register, derived from its number — the ONE place the GPR/XMM
 // boundary is decided.

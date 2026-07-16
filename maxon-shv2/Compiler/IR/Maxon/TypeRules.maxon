@@ -458,7 +458,24 @@ export let ShiftCountBits = 64 as ParsedInt
 // The largest count the shift INSTRUCTION distinguishes, and so the largest that may reach an
 // unguarded `shl`/`sar`. Anything above it must be saturated by the compiler, never handed to the
 // hardware, which would mask it back into range.
-export let MaxUnguardedShiftCount = 63 as ParsedInt
+//
+// ⭐ DERIVED, NOT SPELLED. It was a literal `63` beside a literal `64`, which is ONE hardware fact —
+// the operand width — written down twice with nothing making the copies agree. The two are not
+// independently choosable: the hardware masks a count to `ShiftCountBits - 1`, so any other value
+// here admits a count the mask would fold back into range, which is the `a shl -1 → a shl 63` class
+// of silent wrong answer E2054 exists to close. Stating the width once and subtracting makes that
+// drift UNREPRESENTABLE rather than merely asserted — so THESE TWO need no consistency check, and
+// none is written. (The bootstrap's constant evaluator folds a top-level `let` from another
+// top-level `let`; it is only `.rawValue` it declines, which is why `RegBits.FirstXmmRegisterNumber`
+// must stay a literal and take an assert instead.)
+//
+// ⚠ **BUT THE 63 IS STILL WRITTEN ONE MORE TIME, AND THAT COPY IS UNREACHABLE FROM HERE**:
+// `TargetDialect.ShiftCount` is `int(0 to 63)`. It is a RANGE BOUND, so it cannot name this constant
+// (E2010) and no assert can read it — the same dead end `RegBits.RegNum` documents. It is the FORCED
+// restatement, it says so itself, and it must move with this line. **Do not read "unrepresentable"
+// above as "there is only one copy":** it means the `63`/`64` pair here cannot disagree. The Target
+// tier's copy is a third number and it moves BY HAND.
+export let MaxUnguardedShiftCount = (ShiftCountBits - 1) as ParsedInt
 
 // The one count that is not a shift at all.
 export function shiftCountIsNegative(count ParsedInt) returns bool

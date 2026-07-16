@@ -193,7 +193,8 @@ spec files *observe a side effect*.
 but `StdOp` has only `arith`/`control`/`call`), a `.data` section (PeWriter has none), and the
 `dataSectionRipRelDisp32` reloc — **all three already scaffolded and named for this milestone**
 (`GlobalDataTable`: *".data-section globals … OMITTED until their milestones … they grow back as additional
-fields here"*; `RdataRelocKind.dataSectionRipRelDisp32` and `GlobalLabelClass.dataSection` already exist;
+fields here"*; `RdataRelocKind.dataSectionRipRelDisp32` already exists — as did a `GlobalLabelClass.dataSection`, since
+DELETED unused (4h): the routing turned out to be by reloc kind, never by the label's name;
 `PeWriter.maxon:236` panics *"not supported until its milestone"*).
 
 ⚠ **`let` needs NO storage at all** — it is compile-time evaluated and inlines at its use sites (which is
@@ -307,29 +308,124 @@ it is a **limit to state, not rediscover**: `scale-test` answers *"did the memor
 (*"in practice no two file-private vars share a bare name"*). **A complexity defended by what programs
 happen to look like is a bug waiting for a program.**
 
+### 4h. ✅ MAKE THE COPIES CHECK EACH OTHER — three cures, and they are NOT the same strength
+Closed 2026-07-15 (`make-copies-check`). Three instances of the signature bug — ONE FACT WRITTEN DOWN TWICE
+— cured three different ways. **The ranking below is the reusable part; reach for them in this order.**
+
+1. ⭐⭐ **DERIVE IT — the fact is written ONCE and there is nothing left to check.** `TypeRules` held
+   `ShiftCountBits = 64` and `MaxUnguardedShiftCount = 63`: two literals, ONE hardware fact (the operand
+   width), nothing comparing them. Drift admits a count the hardware masks — the `a shl -1 → a shl 63`
+   class E2054 exists to close (#7b). **Now `(ShiftCountBits - 1)`.** ✅ **The bootstrap DOES const-fold a
+   top-level `let` from another top-level `let`** (verified by running it: exit code 63). **Prefer this
+   always: an assert is a consolation prize for a fact you could not derive.**
+2. ⭐ **ASSERT IT — when a derivation is REFUSED.** `RegBits.FirstXmmRegisterNumber = 16` and
+   `RegisterFileSize = 32` respell `X64Register.xmm0.rawValue` and the enum's case count. They **cannot** be
+   derived: **`.rawValue` in a top-level `let` initializer is E2045** (verified — *"Global initializer for
+   'FirstXmm' is not a constant expression"*). ⭐ **But E2045 binds CONST-EVALUATION, not a function body**,
+   so the constant stays a literal and the CHECK reads the enum. `assertRegisterFileMatchesEnum` runs once
+   per module. **Cost, MEASURED: +2 allocs / +296 bytes per compile, FLAT across all six rungs** (the
+   `allCases` Array + buffer; 40B header + 32×8B). Same call that cost **+5.6M allocations** on the per-op
+   path — *the position is the whole difference.*
+3. ⭐ **MAKE IT A REQUIRED PARAMETER — the strongest of all where it fits.** `ScaleCorpus.mainSource`
+   re-spelled 13 of 15 driver names. Each knob now answers a required `driver RungDriver` on
+   `writeRungFile`, and `main` reads one list. **A knob that forgets its driver COMPILES NOTHING**
+   (`E3036: missing argument for parameter 'driver'` — verified by sabotage). This is the `iatCall` cure's
+   shape: not detected, **unrepresentable**.
+
+⭐ **ASK `value == Type.case`, NOT `.rawValue != n` — AND THE REVIEW IS WHAT CAUGHT IT.** The xmm check
+first compared `FirstXmmRegisterNumber` against `xmm0.rawValue`. That is **E3097**, and the first fix —
+bind it to a local — was a **false account of its own code**: a bare local does **not** dodge E3097 (the
+checker traces the binding, measured); only a **NARROWING cast** does, and only because the range check
+hides the accessor (`as int(0 to u64.max)` is elided and E3097 returns). ⚠ **And that cast PRE-EMPTED the
+check**: an xmm0 drifted above the file range-check-panics *"value outside typealias 'RegNum'"* — naming
+a typealias instead of the two things that disagree. The check is now
+`fromRawValue(FirstXmmRegisterNumber) != X64Register.xmm0` — the form E3097 demands, no cast, and it
+reads as the property. **Bonus, verified: an out-of-enum boundary is now `E3034` at COMPILE time.**
+⇒ **A line that compiles only because a cast launders it is a line nobody can safely tidy.**
+
+⚠ **THE `63` IS STILL WRITTEN A THIRD TIME AND THE DERIVATION DOES NOT REACH IT** (review found this):
+`TargetDialect.ShiftCount = int(0 to 63)`. A range bound — E2010, uncheckable, the `RegNum` dead end
+again. It is the FORCED restatement and says so; TypeRules now points AT it, because *"unrepresentable"*
+next to `ShiftCountBits` otherwise reads as *"there is only one copy"* and there are two.
+
+⚠ **AND THE SABOTAGE FOUND AN ORDERING DEFECT NOTHING ELSE WOULD HAVE.** With `RegisterFileSize` broken,
+the PRE-EXISTING `assertCallClobberConsistent` fired FIRST and blamed *"TargetDialect.callDirect's
+implicitDefs"* — **a file with nothing wrong in it** — because `callerSavedMask` is BUILT from
+`classRegisterMask`, which is built from `RegisterFileSize`. A derived check outrunning the primitive one
+accuses the wrong party, which is the exact failure `assertOneCallClobber`'s own comment warns of. **The
+checks are now ordered most-primitive-first.** ⇒ **When you add a check, ask what it is DOWNSTREAM of.**
+
 ### 4g. ⚠ Three comments claimed mechanisms that do not exist (found by P1.0d.5b's review)
 Same family as `throws_` being **write-only for its entire life** while a comment claimed *"the runtime
 branches on it"*, and `TargetOpMeta.setsFlags` (written 40× / read 0×), and the `xor reg,reg` idiom the
 lowering never emitted. **Now four instances of "a comment describing a compiler nobody wrote."**
-- ⭐ **`classifyGlobalLabel` has ZERO CALLERS** (`CodeResult.maxon:103-119`) — dead since M1-A. Its comment
+- ✅ **`classifyGlobalLabel` had ZERO CALLERS** (`CodeResult.maxon:103-119`) — dead since M1-A. Its comment
   claimed it routes globals to `.data` by the `__data_` prefix, that a label without it *"would fault on its
   first store to a read-only page"*, and that *"the two are one fact and this is its name."* **All false**,
   and **disproved by measurement**: set the prefix to `"zzz_"`, rebuild — globals still land in `.data`, still
   take stores, still return the right answer. Routing is by `RdataRelocKind.dataSectionRipRelDisp32`, filed
-  unconditionally. ⚠ **And the fact IS written twice** (`DataLabelPrefix` vs the literal at
-  `CodeResult.maxon:107`) — **they cannot disagree only because one is dead.** *(Left in place: it plausibly
-  becomes live when `__slab_`/`__gt_` runtime globals arrive at P1.2/P1.5. **Delete-or-wire is that rung's
-  call**, and a comment now names what must happen first.)*
+  unconditionally. ⚠ **And the fact WAS written twice** (`DataLabelPrefix` vs the literal at
+  `CodeResult.maxon:107`) — **they could not disagree only because one was dead.**
+  **DELETED 2026-07-15 (make-copies-check), along with `GlobalLabelClass`, `isRuntimeMutableGlobalLabel` and
+  the three comments citing them.** ⭐ **The "leave it, it plausibly becomes live at P1.2/P1.5" prediction was
+  FALSIFIED before it was read**: P1.0r shipped `__slab_cursor` and `__slab_end` — the exact globals it
+  enumerates — and wired nothing to it. Same rule as `__mm_incref`, deleted at P1.0r: *it had no correct call
+  site to be missing.* A future name-based classifier single-sources its prefix from `DataLabelPrefix`.
 - `PeWriter.maxon:34-37` carried the same false credit.
 - `TargetPrinter.maxon` claimed `RequiredData` blocks *"are compared against exactly these lines"* — **the
   rung contradicted itself**: `SpecTestRunner` and `PeSectionReader` both correctly state the opposite, and
   `compareDataSection` never touches `printDataSection`.
+
+**FOUR MORE FOUND AND FIXED 2026-07-15 (make-copies-check). The count is now EIGHT, and the class is not
+slowing down** — every one is a comment that was TRUE when written and that nothing re-read when the code
+under it moved:
+- ✅ `TargetLiveness.maxon` claimed `assertRegClassCountMatches` gives *"the same answer `RegisterFileSize`/
+  `RegNum` already give: state the number, and ASSERT it against the thing it mirrors"* — **it asserted
+  NEITHER.** It cited a discipline that did not exist. `assertRegisterFileMatchesEnum` now makes the claim
+  true **for `RegisterFileSize`**; the comment no longer makes it for `RegNum`, which is the one respelled
+  number **nothing can check** (a typealias range bound is readable by no expression, so there is no
+  comparand — it moves by hand, and saying so is the only honest option).
+- ✅ `RegisterAllocator.maxon` said ``"`RegNum` is `int(0 to 16)`"`` — **it is `int(0 to 32)`**, and the
+  sentence around it REASONED FROM THE WRONG BOUND (*"is not one of the 0..15 the file holds"*; the file
+  holds 0..31). Worst of the four: a reader checking the sentinel's safety would have checked it against a
+  file half the real width.
+- ✅ `RegisterAllocator.maxon` (*"a forward sweep over a `u16` in-use mask"*) and `TargetLiveness.maxon`
+  (*"u16 register masks"*) — **stale since P1.0d.4 doubled the file to 32.** `RegMask` is
+  `int(0 to u64.max)`. Both now name `RegMask` rather than respelling a width, which is the fix that cannot
+  go stale again: **a number in prose is just another copy.**
+- ✅ `ScaleCorpus.mainSource` claimed *"the enumeration is not written down a second time here and cannot
+  drift from the names on disk"* — **true of the `funcNames` loop, FALSE of the thirteen hand-spelled
+  driver names directly beneath it.** A comment contradicted by the code it sat on. Fixed structurally: see
+  4h.
 
 ⭐ **AND NEW CODE SHIPPED UNTESTED BEHIND A CITED PIN THAT WAS DISABLED.** `parseTopLevelAssignment`'s `let`
 arm cited `top-level-let-struct-reassign-error` as its test — **which is `disabled-test:` behind P1.1
 structs**, and `assignment.md`'s E2013 cases are all locals on a different path. The property needs no
 structs at all. ⇒ `top-level-let-scalar-reassign-error` added, verified to pass **and** to fail when
 perturbed. **A citation is not a test. Check the pin is ENABLED.**
+
+### 4i. 🔴 OPEN BOOTSTRAP BUG: **E3097 is fully defeated by any narrowing `as` cast** (found by make-copies-check's review)
+**A safety check that a one-token edit turns off.** `E3097` (`SemanticEnumAccessorComparison`) exists so
+that case-testing an enum through `.name`/`.ordinal`/`.rawValue` is refused — *"so adding a case forces
+every site to handle it instead of silently slipping through"*. It is a purely syntactic check on the
+COMPARISON's operands, and it sees through a plain local (verified) but **not through a cast**:
+
+```maxon
+let o = c.rawValue as Ordinal   // Ordinal = int(0 to 200)
+if o == 1 'isRed'               // compiles, runs, correctly identifies `red`
+```
+
+**Verified end to end** (exit 100 = the branch fired for exactly one case). That is precisely the
+case-test E3097 forbids, and **adding a case to the enum would not force that site to handle it** — the
+silent-slip-through the code exists to prevent. ⚠ **A WIDE cast does NOT defeat it** (`as int(0 to
+u64.max)` is elided and E3097 returns), which is the tell: what hides the accessor is the range-check
+node a NARROWING cast inserts, so the check is keyed on the syntax it happens to see rather than on the
+question being asked.
+
+**NOT fixed here**: it is `maxon-sharp/` code, its gate is the full C# suite plus codegen neutrality, and
+it has no business riding along on a rung about shv2's constants. ⇒ **Its own rung.** *(shv2 does not emit
+E3097 — `notEmittedBy: [shv2]` — so shv2's own parser inherits nothing to fix yet, but it will need the
+rule when it reaches semantic checking, and it should key it on the QUESTION, not the token shape.)*
 
 ### 4e. ⚠ Three bootstrap bugs P1.0d.5a tripped over (each cost the implementer real time)
 - ⭐ **A parameter named `end` SILENTLY DESTROYS the enclosing type's member table.**
@@ -773,8 +869,9 @@ The bootstrap check runs at **both** parse sites that can meet a shift — the e
 >
 > ⚠ **The lesson is about THIS FILE.** A backlog whose stated through-line is *ONE FACT WRITTEN DOWN TWICE*
 > was itself carrying a fixed entry that `CLAUDE.md` documents as fixed — **the fact written twice, and the
-> copy nobody executed went stale.** Exactly what #4g's dead `classifyGlobalLabel` is, one file over. **An
-> entry here is not evidence; check it before you act on it.**
+> copy nobody executed went stale.** Exactly what #4g's dead `classifyGlobalLabel` was, one file over —
+> and that one has now been deleted rather than left to rot (4h). **An entry here is not evidence; check
+> it before you act on it.**
 
 **~~The original report:~~**
 `maxon-sharp/Compiler/ErrorCode.cs` and `maxon-selfhosted/Compiler/ErrorCode.maxon` are **two registries

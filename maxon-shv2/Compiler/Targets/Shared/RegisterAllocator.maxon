@@ -143,8 +143,8 @@ export type ReuseCopyPlan
 	// `count()` as "past the last copy", which is unchanged (the length is still `seq + 1`).
 	//
 	// The register columns are filled with the out-of-file sentinel rather than register 0, so an entry
-	// whose `present` flag is false names no real register (`RegNum` is `int(0 to 16)` precisely so that
-	// `RegisterFileSize` is representable and is not one of the 0..15 the file holds). Nothing READS it
+	// whose `present` flag is false names no real register (`RegNum` is `int(0 to 32)` precisely so that
+	// `RegisterFileSize` is representable and is not one of the 0..31 the file holds). Nothing READS it
 	// — `at()` returns `none` on a false `present` before it touches either register column — so this is
 	// a defence against a future reader, not a value any decision depends on today.
 	export function record(seq OpSeq, destReg RegNum, srcReg RegNum)
@@ -418,6 +418,14 @@ export typealias ValueClassColumns = Array with ValueClassColumn
 
 export function allocateRegisters(module TargetModule, target Target, project Project, valueClasses ValueClassColumns) throws CompileError
 	logDebug(LogCategory.codegen, message: function() gives "Register allocation ({targetToString(target)}): {module.funcCount()} function(s)")
+	// ORDER IS LOAD-BEARING: most primitive fact first. `callerSavedMask` is built from
+	// `classRegisterMask`, which is built from `RegisterFileSize` — so a drifted register file makes
+	// the clobber check fail TOO, and it fails first and blames `TargetDialect.callDirect`, sending
+	// the reader to a file with nothing wrong in it. Verified by sabotage: with `RegisterFileSize`
+	// set to 31, the clobber check reported "callDirect ... drifted apart" and named neither the
+	// constant nor the enum. Checking the file's own width before anything derived from it is read
+	// means each panic accuses the thing that actually moved.
+	assertRegisterFileMatchesEnum()
 	assertCallClobberConsistent()
 	assertRegClassCountMatches()
 
@@ -697,7 +705,7 @@ function collectPhiEdgeHints(module TargetModule, topo FuncTopology, predBlock I
 end 'collectPhiEdgeHints'
 
 // ==========================================================================
-// The colorer — a forward sweep over a `u16` in-use mask, per block
+// The colorer — a forward sweep over a `RegMask` in-use mask, per block
 // ==========================================================================
 
 function colorFunction(module TargetModule, liveness LivenessResult, pool RegMask, stats RegAllocStats, reuseCopies ReuseCopyPlan) returns Allocation

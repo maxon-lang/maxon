@@ -376,10 +376,15 @@ enum ShiftInstruction
 	shr
 end 'ShiftInstruction'
 
-// The label prefix every f64 constant island carries. It is NOT one of `classifyGlobalLabel`'s
-// writable prefixes (`__data_`, `__slab_`, `__mm_`, …), so a float constant classifies as
-// read-only `.rdata` — which is what it is: an immutable IEEE bit pattern the code only ever
-// loads. The classification is by NAME, so the prefix is the whole of what puts it there.
+// The label prefix every f64 constant island carries: an immutable IEEE bit pattern the code only
+// ever loads, so it belongs in read-only `.rdata`.
+//
+// ⚠ THE PREFIX DOES NOT PUT IT THERE — the RELOCATION KIND does. A float island lands in `.rdata`
+// because it is filed as `RdataRelocKind.ripRelDisp32`, and a global lands in `.data` because it is
+// filed as `dataSectionRipRelDisp32`; the label's text is never consulted on the way. This comment
+// used to say the routing was by NAME, crediting a `classifyGlobalLabel` that had no callers and was
+// deleted; `DataLabelPrefix` in SignatureIndex.maxon records the measurement that settled it. So the
+// prefix buys READABILITY in a golden fragment, and nothing else.
 let FloatConstantLabelPrefix = "__fconst_"
 
 // The label every `ordered` block carries — the second half of a split float equality (see
