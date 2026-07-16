@@ -3123,11 +3123,11 @@ export type Parser
 		//
 		// ⚠ Guarded on the block NOT being terminated, and that is the fail-safe: `return`/`break`/`continue`
 		// have already ended the block, and a `__mm_decref` emitted after a terminator would sit on a dead
-		// path (a leak the gate would shout, not a wrong answer). No enabled statement creates a temporary in
-		// a terminating position — the only owned temporaries at this rung are interpolation results in `let`
-		// and bare-call statements, neither of which terminates — so this drops every one of them. Should a
-		// later rung return an owned temporary, the leak gate names it loudly rather than a wrong drop hiding
-		// it, which is the same trade `closeBlock` makes for a nested-block binding.
+		// path (a leak the gate would shout, not a wrong answer). A TERMINATING statement that creates a
+		// temporary drops it BEFORE the terminator itself — `return wrap("v{x}")` builds an owned
+		// interpolation as a call argument, and `parseReturnStatement` drains it ahead of the `ret` — so by
+		// the time control reaches here the block is terminated and its temporaries are already gone. This
+		// skip is therefore correct, not a hole: `break`/`continue` carry no expression and so no temporary.
 		//
 		// The `count() > 0` half is what keeps a statement that produced NO temporary — every statement in a
 		// program with no interpolation — from paying anything: `drainPendingTemps` reallocates the list, so
@@ -3494,6 +3494,29 @@ export type Parser
 			narrowsFloatToInt then throw ParseError.implicitNarrowing(typeTagName(retTag), targetType: typeTagName(declaredTag), line: retTok.line, column: retTok.column)
 		end 'declared'
 
+		// ⭐ **A `returns String` FUNCTION HANDS BACK A UNIFORMLY OWNED HEAP String**, and the caller
+		// drops that result unconditionally (`mintOwnedCallResult`). So the callee must return
+		// something OWNED and must not drop it — two adjustments, in this order, BEFORE the scope drops:
+		//
+		//   • PROMOTE a borrowed return. `return "hi"` is an immortal rdata literal (capacity == -2),
+		//     not owned heap; handed back as-is, the caller would `__mm_decref` read-only data. Copying
+		//     its bytes into a fresh owned record — the same single-`__mm_alloc` fused-record path an
+		//     interpolation builds, with the source as its one part — gives the caller a box it may
+		//     safely drop. `return "{x}"` and `return t` are already owned, so they pass through here.
+		//   • MOVE the owned return OUT of both drop sets. It belongs to the caller now: out of
+		//     `ownedBindings` so `emitScopeDrops` does not double-free `return t`, and out of
+		//     `pendingTempDrops` so the interp/promoted temporary is not dropped on the dead path the
+		//     `ret` leaves behind.
+		var returned = retVal
+		if tagIsText(retTag) and not self.valueIsOwnedHeap(returned) 'promoteBorrowed'
+			returned = self.promoteToOwnedString(returned, range: SourceRange.ofToken(retTok))
+		end 'promoteBorrowed'
+
+		if self.valueIsOwnedHeap(returned) 'moveOut'
+			self.removeFromOwnedBindings(returned)
+			self.removeFromPendingTemps(returned)
+		end 'moveOut'
+
 		// ⭐⭐ **THE DROP GOES HERE — AFTER THE VALUE, BEFORE THE TERMINATOR — AND BOTH HALVES OF
 		// THAT ARE LOAD-BEARING.**
 		//
@@ -3505,18 +3528,32 @@ export type Parser
 		//   • BEFORE the terminator, because a `ret` ENDS the block. Anything emitted after it sits
 		//     on a path control has already left, and the box would leak — exit 101.
 		//
-		// `retVal` is already computed, so it is a value in a register and no longer a read of the
+		// `returned` is already computed, so it is a value in a register and no longer a read of the
 		// box. That is what makes the window between the two lines safe.
 		//
-		// ⚠ **A RETURNED STRUCT WOULD BE DROPPED BY THIS AND MUST NOT BE** — `return p` MOVES the box
-		// out to the caller, so the callee owes no decref. It cannot arise at this rung and the
-		// reason is worth pinning: the only struct-returning function is a factory, whose `return
-		// Self{…}` returns a TEMPORARY that is bound to no name and so is in no scope
+		// ⚠ **AN OWNED String RETURN HAS ALREADY LEFT THIS DROP SET (moved out above), which is what
+		// makes the caller its sole owner.** A returned STRUCT is the one owned value the move-out does
+		// NOT yet cover, and it cannot arise at this rung: the only struct-returning function is a
+		// factory, whose `return Self{…}` returns a TEMPORARY bound to no name and so in no scope
 		// (`emitStructLiteral` mints a value, not a binding). The day a struct is returned through a
-		// BINDING (`struct-return`, still `disabled-test:`, P1.4), this must first ask whether
-		// `retVal` IS the box it is about to drop.
+		// BINDING (`struct-return`, still `disabled-test:`, P1.4), the move-out above must also ask
+		// `tagIsStructRef` — today it asks only `valueIsOwnedHeap`, which a struct box never sets.
+		//
+		// TWO drop sets empty here, both before the `ret` and both with the returned value already moved
+		// out: the owned TEMPORARIES this return's expression created but does NOT hand back, and the
+		// owned BINDINGS in scope. The temporary case is `return wrap("v{x}")` — the interpolation is
+		// built here, handed to `wrap` (which BORROWS it), and belongs to this statement, which owns and
+		// drops it exactly as `print("{x}")` does. `parseStatement`'s statement-end drain cannot: a `ret`
+		// has terminated the block, so it sees the termination and skips, and the drop has to land here
+		// instead. The `count() > 0` guard is that drain's own — `drainPendingTemps` reallocates the list
+		// and almost no return leaves a temporary, so the common return pays nothing. Temporaries drop
+		// before bindings: the return expression's temporaries are the last owned values built.
+		if self.pendingTempDrops.count() > 0 'dropReturnTemps'
+			self.drainPendingTemps(retTok)
+		end 'dropReturnTemps'
+
 		self.emitScopeDrops(retTok)
-		self.artifact.emitTerminator(self.currentBlock, op: MaxonOp.ret(retVal), range: SourceRange.ofToken(retTok))
+		self.artifact.emitTerminator(self.currentBlock, op: MaxonOp.ret(returned), range: SourceRange.ofToken(retTok))
 	end 'parseReturnStatement'
 
 	// Emit a `__mm_decref` for every struct binding in scope, in REVERSE declaration order.
@@ -3602,6 +3639,36 @@ export type Parser
 		end 'each'
 		self.pendingTempDrops = kept
 	end 'removeFromPendingTemps'
+
+	// The value a binding holds has been MOVED OUT — a `return` hands its box to the caller — so the
+	// binding must leave `ownedBindings`, else `emitScopeDrops` would decref a box the callee no longer
+	// owns (a double-free with the caller's own drop). Keyed on the bound VALUE rather than on position:
+	// a returned binding is rarely the last declared, so identity is what stays correct. A filter-rebuild,
+	// the `removeFromPendingTemps` shape for the owned-BINDING list.
+	function removeFromOwnedBindings(value ValueId)
+		var kept = VarInfoArray.create()
+		for binding in self.ownedBindings 'each'
+			if binding.boundValue != value 'notMovedOut'
+				kept.push(binding)
+			end 'notMovedOut'
+		end 'each'
+		self.ownedBindings = kept
+	end 'removeFromOwnedBindings'
+
+	// ⭐ **PROMOTE A BORROWED String TO AN OWNED HEAP COPY** so a `returns String` function ALWAYS hands
+	// back something owned. `return "hi"` yields an immortal rdata literal (capacity == -2), and a
+	// `returns String` caller drops its result unconditionally — decref'ing read-only data. Copying the
+	// source bytes into a fresh fused record — the SAME single-`__mm_alloc` path an interpolation builds,
+	// with the source as its one part (`__str_copy` blits `buffer@0`/`length@8`) — yields an owned
+	// temporary the caller can safely drop. `emitStringInterp` marks it owned (`trackOwnedTemp`); the
+	// return's move-out then takes it out of the pending list. NO second record layout is hand-rolled.
+	function promoteToOwnedString(source ValueId, range SourceRange) returns ValueId
+		var partBufs = ValueIdArray.create()
+		var partLens = ValueIdArray.create()
+		var scratchIds = ValueIdArray.create()
+		self.materializeStringRecordPart(source, partBufs: partBufs, partLens: partLens, range: range)
+		return self.emitStringInterp(partBufs, partLens: partLens, scratchIds: scratchIds, range: range)
+	end 'promoteToOwnedString'
 
 	// ⭐ **DROP EVERY OWNED TEMPORARY THE STATEMENT LEFT UNCONSUMED**, in REVERSE creation order (the
 	// `emitScopeDrops` convention — the last built is the first torn down), into `currentBlock`. Called at
@@ -8033,7 +8100,7 @@ export type Parser
 	// finally a split and not a sentinel.
 	function mintDeclaredCallResult(callee ByteArray, anchor Token, returnType MaxonReturnType, resultUsed bool) returns ValueId throws ParseError
 		match returnType 'r'
-			value(inner) then return self.mintValueOfType(inner)
+			value(inner) then return self.mintOwnedCallResult(inner)
 			void then break 'r'
 		end 'r'
 
@@ -8049,6 +8116,22 @@ export type Parser
 
 		return self.mintValue(ValueTypeTag.void, nameId: UnnamedTypeId)
 	end 'mintDeclaredCallResult'
+
+	// The SSA value a VALUE-returning callee defines, minted from its declared return type. A
+	// `returns String` callee hands back a uniformly OWNED heap String (`parseReturnStatement` moved
+	// it out of the callee, promoting a borrowed literal if need be), so the CALLER owns the result
+	// and must drop it. It is enrolled exactly as an interpolation temporary is — `parseBinding`
+	// transfers a bound result to a scope-exit drop, `drainPendingTemps` frees an unbound one after
+	// the consuming statement — through the one owned-temp door, `trackOwnedTemp`. A non-String result
+	// owns no heap, so it is enrolled in nothing. String-ness is the tag `ValueTypeTag.string`, read
+	// through the same `tagIsText` predicate every String site asks.
+	function mintOwnedCallResult(inner MaxonType) returns ValueId
+		let result = self.mintValueOfType(inner)
+		if tagIsText(self.tagOf(result)) 'ownsStringResult'
+			self.trackOwnedTemp(result)
+		end 'ownsStringResult'
+		return result
+	end 'mintOwnedCallResult'
 
 	// Parse an integer literal token into a `literal` op, and return the value it defines.
 	// The token's text becomes a number through the shared `intLiteralValue`, so a literal
