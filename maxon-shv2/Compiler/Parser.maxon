@@ -287,18 +287,39 @@ export union ParseError implements Error
 	// A field access (`p.x`) naming a field the struct does not declare. Renders as E3018,
 	// positioned at the FIELD name — the token that is wrong, not the value it is read from.
 	unknownField(typeName String, fieldName String, line LineNumber, column ColumnNumber)
-	// A struct literal that omits a field. Renders as E3086, positioned at the type name.
+	// A struct literal that omits a field the declaration gives no DEFAULT for. Renders as E3086,
+	// positioned at the type name.
 	//
 	// ⚠ It is NOT tolerated by the allocator's zeroing guarantee, and that is worth saying because
 	// the guarantee makes it look safe: an omitted slot would read back as 0, which is a plausible
 	// number and therefore a WRONG ANSWER rather than a crash. `Point{x: 1}` would have `y == 0`
-	// and nothing would say so. Field DEFAULTS are the feature that makes an omission legal, and
-	// they are P1.1a wave 2 (`struct-field-default`, still `disabled-test:`).
+	// and nothing would say so.
+	//
+	// Field DEFAULTS (P1.1a wave 2) are what make an omission legal, and they NARROW this arm
+	// rather than removing it: `applyFieldDefaults` fills every omitted slot that declares one
+	// BEFORE `requireAllFieldsInitialized` looks, so what reaches here is a slot with no value from
+	// either source. The message's "and it has no default value" is now a statement of fact.
 	fieldNotInitialized(typeName String, fieldName String, line LineNumber, column ColumnNumber)
 	// A struct literal that names one field twice (`Point{x: 1, x: 2}`). Renders as E3018 — the
 	// same code an unknown field reports, because it is the same defect from the other side: the
 	// literal's field list does not correspond to the type's. Positioned at the repeated name.
 	duplicateFieldInitializer(typeName String, fieldName String, line LineNumber, column ColumnNumber)
+	// --- The field-mutability arm (P1.1a wave 2) ---
+	//
+	// A write to a field declared `let` — `c.version = 2` where `version` is `export let`. Renders
+	// as **E2013, the SAME code as `assignToImmutable`**, because it is the same defect reached
+	// from the other side: a write to something declared not to accept one. A second code would
+	// split one rule across two numbers, and a reader hitting either wants the identical advice.
+	// (Precedent for many-variants-one-code: `unknownLoopLabel` reports `ErrorCode.controlOutsideLoop`.)
+	//
+	// It is a DISTINCT arm rather than a reuse of `assignToImmutable` because the two must say
+	// different words — that one names a VARIABLE, and "cannot assign to immutable variable:
+	// 'version'" would name something the source did not write, and would not tell the reader that
+	// `var version` is the fix.
+	//
+	// ⚠ Positioned at the ROOT VARIABLE token, NOT the field — measured from the bootstrap, and
+	// pinned at `:16:2` by `structs.md`'s `error.let-field-assign`.
+	assignToImmutableField(typeName String, fieldName String, line LineNumber, column ColumnNumber)
 end 'ParseError'
 
 // --- Ranged-typealias range bounds ---
@@ -621,6 +642,33 @@ function constantValueType(tag ValueTypeTag) returns MaxonType
 
 	panic("constantValueType: a top-level constant is tagged '{typeTagName(tag)}' — the evaluator folds integers, bools and floats only")
 end 'constantValueType'
+
+// The literal a field DEFAULT is: its VALUE, and the type its TOKEN KIND denotes. See
+// `Parser.readFieldDefaultLiteral`, which is the only thing that builds one.
+type FieldDefaultLiteral
+	export var payload as ParsedInt
+	export var declaredType as MaxonType
+
+	export static function create(payload ParsedInt, declaredType MaxonType) returns FieldDefaultLiteral
+		return Self{payload: payload, declaredType: declaredType}
+	end 'create'
+end 'FieldDefaultLiteral'
+
+// IEEE-754's sign bit — the top bit of the 64-bit pattern. Negating a float literal FLIPS it; it is
+// not an arithmetic negate, because a `ParsedInt` holding a float carries the BITS (see
+// `Parser.parseFloatLiteral`) and `0 - bits` would be nonsense.
+//
+// It rides `ParsedInt`, which is SIGNED, so the constant IS `i64.min` — the same bit pattern
+// `0x8000000000000000`, spelled as the number Maxon can write. `xor` with it flips exactly that bit
+// and leaves the other 63 alone, which is negation for every float including zero and infinity.
+let FloatSignBit = i64.min as ParsedInt
+
+// `-<float literal>` — the bits of the literal's negation. The declaration sweep needs this and the
+// expression parser does not: a body's `-x` is `emitFloatNegation` (a real `0.0 - x` op), while a
+// field default has no code to emit into and must be a NUMBER by the time the layout is hashed.
+function negatedFloatBits(bits ParsedInt) returns ParsedInt
+	return bits xor FloatSignBit
+end 'negatedFloatBits'
 
 // The comparison operators (M4). Each maps to a `MaxonOp.compare`. Classifier shared by
 // the precedence table (`infixPrecedence`) and the climber's op-dispatch (`parseBinary`).
@@ -1393,8 +1441,7 @@ export type Parser
 		let nameTok = try self.readTypeHeader() otherwise return
 		self.enclosingType = nameTok.value
 
-		var fieldNames = ByteArrayArray.create()
-		var fieldTypes = MaxonTypeArray.create()
+		var layout = StructLayout.create(nameTok.value)
 
 		var depth = 0 as BlockDepth
 		while not self.isEof() 'body'
@@ -1408,7 +1455,7 @@ export type Parser
 				// A field the sweep cannot read leaves the layout SHORT, which would put every later
 				// field at the wrong offset — so the scan stops rather than recording a layout it
 				// knows is wrong. The real parse reports the malformed declaration properly.
-				try self.readStructFieldInto(fieldNames, fieldTypes: fieldTypes) otherwise break
+				try self.readStructFieldInto(layout) otherwise break
 				continue
 			end 'isField'
 
@@ -1426,7 +1473,7 @@ export type Parser
 			self.advance()
 		end 'body'
 
-		structs.push(StructLayout.create(nameTok.value, fieldNames: fieldNames, fieldTypes: fieldTypes))
+		structs.push(layout)
 		self.enclosingType = EmptySourceText
 	end 'recordScannedType'
 
@@ -1452,23 +1499,25 @@ export type Parser
 		return self.atTopLevelBindingKeyword()
 	end 'atStructFieldKeyword'
 
-	// Read one field declaration — `[export] (let|var) <name> as <Type>` — appending its name and
-	// declared type to the parallel columns. THE one field reader, shared by the sweep and the real
-	// parse, so `StructLayout`'s field ORDER (which IS the box's slot order — see
+	// Read one field declaration into `layout`. THE one field reader, shared by the sweep and the
+	// real parse, so `StructLayout`'s field ORDER (which IS the box's slot order — see
 	// `StructLayout.offsetOfField`) is read exactly once from one grammar. Two readers would be free
 	// to disagree about how many fields a type has, and the one that was wrong would place every
 	// later field at the wrong offset: a silent out-of-bounds read, not a compile error.
 	//
-	// ⚠ **`let` AND `var` ARE READ IDENTICALLY AND THE DISTINCTION IS DROPPED**, deliberately. It
-	// decides FIELD MUTABILITY (`c.version = 2` on a `let` field is E2013), and that is P1.1a wave 2
-	// — every case for it in `specs-shv2/structs.md` is still `disabled-test:`. Recording the bit now
-	// would be a `StructLayout` column nothing reads, which is this rung's own founding lesson
-	// (`MmRuntime`'s header: no `__slab_alloc_raw` without the caller that justifies it). The
-	// keyword is CONSUMED either way, so the grammar is whole; only the answer is not kept.
+	// **THE THREE LEGAL SHAPES**, and the `as` is what tells them apart:
 	//
-	// `export` is consumed and dropped for a different reason: field visibility gates cross-FILE
-	// access (E3014), and shv2 has no cross-file name resolution to gate.
-	function readStructFieldInto(fieldNames ByteArrayArray, fieldTypes MaxonTypeArray) throws ParseError
+	//   1. `export var x as Integer`     — annotated, no default. A literal must supply it (E3086).
+	//   2. `export var x = 0`            — the literal supplies BOTH the value and the TYPE.
+	//   3. `export var x as Integer = 0` — annotated AND defaulted; the literal is checked against
+	//                                      the annotation.
+	//
+	// Neither `as` nor `=` is E2010 — the `consume(equals)` below reporting the token it wanted.
+	//
+	// `let` vs `var` decides FIELD MUTABILITY (`c.version = 2` on a `let` field is E2013), and
+	// `export` is still consumed and DROPPED: field visibility gates cross-FILE access (E3014), and
+	// shv2 has no cross-file name resolution to gate.
+	function readStructFieldInto(layout StructLayout) throws ParseError
 		if self.at(TokenKind.export) 'exported'
 			self.advance()
 		end 'exported'
@@ -1477,12 +1526,96 @@ export type Parser
 		try self.consume(TokenKind.var if mutable else TokenKind.let)
 
 		let nameTok = try self.consume(TokenKind.identifier)
+
+		if not self.at(TokenKind.as) 'typeFromLiteral'
+			// Shape 2. There is no annotation to read the type off, so the literal's TOKEN KIND is
+			// the whole of the type inference — see `readFieldDefaultLiteral`.
+			try self.consume(TokenKind.equals)
+			let inferred = try self.readFieldDefaultLiteral()
+			layout.addField(nameTok.value, declaredType: inferred.declaredType, mutable: mutable, defaultValue: FieldDefault.literal(inferred.payload))
+			return
+		end 'typeFromLiteral'
+
 		try self.consume(TokenKind.as)
 		let fieldType = try self.parseTypeReference()
 
-		fieldNames.push(nameTok.value)
-		fieldTypes.push(fieldType)
+		if not self.at(TokenKind.equals) 'noDefault'
+			layout.addField(nameTok.value, declaredType: fieldType, mutable: mutable, defaultValue: FieldDefault.none)
+			return
+		end 'noDefault'
+
+		// Shape 3. The ANNOTATION is the field's type and the literal must agree with it: `as
+		// Integer = 50.0` is the same lossy coercion `var x as Integer` then `x = 50.0` is, so it
+		// asks the same rule (`requireAssignable`) rather than a second opinion about floats.
+		try self.consume(TokenKind.equals)
+		let given = try self.readFieldDefaultLiteral()
+		try self.requireAssignable(nameTok, value: maxonTypeTag(given.declaredType), declared: maxonTypeTag(fieldType))
+		layout.addField(nameTok.value, declaredType: fieldType, mutable: mutable, defaultValue: FieldDefault.literal(given.payload))
 	end 'readStructFieldInto'
+
+	// The literal a field default is: its VALUE, and the type its TOKEN KIND denotes. Both come off
+	// the same token and are returned together, so a caller cannot read one without the other —
+	// which is the point, because shape 2 above derives the field's declared type from nothing else.
+	//
+	// ⭐ **TYPE INFERENCE HERE IS A TOKEN-KIND LOOKUP, NOT CONSTANT EVALUATION**, and it has to be:
+	// the type must be known when `ProgramSignatures.recordStruct` hashes the layout, and that runs
+	// inside the declaration SWEEP — before `evaluateInitializers` has folded a single constant. A
+	// token kind is available at scan time; a constant's value is not. (v1 infers it the same way,
+	// from the same three token kinds: `inferShorthandFieldType`, Parser.maxon:3634-3665.)
+	function readFieldDefaultLiteral() returns FieldDefaultLiteral throws ParseError
+		let negated = self.at(TokenKind.minus)
+		if negated 'signed'
+			self.advance()
+		end 'signed'
+
+		if self.at(TokenKind.intLiteral) 'intLit'
+			let tok = try self.consume(TokenKind.intLiteral)
+			return FieldDefaultLiteral.create(try self.intLiteralValue(tok, negated: negated), declaredType: MaxonType.integer)
+		end 'intLit'
+
+		if self.at(TokenKind.floatLiteral) 'floatLit'
+			let tok = try self.consume(TokenKind.floatLiteral)
+			let bits = try parseFloatBits(tok.value) otherwise throw ParseError.floatLiteralOverflow(tok.line, column: tok.column)
+			return FieldDefaultLiteral.create(negatedFloatBits(bits) if negated else bits, declaredType: MaxonType.float)
+		end 'floatLit'
+
+		if self.at(TokenKind.true) or self.at(TokenKind.false) 'boolLit'
+			return try self.readBoolFieldDefault(negated)
+		end 'boolLit'
+
+		// Everything else — `= pick()`, `= 2 + 3`, `= OTHER`. See `rejectNonLiteralFieldDefault`.
+		throw self.rejectNonLiteralFieldDefault()
+	end 'readFieldDefaultLiteral'
+
+	// `= true` / `= false`. A leading `-` is not a sign here — there is no negative bool — so it is
+	// rejected as the non-literal it is rather than silently ignored.
+	function readBoolFieldDefault(negated bool) returns FieldDefaultLiteral throws ParseError
+		if negated 'negatedBool'
+			throw self.rejectNonLiteralFieldDefault()
+		end 'negatedBool'
+
+		let isTrue = self.at(TokenKind.true)
+		self.advance()
+		return FieldDefaultLiteral.create(BoolTrueValue if isTrue else BoolFalseValue, declaredType: MaxonType.boolean)
+	end 'readBoolFieldDefault'
+
+	// ⚠ **A NON-LITERAL DEFAULT IS DEFERRED, AND IT IS DEFERRED LOUDLY** — positioned at the token
+	// that is not a literal, naming the mechanism that is missing.
+	//
+	// ⚠ **THIS OVER-REJECTS, DELIBERATELY. THE BOOTSTRAP ACCEPTS IT** (measured: `export var x as
+	// Integer = pick()` compiles, and the field arrives holding 4). A default is an arbitrary
+	// expression there, evaluated at CONSTRUCTION — v1 implements it by synthesizing a nullary
+	// `__field_init_*` function per default and splicing a call into every literal
+	// (Parser.maxon:15885-15893). That machinery needs the initializer captured at the declaration
+	// and replayed at each construction site, and it has ZERO reachable consumers at this rung:
+	// every corpus case that wants it also wants Array (P1.7), String (P1.2) or a struct-typed
+	// field. Building it now would be a mechanism with no consumer — this ladder's founding error,
+	// made four times on P1.0r — so the rung takes the literal every enabled case actually needs,
+	// and says plainly that the rest is not here yet.
+	function rejectNonLiteralFieldDefault() returns ParseError
+		let tok = self.current()
+		return ParseError.unsupported("'{tok.kind.rawValue}' as a field default (only a LITERAL default is parsed — `= 5`, `= 50.0`, `= true`, optionally signed. An arbitrary expression is evaluated once per struct literal, which needs the initializer captured at the declaration and replayed at every literal that omits the field, and arrives with the rung that has a case needing one)", line: tok.line, column: tok.column)
+	end 'rejectNonLiteralFieldDefault'
 
 	// Advance past a balanced `( … )` starting at the cursor. Returns false — leaving the
 	// cursor where it stopped — when the token stream does not hold one, which the real
@@ -1815,8 +1948,7 @@ export type Parser
 		let nameTok = try self.readTypeHeader()
 		self.enclosingType = nameTok.value
 
-		var fieldNames = ByteArrayArray.create()
-		var fieldTypes = MaxonTypeArray.create()
+		var layout = StructLayout.create(nameTok.value)
 
 		while true 'members'
 			self.skipNewlines()
@@ -1829,7 +1961,7 @@ export type Parser
 			end 'eof'
 
 			if self.atStructFieldKeyword() 'isField'
-				try self.readStructFieldInto(fieldNames, fieldTypes: fieldTypes)
+				try self.readStructFieldInto(layout)
 				continue
 			end 'isField'
 
@@ -1839,7 +1971,7 @@ export type Parser
 		try self.consume(TokenKind.end)
 		self.skipOptionalLabel()
 
-		self.artifact.recordStructType(StructLayout.create(nameTok.value, fieldNames: fieldNames, fieldTypes: fieldTypes))
+		self.artifact.recordStructType(layout)
 		self.enclosingType = EmptySourceText
 	end 'parseTypeDeclaration'
 
@@ -2250,7 +2382,12 @@ export type Parser
 			// keeps a bare identifier from being mis-parsed as an incomplete assignment.
 			// Through `assignsAt`, which is also what decides a loop's carried vars — see there.
 			try self.parseAssignment(func, block: block)
-		end 'assign' else if self.at(TokenKind.identifier) and self.peekKind() == TokenKind.leftParen 'callStmt'
+		end 'assign' else if self.fieldAssignsAt(self.pos) 'fieldAssign'
+			// `p.x = 5` — a store THROUGH a binding rather than a rebinding of one. Its own
+			// predicate, and `namesAssignedIn` reads only `assignsAt`: see `assignsAt` for why
+			// widening that one instead would have minted the loop's phi for the FIELD's name.
+			try self.parseFieldAssignment(func, block: block)
+		end 'fieldAssign' else if self.at(TokenKind.identifier) and self.peekKind() == TokenKind.leftParen 'callStmt'
 			// An identifier followed by `(` is a bare-call statement — the call is evaluated for its
 			// effect and its result discarded (M5). `resultUsed: false` is what makes a VOID call legal
 			// HERE and nowhere else: this is the position that wants no value.
@@ -4126,10 +4263,14 @@ export type Parser
 	// each store as its field was parsed would have written the box in source order, which is the same
 	// thing for these two cases and the wrong thing for one field in a slot the layout disagrees about.
 	//
-	// ⚠ **EVERY FIELD MUST BE INITIALIZED, and the allocator's zeroing guarantee is what makes that a
-	// RULE rather than a nicety.** An omitted slot reads back as a clean 0 — a plausible number — so
-	// `Point{x: 1}` would silently have `y == 0`. E3086 rejects it. Field DEFAULTS are what make an
-	// omission legal, and they are P1.1a wave 2.
+	// ⚠ **EVERY FIELD MUST END UP INITIALIZED, and the allocator's zeroing guarantee is what makes
+	// that a RULE rather than a nicety.** An omitted slot reads back as a clean 0 — a plausible
+	// number — so `Point{x: 1}` would silently have `y == 0`. E3086 rejects it.
+	//
+	// A slot gets its value from one of TWO sources, asked in this order: the literal
+	// (`parseStructLiteralFields`), then the field's declared DEFAULT (`applyFieldDefaults`). The
+	// literal always wins — the default is consulted only for a slot `filled` says nothing wrote.
+	// `requireAllFieldsInitialized` then rejects whatever neither supplied.
 	function parseStructLiteral(func IrFunction) returns ValueId throws ParseError
 		let typeTok = self.current()
 		let typeName = try self.readStructLiteralTypeName()
@@ -4148,6 +4289,12 @@ export type Parser
 
 		try self.parseStructLiteralFields(func, layout: layout, fieldValues: fieldValues, filled: filled)
 		let rbraceTok = try self.consume(TokenKind.rightBrace)
+
+		// Defaults are applied BEFORE the check, which is what makes an omitted-but-defaulted field
+		// legal without teaching `requireAllFieldsInitialized` a second rule. That one goes on
+		// asking exactly what it always asked — "does every slot have a value by now?" — and a
+		// default is simply one of the two ways a slot comes to have one.
+		self.applyFieldDefaults(layout, fieldValues: fieldValues, filled: filled, anchor: typeTok)
 		try self.requireAllFieldsInitialized(layout, filled: filled, anchor: typeTok)
 
 		return self.emitStructLiteral(layout, fieldValues: fieldValues, range: SourceRange.between(typeTok, last: rbraceTok))
@@ -4259,8 +4406,54 @@ export type Parser
 		end 'declared'
 	end 'requireFieldType'
 
+	// ⭐ **FILL EVERY OMITTED SLOT THAT DECLARES A DEFAULT** — `export var value = 0` + `Self{}`.
+	//
+	// **A LITERAL-PROVIDED VALUE ALWAYS BEATS THE DEFAULT**, and `filled` is what says so: this only
+	// ever looks at slots the literal did not write, so an override is not a race between two stores
+	// — the default's `literal` op is never emitted at all. That is the rule
+	// `field-initialization.md` states ("A literal-provided value always overrides a declared
+	// default") and `literal-overrides-default` pins.
+	//
+	// The literal is minted at the field's STORAGE type, not its declared one: `emitLiteral` uses
+	// one `MaxonType` for both the value's tag and the op's, and `maxonTypeToStdType` PANICS on a
+	// `named` — so a field declared `as Integer = 7` would otherwise carry an alias into an op that
+	// must be concrete by lowering. Nothing reads this value's tag (it flows straight into the
+	// store), and `emitFieldStore` independently derives the same storage type for the slot, so the
+	// two agree by construction.
+	//
+	// The span is the LITERAL's anchor — the `Self` token — and not the field declaration's, which
+	// may be in another file entirely: a `SourceRange` is an offset into THIS file's bytes.
+	function applyFieldDefaults(layout StructLayout, fieldValues ValueIdArray, filled BoolArray, anchor Token)
+		let range = SourceRange.ofToken(anchor)
+		for i in 0 upto layout.fieldCount() 'eachField'
+			let wasFilled = try filled.get(i) otherwise panic("applyFieldDefaults: filled.get OOB at {i} — the column is sized to the layout's field count")
+			if wasFilled 'literalWins'
+				continue
+			end 'literalWins'
+
+			match layout.fieldDefault(i) 'declared'
+				// The literal did not fill this slot and the declaration offers nothing. That is
+				// E3086, and `requireAllFieldsInitialized` is what says so — not this function.
+				none then continue
+				literal(payload) then self.fillFieldDefault(layout, index: i, payload: payload, fieldValues: fieldValues, filled: filled, range: range)
+			end 'declared'
+		end 'eachField'
+	end 'applyFieldDefaults'
+
+	// Emit one default's `literal` and record it as slot `index`'s value. Split out so the payload
+	// is bound by the match arm that proved there IS one, rather than read back out of the union
+	// through an accessor with a `none` case to mishandle.
+	function fillFieldDefault(layout StructLayout, index FieldIndex, payload ParsedInt, fieldValues ValueIdArray, filled BoolArray, range SourceRange)
+		let declared = self.signatures.fieldTypeOf(layout.name, index: index, into: self.artifact.typeNames)
+		let value = self.emitLiteral(payload, valueType: self.fieldStorageType(declared), range: range)
+
+		try fieldValues.set(index, value: value) otherwise panic("fillFieldDefault: fieldValues.set OOB at {index} — the column is sized to the layout's field count")
+		try filled.set(index, value: true) otherwise panic("fillFieldDefault: filled.set OOB at {index} — the column is sized to the layout's field count")
+	end 'fillFieldDefault'
+
 	// Every declared field must have been given a value — see `parseStructLiteral` for why the
-	// allocator's zeroing guarantee makes an omission a WRONG ANSWER rather than a safe default.
+	// allocator's zeroing guarantee makes an omission a WRONG ANSWER rather than a safe default,
+	// and `applyFieldDefaults` for the other way a slot comes to have one.
 	// Reports the FIRST omitted field, in declaration order, so the message is a function of the
 	// type rather than of a hash walk.
 	function requireAllFieldsInitialized(layout StructLayout, filled BoolArray, anchor Token) throws ParseError
@@ -4292,8 +4485,7 @@ export type Parser
 
 		for i in 0 upto layout.fieldCount() 'eachField'
 			let value = try fieldValues.get(i) otherwise panic("emitStructLiteral: fieldValues.get OOB at {i} — the column is sized to the layout's field count")
-			let declared = self.signatures.fieldTypeOf(layout.name, index: i, into: self.artifact.typeNames)
-			self.artifact.emitOp(self.currentBlock, op: MaxonOp.storeIndirect(box, offset: layout.offsetOfField(i), value: value, valueType: self.fieldStorageType(declared)), range: range)
+			self.emitFieldStore(box, layout: layout, index: i, value: value, range: range)
 		end 'eachField'
 
 		return box
@@ -4380,6 +4572,60 @@ export type Parser
 		return self.emitFieldLoad(binding.boundValue, layout: layout, index: index, range: SourceRange.between(baseTok, last: fieldTok))
 	end 'parseFieldAccess'
 
+	// `p.x = <expr>` — write field `x` of the box `p` points at. The exact mirror of
+	// `parseFieldAccess`: the same three tokens resolved through the same two steps (which type is
+	// `p`, which slot does that type call `x`), landing on `storeIndirect` where that one lands on
+	// `loadIndirect`. There is no `fieldStore` op for the same reason there is no `fieldLoad`.
+	//
+	// ⭐ **TWO THINGS MUST BE MUTABLE AND THEY ARE TWO DIFFERENT FACTS**: the INSTANCE (`let p` is
+	// not writable through) and the FIELD (`export let version` is not writable). Both report E2013
+	// — one code, because it is one defect from two sides: a write to something declared not to
+	// accept one. Both anchor at the ROOT VARIABLE token and not at the field, which is measured
+	// from the bootstrap and pinned by `structs.md`'s two `error.*` cases at `:16:2`.
+	//
+	// ⚠ **THE INSTANCE CHECK RUNS FIRST, AND THE ORDER IS A DECISION.** When both fail — a `let`
+	// instance holding a `let` field — the instance wins. In the bootstrap this is a positional
+	// ACCIDENT (`ResolveStructVariable(requireMutable: true)` happens to throw before
+	// `RequireMutableField` runs) and nothing there declares it; here it is deliberate, and it is
+	// the honest one: telling a reader to write `var version` would not fix `let p`, so the
+	// diagnostic would name a change that does not work. `struct-field-assign-precedence.md` pins
+	// it, because a rule stated only in the order of two `if`s is a rule the next edit reorders.
+	function parseFieldAssignment(func IrFunction, block IrBlock) throws ParseError
+		let baseTok = try self.consume(TokenKind.identifier)
+		try self.consume(TokenKind.dot)
+		let fieldTok = try self.consume(TokenKind.identifier)
+		try self.consume(TokenKind.equals)
+
+		if not self.scope.contains(baseTok.value) 'undeclared'
+			// A field store names a LOCAL box. A top-level `var` of struct type would resolve here
+			// too, and cannot yet exist: a global holds a scalar until the heap reaches `.data`
+			// (`readTopLevelBinding` rejects the rest), so there is no second lookup to miss.
+			throw ParseError.undefinedVariable(String.from(baseTok.value), line: baseTok.line, column: baseTok.column)
+		end 'undeclared'
+
+		let binding = self.scope.getInfo(baseTok.value)
+		if not binding.mutable 'immutableInstance'
+			throw ParseError.assignToImmutable(String.from(baseTok.value), line: baseTok.line, column: baseTok.column)
+		end 'immutableInstance'
+
+		let layout = try self.requireStructBinding(binding, baseTok: baseTok)
+		let index = layout.indexOfField(fieldTok.value)
+		if index >= layout.fieldCount() 'noSuchField'
+			throw ParseError.unknownField(String.from(layout.name), fieldName: String.from(fieldTok.value), line: fieldTok.line, column: fieldTok.column)
+		end 'noSuchField'
+
+		if not layout.fieldIsMutable(index) 'immutableField'
+			throw ParseError.assignToImmutableField(String.from(layout.name), fieldName: String.from(fieldTok.value), line: baseTok.line, column: baseTok.column)
+		end 'immutableField'
+
+		// Parsed AFTER both rejections, so a refused program emits no op — `emitCheckedGlobalStore`'s
+		// discipline, for its reason.
+		let value = try self.parseExpression(func, block: block)
+		try self.requireFieldType(layout, index: index, value: value, anchor: fieldTok)
+
+		self.emitFieldStore(binding.boundValue, layout: layout, index: index, value: value, range: SourceRange.between(baseTok, last: fieldTok))
+	end 'parseFieldAssignment'
+
 	// The `StructLayout` of `binding` — the two-step every field access takes: the binding's declared
 	// type must BE a struct, and that struct must be one some file declares.
 	//
@@ -4419,6 +4665,20 @@ export type Parser
 		self.artifact.emitOp(self.currentBlock, op: MaxonOp.loadIndirect(result, addr: box, offset: layout.offsetOfField(index), valueType: self.fieldStorageType(declared)), range: range)
 		return result
 	end 'emitFieldLoad'
+
+	// `storeIndirect <box> <offset> <value>` — the one op a field write is, and the exact mirror of
+	// `emitFieldLoad` (same offset, same storage type, same reason for each).
+	//
+	// **THE ONE STORE SITE**, shared by the two paths that write a field: the `Self{…}` loop filling
+	// a fresh box (`emitStructLiteral`) and the assignment statement writing a live one
+	// (`parseFieldAssignment`). They were one line apart from being two copies of the offset-and-
+	// width derivation, which is the pair that must never disagree — a literal that stored `y` at
+	// the width the layout says and an assignment that stored it at another would corrupt the box
+	// silently.
+	function emitFieldStore(box ValueId, layout StructLayout, index FieldIndex, value ValueId, range SourceRange)
+		let declared = self.signatures.fieldTypeOf(layout.name, index: index, into: self.artifact.typeNames)
+		self.artifact.emitOp(self.currentBlock, op: MaxonOp.storeIndirect(box, offset: layout.offsetOfField(index), value: value, valueType: self.fieldStorageType(declared)), range: range)
+	end 'emitFieldStore'
 
 	// The CONCRETE `MaxonType` a field of declared type `declared` occupies its slot as — what the
 	// `loadIndirect`/`storeIndirect` carries, and the only type in the compiler that says how wide
@@ -5303,10 +5563,19 @@ export type Parser
 	// predicate teaches both.
 	//
 	// ⚠ AND IT IS NOT ENOUGH TO MAKE THE NEW FORM MERELY *MATCH* — IT MUST NAME THE RIGHT VAR.
-	// `a.b = x` already fits `identifier equals`, at `b`. So the day field stores parse (they do
-	// not today — `parseStatement` rejects them as unsupported), this scan silently starts
-	// inserting **`b`**, the FIELD, and never `a`, the var that actually carries the loop value.
-	// The phi would be minted for a name nothing writes and withheld from the one that does.
+	// `a.b = x` already fits `identifier equals`, at `b`. So a field store taught to THIS predicate
+	// would silently start inserting **`b`**, the FIELD, and never `a`, the var that carries the
+	// loop value. The phi would be minted for a name nothing writes and withheld from the one that
+	// does.
+	//
+	// ⭐ **THAT IS WHY FIELD STORES HAVE THEIR OWN PREDICATE — `fieldAssignsAt` — AND WHY THIS ONE
+	// WAS NOT WIDENED** (P1.1a wave 2). `parseStatement` routes on both; `namesAssignedIn` reads
+	// only this one, and that is CORRECT rather than an omission: **a field store assigns no
+	// binding.** `p` is a box pointer that `p.x = 5` never reassigns — the write goes to MEMORY,
+	// through `storeIndirect`, and the box's address is the same value afterwards. So there is no
+	// loop-carried value to merge and no phi to mint. (`c.value = c.value + 1` does make this scan
+	// insert `value`, at the field token — harmless, and already covered by the over-approximation
+	// note above: `value` binds nothing at the header, so it selects nothing.)
 	//
 	// ⚠ A write with NO `=` ANYWHERE cannot be covered by either half of the above, because it is
 	// not a statement to teach the dispatcher about: a `var` PARAMETER is written by `mutate(p)`
@@ -5314,6 +5583,18 @@ export type Parser
 	function assignsAt(index TokenIndex) returns bool
 		return self.kindAt(index) == TokenKind.identifier and self.kindAt(index + 1) == TokenKind.equals
 	end 'assignsAt'
+
+	// **The token shape of a FIELD STORE** — `<base> . <field> =`, asked at an ABSOLUTE index.
+	//
+	// Deliberately NOT folded into `assignsAt`: see there. The two are disjoint by construction (the
+	// token after the base is `=` for one and `.` for the other), so `parseStatement` may ask them
+	// in either order and get the same answer.
+	//
+	// `p.x == y` cannot be mistaken for a store: `==` lexes as a single `equalsEquals` token. Nor
+	// can `Point.create(…)`, whose token at +3 is `(`.
+	function fieldAssignsAt(index TokenIndex) returns bool
+		return self.kindAt(index) == TokenKind.identifier and self.kindAt(index + 1) == TokenKind.dot and self.kindAt(index + 2) == TokenKind.identifier and self.kindAt(index + 3) == TokenKind.equals
+	end 'fieldAssignsAt'
 
 	// The kind of the token ONE past the cursor. The parser's two-token lookahead:
 	// distinguishing a reassignment (`ident =`) from a bare identifier statement (`ident …`)

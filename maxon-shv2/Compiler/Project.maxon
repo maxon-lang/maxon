@@ -186,6 +186,26 @@ let FieldSlotBytes = 8 as ByteOffset
 // declares an empty struct exactly 8 bytes it will never read.
 let EmptyStructBytes = FieldSlotBytes
 
+// The value a field declaration supplies when a `Self{…}` literal omits it — `export var value = 0`.
+//
+// It carries the PAYLOAD only, never a type: the default's type IS the field's declared type, which
+// `StructLayout.fieldTypes` already holds. For `= 0` the literal is what SET that type (there is no
+// annotation to read); for `as Integer = 0` the annotation set it and the literal was CHECKED
+// against it. Either way one field has one type in one column, so a default cannot come to disagree
+// with the slot it fills.
+//
+// The payload is a `ParsedInt` for a float exactly as for an integer — a float literal's value IS
+// its IEEE-754 bit pattern (see `Parser.parseFloatLiteral`), which is why a defaulted float costs no
+// second column and no second decoder.
+export union FieldDefault
+	// The declaration supplies none: `export var x as Integer`. A literal that omits this field is
+	// E3086, and that is the rule field defaults exist to relax.
+	none
+	literal(payload ParsedInt)
+end 'FieldDefault'
+
+export typealias FieldDefaultArray = Array with FieldDefault
+
 // StructLayout — one declared `type T`: what it is called, and its fields IN DECLARATION ORDER.
 //
 // It is the struct twin of `FuncSignature` (parallel name/type arrays, a linear index-of lookup),
@@ -202,16 +222,48 @@ let EmptyStructBytes = FieldSlotBytes
 // Two readers, two moments, one record type.
 export type StructLayout
 	export var name as ByteArray
-	// Parallel arrays, in DECLARATION order: `fieldNames[i]` is declared `fieldTypes[i]`. The
-	// declared type, NOT a resolved one — the sweep that records it cannot resolve anything (the
-	// alias it names may be in a file not yet folded), and the parser resolves it at the use site
-	// through the same `aliasOf` door the shift rule already asks.
+	// Parallel arrays, in DECLARATION order: field `i` is called `fieldNames[i]`, is declared
+	// `fieldTypes[i]`, accepts a write iff `fieldMutable[i]`, and defaults to `fieldDefaults[i]`.
+	// The declared type is NOT a resolved one — the sweep that records it cannot resolve anything
+	// (the alias it names may be in a file not yet folded), and the parser resolves it at the use
+	// site through the same `aliasOf` door the shift rule already asks.
+	//
+	// ⚠ **THE COLUMNS ARE NEVER APPENDED TO DIRECTLY — `addField` IS THE ONE WRITER**, and that is
+	// what makes "the columns fell out of lockstep" unrepresentable rather than merely asserted. A
+	// reader indexes all four by one `FieldIndex`, so a caller that pushed a name and forgot a
+	// default would shift every later field's default onto the wrong field: a silent wrong answer
+	// with no crash to find it by.
 	export var fieldNames as ByteArrayArray
 	export var fieldTypes as MaxonTypeArray
+	export var fieldMutable as BoolArray
+	export var fieldDefaults as FieldDefaultArray
 
-	export static function create(name ByteArray, fieldNames ByteArrayArray, fieldTypes MaxonTypeArray) returns StructLayout
-		return Self{name: name, fieldNames: fieldNames, fieldTypes: fieldTypes}
+	// An EMPTY layout, filled by `addField`. It does not take the columns, deliberately: handing
+	// four pre-built parallel arrays across a call boundary is exactly the shape that lets three of
+	// them arrive.
+	export static function create(name ByteArray) returns StructLayout
+		return Self{name: name, fieldNames: ByteArrayArray.create(), fieldTypes: MaxonTypeArray.create(), fieldMutable: BoolArray.create(), fieldDefaults: FieldDefaultArray.create()}
 	end 'create'
+
+	// Append one declared field. THE one writer of the columns — every column, one push, so they
+	// cannot drift.
+	export function addField(fieldName ByteArray, declaredType MaxonType, mutable bool, defaultValue FieldDefault)
+		self.fieldNames.push(fieldName)
+		self.fieldTypes.push(declaredType)
+		self.fieldMutable.push(mutable)
+		self.fieldDefaults.push(defaultValue)
+	end 'addField'
+
+	// Does field `index` accept a write? `export var count` does; `export let version` does not, and
+	// `c.version = 2` is E2013 (see `Parser.parseFieldAssignment`).
+	export function fieldIsMutable(index FieldIndex) returns bool
+		return try self.fieldMutable.get(index) otherwise panic("StructLayout.fieldIsMutable: fieldMutable.get OOB at {index} for `type {String.from(self.name)}`, which declares {self.fieldCount()} — every index handed out came from `indexOfField`")
+	end 'fieldIsMutable'
+
+	// What field `index` defaults to when a `Self{…}` literal omits it.
+	export function fieldDefault(index FieldIndex) returns FieldDefault
+		return try self.fieldDefaults.get(index) otherwise panic("StructLayout.fieldDefault: fieldDefaults.get OOB at {index} for `type {String.from(self.name)}`, which declares {self.fieldCount()} — every index handed out came from `indexOfField`")
+	end 'fieldDefault'
 
 	export function fieldCount() returns FieldIndex
 		return self.fieldNames.count()

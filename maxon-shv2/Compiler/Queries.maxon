@@ -351,13 +351,17 @@ function reportParseError(project Project, path FilePath, error ParseError)
 		nonConstantInitializer(name, leftover, line, column) then reportPositioned(project, code: ErrorCode.parserNonConstantInitializer, message: "Global initializer for '{name}' is not a constant expression: '{leftover}' cannot be evaluated at compile time", line: line, column: column, filePath: path)
 		undefinedConstant(name, line, column) then reportPositioned(project, code: ErrorCode.parserExpressionError, message: "Undefined constant '{name}'", line: line, column: column, filePath: path)
 		constantDivisionByZero(op, line, column) then reportPositioned(project, code: ErrorCode.parserNonConstantInitializer, message: "'{op}' by zero has no value: a global initializer is folded at compile time, so there is no run time for it to trap in", line: line, column: column, filePath: path)
-		// The four struct arms (P1.0r). Each carries the code its meaning is registered under in
-		// `docs/error-codes.txt` — never a number spelled here.
+		// The struct arms (P1.0r, plus `assignToImmutableField` at P1.1a wave 2). Each carries the
+		// code its meaning is registered under in `docs/error-codes.txt` — never a number spelled here.
 		constructorRestricted(typeName, line, column) then reportPositioned(project, code: ErrorCode.semanticConstructorRestriction, message: "'{typeName}' can only be constructed inside its own methods; use a static factory such as '{typeName}.create(...)'", line: line, column: column, filePath: path)
 		unknownField(typeName, fieldName, line, column) then reportPositioned(project, code: ErrorCode.semanticUnknownField, message: "type '{typeName}' has no field named '{fieldName}'", line: line, column: column, filePath: path)
 		fieldNotInitialized(typeName, fieldName, line, column) then reportPositioned(project, code: ErrorCode.semanticFieldNotInitialized, message: "field '{fieldName}' of '{typeName}' is not initialized by this literal, and it has no default value", line: line, column: column, filePath: path)
 		// The SAME code as `unknownField`, and deliberately: a literal whose field list does not
 		// correspond one-to-one with the type's is one defect, seen from its two sides.
 		duplicateFieldInitializer(typeName, fieldName, line, column) then reportPositioned(project, code: ErrorCode.semanticUnknownField, message: "field '{fieldName}' of '{typeName}' is initialized twice by this literal", line: line, column: column, filePath: path)
+		// ⚠ The SAME code as `assignToImmutable` — one rule, two sides (see the ParseError arm) —
+		// and byte-for-byte the bootstrap's text, because `structs.md` and
+		// `challenge-struct-field-assign.md` both gate this stderr exactly, in both suites.
+		assignToImmutableField(typeName, fieldName, line, column) then reportPositioned(project, code: ErrorCode.assignToImmutable, message: "cannot assign to field '{typeName}.{fieldName}' because it is immutable (declare with 'var' to make it mutable)", line: line, column: column, filePath: path)
 	end 'kind'
 end 'reportParseError'

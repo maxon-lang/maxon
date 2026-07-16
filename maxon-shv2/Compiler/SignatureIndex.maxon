@@ -85,6 +85,22 @@ let DeclShapeStruct = 14 as ContentHash
 // could not tell them apart would hand a reader a memo built under the wrong one.
 let TypeShapeStructRef = 15 as ContentHash
 
+// A declared FIELD's mutability, mixed into the hash beside its name and type (P1.1a wave 2). The
+// struct twin of `DeclShapeConstant`/`DeclShapeMutable`, and distinct constants rather than a reuse
+// of them: those two discriminate a top-level `let` from a `var`, and colliding a field's `let` with
+// a global's would let an edit that swaps one for the other land on the hash the other already
+// occupied. What rides is ACCEPTANCE — `var count` → `let count` must turn every other file's
+// `c.count = 5` into E2013, and a reader whose memo did not move would go on compiling it.
+let FieldShapeMutable = 16 as ContentHash
+let FieldShapeImmutable = 17 as ContentHash
+
+// Whether a field declares a DEFAULT, mixed beside the payload when it does. Two constants and not
+// one, because "has no default" must hash differently from "defaults to 0" — the payload alone
+// cannot say so, and those two declarations accept different programs (`Self{}` is E3086 under the
+// first and legal under the second).
+let FieldShapeNoDefault = 18 as ContentHash
+let FieldShapeDefaulted = 19 as ContentHash
+
 // The two shapes a top-level constant's ANSWER hashes under: it evaluated to a value, or it did
 // not. Their own discriminators for `DeclShapeAlias`'s reason — a name that stops being a function
 // and starts being a constant must move the hash rather than collide.
@@ -615,17 +631,60 @@ export type ProgramSignatures
 	// fields, renaming one, or adding a third changes what every other file COMPILES TO, and only
 	// this hash can carry it. Without it, adding a field would leave every reader inlining the old
 	// offsets against a box that is now a different shape: a silent out-of-bounds read.
+	//
+	// ⚠ **EVERY FACT A FIELD CARRIES RIDES THIS HASH, AND `mixField` IS THE ONE PLACE THEY DO.** The
+	// two P1.1a-wave-2 facts are here for the reason the field list is, one each way:
+	//   • a DEFAULT changes CODEGEN — `export var value = 0` → `= 1` moves the `literal` op every
+	//     other file's `Self{}` emits, while that file's own bytes never move;
+	//   • MUTABILITY changes ACCEPTANCE — `var count` → `let count` must turn every other file's
+	//     `c.count = 5` into E2013, and a reader that did not re-parse would go on compiling it.
+	//
+	// v1 is the cautionary tale, and its bug is live: `StdlibCache.maxon:1494-1506` serializes 6 of
+	// `StructField`'s 7 payload fields — `isMutable` survives, `hasDefault` was never written — so
+	// every cached stdlib field arrives claiming it has no default. A hand-listed copy of a record's
+	// fields is a copy that can be short by one, silently. Keep the list in ONE function.
 	function recordStruct(layout StructLayout)
 		self.structTypes.upsert(layout.name, value: layout)
 
 		var state = mixBytes(mix(self.hash, value: DeclShapeStruct), bytes: layout.name)
-		for i in 0 upto layout.fieldNames.count() 'eachField'
-			let fieldName = try layout.fieldNames.get(i) otherwise panic("ProgramSignatures.recordStruct: fieldNames.get OOB at {i}")
-			let fieldType = try layout.fieldTypes.get(i) otherwise panic("ProgramSignatures.recordStruct: fieldTypes.get OOB at {i} — the two field columns fell out of lockstep")
-			state = self.mixType(mixBytes(state, bytes: fieldName), t: fieldType)
+		for i in 0 upto layout.fieldCount() 'eachField'
+			state = self.mixField(state, layout: layout, index: i)
 		end 'eachField'
 		self.hash = state
 	end 'recordStruct'
+
+	// Fold EVERYTHING the compiler reads off field `index` into the index's hash. See `recordStruct`
+	// for why each fact must ride, and why they must all ride from one place.
+	function mixField(state ContentHash, layout StructLayout, index FieldIndex) returns ContentHash
+		let fieldName = try layout.fieldNames.get(index) otherwise panic("ProgramSignatures.mixField: fieldNames.get OOB at {index}")
+		let fieldType = try layout.fieldTypes.get(index) otherwise panic("ProgramSignatures.mixField: fieldTypes.get OOB at {index} — the field columns fell out of lockstep")
+
+		let named = self.mixType(mixBytes(state, bytes: fieldName), t: fieldType)
+		let withMutability = mix(named, value: FieldShapeMutable if layout.fieldIsMutable(index) else FieldShapeImmutable)
+		return self.mixFieldDefault(withMutability, defaultValue: layout.fieldDefault(index))
+	end 'mixField'
+
+	// The DEFAULT half of `mixField`. `none` mixes its own shape rather than nothing: a field that
+	// gained a default must hash differently from one that never had it, and `= 0` on a field whose
+	// payload would otherwise fold to the same 0 is exactly the collision that would hide it.
+	function mixFieldDefault(state ContentHash, defaultValue FieldDefault) returns ContentHash
+		return match defaultValue 'shape'
+			none gives mix(state, value: FieldShapeNoDefault)
+			literal(payload) gives self.mixDefaultPayload(state, payload: payload)
+		end 'shape'
+	end 'mixFieldDefault'
+
+	// The payload half of a defaulted field's hash. Split from `mixFieldDefault` so the payload
+	// arrives as a bound PARAMETER: it is SIGNED (`ParsedInt` — and a float default's is a bit
+	// pattern that routinely has its top bit set) while the hash domain is unsigned, so it crosses
+	// by an explicit cast, and that cast needs a local. `recordAlias` has the same two lines for the
+	// same reason: written inline as an argument to a nested `mix`, the bootstrap misreads it as
+	// already-hashed and rejects the cast as unneeded (E3010) — a false positive that costs nothing
+	// to route around.
+	function mixDefaultPayload(state ContentHash, payload ParsedInt) returns ContentHash
+		let payloadBits = payload as ContentHash
+		return mix(mix(state, value: FieldShapeDefaulted), value: payloadBits)
+	end 'mixDefaultPayload'
 
 	// Add one ranged typealias to the index AND fold it into the hash. The hash carries the RANGE
 	// and not merely the name, and that is load-bearing: widening `int(0 to 100)` to
