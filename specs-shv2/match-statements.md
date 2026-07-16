@@ -1034,8 +1034,7 @@ end 'main'
 error E2049: specs/fragments/match-statements/error.match-otherwise-block-form.test:12:35: block-form 'try ... otherwise 'label' ... end' is not allowed in a match arm; use 'otherwise panic("...")', 'otherwise ignore', or 'otherwise return/throw/...' instead
 ```
 
-<!-- disabled-test: match-string.simple -->
-<!-- P1.2 String -->
+<!-- test: match-string.simple -->
 ```maxon
 function main() returns ExitCode
 	let name = "alice"
@@ -1050,8 +1049,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: match-string.second-case -->
-<!-- P1.2 String -->
+<!-- test: match-string.second-case -->
 ```maxon
 function main() returns ExitCode
 	let name = "bob"
@@ -1066,8 +1064,7 @@ end 'main'
 2
 ```
 
-<!-- disabled-test: match-string.default -->
-<!-- P1.2 String -->
+<!-- test: match-string.default -->
 ```maxon
 function main() returns ExitCode
 	let name = "charlie"
@@ -1082,8 +1079,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: match-string.or-patterns -->
-<!-- P1.2 String -->
+<!-- test: match-string.or-patterns -->
 ```maxon
 function main() returns ExitCode
 	let name = "carol"
@@ -1098,8 +1094,7 @@ end 'main'
 2
 ```
 
-<!-- disabled-test: match-string.expression -->
-<!-- P1.2 String -->
+<!-- test: match-string.expression -->
 ```maxon
 function main() returns ExitCode
 	let name = "bob"
