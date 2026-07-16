@@ -338,10 +338,21 @@ function returnTypeResultClass(returnType StdReturnType) returns RegClass
 	end 'r'
 end 'returnTypeResultClass'
 
-// Write `valueId`'s class into the column. A write past the end is an invariant break, not a case:
-// the column was sized by `scanFunctionValueCount` over the very ops this walks.
+// Write `valueId`'s class into the column, EXTENDING the column when the id runs past its end.
+//
+// The column is pre-sized to `scanFunctionValueCount` — the OPERAND-based value count the allocator
+// uses — but this walk writes a class for every value an op DEFINES, and those are not the same set. A
+// fused loop-test `cmp` DEFINES its boolean yet is consumed only as EFLAGS by the paired `jcc`, so that
+// boolean is a def that never appears as an operand; when it is the function's highest id, the operand
+// count comes up one short of it. The class column must cover every DEFINED value (a superset of the
+// operand-used ones), so it grows to fit. `growFilled` — not `resize` — is amortized-linear here (see
+// its header), and the added slots are `gpr`, the same fill the pre-size uses for ids no op names.
 function setValueClass(column ValueClassColumn, valueId ValueId, class RegClass)
-	try column.set(valueId, value: class) otherwise panic("setValueClass: v{valueId} is outside the {column.count()}-wide class column — the column is sized by scanFunctionValueCount over the same ops this walk reads, so the two have fallen out of step")
+	if valueId >= column.count() 'extend'
+		column.growFilled(valueId + 1, value: RegClass.gpr)
+	end 'extend'
+
+	try column.set(valueId, value: class) otherwise panic("setValueClass: v{valueId} outside the {column.count()}-wide class column after growFilled(v{valueId}+1) — a grow that just ensured the slot cannot leave it missing")
 end 'setValueClass'
 
 // ⚠ THE WHOLE SSE LOWERING IS SCALAR-DOUBLE, AND THIS IS WHERE IT SAYS SO. `movsd`, `addsd`,
@@ -537,9 +548,14 @@ type StdToX64Lowering
 		return columns
 	end 'buildValueClasses'
 
-	// One function's column. Sized from `scanFunctionValueCount` — the SAME count the allocator
-	// derives, asked of the same (Target) module, so the column cannot come up short of the value
-	// space it must cover (`assertClassColumnCovers` is the gate that says so).
+	// One function's column. Pre-sized to `scanFunctionValueCount` — the OPERAND-based value count the
+	// allocator derives from the same (Target) module — and then EXTENDED by `setValueClass` for any
+	// value this walk DEFINES that the operand count did not reach. The two are not the same set: the
+	// allocator only ever indexes values read out of a register (operands), while this walk records a
+	// class for every value an op defines, and a fused loop-test `cmp` defines a boolean that lives only
+	// in EFLAGS and is never an operand. So the pre-size is a LOWER BOUND — it guarantees allocator
+	// coverage (`assertClassColumnCovers` is the gate that says so) — and the grow-on-write covers the
+	// defs beyond it. See `setValueClass`.
 	//
 	// It walks the STD ops, which is sound because this lowering mints NO fresh ValueIds: every
 	// Target virtual is a Std virtual, so one column covers both tiers. (The float-equality fold is

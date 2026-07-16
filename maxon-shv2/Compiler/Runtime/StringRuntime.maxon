@@ -478,13 +478,13 @@ function buildIntToString(module StdModule)
 	var setup = module.addBlock(func, label: b"setup")
 	var countLoop = module.addBlock(func, label: b"countLoop")
 	var writeSetup = module.addBlock(func, label: b"writeSetup")
-	// The write loop is HEADER-GUARDED (test at the top, `buildStrEq`/`buildStrCopy`'s shape) rather than
-	// bottom-tested, and that is load-bearing beyond style. A fused loop-test `cmp` materializes NO target
-	// op (it sets flags the `jcc` reads), so it is invisible to `scanFunctionValueCount` — which sizes the
-	// value-class column by the target ops — while `recordOpResultClass` still classes it off the Std op.
-	// If that `cmp` result were the function's HIGHEST-numbered value, the column would come up one short
-	// (`setValueClass: v_N outside the N-wide column`). A header guard keeps the loop BODY — all
-	// materialized, all counted — as the last values minted, so the top-tested `cmp` is never the maximum.
+	// The write loop is HEADER-GUARDED (test at the top), following `buildStrEq`/`buildStrCopy`'s shape so
+	// the three string builders read the same way. It is a STYLE choice, not a correctness one. A fused
+	// loop-test `cmp` whose boolean is a function's highest-numbered value once tripped the value-class
+	// column — `setValueClass` sized it off the target OPERANDS, and a flags-only compare is not among them
+	// — and this shape happened to dodge it by keeping the loop body's values minted last. That column now
+	// GROWS to cover every DEFINED id (see `setValueClass` in StdToX64Conversion), so the dodge is
+	// unnecessary and a bottom-tested loop would compile too; the shared shape stays for consistency.
 	var writeHeader = module.addBlock(func, label: b"writeHeader")
 	var writeBody = module.addBlock(func, label: b"writeBody")
 	var done = module.addBlock(func, label: b"done")

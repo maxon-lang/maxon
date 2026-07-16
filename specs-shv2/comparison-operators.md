@@ -135,6 +135,30 @@ end 'main'
 24
 ```
 
+<!-- test: fused-compare-is-highest-value -->
+A fused compare — one whose boolean is consumed only as the EFLAGS a `jcc` reads, never
+out of a register — leaves NO trace among the target ops: it is neither an operand nor a
+def there. So when it is the function's HIGHEST-numbered value, `scanFunctionValueCount`
+(which counts target operands) sizes the value-class column one short of it, and recording
+that boolean's class runs off the end — a backend panic on a valid program. This pins the
+shape: both `if` branches return an already-bound value (`a`, `b`), so nothing is minted
+after the `a < b` compare and the compare IS the top id. With `a = 7`, `b = 3`, `7 < 3` is
+false, so it falls through to `return a` and exits 7. See `setValueClass` in
+StdToX64Conversion — the column now GROWS to cover every defined id.
+```maxon
+function main() returns ExitCode
+	let a = 7
+	let b = 3
+	if a < b 'lt'
+		return b
+	end 'lt'
+	return a
+end 'main'
+```
+```exitcode
+7
+```
+
 ## Deferred
 
 Tests recorded for re-enablement at the milestone that unblocks them. They live
