@@ -4250,6 +4250,18 @@ export type Parser
 		// a dangling block: it is exhaustive only through a `default`, whose BODY consumes this block.
 		if isEnumMatch 'enumFallOffUnreachable'
 			currentTestBlock.terminator = Terminator.dead
+
+			// A trailing `and fallthrough` on the LAST arm has no following arm or `default` to fall
+			// INTO (a pattern arm cannot follow a default, and an enum match has no legal default at
+			// this rung), so it falls OUT of the match to the continuation — exactly as an arm that
+			// reaches the merge does. Without this the arm body is left unterminated and
+			// `assertAllBlocksTerminated` panics; the reference compiler accepts it as a no-op tail.
+			// Statement form only: `and fallthrough` after a `gives` arm is already rejected, so the
+			// give is `none`. A SCALAR match cannot reach this with `prevFallthrough`: a trailing
+			// fallthrough with no `default` is rejected by the `notExhaustive` throw below.
+			if prevFallthrough 'trailingFallthrough'
+				reachingArms.push(MatchArmExit.create(prevExitBlock, exitVals: prevExitVals, give: MatchGiveValue.none))
+			end 'trailingFallthrough'
 		end 'enumFallOffUnreachable'
 
 		// EXHAUSTIVENESS. An enum match must cover every case (E2026 listing the missing ones); a
@@ -4717,6 +4729,18 @@ export type Parser
 		return try self.emitEnumTagCompare(scrut, layout: layout, index: lowIndex, opTok: patternTok)
 	end 'emitEnumPatternAtom'
 
+	// The declaration index of the case named by `nameTok`, or E3034 (unknown case) positioned at
+	// `posTok`. THE one emitter of "this name is not a case of this enum" — a `Color.red` literal
+	// anchors it at the TYPE name and a match arm at the CASE name, so the POSITION is the caller's to
+	// pass, but the lookup and the diagnostic are shared so the two sites cannot drift on either.
+	function enumCaseIndexOrThrow(layout EnumLayout, nameTok Token, posTok Token) returns CaseIndex throws ParseError
+		let index = layout.indexOfCase(nameTok.value)
+		if index >= layout.caseCount() 'unknownCase'
+			throw ParseError.enumUnknownCase(String.from(nameTok.value), line: posTok.line, column: posTok.column)
+		end 'unknownCase'
+		return index
+	end 'enumCaseIndexOrThrow'
+
 	// Resolve a case NAME in a match arm to its declaration index. A QUALIFIED name (`Color.red`) is
 	// E3075 — the scrutinee's enum is already known, so the bare name suffices — positioned at the
 	// type name (the bootstrap's anchor). An unknown case is E3034, at the case name.
@@ -4734,11 +4758,7 @@ export type Parser
 		end 'qualified'
 
 		self.advance()
-		let index = layout.indexOfCase(caseTok.value)
-		if index >= layout.caseCount() 'unknownCase'
-			throw ParseError.enumUnknownCase(String.from(caseTok.value), line: caseTok.line, column: caseTok.column)
-		end 'unknownCase'
-		return index
+		return try self.enumCaseIndexOrThrow(layout, nameTok: caseTok, posTok: caseTok)
 	end 'resolveEnumArmCase'
 
 	// Mark case `index` covered, or raise E2027 if a prior arm already covered it. The overlap is
@@ -6057,10 +6077,7 @@ export type Parser
 		end 'notACaseName'
 		self.advance()
 
-		let index = layout.indexOfCase(caseTok.value)
-		if index >= layout.caseCount() 'unknownCase'
-			throw ParseError.enumUnknownCase(String.from(caseTok.value), line: typeTok.line, column: typeTok.column)
-		end 'unknownCase'
+		let index = try self.enumCaseIndexOrThrow(layout, nameTok: caseTok, posTok: typeTok)
 
 		return self.emitEnumTagLiteral(layout.name, tag: layout.tagOfIndex(index), range: SourceRange.ofToken(typeTok))
 	end 'parseEnumLiteral'

@@ -269,6 +269,29 @@ end 'main'
 1
 ```
 
+<!-- test: enum-exhaustive.trailing-fallthrough -->
+```maxon
+enum Color
+		red
+		green
+		blue
+end 'Color'
+
+function main() returns ExitCode
+	var x = 0
+	let c = Color.blue
+	match c 'check'
+		red then x = 1
+		green then x = 2
+		blue then x = 3 and fallthrough
+	end 'check'
+	return x
+end 'main'
+```
+```exitcode
+3
+```
+
 <!-- disabled-test: enum-exhaustive.default-throws -->
 <!-- P1.4 error handling (throws / try / otherwise) -->
 ```maxon
