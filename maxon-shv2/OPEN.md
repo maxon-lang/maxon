@@ -332,6 +332,21 @@ Closed 2026-07-15 (`make-copies-check`). Three instances of the signature bug �
    (`E3036: missing argument for parameter 'driver'` — verified by sabotage). This is the `iatCall` cure's
    shape: not detected, **unrepresentable**.
 
+⭐ **THE FOURTEENTH DRIVER WAS LEFT COUPLED BY ADJACENCY, AND THE REASON FOR LEAVING IT WAS WRONG (review
+closed it).** The chain knob escaped cure 3: `callChainSource` numbered its links `0..length-1` while a
+separate `chainTopName(length)` returned `chainLinkName(length - 1)` — *"the links are numbered
+0..length-1"* written TWICE, once as a loop bound and once as a subtraction, with **nothing making the
+copies agree**. Its own comment said so (*"nothing checks the pair… a stale `chainTopName` names a MIDDLE
+link silently"*) — and a coupling documented at both ends is exactly what this file's through-line says
+does not work; it is what the dead `classifyGlobalLabel` had. It was left because closing it *"would
+invalidate the byte-identity proof"* — **which it does not**: the closure emits **identical text**
+(verified, `--emit-corpus` before/after, 342 files, recursive diff EMPTY), so the proof is re-run, not
+lost. **The cure was already IN THE FILE**: `writeManyFunctions` — the other knob minting names in a loop
+— writes and registers in ONE function. `callChainSource`/`chainTopName` are now `writeCallChain`, whose
+`topName` is *literally the last link the loop emitted*. ⇒ **Cure 1 (derive), not cure 2 (assert): read
+the fact off the generator instead of recomputing it.** Measurement-neutral: the delta stayed **+2 allocs
+/ +296 bytes flat at rungs 0-5** (the generator is not inside a measured phase).
+
 ⭐ **ASK `value == Type.case`, NOT `.rawValue != n` — AND THE REVIEW IS WHAT CAUGHT IT.** The xmm check
 first compared `FirstXmmRegisterNumber` against `xmm0.rawValue`. That is **E3097**, and the first fix —
 bind it to a local — was a **false account of its own code**: a bare local does **not** dodge E3097 (the

@@ -534,8 +534,6 @@ function generateRung(root FilePath, rung RungIndex) returns ScaleRung throws Sc
 	let funcCount = knobAt(FunctionsBase, rung: rung)
 	let localCount = knobAt(LocalsPerFunctionBase, rung: rung)
 
-	let chainLength = knobAt(CallChainBase, rung: rung)
-
 	var sourceBytes = 0 as SourceByteCount
 	var written = StringArray.create()
 	// Every generated entry point `main` threads the accumulator through, IN CALL ORDER — filled by
@@ -549,9 +547,9 @@ function generateRung(root FilePath, rung RungIndex) returns ScaleRung throws Sc
 	sourceBytes = sourceBytes + try writeManyFunctions(dir, fileCount: fileCount, funcCount: funcCount, written: written, drivers: drivers)
 	sourceBytes = sourceBytes + try writeRungFile(dir, name: "c_long", source: longFunctionSource(knobAt(LongIfsBase, rung: rung), localCount: localCount), written: written, drivers: drivers, driver: RungDriver.threads(LongIfDriver))
 	sourceBytes = sourceBytes + try writeRungFile(dir, name: "d_blocks", source: deepBlocksSource(knobAt(DeepBlocksBase, rung: rung), localCount: localCount), written: written, drivers: drivers, driver: RungDriver.threads(DeepBlocksDriver))
-	// The chain's driver is its TOP link, whose name depends on the knob's size — so it is asked for
-	// by the same function that generates the links, never respelled from the shape of the name.
-	sourceBytes = sourceBytes + try writeRungFile(dir, name: "e_chain", source: callChainSource(chainLength), written: written, drivers: drivers, driver: RungDriver.threads(chainTopName(chainLength)))
+	// The chain writes and registers itself, like `writeManyFunctions`: its driver is its TOP link,
+	// whose name is known only to the loop that mints the links (see `writeCallChain`).
+	sourceBytes = sourceBytes + try writeCallChain(dir, length: knobAt(CallChainBase, rung: rung), written: written, drivers: drivers)
 	sourceBytes = sourceBytes + try writeRungFile(dir, name: "f_loops", source: pressuredLoopsSource(knobAt(PressuredLoopsBase, rung: rung)), written: written, drivers: drivers, driver: RungDriver.threads(PressuredDriver))
 	sourceBytes = sourceBytes + try writeRungFile(dir, name: "g_nested", source: nestedLoopsSource(knobAt(LoopNestBase, rung: rung)), written: written, drivers: drivers, driver: RungDriver.threads(NestedDriver))
 	sourceBytes = sourceBytes + try writeRungFile(dir, name: "h_shifts", source: shiftCoverageSource(), written: written, drivers: drivers, driver: RungDriver.threads(ShiftsDriver))
@@ -756,7 +754,8 @@ end 'smallFunctionName'
 // Each knob's ENTRY POINT is named once, in a constant like this one, and read by the two parties that
 // must agree: the generator below, which emits the function under this name, and `generateRung`, which
 // registers it as the knob's `RungDriver` so `main` calls it. They cannot drift, because there is
-// nothing to drift from. (The chain knob is the exception, and it says why at `chainTopName`.)
+// nothing to drift from. (The two knobs that mint their names in a loop — `writeManyFunctions` and
+// `writeCallChain` — register from inside that loop instead, for the same reason.)
 let LongIfDriver = "scaleLongIf"
 
 // The `longFunction` knob: ONE function, N sequential `if`s, over a bounded working set and
@@ -828,49 +827,54 @@ function deepBlocksSource(ifElseCount KnobSize, localCount KnobSize) returns Str
 end 'deepBlocksSource'
 
 // One link of the chain, by index — the `smallFunctionName` pattern: ONE name function, read by the
-// generator that emits the links and by the driver lookup below. The chain takes a name FUNCTION
-// where every other knob takes a name constant, because it generates N functions rather than one.
+// generator that emits the links and by the driver registration below. The chain takes a name
+// FUNCTION where every other knob takes a name constant, because it generates N functions rather
+// than one.
 function chainLinkName(link KnobSize) returns String
 	return "scaleChain{link}"
 end 'chainLinkName'
-
-// The chain's DRIVER: its TOP link, the only one `main` calls (it reaches the rest by recursion).
-//
-// This is the awkward knob — its entry point's name is a function of the knob's SIZE, so it cannot be
-// a constant like every other driver. It is a named function rather than a `chainLinkName(length - 1)`
-// spelled at the call site because "the top link is `length - 1`" is a fact about the GENERATOR's
-// numbering, and it belongs beside the loop that decides it: widen that loop and this moves with it,
-// where a `- 1` sitting in `generateRung` would quietly go on naming a link in the middle.
-function chainTopName(length KnobSize) returns String
-	return chainLinkName(length - 1)
-end 'chainTopName'
 
 // The `callChain` knob: N functions, each calling the one below it and holding values LIVE ACROSS
 // that call. The live values are the point — a bare call chain would measure call lowering, but
 // values live across a call can only live in the 5 callee-saved registers, so this is what
 // exercises the cross-call spill bracket.
 //
-// ⚠ IT NUMBERS THE LINKS 0..length-1, WHICH IS THE FACT `chainTopName` READS. Change the numbering
-// here and change it there; nothing checks the pair, and a stale `chainTopName` names a MIDDLE link
-// silently (`main` would still call a real function, and the knob would quietly shorten).
-function callChainSource(length KnobSize) returns String
+// ⭐ IT WRITES AND REGISTERS IN ONE FUNCTION, for the same reason `writeManyFunctions` does: this is
+// the other knob whose entry point's name is known only inside the loop that mints it, so the name
+// is READ OFF THE GENERATOR rather than recomputed from the knob's size. `topName` is literally the
+// last link this loop emitted.
+//
+// This used to be a `callChainSource` + `chainTopName(length)` pair returning `chainLinkName(length
+// - 1)`, which was the file's own signature bug: "the links are numbered 0..length-1" was written
+// TWICE — once as this loop's bound, once as that subtraction — with nothing making the copies
+// agree. The failure was SILENT, which is what made it worth closing: a stale `chainTopName` names a
+// MIDDLE link, `main` still calls a real function, everything still compiles, and the knob quietly
+// measures a shorter chain than the ladder says it does. Now the two cannot disagree, because there
+// is only one of them.
+function writeCallChain(dir FilePath, length KnobSize, written StringArray, drivers StringArray) returns SourceByteCount throws ScaleError
 	var out = StringBuilder.create()
 	out.append("// Generated by ScaleCorpus: the call-chain knob — {length} chained calls, values live across each.\n")
-	// The base of the chain: takes no call, so the recursion of generated text terminates.
+	// The base of the chain: takes no call, so the recursion of generated text terminates. It is also
+	// the top when the knob is 1, which is why `topName` seeds from it rather than from the loop.
 	out.append("function {chainLinkName(0)}(a int) returns int\n")
 	out.append("\treturn a + 1\n")
 	out.append("end '{chainLinkName(0)}'\n")
 
+	var topName = chainLinkName(0)
+
 	for i in 1 upto length 'eachLink'
-		out.append("\nfunction {chainLinkName(i)}(a int) returns int\n")
+		let linkName = chainLinkName(i)
+		out.append("\nfunction {linkName}(a int) returns int\n")
 		out.append("\tlet x = a + {i mod 9 + 1}\n")
 		out.append("\tlet y = a * 2\n")
 		out.append("\tlet z = {chainLinkName(i - 1)}(a)\n")
 		out.append("\treturn x + y + z\n")
-		out.append("end '{chainLinkName(i)}'\n")
+		out.append("end '{linkName}'\n")
+		topName = linkName
 	end 'eachLink'
-	return out.build()
-end 'callChainSource'
+
+	return try writeRungFile(dir, name: "e_chain", source: out.build(), written: written, drivers: drivers, driver: RungDriver.threads(topName))
+end 'writeCallChain'
 
 let PressuredDriver = "scalePressured"
 
