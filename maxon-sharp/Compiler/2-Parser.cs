@@ -1549,16 +1549,59 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       // Preserve existing OwnerTypeName if this parser doesn't know it (seeded alias)
       if (ownerTypeName == null && module.TypeAliasSources.TryGetValue(aliasName, out var existingInfo))
         ownerTypeName = existingInfo.OwnerTypeName;
+
+      // The module holds ONE alias record per name, so it can describe only one declaration. When a
+      // name is declared in two files — legal for e.g. an `export typealias FilePathArray` and a
+      // file-private one of the same name — a narrower declaration must not seize the record from a
+      // wider one in another file: overwriting an exported record with the file-private one flips
+      // its IsExported to false, at which point SeedFromModule stops seeding it and every other
+      // file's reference re-derives a bare `Array` (element defaulting to int) instead of
+      // `Array with FilePath`. Which file wins was decided by readdir order — sorted on NTFS,
+      // hash-ordered on APFS — so the same tree built on Windows and was refused on macOS. The
+      // widest declaration owns the record; equal ranks keep the later write, leaving two exported
+      // declarations of a name to the namespace-qualification path (AmbiguousTypeNames).
+      if (module.TypeAliasSources.TryGetValue(aliasName, out var ownerInfo)
+          && ownerInfo.SourceFilePath != _sourceFilePath
+          && AliasVisibilityRank(ownerInfo) > AliasVisibilityRank(isExported, isModuleVisible, _isStdlib))
+        continue;
+
       module.TypeAliasSources[aliasName] = new TypeAliasInfo(sourceTypeName, typeParams,
           isExported, _isStdlib, _sourceFilePath, ownerTypeName, isModuleVisible);
       if (_sourceFilePath != null)
         module.TypeDefSourceFiles[aliasName] = _sourceFilePath;
-      if (!isExported && !isModuleVisible && !_isStdlib)
-        module.NonExportedTypeNames.Add(aliasName);
-      if (isModuleVisible)
+
+      // Visibility marks WIDEN, never narrow. The two name-keyed sets can only ever describe one
+      // declaration of a name, so when a wider declaration of it appears — an `export typealias`
+      // where a file-private one of the same name was seen first — the narrow mark left behind must
+      // be cleared, or the exported alias stays wrongly file-scoped and un-seeded (this is the
+      // FilePathArray→int bug). But a NARROWER (or visibility-silent) pass must not undo a wider
+      // mark: a `module` inner alias is re-walked by passes that do not re-derive its module scope,
+      // and clearing then re-adding on those passes would drop the mark and lose the alias entirely
+      // (the cross-file `module extension` Comparator regression). So each case only ever removes a
+      // strictly-narrower mark and only adds when nothing wider already marks the name.
+      if (isExported || _isStdlib) {
+        module.NonExportedTypeNames.Remove(aliasName);
+        module.ModuleVisibleTypeNames.Remove(aliasName);
+      } else if (isModuleVisible) {
+        module.NonExportedTypeNames.Remove(aliasName);
         module.ModuleVisibleTypeNames.Add(aliasName);
+      } else if (!module.ModuleVisibleTypeNames.Contains(aliasName)) {
+        module.NonExportedTypeNames.Add(aliasName);
+      }
     }
   }
+
+  // How widely a typealias declaration is visible, ordered so the widest declaration of a name owns
+  // the module's single record for it (see the record guard in CopyTypeAliasesToModule).
+  private static TypeAliasVisibilityRank AliasVisibilityRank(bool isExported, bool isModuleVisible, bool isStdlib) =>
+    isModuleVisible ? TypeAliasVisibilityRank.ModuleVisible
+    : isExported || isStdlib ? TypeAliasVisibilityRank.Exported
+    : TypeAliasVisibilityRank.FileScoped;
+
+  private static TypeAliasVisibilityRank AliasVisibilityRank(TypeAliasInfo info) =>
+    AliasVisibilityRank(info.IsExported, info.IsModuleVisible, info.IsStdlib);
+
+  private enum TypeAliasVisibilityRank { FileScoped, ModuleVisible, Exported }
 
   /// <summary>
   /// Seeds the parser's internal dictionaries from a previously-parsed module so that
@@ -1674,11 +1717,108 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   // Pre-scanning for top-level let and var declarations
   // ===========================================================================
 
-  // Raw constant declaration: stores the token range for the initializer expression
-  private record ConstantDecl(string Name, int TokenStart, int TokenEnd, int Line, int Column, bool IsExported = false, bool IsModuleVisible = false);
+  /// <summary>
+  /// Whole-program pre-pass: record this file's top-level constant DECLARATIONS on the module,
+  /// unfolded, so that every file's constants are declared before any file folds one. Runs across
+  /// all sources between the typealias pre-scan and PreScan (see Compiler.CompileSources) — after
+  /// the typealias pre-scan because IsComplexInitializer asks whether a name is a ranged type or an
+  /// enum, and those are what that pass establishes whole-program.
+  ///
+  /// Only the DECLARATIONS are collected. Folding stays on demand in EvaluateConstant, whose
+  /// recursion already resolves a reference to a constant declared later — that recursion is why
+  /// this pass does not need to sort anything: the topological order falls out of it for free once
+  /// the declarations it can see are the whole program's rather than one file's.
+  /// </summary>
+  public void PreScanTopLevelConstantDecls(IrModule<MaxonOp> targetModule) {
+    _currentModule = targetModule;
+
+    while (!IsAtEnd() && Current().Type != TokenType.Eof) {
+      SkipNewlines();
+      if (IsAtEnd() || Current().Type == TokenType.Eof) break;
+
+      var (isExported, isModuleVisible) = ParseVisibilityModifier();
+
+      if (Check(TokenType.HashIf)) {
+        HandleConditionalCompilation();
+        continue;
+      }
+      if (Check(TokenType.HashElse)) {
+        HandleConditionalElse();
+        continue;
+      }
+      if (Check(TokenType.HashEndif)) {
+        HandleConditionalEndif();
+        continue;
+      }
+
+      if (Check(TokenType.Let)) {
+        var decl = ScanTopLevelValueDecl();
+        // A complex initializer is a runtime global, not a constant, so it is not a declaration any
+        // other file may fold — leaving it out is what keeps a cross-file read of one an error here
+        // exactly as a same-file read of one already is.
+        if (!IsComplexInitializer(decl.TokenStart)) {
+          targetModule.TopLevelConstantDecls.Add(new TopLevelConstantDecl(decl.Name, _tokens,
+            decl.TokenStart, decl.TokenEnd, decl.Line, decl.Column, isExported, isModuleVisible, _sourceFilePath));
+        }
+      } else if (Check(TokenType.Type) || Check(TokenType.Union) || Check(TokenType.Enum)
+          || Check(TokenType.Interface) || Check(TokenType.Extension) || Check(TokenType.Function)) {
+        Advance();
+        SkipToMatchingEnd();
+      } else {
+        SkipToEndOfLine();
+      }
+      SkipNewlines();
+    }
+
+    _pos = 0;
+  }
+
+  /// <summary>
+  /// Scans `let NAME = <initializer>` / `var NAME = <initializer>` from the `let`/`var` token,
+  /// leaving `_pos` past the end of the initializer. The one reader of a top-level value
+  /// declaration's shape, shared by the whole-program constant pre-pass and PreScan so the two
+  /// walks cannot drift apart on where a declaration starts and ends.
+  /// </summary>
+  private DeferredDecl ScanTopLevelValueDecl() {
+    Advance(); // consume 'let' / 'var'
+    var nameToken = Expect(TokenType.Identifier);
+    CheckReservedDeclName(nameToken);
+    Expect(TokenType.Equals);
+    int exprStart = _pos;
+    SkipToEndOfLine();
+    return new DeferredDecl(nameToken.Value, exprStart, _pos, nameToken.Line, nameToken.Column);
+  }
+
+  /// <summary>
+  /// The constant declarations this file may fold against: its OWN (whatever their visibility) plus
+  /// every other file's that this file is allowed to see. Own declarations come from this parser's
+  /// own walk and lead, so a file-private constant still shadows a foreign one of the same name.
+  ///
+  /// The visibility rule is the one SeedFromModule applies to already-folded values, restated
+  /// against declarations — collecting the whole program's declarations must not make a file-scoped
+  /// constant globally readable, and nothing else in the compiler would have caught it if it did.
+  /// </summary>
+  private List<TopLevelConstantDecl> VisibleConstantDecls(List<TopLevelConstantDecl> ownDecls) {
+    var decls = new List<TopLevelConstantDecl>(ownDecls);
+    if (seedModule == null) return decls;
+
+    foreach (var decl in seedModule.TopLevelConstantDecls) {
+      if (decl.SourceFilePath == _sourceFilePath) continue; // already present, from our own walk
+      if (decl.IsExported) {
+        decls.Add(decl);
+      } else if (decl.IsModuleVisible
+          && _sourceFilePath != null
+          && decl.SourceFilePath != null
+          && IsFileInModuleScope(decl.SourceFilePath, _sourceFilePath)) {
+        decls.Add(decl);
+      }
+      // Anything else is file-scoped to its declarer and stays undefined here.
+    }
+    return decls;
+  }
 
   private void CollectAndEvaluateTopLevelDecls(IrModule<MaxonOp> module) {
-    var constDecls = new List<ConstantDecl>();
+    var ownDecls = new List<TopLevelConstantDecl>();
     int savedPos = _pos;
 
     PreRegisterTopLevelTypeAliasNames();
@@ -1690,33 +1830,19 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
       var (isExported, isModuleVisible) = ParseVisibilityModifier();
 
-      if (Check(TokenType.Let)) {
-        Advance(); // consume 'let'
-        var nameToken = Expect(TokenType.Identifier);
-        CheckReservedDeclName(nameToken);
-        Expect(TokenType.Equals);
-        int exprStart = _pos;
-        SkipToEndOfLine();
-        if (IsComplexInitializer(exprStart)) {
-          _deferredExprLets.Add(new DeferredDecl(nameToken.Value, exprStart, _pos, nameToken.Line, nameToken.Column, isExported, isModuleVisible));
+      if (Check(TokenType.Let) || Check(TokenType.Var)) {
+        bool isMutable = Check(TokenType.Var);
+        var scanned = ScanTopLevelValueDecl();
+        var decl = scanned with { IsExported = isExported, IsModuleVisible = isModuleVisible };
+        if (IsComplexInitializer(decl.TokenStart)) {
+          (isMutable ? _deferredExprVars : _deferredExprLets).Add(decl);
           module.DeferredGlobalInits.Add(new DeferredGlobalInit(
-            nameToken.Value, _tokens, exprStart, _pos, IsMutable: false, nameToken.Line, nameToken.Column, _sourceFilePath));
+            decl.Name, _tokens, decl.TokenStart, decl.TokenEnd, isMutable, decl.Line, decl.Column, _sourceFilePath));
+        } else if (isMutable) {
+          _deferredGlobalVars.Add(decl);
         } else {
-          constDecls.Add(new ConstantDecl(nameToken.Value, exprStart, _pos, nameToken.Line, nameToken.Column, isExported, isModuleVisible));
-        }
-      } else if (Check(TokenType.Var)) {
-        Advance(); // consume 'var'
-        var nameToken = Expect(TokenType.Identifier);
-        CheckReservedDeclName(nameToken);
-        Expect(TokenType.Equals);
-        int exprStart = _pos;
-        SkipToEndOfLine();
-        if (IsComplexInitializer(exprStart)) {
-          _deferredExprVars.Add(new DeferredDecl(nameToken.Value, exprStart, _pos, nameToken.Line, nameToken.Column, isExported, isModuleVisible));
-          module.DeferredGlobalInits.Add(new DeferredGlobalInit(
-            nameToken.Value, _tokens, exprStart, _pos, IsMutable: true, nameToken.Line, nameToken.Column, _sourceFilePath));
-        } else {
-          _deferredGlobalVars.Add(new DeferredDecl(nameToken.Value, exprStart, _pos, nameToken.Line, nameToken.Column, isExported, isModuleVisible));
+          ownDecls.Add(new TopLevelConstantDecl(decl.Name, _tokens, decl.TokenStart, decl.TokenEnd,
+            decl.Line, decl.Column, isExported, isModuleVisible, _sourceFilePath));
         }
       } else if (Check(TokenType.Function)) {
         // Pre-register function signature for forward references
@@ -1757,14 +1883,18 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     ResolveAutoCloneableConformance(module);
     ResolveAutoEquatableConformance(module);
 
-    // Evaluate constants (handling forward references).
-    // Pre-populate with seeded constants from other files so cross-file
-    // constant references (e.g., export let) resolve during evaluation.
+    // Evaluate constants (handling forward references, in this file and across files).
+    // Pre-populate with constants already folded by the files pre-scanned before this one: a hit
+    // there is the same value `decls` would fold, reached without re-folding it.
     var evaluated = new Dictionary<string, object>(_topLevelConstants);
     var evaluating = new HashSet<string>();
+    var decls = VisibleConstantDecls(ownDecls);
 
-    foreach (var decl in constDecls) {
-      EvaluateConstant(decl.Name, constDecls, evaluated, evaluating, decl.Line, decl.Column);
+    // Only THIS file's constants are folded eagerly. A foreign one is folded when it is demanded,
+    // by the recursion below — folding them all here would report another file's broken constant
+    // against this file, and would fold constants nothing in this compilation ever reads.
+    foreach (var decl in ownDecls) {
+      EvaluateConstant(decl.Name, decls, evaluated, evaluating, decl.Line, decl.Column);
     }
 
     _topLevelConstants = evaluated;
@@ -1772,7 +1902,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     // Store exported / module-visible constants on the module for cross-file
     // seeding. Module-visible constants additionally need their declarer path
     // recorded so the directory-subtree check can run when other files seed.
-    foreach (var decl in constDecls) {
+    foreach (var decl in ownDecls) {
       if (!evaluated.TryGetValue(decl.Name, out var constVal)) continue;
       if (decl.IsExported) {
         module.ExportedConstants[decl.Name] = constVal;
@@ -1787,7 +1917,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     foreach (var deferred in _deferredGlobalVars) {
       int savedPos2 = _pos;
       _pos = deferred.TokenStart;
-      var value = EvalConstExpr(constDecls, evaluated, evaluating);
+      var value = EvalConstExpr(decls, evaluated, evaluating);
       ExpectConstInitializerFullyConsumed(deferred.Name, deferred.TokenEnd);
       _pos = savedPos2;
 
@@ -4958,7 +5088,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     if (Check(TokenType.CharacterLiteral)) Advance();
   }
 
-  private object EvaluateConstant(string name, List<ConstantDecl> decls, Dictionary<string, object> evaluated, HashSet<string> evaluating, int refLine = 0, int refCol = 0) {
+  private object EvaluateConstant(string name, List<TopLevelConstantDecl> decls, Dictionary<string, object> evaluated, HashSet<string> evaluating, int refLine = 0, int refCol = 0) {
     if (evaluated.TryGetValue(name, out var val)) return val;
 
     var decl = decls.FirstOrDefault(d => d.Name == name) ?? throw new CompileError(ErrorCode.ParserExpectedExpression, $"Undefined constant '{name}'", refLine, refCol);
@@ -4968,14 +5098,30 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       var lastDecl = decls.Last(d => evaluating.Contains(d.Name));
       throw new CompileError(ErrorCode.ParserCircularDependency,
         $"Circular dependency detected among global constants: {cycleNames}",
-        lastDecl.Line, lastDecl.Column);
+        lastDecl.Line, lastDecl.Column) { FilePath = lastDecl.SourceFilePath };
     }
 
+    // The declaration may be another file's, in which case TokenStart indexes ITS token list and
+    // not the one this parser is holding. Swapping is how the same demand-driven recursion folds a
+    // foreign declaration; the finally is because a fold that throws must not leave this parser
+    // pointing into a file it is not parsing.
+    var savedTokens = _tokens;
     int savedPos = _pos;
-    _pos = decl.TokenStart;
-    var result = EvalConstExpr(decls, evaluated, evaluating);
-    ExpectConstInitializerFullyConsumed(decl.Name, decl.TokenEnd);
-    _pos = savedPos;
+    object result;
+    try {
+      _tokens = decl.Tokens;
+      _pos = decl.TokenStart;
+      result = EvalConstExpr(decls, evaluated, evaluating);
+      ExpectConstInitializerFullyConsumed(decl.Name, decl.TokenEnd);
+    } catch (CompileError ex) {
+      // Blame the file that CONTAINS the bad constant, not the file that happened to demand it
+      // first — the line and column in the message are that file's.
+      ex.FilePath ??= decl.SourceFilePath;
+      throw;
+    } finally {
+      _tokens = savedTokens;
+      _pos = savedPos;
+    }
 
     evaluated[name] = result;
     evaluating.Remove(name);
@@ -5004,11 +5150,11 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   // Compile-time constant expression evaluator
   // ============================================================================
 
-  private object EvalConstExpr(List<ConstantDecl> decls, Dictionary<string, object> evaluated, HashSet<string> evaluating) {
+  private object EvalConstExpr(List<TopLevelConstantDecl> decls, Dictionary<string, object> evaluated, HashSet<string> evaluating) {
     return EvalConstOr(decls, evaluated, evaluating);
   }
 
-  private object EvalConstOr(List<ConstantDecl> decls, Dictionary<string, object> evaluated, HashSet<string> evaluating) {
+  private object EvalConstOr(List<TopLevelConstantDecl> decls, Dictionary<string, object> evaluated, HashSet<string> evaluating) {
     var lhs = EvalConstXor(decls, evaluated, evaluating);
     while (Check(TokenType.Or)) {
       Advance();
@@ -5020,7 +5166,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     return lhs;
   }
 
-  private object EvalConstXor(List<ConstantDecl> decls, Dictionary<string, object> evaluated, HashSet<string> evaluating) {
+  private object EvalConstXor(List<TopLevelConstantDecl> decls, Dictionary<string, object> evaluated, HashSet<string> evaluating) {
     var lhs = EvalConstAnd(decls, evaluated, evaluating);
     while (Check(TokenType.Xor)) {
       Advance();
@@ -5032,7 +5178,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     return lhs;
   }
 
-  private object EvalConstAnd(List<ConstantDecl> decls, Dictionary<string, object> evaluated, HashSet<string> evaluating) {
+  private object EvalConstAnd(List<TopLevelConstantDecl> decls, Dictionary<string, object> evaluated, HashSet<string> evaluating) {
     var lhs = EvalConstComparison(decls, evaluated, evaluating);
     while (Check(TokenType.And)) {
       Advance();
@@ -5044,7 +5190,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     return lhs;
   }
 
-  private object EvalConstComparison(List<ConstantDecl> decls, Dictionary<string, object> evaluated, HashSet<string> evaluating) {
+  private object EvalConstComparison(List<TopLevelConstantDecl> decls, Dictionary<string, object> evaluated, HashSet<string> evaluating) {
     var lhs = EvalConstShift(decls, evaluated, evaluating);
 
     if (Check(TokenType.EqualsEquals) || Check(TokenType.NotEquals) ||
@@ -5058,7 +5204,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     return lhs;
   }
 
-  private object EvalConstShift(List<ConstantDecl> decls, Dictionary<string, object> evaluated, HashSet<string> evaluating) {
+  private object EvalConstShift(List<TopLevelConstantDecl> decls, Dictionary<string, object> evaluated, HashSet<string> evaluating) {
     var lhs = EvalConstAddSub(decls, evaluated, evaluating);
     while (Check(TokenType.Shl) || Check(TokenType.Shr)) {
       var op = Advance().Type;
@@ -5104,7 +5250,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     };
   }
 
-  private object EvalConstAddSub(List<ConstantDecl> decls, Dictionary<string, object> evaluated, HashSet<string> evaluating) {
+  private object EvalConstAddSub(List<TopLevelConstantDecl> decls, Dictionary<string, object> evaluated, HashSet<string> evaluating) {
     var lhs = EvalConstMulDiv(decls, evaluated, evaluating);
 
     while (Check(TokenType.Plus) || Check(TokenType.Minus)) {
@@ -5124,7 +5270,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     return lhs;
   }
 
-  private object EvalConstMulDiv(List<ConstantDecl> decls, Dictionary<string, object> evaluated, HashSet<string> evaluating) {
+  private object EvalConstMulDiv(List<TopLevelConstantDecl> decls, Dictionary<string, object> evaluated, HashSet<string> evaluating) {
     var lhs = EvalConstUnary(decls, evaluated, evaluating);
 
     while (Check(TokenType.Star) || Check(TokenType.Slash) || Check(TokenType.Mod)) {
@@ -5150,7 +5296,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     return lhs;
   }
 
-  private object EvalConstUnary(List<ConstantDecl> decls, Dictionary<string, object> evaluated, HashSet<string> evaluating) {
+  private object EvalConstUnary(List<TopLevelConstantDecl> decls, Dictionary<string, object> evaluated, HashSet<string> evaluating) {
     if (Check(TokenType.Minus)) {
       Advance();
       var val = EvalConstAsCast(decls, evaluated, evaluating);
@@ -5173,7 +5319,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   // the value against a ranged-type bound (compile error on out-of-range), or
   // both. Mirrors the runtime parser's `as`-cast handling but operates on
   // already-evaluated constants instead of MaxonValues.
-  private object EvalConstAsCast(List<ConstantDecl> decls, Dictionary<string, object> evaluated, HashSet<string> evaluating) {
+  private object EvalConstAsCast(List<TopLevelConstantDecl> decls, Dictionary<string, object> evaluated, HashSet<string> evaluating) {
     var value = EvalConstPrimary(decls, evaluated, evaluating);
     while (Check(TokenType.As)) {
       var asToken = Advance(); // consume 'as'
@@ -5238,7 +5384,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     return value;
   }
 
-  private object EvalConstPrimary(List<ConstantDecl> decls, Dictionary<string, object> evaluated, HashSet<string> evaluating) {
+  private object EvalConstPrimary(List<TopLevelConstantDecl> decls, Dictionary<string, object> evaluated, HashSet<string> evaluating) {
     if (Check(TokenType.IntegerLiteral)) {
       var token = Advance();
       return ParseIntegerLiteral(token);

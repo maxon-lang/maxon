@@ -42,6 +42,9 @@ public class MachOWriter {
   private const int DYLD_CHAINED_PTR_64 = 6;
   // DYLD_CHAINED_IMPORT format 1: 4 bytes per import
   private const int DYLD_CHAINED_IMPORT = 1;
+  // A __DATA page with no chain starting on it. dyld follows a chain that flows onto a page via its
+  // predecessor's `next` field regardless of this array; the array only marks where a chain BEGINS.
+  private const ushort DYLD_CHAINED_PTR_START_NONE = 0xFFFF;
 
   // Code signature constants
   private const uint CSMAGIC_EMBEDDED_SIGNATURE = 0xFADE0CC0;
@@ -177,7 +180,22 @@ public class MachOWriter {
       var startsOffset = 0x20u;
       var segCount = 4u;
       var startsSize = 4u + segCount * 4u;
-      var dataSegStartsSize = 4u + 2u + 2u + 8u + 4u + 2u + 2u;
+
+      // dyld_chained_starts_in_segment describes EVERY page of __DATA, not just the first. The GOT
+      // — the only chained-fixup site — sits at gotSectionOffset within the segment, which is past
+      // the plain data (AlignUp(dataSize, 8)); once __DATA outgrows a single 16KB page that offset
+      // lands on a later page, and a segment with N pages needs N page_start entries or dyld walks
+      // a chain from a bogus start and faults ("chain overflow ... max=1"). shv2 is the first
+      // program this compiler builds whose __DATA spans multiple pages, so this stayed latent until
+      // now: every spec fixture and example has a sub-page __DATA where page_count 1 happens to be
+      // right.
+      var chainPageSize = (uint)MachOLayout.PageSize;
+      var dataPageCount = (ushort)((dataSegmentFileSize + chainPageSize - 1) / chainPageSize);
+      var gotChainStartPage = gotSectionOffset / chainPageSize;
+      var gotChainStartInPage = (ushort)(gotSectionOffset % chainPageSize);
+      // Struct header (size,page_size,pointer_format,segment_offset,max_valid_pointer,page_count) is
+      // 22 bytes; the page_start[] array follows, one uint16 per page.
+      var dataSegStartsSize = 4u + 2u + 2u + 8u + 4u + 2u + dataPageCount * 2u;
       var dataSegStartsOffset = startsSize;
 
       var importsOffset = AlignUp(startsOffset + startsSize + dataSegStartsSize, 4u);
@@ -215,8 +233,11 @@ public class MachOWriter {
       cw.Write((ushort)DYLD_CHAINED_PTR_64);
       cw.Write((ulong)dataSegmentFileOff);
       cw.Write(0u);
-      cw.Write((ushort)1);
-      cw.Write((ushort)gotSectionOffset);
+      cw.Write(dataPageCount);
+      // The GOT is one contiguous chain (each entry's `next` steps 8 bytes to the following one), so
+      // exactly one page holds its start; every other page has no chain of its own.
+      for (uint page = 0; page < dataPageCount; page++)
+        cw.Write(page == gotChainStartPage ? gotChainStartInPage : DYLD_CHAINED_PTR_START_NONE);
 
       while (cf.Position < importsOffset) cw.Write((byte)0);
 

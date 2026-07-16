@@ -323,6 +323,30 @@ public class Compiler {
     }
     if (sw != null) StageTimer.Record(timings!, "preScanAliases", sw.ElapsedMilliseconds);
 
+    // Collect every file's top-level constant DECLARATIONS before any file folds one, so that a
+    // constant initializer referencing a constant declared in another file resolves whichever
+    // order the files arrive in. Without this, a file's constants are folded at the end of its own
+    // pre-scan against only the values of the files pre-scanned before it, and `let A = FOREIGN`
+    // compiles or fails on the strength of the filesystem's enumeration order — which is sorted on
+    // NTFS and hash-ordered on APFS, so the same tree built on Windows and refused on macOS.
+    //
+    // Runs after the typealias pre-scan: classifying an initializer as constant-vs-runtime asks
+    // whether a name is a ranged type or an enum, and that pass is what settles those whole-program.
+    sw?.Restart();
+    foreach (var source in sources) {
+      if (failedFiles.Contains(source.Path)) continue;
+      try {
+        var tokens = TokensFor(source);
+        var parser = new Parser(tokens, module, isStdlib: isStdLib, sourceFilePath: source.Path, testing: Testing, targetOs: parserOs, targetArch: parserArch, rootPath: source.RootPath);
+        parser.PreScanTopLevelConstantDecls(module);
+      } catch (CompileError ex) {
+        ex.FilePath ??= source.Path;
+        errors.Add(ex);
+        failedFiles.Add(source.Path);
+      }
+    }
+    if (sw != null) StageTimer.Record(timings!, "preScanConstDecls", sw.ElapsedMilliseconds);
+
     // Pre-scan all sources to register function signatures, type details, etc.
     // so that cross-file forward references resolve regardless of parse order
     sw?.Restart();

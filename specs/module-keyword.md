@@ -264,3 +264,56 @@ end 'main'
 ```exitcode
 42
 ```
+
+<!-- test: module-let-same-directory -->
+A `module let` constant is readable from a constant initializer in a file in the same directory.
+```maxon
+// --- file: feature/limits.maxon
+module let LIMIT = 21
+
+// --- file: feature/main.maxon
+let DOUBLE = LIMIT * 2
+
+function main() returns ExitCode
+	return DOUBLE
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: module-let-subdirectory -->
+A `module let` constant is readable from a constant initializer in a subdirectory of the
+declaring file's directory.
+```maxon
+// --- file: feature/limits.maxon
+module let LIMIT = 21
+
+// --- file: feature/sub/main.maxon
+let DOUBLE = LIMIT * 2
+
+function main() returns ExitCode
+	return DOUBLE
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: error.module-let-different-directory -->
+A `module let` constant is not readable from outside its declaring directory's subtree, even
+though the compiler collects every file's constant declarations before folding any of them.
+```maxon
+// --- file: feature/limits.maxon
+module let LIMIT = 21
+
+// --- file: other/main.maxon
+let DOUBLE = LIMIT * 2
+
+function main() returns ExitCode
+	return DOUBLE
+end 'main'
+```
+```maxoncstderr
+error E2004: other/specs/fragments/module-keyword/error.module-let-different-directory.test:6:14: Undefined constant 'LIMIT'
+```

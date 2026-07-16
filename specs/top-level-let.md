@@ -313,3 +313,105 @@ end 'main'
 ```stdout
 test.txt
 ```
+
+<!-- test: cross-file-constant-in-initializer -->
+A top-level `let` initializer may reference an exported constant from another file. The declaring
+file here is fed to the compiler LAST, after the file that reads it — resolution is by declaration,
+not by the order the files happen to arrive, so the reference resolves either way.
+```maxon
+// --- file: app/main.maxon
+let TOTAL = BASE * 2
+
+function main() returns ExitCode
+	return TOTAL
+end 'main'
+
+// --- file: api/base.maxon
+export let BASE = 21
+```
+```exitcode
+42
+```
+
+<!-- test: cross-file-constant-in-initializer-declared-first -->
+The same program with the declaring file fed FIRST. Both orders must produce the same executable.
+```maxon
+// --- file: api/base.maxon
+export let BASE = 21
+
+// --- file: app/main.maxon
+let TOTAL = BASE * 2
+
+function main() returns ExitCode
+	return TOTAL
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: cross-file-constant-chain -->
+A cross-file constant chain folds transitively, in either direction, regardless of which file
+declares which link.
+```maxon
+// --- file: app/main.maxon
+let FINAL = MIDDLE + 2
+
+function main() returns ExitCode
+	return FINAL
+end 'main'
+
+// --- file: api/middle.maxon
+export let MIDDLE = ROOT * 4
+
+// --- file: api/root.maxon
+export let ROOT = 10
+```
+```exitcode
+42
+```
+
+<!-- test: error.circular-dependency-cross-file -->
+A cycle among top-level constants is reported as a circular dependency even when the cycle spans
+files. Each participating file folds its own constants, so each reports the cycle it is in, naming
+the file that closes it from that file's side. Before constant resolution became order-independent
+this was an `E2004 Undefined constant` naming one arbitrary participant — whichever file the
+filesystem happened to hand over second — because the cycle guard was never reached at all.
+```maxon
+// --- file: app/main.maxon
+export let A = B + 1
+
+function main() returns ExitCode
+	return 0
+end 'main'
+
+// --- file: api/b.maxon
+export let B = A + 1
+```
+```maxoncstderr
+error E2012: api/specs/fragments/top-level-let/error.circular-dependency-cross-file.test:10:12: Circular dependency detected among global constants: A, B
+error E2012: app/specs/fragments/top-level-let/error.circular-dependency-cross-file.test:3:12: Circular dependency detected among global constants: B, A
+```
+
+<!-- test: error.file-private-constant-cross-file -->
+A file-private (non-exported) top-level `let` is not a constant another file may read, so a
+cross-file reference to one from a constant initializer is undefined — the whole-program view the
+compiler takes of constant DECLARATIONS does not widen their VISIBILITY.
+```maxon
+// --- file: api/secret.maxon
+let SECRET = 5
+
+export function useSecret() returns ExitCode
+	return SECRET as ExitCode
+end 'useSecret'
+
+// --- file: app/main.maxon
+let COPY = SECRET * 2
+
+function main() returns ExitCode
+	return COPY + useSecret()
+end 'main'
+```
+```maxoncstderr
+error E2004: app/specs/fragments/top-level-let/error.file-private-constant-cross-file.test:10:12: Undefined constant 'SECRET'
+```

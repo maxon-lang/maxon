@@ -45,6 +45,18 @@ public record GlobalVarMetadata(MaxonValueKind Kind, bool Mutable, string? EnumT
 // Deferred global variable initialization: stores tokens for expressions that must be evaluated at main() entry
 public record DeferredGlobalInit(string Name, List<Token> Tokens, int TokenStart, int TokenEnd, bool IsMutable, int Line, int Column, string? SourceFilePath = null);
 
+// An unfolded top-level `let` whose initializer IS a constant expression, recorded whole-program by
+// Parser.PreScanTopLevelConstantDecls before any file folds anything. Cross-file constant resolution
+// is by DECLARATION, not by seeding an already-folded VALUE from a file that got pre-scanned first —
+// so `let A = FOREIGN` no longer depends on the order the filesystem hands the compiler its files.
+//
+// Tokens travels with the record for the same reason DeferredGlobalInit carries it: the initializer
+// is folded by whichever file first DEMANDS the constant, whose token list is not the declarer's, so
+// TokenStart indexes nothing the folding parser holds. SourceFilePath is what the visibility rule is
+// applied against — collecting every file's declarations must not widen any file's SCOPE.
+public record TopLevelConstantDecl(string Name, List<Token> Tokens, int TokenStart, int TokenEnd,
+    int Line, int Column, bool IsExported, bool IsModuleVisible, string? SourceFilePath);
+
 public class IrModule<TOp> where TOp : IPrintableOp {
   public string EntryFunctionName { get; set; } = "main";
   public List<IrFunction<TOp>> Functions { get; } = [];
@@ -455,6 +467,12 @@ public class IrModule<TOp> where TOp : IPrintableOp {
   // Source file path for each global var (for file-scoped and module-scoped visibility checks)
   public Dictionary<string, string> GlobalVarSourceFiles { get; } = [];
 
+  // Every file's top-level constant DECLARATIONS, unfolded, collected before any file folds. This is
+  // what makes a cross-file constant reference resolvable no matter which file the compiler reads
+  // first; ExportedConstants below carries only the ALREADY-FOLDED values of the files pre-scanned
+  // so far, which is necessarily order-dependent and cannot answer a forward reference.
+  public List<TopLevelConstantDecl> TopLevelConstantDecls { get; } = [];
+
   // Exported top-level constants (simple `export let` declarations evaluated at compile time)
   public Dictionary<string, object> ExportedConstants { get; } = [];
 
@@ -572,6 +590,7 @@ public class IrModule<TOp> where TOp : IPrintableOp {
     clone.TagTable.AddRange(TagTable);
     clone.TagNames.AddRange(TagNames);
     clone.DebugStreamNames.AddRange(DebugStreamNames);
+    clone.TopLevelConstantDecls.AddRange(TopLevelConstantDecls);
     foreach (var (k, v) in ExportedConstants) clone.ExportedConstants[k] = v;
     foreach (var (k, v) in ModuleVisibleConstants) clone.ModuleVisibleConstants[k] = v;
     foreach (var (k, v) in ModuleConstantSourceFiles) clone.ModuleConstantSourceFiles[k] = v;
@@ -634,6 +653,12 @@ public class IrModule<TOp> where TOp : IPrintableOp {
     foreach (var init in other.DeferredGlobalInits) {
       if (!DeferredGlobalInits.Any(d => d.Name == init.Name))
         DeferredGlobalInits.Add(init);
+    }
+    // Keyed by name AND declaring file: two files may each declare a file-private constant of the
+    // same name, and they are different declarations that must both survive the merge.
+    foreach (var decl in other.TopLevelConstantDecls) {
+      if (!TopLevelConstantDecls.Any(d => d.Name == decl.Name && d.SourceFilePath == decl.SourceFilePath))
+        TopLevelConstantDecls.Add(decl);
     }
   }
 }

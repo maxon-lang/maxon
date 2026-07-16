@@ -2,12 +2,47 @@ namespace MaxonSharp.Compiler;
 
 /// <summary>
 /// Central source-file collection for both the CLI (<c>maxon build</c>) and
-/// the LSP server. Both callers must feed <see cref="Compiler.CompileSources"/>
-/// the same set of files in the same order — the compiler's pre-scan passes
-/// have ordering dependencies, so divergence here produces spurious diagnostics
-/// in one client but not the other.
+/// the LSP server, so that both feed <see cref="Compiler.CompileSources"/> the
+/// same set of files.
+///
+/// Resolution of top-level CONSTANTS does not depend on this order: every file's
+/// constant declarations are collected before any of them is folded (see
+/// Parser.PreScanTopLevelConstantDecls). Other pre-scan passes still carry
+/// ordering dependencies — a duplicate type name resolves first-file-wins, and
+/// auto-conformance synthesis only sees the files pre-scanned before it — so a
+/// divergence in this order can still produce a diagnostic in one client and not
+/// the other, until those are order-independent too.
+///
+/// <see cref="SourceOrderEnvVar"/> is the seam that proves the claim rather than
+/// asserting it: a real project built forwards and backwards must produce
+/// byte-identical output and diagnostics.
 /// </summary>
 public static class SourceCollector {
+  /// <summary>
+  /// Test seam: set to <c>reverse</c> to hand the compiler every discovered file in the exact
+  /// opposite order. Order-independence is a property of the RESOLVER, and the only way to keep
+  /// it true is to be able to run the real corpus both ways and diff — a suite that only ever
+  /// runs in one order proves nothing, which is how a filesystem-order bug survived here for
+  /// months (sorted on NTFS, hash-ordered on APFS: the tree that built on Windows was refused on
+  /// macOS). An environment variable rather than a CLI flag so it reaches subprocess builds too.
+  /// </summary>
+  public const string SourceOrderEnvVar = "MAXON_SOURCE_ORDER";
+  private const string ReverseOrder = "reverse";
+
+  /// <summary>
+  /// Apply <see cref="SourceOrderEnvVar"/>. An unrecognized value throws rather than falling
+  /// back to natural order: a typo'd seam that silently measures nothing is worse than no seam.
+  /// </summary>
+  private static List<SourceFile> ApplyRequestedOrder(List<SourceFile> files) {
+    var requested = Environment.GetEnvironmentVariable(SourceOrderEnvVar);
+    if (string.IsNullOrEmpty(requested)) return files;
+    if (requested == ReverseOrder) {
+      files.Reverse();
+      return files;
+    }
+    throw new ArgumentException(
+      $"{SourceOrderEnvVar}='{requested}' is not a known source order; the only supported value is '{ReverseOrder}'");
+  }
   /// <summary>
   /// Walk <paramref name="directory"/> and collect every .maxon file suitable
   /// as a compiler source. Skips <c>build.maxon</c> (project metadata, not
@@ -51,7 +86,7 @@ public static class SourceCollector {
           files.Add(new SourceFile(path, ReadUpToSeparator(content), rootPath));
       }
     }
-    return [.. files];
+    return [.. ApplyRequestedOrder(files)];
   }
 
   /// <summary>

@@ -1,0 +1,22 @@
+// Test: cross-file-constant-in-initializer
+// --- file: app/main.maxon
+let TOTAL = BASE * 2
+
+function main() returns ExitCode
+	return TOTAL
+end 'main'
+
+// --- file: api/base.maxon
+export let BASE = 21
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @main() -> u8 {
+  entry:
+    arm64.mov x0, #42
+    arm64.ret
+  }
+}
+---
