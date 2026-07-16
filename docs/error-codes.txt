@@ -399,7 +399,20 @@ E3013 SemanticMissingReturn
 E3014 SemanticUnexportedFieldAccess
 	csharp SemanticUnexportedFieldAccess
 	selfhosted semanticUnexportedFieldAccess
-	doc A field is read from another file but is not declared 'export'.
+	shv2 unexportedFieldAccess
+	doc A field not declared 'export' is read or written from outside its own type.
+	doc The gate is the TYPE, not the FILE, and it covers WRITES as well as reads --
+	doc both measured against the bootstrap: `type B` touching `type A`'s unexported
+	doc field is E3014 in the same file, and `v.private = 42` reports it exactly as
+	doc `return v.private` does. This line said "read from another file" until P1.1a
+	doc wave 3 and was wrong on both counts. Neither compiler's CHECK ever agreed
+	doc with it -- v1 gates on `structName == enclosingType`
+	doc (TypeResolution.maxon:8204) -- so it was the prose that drifted, and it
+	doc drifted in one place and was read in three: this entry is the only copy, and
+	doc correcting it corrects every generated registry at once.
+	doc Initialization is exempt: every field, exported or not, may be named in a
+	doc struct literal, because the type itself determines what fields exist and
+	doc visibility only governs access AFTER construction (specs/export-var-fields.md).
 	doc (was internally `semanticTypeResolutionCycle` while the
 	doc unexported-field-access check was unimplemented). Bootstrap parity
 	doc reclaims 3014 for the field-visibility diagnostic; the typealias-cycle

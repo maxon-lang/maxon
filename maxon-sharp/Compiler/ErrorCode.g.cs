@@ -227,7 +227,19 @@ public enum ErrorCode {
   /// </summary>
   SemanticMissingReturn = 3013,
   /// <summary>
-  /// A field is read from another file but is not declared 'export'.
+  /// A field not declared 'export' is read or written from outside its own type.
+  /// The gate is the TYPE, not the FILE, and it covers WRITES as well as reads --
+  /// both measured against the bootstrap: `type B` touching `type A`'s unexported
+  /// field is E3014 in the same file, and `v.private = 42` reports it exactly as
+  /// `return v.private` does. This line said "read from another file" until P1.1a
+  /// wave 3 and was wrong on both counts. Neither compiler's CHECK ever agreed
+  /// with it -- v1 gates on `structName == enclosingType`
+  /// (TypeResolution.maxon:8204) -- so it was the prose that drifted, and it
+  /// drifted in one place and was read in three: this entry is the only copy, and
+  /// correcting it corrects every generated registry at once.
+  /// Initialization is exempt: every field, exported or not, may be named in a
+  /// struct literal, because the type itself determines what fields exist and
+  /// visibility only governs access AFTER construction (specs/export-var-fields.md).
   /// (was internally `semanticTypeResolutionCycle` while the
   /// unexported-field-access check was unimplemented). Bootstrap parity
   /// reclaims 3014 for the field-visibility diagnostic; the typealias-cycle

@@ -363,5 +363,11 @@ function reportParseError(project Project, path FilePath, error ParseError)
 		// and byte-for-byte the bootstrap's text, because `structs.md` and
 		// `challenge-struct-field-assign.md` both gate this stderr exactly, in both suites.
 		assignToImmutableField(typeName, fieldName, line, column) then reportPositioned(project, code: ErrorCode.assignToImmutable, message: "cannot assign to field '{typeName}.{fieldName}' because it is immutable (declare with 'var' to make it mutable)", line: line, column: column, filePath: path)
+		// The instance-method arms (P1.1a wave 3).
+		//
+		// ⚠ Byte-for-byte the bootstrap's text for both, because `export-var-fields.md` gates this
+		// stderr exactly and the two suites run the same spec file.
+		localShadowsSelfField(name, typeName, line, column) then reportPositioned(project, code: ErrorCode.duplicateFunction, message: "local '{name}' shadows self field '{typeName}.{name}' — rename the local to avoid silent type confusion at every read/write keyed on the name", line: line, column: column, filePath: path)
+		unexportedFieldAccess(typeName, fieldName, line, column) then reportPositioned(project, code: ErrorCode.unexportedFieldAccess, message: "cannot access unexported field: '{fieldName}' outside of type '{typeName}'", line: line, column: column, filePath: path)
 	end 'kind'
 end 'reportParseError'

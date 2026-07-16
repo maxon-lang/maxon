@@ -56,9 +56,55 @@ export function resolveTypes(project Project, module MaxonModule)
 		syncResolvedSignature(project, func: func)
 	end 'eachFunc'
 
+	checkStructFieldTypes(project)
+
 	// M1 op value-types are all concrete (`integer` literals) — nothing to stamp.
 	// Op-type resolution (typed constants whose type is a named alias) grows at M9.
 end 'resolveTypes'
+
+// ⭐ **THE THIRD DECLARATION SITE.** A program names a type in exactly three places — a PARAMETER,
+// a RETURN type, and a FIELD — and until P1.1a wave 3 this pass walked only the first two. So a
+// field declared `as Nonexistent` reached no check at all, and `Parser.fieldStorageType`'s recovery
+// value became the FINAL answer: the program compiled clean and the field silently typed itself
+// `i64`. A wrong answer, not a crash.
+//
+// It also made `fieldStorageType`'s own comment false. That comment justified its recovery value by
+// pointing here — "E3011, which `TypeResolution` reports against the merged registry, the
+// authority... Returning `integer` keeps the op well-formed for the instant before the pipeline's
+// error gate throws" — and nothing was reporting it, so there was no instant and no gate. The
+// comment described the right design; the implementation never had it. This walk is what makes the
+// sentence true, which is why the sentence stayed.
+//
+// ⚠ **IT VALIDATES AND DOES NOT REWRITE**, and there are two independent reasons — either alone
+// would be sufficient:
+//   • **Nothing reads a resolved field type.** The parser cannot wait for this pass (an op's type
+//     must be concrete when it is EMITTED, and `resolveTypes` never rewrites an op's type), so it
+//     resolves a field's storage type itself, through the sweep. A rewrite here would be a
+//     mechanism with no consumer.
+//   • **The layout object is the ARTIFACT's own.** `commitStructTypes` upserts it by REFERENCE and
+//     an artifact is MEMOIZED, so writing through it would mutate a cached parse — the hazard
+//     IrBlock's header states for the phi model, reached from a different direction.
+// So `resolveType`'s RESULT is discarded and its DIAGNOSTIC is the point. `resolveNamedType` stays
+// the single place that knows what a named type denotes; asking it here rather than re-deriving
+// "is this name declared?" is what keeps the three declaration sites answering to one authority.
+//
+// ⚠ **IT CANNOT LIVE AT THE COMMIT POINT**, which is the tempting alternative (`commitStructTypes`,
+// where the layouts arrive in declaration order and a Map walk would not be needed).
+// `mergeArtifact` folds ONE artifact at a time, so a field naming a type declared in a file folded
+// LATER would report a false E3011. The registry is complete only once every artifact is in, and
+// that is exactly here.
+//
+// The walk is over the registry MAP, so its order is the map's rather than the source's — the one
+// place this pass's diagnostics are not in declaration order. It is deterministic (the same program
+// hashes the same names into the same slots), which is what the byte-identical-output gate needs;
+// and a program with two undeclared field types has two independent bugs, not an ordering.
+function checkStructFieldTypes(project Project)
+	for (_, layout) in project.structTypes 'eachStruct'
+		for fieldType in layout.fieldTypes 'eachField'
+			_ = resolveType(project, t: fieldType)
+		end 'eachField'
+	end 'eachStruct'
+end 'checkStructFieldTypes'
 
 // Re-sync a function's `funcSignatures` entry with its now-resolved param types.
 // The parser recorded the signature with the SAME raw param types it put on

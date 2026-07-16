@@ -47,10 +47,14 @@ export union ScopeLookupError implements Error
 	notFound(name String)
 end 'ScopeLookupError'
 
-// Raised by `declare` / `declarePayloadBinding` when the name being bound would
-// overwrite a self-field alias registered at instance-method entry (E3006).
-// Scope is the only layer that sees both the alias and the colliding
-// declaration, so detection lives here.
+// Raised when the name being bound would overwrite a self-field alias registered at
+// instance-method entry (E3006). Scope is the only layer that sees both the alias and the
+// colliding declaration, so detection lives here.
+//
+// `declareValueBinding` is the live raiser — it is the one path a parameter and a body local are
+// both bound through, so it covers both shapes the bootstrap reports. (`declare` /
+// `declarePayloadBinding` carry the same guard for the slot-based model; neither has a caller
+// today — see `declareShadowing`.)
 export union ScopeError implements Error
 	// String, not the raw slice: this arm exists only to be FORMATTED into a diagnostic.
 	shadowsSelfField(name String)
@@ -131,25 +135,34 @@ export type Scope
 		self.install(VarInfo.create(name, varType: varType, mutable: mutable, slot: slot))
 	end 'bindExistingSlot'
 
-	// Declare a self-field alias. No local backing slot is materialized — reads
-	// and writes lower to loadIndirect/storeIndirect through __self. Throws
-	// `ScopeError.shadowsSelfField` when `name` is already bound (a parameter
-	// shadows this field — the symmetric case to a body local shadowing it).
-	export function declareSelfField(name ByteArray, varType MaxonType, offset FieldOffset) returns VarSlot throws ScopeError
-		if vars.contains(name) 'paramShadow'
-			throw ScopeError.shadowsSelfField(String.from(name))
-		end 'paramShadow'
-		return self.installSelfField(name, varType: varType, offset: offset)
+	// Declare a self-field alias — field `fieldIndex` of the enclosing type, bound by name at
+	// instance-method entry so a bare `count` inside the method resolves to `self.count`.
+	//
+	// It allocates NO slot and returns nothing. A self-field alias is neither of the two things a
+	// slot is for: it holds no local storage (a read is a `loadIndirect` through the receiver) and
+	// aliases no SSA value (a write is a `storeIndirect`, not a rebind). It exists to occupy the
+	// NAME — so that a read resolves through it, and so that a local or a parameter trying to take
+	// the same name is caught below rather than silently displacing the field.
+	//
+	// ⭐ **IT DOES NOT GUARD, AND THE ONE GUARD IS `declareValueBinding`'s.** The aliases are
+	// declared into a freshly `reset` scope BEFORE the parameters and before any body local, so
+	// nothing can be here to displace: every name that could collide with a field arrives LATER,
+	// through `declareValueBinding`, which is the single path a parameter and a local are both
+	// bound by. Guarding from this side too would be the same rule asked twice — and the two sides
+	// would disagree about WHERE to point, because the token worth naming is always the colliding
+	// declaration's, which only the other side holds. Ordering the declarations is what makes one
+	// guard sufficient; both cases the bootstrap reports (a parameter at `4:16`, a body local at
+	// `5:7`) come out of that one site, each anchored on the token its own caller has.
+	//
+	// ⚠ Two fields of ONE name therefore overwrite here rather than reporting. That is the
+	// pre-existing duplicate-field gap, not a new one: `StructLayout.addField` accepts the second
+	// declaration and `indexOfField` resolves every use to the first, and the BOOTSTRAP accepts
+	// the same program (measured: `type Dup` with two `var x` compiles and runs). Inventing E3006
+	// for it here would reject a program the oracle accepts, on a rung with no case for it; it
+	// wants its own diagnostic against the LAYOUT, where both compilers are silent.
+	export function declareSelfField(name ByteArray, varType MaxonType, fieldIndex FieldIndex)
+		self.install(VarInfo.createSelfField(name, varType: varType, fieldIndex: fieldIndex))
 	end 'declareSelfField'
-
-	// Register a self-field alias unconditionally (no param-shadow guard).
-	// Shared core for `declareSelfField`; also the E3006 recovery path.
-	export function installSelfField(name ByteArray, varType MaxonType, offset FieldOffset) returns VarSlot
-		let slot = nextSlot
-		nextSlot = nextSlot + 1
-		self.install(VarInfo.createSelfField(name, varType: varType, slot: slot, offset: offset))
-		return slot
-	end 'installSelfField'
 
 	// Declare a match-arm payload binding. Reads work like a normal local;
 	// writes go through a payload store against the scrutinee + field index.
@@ -172,16 +185,27 @@ export type Scope
 	// Declare a value binding (M2's SSA-substitution model): bind `name` to the SSA
 	// value `value`, so a later reference resolves to it via `lookupValue`. No slot
 	// is allocated — value bindings need no stack storage (contrast the slot-based
-	// `declare*` paths that back the future mutable/mem2reg model). The self-field-
-	// shadow guard the slot path carries is unnecessary here: M2 has no instance
-	// methods, so no self-field alias can exist to shadow — that guard joins this
-	// path when methods land.
+	// `declare*` paths that back the future mutable/mem2reg model).
+	//
+	// ⭐ **THE SELF-FIELD GUARD IS NOW ON THIS PATH, AND THIS IS THE RUNG ITS ABSENCE NAMED.** It
+	// used to say the guard was "unnecessary here: M2 has no instance methods, so no self-field
+	// alias can exist to shadow — that guard joins this path when methods land." Methods have
+	// landed, and this is the path every local and every parameter is bound through, so it is the
+	// path an alias can now be displaced on: `let count = 5` inside a method of a `type Counter`
+	// that declares `count`. `vars` is keyed by NAME, so that `let` would overwrite the alias and
+	// every later `count` in the method would read the LOCAL — silently, and the field's own reads
+	// and writes would simply stop happening. E3006, and the bootstrap agrees down to the
+	// reasoning ("local 'count' shadows self field 'Counter.count' — rename the local to avoid
+	// silent type confusion at every read/write keyed on the name").
 	//
 	// Returns the `VarInfo` it installed, because a `var` binding is tracked BY
 	// REFERENCE (see the header): the parser keeps mutable bindings in its loop-phi
 	// list as the objects themselves, so a nested block that shadows the NAME cannot
 	// misdirect a phi write to the shadow.
-	export function declareValueBinding(name ByteArray, varType MaxonType, mutable bool, value ValueId) returns VarInfo
+	export function declareValueBinding(name ByteArray, varType MaxonType, mutable bool, value ValueId) returns VarInfo throws ScopeError
+		if self.wouldShadowSelfField(name) 'shadow'
+			throw ScopeError.shadowsSelfField(String.from(name))
+		end 'shadow'
 		var info = VarInfo.createValueBinding(name, varType: varType, mutable: mutable, boundValue: value)
 		self.install(info)
 		return info

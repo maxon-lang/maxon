@@ -1,6 +1,6 @@
 {
   "generatedFrom": "docs/error-codes.txt",
-  "sourceHash": "eec5cf9bc55c924c",
+  "sourceHash": "9ecd9ffcc82582a6",
   "note": "GENERATED. Do not edit. Run `maxon error-codes generate`. A reader MUST hash generatedFrom's bytes (FNV-1a 64, hex) and refuse to answer unless it equals sourceHash.",
   "compilers": ["csharp", "selfhosted", "shv2"],
   "codes": [
@@ -520,9 +520,9 @@
       "tag": "E3014",
       "name": "SemanticUnexportedFieldAccess",
       "stage": "semantic",
-      "doc": "A field is read from another file but is not declared 'export'.\n(was internally `semanticTypeResolutionCycle` while the\nunexported-field-access check was unimplemented). Bootstrap parity\nreclaims 3014 for the field-visibility diagnostic; the typealias-cycle\ndiagnostic moves to 3091 (a code unused on both sides).",
-      "emittedBy": {"csharp": "SemanticUnexportedFieldAccess", "selfhosted": "semanticUnexportedFieldAccess"},
-      "notEmittedBy": ["shv2"]
+      "doc": "A field not declared 'export' is read or written from outside its own type.\nThe gate is the TYPE, not the FILE, and it covers WRITES as well as reads --\nboth measured against the bootstrap: `type B` touching `type A`'s unexported\nfield is E3014 in the same file, and `v.private = 42` reports it exactly as\n`return v.private` does. This line said \"read from another file\" until P1.1a\nwave 3 and was wrong on both counts. Neither compiler's CHECK ever agreed\nwith it -- v1 gates on `structName == enclosingType`\n(TypeResolution.maxon:8204) -- so it was the prose that drifted, and it\ndrifted in one place and was read in three: this entry is the only copy, and\ncorrecting it corrects every generated registry at once.\nInitialization is exempt: every field, exported or not, may be named in a\nstruct literal, because the type itself determines what fields exist and\nvisibility only governs access AFTER construction (specs/export-var-fields.md).\n(was internally `semanticTypeResolutionCycle` while the\nunexported-field-access check was unimplemented). Bootstrap parity\nreclaims 3014 for the field-visibility diagnostic; the typealias-cycle\ndiagnostic moves to 3091 (a code unused on both sides).",
+      "emittedBy": {"csharp": "SemanticUnexportedFieldAccess", "selfhosted": "semanticUnexportedFieldAccess", "shv2": "unexportedFieldAccess"},
+      "notEmittedBy": []
     },
     {
       "code": 3015,

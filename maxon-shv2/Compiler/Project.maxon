@@ -28,21 +28,6 @@ export enum Visibility
 	global
 end 'Visibility'
 
-// Byte offset of a field within a struct's heap layout. Bounded by the max
-// struct size the layout descriptor can address. Used by `VarInfo` for the
-// self-field-alias fast path (reads/writes lower to loadIndirect/storeIndirect
-// through `__self` + this offset rather than a materialized local slot).
-//
-// ⚠ **STILL ZERO CALLERS AT P1.0r, AND STRUCTS DID NOT CHANGE THAT** — which is worth saying,
-// because they look like the same feature and are not. This is the INSTANCE-METHOD alias: inside
-// `function area()` of `type Rect`, the bare name `width` means `self.width`, so a name with no
-// dot resolves to an offset. P1.0r has only `static function create`, no `self`, and no bare
-// field name — its field access is `p.x`, an EXPRESSION over an ordinary value binding, which
-// reads the struct's `StructLayout` through the binding's `structRef` type and never touches this
-// record (`Parser.emitFieldLoad`). Wiring it here anyway would have given the scaffold a consumer
-// and no reason to be right — the `mintPhi` trap, which cost a rung. It waits for instance methods.
-export typealias FieldOffset = int(0 to 65520)
-
 // Ordinal of a union case (and, for a payload binding, the field index within
 // that case's payload). Bounded by the max cases a union may declare.
 export typealias CaseOrdinal = int(0 to 65535)
@@ -69,9 +54,9 @@ export type VarInfo
 	// `let`/`var x = <expr>` binds `x` directly to the ValueId its initializer
 	// produced, so a reference to `x` resolves to that value at parse time and no
 	// `x` op ever enters the IR (`let x = 42; return x` lowers identically to
-	// `return 42`). Meaningful ONLY for value bindings — exactly like `fieldOffset`
+	// `return 42`). Meaningful ONLY for value bindings — exactly like `fieldIndex`
 	// for self-fields and `payloadFieldIndex` for payload bindings, it is 0 (unused)
-	// for the slot-backed binding shapes. When mutation + `mem2reg` land, the slot
+	// for every other binding shape. When mutation + `mem2reg` land, the slot
 	// model (above) supersedes this direct substitution.
 	export var boundValue as ValueId
 	// Ownership lattice kind for this binding — the M1 ownership scaffold's
@@ -81,12 +66,28 @@ export type VarInfo
 	// per-frame owned-values list keys off it to place drops at scope exit.
 	// Present-but-inert: designed in from the first commit, not retrofitted.
 	export var ownership as OwnershipKind
-	// True when this name is a self-field alias inside an instance method.
-	// Reads emit loadIndirect via __self + fieldOffset; writes emit storeIndirect — the SAME two
-	// ops `p.x` already rides (there is no `fieldLoad`/`fieldStore` op and there is not going to
-	// be one; the memory band is the general pair, per StdDialect).
+	// True when this name is a self-field alias inside an instance method — the bare `width`
+	// inside `function area()` of `type Rect`, which means `self.width`.
+	//
+	// Reads emit loadIndirect through `__self` at the field's offset; writes emit storeIndirect —
+	// the SAME two ops `p.x` already rides (there is no `fieldLoad`/`fieldStore` op and there is
+	// not going to be one; the memory band is the general pair, per StdDialect). Concretely they
+	// ride the same two ROUTINES, `Parser.emitFieldLoad`/`emitFieldStore`, which is the stronger
+	// statement and the one that matters: v1 has a SECOND pair of ops for this alias
+	// (`selfFieldLoad`/`selfFieldStore`, receiver out-of-band) and paid for it twice — its
+	// visibility walker inspects only the ordinary pair, so a bare-name access is structurally
+	// invisible to E3014, and its closure lowering has to re-route because the hardcoded receiver
+	// slot "would load garbage" inside one.
+	//
+	// ⭐ **IT CARRIES THE FIELD'S INDEX, NOT ITS OFFSET**, and that is what keeps the two spellings
+	// on one path. The index IS the field's identity (see `FieldIndex`); the offset, the declared
+	// type, the mutability and the `export` bit are all DERIVED from `(layout, index)` by the four
+	// accessors `p.x` already asks. An offset here would answer only the first of those four, and
+	// would answer it a SECOND time — `binding.fieldOffset` beside `layout.offsetOfField(index)`,
+	// two numbers for one fact, with the write path left needing the index anyway to reach
+	// `fieldMutable`. One number, one lookup, no column to keep in step.
 	export var isSelfField as bool
-	export var fieldOffset as FieldOffset
+	export var fieldIndex as FieldIndex
 	// True when this name was introduced as a match-arm binding on a union
 	// payload. Reads go through the local slot; writes are rewritten to a
 	// payload store against the scrutinee + field index.
@@ -98,15 +99,27 @@ export type VarInfo
 	export var payloadCaseName as ByteArray
 
 	export static function create(name ByteArray, varType MaxonType, mutable bool, slot VarSlot) returns VarInfo
-		return Self{name: name, varType: varType, mutable: mutable, slot: slot, boundValue: 0, ownership: OwnershipKind.trivial, isSelfField: false, fieldOffset: 0, isPayloadBinding: false, payloadScrutineeName: EmptySourceText, payloadFieldIndex: 0 as CaseOrdinal, payloadCaseName: EmptySourceText}
+		return Self{name: name, varType: varType, mutable: mutable, slot: slot, boundValue: 0, ownership: OwnershipKind.trivial, isSelfField: false, fieldIndex: 0, isPayloadBinding: false, payloadScrutineeName: EmptySourceText, payloadFieldIndex: 0, payloadCaseName: EmptySourceText}
 	end 'create'
 
-	export static function createSelfField(name ByteArray, varType MaxonType, slot VarSlot, offset FieldOffset) returns VarInfo
-		return Self{name: name, varType: varType, mutable: true, slot: slot, boundValue: 0, ownership: OwnershipKind.trivial, isSelfField: true, fieldOffset: offset, isPayloadBinding: false, payloadScrutineeName: EmptySourceText, payloadFieldIndex: 0, payloadCaseName: EmptySourceText}
+	// A self-field alias: the name of field `fieldIndex` of the enclosing type, bound at
+	// instance-method entry. It materializes NO stack slot and aliases NO SSA value — a read is a
+	// `loadIndirect` through the receiver and a write is a `storeIndirect`, so there is nothing for
+	// either to hold. `slot`/`boundValue` are 0 and unread, exactly as `slot` is for a value
+	// binding.
+	//
+	// `mutable` is FALSE, and that is not the field's mutability — it is this BINDING's, and the
+	// two are different questions with different homes. `count = count + 1` is legal iff the
+	// FIELD accepts a write, which is `StructLayout.fieldIsMutable(index)`, the one column
+	// `c.count = 1` already asks. A `true` here would be that column copied onto every alias, free
+	// to disagree with it; a `false` states the honest fact that no reassignment of the alias
+	// itself is ever legal, and leaves the field's own answer where it lives.
+	export static function createSelfField(name ByteArray, varType MaxonType, fieldIndex FieldIndex) returns VarInfo
+		return Self{name: name, varType: varType, mutable: false, slot: 0, boundValue: 0, ownership: OwnershipKind.trivial, isSelfField: true, fieldIndex: fieldIndex, isPayloadBinding: false, payloadScrutineeName: EmptySourceText, payloadFieldIndex: 0, payloadCaseName: EmptySourceText}
 	end 'createSelfField'
 
 	export static function createPayloadBinding(name ByteArray, varType MaxonType, mutable bool, slot VarSlot, scrutineeName ByteArray, fieldIndex CaseOrdinal, caseName ByteArray) returns VarInfo
-		return Self{name: name, varType: varType, mutable: mutable, slot: slot, boundValue: 0, ownership: OwnershipKind.trivial, isSelfField: false, fieldOffset: 0, isPayloadBinding: true, payloadScrutineeName: scrutineeName, payloadFieldIndex: fieldIndex, payloadCaseName: caseName}
+		return Self{name: name, varType: varType, mutable: mutable, slot: slot, boundValue: 0, ownership: OwnershipKind.trivial, isSelfField: false, fieldIndex: 0, isPayloadBinding: true, payloadScrutineeName: scrutineeName, payloadFieldIndex: fieldIndex, payloadCaseName: caseName}
 	end 'createPayloadBinding'
 
 	// Construct a value binding for M2's substitution model: `name` aliases the SSA
@@ -114,7 +127,7 @@ export type VarInfo
 	// none), so `slot` is 0 — a value binding never reads it. The slot-backed
 	// constructors above stay the home of the future mutable/mem2reg model.
 	export static function createValueBinding(name ByteArray, varType MaxonType, mutable bool, boundValue ValueId) returns VarInfo
-		return Self{name: name, varType: varType, mutable: mutable, slot: 0, boundValue: boundValue, ownership: OwnershipKind.trivial, isSelfField: false, fieldOffset: 0, isPayloadBinding: false, payloadScrutineeName: EmptySourceText, payloadFieldIndex: 0, payloadCaseName: EmptySourceText}
+		return Self{name: name, varType: varType, mutable: mutable, slot: 0, boundValue: boundValue, ownership: OwnershipKind.trivial, isSelfField: false, fieldIndex: 0, isPayloadBinding: false, payloadScrutineeName: EmptySourceText, payloadFieldIndex: 0, payloadCaseName: EmptySourceText}
 	end 'createValueBinding'
 end 'VarInfo'
 
@@ -223,7 +236,8 @@ export typealias FieldDefaultArray = Array with FieldDefault
 export type StructLayout
 	export var name as ByteArray
 	// Parallel arrays, in DECLARATION order: field `i` is called `fieldNames[i]`, is declared
-	// `fieldTypes[i]`, accepts a write iff `fieldMutable[i]`, and defaults to `fieldDefaults[i]`.
+	// `fieldTypes[i]`, accepts a write iff `fieldMutable[i]`, is reachable from outside the type
+	// iff `fieldExported[i]`, and defaults to `fieldDefaults[i]`.
 	// The declared type is NOT a resolved one — the sweep that records it cannot resolve anything
 	// (the alias it names may be in a file not yet folded), and the parser resolves it at the use
 	// site through the same `aliasOf` door the shift rule already asks.
@@ -236,29 +250,50 @@ export type StructLayout
 	export var fieldNames as ByteArrayArray
 	export var fieldTypes as MaxonTypeArray
 	export var fieldMutable as BoolArray
+	// `export var n` vs `var n` — the visibility column, read by `Parser.requireFieldAccessible`
+	// (E3014). It is the twin of `fieldMutable` in every respect: one bit per field, off the
+	// declaring keyword, written only by `addField`, and read only through an accessor that
+	// decodes it for one `FieldIndex`.
+	export var fieldExported as BoolArray
 	export var fieldDefaults as FieldDefaultArray
 
 	// An EMPTY layout, filled by `addField`. It does not take the columns, deliberately: handing
-	// four pre-built parallel arrays across a call boundary is exactly the shape that lets three of
+	// five pre-built parallel arrays across a call boundary is exactly the shape that lets four of
 	// them arrive.
 	export static function create(name ByteArray) returns StructLayout
-		return Self{name: name, fieldNames: ByteArrayArray.create(), fieldTypes: MaxonTypeArray.create(), fieldMutable: BoolArray.create(), fieldDefaults: FieldDefaultArray.create()}
+		return Self{name: name, fieldNames: ByteArrayArray.create(), fieldTypes: MaxonTypeArray.create(), fieldMutable: BoolArray.create(), fieldExported: BoolArray.create(), fieldDefaults: FieldDefaultArray.create()}
 	end 'create'
 
 	// Append one declared field. THE one writer of the columns — every column, one push, so they
 	// cannot drift.
-	export function addField(fieldName ByteArray, declaredType MaxonType, mutable bool, defaultValue FieldDefault)
+	export function addField(fieldName ByteArray, declaredType MaxonType, mutable bool, exported bool, defaultValue FieldDefault)
 		self.fieldNames.push(fieldName)
 		self.fieldTypes.push(declaredType)
 		self.fieldMutable.push(mutable)
+		self.fieldExported.push(exported)
 		self.fieldDefaults.push(defaultValue)
 	end 'addField'
+
+	// ⚠ **THE OOB PANIC SENTENCE BELOW IS REPEATED PER COLUMN, AND THE COPY IS FORCED BY THE
+	// LANGUAGE, NOT CHOSEN.** `panic` takes a string LITERAL — `panic(msg)` for any String value,
+	// even a `let`-bound one, is rejected outright ("panic requires a string argument", measured
+	// against the bootstrap) — so the one text cannot be built by a shared helper and handed over.
+	// A forced copy is worth saying so about: the cure for one-fact-twice is DERIVE > CHECK >
+	// COMMENT, and this is the tier where only the comment is available. If `panic` ever takes an
+	// expression, these collapse into one.
 
 	// Does field `index` accept a write? `export var count` does; `export let version` does not, and
 	// `c.version = 2` is E2013 (see `Parser.parseFieldAssignment`).
 	export function fieldIsMutable(index FieldIndex) returns bool
 		return try self.fieldMutable.get(index) otherwise panic("StructLayout.fieldIsMutable: fieldMutable.get OOB at {index} for `type {String.from(self.name)}`, which declares {self.fieldCount()} — every index handed out came from `indexOfField`")
 	end 'fieldIsMutable'
+
+	// Is field `index` reachable from outside this type? `export var n` is; a bare `var n` is not,
+	// and `v.n` from anywhere but `type Value`'s own body is E3014 (see
+	// `Parser.requireFieldAccessible`). The gate is the TYPE, not the file.
+	export function fieldIsExported(index FieldIndex) returns bool
+		return try self.fieldExported.get(index) otherwise panic("StructLayout.fieldIsExported: fieldExported.get OOB at {index} for `type {String.from(self.name)}`, which declares {self.fieldCount()} — every index handed out came from `indexOfField`")
+	end 'fieldIsExported'
 
 	// What field `index` defaults to when a `Self{…}` literal omits it.
 	export function fieldDefault(index FieldIndex) returns FieldDefault

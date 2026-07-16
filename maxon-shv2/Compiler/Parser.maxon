@@ -320,7 +320,51 @@ export union ParseError implements Error
 	// ⚠ Positioned at the ROOT VARIABLE token, NOT the field — measured from the bootstrap, and
 	// pinned at `:16:2` by `structs.md`'s `error.let-field-assign`.
 	assignToImmutableField(typeName String, fieldName String, line LineNumber, column ColumnNumber)
+	// --- The instance-method arms (P1.1a wave 3) ---
+	//
+	// A local or a parameter inside an instance method taking the name of a field of the enclosing
+	// type — `let count = 5`, or `function bump(count Integer)`, inside a `type Counter` that
+	// declares `count`. Renders as **E3006**, whose registry entry already covers this shape ("a
+	// local declaration inside an instance method whose name collides with a `self.field`") beside
+	// the duplicate-function one; the two are one fact — a name declared twice where exactly one
+	// binding is legal.
+	//
+	// It is a REJECTION rather than a shadow, and the bootstrap's own message says why: the field
+	// and the local would share one name-keyed entry, so every later read and write in the method
+	// would silently resolve to whichever won. Positioned at the COLLIDING declaration, never at
+	// the field — the local is what has to be renamed.
+	localShadowsSelfField(name String, typeName String, line LineNumber, column ColumnNumber)
+	// A read or a write of a field not declared `export`, from outside the type that declares it.
+	// Renders as **E3014**. Positioned at the FIELD token — the name that is not accessible —
+	// which is the bootstrap's anchor for the read (`:15:11`) and the write (`:15:4`) alike, and
+	// is deliberately NOT `assignToImmutableField`'s root-variable anchor: that one is advice
+	// about the BINDING (`var p`), this one is about the field itself.
+	unexportedFieldAccess(typeName String, fieldName String, line LineNumber, column ColumnNumber)
 end 'ParseError'
+
+// **THE NAME OF THE RECEIVER PARAMETER.** An instance method's parameter 0, pushed by
+// `parseFunction` and bound by `bindParameters` exactly like every other parameter — so the
+// receiver's SSA value, its register, and its slot in a call's argument list are all decided by
+// machinery that does not know what a method is.
+//
+// It is v1's spelling (`SELF_PARAM_NAME = "__self"`, IR/Maxon/MaxonDialect.maxon:15), taken so the
+// two compilers' IR reads the same way to anyone who has read either.
+//
+// ⚠ It is an ORDINARY IDENTIFIER, so a body that writes `__self` resolves it and gets the
+// receiver — an internal name reachable from source. v1 has the identical hole. It is not exploited
+// by anything and no corpus case names it; the alternative (binding the receiver under the `self`
+// KEYWORD's own text, which no parameter can ever be called) closes it for free but departs from
+// both references' convention, so it is recorded here rather than taken unilaterally.
+let SelfParamName = b"__self"
+
+// The receiver a call carries, if any. A union rather than a `ValueId` plus a bool, and rather
+// than a reserved id: `ValueId` has no empty value and a sentinel would be READ as a real argument
+// by everything downstream (`retVoid` exists in the Maxon dialect for precisely this reason).
+// `none` is every free and static call; `value` is an instance method's receiver.
+union ReceiverArg
+	none
+	value(id ValueId)
+end 'ReceiverArg'
 
 // --- Ranged-typealias range bounds ---
 //
@@ -733,6 +777,22 @@ function singletonArgs(value ValueId) returns ValueIdArray
 	args.push(value)
 	return args
 end 'singletonArgs'
+
+// Append one argument to a call's THREE PARALLEL COLUMNS — its value, its `name:` label (the empty
+// slice when positional), and its source span.
+//
+// **THE ONE WRITER OF THEM**, which is `StructLayout.addField`'s reason reaching the other family
+// of parallel columns in the compiler: a caller that pushed a value and forgot a label would shift
+// every later argument's label onto the wrong argument, and `slotCallArgs` would slot them
+// accordingly — a silent wrong answer with no crash to find it by. There are exactly two callers,
+// and the second is what made this worth a function: an argument the SOURCE wrote
+// (`parseCallArgs`), and the RECEIVER an instance method call prepends (`parseCallNamed`), which is
+// positional by construction and would otherwise have been a second, hand-written triple.
+function pushCallArg(args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, value ValueId, label ByteArray, range SourceRange)
+	args.push(value)
+	argLabels.push(label)
+	argRanges.push(range)
+end 'pushCallArg'
 
 // A `MaxonOp.call`'s `argLabels` column for a call whose every argument is POSITIONAL — one empty
 // slice per argument. The op's columns are parallel by construction, so an all-positional call
@@ -1508,28 +1568,24 @@ export type Parser
 	//
 	// Neither `as` nor `=` is E2010 — the `consume(equals)` below reporting the token it wanted.
 	//
-	// `let` vs `var` decides FIELD MUTABILITY (`c.version = 2` on a `let` field is E2013), which is
-	// this rung, and the bit is now kept — see `StructLayout.fieldMutable`.
+	// **TWO KEYWORDS, TWO BITS, AND BOTH ARE KEPT.** `let` vs `var` decides FIELD MUTABILITY
+	// (`c.version = 2` on a `let` field is E2013 — `StructLayout.fieldMutable`); `export` decides
+	// FIELD VISIBILITY (`v.private` from outside `type Value` is E3014 —
+	// `StructLayout.fieldExported`, read by `requireFieldAccessible`). They ride the same
+	// `addField` call, which is the one writer of every column.
 	//
-	// ⚠ **`export` IS STILL CONSUMED AND DROPPED, AND THE REASON THIS COMMENT USED TO GIVE FOR THAT
-	// WAS FALSE.** It said *"field visibility gates cross-FILE access (E3014), and shv2 has no
-	// cross-file name resolution to gate"* — which would make the bit unreadable today and its drop
-	// free. **The corpus disproves it:** visibility gates access from outside the TYPE, in the SAME
-	// FILE, and `specs/export-var-fields.md`'s `error.unexported-field-read` /
-	// `error.unexported-field-write` are both single-file fragments. So the dropped bit HAS a live
-	// consumer, and shv2 silently accepts a program the language rejects (measured: a private field
-	// read compiles and returns 42 where the bootstrap says E3014). OPEN.md #25.
-	//
-	// It is dropped anyway, and NOT quietly: visibility is a third mechanism (this rung is
-	// mutability + defaults), and E3014 carries no shv2 claim in the registry — it needs a registry
-	// edit and `maxon error-codes generate`, which is a rung's worth of its own. ⇒ **P1.1a wave 3**,
-	// whose port is `specs/export-var-fields.md`. The machinery is nearly all here:
-	// `requireConstructible` already computes "am I inside type T's methods?", the same question
-	// E3014 asks.
+	// ⚠ The `export` bit was CONSUMED AND DROPPED until P1.1a wave 3, and the reason this comment
+	// gave for dropping it was false twice over. It said *"field visibility gates cross-FILE access
+	// (E3014), and shv2 has no cross-file name resolution to gate"* — but visibility gates access
+	// from outside the TYPE, in the same file (measured: `type B` reading `type A`'s unexported
+	// field is E3014 on the bootstrap), so the bit always had a live consumer and shv2 silently
+	// accepted a program the language rejects. It is kept now, and the rung that reads it is the
+	// one that ported `specs/export-var-fields.md`'s two `error.unexported-field-*` cases.
 	function readStructFieldInto(layout StructLayout) throws ParseError
-		if self.at(TokenKind.export) 'exported'
+		let exported = self.at(TokenKind.export)
+		if exported 'isExported'
 			self.advance()
-		end 'exported'
+		end 'isExported'
 
 		let mutable = self.at(TokenKind.var)
 		try self.consume(TokenKind.var if mutable else TokenKind.let)
@@ -1541,7 +1597,7 @@ export type Parser
 			// the whole of the type inference — see `readFieldDefaultLiteral`.
 			try self.consume(TokenKind.equals)
 			let inferred = try self.readFieldDefaultLiteral()
-			layout.addField(nameTok.value, declaredType: constantValueType(inferred.tag), mutable: mutable, defaultValue: FieldDefault.literal(inferred.payload))
+			layout.addField(nameTok.value, declaredType: constantValueType(inferred.tag), mutable: mutable, exported: exported, defaultValue: FieldDefault.literal(inferred.payload))
 			return
 		end 'typeFromLiteral'
 
@@ -1549,7 +1605,7 @@ export type Parser
 		let fieldType = try self.parseTypeReference()
 
 		if not self.at(TokenKind.equals) 'noDefault'
-			layout.addField(nameTok.value, declaredType: fieldType, mutable: mutable, defaultValue: FieldDefault.none)
+			layout.addField(nameTok.value, declaredType: fieldType, mutable: mutable, exported: exported, defaultValue: FieldDefault.none)
 			return
 		end 'noDefault'
 
@@ -1559,7 +1615,7 @@ export type Parser
 		try self.consume(TokenKind.equals)
 		let given = try self.readFieldDefaultLiteral()
 		try self.requireAssignable(nameTok, value: given.tag, declared: maxonTypeTag(fieldType))
-		layout.addField(nameTok.value, declaredType: fieldType, mutable: mutable, defaultValue: FieldDefault.literal(given.payload))
+		layout.addField(nameTok.value, declaredType: fieldType, mutable: mutable, exported: exported, defaultValue: FieldDefault.literal(given.payload))
 	end 'readStructFieldInto'
 
 	// The literal a field default is, as the SAME tagged pair the constant evaluator speaks in — its
@@ -1677,7 +1733,8 @@ export type Parser
 		end 'exported'
 
 		if self.at(TokenKind.function) 'isFunction'
-			try self.parseFunction(visibility)
+			// A FILE-scope function takes no receiver: there is no enclosing type for one to be.
+			try self.parseFunction(visibility, takesReceiver: false)
 		end 'isFunction' else if self.at(TokenKind.typealias) 'isTypeAlias'
 			self.artifact.recordTypeAlias(try self.readTypeAliasDeclaration())
 		end 'isTypeAlias' else if self.at(TokenKind.type) 'isTypeDecl'
@@ -1993,17 +2050,18 @@ export type Parser
 		self.enclosingType = EmptySourceText
 	end 'parseTypeDeclaration'
 
-	// One member of a type body that is not a field: `[export] static function …`.
+	// One member of a type body that is not a field: `[export] [static] function …`.
 	//
-	// ⚠ **AN INSTANCE METHOD IS REJECTED, AND IT IS THE ONE GAP OF THIS RUNG WORTH NAMING HERE.** A
-	// `function area()` with no `static` takes a receiver, which needs `self` bound at entry and
-	// every bare field name inside it resolving to a load through it — the self-field alias whose
-	// scaffold (`VarInfo.isSelfField`/`fieldOffset`, `Scope.declareSelfField`) has been present and
-	// callerless since M1. Wiring that scaffold up here would give it a consumer and no reason to be
-	// right: no case in `specs-shv2/structs.md` calls an instance method, so nothing would prove the
-	// offset it threaded was the one the box was built with. That is the `mintPhi` failure exactly.
-	// So it is a positioned `unsupported` naming its own gap, and the scaffold waits for the rung
-	// that has a case for it.
+	// ⭐ **`static` IS THE WHOLE DIFFERENCE, AND IT IS ONE BOOLEAN.** A `static function create()`
+	// is a free function with a qualified name; a `function area()` is the same thing plus a
+	// RECEIVER — `__self` at parameter 0, and every field of the enclosing type bound by name so a
+	// bare `width` inside it means `self.width`. Both are built by the same `parseFunction`,
+	// because a method IS a function: there is no method table and nothing for a call to dispatch
+	// through. `enclosingType` supplies the qualification and is already set.
+	//
+	// The receiver is passed down as a flag and NOT recorded as one: `parseFunction` turns it into
+	// a parameter named `SelfParamName` at position 0, and every later reader asks
+	// `signatureTakesReceiver`, which reads that name back. See there — one fact, one home.
 	function parseTypeMember() throws ParseError
 		var visibility = Visibility.file
 		if self.at(TokenKind.export) 'exported'
@@ -2011,28 +2069,31 @@ export type Parser
 			visibility = Visibility.module
 		end 'exported'
 
-		if not self.at(TokenKind.static) 'notStatic'
-			let tok = self.current()
-			throw ParseError.unsupported("a '{tok.kind.rawValue}' member of type '{String.from(self.enclosingType)}' (only `static function` is parsed: an INSTANCE method needs `self` bound at entry and every bare field name resolving through it, which arrives with the rung that has a case calling one)", line: tok.line, column: tok.column)
-		end 'notStatic'
-		self.advance()
+		let isStatic = self.at(TokenKind.static)
+		if isStatic 'staticMember'
+			self.advance()
+		end 'staticMember'
 
 		if not self.at(TokenKind.function) 'notFunction'
 			let tok = self.current()
 			throw ParseError.unexpectedToken(TokenKind.function.rawValue, got: tok.kind.rawValue, line: tok.line, column: tok.column)
 		end 'notFunction'
 
-		// The SAME `parseFunction` a free function is built by — a method IS one, plus a qualified
-		// name. `enclosingType` is what supplies the qualification, and it is already set.
-		try self.parseFunction(visibility)
+		try self.parseFunction(visibility, takesReceiver: not isStatic)
 	end 'parseTypeMember'
 
-	// Parse a free function: `function <name>(<params>) [returns <Type>] <body> end
+	// Parse a function: `[static] function <name>(<params>) [returns <Type>] <body> end
 	// [label]`. M5 adds parameters (`name type`, comma-separated); there is still no
 	// `main` qualification (single-file build), so the declared name is used verbatim
 	// for registry keys — `main` stays `main`. P1.0r adds the ONE qualification there is:
 	// a function declared inside a `type` body is `Point.create` (`declaredMethodName`).
-	function parseFunction(visibility Visibility) throws ParseError
+	//
+	// `takesReceiver` is set only by `parseTypeMember`, for a member with no `static`. It adds ONE
+	// thing — a leading parameter — and everything else about an instance method follows from
+	// that, through machinery that already existed: the call is an ordinary direct call, the
+	// receiver is an ordinary argument, `slotCallArgs` slots it at position 0 because it is
+	// positional, and the register ABI hands it to the callee in argument register 0.
+	function parseFunction(visibility Visibility, takesReceiver bool) throws ParseError
 		try self.consume(TokenKind.function)
 		let nameTok = try self.consume(TokenKind.identifier)
 		// `Point.create` inside `type Point`, the bare token at file scope. The SAME derivation the
@@ -2044,13 +2105,35 @@ export type Parser
 		// binding them needs the fresh per-function scope + value numbering, which is
 		// re-seeded at the resulting paramCount just below. Parsing itself only
 		// consumes tokens, so it needs no scope.
-		try self.consume(TokenKind.leftParen)
 		var paramNames = ByteArrayArray.create()
 		var paramTypes = MaxonTypeArray.create()
 		// Parallel to `paramNames`: each parameter's name-token span, so `bindParameters` can
 		// record a ValueOrigin at the DECLARATION for parameter `i` — the source site the
 		// E5001 diagnostic points at when a parameter is in a register-pressure blocking set.
 		var paramRanges = SourceRangeArray.create()
+
+		// ⭐ **THE RECEIVER IS AN ORDINARY PARAMETER, PUSHED FIRST.** That is the entire mechanism:
+		// it occupies position 0, so it is ValueId 0 by the same Std-ABI seeding every parameter
+		// gets, and no part of the call path, the lowering or the backend learns that methods
+		// exist. It is pushed BEFORE `parseFunctionParameters` so the user's own parameters land
+		// after it — which also means the `MaxRegisterParams` cap that routine enforces counts the
+		// receiver, correctly: a 6-argument register ABI passes the receiver in one of the six.
+		//
+		// It is typed `structRef(enclosingType)` — the same `Self` means here, through the same
+		// routine that resolves the `Self` keyword, so a receiver and a `returns Self` cannot come
+		// to disagree about which type encloses them.
+		//
+		// Its span is the METHOD NAME, because no source token declares it. That is the choice
+		// `closeFunctionBody` makes for its synthetic `retVoid` and for E3013, and for the same
+		// reason: the name is where a reader looks when something about the function's own shape is
+		// at fault.
+		if takesReceiver 'receiverParam'
+			paramNames.push(SelfParamName)
+			paramTypes.push(try self.enclosingStructType(nameTok))
+			paramRanges.push(SourceRange.ofToken(nameTok))
+		end 'receiverParam'
+
+		try self.consume(TokenKind.leftParen)
 		try self.parseFunctionParameters(paramNames, paramTypes: paramTypes, paramRanges: paramRanges)
 		try self.consume(TokenKind.rightParen)
 
@@ -2079,11 +2162,22 @@ export type Parser
 			self.recordValueType(paramType)
 		end 'seedParamTypes'
 
+		// ⭐ **THE FIELD ALIASES ARE DECLARED BEFORE THE PARAMETERS, AND THE ORDER IS THE E3006
+		// CONTRACT.** Both a parameter and a body local are bound through `declareValueBinding`,
+		// which refuses to displace a self-field alias — so declaring the aliases into the
+		// just-`reset` scope FIRST is what puts every colliding declaration on the guarded side of
+		// the collision, with its own token in hand to anchor the diagnostic on. Reversed, the
+		// parameter would be in place first and the ALIAS would be the one refused, leaving the
+		// error to be reported against a field declaration that is not what needs to change.
+		if takesReceiver 'selfFieldAliases'
+			try self.declareSelfFieldAliases(nameTok)
+		end 'selfFieldAliases'
+
 		// Bind each parameter name to its reserved ValueId (i for parameter i), so a
 		// body reference resolves straight to the parameter's SSA value — the same
 		// value-substitution model `let`/`var` bindings use. Parameters are immutable
 		// (a reassignment is E2013); mutating a parameter needs a local shadow.
-		self.bindParameters(paramNames, paramTypes: paramTypes, paramRanges: paramRanges)
+		try self.bindParameters(paramNames, paramTypes: paramTypes, paramRanges: paramRanges)
 
 		// `self.valueTags` is handed over BY REFERENCE, already seeded with the parameter types.
 		// Every `mintValue` below therefore pushes straight into the function's own type column
@@ -2214,7 +2308,14 @@ export type Parser
 	// scope: parameter `i` is ValueId `i` (the ids 0..paramCount-1 the value
 	// numbering reserved). Bound as an immutable value binding, so a body reference
 	// resolves to the parameter value and a reassignment is rejected as immutable.
-	function bindParameters(paramNames ByteArrayArray, paramTypes MaxonTypeArray, paramRanges SourceRangeArray)
+	//
+	// A parameter of an instance method may COLLIDE with a field of the enclosing type —
+	// `function bump(count Integer)` inside a `type Counter` that declares `count`. The aliases are
+	// already in scope by now (see `parseFunction`), so `declareValueBinding` refuses it and this
+	// is where that refusal becomes E3006, anchored on the PARAMETER's own name token, which is
+	// the declaration that has to change. The bootstrap reports the identical program at the
+	// identical token.
+	function bindParameters(paramNames ByteArrayArray, paramTypes MaxonTypeArray, paramRanges SourceRangeArray) throws ParseError
 		for i in 0 upto paramNames.count() 'eachParam'
 			let paramName = try paramNames.get(i) otherwise panic("bindParameters: paramNames.get OOB at {i}")
 			let paramType = try paramTypes.get(i) otherwise panic("bindParameters: paramTypes.get OOB at {i}")
@@ -2248,7 +2349,7 @@ export type Parser
 
 			// The installed binding is discarded: only MUTABLE bindings are tracked by
 			// reference (for loop phis), and a parameter is immutable.
-			_ = self.scope.declareValueBinding(paramName, varType: paramType, mutable: paramIsMutable, value: i as ValueId)
+			_ = try self.scope.declareValueBinding(paramName, varType: paramType, mutable: paramIsMutable, value: i as ValueId) otherwise throw ParseError.localShadowsSelfField(String.from(paramName), typeName: String.from(self.enclosingType), line: paramRange.line, column: paramRange.column)
 			// Parameter `i` owns ValueId `i`; record its declaration span so the register-pressure
 			// diagnostic can resolve the parameter to source (it is minted by no op — see
 			// ParamOriginTable — so it has no `emitOp` origin).
@@ -2400,12 +2501,23 @@ export type Parser
 			// keeps a bare identifier from being mis-parsed as an incomplete assignment.
 			// Through `assignsAt`, which is also what decides a loop's carried vars — see there.
 			try self.parseAssignment(func, block: block)
-		end 'assign' else if self.fieldAssignsAt(self.pos) 'fieldAssign'
+		end 'assign' else if self.selfFieldAssignsAt(self.pos) 'selfFieldAssign'
+			// `self.count = 5` — the explicit spelling of a self-field store. Its own predicate for
+			// `fieldAssignsAt`'s reason: it assigns no BINDING, so `namesAssignedIn` must not see it.
+			// (The BARE spelling, `count = 5`, matches `assignsAt` and is routed above — see there
+			// for why the scan finding `count` is harmless.)
+			try self.parseExplicitSelfFieldAssignment(func, block: block)
+		end 'selfFieldAssign' else if self.fieldAssignsAt(self.pos) 'fieldAssign'
 			// `p.x = 5` — a store THROUGH a binding rather than a rebinding of one. Its own
 			// predicate, and `namesAssignedIn` reads only `assignsAt`: see `assignsAt` for why
 			// widening that one instead would have minted the loop's phi for the FIELD's name.
 			try self.parseFieldAssignment(func, block: block)
-		end 'fieldAssign' else if self.at(TokenKind.identifier) and self.peekKind() == TokenKind.leftParen 'callStmt'
+		end 'fieldAssign' else if self.methodCallsAt(self.pos) 'methodCallStmt'
+			// `c.increment()` / `self.increment()` — a method call for its EFFECT. Void methods are
+			// most of what a type declares, and this is the only position that wants no value, so
+			// `resultUsed: false` is what makes them callable at all.
+			_ = try self.parseMethodCall(func, resultUsed: false)
+		end 'methodCallStmt' else if self.at(TokenKind.identifier) and self.peekKind() == TokenKind.leftParen 'callStmt'
 			// An identifier followed by `(` is a bare-call statement — the call is evaluated for its
 			// effect and its result discarded (M5). `resultUsed: false` is what makes a VOID call legal
 			// HERE and nowhere else: this is the position that wants no value.
@@ -2443,7 +2555,10 @@ export type Parser
 		let nameTok = try self.consume(TokenKind.identifier)
 		try self.consume(TokenKind.equals)
 		let value = try self.parseExpression(func, block: block)
-		var binding = self.scope.declareValueBinding(nameTok.value, varType: self.typeOf(value), mutable: mutable, value: value)
+		// A local taking the name of a field of the enclosing type is E3006, not a shadow — see
+		// `Scope.declareValueBinding`. Anchored on the LOCAL's name token: the field is fine, the
+		// local is what has to be renamed.
+		var binding = try self.scope.declareValueBinding(nameTok.value, varType: self.typeOf(value), mutable: mutable, value: value) otherwise throw ParseError.localShadowsSelfField(String.from(nameTok.value), typeName: String.from(self.enclosingType), line: nameTok.line, column: nameTok.column)
 		if mutable 'trackVar'
 			// Record `var`s in declaration order so loop headers can mint phis for every
 			// mutable binding in scope (M4b on-the-fly SSA). `let`s never join — they
@@ -2578,6 +2693,15 @@ export type Parser
 		end 'undeclared'
 
 		let binding = self.scope.getInfo(nameTok.value)
+
+		// A bare field name inside an instance method — `count = count + 1`. It is a STORE through
+		// the receiver, not a rebinding of anything, so it asks the field's mutability rather than
+		// this binding's (see `parseSelfFieldAssignment`) and never reaches `setValue` below.
+		if binding.isSelfField 'selfField'
+			try self.parseSelfFieldAssignment(func, block: block, nameTok: nameTok, binding: binding)
+			return
+		end 'selfField'
+
 		try self.requireMutableBinding(binding, nameTok: nameTok)
 
 		let value = try self.parseExpression(func, block: block)
@@ -4199,6 +4323,13 @@ export type Parser
 			return try self.parseStructLiteral(func)
 		end 'selfLiteral'
 
+		// `self.x` / `self.m(…)` — the RECEIVER, which is a different keyword from `Self` the TYPE
+		// (`self` vs `selfType`; the lexer splits them, so nothing here has to). Its own arm for the
+		// same reason `Self{…}` has one: a keyword cannot ride the identifier arm below.
+		if self.at(TokenKind.self) 'selfReceiver'
+			return try self.parseSelfPrimary(func)
+		end 'selfReceiver'
+
 		if self.at(TokenKind.identifier) 'namedPrimary'
 			// One-token lookaheads split the four forms an identifier can open. `(` makes it a CALL
 			// (the same shape the statement parser uses to tell a call apart from a bare name); `{`
@@ -4540,14 +4671,29 @@ export type Parser
 	// every struct — so `p.x` would have reported "expected a sized numeric type (u8/u16/…)" for a
 	// perfectly good field read.
 	function parseDottedPrimary(func IrFunction) returns ValueId throws ParseError
-		// The three tokens are `<base> . <member>`; a `(` at +3 opens the call's argument list.
+		// ⭐ **A BOUND BASE IS A VALUE, AND A VALUE OUTRANKS A TYPE NAME.** `p.x` and `p.add(10)` are
+		// an instance's field and an instance's METHOD; `Point.create(10)` is a static method, and
+		// `u16.max` is a bound. The base being IN SCOPE is what tells the first two from the last
+		// two, and it is asked FIRST for `parseVariableReference`'s stated reason: a local binding
+		// shadows a name from any wider scope, which is what every language with both does.
+		//
+		// ⚠ **THE `(` AT +3 IS NOT ENOUGH TO FIND A STATIC CALL**, and that is the trap this order
+		// avoids: `p.add(10)` and `Point.create(10)` have IDENTICAL token shapes. Testing `(` first
+		// sends `p.add(10)` to `parseQualifiedCall`, which would mangle the callee out of the
+		// VARIABLE's name — `p.add`, which no file declares — and report E3004 against a method that
+		// is right there in the type. `methodCallsAt` is where that scope test lives, shared with the
+		// statement dispatcher.
+		if self.methodCallsAt(self.pos) 'methodCall'
+			return try self.parseMethodCall(func, resultUsed: true)
+		end 'methodCall'
+
+		if self.scope.contains(self.baseBindingName(self.current())) 'fieldAccess'
+			return try self.parseFieldAccess()
+		end 'fieldAccess'
+
 		if self.kindAt(self.pos + 3) == TokenKind.leftParen 'qualifiedCall'
 			return try self.parseQualifiedCall(func)
 		end 'qualifiedCall'
-
-		if self.scope.contains(self.current().value) 'fieldAccess'
-			return try self.parseFieldAccess()
-		end 'fieldAccess'
 
 		return try self.parseTypeQualifiedBoundExpression()
 	end 'parseDottedPrimary'
@@ -4565,11 +4711,77 @@ export type Parser
 	// declares, which `SemanticCheck.validateCall` reports as E3004 — the authority for "no such
 	// function", reading the registry the real parse built. A check here would be a second opinion
 	// from the tolerant sweep, and the sweep must never own a veto (see `CalleeReturn.undeclared`).
+	//
+	// ⚠ **`Adder.add(5)` — AN INSTANCE METHOD NAMED STATICALLY — REACHES HERE, AND IS REJECTED BY
+	// ARITY RATHER THAN BY WHAT IT IS.** It carries no receiver, so its argument list is one short
+	// of the signature (whose parameter 0 is `SelfParamName`) and `validateCall` reports E3036. The
+	// program is refused, which is right; the COUNTS it is refused with include the receiver, so
+	// they are one higher than anything the source wrote. The bootstrap dodges this by reporting
+	// per-parameter ("missing argument for parameter 'value'") rather than by count. The honest fix
+	// is a diagnostic that says an instance method needs a receiver — which no corpus case covers,
+	// so it is recorded rather than invented here.
 	function parseQualifiedCall(func IrFunction) returns ValueId throws ParseError
 		let typeTok = try self.consume(TokenKind.identifier)
 		try self.consume(TokenKind.dot)
-		return try self.parseCallNamed(func, callee: qualifiedMethodName(typeTok.value, methodName: self.current().value), anchor: typeTok, resultUsed: true)
+		return try self.parseCallNamed(func, callee: qualifiedMethodName(typeTok.value, methodName: self.current().value), anchor: typeTok, receiver: ReceiverArg.none, resultUsed: true)
 	end 'parseQualifiedCall'
+
+	// ⭐ **`p.add(10)` / `self.add(10)` — AN INSTANCE METHOD CALL, WHICH IS AN ORDINARY DIRECT CALL
+	// WITH ONE EXTRA ARGUMENT.**
+	//
+	// The callee is `Adder.add` — mangled from the RECEIVER'S DECLARED TYPE and the method name,
+	// which is exactly the key `parseFunction` declared it under (`declaredMethodName`), the same
+	// key `Point.create` is linked by. So the result is typed from the signature index, arguments
+	// are slotted by `slotCallArgs`, arity and labels are validated by `SemanticCheck`, and the
+	// backend passes the receiver in argument register 0 — none of which learns that methods exist.
+	//
+	// **THE RECEIVER IS PREPENDED AS ARGUMENT 0, AND THAT IS THE ENTIRE DISPATCH MECHANISM.** It
+	// pairs with the `SelfParamName` parameter `parseFunction` pushed at position 0: the call's
+	// first argument is POSITIONAL, so `slotCallArgs` puts it at position 0 without being told
+	// anything, and the user's `10` — also positional, at index 1 — lands on the first user
+	// parameter. The two halves meet through the ordinary label rules and nothing else.
+	//
+	// ⭐ **THE RECEIVER IS BORROWED — the callee neither owns it nor drops it.** It is passed as a
+	// parameter, and a parameter is not owned by the callee: the CALLER owns the +1, so no incref
+	// is emitted here and no drop is emitted there. The receiver's box is dropped by the binding
+	// that owns it, at ITS scope exit (`ownedBindings`), which is why `c.increment()` twice over
+	// followed by `c.getCount()` is well-defined and returns 42 rather than reading freed memory.
+	// Both references agree for the receiver specifically — the bootstrap gives `self`
+	// `OwnershipFlags.IsParam`, and v1's `__self` is param 0, which its refcounter treats as a
+	// borrow — so this is not the borrow-vs-consume ruling struct-typed PARAMETERS are deferred
+	// for. It is also not a hardcode: a consume would have to be a SINK — a store of the receiver
+	// into heap storage, or an argument to a callee that consumes it — and this rung has scalar
+	// and float fields only, so there is nowhere to store it. The absence of an incref is CORRECT
+	// rather than merely unused, because the thing that would make it wrong is unrepresentable.
+	//
+	// ⚠ **THE RUNG THAT MAKES THE SINK REPRESENTABLE MUST REVISIT THIS**, and it is the one that
+	// gives a field a struct or `String` type — a method that stores `self` into durable storage is
+	// real and the stdlib exercises it. v1 does not assert "the receiver is borrowed" anywhere:
+	// it FALLS OUT of `__self` being param 0 plus a structural per-param consume analysis
+	// (`ParamConsumeAnalysis.maxon:5-13`). shv2 will need that analysis at the moment a sink can be
+	// written, and not before — it has no consumer until then.
+	function parseMethodCall(func IrFunction, resultUsed bool) returns ValueId throws ParseError
+		let baseTok = self.current()
+		self.advance()
+		try self.consume(TokenKind.dot)
+
+		let binding = self.scope.getInfo(self.baseBindingName(baseTok))
+		let layout = try self.requireStructBinding(binding, baseTok: baseTok)
+
+		return try self.parseCallNamed(func, callee: qualifiedMethodName(layout.name, methodName: self.current().value), anchor: baseTok, receiver: ReceiverArg.value(binding.boundValue), resultUsed: resultUsed)
+	end 'parseMethodCall'
+
+	// The SCOPE name a base token denotes. `self` is a keyword, so it carries no binding name of its
+	// own; it names the receiver parameter, which is bound under `SelfParamName`. Every other base
+	// token names itself.
+	//
+	// One home, because `p.x`, `p.m()` and their `self` spellings all have to answer it the same
+	// way — and because it is the ONLY place the `self` token and the receiver parameter's name are
+	// connected. A second copy is a second chance to look the receiver up under the word the source
+	// happened to write.
+	function baseBindingName(tok Token) returns ByteArray
+		return SelfParamName if tok.kind == TokenKind.self else tok.value
+	end 'baseBindingName'
 
 	// `p.x` — read field `x` out of the box `p` points at.
 	//
@@ -4594,9 +4806,133 @@ export type Parser
 		let binding = self.scope.getInfo(baseTok.value)
 		let layout = try self.requireStructBinding(binding, baseTok: baseTok)
 		let index = try self.requireFieldIndex(layout, fieldTok: fieldTok)
+		try self.requireFieldAccessible(layout, index: index, fieldTok: fieldTok)
 
 		return self.emitFieldLoad(binding.boundValue, layout: layout, index: index, range: SourceRange.between(baseTok, last: fieldTok))
 	end 'parseFieldAccess'
+
+	// ⭐⭐ **A SELF-FIELD READ — `count` AND `self.count`, ONE PATH.**
+	//
+	// Both spellings mean the same thing, so both resolve to the same `(layout, index)` and hand it
+	// to `emitFieldLoad` — **the very routine `p.x` uses**, emitting the same `loadIndirect` at the
+	// same offset with the same storage type. The two spellings differ in exactly one step, and it
+	// is the step they *have* to differ in: `self.count` names its field with a TOKEN, so it asks
+	// `requireFieldIndex` (and can report E3018); a bare `count` came off an alias that
+	// `declareSelfFieldAliases` minted by enumerating the layout, so its index is already known and
+	// provably valid.
+	//
+	// ⚠ **v1 SPLITS THIS AND SHV2 MUST NOT — the split is what this rung exists to not inherit.**
+	// There, a bare `x` gets dedicated `selfFieldLoad`/`selfFieldStore` ops carrying the receiver
+	// out-of-band with slot 0 hardcoded in lowering, while `self.x` gets an ordinary `varLoad` +
+	// `fieldLoad`. Two ops, two lowerings, one fact — and it cost v1 twice over:
+	//   • its E3014 walker inspects only `fieldLoad`/`fieldStore`, so a bare-name access is
+	//     STRUCTURALLY invisible to field visibility (TypeResolution.maxon:8183-8188);
+	//   • inside a closure there is no receiver slot, so the hardcoded slot 0 *"would load
+	//     garbage"* and the closure path must re-route to the explicit form
+	//     (Parser.maxon:18179-18189).
+	// Neither is reachable here, and not because they were fixed — because the second path that
+	// would have to be kept in step does not exist. `Project.maxon`'s `VarInfo.isSelfField` states
+	// the rule; this is where it is obeyed.
+	function parseSelfFieldRead(nameTok Token, binding VarInfo) returns ValueId throws ParseError
+		return self.emitFieldLoad(try self.requireReceiverValue(nameTok), layout: try self.enclosingLayout(nameTok), index: binding.fieldIndex, range: SourceRange.ofToken(nameTok))
+	end 'parseSelfFieldRead'
+
+	// `count = <expr>` — write a field of the enclosing type through the receiver, named bare. The
+	// mirror of `parseSelfFieldRead`, landing on `emitFieldStore` exactly as `p.x = 5` does.
+	//
+	// ⭐ **THE RECEIVER'S OWN MUTABILITY IS NOT ASKED, AND THAT IS THE LANGUAGE'S RULE, NOT AN
+	// OMISSION.** `parseFieldAssignment` demands a mutable INSTANCE because `let p` refuses a write
+	// through it; here the instance is `__self`, a parameter, and every parameter is bound
+	// immutable — so asking would report E2013 against `self.n = self.n * 2` in every mutating
+	// method the corpus has. The corpus is also what settles that this is right rather than
+	// convenient: `let acc = Accumulator.create(0)` followed by `acc.add(10)` expects **42**
+	// (specs/self-keyword.md, `self-with-params`). A `let` on a struct binding refuses a REBIND
+	// (`acc = other`) and a direct field write through it (`acc.total = 1`, E2013 — structs.md pins
+	// it); it does not reach inside the type's own methods.
+	//
+	// What IS asked is the FIELD's mutability — `layout.fieldIsMutable`, the same column and the
+	// same diagnostic `c.version = 2` gets, because it is the same question. Anchored at the name
+	// token, which is the only token there is.
+	function parseSelfFieldAssignment(func IrFunction, block IrBlock, nameTok Token, binding VarInfo) throws ParseError
+		try self.emitCheckedSelfFieldStore(func, block: block, receiver: try self.requireReceiverValue(nameTok), layout: try self.enclosingLayout(nameTok), index: binding.fieldIndex, fieldTok: nameTok, range: SourceRange.ofToken(nameTok))
+	end 'parseSelfFieldAssignment'
+
+	// **THE ONE SELF-FIELD WRITE**, shared by the two spellings: the bare `count = 1` and the
+	// explicit `self.count = 1`. Everything a write decides lives here — whether the field accepts
+	// one, when the right-hand side is parsed, what type it must have, and the store itself — so
+	// the two spellings cannot come to disagree about any of it. They differ only in how the index
+	// was found and which tokens the span covers, which is all either caller passes in.
+	//
+	// The right-hand side is parsed AFTER the rejection, so a refused program emits no op —
+	// `emitCheckedGlobalStore`'s discipline, and its name, for its reason.
+	function emitCheckedSelfFieldStore(func IrFunction, block IrBlock, receiver ValueId, layout StructLayout, index FieldIndex, fieldTok Token, range SourceRange) throws ParseError
+		if not layout.fieldIsMutable(index) 'immutableField'
+			throw ParseError.assignToImmutableField(String.from(layout.name), fieldName: String.from(fieldTok.value), line: fieldTok.line, column: fieldTok.column)
+		end 'immutableField'
+
+		let value = try self.parseExpression(func, block: block)
+		try self.requireFieldType(layout, index: index, value: value, anchor: fieldTok)
+
+		self.emitFieldStore(receiver, layout: layout, index: index, value: value, range: range)
+	end 'emitCheckedSelfFieldStore'
+
+	// `self.x` / `self.m(…)` — the receiver named explicitly. `self` is its own KEYWORD token, so it
+	// cannot ride the identifier paths; what it can do is resolve to the same two destinations they
+	// do, which is what this routine is for.
+	//
+	// The `(` at +3 splits them, exactly as `parseDottedPrimary` splits `p.x` from `p.m(…)` — one
+	// lookahead, written the same way, because it is the same question about the same three tokens.
+	//
+	// A BARE `self` — not followed by a dot — is the receiver as a VALUE, which means returning or
+	// passing a struct. That is P1.4's ownership ruling (a struct crossing a call boundary), so it
+	// is a positioned `unsupported` naming the rung rather than a confusing parse failure. No
+	// corpus case needs it: `self-modify-and-return` returns `self.n`, the FIELD.
+	function parseSelfPrimary(func IrFunction) returns ValueId throws ParseError
+		let selfTok = self.current()
+
+		// The receiver is required for EITHER destination, so it is established once, here, before
+		// the split — which is also what keeps `self` in a `static function` out of
+		// `parseMethodCall`, whose binding lookup would panic rather than report.
+		_ = try self.requireReceiverValue(selfTok)
+
+		if self.peekKind() != TokenKind.dot 'bareSelf'
+			throw ParseError.unsupported("'{selfTok.kind.rawValue}' as a value (a field can be read THROUGH the receiver — `self.x`, or a bare field name — but passing or returning the receiver itself hands a struct across a call boundary, which needs the ownership ruling struct-typed parameters and returns are deferred to)", line: selfTok.line, column: selfTok.column)
+		end 'bareSelf'
+
+		if self.methodCallsAt(self.pos) 'methodCall'
+			return try self.parseMethodCall(func, resultUsed: true)
+		end 'methodCall'
+
+		return try self.parseExplicitSelfFieldRead()
+	end 'parseSelfPrimary'
+
+	// `self.x` in value position. It asks `requireFieldIndex` where the bare spelling reads the
+	// alias's index — see `parseSelfFieldRead` for why that is the one legitimate difference — and
+	// converges on the same `emitFieldLoad`.
+	function parseExplicitSelfFieldRead() returns ValueId throws ParseError
+		let selfTok = try self.consume(TokenKind.self)
+		try self.consume(TokenKind.dot)
+		let fieldTok = try self.consume(TokenKind.identifier)
+
+		let layout = try self.enclosingLayout(selfTok)
+		return self.emitFieldLoad(try self.requireReceiverValue(selfTok), layout: layout, index: try self.requireFieldIndex(layout, fieldTok: fieldTok), range: SourceRange.between(selfTok, last: fieldTok))
+	end 'parseExplicitSelfFieldRead'
+
+	// `self.x = <expr>`. The explicit spelling, resolving its field token to an index and then
+	// handing over to the one shared write above — so both spellings ask one mutability rule and
+	// emit one store.
+	function parseExplicitSelfFieldAssignment(func IrFunction, block IrBlock) throws ParseError
+		let selfTok = try self.consume(TokenKind.self)
+		try self.consume(TokenKind.dot)
+		let fieldTok = try self.consume(TokenKind.identifier)
+		try self.consume(TokenKind.equals)
+
+		// The receiver first, so `self.x = 1` in a `static function` reports what is actually wrong
+		// rather than tripping over the enclosing type's layout.
+		let receiver = try self.requireReceiverValue(selfTok)
+		let layout = try self.enclosingLayout(selfTok)
+		try self.emitCheckedSelfFieldStore(func, block: block, receiver: receiver, layout: layout, index: try self.requireFieldIndex(layout, fieldTok: fieldTok), fieldTok: fieldTok, range: SourceRange.between(selfTok, last: fieldTok))
+	end 'parseExplicitSelfFieldAssignment'
 
 	// `p.x = <expr>` — write field `x` of the box `p` points at. The exact mirror of
 	// `parseFieldAccess`: the same three tokens resolved through the same two steps (which type is
@@ -4632,6 +4968,19 @@ export type Parser
 	// `RequireMutableField` runs) and nothing there declares it. `struct-field-assign-precedence.md`
 	// pins BOTH ranks, because a rule stated only in the order of two `if`s is a rule the next edit
 	// reorders.
+	//
+	// ⭐ **VISIBILITY (E3014) LANDS BETWEEN THE TWO, AND THE WHOLE BAND IS ONE CHAIN: EACH RANK IS
+	// THE FIX THAT ACTUALLY WORKS NEXT.** The instance, then whether the field can be SEEN, then
+	// whether it can be WRITTEN — because `export private` does not fix `let p`, and `var private`
+	// does not fix a field the caller cannot reach at all. All three ranks are MEASURED against the
+	// bootstrap, not inferred:
+	//
+	//   • `var v` + `let` unexported field  → **E3014** (visibility outranks field mutability)
+	//   • `let v` + `var` unexported field  → **E2013 'v'** (the instance outranks visibility)
+	//   • `v.nosuch`                        → **E3018** (resolution outranks all of it)
+	//
+	// The READ path asks the same chain minus its middle: it has no instance to write through, so
+	// resolution is followed directly by visibility (`parseFieldAccess`).
 	function parseFieldAssignment(func IrFunction, block IrBlock) throws ParseError
 		let baseTok = try self.consume(TokenKind.identifier)
 		try self.consume(TokenKind.dot)
@@ -4650,6 +4999,7 @@ export type Parser
 		let index = try self.requireFieldIndex(layout, fieldTok: fieldTok)
 
 		try self.requireMutableBinding(binding, nameTok: baseTok)
+		try self.requireFieldAccessible(layout, index: index, fieldTok: fieldTok)
 
 		if not layout.fieldIsMutable(index) 'immutableField'
 			throw ParseError.assignToImmutableField(String.from(layout.name), fieldName: String.from(fieldTok.value), line: baseTok.line, column: baseTok.column)
@@ -4663,11 +5013,73 @@ export type Parser
 		self.emitFieldStore(binding.boundValue, layout: layout, index: index, value: value, range: SourceRange.between(baseTok, last: fieldTok))
 	end 'parseFieldAssignment'
 
+	// Declare every field of the enclosing type as a self-field alias, so a bare `width` inside
+	// `function area()` of `type Rect` resolves to `self.width`. Called at instance-method entry
+	// only; `anchor` is the method's name token, which the layout lookup's diagnostic points at.
+	//
+	// The alias carries the field's INDEX and its declared TYPE, both read straight out of the
+	// layout being enumerated — so the alias cannot name a field the type does not have, which is
+	// what lets the read and write paths skip the "does this type have this field?" question that
+	// `self.x` and `p.x` must ask.
+	//
+	// The type comes through `fieldTypeOf`, not off the layout's column directly, because that is
+	// the door that RE-INTERNS a `named` type into this file's own interner — the same door
+	// `emitFieldLoad` reads a field's type through. Reading the column raw would bind aliases to
+	// type-name ids from the SWEEP's table, which this file's interner cannot resolve.
+	function declareSelfFieldAliases(anchor Token) throws ParseError
+		let layout = try self.enclosingLayout(anchor)
+		for i in 0 upto layout.fieldCount() 'eachField'
+			let fieldName = try layout.fieldNames.get(i) otherwise panic("declareSelfFieldAliases: fieldNames.get OOB at {i} for `type {String.from(layout.name)}`, which declares {layout.fieldCount()}")
+			self.scope.declareSelfField(fieldName, varType: self.signatures.fieldTypeOf(layout.name, index: i, into: self.artifact.typeNames), fieldIndex: i)
+		end 'eachField'
+	end 'declareSelfFieldAliases'
+
+	// The `StructLayout` of the type whose body encloses the cursor. The self-field twin of
+	// `requireStructBinding`: that one resolves the layout of a BINDING's declared type, this one
+	// resolves the layout of the enclosing DECLARATION, which is what a receiver and a bare field
+	// name are both typed by.
+	//
+	// Both misses panic rather than report, and for `requireConstructible`'s reason: every caller
+	// is inside an instance method, so an enclosing type exists by construction, and the
+	// declaration sweep recorded every `type` in the program before this file's parse began.
+	function enclosingLayout(anchor Token) returns StructLayout throws ParseError
+		if self.enclosingType.isEmpty() 'noEnclosingType'
+			panic("enclosingLayout: asked for the enclosing type's layout at {anchor.line}:{anchor.column}, but the cursor is at file scope — every caller is inside an instance method, whose body only `parseTypeDeclaration` reaches")
+		end 'noEnclosingType'
+
+		match self.signatures.structOf(self.enclosingType) 'declared'
+			declared(layout) then return layout
+			undeclared then panic("enclosingLayout: `type {String.from(self.enclosingType)}` is being parsed right now, but the declaration sweep never recorded it — `recordScannedType` and `parseTypeDeclaration` disagree about what opens a type declaration")
+		end 'declared'
+	end 'enclosingLayout'
+
+	// ⭐ **THE RECEIVER'S SSA VALUE — READ BACK, NEVER ASSUMED.** It is parameter 0, so it is
+	// ValueId 0; but that is a CONSEQUENCE of the Std-ABI seeding `parseFunction` performs
+	// (`ValueIdRef.create(paramCount)` reserves 0..paramCount-1 and `bindParameters` binds
+	// parameter `i` to id `i`), not an independent fact. A literal `0` here would be that
+	// convention written down a second time, in the one place that would keep compiling — and
+	// silently reading the wrong value — the day the seeding changed.
+	//
+	// **IT IS ALSO THE ONE PLACE `self` IS REFUSED WHERE THERE IS NO RECEIVER**, because that is
+	// the same question: the receiver is bound iff `parseFunction` pushed one, so a failed lookup
+	// IS "this is not an instance method". A `static function` is the interesting case — it has an
+	// enclosing type but no instance — and file scope has neither. Both report here, positioned,
+	// rather than reaching `enclosingLayout` and panicking on an enclosing type that is absent or
+	// irrelevant.
+	function requireReceiverValue(anchor Token) returns ValueId throws ParseError
+		return try self.scope.lookupValue(SelfParamName) otherwise throw ParseError.unsupported("'{anchor.kind.rawValue}' outside an instance method (`self` names the instance a method was called on; a `static function` is called on the type itself and has none)", line: anchor.line, column: anchor.column)
+	end 'requireReceiverValue'
+
 	// **The declaration index `fieldTok` names in `layout`, or E3018** — asked by every one of the
-	// three places a field is named: the struct literal's `x:` label, the field READ, and the field
-	// WRITE. One home, because it is one question, and the three must not come to disagree about
-	// what "this type has no such field" means or where the diagnostic points (the FIELD token — the
-	// token that is wrong, never the value it is read from).
+	// three places a field is named by a TOKEN: the struct literal's `x:` label, the field READ,
+	// and the field WRITE. One home, because it is one question, and the three must not come to
+	// disagree about what "this type has no such field" means or where the diagnostic points (the
+	// FIELD token — the token that is wrong, never the value it is read from).
+	//
+	// A BARE self-field name does not ask it: its index came off the alias, which
+	// `declareSelfFieldAliases` minted by enumerating the layout, so the field provably exists. A
+	// bare name that is NOT a field is not a self-field alias at all and never reaches a field
+	// path — it is an undefined variable, and reports as one.
 	//
 	// It is also the one place `indexOfField`'s "not found" convention is READ. That answer is
 	// `fieldCount()` — an index one past the end — and every caller comparing against it by hand was
@@ -4680,6 +5092,49 @@ export type Parser
 		end 'noSuchField'
 		return index
 	end 'requireFieldIndex'
+
+	// ⭐ **E3014 — A FIELD NOT DECLARED `export` IS REACHABLE ONLY FROM ITS OWN TYPE'S BODY.**
+	//
+	//     accessible  ==  the field is exported  OR  this code is inside the declaring type
+	//
+	// **THE GATE IS THE TYPE, NOT THE FILE**, and that is measured rather than inherited: `type B`
+	// reading `type A`'s unexported field is E3014 on the bootstrap **in the same file**. BOTH
+	// reference registries call it "another file" and both are wrong — v1's CODE agrees with the
+	// measurement (it gates on `structName == enclosingType`, TypeResolution.maxon:8204) and only
+	// its prose does not. `docs/error-codes.txt`'s doc line is corrected to match.
+	//
+	// **ONE HOME, TWO CALLERS** — the field READ and the field WRITE. It is one rule; written at
+	// both sites, a future answer to what "accessible" means (a `module`-visible field, a friend
+	// type) taught to one and not the other would let a private field be WRITTEN where reading it
+	// correctly reports. An accepted access that should have been refused is a wrong answer, not a
+	// compile error.
+	//
+	// `namesEnclosingType` is the SAME predicate `requireConstructible` (E3076) and
+	// `parseTypeReference` ask — "am I inside type T's body?" — so visibility, construction and
+	// `Self` cannot come to disagree about where a type's body ends.
+	//
+	// ⚠ **IT IS NOT ASKED AT THE STRUCT-LITERAL SITE, AND THE REASON IS THE SPEC'S, NOT E3076'S.**
+	// Initialization is exempt outright: *"All fields (exported or not) can be initialized in
+	// struct literals, since the type itself determines what fields exist. The visibility only
+	// affects access after construction"* (specs/export-var-fields.md). In shv2 that exemption is
+	// VACUOUS today — E3076 already refuses every literal written outside its own type's body, so
+	// no out-of-type literal survives to ask — but it is the SPEC's rule that makes the absence
+	// correct rather than merely unreachable, and it is written here so the day E3076 relaxes does
+	// not silently take the exemption with it. (v1 needs the rule live, and spells it `isInit`.)
+	//
+	// ⚠ **NOR IS IT ASKED ON THE SELF-FIELD PATH**, where it could not fail: a bare `count` and
+	// `self.count` both resolve through `enclosingLayout`, so `namesEnclosingType(layout.name)`
+	// holds by construction. The rule is asked wherever it can be broken, which is wherever the
+	// layout came from a BINDING's type rather than from the enclosing declaration.
+	function requireFieldAccessible(layout StructLayout, index FieldIndex, fieldTok Token) throws ParseError
+		if layout.fieldIsExported(index) 'exported'
+			return
+		end 'exported'
+		if self.namesEnclosingType(layout.name) 'insideDeclaringType'
+			return
+		end 'insideDeclaringType'
+		throw ParseError.unexportedFieldAccess(String.from(layout.name), fieldName: String.from(fieldTok.value), line: fieldTok.line, column: fieldTok.column)
+	end 'requireFieldAccessible'
 
 	// The `StructLayout` of `binding` — the two-step every field access takes: the binding's declared
 	// type must BE a struct, and that struct must be one some file declares.
@@ -4802,8 +5257,19 @@ export type Parser
 	// one storage key holds ONE decl, and `constantValueOf`/`globalDeclFor` each answer only for
 	// their own kind — so at most one of the two probes can ever hit. The order is readability, not
 	// precedence.
+	// ⚠ **A SELF-FIELD ALIAS IS TESTED BEFORE `lookupValue`, AND THE ORDER IS LOAD-BEARING RATHER
+	// THAN TIDY.** An alias aliases no SSA value — a read of it is a `loadIndirect`, so there is
+	// nothing for `boundValue` to hold and it is left 0. `lookupValue` would hand that 0 back as if
+	// it were the answer, and ValueId 0 is the RECEIVER: `return count` inside a method would
+	// silently compile to `return self`, reading a box pointer as an integer. A wrong answer with
+	// no diagnostic anywhere.
 	function parseVariableReference() returns ValueId throws ParseError
 		let tok = try self.consume(TokenKind.identifier)
+
+		if self.scope.isSelfField(tok.value) 'selfField'
+			return try self.parseSelfFieldRead(tok, binding: self.scope.getInfo(tok.value))
+		end 'selfField'
+
 		return try self.scope.lookupValue(tok.value) otherwise return try self.topLevelBindingReference(tok)
 	end 'parseVariableReference'
 
@@ -5328,7 +5794,8 @@ export type Parser
 	// here and not in a later pass.
 	function parseCall(func IrFunction, resultUsed bool) returns ValueId throws ParseError
 		let calleeTok = self.current()
-		return try self.parseCallNamed(func, callee: calleeTok.value, anchor: calleeTok, resultUsed: resultUsed)
+		// A free call has no receiver: there is no value to its left.
+		return try self.parseCallNamed(func, callee: calleeTok.value, anchor: calleeTok, receiver: ReceiverArg.none, resultUsed: resultUsed)
 	end 'parseCall'
 
 	// The call parser proper, taking the callee's NAME rather than reading it — because two call
@@ -5341,13 +5808,32 @@ export type Parser
 	// caller has already consumed any qualification. `anchor` is the token diagnostics point at,
 	// which for a qualified call is the TYPE name — the start of what the user wrote, and the same
 	// anchor the span runs from.
-	function parseCallNamed(func IrFunction, callee ByteArray, anchor Token, resultUsed bool) returns ValueId throws ParseError
+	function parseCallNamed(func IrFunction, callee ByteArray, anchor Token, receiver ReceiverArg, resultUsed bool) returns ValueId throws ParseError
 		try self.consume(TokenKind.identifier)
 		try self.consume(TokenKind.leftParen)
 
 		var args = ValueIdArray.create()
 		var argLabels = ByteArrayArray.create()
 		var argRanges = SourceRangeArray.create()
+
+		// ⭐ **THE RECEIVER GOES IN FIRST, AS AN UNLABELLED ARGUMENT, AND THEN IT IS JUST AN
+		// ARGUMENT.** Pushed BEFORE the source's own arguments are parsed, so it occupies index 0
+		// and everything downstream slots it there without being told: `slotCallArgs` puts an
+		// unlabelled argument at index `i` into parameter position `i`, and parameter 0 is
+		// `SelfParamName`. The two ends of the convention never speak to each other.
+		//
+		// It does NOT disturb the label rules. `parseCallArgs` counts the SOURCE's arguments from
+		// zero on its own counter, so `acc.add(10)`'s `10` is still "the first argument" and is
+		// still required to be positional — the receiver is not something the user wrote and must
+		// not shift what they did.
+		//
+		// Its span is the receiver EXPRESSION's anchor (`acc`, or the `self` keyword), which is the
+		// token a diagnostic about the receiver has to point at.
+		match receiver 'prependReceiver'
+			none then break 'prependReceiver'
+			value(id) then pushCallArg(args, argLabels: argLabels, argRanges: argRanges, value: id, label: EmptySourceText, range: SourceRange.ofToken(anchor))
+		end 'prependReceiver'
+
 		try self.parseCallArgs(func, args: args, argLabels: argLabels, argRanges: argRanges)
 
 		let rparenTok = try self.consume(TokenKind.rightParen)
@@ -5430,9 +5916,7 @@ export type Parser
 			// short-circuit an EARLIER argument performed.
 			let value = try self.parseBinary(func, minPrec: OrPrecedence)
 
-			args.push(value)
-			argLabels.push(label)
-			argRanges.push(SourceRange.ofToken(argFirstTok))
+			pushCallArg(args, argLabels: argLabels, argRanges: argRanges, value: value, label: label, range: SourceRange.ofToken(argFirstTok))
 			argIndex = argIndex + 1
 
 			if not self.at(TokenKind.comma) 'endArgs'
@@ -5658,6 +6142,42 @@ export type Parser
 	function fieldAssignsAt(index TokenIndex) returns bool
 		return self.kindAt(index) == TokenKind.identifier and self.kindAt(index + 1) == TokenKind.dot and self.kindAt(index + 2) == TokenKind.identifier and self.kindAt(index + 3) == TokenKind.equals
 	end 'fieldAssignsAt'
+
+	// **The token shape of an EXPLICIT self-field store** — `self . <field> =`.
+	//
+	// Its own predicate rather than a widening of `fieldAssignsAt`, because `self` is a KEYWORD and
+	// not an identifier — and, more to the point, for `fieldAssignsAt`'s own reason: it assigns no
+	// BINDING, so `namesAssignedIn` must not see it. (The BARE spelling `count = 5` DOES match
+	// `assignsAt` and is deliberately left to; see there.)
+	function selfFieldAssignsAt(index TokenIndex) returns bool
+		return self.kindAt(index) == TokenKind.self and self.kindAt(index + 1) == TokenKind.dot and self.kindAt(index + 2) == TokenKind.identifier and self.kindAt(index + 3) == TokenKind.equals
+	end 'selfFieldAssignsAt'
+
+	// **The token shape of an INSTANCE METHOD CALL** — `<base> . <name> (`, where `<base>` names a
+	// value IN SCOPE (a binding, or the `self` keyword's receiver).
+	//
+	// ⭐ **THE SCOPE TEST IS THE WHOLE PREDICATE**, because the token shape alone cannot tell
+	// `c.increment()` from `Point.create()` — they are identical. What separates them is that one
+	// base is a VALUE and the other is a TYPE NAME, and only the scope knows which.
+	//
+	// Asked at an ABSOLUTE index by `parseStatement` and at the cursor by
+	// `parseDottedPrimary`/`parseSelfPrimary`, so the statement and expression positions cannot come
+	// to disagree about what a method call looks like — which they would, since a method call is
+	// legal in both and only one of them may discard the result.
+	//
+	// ⚠ A STATIC call in statement position stays unsupported, and that is deliberate rather than an
+	// oversight of this predicate: `Point.create()` on a line of its own discards a value, and for a
+	// factory that value is a box nothing would then free.
+	function methodCallsAt(index TokenIndex) returns bool
+		let baseKind = self.kindAt(index)
+		if baseKind != TokenKind.identifier and baseKind != TokenKind.self 'notABase'
+			return false
+		end 'notABase'
+		if self.kindAt(index + 1) != TokenKind.dot or self.kindAt(index + 2) != TokenKind.identifier or self.kindAt(index + 3) != TokenKind.leftParen 'notADottedCall'
+			return false
+		end 'notADottedCall'
+		return self.scope.contains(self.baseBindingName(self.tokenAt(index)))
+	end 'methodCallsAt'
 
 	// The kind of the token ONE past the cursor. The parser's two-token lookahead:
 	// distinguishing a reassignment (`ident =`) from a bare identifier statement (`ident …`)
