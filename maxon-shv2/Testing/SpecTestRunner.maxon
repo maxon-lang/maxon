@@ -515,7 +515,7 @@ function checkTestFragment(fragmentDir FilePath, test SpecTest, compile ProcessC
 	// its IR — a pinned ```stderr is an assertion about the RUN, checked there, and adding
 	// it here would move every golden for nothing.
 	let content = match test.expectation 'e'
-		run(expected, _, _) gives buildExitCodeFragment(test, expected: expected, irPath: irPath)
+		run(expected, _, _, _) gives buildExitCodeFragment(test, expected: expected, irPath: irPath)
 		compilerError gives buildErrorFragment(test, compile: compile, staged: staged)
 	end 'e'
 
@@ -608,7 +608,7 @@ end 'buildErrorFragment'
 
 function checkExpectation(test SpecTest, specName String, compile ProcessCapture, staged StagedTest, exePath FilePath) returns TestOutcome
 	return match test.expectation 'e'
-		run(expected, stderr, requiredData) gives checkRun(expected, stderr: stderr, requiredData: requiredData, compile: compile, exePath: exePath)
+		run(expected, stderr, stdout, requiredData) gives checkRun(expected, stderr: stderr, stdout: stdout, requiredData: requiredData, compile: compile, exePath: exePath)
 		compilerError(text) gives checkCompilerError(text, specName: specName, testName: test.name, compile: compile, staged: staged)
 	end 'e'
 end 'checkExpectation'
@@ -640,10 +640,10 @@ function checkCompilerError(expectedText String, specName String, testName Strin
 	return TestOutcome.fail("compiler-error mismatch\n    expected: {expected}\n    actual:   {actual}")
 end 'checkCompilerError'
 
-// A RUN test (an ```exitcode block, plus the ```stderr block that may accompany it): the
-// compile MUST succeed, then the produced exe is spawned and BOTH halves of the
-// expectation are checked against that one execution — its exit code, and what it printed.
-function checkRun(expected ExitCodeValue, stderr SpecStderr, requiredData SpecRequiredData, compile ProcessCapture, exePath FilePath) returns TestOutcome
+// A RUN test (an ```exitcode block, plus the ```stderr / ```stdout blocks that may accompany it): the
+// compile MUST succeed, then the produced exe is spawned and EVERY half of the expectation is checked
+// against that one execution — its exit code, what it wrote to stderr, and what it wrote to stdout.
+function checkRun(expected ExitCodeValue, stderr SpecStderr, stdout SpecStdout, requiredData SpecRequiredData, compile ProcessCapture, exePath FilePath) returns TestOutcome
 	if compile.exitCode != 0 'compileFailed'
 		return TestOutcome.fail("compilation failed (exit {compile.exitCode}): {compile.stderr.trim()}")
 	end 'compileFailed'
@@ -666,6 +666,14 @@ function checkRun(expected ExitCodeValue, stderr SpecStderr, requiredData SpecRe
 	if run.exitCode != expected 'exitMismatch'
 		return TestOutcome.fail("exit code mismatch: expected {expected}, got {run.exitCode}")
 	end 'exitMismatch'
+
+	// Both streams are checked against the ONE execution. stdout first (it is what a `print` test
+	// exists to pin); on a pass, stderr is checked and its outcome returned.
+	let stdoutOutcome = checkRunStdout(stdout, actual: run.stdout)
+	match stdoutOutcome 'stdout'
+		pass then break 'stdout'
+		fail then return stdoutOutcome
+	end 'stdout'
 
 	return checkRunStderr(stderr, actual: run.stderr)
 end 'checkRun'
@@ -732,26 +740,57 @@ end 'compareDataSection'
 function checkRunStderr(stderr SpecStderr, actual String) returns TestOutcome
 	let cleaned = stripFaultRipSuffix(actual).trim()
 	return match stderr 'pin'
-		unpinned gives checkStderrSilent(cleaned)
-		pinned(text) gives checkStderrMatches(text.trim(), actual: cleaned)
+		unpinned gives checkStreamSilent(cleaned, streamName: StderrStreamName)
+		pinned(text) gives checkStreamMatches(text.trim(), actual: cleaned, streamName: StderrStreamName)
 	end 'pin'
 end 'checkRunStderr'
 
-// A program whose spec pins no stderr must print none.
-function checkStderrSilent(actual String) returns TestOutcome
+// The stdout half of a run expectation (P1.2 wave A — `print`) — `checkRunStderr`'s exact twin, minus
+// the fault-rip stripping (that tail is a stderr panic artifact; stdout carries none), so it shares
+// the same `checkStreamSilent`/`checkStreamMatches` rather than a second copy of them.
+//
+// ⚠ **BOTH SIDES ARE `.trim()`ED, which is what makes the ```stdout newline handling correct.** A
+// program that `print`s `hello` writes `hello` with NO trailing newline; the ```stdout block's content
+// is the single line `hello` (a fence strips its own trailing newline). Trimming both compares `hello`
+// to `hello`. A program that `print`s `1\n` writes `1` then a newline; the block content is the line
+// `1`; trimming both compares `1` to `1`. So a `print("x")` and a `print("x\n")` case both pass their
+// block, and the newline the source chose is not something the golden has to spell — the SAME rule
+// `checkRunStderr` already applies to a panic message.
+//
+// The `unpinned` arm is NOT "ignore stdout": it asserts the program printed NOTHING, which is what a
+// non-`print` program does. Every pre-P1.2 program printed nothing to stdout, so this holds the whole
+// suite to it — an accidental stray write becomes a FAILURE rather than an invisible one.
+function checkRunStdout(stdout SpecStdout, actual String) returns TestOutcome
+	let cleaned = actual.trim()
+	return match stdout 'pin'
+		unpinned gives checkStreamSilent(cleaned, streamName: StdoutStreamName)
+		pinned(text) gives checkStreamMatches(text.trim(), actual: cleaned, streamName: StdoutStreamName)
+	end 'pin'
+end 'checkRunStdout'
+
+// The two output streams a run expectation can pin — named so the shared stream checkers below phrase
+// their diagnostic for the right one without either checker knowing which stream it serves.
+let StderrStreamName = "stderr"
+let StdoutStreamName = "stdout"
+
+// A program whose spec pins no `streamName` output must print none. Shared by stderr and stdout: the
+// rule ("declining to mention a stream asserts it is empty") is identical, and only the stream's NAME
+// in the message differs.
+function checkStreamSilent(actual String, streamName String) returns TestOutcome
 	if actual.isEmpty() 'silent'
 		return TestOutcome.pass
 	end 'silent'
-	return TestOutcome.fail("unexpected stderr output:\n{actual}")
-end 'checkStderrSilent'
+	return TestOutcome.fail("unexpected {streamName} output:\n{actual}")
+end 'checkStreamSilent'
 
-// A program whose spec pins stderr must print exactly it.
-function checkStderrMatches(expected String, actual String) returns TestOutcome
+// A program whose spec pins `streamName` output must print exactly it. Shared for the same reason as
+// `checkStreamSilent`.
+function checkStreamMatches(expected String, actual String, streamName String) returns TestOutcome
 	if actual == expected 'matched'
 		return TestOutcome.pass
 	end 'matched'
-	return TestOutcome.fail("stderr mismatch\n    expected: {expected}\n    actual:   {actual}")
-end 'checkStderrMatches'
+	return TestOutcome.fail("{streamName} mismatch\n    expected: {expected}\n    actual:   {actual}")
+end 'checkStreamMatches'
 
 // Drop the ` at rip=0xHEX diag_base=0xHEX` tail a CPU-fault panic line carries.
 //

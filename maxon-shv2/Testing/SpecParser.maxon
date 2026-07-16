@@ -102,6 +102,17 @@ let CompilerErrorFence = "```maxoncstderr"
 // thing that is true until someone edits a literal.)
 let RuntimeStderrFence = "```stderr"
 
+// The RUN's stdout — what the COMPILED PROGRAM printed to standard output (P1.2 wave A — `print`). A
+// separate fence from `RuntimeStderrFence` for the same reason that one is separate from
+// `CompilerErrorFence`: it pins a DIFFERENT stream. Until this rung shv2 could `print` nothing, so a
+// ```stdout block was silently walked over — a false green the moment `print` landed.
+//
+// Order-INDEPENDENT of the other five fences: "```stdout" is neither a prefix nor an extension of any
+// of them ("```stderr" first differs at the `o`/`e`), so no arm can swallow it and it can swallow none.
+// (Checked explicitly rather than assumed, because fence order is exactly what breaks when a literal
+// is edited.)
+let StdoutFence = "```stdout"
+
 // ⭐ THE `.data` SECTION'S BYTES, as typed values — `i64 42` / `i8 1` / `f64 3.14`, one per line.
 // The gate on a top-level `var`'s STORAGE: not what the compiler thinks it laid out, but what the
 // linked binary actually contains, read back out of the PE (`SpecTestRunner.checkRequiredData`).
@@ -158,6 +169,15 @@ export union SpecStderr
 	pinned(text String)
 end 'SpecStderr'
 
+// What a spec pins about the RUN's stdout — `SpecStderr`'s exact shape, and a union for the identical
+// reason: "this spec says nothing about stdout" and "this spec says stdout is EMPTY" are different
+// claims, and an empty String cannot tell them apart. `unpinned` is NOT "ignore stdout" — it asserts
+// the program printed nothing (see `checkRunStdout`), which is what a non-`print` program should do.
+export union SpecStdout
+	unpinned
+	pinned(text String)
+end 'SpecStdout'
+
 // What a spec pins about the emitted `.data` section — `SpecStderr`'s exact shape, and a union for
 // the identical reason: "this spec says nothing about `.data`" and "this spec says `.data` is
 // EMPTY" are different claims, and an empty String cannot tell them apart.
@@ -171,17 +191,18 @@ end 'SpecRequiredData'
 // program RAN, OR the compiler rejected the source with `text` (a ```maxoncstderr
 // block) — with no sentinel "unset" state.
 //
-// The `run` arm carries ALL THREE halves of a run expectation, because none of them replaces an
-// ```exitcode block — each ACCOMPANIES one. `specs/safety.md` asserts that `100 / zero` exits 1 AND
-// prints a panic; `specs/static-variables.md` asserts that `data-section-i64-8byte` exits 0 AND
-// lays down `i64 42`. Each is one indivisible claim about one build-and-run. Modelling stderr or
-// requiredData as parallel arms would let a test assert an exit code or a layout but never both,
-// which is precisely what those six cases do assert. The C# reference says the same thing with
-// independent nullable fields (`SpecParser.cs:171` — a success expectation has optional
-// ExitCode/Stdout/Stderr/RequiredData, mutually exclusive with a compile-error expectation); this
-// is that shape with the "unset" states the reference leaves as `null` made unrepresentable.
+// The `run` arm carries EVERY half of a run expectation (stderr, stdout, requiredData), because none
+// of them replaces an ```exitcode block — each ACCOMPANIES one. `specs/safety.md` asserts that
+// `100 / zero` exits 1 AND prints a panic to stderr; `specs/static-variables.md` asserts that
+// `data-section-i64-8byte` exits 0 AND lays down `i64 42`; `specs/string-type.md` asserts that
+// `print-literal` exits 0 AND writes `Hello, World!` to stdout. Each is one indivisible claim about
+// one build-and-run. Modelling any of them as a parallel arm would let a test assert an exit code or a
+// stream but never both, which is precisely what those cases do assert. The C# reference says the same
+// thing with independent nullable fields (`SpecParser.cs:171` — a success expectation has optional
+// ExitCode/Stdout/Stderr/RequiredData, mutually exclusive with a compile-error expectation); this is
+// that shape with the "unset" states the reference leaves as `null` made unrepresentable.
 export union SpecExpectation
-	run(exitCode ExitCodeValue, stderr SpecStderr, requiredData SpecRequiredData)
+	run(exitCode ExitCodeValue, stderr SpecStderr, stdout SpecStdout, requiredData SpecRequiredData)
 	compilerError(text String)
 end 'SpecExpectation'
 
@@ -417,6 +438,7 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 	var exitCode = 0 as ExitCodeValue
 	var haveExitCode = false
 	var stderr = SpecStderr.unpinned
+	var stdout = SpecStdout.unpinned
 	var requiredData = SpecRequiredData.unpinned
 	var i = markerIndex + 1
 
@@ -451,6 +473,13 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 			i = block.nextIndex
 			continue
 		end 'runtimeStderr'
+
+		if line.startsWith(StdoutFence) 'runtimeStdout'
+			let block = readFence(lines, openIndex: i)
+			stdout = SpecStdout.pinned(block.text.trim())
+			i = block.nextIndex
+			continue
+		end 'runtimeStdout'
 
 		if line.startsWith(RequiredDataFence) 'requiredDataBlock'
 			let block = readFence(lines, openIndex: i)
@@ -500,7 +529,7 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 	// An ```exitcode block, plus whatever ```stderr accompanied it, is ONE claim about ONE
 	// execution.
 	if haveExitCode 'ran'
-		tests.push(SpecTest.create(name, source: source, expectation: SpecExpectation.run(exitCode, stderr: stderr, requiredData: requiredData)))
+		tests.push(SpecTest.create(name, source: source, expectation: SpecExpectation.run(exitCode, stderr: stderr, stdout: stdout, requiredData: requiredData)))
 	end 'ran'
 
 	return i
