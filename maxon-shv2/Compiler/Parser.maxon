@@ -3534,11 +3534,19 @@ export type Parser
 		while i > 0 'eachOwned'
 			i = i - 1
 			let binding = try self.ownedBindings.get(i) otherwise panic("emitScopeDrops: ownedBindings.get OOB at {i} — the list is only appended to and drained at a block's end")
-			// `void`, because `__mm_decref` returns nothing — the tag `ValueTypeTag.void` exists for
-			// exactly this, a ValueId the op shape demands and no rule may ever be asked about.
-			_ = self.emitRuntimeCall(MmDecrefName, args: singletonArgs(binding.boundValue), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(anchor))
+			self.emitDecref(binding.boundValue, range: SourceRange.ofToken(anchor))
 		end 'eachOwned'
 	end 'emitScopeDrops'
+
+	// Emit a single `__mm_decref` — the one shape a dropped owned heap value releases through, shared by
+	// every drop site: `emitScopeDrops` (a binding at scope exit), `drainPendingTemps` (an unconsumed
+	// temporary at statement end), and `emitStringInterp` (its consumed scratch buffers). One door, so the
+	// decref's op shape lives in ONE place and cannot drift across the three callers. The result is `void`
+	// because `__mm_decref` returns nothing — the tag `ValueTypeTag.void` exists for exactly this, a
+	// ValueId the op shape demands and no rule may ever be asked about.
+	function emitDecref(value ValueId, range SourceRange)
+		_ = self.emitRuntimeCall(MmDecrefName, args: singletonArgs(value), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+	end 'emitDecref'
 
 	// ⭐ **CALL AN EMITTED RUNTIME ENTRY POINT** (`__mm_alloc`, `__mm_decref`) — the door the parser
 	// reaches the heap through, and the only one.
@@ -3607,7 +3615,7 @@ export type Parser
 		while i > 0 'eachTemp'
 			i = i - 1
 			let temp = try self.pendingTempDrops.get(i) otherwise panic("drainPendingTemps: pendingTempDrops.get OOB at {i} — the list is only appended to and drained here")
-			_ = self.emitRuntimeCall(MmDecrefName, args: singletonArgs(temp), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(anchor))
+			self.emitDecref(temp, range: SourceRange.ofToken(anchor))
 		end 'eachTemp'
 		self.pendingTempDrops = ValueIdArray.create()
 	end 'drainPendingTemps'
@@ -6225,7 +6233,7 @@ export type Parser
 		// free, so the leak counter stays balanced — the same door `emitScopeDrops` drops through.
 		for i in 0 upto scratchIds.count() 'freeScratch'
 			let scratch = try scratchIds.get(i) otherwise panic("emitStringInterp: scratchIds.get OOB at {i}")
-			_ = self.emitRuntimeCall(MmDecrefName, args: singletonArgs(scratch), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+			self.emitDecref(scratch, range: range)
 		end 'freeScratch'
 
 		return result
