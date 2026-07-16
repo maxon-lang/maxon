@@ -92,7 +92,7 @@ end 'main'
 ```Stdout:x64-windows
 C:\test.txt
 ```
-```Stdout:wasm32-wasi
+```stdout
 C:/test.txt
 ```
 
@@ -233,7 +233,7 @@ end 'main'
 ```Stdout:x64-windows
 C:\Users
 ```
-```Stdout:wasm32-wasi
+```stdout
 C:/Users
 ```
 
@@ -252,7 +252,7 @@ end 'main'
 ```Stdout:x64-windows
 C:\Users
 ```
-```Stdout:wasm32-wasi
+```stdout
 C:/Users
 ```
 
@@ -289,7 +289,7 @@ end 'main'
 ```Stdout:x64-windows
 C:\Users\test
 ```
-```Stdout:wasm32-wasi
+```stdout
 C:/Users/test
 ```
 
@@ -308,7 +308,7 @@ end 'main'
 ```Stdout:x64-windows
 C:\Users\test
 ```
-```Stdout:wasm32-wasi
+```stdout
 C:/Users/test
 ```
 
@@ -327,7 +327,7 @@ end 'main'
 ```Stdout:x64-windows
 C:\Users\docs\readme.md
 ```
-```Stdout:wasm32-wasi
+```stdout
 C:/Users/docs/readme.md
 ```
 
@@ -429,7 +429,7 @@ end 'main'
 ```Stdout:x64-windows
 C:\Users\file.md
 ```
-```Stdout:wasm32-wasi
+```stdout
 C:/Users/file.md
 ```
 
@@ -448,7 +448,7 @@ end 'main'
 ```Stdout:x64-windows
 C:\Users\test
 ```
-```Stdout:wasm32-wasi
+```stdout
 C:/Users/test
 ```
 
@@ -533,7 +533,7 @@ end 'main'
 ```Stdout:x64-windows
 \
 ```
-```Stdout:wasm32-wasi
+```stdout
 /
 ```
 
@@ -553,7 +553,7 @@ end 'main'
 ```Stdout:x64-windows
 C:\Users\docs
 ```
-```Stdout:wasm32-wasi
+```stdout
 C:/Users/docs
 ```
 
@@ -573,7 +573,7 @@ end 'main'
 ```Stdout:x64-windows
 C:\Users\file.txt
 ```
-```Stdout:wasm32-wasi
+```stdout
 C:/Other/C:/Users/file.txt
 ```
 
@@ -608,7 +608,7 @@ end 'main'
 ```Stdout:x64-windows
 C:\Users\docs
 ```
-```Stdout:wasm32-wasi
+```stdout
 C:/Users/docs
 ```
 
@@ -660,7 +660,7 @@ end 'main'
 ```Stdout:x64-windows
 C:\valid\path.txt
 ```
-```Stdout:wasm32-wasi
+```stdout
 C:/valid/path.txt
 ```
 
@@ -682,7 +682,7 @@ end 'main'
 ```Stdout:x64-windows
 \tmp\test.txt
 ```
-```Stdout:wasm32-wasi
+```stdout
 /tmp/test.txt
 ```
 
@@ -700,7 +700,7 @@ end 'main'
 ```Stdout:x64-windows
 \tmp\test.txt
 ```
-```Stdout:wasm32-wasi
+```stdout
 /tmp/test.txt
 ```
 
@@ -718,7 +718,7 @@ end 'main'
 ```Stdout:x64-windows
 \home\user\file.txt
 ```
-```Stdout:wasm32-wasi
+```stdout
 /home/user/file.txt
 ```
 
@@ -753,7 +753,7 @@ end 'main'
 ```Stdout:x64-windows
 C:\Users\normal\path.txt
 ```
-```Stdout:wasm32-wasi
+```stdout
 C:/Users/normal/path.txt
 ```
 
@@ -773,7 +773,7 @@ end 'main'
 path='\'
 empty=false
 ```
-```Stdout:wasm32-wasi
+```stdout
 path='/'
 empty=false
 ```
