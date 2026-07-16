@@ -19,6 +19,15 @@ almost every one is a **wrong answer, not a crash**. Recorded 2026-07-14.
 > dead weight being maintained at cost.** (The error-code registry, #12, is the drifting kind; this is the
 > costing kind. Both are the same question.)
 >
+> **⭐ AND ITS CURE, learned 2026-07-16 (#23): WHEN TWO PLACES MUST AGREE, MAKE THEM CHECK EACH OTHER.**
+> The iatCall bug — `implicitDefs: 0` under a comment reading *"full call-barrier semantics"* — was fixed not
+> by an instrument but by **`assertCallClobberConsistent`**, which compares the op metadata against
+> `RegisterAllocator.callerSavedMask` on every `allocateRegisters` and panics naming the drift. **Verified by
+> trying to put the bug back: it no longer compiles anything.** The bug is **unrepresentable, not fixed**.
+> Three green gates had sat on it. ⇒ **A check between the two copies beats every gate, because a gate can be
+> pointed at the wrong program and a check cannot.** (`maxon error-codes check` is the same move — see #12,
+> which is closed, and which this file went on claiming was open.)
+>
 > **⚠ A STANDING RULE, from the same rung: a WHOLE-PROGRAM query placed UNDER a per-file one is asked
 > ONCE PER FILE.** Anything O(files) inside it is therefore **O(files²)**. Two quadratics hid behind
 > exactly that, and were found only because a new query made the scale-test *delta* grow **x3.4 per rung
@@ -227,8 +236,37 @@ probe. **This is `22f534e78`'s lesson ("a gate that knows it is vacuous must not
 a gate that does NOT know it is vacuous is worse. When a gate asserts a property, ask what edit would break
 it — and make that edit.**
 
-### 4d. ⚠ THE SCALE CORPUS IS SYSTEMATICALLY BLIND TO THE FEATURE JUST LANDED — **THIRD instance**
-`scale-test` reported P1.0d.5a's cost as `2 × files + 1`, exact on all six rungs. **It measured the feature
+### ~~4d. ⚠ THE SCALE CORPUS IS SYSTEMATICALLY BLIND TO THE FEATURE JUST LANDED — **THIRD instance**~~ ✅ **CLOSED 2026-07-16** (`74ea57d1f`, `726a606f1`)
+
+> **FIVE KNOBS, and the four blind rungs are now on the ladder.** Measured by emitting the corpus and
+> counting, at rung1 (before → after): top-level `let` **0 → 64**, top-level `var` **0 → 64**, `type` decls
+> **0 → 20**, `Self{}` **0 → 20**, `.create()` **0 → 80**, integer `/` **0 → 64**, `mod` **0 → 64**. Every
+> one DOUBLES per rung. `globalConsts` · `globalVars` · `structTypes` · `structAllocs` · `intDivide`.
+> **No compiler code changed** — the diff is `ScaleCorpus.maxon` + one log row, and every rung's
+> `allocsDelta`/`bytesDelta` read **0** against a re-run, which is the proof.
+>
+> ⭐ **THE FIND, and it generalises past this rung: the corpus was ALREADY FULL OF `/` — and every one was a
+> FLOAT `/`.** Float `/` is a *different Std op* (`binOp(div)`, no fixed registers) from integer `/`
+> (`StdOp.div`, the RAX/RDX clobber). **Counting the OPERATOR said "covered"; only counting its TYPE found
+> the hole.** A grep for a construct is not a measurement of the construct.
+>
+> ⭐⭐ **AND THE MANIFEST LIED BY OMISSION — the half of this rung that matters.** It printed `let / var`
+> under **CONSTRUCTS GENERATED**, meaning the *body-local* kind, and named the *top-level* kind under
+> **NEITHER** heading. Two rungs and 36 spec tests read as covered by a reader doing exactly what the
+> manifest asks. It is now held to a stated rule: **every construct in the subset appears under EXACTLY ONE
+> heading, and a PARTLY-generated construct names which part.** Structs are generated — and their two
+> interior blind spots (**field WRITES**, P1.1a wave 2; **structs across a CALL**, P1.4) are named *in the
+> struct entry*, where a reader looking up structs will actually find them. *An undeclared gap reads as
+> coverage; that is this file's oldest lesson and the instrument now obeys it.*
+>
+> ⚠ **SCOPE, stated so it is not mistaken for more:** these knobs measure **the COMPILER's cost of compiling
+> those constructs**. `scale-test` compiles each rung and never runs it (`ScaleTestRunner.compileRung`
+> spawns `build`, reads the metrics TSV, returns), so the **emitted program's RUNTIME behaviour is measured
+> by nothing here** — the implementer hit this independently (*"a struct in a block exits 101 … a stated P1.4
+> gap this instrument never observes because it COMPILES these programs and never RUNS them"*). Not a defect
+> of this rung; a boundary worth knowing before the next reader expects more of the columns than they hold.
+
+**~~`scale-test` reported P1.0d.5a's cost as `2 × files + 1`, exact on all six rungs.~~** **It measured the feature
 INERT: the corpus contains NO top-level `let` at all** — verified by emitting it (**0** column-0 `let`, 56
 body-local) — so the arena is empty on every rung and the DFS, the lookup and `mixConstant` never run.
 `2 × files + 1` is *the signature of an empty arena*: it proves the per-file SWEEP is linear and says
@@ -722,7 +760,23 @@ The bootstrap check runs at **both** parse sites that can meet a shift — the e
 `EvalConstShift`, where `let MASK = 1 shl 100` was silently evaluating to `1 shl 36` through C#'s own
 `<<`. That second site was not in the original report and is the same defect one tier up.
 
-### 12. ⚠ NEW — the ERROR-CODE REGISTRY is written down TWICE, and two agents collided on E3099
+### ~~12. ⚠ NEW — the ERROR-CODE REGISTRY is written down TWICE, and two agents collided on E3099~~ ✅ **FIXED — and this entry was STALE, which is its own instance of the disease**
+
+> **`docs/error-codes.txt` is now the single source of truth**, with `maxon error-codes generate` producing
+> four files and `maxon error-codes check` **failing the build** on a duplicate number, a duplicate name, a
+> drifted generated file, or a **dead claim** — and it runs wherever a generated file is USED, not only where
+> it is produced. See `.claude/CLAUDE.md` → "Error codes — ONE registry, ONE parser". Verified 2026-07-16:
+> `ErrorCode.cs` is extension methods with **zero** numeric assignments, and
+> `maxon-selfhosted/Compiler/ErrorCode.maxon`'s only four-digit numbers are **band boundaries**
+> (`>= 3000 and < 4000`). Every build in this session echoed `error-codes: OK - 130 codes (16 reserved),
+> registry hash 8feb6d75fcf1e5fe, 4 generated files up to date`.
+>
+> ⚠ **The lesson is about THIS FILE.** A backlog whose stated through-line is *ONE FACT WRITTEN DOWN TWICE*
+> was itself carrying a fixed entry that `CLAUDE.md` documents as fixed — **the fact written twice, and the
+> copy nobody executed went stale.** Exactly what #4g's dead `classifyGlobalLabel` is, one file over. **An
+> entry here is not evidence; check it before you act on it.**
+
+**~~The original report:~~**
 `maxon-sharp/Compiler/ErrorCode.cs` and `maxon-selfhosted/Compiler/ErrorCode.maxon` are **two registries
 for one number space**, and nothing makes them agree. `mcp__maxon-dev__lookup_error_code` parses only the
 **`.maxon`** one — so a code added to the C# side alone is **undiscoverable** (E3098 was exactly that).
@@ -937,9 +991,77 @@ feature just landed."* At P1.0d.4 that hole hid a compiler crash (`var f = 0.0` 
 before adding a feature.** The fix is not subtle — the corpus generator must emit the constructs the rung
 just landed.
 
+> ### ✅ **THE CORPUS HALF IS CLOSED — 2026-07-16, and it was done BEFORE the next feature, as this entry asked.** See **#4d**: five knobs, the four blind rungs measured onto the ladder, and the manifest that called them covered rewritten. **Structs, the heap, globals and the idiv path are all generated now.**
+>
+> ⚠⚠ **BUT DO NOT READ THAT AS "THIS BUG WOULD NOW BE CAUGHT" — IT WOULD NOT, AND THE REASON IS WORTH MORE
+> THAN THE KNOB.** Two facts, each verified rather than reasoned:
+> - **`scale-test` COMPILES each rung and never RUNS it.** `ScaleTestRunner.compileRung` spawns `build`,
+>   reads the metrics TSV, and returns; `rung0.out` is written and never executed. So the columns are about
+>   **compiling**, and `__slab_alloc` — the runtime shv2 *emits* — never executes during a scale-test at all.
+>   A struct knob does not change that.
+> - **Even a runtime `__mm_alloc_count` column would have missed it.** Under the bug, 2,000 Points is
+>   **2,000 `__mm_alloc` calls either way**. What went 133 MB → 412 KB was *pages taken from the OS*, and the
+>   runtime's only globals are `__slab_cursor`/`__slab_end`/`__mm_alloc_count` — **there is no counter for
+>   that.**
+>
+> ⇒ **The sentence above — *"the instrument was right and pointed at the wrong program"* — is a STORY THAT
+> FITS, written one entry away from #22's *"attribution is not a story that fits, it is a measurement."*
+> Left standing, with its correction beside it, because the error is the lesson.**
+>
+> ⭐ **WHAT ACTUALLY CLOSED THIS CLASS — and it is not an instrument.** The fix (`ac512711a`) did not merely
+> set the mask; it added **`assertCallClobberConsistent`**, which compares `TargetDialect.iatCall.implicitDefs`
+> against `RegisterAllocator.callerSavedMask` on **every `allocateRegisters` call** and panics naming the
+> drift. **Verified by trying to reintroduce the bug: `implicitDefs: 0` no longer compiles anything** —
+> *"iatCall clobber mask 0 != caller-saved pool 4294905799 — TargetDialect.iatCall's implicitDefs and
+> RegisterAllocator.callerSavedMask drifted apart."* **The bug is now unrepresentable, not merely fixed.**
+> ⇒ **For ONE FACT WRITTEN TWICE, the fix is to make the two copies CHECK each other. That beats every
+> instrument, because it cannot be pointed at the wrong program.** The gap that remains is real — shv2's
+> emitted runtime is measured by nothing, and P1.2's `String` and P1.5's GT scheduler live there — but it is
+> a **runtime instrument** that would close it, and it needs a reporting channel that does not exist
+> (a corpus program has no `print`, and an exit code is 8-bit). **That is its own rung, and it should not be
+> smuggled into a corpus one.**
+
 ⚠ **And note WHICH instrument would have caught it**: `scale-test` measures **memory**, exactly, bit-for-bit
 — a 1000× allocation blow-up is the *one thing it is built to see*. It missed it purely because its corpus
 does not contain a struct. **The instrument was right and pointed at the wrong program.**
+
+### 24. ⚠ NEW 2026-07-16 — four findings from the corpus rung, none fixed, each named where it lives
+
+**Found by extending the instrument (#4d). None is a corpus bug; all four are in code the rung did not own.**
+
+- ⭐ **`SplitLiveRanges` is O(blocks × K²)**, K = simultaneously-live **owned** values in one block — and the
+  two variables were separated by MEASUREMENT: K=8 with blocks doubling reads **x2.00**; K doubling with
+  blocks fixed reads **x6.48 x6.07 x4.39 x4.03** → x4.00. **It is NOT a curve in program size.** A struct
+  binding is *owned*, so it does not die at its last read — it sits on `ownedBindings` until the `return`,
+  where `emitScopeDrops` (`Parser.maxon:2524`) decrefs every one. **K measured across all 2,445 functions in
+  `maxon-shv2/` + `stdlib/`: max = 8, mean 0.16.** Σ_f O(K_f²) is therefore linear in program size, so this
+  is **DEBT, not a bug**. ⚠ **The re-measure trigger is an INLINER** (inlining N callees each holding an
+  owned local into one block is what makes K scale with program size) — **not P1.4 and not P1.7**, which the
+  first draft claimed: P1.4 is bounded by a **compiler cap** (`Parser.maxon:50`, six parameters) and an array
+  is **one** owned value. shv2 has no inliner and **no DCE** (`PassPipeline.maxon:135`).
+- **`installMmRuntime` is billed to NO PHASE.** Called at `Compiler.maxon:180`, between `pipeline.run()` and
+  `buildBackend`, **outside every `PhaseProbe`** ⇒ **phases do not sum to total.** Isolated: `unattributed` =
+  **746 allocations at every rung of a 16× ladder** — exactly constant; no-heap 432 vs heap 748 ⇒ the
+  **316-alloc delta IS `installMmRuntime`**. Constant in time too (0.18–0.25 ms, share *falling* 2.9% → 0.3%),
+  so it is **not** the "dominant cost in the wrong bucket" class that has bitten this project four times — but
+  it is the same shape, and `--metrics` already emits an `unattributed` row that `scale-test` does not surface.
+- ⚠ **`mainSource` re-derives 13 of 15 driver names, and an omission is SILENT.** `writeManyFunctions`/
+  `funcNames` exists *precisely* so the enumeration is not written twice — its own header says a second copy
+  could *"skip one (an uncalled function a future DCE deletes, silently flattening the knob)"*. **That fix was
+  applied to exactly ONE knob.** All 15 are correctly wired today and **there is no DCE**, so there is no live
+  defect and no trigger — but the structural fix (each knob's emitter registers its own driver name) is a
+  15-site restructure of the file's spine and wants its own commit.
+- **`docs/error-codes.txt`'s E1006 doc text is WRONG.** It says a literal brace *"must be doubled"*; the lexer
+  says `use '\{'`, the spec says `\{`, and it was **verified both ways: `{{` fails with E2004, `\{` works.**
+  One fact written down twice, disagreeing — in the registry that exists to be the single copy.
+
+> ⭐ **A PROCESS NOTE WORTH MORE THAN ANY OF THEM: the independent REVIEW caught the independent OPTIMIZER.**
+> The optimizer priced the splitter's ceiling at *"K=65 ⇒ 1.28 s in `stdlib/Internals.maxon:1274`"*. The
+> reviewer looked the citation up: line 1274 is `function __slab_free(ptr MachineWord)` — **nothing to do with
+> live-value counts** — and no K=65 bound exists anywhere in the tree. **It refused to record the number**:
+> *"replacing a wrong claim with an unverifiable one re-mints the exact defect I was sent to remove."*
+> **That is why the review is independent and why it runs LAST.** A plausible number with a citation attached
+> is exactly what #22 warns of, and it very nearly went into the log.
 
 ### 22. ⚠⚠ `bin/maxon.exe` IS GITIGNORED AND NOTHING REBUILDS IT — **a baseline can measure a tree that does not exist**
 

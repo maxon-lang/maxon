@@ -119,6 +119,15 @@ was missing grouping, `true`/`false`, `not`/`and`/`or`, block scoping, void func
 > object. 133.74 MB for 2,000 Points → 412 KB fixed.**
 > ⚠⚠ **It never produced a wrong USER-VISIBLE answer — which is why `specs-shv2` 357/0, the worker-invariance
 > gate, AND `scale-test` were ALL GREEN OVER IT. Only reading the emitted machine code found it.**
+> ### ✅ **AND THE FIX MADE IT UNREPRESENTABLE — the part to COPY, not the mask** (verified 2026-07-16 by
+> trying to put the bug back: `implicitDefs: 0` now compiles **NOTHING**). `assertCallClobberConsistent`
+> compares the op metadata against `RegisterAllocator.callerSavedMask` on **every `allocateRegisters`** and
+> panics naming the drift. ⇒ **For ONE FACT WRITTEN TWICE, make the two copies CHECK EACH OTHER. That beats
+> every gate, because a gate can be pointed at the wrong program and a check cannot.**
+> *(The corpus blind spot the entry blamed is ALSO closed now — 2026-07-16, five knobs; structs, the heap,
+> globals and the idiv path are all generated. But it was **never what would have caught this**: `scale-test`
+> COMPILES each rung and never RUNS it, so shv2's **emitted** runtime is measured by nothing. See OPEN.md
+> #23 / #4d.)*
 > *(Also fixed: a void function falling off the end never dropped ⇒ **101 on a valid program** — the drop hung
 > only off `parseReturnStatement`; and a diagnostic hardcoded `float` under a comment calling it "the only tag
 > that can trip this rule" — **a theorem P1.0r falsified in the same commit, without touching the line it
