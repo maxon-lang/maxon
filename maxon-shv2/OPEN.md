@@ -1471,4 +1471,41 @@ are the knob nobody added.** The optimizer correctly did NOT touch the instrumen
 the cardinal sin — see #23's "an agent edited the instrument to stop it complaining"). ⇒ A corpus knob that
 emits a type with an instance method and calls it, so the next rung's method work is measurable rather than
 argued. Not urgent — the method path is O(1)/O(fields) by inspection — but it is the same recurring gap and
-it should be closed the same way, once, deliberately.
+it should be closed the same way, once, deliberately. **P1.1b Wave A's optimizer found the corpus is ALSO
+`match`-blind** (no knob emits `match`/`then`/`gives`) — the same gap, third instance. Fold a `match` knob
+in with the method one.
+
+### 31. ⚠ NEW 2026-07-16 (P1.1b Wave A) — **a cross-register-class match EXPRESSION is refused (E2015); the float rung must PROMOTE it instead**
+
+A match expression whose `gives` arms cross register files — an integer give and a float give feeding one
+result phi — **panicked the backend** (`X64Backend.emitRegRegMove:603`, "crosses register files") until Wave A
+guarded it. It is now refused with a positioned **E2015** (`Parser.finalizeMatchMerge`, pinned by
+`specs-shv2/match-expr-divergent-class.md`, both directions). **That is a deliberate DIVERGENCE from the
+oracle**, which UNIFIES such arms: it promotes the integer arms to float (`cvtsi2sd`) so the result is
+uniformly float, then the surrounding context decides (returning that float as `ExitCode` is a separate
+E3009).
+
+**Why refuse rather than promote now:** shv2 HAS the instruction (`promoteToFloat`, `Parser.maxon:4885`) and
+the lattice (`TypeRules.arithResultTag`), so the promotion is not blocked on missing machinery. It is blocked
+on **there being nothing to hold the result**: a promoted match yields a float VALUE, and a float has no
+nameable type in shv2 yet — `typealias F = float(…)` is itself E2015 ("a typealias over 'float' … arrives with
+the milestones that give them meaning"). So a float-result match could not be bound, returned, or passed. The
+promotion has **no consumer** — the `mintPhi` trap this project keeps re-learning. ⇒ **It arrives with the
+float type-system rung** (the one that makes `float` nameable). At that point, replace the E2015 refusal in
+`finalizeMatchMerge` with: unify the arms' result type through `arithResultTag` (any arm float ⇒ float), and
+promote each non-float arm's give value **in its own exit block, before its branch to merge** (the fiddly part
+— the exit blocks are terminated by the branch-to-merge loop, so the promote must be emitted before that loop
+runs, not at edge-recording time). Same-class arms (int+bool) need none of this and already match the oracle
+exactly (E3005 on a bool→int return, byte-for-byte).
+
+### 32. ⚠ NEW 2026-07-16 (P1.1b Wave A) — **the E2027 duplicate-pattern check is O(P²) in one match's arm count — DEBT, kept deliberately**
+
+`Parser.checkAndRecordDuplicate` linear-scans a `seenValues` list per known-const single-value pattern, so a
+single match with P integer-literal arms costs O(P²). **Kept, and the optimizer + review both agreed:** P is a
+single match's HAND-WRITTEN arm count (never bulk-generated), so whole-program cost is O(Σ Pₘ²) = linear for
+bounded arm counts, quadratic only in a degenerate single-giant-match. It matches the project's own precedent
+for parameter-duplicate detection (`byteArrayContains`, `Parser.maxon:558` — *"parameter lists are tiny… no
+membership set is worth its heap object"*); a `Set` would allocate a heap object per match to save a bounded
+scan, contradicting that precedent and adding a parse-phase allocation the instrument tracks. **Same class as
+`indexOfField`'s O(F²) (#28)** — real superlinear term, invisible dimension, correctly left. Revisit only if a
+real program ever writes a match with hundreds of literal arms (none does).
