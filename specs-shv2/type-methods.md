@@ -1,0 +1,281 @@
+---
+feature: type-methods
+status: experimental
+keywords: [type, method, function, self, Self, static, export]
+category: type-system
+---
+
+# Type Methods
+
+## Documentation
+
+Types can contain methods - functions that operate on type instances.
+
+### Instance Methods
+
+Instance methods automatically receive `self` as the current instance:
+
+```text
+type Counter
+  var count as int
+
+  function increment()
+    count = count + 1
+  end 'increment'
+
+  function get() returns int
+    return count
+  end 'get'
+end 'Counter'
+```
+
+Call methods using dot notation:
+```text
+var c = Counter{count: 0}
+c.increment()
+var value = c.get()
+```
+
+### Static Methods
+
+Static methods don't have access to `self`:
+
+```text
+type Math
+  static function square(x int) returns int
+    return x * x
+  end 'square'
+end 'Math'
+
+var result = Math.square(5)  // 25
+```
+
+### Export Modifier
+
+Use `export` to make methods visible outside the module:
+
+```text
+type PublicAPI
+  export function doSomething() returns int
+    return 42
+  end 'doSomething'
+end 'PublicAPI'
+```
+
+### Field Access in Methods
+
+Methods can access fields directly without `self.` prefix:
+
+```text
+type Point
+  var x as int
+  var y as int
+
+  function magnitude() returns int
+    return x * x + y * y
+  end 'magnitude'
+end 'Point'
+```
+
+## Tests
+
+<!-- test: type-method-basic -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+type Counter
+	var count as Integer
+
+	function increment()
+		count = count + 1
+	end 'increment'
+
+	function get() returns Integer
+		return count
+	end 'get'
+
+	static function create(count Integer) returns Self
+		return Self{count: count}
+	end 'create'
+end 'Counter'
+
+function main() returns ExitCode
+	var c = Counter.create(0)
+	c.increment()
+	return c.get()
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: type-method-with-params -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+type Adder
+	var total as Integer
+
+	function add(value Integer)
+		total = total + value
+	end 'add'
+
+	function getTotal() returns Integer
+		return total
+	end 'getTotal'
+
+	static function create(total Integer) returns Self
+		return Self{total: total}
+	end 'create'
+end 'Adder'
+
+function main() returns ExitCode
+	var a = Adder.create(0)
+	a.add(10)
+	a.add(32)
+	return a.getTotal()
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: type-method-returning-value -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+type Calculator
+	var value as Integer
+
+	function double() returns Integer
+		return value * 2
+	end 'double'
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Calculator'
+
+function main() returns ExitCode
+	let c = Calculator.create(21)
+	return c.double()
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: type-multiple-methods -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+type Counter
+	var count as Integer
+
+	function increment()
+		count = count + 1
+	end 'increment'
+
+	function decrement()
+		count = count - 1
+	end 'decrement'
+
+	function reset()
+		count = 0
+	end 'reset'
+
+	function get() returns Integer
+		return count
+	end 'get'
+
+	static function create(count Integer) returns Self
+		return Self{count: count}
+	end 'create'
+end 'Counter'
+
+function main() returns ExitCode
+	var c = Counter.create(10)
+	c.increment()
+	c.increment()
+	c.decrement()
+	return c.get()
+end 'main'
+```
+```exitcode
+11
+```
+
+<!-- test: type-method-chain -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+type Value
+	var n as Integer
+
+	function add(x Integer)
+		n = n + x
+	end 'add'
+
+	function get() returns Integer
+		return n
+	end 'get'
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Value'
+
+function main() returns ExitCode
+	var v = Value.create(0)
+	v.add(10)
+	v.add(20)
+	v.add(12)
+	return v.get()
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- disabled-test: method-call-on-call-result -->
+<!-- P1.1b enums+match (`match a.get().compare(…)`), AND a primitive extension method
+     (`.compare` on an Integer call-result receiver) — which is on NO rung of the ladder;
+     cf. OPEN.md #26's overloading gap. NOT blocked by instance methods. -->
+A method call whose receiver is the primitive result of a prior call
+(`a.get().compare(b.get())`). The receiver of `.compare` is the `Integer`
+returned by `get()`, not a variable — the parser must resolve the primitive
+type from the call result rather than rejecting it as a non-struct value.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+type Value
+	var n as Integer
+
+	function get() returns Integer
+		return n
+	end 'get'
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Value'
+
+function main() returns ExitCode
+	let a = Value.create(3)
+	let b = Value.create(5)
+	match a.get().compare(b.get()) 'check'
+		lessThan then return 0
+		equalTo then return 1
+		greaterThan then return 2
+	end 'check'
+end 'main'
+```
+```exitcode
+0
+```
