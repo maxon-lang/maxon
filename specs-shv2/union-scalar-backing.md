@@ -87,6 +87,33 @@ end 'main'
 ```
 
 
+<!-- test: error.unknown-union-case -->
+A match arm naming a case the union does not have is E3034, worded "union" — the
+reference compiler distinguishes a union from an enum here (`IsUnion ? "union" :
+"enum"`), unlike the always-"enum" declaration diagnostics.
+```maxon
+union Shape
+	circle
+	square
+end 'Shape'
+
+function classify(s Shape) returns ExitCode
+	match s 'm'
+		circle then return 1
+		square then return 2
+		triangle then return 3
+	end 'm'
+end 'classify'
+
+function main() returns ExitCode
+	return classify(Shape.circle)
+end 'main'
+```
+```maxoncstderr
+error E3034: specs/fragments/union-scalar-backing/error.unknown-union-case.test:11:3: unknown union case: 'triangle'
+```
+
+
 <!-- disabled-test: string-backed-union-name -->
 <!-- P1.2 String backing + .rawValue / .name accessors + print -->
 A string-backed union keeps an integer runtime tag but exposes the decoded

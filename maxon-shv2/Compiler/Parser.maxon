@@ -390,9 +390,12 @@ export union ParseError implements Error
 	// fail = 5.0`). Renders as **E3032**, positioned at the offending case. `detail` is the
 	// bootstrap's exact `expected <x>, got <y>` phrasing.
 	enumRawValueTypeMismatch(detail String, line LineNumber, column ColumnNumber)
-	// A `Color.red` literal, or a match arm, names a case the enum does not have. Renders as
-	// **E3034**, positioned at the case name.
-	enumUnknownCase(caseName String, line LineNumber, column ColumnNumber)
+	// A `Color.red` literal, or a match arm, names a case the enum/union does not have. Renders as
+	// **E3034**, positioned at the case name. `kindWord` ("enum"/"union") names the CONSTRUCT: the
+	// reference compiler distinguishes them here (`IsUnion ? "union" : "enum"` in 2-Parser.cs), so a
+	// bad case of a `union` reads "unknown union case", matching the bootstrap and shv2's own
+	// E2026/E2046 rather than hardcoding "enum" (which disagreed with both).
+	enumUnknownCase(kindWord String, caseName String, line LineNumber, column ColumnNumber)
 	// A match arm names a case in QUALIFIED form (`Color.red`). Renders as **E3075**, positioned at
 	// the type name — the scrutinee's enum is already known, so the bare name suffices.
 	matchQualifiedCaseName(bare String, qualified String, line LineNumber, column ColumnNumber)
@@ -4736,7 +4739,7 @@ export type Parser
 	function enumCaseIndexOrThrow(layout EnumLayout, nameTok Token, posTok Token) returns CaseIndex throws ParseError
 		let index = layout.indexOfCase(nameTok.value)
 		if index >= layout.caseCount() 'unknownCase'
-			throw ParseError.enumUnknownCase(String.from(nameTok.value), line: posTok.line, column: posTok.column)
+			throw ParseError.enumUnknownCase(layout.kindWord(), caseName: String.from(nameTok.value), line: posTok.line, column: posTok.column)
 		end 'unknownCase'
 		return index
 	end 'enumCaseIndexOrThrow'
