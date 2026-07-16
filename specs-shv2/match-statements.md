@@ -807,6 +807,20 @@ end 'main'
 error E2049: specs/fragments/match-statements/error.match-block-statement.test:5:10: block-opening statement 'if' is not allowed in a match arm; use a function call instead
 ```
 
+<!-- test: error.match-not-exhaustive -->
+```maxon
+function main() returns ExitCode
+	let x = 1
+	match x 'check'
+		1 then return 10
+		2 then return 20
+	end 'check'
+end 'main'
+```
+```maxoncstderr
+error E2026: specs/fragments/match-statements/error.match-not-exhaustive.test:7:2: match is not exhaustive: add a 'default' arm
+```
+
 ### Single-Statement `try` Forms in Match Arms
 
 A `match` arm body must be a single statement; the multi-line block-opening keywords `if`, `while`, `for`, `match` are rejected with E2049 (see above). All single-statement forms of `try` are permitted: bare propagation (`try call()`), and the four single-statement `otherwise` shapes (`panic`, `ignore`, `return/break/continue/throw`, default-value expression). The two multi-line block forms — `try 'label' ... end 'label'` and `try call() otherwise 'label' ... end 'label'` (with or without binding) — are rejected because they would allocate persistent error-flag slots in the enclosing scope and leak them on every error path through the match.

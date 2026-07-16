@@ -591,6 +591,20 @@ end 'main'
 error E2029: specs/fragments/match-simple/error.match-default-not-last.test:6:3: 'default' case must be the last case in match
 ```
 
+<!-- test: error.match-not-exhaustive -->
+```maxon
+function main() returns ExitCode
+	let x = 1
+	match x 'check'
+		1 then return 10
+		2 then return 20
+	end 'check'
+end 'main'
+```
+```maxoncstderr
+error E2026: specs/fragments/match-simple/error.match-not-exhaustive.test:7:2: match is not exhaustive: add a 'default' arm
+```
+
 <!-- disabled-test: match-arm-field-assignment -->
 <!-- enum scrutinee (Wave B) -->
 A match arm body may be a dotted field assignment (`state.flag = true`), not
