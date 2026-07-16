@@ -70,7 +70,8 @@ budgets**. Old "Stage 0" (tooling) is **CLOSED**. Old "Stage 4" (broaden) is **B
 ## Context
 
 `maxon-shv2` is the ground-up rewrite of `maxon-selfhosted` (v1, 191,487 lines). shv2 is at
-**21,038 lines**, with a working `spec-test` runner (**specs-shv2 281/0** as of 2026-07-15 — it was
+**44,671 lines** (measured 2026-07-16 — see "The honest sizing"), with a working `spec-test` runner
+(**specs-shv2 371/0** as of 2026-07-16 — it was
 126/0 across 19 files when this plan was written; Workstream S's on-demand ports are what grew it), a
 warm-rebuild determinism gate, the full scalar core, and a **linear** SSA-chordal register
 allocator. The bones are good — content-hash query spine, parse-staging, 3 IR tiers
@@ -89,7 +90,61 @@ was missing grouping, `true`/`false`, `not`/`and`/`or`, block scoping, void func
 > `__mm_alloc`/`__mm_decref`/`__mm_free` as a **builder-built `StdModule` through the ordinary backend** —
 > no IR text, no parser · `__mm_alloc_count` + **a leak gate that fires** · and the first heap value:
 > `type` · layout · `Self{}` · `static create` · field access. **`Point.create(3, y: 4)` ⇒ 7.**
-> **⇒ THE LIVE WORK IS NOW `P1.1a` wave 2** (struct mutability + field defaults), then `P1.1b` (enums + `match`).
+> ### ✅ **`P1.1a` WAVE 2 IS CLOSED (2026-07-16) — a struct field can be WRITTEN. `specs-shv2` 357 → 371/0.**
+> Field WRITES (`p.x = 30`) · instance + field MUTABILITY (both **E2013**, no new code) · field DEFAULTS
+> (`export var value = 0`, type inferred from the literal). **NO new IR op** — a field write is
+> `storeIndirect`, the exact mirror of the read `emitFieldLoad` already emitted.
+> **⇒ THE LIVE WORK IS NOW `P1.1a` wave 3** (see #25 below), then `P1.1b` (enums + `match`).
+>
+> **The rung was three deliberately-DROPPED facts acquiring their consumers**, and `readStructFieldInto`'s
+> own comment said so before it was written: *"`let` AND `var` ARE READ IDENTICALLY AND THE DISTINCTION IS
+> DROPPED… that is P1.1a wave 2… Recording the bit now would be a `StructLayout` column nothing reads."*
+> **E3086's user-visible message already promised the mechanism too** — *"and it has no default value"*.
+> ⇒ **The rule keeps paying: GREP FOR YOUR RUNG'S NAME FIRST.** Wave 1 left three notes and all three were right.
+>
+> **What it DECLINED to copy, and why the decline is the point.** v1 desugars each default into a synthetic
+> `__field_init_*` nullary function and splices `call + fieldStore(isInit: true)` in a post-TypeResolution
+> pass. **Its own comment gives the reason, and the reason does not hold here:** *"the parser is pure-record
+> and can't see the type's field list."* **shv2's parser CAN** — `queryProgramSignatures` is a whole-program
+> pass that runs before any body parses, which is why `requireAllFieldsInitialized` already reads it. So the
+> `method-before-field` ordering hazard that forces v1's whole architecture is **structurally absent**, and
+> the copy had no reason. Defaults fold at the declaration (type from the literal's TOKEN KIND — v1's
+> `inferShorthandFieldType` shape, no const-evaluator) and materialize in the `Self{}` loop that already
+> walks the layout. `isInit` was left behind for the same test: shv2's construction store is a different
+> code path from the assignment statement, so the flag would have had **no consumer**.
+>
+> ### 🔴 THE FIND: **`StdOpMeta.isPure` HAS ZERO READERS, and SIX places called it a live correctness constraint**
+> **The THIRD instance of "a gate reported PASS while structurally blind" (#4c, #23), and a SABOTAGE found it
+> again.** `loadIndirect` flipped to `isPure: true` — the exact edit six sites call a silent wrong answer —
+> and the suite reads **371/0**, including P1.0d.5b's own `global-load-not-hoisted`. **Nothing hoists**
+> (there is no LICM/CSE/inliner), so the property holds for a reason nobody had written down, while the
+> reason everybody HAD written down enforces nothing. **P1.0d.5b's row below said "pinned by a spec" — it was
+> not; that claim is now corrected in place.** `isPure` is KEPT (unlike #7's `setsFlags`, which was a *second*
+> home for a live fact — this is the SOLE declaration and its reader is scheduled), and **six of `StdOpMeta`'s
+> nine fields have no reader at all.** ⇒ **OPEN.md #27.**
+>
+> ### ⚠ AND THE RUNG WROTE ITS OWN SUBJECT TWICE — caught by the independent review, not the author
+> `if not binding.mutable → throw assignToImmutable` landed at **two** sites with nothing making them agree.
+> A rung *about* one-fact-written-twice committed it, in the fact it was adding. Now one
+> `requireMutableBinding`; `binding.mutable` is read at **exactly one site** — against the bootstrap's 3
+> readers / 4 message copies and v1's 6. **This is why the review is independent and why it runs LAST.**
+>
+> ### ⚠ KNOWN GAPS, named not hidden
+> - **`struct-field-default` stays `disabled-test:` and its reason is CORRECTED — it needs FUNCTION
+>   OVERLOADING** (two `Counter.create` arities ⇒ **E3006**), not defaults. **Overloading is on NO rung of
+>   this ladder** though the stdlib has overload sets (§487's "env-map overload"). ⇒ **OPEN.md #26**; it needs
+>   a number, and that is a PLAN decision. Field defaults are covered instead by `field-initialization.md`'s
+>   `all-defaults` / `literal-overrides-default` / `mixed-default-and-literal` — real corpus cases, all green.
+> - **`as Type = <non-literal>` is deferred and rejected LOUDLY (E2015 naming the gap).** It needs token
+>   capture + replay at each `Self{}` site and has **ZERO reachable consumers** — every corpus case wanting it
+>   also wants Array (P1.7), String (P1.2) or a struct-typed field. Building it now is P1.0r's error #2 again.
+>   *(⚠ The contract claimed the oracle rejects `= 2 + 3` outright. **FALSE, and measured by the implementer:**
+>   `as Integer = 2 + 3` ⇒ 5 and `as Integer = pick()` ⇒ 4. The grammar is ASYMMETRIC — un-annotated takes one
+>   literal, annotated takes any expression. The deferral survived; its stated reason did not.)*
+> - **The corpus cannot see this rung's cost dimension.** `structTypeDecl` emits exactly **two** fields per
+>   generated type while the ladder doubles the NUMBER of types, so `indexOfField`'s O(F²) lives in a
+>   dimension `scale-test` structurally cannot measure — F had to be measured against real source instead
+>   (**max 22, mean 4.14 over 166 declarations** ⇒ linear in program size; DEBT, not a bug). ⇒ **OPEN.md #28.**
 >
 > ⚠⚠ **READ THIS BEFORE THE NEXT RUNG — the rung was RE-SLICED TWICE and the CONTRACT was wrong FOUR times,
 > every one the SAME error: SOMETHING SHIPPED WITHOUT A CONSUMER.**
@@ -196,7 +251,7 @@ was missing grouping, `true`/`false`, `not`/`and`/`or`, block scoping, void func
 > `String`; it merely stops being *first*. Every existing marker still resolves.
 
 > **Note the two senses of "shv2 runs its spec tests."** shv2 *already* has a `spec-test`
-> command (281/0) — but that harness is compiled by **`maxon.exe`**, the C# bootstrap. Phase 1
+> command (371/0) — but that harness is compiled by **`maxon.exe`**, the C# bootstrap. Phase 1
 > is the other sense, the one `maxon-selfhosted` has and shv2 does not: **shv2 compiles the
 > harness itself.** That is the whole difference, and it is the entire mechanism ladder.
 
@@ -205,7 +260,8 @@ and validated with fast iterations.
 
 ### The honest sizing
 
-Self-host is **~30–45k lines of new Maxon** away (from 21,038 today), and "Maxon-core" is
+Self-host is **~5–20k lines of new Maxon** away (from **44,671** today — measured 2026-07-16; the
+`21,038` this line used to cite was 2× stale, see "The honest sizing"), and "Maxon-core" is
 **~75–80% of the language**, not 25% — it excludes only async, general `Iterable`/associated
 types, and higher-order/sort. **That is exactly why Phase 1 exists.**
 
@@ -544,7 +600,7 @@ green build.
 | **P1.0o** | **the compiler traces ITSELF — Workstream O1** ⭐ | **FIRST, because it is the instrument the rest of the ladder is debugged with.** shv2's stderr `Logger` dies the moment P1.0a interleaves N workers into one stream. A `__DebugStream` builtin in **`maxon.exe`** + 4 new event codes + a sink behind `Logger`'s existing API ⇒ binary events into the shared-memory ring, demuxed per-worker by `maxon monitor`. **Depends on NOTHING in Phase 1** — the bootstrap already carries the ring, the reserve, and the monitor *(see Workstream O)* |
 | **P1.0a** | **grow the harness's parallel worker pool back** | **The acceptance target must exist before it can be a target.** Port `maxon-selfhosted`'s [`runAllSpecTestsParallel`](maxon-selfhosted/Testing/SpecTestRunner.maxon#L3401) worker pool into `maxon-shv2/Testing/`. Written in Maxon, compiled by **`maxon.exe`**, green under today's gates — so it lands *now*, and every later rung is measured against the real Phase-1 target instead of the serial stub. **Workstream S is what makes it pay:** the corpus takes the suite from 126 tests to thousands |
 | **P1.0b** | **Workstream S — the `disabled-test:` marker, and ON-DEMAND porting** ⭐ | *(see Workstream S.)* The marker is SHIPPED (`362b07b72`). **The bulk port is NOT, and will not be** (user directive): spec files are copied from `/specs` **on demand, by the rung that needs them**, not as a corpus dump. A trial bulk sweep was run once, as a MEASUREMENT, and then discarded — see P1.0d, which is what it found |
-| **P1.0d** | **complete the SCALAR CORE** ⭐⭐ | **NEW, and it exists because the sweep proved this plan's central claim false.** See "The scalar core is NOT done" below. **SLICE 1 ✅ DONE** (parens · `true`/`false` · block scoping · void fns · top-level `typealias`) — suite **126 → 159**. **SLICES REMAINING ← NEXT:** see below |
+| **P1.0d** | **complete the SCALAR CORE** ⭐⭐ | **NEW, and it exists because the sweep proved this plan's central claim false.** See "The scalar core is NOT done" below. ✅ **ALL SLICES DONE; P1.0d CLOSED 2026-07-15 — suite 126 → 355/0.** Slice 1 (parens · `true`/`false` · block scoping · void fns · top-level `typealias`) 126 → 159; then `.2` word/bitwise/chars, `.3` divide-by-zero, `.5a` top-level `let`, `.5b` globals, `.4` floats. |
 | **P1.0d.2** | `not` / `and` / `or` · bitwise · character literals | ✅ **DONE.** Short-circuit `and`/`or` is control flow, so it landed as blocks + phis on the parser's on-the-fly SSA. Bitwise + chars are new `StdOp`s in the existing integer register class — **APPENDED at the END of a band** (a `match` range arm silently swallows anything inserted mid-band) |
 | **P1.0d.3** | **`a / 0` ⇒ a clean panic** | ✅ **DONE 2026-07-15** — suite **279 → 281**. It escaped as a raw `0xC0000094` with **empty stderr**; it is now exit **1** + `panic: integer divide by zero` + a symbolized backtrace, and `specs/safety.md`'s `divide-by-zero` + `mod-by-zero` are ported and ENABLED. **Workstream R's first slice.** Three things this rung settled, each bigger than the divide: (1) **the fault is caught by a VEH thunk, not a divisor check** — shv2 is x64-only and the CPU raises `#DE` for free, so a `cmp`/`branch` before every `idiv` would be the scope cut the PRINCIPLE names; **NO gt redirect** (the reference's fault path rides green threads, which arrive at P1.5) — the thunk prints and exits in place, so the context travels as ordinary arguments and needs no fault globals at all. (2) ⭐ **FRAME POINTERS, on every function, leaves included** — see below. (3) the harness grew a ` ```stderr ` fence: `maxoncstderr` is the COMPILER's stderr, and a program's **RUNTIME** stderr was a thing no spec could pin |
 | **P1.0d.5a** | **top-level `let`** ⚠ **the plan never listed this one either** | ✅ **DONE 2026-07-15** — suite **281 → 295**. **Found by probing, not by the ladder** — and it has **its own stable spec nobody had found: `specs/top-level-let.md`, 17 cases**, which the bootstrap passes. *(Missed twice because a grep for `global|static|module|init` does not match the filename — **look for a feature's own spec BY NAME.**)* **A module-scope constant is a NUMBER: it inlines as an ordinary `literal` at each use ⇒ no IR op, no `.data`, no relocation, NO BACKEND AT ALL.** Zero pre-existing goldens moved, which is the proof. Design: an arena of `(name, visibility, file, token range)` + a memoized DFS with cycle detection, driven inside `queryProgramSignatures` — that is what makes **forward references** and cross-file `export let` work. The evaluator **shares `TypeRules`' folds** (one opinion on constant arithmetic; only the climb loop forks, because `and`/`or` are *control flow* in a body and a *value* at file scope). ⚠ **Still `disabled-test:`: `basic-float-constant` (P1.0d.4), `file-private-same-name-cross-file` (P1.9 `as`), `from-literal-initializer` (P1.2 `String`)** |
@@ -606,8 +662,8 @@ morestack's fixup, which needs the chain anyway.
 top-level ranged `typealias`; the corpus's ranges are wide, so the *checks* — `ExpandCastRangeChecks` /
 `InsertRangeChecks` — stay at P1.9 where they belong). Floats need a whole new register bank (there is
 **no XMM class** in the allocator today), so they are the last slice of the rung, not the first.
-| **P1.0r** | **R1-core — the ALLOCATOR + refcounting runtime** ⭐⭐ | **← NEXT.** *(Was "R1 @ P1.2". Promoted ahead of structs 2026-07-15 — see the RESTRUCTURED box: a struct is a heap value, so the heap cannot come second.)* The slab allocator · `__mm_alloc` · `__mm_incref`/`__mm_decref` · the `__destruct_*` cascade. **The allocator ALWAYS RETURNS ZEROED MEMORY, from commit 1** — a property of the allocator, not of each caller (it cost v1 three separately root-caused bugs; see ARCHITECTURE.md → "Allocator: the zeroing contract"). ⚠ **THIS RUNG MUST DECIDE THE RUNTIME'S *FORM*** — hand-assembled machine code vs. v1's `runtime.std` (6,049 lines of Std-IR text through the ordinary backend). **The excuse for deferring it has now EXPIRED: its precondition was the Std memory band, and P1.0d.5b shipped it.** See the R1 box in Workstream R — **the named risk is inertia**, 6 hand-assembled functions becoming 5,000 by default. **Write the reason down.** ⚠ Its acceptance test is **P1.1a**, not a bespoke spec: an allocator with no heap value to allocate is untestable, so the two are adjacent on purpose |
-| **P1.1a** | **structs** — R1's DOGFOOD ⭐ | *(was the struct half of `P1.1`; its `disabled-test:` markers read correctly unchanged.)* concrete, **trivial-ownership only** — scalar/float fields, so the destructor is NULL and no field write increfs. Heap-boxed via `__mm_alloc`, **uniform 8-byte field slots** (`sizeof` PINS this: `sizeof(Point)`=16, `sizeof(Vec3)`=24, and `sizeof(Outer{p Point, n Integer})`=**16** — a struct field is a POINTER). Field access = `loadIndirect`/`storeIndirect` at a real offset, **the ops P1.0d.5b already built and whose comments NAME this rung**. Methods · `self` · `static function create` · `Self{…}` (construction is restricted to the type's own methods — **E3076**) |
+| **P1.0r** | **R1-core — the ALLOCATOR + refcounting runtime** ⭐⭐ | ✅ **DONE 2026-07-15** — suite **355 → 357/0**; see the closed box at the top of this file. *(Was "R1 @ P1.2". Promoted ahead of structs 2026-07-15 — see the RESTRUCTURED box: a struct is a heap value, so the heap cannot come second.)* The slab allocator · `__mm_alloc` · `__mm_incref`/`__mm_decref` · the `__destruct_*` cascade. **The allocator ALWAYS RETURNS ZEROED MEMORY, from commit 1** — a property of the allocator, not of each caller (it cost v1 three separately root-caused bugs; see ARCHITECTURE.md → "Allocator: the zeroing contract"). ⚠ **THIS RUNG MUST DECIDE THE RUNTIME'S *FORM*** — hand-assembled machine code vs. v1's `runtime.std` (6,049 lines of Std-IR text through the ordinary backend). **The excuse for deferring it has now EXPIRED: its precondition was the Std memory band, and P1.0d.5b shipped it.** See the R1 box in Workstream R — **the named risk is inertia**, 6 hand-assembled functions becoming 5,000 by default. **Write the reason down.** ⚠ Its acceptance test is **P1.1a**, not a bespoke spec: an allocator with no heap value to allocate is untestable, so the two are adjacent on purpose |
+| **P1.1a** | **structs** — R1's DOGFOOD ⭐ | **WAVE 1 ✅ DONE 2026-07-15** (with P1.0r: `type` · layout · `Self{}` · `static create` · field READS — 355→357). **WAVE 2 ✅ DONE 2026-07-16** (field WRITES · mutability · defaults — 357→**371**; see the closed box at the top). **WAVE 3 ← NEXT: INSTANCE METHODS + `self`, and FIELD VISIBILITY (E3014).** Both are named by shv2's own diagnostics: an instance method is `E2015 "…which arrives with the rung that has a case calling one"`, and its `VarInfo.isSelfField`/`fieldOffset`/`Scope.declareSelfField` scaffold has been callerless since M1. **E3014 is a WRONG ANSWER today — shv2 returns 42 where the bootstrap rejects (OPEN.md #25)** — and its RED is already captured. Ports: `specs/type-methods.md` (6), `specs/self-keyword.md` (6), `specs/export-var-fields.md` (E3014 ×2). ⚠ **Check whether the RECEIVER forces the P1.4 borrow-vs-consume ruling that `struct-param` is deferred for** — an instance method passes a struct across a call boundary. *(was the struct half of `P1.1`; its `disabled-test:` markers read correctly unchanged.)* concrete, **trivial-ownership only** — scalar/float fields, so the destructor is NULL and no field write increfs. Heap-boxed via `__mm_alloc`, **uniform 8-byte field slots** (`sizeof` PINS this: `sizeof(Point)`=16, `sizeof(Vec3)`=24, and `sizeof(Outer{p Point, n Integer})`=**16** — a struct field is a POINTER). Field access = `loadIndirect`/`storeIndirect` at a real offset, **the ops P1.0d.5b already built and whose comments NAME this rung**. Methods · `self` · `static function create` · `Self{…}` (construction is restricted to the type's own methods — **E3076**) |
 | **P1.1b** | **enums + `match`** | *(was the enum/match half of `P1.1`.)* **HEAP-FREE — this is why it is its own slice**: both references collapse a payload-free enum to an `int` typealias + constants, and `match` is a chain of two-way `condBranch` blocks (**never bend `IrBlock.CondBranch`'s one-branch-per-block invariant** — P1.0d.4's float compare already set that precedent). Payload-free `union` rides the identical path. ⭐ **RANGE ARMS USE ORDINAL ORDER** — the declaration order — **NOT the raw value** (user ruling, 2026-07-15). ⚠ **The bootstrap gets this WRONG and shv2 must not copy it**: see OPEN.md #21 |
 | **P1.2** | **`String` + ownership + drops** ⭐ | **THE CRUX.** ~~String is the FIRST heap value~~ — **FALSE, corrected 2026-07-15: a scalar struct is (P1.1a), and it is simpler.** String is the first *non-trivial* heap value, and that is still the point: real, needed by everything, and trivially-elemented so it forces no descriptor. **A `String` IS its `__ManagedMemory`** — ONE fused 48B record (`buffer`@0, `length`@8, `capacity`@16, `element_size`@24, `parent_ptr`@32, `isAsciiFlag`@40), NOT a 16B envelope pointing at a 40B record. The bootstrap deleted that envelope (`3e21a401a`..`c0bf9ec0d`); do not rebuild it here. An owned string's bytes live INSIDE the record at `record+48` with `parent_ptr = -3`; growth DETACHES rather than reallocating, because the record pointer IS the value and may never move. rdata `capacity = -2` sentinel; synthesized `__destruct_String`; interpolation of **primitives**. **It rides P1.0r's `__mm_alloc` rather than introducing one** — which is the whole benefit of the reorder. mm-trace gates from here. **`own.drop` declares BOTH arms now**; the descriptor arm is unreachable until P1.6 |
 | **P1.3** | **owned payloads in enums/unions** | *moved into Phase 1* — `compilerError(text String)`, `fail(reason String)`. Needs only P1.1a/P1.1b + P1.2's drops. Errors (P1.4) want it too: the harness calls `e.displayReason()` |
@@ -823,7 +879,7 @@ corpus is what makes it *also* the thing keeping the loop fast.
 
 ## Phase 2 — self-host
 
-**= Phase 1, plus exactly what shv2's own 21,038-line source adds.** Bounded by measurement
+**= Phase 1, plus exactly what shv2's own 44,671-line source adds.** Bounded by measurement
 against that source:
 
 | # | Mechanism | Forced by |
@@ -1235,15 +1291,21 @@ never block on the ladder:
 
 ## Where we are
 
-**The scalar core is ~~DONE~~ INCOMPLETE** (old M1–M5). What genuinely works: `let`/`var` · full-Pratt
-arithmetic/comparison/unary · `if`/`else` · `while`/`break`/`continue` (on-the-fly SSA +
-`EliminatePhis`) · functions with params + calls · integer `/` and `mod`.
+**The scalar core is DONE — and this time MEASURED, not asserted: `specs-shv2` 371/0** (P1.0d closed
+2026-07-15). `let`/`var` · full-Pratt arithmetic/comparison/unary · parens · `true`/`false` ·
+`not`/`and`/`or` · bitwise · chars · **floats (f64, XMM class)** · real block scoping · void functions ·
+top-level `typealias`/`let`/`var` · `if`/`else` · `while`/`break`/`continue` (on-the-fly SSA +
+`EliminatePhis`) · functions with params + calls · integer `/` and `mod` with **`a / 0` a clean panic**.
 
-⚠ **What "block scope" in that list actually means: nothing.** `Scope.pushScope`/`popScope` exist,
-are correct, and are **never called** — a `let` inside an `if` leaks to the function frame. The claim
-survived because every one of the 126 tests was written by shv2, for shv2. **P1.0d closes this and
-the seven other measured gaps** (parens, `true`/`false`, `not`/`and`/`or`, void functions, top-level
-`typealias`, floats/chars/bitwise, and divide-by-zero-as-hardware-trap). See the ladder.
+**shv2 HAS A HEAP** (P1.0r, 2026-07-15): a VirtualAlloc bump allocator that always returns zeroed memory,
+`__mm_alloc`/`__mm_decref`/`__mm_free` as a builder-built `StdModule`, and a leak gate that fires.
+**And STRUCTS are real** (P1.1a waves 1–2): `type` · layout · `Self{}` · `static create` · field reads,
+writes, mutability rules and defaults.
+
+⚠ **The paragraph that used to live here said the scalar core was INCOMPLETE, and before that, that it was
+DONE. Both were written with equal confidence, and the second was wrong by 48-of-2,746.** The difference
+was never the prose — it was whether anyone had run the corpus. **Every claim above is a suite number that
+`spec-test` will reproduce, or it is not in this section.**
 
 **The register allocator shipped and beat its own brief.** Register allocation was ~74% of v1's
 self-compile wall time (~418 s of 561 s) against shv2's ≤30 s *whole-compile* budget; shv2's is
@@ -1262,17 +1324,28 @@ it is retired.**
 | x64 backend + emitters | 16,030 | 8–10k |
 | Register allocator | 8,520 | ✅ **DONE** (linear) |
 | **Workstream R (emitted runtime)** | *(inside X64Backend)* | **5–7k** |
-| Testing | 7,699 | ✅ **704** |
-| **Total** | **191,487** | **~50–65k** |
+| Testing | 7,699 | ✅ ~~704~~ → **6,982** (measured 2026-07-16) |
+| **Total** | **191,487** → **192,971** (measured) | **~50–65k** |
 
-**Current: 21,038.** Self-compile is **~30–45k lines away** — and the hardest *single* piece of it
-(the allocator) is already behind us.
+**Current: ~~21,038~~ → 44,671** (measured 2026-07-16; `find maxon-shv2 -name '*.maxon' -exec cat {} + | wc -l`
+— `Compiler/` is 37,096 of it, `Testing/` 6,982). Self-compile is **~5–20k lines away** on the estimate
+above — and the hardest *single* piece of it (the allocator) is already behind us.
+
+> ⚠ **THIS TABLE WAS STALE BY 2×, AND ITS `Testing` CELL BY 10× — and the drift is the file's own disease,
+> aimed at its own schedule.** `21,038` and `704` were true when the plan was written and **nothing
+> re-derives them**, so they aged into a claim ("~30–45k away") that was never re-measured. **The method is
+> confirmed identical, not guessed:** the same command over v1 reads **192,971** against its recorded
+> **191,487** — a 0.8% drift from ordinary edits, which is what a *maintained* number looks like next to an
+> abandoned one. **The command is now written down beside the number**, because a figure whose derivation is
+> unstated cannot be checked and therefore will not be. ⚠ **The `~50–65k` ESTIMATE is itself unvalidated** —
+> it is a 2026-07-13 guess, and `Testing` alone overran its whole line by 6,278. Treat "5–20k away" as
+> arithmetic on an untested premise, not as a schedule.
 
 ---
 
 ## Verification
 
-- **Per rung:** `maxon-shv2 spec-test` stays green (**281/0** as of 2026-07-15, and growing with
+- **Per rung:** `maxon-shv2 spec-test` stays green (**371/0** as of 2026-07-16, and growing with
   every Workstream-S port); ownership rungs (P1.2+) also assert an `mm-trace` block via
   `maxon monitor`.
 - **The ratchet (Workstream S):** **an ENABLED spec case may never be re-disabled.** Behavioural,
