@@ -3853,7 +3853,7 @@ export type Parser
 			end 'labelMismatch'
 		end 'endLabel'
 
-		let outcome = self.finalizeMatchMerge(func, matchTok: matchTok, carried: carried, reachingArms: reachingArms, isExpression: isExpression)
+		let outcome = try self.finalizeMatchMerge(func, matchTok: matchTok, carried: carried, reachingArms: reachingArms, isExpression: isExpression)
 		self.currentBlock = outcome.cont
 		return outcome
 	end 'parseMatchCommon'
@@ -3944,7 +3944,7 @@ export type Parser
 	// into it. An empty set means every arm terminated — the merge is `dead`. Otherwise mint the
 	// block-args in order — the result phi (expression form) first, then one phi per carried var
 	// that differs across the reaching arms — and record each arm's edge in the SAME order.
-	function finalizeMatchMerge(func IrFunction, matchTok Token, carried VarInfoArray, reachingArms MatchArmExitArray, isExpression bool) returns MatchOutcome
+	function finalizeMatchMerge(func IrFunction, matchTok Token, carried VarInfoArray, reachingArms MatchArmExitArray, isExpression bool) returns MatchOutcome throws ParseError
 		var merge = self.newBlock(func, label: b"matchcont", line: matchTok.line)
 
 		if reachingArms.count() == 0 'allTerminate'
@@ -3959,6 +3959,36 @@ export type Parser
 		// value" question is asked against, so it is fetched once here (the count check above proves
 		// it exists).
 		let firstArm = try reachingArms.get(0) otherwise panic("finalizeMatchMerge: reachingArms.get(0) failed after count check")
+
+		// ⚠ **A CROSS-REGISTER-CLASS EXPRESSION MATCH IS REFUSED HERE, LOUDLY — it must not reach the
+		// backend.** Every arm's `gives` value is fed into ONE result phi, and a value's register file
+		// (GP vs XMM) is fixed by its type at birth. So an integer give and a float give in the same
+		// match hand the phi two values from different files; the allocator cannot color that move and
+		// `X64Backend.emitRegRegMove` panics ("crosses register files") — a compiler crash on a user
+		// program, not a diagnostic. The reference oracle UNIFIES such arms, promoting the integer
+		// arms to float (`cvtsi2sd`) so the result is uniformly float; shv2 has that instruction
+		// (`promoteToFloat`) and lattice already, but the *result* of such a match is a float value,
+		// and a float has no nameable type in shv2 yet (`typealias F = float(…)` is itself still
+		// E2015). Building the promotion before floats are nameable would be a value nothing can hold.
+		// ⇒ refused as "not yet", positioned, exactly as every other unbuilt scalar surface is — and
+		// recorded in OPEN.md as the promotion the float rung supplies. Same-class arms (int + bool)
+		// share a file, need no promotion, and never reach this throw.
+		if isExpression 'checkGiveClass'
+			var anyFloat = false
+			var anyNonFloat = false
+			for i in 0 upto reachingArms.count() 'scanClass'
+				let a = try reachingArms.get(i) otherwise panic("finalizeMatchMerge: reachingArms.get OOB at {i}")
+				if tagIsFloat(self.tagOf(self.giveValueOf(a))) 'isFloat'
+					anyFloat = true
+				end 'isFloat' else 'notFloat'
+					anyNonFloat = true
+				end 'notFloat'
+			end 'scanClass'
+
+			if anyFloat and anyNonFloat 'crossClass'
+				throw ParseError.unsupported("a match expression whose arms give values of different register classes (a float arm and a non-float arm) — unifying them promotes the integer arms to float, whose result has no nameable type until the float type system lands (a `float` typealias is itself not yet parsed), and it arrives with that rung", line: matchTok.line, column: matchTok.column)
+			end 'crossClass'
+		end 'checkGiveClass'
 
 		// Every reaching arm branches to the merge (its exit block is, by definition, unterminated).
 		for i in 0 upto reachingArms.count() 'branchToMerge'
