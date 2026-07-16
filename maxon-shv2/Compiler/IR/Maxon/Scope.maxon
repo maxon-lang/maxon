@@ -41,6 +41,33 @@
 // and the type + slot a drop has to name. A parallel "owned names" array would be a
 // strict projection of `vars` kept in lockstep by hand — state that can drift, buying
 // nothing. At M1 every binding is `trivial`, so the hook never fires.
+//
+// ⚠⚠ **THE SLOT HALF OF THIS API HAS NO CALLERS, AND SAYING SO IS THE POINT OF THIS PARAGRAPH.**
+// Measured at P1.1a wave 3: `declare`, `declareShadowing`, `declarePayloadBinding`,
+// `declarePayloadBindingShadowing`, `bindExistingSlot`, `installVerbatim`, `lookup`, `getType`,
+// `allVars`, `nextSlot` and `setNextSlot` are called from nowhere outside this file. Everything the
+// parser actually binds goes through `declareValueBinding` (the M2 SSA-substitution model) or
+// `declareSelfField` (which is slotless by construction).
+//
+// **The consumers, named rather than implied:**
+//   • `declarePayloadBinding` + `declarePayloadBindingShadowing` → **P1.1b** (enums + `match`), which
+//     is the next rung and does have the shape they were written for.
+//   • everything else → the mutable/`mem2reg` model, whose rung is not scheduled and whose shape is
+//     not settled.
+//
+// ⚠ **AND THE SECOND GROUP IS OWED A HARDER LOOK THAN "IT WILL BE USED LATER", BECAUSE THIS RUNG
+// DISPROVED ITS SIBLING.** `VarInfo.fieldOffset` was scaffolded beside these at M1, for the
+// self-field alias, with a comment explaining why an offset was the right thing to carry. When the
+// consumer finally arrived — this rung — the right answer turned out to be the field's INDEX, and
+// the scaffold was not extended but DELETED: an offset would have forced a second emit site and
+// left the mutability check no home. The scaffold did not save the rung any work; it had to be
+// undone first. That is the `mintPhi` trap's other face, and it is direct evidence about THESE
+// members, not an analogy — they were guessed at by the same commit, for the same tier, on the same
+// reasoning. Deleting them is real work with a real diff (it reaches `VarInfo.slot`,
+// `IrFunction.varSlotCount` and the Maxon→Std lowering's comments) and is deliberately NOT smuggled
+// into a review commit; it is its own change, with the full suite as its gate. Until it lands, no
+// one should read this API as a design that has been agreed — it is a guess that is still waiting to
+// find out whether it was right, and its sibling was not.
 
 export union ScopeLookupError implements Error
 	// String, not the raw slice: this arm exists only to be FORMATTED into a diagnostic.
@@ -106,21 +133,20 @@ export type Scope
 	// `ScopeError.shadowsSelfField` when `name` currently maps to a self-field
 	// alias (binding a local of the same name would overwrite it — E3006).
 	export function declare(name ByteArray, varType MaxonType, mutable bool) returns VarSlot throws ScopeError
-		if self.wouldShadowSelfField(name) 'shadow'
+		if self.isSelfField(name) 'shadow'
 			throw ScopeError.shadowsSelfField(String.from(name))
 		end 'shadow'
 		return self.declareShadowing(name, varType: varType, mutable: mutable)
 	end 'declare'
 
-	// True when `name` currently resolves to a self-field alias.
-	function wouldShadowSelfField(name ByteArray) returns bool
-		let info = try vars.get(name) otherwise return false
-		return info.isSelfField
-	end 'wouldShadowSelfField'
-
-	// Allocate a slot for `name` without the self-field-shadow guard. The
-	// error-recovery path after a caller reported E3006, and the shared
-	// slot-allocating core for `declare`.
+	// Allocate a slot for `name` without the self-field-shadow guard — the shared slot-allocating
+	// core for `declare`.
+	//
+	// ⚠ It also called itself "the error-recovery path after a caller reported E3006" until P1.1a
+	// wave 3's review, and there is no such caller and never has been: the E3006 that exists is
+	// `declareValueBinding`'s, and the parser turns it into a `ParseError` and stops rather than
+	// recovering. Saying so mattered because that sentence was the only thing making this member
+	// look consumed. See the header — it is not.
 	export function declareShadowing(name ByteArray, varType MaxonType, mutable bool) returns VarSlot
 		let slot = nextSlot
 		nextSlot = nextSlot + 1
@@ -167,7 +193,7 @@ export type Scope
 	// Declare a match-arm payload binding. Reads work like a normal local;
 	// writes go through a payload store against the scrutinee + field index.
 	export function declarePayloadBinding(name ByteArray, varType MaxonType, mutable bool, scrutineeName ByteArray, fieldIndex CaseOrdinal, caseName ByteArray) returns VarSlot throws ScopeError
-		if self.wouldShadowSelfField(name) 'shadow'
+		if self.isSelfField(name) 'shadow'
 			throw ScopeError.shadowsSelfField(String.from(name))
 		end 'shadow'
 		return self.declarePayloadBindingShadowing(name, varType: varType, mutable: mutable, scrutineeName: scrutineeName, fieldIndex: fieldIndex, caseName: caseName)
@@ -203,7 +229,7 @@ export type Scope
 	// list as the objects themselves, so a nested block that shadows the NAME cannot
 	// misdirect a phi write to the shadow.
 	export function declareValueBinding(name ByteArray, varType MaxonType, mutable bool, value ValueId) returns VarInfo throws ScopeError
-		if self.wouldShadowSelfField(name) 'shadow'
+		if self.isSelfField(name) 'shadow'
 			throw ScopeError.shadowsSelfField(String.from(name))
 		end 'shadow'
 		var info = VarInfo.createValueBinding(name, varType: varType, mutable: mutable, boundValue: value)
@@ -289,8 +315,24 @@ export type Scope
 		return vars
 	end 'allVars'
 
-	// True when `name` is a self-field alias inside an instance method. Returns
-	// false for unknown names so callers can probe without checking contains().
+	// True when `name` is a self-field alias inside an instance method. Returns false for unknown
+	// names so callers can probe without checking `contains()`.
+	//
+	// ⭐ **ONE PREDICATE, TWO SIDES OF ONE RULE, AND THEY MUST NEVER DISAGREE.** It is asked by the
+	// READER — `Parser.parseVariableReference`, deciding whether a bare `count` lowers to a
+	// `loadIndirect` through the receiver — and by every WRITER, the three `declare*` paths asking
+	// whether a new binding would displace an alias (E3006). Those are the same question wearing
+	// two grammatical moods, not two questions.
+	//
+	// ⚠ It was written TWICE until this rung's review: a private `wouldShadowSelfField` with a
+	// byte-identical body sat 180 lines above, serving the writers while this one served the
+	// reader. Nothing made them agree — and had they drifted, NEITHER side would have failed to
+	// compile: a writer answering `false` lets a local silently displace the field, so every later
+	// read in the method resolves to the local and the field's reads and writes simply stop
+	// happening; a reader answering `false` sends the bare name to `lookupValue`, which hands back
+	// an alias's unset `boundValue` of 0 — the RECEIVER. Both are wrong answers with no diagnostic.
+	// (v1 carries the same two functions, `Scope.maxon:79` and `:199`; the split was PORTED, not
+	// reasoned. A copy needs a reason as much as a divergence does.)
 	export function isSelfField(name ByteArray) returns bool
 		let info = try vars.get(name) otherwise return false
 		return info.isSelfField

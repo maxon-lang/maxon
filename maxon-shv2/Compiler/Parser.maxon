@@ -366,6 +366,22 @@ union ReceiverArg
 	value(id ValueId)
 end 'ReceiverArg'
 
+// The BOX a field access goes through, paired with the LAYOUT that says what is inside it.
+//
+// ⭐ **ONE ANSWER, BECAUSE IT IS ONE QUESTION** — and because the two halves drifting apart is a
+// wrong answer rather than a compile error. `requireStructBase` proves a binding is a struct and
+// hands back the value holding its pointer, together; a caller cannot end up with a layout it
+// PROVED beside a box it merely ASSUMED. They were two separate reads off one `VarInfo` at three
+// call sites, and one of the two reads was wrong at all three — see `requireStructBase`.
+type StructBase
+	export let layout as StructLayout
+	export let box as ValueId
+
+	export static function create(layout StructLayout, box ValueId) returns StructBase
+		return Self{layout: layout, box: box}
+	end 'create'
+end 'StructBase'
+
 // --- Ranged-typealias range bounds ---
 //
 // The inclusive bounds each sized numeric type's `.min` / `.max` denotes in a range
@@ -4715,11 +4731,11 @@ export type Parser
 	// ⚠ **`Adder.add(5)` — AN INSTANCE METHOD NAMED STATICALLY — REACHES HERE, AND IS REJECTED BY
 	// ARITY RATHER THAN BY WHAT IT IS.** It carries no receiver, so its argument list is one short
 	// of the signature (whose parameter 0 is `SelfParamName`) and `validateCall` reports E3036. The
-	// program is refused, which is right; the COUNTS it is refused with include the receiver, so
-	// they are one higher than anything the source wrote. The bootstrap dodges this by reporting
-	// per-parameter ("missing argument for parameter 'value'") rather than by count. The honest fix
+	// program is refused, which is right, but it is refused for the wrong reason and the honest fix
 	// is a diagnostic that says an instance method needs a receiver — which no corpus case covers,
-	// so it is recorded rather than invented here.
+	// so it is recorded rather than invented here. (The COUNTS that E3036 carries are inflated by
+	// the receiver, which is not this routine's doing and is not restated here — see the receiver
+	// prepend in `parseCallNamed`, the one place that causes it, for both callers.)
 	function parseQualifiedCall(func IrFunction) returns ValueId throws ParseError
 		let typeTok = try self.consume(TokenKind.identifier)
 		try self.consume(TokenKind.dot)
@@ -4749,26 +4765,38 @@ export type Parser
 	// Both references agree for the receiver specifically — the bootstrap gives `self`
 	// `OwnershipFlags.IsParam`, and v1's `__self` is param 0, which its refcounter treats as a
 	// borrow — so this is not the borrow-vs-consume ruling struct-typed PARAMETERS are deferred
-	// for. It is also not a hardcode: a consume would have to be a SINK — a store of the receiver
-	// into heap storage, or an argument to a callee that consumes it — and this rung has scalar
-	// and float fields only, so there is nowhere to store it. The absence of an incref is CORRECT
-	// rather than merely unused, because the thing that would make it wrong is unrepresentable.
+	// for. A consume would have to be a SINK: a store of the RECEIVER into heap storage, or its
+	// passing to a callee that consumes it.
+	//
+	// ⚠ **THE SINK IS UNREACHABLE BECAUSE `self` IS NOT A VALUE — NOT BECAUSE FIELDS ARE SCALAR.**
+	// This comment claimed the latter ("this rung has scalar and float fields only, so there is
+	// nowhere to store it") and it is FALSE, measured: `var next as Node` inside `type Node` is a
+	// legal struct-typed field (`parseTypeReference` mints a `structRef` for the enclosing type's
+	// own name), and `function link(other Node) → next = other` compiles TODAY, to
+	// `storeBaseDispReg.word64 [rcx + 8], rdx`. Heap storage, holding a struct pointer, with no
+	// incref. The sink exists. What does not exist is a way to put THE RECEIVER in it:
+	// `parseSelfPrimary` refuses a bare `self` as a value, so `next = self` never parses. That
+	// refusal is the whole load-bearing mechanism, and it lives one function away — which is
+	// exactly why it is named here rather than left to be re-derived. The absence of an incref on
+	// the receiver is correct; the reason previously written down was not the reason.
 	//
 	// ⚠ **THE RUNG THAT MAKES THE SINK REPRESENTABLE MUST REVISIT THIS**, and it is the one that
 	// gives a field a struct or `String` type — a method that stores `self` into durable storage is
-	// real and the stdlib exercises it. v1 does not assert "the receiver is borrowed" anywhere:
-	// it FALLS OUT of `__self` being param 0 plus a structural per-param consume analysis
-	// (`ParamConsumeAnalysis.maxon:5-13`). shv2 will need that analysis at the moment a sink can be
-	// written, and not before — it has no consumer until then.
+	// real and the stdlib exercises it. It inherits TWO things, not one: this receiver-ownership
+	// question, and the `next = other` store above, which is a live un-increfed store that no
+	// analysis checks (`requireStructBase` refuses every path that could OBSERVE such a field, so
+	// nothing today can read the dangling pointer back out — that is containment, not a fix). v1
+	// does not assert "the receiver is borrowed" anywhere: it FALLS OUT of `__self` being param 0
+	// plus a structural per-param consume analysis (`ParamConsumeAnalysis.maxon:5-13`). shv2 will
+	// need that analysis at the moment a sink can be written, and not before.
 	function parseMethodCall(func IrFunction, resultUsed bool) returns ValueId throws ParseError
 		let baseTok = self.current()
 		self.advance()
 		try self.consume(TokenKind.dot)
 
-		let binding = self.scope.getInfo(self.baseBindingName(baseTok))
-		let layout = try self.requireStructBinding(binding, baseTok: baseTok)
+		let base = try self.requireStructBase(self.scope.getInfo(self.baseBindingName(baseTok)), baseTok: baseTok)
 
-		return try self.parseCallNamed(func, callee: qualifiedMethodName(layout.name, methodName: self.current().value), anchor: baseTok, receiver: ReceiverArg.value(binding.boundValue), resultUsed: resultUsed)
+		return try self.parseCallNamed(func, callee: qualifiedMethodName(base.layout.name, methodName: self.current().value), anchor: baseTok, receiver: ReceiverArg.value(base.box), resultUsed: resultUsed)
 	end 'parseMethodCall'
 
 	// The SCOPE name a base token denotes. `self` is a keyword, so it carries no binding name of its
@@ -4800,15 +4828,15 @@ export type Parser
 		try self.consume(TokenKind.dot)
 		let fieldTok = try self.consume(TokenKind.identifier)
 
-		// The binding is fetched ONCE and both facts read off it: `parseDottedPrimary` routed here
-		// on `scope.contains`, so it exists, and its type and its SSA value are two fields of the
-		// one record. Asking `Scope` twice would be two hash lookups for one answer.
-		let binding = self.scope.getInfo(baseTok.value)
-		let layout = try self.requireStructBinding(binding, baseTok: baseTok)
-		let index = try self.requireFieldIndex(layout, fieldTok: fieldTok)
-		try self.requireFieldAccessible(layout, index: index, fieldTok: fieldTok)
+		// The binding is fetched ONCE and `requireStructBase` reads both facts off it: `parseDotted
+		// Primary` routed here on `scope.contains`, so it exists, and its layout and the box it is
+		// held in are one answer (see `StructBase`). Asking `Scope` twice would be two hash lookups
+		// for one answer.
+		let base = try self.requireStructBase(self.scope.getInfo(baseTok.value), baseTok: baseTok)
+		let index = try self.requireFieldIndex(base.layout, fieldTok: fieldTok)
+		try self.requireFieldAccessible(base.layout, index: index, fieldTok: fieldTok)
 
-		return self.emitFieldLoad(binding.boundValue, layout: layout, index: index, range: SourceRange.between(baseTok, last: fieldTok))
+		return self.emitFieldLoad(base.box, layout: base.layout, index: index, range: SourceRange.between(baseTok, last: fieldTok))
 	end 'parseFieldAccess'
 
 	// ⭐⭐ **A SELF-FIELD READ — `count` AND `self.count`, ONE PATH.**
@@ -4995,22 +5023,22 @@ export type Parser
 		end 'undeclared'
 
 		let binding = self.scope.getInfo(baseTok.value)
-		let layout = try self.requireStructBinding(binding, baseTok: baseTok)
-		let index = try self.requireFieldIndex(layout, fieldTok: fieldTok)
+		let base = try self.requireStructBase(binding, baseTok: baseTok)
+		let index = try self.requireFieldIndex(base.layout, fieldTok: fieldTok)
 
 		try self.requireMutableBinding(binding, nameTok: baseTok)
-		try self.requireFieldAccessible(layout, index: index, fieldTok: fieldTok)
+		try self.requireFieldAccessible(base.layout, index: index, fieldTok: fieldTok)
 
-		if not layout.fieldIsMutable(index) 'immutableField'
-			throw ParseError.assignToImmutableField(String.from(layout.name), fieldName: String.from(fieldTok.value), line: baseTok.line, column: baseTok.column)
+		if not base.layout.fieldIsMutable(index) 'immutableField'
+			throw ParseError.assignToImmutableField(String.from(base.layout.name), fieldName: String.from(fieldTok.value), line: baseTok.line, column: baseTok.column)
 		end 'immutableField'
 
 		// Parsed AFTER both rejections, so a refused program emits no op — `emitCheckedGlobalStore`'s
 		// discipline, for its reason.
 		let value = try self.parseExpression(func, block: block)
-		try self.requireFieldType(layout, index: index, value: value, anchor: fieldTok)
+		try self.requireFieldType(base.layout, index: index, value: value, anchor: fieldTok)
 
-		self.emitFieldStore(binding.boundValue, layout: layout, index: index, value: value, range: SourceRange.between(baseTok, last: fieldTok))
+		self.emitFieldStore(base.box, layout: base.layout, index: index, value: value, range: SourceRange.between(baseTok, last: fieldTok))
 	end 'parseFieldAssignment'
 
 	// Declare every field of the enclosing type as a self-field alias, so a bare `width` inside
@@ -5035,7 +5063,7 @@ export type Parser
 	end 'declareSelfFieldAliases'
 
 	// The `StructLayout` of the type whose body encloses the cursor. The self-field twin of
-	// `requireStructBinding`: that one resolves the layout of a BINDING's declared type, this one
+	// `requireStructBase`: that one resolves the layout of a BINDING's declared type, this one
 	// resolves the layout of the enclosing DECLARATION, which is what a receiver and a bare field
 	// name are both typed by.
 	//
@@ -5148,23 +5176,61 @@ export type Parser
 		throw ParseError.unexportedFieldAccess(String.from(layout.name), fieldName: String.from(fieldTok.value), line: fieldTok.line, column: fieldTok.column)
 	end 'requireFieldAccessible'
 
-	// The `StructLayout` of `binding` — the two-step every field access takes: the binding's declared
-	// type must BE a struct, and that struct must be one some file declares.
+	// The box `binding` denotes and the `StructLayout` describing it — the two-step every field
+	// access takes: the binding's declared type must BE a struct, and that struct must be one some
+	// file declares.
 	//
 	// The second step cannot fail for a `structRef` the parser itself minted (it interned the id from
 	// a name the sweep had already recorded), so it panics; the first very much can — `let n = 5`
 	// then `n.x` — and reports. `baseTok` is only the token those diagnostics point at.
-	function requireStructBinding(binding VarInfo, baseTok Token) returns StructLayout throws ParseError
+	//
+	// ⭐⭐ **IT IS THE ONE READER OF A BASE BINDING'S `boundValue`, AND THAT IS WHY IT RETURNS THE
+	// BOX AND NOT JUST THE LAYOUT.** A SELF-FIELD ALIAS HAS NO SSA VALUE: `createSelfField` leaves
+	// `boundValue` 0 because a read of the alias is a `loadIndirect` through the receiver, not a
+	// reference to a value — **and ValueId 0 IS THE RECEIVER**. So a caller that proved the layout
+	// here and then reached for `binding.boundValue` on its own silently addressed `__self`.
+	//
+	// That is not a hazard this comment is imagining; it was MEASURED, on the three sites that did
+	// exactly that. In a self-referential `type Node` (`var next as Node`, which
+	// `parseTypeReference` types `structRef` through its `namesEnclosingType` arm):
+	//   • `return next.a`      compiled to a single `loadRegBaseDisp r8, [rcx + 0]` — that is
+	//                          `return self.a`, off the receiver, at the wrong field's offset.
+	//   • `return next.readA()` compiled to a bare `callDirect Node.readA` with NO argument setup —
+	//                          the receiver was already in `rcx`, so it is `self.readA()`.
+	//   • `next.a = 99`        reported E2013 "cannot assign to immutable variable: 'next'", which
+	//                          is simply false of an `export var` field.
+	// The first two exit 0 with no diagnostic anywhere. `parseVariableReference` guards this same
+	// fact for the bare-name path and its comment states it exactly; the fact was written down
+	// once and needed in four places. Handing the box back from here is what makes the other three
+	// unable to get it wrong.
+	function requireStructBase(binding VarInfo, baseTok Token) returns StructBase throws ParseError
 		if maxonTypeTag(binding.varType) != ValueTypeTag.structRef 'notAStruct'
 			throw ParseError.unsupported("a field access on '{String.from(baseTok.value)}', which is declared '{typeTagName(maxonTypeTag(binding.varType))}' and not a struct type (only a struct has fields)", line: baseTok.line, column: baseTok.column)
 		end 'notAStruct'
 
-		let typeName = try self.artifact.typeNames.nameOf(typeNameIdOf(binding.varType)) otherwise panic("requireStructBinding: '{String.from(baseTok.value)}' carries a structRef whose name id is not in this file's interner — every structRef the parser mints is interned from a name in the same table")
+		// ⚠ **A STRUCT-TYPED FIELD USED AS A BASE IS REFUSED, NOT LOADED** — `next.a` inside `type
+		// Node`'s own method. Tested AFTER the `structRef` gate above, so a SCALAR field's alias
+		// (`count.x`, where `count` is an `Integer`) still reports what is actually wrong with it
+		// rather than being blamed on a struct it is not.
+		//
+		// Reading it correctly means materializing the field first — `loadIndirect` the box out of
+		// the receiver, then address THAT — which is one line, and is deliberately NOT taken here.
+		// A struct-typed field cannot be CONSTRUCTED at this rung: `Self{next: …}` needs a `Node`
+		// to put there, there is no `null` and no base case, so no program could observe the load
+		// being right. That is the `mintPhi` trap exactly — a mechanism handed a consumer and no
+		// reason to be right — and it is the same trap this rung's own scaffold waited out. It
+		// arrives with the rung that gives a field a struct type, which is the rung that already
+		// owes this one its receiver-ownership analysis (see `parseMethodCall`).
+		if binding.isSelfField 'structTypedField'
+			throw ParseError.unsupported("a field access through '{String.from(baseTok.value)}', which is a struct-typed FIELD of the enclosing type (its box has to be loaded out of the receiver before it can be addressed, which arrives with the rung that gives a field a struct type — no struct-typed field can be constructed yet)", line: baseTok.line, column: baseTok.column)
+		end 'structTypedField'
+
+		let typeName = try self.artifact.typeNames.nameOf(typeNameIdOf(binding.varType)) otherwise panic("requireStructBase: '{String.from(baseTok.value)}' carries a structRef whose name id is not in this file's interner — every structRef the parser mints is interned from a name in the same table")
 		match self.signatures.structOf(typeName) 'declared'
-			declared(layout) then return layout
-			undeclared then panic("requireStructBinding: '{String.from(baseTok.value)}' is typed `structRef({String.from(typeName)})` but no file declares that type — a structRef is only minted for a name the declaration sweep recorded (Parser.parseTypeReference)")
+			declared(layout) then return StructBase.create(layout, box: binding.boundValue)
+			undeclared then panic("requireStructBase: '{String.from(baseTok.value)}' is typed `structRef({String.from(typeName)})` but no file declares that type — a structRef is only minted for a name the declaration sweep recorded (Parser.parseTypeReference)")
 		end 'declared'
-	end 'requireStructBinding'
+	end 'requireStructBase'
 
 	// `loadIndirect <box> <offset>` — the one op a field read is.
 	//
@@ -5838,6 +5904,18 @@ export type Parser
 		// zero on its own counter, so `acc.add(10)`'s `10` is still "the first argument" and is
 		// still required to be positional — the receiver is not something the user wrote and must
 		// not shift what they did.
+		//
+		// ⚠ **IT DOES DISTURB THE ARITY COUNTS, AND THIS IS THE ONE PLACE THAT CAN SAY SO.** Every
+		// E3036 against a method now counts the receiver on BOTH sides, so both numbers are one
+		// higher than anything the source wrote: `a.add()` — zero arguments written — reports
+		// *"'Adder.add' expects 2 argument(s) but 1 were provided"* (measured). The count is
+		// internally consistent and the program is correctly refused; the numbers are just not the
+		// user's. Every method call is affected, through both callers — `parseMethodCall`'s
+		// `a.add()` and `parseQualifiedCall`'s receiverless `Adder.add(5)` — which is exactly why
+		// the note lives HERE, at the prepend that causes it, rather than being written once per
+		// caller and drifting. The bootstrap dodges it by reporting per-parameter ("missing argument
+		// for parameter 'value'") instead of by count. The honest fix is a diagnostic that speaks in
+		// the SOURCE's arity, and no corpus case covers one — so it is recorded, not invented here.
 		//
 		// Its span is the receiver EXPRESSION's anchor (`acc`, or the `self` keyword), which is the
 		// token a diagnostic about the receiver has to point at.
