@@ -826,8 +826,7 @@ John Doe, 30 years old
 
 ### Int-Backed Enum Interpolation
 
-<!-- disabled-test: int-enum-interpolation -->
-<!-- P1.2 wave B-enum: enum interpolation -->
+<!-- test: int-enum-interpolation -->
 ```maxon
 enum Color
 	red = 1
@@ -851,7 +850,7 @@ Color value: 2
 ### Simple Enum Interpolation
 
 <!-- disabled-test: simple-enum-interpolation -->
-<!-- P1.2 wave B-enum: enum interpolation -->
+<!-- P1.2 wave B-enum: enum case-name / raw-string rendering (int-backed enums render via the integer path today) -->
 ```maxon
 enum Direction
 	north
@@ -876,7 +875,7 @@ Direction: east
 ### String-Backed Enum Interpolation
 
 <!-- disabled-test: string-enum-interpolation -->
-<!-- P1.2 wave B-enum: enum interpolation -->
+<!-- P1.2 wave B-enum: enum case-name / raw-string rendering (int-backed enums render via the integer path today) -->
 ```maxon
 enum Status
 	active = "Active"
@@ -899,8 +898,7 @@ Status: Active
 
 ### Multiple Enum Interpolations
 
-<!-- disabled-test: multiple-enum-interpolation -->
-<!-- P1.2 wave B-enum: enum interpolation -->
+<!-- test: multiple-enum-interpolation -->
 ```maxon
 enum Priority
 	low = 1
