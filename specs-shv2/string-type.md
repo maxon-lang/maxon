@@ -267,8 +267,7 @@ end 'main'
 Hello, World!
 ```
 
-<!-- disabled-test: string-interpolation-concatenation -->
-<!-- P1.2 wave B: string interpolation -->
+<!-- test: string-interpolation-concatenation -->
 ```maxon
 function main() returns ExitCode
 	let a = "hello"

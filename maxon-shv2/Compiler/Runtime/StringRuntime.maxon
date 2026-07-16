@@ -91,6 +91,20 @@ let SignMultiplierSpan = 2 as ParsedInt
 // allocates this, the converter fills `len ≤ 21` bytes, and the caller frees it after the copy.
 export let IntToStringScratchBytes = 21 as ParsedInt
 
+// `__bool_to_string` renders "true" (4) or "false" (5). The ASCII bytes of both, and the two lengths.
+let AsciiLowerT = 116 as ParsedInt
+let AsciiLowerR = 114 as ParsedInt
+let AsciiLowerU = 117 as ParsedInt
+let AsciiLowerE = 101 as ParsedInt
+let AsciiLowerF = 102 as ParsedInt
+let AsciiLowerA = 97 as ParsedInt
+let AsciiLowerL = 108 as ParsedInt
+let AsciiLowerS = 115 as ParsedInt
+let BoolTrueLength = 4 as ParsedInt
+let BoolFalseLength = 5 as ParsedInt
+// "false" is the longest rendering, so 5 bytes cover both.
+export let BoolToStringScratchBytes = 5 as ParsedInt
+
 // The `.rdata` label prefixes for a literal's blob and its record. Distinct so a reader of the section
 // can tell the two apart; `__`-prefixed so they never collide with a user name and stay out of the
 // spec goldens (`TargetPrinter.isRuntimeFunction`'s data twin).
@@ -112,6 +126,7 @@ export let StrEqName = b"__str_eq"
 // `scanRuntimeUsage` already sees.
 export let StrCopyName = b"__str_copy"
 export let IntToStringName = b"__int_to_string"
+export let BoolToStringName = b"__bool_to_string"
 
 // The bool `__str_eq` returns, as the i64 a Std `value(i64)` return carries: 1 when equal, 0 otherwise.
 let StrEqEqual = 1 as ParsedInt
@@ -212,9 +227,10 @@ export type RuntimeUsage
 	export var usesStrEq as bool
 	export var usesStrCopy as bool
 	export var usesIntToString as bool
+	export var usesBoolToString as bool
 
 	static function create() returns RuntimeUsage
-		return Self{usesHeap: false, usesPrint: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false}
+		return Self{usesHeap: false, usesPrint: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesBoolToString: false}
 	end 'create'
 end 'RuntimeUsage'
 
@@ -255,6 +271,9 @@ function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 	if callee.equals(IntToStringName) 'inttostr'
 		usage.usesIntToString = true
 	end 'inttostr'
+	if callee.equals(BoolToStringName) 'booltostr'
+		usage.usesBoolToString = true
+	end 'booltostr'
 end 'recordCallUsage'
 
 // Install the referenced String runtime functions into the lowered Std module. Called AFTER the
@@ -273,6 +292,9 @@ export function installStringRuntime(module StdModule, usage RuntimeUsage)
 	if usage.usesIntToString 'inttostr'
 		buildIntToString(module)
 	end 'inttostr'
+	if usage.usesBoolToString 'booltostr'
+		buildBoolToString(module)
+	end 'booltostr'
 end 'installStringRuntime'
 
 // `__print_string(strPtr)` — write a String's bytes to stdout, no trailing newline.
@@ -583,6 +605,56 @@ function buildIntToString(module StdModule)
 
 	module.functions.push(func)
 end 'buildIntToString'
+
+// `__bool_to_string(value, dest) -> len` — render a bool as "true" (4 bytes) or "false" (5). The value is
+// 0 or 1, so a single branch picks the rendering; each branch writes its bytes with fixed offsets and
+// returns its length. The last value minted in each branch is the length const (returned, so materialized),
+// never the entry `cmp`, so the value-class column is sized right (see `buildIntToString`'s header).
+function buildBoolToString(module StdModule)
+	var func = IrFunction.createFromStd(BoolToStringName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var trueCase = module.addBlock(func, label: b"trueCase")
+	var falseCase = module.addBlock(func, label: b"falseCase")
+
+	emitParams(module, block: entry, count: 2)
+	let value = 0 as ValueId
+	let dest = 1 as ValueId
+
+	let zeroConst = ids.mint()
+	module.appendOp(entry, op: StdOp.const(zeroConst, value: 0, valueType: StdType.i64))
+	let isFalse = ids.mint()
+	module.appendOp(entry, op: StdOp.cmp(isFalse, lhs: value, rhs: zeroConst, pred: StdCmpPred.eq, operandType: StdType.i64))
+	module.setTerminator(entry, op: StdOp.condBranch(isFalse, thenBlockId: falseCase.id, elseBlockId: trueCase.id))
+
+	storeConstByte(module, block: trueCase, ids: ids, dest: dest, offset: 0 as ByteOffset, charValue: AsciiLowerT)
+	storeConstByte(module, block: trueCase, ids: ids, dest: dest, offset: 1 as ByteOffset, charValue: AsciiLowerR)
+	storeConstByte(module, block: trueCase, ids: ids, dest: dest, offset: 2 as ByteOffset, charValue: AsciiLowerU)
+	storeConstByte(module, block: trueCase, ids: ids, dest: dest, offset: 3 as ByteOffset, charValue: AsciiLowerE)
+	let trueLen = ids.mint()
+	module.appendOp(trueCase, op: StdOp.const(trueLen, value: BoolTrueLength, valueType: StdType.i64))
+	module.setTerminator(trueCase, op: StdOp.ret(trueLen))
+
+	storeConstByte(module, block: falseCase, ids: ids, dest: dest, offset: 0 as ByteOffset, charValue: AsciiLowerF)
+	storeConstByte(module, block: falseCase, ids: ids, dest: dest, offset: 1 as ByteOffset, charValue: AsciiLowerA)
+	storeConstByte(module, block: falseCase, ids: ids, dest: dest, offset: 2 as ByteOffset, charValue: AsciiLowerL)
+	storeConstByte(module, block: falseCase, ids: ids, dest: dest, offset: 3 as ByteOffset, charValue: AsciiLowerS)
+	storeConstByte(module, block: falseCase, ids: ids, dest: dest, offset: 4 as ByteOffset, charValue: AsciiLowerE)
+	let falseLen = ids.mint()
+	module.appendOp(falseCase, op: StdOp.const(falseLen, value: BoolFalseLength, valueType: StdType.i64))
+	module.setTerminator(falseCase, op: StdOp.ret(falseLen))
+
+	module.functions.push(func)
+end 'buildBoolToString'
+
+// Store one constant byte at `dest[offset]`. The shape a fixed-text renderer (`__bool_to_string`) writes
+// each of its bytes with — a `const` typed i64, stored as a `u8` (the store keeps the low byte).
+function storeConstByte(module StdModule, block IrBlock, ids ValueMinter, dest ValueId, offset ByteOffset, charValue ParsedInt)
+	let ch = ids.mint()
+	module.appendOp(block, op: StdOp.const(ch, value: charValue, valueType: StdType.i64))
+	module.appendOp(block, op: StdOp.storeIndirect(dest, offset: offset, valueId: ch, valueType: StdType.u8))
+end 'storeConstByte'
 
 // Three i64 parameters — `__str_copy(dest, src, len)`. The one runtime function that needs a third; the
 // shared `oneI64Param`/`twoI64Params` cover the rest.

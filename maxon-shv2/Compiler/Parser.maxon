@@ -6119,11 +6119,16 @@ export type Parser
 		end 'stringPart'
 
 		if tagIsIntegral(tag) 'intPart'
-			self.materializeIntPart(exprVal, partBufs: partBufs, partLens: partLens, scratchIds: scratchIds, range: range)
+			self.materializeScratchPart(exprVal, converter: IntToStringName, scratchBytes: IntToStringScratchBytes, partBufs: partBufs, partLens: partLens, scratchIds: scratchIds, range: range)
 			return
 		end 'intPart'
 
-		throw ParseError.unsupported("interpolating a value of type '{typeTagName(tag)}' — P1.2 wave B interpolates String and integer expressions; bool and float arrive next, and a Stringable struct at P1.7a", line: exprTok.line, column: exprTok.column)
+		if tagIsBool(tag) 'boolPart'
+			self.materializeScratchPart(exprVal, converter: BoolToStringName, scratchBytes: BoolToStringScratchBytes, partBufs: partBufs, partLens: partLens, scratchIds: scratchIds, range: range)
+			return
+		end 'boolPart'
+
+		throw ParseError.unsupported("interpolating a value of type '{typeTagName(tag)}' — P1.2 wave B interpolates String, integer and bool expressions; float arrives next, and a Stringable struct at P1.7a", line: exprTok.line, column: exprTok.column)
 	end 'materializeInterpExpr'
 
 	// A String-record part: load `buffer@0` and `length@8` off the record. Shared by literal fragments and
@@ -6133,12 +6138,13 @@ export type Parser
 		partLens.push(self.emitLoadStringField(rec, offset: StringLengthOffset, range: range))
 	end 'materializeStringRecordPart'
 
-	// An integer part: render `exprVal`'s decimal text into a freshly `__mm_alloc`'d scratch buffer via
-	// `__int_to_string`, which returns the byte count. The scratch is enrolled for the post-copy free — it
-	// is an owned buffer the blit consumes. `IntToStringScratchBytes` covers every i64 (`i64.min` is 21
-	// bytes). A `named` integer alias is already i64, so no widening is needed at this rung.
-	function materializeIntPart(exprVal ValueId, partBufs ValueIdArray, partLens ValueIdArray, scratchIds ValueIdArray, range SourceRange)
-		let scratchSize = self.emitLiteral(IntToStringScratchBytes, valueType: MaxonType.integer, range: range)
+	// Render a primitive part into a freshly `__mm_alloc`'d scratch buffer via a `(value, dest) -> length`
+	// converter runtime function, enroll the scratch for the post-copy free (it is an owned buffer the blit
+	// consumes — otherwise the interp-scratch-buffer leak), and record `(scratch, length)`. The shared shape
+	// of every primitive part — int, bool, float — differing only in the converter and its worst-case byte
+	// budget. A `named` integer alias is already i64, so the value needs no widening at this rung.
+	function materializeScratchPart(exprVal ValueId, converter ByteArray, scratchBytes ParsedInt, partBufs ValueIdArray, partLens ValueIdArray, scratchIds ValueIdArray, range SourceRange)
+		let scratchSize = self.emitLiteral(scratchBytes, valueType: MaxonType.integer, range: range)
 		let destructor = self.emitLiteral(TrivialDestructor, valueType: MaxonType.integer, range: range)
 		var allocArgs = ValueIdArray.create()
 		allocArgs.push(scratchSize)
@@ -6148,12 +6154,12 @@ export type Parser
 		var convArgs = ValueIdArray.create()
 		convArgs.push(exprVal)
 		convArgs.push(scratch)
-		let length = self.emitRuntimeCall(IntToStringName, args: convArgs, resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+		let length = self.emitRuntimeCall(converter, args: convArgs, resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
 
 		partBufs.push(scratch)
 		partLens.push(length)
 		scratchIds.push(scratch)
-	end 'materializeIntPart'
+	end 'materializeScratchPart'
 
 	// ⭐ **ASSEMBLE THE FUSED OWNED STRING.** Sum the part lengths, allocate ONE `__mm_alloc` record big
 	// enough for the 48-byte record + the bytes + a NUL, copy every part into the inline region at a running

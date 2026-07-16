@@ -132,8 +132,7 @@ var msg = "Hello, {name}!"
 
 ### Basic Variable Interpolation
 
-<!-- disabled-test: basic-variable -->
-<!-- P1.2 wave B: string interpolation -->
+<!-- test: basic-variable -->
 ```maxon
 function main() returns ExitCode
 	let name = "World"
@@ -150,8 +149,7 @@ Hello, World!
 
 ### Multiple Variables
 
-<!-- disabled-test: multiple-variables -->
-<!-- P1.2 wave B: string interpolation -->
+<!-- test: multiple-variables -->
 ```maxon
 function main() returns ExitCode
 	let first = "Hello"
@@ -169,8 +167,7 @@ Hello, World!
 
 ### Integer Interpolation
 
-<!-- disabled-test: integer-interpolation -->
-<!-- P1.2 wave B: string interpolation -->
+<!-- test: integer-interpolation -->
 ```maxon
 function main() returns ExitCode
 	let x = 42
@@ -187,8 +184,7 @@ Value: 42
 
 ### Integer Literal Interpolation
 
-<!-- disabled-test: integer-literal -->
-<!-- P1.2 wave B: string interpolation -->
+<!-- test: integer-literal -->
 ```maxon
 function main() returns ExitCode
 	print("Answer: {42}\n")
@@ -204,8 +200,7 @@ Answer: 42
 
 ### Negative Integer
 
-<!-- disabled-test: negative-integer -->
-<!-- P1.2 wave B: string interpolation -->
+<!-- test: negative-integer -->
 ```maxon
 function main() returns ExitCode
 	let x = -5
@@ -222,8 +217,7 @@ Negative: -5
 
 ### Negative Unary Expression
 
-<!-- disabled-test: negative-unary -->
-<!-- P1.2 wave B: string interpolation -->
+<!-- test: negative-unary -->
 ```maxon
 function main() returns ExitCode
 	print("Value: {0-10}\n")
@@ -240,7 +234,7 @@ Value: -10
 ### Float Interpolation
 
 <!-- disabled-test: float-interpolation -->
-<!-- P1.2 wave B: string interpolation -->
+<!-- P1.2 wave B-float: float interpolation (blocked: shv2 has no f64 function-argument ABI) -->
 ```maxon
 function main() returns ExitCode
 	let pi = 3.14159
@@ -258,7 +252,7 @@ Pi: 3.14159
 ### Float Literal Interpolation
 
 <!-- disabled-test: float-literal -->
-<!-- P1.2 wave B: string interpolation -->
+<!-- P1.2 wave B-float: float interpolation (blocked: shv2 has no f64 function-argument ABI) -->
 ```maxon
 function main() returns ExitCode
 	print("Value: {2.5}\n")
@@ -275,7 +269,7 @@ Value: 2.5
 ### Negative Float
 
 <!-- disabled-test: negative-float -->
-<!-- P1.2 wave B: string interpolation -->
+<!-- P1.2 wave B-float: float interpolation (blocked: shv2 has no f64 function-argument ABI) -->
 ```maxon
 function main() returns ExitCode
 	let temp = -3.5
@@ -292,8 +286,7 @@ Temp: -3.5
 
 ### Boolean True Interpolation
 
-<!-- disabled-test: bool-true -->
-<!-- P1.2 wave B: string interpolation -->
+<!-- test: bool-true -->
 ```maxon
 function main() returns ExitCode
 	let flag = true
@@ -310,8 +303,7 @@ Active: true
 
 ### Boolean False Interpolation
 
-<!-- disabled-test: bool-false -->
-<!-- P1.2 wave B: string interpolation -->
+<!-- test: bool-false -->
 ```maxon
 function main() returns ExitCode
 	let flag = false
@@ -328,8 +320,7 @@ Active: false
 
 ### Boolean Literal Interpolation
 
-<!-- disabled-test: bool-literal -->
-<!-- P1.2 wave B: string interpolation -->
+<!-- test: bool-literal -->
 ```maxon
 function main() returns ExitCode
 	print("Yes: {true}, No: {false}\n")
@@ -345,8 +336,7 @@ Yes: true, No: false
 
 ### Expression Interpolation
 
-<!-- disabled-test: expression-interpolation -->
-<!-- P1.2 wave B: string interpolation -->
+<!-- test: expression-interpolation -->
 ```maxon
 function main() returns ExitCode
 	let a = 5
@@ -364,8 +354,7 @@ end 'main'
 
 ### Complex Expression
 
-<!-- disabled-test: complex-expression -->
-<!-- P1.2 wave B: string interpolation -->
+<!-- test: complex-expression -->
 ```maxon
 function main() returns ExitCode
 	let x = 10
@@ -382,8 +371,7 @@ Double: 20, Triple: 30
 
 ### Parenthesized Expression
 
-<!-- disabled-test: parenthesized-expression -->
-<!-- P1.2 wave B: string interpolation -->
+<!-- test: parenthesized-expression -->
 ```maxon
 function main() returns ExitCode
 	let a = 2
@@ -401,8 +389,7 @@ Result: 10
 
 ### Empty String Parts
 
-<!-- disabled-test: empty-parts -->
-<!-- P1.2 wave B: string interpolation -->
+<!-- test: empty-parts -->
 ```maxon
 function main() returns ExitCode
 	let x = 42
@@ -419,8 +406,7 @@ end 'main'
 
 ### Adjacent Interpolations
 
-<!-- disabled-test: adjacent-interpolations -->
-<!-- P1.2 wave B: string interpolation -->
+<!-- test: adjacent-interpolations -->
 ```maxon
 function main() returns ExitCode
 	let a = "Hello"
@@ -438,8 +424,7 @@ HelloWorld
 
 ### Three Adjacent Interpolations
 
-<!-- disabled-test: three-adjacent -->
-<!-- P1.2 wave B: string interpolation -->
+<!-- test: three-adjacent -->
 ```maxon
 function main() returns ExitCode
 	let a = "A"
@@ -458,8 +443,7 @@ ABC
 
 ### String Variable Interpolation
 
-<!-- disabled-test: string-variable -->
-<!-- P1.2 wave B: string interpolation -->
+<!-- test: string-variable -->
 ```maxon
 function main() returns ExitCode
 	let greeting = "Hello"
@@ -494,8 +478,7 @@ Use {expr} for interpolation
 
 ### Mixed Escaped and Interpolation
 
-<!-- disabled-test: mixed-escaped -->
-<!-- P1.2 wave B: string interpolation -->
+<!-- test: mixed-escaped -->
 ```maxon
 function main() returns ExitCode
 	let x = 42
@@ -512,8 +495,7 @@ Value {x} is 42
 
 ### Interpolation in Loop
 
-<!-- disabled-test: interpolation-loop -->
-<!-- P1.2 wave B: string interpolation -->
+<!-- test: interpolation-loop -->
 ```maxon
 function main() returns ExitCode
 	var i = 0
@@ -535,8 +517,7 @@ Count: 2
 
 ### Function Call in Interpolation
 
-<!-- disabled-test: function-call -->
-<!-- P1.2 wave B: string interpolation -->
+<!-- test: function-call -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -560,7 +541,7 @@ Double of 5: 10
 ### Method Call in Interpolation
 
 <!-- disabled-test: method-call -->
-<!-- P1.2 wave B: string interpolation -->
+<!-- P1.8: string methods (.count()) -->
 ```maxon
 function main() returns ExitCode
 	let s = "hello"
@@ -577,8 +558,7 @@ Length: 5
 
 ### Comparison in Interpolation
 
-<!-- disabled-test: comparison-interpolation -->
-<!-- P1.2 wave B: string interpolation -->
+<!-- test: comparison-interpolation -->
 ```maxon
 function main() returns ExitCode
 	let a = 5
@@ -596,8 +576,7 @@ a > b: true
 
 ### Logical Expression
 
-<!-- disabled-test: logical-expression -->
-<!-- P1.2 wave B: string interpolation -->
+<!-- test: logical-expression -->
 ```maxon
 function main() returns ExitCode
 	let x = true
@@ -616,7 +595,7 @@ x and y: false
 ### Float Arithmetic
 
 <!-- disabled-test: float-arithmetic -->
-<!-- P1.2 wave B: string interpolation -->
+<!-- P1.2 wave B-float: float interpolation (blocked: shv2 has no f64 function-argument ABI) -->
 ```maxon
 function main() returns ExitCode
 	let r = 2.0
@@ -633,8 +612,7 @@ Area: 12.56636
 
 ### Mixed Types
 
-<!-- disabled-test: mixed-types -->
-<!-- P1.2 wave B: string interpolation -->
+<!-- test: mixed-types -->
 ```maxon
 function main() returns ExitCode
 	let name = "test"
@@ -653,8 +631,7 @@ Name: test, Count: 5, Active: true
 
 ### Large Integer
 
-<!-- disabled-test: large-integer -->
-<!-- P1.2 wave B: string interpolation -->
+<!-- test: large-integer -->
 ```maxon
 function main() returns ExitCode
 	let big = 2147483647
@@ -672,7 +649,7 @@ Max int: 2147483647
 ### Zero Values
 
 <!-- disabled-test: zero-values -->
-<!-- P1.2 wave B: string interpolation -->
+<!-- P1.2 wave B-float: float interpolation (blocked: shv2 has no f64 function-argument ABI) -->
 ```maxon
 function main() returns ExitCode
 	let i = 0
@@ -690,8 +667,7 @@ Int: 0, Float: 0.0
 
 ### Newline in String with Interpolation
 
-<!-- disabled-test: newline-interpolation -->
-<!-- P1.2 wave B: string interpolation -->
+<!-- test: newline-interpolation -->
 ```maxon
 function main() returns ExitCode
 	let x = 42
@@ -709,8 +685,7 @@ Line2: done
 
 ### Tab in String with Interpolation
 
-<!-- disabled-test: tab-interpolation -->
-<!-- P1.2 wave B: string interpolation -->
+<!-- test: tab-interpolation -->
 ```maxon
 function main() returns ExitCode
 	let a = 1
@@ -852,7 +827,7 @@ John Doe, 30 years old
 ### Int-Backed Enum Interpolation
 
 <!-- disabled-test: int-enum-interpolation -->
-<!-- P1.2 wave B: string interpolation -->
+<!-- P1.2 wave B-enum: enum interpolation -->
 ```maxon
 enum Color
 	red = 1
@@ -876,7 +851,7 @@ Color value: 2
 ### Simple Enum Interpolation
 
 <!-- disabled-test: simple-enum-interpolation -->
-<!-- P1.2 wave B: string interpolation -->
+<!-- P1.2 wave B-enum: enum interpolation -->
 ```maxon
 enum Direction
 	north
@@ -901,7 +876,7 @@ Direction: east
 ### String-Backed Enum Interpolation
 
 <!-- disabled-test: string-enum-interpolation -->
-<!-- P1.2 wave B: string interpolation -->
+<!-- P1.2 wave B-enum: enum interpolation -->
 ```maxon
 enum Status
 	active = "Active"
@@ -925,7 +900,7 @@ Status: Active
 ### Multiple Enum Interpolations
 
 <!-- disabled-test: multiple-enum-interpolation -->
-<!-- P1.2 wave B: string interpolation -->
+<!-- P1.2 wave B-enum: enum interpolation -->
 ```maxon
 enum Priority
 	low = 1
@@ -950,7 +925,7 @@ Priorities: 1 and 3
 ### Integer Format Specifier - Zero Padding
 
 <!-- disabled-test: int-format-zero-pad -->
-<!-- P1.2 wave B: string interpolation -->
+<!-- P1.2 wave B-format: format specifiers -->
 ```maxon
 function main() returns ExitCode
 	let n = 42
@@ -974,7 +949,7 @@ end 'main'
 ### Integer Format Specifier - Hex
 
 <!-- disabled-test: int-format-hex -->
-<!-- P1.2 wave B: string interpolation -->
+<!-- P1.2 wave B-format: format specifiers -->
 ```maxon
 function main() returns ExitCode
 	let n = 255
@@ -1007,7 +982,7 @@ that as "negative", started at index 1, and overwrote the digit it had just shif
 chars wide, so it never pads); only a value SHORTER than its field reaches the fill loop.
 
 <!-- disabled-test: int-format-zero-padded-unsigned -->
-<!-- P1.2 wave B: string interpolation -->
+<!-- P1.2 wave B-format: format specifiers -->
 ```maxon
 function main() returns ExitCode
 	let n = 255
@@ -1037,7 +1012,7 @@ end 'main'
 ### Integer Format Specifier - Hex High Bit (unsigned bases)
 
 <!-- disabled-test: int-format-high-bit-unsigned -->
-<!-- P1.2 wave B: string interpolation -->
+<!-- P1.2 wave B-format: format specifiers -->
 ```maxon
 function main() returns ExitCode
 	// Values with bit 63 set exceed i64.max (negative as signed i64). The
@@ -1070,7 +1045,7 @@ B000000000000000
 ### Integer Format Specifier - Width
 
 <!-- disabled-test: int-format-width -->
-<!-- P1.2 wave B: string interpolation -->
+<!-- P1.2 wave B-format: format specifiers -->
 ```maxon
 function main() returns ExitCode
 	let n = 42
@@ -1090,7 +1065,7 @@ end 'main'
 ### Integer Format Specifier - Negative Zero Padding
 
 <!-- disabled-test: int-format-neg-zero-pad -->
-<!-- P1.2 wave B: string interpolation -->
+<!-- P1.2 wave B-format: format specifiers -->
 ```maxon
 function main() returns ExitCode
 	let n = -42
@@ -1108,7 +1083,7 @@ end 'main'
 ### Float Format Specifier - Precision
 
 <!-- disabled-test: float-format-precision -->
-<!-- P1.2 wave B: string interpolation -->
+<!-- P1.2 wave B-format: float format specifiers (blocked: no f64 function-argument ABI) -->
 ```maxon
 function main() returns ExitCode
 	let f = 3.14159
@@ -1131,7 +1106,7 @@ end 'main'
 ### Float Format Specifier - Width and Precision
 
 <!-- disabled-test: float-format-width-precision -->
-<!-- P1.2 wave B: string interpolation -->
+<!-- P1.2 wave B-format: float format specifiers (blocked: no f64 function-argument ABI) -->
 ```maxon
 function main() returns ExitCode
 	let f = 3.14
@@ -1149,7 +1124,7 @@ end 'main'
 ### Enum Raw Value Format Specifier
 
 <!-- disabled-test: enum-rawvalue-format -->
-<!-- P1.2 wave B: string interpolation -->
+<!-- P1.2 wave B-format: format specifiers -->
 ```maxon
 enum ErrorCode
 	ok = 0
@@ -1185,7 +1160,7 @@ fragment's `try` merge block — leaving it without a terminator, which tripped
 diagnostic could be reported.
 
 <!-- disabled-test: multiple-try-fragments -->
-<!-- P1.2 wave B: string interpolation -->
+<!-- P1.4: try-expression inside interpolation -->
 ```maxon
 typealias Idx = int(i64.min to i64.max)
 typealias IdxList = List with Idx
