@@ -252,6 +252,28 @@ storing it is now the whole lowering.
 The dummy was also *leaking* on the error path (see below), so this is a correctness fix wearing an
 optimization's clothes.
 
+**2026-07-16 — bootstrap constant resolver, not shv2: no table row moved, and none could.** This
+change is in the **C# bootstrap's** cross-file top-level constant resolver, which `scale-test` does
+not measure — the instrument compiles generated programs with **shv2**, and shv2 was rebuilt
+byte-for-byte identically by the patched bootstrap (sha256 `1062b0d…`, forward *and*
+`MAXON_SOURCE_ORDER=reverse`). The subject of every row above is unchanged, so there is nothing for
+the tool to record. (On this arm64-macOS host the instrument cannot run at all: shv2's M1 backend
+allocates for x64-windows only, so `RegisterAllocator.maxon` panics on the host arch — orthogonal to
+this change.)
+
+The bootstrap regression it fixes was real and superlinear. The rung `2408411dc` made cross-file
+constant resolution order-independent by folding every reference against a **whole-program-visible**
+list of constant declarations; `EvaluateConstant` looked a name up in that list with a linear
+`FirstOrDefault`, once per reference — **O(references × constants)**, quadratic in a constant-heavy
+project. Measured on a generated corpus of N cross-file constants with `--timing` (the bootstrap's
+own per-phase instrument, since `scale-test` measures the wrong compiler here), the `preScan` phase
+grew **×4.2 per doubling** at N = 2000→4000 (39 → 164 ms) — a clean quadratic. Replacing the scan
+with a name→decl dictionary built once per file (first-wins, so a file's own declaration still
+shadows a foreign one of the same name) makes each lookup O(1): that same step is now ×2.4 (15 → 36
+ms) and the dominant term is gone. The O(files × constants) that remains is the *same* class as the
+pre-existing `SeedFromModule` seed this diff never touched — sub-millisecond at the ~600-constant
+scale of a real self-build, and quadratic before this rung too.
+
 ## Bugs this uncovered
 
 Removing the dummy exposed a leak it had been half-hiding, and the leak in turn exposed a hole in the

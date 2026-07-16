@@ -1888,7 +1888,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     // there is the same value `decls` would fold, reached without re-folding it.
     var evaluated = new Dictionary<string, object>(_topLevelConstants);
     var evaluating = new HashSet<string>();
-    var decls = VisibleConstantDecls(ownDecls);
+    var decls = ConstantDeclSet.From(VisibleConstantDecls(ownDecls));
 
     // Only THIS file's constants are folded eagerly. A foreign one is folded when it is demanded,
     // by the recursion below — folding them all here would report another file's broken constant
@@ -5088,14 +5088,35 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     if (Check(TokenType.CharacterLiteral)) Advance();
   }
 
-  private object EvaluateConstant(string name, List<TopLevelConstantDecl> decls, Dictionary<string, object> evaluated, HashSet<string> evaluating, int refLine = 0, int refCol = 0) {
+  // A file's visible top-level constant declarations, indexed two ways. Ordered keeps the
+  // own-decls-first order the circular-dependency report walks with Last(); ByName gives the fold
+  // an O(1) name lookup in place of a linear scan. The scan was FirstOrDefault over the
+  // WHOLE-PROGRAM-visible list, run once per constant reference — O(references x constants), i.e.
+  // quadratic in a constant-heavy project (measured: preScan 39ms->164ms per doubling at 2k->4k
+  // constants). ByName is first-wins to match the FirstOrDefault it replaces: a file's own
+  // declaration, listed first, must still shadow a foreign one of the same name.
+  private sealed record ConstantDeclSet(
+      List<TopLevelConstantDecl> Ordered,
+      Dictionary<string, TopLevelConstantDecl> ByName) {
+    public static readonly ConstantDeclSet Empty = new([], []);
+
+    public static ConstantDeclSet From(List<TopLevelConstantDecl> ordered) {
+      var byName = new Dictionary<string, TopLevelConstantDecl>(ordered.Count);
+      foreach (var decl in ordered)
+        byName.TryAdd(decl.Name, decl); // first-wins mirrors Ordered.FirstOrDefault(name)
+      return new ConstantDeclSet(ordered, byName);
+    }
+  }
+
+  private object EvaluateConstant(string name, ConstantDeclSet decls, Dictionary<string, object> evaluated, HashSet<string> evaluating, int refLine = 0, int refCol = 0) {
     if (evaluated.TryGetValue(name, out var val)) return val;
 
-    var decl = decls.FirstOrDefault(d => d.Name == name) ?? throw new CompileError(ErrorCode.ParserExpectedExpression, $"Undefined constant '{name}'", refLine, refCol);
+    if (!decls.ByName.TryGetValue(name, out var decl))
+      throw new CompileError(ErrorCode.ParserExpectedExpression, $"Undefined constant '{name}'", refLine, refCol);
     if (!evaluating.Add(name)) {
       // Circular dependency: collect all names in the cycle
       var cycleNames = string.Join(", ", evaluating);
-      var lastDecl = decls.Last(d => evaluating.Contains(d.Name));
+      var lastDecl = decls.Ordered.Last(d => evaluating.Contains(d.Name));
       throw new CompileError(ErrorCode.ParserCircularDependency,
         $"Circular dependency detected among global constants: {cycleNames}",
         lastDecl.Line, lastDecl.Column) { FilePath = lastDecl.SourceFilePath };
@@ -5150,11 +5171,11 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   // Compile-time constant expression evaluator
   // ============================================================================
 
-  private object EvalConstExpr(List<TopLevelConstantDecl> decls, Dictionary<string, object> evaluated, HashSet<string> evaluating) {
+  private object EvalConstExpr(ConstantDeclSet decls, Dictionary<string, object> evaluated, HashSet<string> evaluating) {
     return EvalConstOr(decls, evaluated, evaluating);
   }
 
-  private object EvalConstOr(List<TopLevelConstantDecl> decls, Dictionary<string, object> evaluated, HashSet<string> evaluating) {
+  private object EvalConstOr(ConstantDeclSet decls, Dictionary<string, object> evaluated, HashSet<string> evaluating) {
     var lhs = EvalConstXor(decls, evaluated, evaluating);
     while (Check(TokenType.Or)) {
       Advance();
@@ -5166,7 +5187,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     return lhs;
   }
 
-  private object EvalConstXor(List<TopLevelConstantDecl> decls, Dictionary<string, object> evaluated, HashSet<string> evaluating) {
+  private object EvalConstXor(ConstantDeclSet decls, Dictionary<string, object> evaluated, HashSet<string> evaluating) {
     var lhs = EvalConstAnd(decls, evaluated, evaluating);
     while (Check(TokenType.Xor)) {
       Advance();
@@ -5178,7 +5199,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     return lhs;
   }
 
-  private object EvalConstAnd(List<TopLevelConstantDecl> decls, Dictionary<string, object> evaluated, HashSet<string> evaluating) {
+  private object EvalConstAnd(ConstantDeclSet decls, Dictionary<string, object> evaluated, HashSet<string> evaluating) {
     var lhs = EvalConstComparison(decls, evaluated, evaluating);
     while (Check(TokenType.And)) {
       Advance();
@@ -5190,7 +5211,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     return lhs;
   }
 
-  private object EvalConstComparison(List<TopLevelConstantDecl> decls, Dictionary<string, object> evaluated, HashSet<string> evaluating) {
+  private object EvalConstComparison(ConstantDeclSet decls, Dictionary<string, object> evaluated, HashSet<string> evaluating) {
     var lhs = EvalConstShift(decls, evaluated, evaluating);
 
     if (Check(TokenType.EqualsEquals) || Check(TokenType.NotEquals) ||
@@ -5204,7 +5225,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     return lhs;
   }
 
-  private object EvalConstShift(List<TopLevelConstantDecl> decls, Dictionary<string, object> evaluated, HashSet<string> evaluating) {
+  private object EvalConstShift(ConstantDeclSet decls, Dictionary<string, object> evaluated, HashSet<string> evaluating) {
     var lhs = EvalConstAddSub(decls, evaluated, evaluating);
     while (Check(TokenType.Shl) || Check(TokenType.Shr)) {
       var op = Advance().Type;
@@ -5250,7 +5271,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     };
   }
 
-  private object EvalConstAddSub(List<TopLevelConstantDecl> decls, Dictionary<string, object> evaluated, HashSet<string> evaluating) {
+  private object EvalConstAddSub(ConstantDeclSet decls, Dictionary<string, object> evaluated, HashSet<string> evaluating) {
     var lhs = EvalConstMulDiv(decls, evaluated, evaluating);
 
     while (Check(TokenType.Plus) || Check(TokenType.Minus)) {
@@ -5270,7 +5291,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     return lhs;
   }
 
-  private object EvalConstMulDiv(List<TopLevelConstantDecl> decls, Dictionary<string, object> evaluated, HashSet<string> evaluating) {
+  private object EvalConstMulDiv(ConstantDeclSet decls, Dictionary<string, object> evaluated, HashSet<string> evaluating) {
     var lhs = EvalConstUnary(decls, evaluated, evaluating);
 
     while (Check(TokenType.Star) || Check(TokenType.Slash) || Check(TokenType.Mod)) {
@@ -5296,7 +5317,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     return lhs;
   }
 
-  private object EvalConstUnary(List<TopLevelConstantDecl> decls, Dictionary<string, object> evaluated, HashSet<string> evaluating) {
+  private object EvalConstUnary(ConstantDeclSet decls, Dictionary<string, object> evaluated, HashSet<string> evaluating) {
     if (Check(TokenType.Minus)) {
       Advance();
       var val = EvalConstAsCast(decls, evaluated, evaluating);
@@ -5319,7 +5340,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   // the value against a ranged-type bound (compile error on out-of-range), or
   // both. Mirrors the runtime parser's `as`-cast handling but operates on
   // already-evaluated constants instead of MaxonValues.
-  private object EvalConstAsCast(List<TopLevelConstantDecl> decls, Dictionary<string, object> evaluated, HashSet<string> evaluating) {
+  private object EvalConstAsCast(ConstantDeclSet decls, Dictionary<string, object> evaluated, HashSet<string> evaluating) {
     var value = EvalConstPrimary(decls, evaluated, evaluating);
     while (Check(TokenType.As)) {
       var asToken = Advance(); // consume 'as'
@@ -5384,7 +5405,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     return value;
   }
 
-  private object EvalConstPrimary(List<TopLevelConstantDecl> decls, Dictionary<string, object> evaluated, HashSet<string> evaluating) {
+  private object EvalConstPrimary(ConstantDeclSet decls, Dictionary<string, object> evaluated, HashSet<string> evaluating) {
     if (Check(TokenType.IntegerLiteral)) {
       var token = Advance();
       return ParseIntegerLiteral(token);
@@ -6367,7 +6388,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     } else {
       // Simple constant initializer — evaluate at compile time
       _pos = exprStart;
-      var value = EvalConstExpr([], _topLevelConstants, []);
+      var value = EvalConstExpr(ConstantDeclSet.Empty, _topLevelConstants, []);
       var (fieldType, defaultValue) = ConstValueToAttribute(value, fieldToken.Line, fieldToken.Column);
 
       if (isMutable) {
