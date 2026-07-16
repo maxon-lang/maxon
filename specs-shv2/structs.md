@@ -68,8 +68,7 @@ c.count = 5     // OK: field is var
 
 ## Tests
 
-<!-- disabled-test: var-struct-field-assign -->
-<!-- P1.1a wave 2 — instance/field mutability rules -->
+<!-- test: var-struct-field-assign -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -93,8 +92,7 @@ end 'main'
 30
 ```
 
-<!-- disabled-test: var-field-assign -->
-<!-- P1.1a wave 2 — instance/field mutability rules -->
+<!-- test: var-field-assign -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -118,8 +116,7 @@ end 'main'
 5
 ```
 
-<!-- disabled-test: error.let-struct-field-assign -->
-<!-- P1.1a wave 2 — instance/field mutability rules -->
+<!-- test: error.let-struct-field-assign -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -143,8 +140,7 @@ end 'main'
 error E2013: specs/fragments/structs/error.let-struct-field-assign.test:16:2: cannot assign to immutable variable: 'p'
 ```
 
-<!-- disabled-test: error.let-field-assign -->
-<!-- P1.1a wave 2 — instance/field mutability rules -->
+<!-- test: error.let-field-assign -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -299,7 +295,7 @@ end 'main'
 ```
 
 <!-- disabled-test: struct-field-default -->
-<!-- P1.1a wave 2 — field defaults -->
+<!-- FUNCTION OVERLOADING — not field defaults, which P1.1a wave 2 landed. This case declares `Counter.create` TWICE (arity 0 and arity 2), and the whole-program duplicate check reports `E3006: duplicate definition of function 'Counter.create'` before anything reaches a default. Overloading appears nowhere on the ladder; `field-initialization.md`'s `all-defaults` is the enabled default case. -->
 ```maxon
 type Counter
 	export var value = 0
@@ -328,8 +324,7 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: struct-field-inferred-type -->
-<!-- P1.1a wave 2 — field defaults + inferred field types -->
+<!-- test: struct-field-inferred-type -->
 ```maxon
 type Settings
 	export let maxRetries = 5
