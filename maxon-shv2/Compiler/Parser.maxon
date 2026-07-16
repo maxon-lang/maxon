@@ -1138,6 +1138,11 @@ let NulByte = 0 as Byte
 // phi, nor take a slot in a merge snapshot. Wide range: declaration counts are unbounded.
 typealias BindingMark = int(0 to u64.max)
 
+// The floor `emitScopeDrops` releases down to at a FUNCTION exit — the base of the owned-binding
+// stack, so every owned binding still in scope is dropped. A block or loop exit passes its own
+// recorded height instead, releasing only what it declared.
+let WholeFunctionScopeFloor = 0 as BindingMark
+
 // What a lexical block must be unwound to — the heights of BOTH per-binding lists the parser
 // keeps beside `Scope`.
 //
@@ -1208,9 +1213,14 @@ type LoopContext
 	// True once at least one `break` targeted this loop — the exit then merges the
 	// header-false-edge value with each break's value, so it needs its own phis.
 	export var hasBreak as bool
+	// The owned-binding height when this loop's body was entered — the floor a `break`/`continue`
+	// releases down to, dropping every owned binding declared since (this iteration's body-local
+	// Strings/structs) before it jumps to the exit / back-edge. Equal to the body block's
+	// `BlockMark.ownedCount`, because nothing is pushed between recording it and opening the body.
+	export var ownedFloor as BindingMark
 
-	export static function create(label ByteArray, headerId BlockId, exitId BlockId, phiVars LoopPhiVarArray) returns LoopContext
-		return Self{label: label, headerId: headerId, exitId: exitId, phiVars: phiVars, hasBreak: false}
+	export static function create(label ByteArray, headerId BlockId, exitId BlockId, phiVars LoopPhiVarArray, ownedFloor BindingMark) returns LoopContext
+		return Self{label: label, headerId: headerId, exitId: exitId, phiVars: phiVars, hasBreak: false, ownedFloor: ownedFloor}
 	end 'create'
 end 'LoopContext'
 
@@ -2836,7 +2846,7 @@ export type Parser
 		// `bodyEnd` IS `self.currentBlock` — `parseStatement` returns the latter and `parseStatements`
 		// threads it — so the drops land in the block this terminator ends. The already-terminated
 		// case returned above, so a `return` that has dropped cannot be dropped a second time here.
-		self.emitScopeDrops(nameTok)
+		self.emitScopeDrops(WholeFunctionScopeFloor, anchor: nameTok)
 		self.artifact.emitTerminator(bodyEnd, op: MaxonOp.retVoid, range: SourceRange.ofToken(nameTok))
 	end 'closeFunctionBody'
 
@@ -3220,18 +3230,17 @@ export type Parser
 	end 'openBlock'
 
 	// Close a lexical block: drop its declarations out of scope (restoring anything they
-	// shadowed), its `var`s off the mutable-binding list, and its struct bindings off the
+	// shadowed), its `var`s off the mutable-binding list, and its owned bindings off the
 	// owned list.
 	//
-	// ⚠ **IT EMITS NO DROP, AND THE FAILURE THAT CAUSES IS LOUD.** A struct declared in a
-	// block and not returned through — `if c 'b' let p = Point.create(1, y: 2) end 'b'` —
-	// leaves scope here with its box still live, so the program LEAKS and `__mm_leak_check`
-	// reports exit 101. That is a real gap and it is stated rather than papered: no case in
-	// `specs-shv2/structs.md` declares a struct inside a block, so a drop emitted here would
-	// be code nothing executes and nothing proves — and the failure mode of getting it wrong
-	// (a decref onto a path control has already left, or a second decref of a box the
-	// `return` already dropped) is a USE-AFTER-FREE, which is strictly worse than the leak
-	// the gate already shouts about. Fail-safe beats untested.
+	// ⚠ **IT EMITS NO DROP, AND THAT IS NOW CORRECT RATHER THAN A DEFERRAL.** The `__mm_decref` for a
+	// block-local owned binding — `if c 'b' let s = build(1) end 'b'` — is emitted by the code that
+	// makes control LEAVE the block, keyed on HOW it leaves: a fall-through drops it in `parseBlockBody`
+	// (before this pops it), a `break`/`continue` in `parseBreakStatement`/`parseContinueStatement`
+	// (down to the enclosing loop's height), a `return` in `emitScopeDrops` (the whole scope). That
+	// placement is what avoids the double-free/use-after-free this comment once warned the drop-here
+	// approach could not: each edge that leaves the block alive drops exactly once, and a terminated
+	// edge has already dropped, so this routine only unwinds the TRACKING lists and emits nothing.
 	function closeBlock(mark BlockMark)
 		self.scope.popScope()
 		while self.mutableVars.count() > mark.mutableCount 'drainVars'
@@ -3254,6 +3263,23 @@ export type Parser
 		let mark = self.openBlock()
 		self.skipNewlines()
 		let bodyEnd = try self.parseStatements(func, block: block)
+
+		// ⭐ **DROP THE BLOCK'S OWN OWNED BINDINGS ON FALL-THROUGH** — a `let s = build(i)` inside an
+		// `if`/`while` body dies at the block's `end`, so a loop body drops per iteration. Only the
+		// bindings the block itself declared (above `mark.ownedCount`); the outer ones drop when THEIR
+		// block closes. Emitted into `bodyEnd` — which IS `self.currentBlock`, as `parseStatements`
+		// threads it — BEFORE `closeBlock` pops them off the list, and before the caller
+		// (`parseIf`/`parseWhile`) emits the block's exit jump, so the drops precede the continuation
+		// branch / back-edge.
+		//
+		// ⚠ Skipped on a TERMINATED `bodyEnd`: a `return`/`break`/`continue` on every path has already
+		// emitted its own drops (the whole scope, or down to the enclosing loop), so dropping again here
+		// would double-free — the exact hazard `closeBlock`'s old comment named. `isTerminated()` is the
+		// guard that makes this an addition rather than that bug.
+		if not bodyEnd.isTerminated() 'dropBlockOwned'
+			self.currentBlock = bodyEnd
+			self.emitScopeDrops(mark.ownedCount, anchor: self.current())
+		end 'dropBlockOwned'
 
 		// Published for `parseWhileStatement`'s drift guard — the cursor is ON the `end` here,
 		// which is the one place the block's closing token index is known.
@@ -3459,7 +3485,7 @@ export type Parser
 				throw ParseError.returnValueFromVoid(String.from(func.name), line: retTok.line, column: retTok.column)
 			end 'valueFromVoid'
 
-			self.emitScopeDrops(retTok)
+			self.emitScopeDrops(WholeFunctionScopeFloor, anchor: retTok)
 			self.artifact.emitTerminator(block, op: MaxonOp.retVoid, range: SourceRange.ofToken(retTok))
 			return
 		end 'voidFunction'
@@ -3552,11 +3578,18 @@ export type Parser
 			self.drainPendingTemps(retTok)
 		end 'dropReturnTemps'
 
-		self.emitScopeDrops(retTok)
+		self.emitScopeDrops(WholeFunctionScopeFloor, anchor: retTok)
 		self.artifact.emitTerminator(self.currentBlock, op: MaxonOp.ret(returned), range: SourceRange.ofToken(retTok))
 	end 'parseReturnStatement'
 
-	// Emit a `__mm_decref` for every struct binding in scope, in REVERSE declaration order.
+	// Emit a `__mm_decref` for every owned binding above `floor`, in REVERSE declaration order.
+	//
+	// ONE routine serves the two kinds of exit that release owned bindings, differing only in how far
+	// down the stack they release: a FUNCTION exit (`return`, an implicit void end) drops the WHOLE
+	// in-scope list (`WholeFunctionScopeFloor`), while a nested BLOCK's fall-through and a
+	// `break`/`continue` drop only what the block or loop itself declared (their recorded height),
+	// leaving the outer bindings for their own scope to release. The floor is the single fact that
+	// tells the two apart, so the reverse-order decref loop lives here and cannot drift between them.
 	//
 	// Reverse, because that is the order ownership is conventionally released in — the last thing
 	// built is the first torn down — and because a later binding may (once struct fields land) hold
@@ -3564,11 +3597,12 @@ export type Parser
 	// still being pointed at. Nothing at this rung can tell the two orders apart; the convention
 	// costs nothing and is the one that stays right.
 	//
-	// `anchor` is the `return` token: no source token spawns a drop, and the statement that made
-	// control leave the scope is where a reader looks for what happened to the values in it.
-	function emitScopeDrops(anchor Token)
+	// `anchor` is the token of the statement that made control leave the scope (the `return`, the
+	// block's `end`, the `break`/`continue`): no source token spawns a drop, and that statement is
+	// where a reader looks for what happened to the values in it.
+	function emitScopeDrops(floor BindingMark, anchor Token)
 		var i = self.ownedBindings.count()
-		while i > 0 'eachOwned'
+		while i > floor 'eachOwned'
 			i = i - 1
 			let binding = try self.ownedBindings.get(i) otherwise panic("emitScopeDrops: ownedBindings.get OOB at {i} — the list is only appended to and drained at a block's end")
 			self.emitDecref(binding.boundValue, range: SourceRange.ofToken(anchor))
@@ -4019,7 +4053,9 @@ export type Parser
 		var exit = self.newBlock(func, label: b"whileexit", line: whileTok.line)
 		self.emitCondBranch(condExit, cond: cond, thenId: body.id, elseId: exit.id, ifTok: whileTok)
 
-		self.loops.push(LoopContext.create(loopLabelTok.value, headerId: header.id, exitId: exit.id, phiVars: phiVars))
+		// `ownedFloor` is the owned-binding height NOW, before the body opens its block — so a
+		// `break`/`continue` releases exactly what the body declares (see LoopContext.ownedFloor).
+		self.loops.push(LoopContext.create(loopLabelTok.value, headerId: header.id, exitId: exit.id, phiVars: phiVars, ownedFloor: self.ownedBindings.count()))
 
 		// The body is a lexical BLOCK: its declarations are gone — and its `var`s off
 		// `mutableVars` — before the back-edge args below are read, so those args name the
@@ -4232,12 +4268,26 @@ export type Parser
 		self.recordBranchEdge(condExit, targetId: exit.id, argIds: headerVals)
 	end 'wireLoopExit'
 
+	// Drop the owned bindings a `break`/`continue` skips past — everything declared since the target
+	// loop's body was entered (`ctx.ownedFloor`), in reverse order, into `block` BEFORE the branch that
+	// terminates it. A `break`/`continue` leaves its block ALIVE (it jumps forward/back rather than
+	// falling through the `end`), so `parseBlockBody`'s fall-through drop never runs on this path — this
+	// is the only place that iteration's body-local Strings/structs are released. For a labelled control
+	// to an OUTER loop, `ctx` is that outer loop, so the floor releases every binding down to it. The
+	// decrefs land in `block` because `emitScopeDrops` emits into `currentBlock` and a `break`/`continue`
+	// moves control nowhere until its branch, so `currentBlock` is `block`.
+	function dropLoopBodyOwned(block IrBlock, ctx LoopContext, anchor Token)
+		self.currentBlock = block
+		self.emitScopeDrops(ctx.ownedFloor, anchor: anchor)
+	end 'dropLoopBodyOwned'
+
 	// Parse `break ['label']` (M4b): branch to the target loop's EXIT block, carrying
 	// the current phi-var values so the exit's merge phis see this path's values.
 	function parseBreakStatement(block IrBlock) throws ParseError
 		let breakTok = try self.consume(TokenKind.break)
 		var ctx = try self.resolveControlTarget("break", kwTok: breakTok)
 		ctx.hasBreak = true
+		self.dropLoopBodyOwned(block, ctx: ctx, anchor: breakTok)
 		self.recordBranchEdge(block, targetId: ctx.exitId, argIds: self.edgeArgsFor(ctx.phiVars))
 		self.emitBranch(block, targetId: ctx.exitId)
 	end 'parseBreakStatement'
@@ -4247,6 +4297,7 @@ export type Parser
 	function parseContinueStatement(block IrBlock) throws ParseError
 		let continueTok = try self.consume(TokenKind.continue)
 		let ctx = try self.resolveControlTarget("continue", kwTok: continueTok)
+		self.dropLoopBodyOwned(block, ctx: ctx, anchor: continueTok)
 		self.recordBranchEdge(block, targetId: ctx.headerId, argIds: self.edgeArgsFor(ctx.phiVars))
 		self.emitBranch(block, targetId: ctx.headerId)
 	end 'parseContinueStatement'

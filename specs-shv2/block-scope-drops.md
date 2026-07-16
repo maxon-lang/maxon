@@ -1,0 +1,237 @@
+---
+feature: block-scope-drops
+status: experimental
+keywords: [ownership, drop, block, loop, break, continue, leak]
+category: memory
+---
+
+# Block-Scope Ownership Drops
+
+## Documentation
+
+An owned heap value (a `String`, a struct box) bound inside an `if` or `while` body
+is owned by that block and must be released when control leaves it, on every edge
+that leaves the block alive:
+
+- **fall-through** — the binding drops at the block's `end`, so a loop body releases
+  its per-iteration bindings each time round;
+- **`break` / `continue`** — the jump skips past the block's `end`, so the drop is
+  emitted before the branch, releasing everything declared since the target loop's
+  body was entered;
+- **`return`** — the whole in-scope set is released before the terminator, and a
+  binding that is itself returned is moved out first (so it is not double-freed).
+
+Outer bindings are untouched: each drops when its own block closes.
+
+```maxon
+while more() 'loop'
+	let line = readLine()   // owned; dropped at the loop body's end each iteration
+	print(line)
+end 'loop'
+```
+
+## Tests
+
+### Owned Binding in a Loop Body
+
+<!-- test: owned-binding-in-loop -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function build(x Integer) returns String
+	return "v{x}"
+end 'build'
+
+function main() returns ExitCode
+	var i = 0
+	while i < 3 'loop'
+		let s = build(i)
+		print(s)
+		i = i + 1
+	end 'loop'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+v0v1v2
+```
+
+### Owned Binding in an If Body
+
+<!-- test: owned-binding-in-if -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function build(x Integer) returns String
+	return "v{x}"
+end 'build'
+
+function main() returns ExitCode
+	let flag = 1
+	if flag > 0 'b'
+		let s = build(flag)
+		print(s)
+	end 'b'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+v1
+```
+
+### Owned Binding Released on Break
+
+<!-- test: owned-binding-with-break -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function build(x Integer) returns String
+	return "v{x}"
+end 'build'
+
+function main() returns ExitCode
+	var i = 0
+	while i < 100 'loop'
+		let s = build(i)
+		print(s)
+		i = i + 1
+		if i > 3 'stop'
+			break
+		end 'stop'
+	end 'loop'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+v0v1v2v3
+```
+
+### Owned Binding Released on Continue
+
+<!-- test: owned-binding-with-continue -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function build(x Integer) returns String
+	return "v{x}"
+end 'build'
+
+function main() returns ExitCode
+	var i = 0
+	while i < 3 'loop'
+		i = i + 1
+		let s = build(i)
+		print(s)
+		continue
+	end 'loop'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+v1v2v3
+```
+
+### Nested Blocks, Both Bind Owned Strings
+
+<!-- test: nested-owned-bindings -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function build(x Integer) returns String
+	return "v{x}"
+end 'build'
+
+function main() returns ExitCode
+	var i = 0
+	while i < 4 'loop'
+		let a = build(i)
+		print(a)
+		if i < 2 'b'
+			let bb = build(i)
+			print(bb)
+		end 'b'
+		i = i + 1
+	end 'loop'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+v0v0v1v1v2v3
+```
+
+### Returning a Block-Local Binding Frees Exactly Once
+
+<!-- test: return-block-local-binding -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function build(x Integer) returns String
+	return "v{x}"
+end 'build'
+
+function pick(x Integer) returns String
+	if x > 0 'b'
+		let p = build(x)
+		return p
+	end 'b'
+	return "neg"
+end 'pick'
+
+function main() returns ExitCode
+	let s = pick(5)
+	print(s)
+	let t = pick(0 - 3)
+	print(t)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+v5neg
+```
+
+### Struct Bound in a Block Is Released
+
+<!-- test: owned-struct-in-block -->
+```maxon
+type Box
+	var v as int
+
+	static function create(v int) returns Box
+		return Self{v: v}
+	end 'create'
+end 'Box'
+
+function main() returns ExitCode
+	var i = 0
+	while i < 3 'loop'
+		if i < 2 'b'
+			let q = Box.create(i)
+		end 'b'
+		i = i + 1
+	end 'loop'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+```
