@@ -1216,3 +1216,64 @@ end 'main'
 ```maxoncstderr
 error E3005: specs/fragments/string-interpolation/error.plus-on-string.test:5:12: operator '+' is not defined for type 'String'
 ```
+
+### Interpolation temporary is dropped per loop iteration
+
+An unbound interpolation result (`print("{i}")`) is an owned heap String owned by the STATEMENT that
+produced it. In a loop body each iteration allocates a fresh one, and the statement-scoped drop must free
+it inside the body, every iteration — not once at scope exit. A single scope-exit drop would leak every
+iteration but the last; a wrong drop of an already-freed value would be worse. This authored regression
+runs the loop long enough that any per-iteration leak drives `__mm_alloc_count` above zero and the leak
+gate reports exit 101 instead of 0.
+
+<!-- test: interp-temporary-dropped-per-loop-iteration -->
+```maxon
+function main() returns ExitCode
+	var i = 0
+	while i < 8 'loop'
+		print("iter {i}\n")
+		i = i + 1
+	end 'loop'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+iter 0
+iter 1
+iter 2
+iter 3
+iter 4
+iter 5
+iter 6
+iter 7
+```
+
+### Interpolation temporary in a nested block is dropped at statement end
+
+A temporary owned interpolation result created inside an `if` block is dropped at the end of its own
+statement — which is INSIDE the block — so it is leak-free even though the block emits no scope-exit drop.
+This is the case the deferred `closeBlock` gap does NOT cover: a nested-block temporary works (the drop
+rides the statement), where a nested-block BOUND value would leak (its drop would have to ride the block's
+`end`, which is P1.4). Authored to pin that distinction.
+
+<!-- test: interp-temporary-in-nested-block -->
+```maxon
+function main() returns ExitCode
+	let n = 7
+	if n > 0 'inside'
+		print("val={n}\n")
+		print("twice {n}{n}\n")
+	end 'inside'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+val=7
+twice 77
+```

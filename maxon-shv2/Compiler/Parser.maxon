@@ -1447,17 +1447,21 @@ export type Parser
 	// lets the fold be an optimization rather than a second opinion.
 	var valueConsts as ParsedIntArray
 	var valueConstKnown as BoolArray
-	// ⭐ **THE OWNED-HEAP PROVENANCE BIT — one per SSA value, in lockstep with `valueTags`.** True iff the
-	// value is a FRESH owned heap allocation this function is responsible for dropping — today, an
-	// interpolation RESULT (`emitStringInterp`). It exists because ownership CANNOT be read off the type
-	// tag: an owned interpolation String and a borrowed-immortal rdata literal String share
-	// `ValueTypeTag.string`, so keying a drop on the tag would either decref an immortal literal (a wrong
-	// decref of unowned `.rdata`) or leak an interpolation result. The bit is the provenance the tag cannot
-	// carry — set by the ONE expression that allocates a String, cleared (never set) by the literal path —
-	// and it is read by `parseBinding` (does this binding OWN a drop?) and by the statement-scoped
-	// temp-drop (`drainPendingTemps`). Structs need no such bit: every struct is heap, so `tagIsStructRef`
-	// already answers for them; this is only the String owned/borrowed split the tag conflates.
-	var valueOwnsHeap as BoolArray
+	// ⭐ **THE OWNED-HEAP PROVENANCE — the SSA values that are FRESH owned heap allocations this function
+	// must drop.** Today, the interpolation RESULTS (`emitStringInterp`). It exists because ownership CANNOT
+	// be read off the type tag: an owned interpolation String and a borrowed-immortal rdata literal String
+	// share `ValueTypeTag.string`, so keying a drop on the tag would either decref an immortal literal (a
+	// wrong decref of unowned `.rdata`) or leak an interpolation result. This is the provenance the tag
+	// cannot carry — recorded by the ONE expression that allocates a String, never by the literal path —
+	// read by `parseBinding` (does this binding OWN a drop?) and structurally by the statement-scoped
+	// temp-drop. Structs need no entry: every struct is heap, so `tagIsStructRef` already answers for them;
+	// this is only the String owned/borrowed split the tag conflates.
+	//
+	// A SPARSE list, not a per-value column: owned heap values are a HANDFUL per function (the columns in
+	// lockstep with `valueTags` pay for every value, and provenance is true for almost none of them), so a
+	// short list scanned by `valueIsOwnedHeap` — called once per binding — costs far less than a bool on
+	// every SSA value across a self-compile. Reset per function.
+	var ownedHeapValues as ValueIdArray
 	// Every function declared ANYWHERE IN THE PROGRAM, with its return type — the whole-program
 	// signature index (SignatureIndex.maxon), built from every file's TOKENS before any file is
 	// parsed and handed to every Parser.
@@ -1543,7 +1547,7 @@ export type Parser
 			valueNameIds: TypeNameIdArray.create(),
 			valueConsts: ParsedIntArray.create(),
 			valueConstKnown: BoolArray.create(),
-			valueOwnsHeap: BoolArray.create(),
+			ownedHeapValues: ValueIdArray.create(),
 			signatures: signatures,
 			enclosingType: EmptySourceText,
 			ownedBindings: VarInfoArray.create(),
@@ -2724,7 +2728,7 @@ export type Parser
 		self.valueNameIds = TypeNameIdArray.create()
 		self.valueConsts = ParsedIntArray.create()
 		self.valueConstKnown = BoolArray.create()
-		self.valueOwnsHeap = BoolArray.create()
+		self.ownedHeapValues = ValueIdArray.create()
 		for paramType in paramTypes 'seedParamTypes'
 			self.recordValueType(paramType)
 		end 'seedParamTypes'
@@ -3552,19 +3556,25 @@ export type Parser
 	end 'emitRuntimeCall'
 
 	// ⭐ **TRACK A FRESH OWNED HEAP TEMPORARY.** The one door `emitStringInterp` reaches ownership through:
-	// it sets the value's provenance bit (so `parseBinding` knows the binding owns a drop) AND enrolls it in
+	// it records the value's provenance (so `parseBinding` knows the binding owns a drop) AND enrolls it in
 	// the statement's pending-drop list (so an UNBOUND result is dropped at statement end). Both from one
 	// call, so the two facts — "this value owns heap" and "someone must drop it" — cannot be set apart.
 	function trackOwnedTemp(value ValueId)
-		try self.valueOwnsHeap.set(value, value: true) otherwise panic("trackOwnedTemp: value v{value} has no ownership slot — every SSA value must be minted through mintValue")
+		self.ownedHeapValues.push(value)
 		self.pendingTempDrops.push(value)
 	end 'trackOwnedTemp'
 
 	// Does `value` own a droppable heap allocation? Read by `parseBinding` (the String half of "is this
 	// binding owned?") and by the reassignment/return paths as they arrive. It is provenance, NOT the type
-	// tag — see `valueOwnsHeap`'s header for why the tag cannot answer.
+	// tag — see `ownedHeapValues`'s header for why the tag cannot answer. A scan of the sparse owned list;
+	// it holds a handful of interpolation results per function, so the linear membership test is cheap.
 	function valueIsOwnedHeap(value ValueId) returns bool
-		return try self.valueOwnsHeap.get(value) otherwise panic("valueIsOwnedHeap: value v{value} has no ownership slot — every SSA value must be minted through mintValue")
+		for owned in self.ownedHeapValues 'each'
+			if owned == value 'match'
+				return true
+			end 'match'
+		end 'each'
+		return false
 	end 'valueIsOwnedHeap'
 
 	// Ownership of `value` has been TRANSFERRED to a binding, so the statement no longer owes its drop:
@@ -5140,8 +5150,6 @@ export type Parser
 		// slot must exist first, and the emitter overwrites it (`recordConst`).
 		self.valueConsts.push(0)
 		self.valueConstKnown.push(false)
-		// Borrowed by default: only `markOwnsHeap` sets it. A value that allocates nothing owns no drop.
-		self.valueOwnsHeap.push(false)
 		return id
 	end 'mintValue'
 
@@ -5160,9 +5168,6 @@ export type Parser
 		// A parameter's value is the one thing the compiler provably cannot see.
 		self.valueConsts.push(0)
 		self.valueConstKnown.push(false)
-		// A parameter is a BORROW at this rung (the consume-vs-borrow calling convention is P1.4), so it
-		// owns no drop — the column stays in lockstep either way.
-		self.valueOwnsHeap.push(false)
 	end 'recordValueType'
 
 	// Remember the integer behind a value the parser has just DEFINED. Called by the emitters, on
