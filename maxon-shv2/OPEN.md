@@ -1538,6 +1538,18 @@ consistent behavior (documented in `Queries.maxon`). ⇒ **Coordinator's call wh
 author union E2026/E2046 spec tests pinning shv2's "union", or decide to reproduce the bootstrap's "enum".
 Not a blocker — an unpinned wording detail on a diagnostic no case currently reaches.
 
+### ~~35. 🔴 a USER `__`-prefixed function SILENTLY MISCOMPILES; shv2 needs E2051~~ ✅ **FIXED 2026-07-16** (`f3550590e`, `6b739ebc3`, `b697c411c`)
+**E2051 now emitted by shv2 at 9 declaration sites** (function/method name, parameter, `let`, `var`, `type`,
+type-field, `typealias`, enum/union CASE, **enum/union NAME**) via ONE `Parser.requireUnreservedName` helper.
+The `__` compiler-internal namespace is now ENFORCED, so `isCompilerInternalCallee`'s `__`-prefix predicate is
+**provably sound** (no user `__` name can exist). `__add(7)` ⇒ E2051 (was exit 65543); `print("hi")` still
+builds (runtime `__` fns are builder-built, never parsed). Ported `specs/reserved-double-underscore.md` (8
+cases) + 2 coordinator-authored cases (`enum-name`, `union-name` — the implementer flagged the enum/union NAME
+gap rather than shipping an untested guard; the coordinator closed it). `closure-parameter` deferred → P1.5.
+`specs-shv2` 523→533. **One residual (minor): `b"__"` is 3 cross-referenced copies** (`Parser.ReservedNamePrefix`,
+`MmRuntime.CompilerInternalPrefix`, `TargetPrinter.isRuntimeFunction`) — the same namespace marker at 3 tiers;
+a single shared language-level constant is a worthwhile small cleanup, deferred (spans TargetPrinter).
+
 ### 35. 🔴 NEW 2026-07-16 (P1.2 Wave A) — **a USER `__`-prefixed function SILENTLY MISCOMPILES; shv2 needs E2051. THE IMMEDIATE P1.2 FOLLOW-UP.**
 
 **Found by the INDEPENDENT review** (the implementer's self-review missed it — the fifth time this rung the
