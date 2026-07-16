@@ -316,7 +316,9 @@ public static partial class MaxonToStandardConversion {
       var stackTag = $"__stk_{stackVarName}";
 
       // Slots are immediately overwritten by both halves, so skip the zero-init.
-      block.AddOp(new StdBulkZeroOp(stackTag, tupleType.Fields.Count, zeroInit: false));
+      // QWORDS, not fields (see StackSlotCount) — equal for a 2-scalar tuple, but the slot names
+      // below are indexed by offset, so the two must be derived from the same quantity.
+      block.AddOp(new StdBulkZeroOp(stackTag, StackSlotCount(tupleType), zeroInit: false));
       EmitStore(block, low, StackSlotName(stackTag, tupleType, tupleType.Fields[0].Offset), varTypes);
       EmitStore(block, high, StackSlotName(stackTag, tupleType, tupleType.Fields[1].Offset), varTypes);
 

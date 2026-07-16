@@ -43,15 +43,28 @@ public static partial class MaxonToStandardConversion {
   }
 
   /// <summary>
+  /// How many 8-byte slots a stack-allocated <paramref name="structType"/> occupies — the number
+  /// `StdBulkZeroOp` reserves, and the number `StackSlotName` indexes backwards from.
+  ///
+  /// It is a QWORD count, and it is NOT `Fields.Count`. Those agree only while every field occupies
+  /// exactly one qword, which is true of every type that reaches here TODAY and is not a property of
+  /// the layout: an inline `managed` field is 40 bytes (see `IrStructType.FieldSlotSize`), so a
+  /// `String` is 2 fields and 6 qwords. Asking `Fields.Count` gave `StackSlotName` a NEGATIVE index
+  /// for String's `isAsciiFlag` (`2 - 1 - 40/8` = -4) — invalid, and reachable the moment such a type
+  /// becomes stack-allocatable. Size is the question; ask it.
+  /// </summary>
+  private static int StackSlotCount(IrStructType structType) => structType.SizeInBytes / 8;
+
+  /// <summary>
   /// Name of the BulkZero stack slot holding the field at <paramref name="fieldOffset"/> of a
   /// stack-allocated struct tagged <paramref name="stackTag"/>.
   ///
-  /// Slots run in REVERSE field order because the LEA that materialises a pointer to the
-  /// record yields the lowest stack address: numbering them backwards is what puts field 0
+  /// Slots run in REVERSE offset order because the LEA that materialises a pointer to the
+  /// record yields the lowest stack address: numbering them backwards is what puts offset 0
   /// at [ptr+0].
   /// </summary>
   private static string StackSlotName(string stackTag, IrStructType structType, int fieldOffset) =>
-    $"{stackTag}.{Math.Max(structType.Fields.Count, 1) - 1 - (fieldOffset / 8)}";
+    $"{stackTag}.{StackSlotCount(structType) - 1 - (fieldOffset / 8)}";
 
   /// <summary>
   /// Resolve the canonical struct type for a function return type.

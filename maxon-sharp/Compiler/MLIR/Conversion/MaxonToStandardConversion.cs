@@ -1089,10 +1089,12 @@ public static partial class MaxonToStandardConversion {
                 }
                 tempName2 ??= temps.CreateTemp("stack", structLitOp.Result.Id, structLitOp.TypeName, OwnershipFlags.None);
                 var stackTag = $"__stk_{tempName2}";
-                var fieldCount = Math.Max(structType.Fields.Count, 1);
+                // QWORDS, not fields — StdBulkZeroOp reserves 8-byte slots, and the two agree only
+                // while every field is one qword wide (see StackSlotCount).
+                var slotCount = StackSlotCount(structType);
 
                 // Reserve stack space (skip zero-init — fields are immediately overwritten)
-                newBlock.AddOp(new StdBulkZeroOp(stackTag, fieldCount, zeroInit: false));
+                newBlock.AddOp(new StdBulkZeroOp(stackTag, slotCount, zeroInit: false));
 
                 // Store each field directly to the BulkZero slots (no pointer indirection).
                 // Fields are stored in reverse slot order so that the LEA (which returns the
