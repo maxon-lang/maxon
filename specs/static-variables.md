@@ -715,3 +715,40 @@ end 'main'
 ```maxoncstderr
 error E2045: specs/fragments/static-variables/top-level-var-function-call-error.test:8:13: Function calls are not allowed in global variable initializers; 'getDefault()' is not a constant expression
 ```
+
+<!-- test: literal-in-a-struct-field-is-not-static -->
+A literal stored into a **struct field** must not become a shared immortal record. Whoever holds the
+struct can mutate the field in place — `h.name.append("!")` — which the per-function escape analysis
+cannot see, exactly as it cannot see a mutable global mutated in another function.
+
+Left eligible, the damage is **silent and not local**: literals are interned, so both `"fld"` below are
+ONE static record; `append` finds `capacity == -2`, detaches, and writes the fresh buffer **into that
+shared record**. `untouched` — which nothing ever touched — then reads `"fld!"`, and the buffer leaks
+(exit 101) because an immortal record's destructor is 0. Both were real on `2122a9471`.
+
+Nothing else catches this: the plan's `.rodata` safety net does not exist, because a data→data pointer
+cannot be baked under ASLR, so static records live in **writable** `.data` and the write succeeds
+quietly. **The escape analysis is the only guard.**
+```maxon
+type Holder
+	export var name as String
+
+	static function create(name String) returns Self
+		return Self{name: name}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	var h = Holder.create("fld")
+	h.name.append("!")
+	let untouched = "fld"
+	print("h.name={h.name} untouched={untouched}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+h.name=fld! untouched=fld
+```

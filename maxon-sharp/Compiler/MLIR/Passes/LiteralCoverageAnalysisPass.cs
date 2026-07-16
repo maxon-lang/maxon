@@ -248,9 +248,29 @@ public static class LiteralCoverageAnalysisPass {
           }
           break;
         case MaxonStructLiteralOp sl:
-          // String{managed: X} / ByteArray{managed: X} aliases X (zero-copy).
           foreach (var (fieldName, value) in sl.FieldValues) {
-            if (fieldName == "managed") Union(ValueNode(sl.Result.Id), ValueNode(value.Id));
+            if (fieldName == "managed") {
+              // String{managed: X} / ByteArray{managed: X} aliases X (zero-copy). The wrapper IS its
+              // __ManagedMemory since the envelope collapse, so this is identity, not storage.
+              Union(ValueNode(sl.Result.Id), ValueNode(value.Id));
+            } else {
+              // ...but stored into ANY OTHER field, a literal escapes this per-function analysis, for
+              // exactly the reason a mutable global does (see the GlobalStore sink above): whoever
+              // holds the struct can mutate the field in place -- `h.name.append("!")` -- and the local
+              // var graph cannot see it. Left eligible, the literal stays a shared immortal record, and
+              // `append` grows it: `ensure_cap` sees capacity == -2, detaches, and writes the fresh
+              // buffer INTO THE SHARED STATIC RECORD. Every other occurrence of that literal in the
+              // program then reads the mutated bytes, and the buffer leaks because an immortal record's
+              // destructor is 0. Both were REAL: `var h = Holder.create("fld"); h.name.append("!")`
+              // corrupted an untouched `let x = "fld"` to "fld!" and exited 101.
+              //
+              // The .rodata safety net the plan specified does not exist to catch this -- static records
+              // live in WRITABLE .data, because a data->data pointer cannot be baked under ASLR
+              // (__module_init fills buffer@0 with a RIP-relative lea). So the write succeeds silently.
+              // This sink is the guard.
+              ctx.IntrinsicSinks.Add(ValueNode(value.Id));
+              ctx.IntrinsicSinkValueIds.Add(value.Id);
+            }
           }
           // An ARRAY literal is a literal site too: a never-mutated one can be a shared immortal
           // record — a CONSTANT primitive array (`[1,2,3]`, elements packed in rdata; 3b) or a
