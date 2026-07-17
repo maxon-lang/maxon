@@ -323,6 +323,9 @@ function reportParseError(project Project, path FilePath, error ParseError)
 		returnValueFromVoid(name, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "type mismatch: '{name}' declares no return type, so it cannot return a value", line: line, column: column, filePath: path)
 		returnWithoutValue(name, line, column) then reportPositioned(project, code: ErrorCode.missingReturn, message: "missing return value: '{name}' declares a return type, so every 'return' must carry a value", line: line, column: column, filePath: path)
 		assignToImmutable(name, line, column) then reportPositioned(project, code: ErrorCode.assignToImmutable, message: "cannot assign to immutable variable: '{name}'", line: line, column: column, filePath: path)
+		// Wave C, static single-owner. shv2-only — the reference compilers refcount and have no move
+		// model, so there is no bootstrap text to match. Positioned on the use.
+		useAfterMove(name, line, column) then reportPositioned(project, code: ErrorCode.useAfterMove, message: "use of moved value '{name}': its ownership moved to another binding at an earlier bind or assignment", line: line, column: column, filePath: path)
 		controlOutsideLoop(keyword, line, column) then reportPositioned(project, code: ErrorCode.controlOutsideLoop, message: "'{keyword}' can only be used inside a loop", line: line, column: column, filePath: path)
 		labelTargetsOwnLoop(keyword, label, line, column) then reportPositioned(project, code: ErrorCode.labelTargetsOwnLoop, message: "'{keyword}' with label '{label}' targets its own loop; use '{keyword}' without a label, or '{keyword}' with the label of an outer loop", line: line, column: column, filePath: path)
 		unknownLoopLabel(keyword, label, line, column) then reportPositioned(project, code: ErrorCode.controlOutsideLoop, message: "'{keyword}' targets no enclosing loop with label '{label}'", line: line, column: column, filePath: path)

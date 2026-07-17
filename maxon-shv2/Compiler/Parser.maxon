@@ -112,6 +112,13 @@ export union ParseError implements Error
 	// A reassignment (`x = expr`) whose target was declared `let` (immutable). M4b
 	// added assignment; only `var` bindings accept it. Renders as E2013.
 	assignToImmutable(name String, line LineNumber, column ColumnNumber)
+	// A READ of a binding that has been MOVED FROM — its owned heap value was transferred to
+	// another binding by an earlier `let u = t` / `s = t` (Wave C, static single-owner). Renders
+	// as E3102, positioned on the use. A WRITE to a moved-from `var` is legal (it revives the
+	// binding) and does NOT come through here — only reads reach `parseVariableReference`. This
+	// is shv2's first ownership program-rejection; the reference compilers refcount and have no
+	// move model, so there is no bootstrap text to match.
+	useAfterMove(name String, line LineNumber, column ColumnNumber)
 	// A `break`/`continue` with no enclosing loop. `keyword` is "break"/"continue"
 	// for the message. Renders as E2047.
 	controlOutsideLoop(keyword String, line LineNumber, column ColumnNumber)
@@ -3200,6 +3207,13 @@ export type Parser
 		// binding is borrowed and never dropped, exactly as an immortal rdata String must be. `let` and `var`
 		// alike: ownership is a property of the VALUE, never the mutability.
 		if self.valueIsOwned(value, tag: self.tagOf(value)) 'trackOwned'
+			// ⭐ **MOVE-ON-BIND.** If the initializer was a bare reference to an ALREADY-owned binding
+			// (`let u = t`), `value` is that binding's value: it MOVES to this new one. Poison the
+			// source so a later read of it is use-after-move and only the new owner drops the value.
+			// A fresh owned temp (`build()`, `"{x}"`) is held by no binding, so nothing is poisoned —
+			// that is a CONSUME (move-in), not a source-poisoning move. Run BEFORE the push below, so
+			// the scan cannot find this new binding (it aliases the same value).
+			self.poisonMoveSource(value)
 			self.ownedBindings.push(binding)
 			// Ownership TRANSFERS from the statement to the binding, so the statement must no longer drop it
 			// — a second drop of the box the binding now owns is a double-free. A struct box is never in the
@@ -3400,30 +3414,53 @@ export type Parser
 			return
 		end 'selfAssign'
 
-		let wasOwned = self.bindingIsOwned(binding)
+		// ⭐ **MOVE-ON-ASSIGN.** A bare reference to an ALREADY-owned binding as the RHS (`s = t`) MOVES
+		// that value: poison the source so a later read of it is use-after-move and only the new owner
+		// drops the value. A fresh owned temp is held by no binding — a CONSUME, not a move. Run BEFORE
+		// `setValue` below, so the scan matches the SOURCE's value rather than this binding's (which
+		// `setValue` is about to overwrite with the moved value).
+		self.poisonMoveSource(value)
 
-		// Promote a borrowed value assigned to an owned binding (owned→borrowed, `s = "literal"`) to an
-		// owned copy, so the binding stays in `ownedBindings` (see the header). Reached only for a
-		// String: the only owned binding that can be handed a borrowed value is a String one — a struct
-		// binding's RHS is a struct box (`tagIsStructRef`, so already owned), and `requireAssignable`
-		// has rejected any other type.
+		// Is `binding` a LIVE owner (owes a drop of `oldValue`), and/or already enrolled in
+		// `ownedBindings`? `binding.movedFrom` is read DIRECTLY, not via `bindingIsOwned`: a moved-from
+		// binding shares its stale `boundValue` with the binding it moved to, so a value-keyed membership
+		// test would find that new owner and wrongly report the moved-from binding as still owning a
+		// drop. A moved-from binding owns NOTHING (its value belongs to its new owner), so it drops
+		// nothing here — but it IS still in `ownedBindings`, so a revive must not re-enrol it.
+		let wasMovedFrom = binding.movedFrom
+		let wasOwned = not wasMovedFrom and self.bindingIsOwned(binding)
+		let inOwnedSet = wasOwned or wasMovedFrom
+
+		// Promote a borrowed value assigned to a binding that is (or stays) in the owned set
+		// (owned→borrowed `s = "literal"`, or a moved-from binding revived with a literal) to an owned
+		// copy, so the binding keeps owning a droppable value rather than being deleted from the middle
+		// of the owned-binding stack (see the header). Reached only for a String: a struct binding's RHS
+		// is always a struct box (`tagIsStructRef`, already owned), and `requireAssignable` rejects any
+		// other type.
 		var newValue = value
 		var newIsOwned = self.valueIsOwned(value, tag: valueTag)
-		if wasOwned and not newIsOwned 'promoteBorrowed'
+		if inOwnedSet and not newIsOwned 'promoteBorrowed'
 			newValue = self.promoteToOwnedString(value, range: SourceRange.ofToken(nameTok))
 			newIsOwned = true
 		end 'promoteBorrowed'
 
-		// Release the overwritten allocation BEFORE the rebind, while `oldValue` still names it.
+		// Release the overwritten allocation BEFORE the rebind, while `oldValue` still names it. Only a
+		// LIVE owner has one to release: a moved-from binding's old value belongs to the binding it moved
+		// to, which drops it — decref-ing it here would double-free.
 		if wasOwned 'dropOld'
 			self.emitDecref(oldValue, range: SourceRange.ofToken(nameTok))
 		end 'dropOld'
 
 		self.scope.setValue(nameTok.value, value: newValue)
 
+		// A WRITE REVIVES the binding: it owns `newValue` now, so a later read of it is legal again.
+		binding.movedFrom = false
+
 		if newIsOwned 'trackNew'
-			if not wasOwned 'borrowedToOwned'
-				// borrowed → owned (`var s = ""; s = build(1)`): the binding now owes a scope-exit drop.
+			if not inOwnedSet 'borrowedToOwned'
+				// A genuinely borrowed binding (`var s = ""; s = build(1)`) joins the owned set. A binding
+				// already in the set — a live owner, or a moved-from ghost being revived — must NOT be
+				// pushed again, or scope exit would decref `newValue` twice.
 				self.ownedBindings.push(binding)
 			end 'borrowedToOwned'
 			// The new owned value is the binding's to drop at scope exit, so the STATEMENT must not also
@@ -3695,7 +3732,15 @@ export type Parser
 		while i > floor 'eachOwned'
 			i = i - 1
 			let binding = try self.ownedBindings.get(i) otherwise panic("emitScopeDrops: ownedBindings.get OOB at {i} — the list is only appended to and drained at a block's end")
-			self.emitDecref(binding.boundValue, range: SourceRange.ofToken(anchor))
+			// ⭐ **DROP-SKIP FOR A MOVED-FROM BINDING.** Its owned value was transferred to another
+			// binding by a `let u = t` / `s = t`, which now owns and drops it — decref-ing it here too
+			// would double-free (the exact bug #41 filed for `s = t`). The moved-from binding stays in
+			// the list (removal would desync the block/loop drop marks), so the SKIP is what makes a
+			// moved-out value drop exactly once. This one guard serves every exit that funnels through
+			// here — `return`, a block fall-through, a `break`/`continue`.
+			if not binding.movedFrom 'liveOwner'
+				self.emitDecref(binding.boundValue, range: SourceRange.ofToken(anchor))
+			end 'liveOwner'
 		end 'eachOwned'
 	end 'emitScopeDrops'
 
@@ -3791,24 +3836,52 @@ export type Parser
 		self.ownedBindings = kept
 	end 'removeFromOwnedBindings'
 
-	// Does `binding` currently owe a scope-exit drop — i.e. is it a member of `ownedBindings`? The
+	// Does `binding` currently owe a scope-exit drop — i.e. is it a LIVE owner in `ownedBindings`? The
 	// reassignment path's test for whether the value being OVERWRITTEN is owned. It reads MEMBERSHIP,
 	// not `valueIsOwnedHeap(binding.boundValue)`, and that distinction is the whole point: a
 	// loop-carried `var`'s current value is a header phi with no owned-heap provenance, so the value
 	// column would answer `false` for a binding the loop owns (see `reassignBindingValue`). Membership
 	// survives the phi; the provenance bit does not.
 	//
-	// Keyed on `boundValue`, the `removeFromOwnedBindings` idiom — an owned heap value has a single
-	// owner, so at most one owned binding holds any given value, and it is this one. An O(ownedBindings)
-	// scan; a reassignment is not a hot path.
+	// Keyed on `boundValue`, the `removeFromOwnedBindings` idiom — an owned heap value has a single LIVE
+	// owner, so at most one non-moved owned binding holds any given value. `movedFrom` GHOSTS are
+	// skipped: a moved-from binding stays in the list but shares its stale value with the binding it
+	// moved to, so counting it would report two owners of one value. An O(ownedBindings) scan; a
+	// reassignment is not a hot path.
 	function bindingIsOwned(binding VarInfo) returns bool
 		for owned in self.ownedBindings 'each'
-			if owned.boundValue == binding.boundValue 'match'
+			if not owned.movedFrom and owned.boundValue == binding.boundValue 'match'
 				return true
 			end 'match'
 		end 'each'
 		return false
 	end 'bindingIsOwned'
+
+	// ⭐ **MOVE THE VALUE OUT OF ITS CURRENT OWNER.** If `value` is the current value of a LIVE owned
+	// binding — i.e. the RHS of a bind/assign was a bare reference to that binding (`let u = t`) — mark
+	// that source `movedFrom`, so a later read of it is use-after-move (E3102) and `emitScopeDrops`
+	// skips its drop (only the new owner drops the value). A fresh owned temp (`build()`, `"{x}"`) is
+	// the value of no binding, so nothing is poisoned — that is a CONSUME (move-in), not a
+	// source-poisoning move.
+	//
+	// Skips `movedFrom` ghosts (a value already moved once cannot be its live source) so the ONE live
+	// owner is the one poisoned. Keyed on `boundValue`, the `bindingIsOwned` idiom; an O(ownedBindings)
+	// scan on the cold bind/assign path.
+	function poisonMoveSource(value ValueId)
+		var i = 0
+		while i < self.ownedBindings.count() 'each'
+			// A `var` bound from `.get(i)`, not a bare `for` element: a field write needs a mutable
+			// binding, and it is written THROUGH the shared `VarInfo` reference (the `Scope.setValue`
+			// idiom), so the flag is observed by every holder — `ownedBindings`, `Scope.vars`, any
+			// loop-phi list.
+			var owned = try self.ownedBindings.get(i) otherwise panic("poisonMoveSource: ownedBindings.get OOB at {i} — the list is only appended to and drained at a block's end")
+			if not owned.movedFrom and owned.boundValue == value 'source'
+				owned.movedFrom = true
+				return
+			end 'source'
+			i = i + 1
+		end 'each'
+	end 'poisonMoveSource'
 
 	// ⭐ **PROMOTE A BORROWED String TO AN OWNED HEAP COPY** so a `returns String` function ALWAYS hands
 	// back something owned. `return "hi"` yields an immortal rdata literal (capacity == -2), and a
@@ -7506,7 +7579,20 @@ export type Parser
 			return try self.parseSelfFieldRead(tok, binding: self.scope.getInfo(tok.value))
 		end 'selfField'
 
-		return try self.scope.lookupValue(tok.value) otherwise return try self.topLevelBindingReference(tok)
+		// A LOCAL binding: reject a read of one that has been MOVED FROM (its owned value was transferred
+		// to another binding by a `let u = t` / `s = t`). This is the READ site — a WRITE target routes
+		// through `parseAssignment`, which REVIVES the binding, so the check must not run there. A name
+		// that is NOT a local (a top-level constant or `var`) is never owned and never moved, so it
+		// stays on the original resolve path.
+		if self.scope.contains(tok.value) 'local'
+			let binding = self.scope.getInfo(tok.value)
+			if binding.movedFrom 'moved'
+				throw ParseError.useAfterMove(String.from(tok.value), line: tok.line, column: tok.column)
+			end 'moved'
+			return binding.boundValue
+		end 'local'
+
+		return try self.topLevelBindingReference(tok)
 	end 'parseVariableReference'
 
 	// A bare name that is not a local: a top-level constant, a top-level `var`, or nothing.

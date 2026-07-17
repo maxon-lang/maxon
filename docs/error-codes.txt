@@ -932,6 +932,16 @@ E3101 SemanticThrowingFunctionAsValue
 	doc the function-type grammar plus an indirect try-call ABI is a FEATURE, and would be built for
 	doc nobody. If a real need appears, that is the shape -- and this code is what says so.
 
+E3102 SemanticUseAfterMove
+	shv2 useAfterMove
+	doc A binding is READ after its owned heap value was MOVED OUT of it. Under shv2's static
+	doc single-owner model an owned value (an owned String, a struct box) has exactly one owner; a
+	doc `let u = t` / `s = t` whose RHS is a bare reference to an owned binding TRANSFERS ownership to
+	doc the destination, and the source is left moved-from. A later read of the source is refused --
+	doc it would read a value another binding now owns and will drop, and dropping it twice is a
+	doc double-free. A WRITE to a moved-from `var` is legal (it revives the binding). shv2-only: the
+	doc reference compilers refcount, so aliasing is legal there and there is no move to violate.
+
 E4001 IrUnsupportedExpression
 	csharp IrUnsupportedExpression
 	doc The IR builder met an expression form it cannot lower.

@@ -184,6 +184,14 @@ export enum ErrorCode
 	// struct-literal field-init checks and the post-body definite-assignment
 	// dataflow pass.
 	semanticFieldNotInitialized = "E3086"
+	// A binding is READ after its owned heap value was MOVED OUT of it. Under shv2's static
+	// single-owner model an owned value (an owned String, a struct box) has exactly one owner; a
+	// `let u = t` / `s = t` whose RHS is a bare reference to an owned binding TRANSFERS ownership to
+	// the destination, and the source is left moved-from. A later read of the source is refused --
+	// it would read a value another binding now owns and will drop, and dropping it twice is a
+	// double-free. A WRITE to a moved-from `var` is legal (it revives the binding). shv2-only: the
+	// reference compilers refcount, so aliasing is legal there and there is no move to violate.
+	useAfterMove = "E3102"
 
 	// Register pressure: a value set live across a call, an idiv, or a loop genuinely needs more registers than the target has, after the cold-spill splitter has moved every idle value out and rematerialized every constant. Only the programmer can resolve a hot overflow, so the compiler refuses rather than guessing.
 	registerPressure = "E5001"
