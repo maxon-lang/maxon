@@ -342,10 +342,21 @@ end 'buildMmAlloc'
 // test that executes it.
 //
 // ⚠⚠ **WHEN IT RETURNS, IT IS NON-ATOMIC AND THAT IS A DECISION, NOT AN OVERSIGHT** — the same one
-// `__mm_decref` below already carries, which is why the note lives there now rather than leaving
-// with this function. See `buildMmDecref`.
+// the shared refcount read-modify-write below already carries, which is why the note lives there now
+// rather than leaving with this function. See `emitRefcountCheckToLastOwner`.
 
-// `__mm_decref(ptr)` — one fewer owner; free at the last.
+// **THE REFCOUNT READ-MODIFY-WRITE EVERY DECREF SHARES.** Read the count through the shared header
+// geometry (`emitHeaderBase`/`HeaderRefcountOffset`, so the header LAYOUT is one fact); on `rc == 0`
+// this is the FINAL owner and control branches to `lastOwner` — the caller's block, which reclaims
+// whatever it must before the memory dies — otherwise the count is lowered by one and the box kept.
+// It fills `entry` (the check) and `lower` (the not-last decrement), wiring `entry`'s conditional
+// branch to the caller-supplied `lastOwner`/`lower`. The caller creates all three blocks so their
+// order — and thus its own last-owner blocks — is its to choose.
+//
+// ⭐ ONE HOME FOR THE REFCOUNT PROTOCOL, so `__mm_decref` and `StringRuntime.__str_decref` cannot
+// drift on what "the last owner" means. `__str_decref` needs that SAME answer but must read a
+// detached String's `parent`/`buffer` out of the record BEFORE the record is reclaimed, so it cannot
+// call `__mm_decref` at runtime — it shares this BUILDER instead, which is where the one fact lives.
 //
 // ⭐ THE REFCOUNT IS `owners - 1`, NOT `owners`, AND THAT IS WHY `__mm_alloc` WRITES NOTHING. A box
 // is born at refcount 0 meaning ONE owner, so the overwhelmingly common case — allocate, use, drop
@@ -367,11 +378,33 @@ end 'buildMmAlloc'
 // that day is reached by READING rather than by a race. (PLAN.md's R1 box exists to stop inertia
 // making this call quietly; this is the call, made out loud.)
 //
-// The note lives on THIS function because this is where the surviving refcount read-modify-write
-// is — it arrived with `__mm_incref` and had to outlive it. `__mm_alloc` and `__mm_free` do the
-// same unlocked RMW on `__mm_alloc_count`, and they become `LOCK`-prefixed on the same day for the
-// same reason: a counter that loses an update reports a leak that did not happen, or hides one
-// that did.
+// The note lives on THIS helper because it is now the ONE place the surviving refcount read-modify-
+// write is: `__mm_decref` and `__str_decref` both route through it, so `LOCK`-prefixing it that day
+// covers both, and a second RMW cannot hide from the note by living in its own function. `__mm_alloc`
+// and `__mm_free` do the same unlocked RMW on `__mm_alloc_count`, and they become `LOCK`-prefixed on
+// the same day for the same reason: a counter that loses an update reports a leak that did not
+// happen, or hides one that did.
+export function emitRefcountCheckToLastOwner(module StdModule, entry IrBlock, lower IrBlock, record ValueId, lastOwner IrBlock, ids ValueMinter)
+	let header = emitHeaderBase(module, block: entry, ptr: record, ids: ids)
+	let rc = ids.mint()
+	module.appendOp(entry, op: StdOp.loadIndirect(rc, addrId: header, offset: HeaderRefcountOffset, valueType: StdType.i64))
+	let zeroConst = ids.mint()
+	module.appendOp(entry, op: StdOp.const(zeroConst, value: 0, valueType: StdType.i64))
+	let isLast = ids.mint()
+	module.appendOp(entry, op: StdOp.cmp(isLast, lhs: rc, rhs: zeroConst, pred: StdCmpPred.eq, operandType: StdType.i64))
+	module.setTerminator(entry, op: StdOp.condBranch(isLast, thenBlockId: lastOwner.id, elseBlockId: lower.id))
+
+	let oneConst = ids.mint()
+	module.appendOp(lower, op: StdOp.const(oneConst, value: 1, valueType: StdType.i64))
+	let lowered = ids.mint()
+	module.appendOp(lower, op: StdOp.binOp(lowered, lhs: rc, rhs: oneConst, opcode: StdBinOpcode.sub, operandType: StdType.i64))
+	module.appendOp(lower, op: StdOp.storeIndirect(header, offset: HeaderRefcountOffset, valueId: lowered, valueType: StdType.i64))
+	module.setTerminator(lower, op: StdOp.retVoid)
+end 'emitRefcountCheckToLastOwner'
+
+// `__mm_decref(ptr)` — one fewer owner; free at the last. The refcount read-modify-write is the
+// shared `emitRefcountCheckToLastOwner`; this function supplies only the LAST-OWNER path — reclaim
+// the box.
 function buildMmDecref(module StdModule)
 	var func = IrFunction.createFromStd(MmDecrefName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
@@ -383,25 +416,11 @@ function buildMmDecref(module StdModule)
 	emitParams(module, block: entry, count: 1)
 	let ptr = 0 as ValueId
 
-	let header = emitHeaderBase(module, block: entry, ptr: ptr, ids: ids)
-	let rc = ids.mint()
-	module.appendOp(entry, op: StdOp.loadIndirect(rc, addrId: header, offset: HeaderRefcountOffset, valueType: StdType.i64))
-	let zeroConst = ids.mint()
-	module.appendOp(entry, op: StdOp.const(zeroConst, value: 0, valueType: StdType.i64))
-	let isLast = ids.mint()
-	module.appendOp(entry, op: StdOp.cmp(isLast, lhs: rc, rhs: zeroConst, pred: StdCmpPred.eq, operandType: StdType.i64))
-	module.setTerminator(entry, op: StdOp.condBranch(isLast, thenBlockId: release.id, elseBlockId: lower.id))
+	emitRefcountCheckToLastOwner(module, entry: entry, lower: lower, record: ptr, lastOwner: release, ids: ids)
 
 	let freed = ids.mint()
 	module.appendOp(release, op: StdOp.call(freed, callee: MmFreeName, args: argsOf(ptr)))
 	module.setTerminator(release, op: StdOp.retVoid)
-
-	let oneConst = ids.mint()
-	module.appendOp(lower, op: StdOp.const(oneConst, value: 1, valueType: StdType.i64))
-	let lowered = ids.mint()
-	module.appendOp(lower, op: StdOp.binOp(lowered, lhs: rc, rhs: oneConst, opcode: StdBinOpcode.sub, operandType: StdType.i64))
-	module.appendOp(lower, op: StdOp.storeIndirect(header, offset: HeaderRefcountOffset, valueId: lowered, valueType: StdType.i64))
-	module.setTerminator(lower, op: StdOp.retVoid)
 
 	module.functions.push(func)
 end 'buildMmDecref'

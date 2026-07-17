@@ -822,10 +822,11 @@ end 'buildStrAppend'
 // reach a destructor it cannot name. Shipping the indirect-call vocabulary now would be vocabulary ahead
 // of its forcing consumer — the mistake `__mm_incref` and `mintPhi` are the standing warnings against.
 //
-// The refcount RMW duplicates `__mm_decref`'s (load rc; `== 0` ⇒ last owner) because it must run BEFORE
-// the record is freed and gate the buffer free on the same "is this the last owner?" answer — the generic
-// decref cannot be called for the record part without first losing the chance to read `parent`/`buffer`
-// out of a box it is about to reclaim.
+// The refcount read-modify-write is the shared `emitRefcountCheckToLastOwner` (load rc; `== 0` ⇒ last
+// owner; else lower and keep) — the ONE home of the refcount protocol, so a String and a struct box
+// cannot disagree about who the last owner is. `__str_decref` runs that shared check itself, rather
+// than calling `__mm_decref` at runtime, because it must read `parent`/`buffer` out of the record on
+// the last-owner path BEFORE that record is freed — the generic decref would reclaim the box first.
 function buildStrDecref(module StdModule)
 	var func = IrFunction.createFromStd(StrDecrefName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
@@ -839,24 +840,9 @@ function buildStrDecref(module StdModule)
 	emitParams(module, block: entry, count: 1)
 	let record = 0 as ValueId
 
-	// entry: read the refcount through the shared header geometry. `rc == 0` is the LAST owner (a box is
-	// born at rc 0 meaning ONE owner — `__mm_alloc`'s model); any other value is decremented.
-	let header = emitHeaderBase(module, block: entry, ptr: record, ids: ids)
-	let rc = ids.mint()
-	module.appendOp(entry, op: StdOp.loadIndirect(rc, addrId: header, offset: HeaderRefcountOffset, valueType: StdType.i64))
-	let zeroConst = ids.mint()
-	module.appendOp(entry, op: StdOp.const(zeroConst, value: 0, valueType: StdType.i64))
-	let isLast = ids.mint()
-	module.appendOp(entry, op: StdOp.cmp(isLast, lhs: rc, rhs: zeroConst, pred: StdCmpPred.eq, operandType: StdType.i64))
-	module.setTerminator(entry, op: StdOp.condBranch(isLast, thenBlockId: release.id, elseBlockId: lower.id))
-
-	// lower: not the last owner — drop the count by one and keep the box.
-	let oneConst = ids.mint()
-	module.appendOp(lower, op: StdOp.const(oneConst, value: 1, valueType: StdType.i64))
-	let lowered = ids.mint()
-	module.appendOp(lower, op: StdOp.binOp(lowered, lhs: rc, rhs: oneConst, opcode: StdBinOpcode.sub, operandType: StdType.i64))
-	module.appendOp(lower, op: StdOp.storeIndirect(header, offset: HeaderRefcountOffset, valueId: lowered, valueType: StdType.i64))
-	module.setTerminator(lower, op: StdOp.retVoid)
+	// entry + lower: the shared refcount check. `rc == 0` (the last owner) branches to `release`, where a
+	// String does the one thing the generic decref structurally cannot — free a detached buffer first.
+	emitRefcountCheckToLastOwner(module, entry: entry, lower: lower, record: record, lastOwner: release, ids: ids)
 
 	// release: the last owner. A DETACHED ROOT (`parent == -1`) owns an external buffer that must be
 	// freed before the record; inline/rdata/borrowed frees nothing beyond it.
