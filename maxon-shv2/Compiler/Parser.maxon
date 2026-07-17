@@ -3358,8 +3358,82 @@ export type Parser
 		let declaredTag = maxonTypeTag(binding.varType)
 		try self.requireAssignable(nameTok, value: valueTag, declared: declaredTag)
 
-		self.scope.setValue(nameTok.value, value: value)
+		self.reassignBindingValue(binding, nameTok: nameTok, value: value, valueTag: valueTag)
 	end 'parseAssignment'
+
+	// ⭐ **REBIND A `var` TO A NEW VALUE, RELEASING WHAT IT OWNED.** The rebinding half is one line —
+	// `Scope.setValue` — but a `var` that owns a heap allocation (an owned interpolation String, a
+	// struct box) must DROP that allocation as it is overwritten, or it leaks: a binding's scope-exit
+	// drop only ever reaches the LAST value it was assigned, so every earlier one is lost.
+	//
+	// The bug is MASKED at this rung and stops being masked the moment `__mm_free` reclaims: today the
+	// bump allocator recycles nothing, and the leak counter nets to zero by coincidence — the
+	// overwritten value that leaks and the last value (drained as a statement temporary AND dropped at
+	// scope exit) that double-frees cancel one-for-one. With a real free list the same miscompile is a
+	// leak, a double-free and a use-after-free at once.
+	//
+	// ⚠ **OWNERSHIP IS BINDING-LEVEL: `wasOwned` reads membership in `ownedBindings` (`bindingIsOwned`),
+	// NEVER `valueIsOwnedHeap(oldValue)`.** A loop-carried `var`'s current value is a header phi, and a
+	// phi carries no owned-heap provenance bit (the bit rides the value flowing INTO the merge, not the
+	// merge) — so the value column reads `false` for a binding the loop genuinely owns, and the
+	// overwritten allocation would leak every iteration. Membership is the only record that survives the
+	// phi. `newIsOwned` asks the SAME question `parseBinding` asks of a fresh binding, so the reassign
+	// and the declaration agree on what "owned" means by construction.
+	//
+	// ⚠ **AN OWNED BINDING STAYS OWNED — a borrowed RHS is PROMOTED to an owned copy rather than the
+	// binding being removed from `ownedBindings`.** Removal would be a middle-of-stack delete, and
+	// `ownedBindings` is a STACK whose heights the block/loop drop marks (`BlockMark.ownedCount`,
+	// `LoopContext.ownedFloor`) index into: reassigning an OUTER owned `var` to a literal inside a
+	// nested block would delete a below-mark entry, shift every block-local drop down one slot, and
+	// strand a block-local binding to be dropped at function exit on a path where its value is not even
+	// defined (a register-allocator "use dominates def" panic, verified). Promoting the literal to an
+	// owned heap copy — the SAME fused-record copy a borrowed `return` makes (`promoteToOwnedString`) —
+	// keeps every reassignment of an owned binding a uniform owned→owned: the binding never moves, and
+	// an `if`/loop merge is handled by the phi machinery exactly as for any other carried value.
+	function reassignBindingValue(binding VarInfo, nameTok Token, value ValueId, valueTag ValueTypeTag)
+		let oldValue = binding.boundValue
+
+		// `s = s` (a self-rebind): the value and its ownership are unchanged, so there is nothing to drop
+		// and nothing to reclassify. Guarding here is also what keeps a loop self-assign — where
+		// `oldValue` is a provenance-free phi — from being misread and re-tracked, and prevents a
+		// drop-then-keep (decref'ing a value the binding still holds).
+		if oldValue == value 'selfAssign'
+			self.scope.setValue(nameTok.value, value: value)
+			return
+		end 'selfAssign'
+
+		let wasOwned = self.bindingIsOwned(binding)
+
+		// Promote a borrowed value assigned to an owned binding (owned→borrowed, `s = "literal"`) to an
+		// owned copy, so the binding stays in `ownedBindings` (see the header). Reached only for a
+		// String: the only owned binding that can be handed a borrowed value is a String one — a struct
+		// binding's RHS is a struct box (`tagIsStructRef`, so already owned), and `requireAssignable`
+		// has rejected any other type.
+		var newValue = value
+		var newIsOwned = tagIsStructRef(valueTag) or self.valueIsOwnedHeap(value)
+		if wasOwned and not newIsOwned 'promoteBorrowed'
+			newValue = self.promoteToOwnedString(value, range: SourceRange.ofToken(nameTok))
+			newIsOwned = true
+		end 'promoteBorrowed'
+
+		// Release the overwritten allocation BEFORE the rebind, while `oldValue` still names it.
+		if wasOwned 'dropOld'
+			self.emitDecref(oldValue, range: SourceRange.ofToken(nameTok))
+		end 'dropOld'
+
+		self.scope.setValue(nameTok.value, value: newValue)
+
+		if newIsOwned 'trackNew'
+			if not wasOwned 'borrowedToOwned'
+				// borrowed → owned (`var s = ""; s = build(1)`): the binding now owes a scope-exit drop.
+				self.ownedBindings.push(binding)
+			end 'borrowedToOwned'
+			// The new owned value is the binding's to drop at scope exit, so the STATEMENT must not also
+			// drop it: a call/interpolation/promotion result is enrolled as a pending temp, and draining
+			// it too would be a double-free (and, before the scope-exit drop, a use-after-free).
+			self.removeFromPendingTemps(newValue)
+		end 'trackNew'
+	end 'reassignBindingValue'
 
 	// Assign to a name that is not a local: a top-level `var` (a STORE to its `.data` slot), a
 	// top-level `let` (E2013 — assigning to a constant), or nothing (E2004).
@@ -3706,6 +3780,25 @@ export type Parser
 		end 'each'
 		self.ownedBindings = kept
 	end 'removeFromOwnedBindings'
+
+	// Does `binding` currently owe a scope-exit drop — i.e. is it a member of `ownedBindings`? The
+	// reassignment path's test for whether the value being OVERWRITTEN is owned. It reads MEMBERSHIP,
+	// not `valueIsOwnedHeap(binding.boundValue)`, and that distinction is the whole point: a
+	// loop-carried `var`'s current value is a header phi with no owned-heap provenance, so the value
+	// column would answer `false` for a binding the loop owns (see `reassignBindingValue`). Membership
+	// survives the phi; the provenance bit does not.
+	//
+	// Keyed on `boundValue`, the `removeFromOwnedBindings` idiom — an owned heap value has a single
+	// owner, so at most one owned binding holds any given value, and it is this one. An O(ownedBindings)
+	// scan; a reassignment is not a hot path.
+	function bindingIsOwned(binding VarInfo) returns bool
+		for owned in self.ownedBindings 'each'
+			if owned.boundValue == binding.boundValue 'match'
+				return true
+			end 'match'
+		end 'each'
+		return false
+	end 'bindingIsOwned'
 
 	// ⭐ **PROMOTE A BORROWED String TO AN OWNED HEAP COPY** so a `returns String` function ALWAYS hands
 	// back something owned. `return "hi"` yields an immortal rdata literal (capacity == -2), and a
