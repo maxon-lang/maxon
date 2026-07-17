@@ -144,3 +144,24 @@ export function remapStructLayoutFieldTypes(layout StructLayout, remap TypeNameR
 	end 'each'
 	layout.fieldTypes = remapped
 end 'remapStructLayoutFieldTypes'
+
+// Rewrite a declared union/enum's PAYLOAD field types through a remap, IN PLACE — the enum twin of
+// `remapStructLayoutFieldTypes`, and it exists for the identical reason: a payload field declared
+// `walk(dir Direction)` carries a `named(Direction)` id into the file-local interner, and a merge
+// that moves ids leaves it pointing at whatever name took that id first. `PayloadField` is an
+// immutable record (`let` fields), so a rebuilt array of rebuilt fields replaces the column rather
+// than mutating each in place — the `remapArtifact` interner rule (build fresh, assign) applied one
+// registry deeper. Both callers that reconcile a file's enum layouts into a bigger table
+// (`remapArtifact` into `Project`, `ProgramSignatures.foldFile` into the index) go through here, so
+// the two cannot disagree about what a payload's declared type means.
+export function remapEnumLayoutPayloadTypes(layout EnumLayout, remap TypeNameRemap)
+	var remappedCases = PayloadFieldArrayArray.create()
+	for casePayloads in layout.casePayloads 'eachCase'
+		var remappedFields = PayloadFieldArray.create()
+		for field in casePayloads 'eachField'
+			remappedFields.push(PayloadField.create(field.name, declaredType: remapMaxonType(field.declaredType, remap: remap)))
+		end 'eachField'
+		remappedCases.push(remappedFields)
+	end 'eachCase'
+	layout.casePayloads = remappedCases
+end 'remapEnumLayoutPayloadTypes'

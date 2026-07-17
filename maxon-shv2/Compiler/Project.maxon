@@ -358,6 +358,34 @@ export typealias StructLayoutArray = Array with StructLayout
 // a declared `type` into `MaxonType.structRef`.
 export typealias StructLayoutMap = Map with (ByteArray, StructLayout)
 
+// --- Union payload fields (P1.3 slice 1) ---
+
+// One PAYLOAD FIELD of a `union`/`enum` case — `circle(radius Integer)` declares one named
+// `radius` of declared type `named(Integer)`. Its SLOT is its position in the case's field list
+// (`payload[j]` lives at byte offset `UnionTagBytes + j * FieldSlotBytes` in the box), so the
+// index IS the slot and no second number is stored — the same "index is the identity" discipline
+// `StructLayout.offsetOfField` rests on. The declared type is NOT resolved (the sweep that records
+// it cannot resolve anything); the construct/extract sites resolve it through the same `aliasOf`/
+// `enumOf`/`structOf` doors a struct field is resolved through, and reject the managed/float types
+// slice 1 does not lower there.
+export type PayloadField
+	export let name as ByteArray
+	export let declaredType as MaxonType
+
+	export static function create(name ByteArray, declaredType MaxonType) returns PayloadField
+		return Self{name: name, declaredType: declaredType}
+	end 'create'
+end 'PayloadField'
+
+export typealias PayloadFieldArray = Array with PayloadField
+export typealias PayloadFieldArrayArray = Array with PayloadFieldArray
+
+// A boxed union is `UnionTagBytes` (the i64 tag at offset 0) plus `FieldSlotBytes` per payload slot
+// of the WIDEST case. The tag is always i64 — an enum value is its i64 tag, boxed or not — so the
+// tag store/load width is fixed here rather than derived, the one place it lives.
+export let UnionTagOffset = 0 as ByteOffset
+let UnionTagBytes = 8 as ByteOffset
+
 // EnumLayout — one declared `enum`/`union`: what it is called, whether it is a `union` (the ONLY
 // thing that separates the two — identical lowering, different diagnostic wording), and its cases
 // IN DECLARATION ORDER.
@@ -385,20 +413,74 @@ export type EnumLayout
 	// prints ("union" vs "enum"), which is exactly what `/specs` says separates the two for a
 	// payload-free union.
 	export var isUnion as bool
-	// Parallel arrays, in DECLARATION order: case `i` is named `caseNames[i]` and carries tag
-	// `caseTags[i]`. NEVER appended to directly — `addCase` is the one writer (see the header).
+	// Parallel arrays, in DECLARATION order: case `i` is named `caseNames[i]`, carries tag
+	// `caseTags[i]` and declares payload fields `casePayloads[i]` (empty for a payload-free case).
+	// NEVER appended to directly — `addCase` is the one writer (see the header).
 	export var caseNames as ByteArrayArray
 	export var caseTags as ParsedIntArray
+	// Per-case payload fields (P1.3 slice 1). `casePayloads[i][j]` is case `i`'s slot-`j` field; its
+	// byte offset in the box is `UnionTagBytes + j * FieldSlotBytes`. Empty for `red`/`stay`; the
+	// box is allocated iff SOME case carries a payload (`isBoxed`), and all cases of a boxed union —
+	// payload-free ones included — take the boxed form (a bare tag in a box).
+	export var casePayloads as PayloadFieldArrayArray
 
 	export static function create(name ByteArray, isUnion bool) returns EnumLayout
-		return Self{name: name, isUnion: isUnion, caseNames: ByteArrayArray.create(), caseTags: ParsedIntArray.create()}
+		return Self{name: name, isUnion: isUnion, caseNames: ByteArrayArray.create(), caseTags: ParsedIntArray.create(), casePayloads: PayloadFieldArrayArray.create()}
 	end 'create'
 
-	// Append one declared case. THE one writer of both columns, so they cannot drift.
-	export function addCase(caseName ByteArray, tag ParsedInt)
+	// Append one declared case. THE one writer of all THREE columns, so they cannot drift — a caller
+	// that pushed a name and forgot the payloads would shift every later case's payloads onto the
+	// wrong case. A payload-free case passes an empty array.
+	export function addCase(caseName ByteArray, tag ParsedInt, payloads PayloadFieldArray)
 		self.caseNames.push(caseName)
 		self.caseTags.push(tag)
+		self.casePayloads.push(payloads)
 	end 'addCase'
+
+	// The payload fields of case `index`, in slot order — empty for a payload-free case.
+	export function payloadsAt(index CaseIndex) returns PayloadFieldArray
+		return try self.casePayloads.get(index) otherwise panic("EnumLayout.payloadsAt: casePayloads.get OOB at {index} for `{self.kindWord()} {String.from(self.name)}`, which declares {self.caseCount()} cases")
+	end 'payloadsAt'
+
+	// The number of payload slots case `index` declares.
+	export function payloadArityAt(index CaseIndex) returns CaseIndex
+		return self.payloadsAt(index).count()
+	end 'payloadArityAt'
+
+	// The union-wide MAX payload arity — the number of payload slots the box reserves, so every case
+	// (narrow ones included) shares one allocation size. This is what makes the box's layout a
+	// function of the WIDEST case, and it is what a narrow case's zero-fill fills up to.
+	export function maxPayloadArity() returns CaseIndex
+		var widest = 0 as CaseIndex
+		for i in 0 upto self.caseCount() 'each'
+			let arity = self.payloadArityAt(i)
+			if arity > widest 'wider'
+				widest = arity
+			end 'wider'
+		end 'each'
+		return widest
+	end 'maxPayloadArity'
+
+	// Is this a HEAP-BOXED union — does SOME case carry a payload? A payload-free enum/union keeps
+	// the bare-i64-tag representation P1.1b emits; only a payload-bearing one is boxed
+	// (`8 + maxArity*8` bytes, tag@0). The one decider, so construct and match cannot disagree about
+	// whether a value is a box or a bare tag.
+	export function isBoxed() returns bool
+		return self.maxPayloadArity() > 0
+	end 'isBoxed'
+
+	// The payload bytes `__mm_alloc` must be asked for: the tag word plus one slot per payload field
+	// of the widest case. THE one place the box size is computed, so the allocation and the stores
+	// that fill it cannot come to disagree about how big it is.
+	export function boxSizeBytes() returns ByteOffset
+		return UnionTagBytes + self.maxPayloadArity() * FieldSlotBytes
+	end 'boxSizeBytes'
+
+	// The byte offset of payload slot `slot` from the box pointer `__mm_alloc` returns — past the
+	// tag word. The enum twin of `StructLayout.offsetOfField`.
+	export function payloadSlotOffset(slot CaseIndex) returns ByteOffset
+		return UnionTagBytes + slot * FieldSlotBytes
+	end 'payloadSlotOffset'
 
 	export function caseCount() returns CaseIndex
 		return self.caseNames.count()

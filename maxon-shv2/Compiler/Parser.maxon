@@ -433,6 +433,13 @@ export union ParseError implements Error
 	// A range arm `high to low` whose upper case is declared BEFORE its lower case, so it covers no
 	// cases. Renders as **E2027**, positioned at the range. `low`/`high` are the case names written.
 	matchEmptyRange(low String, high String, line LineNumber, column ColumnNumber)
+	// A `union` value is compared with `==`/`!=`. Renders as **E3066**, positioned at the operator.
+	// A union carries no synthesized equality — `Container.value(1) == Container.value(1)` would
+	// compare two BOX ADDRESSES, reference equality answering a question about values, the exact
+	// hazard `comparableOperands` already refuses for two structs. An ENUM is unaffected (its value
+	// IS its i64 tag, so `==` is a real tag compare); only `isUnion` triggers this. `op` is the
+	// operator's spelling (`==`/`!=`) for the message.
+	unionNotComparable(op String, line LineNumber, column ColumnNumber)
 	// --- The reserved-name arm (P1.2 follow-up) ---
 	//
 	// A user DECLARATION whose name starts with `__` — the prefix Maxon reserves for compiler
@@ -539,6 +546,12 @@ let MaxBoundField = b"max"
 // tripwire that enforces it lives in `bindParameters`, on the flag itself; this constant is what
 // it currently reads.
 let ParametersAreMutable = false
+
+// The discard binding name — `walk(_)` matches the case but binds no payload. It is an ordinary
+// identifier to the lexer (`_` is a legal identifier), so the payload-binding reader recognizes it
+// by TEXT and skips the load + declaration for that slot. A constant because it is a language fact
+// (`_` means discard), spelled once.
+let DiscardBindingName = b"_"
 
 // The label of the placeholder block a Parser holds before it has parsed a function. It
 // belongs to no function and is registered in no module; `parseFunction` replaces it
@@ -1384,6 +1397,44 @@ type MatchOutcome
 		return Self{cont: cont, result: result}
 	end 'create'
 end 'MatchOutcome'
+
+// One resolved payload binding of a `walk(dir)` arm (P1.3 slice 1): the binding NAME token (`dir`),
+// the case FIELD it reads (its declared name + type), the SLOT it occupies, and whether it is the
+// discard `_` (which binds nothing). Resolved at pattern-parse time — where the case index and its
+// layout are in hand — and consumed by the arm body, which loads each slot out of the scrutinee box.
+type PayloadBinding
+	export let nameTok as Token
+	export let field as PayloadField
+	export let slot as CaseIndex
+	export let isDiscard as bool
+
+	export static function bound(nameTok Token, field PayloadField, slot CaseIndex) returns PayloadBinding
+		return Self{nameTok: nameTok, field: field, slot: slot, isDiscard: false}
+	end 'bound'
+
+	export static function discard(nameTok Token, field PayloadField, slot CaseIndex) returns PayloadBinding
+		return Self{nameTok: nameTok, field: field, slot: slot, isDiscard: true}
+	end 'discard'
+end 'PayloadBinding'
+
+typealias PayloadBindingArray = Array with PayloadBinding
+
+// A pattern arm's parse result: the boolean CONDITION (`subject == tag`, or the OR/range fold) and
+// the payload BINDINGS the arm body declares. A scalar match, and every enum pattern that is not a
+// single case (an or-chain, a range), carries no bindings.
+type EnumPatternResult
+	export let cond as ValueId
+	export let bindings as PayloadBindingArray
+
+	export static function create(cond ValueId, bindings PayloadBindingArray) returns EnumPatternResult
+		return Self{cond: cond, bindings: bindings}
+	end 'create'
+
+	// The common case: a condition with nothing to bind (a scalar pattern, an or-chain, a range).
+	export static function noBindings(cond ValueId) returns EnumPatternResult
+		return Self{cond: cond, bindings: PayloadBindingArray.create()}
+	end 'noBindings'
+end 'EnumPatternResult'
 
 export type Parser
 	var tokens as TokenArray
@@ -2555,9 +2606,20 @@ export type Parser
 			throw ParseError.enumDuplicateCase(String.from(caseName), line: nameTok.line, column: nameTok.column)
 		end 'duplicateCase'
 
-		// A payload (`case foo(x Int)`) — P1.3. Rejected here so the case list stays payload-free.
+		// A PAYLOAD case (`circle(radius Integer)`) — P1.3 slice 1. It takes an auto-increment tag
+		// like a bare case (a payload case carries no explicit raw value in the corpus) and captures
+		// its declared field types. The managed/float REJECTION is NOT here — it would `throw` in the
+		// tolerant sweep (`recordScannedEnum`'s `otherwise break`), truncating the layout and
+		// misassigning every later case's tag. The construct and extract sites resolve each field
+		// type and reject the ones slice 1 cannot lower, exactly as a struct's `structRef` field is
+		// refused at its USE site (`requireStructBase`) rather than at declaration.
 		if self.at(TokenKind.leftParen) 'payload'
-			throw ParseError.unsupported("a payload on case '{String.from(caseName)}' (enum/union payloads — `case foo(x Int)` and their `foo(let x)` bindings — arrive at P1.3)", line: nameTok.line, column: nameTok.column)
+			let payloads = try self.readPayloadFieldsInto()
+			try self.requireIntBacking(state, caseTok: nameTok)
+			let tag = state.nextTag
+			state.nextTag = state.nextTag + 1
+			try self.appendEnumCase(layout, caseName: caseName, tag: tag, rawDisplay: "{tag}", caseTok: nameTok, payloads: payloads)
+			return
 		end 'payload'
 
 		if not self.at(TokenKind.equals) 'bareName'
@@ -2565,7 +2627,7 @@ export type Parser
 			try self.requireIntBacking(state, caseTok: nameTok)
 			let tag = state.nextTag
 			state.nextTag = state.nextTag + 1
-			try self.appendEnumCase(layout, caseName: caseName, tag: tag, rawDisplay: "{tag}", caseTok: nameTok)
+			try self.appendEnumCase(layout, caseName: caseName, tag: tag, rawDisplay: "{tag}", caseTok: nameTok, payloads: PayloadFieldArray.create())
 			return
 		end 'bareName'
 
@@ -2577,7 +2639,7 @@ export type Parser
 			let floatTok = try self.consume(TokenKind.floatLiteral)
 			let bits = try parseFloatBits(floatTok.value) otherwise throw ParseError.floatLiteralOverflow(floatTok.line, column: floatTok.column)
 			try self.requireFloatBacking(state, caseTok: nameTok)
-			try self.appendEnumCase(layout, caseName: caseName, tag: bits, rawDisplay: String.from(floatTok.value), caseTok: nameTok)
+			try self.appendEnumCase(layout, caseName: caseName, tag: bits, rawDisplay: String.from(floatTok.value), caseTok: nameTok, payloads: PayloadFieldArray.create())
 			return
 		end 'floatValue'
 
@@ -2586,8 +2648,36 @@ export type Parser
 		let intValue = try self.readEnumIntRawValue()
 		try self.requireIntBacking(state, caseTok: nameTok)
 		state.nextTag = intValue + 1
-		try self.appendEnumCase(layout, caseName: caseName, tag: intValue, rawDisplay: "{intValue}", caseTok: nameTok)
+		try self.appendEnumCase(layout, caseName: caseName, tag: intValue, rawDisplay: "{intValue}", caseTok: nameTok, payloads: PayloadFieldArray.create())
 	end 'readEnumCaseInto'
+
+	// Parse a payload field list `(name Type, name2 Type2)` for a `union`/`enum` case, into a
+	// `PayloadField` array in slot order. Shared by the real parse and the tolerant sweep, so it
+	// captures types WITHOUT rejecting the managed/float ones — see `readEnumCaseInto`'s payload arm
+	// for why a rejection here would corrupt the sweep. `parseTypeReference` is the same type reader
+	// a struct field and a parameter use, so a payload's type is spelled by one grammar.
+	function readPayloadFieldsInto() returns PayloadFieldArray throws ParseError
+		try self.consume(TokenKind.leftParen)
+		var fields = PayloadFieldArray.create()
+
+		while true 'fieldLoop'
+			let nameTok = try self.consume(TokenKind.identifier)
+			// A `__`-prefixed field is reserved, at the name, exactly as a struct field's is
+			// (`readStructFieldInto`). The tolerant sweep swallows the throw and leaves the diagnostic
+			// to the real parse.
+			try self.requireUnreservedName(nameTok)
+			let fieldType = try self.parseTypeReference()
+			fields.push(PayloadField.create(nameTok.value, declaredType: fieldType))
+
+			if not self.at(TokenKind.comma) 'endFields'
+				break
+			end 'endFields'
+			try self.consume(TokenKind.comma)
+		end 'fieldLoop'
+
+		try self.consume(TokenKind.rightParen)
+		return fields
+	end 'readPayloadFieldsInto'
 
 	// Read the token that NAMES a case — an identifier, or a keyword used as one. A string/char
 	// literal here is a string/char BACKING (a later rung), reported as such rather than as a bad
@@ -2649,13 +2739,13 @@ export type Parser
 	// Append a case after checking E3031 (duplicate raw value) — a linear scan of the tags recorded
 	// so far, positioned at the offending case. `rawDisplay` is how the value is written (the int, or
 	// the float's source text), which is what the message prints.
-	function appendEnumCase(layout EnumLayout, caseName ByteArray, tag ParsedInt, rawDisplay String, caseTok Token) throws ParseError
+	function appendEnumCase(layout EnumLayout, caseName ByteArray, tag ParsedInt, rawDisplay String, caseTok Token, payloads PayloadFieldArray) throws ParseError
 		for i in 0 upto layout.caseCount() 'eachExisting'
 			if layout.tagOfIndex(i) == tag 'duplicateRawValue'
 				throw ParseError.enumDuplicateRawValue(rawDisplay, line: caseTok.line, column: caseTok.column)
 			end 'duplicateRawValue'
 		end 'eachExisting'
-		layout.addCase(caseName, tag: tag)
+		layout.addCase(caseName, tag: tag, payloads: payloads)
 	end 'appendEnumCase'
 
 	// One member of a type body that is not a field: `[export] [static] function …`.
@@ -4809,6 +4899,16 @@ export type Parser
 			end 'eachCase'
 		end 'initEnumCoverage'
 
+		// The DISPATCH SUBJECT — what each arm's tag compare reads. A scalar enum's value IS its tag;
+		// a boxed union's value is a heap POINTER, so its i64 tag is loaded ONCE here (into the first
+		// test block, which dominates every arm) from offset 0. The scrutinee `scrut` itself stays the
+		// BOX, which is what a payload binding reads its slots out of. Mirrors v1's
+		// `matchDispatchSubject`.
+		var dispatchSubject = scrut
+		if isEnumMatch and requireEnumLayout(enumMatch).isBoxed() 'boxedDispatch'
+			dispatchSubject = self.emitUnionTagLoad(scrut, range: SourceRange.ofToken(matchTok))
+		end 'boxedDispatch'
+
 		while true 'arms'
 			self.skipNewlines()
 			// The closing `end` — unless it is a keyword CASE NAME arm (`end gives …`) on an enum
@@ -4877,8 +4977,11 @@ export type Parser
 				// are case names + the #21 range rule; scalar patterns are literals + ranges (Wave A).
 				self.currentBlock = currentTestBlock
 				var cond = 0 as ValueId
+				var payloadBindings = PayloadBindingArray.create()
 				if isEnumMatch 'enumPattern'
-					cond = try self.emitEnumPatternCondition(scrut, layout: requireEnumLayout(enumMatch), covered: enumCovered)
+					let patternResult = try self.emitEnumPatternCondition(dispatchSubject, layout: requireEnumLayout(enumMatch), covered: enumCovered)
+					cond = patternResult.cond
+					payloadBindings = patternResult.bindings
 				end 'enumPattern' else 'scalarPattern'
 					cond = try self.emitPatternCondition(scrut, scrutTag: scrutTag, seenValues: seenValues)
 				end 'scalarPattern'
@@ -4893,7 +4996,22 @@ export type Parser
 				self.recordBranchEdge(currentTestBlock, targetId: bodyBlock.id, argIds: matchEdgeArgs)
 				self.emitCondBranch(currentTestBlock, cond: cond, thenId: bodyBlock.id, elseId: nextTest.id, ifTok: patternTok)
 
+				// A `walk(dir)` arm's payload bindings are declared at the HEAD of the arm body, in a
+				// scope frame that closes at the arm's `end` so they cannot leak into the next arm. Each
+				// reads a slot out of the scrutinee BOX (`scrut`), not the loaded tag `dispatchSubject`.
+				// Only an enum pattern produces bindings, so `requireEnumLayout` is guarded.
+				let hasPayloadBindings = payloadBindings.count() > 0
+				if hasPayloadBindings 'openArmBindings'
+					self.currentBlock = bodyBlock
+					self.scope.pushScope()
+					try self.declarePayloadBindings(payloadBindings, scrutBox: scrut, layout: requireEnumLayout(enumMatch))
+				end 'openArmBindings'
+
 				let armBody = try self.parseArmBody(func, bodyBlock: bodyBlock, isExpression: isExpression, carried: carried)
+
+				if hasPayloadBindings 'closeArmBindings'
+					self.scope.popScope()
+				end 'closeArmBindings'
 				if armBody.fellThrough 'fellThrough'
 					prevFallthrough = true
 					prevExitBlock = armBody.exitBlock
@@ -5383,21 +5501,53 @@ export type Parser
 		return self.signatures.enumOf(name)
 	end 'enumMatchFor'
 
-	// One arm's enum pattern as a single boolean, OR-folding alternatives (`red or blue`) exactly as
-	// the scalar path does — a bitwise `or` over the `bool`s, eager because a pattern has no side
-	// effects.
-	function emitEnumPatternCondition(scrut ValueId, layout EnumLayout, covered BoolArray) returns ValueId throws ParseError
-		var cond = try self.emitEnumPatternAtom(scrut, layout: layout, covered: covered)
+	// Is `value` a `union` value — a `named(X)` whose type is a declared `union`? The E3066 gate
+	// (`emitCompare`), keyed on the SAME `enumMatchFor` a `match` reads its scrutinee's enum through,
+	// so "is this a union?" is answered in one place for both. A payload-free ENUM is `false` (its
+	// value is a plain tag that `==` may compare); only `isUnion` is a union.
+	//
+	// ⚠ **THE TAG PRE-CHECK IS A HOT-PATH ALLOCATION GUARD, NOT A TIDY EARLY RETURN.** This runs for
+	// BOTH operands of EVERY comparison in the program, and `enumMatchFor` returns a `DeclaredEnum` —
+	// a Maxon union VALUE, which is a heap object for its `undeclared` case as much as any other. So
+	// calling it for an `int`/`bool` operand (the overwhelming majority) would allocate two throwaway
+	// `DeclaredEnum.undeclared` boxes per compare, scaling with the program: scale-test charged
+	// exactly that (+1,257 allocs on rung 0, doubling per rung). A value can only be a union if its
+	// tag is `named`, and that test is a scalar column read that allocates nothing.
+	function valueIsUnion(value ValueId) returns bool
+		if self.tagOf(value) != ValueTypeTag.named 'notNamed'
+			return false
+		end 'notNamed'
+		let decl = self.enumMatchFor(value)
+		if not enumMatchIsDeclared(decl) 'notEnum'
+			return false
+		end 'notEnum'
+		return requireEnumLayout(decl).isUnion
+	end 'valueIsUnion'
+
+	// One arm's enum pattern: the boolean condition plus any payload bindings the arm body declares.
+	// Alternatives are OR-folded (`red or blue`) exactly as the scalar path does — a bitwise `or` over
+	// the `bool`s, eager because a pattern has no side effects. A payload BINDING is legal only on a
+	// SINGLE case (`walk(dir)`); a binding on an or-alternative (`stay or walk(dir)`) is a later rung.
+	function emitEnumPatternCondition(subject ValueId, layout EnumLayout, covered BoolArray) returns EnumPatternResult throws ParseError
+		let first = try self.emitEnumPatternAtom(subject, layout: layout, covered: covered)
+		if not self.at(TokenKind.or) 'single'
+			return first
+		end 'single'
+
+		try self.rejectOrPatternBinding(first)
+		var cond = first.cond
 		while self.at(TokenKind.or) 'orChain'
 			let orTok = try self.consume(TokenKind.or)
-			let rhs = try self.emitEnumPatternAtom(scrut, layout: layout, covered: covered)
-			cond = try self.emitBinOp(cond, rhs: rhs, op: MaxonBinOp.bitOr, opTok: orTok)
+			let rhs = try self.emitEnumPatternAtom(subject, layout: layout, covered: covered)
+			try self.rejectOrPatternBinding(rhs)
+			cond = try self.emitBinOp(cond, rhs: rhs.cond, op: MaxonBinOp.bitOr, opTok: orTok)
 		end 'orChain'
-		return cond
+		return EnumPatternResult.noBindings(cond)
 	end 'emitEnumPatternCondition'
 
-	// One alternative: a single case (`red`) or a case-name range (`low to high`, `low upto high`).
-	function emitEnumPatternAtom(scrut ValueId, layout EnumLayout, covered BoolArray) returns ValueId throws ParseError
+	// One alternative: a single case (`red`, or `walk(dir)` binding its payload) or a case-name range
+	// (`low to high`, `low upto high`). Only the single-case form may carry payload bindings.
+	function emitEnumPatternAtom(subject ValueId, layout EnumLayout, covered BoolArray) returns EnumPatternResult throws ParseError
 		let patternTok = self.current()
 		let lowIndex = try self.resolveEnumArmCase(layout)
 
@@ -5405,12 +5555,83 @@ export type Parser
 			let isUpto = self.at(TokenKind.upto)
 			self.advance()
 			let highIndex = try self.resolveEnumArmCase(layout)
-			return try self.emitEnumRange(scrut, layout: layout, lowIndex: lowIndex, highIndex: highIndex, isUpto: isUpto, covered: covered, patternTok: patternTok)
+			let rangeCond = try self.emitEnumRange(subject, layout: layout, lowIndex: lowIndex, highIndex: highIndex, isUpto: isUpto, covered: covered, patternTok: patternTok)
+			return EnumPatternResult.noBindings(rangeCond)
 		end 'rangeArm'
 
+		var bindings = PayloadBindingArray.create()
+		if self.at(TokenKind.leftParen) 'payloadBind'
+			bindings = try self.parseCasePayloadBindings(layout, caseIndex: lowIndex)
+		end 'payloadBind'
+
 		try self.markEnumCovered(covered, index: lowIndex, layout: layout, patternTok: patternTok)
-		return try self.emitEnumTagCompare(scrut, layout: layout, index: lowIndex, opTok: patternTok)
+		return EnumPatternResult.create(self.emitEnumTagCompare(subject, layout: layout, index: lowIndex, opTok: patternTok), bindings: bindings)
 	end 'emitEnumPatternAtom'
+
+	// A payload binding is meaningful only where exactly one case matched — refuse it on an
+	// or-alternative (`stay or walk(dir)`), whose alternatives may be different cases of different
+	// arity. Positioned at the binding name.
+	function rejectOrPatternBinding(atom EnumPatternResult) throws ParseError
+		if atom.bindings.count() == 0 'noBinding'
+			return
+		end 'noBinding'
+		let binding = try atom.bindings.get(0) otherwise panic("rejectOrPatternBinding: bindings.count() > 0 but get(0) failed")
+		throw ParseError.unsupported("a payload binding '{String.from(binding.nameTok.value)}' on an `or`-pattern (a binding shared across the alternatives of an or-arm arrives at a later rung)", line: binding.nameTok.line, column: binding.nameTok.column)
+	end 'rejectOrPatternBinding'
+
+	// Parse a `(dir)` / `(_)` / `(a, b)` binding list on a single-case pattern, resolving each binding
+	// against the case's declared payload fields in SLOT order. A `_` is the discard — it consumes a
+	// slot but binds nothing. The binding count must equal the case's declared arity.
+	function parseCasePayloadBindings(layout EnumLayout, caseIndex CaseIndex) returns PayloadBindingArray throws ParseError
+		let payloads = layout.payloadsAt(caseIndex)
+		try self.consume(TokenKind.leftParen)
+		var bindings = PayloadBindingArray.create()
+
+		while true 'bindLoop'
+			let nameTok = try self.consume(TokenKind.identifier)
+			if bindings.count() >= payloads.count() 'tooMany'
+				throw ParseError.unsupported("case '{String.from(layout.caseNameAt(caseIndex))}' of `{layout.kindWord()} {String.from(layout.name)}` binds more payloads than the {payloads.count()} it declares", line: nameTok.line, column: nameTok.column)
+			end 'tooMany'
+			let field = try payloads.get(bindings.count()) otherwise panic("parseCasePayloadBindings: payloads.get OOB after the count guard")
+			if nameTok.value.equals(DiscardBindingName) 'discard'
+				bindings.push(PayloadBinding.discard(nameTok, field: field, slot: bindings.count()))
+			end 'discard' else 'realBinding'
+				try self.requireUnreservedName(nameTok)
+				bindings.push(PayloadBinding.bound(nameTok, field: field, slot: bindings.count()))
+			end 'realBinding'
+
+			if not self.at(TokenKind.comma) 'endBindings'
+				break
+			end 'endBindings'
+			try self.consume(TokenKind.comma)
+		end 'bindLoop'
+
+		let closeTok = self.current()
+		try self.consume(TokenKind.rightParen)
+		if bindings.count() != payloads.count() 'tooFew'
+			throw ParseError.unsupported("case '{String.from(layout.caseNameAt(caseIndex))}' of `{layout.kindWord()} {String.from(layout.name)}` binds {bindings.count()} payload(s) but declares {payloads.count()}", line: closeTok.line, column: closeTok.column)
+		end 'tooFew'
+		return bindings
+	end 'parseCasePayloadBindings'
+
+	// Declare a single-case pattern's payload bindings at the head of the arm body — each a
+	// `loadIndirect` from the SCRUTINEE BOX (`scrutBox`), bound READ-ONLY: a `let` scrutinee's
+	// payload cannot be written (a write-back to a `var` scrutinee's payload is slice 2), and a write
+	// to a `let`-bound payload is the existing immutability error. A discard `_` binds nothing. Called
+	// inside a scope frame the arm loop opens, so the bindings leave scope at the arm's `end` and
+	// cannot leak into the next arm. The extracted value is a SCALAR copy — not a borrow into the box
+	// — so dropping the box at scope exit does not invalidate it (which is exactly why a managed
+	// payload, a genuine borrow, is refused until slice 2).
+	function declarePayloadBindings(bindings PayloadBindingArray, scrutBox ValueId, layout EnumLayout) throws ParseError
+		for binding in bindings 'each'
+			if binding.isDiscard 'discard'
+				continue
+			end 'discard'
+			let range = SourceRange.ofToken(binding.nameTok)
+			let loaded = try self.emitUnionPayloadLoad(scrutBox, field: binding.field, slot: binding.slot, layout: layout, posTok: binding.nameTok, range: range)
+			_ = try self.scope.declareValueBinding(binding.nameTok.value, varType: binding.field.declaredType, mutable: false, value: loaded) otherwise throw ParseError.localShadowsSelfField(String.from(binding.nameTok.value), typeName: String.from(self.enclosingType), line: binding.nameTok.line, column: binding.nameTok.column)
+		end 'each'
+	end 'declarePayloadBindings'
 
 	// The declaration index of the case named by `nameTok`, or E3034 (unknown case) positioned at
 	// `posTok`. THE one emitter of "this name is not a case of this enum" — a `Color.red` literal
@@ -5455,14 +5676,33 @@ export type Parser
 		try covered.set(index, value: true) otherwise panic("markEnumCovered: covered.set OOB at {index}")
 	end 'markEnumCovered'
 
-	// `scrut == tag(index)` — one case's compare, the same `compare` a bare scalar pattern emits. The
-	// tag literal is `integer`-typed (a plain number): the scrutinee is `named` (→ i64) and the tag
-	// i64, so the compare is an i64 equality, for an int backing and a float backing alike (a float
-	// tag IS its bit pattern — see EnumLayout).
-	function emitEnumTagCompare(scrut ValueId, layout EnumLayout, index CaseIndex, opTok Token) returns ValueId throws ParseError
-		let tagLit = self.emitLiteral(layout.tagOfIndex(index), valueType: MaxonType.integer, range: SourceRange.ofToken(opTok))
-		return try self.emitCompare(scrut, rhs: tagLit, op: MaxonCmpOp.eq, opTok: opTok)
+	// `subject == tag(index)` — one case's compare. The `subject` is the DISPATCH SUBJECT: a scalar
+	// enum's value IS its tag (a `named` value), a boxed union's is its loaded i64 tag.
+	function emitEnumTagCompare(subject ValueId, layout EnumLayout, index CaseIndex, opTok Token) returns ValueId
+		return self.emitDispatchCompare(subject, tag: layout.tagOfIndex(index), op: MaxonCmpOp.eq, opTok: opTok)
 	end 'emitEnumTagCompare'
+
+	// ⭐ **THE MATCH DISPATCH COMPARE** — `subject <op> tag`, emitting `MaxonOp.compare` DIRECTLY
+	// rather than through `emitCompare`, and that bypass is load-bearing. `emitCompare` refuses a
+	// `union` operand (E3066), and a PAYLOAD-FREE union match dispatches on the scrutinee itself (a
+	// `named(union)` value) — so routing through it would reject `match u`. Both the subject (a scalar
+	// enum's `named` value, or a boxed union's loaded i64 tag) and the tag literal collapse to i64, so
+	// this is a plain i64 comparison with no operand type to check. It emits the SAME `compare` op
+	// `emitCompare` did for a payload-free match, so no committed golden moves.
+	function emitDispatchCompare(subject ValueId, tag ParsedInt, op MaxonCmpOp, opTok Token) returns ValueId
+		let tagLit = self.emitLiteral(tag, valueType: MaxonType.integer, range: SourceRange.ofToken(opTok))
+		return self.emitDispatchCompareWith(subject, tagLit: tagLit, op: op, opTok: opTok)
+	end 'emitDispatchCompare'
+
+	// The compare over an ALREADY-EMITTED tag literal — split from `emitDispatchCompare` so the range
+	// path can emit BOTH bound literals before EITHER compare, which is the op ORDER the committed
+	// range goldens pin (fusing the literal into each compare would interleave them and move every
+	// golden without changing a single op).
+	function emitDispatchCompareWith(subject ValueId, tagLit ValueId, op MaxonCmpOp, opTok Token) returns ValueId
+		let result = self.mintValue(ValueTypeTag.boolean, nameId: UnnamedTypeId)
+		self.artifact.emitOp(self.currentBlock, op: MaxonOp.compare(result, lhs: subject, rhs: tagLit, op: op), range: SourceRange.ofToken(opTok))
+		return result
+	end 'emitDispatchCompareWith'
 
 	// ⭐⭐⭐ THE OPEN #21 RANGE RULE. A range arm `low to high` MEANS the OR of the cases it covers,
 	// selected BY DECLARATION INDEX — the slice `[indexOfCase(low), indexOfCase(high)]` (`upto` drops
@@ -5502,18 +5742,19 @@ export type Parser
 		end 'coverEach'
 
 		if self.tagRangeCovers(layout, lowIndex: lowIndex, lastCovered: lastCovered, loTag: loTag, hiTag: hiTag) 'expressibleAsRange'
+			// Both bound literals BEFORE either compare — the op order the range goldens pin.
 			let loLit = self.emitLiteral(loTag, valueType: MaxonType.integer, range: SourceRange.ofToken(patternTok))
 			let hiLit = self.emitLiteral(hiTag, valueType: MaxonType.integer, range: SourceRange.ofToken(patternTok))
-			let loCmp = try self.emitCompare(scrut, rhs: loLit, op: MaxonCmpOp.ge, opTok: patternTok)
-			let hiCmp = try self.emitCompare(scrut, rhs: hiLit, op: MaxonCmpOp.le, opTok: patternTok)
+			let loCmp = self.emitDispatchCompareWith(scrut, tagLit: loLit, op: MaxonCmpOp.ge, opTok: patternTok)
+			let hiCmp = self.emitDispatchCompareWith(scrut, tagLit: hiLit, op: MaxonCmpOp.le, opTok: patternTok)
 			return try self.emitBinOp(loCmp, rhs: hiCmp, op: MaxonBinOp.bitAnd, opTok: patternTok)
 		end 'expressibleAsRange'
 
 		// The OR of the covered cases — the same path a bare case name takes, one compare each.
-		var cond = try self.emitEnumTagCompare(scrut, layout: layout, index: lowIndex, opTok: patternTok)
+		var cond = self.emitEnumTagCompare(scrut, layout: layout, index: lowIndex, opTok: patternTok)
 		var j = lowIndex + 1
 		while j <= lastCovered 'orEach'
-			let rhs = try self.emitEnumTagCompare(scrut, layout: layout, index: j, opTok: patternTok)
+			let rhs = self.emitEnumTagCompare(scrut, layout: layout, index: j, opTok: patternTok)
 			cond = try self.emitBinOp(cond, rhs: rhs, op: MaxonBinOp.bitOr, opTok: patternTok)
 			j = j + 1
 		end 'orEach'
@@ -6329,6 +6570,26 @@ export type Parser
 			return try self.emitStringCompare(lhs, rhs: rhs, op: op, opTok: opTok)
 		end 'stringCompare'
 
+		// ⭐ A `union` VALUE HAS NO `==`/`!=` (E3066). Refused BEFORE `comparableOperands`, which would
+		// pass a `named`-vs-`named` pair (they agree) and lower to a compare of two BOX ADDRESSES — the
+		// same reference-equality wrong answer that rule already refuses for two structs. An ENUM's
+		// value IS its i64 tag, so `Color.red == c` is a real tag compare and stays legal; only a
+		// `union` (`isUnion`) is rejected. The pattern-condition path (`emitEnumTagCompare`) builds its
+		// tag compare with its own `MaxonOp.compare` and never routes through here, so a `match` arm is
+		// unaffected.
+		if self.valueIsUnion(lhs) or self.valueIsUnion(rhs) 'unionCompare'
+			match op 'kind'
+				eq then throw ParseError.unionNotComparable("==", line: opTok.line, column: opTok.column)
+				ne then throw ParseError.unionNotComparable("!=", line: opTok.line, column: opTok.column)
+				// `<`/`>`/`<=`/`>=` on a union has no more meaning than `==` does, but no corpus case
+				// exercises it and the bootstrap's E3066 message names `==`/`!=` specifically; such an
+				// ordering falls through to `comparableOperands` below (which passes a `named` pair) —
+				// a latent wrong answer on a boxed union, recorded rather than papered over with a
+				// message that would name the wrong operator.
+				lt to ge then break 'kind'
+			end 'kind'
+		end 'unionCompare'
+
 		if not comparableOperands(leftTag, right: rightTag) 'mismatch'
 			throw ParseError.comparisonTypeMismatch(typeTagName(leftTag), right: typeTagName(rightTag), line: opTok.line, column: opTok.column)
 		end 'mismatch'
@@ -7028,18 +7289,27 @@ export type Parser
 			return try self.parseFieldAccess()
 		end 'fieldAccess'
 
+		// `Color.red` and `Move.walk(Direction.east)` — an ENUM CASE reference or a UNION CONSTRUCT,
+		// the base being a declared enum/union. Asked AFTER the scope-based forms above (a bound base
+		// outranks a type name, exactly as `u16.max` is the last resort) but BEFORE the qualified STATIC
+		// CALL below, because a payload construct `Move.walk(…)` has the SAME `<name>.<name>(` shape a
+		// static call does: testing `(` at +3 first would mangle it to a callee `Move.walk` no file
+		// declares (E3004) rather than building the box. The two are disjoint by name — a name is one
+		// type, so a struct's `Point.create(…)` never resolves as an enum here.
+		// Gated on the non-allocating `containsEnum` rather than `enumOf` directly: this runs for EVERY
+		// dotted primary, and `enumOf` would box a throwaway `DeclaredEnum.undeclared` for every
+		// `Point.create(...)` (scale-test charged exactly that — see `ProgramSignatures.containsEnum`).
+		// The `enumOf` inside the guard runs only for a real enum reference, which is rare.
+		if self.signatures.containsEnum(self.current().value) 'enumRef'
+			match self.signatures.enumOf(self.current().value) 'declared'
+				declared(layout) then return try self.parseEnumLiteral(func, layout: layout)
+				undeclared then panic("parseDottedPrimary: containsEnum answered yes but enumOf answered undeclared — the two read the same enum registry")
+			end 'declared'
+		end 'enumRef'
+
 		if self.kindAt(self.pos + 3) == TokenKind.leftParen 'qualifiedCall'
 			return try self.parseQualifiedCall(func)
 		end 'qualifiedCall'
-
-		// `Color.red` — an ENUM CASE reference, the value being the case's tag. Asked AFTER the three
-		// forms above (a bound base outranks a type name, exactly as `u16.max` is the last resort) and
-		// BEFORE the sized-bound fallback, because a declared enum name is not a sized type and would
-		// otherwise report "expected a sized numeric type" for a perfectly good case reference.
-		match self.signatures.enumOf(self.current().value) 'enumRef'
-			declared(layout) then return try self.parseEnumLiteral(layout)
-			undeclared then break 'enumRef'
-		end 'enumRef'
 
 		return try self.parseTypeQualifiedBoundExpression()
 	end 'parseDottedPrimary'
@@ -7053,7 +7323,7 @@ export type Parser
 	// as a `Color`, and the OP's `integer` type is what the Std lowering reads to give it an i64
 	// (a `named` op-type would hit `maxonTypeToStdType`'s panic). Both collapse to i64, so the value's
 	// register class and its lowering agree — see `emitEnumTagLiteral`.
-	function parseEnumLiteral(layout EnumLayout) returns ValueId throws ParseError
+	function parseEnumLiteral(func IrFunction, layout EnumLayout) returns ValueId throws ParseError
 		let typeTok = try self.consume(TokenKind.identifier)
 		try self.consume(TokenKind.dot)
 
@@ -7064,9 +7334,146 @@ export type Parser
 		self.advance()
 
 		let index = try self.enumCaseIndexOrThrow(layout, nameTok: caseTok, posTok: typeTok)
+		let range = SourceRange.ofToken(typeTok)
 
-		return self.emitEnumTagLiteral(layout.name, tag: layout.tagOfIndex(index), range: SourceRange.ofToken(typeTok))
+		// ⭐ A PAYLOAD-BEARING union is HEAP-BOXED, and EVERY case of it takes the boxed form — a
+		// payload-free case (`Container.empty`) is a bare tag in a box, so the box lifetime is uniform
+		// (`isBoxed` decides once, per the union, not per the case). A payload-free enum/union stays
+		// the bare-i64-tag representation P1.1b emits.
+		if layout.isBoxed() 'boxedUnion'
+			return try self.parseEnumBoxConstruct(func, layout: layout, caseIndex: index, caseTok: caseTok, range: range)
+		end 'boxedUnion'
+
+		// A payload-free enum/union case carries no value list. `Color.red(5)` is a payload on a
+		// construct that declares none — refused rather than silently dropped.
+		if self.at(TokenKind.leftParen) 'unexpectedPayload'
+			let parenTok = self.current()
+			throw ParseError.unsupported("a payload on case '{String.from(caseTok.value)}' of `{layout.kindWord()} {String.from(layout.name)}`, which declares no payload on any case", line: parenTok.line, column: parenTok.column)
+		end 'unexpectedPayload'
+
+		return self.emitEnumTagLiteral(layout.name, tag: layout.tagOfIndex(index), range: range)
 	end 'parseEnumLiteral'
+
+	// ⭐ **CONSTRUCT A BOXED UNION VALUE** — `Move.walk(Direction.east)`, or a payload-free case of a
+	// boxed union (`Container.empty`). Parses the payload argument list (absent for an arity-0 case),
+	// validates its count against the case's declared arity, and hands off to `emitEnumBox`, which
+	// validates each field's TYPE (rejecting the managed/float ones slice 1 cannot lower) before it
+	// emits a single op.
+	function parseEnumBoxConstruct(func IrFunction, layout EnumLayout, caseIndex CaseIndex, caseTok Token, range SourceRange) returns ValueId throws ParseError
+		let arity = layout.payloadArityAt(caseIndex)
+
+		var args = ValueIdArray.create()
+		if self.at(TokenKind.leftParen) 'withArgs'
+			try self.consume(TokenKind.leftParen)
+			while true 'argLoop'
+				// The climber, not `parseExpression`, for `parseStructLiteralFields`' reason: an
+				// argument is parsed INSIDE an expression that already seeded `currentBlock`.
+				args.push(try self.parseBinary(func, minPrec: OrPrecedence))
+				if not self.at(TokenKind.comma) 'endArgs'
+					break
+				end 'endArgs'
+				try self.consume(TokenKind.comma)
+			end 'argLoop'
+			try self.consume(TokenKind.rightParen)
+		end 'withArgs'
+
+		if args.count() != arity 'arityMismatch'
+			throw ParseError.unsupported("`{layout.kindWord()} {String.from(layout.name)}.{String.from(caseTok.value)}` expects {arity} payload argument(s), got {args.count()}", line: caseTok.line, column: caseTok.column)
+		end 'arityMismatch'
+
+		return try self.emitEnumBox(layout, caseIndex: caseIndex, args: args, caseTok: caseTok, range: range)
+	end 'parseEnumBoxConstruct'
+
+	// Emit the box: validate every payload field (reject managed/float, type-check each argument)
+	// BEFORE any op, then `__mm_alloc` the `8 + maxArity*8` bytes, store the case TAG at offset 0,
+	// store each scalar payload at `8 + slot*8`, and ZERO-FILL the unused slots `[arity, maxArity)`.
+	//
+	// ⭐ The box is TAGGED `named(<union>)` — the same tag a scalar enum value carries, so `match`
+	// recognizes it through the one `enumMatchFor` door — and enrolled as an OWNED HEAP TEMPORARY
+	// (`trackOwnedTemp`), so `parseBinding` binds its drop to scope exit and an unbound `Move.walk(5)`
+	// statement is freed at statement end. Its destructor is the TRIVIAL one (`__mm_decref` frees the
+	// box; a scalar payload owns nothing beneath it), which is why slice 1 needs no `funcAddr`/
+	// `callIndirect` and no per-union `__destruct_<U>` — those arrive with the managed payload.
+	//
+	// ⚠ **THE ZERO-FILL IS MANDATORY** even though the slab returns zeroed memory: it pins a
+	// deterministic 0 in a narrow case's unused slots, which slice 2's destructor will iterate — and
+	// it is what both reference lowerings emit (`LowerMaxonToStd.maxon:12549`).
+	function emitEnumBox(layout EnumLayout, caseIndex CaseIndex, args ValueIdArray, caseTok Token, range SourceRange) returns ValueId throws ParseError
+		let payloads = layout.payloadsAt(caseIndex)
+
+		// Validate every field before emitting a single op — a refused payload emits no code.
+		var storageTypes = MaxonTypeArray.create()
+		for i in 0 upto payloads.count() 'validate'
+			let field = try payloads.get(i) otherwise panic("emitEnumBox: payloadsAt returned fewer fields than its own count at {i}")
+			let storage = try self.resolvePayloadStorage(field, layout: layout, posTok: caseTok)
+			let arg = try args.get(i) otherwise panic("emitEnumBox: args.count() was checked to equal the arity but get OOB at {i}")
+			try self.requirePayloadArgType(field, value: arg, layout: layout, caseTok: caseTok)
+			storageTypes.push(storage)
+		end 'validate'
+
+		let size = self.emitLiteral(layout.boxSizeBytes(), valueType: MaxonType.integer, range: range)
+		let destructor = self.emitLiteral(TrivialDestructor, valueType: MaxonType.integer, range: range)
+
+		var allocArgs = ValueIdArray.create()
+		allocArgs.push(size)
+		allocArgs.push(destructor)
+		let box = self.emitRuntimeCall(MmAllocName, args: allocArgs, resultTag: ValueTypeTag.named, resultNameId: self.artifact.typeNames.intern(layout.name), range: range)
+		self.trackOwnedTemp(box)
+
+		self.emitUnionTagStore(box, tag: layout.tagOfIndex(caseIndex), range: range)
+
+		for i in 0 upto payloads.count() 'storeEach'
+			let arg = try args.get(i) otherwise panic("emitEnumBox: args.get OOB at {i} after the arity check")
+			let storage = try storageTypes.get(i) otherwise panic("emitEnumBox: storageTypes.get OOB at {i} — it is filled in lockstep with the fields")
+			self.emitIndirectStore(box, offset: layout.payloadSlotOffset(i), value: arg, storageType: storage, range: range)
+		end 'storeEach'
+
+		for j in payloads.count() upto layout.maxPayloadArity() 'zeroFill'
+			let zero = self.emitLiteral(0 as ParsedInt, valueType: MaxonType.integer, range: range)
+			self.emitIndirectStore(box, offset: layout.payloadSlotOffset(j), value: zero, storageType: MaxonType.integer, range: range)
+		end 'zeroFill'
+
+		return box
+	end 'emitEnumBox'
+
+	// Store the case TAG at the box's offset 0 as an i64 — the same i64 tag `emitEnumTagLiteral` mints
+	// for a bare enum and the same `match` loads back to dispatch, so construct and match cannot
+	// disagree about what a case's tag is.
+	function emitUnionTagStore(box ValueId, tag ParsedInt, range SourceRange)
+		let tagLit = self.emitLiteral(tag, valueType: MaxonType.integer, range: range)
+		self.emitIndirectStore(box, offset: UnionTagOffset, value: tagLit, storageType: MaxonType.integer, range: range)
+	end 'emitUnionTagStore'
+
+	// A payload argument must agree with its field's DECLARED type — `checkDeclaredType`, the same
+	// coercion-site rule a struct literal field, a call argument and a `return` ask. Anchored at the
+	// case name (the whole construct's anchor); no per-argument span is tracked at this rung.
+	function requirePayloadArgType(field PayloadField, value ValueId, layout EnumLayout, caseTok Token) throws ParseError
+		let declared = maxonTypeTag(field.declaredType)
+		let got = self.tagOf(value)
+		match checkDeclaredType(got, declared: declared) 'declared'
+			ok then break 'declared'
+			mismatch then throw ParseError.assignTypeMismatch("{String.from(layout.name)}.{String.from(caseTok.value)}({String.from(field.name)})", got: typeTagName(got), expected: typeTagName(declared), line: caseTok.line, column: caseTok.column)
+			narrowsFloatToInt then throw ParseError.implicitNarrowing(typeTagName(got), targetType: typeTagName(declared), line: caseTok.line, column: caseTok.column)
+		end 'declared'
+	end 'requirePayloadArgType'
+
+	// Load a boxed union's i64 TAG from offset 0 — the DISPATCH SUBJECT a `match` compares against
+	// each case's tag. Its result is `integer`-tagged (a plain i64), not `named`, so the dispatch
+	// compare is an i64 equality the E3066 union guard never sees. Loaded ONCE per match (it dominates
+	// every arm's test block). Mirrors v1's `matchDispatchSubject`.
+	function emitUnionTagLoad(box ValueId, range SourceRange) returns ValueId
+		return self.emitIndirectLoad(MaxonType.integer, box: box, offset: UnionTagOffset, storageType: MaxonType.integer, range: range)
+	end 'emitUnionTagLoad'
+
+	// Load a scalar payload field out of the box at `8 + slot*8`, minted at the field's DECLARED type
+	// (so a nested `match dir` sees a `Direction`) with the concrete STORAGE width on the op — the
+	// `emitFieldLoad` split, one op further. `resolvePayloadStorage` rejects the managed/float
+	// payloads slice 1 cannot lower, at the binding token — a borrowed managed payload extracted from
+	// the box would outlive the box's drop, which is exactly slice 2's ownership work.
+	function emitUnionPayloadLoad(box ValueId, field PayloadField, slot CaseIndex, layout EnumLayout, posTok Token, range SourceRange) returns ValueId throws ParseError
+		let storage = try self.resolvePayloadStorage(field, layout: layout, posTok: posTok)
+		return self.emitIndirectLoad(field.declaredType, box: box, offset: layout.payloadSlotOffset(slot), storageType: storage, range: range)
+	end 'emitUnionPayloadLoad'
 
 	// Emit a case's TAG as an i64 `literal` whose VALUE tag is `named(<enum>)`. The one site that
 	// mints an enum value, so the tag/op-type split (see `parseEnumLiteral`) lives in exactly one
@@ -7723,10 +8130,19 @@ export type Parser
 	// `named` arm exists for it), so this is that arrangement reaching one op further, not a new one.
 	function emitFieldLoad(box ValueId, layout StructLayout, index FieldIndex, range SourceRange) returns ValueId
 		let declared = self.signatures.fieldTypeOf(layout.name, index: index, into: self.artifact.typeNames)
-		let result = self.mintValueOfType(declared)
-		self.artifact.emitOp(self.currentBlock, op: MaxonOp.loadIndirect(result, addr: box, offset: layout.offsetOfField(index), valueType: self.fieldStorageType(declared)), range: range)
-		return result
+		return self.emitIndirectLoad(declared, box: box, offset: layout.offsetOfField(index), storageType: self.fieldStorageType(declared), range: range)
 	end 'emitFieldLoad'
+
+	// ⭐ **THE ONE `loadIndirect` EMIT.** A field read (`p.x`), a union tag load and a union payload
+	// read all reach here — one op shape, so the value's SOURCE type (`declared`, minted onto the
+	// tag column so a nested `match` or the shift rule reads what the source said) and its STORAGE
+	// type (the concrete primitive the op carries, because `maxonTypeToStdType` panics on a `named`)
+	// are split in exactly one place. See `emitFieldLoad`'s header for why the two differ.
+	function emitIndirectLoad(declared MaxonType, box ValueId, offset ByteOffset, storageType MaxonType, range SourceRange) returns ValueId
+		let result = self.mintValueOfType(declared)
+		self.artifact.emitOp(self.currentBlock, op: MaxonOp.loadIndirect(result, addr: box, offset: offset, valueType: storageType), range: range)
+		return result
+	end 'emitIndirectLoad'
 
 	// `storeIndirect <box> <offset> <value>` — the one op a field write is, and the exact mirror of
 	// `emitFieldLoad` (same offset, same storage type, same reason for each).
@@ -7739,8 +8155,16 @@ export type Parser
 	// silently.
 	function emitFieldStore(box ValueId, layout StructLayout, index FieldIndex, value ValueId, range SourceRange)
 		let declared = self.signatures.fieldTypeOf(layout.name, index: index, into: self.artifact.typeNames)
-		self.artifact.emitOp(self.currentBlock, op: MaxonOp.storeIndirect(box, offset: layout.offsetOfField(index), value: value, valueType: self.fieldStorageType(declared)), range: range)
+		self.emitIndirectStore(box, offset: layout.offsetOfField(index), value: value, storageType: self.fieldStorageType(declared), range: range)
 	end 'emitFieldStore'
+
+	// ⭐ **THE ONE `storeIndirect` EMIT.** A field write, a union tag store, a union payload store and
+	// a union's unused-slot zero-fill all reach here — one op shape, so the offset-and-width
+	// derivation a box's stores must agree on lives in one place (a literal storing `y` at one width
+	// and an assignment storing it at another would corrupt the box silently — see `emitFieldStore`).
+	function emitIndirectStore(box ValueId, offset ByteOffset, value ValueId, storageType MaxonType, range SourceRange)
+		self.artifact.emitOp(self.currentBlock, op: MaxonOp.storeIndirect(box, offset: offset, value: value, valueType: storageType), range: range)
+	end 'emitIndirectStore'
 
 	// The CONCRETE `MaxonType` a field of declared type `declared` occupies its slot as — what the
 	// `loadIndirect`/`storeIndirect` carries, and the only type in the compiler that says how wide
@@ -7787,6 +8211,98 @@ export type Parser
 			undeclared then return MaxonType.integer
 		end 'alias'
 	end 'fieldStorageType'
+
+	// ⭐ **THE SCALAR-VS-MANAGED PAYLOAD DECISION — the boundary of slice 1.** The concrete storage
+	// type a union payload field of declared type `declared` occupies its 8-byte slot as, OR a clean
+	// rejection of the types slice 1 cannot lower: a FLOAT (needs the bitcast ops a later rung adds)
+	// and every MANAGED reference (String, struct, a boxed union — an owned heap pointer whose
+	// move-in/drop is slice 2's ownership work). A SCALAR — `int`/`bool`, a ranged-int alias, or a
+	// payload-FREE enum (whose value IS its i64 tag) — is stored inline and returned here.
+	//
+	// It is the payload twin of `fieldStorageType`, and it is a SEPARATE policy on purpose: a struct
+	// FIELD may be a `structRef` (a struct holds a pointer to another struct, `sizeof` counts it as 8
+	// bytes) and `fieldStorageType` returns it; a union PAYLOAD may not, because storing a managed
+	// pointer without the incref/decref discipline slice 2 supplies would leak it or free it twice.
+	// The rejection is deferred to HERE — the construct and extract sites — rather than the
+	// declaration, exactly as a struct-typed field's is refused at its use site (`requireStructBase`)
+	// and not where the field is declared: a rejection at declaration would `throw` in the tolerant
+	// enum sweep and truncate the layout (see `readEnumCaseInto`'s payload arm).
+	function resolvePayloadStorage(field PayloadField, layout EnumLayout, posTok Token) returns MaxonType throws ParseError
+		match field.declaredType 'kind'
+			// A scalar keyword type is already concrete — `maxonTypeToStdType` gives it the width.
+			boolean then return field.declaredType
+			integer then return field.declaredType
+			exitCode then return field.declaredType
+			float then throw ParseError.unsupported(self.floatPayloadMessage(field, layout: layout), line: posTok.line, column: posTok.column)
+			// A String / struct reference is a MANAGED heap pointer — its move-in and its drop are
+			// slice 2's ownership work, not slice 1's.
+			string then throw ParseError.unsupported(self.managedPayloadMessage(field, layout: layout, typeName: "String"), line: posTok.line, column: posTok.column)
+			structRef then throw ParseError.unsupported(self.managedPayloadMessage(field, layout: layout, typeName: String.from(try self.artifact.typeNames.nameOf(typeNameIdOf(field.declaredType)) otherwise "a struct")), line: posTok.line, column: posTok.column)
+			unresolved then panic("resolvePayloadStorage: a payload field is declared `unresolved` — `parseTypeReference` produces only `named`, `structRef` and the three primitive keywords, so no payload declaration can carry one")
+			named then break 'kind'
+		end 'kind'
+
+		let name = try self.artifact.typeNames.nameOf(typeNameIdOf(field.declaredType)) otherwise panic("resolvePayloadStorage: a payload field's named type has an id that is not in this file's interner — the layout's types are adopted through the same interner the parser mints them from")
+
+		// A ranged-int alias is a scalar of its underlying width; a FLOAT alias (none exist yet) would
+		// be a float payload, rejected the same way a bare `float` is.
+		match self.signatures.aliasOf(name) 'alias'
+			declared(alias) then return try self.scalarAliasUnderlying(alias, field: field, layout: layout, posTok: posTok)
+			undeclared then break 'alias'
+		end 'alias'
+
+		// A payload-FREE enum's value is an i64 tag — a scalar; a BOXED union payload is a managed
+		// heap pointer (slice 2).
+		match self.signatures.enumOf(name) 'asEnum'
+			declared(enumLayout) then return try self.scalarEnumStorage(enumLayout, field: field, layout: layout, posTok: posTok)
+			undeclared then break 'asEnum'
+		end 'asEnum'
+
+		// A `type` (struct) payload is managed. An undeclared name is a user error TypeResolution
+		// reports as E3011; returning `integer` keeps the op well-formed for the instant before the
+		// pipeline's error gate throws, exactly as `fieldStorageType`'s recovery does.
+		match self.signatures.structOf(name) 'asStruct'
+			declared then throw ParseError.unsupported(self.managedPayloadMessage(field, layout: layout, typeName: String.from(name)), line: posTok.line, column: posTok.column)
+			undeclared then return MaxonType.integer
+		end 'asStruct'
+	end 'resolvePayloadStorage'
+
+	// A ranged-int alias payload is a scalar of its underlying width. A FLOAT-underlying alias (none
+	// are declarable yet — `Parser.readTypeAliasDeclaration` accepts only `int(low to high)`) would
+	// be a float payload and is rejected the same way a bare `float` is.
+	function scalarAliasUnderlying(alias RangedTypeAlias, field PayloadField, layout EnumLayout, posTok Token) returns MaxonType throws ParseError
+		if maxonTypeTag(alias.underlying) == ValueTypeTag.float 'floatAlias'
+			throw ParseError.unsupported(self.floatPayloadMessage(field, layout: layout), line: posTok.line, column: posTok.column)
+		end 'floatAlias'
+		return alias.underlying
+	end 'scalarAliasUnderlying'
+
+	// A payload whose type is another enum/union: a payload-FREE enum is a scalar (its value is its
+	// i64 tag, stored inline — `walk(dir Direction)`); a BOXED union is a managed heap pointer whose
+	// ownership is slice 2's.
+	function scalarEnumStorage(enumLayout EnumLayout, field PayloadField, layout EnumLayout, posTok Token) returns MaxonType throws ParseError
+		if enumLayout.isBoxed() 'boxedPayload'
+			throw ParseError.unsupported(self.managedPayloadMessage(field, layout: layout, typeName: "{enumLayout.kindWord()} {String.from(enumLayout.name)}"), line: posTok.line, column: posTok.column)
+		end 'boxedPayload'
+		return MaxonType.integer
+	end 'scalarEnumStorage'
+
+	// The two payload-rejection MESSAGES, one shape each, so the construct and extract sites report a
+	// refused payload identically. They return the STRING, and each caller throws
+	// `ParseError.unsupported(<message>, …)` INLINE — never `throw self.helperReturningAParseError(…)`,
+	// which LEAKS 2 allocations under the C#-emitted refcount runtime: a freshly-owned union returned
+	// across a call and immediately re-thrown is not reconciled (the family OPEN.md records for a
+	// `throw` of a call result and for the owned-value ternary). Building the message via a call that
+	// returns a String and throwing the ParseError inline is the non-leaking shape
+	// `requirePayloadArgType` already uses. MEASURED: `union U { s(x String) }` + `U.s(5)` went from
+	// `MM leak: 2 allocation(s) remain` (exit 101) to a clean exit 1.
+	function managedPayloadMessage(field PayloadField, layout EnumLayout, typeName String) returns String
+		return "a managed payload field '{String.from(field.name)}' of type '{typeName}' on `{layout.kindWord()} {String.from(layout.name)}` (String/struct/boxed-union payloads and their move-in/drop ownership arrive at P1.3 slice 2)"
+	end 'managedPayloadMessage'
+
+	function floatPayloadMessage(field PayloadField, layout EnumLayout) returns String
+		return "payload field '{String.from(field.name)}' on `{layout.kindWord()} {String.from(layout.name)}`: a `float` payload needs the bitcast ops a later rung adds (a scalar-only union is int-tagged)"
+	end 'floatPayloadMessage'
 
 	// A type-qualified numeric bound used as a VALUE (`let x = u16.max`, `if v == u64.max`).
 	// The same three tokens a range declaration's endpoint is built from, resolved through

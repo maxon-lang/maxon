@@ -400,6 +400,10 @@ function reportParseError(project Project, path FilePath, error ParseError)
 		enumMatchNotExhaustive(kindWord, typeName, missing, line, column) then reportPositioned(project, code: ErrorCode.matchNotExhaustive, message: "match on {kindWord} '{typeName}' is not exhaustive, missing: {missing}", line: line, column: column, filePath: path)
 		matchOverlappingCase(caseName, line, column) then reportPositioned(project, code: ErrorCode.matchDuplicatePattern, message: "overlapping pattern in match: '{caseName}' is already covered", line: line, column: column, filePath: path)
 		matchEmptyRange(low, high, line, column) then reportPositioned(project, code: ErrorCode.matchDuplicatePattern, message: "range pattern '{low} to {high}' is empty: '{high}' is declared before '{low}'", line: line, column: column, filePath: path)
+		// A `union` value compared with `==`/`!=` (E3066). Byte-for-byte the bootstrap's text — the
+		// ported `enum-match-only.md` `maxoncstderr` goldens gate this stderr exactly, so the two
+		// compilers must not drift.
+		unionNotComparable(op, line, column) then reportPositioned(project, code: ErrorCode.semanticEnumNotComparable, message: "cannot compare union values using '{op}', use 'match' instead", line: line, column: column, filePath: path)
 		// The reserved-name arm (P1.2 follow-up). Byte-for-byte the bootstrap's text — the ported
 		// `reserved-double-underscore.md` `maxoncstderr` goldens gate this stderr exactly, so the two
 		// compilers must not drift.

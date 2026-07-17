@@ -56,8 +56,7 @@ The enclosing function must declare `throws MyError`. Callers must use `try`/`ot
 
 ## Tests
 
-<!-- disabled-test: error.enum-eq -->
-<!-- P1.3 union payloads (value(n Integer)) + E3066 enum-equality reject -->
+<!-- test: error.enum-eq -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -78,8 +77,7 @@ end 'main'
 error E3066: specs/fragments/enum-match-only/error.enum-eq.test:11:7: cannot compare union values using '==', use 'match' instead
 ```
 
-<!-- disabled-test: error.enum-ne -->
-<!-- P1.3 union payloads (value(n Integer)) + E3066 enum-equality reject -->
+<!-- test: error.enum-ne -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -101,7 +99,8 @@ error E3066: specs/fragments/enum-match-only/error.enum-ne.test:11:7: cannot com
 ```
 
 <!-- disabled-test: error.enum-eq-method -->
-<!-- P1.3 union payloads + instance methods on unions + E3066 -->
+<!-- P1.3 slice 2+: an instance METHOD on a union (`function isEmpty()` in the union body) is a later rung; the payload + E3066 halves are done -->
+
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -129,8 +128,7 @@ end 'main'
 error E3066: specs/fragments/enum-match-only/error.enum-eq-method.test:9:11: cannot compare union values using '==', use 'match' instead
 ```
 
-<!-- disabled-test: error.enum-eq-associated -->
-<!-- P1.3 union payloads (value(n Integer)) + E3066 enum-equality reject -->
+<!-- test: error.enum-eq-associated -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)

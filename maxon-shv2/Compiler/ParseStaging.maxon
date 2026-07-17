@@ -317,6 +317,14 @@ function remapArtifact(artifact FileParseArtifact, remap TypeNameRemap)
 	for layout in artifact.structTypes 'eachStruct'
 		remapStructLayoutFieldTypes(layout, remap: remap)
 	end 'eachStruct'
+
+	// A declared union/enum's PAYLOAD field types are id-bearing (`walk(dir Direction)`) for the same
+	// reason a struct's field types are, so they are reconciled the same way and land in
+	// `project.enumTypes` the same way `structTypes` does above. (A payload-free enum's cases carry
+	// no ids, so its loop body rewrites nothing.)
+	for layout in artifact.enumTypes 'eachEnum'
+		remapEnumLayoutPayloadTypes(layout, remap: remap)
+	end 'eachEnum'
 end 'remapArtifact'
 
 // Commit the artifact's `funcReturnTypes` contributions into the project registry.

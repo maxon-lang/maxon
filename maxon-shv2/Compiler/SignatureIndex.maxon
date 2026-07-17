@@ -599,13 +599,6 @@ export type ProgramSignatures
 			self.recordAlias(alias)
 		end 'eachAlias'
 
-		// Enums carry no ids (a case is a name, a tag an int), so they are recorded BEFORE the
-		// interner fold below and need no remap — unlike the structs, whose field types are
-		// reconciled through it.
-		for enumLayout in enums 'eachEnum'
-			self.recordEnum(enumLayout)
-		end 'eachEnum'
-
 		// Bindings — `let` and `var` alike — are RECORDED here and EVALUATED later
 		// (`evaluateInitializers`), and the gap between the two is the whole reason a forward
 		// reference works — see that function.
@@ -623,15 +616,28 @@ export type ProgramSignatures
 		// function); a `StructLayout` is a heap `type` this sweep just built and still owns, so its
 		// field list is simply rewritten. `remapStructLayoutFieldTypes` is the single mechanism
 		// `mergeArtifact` folds the same records with.
-		if not remap.isIdentity 'structIdsMoved'
+		// A declared type's id-bearing member types — a struct's field types and a union/enum's
+		// PAYLOAD field types (`walk(dir Direction)`) — are reconciled IN PLACE before the record
+		// loops below, so there is ONE recording path rather than a mapped and an unmapped one. A
+		// payload-free enum carries no ids, so its loop body rewrites nothing; the record loop still
+		// runs unconditionally (the ids are irrelevant to WHETHER a type is declared, only to what its
+		// members mean).
+		if not remap.isIdentity 'typeMemberIdsMoved'
 			for layout in structs 'eachMovedStruct'
 				remapStructLayoutFieldTypes(layout, remap: remap)
 			end 'eachMovedStruct'
-		end 'structIdsMoved'
+			for enumLayout in enums 'eachMovedEnum'
+				remapEnumLayoutPayloadTypes(enumLayout, remap: remap)
+			end 'eachMovedEnum'
+		end 'typeMemberIdsMoved'
 
 		for layout in structs 'eachStruct'
 			self.recordStruct(layout)
 		end 'eachStruct'
+
+		for enumLayout in enums 'eachEnum'
+			self.recordEnum(enumLayout)
+		end 'eachEnum'
 
 		// The remap is loop-INVARIANT, so the identity test is hoisted OUT of the per-declaration
 		// loop rather than asked once per function — the same shape `mergeArtifact` uses for the same
@@ -1334,6 +1340,15 @@ export type ProgramSignatures
 		let layout = try self.enumTypes.get(name) otherwise return DeclaredEnum.undeclared
 		return DeclaredEnum.declared(layout)
 	end 'enumOf'
+
+	// Is `name` a declared enum/union — the `bool` half of `enumOf`, and a HOT-PATH allocation guard.
+	// `enumOf` returns a `DeclaredEnum`, a Maxon union VALUE that allocates a heap box on its
+	// `undeclared` case as much as any other, so a caller that only needs "is it an enum?" for the
+	// COMMON no answer (`parseDottedPrimary` asks it of every `Point.create(…)` static call) must not
+	// pay `enumOf`'s box just to throw it away. A `Map.contains` allocates nothing.
+	export function containsEnum(name ByteArray) returns bool
+		return self.enumTypes.contains(name)
+	end 'containsEnum'
 
 	// The DECLARED type of field `index` of struct `structName`, ADOPTED into `into` — the calling
 	// file's own artifact interner. `returnTypeOf`'s exact shape and exact reason: a `named` type
