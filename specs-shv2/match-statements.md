@@ -1486,7 +1486,8 @@ end 'main'
 ### Break in Exhaustive Enum Match
 
 <!-- disabled-test: match-statements.break-exhaustive-enum -->
-<!-- payload union + panic (Wave B) -->
+<!-- P1.4: `process(c Container)` matches a union PARAMETER, and `main` passes a union across a call (a struct/union param is not yet a `structRef` binding — E2015 today); the payload construct + scalar extract themselves are P1.3 slice 1 -->
+
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
