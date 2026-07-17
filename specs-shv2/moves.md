@@ -244,3 +244,59 @@ end 'main'
 ```
 ```stdout
 ```
+
+### Move Through Redundant Parentheses Drops Once (No Double-Free)
+
+`let u = (t)` — the initializer is a bare local reference wrapped in redundant parentheses.
+`parseParenthesizedExpression` returns its inner value UNCHANGED, so `(t)` aliases `t`'s owned box
+exactly as a bare `t` would: it MOVES. A move gate that decided "bare local" by counting tokens saw
+three tokens (`( t )`) and called this a consume, left `t` unpoisoned, and both bindings decref'd the
+one box at scope exit — a double-free (exit 101). The gate now strips redundant parentheses, so `t` is
+moved-from and skipped and the box drops exactly once.
+
+<!-- test: paren-move -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function build(x Integer) returns String
+	return "v{x}"
+end 'build'
+
+function main() returns ExitCode
+	var t = build(1)
+	let u = (t)
+	print(u)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+v1
+```
+
+### Use After Move Through Parentheses
+
+`let u = (t)` moves `t` through redundant parentheses; the following `print(t)` reads the moved-from
+binding and is rejected at the use. The parens do not exempt the source from poisoning — the gate sees
+through them to the bare local reference underneath.
+
+<!-- test: paren-use-after-move -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function build(x Integer) returns String
+	return "v{x}"
+end 'build'
+
+function main() returns ExitCode
+	let t = build(1)
+	let u = (t)
+	print(t)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:11:8: use of moved value 't': its ownership moved to another binding at an earlier bind or assignment
+```

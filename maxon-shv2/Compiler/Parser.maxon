@@ -3866,20 +3866,41 @@ export type Parser
 	// reassignment is not a hot path.
 	function bindingIsOwned(binding VarInfo) returns bool
 		for owned in self.ownedBindings 'each'
-			if not owned.movedFrom and owned.boundValue == binding.boundValue 'match'
+			if self.isLiveOwnerOf(owned, value: binding.boundValue) 'match'
 				return true
 			end 'match'
 		end 'each'
 		return false
 	end 'bindingIsOwned'
 
-	// True iff the RHS just parsed — the tokens in `[startPos, self.pos)` — was EXACTLY a bare
-	// reference to a LOCAL binding (`let u = t` / `s = t`). That is the ONLY RHS shape that can MOVE an
-	// owned value out of an existing binding: a bare local reference resolves to that binding's own SSA
+	// ⭐ **WHAT MAKES AN OWNED-SET ENTRY THE ONE LIVE OWNER OF `value`**: it holds that value AND has not
+	// itself been moved from. Single-homed on purpose — the `valueIsOwned` pattern. `bindingIsOwned`
+	// (does this binding still owe a drop?) and `poisonMoveSource` (which binding does a move poison?)
+	// both need exactly this predicate, and if it drifted between the two — a new ownership flag taught
+	// to one scan and not the other — one would count a `movedFrom` ghost as a live owner: a double-free
+	// or a wrongly-skipped drop, and invisible at either call site read alone. The GHOST skip is the
+	// load-bearing half: a moved-from binding shares its stale `boundValue` with the binding it moved to,
+	// so a value has exactly one owner only once the flag is checked.
+	function isLiveOwnerOf(owned VarInfo, value ValueId) returns bool
+		return not owned.movedFrom and owned.boundValue == value
+	end 'isLiveOwnerOf'
+
+	// True iff the RHS just parsed — the tokens in `[startPos, self.pos)` — RESOLVES TO a bare reference
+	// to a LOCAL binding (`let u = t` / `s = t`, and equally `let u = (t)`). That is the ONLY RHS shape
+	// that can MOVE an owned value out of an existing binding: it resolves to that binding's own SSA
 	// value (`parseVariableReference` returns `binding.boundValue`), so `poisonMoveSource`'s value-keyed
 	// scan can match it. Every other RHS — a call, an interpolation, a field read, any arithmetic —
 	// mints a FRESH temp that is the value of no binding (a CONSUME), so the scan is guaranteed to find
 	// nothing.
+	//
+	// ⚠ **REDUNDANT PARENS ARE STRIPPED FIRST, and that is a soundness requirement, not tidiness.**
+	// `parseParenthesizedExpression` returns its inner value UNCHANGED, so `(t)` / `((t))` alias the
+	// same owned box a bare `t` does. A token-count-only gate (`self.pos == startPos + 1`) called them
+	// non-bare-local, so the poison never ran, both bindings dropped the one box, and the #41
+	// double-free returned. Stripping the outer parens makes the gate a SOUND over-approximation: it can
+	// only ever add moves, never miss one. (The identical 4-line strip lives in `shiftCountAnchor`; see
+	// the note there for why it is deliberately inlined at both sites rather than shared through a
+	// tuple-returning helper that would heap-allocate on this per-bind/assign path.)
 	//
 	// ⭐ **A GATE, NOT THE DECISION.** `poisonMoveSource` keeps the authority — given a bare-local RHS it
 	// still matches the value against the owned set, so a bare local that is NOT owned (a scalar) still
@@ -3892,13 +3913,21 @@ export type Parser
 	// false) or a self-field alias (`isSelfField`, whose read mints a fresh load rather than aliasing a
 	// binding's value) — neither is a live owned local the scan would match. Those are the same two
 	// conditions `parseVariableReference` treats as a bare LOCAL read, so the gate cannot diverge from
-	// what actually resolves to a binding's `boundValue`.
+	// what actually resolves to a binding's `boundValue` — parens included, since a parenthesized read
+	// resolves through the very same `parseVariableReference`.
 	function rhsWasBareLocalReference(startPos TokenIndex) returns bool
-		if self.pos != startPos + 1 'notSingleToken'
+		var lo = startPos
+		var hi = self.pos
+		while lo + 2 <= hi and self.kindAt(lo) == TokenKind.leftParen and self.kindAt(hi - 1) == TokenKind.rightParen 'stripParens'
+			lo = lo + 1
+			hi = hi - 1
+		end 'stripParens'
+
+		if hi != lo + 1 'notSingleToken'
 			return false
 		end 'notSingleToken'
 
-		let tok = self.tokenAt(startPos)
+		let tok = self.tokenAt(lo)
 		if tok.kind != TokenKind.identifier 'notIdentifier'
 			return false
 		end 'notIdentifier'
@@ -3913,11 +3942,11 @@ export type Parser
 	// the value of no binding, so nothing is poisoned — that is a CONSUME (move-in), not a
 	// source-poisoning move.
 	//
-	// Skips `movedFrom` ghosts (a value already moved once cannot be its live source) so the ONE live
-	// owner is the one poisoned. Keyed on `boundValue`, the `bindingIsOwned` idiom; an O(ownedBindings)
-	// scan. **The callers GATE it on `rhsWasBareLocalReference`**, so it runs only when the RHS actually
-	// was a bare local reference — never on a consume, which is what kept it off the hot path of every
-	// owned bind (the scan-and-find-nothing that made accumulating N owned bindings O(N²)).
+	// Finds the ONE live owner via `isLiveOwnerOf` (the same predicate `bindingIsOwned` reads), so a
+	// value already moved once — a `movedFrom` ghost — can never be picked as a live source. An
+	// O(ownedBindings) scan. **The callers GATE it on `rhsWasBareLocalReference`**, so it runs only when
+	// the RHS actually was a bare local reference — never on a consume, which is what kept it off the hot
+	// path of every owned bind (the scan-and-find-nothing that made accumulating N owned bindings O(N²)).
 	function poisonMoveSource(value ValueId)
 		var i = 0
 		while i < self.ownedBindings.count() 'each'
@@ -3926,7 +3955,7 @@ export type Parser
 			// idiom), so the flag is observed by every holder — `ownedBindings`, `Scope.vars`, any
 			// loop-phi list.
 			var owned = try self.ownedBindings.get(i) otherwise panic("poisonMoveSource: ownedBindings.get OOB at {i} — the list is only appended to and drained at a block's end")
-			if not owned.movedFrom and owned.boundValue == value 'source'
+			if self.isLiveOwnerOf(owned, value: value) 'source'
 				owned.movedFrom = true
 				return
 			end 'source'
@@ -5946,6 +5975,14 @@ export type Parser
 		var lo = countStart
 		var hi = countEnd
 
+		// Strip redundant outer parentheses so `x shl (-1)` anchors E2054 on the `-1`, not the `(`. The
+		// same 4-line idiom `rhsWasBareLocalReference` uses to see a move through `(t)` — NOT factored
+		// into a shared helper on purpose: the only shv2 return shape that could hand back both narrowed
+		// bounds is a tuple, and a tuple return HEAP-ALLOCATES per call, which on the per-bind/assign
+		// gate path reintroduces exactly the linear compile-time allocation the move-poison optimizer
+		// removed. Each copy is independently pinned by specs (shift goldens here; `paren-move` there), so
+		// a divergence cannot pass unnoticed, and the two serve unrelated ends (diagnostic anchor vs move
+		// soundness) — a benign shared mechanic, not a shared fact that must agree.
 		while lo + 2 <= hi and self.kindAt(lo) == TokenKind.leftParen and self.kindAt(hi - 1) == TokenKind.rightParen 'stripParens'
 			lo = lo + 1
 			hi = hi - 1
