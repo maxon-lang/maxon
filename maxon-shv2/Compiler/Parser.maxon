@@ -349,6 +349,16 @@ export union ParseError implements Error
 	// is deliberately NOT `assignToImmutableField`'s root-variable anchor: that one is advice
 	// about the BINDING (`var p`), this one is about the field itself.
 	unexportedFieldAccess(typeName String, fieldName String, line LineNumber, column ColumnNumber)
+	// --- The String-method arm (P1.2 wave D) ---
+	//
+	// A MUTATING String method (append) called on an IMMUTABLE (let-bound) receiver. Renders as
+	// E3019 with the bootstraps exact framing -- cannot pass <name> to function that mutates
+	// parameter self (in <function>) -- positioned at the METHOD name (the bootstraps anchor). The
+	// bootstrap reaches this because it lowers a method to append(self, ...) and checks the receiver
+	// against selfs mutation, machinery shv2 does not have for a builtin -- but the DEFECT and the
+	// message are identical, so the code and words are the same. functionName rides along for the
+	// (in ...) suffix, which names the enclosing function.
+	immutableMutatingCall(name String, functionName String, line LineNumber, column ColumnNumber)
 	// --- The scalar-match arms (P1.1b wave A) ---
 	//
 	// A stray token where a match EXPRESSION arm has finished — the `and` of an `and fallthrough`
@@ -890,6 +900,12 @@ let PrintBuiltinName = b"print"
 // states it as both the check and the diagnostic's `expected`.
 let PrintArity = 1 as ParamCount
 
+// **THE BUILTIN STRING METHODS** (P1.2 wave D). `append` grows a `var` String in place; `byteLength` reads
+// its byte count. String is the one non-struct type with methods at this rung, dispatched by name in
+// `parseStringMethodCall` off a String-typed receiver.
+let StringAppendMethod = b"append"
+let StringByteLengthMethod = b"byteLength"
+
 // The value a short-circuit merge takes on the SKIPPED path: `false` for `and` (a false left
 // operand determines the whole expression), `true` for `or`.
 function shortCircuitSeed(takesRhsWhenTrue bool) returns ParsedInt
@@ -915,6 +931,14 @@ function singletonArgs(value ValueId) returns ValueIdArray
 	args.push(value)
 	return args
 end 'singletonArgs'
+
+// A two-element call argument list — `__str_append(self, other)`'s pair. `singletonArgs`' sibling.
+function pairArgs(first ValueId, second ValueId) returns ValueIdArray
+	var args = ValueIdArray.create()
+	args.push(first)
+	args.push(second)
+	return args
+end 'pairArgs'
 
 // Append one argument to a call's THREE PARALLEL COLUMNS — its value, its `name:` label (the empty
 // slice when positional), and its source span.
@@ -3188,10 +3212,29 @@ export type Parser
 		// other RHS is a consume that poisons nothing. Captured here, off the token position, so the
 		// poison never runs its owned-set scan on a consume (see `rhsWasBareLocalReference`).
 		let rhsWasBareLocal = self.rhsWasBareLocalReference(rhsStart)
+
+		// ⭐ **A MUTABLE STRING BINDING OWNS A WRITABLE HEAP COPY.** `var s = "literal"` binds `s` to an
+		// immortal READ-ONLY rdata record, which `s.append(...)` cannot grow in place. So a `var` whose
+		// initializer is a BORROWED String is promoted to an owned heap copy AT THE DECLARATION — the same
+		// fused-record copy a borrowed `return` makes (`promoteToOwnedString`) — which makes `s` writable
+		// and enrols it as owned at ITS OWN scope. That last part is load-bearing: `ownedBindings` is a
+		// height stack, so a binding can only be marked owned at the depth it is declared, and promoting at
+		// the declaration is what lets an append INSIDE a nested loop mutate in place with no owned-set
+		// surgery (the OPEN #40 hazard the reassignment path still carries). A `let` String stays a borrowed
+		// rdata pointer — immutable, so never appended, and a copy would be an allocation with no consumer.
+		// An already-owned initializer (`var s = "{x}"`, or a move `var s = t`) is left untouched, and the
+		// promotion makes this binding a fresh CONSUME, not a bare-local move.
+		var boundValue = value
+		var boundBareLocal = rhsWasBareLocal
+		if mutable and self.tagOf(value) == ValueTypeTag.string and not self.valueIsOwnedHeap(value) 'promoteMutableString'
+			boundValue = self.promoteToOwnedString(value, range: SourceRange.ofToken(nameTok))
+			boundBareLocal = false
+		end 'promoteMutableString'
+
 		// A local taking the name of a field of the enclosing type is E3006, not a shadow — see
 		// `Scope.declareValueBinding`. Anchored on the LOCAL's name token: the field is fine, the
 		// local is what has to be renamed.
-		var binding = try self.scope.declareValueBinding(nameTok.value, varType: self.typeOf(value), mutable: mutable, value: value) otherwise throw ParseError.localShadowsSelfField(String.from(nameTok.value), typeName: String.from(self.enclosingType), line: nameTok.line, column: nameTok.column)
+		var binding = try self.scope.declareValueBinding(nameTok.value, varType: self.typeOf(boundValue), mutable: mutable, value: boundValue) otherwise throw ParseError.localShadowsSelfField(String.from(nameTok.value), typeName: String.from(self.enclosingType), line: nameTok.line, column: nameTok.column)
 		if mutable 'trackVar'
 			// Record `var`s in declaration order so loop headers can mint phis for every
 			// mutable binding in scope (M4b on-the-fly SSA). `let`s never join — they
@@ -3211,23 +3254,23 @@ export type Parser
 		// owned interpolation String). `let s = "hi"` is NOT owned: a literal sets no provenance bit, so the
 		// binding is borrowed and never dropped, exactly as an immortal rdata String must be. `let` and `var`
 		// alike: ownership is a property of the VALUE, never the mutability.
-		if self.valueIsOwned(value, tag: self.tagOf(value)) 'trackOwned'
+		if self.valueIsOwned(boundValue, tag: self.tagOf(boundValue)) 'trackOwned'
 			// ⭐ **MOVE-ON-BIND.** If the initializer was a bare reference to an ALREADY-owned binding
-			// (`let u = t`), `value` is that binding's value: it MOVES to this new one. Poison the
+			// (`let u = t`), `boundValue` is that binding's value: it MOVES to this new one. Poison the
 			// source so a later read of it is use-after-move and only the new owner drops the value.
-			// A fresh owned temp (`build()`, `"{x}"`) is held by no binding, so nothing is poisoned —
-			// that is a CONSUME (move-in), not a source-poisoning move. Gated on `rhsWasBareLocal`, so a
-			// consume never pays the owned-set scan; run BEFORE the push below, so the scan cannot find
-			// this new binding (it aliases the same value).
-			if rhsWasBareLocal 'moveOnBind'
-				self.poisonMoveSource(value)
+			// A fresh owned temp (`build()`, `"{x}"`, a promoted mutable-string copy) is held by no
+			// binding, so nothing is poisoned — that is a CONSUME (move-in), not a source-poisoning move.
+			// Gated on `boundBareLocal`, so a consume never pays the owned-set scan; run BEFORE the push
+			// below, so the scan cannot find this new binding (it aliases the same value).
+			if boundBareLocal 'moveOnBind'
+				self.poisonMoveSource(boundValue)
 			end 'moveOnBind'
 			self.ownedBindings.push(binding)
 			// Ownership TRANSFERS from the statement to the binding, so the statement must no longer drop it
 			// — a second drop of the box the binding now owns is a double-free. A struct box is never in the
 			// pending list (only `emitStringInterp` enrolls); an owned interpolation result is, so this is
 			// what moves its drop from statement-end to scope-exit.
-			self.removeFromPendingTemps(value)
+			self.removeFromPendingTemps(boundValue)
 		end 'trackOwned'
 	end 'parseBinding'
 
@@ -3760,14 +3803,22 @@ export type Parser
 		end 'eachOwned'
 	end 'emitScopeDrops'
 
-	// Emit a single `__mm_decref` — the one shape a dropped owned heap value releases through, shared by
-	// every drop site: `emitScopeDrops` (a binding at scope exit), `drainPendingTemps` (an unconsumed
-	// temporary at statement end), and `emitStringInterp` (its consumed scratch buffers). One door, so the
-	// decref's op shape lives in ONE place and cannot drift across the three callers. The result is `void`
-	// because `__mm_decref` returns nothing — the tag `ValueTypeTag.void` exists for exactly this, a
-	// ValueId the op shape demands and no rule may ever be asked about.
+	// Emit a single drop — the one shape a dropped owned heap value releases through, shared by every drop
+	// site: `emitScopeDrops` (a binding at scope exit), `drainPendingTemps` (an unconsumed temporary at
+	// statement end), and `emitStringInterp` (its consumed scratch buffers). One door, so the drop's op
+	// shape lives in ONE place and cannot drift across the callers. The result is `void` because a decref
+	// returns nothing — the tag `ValueTypeTag.void` exists for exactly this, a ValueId the op shape demands
+	// and no rule may ever be asked about.
+	//
+	// ⭐ **A STRING DROPS THROUGH `__str_decref`, EVERYTHING ELSE THROUGH `__mm_decref`** — the tag tells
+	// them apart. A String record alone carries the external-buffer provenance (`parent@32`/`buffer@0`) a
+	// grown String leaves behind, so only its drop must free that buffer; a struct box and a raw
+	// interpolation scratch buffer (integer-tagged) have none, so the generic decref is exactly right. This
+	// IS the destructor dispatch, done STATICALLY: the parser knows the type at every drop, so there is no
+	// stored destructor pointer and no `callIndirect` (`StringRuntime.buildStrDecref` has the full why).
 	function emitDecref(value ValueId, range SourceRange)
-		_ = self.emitRuntimeCall(MmDecrefName, args: singletonArgs(value), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+		let callee = StrDecrefName if self.tagOf(value) == ValueTypeTag.string else MmDecrefName
+		_ = self.emitRuntimeCall(callee, args: singletonArgs(value), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 	end 'emitDecref'
 
 	// ⭐ **CALL AN EMITTED RUNTIME ENTRY POINT** (`__mm_alloc`, `__mm_decref`) — the door the parser
@@ -7106,13 +7157,82 @@ export type Parser
 	// need that analysis at the moment a sink can be written, and not before.
 	function parseMethodCall(func IrFunction, resultUsed bool) returns ValueId throws ParseError
 		let baseTok = self.current()
+		let binding = self.scope.getInfo(self.baseBindingName(baseTok))
+
+		// A STRING RECEIVER is dispatched to the builtin String methods (append, byteLength) rather than
+		// through requireStructBase, which would reject it as not a struct. String is the one non-struct
+		// type carrying methods at this rung; the split is on the binding's TAG, the parser's type oracle.
+		// (self never names a String -- a receiver is always a struct -- so baseBindingName is untouched.)
+		if maxonTypeTag(binding.varType) == ValueTypeTag.string 'stringMethod'
+			return try self.parseStringMethodCall(func, binding: binding, baseTok: baseTok, resultUsed: resultUsed)
+		end 'stringMethod'
+
 		self.advance()
 		try self.consume(TokenKind.dot)
 
-		let base = try self.requireStructBase(self.scope.getInfo(self.baseBindingName(baseTok)), baseTok: baseTok)
+		let base = try self.requireStructBase(binding, baseTok: baseTok)
 
 		return try self.parseCallNamed(func, callee: qualifiedMethodName(base.layout.name, methodName: self.current().value), anchor: baseTok, receiver: ReceiverArg.value(base.box), resultUsed: resultUsed)
 	end 'parseMethodCall'
+
+	// A STRING'S BUILTIN METHODS -- s.append(t) and s.byteLength(). String is the one non-struct type
+	// carrying methods at this rung, so it has its own dispatch rather than riding requireStructBase.
+	// The receiver must be LIVE (a moved-from String touched through a method is use-after-move, E3102),
+	// checked here before the method name is even resolved -- the same guard requireStructBase gives a
+	// struct base.
+	function parseStringMethodCall(func IrFunction, binding VarInfo, baseTok Token, resultUsed bool) returns ValueId throws ParseError
+		self.advance()
+		try self.consume(TokenKind.dot)
+		try self.requireBindingLive(binding, nameTok: baseTok)
+
+		let methodTok = try self.consume(TokenKind.identifier)
+		if methodTok.value.equals(StringAppendMethod) 'append'
+			return try self.parseStringAppend(func, binding: binding, baseTok: baseTok, methodTok: methodTok, resultUsed: resultUsed)
+		end 'append'
+		if methodTok.value.equals(StringByteLengthMethod) 'byteLength'
+			return try self.parseStringByteLength(binding, methodTok: methodTok)
+		end 'byteLength'
+
+		throw ParseError.unsupported("String method '{String.from(methodTok.value)}' -- P1.2 wave D provides `append` and `byteLength`; the rest (slice/split/toByteArray/...) need Array and arrive at P1.7+", line: methodTok.line, column: methodTok.column)
+	end 'parseStringMethodCall'
+
+	// s.append(t) -- grow the String s by t's bytes, IN PLACE (a __str_append(s, t) runtime call). s must
+	// be a var (append mutates the receiver), else E3019 with the bootstrap's exact framing. s is already
+	// an owned WRITABLE heap record -- a var String initializer is promoted at its declaration
+	// (parseBinding) -- so there is nothing to make writable here. t is BORROWED and COPIED (its bytes are
+	// blitted), so it is neither moved nor consumed: an owned interpolation argument stays a pending temp
+	// and drops at statement end, AFTER the copy. append is void, so a value-position call is rejected.
+	function parseStringAppend(func IrFunction, binding VarInfo, baseTok Token, methodTok Token, resultUsed bool) returns ValueId throws ParseError
+		if not binding.mutable 'immutableReceiver'
+			throw ParseError.immutableMutatingCall(String.from(baseTok.value), functionName: String.from(func.name), line: methodTok.line, column: methodTok.column)
+		end 'immutableReceiver'
+		if resultUsed 'voidResultUsed'
+			throw ParseError.voidCallResultUsed(String.from(StringAppendMethod), line: methodTok.line, column: methodTok.column)
+		end 'voidResultUsed'
+
+		try self.consume(TokenKind.leftParen)
+		let argTok = self.current()
+		let arg = try self.parseExpression(func, block: self.currentBlock)
+		try self.consume(TokenKind.rightParen)
+
+		if self.tagOf(arg) != ValueTypeTag.string 'argNotString'
+			throw ParseError.builtinOperandType(String.from(StringAppendMethod), required: typeTagName(ValueTypeTag.string), got: typeTagName(self.tagOf(arg)), line: argTok.line, column: argTok.column)
+		end 'argNotString'
+
+		_ = self.emitRuntimeCall(StrAppendName, args: pairArgs(binding.boundValue, second: arg), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: SourceRange.between(baseTok, last: methodTok))
+		// append is a statement (resultUsed false, checked above); the returned id is discarded by the
+		// caller. The receiver value is the honest thing to hand back -- it is what s still denotes.
+		return binding.boundValue
+	end 'parseStringAppend'
+
+	// s.byteLength() -- the String's byte count, length@8. A non-mutating accessor, so a let or var
+	// receiver alike, and it takes no arguments. The value is integer-tagged (a byte count), exactly as a
+	// field read is, and returns through the one String-field load site.
+	function parseStringByteLength(binding VarInfo, methodTok Token) returns ValueId throws ParseError
+		try self.consume(TokenKind.leftParen)
+		try self.consume(TokenKind.rightParen)
+		return self.emitLoadStringField(binding.boundValue, offset: StringLengthOffset, range: SourceRange.ofToken(methodTok))
+	end 'parseStringByteLength'
 
 	// The SCOPE name a base token denotes. `self` is a keyword, so it carries no binding name of its
 	// own; it names the receiver parameter, which is bound under `SelfParamName`. Every other base

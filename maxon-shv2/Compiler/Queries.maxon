@@ -372,6 +372,7 @@ function reportParseError(project Project, path FilePath, error ParseError)
 		// stderr exactly and the two suites run the same spec file.
 		localShadowsSelfField(name, typeName, line, column) then reportPositioned(project, code: ErrorCode.duplicateFunction, message: "local '{name}' shadows self field '{typeName}.{name}' — rename the local to avoid silent type confusion at every read/write keyed on the name", line: line, column: column, filePath: path)
 		unexportedFieldAccess(typeName, fieldName, line, column) then reportPositioned(project, code: ErrorCode.unexportedFieldAccess, message: "cannot access unexported field: '{fieldName}' outside of type '{typeName}'", line: line, column: column, filePath: path)
+		immutableMutatingCall(name, functionName, line, column) then reportPositioned(project, code: ErrorCode.semanticImmutableRefToMutatingParam, message: "cannot pass '{name}' to function that mutates parameter 'self' (in {functionName})", line: line, column: column, filePath: path)
 		// The scalar-match arms (P1.1b wave A). Each carries the code its meaning is registered under
 		// in `docs/error-codes.txt`, and each message is byte-for-byte the reference compilers' — the
 		// `maxoncstderr` goldens in `match-statements.md`/`match-simple.md` gate them exactly.

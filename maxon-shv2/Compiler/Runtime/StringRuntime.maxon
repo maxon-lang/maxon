@@ -24,6 +24,7 @@
 // blob is a SEPARATE `.rdata` entry, NUL-terminated, and `length@8` EXCLUDES the NUL.
 export let StringBufferOffset = 0 as ByteOffset
 export let StringLengthOffset = 8 as ByteOffset
+
 // Exported for `Parser.emitStringInterp`, which WRITES all six fields of an owned heap String's record
 // (the literal path here only ever writes rdata). One set of offsets, read by the runtime and written by
 // the interpolation lowering, so a reader and a writer of the same record cannot drift.
@@ -80,6 +81,7 @@ let NulTerminator = 0 as Byte
 let AsciiZeroDigit = 48 as ParsedInt
 let AsciiMinusSign = 45 as ParsedInt
 let DecimalRadix = 10 as ParsedInt
+
 // `value >>logical 63` is `1` exactly when the sign bit is set — the branch-free `isNegative` the sign
 // and the leading `-` are both derived from.
 let SignBitPosition = 63 as ParsedInt
@@ -102,6 +104,7 @@ let AsciiLowerL = 108 as ParsedInt
 let AsciiLowerS = 115 as ParsedInt
 let BoolTrueLength = 4 as ParsedInt
 let BoolFalseLength = 5 as ParsedInt
+
 // "false" is the longest rendering, so 5 bytes cover both.
 export let BoolToStringScratchBytes = 5 as ParsedInt
 
@@ -127,6 +130,22 @@ export let StrEqName = b"__str_eq"
 export let StrCopyName = b"__str_copy"
 export let IntToStringName = b"__int_to_string"
 export let BoolToStringName = b"__bool_to_string"
+
+// The two Wave-D entry points. `__str_append(self, other)` grows a String in place; `__str_decref(record)`
+// is a String's drop — a `__mm_decref` that ALSO frees the external buffer of a detached String. Both are
+// `__`-prefixed compiler-internal (no E3004, no signature slotting) but NOT `__mm_`-prefixed, so on their
+// own they do not widen the heap decision. They DO call `__mm_alloc`/`__mm_free`/`__str_copy` inside their
+// Std bodies — which `scanRuntimeUsage` cannot see, since those calls are not in the Maxon module — so a
+// reference to either explicitly turns on `usesHeap` (and `__str_append` turns on `usesStrCopy`).
+export let StrAppendName = b"__str_append"
+export let StrDecrefName = b"__str_decref"
+
+// `parent_ptr == -1` — a DETACHED ROOT: `buffer@0` is an external `__mm_alloc`'d buffer this String owns
+// and must free. It is the ONE parent value that frees an external buffer; inline (`-3`), rdata literal
+// (`0`) and a borrowed slice (`-1` is taken, slices are P1.4) free nothing beyond the record. `__str_append`
+// WRITES it on detach and `__str_decref` READS it to decide the buffer free — one fact, the load-bearing
+// invariant of this rung, so it is named once here and read from both ends.
+export let DetachedRootParent = 0 - 1 as ParsedInt
 
 // The bool `__str_eq` returns, as the i64 a Std `value(i64)` return carries: 1 when equal, 0 otherwise.
 let StrEqEqual = 1 as ParsedInt
@@ -228,9 +247,11 @@ export type RuntimeUsage
 	export var usesStrCopy as bool
 	export var usesIntToString as bool
 	export var usesBoolToString as bool
+	export var usesStrAppend as bool
+	export var usesStrDecref as bool
 
 	static function create() returns RuntimeUsage
-		return Self{usesHeap: false, usesPrint: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesBoolToString: false}
+		return Self{usesHeap: false, usesPrint: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesBoolToString: false, usesStrAppend: false, usesStrDecref: false}
 	end 'create'
 end 'RuntimeUsage'
 
@@ -274,6 +295,19 @@ function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 	if callee.equals(BoolToStringName) 'booltostr'
 		usage.usesBoolToString = true
 	end 'booltostr'
+	// `__str_append` and `__str_decref` call `__mm_alloc`/`__mm_free` inside their Std bodies, which
+	// this Maxon-module scan cannot see — so their TRANSITIVE heap dependency is declared here rather
+	// than discovered. `__str_append` also blits with `__str_copy`. Turning these bits on is what
+	// keeps a program that appends from missing its allocator or its copy loop.
+	if callee.equals(StrAppendName) 'strappend'
+		usage.usesStrAppend = true
+		usage.usesHeap = true
+		usage.usesStrCopy = true
+	end 'strappend'
+	if callee.equals(StrDecrefName) 'strdecref'
+		usage.usesStrDecref = true
+		usage.usesHeap = true
+	end 'strdecref'
 end 'recordCallUsage'
 
 // Install the referenced String runtime functions into the lowered Std module. Called AFTER the
@@ -295,6 +329,12 @@ export function installStringRuntime(module StdModule, usage RuntimeUsage)
 	if usage.usesBoolToString 'booltostr'
 		buildBoolToString(module)
 	end 'booltostr'
+	if usage.usesStrAppend 'strappend'
+		buildStrAppend(module)
+	end 'strappend'
+	if usage.usesStrDecref 'strdecref'
+		buildStrDecref(module)
+	end 'strdecref'
 end 'installStringRuntime'
 
 // `__print_string(strPtr)` — write a String's bytes to stdout, no trailing newline.
@@ -648,6 +688,202 @@ function buildBoolToString(module StdModule)
 	module.functions.push(func)
 end 'buildBoolToString'
 
+// `__str_append(self, other)` — grow `self` in place by `other`'s bytes. The first time a shv2 String's
+// bytes leave the inline/rdata region (Wave D), so the FIRST real exercise of the leak gate on a non-inline
+// allocation. Adapted from v1's `__managed_mem_cow_check`+`grow` (`stdlib/Internals.maxon:3432-3491`) to
+// shv2's fused record and static single-owner model (no refcount on the detach path).
+//
+// ⭐ **ONE DETACH CONDITION, ONE FREE GUARD, THREE SOURCE PROVENANCES.** The bytes must move to a fresh
+// external buffer whenever `self` does not already own a big-enough external ROOT — i.e. `parent != -1`
+// (the bytes are inline `-3` or a borrowed rdata literal `0`, neither writable-in-place) OR `capacity <
+// requiredLen` (an owned root that is too small — a grow). The OLD buffer is freed ONLY when it was itself
+// a root (`parent == -1`): an inline source's bytes belong to the record's own slot and an rdata literal's
+// are immortal, so neither is freed. That single guard collapses the three cases the record format admits
+// into one path — there is no per-provenance branch, and so no dead one.
+//
+// ⚠ **THE LOAD-BEARING INVARIANT: detach WRITES `parent@32 = -1`, and `__str_decref` READS it to free the
+// buffer.** Leave `parent` at its pre-detach value and the owned external buffer is never freed — a leak
+// (exit 101). The value written here and the value read there are ONE fact (`DetachedRootParent`), named
+// once so the writer and the reader cannot drift.
+//
+// Growth is EXACT (`requiredLen`): the specs pin the output, the byte length and the absence of a leak,
+// none of which a geometric policy would change — and exact size keeps the alloc/free count trivially
+// balanced. Geometric growth is a later optimization with no consumer here.
+function buildStrAppend(module StdModule)
+	var func = IrFunction.createFromStd(StrAppendName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var checkCap = module.addBlock(func, label: b"checkCap")
+	var detach = module.addBlock(func, label: b"detach")
+	var freeOld = module.addBlock(func, label: b"freeOld")
+	var afterDetach = module.addBlock(func, label: b"afterDetach")
+	var blit = module.addBlock(func, label: b"blit")
+	var clearAscii = module.addBlock(func, label: b"clearAscii")
+	var done = module.addBlock(func, label: b"done")
+
+	emitParams(module, block: entry, count: 2)
+	let selfPtr = 0 as ValueId
+	let otherPtr = 1 as ValueId
+
+	// entry: load the fields every block reads (entry dominates all of them, so these need no phi),
+	// compute the required length, and branch on whether `self` already owns an external root buffer.
+	let selfLen = ids.mint()
+	module.appendOp(entry, op: StdOp.loadIndirect(selfLen, addrId: selfPtr, offset: StringLengthOffset, valueType: StdType.i64))
+	let selfBuf = ids.mint()
+	module.appendOp(entry, op: StdOp.loadIndirect(selfBuf, addrId: selfPtr, offset: StringBufferOffset, valueType: StdType.i64))
+	let selfParent = ids.mint()
+	module.appendOp(entry, op: StdOp.loadIndirect(selfParent, addrId: selfPtr, offset: StringParentPtrOffset, valueType: StdType.i64))
+	let otherLen = ids.mint()
+	module.appendOp(entry, op: StdOp.loadIndirect(otherLen, addrId: otherPtr, offset: StringLengthOffset, valueType: StdType.i64))
+	let otherBuf = ids.mint()
+	module.appendOp(entry, op: StdOp.loadIndirect(otherBuf, addrId: otherPtr, offset: StringBufferOffset, valueType: StdType.i64))
+	let otherAscii = ids.mint()
+	module.appendOp(entry, op: StdOp.loadIndirect(otherAscii, addrId: otherPtr, offset: StringIsAsciiOffset, valueType: StdType.i64))
+	let requiredLen = ids.mint()
+	module.appendOp(entry, op: StdOp.binOp(requiredLen, lhs: selfLen, rhs: otherLen, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	let rootConst = ids.mint()
+	module.appendOp(entry, op: StdOp.const(rootConst, value: DetachedRootParent, valueType: StdType.i64))
+	let isRoot = ids.mint()
+	module.appendOp(entry, op: StdOp.cmp(isRoot, lhs: selfParent, rhs: rootConst, pred: StdCmpPred.eq, operandType: StdType.i64))
+	module.setTerminator(entry, op: StdOp.condBranch(isRoot, thenBlockId: checkCap.id, elseBlockId: detach.id))
+
+	// checkCap: an owned root still detaches (grows) when it is too small for the combined length.
+	let selfCap = ids.mint()
+	module.appendOp(checkCap, op: StdOp.loadIndirect(selfCap, addrId: selfPtr, offset: StringCapacityOffset, valueType: StdType.i64))
+	let tooSmall = ids.mint()
+	module.appendOp(checkCap, op: StdOp.cmp(tooSmall, lhs: selfCap, rhs: requiredLen, pred: StdCmpPred.lt, operandType: StdType.i64))
+	module.setTerminator(checkCap, op: StdOp.condBranch(tooSmall, thenBlockId: detach.id, elseBlockId: blit.id))
+
+	// detach: allocate a fresh external buffer (destructor 0 — raw bytes, `__str_decref` frees it
+	// directly), copy the live bytes in, and free the OLD buffer only if it was itself a root.
+	let zeroDtor = ids.mint()
+	module.appendOp(detach, op: StdOp.const(zeroDtor, value: 0, valueType: StdType.i64))
+	let newBuf = ids.mint()
+	module.appendOp(detach, op: StdOp.call(newBuf, callee: MmAllocName, args: twoArgs(requiredLen, second: zeroDtor)))
+	let copied = ids.mint()
+	module.appendOp(detach, op: StdOp.call(copied, callee: StrCopyName, args: threeArgs(newBuf, second: selfBuf, third: selfLen)))
+	let rootConst2 = ids.mint()
+	module.appendOp(detach, op: StdOp.const(rootConst2, value: DetachedRootParent, valueType: StdType.i64))
+	let wasRoot = ids.mint()
+	module.appendOp(detach, op: StdOp.cmp(wasRoot, lhs: selfParent, rhs: rootConst2, pred: StdCmpPred.eq, operandType: StdType.i64))
+	module.setTerminator(detach, op: StdOp.condBranch(wasRoot, thenBlockId: freeOld.id, elseBlockId: afterDetach.id))
+
+	// freeOld: the old external root is being replaced by a bigger one — release it (a grow).
+	let oldFreed = ids.mint()
+	module.appendOp(freeOld, op: StdOp.call(oldFreed, callee: MmFreeName, args: argsOf(selfBuf)))
+	module.setTerminator(freeOld, op: StdOp.branch(afterDetach.id))
+
+	// afterDetach: publish the new buffer, its capacity, and the ROOT provenance — the record now owns
+	// an external buffer, exactly as a prior grow leaves it. `newBuf` is defined in `detach`, which
+	// dominates here on both incoming edges.
+	module.appendOp(afterDetach, op: StdOp.storeIndirect(selfPtr, offset: StringBufferOffset, valueId: newBuf, valueType: StdType.i64))
+	module.appendOp(afterDetach, op: StdOp.storeIndirect(selfPtr, offset: StringCapacityOffset, valueId: requiredLen, valueType: StdType.i64))
+	let rootParent = ids.mint()
+	module.appendOp(afterDetach, op: StdOp.const(rootParent, value: DetachedRootParent, valueType: StdType.i64))
+	module.appendOp(afterDetach, op: StdOp.storeIndirect(selfPtr, offset: StringParentPtrOffset, valueId: rootParent, valueType: StdType.i64))
+	module.setTerminator(afterDetach, op: StdOp.branch(blit.id))
+
+	// blit: append `other`'s bytes at the end of `self`'s CURRENT buffer (reloaded, since detach may
+	// have replaced it) using the OLD length as the write cursor, then publish the new length. Reached
+	// in place (from `checkCap`) and grown (from `afterDetach`) alike.
+	let curBuf = ids.mint()
+	module.appendOp(blit, op: StdOp.loadIndirect(curBuf, addrId: selfPtr, offset: StringBufferOffset, valueType: StdType.i64))
+	let dstAddr = ids.mint()
+	module.appendOp(blit, op: StdOp.binOp(dstAddr, lhs: curBuf, rhs: selfLen, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	let blitted = ids.mint()
+	module.appendOp(blit, op: StdOp.call(blitted, callee: StrCopyName, args: threeArgs(dstAddr, second: otherBuf, third: otherLen)))
+	module.appendOp(blit, op: StdOp.storeIndirect(selfPtr, offset: StringLengthOffset, valueId: requiredLen, valueType: StdType.i64))
+	// `isAscii` is maintained incrementally: the concatenation stays ASCII only if `other` is too.
+	let zeroAscii = ids.mint()
+	module.appendOp(blit, op: StdOp.const(zeroAscii, value: 0, valueType: StdType.i64))
+	let otherNonAscii = ids.mint()
+	module.appendOp(blit, op: StdOp.cmp(otherNonAscii, lhs: otherAscii, rhs: zeroAscii, pred: StdCmpPred.eq, operandType: StdType.i64))
+	module.setTerminator(blit, op: StdOp.condBranch(otherNonAscii, thenBlockId: clearAscii.id, elseBlockId: done.id))
+
+	// clearAscii: `other` carried a non-ASCII byte, so the result is not ASCII.
+	module.appendOp(clearAscii, op: StdOp.storeIndirect(selfPtr, offset: StringIsAsciiOffset, valueId: zeroAscii, valueType: StdType.i64))
+	module.setTerminator(clearAscii, op: StdOp.branch(done.id))
+
+	module.setTerminator(done, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildStrAppend'
+
+// `__str_decref(record)` — a String's DROP. It is `__mm_decref` (dec the refcount; free at the last
+// owner) plus the one thing the generic decref structurally cannot do: free the EXTERNAL buffer of a
+// detached String BEFORE the record. The parser routes every owned-String drop here by TAG (`emitDecref`),
+// so a struct box and a raw scratch buffer still drop through `__mm_decref`; only a String record, which
+// alone carries the `parent@32`/`buffer@0` pair, drops through here.
+//
+// ⭐ **STATIC DISPATCH, NOT A DESTRUCTOR POINTER.** The record stores NO destructor — the parser knows the
+// static type at every drop, so there is nothing to dispatch dynamically, and `funcAddr`/`callIndirect`
+// stay deferred until a struct/array FIELD can hold a String (P1.4+), where a box's own `__mm_free` must
+// reach a destructor it cannot name. Shipping the indirect-call vocabulary now would be vocabulary ahead
+// of its forcing consumer — the mistake `__mm_incref` and `mintPhi` are the standing warnings against.
+//
+// The refcount RMW duplicates `__mm_decref`'s (load rc; `== 0` ⇒ last owner) because it must run BEFORE
+// the record is freed and gate the buffer free on the same "is this the last owner?" answer — the generic
+// decref cannot be called for the record part without first losing the chance to read `parent`/`buffer`
+// out of a box it is about to reclaim.
+function buildStrDecref(module StdModule)
+	var func = IrFunction.createFromStd(StrDecrefName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var lower = module.addBlock(func, label: b"lower")
+	var release = module.addBlock(func, label: b"release")
+	var freeBuf = module.addBlock(func, label: b"freeBuf")
+	var freeRec = module.addBlock(func, label: b"freeRec")
+
+	emitParams(module, block: entry, count: 1)
+	let record = 0 as ValueId
+
+	// entry: read the refcount through the shared header geometry. `rc == 0` is the LAST owner (a box is
+	// born at rc 0 meaning ONE owner — `__mm_alloc`'s model); any other value is decremented.
+	let header = emitHeaderBase(module, block: entry, ptr: record, ids: ids)
+	let rc = ids.mint()
+	module.appendOp(entry, op: StdOp.loadIndirect(rc, addrId: header, offset: HeaderRefcountOffset, valueType: StdType.i64))
+	let zeroConst = ids.mint()
+	module.appendOp(entry, op: StdOp.const(zeroConst, value: 0, valueType: StdType.i64))
+	let isLast = ids.mint()
+	module.appendOp(entry, op: StdOp.cmp(isLast, lhs: rc, rhs: zeroConst, pred: StdCmpPred.eq, operandType: StdType.i64))
+	module.setTerminator(entry, op: StdOp.condBranch(isLast, thenBlockId: release.id, elseBlockId: lower.id))
+
+	// lower: not the last owner — drop the count by one and keep the box.
+	let oneConst = ids.mint()
+	module.appendOp(lower, op: StdOp.const(oneConst, value: 1, valueType: StdType.i64))
+	let lowered = ids.mint()
+	module.appendOp(lower, op: StdOp.binOp(lowered, lhs: rc, rhs: oneConst, opcode: StdBinOpcode.sub, operandType: StdType.i64))
+	module.appendOp(lower, op: StdOp.storeIndirect(header, offset: HeaderRefcountOffset, valueId: lowered, valueType: StdType.i64))
+	module.setTerminator(lower, op: StdOp.retVoid)
+
+	// release: the last owner. A DETACHED ROOT (`parent == -1`) owns an external buffer that must be
+	// freed before the record; inline/rdata/borrowed frees nothing beyond it.
+	let parent = ids.mint()
+	module.appendOp(release, op: StdOp.loadIndirect(parent, addrId: record, offset: StringParentPtrOffset, valueType: StdType.i64))
+	let rootConst = ids.mint()
+	module.appendOp(release, op: StdOp.const(rootConst, value: DetachedRootParent, valueType: StdType.i64))
+	let isRoot = ids.mint()
+	module.appendOp(release, op: StdOp.cmp(isRoot, lhs: parent, rhs: rootConst, pred: StdCmpPred.eq, operandType: StdType.i64))
+	module.setTerminator(release, op: StdOp.condBranch(isRoot, thenBlockId: freeBuf.id, elseBlockId: freeRec.id))
+
+	// freeBuf: release the external buffer, then fall into the record free.
+	let buffer = ids.mint()
+	module.appendOp(freeBuf, op: StdOp.loadIndirect(buffer, addrId: record, offset: StringBufferOffset, valueType: StdType.i64))
+	let bufFreed = ids.mint()
+	module.appendOp(freeBuf, op: StdOp.call(bufFreed, callee: MmFreeName, args: argsOf(buffer)))
+	module.setTerminator(freeBuf, op: StdOp.branch(freeRec.id))
+
+	// freeRec: release the record itself. Reached from `release` (nothing beyond it) and `freeBuf`
+	// (external buffer already gone) alike.
+	let recFreed = ids.mint()
+	module.appendOp(freeRec, op: StdOp.call(recFreed, callee: MmFreeName, args: argsOf(record)))
+	module.setTerminator(freeRec, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildStrDecref'
+
 // Store one constant byte at `dest[offset]`. The shape a fixed-text renderer (`__bool_to_string`) writes
 // each of its bytes with — a `const` typed i64, stored as a `u8` (the store keeps the low byte).
 function storeConstByte(module StdModule, block IrBlock, ids ValueMinter, dest ValueId, offset ByteOffset, charValue ParsedInt)
@@ -673,3 +909,13 @@ function twoArgs(first ValueId, second ValueId) returns ValueIdArray
 	args.push(second)
 	return args
 end 'twoArgs'
+
+// The three-argument call helper — `argsOf`'s triple sibling, for the `__mm_alloc(size, dtor)` and
+// `__str_copy(dest, src, len)` calls `__str_append` makes. (`twoArgs` doubles as the two-value case.)
+function threeArgs(first ValueId, second ValueId, third ValueId) returns ValueIdArray
+	var args = ValueIdArray.create()
+	args.push(first)
+	args.push(second)
+	args.push(third)
+	return args
+end 'threeArgs'

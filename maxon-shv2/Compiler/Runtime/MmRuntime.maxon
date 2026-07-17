@@ -41,8 +41,12 @@
 // the word would be 8 bytes of nothing on every allocation in the language.
 let HeaderDestructorOffset = 0 as ByteOffset
 let HeaderSizeOffset = 8 as ByteOffset
-let HeaderRefcountOffset = 16 as ByteOffset
-let HeaderBytes = 24
+
+// Exported so `StringRuntime.__str_decref` reads the refcount word through the SAME header
+// layout `__mm_decref` does — one source of the header geometry, so the String's own drop and
+// the generic decref cannot disagree about where the refcount lives.
+export let HeaderRefcountOffset = 16 as ByteOffset
+export let HeaderBytes = 24
 
 // The arena a single `osAllocPages` request commits. 64 KiB is Windows' allocation granularity, so
 // a smaller request would round up to it anyway and simply waste the difference.
@@ -481,8 +485,9 @@ end 'buildMmLeakCheck'
 
 // `ptr - HeaderBytes` — the header's base address. Every header access goes through it, so the one
 // place the payload/header relationship is expressed is here. See the header-layout note above for
-// why this is a subtraction rather than a negative `loadIndirect` offset.
-function emitHeaderBase(module StdModule, block IrBlock, ptr ValueId, ids ValueMinter) returns ValueId
+// why this is a subtraction rather than a negative `loadIndirect` offset. Exported so `__str_decref`
+// reaches the refcount through the same subtraction rather than respelling the header geometry.
+export function emitHeaderBase(module StdModule, block IrBlock, ptr ValueId, ids ValueMinter) returns ValueId
 	let headerConst = ids.mint()
 	module.appendOp(block, op: StdOp.const(headerConst, value: HeaderBytes, valueType: StdType.i64))
 	let header = ids.mint()
