@@ -255,6 +255,15 @@ public class Compiler {
     var failedFiles = new HashSet<string>();
     var sw = timings != null ? new System.Diagnostics.Stopwatch() : null;
 
+    // Foreign top-level-constant perspectives are a pure function of the module's whole-program
+    // constant declarations (settled by preScanConstDecls, below, before any fold) and a file path.
+    // Share ONE cache across every parser in this compilation — both folding passes (preScan and the
+    // full parse) and every file — so a given declarer's perspective is built at most once. A fresh
+    // Parser is created per file per pass, so a per-parser cache rebuilt the same perspective in each,
+    // making total build work super-quadratic on deep cross-file constant chains. Scoped to this call
+    // (not static) so a reused module — e.g. the LSP's cached stdlib module — never serves a stale set.
+    var foreignPerspectiveCache = new Dictionary<string, object>();
+
     // Per-source token cache. The same file is walked by up to 5 passes
     // (PreRegisterTypeNames, PreScanTypeAliasesOnly, PreScan, RescanExtensions,
     // PreScanTypeAliasesOnly again, Parse). Each pass previously re-lexed from
@@ -354,7 +363,7 @@ public class Compiler {
       if (failedFiles.Contains(source.Path)) continue;
       try {
         var tokens = TokensFor(source);
-        var parser = new Parser(tokens, module, isStdlib: isStdLib, sourceFilePath: source.Path, testing: Testing, targetOs: parserOs, targetArch: parserArch, rootPath: source.RootPath);
+        var parser = new Parser(tokens, module, isStdlib: isStdLib, sourceFilePath: source.Path, testing: Testing, targetOs: parserOs, targetArch: parserArch, rootPath: source.RootPath, foreignPerspectiveCache: foreignPerspectiveCache);
         parser.PreScan(module);
       } catch (CompileError ex) {
         ex.FilePath ??= source.Path;
@@ -458,7 +467,7 @@ public class Compiler {
       if (failedFiles.Contains(source.Path)) continue;
       try {
         var tokens = TokensFor(source);
-        var parser = new Parser(tokens, module, isStdlib: isStdLib, sourceFilePath: source.Path, testing: Testing, targetOs: parserOs, targetArch: parserArch, rootPath: source.RootPath);
+        var parser = new Parser(tokens, module, isStdlib: isStdLib, sourceFilePath: source.Path, testing: Testing, targetOs: parserOs, targetArch: parserArch, rootPath: source.RootPath, foreignPerspectiveCache: foreignPerspectiveCache);
         var parsed = parser.Parse();
         module.Merge(parsed);
         // Collect declaration-level errors from parser recovery

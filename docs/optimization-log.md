@@ -274,6 +274,42 @@ ms) and the dominant term is gone. The O(files × constants) that remains is the
 pre-existing `SeedFromModule` seed this diff never touched — sub-millisecond at the ~600-constant
 scale of a real self-build, and quadratic before this rung too.
 
+**2026-07-17 — the perspective-fold's cache was PER-PARSER, so a foreign perspective was rebuilt in
+every parser that read it. Bootstrap again; no table row moved.** The follow-up `d7ed60d30` folds each
+top-level constant in its DECLARER's perspective, resolving that file's private aliases; a foreign
+perspective is built by `ConstantDeclSetFor(filePath)`, which scans the whole-program declaration list
+once and memoizes the result. The memo was an **instance field** (`_constantDeclSetCache`), and a fresh
+`Parser` is created for every file in every pass — so the SAME declarer's perspective was rebuilt once
+per parser that folded one of its constants, across both the PreScan and Parse passes. On a deep
+cross-file constant chain folded in a seeding-defeating order (which is exactly what
+`MAXON_SOURCE_ORDER=reverse` exercises) the cascade re-derives each perspective at every level of every
+parser: total perspective-build work grew **super-quadratically**, above the pre-existing and accepted
+O(files × constants) baseline.
+
+Measured with a temporary deterministic counter (perspective builds, and decls scanned across them —
+exact, load-independent) on a generated chain of N single-constant files, `MAXON_SOURCE_ORDER=reverse`:
+builds grew **×2.5–3 per doubling (~N¹·³)** and total decls scanned **×~4.5 (~N²·¹⁶)** — F, the number
+of distinct perspective demands, was *larger than the file count* because the cache did not dedupe
+across parsers. The fix threads ONE cache through every parser of a compilation
+(`Compiler.CompileSources` owns it; scoped to the call, not static, so a reused module — the LSP's
+cached stdlib module — never serves a stale set). After it: builds are **exactly linear (×2.00 per
+doubling, one build per file)** and decls scanned is **×~4 = O(N²)**, the baseline class restored. At
+N = 3200 that is 71.1M → 10.4M decls scanned (**6.85×** less), and reverse-order `preScan` wall-clock
+went from **4.56× the parent at N = 3200 to 1.97×** — a bounded constant factor over the parent's own
+O(files × constants), where before the gap *widened* with N.
+
+It was a **latent** superlinearity, not a live regression: on realistic input the whole path is inert —
+the stdlib (~600 constants) does **0** perspective builds and a real `maxon-shv2` self-build does **2**
+(816 decls scanned), because real cross-file constant references are shallow and mostly fold from a
+value already seeded by their declarer. Behaviour is byte-identical: **3041/3041** C# spec tests pass
+forward AND `MAXON_SOURCE_ORDER=reverse`, `git status specs/ specs-shv2/` empty (codegen unchanged),
+the shv2 self-build is bit-for-bit `1062b0d…` in both orders, and the three perspective/collision
+reopen behaviours hold both ways (`cross-file-exported-reads-own-private` → 42,
+`cross-file-exported-cast-to-own-private-alias` → 42, `cross-file-private-constant-name-collision` →
+**122**, not 42). No run exited 101. (`scale-test` measures shv2 and cannot run on this arm64-macOS
+host anyway — the bootstrap's `--timing` plus the temporary build counter are the right instruments
+here, as with `0c974245e` above.)
+
 ## Bugs this uncovered
 
 Removing the dummy exposed a leak it had been half-hiding, and the leak in turn exposed a hole in the

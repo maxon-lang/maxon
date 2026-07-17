@@ -4,7 +4,7 @@ using MaxonSharp.Compiler.Ir.Dialects;
 
 namespace MaxonSharp.Compiler;
 
-public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bool isStdlib = false, string? sourceFilePath = null, string targetOs = "Windows", string targetArch = "x64", bool testing = false, string? rootPath = null) {
+public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bool isStdlib = false, string? sourceFilePath = null, string targetOs = "Windows", string targetArch = "x64", bool testing = false, string? rootPath = null, Dictionary<string, object>? foreignPerspectiveCache = null) {
   private List<Token> _tokens = tokens;
   private readonly bool _isStdlib = isStdlib;
   private readonly string? _sourceFilePath = sourceFilePath;
@@ -233,10 +233,19 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   // _topLevelConstants — a declarer's private must never leak into the current file's table.
   private ConstantDeclSet _currentFileConstantDecls = ConstantDeclSet.Empty;
 
-  // Per-file memo of ConstantDeclSetFor: each file's visible-constant set is built once and reused,
-  // so folding in a declarer's perspective stays O(1) amortized rather than rescanning the
-  // whole-program declaration list per reference (which is the quadratic the optimizer removed).
-  private readonly Dictionary<string, ConstantDeclSet> _constantDeclSetCache = [];
+  // Memo of ConstantDeclSetFor: a FOREIGN file's visible-constant set built once and reused, so
+  // folding in a declarer's perspective stays O(1) amortized rather than rescanning the whole-program
+  // declaration list per reference (the quadratic the optimizer removed). A foreign perspective is a
+  // pure function of the module's whole-program constant declarations (fixed before folding) and a
+  // file path — never of parser state — so the cache is SHARED across every parser in a compilation
+  // when one is supplied: a fresh Parser is created for each file in each pass, and a per-parser cache
+  // made every parser rebuild the same declarer's perspective, so total build work grew
+  // super-quadratically on deep cross-file constant chains folded in a seeding-defeating order. The
+  // current file's OWN set (_currentFileConstantDecls) is never stored here — it is built from this
+  // parser's own token walk, and only foreign folds read this cache. Typed as object because the
+  // shared cache is threaded in from CompileSources, which cannot name the parser-private value type;
+  // every value is a ConstantDeclSet.
+  private readonly Dictionary<string, object> _constantDeclSetCache = foreignPerspectiveCache ?? [];
 
   // Top-level declarations deferred for evaluation at a later phase
   private record EnumConstantValue(string EnumTypeName, string CaseName, int Ordinal);
@@ -1911,9 +1920,10 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     // a hit there is the same value the declaration would fold to, reached without re-folding it.
     // The fold Memo and cycle Active set key by (declarer, name) so a private cross-file constant
     // never collides with a homonym; Values stays name-keyed because it IS the use-site table.
+    // Built from this parser's own token walk (ownDecls), so it is NOT stored in the shared foreign
+    // cache — ConstantDeclSetFor returns it directly for the current file. A foreign parser demanding
+    // this file's perspective rebuilds it from the module's canonical declarations instead.
     _currentFileConstantDecls = ConstantDeclSet.From(VisibleConstantDecls(ownDecls));
-    if (_sourceFilePath != null)
-      _constantDeclSetCache[_sourceFilePath] = _currentFileConstantDecls;
     var state = new ConstFoldState(new Dictionary<string, object>(_topLevelConstants), [], []);
     var decls = _currentFileConstantDecls;
 
@@ -5164,8 +5174,10 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   // privates and not the demander's. Memoized per file: the whole-program list is scanned once per
   // perspective, then reused O(1), preserving the optimizer's linear lookup.
   private ConstantDeclSet ConstantDeclSetFor(string? filePath) {
-    if (filePath == null) return _currentFileConstantDecls;
-    if (_constantDeclSetCache.TryGetValue(filePath, out var cached)) return cached;
+    // The current file's own set is built from this parser's token walk; only foreign perspectives
+    // go through the (shared) cache, so the current file is served directly and never cached here.
+    if (filePath == null || filePath == _sourceFilePath) return _currentFileConstantDecls;
+    if (_constantDeclSetCache.TryGetValue(filePath, out var cached)) return (ConstantDeclSet)cached;
 
     var all = seedModule?.TopLevelConstantDecls;
     var visible = new List<TopLevelConstantDecl>();
