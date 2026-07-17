@@ -30,6 +30,14 @@ have marched straight past that and built P1.1 on it.)*
 
 - **Any gate is red** — a non-zero build, a non-green suite, a worker-count mismatch, exit **101**, or an
   unjustified **`M`** on a pre-existing fragment. **Never turn a gate green by narrowing what it tests.**
+- **A reachable leak — even one the SUITE is GREEN over.** The leak gate ("no run exits 101") checks the
+  *committed suite*; the leaks that matter most are the ones a suite run never reaches — a `let m = f()`
+  that exits **101** only when *you* probe it. **Leaks are not ok**: a latent/reachable leak is **FIXED**,
+  or the leak-causing construct is **REJECTED cleanly** (turned into a compile error), *before merge* —
+  **NEVER deferred to a later rung as a live leak.** *(Precedent: an owned-String RETURN leaked — OPEN #37;
+  the option to "defer the leak to P1.4" was overruled, the convention pulled forward. At P1.3 Slice 1 a
+  boxed-union RETURN leaked; it was rejected (E2015) symmetric with the already-deferred param, not shipped
+  leaking. The suite was green over BOTH — only adversarial probing found them.)*
 - **A DESIGN RULING is needed** — the corpus contradicts itself, the two references disagree and the plan
   cannot settle it, or the spec is genuinely ambiguous. **You must not guess.** *(`/specs` said both
   "lossy conversions are not allowed" **and** `takeInt(3.7)` ⇒ silently `3` — and the bootstrap passed
@@ -211,7 +219,7 @@ by grepping for a success string.
 | Fragments | `git status --short specs-shv2/fragments/` — **additions only**. An **`M`** is a codegen change: justify or fix. Empty diff after a spec run **proves byte-identical codegen** |
 | `scale-test` | ⚠ **NOT A GATE — it is an INSTRUMENT with no verdict.** Run it after any change to a pass, the IR, or a data structure the compiler indexes by, and **read it**: the per-rung memory numbers are exact and bit-for-bit reproducible, so any movement is real. **Explain and attribute what moved**, and record the reason in `docs/optimization-log.md` — the trend table is the deliverable. There is nothing to "pass"; do not chase one, and never touch the instrument to make a number look better |
 | If `maxon-sharp/` was touched | C# suite green (**2883+**) **AND codegen neutrality**: `git status --short specs/ specs-shv2/` EMPTY |
-| Leak gate | no run exits **101** |
+| Leak gate | no run exits **101** — **and no reachable leak, including one found only by adversarial PROBING** (a `let m = f()` no committed test runs). A probed/latent leak is FIXED, or the leak-causing construct cleanly REJECTED, before merge — **never deferred as a live leak** (see the HALT list — *"leaks are not ok"*). A green suite is not proof of no leak; it is proof no *committed test* leaks |
 
 ## 10. Land it — linear history, then push
 

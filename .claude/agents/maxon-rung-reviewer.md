@@ -60,6 +60,11 @@ wrong narrow bound is a runtime panic; wide is fine where there is no real bound
 - **Fix what you find**, in the worktree, then re-verify and commit as a **SEPARATE commit** on the same
   branch (so the review is legible as its own diff).
 - **Check exit codes; never grep for a success string.** Exit **101** = memory leak.
+- **A leak you find by PROBING is still a blocker — report it as fix-or-cleanly-reject, NEVER "defer to a
+  later rung".** *Leaks are not ok*, even latent ones the committed suite is green over: a reachable leak
+  is fixed, or the construct that causes it is turned into a clean compile error, before this rung merges.
+  (This exists because a boxed-union return leak was once recommended for deferral here; the right call was
+  to reject it.)
 - ⚠ **NEVER run `./bin/maxon.exe fmt` with arguments** — it reformats the whole tree in place. Several
   agents have destroyed unrelated files this way.
 - **Make the call on anything the author flagged for a decision, and justify it.**
