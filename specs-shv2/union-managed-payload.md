@@ -301,6 +301,39 @@ end 'main'
 the taken arm b string, long enough to be a real heap allocation
 ```
 
+<!-- test: var-reassign-after-partial-move -->
+A `var` union consumed by a binding-match is `partiallyMoved` (a re-read is E3102), but a REASSIGNMENT
+revives it: the fresh value has no moved-out slots, so a later match is legal again. The old box (with
+its nulled payload slot) is dropped at the reassignment; the new one at scope exit — both leak-free.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+union Message
+	silent
+	text(body String)
+end 'Message'
+
+function main() returns ExitCode
+	var m = Message.text("reassign first payload string long enough to be a real heap allocation")
+	match m 'check'
+		silent then return 0
+		text(s) then print(s)
+	end 'check'
+	m = Message.text("reassign second payload string long enough to be a real heap allocation")
+	match m 'again'
+		silent then return 0
+		text(t) then print(t)
+	end 'again'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+reassign first payload string long enough to be a real heap allocationreassign second payload string long enough to be a real heap allocation
+```
+
 <!-- test: error.construct-moves-string-source -->
 Moving a String binding into a union payload poisons it; a later read is E3102.
 ```maxon

@@ -3665,8 +3665,14 @@ export type Parser
 
 		self.scope.setValue(nameTok.value, value: newValue)
 
-		// A WRITE REVIVES the binding: it owns `newValue` now, so a later read of it is legal again.
+		// A WRITE REVIVES the binding: it owns `newValue` now, so a later read of it is legal again. Both
+		// move states are cleared — `partiallyMoved` no less than `movedFrom`, because a reassignment gives
+		// the binding a WHOLE fresh value (no moved-out slots), so a scrutinee consumed by an earlier
+		// binding-match is fully live once overwritten. Clearing only `movedFrom` left `requireBindingLive`
+		// (which rejects on EITHER flag) refusing every use of a reassigned `var` union — an over-rejection
+		// of a valid program.
 		binding.movedFrom = false
+		binding.partiallyMoved = false
 
 		if newIsOwned 'trackNew'
 			if not inOwnedSet 'borrowedToOwned'
