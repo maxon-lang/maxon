@@ -3182,7 +3182,12 @@ export type Parser
 		let nameTok = try self.consume(TokenKind.identifier)
 		try self.requireUnreservedName(nameTok)
 		try self.consume(TokenKind.equals)
+		let rhsStart = self.pos
 		let value = try self.parseExpression(func, block: block)
+		// Was the initializer a bare reference to a local (`let u = t`)? A MOVE poisons that source; any
+		// other RHS is a consume that poisons nothing. Captured here, off the token position, so the
+		// poison never runs its owned-set scan on a consume (see `rhsWasBareLocalReference`).
+		let rhsWasBareLocal = self.rhsWasBareLocalReference(rhsStart)
 		// A local taking the name of a field of the enclosing type is E3006, not a shadow — see
 		// `Scope.declareValueBinding`. Anchored on the LOCAL's name token: the field is fine, the
 		// local is what has to be renamed.
@@ -3211,9 +3216,12 @@ export type Parser
 			// (`let u = t`), `value` is that binding's value: it MOVES to this new one. Poison the
 			// source so a later read of it is use-after-move and only the new owner drops the value.
 			// A fresh owned temp (`build()`, `"{x}"`) is held by no binding, so nothing is poisoned —
-			// that is a CONSUME (move-in), not a source-poisoning move. Run BEFORE the push below, so
-			// the scan cannot find this new binding (it aliases the same value).
-			self.poisonMoveSource(value)
+			// that is a CONSUME (move-in), not a source-poisoning move. Gated on `rhsWasBareLocal`, so a
+			// consume never pays the owned-set scan; run BEFORE the push below, so the scan cannot find
+			// this new binding (it aliases the same value).
+			if rhsWasBareLocal 'moveOnBind'
+				self.poisonMoveSource(value)
+			end 'moveOnBind'
 			self.ownedBindings.push(binding)
 			// Ownership TRANSFERS from the statement to the binding, so the statement must no longer drop it
 			// — a second drop of the box the binding now owns is a double-free. A struct box is never in the
@@ -3364,13 +3372,18 @@ export type Parser
 
 		try self.requireMutableBinding(binding, nameTok: nameTok)
 
+		let rhsStart = self.pos
 		let value = try self.parseExpression(func, block: block)
+		// Was the RHS a bare reference to a local (`s = t`)? Only then can this assignment MOVE an owned
+		// value out of a source binding; every other RHS is a consume. Captured off the token position
+		// so `reassignBindingValue` gates the poison's owned-set scan on it (see `rhsWasBareLocalReference`).
+		let rhsWasBareLocal = self.rhsWasBareLocalReference(rhsStart)
 
 		let valueTag = self.tagOf(value)
 		let declaredTag = maxonTypeTag(binding.varType)
 		try self.requireAssignable(nameTok, value: valueTag, declared: declaredTag)
 
-		self.reassignBindingValue(binding, nameTok: nameTok, value: value, valueTag: valueTag)
+		self.reassignBindingValue(binding, nameTok: nameTok, value: value, valueTag: valueTag, rhsWasBareLocal: rhsWasBareLocal)
 	end 'parseAssignment'
 
 	// ⭐ **REBIND A `var` TO A NEW VALUE, RELEASING WHAT IT OWNED.** The rebinding half is one line —
@@ -3402,7 +3415,7 @@ export type Parser
 	// owned heap copy — the SAME fused-record copy a borrowed `return` makes (`promoteToOwnedString`) —
 	// keeps every reassignment of an owned binding a uniform owned→owned: the binding never moves, and
 	// an `if`/loop merge is handled by the phi machinery exactly as for any other carried value.
-	function reassignBindingValue(binding VarInfo, nameTok Token, value ValueId, valueTag ValueTypeTag)
+	function reassignBindingValue(binding VarInfo, nameTok Token, value ValueId, valueTag ValueTypeTag, rhsWasBareLocal bool)
 		let oldValue = binding.boundValue
 
 		// `s = s` (a self-rebind): the value and its ownership are unchanged, so there is nothing to drop
@@ -3416,10 +3429,13 @@ export type Parser
 
 		// ⭐ **MOVE-ON-ASSIGN.** A bare reference to an ALREADY-owned binding as the RHS (`s = t`) MOVES
 		// that value: poison the source so a later read of it is use-after-move and only the new owner
-		// drops the value. A fresh owned temp is held by no binding — a CONSUME, not a move. Run BEFORE
-		// `setValue` below, so the scan matches the SOURCE's value rather than this binding's (which
-		// `setValue` is about to overwrite with the moved value).
-		self.poisonMoveSource(value)
+		// drops the value. A fresh owned temp is held by no binding — a CONSUME, not a move. Gated on
+		// `rhsWasBareLocal`, so a consume never pays the owned-set scan; run BEFORE `setValue` below, so
+		// the scan matches the SOURCE's value rather than this binding's (which `setValue` is about to
+		// overwrite with the moved value).
+		if rhsWasBareLocal 'moveOnAssign'
+			self.poisonMoveSource(value)
+		end 'moveOnAssign'
 
 		// Is `binding` a LIVE owner (owes a drop of `oldValue`), and/or already enrolled in
 		// `ownedBindings`? `binding.movedFrom` is read DIRECTLY, not via `bindingIsOwned`: a moved-from
@@ -3857,6 +3873,39 @@ export type Parser
 		return false
 	end 'bindingIsOwned'
 
+	// True iff the RHS just parsed — the tokens in `[startPos, self.pos)` — was EXACTLY a bare
+	// reference to a LOCAL binding (`let u = t` / `s = t`). That is the ONLY RHS shape that can MOVE an
+	// owned value out of an existing binding: a bare local reference resolves to that binding's own SSA
+	// value (`parseVariableReference` returns `binding.boundValue`), so `poisonMoveSource`'s value-keyed
+	// scan can match it. Every other RHS — a call, an interpolation, a field read, any arithmetic —
+	// mints a FRESH temp that is the value of no binding (a CONSUME), so the scan is guaranteed to find
+	// nothing.
+	//
+	// ⭐ **A GATE, NOT THE DECISION.** `poisonMoveSource` keeps the authority — given a bare-local RHS it
+	// still matches the value against the owned set, so a bare local that is NOT owned (a scalar) still
+	// poisons nothing. This only decides whether calling the scan can possibly do anything, so the
+	// common case — every consume `let u = build()` — skips the O(ownedBindings) scan the poison used to
+	// run on EVERY owned bind and reassignment. Skipping it when this is false is a proven no-op, not a
+	// behaviour change: the scan could not have matched a non-bare-local RHS anyway.
+	//
+	// The single consumed identifier is excluded when it names a top-level binding (`scope.contains`
+	// false) or a self-field alias (`isSelfField`, whose read mints a fresh load rather than aliasing a
+	// binding's value) — neither is a live owned local the scan would match. Those are the same two
+	// conditions `parseVariableReference` treats as a bare LOCAL read, so the gate cannot diverge from
+	// what actually resolves to a binding's `boundValue`.
+	function rhsWasBareLocalReference(startPos TokenIndex) returns bool
+		if self.pos != startPos + 1 'notSingleToken'
+			return false
+		end 'notSingleToken'
+
+		let tok = self.tokenAt(startPos)
+		if tok.kind != TokenKind.identifier 'notIdentifier'
+			return false
+		end 'notIdentifier'
+
+		return self.scope.contains(tok.value) and not self.scope.isSelfField(tok.value)
+	end 'rhsWasBareLocalReference'
+
 	// ⭐ **MOVE THE VALUE OUT OF ITS CURRENT OWNER.** If `value` is the current value of a LIVE owned
 	// binding — i.e. the RHS of a bind/assign was a bare reference to that binding (`let u = t`) — mark
 	// that source `movedFrom`, so a later read of it is use-after-move (E3102) and `emitScopeDrops`
@@ -3866,7 +3915,9 @@ export type Parser
 	//
 	// Skips `movedFrom` ghosts (a value already moved once cannot be its live source) so the ONE live
 	// owner is the one poisoned. Keyed on `boundValue`, the `bindingIsOwned` idiom; an O(ownedBindings)
-	// scan on the cold bind/assign path.
+	// scan. **The callers GATE it on `rhsWasBareLocalReference`**, so it runs only when the RHS actually
+	// was a bare local reference — never on a consume, which is what kept it off the hot path of every
+	// owned bind (the scan-and-find-nothing that made accumulating N owned bindings O(N²)).
 	function poisonMoveSource(value ValueId)
 		var i = 0
 		while i < self.ownedBindings.count() 'each'
