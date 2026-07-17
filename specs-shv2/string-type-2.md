@@ -674,8 +674,7 @@ hello
 
 ### String.append
 
-<!-- disabled-test: string-append-basic -->
-<!-- P1.8: string methods -->
+<!-- test: string-append-basic -->
 ### Basic Append
 Append a string literal to an existing string.
 ```maxon
@@ -693,8 +692,7 @@ end 'main'
 Hello World
 ```
 
-<!-- disabled-test: string-append-interp -->
-<!-- P1.2 wave B: string interpolation -->
+<!-- test: string-append-interp -->
 ### Append with Interpolation
 Append an interpolated string directly into the target buffer without materializing a temporary.
 ```maxon
@@ -713,8 +711,7 @@ end 'main'
 Hello World!
 ```
 
-<!-- disabled-test: string-append-loop -->
-<!-- P1.8: string methods -->
+<!-- test: string-append-loop -->
 ### Append in Loop
 Append in a loop builds the string efficiently with amortized O(1) per append.
 ```maxon
@@ -736,8 +733,7 @@ end 'main'
 01234
 ```
 
-<!-- disabled-test: string-append-variable -->
-<!-- P1.8: string methods -->
+<!-- test: string-append-variable -->
 ### Append Variable
 Append another string variable.
 ```maxon
@@ -780,8 +776,7 @@ end 'main'
 0,1,2,3,4,
 ```
 
-<!-- disabled-test: string-append-multi-parts -->
-<!-- P1.8: string methods -->
+<!-- test: string-append-multi-parts -->
 ### Append Multiple Interpolation Parts
 Append with multiple interpolated expressions written directly into buffer.
 ```maxon
