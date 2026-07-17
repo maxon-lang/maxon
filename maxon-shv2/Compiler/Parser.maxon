@@ -3195,13 +3195,11 @@ export type Parser
 		// came from. So a binding is owned iff it holds a struct, whatever expression produced it —
 		// and there is no second question to get wrong the day a struct arrives from somewhere other
 		// than a factory call.
-		// A binding OWNS a drop iff its value is a FRESH owned heap allocation — a struct box (every struct
-		// is heap, so the tag answers, `tagIsStructRef`) or an owned interpolation String (`valueIsOwnedHeap`
-		// provenance, because the tag conflates it with a borrowed-immortal literal — see `valueOwnsHeap`).
-		// `let s = "hi"` is NOT owned: a literal sets no provenance bit, so the binding is borrowed and never
-		// dropped, exactly as an immortal rdata String must be. `let` and `var` alike: ownership is a
-		// property of the VALUE, never the mutability.
-		if tagIsStructRef(self.tagOf(value)) or self.valueIsOwnedHeap(value) 'trackOwned'
+		// A binding OWNS a drop iff its value is a fresh owned value (`valueIsOwned` — a struct box or an
+		// owned interpolation String). `let s = "hi"` is NOT owned: a literal sets no provenance bit, so the
+		// binding is borrowed and never dropped, exactly as an immortal rdata String must be. `let` and `var`
+		// alike: ownership is a property of the VALUE, never the mutability.
+		if self.valueIsOwned(value, tag: self.tagOf(value)) 'trackOwned'
 			self.ownedBindings.push(binding)
 			// Ownership TRANSFERS from the statement to the binding, so the statement must no longer drop it
 			// — a second drop of the box the binding now owns is a double-free. A struct box is never in the
@@ -3377,8 +3375,8 @@ export type Parser
 	// phi carries no owned-heap provenance bit (the bit rides the value flowing INTO the merge, not the
 	// merge) — so the value column reads `false` for a binding the loop genuinely owns, and the
 	// overwritten allocation would leak every iteration. Membership is the only record that survives the
-	// phi. `newIsOwned` asks the SAME question `parseBinding` asks of a fresh binding, so the reassign
-	// and the declaration agree on what "owned" means by construction.
+	// phi. `newIsOwned` is `valueIsOwned` — the SAME predicate `parseBinding` enrols a fresh binding by —
+	// so the reassign and the declaration cannot drift on what "owned" means.
 	//
 	// ⚠ **AN OWNED BINDING STAYS OWNED — a borrowed RHS is PROMOTED to an owned copy rather than the
 	// binding being removed from `ownedBindings`.** Removal would be a middle-of-stack delete, and
@@ -3410,7 +3408,7 @@ export type Parser
 		// binding's RHS is a struct box (`tagIsStructRef`, so already owned), and `requireAssignable`
 		// has rejected any other type.
 		var newValue = value
-		var newIsOwned = tagIsStructRef(valueTag) or self.valueIsOwnedHeap(value)
+		var newIsOwned = self.valueIsOwned(value, tag: valueTag)
 		if wasOwned and not newIsOwned 'promoteBorrowed'
 			newValue = self.promoteToOwnedString(value, range: SourceRange.ofToken(nameTok))
 			newIsOwned = true
@@ -3751,6 +3749,18 @@ export type Parser
 	function valueIsOwnedHeap(value ValueId) returns bool
 		return try self.valueOwnsHeap.get(value) otherwise panic("valueIsOwnedHeap: v{value} has no owned-heap slot — every SSA value must be minted through mintValue, which seeds the column")
 	end 'valueIsOwnedHeap'
+
+	// ⭐ **DOES BINDING A FRESH VALUE MAKE ITS BINDING OWNED — owe a scope-exit drop?** The ONE definition
+	// of "owned", shared by the DECLARATION (`parseBinding`) and the REASSIGNMENT (`reassignBindingValue`)
+	// so the two cannot drift on what enrols a binding in `ownedBindings`. A value is owned iff it is a
+	// struct box (every struct is heap, so the TAG answers — `tagIsStructRef`) or an owned
+	// interpolation/promotion String (`valueIsOwnedHeap` PROVENANCE, because the tag conflates it with a
+	// borrowed-immortal literal). It is the UNION both enrolment sites test; `valueIsOwnedHeap` is only the
+	// String half of it. The day a third owned kind (an owned array) lands it is added HERE, once, and both
+	// sites agree by construction rather than by a comment asking them to.
+	function valueIsOwned(value ValueId, tag ValueTypeTag) returns bool
+		return tagIsStructRef(tag) or self.valueIsOwnedHeap(value)
+	end 'valueIsOwned'
 
 	// Ownership of `value` has been TRANSFERRED to a binding, so the statement no longer owes its drop:
 	// remove it from the pending list. A filter-rebuild rather than a pop because, while the transferred
