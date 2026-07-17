@@ -415,3 +415,106 @@ end 'main'
 ```maxoncstderr
 error E2004: app/specs/fragments/top-level-let/error.file-private-constant-cross-file.test:10:12: Undefined constant 'SECRET'
 ```
+
+<!-- test: cross-file-exported-reads-own-private-declared-last -->
+An exported constant whose initializer reads a constant PRIVATE to its own declaring file resolves
+to the right value from another file — because it is folded in ITS declarer's perspective, where
+that private is visible, not in the demander's. The declaring file is fed LAST here; it must give
+the same result as when fed first (below).
+```maxon
+// --- file: app/main.maxon
+let TOTAL = BASE * 2
+
+function main() returns ExitCode
+	return TOTAL
+end 'main'
+
+// --- file: api/base.maxon
+let SECRET = 20
+export let BASE = SECRET + 1
+```
+```exitcode
+42
+```
+
+<!-- test: cross-file-exported-reads-own-private-declared-first -->
+The same program with the declaring file fed FIRST. Both orders must produce the same executable —
+this is the order-independence the residual fix closes.
+```maxon
+// --- file: api/base.maxon
+let SECRET = 20
+export let BASE = SECRET + 1
+
+// --- file: app/main.maxon
+let TOTAL = BASE * 2
+
+function main() returns ExitCode
+	return TOTAL
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: cross-file-exported-cast-to-own-private-alias-declared-last -->
+An exported constant whose initializer casts to a ranged `typealias` PRIVATE to its own declaring
+file folds in the declarer's perspective, resolving that file-private alias — the cast type is
+looked up as the declarer would see it, not the demander. Declaring file fed LAST.
+```maxon
+// --- file: app/main.maxon
+let VALUE = BASE
+
+function main() returns ExitCode
+	return VALUE
+end 'main'
+
+// --- file: api/base.maxon
+typealias Small = int(0 to 100)
+export let BASE = 21 as Small
+```
+```exitcode
+21
+```
+
+<!-- test: cross-file-exported-cast-to-own-private-alias-declared-first -->
+The same program with the declaring file fed FIRST — the same executable either way.
+```maxon
+// --- file: api/base.maxon
+typealias Small = int(0 to 100)
+export let BASE = 21 as Small
+
+// --- file: app/main.maxon
+let VALUE = BASE
+
+function main() returns ExitCode
+	return VALUE
+end 'main'
+```
+```exitcode
+21
+```
+
+<!-- test: cross-file-private-constant-name-collision -->
+Two files each declare a PRIVATE constant of the same name with different values, each read through
+an exported constant. The exported constants must fold against their OWN file's private — proving
+the fold memo keys by declaration identity, not by bare name. A name-keyed memo would serve the
+first `SECRET` folded (20) for the second, making BVAL 21 and the total 42 instead of 122.
+```maxon
+// --- file: app/main.maxon
+let RESULT = AVAL + BVAL
+
+function main() returns ExitCode
+	return RESULT
+end 'main'
+
+// --- file: api/a.maxon
+let SECRET = 20
+export let AVAL = SECRET + 1
+
+// --- file: lib/b.maxon
+let SECRET = 100
+export let BVAL = SECRET + 1
+```
+```exitcode
+122
+```

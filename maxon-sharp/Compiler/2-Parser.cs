@@ -221,6 +221,23 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   // Top-level compile-time constants (name -> evaluated value: long, double, or bool)
   private Dictionary<string, object> _topLevelConstants = [];
 
+  // While folding a FOREIGN constant, the path of the file that DECLARES it — the perspective a
+  // cast/enum type name must be resolved from, so `let X = 5 as PrivateAlias` folds against the
+  // declarer's private aliases and not the demander's registry. Null while folding the current
+  // file's own constants (whose aliases are already in _typeRegistry).
+  private string? _constFoldPerspectivePath;
+
+  // The current file's visible constant set, captured once per fold. It anchors the circular-
+  // dependency BLAME to the demanding file (matching the resolver before it folded in the
+  // declarer's perspective) and gates which folded values may be published to the name-keyed
+  // _topLevelConstants — a declarer's private must never leak into the current file's table.
+  private ConstantDeclSet _currentFileConstantDecls = ConstantDeclSet.Empty;
+
+  // Per-file memo of ConstantDeclSetFor: each file's visible-constant set is built once and reused,
+  // so folding in a declarer's perspective stays O(1) amortized rather than rescanning the
+  // whole-program declaration list per reference (which is the quadratic the optimizer removed).
+  private readonly Dictionary<string, ConstantDeclSet> _constantDeclSetCache = [];
+
   // Top-level declarations deferred for evaluation at a later phase
   private record EnumConstantValue(string EnumTypeName, string CaseName, int Ordinal);
   /// Shared info for both try-call and try-await operations, used by the otherwise-clause helpers.
@@ -1804,17 +1821,23 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
     foreach (var decl in seedModule.TopLevelConstantDecls) {
       if (decl.SourceFilePath == _sourceFilePath) continue; // already present, from our own walk
-      if (decl.IsExported) {
-        decls.Add(decl);
-      } else if (decl.IsModuleVisible
-          && _sourceFilePath != null
-          && decl.SourceFilePath != null
-          && IsFileInModuleScope(decl.SourceFilePath, _sourceFilePath)) {
-        decls.Add(decl);
-      }
+      if (IsForeignConstantVisibleFrom(decl, _sourceFilePath)) decls.Add(decl);
       // Anything else is file-scoped to its declarer and stays undefined here.
     }
     return decls;
+  }
+
+  // The single cross-file constant-visibility rule: a FOREIGN top-level constant is visible from
+  // `accessorPath` if it is exported (everywhere) or module-visible and `accessorPath` lies within
+  // the declarer's directory subtree; a private one never is. Shared by the current file's set
+  // (VisibleConstantDecls) and any declarer's perspective (ConstantDeclSetFor), so widening the
+  // whole-program view of DECLARATIONS can never widen their VISIBILITY in one place but not another.
+  private bool IsForeignConstantVisibleFrom(TopLevelConstantDecl decl, string? accessorPath) {
+    if (decl.IsExported) return true;
+    return decl.IsModuleVisible
+        && decl.SourceFilePath != null
+        && accessorPath != null
+        && IsFileInModuleScope(decl.SourceFilePath, accessorPath);
   }
 
   private void CollectAndEvaluateTopLevelDecls(IrModule<MaxonOp> module) {
@@ -1884,26 +1907,38 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     ResolveAutoEquatableConformance(module);
 
     // Evaluate constants (handling forward references, in this file and across files).
-    // Pre-populate with constants already folded by the files pre-scanned before this one: a hit
-    // there is the same value `decls` would fold, reached without re-folding it.
-    var evaluated = new Dictionary<string, object>(_topLevelConstants);
-    var evaluating = new HashSet<string>();
-    var decls = ConstantDeclSet.From(VisibleConstantDecls(ownDecls));
+    // `Values` pre-populates with constants already folded by the files pre-scanned before this one:
+    // a hit there is the same value the declaration would fold to, reached without re-folding it.
+    // The fold Memo and cycle Active set key by (declarer, name) so a private cross-file constant
+    // never collides with a homonym; Values stays name-keyed because it IS the use-site table.
+    _currentFileConstantDecls = ConstantDeclSet.From(VisibleConstantDecls(ownDecls));
+    if (_sourceFilePath != null)
+      _constantDeclSetCache[_sourceFilePath] = _currentFileConstantDecls;
+    var state = new ConstFoldState(new Dictionary<string, object>(_topLevelConstants), [], []);
+    var decls = _currentFileConstantDecls;
+
+    // A file folds its OWN constants fresh rather than reusing a value it published on an earlier
+    // pass: PreScan seeds Parse with this file's own exports through ExportedConstants, and reusing
+    // one would skip the fold that registers side effects — notably an `as`-cast's alias usage,
+    // whose loss spuriously reports the alias as an unused typealias. Foreign seeded values stay:
+    // those were folded by their own declarers, not here.
+    foreach (var decl in ownDecls)
+      state.Values.Remove(decl.Name);
 
     // Only THIS file's constants are folded eagerly. A foreign one is folded when it is demanded,
     // by the recursion below — folding them all here would report another file's broken constant
     // against this file, and would fold constants nothing in this compilation ever reads.
     foreach (var decl in ownDecls) {
-      EvaluateConstant(decl.Name, decls, evaluated, evaluating, decl.Line, decl.Column);
+      EvaluateConstant(decl.Name, decls, state, decl.Line, decl.Column);
     }
 
-    _topLevelConstants = evaluated;
+    _topLevelConstants = state.Values;
 
     // Store exported / module-visible constants on the module for cross-file
     // seeding. Module-visible constants additionally need their declarer path
     // recorded so the directory-subtree check can run when other files seed.
     foreach (var decl in ownDecls) {
-      if (!evaluated.TryGetValue(decl.Name, out var constVal)) continue;
+      if (!state.Values.TryGetValue(decl.Name, out var constVal)) continue;
       if (decl.IsExported) {
         module.ExportedConstants[decl.Name] = constVal;
       } else if (decl.IsModuleVisible) {
@@ -1917,7 +1952,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     foreach (var deferred in _deferredGlobalVars) {
       int savedPos2 = _pos;
       _pos = deferred.TokenStart;
-      var value = EvalConstExpr(decls, evaluated, evaluating);
+      var value = EvalConstExpr(decls, state);
       ExpectConstInitializerFullyConsumed(deferred.Name, deferred.TokenEnd);
       _pos = savedPos2;
 
@@ -5108,31 +5143,115 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     }
   }
 
-  private object EvaluateConstant(string name, ConstantDeclSet decls, Dictionary<string, object> evaluated, HashSet<string> evaluating, int refLine = 0, int refCol = 0) {
-    if (evaluated.TryGetValue(name, out var val)) return val;
+  // A constant's canonical identity. Keying the fold memo and cycle-set by (declarer, name) rather
+  // than by bare name is what lets two files each hold a private constant of the same name without
+  // one's folded value being served for the other's — the silent miscompile a name key would cause
+  // the instant private cross-file constants actually resolve.
+  private readonly record struct ConstantDeclKey(string? SourceFilePath, string Name);
 
-    if (!decls.ByName.TryGetValue(name, out var decl))
+  // The mutable state threaded through one file's constant fold. Bundling the three collections
+  // keeps the EvalConst* chain to a (decls, state) pair while letting the memo and cycle-set key by
+  // DECLARATION IDENTITY where the use-site table stays keyed by name.
+  private sealed record ConstFoldState(
+      Dictionary<string, object> Values,          // name -> value: the file's use-site table + seed
+      Dictionary<ConstantDeclKey, object> Memo,   // (declarer, name) -> value: the fold memo
+      HashSet<ConstantDeclKey> Active);           // (declarer, name): the in-progress cycle set
+
+  // The constant declarations visible from `filePath`'s perspective: its own first (so a file-
+  // private constant shadows a foreign one of the same name), then every foreign constant that file
+  // may see. This is the exact rule VisibleConstantDecls applies for the current file, applied to
+  // ANY file — so a foreign constant folds against ITS declarer's scope, seeing that file's
+  // privates and not the demander's. Memoized per file: the whole-program list is scanned once per
+  // perspective, then reused O(1), preserving the optimizer's linear lookup.
+  private ConstantDeclSet ConstantDeclSetFor(string? filePath) {
+    if (filePath == null) return _currentFileConstantDecls;
+    if (_constantDeclSetCache.TryGetValue(filePath, out var cached)) return cached;
+
+    var all = seedModule?.TopLevelConstantDecls;
+    var visible = new List<TopLevelConstantDecl>();
+    if (all != null) {
+      foreach (var d in all)
+        if (d.SourceFilePath == filePath) visible.Add(d);
+      foreach (var d in all) {
+        if (d.SourceFilePath == filePath) continue;
+        if (IsForeignConstantVisibleFrom(d, filePath)) visible.Add(d);
+      }
+    }
+
+    var set = ConstantDeclSet.From(visible);
+    _constantDeclSetCache[filePath] = set;
+    return set;
+  }
+
+  // Resolve a type name as the file currently being folded would see it. This parser's own registry
+  // is tried first (the common path — folding the current file's own constant). When folding a
+  // FOREIGN constant, its cast/enum type may be an alias or enum PRIVATE to the declaring file:
+  // absent from this parser's registry but present on the module keyed by name, admitted only if
+  // that file may actually see it, through the one cross-file type-visibility rule.
+  private bool TryResolveForeignConstFoldType(string name, out IrType type) {
+    if (_constFoldPerspectivePath != null && _currentModule != null
+        && _currentModule.TypeDefs.TryGetValue(name, out var foreign)
+        && IsTypeVisibleAcrossFiles(_currentModule, name, _constFoldPerspectivePath)) {
+      type = foreign;
+      return true;
+    }
+    type = null!;
+    return false;
+  }
+
+  private object EvaluateConstant(string name, ConstantDeclSet decls, ConstFoldState state, int refLine = 0, int refCol = 0) {
+    // The declaration this reference resolves to FROM THE CURRENT PERSPECTIVE. Finding it before
+    // trusting any by-name value is what makes the by-name fast paths below identity-safe: a
+    // homonym in another file is a different declaration and must not borrow this one's value.
+    if (!decls.ByName.TryGetValue(name, out var decl)) {
+      // No declaration in scope. A static-field initializer folds with an empty decl set and reads
+      // top-level constants straight from the name table, so honour a bare name hit before failing.
+      if (state.Values.TryGetValue(name, out var loose)) return loose;
       throw new CompileError(ErrorCode.ParserExpectedExpression, $"Undefined constant '{name}'", refLine, refCol);
-    if (!evaluating.Add(name)) {
-      // Circular dependency: collect all names in the cycle
-      var cycleNames = string.Join(", ", evaluating);
-      var lastDecl = decls.Ordered.Last(d => evaluating.Contains(d.Name));
+    }
+
+    var key = new ConstantDeclKey(decl.SourceFilePath, decl.Name);
+    if (state.Memo.TryGetValue(key, out var memo)) return memo;
+
+    // By-name reuse of an already-folded value (a constant seeded from another file, or one folded
+    // earlier in this file), taken ONLY when `name` resolves to THIS decl from the current file's
+    // own scope — so a declarer's private of the same name can never collide with it.
+    if (_currentFileConstantDecls.ByName.TryGetValue(name, out var visibleHere)
+        && visibleHere.SourceFilePath == decl.SourceFilePath
+        && state.Values.TryGetValue(name, out var known))
+      return known;
+
+    if (!state.Active.Add(key)) {
+      // Circular dependency. Blame the last participant in the DEMANDING file's declaration order,
+      // reproducing the pre-perspective resolver's choice so a cross-file cycle reports the same
+      // way from each file that folds into it.
+      var cycleNames = string.Join(", ", state.Active.Select(k => k.Name));
+      var lastDecl = _currentFileConstantDecls.Ordered
+        .LastOrDefault(d => state.Active.Contains(new ConstantDeclKey(d.SourceFilePath, d.Name))) ?? decl;
       throw new CompileError(ErrorCode.ParserCircularDependency,
         $"Circular dependency detected among global constants: {cycleNames}",
         lastDecl.Line, lastDecl.Column) { FilePath = lastDecl.SourceFilePath };
     }
 
-    // The declaration may be another file's, in which case TokenStart indexes ITS token list and
-    // not the one this parser is holding. Swapping is how the same demand-driven recursion folds a
-    // foreign declaration; the finally is because a fold that throws must not leave this parser
+    // Fold the declaration in ITS declarer's perspective: its own token list, its own visible
+    // constant set, and — for an `as` cast or enum reference — its own file's type aliases. A
+    // constant's value is a property of its declarer, not of whoever demands it first; everything
+    // perspective-dependent is saved and restored together so a throw cannot leave this parser
     // pointing into a file it is not parsing.
+    // _constFoldPerspectivePath — not _sourceFilePath — carries the declarer's identity into the
+    // type lookups: _sourceFilePath is a readonly per-file capture, and nothing on the fold path
+    // reads it in a value-affecting way (the cast/enum lookups read _constFoldPerspectivePath, and
+    // a thrown error's file is re-attributed in the catch below).
+    var perspectiveDecls = ConstantDeclSetFor(decl.SourceFilePath);
     var savedTokens = _tokens;
     int savedPos = _pos;
+    var savedPerspective = _constFoldPerspectivePath;
     object result;
     try {
       _tokens = decl.Tokens;
       _pos = decl.TokenStart;
-      result = EvalConstExpr(decls, evaluated, evaluating);
+      _constFoldPerspectivePath = decl.SourceFilePath;
+      result = EvalConstExpr(perspectiveDecls, state);
       ExpectConstInitializerFullyConsumed(decl.Name, decl.TokenEnd);
     } catch (CompileError ex) {
       // Blame the file that CONTAINS the bad constant, not the file that happened to demand it
@@ -5142,10 +5261,17 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     } finally {
       _tokens = savedTokens;
       _pos = savedPos;
+      _constFoldPerspectivePath = savedPerspective;
     }
 
-    evaluated[name] = result;
-    evaluating.Remove(name);
+    state.Memo[key] = result;
+    // Publish to the name-keyed table only when this decl is the one the CURRENT file resolves the
+    // name to. A declarer's private dependency, folded here as part of an exported constant, must
+    // not leak a value into the current file's constant table under that name.
+    if (_currentFileConstantDecls.ByName.TryGetValue(name, out var visiblePublish)
+        && visiblePublish.SourceFilePath == decl.SourceFilePath)
+      state.Values[name] = result;
+    state.Active.Remove(key);
     return result;
   }
 
@@ -5171,15 +5297,15 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   // Compile-time constant expression evaluator
   // ============================================================================
 
-  private object EvalConstExpr(ConstantDeclSet decls, Dictionary<string, object> evaluated, HashSet<string> evaluating) {
-    return EvalConstOr(decls, evaluated, evaluating);
+  private object EvalConstExpr(ConstantDeclSet decls, ConstFoldState state) {
+    return EvalConstOr(decls, state);
   }
 
-  private object EvalConstOr(ConstantDeclSet decls, Dictionary<string, object> evaluated, HashSet<string> evaluating) {
-    var lhs = EvalConstXor(decls, evaluated, evaluating);
+  private object EvalConstOr(ConstantDeclSet decls, ConstFoldState state) {
+    var lhs = EvalConstXor(decls, state);
     while (Check(TokenType.Or)) {
       Advance();
-      var rhs = EvalConstXor(decls, evaluated, evaluating);
+      var rhs = EvalConstXor(decls, state);
       if (lhs is bool lb && rhs is bool rb) lhs = lb || rb;
       else if (lhs is long ll && rhs is long rl) lhs = ll | rl;
       else throw new InvalidOperationException($"Cannot apply 'or' to {lhs?.GetType().Name} and {rhs?.GetType().Name}");
@@ -5187,11 +5313,11 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     return lhs;
   }
 
-  private object EvalConstXor(ConstantDeclSet decls, Dictionary<string, object> evaluated, HashSet<string> evaluating) {
-    var lhs = EvalConstAnd(decls, evaluated, evaluating);
+  private object EvalConstXor(ConstantDeclSet decls, ConstFoldState state) {
+    var lhs = EvalConstAnd(decls, state);
     while (Check(TokenType.Xor)) {
       Advance();
-      var rhs = EvalConstAnd(decls, evaluated, evaluating);
+      var rhs = EvalConstAnd(decls, state);
       if (lhs is bool lb && rhs is bool rb) lhs = lb ^ rb;
       else if (lhs is long ll && rhs is long rl) lhs = ll ^ rl;
       else throw new InvalidOperationException($"Cannot apply 'xor' to {lhs?.GetType().Name} and {rhs?.GetType().Name}");
@@ -5199,11 +5325,11 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     return lhs;
   }
 
-  private object EvalConstAnd(ConstantDeclSet decls, Dictionary<string, object> evaluated, HashSet<string> evaluating) {
-    var lhs = EvalConstComparison(decls, evaluated, evaluating);
+  private object EvalConstAnd(ConstantDeclSet decls, ConstFoldState state) {
+    var lhs = EvalConstComparison(decls, state);
     while (Check(TokenType.And)) {
       Advance();
-      var rhs = EvalConstComparison(decls, evaluated, evaluating);
+      var rhs = EvalConstComparison(decls, state);
       if (lhs is bool lb && rhs is bool rb) lhs = lb && rb;
       else if (lhs is long ll && rhs is long rl) lhs = ll & rl;
       else throw new InvalidOperationException($"Cannot apply 'and' to {lhs?.GetType().Name} and {rhs?.GetType().Name}");
@@ -5211,26 +5337,26 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     return lhs;
   }
 
-  private object EvalConstComparison(ConstantDeclSet decls, Dictionary<string, object> evaluated, HashSet<string> evaluating) {
-    var lhs = EvalConstShift(decls, evaluated, evaluating);
+  private object EvalConstComparison(ConstantDeclSet decls, ConstFoldState state) {
+    var lhs = EvalConstShift(decls, state);
 
     if (Check(TokenType.EqualsEquals) || Check(TokenType.NotEquals) ||
         Check(TokenType.LessThan) || Check(TokenType.GreaterThan) ||
         Check(TokenType.LessEquals) || Check(TokenType.GreaterEquals)) {
       var opType = Advance().Type;
-      var rhs = EvalConstShift(decls, evaluated, evaluating);
+      var rhs = EvalConstShift(decls, state);
       return EvalConstComparisonOp(lhs, rhs, opType);
     }
 
     return lhs;
   }
 
-  private object EvalConstShift(ConstantDeclSet decls, Dictionary<string, object> evaluated, HashSet<string> evaluating) {
-    var lhs = EvalConstAddSub(decls, evaluated, evaluating);
+  private object EvalConstShift(ConstantDeclSet decls, ConstFoldState state) {
+    var lhs = EvalConstAddSub(decls, state);
     while (Check(TokenType.Shl) || Check(TokenType.Shr)) {
       var op = Advance().Type;
       var rhsStart = _pos;
-      var rhs = EvalConstAddSub(decls, evaluated, evaluating);
+      var rhs = EvalConstAddSub(decls, state);
       var rhsEnd = _pos;
 
       if (lhs is not long ll || rhs is not long rl)
@@ -5271,12 +5397,12 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     };
   }
 
-  private object EvalConstAddSub(ConstantDeclSet decls, Dictionary<string, object> evaluated, HashSet<string> evaluating) {
-    var lhs = EvalConstMulDiv(decls, evaluated, evaluating);
+  private object EvalConstAddSub(ConstantDeclSet decls, ConstFoldState state) {
+    var lhs = EvalConstMulDiv(decls, state);
 
     while (Check(TokenType.Plus) || Check(TokenType.Minus)) {
       var op = Advance().Type;
-      var rhs = EvalConstMulDiv(decls, evaluated, evaluating);
+      var rhs = EvalConstMulDiv(decls, state);
       (var lVal, var rVal) = PromoteConstPair(lhs, rhs);
 
       if (lVal is long li && rVal is long ri) {
@@ -5291,12 +5417,12 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     return lhs;
   }
 
-  private object EvalConstMulDiv(ConstantDeclSet decls, Dictionary<string, object> evaluated, HashSet<string> evaluating) {
-    var lhs = EvalConstUnary(decls, evaluated, evaluating);
+  private object EvalConstMulDiv(ConstantDeclSet decls, ConstFoldState state) {
+    var lhs = EvalConstUnary(decls, state);
 
     while (Check(TokenType.Star) || Check(TokenType.Slash) || Check(TokenType.Mod)) {
       var op = Advance().Type;
-      var rhs = EvalConstUnary(decls, evaluated, evaluating);
+      var rhs = EvalConstUnary(decls, state);
       (var lVal, var rVal) = PromoteConstPair(lhs, rhs);
 
       if (lVal is long li && rVal is long ri) {
@@ -5317,22 +5443,22 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     return lhs;
   }
 
-  private object EvalConstUnary(ConstantDeclSet decls, Dictionary<string, object> evaluated, HashSet<string> evaluating) {
+  private object EvalConstUnary(ConstantDeclSet decls, ConstFoldState state) {
     if (Check(TokenType.Minus)) {
       Advance();
-      var val = EvalConstAsCast(decls, evaluated, evaluating);
+      var val = EvalConstAsCast(decls, state);
       if (val is long l) return -l;
       if (val is double d) return -d;
       throw new InvalidOperationException($"Cannot negate {val?.GetType().Name}");
     }
     if (Check(TokenType.Not)) {
       Advance();
-      var val = EvalConstAsCast(decls, evaluated, evaluating);
+      var val = EvalConstAsCast(decls, state);
       if (val is bool b) return !b;
       if (val is long l) return ~l;
       throw new InvalidOperationException($"Cannot apply 'not' to {val?.GetType().Name}");
     }
-    return EvalConstAsCast(decls, evaluated, evaluating);
+    return EvalConstAsCast(decls, state);
   }
 
   // Apply zero or more `as TypeName` casts to a constant value. Each cast
@@ -5340,8 +5466,8 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   // the value against a ranged-type bound (compile error on out-of-range), or
   // both. Mirrors the runtime parser's `as`-cast handling but operates on
   // already-evaluated constants instead of MaxonValues.
-  private object EvalConstAsCast(ConstantDeclSet decls, Dictionary<string, object> evaluated, HashSet<string> evaluating) {
-    var value = EvalConstPrimary(decls, evaluated, evaluating);
+  private object EvalConstAsCast(ConstantDeclSet decls, ConstFoldState state) {
+    var value = EvalConstPrimary(decls, state);
     while (Check(TokenType.As)) {
       var asToken = Advance(); // consume 'as'
       // Attempt to recognize the target type. Built-in primitive keywords are
@@ -5368,12 +5494,18 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       } else {
         Advance();
       }
-      if (!_typeRegistry.TryGetValue(fullName, out var ty) || ty is not IrRangedPrimitiveType ranged) {
+      IrRangedPrimitiveType ranged;
+      if (_typeRegistry.TryGetValue(fullName, out var localTy) && localTy is IrRangedPrimitiveType localRanged) {
+        ranged = localRanged;
+        _usedTypeAliases.Add(typeName); // a used LOCAL alias; a foreign one is not this file's to mark
+      } else if (TryResolveForeignConstFoldType(fullName, out var foreignTy) && foreignTy is IrRangedPrimitiveType foreignRanged) {
+        // Folding a foreign constant whose cast type is a ranged alias PRIVATE to its declaring file.
+        ranged = foreignRanged;
+      } else {
         throw new CompileError(ErrorCode.ParserExpectedType,
           $"'{fullName}' is not a ranged type usable in a const-expr 'as' cast",
           asToken.Line, asToken.Column);
       }
-      _usedTypeAliases.Add(typeName);
       // Validate against the declared range.
       if (ranged.IsFloatBased) {
         double numericVal = value is long lv ? (double)lv : value is double dv ? dv : throw new CompileError(
@@ -5405,7 +5537,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     return value;
   }
 
-  private object EvalConstPrimary(ConstantDeclSet decls, Dictionary<string, object> evaluated, HashSet<string> evaluating) {
+  private object EvalConstPrimary(ConstantDeclSet decls, ConstFoldState state) {
     if (Check(TokenType.IntegerLiteral)) {
       var token = Advance();
       return ParseIntegerLiteral(token);
@@ -5428,7 +5560,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     }
     if (Check(TokenType.LeftParen)) {
       Advance();
-      var val = EvalConstExpr(decls, evaluated, evaluating);
+      var val = EvalConstExpr(decls, state);
       Expect(TokenType.RightParen);
       return val;
     }
@@ -5449,8 +5581,11 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
           return ResolveIntTypeBound(sizedType, keyword);
         }
       }
-      // Handle enum constant: EnumType.caseName
-      if (Check(TokenType.Dot) && _typeRegistry.TryGetValue(token.Value, out var constType) && constType is IrEnumType constEnumType) {
+      // Handle enum constant: EnumType.caseName. A foreign constant may name an enum PRIVATE to its
+      // declaring file, so fall back to the declarer's perspective when the local registry misses.
+      if (Check(TokenType.Dot)
+          && (_typeRegistry.TryGetValue(token.Value, out var constType) || TryResolveForeignConstFoldType(token.Value, out constType))
+          && constType is IrEnumType constEnumType) {
         Advance(); // consume '.'
         var caseToken = ExpectIdentifierLike();
         var enumCase = constEnumType.GetCase(caseToken.Value)
@@ -5463,7 +5598,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
           $"Function calls are not allowed in global variable initializers; '{token.Value}()' is not a constant expression",
           token.Line, token.Column);
       }
-      return EvaluateConstant(token.Value, decls, evaluated, evaluating, token.Line, token.Column);
+      return EvaluateConstant(token.Value, decls, state, token.Line, token.Column);
     }
     throw new CompileError(ErrorCode.ParserExpectedExpression, $"Expected constant expression, got '{Current().Value}'", Current().Line, Current().Column);
   }
@@ -6388,7 +6523,9 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     } else {
       // Simple constant initializer — evaluate at compile time
       _pos = exprStart;
-      var value = EvalConstExpr(ConstantDeclSet.Empty, _topLevelConstants, []);
+      // A static-field initializer folds against no top-level declaration set; references to
+      // top-level constants resolve straight out of the name table (_topLevelConstants) as Values.
+      var value = EvalConstExpr(ConstantDeclSet.Empty, new ConstFoldState(_topLevelConstants, [], []));
       var (fieldType, defaultValue) = ConstValueToAttribute(value, fieldToken.Line, fieldToken.Column);
 
       if (isMutable) {
