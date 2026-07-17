@@ -173,6 +173,32 @@ end 'main'
 error E3066: specs/fragments/enum-match-only/error.enum-eq-associated.test:13:7: cannot compare union values using '==', use 'match' instead
 ```
 
+<!-- test: error.union-return -->
+A payload-bearing union cannot yet be RETURNED across a call — the caller cannot adopt the returned heap box as owned, so `let c = make()` would leak it (that half of cross-call union ownership arrives at P1.4, with the union-parameter half). Refused at the return-type annotation. A payload-FREE union/enum return is a bare tag and stays allowed.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+union Container
+	empty
+	value(n Integer)
+end 'Container'
+
+function make() returns Container
+	return Container.value(5)
+end 'make'
+
+function main() returns ExitCode
+	let c = make()
+	match c 'k'
+		empty then return 0
+		value(n) then return n
+	end 'k'
+end 'main'
+```
+```maxoncstderr
+error E2015: specs/fragments/enum-match-only/error.union-return.test:9:17: Unsupported: returning a `union Container` value — a payload-bearing union is a heap box, and the caller adopting that box as owned (so `let c = make()` frees it rather than leaking) is the cross-call union ownership that arrives with the union-parameter half at P1.4; a payload-free union/enum return is a bare tag and is allowed
+```
+
 <!-- test: error.default-without-throws -->
 ```maxon
 enum Color

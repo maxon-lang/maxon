@@ -1,0 +1,22 @@
+// Test: error.union-return
+typealias Integer = int(i64.min to i64.max)
+
+union Container
+	empty
+	value(n Integer)
+end 'Container'
+
+function make() returns Container
+	return Container.value(5)
+end 'make'
+
+function main() returns ExitCode
+	let c = make()
+	match c 'k'
+		empty then return 0
+		value(n) then return n
+	end 'k'
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:9:17: Unsupported: returning a `union Container` value — a payload-bearing union is a heap box, and the caller adopting that box as owned (so `let c = make()` frees it rather than leaking) is the cross-call union ownership that arrives with the union-parameter half at P1.4; a payload-free union/enum return is a bare tag and is allowed

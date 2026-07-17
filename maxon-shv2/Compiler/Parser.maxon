@@ -2856,7 +2856,13 @@ export type Parser
 		try self.parseFunctionParameters(paramNames, paramTypes: paramTypes, paramRanges: paramRanges)
 		try self.consume(TokenKind.rightParen)
 
+		// The token the return-type annotation begins at (`returns`, or the body's first token when
+		// there is none), captured for the boxed-union-return diagnostic below. Read in the REAL parse
+		// only — never in `recordScannedSignature`'s tolerant sweep, where the enum layouts it consults
+		// are not yet recorded (see `parseTypeReference`'s two-pass header).
+		let returnAnchor = self.current()
 		let returnType = try self.parseOptionalReturnType()
+		try self.requireReturnTypeLowerable(returnType, anchor: returnAnchor)
 
 		// Fresh per-function value numbering, seeded at the function's paramCount so
 		// parameter ids occupy 0..paramCount-1 by Std-ABI convention (a body value
@@ -3090,6 +3096,46 @@ export type Parser
 		try self.consume(TokenKind.returns)
 		return MaxonReturnType.value(try self.parseTypeReference())
 	end 'parseOptionalReturnType'
+
+	// A return type the current rung can actually lower. Runs in the REAL parse only (see
+	// `parseFunction`), so the enum layouts it consults are fully recorded — the tolerant sweep never
+	// reaches here. `void` and every scalar type pass; the one refusal is a payload-bearing union
+	// (below).
+	function requireReturnTypeLowerable(returnType MaxonReturnType, anchor Token) throws ParseError
+		match returnType 'rt'
+			void then break 'rt'
+			value(inner) then try self.rejectBoxedUnionReturnType(inner, anchor: anchor)
+		end 'rt'
+	end 'requireReturnTypeLowerable'
+
+	// ⭐ **A PAYLOAD-BEARING (HEAP-BOXED) UNION CANNOT YET BE RETURNED ACROSS A CALL.** A boxed union
+	// is `named`-tagged, so a call RESULT is indistinguishable by tag from a bare enum value —
+	// `valueIsOwned` recognizes a struct result by its `structRef` tag but has no such handle here, and
+	// the box's owned-heap provenance bit is set only at its `emitEnumBox` construct site, never on a
+	// value arriving from a callee. So `let c = make()` would bind `c` to a box it does not know it
+	// owns and never drop it: a silent exit-101 LEAK. Refused at the return-type ANNOTATION until the
+	// caller-adopts-the-returned-box half of cross-call union ownership lands at P1.4 — the same rung
+	// the union PARAMETER half is deferred to, so a boxed union is uniformly not-yet-passable in either
+	// direction rather than rejected one way and leaking the other. A payload-FREE union/enum return is
+	// a bare i64 tag with no box and no ownership, so it stays allowed (`isBoxed` is the whole test).
+	function rejectBoxedUnionReturnType(returnType MaxonType, anchor Token) throws ParseError
+		if maxonTypeTag(returnType) != ValueTypeTag.named 'notNamed'
+			return
+		end 'notNamed'
+
+		let name = try self.artifact.typeNames.nameOf(typeNameIdOf(returnType)) otherwise panic("rejectBoxedUnionReturnType: a `named` return type's id is not in this file's interner — `parseTypeReference` interned it from a name in the same table")
+		let decl = self.signatures.enumOf(name)
+		if not enumMatchIsDeclared(decl) 'notEnum'
+			return
+		end 'notEnum'
+
+		let layout = requireEnumLayout(decl)
+		if not layout.isBoxed() 'payloadFree'
+			return
+		end 'payloadFree'
+
+		throw ParseError.unsupported("returning a `{layout.kindWord()} {String.from(name)}` value — a payload-bearing union is a heap box, and the caller adopting that box as owned (so `let c = make()` frees it rather than leaking) is the cross-call union ownership that arrives with the union-parameter half at P1.4; a payload-free union/enum return is a bare tag and is allowed", line: anchor.line, column: anchor.column)
+	end 'rejectBoxedUnionReturnType'
 
 	// A type reference. M1: a bare identifier (a named type like `ExitCode`,
 	// interned into the artifact's local interner) or a bare primitive keyword.
