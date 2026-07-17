@@ -1,9 +1,15 @@
 // Shared utilities used by multiple tools. Kept small — anything that grows
 // past one obvious shape (e.g. JSON-builder helpers, command-line parsing)
 // should get its own file rather than accreting here.
-
-typealias Byte = int(0 to u8.max)
-typealias ByteArray = Array with Byte
+//
+// `Byte` and `ByteArray` are NOT declared here — they resolve to `File.maxon`'s
+// EXPORTED aliases. A file-private `typealias ByteArray = Array with Byte` used to
+// live here, but since a generic's ranged element type became part of its type
+// (commit e4146cf8e), a locally-declared `Array with int(0 to u8.max)` no longer
+// unifies with the one `String.toByteArray()` returns from the stdlib — the two are
+// distinct types despite identical ranges. Using the stdlib's own exported alias is
+// the single canonical byte-array type, so every `.toByteArray()` result flows in
+// without a mismatch.
 
 /// Byte position into a ByteArray. Used as the result type of search helpers
 /// when a match is found; absence is signalled by throwing `NotFound.notFound`.

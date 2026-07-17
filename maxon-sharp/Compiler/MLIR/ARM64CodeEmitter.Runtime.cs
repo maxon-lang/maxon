@@ -7667,9 +7667,12 @@ public partial class ARM64CodeEmitter {
     EmitMaxonSubprocessLastErrorMessagePosix();
 
     // --- Still stubbed (not on the spec-runner path; gated host-only specs) ---
-    // resolve_on_path never resolves PATH here (the parallel runner uses absolute
-    // Executable.path), but it must honour the C# cstring→managed ABI: return a
-    // fresh empty cstring, NOT NULL (see EmitMaxonSubprocessResolveOnPathPosix).
+    // resolve_on_path never resolves PATH here — it returns a fresh empty cstring
+    // (NOT NULL, to honour the C# cstring→managed ABI; managedIsNull reads it as a
+    // miss all the same). That is fine because the spawn does the PATH search: the
+    // stdlib turns the miss into the bare name, and posix_spawnp resolves it
+    // execvp-style. So `Executable.name("dotnet")` launches without a real resolver
+    // (see EmitMaxonSubprocessResolveOnPathPosix and the posix_spawnp call sites).
     EmitMaxonSubprocessResolveOnPathPosix();
     EmitSubprocessIntStub("maxon_subprocess_send_signal", 2, returnValue: -1);
     EmitSubprocessIntStub("maxon_subprocess_detach", 14, returnValue: -1);
@@ -7927,14 +7930,19 @@ public partial class ARM64CodeEmitter {
     EmitLoadIndirect(ARM64Register.X0, ARM64Register.X0, 0, 8);
     EmitStoreToStack(0xA0, ARM64Register.X0, 8);
 
-    // posix_spawn(&pid, path, &fa, NULL, argv, envp)
+    // posix_spawnp(&pid, file, &fa, NULL, argv, envp) — like posix_spawn but does an
+    // execvp-style PATH search when `file` has no slash. `Executable.name(n)` whose
+    // resolver missed reaches the spawn as a bare argv[0] (the stdlib's documented
+    // fallback), so PATH resolution has to happen here or a bare name like "dotnet"
+    // never launches. With a slash `file` is used verbatim, matching posix_spawn for
+    // `Executable.path`, so absolute-path spawns are unchanged.
     EmitAddSubImm(ARM64Register.X0, ARM64Register.X29, 0x68, isAdd: true);
-    EmitLoadFromStack(ARM64Register.X1, 0x90, 8);               // path = argv[0]
+    EmitLoadFromStack(ARM64Register.X1, 0x90, 8);               // file = argv[0]
     EmitAddSubImm(ARM64Register.X2, ARM64Register.X29, 0x60, isAdd: true);
     EmitMovRegImm(ARM64Register.X3, 0);
     EmitLoadFromStack(ARM64Register.X4, 0x78, 8);               // argv
     EmitLoadFromStack(ARM64Register.X5, 0xA0, 8);               // envp
-    EmitCallImport("posix_spawn");
+    EmitCallImport("posix_spawnp");
     EmitCmpImm(ARM64Register.X0, 0);
     EmitBranchCond(ARM64ConditionCode.Ne, spawnFail);
 
@@ -8539,14 +8547,17 @@ public partial class ARM64CodeEmitter {
     EmitLoadIndirect(ARM64Register.X0, ARM64Register.X0, 0, 8);
     EmitStoreToStack(0xA0, ARM64Register.X0, 8);
 
-    // posix_spawn(&pid, path, &fa, NULL, argv, envp)
+    // posix_spawnp(&pid, file, &fa, NULL, argv, envp) — like posix_spawn but does an
+    // execvp-style PATH search when `file` has no slash, so `Executable.name(n)` that
+    // reaches the spawn as a bare argv[0] resolves against PATH (streaming path). With
+    // a slash `file` is used verbatim, matching posix_spawn for `Executable.path`.
     EmitAddSubImm(ARM64Register.X0, ARM64Register.X29, 0x68, isAdd: true);
     EmitLoadFromStack(ARM64Register.X1, 0x90, 8);
     EmitAddSubImm(ARM64Register.X2, ARM64Register.X29, 0x60, isAdd: true);
     EmitMovRegImm(ARM64Register.X3, 0);
     EmitLoadFromStack(ARM64Register.X4, 0x78, 8);
     EmitLoadFromStack(ARM64Register.X5, 0xA0, 8);
-    EmitCallImport("posix_spawn");
+    EmitCallImport("posix_spawnp");
     EmitCmpImm(ARM64Register.X0, 0);
     EmitBranchCond(ARM64ConditionCode.Ne, spawnFail);
 
