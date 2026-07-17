@@ -1,0 +1,66 @@
+// Arm64Backend — the arm64 half of the Phase-7 backend: Std → arm64 Target ops → register
+// allocation → arm64 prologue/epilogue → runtime augmentation → machine-code emission → CodeResult.
+//
+// ⭐ WAVE-1 STUBS (arm64-macOS foundation rung). `buildArm64Backend` mirrors the x64 pipeline
+// (`BackendDispatch.buildX64Backend`) so wave 1 has the exact structure to fill; the SHARED stages
+// — `allocateRegisters`, `augmentWithRuntime` — are already neutral and are reused as-is, which is
+// the whole point of the one-allocator / unified-`TargetOp` design (USER RULING). The ISA-specific
+// stages (isel, frame, encoder, link) are the arm64 stubs, and isel panics FIRST, so a
+// `build --target=arm64-macos` reaches this pipeline and stops at the isel stub — proving the
+// register model, ABI dispatch, op-arm declarations and BackendDispatch are correctly wired.
+
+// Run the arm64 backend. `throws CompileError` because register allocation can fail for a real
+// reason (E5001), exactly as the x64 backend does.
+export function buildArm64Backend(stdModule StdModule, target Target, globalData GlobalDataTable, project Project) returns CodeResult throws CompileError
+	let iselProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.isel)
+	// The class column travels forward WITH the module — see StdToArm64Conversion. This stub panics,
+	// so the stages below are the contract wave 1 fills, in this order.
+	var (targetModule, valueClasses) = lowerStdToArm64(stdModule, globalData: globalData)
+	recordPhase(project, phase: CompilePhase.isel, probe: iselProbe)
+
+	let regAllocProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.regalloc)
+	try allocateRegisters(targetModule, target: target, project: project, valueClasses: valueClasses)
+	recordPhase(project, phase: CompilePhase.regalloc, probe: regAllocProbe)
+
+	let prologueProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.prologueEpilogue)
+	insertArm64PrologueEpilogue(targetModule, target: target)
+	recordPhase(project, phase: CompilePhase.prologueEpilogue, probe: prologueProbe)
+
+	let runtimeProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.runtimeAugment)
+	augmentWithRuntime(targetModule, target: target)
+	recordPhase(project, phase: CompilePhase.runtimeAugment, probe: runtimeProbe)
+
+	let encodeProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.encode)
+	var chunks = FunctionCodeChunkArray.create()
+	for func in targetModule.functions 'eachFunc'
+		chunks.push(emitArm64FunctionChunk(targetModule, func: func))
+	end 'eachFunc'
+	appendArm64RuntimeChunks(chunks)
+	recordPhase(project, phase: CompilePhase.encode, probe: encodeProbe)
+
+	let linkProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.link)
+	let codeResult = concatArm64FunctionChunks(targetModule, stdModule: stdModule, chunks: chunks, globalData: globalData)
+	recordPhase(project, phase: CompilePhase.link, probe: linkProbe)
+
+	return codeResult
+end 'buildArm64Backend'
+
+// Encode one function into a FunctionCodeChunk. Wave 1 maps each colored arm64 `TargetOp` (its
+// `RegNum` operands resolved to `Arm64Register`) to its 32-bit encoding — the arm64 twin of
+// `X64Backend.emitFunctionChunk`, with the ADRP+ADD reach guards and the load/store scaling ladders
+// the M1 notes list as arm64 encoding traps.
+export function emitArm64FunctionChunk(module TargetModule, func IrFunction) returns FunctionCodeChunk
+	panic("arm64 emitArm64FunctionChunk: not yet implemented (wave 1) [{module.funcCount()} fn, @{String.from(func.name)}]")
+end 'emitArm64FunctionChunk'
+
+// Append the hand-assembled arm64 runtime chunks (entry stub bytes, the divide-by-zero panic path)
+// after user code — the arm64 twin of `appendX64RuntimeChunks`.
+export function appendArm64RuntimeChunks(chunks FunctionCodeChunkArray)
+	panic("arm64 appendArm64RuntimeChunks: not yet implemented (wave 1) [{chunks.count()} chunk(s)]")
+end 'appendArm64RuntimeChunks'
+
+// Concatenate the per-function chunks into a CodeResult, resolving branch/call/rdata/global fixups
+// against the final `.text`/`.rdata`/`.data` placement — the arm64 twin of `concatX64FunctionChunks`.
+export function concatArm64FunctionChunks(targetModule TargetModule, stdModule StdModule, chunks FunctionCodeChunkArray, globalData GlobalDataTable) returns CodeResult
+	panic("arm64 concatArm64FunctionChunks: not yet implemented (wave 1) [{targetModule.funcCount()} fn, {stdModule.funcCount()} std, {chunks.count()} chunk(s), {globalData.dataSection.count()} data]")
+end 'concatArm64FunctionChunks'

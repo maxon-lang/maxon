@@ -1105,9 +1105,9 @@ end 'encodeIatCall'
 // encoder and an XMM assembles as the GPR sharing its low nibble, silently. Use it directly
 // ONLY where the op is genuinely class-agnostic and the CLASS ITSELF is what is being
 // dispatched on (`emitRegRegMove`, `emitWord64Load`/`Store`, `emitRegRegSwap`).
-function resolvePhysical(vreg X64VReg) returns X64Register
+function resolvePhysical(vreg TargetVReg) returns X64Register
 	match vreg 'resolve'
-		physical(reg) then return reg
+		physical(reg) then return try X64Register.fromRawValue(reg) otherwise panic("x64 emitter: colored register number {reg} is not a valid X64Register — the allocator assigned a register outside the x64 file")
 		virtual(id) then panic("x64 emitter: unresolved virtual register v{id} — register allocation did not color it before emission")
 	end 'resolve'
 end 'resolvePhysical'
@@ -1133,14 +1133,14 @@ function requireClass(reg X64Register, class RegClass) returns X64Register
 end 'requireClass'
 
 // Resolve a colored operand to a physical GPR, panicking if it is an XMM.
-function resolveGpr(vreg X64VReg) returns X64Register
+function resolveGpr(vreg TargetVReg) returns X64Register
 	return requireClass(resolvePhysical(vreg), class: RegClass.gpr)
 end 'resolveGpr'
 
 // Resolve a colored operand to a physical XMM, panicking if it is a GPR — `resolveGpr`'s
 // mirror, and it exists for the same reason in the other direction: `addsd` would encode
 // `rbx` as `xmm3` just as happily.
-function resolveXmm(vreg X64VReg) returns X64Register
+function resolveXmm(vreg TargetVReg) returns X64Register
 	return requireClass(resolvePhysical(vreg), class: RegClass.xmm)
 end 'resolveXmm'
 
@@ -1242,6 +1242,10 @@ function emitTargetOp(op TargetOp, code ByteArray, callFixups CallFixupArray, ia
 		// The `.rdata` address `lea` (P1.2 wave A) — `leaRegGlobal`'s twin, GPR dest, its label filed
 		// as an `.rdata` relocation. See `encodeLeaRegRdata`.
 		leaRegRdata(dest, label) then encodeLeaRegRdata(code, rdataRelocs: rdataRelocs, dest: resolveGpr(dest), label: label)
+		// The arm64 band is encoded by the arm64 backend (`Arm64Backend`, wave 1), never here — the
+		// x64 encoder only ever sees x64 ops (`buildBackend` dispatches on `target.cpu`). The
+		// band-append invariant forced this arm; a panic keeps the ISA boundary loud.
+		arm64Ret to arm64FpLoadRdata then panic("emitTargetOp: an arm64 op reached the x64 encoder — the arm64 backend (wave 1) encodes the arm64 band")
 	end 'emit'
 end 'emitTargetOp'
 

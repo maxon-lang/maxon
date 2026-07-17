@@ -82,16 +82,18 @@ let OperandConstraintTagFixed = 2
 
 // --- Packing ---
 
-// Encode a vreg's payload into the high bits, tagging physical vs virtual.
-function packVRegBits(vreg X64VReg) returns MachineWord
+// Encode a vreg's payload into the high bits, tagging physical vs virtual. A
+// physical operand's payload IS its `RegNum` — the packed operand model is neutral
+// across ISAs exactly as `TargetVReg` is (see `operandRegister`).
+function packVRegBits(vreg TargetVReg) returns MachineWord
 	return match vreg 'v'
-		physical(reg) gives reg.rawValue shl OperandVRegShift
+		physical(reg) gives reg shl OperandVRegShift
 		virtual(id) gives OperandVRegVirtualBit or (id shl OperandVRegShift)
 	end 'v'
 end 'packVRegBits'
 
 // Assemble a packed operand from its typed fields.
-function packOperand(vreg X64VReg, kind OperandKind, position OperandPosition, constraintTag MachineWord, constraintArg MachineWord) returns Operand
+function packOperand(vreg TargetVReg, kind OperandKind, position OperandPosition, constraintTag MachineWord, constraintArg MachineWord) returns Operand
 	var word = packVRegBits(vreg)
 	if operandKindIsDef(kind) 'isDef'
 		word = word or OperandKindBit
@@ -119,18 +121,18 @@ function operandPositionIsLate(position OperandPosition) returns bool
 end 'operandPositionIsLate'
 
 // Append helpers keep `targetOpOperands` a single readable statement per operand.
-function pushUse(buf OperandList, vreg X64VReg)
+function pushUse(buf OperandList, vreg TargetVReg)
 	buf.push(packOperand(vreg, kind: OperandKind.use, position: OperandPosition.early, constraintTag: OperandConstraintTagAny, constraintArg: 0))
 end 'pushUse'
 
-function pushDef(buf OperandList, vreg X64VReg)
+function pushDef(buf OperandList, vreg TargetVReg)
 	buf.push(packOperand(vreg, kind: OperandKind.def, position: OperandPosition.late, constraintTag: OperandConstraintTagAny, constraintArg: 0))
 end 'pushDef'
 
 // A read-modify-write def: a `late` def whose register REUSES the operand at
 // `reuseIndex` (the same vreg read at `early`). Models the two-address `add`/
 // `sub`/`imul`/`neg`, whose destination is also their first source.
-function pushReuseDef(buf OperandList, vreg X64VReg, reuseIndex OperandIndex)
+function pushReuseDef(buf OperandList, vreg TargetVReg, reuseIndex OperandIndex)
 	buf.push(packOperand(vreg, kind: OperandKind.def, position: OperandPosition.late, constraintTag: OperandConstraintTagReuse, constraintArg: reuseIndex))
 end 'pushReuseDef'
 
@@ -222,7 +224,7 @@ export function targetOpOperands(op TargetOp, buf OperandList)
 		imulRegReg(dest, lhs, rhs) then pushReuseBinOperands(buf, dest: dest, lhs: lhs, rhs: rhs)
 		negReg(dest, src) then pushReuseUnaryOperands(buf, dest: dest, src: src)
 		cmpRegReg(lhsReg, rhsReg) then pushCmpOperands(buf, lhs: lhsReg, rhs: rhsReg)
-		leaRegRegReg(dest, base, index) then pushLeaBinOperands(buf, dest: dest, base: base, index: index)
+		leaRegRegReg(dest, base, index) then pushDefTwoUse(buf, dest: dest, a: base, b: index)
 		leaRegRegImm32(dest, base, _) then pushDefFromUse(buf, dest: dest, src: base)
 		imulRegRegImm32(dest, src, _) then pushDefFromUse(buf, dest: dest, src: src)
 		cmpRegImm32(reg, _) then pushUse(buf, vreg: reg)
@@ -305,12 +307,68 @@ export function targetOpOperands(op TargetOp, buf OperandList)
 		// The `.rdata` address `lea` (P1.2 wave A) — one plain def, no uses, exactly like
 		// `leaRegGlobal`: a RIP-relative `lea` reads no allocatable register.
 		leaRegRdata(dest, _) then pushDef(buf, vreg: dest)
+		// --- arm64 SCALAR-CORE band ---
+		//
+		// The COMPLETE operand model for the arm64 arms — the contract wave 1's encoder + allocator
+		// read. arm64 is 3-ADDRESS, so its ALU ops are PLAIN defs (`pushDefTwoUse`), never the
+		// two-address `Reuse` the x64 arms use. Control/frame/call ops name no register operand
+		// (their implicit registers ride `TargetOpMeta`), exactly as the x64 control band does.
+		arm64Ret then break 'operands'
+		arm64Branch then break 'operands'
+		arm64CondBranch then break 'operands'
+		arm64Cbz(reg, _) then pushUse(buf, vreg: reg)
+		arm64Cbnz(reg, _) then pushUse(buf, vreg: reg)
+		arm64MovImm(dest, _) then pushDef(buf, vreg: dest)
+		arm64Prologue then break 'operands'
+		arm64Epilogue then break 'operands'
+		arm64Add(dest, lhs, rhs) then pushDefTwoUse(buf, dest: dest, a: lhs, b: rhs)
+		arm64Sub(dest, lhs, rhs) then pushDefTwoUse(buf, dest: dest, a: lhs, b: rhs)
+		arm64Mul(dest, lhs, rhs) then pushDefTwoUse(buf, dest: dest, a: lhs, b: rhs)
+		arm64Sdiv(dest, lhs, rhs) then pushDefTwoUse(buf, dest: dest, a: lhs, b: rhs)
+		arm64Udiv(dest, lhs, rhs) then pushDefTwoUse(buf, dest: dest, a: lhs, b: rhs)
+		arm64Msub(dest, mulLhs, mulRhs, minuend) then pushDefThreeUse(buf, dest: dest, a: mulLhs, b: mulRhs, c: minuend)
+		arm64And(dest, lhs, rhs) then pushDefTwoUse(buf, dest: dest, a: lhs, b: rhs)
+		arm64Orr(dest, lhs, rhs) then pushDefTwoUse(buf, dest: dest, a: lhs, b: rhs)
+		arm64Eor(dest, lhs, rhs) then pushDefTwoUse(buf, dest: dest, a: lhs, b: rhs)
+		arm64Lslv(dest, lhs, rhs) then pushDefTwoUse(buf, dest: dest, a: lhs, b: rhs)
+		arm64Asrv(dest, lhs, rhs) then pushDefTwoUse(buf, dest: dest, a: lhs, b: rhs)
+		arm64Lsrv(dest, lhs, rhs) then pushDefTwoUse(buf, dest: dest, a: lhs, b: rhs)
+		arm64Neg(dest, src) then pushDefFromUse(buf, dest: dest, src: src)
+		arm64Mvn(dest, src) then pushDefFromUse(buf, dest: dest, src: src)
+		// arm64 immediate ALU forms are 3-address (dest INDEPENDENT of src), so a PLAIN def-from-use
+		// — NOT the two-address reuse the x64 immediate forms declare.
+		arm64AddImm(dest, src, _) then pushDefFromUse(buf, dest: dest, src: src)
+		arm64SubImm(dest, src, _) then pushDefFromUse(buf, dest: dest, src: src)
+		arm64AndImm(dest, src, _) then pushDefFromUse(buf, dest: dest, src: src)
+		arm64OrrImm(dest, src, _) then pushDefFromUse(buf, dest: dest, src: src)
+		arm64EorImm(dest, src, _) then pushDefFromUse(buf, dest: dest, src: src)
+		arm64LslImm(dest, src, _) then pushDefFromUse(buf, dest: dest, src: src)
+		arm64AsrImm(dest, src, _) then pushDefFromUse(buf, dest: dest, src: src)
+		arm64LsrImm(dest, src, _) then pushDefFromUse(buf, dest: dest, src: src)
+		arm64Cmp(lhs, rhs) then pushCmpOperands(buf, lhs: lhs, rhs: rhs)
+		arm64CmpImm(reg, _) then pushUse(buf, vreg: reg)
+		arm64Cset(dest, _) then pushDef(buf, vreg: dest)
+		// The PIE address `lea`s read no allocatable register (the ADRP+ADD pair addresses a section),
+		// so each is one plain def — exactly like the x64 `leaRegGlobal`/`leaRegRdata`.
+		arm64LeaFuncAddr(dest, _) then pushDef(buf, vreg: dest)
+		arm64LeaRdata(dest, _) then pushDef(buf, vreg: dest)
+		arm64LeaGlobal(dest, _) then pushDef(buf, vreg: dest)
+		arm64BranchLink then break 'operands'
+		arm64BranchLinkReg(reg) then pushUse(buf, vreg: reg)
+		arm64Fadd(dest, lhs, rhs) then pushDefTwoUse(buf, dest: dest, a: lhs, b: rhs)
+		arm64Fsub(dest, lhs, rhs) then pushDefTwoUse(buf, dest: dest, a: lhs, b: rhs)
+		arm64Fmul(dest, lhs, rhs) then pushDefTwoUse(buf, dest: dest, a: lhs, b: rhs)
+		arm64Fdiv(dest, lhs, rhs) then pushDefTwoUse(buf, dest: dest, a: lhs, b: rhs)
+		arm64Fcmp(lhs, rhs) then pushCmpOperands(buf, lhs: lhs, rhs: rhs)
+		arm64Scvtf(dest, src) then pushDefFromUse(buf, dest: dest, src: src)
+		arm64Fcvtzs(dest, src) then pushDefFromUse(buf, dest: dest, src: src)
+		arm64FpLoadRdata(dest, _) then pushDef(buf, vreg: dest)
 	end 'operands'
 end 'targetOpOperands'
 
 // A plain register-to-register copy: `dest` is a fresh value that COPIES `src`
 // (not a reuse — dest is independent of src). Shared by the 64- and 32-bit movs.
-function pushCopyOperands(buf OperandList, dest X64VReg, src X64VReg)
+function pushCopyOperands(buf OperandList, dest TargetVReg, src TargetVReg)
 	pushUse(buf, vreg: src)
 	pushDef(buf, vreg: dest)
 end 'pushCopyOperands'
@@ -321,7 +379,7 @@ end 'pushCopyOperands'
 // value from `lhs`, so the allocator (not ISel) supplies the copy, and only when `lhs`
 // outlives the op (Phase-1 reuse rework). `lhs` at operand 0 is what the reuse index
 // points at.
-function pushReuseBinOperands(buf OperandList, dest X64VReg, lhs X64VReg, rhs X64VReg)
+function pushReuseBinOperands(buf OperandList, dest TargetVReg, lhs TargetVReg, rhs TargetVReg)
 	pushUse(buf, vreg: lhs)
 	pushUse(buf, vreg: rhs)
 	pushReuseDef(buf, vreg: dest, reuseIndex: 0)
@@ -329,30 +387,39 @@ end 'pushReuseBinOperands'
 
 // A genuinely two-address unary op `dest = <op> src` (`neg`): `src` is read (operand
 // 0), `dest` is a fresh REUSE-of-0 def landing in `src`'s register.
-function pushReuseUnaryOperands(buf OperandList, dest X64VReg, src X64VReg)
+function pushReuseUnaryOperands(buf OperandList, dest TargetVReg, src TargetVReg)
 	pushUse(buf, vreg: src)
 	pushReuseDef(buf, vreg: dest, reuseIndex: 0)
 end 'pushReuseUnaryOperands'
 
-// A 3-operand address-arithmetic op `dest = base + index` (`lea`): `base` and `index`
-// are read, `dest` is a PLAIN def (NO reuse) — the whole point of the `lea` form is
-// that its destination is independent of its inputs, so no copy is ever needed.
-function pushLeaBinOperands(buf OperandList, dest X64VReg, base X64VReg, index X64VReg)
-	pushUse(buf, vreg: base)
-	pushUse(buf, vreg: index)
+// A 3-operand op `dest = f(a, b)` whose destination is INDEPENDENT of both sources — two reads,
+// one PLAIN def (NO reuse), so no copy is ever needed. It is the x64 3-operand `lea`'s shape AND
+// every arm64 3-address ALU op's shape (arm64 has no two-address form): one helper, both ISAs.
+function pushDefTwoUse(buf OperandList, dest TargetVReg, a TargetVReg, b TargetVReg)
+	pushUse(buf, vreg: a)
+	pushUse(buf, vreg: b)
 	pushDef(buf, vreg: dest)
-end 'pushLeaBinOperands'
+end 'pushDefTwoUse'
+
+// A 4-operand op `dest = f(a, b, c)` with three INDEPENDENT reads and one PLAIN def — arm64's
+// `msub` (remainder: `dest = minuend - mulLhs*mulRhs`).
+function pushDefThreeUse(buf OperandList, dest TargetVReg, a TargetVReg, b TargetVReg, c TargetVReg)
+	pushUse(buf, vreg: a)
+	pushUse(buf, vreg: b)
+	pushUse(buf, vreg: c)
+	pushDef(buf, vreg: dest)
+end 'pushDefThreeUse'
 
 // A 2-operand op with a PLAIN (non-reuse) def and one register source: `dest = f(src,
 // imm)` — the `lea dest, [base + imm]` and `imul dest, src, imm` immediate forms,
 // whose destination is independent of the source.
-function pushDefFromUse(buf OperandList, dest X64VReg, src X64VReg)
+function pushDefFromUse(buf OperandList, dest TargetVReg, src TargetVReg)
 	pushUse(buf, vreg: src)
 	pushDef(buf, vreg: dest)
 end 'pushDefFromUse'
 
 // A compare reads both registers and defines none (it sets flags only).
-function pushCmpOperands(buf OperandList, lhs X64VReg, rhs X64VReg)
+function pushCmpOperands(buf OperandList, lhs TargetVReg, rhs TargetVReg)
 	pushUse(buf, vreg: lhs)
 	pushUse(buf, vreg: rhs)
 end 'pushCmpOperands'

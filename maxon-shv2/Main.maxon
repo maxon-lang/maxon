@@ -50,9 +50,39 @@ function main() returns ExitCode
 	end 'cmd'
 end 'main'
 
+// The outcome of resolving a `--target=<cpu>-<os>` spelling: either the Target it
+// names, or the raw spelling for the error message when it names no known target.
+union TargetResolution
+	resolved(target Target)
+	unrecognized(spec String)
+end 'TargetResolution'
+
+// Resolve a `--target` spelling to a Target, or report it unrecognized. The targets
+// maxon-shv2 can build for are listed once, and matched by their own `targetToString`
+// spelling — so the parser and the printer read the same table and cannot drift into
+// accepting a spelling the compiler cannot name back. A spec that names none of them
+// is rejected; the list grows as backends land.
+function parseBuildTarget(spec String) returns TargetResolution
+	let supported = [Target.create(CpuArch.x64, os: Os.windows), Target.create(CpuArch.arm64, os: Os.macos)]
+	for candidate in supported 'each'
+		if targetToString(candidate) == spec 'match'
+			return TargetResolution.resolved(candidate)
+		end 'match'
+	end 'each'
+	return TargetResolution.unrecognized(spec)
+end 'parseBuildTarget'
+
+// Report a `--target` spelling that names no known target, as an exit code the
+// build command returns directly. Separate from the match arm because a match arm
+// is one statement, and this one both prints and yields the code.
+function reportUnknownTarget(spec String) returns ExitCode
+	printError("error: unknown --target '{spec}' (expected e.g. x64-windows or arm64-macos)\n")
+	return 1
+end 'reportUnknownTarget'
+
 function runBuild(args MaxonArgs) returns ExitCode
 	if args.path.isEmpty() 'noPath'
-		printError("Usage: maxon-shv2 build <file|directory> [-o <output>] [--emit-ir]\n")
+		printError("Usage: maxon-shv2 build <file|directory> [-o <output>] [--emit-ir] [--target=<cpu>-<os>]\n")
 		return 1
 	end 'noPath'
 
@@ -61,7 +91,13 @@ function runBuild(args MaxonArgs) returns ExitCode
 		return 1
 	end 'badPath'
 
-	let target = detectHostTarget()
+	var target = detectHostTarget()
+	if not args.targetSpec.isEmpty() 'explicitTarget'
+		match parseBuildTarget(args.targetSpec) 'sel'
+			resolved(t) then target = t
+			unrecognized(spec) then return reportUnknownTarget(spec)
+		end 'sel'
+	end 'explicitTarget'
 	let outputPath = try compile(inputPath, target: target, outputOverride: args.outputOverride, emitIr: args.emitIr, metricsPath: args.metricsPath) otherwise (e) 'compileErr'
 		reportCompileError(e)
 		return 1
@@ -263,6 +299,8 @@ function printUsage()
 	print("Options:\n")
 	print("  -o, --output=<path>           Output executable path (default: derived from input)\n")
 	print("  --emit-ir                     Also write the lowered Target IR beside the exe as <output>.ir\n")
+	print("  --target=<cpu>-<os>           (build) Compile for this target instead of the host, e.g.\n")
+	print("                                x64-windows or arm64-macos (default: the host target)\n")
 	print("  --metrics=<path>              (build) Write this compile's per-phase time + memory\n")
 	print("                                attribution to <path> as TSV. `--log=compiler:debug` prints\n")
 	print("                                the same numbers as a human-readable table.\n")
@@ -364,6 +402,11 @@ export type MaxonArgs
 	// to be read by a person; the day a phase name outgrows its column, a scrape would silently
 	// mis-parse rather than fail. A caller that wants data gets data.
 	export let resultJson as String
+	// `--target=<cpu>-<os>` (build only): compile for this target instead of the host
+	// (`detectHostTarget`). Empty selects the host. Parsed to a Target in `runBuild`;
+	// an unknown spelling aborts the build. Needed to cross-compile x64-windows on an
+	// arm64 host for golden verification, and to select arm64-macos explicitly.
+	export let targetSpec as String
 	// Set when an argument could not be understood. The driver refuses to run rather
 	// than proceed on a command line it only partly parsed — see `parse`.
 	export let badOption as String
@@ -394,6 +437,7 @@ export type MaxonArgs
 		var perType = false
 		var note = ""
 		var resultJson = ""
+		var targetSpec = ""
 		var badOption = ""
 
 		let args = CommandLine.args()
@@ -451,7 +495,9 @@ export type MaxonArgs
 				note = try CommandLine.optionValue(arg) otherwise ""
 			end 'noteFlag' else if arg.startsWith("--result-json=") 'resultJsonFlag'
 				resultJson = try CommandLine.optionValue(arg) otherwise ""
-			end 'resultJsonFlag' else if arg.startsWith("--log=") 'logFlag'
+			end 'resultJsonFlag' else if arg.startsWith("--target=") 'targetFlag'
+				targetSpec = try CommandLine.optionValue(arg) otherwise ""
+			end 'targetFlag' else if arg.startsWith("--log=") 'logFlag'
 				var spec = try CommandLine.optionValue(arg) otherwise ""
 				if not parseLogOption(spec) 'badSpec'
 					printError("Unrecognized --log spec '{spec}' (expected <level> or <category>:<level>)\n")
@@ -468,6 +514,6 @@ export type MaxonArgs
 			i = i + 1
 		end 'each'
 
-		return Self{command: command, path: path, outputOverride: outputOverride, emitIr: emitIr, filter: filter, updateRequired: updateRequired, workers: workers, workerPersistent: workerPersistent, metricsPath: metricsPath, emitCorpus: emitCorpus, rungs: rungs, perType: perType, note: note, resultJson: resultJson, badOption: badOption}
+		return Self{command: command, path: path, outputOverride: outputOverride, emitIr: emitIr, filter: filter, updateRequired: updateRequired, workers: workers, workerPersistent: workerPersistent, metricsPath: metricsPath, emitCorpus: emitCorpus, rungs: rungs, perType: perType, note: note, resultJson: resultJson, targetSpec: targetSpec, badOption: badOption}
 	end 'parse'
 end 'MaxonArgs'

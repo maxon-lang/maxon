@@ -1982,6 +1982,10 @@ function opIsConstMaterialization(module TargetModule, opIdx OpIndex) returns bo
 		// ARE an integer the compiler holds. `constValueOfDef` would panic. When someone
 		// generalizes remat to "an op with no register inputs", it buys BOTH of these at once.
 		andRegReg to leaRegRdata gives false
+		// arm64 does not run the splitter this rung (isel stubs out before `allocateRegisters`), so
+		// `false` is unreachable — `gives` cannot host a `panic`. Wave 1 answers `arm64MovImm` true
+		// here (it is the arm64 const materialization) when it wires arm64 through the splitter.
+		arm64Ret to arm64FpLoadRdata gives false
 	end 'k'
 end 'opIsConstMaterialization'
 
@@ -2361,7 +2365,7 @@ function insertStoreAfter(module TargetModule, cfg FuncCfg, valueId ValueId, aft
 	assertPlacementLegal(cfg, blockLocal: blockLocal, valueId: valueId, what: SplitPlacementOp.store, placement: placement)
 	var block = blockAt(module, topo: cfg.topo, local: blockLocal)
 	let anchorPos = positionInBlock(block, opIdx: afterOpIdx)
-	spliceOp(block, at: anchorPos + 1, op: TargetOp.storeSlotReg(slot, srcReg: X64VReg.virtual(valueId)), module: module, blockLocal: blockLocal, edits: edits)
+	spliceOp(block, at: anchorPos + 1, op: TargetOp.storeSlotReg(slot, srcReg: TargetVReg.virtual(valueId)), module: module, blockLocal: blockLocal, edits: edits)
 end 'insertStoreAfter'
 
 // Insert `storeSlotReg(slot, valueId)` at the very TOP of `blockLocal` — the PHI anchor. A
@@ -2371,7 +2375,7 @@ end 'insertStoreAfter'
 function insertStoreAtBlockEntry(module TargetModule, cfg FuncCfg, valueId ValueId, blockLocal CfgIndex, slot SpillSlot, placement SpillPlacement, edits SplitEdits)
 	assertPlacementLegal(cfg, blockLocal: blockLocal, valueId: valueId, what: SplitPlacementOp.store, placement: placement)
 	var block = blockAt(module, topo: cfg.topo, local: blockLocal)
-	spliceOp(block, at: 0, op: TargetOp.storeSlotReg(slot, srcReg: X64VReg.virtual(valueId)), module: module, blockLocal: blockLocal, edits: edits)
+	spliceOp(block, at: 0, op: TargetOp.storeSlotReg(slot, srcReg: TargetVReg.virtual(valueId)), module: module, blockLocal: blockLocal, edits: edits)
 end 'insertStoreAtBlockEntry'
 
 // Insert `loadRegSlot(freshId, slot)` right before `beforeOpIdx` (the first after-peak OP use in
@@ -2381,7 +2385,7 @@ function insertReloadBefore(module TargetModule, cfg FuncCfg, blockLocal CfgInde
 	assertPlacementLegal(cfg, blockLocal: blockLocal, valueId: valueId, what: SplitPlacementOp.reload, placement: placement)
 	var block = blockAt(module, topo: cfg.topo, local: blockLocal)
 	let pos = positionInBlock(block, opIdx: beforeOpIdx)
-	spliceOp(block, at: pos, op: TargetOp.loadRegSlot(X64VReg.virtual(freshId), slot: slot), module: module, blockLocal: blockLocal, edits: edits)
+	spliceOp(block, at: pos, op: TargetOp.loadRegSlot(TargetVReg.virtual(freshId), slot: slot), module: module, blockLocal: blockLocal, edits: edits)
 end 'insertReloadBefore'
 
 // Insert `loadRegSlot(freshId, slot)` at the END of `blockLocal`'s body — after every op, ahead of
@@ -2399,7 +2403,7 @@ function insertReloadAtBlockEnd(module TargetModule, cfg FuncCfg, blockLocal Cfg
 	assertPlacementLegal(cfg, blockLocal: blockLocal, valueId: valueId, what: SplitPlacementOp.reload, placement: placement)
 	var block = blockAt(module, topo: cfg.topo, local: blockLocal)
 	let pos = beforeBranchPosition(block)
-	spliceOp(block, at: pos, op: TargetOp.loadRegSlot(X64VReg.virtual(freshId), slot: slot), module: module, blockLocal: blockLocal, edits: edits)
+	spliceOp(block, at: pos, op: TargetOp.loadRegSlot(TargetVReg.virtual(freshId), slot: slot), module: module, blockLocal: blockLocal, edits: edits)
 end 'insertReloadAtBlockEnd'
 
 // The `opRefs` position at which an op runs after the whole body but on EVERY edge out of the
@@ -2488,7 +2492,7 @@ function rematerializeConstant(module TargetModule, index UseIndex, topo FuncTop
 			// The SAME op builder the ISel used, so the re-emitted constant is byte-identical to
 			// the one it replaces (StdToX64Conversion.constMaterializationOp) — not a second copy
 			// of the 32-vs-64-bit size choice that can drift from it.
-			spliceOp(block, at: usePos, op: constMaterializationOp(X64VReg.virtual(freshId), value: constValue), module: module, blockLocal: useBlockLocal, edits: edits)
+			spliceOp(block, at: usePos, op: constMaterializationOp(TargetVReg.virtual(freshId), value: constValue), module: module, blockLocal: useBlockLocal, edits: edits)
 			rewriteOpAt(module, opIdx: useOpIdx, from: valueId, to: freshId, buf: buf)
 			// The re-emitted copy derives from the original constant — record it so a
 			// rematerialized id in an E5001 blocking set chases back to the constant's source
@@ -2527,6 +2531,7 @@ function constValueOfDef(module TargetModule, opIdx OpIndex) returns MachineWord
 		prologue to jcc then panic("constValueOfDef: def is not a constant materialization")
 		movRegReg to loadRegSlot then panic("constValueOfDef: def is not a constant materialization")
 		andRegReg to leaRegRdata then panic("constValueOfDef: def is not a constant materialization")
+		arm64Ret to arm64FpLoadRdata then panic("constValueOfDef: an arm64 op reached the splitter — arm64 does not run the allocator this rung (wave 1 wires it)")
 	end 'k'
 end 'constValueOfDef'
 
@@ -2574,10 +2579,10 @@ end 'opUsesValue'
 
 // Replace virtual `from` with virtual `to` in a vreg operand; a physical reg or any other
 // virtual passes through.
-function substituteVReg(vreg X64VReg, from ValueId, to ValueId) returns X64VReg
+function substituteVReg(vreg TargetVReg, from ValueId, to ValueId) returns TargetVReg
 	return match vreg 'v'
 		physical gives vreg
-		virtual(id) gives X64VReg.virtual(to) if id == from else vreg
+		virtual(id) gives TargetVReg.virtual(to) if id == from else vreg
 	end 'v'
 end 'substituteVReg'
 
@@ -2637,6 +2642,10 @@ function substituteValueInOp(op TargetOp, from ValueId, to ValueId) returns Targ
 		cvttsd2siRegReg(dest, src) then return TargetOp.cvttsd2siRegReg(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to))
 		// The `.rdata` address `lea` (P1.2 wave A) — substitutes its GPR dest, exactly like `leaRegGlobal`.
 		leaRegRdata(dest, label) then return TargetOp.leaRegRdata(substituteVReg(dest, from: from, to: to), label: label)
+		// arm64 does not run the splitter this rung. Wave 1 fills these with the same
+		// `substituteVReg`-per-operand rewrite the x64 arms use (it is neutral over `TargetVReg`); the
+		// band-append invariant forced this arm and a panic keeps the gap loud.
+		arm64Ret to arm64FpLoadRdata then panic("substituteValueInOp: an arm64 op reached the splitter — arm64 does not run the allocator this rung (wave 1 wires it)")
 	end 'rewrite'
 end 'substituteValueInOp'
 

@@ -1257,6 +1257,9 @@ function opIsCondBranch(op TargetOp) returns bool
 		pushReg to popReg gives false
 		storeSlotReg to loadRegSlot gives false
 		andRegReg to leaRegRdata gives false
+		// Unreachable this rung (arm64 does not run the allocator; isel stubs first). `gives` cannot
+		// host a `panic`; wave 1 answers arm64CondBranch/arm64Cbz/arm64Cbnz true here.
+		arm64Ret to arm64FpLoadRdata gives false
 	end 'check'
 end 'opIsCondBranch'
 
@@ -1272,6 +1275,9 @@ function terminatorIsJmp(module TargetModule, block IrBlock) returns bool
 		pushReg to popReg gives false
 		storeSlotReg to loadRegSlot gives false
 		andRegReg to leaRegRdata gives false
+		// Unreachable this rung (arm64 does not run the allocator; isel stubs first). `gives` cannot
+		// host a `panic`; wave 1 answers arm64Branch true here.
+		arm64Ret to arm64FpLoadRdata gives false
 	end 'check'
 end 'terminatorIsJmp'
 
@@ -1308,6 +1314,7 @@ function collectBlockSuccessorIds(module TargetModule, block IrBlock, out BlockI
 			pushReg to popReg then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a pushReg/popReg as its terminator — those are post-regalloc body ops")
 			storeSlotReg to loadRegSlot then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a spill/reload as its terminator — the splitter inserts them as body ops")
 			andRegReg to leaRegRdata then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a non-terminator op as its terminator")
+			arm64Ret to arm64FpLoadRdata then panic("collectBlockSuccessorIds: an arm64 op reached the shared CFG builder — arm64 does not run the allocator this rung (wave 1 wires the arm64 CFG, incl. arm64Branch/arm64Ret)")
 		end 'termCtrl'
 	end 'hasTerm'
 end 'collectBlockSuccessorIds'
@@ -2094,7 +2101,6 @@ function falseColumn(count ColumnLength) returns BoolArray
 	return col
 end 'falseColumn'
 
-
 // The value ids ONE split touched: the VICTIM it rewrote, and the half-open range of fresh reload /
 // remat ids it minted. They are the only values whose index facts, liveness or forbidden mask a split
 // can change, so they are the only ones re-derived afterwards.
@@ -2700,6 +2706,7 @@ export function collectEntryParamCaptures(module TargetModule, topo FuncTopology
 			movReg32Reg32 to popReg then break 'capture'
 			storeSlotReg to loadRegSlot then break 'capture'
 			andRegReg to leaRegRdata then break 'capture'
+			arm64Ret to arm64FpLoadRdata then panic("collectEntryParamCaptures: an arm64 op reached the shared param-capture scan — arm64 does not run the allocator this rung (wave 1 wires it; arm64 param captures are the shared movRegReg from x0..x7)")
 		end 'capture'
 	end 'eachOp'
 	return captures
@@ -2709,19 +2716,19 @@ end 'collectEntryParamCaptures'
 // virtual whose id is < paramCount) and `src` is a physical register (the incoming ABI
 // register). Every other `movRegReg` in the entry block — a call/idiv result move, an
 // arg-setup move — fails one of the two gates and is skipped.
-function recordParamCapture(captures ParamCaptureArray, dst X64VReg, src X64VReg, paramCount ParamCount)
+function recordParamCapture(captures ParamCaptureArray, dst TargetVReg, src TargetVReg, paramCount ParamCount)
 	match dst 'd'
 		virtual(vid) then recordParamCaptureFromPhysSource(captures, vid: vid, src: src, paramCount: paramCount)
 		physical then break 'd'
 	end 'd'
 end 'recordParamCapture'
 
-function recordParamCaptureFromPhysSource(captures ParamCaptureArray, vid ValueId, src X64VReg, paramCount ParamCount)
+function recordParamCaptureFromPhysSource(captures ParamCaptureArray, vid ValueId, src TargetVReg, paramCount ParamCount)
 	if vid >= paramCount 'notParam'
 		return
 	end 'notParam'
 	match src 's'
-		physical(reg) then captures.push(ParamCapture.create(vid, incomingReg: reg.rawValue))
+		physical(reg) then captures.push(ParamCapture.create(vid, incomingReg: reg))
 		virtual then break 's'
 	end 's'
 end 'recordParamCaptureFromPhysSource'
@@ -2981,6 +2988,10 @@ export function spillStoreSlotOf(op TargetOp) returns ValueSpillSlot
 		// writes a global at a link-time address, not a `SpillSlot` this function's frame owns.
 		// Claiming a slot for it would hand the allocator a spill record for a value it never spilled.
 		andRegReg to leaRegRdata gives ValueSpillSlot.none
+		// arm64 spills go through the SHARED `storeSlotReg` (handled above), so the arm64 band never
+		// carries a spill store — `none` is unreachable this rung AND correct. `gives` cannot host a
+		// `panic`.
+		arm64Ret to arm64FpLoadRdata gives ValueSpillSlot.none
 	end 'k'
 end 'spillStoreSlotOf'
 

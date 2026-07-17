@@ -1,0 +1,22 @@
+// Arm64Runtime — the arm64-macOS entry stub + runtime-init name, the arm64 twin of X64Runtime's
+// `mrt_start` / `RuntimeInitName`.
+//
+// ⭐ WAVE-1 STUB (arm64-macOS foundation rung). The RESOLVED M1 design (design notes, both surveys):
+// link `/usr/lib/libSystem.B.dylib` via dyld chained fixups and call `_exit` — NEVER a raw SVC
+// (Apple-forbidden). `mrt_start` is laid out FIRST in `.text` (so `LC_MAIN.entryoff` points at it),
+// reads argc/argv/envp from x0/x1/x2, zeroes x29/x30 to end the frame chain, calls the runtime init
+// then `main`, bridges `main`'s x0 return to `_exit`'s argument (import call sequence: `adrp x16,
+// got; ldr x16, [x16, #off]; blr x16`), and ends with `brk #0`. Wave 1 hand-assembles it.
+
+// The runtime-init function the arm64 entry stub calls before any user code — SHARED with x64
+// (`X64Runtime.RuntimeInitName`, `mrt_runtime_init`): the fault handler it installs is a runtime
+// concern, not an ISA one. Named here so the arm64 entry stub has a single spelling to reference.
+export let Arm64RuntimeInitName = b"mrt_runtime_init"
+
+// Prepend the arm64 `mrt_start` entry stub and register the `libSystem` `_exit` import. `checkLeaks`
+// gates the leak-check bridge on the exit path exactly as the x64 stub does (a program that reaches
+// the heap checks itself before exiting). Runs AFTER register allocation + prologue/epilogue, so the
+// hand-built stub is never reprocessed.
+export function prependArm64EntryStub(module TargetModule, checkLeaks bool)
+	panic("arm64 prependArm64EntryStub: not yet implemented (wave 1) [{module.funcCount()} fn, leakCheck={checkLeaks}, entry calls {String.from(Arm64RuntimeInitName)}]")
+end 'prependArm64EntryStub'

@@ -56,15 +56,26 @@ let EntryStubFrameBytes = 0x20
 // sub-phases are recorded into `project.timings.regAlloc` / `project.memory.regAlloc` and
 // nest UNDER this phase in both reports; they are a breakdown of what is measured here,
 // never additional phases.
+// Run the backend for `target`, dispatched on its CPU: the x64 pipeline, or the arm64 one
+// (`Arm64Backend`, wave 1). Both share the register allocator, the runtime augmentation and the
+// per-OS writer; they differ in isel + encoder + frame, which is exactly the per-ISA split the
+// unified `TargetOp` was chosen to allow (USER RULING). The sugar gate is target-neutral and runs
+// here, once, so every backend inherits it.
 export function buildBackend(stdModule StdModule, target Target, globalData GlobalDataTable, project Project) returns CodeResult throws CompileError
-	// The sugar gate lives HERE, not in the per-target lowering: it is a property of
-	// the Std tier, not of x64, so installing it at the one target-neutral entry
-	// means arm64/wasm inherit it instead of each having to re-add it. See
-	// StdDialect's sugar-band contract.
 	let sugarProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.sugarGate)
 	assertNoSugarOps(stdModule)
 	recordPhase(project, phase: CompilePhase.sugarGate, probe: sugarProbe)
 
+	match target.cpu 'cpu'
+		x64 then return try buildX64Backend(stdModule, target: target, globalData: globalData, project: project)
+		arm64 then return try buildArm64Backend(stdModule, target: target, globalData: globalData, project: project)
+		wasm32 then panic("buildBackend: maxon-shv2 has no wasm backend (got {targetToString(target)})")
+	end 'cpu'
+end 'buildBackend'
+
+// The x64 backend: Std → Target → register allocation → prologue/epilogue → runtime augmentation →
+// machine-code emission → CodeResult.
+function buildX64Backend(stdModule StdModule, target Target, globalData GlobalDataTable, project Project) returns CodeResult throws CompileError
 	let iselProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.isel)
 	// `globalData` reaches ISel because a float CONSTANT is `.rdata` content the lowering is the
 	// first to see (`lowerFloatConst`). It is the same table concat resolves those labels against
@@ -110,17 +121,19 @@ export function buildBackend(stdModule StdModule, target Target, globalData Glob
 	recordPhase(project, phase: CompilePhase.link, probe: linkProbe)
 
 	return codeResult
-end 'buildBackend'
+end 'buildX64Backend'
 
 // Install the OS entry point. M1 = "prepend the `mrt_start` entry stub + register
 // the ExitProcess import." Runs AFTER register allocation and prologue/epilogue so
 // the hand-built stub (all-physical registers, its own explicit frame) is never
 // reprocessed by those passes.
 export function augmentWithRuntime(module TargetModule, target Target)
-	if target.os != Os.windows 'unsupportedOs'
-		panic("augmentWithRuntime: maxon-shv2 M1 emits an entry stub for x64-windows only (got {targetToString(target)})")
-	end 'unsupportedOs'
-	prependEntryStub(module, checkLeaks: moduleHasFunction(module, name: MmLeakCheckName))
+	match target.os 'os'
+		windows then prependEntryStub(module, checkLeaks: moduleHasFunction(module, name: MmLeakCheckName))
+		macos then prependArm64EntryStub(module, checkLeaks: moduleHasFunction(module, name: MmLeakCheckName))
+		linux then panic("augmentWithRuntime: maxon-shv2 has no linux entry stub yet (got {targetToString(target)})")
+		wasi then panic("augmentWithRuntime: maxon-shv2 has no wasi entry stub yet (got {targetToString(target)})")
+	end 'os'
 end 'augmentWithRuntime'
 
 // Whether the MM runtime was installed — i.e. whether the program reaches the heap at all. The
@@ -180,11 +193,11 @@ function prependEntryStub(module TargetModule, checkLeaks bool)
 	// The argument goes in RCX and the result comes back in R8: `__mm_leak_check` is an ordinary
 	// Maxon-ABI function (arg 0 = rcx, primary return = r8), not a Win64 import.
 	if checkLeaks 'leakGate'
-		module.appendOp(block, op: TargetOp.movRegReg(X64VReg.physical(X64Register.rcx), srcReg: X64VReg.physical(X64Register.r8)))
+		module.appendOp(block, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: x64PhysReg(X64Register.r8)))
 		module.appendOp(block, op: TargetOp.callDirect(MmLeakCheckName))
 	end 'leakGate'
 
-	module.appendOp(block, op: TargetOp.movReg32Reg32(X64VReg.physical(X64Register.rcx), srcReg: X64VReg.physical(X64Register.r8)))
+	module.appendOp(block, op: TargetOp.movReg32Reg32(x64PhysReg(X64Register.rcx), srcReg: x64PhysReg(X64Register.r8)))
 	module.appendOp(block, op: TargetOp.iatCall(iatSlotIndex(IatSlot.ExitProcess)))
 	module.appendOp(block, op: TargetOp.epilogue(EntryStubFrameBytes))
 	module.appendOp(block, op: TargetOp.popReg(X64Register.rbp))
@@ -205,12 +218,23 @@ function prependFunction(module TargetModule, func IrFunction)
 	module.functions = reordered
 end 'prependFunction'
 
-// Write the CodeResult to a runnable executable, dispatched on target OS. M1
-// writes an x64-windows PE; the ELF / Mach-O / WASM writers arrive at their
-// milestones.
+// Write the CodeResult to a runnable executable, dispatched on target OS: an x64-windows PE, or a
+// macOS Mach-O. The ELF / WASM writers arrive at their milestones.
 export function writeExecutable(codeResult CodeResult, target Target, outputPath FilePath)
 	match target.os 'os'
 		windows then writePe(outputPath, codeResult: codeResult, target: target)
-		default panic("writeExecutable: maxon-shv2 M1 writes x64-windows PE only (got {targetToString(target)})")
+		macos then writeMachO(outputPath, codeResult: codeResult, target: target)
+		linux then panic("writeExecutable: maxon-shv2 has no ELF writer yet (got {targetToString(target)})")
+		wasi then panic("writeExecutable: maxon-shv2 has no WASM writer yet (got {targetToString(target)})")
 	end 'os'
 end 'writeExecutable'
+
+// ⚠⚠ TEMP — REPLACED AT MACH-O INTEGRATION. The real `writeMachO` lives in
+// `Targets/Macos/MachOWriter.maxon`, owned by a PARALLEL agent (ad-hoc signing, PIE relocs, GOT +
+// chained fixups). shv2 needs the symbol to COMPILE, so this local panicking stub stands in until
+// that file lands — at which point the coordinator DELETES this stub and the exported one takes
+// over. It is never reached this rung: the arm64 build panics at the isel stub, far before
+// `writeExecutable`. See the writeup's "MachO seam".
+function writeMachO(outputPath FilePath, codeResult CodeResult, target Target)
+	panic("writeMachO: not yet implemented (MachO integration — Targets/Macos/MachOWriter.maxon, parallel agent) [{outputPath}, {codeResult.targetModule.funcCount()} fn, {targetToString(target)}]")
+end 'writeMachO'

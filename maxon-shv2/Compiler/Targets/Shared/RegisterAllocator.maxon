@@ -87,11 +87,6 @@ export type Allocation
 		return c
 	end 'regNumOf'
 
-	// The physical register assigned to `v`.
-	export function colorOf(v ValueId) returns X64Register
-		return try X64Register.fromRawValue(self.regNumOf(v)) otherwise panic("Allocation.colorOf: value {v} colored to invalid register number")
-	end 'colorOf'
-
 	export function assign(v ValueId, regNum RegNum)
 		try self.color.set(v, value: regNum) otherwise panic("Allocation.assign: value {v} out of range")
 	end 'assign'
@@ -293,11 +288,39 @@ end 'RegAllocStats'
 // and the IAT call is RIP-relative), so the doc's r10/r11-as-scratch is a FUTURE tuning.
 // The pool is a property of the target — arm64 declares its own when its backend lands.
 export function allocatablePool(target Target) returns RegMask
-	if target.os != Os.windows 'unsupported'
-		panic("allocatablePool: maxon-shv2 allocates for x64-windows only (got {targetToString(target)})")
-	end 'unsupported'
-	return callerSavedMask() or calleeSavedMask() or classRegisterMask(RegClass.xmm)
+	match target.cpu 'cpu'
+		x64 then return x64AllocatablePool()
+		arm64 then return arm64AllocatablePool()
+		wasm32 then panic("allocatablePool: maxon-shv2 has no register pool for wasm32 (got {targetToString(target)})")
+	end 'cpu'
 end 'allocatablePool'
+
+// The x64 pool: every GPR except rsp/rbp (the frame) — 9 caller-saved + 5 callee-saved — plus every
+// XMM. The XMM half is the whole file (Wave 1 takes all 16 as caller-saved; see `callDirect`).
+function x64AllocatablePool() returns RegMask
+	return callerSavedMask() or calleeSavedMask() or classRegisterMask(RegClass.xmm, file: x64RegisterFile())
+end 'x64AllocatablePool'
+
+// The arm64 pool (AAPCS64-derived, M1 notes): allocatable GPRs x0..x15 ∪ x19..x28, and the WHOLE
+// SIMD file d0..d31 (all 32 are allocatable — d0..d7/d16..d31 caller-saved, d8..d15 callee-saved).
+// x16/x17 (IP scratch), x18 (the untouchable Darwin platform register), x29 (FP), x30 (LR) and sp
+// are NOT in the pool. Declared for the contract; arm64 does not run the allocator this rung.
+function arm64AllocatablePool() returns RegMask
+	return arm64AllocatableGprMask() or classRegisterMask(RegClass.xmm, file: arm64RegisterFile())
+end 'arm64AllocatablePool'
+
+// arm64 allocatable GPRs: x0..x15 (RegNum 0..15) ∪ x19..x28 (RegNum 19..28). Mirrors v1's
+// `createArm64GprPool`; x16/x17/x18/x29/x30/sp are excluded (see `arm64AllocatablePool`).
+function arm64AllocatableGprMask() returns RegMask
+	var mask = 0 as RegMask
+	for reg in 0 upto 16 'callerSavedGprs'
+		mask = regMaskAdd(mask, regNum: reg)
+	end 'callerSavedGprs'
+	for reg in 19 upto 29 'calleeSavedGprs'
+		mask = regMaskAdd(mask, regNum: reg)
+	end 'calleeSavedGprs'
+	return mask
+end 'arm64AllocatableGprMask'
 
 // The registers of ONE class that `pool` makes available — and the pool EVERY per-value question must
 // be asked against, because a value can only ever take a register from its own file.
@@ -308,8 +331,12 @@ end 'allocatablePool'
 // permanent census over every operand of every op — a pure TIME cost, which `scale-test` measures no
 // part of), while a 15-live-int pigeonhole measured against the same 30 never fires at all and lets
 // the colorer run out of registers. Both are the same mistake: a class-agnostic denominator.
+// ⚠ x64-SCOPED THIS RUNG. The class split reads the X64 register file's boundary. `poolOfClass` and
+// `classPoolSizeOf` are called from the shared splitter / Hall census, which run the allocator only
+// for x64 this rung (arm64 stubs out at isel before `allocateRegisters`). Wiring arm64 through the
+// allocator (wave 1) threads the target's `RegisterFile` here — the boundary is per-ISA (16 vs 31).
 export function poolOfClass(pool RegMask, class RegClass) returns RegMask
-	return pool and classRegisterMask(class)
+	return pool and classRegisterMask(class, file: x64RegisterFile())
 end 'poolOfClass'
 
 // How many registers a value of `class` could take if nothing were blocked — the denominator of every
@@ -346,24 +373,64 @@ end 'classPoolSizeOf'
 // The ops are named one by one because `TargetOp` offers no way to enumerate its arms. The one
 // thing that can go wrong is a NEW call op landing without a line here — `isCall: true` is the
 // property to grep for when adding one. The payloads are throwaway: only the metadata is read.
-function assertCallClobberConsistent()
-	assertOneCallClobber(TargetOp.callDirect(""), name: "callDirect")
-	assertOneCallClobber(TargetOp.iatCall(0), name: "iatCall")
+function assertCallClobberConsistent(target Target)
+	match target.cpu 'cpu'
+		x64 then assertX64CallClobbers()
+		arm64 then assertArm64CallClobbers()
+		wasm32 then panic("assertCallClobberConsistent: maxon-shv2 has no call ABI for wasm32 (got {targetToString(target)})")
+	end 'cpu'
 end 'assertCallClobberConsistent'
 
-// One call op's clobber mask against the pool. `name` is carried rather than derived because a
-// union case cannot name itself, and a panic that cannot say WHICH op drifted would send a reader
-// to the wrong line of TargetDialect.
-function assertOneCallClobber(op TargetOp, name String)
+// The x64 call ops against the x64 caller-saved pool, with rbx (callee-saved) the drift witness.
+function assertX64CallClobbers()
+	let pool = callerSavedMask()
+	assertOneCallClobber(TargetOp.callDirect(""), name: "callDirect", pool: pool, calleeWitness: X64Register.rbx.rawValue, calleeName: "rbx")
+	assertOneCallClobber(TargetOp.iatCall(0), name: "iatCall", pool: pool, calleeWitness: X64Register.rbx.rawValue, calleeName: "rbx")
+end 'assertX64CallClobbers'
+
+// The arm64 call ops against the arm64 caller-saved pool, with x19 (callee-saved) the drift witness.
+// Never RUN this rung (arm64 does not run the allocator), but it holds the same one-fact-one-place
+// guard the x64 pair does: the `0x7FFF807F8000FFFF` literal on `arm64BranchLink`/`arm64BranchLinkReg`
+// must equal `arm64CallerSavedMask`, or a value live across a call is mis-constrained.
+function assertArm64CallClobbers()
+	let pool = arm64CallerSavedMask()
+	assertOneCallClobber(TargetOp.arm64BranchLink(b""), name: "arm64BranchLink", pool: pool, calleeWitness: 19, calleeName: "x19")
+	assertOneCallClobber(TargetOp.arm64BranchLinkReg(TargetVReg.virtual(0)), name: "arm64BranchLinkReg", pool: pool, calleeWitness: 19, calleeName: "x19")
+end 'assertArm64CallClobbers'
+
+// One call op's clobber mask against its ABI's caller-saved `pool`, and against a `calleeWitness`
+// register that must NOT be clobbered (a shipped v1 bug clobbered a callee-saved register —
+// project_regalloc_crosscall_spill_fixes). `name`/`calleeName` are carried because a union case
+// cannot name itself, and a panic that cannot say WHICH op drifted would send a reader to the wrong
+// line of TargetDialect.
+function assertOneCallClobber(op TargetOp, name String, pool RegMask, calleeWitness RegNum, calleeName String)
 	let clobber = op.rawValue.implicitDefs
-	if clobber != callerSavedMask() 'drift'
-		panic("assertCallClobberConsistent: {name} clobber mask {clobber} != caller-saved pool {callerSavedMask()} — TargetDialect.{name}'s implicitDefs and RegisterAllocator.callerSavedMask drifted apart")
+	if clobber != pool 'drift'
+		panic("assertCallClobberConsistent: {name} clobber mask {clobber} != caller-saved pool {pool} — TargetDialect.{name}'s implicitDefs and RegisterAllocator's caller-saved mask drifted apart")
 	end 'drift'
 
-	if regMaskContains(clobber, regNum: X64Register.rbx.rawValue) 'rbxClobbered'
-		panic("assertCallClobberConsistent: {name} clobber mask wrongly includes rbx, which is CALLEE-saved (project_regalloc_crosscall_spill_fixes shipped exactly this bug in v1)")
-	end 'rbxClobbered'
+	if regMaskContains(clobber, regNum: calleeWitness) 'calleeClobbered'
+		panic("assertCallClobberConsistent: {name} clobber mask wrongly includes {calleeName}, which is CALLEE-saved (project_regalloc_crosscall_spill_fixes shipped exactly this bug in v1)")
+	end 'calleeClobbered'
 end 'assertOneCallClobber'
+
+// The arm64 caller-saved set: GPRs x0..x15 (RegNum 0..15) ∪ SIMD d0..d7 (31..38) ∪ d16..d31
+// (47..62) — d8..d15 and x19..x28 are callee-saved. Equals the `0x7FFF807F8000FFFF` literal the
+// arm64 call ops carry (asserted). Mirrors v1's `createArm64CallerSavedGprs`/`Fps`.
+function arm64CallerSavedMask() returns RegMask
+	let fpBase = arm64RegisterFile().firstVector
+	var mask = 0 as RegMask
+	for reg in 0 upto 16 'callerGprs'
+		mask = regMaskAdd(mask, regNum: reg)
+	end 'callerGprs'
+	for fpIndex in 0 upto 8 'fpLow'
+		mask = regMaskAdd(mask, regNum: fpBase + fpIndex)
+	end 'fpLow'
+	for fpIndex in 16 upto 32 'fpHigh'
+		mask = regMaskAdd(mask, regNum: fpBase + fpIndex)
+	end 'fpHigh'
+	return mask
+end 'arm64CallerSavedMask'
 
 // Every CALLER-saved register the custom ABI clobbers across a call — the same set
 // `callDirect`'s `implicitDefs` mask (0xFFFF0FC7) names, kept in ONE place so the pool and
@@ -377,7 +444,7 @@ end 'assertOneCallClobber'
 // xmm6-15 as callee-saved is Wave 2 and is not a tweak — Win64 preserves all 128 bits of them while
 // `movsd` zeroes bits 64-127, so it needs 16-byte spill slots and leaf frame alignment together.
 export function callerSavedMask() returns RegMask
-	var mask = classRegisterMask(RegClass.xmm)
+	var mask = classRegisterMask(RegClass.xmm, file: x64RegisterFile())
 	mask = mask or regMaskOf(X64Register.rax)
 	mask = mask or regMaskOf(X64Register.rcx)
 	mask = mask or regMaskOf(X64Register.rdx)
@@ -426,7 +493,7 @@ export function allocateRegisters(module TargetModule, target Target, project Pr
 	// constant nor the enum. Checking the file's own width before anything derived from it is read
 	// means each panic accuses the thing that actually moved.
 	assertRegisterFileMatchesEnum()
-	assertCallClobberConsistent()
+	assertCallClobberConsistent(target)
 	assertRegClassCountMatches()
 
 	// The stats object is the PROJECT's, not a fresh one: its sub-phase timers are a
@@ -642,6 +709,11 @@ function collectOpHints(op TargetOp, hints ColorHints)
 		// The data-section band carries no COPY hint either: a `lea`, a load and a store are
 		// none of them a move, so no two of their operands want the same register.
 		andRegReg to leaRegRdata then break 'hint'
+		// arm64 does not run the allocator this rung (isel stubs out before `allocateRegisters`), so
+		// no arm64 op reaches hint collection. Wave 1, wiring arm64 through the shared allocator,
+		// replaces this with the real arm64 hints (arm64 has no two-address reuse, so most arms
+		// simply carry none). The band-append invariant forced this arm; a panic keeps it loud.
+		arm64Ret to arm64FpLoadRdata then panic("collectOpHints: an arm64 op reached the shared coloring pass — arm64 does not run the allocator this rung (wave 1 wires it)")
 	end 'hint'
 end 'collectOpHints'
 
@@ -662,7 +734,7 @@ function collectReuseHints(op TargetOp, hints ColorHints, buf OperandList)
 	end 'eachOperand'
 end 'collectReuseHints'
 
-function addCopyHint(dst X64VReg, src X64VReg, hints ColorHints)
+function addCopyHint(dst TargetVReg, src TargetVReg, hints ColorHints)
 	match dst 'd'
 		physical(dReg) then addFixedFromPhysDst(dReg, src: src, hints: hints)
 		virtual(dId) then addCopyFromVirtualDst(dId, src: src, hints: hints)
@@ -670,9 +742,9 @@ function addCopyHint(dst X64VReg, src X64VReg, hints ColorHints)
 end 'addCopyHint'
 
 // `mov <fixed physical>, <virtual src>`: the source wants that fixed register.
-function addFixedFromPhysDst(dReg X64Register, src X64VReg, hints ColorHints)
+function addFixedFromPhysDst(dReg RegNum, src TargetVReg, hints ColorHints)
 	match src 's'
-		virtual(sId) then hints.setFixedIfUnset(sId, regNum: dReg.rawValue)
+		virtual(sId) then hints.setFixedIfUnset(sId, regNum: dReg)
 		physical then break 's'
 	end 's'
 end 'addFixedFromPhysDst'
@@ -681,10 +753,10 @@ end 'addFixedFromPhysDst'
 // register (physical src). No such op survives to coloring today (the two-address seed
 // `mov` is retired and edge copies are post-coloring), but the handler stays general so
 // a future virtual-to-virtual copy op is hinted correctly.
-function addCopyFromVirtualDst(dId ValueId, src X64VReg, hints ColorHints)
+function addCopyFromVirtualDst(dId ValueId, src TargetVReg, hints ColorHints)
 	match src 's'
 		virtual(sId) then hints.setCopyIfUnset(dId, partner: sId)
-		physical(sReg) then hints.setFixedIfUnset(dId, regNum: sReg.rawValue)
+		physical(sReg) then hints.setFixedIfUnset(dId, regNum: sReg)
 	end 's'
 end 'addCopyFromVirtualDst'
 
@@ -1237,14 +1309,14 @@ end 'computeBlockDeaths'
 
 // Resolve one operand: a physical register passes through (the R8 return target); a
 // virtual register becomes its assigned physical register.
-export function colorVRegWith(vreg X64VReg, alloc Allocation) returns X64VReg
+export function colorVRegWith(vreg TargetVReg, alloc Allocation) returns TargetVReg
 	return match vreg 'v'
 		physical gives vreg
-		virtual(id) gives X64VReg.physical(alloc.colorOf(id))
+		virtual(id) gives TargetVReg.physical(alloc.regNumOf(id))
 	end 'v'
 end 'colorVRegWith'
 
-// Rebuild an op with its X64VReg operands colored to physical registers. EXHAUSTIVE
+// Rebuild an op with its TargetVReg operands colored to physical registers. EXHAUSTIVE
 // over every TargetOp — control/frame/call ops with no register operands pass
 // through. `xchgRegReg` is spliced in AFTER this rewrite, so its operands are already
 // physical (pass through).
@@ -1302,6 +1374,11 @@ export function colorTargetOp(op TargetOp, alloc Allocation) returns TargetOp
 		cvttsd2siRegReg(dest, src) then return TargetOp.cvttsd2siRegReg(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc))
 		// The `.rdata` address `lea` (P1.2 wave A) — colors its GPR dest, exactly like `leaRegGlobal`.
 		leaRegRdata(dest, label) then return TargetOp.leaRegRdata(colorVRegWith(dest, alloc: alloc), label: label)
+		// arm64 does not run the allocator this rung, so no arm64 op reaches the rewrite. Wave 1
+		// fills these with the same `colorVRegWith`-per-operand reconstruction the x64 arms use above
+		// (the rewrite is neutral — it substitutes `RegNum`s and never names an ISA register). The
+		// band-append invariant forced this arm; a panic keeps the gap loud until wave 1 closes it.
+		arm64Ret to arm64FpLoadRdata then panic("colorTargetOp: an arm64 op reached the shared rewrite — arm64 does not run the allocator this rung (wave 1 wires it)")
 	end 'rewrite'
 end 'colorTargetOp'
 

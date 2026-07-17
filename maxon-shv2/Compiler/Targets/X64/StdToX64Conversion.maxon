@@ -1,6 +1,6 @@
 // StdToX64Conversion — Std → Target (x64) lowering. Takes a StdModule and
 // produces a fresh TargetModule of x64 `TargetOp`s. Each StdOp is lowered to its
-// x64 op sequence; the result still uses VIRTUAL registers (X64VReg.virtual),
+// x64 op sequence; the result still uses VIRTUAL registers (TargetVReg.virtual),
 // which the register allocator colors to physical GPRs afterward.
 //
 // This is the ONLY tier boundary below Std — shv2 has no MIR tier (see
@@ -62,7 +62,7 @@ let Imm32ZeroExtendedMin = 0 as MachineWord
 // back and accept the lost fusion. Landing the idiom alone is a SILENT MISCOMPILE — a `jcc`
 // would read flags the `xor` had already destroyed. This is the flag-neutral half of the
 // "flag-neutral-vs-shorter" tradeoff, and it is not free.
-export function constMaterializationOp(dest X64VReg, value MachineWord) returns TargetOp
+export function constMaterializationOp(dest TargetVReg, value MachineWord) returns TargetOp
 	if value >= Imm32ZeroExtendedMin and value <= u32.max 'fitsUnsigned32'
 		return TargetOp.movRegImm32(dest, value: value)
 	end 'fitsUnsigned32'
@@ -88,14 +88,16 @@ let argRegisters = [X64Register.rcx, X64Register.rdx, X64Register.rax, X64Regist
 // would fault rather than answer 0. The two flags travel together for that reason.
 let VirtualAllocLetOsChooseBase = 0x0
 let VirtualAllocCommitAndReserve = 0x3000  // MEM_COMMIT (0x1000) | MEM_RESERVE (0x2000)
-let VirtualAllocPageReadWrite = 0x4        // PAGE_READWRITE
+let VirtualAllocPageReadWrite = 0x4  // PAGE_READWRITE
 
 // `GetStdHandle(STD_OUTPUT_HANDLE)` — the handle `osWriteStdout` writes to (P1.2 wave A). The
 // parameter is a DWORD, so the 32-bit `mov` (which zero-extends) puts exactly (DWORD)-11 in ECX. The
 // panic path's `StdErrorHandle` is (DWORD)-12; this is its stdout sibling.
 let StdOutputHandle = 0xFFFFFFF5  // (DWORD)-11 — GetStdHandle's STD_OUTPUT_HANDLE
+
 // WriteFile's `lpOverlapped` — NULL for a synchronous write.
 let NullPointer = 0x0
+
 // The two WriteFile outgoing stack SLOTS `__print_string`'s frame reserves, past the shadow space:
 // slot 0 = the 5th argument `lpOverlapped` (NULL), slot 1 = a scratch DWORD `lpNumberOfBytesWritten`
 // points at (WriteFile writes the count there; it must be a valid pointer, not NULL). These are SLOT
@@ -962,7 +964,7 @@ type StdToX64Lowering
 			storeIndirect(addrId, offset, valueId, valueType) then self.lowerStoreIndirect(addrId, offset: offset, valueId: valueId, valueType: valueType, dstBlock: dstBlock)
 			osAllocPages(resultId, sizeId) then self.lowerOsAllocPages(resultId, sizeId: sizeId, dstBlock: dstBlock)
 			osWriteStdout(bufId, lenId) then self.lowerOsWriteStdout(bufId, lenId: lenId, dstBlock: dstBlock)
-			rdataAddr(resultId, label) then self.targetModule.appendOp(dstBlock, op: TargetOp.leaRegRdata(X64VReg.virtual(resultId), label: label))
+			rdataAddr(resultId, label) then self.targetModule.appendOp(dstBlock, op: TargetOp.leaRegRdata(TargetVReg.virtual(resultId), label: label))
 		end 'lower'
 	end 'lowerBodyOp'
 
@@ -1001,7 +1003,7 @@ type StdToX64Lowering
 			self.lowerFloatConst(resultId, value: value, valueType: valueType, dstBlock: dstBlock)
 			return
 		end 'float'
-		self.targetModule.appendOp(dstBlock, op: constMaterializationOp(X64VReg.virtual(resultId), value: value))
+		self.targetModule.appendOp(dstBlock, op: constMaterializationOp(TargetVReg.virtual(resultId), value: value))
 	end 'lowerConst'
 
 	// Materialize a FLOAT constant: register its IEEE bits as a `.rdata` island and load them with
@@ -1024,7 +1026,7 @@ type StdToX64Lowering
 		requireScalarDouble(valueType, what: "lowerFloatConst")
 		let bytes = scalarImage(value, byteCount: stdTypeStorageBytes(valueType))
 		let label = self.globalData.registerRdataConstant(FloatConstantLabelPrefix, bytes: bytes)
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movsdRegRip(X64VReg.virtual(resultId), label: label.toByteArray()))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movsdRegRip(TargetVReg.virtual(resultId), label: label.toByteArray()))
 	end 'lowerFloatConst'
 
 	// Lower a Std binary op (both operands registers) to x64. NO seed `mov` is emitted
@@ -1041,9 +1043,9 @@ type StdToX64Lowering
 			return
 		end 'float'
 
-		let dest = X64VReg.virtual(resultId)
-		let lhsReg = X64VReg.virtual(lhs)
-		let rhsReg = X64VReg.virtual(rhs)
+		let dest = TargetVReg.virtual(resultId)
+		let lhsReg = TargetVReg.virtual(lhs)
+		let rhsReg = TargetVReg.virtual(rhs)
 		match opcode 'op'
 			add then self.targetModule.appendOp(dstBlock, op: TargetOp.leaRegRegReg(dest, base: lhsReg, index: rhsReg))
 			sub then self.targetModule.appendOp(dstBlock, op: TargetOp.subRegReg(dest, lhs: lhsReg, rhs: rhsReg))
@@ -1082,9 +1084,9 @@ type StdToX64Lowering
 	// defined by. See StdBinOpcode.
 	function lowerFloatBinOp(resultId ValueId, lhs ValueId, rhs ValueId, opcode StdBinOpcode, operandType StdType, dstBlock IrBlock)
 		requireScalarDouble(operandType, what: "lowerFloatBinOp")
-		let dest = X64VReg.virtual(resultId)
-		let lhsReg = X64VReg.virtual(lhs)
-		let rhsReg = X64VReg.virtual(rhs)
+		let dest = TargetVReg.virtual(resultId)
+		let lhsReg = TargetVReg.virtual(lhs)
+		let rhsReg = TargetVReg.virtual(rhs)
 		match opcode 'op'
 			add then self.targetModule.appendOp(dstBlock, op: TargetOp.addsdRegReg(dest, lhs: lhsReg, rhs: rhsReg))
 			sub then self.targetModule.appendOp(dstBlock, op: TargetOp.subsdRegReg(dest, lhs: lhsReg, rhs: rhsReg))
@@ -1131,8 +1133,8 @@ type StdToX64Lowering
 		end 'o'
 	end 'shiftInstructionOf'
 
-	function lowerShiftCl(dest X64VReg, lhsReg X64VReg, countId ValueId, instr ShiftInstruction, dstBlock IrBlock)
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(X64VReg.physical(X64Register.rcx), srcReg: X64VReg.virtual(countId)))
+	function lowerShiftCl(dest TargetVReg, lhsReg TargetVReg, countId ValueId, instr ShiftInstruction, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(countId)))
 		match instr 'i'
 			shl then self.targetModule.appendOp(dstBlock, op: TargetOp.shlRegCl(dest, lhs: lhsReg))
 			sar then self.targetModule.appendOp(dstBlock, op: TargetOp.sarRegCl(dest, lhs: lhsReg))
@@ -1144,7 +1146,7 @@ type StdToX64Lowering
 	// `constFitsBinOpImmediate` promises 0..63 for a shift, and this is where that promise is
 	// collected. A fold that ever broke it would fail loudly here rather than silently
 	// truncating a count.
-	function lowerShiftImm8(dest X64VReg, base X64VReg, imm Imm32, instr ShiftInstruction, dstBlock IrBlock)
+	function lowerShiftImm8(dest TargetVReg, base TargetVReg, imm Imm32, instr ShiftInstruction, dstBlock IrBlock)
 		let count = imm as ShiftCount
 		match instr 'i'
 			shl then self.targetModule.appendOp(dstBlock, op: TargetOp.shlRegImm8(dest, lhs: base, imm: count))
@@ -1175,8 +1177,8 @@ type StdToX64Lowering
 			panic("lowerUnaryOp: no float form of {opcode.rawValue} — an f64 negate flips the sign bit (`xorpd` against a .rdata mask), not the integer `neg`, and nothing lowers to one yet (P1.0d.4 reaches negative floats through `0.0 - x`)")
 		end 'float'
 
-		let dest = X64VReg.virtual(resultId)
-		let src = X64VReg.virtual(operand)
+		let dest = TargetVReg.virtual(resultId)
+		let src = TargetVReg.virtual(operand)
 		match opcode 'op'
 			neg then self.targetModule.appendOp(dstBlock, op: TargetOp.negReg(dest, src: src))
 			bitNot then self.targetModule.appendOp(dstBlock, op: TargetOp.notReg(dest, src: src))
@@ -1211,8 +1213,8 @@ type StdToX64Lowering
 	// literal needs no register and the op sets no flags); `mul` to the 3-operand `imul
 	// dest, lhs, imm`. None is two-address, so no reuse copy is ever needed.
 	function lowerBinOpImm(resultId ValueId, lhs ValueId, imm Imm32, opcode StdBinOpcode, dstBlock IrBlock)
-		let dest = X64VReg.virtual(resultId)
-		let base = X64VReg.virtual(lhs)
+		let dest = TargetVReg.virtual(resultId)
+		let base = TargetVReg.virtual(lhs)
 		match opcode 'op'
 			add then self.targetModule.appendOp(dstBlock, op: TargetOp.leaRegRegImm32(dest, base: base, disp: imm))
 			// `a - imm` is `lea dest, [base - imm]`, a NEGATIVE displacement. `foldConstOperands`
@@ -1246,17 +1248,17 @@ type StdToX64Lowering
 	// `globalAddr` → `lea dest, [rip + <label>]`. The address is computed, not loaded; the PE
 	// writer supplies the displacement once `.data` has an RVA.
 	function lowerGlobalAddr(resultId ValueId, label ByteArray, dstBlock IrBlock)
-		self.targetModule.appendOp(dstBlock, op: TargetOp.leaRegGlobal(X64VReg.virtual(resultId), label: label))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.leaRegGlobal(TargetVReg.virtual(resultId), label: label))
 	end 'lowerGlobalAddr'
 
 	// `loadIndirect` → `mov dest, [base + disp]` / `movzx dest, byte [base + disp]`.
 	function lowerLoadIndirect(resultId ValueId, addrId ValueId, offset ByteOffset, valueType StdType, dstBlock IrBlock)
-		self.targetModule.appendOp(dstBlock, op: TargetOp.loadRegBaseDisp(X64VReg.virtual(resultId), base: X64VReg.virtual(addrId), disp: memoryDisplacement(offset), width: x64AccessWidthFor(valueType)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.loadRegBaseDisp(TargetVReg.virtual(resultId), base: TargetVReg.virtual(addrId), disp: memoryDisplacement(offset), width: x64AccessWidthFor(valueType)))
 	end 'lowerLoadIndirect'
 
 	// `storeIndirect` → `mov [base + disp], src`.
 	function lowerStoreIndirect(addrId ValueId, offset ByteOffset, valueId ValueId, valueType StdType, dstBlock IrBlock)
-		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(X64VReg.virtual(addrId), disp: memoryDisplacement(offset), src: X64VReg.virtual(valueId), width: x64AccessWidthFor(valueType)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(TargetVReg.virtual(addrId), disp: memoryDisplacement(offset), src: TargetVReg.virtual(valueId), width: x64AccessWidthFor(valueType)))
 	end 'lowerStoreIndirect'
 
 	// Lower a Std `div`/`mod` to the x64 `idiv` sequence. x64 `idiv r/m64` divides the
@@ -1277,10 +1279,10 @@ type StdToX64Lowering
 	// delivered by the runtime fault handler (a Workstream-R / M6 deliverable), NOT by a
 	// compiler guard — so `x / 0` here is correct-but-raw-#DE for now, by design.
 	function lowerDivMod(resultId ValueId, lhs ValueId, rhs ValueId, resultReg X64Register, dstBlock IrBlock)
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(X64VReg.physical(X64Register.rax), srcReg: X64VReg.virtual(lhs)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rax), srcReg: TargetVReg.virtual(lhs)))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.cqo)
-		self.targetModule.appendOp(dstBlock, op: TargetOp.idivReg(X64VReg.virtual(rhs)))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(X64VReg.virtual(resultId), srcReg: X64VReg.physical(resultReg)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.idivReg(TargetVReg.virtual(rhs)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: x64PhysReg(resultReg)))
 	end 'lowerDivMod'
 
 	// Lower a Std `param` to the entry move that captures the parameter's incoming ABI
@@ -1292,7 +1294,7 @@ type StdToX64Lowering
 	// cross-param forbidding it drives is what stops one capture's DESTINATION from
 	// clobbering a later capture's incoming register before it is read.
 	function lowerParam(resultId ValueId, index ParamCount, dstBlock IrBlock)
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(X64VReg.virtual(resultId), srcReg: X64VReg.physical(argRegisterAt(index))))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: x64PhysReg(argRegisterAt(index))))
 	end 'lowerParam'
 
 	// Lower a Std `call` to the x64 call sequence: move each argument into its ABI
@@ -1313,10 +1315,10 @@ type StdToX64Lowering
 	function lowerCall(resultId ValueId, callee ByteArray, args ValueIdArray, dstBlock IrBlock)
 		for k in 0 upto args.count() 'eachArg'
 			let argId = try args.get(k) otherwise panic("lowerCall: args.get OOB at {k}")
-			self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(X64VReg.physical(argRegisterAt(k)), srcReg: X64VReg.virtual(argId)))
+			self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(argRegisterAt(k)), srcReg: TargetVReg.virtual(argId)))
 		end 'eachArg'
 		self.targetModule.appendOp(dstBlock, op: TargetOp.callDirect(callee))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(X64VReg.virtual(resultId), srcReg: X64VReg.physical(X64Register.r8)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: x64PhysReg(X64Register.r8)))
 	end 'lowerCall'
 
 	// Lower `osAllocPages` to the x64-windows page source: `VirtualAlloc(NULL, size,
@@ -1334,13 +1336,13 @@ type StdToX64Lowering
 	// `IatSlot.VirtualAlloc`, whose spelling and import live in `Targets/Windows/PeWriter.maxon`.
 	function lowerOsAllocPages(resultId ValueId, sizeId ValueId, dstBlock IrBlock)
 		// lpAddress = NULL: the OS picks the base. A zeroed rcx is the request, not a missing argument.
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(X64VReg.physical(X64Register.rcx), value: VirtualAllocLetOsChooseBase))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(X64VReg.physical(X64Register.rdx), srcReg: X64VReg.virtual(sizeId)))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(X64VReg.physical(X64Register.r8), value: VirtualAllocCommitAndReserve))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(X64VReg.physical(X64Register.r9), value: VirtualAllocPageReadWrite))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rcx), value: VirtualAllocLetOsChooseBase))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdx), srcReg: TargetVReg.virtual(sizeId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r8), value: VirtualAllocCommitAndReserve))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r9), value: VirtualAllocPageReadWrite))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.VirtualAlloc)))
 		// RAX, not R8 — see above. This single line is the whole reason the op exists.
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(X64VReg.virtual(resultId), srcReg: X64VReg.physical(X64Register.rax)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: x64PhysReg(X64Register.rax)))
 	end 'lowerOsAllocPages'
 
 	// Lower `osWriteStdout(buf, len)` to `GetStdHandle(STD_OUTPUT_HANDLE)` + `WriteFile(handle, buf,
@@ -1359,17 +1361,17 @@ type StdToX64Lowering
 	// `__print_string`'s `outgoingArgSize` region.
 	function lowerOsWriteStdout(bufId ValueId, lenId ValueId, dstBlock IrBlock)
 		// GetStdHandle(STD_OUTPUT_HANDLE) -> RAX (the handle).
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(X64VReg.physical(X64Register.rcx), value: StdOutputHandle))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rcx), value: StdOutputHandle))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.GetStdHandle)))
 
 		// WriteFile(handle, buffer, length, &written, NULL). The handle move (rcx <- rax) FIRST, before
 		// rax is reused as the NULL scratch below.
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(X64VReg.physical(X64Register.rcx), srcReg: X64VReg.physical(X64Register.rax)))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(X64VReg.physical(X64Register.rdx), srcReg: X64VReg.virtual(bufId)))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(X64VReg.physical(X64Register.r8), srcReg: X64VReg.virtual(lenId)))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.leaRegRegImm32(X64VReg.physical(X64Register.r9), base: X64VReg.physical(X64Register.rsp), disp: writeFileArgDisp(WriteFileBytesWrittenSlot)))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(X64VReg.physical(X64Register.rax), value: NullPointer))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(X64VReg.physical(X64Register.rsp), disp: writeFileArgDisp(WriteFileOverlappedSlot), src: X64VReg.physical(X64Register.rax), width: X64AccessWidth.word64))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: x64PhysReg(X64Register.rax)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdx), srcReg: TargetVReg.virtual(bufId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.r8), srcReg: TargetVReg.virtual(lenId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.leaRegRegImm32(x64PhysReg(X64Register.r9), base: x64PhysReg(X64Register.rsp), disp: writeFileArgDisp(WriteFileBytesWrittenSlot)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rax), value: NullPointer))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(x64PhysReg(X64Register.rsp), disp: writeFileArgDisp(WriteFileOverlappedSlot), src: x64PhysReg(X64Register.rax), width: X64AccessWidth.word64))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.WriteFile)))
 	end 'lowerOsWriteStdout'
 
@@ -1378,7 +1380,7 @@ type StdToX64Lowering
 	// changes only the compare INSTRUCTION, never what the compare MEANS. The literal
 	// occupies no register.
 	function lowerCmpImm(resultId ValueId, lhs ValueId, imm Imm32, pred StdCmpPred, dstBlock IrBlock)
-		self.targetModule.appendOp(dstBlock, op: TargetOp.cmpRegImm32(X64VReg.virtual(lhs), imm: imm))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.cmpRegImm32(TargetVReg.virtual(lhs), imm: imm))
 		// INTEGER by construction, and `i64` is not a guess: `cmpImm` carries no `operandType`
 		// because no SSE form takes an immediate, so `foldConstOperands` refuses a float rhs and a
 		// float compare can never reach this variant. See `recordFusableCompare`'s twin of this.
@@ -1403,7 +1405,7 @@ type StdToX64Lowering
 			self.lowerFloatCmp(resultId, lhs: lhs, rhs: rhs, pred: pred, operandType: operandType, dstBlock: dstBlock)
 			return
 		end 'float'
-		self.targetModule.appendOp(dstBlock, op: TargetOp.cmpRegReg(X64VReg.virtual(lhs), rhsReg: X64VReg.virtual(rhs)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.cmpRegReg(TargetVReg.virtual(lhs), rhsReg: TargetVReg.virtual(rhs)))
 		self.materializeCompareIfRead(resultId, pred: pred, operandType: operandType, dstBlock: dstBlock)
 	end 'lowerCmp'
 
@@ -1420,7 +1422,7 @@ type StdToX64Lowering
 		let swapped = floatCmpSwapsOperands(pred)
 		let cmpLhs = rhs if swapped else lhs
 		let cmpRhs = lhs if swapped else rhs
-		self.targetModule.appendOp(dstBlock, op: TargetOp.ucomisdRegReg(X64VReg.virtual(cmpLhs), rhs: X64VReg.virtual(cmpRhs)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.ucomisdRegReg(TargetVReg.virtual(cmpLhs), rhs: TargetVReg.virtual(cmpRhs)))
 		self.materializeCompareIfRead(resultId, pred: pred, operandType: operandType, dstBlock: dstBlock)
 	end 'lowerFloatCmp'
 
@@ -1435,7 +1437,7 @@ type StdToX64Lowering
 			self.materializeFloatEquality(resultId, pred: pred, dstBlock: dstBlock)
 			return
 		end 'floatEquality'
-		self.targetModule.appendOp(dstBlock, op: TargetOp.setccReg(X64VReg.virtual(resultId), cond: condCodeForPred(pred, isFloat: stdTypeIsFloat(operandType))))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.setccReg(TargetVReg.virtual(resultId), cond: condCodeForPred(pred, isFloat: stdTypeIsFloat(operandType))))
 	end 'materializeCompareIfRead'
 
 	// MATERIALIZE a float `==`/`!=` — the one compare whose boolean a single `setcc` cannot write.
@@ -1483,7 +1485,7 @@ type StdToX64Lowering
 	function materializeFloatEquality(resultId ValueId, pred StdCmpPred, dstBlock IrBlock)
 		match pred 'p'
 			// `!=` IS the inequality value — it lands straight in its own virtual, one def, done.
-			ne then self.appendFloatInequality(X64VReg.virtual(resultId), dstBlock: dstBlock)
+			ne then self.appendFloatInequality(TargetVReg.virtual(resultId), dstBlock: dstBlock)
 			eq then self.appendFloatEqualityAsNotInequality(resultId, dstBlock: dstBlock)
 			lt to ge then panic("materializeFloatEquality: {pred.name} is an ORDERED float predicate — it materializes with a single `seta`/`setae` on swapped operands and has no parity bit to fold")
 		end 'p'
@@ -1497,9 +1499,9 @@ type StdToX64Lowering
 	// the fold cannot destroy anything a later op still needs. `dest` itself is defined AT the
 	// `lea`, so it is not live across either — it may legally be coloured into one of them, and
 	// `lea dest, [rcx + rdx]` reads both inputs before writing its destination.
-	function appendFloatInequality(dest X64VReg, dstBlock IrBlock)
-		let unequal = X64VReg.physical(FloatInequalityUnequalReg)
-		let unordered = X64VReg.physical(FloatInequalityUnorderedReg)
+	function appendFloatInequality(dest TargetVReg, dstBlock IrBlock)
+		let unequal = x64PhysReg(FloatInequalityUnequalReg)
+		let unordered = x64PhysReg(FloatInequalityUnorderedReg)
 		self.targetModule.appendOp(dstBlock, op: TargetOp.setccReg(unequal, cond: X64CondCode.notEqual))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.setccReg(unordered, cond: X64CondCode.parity))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.leaRegRegReg(dest, base: unequal, index: unordered))
@@ -1510,10 +1512,10 @@ type StdToX64Lowering
 	// already uses (`BoolFalseImm`), and the reason the complement needs no `xor`: `xorRegImm32` is
 	// two-address, so it would want a reuse input, which is the shape the header rules out.
 	function appendFloatEqualityAsNotInequality(resultId ValueId, dstBlock IrBlock)
-		let inequality = X64VReg.physical(FloatInequalityUnequalReg)
+		let inequality = x64PhysReg(FloatInequalityUnequalReg)
 		self.appendFloatInequality(inequality, dstBlock: dstBlock)
 		self.targetModule.appendOp(dstBlock, op: TargetOp.cmpRegImm32(inequality, imm: BoolFalseImm))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.setccReg(X64VReg.virtual(resultId), cond: X64CondCode.equal))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.setccReg(TargetVReg.virtual(resultId), cond: X64CondCode.equal))
 	end 'appendFloatEqualityAsNotInequality'
 
 	// Lower a Std `condBranch` to `jcc <then>` + `jmp <else>`. The `jcc` is a body op and the
@@ -1588,7 +1590,7 @@ type StdToX64Lowering
 	// when the condition is a value rather than a fused compare's flags.
 	function branchConditionCode(condId ValueId, dstBlock IrBlock) returns X64CondCode
 		let pred = try self.cmpPreds.get(condId) otherwise 'notFused'
-			self.targetModule.appendOp(dstBlock, op: TargetOp.cmpRegImm32(X64VReg.virtual(condId), imm: BoolFalseImm))
+			self.targetModule.appendOp(dstBlock, op: TargetOp.cmpRegImm32(TargetVReg.virtual(condId), imm: BoolFalseImm))
 			return X64CondCode.notEqual
 		end 'notFused'
 		return condCodeForPred(pred, isFloat: self.fusedFloatCmps.contains(condId))
@@ -1894,7 +1896,7 @@ type StdToX64Lowering
 		if stdReturnTypeIsFloat(returnType) 'float'
 			panic("lowerStdToX64: float return values (XMM0) are not supported until M3 — the `return 42` slice is integer-only")
 		end 'float'
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(X64VReg.physical(X64Register.r8), srcReg: X64VReg.virtual(retValId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.r8), srcReg: TargetVReg.virtual(retValId)))
 	end 'emitPrimaryReturnMove'
 end 'StdToX64Lowering'
 

@@ -47,6 +47,7 @@ let BitWordShift = 6
 let PopcountPairMask = 0x5555555555555555
 let PopcountNibbleMask = 0x3333333333333333
 let PopcountByteMask = 0x0F0F0F0F0F0F0F0F
+
 // The final fold leaves the whole count in byte 0 (it is at most 64, so it cannot carry out of a byte).
 let PopcountByteSelect = 0xFF
 
@@ -173,23 +174,66 @@ function popcountWord(word MachineWord) returns WordBitCount
 end 'popcountWord'
 
 // ==========================================================================
-// Physical-register masks (one bit per X64Register number 0..31)
+// Physical-register masks (one bit per RegNum in the UNIFIED register file)
 // ==========================================================================
 
-// The 32 x64 registers the allocator colors into: 16 GPRs (0..15) then 16 XMMs
-// (16..31). A RegMask (TargetDialect) is a bit per register number, spanning both.
+// The width of the UNIFIED register file — one allocator serves both ISAs (USER RULING
+// 2026-07-17), so `RegNum`, the masks and the allocator's data structures are sized to the
+// WIDER of the two files. x64 has 32 registers (GPR 0..15, XMM 16..31); arm64 has 63 (GPR
+// x0..x30 = 0..30, SIMD d0..d31 = 31..62). So this is arm64's 63 — and, being one past the
+// last arm64 register AND above every x64 register, it is the "no register" SENTINEL that
+// `Uncolored` / `NoFixedHint` / `noRegister` share for BOTH ISAs.
 //
-// This number is the X64Register enum's case count, and `assertRegisterFileMatchesEnum` holds it to
-// that once per module — so of the three copies of "the register file is 32 wide", this one cannot
-// drift from the enum that defines it.
+// ⚠ x64 uses only the low 32 of this file. It therefore OVER-SIZES a handful of allocator
+// scratch structures (the Hall census columns, `lowestClearRegister`'s scan) by a bounded
+// CONSTANT factor — the cost of one shared file. It changes NO x64 codegen: a value's pool is
+// its own class's registers (0..31 for x64), so `lowestClearRegister` never returns 32..62 and
+// no x64 op ever names one. Verified byte-identical against the committed x64 goldens.
 //
-// `RegNum`'s upper bound is the same 32 a THIRD time, RESPELLED as a literal because a typealias
-// range bound must be a literal (E2010) — a range cannot name a constant. It is the one copy NOTHING
-// can check: a range bound is erased into the range check itself and is readable by no expression,
-// so there is nothing to compare against. It must be moved BY HAND with the other two; the failure
-// is at least loud rather than silent (a widened file with a stale `RegNum` range-check-panics on
-// the new registers rather than mis-encoding them).
-export let RegisterFileSize = 32
+// ⚠ THIS IS NOT THE PER-TARGET FILE SIZE. The class masks and the enum-vs-file check ask a
+// SPECIFIC target's file (`RegisterFile.size` — 32 for x64, 63 for arm64), never this unified
+// width; using this here would put x64's XMM class mask at bits 16..62 and break the
+// caller-saved clobber assert. See `RegisterFile` and `classRegisterMask`.
+//
+// `RegNum`'s upper bound is this same 63, RESPELLED as a literal because a typealias range bound
+// must be a literal (E2010) — a range cannot name a constant. It is the one copy NOTHING can
+// check: a range bound is erased into the range check itself and is readable by no expression, so
+// there is nothing to compare against. It moves BY HAND with this constant; the failure is at
+// least loud (a widened file with a stale `RegNum` range-check-panics rather than mis-encoding).
+export let RegisterFileSize = 63
+
+// A per-TARGET register file: how many registers it has, and where its GPR/vector boundary
+// falls. The class masks and the "is this pool full?" denominators are asked against THIS, never
+// against the unified `RegisterFileSize` — because the boundary is irreducibly per-ISA (x64 files
+// its XMMs at 16, arm64 its SIMD at 31) and the file WIDTH caps the vector class mask (x64's XMMs
+// stop at 31, arm64's SIMD at 62). Derived from the target so the two numbers live in one place.
+export type RegisterFile
+	// One past the highest register NUMBER of this file (32 for x64, 63 for arm64) — a bit width.
+	export let size as RegCount
+	// The FIRST vector register's number — the GPR/vector boundary (16 for x64, 31 for arm64).
+	export let firstVector as RegNum
+
+	export static function create(size RegCount, firstVector RegNum) returns RegisterFile
+		return Self{size: size, firstVector: firstVector}
+	end 'create'
+end 'RegisterFile'
+
+// The x64 register file: 32 registers, XMMs from 16. Its `size` (32) is the X64Register enum's
+// case count, held to it by `assertRegisterFileMatchesEnum`; its boundary is `FirstXmmRegisterNumber`.
+export function x64RegisterFile() returns RegisterFile
+	return RegisterFile.create(32, firstVector: FirstXmmRegisterNumber)
+end 'x64RegisterFile'
+
+// The arm64 register file: 63 registers — GPR x0..x30 (0..30), SIMD d0..d31 (31..62). The SIMD
+// boundary at 31 is arm64's, NOT x64's 16; one allocator, two boundaries, chosen by the target.
+//
+// The per-CPU `RegisterFile`s are asked for by name (`x64RegisterFile` / `arm64RegisterFile`), not
+// through a `registerFileFor(target)` dispatcher — the pool masks already dispatch on `target.cpu`
+// and each arm names its own file. Wave 1, threading the file through the shared splitter/census so
+// their class boundary becomes per-ISA, is the natural home for a `registerFileFor(target)`.
+export function arm64RegisterFile() returns RegisterFile
+	return RegisterFile.create(63, firstVector: 31)
+end 'arm64RegisterFile'
 
 // Bytes per spill slot: one 64-bit machine word. Every Std value is a signed i64, so a
 // spilled value occupies exactly 8 bytes. The cold-spill splitter (SplitLiveRanges) sets
@@ -206,20 +250,26 @@ export typealias RegCount = int(0 to u64.max)
 // A PHYSICAL REGISTER NUMBER: an `X64Register`'s raw value, and the key every register mask, the
 // coloring column and the parallel-move plans are stated in.
 //
-// BOUNDED BY THE REGISTER FILE, and the bound goes to `RegisterFileSize` INCLUSIVE — 32, not 31 —
-// because one-past-the-last-register is the "no register" value three sentinels share:
+// BOUNDED BY THE UNIFIED REGISTER FILE, and the bound goes to `RegisterFileSize` INCLUSIVE — 63,
+// not 62 — because one-past-the-last-register is the "no register" value three sentinels share:
 // `lowestClearRegister`'s "every register is blocked", the colorer's `Uncolored`, and its
 // `NoFixedHint`. Admitting exactly that one extra value is what lets those sentinels live in the
-// same column as real registers without a second type.
+// same column as real registers without a second type. 63 covers arm64's SIMD d31 (62); x64 uses
+// only 0..31, and 63 is a valid sentinel for it too (no x64 register is that high).
 //
 // It was `MachineWord` — the alias for a raw 64-bit word, which is also what a `movRegImm`
 // IMMEDIATE and a bitset WORD are. A register number and a 64-bit constant are not the same kind
 // of thing, and this is the narrowest range in the allocator, so it is the one worth stating.
-export typealias RegNum = int(0 to 32)
+export typealias RegNum = int(0 to 63)
 
-// The FIRST XMM's register number — the boundary between the two files, and the bit that
-// classifies one. Named because `regClassOf` and both class masks would otherwise each spell
-// a bare 16, which is the same fact written three times.
+// The FIRST XMM's register number in the X64 file — its GPR/XMM boundary, and the bit that
+// classifies one x64 register. Named because `regClassOf` and `x64RegisterFile` would otherwise
+// each spell a bare 16, which is the same fact written twice.
+//
+// ⚠ THIS IS THE X64 BOUNDARY, NOT A UNIVERSAL ONE. arm64 files its SIMD at 31 — one allocator,
+// two boundaries — which is why the per-target `RegisterFile.firstVector` is what the class masks
+// read, and `regClassOf` (x64-boundary) is used only where the register is known to be x64's or
+// is an ABI operand below both boundaries (see `regClassOf`).
 //
 // RESPELLED as a literal rather than read off `X64Register.xmm0.rawValue`: a top-level
 // `let` is const-evaluated, and the evaluator does not fold `.rawValue` (E2045, verified —
@@ -247,14 +297,23 @@ export let FirstXmmRegisterNumber = 16 as RegNum
 // magnitude apart, and the position is the whole of the difference.
 //
 // ⚠ `allCases.count()` is the right comparand only because X64Register is CONTIGUOUS and holds
-// nothing but registers (rax=0..r15=15, xmm0=16..xmm15=31). `RegisterFileSize` means "one past the
-// highest register NUMBER" — a bit width — and a case COUNT equals that only under those two
-// properties. Add a non-register case or a gap and this check starts lying: fix it then, do not
-// widen the constant to satisfy it.
+// nothing but registers (rax=0..r15=15, xmm0=16..xmm15=31). `x64RegisterFile().size` means "one
+// past the highest x64 register NUMBER" — a bit width — and a case COUNT equals that only under
+// those two properties. Add a non-register case or a gap and this check starts lying: fix it then,
+// do not widen the constant to satisfy it.
 export function assertRegisterFileMatchesEnum()
-	if RegisterFileSize != X64Register.allCases.count() 'fileSize'
-		panic("assertRegisterFileMatchesEnum: RegisterFileSize is {RegisterFileSize} but the X64Register enum has {X64Register.allCases.count()} cases — every mask built from `1 shl RegisterFileSize` is now the wrong width, so a register outside it is unaddressable by `fullRegisterMask` and a `RegNum` past the typealias bound range-check-panics. Move RegisterFileSize, RegNum's bound and the enum together.")
+	let x64File = x64RegisterFile()
+	if x64File.size != X64Register.allCases.count() 'fileSize'
+		panic("assertRegisterFileMatchesEnum: x64RegisterFile().size is {x64File.size} but the X64Register enum has {X64Register.allCases.count()} cases — every x64 class mask is now the wrong width, so a register outside it is unaddressable and the caller-saved clobber assert drifts. Move x64RegisterFile().size and the enum together.")
 	end 'fileSize'
+
+	// The UNIFIED file must be wide enough to hold every target's registers AND the shared "no
+	// register" sentinel (`RegisterFileSize` itself). If it shrank below a target's file, that
+	// target's registers would be unaddressable by `fullRegisterMask` and its sentinel would collide
+	// with a real register.
+	if RegisterFileSize < x64File.size 'unifiedTooSmall'
+		panic("assertRegisterFileMatchesEnum: RegisterFileSize {RegisterFileSize} is smaller than the x64 file ({x64File.size}) — the unified register file must hold every target's registers plus the sentinel. Move RegisterFileSize and RegNum's bound together.")
+	end 'unifiedTooSmall'
 
 	// ⭐ ASKED AS "THE REGISTER AT THE BOUNDARY IS xmm0", NOT AS A COMPARISON OF TWO NUMBERS — which is
 	// `value == Type.case`, the form E3097 demands. That is not a workaround for the diagnostic; it is
@@ -283,8 +342,16 @@ export function assertRegisterFileMatchesEnum()
 	end 'xmmBoundary'
 end 'assertRegisterFileMatchesEnum'
 
-// The CLASS of a physical register, derived from its number — the ONE place the GPR/XMM
-// boundary is decided.
+// The CLASS of a physical register in the X64 file, derived from its number.
+//
+// ⚠ THIS USES THE X64 BOUNDARY (16), and every caller this rung is x64-correct: the x64 encoder's
+// `registerClass`, and the two consumers that classify PHYSICAL OPERANDS (`operandClass`,
+// `assertColouredInClass`). A physical operand is always an ABI arg/return register (`RegNum` < 16,
+// GPR under both boundaries) or a vector register (`RegNum` >= 31, vector under both), so the x64
+// boundary classifies every operand that actually appears correctly for BOTH ISAs. A COLORED arm64
+// GPR in x19..x28 would be misclassified — but arm64 does not run the allocator this rung; wiring
+// it (wave 1) threads the target's `RegisterFile` here. Colored registers of the target running the
+// allocator are classified against `RegisterFile.firstVector` via the class masks below.
 export function regClassOf(reg RegNum) returns RegClass
 	return RegClass.xmm if reg >= FirstXmmRegisterNumber else RegClass.gpr
 end 'regClassOf'
@@ -309,10 +376,16 @@ end 'regClassOf'
 // exactly the trap the paragraph above describes, at smaller scale: every unconstrained int
 // reads `14 < 16` ⇒ constrained. The width of a file and the width of a pool are two facts;
 // only one of them is a denominator.
-export function classRegisterMask(class RegClass) returns RegMask
+// Taken against a per-target `RegisterFile`, NOT the unified `RegisterFileSize`: the GPR/vector
+// boundary (`file.firstVector`) and the file's TOP (`file.size`) are both per-ISA — x64 splits at
+// 16 and stops at 32, arm64 splits at 31 and stops at 63. Using the unified 63 as the top would put
+// x64's XMM mask at bits 16..62, and the caller-saved clobber assert (which reads all-XMMs-caller-
+// saved) would then include phantom registers 32..62 and fail. So the vector mask is CAPPED at the
+// target's own file width.
+export function classRegisterMask(class RegClass, file RegisterFile) returns RegMask
 	return match class 'class'
-		gpr gives (1 shl FirstXmmRegisterNumber) - 1
-		xmm gives ((1 shl RegisterFileSize) - 1) and not ((1 shl FirstXmmRegisterNumber) - 1)
+		gpr gives (1 shl file.firstVector) - 1
+		xmm gives ((1 shl file.size) - 1) and not ((1 shl file.firstVector) - 1)
 	end 'class'
 end 'classRegisterMask'
 

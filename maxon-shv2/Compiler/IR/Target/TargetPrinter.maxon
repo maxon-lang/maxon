@@ -25,6 +25,7 @@ let OpIndent = "    "
 // site rather than baked into all 16 match arms — the arms stay mnemonic-only
 // and the namespace lives in one constant.
 let X64OpPrefix = "x64."
+let Arm64OpPrefix = "arm64."
 let FuncHeaderPrefix = "func @"
 
 // Serialize a whole TargetModule: each function in module order (the entry stub
@@ -141,8 +142,19 @@ end 'printTargetFunction'
 // a user error, so it panics rather than printing a sentinel.
 function printOpLine(module TargetModule, opIdx OpIndex, blocks IrBlockArray) returns String
 	let op = try module.ops.get(opIdx) otherwise panic("printOpLine: op index {opIdx} out of range in module.ops")
-	return "{OpIndent}{X64OpPrefix}{formatTargetOp(op, blocks: blocks)}\n"
+	return "{OpIndent}{opIsaPrefix(op)}{formatTargetOp(op, blocks: blocks)}\n"
 end 'printOpLine'
+
+// The ISA namespace an op prints under, chosen by which BAND it falls in — the x64 arms print
+// `x64.`, the arm64 arms `arm64.`. A module is single-target, so this never mixes within one
+// printout; deriving the prefix from the op (rather than threading the target through the printer)
+// keeps the x64 output byte-identical and the arm64 output correct from the one exhaustive match.
+function opIsaPrefix(op TargetOp) returns String
+	match op 'p'
+		prologue to leaRegRdata then return X64OpPrefix
+		arm64Ret to arm64FpLoadRdata then return Arm64OpPrefix
+	end 'p'
+end 'opIsaPrefix'
 
 // Render one TargetOp as `<mnemonic> <operands>` (the `x64.` namespace is added
 // by the caller). EXHAUSTIVE over every TargetOp variant — see the file header:
@@ -205,16 +217,90 @@ function formatTargetOp(op TargetOp, blocks IrBlockArray) returns String
 		// The LABEL is printed for the same reason `leaRegGlobal`'s is: a fragment showing which
 		// `.rdata` record a `lea` names makes a wrong record a reviewable diff.
 		leaRegRdata(dest, label) gives "leaRegRdata {vregName(dest)}, [rip + {String.from(label)}]"
+		// --- arm64 SCALAR-CORE band ---
+		//
+		// Each arm64 operand prints through `arm64VregName` (its `RegNum` mapped to an arm64 register
+		// name), and each condition through the `Arm64CondCode` member name. The mnemonics are the
+		// arm64 spellings; the `arm64.` namespace is added by `opIsaPrefix` at the print site.
+		arm64Ret gives "ret"
+		arm64Branch(targetBlockId) gives "b {String.from(resolveBlockLabel(targetBlockId, blocks: blocks))}"
+		arm64CondBranch(cond, targetBlockId) gives "b.{cond.name} {String.from(resolveBlockLabel(targetBlockId, blocks: blocks))}"
+		arm64Cbz(reg, targetBlockId) gives "cbz {arm64VregName(reg)}, {String.from(resolveBlockLabel(targetBlockId, blocks: blocks))}"
+		arm64Cbnz(reg, targetBlockId) gives "cbnz {arm64VregName(reg)}, {String.from(resolveBlockLabel(targetBlockId, blocks: blocks))}"
+		arm64MovImm(dest, value) gives "movImm {arm64VregName(dest)}, {value}"
+		arm64Prologue(stackSize) gives "prologue {stackSize}"
+		arm64Epilogue(stackSize) gives "epilogue {stackSize}"
+		arm64Add(dest, lhs, rhs) gives "add {arm64VregName(dest)}, {arm64VregName(lhs)}, {arm64VregName(rhs)}"
+		arm64Sub(dest, lhs, rhs) gives "sub {arm64VregName(dest)}, {arm64VregName(lhs)}, {arm64VregName(rhs)}"
+		arm64Mul(dest, lhs, rhs) gives "mul {arm64VregName(dest)}, {arm64VregName(lhs)}, {arm64VregName(rhs)}"
+		arm64Sdiv(dest, lhs, rhs) gives "sdiv {arm64VregName(dest)}, {arm64VregName(lhs)}, {arm64VregName(rhs)}"
+		arm64Udiv(dest, lhs, rhs) gives "udiv {arm64VregName(dest)}, {arm64VregName(lhs)}, {arm64VregName(rhs)}"
+		arm64Msub(dest, mulLhs, mulRhs, minuend) gives "msub {arm64VregName(dest)}, {arm64VregName(mulLhs)}, {arm64VregName(mulRhs)}, {arm64VregName(minuend)}"
+		arm64And(dest, lhs, rhs) gives "and {arm64VregName(dest)}, {arm64VregName(lhs)}, {arm64VregName(rhs)}"
+		arm64Orr(dest, lhs, rhs) gives "orr {arm64VregName(dest)}, {arm64VregName(lhs)}, {arm64VregName(rhs)}"
+		arm64Eor(dest, lhs, rhs) gives "eor {arm64VregName(dest)}, {arm64VregName(lhs)}, {arm64VregName(rhs)}"
+		arm64Lslv(dest, lhs, rhs) gives "lslv {arm64VregName(dest)}, {arm64VregName(lhs)}, {arm64VregName(rhs)}"
+		arm64Asrv(dest, lhs, rhs) gives "asrv {arm64VregName(dest)}, {arm64VregName(lhs)}, {arm64VregName(rhs)}"
+		arm64Lsrv(dest, lhs, rhs) gives "lsrv {arm64VregName(dest)}, {arm64VregName(lhs)}, {arm64VregName(rhs)}"
+		arm64Neg(dest, src) gives "neg {arm64VregName(dest)}, {arm64VregName(src)}"
+		arm64Mvn(dest, src) gives "mvn {arm64VregName(dest)}, {arm64VregName(src)}"
+		arm64AddImm(dest, src, imm) gives "add {arm64VregName(dest)}, {arm64VregName(src)}, {imm}"
+		arm64SubImm(dest, src, imm) gives "sub {arm64VregName(dest)}, {arm64VregName(src)}, {imm}"
+		arm64AndImm(dest, src, imm) gives "and {arm64VregName(dest)}, {arm64VregName(src)}, {imm}"
+		arm64OrrImm(dest, src, imm) gives "orr {arm64VregName(dest)}, {arm64VregName(src)}, {imm}"
+		arm64EorImm(dest, src, imm) gives "eor {arm64VregName(dest)}, {arm64VregName(src)}, {imm}"
+		arm64LslImm(dest, src, imm) gives "lsl {arm64VregName(dest)}, {arm64VregName(src)}, {imm}"
+		arm64AsrImm(dest, src, imm) gives "asr {arm64VregName(dest)}, {arm64VregName(src)}, {imm}"
+		arm64LsrImm(dest, src, imm) gives "lsr {arm64VregName(dest)}, {arm64VregName(src)}, {imm}"
+		arm64Cmp(lhs, rhs) gives "cmp {arm64VregName(lhs)}, {arm64VregName(rhs)}"
+		arm64CmpImm(reg, imm) gives "cmp {arm64VregName(reg)}, {imm}"
+		arm64Cset(dest, cond) gives "cset {arm64VregName(dest)}, {cond.name}"
+		arm64LeaFuncAddr(dest, funcName) gives "leaFuncAddr {arm64VregName(dest)}, {String.from(funcName)}"
+		arm64LeaRdata(dest, label) gives "leaRdata {arm64VregName(dest)}, {String.from(label)}"
+		arm64LeaGlobal(dest, label) gives "leaGlobal {arm64VregName(dest)}, {String.from(label)}"
+		arm64BranchLink(targetName) gives "bl {String.from(targetName)}"
+		arm64BranchLinkReg(reg) gives "blr {arm64VregName(reg)}"
+		arm64Fadd(dest, lhs, rhs) gives "fadd {arm64VregName(dest)}, {arm64VregName(lhs)}, {arm64VregName(rhs)}"
+		arm64Fsub(dest, lhs, rhs) gives "fsub {arm64VregName(dest)}, {arm64VregName(lhs)}, {arm64VregName(rhs)}"
+		arm64Fmul(dest, lhs, rhs) gives "fmul {arm64VregName(dest)}, {arm64VregName(lhs)}, {arm64VregName(rhs)}"
+		arm64Fdiv(dest, lhs, rhs) gives "fdiv {arm64VregName(dest)}, {arm64VregName(lhs)}, {arm64VregName(rhs)}"
+		arm64Fcmp(lhs, rhs) gives "fcmp {arm64VregName(lhs)}, {arm64VregName(rhs)}"
+		arm64Scvtf(dest, src) gives "scvtf {arm64VregName(dest)}, {arm64VregName(src)}"
+		arm64Fcvtzs(dest, src) gives "fcvtzs {arm64VregName(dest)}, {arm64VregName(src)}"
+		arm64FpLoadRdata(dest, label) gives "fpLoadRdata {arm64VregName(dest)}, [rdata + {String.from(label)}]"
 	end 'op'
 end 'formatTargetOp'
+
+// The printed form of an arm64 operand: a colored physical register by its arm64 name (`x0`, `d5`,
+// …) or a still-virtual value by its SSA id. `TargetVReg.physical` carries a neutral `RegNum`, which
+// the printer — one tier above the neutral op — maps back through `Arm64Register`, exactly as the
+// arm64 encoder will. The x64 twin is `vregName`.
+function arm64VregName(vreg TargetVReg) returns String
+	return match vreg 'v'
+		physical(reg) gives arm64RegName(reg)
+		virtual(id) gives "v{id}"
+	end 'v'
+end 'arm64VregName'
+
+// The arm64 register name for a colored `RegNum` — the `Arm64Register` member name (x0..x30 for
+// 0..30, d0..d31 for 31..62). The enum's own names ARE the register names, so no second table.
+function arm64RegName(reg RegNum) returns String
+	let r = try Arm64Register.fromRawValue(reg) otherwise panic("arm64RegName: register number {reg} names no arm64 register (0..62)")
+	return r.name
+end 'arm64RegName'
 
 // A machine-register operand: a colored physical GPR by its ISA name (`rax`,
 // `r8`, …) or a still-virtual value by its SSA id (`v<id>`). A fully lowered
 // module (what CodeResult.targetModule holds) has only `physical`; `virtual`
 // appears only when printing pre-regalloc IR for debugging.
-function vregName(vreg X64VReg) returns String
+// The printed form of an x64 operand: a colored physical register by its x64 name, or a still-
+// virtual value by its SSA id. `TargetVReg.physical` now carries a neutral `RegNum`, so the printer
+// — a per-ISA reader, one tier above the neutral op — maps it back through `X64Register` exactly as
+// the x64 encoder does. arm64 ops print through `arm64VregName` instead (their operands name arm64
+// registers), which is why this stays x64-specific rather than taking an ISA parameter.
+function vregName(vreg TargetVReg) returns String
 	return match vreg 'v'
-		physical(reg) gives registerName(reg)
+		physical(reg) gives registerName(try X64Register.fromRawValue(reg) otherwise panic("vregName: colored register number {reg} is not a valid X64Register"))
 		virtual(id) gives "v{id}"
 	end 'v'
 end 'vregName'

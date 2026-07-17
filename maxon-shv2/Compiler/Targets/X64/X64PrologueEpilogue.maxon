@@ -266,14 +266,19 @@ function opPhysicalRegs(op TargetOp) returns RegMask
 		// The `.rdata` address `lea` (P1.2 wave A) — its GPR dest can be colored into a callee-saved
 		// register, so it MUST be counted here, exactly like `leaRegGlobal` above.
 		leaRegRdata(d, _) gives physRegBit(d)
+		// arm64 does not run the x64 prologue pass (its frame is `Arm64PrologueEpilogue`, wave 1), so
+		// no arm64 op reaches here — an empty mask is unreachable AND correct (none of these arms names
+		// a register the x64 prologue counts). `gives` cannot host a `panic`; the band-append
+		// invariant forced this arm.
+		arm64Ret to arm64FpLoadRdata gives 0
 	end 'p'
 end 'opPhysicalRegs'
 
 // The single-register mask of a colored operand. Every operand is physical at this
 // point (register allocation rewrote virtuals), so a virtual here is an allocator bug.
-function physRegBit(vreg X64VReg) returns RegMask
+function physRegBit(vreg TargetVReg) returns RegMask
 	match vreg 'v'
-		physical(reg) then return regMaskOf(reg)
+		physical(reg) then return regMaskAdd(0, regNum: reg)
 		virtual(id) then panic("opPhysicalRegs: unresolved virtual register v{id} reached the prologue pass — register allocation must color every operand first")
 	end 'v'
 end 'physRegBit'
@@ -330,7 +335,7 @@ end 'appendEpilogueBeforeReturn'
 // encoding it does not already have. Shared by this pass and `mrt_start`'s hand-built
 // frame, so the two cannot spell the frame's defining instruction differently.
 export function framePointerSetupOp() returns TargetOp
-	return TargetOp.movRegReg(X64VReg.physical(X64Register.rbp), srcReg: X64VReg.physical(X64Register.rsp))
+	return TargetOp.movRegReg(x64PhysReg(X64Register.rbp), srcReg: x64PhysReg(X64Register.rsp))
 end 'framePointerSetupOp'
 
 // Insert `op` at the front of `block`'s op list (a fresh `module.ops` slot). The shared
@@ -382,5 +387,8 @@ function blockEndsWithReturn(module TargetModule, block IrBlock) returns bool
 		pushReg to popReg gives false
 		storeSlotReg to loadRegSlot gives false
 		andRegReg to leaRegRdata gives false
+		// Unreachable this rung (arm64 uses Arm64PrologueEpilogue, wave 1). `gives` cannot host a
+		// `panic`; wave 1 answers `arm64Ret` true here when it wires the arm64 return block.
+		arm64Ret to arm64FpLoadRdata gives false
 	end 'check'
 end 'blockEndsWithReturn'
