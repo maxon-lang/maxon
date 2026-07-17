@@ -433,6 +433,7 @@ serializable-in-order, so a future cache has a stable id space to build on rathe
 | **String** | **A BUILTIN, at P1.2** — gated on the RUNTIME, *not* on generics. It is the FIRST heap value. v1 shipped String in Phase 7; generics in Phase 11. |
 | **Closures** | **IN core** — co-landed with escape analysis at **P1.5**, because closure capture *is* the canonical escape. The `LazyMessage` sites are kept as dogfood. |
 | **`async` / green threads** | **IN core, at P1.5** *(reversed 2026-07-13 — was "Beyond")*. Parallel spec execution is part of the Phase-1 goal, and a green-thread capture **IS** an escape — so it co-lands with closures + escape, never after. Brings **Workstream R3 (the GT scheduler) into Phase 1.** Its dogfood + acceptance test is the parallel harness; it also un-blocks **P2.6** per-function fan-out, which was always going to need it. **⭐ AND: give `Promise` the ERROR TYPE — see below. Do not port the bootstrap's shape.** |
+| **Frontend / pre-scan** | **The parser stays a PURE PER-FILE function of its own tokens.** Whole-program facts come from the ONE `queryProgramSignatures` sweep — extended by **arms**, never by a second pre-pass or an inline `self.signatures.*` shadow-resolver that keeps a second copy of `TypeResolution`'s logic. Sweep + parse both **fan out at P2.6** (parallel extract → path-ordered serial merge → parallel parse, reusing the sweep's cached tokens). *This is the antidote to v1's disease — v1 kept ADDING pre-passes for missing info and slowed every time; shv2 has ONE, and keeping it one is a decision, not an accident.* See **⭐ Frontend parallelism** below. |
 | **Conditional conformance** | **IN core** — *declared* in Phase 1 (the stdlib forces it), *emitted* at **P2.2**. It is a hard mechanism, and this plan implements hard mechanisms rather than dodging them. See the PRINCIPLE. |
 | **`Map` / `Set`** | multi-param generics + one `Hashable` constraint. No `Iterable`-on-Map, no tuple `Entry`. **P2.3.** `Set` rides Map's exact mechanism. |
 | **Iteration** | **Hardcode `for-in`** over Array/Range/String. No general `Iterable`/associated types. |
@@ -440,6 +441,58 @@ serializable-in-order, so a future cache has a stable id space to build on rathe
 | **Stdlib lowering** | **Reachability-seeded — lower only the stdlib bodies the program transitively reaches.** *Not an optimization: it is what makes Phase 1 a phase.* See §"The stdlib cone." |
 | **Stdlib fork** | `stdlib-shv2/stdlib/` — ❌ **NOT NEEDED. Re-deferred 2026-07-13 on measurement (P1.0c).** It was un-deferred as the backstop for `Map`, *"if reachability-seeded lowering proves insufficient."* **It proved sufficient** — `Map` is laid out and never codegen'd. The one edge it *could* have cut (`String.trim()` → `CharacterSet` → `Set`) we chose NOT to cut: do the hard things early ⇒ `Set` is in Phase 1 (P1.7b). **So the fork now gates nothing, and its original ~1 s justification is still dead.** Do not resurrect it without a NEW reason. |
 | **Targets** | x64-windows only through Phase 2. |
+
+### ⭐ Frontend parallelism — the pre-scan FANS OUT; the barrier is cheap and STAYS
+
+The frontend is a whole-program `queryProgramSignatures` sweep (lex every file, extract its
+DECLARATIONS off tokens, fold into one index) sitting UNDER the per-file `queryParseOps` parse. That
+makes the sweep a **barrier**: no file's real parse can start until every file's declarations are
+known. **This is intrinsic, not incidental.** *"Is `Foo` a type declared ANYWHERE?"* is a whole-program
+predicate, and the parse needs the answer to shape control flow — a bool `and`/`or` is short-circuit
+blocks + a phi, an int one is a bitwise op, and which it is must be decided BEFORE the right operand is
+parsed. **The deferral was never the defect; not looking was** (see ARCHITECTURE.md → Query spine, and
+`SignatureIndex.maxon`).
+
+⇒ **Do not try to DELETE the barrier. Parallelize ACROSS it (BSP):**
+
+```
+parallel[ per file: lex → extract declarations into local arrays ]   ← the map
+serial [ fold contributions into the index, in SOURCE-PATH order ]    ← the reduce (cheap)
+parallel[ per file: parse, reusing the tokens the sweep already cached ]  ← the map
+```
+
+- **Token reuse is free** — `queryTokens` is memoized; the sweep populating it and the parse reading it
+  back is today's behavior, just serial. No double-lex.
+- **The extract is already the map half** — `foldDeclaredSignaturesInto` builds per-file LOCAL arrays and
+  reads no shared state while walking (a sweep types no call, so it never reads the index it fills). Only
+  the fold touches the shared index.
+- **The serial reduce is small** — O(declarations) fold + the O(constants) `evaluateInitializers` DFS (the
+  one genuinely-sequential piece: forward + cross-file constant refs, cycle-detected → `E2012`).
+- ⚠ **TWO GUARDS, or a gate breaks.** (1) The fold must stay **LINEAR** — this exact whole-program-under-
+  per-file spot has gone **O(files²) twice** (`clearDepsFor`, `compositeSourceHash`); before adding work
+  to it, multiply by the file count. (2) Fold in **PATH ORDER, not completion order**, or the byte-identity
+  bootstrap gate dies on a nondeterministic index.
+
+This lands at **P2.6**, folded into the fan-out rung — it is the one upstream phase that rung otherwise
+leaves serial.
+
+**BATCH ≠ INCREMENTAL — two independent, composable wins.** Parallelizing the sweep is the **batch** win
+(self-host throughput, the >90% CPU number). It does NOT shrink the **incremental** cost: the sweep memo is
+keyed on the whole-program composite hash, so a one-file edit still re-sweeps every file (faster now, not
+smaller). The orthogonal knob is **per-file sweep memoization** — cache each file's declaration contribution
+on its own content hash, re-extract only the edited file, re-fold. Do both and a cold build saturates cores
+while a warm rebuild does O(changed file) + O(declarations).
+
+**Removing the barrier ENTIRELY is a MEASUREMENT-GATED alternative, not committed work.** Two designs would
+dissolve the pre-scan: **(a) post-parse fixup** — parse with no cross-file info, record ops of unknown type
+on a worklist, resolve after all files parse (needs *detached-block* deferral for `and`/`or`, the one
+CFG-shape case); **(b) blocking demand-lookup** — each parse is a green-thread task that SUSPENDS on an
+unknown type until a peer registers it (handles `and`/`or` inline, but adds a shared mutable registry,
+wait-graph cycle/quiescence detection, and a determinism proof over interleavings — against the byte-identity
+gate). **Neither is required** — the barrier does not block P2.6's fan-out or the ≤30 s goal. Promote one
+only if the `signatures`-phase scale-test bends or a real incremental-latency target appears; prefer **(a)**
+for shv2 (deterministic by construction). Until then this note is the record, so the analysis is not
+re-derived.
 
 ### ⭐ P1.5: `Promise` MUST CARRY ITS ERROR TYPE — `Promise with (T, E)`, not `Promise with T`
 
@@ -1026,7 +1079,7 @@ against that source:
 | **P2.3** | **`Map`** *(`Set` ⬆ PROMOTED to P1.7b)* | multi-param generics. **`Map` is genuinely unreached by the harness — P1.0c proved it with the machine code** (its `EnvMap` arms compile to a bare `mm_decref`), so reachability-seeded lowering holds and it stays here. 12 `Map` typealiases in shv2's own source. ⚠ **`Set` does NOT wait for it** — it was reached in Phase 1 by `String.trim()`, which is why *"`Set` rides `Map`'s exact mechanism"* was false as sequencing |
 | **P2.4** | **`extension`** | promotes the stdlib's extension blocks DECLARE→EMIT |
 | **P2.5** | **closure dogfood** | shv2's `LazyMessage` sites ([Logger.maxon:35](maxon-shv2/Compiler/Logger.maxon#L35)) compile — the acceptance test for P1.5 |
-| **P2.6** | **per-function fan-out** | the one carry-over from the scalar core (M5's original scope, never built). Both seams exist (`PassPipeline.classifyPass`; the parser is already a pure function of its file) — and **the runtime under it now exists, because P1.5 brought R3 forward**. Gate: **1-core-vs-N-core byte identity** |
+| **P2.6** | **per-function fan-out + parallel frontend** | the one carry-over from the scalar core (M5's original scope, never built). Both seams exist (`PassPipeline.classifyPass`; the parser is already a pure function of its file) — and **the runtime under it now exists, because P1.5 brought R3 forward**. ⭐ **This rung ALSO parallelizes the frontend — the one upstream phase the fan-out otherwise leaves SERIAL.** The `queryProgramSignatures` sweep (lex + declaration extract) is today a serial `for path in sourcePaths` loop under the per-file parse; make it BSP — `parallel[lex + extract into local arrays]` → `serial[fold in SOURCE-PATH order]` → `parallel[parse, reusing cached tokens]`. The extract already builds per-file local arrays and reads no shared state, so only the fold is serial (O(declarations) + the cheap O(constants) `evaluateInitializers` DFS). **Guards:** the fold stays LINEAR (this spot has gone O(files²) twice) and folds in PATH order, not completion order, or byte-identity dies. **See ⭐ Frontend parallelism (Locked decisions).** Batch win only — the incremental re-sweep-all cost is a separate knob (per-file sweep memoization). Gate: **1-core-vs-N-core byte identity** |
 | 🚩 | **PHASE 2 GATE — self-host** | **3-stage bootstrap fixpoint: stage-2 == stage-3, byte-identical**, and stage-2 shv2 passes the whole `specs-shv2/` suite |
 
 **Byte-identity is a cliff, not a ramp** — it demands determinism in rdata ordering, hash
