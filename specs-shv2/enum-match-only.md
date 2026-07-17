@@ -98,6 +98,28 @@ end 'main'
 error E3066: specs/fragments/enum-match-only/error.enum-ne.test:11:7: cannot compare union values using '!=', use 'match' instead
 ```
 
+<!-- test: error.enum-lt -->
+An ORDERING operator on a union is refused exactly as `==`/`!=` are: a union carries no comparison of any kind, and `<` would compare two box addresses. The message names the operator the author actually wrote.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+union Container
+	empty
+	value(n Integer)
+end 'Container'
+
+function main() returns ExitCode
+	let c = Container.empty
+	if c < Container.empty 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3066: specs/fragments/enum-match-only/error.enum-lt.test:11:7: cannot compare union values using '<', use 'match' instead
+```
+
 <!-- disabled-test: error.enum-eq-method -->
 <!-- P1.3 slice 2+: an instance METHOD on a union (`function isEmpty()` in the union body) is a later rung; the payload + E3066 halves are done -->
 

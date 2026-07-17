@@ -1030,6 +1030,23 @@ function infixCmpOp(kind TokenKind) returns MaxonCmpOp
 	panic("infixCmpOp: token '{kind.rawValue}' is not a comparison operator — comparisonOperator must gate this call")
 end 'infixCmpOp'
 
+// The source spelling of a comparison operator, for the E3066 union-comparison message. A `union`
+// value has NO comparison of ANY kind: `==`/`!=` carry no synthesized equality, and `<`/`>`/`<=`/`>=`
+// would compare two BOX ADDRESSES — a pointer answer to a question about values, the same
+// reference-equality hazard `comparableOperands` refuses for two structs. So EVERY operator is named
+// here, not only the two the corpus happens to exercise — the message stays honest whichever one the
+// author wrote.
+function comparisonOpSpelling(op MaxonCmpOp) returns String
+	return match op 'op'
+		eq gives "=="
+		ne gives "!="
+		lt gives "<"
+		gt gives ">"
+		le gives "<="
+		ge gives ">="
+	end 'op'
+end 'comparisonOpSpelling'
+
 // --- Character literals ---
 //
 // The lexer hands the parser the RAW bytes between the quotes, escapes undecoded, under
@@ -3935,6 +3952,24 @@ export type Parser
 		return result
 	end 'emitRuntimeCall'
 
+	// ⭐ **THE ONE `__mm_alloc` CALL.** Every heap box the compiler builds — a struct record, a fused
+	// String record, an interpolation scratch buffer, a boxed union — is allocated through here, so the
+	// `__mm_alloc(size, destructor)` ABI lives in exactly ONE place: the destructor is the SECOND
+	// argument, and a box whose contents cascade to nothing passes `TrivialDestructor`. An added or
+	// reordered alloc argument that reached three of those call sites and missed the fourth would
+	// corrupt that box silently — nothing but this consolidation forces the four to agree. `size` is an
+	// already-emitted value (a size literal, or the interpolation length sum), so the caller decides how
+	// it is computed; and enrolling the result as an owned temp is the caller's decision too (a struct
+	// box is not tracked, a union and an interpolation String are), so `trackOwnedTemp` stays at the
+	// call site rather than hiding in here.
+	function emitBoxAlloc(size ValueId, resultTag ValueTypeTag, resultNameId TypeNameId, range SourceRange) returns ValueId
+		let destructor = self.emitLiteral(TrivialDestructor, valueType: MaxonType.integer, range: range)
+		var allocArgs = ValueIdArray.create()
+		allocArgs.push(size)
+		allocArgs.push(destructor)
+		return self.emitRuntimeCall(MmAllocName, args: allocArgs, resultTag: resultTag, resultNameId: resultNameId, range: range)
+	end 'emitBoxAlloc'
+
 	// ⭐ **TRACK A FRESH OWNED HEAP TEMPORARY.** The one door `emitStringInterp` reaches ownership through:
 	// it records the value's provenance (so `parseBinding` knows the binding owns a drop) AND enrolls it in
 	// the statement's pending-drop list (so an UNBOUND result is dropped at statement end). Both from one
@@ -6570,24 +6605,16 @@ export type Parser
 			return try self.emitStringCompare(lhs, rhs: rhs, op: op, opTok: opTok)
 		end 'stringCompare'
 
-		// ⭐ A `union` VALUE HAS NO `==`/`!=` (E3066). Refused BEFORE `comparableOperands`, which would
-		// pass a `named`-vs-`named` pair (they agree) and lower to a compare of two BOX ADDRESSES — the
-		// same reference-equality wrong answer that rule already refuses for two structs. An ENUM's
-		// value IS its i64 tag, so `Color.red == c` is a real tag compare and stays legal; only a
-		// `union` (`isUnion`) is rejected. The pattern-condition path (`emitEnumTagCompare`) builds its
-		// tag compare with its own `MaxonOp.compare` and never routes through here, so a `match` arm is
-		// unaffected.
+		// ⭐ A `union` VALUE HAS NO COMPARISON — of ANY kind (E3066). Refused BEFORE `comparableOperands`,
+		// which would pass a `named`-vs-`named` pair (they agree) and lower to a compare of two BOX
+		// ADDRESSES — the same reference-equality wrong answer that rule already refuses for two structs.
+		// `==`/`!=` have no synthesized equality; `<`/`>`/`<=`/`>=` a fortiori have no meaning either, so
+		// ALL of them reject here (the message names whichever operator the author wrote). An ENUM's value
+		// IS its i64 tag, so `Color.red == c` is a real tag compare and stays legal; only a `union`
+		// (`isUnion`) is rejected. The pattern-condition path (`emitEnumTagCompare`) builds its tag compare
+		// with its own `MaxonOp.compare` and never routes through here, so a `match` arm is unaffected.
 		if self.valueIsUnion(lhs) or self.valueIsUnion(rhs) 'unionCompare'
-			match op 'kind'
-				eq then throw ParseError.unionNotComparable("==", line: opTok.line, column: opTok.column)
-				ne then throw ParseError.unionNotComparable("!=", line: opTok.line, column: opTok.column)
-				// `<`/`>`/`<=`/`>=` on a union has no more meaning than `==` does, but no corpus case
-				// exercises it and the bootstrap's E3066 message names `==`/`!=` specifically; such an
-				// ordering falls through to `comparableOperands` below (which passes a `named` pair) —
-				// a latent wrong answer on a boxed union, recorded rather than papered over with a
-				// message that would name the wrong operator.
-				lt to ge then break 'kind'
-			end 'kind'
+			throw ParseError.unionNotComparable(comparisonOpSpelling(op), line: opTok.line, column: opTok.column)
 		end 'unionCompare'
 
 		if not comparableOperands(leftTag, right: rightTag) 'mismatch'
@@ -6881,11 +6908,7 @@ export type Parser
 	// budget. A `named` integer alias is already i64, so the value needs no widening at this rung.
 	function materializeScratchPart(exprVal ValueId, converter ByteArray, scratchBytes ParsedInt, partBufs ValueIdArray, partLens ValueIdArray, scratchIds ValueIdArray, range SourceRange)
 		let scratchSize = self.emitLiteral(scratchBytes, valueType: MaxonType.integer, range: range)
-		let destructor = self.emitLiteral(TrivialDestructor, valueType: MaxonType.integer, range: range)
-		var allocArgs = ValueIdArray.create()
-		allocArgs.push(scratchSize)
-		allocArgs.push(destructor)
-		let scratch = self.emitRuntimeCall(MmAllocName, args: allocArgs, resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+		let scratch = self.emitBoxAlloc(scratchSize, resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
 
 		var convArgs = ValueIdArray.create()
 		convArgs.push(exprVal)
@@ -6908,11 +6931,7 @@ export type Parser
 
 		let overhead = self.emitLiteral(StringInterpOverheadBytes, valueType: MaxonType.integer, range: range)
 		let allocSize = self.emitInterpArith(totalLen, rhs: overhead, range: range)
-		let destructor = self.emitLiteral(TrivialDestructor, valueType: MaxonType.integer, range: range)
-		var allocArgs = ValueIdArray.create()
-		allocArgs.push(allocSize)
-		allocArgs.push(destructor)
-		let result = self.emitRuntimeCall(MmAllocName, args: allocArgs, resultTag: ValueTypeTag.string, resultNameId: UnnamedTypeId, range: range)
+		let result = self.emitBoxAlloc(allocSize, resultTag: ValueTypeTag.string, resultNameId: UnnamedTypeId, range: range)
 		self.trackOwnedTemp(result)
 
 		// The inline byte region begins right after the record. Copy each part in at a cursor that advances
@@ -7235,12 +7254,7 @@ export type Parser
 	// enclosing type's name.
 	function emitStructLiteral(layout StructLayout, fieldValues ValueIdArray, range SourceRange) returns ValueId
 		let size = self.emitLiteral(layout.sizeBytes(), valueType: MaxonType.integer, range: range)
-		let destructor = self.emitLiteral(TrivialDestructor, valueType: MaxonType.integer, range: range)
-
-		var allocArgs = ValueIdArray.create()
-		allocArgs.push(size)
-		allocArgs.push(destructor)
-		let box = self.emitRuntimeCall(MmAllocName, args: allocArgs, resultTag: ValueTypeTag.structRef, resultNameId: self.artifact.typeNames.intern(layout.name), range: range)
+		let box = self.emitBoxAlloc(size, resultTag: ValueTypeTag.structRef, resultNameId: self.artifact.typeNames.intern(layout.name), range: range)
 
 		for i in 0 upto layout.fieldCount() 'eachField'
 			let value = try fieldValues.get(i) otherwise panic("emitStructLiteral: fieldValues.get OOB at {i} — the column is sized to the layout's field count")
@@ -7412,12 +7426,7 @@ export type Parser
 		end 'validate'
 
 		let size = self.emitLiteral(layout.boxSizeBytes(), valueType: MaxonType.integer, range: range)
-		let destructor = self.emitLiteral(TrivialDestructor, valueType: MaxonType.integer, range: range)
-
-		var allocArgs = ValueIdArray.create()
-		allocArgs.push(size)
-		allocArgs.push(destructor)
-		let box = self.emitRuntimeCall(MmAllocName, args: allocArgs, resultTag: ValueTypeTag.named, resultNameId: self.artifact.typeNames.intern(layout.name), range: range)
+		let box = self.emitBoxAlloc(size, resultTag: ValueTypeTag.named, resultNameId: self.artifact.typeNames.intern(layout.name), range: range)
 		self.trackOwnedTemp(box)
 
 		self.emitUnionTagStore(box, tag: layout.tagOfIndex(caseIndex), range: range)
