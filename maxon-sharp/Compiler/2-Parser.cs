@@ -1826,20 +1826,28 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// </summary>
   private List<TopLevelConstantDecl> VisibleConstantDecls(List<TopLevelConstantDecl> ownDecls) {
     var decls = new List<TopLevelConstantDecl>(ownDecls);
-    if (seedModule == null) return decls;
-
-    foreach (var decl in seedModule.TopLevelConstantDecls) {
-      if (decl.SourceFilePath == _sourceFilePath) continue; // already present, from our own walk
-      if (IsForeignConstantVisibleFrom(decl, _sourceFilePath)) decls.Add(decl);
-      // Anything else is file-scoped to its declarer and stays undefined here.
-    }
+    AppendVisibleForeignDecls(decls, _sourceFilePath);
     return decls;
+  }
+
+  // Append every FOREIGN top-level constant that `accessorPath` may see to `into`, skipping any
+  // declared in `accessorPath`'s own file (those already lead the list). The one place the
+  // whole-program declaration list is walked and filtered by visibility, shared by the current
+  // file's set (VisibleConstantDecls) and any declarer's perspective (ConstantDeclSetFor) so the two
+  // cannot drift on WHICH foreign constants a file sees. Anything not visible is file-scoped to its
+  // declarer and stays undefined here.
+  private void AppendVisibleForeignDecls(List<TopLevelConstantDecl> into, string? accessorPath) {
+    if (seedModule == null) return;
+    foreach (var decl in seedModule.TopLevelConstantDecls) {
+      if (decl.SourceFilePath == accessorPath) continue;
+      if (IsForeignConstantVisibleFrom(decl, accessorPath)) into.Add(decl);
+    }
   }
 
   // The single cross-file constant-visibility rule: a FOREIGN top-level constant is visible from
   // `accessorPath` if it is exported (everywhere) or module-visible and `accessorPath` lies within
-  // the declarer's directory subtree; a private one never is. Shared by the current file's set
-  // (VisibleConstantDecls) and any declarer's perspective (ConstantDeclSetFor), so widening the
+  // the declarer's directory subtree; a private one never is. Applied by AppendVisibleForeignDecls,
+  // which every perspective (the current file's and any declarer's) routes through, so widening the
   // whole-program view of DECLARATIONS can never widen their VISIBILITY in one place but not another.
   private bool IsForeignConstantVisibleFrom(TopLevelConstantDecl decl, string? accessorPath) {
     if (decl.IsExported) return true;
@@ -5179,16 +5187,15 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     if (filePath == null || filePath == _sourceFilePath) return _currentFileConstantDecls;
     if (_constantDeclSetCache.TryGetValue(filePath, out var cached)) return (ConstantDeclSet)cached;
 
-    var all = seedModule?.TopLevelConstantDecls;
+    // Own declarations first (so a file-private constant shadows a foreign homonym), read back from
+    // the whole-program list because this is not the parser that walked filePath; then every foreign
+    // constant that file may see, through the shared visibility filter.
     var visible = new List<TopLevelConstantDecl>();
-    if (all != null) {
+    var all = seedModule?.TopLevelConstantDecls;
+    if (all != null)
       foreach (var d in all)
         if (d.SourceFilePath == filePath) visible.Add(d);
-      foreach (var d in all) {
-        if (d.SourceFilePath == filePath) continue;
-        if (IsForeignConstantVisibleFrom(d, filePath)) visible.Add(d);
-      }
-    }
+    AppendVisibleForeignDecls(visible, filePath);
 
     var set = ConstantDeclSet.From(visible);
     _constantDeclSetCache[filePath] = set;
@@ -5226,11 +5233,9 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     if (state.Memo.TryGetValue(key, out var memo)) return memo;
 
     // By-name reuse of an already-folded value (a constant seeded from another file, or one folded
-    // earlier in this file), taken ONLY when `name` resolves to THIS decl from the current file's
-    // own scope — so a declarer's private of the same name can never collide with it.
-    if (_currentFileConstantDecls.ByName.TryGetValue(name, out var visibleHere)
-        && visibleHere.SourceFilePath == decl.SourceFilePath
-        && state.Values.TryGetValue(name, out var known))
+    // earlier in this file), taken ONLY when the current file resolves `name` to THIS decl — so a
+    // declarer's private of the same name can never collide with it.
+    if (CurrentFileResolvesTo(name, decl) && state.Values.TryGetValue(name, out var known))
       return known;
 
     if (!state.Active.Add(key)) {
@@ -5280,12 +5285,20 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     // Publish to the name-keyed table only when this decl is the one the CURRENT file resolves the
     // name to. A declarer's private dependency, folded here as part of an exported constant, must
     // not leak a value into the current file's constant table under that name.
-    if (_currentFileConstantDecls.ByName.TryGetValue(name, out var visiblePublish)
-        && visiblePublish.SourceFilePath == decl.SourceFilePath)
+    if (CurrentFileResolvesTo(name, decl))
       state.Values[name] = result;
     state.Active.Remove(key);
     return result;
   }
+
+  // True when the CURRENT file resolves `name` to `decl` — i.e. `decl` is the very declaration this
+  // file binds that name to. Gates BOTH the by-name reuse of an already-folded value and its
+  // publication into the name-keyed table, so a declarer's private of the same name can neither be
+  // served for, nor overwrite, the current file's own binding. One predicate so the read and the
+  // write can never disagree about which declaration owns a name.
+  private bool CurrentFileResolvesTo(string name, TopLevelConstantDecl decl) =>
+      _currentFileConstantDecls.ByName.TryGetValue(name, out var visible)
+          && visible.SourceFilePath == decl.SourceFilePath;
 
   /// <summary>
   /// Rejects a global initializer whose expression the constant evaluator could only fold in
