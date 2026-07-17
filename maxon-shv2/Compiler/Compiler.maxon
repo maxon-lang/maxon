@@ -160,6 +160,10 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// exist before the backend resolves a `globalAddr`, so it is needed here, before lowering — and it
 	// stays `__mm_`-specific: a print-only program adds no `.data` slots and no leak check.
 	let usage = scanRuntimeUsage(module)
+	// A managed-payload union's `__destruct_<U>` (P1.3 slice 2) calls `__str_decref`/`__mm_free` inside a
+	// SYNTHESIZED Std body the Maxon-module scan above cannot see. Declare those transitive needs now —
+	// before `.data` layout reads `usesHeap` and before `installStringRuntime` reads `usesStrDecref`.
+	noteUnionDestructorUsage(usage, project: project, signatures: signatures)
 	var declaredGlobals = signatures.declaredGlobals()
 	if usage.usesHeap 'heapGlobals'
 		for entry in runtimeGlobals() 'each'
@@ -189,6 +193,11 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// print-only or string-`==`-only program pulls in NEITHER the allocator NOR the leak check.
 	// `installStringRuntime` installs only the referenced functions (a no-op when neither is used).
 	installStringRuntime(pipeline.stdModule, usage: usage)
+
+	// The per-union destructor cascades (P1.3 slice 2), installed the same way and for the same reason:
+	// already-lowered Std, appended after the pipeline so they are never re-optimized. Only the union
+	// destructors the module actually CALLS are built (`usage.neededUnionDestructors`).
+	installUnionDestructors(pipeline.stdModule, project: project, signatures: signatures, needed: usage.neededUnionDestructors)
 
 	// The backend owns its own error gate now: the register allocator reports E5001
 	// (register pressure) onto `project.diagnostics` and throws when a loop genuinely

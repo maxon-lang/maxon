@@ -72,6 +72,16 @@ export let MmDecrefName = b"__mm_decref"
 export let MmFreeName = b"__mm_free"
 export let MmLeakCheckName = b"__mm_leak_check"
 
+// ⭐ **THE NAME OF A MANAGED-PAYLOAD UNION'S SYNTHESIZED DESTRUCTOR — `__destruct_<UnionName>`** (P1.3
+// slice 2). It is `__`-prefixed, so `isCompilerInternalCallee` routes its call past the user-function
+// checks — no file declares it. ONE speller, so the DROP site (`Parser.decrefCalleeFor`), the USAGE scan
+// (`recordCallUsage`) and the SYNTHESIS (`installUnionDestructors`) name it identically and cannot drift.
+export let UnionDestructorPrefix = b"__destruct_"
+
+export function unionDestructorSymbol(unionName ByteArray) returns ByteArray
+	return "{String.from(UnionDestructorPrefix)}{String.from(unionName)}".toByteArray()
+end 'unionDestructorSymbol'
+
 // The exit code a leaked program reports. It is the project-wide leak-gate code: a `spec-test`
 // worker is itself a leak-gated Maxon program, and `SpecWorkerPool.LeakCheckExitCode` is the same
 // number read from the other end.
@@ -458,6 +468,147 @@ function buildMmFree(module StdModule)
 
 	module.functions.push(func)
 end 'buildMmFree'
+
+// ⭐⭐ **THE PER-UNION DESTRUCTOR CASCADE (P1.3 slice 2).** Synthesize `__destruct_<U>(box)` for every
+// managed-payload union whose destructor is REFERENCED (`needed`, collected from the module's
+// `__destruct_*` calls — install only what is used, exactly like the rest of the runtime). It is
+// APPENDED already-lowered after the pipeline (like `installMmRuntime`), so it is never re-optimized.
+//
+// ⭐ **THE BIGGEST DIVERGENCE FROM v1**: v1's union drop is ONE polymorphic `mm_decref` that recurses
+// through the payload's box-HEADER destructor. shv2 has NO header destructor (static dispatch) — so THIS
+// function statically emits each managed field's OWN drop (`__str_decref` for a String, `__mm_decref`
+// for a struct box), routed off the SAME classifier the construct's move-in reads. The tag switch drops
+// only the LIVE case's managed fields; a moved-out slot is null and its null-guard skips it (so a match
+// that bound a payload OUT does not double-free it here).
+export function installUnionDestructors(module StdModule, project Project, signatures ProgramSignatures, needed ByteArrayArray)
+	for (_, layout) in project.enumTypes 'each'
+		if not unionHasManagedField(signatures, typeNames: project.typeNames, layout: layout, wantStringOnly: false) 'noManaged'
+			continue
+		end 'noManaged'
+		if not bytesArrayContains(needed, target: unionDestructorSymbol(layout.name)) 'notReferenced'
+			continue
+		end 'notReferenced'
+		synthesizeUnionDestructor(module, layout: layout, project: project, signatures: signatures)
+	end 'each'
+end 'installUnionDestructors'
+
+// ⭐ **NOTE WHAT A REFERENCED UNION DESTRUCTOR TRANSITIVELY NEEDS** — its `__str_decref`/`__mm_free`
+// calls live in a Std body the Maxon-module `scanRuntimeUsage` cannot see, so they are DECLARED here
+// (the same shape `recordCallUsage` uses for `__str_append`). A destructor always frees the box
+// (`__mm_free`, part of the heap runtime), and one whose union carries a String field also calls
+// `__str_decref`. Called after `scanRuntimeUsage`, before `installStringRuntime` — so the bits are set
+// before the functions they gate are (or are not) built.
+export function noteUnionDestructorUsage(usage RuntimeUsage, project Project, signatures ProgramSignatures)
+	for (_, layout) in project.enumTypes 'each'
+		if not unionHasManagedField(signatures, typeNames: project.typeNames, layout: layout, wantStringOnly: false) 'noManaged'
+			continue
+		end 'noManaged'
+		if not bytesArrayContains(usage.neededUnionDestructors, target: unionDestructorSymbol(layout.name)) 'notReferenced'
+			continue
+		end 'notReferenced'
+		usage.usesHeap = true
+		if unionHasManagedField(signatures, typeNames: project.typeNames, layout: layout, wantStringOnly: true) 'hasString'
+			usage.usesStrDecref = true
+		end 'hasString'
+	end 'each'
+end 'noteUnionDestructorUsage'
+
+function bytesArrayContains(arr ByteArrayArray, target ByteArray) returns bool
+	for entry in arr 'each'
+		if entry.equals(target) 'found'
+			return true
+		end 'found'
+	end 'each'
+	return false
+end 'bytesArrayContains'
+
+// Emit `__destruct_<U>(box)`:
+//
+//   entry + lower: the shared refcount RMW (`emitRefcountCheckToLastOwner`) — `rc == 0` is the last
+//     owner and branches to `drop`; otherwise the count is lowered and the box kept.
+//   drop:  load the tag, then a per-managed-case guard chain (`if tag == c_i` → drop c_i's fields).
+//          A scalar/payload-free case is not in the chain — its tag falls through to `free`.
+//   case:  drop each managed field behind a NULL-guard, then fall to `free`.
+//   free:  `__mm_free(box)`; ret.
+//
+// A void `(i64) -> void` signature — the X64 backend discards nothing, and there is no `call_indirect`
+// type tag to satisfy (static dispatch), so it needs no `i64` return the way v1's header destructor did.
+function synthesizeUnionDestructor(module StdModule, layout EnumLayout, project Project, signatures ProgramSignatures)
+	let func = IrFunction.createFromStd(unionDestructorSymbol(layout.name), returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var lower = module.addBlock(func, label: b"lower")
+	var drop = module.addBlock(func, label: b"drop")
+	var free = module.addBlock(func, label: b"free")
+
+	emitParams(module, block: entry, count: 1)
+	let box = 0 as ValueId
+
+	emitRefcountCheckToLastOwner(module, entry: entry, lower: lower, record: box, lastOwner: drop, ids: ids)
+
+	let tag = ids.mint()
+	module.appendOp(drop, op: StdOp.loadIndirect(tag, addrId: box, offset: UnionTagOffset, valueType: StdType.i64))
+
+	var cur = drop
+	for ci in 0 upto layout.caseCount() 'eachCase'
+		if not caseHasManagedField(signatures, typeNames: project.typeNames, layout: layout, ci: ci, wantStringOnly: false) 'scalarCase'
+			continue
+		end 'scalarCase'
+		let caseBlock = module.addBlock(func, label: b"case")
+		let nextTest = module.addBlock(func, label: b"casetest")
+		let tagConst = ids.mint()
+		module.appendOp(cur, op: StdOp.const(tagConst, value: layout.tagOfIndex(ci), valueType: StdType.i64))
+		let isCase = ids.mint()
+		module.appendOp(cur, op: StdOp.cmp(isCase, lhs: tag, rhs: tagConst, pred: StdCmpPred.eq, operandType: StdType.i64))
+		module.setTerminator(cur, op: StdOp.condBranch(isCase, thenBlockId: caseBlock.id, elseBlockId: nextTest.id))
+		emitManagedFieldDrops(module, startBlock: caseBlock, box: box, layout: layout, ci: ci, dest: free, project: project, signatures: signatures, ids: ids, func: func)
+		cur = nextTest
+	end 'eachCase'
+
+	// The final else — a scalar / payload-free case's tag matched no managed case — falls to the free.
+	module.setTerminator(cur, op: StdOp.branch(free.id))
+
+	let freed = ids.mint()
+	module.appendOp(free, op: StdOp.call(freed, callee: MmFreeName, args: argsOf(box)))
+	module.setTerminator(free, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'synthesizeUnionDestructor'
+
+// Drop every MANAGED field of case `ci` from `startBlock`, each behind a NULL-guard (a moved-out slot is
+// null and must not be decref'd as a bogus pointer), then branch to `dest`. A String field drops through
+// `__str_decref` (frees its external buffer too), a struct box through `__mm_decref`; the kind comes off
+// the SAME classifier the construct read, so the dropped set equals the moved-in set by construction.
+function emitManagedFieldDrops(module StdModule, startBlock IrBlock, box ValueId, layout EnumLayout, ci CaseIndex, dest IrBlock, project Project, signatures ProgramSignatures, ids ValueMinter, func IrFunction)
+	let payloads = layout.payloadsAt(ci)
+	var cur = startBlock
+	for fi in 0 upto payloads.count() 'eachField'
+		let field = try payloads.get(fi) otherwise panic("emitManagedFieldDrops: payloadsAt count disagrees with get at {fi}")
+		let class = classifyUnionPayload(signatures, typeNames: project.typeNames, fieldType: field.declaredType)
+		if not payloadClassIsManaged(class) 'scalarField'
+			continue
+		end 'scalarField'
+		let callee = StrDecrefName if payloadClassIsString(class) else MmDecrefName
+
+		let ptr = ids.mint()
+		module.appendOp(cur, op: StdOp.loadIndirect(ptr, addrId: box, offset: layout.payloadSlotOffset(fi), valueType: StdType.i64))
+		let zero = ids.mint()
+		module.appendOp(cur, op: StdOp.const(zero, value: 0, valueType: StdType.i64))
+		let nonNull = ids.mint()
+		module.appendOp(cur, op: StdOp.cmp(nonNull, lhs: ptr, rhs: zero, pred: StdCmpPred.ne, operandType: StdType.i64))
+		var dropBlock = module.addBlock(func, label: b"decref")
+		let contBlock = module.addBlock(func, label: b"cont")
+		module.setTerminator(cur, op: StdOp.condBranch(nonNull, thenBlockId: dropBlock.id, elseBlockId: contBlock.id))
+
+		let dropped = ids.mint()
+		module.appendOp(dropBlock, op: StdOp.call(dropped, callee: callee, args: argsOf(ptr)))
+		module.setTerminator(dropBlock, op: StdOp.branch(contBlock.id))
+
+		cur = contBlock
+	end 'eachField'
+	module.setTerminator(cur, op: StdOp.branch(dest.id))
+end 'emitManagedFieldDrops'
 
 // `__mm_leak_check(exitCode) -> exitCode` — the gate.
 //

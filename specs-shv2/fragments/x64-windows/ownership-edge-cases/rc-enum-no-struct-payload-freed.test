@@ -1,0 +1,66 @@
+// Test: rc-enum-no-struct-payload-freed
+typealias Integer = int(i64.min to i64.max)
+
+enum Color
+	red
+	green
+	blue
+end 'Color'
+
+function colorCode(c Color) returns Integer
+	let result = match c 'pick'
+		red   gives 1
+		green gives 2
+		blue  gives 3
+	end 'pick'
+	return result
+end 'colorCode'
+
+function main() returns ExitCode
+	let c = Color.green
+	return colorCode(c)
+end 'main'
+---
+ExitCode: 2
+---
+func @colorCode {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.movRegImm32 r8, 1
+    x64.jmp matchcont
+  matchnext:
+    x64.cmpRegImm32 rcx, 1
+    x64.jcc equal, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.movRegImm32 r8, 2
+    x64.jmp matchcont
+  matchnext:
+    x64.cmpRegImm32 rcx, 2
+    x64.jcc equal, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.movRegImm32 r8, 3
+    x64.jmp matchcont
+  matchcont:
+    x64.popReg rbp
+    x64.ret
+  matchnext:
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 1
+    x64.callDirect colorCode
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

@@ -249,9 +249,14 @@ export type RuntimeUsage
 	export var usesBoolToString as bool
 	export var usesStrAppend as bool
 	export var usesStrDecref as bool
+	// The `__destruct_<U>` symbols this module CALLS (P1.3 slice 2) — collected from the drop sites so
+	// `installUnionDestructors` synthesizes only the referenced ones, and `noteUnionDestructorUsage`
+	// can classify their transitive `__str_decref`/`__mm_free` needs. Full symbols (not names): the
+	// installer compares them against `unionDestructorSymbol(name)`, avoiding a byte-substring extract.
+	export var neededUnionDestructors as ByteArrayArray
 
 	static function create() returns RuntimeUsage
-		return Self{usesHeap: false, usesPrint: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesBoolToString: false, usesStrAppend: false, usesStrDecref: false}
+		return Self{usesHeap: false, usesPrint: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesBoolToString: false, usesStrAppend: false, usesStrDecref: false, neededUnionDestructors: ByteArrayArray.create()}
 	end 'create'
 end 'RuntimeUsage'
 
@@ -308,6 +313,14 @@ function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 		usage.usesStrDecref = true
 		usage.usesHeap = true
 	end 'strdecref'
+	// A managed-payload union's scope-exit drop (`__destruct_<U>`). It frees the box (`__mm_free` — heap)
+	// and, for a String field, calls `__str_decref` — but those live in the SYNTHESIZED body this scan
+	// cannot see, so the symbol is recorded and its transitive needs are declared by
+	// `noteUnionDestructorUsage` (which has the signatures/interner to classify the fields).
+	if bytesStartWith(callee, prefix: UnionDestructorPrefix) 'uniondtor'
+		usage.usesHeap = true
+		usage.neededUnionDestructors.push(callee)
+	end 'uniondtor'
 end 'recordCallUsage'
 
 // Install the referenced String runtime functions into the lowered Std module. Called AFTER the

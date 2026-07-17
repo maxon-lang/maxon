@@ -77,6 +77,16 @@ export type VarInfo
 	// binding then owns the new value); a field store `t.x = …` is a USE, not a revive. Always false for a
 	// trivial/scalar binding, because only an owned heap value is ever moved.
 	export var movedFrom as bool
+	// ⭐ **PARTIALLY MOVED (P1.3 slice 2 — a binding-match that moved a managed payload OUT of this
+	// union).** Distinct from `movedFrom` in exactly one respect, and that respect is the whole reason it
+	// is a second bit: a `partiallyMoved` union is REJECTED at every use (E3102 — a later `match`/read
+	// would deref a nulled slot) via the SAME `requireBindingLive` guard, but it is STILL DROPPED at scope
+	// exit (`emitScopeDrops` does NOT skip it). Its box, and any managed fields the match left in place,
+	// are freed by its `__destruct_<U>` cascade — the moved-out slots were nulled, so the cascade skips
+	// them. `movedFrom` means "another binding owns this value, drop nothing"; `partiallyMoved` means
+	// "this binding still owns the box, but its contents may not be read again". Always false for a scalar
+	// binding or a union whose match bound no managed payload.
+	export var partiallyMoved as bool
 	// True when this name is a self-field alias inside an instance method — the bare `width`
 	// inside `function area()` of `type Rect`, which means `self.width`.
 	//
@@ -110,7 +120,7 @@ export type VarInfo
 	export var payloadCaseName as ByteArray
 
 	export static function create(name ByteArray, varType MaxonType, mutable bool, slot VarSlot) returns VarInfo
-		return Self{name: name, varType: varType, mutable: mutable, slot: slot, boundValue: 0, ownership: OwnershipKind.trivial, movedFrom: false, isSelfField: false, fieldIndex: 0, isPayloadBinding: false, payloadScrutineeName: EmptySourceText, payloadFieldIndex: 0, payloadCaseName: EmptySourceText}
+		return Self{name: name, varType: varType, mutable: mutable, slot: slot, boundValue: 0, ownership: OwnershipKind.trivial, movedFrom: false, partiallyMoved: false, isSelfField: false, fieldIndex: 0, isPayloadBinding: false, payloadScrutineeName: EmptySourceText, payloadFieldIndex: 0, payloadCaseName: EmptySourceText}
 	end 'create'
 
 	// A self-field alias: the name of field `fieldIndex` of the enclosing type, bound at
@@ -126,11 +136,11 @@ export type VarInfo
 	// to disagree with it; a `false` states the honest fact that no reassignment of the alias
 	// itself is ever legal, and leaves the field's own answer where it lives.
 	export static function createSelfField(name ByteArray, varType MaxonType, fieldIndex FieldIndex) returns VarInfo
-		return Self{name: name, varType: varType, mutable: false, slot: 0, boundValue: 0, ownership: OwnershipKind.trivial, movedFrom: false, isSelfField: true, fieldIndex: fieldIndex, isPayloadBinding: false, payloadScrutineeName: EmptySourceText, payloadFieldIndex: 0, payloadCaseName: EmptySourceText}
+		return Self{name: name, varType: varType, mutable: false, slot: 0, boundValue: 0, ownership: OwnershipKind.trivial, movedFrom: false, partiallyMoved: false, isSelfField: true, fieldIndex: fieldIndex, isPayloadBinding: false, payloadScrutineeName: EmptySourceText, payloadFieldIndex: 0, payloadCaseName: EmptySourceText}
 	end 'createSelfField'
 
 	export static function createPayloadBinding(name ByteArray, varType MaxonType, mutable bool, slot VarSlot, scrutineeName ByteArray, fieldIndex CaseOrdinal, caseName ByteArray) returns VarInfo
-		return Self{name: name, varType: varType, mutable: mutable, slot: slot, boundValue: 0, ownership: OwnershipKind.trivial, movedFrom: false, isSelfField: false, fieldIndex: 0, isPayloadBinding: true, payloadScrutineeName: scrutineeName, payloadFieldIndex: fieldIndex, payloadCaseName: caseName}
+		return Self{name: name, varType: varType, mutable: mutable, slot: slot, boundValue: 0, ownership: OwnershipKind.trivial, movedFrom: false, partiallyMoved: false, isSelfField: false, fieldIndex: 0, isPayloadBinding: true, payloadScrutineeName: scrutineeName, payloadFieldIndex: fieldIndex, payloadCaseName: caseName}
 	end 'createPayloadBinding'
 
 	// Construct a value binding for M2's substitution model: `name` aliases the SSA
@@ -138,7 +148,7 @@ export type VarInfo
 	// none), so `slot` is 0 — a value binding never reads it. The slot-backed
 	// constructors above stay the home of the future mutable/mem2reg model.
 	export static function createValueBinding(name ByteArray, varType MaxonType, mutable bool, boundValue ValueId) returns VarInfo
-		return Self{name: name, varType: varType, mutable: mutable, slot: 0, boundValue: boundValue, ownership: OwnershipKind.trivial, movedFrom: false, isSelfField: false, fieldIndex: 0, isPayloadBinding: false, payloadScrutineeName: EmptySourceText, payloadFieldIndex: 0, payloadCaseName: EmptySourceText}
+		return Self{name: name, varType: varType, mutable: mutable, slot: 0, boundValue: boundValue, ownership: OwnershipKind.trivial, movedFrom: false, partiallyMoved: false, isSelfField: false, fieldIndex: 0, isPayloadBinding: false, payloadScrutineeName: EmptySourceText, payloadFieldIndex: 0, payloadCaseName: EmptySourceText}
 	end 'createValueBinding'
 end 'VarInfo'
 

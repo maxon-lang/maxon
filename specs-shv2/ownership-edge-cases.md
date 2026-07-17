@@ -809,8 +809,7 @@ end 'main'
 30
 ```
 
-<!-- disabled-test: rc-enum-no-struct-payload-freed -->
-<!-- beyond P1.2: enum ownership trace not yet in shv2 -->
+<!-- test: rc-enum-no-struct-payload-freed -->
 A simple enum enum (no struct payload) is freed correctly at scope exit.
 ```maxon
 typealias Integer = int(i64.min to i64.max)

@@ -3963,16 +3963,48 @@ export type Parser
 	// returns nothing — the tag `ValueTypeTag.void` exists for exactly this, a ValueId the op shape demands
 	// and no rule may ever be asked about.
 	//
-	// ⭐ **A STRING DROPS THROUGH `__str_decref`, EVERYTHING ELSE THROUGH `__mm_decref`** — the tag tells
-	// them apart. A String record alone carries the external-buffer provenance (`parent@32`/`buffer@0`) a
-	// grown String leaves behind, so only its drop must free that buffer; a struct box and a raw
-	// interpolation scratch buffer (integer-tagged) have none, so the generic decref is exactly right. This
-	// IS the destructor dispatch, done STATICALLY: the parser knows the type at every drop, so there is no
+	// ⭐ **THE DROP DISPATCH, DONE STATICALLY** — the parser knows the type at every drop, so there is no
 	// stored destructor pointer and no `callIndirect` (`StringRuntime.buildStrDecref` has the full why).
 	function emitDecref(value ValueId, range SourceRange)
-		let callee = StrDecrefName if self.tagOf(value) == ValueTypeTag.string else MmDecrefName
+		let callee = self.decrefCalleeFor(value)
 		_ = self.emitRuntimeCall(callee, args: singletonArgs(value), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 	end 'emitDecref'
+
+	// ⭐ **WHICH RUNTIME ENTRY DROPS `value`** — one tag-and-type router, extended per managed kind (Wave
+	// D's ruling generalised):
+	//   • a STRING (`__str_decref`) frees its record AND the external buffer a grown String leaves behind
+	//     (`parent@32`/`buffer@0`), which the generic decref structurally cannot reach;
+	//   • a MANAGED-PAYLOAD union box (`__destruct_<U>`) runs its own tag-conditional cascade — drop each
+	//     live managed field through ITS own destructor, then free the box — because a union box carries
+	//     owned payloads the generic decref would leak;
+	//   • everything else (a SCALAR union box, a struct box whose fields are scalars, a raw interpolation
+	//     buffer) is the generic refcounted `__mm_decref` — its `TrivialDestructor` frees exactly the box.
+	// The union case is decided off the SAME `enumMatchFor` + `unionHasManagedField` predicate the
+	// destructor synthesis emits from, so a box routed to a cascade here always has one built for it.
+	function decrefCalleeFor(value ValueId) returns ByteArray
+		let tag = self.tagOf(value)
+		if tag == ValueTypeTag.string 'string'
+			return StrDecrefName
+		end 'string'
+		// ⚠ **THE `named` PRE-CHECK IS A HOT-PATH ALLOCATION GUARD, NOT A TIDY EARLY RETURN** — the exact
+		// one `valueIsUnion` documents. This runs for EVERY dropped owned value (a struct box, an
+		// interpolation buffer), and `enumMatchFor` returns a `DeclaredEnum` — a heap-boxed Maxon union
+		// VALUE even for its `undeclared` case. Only a `named`-tagged value can be a union box; a struct
+		// box is `structRef` and an interp buffer `integer`, so gating here is what keeps a struct/String
+		// drop from boxing a throwaway `DeclaredEnum.undeclared` (measured on scale-test: the whole
+		// `allocsDelta` this rung added, +42 doubling per rung, collapses to 0 with this guard).
+		if tag != ValueTypeTag.named 'notUnion'
+			return MmDecrefName
+		end 'notUnion'
+		let decl = self.enumMatchFor(value)
+		if enumMatchIsDeclared(decl) 'union'
+			let layout = requireEnumLayout(decl)
+			if unionHasManagedField(self.signatures, typeNames: self.artifact.typeNames, layout: layout, wantStringOnly: false) 'managedUnion'
+				return unionDestructorSymbol(layout.name)
+			end 'managedUnion'
+		end 'union'
+		return MmDecrefName
+	end 'decrefCalleeFor'
 
 	// ⭐ **CALL AN EMITTED RUNTIME ENTRY POINT** (`__mm_alloc`, `__mm_decref`) — the door the parser
 	// reaches the heap through, and the only one.
@@ -4990,6 +5022,15 @@ export type Parser
 			dispatchSubject = self.emitUnionTagLoad(scrut, range: SourceRange.ofToken(matchTok))
 		end 'boxedDispatch'
 
+		// ⭐ **MATCH-CONSUME BOOKKEEPING (P1.3 slice 2).** A managed payload BINDING moves its field out
+		// of the box, which is legal only when the scrutinee is an OWNED local (`scrutOwned` — a borrowed
+		// param/receiver is the P1.4 case, refused in `moveOutManagedPayload`). If ANY arm moves a managed
+		// payload out, the whole scrutinee is consumed: its binding is marked `partiallyMoved` after the
+		// loop (a re-read would deref a nulled slot — E3102 — but the box is still dropped, its cascade
+		// null-guarding the moved slots). A match that moves nothing BORROWS — the union survives.
+		let scrutOwned = self.valueIsOwnedHeap(scrut)
+		var matchMovedManaged = false
+
 		while true 'arms'
 			self.skipNewlines()
 			// The closing `end` — unless it is a keyword CASE NAME arm (`end gives …`) on an enum
@@ -5081,11 +5122,20 @@ export type Parser
 				// scope frame that closes at the arm's `end` so they cannot leak into the next arm. Each
 				// reads a slot out of the scrutinee BOX (`scrut`), not the loaded tag `dispatchSubject`.
 				// Only an enum pattern produces bindings, so `requireEnumLayout` is guarded.
+				// The owned-binding height BEFORE the arm's payload bindings — an arm-local drop FLOOR, the
+				// enum twin of `openBlock`'s `ownedCount`. A managed payload binding is enrolled in
+				// `ownedBindings` above this floor, and must be dropped on the edge that leaves the arm (see
+				// `dropArmScopedOwned`) rather than accumulating there to be decref'd in the continuation,
+				// where a value defined in only one arm's block is garbage on every other arm's path.
+				let armOwnedFloor = self.ownedBindings.count()
 				let hasPayloadBindings = payloadBindings.count() > 0
 				if hasPayloadBindings 'openArmBindings'
 					self.currentBlock = bodyBlock
 					self.scope.pushScope()
-					try self.declarePayloadBindings(payloadBindings, scrutBox: scrut, layout: requireEnumLayout(enumMatch))
+					let armMovedManaged = try self.declarePayloadBindings(payloadBindings, scrutBox: scrut, scrutOwned: scrutOwned, layout: requireEnumLayout(enumMatch))
+					if armMovedManaged 'consumed'
+						matchMovedManaged = true
+					end 'consumed'
 				end 'openArmBindings'
 
 				let armBody = try self.parseArmBody(func, bodyBlock: bodyBlock, isExpression: isExpression, carried: carried)
@@ -5093,6 +5143,8 @@ export type Parser
 				if hasPayloadBindings 'closeArmBindings'
 					self.scope.popScope()
 				end 'closeArmBindings'
+				self.dropArmScopedOwned(armOwnedFloor, exitBlock: armBody.exitBlock, anchor: patternTok)
+
 				if armBody.fellThrough 'fellThrough'
 					prevFallthrough = true
 					prevExitBlock = armBody.exitBlock
@@ -5159,10 +5211,60 @@ export type Parser
 			end 'labelMismatch'
 		end 'endLabel'
 
+		// A binding-match that moved a managed payload out CONSUMES the scrutinee: mark its binding
+		// `partiallyMoved` so a later read is E3102 (a re-match would deref a nulled slot). The box is
+		// still dropped at scope exit — its cascade null-guards the moved slots. A TEMPORARY scrutinee has
+		// no binding to mark and cannot be re-read; it stays in the pending drops and is dropped normally.
+		if matchMovedManaged 'consumeScrut'
+			self.markScrutineePartiallyMoved(scrut)
+		end 'consumeScrut'
+
 		let outcome = try self.finalizeMatchMerge(func, matchTok: matchTok, carried: carried, reachingArms: reachingArms, isExpression: isExpression)
 		self.currentBlock = outcome.cont
 		return outcome
 	end 'parseMatchCommon'
+
+	// Mark the binding a consumed match scrutinee denotes as `partiallyMoved` — a re-read is E3102, but
+	// the box is still dropped (see VarInfo.partiallyMoved). Found by VALUE via `isLiveOwnerOf`, the same
+	// predicate `poisonMoveSource` uses, so a temporary scrutinee (owned by no binding) is correctly a
+	// no-op. An O(ownedBindings) scan, run once per consuming match.
+	// ⭐ **DROP A MATCH ARM'S OWNED (managed) PAYLOAD BINDINGS**, the enum twin of `closeBlock` +
+	// `parseBlockBody`'s fall-through drop. The arm's managed bindings own heap that must be released when
+	// the arm exits, and the release is keyed on HOW it exits (the block rule, exactly):
+	//   • a LIVE exit — a fall-through to the merge, or `and fallthrough` to the next arm — still owns the
+	//     bindings here, so drop them into the exit block before it merges (a decref left for the
+	//     continuation would run in a block where a one-arm value is garbage on every other arm's path — a
+	//     use-after-free, exit 0xC0000005);
+	//   • a TERMINATED exit — a `return`/`break`/`continue` — already dropped them via `emitScopeDrops`
+	//     down to its own floor, so drop nothing.
+	// The tracking is drained to `floor` EITHER way, so the next arm starts clean and the function-end
+	// drop never sees an arm binding. `patternTok` anchors the drop, as the arm's pattern is where a
+	// reader looks for what became of its bindings.
+	function dropArmScopedOwned(floor BindingMark, exitBlock IrBlock, anchor Token)
+		if not exitBlock.isTerminated() 'leavesAlive'
+			let saved = self.currentBlock
+			self.currentBlock = exitBlock
+			self.emitScopeDrops(floor, anchor: anchor)
+			self.currentBlock = saved
+		end 'leavesAlive'
+		while self.ownedBindings.count() > floor 'drain'
+			_ = try self.ownedBindings.pop() otherwise panic("dropArmScopedOwned: ownedBindings.pop failed above the floor {floor}")
+		end 'drain'
+	end 'dropArmScopedOwned'
+
+	function markScrutineePartiallyMoved(scrut ValueId)
+		var i = 0
+		while i < self.ownedBindings.count() 'each'
+			// A `var` bound from `.get(i)`: the flag is written THROUGH the shared `VarInfo` reference
+			// (the `Scope.setValue` idiom `poisonMoveSource` uses), so every holder observes it.
+			var owned = try self.ownedBindings.get(i) otherwise panic("markScrutineePartiallyMoved: ownedBindings.get OOB at {i}")
+			if self.isLiveOwnerOf(owned, value: scrut) 'source'
+				owned.partiallyMoved = true
+				return
+			end 'source'
+			i = i + 1
+		end 'each'
+	end 'markScrutineePartiallyMoved'
 
 	// Parse ONE arm's body. A `gives` arm is a single expression (its value feeds the merge phi); a
 	// `then` arm is a single statement, and `and fallthrough` may follow it. Reports E2049 for a
@@ -5696,23 +5798,59 @@ export type Parser
 	end 'parseCasePayloadBindings'
 
 	// Declare a single-case pattern's payload bindings at the head of the arm body — each a
-	// `loadIndirect` from the SCRUTINEE BOX (`scrutBox`), bound READ-ONLY: a `let` scrutinee's
-	// payload cannot be written (a write-back to a `var` scrutinee's payload is slice 2), and a write
-	// to a `let`-bound payload is the existing immutability error. A discard `_` binds nothing. Called
-	// inside a scope frame the arm loop opens, so the bindings leave scope at the arm's `end` and
-	// cannot leak into the next arm. The extracted value is a SCALAR copy — not a borrow into the box
-	// — so dropping the box at scope exit does not invalidate it (which is exactly why a managed
-	// payload, a genuine borrow, is refused until slice 2).
-	function declarePayloadBindings(bindings PayloadBindingArray, scrutBox ValueId, layout EnumLayout) throws ParseError
+	// `loadIndirect` from the SCRUTINEE BOX (`scrutBox`). Called inside a scope frame the arm loop opens,
+	// so the bindings leave scope at the arm's `end` and cannot leak into the next arm. A discard `_`
+	// binds nothing (its managed payload is left in the box and dropped by the scope-exit cascade).
+	//
+	// ⭐ **A SCALAR binding is a COPY** (not a borrow into the box), so dropping the box does not
+	// invalidate it. A MANAGED binding (String/struct) is a MOVE-OUT: the binding OWNS the payload and
+	// drops it at its own scope exit, and the box slot is nulled so the box's cascade skips it (see
+	// `moveOutManagedPayload`). Returns whether ANY managed field was moved out — the whole match then
+	// consumes the scrutinee (`markScrutineePartiallyMoved`).
+	function declarePayloadBindings(bindings PayloadBindingArray, scrutBox ValueId, scrutOwned bool, layout EnumLayout) returns bool throws ParseError
+		var movedManaged = false
 		for binding in bindings 'each'
 			if binding.isDiscard 'discard'
 				continue
 			end 'discard'
 			let range = SourceRange.ofToken(binding.nameTok)
+			let class = classifyUnionPayload(self.signatures, typeNames: self.artifact.typeNames, fieldType: binding.field.declaredType)
 			let loaded = try self.emitUnionPayloadLoad(scrutBox, field: binding.field, slot: binding.slot, layout: layout, posTok: binding.nameTok, range: range)
-			_ = try self.scope.declareValueBinding(binding.nameTok.value, varType: binding.field.declaredType, mutable: false, value: loaded) otherwise throw ParseError.localShadowsSelfField(String.from(binding.nameTok.value), typeName: String.from(self.enclosingType), line: binding.nameTok.line, column: binding.nameTok.column)
+			var bindingInfo = try self.scope.declareValueBinding(binding.nameTok.value, varType: self.typeOf(loaded), mutable: false, value: loaded) otherwise throw ParseError.localShadowsSelfField(String.from(binding.nameTok.value), typeName: String.from(self.enclosingType), line: binding.nameTok.line, column: binding.nameTok.column)
+			if payloadClassIsManaged(class) 'managedMoveOut'
+				try self.moveOutManagedPayload(bindingInfo, loaded: loaded, class: class, scrutBox: scrutBox, scrutOwned: scrutOwned, slot: binding.slot, layout: layout, nameTok: binding.nameTok, range: range)
+				movedManaged = true
+			end 'managedMoveOut'
 		end 'each'
+		return movedManaged
 	end 'declarePayloadBindings'
+
+	// ⭐ **MOVE A MANAGED PAYLOAD OUT OF THE SCRUTINEE BOX** into its binding — the match half of static
+	// single-owner ownership. The binding OWNS the payload (enrolled in `ownedBindings`, so it drops at
+	// its own scope exit through `emitDecref`'s tag routing), and the box SLOT is NULLED so the box's own
+	// `__destruct_<U>` cascade — which null-guards every field — does not decref it a second time.
+	//
+	// ⚠ Moving a managed field out of a BORROWED union (a parameter, a receiver) would STEAL it from its
+	// owner — the caller's cascade would then skip a payload the callee already dropped, or double-free
+	// one it did not. That is the cross-call borrow-consume ruling deferred to P1.4, so the scrutinee must
+	// be an OWNED LOCAL; a borrowed one is E2015 here rather than a silent double-free.
+	function moveOutManagedPayload(bindingInfo VarInfo, loaded ValueId, class PayloadClass, scrutBox ValueId, scrutOwned bool, slot CaseIndex, layout EnumLayout, nameTok Token, range SourceRange) throws ParseError
+		if not scrutOwned 'borrowedScrut'
+			throw ParseError.unsupported("binding the managed payload '{String.from(nameTok.value)}' out of a `{layout.kindWord()} {String.from(layout.name)}` that is not an OWNED local — a borrowed union (a parameter, a receiver) cannot have its payload MOVED out; that cross-call ownership arrives at P1.4 (match a payload-free / `_`-discarded arm to borrow it instead)", line: nameTok.line, column: nameTok.column)
+		end 'borrowedScrut'
+
+		// A String binding owns heap the tag alone cannot tell from a borrowed literal, so record its
+		// provenance; a struct box is owned via `tagIsStructRef` and needs none. The binding owns the drop
+		// (it is in `ownedBindings`), not the statement, so the value leaves the pending-temp list.
+		if self.tagOf(loaded) == ValueTypeTag.string 'stringOwned'
+			self.trackOwnedTemp(loaded)
+			self.removeFromPendingTemps(loaded)
+		end 'stringOwned'
+		self.ownedBindings.push(bindingInfo)
+
+		let zero = self.emitLiteral(0 as ParsedInt, valueType: MaxonType.integer, range: range)
+		self.emitIndirectStore(scrutBox, offset: layout.payloadSlotOffset(slot), value: zero, storageType: payloadStorageOf(class), range: range)
+	end 'moveOutManagedPayload'
 
 	// The declaration index of the case named by `nameTok`, or E3034 (unknown case) positioned at
 	// `posTok`. THE one emitter of "this name is not a case of this enum" — a `Color.red` literal
@@ -7423,12 +7561,18 @@ export type Parser
 		let arity = layout.payloadArityAt(caseIndex)
 
 		var args = ValueIdArray.create()
+		// Per-argument: was it a bare reference to a local binding (`U.case(t)`)? A MANAGED payload MOVES
+		// its argument in, and only a bare-local RHS can poison a source binding — captured off the token
+		// position, exactly as `parseBinding`'s move-on-bind does (see `rhsWasBareLocalReference`).
+		var argsBareLocal = BoolArray.create()
 		if self.at(TokenKind.leftParen) 'withArgs'
 			try self.consume(TokenKind.leftParen)
 			while true 'argLoop'
 				// The climber, not `parseExpression`, for `parseStructLiteralFields`' reason: an
 				// argument is parsed INSIDE an expression that already seeded `currentBlock`.
+				let argStart = self.pos
 				args.push(try self.parseBinary(func, minPrec: OrPrecedence))
+				argsBareLocal.push(self.rhsWasBareLocalReference(argStart))
 				if not self.at(TokenKind.comma) 'endArgs'
 					break
 				end 'endArgs'
@@ -7441,34 +7585,37 @@ export type Parser
 			throw ParseError.unsupported("`{layout.kindWord()} {String.from(layout.name)}.{String.from(caseTok.value)}` expects {arity} payload argument(s), got {args.count()}", line: caseTok.line, column: caseTok.column)
 		end 'arityMismatch'
 
-		return try self.emitEnumBox(layout, caseIndex: caseIndex, args: args, caseTok: caseTok, range: range)
+		return try self.emitEnumBox(layout, caseIndex: caseIndex, args: args, argsBareLocal: argsBareLocal, caseTok: caseTok, range: range)
 	end 'parseEnumBoxConstruct'
 
-	// Emit the box: validate every payload field (reject managed/float, type-check each argument)
-	// BEFORE any op, then `__mm_alloc` the `8 + maxArity*8` bytes, store the case TAG at offset 0,
-	// store each scalar payload at `8 + slot*8`, and ZERO-FILL the unused slots `[arity, maxArity)`.
+	// Emit the box: validate + classify every payload field (reject float/nested-union, type-check each
+	// argument) BEFORE any op, then `__mm_alloc` the `8 + maxArity*8` bytes, store the case TAG at
+	// offset 0, store each payload at `8 + slot*8`, and ZERO-FILL the unused slots `[arity, maxArity)`.
 	//
 	// ⭐ The box is TAGGED `named(<union>)` — the same tag a scalar enum value carries, so `match`
 	// recognizes it through the one `enumMatchFor` door — and enrolled as an OWNED HEAP TEMPORARY
 	// (`trackOwnedTemp`), so `parseBinding` binds its drop to scope exit and an unbound `Move.walk(5)`
-	// statement is freed at statement end. Its destructor is the TRIVIAL one (`__mm_decref` frees the
-	// box; a scalar payload owns nothing beneath it), which is why slice 1 needs no `funcAddr`/
-	// `callIndirect` and no per-union `__destruct_<U>` — those arrive with the managed payload.
+	// statement is freed at statement end.
+	//
+	// ⭐ **A MANAGED PAYLOAD IS MOVED IN** (`moveInPayload`) — no incref, no copy of an owned value. The
+	// box owns the payload after the store; the source binding is poisoned (E3102) and an owned temporary
+	// is removed from the statement's pending drops. A wholly-scalar union keeps slice 1's trivial
+	// destructor; a managed one drops through `__destruct_<U>` (see `emitDecref`/`synthesizeUnionDestructor`).
 	//
 	// ⚠ **THE ZERO-FILL IS MANDATORY** even though the slab returns zeroed memory: it pins a
-	// deterministic 0 in a narrow case's unused slots, which slice 2's destructor will iterate — and
-	// it is what both reference lowerings emit (`LowerMaxonToStd.maxon:12549`).
-	function emitEnumBox(layout EnumLayout, caseIndex CaseIndex, args ValueIdArray, caseTok Token, range SourceRange) returns ValueId throws ParseError
+	// deterministic 0 in a narrow case's unused slots, and a NULL slot is exactly what the cascade's
+	// null-guard skips — so a zeroed managed slot is never decref'd as a bogus pointer.
+	function emitEnumBox(layout EnumLayout, caseIndex CaseIndex, args ValueIdArray, argsBareLocal BoolArray, caseTok Token, range SourceRange) returns ValueId throws ParseError
 		let payloads = layout.payloadsAt(caseIndex)
 
-		// Validate every field before emitting a single op — a refused payload emits no code.
-		var storageTypes = MaxonTypeArray.create()
+		// Validate + classify every field before emitting a single op — a refused payload emits no code.
+		var classes = PayloadClassArray.create()
 		for i in 0 upto payloads.count() 'validate'
 			let field = try payloads.get(i) otherwise panic("emitEnumBox: payloadsAt returned fewer fields than its own count at {i}")
-			let storage = try self.resolvePayloadStorage(field, layout: layout, posTok: caseTok)
+			let class = try self.requirePayloadLowerable(field, layout: layout, posTok: caseTok)
 			let arg = try args.get(i) otherwise panic("emitEnumBox: args.count() was checked to equal the arity but get OOB at {i}")
-			try self.requirePayloadArgType(field, value: arg, layout: layout, caseTok: caseTok)
-			storageTypes.push(storage)
+			try self.requirePayloadArgType(field, class: class, value: arg, layout: layout, caseTok: caseTok)
+			classes.push(class)
 		end 'validate'
 
 		let size = self.emitLiteral(layout.boxSizeBytes(), valueType: MaxonType.integer, range: range)
@@ -7479,8 +7626,10 @@ export type Parser
 
 		for i in 0 upto payloads.count() 'storeEach'
 			let arg = try args.get(i) otherwise panic("emitEnumBox: args.get OOB at {i} after the arity check")
-			let storage = try storageTypes.get(i) otherwise panic("emitEnumBox: storageTypes.get OOB at {i} — it is filled in lockstep with the fields")
-			self.emitIndirectStore(box, offset: layout.payloadSlotOffset(i), value: arg, storageType: storage, range: range)
+			let class = try classes.get(i) otherwise panic("emitEnumBox: classes.get OOB at {i} — it is filled in lockstep with the fields")
+			let bareLocal = try argsBareLocal.get(i) otherwise panic("emitEnumBox: argsBareLocal.get OOB at {i} — captured in lockstep with the args")
+			let stored = self.moveInPayload(class, arg: arg, argBareLocal: bareLocal, range: range)
+			self.emitIndirectStore(box, offset: layout.payloadSlotOffset(i), value: stored, storageType: payloadStorageOf(class), range: range)
 		end 'storeEach'
 
 		for j in payloads.count() upto layout.maxPayloadArity() 'zeroFill'
@@ -7491,6 +7640,41 @@ export type Parser
 		return box
 	end 'emitEnumBox'
 
+	// ⭐ **MOVE A MANAGED PAYLOAD INTO THE BOX** — the construct half of static single-owner ownership,
+	// the mirror of `parseBinding`'s move-on-bind. A scalar is stored as-is. A managed payload transfers:
+	//   • a BORROWED String literal/param is PROMOTED to an owned heap copy first (`promoteToOwnedString`),
+	//     so the box owns a droppable payload — the copy is a fresh temp, removed from the pending list;
+	//   • an already-OWNED payload (an owned String, an interpolation temp, a struct box) is transferred:
+	//     a bare-local reference to a binding is POISONED (E3102 on later use), an owned temporary is
+	//     removed from the pending drops. No incref, no copy — the box becomes the value's sole owner.
+	function moveInPayload(class PayloadClass, arg ValueId, argBareLocal bool, range SourceRange) returns ValueId
+		let isString = match class 'c'
+			managed(_, s) gives s
+			scalar gives false
+			floatPayload gives false
+			nestedUnion gives false
+			undeclaredName gives false
+		end 'c'
+		if not payloadClassIsManaged(class) 'scalar'
+			return arg
+		end 'scalar'
+
+		if isString and not self.valueIsOwnedHeap(arg) 'promoteBorrowed'
+			// A borrowed String literal/param — copy its bytes into a fresh owned record the box can drop.
+			let owned = self.promoteToOwnedString(arg, range: range)
+			self.removeFromPendingTemps(owned)
+			return owned
+		end 'promoteBorrowed'
+
+		// An already-owned managed value moves out of its source into the box.
+		if argBareLocal 'moveOnBind'
+			self.poisonMoveSource(arg)
+		end 'moveOnBind' else 'consumeTemp'
+			self.removeFromPendingTemps(arg)
+		end 'consumeTemp'
+		return arg
+	end 'moveInPayload'
+
 	// Store the case TAG at the box's offset 0 as an i64 — the same i64 tag `emitEnumTagLiteral` mints
 	// for a bare enum and the same `match` loads back to dispatch, so construct and match cannot
 	// disagree about what a case's tag is.
@@ -7499,10 +7683,40 @@ export type Parser
 		self.emitIndirectStore(box, offset: UnionTagOffset, value: tagLit, storageType: MaxonType.integer, range: range)
 	end 'emitUnionTagStore'
 
-	// A payload argument must agree with its field's DECLARED type — `checkDeclaredType`, the same
-	// coercion-site rule a struct literal field, a call argument and a `return` ask. Anchored at the
+	// Classify a payload field's storage, rejecting the ones this rung cannot lower — a FLOAT (needs the
+	// bitcast ops a later rung adds) and a NESTED boxed-union payload (its own destructor cascade is a
+	// later rung). A SCALAR, a String, and a struct are lowerable; the returned class carries the storage
+	// type and, for a managed payload, whether it is a String. The reject is at the construct/extract USE
+	// site (not the declaration), so the tolerant enum sweep never truncates a layout over it.
+	function requirePayloadLowerable(field PayloadField, layout EnumLayout, posTok Token) returns PayloadClass throws ParseError
+		let class = classifyUnionPayload(self.signatures, typeNames: self.artifact.typeNames, fieldType: field.declaredType)
+		match class 'c'
+			scalar then break 'c'
+			managed then break 'c'
+			undeclaredName then break 'c'
+			floatPayload then throw ParseError.unsupported(self.floatPayloadMessage(field, layout: layout), line: posTok.line, column: posTok.column)
+			nestedUnion(display) then throw ParseError.unsupported(self.nestedUnionPayloadMessage(field, layout: layout, typeName: display), line: posTok.line, column: posTok.column)
+		end 'c'
+		return class
+	end 'requirePayloadLowerable'
+
+	// A payload argument must agree with its field's classified type. A SCALAR uses `checkDeclaredType`,
+	// the same coercion-site rule a struct literal field, a call argument and a `return` ask; a MANAGED
+	// payload requires the matching heap kind (a String, or a struct of the same name). Anchored at the
 	// case name (the whole construct's anchor); no per-argument span is tracked at this rung.
-	function requirePayloadArgType(field PayloadField, value ValueId, layout EnumLayout, caseTok Token) throws ParseError
+	function requirePayloadArgType(field PayloadField, class PayloadClass, value ValueId, layout EnumLayout, caseTok Token) throws ParseError
+		match class 'c'
+			scalar then try self.requireScalarPayloadArg(field, value: value, layout: layout, caseTok: caseTok)
+			managed(storage, isString) then try self.requireManagedPayloadArg(field, storage: storage, isString: isString, value: value, layout: layout, caseTok: caseTok)
+			// An undeclared payload name is a user error TypeResolution reports (E3011); the op is kept
+			// well-formed for the instant before the pipeline's error gate throws — nothing to check here.
+			undeclaredName then break 'c'
+			floatPayload then panic("requirePayloadArgType: a float payload reached the arg check — requirePayloadLowerable rejects it first")
+			nestedUnion then panic("requirePayloadArgType: a nested-union payload reached the arg check — requirePayloadLowerable rejects it first")
+		end 'c'
+	end 'requirePayloadArgType'
+
+	function requireScalarPayloadArg(field PayloadField, value ValueId, layout EnumLayout, caseTok Token) throws ParseError
 		let declared = maxonTypeTag(field.declaredType)
 		let got = self.tagOf(value)
 		match checkDeclaredType(got, declared: declared) 'declared'
@@ -7510,7 +7724,28 @@ export type Parser
 			mismatch then throw ParseError.assignTypeMismatch("{String.from(layout.name)}.{String.from(caseTok.value)}({String.from(field.name)})", got: typeTagName(got), expected: typeTagName(declared), line: caseTok.line, column: caseTok.column)
 			narrowsFloatToInt then throw ParseError.implicitNarrowing(typeTagName(got), targetType: typeTagName(declared), line: caseTok.line, column: caseTok.column)
 		end 'declared'
-	end 'requirePayloadArgType'
+	end 'requireScalarPayloadArg'
+
+	// A managed payload argument must be the matching heap kind: a String field takes a `string`; a
+	// struct field takes a `structRef` of the SAME struct name (a pointer of the wrong struct would pass
+	// a tag-only check). The names are compared through this file's interner, the one the classifier's
+	// `structRef` id and the argument's own id were both minted from.
+	function requireManagedPayloadArg(field PayloadField, storage MaxonType, isString bool, value ValueId, layout EnumLayout, caseTok Token) throws ParseError
+		let got = self.tagOf(value)
+		let wantTag = maxonTypeTag(storage)
+		if got != wantTag 'tagMismatch'
+			throw ParseError.assignTypeMismatch("{String.from(layout.name)}.{String.from(caseTok.value)}({String.from(field.name)})", got: typeTagName(got), expected: typeTagName(wantTag), line: caseTok.line, column: caseTok.column)
+		end 'tagMismatch'
+		if isString 'stringOk'
+			return
+		end 'stringOk'
+
+		let wantName = try self.artifact.typeNames.nameOf(typeNameIdOf(storage)) otherwise panic("requireManagedPayloadArg: the payload field's struct name id is not in this file's interner")
+		let gotName = try self.artifact.typeNames.nameOf(typeNameIdOf(self.typeOf(value))) otherwise panic("requireManagedPayloadArg: the argument's struct name id is not in this file's interner")
+		if not wantName.equals(gotName) 'nameMismatch'
+			throw ParseError.assignTypeMismatch("{String.from(layout.name)}.{String.from(caseTok.value)}({String.from(field.name)})", got: String.from(gotName), expected: String.from(wantName), line: caseTok.line, column: caseTok.column)
+		end 'nameMismatch'
+	end 'requireManagedPayloadArg'
 
 	// Load a boxed union's i64 TAG from offset 0 — the DISPATCH SUBJECT a `match` compares against
 	// each case's tag. Its result is `integer`-tagged (a plain i64), not `named`, so the dispatch
@@ -7520,14 +7755,17 @@ export type Parser
 		return self.emitIndirectLoad(MaxonType.integer, box: box, offset: UnionTagOffset, storageType: MaxonType.integer, range: range)
 	end 'emitUnionTagLoad'
 
-	// Load a scalar payload field out of the box at `8 + slot*8`, minted at the field's DECLARED type
-	// (so a nested `match dir` sees a `Direction`) with the concrete STORAGE width on the op — the
-	// `emitFieldLoad` split, one op further. `resolvePayloadStorage` rejects the managed/float
-	// payloads slice 1 cannot lower, at the binding token — a borrowed managed payload extracted from
-	// the box would outlive the box's drop, which is exactly slice 2's ownership work.
+	// Load a payload field out of the box at `8 + slot*8` — the `emitFieldLoad` split, one op further.
+	// A SCALAR is minted at the field's DECLARED type (so a nested `match dir` sees a `Direction`, and the
+	// shift rule reads a ranged alias's low bound); a MANAGED payload is minted at its concrete storage
+	// type (`structRef`/`string`) so an extracted struct's field access (`b.mass`) resolves and its
+	// ownership is read off the tag. The op carries the concrete storage width in both cases
+	// (`maxonTypeToStdType` panics on a `named`). `requirePayloadLowerable` rejects float/nested here.
 	function emitUnionPayloadLoad(box ValueId, field PayloadField, slot CaseIndex, layout EnumLayout, posTok Token, range SourceRange) returns ValueId throws ParseError
-		let storage = try self.resolvePayloadStorage(field, layout: layout, posTok: posTok)
-		return self.emitIndirectLoad(field.declaredType, box: box, offset: layout.payloadSlotOffset(slot), storageType: storage, range: range)
+		let class = try self.requirePayloadLowerable(field, layout: layout, posTok: posTok)
+		let storage = payloadStorageOf(class)
+		let valueType = payloadValueTypeOf(class, declared: field.declaredType)
+		return self.emitIndirectLoad(valueType, box: box, offset: layout.payloadSlotOffset(slot), storageType: storage, range: range)
 	end 'emitUnionPayloadLoad'
 
 	// Emit a case's TAG as an i64 `literal` whose VALUE tag is `named(<enum>)`. The one site that
@@ -8101,7 +8339,11 @@ export type Parser
 			return
 		end 'selfFieldAlias'
 
-		if binding.movedFrom 'moved'
+		// Both move states are dead at every read. `movedFrom` (a `let u = t` / `s = t` handed the value
+		// to another binding) and `partiallyMoved` (a binding-match moved a managed payload OUT of this
+		// union, nulling its slot) differ only in whether the binding still owes a DROP — a use is
+		// forbidden for both, and this is the one predicate that says so.
+		if binding.movedFrom or binding.partiallyMoved 'moved'
 			throw ParseError.useAfterMove(String.from(nameTok.value), line: nameTok.line, column: nameTok.column)
 		end 'moved'
 	end 'requireBindingLive'
@@ -8282,78 +8524,16 @@ export type Parser
 	// declaration, exactly as a struct-typed field's is refused at its use site (`requireStructBase`)
 	// and not where the field is declared: a rejection at declaration would `throw` in the tolerant
 	// enum sweep and truncate the layout (see `readEnumCaseInto`'s payload arm).
-	function resolvePayloadStorage(field PayloadField, layout EnumLayout, posTok Token) returns MaxonType throws ParseError
-		match field.declaredType 'kind'
-			// A scalar keyword type is already concrete — `maxonTypeToStdType` gives it the width.
-			boolean then return field.declaredType
-			integer then return field.declaredType
-			exitCode then return field.declaredType
-			float then throw ParseError.unsupported(self.floatPayloadMessage(field, layout: layout), line: posTok.line, column: posTok.column)
-			// A String / struct reference is a MANAGED heap pointer — its move-in and its drop are
-			// slice 2's ownership work, not slice 1's.
-			string then throw ParseError.unsupported(self.managedPayloadMessage(field, layout: layout, typeName: "String"), line: posTok.line, column: posTok.column)
-			structRef then throw ParseError.unsupported(self.managedPayloadMessage(field, layout: layout, typeName: String.from(try self.artifact.typeNames.nameOf(typeNameIdOf(field.declaredType)) otherwise "a struct")), line: posTok.line, column: posTok.column)
-			unresolved then panic("resolvePayloadStorage: a payload field is declared `unresolved` — `parseTypeReference` produces only `named`, `structRef` and the three primitive keywords, so no payload declaration can carry one")
-			named then break 'kind'
-		end 'kind'
-
-		let name = try self.artifact.typeNames.nameOf(typeNameIdOf(field.declaredType)) otherwise panic("resolvePayloadStorage: a payload field's named type has an id that is not in this file's interner — the layout's types are adopted through the same interner the parser mints them from")
-
-		// A ranged-int alias is a scalar of its underlying width; a FLOAT alias (none exist yet) would
-		// be a float payload, rejected the same way a bare `float` is.
-		match self.signatures.aliasOf(name) 'alias'
-			declared(alias) then return try self.scalarAliasUnderlying(alias, field: field, layout: layout, posTok: posTok)
-			undeclared then break 'alias'
-		end 'alias'
-
-		// A payload-FREE enum's value is an i64 tag — a scalar; a BOXED union payload is a managed
-		// heap pointer (slice 2).
-		match self.signatures.enumOf(name) 'asEnum'
-			declared(enumLayout) then return try self.scalarEnumStorage(enumLayout, field: field, layout: layout, posTok: posTok)
-			undeclared then break 'asEnum'
-		end 'asEnum'
-
-		// A `type` (struct) payload is managed. An undeclared name is a user error TypeResolution
-		// reports as E3011; returning `integer` keeps the op well-formed for the instant before the
-		// pipeline's error gate throws, exactly as `fieldStorageType`'s recovery does.
-		match self.signatures.structOf(name) 'asStruct'
-			declared then throw ParseError.unsupported(self.managedPayloadMessage(field, layout: layout, typeName: String.from(name)), line: posTok.line, column: posTok.column)
-			undeclared then return MaxonType.integer
-		end 'asStruct'
-	end 'resolvePayloadStorage'
-
-	// A ranged-int alias payload is a scalar of its underlying width. A FLOAT-underlying alias (none
-	// are declarable yet — `Parser.readTypeAliasDeclaration` accepts only `int(low to high)`) would
-	// be a float payload and is rejected the same way a bare `float` is.
-	function scalarAliasUnderlying(alias RangedTypeAlias, field PayloadField, layout EnumLayout, posTok Token) returns MaxonType throws ParseError
-		if maxonTypeTag(alias.underlying) == ValueTypeTag.float 'floatAlias'
-			throw ParseError.unsupported(self.floatPayloadMessage(field, layout: layout), line: posTok.line, column: posTok.column)
-		end 'floatAlias'
-		return alias.underlying
-	end 'scalarAliasUnderlying'
-
-	// A payload whose type is another enum/union: a payload-FREE enum is a scalar (its value is its
-	// i64 tag, stored inline — `walk(dir Direction)`); a BOXED union is a managed heap pointer whose
-	// ownership is slice 2's.
-	function scalarEnumStorage(enumLayout EnumLayout, field PayloadField, layout EnumLayout, posTok Token) returns MaxonType throws ParseError
-		if enumLayout.isBoxed() 'boxedPayload'
-			throw ParseError.unsupported(self.managedPayloadMessage(field, layout: layout, typeName: "{enumLayout.kindWord()} {String.from(enumLayout.name)}"), line: posTok.line, column: posTok.column)
-		end 'boxedPayload'
-		return MaxonType.integer
-	end 'scalarEnumStorage'
-
-	// The two payload-rejection MESSAGES, one shape each, so the construct and extract sites report a
-	// refused payload identically. They return the STRING, and each caller throws
-	// `ParseError.unsupported(<message>, …)` INLINE — never `throw self.helperReturningAParseError(…)`,
-	// which LEAKS 2 allocations under the C#-emitted refcount runtime: a freshly-owned union returned
-	// across a call and immediately re-thrown is not reconciled (the family OPEN.md records for a
-	// `throw` of a call result and for the owned-value ternary). Building the message via a call that
-	// returns a String and throwing the ParseError inline is the non-leaking shape
-	// `requirePayloadArgType` already uses. MEASURED: `union U { s(x String) }` + `U.s(5)` went from
-	// `MM leak: 2 allocation(s) remain` (exit 101) to a clean exit 1.
-	function managedPayloadMessage(field PayloadField, layout EnumLayout, typeName String) returns String
-		return "a managed payload field '{String.from(field.name)}' of type '{typeName}' on `{layout.kindWord()} {String.from(layout.name)}` (String/struct/boxed-union payloads and their move-in/drop ownership arrive at P1.3 slice 2)"
-	end 'managedPayloadMessage'
+	// The payload-rejection MESSAGES, one shape each, so the construct and extract sites report a refused
+	// payload identically. They return the STRING, and each caller throws `ParseError.unsupported(…)`
+	// INLINE — never `throw self.helperReturningAParseError(…)`, which LEAKS 2 allocations under the
+	// C#-emitted refcount runtime: a freshly-owned union returned across a call and immediately re-thrown
+	// is not reconciled (the family OPEN.md records for a `throw` of a call result and for the owned-value
+	// ternary). Building the message via a call that returns a String and throwing the ParseError inline
+	// is the non-leaking shape.
+	function nestedUnionPayloadMessage(field PayloadField, layout EnumLayout, typeName String) returns String
+		return "a payload field '{String.from(field.name)}' of type '{typeName}' on `{layout.kindWord()} {String.from(layout.name)}` — a nested payload-bearing union payload needs its own destructor cascade, which arrives at a later rung (String and struct payloads are supported)"
+	end 'nestedUnionPayloadMessage'
 
 	function floatPayloadMessage(field PayloadField, layout EnumLayout) returns String
 		return "payload field '{String.from(field.name)}' on `{layout.kindWord()} {String.from(layout.name)}`: a `float` payload needs the bitcast ops a later rung adds (a scalar-only union is int-tagged)"

@@ -517,6 +517,180 @@ export union DeclaredEnum
 	undeclared
 end 'DeclaredEnum'
 
+// ⭐ **HOW A UNION PAYLOAD FIELD IS STORED AND DROPPED — P1.3 slice 2.** The ONE classifier the
+// construct (move-in), the match extract (move-out), the drop routing, and the synthesized
+// `__destruct_<U>` cascade all read, so "is field F managed, and if so String or struct?" is decided in
+// exactly ONE place. That is the whole defence against this rung's signature bug: a field moved IN but
+// not dropped leaks; dropped but not moved in double-frees — and neither can happen when one function
+// decides both. It is v1's `unionHasManagedPayload` predicate generalised to also name the KIND.
+export union PayloadClass
+	// int / bool / exitCode / a ranged-int alias / a payload-free enum (whose value IS its i64 tag).
+	// Stored inline; owns nothing; the cascade skips it.
+	scalar(storage MaxonType)
+	// A String (`isString`) or a struct box — an owned heap pointer. Construct MOVES it in (no incref);
+	// a match binding MOVES it out; the cascade drops it (String via `__str_decref`, struct via
+	// `__mm_decref`). `storage` is the field's own type, which `maxonTypeToStdType` gives a machine word.
+	managed(storage MaxonType, isString bool)
+	// A `float` payload — needs the bitcast ops a later rung adds (a scalar-only union is int-tagged).
+	floatPayload
+	// A boxed-union payload (a nested payload-bearing union) — its own destructor cascade is a later
+	// rung (P1.7+). `display` is the "union U"/"enum U" text a rejection message names.
+	nestedUnion(display String)
+	// A name no file declares — `TypeResolution` reports it as E3011; the caller keeps the op
+	// well-formed for the instant before the pipeline's error gate throws.
+	undeclaredName
+end 'PayloadClass'
+
+// Classify a union payload field's storage and ownership. `typeNames` resolves a `named` field's id to
+// a NAME; pass the interner the LAYOUT's ids live in — the file-local artifact interner at the
+// construct/extract sites, `project.typeNames` at the destructor-synthesis site. All three lookups
+// below are keyed by that name, so they are interner-independent once the name is in hand.
+export function classifyUnionPayload(signatures ProgramSignatures, typeNames TypeNameInterner, fieldType MaxonType) returns PayloadClass
+	match fieldType 'kind'
+		boolean then return PayloadClass.scalar(fieldType)
+		integer then return PayloadClass.scalar(fieldType)
+		exitCode then return PayloadClass.scalar(fieldType)
+		float then return PayloadClass.floatPayload
+		// A String / struct reference is a managed heap pointer whose move-in and drop are this rung's
+		// work. A payload field of a struct's own name resolves to `structRef` (`Self` and the enclosing
+		// type); a reference to ANOTHER struct arrives as `named` and is resolved below.
+		string then return PayloadClass.managed(fieldType, isString: true)
+		structRef then return PayloadClass.managed(fieldType, isString: false)
+		unresolved then panic("classifyUnionPayload: a payload field is declared `unresolved` — `parseTypeReference` produces only `named`, `structRef` and the three primitive keywords, so no payload declaration can carry one")
+		named then break 'kind'
+	end 'kind'
+
+	let name = try typeNames.nameOf(typeNameIdOf(fieldType)) otherwise panic("classifyUnionPayload: a payload field's named type id is not in the interner it was resolved against — pass the interner the layout's ids live in")
+
+	// A ranged-int alias is a scalar of its underlying width; a float-underlying alias would be a float
+	// payload (none are declarable yet).
+	match signatures.aliasOf(name) 'alias'
+		declared(alias) then return aliasPayloadClass(alias)
+		undeclared then break 'alias'
+	end 'alias'
+
+	// A payload-FREE enum's value is an i64 tag — a scalar; a BOXED union is a managed heap pointer
+	// whose own destructor cascade is a later rung.
+	match signatures.enumOf(name) 'asEnum'
+		declared(enumLayout) then return enumPayloadClass(enumLayout)
+		undeclared then break 'asEnum'
+	end 'asEnum'
+
+	// A `type` (struct) payload is a managed heap pointer. Its storage type is a `structRef` — NOT the
+	// `named` the field was spelled with: `maxonTypeToStdType` panics on a `named` (an op's type must be
+	// concrete by lowering), and a struct BINDING's field access (`b.mass`) requires the `structRef`
+	// tag (`requireStructBase`). An undeclared name is a user error TypeResolution reports as E3011.
+	match signatures.structOf(name) 'asStruct'
+		declared then return PayloadClass.managed(MaxonType.structRef(typeNameIdOf(fieldType)), isString: false)
+		undeclared then return PayloadClass.undeclaredName
+	end 'asStruct'
+end 'classifyUnionPayload'
+
+// A ranged-int alias payload is a scalar of its underlying width. A float-underlying alias would be a
+// float payload, rejected the same way a bare `float` is.
+function aliasPayloadClass(alias RangedTypeAlias) returns PayloadClass
+	if maxonTypeTag(alias.underlying) == ValueTypeTag.float 'floatAlias'
+		return PayloadClass.floatPayload
+	end 'floatAlias'
+	return PayloadClass.scalar(alias.underlying)
+end 'aliasPayloadClass'
+
+// A payload whose type is another enum/union: a payload-FREE enum is a scalar (its value is its i64
+// tag, stored inline); a BOXED union is a managed heap pointer whose ownership is a later rung.
+function enumPayloadClass(enumLayout EnumLayout) returns PayloadClass
+	if enumLayout.isBoxed() 'boxed'
+		return PayloadClass.nestedUnion("{enumLayout.kindWord()} {String.from(enumLayout.name)}")
+	end 'boxed'
+	return PayloadClass.scalar(MaxonType.integer)
+end 'enumPayloadClass'
+
+// ⭐ **THE ONE LOOP THREE QUESTIONS SHARE.** Does any case carry a payload that needs a DROP — a managed
+// (String/struct) field, or (when `wantStringOnly`) specifically a String field? Keeping it ONE function,
+// not one copy per site, is what makes the destructor's dropped set, the construct's moved set, and the
+// `usesStrDecref` gate agree on what "managed" means by construction. Callers:
+//   • `wantStringOnly: false` — does the union need a `__destruct_<U>` at all / does the construct move
+//     its payloads in (`decrefCalleeFor`, `installUnionDestructors`, `noteUnionDestructorUsage`);
+//   • `wantStringOnly: true`  — does that destructor transitively call `__str_decref` (the usesStrDecref
+//     gate in `noteUnionDestructorUsage`).
+export function unionHasManagedField(signatures ProgramSignatures, typeNames TypeNameInterner, layout EnumLayout, wantStringOnly bool) returns bool
+	for ci in 0 upto layout.caseCount() 'eachCase'
+		if caseHasManagedField(signatures, typeNames: typeNames, layout: layout, ci: ci, wantStringOnly: wantStringOnly) 'found'
+			return true
+		end 'found'
+	end 'eachCase'
+	return false
+end 'unionHasManagedField'
+
+// The per-CASE half — the destructor's tag switch emits a drop block only for a case this answers true
+// for, so the switch and the union-wide gate above read the exact same classification.
+export function caseHasManagedField(signatures ProgramSignatures, typeNames TypeNameInterner, layout EnumLayout, ci CaseIndex, wantStringOnly bool) returns bool
+	let payloads = layout.payloadsAt(ci)
+	for fi in 0 upto payloads.count() 'eachField'
+		let field = try payloads.get(fi) otherwise panic("caseHasManagedField: payloadsAt count disagrees with get at {fi}")
+		let class = classifyUnionPayload(signatures, typeNames: typeNames, fieldType: field.declaredType)
+		let needsDrop = payloadClassIsString(class) if wantStringOnly else payloadClassIsManaged(class)
+		if needsDrop 'found'
+			return true
+		end 'found'
+	end 'eachField'
+	return false
+end 'caseHasManagedField'
+
+// Is a classified payload a managed (String/struct) one — the single reader of "does this class own a
+// heap drop?", so every site testing it (the predicate above, the destructor synthesis, the usage scan)
+// agrees.
+export function payloadClassIsManaged(class PayloadClass) returns bool
+	return match class 'c'
+		managed gives true
+		scalar gives false
+		floatPayload gives false
+		nestedUnion gives false
+		undeclaredName gives false
+	end 'c'
+end 'payloadClassIsManaged'
+
+// Is a classified payload a STRING (drops through `__str_decref`) rather than a struct (`__mm_decref`)?
+// The single reader of "which managed drop?", so the destructor synthesis and the usesStrDecref gate route
+// the same way.
+export function payloadClassIsString(class PayloadClass) returns bool
+	return match class 'c'
+		managed(_, isString) gives isString
+		scalar gives false
+		floatPayload gives false
+		nestedUnion gives false
+		undeclaredName gives false
+	end 'c'
+end 'payloadClassIsString'
+
+// The CONCRETE storage type a classified payload occupies its slot as — what the `loadIndirect`/
+// `storeIndirect` carries. A managed payload's storage is a `structRef`/`string` (an i64 pointer);
+// float/nested-union are rejected before any store reaches here.
+export function payloadStorageOf(class PayloadClass) returns MaxonType
+	match class 'c'
+		scalar(storage) then return storage
+		managed(storage, _) then return storage
+		undeclaredName then return MaxonType.integer
+		floatPayload then panic("payloadStorageOf: a float payload has no lowerable storage — requirePayloadLowerable rejects it before any store")
+		nestedUnion then panic("payloadStorageOf: a nested-union payload has no lowerable storage — requirePayloadLowerable rejects it before any store")
+	end 'c'
+end 'payloadStorageOf'
+
+// The MaxonType a LOADED payload value is tagged with: a managed payload's concrete storage (so a
+// struct binding reads as `structRef` — required by `requireStructBase` — and a String as `string`),
+// but a scalar's DECLARED type (so a ranged alias's low bound stays readable by the shift rule, exactly
+// as `emitFieldLoad` keeps a scalar field's alias).
+export function payloadValueTypeOf(class PayloadClass, declared MaxonType) returns MaxonType
+	match class 'c'
+		scalar then return declared
+		managed(storage, _) then return storage
+		undeclaredName then return declared
+		floatPayload then panic("payloadValueTypeOf: a float payload has no lowerable value type — requirePayloadLowerable rejects it before any load")
+		nestedUnion then panic("payloadValueTypeOf: a nested-union payload has no lowerable value type — requirePayloadLowerable rejects it before any load")
+	end 'c'
+end 'payloadValueTypeOf'
+
+export typealias PayloadClassArray = Array with PayloadClass
+
 export type ProgramSignatures
 	// Function name -> its declared return type. Last-wins on a duplicate name, exactly as the
 	// project's own `funcReturnTypes` registry is; the duplicate itself is reported by
