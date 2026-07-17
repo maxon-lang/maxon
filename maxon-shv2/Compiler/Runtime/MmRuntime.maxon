@@ -480,12 +480,12 @@ end 'buildMmFree'
 // for a struct box), routed off the SAME classifier the construct's move-in reads. The tag switch drops
 // only the LIVE case's managed fields; a moved-out slot is null and its null-guard skips it (so a match
 // that bound a payload OUT does not double-free it here).
-export function installUnionDestructors(module StdModule, project Project, signatures ProgramSignatures, needed ByteArrayArray)
+export function installUnionDestructors(module StdModule, project Project, signatures ProgramSignatures, needed UnionDestructorSet)
 	for (_, layout) in project.enumTypes 'each'
 		if not unionHasManagedField(signatures, typeNames: project.typeNames, layout: layout, wantStringOnly: false) 'noManaged'
 			continue
 		end 'noManaged'
-		if not bytesArrayContains(needed, target: unionDestructorSymbol(layout.name)) 'notReferenced'
+		if not needed.contains(unionDestructorSymbol(layout.name)) 'notReferenced'
 			continue
 		end 'notReferenced'
 		synthesizeUnionDestructor(module, layout: layout, project: project, signatures: signatures)
@@ -503,7 +503,7 @@ export function noteUnionDestructorUsage(usage RuntimeUsage, project Project, si
 		if not unionHasManagedField(signatures, typeNames: project.typeNames, layout: layout, wantStringOnly: false) 'noManaged'
 			continue
 		end 'noManaged'
-		if not bytesArrayContains(usage.neededUnionDestructors, target: unionDestructorSymbol(layout.name)) 'notReferenced'
+		if not usage.neededUnionDestructors.contains(unionDestructorSymbol(layout.name)) 'notReferenced'
 			continue
 		end 'notReferenced'
 		usage.usesHeap = true
@@ -512,15 +512,6 @@ export function noteUnionDestructorUsage(usage RuntimeUsage, project Project, si
 		end 'hasString'
 	end 'each'
 end 'noteUnionDestructorUsage'
-
-function bytesArrayContains(arr ByteArrayArray, target ByteArray) returns bool
-	for entry in arr 'each'
-		if entry.equals(target) 'found'
-			return true
-		end 'found'
-	end 'each'
-	return false
-end 'bytesArrayContains'
 
 // Emit `__destruct_<U>(box)`:
 //

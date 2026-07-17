@@ -240,6 +240,16 @@ end 'registerStringRecord'
 //
 // It asks the MAXON module because the answers are needed BEFORE lowering — the heap decision drives
 // `.data` layout, and all three drive which functions get installed into the Std module.
+
+// The set of `__destruct_<U>` symbols a module CALLS. A SET, not a list, for the same reason
+// `IrModule.dropFunctionsByName` interns its drop list: both `noteUnionDestructorUsage` and
+// `installUnionDestructors` walk EVERY union (`project.enumTypes`) and ask "is this union's destructor
+// referenced?" — a per-union membership test. Against a per-drop-site list that is an O(unions × drop
+// sites) scan (the classic linear-lookup-in-a-linear-walk quadratic); against a set it is O(1) each, so
+// the whole check is O(unions + drop sites). Insert also DEDUPLICATES — a union dropped D times records
+// its one symbol once, not D copies.
+export typealias UnionDestructorSet = Set with ByteArray
+
 export type RuntimeUsage
 	export var usesHeap as bool
 	export var usesPrint as bool
@@ -252,11 +262,12 @@ export type RuntimeUsage
 	// The `__destruct_<U>` symbols this module CALLS (P1.3 slice 2) — collected from the drop sites so
 	// `installUnionDestructors` synthesizes only the referenced ones, and `noteUnionDestructorUsage`
 	// can classify their transitive `__str_decref`/`__mm_free` needs. Full symbols (not names): the
-	// installer compares them against `unionDestructorSymbol(name)`, avoiding a byte-substring extract.
-	export var neededUnionDestructors as ByteArrayArray
+	// consumers query them against `unionDestructorSymbol(name)`, avoiding a byte-substring extract. A
+	// SET so that per-union query is O(1) — see `UnionDestructorSet`.
+	export var neededUnionDestructors as UnionDestructorSet
 
 	static function create() returns RuntimeUsage
-		return Self{usesHeap: false, usesPrint: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesBoolToString: false, usesStrAppend: false, usesStrDecref: false, neededUnionDestructors: ByteArrayArray.create()}
+		return Self{usesHeap: false, usesPrint: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesBoolToString: false, usesStrAppend: false, usesStrDecref: false, neededUnionDestructors: UnionDestructorSet.create()}
 	end 'create'
 end 'RuntimeUsage'
 
@@ -319,7 +330,7 @@ function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 	// `noteUnionDestructorUsage` (which has the signatures/interner to classify the fields).
 	if bytesStartWith(callee, prefix: UnionDestructorPrefix) 'uniondtor'
 		usage.usesHeap = true
-		usage.neededUnionDestructors.push(callee)
+		usage.neededUnionDestructors.insert(callee)
 	end 'uniondtor'
 end 'recordCallUsage'
 
