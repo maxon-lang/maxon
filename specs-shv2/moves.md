@@ -300,3 +300,151 @@ end 'main'
 ```maxoncstderr
 error E3102: <fragment>:11:8: use of moved value 't': its ownership moved to another binding at an earlier bind or assignment
 ```
+
+### Field Read After Move Is Use-After-Move
+
+`let q = p` moves `p`'s box into `q`; `return p.x` then READS a field out of the moved-from `p`. The
+use-after-move guard fires at every binding-use site, not only the bare read — reading a field through
+a moved-from base is rejected at the base, before the field load is emitted. (Without the guard this
+returned the moved struct's field: a latent use-after-free once the new owner drops first.)
+
+<!-- test: field-read-after-move -->
+```maxon
+type Point
+	export var x as int
+
+	static function create(x int) returns Point
+		return Self{x: x}
+	end 'create'
+end 'Point'
+
+function main() returns ExitCode
+	var p = Point.create(7)
+	let q = p
+	return p.x
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:13:9: use of moved value 'p': its ownership moved to another binding at an earlier bind or assignment
+```
+
+### Field Store After Move Is Use-After-Move (Not a Revive)
+
+`let q = p` moves `p`'s box into `q`; `p.x = 99` then WRITES a field through the moved-from `p`. A
+field store on a moved-from binding is a USE, not a revive: `p.x = …` mutates the box `p` no longer
+owns (the one `q` holds), so it is rejected at the base. Only a FULL reassignment `p = <expr>` revives
+`p`. Without the guard this silently mutated `q`'s aliased box and `return q.x` returned **99** — an
+observable wrong answer for a program shv2 must reject.
+
+<!-- test: field-store-after-move -->
+```maxon
+type Point
+	export var x as int
+
+	static function create(x int) returns Point
+		return Self{x: x}
+	end 'create'
+end 'Point'
+
+function main() returns ExitCode
+	var p = Point.create(7)
+	let q = p
+	p.x = 99
+	return q.x
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:13:2: use of moved value 'p': its ownership moved to another binding at an earlier bind or assignment
+```
+
+### Method Call After Move Is Use-After-Move
+
+`let q = p` moves `p`'s box into `q`; `p.getX()` then calls an instance method with the moved-from `p`
+as receiver. The receiver is a use of `p`, so it is rejected at the base before the call is emitted.
+
+<!-- test: method-call-after-move -->
+```maxon
+type Point
+	export var x as int
+
+	static function create(x int) returns Point
+		return Self{x: x}
+	end 'create'
+
+	function getX() returns int
+		return x
+	end 'getX'
+end 'Point'
+
+function main() returns ExitCode
+	var p = Point.create(5)
+	let q = p
+	return p.getX()
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:17:9: use of moved value 'p': its ownership moved to another binding at an earlier bind or assignment
+```
+
+### Full Reassignment Revives, Then a Field Store Is Legal
+
+`let q = p` moves `p`'s box into `q`; `p = Point.create(3)` is a FULL reassignment that REVIVES `p` —
+it owns a fresh box now — so the following `p.x = 5` writes that new box legally, and `return p.x`
+reads it back as 5. `q` owns the box moved out of `p`, `p` owns the box from `create(3)`; each drops
+exactly once (no leak). This pins that a field store reads the CURRENT moved-from state (post-revive),
+not a stale one.
+
+<!-- test: reassign-revives-then-field-store -->
+```maxon
+type Point
+	export var x as int
+
+	static function create(x int) returns Point
+		return Self{x: x}
+	end 'create'
+end 'Point'
+
+function main() returns ExitCode
+	var p = Point.create(1)
+	let q = p
+	p = Point.create(3)
+	p.x = 5
+	return p.x
+end 'main'
+```
+```exitcode
+5
+```
+```stdout
+```
+
+### Field Access and Method Call on a Live Struct (Positive Control)
+
+`p` is never moved, so both the field store `p.x = 0` and the method call `p.getX()` are legal — the
+use-after-move guard fires ONLY when the base binding is moved-from. Reads back 0.
+
+<!-- test: field-access-on-live-struct -->
+```maxon
+type Point
+	export var x as int
+
+	static function create(x int) returns Point
+		return Self{x: x}
+	end 'create'
+
+	function getX() returns int
+		return x
+	end 'getX'
+end 'Point'
+
+function main() returns ExitCode
+	var p = Point.create(4)
+	p.x = 0
+	return p.getX()
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+```

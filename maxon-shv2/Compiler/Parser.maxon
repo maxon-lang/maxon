@@ -7491,6 +7491,39 @@ export type Parser
 		throw ParseError.unexportedFieldAccess(String.from(layout.name), fieldName: String.from(fieldTok.value), line: fieldTok.line, column: fieldTok.column)
 	end 'requireFieldAccessible'
 
+	// ⭐ **A MOVED-FROM BINDING IS DEAD AT EVERY USE, AND THIS IS THE ONE PREDICATE THAT SAYS SO.** Its
+	// owned heap value was transferred to another binding by a `let u = t` / `s = t` whose RHS was a
+	// bare reference to it (`poisonMoveSource` set `movedFrom`), so the value now belongs to that new
+	// owner and any further USE of the source — a bare read, a field read or write THROUGH it, a method
+	// call ON it — is use-after-move (E3102), anchored on the USE token. Only a FULL reassignment
+	// `t = <expr>` revives it (`reassignBindingValue` clears the bit); a field store `t.x = …` is itself
+	// a use of `t`, not a revive of it, so it must route through here and NOT through the reviving path.
+	//
+	// ⭐ **ONE HOME, TWO ENFORCING CALLERS**: the bare read (`parseVariableReference`) and every base of
+	// a `.` — field read (`parseFieldAccess`), field write (`parseFieldAssignment`) and method receiver
+	// (`parseMethodCall`), which ALL funnel through `requireStructBase`. Written at only the bare read,
+	// a moved-from struct read or written through its fields was an UNCHECKED use-after-move: `let q = p`
+	// then `p.x = 99` mutated `q`'s aliased box and `return q.x` returned 99 — a wrong answer for a
+	// program that must be rejected (OPEN.md #42). The rule cannot be split across use sites: a site
+	// taught it beside a site not taught it IS that bug, and it is the same "one predicate, one enforcing
+	// home" the move gate itself is written to.
+	//
+	// A SELF-FIELD ALIAS is EXCLUDED: a bare `count` inside a method reads a fresh `loadIndirect` through
+	// the receiver rather than aliasing an owned value, so it is never moved-from (`poisonMoveSource`
+	// gates on `rhsWasBareLocalReference`, which excludes self-fields). `parseVariableReference` routes
+	// self-fields away before it reaches this guard; the exclusion here is what keeps the guard safe on
+	// the struct-typed self-field base that DOES reach `requireStructBase` (and is refused there for the
+	// unrelated reason that its box has to be loaded out of the receiver first).
+	function requireBindingLive(binding VarInfo, nameTok Token) throws ParseError
+		if binding.isSelfField 'selfFieldAlias'
+			return
+		end 'selfFieldAlias'
+
+		if binding.movedFrom 'moved'
+			throw ParseError.useAfterMove(String.from(nameTok.value), line: nameTok.line, column: nameTok.column)
+		end 'moved'
+	end 'requireBindingLive'
+
 	// The box `binding` denotes and the `StructLayout` describing it — the two-step every field
 	// access takes: the binding's declared type must BE a struct, and that struct must be one some
 	// file declares.
@@ -7519,6 +7552,12 @@ export type Parser
 	// once and needed in four places. Handing the box back from here is what makes the other three
 	// unable to get it wrong.
 	function requireStructBase(binding VarInfo, baseTok Token) returns StructBase throws ParseError
+		// The base binding must be LIVE before anything about it is resolved — a moved-from base is dead,
+		// so `p.x`, `p.x = …` and `p.m()` on it are use-after-move (E3102), reported here at the base
+		// token before the field/method is even looked up. This is the shared guard's second enforcing
+		// home; `parseVariableReference` is the first. See `requireBindingLive`.
+		try self.requireBindingLive(binding, nameTok: baseTok)
+
 		if maxonTypeTag(binding.varType) != ValueTypeTag.structRef 'notAStruct'
 			throw ParseError.unsupported("a field access on '{String.from(baseTok.value)}', which is declared '{typeTagName(maxonTypeTag(binding.varType))}' and not a struct type (only a struct has fields)", line: baseTok.line, column: baseTok.column)
 		end 'notAStruct'
@@ -7667,16 +7706,14 @@ export type Parser
 			return try self.parseSelfFieldRead(tok, binding: self.scope.getInfo(tok.value))
 		end 'selfField'
 
-		// A LOCAL binding: reject a read of one that has been MOVED FROM (its owned value was transferred
-		// to another binding by a `let u = t` / `s = t`). This is the READ site — a WRITE target routes
-		// through `parseAssignment`, which REVIVES the binding, so the check must not run there. A name
-		// that is NOT a local (a top-level constant or `var`) is never owned and never moved, so it
-		// stays on the original resolve path.
+		// A LOCAL binding: reject a read of one that has been MOVED FROM through the shared liveness guard
+		// (`requireBindingLive`), the SAME predicate the field/method base sites ask. This is the bare
+		// READ site — a WRITE target routes through `parseAssignment`, which REVIVES the binding, so the
+		// check must not run there. A name that is NOT a local (a top-level constant or `var`) is never
+		// owned and never moved, so it stays on the original resolve path.
 		if self.scope.contains(tok.value) 'local'
 			let binding = self.scope.getInfo(tok.value)
-			if binding.movedFrom 'moved'
-				throw ParseError.useAfterMove(String.from(tok.value), line: tok.line, column: tok.column)
-			end 'moved'
+			try self.requireBindingLive(binding, nameTok: tok)
 			return binding.boundValue
 		end 'local'
 

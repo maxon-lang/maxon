@@ -71,8 +71,10 @@ export type VarInfo
 	// whose RHS was a bare reference to it. A moved-from binding STAYS in `ownedBindings` (mid-stack
 	// removal would desync the block/loop drop marks — see `reassignBindingValue`/`removeFromOwnedBindings`)
 	// but is SKIPPED by `emitScopeDrops` (its value drops via its NEW owner, exactly once) and REJECTED
-	// on read (`Parser.parseVariableReference` → E3102 use-after-move). A `var` WRITE revives it
-	// (`reassignBindingValue` clears the bit — the binding then owns the new value). Always false for a
+	// at EVERY use — a bare read, a field read/write through it, a method call on it (E3102 use-after-move,
+	// via the one `Parser.requireBindingLive` guard both `parseVariableReference` and `requireStructBase`
+	// ask). A FULL reassignment `t = <expr>` revives it (`reassignBindingValue` clears the bit — the
+	// binding then owns the new value); a field store `t.x = …` is a USE, not a revive. Always false for a
 	// trivial/scalar binding, because only an owned heap value is ever moved.
 	export var movedFrom as bool
 	// True when this name is a self-field alias inside an instance method — the bare `width`
