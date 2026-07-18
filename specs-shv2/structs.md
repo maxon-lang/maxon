@@ -69,6 +69,7 @@ c.count = 5     // OK: field is var
 ## Tests
 
 <!-- test: var-struct-field-assign -->
+<!-- targets: x64-windows -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -93,6 +94,7 @@ end 'main'
 ```
 
 <!-- test: var-field-assign -->
+<!-- targets: x64-windows -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -165,6 +167,7 @@ error E2013: specs/fragments/structs/error.let-field-assign.test:16:2: cannot as
 ```
 
 <!-- test: simple-type -->
+<!-- targets: x64-windows -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -188,6 +191,7 @@ end 'main'
 ```
 
 <!-- test: struct-field-access -->
+<!-- targets: x64-windows -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -322,6 +326,7 @@ end 'main'
 ```
 
 <!-- test: struct-field-inferred-type -->
+<!-- targets: x64-windows -->
 ```maxon
 type Settings
 	export let maxRetries = 5

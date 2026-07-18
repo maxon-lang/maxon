@@ -1,0 +1,119 @@
+// Test: six-args-all-live-after-the-call
+function digits6(p1 int, p2 int, p3 int, p4 int, p5 int, p6 int) returns int
+	return p1 * 100000 + p2 * 10000 + p3 * 1000 + p4 * 100 + p5 * 10 + p6
+end 'digits6'
+
+function keepAll(a int, b int, c int, d int, e int, f int) returns int
+	let r = digits6(f, p2: e, p3: d, p4: c, p5: b, p6: a)
+	return r + a * 100000 + b * 10000 + c * 1000 + d * 100 + e * 10 + f
+end 'keepAll'
+
+function main() returns ExitCode
+	let v = keepAll(1, b: 2, c: 3, d: 4, e: 5, f: 6)
+	if v == 777777 'ok'
+		return 0
+	end 'ok'
+	return 99
+end 'main'
+---
+ExitCode: 0
+---
+func @digits6 {
+  entry:
+    arm64.prologue 16
+    arm64.movRegReg x6, x3
+    arm64.movRegReg x7, x4
+    arm64.movRegReg x8, x5
+    arm64.movImm x16, 100000
+    arm64.mul x0, x0, x16
+    arm64.movImm x16, 10000
+    arm64.mul x1, x1, x16
+    arm64.add x0, x0, x1
+    arm64.movImm x16, 1000
+    arm64.mul x1, x2, x16
+    arm64.add x0, x0, x1
+    arm64.movImm x16, 100
+    arm64.mul x1, x6, x16
+    arm64.add x0, x0, x1
+    arm64.movImm x16, 10
+    arm64.mul x1, x7, x16
+    arm64.add x0, x0, x1
+    arm64.add x0, x0, x8
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @keepAll {
+  entry:
+    arm64.prologue 64
+    arm64.storeSlotReg slot5, x24
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x20, x1
+    arm64.movRegReg x21, x2
+    arm64.movRegReg x22, x3
+    arm64.movRegReg x23, x4
+    arm64.movRegReg x24, x5
+    arm64.movRegReg x0, x24
+    arm64.movRegReg x1, x23
+    arm64.movRegReg x2, x22
+    arm64.movRegReg x3, x21
+    arm64.movRegReg x4, x20
+    arm64.movRegReg x5, x19
+    arm64.bl digits6
+    arm64.movImm x16, 100000
+    arm64.mul x1, x19, x16
+    arm64.add x0, x0, x1
+    arm64.movImm x16, 10000
+    arm64.mul x1, x20, x16
+    arm64.add x0, x0, x1
+    arm64.movImm x16, 1000
+    arm64.mul x1, x21, x16
+    arm64.add x0, x0, x1
+    arm64.movImm x16, 100
+    arm64.mul x1, x22, x16
+    arm64.add x0, x0, x1
+    arm64.movImm x16, 10
+    arm64.mul x1, x23, x16
+    arm64.add x0, x0, x1
+    arm64.add x0, x0, x24
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.epilogue 64
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 1
+    arm64.movImm x1, 2
+    arm64.movImm x2, 3
+    arm64.movImm x6, 4
+    arm64.movImm x7, 5
+    arm64.movImm x8, 6
+    arm64.movRegReg x3, x6
+    arm64.movRegReg x4, x7
+    arm64.movRegReg x5, x8
+    arm64.bl keepAll
+    arm64.cmp x0, 777777
+    arm64.cset x0, eq
+    arm64.cbnz x0, ok
+    arm64.b ifcont
+  ok:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 99
+    arm64.epilogue 16
+    arm64.ret
+}

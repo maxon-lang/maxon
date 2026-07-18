@@ -1,0 +1,56 @@
+// Test: enum-exhaustive.int-backed-range-excludes-outside-case
+enum Level
+	low = 10
+	medium = 20
+	high = 30
+end 'Level'
+
+function classify(l Level) returns ExitCode
+	let r = match l 'm'
+		low to medium gives 41
+		high gives 42
+	end 'm'
+	return r
+end 'classify'
+
+function main() returns ExitCode
+	return classify(Level.high)
+end 'main'
+---
+ExitCode: 42
+---
+func @classify {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x0, 10
+    arm64.cset x1, ge
+    arm64.cmp x0, 20
+    arm64.cset x2, le
+    arm64.and x1, x1, x2
+    arm64.cbnz x1, matcharm
+    arm64.b matchnext
+  matcharm:
+    arm64.movImm x0, 41
+    arm64.b matchcont
+  matchnext:
+    arm64.cmp x0, 30
+    arm64.cset x0, eq
+    arm64.cbnz x0, matcharm
+    arm64.b matchnext
+  matcharm:
+    arm64.movImm x0, 42
+    arm64.b matchcont
+  matchcont:
+    arm64.epilogue 16
+    arm64.ret
+  matchnext:
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 30
+    arm64.bl classify
+    arm64.epilogue 16
+    arm64.ret
+}

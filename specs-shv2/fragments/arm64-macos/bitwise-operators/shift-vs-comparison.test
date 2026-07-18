@@ -1,0 +1,30 @@
+// Test: shift-vs-comparison
+function main() returns ExitCode
+	// Shift has higher precedence than comparison
+	// 1 shl 3 = 8, then 8 > 5 = true
+	if 1 shl 3 > 5 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 1
+    arm64.lsl x0, x0, 3
+    arm64.cmp x0, 5
+    arm64.cset x0, gt
+    arm64.cbnz x0, check
+    arm64.b ifcont
+  check:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

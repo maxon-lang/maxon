@@ -1,0 +1,34 @@
+// Test: div-in-loop
+function main() returns ExitCode
+	var sum = 0
+	var i = 1
+	while i <= 6 'loop'
+		sum = sum + 100 / i
+		i = i + 1
+	end 'loop'
+	return sum
+end 'main'
+---
+ExitCode: 244
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 0
+    arm64.movImm x1, 1
+    arm64.b whilehdr
+  whilehdr:
+    arm64.cmp x1, 6
+    arm64.cset x2, le
+    arm64.cbnz x2, loop
+    arm64.b whileexit
+  loop:
+    arm64.movImm x2, 100
+    arm64.sdiv x2, x2, x1
+    arm64.add x0, x0, x2
+    arm64.add x1, x1, 1
+    arm64.b whilehdr
+  whileexit:
+    arm64.epilogue 16
+    arm64.ret
+}

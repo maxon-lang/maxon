@@ -1,0 +1,33 @@
+// Test: error.other-type-cannot-write-private
+
+typealias Integer = int(i64.min to i64.max)
+
+type A
+	var secret as Integer
+
+	static function create() returns Self
+		return A{secret: 0}
+	end 'create'
+end 'A'
+
+type B
+	var n as Integer
+
+	static function create() returns Self
+		return B{n: 0}
+	end 'create'
+
+	function poke() returns Integer
+		var a = A.create()
+		a.secret = 42
+		return 0
+	end 'poke'
+end 'B'
+
+function main() returns ExitCode
+	let b = B.create()
+	return b.poke()
+end 'main'
+---
+CompilerError:
+error E3014: <fragment>:22:5: cannot access unexported field: 'secret' outside of type 'A'

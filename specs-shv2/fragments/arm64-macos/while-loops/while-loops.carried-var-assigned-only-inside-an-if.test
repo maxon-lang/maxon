@@ -1,0 +1,43 @@
+// Test: while-loops.carried-var-assigned-only-inside-an-if
+function main() returns ExitCode
+	var x = 1
+	var i = 0
+	while i < 3 'l'
+		if i == 1 'b'
+			x = 2
+		end 'b'
+		i = i + 1
+	end 'l'
+	return x
+end 'main'
+---
+ExitCode: 2
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 1
+    arm64.movImm x1, 0
+    arm64.b whilehdr
+  whilehdr:
+    arm64.cmp x1, 3
+    arm64.cset x2, lt
+    arm64.cbnz x2, l
+    arm64.b whileexit
+  l:
+    arm64.cmp x1, 1
+    arm64.cset x2, eq
+    arm64.cbnz x2, b
+    arm64.b critsplit
+  b:
+    arm64.movImm x0, 2
+    arm64.b ifcont
+  critsplit:
+    arm64.b ifcont
+  ifcont:
+    arm64.add x1, x1, 1
+    arm64.b whilehdr
+  whileexit:
+    arm64.epilogue 16
+    arm64.ret
+}

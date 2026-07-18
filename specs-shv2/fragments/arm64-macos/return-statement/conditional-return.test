@@ -1,0 +1,68 @@
+// Test: conditional-return
+function firstOver(x int) returns int
+	if x > 3 'check'
+		return 1
+	end 'check'
+	return 0
+end 'firstOver'
+
+function main() returns ExitCode
+	if firstOver(5) != 1 'branchTaken'
+		return 2
+	end 'branchTaken'
+
+	if firstOver(1) != 0 'branchNotTaken'
+		return 3
+	end 'branchNotTaken'
+
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @firstOver {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x0, 3
+    arm64.cset x0, gt
+    arm64.cbnz x0, check
+    arm64.b ifcont
+  check:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 5
+    arm64.bl firstOver
+    arm64.cmp x0, 1
+    arm64.cset x0, ne
+    arm64.cbnz x0, branchTaken
+    arm64.b ifcont
+  branchTaken:
+    arm64.movImm x0, 2
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 1
+    arm64.bl firstOver
+    arm64.cmp x0, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, branchNotTaken
+    arm64.b ifcont
+  branchNotTaken:
+    arm64.movImm x0, 3
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

@@ -1,0 +1,50 @@
+// Test: loop-reads-a-global-it-writes
+var acc = 0
+var i = 0
+
+function main() returns ExitCode
+	while i < 5 'loop'
+		acc = acc + i
+		i = i + 1
+	end 'loop'
+	return acc
+end 'main'
+---
+ExitCode: 10
+---
+data {
+  __data_acc@0 = i64 0
+  __data_i@8 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.b whilehdr
+  whilehdr:
+    arm64.leaGlobal x0, __data_i
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.cmp x0, 5
+    arm64.cset x0, lt
+    arm64.cbnz x0, loop
+    arm64.b whileexit
+  loop:
+    arm64.leaGlobal x0, __data_acc
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.leaGlobal x1, __data_i
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
+    arm64.add x0, x0, x1
+    arm64.leaGlobal x1, __data_acc
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.leaGlobal x0, __data_i
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.add x0, x0, 1
+    arm64.leaGlobal x1, __data_i
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.b whilehdr
+  whileexit:
+    arm64.leaGlobal x0, __data_acc
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.epilogue 16
+    arm64.ret
+}

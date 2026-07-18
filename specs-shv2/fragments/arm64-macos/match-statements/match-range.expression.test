@@ -1,0 +1,63 @@
+// Test: match-range.expression
+function main() returns ExitCode
+	let temp = 22
+	let category = match temp 'weather'
+		min upto 0 gives 1
+		0 upto 15 gives 2
+		15 upto 25 gives 3
+		25 to max gives 4
+		default gives 0
+	end 'weather'
+	return category
+end 'main'
+---
+ExitCode: 3
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 22
+    arm64.cmp x0, 0
+    arm64.cset x1, lt
+    arm64.cbnz x1, matcharm
+    arm64.b matchnext
+  matcharm:
+    arm64.movImm x0, 1
+    arm64.b matchcont
+  matchnext:
+    arm64.cmp x0, 0
+    arm64.cset x1, ge
+    arm64.cmp x0, 15
+    arm64.cset x2, lt
+    arm64.and x1, x1, x2
+    arm64.cbnz x1, matcharm
+    arm64.b matchnext
+  matcharm:
+    arm64.movImm x0, 2
+    arm64.b matchcont
+  matchnext:
+    arm64.cmp x0, 15
+    arm64.cset x1, ge
+    arm64.cmp x0, 25
+    arm64.cset x2, lt
+    arm64.and x1, x1, x2
+    arm64.cbnz x1, matcharm
+    arm64.b matchnext
+  matcharm:
+    arm64.movImm x0, 3
+    arm64.b matchcont
+  matchnext:
+    arm64.cmp x0, 25
+    arm64.cset x0, ge
+    arm64.cbnz x0, matcharm
+    arm64.b matchnext
+  matcharm:
+    arm64.movImm x0, 4
+    arm64.b matchcont
+  matchnext:
+    arm64.movImm x0, 0
+    arm64.b matchcont
+  matchcont:
+    arm64.epilogue 16
+    arm64.ret
+}

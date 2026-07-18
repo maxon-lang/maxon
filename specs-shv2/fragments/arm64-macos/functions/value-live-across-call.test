@@ -1,0 +1,46 @@
+// Test: value-live-across-call
+function add(a int, b int) returns int
+	return a + b
+end 'add'
+
+function compute(n int) returns int
+	let y = add(n, b: 100)
+	return n + y
+end 'compute'
+
+function main() returns ExitCode
+	return compute(5)
+end 'main'
+---
+ExitCode: 110
+---
+func @add {
+  entry:
+    arm64.prologue 16
+    arm64.add x0, x0, x1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @compute {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x1, 100
+    arm64.movRegReg x0, x19
+    arm64.bl add
+    arm64.add x0, x19, x0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 5
+    arm64.bl compute
+    arm64.epilogue 16
+    arm64.ret
+}

@@ -1,0 +1,32 @@
+// Test: while-loops.inner-declaration-shadows-a-carried-var
+function main() returns ExitCode
+	var t = 100
+	var i = 0
+	while i < 3 'l'
+		var t = i + 1
+		i = i + t
+	end 'l'
+	return t
+end 'main'
+---
+ExitCode: 100
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 100
+    arm64.movImm x1, 0
+    arm64.b whilehdr
+  whilehdr:
+    arm64.cmp x1, 3
+    arm64.cset x2, lt
+    arm64.cbnz x2, l
+    arm64.b whileexit
+  l:
+    arm64.add x2, x1, 1
+    arm64.add x1, x1, x2
+    arm64.b whilehdr
+  whileexit:
+    arm64.epilogue 16
+    arm64.ret
+}

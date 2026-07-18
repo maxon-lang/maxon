@@ -132,6 +132,7 @@ end 'main'
 ```
 
 <!-- test: string-append -->
+<!-- targets: x64-windows -->
 ```maxon
 function main() returns ExitCode
 	var s = "hello"

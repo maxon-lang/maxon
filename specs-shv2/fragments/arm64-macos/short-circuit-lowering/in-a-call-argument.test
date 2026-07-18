@@ -1,0 +1,112 @@
+// Test: in-a-call-argument
+typealias Tag = int(0 to 100)
+
+function t() returns bool
+	return true
+end 't'
+
+function f() returns bool
+	return false
+end 'f'
+
+function consume(flag bool) returns Tag
+	if flag 'isTrue'
+		return 1
+	end 'isTrue'
+	return 0
+end 'consume'
+
+function main() returns ExitCode
+	let a = consume(t() or f())
+	let b = consume(t() and f())
+	let c = consume(f() or t())
+	return a * 4 + b * 2 + c
+end 'main'
+---
+ExitCode: 5
+---
+func @t {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @f {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @consume {
+  entry:
+    arm64.prologue 16
+    arm64.cbnz x0, isTrue
+    arm64.b ifcont
+  isTrue:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.bl t
+    arm64.movImm x1, 1
+    arm64.cbnz x0, critsplit
+    arm64.b orrhs
+  critsplit:
+    arm64.movRegReg x0, x1
+    arm64.b scmerge
+  orrhs:
+    arm64.bl f
+    arm64.b scmerge
+  scmerge:
+    arm64.bl consume
+    arm64.movRegReg x19, x0
+    arm64.bl t
+    arm64.movImm x1, 0
+    arm64.cbnz x0, andrhs
+    arm64.b critsplit
+  andrhs:
+    arm64.bl f
+    arm64.b scmerge
+  critsplit:
+    arm64.movRegReg x0, x1
+    arm64.b scmerge
+  scmerge:
+    arm64.bl consume
+    arm64.movRegReg x20, x0
+    arm64.bl f
+    arm64.movImm x1, 1
+    arm64.cbnz x0, critsplit
+    arm64.b orrhs
+  critsplit:
+    arm64.movRegReg x0, x1
+    arm64.b scmerge
+  orrhs:
+    arm64.bl t
+    arm64.b scmerge
+  scmerge:
+    arm64.bl consume
+    arm64.movImm x16, 4
+    arm64.mul x1, x19, x16
+    arm64.movImm x16, 2
+    arm64.mul x2, x20, x16
+    arm64.add x1, x1, x2
+    arm64.add x0, x1, x0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

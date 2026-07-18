@@ -1,0 +1,44 @@
+// Test: bool-equals-bool
+function main() returns ExitCode
+	let a = true
+	let b = false
+
+	if a == b 'same'
+		return 0
+	end 'same'
+
+	if b == false 'bothFalse'
+		return 1
+	end 'bothFalse'
+	return 2
+end 'main'
+---
+ExitCode: 1
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 1
+    arm64.movImm x1, 0
+    arm64.cmp x0, 0
+    arm64.cset x0, eq
+    arm64.cbnz x0, same
+    arm64.b ifcont
+  same:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.cmp x1, 0
+    arm64.cset x0, eq
+    arm64.cbnz x0, bothFalse
+    arm64.b ifcont
+  bothFalse:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 2
+    arm64.epilogue 16
+    arm64.ret
+}

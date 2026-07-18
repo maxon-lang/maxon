@@ -1,0 +1,49 @@
+// Test: float-phi-both-arms
+function work(a int) returns int
+	var f = a + 0.0
+	if a > 100 'big'
+		f = f * 2.0
+	end 'big' else 'small'
+		f = f - 4.5
+	end 'small'
+	return trunc(f)
+end 'work'
+
+function main() returns ExitCode
+	return work(19)
+end 'main'
+---
+ExitCode: 14
+---
+func @work {
+  entry:
+    arm64.prologue 16
+    arm64.fpLoadRdata d0, [rdata + __fconst_0]
+    arm64.scvtf d1, x0
+    arm64.fadd d0, d1, d0
+    arm64.cmp x0, 100
+    arm64.cset x0, gt
+    arm64.cbnz x0, big
+    arm64.b ifelse
+  big:
+    arm64.fpLoadRdata d1, [rdata + __fconst_1]
+    arm64.fmul d0, d0, d1
+    arm64.b ifcont
+  ifelse:
+    arm64.fpLoadRdata d1, [rdata + __fconst_2]
+    arm64.fsub d0, d0, d1
+    arm64.b ifcont
+  ifcont:
+    arm64.fcvtzs x0, d0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 19
+    arm64.bl work
+    arm64.epilogue 16
+    arm64.ret
+}

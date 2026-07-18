@@ -1,0 +1,45 @@
+// Test: enum-exhaustive.expression
+enum Status
+		pending
+		approved
+		rejected
+end 'Status'
+
+function main() returns ExitCode
+	let s = Status.approved
+	let code = match s 'eval'
+		pending gives 0
+		approved to rejected gives 1
+	end 'eval'
+	return code
+end 'main'
+---
+ExitCode: 1
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 1
+    arm64.cmp x0, 0
+    arm64.cset x1, eq
+    arm64.cbnz x1, matcharm
+    arm64.b matchnext
+  matcharm:
+    arm64.movImm x0, 0
+    arm64.b matchcont
+  matchnext:
+    arm64.cmp x0, 1
+    arm64.cset x1, ge
+    arm64.cmp x0, 2
+    arm64.cset x0, le
+    arm64.and x0, x1, x0
+    arm64.cbnz x0, matcharm
+    arm64.b matchnext
+  matcharm:
+    arm64.movImm x0, 1
+    arm64.b matchcont
+  matchcont:
+    arm64.epilogue 16
+    arm64.ret
+  matchnext:
+}

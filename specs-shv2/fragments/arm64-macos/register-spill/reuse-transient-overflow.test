@@ -1,0 +1,80 @@
+// Test: reuse-transient-overflow
+function reuseTransientOverflow(p int) returns int
+	let a = p + 100
+	let b1 = p + 2
+	let b2 = p + 3
+	let b3 = p + 4
+	let b4 = p + 5
+	let b5 = p + 6
+	let b6 = p + 7
+	let b7 = p + 8
+	let b8 = p + 9
+	let b9 = p + 10
+	let b10 = p + 11
+	let b11 = p + 12
+	let b12 = p + 13
+	let rhs = p + 50
+	let d = a - rhs
+	let s = b1 + b2 + b3 + b4 + b5 + b6 + b7 + b8 + b9 + b10 + b11 + b12 + d + a
+	return s
+end 'reuseTransientOverflow'
+
+function main() returns ExitCode
+	return reuseTransientOverflow(0)
+end 'main'
+---
+ExitCode: 240
+---
+func @reuseTransientOverflow {
+  entry:
+    arm64.prologue 64
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.add x1, x0, 100
+    arm64.add x2, x0, 2
+    arm64.add x6, x0, 3
+    arm64.add x7, x0, 4
+    arm64.add x8, x0, 5
+    arm64.add x9, x0, 6
+    arm64.add x10, x0, 7
+    arm64.add x11, x0, 8
+    arm64.add x19, x0, 9
+    arm64.add x20, x0, 10
+    arm64.add x21, x0, 11
+    arm64.add x22, x0, 12
+    arm64.add x23, x0, 13
+    arm64.add x0, x0, 50
+    arm64.sub x0, x1, x0
+    arm64.add x2, x2, x6
+    arm64.add x2, x2, x7
+    arm64.add x2, x2, x8
+    arm64.add x2, x2, x9
+    arm64.add x2, x2, x10
+    arm64.add x2, x2, x11
+    arm64.add x2, x2, x19
+    arm64.add x2, x2, x20
+    arm64.add x2, x2, x21
+    arm64.add x2, x2, x22
+    arm64.add x2, x2, x23
+    arm64.add x0, x2, x0
+    arm64.add x0, x0, x1
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.epilogue 64
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 0
+    arm64.bl reuseTransientOverflow
+    arm64.epilogue 16
+    arm64.ret
+}

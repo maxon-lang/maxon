@@ -1035,6 +1035,7 @@ error E2049: specs/fragments/match-statements/error.match-otherwise-block-form.t
 ```
 
 <!-- test: match-string.simple -->
+<!-- targets: x64-windows -->
 ```maxon
 function main() returns ExitCode
 	let name = "alice"
@@ -1050,6 +1051,7 @@ end 'main'
 ```
 
 <!-- test: match-string.second-case -->
+<!-- targets: x64-windows -->
 ```maxon
 function main() returns ExitCode
 	let name = "bob"
@@ -1080,6 +1082,7 @@ end 'main'
 ```
 
 <!-- test: match-string.or-patterns -->
+<!-- targets: x64-windows -->
 ```maxon
 function main() returns ExitCode
 	let name = "carol"
@@ -1095,6 +1098,7 @@ end 'main'
 ```
 
 <!-- test: match-string.expression -->
+<!-- targets: x64-windows -->
 ```maxon
 function main() returns ExitCode
 	let name = "bob"

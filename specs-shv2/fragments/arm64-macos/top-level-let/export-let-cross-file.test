@@ -1,0 +1,20 @@
+// Test: export-let-cross-file
+// --- file: api/constants.maxon
+export let MAGIC = 42
+export let OFFSET = -10
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return MAGIC + OFFSET
+end 'main'
+---
+ExitCode: 32
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 42
+    arm64.add x0, x0, -10
+    arm64.epilogue 16
+    arm64.ret
+}

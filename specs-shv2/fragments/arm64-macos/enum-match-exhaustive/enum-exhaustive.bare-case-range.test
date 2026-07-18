@@ -1,0 +1,48 @@
+// Test: enum-exhaustive.bare-case-range
+enum Priority
+		low
+		medium
+		high
+		critical
+end 'Priority'
+
+function main() returns ExitCode
+	let p = Priority.high
+	match p 'check'
+		low to medium then return 1
+		high to critical then return 2
+	end 'check'
+end 'main'
+---
+ExitCode: 2
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 2
+    arm64.cmp x0, 0
+    arm64.cset x1, ge
+    arm64.cmp x0, 1
+    arm64.cset x2, le
+    arm64.and x1, x1, x2
+    arm64.cbnz x1, matcharm
+    arm64.b matchnext
+  matcharm:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+  matchnext:
+    arm64.cmp x0, 2
+    arm64.cset x1, ge
+    arm64.cmp x0, 3
+    arm64.cset x0, le
+    arm64.and x0, x1, x0
+    arm64.cbnz x0, matcharm
+    arm64.b matchnext
+  matcharm:
+    arm64.movImm x0, 2
+    arm64.epilogue 16
+    arm64.ret
+  matchnext:
+  matchcont:
+}

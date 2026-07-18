@@ -1,0 +1,29 @@
+// Test: integer-and-is-bitwise-not-logical
+function main() returns ExitCode
+	let r = 12 and 3
+	if r == 0 'bitwise'
+		return 0
+	end 'bitwise'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 12
+    arm64.and x0, x0, 3
+    arm64.cmp x0, 0
+    arm64.cset x0, eq
+    arm64.cbnz x0, bitwise
+    arm64.b ifcont
+  bitwise:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+}

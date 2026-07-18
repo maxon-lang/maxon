@@ -1,0 +1,43 @@
+// Test: mixed-export-and-non-export
+// --- file: api/lib.maxon
+typealias Integer = int(i64.min to i64.max)
+
+export function publicFunc() returns Integer
+	return privateFunc() + 20
+end 'publicFunc'
+
+function privateFunc() returns Integer
+	return 22
+end 'privateFunc'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return publicFunc()
+end 'main'
+---
+ExitCode: 42
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.bl publicFunc
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @publicFunc {
+  entry:
+    arm64.prologue 16
+    arm64.bl privateFunc
+    arm64.add x0, x0, 20
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @privateFunc {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 22
+    arm64.epilogue 16
+    arm64.ret
+}

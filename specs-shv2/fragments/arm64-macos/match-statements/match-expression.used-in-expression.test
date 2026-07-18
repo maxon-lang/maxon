@@ -1,0 +1,41 @@
+// Test: match-expression.used-in-expression
+function main() returns ExitCode
+	let x = 2
+	let doubled = match x 'eval'
+		1 gives 10
+		2 gives 20
+		default gives 0
+	end 'eval' * 2
+	return doubled
+end 'main'
+---
+ExitCode: 40
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 2
+    arm64.cmp x0, 1
+    arm64.cset x1, eq
+    arm64.cbnz x1, matcharm
+    arm64.b matchnext
+  matcharm:
+    arm64.movImm x0, 10
+    arm64.b matchcont
+  matchnext:
+    arm64.cmp x0, 2
+    arm64.cset x0, eq
+    arm64.cbnz x0, matcharm
+    arm64.b matchnext
+  matcharm:
+    arm64.movImm x0, 20
+    arm64.b matchcont
+  matchnext:
+    arm64.movImm x0, 0
+    arm64.b matchcont
+  matchcont:
+    arm64.movImm x16, 2
+    arm64.mul x0, x0, x16
+    arm64.epilogue 16
+    arm64.ret
+}

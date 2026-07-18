@@ -1,0 +1,44 @@
+// Test: while-loops.basic
+function main() returns ExitCode
+	var x = 5
+	var i = 3
+	while i > 0 'loop'
+		x = x + 2
+		i = i - 1
+		if i == 0 'check'
+			break
+		end 'check'
+	end 'loop'
+	return x
+end 'main'
+---
+ExitCode: 11
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 5
+    arm64.movImm x1, 3
+    arm64.b whilehdr
+  whilehdr:
+    arm64.cmp x1, 0
+    arm64.cset x2, gt
+    arm64.cbnz x2, loop
+    arm64.b critsplit
+  loop:
+    arm64.add x0, x0, 2
+    arm64.sub x1, x1, 1
+    arm64.cmp x1, 0
+    arm64.cset x2, eq
+    arm64.cbnz x2, check
+    arm64.b ifcont
+  check:
+    arm64.b whileexit
+  ifcont:
+    arm64.b whilehdr
+  critsplit:
+    arm64.b whileexit
+  whileexit:
+    arm64.epilogue 16
+    arm64.ret
+}

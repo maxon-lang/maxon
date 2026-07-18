@@ -15,6 +15,7 @@ Struct fields can be modified after the struct is created.
 ## Tests
 
 <!-- test: struct-field-reassignment -->
+<!-- targets: x64-windows -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)

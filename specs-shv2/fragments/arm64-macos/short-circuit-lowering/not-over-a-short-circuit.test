@@ -1,0 +1,111 @@
+// Test: not-over-a-short-circuit
+function t() returns bool
+	return true
+end 't'
+
+function f() returns bool
+	return false
+end 'f'
+
+function main() returns ExitCode
+	var code = 0
+	if not (f() or f()) 'a'
+		code = code + 1
+	end 'a'
+	if not (t() and t()) 'b'
+		code = code + 2
+	end 'b'
+	if not (t() and f()) 'c'
+		code = code + 4
+	end 'c'
+	return code
+end 'main'
+---
+ExitCode: 5
+---
+func @t {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @f {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 0
+    arm64.bl f
+    arm64.movImm x1, 1
+    arm64.cbnz x0, critsplit
+    arm64.b orrhs
+  critsplit:
+    arm64.b scmerge
+  orrhs:
+    arm64.bl f
+    arm64.movRegReg x1, x0
+    arm64.b scmerge
+  scmerge:
+    arm64.eor x0, x1, 1
+    arm64.cbnz x0, a
+    arm64.b critsplit
+  a:
+    arm64.add x19, x19, 1
+    arm64.b ifcont
+  critsplit:
+    arm64.b ifcont
+  ifcont:
+    arm64.bl t
+    arm64.movImm x1, 0
+    arm64.cbnz x0, andrhs
+    arm64.b critsplit
+  andrhs:
+    arm64.bl t
+    arm64.b scmerge
+  critsplit:
+    arm64.movRegReg x0, x1
+    arm64.b scmerge
+  scmerge:
+    arm64.eor x0, x0, 1
+    arm64.cbnz x0, b
+    arm64.b critsplit
+  b:
+    arm64.add x19, x19, 2
+    arm64.b ifcont
+  critsplit:
+    arm64.b ifcont
+  ifcont:
+    arm64.bl t
+    arm64.movImm x1, 0
+    arm64.cbnz x0, andrhs
+    arm64.b critsplit
+  andrhs:
+    arm64.bl f
+    arm64.b scmerge
+  critsplit:
+    arm64.movRegReg x0, x1
+    arm64.b scmerge
+  scmerge:
+    arm64.eor x0, x0, 1
+    arm64.cbnz x0, c
+    arm64.b critsplit
+  c:
+    arm64.add x0, x19, 4
+    arm64.b ifcont
+  critsplit:
+    arm64.movRegReg x0, x19
+    arm64.b ifcont
+  ifcont:
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}

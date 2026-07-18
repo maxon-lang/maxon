@@ -1,0 +1,66 @@
+// Test: loop-calls-a-function-that-writes-the-global
+
+typealias Integer = int(i64.min to i64.max)
+
+var counter = 0
+
+function bump()
+	counter = counter + 1
+end 'bump'
+
+function main() returns ExitCode
+	var seen = 0
+	var n = 0
+	while n < 5 'loop'
+		bump()
+		seen = seen + counter
+		n = n + 1
+	end 'loop'
+	return seen
+end 'main'
+---
+ExitCode: 15
+---
+data {
+  __data_counter@0 = i64 0
+}
+
+func @bump {
+  entry:
+    arm64.prologue 16
+    arm64.leaGlobal x0, __data_counter
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.add x0, x0, 1
+    arm64.leaGlobal x1, __data_counter
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 0
+    arm64.movImm x20, 0
+    arm64.b whilehdr
+  whilehdr:
+    arm64.cmp x20, 5
+    arm64.cset x0, lt
+    arm64.cbnz x0, loop
+    arm64.b whileexit
+  loop:
+    arm64.bl bump
+    arm64.leaGlobal x0, __data_counter
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.add x19, x19, x0
+    arm64.add x20, x20, 1
+    arm64.b whilehdr
+  whileexit:
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

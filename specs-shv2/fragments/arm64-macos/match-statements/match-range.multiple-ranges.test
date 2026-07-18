@@ -1,0 +1,58 @@
+// Test: match-range.multiple-ranges
+function main() returns ExitCode
+	let score = 85
+	match score 'grade'
+		90 to 100 then return 65
+		80 upto 90 then return 66
+		70 upto 80 then return 67
+		default then return 70
+	end 'grade'
+end 'main'
+---
+ExitCode: 66
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 85
+    arm64.cmp x0, 90
+    arm64.cset x1, ge
+    arm64.cmp x0, 100
+    arm64.cset x2, le
+    arm64.and x1, x1, x2
+    arm64.cbnz x1, matcharm
+    arm64.b matchnext
+  matcharm:
+    arm64.movImm x0, 65
+    arm64.epilogue 16
+    arm64.ret
+  matchnext:
+    arm64.cmp x0, 80
+    arm64.cset x1, ge
+    arm64.cmp x0, 90
+    arm64.cset x2, lt
+    arm64.and x1, x1, x2
+    arm64.cbnz x1, matcharm
+    arm64.b matchnext
+  matcharm:
+    arm64.movImm x0, 66
+    arm64.epilogue 16
+    arm64.ret
+  matchnext:
+    arm64.cmp x0, 70
+    arm64.cset x1, ge
+    arm64.cmp x0, 80
+    arm64.cset x0, lt
+    arm64.and x0, x1, x0
+    arm64.cbnz x0, matcharm
+    arm64.b matchnext
+  matcharm:
+    arm64.movImm x0, 67
+    arm64.epilogue 16
+    arm64.ret
+  matchnext:
+    arm64.movImm x0, 70
+    arm64.epilogue 16
+    arm64.ret
+  matchcont:
+}

@@ -1,0 +1,28 @@
+// Test: bare-call-statement
+function noop(x int) returns int
+	return x
+end 'noop'
+
+function main() returns ExitCode
+	noop(5)
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @noop {
+  entry:
+    arm64.prologue 16
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 5
+    arm64.bl noop
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

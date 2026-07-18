@@ -133,6 +133,7 @@ var msg = "Hello, {name}!"
 ### Basic Variable Interpolation
 
 <!-- test: basic-variable -->
+<!-- targets: x64-windows -->
 ```maxon
 function main() returns ExitCode
 	let name = "World"
@@ -150,6 +151,7 @@ Hello, World!
 ### Multiple Variables
 
 <!-- test: multiple-variables -->
+<!-- targets: x64-windows -->
 ```maxon
 function main() returns ExitCode
 	let first = "Hello"
@@ -168,6 +170,7 @@ Hello, World!
 ### Integer Interpolation
 
 <!-- test: integer-interpolation -->
+<!-- targets: x64-windows -->
 ```maxon
 function main() returns ExitCode
 	let x = 42
@@ -185,6 +188,7 @@ Value: 42
 ### Integer Literal Interpolation
 
 <!-- test: integer-literal -->
+<!-- targets: x64-windows -->
 ```maxon
 function main() returns ExitCode
 	print("Answer: {42}\n")
@@ -201,6 +205,7 @@ Answer: 42
 ### Negative Integer
 
 <!-- test: negative-integer -->
+<!-- targets: x64-windows -->
 ```maxon
 function main() returns ExitCode
 	let x = -5
@@ -218,6 +223,7 @@ Negative: -5
 ### Negative Unary Expression
 
 <!-- test: negative-unary -->
+<!-- targets: x64-windows -->
 ```maxon
 function main() returns ExitCode
 	print("Value: {0-10}\n")
@@ -287,6 +293,7 @@ Temp: -3.5
 ### Boolean True Interpolation
 
 <!-- test: bool-true -->
+<!-- targets: x64-windows -->
 ```maxon
 function main() returns ExitCode
 	let flag = true
@@ -304,6 +311,7 @@ Active: true
 ### Boolean False Interpolation
 
 <!-- test: bool-false -->
+<!-- targets: x64-windows -->
 ```maxon
 function main() returns ExitCode
 	let flag = false
@@ -321,6 +329,7 @@ Active: false
 ### Boolean Literal Interpolation
 
 <!-- test: bool-literal -->
+<!-- targets: x64-windows -->
 ```maxon
 function main() returns ExitCode
 	print("Yes: {true}, No: {false}\n")
@@ -337,6 +346,7 @@ Yes: true, No: false
 ### Expression Interpolation
 
 <!-- test: expression-interpolation -->
+<!-- targets: x64-windows -->
 ```maxon
 function main() returns ExitCode
 	let a = 5
@@ -355,6 +365,7 @@ end 'main'
 ### Complex Expression
 
 <!-- test: complex-expression -->
+<!-- targets: x64-windows -->
 ```maxon
 function main() returns ExitCode
 	let x = 10
@@ -372,6 +383,7 @@ Double: 20, Triple: 30
 ### Parenthesized Expression
 
 <!-- test: parenthesized-expression -->
+<!-- targets: x64-windows -->
 ```maxon
 function main() returns ExitCode
 	let a = 2
@@ -390,6 +402,7 @@ Result: 10
 ### Empty String Parts
 
 <!-- test: empty-parts -->
+<!-- targets: x64-windows -->
 ```maxon
 function main() returns ExitCode
 	let x = 42
@@ -407,6 +420,7 @@ end 'main'
 ### Adjacent Interpolations
 
 <!-- test: adjacent-interpolations -->
+<!-- targets: x64-windows -->
 ```maxon
 function main() returns ExitCode
 	let a = "Hello"
@@ -425,6 +439,7 @@ HelloWorld
 ### Three Adjacent Interpolations
 
 <!-- test: three-adjacent -->
+<!-- targets: x64-windows -->
 ```maxon
 function main() returns ExitCode
 	let a = "A"
@@ -444,6 +459,7 @@ ABC
 ### String Variable Interpolation
 
 <!-- test: string-variable -->
+<!-- targets: x64-windows -->
 ```maxon
 function main() returns ExitCode
 	let greeting = "Hello"
@@ -463,6 +479,7 @@ Hello, World!
 ### Escaped Braces
 
 <!-- test: escaped-braces -->
+<!-- targets: x64-windows -->
 ```maxon
 function main() returns ExitCode
 	print("Use \{expr\} for interpolation")
@@ -479,6 +496,7 @@ Use {expr} for interpolation
 ### Mixed Escaped and Interpolation
 
 <!-- test: mixed-escaped -->
+<!-- targets: x64-windows -->
 ```maxon
 function main() returns ExitCode
 	let x = 42
@@ -496,6 +514,7 @@ Value {x} is 42
 ### Interpolation in Loop
 
 <!-- test: interpolation-loop -->
+<!-- targets: x64-windows -->
 ```maxon
 function main() returns ExitCode
 	var i = 0
@@ -518,6 +537,7 @@ Count: 2
 ### Function Call in Interpolation
 
 <!-- test: function-call -->
+<!-- targets: x64-windows -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -559,6 +579,7 @@ Length: 5
 ### Comparison in Interpolation
 
 <!-- test: comparison-interpolation -->
+<!-- targets: x64-windows -->
 ```maxon
 function main() returns ExitCode
 	let a = 5
@@ -577,6 +598,7 @@ a > b: true
 ### Logical Expression
 
 <!-- test: logical-expression -->
+<!-- targets: x64-windows -->
 ```maxon
 function main() returns ExitCode
 	let x = true
@@ -613,6 +635,7 @@ Area: 12.56636
 ### Mixed Types
 
 <!-- test: mixed-types -->
+<!-- targets: x64-windows -->
 ```maxon
 function main() returns ExitCode
 	let name = "test"
@@ -632,6 +655,7 @@ Name: test, Count: 5, Active: true
 ### Large Integer
 
 <!-- test: large-integer -->
+<!-- targets: x64-windows -->
 ```maxon
 function main() returns ExitCode
 	let big = 2147483647
@@ -668,6 +692,7 @@ Int: 0, Float: 0.0
 ### Newline in String with Interpolation
 
 <!-- test: newline-interpolation -->
+<!-- targets: x64-windows -->
 ```maxon
 function main() returns ExitCode
 	let x = 42
@@ -686,6 +711,7 @@ Line2: done
 ### Tab in String with Interpolation
 
 <!-- test: tab-interpolation -->
+<!-- targets: x64-windows -->
 ```maxon
 function main() returns ExitCode
 	let a = 1
@@ -827,6 +853,7 @@ John Doe, 30 years old
 ### Int-Backed Enum Interpolation
 
 <!-- test: int-enum-interpolation -->
+<!-- targets: x64-windows -->
 ```maxon
 enum Color
 	red = 1
@@ -899,6 +926,7 @@ Status: Active
 ### Multiple Enum Interpolations
 
 <!-- test: multiple-enum-interpolation -->
+<!-- targets: x64-windows -->
 ```maxon
 enum Priority
 	low = 1
@@ -1225,6 +1253,7 @@ runs the loop long enough that any per-iteration leak drives `__mm_alloc_count` 
 gate reports exit 101 instead of 0.
 
 <!-- test: interp-temporary-dropped-per-loop-iteration -->
+<!-- targets: x64-windows -->
 ```maxon
 function main() returns ExitCode
 	var i = 0
@@ -1258,6 +1287,7 @@ rides the statement), where a nested-block BOUND value would leak (its drop woul
 `end`, which is P1.4). Authored to pin that distinction.
 
 <!-- test: interp-temporary-in-nested-block -->
+<!-- targets: x64-windows -->
 ```maxon
 function main() returns ExitCode
 	let n = 7

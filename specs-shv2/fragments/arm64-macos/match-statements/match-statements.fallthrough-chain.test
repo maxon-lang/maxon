@@ -1,0 +1,56 @@
+// Test: match-statements.fallthrough-chain
+function main() returns ExitCode
+	let x = 1
+	var result = 0
+	match x 'cascade'
+		1 then result = result + 10 and fallthrough
+		2 then result = result + 20 and fallthrough
+		3 then result = result + 30
+		default then result = 100
+	end 'cascade'
+	return result
+end 'main'
+---
+ExitCode: 60
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 1
+    arm64.movImm x1, 0
+    arm64.cmp x0, 1
+    arm64.cset x2, eq
+    arm64.cbnz x2, matcharm
+    arm64.b matchnext
+  matcharm:
+    arm64.add x0, x1, 10
+    arm64.b matcharm
+  matchnext:
+    arm64.cmp x0, 2
+    arm64.cset x2, eq
+    arm64.cbnz x2, critsplit
+    arm64.b matchnext
+  critsplit:
+    arm64.movRegReg x0, x1
+    arm64.b matcharm
+  matcharm:
+    arm64.add x0, x0, 20
+    arm64.b matcharm
+  matchnext:
+    arm64.cmp x0, 3
+    arm64.cset x0, eq
+    arm64.cbnz x0, critsplit
+    arm64.b matchnext
+  critsplit:
+    arm64.movRegReg x0, x1
+    arm64.b matcharm
+  matcharm:
+    arm64.add x0, x0, 30
+    arm64.b matchcont
+  matchnext:
+    arm64.movImm x0, 100
+    arm64.b matchcont
+  matchcont:
+    arm64.epilogue 16
+    arm64.ret
+}

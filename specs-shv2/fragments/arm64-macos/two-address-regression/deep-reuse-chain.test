@@ -1,0 +1,67 @@
+// Test: deep-reuse-chain
+function chain(p int) returns int
+	let a = p + 100
+	let b = p + 1
+	let c = p + 2
+	let d = p + 3
+	let e = p + 4
+	let f = p + 5
+	let r1 = a - b
+	let r2 = a - c
+	let r3 = a - d
+	let r4 = a - e
+	let r5 = a - f
+	return r1 + r2 + r3 + r4 + r5 + a
+end 'chain'
+
+function main() returns ExitCode
+	let s = chain(0)
+	if s == 585 'ok'
+		return 0
+	end 'ok'
+	return 99
+end 'main'
+---
+ExitCode: 0
+---
+func @chain {
+  entry:
+    arm64.prologue 16
+    arm64.add x1, x0, 100
+    arm64.add x2, x0, 1
+    arm64.add x6, x0, 2
+    arm64.add x7, x0, 3
+    arm64.add x8, x0, 4
+    arm64.add x0, x0, 5
+    arm64.sub x2, x1, x2
+    arm64.sub x6, x1, x6
+    arm64.sub x7, x1, x7
+    arm64.sub x8, x1, x8
+    arm64.sub x0, x1, x0
+    arm64.add x2, x2, x6
+    arm64.add x2, x2, x7
+    arm64.add x2, x2, x8
+    arm64.add x0, x2, x0
+    arm64.add x0, x0, x1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 0
+    arm64.bl chain
+    arm64.cmp x0, 585
+    arm64.cset x0, eq
+    arm64.cbnz x0, ok
+    arm64.b ifcont
+  ok:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 99
+    arm64.epilogue 16
+    arm64.ret
+}

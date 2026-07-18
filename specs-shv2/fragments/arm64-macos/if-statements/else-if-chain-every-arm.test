@@ -1,0 +1,124 @@
+// Test: else-if-chain-every-arm
+function classify(x int) returns int
+	if x == 0 'zero'
+		return 0
+	end 'zero' else if x < 10 'small'
+		return 1
+	end 'small' else if x < 100 'medium'
+		return 2
+	end 'medium' else 'large'
+		return 3
+	end 'large'
+end 'classify'
+
+function main() returns ExitCode
+	if classify(0) != 0 'zeroArm'
+		return 1
+	end 'zeroArm'
+
+	if classify(5) != 1 'smallArm'
+		return 2
+	end 'smallArm'
+
+	if classify(50) != 2 'mediumArm'
+		return 3
+	end 'mediumArm'
+
+	if classify(200) != 3 'largeArm'
+		return 4
+	end 'largeArm'
+
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @classify {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x0, 0
+    arm64.cset x1, eq
+    arm64.cbnz x1, zero
+    arm64.b ifelse
+  zero:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  ifelse:
+    arm64.cmp x0, 10
+    arm64.cset x1, lt
+    arm64.cbnz x1, small
+    arm64.b ifelse
+  small:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+  ifelse:
+    arm64.cmp x0, 100
+    arm64.cset x0, lt
+    arm64.cbnz x0, medium
+    arm64.b ifelse
+  medium:
+    arm64.movImm x0, 2
+    arm64.epilogue 16
+    arm64.ret
+  ifelse:
+    arm64.movImm x0, 3
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+  ifcont:
+  ifcont:
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 0
+    arm64.bl classify
+    arm64.cmp x0, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, zeroArm
+    arm64.b ifcont
+  zeroArm:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 5
+    arm64.bl classify
+    arm64.cmp x0, 1
+    arm64.cset x0, ne
+    arm64.cbnz x0, smallArm
+    arm64.b ifcont
+  smallArm:
+    arm64.movImm x0, 2
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 50
+    arm64.bl classify
+    arm64.cmp x0, 2
+    arm64.cset x0, ne
+    arm64.cbnz x0, mediumArm
+    arm64.b ifcont
+  mediumArm:
+    arm64.movImm x0, 3
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 200
+    arm64.bl classify
+    arm64.cmp x0, 3
+    arm64.cset x0, ne
+    arm64.cbnz x0, largeArm
+    arm64.b ifcont
+  largeArm:
+    arm64.movImm x0, 4
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}
