@@ -46,8 +46,9 @@ function safeDivide(a Integer, b Integer) returns Integer throws ComputeError
 				throw ComputeError.overflow
 		end 'check'
 		// Reached only when b != 0 (the guard above throws otherwise); the divide rides `try` because
-		// `/` is fallible at the type level and b is typed 0-inclusive. The `otherwise` is unreachable.
-		return try (a / b) otherwise 0
+		// `/` is fallible at the type level and b is typed 0-inclusive. The `otherwise` is unreachable,
+		// so it panics rather than fold a wrong answer.
+		return try (a / b) otherwise panic("safeDivide: b was 0 past the zero guard")
 end 'safeDivide'
 
 function main() returns ExitCode
@@ -74,8 +75,9 @@ function safeDivide(a Integer, b Integer) returns Integer throws ComputeError
 				throw ComputeError.overflow
 		end 'check'
 		// Reached only when b != 0 (the guard above throws otherwise); the divide rides `try` because
-		// `/` is fallible at the type level and b is typed 0-inclusive. The `otherwise` is unreachable.
-		return try (a / b) otherwise 0
+		// `/` is fallible at the type level and b is typed 0-inclusive. The `otherwise` is unreachable,
+		// so it panics rather than fold a wrong answer.
+		return try (a / b) otherwise panic("safeDivide: b was 0 past the zero guard")
 end 'safeDivide'
 
 function main() returns ExitCode
@@ -158,8 +160,9 @@ function checkedDiv(a Integer, b Integer) returns Integer throws MathError
 				throw MathError.divByZero
 		end 'z'
 		// Reached only when b != 0 (the guard above throws otherwise); the divide rides `try` because
-		// `/` is fallible at the type level and b is typed 0-inclusive. The `otherwise` is unreachable.
-		return try (a / b) otherwise 0
+		// `/` is fallible at the type level and b is typed 0-inclusive. The `otherwise` is unreachable,
+		// so it panics rather than fold a wrong answer.
+		return try (a / b) otherwise panic("safeDivide: b was 0 past the zero guard")
 end 'checkedDiv'
 
 function main() returns ExitCode

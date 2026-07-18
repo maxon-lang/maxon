@@ -901,3 +901,44 @@ end 'main'
 ```exitcode
 4
 ```
+
+<!-- test: interface-param-checked-divide-survives-specialization -->
+### A possibly-zero divide in an interface-param function survives specialization
+An interface-parameter function is CLONED per concrete argument type (monomorphization's
+interface-alias specialization path). A possibly-zero integer `/` in its body is a throwing
+`__checked_div` op carrying its own mod/signedness metadata; the clone must rebuild it as
+itself, not as a plain try-call the lowering cannot emit.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Scorer
+	function score() returns Integer
+end 'Scorer'
+
+type Alpha implements Scorer
+	let n as Integer
+	function score() returns Integer
+		return n * 2
+	end 'score'
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Alpha'
+
+function opaque(x Integer) returns Integer
+	return x
+end 'opaque'
+
+function ratioVia(s Scorer, d Integer) returns Integer
+	let base = s.score()
+	return try (base / d) otherwise panic("ratioVia: d was 0")
+end 'ratioVia'
+
+function main() returns ExitCode
+	let a = Alpha.create(21)
+	return ratioVia(a, d: opaque(3)) as ExitCode
+end 'main'
+```
+```exitcode
+14
+```

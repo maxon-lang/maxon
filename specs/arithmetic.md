@@ -127,7 +127,7 @@ function divLoop(n Integer) returns Integer
 	var sum = 0
 	var i = 1
 	while i <= n 'loop'
-		sum = sum + trunc(try (50 / i) otherwise 0)
+		sum = sum + trunc(try (50 / i) otherwise panic("divLoop: i was 0"))
 		i = i + 1
 	end 'loop'
 	return sum

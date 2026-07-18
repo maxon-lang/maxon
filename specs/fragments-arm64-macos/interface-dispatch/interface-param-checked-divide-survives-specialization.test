@@ -1,0 +1,188 @@
+// Test: interface-param-checked-divide-survives-specialization
+typealias Integer = int(i64.min to i64.max)
+
+interface Scorer
+	function score() returns Integer
+end 'Scorer'
+
+type Alpha implements Scorer
+	let n as Integer
+	function score() returns Integer
+		return n * 2
+	end 'score'
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Alpha'
+
+function opaque(x Integer) returns Integer
+	return x
+end 'opaque'
+
+function ratioVia(s Scorer, d Integer) returns Integer
+	let base = s.score()
+	return try (base / d) otherwise panic("ratioVia: d was 0")
+end 'ratioVia'
+
+function main() returns ExitCode
+	let a = Alpha.create(21)
+	return ratioVia(a, d: opaque(3)) as ExitCode
+end 'main'
+---
+ExitCode: 14
+---
+// CompiledIR
+module {
+  func @Alpha.score(__self_ptr: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.mov x2, #2
+    arm64.mul x3, x1, x2
+    arm64.mov x0, x3
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @Alpha.create(n: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-16]
+    arm64.mov x0, #8
+    arm64.mov x1, #0
+    arm64.mov x2, #1
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-16]
+    arm64.str x1, [x0, #0]
+    arm64.ldr x2, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x3, [x29, #-8]
+    arm64.mov x0, x3
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @opaque(x: i64) -> i64 {
+  entry:
+    arm64.ret
+  }
+  func @main() -> u8 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x0, #21
+    arm64.bl Alpha.create
+    arm64.str x0, [x29, #-8]
+    arm64.mov x0, #3
+    arm64.bl opaque
+    arm64.ldr x1, [x29, #-8]
+    arm64.mov x1, x0
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl ratioVia$Alpha
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x1, #255
+    arm64.cmp x0, x1
+    arm64.cset x3, gt
+    arm64.orr x1, x2, x3
+    arm64.cmp x1, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_1
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_0:
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x1, #255
+    arm64.cmp x0, x1
+    arm64.cset x3, gt
+    arm64.orr x1, x2, x3
+    arm64.cmp x1, #0
+    arm64.b.ne main.__range_panic_1
+    arm64.b main.__range_ok_1
+  __range_panic_1:
+    arm64.adrp_add_symdata x0, __panic_msg_1
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  __range_ok_1:
+    arm64.ldr x1, [x29, #-8]
+    arm64.str x0, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq main.__skip_guarded_26
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_26
+    arm64.ldr x0, [x29, #-16]
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @ratioVia$Alpha(s: i64, d: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=96
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.str x1, [x29, #-40]
+    arm64.bl Alpha.score
+    arm64.mov x1, #0
+    arm64.ldr x2, [x29, #-40]
+    arm64.cmp x2, x1
+    arm64.cset x3, eq
+    arm64.mov x4, #1
+    arm64.mov x5, #0
+    arm64.cmp x3, #0
+    arm64.csel x6, x4, x5, ne
+    arm64.str x6, [x29, #-16]
+    arm64.mov x7, #0
+    arm64.str x7, [x29, #-24]
+    arm64.cmp x3, #0
+    arm64.str x0, [x29, #-48]
+    arm64.b.ne ratioVia$Alpha.__div_zero_50
+    arm64.b ratioVia$Alpha.__div_ok_50
+  __div_zero_0:
+    arm64.b ratioVia$Alpha.__div_merge_50
+  __div_ok_0:
+    arm64.ldr x0, [x29, #-40]
+    arm64.ldr x1, [x29, #-48]
+    arm64.cmp x0, #0
+    arm64.b.ne ratioVia$Alpha.__div_ok_0
+    arm64.bl mrt_div_by_zero
+    arm64.label ratioVia$Alpha.__div_ok_0
+    arm64.sdiv x2, x1, x0
+    arm64.str x2, [x29, #-24]
+    arm64.b ratioVia$Alpha.__div_merge_50
+  __div_merge_0:
+    arm64.ldr x0, [x29, #-16]
+    arm64.ldr x1, [x29, #-24]
+    arm64.str x1, [x29, #-32]
+    arm64.mov x2, #0
+    arm64.cmp x0, x2
+    arm64.cset x3, ne
+    arm64.cmp x3, #0
+    arm64.b.ne ratioVia$Alpha.otherwise_panic_0
+    arm64.b ratioVia$Alpha.otherwise_continue_1
+  otherwise_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_0
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  otherwise_continue_0:
+    arm64.ldr x0, [x29, #-32]
+    arm64.epilogue stack_size=96
+    arm64.ret
+  }
+  func @__destruct_Alpha(ptr: i64) {
+  entry:
+    arm64.b __destruct_Alpha.done
+  done:
+    arm64.ret
+  }
+}
+---

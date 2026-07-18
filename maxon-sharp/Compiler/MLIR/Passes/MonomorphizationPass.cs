@@ -2294,6 +2294,33 @@ public static class MonomorphizationPass {
       IrModule<MaxonOp>? module = null,
       List<(string SourceName, string SpecName, IrFunction<MaxonOp> SourceFunc)>? closureSpecOut = null) {
     switch (op) {
+      // Try-call SUBTYPES carry metadata the base op does not (and CopyCallMetadata cannot reach),
+      // so they must be rebuilt as themselves — matching them under `case MaxonTryCallOp` below and
+      // rebuilding a plain MaxonTryCallOp strands that metadata and breaks lowering. Their callee is
+      // fixed (never interface-alias-substituted), so only the args are remapped. This mirrors
+      // FunctionCloner.CloneTryCallOp, the generic-type-parameter cloner; the two must agree.
+      case MaxonCheckedDivTryCallOp checkedDiv: {
+        var newArgs = checkedDiv.Args.Select(mapValue).ToList();
+        var cloned = new MaxonCheckedDivTryCallOp(newArgs[0], newArgs[1], checkedDiv.IsMod,
+          checkedDiv.IsUnsigned, checkedDiv.ResultKind!.Value, checkedDiv.ThrowsType!);
+        CopyCallMetadata(checkedDiv, cloned);
+        if (checkedDiv.Result != null && cloned.Result != null)
+          valueMap[checkedDiv.Result.Id] = cloned.Result;
+        valueMap[checkedDiv.ErrorFlag.Id] = cloned.ErrorFlag;
+        return cloned;
+      }
+      case MaxonManagedMemCreateTryCallOp createTry: {
+        var newArgs = createTry.Args.Select(mapValue).ToList();
+        var resultStructTypeName = createTry.ResultStructTypeName != null ? sub.SubstituteName(createTry.ResultStructTypeName) : null;
+        var cloned = new MaxonManagedMemCreateTryCallOp(newArgs[0], createTry.ElementSize, createTry.IsBitPacked) {
+          ResultStructTypeName = resultStructTypeName
+        };
+        CopyCallMetadata(createTry, cloned);
+        if (createTry.Result != null && cloned.Result != null)
+          valueMap[createTry.Result.Id] = cloned.Result;
+        valueMap[createTry.ErrorFlag.Id] = cloned.ErrorFlag;
+        return cloned;
+      }
       case MaxonTryCallOp tryCall: {
         var newCallee = sub.SubstituteCallee(tryCall.Callee);
         var newArgs = tryCall.Args.Select(mapValue).ToList();

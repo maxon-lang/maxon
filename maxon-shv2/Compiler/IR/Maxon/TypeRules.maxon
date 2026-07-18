@@ -650,12 +650,13 @@ function foldIntDivision(op MaxonBinOp, lhs ParsedInt, rhs ParsedInt) returns Fo
 	// rhs is guarded non-zero (and not the i64.min/-1 overflow) above, so these never fail. The
 	// divisor is any non-zero ParsedInt — BOTH signs — which no single contiguous ranged type can
 	// express (non-zero is not a range), so the guaranteed-safe divide/remainder ride `try`; the
-	// `otherwise` arms are unreachable.
+	// `otherwise` arms are unreachable, so they PANIC rather than fold a wrong answer — a silent
+	// `otherwise 0` would fold to 0 if the guard above ever regressed.
 	if op == MaxonBinOp.div 'quotient'
-		return FoldedInt.folded(try (lhs / rhs) otherwise 0)
+		return FoldedInt.folded(try (lhs / rhs) otherwise panic("foldIntDivision: divisor was 0 past the zero guard"))
 	end 'quotient'
 
-	return FoldedInt.folded(try (lhs mod rhs) otherwise 0)
+	return FoldedInt.folded(try (lhs mod rhs) otherwise panic("foldIntDivision: divisor was 0 past the zero guard"))
 end 'foldIntDivision'
 
 // Fold a unary operator over an integer the parser already holds. `logicalNot` is a BOOL operator —

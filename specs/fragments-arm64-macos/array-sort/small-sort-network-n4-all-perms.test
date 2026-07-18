@@ -36,9 +36,9 @@ function nthPerm4(k Integer) returns IntArray
 	for i in 0 upto 4 'pick'
 		let d = try divs.get(i) otherwise panic("divs OOB")
 		// Every `divs` entry is >= 1, so these divides never throw; the `otherwise` arms are
-		// unreachable and exist only because `/`/`mod` are fallible for a 0-inclusive divisor type.
-		let idx = trunc(try (remaining / d) otherwise 0)
-		remaining = try (remaining mod d) otherwise 0
+		// unreachable (matching the `panic` used for this function's other impossible failures).
+		let idx = trunc(try (remaining / d) otherwise panic("nthPerm4: divs entry was 0"))
+		remaining = try (remaining mod d) otherwise panic("nthPerm4: divs entry was 0")
 		let v = try pool.get(idx) otherwise panic("pool OOB")
 		result.push(v)
 		try pool.remove(idx) otherwise panic("pool.remove OOB")
@@ -166,8 +166,8 @@ module {
   }
   func @nthPerm4(k: i64) -> i64 {
   entry:
-    arm64.prologue stack_size=304
-    arm64.str x0, [x29, #-144]
+    arm64.prologue stack_size=272
+    arm64.str x0, [x29, #-128]
     arm64.bl IntArray.create
     arm64.str x0, [x29, #-8]
     arm64.ldr x0, [x29, #-8]
@@ -187,9 +187,9 @@ module {
     arm64.bl IntArray.push
     arm64.bl IntArray.create
     arm64.str x0, [x29, #-16]
-    arm64.ldr x4, [x29, #-144]
+    arm64.ldr x4, [x29, #-128]
     arm64.str x4, [x29, #-24]
-    arm64.adrp_add_global x5, __static_lit_25
+    arm64.adrp_add_global x5, __static_lit_0
     arm64.mov x6, x5
     arm64.mov x7, #32
     arm64.add x8, x6, x7
@@ -260,22 +260,21 @@ module {
   __div_merge_0:
     arm64.ldr x0, [x29, #-72]
     arm64.ldr x1, [x29, #-80]
+    arm64.str x1, [x29, #-88]
     arm64.mov x2, #0
-    arm64.str x2, [x29, #-88]
-    arm64.str x1, [x29, #-96]
-    arm64.mov x3, #0
-    arm64.cmp x0, x3
-    arm64.cset x4, ne
-    arm64.cmp x4, #0
-    arm64.b.ne nthPerm4.otherwise_default_error_0
-    arm64.b nthPerm4.otherwise_default_continue_0
-  otherwise_default_error_0:
+    arm64.cmp x0, x2
+    arm64.cset x3, ne
+    arm64.cmp x3, #0
+    arm64.b.ne nthPerm4.otherwise_panic_1
+    arm64.b nthPerm4.otherwise_continue_1
+  otherwise_panic_1:
+    arm64.adrp_add_symdata x0, __panic_msg_1
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  otherwise_continue_1:
     arm64.ldr x0, [x29, #-88]
     arm64.str x0, [x29, #-96]
-    arm64.b nthPerm4.otherwise_default_continue_0
-  otherwise_default_continue_0:
-    arm64.ldr x0, [x29, #-96]
-    arm64.str x0, [x29, #-104]
     arm64.ldr x1, [x29, #-24]
     arm64.ldr x2, [x29, #-64]
     arm64.mov x3, #0
@@ -287,7 +286,7 @@ module {
     arm64.csel x7, x5, x6, ne
     arm64.str x7, [x29, #-72]
     arm64.mov x8, #0
-    arm64.str x8, [x29, #-112]
+    arm64.str x8, [x29, #-104]
     arm64.cmp x4, #0
     arm64.b.ne nthPerm4.__div_zero_1
     arm64.b nthPerm4.__div_ok_1
@@ -302,58 +301,16 @@ module {
     arm64.label nthPerm4.__div_ok_1
     arm64.sdiv x2, x1, x0
     arm64.msub x3, x2, x0, x1
-    arm64.str x3, [x29, #-112]
+    arm64.str x3, [x29, #-104]
     arm64.b nthPerm4.__div_merge_1
   __div_merge_1:
     arm64.ldr x0, [x29, #-72]
-    arm64.ldr x1, [x29, #-112]
+    arm64.ldr x1, [x29, #-104]
+    arm64.str x1, [x29, #-112]
     arm64.mov x2, #0
-    arm64.str x2, [x29, #-120]
-    arm64.str x1, [x29, #-128]
-    arm64.mov x3, #0
-    arm64.cmp x0, x3
-    arm64.cset x4, ne
-    arm64.cmp x4, #0
-    arm64.b.ne nthPerm4.otherwise_default_error_1
-    arm64.b nthPerm4.otherwise_default_continue_1
-  otherwise_default_error_1:
-    arm64.ldr x0, [x29, #-120]
-    arm64.str x0, [x29, #-128]
-    arm64.b nthPerm4.otherwise_default_continue_1
-  otherwise_default_continue_1:
-    arm64.ldr x0, [x29, #-128]
-    arm64.str x0, [x29, #-24]
-    arm64.ldr x1, [x29, #-104]
-    arm64.ldr x2, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
-    arm64.bl IntArray.get
-    arm64.str x0, [x29, #-136]
-    arm64.mov x3, #0
-    arm64.cmp x1, x3
-    arm64.cset x4, ne
-    arm64.cmp x4, #0
-    arm64.b.ne nthPerm4.otherwise_panic_1
-    arm64.b nthPerm4.otherwise_continue_1
-  otherwise_panic_1:
-    arm64.adrp_add_symdata x0, __panic_msg_1
-    arm64.mov x1, x0
-    arm64.mov x0, x1
-    arm64.bl mrt_panic
-  otherwise_continue_1:
-    arm64.ldr x0, [x29, #-136]
-    arm64.ldr x1, [x29, #-16]
-    arm64.ldr x0, [x29, #-16]
-    arm64.ldr x1, [x29, #-136]
-    arm64.bl IntArray.push
-    arm64.ldr x2, [x29, #-104]
-    arm64.ldr x3, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x29, #-104]
-    arm64.bl IntArray.remove
-    arm64.mov x4, #0
-    arm64.cmp x1, x4
-    arm64.cset x5, ne
-    arm64.cmp x5, #0
+    arm64.cmp x0, x2
+    arm64.cset x3, ne
+    arm64.cmp x3, #0
     arm64.b.ne nthPerm4.otherwise_panic_2
     arm64.b nthPerm4.otherwise_continue_2
   otherwise_panic_2:
@@ -362,6 +319,47 @@ module {
     arm64.mov x0, x1
     arm64.bl mrt_panic
   otherwise_continue_2:
+    arm64.ldr x0, [x29, #-112]
+    arm64.str x0, [x29, #-24]
+    arm64.ldr x1, [x29, #-96]
+    arm64.ldr x2, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl IntArray.get
+    arm64.str x0, [x29, #-120]
+    arm64.mov x3, #0
+    arm64.cmp x1, x3
+    arm64.cset x4, ne
+    arm64.cmp x4, #0
+    arm64.b.ne nthPerm4.otherwise_panic_3
+    arm64.b nthPerm4.otherwise_continue_3
+  otherwise_panic_3:
+    arm64.adrp_add_symdata x0, __panic_msg_3
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  otherwise_continue_3:
+    arm64.ldr x0, [x29, #-120]
+    arm64.ldr x1, [x29, #-16]
+    arm64.ldr x0, [x29, #-16]
+    arm64.ldr x1, [x29, #-120]
+    arm64.bl IntArray.push
+    arm64.ldr x2, [x29, #-96]
+    arm64.ldr x3, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-96]
+    arm64.bl IntArray.remove
+    arm64.mov x4, #0
+    arm64.cmp x1, x4
+    arm64.cset x5, ne
+    arm64.cmp x5, #0
+    arm64.b.ne nthPerm4.otherwise_panic_4
+    arm64.b nthPerm4.otherwise_continue_4
+  otherwise_panic_4:
+    arm64.adrp_add_symdata x0, __panic_msg_4
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl mrt_panic
+  otherwise_continue_4:
     arm64.b nthPerm4.pick_0.incr
   pick_0.incr:
     arm64.mov x0, #1
@@ -372,18 +370,18 @@ module {
   pick_0.exit:
     arm64.ldr x0, [x29, #-32]
     arm64.cmp x0, #0
-    arm64.b.eq nthPerm4.__skip_guarded_130
+    arm64.b.eq nthPerm4.__skip_guarded_126
     arm64.bl mm_decref
-    arm64.label nthPerm4.__skip_guarded_130
+    arm64.label nthPerm4.__skip_guarded_126
     arm64.ldr x1, [x29, #-8]
     arm64.cmp x1, #0
-    arm64.b.eq nthPerm4.__skip_guarded_132
+    arm64.b.eq nthPerm4.__skip_guarded_128
     arm64.ldr x0, [x29, #-8]
     arm64.bl mm_decref
-    arm64.label nthPerm4.__skip_guarded_132
+    arm64.label nthPerm4.__skip_guarded_128
     arm64.ldr x2, [x29, #-16]
     arm64.mov x0, x2
-    arm64.epilogue stack_size=304
+    arm64.epilogue stack_size=272
     arm64.ret
   }
   func @main() -> u8 {
@@ -537,6 +535,613 @@ module {
     arm64.label main.__skip_guarded_107
     arm64.mov x0, #0
     arm64.epilogue stack_size=256
+    arm64.ret
+  }
+  func @__module_init() {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.adrp_add_global x0, __static_lit_0
+    arm64.mov x1, x0
+    arm64.mov x2, #72
+    arm64.str x2, [x1, #0]
+    arm64.mov x3, #2
+    arm64.str x3, [x1, #8]
+    arm64.mov x4, #0
+    arm64.str x4, [x1, #16]
+    arm64.mov x5, #4611686018427387904
+    arm64.str x5, [x1, #24]
+    arm64.adrp_add_rdata x6, __sarr_0
+    arm64.mov x7, x6
+    arm64.str x7, [x1, #32]
+    arm64.mov x8, #4
+    arm64.str x8, [x1, #40]
+    arm64.mov x9, #-2
+    arm64.str x9, [x1, #48]
+    arm64.mov x10, #8
+    arm64.str x10, [x1, #56]
+    arm64.mov x11, #0
+    arm64.str x11, [x1, #64]
+    arm64.adrp_add_global x12, __static_lit_1
+    arm64.mov x14, x12
+    arm64.mov x15, #80
+    arm64.str x15, [x14, #0]
+    arm64.mov x0, #3
+    arm64.str x0, [x14, #8]
+    arm64.mov x0, #0
+    arm64.str x0, [x14, #16]
+    arm64.mov x0, #4611686018427387904
+    arm64.str x0, [x14, #24]
+    arm64.adrp_add_rdata x0, __str_2
+    arm64.mov x1, x0
+    arm64.str x1, [x14, #32]
+    arm64.mov x0, #24
+    arm64.str x0, [x14, #40]
+    arm64.mov x0, #-2
+    arm64.str x0, [x14, #48]
+    arm64.mov x0, #1
+    arm64.str x0, [x14, #56]
+    arm64.mov x0, #0
+    arm64.str x0, [x14, #64]
+    arm64.mov x0, #1
+    arm64.str x0, [x14, #72]
+    arm64.adrp_add_global x0, __static_lit_2
+    arm64.mov x1, x0
+    arm64.mov x0, #80
+    arm64.str x0, [x1, #0]
+    arm64.mov x0, #3
+    arm64.str x0, [x1, #8]
+    arm64.mov x0, #0
+    arm64.str x0, [x1, #16]
+    arm64.mov x0, #4611686018427387904
+    arm64.str x0, [x1, #24]
+    arm64.adrp_add_rdata x0, __str_3
+    arm64.mov x2, x0
+    arm64.str x2, [x1, #32]
+    arm64.mov x0, #18
+    arm64.str x0, [x1, #40]
+    arm64.mov x0, #-2
+    arm64.str x0, [x1, #48]
+    arm64.mov x0, #1
+    arm64.str x0, [x1, #56]
+    arm64.mov x0, #0
+    arm64.str x0, [x1, #64]
+    arm64.mov x0, #1
+    arm64.str x0, [x1, #72]
+    arm64.adrp_add_global x0, __static_lit_3
+    arm64.mov x1, x0
+    arm64.mov x0, #80
+    arm64.str x0, [x1, #0]
+    arm64.mov x0, #3
+    arm64.str x0, [x1, #8]
+    arm64.mov x0, #0
+    arm64.str x0, [x1, #16]
+    arm64.mov x0, #4611686018427387904
+    arm64.str x0, [x1, #24]
+    arm64.adrp_add_rdata x0, __str_4
+    arm64.mov x2, x0
+    arm64.str x2, [x1, #32]
+    arm64.mov x0, #17
+    arm64.str x0, [x1, #40]
+    arm64.mov x0, #-2
+    arm64.str x0, [x1, #48]
+    arm64.mov x0, #1
+    arm64.str x0, [x1, #56]
+    arm64.mov x0, #0
+    arm64.str x0, [x1, #64]
+    arm64.mov x0, #1
+    arm64.str x0, [x1, #72]
+    arm64.adrp_add_global x0, __static_lit_4
+    arm64.mov x1, x0
+    arm64.mov x0, #80
+    arm64.str x0, [x1, #0]
+    arm64.mov x0, #3
+    arm64.str x0, [x1, #8]
+    arm64.mov x0, #0
+    arm64.str x0, [x1, #16]
+    arm64.mov x0, #4611686018427387904
+    arm64.str x0, [x1, #24]
+    arm64.adrp_add_rdata x0, __str_5
+    arm64.mov x2, x0
+    arm64.str x2, [x1, #32]
+    arm64.mov x0, #20
+    arm64.str x0, [x1, #40]
+    arm64.mov x0, #-2
+    arm64.str x0, [x1, #48]
+    arm64.mov x0, #1
+    arm64.str x0, [x1, #56]
+    arm64.mov x0, #0
+    arm64.str x0, [x1, #64]
+    arm64.mov x0, #1
+    arm64.str x0, [x1, #72]
+    arm64.adrp_add_global x0, __static_lit_5
+    arm64.mov x1, x0
+    arm64.mov x0, #80
+    arm64.str x0, [x1, #0]
+    arm64.mov x0, #3
+    arm64.str x0, [x1, #8]
+    arm64.mov x0, #0
+    arm64.str x0, [x1, #16]
+    arm64.mov x0, #4611686018427387904
+    arm64.str x0, [x1, #24]
+    arm64.adrp_add_rdata x0, __str_6
+    arm64.mov x2, x0
+    arm64.str x2, [x1, #32]
+    arm64.mov x0, #18
+    arm64.str x0, [x1, #40]
+    arm64.mov x0, #-2
+    arm64.str x0, [x1, #48]
+    arm64.mov x0, #1
+    arm64.str x0, [x1, #56]
+    arm64.mov x0, #0
+    arm64.str x0, [x1, #64]
+    arm64.mov x0, #1
+    arm64.str x0, [x1, #72]
+    arm64.adrp_add_global x0, __static_lit_6
+    arm64.mov x1, x0
+    arm64.mov x0, #80
+    arm64.str x0, [x1, #0]
+    arm64.mov x0, #3
+    arm64.str x0, [x1, #8]
+    arm64.mov x0, #0
+    arm64.str x0, [x1, #16]
+    arm64.mov x0, #4611686018427387904
+    arm64.str x0, [x1, #24]
+    arm64.adrp_add_rdata x0, __str_7
+    arm64.mov x2, x0
+    arm64.str x2, [x1, #32]
+    arm64.mov x0, #20
+    arm64.str x0, [x1, #40]
+    arm64.mov x0, #-2
+    arm64.str x0, [x1, #48]
+    arm64.mov x0, #1
+    arm64.str x0, [x1, #56]
+    arm64.mov x0, #0
+    arm64.str x0, [x1, #64]
+    arm64.mov x0, #1
+    arm64.str x0, [x1, #72]
+    arm64.adrp_add_global x0, __static_lit_7
+    arm64.mov x1, x0
+    arm64.mov x0, #80
+    arm64.str x0, [x1, #0]
+    arm64.mov x0, #3
+    arm64.str x0, [x1, #8]
+    arm64.mov x0, #0
+    arm64.str x0, [x1, #16]
+    arm64.mov x0, #4611686018427387904
+    arm64.str x0, [x1, #24]
+    arm64.adrp_add_rdata x0, __str_8
+    arm64.mov x2, x0
+    arm64.str x2, [x1, #32]
+    arm64.mov x0, #15
+    arm64.str x0, [x1, #40]
+    arm64.mov x0, #-2
+    arm64.str x0, [x1, #48]
+    arm64.mov x0, #1
+    arm64.str x0, [x1, #56]
+    arm64.mov x0, #0
+    arm64.str x0, [x1, #64]
+    arm64.mov x0, #1
+    arm64.str x0, [x1, #72]
+    arm64.adrp_add_global x0, __static_lit_8
+    arm64.mov x1, x0
+    arm64.mov x0, #80
+    arm64.str x0, [x1, #0]
+    arm64.mov x0, #3
+    arm64.str x0, [x1, #8]
+    arm64.mov x0, #0
+    arm64.str x0, [x1, #16]
+    arm64.mov x0, #4611686018427387904
+    arm64.str x0, [x1, #24]
+    arm64.adrp_add_rdata x0, __str_9
+    arm64.mov x2, x0
+    arm64.str x2, [x1, #32]
+    arm64.mov x0, #12
+    arm64.str x0, [x1, #40]
+    arm64.mov x0, #-2
+    arm64.str x0, [x1, #48]
+    arm64.mov x0, #1
+    arm64.str x0, [x1, #56]
+    arm64.mov x0, #0
+    arm64.str x0, [x1, #64]
+    arm64.mov x0, #1
+    arm64.str x0, [x1, #72]
+    arm64.adrp_add_global x0, __static_lit_9
+    arm64.mov x1, x0
+    arm64.mov x0, #80
+    arm64.str x0, [x1, #0]
+    arm64.mov x0, #3
+    arm64.str x0, [x1, #8]
+    arm64.mov x0, #0
+    arm64.str x0, [x1, #16]
+    arm64.mov x0, #4611686018427387904
+    arm64.str x0, [x1, #24]
+    arm64.adrp_add_rdata x0, __str_10
+    arm64.mov x2, x0
+    arm64.str x2, [x1, #32]
+    arm64.mov x0, #14
+    arm64.str x0, [x1, #40]
+    arm64.mov x0, #-2
+    arm64.str x0, [x1, #48]
+    arm64.mov x0, #1
+    arm64.str x0, [x1, #56]
+    arm64.mov x0, #0
+    arm64.str x0, [x1, #64]
+    arm64.mov x0, #1
+    arm64.str x0, [x1, #72]
+    arm64.adrp_add_global x0, __static_lit_10
+    arm64.mov x1, x0
+    arm64.mov x0, #80
+    arm64.str x0, [x1, #0]
+    arm64.mov x0, #3
+    arm64.str x0, [x1, #8]
+    arm64.mov x0, #0
+    arm64.str x0, [x1, #16]
+    arm64.mov x0, #4611686018427387904
+    arm64.str x0, [x1, #24]
+    arm64.adrp_add_rdata x0, __str_11
+    arm64.mov x2, x0
+    arm64.str x2, [x1, #32]
+    arm64.mov x0, #17
+    arm64.str x0, [x1, #40]
+    arm64.mov x0, #-2
+    arm64.str x0, [x1, #48]
+    arm64.mov x0, #1
+    arm64.str x0, [x1, #56]
+    arm64.mov x0, #0
+    arm64.str x0, [x1, #64]
+    arm64.mov x0, #1
+    arm64.str x0, [x1, #72]
+    arm64.adrp_add_global x0, __static_lit_11
+    arm64.mov x1, x0
+    arm64.mov x0, #80
+    arm64.str x0, [x1, #0]
+    arm64.mov x0, #3
+    arm64.str x0, [x1, #8]
+    arm64.mov x0, #0
+    arm64.str x0, [x1, #16]
+    arm64.mov x0, #4611686018427387904
+    arm64.str x0, [x1, #24]
+    arm64.adrp_add_rdata x0, __str_12
+    arm64.mov x2, x0
+    arm64.str x2, [x1, #32]
+    arm64.mov x0, #18
+    arm64.str x0, [x1, #40]
+    arm64.mov x0, #-2
+    arm64.str x0, [x1, #48]
+    arm64.mov x0, #1
+    arm64.str x0, [x1, #56]
+    arm64.mov x0, #0
+    arm64.str x0, [x1, #64]
+    arm64.mov x0, #1
+    arm64.str x0, [x1, #72]
+    arm64.adrp_add_global x0, __static_lit_12
+    arm64.mov x1, x0
+    arm64.mov x0, #80
+    arm64.str x0, [x1, #0]
+    arm64.mov x0, #3
+    arm64.str x0, [x1, #8]
+    arm64.mov x0, #0
+    arm64.str x0, [x1, #16]
+    arm64.mov x0, #4611686018427387904
+    arm64.str x0, [x1, #24]
+    arm64.adrp_add_rdata x0, __str_13
+    arm64.mov x2, x0
+    arm64.str x2, [x1, #32]
+    arm64.mov x0, #16
+    arm64.str x0, [x1, #40]
+    arm64.mov x0, #-2
+    arm64.str x0, [x1, #48]
+    arm64.mov x0, #1
+    arm64.str x0, [x1, #56]
+    arm64.mov x0, #0
+    arm64.str x0, [x1, #64]
+    arm64.mov x0, #1
+    arm64.str x0, [x1, #72]
+    arm64.adrp_add_global x0, __static_lit_13
+    arm64.mov x1, x0
+    arm64.mov x0, #80
+    arm64.str x0, [x1, #0]
+    arm64.mov x0, #3
+    arm64.str x0, [x1, #8]
+    arm64.mov x0, #0
+    arm64.str x0, [x1, #16]
+    arm64.mov x0, #4611686018427387904
+    arm64.str x0, [x1, #24]
+    arm64.adrp_add_rdata x0, __str_14
+    arm64.mov x2, x0
+    arm64.str x2, [x1, #32]
+    arm64.mov x0, #21
+    arm64.str x0, [x1, #40]
+    arm64.mov x0, #-2
+    arm64.str x0, [x1, #48]
+    arm64.mov x0, #1
+    arm64.str x0, [x1, #56]
+    arm64.mov x0, #0
+    arm64.str x0, [x1, #64]
+    arm64.mov x0, #1
+    arm64.str x0, [x1, #72]
+    arm64.adrp_add_global x0, __static_lit_14
+    arm64.mov x1, x0
+    arm64.mov x0, #80
+    arm64.str x0, [x1, #0]
+    arm64.mov x0, #3
+    arm64.str x0, [x1, #8]
+    arm64.mov x0, #0
+    arm64.str x0, [x1, #16]
+    arm64.mov x0, #4611686018427387904
+    arm64.str x0, [x1, #24]
+    arm64.adrp_add_rdata x0, __str_15
+    arm64.mov x2, x0
+    arm64.str x2, [x1, #32]
+    arm64.mov x0, #19
+    arm64.str x0, [x1, #40]
+    arm64.mov x0, #-2
+    arm64.str x0, [x1, #48]
+    arm64.mov x0, #1
+    arm64.str x0, [x1, #56]
+    arm64.mov x0, #0
+    arm64.str x0, [x1, #64]
+    arm64.mov x0, #1
+    arm64.str x0, [x1, #72]
+    arm64.adrp_add_global x0, __static_lit_15
+    arm64.mov x1, x0
+    arm64.mov x0, #80
+    arm64.str x0, [x1, #0]
+    arm64.mov x0, #3
+    arm64.str x0, [x1, #8]
+    arm64.mov x0, #0
+    arm64.str x0, [x1, #16]
+    arm64.mov x0, #4611686018427387904
+    arm64.str x0, [x1, #24]
+    arm64.adrp_add_rdata x0, __str_16
+    arm64.mov x2, x0
+    arm64.str x2, [x1, #32]
+    arm64.mov x0, #13
+    arm64.str x0, [x1, #40]
+    arm64.mov x0, #-2
+    arm64.str x0, [x1, #48]
+    arm64.mov x0, #1
+    arm64.str x0, [x1, #56]
+    arm64.mov x0, #0
+    arm64.str x0, [x1, #64]
+    arm64.mov x0, #1
+    arm64.str x0, [x1, #72]
+    arm64.adrp_add_global x0, __static_lit_16
+    arm64.mov x1, x0
+    arm64.mov x0, #80
+    arm64.str x0, [x1, #0]
+    arm64.mov x0, #3
+    arm64.str x0, [x1, #8]
+    arm64.mov x0, #0
+    arm64.str x0, [x1, #16]
+    arm64.mov x0, #4611686018427387904
+    arm64.str x0, [x1, #24]
+    arm64.adrp_add_rdata x0, __str_17
+    arm64.mov x2, x0
+    arm64.str x2, [x1, #32]
+    arm64.mov x0, #17
+    arm64.str x0, [x1, #40]
+    arm64.mov x0, #-2
+    arm64.str x0, [x1, #48]
+    arm64.mov x0, #1
+    arm64.str x0, [x1, #56]
+    arm64.mov x0, #0
+    arm64.str x0, [x1, #64]
+    arm64.mov x0, #1
+    arm64.str x0, [x1, #72]
+    arm64.adrp_add_global x0, __static_lit_17
+    arm64.mov x1, x0
+    arm64.mov x0, #80
+    arm64.str x0, [x1, #0]
+    arm64.mov x0, #3
+    arm64.str x0, [x1, #8]
+    arm64.mov x0, #0
+    arm64.str x0, [x1, #16]
+    arm64.mov x0, #4611686018427387904
+    arm64.str x0, [x1, #24]
+    arm64.adrp_add_rdata x0, __str_18
+    arm64.mov x2, x0
+    arm64.str x2, [x1, #32]
+    arm64.mov x0, #19
+    arm64.str x0, [x1, #40]
+    arm64.mov x0, #-2
+    arm64.str x0, [x1, #48]
+    arm64.mov x0, #1
+    arm64.str x0, [x1, #56]
+    arm64.mov x0, #0
+    arm64.str x0, [x1, #64]
+    arm64.mov x0, #1
+    arm64.str x0, [x1, #72]
+    arm64.bl TraceKeyArray.create
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x0, [x29, #-8]
+    arm64.global_store [captured], x0
+    arm64.ldr x0, [x29, #-8]
+    arm64.cmp x0, #0
+    arm64.b.eq __module_init.__skip_guarded_418
+    arm64.bl mm_decref
+    arm64.label __module_init.__skip_guarded_418
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @__maxon_global_cleanup() {
+  entry:
+    arm64.prologue stack_size=32
+    arm64.global_load x0, [captured]
+    arm64.str x0, [x29, #-8]
+    arm64.cmp x0, #0
+    arm64.b.eq __maxon_global_cleanup.__skip_guarded_1
+    arm64.bl mm_decref
+    arm64.label __maxon_global_cleanup.__skip_guarded_1
+    arm64.epilogue stack_size=32
+    arm64.ret
+  }
+  func @__destruct_SortRun(ptr: i64) {
+  entry:
+    arm64.b __destruct_SortRun.done
+  done:
+    arm64.ret
+  }
+  func @__destruct_String(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #16]
+    arm64.mov x2, #-1
+    arm64.cmp x1, x2
+    arm64.cset x3, eq
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct_String.slice_cleanup_0
+    arm64.b __destruct_String.check_owned_0
+  slice_cleanup_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #32]
+    arm64.str x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq __destruct_String.__skip_guarded_9
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label __destruct_String.__skip_guarded_9
+    arm64.b __destruct_String.skip_buf_0
+  check_owned_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #16]
+    arm64.mov x2, #-2
+    arm64.cmp x1, x2
+    arm64.cset x3, ne
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct_String.free_buf_0
+    arm64.b __destruct_String.skip_buf_0
+  free_buf_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #32]
+    arm64.mov x2, #-3
+    arm64.cmp x1, x2
+    arm64.cset x3, ne
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct_String.raw_free_0
+    arm64.b __destruct_String.skip_buf_0
+  raw_free_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.mov x0, x1
+    arm64.bl mm_raw_free
+    arm64.b __destruct_String.skip_buf_0
+  skip_buf_0:
+    arm64.b __destruct_String.done
+  done:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @__destruct_TraceKeyArray(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #16]
+    arm64.mov x2, #-1
+    arm64.cmp x1, x2
+    arm64.cset x3, eq
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct_TraceKeyArray.slice_cleanup_0
+    arm64.b __destruct_TraceKeyArray.check_owned_0
+  slice_cleanup_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #32]
+    arm64.str x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq __destruct_TraceKeyArray.__skip_guarded_9
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label __destruct_TraceKeyArray.__skip_guarded_9
+    arm64.b __destruct_TraceKeyArray.skip_buf_0
+  check_owned_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #16]
+    arm64.mov x2, #-2
+    arm64.cmp x1, x2
+    arm64.cset x3, ne
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct_TraceKeyArray.free_buf_0
+    arm64.b __destruct_TraceKeyArray.skip_buf_0
+  free_buf_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref_managed_elements
+    arm64.ldr x1, [x29, #-8]
+    arm64.ldr x2, [x1, #32]
+    arm64.mov x3, #-3
+    arm64.cmp x2, x3
+    arm64.cset x4, ne
+    arm64.cmp x4, #0
+    arm64.b.ne __destruct_TraceKeyArray.raw_free_0
+    arm64.b __destruct_TraceKeyArray.skip_buf_0
+  raw_free_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.mov x0, x1
+    arm64.bl mm_raw_free
+    arm64.b __destruct_TraceKeyArray.skip_buf_0
+  skip_buf_0:
+    arm64.b __destruct_TraceKeyArray.done
+  done:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @__destruct_RunArrayStack(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #16]
+    arm64.mov x2, #-1
+    arm64.cmp x1, x2
+    arm64.cset x3, eq
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct_RunArrayStack.slice_cleanup_0
+    arm64.b __destruct_RunArrayStack.check_owned_0
+  slice_cleanup_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #32]
+    arm64.str x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq __destruct_RunArrayStack.__skip_guarded_9
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label __destruct_RunArrayStack.__skip_guarded_9
+    arm64.b __destruct_RunArrayStack.skip_buf_0
+  check_owned_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #16]
+    arm64.mov x2, #-2
+    arm64.cmp x1, x2
+    arm64.cset x3, ne
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct_RunArrayStack.free_buf_0
+    arm64.b __destruct_RunArrayStack.skip_buf_0
+  free_buf_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref_managed_elements
+    arm64.ldr x1, [x29, #-8]
+    arm64.ldr x2, [x1, #32]
+    arm64.mov x3, #-3
+    arm64.cmp x2, x3
+    arm64.cset x4, ne
+    arm64.cmp x4, #0
+    arm64.b.ne __destruct_RunArrayStack.raw_free_0
+    arm64.b __destruct_RunArrayStack.skip_buf_0
+  raw_free_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.mov x0, x1
+    arm64.bl mm_raw_free
+    arm64.b __destruct_RunArrayStack.skip_buf_0
+  skip_buf_0:
+    arm64.b __destruct_RunArrayStack.done
+  done:
+    arm64.epilogue stack_size=48
     arm64.ret
   }
   func @__destruct_IntArray(ptr: i64) {
