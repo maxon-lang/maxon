@@ -89,6 +89,7 @@ Bool `and`/`or` short-circuit: `false and _` skips the right side; `true or _` s
 `==` on struct types requires the type to implement `Equatable` (error E3069 if not).
 `==`/`!=` on Equatable types — including generic collections like `Array`/`ByteArray` — compare by content (dispatch to `equals()`); two distinct arrays with equal elements are `==`.
 `is`, `is not` compare reference identity (same heap object) for struct types.
+`/` and `mod` are fallible: a divisor not provably non-zero throws `DivisionByZero` — handle with `try (a / b) otherwise ...`, or give the divisor a ranged type that excludes 0. A constant-0 divisor is a compile error (E3103). Float `/` throws too (`1.0 / 0.0` is not `inf`); there is no float `mod`.
 `shl`, `shr` work on integers only. `shr` fills by the **left** operand's signedness — arithmetic (sign-fill) on a signed operand, logical (zero-fill) on an unsigned one (`int(0 to u64.max)`): `(0-8) shr 1` is `-4`, `u64.max shr 60` is `15`. The count is not masked and has no upper limit — `a shl 64` shifts every bit out and is `0`, legal, not an error. A **negative** count is the error (E2054 when folded, a panic at run time); the compiler saturates any count it cannot fold so the hardware's masking never shows.
 
 ## Conditional Expression

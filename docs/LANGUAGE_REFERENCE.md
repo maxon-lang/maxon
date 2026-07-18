@@ -2364,11 +2364,14 @@ var result = add(3, b: 4)
 
 **Named Arguments for Clarity**
 ```maxon
-function divide(dividend int, divisor int) returns int
-		return dividend / divisor
+typealias Integer = int(i64.min to i64.max)
+typealias NonZeroInt = int(1 to i64.max)
+
+function divide(dividend Integer, divisor NonZeroInt) returns Integer
+		return dividend / divisor    // divisor's type excludes 0 — a bare divide, no `try` (see Division by Zero)
 end 'divide'
 
-var result = divide(dividend: 10, divisor: 2)
+var result = divide(10, divisor: 2)  // first arg positional, rest named
 ```
 
 **Array Parameters**
@@ -2646,6 +2649,44 @@ extern function ExitProcess(uExitCode int) returns int
 
 **Notes:**
 - Mixed int/float operations promote int to float
+- `/` and `mod` are **fallible** — a divide or modulo whose divisor cannot be proven non-zero throws `DivisionByZero`; see [Division by Zero](#division-by-zero).
+
+### Division by Zero
+
+Integer and float `/`, and integer `mod`, are **fallible operations**: dividing by zero is not a silent `0`, an unhandled panic, or a CPU trap — the failure is expressed in the type system, so the behavior is identical on every target.
+
+- A divisor the compiler can prove **non-zero** — a non-zero literal (`x / 4`), or a value whose ranged type excludes 0 — compiles to a **bare divide** with no check.
+- A divisor the compiler **cannot** prove non-zero (a full-range `int`, which includes 0) makes the divide **throw `DivisionByZero`**. Like any throwing operation it must be handled with `try`, or propagated by a `throws` function (see [Error Handling](#error-handling)):
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function tryDivide(a Integer, b Integer) returns Integer
+	return try (a / b) otherwise 0        // b may be zero — supply a fallback
+end 'tryDivide'
+```
+
+Or give the divisor a type that excludes 0, so the divide is provably safe:
+
+```maxon
+typealias NonZeroInt = int(1 to i64.max)
+
+function ratio(a Integer, b NonZeroInt) returns Integer
+	return a / b                          // bare divide — no `try` needed
+end 'ratio'
+```
+
+- A divisor the compiler holds as the constant **0** (`a / 0`, `a / 0.0`) is neither recoverable nor safe — it is a compile-time error (**E3103**).
+
+**`try` wraps the throwing operation itself, not the surrounding expression.** Because `try` binds like a primary, a divide nested inside a larger expression cannot ride along inside it — parenthesize the divide as the direct operand of `try`, or use a multi-line `try` block:
+
+```maxon
+let bad = try (10 + a / b) otherwise 0   // ERROR (E2001): `try` wraps the `+`, not the divide
+let d = try (a / b) otherwise 0          // extract the divide...
+let good = 10 + d                        // ...then use it
+```
+
+**Float division** throws on a zero divisor too: `1.0 / 0.0` does not silently yield `inf`, and a `-0.0` divisor also throws. Only division *by zero* is intercepted — `inf`/`nan` produced by other operations (overflow, `0.0 * inf`, domain errors) are ordinary IEEE-754 values and are unaffected. There is no float `mod`.
 
 ### Comparison Operators
 

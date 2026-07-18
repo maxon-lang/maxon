@@ -29,6 +29,7 @@ if (x > 0) { ... }            if x > 0 'label' ... end 'label'
 } else {                       end 'label' else 'label2'
 "hello " + name                "hello {name}"
 null / nil / None              (does not exist — use try...otherwise)
+a / b   (b may be zero)        try (a / b) otherwise ...   (`/` `mod` throw DivisionByZero)
 ;                              (no semicolons — newline-delimited)
 func(a, b, c)                  func(a, b: b, c: c)
 param int                      param SomeTypealias
