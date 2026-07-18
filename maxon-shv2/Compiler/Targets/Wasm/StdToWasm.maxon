@@ -387,6 +387,7 @@ function recordDefValtype(op StdOp, valtypes WasmValTypeArray, depResult ValueId
 		osAllocPages then break 'def'
 		osWriteStdout then break 'def'
 		rdataAddr then break 'def'
+		tryCall to osExit then panic("recordDefValtype: error-handling op (throws/try/panic) is not in the wasm scalar slice")
 	end 'def'
 end 'recordDefValtype'
 
@@ -585,6 +586,7 @@ type WasmFuncEmitter
 			param then panic("emitStraightLineTerminator: a `param` op is not a terminator")
 			call then panic("emitStraightLineTerminator: a `call` op is not a terminator")
 			globalAddr to rdataAddr then panic("emitStraightLineTerminator: a memory/system op is not a terminator")
+			tryCall to osExit then panic("emitStraightLineTerminator: error-handling op (throws/try/panic) is not in the wasm scalar slice")
 		end 'term'
 	end 'emitStraightLineTerminator'
 
@@ -645,6 +647,7 @@ type WasmFuncEmitter
 			param then panic("emitDispatcherTerminator: a `param` op is not a terminator")
 			call then panic("emitDispatcherTerminator: a `call` op is not a terminator")
 			globalAddr to rdataAddr then panic("emitDispatcherTerminator: a memory/system op is not a terminator")
+			tryCall to osExit then panic("emitDispatcherTerminator: error-handling op (throws/try/panic) is not in the wasm scalar slice")
 		end 'term'
 	end 'emitDispatcherTerminator'
 
@@ -677,6 +680,7 @@ type WasmFuncEmitter
 			osAllocPages then panic("wasm: osAllocPages not in scalar slice")
 			osWriteStdout then panic("wasm: osWriteStdout not in scalar slice")
 			rdataAddr then panic("wasm: rdataAddr not in scalar slice")
+			tryCall to osExit then panic("wasm: error-handling op (throws/try/panic) not in scalar slice")
 		end 'body'
 	end 'emitBodyOp'
 
@@ -1123,6 +1127,7 @@ function decideDispatcher(module StdModule, func IrFunction) returns bool
 		call then break 'k'
 		retVoid then break 'k'
 		globalAddr to rdataAddr then break 'k'
+		tryCall to osExit then panic("decideDispatcher: error-handling op (throws/try/panic) is not in the wasm scalar slice")
 	end 'k'
 	return false
 end 'decideDispatcher'
