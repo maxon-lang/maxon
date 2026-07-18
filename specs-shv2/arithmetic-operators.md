@@ -178,3 +178,31 @@ end 'main'
 23
 ```
 
+
+<!-- test: mixed-width-operands -->
+<!-- targets: wasm32-wasi -->
+**An operator with operands of DIFFERENT declared widths — a wasm codegen regression test.** `r`
+is a narrow ranged int (`ExitCode`) and `j` is a plain `int`; `r + j` is a binary op whose two
+operands were left different WIDTHS by the frontend (an int→int width change carries no IR
+conversion op — the value just flows). The register backends never notice — every value sits in a
+64-bit register — but wasm's typed stack does: each operand must be pushed at the op's width, so the
+narrow one is coerced exactly as a `return` or a phi edge coerces. Without it the emitted core module
+fails validation. `base()` is 5 and `j` is 10, so `r + j` = 15. (Same gap covers `<`, `mod`, `/`.)
+```maxon
+function base() returns ExitCode
+	return 5
+end 'base'
+
+function widen(j int) returns int
+	let r = base()
+	return r + j
+end 'widen'
+
+function main() returns ExitCode
+	return widen(10)
+end 'main'
+```
+```exitcode
+15
+```
+

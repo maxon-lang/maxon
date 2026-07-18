@@ -695,10 +695,21 @@ type WasmFuncEmitter
 		end 'i32'
 	end 'emitIntConst'
 
+	// Push value `v` onto the stack at `targetVt`, coercing from its actual valtype when they differ.
+	// A binary op's two operands must BOTH sit at the op's width, and the frontend can leave one a
+	// different width — an int↔narrower change carries no Std conversion op, the same reason
+	// `emitLocalCopy` coerces at a phi edge — so each operand is coerced as it is pushed. A no-op when
+	// the widths already agree, so a same-width op stays byte-identical.
+	function pushOperandAt(v ValueId, targetVt WasmValType)
+		self.body.localGet(v as Wasm32Index)
+		coerceOnStack(self.body, from: getValtype(self.valtypes, v: v), to: targetVt)
+	end 'pushOperandAt'
+
 	function emitBinOp(resultId ValueId, lhs ValueId, rhs ValueId, opcode StdBinOpcode, operandType StdType)
 		let wide = isWideInt(operandType, what: "binOp")
-		self.body.localGet(lhs as Wasm32Index)
-		self.body.localGet(rhs as Wasm32Index)
+		let opVt = WasmValType.i64 if wide else WasmValType.i32
+		self.pushOperandAt(lhs, targetVt: opVt)
+		self.pushOperandAt(rhs, targetVt: opVt)
 		self.emitBinOpcode(opcode, wide: wide)
 		self.body.localSet(resultId as Wasm32Index)
 	end 'emitBinOp'
@@ -790,8 +801,9 @@ type WasmFuncEmitter
 
 	function emitCmp(resultId ValueId, lhs ValueId, rhs ValueId, pred StdCmpPred, operandType StdType)
 		let wide = isWideInt(operandType, what: "cmp")
-		self.body.localGet(lhs as Wasm32Index)
-		self.body.localGet(rhs as Wasm32Index)
+		let opVt = WasmValType.i64 if wide else WasmValType.i32
+		self.pushOperandAt(lhs, targetVt: opVt)
+		self.pushOperandAt(rhs, targetVt: opVt)
 		self.emitCmpPred(pred, wide: wide)
 		self.body.localSet(resultId as Wasm32Index)
 	end 'emitCmp'
@@ -834,9 +846,13 @@ type WasmFuncEmitter
 	// wasm traps natively on a zero divisor and on INT_MIN/-1, matching the intended semantics;
 	// the Tier-1 division specs all use non-zero divisors (CONTRACT §4.7).
 	function emitDivMod(resultId ValueId, lhs ValueId, rhs ValueId, isRemainder bool)
-		let wide = getValtype(self.valtypes, v: lhs) == WasmValType.i64
-		self.body.localGet(lhs as Wasm32Index)
-		self.body.localGet(rhs as Wasm32Index)
+		// div/mod carry no operand type — the width, and the result's, are `lhs`'s (the dependent-width
+		// model, see buildValtypeTable). Both operands are pushed at that width, coercing `rhs` when the
+		// frontend left it a different width (same gap as a mixed-width `binOp`).
+		let opVt = getValtype(self.valtypes, v: lhs)
+		let wide = opVt == WasmValType.i64
+		self.pushOperandAt(lhs, targetVt: opVt)
+		self.pushOperandAt(rhs, targetVt: opVt)
 		if isRemainder 'rem'
 			if wide 'remWide'
 				self.body.i64RemS()
