@@ -814,10 +814,11 @@ export union TargetOp
 	// `storeBaseDispReg`), so they do not reappear here — the arm64 encoder gives `movRegReg` a
 	// `mov`/`fmov`, `storeSlotReg` a `str`, and so on.
 	//
-	// ⭐ DECLARED, NOT YET EXERCISED. arm64 isel is a wave-1 stub, so nothing produces these this
-	// rung; the operand model (TargetOperands) and printer (TargetPrinter) below are COMPLETE — the
-	// contract wave 1's encoder reads — while the allocator's rewrite/hint/self-move passes
-	// range-PANIC on them, because arm64 does not run the allocator this rung (see `colorTargetOp`).
+	// ⭐ NOW EXERCISED. The arm64 isel produces these ops and the full pipeline runs on arm64-macOS
+	// (the scalar-core backend + M2 runtime floor): the operand model (TargetOperands), the printer
+	// (TargetPrinter), and the allocator's rewrite/hint/self-move passes all carry real arm64 arms
+	// (see `colorTargetOp`) — no longer the range-PANICs the wave-1 stub left before arm64 ran the
+	// allocator.
 
 	// `ret` — return to caller. implicitUses = 0x1 (the x0 bit): arm64 returns its primary value in
 	// x0, which is what lets the allocator admit x0 into the pool (nothing is live across

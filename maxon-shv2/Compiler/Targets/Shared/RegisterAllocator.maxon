@@ -304,7 +304,9 @@ end 'x64AllocatablePool'
 // The arm64 pool (AAPCS64-derived, M1 notes): allocatable GPRs x0..x15 ∪ x19..x28, and the WHOLE
 // SIMD file d0..d31 (all 32 are allocatable — d0..d7/d16..d31 caller-saved, d8..d15 callee-saved).
 // x16/x17 (IP scratch), x18 (the untouchable Darwin platform register), x29 (FP), x30 (LR) and sp
-// are NOT in the pool. Declared for the contract; arm64 does not run the allocator this rung.
+// are NOT in the pool. arm64 now runs the allocator (the M2 runtime floor), so this pool is LIVE;
+// x16/x17 being out of it is what lets the `arm64ImportCall` trampoline (`adrp/ldr/blr x16`) clobber
+// x16 freely — no value is ever coloured there, so its omission from the caller-saved mask is sound.
 function arm64AllocatablePool() returns RegMask
 	return arm64AllocatableGprMask() or classRegisterMask(RegClass.xmm, file: arm64RegisterFile())
 end 'arm64AllocatablePool'
