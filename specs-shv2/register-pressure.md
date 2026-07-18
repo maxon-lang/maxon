@@ -145,6 +145,122 @@ error E5001: the loop at <fragment>:21 needs 3 more register(s) than are availab
   and the loop body no longer needs a register for each one.
 ```
 
+<!-- test: hot-loop-overflow-arm64 -->
+<!-- targets: arm64-macos -->
+arm64 allocates from 26 GPRs (x0-x15 ∪ x19-x28), not x64's 14, so an overflow needs more live values than `hot-loop-overflow`. Twenty-eight accumulators `s1`..`s28` are all updated every iteration, plus the counter `i`, plus the loop condition's materialized boolean — arm64 lowers `i < N` to `cmp`+`cset` into a GPR, where x64 fuses `cmp`+`jcc` and materializes nothing — so thirty values are live at the loop header against a pool of twenty-six. The deficit is exactly 4 (30 − 26), reported against the FULL arm64 pool, and each accumulator points at its declaration span.
+```maxon
+function hot(p int) returns int
+	var s1 = 1
+	var s2 = 2
+	var s3 = 3
+	var s4 = 4
+	var s5 = 5
+	var s6 = 6
+	var s7 = 7
+	var s8 = 8
+	var s9 = 9
+	var s10 = 10
+	var s11 = 11
+	var s12 = 12
+	var s13 = 13
+	var s14 = 14
+	var s15 = 15
+	var s16 = 16
+	var s17 = 17
+	var s18 = 18
+	var s19 = 19
+	var s20 = 20
+	var s21 = 21
+	var s22 = 22
+	var s23 = 23
+	var s24 = 24
+	var s25 = 25
+	var s26 = 26
+	var s27 = 27
+	var s28 = 28
+	var i = 0
+	while i < 5 'loop'
+		s1 = s1 + i
+		s2 = s2 + i
+		s3 = s3 + i
+		s4 = s4 + i
+		s5 = s5 + i
+		s6 = s6 + i
+		s7 = s7 + i
+		s8 = s8 + i
+		s9 = s9 + i
+		s10 = s10 + i
+		s11 = s11 + i
+		s12 = s12 + i
+		s13 = s13 + i
+		s14 = s14 + i
+		s15 = s15 + i
+		s16 = s16 + i
+		s17 = s17 + i
+		s18 = s18 + i
+		s19 = s19 + i
+		s20 = s20 + i
+		s21 = s21 + i
+		s22 = s22 + i
+		s23 = s23 + i
+		s24 = s24 + i
+		s25 = s25 + i
+		s26 = s26 + i
+		s27 = s27 + i
+		s28 = s28 + i
+		i = i + 1
+	end 'loop'
+	return s1 + s2 + s3 + s4 + s5 + s6 + s7 + s8 + s9 + s10 + s11 + s12 + s13 + s14 + s15 + s16 + s17 + s18 + s19 + s20 + s21 + s22 + s23 + s24 + s25 + s26 + s27 + s28
+end 'hot'
+
+function main() returns ExitCode
+	return hot(0)
+end 'main'
+```
+```maxoncstderr
+error E5001: the loop at <fragment>:32 needs 4 more register(s) than are available
+  30 values must be held in registers at once inside this loop, but
+  only 26 registers are available. The values idle across the loop were already
+  spilled around it at no cost; spilling any of these would put a load or store inside
+  the loop body, which is exactly what this error exists to prevent.
+
+  remove 4 of these 30 value(s) from the loop, cheapest first (ranked by uses inside the loop):
+    <fragment>:3:11   used 1 time in the loop
+    <fragment>:4:11   used 1 time in the loop
+    <fragment>:5:11   used 1 time in the loop
+    <fragment>:6:11   used 1 time in the loop
+    <fragment>:7:11   used 1 time in the loop
+    <fragment>:8:11   used 1 time in the loop
+    <fragment>:9:11   used 1 time in the loop
+    <fragment>:10:11   used 1 time in the loop
+    <fragment>:11:11   used 1 time in the loop
+    <fragment>:12:12   used 1 time in the loop
+    <fragment>:13:12   used 1 time in the loop
+    <fragment>:14:12   used 1 time in the loop
+    <fragment>:15:12   used 1 time in the loop
+    <fragment>:16:12   used 1 time in the loop
+    <fragment>:17:12   used 1 time in the loop
+    <fragment>:18:12   used 1 time in the loop
+    <fragment>:19:12   used 1 time in the loop
+    <fragment>:20:12   used 1 time in the loop
+    <fragment>:21:12   used 1 time in the loop
+    <fragment>:22:12   used 1 time in the loop
+    <fragment>:23:12   used 1 time in the loop
+    <fragment>:24:12   used 1 time in the loop
+    <fragment>:25:12   used 1 time in the loop
+    <fragment>:26:12   used 1 time in the loop
+    <fragment>:27:12   used 1 time in the loop
+    <fragment>:28:12   used 1 time in the loop
+    <fragment>:29:12   used 1 time in the loop
+    <fragment>:30:12   used 1 time in the loop
+    <fragment>:32:10   used 1 time in the loop
+    <fragment>:31:10   used 30 times in the loop
+
+  to fix: hold the loop's working set in an array and index it inside the loop.
+  array elements are never promoted into registers, so the values stay in memory
+  and the loop body no longer needs a register for each one.
+```
+
 <!-- test: hot-loop-across-call -->
 A call inside a loop is **NOT** E5001 — it is case 2, the forced bracket. Five accumulators AND
 the loop counter (six values) are live across the `sink` call inside the loop, but only five
@@ -314,6 +430,117 @@ error E5001: the loop at <fragment>:18 needs 1 more register(s) than are availab
   and the loop body no longer needs a register for each one.
 ```
 
+<!-- test: hot-loop-param-used-arm64 -->
+<!-- targets: arm64-macos -->
+The arm64 twin of `hot-loop-param-used`: a PARAMETER read every iteration is part of the hot working set and must resolve to its declaration span through `ParamOriginTable` (it is minted by no op) rather than trip the Rule-3 panic. `p` is read in `s1 = s1 + i + p`, so with twenty-six accumulators, the counter, and the condition boolean it is one of twenty-nine values live against arm64's 26-GPR pool. It ranks first (`<fragment>:2:14` — the `p` token); the counter `i` ranks last. Deficit 3.
+```maxon
+function hot(p int) returns int
+	var s1 = 1
+	var s2 = 2
+	var s3 = 3
+	var s4 = 4
+	var s5 = 5
+	var s6 = 6
+	var s7 = 7
+	var s8 = 8
+	var s9 = 9
+	var s10 = 10
+	var s11 = 11
+	var s12 = 12
+	var s13 = 13
+	var s14 = 14
+	var s15 = 15
+	var s16 = 16
+	var s17 = 17
+	var s18 = 18
+	var s19 = 19
+	var s20 = 20
+	var s21 = 21
+	var s22 = 22
+	var s23 = 23
+	var s24 = 24
+	var s25 = 25
+	var s26 = 26
+	var i = 0
+	while i < 5 'loop'
+		s1 = s1 + i + p
+		s2 = s2 + i
+		s3 = s3 + i
+		s4 = s4 + i
+		s5 = s5 + i
+		s6 = s6 + i
+		s7 = s7 + i
+		s8 = s8 + i
+		s9 = s9 + i
+		s10 = s10 + i
+		s11 = s11 + i
+		s12 = s12 + i
+		s13 = s13 + i
+		s14 = s14 + i
+		s15 = s15 + i
+		s16 = s16 + i
+		s17 = s17 + i
+		s18 = s18 + i
+		s19 = s19 + i
+		s20 = s20 + i
+		s21 = s21 + i
+		s22 = s22 + i
+		s23 = s23 + i
+		s24 = s24 + i
+		s25 = s25 + i
+		s26 = s26 + i
+		i = i + 1
+	end 'loop'
+	return s1 + s2 + s3 + s4 + s5 + s6 + s7 + s8 + s9 + s10 + s11 + s12 + s13 + s14 + s15 + s16 + s17 + s18 + s19 + s20 + s21 + s22 + s23 + s24 + s25 + s26
+end 'hot'
+
+function main() returns ExitCode
+	return hot(0)
+end 'main'
+```
+```maxoncstderr
+error E5001: the loop at <fragment>:30 needs 3 more register(s) than are available
+  29 values must be held in registers at once inside this loop, but
+  only 26 registers are available. The values idle across the loop were already
+  spilled around it at no cost; spilling any of these would put a load or store inside
+  the loop body, which is exactly what this error exists to prevent.
+
+  remove 3 of these 29 value(s) from the loop, cheapest first (ranked by uses inside the loop):
+    <fragment>:2:14   used 1 time in the loop
+    <fragment>:3:11   used 1 time in the loop
+    <fragment>:4:11   used 1 time in the loop
+    <fragment>:5:11   used 1 time in the loop
+    <fragment>:6:11   used 1 time in the loop
+    <fragment>:7:11   used 1 time in the loop
+    <fragment>:8:11   used 1 time in the loop
+    <fragment>:9:11   used 1 time in the loop
+    <fragment>:10:11   used 1 time in the loop
+    <fragment>:11:11   used 1 time in the loop
+    <fragment>:12:12   used 1 time in the loop
+    <fragment>:13:12   used 1 time in the loop
+    <fragment>:14:12   used 1 time in the loop
+    <fragment>:15:12   used 1 time in the loop
+    <fragment>:16:12   used 1 time in the loop
+    <fragment>:17:12   used 1 time in the loop
+    <fragment>:18:12   used 1 time in the loop
+    <fragment>:19:12   used 1 time in the loop
+    <fragment>:20:12   used 1 time in the loop
+    <fragment>:21:12   used 1 time in the loop
+    <fragment>:22:12   used 1 time in the loop
+    <fragment>:23:12   used 1 time in the loop
+    <fragment>:24:12   used 1 time in the loop
+    <fragment>:25:12   used 1 time in the loop
+    <fragment>:26:12   used 1 time in the loop
+    <fragment>:27:12   used 1 time in the loop
+    <fragment>:28:12   used 1 time in the loop
+    <fragment>:30:10   used 1 time in the loop
+    <fragment>:29:10   used 28 times in the loop
+
+  to fix: hold the loop's working set in an array and index it inside the loop.
+  array elements are never promoted into registers, so the values stay in memory
+  and the loop body no longer needs a register for each one.
+```
+
 <!-- test: hot-loop-rematerialized-constant -->
 <!-- targets: x64-windows -->
 A constant the loop uses (`let d`, read by `s14 = d - s14`) is REMATERIALIZED by the
@@ -389,6 +616,117 @@ error E5001: the loop at <fragment>:19 needs 2 more register(s) than are availab
     <fragment>:16:12   used 1 time in the loop
     <fragment>:24:11   used 1 time in the loop
     <fragment>:17:10   used 15 times in the loop
+
+  to fix: hold the loop's working set in an array and index it inside the loop.
+  array elements are never promoted into registers, so the values stay in memory
+  and the loop body no longer needs a register for each one.
+```
+
+<!-- test: hot-loop-rematerialized-constant-arm64 -->
+<!-- targets: arm64-macos -->
+The arm64 twin of `hot-loop-rematerialized-constant`: a constant the loop uses (`let d`, read by `s26 = d - s26`) is REMATERIALIZED by the splitter with a fresh ValueId that has no origin of its own, and must be chased through `SplitLineage` back to the `let d` literal (`<fragment>:56:11`) rather than trip the Rule-3 panic. Twenty-six accumulators plus the counter plus the rematerialized constant overflow arm64's 26-GPR pool by two.
+```maxon
+function hot() returns int
+	var s1 = 1
+	var s2 = 2
+	var s3 = 3
+	var s4 = 4
+	var s5 = 5
+	var s6 = 6
+	var s7 = 7
+	var s8 = 8
+	var s9 = 9
+	var s10 = 10
+	var s11 = 11
+	var s12 = 12
+	var s13 = 13
+	var s14 = 14
+	var s15 = 15
+	var s16 = 16
+	var s17 = 17
+	var s18 = 18
+	var s19 = 19
+	var s20 = 20
+	var s21 = 21
+	var s22 = 22
+	var s23 = 23
+	var s24 = 24
+	var s25 = 25
+	var s26 = 26
+	var i = 0
+	while i < 5 'loop'
+		s1 = s1 + i
+		s2 = s2 + i
+		s3 = s3 + i
+		s4 = s4 + i
+		s5 = s5 + i
+		s6 = s6 + i
+		s7 = s7 + i
+		s8 = s8 + i
+		s9 = s9 + i
+		s10 = s10 + i
+		s11 = s11 + i
+		s12 = s12 + i
+		s13 = s13 + i
+		s14 = s14 + i
+		s15 = s15 + i
+		s16 = s16 + i
+		s17 = s17 + i
+		s18 = s18 + i
+		s19 = s19 + i
+		s20 = s20 + i
+		s21 = s21 + i
+		s22 = s22 + i
+		s23 = s23 + i
+		s24 = s24 + i
+		s25 = s25 + i
+		let d = 1000000007
+		s26 = d - s26
+		i = i + 1
+	end 'loop'
+	return s1 + s2 + s3 + s4 + s5 + s6 + s7 + s8 + s9 + s10 + s11 + s12 + s13 + s14 + s15 + s16 + s17 + s18 + s19 + s20 + s21 + s22 + s23 + s24 + s25 + s26
+end 'hot'
+
+function main() returns ExitCode
+	return hot()
+end 'main'
+```
+```maxoncstderr
+error E5001: the loop at <fragment>:30 needs 2 more register(s) than are available
+  28 values must be held in registers at once inside this loop, but
+  only 26 registers are available. The values idle across the loop were already
+  spilled around it at no cost; spilling any of these would put a load or store inside
+  the loop body, which is exactly what this error exists to prevent.
+
+  remove 2 of these 28 value(s) from the loop, cheapest first (ranked by uses inside the loop):
+    <fragment>:31:11   used 0 times in the loop
+    <fragment>:32:11   used 0 times in the loop
+    <fragment>:33:11   used 0 times in the loop
+    <fragment>:34:11   used 0 times in the loop
+    <fragment>:35:11   used 0 times in the loop
+    <fragment>:36:11   used 0 times in the loop
+    <fragment>:37:11   used 0 times in the loop
+    <fragment>:38:11   used 0 times in the loop
+    <fragment>:39:11   used 0 times in the loop
+    <fragment>:40:13   used 0 times in the loop
+    <fragment>:41:13   used 0 times in the loop
+    <fragment>:42:13   used 0 times in the loop
+    <fragment>:43:13   used 0 times in the loop
+    <fragment>:44:13   used 0 times in the loop
+    <fragment>:45:13   used 0 times in the loop
+    <fragment>:46:13   used 0 times in the loop
+    <fragment>:47:13   used 0 times in the loop
+    <fragment>:48:13   used 0 times in the loop
+    <fragment>:49:13   used 0 times in the loop
+    <fragment>:50:13   used 0 times in the loop
+    <fragment>:51:13   used 0 times in the loop
+    <fragment>:52:13   used 0 times in the loop
+    <fragment>:53:13   used 0 times in the loop
+    <fragment>:54:13   used 0 times in the loop
+    <fragment>:55:13   used 0 times in the loop
+    <fragment>:28:12   used 1 time in the loop
+    <fragment>:56:11   used 1 time in the loop
+    <fragment>:29:10   used 27 times in the loop
 
   to fix: hold the loop's working set in an array and index it inside the loop.
   array elements are never promoted into registers, so the values stay in memory
