@@ -612,6 +612,13 @@ end 'WasmExport'
 
 typealias WasmExportArray = Array with WasmExport
 
+// Encoded functype bytes → the type index already interned for them, so `internFuncType` dedups in
+// O(1) instead of a linear scan over every interned type. Keyed on the rendered BYTES, exactly like
+// GlobalDataTable's `valueDedup` (same reason: interning N distinct signatures by scanning was O(N²) —
+// one findFirst-over-an-array per defined function). Content-hashed, so two identical signatures share
+// one entry regardless of how they were built.
+typealias FuncTypeDedupMap = Map with (ByteArray, Wasm32Index)
+
 // --- WasmModuleBuilder: assembles a complete CORE wasm module ---
 // FUNCTION INDEX SPACE (the contract A2 mirrors): imports take indices 0..importCount-1 in
 // addImportFunc call order; defined functions take importCount, importCount+1, … in addFunction
@@ -619,8 +626,12 @@ typealias WasmExportArray = Array with WasmExport
 // assigned, computed from the import count at that moment.
 export type WasmModuleBuilder
 	// Interned functype encodings, position = type index. Deduplicated so identical signatures
-	// share one entry (the type section is small; a linear scan over its bytes is ample).
+	// share one entry; `funcTypeDedup` keys the encoded bytes → index so the dedup is O(1), not a
+	// scan of every prior entry per interned type.
 	var funcTypes as ByteArrayArray
+
+	// Encoded functype bytes → their interned type index (the dedup index for `funcTypes`).
+	var funcTypeDedup as FuncTypeDedupMap
 
 	// Imports, in call order: parallel columns of module name, field name, and type index.
 	var importModules as ByteArrayArray
@@ -640,22 +651,23 @@ export type WasmModuleBuilder
 	var memoryMinPages as Wasm32Index
 
 	export static function create() returns WasmModuleBuilder
-		return Self{funcTypes: ByteArrayArray.create(), importModules: ByteArrayArray.create(), importFields: ByteArrayArray.create(), importTypeIndices: Wasm32IndexArray.create(), funcTypeIndices: Wasm32IndexArray.create(), funcBodies: ByteArrayArray.create(), exportEntries: WasmExportArray.create(), hasMemory: false, memoryMinPages: 0}
+		return Self{funcTypes: ByteArrayArray.create(), funcTypeDedup: FuncTypeDedupMap.create(), importModules: ByteArrayArray.create(), importFields: ByteArrayArray.create(), importTypeIndices: Wasm32IndexArray.create(), funcTypeIndices: Wasm32IndexArray.create(), funcBodies: ByteArrayArray.create(), exportEntries: WasmExportArray.create(), hasMemory: false, memoryMinPages: 0}
 	end 'create'
 
-	// Intern a functype, returning its (deduplicated) type index.
+	// Intern a functype, returning its (deduplicated) type index. The dedup is an O(1) map lookup on
+	// the encoded bytes: this runs once per DEFINED FUNCTION, so a scan of every prior interned type
+	// here made interning N functions with D distinct signatures O(N·D) — up to O(N²) when signatures
+	// vary — a findFirst-over-an-array in a per-function loop. The map returns the FIRST-interned
+	// index for identical bytes, exactly as the scan did, so the emitted type section is byte-identical.
 	export function internFuncType(params WasmValTypeArray, results WasmValTypeArray) returns Wasm32Index
 		let enc = encodeFuncType(params, results: results)
 
-		for (iter, existing) in self.funcTypes.withIterator() 'search'
-			if existing.equals(enc) 'found'
-				return iter.index() as Wasm32Index
-			end 'found'
-		end 'search'
-
-		let idx = self.funcTypes.count() as Wasm32Index
-		self.funcTypes.push(enc)
-		return idx
+		return try self.funcTypeDedup.get(enc) otherwise 'fresh'
+			let idx = self.funcTypes.count() as Wasm32Index
+			self.funcTypes.push(enc)
+			self.funcTypeDedup.upsert(enc, value: idx)
+			return idx
+		end 'fresh'
 	end 'internFuncType'
 
 	// Add an imported function, returning its function index (imports precede all defined
