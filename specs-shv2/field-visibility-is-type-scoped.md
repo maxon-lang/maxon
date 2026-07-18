@@ -108,7 +108,6 @@ error E3014: specs/fragments/field-visibility-is-type-scoped/error.other-type-ca
 ```
 
 <!-- test: own-type-reaches-its-own-private-field -->
-<!-- targets: x64-windows -->
 The positive companion, and the reason the gate cannot simply be "reject every access through a
 binding": `type A`'s own method reaches A's unexported field through a LOCAL of its own type — not
 through `self`. This is the access the self-field path never sees, so it is the one that proves the

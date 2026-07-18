@@ -329,7 +329,7 @@ function isPhysicalSelfMove(op TargetOp) returns bool
 		andRegReg to leaRegRdata then return false
 		// arm64 reg-reg moves are the SHARED `movRegReg` (handled above), so the arm64 band — arm64's
 		// own ALU / control / call ops — is never a register-to-register move, hence never a self-move.
-		arm64Ret to arm64FpLoadRdata then return false
+		arm64Ret to arm64ImportCall then return false
 	end 'sm'
 end 'isPhysicalSelfMove'
 
@@ -568,7 +568,7 @@ function retargetControlOp(module TargetModule, predRef BlockRef, oldTarget Bloc
 			// branches, ALU, frame, call ops — is not a terminator here.
 			arm64Ret then break 'term'
 			arm64Branch(target) then retargeted = retargetArm64Branch(module, opIdx: ti, target: target, oldTarget: oldTarget, newTarget: newTarget) or retargeted
-			arm64CondBranch to arm64FpLoadRdata then panic("retargetControlOp: an arm64 non-terminator op reached as a terminator")
+			arm64CondBranch to arm64ImportCall then panic("retargetControlOp: an arm64 non-terminator op reached as a terminator")
 		end 'term'
 	end 'hasTerm'
 

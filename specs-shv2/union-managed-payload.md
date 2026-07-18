@@ -39,7 +39,6 @@ cross-call ownership ruling deferred to **P1.4**.
 ## Tests
 
 <!-- test: struct-payload-drop-leak-free -->
-<!-- targets: x64-windows -->
 An owned union with a struct payload, dropped at scope exit without being matched,
 frees its struct payload through the cascade — no leak (a leak is exit 101).
 ```maxon
@@ -68,7 +67,6 @@ end 'main'
 ```
 
 <!-- test: struct-payload-match-consume -->
-<!-- targets: x64-windows -->
 Matching an owned struct-payload union binds the struct, reads its field, and
 consumes the union — the struct is freed once (via the binding), the box once.
 ```maxon
@@ -177,7 +175,6 @@ v41
 ```
 
 <!-- test: match-borrow-no-managed-binding -->
-<!-- targets: x64-windows -->
 A match that binds no managed payload (a tag-only arm) borrows: the union is not
 consumed and is dropped at scope exit, freeing its struct payload once.
 ```maxon

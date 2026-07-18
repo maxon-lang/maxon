@@ -53,7 +53,6 @@ end 'Point'
 ## Tests
 
 <!-- test: self-explicit-access -->
-<!-- targets: x64-windows -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -86,7 +85,6 @@ end 'main'
 ```
 
 <!-- test: self-implicit-access -->
-<!-- targets: x64-windows -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -120,7 +118,6 @@ end 'main'
 ```
 
 <!-- test: self-with-params -->
-<!-- targets: x64-windows -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -154,7 +151,6 @@ end 'main'
 ```
 
 <!-- test: self-multiple-fields -->
-<!-- targets: x64-windows -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -186,7 +182,6 @@ end 'main'
 ```
 
 <!-- test: self-modify-and-return -->
-<!-- targets: x64-windows -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -218,7 +213,6 @@ end 'main'
 ```
 
 <!-- test: self-implicit-multiple-fields -->
-<!-- targets: x64-windows -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)

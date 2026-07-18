@@ -803,7 +803,7 @@ export union TargetOp
 	// preceding band documents: every range arm over `TargetOp` in the x64/shared passes stops at or
 	// before `leaRegRdata`, so an arm64 op inserted anywhere else would be SILENTLY swallowed and
 	// misclassified. Appending past the last arm makes each of those matches fail to compile until it
-	// is consciously extended with an `arm64Ret to arm64FpLoadRdata` arm.
+	// is consciously extended with an `arm64Ret to arm64ImportCall` arm.
 	//
 	// One allocator, one op union (USER RULING): these arms carry the NEUTRAL `TargetVReg` and the
 	// neutral `RegNum`, exactly as the x64 arms do — the arm64 ENCODER (wave 1) maps a resolved
@@ -912,6 +912,23 @@ export union TargetOp
 	// `ldr d, [pc-rel rdata]` — load an f64 constant from `.rdata` via the ADRP+LDR pair. One plain
 	// def reading no allocatable register; the float twin of `leaRdata`. isMemory (a load).
 	arm64FpLoadRdata(dest TargetVReg, label ByteArray) = TargetOpMeta{isMemory: true, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
+	// A GOT-indirect libSystem import call (`adrp x16, GOTPAGE; ldr x16, [x16, GOTOFF]; blr x16`) — the
+	// macOS twin of x64's `iatCall`, used by the arm64 isel to lower `osAllocPages`→`mmap` and
+	// `osWriteStdout`→`write` (the M2 runtime floor). APPENDED at the END of the arm64 band (band-append
+	// invariant), so every `… to arm64FpLoadRdata` range arm fails to compile until consciously extended.
+	//
+	// ⚠⚠ IT CANNOT REUSE `iatCall`, AND THE REASON IS THE CLOBBER. `iatCall`'s single `TargetOpMeta`
+	// carries the x64 caller-saved mask (0xFFFF0FC7), whose bits name x64 `RegNum`s — a DIFFERENT numbering
+	// from arm64's. Routing an arm64 mmap/write through `iatCall` would forbid a value live across it the
+	// x64 set (leaving x3/x4/x5/x12–x15, all arm64 caller-saved, free to colour and be clobbered): a silent
+	// miscompile, and `__slab_alloc` genuinely holds values live across its page call (the exact shape the
+	// `iatCall` comment records for `VirtualAlloc`). So this op carries the ARM64 caller-saved clobber:
+	// implicitDefs = 0x7FFF807F8000FFFF — GPRs x0..x15 (0xFFFF), SIMD d0..d7 (bits 31..38) and d16..d31
+	// (bits 47..62); x19..x28/d8..d15 are callee-saved and excluded. Identical to `arm64BranchLink`, and
+	// `assertArm64CallClobbers` holds it equal to `arm64CallerSavedMask`. A union-backing literal cannot
+	// reference a named `let`, so the mask is inline (guarded there). `slotIndex` names the libSystem GOT
+	// slot the Mach-O writer patches.
+	arm64ImportCall(slotIndex RelocSlotIndex) = TargetOpMeta{isMemory: true, isStore: true, isCall: true, implicitUses: 0, implicitDefs: 0x7FFF807F8000FFFF}
 end 'TargetOp'
 
 // The memory-access widths the `.data` load/store encoders have. TWO, because two are what the

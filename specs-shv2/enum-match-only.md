@@ -174,7 +174,6 @@ error E3066: specs/fragments/enum-match-only/error.enum-eq-associated.test:13:7:
 ```
 
 <!-- test: union-return -->
-<!-- targets: x64-windows -->
 A payload-bearing union RETURNED across a call (OPEN #44, closed at P1.4a). The callee builds an owned heap box and MOVES it out; the caller ADOPTS it (`let c = make()`) — owned, dropped exactly once at scope exit, no leak (a leak is exit 101). The result is recognized as owned via a `named` + `isBoxed` LAYOUT lookup, not the tag: a boxed union and a bare enum both carry the `named` tag, but only the boxed one owns a box the caller must free.
 ```maxon
 typealias Integer = int(i64.min to i64.max)

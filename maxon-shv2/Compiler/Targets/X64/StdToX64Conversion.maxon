@@ -118,12 +118,28 @@ function writeFileArgDisp(slot MachineWord) returns Imm32
 end 'writeFileArgDisp'
 
 // The frame region `__print_string` reserves for WriteFile's outgoing stack args — the two slots
-// `writeFileArgDisp` addresses. Exported: `StringRuntime.buildPrintString` sets the function's
-// `outgoingArgSize` from it, so the size the frame reserves and the slots this lowering writes are ONE
-// fact. A FUNCTION rather than a const so the `SpillSlotBytes` read is at runtime (see above).
-export function stringPrintOutgoingArgBytes() returns StackSize
+// `writeFileArgDisp` addresses. The single source of BOTH the frame reservation (via
+// `stdOpOutgoingArgBytes`, applied to the function by `lowerFunctionBlocks`) and the slot displacements
+// this file's lowering writes, so they are ONE fact. A FUNCTION rather than a const so the
+// `SpillSlotBytes` read is at runtime (see above). NOT exported: this is an x64 frame fact, set here in
+// the x64 isel — the target-neutral String runtime deliberately no longer sets `outgoingArgSize`.
+function stringPrintOutgoingArgBytes() returns StackSize
 	return (WriteFileOutgoingSlots * SpillSlotBytes) as StackSize
 end 'stringPrintOutgoingArgBytes'
+
+// The OUTGOING stack-argument bytes an `StdOp`'s x64 lowering needs. Only `osWriteStdout` needs any: its
+// `WriteFile` lowering passes the 5th argument (`lpOverlapped`) and a scratch pointer for the
+// bytes-written out-param ON THE STACK. Every other op lowers register-only or in-frame → 0. This is an
+// x64 ABI fact — arm64's `write` is all-register and reserves nothing — so it lives in the x64 isel, and
+// `lowerFunctionBlocks` folds it to a per-function max. EXHAUSTIVE over `StdOp` (`const to osAllocPages`
+// then the two tail ops), so a band-appended op cannot slip in unclassified.
+function stdOpOutgoingArgBytes(op StdOp) returns StackSize
+	return match op 'o'
+		osWriteStdout gives stringPrintOutgoingArgBytes()
+		const to osAllocPages gives 0
+		rdataAddr gives 0
+	end 'o'
+end 'stdOpOutgoingArgBytes'
 
 // The physical register argument `index` occupies. An index past the register file is
 // a parser-cap violation (parseFunctionParameters rejects >6 parameters), so it is a
@@ -525,8 +541,24 @@ type StdToX64Lowering
 		// original block's ops into it a second time.
 		let originalBlockCount = self.stdBlockCountOf(funcIdx)
 		self.orderedBlockIds = self.reserveFloatEqualityBlocks(funcIdx)
-		self.lowerFunctionBlocks(funcIdx, originalBlockCount: originalBlockCount)
+		// The op walk returns the OUTGOING stack-argument bytes the function's x64 lowering needs (nonzero
+		// only for a `__print_string`, whose `WriteFile` lowering has two stack arguments). Applied to the
+		// TARGET function AFTER the walk, in a scope holding no `srcFunc` borrow of the same object.
+		let outgoingArgBytes = self.lowerFunctionBlocks(funcIdx, originalBlockCount: originalBlockCount)
+		self.applyOutgoingArgSize(funcIdx, bytes: outgoingArgBytes)
 	end 'lowerFunction'
+
+	// Record the function's outgoing stack-argument reservation on the TARGET function. This is set by
+	// the x64 ISEL — not the target-neutral String runtime — because the need is an x64 ABI fact (arm64's
+	// `write` is all-register and reserves nothing). Skips the assignment when zero, so a non-printing
+	// function is untouched.
+	function applyOutgoingArgSize(funcIdx FuncIndex, bytes StackSize)
+		if bytes == 0 'none'
+			return
+		end 'none'
+		var func = self.targetModule.getFunc(funcIdx)
+		func.outgoingArgSize = bytes
+	end 'applyOutgoingArgSize'
 
 	// Phase 1 — the per-function analyses, all READS. Fresh tables each time: a `cmp`'s ValueId
 	// only means anything within its own function, and both the fused branch and the value uses
@@ -549,8 +581,13 @@ type StdToX64Lowering
 
 	// Phase 3 — the op walk. `originalBlockCount` bounds it to the Std module's own blocks; see
 	// `lowerFunction`.
-	function lowerFunctionBlocks(funcIdx FuncIndex, originalBlockCount BlockCount)
+	function lowerFunctionBlocks(funcIdx FuncIndex, originalBlockCount BlockCount) returns StackSize
 		let srcFunc = self.stdModule.getFunc(funcIdx)
+		// The max outgoing stack-arg bytes any op in this function needs — a running MAX (a call REUSES the
+		// region, so it is the largest single call's need, not their sum). Only `osWriteStdout` contributes
+		// on x64; everything else lowers register-only. Accumulated from the op already in hand, so no
+		// extra pass, and returned for `lowerFunction` to record once the walk's borrow is released.
+		var outgoingArgBytes = 0 as StackSize
 		for i in 0 upto originalBlockCount 'eachBlock'
 			let blockRef = try srcFunc.blockRefs.get(i) otherwise panic("lowerStdToX64: blockRefs.get OOB at {i} despite the captured bound")
 			let srcBlock = try self.stdModule.blocks.get(blockRef) otherwise panic("lowerStdToX64: blockRef from srcFunc.blockRefs not in stdModule.blocks")
@@ -558,6 +595,10 @@ type StdToX64Lowering
 
 			for opIdx in srcBlock.opRefs 'eachOp'
 				let stdOp = try self.stdModule.ops.get(opIdx) otherwise panic("lowerStdToX64: opIdx from srcBlock.opRefs not in stdModule.ops")
+				let opOutgoing = stdOpOutgoingArgBytes(stdOp)
+				if opOutgoing > outgoingArgBytes 'largerArgRegion'
+					outgoingArgBytes = opOutgoing
+				end 'largerArgRegion'
 				self.lowerBodyOp(stdOp, dstBlock: dstBlock, returnType: srcFunc.returnType)
 			end 'eachOp'
 
@@ -566,6 +607,8 @@ type StdToX64Lowering
 				self.lowerTerminatorOp(termOp, dstBlock: dstBlock, returnType: srcFunc.returnType, blockRef: blockRef)
 			end 'hasTerm'
 		end 'eachBlock'
+
+		return outgoingArgBytes
 	end 'lowerFunctionBlocks'
 
 	// ==========================================================================

@@ -174,13 +174,13 @@ function moduleTargetCpu(module TargetModule) returns CpuArch
 	return CpuArch.x64
 end 'moduleTargetCpu'
 
-// True when `op` is one of the arm64-SPECIFIC ops (the `arm64Ret..arm64FpLoadRdata` band) — the shared
+// True when `op` is one of the arm64-SPECIFIC ops (the `arm64Ret..arm64ImportCall` band) — the shared
 // ops (in the x64 band positionally) and the x64-specific ops are false, so a module is arm64 iff it
 // holds at least one of these. Exhaustive, so a new op variant is a compile error, not a mis-classify.
 function opIsArm64Band(op TargetOp) returns bool
 	return match op 'p'
 		prologue to leaRegRdata gives false
-		arm64Ret to arm64FpLoadRdata gives true
+		arm64Ret to arm64ImportCall gives true
 	end 'p'
 end 'opIsArm64Band'
 
@@ -298,6 +298,7 @@ function formatTargetOp(op TargetOp, blocks IrBlockArray, cpu CpuArch) returns S
 		arm64Scvtf(dest, src) gives "scvtf {arm64VregName(dest)}, {arm64VregName(src)}"
 		arm64Fcvtzs(dest, src) gives "fcvtzs {arm64VregName(dest)}, {arm64VregName(src)}"
 		arm64FpLoadRdata(dest, label) gives "fpLoadRdata {arm64VregName(dest)}, [rdata + {String.from(label)}]"
+		arm64ImportCall(slotIndex) gives "importCall {slotIndex}"
 	end 'op'
 end 'formatTargetOp'
 

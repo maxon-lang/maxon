@@ -80,7 +80,6 @@ end 'Point'
 ## Tests
 
 <!-- test: type-method-basic -->
-<!-- targets: x64-windows -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -112,7 +111,6 @@ end 'main'
 ```
 
 <!-- test: type-method-with-params -->
-<!-- targets: x64-windows -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -145,7 +143,6 @@ end 'main'
 ```
 
 <!-- test: type-method-returning-value -->
-<!-- targets: x64-windows -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -172,7 +169,6 @@ end 'main'
 ```
 
 <!-- test: type-multiple-methods -->
-<!-- targets: x64-windows -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -214,7 +210,6 @@ end 'main'
 ```
 
 <!-- test: type-method-chain -->
-<!-- targets: x64-windows -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)

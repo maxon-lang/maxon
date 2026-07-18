@@ -33,7 +33,6 @@ Every case below is leak-free (a leak is exit 101) and crash-free (a double-free
 ## Tests
 
 <!-- test: temp-scalar-union-scrutinee -->
-<!-- targets: x64-windows -->
 A constructed scalar-payload union used directly as the scrutinee is an owned
 temporary; the box drops once on both `return` arms, whichever runs.
 ```maxon
@@ -57,7 +56,6 @@ end 'main'
 ```
 
 <!-- test: temp-scalar-union-arm-order -->
-<!-- targets: x64-windows -->
 The same, with the arms in the other order — the box drops once regardless of which
 arm the parser sees first (the leak was arm-order-dependent).
 ```maxon
@@ -104,7 +102,6 @@ end 'main'
 ```
 
 <!-- test: temp-scrutinee-break-arm -->
-<!-- targets: x64-windows -->
 A temporary scrutinee inside a loop with a `break` arm: the box drops on the break
 edge (down to the loop floor), not only on the `return` arm that the parser drained
 into first.

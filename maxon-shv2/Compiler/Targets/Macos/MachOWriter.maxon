@@ -19,6 +19,16 @@
 // arms panic rather than silently emit an unbacked section — the day one is
 // emitted is a loud failure, not a wrong address.
 //
+// ⚠ M2 CONFIRMED THIS IS THE STRING-TEST BLOCKER. The M2 runtime floor (mmap/write
+// primitives + leak gate) lets heap/struct/union programs run natively, but a String
+// LITERAL's record carries a `buffer@0` ABSOLUTE pointer to its blob — the
+// `stringBufferFixups` PeWriter bakes at its fixed base. On this PIE that pointer needs
+// a dyld rebase, AND the record must first MOVE from read-only __const (in __TEXT, no
+// chain starts) to a rebase-able __DATA/__DATA_CONST section. Until then a String
+// literal's buffer reads 0 at runtime (write(NULL) is a silent no-op; __str_copy
+// segfaults), so every String-literal-materializing spec test stays gated to
+// x64-windows. This is the next slice — the "P1.2 string buffers" milestone above.
+//
 // Unlike PeWriter's fixed-base image (`patchStringBufferFixups` bakes an absolute
 // VA), macOS arm64 is always ASLR/PIE: there is no fixed base to bake, so absolute
 // pointers become dyld rebases (deferred above) and code stays position-
@@ -138,14 +148,18 @@ let MinOsMacos13 = 0x000D0000
 // chained-fixup import table + the symbol pool all size themselves off `allCases`,
 // so adding an import is: append a case here and its symbol in `machoImportSymbol`.
 //
-// `exit` terminates the process with main's return code. `write` is the panic
-// runtime's route to stderr (macOS has no CRT `fprintf`; a panic is `write(2, …)`).
+// `exit` terminates the process with main's return code. `write` is both the panic
+// runtime's route to stderr (macOS has no CRT `fprintf`; a panic is `write(2, …)`) and,
+// since the M2 runtime floor, the `osWriteStdout`/`print` primitive (`write(1, …)`).
+// `mmap` is the page source `osAllocPages` bottoms out in (the macOS twin of x64's
+// `VirtualAlloc`); MAP_ANON returns ZEROED pages, satisfying the slab's zeroing contract.
 // arm64 needs no fault-handler import — the scalar core's only trap-shaped case,
-// divide-by-zero, is guarded inline (arm64 `sdiv` by 0 does not fault), and the
-// scalar core allocates nothing so there is no page-source import either.
+// divide-by-zero, is guarded inline (arm64 `sdiv` by 0 does not fault). No `munmap`: the
+// slab never decommits (there is no `osDecommit`), so a page-free import would be dead.
 export enum MachoImportSlot
 	exit
 	write
+	mmap
 end 'MachoImportSlot'
 
 // The GOT slot index a call site records and the writer patches its ADRP+LDR
@@ -161,6 +175,7 @@ function machoImportSymbol(slot MachoImportSlot) returns String
 	return match slot 'sym'
 		exit gives "_exit"
 		write gives "_write"
+		mmap gives "_mmap"
 	end 'sym'
 end 'machoImportSymbol'
 

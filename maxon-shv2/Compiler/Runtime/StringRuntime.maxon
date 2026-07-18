@@ -364,14 +364,14 @@ end 'installStringRuntime'
 // `__print_string(strPtr)` — write a String's bytes to stdout, no trailing newline.
 //
 // It loads `buffer@0` and `length@8` from the record and hands them to the `osWriteStdout` system op,
-// which lowers (x64-windows) to `GetStdHandle(STD_OUTPUT_HANDLE)` + `WriteFile` through the IAT. The
-// op is target-neutral — a wasm/linux backend writes its own way — so this function itself names no
-// Win32 symbol. `outgoingArgSize` reserves WriteFile's stack-arg space (its 5th parameter plus a
-// scratch slot for the bytes-written out-param); that need is the x64 lowering's, so its size comes
-// from there (`stringPrintOutgoingArgBytes`).
+// which lowers per target — x64-windows to `GetStdHandle` + `WriteFile` through the IAT, arm64-macOS to
+// a POSIX `write` through the GOT. The op is target-neutral, so this function names no OS symbol AND
+// sets no frame size: `outgoingArgSize` (WriteFile's stack-arg space on x64, ZERO on arm64's all-register
+// `write`) is a TARGET ABI fact, so each backend's isel sets it from the op it actually lowers
+// (`StdToX64Conversion` bumps it for `osWriteStdout`; arm64 needs none). Setting it here would bake an
+// x64 frame size into a target-neutral function — the leak that made the arm64 prologue panic.
 function buildPrintString(module StdModule)
 	var func = IrFunction.createFromStd(PrintStringName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
-	func.outgoingArgSize = stringPrintOutgoingArgBytes()
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry")

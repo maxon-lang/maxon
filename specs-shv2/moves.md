@@ -227,7 +227,6 @@ its drop is skipped, so the box drops exactly once through `q`. Without the move
 and the leak gate would fire (exit 101).
 
 <!-- test: struct-move-drop-skip -->
-<!-- targets: x64-windows -->
 ```maxon
 type Point
 	export var x as int
@@ -400,7 +399,6 @@ exactly once (no leak). This pins that a field store reads the CURRENT moved-fro
 not a stale one.
 
 <!-- test: reassign-revives-then-field-store -->
-<!-- targets: x64-windows -->
 ```maxon
 type Point
 	export var x as int
@@ -430,7 +428,6 @@ end 'main'
 use-after-move guard fires ONLY when the base binding is moved-from. Reads back 0.
 
 <!-- test: field-access-on-live-struct -->
-<!-- targets: x64-windows -->
 ```maxon
 type Point
 	export var x as int

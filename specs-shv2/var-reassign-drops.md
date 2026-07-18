@@ -261,7 +261,6 @@ overwritten box; without the drop the first box leaks (the leak counter catches 
 because a struct box is never enrolled as a statement temporary to be drained).
 
 <!-- test: struct-reassign -->
-<!-- targets: x64-windows -->
 ```maxon
 type Point
 	var x as int

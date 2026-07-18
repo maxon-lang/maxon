@@ -258,7 +258,6 @@ v2none
 ### Struct Bound in a Block Is Released
 
 <!-- test: owned-struct-in-block -->
-<!-- targets: x64-windows -->
 ```maxon
 type Box
 	var v as int

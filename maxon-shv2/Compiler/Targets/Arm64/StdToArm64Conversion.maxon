@@ -24,8 +24,11 @@
 //     `sdiv` (+ `msub` for the remainder) with NO guard block and NO panic routine — nothing splits the
 //     block, so the op walk is a straight one-block-in, one-block-out lowering exactly like x64's.
 //
-// The macOS OS-primitive lowering (`osAllocPages`/`osWriteStdout`) is NOT needed by the scalar core
-// (which allocates nothing and does not `print`), so those two Std ops panic here rather than lower.
+// The macOS OS-primitive lowering (`osAllocPages`/`osWriteStdout`, the M2 runtime floor) bottoms the
+// Std-tier slab and String runtimes out in libSystem `mmap`/`write` through the GOT (`arm64ImportCall`).
+// These are the ONLY arm64-specific gaps in the heap/String path: the slab allocator, refcounting and
+// the whole String runtime are Std-tier and target-neutral, inherited unchanged (see the two functions
+// at the end of this file, and MachOWriter's `MachoImportSlot`).
 
 // The AAPCS64 integer ARGUMENT / return registers: argument `k` arrives in (and is passed in)
 // `arm64ArgRegisters[k]` = x0..x7, and an integer value returns in x0. The array LENGTH caps the
@@ -39,6 +42,25 @@ let Arm64IntReturnReg = Arm64Register.x0
 
 // The primary FLOAT return register (AAPCS64) — a float result returns in d0, not x0.
 let Arm64FloatReturnReg = Arm64Register.d0
+
+// The macOS `mmap` call shape `lowerOsAllocPages` emits: `mmap(NULL, size, PROT_READ|PROT_WRITE,
+// MAP_ANON|MAP_PRIVATE, -1, 0)` — the macOS twin of x64's VirtualAlloc constants. Named rather than
+// spelled as bare hex at the call site: `0x1002` is unreadable and `MAP_ANON|MAP_PRIVATE` is the fact.
+//
+// ⭐ MAP_ANON IS WHAT MAKES THE ZEROING CONTRACT TRUE. An anonymous mapping is kernel-zeroed on first
+// touch, which is the entire basis for `__slab_alloc` handing out bump slots without memzeroing them —
+// exactly the role `MEM_COMMIT` plays for x64's VirtualAlloc. MAP_PRIVATE travels with it, and a
+// MAP_ANON mapping must name NO file, which is why `fd` is -1. The values are macOS's (`MAP_ANON`
+// is 0x1000 on Darwin, unlike Linux's 0x20).
+let MmapKernelChoosesBase = 0x0             // addr = NULL: the kernel picks the base.
+let MmapProtReadWrite = 0x3                 // PROT_READ (0x1) | PROT_WRITE (0x2)
+let MmapAnonPrivate = 0x1002                // MAP_ANON (0x1000) | MAP_PRIVATE (0x2)
+let MmapAnonFd = 0xFFFFFFFFFFFFFFFF         // fd = -1 (two's-complement): MAP_ANON names no file.
+let MmapNoOffset = 0x0                      // offset = 0 (ignored for an anonymous mapping).
+
+// `write(1, buf, len)` — the stdout primitive `lowerOsWriteStdout` emits. FAR simpler than x64's
+// GetStdHandle+WriteFile: no handle call, no bytes-written out-param, no stack args.
+let WriteStdoutFd = 0x1                      // fd = 1 (STDOUT_FILENO).
 
 // The IP scratch register the isel materialises an immediate into when no immediate op-form fits:
 // a multiplier (arm64 has no multiply-by-immediate), or a non-bitmask logical immediate (AArch64
@@ -298,8 +320,8 @@ type StdToArm64Lowering
 			globalAddr(resultId, label) then self.emit(dstRef, op: TargetOp.arm64LeaGlobal(TargetVReg.virtual(resultId), label: label))
 			loadIndirect(resultId, addrId, offset, valueType) then self.lowerLoadIndirect(resultId, addrId: addrId, offset: offset, valueType: valueType, dstRef: dstRef)
 			storeIndirect(addrId, offset, valueId, valueType) then self.lowerStoreIndirect(addrId, offset: offset, valueId: valueId, valueType: valueType, dstRef: dstRef)
-			osAllocPages then panic("lowerStdToArm64: `osAllocPages` (the macOS page source) is not in the scalar core — the scalar core allocates nothing; the arm64 heap primitive lands with the runtime floor")
-			osWriteStdout then panic("lowerStdToArm64: `osWriteStdout` (`print`) is not in the scalar core — it lands with the arm64 macOS `write` primitive")
+			osAllocPages(resultId, sizeId) then self.lowerOsAllocPages(resultId, sizeId: sizeId, dstRef: dstRef)
+			osWriteStdout(bufId, lenId) then self.lowerOsWriteStdout(bufId, lenId: lenId, dstRef: dstRef)
 			rdataAddr(resultId, label) then self.emit(dstRef, op: TargetOp.arm64LeaRdata(TargetVReg.virtual(resultId), label: label))
 		end 'lower'
 	end 'lowerBodyOp'
@@ -612,4 +634,41 @@ type StdToArm64Lowering
 		self.emit(dstRef, op: TargetOp.arm64BranchLink(callee))
 		self.emit(dstRef, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: arm64PhysReg(Arm64IntReturnReg)))
 	end 'lowerCall'
+
+	// Lower `osAllocPages(size)` to the macOS page source `mmap(NULL, size, PROT_READ|PROT_WRITE,
+	// MAP_ANON|MAP_PRIVATE, -1, 0)` through the libSystem GOT — the arm64 twin of x64's `lowerOsAllocPages`
+	// (VirtualAlloc), and FAR simpler: AAPCS64's argument registers x0..x7 ARE the call ABI, so there is
+	// no custom-ABI↔OS-ABI mismatch to bridge (the whole reason x64 needs its own op rather than a
+	// `call`). The six arguments go straight into x0..x5 and the result reads back from x0. MAP_ANON
+	// returns ZEROED pages, satisfying the slab's zeroing contract (see the mmap constants), exactly as
+	// x64's MEM_COMMIT does.
+	//
+	// Forward-order emission is sound for the one live operand (`size`): each `mov x[k], …` is a physical
+	// def of x[k] that liveness forbids to every value live across it, so `size` (live into its own move)
+	// can never be coloured to an argument register set before it — the same argument `lowerCall` makes.
+	// The `arm64ImportCall`'s caller-saved clobber confines any value live ACROSS the call to the
+	// callee-saved half, which is what keeps `__slab_alloc`'s bookkeeping (live across the page call)
+	// correct — the exact miscompile the x64 `iatCall` clobber comment records for `VirtualAlloc`.
+	function lowerOsAllocPages(resultId ValueId, sizeId ValueId, dstRef BlockRef)
+		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x0), value: MmapKernelChoosesBase))
+		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x1), srcReg: TargetVReg.virtual(sizeId)))
+		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x2), value: MmapProtReadWrite))
+		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x3), value: MmapAnonPrivate))
+		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x4), value: MmapAnonFd))
+		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x5), value: MmapNoOffset))
+		self.emit(dstRef, op: TargetOp.arm64ImportCall(machoImportSlotIndex(MachoImportSlot.mmap)))
+		self.emit(dstRef, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: arm64PhysReg(Arm64IntReturnReg)))
+	end 'lowerOsAllocPages'
+
+	// Lower `osWriteStdout(buf, len)` to `write(1, buf, len)` through the libSystem GOT; the result is
+	// ignored. FAR simpler than x64's `lowerOsWriteStdout` (GetStdHandle then WriteFile with a handle, an
+	// out-param and a stack argument): a single POSIX `write` with three register arguments. `buf`/`len`
+	// move forward into x1/x2 — a `len` colouring x1 is forbidden by the physical def of x1 that reads
+	// `buf`, exactly as `lowerCall`'s arg moves are sound in order.
+	function lowerOsWriteStdout(bufId ValueId, lenId ValueId, dstRef BlockRef)
+		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x0), value: WriteStdoutFd))
+		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x1), srcReg: TargetVReg.virtual(bufId)))
+		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x2), srcReg: TargetVReg.virtual(lenId)))
+		self.emit(dstRef, op: TargetOp.arm64ImportCall(machoImportSlotIndex(MachoImportSlot.write)))
+	end 'lowerOsWriteStdout'
 end 'StdToArm64Lowering'

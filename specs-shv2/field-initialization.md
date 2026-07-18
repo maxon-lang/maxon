@@ -58,7 +58,6 @@ conditional write that reaches the return only on some paths is rejected.
 ## Tests
 
 <!-- test: all-in-literal -->
-<!-- targets: x64-windows -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -82,7 +81,6 @@ end 'main'
 ```
 
 <!-- test: all-defaults -->
-<!-- targets: x64-windows -->
 ```maxon
 type Defaults
 	export var a = 10
@@ -103,7 +101,6 @@ end 'main'
 ```
 
 <!-- test: literal-overrides-default -->
-<!-- targets: x64-windows -->
 ```maxon
 type Thing
 	export var value = 7
@@ -125,7 +122,6 @@ end 'main'
 ```
 
 <!-- test: mixed-default-and-literal -->
-<!-- targets: x64-windows -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
