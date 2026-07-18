@@ -32,6 +32,9 @@ let TempSubdirName = ".spec-tmp"
 // source and the exe SIBLINGS on every host; it never reaches a golden (every compiled path is
 // normalized to `<fragment>`), so the committed x64 fragments are byte-unchanged.
 let MultiFileSourceDirSuffix = ".src"
+// A fixed, keyword-free stem for the built test program's exe (see runOneTest): Windows UAC
+// installer-detection requires ELEVATION for any exe whose file name contains install/setup/update/patch.
+let HostProgramExeStem = "hostprog"
 let DraftStatus = "draft"
 let BuildSubcommand = "build"
 let OutputFlag = "-o"
@@ -461,7 +464,13 @@ end 'StagingResult'
 // check its expectation, then check the emitted IR against the committed `.test` golden. Everything
 // written is cleaned up before returning.
 function runOneTest(compilerExe FilePath, test SpecTest, specName String, tempDir FilePath, exeExtension String, fragmentDir FilePath, updateRequired bool, effectiveTarget Target) returns TestOutcome
-	let exeBase = tempDir.join(test.name)
+	// The built test program's exe base is a FIXED, keyword-free stem — NOT `test.name` — because Windows
+	// UAC "installer detection" auto-requires ELEVATION for any executable whose file name contains
+	// install/setup/update/patch (a test named `...its-update` spawn-failed with "requires elevation" on
+	// Windows; the host-macOS + wasm runners never saw it). The name only has to be unique within this
+	// spec's own per-spec tempDir, and a spec's tests run SEQUENTIALLY, each rebuilding `-o` (overwriting)
+	// before it spawns, so a constant is safe. The staged SOURCE keeps `test.name` (it is never spawned).
+	let exeBase = tempDir.join("{HostProgramExeStem}")
 	// The driver appends the platform extension to the `-o` value
 	// (resolveOutputPath), so the produced exe is `<exeBase><ext>` — reconstruct
 	// that exact path to spawn it for the exit-code check.
