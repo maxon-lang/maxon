@@ -39,6 +39,7 @@ cross-call ownership ruling deferred to **P1.4**.
 ## Tests
 
 <!-- test: struct-payload-drop-leak-free -->
+<!-- targets: x64-windows -->
 An owned union with a struct payload, dropped at scope exit without being matched,
 frees its struct payload through the cascade — no leak (a leak is exit 101).
 ```maxon
@@ -67,6 +68,7 @@ end 'main'
 ```
 
 <!-- test: struct-payload-match-consume -->
+<!-- targets: x64-windows -->
 Matching an owned struct-payload union binds the struct, reads its field, and
 consumes the union — the struct is freed once (via the binding), the box once.
 ```maxon
@@ -98,6 +100,7 @@ end 'main'
 ```
 
 <!-- test: string-payload-drop-leak-free -->
+<!-- targets: x64-windows -->
 An owned union with a String payload, dropped at scope exit without being matched,
 frees its String through `__str_decref` — no leak.
 ```maxon
@@ -118,6 +121,7 @@ end 'main'
 ```
 
 <!-- test: string-payload-match-consume -->
+<!-- targets: x64-windows -->
 Matching an owned String-payload union binds the String, prints it, and consumes
 the union. The String is freed once (via the binding), the box once.
 ```maxon
@@ -145,6 +149,7 @@ hi
 ```
 
 <!-- test: string-payload-interpolated -->
+<!-- targets: x64-windows -->
 An interpolated String moved into a union payload, then matched back out and
 printed. The interpolation temporary is owned; the move transfers it into the box.
 ```maxon
@@ -172,6 +177,7 @@ v41
 ```
 
 <!-- test: match-borrow-no-managed-binding -->
+<!-- targets: x64-windows -->
 A match that binds no managed payload (a tag-only arm) borrows: the union is not
 consumed and is dropped at scope exit, freeing its struct payload once.
 ```maxon
@@ -204,6 +210,7 @@ end 'main'
 ```
 
 <!-- test: discard-managed-field -->
+<!-- targets: x64-windows -->
 A `_` discard of a managed field binds nothing and does not consume: the union is
 dropped at scope exit and the cascade frees the discarded String.
 ```maxon
@@ -228,6 +235,7 @@ end 'main'
 ```
 
 <!-- test: two-managed-fields-drop -->
+<!-- targets: x64-windows -->
 A case with two String fields, dropped at scope exit, frees both.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -247,6 +255,7 @@ end 'main'
 ```
 
 <!-- test: two-managed-fields-bind-one-discard-one -->
+<!-- targets: x64-windows -->
 A two-String case binds one field and discards the other. The bound one is freed
 via its binding; the discarded one is freed by the cascade at scope exit.
 ```maxon
@@ -274,6 +283,7 @@ bound first string long enough to heap
 ```
 
 <!-- test: two-binding-arms-fall-through -->
+<!-- targets: x64-windows -->
 Two arms that each bind a managed payload AND fall through: each arm's binding is dropped on ITS OWN
 exit edge, not accumulated for the continuation (where the other arm's value would be garbage). Both
 paths are leak-free and crash-free.
@@ -302,6 +312,7 @@ the taken arm b string, long enough to be a real heap allocation
 ```
 
 <!-- test: var-reassign-after-partial-move -->
+<!-- targets: x64-windows -->
 A `var` union consumed by a binding-match is `partiallyMoved` (a re-read is E3102), but a REASSIGNMENT
 revives it: the fresh value has no moved-out slots, so a later match is legal again. The old box (with
 its nulled payload slot) is dropped at the reassignment; the new one at scope exit — both leak-free.

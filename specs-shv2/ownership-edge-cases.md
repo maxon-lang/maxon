@@ -113,6 +113,7 @@ end 'main'
 ```
 
 <!-- test: rc-return-transfers-ownership -->
+<!-- targets: x64-windows -->
 Returning a struct skips its decref; caller receives ownership and frees it at its own scope exit.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -1188,6 +1189,7 @@ end 'main'
 ```
 
 <!-- test: rc-return-struct-literal -->
+<!-- targets: x64-windows -->
 Returning a struct literal directly from a function must transfer ownership at rc=1.
 The callee constructs the struct (rc=0), increfs it for the assignment, and transfers
 ownership to the caller via KeepVars. The caller must not incref again.

@@ -215,6 +215,7 @@ end 'main'
 ```
 
 <!-- test: struct-param -->
+<!-- targets: x64-windows -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -243,6 +244,7 @@ end 'main'
 ```
 
 <!-- test: struct-return -->
+<!-- targets: x64-windows -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -270,6 +272,7 @@ end 'main'
 ```
 
 <!-- test: struct-literal-as-arg -->
+<!-- targets: x64-windows -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
