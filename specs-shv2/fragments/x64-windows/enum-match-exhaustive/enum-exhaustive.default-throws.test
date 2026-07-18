@@ -1,0 +1,70 @@
+// Test: enum-exhaustive.default-throws
+enum Color
+		red
+		green
+		blue
+end 'Color'
+
+enum AppError
+		unmatched
+end 'AppError'
+
+typealias ColorCode = int(0 to 10)
+
+function checkColor(c Color) returns ColorCode throws AppError
+	match c 'check'
+		red then return 1
+		default throws AppError.unmatched
+	end 'check'
+end 'checkColor'
+
+function main() returns ExitCode
+	let result = try checkColor(Color.red) otherwise 'err'
+		return 99
+	end 'err'
+	return result
+end 'main'
+---
+ExitCode: 1
+---
+func @checkColor {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.movRegImm32 r8, 1
+    x64.movRegImm32 r10, 0
+    x64.popReg rbp
+    x64.ret
+  matchnext:
+    x64.movRegImm32 rax, 0
+    x64.leaRegRegImm32 r10, rax, 1
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+  matchcont:
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 0
+    x64.callDirect checkColor
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 r8, 99
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

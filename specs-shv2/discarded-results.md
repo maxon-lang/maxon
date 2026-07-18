@@ -409,8 +409,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: try-statement-impure-ok -->
-<!-- P1.4 errors + top-level `var` globals -->
+<!-- test: try-statement-impure-ok -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)

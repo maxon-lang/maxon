@@ -219,8 +219,7 @@ end 'main'
 error E2046: specs/fragments/enum-match-only/error.default-without-throws.test:12:3: 'default' in a match on enum 'Color' must be followed by 'throws <error>' or 'panic("message")'
 ```
 
-<!-- disabled-test: default-throws-statement -->
-<!-- P1.4 error handling (throws / try / otherwise) -->
+<!-- test: default-throws-statement -->
 ```maxon
 enum Color
 	red
@@ -249,8 +248,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: default-throws-no-match -->
-<!-- P1.4 error handling (throws / try / otherwise) -->
+<!-- test: default-throws-no-match -->
 ```maxon
 enum Color
 	red
@@ -280,8 +278,7 @@ end 'main'
 99
 ```
 
-<!-- disabled-test: default-throws-expression -->
-<!-- P1.4 error handling (throws / try / otherwise) -->
+<!-- test: default-throws-expression -->
 ```maxon
 enum Color
 	red
@@ -312,8 +309,7 @@ end 'main'
 20
 ```
 
-<!-- disabled-test: default-throws-associated-value -->
-<!-- P1.3 union payloads + P1.4 error handling -->
+<!-- test: default-throws-associated-value -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)

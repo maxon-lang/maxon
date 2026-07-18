@@ -820,8 +820,7 @@ error E2026: specs/fragments/match-statements/error.match-not-exhaustive.test:7:
 
 A `match` arm body must be a single statement; the multi-line block-opening keywords `if`, `while`, `for`, `match` are rejected with E2049 (see above). All single-statement forms of `try` are permitted: bare propagation (`try call()`), and the four single-statement `otherwise` shapes (`panic`, `ignore`, `return/break/continue/throw`, default-value expression). The two multi-line block forms — `try 'label' ... end 'label'` and `try call() otherwise 'label' ... end 'label'` (with or without binding) — are rejected because they would allocate persistent error-flag slots in the enclosing scope and leak them on every error path through the match.
 
-<!-- disabled-test: match-statements.try-propagate -->
-<!-- P1.4 try/throws/otherwise -->
+<!-- test: match-statements.try-propagate -->
 ```maxon
 typealias Tally = int(0 to 100)
 
@@ -849,8 +848,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: match-statements.try-otherwise-panic -->
-<!-- P1.4 try/throws/otherwise -->
+<!-- test: match-statements.try-otherwise-panic -->
 ```maxon
 enum Err implements Error
 	bad
@@ -878,8 +876,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: match-statements.try-otherwise-ignore -->
-<!-- P1.4 try/throws/otherwise -->
+<!-- test: match-statements.try-otherwise-ignore -->
 ```maxon
 enum Err implements Error
 	bad
@@ -907,8 +904,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: match-statements.try-otherwise-stmt -->
-<!-- P1.4 try/throws/otherwise -->
+<!-- test: match-statements.try-otherwise-stmt -->
 ```maxon
 enum Err implements Error
 	bad
@@ -937,8 +933,7 @@ end 'main'
 7
 ```
 
-<!-- disabled-test: match-statements.try-otherwise-default -->
-<!-- P1.4 try/throws/otherwise -->
+<!-- test: match-statements.try-otherwise-default -->
 ```maxon
 enum Err implements Error
 	bad
@@ -966,8 +961,7 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: error.match-try-block-form -->
-<!-- P1.4 try/throws/otherwise -->
+<!-- test: error.match-try-block-form -->
 ```maxon
 enum Err implements Error
 	bad
@@ -1001,8 +995,7 @@ end 'main'
 error E2049: specs/fragments/match-statements/error.match-try-block-form.test:12:10: block-form 'try ... end' is not allowed in a match arm; use a single-statement try form (e.g. 'try call()' or 'try call() otherwise panic(...)') instead
 ```
 
-<!-- disabled-test: error.match-otherwise-block-form -->
-<!-- P1.4 try/throws/otherwise -->
+<!-- test: error.match-otherwise-block-form -->
 ```maxon
 enum Err implements Error
 	bad

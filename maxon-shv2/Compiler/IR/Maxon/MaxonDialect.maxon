@@ -589,4 +589,37 @@ export union MaxonOp
 	// (SemanticCheck, MmRuntime) and appending past the tail is the only placement the compiler
 	// reports on.
 	stringLiteral(result ValueId, bytes ByteArray) = MaxonOpMeta{category: OpCategory.plain}
+	// --- P1.4b: scalar error handling (dual-register `(value, errorFlag)` ABI) ---
+	//
+	// ⚠ APPENDED AT THE END OF THE UNION, past `stringLiteral`, per the band-append invariant: a
+	// mid-union insert is silently swallowed by any range arm (`literal to storeIndirect`, the
+	// category ranges). Their `OpCategory` is metadata independent of this tail position.
+	//
+	// A THROWING free call `try callee(args…)`. The Maxon-tier twin of `call`, plus a SECOND def:
+	// `result` is the primary value (R8 / x0 on return), `errorFlag` is the dual-register error flag
+	// (R10 / x9). `errorFlag` is `0` when the callee returned normally and `ordinal + 1` when it threw
+	// a scalar error (the `+1` reserving 0 for "no error in flight"). The compare/branch desugar the
+	// PARSER emits (`compare(errorFlag != 0)` + `condBranch`) is what reads the flag; the value is used
+	// on the success edge. Category `callFree`, the same band as `call` — it IS `call` plus the flag def.
+	tryCall(result ValueId, errorFlag ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray) = MaxonOpMeta{category: OpCategory.callFree}
+	// THROW a scalar error — a `throw E.case` or `otherwise (e) throw e`. TERMINATOR (control leaves the
+	// function via the error edge). `errorValue` is the enum ORDINAL as an SSA value (a literal for
+	// `throw E.case`, the caught `(e)` binding for `throw e`); `errorType` is the thrown enum. The
+	// `ordinal + 1` re-encoding is applied in `lowerMaxonToStd` (the ABI lives in ONE place), NOT here —
+	// which is why this carries the ordinal and `propagateError` carries the already-encoded flag, and
+	// the two are kept DISTINCT so the +1 never doubles up. Category `plain`, like the other terminators.
+	throwError(errorValue ValueId, errorType MaxonType) = MaxonOpMeta{category: OpCategory.plain}
+	// PROPAGATE a caught error flag verbatim — an uncaught `try f()` inside a throwing function
+	// re-publishes the callee's flag to its own caller. TERMINATOR. `errorFlag` is ALREADY the
+	// `ordinal + 1` encoding (it came out of a `tryCall`), so lowering re-emits it into the error
+	// register with NO re-encoding — the whole reason it is distinct from `throwError` (which carries
+	// an ordinal and does the +1). Category `plain`.
+	propagateError(errorFlag ValueId) = MaxonOpMeta{category: OpCategory.plain}
+	// ABORT the process, printing `message` (a `String` value) — the primitive a user `panic("…")` ends
+	// on (an `otherwise panic(…)` handler or a match `default panic(…)`). It is a BODY op, not a
+	// terminator: the parser emits it followed by a dead return terminator (control never returns, so the
+	// return is unreachable but keeps the block well-formed). `lowerMaxonToStd` expands it into
+	// `osWriteStdout(buffer, length)` + `osExit(code)` — the first occupant of the `panicking` band, which
+	// has been declared and empty since M1.
+	panicAbort(message ValueId) = MaxonOpMeta{category: OpCategory.panicking}
 end 'MaxonOp'

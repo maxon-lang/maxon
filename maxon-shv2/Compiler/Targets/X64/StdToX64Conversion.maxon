@@ -138,6 +138,9 @@ function stdOpOutgoingArgBytes(op StdOp) returns StackSize
 		osWriteStdout gives stringPrintOutgoingArgBytes()
 		const to osAllocPages gives 0
 		rdataAddr gives 0
+		// A `tryCall` passes its args in registers (≤6, like `call`); `errorReturn`/`osExit` have no
+		// outgoing args. None reserves stack argument space at this rung.
+		tryCall to osExit gives 0
 	end 'o'
 end 'stdOpOutgoingArgBytes'
 
@@ -664,6 +667,7 @@ type StdToX64Lowering
 				condBranch(condId, _, _) then self.recordFusableCompare(block, condId: condId, fused: fused, floatCmps: floatCmps)
 				const to mod then break 'term'
 				branch to rdataAddr then break 'term'
+				tryCall to osExit then break 'term'
 			end 'term'
 		end 'eachBlock'
 	end 'computeFusedCmps'
@@ -709,6 +713,7 @@ type StdToX64Lowering
 				// Declining a fusion is always safe. (`rdataAddr` never reaches here — the loop guards on
 				// `clobbersFlags` and it sets none — but it is named rather than swallowed.)
 				div to rdataAddr then break 'isTheCompare'
+				tryCall to osExit then break 'isTheCompare'
 			end 'isTheCompare'
 			return
 		end 'scanBackward'
@@ -771,6 +776,7 @@ type StdToX64Lowering
 			condBranch(condId, _, _) gives self.cmpPreds.contains(condId)
 			const to mod gives false
 			branch to rdataAddr gives false
+			tryCall to osExit gives false
 		end 'term'
 	end 'terminatorReadsFusedFlags'
 
@@ -799,6 +805,9 @@ type StdToX64Lowering
 			osAllocPages(resultId, sizeId) then self.lowerOsAllocPages(resultId, sizeId: sizeId, dstBlock: dstBlock)
 			osWriteStdout(bufId, lenId) then self.lowerOsWriteStdout(bufId, lenId: lenId, dstBlock: dstBlock)
 			rdataAddr(resultId, label) then self.targetModule.appendOp(dstBlock, op: TargetOp.leaRegRdata(TargetVReg.virtual(resultId), label: label))
+			tryCall(resultId, errorFlagId, callee, args) then self.lowerTryCall(resultId, errorFlagId: errorFlagId, callee: callee, args: args, dstBlock: dstBlock)
+			errorReturn(retValId, errorFlagId) then self.lowerErrorReturn(retValId, errorFlagId: errorFlagId, dstBlock: dstBlock, asTerminator: false)
+			osExit(codeId) then self.lowerOsExit(codeId, dstBlock: dstBlock)
 		end 'lower'
 	end 'lowerBodyOp'
 
@@ -826,6 +835,9 @@ type StdToX64Lowering
 			osAllocPages then panic("lowerStdToX64: an `osAllocPages` op appeared as a block terminator (lowering bug — a page allocation is a body op)")
 			osWriteStdout then panic("lowerStdToX64: an `osWriteStdout` op appeared as a block terminator (lowering bug — a stdout write is a body op)")
 			rdataAddr then panic("lowerStdToX64: an `rdataAddr` op appeared as a block terminator (lowering bug — an rdata address is a value-producing body op)")
+			tryCall then panic("lowerStdToX64: a `tryCall` op appeared as a block terminator (lowering bug — a throwing call is a value-producing body op)")
+			errorReturn(retValId, errorFlagId) then self.lowerErrorReturn(retValId, errorFlagId: errorFlagId, dstBlock: dstBlock, asTerminator: true)
+			osExit then panic("lowerStdToX64: an `osExit` op appeared as a block terminator (lowering bug — a process exit is a body op followed by a dead return)")
 		end 'lower'
 	end 'lowerTerminatorOp'
 
@@ -1155,6 +1167,43 @@ type StdToX64Lowering
 		self.targetModule.appendOp(dstBlock, op: TargetOp.callDirect(callee))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: x64PhysReg(X64Register.r8)))
 	end 'lowerCall'
+
+	// Lower a throwing `tryCall`: the arguments and `callDirect` exactly as `lowerCall`, then capture BOTH
+	// return registers — the primary value from **R8** and the error flag from **R10**. The two capture
+	// moves (`result ← R8`, `flag ← R10`) are a PARALLEL COPY that SSA destruction resequences through
+	// `sequenceParallelCopy` (see `colorAndDropSelfMoves`): a naive `mov;mov` collapses a value/flag swap
+	// when the allocator colors them cyclically. R10 is caller-saved, not an argument register, and
+	// allocatable — mirroring R8's own "no return/argument register conflict" — so it is unconditionally
+	// free to carry the flag out. The capture moves are emitted CONSECUTIVELY and right after the call, so
+	// the resequencer's "a call followed by two virtual-dest/physical-src moves" test identifies the pair.
+	function lowerTryCall(resultId ValueId, errorFlagId ValueId, callee ByteArray, args ValueIdArray, dstBlock IrBlock)
+		for k in 0 upto args.count() 'eachArg'
+			let argId = try args.get(k) otherwise panic("lowerTryCall: args.get OOB at {k}")
+			self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(argRegisterAt(k)), srcReg: TargetVReg.virtual(argId)))
+		end 'eachArg'
+		self.targetModule.appendOp(dstBlock, op: TargetOp.callDirect(callee))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: x64PhysReg(X64Register.r8)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(TargetVReg.virtual(errorFlagId), srcReg: x64PhysReg(X64Register.r10)))
+	end 'lowerTryCall'
+
+	// Lower the dual-register `errorReturn`: write the primary value to **R8** and the error flag to
+	// **R10**, then the return terminator. This is the ONE place the second register is written. Both
+	// moves are unconditional (even a void throwing function's caller reads the flag register); the frame
+	// epilogue is inserted separately by `X64PrologueEpilogue`, which recognizes the `ret` terminator this
+	// emits exactly as it does an ordinary return's.
+	function lowerErrorReturn(retValId ValueId, errorFlagId ValueId, dstBlock IrBlock, asTerminator bool)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.r8), srcReg: TargetVReg.virtual(retValId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.r10), srcReg: TargetVReg.virtual(errorFlagId)))
+		self.emitRet(dstBlock, asTerminator: asTerminator)
+	end 'lowerErrorReturn'
+
+	// Lower `osExit(code)` to `ExitProcess(code)` through the IAT — the Win64 exit primitive a `panic(…)`
+	// ends on. The code goes in ECX (the Win64 first-argument register); `iatCall` clobbers the caller-saved
+	// set, but `code` is dead after (the process is gone), so nothing is live across it.
+	function lowerOsExit(codeId ValueId, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movReg32Reg32(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(codeId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.ExitProcess)))
+	end 'lowerOsExit'
 
 	// Lower `osAllocPages` to the x64-windows page source: `VirtualAlloc(NULL, size,
 	// MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE)` through the IAT.
@@ -1531,6 +1580,7 @@ type StdToX64Lowering
 			condBranch(condId, _, _) gives self.settleFloatEqualityCondition(condId)
 			const to mod gives false
 			branch to rdataAddr gives false
+			tryCall to osExit gives false
 		end 'term'
 	end 'settleFloatEqualityBranch'
 
@@ -1662,6 +1712,7 @@ type StdToX64Lowering
 			condBranch(condId, thenBlockId, elseBlockId) gives (condId, thenBlockId, elseBlockId)
 			const to mod panic("condBranchFieldsOf: the terminator of block ref {blockRef} is not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			branch to rdataAddr panic("condBranchFieldsOf: the terminator of block ref {blockRef} is not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
+			tryCall to osExit panic("condBranchFieldsOf: the terminator of block ref {blockRef} is not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 		end 'term'
 	end 'condBranchFieldsOf'
 

@@ -1,0 +1,106 @@
+// Test: error.otherwise-return-in-assignment
+
+typealias Integer = int(i64.min to i64.max)
+
+// Single-statement otherwise: success path still yields a value
+enum MyError implements Error
+	failed
+end 'MyError'
+
+function maybeFail(flag bool) returns Integer throws MyError
+	if flag 'check'
+		throw MyError.failed
+	end 'check'
+	return 42
+end 'maybeFail'
+
+function runIt(flag bool) returns Integer
+	let value = try maybeFail(flag) otherwise return -1
+	return value
+end 'runIt'
+
+function main() returns ExitCode
+	let good = runIt(false)
+	if good == 42 'checkGood'
+		let bad = runIt(true)
+		if bad == -1 'checkBad'
+			return 7
+		end 'checkBad'
+	end 'checkGood'
+	return 0
+end 'main'
+---
+ExitCode: 7
+---
+func @maybeFail {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, check
+    x64.jmp ifcont
+  check:
+    x64.movRegImm32 rax, 0
+    x64.leaRegRegImm32 r10, rax, 1
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 42
+    x64.movRegImm32 r10, 0
+    x64.popReg rbp
+    x64.ret
+}
+
+func @runIt {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect maybeFail
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 r8, 1
+    x64.negReg r8, r8
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 0
+    x64.callDirect runIt
+    x64.cmpRegImm32 r8, 42
+    x64.jcc equal, checkGood
+    x64.jmp ifcont
+  checkGood:
+    x64.movRegImm32 rcx, 1
+    x64.callDirect runIt
+    x64.movRegImm32 rax, 1
+    x64.negReg rax, rax
+    x64.cmpRegReg r8, rax
+    x64.jcc equal, checkBad
+    x64.jmp ifcont
+  checkBad:
+    x64.movRegImm32 r8, 7
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

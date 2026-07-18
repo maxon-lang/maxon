@@ -596,6 +596,35 @@ export union StdOp
 	// `memory` category is metadata independent of this position, and a mid-band insert would be
 	// silently swallowed by the `branch to osAllocPages` full-tail range arms in the backend.
 	rdataAddr(resultId ValueId, label ByteArray) = StdOpMeta{category: StdOpCategory.memory, role: OpRole.plain, isPure: true, isUnsupportedInInlineBody: false, isMemory: false, isStore: false, isCall: false, clobbersFlags: false, isCmp: false}
+	// --- P1.4b: scalar error handling ---
+	//
+	// ⚠ APPENDED PAST THE END OF THE UNION (`rdataAddr` was the last variant), which is the band-append
+	// invariant working in the reviewer's favour: every stale `… to rdataAddr` full-tail range arm now
+	// FAILS TO COMPILE until it is consciously extended. The `category` metadata places each variant
+	// logically (a `call`-band `tryCall`, a `call`-band `errorReturn`, a `system`-band `osExit`)
+	// independently of this tail position.
+	//
+	// A throwing direct call `resultId = try callee(args…)` — defines TWO results: `resultId` (primary
+	// value from R8 / x0) and `errorFlagId` (the dual-register error flag from R10 / x9). Metadata
+	// identical to `call`: full call-barrier semantics. The x64/arm64 lowering captures BOTH return
+	// registers through the parallel-copy resolver (never a naive `mov;mov`, which collapses a
+	// value/flag swap — see StdToX64Conversion.lowerTryCall).
+	tryCall(resultId ValueId, errorFlagId ValueId, callee ByteArray, args ValueIdArray) = StdOpMeta{category: StdOpCategory.call, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+	// The DUAL-REGISTER epilogue terminator: write `retValId` to the primary return register (R8 / x0)
+	// and `errorFlagId` to the error-flag register (R10 / x9), then the return terminator. This is the
+	// ONE place the second register is written, and `role: OpRole.errorReturn` — the placeholder
+	// declared since M1 — finally gets its producer. `isPure: true` mirrors `ret`. `isUnsupportedInInlineBody:
+	// true` matches the field's own documented example (v1 lists `errorReturn`): a dual-register exit
+	// terminator escapes the inliner's static-callee model. The flag has no reader yet, so this is a
+	// declaration awaiting one — but the value is the debugged one. APPENDED here, past `rdataAddr`.
+	errorReturn(retValId ValueId, errorFlagId ValueId) = StdOpMeta{category: StdOpCategory.call, role: OpRole.errorReturn, isPure: true, isUnsupportedInInlineBody: true, isMemory: false, isStore: false, isCall: false, clobbersFlags: false, isCmp: false}
+	// Terminate the process with exit code `codeId` — the primitive a user `panic(...)` ends on (via the
+	// `__abort` runtime graph). A `system`-band op for the same two reasons `osAllocPages`/`osWriteStdout`
+	// are: it says WHAT is wanted (exit with a code) and lets each backend say HOW (x64-windows:
+	// `ExitProcess` through the IAT; arm64-macOS: the `_exit` import), keeping the OS ABI out of the
+	// target-neutral tier; and it appends at the END of the union, where the append is LOUD. Full
+	// call-barrier metadata: it IS a diverging call once lowered.
+	osExit(codeId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 end 'StdOp'
 
 export typealias StdOpArray = Array with StdOp
@@ -682,6 +711,12 @@ export function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 		// `rdataAddr` reads nothing — its `label` is a NAME, not a value (its result is a def), exactly
 		// like `globalAddr`.
 		rdataAddr then break 'u'
+		// A throwing call reads its arguments exactly as `call` does; `resultId`/`errorFlagId` are DEFS.
+		tryCall(_, _, _, args) then insertUseArgs(referenced, args: args)
+		// The dual-register terminator reads BOTH the primary value and the error flag it writes out.
+		errorReturn(retValId, errorFlagId) then insertUsePair(referenced, a: retValId, b: errorFlagId)
+		// The exit code is the one value operand `osExit` reads.
+		osExit(codeId) then referenced.insert(codeId)
 	end 'u'
 end 'collectStdOpUses'
 
@@ -739,6 +774,11 @@ module function remapStdOpUses(op StdOp, subst ValueIdArray) returns StdOp
 		// `rdataAddr` reports no use (its `label` is a name), so it rewrites nothing and is handed back
 		// unchanged — the exact mirror of `collectStdOpUses`'s `globalAddr`/`rdataAddr` arms.
 		rdataAddr gives op
+		// The exact mirror of `collectStdOpUses`: `tryCall` rewrites its args (its two results are defs),
+		// `errorReturn` rewrites both operands it reads, `osExit` rewrites its code operand.
+		tryCall(resultId, errorFlagId, callee, args) gives StdOp.tryCall(resultId, errorFlagId: errorFlagId, callee: callee, args: remappedArgs(args, subst: subst))
+		errorReturn(retValId, errorFlagId) gives StdOp.errorReturn(remappedValue(retValId, subst: subst), errorFlagId: remappedValue(errorFlagId, subst: subst))
+		osExit(codeId) gives StdOp.osExit(remappedValue(codeId, subst: subst))
 	end 'r'
 end 'remapStdOpUses'
 

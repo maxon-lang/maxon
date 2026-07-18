@@ -1,0 +1,125 @@
+// Test: error.binding-match-multi-case
+
+typealias Integer = int(i64.min to i64.max)
+
+// Test matching on error binding with multiple cases
+enum MyError implements Error
+	failed
+	timeout
+	notFound
+end 'MyError'
+
+var counter = 0 as Integer
+
+function mayFail(code Integer) returns Integer throws MyError
+	counter = counter + 1
+	if code == 1 'c1'
+		throw MyError.failed
+	end 'c1'
+	if code == 2 'c2'
+		throw MyError.timeout
+	end 'c2'
+	throw MyError.notFound
+end 'mayFail'
+
+function main() returns ExitCode
+	var result = 0
+	try mayFail(2) otherwise (e) 'handler'
+		match e 'check'
+			failed then result = 10
+			timeout then result = 20
+			notFound then result = 30
+		end 'check'
+	end 'handler'
+	return result
+end 'main'
+---
+ExitCode: 20
+---
+data {
+  __data_counter@0 = i64 0
+}
+
+func @mayFail {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.leaRegGlobal rax, __data_counter
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.leaRegGlobal rdx, __data_counter
+    x64.storeBaseDispReg.word64 [rdx + 0], rax
+    x64.cmpRegImm32 rcx, 1
+    x64.jcc equal, c1
+    x64.jmp ifcont
+  c1:
+    x64.movRegImm32 rax, 0
+    x64.leaRegRegImm32 r10, rax, 1
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.cmpRegImm32 rcx, 2
+    x64.jcc equal, c2
+    x64.jmp ifcont
+  c2:
+    x64.movRegImm32 rax, 1
+    x64.leaRegRegImm32 r10, rax, 1
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 rax, 2
+    x64.leaRegRegImm32 r10, rax, 1
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 rcx, 2
+    x64.callDirect mayFail
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.leaRegRegImm32 rax, r10, -1
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.movRegImm32 rax, 10
+    x64.jmp matchcont
+  matchnext:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc equal, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.movRegImm32 rax, 20
+    x64.jmp matchcont
+  matchnext:
+    x64.cmpRegImm32 rax, 2
+    x64.jcc equal, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.movRegImm32 rax, 30
+    x64.jmp matchcont
+  matchcont:
+    x64.movRegReg r8, rax
+    x64.jmp trycont
+  matchnext:
+  tryok:
+    x64.movRegReg r8, rbx
+    x64.jmp trycont
+  trycont:
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

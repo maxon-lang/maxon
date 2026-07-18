@@ -193,6 +193,9 @@ function recordOpResultClass(op StdOp, column ValueClassColumn, calleeResultClas
 		mod(resultId, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		param(resultId, _, paramType) then setValueClass(column, valueId: resultId, class: regClassForStdType(paramType))
 		call(resultId, callee, _) then setValueClass(column, valueId: resultId, class: calleeResultClass(calleeResultClasses, callee: callee))
+		// A throwing call classes its primary result exactly as `call` does (the callee's return type);
+		// its error-flag second result is an i64, which the column's `gpr` default already covers (P1.4b).
+		tryCall(resultId, _, callee, _) then setValueClass(column, valueId: resultId, class: calleeResultClass(calleeResultClasses, callee: callee))
 		// An ADDRESS is an integer, whatever the global holds.
 		globalAddr(resultId, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		loadIndirect(resultId, _, _, valueType) then setValueClass(column, valueId: resultId, class: regClassForStdType(valueType))
@@ -208,6 +211,8 @@ function recordOpResultClass(op StdOp, column ValueClassColumn, calleeResultClas
 		retVoid then break 'result'
 		storeIndirect then break 'result'
 		osWriteStdout then break 'result'
+		// `errorReturn` (a terminator) and `osExit` define no value (P1.4b).
+		errorReturn to osExit then break 'result'
 	end 'result'
 end 'recordOpResultClass'
 

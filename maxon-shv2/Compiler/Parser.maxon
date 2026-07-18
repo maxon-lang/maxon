@@ -449,6 +449,31 @@ export union ParseError implements Error
 	// why this reservation is what makes `MmRuntime.isCompilerInternalCallee` sound rather than a
 	// hopeful shortcut. `name` is the offending identifier, for the message.
 	reservedIdentifier(name String, line LineNumber, column ColumnNumber)
+	// --- The scalar-error arms (P1.4b) ---
+	//
+	// An `otherwise` handler with no `try` expression to attach to — `let v = mayFail() otherwise 0`.
+	// Renders as **E3058**, positioned at the stray `otherwise`. It is a PARSE error and not a
+	// SemanticCheck one because a bare `otherwise` builds no IR to inspect: the parser reaches it as an
+	// unexpected token after a complete expression, and only the parser knows there was no `try`.
+	otherwiseWithoutTry(line LineNumber, column ColumnNumber)
+	// An error-handling TYPE MISMATCH at a `try … otherwise …`. Renders as **E3059**, ONE code with three
+	// message variants (all built by `reportParseError` as `type mismatch: '<detail>'`): an `otherwise`
+	// value whose type differs from the try's success type; an `otherwise ignore` used in value position;
+	// or a value-position `try` on a VOID callee. `detail` is the inner message. Parse-time because each is
+	// a fact about the `otherwise` syntax and the assignment context, which only the parser sees.
+	errorTypeMismatch(detail String, line LineNumber, column ColumnNumber)
+	// A BLOCK-FORM `try` inside a `match` arm — a `try 'label' … end` (grouping multiple calls) or a
+	// block-handler `otherwise 'label' … end` — where an arm body must be a single statement. Renders as
+	// **E2049** (the same code `matchBlockStatement` reports for `if`/`while`/… arm bodies), positioned at
+	// the block label. `isOtherwiseForm` picks the message: the grouped-`try` form or the block-`otherwise`
+	// form (both name the single-statement alternatives the arm can use instead).
+	tryBlockFormInMatchArm(isOtherwiseForm bool, line LineNumber, column ColumnNumber)
+	// A `try` applied to a call that cannot throw — `try noFail()`. Renders as **E3055**, positioned at the
+	// `try` token. It is a PARSE error (not SemanticCheck's, where its throws-band siblings E3054/E3057 live)
+	// for a positional reason: the reference gates it byte-for-byte at the `try` keyword, and only the
+	// parser holds that token — the emitted `tryCall` op's span anchors on the callee, and the append-only
+	// span table cannot be retargeted after the fact. `callee` names the non-throwing function.
+	tryOnNonThrowing(callee String, line LineNumber, column ColumnNumber)
 end 'ParseError'
 
 // **THE NAME OF THE RECEIVER PARAMETER.** An instance method's parameter 0, pushed by
@@ -1264,6 +1289,19 @@ type MoveMark
 	end 'create'
 end 'MoveMark'
 
+// How a `try … otherwise …`'s error handler affects the merge (P1.4b). The success (`ok`) block always
+// carries the tryCall's `result`; the error block's shape is one of:
+//   • `value(v)`      — `otherwise <expr>` produced a fallback value; both edges merge into a result phi.
+//   • `terminated`    — propagate / `otherwise return|break|continue|throw|panic` left the error block via
+//                       its own terminator, so ONLY the ok block reaches the continuation (no merge).
+//   • `fellThrough`   — `otherwise ignore` or a block handler that falls through: both edges reach the
+//                       continuation with no try-value (a statement form), merging only carried vars.
+union TryHandler
+	value(otherwiseValue ValueId)
+	terminated
+	fellThrough
+end 'TryHandler'
+
 // One incoming edge at a control-flow join, for the move reconciliation: the predecessor block a drop is
 // emitted INTO when this edge kept a binding live, paired with the move state that edge carries. An
 // `if`/`else` builds two (the then and else ends); a `match` builds one per reaching arm.
@@ -1704,6 +1742,12 @@ export type Parser
 	// statement end. Reset per function, like every other per-function column. It holds only owned RESULTS —
 	// the interpolation's internal scratch buffers are freed inside `emitStringInterp`, never tracked here.
 	var pendingTempDrops as ValueIdArray
+	// ⭐ **TRUE WHILE PARSING A `match` ARM's single-statement body (P1.4b).** A match arm body is a single
+	// statement, so a `try` used there may take only a single-statement form — the block forms
+	// (`try 'label' … end`, `otherwise 'label' … end`, `otherwise (e) 'label' … end`) are rejected as
+	// E2049. `parseArmBody` sets it around its `parseStatement` call; `parseTry` reads it to raise the
+	// block-form diagnostics at the right position. Saved/restored so nested constructs unwind it.
+	var inMatchArmBody as bool
 
 	export static function create(tokens TokenArray, filePath FilePath, namespace String, signatures ProgramSignatures) returns Parser
 		return Self{
@@ -1726,7 +1770,8 @@ export type Parser
 			signatures: signatures,
 			enclosingType: EmptySourceText,
 			ownedBindings: VarInfoArray.create(),
-			pendingTempDrops: ValueIdArray.create()
+			pendingTempDrops: ValueIdArray.create(),
+			inMatchArmBody: false
 		}
 	end 'create'
 
@@ -1775,6 +1820,9 @@ export type Parser
 		// from the SAME token walk. `recordScannedSignature` fills one entry per function whose body moves a
 		// parameter into a struct field, so a call site can decide whether an owned argument is moved.
 		var paramConsumes = ParamConsumeEntryArray.create()
+		// ⭐ Per-function `throws E` clauses (P1.4b) — the call-site dual of the return type, from the SAME
+		// token walk. One entry per THROWING function so a call site can decide whether it needs `try`.
+		var throwsEntries = ThrowsClauseEntryArray.create()
 
 		let resume = self.pos
 		self.pos = 0
@@ -1804,7 +1852,7 @@ export type Parser
 				// read, because reading it moves the cursor past the `function` keyword.
 				depth = depth + 1
 				self.advance()
-				self.recordScannedSignature(entries, paramConsumes: paramConsumes)
+				self.recordScannedSignature(entries, paramConsumes: paramConsumes, throwsEntries: throwsEntries)
 				continue
 			end 'isFunction'
 
@@ -1826,7 +1874,7 @@ export type Parser
 			// array. It consumes the `type` keyword before it can fail, so the cursor always
 			// advances and this loop cannot spin.
 			if depth == 0 and self.at(TokenKind.type) 'isTypeDecl'
-				self.recordScannedType(structs, entries: entries, paramConsumes: paramConsumes)
+				self.recordScannedType(structs, entries: entries, paramConsumes: paramConsumes, throwsEntries: throwsEntries)
 				continue
 			end 'isTypeDecl'
 
@@ -1845,7 +1893,7 @@ export type Parser
 		end 'scan'
 		self.pos = resume
 
-		index.foldFile(entries, aliases: aliases, structs: structs, enums: enums, bindings: bindings, paramConsumes: paramConsumes, fileTypeNames: self.artifact.typeNames)
+		index.foldFile(entries, aliases: aliases, structs: structs, enums: enums, bindings: bindings, paramConsumes: paramConsumes, throwsEntries: throwsEntries, fileTypeNames: self.artifact.typeNames)
 	end 'foldDeclaredSignaturesInto'
 
 	// Is the cursor on a `let` or a `var` — the two keywords that introduce a top-level binding?
@@ -1913,7 +1961,7 @@ export type Parser
 	//
 	// The name is `declaredMethodName`'s, not the token's, so a factory inside `type Point` is
 	// recorded under the very key `Point.create(3, y: 4)` will look it up by — see there.
-	function recordScannedSignature(entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray)
+	function recordScannedSignature(entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, throwsEntries ThrowsClauseEntryArray)
 		if not self.at(TokenKind.identifier) 'noName'
 			return
 		end 'noName'
@@ -1934,6 +1982,15 @@ export type Parser
 		let returnType = try self.parseOptionalReturnType() otherwise return
 		let funcName = self.declaredMethodName(nameTok)
 		entries.push(FuncReturnTypeEntry.create(funcName, returnType: returnType))
+		// The `throws E` clause follows the return type; parsed BEFORE the consume-scan so the cursor lands
+		// past it. Only a THROWING function gets an entry (its absence is "does not throw"), mirroring
+		// `paramConsumes` recording only consuming functions. Gated on the `throws` KEYWORD being present so
+		// the overwhelmingly common non-throwing function allocates neither a `ThrowsClause.none` nor a
+		// `ThrowsClauseEntry` — its cursor already sits at the block label with nothing to consume.
+		if self.at(TokenKind.throws) 'throwing'
+			let throwsClause = try self.parseOptionalThrowsClause() otherwise return
+			throwsEntries.push(ThrowsClauseEntry.create(funcName, clause: throwsClause))
+		end 'throwing'
 
 		// The cursor is now at the body start. Scan the body (peek-only, cursor untouched) for parameters
 		// this function moves into a struct field — its CONSUME set.
@@ -2175,7 +2232,7 @@ export type Parser
 	// tell them apart. `depth` here is relative to the body — 0 is directly inside it — and
 	// `blockDepthAfter` is the same opener/closer rule the caller counts with, so a method's `if`
 	// and `while` nest correctly and its `end` cannot be mistaken for the type's.
-	function recordScannedType(structs StructLayoutArray, entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray)
+	function recordScannedType(structs StructLayoutArray, entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, throwsEntries ThrowsClauseEntryArray)
 		let nameTok = try self.readTypeHeader() otherwise return
 		self.enclosingType = nameTok.value
 
@@ -2203,7 +2260,7 @@ export type Parser
 				// loop does exactly this, for exactly this reason.
 				depth = depth + 1
 				self.advance()
-				self.recordScannedSignature(entries, paramConsumes: paramConsumes)
+				self.recordScannedSignature(entries, paramConsumes: paramConsumes, throwsEntries: throwsEntries)
 				continue
 			end 'isMethod'
 
@@ -2230,6 +2287,7 @@ export type Parser
 	function recordScannedEnum(enums EnumLayoutArray, isUnion bool)
 		try self.consume(TokenKind.union if isUnion else TokenKind.enum) otherwise return
 		let nameTok = try self.consume(TokenKind.identifier) otherwise return
+		try self.skipOptionalImplementsClause() otherwise return
 
 		var layout = EnumLayout.create(nameTok.value, isUnion: isUnion)
 		var state = EnumBackingState.create()
@@ -2806,6 +2864,7 @@ export type Parser
 		try self.consume(TokenKind.union if isUnion else TokenKind.enum)
 		let nameTok = try self.consume(TokenKind.identifier)
 		try self.requireUnreservedName(nameTok)
+		try self.skipOptionalImplementsClause()
 
 		var layout = EnumLayout.create(nameTok.value, isUnion: isUnion)
 		var state = EnumBackingState.create()
@@ -3132,6 +3191,9 @@ export type Parser
 		// signature, and `parseReturnStatement`'s declared-type check all then see a struct as a struct.
 		paramTypes = self.resolveNamedStructAll(paramTypes)
 		let returnType = self.resolveNamedStructReturn(try self.parseOptionalReturnType())
+		// The `throws E` clause (P1.4b) — stamped onto the function so the body parse (`throw`/propagate)
+		// and the lowering (`ret` → `errorReturn` inside a throwing function) can read it off `func`.
+		let throwsClause = try self.parseOptionalThrowsClause()
 
 		// Fresh per-function value numbering, seeded at the function's paramCount so
 		// parameter ids occupy 0..paramCount-1 by Std-ABI convention (a body value
@@ -3182,7 +3244,7 @@ export type Parser
 		// — there is no second array and no copy-back at the end of the body. It is safe because
 		// `self.valueTags` is re-created (not cleared) for the next function, so nothing aliases
 		// this one afterwards. See IrFunction.valueTags for what the column is FOR.
-		var func = IrFunction.create(name, maxonReturnType: returnType, paramCount: paramCount, maxonParamTypes: paramTypes, valueTags: self.valueTags, returnLine: nameTok.line)
+		var func = IrFunction.create(name, maxonReturnType: returnType, paramCount: paramCount, maxonParamTypes: paramTypes, valueTags: self.valueTags, returnLine: nameTok.line, throwsTypeName: throwsClause)
 		func.namespace = self.namespace
 		func.visibility = visibility
 		func.sourceFilePath = self.filePath
@@ -3384,6 +3446,33 @@ export type Parser
 		return MaxonReturnType.value(try self.parseTypeReference())
 	end 'parseOptionalReturnType'
 
+	// The `throws E` clause that follows a function's return type (P1.4b). `E` is a bare enum name — a
+	// payload-free enum conforming to `Error` (validated later, in SemanticCheck; the sweep and the real
+	// parse are tolerant). Read by BOTH the declaration sweep (`recordScannedSignature`, whole-program) and
+	// the real parse (`parseFunction`, which stamps `func.throwsTypeName`), so the throws fact is captured
+	// once and shared, exactly as `parseOptionalReturnType` is.
+	function parseOptionalThrowsClause() returns ThrowsClause throws ParseError
+		if not self.at(TokenKind.throws) 'noThrows'
+			return ThrowsClause.none
+		end 'noThrows'
+		try self.consume(TokenKind.throws)
+		let nameTok = try self.consume(TokenKind.identifier)
+		return ThrowsClause.throwing(String.from(nameTok.value))
+	end 'parseOptionalThrowsClause'
+
+	// The optional `implements <Interface>` clause on an enum/union declaration — error enums declare
+	// `implements Error` (P1.4b). Interfaces are not yet modelled in shv2, so the clause is CONSUMED and
+	// the conformance ASSUMED; the payload-free-enum-conforms-to-Error check the CONTRACT names is a
+	// follow-up (no Wave-1 case declares a non-Error throws enum). Shared by the tolerant declaration sweep
+	// and the real parse, exactly as `parseOptionalThrowsClause` is.
+	function skipOptionalImplementsClause() throws ParseError
+		if not self.at(TokenKind.implements) 'noImplements'
+			return
+		end 'noImplements'
+		try self.consume(TokenKind.implements)
+		_ = try self.consume(TokenKind.identifier)
+	end 'skipOptionalImplementsClause'
+
 	// A type reference. M1: a bare identifier (a named type like `ExitCode`,
 	// interned into the artifact's local interner) or a bare primitive keyword.
 	// Ranged/generic/qualified type syntax grows at M2+.
@@ -3579,7 +3668,20 @@ export type Parser
 			try self.parseBreakStatement(block)
 		end 'breakStmt' else if self.at(TokenKind.continue) 'continueStmt'
 			try self.parseContinueStatement(block)
-		end 'continueStmt' else if self.assignsAt(self.pos) 'assign'
+		end 'continueStmt' else if self.at(TokenKind.throw) 'throwStmt'
+			try self.parseThrowStatement(func, block: block)
+		end 'throwStmt' else if self.at(TokenKind.try) 'tryStmt'
+			// A `try` in statement position — its value is discarded; the forms are the propagate,
+			// the control-flow `otherwise`s, `otherwise ignore`, and the block handlers.
+			_ = try self.parseTry(func, resultUsed: false)
+		end 'tryStmt' else if self.at(TokenKind.panic) 'panicStmt'
+			try self.parsePanicStatement(func, block: block)
+		end 'panicStmt' else if self.at(TokenKind.otherwise) 'strayOtherwise'
+			// An `otherwise` with no `try` to attach to (`let v = f() otherwise 0`). Reaches here as a
+			// statement starter after the preceding expression completed. Renders as E3058.
+			let otherwiseTok = self.current()
+			throw ParseError.otherwiseWithoutTry(otherwiseTok.line, column: otherwiseTok.column)
+		end 'strayOtherwise' else if self.assignsAt(self.pos) 'assign'
 			// An identifier followed by `=` is a reassignment. The two-token lookahead
 			// keeps a bare identifier from being mis-parsed as an incomplete assignment.
 			// Through `assignsAt`, which is also what decides a loop's carried vars — see there.
@@ -4241,6 +4343,330 @@ export type Parser
 
 		self.artifact.emitTerminator(self.currentBlock, op: MaxonOp.ret(returned), range: SourceRange.ofToken(retTok))
 	end 'parseReturnStatement'
+
+	// ============================================================================
+	// P1.4b — scalar error handling: throw / try / otherwise / panic
+	// ============================================================================
+
+	// `throw E.case` or `throw <e>` — leave the function via the ERROR edge. The thrown expression
+	// evaluates to a `named(E)` enum value carrying the case's tag (a literal for `throw E.case`, the
+	// caught `(e)` binding for `throw e`); `throwError` carries it and lowering re-encodes it `+1`. Owned
+	// locals are dropped before the error terminator (trivial for scalar Wave 1).
+	function parseThrowStatement(func IrFunction, block IrBlock) throws ParseError
+		self.currentBlock = block
+		let throwTok = try self.consume(TokenKind.throw)
+		try self.emitThrowError(func, anchor: throwTok)
+	end 'parseThrowStatement'
+
+	// Parse the thrown enum expression and emit the `throwError` terminator into `currentBlock`. Shared by
+	// the `throw <e>` statement and the match `default throws <E.case>` arm (which differ only in the
+	// keyword their caller consumed — `throw` vs `throws`).
+	function emitThrowError(func IrFunction, anchor Token) throws ParseError
+		let errValue = try self.parseExpression(func, block: self.currentBlock)
+		let errType = self.typeOf(errValue)
+		self.emitScopeDrops(WholeFunctionScopeFloor, anchor: anchor)
+		self.artifact.emitTerminator(self.currentBlock, op: MaxonOp.throwError(errValue, errorType: errType), range: SourceRange.ofToken(anchor))
+	end 'emitThrowError'
+
+	// `panic("message")` — abort the process after printing the message. Emits a `panicAbort` body op
+	// (expanded to `osWriteStdout` + `osExit` in lowering) followed by a dead return terminator (control
+	// never returns, so the return is unreachable but keeps the block well-formed).
+	function parsePanicStatement(func IrFunction, block IrBlock) throws ParseError
+		self.currentBlock = block
+		let panicTok = try self.consume(TokenKind.panic)
+		try self.consume(TokenKind.leftParen)
+		let msg = try self.parseExpression(func, block: self.currentBlock)
+		try self.consume(TokenKind.rightParen)
+		if not tagIsText(self.tagOf(msg)) 'notAString'
+			throw ParseError.builtinOperandType("panic", required: typeTagName(ValueTypeTag.string), got: typeTagName(self.tagOf(msg)), line: panicTok.line, column: panicTok.column)
+		end 'notAString'
+		self.artifact.emitOp(self.currentBlock, op: MaxonOp.panicAbort(msg), range: SourceRange.ofToken(panicTok))
+		self.emitDeadReturn(func, anchor: panicTok)
+	end 'parsePanicStatement'
+
+	// The dead return terminator emitted after a diverging op (`panicAbort`): a `retVoid` for a void
+	// function, else a `ret 0`. Unreachable — the preceding op never returns — but every block must
+	// commit to a terminator. Its type need not match the declared return (it is dead code and bypasses
+	// the `return`-statement checks); lowering moves it to the return register like any other `ret`.
+	function emitDeadReturn(func IrFunction, anchor Token)
+		if maxonReturnTypeIsVoid(func.maxonReturnType) 'void'
+			self.artifact.emitTerminator(self.currentBlock, op: MaxonOp.retVoid, range: SourceRange.ofToken(anchor))
+			return
+		end 'void'
+		let zero = self.emitLiteral(0, valueType: MaxonType.integer, range: SourceRange.ofToken(anchor))
+		self.artifact.emitTerminator(self.currentBlock, op: MaxonOp.ret(zero), range: SourceRange.ofToken(anchor))
+	end 'emitDeadReturn'
+
+	// ⭐ **THE try/otherwise DESUGAR.** Parses `try <call> [otherwise <handler>]`, emitting a `tryCall`
+	// (the call rewritten to define a second `errorFlag` value), a `compare(flag != 0)` + `condBranch`
+	// two-way split, the error handler, and the merge. Returns the try's RESULT value (used in expression
+	// position; discarded as a statement). `resultUsed` is true in value position — it decides the
+	// void-callee (E3059) and `otherwise ignore` (E3059) rejects.
+	function parseTry(func IrFunction, resultUsed bool) returns ValueId throws ParseError
+		let tryTok = try self.consume(TokenKind.try)
+
+		// A block-form `try 'label' … end` (grouping multiple calls) is a later slice; only a match arm
+		// needs it rejected here (E2049 at the block label).
+		if self.at(TokenKind.charLiteral) 'blockForm'
+			if self.inMatchArmBody 'inArm'
+				throw ParseError.tryBlockFormInMatchArm(false, line: tryTok.line, column: tryTok.column)
+			end 'inArm'
+			throw ParseError.unsupported("block-form `try 'label' … end` (grouping multiple calls in one try) — a later slice; use a single-statement `try call()` optionally with `otherwise`", line: tryTok.line, column: tryTok.column)
+		end 'blockForm'
+
+		let result = try self.parseTryCallTarget(func)
+		let flag = self.mintValue(ValueTypeTag.integer, nameId: UnnamedTypeId)
+		let callee = try self.rewriteLastCallToTryCall(flag, tryTok: tryTok)
+
+		// E3055 — `try` on a call that cannot throw. Checked here (not SemanticCheck) so it anchors on the
+		// `try` token. A callee NO file declares is left to SemanticCheck's E3004 (a `try <typo>` is an
+		// unknown function, not a non-throwing one), so the check is gated on the callee being declared.
+		if self.calleeIsDeclared(callee) and not throwsClauseIsThrowing(self.signatures.throwsOf(callee)) 'nonThrowing'
+			throw ParseError.tryOnNonThrowing(String.from(callee), line: tryTok.line, column: tryTok.column)
+		end 'nonThrowing'
+
+		// A value-position `try` on a VOID callee has no value to yield (E3059).
+		if resultUsed and self.tagOf(result) == ValueTypeTag.void 'voidInValue'
+			throw ParseError.errorTypeMismatch("'{String.from(callee)}' does not return a value", line: tryTok.line, column: tryTok.column)
+		end 'voidInValue'
+
+		return try self.desugarTry(func, tryTok: tryTok, result: result, flag: flag, callee: callee, resultUsed: resultUsed)
+	end 'parseTry'
+
+	// Parse the throwing call target after `try` — a free call `f(…)`, a method/qualified call
+	// `obj.m(…)` / `Type.m(…)`, or a `self.m(…)`. Emits an ordinary `call` op that `rewriteLastCallToTryCall`
+	// then converts. `resultUsed: false` on the free-call path so a VOID throwing callee is not rejected
+	// here (whether the try's VALUE is usable is decided in `parseTry` from the try's own position).
+	function parseTryCallTarget(func IrFunction) returns ValueId throws ParseError
+		if self.at(TokenKind.self) 'selfCall'
+			return try self.parseSelfPrimary(func)
+		end 'selfCall'
+		if self.at(TokenKind.identifier) 'named'
+			if self.peekKind() == TokenKind.leftParen 'freeCall'
+				return try self.parseCall(func, resultUsed: false)
+			end 'freeCall'
+			if self.peekKind() == TokenKind.dot 'dotted'
+				return try self.parseDottedPrimary(func)
+			end 'dotted'
+		end 'named'
+		let tok = self.current()
+		throw ParseError.unsupported("`try` must be applied to a call — `try f(…)` or `try obj.method(…)` (got '{tok.kind.rawValue}')", line: tok.line, column: tok.column)
+	end 'parseTryCallTarget'
+
+	// Rewrite the just-emitted `call` op in `currentBlock` into a `tryCall` defining `errorFlag` as its
+	// second result. Returns the callee name (for the E3059/E3055 diagnostics). v1 rewrites the terminal
+	// call in place for the same reason: it makes nested tries (`try consume(try get() otherwise 0)`)
+	// work — each inner try rewrites its OWN call, and the outer rewrites the last op after the whole
+	// parse, which is its own call.
+	function rewriteLastCallToTryCall(errorFlag ValueId, tryTok Token) returns ByteArray throws ParseError
+		let refCount = self.currentBlock.opRefs.count()
+		if refCount == 0 'noOp'
+			throw ParseError.unsupported("`try` must be applied to a call — the expression after `try` emitted no call", line: tryTok.line, column: tryTok.column)
+		end 'noOp'
+		let opIdx = try self.currentBlock.opRefs.get(refCount - 1) otherwise panic("rewriteLastCallToTryCall: opRefs.get OOB on a non-empty block")
+		let op = try self.artifact.module.ops.get(opIdx) otherwise panic("rewriteLastCallToTryCall: last opRef {opIdx} not in module.ops")
+		return match op 'rewrite'
+			call(result, callee, args, argLabels, argRanges) gives self.commitTryCallRewrite(opIdx, result: result, errorFlag: errorFlag, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges)
+			literal to panicAbort gives try self.rejectTryTarget(tryTok)
+		end 'rewrite'
+	end 'rewriteLastCallToTryCall'
+
+	// Replace the `call` op at `opIdx` with a `tryCall` defining the second `errorFlag` result, preserving
+	// every call field, and return the callee name.
+	function commitTryCallRewrite(opIdx OpIndex, result ValueId, errorFlag ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray) returns ByteArray
+		try self.artifact.module.ops.set(opIdx, value: MaxonOp.tryCall(result, errorFlag: errorFlag, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges)) otherwise panic("commitTryCallRewrite: module.ops.set OOB at {opIdx}")
+		return callee
+	end 'commitTryCallRewrite'
+
+	// The expression after `try` was not a call. Typed `returns ByteArray` so it slots into
+	// `rewriteLastCallToTryCall`'s `match`, but it always throws.
+	function rejectTryTarget(tryTok Token) returns ByteArray throws ParseError
+		throw ParseError.unsupported("`try` must be applied to a call — `try f(…)` or `try obj.method(…)`; the expression after `try` is not a call", line: tryTok.line, column: tryTok.column)
+	end 'rejectTryTarget'
+
+	// Build the flag split + handler + merge for a parsed `tryCall`. `result` is the success value,
+	// `flag` its error flag, both defined by the `tryCall` in `currentBlock`.
+	function desugarTry(func IrFunction, tryTok Token, result ValueId, flag ValueId, callee ByteArray, resultUsed bool) returns ValueId throws ParseError
+		let entryBlock = self.currentBlock
+		let zero = self.emitLiteral(0, valueType: MaxonType.integer, range: SourceRange.ofToken(tryTok))
+		let isErr = try self.emitCompare(flag, rhs: zero, op: MaxonCmpOp.ne, opTok: tryTok)
+
+		var okBlock = self.newBlock(func, label: b"tryok", line: tryTok.line)
+		let errBlock = self.newBlock(func, label: b"tryerr", line: tryTok.line)
+		self.emitCondBranch(entryBlock, cond: isErr, thenId: errBlock.id, elseId: okBlock.id, ifTok: tryTok)
+
+		// Values entering both branches: the ok path leaves the carried vars unchanged, so `entryVals`
+		// is what it carries; the error handler may reassign them (`otherwise 'err' result = 42`).
+		let entryVals = self.snapshotBindings(self.mutableVars)
+
+		self.currentBlock = errBlock
+		let handler = try self.parseOtherwiseHandler(func, result: result, flag: flag, callee: callee, resultUsed: resultUsed, tryTok: tryTok)
+		var errEnd = self.currentBlock
+
+		return match handler 'h'
+			terminated gives self.finishTerminatedTry(okBlock, entryVals: entryVals, result: result)
+			value(otherwiseValue) gives self.finishValueTry(func, okBlock: okBlock, errEnd: errEnd, result: result, otherwiseValue: otherwiseValue, tryTok: tryTok)
+			fellThrough gives self.finishFellThroughTry(func, okBlock: okBlock, errEnd: errEnd, entryVals: entryVals, result: result, tryTok: tryTok)
+		end 'h'
+	end 'desugarTry'
+
+	// The error handler TERMINATED (propagate / return / break / continue / throw / panic): only the ok
+	// block reaches the continuation. Restore the carried vars to their pre-try values (the error path's
+	// reassignments do not reach here) and continue in the ok block.
+	function finishTerminatedTry(okBlock IrBlock, entryVals ValueIdArray, result ValueId) returns ValueId
+		self.restoreBindings(self.mutableVars, snapshot: entryVals)
+		self.currentBlock = okBlock
+		return result
+	end 'finishTerminatedTry'
+
+	// `otherwise <expr>` — both edges reach a fresh continuation carrying a result phi of `result` (ok)
+	// and `otherwiseValue` (err). No carried-var phis: an `otherwise` VALUE is an expression, which
+	// assigns no binding, so the ok and err edges agree on every carried var.
+	function finishValueTry(func IrFunction, okBlock IrBlock, errEnd IrBlock, result ValueId, otherwiseValue ValueId, tryTok Token) returns ValueId
+		var cont = self.newBlock(func, label: b"trycont", line: tryTok.line)
+		let phiId = self.mintPhi(cont, tag: self.tagOf(result), nameId: try self.valueNameIds.get(result) otherwise panic("finishValueTry: result has no name column"))
+
+		var okArgs = ValueIdArray.create()
+		okArgs.push(result)
+		self.recordBranchEdge(okBlock, targetId: cont.id, argIds: okArgs)
+		self.emitBranch(okBlock, targetId: cont.id)
+
+		var errArgs = ValueIdArray.create()
+		errArgs.push(otherwiseValue)
+		self.recordBranchEdge(errEnd, targetId: cont.id, argIds: errArgs)
+		self.emitBranch(errEnd, targetId: cont.id)
+
+		self.currentBlock = cont
+		return phiId
+	end 'finishValueTry'
+
+	// `otherwise ignore` or a block handler that FELL THROUGH — both edges reach a fresh continuation
+	// with no try-value. Merge the carried vars a block handler may have reassigned (`mergeAtContinuation`
+	// mints a phi only where the two edges differ). The returned `result` is the discarded statement value.
+	function finishFellThroughTry(func IrFunction, okBlock IrBlock, errEnd IrBlock, entryVals ValueIdArray, result ValueId, tryTok Token) returns ValueId
+		var cont = self.newBlock(func, label: b"trycont", line: tryTok.line)
+		let errVals = self.snapshotBindings(self.mutableVars)
+		self.mergeAtContinuation(okBlock, predB: errEnd, cont: cont, bindings: self.mutableVars, valsA: entryVals, valsB: errVals)
+		self.emitBranch(okBlock, targetId: cont.id)
+		self.emitBranch(errEnd, targetId: cont.id)
+		self.currentBlock = cont
+		return result
+	end 'finishFellThroughTry'
+
+	// Parse the `otherwise` handler (or its absence — a PROPAGATE) into the current (error) block, and
+	// report how it affects the merge. On entry `currentBlock` is the error block.
+	function parseOtherwiseHandler(func IrFunction, result ValueId, flag ValueId, callee ByteArray, resultUsed bool, tryTok Token) returns TryHandler throws ParseError
+		if not self.at(TokenKind.otherwise) 'propagate'
+			// Uncaught `try f()` — re-publish the callee's flag to this function's caller.
+			self.emitScopeDrops(WholeFunctionScopeFloor, anchor: tryTok)
+			self.artifact.emitTerminator(self.currentBlock, op: MaxonOp.propagateError(flag), range: SourceRange.ofToken(tryTok))
+			return TryHandler.terminated
+		end 'propagate'
+
+		try self.consume(TokenKind.otherwise)
+
+		if self.at(TokenKind.ignore) 'ignoreForm'
+			try self.consume(TokenKind.ignore)
+			if resultUsed 'ignoreInValue'
+				throw ParseError.errorTypeMismatch("'otherwise ignore' cannot be used in assignment", line: tryTok.line, column: tryTok.column)
+			end 'ignoreInValue'
+			return TryHandler.fellThrough
+		end 'ignoreForm'
+
+		if self.at(TokenKind.leftParen) 'bindingForm'
+			return try self.parseOtherwiseBinding(func, flag: flag, callee: callee)
+		end 'bindingForm'
+
+		if self.at(TokenKind.charLiteral) 'blockForm'
+			return try self.parseOtherwiseBlock(func, bindingName: EmptySourceText, hasBinding: false, flag: flag, callee: callee)
+		end 'blockForm'
+
+		// The single-statement CONTROL-FLOW forms terminate the error block.
+		if self.at(TokenKind.return) or self.at(TokenKind.break) or self.at(TokenKind.continue) 'controlFlow'
+			_ = try self.parseStatement(func, block: self.currentBlock)
+			return TryHandler.terminated
+		end 'controlFlow'
+		if self.at(TokenKind.throw) 'rethrow'
+			try self.parseThrowStatement(func, block: self.currentBlock)
+			return TryHandler.terminated
+		end 'rethrow'
+		if self.at(TokenKind.panic) 'panicForm'
+			try self.parsePanicStatement(func, block: self.currentBlock)
+			return TryHandler.terminated
+		end 'panicForm'
+
+		// `otherwise <expr>` — a fallback VALUE that merges with the success value.
+		let otherwiseValue = try self.parseExpression(func, block: self.currentBlock)
+		if resultUsed and tagIsFloat(self.tagOf(otherwiseValue)) != tagIsFloat(self.tagOf(result)) 'typeMismatch'
+			throw ParseError.errorTypeMismatch("otherwise type '{typeTagName(self.tagOf(otherwiseValue))}' does not match expected type '{typeTagName(self.tagOf(result))}'", line: tryTok.line, column: tryTok.column)
+		end 'typeMismatch'
+		return TryHandler.value(otherwiseValue)
+	end 'parseOtherwiseHandler'
+
+	// `otherwise (e) 'label' … end 'label'` — bind the caught error `e = flag - 1` (typed as the callee's
+	// throws enum so `match e` recognizes it), then parse the labelled handler block. In a match arm this
+	// block form is E2049.
+	function parseOtherwiseBinding(func IrFunction, flag ValueId, callee ByteArray) returns TryHandler throws ParseError
+		try self.consume(TokenKind.leftParen)
+		let eNameTok = try self.consume(TokenKind.identifier)
+		try self.consume(TokenKind.rightParen)
+		return try self.parseOtherwiseBlock(func, bindingName: eNameTok.value, hasBinding: true, flag: flag, callee: callee)
+	end 'parseOtherwiseBinding'
+
+	// Parse an `otherwise` handler BLOCK (`otherwise ['(e)'] 'label' … end 'label'`) into the error block.
+	// When `hasBinding`, `e = flag - 1` is declared in a fresh scope frame before the body. Both forms are
+	// E2049 in a match arm (the block label is where the arm-body single-statement rule is violated).
+	function parseOtherwiseBlock(func IrFunction, bindingName ByteArray, hasBinding bool, flag ValueId, callee ByteArray) returns TryHandler throws ParseError
+		if not self.at(TokenKind.charLiteral) 'noLabel'
+			let tok = self.current()
+			throw ParseError.matchMissingBlockId(tok.line, column: tok.column)
+		end 'noLabel'
+		let labelTok = self.current()
+		if self.inMatchArmBody 'inArm'
+			throw ParseError.tryBlockFormInMatchArm(true, line: labelTok.line, column: labelTok.column)
+		end 'inArm'
+		// Consume the block-open label (`parseBlockBody` consumes only the closing `end <label>`, exactly
+		// as `parseIfStatement`/`parseWhileStatement` consume their own opening labels).
+		try self.consume(TokenKind.charLiteral)
+
+		var errBlock = self.currentBlock
+		self.scope.pushScope()
+		if hasBinding 'bindE'
+			let eType = self.tryErrorEnumType(callee)
+			let one = self.emitLiteral(1, valueType: MaxonType.integer, range: SourceRange.ofToken(labelTok))
+			let eValue = self.mintValueOfType(eType)
+			self.artifact.emitOp(errBlock, op: MaxonOp.binOp(eValue, lhs: flag, rhs: one, op: MaxonBinOp.sub), range: SourceRange.ofToken(labelTok))
+			_ = try self.scope.declareValueBinding(bindingName, varType: eType, mutable: false, value: eValue) otherwise throw ParseError.localShadowsSelfField(String.from(bindingName), typeName: String.from(self.enclosingType), line: labelTok.line, column: labelTok.column)
+		end 'bindE'
+
+		let errEnd = try self.parseBlockBody(func, block: errBlock)
+		self.scope.popScope()
+
+		if errEnd.isTerminated() 'terminated'
+			return TryHandler.terminated
+		end 'terminated'
+		return TryHandler.fellThrough
+	end 'parseOtherwiseBlock'
+
+	// The MaxonType of the enum a throwing `callee` throws — the type an `(e)` binding recovers. A callee
+	// with no throws clause is rejected by SemanticCheck (E3055), so the fallback `integer` here is never
+	// lowered; it only keeps the parser from panicking while building IR the error gate will discard.
+	function tryErrorEnumType(callee ByteArray) returns MaxonType
+		return match self.signatures.throwsOf(callee) 'k'
+			none gives MaxonType.integer
+			throwing(name) gives MaxonType.named(self.artifact.typeNames.intern(name.toByteArray()))
+		end 'k'
+	end 'tryErrorEnumType'
+
+	// Does SOME file declare `callee`? The whole-program signature index answers before any file is
+	// parsed. Used to keep the E3055 (`try` on a non-throwing call) check off an UNDECLARED callee, whose
+	// real defect is E3004 (unknown function), reported by SemanticCheck against the merged registry.
+	function calleeIsDeclared(callee ByteArray) returns bool
+		return match self.signatures.returnTypeOf(callee, into: self.artifact.typeNames) 'r'
+			declared gives true
+			undeclared gives false
+		end 'r'
+	end 'calleeIsDeclared'
 
 	// Emit a `__mm_decref` for every owned binding above `floor`, in REVERSE declaration order.
 	//
@@ -5613,17 +6039,6 @@ export type Parser
 			end 'endOfArms'
 
 			if self.at(TokenKind.default) 'defaultArm'
-				// ⚠ **A `default` ON AN ENUM MATCH IS E2046** — an enum match is exhaustive by listing
-				// every case, so a plain catch-all is forbidden (it would silently mask a case added
-				// later). The only legal enum default is `default throws`/`default panic`, neither of
-				// which shv2 has yet, so EVERY enum `default` is this error at this rung. Positioned at
-				// the `default`, before the scalar default machinery below runs.
-				if isEnumMatch 'enumDefault'
-					let defTok = self.current()
-					let layout = requireEnumLayout(enumMatch)
-					throw ParseError.matchDefaultEnumMustThrow(layout.kindWord(), typeName: String.from(layout.name), line: defTok.line, column: defTok.column)
-				end 'enumDefault'
-
 				// A second `default`, or any `default` that is not last, is E2029 — reported when a
 				// pattern arm FOLLOWS a default (below); a default following a default is the same rule.
 				if sawDefault 'defaultAfterDefault'
@@ -5631,6 +6046,7 @@ export type Parser
 					throw ParseError.matchDefaultNotLast(dupTok.line, column: dupTok.column)
 				end 'defaultAfterDefault'
 
+				let defTok = self.current()
 				try self.consume(TokenKind.default)
 				// The default's body IS the last real arm's `else` target (or the entry block when the
 				// match is default-only): there is no pattern to test. `var` because `parseArmBody`
@@ -5648,17 +6064,35 @@ export type Parser
 					self.restoreMoveMark(entryMoveMark)
 				end 'defaultFresh'
 
-				let defaultArmBody = try self.parseArmBody(func, bodyBlock: defaultBody, isExpression: isExpression, carried: carried)
-				// A `default gives …` arm's OWNED give escapes to the result phi — move it out of its owner
-				// so the post-match drain does not free it (the pattern-arm rule, for the catch-all arm).
-				if isExpression 'transferDefaultGive'
-					try self.transferGiveToPhi(self.giveValueOf(defaultArmBody.give), anchor: matchTok)
-				end 'transferDefaultGive'
-				// `default` is the last arm, so a fall-through has no next arm to reach — it simply
-				// continues to the merge. So the test is "did control leave?", not `reachesMerge`.
-				if not defaultArmBody.exitBlock.isTerminated() 'defaultReaches'
-					reachingArms.push(MatchArmExit.create(defaultArmBody.exitBlock, exitVals: defaultArmBody.exitVals, give: defaultArmBody.give, moveMark: self.captureMoveMark()))
-				end 'defaultReaches'
+				// ⭐ **`default throws E.case` / `default panic("…")`** (P1.4b) — a DIVERGING catch-all that
+				// covers every unmatched case (so the match is exhaustive). It is the ONLY legal enum
+				// default; a scalar match may use it too. A PLAIN `default` (then/gives) stays E2046 on an
+				// enum match (a catch-all would silently mask a case added later) and a real body on a
+				// scalar match. A diverging default terminates its body and so reaches no merge.
+				if self.at(TokenKind.throws) 'defaultThrows'
+					self.currentBlock = defaultBody
+					let throwsTok = try self.consume(TokenKind.throws)
+					try self.emitThrowError(func, anchor: throwsTok)
+				end 'defaultThrows' else if self.at(TokenKind.panic) 'defaultPanic'
+					try self.parsePanicStatement(func, block: defaultBody)
+				end 'defaultPanic' else 'plainDefault'
+					if isEnumMatch 'enumPlainDefault'
+						let layout = requireEnumLayout(enumMatch)
+						throw ParseError.matchDefaultEnumMustThrow(layout.kindWord(), typeName: String.from(layout.name), line: defTok.line, column: defTok.column)
+					end 'enumPlainDefault'
+					let defaultArmBody = try self.parseArmBody(func, bodyBlock: defaultBody, isExpression: isExpression, carried: carried)
+					// A `default gives …` arm's OWNED give escapes to the result phi — move it out of its
+					// owner so the post-match drain does not free it (the pattern-arm rule, for the
+					// catch-all arm).
+					if isExpression 'transferDefaultGive'
+						try self.transferGiveToPhi(self.giveValueOf(defaultArmBody.give), anchor: matchTok)
+					end 'transferDefaultGive'
+					// `default` is the last arm, so a fall-through has no next arm to reach — it simply
+					// continues to the merge. So the test is "did control leave?", not `reachesMerge`.
+					if not defaultArmBody.exitBlock.isTerminated() 'defaultReaches'
+						reachingArms.push(MatchArmExit.create(defaultArmBody.exitBlock, exitVals: defaultArmBody.exitVals, give: defaultArmBody.give, moveMark: self.captureMoveMark()))
+					end 'defaultReaches'
+				end 'plainDefault'
 				sawDefault = true
 				prevFallthrough = false
 			end 'defaultArm' else 'patternArm'
@@ -5756,7 +6190,10 @@ export type Parser
 		// exists and the block needs a terminator. `dead` marks it unreachable, the same terminator the
 		// parser gives code after a fully-terminated `if`/`else`. A scalar match cannot reach here with
 		// a dangling block: it is exhaustive only through a `default`, whose BODY consumes this block.
-		if isEnumMatch 'enumFallOffUnreachable'
+		// ⚠ Skipped when `sawDefault` (a `default throws`/`panic`): the final-else block IS that diverging
+		// default's body, already given a real terminator above — overwriting it with `dead` would orphan
+		// the throw/panic and silently drop it.
+		if isEnumMatch and not sawDefault 'enumFallOffUnreachable'
 			currentTestBlock.terminator = Terminator.dead
 
 			// A trailing `and fallthrough` on the LAST arm has no following arm or `default` to fall
@@ -5775,9 +6212,10 @@ export type Parser
 		// EXHAUSTIVENESS. An enum match must cover every case (E2026 listing the missing ones); a
 		// scalar match is exhaustive only through a `default` (without one it would silently do nothing
 		// for an unmatched value). Both are anchored at the closing `end`, as both references anchor it.
-		if isEnumMatch 'enumExhaustive'
+		if isEnumMatch and not sawDefault 'enumExhaustive'
+			// A `default throws`/`panic` covers every unmatched case, so the case-set need not be complete.
 			try self.checkEnumExhaustive(requireEnumLayout(enumMatch), covered: enumCovered)
-		end 'enumExhaustive' else if not sawDefault 'notExhaustive'
+		end 'enumExhaustive' else if not isEnumMatch and not sawDefault 'notExhaustive'
 			var subject = "match"
 			if isExpression 'exprSubject'
 				subject = "match expression"
@@ -5888,7 +6326,13 @@ export type Parser
 		// Whether the body is a `return` is read BEFORE it is parsed — `and fallthrough` after a
 		// `return` cannot combine (the `return` has already left the arm).
 		let isReturn = self.at(TokenKind.return)
+		// ⭐ A match arm body is a single statement, so a `try` used here may take only a single-statement
+		// form — the block forms are E2049 (P1.4b). `parseTry` reads this flag; saved/restored so a nested
+		// construct unwinds it. On a throw the parse aborts, so restoring on the error path is moot.
+		let savedInMatchArm = self.inMatchArmBody
+		self.inMatchArmBody = true
 		let exitBlock = try self.parseStatement(func, block: self.currentBlock)
+		self.inMatchArmBody = savedInMatchArm
 
 		var fellThrough = false
 		if self.at(TokenKind.and) and self.peekKind() == TokenKind.fallthrough 'fallthroughSuffix'
@@ -7336,7 +7780,7 @@ export type Parser
 	function parseUnary(func IrFunction) returns ValueId throws ParseError
 		if self.at(TokenKind.minus) 'neg'
 			let opTok = try self.consume(TokenKind.minus)
-			let operand = try self.parsePrimary(func)
+			let operand = try self.parsePostfixCast(try self.parsePrimary(func))
 			let operandTag = self.tagOf(operand)
 			if not typeClassAdmits(TypeClass.numeric, tag: operandTag) 'notANumber'
 				throw ParseError.nonNumericNegation(typeTagName(operandTag), line: opTok.line, column: opTok.column)
@@ -7360,8 +7804,21 @@ export type Parser
 			end 'which'
 		end 'not'
 
-		return try self.parsePrimary(func)
+		return try self.parsePostfixCast(try self.parsePrimary(func))
 	end 'parseUnary'
+
+	// A primary followed by any trailing `as <Type>` casts. A cast to a coercible integer type
+	// (`0 as ExitCode`, `n as Integer`) is a compile-time NO-OP: the value's bytes are unchanged and a
+	// `return`/assignment coerces its tag via `checkDeclaredType`, so the value passes through with its own
+	// tag. ⚠ Only same-representation numeric casts are modelled; float↔int and struct/String casts are a
+	// follow-up (shv2's `as` in expressions was otherwise unimplemented; no Wave-1 case needs the others).
+	function parsePostfixCast(value ValueId) returns ValueId throws ParseError
+		while self.at(TokenKind.as) 'cast'
+			try self.consume(TokenKind.as)
+			_ = try self.parseTypeReference()
+		end 'cast'
+		return value
+	end 'parsePostfixCast'
 
 	// Append a `binOp` op combining two SSA values; return the ValueId it defines. The
 	// result's TYPE is the operator's: arithmetic and shifts are integer; `and`/`or`/`xor`
@@ -7596,6 +8053,13 @@ export type Parser
 		if self.at(TokenKind.match) 'matchExpr'
 			return try self.parseMatchExpression(func)
 		end 'matchExpr'
+
+		// `try <call> [otherwise <handler>]` in value position — `let r = try f() otherwise 0`, `return try
+		// f() otherwise 42`. Yields the merged result value and leaves control in the merge (or the ok block
+		// for a terminating/propagate handler), exactly as `parseMatchExpression` does.
+		if self.at(TokenKind.try) 'tryExpr'
+			return try self.parseTry(func, resultUsed: true)
+		end 'tryExpr'
 
 		// `Self{…}` — a struct literal naming the enclosing type. `Self` is its own KEYWORD token, not
 		// an identifier, so it cannot ride the identifier arm below; and `{` is what tells it from
@@ -9772,7 +10236,7 @@ export type Parser
 		if self.at(TokenKind.minus) 'neg'
 			let opTok = self.current()
 			self.advance()
-			let operand = try self.evalConstPrimary(stack)
+			let operand = try self.evalConstPostfix(stack)
 			if not typeClassAdmits(TypeClass.numeric, tag: operand.tag) 'notANumber'
 				throw ConstEvalError.defective(ParseError.nonNumericNegation(typeTagName(operand.tag), line: opTok.line, column: opTok.column))
 			end 'notANumber'
@@ -9795,8 +10259,43 @@ export type Parser
 			return try self.foldConstNot(operand, opTok: opTok)
 		end 'not'
 
-		return try self.evalConstPrimary(stack)
+		return try self.evalConstPostfix(stack)
 	end 'evalConstUnary'
+
+	// A constant primary followed by any trailing `as <Type>` casts. A cast to a ranged-int alias or a
+	// primitive is a compile-time NO-OP on the value's bytes (`0 as Integer` is `0`), so the target type
+	// is consumed and the value passes through unchanged — the same shape the emitting path uses for a
+	// numeric range cast. ⚠ The target's RANGE is not checked here (`256 as Octet` would slip through);
+	// full const range-checking is a follow-up shared with `as`-in-expression, which shv2 also lacks.
+	function evalConstPostfix(stack TopLevelDeclIndexArray) returns ConstValue throws ConstEvalError
+		var value = try self.evalConstPrimary(stack)
+		while self.at(TokenKind.as) 'cast'
+			value = try self.applyConstCast(value)
+		end 'cast'
+		return value
+	end 'evalConstPostfix'
+
+	// Consume one `as <Type>` cast and return the value unchanged (see `evalConstPostfix`). The target is a
+	// named alias or a primitive keyword — a single token at this rung (a ranged `int(low to high)` cast is
+	// a follow-up).
+	function applyConstCast(value ConstValue) returns ConstValue throws ConstEvalError
+		try self.consumeConstToken(TokenKind.as)
+		if self.at(TokenKind.identifier) or self.at(TokenKind.int) or self.at(TokenKind.bool) or self.at(TokenKind.float) 'targetType'
+			self.advance()
+			return value
+		end 'targetType'
+		let tok = self.current()
+		throw ConstEvalError.defective(ParseError.nonConstantInitializer("cast target", leftover: String.from(tok.value), line: tok.line, column: tok.column))
+	end 'applyConstCast'
+
+	// Consume `kind` in the constant evaluator, wrapping a mismatch as a `ConstEvalError`.
+	function consumeConstToken(kind TokenKind) throws ConstEvalError
+		if not self.at(kind) 'mismatch'
+			let tok = self.current()
+			throw ConstEvalError.defective(ParseError.unexpectedToken(kind.rawValue, got: tok.kind.rawValue, line: tok.line, column: tok.column))
+		end 'mismatch'
+		self.advance()
+	end 'consumeConstToken'
 
 	// Which `not` this is, and the fold for it — one question, asked of `notOperatorFor`.
 	//

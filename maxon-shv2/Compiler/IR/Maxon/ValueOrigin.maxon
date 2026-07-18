@@ -69,6 +69,10 @@ export function maxonOpResultValue(op MaxonOp) returns MaxonOpResult
 		storeIndirect gives MaxonOpResult.none
 		// A string literal DEFINES a value — the `.rdata` record's address (P1.2 wave A).
 		stringLiteral(result, _) gives MaxonOpResult.value(result)
+		// A throwing call DEFINES its primary result (its error-flag second result is compiler-synthetic
+		// and needs no source origin); the throw/propagate terminators and `panicAbort` define none (P1.4b).
+		tryCall(result, _, _, _, _, _) gives MaxonOpResult.value(result)
+		throwError to panicAbort gives MaxonOpResult.none
 	end 'result'
 end 'maxonOpResultValue'
 

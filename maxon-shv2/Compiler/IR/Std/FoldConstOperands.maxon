@@ -102,8 +102,9 @@ function stdConstInfo(op StdOp) returns StdConstInfo
 		// Extended past `storeIndirect` to take in the system band and the `osWriteStdout`/`rdataAddr`
 		// tail. None is a constant a fold could read: an allocation's result is an OS-chosen address,
 		// `osWriteStdout` defines no value, and `rdataAddr`'s result is a RIP-relative address, not a
-		// constant `constValueOfDef` could rebuild.
-		binOp to rdataAddr gives StdConstInfo.notConst
+		// constant `constValueOfDef` could rebuild. Extended past `rdataAddr` to the P1.4b tail: a
+		// `tryCall`'s result is a call return, `errorReturn` defines nothing, `osExit` defines nothing.
+		binOp to osExit gives StdConstInfo.notConst
 	end 'c'
 end 'stdConstInfo'
 
@@ -172,8 +173,10 @@ function tryFold(op StdOp, constMap ConstValueMap) returns FoldResult
 		// literal in every expression rather than the initializing store of a global.
 		// Extended past `storeIndirect` to take in the system band and the `osWriteStdout`/`rdataAddr`
 		// tail. None has an immediate form to fold INTO: `osAllocPages`/`osWriteStdout` reach the OS in
-		// registers whatever wrote their operands, and `rdataAddr` has no operand at all.
-		binOpImm to rdataAddr gives FoldResult.unchanged
+		// registers whatever wrote their operands, and `rdataAddr` has no operand at all. Extended past
+		// `rdataAddr` to the P1.4b tail (`tryCall`/`errorReturn`/`osExit`): none has an immediate form to
+		// fold into either.
+		binOpImm to osExit gives FoldResult.unchanged
 	end 'f'
 end 'tryFold'
 

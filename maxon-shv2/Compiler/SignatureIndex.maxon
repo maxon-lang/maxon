@@ -142,6 +142,14 @@ let DeclShapeParamConsume = 24 as ContentHash
 let ConsumeBitSet = 25 as ContentHash
 let ConsumeBitClear = 26 as ContentHash
 
+// A function's `throws E` clause discriminator (P1.4b). Its own discriminator for `DeclShapeAlias`'s
+// reason: a callee that GAINS or CHANGES a throws type changes whether each call site needs a `try`
+// (E3055/E3057) and what type the `(e)` binding recovers, so a caller's parse memo must move when the
+// callee's throws clause does. Only THROWING functions are recorded (absence = non-throwing default),
+// exactly as `recordParamConsume` records only consuming ones — so a non-throwing function costs no
+// hash movement.
+let DeclShapeThrows = 27 as ContentHash
+
 // The separator between a file's path and a constant's bare name in a FILE-PRIVATE constant's
 // storage key. `|` is legal in neither a Maxon identifier nor a Windows path, so the composite is
 // unambiguous. Ported verbatim from v1's `fileScopedTopLevelKey` (Project.maxon:189-191), which
@@ -749,6 +757,22 @@ end 'ParamConsumeEntry'
 export typealias ParamConsumeEntryArray = Array with ParamConsumeEntry
 export typealias ParamConsumeMap = Map with (ByteArray, ParamConsumeInfo)
 
+// One function's `throws E` clause, captured by the declaration sweep (P1.4b) — the argument- and
+// call-site dual of its return type, from the SAME token walk. `recordScannedSignature` fills one per
+// THROWING function so a call site can decide whether it needs `try` (E3055/E3057) and what type an
+// `(e)` binding recovers. Travels by NAME and carries no ids, exactly like `ParamConsumeEntry`.
+export type ThrowsClauseEntry
+	export let name as ByteArray
+	export let clause as ThrowsClause
+
+	export static function create(name ByteArray, clause ThrowsClause) returns ThrowsClauseEntry
+		return Self{name: name, clause: clause}
+	end 'create'
+end 'ThrowsClauseEntry'
+
+export typealias ThrowsClauseEntryArray = Array with ThrowsClauseEntry
+export typealias FuncThrowsMap = Map with (ByteArray, ThrowsClause)
+
 // The answer to "does this callee consume any parameter?" — a union so "no recorded entry" is an ANSWER
 // (a borrow-only callee), never confused with an empty-but-present one.
 export union CalleeConsume
@@ -858,6 +882,13 @@ export type ProgramSignatures
 	// `recordParamConsume` from each file's `scanParamConsumes`; last-wins on a duplicate name (a duplicate
 	// function is E3006, reported elsewhere, so the overwrite is never observed), exactly as `returnTypes` is.
 	var funcParamConsumes as ParamConsumeMap
+	// ⭐ Function name -> its `throws E` clause (P1.4b). `throwsOf(callee)` is the door a call site asks
+	// "does this callee throw, and what error type?". Filled by `recordThrows` from each file's scanned
+	// signatures; last-wins on a duplicate name (E3006 reported elsewhere), exactly as `returnTypes` is.
+	// Only THROWING functions are recorded — a callee with no entry is non-throwing, the safe default that
+	// makes recording only the throwing ones correct (the same "absence is the answer" `funcParamConsumes`
+	// rests on).
+	var funcThrows as FuncThrowsMap
 	// The content hash OF THE DECLARATIONS — not of the source they were read from. This is the
 	// second half of a parse memo's key (`QueryEngine.parseMemoKey`), and hashing the folded
 	// ENTRIES rather than the FILES is the whole point of it:
@@ -878,7 +909,7 @@ export type ProgramSignatures
 	export var hash as ContentHash
 
 	export static function create() returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedTypeAliasMap.create(), structTypes: StructLayoutMap.create(), enumTypes: EnumLayoutMap.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), hash: fnvOffsetBasis()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedTypeAliasMap.create(), structTypes: StructLayoutMap.create(), enumTypes: EnumLayoutMap.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), hash: fnvOffsetBasis()}
 	end 'create'
 
 	// Fold ONE file's scanned declarations into the index. Called in SOURCE-PATH order, so the
@@ -890,7 +921,7 @@ export type ProgramSignatures
 	// machinery `mergeArtifact` uses for the identical job — `TypeNameInterner.foldInto` +
 	// `remapMaxonReturnType`. One mechanism, two callers: a second copy of "reconcile a file's ids
 	// into a bigger table" would be free to disagree with this one about what an id means.
-	export function foldFile(scanned FuncReturnTypeEntryArray, aliases RangedTypeAliasArray, structs StructLayoutArray, enums EnumLayoutArray, bindings TopLevelDeclArray, paramConsumes ParamConsumeEntryArray, fileTypeNames TypeNameInterner)
+	export function foldFile(scanned FuncReturnTypeEntryArray, aliases RangedTypeAliasArray, structs StructLayoutArray, enums EnumLayoutArray, bindings TopLevelDeclArray, paramConsumes ParamConsumeEntryArray, throwsEntries ThrowsClauseEntryArray, fileTypeNames TypeNameInterner)
 		for alias in aliases 'eachAlias'
 			self.recordAlias(alias)
 		end 'eachAlias'
@@ -900,6 +931,12 @@ export type ProgramSignatures
 		for entry in paramConsumes 'eachConsume'
 			self.recordParamConsume(entry.name, info: entry.info)
 		end 'eachConsume'
+
+		// Throws clauses travel by NAME and carry no ids either (the throws type is a bare enum name),
+		// so they fold here alongside the consume facts, before the interner reconciliation.
+		for entry in throwsEntries 'eachThrows'
+			self.recordThrows(entry.name, clause: entry.clause)
+		end 'eachThrows'
 
 		// Bindings — `let` and `var` alike — are RECORDED here and EVALUATED later
 		// (`evaluateInitializers`), and the gap between the two is the whole reason a forward
@@ -1008,6 +1045,31 @@ export type ProgramSignatures
 		let info = try self.funcParamConsumes.get(callee) otherwise return CalleeConsume.borrowsAll
 		return CalleeConsume.consumes(info)
 	end 'consumeOf'
+
+	// Record one function's `throws E` clause AND fold it into the hash — the one write, for `record`'s
+	// reason. A NON-throwing function is not recorded (its default answer is "does not throw"), so the
+	// common function costs no map entry and no hash movement, exactly as `recordParamConsume` treats a
+	// borrow-only one.
+	function recordThrows(name ByteArray, clause ThrowsClause)
+		match clause 'k'
+			none then break 'k'
+			throwing(throwsName) then self.recordThrowingClause(name, clause: clause, throwsName: throwsName)
+		end 'k'
+	end 'recordThrows'
+
+	function recordThrowingClause(name ByteArray, clause ThrowsClause, throwsName String)
+		self.funcThrows.upsert(name, value: clause)
+		// The THROWS TYPE NAME rides too: a callee that changes which error it throws changes what type a
+		// caller's `(e)` binding recovers, so the caller's memo must move with it.
+		self.hash = mixBytes(mixBytes(mix(self.hash, value: DeclShapeThrows), bytes: name), bytes: throwsName.toByteArray())
+	end 'recordThrowingClause'
+
+	// ⭐ **THE CALLEE'S `throws` CLAUSE, or `none`** — the door a call site asks: does this callee throw,
+	// and what error type does it throw? `none` (no recorded entry) is every non-throwing function and the
+	// common case. Read by the parser (to type an `(e)` binding) and by SemanticCheck (E3055/E3057).
+	export function throwsOf(callee ByteArray) returns ThrowsClause
+		return try self.funcThrows.get(callee) otherwise ThrowsClause.none
+	end 'throwsOf'
 
 	// Add one declared struct type to the index AND fold it into the hash. The one write, for
 	// `record`'s reason: the table and the hash that keys every parse memo on it cannot disagree

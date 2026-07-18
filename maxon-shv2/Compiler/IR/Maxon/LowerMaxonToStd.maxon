@@ -17,10 +17,11 @@
 // variables are `VarSlot`s, and `mem2reg` does the real SSA work at the Std tier.
 // The map, `defineName`, and `resolveName` are all deleted.
 //
-// Ops that SYNTHESIZE new values (the 1:N desugarings, from M3 on) must not
-// collide with the parser's ids: they allocate from a `ValueIdRef` seeded at
-// `scanMaxValueId(func) + 1`. M1's two lowerings synthesize nothing, so no such
-// ref exists yet.
+// Ops that SYNTHESIZE new values (the 1:N desugarings) must not collide with the parser's ids: they
+// mint from `nextValueId`, a per-function counter seeded at the parser's dense id count (the next free
+// id). P1.4b's error lowering is the first to synthesize — the `+1` flag re-encode, the zero flag of a
+// throwing return, the `panicAbort` exit code — and the Std passes downstream grow their dense columns
+// to fit, so a monotonic counter is all that is needed (no per-function object).
 //
 // THIN for maxon-shv2 M1: lowers exactly the `return 42` slice —
 //   maxon.literal -> StdOp.const
@@ -202,6 +203,11 @@ end 'maxonCmpOpToStdPred'
 // `funcSignatures` registry so `lowerCall` can reorder each call's labelled arguments
 // to the callee's declaration order (the registry is the only whole-program source of
 // parameter names — `IrFunction` carries types but not names).
+// The process exit code a user `panic(…)` terminates with — a conventional abort code (128 + SIGABRT).
+// The value is untested by the corpus (no Wave-1 panic is ever reached at runtime); it must only be
+// non-zero so a reached panic is observably a failure.
+let UserPanicExitCode = 134 as ParsedInt
+
 export function lowerMaxonToStd(maxonModule MaxonModule, funcSignatures FuncSignatureMap, globalData GlobalDataTable) returns StdModule
 	return MaxonToStdLowering.create(maxonModule, funcSignatures: funcSignatures, globalData: globalData).lower()
 end 'lowerMaxonToStd'
@@ -232,9 +238,19 @@ type MaxonToStdLowering
 	// It is a per-function BINDING rather than a parameter threaded through `lowerOp`, because
 	// every op in a function shares one column and the walk is already per-function.
 	var valueTags as ValueTypeTagArray
+	// The `throws` clause of the function CURRENTLY being lowered (P1.4b) — re-pointed per function like
+	// `valueTags`. `emitRetOrErrorReturn` reads it to decide whether a normal `ret`/`retVoid` becomes the
+	// dual-register `errorReturn` (a THROWING function writes both the value AND a zero error flag).
+	var currentThrows as ThrowsClause
+	// Fresh-ValueId minter for the CURRENT function — seeded past the parser's dense id space so the ops
+	// this pass synthesizes (the `+1` re-encoding of a throw, the zero flag of a normal throwing return,
+	// the loads a `panicAbort` expands into) get ids that collide with none the parser minted.
+	// The next fresh ValueId for the CURRENT function — a plain counter (no per-function object) reset to the
+	// parser's dense id space + 1, so the ops this pass synthesizes get ids colliding with none the parser minted.
+	var nextValueId as ValueId
 
 	static function create(maxonModule MaxonModule, funcSignatures FuncSignatureMap, globalData GlobalDataTable) returns MaxonToStdLowering
-		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), funcSignatures: funcSignatures, globalData: globalData, valueTags: ValueTypeTagArray.create()}
+		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), funcSignatures: funcSignatures, globalData: globalData, valueTags: ValueTypeTagArray.create(), currentThrows: ThrowsClause.none, nextValueId: 0}
 	end 'create'
 
 	// The Std type a VALUE computes in — the truth the arith band's `operandType` carries, and a
@@ -289,6 +305,9 @@ type MaxonToStdLowering
 			// Point the type oracle at THIS function before any of its ops are lowered — the
 			// column is dense per function, so every `stdTypeOf` below reads the right one.
 			self.valueTags = srcFunc.valueTags
+			self.currentThrows = srcFunc.throwsTypeName
+			// The next free ValueId is the count of the dense per-value column the parser handed over.
+			self.nextValueId = srcFunc.valueTags.count()
 			self.emitParams(srcFunc)
 
 			for blockRef in srcFunc.blockRefs 'eachBlock'
@@ -349,7 +368,7 @@ type MaxonToStdLowering
 			call(result, callee, args, argLabels, _) then self.lowerCall(result, callee: callee, args: args, argLabels: argLabels, dstBlock: dstBlock)
 			literal(result, value, litType) then self.lowerLiteral(result, value: value, litType: litType, dstBlock: dstBlock)
 			ret(retVal) then self.emitRetOrErrorReturn(retVal, dstBlock: dstBlock, asTerminator: false)
-			retVoid then self.stdModule.appendOp(dstBlock, op: StdOp.retVoid)
+			retVoid then self.emitRetVoidOrErrorReturn(dstBlock, asTerminator: false)
 			binOp(result, lhs, rhs, op) then self.lowerBinOp(result, lhs: lhs, rhs: rhs, op: op, dstBlock: dstBlock)
 			unaryOp(result, operand, op) then self.lowerUnaryOp(result, operand: operand, op: op, dstBlock: dstBlock)
 			compare(result, lhs, rhs, op) then self.lowerCompare(result, lhs: lhs, rhs: rhs, op: op, dstBlock: dstBlock)
@@ -363,6 +382,12 @@ type MaxonToStdLowering
 			loadIndirect(result, addr, offset, valueType) then self.stdModule.appendOp(dstBlock, op: StdOp.loadIndirect(result, addrId: addr, offset: offset, valueType: maxonTypeToStdType(valueType)))
 			storeIndirect(addr, offset, value, valueType) then self.stdModule.appendOp(dstBlock, op: StdOp.storeIndirect(addr, offset: offset, valueId: value, valueType: maxonTypeToStdType(valueType)))
 			stringLiteral(result, bytes) then self.lowerStringLiteral(result, bytes: bytes, dstBlock: dstBlock)
+			// A throwing call: like `call`, plus the second `errorFlag` result (the Std `tryCall`).
+			tryCall(result, errorFlag, callee, args, argLabels, _) then self.lowerTryCall(result, errorFlag: errorFlag, callee: callee, args: args, argLabels: argLabels, dstBlock: dstBlock)
+			// `panicAbort` expands into `osExit` (the message is validated but not printed — see the helper).
+			panicAbort then self.lowerPanicAbort(dstBlock)
+			// The error terminators are never body ops.
+			throwError to propagateError then panic("lowerMaxonToStd: an error terminator appeared as a body op (parser bug — throwError/propagateError are always block terminators)")
 		end 'lower'
 	end 'lowerOp'
 
@@ -371,7 +396,9 @@ type MaxonToStdLowering
 	function lowerTerminator(hlOp MaxonOp, dstBlock IrBlock)
 		match hlOp 'lower'
 			ret(retVal) then self.emitRetOrErrorReturn(retVal, dstBlock: dstBlock, asTerminator: true)
-			retVoid then self.stdModule.setTerminator(dstBlock, op: StdOp.retVoid)
+			retVoid then self.emitRetVoidOrErrorReturn(dstBlock, asTerminator: true)
+			throwError(errValue, _) then self.lowerThrowError(errValue, dstBlock: dstBlock)
+			propagateError(errorFlag) then self.lowerPropagateError(errorFlag, dstBlock: dstBlock)
 			condBranch(cond, thenBlockId, elseBlockId) then self.lowerCondBranch(cond, thenBlockId: thenBlockId, elseBlockId: elseBlockId, dstBlock: dstBlock)
 			branch(targetBlockId) then self.lowerBranch(targetBlockId, dstBlock: dstBlock)
 			literal then panic("lowerMaxonToStd: a `literal` op appeared as a block terminator (parser bug — literal is never a terminator)")
@@ -381,6 +408,8 @@ type MaxonToStdLowering
 			call then panic("lowerMaxonToStd: a `call` op appeared as a block terminator (parser bug — a call is a body op, never a terminator)")
 			globalAddr to storeIndirect then panic("lowerMaxonToStd: a varAccess op appeared as a block terminator (parser bug — a global's address, load and store are all body ops, never terminators)")
 			stringLiteral then panic("lowerMaxonToStd: a `stringLiteral` op appeared as a block terminator (parser bug — a string literal is a value-producing body op, never a terminator)")
+			tryCall then panic("lowerMaxonToStd: a `tryCall` op appeared as a block terminator (parser bug — a throwing call is a value-producing body op, never a terminator)")
+			panicAbort then panic("lowerMaxonToStd: a `panicAbort` op appeared as a block terminator (parser bug — panicAbort is a body op followed by a dead return terminator)")
 		end 'lower'
 	end 'lowerTerminator'
 
@@ -602,23 +631,110 @@ type MaxonToStdLowering
 		end 'carry'
 	end 'carryOplessTerminator'
 
-	// Emit the function-return terminator (or, for a mid-block ret, a body op).
-	// M1 has only the PLAIN-ret arm: a non-throwing, non-interface-returning
-	// function hands its single value back via `StdOp.ret`. The throwing
-	// (errorReturn + zero flag) and fat-interface (errorReturn + witness) arms
-	// GROW in at M15 / M6 — once the Std dialect gains `errorReturn` and
-	// functions can throw or return interface types. `asTerminator` toggles
+	// Emit the function-return terminator (or, for a mid-block ret, a body op) for a VALUE return. In a
+	// NON-throwing function it is a plain `StdOp.ret`. In a THROWING one it is the dual-register
+	// `errorReturn(retVal, 0)` — the primary value AND a ZERO error flag (no error in flight), so the ABI
+	// is honored on every exit of a throwing function, not just the throw. `asTerminator` toggles
 	// setTerminator (block-final) vs appendOp (the rare mid-block ret).
 	//
-	// The VOID return has no such variance to carry (no value, so nothing to widen,
-	// box, or pair with an error flag), so it lowers 1:1 at its match arm — through
-	// `StdOp.retVoid` — rather than through this helper.
+	// ⭐ **THIS IS THE ONE PLACE THE ABI DECIDES ret-vs-errorReturn** — from the function's `throws` clause,
+	// not from the token — so the parser's ordinary `ret` needs no knowledge of the error channel.
 	function emitRetOrErrorReturn(retVal ValueId, dstBlock IrBlock, asTerminator bool)
-		let plainOp = StdOp.ret(retVal)
-		if asTerminator 'asTerm'
-			self.stdModule.setTerminator(dstBlock, op: plainOp)
-		end 'asTerm' else 'asBody'
-			self.stdModule.appendOp(dstBlock, op: plainOp)
-		end 'asBody'
+		if throwsClauseIsThrowing(self.currentThrows) 'throwing'
+			let zeroFlag = self.emitZeroConst(dstBlock)
+			self.emitTerminatorOrBody(dstBlock, op: StdOp.errorReturn(retVal, errorFlagId: zeroFlag), asTerminator: asTerminator)
+			return
+		end 'throwing'
+		self.emitTerminatorOrBody(dstBlock, op: StdOp.ret(retVal), asTerminator: asTerminator)
 	end 'emitRetOrErrorReturn'
+
+	// The VOID-return counterpart. A non-throwing function returns nothing (`StdOp.retVoid`); a THROWING
+	// one still writes BOTH registers — a family-default `0` primary and a `0` error flag — through
+	// `errorReturn`, because even a void throwing function's caller reads the flag register.
+	function emitRetVoidOrErrorReturn(dstBlock IrBlock, asTerminator bool)
+		if throwsClauseIsThrowing(self.currentThrows) 'throwing'
+			let defaultVal = self.emitZeroConst(dstBlock)
+			let zeroFlag = self.emitZeroConst(dstBlock)
+			self.emitTerminatorOrBody(dstBlock, op: StdOp.errorReturn(defaultVal, errorFlagId: zeroFlag), asTerminator: asTerminator)
+			return
+		end 'throwing'
+		self.emitTerminatorOrBody(dstBlock, op: StdOp.retVoid, asTerminator: asTerminator)
+	end 'emitRetVoidOrErrorReturn'
+
+	// `throw E.case` / `throw e` — the `ordinal + 1` re-encoding lives HERE (the ABI in one place, per
+	// PLAN.md), not in the parser: `errValue` is the caught ordinal (a `throw E.case` literal or the `(e)`
+	// binding), and the flag is `errValue + 1` — the runtime add covering both the compile-time-constant
+	// and the caught-runtime-value case uniformly. The primary register carries a family-default `0`,
+	// which the caller ignores when the flag is non-zero.
+	function lowerThrowError(errValue ValueId, dstBlock IrBlock)
+		let one = self.mintStdValueId()
+		self.stdModule.appendOp(dstBlock, op: StdOp.const(one, value: 1, valueType: StdType.i64))
+		let flag = self.mintStdValueId()
+		self.stdModule.appendOp(dstBlock, op: StdOp.binOp(flag, lhs: errValue, rhs: one, opcode: StdBinOpcode.add, operandType: StdType.i64))
+		let defaultVal = self.emitZeroConst(dstBlock)
+		self.stdModule.setTerminator(dstBlock, op: StdOp.errorReturn(defaultVal, errorFlagId: flag))
+	end 'lowerThrowError'
+
+	// An uncaught `try f()` — re-publish the caught flag VERBATIM. `errorFlag` is ALREADY the `ordinal + 1`
+	// encoding (it came straight out of a `tryCall`), so there is NO re-encoding — the whole reason
+	// `propagateError` is distinct from `throwError`.
+	function lowerPropagateError(errorFlag ValueId, dstBlock IrBlock)
+		let defaultVal = self.emitZeroConst(dstBlock)
+		self.stdModule.setTerminator(dstBlock, op: StdOp.errorReturn(defaultVal, errorFlagId: errorFlag))
+	end 'lowerPropagateError'
+
+	// A throwing free call `try callee(args…)` — the arg slotting is `lowerCall`'s exactly (it IS a call),
+	// plus the `errorFlag` second result. A `tryCall` never targets a compiler-internal callee (a builtin
+	// does not throw), and the parser has already rejected a non-throwing one (E3055).
+	function lowerTryCall(result ValueId, errorFlag ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, dstBlock IrBlock)
+		let sig = try self.funcSignatures.get(callee) otherwise panic("lowerTryCall: throwing callee '{String.from(callee)}' has no signature — SemanticCheck must reject an unknown callee before lowering")
+		match slotCallArgs(sig, args: args, argLabels: argLabels) 'slot'
+			ordered(argIds) then self.stdModule.appendOp(dstBlock, op: StdOp.tryCall(result, errorFlagId: errorFlag, callee: callee, args: argIds))
+			arityMismatch then panic("lowerTryCall: arity mismatch for '{String.from(callee)}' reached lowering — SemanticCheck must gate it")
+			unknownLabel then panic("lowerTryCall: unknown argument label for '{String.from(callee)}' reached lowering — SemanticCheck must gate it")
+			duplicateArg then panic("lowerTryCall: duplicate argument for '{String.from(callee)}' reached lowering — SemanticCheck must gate it")
+		end 'slot'
+	end 'lowerTryCall'
+
+	// `panic("message")` — exit the process with a non-zero code. The parser emitted a dead return
+	// terminator after this op, so the block stays well-formed though control never reaches it.
+	//
+	// ⚠ **THE MESSAGE IS NOT PRINTED at this rung.** It is parsed and type-checked (it must be a `String`),
+	// but printing it would need `osWriteStdout` — and hence the Win64 `WriteFile` import wired even for a
+	// panic-only program that never uses `print`, plus a stderr write path. No Wave-1 case ever REACHES a
+	// panic (every one is a `default panic(…)` on a matched value or an `otherwise panic(…)` on a
+	// succeeding call), so the message text is untested; printing it is a follow-up. The exit — via
+	// `ExitProcess`, always imported by the entry stub — is what makes a reached panic observably a
+	// failure, and that IS emitted.
+	function lowerPanicAbort(dstBlock IrBlock)
+		let code = self.mintStdValueId()
+		self.stdModule.appendOp(dstBlock, op: StdOp.const(code, value: UserPanicExitCode, valueType: StdType.i64))
+		self.stdModule.appendOp(dstBlock, op: StdOp.osExit(code))
+	end 'lowerPanicAbort'
+
+	// A fresh `const 0` (i64) — the family-default primary value and the zero error flag both need one, at
+	// several sites, so the mint-and-append lives in one place.
+	function emitZeroConst(dstBlock IrBlock) returns ValueId
+		let zero = self.mintStdValueId()
+		self.stdModule.appendOp(dstBlock, op: StdOp.const(zero, value: 0, valueType: StdType.i64))
+		return zero
+	end 'emitZeroConst'
+
+	// A fresh ValueId for the current function, past the parser's dense id space — a plain counter bump,
+	// no per-function object. The Std passes downstream grow their dense columns to fit the highest id, so
+	// a monotonically increasing id is all that is required.
+	function mintStdValueId() returns ValueId
+		let id = self.nextValueId
+		self.nextValueId = self.nextValueId + 1
+		return id
+	end 'mintStdValueId'
+
+	// set-as-terminator vs append-as-body, shared by the return/error-return emitters.
+	function emitTerminatorOrBody(dstBlock IrBlock, op StdOp, asTerminator bool)
+		if asTerminator 'asTerm'
+			self.stdModule.setTerminator(dstBlock, op: op)
+		end 'asTerm' else 'asBody'
+			self.stdModule.appendOp(dstBlock, op: op)
+		end 'asBody'
+	end 'emitTerminatorOrBody'
 end 'MaxonToStdLowering'

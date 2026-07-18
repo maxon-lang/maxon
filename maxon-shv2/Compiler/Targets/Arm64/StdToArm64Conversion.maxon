@@ -43,6 +43,13 @@ let Arm64IntReturnReg = Arm64Register.x0
 // The primary FLOAT return register (AAPCS64) — a float result returns in d0, not x0.
 let Arm64FloatReturnReg = Arm64Register.d0
 
+// The dual-register ERROR-FLAG return register (P1.4b) — the arm64 twin of x64's R10. x9 is an AAPCS64
+// caller-saved TEMPORARY (x9–x15) and NOT an argument register (x0–x7), mirroring R10's "caller-saved,
+// not an argument register, so no return/argument conflict" choice. A `tryCall` reads the callee's flag
+// from here; an `errorReturn` writes it here. ⚠ arm64 error tests are per-target gated OUT of this
+// machine's suite, so this path is verified by the arm64 BUILD, not by execution.
+let Arm64FlagReturnReg = Arm64Register.x9
+
 // The macOS `mmap` call shape `lowerOsAllocPages` emits: `mmap(NULL, size, PROT_READ|PROT_WRITE,
 // MAP_ANON|MAP_PRIVATE, -1, 0)` — the macOS twin of x64's VirtualAlloc constants. Named rather than
 // spelled as bare hex at the call site: `0x1002` is unreadable and `MAP_ANON|MAP_PRIVATE` is the fact.
@@ -323,6 +330,9 @@ type StdToArm64Lowering
 			osAllocPages(resultId, sizeId) then self.lowerOsAllocPages(resultId, sizeId: sizeId, dstRef: dstRef)
 			osWriteStdout(bufId, lenId) then self.lowerOsWriteStdout(bufId, lenId: lenId, dstRef: dstRef)
 			rdataAddr(resultId, label) then self.emit(dstRef, op: TargetOp.arm64LeaRdata(TargetVReg.virtual(resultId), label: label))
+			tryCall(resultId, errorFlagId, callee, args) then self.lowerTryCall(resultId, errorFlagId: errorFlagId, callee: callee, args: args, dstRef: dstRef)
+			errorReturn(retValId, errorFlagId) then self.lowerErrorReturn(retValId, errorFlagId: errorFlagId, dstRef: dstRef, asTerminator: false)
+			osExit(codeId) then self.lowerOsExit(codeId, dstRef: dstRef)
 		end 'lower'
 	end 'lowerBodyOp'
 
@@ -346,6 +356,9 @@ type StdToArm64Lowering
 			osAllocPages then panic("lowerStdToArm64: an `osAllocPages` op appeared as a block terminator (lowering bug)")
 			osWriteStdout then panic("lowerStdToArm64: an `osWriteStdout` op appeared as a block terminator (lowering bug)")
 			rdataAddr then panic("lowerStdToArm64: an `rdataAddr` op appeared as a block terminator (lowering bug)")
+			tryCall then panic("lowerStdToArm64: a `tryCall` op appeared as a block terminator (lowering bug — a throwing call is a body op)")
+			errorReturn(retValId, errorFlagId) then self.lowerErrorReturn(retValId, errorFlagId: errorFlagId, dstRef: dstRef, asTerminator: true)
+			osExit then panic("lowerStdToArm64: an `osExit` op appeared as a block terminator (lowering bug — a process exit is a body op)")
 		end 'lower'
 	end 'lowerTerminatorOp'
 
@@ -634,6 +647,38 @@ type StdToArm64Lowering
 		self.emit(dstRef, op: TargetOp.arm64BranchLink(callee))
 		self.emit(dstRef, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: arm64PhysReg(Arm64IntReturnReg)))
 	end 'lowerCall'
+
+	// The arm64 twin of x64's `lowerTryCall` (P1.4b): args + `bl` as `lowerCall`, then capture BOTH return
+	// registers — the primary value from **x0** and the error flag from **x9**. The two capture moves are
+	// resequenced through the parallel-copy sequencer (`colorAndDropSelfMoves`), exactly as x64's are — the
+	// resequencer is target-agnostic (it reads whatever physical sources the captures name). Emitted
+	// consecutively right after the call so its "call followed by two virtual-dest/physical-src moves" test
+	// identifies the pair.
+	function lowerTryCall(resultId ValueId, errorFlagId ValueId, callee ByteArray, args ValueIdArray, dstRef BlockRef)
+		for k in 0 upto args.count() 'eachArg'
+			let argId = try args.get(k) otherwise panic("lowerTryCall: args.get OOB at {k}")
+			self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(arm64ArgRegisterAt(k)), srcReg: TargetVReg.virtual(argId)))
+		end 'eachArg'
+		self.emit(dstRef, op: TargetOp.arm64BranchLink(callee))
+		self.emit(dstRef, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: arm64PhysReg(Arm64IntReturnReg)))
+		self.emit(dstRef, op: TargetOp.movRegReg(TargetVReg.virtual(errorFlagId), srcReg: arm64PhysReg(Arm64FlagReturnReg)))
+	end 'lowerTryCall'
+
+	// The arm64 dual-register `errorReturn`: write the value to **x0** and the flag to **x9**, then the
+	// return terminator (which `Arm64PrologueEpilogue` recognizes exactly as an ordinary return's, since
+	// this emits the same `arm64Ret`). Both moves unconditional, mirroring x64's `lowerErrorReturn`.
+	function lowerErrorReturn(retValId ValueId, errorFlagId ValueId, dstRef BlockRef, asTerminator bool)
+		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64IntReturnReg), srcReg: TargetVReg.virtual(retValId)))
+		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64FlagReturnReg), srcReg: TargetVReg.virtual(errorFlagId)))
+		self.emitRet(dstRef, asTerminator: asTerminator)
+	end 'lowerErrorReturn'
+
+	// Lower `osExit(code)` to `_exit(code)` through the libSystem GOT — the macOS twin of x64's ExitProcess
+	// path (the same import the arm64 entry stub uses). AAPCS64 puts the code in x0.
+	function lowerOsExit(codeId ValueId, dstRef BlockRef)
+		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x0), srcReg: TargetVReg.virtual(codeId)))
+		self.emit(dstRef, op: TargetOp.arm64ImportCall(machoImportSlotIndex(MachoImportSlot.exit)))
+	end 'lowerOsExit'
 
 	// Lower `osAllocPages(size)` to the macOS page source `mmap(NULL, size, PROT_READ|PROT_WRITE,
 	// MAP_ANON|MAP_PRIVATE, -1, 0)` through the libSystem GOT — the arm64 twin of x64's `lowerOsAllocPages`

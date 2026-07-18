@@ -277,10 +277,40 @@ function colorAndDropSelfMoves(module TargetModule, func IrFunction, alloc Alloc
 		let bodyCount = block.opRefs.count()
 
 		var newRefs = OpIndexArray.create()
+		// ⭐ **THE TWO-RESULT CAPTURE OF A `tryCall`** — a call op followed by TWO virtual-dest /
+		// physical-src moves (`result ← R8/x0`, `flag ← R10/x9`). A single-result call is followed by
+		// ONE; parameter moves have the same shape but are at function entry, never after a call — so
+		// the `prevWasCall` gate discriminates them. The two moves form a PARALLEL COPY: coloring them
+		// onto each other's source registers (result→R10, flag→R8) makes a naive `mov;mov` collapse
+		// value and flag into one register (v1's array-sort miscompile). `sequenceParallelCopy` orders
+		// them safely, breaking a cycle with `xchg` (no scratch), exactly as the phi-edge copies do.
+		var prevWasCall = false
+		var skipNext = false
 		for pos in 0 upto bodyCount 'eachOp'
 			let opIdx = try block.opRefs.get(pos) otherwise panic("colorAndDropSelfMoves: opRefs.get OOB")
-			let colored = colorTargetOp(try module.ops.get(opIdx) otherwise panic("colorAndDropSelfMoves: opIdx not in module.ops"), alloc: alloc)
+			if skipNext 'flagCaptureHandled'
+				skipNext = false
+				continue
+			end 'flagCaptureHandled'
+
+			let uncolored = try module.ops.get(opIdx) otherwise panic("colorAndDropSelfMoves: opIdx not in module.ops")
+
+			// A `tryCall` capture pair is resequenced through the parallel-copy sequencer, using the
+			// UNCOLORED ops (their dests are still virtual, so their ids can be looked up in `alloc`).
+			if prevWasCall and pos + 1 < bodyCount and isCaptureMove(uncolored) 'maybePair'
+				let nextIdx = try block.opRefs.get(pos + 1) otherwise panic("colorAndDropSelfMoves: opRefs.get OOB at {pos + 1}")
+				let nextUncolored = try module.ops.get(nextIdx) otherwise panic("colorAndDropSelfMoves: opIdx {nextIdx} not in module.ops")
+				if isCaptureMove(nextUncolored) 'isPair'
+					emitResequencedCapture(module, resultOp: uncolored, flagOp: nextUncolored, alloc: alloc, newRefs: newRefs)
+					skipNext = true
+					prevWasCall = false
+					continue
+				end 'isPair'
+			end 'maybePair'
+
+			let colored = colorTargetOp(uncolored, alloc: alloc)
 			try module.ops.set(opIdx, value: colored) otherwise panic("colorAndDropSelfMoves: ops.set OOB")
+			prevWasCall = colored.rawValue.isCall
 			if isPhysicalSelfMove(colored) 'selfMove'
 				continue
 			end 'selfMove'
@@ -297,6 +327,85 @@ function colorAndDropSelfMoves(module TargetModule, func IrFunction, alloc Alloc
 		end 'hasTerm'
 	end 'eachBlock'
 end 'colorAndDropSelfMoves'
+
+// True for a `movRegReg` whose DEST is still virtual and whose SRC is a physical register — the shape of
+// a call-result capture (`virtual(result) ← physical(returnReg)`). Read on the UNCOLORED op, before its
+// dest is rewritten to a physical register.
+function isCaptureMove(op TargetOp) returns bool
+	return match op 'm'
+		movRegReg(dst, src) gives vregIsVirtual(dst) and vregIsPhysical(src)
+		prologue to movRegImm32 gives false
+		movReg32Reg32 to leaRegRdata gives false
+		arm64Ret to arm64ImportCall gives false
+	end 'm'
+end 'isCaptureMove'
+
+function vregIsVirtual(vreg TargetVReg) returns bool
+	return match vreg 'v'
+		virtual gives true
+		physical gives false
+	end 'v'
+end 'vregIsVirtual'
+
+function vregIsPhysical(vreg TargetVReg) returns bool
+	return match vreg 'v'
+		virtual gives false
+		physical gives true
+	end 'v'
+end 'vregIsPhysical'
+
+// Resequence a `tryCall`'s two capture moves as a parallel copy and splice the ordered result into
+// `newRefs`. The two DESTS are colored via `alloc`; the two SRCS are the physical return registers the
+// lowering already fixed. `sequenceParallelCopy` drops a self-move (a hint-satisfied capture emits
+// nothing) and breaks a value/flag swap with `xchg` — the whole point of routing through it.
+function emitResequencedCapture(module TargetModule, resultOp TargetOp, flagOp TargetOp, alloc Allocation, newRefs OpIndexArray)
+	var dsts = RegNumColumn.create()
+	var srcs = RegNumColumn.create()
+	dsts.push(alloc.regNumOf(captureMoveDestId(resultOp)))
+	srcs.push(captureMoveSrcReg(resultOp))
+	dsts.push(alloc.regNumOf(captureMoveDestId(flagOp)))
+	srcs.push(captureMoveSrcReg(flagOp))
+
+	let moves = sequenceParallelCopy(dsts, srcs: srcs)
+	for i in 0 upto moves.count() 'eachMove'
+		let dst = TargetVReg.physical(try moves.dsts.get(i) otherwise panic("emitResequencedCapture: dsts.get OOB"))
+		let src = TargetVReg.physical(try moves.srcs.get(i) otherwise panic("emitResequencedCapture: srcs.get OOB"))
+		let swap = try moves.isSwap.get(i) otherwise panic("emitResequencedCapture: isSwap.get OOB")
+		let opIdx = module.ops.count()
+		module.ops.push(TargetOp.xchgRegReg(dst, b: src) if swap else TargetOp.movRegReg(dst, srcReg: src))
+		newRefs.push(opIdx)
+	end 'eachMove'
+end 'emitResequencedCapture'
+
+// The virtual DEST id of a capture move (guarded by `isCaptureMove`, so the dest is always virtual).
+function captureMoveDestId(op TargetOp) returns ValueId
+	match op 'm'
+		movRegReg(dst, _) then return virtualIdOf(dst)
+		default panic("captureMoveDestId: not a movRegReg")
+	end 'm'
+end 'captureMoveDestId'
+
+// The physical SRC register-number of a capture move (guarded by `isCaptureMove`, so the src is physical).
+function captureMoveSrcReg(op TargetOp) returns RegNum
+	match op 'm'
+		movRegReg(_, src) then return physicalRegOf(src)
+		default panic("captureMoveSrcReg: not a movRegReg")
+	end 'm'
+end 'captureMoveSrcReg'
+
+function virtualIdOf(vreg TargetVReg) returns ValueId
+	match vreg 'v'
+		virtual(id) then return id
+		physical then panic("virtualIdOf: expected a virtual register")
+	end 'v'
+end 'virtualIdOf'
+
+function physicalRegOf(vreg TargetVReg) returns RegNum
+	match vreg 'v'
+		physical(reg) then return reg
+		virtual then panic("physicalRegOf: expected a physical register")
+	end 'v'
+end 'physicalRegOf'
 
 // If the op at layout sequence `seq` is a reuse def whose input outlived it, splice the physical
 // `mov dest, input` the allocator recorded into `newRefs` BEFORE the op's own index —

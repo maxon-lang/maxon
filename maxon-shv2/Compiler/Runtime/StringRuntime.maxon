@@ -304,6 +304,10 @@ function classifyRuntimeCall(op MaxonOp, usage RuntimeUsage)
 	match op 'op'
 		call(_, callee, _, _, _) then recordCallUsage(callee, usage: usage)
 		literal to stringLiteral then break 'op'
+		// A throwing call names a user callee whose runtime usage is scanned exactly as `call`'s is; the
+		// throw/propagate terminators and `panicAbort` name no user callee (panic exits directly) (P1.4b).
+		tryCall(_, _, callee, _, _, _) then recordCallUsage(callee, usage: usage)
+		throwError to panicAbort then break 'op'
 	end 'op'
 end 'classifyRuntimeCall'
 

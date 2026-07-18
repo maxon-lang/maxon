@@ -1,0 +1,59 @@
+// Test: try-otherwise-value-flow.fallback-path-returns-otherwise-value
+enum E
+	bad
+end 'E'
+
+function alwaysThrows(x ExitCode) returns ExitCode throws E
+	if x >= 0 'always'
+		throw E.bad
+	end 'always'
+	return x
+end 'alwaysThrows'
+
+function main() returns ExitCode
+	let v = try alwaysThrows(5) otherwise 99
+	return v
+end 'main'
+---
+ExitCode: 99
+---
+func @alwaysThrows {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc greaterEqual, always
+    x64.jmp ifcont
+  always:
+    x64.movRegImm32 rax, 0
+    x64.leaRegRegImm32 r10, rax, 1
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r10, 0
+    x64.movRegReg r8, rcx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 5
+    x64.callDirect alwaysThrows
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 r8, 99
+    x64.jmp trycont
+  tryok:
+    x64.jmp trycont
+  trycont:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

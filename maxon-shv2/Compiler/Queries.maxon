@@ -408,5 +408,23 @@ function reportParseError(project Project, path FilePath, error ParseError)
 		// `reserved-double-underscore.md` `maxoncstderr` goldens gate this stderr exactly, so the two
 		// compilers must not drift.
 		reservedIdentifier(name, line, column) then reportPositioned(project, code: ErrorCode.reservedIdentifier, message: "identifier '{name}' is reserved: declarations starting with '__' are reserved for compiler internals", line: line, column: column, filePath: path)
+		// The scalar-error arms (P1.4b). E3058/E3059/E2049 render the parser's error-handling diagnostics
+		// (the `ParseError` variants are declared in `Parser.maxon`; this is their render half). Each
+		// message is byte-for-byte the reference compiler's — the `error-handling.md`/`match-statements.md`
+		// `maxoncstderr` goldens gate them exactly.
+		otherwiseWithoutTry(line, column) then reportPositioned(project, code: ErrorCode.otherwiseRequiresTry, message: "otherwise requires try expression", line: line, column: column, filePath: path)
+		errorTypeMismatch(detail, line, column) then reportPositioned(project, code: ErrorCode.errorTypeMismatch, message: "type mismatch: '{detail}'", line: line, column: column, filePath: path)
+		tryBlockFormInMatchArm(isOtherwiseForm, line, column) then reportPositioned(project, code: ErrorCode.matchBlockStatement, message: tryBlockFormMessage(isOtherwiseForm), line: line, column: column, filePath: path)
+		tryOnNonThrowing(callee, line, column) then reportPositioned(project, code: ErrorCode.tryRequiresThrowingFunction, message: "try requires a throwing function: '{callee}' does not throw'", line: line, column: column, filePath: path)
 	end 'kind'
 end 'reportParseError'
+
+// The two E2049 block-form-in-match-arm messages (P1.4b), split out so the `reportParseError` arm stays a
+// single expression. A block-form `try 'label' … end` (grouping multiple calls) versus a block-handler
+// `otherwise 'label' … end` — both name the single-statement alternatives an arm may use instead.
+function tryBlockFormMessage(isOtherwiseForm bool) returns String
+	if isOtherwiseForm 'otherwiseForm'
+		return "block-form 'try ... otherwise 'label' ... end' is not allowed in a match arm; use 'otherwise panic(\"...\")', 'otherwise ignore', or 'otherwise return/throw/...' instead"
+	end 'otherwiseForm'
+	return "block-form 'try ... end' is not allowed in a match arm; use a single-statement try form (e.g. 'try call()' or 'try call() otherwise panic(...)') instead"
+end 'tryBlockFormMessage'

@@ -292,8 +292,7 @@ end 'main'
 3
 ```
 
-<!-- disabled-test: enum-exhaustive.default-throws -->
-<!-- P1.4 error handling (throws / try / otherwise) -->
+<!-- test: enum-exhaustive.default-throws -->
 ```maxon
 enum Color
 		red

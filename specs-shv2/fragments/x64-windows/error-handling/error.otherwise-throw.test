@@ -1,0 +1,82 @@
+// Test: error.otherwise-throw
+
+typealias Integer = int(i64.min to i64.max)
+
+// Single-statement otherwise: rethrow a different error type
+enum InnerError implements Error
+	low
+end 'InnerError'
+
+enum OuterError implements Error
+	high
+end 'OuterError'
+
+function inner() returns Integer throws InnerError
+	throw InnerError.low
+end 'inner'
+
+function outer() returns Integer throws OuterError
+	let v = try inner() otherwise throw OuterError.high
+	return v
+end 'outer'
+
+function main() returns ExitCode
+	let v = try outer() otherwise 77
+	return v
+end 'main'
+---
+ExitCode: 77
+---
+func @inner {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 rax, 0
+    x64.leaRegRegImm32 r10, rax, 1
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}
+
+func @outer {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect inner
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 rax, 0
+    x64.leaRegRegImm32 r10, rax, 1
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.movRegImm32 r10, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect outer
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 r8, 77
+    x64.jmp trycont
+  tryok:
+    x64.jmp trycont
+  trycont:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

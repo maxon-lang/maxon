@@ -25,32 +25,83 @@ let MainWrongReturnMessage = "Function 'main' must return ExitCode"
 // `funcSignatures` registry carries.
 export function semanticCheck(project Project, module MaxonModule)
 	checkMainFunction(project)
-	checkCalls(project, module: module)
+	checkMainCannotThrow(project, module: module)
+	// The whole-program throws map (name -> its `throws` clause, throwing functions only) — built once
+	// from the merged module and read at every call site to decide whether a plain call needs a `try`
+	// (E3057). The parser handled the mirror rule (E3055, `try` on a non-throwing call) at the `try` token.
+	let throwsMap = buildThrowsMap(module)
+	checkCalls(project, module: module, throwsMap: throwsMap)
 end 'semanticCheck'
+
+// E3054 — `main` cannot declare `throws`: there is no caller left to handle the error. Scans the merged
+// module for `main`'s function (whose `throwsTypeName` the parser stamped), positioned at its name token.
+function checkMainCannotThrow(project Project, module MaxonModule)
+	for func in module.functions 'eachFunc'
+		if func.name == MainFunctionName and throwsClauseIsThrowing(func.throwsTypeName) 'mainThrows'
+			reportPositioned(project, code: ErrorCode.mainCannotThrow, message: "main cannot throw: 'main'", line: func.nameLine, column: func.nameColumn, filePath: func.sourceFilePath)
+		end 'mainThrows'
+	end 'eachFunc'
+end 'checkMainCannotThrow'
+
+// The throws clauses of every THROWING function in the program, keyed by (mangled) name. A non-throwing
+// function is absent — the same "absence is the answer" the parser's `ProgramSignatures.funcThrows` uses.
+function buildThrowsMap(module MaxonModule) returns FuncThrowsMap
+	var throwsMap = FuncThrowsMap.create()
+	for func in module.functions 'eachFunc'
+		if throwsClauseIsThrowing(func.throwsTypeName) 'throwing'
+			throwsMap.upsert(func.name, value: func.throwsTypeName)
+		end 'throwing'
+	end 'eachFunc'
+	return throwsMap
+end 'buildThrowsMap'
 
 // Validate every `call` op against its callee's signature. Walked by FUNCTION (not the
 // flat op array) so each call's diagnostic can name its declaring file (`func.sourceFilePath`);
 // the flat op INDEX still keys the call-site span in `project.opRanges`. Calls are body
 // ops (never terminators), so only `block.opRefs` is scanned.
-function checkCalls(project Project, module MaxonModule)
+function checkCalls(project Project, module MaxonModule, throwsMap FuncThrowsMap)
 	for func in module.functions 'eachFunc'
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise panic("checkCalls: blockRef from func.blockRefs not in module.blocks")
 			for opIdx in block.opRefs 'eachOp'
 				let op = try module.ops.get(opIdx) otherwise panic("checkCalls: opIdx {opIdx} not in module.ops")
 				match op 'op'
-					call(_, callee, args, argLabels, argRanges) then validateCall(project, func: func, opIndex: opIdx, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges)
+					// A PLAIN call — its args are validated, and a call to a THROWING callee that is not
+					// under a `try` is E3057 (it is a `call`, not a `tryCall`, precisely because no `try`
+					// covered it).
+					call(_, callee, args, argLabels, argRanges) then validatePlainCall(project, func: func, opIndex: opIdx, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, throwsMap: throwsMap)
 					// Extended past `branch` to take in the varAccess band and the `stringLiteral` op: a
 					// global's address/load/store and a string literal are not calls and have nothing for
 					// this check to say. Their CALLEE-shaped question — "does this name resolve?" — was
 					// answered before the op was emitted (`ProgramSignatures` for a global; a literal
 					// resolves nothing), which is why there is no E3004 twin for either.
 					literal to stringLiteral then break 'op'
+					// A `tryCall`'s args are validated exactly like a `call`'s (it IS a call plus a flag);
+					// its throws-compatibility (E3055) was checked by the parser at the `try` token.
+					tryCall(_, _, callee, args, argLabels, argRanges) then validateCall(project, func: func, opIndex: opIdx, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges)
+					// The error terminators and the panic op read no callee signature.
+					throwError to panicAbort then break 'op'
 				end 'op'
 			end 'eachOp'
 		end 'eachBlock'
 	end 'eachFunc'
 end 'checkCalls'
+
+// A plain call: validate its arguments, then — if it targets a THROWING callee — report E3057 (a throwing
+// call made without `try`). The `tryCall` path skips this: it IS the `try`.
+function validatePlainCall(project Project, func IrFunction, opIndex OpIndex, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, throwsMap FuncThrowsMap)
+	validateCall(project, func: func, opIndex: opIndex, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges)
+	if isCompilerInternalCallee(callee) 'internal'
+		return
+	end 'internal'
+	// `throwsMap` holds ONLY throwing functions, so membership IS "the callee throws" — a non-allocating
+	// `contains`, not a `get otherwise ThrowsClause.none` (whose fallback would box a `none` for every one
+	// of the program's calls that is not to a throwing callee, i.e. almost all of them).
+	if throwsMap.contains(callee) 'throwing'
+		let callRange = project.opRanges.get(opIndex)
+		reportPositioned(project, code: ErrorCode.throwingFunctionRequiresTry, message: "throwing function requires try: '{String.from(callee)}'", line: callRange.line, column: callRange.column, filePath: func.sourceFilePath)
+	end 'throwing'
+end 'validatePlainCall'
 
 // Validate one call site. Reports the FIRST error found (unknown callee, then the arg
 // slotting result: arity, unknown label, or a parameter given two arguments; then, on a
