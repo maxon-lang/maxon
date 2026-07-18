@@ -4633,9 +4633,12 @@ export type Parser
 		self.scope.pushScope()
 		if hasBinding 'bindE'
 			let eType = self.tryErrorEnumType(callee)
-			let one = self.emitLiteral(1, valueType: MaxonType.integer, range: SourceRange.ofToken(labelTok))
+			// DECODE the caught flag back to the enum ordinal: `e = flag - ErrorFlagOrdinalBias`, the exact
+			// inverse of the Std-tier throw ENCODE (`lowerThrowError`). Both read the one `ErrorFlagOrdinalBias`
+			// so a change to the bias cannot leave this decode silently binding `match e` to the wrong case.
+			let bias = self.emitLiteral(ErrorFlagOrdinalBias, valueType: MaxonType.integer, range: SourceRange.ofToken(labelTok))
 			let eValue = self.mintValueOfType(eType)
-			self.artifact.emitOp(errBlock, op: MaxonOp.binOp(eValue, lhs: flag, rhs: one, op: MaxonBinOp.sub), range: SourceRange.ofToken(labelTok))
+			self.artifact.emitOp(errBlock, op: MaxonOp.binOp(eValue, lhs: flag, rhs: bias, op: MaxonBinOp.sub), range: SourceRange.ofToken(labelTok))
 			_ = try self.scope.declareValueBinding(bindingName, varType: eType, mutable: false, value: eValue) otherwise throw ParseError.localShadowsSelfField(String.from(bindingName), typeName: String.from(self.enclosingType), line: labelTok.line, column: labelTok.column)
 		end 'bindE'
 

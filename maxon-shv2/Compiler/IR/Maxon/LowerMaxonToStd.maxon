@@ -242,11 +242,11 @@ type MaxonToStdLowering
 	// `valueTags`. `emitRetOrErrorReturn` reads it to decide whether a normal `ret`/`retVoid` becomes the
 	// dual-register `errorReturn` (a THROWING function writes both the value AND a zero error flag).
 	var currentThrows as ThrowsClause
-	// Fresh-ValueId minter for the CURRENT function — seeded past the parser's dense id space so the ops
-	// this pass synthesizes (the `+1` re-encoding of a throw, the zero flag of a normal throwing return,
-	// the loads a `panicAbort` expands into) get ids that collide with none the parser minted.
-	// The next fresh ValueId for the CURRENT function — a plain counter (no per-function object) reset to the
-	// parser's dense id space + 1, so the ops this pass synthesizes get ids colliding with none the parser minted.
+	// The next fresh ValueId for the CURRENT function — a plain counter (no per-function object) seeded at
+	// the parser's dense id count, i.e. the next free id. The ops this pass synthesizes (the flag re-encode
+	// of a throw, the zero flag of a normal throwing return, the exit code a `panicAbort` expands into) mint
+	// from here so their ids collide with none the parser minted; the Std passes downstream grow their dense
+	// columns to fit the highest id, so a monotonic counter is all that is required.
 	var nextValueId as ValueId
 
 	static function create(maxonModule MaxonModule, funcSignatures FuncSignatureMap, globalData GlobalDataTable) returns MaxonToStdLowering
@@ -661,16 +661,17 @@ type MaxonToStdLowering
 		self.emitTerminatorOrBody(dstBlock, op: StdOp.retVoid, asTerminator: asTerminator)
 	end 'emitRetVoidOrErrorReturn'
 
-	// `throw E.case` / `throw e` — the `ordinal + 1` re-encoding lives HERE (the ABI in one place, per
-	// PLAN.md), not in the parser: `errValue` is the caught ordinal (a `throw E.case` literal or the `(e)`
-	// binding), and the flag is `errValue + 1` — the runtime add covering both the compile-time-constant
-	// and the caught-runtime-value case uniformly. The primary register carries a family-default `0`,
-	// which the caller ignores when the flag is non-zero.
+	// `throw E.case` / `throw e` — the `ordinal + ErrorFlagOrdinalBias` re-encoding lives HERE (the ABI in
+	// one place, per PLAN.md), not in the parser: `errValue` is the caught ordinal (a `throw E.case` literal
+	// or the `(e)` binding), and the flag is `errValue + bias` — the runtime add covering both the
+	// compile-time-constant and the caught-runtime-value case uniformly. The primary register carries a
+	// family-default `0`, which the caller ignores when the flag is non-zero. The parser's `(e)`-binding
+	// DECODE (`flag - bias`) reads the SAME `ErrorFlagOrdinalBias`, so encode and decode cannot drift.
 	function lowerThrowError(errValue ValueId, dstBlock IrBlock)
-		let one = self.mintStdValueId()
-		self.stdModule.appendOp(dstBlock, op: StdOp.const(one, value: 1, valueType: StdType.i64))
+		let bias = self.mintStdValueId()
+		self.stdModule.appendOp(dstBlock, op: StdOp.const(bias, value: ErrorFlagOrdinalBias, valueType: StdType.i64))
 		let flag = self.mintStdValueId()
-		self.stdModule.appendOp(dstBlock, op: StdOp.binOp(flag, lhs: errValue, rhs: one, opcode: StdBinOpcode.add, operandType: StdType.i64))
+		self.stdModule.appendOp(dstBlock, op: StdOp.binOp(flag, lhs: errValue, rhs: bias, opcode: StdBinOpcode.add, operandType: StdType.i64))
 		let defaultVal = self.emitZeroConst(dstBlock)
 		self.stdModule.setTerminator(dstBlock, op: StdOp.errorReturn(defaultVal, errorFlagId: flag))
 	end 'lowerThrowError'

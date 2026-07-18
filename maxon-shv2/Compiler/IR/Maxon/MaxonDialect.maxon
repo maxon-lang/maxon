@@ -623,3 +623,11 @@ export union MaxonOp
 	// has been declared and empty since M1.
 	panicAbort(message ValueId) = MaxonOpMeta{category: OpCategory.panicking}
 end 'MaxonOp'
+
+// The dual-register error-flag ABI BIAS (P1.4b). The error flag is `0` for "no error in flight" and
+// `errorOrdinal + ErrorFlagOrdinalBias` when a scalar error is thrown — the bias is what reserves `0`.
+// This is ONE fact read from BOTH sides of a tier boundary and they MUST agree: the Std-tier lowering
+// ENCODES a throw (`lowerThrowError`: ordinal + bias) and the Maxon-tier parser DECODES an `(e)` binding
+// (`parseOtherwiseBlock`: flag - bias). A divergence here would not fail to compile — it would silently
+// bind `match e` to the wrong case — so the two derive from this constant rather than each spelling `1`.
+export let ErrorFlagOrdinalBias = 1 as ParsedInt
