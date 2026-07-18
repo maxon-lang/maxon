@@ -263,7 +263,7 @@ end 'registerStringRecord'
 // sites) scan (the classic linear-lookup-in-a-linear-walk quadratic); against a set it is O(1) each, so
 // the whole check is O(unions + drop sites). Insert also DEDUPLICATES — a union dropped D times records
 // its one symbol once, not D copies.
-export typealias UnionDestructorSet = Set with ByteArray
+export typealias DestructorSet = Set with ByteArray
 
 export type RuntimeUsage
 	export var usesHeap as bool
@@ -277,12 +277,12 @@ export type RuntimeUsage
 	// The `__destruct_<U>` symbols this module CALLS (P1.3 slice 2) — collected from the drop sites so
 	// `installUnionDestructors` synthesizes only the referenced ones, and `noteUnionDestructorUsage`
 	// can classify their transitive `__str_decref`/`__mm_free` needs. Full symbols (not names): the
-	// consumers query them against `unionDestructorSymbol(name)`, avoiding a byte-substring extract. A
-	// SET so that per-union query is O(1) — see `UnionDestructorSet`.
-	export var neededUnionDestructors as UnionDestructorSet
+	// consumers query them against `destructorSymbol(name)`, avoiding a byte-substring extract. A
+	// SET so that per-union query is O(1) — see `DestructorSet`.
+	export var neededDestructors as DestructorSet
 
 	static function create() returns RuntimeUsage
-		return Self{usesHeap: false, usesPrint: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesBoolToString: false, usesStrAppend: false, usesStrDecref: false, neededUnionDestructors: UnionDestructorSet.create()}
+		return Self{usesHeap: false, usesPrint: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesBoolToString: false, usesStrAppend: false, usesStrDecref: false, neededDestructors: DestructorSet.create()}
 	end 'create'
 end 'RuntimeUsage'
 
@@ -343,9 +343,9 @@ function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 	// and, for a String field, calls `__str_decref` — but those live in the SYNTHESIZED body this scan
 	// cannot see, so the symbol is recorded and its transitive needs are declared by
 	// `noteUnionDestructorUsage` (which has the signatures/interner to classify the fields).
-	if bytesStartWith(callee, prefix: UnionDestructorPrefix) 'uniondtor'
+	if bytesStartWith(callee, prefix: DestructorPrefix) 'uniondtor'
 		usage.usesHeap = true
-		usage.neededUnionDestructors.insert(callee)
+		usage.neededDestructors.insert(callee)
 	end 'uniondtor'
 end 'recordCallUsage'
 

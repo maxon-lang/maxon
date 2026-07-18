@@ -504,6 +504,23 @@ type StructBase
 	end 'create'
 end 'StructBase'
 
+// The resolved END of a field-access chain `base.f1.…fN` (P1.4a wave 2): the `box` its LAST field lives in
+// (the base's box for a single field, an intermediate struct field's loaded box for a chain), the `layout`
+// that box has, the `lastFieldTok` naming the field still to read or write, and the `baseTok`/`baseBinding`
+// the chain started from (the write path needs the base binding for its mutability check). `resolveFieldChain`
+// is the one producer; a chained read and a chained write are its two consumers.
+type FieldChainStep
+	export let box as ValueId
+	export let layout as StructLayout
+	export let lastFieldTok as Token
+	export let baseTok as Token
+	export let baseBinding as VarInfo
+
+	export static function create(box ValueId, layout StructLayout, lastFieldTok Token, baseTok Token, baseBinding VarInfo) returns FieldChainStep
+		return Self{box: box, layout: layout, lastFieldTok: lastFieldTok, baseTok: baseTok, baseBinding: baseBinding}
+	end 'create'
+end 'FieldChainStep'
+
 // --- Ranged-typealias range bounds ---
 //
 // The inclusive bounds each sized numeric type's `.min` / `.max` denotes in a range
@@ -1709,6 +1726,10 @@ export type Parser
 		var structs = StructLayoutArray.create()
 		var enums = EnumLayoutArray.create()
 		var bindings = TopLevelDeclArray.create()
+		// ⭐ Per-function CONSUME bits (P1.4a wave 2) — the argument-side dual of the return type, computed
+		// from the SAME token walk. `recordScannedSignature` fills one entry per function whose body moves a
+		// parameter into a struct field, so a call site can decide whether an owned argument is moved.
+		var paramConsumes = ParamConsumeEntryArray.create()
 
 		let resume = self.pos
 		self.pos = 0
@@ -1738,7 +1759,7 @@ export type Parser
 				// read, because reading it moves the cursor past the `function` keyword.
 				depth = depth + 1
 				self.advance()
-				self.recordScannedSignature(entries)
+				self.recordScannedSignature(entries, paramConsumes: paramConsumes)
 				continue
 			end 'isFunction'
 
@@ -1760,7 +1781,7 @@ export type Parser
 			// array. It consumes the `type` keyword before it can fail, so the cursor always
 			// advances and this loop cannot spin.
 			if depth == 0 and self.at(TokenKind.type) 'isTypeDecl'
-				self.recordScannedType(structs, entries: entries)
+				self.recordScannedType(structs, entries: entries, paramConsumes: paramConsumes)
 				continue
 			end 'isTypeDecl'
 
@@ -1779,7 +1800,7 @@ export type Parser
 		end 'scan'
 		self.pos = resume
 
-		index.foldFile(entries, aliases: aliases, structs: structs, enums: enums, bindings: bindings, fileTypeNames: self.artifact.typeNames)
+		index.foldFile(entries, aliases: aliases, structs: structs, enums: enums, bindings: bindings, paramConsumes: paramConsumes, fileTypeNames: self.artifact.typeNames)
 	end 'foldDeclaredSignaturesInto'
 
 	// Is the cursor on a `let` or a `var` — the two keywords that introduce a top-level binding?
@@ -1847,18 +1868,221 @@ export type Parser
 	//
 	// The name is `declaredMethodName`'s, not the token's, so a factory inside `type Point` is
 	// recorded under the very key `Point.create(3, y: 4)` will look it up by — see there.
-	function recordScannedSignature(entries FuncReturnTypeEntryArray)
+	function recordScannedSignature(entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray)
 		if not self.at(TokenKind.identifier) 'noName'
 			return
 		end 'noName'
 		let nameTok = self.current()
+		// ⚠ Captured NOW, at the name token: the caller has consumed `function` (at `pos - 1`), so the
+		// modifier before it is at `pos - 2` — and `static` is what marks a receiver-less method. Read after
+		// the params/return type are consumed, `pos - 2` would name a token inside the return type instead.
+		// Guarded on `pos >= 2` so a `function` at the very start of the file (a top-level one, never a
+		// method) does not underflow — such a function has an empty `enclosingType` anyway.
+		let hasStaticModifier = self.pos >= 2 and self.kindAt(self.pos - 2) == TokenKind.static
 		self.advance()
+		// The parameter list's `(` is captured before the skip so the param NAMES can be read back out of it
+		// (`paramNamesIn`) — the CONSUME scan needs them, and `skipBalancedParens` only advances past them.
+		let paramsStart = self.pos
 		if not self.skipBalancedParens() 'malformedParams'
 			return
 		end 'malformedParams'
 		let returnType = try self.parseOptionalReturnType() otherwise return
-		entries.push(FuncReturnTypeEntry.create(self.declaredMethodName(nameTok), returnType: returnType))
+		let funcName = self.declaredMethodName(nameTok)
+		entries.push(FuncReturnTypeEntry.create(funcName, returnType: returnType))
+
+		// The cursor is now at the body start. Scan the body (peek-only, cursor untouched) for parameters
+		// this function moves into a struct field — its CONSUME set.
+		//
+		// ⚠ **Gated to RECEIVER-LESS functions** (top-level functions and `static` methods). An instance
+		// method prepends `self` as parameter 0 (`parseFunction`), so its call-site parameter indices are
+		// self-OFFSET from the source parameter list this scan reads — leaving it here would misindex the
+		// bits. The corpus's consuming functions are all static constructors (`create`), so this covers them;
+		// a struct-literal consume in an instance method falls to the callee-side borrowed-value refusal
+		// (`moveInPayload`'s clean E2015). The receiver test mirrors `parseTypeMember`'s `not isStatic`: a
+		// method inside a type whose `function` keyword is not preceded by `static` (captured above).
+		let takesReceiver = not self.enclosingType.isEmpty() and not hasStaticModifier
+		if not takesReceiver 'receiverless'
+			self.scanConsumeBits(funcName, paramNames: self.paramNamesIn(paramsStart), bodyStart: self.pos, paramConsumes: paramConsumes)
+		end 'receiverless'
 	end 'recordScannedSignature'
+
+	// ⭐ **THE CONSUME SCAN (P1.4a wave 2)** — one entry per function whose body MOVES a parameter into
+	// durable storage (a struct-literal field value). A peek-only walk of the body from `bodyStart` to its
+	// matching `end`: it tracks the bracket stack (a struct literal is `{…}`, a call is `(…)`), and when a
+	// `:` appears with the innermost open bracket a `{`, it is a struct-field separator — if the value that
+	// follows is a bare reference (parens stripped) to a parameter, that parameter is CONSUMED.
+	//
+	// ⚠ **THIS IS A SOUND APPROXIMATION, NOT AN ORACLE, AND IT DOES NOT NEED TO BE ONE.** The callee-side
+	// move (`moveInPayload`) refuses to move a parameter that is NOT enrolled owned, so an UNDER-detected
+	// consume becomes a clean `E2015` at the constructor rather than a double-free; an OVER-detected one (a
+	// shadowed name) makes the callee OWN and DROP the value once while its caller was poisoned — sound, just
+	// stricter. So the scan may be simple: it detects the direct constructor sink (`Self{f: p}`) the corpus
+	// uses and leaves the transitive case (a parameter forwarded to a consuming CALLEE — a `:` at a `(`
+	// level, or a call argument) to the borrowed-value refusal. Parens are stripped exactly as the real
+	// parse's `rhsWasBareLocalReference` strips them, so the two agree on what a bare-parameter value is.
+	function scanConsumeBits(funcName ByteArray, paramNames ByteArrayArray, bodyStart TokenIndex, paramConsumes ParamConsumeEntryArray)
+		if paramNames.count() == 0 'noParams'
+			return
+		end 'noParams'
+
+		var consumed = BoolArray.create()
+		for _ in 0 upto paramNames.count() 'initBits'
+			consumed.push(false)
+		end 'initBits'
+		var any = false
+		// The bracket stack: `true` for a `{` (struct literal), `false` for a `(`/`[`. The innermost open
+		// bracket being a `{` is what distinguishes a struct-field `:` from a labelled-call-argument one.
+		var braceStack = BoolArray.create()
+		var blockDepth = 0 as BlockDepth
+
+		var q = bodyStart
+		while self.kindAt(q) != TokenKind.eof 'walk'
+			// The function's own `end` (at block depth 0) closes the scan.
+			if blockDepth == 0 and self.kindAt(q) == TokenKind.end and not self.keywordIsMatchCaseName(q) 'funcEnd'
+				break
+			end 'funcEnd'
+
+			let kind = self.kindAt(q)
+			if kind == TokenKind.leftBrace 'openBrace'
+				braceStack.push(true)
+			end 'openBrace'
+			if kind == TokenKind.leftParen 'openParen'
+				braceStack.push(false)
+			end 'openParen'
+			if (kind == TokenKind.rightBrace or kind == TokenKind.rightParen) and braceStack.count() > 0 'close'
+				_ = try braceStack.pop() otherwise panic("scanConsumeBits: braceStack.pop on non-empty stack failed")
+			end 'close'
+
+			if kind == TokenKind.colon and self.braceStackInnermostIsBrace(braceStack) 'fieldSep'
+				let idx = self.consumedParamAfterColon(q, paramNames: paramNames)
+				if idx < paramNames.count() 'isParam'
+					try consumed.set(idx, value: true) otherwise panic("scanConsumeBits: consumed.set OOB at {idx} despite idx < paramNames.count()")
+					any = true
+				end 'isParam'
+			end 'fieldSep'
+
+			if self.opensBlockAt(q) 'opensBlock'
+				blockDepth = blockDepth + 1
+			end 'opensBlock' else 'notOpener'
+				if kind == TokenKind.end and blockDepth > 0 and not self.keywordIsMatchCaseName(q) 'closesBlock'
+					blockDepth = blockDepth - 1
+				end 'closesBlock'
+			end 'notOpener'
+
+			q = q + 1
+		end 'walk'
+
+		if any 'consumes'
+			paramConsumes.push(ParamConsumeEntry.create(funcName, info: ParamConsumeInfo.create(paramNames, bits: consumed)))
+		end 'consumes'
+	end 'scanConsumeBits'
+
+	// Is the innermost OPEN bracket a `{` (a struct literal)? The stack's top decides whether a `:` is a
+	// struct-field separator (yes) or a labelled call argument's (no).
+	function braceStackInnermostIsBrace(braceStack BoolArray) returns bool
+		if braceStack.count() == 0 'empty'
+			return false
+		end 'empty'
+		return try braceStack.get(braceStack.count() - 1) otherwise panic("braceStackInnermostIsBrace: get OOB on non-empty stack")
+	end 'braceStackInnermostIsBrace'
+
+	// The parameter index of the VALUE that follows a struct-field `:` at `colonPos`, or `paramNames.count()`
+	// (a non-parameter) when the value is not a bare parameter reference. The value runs to the field's `,`
+	// or the literal's `}`; surrounding parens are stripped (matching `rhsWasBareLocalReference`), so
+	// `f: p`, `f: (p)` and `f: ((p))` all name `p`, while `f: p + 1`, `f: g(p)` and `f: q.x` name none.
+	function consumedParamAfterColon(colonPos TokenIndex, paramNames ByteArrayArray) returns ParamCount
+		var q = colonPos + 1
+		var opens = 0
+		while self.kindAt(q) == TokenKind.leftParen 'stripOpen'
+			opens = opens + 1
+			q = q + 1
+		end 'stripOpen'
+
+		if self.kindAt(q) != TokenKind.identifier 'notIdentifier'
+			return paramNames.count()
+		end 'notIdentifier'
+		let idx = self.paramIndexIn(paramNames, name: self.tokenAt(q).value)
+		if idx >= paramNames.count() 'notParam'
+			return paramNames.count()
+		end 'notParam'
+		q = q + 1
+
+		var closes = 0
+		while self.kindAt(q) == TokenKind.rightParen and closes < opens 'stripClose'
+			closes = closes + 1
+			q = q + 1
+		end 'stripClose'
+		if closes != opens 'unbalanced'
+			return paramNames.count()
+		end 'unbalanced'
+
+		// The value must END here — the next token is the field separator `,` or the literal close `}`.
+		// Anything else (`+`, `.`, `(`) means the parameter was READ inside a larger expression, not moved.
+		if self.kindAt(q) == TokenKind.comma or self.kindAt(q) == TokenKind.rightBrace 'bareMove'
+			return idx
+		end 'bareMove'
+		return paramNames.count()
+	end 'consumedParamAfterColon'
+
+	// The index of `name` in `paramNames`, or `paramNames.count()` when absent — the linear-scan door the
+	// consume scan maps a value token back to a parameter position through.
+	function paramIndexIn(paramNames ByteArrayArray, name ByteArray) returns ParamCount
+		for i in 0 upto paramNames.count() 'each'
+			let paramName = try paramNames.get(i) otherwise panic("paramIndexIn: paramNames.get OOB at {i}")
+			if paramName.equals(name) 'match'
+				return i
+			end 'match'
+		end 'each'
+		return paramNames.count()
+	end 'paramIndexIn'
+
+	// Read the ordered parameter NAMES out of the `(…)` beginning at `parenPos` — peek-only (the cursor is
+	// untouched). Each parameter is `name Type`, so the first token after `(` or a top-level `,` is the name
+	// and the type runs to the next top-level `,` or the closing `)`. Paren depth is tracked because a type
+	// may itself contain parens (`int(0 to 100)`, `function(X) returns Y`).
+	function paramNamesIn(parenPos TokenIndex) returns ByteArrayArray
+		var names = ByteArrayArray.create()
+		var q = parenPos
+		if self.kindAt(q) != TokenKind.leftParen 'noParens'
+			return names
+		end 'noParens'
+		q = q + 1
+		if self.kindAt(q) == TokenKind.rightParen 'noParams'
+			return names
+		end 'noParams'
+
+		while true 'params'
+			// The parameter's first token is its NAME (an identifier — or a keyword like `type`, which is a
+			// legal parameter name; the type reader that follows is what tells them apart, and the sweep only
+			// needs the text, not the kind).
+			names.push(self.tokenAt(q).value)
+			q = q + 1
+
+			var depth = 0
+			while true 'skipType'
+				let kind = self.kindAt(q)
+				if kind == TokenKind.eof 'malformed'
+					return names
+				end 'malformed'
+				if kind == TokenKind.leftParen 'openType'
+					depth = depth + 1
+				end 'openType'
+				if kind == TokenKind.rightParen 'closeType'
+					if depth == 0 'endList'
+						return names
+					end 'endList'
+					depth = depth - 1
+				end 'closeType'
+				if kind == TokenKind.comma and depth == 0 'nextParam'
+					break
+				end 'nextParam'
+				q = q + 1
+			end 'skipType'
+
+			q = q + 1
+		end 'params'
+		panic("paramNamesIn: the parameter loop only exits by returning at the closing `)` or at EOF")
+	end 'paramNamesIn'
 
 	// The name a `function <nameTok>` is DECLARED under: its own, at file scope; `Point.create`
 	// inside `type Point`.
@@ -1906,7 +2130,7 @@ export type Parser
 	// tell them apart. `depth` here is relative to the body — 0 is directly inside it — and
 	// `blockDepthAfter` is the same opener/closer rule the caller counts with, so a method's `if`
 	// and `while` nest correctly and its `end` cannot be mistaken for the type's.
-	function recordScannedType(structs StructLayoutArray, entries FuncReturnTypeEntryArray)
+	function recordScannedType(structs StructLayoutArray, entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray)
 		let nameTok = try self.readTypeHeader() otherwise return
 		self.enclosingType = nameTok.value
 
@@ -1934,7 +2158,7 @@ export type Parser
 				// loop does exactly this, for exactly this reason.
 				depth = depth + 1
 				self.advance()
-				self.recordScannedSignature(entries)
+				self.recordScannedSignature(entries, paramConsumes: paramConsumes)
 				continue
 			end 'isMethod'
 
@@ -2906,7 +3130,7 @@ export type Parser
 		// body reference resolves straight to the parameter's SSA value — the same
 		// value-substitution model `let`/`var` bindings use. Parameters are immutable
 		// (a reassignment is E2013); mutating a parameter needs a local shadow.
-		try self.bindParameters(paramNames, paramTypes: paramTypes, paramRanges: paramRanges)
+		try self.bindParameters(name, paramNames: paramNames, paramTypes: paramTypes, paramRanges: paramRanges)
 
 		// `self.valueTags` is handed over BY REFERENCE, already seeded with the parameter types.
 		// Every `mintValue` below therefore pushes straight into the function's own type column
@@ -3045,7 +3269,7 @@ export type Parser
 	// is where that refusal becomes E3006, anchored on the PARAMETER's own name token, which is
 	// the declaration that has to change. The bootstrap reports the identical program at the
 	// identical token.
-	function bindParameters(paramNames ByteArrayArray, paramTypes MaxonTypeArray, paramRanges SourceRangeArray) throws ParseError
+	function bindParameters(funcName ByteArray, paramNames ByteArrayArray, paramTypes MaxonTypeArray, paramRanges SourceRangeArray) throws ParseError
 		for i in 0 upto paramNames.count() 'eachParam'
 			let paramName = try paramNames.get(i) otherwise panic("bindParameters: paramNames.get OOB at {i}")
 			let paramType = try paramTypes.get(i) otherwise panic("bindParameters: paramTypes.get OOB at {i}")
@@ -3077,15 +3301,33 @@ export type Parser
 				panic("bindParameters: parameter '{String.from(paramName)}' is being bound MUTABLE, but `namesAssignedIn` finds a loop's carried vars by scanning tokens for `identifier =` — and a `var` parameter is written by `mutate(p)` at the CALL SITE, leaving no `=` for that scan to find. The loop would mint no phi and the parameter would silently reset to its entry value every iteration. Teach `assignsAt`/`namesAssignedIn` the new write form before binding a parameter mutable.")
 			end 'writesThisScanCannotSee'
 
-			// The installed binding is discarded: only MUTABLE bindings are tracked by
-			// reference (for loop phis), and a parameter is immutable.
-			_ = try self.scope.declareValueBinding(paramName, varType: paramType, mutable: paramIsMutable, value: i as ValueId) otherwise throw ParseError.localShadowsSelfField(String.from(paramName), typeName: String.from(self.enclosingType), line: paramRange.line, column: paramRange.column)
+			let binding = try self.scope.declareValueBinding(paramName, varType: paramType, mutable: paramIsMutable, value: i as ValueId) otherwise throw ParseError.localShadowsSelfField(String.from(paramName), typeName: String.from(self.enclosingType), line: paramRange.line, column: paramRange.column)
 			// Parameter `i` owns ValueId `i`; record its declaration span so the register-pressure
 			// diagnostic can resolve the parameter to source (it is minted by no op — see
 			// ParamOriginTable — so it has no `emitOp` origin).
 			self.artifact.recordParamOrigin(i as ValueId, range: paramRange)
+
+			// ⭐ **A CONSUMED MANAGED PARAMETER IS ENROLLED AS OWNED** (P1.4a wave 2). The consume analysis
+			// marked it moved-into-durable-storage, so the caller transfers ownership at the call site and
+			// this function OWNS the value: it is enrolled exactly as an owned local, so `moveInPayload`
+			// accepts moving it into a field (an owned bare-local reference is poisoned), and if it is NOT
+			// moved on some path `emitScopeDrops` drops it once at function exit — sound whether the analysis
+			// was exact or over-approximated. A SCALAR consumed param owns no heap and is left borrowed (its
+			// consume bit is inert), so it is never enrolled — a decref of an integer would corrupt the count.
+			if self.signatures.paramIsConsumed(funcName, index: i) and self.valueIsManagedHeap(i as ValueId) 'consumedManaged'
+				self.markValueOwnsHeap(i as ValueId)
+				self.ownedBindings.push(binding)
+			end 'consumedManaged'
 		end 'eachParam'
 	end 'bindParameters'
+
+	// Is `value` a managed HEAP value — a struct box, a String, or a boxed union — the kinds a consumed
+	// parameter can own (and this function must drop) and a consumed argument must transfer? Mirrors
+	// `mintOwnedCallResult`'s adoption test: a ranged-alias / `int` / `bool` owns no heap.
+	function valueIsManagedHeap(value ValueId) returns bool
+		let tag = self.tagOf(value)
+		return tagIsText(tag) or tagIsStructRef(tag) or self.valueIsBoxedUnion(value)
+	end 'valueIsManagedHeap'
 
 	// `returns <Type>` or nothing (void). The return type flows to the registry
 	// (for SemanticCheck) and to lowering (via the function signature).
@@ -4008,25 +4250,33 @@ export type Parser
 	// D's ruling generalised):
 	//   • a STRING (`__str_decref`) frees its record AND the external buffer a grown String leaves behind
 	//     (`parent@32`/`buffer@0`), which the generic decref structurally cannot reach;
+	//   • a STRUCT box that owns a managed field (`__destruct_<Struct>`) drops each managed field through ITS
+	//     own destructor, then frees the box — because the generic decref would leak them (P1.4a wave 2);
 	//   • a MANAGED-PAYLOAD union box (`__destruct_<U>`) runs its own tag-conditional cascade — drop each
 	//     live managed field through ITS own destructor, then free the box — because a union box carries
 	//     owned payloads the generic decref would leak;
-	//   • everything else (a SCALAR union box, a struct box whose fields are scalars, a raw interpolation
+	//   • everything else (a SCALAR union box, a struct box whose fields are all scalars, a raw interpolation
 	//     buffer) is the generic refcounted `__mm_decref` — its `TrivialDestructor` frees exactly the box.
-	// The union case is decided off the SAME `enumMatchFor` + `unionHasManagedField` predicate the
-	// destructor synthesis emits from, so a box routed to a cascade here always has one built for it.
+	// A struct/union routed to a cascade is decided off `managedFieldDropCallee` / `unionHasManagedField`,
+	// the SAME predicates the destructor synthesis (and `noteDestructorUsage`) emit from, so a box routed to
+	// a cascade here always has one built for it.
 	function decrefCalleeFor(value ValueId) returns ByteArray
 		let tag = self.tagOf(value)
 		if tag == ValueTypeTag.string 'string'
 			return StrDecrefName
 		end 'string'
+		// A struct box: `managedFieldDropCallee` returns `__destruct_<Struct>` for one that owns a managed
+		// field and the trivial `__mm_decref` otherwise, reading only allocation-free `Map.contains` /
+		// per-field checks (no throwaway box), so it needs no hot-path guard of its own.
+		if tagIsStructRef(tag) 'struct'
+			return managedFieldDropCallee(self.signatures, typeNames: self.artifact.typeNames, fieldType: self.typeOf(value))
+		end 'struct'
 		// ⚠ **THE `named` PRE-CHECK IS A HOT-PATH ALLOCATION GUARD, NOT A TIDY EARLY RETURN** — the exact
-		// one `valueIsUnion` documents. This runs for EVERY dropped owned value (a struct box, an
-		// interpolation buffer), and `enumMatchFor` returns a `DeclaredEnum` — a heap-boxed Maxon union
-		// VALUE even for its `undeclared` case. Only a `named`-tagged value can be a union box; a struct
-		// box is `structRef` and an interp buffer `integer`, so gating here is what keeps a struct/String
-		// drop from boxing a throwaway `DeclaredEnum.undeclared` (measured on scale-test: the whole
-		// `allocsDelta` this rung added, +42 doubling per rung, collapses to 0 with this guard).
+		// one `valueIsUnion` documents. This runs for EVERY dropped owned value (an interpolation buffer),
+		// and `enumMatchFor` returns a `DeclaredEnum` — a heap-boxed Maxon union VALUE even for its
+		// `undeclared` case. Only a `named`-tagged value can be a union box; an interp buffer is `integer`,
+		// so gating here is what keeps a String/interp drop from boxing a throwaway `DeclaredEnum.undeclared`
+		// (measured on scale-test: the whole `allocsDelta` this rung added collapses to 0 with this guard).
 		if tag != ValueTypeTag.named 'notUnion'
 			return MmDecrefName
 		end 'notUnion'
@@ -4034,7 +4284,7 @@ export type Parser
 		if enumMatchIsDeclared(decl) 'union'
 			let layout = requireEnumLayout(decl)
 			if unionHasManagedField(self.signatures, typeNames: self.artifact.typeNames, layout: layout, wantStringOnly: false) 'managedUnion'
-				return unionDestructorSymbol(layout.name)
+				return destructorSymbol(layout.name)
 			end 'managedUnion'
 		end 'union'
 		return MmDecrefName
@@ -4087,9 +4337,19 @@ export type Parser
 	// the statement's pending-drop list (so an UNBOUND result is dropped at statement end). Both from one
 	// call, so the two facts — "this value owns heap" and "someone must drop it" — cannot be set apart.
 	function trackOwnedTemp(value ValueId)
-		try self.valueOwnsHeap.set(value, value: true) otherwise panic("trackOwnedTemp: v{value} has no owned-heap slot — every SSA value must be minted through mintValue, which seeds the column")
+		self.markValueOwnsHeap(value)
 		self.pendingTempDrops.push(value)
 	end 'trackOwnedTemp'
+
+	// Set `value`'s owned-heap provenance bit WITHOUT enrolling it as a statement-scoped pending temporary
+	// — the half of `trackOwnedTemp` a CONSUMED PARAMETER needs (P1.4a wave 2). The param already drops at
+	// FUNCTION scope exit through `ownedBindings` (or is skipped once moved into a field), so adding it to
+	// `pendingTempDrops` too would drop it a SECOND time at the enclosing statement's end — the double-free
+	// that made `Outer.create(inner)` free its own field. A temporary, by contrast, IS statement-scoped and
+	// wants both.
+	function markValueOwnsHeap(value ValueId)
+		try self.valueOwnsHeap.set(value, value: true) otherwise panic("markValueOwnsHeap: v{value} has no owned-heap slot — every SSA value must be minted through mintValue, which seeds the column")
+	end 'markValueOwnsHeap'
 
 	// ⭐ **THE ONE DEFINITION OF "OWNED": does `value` own a droppable heap allocation it must transfer or
 	// drop?** The single predicate the DECLARATION (`parseBinding`), the REASSIGNMENT
@@ -7446,43 +7706,62 @@ export type Parser
 	// to Wave 2, alongside the destructor cascade. Refused at the CONSTRUCT site (a struct with a managed
 	// field may still be DECLARED — the layout is fine; it is building one that is not yet lowerable), the
 	// same use-site placement `requireStructBase` and the union-payload rejection use.
-	function rejectManagedStructFields(layout StructLayout, anchor Token) throws ParseError
+	// ⭐ **THE ONE MANAGED FIELD KIND WAVE 2 DOES NOT YET CONSTRUCT — a payload-bearing (boxed) UNION
+	// field.** Wave 2 lifted the blanket reject on managed struct fields for the two supported kinds — a
+	// `String` (promoted/moved in, dropped through `__str_decref`) and a `struct` (moved in, dropped through
+	// its own `__destruct_<Struct>`). A boxed-union field is left refused because `moveInPayload` has no
+	// move for it (a `nestedUnion` classification is not `managed`, so it would be stored as a raw scalar and
+	// never move-tracked — a leak or double-free), and the drop routing that WOULD reach its destructor is
+	// present but its CONSTRUCT move is not. Refused at the CONSTRUCT site (a struct with such a field may
+	// still be DECLARED — the layout is fine), the same use-site placement `requireStructBase` uses.
+	function rejectUnsupportedManagedStructField(layout StructLayout, anchor Token) throws ParseError
 		for i in 0 upto layout.fieldCount() 'eachField'
-			if self.signatures.structFieldIsManaged(layout.name, index: i) 'managed'
-				let fieldName = try layout.fieldNames.get(i) otherwise panic("rejectManagedStructFields: fieldNames.get OOB at {i} — the layout's name column is sized to its field count")
-				throw ParseError.unsupported("constructing `type {String.from(layout.name)}` with the managed field '{String.from(fieldName)}' — a struct field that owns heap (a String, a struct, or a payload-bearing union) needs a destructor cascade to free it when the struct is dropped, and moving a value into durable struct storage is the CONSUME half of cross-call ownership; both arrive at Wave 2 (P1.4b). A scalar-field struct crosses a call today.", line: anchor.line, column: anchor.column)
-			end 'managed'
+			let fieldType = self.signatures.fieldTypeOf(layout.name, index: i, into: self.artifact.typeNames)
+			match classifyUnionPayload(self.signatures, typeNames: self.artifact.typeNames, fieldType: fieldType) 'class'
+				nestedUnion then break 'class'
+				scalar then continue
+				managed then continue
+				floatPayload then continue
+				undeclaredName then continue
+			end 'class'
+			let fieldName = try layout.fieldNames.get(i) otherwise panic("rejectUnsupportedManagedStructField: fieldNames.get OOB at {i} — the layout's name column is sized to its field count")
+			throw ParseError.unsupported("constructing `type {String.from(layout.name)}` with the boxed-union field '{String.from(fieldName)}' — a struct field that is a payload-bearing union needs the nested-destructor CONSTRUCT move a later rung adds; a `String` and a `struct` field are supported at Wave 2", line: anchor.line, column: anchor.column)
 		end 'eachField'
-	end 'rejectManagedStructFields'
+	end 'rejectUnsupportedManagedStructField'
 
 	function parseStructLiteral(func IrFunction) returns ValueId throws ParseError
 		let typeTok = self.current()
 		let typeName = try self.readStructLiteralTypeName()
 		let layout = try self.requireConstructible(typeName, anchor: typeTok)
-		try self.rejectManagedStructFields(layout, anchor: typeTok)
+		try self.rejectUnsupportedManagedStructField(layout, anchor: typeTok)
 
 		try self.consume(TokenKind.leftBrace)
 		// Parallel to the LAYOUT, not to the source: `fieldValues[i]` is the value for the field the
 		// type declares at `i`, whatever position the literal wrote it in. `filled` is what turns an
-		// unwritten slot into E3086 rather than into a zero nobody chose.
+		// unwritten slot into E3086 rather than into a zero nobody chose. `fieldBareLocal[i]` records
+		// whether the literal's value for field `i` was a bare reference to a local binding — what a
+		// managed field's move-in poisons (`moveInPayload`), captured here because only the parse can see it.
 		var fieldValues = ValueIdArray.create()
 		var filled = BoolArray.create()
+		var fieldBareLocal = BoolArray.create()
 		for _ in 0 upto layout.fieldCount() 'initSlots'
 			fieldValues.push(0 as ValueId)
 			filled.push(false)
+			fieldBareLocal.push(false)
 		end 'initSlots'
 
-		try self.parseStructLiteralFields(func, layout: layout, fieldValues: fieldValues, filled: filled)
+		try self.parseStructLiteralFields(func, layout: layout, fieldValues: fieldValues, filled: filled, fieldBareLocal: fieldBareLocal)
 		let rbraceTok = try self.consume(TokenKind.rightBrace)
 
 		// Defaults are applied BEFORE the check, which is what makes an omitted-but-defaulted field
 		// legal without teaching `requireAllFieldsInitialized` a second rule. That one goes on
 		// asking exactly what it always asked — "does every slot have a value by now?" — and a
-		// default is simply one of the two ways a slot comes to have one.
+		// default is simply one of the two ways a slot comes to have one. A default is a scalar literal,
+		// never a managed value, so its `fieldBareLocal` stays false and its store never moves.
 		self.applyFieldDefaults(layout, fieldValues: fieldValues, filled: filled, anchor: typeTok)
 		try self.requireAllFieldsInitialized(layout, filled: filled, anchor: typeTok)
 
-		return self.emitStructLiteral(layout, fieldValues: fieldValues, range: SourceRange.between(typeTok, last: rbraceTok))
+		return try self.emitStructLiteral(layout, fieldValues: fieldValues, fieldBareLocal: fieldBareLocal, anchor: typeTok, range: SourceRange.between(typeTok, last: rbraceTok))
 	end 'parseStructLiteral'
 
 	// The type a struct literal names: `Self` (the enclosing type) or a bare identifier. Consumes it.
@@ -7539,7 +7818,7 @@ export type Parser
 	// name to find its place, while a struct literal names slots outright. So this reads its own
 	// labels rather than reusing the call's, and `slotCallArgs` is not involved — there is nothing
 	// to reorder, because the label IS the destination.
-	function parseStructLiteralFields(func IrFunction, layout StructLayout, fieldValues ValueIdArray, filled BoolArray) throws ParseError
+	function parseStructLiteralFields(func IrFunction, layout StructLayout, fieldValues ValueIdArray, filled BoolArray, fieldBareLocal BoolArray) throws ParseError
 		if self.at(TokenKind.rightBrace) 'noFields'
 			return
 		end 'noFields'
@@ -7557,12 +7836,16 @@ export type Parser
 
 			// The climber, not `parseExpression`, for `parseCallArgs`' reason: a field's value is
 			// parsed INSIDE an expression that has already seeded `currentBlock`, and re-seeding it
-			// would discard a short-circuit an earlier field performed.
+			// would discard a short-circuit an earlier field performed. The value's start position is
+			// captured first so `rhsWasBareLocalReference` can decide, after the value is parsed, whether
+			// it was a bare local — a managed field's move-in poisons that source.
+			let valueStart = self.pos
 			let value = try self.parseBinary(func, minPrec: OrPrecedence)
 			try self.requireFieldType(layout, index: index, value: value, anchor: nameTok)
 
 			try fieldValues.set(index, value: value) otherwise panic("parseStructLiteralFields: fieldValues.set OOB at {index} — the columns are sized to the layout's field count")
 			try filled.set(index, value: true) otherwise panic("parseStructLiteralFields: filled.set OOB at {index} — the columns are sized to the layout's field count")
+			try fieldBareLocal.set(index, value: self.rhsWasBareLocalReference(valueStart)) otherwise panic("parseStructLiteralFields: fieldBareLocal.set OOB at {index} — the columns are sized to the layout's field count")
 
 			if not self.at(TokenKind.comma) 'endFields'
 				break
@@ -7571,22 +7854,59 @@ export type Parser
 		end 'fieldLoop'
 	end 'parseStructLiteralFields'
 
-	// A field initializer must agree with the field's DECLARED type — `checkDeclaredType`, the same
-	// COERCION-SITE rule a call argument, a `return` and an assignment ask, and deliberately not the
-	// symmetric `typesAgree` an operator's two operands ask.
+	// A field initializer / assignment must agree with the field's DECLARED type. A SCALAR field takes the
+	// `checkDeclaredType` coercion-site rule (the same one a call argument, a `return` and an assignment
+	// ask). A MANAGED field (a `String` or a `struct`) takes the tag-AND-name check `requireManagedPayloadArg`
+	// uses for a union payload — a struct field's declared type is `named(<Struct>)` (unresolved), which the
+	// tag path would read as `int` (`typeTagName(named)`), so it MUST classify first (`classifyUnionPayload`
+	// resolves it to `managed(structRef)`) rather than compare the raw tag.
 	//
 	// It is the parser's to check and not SemanticCheck's, unlike a call ARGUMENT: a call's callee
 	// may be declared in another file, but a struct literal's layout is already in hand here — the
 	// parser had to have it to know the field exists at all.
 	function requireFieldType(layout StructLayout, index FieldIndex, value ValueId, anchor Token) throws ParseError
-		let declared = maxonTypeTag(self.signatures.fieldTypeOf(layout.name, index: index, into: self.artifact.typeNames))
-		let got = self.tagOf(value)
-		match checkDeclaredType(got, declared: declared) 'declared'
-			ok then break 'declared'
-			mismatch then throw ParseError.assignTypeMismatch(String.from(anchor.value), got: typeTagName(got), expected: typeTagName(declared), line: anchor.line, column: anchor.column)
-			narrowsFloatToInt then throw ParseError.implicitNarrowing(typeTagName(got), targetType: typeTagName(declared), line: anchor.line, column: anchor.column)
-		end 'declared'
+		let fieldType = self.signatures.fieldTypeOf(layout.name, index: index, into: self.artifact.typeNames)
+		let class = classifyUnionPayload(self.signatures, typeNames: self.artifact.typeNames, fieldType: fieldType)
+		if payloadClassIsManaged(class) 'managed'
+			try self.requireManagedValueMatches(payloadStorageOf(class), isString: payloadClassIsString(class), value: value, siteName: self.fieldSiteName(layout, index: index), anchor: anchor)
+		end 'managed' else 'scalarField'
+			let got = self.tagOf(value)
+			let declaredTag = maxonTypeTag(fieldType)
+			match checkDeclaredType(got, declared: declaredTag) 'declared'
+				ok then break 'declared'
+				mismatch then throw ParseError.assignTypeMismatch(String.from(anchor.value), got: typeTagName(got), expected: typeTagName(declaredTag), line: anchor.line, column: anchor.column)
+				narrowsFloatToInt then throw ParseError.implicitNarrowing(typeTagName(got), targetType: typeTagName(declaredTag), line: anchor.line, column: anchor.column)
+			end 'declared'
+		end 'scalarField'
 	end 'requireFieldType'
+
+	// The `<Struct>.<field>` label a managed-field type mismatch names.
+	function fieldSiteName(layout StructLayout, index FieldIndex) returns String
+		let fieldName = try layout.fieldNames.get(index) otherwise panic("fieldSiteName: fieldNames.get OOB at {index}")
+		return "{String.from(layout.name)}.{String.from(fieldName)}"
+	end 'fieldSiteName'
+
+	// ⭐ **A MANAGED VALUE MUST BE THE MATCHING HEAP KIND** — the ONE check a struct FIELD and a union
+	// PAYLOAD share: a `String` slot takes a `string`; a `struct` slot takes a `structRef` of the SAME struct
+	// name (a pointer of the wrong struct would pass a tag-only check). The names are compared through this
+	// file's interner, the one the classifier's `structRef` id and the value's own id were both minted from.
+	// `siteName` is the `<Type>.<field>` / `<Union>.<case>(<field>)` label the message quotes.
+	function requireManagedValueMatches(storage MaxonType, isString bool, value ValueId, siteName String, anchor Token) throws ParseError
+		let got = self.tagOf(value)
+		let wantTag = maxonTypeTag(storage)
+		if got != wantTag 'tagMismatch'
+			throw ParseError.assignTypeMismatch(siteName, got: typeTagName(got), expected: typeTagName(wantTag), line: anchor.line, column: anchor.column)
+		end 'tagMismatch'
+		if isString 'stringOk'
+			return
+		end 'stringOk'
+
+		let wantName = try self.artifact.typeNames.nameOf(typeNameIdOf(storage)) otherwise panic("requireManagedValueMatches: the slot's struct name id is not in this file's interner")
+		let gotName = try self.artifact.typeNames.nameOf(typeNameIdOf(self.typeOf(value))) otherwise panic("requireManagedValueMatches: the value's struct name id is not in this file's interner")
+		if not wantName.equals(gotName) 'nameMismatch'
+			throw ParseError.assignTypeMismatch(siteName, got: String.from(gotName), expected: String.from(wantName), line: anchor.line, column: anchor.column)
+		end 'nameMismatch'
+	end 'requireManagedValueMatches'
 
 	// ⭐ **FILL EVERY OMITTED SLOT THAT DECLARES A DEFAULT** — `export var value = 0` + `Self{}`.
 	//
@@ -7664,14 +7984,25 @@ export type Parser
 	// (`parseReturnStatement`), so the factory does not drop what it hands to its caller. It is the bit —
 	// not the `structRef` tag — that owns the drop, because a borrowed struct PARAMETER also carries the
 	// tag and owns nothing.
-	function emitStructLiteral(layout StructLayout, fieldValues ValueIdArray, range SourceRange) returns ValueId
+	// ⭐ **A MANAGED FIELD IS MOVED IN** (`moveInPayload`) — the struct half of static single-owner
+	// ownership, the exact mirror of `emitEnumBox`'s payload move. A scalar field is stored as-is; a managed
+	// field (a `String` or a nested `struct`) transfers its value into the box: a borrowed String literal is
+	// promoted to an owned copy, an owned temporary is consumed out of the pending drops, a bare-local
+	// reference is poisoned (E3102 on later use), and a borrowed struct is refused (`moveInPayload` — the
+	// cross-call consume). The box becomes the field's sole owner, and its `__destruct_<Struct>` cascade
+	// drops the field once when the box is dropped.
+	function emitStructLiteral(layout StructLayout, fieldValues ValueIdArray, fieldBareLocal BoolArray, anchor Token, range SourceRange) returns ValueId throws ParseError
 		let size = self.emitLiteral(layout.sizeBytes(), valueType: MaxonType.integer, range: range)
 		let box = self.emitBoxAlloc(size, resultTag: ValueTypeTag.structRef, resultNameId: self.artifact.typeNames.intern(layout.name), range: range)
 		self.trackOwnedTemp(box)
 
 		for i in 0 upto layout.fieldCount() 'eachField'
 			let value = try fieldValues.get(i) otherwise panic("emitStructLiteral: fieldValues.get OOB at {i} — the column is sized to the layout's field count")
-			self.emitFieldStore(box, layout: layout, index: i, value: value, range: range)
+			let bareLocal = try fieldBareLocal.get(i) otherwise panic("emitStructLiteral: fieldBareLocal.get OOB at {i} — the column is sized to the layout's field count")
+			let fieldType = self.signatures.fieldTypeOf(layout.name, index: i, into: self.artifact.typeNames)
+			let class = classifyUnionPayload(self.signatures, typeNames: self.artifact.typeNames, fieldType: fieldType)
+			let stored = try self.moveInPayload(class, arg: value, argBareLocal: bareLocal, anchor: anchor, range: range)
+			self.emitFieldStore(box, layout: layout, index: i, value: stored, range: range)
 		end 'eachField'
 
 		return box
@@ -7857,7 +8188,7 @@ export type Parser
 			let arg = try args.get(i) otherwise panic("emitEnumBox: args.get OOB at {i} after the arity check")
 			let class = try classes.get(i) otherwise panic("emitEnumBox: classes.get OOB at {i} — it is filled in lockstep with the fields")
 			let bareLocal = try argsBareLocal.get(i) otherwise panic("emitEnumBox: argsBareLocal.get OOB at {i} — captured in lockstep with the args")
-			let stored = self.moveInPayload(class, arg: arg, argBareLocal: bareLocal, range: range)
+			let stored = try self.moveInPayload(class, arg: arg, argBareLocal: bareLocal, anchor: caseTok, range: range)
 			self.emitIndirectStore(box, offset: layout.payloadSlotOffset(i), value: stored, storageType: payloadStorageOf(class), range: range)
 		end 'storeEach'
 
@@ -7869,40 +8200,54 @@ export type Parser
 		return box
 	end 'emitEnumBox'
 
-	// ⭐ **MOVE A MANAGED PAYLOAD INTO THE BOX** — the construct half of static single-owner ownership,
-	// the mirror of `parseBinding`'s move-on-bind. A scalar is stored as-is. A managed payload transfers:
+	// ⭐ **MOVE A MANAGED VALUE INTO DURABLE STORAGE** — a union payload slot or a struct field, the
+	// construct half of static single-owner ownership and the mirror of `parseBinding`'s move-on-bind. A
+	// scalar is stored as-is. A managed value transfers into the box, which becomes its sole owner:
 	//   • a BORROWED String literal/param is PROMOTED to an owned heap copy first (`promoteToOwnedString`),
 	//     so the box owns a droppable payload — the copy is a fresh temp, removed from the pending list;
-	//   • an already-OWNED payload (an owned String, an interpolation temp, a struct box) is transferred:
-	//     a bare-local reference to a binding is POISONED (E3102 on later use), an owned temporary is
-	//     removed from the pending drops. No incref, no copy — the box becomes the value's sole owner.
-	function moveInPayload(class PayloadClass, arg ValueId, argBareLocal bool, range SourceRange) returns ValueId
-		let isString = match class 'c'
-			managed(_, s) gives s
-			scalar gives false
-			floatPayload gives false
-			nestedUnion gives false
-			undeclaredName gives false
-		end 'c'
+	//   • an already-OWNED value (an owned String, an interpolation temp, an owned struct/union box, a
+	//     CONSUMED param — one the analysis enrolled as owned) is transferred: a bare-local reference is
+	//     POISONED (E3102 on later use), an owned temporary is removed from the pending drops. No incref, no
+	//     copy.
+	//   • a BORROWED struct/union value (a borrowed param, a borrowed field read, a non-consumed argument)
+	//     has NO clone, so it cannot be moved into durable storage without the caller keeping a live
+	//     reference the box would dangle behind — that is the cross-call CONSUME the call-graph fixpoint
+	//     owns, deferred here to a clean `E2015` rather than a silent double-free. (A String is the one
+	//     managed kind with a promote, so a borrowed String never reaches this refusal.)
+	function moveInPayload(class PayloadClass, arg ValueId, argBareLocal bool, anchor Token, range SourceRange) returns ValueId throws ParseError
 		if not payloadClassIsManaged(class) 'scalar'
 			return arg
 		end 'scalar'
 
-		if isString and not self.valueIsOwnedHeap(arg) 'promoteBorrowed'
-			// A borrowed String literal/param — copy its bytes into a fresh owned record the box can drop.
-			let owned = self.promoteToOwnedString(arg, range: range)
-			self.removeFromPendingTemps(owned)
-			return owned
-		end 'promoteBorrowed'
+		if payloadClassIsString(class) 'string'
+			if not self.valueIsOwnedHeap(arg) 'promoteBorrowed'
+				// A borrowed String literal/param — copy its bytes into a fresh owned record the box can drop.
+				let owned = self.promoteToOwnedString(arg, range: range)
+				self.removeFromPendingTemps(owned)
+				return owned
+			end 'promoteBorrowed'
+		end 'string' else 'structOrUnion'
+			if not self.valueIsOwnedHeap(arg) 'borrowedManaged'
+				throw ParseError.unsupported("moving a borrowed struct/union value into durable storage (a struct field or a union payload) — a struct/union has no `clone`, so ownership must transfer, and a borrowed value's owner keeps a live reference; passing a borrowed parameter at a consuming position is the transitive-consume case handled by the call-graph fixpoint (P1.4a wave 2+)", line: anchor.line, column: anchor.column)
+			end 'borrowedManaged'
+		end 'structOrUnion'
 
 		// An already-owned managed value moves out of its source into the box.
+		self.transferOwnedInto(arg, argBareLocal: argBareLocal)
+		return arg
+	end 'moveInPayload'
+
+	// Transfer an already-OWNED managed value into durable storage: a bare-local reference to a binding is
+	// POISONED (`movedFrom` — E3102 on later use); an owned temporary is removed from the statement's pending
+	// drops (the box owns it now). THE one place the "who no longer owns this value" bookkeeping lives, so a
+	// union payload move and a struct-field move cannot drift on it.
+	function transferOwnedInto(arg ValueId, argBareLocal bool)
 		if argBareLocal 'moveOnBind'
 			self.poisonMoveSource(arg)
 		end 'moveOnBind' else 'consumeTemp'
 			self.removeFromPendingTemps(arg)
 		end 'consumeTemp'
-		return arg
-	end 'moveInPayload'
+	end 'transferOwnedInto'
 
 	// Store the case TAG at the box's offset 0 as an i64 — the same i64 tag `emitEnumTagLiteral` mints
 	// for a bare enum and the same `match` loads back to dispatch, so construct and match cannot
@@ -7955,25 +8300,10 @@ export type Parser
 		end 'declared'
 	end 'requireScalarPayloadArg'
 
-	// A managed payload argument must be the matching heap kind: a String field takes a `string`; a
-	// struct field takes a `structRef` of the SAME struct name (a pointer of the wrong struct would pass
-	// a tag-only check). The names are compared through this file's interner, the one the classifier's
-	// `structRef` id and the argument's own id were both minted from.
+	// A managed payload argument must be the matching heap kind — the union-payload caller of the shared
+	// `requireManagedValueMatches`, naming its site `<Union>.<case>(<field>)`.
 	function requireManagedPayloadArg(field PayloadField, storage MaxonType, isString bool, value ValueId, layout EnumLayout, caseTok Token) throws ParseError
-		let got = self.tagOf(value)
-		let wantTag = maxonTypeTag(storage)
-		if got != wantTag 'tagMismatch'
-			throw ParseError.assignTypeMismatch("{String.from(layout.name)}.{String.from(caseTok.value)}({String.from(field.name)})", got: typeTagName(got), expected: typeTagName(wantTag), line: caseTok.line, column: caseTok.column)
-		end 'tagMismatch'
-		if isString 'stringOk'
-			return
-		end 'stringOk'
-
-		let wantName = try self.artifact.typeNames.nameOf(typeNameIdOf(storage)) otherwise panic("requireManagedPayloadArg: the payload field's struct name id is not in this file's interner")
-		let gotName = try self.artifact.typeNames.nameOf(typeNameIdOf(self.typeOf(value))) otherwise panic("requireManagedPayloadArg: the argument's struct name id is not in this file's interner")
-		if not wantName.equals(gotName) 'nameMismatch'
-			throw ParseError.assignTypeMismatch("{String.from(layout.name)}.{String.from(caseTok.value)}({String.from(field.name)})", got: String.from(gotName), expected: String.from(wantName), line: caseTok.line, column: caseTok.column)
-		end 'nameMismatch'
+		try self.requireManagedValueMatches(storage, isString: isString, value: value, siteName: "{String.from(layout.name)}.{String.from(caseTok.value)}({String.from(field.name)})", anchor: caseTok)
 	end 'requireManagedPayloadArg'
 
 	// Load a boxed union's i64 TAG from offset 0 — the DISPATCH SUBJECT a `match` compares against
@@ -8188,20 +8518,65 @@ export type Parser
 	// is keyed by. So `p.x` resolves through the same two steps a human does — which type is `p`,
 	// and which slot does that type call `x`.
 	function parseFieldAccess() returns ValueId throws ParseError
+		let step = try self.resolveFieldChain()
+		let index = try self.requireFieldIndex(step.layout, fieldTok: step.lastFieldTok)
+		try self.requireFieldAccessible(step.layout, index: index, fieldTok: step.lastFieldTok)
+
+		return self.emitFieldLoad(step.box, layout: step.layout, index: index, range: SourceRange.between(step.baseTok, last: step.lastFieldTok))
+	end 'parseFieldAccess'
+
+	// ⭐ **RESOLVE A FIELD-ACCESS CHAIN `base.f1.f2.…fN` to its FINAL box + layout + last field token** —
+	// the shared spine of a chained READ (`o.inner.x`) and a chained WRITE (`o.inner.x = 42`). It resolves
+	// the base binding to its box and layout (`requireStructBase`, which also enforces the live-binding
+	// guard), then for every INTERMEDIATE field (all but the last) LOADS that field — which must be a struct
+	// — as the next box and threads its layout onward. A borrowed load: the loaded struct box is a borrow of
+	// the owning struct's field, valid while the base binding lives, so no ownership is taken and nothing is
+	// dropped. The cursor is left on the token AFTER the last field name (the `=` of a write, or wherever the
+	// read's expression continues).
+	function resolveFieldChain() returns FieldChainStep throws ParseError
 		let baseTok = try self.consume(TokenKind.identifier)
+		if not self.scope.contains(baseTok.value) 'undeclared'
+			throw ParseError.undefinedVariable(String.from(baseTok.value), line: baseTok.line, column: baseTok.column)
+		end 'undeclared'
+		let baseBinding = self.scope.getInfo(baseTok.value)
+		let base = try self.requireStructBase(baseBinding, baseTok: baseTok)
+		return try self.resolveFieldChainFrom(base.box, layout: base.layout, baseTok: baseTok, baseBinding: baseBinding)
+	end 'resolveFieldChain'
+
+	// Consume one `.field` on `(box, layout)`. The final field (no `.` after) is RETURNED unread for the
+	// caller to read or write; an INTERMEDIATE field (a `.` follows) must be a struct — it is LOADED as the
+	// next box (a borrow of the owning struct's field) and the walk recurses. Recursive rather than a `var`
+	// loop deliberately: threading a `StructLayout` through a reassigned `var` trips the struct-aliasing
+	// policy (E3078), while each recursion binds a fresh `let`. Chains are a handful of hops deep.
+	function resolveFieldChainFrom(box ValueId, layout StructLayout, baseTok Token, baseBinding VarInfo) returns FieldChainStep throws ParseError
 		try self.consume(TokenKind.dot)
 		let fieldTok = try self.consume(TokenKind.identifier)
+		if not self.at(TokenKind.dot) 'lastField'
+			return FieldChainStep.create(box, layout: layout, lastFieldTok: fieldTok, baseTok: baseTok, baseBinding: baseBinding)
+		end 'lastField'
 
-		// The binding is fetched ONCE and `requireStructBase` reads both facts off it: `parseDotted
-		// Primary` routed here on `scope.contains`, so it exists, and its layout and the box it is
-		// held in are one answer (see `StructBase`). Asking `Scope` twice would be two hash lookups
-		// for one answer.
-		let base = try self.requireStructBase(self.scope.getInfo(baseTok.value), baseTok: baseTok)
-		let index = try self.requireFieldIndex(base.layout, fieldTok: fieldTok)
-		try self.requireFieldAccessible(base.layout, index: index, fieldTok: fieldTok)
+		let index = try self.requireFieldIndex(layout, fieldTok: fieldTok)
+		try self.requireFieldAccessible(layout, index: index, fieldTok: fieldTok)
+		let nextLayout = try self.structLayoutOfField(layout, fieldTok: fieldTok, index: index)
+		let nextBox = self.emitFieldLoad(box, layout: layout, index: index, range: SourceRange.between(baseTok, last: fieldTok))
+		return try self.resolveFieldChainFrom(nextBox, layout: nextLayout, baseTok: baseTok, baseBinding: baseBinding)
+	end 'resolveFieldChainFrom'
 
-		return self.emitFieldLoad(base.box, layout: base.layout, index: index, range: SourceRange.between(baseTok, last: fieldTok))
-	end 'parseFieldAccess'
+	// The `StructLayout` of field `index` of `baseLayout` — used to continue a field chain THROUGH a
+	// struct-typed field (`o.inner.x`). The field's declared type is resolved (`named(Inner)` → `structRef`)
+	// and must be a struct; a chain through a scalar or String field (`o.name.x`) is refused, since there is
+	// nothing to address a further field on.
+	function structLayoutOfField(baseLayout StructLayout, fieldTok Token, index FieldIndex) returns StructLayout throws ParseError
+		let fieldType = self.resolveNamedStruct(self.signatures.fieldTypeOf(baseLayout.name, index: index, into: self.artifact.typeNames))
+		if maxonTypeTag(fieldType) != ValueTypeTag.structRef 'notAStruct'
+			throw ParseError.unsupported("a field access through '{String.from(baseLayout.name)}.{String.from(fieldTok.value)}', which is declared '{typeTagName(maxonTypeTag(fieldType))}' and not a struct — only a struct field can carry a further field access", line: fieldTok.line, column: fieldTok.column)
+		end 'notAStruct'
+		let name = try self.artifact.typeNames.nameOf(typeNameIdOf(fieldType)) otherwise panic("structLayoutOfField: a struct field's structRef name id is not in this file's interner — every structRef is interned from a recorded name")
+		match self.signatures.structOf(name) 'declared'
+			declared(layout) then return layout
+			undeclared then panic("structLayoutOfField: field '{String.from(fieldTok.value)}' is typed `structRef({String.from(name)})` but no file declares that struct — a structRef is only minted for a recorded type name")
+		end 'declared'
+	end 'structLayoutOfField'
 
 	// ⭐⭐ **A SELF-FIELD READ — `count` AND `self.count`, ONE PATH.**
 	//
@@ -8262,10 +8637,14 @@ export type Parser
 			throw ParseError.assignToImmutableField(String.from(layout.name), fieldName: String.from(fieldTok.value), line: fieldTok.line, column: fieldTok.column)
 		end 'immutableField'
 
+		let valueStart = self.pos
 		let value = try self.parseExpression(func, block: block)
 		try self.requireFieldType(layout, index: index, value: value, anchor: fieldTok)
 
-		self.emitFieldStore(receiver, layout: layout, index: index, value: value, range: range)
+		// Routed through `emitFieldWrite`, exactly as `parseFieldAssignment` is: a MANAGED self-field
+		// (`name = n`) must drop its old value and MOVE the new one in (a borrowed String is promoted, a
+		// borrowed struct refused), not a raw store that leaks the old value and dangles behind a borrow.
+		try self.emitFieldWrite(receiver, layout: layout, index: index, value: value, argBareLocal: self.rhsWasBareLocalReference(valueStart), anchor: fieldTok, range: range)
 	end 'emitCheckedSelfFieldStore'
 
 	// `self.x` / `self.m(…)` — the receiver named explicitly. `self` is its own KEYWORD token, so it
@@ -8374,36 +8753,50 @@ export type Parser
 	// The READ path asks the same chain minus its middle: it has no instance to write through, so
 	// resolution is followed directly by visibility (`parseFieldAccess`).
 	function parseFieldAssignment(func IrFunction, block IrBlock) throws ParseError
-		let baseTok = try self.consume(TokenKind.identifier)
-		try self.consume(TokenKind.dot)
-		let fieldTok = try self.consume(TokenKind.identifier)
+		// `resolveFieldChain` reads `base.f1.…fN` (a single `p.x` or a chain `o.inner.x`), resolving every
+		// intermediate struct field and leaving the cursor on the `=`. Its `requireStructBase` already
+		// enforced the base's live-binding guard.
+		let step = try self.resolveFieldChain()
 		try self.consume(TokenKind.equals)
+		let index = try self.requireFieldIndex(step.layout, fieldTok: step.lastFieldTok)
 
-		if not self.scope.contains(baseTok.value) 'undeclared'
-			// A field store names a LOCAL box. A top-level `var` of struct type would resolve here
-			// too, and cannot yet exist: a global holds a scalar until the heap reaches `.data`
-			// (`readTopLevelBinding` rejects the rest), so there is no second lookup to miss.
-			throw ParseError.undefinedVariable(String.from(baseTok.value), line: baseTok.line, column: baseTok.column)
-		end 'undeclared'
+		try self.requireMutableBinding(step.baseBinding, nameTok: step.baseTok)
+		try self.requireFieldAccessible(step.layout, index: index, fieldTok: step.lastFieldTok)
 
-		let binding = self.scope.getInfo(baseTok.value)
-		let base = try self.requireStructBase(binding, baseTok: baseTok)
-		let index = try self.requireFieldIndex(base.layout, fieldTok: fieldTok)
-
-		try self.requireMutableBinding(binding, nameTok: baseTok)
-		try self.requireFieldAccessible(base.layout, index: index, fieldTok: fieldTok)
-
-		if not base.layout.fieldIsMutable(index) 'immutableField'
-			throw ParseError.assignToImmutableField(String.from(base.layout.name), fieldName: String.from(fieldTok.value), line: baseTok.line, column: baseTok.column)
+		if not step.layout.fieldIsMutable(index) 'immutableField'
+			throw ParseError.assignToImmutableField(String.from(step.layout.name), fieldName: String.from(step.lastFieldTok.value), line: step.baseTok.line, column: step.baseTok.column)
 		end 'immutableField'
 
 		// Parsed AFTER both rejections, so a refused program emits no op — `emitCheckedGlobalStore`'s
-		// discipline, for its reason.
+		// discipline, for its reason. The value's start is captured so `emitFieldWrite` can decide, for a
+		// MANAGED field, whether the new value is a bare-local reference to poison.
+		let valueStart = self.pos
 		let value = try self.parseExpression(func, block: block)
-		try self.requireFieldType(base.layout, index: index, value: value, anchor: fieldTok)
+		try self.requireFieldType(step.layout, index: index, value: value, anchor: step.lastFieldTok)
 
-		self.emitFieldStore(base.box, layout: base.layout, index: index, value: value, range: SourceRange.between(baseTok, last: fieldTok))
+		try self.emitFieldWrite(step.box, layout: step.layout, index: index, value: value, argBareLocal: self.rhsWasBareLocalReference(valueStart), anchor: step.lastFieldTok, range: SourceRange.between(step.baseTok, last: step.lastFieldTok))
 	end 'parseFieldAssignment'
+
+	// ⭐ **WRITE A FIELD, DROPPING THE OLD MANAGED VALUE AND MOVING THE NEW ONE IN** (P1.4a wave 2) — the
+	// assignment counterpart of the construct-time `emitStructLiteral` move. A SCALAR field is a plain store.
+	// A MANAGED field (a `String` or a `struct`) DROPS its current value first (`emitDecref`, tag-routed —
+	// the old String/struct is freed) and then MOVES the new value in (`moveInPayload` — a borrowed literal
+	// is promoted, an owned value transfers, a borrowed struct is refused), so the field owns exactly one
+	// value across the write and the old one is freed exactly once. Mirrors the `var`-String reassignment
+	// drop model, one indirection out.
+	function emitFieldWrite(box ValueId, layout StructLayout, index FieldIndex, value ValueId, argBareLocal bool, anchor Token, range SourceRange) throws ParseError
+		let fieldType = self.signatures.fieldTypeOf(layout.name, index: index, into: self.artifact.typeNames)
+		let class = classifyUnionPayload(self.signatures, typeNames: self.artifact.typeNames, fieldType: fieldType)
+		if not payloadClassIsManaged(class) 'scalarField'
+			self.emitFieldStore(box, layout: layout, index: index, value: value, range: range)
+			return
+		end 'scalarField'
+
+		let old = self.emitFieldLoad(box, layout: layout, index: index, range: range)
+		self.emitDecref(old, range: range)
+		let stored = try self.moveInPayload(class, arg: value, argBareLocal: argBareLocal, anchor: anchor, range: range)
+		self.emitFieldStore(box, layout: layout, index: index, value: stored, range: range)
+	end 'emitFieldWrite'
 
 	// Declare every field of the enclosing type as a self-field alias, so a bare `width` inside
 	// `function area()` of `type Rect` resolves to `self.width`. Called at instance-method entry
@@ -9554,9 +9947,62 @@ export type Parser
 	// is emitted for a call the program is not allowed to make.
 	function emitCall(callee ByteArray, anchor Token, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, rparenTok Token, resultUsed bool) returns ValueId throws ParseError
 		let result = try self.mintCallResult(callee, anchor: anchor, resultUsed: resultUsed)
+		// The CALLER SIDE of consume-by-use (P1.4a wave 2): an owned argument at a position the callee
+		// CONSUMES is moved (poisoned / drained); a borrowed one is refused. Done BEFORE the op is emitted so
+		// a refused call emits nothing.
+		try self.applyCallerConsume(callee, args: args, argLabels: argLabels, anchor: anchor)
 		self.artifact.emitOp(self.currentBlock, op: MaxonOp.call(result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges), range: SourceRange.between(anchor, last: rparenTok))
 		return result
 	end 'emitCall'
+
+	// ⭐ **TRANSFER OWNERSHIP OF EVERY CONSUMED ARGUMENT** (P1.4a wave 2). For a callee that consumes at
+	// least one parameter, slot each SOURCE argument to its parameter position (positional by index,
+	// labelled by name — the sweep's `paramNames` stand in for the not-yet-built `FuncSignature`) and, at a
+	// consumed position, transfer the argument: an OWNED value is moved (poisoned if it is a live binding,
+	// drained if it is a temporary), a BORROWED struct/union is refused (`E2015` — the transitive-consume
+	// case), a scalar is inert. The overwhelming common callee `borrowsAll`, so this is a single `match` and
+	// returns.
+	function applyCallerConsume(callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, anchor Token) throws ParseError
+		match self.signatures.consumeOf(callee) 'c'
+			borrowsAll then break 'c'
+			consumes(info) then try self.transferConsumedArgs(info, args: args, argLabels: argLabels, anchor: anchor)
+		end 'c'
+	end 'applyCallerConsume'
+
+	// Transfer every argument that lands at a consumed parameter position. Slots each SOURCE argument to its
+	// position (positional by index, labelled by name over the sweep's `paramNames`), exactly the mapping
+	// `slotCallArgs` uses — but at parse time, where the `FuncSignature` does not yet exist. A malformed call
+	// (an arity mismatch, an unknown label) leaves the position `>= paramNames.count()`, which `isConsumed`
+	// answers false, so it is left untouched here and reported by SemanticCheck against the real registry.
+	function transferConsumedArgs(info ParamConsumeInfo, args ValueIdArray, argLabels ByteArrayArray, anchor Token) throws ParseError
+		for i in 0 upto args.count() 'eachArg'
+			let label = try argLabels.get(i) otherwise panic("transferConsumedArgs: argLabels.get OOB at {i} — args and argLabels are pushed in lockstep")
+			let position = i as ParamCount if label.isEmpty() else info.indexOfParam(label)
+			if not info.isConsumed(position) 'borrowed'
+				continue
+			end 'borrowed'
+			let argValue = try args.get(i) otherwise panic("transferConsumedArgs: args.get OOB at {i}")
+			try self.transferConsumedArg(argValue, anchor: anchor)
+		end 'eachArg'
+	end 'transferConsumedArgs'
+
+	// Transfer one consumed argument out of its owner. A SCALAR argument owns no heap and the consume is
+	// inert. An OWNED managed value moves — a live owned BINDING is poisoned (E3102 on later use), an owned
+	// TEMPORARY is drained from the statement's pending drops (the callee owns it now); `poisonMoveSource`
+	// and `removeFromPendingTemps` are each a no-op on the other's case, so both run without a bare-local
+	// flag to gate them. A BORROWED managed value (a borrowed parameter, a borrowed field read, a borrowed
+	// String literal) cannot transfer ownership — its own owner keeps a live reference — so it is refused,
+	// the transitive-consume case the call-graph fixpoint owns.
+	function transferConsumedArg(argValue ValueId, anchor Token) throws ParseError
+		if not self.valueIsManagedHeap(argValue) 'scalar'
+			return
+		end 'scalar'
+		if not self.valueIsOwnedHeap(argValue) 'borrowedManaged'
+			throw ParseError.unsupported("passing a borrowed struct/String value at a CONSUMING argument position — the callee moves it into durable storage, so ownership must transfer, and a borrowed value's owner keeps a live reference the callee's field would dangle behind; forwarding a borrowed parameter to a consuming callee is the transitive-consume case handled by the call-graph fixpoint (P1.4a wave 2+)", line: anchor.line, column: anchor.column)
+		end 'borrowedManaged'
+		self.poisonMoveSource(argValue)
+		self.removeFromPendingTemps(argValue)
+	end 'transferConsumedArg'
 
 	// Mint the SSA value a call to `calleeTok` defines, typed from the WHOLE-PROGRAM signature index
 	// (SignatureIndex.maxon) — so the type is exact whether the callee is declared above this call,
@@ -9759,8 +10205,22 @@ export type Parser
 	//
 	// `p.x == y` cannot be mistaken for a store: `==` lexes as a single `equalsEquals` token. Nor
 	// can `Point.create(…)`, whose token at +3 is `(`.
+	//
+	// ⭐ **A CHAIN `o.inner.x =` matches too** (P1.4a wave 2): the base identifier is followed by ONE OR
+	// MORE `.identifier` hops and then a single `=`. `resolveFieldChain` reads exactly this shape, so the
+	// dispatch predicate and the parser agree on where a chained store begins and ends. A `.method()` chain
+	// ends in `(` (not `=`) and a comparison in `==`, so neither is mistaken for a store.
 	function fieldAssignsAt(index TokenIndex) returns bool
-		return self.kindAt(index) == TokenKind.identifier and self.kindAt(index + 1) == TokenKind.dot and self.kindAt(index + 2) == TokenKind.identifier and self.kindAt(index + 3) == TokenKind.equals
+		if self.kindAt(index) != TokenKind.identifier 'notBase'
+			return false
+		end 'notBase'
+		var q = index + 1
+		var hops = 0
+		while self.kindAt(q) == TokenKind.dot and self.kindAt(q + 1) == TokenKind.identifier 'hop'
+			hops = hops + 1
+			q = q + 2
+		end 'hop'
+		return hops > 0 and self.kindAt(q) == TokenKind.equals
 	end 'fieldAssignsAt'
 
 	// **The token shape of an EXPLICIT self-field store** — `self . <field> =`.

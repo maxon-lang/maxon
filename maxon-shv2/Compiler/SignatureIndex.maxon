@@ -131,6 +131,17 @@ let ConstShapeNoValue = 11 as ContentHash
 let DeclShapeConstant = 12 as ContentHash
 let DeclShapeMutable = 13 as ContentHash
 
+// A function's PER-PARAMETER CONSUME BITS (P1.4a wave 2), mixed into the hash beside its name so a
+// cross-file caller re-parses when a callee's consume set changes. What rides is ACCEPTANCE and OWNERSHIP:
+// a param that becomes CONSUMED turns every caller's `f(ownedLocal)` into a move (the local is poisoned,
+// E3102 on reuse) and its `f(borrowedValue)` into E2015, while the caller's own bytes never move — so a
+// reader whose memo did not move would keep the old drop behaviour, a double-free or a leak. Its own
+// discriminator for `DeclShapeAlias`'s reason. `ConsumeBitSet`/`ConsumeBitClear` distinguish a set bit
+// from a clear one so "param 0 consumed, param 1 not" hashes differently from the reverse.
+let DeclShapeParamConsume = 24 as ContentHash
+let ConsumeBitSet = 25 as ContentHash
+let ConsumeBitClear = 26 as ContentHash
+
 // The separator between a file's path and a constant's bare name in a FILE-PRIVATE constant's
 // storage key. `|` is legal in neither a Maxon identifier nor a Windows path, so the composite is
 // unambiguous. Ported verbatim from v1's `fileScopedTopLevelKey` (Project.maxon:189-191), which
@@ -691,6 +702,112 @@ end 'payloadValueTypeOf'
 
 export typealias PayloadClassArray = Array with PayloadClass
 
+// ⭐ **A FUNCTION'S PER-PARAMETER CONSUME FACTS (P1.4a wave 2)** — the ordered `paramNames` (so a call
+// site can slot a LABELLED argument `inner: i` to its position without the `FuncSignature`, which is not
+// yet built at parse time) and the `bits` (`bits[i]` true iff parameter `i` is CONSUMED — moved into a
+// struct field by the function's own body). The sweep computes them from tokens (the only whole-program
+// input a pure per-file parse may read), one entry per CONSUMING function, and travels by NAME with no
+// interner (a name and a bool are not ids), exactly like `enumTypes`.
+export type ParamConsumeInfo
+	export let paramNames as ByteArrayArray
+	export let bits as BoolArray
+
+	export static function create(paramNames ByteArrayArray, bits BoolArray) returns ParamConsumeInfo
+		return Self{paramNames: paramNames, bits: bits}
+	end 'create'
+
+	// The declaration index of the parameter named `name`, or `paramNames.count()` when absent — the
+	// label→position slotting a call site needs, the `FuncSignature.indexOfParam` shape over the sweep's
+	// own name list.
+	export function indexOfParam(name ByteArray) returns ParamCount
+		for i in 0 upto self.paramNames.count() 'each'
+			let paramName = try self.paramNames.get(i) otherwise panic("ParamConsumeInfo.indexOfParam: paramNames.get OOB at {i}")
+			if paramName.equals(name) 'match'
+				return i
+			end 'match'
+		end 'each'
+		return self.paramNames.count()
+	end 'indexOfParam'
+
+	export function isConsumed(index ParamCount) returns bool
+		if index >= self.bits.count() 'past'
+			return false
+		end 'past'
+		return try self.bits.get(index) otherwise panic("ParamConsumeInfo.isConsumed: bits.get OOB at {index} despite index < count")
+	end 'isConsumed'
+end 'ParamConsumeInfo'
+
+export type ParamConsumeEntry
+	export let name as ByteArray
+	export let info as ParamConsumeInfo
+
+	export static function create(name ByteArray, info ParamConsumeInfo) returns ParamConsumeEntry
+		return Self{name: name, info: info}
+	end 'create'
+end 'ParamConsumeEntry'
+
+export typealias ParamConsumeEntryArray = Array with ParamConsumeEntry
+export typealias ParamConsumeMap = Map with (ByteArray, ParamConsumeInfo)
+
+// The answer to "does this callee consume any parameter?" — a union so "no recorded entry" is an ANSWER
+// (a borrow-only callee), never confused with an empty-but-present one.
+export union CalleeConsume
+	consumes(info ParamConsumeInfo)
+	borrowsAll
+end 'CalleeConsume'
+
+// ⭐ **WHICH RUNTIME ENTRY DROPS A MANAGED FIELD OF DECLARED TYPE `fieldType`** — the ONE router shared by
+// the parser's value-keyed `decrefCalleeFor` (a top-level owned value's drop) and the struct/union
+// destructor cascade (each managed field's drop), so a field moved IN through one classifier is dropped
+// through the matching callee and cannot leak (missed drop) or double-free (wrong drop). It generalises the
+// union cascade's `StrDecrefName if isString else MmDecrefName` line, which could not reach a nested managed
+// struct/union: a `String` drops via `__str_decref`; a struct or boxed union that itself owns managed heap
+// drops via ITS `__destruct_<T>` cascade; a scalar-only struct or scalar-only union box takes the trivial
+// `__mm_decref` (its box is all it owns).
+//
+// `typeNames` resolves a `named`/`structRef` field id to a NAME; pass the interner the field type's ids live
+// in (the file artifact interner at a construct/extract site, `project.typeNames` at the synthesis site).
+// The field is a precondition MANAGED one — every caller asks `structFieldIsManaged`/`payloadClassIsManaged`
+// first, so a scalar reaching here is a classification drift and panics rather than mis-routing.
+export function managedFieldDropCallee(signatures ProgramSignatures, typeNames TypeNameInterner, fieldType MaxonType) returns ByteArray
+	let tag = maxonTypeTag(fieldType)
+	if tagIsText(tag) 'string'
+		return StrDecrefName
+	end 'string'
+	if not (tagIsStructRef(tag) or tag == ValueTypeTag.named) 'notManagedRef'
+		panic("managedFieldDropCallee: a field of tag '{typeTagName(tag)}' is not a managed heap reference — every caller classifies the field managed first")
+	end 'notManagedRef'
+	let name = try typeNames.nameOf(typeNameIdOf(fieldType)) otherwise panic("managedFieldDropCallee: a managed field's type id is not in the interner it was resolved against — pass the interner the field type's ids live in")
+	return managedNameDropCallee(signatures, typeNames: typeNames, name: name)
+end 'managedFieldDropCallee'
+
+// The drop callee for a managed field NAMED `name` — a declared struct or boxed union. Split from
+// `managedFieldDropCallee` so a `structRef` (which is always a struct) and a `named` (struct or union) reach
+// the same struct/union lookup once the name is in hand.
+function managedNameDropCallee(signatures ProgramSignatures, typeNames TypeNameInterner, name ByteArray) returns ByteArray
+	if signatures.containsStruct(name) 'struct'
+		if signatures.structHasManagedField(name) 'managedStruct'
+			return destructorSymbol(name)
+		end 'managedStruct'
+		return MmDecrefName
+	end 'struct'
+	match signatures.enumOf(name) 'union'
+		declared(layout) then return unionNameDropCallee(signatures, typeNames: typeNames, layout: layout)
+		// A managed field that is neither struct nor enum cannot occur: `structFieldIsManaged` classified it
+		// managed, and its only managed non-String forms are a declared struct and a boxed union.
+		undeclared then panic("managedNameDropCallee: managed field '{String.from(name)}' is neither a declared struct nor a declared enum/union — the caller classified it managed")
+	end 'union'
+end 'managedNameDropCallee'
+
+// A boxed union that itself owns a managed payload drops through its own cascade; a scalar-only union box
+// owns only its box.
+function unionNameDropCallee(signatures ProgramSignatures, typeNames TypeNameInterner, layout EnumLayout) returns ByteArray
+	if unionHasManagedField(signatures, typeNames: typeNames, layout: layout, wantStringOnly: false) 'managedUnion'
+		return destructorSymbol(layout.name)
+	end 'managedUnion'
+	return MmDecrefName
+end 'unionNameDropCallee'
+
 export type ProgramSignatures
 	// Function name -> its declared return type. Last-wins on a duplicate name, exactly as the
 	// project's own `funcReturnTypes` registry is; the duplicate itself is reported by
@@ -736,6 +853,11 @@ export type ProgramSignatures
 	var decls as TopLevelDeclArray
 	// Storage key -> its index in `decls`. FIRST-WINS on a duplicate key (see `recordDecl`).
 	var declIndex as TopLevelDeclIndexMap
+	// ⭐ Function name -> its per-parameter CONSUME bits (P1.4a wave 2). `paramIsConsumed(callee, i)` is
+	// the door a call site asks "does the callee take ownership of my argument at position i?". Filled by
+	// `recordParamConsume` from each file's `scanParamConsumes`; last-wins on a duplicate name (a duplicate
+	// function is E3006, reported elsewhere, so the overwrite is never observed), exactly as `returnTypes` is.
+	var funcParamConsumes as ParamConsumeMap
 	// The content hash OF THE DECLARATIONS — not of the source they were read from. This is the
 	// second half of a parse memo's key (`QueryEngine.parseMemoKey`), and hashing the folded
 	// ENTRIES rather than the FILES is the whole point of it:
@@ -756,7 +878,7 @@ export type ProgramSignatures
 	export var hash as ContentHash
 
 	export static function create() returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedTypeAliasMap.create(), structTypes: StructLayoutMap.create(), enumTypes: EnumLayoutMap.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), hash: fnvOffsetBasis()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedTypeAliasMap.create(), structTypes: StructLayoutMap.create(), enumTypes: EnumLayoutMap.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), hash: fnvOffsetBasis()}
 	end 'create'
 
 	// Fold ONE file's scanned declarations into the index. Called in SOURCE-PATH order, so the
@@ -768,10 +890,16 @@ export type ProgramSignatures
 	// machinery `mergeArtifact` uses for the identical job — `TypeNameInterner.foldInto` +
 	// `remapMaxonReturnType`. One mechanism, two callers: a second copy of "reconcile a file's ids
 	// into a bigger table" would be free to disagree with this one about what an id means.
-	export function foldFile(scanned FuncReturnTypeEntryArray, aliases RangedTypeAliasArray, structs StructLayoutArray, enums EnumLayoutArray, bindings TopLevelDeclArray, fileTypeNames TypeNameInterner)
+	export function foldFile(scanned FuncReturnTypeEntryArray, aliases RangedTypeAliasArray, structs StructLayoutArray, enums EnumLayoutArray, bindings TopLevelDeclArray, paramConsumes ParamConsumeEntryArray, fileTypeNames TypeNameInterner)
 		for alias in aliases 'eachAlias'
 			self.recordAlias(alias)
 		end 'eachAlias'
+
+		// Consume facts travel by NAME and carry no ids, so they fold before the interner reconciliation
+		// below — nothing about them needs remapping (like `enumTypes`).
+		for entry in paramConsumes 'eachConsume'
+			self.recordParamConsume(entry.name, info: entry.info)
+		end 'eachConsume'
 
 		// Bindings — `let` and `var` alike — are RECORDED here and EVALUATED later
 		// (`evaluateInitializers`), and the gap between the two is the whole reason a forward
@@ -842,6 +970,44 @@ export type ProgramSignatures
 		self.returnTypes.upsert(name, value: returnType)
 		self.hash = self.mixDeclaration(self.hash, name: name, returnType: returnType)
 	end 'record'
+
+	// Add one function's consume bits to the index AND fold them into the hash. The one write, for
+	// `record`'s reason: the table and the hash that keys every parse memo on it cannot disagree about what
+	// the index contains. A function with NO consumed parameter is not recorded (its default answer is "not
+	// consumed"), so the common function costs no map entry and no hash movement — the same "absence is the
+	// answer" the sweep's over-approximation rests on.
+	function recordParamConsume(name ByteArray, info ParamConsumeInfo)
+		self.funcParamConsumes.upsert(name, value: info)
+		var state = mixBytes(mix(self.hash, value: DeclShapeParamConsume), bytes: name)
+		// The param NAMES ride too: a rename changes which labelled argument a caller slots to a consumed
+		// position, so a caller's memo must move when they do (the slotting `indexOfParam` reads them).
+		for i in 0 upto info.paramNames.count() 'eachName'
+			let paramName = try info.paramNames.get(i) otherwise panic("recordParamConsume: paramNames.get OOB at {i} despite i < count")
+			let bit = info.isConsumed(i)
+			state = mix(mixBytes(state, bytes: paramName), value: ConsumeBitSet if bit else ConsumeBitClear)
+		end 'eachName'
+		self.hash = state
+	end 'recordParamConsume'
+
+	// ⭐ **DOES `callee` CONSUME (take ownership of) ITS ARGUMENT AT POSITION `index`?** THE door the
+	// callee-side enrollment asks per parameter. A callee with no recorded entry, or an index past its
+	// recorded bits, is a BORROW (false) — the safe default, and what makes recording only the consuming
+	// functions correct.
+	export function paramIsConsumed(callee ByteArray, index ParamCount) returns bool
+		return match self.consumeOf(callee) 'c'
+			consumes(info) gives info.isConsumed(index)
+			borrowsAll gives false
+		end 'c'
+	end 'paramIsConsumed'
+
+	// ⭐ **THE CALLEE'S CONSUME FACTS, or `borrowsAll`** — the door a CALL SITE asks once, then slots each
+	// argument against `info.paramNames` to decide which ones are moved. `borrowsAll` (no recorded entry) is
+	// every runtime callee, every borrow-only user function, and the overwhelming common case — so the call
+	// site's fast path is a single `match` with nothing to slot.
+	export function consumeOf(callee ByteArray) returns CalleeConsume
+		let info = try self.funcParamConsumes.get(callee) otherwise return CalleeConsume.borrowsAll
+		return CalleeConsume.consumes(info)
+	end 'consumeOf'
 
 	// Add one declared struct type to the index AND fold it into the hash. The one write, for
 	// `record`'s reason: the table and the hash that keys every parse memo on it cannot disagree
@@ -1582,6 +1748,25 @@ export type ProgramSignatures
 		let enumLayout = try self.enumTypes.get(name) otherwise panic("ProgramSignatures.structFieldIsManaged: enumTypes.contains({String.from(name)}) is true but get failed")
 		return enumLayout.isBoxed()
 	end 'structFieldIsManaged'
+
+	// Does struct `structName` own droppable heap in ANY field — the union-side `unionHasManagedField`
+	// generalised to a struct, and the gate that decides whether the struct needs a `__destruct_<Struct>`
+	// cascade at all (a scalar-only struct's drop is the trivial `__mm_decref`). Answered over the index's
+	// own interner, allocation-free per scalar field, exactly as `structFieldIsManaged` is — it is the loop
+	// around that per-field predicate, kept ONE function so the destructor synthesis, its usage gate and the
+	// caller-side drop routing agree on what "managed" means by construction.
+	//
+	// The struct is a precondition, not a case: every caller reached here through a `structOf` that answered
+	// `declared`.
+	export function structHasManagedField(structName ByteArray) returns bool
+		let layout = try self.structTypes.get(structName) otherwise panic("ProgramSignatures.structHasManagedField: no `type {String.from(structName)}` is declared — every caller asks `structOf` first")
+		for i in 0 upto layout.fieldCount() 'eachField'
+			if self.structFieldIsManaged(structName, index: i) 'managed'
+				return true
+			end 'managed'
+		end 'eachField'
+		return false
+	end 'structHasManagedField'
 
 	// The declared return type of `callee`, ADOPTED into `into` — the calling file's own artifact
 	// interner. THE one door out of this index (see the header): a `named` type crosses by NAME and

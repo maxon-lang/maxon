@@ -76,11 +76,11 @@ export let MmLeakCheckName = b"__mm_leak_check"
 // slice 2). It is `__`-prefixed, so `isCompilerInternalCallee` routes its call past the user-function
 // checks — no file declares it. ONE speller, so the DROP site (`Parser.decrefCalleeFor`), the USAGE scan
 // (`recordCallUsage`) and the SYNTHESIS (`installUnionDestructors`) name it identically and cannot drift.
-export let UnionDestructorPrefix = b"__destruct_"
+export let DestructorPrefix = b"__destruct_"
 
-export function unionDestructorSymbol(unionName ByteArray) returns ByteArray
-	return "{String.from(UnionDestructorPrefix)}{String.from(unionName)}".toByteArray()
-end 'unionDestructorSymbol'
+export function destructorSymbol(unionName ByteArray) returns ByteArray
+	return "{String.from(DestructorPrefix)}{String.from(unionName)}".toByteArray()
+end 'destructorSymbol'
 
 // The exit code a leaked program reports. It is the project-wide leak-gate code: a `spec-test`
 // worker is itself a leak-gated Maxon program, and `SpecWorkerPool.LeakCheckExitCode` is the same
@@ -480,38 +480,149 @@ end 'buildMmFree'
 // for a struct box), routed off the SAME classifier the construct's move-in reads. The tag switch drops
 // only the LIVE case's managed fields; a moved-out slot is null and its null-guard skips it (so a match
 // that bound a payload OUT does not double-free it here).
-export function installUnionDestructors(module StdModule, project Project, signatures ProgramSignatures, needed UnionDestructorSet)
+export function installUnionDestructors(module StdModule, project Project, signatures ProgramSignatures, needed DestructorSet)
 	for (_, layout) in project.enumTypes 'each'
 		if not unionHasManagedField(signatures, typeNames: project.typeNames, layout: layout, wantStringOnly: false) 'noManaged'
 			continue
 		end 'noManaged'
-		if not needed.contains(unionDestructorSymbol(layout.name)) 'notReferenced'
+		if not needed.contains(destructorSymbol(layout.name)) 'notReferenced'
 			continue
 		end 'notReferenced'
 		synthesizeUnionDestructor(module, layout: layout, project: project, signatures: signatures)
 	end 'each'
 end 'installUnionDestructors'
 
-// ⭐ **NOTE WHAT A REFERENCED UNION DESTRUCTOR TRANSITIVELY NEEDS** — its `__str_decref`/`__mm_free`
-// calls live in a Std body the Maxon-module `scanRuntimeUsage` cannot see, so they are DECLARED here
-// (the same shape `recordCallUsage` uses for `__str_append`). A destructor always frees the box
-// (`__mm_free`, part of the heap runtime), and one whose union carries a String field also calls
-// `__str_decref`. Called after `scanRuntimeUsage`, before `installStringRuntime` — so the bits are set
-// before the functions they gate are (or are not) built.
-export function noteUnionDestructorUsage(usage RuntimeUsage, project Project, signatures ProgramSignatures)
-	for (_, layout) in project.enumTypes 'each'
-		if not unionHasManagedField(signatures, typeNames: project.typeNames, layout: layout, wantStringOnly: false) 'noManaged'
+// ⭐ **NOTE WHAT THE REFERENCED DESTRUCTORS TRANSITIVELY NEED**, for both structs and unions — their
+// `__str_decref`/`__mm_free`/nested-`__destruct_<T>` calls live in Std bodies the Maxon-module
+// `scanRuntimeUsage` cannot see, so they are DECLARED here. Two obligations:
+//
+//   1. **Close the needed set over NESTING.** A `__destruct_<Outer>` whose field is a managed struct/union
+//      calls that field's OWN `__destruct_<Inner>`, which the module never mentions by name — so an inner
+//      destructor referenced ONLY through a cascade would never be synthesized. `closeDestructorNeeds`
+//      walks the referenced destructors' managed fields to a fixpoint, adding each nested destructor.
+//   2. **Turn on the transitive runtime bits.** Every destructor frees the box (`__mm_free` — heap), and
+//      one whose type directly owns a `String` field calls `__str_decref`.
+//
+// Called after `scanRuntimeUsage`, before `.data` layout reads `usesHeap` and `installStringRuntime` reads
+// `usesStrDecref` — so the closed set and the bits are settled before anything they gate is built.
+export function noteDestructorUsage(usage RuntimeUsage, project Project, signatures ProgramSignatures)
+	closeDestructorNeeds(usage, project: project, signatures: signatures)
+
+	for (_, layout) in project.structTypes 'eachStruct'
+		if usage.neededDestructors.contains(destructorSymbol(layout.name)) 'referenced'
+			usage.usesHeap = true
+			if structHasStringField(signatures, structName: layout.name) 'hasString'
+				usage.usesStrDecref = true
+			end 'hasString'
+		end 'referenced'
+	end 'eachStruct'
+
+	for (_, layout) in project.enumTypes 'eachUnion'
+		if usage.neededDestructors.contains(destructorSymbol(layout.name)) 'referenced'
+			usage.usesHeap = true
+			if unionHasManagedField(signatures, typeNames: project.typeNames, layout: layout, wantStringOnly: true) 'hasString'
+				usage.usesStrDecref = true
+			end 'hasString'
+		end 'referenced'
+	end 'eachUnion'
+end 'noteDestructorUsage'
+
+// Grow `usage.neededDestructors` to a fixpoint over destructor NESTING: for every referenced managed
+// struct/union destructor, add the `__destruct_<T>` of each managed field that itself owns managed heap (a
+// nested struct/union), because that nested destructor is CALLED by the cascade but named nowhere the module
+// scan can see. Monotonic — a symbol once added stays added — so the loop terminates in at most (#types)
+// passes. A String or scalar-only field's drop callee is not a destructor symbol and adds nothing.
+function closeDestructorNeeds(usage RuntimeUsage, project Project, signatures ProgramSignatures)
+	var changed = true
+	while changed 'fixpoint'
+		changed = false
+		for (_, layout) in project.structTypes 'eachStruct'
+			if usage.neededDestructors.contains(destructorSymbol(layout.name)) and addNestedStructDestructors(usage, structName: layout.name, project: project, signatures: signatures) 'grew'
+				changed = true
+			end 'grew'
+		end 'eachStruct'
+		for (_, layout) in project.enumTypes 'eachUnion'
+			if usage.neededDestructors.contains(destructorSymbol(layout.name)) and addNestedUnionDestructors(usage, layout: layout, project: project, signatures: signatures) 'grew'
+				changed = true
+			end 'grew'
+		end 'eachUnion'
+	end 'fixpoint'
+end 'closeDestructorNeeds'
+
+// Add the nested `__destruct_<T>` of each managed field of struct `structName` to the needed set; return
+// whether the set grew. A field whose drop callee is a destructor symbol (a managed struct/union) contributes
+// its symbol; a String (`__str_decref`) or scalar-only box (`__mm_decref`) contributes none.
+function addNestedStructDestructors(usage RuntimeUsage, structName ByteArray, project Project, signatures ProgramSignatures) returns bool
+	let layout = requireDeclaredStruct(signatures, structName: structName, context: "addNestedStructDestructors")
+	var grew = false
+	for i in 0 upto layout.fieldCount() 'eachField'
+		if not signatures.structFieldIsManaged(structName, index: i) 'scalar'
 			continue
-		end 'noManaged'
-		if not usage.neededUnionDestructors.contains(unionDestructorSymbol(layout.name)) 'notReferenced'
-			continue
-		end 'notReferenced'
-		usage.usesHeap = true
-		if unionHasManagedField(signatures, typeNames: project.typeNames, layout: layout, wantStringOnly: true) 'hasString'
-			usage.usesStrDecref = true
-		end 'hasString'
-	end 'each'
-end 'noteUnionDestructorUsage'
+		end 'scalar'
+		let fieldType = try layout.fieldTypes.get(i) otherwise panic("addNestedStructDestructors: fieldTypes.get OOB at {i}")
+		if insertIfDestructorSymbol(usage, callee: managedFieldDropCallee(signatures, typeNames: project.typeNames, fieldType: fieldType)) 'added'
+			grew = true
+		end 'added'
+	end 'eachField'
+	return grew
+end 'addNestedStructDestructors'
+
+// The union twin of `addNestedStructDestructors` — add each managed payload field's nested destructor.
+function addNestedUnionDestructors(usage RuntimeUsage, layout EnumLayout, project Project, signatures ProgramSignatures) returns bool
+	var grew = false
+	for ci in 0 upto layout.caseCount() 'eachCase'
+		let payloads = layout.payloadsAt(ci)
+		for fi in 0 upto payloads.count() 'eachField'
+			let field = try payloads.get(fi) otherwise panic("addNestedUnionDestructors: payloadsAt count disagrees with get at {fi}")
+			let class = classifyUnionPayload(signatures, typeNames: project.typeNames, fieldType: field.declaredType)
+			if not payloadClassIsManaged(class) 'scalar'
+				continue
+			end 'scalar'
+			if insertIfDestructorSymbol(usage, callee: managedFieldDropCallee(signatures, typeNames: project.typeNames, fieldType: field.declaredType)) 'added'
+				grew = true
+			end 'added'
+		end 'eachField'
+	end 'eachCase'
+	return grew
+end 'addNestedUnionDestructors'
+
+// Insert `callee` into the needed set iff it is a `__destruct_<T>` symbol not already present; return
+// whether it was newly added. A `__str_decref`/`__mm_decref` callee (a leaf drop) is not a destructor and
+// is left out — only synthesized cascades are collected here.
+function insertIfDestructorSymbol(usage RuntimeUsage, callee ByteArray) returns bool
+	if not bytesStartWith(callee, prefix: DestructorPrefix) 'notDestructor'
+		return false
+	end 'notDestructor'
+	if usage.neededDestructors.contains(callee) 'present'
+		return false
+	end 'present'
+	usage.neededDestructors.insert(callee)
+	return true
+end 'insertIfDestructorSymbol'
+
+// The `StructLayout` of a struct the caller already knows is declared (it named a needed destructor). ONE
+// home for the "structOf answered declared → layout" step the struct-destructor helpers share, so the
+// "unreachable undeclared" panic is written once.
+function requireDeclaredStruct(signatures ProgramSignatures, structName ByteArray, context String) returns StructLayout
+	match signatures.structOf(structName) 'declared'
+		declared(layout) then return layout
+		undeclared then panic("{context}: `type {String.from(structName)}` referenced by a needed destructor is not declared — every needed struct destructor names a declared struct")
+	end 'declared'
+end 'requireDeclaredStruct'
+
+// True iff struct `structName` directly owns a `String` field — the fields THIS struct's destructor drops
+// through `__str_decref` (a String inside a nested struct is dropped by that struct's own destructor). The
+// `usesStrDecref` gate reads it.
+function structHasStringField(signatures ProgramSignatures, structName ByteArray) returns bool
+	let layout = requireDeclaredStruct(signatures, structName: structName, context: "structHasStringField")
+	for i in 0 upto layout.fieldCount() 'eachField'
+		let fieldType = try layout.fieldTypes.get(i) otherwise panic("structHasStringField: fieldTypes.get OOB at {i}")
+		if tagIsText(maxonTypeTag(fieldType)) 'string'
+			return true
+		end 'string'
+	end 'eachField'
+	return false
+end 'structHasStringField'
 
 // Emit `__destruct_<U>(box)`:
 //
@@ -525,7 +636,7 @@ end 'noteUnionDestructorUsage'
 // A void `(i64) -> void` signature — the X64 backend discards nothing, and there is no `call_indirect`
 // type tag to satisfy (static dispatch), so it needs no `i64` return the way v1's header destructor did.
 function synthesizeUnionDestructor(module StdModule, layout EnumLayout, project Project, signatures ProgramSignatures)
-	let func = IrFunction.createFromStd(unionDestructorSymbol(layout.name), returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	let func = IrFunction.createFromStd(destructorSymbol(layout.name), returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry")
@@ -567,10 +678,70 @@ function synthesizeUnionDestructor(module StdModule, layout EnumLayout, project 
 	module.functions.push(func)
 end 'synthesizeUnionDestructor'
 
+// ⭐⭐ **THE PER-STRUCT DESTRUCTOR CASCADE (P1.4a wave 2).** The struct twin of `installUnionDestructors`:
+// synthesize `__destruct_<Struct>(box)` for every struct that owns a managed field and whose destructor is
+// REFERENCED. Appended already-lowered after the pipeline, like the union one, so it is never re-optimized.
+// A struct has NO tag — every field is always present — so the cascade drops each managed field
+// unconditionally (behind a null-guard) rather than under a tag switch.
+export function installStructDestructors(module StdModule, project Project, signatures ProgramSignatures, needed DestructorSet)
+	for (_, layout) in project.structTypes 'each'
+		if not signatures.structHasManagedField(layout.name) 'noManaged'
+			continue
+		end 'noManaged'
+		if not needed.contains(destructorSymbol(layout.name)) 'notReferenced'
+			continue
+		end 'notReferenced'
+		synthesizeStructDestructor(module, layout: layout, project: project, signatures: signatures)
+	end 'each'
+end 'installStructDestructors'
+
+// Emit `__destruct_<Struct>(box)`:
+//
+//   entry + lower: the shared refcount RMW (`emitRefcountCheckToLastOwner`) — `rc == 0` is the last owner
+//     and branches to `drop`; otherwise the count is lowered and the box kept.
+//   drop:  drop each managed field, in declaration order, behind a NULL-guard (a moved-out field slot is
+//          null), each through `managedFieldDropCallee` — then fall to `free`.
+//   free:  `__mm_free(box)`; ret.
+//
+// No tag load and no case chain: a struct's fields are all live at once. Otherwise identical to the union
+// cascade, which is why both share `emitNullGuardedDrop` and the same `(i64) -> void` static-dispatch shape.
+function synthesizeStructDestructor(module StdModule, layout StructLayout, project Project, signatures ProgramSignatures)
+	let func = IrFunction.createFromStd(destructorSymbol(layout.name), returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var lower = module.addBlock(func, label: b"lower")
+	var drop = module.addBlock(func, label: b"drop")
+	var free = module.addBlock(func, label: b"free")
+
+	emitParams(module, block: entry, count: 1)
+	let box = 0 as ValueId
+
+	emitRefcountCheckToLastOwner(module, entry: entry, lower: lower, record: box, lastOwner: drop, ids: ids)
+
+	var cur = drop
+	for i in 0 upto layout.fieldCount() 'eachField'
+		if not signatures.structFieldIsManaged(layout.name, index: i) 'scalarField'
+			continue
+		end 'scalarField'
+		let fieldType = try layout.fieldTypes.get(i) otherwise panic("synthesizeStructDestructor: fieldTypes.get OOB at {i}")
+		let callee = managedFieldDropCallee(signatures, typeNames: project.typeNames, fieldType: fieldType)
+		cur = emitNullGuardedDrop(module, cur: cur, box: box, offset: layout.offsetOfField(i), callee: callee, ids: ids, func: func)
+	end 'eachField'
+	module.setTerminator(cur, op: StdOp.branch(free.id))
+
+	let freed = ids.mint()
+	module.appendOp(free, op: StdOp.call(freed, callee: MmFreeName, args: argsOf(box)))
+	module.setTerminator(free, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'synthesizeStructDestructor'
+
 // Drop every MANAGED field of case `ci` from `startBlock`, each behind a NULL-guard (a moved-out slot is
-// null and must not be decref'd as a bogus pointer), then branch to `dest`. A String field drops through
-// `__str_decref` (frees its external buffer too), a struct box through `__mm_decref`; the kind comes off
-// the SAME classifier the construct read, so the dropped set equals the moved-in set by construction.
+// null and must not be decref'd as a bogus pointer), then branch to `dest`. The drop callee comes off
+// `managedFieldDropCallee` — a String through `__str_decref`, a nested managed struct/union through ITS
+// `__destruct_<T>`, a scalar-only struct/union box through `__mm_decref` — the SAME router the construct's
+// drop routing reads, so the dropped set equals the moved-in set by construction.
 function emitManagedFieldDrops(module StdModule, startBlock IrBlock, box ValueId, layout EnumLayout, ci CaseIndex, dest IrBlock, project Project, signatures ProgramSignatures, ids ValueMinter, func IrFunction)
 	let payloads = layout.payloadsAt(ci)
 	var cur = startBlock
@@ -580,26 +751,33 @@ function emitManagedFieldDrops(module StdModule, startBlock IrBlock, box ValueId
 		if not payloadClassIsManaged(class) 'scalarField'
 			continue
 		end 'scalarField'
-		let callee = StrDecrefName if payloadClassIsString(class) else MmDecrefName
-
-		let ptr = ids.mint()
-		module.appendOp(cur, op: StdOp.loadIndirect(ptr, addrId: box, offset: layout.payloadSlotOffset(fi), valueType: StdType.i64))
-		let zero = ids.mint()
-		module.appendOp(cur, op: StdOp.const(zero, value: 0, valueType: StdType.i64))
-		let nonNull = ids.mint()
-		module.appendOp(cur, op: StdOp.cmp(nonNull, lhs: ptr, rhs: zero, pred: StdCmpPred.ne, operandType: StdType.i64))
-		var dropBlock = module.addBlock(func, label: b"decref")
-		let contBlock = module.addBlock(func, label: b"cont")
-		module.setTerminator(cur, op: StdOp.condBranch(nonNull, thenBlockId: dropBlock.id, elseBlockId: contBlock.id))
-
-		let dropped = ids.mint()
-		module.appendOp(dropBlock, op: StdOp.call(dropped, callee: callee, args: argsOf(ptr)))
-		module.setTerminator(dropBlock, op: StdOp.branch(contBlock.id))
-
-		cur = contBlock
+		let callee = managedFieldDropCallee(signatures, typeNames: project.typeNames, fieldType: field.declaredType)
+		cur = emitNullGuardedDrop(module, cur: cur, box: box, offset: layout.payloadSlotOffset(fi), callee: callee, ids: ids, func: func)
 	end 'eachField'
 	module.setTerminator(cur, op: StdOp.branch(dest.id))
 end 'emitManagedFieldDrops'
+
+// Load the managed pointer at `box + offset`, and if it is non-null call `callee` on it — the one
+// null-guarded field-drop shape both the union tag-case cascade and the struct cascade emit, so the
+// load/compare/branch geometry lives in ONE place. Returns the CONTINUATION block (where the caller
+// resumes): a moved-out (null) slot skips the drop and falls straight through.
+function emitNullGuardedDrop(module StdModule, cur IrBlock, box ValueId, offset ByteOffset, callee ByteArray, ids ValueMinter, func IrFunction) returns IrBlock
+	let ptr = ids.mint()
+	module.appendOp(cur, op: StdOp.loadIndirect(ptr, addrId: box, offset: offset, valueType: StdType.i64))
+	let zero = ids.mint()
+	module.appendOp(cur, op: StdOp.const(zero, value: 0, valueType: StdType.i64))
+	let nonNull = ids.mint()
+	module.appendOp(cur, op: StdOp.cmp(nonNull, lhs: ptr, rhs: zero, pred: StdCmpPred.ne, operandType: StdType.i64))
+	var dropBlock = module.addBlock(func, label: b"decref")
+	let contBlock = module.addBlock(func, label: b"cont")
+	module.setTerminator(cur, op: StdOp.condBranch(nonNull, thenBlockId: dropBlock.id, elseBlockId: contBlock.id))
+
+	let dropped = ids.mint()
+	module.appendOp(dropBlock, op: StdOp.call(dropped, callee: callee, args: argsOf(ptr)))
+	module.setTerminator(dropBlock, op: StdOp.branch(contBlock.id))
+
+	return contBlock
+end 'emitNullGuardedDrop'
 
 // `__mm_leak_check(exitCode) -> exitCode` — the gate.
 //

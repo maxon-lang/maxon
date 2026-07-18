@@ -159,11 +159,13 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// (heap / print / string-`==`). The HEAP answer alone drives `.data` layout — the `.data` slots must
 	// exist before the backend resolves a `globalAddr`, so it is needed here, before lowering — and it
 	// stays `__mm_`-specific: a print-only program adds no `.data` slots and no leak check.
-	let usage = scanRuntimeUsage(module)
-	// A managed-payload union's `__destruct_<U>` (P1.3 slice 2) calls `__str_decref`/`__mm_free` inside a
-	// SYNTHESIZED Std body the Maxon-module scan above cannot see. Declare those transitive needs now —
-	// before `.data` layout reads `usesHeap` and before `installStringRuntime` reads `usesStrDecref`.
-	noteUnionDestructorUsage(usage, project: project, signatures: signatures)
+	var usage = scanRuntimeUsage(module)
+	// A managed-payload union's `__destruct_<U>` (P1.3 slice 2) and a managed-field struct's
+	// `__destruct_<Struct>` (P1.4a wave 2) call `__str_decref`/`__mm_free`/nested `__destruct_<T>` inside
+	// SYNTHESIZED Std bodies the Maxon-module scan above cannot see. Close the needed-destructor set over that
+	// nesting and declare its transitive needs now — before `.data` layout reads `usesHeap` and before
+	// `installStringRuntime` reads `usesStrDecref`.
+	noteDestructorUsage(usage, project: project, signatures: signatures)
 	var declaredGlobals = signatures.declaredGlobals()
 	if usage.usesHeap 'heapGlobals'
 		for entry in runtimeGlobals() 'each'
@@ -194,10 +196,12 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// `installStringRuntime` installs only the referenced functions (a no-op when neither is used).
 	installStringRuntime(pipeline.stdModule, usage: usage)
 
-	// The per-union destructor cascades (P1.3 slice 2), installed the same way and for the same reason:
-	// already-lowered Std, appended after the pipeline so they are never re-optimized. Only the union
-	// destructors the module actually CALLS are built (`usage.neededUnionDestructors`).
-	installUnionDestructors(pipeline.stdModule, project: project, signatures: signatures, needed: usage.neededUnionDestructors)
+	// The per-union (P1.3 slice 2) and per-struct (P1.4a wave 2) destructor cascades, installed the same way
+	// and for the same reason: already-lowered Std, appended after the pipeline so they are never
+	// re-optimized. Only the destructors the module actually CALLS — directly or through a nested cascade
+	// `noteDestructorUsage` closed the set over — are built (`usage.neededDestructors`).
+	installUnionDestructors(pipeline.stdModule, project: project, signatures: signatures, needed: usage.neededDestructors)
+	installStructDestructors(pipeline.stdModule, project: project, signatures: signatures, needed: usage.neededDestructors)
 
 	// The backend owns its own error gate now: the register allocator reports E5001
 	// (register pressure) onto `project.diagnostics` and throws when a loop genuinely

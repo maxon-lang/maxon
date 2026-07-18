@@ -63,8 +63,7 @@ end 'main'
 error E2013: specs/fragments/challenge-struct-field-assign/immutable-field-assign-error.test:16:2: cannot assign to field 'Config.id' because it is immutable (declare with 'var' to make it mutable)
 ```
 
-<!-- disabled-test: nested-struct-field-reassignment -->
-<!-- P1.4 — a struct-typed field (`o.inner.x`, a store through a loaded box) plus a struct crossing a call boundary as a PARAM (`Outer.create(inner Inner)`) -->
+<!-- test: nested-struct-field-reassignment -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
