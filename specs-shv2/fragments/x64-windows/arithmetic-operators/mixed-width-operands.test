@@ -1,0 +1,51 @@
+// Test: mixed-width-operands
+function base() returns ExitCode
+	return 5
+end 'base'
+
+function widen(j int) returns int
+	let r = base()
+	return r + j
+end 'widen'
+
+function main() returns ExitCode
+	return widen(10)
+end 'main'
+---
+ExitCode: 15
+---
+func @base {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 5
+    x64.popReg rbp
+    x64.ret
+}
+
+func @widen {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.callDirect base
+    x64.leaRegRegReg r8, r8, rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 10
+    x64.callDirect widen
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
