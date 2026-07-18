@@ -331,12 +331,12 @@ end 'arm64AllocatableGprMask'
 // permanent census over every operand of every op — a pure TIME cost, which `scale-test` measures no
 // part of), while a 15-live-int pigeonhole measured against the same 30 never fires at all and lets
 // the colorer run out of registers. Both are the same mistake: a class-agnostic denominator.
-// ⚠ x64-SCOPED THIS RUNG. The class split reads the X64 register file's boundary. `poolOfClass` and
-// `classPoolSizeOf` are called from the shared splitter / Hall census, which run the allocator only
-// for x64 this rung (arm64 stubs out at isel before `allocateRegisters`). Wiring arm64 through the
-// allocator (wave 1) threads the target's `RegisterFile` here — the boundary is per-ISA (16 vs 31).
-export function poolOfClass(pool RegMask, class RegClass) returns RegMask
-	return pool and classRegisterMask(class, file: x64RegisterFile())
+// The class split reads the TARGET's register file boundary — 16 for x64, 31 for arm64 — threaded in
+// as `file` beside `pool` (both are per-ISA and travel together, sourced once from
+// `registerFileFor(target)` and carried on `LivenessResult.registerFile`). Passing the wrong file
+// files a register in the wrong class: an arm64 GPR x19..x28 would read as vector against x64's 16.
+export function poolOfClass(pool RegMask, class RegClass, file RegisterFile) returns RegMask
+	return pool and classRegisterMask(class, file: file)
 end 'poolOfClass'
 
 // How many registers a value of `class` could take if nothing were blocked — the denominator of every
@@ -350,8 +350,8 @@ end 'poolOfClass'
 // exact permanent-census regression the per-class denominator exists to prevent, reintroduced by a
 // denominator off by two. v1 reaches the same shape independently: its `poolSizeFor(regClass, desc)`
 // reads the pool size off the TARGET DESCRIPTOR, never off the register file.
-export function classPoolSizeOf(pool RegMask, class RegClass) returns RegCount
-	return regMaskPopcount(poolOfClass(pool, class: class))
+export function classPoolSizeOf(pool RegMask, class RegClass, file RegisterFile) returns RegCount
+	return regMaskPopcount(poolOfClass(pool, class: class, file: file))
 end 'classPoolSizeOf'
 
 // Guard the load-bearing invariant that a call op's inline `implicitDefs` clobber
@@ -504,13 +504,18 @@ export function allocateRegisters(module TargetModule, target Target, project Pr
 	// disconnected accounting of the same wall time.
 	var stats = project.timings.regAlloc
 	let pool = allocatablePool(target)
+	// The target's register FILE — its GPR/vector boundary and width — carried beside `pool` through
+	// the whole allocator so every per-value class question is asked against the right ISA (16 vs 31).
+	// Sourced once here and stored on each function's `LivenessResult`; the sites that hold `pool` but
+	// not `target` read it back from there (see `poolOfClass`).
+	let file = registerFileFor(target)
 
 	// Split every phi-carrying CRITICAL edge before coloring, so SSA destruction
 	// always has a safe home for its parallel copies. This runs OUTSIDE the
 	// per-function loop (it mutates `func.blockRefs`, which the loop's `func` borrow
 	// would forbid).
 	let edgeProbe = PhaseProbe.beginRegAllocPhase(project, phase: RegAllocPhase.criticalEdges)
-	splitCriticalEdges(module)
+	splitCriticalEdges(module, target: target)
 	recordRegAllocPhase(project, phase: RegAllocPhase.criticalEdges, probe: edgeProbe)
 
 	// Index-based (not `for func in ...`) because the loop index IS the function's
@@ -521,12 +526,12 @@ export function allocateRegisters(module TargetModule, target Target, project Pr
 	for funcIndex in 0 upto module.funcCount() 'eachFunc'
 		var func = try module.functions.get(funcIndex) otherwise panic("allocateRegisters: functions.get OOB at {funcIndex}")
 		let classes = try valueClasses.get(funcIndex) otherwise panic("allocateRegisters: the lowering produced class columns for {valueClasses.count()} function(s) but the module has {module.funcCount()} — every function's vregs are classified as they are minted, so the two counts are the same walk of the same module")
-		try allocateFunction(module, func: func, funcIndex: funcIndex, pool: pool, valueClass: classes, stats: stats, project: project)
+		try allocateFunction(module, func: func, funcIndex: funcIndex, pool: pool, file: file, valueClass: classes, stats: stats, project: project)
 	end 'eachFunc'
 	logDebug(LogCategory.codegen, message: function() gives regAllocStatsMessage(stats))
 end 'allocateRegisters'
 
-function allocateFunction(module TargetModule, func IrFunction, funcIndex FuncIndex, pool RegMask, valueClass ValueClassColumn, stats RegAllocStats, project Project) throws CompileError
+function allocateFunction(module TargetModule, func IrFunction, funcIndex FuncIndex, pool RegMask, file RegisterFile, valueClass ValueClassColumn, stats RegAllocStats, project Project) throws CompileError
 	// Lay the blocks out in reverse-postorder FIRST, so layout order matches execution order.
 	// The cold-spill splitter's before/after-peak classification (and the colorer's dominance
 	// walk) rest on that; the parser emits a nested loop's exit before its inner blocks, which
@@ -563,7 +568,7 @@ function allocateFunction(module TargetModule, func IrFunction, funcIndex FuncIn
 	// does it in one place for all four (see PhaseProbe).
 	let livenessBefore = regAllocAccumulated(project, phase: RegAllocPhase.liveness)
 	let splitProbe = PhaseProbe.beginRegAllocPhase(project, phase: RegAllocPhase.splitting)
-	let liveness = try splitLiveRanges(module, func: func, funcIndex: funcIndex, topo: topo, pool: pool, valueClass: valueClass, stats: stats, project: project)
+	let liveness = try splitLiveRanges(module, func: func, funcIndex: funcIndex, topo: topo, pool: pool, file: file, valueClass: valueClass, stats: stats, project: project)
 	recordPhaseExcluding(project, phase: RegAllocPhase.splitting, probe: splitProbe, innerPhase: RegAllocPhase.liveness, innerBefore: livenessBefore)
 
 	stats.recordLivenessMarkSteps(liveness.livenessMarkSteps)
@@ -709,11 +714,11 @@ function collectOpHints(op TargetOp, hints ColorHints)
 		// The data-section band carries no COPY hint either: a `lea`, a load and a store are
 		// none of them a move, so no two of their operands want the same register.
 		andRegReg to leaRegRdata then break 'hint'
-		// arm64 does not run the allocator this rung (isel stubs out before `allocateRegisters`), so
-		// no arm64 op reaches hint collection. Wave 1, wiring arm64 through the shared allocator,
-		// replaces this with the real arm64 hints (arm64 has no two-address reuse, so most arms
-		// simply carry none). The band-append invariant forced this arm; a panic keeps it loud.
-		arm64Ret to arm64FpLoadRdata then panic("collectOpHints: an arm64 op reached the shared coloring pass — arm64 does not run the allocator this rung (wave 1 wires it)")
+		// The arm64 band carries NO copy hint: arm64 is 3-ADDRESS (no ALU op is a move, none has a
+		// two-address reuse to bias). The arm64 moves that DO carry a fixed-register hint — the param
+		// capture, the call-arg pre-move, the return move — are the SHARED `movRegReg` handled above,
+		// not an arm64-band op. So every arm64 arm simply breaks, like the bit / data-section bands.
+		arm64Ret to arm64FpLoadRdata then break 'hint'
 	end 'hint'
 end 'collectOpHints'
 
@@ -867,10 +872,10 @@ function allocateDef(v ValueId, working RegMask, dyingRegs RegMask, hints ColorH
 	// So a class filter here covers every route to a register, and the alternative — filtering at each
 	// route — is the same fact written down four times, one of which will be forgotten.
 	let class = liveness.classOf(v)
-	let classPool = poolOfClass(pool, class: class)
+	let classPool = poolOfClass(pool, class: class, file: liveness.registerFile)
 	let blocked = (working and not dyingRegs) or liveness.forbiddenOf(v) or (fullRegisterMask() and not classPool)
 	let reg = chooseRegister(v, classPool: classPool, blocked: blocked, dyingRegs: dyingRegs, hints: hints, alloc: alloc, liveness: liveness, stats: stats)
-	assertColouredInClass(v, reg: reg, class: class)
+	assertColouredInClass(v, reg: reg, class: class, file: liveness.registerFile)
 	alloc.assign(v, regNum: reg)
 	stats.valuesColored = stats.valuesColored + 1
 	stats.noteRegisterUse(reg)
@@ -886,9 +891,9 @@ end 'allocateDef'
 // float that was never declared `xmm` is coloured into a GPR and agrees with itself here. Declaring
 // the class correctly is the op's job and nothing downstream can check it — see
 // `TargetLiveness.makeRegClassColumn`.
-function assertColouredInClass(v ValueId, reg RegNum, class RegClass)
-	if regClassOf(reg) != class 'wrongFile'
-		panic("assertColouredInClass: value {v} is a {class.name} value but was coloured into register {reg}, which is in the {regClassOf(reg).name} file — a route to a register bypassed the class filter in `allocateDef`'s `blocked` mask. An int in an XMM (or a float in a GPR) encodes to a different instruction, so this is a silent miscompile, not a performance bug.")
+function assertColouredInClass(v ValueId, reg RegNum, class RegClass, file RegisterFile)
+	if regClassIn(reg, file: file) != class 'wrongFile'
+		panic("assertColouredInClass: value {v} is a {class.name} value but was coloured into register {reg}, which is in the {regClassIn(reg, file: file).name} file — a route to a register bypassed the class filter in `allocateDef`'s `blocked` mask. An int in an XMM (or a float in a GPR) encodes to a different instruction, so this is a silent miscompile, not a performance bug.")
 	end 'wrongFile'
 end 'assertColouredInClass'
 
@@ -1374,11 +1379,58 @@ export function colorTargetOp(op TargetOp, alloc Allocation) returns TargetOp
 		cvttsd2siRegReg(dest, src) then return TargetOp.cvttsd2siRegReg(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc))
 		// The `.rdata` address `lea` (P1.2 wave A) — colors its GPR dest, exactly like `leaRegGlobal`.
 		leaRegRdata(dest, label) then return TargetOp.leaRegRdata(colorVRegWith(dest, alloc: alloc), label: label)
-		// arm64 does not run the allocator this rung, so no arm64 op reaches the rewrite. Wave 1
-		// fills these with the same `colorVRegWith`-per-operand reconstruction the x64 arms use above
-		// (the rewrite is neutral — it substitutes `RegNum`s and never names an ISA register). The
-		// band-append invariant forced this arm; a panic keeps the gap loud until wave 1 closes it.
-		arm64Ret to arm64FpLoadRdata then panic("colorTargetOp: an arm64 op reached the shared rewrite — arm64 does not run the allocator this rung (wave 1 wires it)")
+		// --- arm64 SCALAR-CORE band ---
+		//
+		// The SAME `colorVRegWith`-per-operand reconstruction the x64 arms use: the rewrite is NEUTRAL —
+		// it substitutes `RegNum`s and never names an ISA register — so an arm64 op is rebuilt exactly
+		// like its x64 twin, and the non-register fields (block ids, immediates, names, cond codes) pass
+		// through. Control/frame/call ops with no register operand pass through unchanged.
+		arm64Ret then return op
+		arm64Branch then return op
+		arm64CondBranch then return op
+		arm64Cbz(reg, targetBlockId) then return TargetOp.arm64Cbz(colorVRegWith(reg, alloc: alloc), targetBlockId: targetBlockId)
+		arm64Cbnz(reg, targetBlockId) then return TargetOp.arm64Cbnz(colorVRegWith(reg, alloc: alloc), targetBlockId: targetBlockId)
+		arm64MovImm(dest, value) then return TargetOp.arm64MovImm(colorVRegWith(dest, alloc: alloc), value: value)
+		arm64Prologue then return op
+		arm64Epilogue then return op
+		arm64Add(dest, lhs, rhs) then return TargetOp.arm64Add(colorVRegWith(dest, alloc: alloc), lhs: colorVRegWith(lhs, alloc: alloc), rhs: colorVRegWith(rhs, alloc: alloc))
+		arm64Sub(dest, lhs, rhs) then return TargetOp.arm64Sub(colorVRegWith(dest, alloc: alloc), lhs: colorVRegWith(lhs, alloc: alloc), rhs: colorVRegWith(rhs, alloc: alloc))
+		arm64Mul(dest, lhs, rhs) then return TargetOp.arm64Mul(colorVRegWith(dest, alloc: alloc), lhs: colorVRegWith(lhs, alloc: alloc), rhs: colorVRegWith(rhs, alloc: alloc))
+		arm64Sdiv(dest, lhs, rhs) then return TargetOp.arm64Sdiv(colorVRegWith(dest, alloc: alloc), lhs: colorVRegWith(lhs, alloc: alloc), rhs: colorVRegWith(rhs, alloc: alloc))
+		arm64Udiv(dest, lhs, rhs) then return TargetOp.arm64Udiv(colorVRegWith(dest, alloc: alloc), lhs: colorVRegWith(lhs, alloc: alloc), rhs: colorVRegWith(rhs, alloc: alloc))
+		arm64Msub(dest, mulLhs, mulRhs, minuend) then return TargetOp.arm64Msub(colorVRegWith(dest, alloc: alloc), mulLhs: colorVRegWith(mulLhs, alloc: alloc), mulRhs: colorVRegWith(mulRhs, alloc: alloc), minuend: colorVRegWith(minuend, alloc: alloc))
+		arm64And(dest, lhs, rhs) then return TargetOp.arm64And(colorVRegWith(dest, alloc: alloc), lhs: colorVRegWith(lhs, alloc: alloc), rhs: colorVRegWith(rhs, alloc: alloc))
+		arm64Orr(dest, lhs, rhs) then return TargetOp.arm64Orr(colorVRegWith(dest, alloc: alloc), lhs: colorVRegWith(lhs, alloc: alloc), rhs: colorVRegWith(rhs, alloc: alloc))
+		arm64Eor(dest, lhs, rhs) then return TargetOp.arm64Eor(colorVRegWith(dest, alloc: alloc), lhs: colorVRegWith(lhs, alloc: alloc), rhs: colorVRegWith(rhs, alloc: alloc))
+		arm64Lslv(dest, lhs, rhs) then return TargetOp.arm64Lslv(colorVRegWith(dest, alloc: alloc), lhs: colorVRegWith(lhs, alloc: alloc), rhs: colorVRegWith(rhs, alloc: alloc))
+		arm64Asrv(dest, lhs, rhs) then return TargetOp.arm64Asrv(colorVRegWith(dest, alloc: alloc), lhs: colorVRegWith(lhs, alloc: alloc), rhs: colorVRegWith(rhs, alloc: alloc))
+		arm64Lsrv(dest, lhs, rhs) then return TargetOp.arm64Lsrv(colorVRegWith(dest, alloc: alloc), lhs: colorVRegWith(lhs, alloc: alloc), rhs: colorVRegWith(rhs, alloc: alloc))
+		arm64Neg(dest, src) then return TargetOp.arm64Neg(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc))
+		arm64Mvn(dest, src) then return TargetOp.arm64Mvn(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc))
+		arm64AddImm(dest, src, imm) then return TargetOp.arm64AddImm(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc), imm: imm)
+		arm64SubImm(dest, src, imm) then return TargetOp.arm64SubImm(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc), imm: imm)
+		arm64AndImm(dest, src, imm) then return TargetOp.arm64AndImm(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc), imm: imm)
+		arm64OrrImm(dest, src, imm) then return TargetOp.arm64OrrImm(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc), imm: imm)
+		arm64EorImm(dest, src, imm) then return TargetOp.arm64EorImm(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc), imm: imm)
+		arm64LslImm(dest, src, imm) then return TargetOp.arm64LslImm(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc), imm: imm)
+		arm64AsrImm(dest, src, imm) then return TargetOp.arm64AsrImm(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc), imm: imm)
+		arm64LsrImm(dest, src, imm) then return TargetOp.arm64LsrImm(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc), imm: imm)
+		arm64Cmp(lhs, rhs) then return TargetOp.arm64Cmp(colorVRegWith(lhs, alloc: alloc), rhs: colorVRegWith(rhs, alloc: alloc))
+		arm64CmpImm(reg, imm) then return TargetOp.arm64CmpImm(colorVRegWith(reg, alloc: alloc), imm: imm)
+		arm64Cset(dest, cond) then return TargetOp.arm64Cset(colorVRegWith(dest, alloc: alloc), cond: cond)
+		arm64LeaFuncAddr(dest, funcName) then return TargetOp.arm64LeaFuncAddr(colorVRegWith(dest, alloc: alloc), funcName: funcName)
+		arm64LeaRdata(dest, label) then return TargetOp.arm64LeaRdata(colorVRegWith(dest, alloc: alloc), label: label)
+		arm64LeaGlobal(dest, label) then return TargetOp.arm64LeaGlobal(colorVRegWith(dest, alloc: alloc), label: label)
+		arm64BranchLink then return op
+		arm64BranchLinkReg(reg) then return TargetOp.arm64BranchLinkReg(colorVRegWith(reg, alloc: alloc))
+		arm64Fadd(dest, lhs, rhs) then return TargetOp.arm64Fadd(colorVRegWith(dest, alloc: alloc), lhs: colorVRegWith(lhs, alloc: alloc), rhs: colorVRegWith(rhs, alloc: alloc))
+		arm64Fsub(dest, lhs, rhs) then return TargetOp.arm64Fsub(colorVRegWith(dest, alloc: alloc), lhs: colorVRegWith(lhs, alloc: alloc), rhs: colorVRegWith(rhs, alloc: alloc))
+		arm64Fmul(dest, lhs, rhs) then return TargetOp.arm64Fmul(colorVRegWith(dest, alloc: alloc), lhs: colorVRegWith(lhs, alloc: alloc), rhs: colorVRegWith(rhs, alloc: alloc))
+		arm64Fdiv(dest, lhs, rhs) then return TargetOp.arm64Fdiv(colorVRegWith(dest, alloc: alloc), lhs: colorVRegWith(lhs, alloc: alloc), rhs: colorVRegWith(rhs, alloc: alloc))
+		arm64Fcmp(lhs, rhs) then return TargetOp.arm64Fcmp(colorVRegWith(lhs, alloc: alloc), rhs: colorVRegWith(rhs, alloc: alloc))
+		arm64Scvtf(dest, src) then return TargetOp.arm64Scvtf(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc))
+		arm64Fcvtzs(dest, src) then return TargetOp.arm64Fcvtzs(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc))
+		arm64FpLoadRdata(dest, label) then return TargetOp.arm64FpLoadRdata(colorVRegWith(dest, alloc: alloc), label: label)
 	end 'rewrite'
 end 'colorTargetOp'
 

@@ -692,7 +692,7 @@ end 'SplitScratch'
 // crossing value is cold-spillable — is E5001 (`raiseRegisterPressure`), not a placeholder
 // panic. `project` (its `opRanges`/`valueOrigins` tables) + `funcIndex` are what the E5001
 // diagnostic maps each blocking Target ValueId back to its source span through.
-export function splitLiveRanges(module TargetModule, func IrFunction, funcIndex FuncIndex, topo FuncTopology, pool RegMask, valueClass ValueClassColumn, stats RegAllocStats, project Project) returns LivenessResult throws CompileError
+export function splitLiveRanges(module TargetModule, func IrFunction, funcIndex FuncIndex, topo FuncTopology, pool RegMask, file RegisterFile, valueClass ValueClassColumn, stats RegAllocStats, project Project) returns LivenessResult throws CompileError
 	// Fresh-id -> source-value map for the E5001 diagnostic: every reload/remat id the loop
 	// below mints is recorded here so a fresh id in a blocking set resolves to source, not a
 	// Rule-3 panic (see SplitLineage).
@@ -718,7 +718,7 @@ export function splitLiveRanges(module TargetModule, func IrFunction, funcIndex 
 	// The ONE liveness build. Everything after it is an incremental repair of the region a split
 	// dirtied (`refreshAfterSplit`) — the whole-function rebuild this used to run per split was the
 	// O(function × splits) quadratic.
-	var liveness = timedLiveness(module, cfg: cfg, func: func, valueClass: valueClass, project: project)
+	var liveness = timedLiveness(module, cfg: cfg, func: func, valueClass: valueClass, file: file, project: project)
 	// One set of working buffers for every iteration below — the sweep and the victim choice allocate
 	// nothing per split (see `SplitScratch`). It is sized off the CFG, which splitting cannot change.
 	var scratch = SplitScratch.create(cfg.topo.numBlocks)
@@ -828,7 +828,7 @@ export function splitLiveRanges(module TargetModule, func IrFunction, funcIndex 
 	// ITS OWN pool.
 	for classOrdinal in 0 upto RegClassCount 'eachClass'
 		let class = regClassAt(classOrdinal)
-		let classPoolSize = classPoolSizeOf(pool, class: class)
+		let classPoolSize = classPoolSizeOf(pool, class: class, file: file)
 		if liveness.maxPressureOf(class) > classPoolSize 'residual'
 			panic("splitLiveRanges: '{String.from(func.name)}' finished with {class.name} maxPressure {liveness.maxPressureOf(class)} still > the {class.name} pool {classPoolSize} — the splitter's post-condition (every point within its pool, per register file) was violated")
 		end 'residual'
@@ -941,7 +941,7 @@ function refreshAfterSplit(module TargetModule, cfg FuncCfg, liveness LivenessRe
 	let victimClass = liveness.classOf(split.victim)
 	index.growTo(cfg.valueCount)
 	liveness.growValueSpace(cfg.valueCount, class: victimClass)
-	scratch.effPools.growTo(cfg.valueCount, pool: pool, class: victimClass)
+	scratch.effPools.growTo(cfg.valueCount, pool: pool, class: victimClass, file: liveness.registerFile)
 	scratch.defLiveAfter.growFilled(cfg.valueCount, value: NoStoreAnchorPressure)
 	scratch.sweep.widenRow(liveness.wordsPerRow)
 
@@ -1059,7 +1059,7 @@ end 'refreshPeak'
 //     here; an op names at most two virtual registers. At least four candidates always remain.
 function noVictimAtPeak(project Project, module TargetModule, func IrFunction, funcIndex FuncIndex, liveness LivenessResult, peak PressurePeak, pool RegMask, lineage SplitLineage) throws CompileError
 	if peak.clobberOnly 'splitterBug'
-		panic("noVictimAtPeak: '{String.from(func.name)}' has a CONFINED overflow ({peak.pressure} values confined to the {regMaskPopcount(peak.witness)} registers of witness {peak.witness}, which the full {peak.witnessClass.name} pool of {classPoolSizeOf(pool, class: peak.witnessClass)} would fit) yet `chooseVictim` refused every one of them. The invariant that must hold: a confined value the peak op does not itself read is ALWAYS relievable — it has a store anchor (an op def or a phi block entry), its store fits the pool (full-pool peaks are relieved FIRST, so no def point is over-pool by now), and reloading its after-peak uses — or, when a before-peak use is still reachable from the peak around a back edge, EVERY use — makes it dead across the peak. The tight set outnumbers the witness and the peak op names at most two virtual registers, so candidates always remain. Refusing them all is a SPLITTER BUG in `hasStoreAnchor` / `storeFitsPool` / `killsValueAtPeak` / `analyzePressure` — not user register pressure. It must never surface as E5001: this program fits the machine.")
+		panic("noVictimAtPeak: '{String.from(func.name)}' has a CONFINED overflow ({peak.pressure} values confined to the {regMaskPopcount(peak.witness)} registers of witness {peak.witness}, which the full {peak.witnessClass.name} pool of {classPoolSizeOf(pool, class: peak.witnessClass, file: liveness.registerFile)} would fit) yet `chooseVictim` refused every one of them. The invariant that must hold: a confined value the peak op does not itself read is ALWAYS relievable — it has a store anchor (an op def or a phi block entry), its store fits the pool (full-pool peaks are relieved FIRST, so no def point is over-pool by now), and reloading its after-peak uses — or, when a before-peak use is still reachable from the peak around a back edge, EVERY use — makes it dead across the peak. The tight set outnumbers the witness and the peak op names at most two virtual registers, so candidates always remain. Refusing them all is a SPLITTER BUG in `hasStoreAnchor` / `storeFitsPool` / `killsValueAtPeak` / `analyzePressure` — not user register pressure. It must never surface as E5001: this program fits the machine.")
 	end 'splitterBug'
 
 	try raiseRegisterPressure(project, module: module, func: func, funcIndex: funcIndex, liveness: liveness, peak: peak, pool: pool, lineage: lineage)
@@ -1080,9 +1080,9 @@ end 'noVictimAtPeak'
 // whole-function build. The per-split REPAIR of that build (`refreshAfterSplit`) is billed to
 // `splitting`, which is where it belongs: it is proportional to what the split changed, not to the
 // function, and it is the splitter's own bookkeeping.
-function timedLiveness(module TargetModule, cfg FuncCfg, func IrFunction, valueClass ValueClassColumn, project Project) returns LivenessResult
+function timedLiveness(module TargetModule, cfg FuncCfg, func IrFunction, valueClass ValueClassColumn, file RegisterFile, project Project) returns LivenessResult
 	let probe = PhaseProbe.beginRegAllocPhase(project, phase: RegAllocPhase.liveness)
-	let liveness = computeLivenessOn(module, cfg: cfg, func: func, valueClass: valueClass)
+	let liveness = computeLivenessOn(module, cfg: cfg, func: func, valueClass: valueClass, file: file)
 	recordRegAllocPhase(project, phase: RegAllocPhase.liveness, probe: probe)
 	return liveness
 end 'timedLiveness'
@@ -1234,7 +1234,7 @@ function analyzeBlockPressure(module TargetModule, liveness LivenessResult, pool
 
 	// The census tracks the SAME set as `liveRow`, so it is seeded and cleared with it.
 	if censusNeeded 'seedTheCensus'
-		census.reset(pool)
+		census.reset(pool, file: liveness.registerFile)
 		for v in seedBuf 'seedCensus'
 			census.add(try effPoolSizes.get(v) otherwise panic("analyzeBlockPressure: live-out value {v} is outside the function's value space"), class: liveness.classOf(v))
 		end 'seedCensus'
@@ -1314,9 +1314,9 @@ function analyzeBlockPressure(module TargetModule, liveness LivenessResult, pool
 		var anyFullPoolOverflow = false
 		for classOrdinal in 0 upto RegClassCount 'eachClass'
 			let class = regClassAt(classOrdinal)
-			if classRowGet(effective, class: class) > classPoolSizeOf(pool, class: class) 'fullPoolOverflow'
+			if classRowGet(effective, class: class) > classPoolSizeOf(pool, class: class, file: liveness.registerFile) 'fullPoolOverflow'
 				anyFullPoolOverflow = true
-				best = betterPeak(best, pressure: classRowGet(effective, class: class), blockLocal: i, forwardPos: forwardPos, peakSeq: seq, clobberOnly: false, witness: poolOfClass(pool, class: class), witnessClass: class, atFixedRegisterOp: atFixedRegisterOp)
+				best = betterPeak(best, pressure: classRowGet(effective, class: class), blockLocal: i, forwardPos: forwardPos, peakSeq: seq, clobberOnly: false, witness: poolOfClass(pool, class: class, file: liveness.registerFile), witnessClass: class, atFixedRegisterOp: atFixedRegisterOp)
 			end 'fullPoolOverflow'
 		end 'eachClass'
 
@@ -1324,7 +1324,7 @@ function analyzeBlockPressure(module TargetModule, liveness LivenessResult, pool
 		// pool. Checked only where NO file overflows its own pool — which also bounds each file's live
 		// set at its pool size, so the exact confirmation can never be a hot-path cost.
 		if not anyFullPoolOverflow 'maybeConfined'
-			if censusNeeded and census.screenViolates(maxClassPoolSize(pool)) 'screenFired'
+			if censusNeeded and census.screenViolates(maxClassPoolSize(pool, file: liveness.registerFile)) 'screenFired'
 				bitsetCollectRow(liveRow, base: 0, wordsPerRow: wordsPerRow, out: liveAtOp)
 				best = confinedPeakAt(liveness, live: liveAtOp, pool: pool, best: best, blockLocal: i, forwardPos: forwardPos, peakSeq: seq, atFixedRegisterOp: atFixedRegisterOp, hall: scratch.hall)
 			end 'screenFired'
@@ -1428,7 +1428,7 @@ function confinedPeakAt(liveness LivenessResult, live ValueIdArray, pool RegMask
 			continue
 		end 'noValuesOfThisFile'
 
-		match hallVerdictAt(liveness, live: hall.classLive, pool: poolOfClass(pool, class: class), scratch: hall) 'verdict'
+		match hallVerdictAt(liveness, live: hall.classLive, pool: poolOfClass(pool, class: class, file: liveness.registerFile), scratch: hall) 'verdict'
 			feasible then continue
 			overflow(witness, tight) then winner = betterPeak(winner, pressure: tight, blockLocal: blockLocal, forwardPos: forwardPos, peakSeq: peakSeq, clobberOnly: true, witness: witness, witnessClass: class, atFixedRegisterOp: atFixedRegisterOp)
 		end 'verdict'
@@ -1595,7 +1595,7 @@ function chooseVictim(module TargetModule, index UseIndex, liveness LivenessResu
 	// Every candidate below is of the peak's own file (the class gate in the loop), so the pool a
 	// store anchor is measured against is THAT file's — 14 for an int, 16 for a float, never the 30
 	// the two files hold between them.
-	let poolSize = classPoolSizeOf(pool, class: peak.witnessClass)
+	let poolSize = classPoolSizeOf(pool, class: peak.witnessClass, file: liveness.registerFile)
 	let placement = placementOf(peak)
 	var usedAtPeak = usesAtPeakOp(module, liveness: liveness, peak: peak, scratch: scratch)
 	var candidates = scratch.candidates
@@ -1982,10 +1982,14 @@ function opIsConstMaterialization(module TargetModule, opIdx OpIndex) returns bo
 		// ARE an integer the compiler holds. `constValueOfDef` would panic. When someone
 		// generalizes remat to "an op with no register inputs", it buys BOTH of these at once.
 		andRegReg to leaRegRdata gives false
-		// arm64 does not run the splitter this rung (isel stubs out before `allocateRegisters`), so
-		// `false` is unreachable — `gives` cannot host a `panic`. Wave 1 answers `arm64MovImm` true
-		// here (it is the arm64 const materialization) when it wires arm64 through the splitter.
-		arm64Ret to arm64FpLoadRdata gives false
+		// The arm64 band. `arm64MovImm` IS the arm64 constant materialization (the `movz`/`movk` ladder),
+		// so it is rematerializable exactly as x64's `movRegImm`/`movRegImm32` are — `constDefInfo` reads
+		// its immediate and `freshConstOp` re-emits a fresh `arm64MovImm`. Every other arm64 op reads a
+		// register (or is control/frame/call), so it is not rematerializable, for the same reason the
+		// x64 ALU band above is not.
+		arm64Ret to arm64Cbnz gives false
+		arm64MovImm gives true
+		arm64Prologue to arm64FpLoadRdata gives false
 	end 'k'
 end 'opIsConstMaterialization'
 
@@ -2456,7 +2460,9 @@ end 'spliceOp'
 // exactly when nothing reads it any more.
 function rematerializeConstant(module TargetModule, index UseIndex, topo FuncTopology, valueId ValueId, peakSeq OpSeq, scope SplitScope, nextValueId ValueId, stats RegAllocStats, lineage SplitLineage, edits SplitEdits) returns ValueId
 	let defOpIdx = index.requireDefOp(valueId)
-	let constValue = constValueOfDef(module, opIdx: defOpIdx)
+	// The immediate AND which ISA's const op the original def is, read ONCE: the re-emit at each use
+	// must be the SAME KIND (x64 `mov`, arm64 `movz`/`movk`) so it is byte-identical to what ISel wrote.
+	let (constValue, isArm64Const) = constDefInfo(module, opIdx: defOpIdx)
 	let keepsOriginal = keepsOriginalBeforePeak(scope)
 
 	var freshId = nextValueId
@@ -2490,9 +2496,10 @@ function rematerializeConstant(module TargetModule, index UseIndex, topo FuncTop
 			var block = blockAt(module, topo: topo, local: useBlockLocal)
 			let usePos = positionInBlock(block, opIdx: useOpIdx)
 			// The SAME op builder the ISel used, so the re-emitted constant is byte-identical to
-			// the one it replaces (StdToX64Conversion.constMaterializationOp) — not a second copy
-			// of the 32-vs-64-bit size choice that can drift from it.
-			spliceOp(block, at: usePos, op: constMaterializationOp(TargetVReg.virtual(freshId), value: constValue), module: module, blockLocal: useBlockLocal, edits: edits)
+			// the one it replaces — x64's `constMaterializationOp` (not a second copy of the 32-vs-64-bit
+			// size choice that can drift from it), or arm64's uniform `arm64MovImm` — selected by the
+			// original def's own kind (`freshConstOp`).
+			spliceOp(block, at: usePos, op: freshConstOp(isArm64Const, freshId: freshId, value: constValue), module: module, blockLocal: useBlockLocal, edits: edits)
 			rewriteOpAt(module, opIdx: useOpIdx, from: valueId, to: freshId, buf: buf)
 			// The re-emitted copy derives from the original constant — record it so a
 			// rematerialized id in an E5001 blocking set chases back to the constant's source
@@ -2522,18 +2529,29 @@ function rematerializeConstant(module TargetModule, index UseIndex, topo FuncTop
 	return freshId
 end 'rematerializeConstant'
 
-// The immediate a `movRegImm`/`movRegImm32` materializes.
-function constValueOfDef(module TargetModule, opIdx OpIndex) returns MachineWord
-	let op = try module.ops.get(opIdx) otherwise panic("constValueOfDef: opIdx not in module.ops")
-	match op 'k'
-		movRegImm(_, value) then return value
-		movRegImm32(_, value) then return value
-		prologue to jcc then panic("constValueOfDef: def is not a constant materialization")
-		movRegReg to loadRegSlot then panic("constValueOfDef: def is not a constant materialization")
-		andRegReg to leaRegRdata then panic("constValueOfDef: def is not a constant materialization")
-		arm64Ret to arm64FpLoadRdata then panic("constValueOfDef: an arm64 op reached the splitter — arm64 does not run the allocator this rung (wave 1 wires it)")
+// The immediate a constant-materialization def carries, and whether it is the arm64 form. Both come
+// from ONE read of the def, so the re-emit selects the right ISA's const op and its value cannot drift
+// from its kind: x64 `movRegImm`/`movRegImm32` (isArm64 = false), arm64 `arm64MovImm` (true).
+function constDefInfo(module TargetModule, opIdx OpIndex) returns (MachineWord, bool)
+	let op = try module.ops.get(opIdx) otherwise panic("constDefInfo: opIdx not in module.ops")
+	return match op 'k'
+		movRegImm(_, value) gives (value, false)
+		movRegImm32(_, value) gives (value, false)
+		arm64MovImm(_, value) gives (value, true)
+		prologue to jcc panic("constDefInfo: def is not a constant materialization")
+		movRegReg to leaRegRdata panic("constDefInfo: def is not a constant materialization")
+		arm64Ret to arm64Cbnz panic("constDefInfo: def is not a constant materialization")
+		arm64Prologue to arm64FpLoadRdata panic("constDefInfo: def is not a constant materialization")
 	end 'k'
-end 'constValueOfDef'
+end 'constDefInfo'
+
+// The fresh constant-materialization op to splice at a spilled constant's use — the arm64 form when
+// its def was arm64, else the x64 form (whose builder reselects the 32-vs-64-bit encoding exactly as
+// ISel did). `freshId` is the split-minted value the use is rewritten to.
+function freshConstOp(isArm64 bool, freshId ValueId, value MachineWord) returns TargetOp
+	let dest = TargetVReg.virtual(freshId)
+	return TargetOp.arm64MovImm(dest, value: value) if isArm64 else constMaterializationOp(dest, value: value)
+end 'freshConstOp'
 
 // Remove the original constant def's op ref from its block (it is now dead — every use was
 // rewritten to a rematerialized copy). The op stays in `module.ops` but unreferenced (harmless,
@@ -2642,10 +2660,59 @@ function substituteValueInOp(op TargetOp, from ValueId, to ValueId) returns Targ
 		cvttsd2siRegReg(dest, src) then return TargetOp.cvttsd2siRegReg(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to))
 		// The `.rdata` address `lea` (P1.2 wave A) — substitutes its GPR dest, exactly like `leaRegGlobal`.
 		leaRegRdata(dest, label) then return TargetOp.leaRegRdata(substituteVReg(dest, from: from, to: to), label: label)
-		// arm64 does not run the splitter this rung. Wave 1 fills these with the same
-		// `substituteVReg`-per-operand rewrite the x64 arms use (it is neutral over `TargetVReg`); the
-		// band-append invariant forced this arm and a panic keeps the gap loud.
-		arm64Ret to arm64FpLoadRdata then panic("substituteValueInOp: an arm64 op reached the splitter — arm64 does not run the allocator this rung (wave 1 wires it)")
+		// --- arm64 SCALAR-CORE band ---
+		//
+		// The SAME `substituteVReg`-per-operand rewrite the x64 arms use — neutral over `TargetVReg`, so
+		// each arm64 op is rebuilt exactly like its x64 twin. Substitution is class-blind for the same
+		// reason coloring is: a fresh id minted by a split INHERITS its victim's class. Non-register
+		// fields (block ids, immediates, names, cond codes) pass through; register-free control/frame/call
+		// ops pass through whole.
+		arm64Ret then return op
+		arm64Branch then return op
+		arm64CondBranch then return op
+		arm64Cbz(reg, targetBlockId) then return TargetOp.arm64Cbz(substituteVReg(reg, from: from, to: to), targetBlockId: targetBlockId)
+		arm64Cbnz(reg, targetBlockId) then return TargetOp.arm64Cbnz(substituteVReg(reg, from: from, to: to), targetBlockId: targetBlockId)
+		arm64MovImm(dest, value) then return TargetOp.arm64MovImm(substituteVReg(dest, from: from, to: to), value: value)
+		arm64Prologue then return op
+		arm64Epilogue then return op
+		arm64Add(dest, lhs, rhs) then return TargetOp.arm64Add(substituteVReg(dest, from: from, to: to), lhs: substituteVReg(lhs, from: from, to: to), rhs: substituteVReg(rhs, from: from, to: to))
+		arm64Sub(dest, lhs, rhs) then return TargetOp.arm64Sub(substituteVReg(dest, from: from, to: to), lhs: substituteVReg(lhs, from: from, to: to), rhs: substituteVReg(rhs, from: from, to: to))
+		arm64Mul(dest, lhs, rhs) then return TargetOp.arm64Mul(substituteVReg(dest, from: from, to: to), lhs: substituteVReg(lhs, from: from, to: to), rhs: substituteVReg(rhs, from: from, to: to))
+		arm64Sdiv(dest, lhs, rhs) then return TargetOp.arm64Sdiv(substituteVReg(dest, from: from, to: to), lhs: substituteVReg(lhs, from: from, to: to), rhs: substituteVReg(rhs, from: from, to: to))
+		arm64Udiv(dest, lhs, rhs) then return TargetOp.arm64Udiv(substituteVReg(dest, from: from, to: to), lhs: substituteVReg(lhs, from: from, to: to), rhs: substituteVReg(rhs, from: from, to: to))
+		arm64Msub(dest, mulLhs, mulRhs, minuend) then return TargetOp.arm64Msub(substituteVReg(dest, from: from, to: to), mulLhs: substituteVReg(mulLhs, from: from, to: to), mulRhs: substituteVReg(mulRhs, from: from, to: to), minuend: substituteVReg(minuend, from: from, to: to))
+		arm64And(dest, lhs, rhs) then return TargetOp.arm64And(substituteVReg(dest, from: from, to: to), lhs: substituteVReg(lhs, from: from, to: to), rhs: substituteVReg(rhs, from: from, to: to))
+		arm64Orr(dest, lhs, rhs) then return TargetOp.arm64Orr(substituteVReg(dest, from: from, to: to), lhs: substituteVReg(lhs, from: from, to: to), rhs: substituteVReg(rhs, from: from, to: to))
+		arm64Eor(dest, lhs, rhs) then return TargetOp.arm64Eor(substituteVReg(dest, from: from, to: to), lhs: substituteVReg(lhs, from: from, to: to), rhs: substituteVReg(rhs, from: from, to: to))
+		arm64Lslv(dest, lhs, rhs) then return TargetOp.arm64Lslv(substituteVReg(dest, from: from, to: to), lhs: substituteVReg(lhs, from: from, to: to), rhs: substituteVReg(rhs, from: from, to: to))
+		arm64Asrv(dest, lhs, rhs) then return TargetOp.arm64Asrv(substituteVReg(dest, from: from, to: to), lhs: substituteVReg(lhs, from: from, to: to), rhs: substituteVReg(rhs, from: from, to: to))
+		arm64Lsrv(dest, lhs, rhs) then return TargetOp.arm64Lsrv(substituteVReg(dest, from: from, to: to), lhs: substituteVReg(lhs, from: from, to: to), rhs: substituteVReg(rhs, from: from, to: to))
+		arm64Neg(dest, src) then return TargetOp.arm64Neg(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to))
+		arm64Mvn(dest, src) then return TargetOp.arm64Mvn(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to))
+		arm64AddImm(dest, src, imm) then return TargetOp.arm64AddImm(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to), imm: imm)
+		arm64SubImm(dest, src, imm) then return TargetOp.arm64SubImm(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to), imm: imm)
+		arm64AndImm(dest, src, imm) then return TargetOp.arm64AndImm(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to), imm: imm)
+		arm64OrrImm(dest, src, imm) then return TargetOp.arm64OrrImm(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to), imm: imm)
+		arm64EorImm(dest, src, imm) then return TargetOp.arm64EorImm(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to), imm: imm)
+		arm64LslImm(dest, src, imm) then return TargetOp.arm64LslImm(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to), imm: imm)
+		arm64AsrImm(dest, src, imm) then return TargetOp.arm64AsrImm(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to), imm: imm)
+		arm64LsrImm(dest, src, imm) then return TargetOp.arm64LsrImm(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to), imm: imm)
+		arm64Cmp(lhs, rhs) then return TargetOp.arm64Cmp(substituteVReg(lhs, from: from, to: to), rhs: substituteVReg(rhs, from: from, to: to))
+		arm64CmpImm(reg, imm) then return TargetOp.arm64CmpImm(substituteVReg(reg, from: from, to: to), imm: imm)
+		arm64Cset(dest, cond) then return TargetOp.arm64Cset(substituteVReg(dest, from: from, to: to), cond: cond)
+		arm64LeaFuncAddr(dest, funcName) then return TargetOp.arm64LeaFuncAddr(substituteVReg(dest, from: from, to: to), funcName: funcName)
+		arm64LeaRdata(dest, label) then return TargetOp.arm64LeaRdata(substituteVReg(dest, from: from, to: to), label: label)
+		arm64LeaGlobal(dest, label) then return TargetOp.arm64LeaGlobal(substituteVReg(dest, from: from, to: to), label: label)
+		arm64BranchLink then return op
+		arm64BranchLinkReg(reg) then return TargetOp.arm64BranchLinkReg(substituteVReg(reg, from: from, to: to))
+		arm64Fadd(dest, lhs, rhs) then return TargetOp.arm64Fadd(substituteVReg(dest, from: from, to: to), lhs: substituteVReg(lhs, from: from, to: to), rhs: substituteVReg(rhs, from: from, to: to))
+		arm64Fsub(dest, lhs, rhs) then return TargetOp.arm64Fsub(substituteVReg(dest, from: from, to: to), lhs: substituteVReg(lhs, from: from, to: to), rhs: substituteVReg(rhs, from: from, to: to))
+		arm64Fmul(dest, lhs, rhs) then return TargetOp.arm64Fmul(substituteVReg(dest, from: from, to: to), lhs: substituteVReg(lhs, from: from, to: to), rhs: substituteVReg(rhs, from: from, to: to))
+		arm64Fdiv(dest, lhs, rhs) then return TargetOp.arm64Fdiv(substituteVReg(dest, from: from, to: to), lhs: substituteVReg(lhs, from: from, to: to), rhs: substituteVReg(rhs, from: from, to: to))
+		arm64Fcmp(lhs, rhs) then return TargetOp.arm64Fcmp(substituteVReg(lhs, from: from, to: to), rhs: substituteVReg(rhs, from: from, to: to))
+		arm64Scvtf(dest, src) then return TargetOp.arm64Scvtf(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to))
+		arm64Fcvtzs(dest, src) then return TargetOp.arm64Fcvtzs(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to))
+		arm64FpLoadRdata(dest, label) then return TargetOp.arm64FpLoadRdata(substituteVReg(dest, from: from, to: to), label: label)
 	end 'rewrite'
 end 'substituteValueInOp'
 
@@ -2722,7 +2789,7 @@ function verifyIncremental(module TargetModule, cfg FuncCfg, func IrFunction, li
 	// original column would be short by exactly those ids and trip `assertClassColumnCovers` — so this
 	// is the one place the verifier must read the incremental state rather than reconstruct it. It is
 	// sound because a class cannot drift: nothing after lowering ever WRITES an existing entry.
-	let fresh = computeLivenessOn(module, cfg: cfg, func: func, valueClass: liveness.valueClass)
+	let fresh = computeLivenessOn(module, cfg: cfg, func: func, valueClass: liveness.valueClass, file: liveness.registerFile)
 	var freshScratch = SplitScratch.create(cfg.topo.numBlocks)
 	let freshAnalysis = analyzePressure(module, liveness: fresh, pool: pool, scratch: freshScratch, intoTree: false)
 

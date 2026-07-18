@@ -327,11 +327,9 @@ function isPhysicalSelfMove(op TargetOp) returns bool
 		storeSlotReg to loadRegSlot then return false
 		// None of the data-section band is a register-to-register move, so none can be a self-move.
 		andRegReg to leaRegRdata then return false
-		// arm64 does not run the allocator this rung, so no arm64 op reaches SSA destruction. Wave 1
-		// wires it; arm64 reg-reg moves are the SHARED `movRegReg` (handled above), so this band —
-		// arm64's own ALU/control/call ops — is never a self-move anyway. The band-append invariant
-		// forced this arm; a panic keeps the gap loud until then.
-		arm64Ret to arm64FpLoadRdata then panic("isPhysicalSelfMove: an arm64 op reached SSA destruction — arm64 does not run the allocator this rung (wave 1 wires it)")
+		// arm64 reg-reg moves are the SHARED `movRegReg` (handled above), so the arm64 band — arm64's
+		// own ALU / control / call ops — is never a register-to-register move, hence never a self-move.
+		arm64Ret to arm64FpLoadRdata then return false
 	end 'sm'
 end 'isPhysicalSelfMove'
 
@@ -406,13 +404,13 @@ let CritSplitLabel = b"critsplit"
 // OUTSIDE the per-function coloring loop's borrow of `func`. Each function is driven
 // by INDEX and re-fetched inside `addSplitBlock`, so no `func` borrowed from
 // `module.functions` is ever passed to a function that mutates it.
-export function splitCriticalEdges(module TargetModule)
+export function splitCriticalEdges(module TargetModule, target Target)
 	for funcIdx in 0 upto module.funcCount() 'eachFunc'
-		splitCriticalEdgesInFunc(module, funcIdx: funcIdx)
+		splitCriticalEdgesInFunc(module, funcIdx: funcIdx, target: target)
 	end 'eachFunc'
 end 'splitCriticalEdges'
 
-function splitCriticalEdgesInFunc(module TargetModule, funcIdx FuncIndex)
+function splitCriticalEdgesInFunc(module TargetModule, funcIdx FuncIndex, target Target)
 	// The SKELETON is built through a helper so `func`'s borrow is scoped to it — the
 	// split loop below mutates `module.functions[funcIdx]` (adding block refs), which
 	// must not overlap a live borrow of that function.
@@ -445,23 +443,24 @@ function splitCriticalEdgesInFunc(module TargetModule, funcIdx FuncIndex)
 	for k in 0 upto predRefs.count() 'eachSplit'
 		let predRef = try predRefs.get(k) otherwise panic("splitCriticalEdgesInFunc: predRefs.get OOB")
 		let succId = try succIds.get(k) otherwise panic("splitCriticalEdgesInFunc: succIds.get OOB")
-		performCriticalSplit(module, funcIdx: funcIdx, predRef: predRef, succId: succId)
+		performCriticalSplit(module, funcIdx: funcIdx, predRef: predRef, succId: succId, target: target)
 	end 'eachSplit'
 end 'splitCriticalEdgesInFunc'
 
-function performCriticalSplit(module TargetModule, funcIdx FuncIndex, predRef BlockRef, succId BlockId)
-	let newRef = addSplitBlock(module, funcIdx: funcIdx, succId: succId)
+function performCriticalSplit(module TargetModule, funcIdx FuncIndex, predRef BlockRef, succId BlockId, target Target)
+	let newRef = addSplitBlock(module, funcIdx: funcIdx, succId: succId, target: target)
 	let newBlock = try module.blocks.get(newRef) otherwise panic("performCriticalSplit: newRef not in module.blocks")
 	let newId = newBlock.id
 	moveBranchEdgeToSplit(module, predRef: predRef, succId: succId, splitRef: newRef)
 	retargetControlOp(module, predRef: predRef, oldTarget: succId, newTarget: newId)
 end 'performCriticalSplit'
 
-// Create the split block (`jmp succId` terminator) and register it in
+// Create the split block (an unconditional-branch terminator to `succId`) and register it in
 // `module.blocks` + `func.blockRefs`. `func` is fetched HERE by index and mutated
 // directly, so its borrow never escapes to a caller (which would clash with the
-// split loop mutating the same function).
-function addSplitBlock(module TargetModule, funcIdx FuncIndex, succId BlockId) returns BlockRef
+// split loop mutating the same function). The branch op is the TARGET's — `jmp` for x64,
+// `arm64Branch` for arm64 — so the split block speaks the same ISA as the code around it.
+function addSplitBlock(module TargetModule, funcIdx FuncIndex, succId BlockId, target Target) returns BlockRef
 	var func = module.getFunc(funcIdx)
 	let newId = func.nextBlockId
 	func.nextBlockId = func.nextBlockId + 1
@@ -469,9 +468,18 @@ function addSplitBlock(module TargetModule, funcIdx FuncIndex, succId BlockId) r
 	let newRef = module.blocks.count() - 1
 	func.blockRefs.push(newRef)
 	var splitBlock = try module.blocks.get(newRef) otherwise panic("addSplitBlock: newRef not in module.blocks")
-	module.setTerminator(splitBlock, op: TargetOp.jmp(succId))
+	module.setTerminator(splitBlock, op: unconditionalBranchTo(target, blockId: succId))
 	return newRef
 end 'addSplitBlock'
+
+// The TARGET's unconditional branch to `blockId` — the one op an edge-split block terminates with.
+function unconditionalBranchTo(target Target, blockId BlockId) returns TargetOp
+	return match target.cpu 'cpu'
+		x64 gives TargetOp.jmp(blockId)
+		arm64 gives TargetOp.arm64Branch(blockId)
+		wasm32 panic("unconditionalBranchTo: maxon-shv2 has no branch op for wasm32 (got {targetToString(target)})")
+	end 'cpu'
+end 'unconditionalBranchTo'
 
 // Move the predecessor's `branchEdge` to `succId` (its phi args) onto the split
 // block. The phi args now flow pred → split → succ, and the split block (one
@@ -534,7 +542,12 @@ function retargetControlOp(module TargetModule, predRef BlockRef, oldTarget Bloc
 		let op = try module.ops.get(opIdx) otherwise panic("retargetControlOp: conditional branch op {opIdx} not in module.ops")
 		match op 'cond'
 			jcc(cond, target) then retargeted = retargetJcc(module, opIdx: opIdx, cond: cond, target: target, oldTarget: oldTarget, newTarget: newTarget) or retargeted
-			default panic("retargetControlOp: block '{String.from(predBlock.label)}' records its conditional branch at op {opIdx}, but that op is not a `jcc`")
+			// The arm64 conditional branches: a flag test (`b.cond`) or a register zero-test (`cbz`/`cbnz`).
+			// Each carries its own target block id, retargeted the same way the `jcc` is.
+			arm64CondBranch(cond, target) then retargeted = retargetArm64CondBranch(module, opIdx: opIdx, cond: cond, target: target, oldTarget: oldTarget, newTarget: newTarget) or retargeted
+			arm64Cbz(reg, target) then retargeted = retargetArm64Cbz(module, opIdx: opIdx, reg: reg, target: target, oldTarget: oldTarget, newTarget: newTarget) or retargeted
+			arm64Cbnz(reg, target) then retargeted = retargetArm64Cbnz(module, opIdx: opIdx, reg: reg, target: target, oldTarget: oldTarget, newTarget: newTarget) or retargeted
+			default panic("retargetControlOp: block '{String.from(predBlock.label)}' records its conditional branch at op {opIdx}, but that op is not a `jcc`/`arm64CondBranch`/`arm64Cbz`/`arm64Cbnz`")
 		end 'cond'
 	end 'hasCond'
 
@@ -550,7 +563,12 @@ function retargetControlOp(module TargetModule, predRef BlockRef, oldTarget Bloc
 			pushReg to popReg then panic("retargetControlOp: pushReg/popReg reached as a terminator — they are body ops inserted post-regalloc")
 			storeSlotReg to loadRegSlot then panic("retargetControlOp: a spill/reload reached as a terminator — the splitter inserts them as body ops, never as terminators")
 			andRegReg to leaRegRdata then panic("retargetControlOp: non-terminator op as terminator")
-			arm64Ret to arm64FpLoadRdata then panic("retargetControlOp: an arm64 op reached critical-edge splitting — arm64 does not run the allocator this rung (wave 1 wires it, including the arm64 branch retargeting)")
+			// The arm64 band: `arm64Branch` is the unconditional terminator (retargeted like `jmp`);
+			// `arm64Ret` is the ret terminator (like x64 `ret`). Everything else — the conditional
+			// branches, ALU, frame, call ops — is not a terminator here.
+			arm64Ret then break 'term'
+			arm64Branch(target) then retargeted = retargetArm64Branch(module, opIdx: ti, target: target, oldTarget: oldTarget, newTarget: newTarget) or retargeted
+			arm64CondBranch to arm64FpLoadRdata then panic("retargetControlOp: an arm64 non-terminator op reached as a terminator")
 		end 'term'
 	end 'hasTerm'
 
@@ -574,6 +592,41 @@ function retargetJmp(module TargetModule, opIdx OpIndex, target BlockId, oldTarg
 	try module.ops.set(opIdx, value: TargetOp.jmp(newTarget)) otherwise panic("retargetJmp: ops.set OOB")
 	return true
 end 'retargetJmp'
+
+// The arm64 twins of `retargetJcc`/`retargetJmp`: rewrite an arm64 branch's target block id when it
+// is the edge being redirected, preserving the branch's other operands (its condition or its register
+// zero-test). Same in-place rewrite at the recorded op index, so the CFG's branch indices stay valid.
+function retargetArm64CondBranch(module TargetModule, opIdx OpIndex, cond Arm64CondCode, target BlockId, oldTarget BlockId, newTarget BlockId) returns bool
+	if target != oldTarget 'notThis'
+		return false
+	end 'notThis'
+	try module.ops.set(opIdx, value: TargetOp.arm64CondBranch(cond, targetBlockId: newTarget)) otherwise panic("retargetArm64CondBranch: ops.set OOB")
+	return true
+end 'retargetArm64CondBranch'
+
+function retargetArm64Cbz(module TargetModule, opIdx OpIndex, reg TargetVReg, target BlockId, oldTarget BlockId, newTarget BlockId) returns bool
+	if target != oldTarget 'notThis'
+		return false
+	end 'notThis'
+	try module.ops.set(opIdx, value: TargetOp.arm64Cbz(reg, targetBlockId: newTarget)) otherwise panic("retargetArm64Cbz: ops.set OOB")
+	return true
+end 'retargetArm64Cbz'
+
+function retargetArm64Cbnz(module TargetModule, opIdx OpIndex, reg TargetVReg, target BlockId, oldTarget BlockId, newTarget BlockId) returns bool
+	if target != oldTarget 'notThis'
+		return false
+	end 'notThis'
+	try module.ops.set(opIdx, value: TargetOp.arm64Cbnz(reg, targetBlockId: newTarget)) otherwise panic("retargetArm64Cbnz: ops.set OOB")
+	return true
+end 'retargetArm64Cbnz'
+
+function retargetArm64Branch(module TargetModule, opIdx OpIndex, target BlockId, oldTarget BlockId, newTarget BlockId) returns bool
+	if target != oldTarget 'notThis'
+		return false
+	end 'notThis'
+	try module.ops.set(opIdx, value: TargetOp.arm64Branch(newTarget)) otherwise panic("retargetArm64Branch: ops.set OOB")
+	return true
+end 'retargetArm64Branch'
 
 // The physical op for move `i` of a plan: an `xchg` for a cycle-break, else a `mov`.
 export function moveOpOf(plan EdgeMovePlan, i MoveIndex) returns TargetOp

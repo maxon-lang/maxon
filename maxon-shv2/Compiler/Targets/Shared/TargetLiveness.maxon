@@ -241,11 +241,19 @@ export function classRowTotal(row RegCountColumn) returns RegCount
 	return total
 end 'classRowTotal'
 
-// The register FILE an operand's register belongs to: a PHYSICAL operand names its file directly (a
-// register number classifies itself), a VIRTUAL one takes its value's declared class.
+// The register FILE a VIRTUAL operand's value lives in — its declared class.
+//
+// ⚠ ONLY VIRTUAL OPERANDS REACH HERE, AND THAT IS WHY IT NEEDS NO TARGET FILE. Both callers guard on
+// `operandIsVirtual` before asking (`recordDefLiveAfter` and `addReuseTransientPressure` — the census
+// tracks only value ids, never physical registers), so a PHYSICAL operand is a bug, not the "classify
+// a register number" case this used to also handle. It did so against the x64 boundary
+// unconditionally (`regClassOf(operandRegister(o).rawValue)`), which would misclassify an arm64 GPR in
+// x19..x28 and panic on an arm64 SIMD number (>31) that `X64Register.fromRawValue` cannot name — a
+// latent per-ISA hazard on a branch nothing reaches. A physical register's class is the ENCODER's
+// concern (`regClassIn` on the target file), not the pressure census's; here it panics loudly.
 export function operandClass(o Operand, classes ValueClassColumn) returns RegClass
 	if not operandIsVirtual(o) 'physical'
-		return regClassOf(operandRegister(o).rawValue)
+		panic("operandClass: a PHYSICAL operand (payload {operandPayload(o)}) reached the pressure census — its two callers guard on `operandIsVirtual`, so this is a bug. A physical register's file is classified by the encoder (`regClassIn` on the target file), never here.")
 	end 'physical'
 	return try classes.get(operandValueId(o)) otherwise panic("operandClass: value {operandValueId(o)} has no recorded register class — the lowering's class column does not cover it")
 end 'operandClass'
@@ -630,6 +638,13 @@ export type LivenessResult
 	// recomputable precisely BECAUSE a split cuts the live range that earned it. Two facts with two
 	// different lifetimes cannot share one column.
 	export var valueClass as ValueClassColumn
+	// The TARGET's register file — its GPR/vector boundary (16 for x64, 31 for arm64) and width. It
+	// rides here because it is the natural travelling companion of `valueClass`: every per-value class
+	// question the splitter/census/colorer ask (`poolOfClass`, `classPoolSizeOf`, `allowedRegistersOf`)
+	// needs this file, and every one of those sites already holds a `LivenessResult`. Sourced once in
+	// `allocateRegisters` (`registerFileFor(target)`) and threaded here through `computeLivenessOn` so
+	// the boundary is stated per-ISA rather than hardcoded to x64's 16.
+	export var registerFile as RegisterFile
 	// Peak simultaneous register demand PER CLASS (a class row) — the exact χ = ω each register file
 	// must satisfy on its own.
 	export var maxPressure as RegCountColumn
@@ -663,8 +678,8 @@ export type LivenessResult
 	// answers EVERY per-value question from it rather than re-walking the function per candidate.
 	export var useIndex as UseIndex
 
-	export static function create(cfg FuncCfg, valueCount ValueId, wordsPerRow BitWordCount, live LiveSets, forbidden RegMaskColumn, valueClass ValueClassColumn, maxPressure RegCountColumn, livenessMarkSteps EventCount, deadPhis RegCountColumn, blockPressure RegCountColumn, useIndex UseIndex) returns LivenessResult
-		return Self{cfg: cfg, valueCount: valueCount, wordsPerRow: wordsPerRow, live: live, forbidden: forbidden, valueClass: valueClass, maxPressure: maxPressure, livenessMarkSteps: livenessMarkSteps, deadPhis: deadPhis, blockPressure: blockPressure, useIndex: useIndex}
+	export static function create(cfg FuncCfg, valueCount ValueId, wordsPerRow BitWordCount, live LiveSets, forbidden RegMaskColumn, valueClass ValueClassColumn, registerFile RegisterFile, maxPressure RegCountColumn, livenessMarkSteps EventCount, deadPhis RegCountColumn, blockPressure RegCountColumn, useIndex UseIndex) returns LivenessResult
+		return Self{cfg: cfg, valueCount: valueCount, wordsPerRow: wordsPerRow, live: live, forbidden: forbidden, valueClass: valueClass, registerFile: registerFile, maxPressure: maxPressure, livenessMarkSteps: livenessMarkSteps, deadPhis: deadPhis, blockPressure: blockPressure, useIndex: useIndex}
 	end 'create'
 
 	// The dead block-arg count of local block `local`, for ONE register file.
@@ -878,7 +893,7 @@ let DfsBlack = 2 as DfsColor
 // value space grows, and the splitter knows exactly how (it minted the ids). Rebuilding the CFG
 // per split re-scanned the whole function, re-derived both CSR graphs, and re-walked one natural
 // loop per loop header, for an answer that could not have changed.
-export function computeLivenessOn(module TargetModule, cfg FuncCfg, func IrFunction, valueClass ValueClassColumn) returns LivenessResult
+export function computeLivenessOn(module TargetModule, cfg FuncCfg, func IrFunction, valueClass ValueClassColumn, file RegisterFile) returns LivenessResult
 	let valueCount = cfg.valueCount
 	let wordsPerRow = bitsetWordsFor(valueCount)
 	let numBlocks = cfg.topo.numBlocks
@@ -916,7 +931,7 @@ export function computeLivenessOn(module TargetModule, cfg FuncCfg, func IrFunct
 	let paramCross = ParamCrossForbid.resolve(module, topo: cfg.topo, paramCount: func.paramCount)
 	paramCross.applyTo(forbidden)
 
-	return LivenessResult.create(cfg, valueCount: valueCount, wordsPerRow: wordsPerRow, live: walk.live, forbidden: forbidden, valueClass: valueClass, maxPressure: maxPressure, livenessMarkSteps: walk.markSteps, deadPhis: deadPhis, blockPressure: blockPressure, useIndex: useIndex)
+	return LivenessResult.create(cfg, valueCount: valueCount, wordsPerRow: wordsPerRow, live: walk.live, forbidden: forbidden, valueClass: valueClass, registerFile: file, maxPressure: maxPressure, livenessMarkSteps: walk.markSteps, deadPhis: deadPhis, blockPressure: blockPressure, useIndex: useIndex)
 end 'computeLivenessOn'
 
 // A zeroed per-value register-mask column.
@@ -1229,24 +1244,25 @@ function checkCondBranchIndex(module TargetModule, block IrBlock, funcName ByteA
 
 	if not block.hasCondBranchOp() 'recordsNone'
 		if seen > 0 'unrecorded'
-			panic("checkCondBranchIndex: '{String.from(funcName)}' block '{String.from(block.label)}' holds {seen} `jcc` op(s) but records NO conditional branch — a conditional branch reached the block without IrModule.appendCondBranch, so its then-edge is missing from every CFG the allocator builds")
+			panic("checkCondBranchIndex: '{String.from(funcName)}' block '{String.from(block.label)}' holds {seen} conditional-branch op(s) but records NONE — a conditional branch reached the block without IrModule.appendCondBranch, so its then-edge is missing from every CFG the allocator builds")
 		end 'unrecorded'
 		return
 	end 'recordsNone'
 
 	let recorded = block.condBranchIndex()
 	if seen != 1 'notExactlyOne'
-		panic("checkCondBranchIndex: '{String.from(funcName)}' block '{String.from(block.label)}' records a conditional branch at op {recorded} but its body holds {seen} `jcc` op(s) — the index must name the one branch the block has")
+		panic("checkCondBranchIndex: '{String.from(funcName)}' block '{String.from(block.label)}' records a conditional branch at op {recorded} but its body holds {seen} conditional-branch op(s) — the index must name the one branch the block has")
 	end 'notExactlyOne'
 	if seenIdx != recorded 'stale'
-		panic("checkCondBranchIndex: '{String.from(funcName)}' block '{String.from(block.label)}' records its conditional branch at op {recorded}, but the `jcc` in its body is op {seenIdx} — the recorded index is stale")
+		panic("checkCondBranchIndex: '{String.from(funcName)}' block '{String.from(block.label)}' records its conditional branch at op {recorded}, but the conditional branch in its body is op {seenIdx} — the recorded index is stale")
 	end 'stale'
 
-	// A `jcc` names only the THEN edge; the else edge is the `jmp` terminator. Without one, the
-	// block would contribute a single successor to the CFG while branching two ways at run time.
-	if not terminatorIsJmp(module, block: block) 'noJmpTerminator'
-		panic("checkCondBranchIndex: '{String.from(funcName)}' block '{String.from(block.label)}' has a conditional branch but its terminator is not a `jmp` — a `jcc` carries only the then-edge, so the else-edge has nowhere to come from")
-	end 'noJmpTerminator'
+	// A conditional branch names only the THEN edge; the else edge is the unconditional-branch
+	// terminator (`jmp` / `arm64Branch`). Without one, the block would contribute a single successor to
+	// the CFG while branching two ways at run time.
+	if not terminatorIsUnconditionalBranch(module, block: block) 'noBranchTerminator'
+		panic("checkCondBranchIndex: '{String.from(funcName)}' block '{String.from(block.label)}' has a conditional branch but its terminator is not an unconditional branch — a conditional branch carries only the then-edge, so the else-edge has nowhere to come from")
+	end 'noBranchTerminator'
 end 'checkCondBranchIndex'
 
 function opIsCondBranch(op TargetOp) returns bool
@@ -1257,17 +1273,24 @@ function opIsCondBranch(op TargetOp) returns bool
 		pushReg to popReg gives false
 		storeSlotReg to loadRegSlot gives false
 		andRegReg to leaRegRdata gives false
-		// Unreachable this rung (arm64 does not run the allocator; isel stubs first). `gives` cannot
-		// host a `panic`; wave 1 answers arm64CondBranch/arm64Cbz/arm64Cbnz true here.
-		arm64Ret to arm64FpLoadRdata gives false
+		// The arm64 conditional branches — a flag test (`arm64CondBranch`) or a register zero-test
+		// (`arm64Cbz`/`arm64Cbnz`) — are the twins of `jcc`: each carries only the THEN edge, paired
+		// with an `arm64Branch` terminator for the else edge. `arm64Ret`/`arm64Branch` and the ALU band
+		// are not conditional branches.
+		arm64Ret to arm64Branch gives false
+		arm64CondBranch to arm64Cbnz gives true
+		arm64MovImm to arm64FpLoadRdata gives false
 	end 'check'
 end 'opIsCondBranch'
 
-function terminatorIsJmp(module TargetModule, block IrBlock) returns bool
+// True iff the block's terminator is the ISA's UNCONDITIONAL branch — `jmp` for x64, `arm64Branch`
+// for arm64. This is the else-edge carrier that must accompany a conditional branch (whose op names
+// only the then-edge); without it a two-way block would contribute one CFG successor.
+function terminatorIsUnconditionalBranch(module TargetModule, block IrBlock) returns bool
 	if not block.hasTerminatorOp() 'noTerm'
 		return false
 	end 'noTerm'
-	let op = try module.ops.get(block.terminatorIndex()) otherwise panic("terminatorIsJmp: terminator not in module.ops")
+	let op = try module.ops.get(block.terminatorIndex()) otherwise panic("terminatorIsUnconditionalBranch: terminator not in module.ops")
 	return match op 'check'
 		prologue to ret gives false
 		jmp gives true
@@ -1275,11 +1298,11 @@ function terminatorIsJmp(module TargetModule, block IrBlock) returns bool
 		pushReg to popReg gives false
 		storeSlotReg to loadRegSlot gives false
 		andRegReg to leaRegRdata gives false
-		// Unreachable this rung (arm64 does not run the allocator; isel stubs first). `gives` cannot
-		// host a `panic`; wave 1 answers arm64Branch true here.
-		arm64Ret to arm64FpLoadRdata gives false
+		arm64Ret gives false
+		arm64Branch gives true
+		arm64CondBranch to arm64FpLoadRdata gives false
 	end 'check'
-end 'terminatorIsJmp'
+end 'terminatorIsUnconditionalBranch'
 
 // A block's successor BlockIds: the `jcc` conditional-branch op names the then-target; the
 // `jmp` terminator names the (unconditional / else) target; `ret` names none.
@@ -1314,7 +1337,13 @@ function collectBlockSuccessorIds(module TargetModule, block IrBlock, out BlockI
 			pushReg to popReg then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a pushReg/popReg as its terminator — those are post-regalloc body ops")
 			storeSlotReg to loadRegSlot then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a spill/reload as its terminator — the splitter inserts them as body ops")
 			andRegReg to leaRegRdata then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a non-terminator op as its terminator")
-			arm64Ret to arm64FpLoadRdata then panic("collectBlockSuccessorIds: an arm64 op reached the shared CFG builder — arm64 does not run the allocator this rung (wave 1 wires the arm64 CFG, incl. arm64Branch/arm64Ret)")
+			// The arm64 terminators: `arm64Branch` names the (unconditional / else) target, `arm64Ret`
+			// names none — the exact mirror of `jmp`/`ret`. The conditional branches
+			// (`arm64CondBranch`/`arm64Cbz`/`arm64Cbnz`) are BODY ops paired with an `arm64Branch`
+			// terminator (their then-target is read via `condBranchTargetOf`), never terminators here.
+			arm64Ret then break 'termCtrl'
+			arm64Branch(target) then out.push(target)
+			arm64CondBranch to arm64FpLoadRdata then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a non-terminator arm64 op as its terminator")
 		end 'termCtrl'
 	end 'hasTerm'
 end 'collectBlockSuccessorIds'
@@ -1327,7 +1356,12 @@ end 'collectBlockSuccessorIds'
 function condBranchTargetOf(op TargetOp, block IrBlock) returns BlockId
 	match op 'cond'
 		jcc(_, target) then return target
-		default panic("condBranchTargetOf: block '{String.from(block.label)}' records its conditional branch at op {block.condBranchIndex()}, but that op is not a `jcc`")
+		// The arm64 conditional branches — a flag test (`arm64CondBranch`) or a register zero-test
+		// (`arm64Cbz`/`arm64Cbnz`) — each names its then-target the same way the `jcc` does.
+		arm64CondBranch(_, target) then return target
+		arm64Cbz(_, target) then return target
+		arm64Cbnz(_, target) then return target
+		default panic("condBranchTargetOf: block '{String.from(block.label)}' records its conditional branch at op {block.condBranchIndex()}, but that op is not a `jcc`/`arm64CondBranch`/`arm64Cbz`/`arm64Cbnz`")
 	end 'cond'
 end 'condBranchTargetOf'
 
@@ -2706,7 +2740,7 @@ export function collectEntryParamCaptures(module TargetModule, topo FuncTopology
 			movReg32Reg32 to popReg then break 'capture'
 			storeSlotReg to loadRegSlot then break 'capture'
 			andRegReg to leaRegRdata then break 'capture'
-			arm64Ret to arm64FpLoadRdata then panic("collectEntryParamCaptures: an arm64 op reached the shared param-capture scan — arm64 does not run the allocator this rung (wave 1 wires it; arm64 param captures are the shared movRegReg from x0..x7)")
+			arm64Ret to arm64FpLoadRdata then break 'capture'
 		end 'capture'
 	end 'eachOp'
 	return captures

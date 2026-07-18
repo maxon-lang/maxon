@@ -226,14 +226,23 @@ end 'x64RegisterFile'
 
 // The arm64 register file: 63 registers — GPR x0..x30 (0..30), SIMD d0..d31 (31..62). The SIMD
 // boundary at 31 is arm64's, NOT x64's 16; one allocator, two boundaries, chosen by the target.
-//
-// The per-CPU `RegisterFile`s are asked for by name (`x64RegisterFile` / `arm64RegisterFile`), not
-// through a `registerFileFor(target)` dispatcher — the pool masks already dispatch on `target.cpu`
-// and each arm names its own file. Wave 1, threading the file through the shared splitter/census so
-// their class boundary becomes per-ISA, is the natural home for a `registerFileFor(target)`.
 export function arm64RegisterFile() returns RegisterFile
 	return RegisterFile.create(63, firstVector: 31)
 end 'arm64RegisterFile'
+
+// The `RegisterFile` of the target the allocator is running for — the ONE dispatcher the shared
+// splitter/census/colorer thread down beside `pool`, so their GPR/vector boundary becomes per-ISA
+// (16 for x64, 31 for arm64) rather than the hardcoded x64 one this file's `regClassOf` still names.
+// The pool masks (`allocatablePool`) dispatch on `target.cpu` separately and each arm names its own
+// file directly; this exists because the allocator's per-value class questions need the SAME file
+// carried through structures that hold `pool` but not `target` (the `LivenessResult`, the census).
+export function registerFileFor(target Target) returns RegisterFile
+	return match target.cpu 'cpu'
+		x64 gives x64RegisterFile()
+		arm64 gives arm64RegisterFile()
+		wasm32 panic("registerFileFor: maxon-shv2 has no register file for wasm32 (got {targetToString(target)})")
+	end 'cpu'
+end 'registerFileFor'
 
 // Bytes per spill slot: one 64-bit machine word. Every Std value is a signed i64, so a
 // spilled value occupies exactly 8 bytes. The cold-spill splitter (SplitLiveRanges) sets
@@ -342,16 +351,24 @@ export function assertRegisterFileMatchesEnum()
 	end 'xmmBoundary'
 end 'assertRegisterFileMatchesEnum'
 
-// The CLASS of a physical register in the X64 file, derived from its number.
+// The CLASS of a physical register in a GIVEN register file, derived from its number against that
+// file's GPR/vector boundary. This is the per-ISA form the allocator's class-boundary sites use —
+// `assertColouredInClass` classifies a COLORED register (x64's 0..31 at boundary 16, arm64's 0..62
+// at boundary 31), and an arm64 GPR in x19..x28 (RegNum 19..28, above x64's 16 but below arm64's 31)
+// classifies as a GPR here where the x64-boundary `regClassOf` would call it a vector.
+export function regClassIn(reg RegNum, file RegisterFile) returns RegClass
+	return RegClass.xmm if reg >= file.firstVector else RegClass.gpr
+end 'regClassIn'
+
+// The CLASS of a physical register in the X64 file, derived from its number against the x64 boundary.
 //
-// ⚠ THIS USES THE X64 BOUNDARY (16), and every caller this rung is x64-correct: the x64 encoder's
-// `registerClass`, and the two consumers that classify PHYSICAL OPERANDS (`operandClass`,
-// `assertColouredInClass`). A physical operand is always an ABI arg/return register (`RegNum` < 16,
-// GPR under both boundaries) or a vector register (`RegNum` >= 31, vector under both), so the x64
-// boundary classifies every operand that actually appears correctly for BOTH ISAs. A COLORED arm64
-// GPR in x19..x28 would be misclassified — but arm64 does not run the allocator this rung; wiring
-// it (wave 1) threads the target's `RegisterFile` here. Colored registers of the target running the
-// allocator are classified against `RegisterFile.firstVector` via the class masks below.
+// ⚠ THIS USES THE X64 BOUNDARY (16) unconditionally — it is the x64 ENCODER's classifier
+// (`X64Backend.registerClass`), which is inherently x64 and correct at that boundary. Every colored
+// register the ALLOCATOR classifies is per-ISA and goes through `regClassIn(reg, file)` with the
+// target's `RegisterFile` instead; this stays as the x64-specialized entry the encoder names. The
+// boundary test is respelled (not `regClassIn(reg, x64RegisterFile())`) so the encoder's per-register
+// path builds no `RegisterFile` value — it is `FirstXmmRegisterNumber`, which `regClassIn`'s x64
+// caller (`x64RegisterFile().firstVector`) equals by construction (`assertRegisterFileMatchesEnum`).
 export function regClassOf(reg RegNum) returns RegClass
 	return RegClass.xmm if reg >= FirstXmmRegisterNumber else RegClass.gpr
 end 'regClassOf'

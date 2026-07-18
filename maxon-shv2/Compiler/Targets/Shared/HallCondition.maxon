@@ -96,7 +96,7 @@ typealias LiveIndexColumn = Array with LiveIndex
 // set is computed from the GPR pool it can never touch, and every downstream question inherits the
 // error — `valueConfinedTo` most damagingly (see there).
 export function allowedRegistersOf(liveness LivenessResult, valueId ValueId, pool RegMask) returns RegMask
-	return poolOfClass(pool, class: liveness.classOf(valueId)) and not liveness.forbiddenOf(valueId)
+	return poolOfClass(pool, class: liveness.classOf(valueId), file: liveness.registerFile) and not liveness.forbiddenOf(valueId)
 end 'allowedRegistersOf'
 
 // The widest pool any single register file offers — the bound the CARDINALITY SCREEN scans to.
@@ -106,11 +106,11 @@ end 'allowedRegistersOf'
 // at `p = |U| <= maxClassPoolSize`, so nothing is missed. Scanning to the MIXED pool size instead
 // would be unsound in the other direction — it would treat one file's full-pool overflow as a
 // confined one, which is the pigeonhole's job and outranks it.
-export function maxClassPoolSize(pool RegMask) returns RegCount
+export function maxClassPoolSize(pool RegMask, file RegisterFile) returns RegCount
 	var widest = 0 as RegCount
 	for classOrdinal in 0 upto RegClassCount 'eachClass'
 		let class = regClassAt(classOrdinal)
-		widest = maxOf(widest, b: classPoolSizeOf(pool, class: class))
+		widest = maxOf(widest, b: classPoolSizeOf(pool, class: class, file: file))
 	end 'eachClass'
 	return widest
 end 'maxClassPoolSize'
@@ -191,7 +191,7 @@ export type EffectivePools
 			let size = regMaskPopcount(allowedRegistersOf(liveness, valueId: v, pool: pool))
 			try self.sizes.set(v, value: size) otherwise panic("EffectivePools.fillAll: sizes.set OOB for value {v}")
 
-			if size < classPoolSizeOf(pool, class: class) 'constrainedValue'
+			if size < classPoolSizeOf(pool, class: class, file: liveness.registerFile) 'constrainedValue'
 				self.constrained = self.constrained + 1
 			end 'constrainedValue'
 			if class == RegClass.xmm 'xmmValue'
@@ -204,12 +204,12 @@ export type EffectivePools
 	// otherwise, so it arrives with the full pool OF ITS CLASS and counts as unconstrained; `refresh`
 	// corrects both the moment its mask is known. `class` is the victim's — see
 	// `LivenessResult.growValueSpace`, which is where a fresh id's class comes from and why.
-	export function growTo(valueCount ValueId, pool RegMask, class RegClass)
+	export function growTo(valueCount ValueId, pool RegMask, class RegClass, file RegisterFile)
 		// Counted from what `growFilled` ACTUALLY added, never as `valueCount - count()`: that
 		// subtraction reads as an enormous positive on a `ColumnLength` the moment the column is
 		// already long enough, and it would corrupt the tally silently.
 		let before = self.sizes.count()
-		self.sizes.growFilled(valueCount, value: classPoolSizeOf(pool, class: class))
+		self.sizes.growFilled(valueCount, value: classPoolSizeOf(pool, class: class, file: file))
 
 		if class == RegClass.xmm 'xmmValues'
 			self.xmmValues = self.xmmValues + (self.sizes.count() - before)
@@ -222,7 +222,7 @@ export type EffectivePools
 	// mask — cannot move a value between files. That is the same property that keeps the class out of
 	// `forbidden` entirely.
 	export function refresh(liveness LivenessResult, valueId ValueId, pool RegMask)
-		let fullPoolSize = classPoolSizeOf(pool, class: liveness.classOf(valueId))
+		let fullPoolSize = classPoolSizeOf(pool, class: liveness.classOf(valueId), file: liveness.registerFile)
 		let previous = try self.sizes.get(valueId) otherwise panic("EffectivePools.refresh: sizes.get OOB for value {valueId}")
 		let size = regMaskPopcount(allowedRegistersOf(liveness, valueId: valueId, pool: pool))
 		try self.sizes.set(valueId, value: size) otherwise panic("EffectivePools.refresh: sizes.set OOB for value {valueId}")
@@ -287,7 +287,7 @@ export type RegPoolCensus
 		return Self{byPoolSize: zeroColumn(RegisterFileSize + 1), occupied: 0, constrained: 0, classPoolSizes: zeroClassRow()}
 	end 'create'
 
-	export function reset(pool RegMask)
+	export function reset(pool RegMask, file RegisterFile)
 		for size in 0 upto RegisterFileSize + 1 'eachSize'
 			try self.byPoolSize.set(size, value: 0) otherwise panic("RegPoolCensus.reset: byPoolSize.set OOB at {size}")
 		end 'eachSize'
@@ -295,7 +295,7 @@ export type RegPoolCensus
 		self.constrained = 0
 		for classOrdinal in 0 upto RegClassCount 'eachClass'
 			let class = regClassAt(classOrdinal)
-			classRowSet(self.classPoolSizes, class: class, value: classPoolSizeOf(pool, class: class))
+			classRowSet(self.classPoolSizes, class: class, value: classPoolSizeOf(pool, class: class, file: file))
 		end 'eachClass'
 	end 'reset'
 
