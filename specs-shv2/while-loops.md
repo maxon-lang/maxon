@@ -358,6 +358,39 @@ end 'main'
 100
 ```
 
+<!-- test: while-loops.loop-carried-var-narrower-than-its-update -->
+<!-- targets: wasm32-wasi -->
+**A loop-carried var whose declared width differs from a value assigned into it — a wasm codegen
+regression test.** `r` is seeded from an `ExitCode` value (a narrow ranged int) but is then assigned
+the plain-`int` counter `i` inside the loop. int→int width changes carry NO IR conversion op (the
+value just flows), so `r`'s header phi and the `i` an edge assigns it end up different WIDTHS. The
+register backends never notice — every value sits in a 64-bit register — but wasm's typed locals do:
+the phi-edge copy must coerce, exactly as a `return` or a call argument does. Without the coercion the
+emitted core module fails validation (`type mismatch: expected i64, found i32`); the native hosts, and
+this run, all return 2 (`r` follows `i` = 0,1,2, stopping when `i` reaches 3).
+```maxon
+function firstExit() returns ExitCode
+	return 0
+end 'firstExit'
+
+function pick() returns ExitCode
+	var r = firstExit()
+	var i = 0
+	while i < 3 'lp'
+		r = i
+		i = i + 1
+	end 'lp'
+	return r
+end 'pick'
+
+function main() returns ExitCode
+	return pick()
+end 'main'
+```
+```exitcode
+2
+```
+
 
 ## Deferred
 

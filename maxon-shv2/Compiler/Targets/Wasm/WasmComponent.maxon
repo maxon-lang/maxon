@@ -157,4 +157,11 @@ export function wrapWasmComponent(outputPath FilePath)
 	if not newResult.succeeded() 'newFailed'
 		panic("wrapWasmComponent: wasm-tools component new exited {newResult.exitCode()}:\n{newResult.stderr}")
 	end 'newFailed'
+
+	// `component new` has overwritten `outputPath` with the finished component, so the embedded
+	// intermediate has served its purpose — remove it rather than leave a `.embed.wasm` beside every
+	// output (the spec runner's `cleanup` deletes the `.wasm`, not this). A delete failure is ignored:
+	// litter is not worth failing a successful compile over, and the panic paths above deliberately
+	// leave it for post-mortem inspection.
+	try File.delete(tmpEmbed) otherwise ignore
 end 'wrapWasmComponent'

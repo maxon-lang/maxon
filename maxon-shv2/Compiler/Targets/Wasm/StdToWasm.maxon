@@ -1018,24 +1018,38 @@ type WasmFuncEmitter
 			if leaf < dsts.count() 'foundLeaf'
 				let d = try dsts.get(leaf) otherwise panic("sequenceParallelCopy: dsts.get OOB at leaf {leaf}")
 				let s = try srcs.get(leaf) otherwise panic("sequenceParallelCopy: srcs.get OOB at leaf {leaf}")
-				self.emitLocalCopy(d as Wasm32Index, srcLocal: s)
+				self.emitLocalCopy(d as Wasm32Index, srcLocal: s, fromVt: getValtype(self.valtypes, v: s), toVt: getValtype(self.valtypes, v: d))
 				removeMoveAt(dsts, srcs: srcs, idx: leaf)
 			end 'foundLeaf' else 'cycle'
 				let a = try dsts.get(0) otherwise panic("sequenceParallelCopy: dsts.get(0) OOB")
 				let b = try srcs.get(0) otherwise panic("sequenceParallelCopy: srcs.get(0) OOB")
-				let scratch = self.scratchFor(getValtype(self.valtypes, v: a))
-				// Exchange a and b via scratch, satisfying (a ← b): scratch←a; a←b; b←scratch.
-				self.emitLocalCopy(scratch, srcLocal: a as Wasm32Index)
-				self.emitLocalCopy(a as Wasm32Index, srcLocal: b)
-				self.emitLocalCopy(b as Wasm32Index, srcLocal: scratch)
+				let aVt = getValtype(self.valtypes, v: a)
+				let bVt = getValtype(self.valtypes, v: b)
+				let scratch = self.scratchFor(aVt)
+				// Exchange a and b via scratch, satisfying (a ← b): scratch←a; a←b; b←scratch. Each leg
+				// coerces to the DESTINATION local's width: a and b are block-args whose declared
+				// valtypes can differ (see emitLocalCopy), so a width-mixing swap round-trips through the
+				// scratch (typed as a's width) with the same coercions a sequential assignment pair would.
+				self.emitLocalCopy(scratch, srcLocal: a as Wasm32Index, fromVt: aVt, toVt: aVt)
+				self.emitLocalCopy(a as Wasm32Index, srcLocal: b, fromVt: bVt, toVt: aVt)
+				self.emitLocalCopy(b as Wasm32Index, srcLocal: scratch, fromVt: aVt, toVt: bVt)
 				removeMoveAt(dsts, srcs: srcs, idx: 0)
 				rewriteSourcesThroughSwap(srcs, a: a, b: b)
 			end 'cycle'
 		end 'seq'
 	end 'sequenceParallelCopy'
 
-	function emitLocalCopy(dstLocal Wasm32Index, srcLocal Wasm32Index)
+	// Copy one local to another, coercing the source's valtype to the destination's when they
+	// differ. The native backends never need this — every value sits in a 64-bit register — but a
+	// phi edge is a value-meets-declared-type boundary exactly like a `ret` or a call argument
+	// (both of which already `coerceOnStack`): the frontend leaves an int↔narrower width change
+	// IMPLICIT (int→int carries no Std conversion op), so a loop-carried var whose declared valtype
+	// — its block-arg slot — is narrower/wider than the value an edge assigns it arrives here as an
+	// i32 into an i64 slot (or the reverse), which wasm's typed `local.set` rejects. `coerceOnStack`
+	// is a no-op when the widths already agree, so a same-width copy stays byte-identical.
+	function emitLocalCopy(dstLocal Wasm32Index, srcLocal Wasm32Index, fromVt WasmValType, toVt WasmValType)
 		self.body.localGet(srcLocal)
+		coerceOnStack(self.body, from: fromVt, to: toVt)
 		self.body.localSet(dstLocal)
 	end 'emitLocalCopy'
 

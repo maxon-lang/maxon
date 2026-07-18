@@ -1,0 +1,56 @@
+// Test: while-loops.loop-carried-var-narrower-than-its-update
+function firstExit() returns ExitCode
+	return 0
+end 'firstExit'
+
+function pick() returns ExitCode
+	var r = firstExit()
+	var i = 0
+	while i < 3 'lp'
+		r = i
+		i = i + 1
+	end 'lp'
+	return r
+end 'pick'
+
+function main() returns ExitCode
+	return pick()
+end 'main'
+---
+ExitCode: 2
+---
+func @firstExit {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @pick {
+  entry:
+    arm64.prologue 16
+    arm64.bl firstExit
+    arm64.movImm x1, 0
+    arm64.b whilehdr
+  whilehdr:
+    arm64.cmp x1, 3
+    arm64.cset x2, lt
+    arm64.cbnz x2, lp
+    arm64.b whileexit
+  lp:
+    arm64.add x0, x1, 1
+    arm64.xchgRegReg x0, x1
+    arm64.b whilehdr
+  whileexit:
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.bl pick
+    arm64.epilogue 16
+    arm64.ret
+}
