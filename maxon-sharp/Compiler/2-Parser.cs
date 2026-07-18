@@ -861,6 +861,19 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     return null;
   }
 
+  /// The ranged-typealias NAME the value `value` currently holds — the NAME counterpart of
+  /// <see cref="GetOptimalType"/>, found the SAME way (by asking which variable is bound to it) so
+  /// the two never disagree about a value's ranged identity. <see cref="GetOptimalType"/> carries
+  /// that identity into an op's WIDTH; this carries it onto the LOCAL a bitwise result initializes,
+  /// which is where a later shift must read it back from.
+  private string? RangedTypeNameOfValue(MaxonValue value) {
+    foreach (var info in _variables.Values) {
+      if (info.Value.Id == value.Id && RangedOptimalTypeOf(info.StructTypeName) is not null)
+        return info.StructTypeName;
+    }
+    return null;
+  }
+
   /// ⭐ The ranged type of a SHIFT's LEFT OPERAND — the only thing that decides how a right shift
   /// FILLS (<see cref="ShiftSemantics.KindOf"/>), and therefore something that must not depend on
   /// WHERE the operand is read, or on what else happens to share its SSA value.
@@ -895,6 +908,25 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     expr is ExprResult.VarRef v
       ? RangedOptimalTypeOf(v.Info.StructTypeName)
       : GetOptimalType(ResolveExprValue(expr));
+
+  /// The ranged-typealias NAME an initializer EXPRESSION carries onto the local it declares — the
+  /// declaration-time counterpart of <see cref="GetShiftOperandOptimalType"/>, and the reason a
+  /// later `v shr n` fills correctly. A `let v = value` (or `var v = value`) binds a fresh local to
+  /// `value`'s SSA value; if `value`'s declared type is a ranged typealias (`MachineWord =
+  /// int(0 to u64.max)`), the fresh local IS that same type. But the local's VarInfo is minted here,
+  /// not inherited, so unless the name rides across it reads back null — and a shift, which asks the
+  /// local's OWN VarInfo (never the value scan, see <see cref="GetShiftOperandOptimalType"/>), then
+  /// treats an unsigned value as signed and ARITHMETIC-fills where it must LOGICAL-fill.
+  ///
+  /// Only a bare variable read needs this. Every other initializer that carries a ranged type — a
+  /// cast, a call return, an array element — already routes its name through
+  /// <c>_lastRangedTypeName</c>, which the caller consults first. Returns null for anything that is
+  /// not a variable reference to a ranged primitive (a struct/enum/type-parameter binding, or a
+  /// non-variable expression), so it never fabricates a name.
+  private string? InitializerRangedTypeName(ExprResult initExpr) =>
+    initExpr is ExprResult.VarRef v && RangedOptimalTypeOf(v.Info.StructTypeName) is not null
+      ? v.Info.StructTypeName
+      : null;
 
   // Tracks captured variables during closure parsing
   private record CaptureInfo(string Name, MaxonValueKind Kind, MaxonValue OuterValue, string? StructTypeName);
@@ -9626,7 +9658,8 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         kind = MaxonValueKind.Float32;
       }
       _currentBlock!.AddOp(new MaxonAssignOp(name, initValue, isDeclaration: true, isMutable: isMutable, kind));
-      _variables.Declare(name, kind, isMutable, initValue, _currentBlock!, structTypeName: rangedTypeName ?? typeParamName);
+      _variables.Declare(name, kind, isMutable, initValue, _currentBlock!,
+        structTypeName: rangedTypeName ?? InitializerRangedTypeName(initExpr) ?? typeParamName);
     }
   }
 
@@ -15634,6 +15667,21 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       }
 
       lhs = new ExprResult.Direct(EmitBinOp(resolvedOp, promotedLhs, promotedRhs, kind, optimalType));
+
+      // `a and b` is BOUNDED BY BOTH operands — every set bit of the result is set in each — so its
+      // value provably fits either operand's range, and it genuinely IS that ranged type: the AND of
+      // two `MachineWord`s is a `MachineWord`, unsigned. Carry that identity onto the local this
+      // initializes, exactly as `optimalType` above carries it into the op's own width. Without it,
+      // `let m = a and b` mints an untyped local and a later `m shr n` — which asks the local's OWN
+      // VarInfo and nothing else (see GetShiftOperandOptimalType) — reads it as SIGNED and
+      // arithmetic-fills an unsigned value (the AArch64 bitmask encoder's `imm = value and mask;
+      // imm shr rotationStart` hung, then mis-encoded, on exactly this). `or`/`xor` are deliberately
+      // NOT here: their result can EXCEED a narrow operand's range (`0x0F or 0xF0` is `0xFF`), so
+      // stamping it with that range would be a claim the value need not honour — a different, wider
+      // question than a shift's fill. `??=` never clobbers a name an operand's cast or call set.
+      if (resolvedOp is MaxonBinOperator.BitAnd)
+        _lastRangedTypeName ??= RangedTypeNameOfValue(promotedLhs) ?? RangedTypeNameOfValue(promotedRhs);
+
       // A comparison yields a bool, which carries no ranged-primitive identity:
       // clear any stale `_lastRangedTypeName` left by an operand so a following
       // `LITERAL as Ranged` cast is not mis-flagged as unneeded (E3010). This was
