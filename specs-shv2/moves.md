@@ -36,7 +36,6 @@ the merge — the flag is set unconditionally where the move is written, with no
 through `u` at scope exit, with `t`'s drop skipped — so no leak and no double-free.
 
 <!-- test: legal-move -->
-<!-- targets: x64-windows -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -89,7 +88,6 @@ both bindings ended up owning `t`'s box and it was decref'd twice at scope exit 
 leak gate reported as exit 101. Now `t` is moved-from and skipped, so each box drops exactly once.
 
 <!-- test: assign-owned-from-owned -->
-<!-- targets: x64-windows -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -143,7 +141,6 @@ box and is usable again — while `b` owns the box moved out of `a`. Both print,
 double-dropped by the reassignment (it belongs to `b` now, not `a`).
 
 <!-- test: reassign-revives -->
-<!-- targets: x64-windows -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -258,7 +255,6 @@ one box at scope exit — a double-free (exit 101). The gate now strips redundan
 moved-from and skipped and the box drops exactly once.
 
 <!-- test: paren-move -->
-<!-- targets: x64-windows -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 

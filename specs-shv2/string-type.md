@@ -168,7 +168,6 @@ When you assign a string to another variable, they share storage. If either is m
 ## Tests
 
 <!-- test: basic-declaration -->
-<!-- targets: x64-windows -->
 ```maxon
 function main() returns ExitCode
 	let s = "hello"
@@ -197,7 +196,6 @@ end 'main'
 ```
 
 <!-- test: long-string -->
-<!-- targets: x64-windows -->
 ```maxon
 function main() returns ExitCode
 	let s = "this string is longer than fifteen bytes"
@@ -212,7 +210,6 @@ end 'main'
 ```
 
 <!-- test: inequality -->
-<!-- targets: x64-windows -->
 ```maxon
 function main() returns ExitCode
 	let s = "hello"
@@ -227,7 +224,6 @@ end 'main'
 ```
 
 <!-- test: equality-with-logical-and -->
-<!-- targets: x64-windows -->
 ```maxon
 function main() returns ExitCode
 	let s = "hello"
@@ -243,7 +239,6 @@ end 'main'
 ```
 
 <!-- test: print-string -->
-<!-- targets: x64-windows -->
 ```maxon
 function main() returns ExitCode
 	let s = "hello"
@@ -259,7 +254,6 @@ hello
 ```
 
 <!-- test: print-literal -->
-<!-- targets: x64-windows -->
 ```maxon
 function main() returns ExitCode
 	print("Hello, World!")
@@ -274,7 +268,6 @@ Hello, World!
 ```
 
 <!-- test: string-interpolation-concatenation -->
-<!-- targets: x64-windows -->
 ```maxon
 function main() returns ExitCode
 	let a = "hello"

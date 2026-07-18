@@ -35,7 +35,6 @@ end 'loop'
 ### Owned Binding in a Loop Body
 
 <!-- test: owned-binding-in-loop -->
-<!-- targets: x64-windows -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -63,7 +62,6 @@ v0v1v2
 ### Owned Binding in an If Body
 
 <!-- test: owned-binding-in-if -->
-<!-- targets: x64-windows -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -90,7 +88,6 @@ v1
 ### Owned Binding Released on Break
 
 <!-- test: owned-binding-with-break -->
-<!-- targets: x64-windows -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -121,7 +118,6 @@ v0v1v2v3
 ### Owned Binding Released on Continue
 
 <!-- test: owned-binding-with-continue -->
-<!-- targets: x64-windows -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -150,7 +146,6 @@ v1v2v3
 ### Nested Blocks, Both Bind Owned Strings
 
 <!-- test: nested-owned-bindings -->
-<!-- targets: x64-windows -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -182,7 +177,6 @@ v0v0v1v1v2v3
 ### Returning a Block-Local Binding Frees Exactly Once
 
 <!-- test: return-block-local-binding -->
-<!-- targets: x64-windows -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -222,7 +216,6 @@ not also strip it from that per-iteration fall-through — `firstHit(2)`, whose 
 even reached, still allocates a `cand` each iteration and must free it.
 
 <!-- test: return-loop-local-frees-iterations -->
-<!-- targets: x64-windows -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 

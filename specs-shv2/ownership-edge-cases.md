@@ -1843,7 +1843,6 @@ hell0 world
 ```
 
 <!-- test: rc-string-concat-loop-no-leak -->
-<!-- targets: x64-windows -->
 Repeatedly appending strings in a loop must not leak memory. Each append grows the buffer in-place; any old buffer freed during reallocation must be properly cleaned up.
 ```maxon
 function main() returns ExitCode

@@ -74,6 +74,18 @@ let AsciiFlagFalse = 0 as ParsedInt
 // usable by any consumer that wants a NUL-terminated buffer, while `length@8` is what Maxon reads.
 let NulTerminator = 0 as Byte
 
+// ⭐ EVERY BLOB IS PADDED TO AN 8-BYTE MULTIPLE, so the RECORD that registers right after it lands at an
+// 8-byte-aligned rdata offset. This is load-bearing for arm64-macOS ONLY: a String literal's `buffer@0`
+// there is a dyld chained-fixup REBASE (`MachOWriter.writeMachoStringBufferRebases`), and a chain links
+// its entries by a 4-byte-granular `next` delta, so every rebased slot MUST sit at an aligned offset or
+// the delta cannot be encoded. Records are 48 bytes (an 8-multiple) and arm64 float islands are 8, so
+// once blobs are 8-multiples the rdata cursor stays 8-aligned across the whole section and every record
+// is naturally aligned. The trailing zero bytes are INVISIBLE to every consumer — the blob is read as a
+// NUL-terminated C string from `buffer@0` and `length@8` counts only the payload — so this is free on
+// x64 (which bakes an unaligned absolute VA and needs no alignment) and correct on arm64. `v1` does the
+// same at its `.data` string helpers (LowerMaxonToStd `addSubprocessString`/`addTraceTagEntry`).
+let StringBlobAlignment = 8 as ByteCount
+
 // `__int_to_string`'s decimal machinery. The digits are rendered without ever NEGATING the value, so
 // `i64.min` is handled with no overflow: signed `%`/`/` keep the value's sign (`x % 10 ∈ [-9,0]` for a
 // negative `x`), and the per-digit magnitude is recovered by MULTIPLYING by `sign = 1 - 2*neg` (`+1` for
@@ -167,6 +179,9 @@ export function stringBlobBytes(bytes ByteArray) returns ByteArray
 	var blob = ByteArray.create()
 	blob.append(bytes)
 	blob.push(NulTerminator)
+	while blob.count() mod StringBlobAlignment != 0 'pad'
+		blob.push(NulTerminator)
+	end 'pad'
 	return blob
 end 'stringBlobBytes'
 

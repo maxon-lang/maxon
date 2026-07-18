@@ -79,7 +79,6 @@ end 'main'
 ```
 
 <!-- test: temp-managed-union-discard -->
-<!-- targets: x64-windows -->
 A constructed String-payload union used directly as the scrutinee, matched with a
 discard arm that binds nothing: the box AND its String payload free once through the
 cascade on whichever `return` runs.
@@ -129,7 +128,6 @@ end 'main'
 ```
 
 <!-- test: temp-scrutinee-fall-through -->
-<!-- targets: x64-windows -->
 Both arms fall through to the merge; the temporary box drops once after the merge,
 not per-arm.
 ```maxon
@@ -156,7 +154,6 @@ v
 ```
 
 <!-- test: gives-owned-interpolation -->
-<!-- targets: x64-windows -->
 Both `gives` arms yield an owned interpolation. Ownership transfers to the result
 phi, which is dropped once at its binding's scope exit — neither arm's temporary is
 double-freed by the post-match drain.
@@ -184,7 +181,6 @@ first arm value 1 padded to heap
 ```
 
 <!-- test: gives-disagree-owned-borrowed -->
-<!-- targets: x64-windows -->
 One arm gives an owned interpolation, the other a borrowed String literal. The
 borrowed give is promoted to an owned copy so the phi is uniformly owned and its
 consumer drops it unconditionally, whichever arm ran.
@@ -212,7 +208,6 @@ a plain literal give also long enough
 ```
 
 <!-- test: gives-moved-out-managed-binding -->
-<!-- targets: x64-windows -->
 A `gives` arm yields a managed payload it moved out of the scrutinee (`text(s) gives
 s`): the payload is not dropped on the arm edge (it escapes to the phi) but at the
 result's own scope exit, and the borrowed literal arm is promoted to match.
@@ -240,7 +235,6 @@ the moved payload string, long enough to be a real heap allocation
 ```
 
 <!-- test: gives-temp-managed-scrutinee -->
-<!-- targets: x64-windows -->
 Both bugs at once: a TEMPORARY managed-union scrutinee whose match expression's arms
 give owned values. The box drops once (cascade, null-guarding the moved slot) and the
 result phi drops once.

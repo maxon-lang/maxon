@@ -1,0 +1,44 @@
+// Test: equality-with-logical-and
+function main() returns ExitCode
+	let s = "hello"
+	let c = 'A'
+	if s == "hello" and c == 'A' 'check'
+		return 0
+	end 'check'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.leaRdata x0, __str_rec_1
+    arm64.movImm x19, 65
+    arm64.leaRdata x1, __str_rec_1
+    arm64.bl __str_eq
+    arm64.movImm x1, 0
+    arm64.cbnz x0, andrhs
+    arm64.b critsplit
+  andrhs:
+    arm64.cmp x19, 65
+    arm64.cset x0, eq
+    arm64.b scmerge
+  critsplit:
+    arm64.movRegReg x0, x1
+    arm64.b scmerge
+  scmerge:
+    arm64.cbnz x0, check
+    arm64.b ifcont
+  check:
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 1
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}

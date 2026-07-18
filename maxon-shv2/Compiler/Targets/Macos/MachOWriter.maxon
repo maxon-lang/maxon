@@ -8,31 +8,26 @@
 // the recipe proven to launch on this host today — with the reach-guarded ARM64
 // patchers this compiler already carries in BinaryHelpers.
 //
-// THIN for M1 (scalar core). It handles what the M1 CodeResult carries: __text,
-// float constants in __const, top-level `var` globals in __data, and GOT imports.
-// It does NOT yet emit the DYLD_CHAINED_PTR_64_OFFSET *rebases* v1 threads through
-// __DATA for absolute function pointers — the scalar core produces none (string
-// buffers arrive at P1.2, witness/layout function pointers at P1.6), so every data
-// reference is PC-relative (ADRP-based) and slide-safe with no rebase. That
-// machinery GROWS back at those milestones, exactly as CodeResult's own
-// arm64-fixup fields do. `symdata`/`covdata` are empty at M1 and their relocation
-// arms panic rather than silently emit an unbacked section — the day one is
-// emitted is a loud failure, not a wrong address.
+// It handles what the CodeResult carries: __text, rdata (float constants + String
+// literal records) in __const, top-level `var` globals in __data, GOT imports, and
+// — since P1.2 string buffers (M2b) — the DYLD_CHAINED_PTR_64_OFFSET *rebases* a PIE
+// image needs for the one absolute pointer the scalar/string core bakes: a String
+// literal's `buffer@0`. The witness/layout function-pointer rebases (`funcAbs64InRdata`)
+// arrive at P1.6 and reuse the same chain machinery; until then their relocation arm
+// panics rather than silently emit an unpatched pointer. `symdata`/`covdata` are empty
+// and their arms panic too — the day one is emitted is a loud failure, not a wrong
+// address.
 //
-// ⚠ M2 CONFIRMED THIS IS THE STRING-TEST BLOCKER. The M2 runtime floor (mmap/write
-// primitives + leak gate) lets heap/struct/union programs run natively, but a String
-// LITERAL's record carries a `buffer@0` ABSOLUTE pointer to its blob — the
-// `stringBufferFixups` PeWriter bakes at its fixed base. On this PIE that pointer needs
-// a dyld rebase, AND the record must first MOVE from read-only __const (in __TEXT, no
-// chain starts) to a rebase-able __DATA/__DATA_CONST section. Until then a String
-// literal's buffer reads 0 at runtime (write(NULL) is a silent no-op; __str_copy
-// segfaults), so every String-literal-materializing spec test stays gated to
-// x64-windows. This is the next slice — the "P1.2 string buffers" milestone above.
-//
-// Unlike PeWriter's fixed-base image (`patchStringBufferFixups` bakes an absolute
-// VA), macOS arm64 is always ASLR/PIE: there is no fixed base to bake, so absolute
-// pointers become dyld rebases (deferred above) and code stays position-
-// independent.
+// ⭐ THE STRING `buffer@0` REBASE (M2b). Unlike PeWriter's fixed-base image
+// (`patchStringBufferFixups` bakes `ImageBase + rdataRva + blobOffset`), macOS arm64 is
+// always ASLR/PIE: there is no fixed base to bake. So a String LITERAL's `buffer@0` — the
+// absolute address of its byte blob — becomes a dyld rebase: the slot stores the blob's
+// OFFSET from the image base and dyld re-adds the slid base at load. For that the record
+// must live where fixup chains reach, so __const MOVED from read-only __TEXT to the
+// writable __DATA segment (`writeMachoStringBufferRebases` + `buildMachoDataPageStarts`
+// thread the rebases through the rdata pages, alongside the import binds on the __got
+// page). Before this, a String literal's buffer read 0 at runtime (write(NULL) is a silent
+// no-op; __str_copy segfaults) and every String spec test was gated to x64-windows.
 
 // --- Page sizes ---
 // Segments are 16 KiB-aligned (the arm64 macOS VM page); the code signature hashes
@@ -81,16 +76,20 @@ let CsAdhoc = 0x2
 let CsLinkerSigned = 0x20000
 let CsHashTypeSha256 = 2
 let CsSha256Len = 32
+
 // The signature hashes the file in 2^12 = 4096-byte pages, NOT the 16 KiB segment
 // page. This is the value the loader assumes for an ad-hoc CodeDirectory.
 let CsPageSizeLog2 = 12
+
 // CS_EXECSEG_MAIN_BINARY: this signed executable segment is the process's main
 // binary. AMFI rejects a zero-length exec segment, so execSegLimit must be the
 // real __TEXT file size.
 let CsExecSegMainBinary = 0x1
+
 // CodeDirectory version 0x20400 is the first that carries the execSeg fields.
 let CsCodeDirectoryVersion = 0x20400
 let CodeDirectoryHeaderSize = 88
+
 // SuperBlob header (magic+length+count = 12) + one BlobIndex (type+offset = 8).
 let SuperBlobHeaderSize = 20
 
@@ -100,9 +99,27 @@ let SuperBlobHeaderSize = 20
 // carry an import ordinal rather than a target address, so they are format-neutral.
 let DyldChainedPtr64Offset = 6
 let DyldChainedImportFormat = 1
+
 // A __DATA page on which no fixup chain BEGINS. dyld still follows a chain that
 // flows onto a page via a predecessor's `next` field; this only marks starts.
 let DyldChainedPtrStartNone = 0xFFFF
+
+// The bit layout shared by every 64-bit chained-fixup entry, BIND and REBASE alike:
+// bit 63 is the bind flag (1 = a GOT import bind carrying an ordinal, 0 = a rebase
+// carrying a target), bits 51-62 are `next` (the stride to the following fixup ON
+// THE SAME PAGE, counted in 4-byte words; 0 ends the chain), and the low bits carry
+// the payload. For a rebase under DYLD_CHAINED_PTR_64_OFFSET the payload is the
+// target's 36-bit OFFSET from the image base, which dyld re-adds the slid base to.
+// `next` steps 4 bytes, so every threaded slot must sit at a 4-byte-granular offset.
+let DyldChainedBindBit = 63
+let DyldChainedNextShift = 51
+let DyldChainedNextStride = 4
+let DyldChainedRebaseTargetBits = 36
+let DyldChainedRebaseTargetMask = (1 shl DyldChainedRebaseTargetBits) - 1
+
+// One __got entry is an 8-byte pointer slot — the width a call site's `slotIndex`
+// scales by and the `next` stride the got's own bind chain steps (8 / 4 = 2 words).
+let MachoGotEntryBytes = 8
 
 // The dyld path and the one dylib every OS call resolves through. macOS forbids raw
 // syscalls, so `_exit`/`_write`/... are GOT-indirect calls into libSystem.
@@ -126,11 +143,14 @@ let BuildVersionCommandSize = 24
 let CodeSignatureCommandSize = 16
 let ChainedFixupsCommandSize = 16
 let ExportsTrieCommandSize = 16
+
 // LC_LOAD_DYLINKER: 12-byte header + "/usr/lib/dyld\0" (14), aligned up to 8 → 32.
 let DylinkerCommandSize = 32
+
 // LC_LOAD_DYLIB: 24-byte header + "/usr/lib/libSystem.B.dylib\0" (27), up to 8 → 56.
 let DylibCommandSize = 56
 let MachHeaderSize = 32
+
 // M1 always emits: __PAGEZERO, __TEXT, __DATA, __LINKEDIT, LC_SYMTAB, LC_DYSYMTAB,
 // LC_LOAD_DYLINKER, LC_MAIN, LC_UUID, LC_LOAD_DYLIB, LC_BUILD_VERSION,
 // LC_DYLD_CHAINED_FIXUPS, LC_DYLD_EXPORTS_TRIE, LC_CODE_SIGNATURE.
@@ -248,27 +268,152 @@ end 'writeMachoSectionHeader'
 function buildGot() returns ByteArray
 	var got = ByteArray.create()
 	let count = machoImportCount()
-	got.reserve(count * 8)
+	got.reserve(count * MachoGotEntryBytes)
 
 	for slot in 0 upto count 'eachSlot'
 		let isLast = slot == count - 1
-		let nextField = 0 if isLast else 2
-		let entry = (1 shl 63) or (nextField shl 51) or slot
+		let nextField = 0 if isLast else MachoGotEntryBytes / DyldChainedNextStride
+		let entry = (1 shl DyldChainedBindBit) or (nextField shl DyldChainedNextShift) or slot
 		writeQword(got, value: entry)
 	end 'eachSlot'
 
 	return got
 end 'buildGot'
 
+// --- String-literal buffer PIE rebases ---
+
+// macOS arm64 forces MH_PIE, so dyld slides the image at launch and there is no fixed base to
+// bake an absolute pointer against. A String LITERAL's record carries `buffer@0`, the address
+// of its byte blob; on x64 `PeWriter.patchStringBufferFixups` bakes that as
+// `ImageBase + rdataRva + blobOffset`, which is impossible here. Instead each `buffer@0` slot
+// becomes a DYLD_CHAINED_PTR_64_OFFSET *rebase*: the slot holds the blob's OFFSET from the image
+// base, and dyld re-adds the runtime base as it walks the chain. The records live in the writable
+// __DATA __const section (moved there from read-only __TEXT for exactly this), so their pages carry
+// fixup chains. This is v1's `writeMachoFuncAbs64Rebases` machinery — the SAME pointer format —
+// sourced from the String buffer fixups rather than the funcAbs64 layout-descriptor slots.
+
+// Insertion-sort the parallel (offset, target) arrays by ascending slot offset, so consecutive
+// slots can be threaded into per-page chains and the page_start table can name the first slot on
+// each page. Counts are tiny (one entry per distinct string literal). Primitive reads are copies,
+// so the in-place moves have no get/set borrow conflict — v1's `sortMachoRebases`.
+function sortMachoRebases(offsets ByteOffsetArray, targets ByteOffsetArray)
+	let n = offsets.count()
+	var i = 1
+	while i < n 'outer'
+		let keyOffset = try offsets.get(i) otherwise panic("sortMachoRebases: i < n by the guard but offsets.get({i}) failed")
+		let keyTarget = try targets.get(i) otherwise panic("sortMachoRebases: targets.get({i}) failed")
+		var j = i - 1
+		while j >= 0 'inner'
+			let valOffset = try offsets.get(j) otherwise panic("sortMachoRebases: 0 <= j < i but offsets.get({j}) failed")
+			if valOffset <= keyOffset 'placed'
+				break
+			end 'placed'
+			let valTarget = try targets.get(j) otherwise panic("sortMachoRebases: targets.get({j}) failed")
+			try offsets.set(j + 1, value: valOffset) otherwise panic("sortMachoRebases: offsets.set OOB at {j + 1}")
+			try targets.set(j + 1, value: valTarget) otherwise panic("sortMachoRebases: targets.set OOB at {j + 1}")
+			j = j - 1
+		end 'inner'
+		try offsets.set(j + 1, value: keyOffset) otherwise panic("sortMachoRebases: offsets.set OOB at {j + 1}")
+		try targets.set(j + 1, value: keyTarget) otherwise panic("sortMachoRebases: targets.set OOB at {j + 1}")
+		i = i + 1
+	end 'outer'
+end 'sortMachoRebases'
+
+// Turn every String `buffer@0` fixup into a DYLD_CHAINED_PTR_64_OFFSET rebase PATCHED INTO the
+// rdata image, and return the rebased slot offsets ASCENDING so the caller can build the __DATA
+// page_start table. `constImageOffset` is __const's offset from the image base (its file offset —
+// __TEXT sits at file 0 = the image base, and __DATA follows contiguously so vmaddr = base + fileoff);
+// added to a blob's rdata offset it gives the blob's image-base-relative rebase target.
+//
+// The same literal used more than once records the SAME `(record, blob)` pair each time, so the
+// fixup list holds duplicates. They are collapsed after sorting — threading one slot twice would
+// give the first copy a `next` of 0 (delta to itself), ending the chain and dropping every later
+// rebase on the page.
+function writeMachoStringBufferRebases(rdata ByteArray, globalData GlobalDataTable, constImageOffset MachineWord) returns ByteOffsetArray
+	var offsets = ByteOffsetArray.create()
+	var targets = ByteOffsetArray.create()
+	for fixup in globalData.stringBufferFixups 'collect'
+		offsets.push(globalData.rdataOffsetOf(fixup.recordLabel) + StringBufferOffset)
+		targets.push(constImageOffset + globalData.rdataOffsetOf(fixup.blobLabel))
+	end 'collect'
+
+	sortMachoRebases(offsets, targets: targets)
+
+	// Deduplicate consecutive equal slot offsets (sorted ⇒ duplicates are adjacent).
+	var slots = ByteOffsetArray.create()
+	var slotTargets = ByteOffsetArray.create()
+	for (iter, slotOffset) in offsets.withIterator() 'dedup'
+		let target = try targets.get(iter.index()) otherwise panic("writeMachoStringBufferRebases: offsets/targets fell out of lockstep at {iter.index()}")
+		var isDuplicate = false
+		if slots.count() > 0 'checkPrev'
+			let prev = try slots.get(slots.count() - 1) otherwise panic("writeMachoStringBufferRebases: slots.get(last) failed with count {slots.count()}")
+			isDuplicate = prev == slotOffset
+		end 'checkPrev'
+		if not isDuplicate 'fresh'
+			slots.push(slotOffset)
+			slotTargets.push(target)
+		end 'fresh'
+	end 'dedup'
+
+	// Thread each slot into its page's chain and patch the rebase over the record's placeholder.
+	let count = slots.count()
+	for i in 0 upto count 'write'
+		let slotOffset = try slots.get(i) otherwise panic("writeMachoStringBufferRebases: i < count but slots.get({i}) failed")
+		let target = try slotTargets.get(i) otherwise panic("writeMachoStringBufferRebases: slotTargets.get({i}) failed")
+		if slotOffset mod DyldChainedNextStride != 0 'misaligned'
+			panic("writeMachoStringBufferRebases: rebased slot at rdata offset {slotOffset} is not {DyldChainedNextStride}-byte aligned — a String record fell off the 8-byte cursor (the StringRuntime blob pad broke)")
+		end 'misaligned'
+		if target > DyldChainedRebaseTargetMask 'targetTooLarge'
+			panic("writeMachoStringBufferRebases: rebase target offset {target} does not fit in {DyldChainedRebaseTargetBits} bits — the image outgrew the DYLD_CHAINED_PTR_64_OFFSET reach")
+		end 'targetTooLarge'
+		var nextField = 0
+		if i + 1 < count 'hasNext'
+			let followingOffset = try slots.get(i + 1) otherwise panic("writeMachoStringBufferRebases: i+1 < count but slots.get({i + 1}) failed")
+			// `next` links only within a page; a cross-page successor ends this chain.
+			if followingOffset / MachoPageSize == slotOffset / MachoPageSize 'samePage'
+				nextField = (followingOffset - slotOffset) / DyldChainedNextStride
+			end 'samePage'
+		end 'hasNext'
+		let entry = (nextField shl DyldChainedNextShift) or (target and DyldChainedRebaseTargetMask)
+		patchQword(rdata, offset: slotOffset, value: entry)
+	end 'write'
+
+	return slots
+end 'writeMachoStringBufferRebases'
+
+// Build the __DATA page_start table from the ascending rebase slot offsets: one entry per rdata
+// page (the in-page offset of the first rebase on it, or START_NONE) followed by the __got page,
+// whose page-aligned start puts its first import bind at in-page offset 0. Its length is the page
+// count the chained-fixups header advertises; the prelude pages beyond carry no fixups and are
+// simply not indexed. v1's `buildMachoDataPageStarts`.
+function buildMachoDataPageStarts(rebaseSlots ByteOffsetArray, rdataPages ByteCount) returns ByteOffsetArray
+	var pageStarts = ByteOffsetArray.create()
+	for page in 0 upto rdataPages 'rdataPage'
+		let pageBase = page * MachoPageSize
+		let pageEnd = pageBase + MachoPageSize
+		var start = DyldChainedPtrStartNone
+		for slotOffset in rebaseSlots 'find'
+			if slotOffset >= pageBase and slotOffset < pageEnd 'inPage'
+				start = slotOffset - pageBase
+				break
+			end 'inPage'
+		end 'find'
+		pageStarts.push(start)
+	end 'rdataPage'
+	pageStarts.push(0)  // the __got page begins its import-bind chain at in-page offset 0
+	return pageStarts
+end 'buildMachoDataPageStarts'
+
 // --- Chained fixups (__LINKEDIT payload) ---
 
-// Build the LC_DYLD_CHAINED_FIXUPS blob describing the single import-bind chain
-// that lives in the __got. The __DATA segment's page_start table has one entry per
-// 16 KiB page of the segment's file image: the page the GOT begins on carries its
-// in-page start offset, every other page is START_NONE. A __DATA that outgrows one
-// page (many globals ahead of the GOT) therefore still points dyld at the right
-// page — the bootstrap learned this the hard way ("chain overflow … max=1").
-function buildChainedFixups(dataSegmentFileOff MachineWord, dataSegmentFileSize ByteCount, gotSectionOffset ByteOffset) returns ByteArray
+// Build the LC_DYLD_CHAINED_FIXUPS blob describing the __DATA fixup chains: the
+// String-literal `buffer@0` rebases threaded through the rdata pages and the single
+// import-bind chain on the __got page. `pageStarts` (from buildMachoDataPageStarts)
+// holds one entry per rdata page followed by the __got page — each the in-page offset
+// of that page's first fixup, or START_NONE. A __DATA that outgrows one page therefore
+// still points dyld at the right page — the bootstrap learned this the hard way
+// ("chain overflow … max=1").
+function buildChainedFixups(dataSegmentFileOff MachineWord, pageStarts ByteOffsetArray) returns ByteArray
 	var cf = ByteArray.create()
 	cf.reserve(256)
 
@@ -277,9 +422,7 @@ function buildChainedFixups(dataSegmentFileOff MachineWord, dataSegmentFileSize 
 	let segCount = 4
 	let startsSize = 4 + segCount * 4
 
-	let dataPageCount = (dataSegmentFileSize + MachoPageSize - 1) / MachoPageSize
-	let gotChainStartPage = gotSectionOffset / MachoPageSize
-	let gotChainStartInPage = gotSectionOffset mod MachoPageSize
+	let dataPageCount = pageStarts.count()
 	// dyld_chained_starts_in_segment: size(4)+page_size(2)+pointer_format(2)+
 	// segment_offset(8)+max_valid_pointer(4)+page_count(2)+page_start[pageCount].
 	let dataSegStartsSize = 22 + 2 * dataPageCount
@@ -312,8 +455,7 @@ function buildChainedFixups(dataSegmentFileOff MachineWord, dataSegmentFileSize 
 	writeQword(cf, value: dataSegmentFileOff)
 	writeDword(cf, value: 0)  // max_valid_pointer
 	writeWord(cf, value: dataPageCount)
-	for page in 0 upto dataPageCount 'eachPage'
-		let start = gotChainStartInPage if page == gotChainStartPage else DyldChainedPtrStartNone
+	for start in pageStarts 'eachPage'
 		writeWord(cf, value: start)
 	end 'eachPage'
 
@@ -353,7 +495,7 @@ end 'buildChainedFixups'
 // within-page offset), so a blown reach is a loud link error, not a wrong page.
 function patchImportRelocations(code ByteArray, relocations RelocationArray, textSectionVmAddr MachineWord, gotSectionVmAddr MachineWord)
 	for reloc in relocations 'patch'
-		let gotEntryVa = gotSectionVmAddr + reloc.slotIndex * 8
+		let gotEntryVa = gotSectionVmAddr + reloc.slotIndex * MachoGotEntryBytes
 		let adrpVa = textSectionVmAddr + reloc.codeOffset
 		patchArm64Adrp(code, codeOffset: reloc.codeOffset, instrAddr: adrpVa, targetAddr: gotEntryVa)
 		patchArm64PageOff(code, codeOffset: reloc.codeOffset + 4, targetAddr: gotEntryVa)
@@ -541,12 +683,14 @@ export function writeMachO(outputPath FilePath, codeResult CodeResult, target Ta
 	let hasPrelude = preludeSize > 0
 
 	// --- Section counts ---
-	// __TEXT: __text [+ __const]. __DATA: [__data] + __got (imports always present).
-	var textSectionCount = 1
-	if hasRdata 'countConst'
-		textSectionCount = textSectionCount + 1
-	end 'countConst'
+	// __TEXT: __text ONLY — rdata (__const) has moved to writable __DATA so dyld can PIE-rebase
+	// the String-literal `buffer@0` pointers it holds (see the file header). __DATA: [__const] +
+	// __got (imports always present) + [__data (globals)].
+	let textSectionCount = 1
 	var dataSectionCount = 1  // __got
+	if hasRdata 'countConst'
+		dataSectionCount = dataSectionCount + 1
+	end 'countConst'
 	if hasPrelude 'countData'
 		dataSectionCount = dataSectionCount + 1
 	end 'countData'
@@ -556,32 +700,44 @@ export function writeMachO(outputPath FilePath, codeResult CodeResult, target Ta
 	let dataCmdSize = SegmentCommandBaseSize + SectionHeaderSize * dataSectionCount
 	let loadCommandsSize = SegmentCommandBaseSize + textCmdSize + dataCmdSize + SegmentCommandBaseSize + SymtabCommandSize + DysymtabCommandSize + DylinkerCommandSize + MainCommandSize + UuidCommandSize + DylibCommandSize + BuildVersionCommandSize + ChainedFixupsCommandSize + ExportsTrieCommandSize + CodeSignatureCommandSize
 
-	// --- __TEXT layout ---
+	// --- __TEXT layout: __text only ---
 	let textSectionOffset = alignUp(MachHeaderSize + loadCommandsSize, alignment: 4)
 	let textSectionVmAddr = MachoTextVmAddr + textSectionOffset
-	// __const sits right after __text, still in read-only __TEXT (the scalar core
-	// bakes no absolute function pointers into rdata, so it needs no PIE rebase and
-	// no move to writable __DATA — see the file header). 8-byte aligned.
-	let constSectionOffset = alignUp(textSectionOffset + codeSize, alignment: 8)
-	let constSectionVmAddr = MachoTextVmAddr + constSectionOffset
-	let textSegmentContentEnd = constSectionOffset + rdataSize if hasRdata else textSectionOffset + codeSize
-	let textSegmentFileSize = alignUp(textSegmentContentEnd, alignment: MachoPageSize)
+	let textSegmentFileSize = alignUp(textSectionOffset + codeSize, alignment: MachoPageSize)
 
-	// --- __DATA layout: [__data (globals)] then __got ---
+	// --- __DATA layout: __const (rebased rdata) | __got | __data (globals) ---
+	// __const begins at the segment start, so a String record's rebased slot offset within the rdata
+	// image IS its offset within __DATA — the page_start math is then trivial. The rdata image is
+	// page-padded so __got starts on a fresh page, isolating the import-bind chain from the rebase
+	// chains; the globals prelude follows on further pages and carries no fixups. __const's offset
+	// from the image base equals its file offset (`dataSegmentFileOff`): __TEXT sits at file 0 = the
+	// image base and __DATA follows contiguously (vmaddr = MachoTextVmAddr + fileoff), so a rebase
+	// target is `dataSegmentFileOff + blobOffset`.
 	let dataSegmentFileOff = textSegmentFileSize
 	let dataSegmentVmAddr = MachoTextVmAddr + textSegmentFileSize
-	let dataSectionVmAddr = dataSegmentVmAddr  // globals begin at the segment start
-	let gotOffsetInData = alignUp(preludeSize, alignment: 8)
+	let constSectionVmAddr = dataSegmentVmAddr  // rdata begins at the segment start
+	let rdataAreaSize = alignUp(rdataSize, alignment: MachoPageSize) if hasRdata else 0
+	let rdataPages = rdataAreaSize / MachoPageSize
+	let gotOffsetInData = rdataAreaSize
 	let gotSectionVmAddr = dataSegmentVmAddr + gotOffsetInData
 	let got = buildGot()
 	let gotSize = got.count()
-	let dataSegmentFileSize = alignUp(gotOffsetInData + gotSize, alignment: MachoPageSize)
+	let constGotFileSize = alignUp(gotOffsetInData + gotSize, alignment: MachoPageSize)
+	let dataSectionFileOff = dataSegmentFileOff + constGotFileSize
+	let dataSectionVmAddr = dataSegmentVmAddr + constGotFileSize  // globals begin after the got
+	let preludeAreaSize = alignUp(preludeSize, alignment: MachoPageSize) if hasPrelude else 0
+	let dataSegmentFileSize = constGotFileSize + preludeAreaSize
 
 	// --- __LINKEDIT layout ---
 	let linkeditFileOff = dataSegmentFileOff + dataSegmentFileSize
 	let linkeditVmAddr = dataSegmentVmAddr + alignUp(dataSegmentFileSize, alignment: MachoPageSize)
 
-	let chainedFixupsData = buildChainedFixups(dataSegmentFileOff, dataSegmentFileSize: dataSegmentFileSize, gotSectionOffset: gotOffsetInData)
+	// Turn the String `buffer@0` fixups into dyld rebases patched into the rdata image, then build
+	// the __DATA page_start table (rdata pages + the got page) and the chained-fixups payload that
+	// threads both the rebases and the import binds.
+	let rebaseSlots = writeMachoStringBufferRebases(codeResult.rdata, globalData: codeResult.globalData, constImageOffset: dataSegmentFileOff)
+	let dataPageStarts = buildMachoDataPageStarts(rebaseSlots, rdataPages: rdataPages)
+	let chainedFixupsData = buildChainedFixups(dataSegmentFileOff, pageStarts: dataPageStarts)
 	let chainedFixupsOff = linkeditFileOff
 	let chainedFixupsSize = chainedFixupsData.count()
 
@@ -639,19 +795,19 @@ export function writeMachO(outputPath FilePath, codeResult CodeResult, target Ta
 	// __PAGEZERO.
 	writeSegmentCommand(macho, segname: "__PAGEZERO", vmaddr: 0, vmsize: MachoPageZeroSize, fileoff: 0, filesize: 0, maxprot: 0, initprot: 0, nsects: 0)
 
-	// __TEXT.
+	// __TEXT — __text only (rdata has moved to __DATA).
 	writeSegmentCommand(macho, segname: "__TEXT", vmaddr: MachoTextVmAddr, vmsize: textSegmentFileSize, fileoff: 0, filesize: textSegmentFileSize, maxprot: VmProtRead or VmProtExecute, initprot: VmProtRead or VmProtExecute, nsects: textSectionCount)
 	writeMachoSectionHeader(macho, sectname: "__text", segname: "__TEXT", addr: textSectionVmAddr, size: codeSize, offset: textSectionOffset, alignLog2: 2, flags: SAttrPureInstructions or SAttrSomeInstructions or SRegular)
-	if hasRdata 'writeConstHeader'
-		writeMachoSectionHeader(macho, sectname: "__const", segname: "__TEXT", addr: constSectionVmAddr, size: rdataSize, offset: constSectionOffset, alignLog2: 3, flags: SRegular)
-	end 'writeConstHeader'
 
-	// __DATA.
+	// __DATA — __const (rebased rdata) | __got | __data (globals).
 	writeSegmentCommand(macho, segname: "__DATA", vmaddr: dataSegmentVmAddr, vmsize: dataSegmentFileSize, fileoff: dataSegmentFileOff, filesize: dataSegmentFileSize, maxprot: VmProtRead or VmProtWrite, initprot: VmProtRead or VmProtWrite, nsects: dataSectionCount)
-	if hasPrelude 'writeDataHeader'
-		writeMachoSectionHeader(macho, sectname: "__data", segname: "__DATA", addr: dataSectionVmAddr, size: preludeSize, offset: dataSegmentFileOff, alignLog2: 3, flags: SRegular)
-	end 'writeDataHeader'
+	if hasRdata 'writeConstHeader'
+		writeMachoSectionHeader(macho, sectname: "__const", segname: "__DATA", addr: constSectionVmAddr, size: rdataSize, offset: dataSegmentFileOff, alignLog2: 3, flags: SRegular)
+	end 'writeConstHeader'
 	writeMachoSectionHeader(macho, sectname: "__got", segname: "__DATA", addr: gotSectionVmAddr, size: gotSize, offset: dataSegmentFileOff + gotOffsetInData, alignLog2: 3, flags: SRegular)
+	if hasPrelude 'writeDataHeader'
+		writeMachoSectionHeader(macho, sectname: "__data", segname: "__DATA", addr: dataSectionVmAddr, size: preludeSize, offset: dataSectionFileOff, alignLog2: 3, flags: SRegular)
+	end 'writeDataHeader'
 
 	// __LINKEDIT.
 	writeSegmentCommand(macho, segname: "__LINKEDIT", vmaddr: linkeditVmAddr, vmsize: linkeditFileSize, fileoff: linkeditFileOff, filesize: linkeditFileSize, maxprot: VmProtRead, initprot: VmProtRead, nsects: 0)
@@ -730,18 +886,19 @@ export function writeMachO(outputPath FilePath, codeResult CodeResult, target Ta
 	// --- Section contents ---
 	padTo(macho, size: textSectionOffset)
 	macho.append(code)
-	if hasRdata 'writeConst'
-		padTo(macho, size: constSectionOffset)
-		macho.append(codeResult.rdata)
-	end 'writeConst'
 	padTo(macho, size: textSegmentFileSize)
 
-	if hasPrelude 'writeData'
+	// __DATA: __const (rebased rdata) | __got | __data (globals).
+	if hasRdata 'writeConst'
 		padTo(macho, size: dataSegmentFileOff)
-		macho.append(codeResult.dataPrelude)
-	end 'writeData'
+		macho.append(codeResult.rdata)
+	end 'writeConst'
 	padTo(macho, size: dataSegmentFileOff + gotOffsetInData)
 	macho.append(got)
+	if hasPrelude 'writeData'
+		padTo(macho, size: dataSectionFileOff)
+		macho.append(codeResult.dataPrelude)
+	end 'writeData'
 	padTo(macho, size: dataSegmentFileOff + dataSegmentFileSize)
 
 	// --- __LINKEDIT contents ---
