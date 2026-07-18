@@ -72,7 +72,7 @@ must (see Building and Testing below).
 
 **Every tool in that table takes `repoRoot`** — the tree it acts on. Omit it and you get the main checkout (the one hosting the server binary); in a worktree that is a false green. See the box.
 
-Flags like `--filter`, `--update-required`, `--log`, `--mm-trace`, and `--target` are exposed as parameters on the relevant tools (`filter`, `updateRequired`, `log`, `mmTrace`, `target`). When iterating on a specific failing test, pass `filter` to `run_spec_test` or use `spec_test_outcome` for per-test detail. `target` cross-compiles to what the CHOSEN compiler can emit — the bootstrap has x64 and arm64 emitters (`"x64-windows"`, `"arm64-macos"`), and shv2 rejects the flag outright. **The wasm backend was only ever in `maxon-selfhosted`, so `target: "wasm32-wasi"` is no longer reachable through the MCP** — run it by hand against that compiler's binary if you need it.
+Flags like `--filter`, `--update-required`, `--log`, `--mm-trace`, and `--target` are exposed as parameters on the relevant tools (`filter`, `updateRequired`, `log`, `mmTrace`, `target`). When iterating on a specific failing test, pass `filter` to `run_spec_test` or use `spec_test_outcome` for per-test detail. `target` cross-compiles to what the CHOSEN compiler can emit — the bootstrap has x64 and arm64 emitters (`"x64-windows"`, `"arm64-macos"`), and the MCP rejects the flag for shv2 outright (the wrapper is host-only for shv2 — though the shv2 *binary* itself cross-compiles). **shv2 gained a `wasm32-wasi` SCALAR backend on 2026-07-18** (a WASI Preview2 component — see the wasm memory / PLAN.md Targets row). Because the MCP rejects `target` for shv2, **drive wasm by hand against the shv2 binary**: `./maxon-shv2/.maxon/maxon-shv2 build f.maxon -o out --target=wasm32-wasi`, then run the component under the vendored runtime `./vendor/wasmtime/wasmtime run -S cli-exit-with-code=y out.wasm`; the spec suite is `./maxon-shv2/.maxon/maxon-shv2 spec-test --target=wasm32-wasi` (scalar only — heap/String/`print`, structs, floats, and async remain Beyond). The full wasm backend in `maxon-selfhosted` is now just the read-only reference for those deeper slices.
 
 ### `run_scale_test` — the scaling INSTRUMENT (shv2 only). ⚠ NOT A GATE.
 
@@ -153,8 +153,10 @@ because **everything v1 is still USED for reads its source rather than runs it**
 - **Porting its code into shv2 — its whole remaining job — is unaffected.**
 - **`lookup_error_code` still works**: it parses `ErrorCode.maxon`, it does not execute it.
 
-What is genuinely lost: you cannot **run** it. So the **wasm backend** is unreachable (it is "Beyond the
-two phases" anyway), and v1 — the only dictionary-passing + witness-table compiler in the tree — cannot
+What is genuinely lost: you cannot **run** it — so v1's own wasm backend cannot be executed. That is now
+largely moot: **shv2 has its own `wasm32-wasi` scalar backend as of 2026-07-18** (WASI Preview2 component),
+and v1's wasm sources are the read-only reference for the deeper slices. And v1 — the only
+dictionary-passing + witness-table compiler in the tree — cannot
 be used to *measure* whether shv2 needs a witness slot for a `Hashable` constraint. That question
 therefore rests on an inference (under dictionary-passing there is no route to `element.hash()` on a type
 parameter except a witness slot), and shv2 will answer it definitively when it reaches generics at P1.6.
@@ -172,7 +174,7 @@ The self-hosted compiler binary is at `./maxon-selfhosted/.maxon/maxon-selfhoste
 - `--update-required` — regenerate RequiredIR blocks
 - `--log=CATEGORY:LEVEL` — enable detailed logging (e.g., `--log=ir:debug`, `--log=codegen:trace`)
 - `--mm-trace` — trace memory management operations (useful for memory leak debugging)
-- `--target=ARCH-OS` — test a specific target (`x64-windows`, `arm64-macos`; `wasm32-wasi` is self-hosted only)
+- `--target=ARCH-OS` — test a specific target (`x64-windows`, `arm64-macos`, `wasm32-wasi`). The bootstrap emits x64/arm64; the **shv2 binary** adds `wasm32-wasi` (scalar core, WASI Preview2 component — run the output under `vendor/wasmtime/wasmtime -S cli-exit-with-code=y`). The MCP rejects `--target` for shv2, so use the binary directly for wasm.
 
 Do NOT use `dotnet run` — it recompiles every time. Use the pre-built binaries directly.
 
