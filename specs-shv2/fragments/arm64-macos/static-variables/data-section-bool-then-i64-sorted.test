@@ -1,0 +1,36 @@
+// Test: data-section-bool-then-i64-sorted
+var flag = false
+var counter = 42
+
+function main() returns ExitCode
+	if flag 'read'
+		return 1
+	end 'read'
+	return counter - 42
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __data_counter@0 = i64 42
+  __data_flag@8 = i1 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.leaGlobal x0, __data_flag
+    arm64.loadRegBaseDisp.byte x0, [x0 + 0]
+    arm64.cbnz x0, read
+    arm64.b ifcont
+  read:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.leaGlobal x0, __data_counter
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.sub x0, x0, 42
+    arm64.epilogue 16
+    arm64.ret
+}
