@@ -4501,7 +4501,7 @@ export type Parser
 		return match handler 'h'
 			terminated gives self.finishTerminatedTry(okBlock, entryVals: entryVals, result: result)
 			value(otherwiseValue) gives self.finishValueTry(func, okBlock: okBlock, errEnd: errEnd, result: result, otherwiseValue: otherwiseValue, tryTok: tryTok)
-			fellThrough gives self.finishFellThroughTry(func, okBlock: okBlock, errEnd: errEnd, entryVals: entryVals, result: result, tryTok: tryTok)
+			fellThrough gives try self.finishFellThroughTry(func, okBlock: okBlock, errEnd: errEnd, entryVals: entryVals, result: result, resultUsed: resultUsed, tryTok: tryTok)
 		end 'h'
 	end 'desugarTry'
 
@@ -4568,7 +4568,19 @@ export type Parser
 	// `otherwise ignore` or a block handler that FELL THROUGH — both edges reach a fresh continuation
 	// with no try-value. Merge the carried vars a block handler may have reassigned (`mergeAtContinuation`
 	// mints a phi only where the two edges differ). The returned `result` is the discarded statement value.
-	function finishFellThroughTry(func IrFunction, okBlock IrBlock, errEnd IrBlock, entryVals ValueIdArray, result ValueId, tryTok Token) returns ValueId
+	function finishFellThroughTry(func IrFunction, okBlock IrBlock, errEnd IrBlock, entryVals ValueIdArray, result ValueId, resultUsed bool, tryTok Token) returns ValueId throws ParseError
+		// ⭐ **A FELL-THROUGH HANDLER CARRIES NO VALUE, SO IT CANNOT STAND IN A VALUE POSITION.** `otherwise
+		// ignore` and a handler block that runs off its end both catch the error and produce nothing, so the
+		// error edge reaches the merge with no value while a value position needs one on BOTH edges — and for
+		// a managed result the ok edge is about to DROP that result below, so binding it would read freed heap
+		// (a leak/UAF, not merely an undefined scalar). Rejected HERE, the ONE point at which both spellings
+		// have collapsed to the `fellThrough` signal, so the rule is stated once rather than at each spelling's
+		// parse site (`otherwise ignore` used to reject itself, and a fall-through block went unchecked — the
+		// two drifted, and the block case leaked).
+		if resultUsed 'valuelessHandlerInValue'
+			throw ParseError.errorTypeMismatch("a `try` used for its value needs a value on the error path too, but this `otherwise` handler catches the error without producing one (`otherwise ignore`, or a handler block that runs off its end) — give it a fallback value with `otherwise <expr>`, or make every path of the handler terminate (`return`/`throw`/`break`/`continue`)", line: tryTok.line, column: tryTok.column)
+		end 'valuelessHandlerInValue'
+
 		var cont = self.newBlock(func, label: b"trycont", line: tryTok.line)
 		let errVals = self.snapshotBindings(self.mutableVars)
 		self.mergeAtContinuation(okBlock, predB: errEnd, cont: cont, bindings: self.mutableVars, valsA: entryVals, valsB: errVals)
@@ -4634,11 +4646,11 @@ export type Parser
 	// bracket them with the caught-box enrol/drop every one of them shares — each DISCARDS the caught error.
 	// Returns how the form affects the merge; on entry `currentBlock` is the error block.
 	function parseUnboundOtherwiseForm(func IrFunction, result ValueId, resultUsed bool, tryTok Token) returns TryHandler throws ParseError
+		// `otherwise ignore` catches the error and discards the value — a fell-through (statement) form. Its
+		// use in a value position is refused uniformly with a fall-through block, at the one `fellThrough`
+		// gate in `finishFellThroughTry`; here it only reports HOW the merge behaves.
 		if self.at(TokenKind.ignore) 'ignoreForm'
 			try self.consume(TokenKind.ignore)
-			if resultUsed 'ignoreInValue'
-				throw ParseError.errorTypeMismatch("'otherwise ignore' cannot be used in assignment", line: tryTok.line, column: tryTok.column)
-			end 'ignoreInValue'
 			return TryHandler.fellThrough
 		end 'ignoreForm'
 

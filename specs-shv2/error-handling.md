@@ -609,7 +609,35 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3059: specs/fragments/error-handling/error.otherwise-ignore-in-assignment.test:15:12: type mismatch: ''otherwise ignore' cannot be used in assignment'
+error E3059: specs/fragments/error-handling/error.otherwise-ignore-in-assignment.test:15:12: type mismatch: 'a `try` used for its value needs a value on the error path too, but this `otherwise` handler catches the error without producing one (`otherwise ignore`, or a handler block that runs off its end) — give it a fallback value with `otherwise <expr>`, or make every path of the handler terminate (`return`/`throw`/`break`/`continue`)'
+```
+
+<!-- test: error.otherwise-block-fallthrough-in-assignment -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+// A block-form `otherwise` that runs off its end catches the error but yields NO value, so it cannot
+// stand in a value position — the same rule `otherwise ignore` obeys, enforced at the one `fellThrough`
+// gate. Before the fix a managed result here LEAKED (the ok edge dropped the result, then the binding
+// read the freed box); a scalar silently bound an undefined value.
+enum MyError implements Error
+	failed
+end 'MyError'
+
+function mayFail() returns Integer throws MyError
+	throw MyError.failed
+end 'mayFail'
+
+function main() returns ExitCode
+	let val = try mayFail() otherwise (e) 'handler'
+		let note = 1
+	end 'handler'
+	return val
+end 'main'
+```
+```maxoncstderr
+error E3059: specs/fragments/error-handling/error.otherwise-block-fallthrough-in-assignment.test:18:12: type mismatch: 'a `try` used for its value needs a value on the error path too, but this `otherwise` handler catches the error without producing one (`otherwise ignore`, or a handler block that runs off its end) — give it a fallback value with `otherwise <expr>`, or make every path of the handler terminate (`return`/`throw`/`break`/`continue`)'
 ```
 
 <!-- test: error.void-try-in-assignment -->
