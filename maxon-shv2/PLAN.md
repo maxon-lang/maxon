@@ -473,7 +473,7 @@ serializable-in-order, so a future cache has a stable id space to build on rathe
 | **Errors** | v1's design **verbatim**: dual-register `(value, errorFlag)`. No unwind tables. Already minimal. |
 | **Stdlib lowering** | **Reachability-seeded — lower only the stdlib bodies the program transitively reaches.** *Not an optimization: it is what makes Phase 1 a phase.* See §"The stdlib cone." |
 | **Stdlib fork** | `stdlib-shv2/stdlib/` — ❌ **NOT NEEDED. Re-deferred 2026-07-13 on measurement (P1.0c).** It was un-deferred as the backstop for `Map`, *"if reachability-seeded lowering proves insufficient."* **It proved sufficient** — `Map` is laid out and never codegen'd. The one edge it *could* have cut (`String.trim()` → `CharacterSet` → `Set`) we chose NOT to cut: do the hard things early ⇒ `Set` is in Phase 1 (P1.7b). **So the fork now gates nothing, and its original ~1 s justification is still dead.** Do not resurrect it without a NEW reason. |
-| **Targets** | ~~x64-windows only through Phase 2.~~ **SUPERSEDED — arm64-macOS pulled forward (user ruling 2026-07-17), parallel to Phase 1.** The arm64-macOS **scalar-core backend LANDED 2026-07-18** (`85237f70d`): shv2 emits running, ad-hoc-signed Mach-O, and `specs-shv2` runs GREEN natively on arm64 (**497/0**) via new per-target `<!-- targets: -->` gating; ~150 M2+ (heap/String/struct/union/print) tests are gated to x64-windows until the arm64 **runtime floor** (the next arm64 rung). Neutral register model — one allocator, both ISAs; x64 codegen byte-identical. wasm still Beyond. |
+| **Targets** | ~~x64-windows only through Phase 2.~~ **SUPERSEDED — arm64-macOS pulled forward (user ruling 2026-07-17), parallel to Phase 1.** The arm64-macOS **scalar-core backend LANDED 2026-07-18** (`85237f70d`): shv2 emits running, ad-hoc-signed Mach-O, and `specs-shv2` runs GREEN natively on arm64 (**497/0**) via new per-target `<!-- targets: -->` gating; ~150 M2+ (heap/String/struct/union/print) tests are gated to x64-windows until the arm64 **runtime floor** (the next arm64 rung). Neutral register model — one allocator, both ISAs; x64 codegen byte-identical. **wasm32-wasi SCALAR-CORE backend LANDED 2026-07-18 (`9a6c6b45d`), reversing the "wasm Beyond" lock — user-authorized.** A **WASI Preview2 COMPONENT** backend, sibling of x64/arm64: it branches off `buildBackend` and consumes the **Std module directly** (no register allocator, no Target dialect — the `wasm32` panics in RegisterAllocator/RegBits/SsaDestruction/TargetPrinter stay dead-but-exhaustive), maps every SSA ValueId to a wasm local, and reconstructs control flow with a **`loop`+`br_table` state-machine dispatcher** (no relooper). Emits a core module (`WasmBinary`/`StdToWasm`), wrapped into a component via the vendored `wasm-tools` (`embed`+`new`, `WasmComponent`), run under the vendored `wasmtime` with `-S cli-exit-with-code=y`. The spec runner gained a **cross-compile-and-run path** (`--target=wasm32-wasi` builds + runs under wasmtime) and an **additive per-target gating rule** (a cross target runs only when explicitly listed; native behavior unchanged). **93/0 exit-code-checked** across the ~16 Tier-1 scalar files. ⚠ Width coercion (i64↔i32) at every value boundary — ret, call-arg, phi-edge, binOp/cmp/div-mod/unary operands — recovers the widths the register backends leave implicit in 64-bit registers (four such gaps found by integration + review, all reproduced + fixed + regression-tested). **STILL BEYOND (later wasm slices): heap/String/`print` (linear memory + slab + `fd_write`), structs, floats, async→asyncify, and a real relooper for codegen quality.** |
 
 ### ⭐ Frontend parallelism — the pre-scan FANS OUT; the barrier is cheap and STAYS
 
@@ -591,7 +591,8 @@ unnecessary**, and all four bugs above are unrepresentable rather than fixed.
 ### PRINCIPLE — when may we rewrite shv2's own source?
 
 > **Rewriting shv2's source to dodge a mechanism is a SCOPE CUT, not a simplification.**
-> Use it *only* for mechanisms deliberately deferred as out-of-scope (async, wasm).
+> Use it *only* for mechanisms deliberately deferred as out-of-scope (async; and wasm's
+> POST-SCALAR slices — the wasm **scalar core landed 2026-07-18**, see the Targets row).
 > **NEVER** for a mechanism that is merely *hard* (closures, conditional conformance) —
 > that is the whole point of this plan.
 
@@ -1403,7 +1404,7 @@ at the Phase-1 GATE sharpens from "`-j1` and `-jN` agree on the *verdicts*" to "
 
 ## Beyond the two phases
 
-**Broaden:** general `Iterable` + associated types · `List`/Json/… · ~~arm64~~ (macOS **scalar core DONE 2026-07-18** — see the Targets row; the arm64 **runtime floor** is its next rung) + wasm · coverage ·
+**Broaden:** general `Iterable` + associated types · `List`/Json/… · ~~arm64~~ (macOS **scalar core DONE 2026-07-18** — see the Targets row; the arm64 **runtime floor** is its next rung) + wasm (**scalar core DONE 2026-07-18** — WASI Preview2 component, 93/0; heap/print/structs/floats/async-under-wasm + relooper remain) · coverage ·
 inliner. *(Two things LEFT this list on 2026-07-13. **`async`/green threads** are core, at P1.5.
 **Porting the spec suite** is no longer an endgame chore — it is **Workstream S**, the driver of
 every rung, starting at P1.0b.)*
