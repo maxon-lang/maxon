@@ -811,8 +811,10 @@ function nthPerm4(k Integer) returns IntArray
 	let divs = [6, 2, 1, 1]
 	for i in 0 upto 4 'pick'
 		let d = try divs.get(i) otherwise panic("divs OOB")
-		let idx = trunc(remaining / d)
-		remaining = remaining mod d
+		// Every `divs` entry is >= 1, so these divides never throw; the `otherwise` arms are
+		// unreachable and exist only because `/`/`mod` are fallible for a 0-inclusive divisor type.
+		let idx = trunc(try (remaining / d) otherwise 0)
+		remaining = try (remaining mod d) otherwise 0
 		let v = try pool.get(idx) otherwise panic("pool OOB")
 		result.push(v)
 		try pool.remove(idx) otherwise panic("pool.remove OOB")

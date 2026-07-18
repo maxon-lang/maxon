@@ -25,6 +25,33 @@ Multiplication, division, and modulo have higher precedence than addition and su
 ```text
 2 + 3 * 4  // Evaluates to 14, not 20
 ```
+
+### Division by zero
+
+Integer `/` and `mod` are **fallible operations**: dividing by zero is not a silent 0, an
+unhandled panic, or a CPU trap — the failure lives in the type system.
+
+- A divisor the compiler can prove **non-zero** — a non-zero literal (`x / 4`), or a value
+  whose ranged type excludes 0 (`int(1 to 100)`) — compiles to a bare divide with no check.
+- A divisor the compiler cannot prove non-zero (a plain `int`, which includes 0) makes the
+  divide **throw `DivisionByZero`**. Like any throwing operation it must be handled with
+  `try`, or propagated:
+
+  ```maxon
+  let q = try (a / b) otherwise 0        // supply a fallback
+  ```
+  ```maxon
+  // or give the divisor a non-zero type so the divide is provably safe:
+  function ratio(a Integer, b int(1 to i64.max)) returns Integer
+  	return a / b                       // bare divide, no check
+  end 'ratio'
+  ```
+
+- A divisor the compiler holds as the constant **0** (`a / 0`) is neither recoverable nor
+  safe — it is a bug, and is rejected at compile time.
+
+Because the check is in the language rather than in a CPU trap, the behavior is identical on
+every target (float division is unaffected and never throws).
 ### Example
 
 ```maxon

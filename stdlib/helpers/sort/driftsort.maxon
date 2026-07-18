@@ -94,10 +94,14 @@ export extension Array
 			return n
 		end 'tiny'
 		var x = n
-		var y = (x + n / x) / 2
+		// `x` is >= 1 throughout: it is seeded to n (>= 2 here) and only ever reassigned the Newton
+		// midpoint (x + n/x)/2, which is >= 1 for x, n >= 1. `SortIndex` is 0-inclusive and there is
+		// no flow-narrowing to say otherwise, so the divide `n / x` — fallible at the type level —
+		// rides `try`; the `otherwise` is unreachable.
+		var y = (x + (try (n / x) otherwise 0)) / 2
 		while y < x 'newton'
 			x = y
-			y = (x + n / x) / 2
+			y = (x + (try (n / x) otherwise 0)) / 2
 		end 'newton'
 		return x
 	end 'sqrtApprox'
@@ -215,7 +219,9 @@ export extension Array
 	function nodePowerBetween(s1 SortIndex, s2 SortIndex, n2 SortIndex, n SortIndex) returns NodePower
 		// scale = ceil(2^62 / n) = (2^62 + n - 1) / n
 		let twoTo62 = 4611686018427387904 as SortIndex  // 2^62
-		let scale = (twoTo62 + n - 1) / n
+		// `n` is a run length, always >= 1; `SortIndex` is 0-inclusive with no flow-narrowing, so the
+		// scale divide rides `try` and the `otherwise` (scale 1) is unreachable.
+		let scale = try ((twoTo62 + n - 1) / n) otherwise 1
 		let x = s1 + s2
 		let y = s2 + s2 + n2
 		let diff = (scale * x) xor (scale * y)
@@ -303,7 +309,10 @@ export extension Array
 		let halfUp = n - n / 2
 		var byteCap = n
 		if elemBytes > 0 'haveSize'
-			let maxElems = 8000000 / elemBytes
+			// Guarded `elemBytes > 0`, but the guard does not narrow the type, so the divide rides
+			// `try`; on the unreachable zero path fall back to n (the same safe over-allocation the
+			// `> 0` guard degrades to).
+			let maxElems = try (8000000 / elemBytes) otherwise n
 			byteCap = maxElems if maxElems < n else n
 		end 'haveSize'
 		var allocLen = halfUp

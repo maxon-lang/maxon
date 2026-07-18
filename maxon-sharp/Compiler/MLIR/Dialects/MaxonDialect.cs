@@ -119,6 +119,7 @@ public enum MaxonOpKind {
   Call,
   TryCall,
   ManagedMemCreateTryCall,
+  CheckedDivTryCall,
   IteratorAdvance,
   IteratorCurrent,
   Trunc,
@@ -673,6 +674,33 @@ public sealed class MaxonManagedMemCreateTryCallOp(MaxonValue count, int element
   public override MaxonOpKind Kind => MaxonOpKind.ManagedMemCreateTryCall;
   public int ElementSize { get; } = elementSize;
   public bool IsBitPacked { get; } = isBitPacked;
+}
+
+/// <summary>
+/// MaxonTryCallOp variant for an integer `a / b` / `a mod b` whose divisor the compiler could not
+/// prove non-zero. `/` and `mod` are throwing at the language level: a possibly-zero divisor is
+/// desugared to one of these, which throw <c>__DivisionByZeroError</c> when the divisor is 0, so
+/// they are always reached via `try` (the parser enforces this, reusing E3057). A divisor proven
+/// non-zero — a non-zero constant, or a ranged type excluding 0 — stays a bare MaxonBinOp.Div/.Rem
+/// and never comes here.
+///
+/// Carries the operand signedness so the lowering picks the matching signed/unsigned division,
+/// exactly as the bare MaxonBinOp path selects it from OptimalType (the ranged type is discarded by
+/// lowering, so it must ride on the op).
+/// </summary>
+public sealed class MaxonCheckedDivTryCallOp : MaxonTryCallOp {
+  public override MaxonOpKind Kind => MaxonOpKind.CheckedDivTryCall;
+  public override string Mnemonic => $"maxon.checked_div @{Callee}";
+  public bool IsMod { get; }
+  public bool IsUnsigned { get; }
+
+  public MaxonCheckedDivTryCallOp(MaxonValue dividend, MaxonValue divisor, bool isMod, bool isUnsigned,
+      MaxonValueKind resultKind, IrType throwsType)
+    : base(isMod ? "__checked_mod" : "__checked_div", [dividend, divisor], resultKind, null) {
+    IsMod = isMod;
+    IsUnsigned = isUnsigned;
+    ThrowsType = throwsType;
+  }
 }
 
 /// <summary>

@@ -13,6 +13,10 @@
 // is intentional here so signed-arithmetic on byte offsets, atomic xadd
 // with negative deltas, and pointer values all flow through one type.
 typealias MachineWord = int(i64.min to i64.max)
+// A machine word proven non-zero: the divisor type for `/`/`mod`. Integer division is fallible (a
+// zero divisor throws), so a structurally-non-zero-but-0-inclusive divisor is cast to this at the
+// divide — a bare divide, no check, and portable across compilers that do not model a throwing `/`.
+typealias NonZeroWord = int(1 to i64.max)
 
 // Atomically increment the refcount at [ptr - 8]. Caller must ensure ptr is
 // the user-region pointer (32-byte mm header sits at ptr-32..ptr-1; refcount
@@ -3148,10 +3152,17 @@ end '__managed_mem_buffer_byte_len'
 // are (-element_size) bits each, so `bytes * 8` bits hold `bytes*8 / bitWidth` of
 // them; byte-strided elements are `bytes / element_size`.
 function __managed_mem_capacity_for_bytes(bytes MachineWord, elemSize MachineWord) returns MachineWord
+	// `/` is fallible at the type level, and `elemSize` is typed 0-inclusive (MachineWord). Both
+	// divisors here are non-zero by construction — the packed path's `0 - elemSize` is >= 1 (packed
+	// elemSize < 0), and the sole caller reaches the non-packed path only under `elemSize != 0`. The
+	// non-zero cast makes that provable to the type system (a bare divide, no check); the cast's
+	// lower-bound panic is unreachable.
 	if __managed_mem_is_packed(elemSize) 'packed'
-		return (bytes shl 3) / __managed_mem_packed_bit_width(elemSize)
+		let bitWidth = __managed_mem_packed_bit_width(elemSize) as NonZeroWord
+		return (bytes shl 3) / bitWidth
 	end 'packed'
-	return bytes / elemSize
+	let stride = elemSize as NonZeroWord
+	return bytes / stride
 end '__managed_mem_capacity_for_bytes'
 
 // Width-dispatched scalar load/store at a precomputed element address. The

@@ -6,6 +6,10 @@ export typealias ByteOffset = int(0 to u64.max)
 // Dense column of byte offsets — the two span columns of `SourceRangeTable`.
 export typealias ByteOffsetArray = Array with ByteOffset
 export typealias MachineWord = int(0 to u64.max)
+// A machine word proven non-zero — the divisor type for `/`/`mod`. Integer division is fallible
+// (a zero divisor throws), so a divisor that is structurally non-zero but typed 0-inclusive is
+// cast to this at the divide, making the divide provably safe (a bare divide, no check).
+export typealias NonZeroWord = int(1 to u64.max)
 
 // A signed 32-bit immediate / displacement operand — the value an x64 instruction
 // carries in a `id` (imm32) or a `disp32` field: a group-1 immediate ALU op's
@@ -266,7 +270,9 @@ export function patchArm64PageOff(code ByteArray, codeOffset CodeOffset, targetA
 	if topByte != 0xF9 and topByte != 0x91 'badOpcode'
 		panic("patchArm64PageOff: instruction at codeOffset {codeOffset} is neither ADD-imm (0x91) nor LDR/STR Xn (0xF9) — opcode top byte 0x{topByte} — emitter/reloc mismatch")
 	end 'badOpcode'
-	let imm12 = (pageOffset / scale) and 0xFFF
+	// `scale` is 1 or 8 — always non-zero; cast so the divide is provably safe.
+	let s = scale as NonZeroWord
+	let imm12 = (pageOffset / s) and 0xFFF
 	let patched = (origInsn and 0xFFC003FF) or (imm12 shl 10)
 	patchDword(code, offset: codeOffset, value: patched)
 end 'patchArm64PageOff'

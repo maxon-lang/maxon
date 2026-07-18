@@ -167,7 +167,10 @@ end 'frameAlignTarget'
 // The smallest value >= `base` congruent to `targetMod` modulo `modulus` — `base` plus
 // the least non-negative delta that lands its residue on `targetMod`.
 function roundUpToMod(base StackSize, targetMod StackSize, modulus StackSize) returns StackSize
-	let delta = ((targetMod - (base mod modulus)) + modulus) mod modulus
+	// `modulus` is a power-of-two stack alignment, always non-zero; cast so the two remainders are
+	// provably safe (integer `mod` throws for a possibly-zero divisor).
+	let m = modulus as NonZeroWord
+	let delta = ((targetMod - (base mod m)) + m) mod m
 	return base + delta
 end 'roundUpToMod'
 

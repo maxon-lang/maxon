@@ -661,10 +661,13 @@ end 'arm64EmitScaledMem'
 
 // The scaled imm12 field of a load/store: `byteOffset / scale`, asserting scale-alignment and range.
 function arm64ScaledImm12(byteOffset MachineWord, scale MachineWord) returns MachineWord
-	if byteOffset mod scale != 0 'unaligned'
+	// `scale` is a load/store access width (1/2/4/8), always non-zero; cast so the divide and
+	// remainder are provably safe (integer `/`/`mod` throw for a possibly-zero divisor).
+	let s = scale as NonZeroWord
+	if byteOffset mod s != 0 'unaligned'
 		panic("arm64 emitter: load/store byte offset {byteOffset} is not {scale}-aligned — the scaled imm12 form cannot encode it")
 	end 'unaligned'
-	let scaled = byteOffset / scale
+	let scaled = byteOffset / s
 	if scaled > Arm64LoadStoreImm12Mask 'tooLarge'
 		panic("arm64 emitter: load/store offset {byteOffset} (scaled {scaled}) exceeds the 12-bit unsigned field")
 	end 'tooLarge'

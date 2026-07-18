@@ -45,7 +45,9 @@ function safeDivide(a Integer, b Integer) returns Integer throws ComputeError
 		if b == 0 'check'
 				throw ComputeError.overflow
 		end 'check'
-		return a / b
+		// Reached only when b != 0 (the guard above throws otherwise); the divide rides `try` because
+		// `/` is fallible at the type level and b is typed 0-inclusive. The `otherwise` is unreachable.
+		return try (a / b) otherwise 0
 end 'safeDivide'
 
 function main() returns ExitCode
@@ -71,7 +73,9 @@ function safeDivide(a Integer, b Integer) returns Integer throws ComputeError
 		if b == 0 'check'
 				throw ComputeError.overflow
 		end 'check'
-		return a / b
+		// Reached only when b != 0 (the guard above throws otherwise); the divide rides `try` because
+		// `/` is fallible at the type level and b is typed 0-inclusive. The `otherwise` is unreachable.
+		return try (a / b) otherwise 0
 end 'safeDivide'
 
 function main() returns ExitCode
@@ -153,7 +157,9 @@ function checkedDiv(a Integer, b Integer) returns Integer throws MathError
 		if b == 0 'z'
 				throw MathError.divByZero
 		end 'z'
-		return a / b
+		// Reached only when b != 0 (the guard above throws otherwise); the divide rides `try` because
+		// `/` is fallible at the type level and b is typed 0-inclusive. The `otherwise` is unreachable.
+		return try (a / b) otherwise 0
 end 'checkedDiv'
 
 function main() returns ExitCode

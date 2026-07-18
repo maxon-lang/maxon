@@ -615,6 +615,13 @@ public enum ErrorCode {
   /// nobody. If a real need appears, that is the shape -- and this code is what says so.
   /// </summary>
   SemanticThrowingFunctionAsValue = 3101,
+  /// <summary>
+  /// An integer `/` or `mod` has a divisor the compiler holds as the constant 0 (`a / 0`, or a
+  /// divisor that folded to 0). Unlike a possibly-zero divisor -- which is a throwing operation
+  /// handled with `try` (E3057) -- a provably-zero one is neither recoverable nor safe: it is a
+  /// bug, rejected at compile time.
+  /// </summary>
+  SemanticDivisionByZero = 3103,
 
   /// <summary>
   /// The IR builder met an expression form it cannot lower.

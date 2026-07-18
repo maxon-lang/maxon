@@ -82,8 +82,9 @@ end 'main'
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
+typealias NonZero = int(1 to i64.max)
 
-function divLive(a Integer, b Integer, x Integer) returns Integer
+function divLive(a Integer, b NonZero, x Integer) returns Integer
 	let preserved = x + 1
 	let result = a / b
 	return trunc(result + preserved)
@@ -101,8 +102,9 @@ end 'main'
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
+typealias NonZero = int(1 to i64.max)
 
-function modLive(a Integer, b Integer, x Integer) returns Integer
+function modLive(a Integer, b NonZero, x Integer) returns Integer
 	let preserved = x + 1
 	let result = a mod b
 	return result + preserved
@@ -125,7 +127,7 @@ function divLoop(n Integer) returns Integer
 	var sum = 0
 	var i = 1
 	while i <= n 'loop'
-		sum = sum + trunc(50 / i)
+		sum = sum + trunc(try (50 / i) otherwise 0)
 		i = i + 1
 	end 'loop'
 	return sum
@@ -143,12 +145,13 @@ end 'main'
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
+typealias NonZero = int(1 to i64.max)
 
 function helper(x Integer) returns Integer
 	return x * 2
 end 'helper'
 
-function divCall(a Integer, b Integer) returns Integer
+function divCall(a Integer, b NonZero) returns Integer
 	let temp = trunc(a / b)
 	let result = helper(temp)
 	return result + temp
@@ -166,8 +169,9 @@ end 'main'
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
+typealias NonZero = int(1 to i64.max)
 
-function multiDiv(a Integer, b Integer, c Integer, d Integer) returns Integer
+function multiDiv(a Integer, b NonZero, c Integer, d NonZero) returns Integer
 	let r1 = a / b
 	let r2 = c / d
 	return trunc(r1 + r2)

@@ -2239,6 +2239,88 @@ public static partial class MaxonToStandardConversion {
   }
 
   /// <summary>
+  /// Lowers the desugared checked-division builtins __checked_div / __checked_mod (see
+  /// MaxonCheckedDivTryCallOp). A possibly-zero `a / b` / `a mod b` becomes: compare the divisor to
+  /// 0, and
+  ///   • on ZERO, set the error flag to __DivisionByZeroError.divisionByZero (ordinal 0 → flag 1)
+  ///     and leave the result at a defined 0 WITHOUT executing the divide (x64 `idiv` by zero
+  ///     raises #DE — the whole point of the throw is to never reach it);
+  ///   • on NON-ZERO, run the real signed/unsigned Div/Rem — byte-for-byte the bare divide the
+  ///     provably-non-zero path emits for the same operands.
+  ///
+  /// The block is split entry → {zero, ok} → merge, exactly like the OOB path in LowerManagedMemGet:
+  /// both arms store into a result temp the merge reloads, so the caller sees one value whichever
+  /// path ran.
+  /// </summary>
+  private static bool TryLowerCheckedDivMod(
+    string callee,
+    List<MaxonValue> args,
+    MaxonValue? result,
+    ref IrBlock<StandardOp> block,
+    IrFunction<StandardOp> func,
+    Dictionary<MaxonValue, StdValue> valueMap,
+    Dictionary<string, string> varTypes,
+    MaxonValue? errorFlagValue,
+    MaxonCallOp? sourceCallOp) {
+    if (callee is not ("__checked_div" or "__checked_mod")) return false;
+
+    // The op carries the signedness the divide needs; lowering has already discarded the ranged
+    // type it came from, so it must ride on the op. A checked divide is ALWAYS a try-call, so the
+    // metadata is always present — its absence is a compiler bug, not an input error.
+    if (sourceCallOp is not MaxonCheckedDivTryCallOp checkedDiv)
+      throw new InvalidOperationException($"'{callee}' must be lowered from a MaxonCheckedDivTryCallOp");
+
+    var dividend = (StdI64)valueMap[args[0]];
+    var divisor = (StdI64)valueMap[args[1]];
+
+    // Error flag: divisionByZero (ordinal 0) → 1. Computed once here; both arms and the merge see it.
+    var zeroConst = new StdConstI64Op(0);
+    block.AddOp(zeroConst);
+    var isZero = new StdCmpI64Op("eq", divisor, zeroConst.Result);
+    block.AddOp(isZero);
+    EmitBoundsCheckErrorFlag(block, isZero.Result, 1, valueMap, varTypes, errorFlagValue);
+
+    // Result temp, seeded to 0 so the error (zero-divisor) path leaves a defined value.
+    var uid = IrContext.Current.NextId();
+    var resultTemp = $"__checked_div_result_{uid}";
+    varTypes[resultTemp] = "i64";
+    var seed = new StdConstI64Op(0);
+    block.AddOp(seed);
+    EmitStore(block, seed.Result, resultTemp, varTypes);
+
+    var zeroLabel = $"__div_zero_{uid}";
+    var okLabel = $"__div_ok_{uid}";
+    var mergeLabel = $"__div_merge_{uid}";
+    block.AddOp(new StdCondBrOp(isZero.Result, zeroLabel, okLabel));
+
+    // Zero path: no divide (idiv would fault); the temp is already 0. Branch to merge.
+    var zeroBlock = func.Body.AddBlock(zeroLabel);
+    zeroBlock.AddOp(new StdBrOp(mergeLabel));
+
+    // Non-zero path: the real divide, then store to the temp. Reuse the exact factories the bare
+    // MaxonBinOp.Div/.Rem path uses, so a checked divide and a bare one emit identical arithmetic.
+    block = func.Body.AddBlock(okLabel);
+    var divOp = checkedDiv.IsMod ? MaxonBinOperator.Mod : MaxonBinOperator.Div;
+    var (arithOp, quotient) = checkedDiv.IsUnsigned
+      ? CreateUnsignedIntBinOp(divOp, dividend, divisor)
+      : BinOpFactories[(divOp, MaxonValueKind.Integer)](dividend, divisor);
+    block.AddOp(arithOp);
+    EmitStore(block, quotient, resultTemp, varTypes);
+    block.AddOp(new StdBrOp(mergeLabel));
+
+    // Merge: reload the flag and the result so both paths converge on one value each.
+    block = func.Body.AddBlock(mergeLabel);
+    if (errorFlagValue != null) {
+      var mergedFlag = (StdI64)EmitLoad(block, "__error_flag", varTypes);
+      valueMap[errorFlagValue] = mergedFlag;
+    }
+    var mergedResult = (StdI64)EmitLoad(block, resultTemp, varTypes);
+    if (result != null) valueMap[result] = mergedResult;
+
+    return true;
+  }
+
+  /// <summary>
   /// Helper: emit a bounds-check error flag using select (like EmitNullCheckErrorFlag).
   /// Sets __error_flag to errorOrdinal if isError is true, else 0.
   ///

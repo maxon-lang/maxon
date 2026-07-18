@@ -36,6 +36,10 @@ let RatioFractionDigits = 2
 // because the division is the same division and a second copy of it differing only in the name of its
 // parameter is exactly the duplication that has no reason to exist.
 export typealias MemoryCount = int(0 to u64.max)
+// A memory count proven non-zero — the divisor type when computing a growth ratio. Integer `/` is
+// fallible (a zero divisor throws); `previous` is guarded non-zero above the divide, so it is cast
+// to this to make the divide provably safe.
+typealias NonZeroCount = int(1 to u64.max)
 
 // The growth of one rung over the rung below it.
 //
@@ -52,7 +56,8 @@ export function growthOf(now MemoryCount, previous MemoryCount) returns GrowthRe
 		return GrowthReading.noBaseline
 	end 'nothingToGrowFrom'
 
-	return GrowthReading.measured(((now * RatioScale) / previous) as GrowthRatio)
+	let base = previous as NonZeroCount
+	return GrowthReading.measured(((now * RatioScale) / base) as GrowthRatio)
 end 'growthOf'
 
 // `x2.00`, or `-` when there is no rung below to compare against (rung 0), or when the rung below

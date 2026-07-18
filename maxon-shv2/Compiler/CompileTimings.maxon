@@ -60,6 +60,8 @@ let RuleUnit = "-"
 // 1000 = 100.0%. There is no float formatting on this path (and no reason to pull
 // one in for two digits).
 typealias Permille = int(0 to 1000)
+// A non-zero nanosecond duration — the divisor type for the percentage/millis conversions below.
+typealias NonZeroNanos = int(1 to u64.max)
 
 let PermilleScale = 1000
 let PermilleTenthsPerPercent = 10
@@ -268,7 +270,10 @@ function percentOfTotal(nanos DurationNanos, total DurationNanos) returns String
 		panic("percentOfTotal: a phase claims {nanos} ns of a {total} ns compile — a phase timer overlaps another and is double-counting (see CompileTimings' header).")
 	end 'overlap'
 
-	let permille = ((nanos * PermilleScale) / total) as Permille
+	// `total` is guarded non-zero above; cast so the divide is provably safe (integer `/` throws
+	// for a possibly-zero divisor).
+	let denom = total as NonZeroNanos
+	let permille = ((nanos * PermilleScale) / denom) as Permille
 	return "{permille / PermilleTenthsPerPercent}.{permille mod PermilleTenthsPerPercent}%"
 end 'percentOfTotal'
 

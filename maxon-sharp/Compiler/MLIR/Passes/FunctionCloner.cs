@@ -847,6 +847,11 @@ internal class FunctionCloner {
       cloned = new MaxonManagedMemCreateTryCallOp(newArgs[0], createTryCall.ElementSize, createTryCall.IsBitPacked) {
         ResultStructTypeName = resultStructTypeName
       };
+    } else if (tryCall is MaxonCheckedDivTryCallOp checkedDiv) {
+      // Preserve the divide's mod/signedness metadata the lowering needs (the callee is fixed;
+      // dropping the subtype would strand the divide as a plain try-call the lowering can't emit).
+      cloned = new MaxonCheckedDivTryCallOp(newArgs[0], newArgs[1], checkedDiv.IsMod,
+        checkedDiv.IsUnsigned, resultKind ?? tryCall.ResultKind!.Value, checkedDiv.ThrowsType!);
     } else {
       cloned = new MaxonTryCallOp(newCallee, newArgs, resultKind, resultStructTypeName);
     }

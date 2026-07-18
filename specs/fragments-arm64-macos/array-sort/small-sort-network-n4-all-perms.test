@@ -35,8 +35,10 @@ function nthPerm4(k Integer) returns IntArray
 	let divs = [6, 2, 1, 1]
 	for i in 0 upto 4 'pick'
 		let d = try divs.get(i) otherwise panic("divs OOB")
-		let idx = trunc(remaining / d)
-		remaining = remaining mod d
+		// Every `divs` entry is >= 1, so these divides never throw; the `otherwise` arms are
+		// unreachable and exist only because `/`/`mod` are fallible for a 0-inclusive divisor type.
+		let idx = trunc(try (remaining / d) otherwise 0)
+		remaining = try (remaining mod d) otherwise 0
 		let v = try pool.get(idx) otherwise panic("pool OOB")
 		result.push(v)
 		try pool.remove(idx) otherwise panic("pool.remove OOB")
@@ -164,8 +166,8 @@ module {
   }
   func @nthPerm4(k: i64) -> i64 {
   entry:
-    arm64.prologue stack_size=176
-    arm64.str x0, [x29, #-80]
+    arm64.prologue stack_size=304
+    arm64.str x0, [x29, #-144]
     arm64.bl IntArray.create
     arm64.str x0, [x29, #-8]
     arm64.ldr x0, [x29, #-8]
@@ -185,7 +187,7 @@ module {
     arm64.bl IntArray.push
     arm64.bl IntArray.create
     arm64.str x0, [x29, #-16]
-    arm64.ldr x4, [x29, #-80]
+    arm64.ldr x4, [x29, #-144]
     arm64.str x4, [x29, #-24]
     arm64.adrp_add_global x5, __static_lit_25
     arm64.mov x6, x5
@@ -228,30 +230,108 @@ module {
     arm64.bl mrt_panic
   otherwise_continue_0:
     arm64.ldr x0, [x29, #-56]
+    arm64.str x0, [x29, #-64]
+    arm64.ldr x1, [x29, #-24]
+    arm64.mov x2, #0
+    arm64.cmp x0, x2
+    arm64.cset x3, eq
+    arm64.mov x4, #1
+    arm64.mov x5, #0
+    arm64.cmp x3, #0
+    arm64.csel x6, x4, x5, ne
+    arm64.str x6, [x29, #-72]
+    arm64.mov x7, #0
+    arm64.str x7, [x29, #-80]
+    arm64.cmp x3, #0
+    arm64.b.ne nthPerm4.__div_zero_0
+    arm64.b nthPerm4.__div_ok_0
+  __div_zero_0:
+    arm64.b nthPerm4.__div_merge_0
+  __div_ok_0:
+    arm64.ldr x0, [x29, #-64]
     arm64.ldr x1, [x29, #-24]
     arm64.cmp x0, #0
     arm64.b.ne nthPerm4.__div_ok_0
     arm64.bl mrt_div_by_zero
     arm64.label nthPerm4.__div_ok_0
     arm64.sdiv x2, x1, x0
-    arm64.str x2, [x29, #-64]
-    arm64.ldr x3, [x29, #-24]
+    arm64.str x2, [x29, #-80]
+    arm64.b nthPerm4.__div_merge_0
+  __div_merge_0:
+    arm64.ldr x0, [x29, #-72]
+    arm64.ldr x1, [x29, #-80]
+    arm64.mov x2, #0
+    arm64.str x2, [x29, #-88]
+    arm64.str x1, [x29, #-96]
+    arm64.mov x3, #0
+    arm64.cmp x0, x3
+    arm64.cset x4, ne
+    arm64.cmp x4, #0
+    arm64.b.ne nthPerm4.otherwise_default_error_0
+    arm64.b nthPerm4.otherwise_default_continue_0
+  otherwise_default_error_0:
+    arm64.ldr x0, [x29, #-88]
+    arm64.str x0, [x29, #-96]
+    arm64.b nthPerm4.otherwise_default_continue_0
+  otherwise_default_continue_0:
+    arm64.ldr x0, [x29, #-96]
+    arm64.str x0, [x29, #-104]
+    arm64.ldr x1, [x29, #-24]
+    arm64.ldr x2, [x29, #-64]
+    arm64.mov x3, #0
+    arm64.cmp x2, x3
+    arm64.cset x4, eq
+    arm64.mov x5, #1
+    arm64.mov x6, #0
+    arm64.cmp x4, #0
+    arm64.csel x7, x5, x6, ne
+    arm64.str x7, [x29, #-72]
+    arm64.mov x8, #0
+    arm64.str x8, [x29, #-112]
+    arm64.cmp x4, #0
+    arm64.b.ne nthPerm4.__div_zero_1
+    arm64.b nthPerm4.__div_ok_1
+  __div_zero_1:
+    arm64.b nthPerm4.__div_merge_1
+  __div_ok_1:
+    arm64.ldr x0, [x29, #-64]
+    arm64.ldr x1, [x29, #-24]
     arm64.cmp x0, #0
     arm64.b.ne nthPerm4.__div_ok_1
     arm64.bl mrt_div_by_zero
     arm64.label nthPerm4.__div_ok_1
-    arm64.sdiv x4, x3, x0
-    arm64.msub x5, x4, x0, x3
-    arm64.str x5, [x29, #-24]
-    arm64.ldr x6, [x29, #-8]
+    arm64.sdiv x2, x1, x0
+    arm64.msub x3, x2, x0, x1
+    arm64.str x3, [x29, #-112]
+    arm64.b nthPerm4.__div_merge_1
+  __div_merge_1:
+    arm64.ldr x0, [x29, #-72]
+    arm64.ldr x1, [x29, #-112]
+    arm64.mov x2, #0
+    arm64.str x2, [x29, #-120]
+    arm64.str x1, [x29, #-128]
+    arm64.mov x3, #0
+    arm64.cmp x0, x3
+    arm64.cset x4, ne
+    arm64.cmp x4, #0
+    arm64.b.ne nthPerm4.otherwise_default_error_1
+    arm64.b nthPerm4.otherwise_default_continue_1
+  otherwise_default_error_1:
+    arm64.ldr x0, [x29, #-120]
+    arm64.str x0, [x29, #-128]
+    arm64.b nthPerm4.otherwise_default_continue_1
+  otherwise_default_continue_1:
+    arm64.ldr x0, [x29, #-128]
+    arm64.str x0, [x29, #-24]
+    arm64.ldr x1, [x29, #-104]
+    arm64.ldr x2, [x29, #-8]
     arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x29, #-64]
     arm64.bl IntArray.get
-    arm64.str x0, [x29, #-72]
-    arm64.mov x7, #0
-    arm64.cmp x1, x7
-    arm64.cset x8, ne
-    arm64.cmp x8, #0
+    arm64.str x0, [x29, #-136]
+    arm64.mov x3, #0
+    arm64.cmp x1, x3
+    arm64.cset x4, ne
+    arm64.cmp x4, #0
     arm64.b.ne nthPerm4.otherwise_panic_1
     arm64.b nthPerm4.otherwise_continue_1
   otherwise_panic_1:
@@ -260,15 +340,15 @@ module {
     arm64.mov x0, x1
     arm64.bl mrt_panic
   otherwise_continue_1:
-    arm64.ldr x0, [x29, #-72]
+    arm64.ldr x0, [x29, #-136]
     arm64.ldr x1, [x29, #-16]
     arm64.ldr x0, [x29, #-16]
-    arm64.ldr x1, [x29, #-72]
+    arm64.ldr x1, [x29, #-136]
     arm64.bl IntArray.push
-    arm64.ldr x2, [x29, #-64]
+    arm64.ldr x2, [x29, #-104]
     arm64.ldr x3, [x29, #-8]
     arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x29, #-64]
+    arm64.ldr x1, [x29, #-104]
     arm64.bl IntArray.remove
     arm64.mov x4, #0
     arm64.cmp x1, x4
@@ -292,18 +372,18 @@ module {
   pick_0.exit:
     arm64.ldr x0, [x29, #-32]
     arm64.cmp x0, #0
-    arm64.b.eq nthPerm4.__skip_guarded_79
+    arm64.b.eq nthPerm4.__skip_guarded_130
     arm64.bl mm_decref
-    arm64.label nthPerm4.__skip_guarded_79
+    arm64.label nthPerm4.__skip_guarded_130
     arm64.ldr x1, [x29, #-8]
     arm64.cmp x1, #0
-    arm64.b.eq nthPerm4.__skip_guarded_81
+    arm64.b.eq nthPerm4.__skip_guarded_132
     arm64.ldr x0, [x29, #-8]
     arm64.bl mm_decref
-    arm64.label nthPerm4.__skip_guarded_81
+    arm64.label nthPerm4.__skip_guarded_132
     arm64.ldr x2, [x29, #-16]
     arm64.mov x0, x2
-    arm64.epilogue stack_size=176
+    arm64.epilogue stack_size=304
     arm64.ret
   }
   func @main() -> u8 {

@@ -1305,6 +1305,15 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         new IrEnumCase("closed",             7, 7L),
       ], conformingInterfaces: ["Error"]);
     }
+    // The error thrown by an integer `/` / `mod` whose divisor was not proven non-zero. Like the
+    // __Managed*Error enums above it is a compiler-synthesized runtime error TYPE (not a
+    // docs/error-codes.txt diagnostic): the desugared __checked_div/__checked_mod builtins throw it,
+    // and a `try ... otherwise (e)` handler matches its one case.
+    if (!_typeRegistry.ContainsKey("__DivisionByZeroError")) {
+      _typeRegistry["__DivisionByZeroError"] = new IrEnumType("__DivisionByZeroError", [
+        new IrEnumCase("divisionByZero", 0, 0L),
+      ], conformingInterfaces: ["Error"]);
+    }
   }
 
   private bool _builtinMethodsRegistered;
@@ -15666,6 +15675,16 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         continue;
       }
 
+      // Integer `/` / `mod` is a throwing operation unless the divisor is provably non-zero. The
+      // decision is made HERE, at the Maxon level, because the divisor's ranged type / folded value
+      // — the whole basis of the proof — is discarded by lowering. See EmitIntegerDivOrMod.
+      if (resolvedOp is MaxonBinOperator.Div or MaxonBinOperator.Mod
+          && kind is MaxonValueKind.Integer or MaxonValueKind.Short) {
+        lhs = new ExprResult.Direct(
+          EmitIntegerDivOrMod(resolvedOp, rhs, promotedLhs, promotedRhs, kind, optimalType, opToken));
+        continue;
+      }
+
       lhs = new ExprResult.Direct(EmitBinOp(resolvedOp, promotedLhs, promotedRhs, kind, optimalType));
 
       // `a and b` is BOUNDED BY BOTH operands — every set bit of the result is set in each — so its
@@ -22129,6 +22148,90 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
   /// Materialize `value` as a literal op, remember it, and hand back its SSA value.
   private MaxonValue EmitIntLiteral(long value) => EmitConstantLiteral(value).Value;
+
+  /// Emit an integer `/` or `mod`. THE one place the divide-by-zero policy lives:
+  ///
+  ///   • A divisor proven to be ZERO (a folded constant 0) is an unconditional bug — neither
+  ///     recoverable nor safe — and is rejected at compile time (E3103).
+  ///   • A divisor proven NON-ZERO — a non-zero folded constant, or a ranged type whose range
+  ///     excludes 0 — is a bare <see cref="MaxonBinOp"/> Div/Rem, byte-for-byte what this compiler
+  ///     emitted before `/` became fallible.
+  ///   • Anything else is POSSIBLY zero, so the divide THROWS <c>__DivisionByZeroError</c>: it is
+  ///     desugared to a throwing <c>__checked_div</c> / <c>__checked_mod</c> builtin call that rides
+  ///     the existing error path (the `try` requirement, MaxonTryCallOp promotion, error-flag
+  ///     routing) with no new operator plumbing.
+  private MaxonValue EmitIntegerDivOrMod(MaxonBinOperator op, ExprResult divisorExpr,
+      MaxonValue dividend, MaxonValue divisor, MaxonValueKind kind, IrType? optimalType, Token opToken) {
+    if (DivisorIsProvablyZero(divisor)) {
+      throw new CompileError(ErrorCode.SemanticDivisionByZero,
+        $"division by zero: the divisor of '{(op == MaxonBinOperator.Mod ? "mod" : "/")}' is always 0",
+        opToken.Line, opToken.Column);
+    }
+
+    if (DivisorIsProvablyNonZero(divisorExpr, divisor))
+      return EmitBinOp(op, dividend, divisor, kind, optimalType);
+
+    // Possibly-zero divisor: the divide is a throwing operation, so it requires `try` (reusing
+    // E3057, exactly as a bare throwing call does). Emit the throwing builtin and route its error
+    // flag through the active try context, mirroring the synthetic managed-mem builtins.
+    ValidateThrowingDivisionContext(opToken);
+    var errorEnum = (IrEnumType)_typeRegistry["__DivisionByZeroError"];
+    var tryOp = new MaxonCheckedDivTryCallOp(dividend, divisor, op == MaxonBinOperator.Mod,
+      optimalType?.IsUnsigned ?? false, kind, errorEnum);
+    _currentBlock!.AddOp(tryOp);
+    InvalidateCachedSelfFields();
+    return RouteAndRebindBuiltinTryCall(tryOp, errorEnum) ?? tryOp.Result!;
+  }
+
+  /// A divisor the compiler holds as a compile-time constant 0 (`a / 0`, or `a / z` where `z`
+  /// folded to 0). Always a bug; never routed to the throwing path (see EmitIntegerDivOrMod).
+  private bool DivisorIsProvablyZero(MaxonValue divisor) =>
+    TryFoldIntConst(divisor) is { Value: 0 };
+
+  /// A divisor that can never be zero: a non-zero folded constant, or a ranged type whose range
+  /// excludes 0. Such a divide stays a bare Div/Rem (no check, no `try`).
+  ///
+  /// The ranged-range test mirrors <see cref="IrRangedPrimitiveType"/>: a range excludes 0 iff it
+  /// is wholly positive (`lo > 0`) or wholly negative (`lo < 0 && effectiveUpper < 0`). The `lo < 0`
+  /// guard keeps the unsigned quirk out of the negative arm — `int(0 to u64.max)` rides with
+  /// `hi == -1`, but its `lo == 0` never reaches the `hi < 0` test, so it reads (correctly) as
+  /// including 0.
+  private bool DivisorIsProvablyNonZero(ExprResult divisorExpr, MaxonValue divisor) {
+    if (TryFoldIntConst(divisor) is { } folded)
+      return folded.Value != 0;
+
+    var rangedName = DivisorRangedTypeName(divisorExpr, divisor);
+    if (rangedName != null && _typeRegistry.TryGetValue(rangedName, out var rangedType)
+        && rangedType is IrRangedPrimitiveType rpt && !rpt.IsFloatBased) {
+      var lo = rpt.IntLower;
+      var effectiveUpper = rpt.UpperInclusive ? rpt.IntUpper : rpt.IntUpper - 1;
+      return lo > 0 || (lo < 0 && effectiveUpper < 0);
+    }
+
+    return false;
+  }
+
+  /// The divisor's ranged-typealias name. Read from the DECLARATION when the divisor is a variable
+  /// reference (reliable across blocks, and immune to the value-scan blind spots documented on
+  /// <see cref="GetShiftOperandOptimalType"/>); otherwise fall back to the value scan. A missed name
+  /// only ever costs a needless `try` (safe over-strictness), never an unsafe bare divide.
+  private string? DivisorRangedTypeName(ExprResult divisorExpr, MaxonValue divisor) =>
+    divisorExpr is ExprResult.VarRef v && RangedOptimalTypeOf(v.Info.StructTypeName) is not null
+      ? v.Info.StructTypeName
+      : RangedTypeNameOfValue(divisor);
+
+  /// A possibly-zero divide is a throwing operation and, like any throwing call, must sit in a `try`
+  /// (reusing E3057 — the error TYPE is a synthesized enum, not a new diagnostic code). Inside an
+  /// active `try` context or `try` block the divide is allowed and routed implicitly; outside one it
+  /// is refused, pointing the programmer at the two ways out.
+  private void ValidateThrowingDivisionContext(Token opToken) {
+    if (_inTryContext || _tryBlockStack.Count > 0) return;
+
+    throw new CompileError(ErrorCode.SemanticThrowingFunctionRequiresTry,
+      "division by a possibly-zero value can throw DivisionByZero: wrap it as `try (a / b) otherwise ...`, "
+      + "or give the divisor a ranged type that excludes 0 (e.g. `int(1 to ...)`)",
+      opToken.Line, opToken.Column);
+  }
 
   /// Append a `MaxonBinOp` and fold its result when the parser holds both operands. THE one place
   /// the expression parser builds a binary op, so the fold cannot miss one.

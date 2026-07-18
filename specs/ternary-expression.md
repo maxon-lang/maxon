@@ -761,33 +761,39 @@ run — not its calls, not its arithmetic, not its allocations. This is the whol
 form: it is what lets a ternary act as a *guard*.
 
 ```maxon
-return 0 if d == 0 else (n / d)   // never divides when d is 0
+return small if fits else (big as Small)   // never range-check-panics when it doesn't fit
 ```
 
 An eagerly-evaluated ternary computes the same answer as a lazy one whenever both arms are
 total, so no value test can tell them apart. The evidence therefore has to be **observational**:
 a side effect that provably did not happen. Two oracles are used below — a counter in a global
-(exact), and a division by a runtime zero, which faults the process if it is ever reached.
+(exact), and an out-of-range cast, which range-check-panics the process if it is ever reached.
+(Integer `/` no longer serves as this oracle: a possibly-zero divide is a throwing operation, so
+it cannot appear bare in an arm — it would need a `try`, which would swallow the very fault the
+oracle relies on.)
 
 <!-- test: ternary-expression.elision.guard-actually-guards -->
-### A guarded division does not divide
-The idiomatic use of the form. If the unselected arm ran, this would die with
-`panic: integer divide by zero` instead of answering.
+### A guarded out-of-range cast does not run
+The idiomatic use of the form. If the unselected arm ran, the out-of-range cast would die with
+a range-check panic instead of answering.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
+typealias Small = int(0 to 10)
 
-function safeDiv(n Integer, d Integer) returns Integer
-	return 0 if d == 0 else (n / d)
-end 'safeDiv'
+function clampOrGuard(useDefault bool, big Integer) returns Integer
+	// `big as Small` range-check-panics for big > 10; it sits in the arm that
+	// `useDefault` does NOT select, so it must never run.
+	return 5 if useDefault else (big as Small)
+end 'clampOrGuard'
 
 function main() returns ExitCode
-	let guarded = safeDiv(100, d: 0) // the divide is in the arm NOT selected
-	let divided = safeDiv(100, d: 5)
-	return (guarded + divided) as ExitCode
+	let guarded = clampOrGuard(true, big: 1000) // the cast is in the arm NOT selected
+	let direct = clampOrGuard(false, big: 7)
+	return (guarded + direct) as ExitCode
 end 'main'
 ```
 ```exitcode
-20
+12
 ```
 
 <!-- test: ternary-expression.elision.false-arm-not-evaluated -->

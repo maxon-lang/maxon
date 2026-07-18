@@ -10,7 +10,9 @@ function safeDivide(a Integer, b Integer) returns Integer throws ComputeError
 		if b == 0 'check'
 				throw ComputeError.overflow
 		end 'check'
-		return a / b
+		// Reached only when b != 0 (the guard above throws otherwise); the divide rides `try` because
+		// `/` is fallible at the type level and b is typed 0-inclusive. The `otherwise` is unreachable.
+		return try (a / b) otherwise 0
 end 'safeDivide'
 
 function main() returns ExitCode
@@ -25,7 +27,7 @@ ExitCode: 99
 module {
   func @safeDivide(a: i64, b: i64) -> i64 {
   entry:
-    arm64.prologue stack_size=96
+    arm64.prologue stack_size=160
     arm64.str x0, [x29, #-8]
     arm64.str x1, [x29, #-16]
     arm64.adrp_add_rdata x0, __str_0
@@ -33,7 +35,7 @@ module {
     arm64.mov x0, #11
     arm64.adrp_add_func x3, __destruct_String
     arm64.mov x4, x3
-    arm64.str x2, [x29, #-40]
+    arm64.str x2, [x29, #-72]
     arm64.mov x1, x4
     arm64.mov x0, #48
     arm64.mov x2, #11
@@ -43,7 +45,7 @@ module {
     arm64.mov x2, #1
     arm64.mov x3, #0
     arm64.ldr x4, [x29, #-24]
-    arm64.ldr x5, [x29, #-40]
+    arm64.ldr x5, [x29, #-72]
     arm64.str x5, [x4, #0]
     arm64.ldr x6, [x29, #-24]
     arm64.mov x7, #11
@@ -92,32 +94,69 @@ module {
     arm64.add x5, x4, x3
     arm64.mov x1, x5
     arm64.mov x0, #0
-    arm64.epilogue stack_size=96
+    arm64.epilogue stack_size=160
     arm64.ret
   check_0.after:
     arm64.ldr x0, [x29, #-8]
     arm64.ldr x1, [x29, #-16]
-    arm64.cmp x1, #0
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x3, eq
+    arm64.mov x4, #1
+    arm64.mov x5, #0
+    arm64.cmp x3, #0
+    arm64.csel x6, x4, x5, ne
+    arm64.str x6, [x29, #-40]
+    arm64.mov x7, #0
+    arm64.str x7, [x29, #-48]
+    arm64.cmp x3, #0
+    arm64.b.ne safeDivide.__div_zero_0
+    arm64.b safeDivide.__div_ok_0
+  __div_zero_0:
+    arm64.b safeDivide.__div_merge_0
+  __div_ok_0:
+    arm64.ldr x0, [x29, #-16]
+    arm64.ldr x1, [x29, #-8]
+    arm64.cmp x0, #0
     arm64.b.ne safeDivide.__div_ok_0
     arm64.bl mrt_div_by_zero
     arm64.label safeDivide.__div_ok_0
-    arm64.sdiv x2, x0, x1
-    arm64.ldr x3, [x29, #-24]
-    arm64.str x2, [x29, #-40]
-    arm64.cmp x3, #0
-    arm64.b.eq safeDivide.__skip_guarded_51
+    arm64.sdiv x2, x1, x0
+    arm64.str x2, [x29, #-48]
+    arm64.b safeDivide.__div_merge_0
+  __div_merge_0:
+    arm64.ldr x0, [x29, #-40]
+    arm64.ldr x1, [x29, #-48]
+    arm64.mov x2, #0
+    arm64.str x2, [x29, #-56]
+    arm64.str x1, [x29, #-64]
+    arm64.mov x3, #0
+    arm64.cmp x0, x3
+    arm64.cset x4, ne
+    arm64.cmp x4, #0
+    arm64.b.ne safeDivide.otherwise_default_error_0
+    arm64.b safeDivide.otherwise_default_continue_0
+  otherwise_default_error_0:
+    arm64.ldr x0, [x29, #-56]
+    arm64.str x0, [x29, #-64]
+    arm64.b safeDivide.otherwise_default_continue_0
+  otherwise_default_continue_0:
+    arm64.ldr x0, [x29, #-64]
+    arm64.ldr x1, [x29, #-24]
+    arm64.cmp x1, #0
+    arm64.b.eq safeDivide.__skip_guarded_75
     arm64.ldr x0, [x29, #-24]
     arm64.bl mm_decref
-    arm64.label safeDivide.__skip_guarded_51
-    arm64.ldr x4, [x29, #-32]
-    arm64.cmp x4, #0
-    arm64.b.eq safeDivide.__skip_guarded_53
+    arm64.label safeDivide.__skip_guarded_75
+    arm64.ldr x2, [x29, #-32]
+    arm64.cmp x2, #0
+    arm64.b.eq safeDivide.__skip_guarded_77
     arm64.ldr x0, [x29, #-32]
     arm64.bl mm_decref
-    arm64.label safeDivide.__skip_guarded_53
-    arm64.ldr x0, [x29, #-40]
+    arm64.label safeDivide.__skip_guarded_77
+    arm64.ldr x0, [x29, #-64]
     arm64.mov x1, #0
-    arm64.epilogue stack_size=96
+    arm64.epilogue stack_size=160
     arm64.ret
   }
   func @main() -> u8 {

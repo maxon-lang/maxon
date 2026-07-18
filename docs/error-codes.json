@@ -1,6 +1,6 @@
 {
   "generatedFrom": "docs/error-codes.txt",
-  "sourceHash": "2fa376ee2f083ba6",
+  "sourceHash": "fb8d0957a4a3bbd3",
   "note": "GENERATED. Do not edit. Run `maxon error-codes generate`. A reader MUST hash generatedFrom's bytes (FNV-1a 64, hex) and refuse to answer unless it equals sourceHash.",
   "compilers": ["csharp", "selfhosted", "shv2"],
   "codes": [
@@ -1074,6 +1074,15 @@
       "doc": "A binding is READ after its owned heap value was MOVED OUT of it. Under shv2's static\nsingle-owner model an owned value (an owned String, a struct box) has exactly one owner; a\n`let u = t` / `s = t` whose RHS is a bare reference to an owned binding TRANSFERS ownership to\nthe destination, and the source is left moved-from. A later read of the source is refused --\nit would read a value another binding now owns and will drop, and dropping it twice is a\ndouble-free. A WRITE to a moved-from `var` is legal (it revives the binding). shv2-only: the\nreference compilers refcount, so aliasing is legal there and there is no move to violate.",
       "emittedBy": {"shv2": "useAfterMove"},
       "notEmittedBy": ["csharp", "selfhosted"]
+    },
+    {
+      "code": 3103,
+      "tag": "E3103",
+      "name": "SemanticDivisionByZero",
+      "stage": "semantic",
+      "doc": "An integer `/` or `mod` has a divisor the compiler holds as the constant 0 (`a / 0`, or a\ndivisor that folded to 0). Unlike a possibly-zero divisor -- which is a throwing operation\nhandled with `try` (E3057) -- a provably-zero one is neither recoverable nor safe: it is a\nbug, rejected at compile time.",
+      "emittedBy": {"csharp": "SemanticDivisionByZero"},
+      "notEmittedBy": ["selfhosted", "shv2"]
     },
     {
       "code": 4001,

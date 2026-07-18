@@ -141,6 +141,12 @@ public static partial class MaxonToStandardConversion {
         valueMap, varTypes, typeDefs, errorFlagValue, temps, sourceCallOp))
       return;
 
+    // Intercept the desugared checked-division builtins (__checked_div / __checked_mod) — a
+    // possibly-zero `a / b` / `a mod b` that throws __DivisionByZeroError on a zero divisor.
+    if (TryLowerCheckedDivMod(callee, args, result, ref block, func, valueMap, varTypes,
+        errorFlagValue, sourceCallOp))
+      return;
+
     // Intercept synthetic __ManagedList reinsert_* builtins (non-throwing moves).
     if (TryLowerManagedListBuiltin(callee, args, block, valueMap, varTypes))
       return;
