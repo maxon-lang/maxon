@@ -1,0 +1,219 @@
+// StdLoweringShared — the TARGET-INDEPENDENT half of the Std → Target lowering, shared by BOTH
+// `StdToX64Conversion` and `StdToArm64Conversion` so the one fact each answers has ONE home.
+//
+// Two things live here, and both are target-independent by construction — they read only a Std TYPE,
+// never an ISA:
+//   • the memory-access DOORS (`accessWidthFor`, `memoryDisplacement`) — a Std type / byte offset
+//     mapped to the neutral `X64AccessWidth` and the `Imm32` displacement the shared `loadRegBaseDisp`
+//     / `storeBaseDispReg` ops carry (the ENCODER that consumes them is per-ISA; the width is not).
+//   • the VALUE-CLASS COLUMN producer (`buildValueClassColumns`) — the register FILE each SSA value
+//     lands in. It is produced HERE because this is the last pass that can see a Std type: the Target
+//     tier carries none (see `ValueClassColumn` in TargetDialect), and the allocator downstream
+//     colours within a class it can no longer derive.
+//
+// ⭐ WHY SHARED AND NOT FORKED: a value's class is what its type says, IDENTICALLY for x64 and arm64.
+// When this walk was forked, the two copies had already drifted — the x64 copy skips the target-only
+// blocks the float-equality split mints, the arm64 copy did not — and the day a new `StdOp` learned to
+// define a value, one target would have silently misclassified it (a float into a GPR) while the other
+// stayed correct. One walk, checked once by the compiler's exhaustiveness, cannot drift.
+
+// ⭐ THE ONE DOOR from a Std type to a memory-access WIDTH. `i1`/`u8` are one byte, `i64`/`f64` the
+// full word; those are what the language can put behind a load/store today. Every other type panics
+// rather than picking a nearby width — a narrow integer needs the `as` cast (P1.9), and its SIGNEDNESS
+// then decides the sign/zero-extending load form. Reuses the neutral `X64AccessWidth` enum: the width
+// (HOW MANY BITS) is not ISA-specific; only the encoder that turns `byte`/`word64` into the concrete
+// instruction (`movzx`/`mov` vs `ldrb`/`ldr`) is. An `f64` access is 8 bytes; whether it moves through
+// the integer or FP form is decided at emit time by the register's class, in each backend.
+export function accessWidthFor(t StdType) returns X64AccessWidth
+	match t 'w'
+		i1 then return X64AccessWidth.byte
+		i64 then return X64AccessWidth.word64
+		f64 then return X64AccessWidth.word64
+		i8 to i32 then panic("accessWidthFor: no memory-access form for {t.name} — a narrow integer needs the `as` cast (P1.9), and its SIGNEDNESS then decides the sign/zero-extending load rather than defaulting to a width")
+		// A `u8` access is unambiguous BECAUSE it is unsigned: zero-extension is always correct, so no
+		// signed/unsigned choice is deferred. Wider unsigned types stay deferred.
+		u8 then return X64AccessWidth.byte
+		u16 to u64 then panic("accessWidthFor: no memory-access form for {t.name} — an unsigned type wider than a byte needs the `as` cast (P1.9)")
+		f32 then panic("accessWidthFor: f32 is 4 bytes and moves through a single-precision form, a width this enum does not carry; Maxon's `float` is f64, so nothing produces one")
+	end 'w'
+end 'accessWidthFor'
+
+// A memory-band byte offset as the signed `Imm32` displacement a `[base + disp]` load/store carries.
+// `ByteOffset` is unsigned and unbounded; the `Imm32` field is signed 32-bit, so the narrowing is
+// CHECKED rather than cast away. This is the field's own encodable bound; each backend's ENCODER
+// enforces the tighter per-ISA reach (x64 disp32, arm64's scaled/unscaled forms) on top of it. Every
+// offset today is a global-slot offset (0); the bound starts mattering at P1.1's struct-field offsets.
+export function memoryDisplacement(offset ByteOffset) returns Imm32
+	if offset > i32.max 'tooFar'
+		panic("memoryDisplacement: byte offset {offset} does not fit the signed Imm32 displacement of a base+disp load/store — an addressing mode reaching that far from its base needs a materialized index register")
+	end 'tooFar'
+	return offset as Imm32
+end 'memoryDisplacement'
+
+// Callee name -> the register FILE its return value lands in. Built once per module so a call's result
+// class is an O(1) lookup rather than a Θ(calls × functions) scan of `stdModule.functions` per call
+// site. Stores the CLASS (a scalar enum), NOT the payload-carrying `StdReturnType` union, so the map
+// heap-boxes nothing per function.
+typealias CalleeResultClassMap = Map with (ByteArray, RegClass)
+
+// ⭐ THE ONE DOOR from a Std type to a register FILE. A value's class is what its TYPE says, and
+// nothing else — the whole content of `ValueClassColumn`'s "produced by the lowering, not derived in
+// the backend".
+function regClassForStdType(t StdType) returns RegClass
+	return RegClass.xmm if stdTypeIsFloat(t) else RegClass.gpr
+end 'regClassForStdType'
+
+// The class of a UNARY op's result, which is NOT its operand's whenever the op CROSSES files.
+//
+// ⚠⚠ THE CONVERSIONS INVERT. `siToFp`'s operand is an INT and its result is an f64; `fpToSi`'s operand
+// is an f64 and its result is an int. `operandType` is the SOURCE by definition, so the conversion
+// band's ops are the only ops whose result type is not on the op at all. `neg`/`bitNot`/`logicalNot`
+// stay in their operand's file: they compute what they consume.
+function unaryResultClass(opcode StdUnaryOpcode, operandType StdType) returns RegClass
+	return match opcode 'k'
+		neg to logicalNot gives regClassForStdType(operandType)
+		// int -> f64: the result lives in an XMM/SIMD register though `operandType` is an integer.
+		siToFp gives RegClass.xmm
+		// f64 -> int: the result lives in a GPR though `operandType` is f64.
+		fpToSi gives RegClass.gpr
+	end 'k'
+end 'unaryResultClass'
+
+// The class a function's RETURN lands in. `void` is `gpr` because a void call still defines a value —
+// see `calleeResultClass`.
+function returnTypeResultClass(returnType StdReturnType) returns RegClass
+	return match returnType 'r'
+		void gives RegClass.gpr
+		value(inner) gives regClassForStdType(inner)
+	end 'r'
+end 'returnTypeResultClass'
+
+// Write `valueId`'s class into the column, EXTENDING it when the id runs past the operand-count
+// pre-size. The pre-size (`scanFunctionValueCount`) counts OPERAND-used values; this walk records a
+// class for every value an op DEFINES, and those are not the same set (a fused loop-test `cmp` defines
+// a boolean that lives only in flags and is never an operand). `growFilled` is amortized-linear and
+// the added slots are `gpr`, the same fill the pre-size uses for ids no op names.
+function setValueClass(column ValueClassColumn, valueId ValueId, class RegClass)
+	if valueId >= column.count() 'extend'
+		column.growFilled(valueId + 1, value: RegClass.gpr)
+	end 'extend'
+
+	try column.set(valueId, value: class) otherwise panic("setValueClass: v{valueId} outside the {column.count()}-wide class column after growFilled(v{valueId}+1) — a grow that just ensured the slot cannot leave it missing")
+end 'setValueClass'
+
+// ⭐⭐ THE VALUE-CLASS COLUMN PRODUCER. One dense-by-ValueId, FUNCTION-LOCAL column per function,
+// answering "what register file does this op's result land in?" — see the file header. Takes the Std
+// module (the source of truth for ops/blocks/functions) and the Target module (whose operand-derived
+// `scanFunctionValueCount` sizes the column). EXHAUSTIVE over `StdOp` with no bare `default`, so a new
+// op that defines a value fails to compile here rather than defaulting a float into a GPR.
+export function buildValueClassColumns(stdModule StdModule, targetModule TargetModule) returns ValueClassColumns
+	let calleeResultClasses = buildCalleeResultClasses(stdModule)
+	var columns = ValueClassColumns.create()
+	for funcIndex in 0 upto stdModule.funcCount() 'eachFunc'
+		columns.push(buildFunctionValueClasses(stdModule, targetModule: targetModule, funcIndex: funcIndex, calleeResultClasses: calleeResultClasses))
+	end 'eachFunc'
+	return columns
+end 'buildValueClassColumns'
+
+// Build the callee name → RESULT CLASS index, once per module.
+function buildCalleeResultClasses(stdModule StdModule) returns CalleeResultClassMap
+	var calleeResultClasses = CalleeResultClassMap.create()
+	for func in stdModule.functions 'eachFunc'
+		calleeResultClasses.upsert(func.name, value: returnTypeResultClass(func.returnType))
+	end 'eachFunc'
+	return calleeResultClasses
+end 'buildCalleeResultClasses'
+
+// One function's column. Pre-sized to `scanFunctionValueCount` (a LOWER bound — operand-used values)
+// and EXTENDED by `setValueClass` for the walk-defined values beyond it. `gpr` is the FILL for ids no
+// op defines (nothing is ever coloured for them).
+function buildFunctionValueClasses(stdModule StdModule, targetModule TargetModule, funcIndex FuncIndex, calleeResultClasses CalleeResultClassMap) returns ValueClassColumn
+	let srcFunc = stdModule.getFunc(funcIndex)
+	var column = ValueClassColumn.create()
+	column.refill(scanFunctionValueCount(targetModule, func: srcFunc), value: RegClass.gpr)
+
+	for blockRef in srcFunc.blockRefs 'eachBlock'
+		// ⚠ SKIP THE TARGET-ONLY BLOCKS. By the time this runs, `srcFunc.blockRefs` may also hold blocks
+		// a backend minted during lowering (x64's float-equality `ordered` split) that exist ONLY in
+		// `targetModule.blocks` — looking one up in `stdModule.blocks` is out of range. Such a block
+		// holds only branches and defines no value, so skipping it is CORRECT, not merely safe.
+		// `prepareSkeleton` made the two block arrays 1:1, so everything appended after is Target-only,
+		// which is exactly what this bound means. (arm64 mints no such block, so the guard never fires.)
+		if blockRef >= stdModule.blocks.count() 'targetOnlyBlock'
+			continue
+		end 'targetOnlyBlock'
+
+		recordBlockArgClasses(stdModule, blockRef: blockRef, column: column)
+		recordBlockOpClasses(stdModule, blockRef: blockRef, column: column, calleeResultClasses: calleeResultClasses)
+	end 'eachBlock'
+
+	return column
+end 'buildFunctionValueClasses'
+
+// A PHI declares its own type, so its class needs no inference from its incoming values — which is
+// what lets this stay a single forward walk with no propagation.
+function recordBlockArgClasses(stdModule StdModule, blockRef BlockRef, column ValueClassColumn)
+	let block = try stdModule.blocks.get(blockRef) otherwise panic("recordBlockArgClasses: blockRef {blockRef} not in stdModule.blocks")
+	for arg in block.blockArgs 'eachArg'
+		setValueClass(column, valueId: arg.valueId, class: regClassForStdType(arg.argType))
+	end 'eachArg'
+end 'recordBlockArgClasses'
+
+function recordBlockOpClasses(stdModule StdModule, blockRef BlockRef, column ValueClassColumn, calleeResultClasses CalleeResultClassMap)
+	let block = try stdModule.blocks.get(blockRef) otherwise panic("recordBlockOpClasses: blockRef {blockRef} not in stdModule.blocks")
+	for opIdx in block.opRefs 'eachOp'
+		let op = try stdModule.ops.get(opIdx) otherwise panic("recordBlockOpClasses: opIdx {opIdx} not in stdModule.ops")
+		recordOpResultClass(op, column: column, calleeResultClasses: calleeResultClasses)
+	end 'eachOp'
+
+	if block.hasTerminatorOp() 'hasTerm'
+		// A terminator defines nothing today, but it goes through the same exhaustive match rather than
+		// being skipped — so an op that both terminates and defines is a compile error here rather than
+		// a value with no class.
+		let term = try stdModule.ops.get(block.terminatorIndex()) otherwise panic("recordBlockOpClasses: terminatorIndex not in stdModule.ops")
+		recordOpResultClass(term, column: column, calleeResultClasses: calleeResultClasses)
+	end 'hasTerm'
+end 'recordBlockOpClasses'
+
+function recordOpResultClass(op StdOp, column ValueClassColumn, calleeResultClasses CalleeResultClassMap)
+	match op 'result'
+		// The op's own type IS the result's.
+		const(resultId, _, valueType) then setValueClass(column, valueId: resultId, class: regClassForStdType(valueType))
+		// add/sub/mul/div all produce what they consume.
+		binOp(resultId, _, _, _, operandType) then setValueClass(column, valueId: resultId, class: regClassForStdType(operandType))
+		unaryOp(resultId, _, opcode, operandType) then setValueClass(column, valueId: resultId, class: unaryResultClass(opcode, operandType: operandType))
+		// ⚠ AN i1, NEVER THE OPERAND TYPE. A float compare's answer is a bool in a GPR.
+		cmp(resultId, _, _, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+		// The immediate forms are INTEGER by construction — no float op takes an immediate, so
+		// `foldConstOperands` cannot produce a float one.
+		binOpImm(resultId, _, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+		cmpImm(resultId, _, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+		// The TRAPPING integer division; float division is `binOp(div)` above.
+		div(resultId, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+		mod(resultId, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+		param(resultId, _, paramType) then setValueClass(column, valueId: resultId, class: regClassForStdType(paramType))
+		call(resultId, callee, _) then setValueClass(column, valueId: resultId, class: calleeResultClass(calleeResultClasses, callee: callee))
+		// An ADDRESS is an integer, whatever the global holds.
+		globalAddr(resultId, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+		loadIndirect(resultId, _, _, valueType) then setValueClass(column, valueId: resultId, class: regClassForStdType(valueType))
+		// A page base is an address, so it is an integer — never float-classed.
+		osAllocPages(resultId, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+		// An `.rdata` address is an integer, never float-classed.
+		rdataAddr(resultId, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+		// The ops that define NOTHING. Named individually rather than collapsed into a range: `StdOp`'s
+		// declaration order interleaves value-defining ops (`param`, `call`) between the non-defining
+		// ones, so a tempting range would span them. Naming each keeps the band-append rule enforcing it.
+		condBranch to branch then break 'result'
+		ret then break 'result'
+		retVoid then break 'result'
+		storeIndirect then break 'result'
+		osWriteStdout then break 'result'
+	end 'result'
+end 'recordOpResultClass'
+
+// The class of a CALL's result — the callee's return type, looked up by name. A VOID call still
+// DEFINES a value (`lowerCall` moves the return register into it unconditionally), so a miss on `void`
+// is `gpr` and not an error: the value is a garbage integer nobody may read.
+function calleeResultClass(calleeResultClasses CalleeResultClassMap, callee ByteArray) returns RegClass
+	return try calleeResultClasses.get(callee) otherwise panic("calleeResultClass: no Std function is named '{String.from(callee)}' — every callee reaching the lowering is one LowerMaxonToStd resolved against the merged module")
+end 'calleeResultClass'

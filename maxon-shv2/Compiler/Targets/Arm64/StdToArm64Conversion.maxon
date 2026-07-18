@@ -27,12 +27,6 @@
 // The macOS OS-primitive lowering (`osAllocPages`/`osWriteStdout`) is NOT needed by the scalar core
 // (which allocates nothing and does not `print`), so those two Std ops panic here rather than lower.
 
-// Callee name -> the register FILE its return value lands in. Built once per module
-// (`buildCalleeResultClasses`), so a call's result class is an O(1) lookup rather than a scan of
-// `stdModule.functions` per call site. (A duplicate of x64's file-private `CalleeResultClassMap`; the
-// class-column production is target-independent and a follow-up may hoist it to shared code.)
-typealias CalleeResultClassMap = Map with (ByteArray, RegClass)
-
 // The AAPCS64 integer ARGUMENT / return registers: argument `k` arrives in (and is passed in)
 // `arm64ArgRegisters[k]` = x0..x7, and an integer value returns in x0. The array LENGTH caps the
 // register-argument count; a further argument would need a stack slot (a later milestone), which the
@@ -66,33 +60,10 @@ let Arm64FloatConstantLabelPrefix = "__fconst_"
 // The IEEE storage width of an f64 — the byte count `.rdata`'s island reserves and the `ldr d` loads.
 let Arm64DoubleBytes = 8 as ByteCount
 
-// ⭐ THE ONE DOOR from a Std type to a memory-access WIDTH — the tier boundary's job for the memory
-// band. `i1` is one byte (a bool), `i64` the full word; those two are what the language can put behind
-// a load/store today. Every other type panics rather than picking a nearby width. It reuses the shared
-// `X64AccessWidth` enum (the width is not ISA-specific — only the encoder that consumes it is): the
-// arm64 encoder turns `byte`/`word64` into `ldrb`/`ldr`. (A duplicate of the x64 door because that one
-// is file-private; the mapping is target-independent and a follow-up may hoist it to shared code.)
-function arm64AccessWidthFor(t StdType) returns X64AccessWidth
-	match t 'w'
-		i1 then return X64AccessWidth.byte
-		i64 then return X64AccessWidth.word64
-		// An f64 access is 8 bytes; which INSTRUCTION moves them (`ldr`/`str` vs the FP `ldr d`/`str d`)
-		// is decided at emit time by the register's class, exactly as x64 decides `mov` vs `movsd`.
-		f64 then return X64AccessWidth.word64
-		i8 to i32 then panic("arm64AccessWidthFor: no memory-access form for {t.name} — a narrow integer needs the `as` cast (P1.9), and its SIGNEDNESS then decides `ldrb` vs `ldrsb`")
-		// A `u8` load is `ldrb` (zero-extension is always correct for an unsigned byte), so no signed/
-		// unsigned choice is deferred. Wider unsigned types stay deferred.
-		u8 then return X64AccessWidth.byte
-		u16 to u64 then panic("arm64AccessWidthFor: no memory-access form for {t.name} — an unsigned type wider than a byte needs the `as` cast (P1.9)")
-		f32 then panic("arm64AccessWidthFor: f32 is 4 bytes and moves through `ldr s`/`str s`, a width this enum does not carry; Maxon's `float` is f64, so nothing produces one")
-	end 'w'
-end 'arm64AccessWidthFor'
-
-// A byte OFFSET into an object, as the signed displacement a `[base + disp]` load/store carries.
-// Duplicate of x64's file-private `memoryDisplacement` for the same target-independent reason.
-function arm64MemoryDisplacement(offset ByteOffset) returns Imm32
-	return offset as Imm32
-end 'arm64MemoryDisplacement'
+// The memory-access WIDTH door (`accessWidthFor`) and the byte-offset → displacement door
+// (`memoryDisplacement`) are shared with the x64 lowering — see `Targets/Shared/StdLoweringShared.maxon`.
+// The width is not ISA-specific; only the encoder that turns `byte`/`word64` into `ldrb`/`ldr` (vs
+// `movzx`/`mov`) is. `lowerLoadIndirect` / `lowerStoreIndirect` call them.
 
 // A physical arm64 operand, from an `Arm64Register`. The arm64 lowering names its fixed ABI registers
 // (x0, d0, x16, …) as `Arm64Register`s; this maps one to its neutral `RegNum` — the number the unified
@@ -155,39 +126,9 @@ function arm64FloatCondForPred(pred StdCmpPred) returns Arm64CondCode
 	end 'map'
 end 'arm64FloatCondForPred'
 
-// ⭐ THE ONE DOOR from a Std type to a register FILE — a value's class is what its type says.
-// (A duplicate of x64's file-private `regClassForStdType`; target-independent, a follow-up may hoist.)
-function arm64RegClassForStdType(t StdType) returns RegClass
-	return RegClass.xmm if stdTypeIsFloat(t) else RegClass.gpr
-end 'arm64RegClassForStdType'
-
-// The class of a UNARY op's result, which is NOT its operand's whenever the op CROSSES files: `siToFp`
-// reads an int and writes an f64, `fpToSi` the reverse. `neg`/`bitNot`/`logicalNot` stay in-file.
-function arm64UnaryResultClass(opcode StdUnaryOpcode, operandType StdType) returns RegClass
-	return match opcode 'k'
-		neg to logicalNot gives arm64RegClassForStdType(operandType)
-		siToFp gives RegClass.xmm
-		fpToSi gives RegClass.gpr
-	end 'k'
-end 'arm64UnaryResultClass'
-
-// The class a function's RETURN lands in. `void` is `gpr` because a void call still defines a value.
-function arm64ReturnResultClass(returnType StdReturnType) returns RegClass
-	return match returnType 'r'
-		void gives RegClass.gpr
-		value(inner) gives arm64RegClassForStdType(inner)
-	end 'r'
-end 'arm64ReturnResultClass'
-
-// Write `valueId`'s class into the column, EXTENDING it when the id runs past the operand-count
-// pre-size (a walk-defined value that never appears as an operand). Mirrors x64's `setValueClass`.
-function arm64SetValueClass(column ValueClassColumn, valueId ValueId, class RegClass)
-	if valueId >= column.count() 'extend'
-		column.growFilled(valueId + 1, value: RegClass.gpr)
-	end 'extend'
-
-	try column.set(valueId, value: class) otherwise panic("arm64SetValueClass: v{valueId} outside the {column.count()}-wide class column after growFilled — a grow that just ensured the slot cannot leave it missing")
-end 'arm64SetValueClass'
+// The register-FILE doors and the value-class-column producer are TARGET-INDEPENDENT and shared with
+// the x64 lowering — see `Targets/Shared/StdLoweringShared.maxon` (`buildValueClassColumns`).
+// `lowerStdToArm64` calls it; a value's class is what its Std type says, identically on both targets.
 
 // The three arm64 variable-count shift instructions, and the whole of what the shift lowering needs to
 // know about a Std shift opcode: `shl`→`lslv`, `shr`→`asrv` (arithmetic — a signed left operand),
@@ -219,7 +160,6 @@ end 'arm64RequireScalarDouble'
 export function lowerStdToArm64(stdModule StdModule, globalData GlobalDataTable) returns (TargetModule, ValueClassColumns)
 	var lowering = StdToArm64Lowering.create(stdModule, globalData: globalData)
 	lowering.prepareSkeleton()
-	lowering.buildCalleeResultClasses()
 	// BY INDEX, never by iteration: `lowerFunction` MUTATES the function it lowers (the divide-by-zero
 	// guard appends blocks to its `blockRefs` and bumps `nextBlockId`), so no `srcFunc` borrowed out of
 	// `stdModule.functions` may be handed to it — the rule `splitCriticalEdges` states for the same
@@ -228,111 +168,24 @@ export function lowerStdToArm64(stdModule StdModule, globalData GlobalDataTable)
 		lowering.lowerFunction(funcIdx)
 	end 'eachFunc'
 
-	return (lowering.targetModule, lowering.buildValueClasses())
+	// The value-class column producer is the shared, target-independent `buildValueClassColumns` (see
+	// `Targets/Shared/StdLoweringShared.maxon`); bind it FIRST so its borrow of `targetModule` closes
+	// before the tuple moves `targetModule` out.
+	let valueClasses = buildValueClassColumns(lowering.stdModule, targetModule: lowering.targetModule)
+	return (lowering.targetModule, valueClasses)
 end 'lowerStdToArm64'
 
 type StdToArm64Lowering
-	var stdModule as StdModule
+	// Exported like `targetModule`: `lowerStdToArm64` hands both to the shared `buildValueClassColumns`.
+	export var stdModule as StdModule
 	// The backend's data table — where a float constant's `.rdata` island is registered, resolved by
 	// the arm64 concat once sections are laid out.
 	var globalData as GlobalDataTable
 	export var targetModule as TargetModule
-	// Callee name -> result class, for the value-class producer. Whole-module, built once.
-	var calleeResultClasses as CalleeResultClassMap
 
 	static function create(stdModule StdModule, globalData GlobalDataTable) returns StdToArm64Lowering
-		return Self{stdModule: stdModule, globalData: globalData, targetModule: TargetModule.create(), calleeResultClasses: CalleeResultClassMap.create()}
+		return Self{stdModule: stdModule, globalData: globalData, targetModule: TargetModule.create()}
 	end 'create'
-
-	// ==========================================================================
-	// The value-class column — the producer (target-independent; mirrors x64)
-	// ==========================================================================
-
-	function buildValueClasses() returns ValueClassColumns
-		var columns = ValueClassColumns.create()
-		for funcIndex in 0 upto self.stdModule.funcCount() 'eachFunc'
-			columns.push(self.buildFunctionValueClasses(funcIndex))
-		end 'eachFunc'
-		return columns
-	end 'buildValueClasses'
-
-	// One function's column. Pre-sized to `scanFunctionValueCount` (the operand-based count the
-	// allocator derives) and extended by `arm64SetValueClass` for any walk-defined value the operand
-	// count did not reach. `gpr` is the FILL for ids no op defines (nothing is ever coloured for them).
-	function buildFunctionValueClasses(funcIndex FuncIndex) returns ValueClassColumn
-		let srcFunc = self.stdModule.getFunc(funcIndex)
-		var column = ValueClassColumn.create()
-		column.refill(scanFunctionValueCount(self.targetModule, func: srcFunc), value: RegClass.gpr)
-
-		for blockRef in srcFunc.blockRefs 'eachBlock'
-			self.recordBlockArgClasses(blockRef, column: column)
-			self.recordBlockOpClasses(blockRef, column: column)
-		end 'eachBlock'
-
-		return column
-	end 'buildFunctionValueClasses'
-
-	function recordBlockArgClasses(blockRef BlockRef, column ValueClassColumn)
-		let block = try self.stdModule.blocks.get(blockRef) otherwise panic("recordBlockArgClasses: blockRef {blockRef} not in stdModule.blocks")
-		for arg in block.blockArgs 'eachArg'
-			arm64SetValueClass(column, valueId: arg.valueId, class: arm64RegClassForStdType(arg.argType))
-		end 'eachArg'
-	end 'recordBlockArgClasses'
-
-	function recordBlockOpClasses(blockRef BlockRef, column ValueClassColumn)
-		let block = try self.stdModule.blocks.get(blockRef) otherwise panic("recordBlockOpClasses: blockRef {blockRef} not in stdModule.blocks")
-		for opIdx in block.opRefs 'eachOp'
-			let op = try self.stdModule.ops.get(opIdx) otherwise panic("recordBlockOpClasses: opIdx {opIdx} not in stdModule.ops")
-			self.recordOpResultClass(op, column: column)
-		end 'eachOp'
-
-		if block.hasTerminatorOp() 'hasTerm'
-			let term = try self.stdModule.ops.get(block.terminatorIndex()) otherwise panic("recordBlockOpClasses: terminatorIndex not in stdModule.ops")
-			self.recordOpResultClass(term, column: column)
-		end 'hasTerm'
-	end 'recordBlockOpClasses'
-
-	function recordOpResultClass(op StdOp, column ValueClassColumn)
-		match op 'result'
-			const(resultId, _, valueType) then arm64SetValueClass(column, valueId: resultId, class: arm64RegClassForStdType(valueType))
-			binOp(resultId, _, _, _, operandType) then arm64SetValueClass(column, valueId: resultId, class: arm64RegClassForStdType(operandType))
-			unaryOp(resultId, _, opcode, operandType) then arm64SetValueClass(column, valueId: resultId, class: arm64UnaryResultClass(opcode, operandType: operandType))
-			// A compare's answer is an i1 bool in a GPR, never its operand type.
-			cmp(resultId, _, _, _, _) then arm64SetValueClass(column, valueId: resultId, class: RegClass.gpr)
-			binOpImm(resultId, _, _, _) then arm64SetValueClass(column, valueId: resultId, class: RegClass.gpr)
-			cmpImm(resultId, _, _, _) then arm64SetValueClass(column, valueId: resultId, class: RegClass.gpr)
-			div(resultId, _, _) then arm64SetValueClass(column, valueId: resultId, class: RegClass.gpr)
-			mod(resultId, _, _) then arm64SetValueClass(column, valueId: resultId, class: RegClass.gpr)
-			param(resultId, _, paramType) then arm64SetValueClass(column, valueId: resultId, class: arm64RegClassForStdType(paramType))
-			call(resultId, callee, _) then arm64SetValueClass(column, valueId: resultId, class: self.calleeResultClass(callee))
-			// An ADDRESS is an integer, whatever the global holds.
-			globalAddr(resultId, _) then arm64SetValueClass(column, valueId: resultId, class: RegClass.gpr)
-			loadIndirect(resultId, _, _, valueType) then arm64SetValueClass(column, valueId: resultId, class: arm64RegClassForStdType(valueType))
-			osAllocPages(resultId, _) then arm64SetValueClass(column, valueId: resultId, class: RegClass.gpr)
-			rdataAddr(resultId, _) then arm64SetValueClass(column, valueId: resultId, class: RegClass.gpr)
-			// The ops that define NOTHING — named individually (not a range) so an op that both
-			// terminates and defines would fail to compile here rather than silently miss a class.
-			condBranch to branch then break 'result'
-			ret then break 'result'
-			retVoid then break 'result'
-			storeIndirect then break 'result'
-			osWriteStdout then break 'result'
-		end 'result'
-	end 'recordOpResultClass'
-
-	// The class of a CALL's result — the callee's return type, looked up by name. A void call still
-	// DEFINES a value (`lowerCall` moves x0 into it unconditionally), so a `void` miss is `gpr`, not
-	// an error: the value is a garbage integer nobody may read, which is what x0 holds.
-	function calleeResultClass(callee ByteArray) returns RegClass
-		return try self.calleeResultClasses.get(callee) otherwise panic("calleeResultClass: no Std function is named '{String.from(callee)}' — every callee reaching the lowering is one LowerMaxonToStd resolved against the merged module")
-	end 'calleeResultClass'
-
-	function buildCalleeResultClasses()
-		self.calleeResultClasses = CalleeResultClassMap.create()
-		for func in self.stdModule.functions 'eachFunc'
-			self.calleeResultClasses.upsert(func.name, value: arm64ReturnResultClass(func.returnType))
-		end 'eachFunc'
-	end 'buildCalleeResultClasses'
 
 	// Whole-module setup: relocate every StdModule block 1:1 into `targetModule.blocks` (preserving the
 	// flat-block indices `IrFunction.blockRefs` references) and transfer every function. Both
@@ -639,11 +492,11 @@ type StdToArm64Lowering
 	end 'lowerLogicalImm'
 
 	function lowerLoadIndirect(resultId ValueId, addrId ValueId, offset ByteOffset, valueType StdType, dstRef BlockRef)
-		self.emit(dstRef, op: TargetOp.loadRegBaseDisp(TargetVReg.virtual(resultId), base: TargetVReg.virtual(addrId), disp: arm64MemoryDisplacement(offset), width: arm64AccessWidthFor(valueType)))
+		self.emit(dstRef, op: TargetOp.loadRegBaseDisp(TargetVReg.virtual(resultId), base: TargetVReg.virtual(addrId), disp: memoryDisplacement(offset), width: accessWidthFor(valueType)))
 	end 'lowerLoadIndirect'
 
 	function lowerStoreIndirect(addrId ValueId, offset ByteOffset, valueId ValueId, valueType StdType, dstRef BlockRef)
-		self.emit(dstRef, op: TargetOp.storeBaseDispReg(TargetVReg.virtual(addrId), disp: arm64MemoryDisplacement(offset), src: TargetVReg.virtual(valueId), width: arm64AccessWidthFor(valueType)))
+		self.emit(dstRef, op: TargetOp.storeBaseDispReg(TargetVReg.virtual(addrId), disp: memoryDisplacement(offset), src: TargetVReg.virtual(valueId), width: accessWidthFor(valueType)))
 	end 'lowerStoreIndirect'
 
 	// Lower a Std `div`/`mod` to `sdiv` (+ `msub` for the remainder). NO zero-divisor guard: AArch64

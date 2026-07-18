@@ -105,6 +105,15 @@ let Arm64BitfieldImmrShift = 16
 let Arm64BitfieldImmsShift = 10
 let Arm64WordBitMax = 63
 
+// The machine word is 64 bits wide — the iteration cap of the leading/trailing bit-count loops.
+let Arm64WordBits = 64
+
+// The 64-bit word's sign bit (bit 63), as an UNSIGNED `MachineWord`. Spelled `i64.min as MachineWord`
+// — the established idiom (see `FloatSignBit`) — NOT the hex literal `0x8000000000000000`: the
+// bootstrap types that `>i64.max` literal as a SIGNED i64, and a `shr` on a signed value is ARITHMETIC
+// (sign-filling), which is exactly the trap that made the old `arm64CountLeadingOnes` loop forever.
+let Arm64WordSignBit = i64.min as MachineWord
+
 // --- Move-wide immediate (movz/movk ladder) ---
 let Arm64OpMovz = 0xD2800000
 let Arm64OpMovk = 0xF2800000
@@ -316,7 +325,7 @@ end 'arm64CountTrailingOnes'
 // The number of low-order clear bits of `value` (trailing zeros), capped at 64 for value 0.
 function arm64CountTrailingZeros(value MachineWord) returns MachineWord
 	if value == 0 'allZero'
-		return 64
+		return Arm64WordBits
 	end 'allZero'
 	var count = 0
 	var v = value
@@ -328,12 +337,18 @@ function arm64CountTrailingZeros(value MachineWord) returns MachineWord
 end 'arm64CountTrailingZeros'
 
 // The number of high-order set bits of `value` (leading ones), over the full 64-bit width.
+//
+// Counts by shifting the VALUE LEFT (`shl` is 0-filling, hence sign-safe) and testing bit 63 each
+// step — NOT by walking a `shr`-moved single-bit mask. A mask right-shifted with `shr` is ARITHMETIC
+// on the sign-bit-set word the bootstrap types as signed, sign-filling into an all-ones mask that
+// never clears — the old form here looped forever on any wrapped-run logical immediate. The
+// `count < Arm64WordBits` cap bounds the walk even for an all-ones input.
 function arm64CountLeadingOnes(value MachineWord) returns MachineWord
 	var count = 0
-	var mask = 0x8000000000000000
-	while mask != 0 and (value and mask) != 0 'each'
+	var v = value
+	while count < Arm64WordBits and (v and Arm64WordSignBit) != 0 'each'
 		count = count + 1
-		mask = mask shr 1
+		v = v shl 1
 	end 'each'
 	return count
 end 'arm64CountLeadingOnes'
@@ -808,7 +823,7 @@ end 'arm64RelBytes'
 
 // A byte displacement as a count of instructions (÷4), sign-preserving on the two's-complement value.
 function arm64RelInstructions(relBytes MachineWord) returns MachineWord
-	if relBytes < 0x8000000000000000 'nonNeg'
+	if relBytes < Arm64WordSignBit 'nonNeg'
 		return relBytes / 4
 	end 'nonNeg'
 	// Negative: arithmetic shift by dividing the magnitude and re-wrapping.
