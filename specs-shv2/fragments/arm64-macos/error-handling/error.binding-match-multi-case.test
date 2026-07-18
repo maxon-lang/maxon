@@ -1,0 +1,126 @@
+// Test: error.binding-match-multi-case
+
+typealias Integer = int(i64.min to i64.max)
+
+// Test matching on error binding with multiple cases
+enum MyError implements Error
+	failed
+	timeout
+	notFound
+end 'MyError'
+
+var counter = 0 as Integer
+
+function mayFail(code Integer) returns Integer throws MyError
+	counter = counter + 1
+	if code == 1 'c1'
+		throw MyError.failed
+	end 'c1'
+	if code == 2 'c2'
+		throw MyError.timeout
+	end 'c2'
+	throw MyError.notFound
+end 'mayFail'
+
+function main() returns ExitCode
+	var result = 0
+	try mayFail(2) otherwise (e) 'handler'
+		match e 'check'
+			failed then result = 10
+			timeout then result = 20
+			notFound then result = 30
+		end 'check'
+	end 'handler'
+	return result
+end 'main'
+---
+ExitCode: 20
+---
+data {
+  __data_counter@0 = i64 0
+}
+
+func @mayFail {
+  entry:
+    arm64.prologue 16
+    arm64.leaGlobal x1, __data_counter
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
+    arm64.add x1, x1, 1
+    arm64.leaGlobal x2, __data_counter
+    arm64.storeBaseDispReg.word64 [x2 + 0], x1
+    arm64.cmp x0, 1
+    arm64.cset x1, eq
+    arm64.cbnz x1, c1
+    arm64.b ifcont
+  c1:
+    arm64.movImm x0, 0
+    arm64.add x9, x0, 1
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.cmp x0, 2
+    arm64.cset x0, eq
+    arm64.cbnz x0, c2
+    arm64.b ifcont
+  c2:
+    arm64.movImm x0, 1
+    arm64.add x9, x0, 1
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 2
+    arm64.add x9, x0, 1
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 0
+    arm64.movImm x0, 2
+    arm64.bl mayFail
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.sub x0, x9, 1
+    arm64.cmp x0, 0
+    arm64.cset x1, eq
+    arm64.cbnz x1, matcharm
+    arm64.b matchnext
+  matcharm:
+    arm64.movImm x0, 10
+    arm64.b matchcont
+  matchnext:
+    arm64.cmp x0, 1
+    arm64.cset x1, eq
+    arm64.cbnz x1, matcharm
+    arm64.b matchnext
+  matcharm:
+    arm64.movImm x0, 20
+    arm64.b matchcont
+  matchnext:
+    arm64.cmp x0, 2
+    arm64.cset x0, eq
+    arm64.cbnz x0, matcharm
+    arm64.b matchnext
+  matcharm:
+    arm64.movImm x0, 30
+    arm64.b matchcont
+  matchcont:
+    arm64.b trycont
+  matchnext:
+  tryok:
+    arm64.movRegReg x0, x19
+    arm64.b trycont
+  trycont:
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}

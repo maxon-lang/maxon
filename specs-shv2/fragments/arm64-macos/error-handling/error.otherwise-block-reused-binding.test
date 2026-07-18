@@ -1,0 +1,140 @@
+// Test: error.otherwise-block-reused-binding
+
+typealias Integer = int(i64.min to i64.max)
+
+// Regression: two sibling `try ... otherwise (e) 'label' ... end 'label'`
+// blocks reusing the same binding name `e` but with different error types
+// (one associated-value enum, one simple enum). Without per-block scoping,
+// the first block's managed-type registration of `e` persists and the
+// function epilogue incorrectly decrefs the second block's integer `e`.
+union AssocError implements Error
+	withCode(code Integer)
+	plain
+end 'AssocError'
+
+enum SimpleError implements Error
+	broken
+end 'SimpleError'
+
+function mayFailAssoc() returns Integer throws AssocError
+	throw AssocError.withCode(7)
+end 'mayFailAssoc'
+
+function mayFailSimple() returns Integer throws SimpleError
+	throw SimpleError.broken
+end 'mayFailSimple'
+
+function main() returns ExitCode
+	var result = 0
+	try mayFailAssoc() otherwise (e) 'handler1'
+		match e 'check1'
+			withCode(code) then result = result + code
+			plain then result = result + 1
+		end 'check1'
+	end 'handler1'
+	try mayFailSimple() otherwise (e) 'handler2'
+		match e 'check2'
+			broken then result = result + 35
+		end 'check2'
+	end 'handler2'
+	return result
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @mayFailAssoc {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 7
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x1, x0
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.storeBaseDispReg.word64 [x1 + 8], x19
+    arm64.movImm x0, 0
+    arm64.movRegReg x9, x1
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @mayFailSimple {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 0
+    arm64.add x9, x0, 1
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 0
+    arm64.bl mayFailAssoc
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.loadRegBaseDisp.word64 x0, [x9 + 0]
+    arm64.cmp x0, 0
+    arm64.cset x1, eq
+    arm64.cbnz x1, matcharm
+    arm64.b matchnext
+  matcharm:
+    arm64.loadRegBaseDisp.word64 x0, [x9 + 8]
+    arm64.add x19, x0, 0
+    arm64.b matchcont
+  matchnext:
+    arm64.cmp x0, 1
+    arm64.cset x0, eq
+    arm64.cbnz x0, matcharm
+    arm64.b matchnext
+  matcharm:
+    arm64.add x19, x19, 1
+    arm64.b matchcont
+  matchcont:
+    arm64.movRegReg x0, x9
+    arm64.bl __mm_decref
+    arm64.b trycont
+  matchnext:
+  tryok:
+    arm64.b trycont
+  trycont:
+    arm64.bl mayFailSimple
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.sub x0, x9, 1
+    arm64.cmp x0, 0
+    arm64.cset x0, eq
+    arm64.cbnz x0, matcharm
+    arm64.b matchnext
+  matcharm:
+    arm64.add x0, x19, 35
+    arm64.b matchcont
+  matchcont:
+    arm64.b trycont
+  matchnext:
+  tryok:
+    arm64.movRegReg x0, x19
+    arm64.b trycont
+  trycont:
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}

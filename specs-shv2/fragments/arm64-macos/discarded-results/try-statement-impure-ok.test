@@ -1,0 +1,58 @@
+// Test: try-statement-impure-ok
+
+typealias Integer = int(i64.min to i64.max)
+
+var counter = 0 as Integer
+
+enum MyError implements Error
+	failed
+end 'MyError'
+
+function doWork() returns Integer throws MyError
+	counter = counter + 1
+	throw MyError.failed
+end 'doWork'
+
+function main() returns ExitCode
+	try doWork() otherwise ignore
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __data_counter@0 = i64 0
+}
+
+func @doWork {
+  entry:
+    arm64.prologue 16
+    arm64.leaGlobal x0, __data_counter
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.add x0, x0, 1
+    arm64.leaGlobal x1, __data_counter
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.movImm x0, 0
+    arm64.add x9, x0, 1
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.bl doWork
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.b trycont
+  tryok:
+    arm64.b trycont
+  trycont:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

@@ -1,0 +1,74 @@
+// Test: match-statements.try-otherwise-default
+enum Err implements Error
+	bad
+end 'Err'
+
+typealias Tally = int(0 to 100)
+typealias Score = int(0 to 100)
+
+function leaf() returns Score throws Err
+	throw Err.bad
+end 'leaf'
+
+function dispatch(kind Tally) returns Score
+	match kind 'k'
+		1 then return try leaf() otherwise 42
+		default panic("unreachable")
+	end 'k'
+end 'dispatch'
+
+function main() returns ExitCode
+	return dispatch(1)
+end 'main'
+---
+ExitCode: 42
+---
+func @leaf {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 0
+    arm64.add x9, x0, 1
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @dispatch {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x0, 1
+    arm64.cset x0, eq
+    arm64.cbnz x0, matcharm
+    arm64.b matchnext
+  matcharm:
+    arm64.bl leaf
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x0, 42
+    arm64.b trycont
+  tryok:
+    arm64.b trycont
+  trycont:
+    arm64.epilogue 16
+    arm64.ret
+  matchnext:
+    arm64.leaRdata x0, __str_rec_1
+    arm64.movImm x0, 134
+    arm64.importCall 0
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  matchcont:
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 1
+    arm64.bl dispatch
+    arm64.epilogue 16
+    arm64.ret
+}
