@@ -121,18 +121,13 @@ let ReferenceFragmentDir = "specs/fragments"
 // FROM `targetToString` (see `nativeTargetKeys`), not written as literals, so its spelling has ONE
 // source — the same producer a `<!-- targets: … -->` marker was authored against.
 let VendorDirName = "vendor"
+// The vendor SUBDIR for wasmtime, which also equals the tool's basename — so it is what
+// `hostWasmToolCandidates` (WasmComponent) is handed to build the `vendor/wasmtime/wasmtime[.exe]`
+// candidate paths, host-preferred. The upward walk, the host-preferred ordering, and the
+// side-by-side `.exe`/extensionless spellings all live THERE now: `findWasmtimePath` reuses that one
+// locator rather than growing a second copy that could disagree about which vendored binary is "the"
+// one (v1 kept two and paid for it — SpecTestRunner.maxon:588).
 let WasmtimeDirName = "wasmtime"
-
-// The vendor tree ships BOTH binaries side by side — a Windows `wasmtime.exe` and an extensionless
-// macOS/Linux `wasmtime` — so on either host the OTHER host's binary is present but NOT runnable.
-// Probe the one matching THIS host first: v1 (`SpecTestRunner.maxon:588`) paid for this, because
-// running the Mach-O `wasmtime` through the Win32 subprocess path faults.
-let WasmtimeUnixBinary = "wasmtime"
-let WasmtimeWindowsBinary = "wasmtime.exe"
-
-// The upward-search bound: enough levels to climb from any spec scratch subdirectory to the repo
-// root that holds `vendor/`. Mirrors v1's `findWasmtimePath` depth.
-let WasmtimeSearchDepth = 10
 
 let WasmtimeRunSubcommand = "run"
 
@@ -821,45 +816,21 @@ function buildWasmRunCommand(modulePath FilePath) returns RunCommand
 	return RunCommand.create(wasmtimeExe, argv: argv)
 end 'buildWasmRunCommand'
 
-// Locate the vendored wasmtime by walking UP from the cwd looking for `vendor/wasmtime/`, preferring
-// the binary that matches THIS host's os (see WasmtimeUnixBinary / WasmtimeWindowsBinary). PANICS if
-// it is nowhere on the way to the filesystem root — the wasm run path cannot proceed without it, and
-// there is no valid FilePath to return in its place (a "" sentinel is what this project forbids).
-// Ported from v1 `SpecTestRunner.maxon:588` (`findWasmtimePath`), whose "" return is replaced here.
+// Locate the vendored wasmtime through the SAME upward-walk + host-preferred-binary locator the
+// component-wrapping step uses (`findFileUpward` + `hostWasmToolCandidates`, both exported from
+// WasmComponent for exactly this reason). One search rule, not two: the spec runner and the compiler
+// must agree on which `vendor/wasmtime/` binary is "the" wasmtime, and a divergent copy is how two
+// callers end up disagreeing (v1 grew a second one — SpecTestRunner.maxon:588). PANICS when it is
+// nowhere on the way to the filesystem root: the wasm run path cannot proceed without it, and there
+// is no valid FilePath to return in its place (a "" sentinel is what this project forbids — which is
+// why the shared locator's empty-FilePath not-found result is turned into a panic right here).
 function findWasmtimePath() returns FilePath
-	let hostIsWindows = detectHostTarget().os == Os.windows
-	let preferred = WasmtimeWindowsBinary if hostIsWindows else WasmtimeUnixBinary
-	let fallback = WasmtimeUnixBinary if hostIsWindows else WasmtimeWindowsBinary
-
-	var dir = Directory.currentPath()
-	for _ in 0 upto WasmtimeSearchDepth 'search'
-		let preferredPath = wasmtimeBinaryIn(dir, binary: preferred)
-		if File.exists(preferredPath) 'foundPreferred'
-			return preferredPath
-		end 'foundPreferred'
-
-		let fallbackPath = wasmtimeBinaryIn(dir, binary: fallback)
-		if File.exists(fallbackPath) 'foundFallback'
-			return fallbackPath
-		end 'foundFallback'
-
-		// The filesystem root has no parent — nowhere left to look, so stop climbing and fall
-		// through to the panic below.
-		let parentDir = try dir.parent() otherwise break
-		dir = parentDir
-	end 'search'
-
-	panic("SpecTestRunner: wasmtime not found under {VendorDirName}/{WasmtimeDirName}/ (searched up {WasmtimeSearchDepth} levels from the cwd) — the wasm run path needs the vendored binary")
+	let found = findFileUpward(hostWasmToolCandidates(WasmtimeDirName))
+	if found.isEmpty() 'notFound'
+		panic("SpecTestRunner: wasmtime not found under {VendorDirName}/{WasmtimeDirName}/ (searched up from the cwd to the filesystem root) — the wasm run path needs the vendored binary")
+	end 'notFound'
+	return found
 end 'findWasmtimePath'
-
-// The path `<dir>/vendor/wasmtime/<binary>` (existence NOT checked — the caller probes it). The
-// relative path is built once through `FilePath.from` (as `fragmentsRootDir` builds its own) rather
-// than by chaining `join(String)`, whose String/FilePath overloads are ambiguous on a bare constant.
-function wasmtimeBinaryIn(dir FilePath, binary String) returns FilePath
-	let rel = "{VendorDirName}{PathSeparator}{WasmtimeDirName}{PathSeparator}{binary}"
-	let relPath = try FilePath.from(rel) otherwise panic("SpecTestRunner: wasmtime path '{rel}' must be a valid relative path")
-	return dir.join(relPath)
-end 'wasmtimeBinaryIn'
 
 // A RUN test (an ```exitcode block, plus the ```stderr / ```stdout blocks that may accompany it): the
 // compile MUST succeed, then the produced exe is spawned and EVERY half of the expectation is checked
