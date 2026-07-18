@@ -4097,6 +4097,20 @@ export type Parser
 		self.pendingTempDrops = kept
 	end 'removeFromPendingTemps'
 
+	// Is `value` still an UNCONSUMED owned temporary — a value `trackOwnedTemp` enrolled and nothing has
+	// transferred to a binding yet? The two owned-value homes are disjoint by construction (a transfer to a
+	// binding `removeFromPendingTemps` first — `parseBinding`/`moveInPayload`/`moveOutManagedPayload`), so a
+	// value in this list is exactly one owned by no binding. `parseMatchCommon` reads it to tell a
+	// temporary scrutinee (which needs match-scoped enrollment) from an already-bound one (which does not).
+	function pendingTempsContain(value ValueId) returns bool
+		for pending in self.pendingTempDrops 'each'
+			if pending == value 'found'
+				return true
+			end 'found'
+		end 'each'
+		return false
+	end 'pendingTempsContain'
+
 	// The value a binding holds has been MOVED OUT — a `return` hands its box to the caller — so the
 	// binding must leave `ownedBindings`, else `emitScopeDrops` would decref a box the callee no longer
 	// owns (a double-free with the caller's own drop). Keyed on the bound VALUE rather than on position:
@@ -5037,6 +5051,23 @@ export type Parser
 		let scrutOwned = self.valueIsOwnedHeap(scrut)
 		var matchMovedManaged = false
 
+		// ⭐ **A TEMPORARY OWNED SCRUTINEE IS ENROLLED AS A MATCH-SCOPED OWNED BINDING (P1.3).** A
+		// constructed union box used directly — `match U.case(x) …` — is an owned heap TEMPORARY: it sits
+		// in the pending-drop list, which is drained per STATEMENT, so whichever arm parses first and
+		// terminates (`return`/`break`/`continue`) would drain it into that arm's block ALONE, leaking it
+		// on every other arm's runtime path (exit 101, arm-order-dependent). Enrolling it as an owned
+		// binding at the enclosing scope BEFORE the arm loop makes it drop EXACTLY ONCE on all four exits —
+		// a `return` arm and an implicit end through `emitScopeDrops`, a `break`/`continue` arm through the
+		// loop-floor drop, a fall-through arm through the enclosing scope's own exit drop — the same
+		// machinery a `let m = U.case(x)` scrutinee already rides. A managed box still drops through its
+		// `__destruct_<U>` cascade, null-guarding any slot a binding arm moved out. An ALREADY-BOUND
+		// scrutinee (`let m = …; match m`) is already in `ownedBindings` (never in the pending list), so it
+		// is left alone — a second enrolment would double-drop the one box.
+		if scrutOwned and self.pendingTempsContain(scrut) 'enrollTempScrutinee'
+			self.ownedBindings.push(VarInfo.createValueBinding(EmptySourceText, varType: self.typeOf(scrut), mutable: false, boundValue: scrut))
+			self.removeFromPendingTemps(scrut)
+		end 'enrollTempScrutinee'
+
 		while true 'arms'
 			self.skipNewlines()
 			// The closing `end` — unless it is a keyword CASE NAME arm (`end gives …`) on an enum
@@ -5081,6 +5112,11 @@ export type Parser
 				end 'defaultFresh'
 
 				let defaultArmBody = try self.parseArmBody(func, bodyBlock: defaultBody, isExpression: isExpression, carried: carried)
+				// A `default gives …` arm's OWNED give escapes to the result phi — move it out of its owner
+				// so the post-match drain does not free it (the pattern-arm rule, for the catch-all arm).
+				if isExpression 'transferDefaultGive'
+					self.transferGiveToPhi(self.giveValueOf(defaultArmBody.give))
+				end 'transferDefaultGive'
 				// `default` is the last arm, so a fall-through has no next arm to reach — it simply
 				// continues to the merge. So the test is "did control leave?", not `reachesMerge`.
 				if not defaultArmBody.exitBlock.isTerminated() 'defaultReaches'
@@ -5149,6 +5185,15 @@ export type Parser
 				if hasPayloadBindings 'closeArmBindings'
 					self.scope.popScope()
 				end 'closeArmBindings'
+
+				// An expression arm's OWNED give value escapes to the result phi, so move it out of its owner
+				// BEFORE `dropArmScopedOwned` — else a `text(s) gives s` arm would drop the payload it is
+				// handing back (a use-after-free), and an owned-interpolation give would be double-freed by
+				// the post-match drain. A gives arm always reaches the merge (an expression cannot terminate
+				// its block), so the transfer is unconditional for `isExpression`.
+				if isExpression 'transferPatternGive'
+					self.transferGiveToPhi(self.giveValueOf(armBody.give))
+				end 'transferPatternGive'
 				self.dropArmScopedOwned(armOwnedFloor, exitBlock: armBody.exitBlock, anchor: patternTok)
 
 				if armBody.fellThrough 'fellThrough'
@@ -5219,8 +5264,9 @@ export type Parser
 
 		// A binding-match that moved a managed payload out CONSUMES the scrutinee: mark its binding
 		// `partiallyMoved` so a later read is E3102 (a re-match would deref a nulled slot). The box is
-		// still dropped at scope exit — its cascade null-guards the moved slots. A TEMPORARY scrutinee has
-		// no binding to mark and cannot be re-read; it stays in the pending drops and is dropped normally.
+		// still dropped at scope exit — its cascade null-guards the moved slots. A TEMPORARY scrutinee's
+		// SYNTHETIC binding (enrolled above) is marked too, which is harmless — it has no name to re-read,
+		// and `partiallyMoved` skips no drop, so the box still drops through the cascade.
 		if matchMovedManaged 'consumeScrut'
 			self.markScrutineePartiallyMoved(scrut)
 		end 'consumeScrut'
@@ -5392,7 +5438,7 @@ export type Parser
 			var anyNonFloat = false
 			for i in 0 upto reachingArms.count() 'scanClass'
 				let a = try reachingArms.get(i) otherwise panic("finalizeMatchMerge: reachingArms.get OOB at {i}")
-				if tagIsFloat(self.tagOf(self.giveValueOf(a))) 'isFloat'
+				if tagIsFloat(self.tagOf(self.giveValueOf(a.give))) 'isFloat'
 					anyFloat = true
 				end 'isFloat' else 'notFloat'
 					anyNonFloat = true
@@ -5404,9 +5450,19 @@ export type Parser
 			end 'crossClass'
 		end 'checkGiveClass'
 
+		// ⭐ **OWNED-GIVE OWNERSHIP TRANSFER (P1.3).** If any reaching arm gives an OWNED value the result
+		// phi takes over ownership (`resultOwned` → the phi is marked owned below): each arm's give value has
+		// already left its own owner (`transferGiveToPhi` in the arm loop), so neither `dropArmScopedOwned`
+		// nor the post-match statement drain frees it, and a borrowed give (a String literal) is promoted to
+		// an owned copy so the phi is uniformly owned and its consumer drops it unconditionally. When NO arm
+		// gives an owned value the phi stays borrowed, exactly as before. `finalGives` carries each reaching
+		// arm's post-promotion give value (empty for a statement match), used below for the phi and the edges.
+		var finalGives = ValueIdArray.create()
+		let resultOwned = self.resolveGivesOwnership(reachingArms, isExpression: isExpression, matchTok: matchTok, finalGives: finalGives)
+
 		// Every reaching arm branches to the merge (its exit block is, by definition, unterminated).
 		for i in 0 upto reachingArms.count() 'branchToMerge'
-			var arm = try reachingArms.get(i) otherwise panic("finalizeMatchMerge: reachingArms.get OOB at {i}")
+			let arm = try reachingArms.get(i) otherwise panic("finalizeMatchMerge: reachingArms.get OOB at {i}")
 			self.emitBranch(arm.exitBlock, targetId: merge.id)
 		end 'branchToMerge'
 
@@ -5429,9 +5485,14 @@ export type Parser
 		// edge lists its `gives` value first.
 		var result = MatchGiveValue.none
 		if isExpression 'resultPhi'
-			let firstGive = self.giveValueOf(firstArm)
+			let firstGive = try finalGives.get(0) otherwise panic("finalizeMatchMerge: finalGives is empty for an expression match — resolveGivesOwnership fills one per reaching arm")
 			let giveType = self.typeOf(firstGive)
 			let phiId = self.mintPhi(merge, tag: maxonTypeTag(giveType), nameId: typeNameIdOf(giveType))
+			// The phi is the new sole owner of the transferred give value (see the ownership-transfer
+			// block above), so it is an owned temp: `parseBinding`/the statement drain drops it once.
+			if resultOwned 'ownedResultPhi'
+				self.trackOwnedTemp(phiId)
+			end 'ownedResultPhi'
 			result = MatchGiveValue.value(phiId)
 		end 'resultPhi'
 
@@ -5450,7 +5511,7 @@ export type Parser
 			var arm = try reachingArms.get(i) otherwise panic("finalizeMatchMerge: reachingArms.get OOB at {i}")
 			var argIds = ValueIdArray.create()
 			if isExpression 'giveArg'
-				argIds.push(self.giveValueOf(arm))
+				argIds.push(try finalGives.get(i) otherwise panic("finalizeMatchMerge: finalGives.get OOB at {i} — one entry per reaching arm"))
 			end 'giveArg'
 			for k in 0 upto carried.count() 'eachVarArg'
 				let isDifferent = try differs.get(k) otherwise panic("finalizeMatchMerge: differs.get OOB at {k}")
@@ -5458,20 +5519,103 @@ export type Parser
 					argIds.push(try arm.exitVals.get(k) otherwise panic("finalizeMatchMerge: exitVals.get OOB at {k}"))
 				end 'diffArg'
 			end 'eachVarArg'
-			self.recordBranchEdge(arm.exitBlock, targetId: merge.id, argIds: argIds)
+
+			// The edge is pushed onto the arm's exit block DIRECTLY here, not through `recordBranchEdge`,
+			// and that is a deliberate bootstrap-fixpoint workaround, not a style slip: the whole-program
+			// mutating-parameter analysis that decides whether `recordBranchEdge`'s `block` is mutated does
+			// not converge once the give-ownership helpers enter this function's call graph, so it
+			// alternately demands `let` (E3019) and `var` (E3077) for the loop's arm. Mutating `arm`'s own
+			// block here is analysed locally and is stable. `argIds.count() == 0` means no phi rides this
+			// edge — the same guard `recordBranchEdge` applies — so nothing is recorded for a zero-arg edge.
+			if argIds.count() > 0 'hasEdgeArgs'
+				arm.exitBlock.branchEdges.push(BranchEdge.create(merge.id, argIds: argIds))
+			end 'hasEdgeArgs'
 		end 'recordEdges'
 
 		return MatchOutcome.create(merge, result: result)
 	end 'finalizeMatchMerge'
 
 	// The `gives` value an expression arm carries. Only ever asked of an expression-match arm, so a
-	// `none` is a parser invariant break, not a program error.
-	function giveValueOf(arm MatchArmExit) returns ValueId
-		match arm.give 'g'
+	// `none` is a parser invariant break, not a program error. Takes the `MatchGiveValue` itself so both
+	// `MatchArmExit` and the arm loop's `MatchArmBody` reach it through the one extractor.
+	function giveValueOf(give MatchGiveValue) returns ValueId
+		match give 'g'
 			value(id) then return id
 			none then panic("giveValueOf: an expression-match arm carries no `gives` value")
 		end 'g'
 	end 'giveValueOf'
+
+	// ⭐ **TRANSFER AN OWNED `gives` VALUE OUT OF ITS OWNER (P1.3).** An expression arm whose yielded value
+	// is OWNED — an owned interpolation/heap `String`, a struct box, or a managed payload a binding arm
+	// moved out (`text(s) gives s`) — hands that value to the merge's result phi, which becomes its sole
+	// owner (`finalizeMatchMerge` marks the phi owned so its consumer drops it once). So the value must
+	// leave its current owner HERE, before `dropArmScopedOwned` releases the arm's bindings and before the
+	// post-match statement drain runs: an owned temporary leaves the pending list, and a bare-local owner
+	// (the payload binding of `text(s) gives s`, or an outer owned binding) is poisoned so `emitScopeDrops`
+	// skips its drop and a later read of it is use-after-move. A borrowed/scalar give owns nothing, so both
+	// calls are no-ops — a borrowed String is promoted at the merge instead, where phi ownership is decided.
+	function transferGiveToPhi(give ValueId)
+		if not self.valueIsOwned(give, tag: self.tagOf(give)) 'borrowed'
+			return
+		end 'borrowed'
+		self.removeFromPendingTemps(give)
+		self.poisonMoveSource(give)
+	end 'transferGiveToPhi'
+
+	// Decide whether an expression match's result phi OWNS its value, and make every arm's give owned so it
+	// does. The phi is owned iff any reaching arm gives an owned value (`finalizeMatchMerge` then marks it an
+	// owned temp); when it is, each arm that gives a BORROWED value (a String literal) is promoted to an
+	// owned copy so the phi is uniformly owned across all edges. A statement match, or an expression match
+	// whose arms all give scalars / immortal rdata, keeps a borrowed phi (returns false).
+	//
+	// The per-arm give value the merge should use — after any promotion — is collected into `finalGives`
+	// (one entry per reaching arm, in order) rather than written back onto the `MatchArmExit`, so nothing
+	// here mutates the arm records the caller still reads. `finalGives` is empty for a statement match.
+	function resolveGivesOwnership(reachingArms MatchArmExitArray, isExpression bool, matchTok Token, finalGives ValueIdArray) returns bool
+		if not isExpression 'statementMatch'
+			return false
+		end 'statementMatch'
+
+		var resultOwned = false
+		for i in 0 upto reachingArms.count() 'anyOwned'
+			let a = try reachingArms.get(i) otherwise panic("resolveGivesOwnership: reachingArms.get OOB at {i}")
+			let give = self.giveValueOf(a.give)
+			if self.valueIsOwned(give, tag: self.tagOf(give)) 'owned'
+				resultOwned = true
+			end 'owned'
+		end 'anyOwned'
+
+		for i in 0 upto reachingArms.count() 'collectGives'
+			let a = try reachingArms.get(i) otherwise panic("resolveGivesOwnership: reachingArms.get OOB at {i}")
+			let give = self.giveValueOf(a.give)
+			if resultOwned and not self.valueIsOwned(give, tag: self.tagOf(give)) 'promoteBorrowed'
+				finalGives.push(self.promoteBorrowedGive(give, arm: a, matchTok: matchTok))
+			end 'promoteBorrowed' else 'keepGive'
+				finalGives.push(give)
+			end 'keepGive'
+		end 'collectGives'
+
+		return resultOwned
+	end 'resolveGivesOwnership'
+
+	// Promote a BORROWED `gives` value to an owned heap copy in its own arm's exit block, so a match whose
+	// OTHER arms give owned values has a uniformly-owned result phi its consumer can drop unconditionally.
+	// Only a String is promotable (a struct give is always owned; a scalar never co-occurs with an owned
+	// give in well-typed code), so a non-String borrowed give — a give-type mismatch the type system will
+	// reject — is left as-is rather than mis-promoted. The copy is the SAME fused-record blit a borrowed
+	// `return`/`var` makes (`promoteToOwnedString`), emitted into the arm's still-unterminated exit block;
+	// it is a fresh owned temp the arm hands straight to the phi, so it leaves the pending list at once.
+	function promoteBorrowedGive(give ValueId, arm MatchArmExit, matchTok Token) returns ValueId
+		if not tagIsText(self.tagOf(give)) 'notText'
+			return give
+		end 'notText'
+		let saved = self.currentBlock
+		self.currentBlock = arm.exitBlock
+		let owned = self.promoteToOwnedString(give, range: SourceRange.ofToken(matchTok))
+		self.removeFromPendingTemps(owned)
+		self.currentBlock = saved
+		return owned
+	end 'promoteBorrowedGive'
 
 	// Emit one arm's pattern as a single boolean condition, OR-folding the alternatives (`1 or 2 or
 	// 3`). Records single-value patterns for the duplicate check and rejects a pattern whose type
