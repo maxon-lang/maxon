@@ -322,6 +322,33 @@ reopen behaviours hold both ways (`cross-file-exported-reads-own-private` → 42
 host anyway — the bootstrap's `--timing` plus the temporary build counter are the right instruments
 here, as with `0c974245e` above.)
 
+**2026-07-18 — the arm64 encoder stopped building a `RegisterFile` per register operand.**
+`scale-test` could not measure this: its corpus is heap/struct/global-heavy and the arm64 M1 backend
+panics at `osAllocPages` on rung 0, so the ladder never produces arm64 data on this host. Measured
+instead with `--metrics` on a synthetic 200-function scalar module (~36,800 ALU statements, which the
+arm64 backend *can* emit), before vs after:
+
+| phase | allocs before | allocs after | bytes before | bytes after |
+| --- | ---: | ---: | ---: | ---: |
+| encode | 123,130 | 10,913 | 2,636,989 | 841,517 |
+| total | 1,527,795 | 1,415,376 | 115,908,333 | 114,109,634 |
+
+**−112,217 allocations in the encode phase (−91%), and the total delta (−112,419) is the same number**
+— so essentially every allocation removed was in the encoder. The cause: `arm64RegNumIsGpr` (the class
+test every colored operand goes through, via `arm64GprField`/`arm64FpField`) read the GPR/SIMD boundary
+as `arm64RegisterFile().firstVector`, **constructing a throwaway `RegisterFile` heap object to read the
+compile-time constant 31** — once per register operand of every op, i.e. O(ops) pure-waste heap
+objects. The x64 side never had this: `regClassOf` reads the `FirstXmmRegisterNumber` constant directly
+and its comment says it does so precisely to avoid building a `RegisterFile` on the encoder's
+per-register path. The fix names the arm64 twin (`Arm64FirstVectorRegister = 31`), so `arm64RegisterFile()`
+and the encoder share one home for "31" and the hot path allocates nothing (the two non-hot per-function
+readers, `arm64CallerSavedMask` and `arm64UsedCalleeSaved`, read the constant too). It is a constant-
+factor win, not a bent curve — the count is still linear in ops — but the constant was ~110k objects a
+scalar module. Codegen is byte-identical (the module emits the same 154,464 code bytes before and after;
+`git status specs-shv2/fragments/` empty, so both the x64-windows and arm64-macos goldens are
+untouched); the arm64 suite is **489/0**, exit 0 (no leak). x64 is provably neutral — nothing on the x64
+path was touched and `arm64RegisterFile()` still returns the same value.
+
 ## Bugs this uncovered
 
 Removing the dummy exposed a leak it had been half-hiding, and the leak in turn exposed a hole in the

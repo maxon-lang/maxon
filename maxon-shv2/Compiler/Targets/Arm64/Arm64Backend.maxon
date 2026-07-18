@@ -215,9 +215,12 @@ function arm64ResolveRegNum(vreg TargetVReg) returns RegNum
 end 'arm64ResolveRegNum'
 
 // True when a colored `RegNum` names a GPR (x0..x30 = 0..30) rather than a SIMD register (d0..d31 =
-// 31..62). The boundary is the arm64 file's `firstVector`, NOT `regClassOf`'s x64 one.
+// 31..62). The boundary is the arm64 file's `firstVector`, NOT `regClassOf`'s x64 one. Read as the
+// `Arm64FirstVectorRegister` CONSTANT, never `arm64RegisterFile().firstVector`: this is the encoder's
+// per-operand hot path, and building a `RegisterFile` here to read one constant allocated a throwaway
+// heap object on every operand of every op (see `Arm64FirstVectorRegister`).
 function arm64RegNumIsGpr(reg RegNum) returns bool
-	return reg < arm64RegisterFile().firstVector
+	return reg < Arm64FirstVectorRegister
 end 'arm64RegNumIsGpr'
 
 function arm64VRegIsGpr(vreg TargetVReg) returns bool
@@ -237,13 +240,14 @@ function arm64GprField(vreg TargetVReg) returns MachineWord
 end 'arm64GprField'
 
 // The SIMD field value (0..31) of a colored operand, panicking if it is a GPR. d`k` has RegNum
-// `firstVector + k`, so the field is `RegNum − firstVector`.
+// `firstVector + k`, so the field is `RegNum − Arm64FirstVectorRegister` — the constant, not a
+// freshly-built `arm64RegisterFile()`, for the per-operand-allocation reason `arm64RegNumIsGpr` gives.
 function arm64FpField(vreg TargetVReg) returns MachineWord
 	let reg = arm64ResolveRegNum(vreg)
 	if arm64RegNumIsGpr(reg) 'notFp'
 		panic("arm64 emitter: register number {reg} is a GPR where a SIMD register is required — this encoding would name the wrong register file")
 	end 'notFp'
-	return reg - arm64RegisterFile().firstVector
+	return reg - Arm64FirstVectorRegister
 end 'arm64FpField'
 
 // ==========================================================================

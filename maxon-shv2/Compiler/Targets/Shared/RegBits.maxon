@@ -224,10 +224,24 @@ export function x64RegisterFile() returns RegisterFile
 	return RegisterFile.create(32, firstVector: FirstXmmRegisterNumber)
 end 'x64RegisterFile'
 
+// The FIRST SIMD register's number in the arm64 file — its GPR/SIMD boundary (d0 = RegNum 31), the
+// arm64 twin of `FirstXmmRegisterNumber`. It is the one fact `arm64RegisterFile().firstVector` names,
+// and it is named HERE so the arm64 ENCODER's per-operand class test (`arm64RegNumIsGpr`,
+// `arm64FpField` in Arm64Backend) can read it WITHOUT constructing a `RegisterFile` — exactly as x64's
+// `regClassOf` reads `FirstXmmRegisterNumber` rather than building `x64RegisterFile()` on its hot path.
+//
+// ⚠ WITHOUT THIS the encoder allocated a throwaway `RegisterFile` on EVERY register operand of EVERY
+// op (`arm64GprField` → `arm64RegNumIsGpr` → `arm64RegisterFile()`), which is O(ops) heap objects that
+// only ever read this one constant. MEASURED at ~110k such allocations in the encode phase of a 200-
+// function scalar module — the overwhelming majority of that phase's traffic — all of it pure waste.
+export let Arm64FirstVectorRegister = 31 as RegNum
+
 // The arm64 register file: 63 registers — GPR x0..x30 (0..30), SIMD d0..d31 (31..62). The SIMD
-// boundary at 31 is arm64's, NOT x64's 16; one allocator, two boundaries, chosen by the target.
+// boundary at 31 is arm64's, NOT x64's 16; one allocator, two boundaries, chosen by the target. The
+// boundary reads `Arm64FirstVectorRegister`, so the file value and the encoder's per-operand test
+// share one home for "31" (mirroring x64's `RegisterFile.create(32, firstVector: FirstXmmRegisterNumber)`).
 export function arm64RegisterFile() returns RegisterFile
-	return RegisterFile.create(63, firstVector: 31)
+	return RegisterFile.create(63, firstVector: Arm64FirstVectorRegister)
 end 'arm64RegisterFile'
 
 // The `RegisterFile` of the target the allocator is running for — the ONE dispatcher the shared
