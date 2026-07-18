@@ -4338,6 +4338,14 @@ export type Parser
 	// next. Called only with at least one reaching edge — an all-terminating construct has a dead merge and
 	// leaves the move state alone.
 	function reconcileMovesAtMerge(edges ReachingMoveEdgeArray, anchor Token)
+		// The caller must pass at least one reaching edge — an all-terminating construct has a dead merge and
+		// must NOT call this at all. With no edges every binding would read `anyMoved == false` and be marked
+		// live, silently clobbering an already-moved binding's state (a mass-leak footgun on the most delicate
+		// path). Enforced loudly rather than trusted, since a wrong move state here is a leak or a double-free.
+		if edges.count() == 0 'noEdges'
+			panic("reconcileMovesAtMerge: called with no reaching edges — an all-terminating construct has a dead merge and must leave the move state alone rather than reconcile it")
+		end 'noEdges'
+
 		let n = self.ownedBindings.count()
 		for edge in edges 'checkAligned'
 			if edge.mark.moved.count() != n 'drifted'
