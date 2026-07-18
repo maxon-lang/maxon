@@ -769,10 +769,14 @@ type WasmFuncEmitter
 		self.body.localSet(resultId as Wasm32Index)
 	end 'emitUnaryOp'
 
-	// Integer negate as `0 - operand` (wasm has no unary negate).
+	// Integer negate as `0 - operand` (wasm has no unary negate). The operand is coerced to the op's
+	// width (from `operandType`, which the result also carries): the frontend can leave it a different
+	// width — e.g. `-r` on an ExitCode (i32) whose neg is typed int (i64) — same gap as a mixed-width
+	// binOp, and it faults the same way (`i64.sub` over an i32) without the coercion.
 	function emitNegExpr(operand ValueId, wide bool)
+		let opVt = WasmValType.i64 if wide else WasmValType.i32
 		self.emitIntConst(wide, value: 0)
-		self.body.localGet(operand as Wasm32Index)
+		self.pushOperandAt(operand, targetVt: opVt)
 		if wide 'i64'
 			self.body.i64Sub()
 		end 'i64' else 'i32'
@@ -780,9 +784,11 @@ type WasmFuncEmitter
 		end 'i32'
 	end 'emitNegExpr'
 
-	// Bitwise complement as `operand xor -1` (all-ones flips every bit).
+	// Bitwise complement as `operand xor -1` (all-ones flips every bit). The operand is coerced to the
+	// op's width for the same reason as `emitNegExpr`.
 	function emitBitNotExpr(operand ValueId, wide bool)
-		self.body.localGet(operand as Wasm32Index)
+		let opVt = WasmValType.i64 if wide else WasmValType.i32
+		self.pushOperandAt(operand, targetVt: opVt)
 		self.emitIntConst(wide, value: -1)
 		if wide 'i64'
 			self.body.i64Xor()

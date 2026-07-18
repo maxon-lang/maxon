@@ -1,0 +1,29 @@
+// Test: unary-minus-widened
+function base() returns ExitCode
+	return 5
+end 'base'
+
+function main() returns ExitCode
+	let r = base()
+	return -r + 12
+end 'main'
+---
+ExitCode: 7
+---
+func @base {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 5
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.bl base
+    arm64.neg x0, x0
+    arm64.add x0, x0, 12
+    arm64.epilogue 16
+    arm64.ret
+}
