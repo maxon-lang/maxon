@@ -4950,9 +4950,15 @@ export type Parser
 			self.restoreMoveMark(thenMoveMark)
 			self.emitBranch(thenEnd, targetId: cont.id)
 		end 'onlyThen' else 'onlyElse'
-			// Only the else branch reaches the continuation — its values and move state are already the
-			// current state (parsed last), but restore the values explicitly for symmetry.
+			// Only the else branch reaches the continuation — its values and move state ARE the current
+			// state (else was parsed last and nothing has mutated either since), so both restores are
+			// no-ops today. They are written explicitly anyway, symmetric with `onlyThen` above: "the
+			// surviving branch's state prevails at the merge" is then stated once per axis rather than
+			// left as an unstated dependence on branch-parse order — which, if ever reordered, would keep
+			// values correct (explicit restore) while silently diverging the drop-gating move state into a
+			// leak or double-free (a wrong answer, not a compile error).
 			self.restoreBindings(bindings, snapshot: elseVals)
+			self.restoreMoveMark(elseMoveMark)
 			self.emitBranch(elseEnd, targetId: cont.id)
 		end 'onlyElse'
 		return cont
