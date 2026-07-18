@@ -1,20 +1,1150 @@
 // Arm64Backend — the arm64 half of the Phase-7 backend: Std → arm64 Target ops → register
 // allocation → arm64 prologue/epilogue → runtime augmentation → machine-code emission → CodeResult.
 //
-// ⭐ WAVE-1 STUBS (arm64-macOS foundation rung). `buildArm64Backend` mirrors the x64 pipeline
-// (`BackendDispatch.buildX64Backend`) so wave 1 has the exact structure to fill; the SHARED stages
-// — `allocateRegisters`, `augmentWithRuntime` — are already neutral and are reused as-is, which is
-// the whole point of the one-allocator / unified-`TargetOp` design (USER RULING). The ISA-specific
-// stages (isel, frame, encoder, link) are the arm64 stubs, and isel panics FIRST, so a
-// `build --target=arm64-macos` reaches this pipeline and stops at the isel stub — proving the
-// register model, ABI dispatch, op-arm declarations and BackendDispatch are correctly wired.
+// This is the arm64 twin of `X64Backend`: `emitArm64FunctionChunk` maps each colored `TargetOp`
+// (its neutral `RegNum` operands resolved to an `Arm64Register`) to its 32-bit AArch64 encoding,
+// `concatArm64FunctionChunks` lays the chunks out into `.text` and resolves the intra-module `bl`
+// and code→data relocations, and `buildArm64Backend` drives the shared pipeline stages. The
+// ISA-specific traps the M1 notes list live HERE: the ADRP+ADD address-materialisation pair (never
+// a bare ADR), the STUR simm9 / scaled-STR spill threshold, the movz/movk immediate ladder, the
+// NaN-safe float compare's condition mapping, and the SP-vs-XZR MOV disambiguation.
+//
+// ⚠ CLASS DETECTION IS PER-ISA, AND `regClassOf` DOES NOT SERVE HERE. `regClassOf` splits at the
+// x64 boundary (`FirstXmmRegisterNumber` = 16); on arm64 that would misread x19..x28 (colored GPRs)
+// as SIMD. The arm64 boundary is `arm64RegisterFile().firstVector` (31) — GPRs are RegNum 0..30,
+// the SIMD file d0..d31 is 31..62 — so every class question here is asked against that boundary
+// (`arm64VRegIsGpr`), never against the shared `regClassOf`.
 
-// Run the arm64 backend. `throws CompileError` because register allocation can fail for a real
-// reason (E5001), exactly as the x64 backend does.
+// ==========================================================================
+// AArch64 instruction encoding primitives
+// ==========================================================================
+
+// A single 32-bit AArch64 instruction word, little-endian. Every encoder below funnels through here
+// so the byte order is spelled once.
+function emitArm64Insn(code ByteArray, insn MachineWord)
+	writeDword(code, value: insn)
+end 'emitArm64Insn'
+
+// The AArch64 register-field bit positions. Rd is the low 5 bits; Rn, Rm and Rt2 sit at their fixed
+// offsets in every data-processing form, so the R-R-R / R-R encoders spell the layout once here.
+let Arm64RnShift = 5
+let Arm64RmShift = 16
+let Arm64Rt2Shift = 10
+
+// The base register field in a load/store / frame op names SP as 31 (the same field value XZR takes
+// in a data-processing op — context, not the number, tells them apart; see the MOV-involving-SP note
+// on `arm64Prologue`). x29/x30 are the frame-record pair.
+let Arm64SpBaseField = 31
+let Arm64Fp = 29
+let Arm64Lr = 30
+
+// The IP scratch registers (x16/x17) — never in the allocatable pool, so the encoder clobbers them
+// freely for immediate materialisation, the `xchg` cycle-break and the ADRP scratch of a float load.
+let Arm64Ip0 = 16
+
+// A 3-register data-processing instruction `op Rd, Rn, Rm` — the shape ADD/SUB/MUL/AND/ORR/… share.
+function emitArm64Rrr(code ByteArray, opcode MachineWord, rd MachineWord, rn MachineWord, rm MachineWord)
+	emitArm64Insn(code, insn: opcode or (rm shl Arm64RmShift) or (rn shl Arm64RnShift) or rd)
+end 'emitArm64Rrr'
+
+// A 2-register instruction `op Rd, Rn` (NEG/MVN/FMOV/SCVTF/FCVTZS and the ORR-based MOV) — Rm is
+// fixed in the opcode (XZR for NEG/MVN, none for the FP unary/convert forms).
+function emitArm64Rr(code ByteArray, opcode MachineWord, rd MachineWord, rn MachineWord)
+	emitArm64Insn(code, insn: opcode or (rn shl Arm64RnShift) or rd)
+end 'emitArm64Rr'
+
+// --- Data-processing (register) base opcodes, 64-bit ---
+let Arm64OpAdd = 0x8B000000
+let Arm64OpSub = 0xCB000000
+let Arm64OpMul = 0x9B007C00
+let Arm64OpSdiv = 0x9AC00C00
+let Arm64OpUdiv = 0x9AC00800
+let Arm64OpAnd = 0x8A000000
+let Arm64OpOrr = 0xAA000000
+let Arm64OpEor = 0xCA000000
+let Arm64OpLslv = 0x9AC02000
+let Arm64OpAsrv = 0x9AC02800
+let Arm64OpLsrv = 0x9AC02400
+
+// MSUB Xd, Xn, Xm, Xa => Xd = Xa - Xn*Xm (the remainder builder). Ra sits at bit 10.
+let Arm64OpMsub = 0x9B008000
+let Arm64MsubRaShift = 10
+
+// MOV Xd, Xn is ORR Xd, XZR, Xn — the register move both files' `movRegReg` lowers to (GPR side).
+let Arm64OpMovReg = 0xAA0003E0
+
+// ORN Xd, XZR, Xn = MVN Xd, Xn. NEG Xd, Xn is SUB Xd, XZR, Xn (reuses `Arm64OpSub`). Both read their
+// SOURCE through the Rm field (bit 16) with XZR in the Rn field — the zero register is NOT folded into
+// the opcode, so the source must land at Rm, not Rn.
+let Arm64OpOrn = 0xAA200000
+// The XZR register field value in a data-processing op (31 — the same field value SP takes in a
+// load/store base, context deciding which; named apart from `Arm64SpBaseField` for readability).
+let Arm64XzrField = 31
+
+// --- Data-processing (immediate) ---
+let Arm64OpAddImm = 0x91000000
+let Arm64OpSubImm = 0xD1000000
+let Arm64ImmShift = 10
+let Arm64ImmMask = 0xFFF
+// The `sh` bit (22): a set `sh` shifts the 12-bit immediate left by 12, extending ADD/SUB-immediate
+// reach to a full 24-bit frame/offset in a hi/lo split.
+let Arm64ImmShiftHiBit = 0x400000
+
+// The bitmask-immediate logical ops (AND/ORR/EOR #bimm). N:immr:imms occupy bits 22:10.
+let Arm64OpAndImm = 0x92000000
+let Arm64OpOrrImm = 0xB2000000
+let Arm64OpEorImm = 0xD2000000
+let Arm64LogicalNShift = 22
+let Arm64LogicalImmrShift = 16
+let Arm64LogicalImmsShift = 10
+
+// The constant-shift bitfield ops. LSL/LSR are UBFM aliases, ASR is an SBFM alias; immr:imms at 21:10.
+let Arm64OpUbfm = 0xD3400000
+let Arm64OpSbfm = 0x93400000
+let Arm64BitfieldImmrShift = 16
+let Arm64BitfieldImmsShift = 10
+let Arm64WordBitMax = 63
+
+// --- Move-wide immediate (movz/movk ladder) ---
+let Arm64OpMovz = 0xD2800000
+let Arm64OpMovk = 0xF2800000
+let Arm64MoveWideHwShift = 21
+let Arm64MoveWideImm16Shift = 5
+let Arm64HalfwordBits = 16
+let Arm64HalfwordMask = 0xFFFF
+
+// --- Compare (SUBS/ANDS into XZR) ---
+let Arm64OpCmpReg = 0xEB00001F
+let Arm64OpCmpImm = 0xF100001F
+
+// CSET Xd, cond = CSINC Xd, XZR, XZR, invert(cond). The condition field is at bit 12; CSET inverts
+// the condition it is given (the true value comes from the +1 of XZR).
+let Arm64OpCsinc = 0x9A9F07E0
+let Arm64CondFieldShift = 12
+let Arm64CondInvertBit = 0x1
+
+// --- Branches ---
+let Arm64OpB = 0x14000000
+let Arm64OpBl = 0x94000000
+let Arm64OpBcond = 0x54000000
+let Arm64OpCbz = 0xB4000000
+let Arm64OpCbnz = 0xB5000000
+let Arm64OpBlr = 0xD63F0000
+// RET returns through x30 (LR); the LR is baked into this fully-formed encoding.
+let Arm64OpRet = 0xD65F03C0
+let Arm64Imm26Mask = 0x3FFFFFF
+let Arm64Imm19Mask = 0x7FFFF
+let Arm64Imm19Shift = 5
+
+// --- Address materialisation (ADRP + ADD/LDR) ---
+let Arm64OpAdrp = 0x90000000
+
+// --- Loads / stores ---
+// Scaled unsigned-offset forms (imm12 * transfer size). Xn = base, Rt = data reg.
+let Arm64OpStrX = 0xF9000000
+let Arm64OpLdrX = 0xF9400000
+let Arm64OpStrD = 0xFD000000
+let Arm64OpLdrD = 0xFD400000
+let Arm64OpStrB = 0x39000000
+let Arm64OpLdrB = 0x39400000
+let Arm64LoadStoreImm12Shift = 10
+let Arm64LoadStoreImm12Mask = 0xFFF
+// Unscaled signed-offset forms (STUR/LDUR, simm9 at bit 12, ±256). Below the 256-byte threshold a
+// spill/reload uses these; at or above it the scaled form is MANDATORY — STUR's 9-bit field silently
+// truncates any offset ≥ 256 and would spill to the wrong slot (M1 trap).
+let Arm64OpSturX = 0xF8000000
+let Arm64OpLdurX = 0xF8400000
+let Arm64OpSturD = 0xBC000000
+let Arm64OpLdurD = 0xBC400000
+let Arm64UnscaledImm9Shift = 12
+let Arm64UnscaledImm9Mask = 0x1FF
+let Arm64UnscaledSpillThreshold = 256
+
+// --- Frame-record pair (STP/LDP) ---
+// Pre/post-indexed frame-record forms and the plain signed-offset forms. imm7 is signed, scaled by 8.
+let Arm64OpStpPreX = 0xA9800000
+let Arm64OpLdpPostX = 0xA8C00000
+let Arm64OpStpOffX = 0xA9000000
+let Arm64OpLdpOffX = 0xA9400000
+let Arm64PairImm7Shift = 15
+let Arm64PairImm7Mask = 0x7F
+// The STP pre-index / LDP post-index imm7 reaches -512..+504 (scaled by 8). The smaller bound
+// governs both so one threshold decides the compact-vs-split frame form (M1 trap: larger frames use
+// a SUB-sp split).
+let Arm64FramePairIndexMax = 504
+
+// --- Floating-point (double precision — the scalar core's only float width) ---
+let Arm64OpFaddD = 0x1E602800
+let Arm64OpFsubD = 0x1E603800
+let Arm64OpFmulD = 0x1E600800
+let Arm64OpFdivD = 0x1E601800
+let Arm64OpFcmpD = 0x1E602000
+let Arm64OpScvtfD = 0x9E620000
+let Arm64OpFcvtzsD = 0x9E780000
+let Arm64OpFmovD = 0x1E604000
+
+// Vector EOR (8B) — a scratch-free three-instruction register SWAP for a SIMD pair, the `xchg`
+// cycle-break's float arm (AArch64 has no `fmov`-based swap and no reserved FP scratch, exactly as
+// x64 has no `xchg xmm` and swaps XMMs with a triple-xorpd).
+let Arm64OpEorVec8b = 0x2E201C00
+
+// The largest frame either stack-split helper encodes (24-bit, two imm12 fields) — past it a frame
+// is not encodable at all and the split panics rather than truncate.
+let Arm64StackSplitMax = 0xFFFFFF
+
+// The reach of a `b`/`bl` (imm26 scaled by 4 = ±128 MiB) and of a `b.cond`/`cbz`/`cbnz` (imm19 scaled
+// by 4 = ±1 MiB), as byte counts. Guarded on resolution so an out-of-range branch is a loud link
+// error, never a silently wrapped displacement.
+let Arm64BranchByteReach = 0x8000000
+let Arm64CondBranchByteReach = 0x100000
+
+// ==========================================================================
+// Register resolution (colored RegNum → AArch64 register field)
+// ==========================================================================
+
+// The `RegNum` a colored operand carries. A virtual reg here is an allocator bug — register
+// allocation colors every operand before emission.
+function arm64ResolveRegNum(vreg TargetVReg) returns RegNum
+	match vreg 'resolve'
+		physical(reg) then return reg
+		virtual(id) then panic("arm64 emitter: unresolved virtual register v{id} — register allocation did not color it before emission")
+	end 'resolve'
+end 'arm64ResolveRegNum'
+
+// True when a colored `RegNum` names a GPR (x0..x30 = 0..30) rather than a SIMD register (d0..d31 =
+// 31..62). The boundary is the arm64 file's `firstVector`, NOT `regClassOf`'s x64 one.
+function arm64RegNumIsGpr(reg RegNum) returns bool
+	return reg < arm64RegisterFile().firstVector
+end 'arm64RegNumIsGpr'
+
+function arm64VRegIsGpr(vreg TargetVReg) returns bool
+	return arm64RegNumIsGpr(arm64ResolveRegNum(vreg))
+end 'arm64VRegIsGpr'
+
+// The GPR field value (0..30) of a colored operand, panicking if it is a SIMD register — the arm64
+// twin of `X64Backend.resolveGpr`. The `Arm64Register` mapping is the brief's `fromRawValue` path;
+// its `rawValue` IS the GPR field for x0..x30, so the round-trip validates the class in one place.
+function arm64GprField(vreg TargetVReg) returns MachineWord
+	let reg = arm64ResolveRegNum(vreg)
+	if not arm64RegNumIsGpr(reg) 'notGpr'
+		panic("arm64 emitter: register number {reg} is a SIMD register where a GPR is required — this encoding would name the wrong register file")
+	end 'notGpr'
+	let named = try Arm64Register.fromRawValue(reg) otherwise panic("arm64 emitter: colored register number {reg} is not a valid Arm64Register")
+	return named.rawValue
+end 'arm64GprField'
+
+// The SIMD field value (0..31) of a colored operand, panicking if it is a GPR. d`k` has RegNum
+// `firstVector + k`, so the field is `RegNum − firstVector`.
+function arm64FpField(vreg TargetVReg) returns MachineWord
+	let reg = arm64ResolveRegNum(vreg)
+	if arm64RegNumIsGpr(reg) 'notFp'
+		panic("arm64 emitter: register number {reg} is a GPR where a SIMD register is required — this encoding would name the wrong register file")
+	end 'notFp'
+	return reg - arm64RegisterFile().firstVector
+end 'arm64FpField'
+
+// ==========================================================================
+// Move-wide immediate materialisation (movz / movk ladder)
+// ==========================================================================
+
+// MOVZ Rd, #imm16, LSL (hw*16) — zeroes the rest of the register.
+function arm64EmitMovz(code ByteArray, rd MachineWord, imm16 MachineWord, hw MachineWord)
+	emitArm64Insn(code, insn: Arm64OpMovz or (hw shl Arm64MoveWideHwShift) or ((imm16 and Arm64HalfwordMask) shl Arm64MoveWideImm16Shift) or rd)
+end 'arm64EmitMovz'
+
+// MOVK Rd, #imm16, LSL (hw*16) — keeps the other halfwords.
+function arm64EmitMovk(code ByteArray, rd MachineWord, imm16 MachineWord, hw MachineWord)
+	emitArm64Insn(code, insn: Arm64OpMovk or (hw shl Arm64MoveWideHwShift) or ((imm16 and Arm64HalfwordMask) shl Arm64MoveWideImm16Shift) or rd)
+end 'arm64EmitMovk'
+
+// Materialise a full 64-bit immediate into `rd`: MOV Xd, XZR for zero, then the first non-zero
+// halfword as a MOVZ (so a single-halfword constant is one instruction) and every subsequent
+// non-zero halfword as a MOVK. Correct for any value; the redundant leading MOVZ #0 the naive ladder
+// emits for e.g. 0x10000 is avoided by starting the MOVZ at the first live halfword.
+function arm64EmitMovImm(code ByteArray, rd MachineWord, value MachineWord)
+	if value == 0 'zero'
+		emitArm64Insn(code, insn: Arm64OpMovReg or (Arm64XzrField shl Arm64RmShift) or rd)
+		return
+	end 'zero'
+
+	var firstEmitted = false
+	for hw in 0 upto 4 'eachHalfword'
+		let chunk = (value shr (hw * Arm64HalfwordBits)) and Arm64HalfwordMask
+		if chunk != 0 'live'
+			if firstEmitted 'notFirst'
+				arm64EmitMovk(code, rd: rd, imm16: chunk, hw: hw)
+			end 'notFirst' else 'first'
+				arm64EmitMovz(code, rd: rd, imm16: chunk, hw: hw)
+				firstEmitted = true
+			end 'first'
+		end 'live'
+	end 'eachHalfword'
+end 'arm64EmitMovImm'
+
+// ==========================================================================
+// Logical bitmask-immediate encoding (AND/ORR/EOR #imm)
+// ==========================================================================
+
+// The (N, immr, imms) encoding of a 64-bit logical bitmask immediate, or a report that `value` is
+// not an encodable bitmask (AArch64 logical immediates are rotated runs of set bits, NOT arbitrary
+// constants — 0 and all-ones are excluded). A non-encodable immediate is an ISEL obligation: it must
+// have materialised the constant into a register and used the register form, so an inencodable value
+// reaching here is a loud bug, not a silent wrong instruction.
+union Arm64LogicalImmResult
+	encodable(n MachineWord, immr MachineWord, imms MachineWord)
+	notEncodable
+end 'Arm64LogicalImmResult'
+
+// The number of low-order set bits of `value` (trailing ones).
+function arm64CountTrailingOnes(value MachineWord) returns MachineWord
+	var count = 0
+	var v = value
+	while (v and 0x1) == 0x1 'each'
+		count = count + 1
+		v = v shr 1
+	end 'each'
+	return count
+end 'arm64CountTrailingOnes'
+
+// The number of low-order clear bits of `value` (trailing zeros), capped at 64 for value 0.
+function arm64CountTrailingZeros(value MachineWord) returns MachineWord
+	if value == 0 'allZero'
+		return 64
+	end 'allZero'
+	var count = 0
+	var v = value
+	while (v and 0x1) == 0x0 'each'
+		count = count + 1
+		v = v shr 1
+	end 'each'
+	return count
+end 'arm64CountTrailingZeros'
+
+// The number of high-order set bits of `value` (leading ones), over the full 64-bit width.
+function arm64CountLeadingOnes(value MachineWord) returns MachineWord
+	var count = 0
+	var mask = 0x8000000000000000
+	while mask != 0 and (value and mask) != 0 'each'
+		count = count + 1
+		mask = mask shr 1
+	end 'each'
+	return count
+end 'arm64CountLeadingOnes'
+
+// True when `value`'s set bits form ONE contiguous run anywhere (a "shifted mask", no wrap) — the run
+// need not touch bit 0. `(value - 1) | value` fills every bit below the run's bottom; if the run is
+// contiguous that fill is a bit-0-anchored mask (`(x & (x+1)) == 0`). Distinct from a bit-0-anchored
+// run: `0xFF00` is a shifted mask but not a low-anchored one, and it IS an encodable rotation.
+function arm64IsShiftedMask(value MachineWord) returns bool
+	if value == 0 'zero'
+		return false
+	end 'zero'
+	let filled = (value - 1) or value
+	return (filled and (filled + 1)) == 0
+end 'arm64IsShiftedMask'
+
+// Encode a 64-bit logical bitmask immediate to its (N, immr, imms) fields, or report it inencodable.
+// Finds the element size (a power of two 2..64) the pattern repeats over, then requires the reduced
+// element to be a ROTATION of a low run of ones — either a shifted mask directly (run does not wrap
+// the element) or one whose complement is (run wraps). Mirrors LLVM's `processLogicalImmediate`; the
+// `imms` size prefix and `N` fall straight out of `~(size-1) << 1`.
+function arm64EncodeLogicalImm(value MachineWord) returns Arm64LogicalImmResult
+	if value == 0 or value == u64.max 'degenerate'
+		return Arm64LogicalImmResult.notEncodable
+	end 'degenerate'
+
+	// Find the repeating element size: halve until the two halves of the candidate element differ.
+	var size = 64
+	while size > 2 'shrink'
+		let half = size / 2
+		let mask = (1 shl half) - 1
+		if (value and mask) != ((value shr half) and mask) 'differ'
+			break
+		end 'differ'
+		size = half
+	end 'shrink'
+
+	let elementMask = fullMaskOfSize(size)
+	var imm = value and elementMask
+
+	var rotationStart = 0
+	var runLength = 0
+	if arm64IsShiftedMask(imm) 'directRun'
+		// The run does not wrap: its bottom is at the trailing-zero count, its length the ones above.
+		rotationStart = arm64CountTrailingZeros(imm)
+		runLength = arm64CountTrailingOnes(imm shr rotationStart)
+	end 'directRun' else 'wrappedRun'
+		// The run wraps the element boundary. Fill the high bits outside the element and require the
+		// COMPLEMENT to be a shifted mask (the gap between the two run fragments is itself one run).
+		imm = imm or not elementMask
+		if not arm64IsShiftedMask(not imm) 'notMask'
+			return Arm64LogicalImmResult.notEncodable
+		end 'notMask'
+		let leadingOnes = arm64CountLeadingOnes(imm)
+		rotationStart = 64 - leadingOnes
+		runLength = leadingOnes + arm64CountTrailingOnes(imm) - (64 - size)
+	end 'wrappedRun'
+
+	// immr is the right-rotation that returns the run to bit 0; imms carries the element-size prefix
+	// (`~(size-1) << 1`) OR'd with (runLength − 1); N is that prefix's bit 6, inverted (1 iff size 64).
+	let immr = (size - rotationStart) and (size - 1)
+	let nImms = (not (size - 1)) shl 1
+	let imms = (nImms or (runLength - 1)) and 0x3F
+	let n = ((nImms shr 6) and 0x1) xor 0x1
+	return Arm64LogicalImmResult.encodable(n, immr: immr, imms: imms)
+end 'arm64EncodeLogicalImm'
+
+// The all-ones mask of a given power-of-two bit width (64 handled without a 1<<64 overflow).
+function fullMaskOfSize(size MachineWord) returns MachineWord
+	if size >= 64 'full'
+		return u64.max
+	end 'full'
+	return (1 shl size) - 1
+end 'fullMaskOfSize'
+
+// Emit a logical bitmask-immediate op `op Rd, Rn, #imm`. `value` is the immediate two's-complement
+// low bits; a non-encodable value panics (ISEL must materialise it — see `arm64EncodeLogicalImm`).
+function arm64EmitLogicalImm(code ByteArray, opcode MachineWord, rd MachineWord, rn MachineWord, value MachineWord)
+	match arm64EncodeLogicalImm(value) 'enc'
+		encodable(n, immr, imms) then emitArm64Insn(code, insn: opcode or (n shl Arm64LogicalNShift) or (immr shl Arm64LogicalImmrShift) or (imms shl Arm64LogicalImmsShift) or (rn shl Arm64RnShift) or rd)
+		notEncodable then panic("arm64 emitter: logical immediate {value} is not an encodable AArch64 bitmask — ISel must materialise a non-bitmask logical immediate into a register and use the register form")
+	end 'enc'
+end 'arm64EmitLogicalImm'
+
+// ==========================================================================
+// Add/sub immediate (with the hi/lo split for offsets past 12 bits)
+// ==========================================================================
+
+// ADD/SUB Rd, Rn, #imm12 [, LSL #12] — one instruction, imm12 field.
+function arm64EmitAddSubImm12(code ByteArray, opcode MachineWord, rd MachineWord, rn MachineWord, imm12 MachineWord, shiftHi bool)
+	let shBit = Arm64ImmShiftHiBit if shiftHi else 0
+	emitArm64Insn(code, insn: opcode or shBit or ((imm12 and Arm64ImmMask) shl Arm64ImmShift) or (rn shl Arm64RnShift) or rd)
+end 'arm64EmitAddSubImm12'
+
+// ADD/SUB Rd, Rn, #imm for an immediate that may exceed the 12-bit field: a plain 12-bit form
+// silently truncates any value ≥ 0x1000, corrupting a large stack-slot address or frame size (M1
+// trap). Splits into a high (<<12) and low part; `rd` doubles as the running accumulator, so it is
+// safe even when `rd == rn`. `opcode` selects ADD (`Arm64OpAddImm`) or SUB (`Arm64OpSubImm`).
+function arm64EmitAddSubImmWide(code ByteArray, opcode MachineWord, rd MachineWord, rn MachineWord, imm MachineWord)
+	if imm > Arm64StackSplitMax 'tooLarge'
+		panic("arm64EmitAddSubImmWide: immediate {imm} exceeds the 24-bit encodable range")
+	end 'tooLarge'
+	let high = (imm shr 12) and Arm64ImmMask
+	let low = imm and Arm64ImmMask
+	if high == 0 'smallImm'
+		arm64EmitAddSubImm12(code, opcode: opcode, rd: rd, rn: rn, imm12: low, shiftHi: false)
+		return
+	end 'smallImm'
+	arm64EmitAddSubImm12(code, opcode: opcode, rd: rd, rn: rn, imm12: high, shiftHi: true)
+	if low > 0 'hasLow'
+		arm64EmitAddSubImm12(code, opcode: opcode, rd: rd, rn: rd, imm12: low, shiftHi: false)
+	end 'hasLow'
+end 'arm64EmitAddSubImmWide'
+
+// The immediate form of `arm64AddImm`/`arm64SubImm`: a signed `Imm32`. A negative literal on the ADD
+// side is a SUB of its magnitude (and vice versa), and a magnitude past the 12-bit field routes
+// through the hi/lo split. `rd`/`rn` are independent (arm64's ADD-immediate is 3-address), so this is
+// never a two-address reuse.
+function arm64EmitAddImmSigned(code ByteArray, rd MachineWord, rn MachineWord, imm Imm32)
+	if imm >= 0 'nonNeg'
+		arm64EmitAddSubImmWide(code, opcode: Arm64OpAddImm, rd: rd, rn: rn, imm: imm)
+		return
+	end 'nonNeg'
+	arm64EmitAddSubImmWide(code, opcode: Arm64OpSubImm, rd: rd, rn: rn, imm: 0 - imm)
+end 'arm64EmitAddImmSigned'
+
+function arm64EmitSubImmSigned(code ByteArray, rd MachineWord, rn MachineWord, imm Imm32)
+	if imm >= 0 'nonNeg'
+		arm64EmitAddSubImmWide(code, opcode: Arm64OpSubImm, rd: rd, rn: rn, imm: imm)
+		return
+	end 'nonNeg'
+	arm64EmitAddSubImmWide(code, opcode: Arm64OpAddImm, rd: rd, rn: rn, imm: 0 - imm)
+end 'arm64EmitSubImmSigned'
+
+// ==========================================================================
+// Constant shifts (LSL/LSR via UBFM, ASR via SBFM)
+// ==========================================================================
+
+function arm64EmitBitfield(code ByteArray, opcode MachineWord, rd MachineWord, rn MachineWord, immr MachineWord, imms MachineWord)
+	emitArm64Insn(code, insn: opcode or ((immr and 0x3F) shl Arm64BitfieldImmrShift) or ((imms and 0x3F) shl Arm64BitfieldImmsShift) or (rn shl Arm64RnShift) or rd)
+end 'arm64EmitBitfield'
+
+// LSL Xd, Xn, #sh = UBFM Xd, Xn, #(-sh mod 64), #(63-sh).
+function arm64EmitLslImm(code ByteArray, rd MachineWord, rn MachineWord, sh ShiftCount)
+	let shift = shiftCountBits(sh)
+	arm64EmitBitfield(code, opcode: Arm64OpUbfm, rd: rd, rn: rn, immr: (64 - shift) and Arm64WordBitMax, imms: Arm64WordBitMax - shift)
+end 'arm64EmitLslImm'
+
+// LSR Xd, Xn, #sh = UBFM Xd, Xn, #sh, #63.
+function arm64EmitLsrImm(code ByteArray, rd MachineWord, rn MachineWord, sh ShiftCount)
+	let shift = shiftCountBits(sh)
+	arm64EmitBitfield(code, opcode: Arm64OpUbfm, rd: rd, rn: rn, immr: shift, imms: Arm64WordBitMax)
+end 'arm64EmitLsrImm'
+
+// ASR Xd, Xn, #sh = SBFM Xd, Xn, #sh, #63.
+function arm64EmitAsrImm(code ByteArray, rd MachineWord, rn MachineWord, sh ShiftCount)
+	let shift = shiftCountBits(sh)
+	arm64EmitBitfield(code, opcode: Arm64OpSbfm, rd: rd, rn: rn, immr: shift, imms: Arm64WordBitMax)
+end 'arm64EmitAsrImm'
+
+// A shift count as a machine word, clamped into the 0..63 the 64-bit shift forms accept — a count
+// out of that range is an ISel bug (a shift-by-≥64 is unspecified and was never a valid Std op).
+function shiftCountBits(sh ShiftCount) returns MachineWord
+	let bits = sh as MachineWord
+	if bits > Arm64WordBitMax 'outOfRange'
+		panic("arm64 emitter: shift count {bits} out of the 0..63 range a 64-bit shift accepts")
+	end 'outOfRange'
+	return bits
+end 'shiftCountBits'
+
+// ==========================================================================
+// Compare / conditional-set
+// ==========================================================================
+
+// CMP Xn, Xm = SUBS XZR, Xn, Xm.
+function arm64EmitCmpReg(code ByteArray, rn MachineWord, rm MachineWord)
+	emitArm64Insn(code, insn: Arm64OpCmpReg or (rm shl Arm64RmShift) or (rn shl Arm64RnShift))
+end 'arm64EmitCmpReg'
+
+// CMP Xn, #imm. The immediate is 12-bit unsigned; a value outside [0, 4095] (a large or negative
+// literal) is materialised into the IP scratch and compared as a register — AArch64 has no wider
+// CMP-immediate, so this is the only correct form (a masked 12-bit truncation would compare the
+// wrong constant).
+function arm64EmitCmpImm(code ByteArray, rn MachineWord, imm Imm32)
+	if imm >= 0 and imm <= Arm64ImmMask 'fits'
+		emitArm64Insn(code, insn: Arm64OpCmpImm or ((imm as MachineWord) shl Arm64ImmShift) or (rn shl Arm64RnShift))
+		return
+	end 'fits'
+	arm64EmitMovImm(code, rd: Arm64Ip0, value: imm32ToWord(imm))
+	arm64EmitCmpReg(code, rn: rn, rm: Arm64Ip0)
+end 'arm64EmitCmpImm'
+
+// A signed `Imm32` as its 64-bit two's-complement pattern — the value `movz`/`movk` must materialise
+// so a negative compare/immediate operand reads with its sign extended.
+function imm32ToWord(imm Imm32) returns MachineWord
+	if imm >= 0 'nonNeg'
+		return imm as MachineWord
+	end 'nonNeg'
+	return u64.max - (0 - imm) + 1
+end 'imm32ToWord'
+
+// CSET Xd, cond = CSINC Xd, XZR, XZR, invert(cond) — one register set from the flags.
+function arm64EmitCset(code ByteArray, rd MachineWord, cond Arm64CondCode)
+	let inverted = (cond.rawValue as MachineWord) xor Arm64CondInvertBit
+	emitArm64Insn(code, insn: Arm64OpCsinc or (inverted shl Arm64CondFieldShift) or rd)
+end 'arm64EmitCset'
+
+// ==========================================================================
+// Register moves and register swap (SSA-destruction cycle break)
+// ==========================================================================
+
+// A GPR reg-reg move: ORR Xd, XZR, Xn.
+function arm64EmitMovGpr(code ByteArray, rd MachineWord, rn MachineWord)
+	emitArm64Insn(code, insn: Arm64OpMovReg or (rn shl Arm64RmShift) or rd)
+end 'arm64EmitMovGpr'
+
+// An FP reg-reg move: FMOV Dd, Dn.
+function arm64EmitFmovD(code ByteArray, rd MachineWord, rn MachineWord)
+	emitArm64Rr(code, opcode: Arm64OpFmovD, rd: rd, rn: rn)
+end 'arm64EmitFmovD'
+
+// `movRegReg` is CLASS-AGNOSTIC (one op, both files): a GPR pair moves through ORR, a SIMD pair
+// through FMOV. The instruction is chosen from the resolved registers, never from the op — the x64
+// side does the same with `mov`/`movsd`. The two must be the SAME class (a copy never crosses files);
+// a mismatch is an allocator bug.
+function arm64EmitRegRegMove(code ByteArray, dest TargetVReg, src TargetVReg)
+	let destGpr = arm64VRegIsGpr(dest)
+	if destGpr != arm64VRegIsGpr(src) 'classMismatch'
+		panic("arm64 emitter: movRegReg between different register files (dest gpr={destGpr}) — a copy never crosses the GPR/SIMD boundary")
+	end 'classMismatch'
+	if destGpr 'gpr'
+		arm64EmitMovGpr(code, rd: arm64GprField(dest), rn: arm64GprField(src))
+	end 'gpr' else 'fp'
+		arm64EmitFmovD(code, rd: arm64FpField(dest), rn: arm64FpField(src))
+	end 'fp'
+end 'arm64EmitRegRegMove'
+
+// `xchgRegReg` is a POST-COLORING physical swap SSA-destruction splices in to break a copy cycle
+// (there is no scratch to spare). AArch64 has no `xchg`, so a GPR pair swaps through the IP scratch
+// x16 in three moves; a SIMD pair swaps scratch-free with a triple vector-EOR (the float twin of
+// x64's triple-xorpd). Both operands share one file — a cross-file swap is meaningless.
+function arm64EmitRegRegSwap(code ByteArray, a TargetVReg, b TargetVReg)
+	let aGpr = arm64VRegIsGpr(a)
+	if aGpr != arm64VRegIsGpr(b) 'classMismatch'
+		panic("arm64 emitter: xchgRegReg between different register files — a swap never crosses the GPR/SIMD boundary")
+	end 'classMismatch'
+	if aGpr 'gpr'
+		let ra = arm64GprField(a)
+		let rb = arm64GprField(b)
+		arm64EmitMovGpr(code, rd: Arm64Ip0, rn: ra)
+		arm64EmitMovGpr(code, rd: ra, rn: rb)
+		arm64EmitMovGpr(code, rd: rb, rn: Arm64Ip0)
+	end 'gpr' else 'fp'
+		let va = arm64FpField(a)
+		let vb = arm64FpField(b)
+		arm64EmitVectorEor(code, rd: va, rn: va, rm: vb)
+		arm64EmitVectorEor(code, rd: vb, rn: vb, rm: va)
+		arm64EmitVectorEor(code, rd: va, rn: va, rm: vb)
+	end 'fp'
+end 'arm64EmitRegRegSwap'
+
+// EOR Vd.8B, Vn.8B, Vm.8B — a 64-bit-lane bitwise XOR of two SIMD registers (covers a d-register's
+// full 64 bits), the swap primitive above builds its three-XOR exchange from.
+function arm64EmitVectorEor(code ByteArray, rd MachineWord, rn MachineWord, rm MachineWord)
+	emitArm64Rrr(code, opcode: Arm64OpEorVec8b, rd: rd, rn: rn, rm: rm)
+end 'arm64EmitVectorEor'
+
+// ==========================================================================
+// Spill / reload and base+disp loads/stores
+// ==========================================================================
+
+// The `[x29 + disp]` displacement of a colored spill slot. x29 points at the saved frame record, and
+// the spill/callee-save area opens at `+16` (past the saved x29/x30 pair); every slot is 8 bytes.
+// The ONE place the arm64 frame-slot arithmetic is spelled, shared by the allocator's spills and the
+// prologue pass's callee-save slots (they address the same frame the same way).
+function arm64SlotDisplacement(slot SpillSlot) returns MachineWord
+	return Arm64FrameRecordBytes + slot * SpillSlotBytes
+end 'arm64SlotDisplacement'
+
+// Access a frame slot at `[x29 + byteOffset]`. Below 256 bytes an unscaled STUR/LDUR encodes the
+// offset directly; at or above it the SCALED form is MANDATORY (the unscaled simm9 truncates ≥ 256 —
+// M1 trap). Offsets here are positive and 8-aligned, so the scaled form always fits. `unscaledOp` /
+// `scaledOp` select the GPR (STUR·STR / LDUR·LDR X) or FP (·D) opcode pair — the class-agnostic slot
+// store and reload each pass their own.
+function arm64EmitFrameSlot(code ByteArray, rt MachineWord, byteOffset MachineWord, unscaledOp MachineWord, scaledOp MachineWord)
+	if byteOffset < Arm64UnscaledSpillThreshold 'unscaled'
+		emitArm64Insn(code, insn: unscaledOp or ((byteOffset and Arm64UnscaledImm9Mask) shl Arm64UnscaledImm9Shift) or (Arm64Fp shl Arm64RnShift) or rt)
+	end 'unscaled' else 'scaled'
+		arm64EmitScaledMem(code, opcode: scaledOp, rt: rt, baseReg: Arm64Fp, byteOffset: byteOffset, scale: SpillSlotBytes)
+	end 'scaled'
+end 'arm64EmitFrameSlot'
+
+// A scaled unsigned-offset load/store `op Rt, [Xn, #imm12*scale]`. The offset must be scale-aligned
+// and fit the 12-bit field — a spill/callee-save or data-field offset always is; a violation is a bug.
+function arm64EmitScaledMem(code ByteArray, opcode MachineWord, rt MachineWord, baseReg MachineWord, byteOffset MachineWord, scale MachineWord)
+	emitArm64Insn(code, insn: opcode or (arm64ScaledImm12(byteOffset, scale: scale) shl Arm64LoadStoreImm12Shift) or (baseReg shl Arm64RnShift) or rt)
+end 'arm64EmitScaledMem'
+
+// The scaled imm12 field of a load/store: `byteOffset / scale`, asserting scale-alignment and range.
+function arm64ScaledImm12(byteOffset MachineWord, scale MachineWord) returns MachineWord
+	if byteOffset mod scale != 0 'unaligned'
+		panic("arm64 emitter: load/store byte offset {byteOffset} is not {scale}-aligned — the scaled imm12 form cannot encode it")
+	end 'unaligned'
+	let scaled = byteOffset / scale
+	if scaled > Arm64LoadStoreImm12Mask 'tooLarge'
+		panic("arm64 emitter: load/store offset {byteOffset} (scaled {scaled}) exceeds the 12-bit unsigned field")
+	end 'tooLarge'
+	return scaled
+end 'arm64ScaledImm12'
+
+// A `[base + disp]` load at the op's width (the data-section access forms). A `word64` load moves
+// through a GPR ldr or an FP ldr per the dest's class (an f64 global is 64 bits either way); a `byte`
+// load is LDRB (zero-extending — a bool must arrive zero-extended, or the upper bits are garbage) and
+// GPR-only.
+function arm64EmitDataLoad(code ByteArray, dest TargetVReg, base MachineWord, disp Imm32, width X64AccessWidth)
+	match width 'w'
+		byte then emitArm64Insn(code, insn: Arm64OpLdrB or ((arm64ByteDisp(disp)) shl Arm64LoadStoreImm12Shift) or (base shl Arm64RnShift) or arm64GprField(dest))
+		word64 then arm64EmitWord64Load(code, dest: dest, base: base, disp: disp)
+	end 'w'
+end 'arm64EmitDataLoad'
+
+function arm64EmitDataStore(code ByteArray, base MachineWord, disp Imm32, src TargetVReg, width X64AccessWidth)
+	match width 'w'
+		byte then emitArm64Insn(code, insn: Arm64OpStrB or ((arm64ByteDisp(disp)) shl Arm64LoadStoreImm12Shift) or (base shl Arm64RnShift) or arm64GprField(src))
+		word64 then arm64EmitWord64Store(code, base: base, disp: disp, src: src)
+	end 'w'
+end 'arm64EmitDataStore'
+
+// The unscaled 12-bit displacement of a byte load/store — LDRB/STRB scale by 1. A negative or
+// oversized displacement is an ISel bug (a data field offset is small and non-negative).
+function arm64ByteDisp(disp Imm32) returns MachineWord
+	if disp < 0 or (disp as MachineWord) > Arm64LoadStoreImm12Mask 'outOfRange'
+		panic("arm64 emitter: byte load/store displacement {disp} out of the 0..4095 range LDRB/STRB encodes")
+	end 'outOfRange'
+	return disp as MachineWord
+end 'arm64ByteDisp'
+
+// A 64-bit `[base + disp]` load, class-dispatched: GPR through LDR Xt, SIMD through LDR Dt. `disp` is
+// scaled by 8 (both widths are 8 bytes).
+function arm64EmitWord64Load(code ByteArray, dest TargetVReg, base MachineWord, disp Imm32)
+	let byteOff = arm64NonNegDisp(disp)
+	if arm64VRegIsGpr(dest) 'gpr'
+		arm64EmitScaledMem(code, opcode: Arm64OpLdrX, rt: arm64GprField(dest), baseReg: base, byteOffset: byteOff, scale: SpillSlotBytes)
+	end 'gpr' else 'fp'
+		arm64EmitScaledMem(code, opcode: Arm64OpLdrD, rt: arm64FpField(dest), baseReg: base, byteOffset: byteOff, scale: SpillSlotBytes)
+	end 'fp'
+end 'arm64EmitWord64Load'
+
+function arm64EmitWord64Store(code ByteArray, base MachineWord, disp Imm32, src TargetVReg)
+	let byteOff = arm64NonNegDisp(disp)
+	if arm64VRegIsGpr(src) 'gpr'
+		arm64EmitScaledMem(code, opcode: Arm64OpStrX, rt: arm64GprField(src), baseReg: base, byteOffset: byteOff, scale: SpillSlotBytes)
+	end 'gpr' else 'fp'
+		arm64EmitScaledMem(code, opcode: Arm64OpStrD, rt: arm64FpField(src), baseReg: base, byteOffset: byteOff, scale: SpillSlotBytes)
+	end 'fp'
+end 'arm64EmitWord64Store'
+
+function arm64NonNegDisp(disp Imm32) returns MachineWord
+	if disp < 0 'neg'
+		panic("arm64 emitter: negative base+disp {disp} — a data-section field offset is non-negative")
+	end 'neg'
+	return disp as MachineWord
+end 'arm64NonNegDisp'
+
+// ==========================================================================
+// Chunk-local block branches (b / b.cond / cbz / cbnz)
+// ==========================================================================
+
+// A pending within-function branch: the chunk-local offset of the branch instruction and the block
+// it targets. `wide` selects the field width — an unconditional `b` carries a 26-bit imm (±128 MiB),
+// a `b.cond`/`cbz`/`cbnz` a 19-bit imm (±1 MiB). A function's blocks are contiguous within its one
+// chunk, so these resolve HERE (like x64's `resolveChunkRel32Fixups`), independent of concat.
+type Arm64BlockBranchFixup
+	export var codeOffset as CodeOffset
+	export var targetBlock as BlockId
+	export var wide as bool
+
+	static function create(codeOffset CodeOffset, targetBlock BlockId, wide bool) returns Arm64BlockBranchFixup
+		return Self{codeOffset: codeOffset, targetBlock: targetBlock, wide: wide}
+	end 'create'
+end 'Arm64BlockBranchFixup'
+
+typealias Arm64BlockBranchFixupArray = Array with Arm64BlockBranchFixup
+typealias Arm64BlockOffsetMap = Map with (BlockId, CodeOffset)
+
+// `b` to a block — placeholder imm26, fixup recorded.
+function arm64EmitBranch(code ByteArray, fixups Arm64BlockBranchFixupArray, targetBlock BlockId)
+	fixups.push(Arm64BlockBranchFixup.create(code.count(), targetBlock: targetBlock, wide: true))
+	emitArm64Insn(code, insn: Arm64OpB)
+end 'arm64EmitBranch'
+
+// `b.cond` to a block — placeholder imm19, condition in the low nibble.
+function arm64EmitCondBranch(code ByteArray, fixups Arm64BlockBranchFixupArray, cond Arm64CondCode, targetBlock BlockId)
+	fixups.push(Arm64BlockBranchFixup.create(code.count(), targetBlock: targetBlock, wide: false))
+	emitArm64Insn(code, insn: Arm64OpBcond or (cond.rawValue as MachineWord))
+end 'arm64EmitCondBranch'
+
+// `cbz`/`cbnz Xt` to a block — a fused zero-test with no preceding compare, placeholder imm19.
+function arm64EmitCbz(code ByteArray, fixups Arm64BlockBranchFixupArray, reg MachineWord, targetBlock BlockId)
+	fixups.push(Arm64BlockBranchFixup.create(code.count(), targetBlock: targetBlock, wide: false))
+	emitArm64Insn(code, insn: Arm64OpCbz or reg)
+end 'arm64EmitCbz'
+
+function arm64EmitCbnz(code ByteArray, fixups Arm64BlockBranchFixupArray, reg MachineWord, targetBlock BlockId)
+	fixups.push(Arm64BlockBranchFixup.create(code.count(), targetBlock: targetBlock, wide: false))
+	emitArm64Insn(code, insn: Arm64OpCbnz or reg)
+end 'arm64EmitCbnz'
+
+// Patch every pending block branch to its target's chunk-local offset. A branch's displacement is
+// PC-relative from the branch itself (not the end of a field, as on x64) and scaled by 4.
+function arm64ResolveBlockBranches(code ByteArray, blockOffsets Arm64BlockOffsetMap, fixups Arm64BlockBranchFixupArray)
+	for fixup in fixups 'resolve'
+		let targetOffset = try blockOffsets.get(fixup.targetBlock) otherwise panic("arm64ResolveBlockBranches: branch to block {fixup.targetBlock} with no recorded offset")
+		if fixup.wide 'uncond'
+			arm64PatchBranch26(code, codeOffset: fixup.codeOffset, targetOffset: targetOffset)
+		end 'uncond' else 'cond'
+			arm64PatchBranch19(code, codeOffset: fixup.codeOffset, targetOffset: targetOffset)
+		end 'cond'
+	end 'resolve'
+end 'arm64ResolveBlockBranches'
+
+// True when a two's-complement byte displacement falls outside the ±`reach` window — its value is
+// either too-large positive or (as an unsigned wrap) too-large negative. A `String`-free arithmetic
+// helper so each caller keeps its own specific overflow message without paying an eager allocation.
+function arm64BranchOutOfReach(rel MachineWord, reach MachineWord) returns bool
+	return rel > reach - 1 and rel < u64.max - reach + 1
+end 'arm64BranchOutOfReach'
+
+// Patch a 26-bit branch (`b`/`bl`) imm26 field, preserving the opcode bits [31:26]. Guards the
+// ±128 MiB reach — an out-of-range branch is a loud link error, never a wrapped displacement.
+function arm64PatchBranch26(code ByteArray, codeOffset CodeOffset, targetOffset CodeOffset)
+	let rel = arm64RelBytes(targetOffset, codeOffset: codeOffset)
+	if arm64BranchOutOfReach(rel, reach: Arm64BranchByteReach) 'overflow'
+		panic("arm64PatchBranch26: branch displacement out of ±128 MiB (codeOffset={codeOffset}, target={targetOffset}) — relocation overflow")
+	end 'overflow'
+	let relInsns = arm64RelInstructions(rel)
+	let orig = try readDword(code, offset: codeOffset) otherwise panic("arm64PatchBranch26: codeOffset {codeOffset} past end of code (count={code.count()})")
+	patchDword(code, offset: codeOffset, value: (orig and (not Arm64Imm26Mask)) or (relInsns and Arm64Imm26Mask))
+end 'arm64PatchBranch26'
+
+// Patch a 19-bit branch (`b.cond`/`cbz`/`cbnz`) imm19 field at bit 5, preserving bits [31:24] (the
+// opcode + condition/op) and [4:0] (the Rt of a cbz/cbnz). Guards the ±1 MiB reach.
+function arm64PatchBranch19(code ByteArray, codeOffset CodeOffset, targetOffset CodeOffset)
+	let rel = arm64RelBytes(targetOffset, codeOffset: codeOffset)
+	if arm64BranchOutOfReach(rel, reach: Arm64CondBranchByteReach) 'overflow'
+		panic("arm64PatchBranch19: conditional-branch displacement out of ±1 MiB (codeOffset={codeOffset}, target={targetOffset}) — relocation overflow")
+	end 'overflow'
+	let relInsns = arm64RelInstructions(rel)
+	let orig = try readDword(code, offset: codeOffset) otherwise panic("arm64PatchBranch19: codeOffset {codeOffset} past end of code (count={code.count()})")
+	patchDword(code, offset: codeOffset, value: (orig and 0xFF00001F) or ((relInsns and Arm64Imm19Mask) shl Arm64Imm19Shift))
+end 'arm64PatchBranch19'
+
+// The signed byte displacement `target − instr`, wrapped into u64 two's-complement.
+function arm64RelBytes(targetOffset CodeOffset, codeOffset CodeOffset) returns MachineWord
+	if targetOffset >= codeOffset 'forward'
+		return targetOffset - codeOffset
+	end 'forward'
+	return u64.max - (codeOffset - targetOffset) + 1
+end 'arm64RelBytes'
+
+// A byte displacement as a count of instructions (÷4), sign-preserving on the two's-complement value.
+function arm64RelInstructions(relBytes MachineWord) returns MachineWord
+	if relBytes < 0x8000000000000000 'nonNeg'
+		return relBytes / 4
+	end 'nonNeg'
+	// Negative: arithmetic shift by dividing the magnitude and re-wrapping.
+	let magnitude = u64.max - relBytes + 1
+	return u64.max - (magnitude / 4) + 1
+end 'arm64RelInstructions'
+
+// ==========================================================================
+// The per-op encoder
+// ==========================================================================
+
+// Encode one arm64 `TargetOp` into `code`, recording call / rdata / block-branch fixups. `callFixups`
+// collects `bl` sites concat resolves by name; `rdataRelocs` collects the ADRP+ADD/LDR code→data
+// references the writer patches; `branchFixups` collects within-function branches resolved once every
+// block's offset is known. EXHAUSTIVE over `TargetOp`: the x64-only arms panic (the x64 encoder owns
+// them — `buildBackend` dispatches on `target.cpu`), and the SHARED arms arm64 reuses (`movRegReg`,
+// the spill/reload and base+disp forms, `xchgRegReg`) are encoded here.
+function emitArm64TargetOp(op TargetOp, code ByteArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, branchFixups Arm64BlockBranchFixupArray)
+	match op 'emit'
+		// --- x64-only control/frame band ---
+		prologue to movRegImm32 then panic("emitArm64TargetOp: an x64 control/frame op reached the arm64 encoder — the x64 encoder owns the x64 band (buildBackend dispatches on target.cpu)")
+		// --- shared: reg-reg move ---
+		movRegReg(dest, src) then arm64EmitRegRegMove(code, dest: dest, src: src)
+		// --- x64-only ALU band ---
+		movReg32Reg32 to cmpRegImm32 then panic("emitArm64TargetOp: an x64 ALU op reached the arm64 encoder")
+		// --- shared: post-coloring swap ---
+		xchgRegReg(a, b) then arm64EmitRegRegSwap(code, a: a, b: b)
+		// --- x64-only call/div/frame band ---
+		callDirect to popReg then panic("emitArm64TargetOp: an x64 call/idiv/push/pop op reached the arm64 encoder")
+		// --- shared: spill / reload ---
+		storeSlotReg(slot, srcReg) then arm64EmitStoreSlot(code, slot: slot, srcReg: srcReg)
+		loadRegSlot(destReg, slot) then arm64EmitLoadSlot(code, destReg: destReg, slot: slot)
+		// --- x64-only word ALU / shift / setcc / lea-global band ---
+		andRegReg to leaRegGlobal then panic("emitArm64TargetOp: an x64 word-ALU/shift/setcc op reached the arm64 encoder")
+		// --- shared: base+disp data access ---
+		loadRegBaseDisp(dest, base, disp, width) then arm64EmitDataLoad(code, dest: dest, base: arm64GprField(base), disp: disp, width: width)
+		storeBaseDispReg(base, disp, src, width) then arm64EmitDataStore(code, base: arm64GprField(base), disp: disp, src: src, width: width)
+		// --- x64-only SSE band ---
+		addsdRegReg to leaRegRdata then panic("emitArm64TargetOp: an x64 SSE op reached the arm64 encoder")
+		// --- arm64 band ---
+		arm64Ret then emitArm64Insn(code, insn: Arm64OpRet)
+		arm64Branch(targetBlockId) then arm64EmitBranch(code, fixups: branchFixups, targetBlock: targetBlockId)
+		arm64CondBranch(cond, targetBlockId) then arm64EmitCondBranch(code, fixups: branchFixups, cond: cond, targetBlock: targetBlockId)
+		arm64Cbz(reg, targetBlockId) then arm64EmitCbz(code, fixups: branchFixups, reg: arm64GprField(reg), targetBlock: targetBlockId)
+		arm64Cbnz(reg, targetBlockId) then arm64EmitCbnz(code, fixups: branchFixups, reg: arm64GprField(reg), targetBlock: targetBlockId)
+		arm64MovImm(dest, value) then arm64EmitMovImm(code, rd: arm64GprField(dest), value: value)
+		arm64Prologue(stackSize) then arm64EmitPrologue(code, frameSize: stackSize)
+		arm64Epilogue(stackSize) then arm64EmitEpilogue(code, frameSize: stackSize)
+		arm64Add(dest, lhs, rhs) then emitArm64Rrr(code, opcode: Arm64OpAdd, rd: arm64GprField(dest), rn: arm64GprField(lhs), rm: arm64GprField(rhs))
+		arm64Sub(dest, lhs, rhs) then emitArm64Rrr(code, opcode: Arm64OpSub, rd: arm64GprField(dest), rn: arm64GprField(lhs), rm: arm64GprField(rhs))
+		arm64Mul(dest, lhs, rhs) then emitArm64Rrr(code, opcode: Arm64OpMul, rd: arm64GprField(dest), rn: arm64GprField(lhs), rm: arm64GprField(rhs))
+		arm64Sdiv(dest, lhs, rhs) then emitArm64Rrr(code, opcode: Arm64OpSdiv, rd: arm64GprField(dest), rn: arm64GprField(lhs), rm: arm64GprField(rhs))
+		arm64Udiv(dest, lhs, rhs) then emitArm64Rrr(code, opcode: Arm64OpUdiv, rd: arm64GprField(dest), rn: arm64GprField(lhs), rm: arm64GprField(rhs))
+		arm64Msub(dest, mulLhs, mulRhs, minuend) then arm64EmitMsub(code, rd: arm64GprField(dest), rn: arm64GprField(mulLhs), rm: arm64GprField(mulRhs), ra: arm64GprField(minuend))
+		arm64And(dest, lhs, rhs) then emitArm64Rrr(code, opcode: Arm64OpAnd, rd: arm64GprField(dest), rn: arm64GprField(lhs), rm: arm64GprField(rhs))
+		arm64Orr(dest, lhs, rhs) then emitArm64Rrr(code, opcode: Arm64OpOrr, rd: arm64GprField(dest), rn: arm64GprField(lhs), rm: arm64GprField(rhs))
+		arm64Eor(dest, lhs, rhs) then emitArm64Rrr(code, opcode: Arm64OpEor, rd: arm64GprField(dest), rn: arm64GprField(lhs), rm: arm64GprField(rhs))
+		arm64Lslv(dest, lhs, rhs) then emitArm64Rrr(code, opcode: Arm64OpLslv, rd: arm64GprField(dest), rn: arm64GprField(lhs), rm: arm64GprField(rhs))
+		arm64Asrv(dest, lhs, rhs) then emitArm64Rrr(code, opcode: Arm64OpAsrv, rd: arm64GprField(dest), rn: arm64GprField(lhs), rm: arm64GprField(rhs))
+		arm64Lsrv(dest, lhs, rhs) then emitArm64Rrr(code, opcode: Arm64OpLsrv, rd: arm64GprField(dest), rn: arm64GprField(lhs), rm: arm64GprField(rhs))
+		arm64Neg(dest, src) then emitArm64Rrr(code, opcode: Arm64OpSub, rd: arm64GprField(dest), rn: Arm64XzrField, rm: arm64GprField(src))
+		arm64Mvn(dest, src) then emitArm64Rrr(code, opcode: Arm64OpOrn, rd: arm64GprField(dest), rn: Arm64XzrField, rm: arm64GprField(src))
+		arm64AddImm(dest, src, imm) then arm64EmitAddImmSigned(code, rd: arm64GprField(dest), rn: arm64GprField(src), imm: imm)
+		arm64SubImm(dest, src, imm) then arm64EmitSubImmSigned(code, rd: arm64GprField(dest), rn: arm64GprField(src), imm: imm)
+		arm64AndImm(dest, src, imm) then arm64EmitLogicalImm(code, opcode: Arm64OpAndImm, rd: arm64GprField(dest), rn: arm64GprField(src), value: imm32ToWord(imm))
+		arm64OrrImm(dest, src, imm) then arm64EmitLogicalImm(code, opcode: Arm64OpOrrImm, rd: arm64GprField(dest), rn: arm64GprField(src), value: imm32ToWord(imm))
+		arm64EorImm(dest, src, imm) then arm64EmitLogicalImm(code, opcode: Arm64OpEorImm, rd: arm64GprField(dest), rn: arm64GprField(src), value: imm32ToWord(imm))
+		arm64LslImm(dest, src, imm) then arm64EmitLslImm(code, rd: arm64GprField(dest), rn: arm64GprField(src), sh: imm)
+		arm64AsrImm(dest, src, imm) then arm64EmitAsrImm(code, rd: arm64GprField(dest), rn: arm64GprField(src), sh: imm)
+		arm64LsrImm(dest, src, imm) then arm64EmitLsrImm(code, rd: arm64GprField(dest), rn: arm64GprField(src), sh: imm)
+		arm64Cmp(lhs, rhs) then arm64EmitCmpReg(code, rn: arm64GprField(lhs), rm: arm64GprField(rhs))
+		arm64CmpImm(reg, imm) then arm64EmitCmpImm(code, rn: arm64GprField(reg), imm: imm)
+		arm64Cset(dest, cond) then arm64EmitCset(code, rd: arm64GprField(dest), cond: cond)
+		arm64LeaFuncAddr(dest, funcName) then arm64EmitLeaFuncAddr(code, dest: arm64GprField(dest), funcName: funcName)
+		arm64LeaRdata(dest, label) then arm64EmitAdrpAddPair(code, rdataRelocs: rdataRelocs, dest: arm64GprField(dest), label: label, adrpKind: RdataRelocKind.arm64Adrp, pageOffKind: RdataRelocKind.arm64PageOff)
+		arm64LeaGlobal(dest, label) then arm64EmitAdrpAddPair(code, rdataRelocs: rdataRelocs, dest: arm64GprField(dest), label: label, adrpKind: RdataRelocKind.dataSectionArm64Adrp, pageOffKind: RdataRelocKind.dataSectionArm64PageOff)
+		arm64BranchLink(targetName) then arm64EmitBranchLink(code, callFixups: callFixups, targetName: targetName)
+		arm64BranchLinkReg(reg) then emitArm64Insn(code, insn: Arm64OpBlr or (arm64GprField(reg) shl Arm64RnShift))
+		arm64Fadd(dest, lhs, rhs) then emitArm64Rrr(code, opcode: Arm64OpFaddD, rd: arm64FpField(dest), rn: arm64FpField(lhs), rm: arm64FpField(rhs))
+		arm64Fsub(dest, lhs, rhs) then emitArm64Rrr(code, opcode: Arm64OpFsubD, rd: arm64FpField(dest), rn: arm64FpField(lhs), rm: arm64FpField(rhs))
+		arm64Fmul(dest, lhs, rhs) then emitArm64Rrr(code, opcode: Arm64OpFmulD, rd: arm64FpField(dest), rn: arm64FpField(lhs), rm: arm64FpField(rhs))
+		arm64Fdiv(dest, lhs, rhs) then emitArm64Rrr(code, opcode: Arm64OpFdivD, rd: arm64FpField(dest), rn: arm64FpField(lhs), rm: arm64FpField(rhs))
+		arm64Fcmp(lhs, rhs) then emitArm64Insn(code, insn: Arm64OpFcmpD or (arm64FpField(rhs) shl Arm64RmShift) or (arm64FpField(lhs) shl Arm64RnShift))
+		arm64Scvtf(dest, src) then emitArm64Rr(code, opcode: Arm64OpScvtfD, rd: arm64FpField(dest), rn: arm64GprField(src))
+		arm64Fcvtzs(dest, src) then emitArm64Rr(code, opcode: Arm64OpFcvtzsD, rd: arm64GprField(dest), rn: arm64FpField(src))
+		arm64FpLoadRdata(dest, label) then arm64EmitFpLoadRdata(code, rdataRelocs: rdataRelocs, dest: arm64FpField(dest), label: label)
+	end 'emit'
+end 'emitArm64TargetOp'
+
+// storeSlotReg / loadRegSlot are CLASS-AGNOSTIC (an 8-byte slot holds a GPR or an f64); the
+// instruction is chosen from the resolved register's file.
+function arm64EmitStoreSlot(code ByteArray, slot SpillSlot, srcReg TargetVReg)
+	let disp = arm64SlotDisplacement(slot)
+	if arm64VRegIsGpr(srcReg) 'gpr'
+		arm64EmitFrameSlot(code, rt: arm64GprField(srcReg), byteOffset: disp, unscaledOp: Arm64OpSturX, scaledOp: Arm64OpStrX)
+	end 'gpr' else 'fp'
+		arm64EmitFrameSlot(code, rt: arm64FpField(srcReg), byteOffset: disp, unscaledOp: Arm64OpSturD, scaledOp: Arm64OpStrD)
+	end 'fp'
+end 'arm64EmitStoreSlot'
+
+function arm64EmitLoadSlot(code ByteArray, destReg TargetVReg, slot SpillSlot)
+	let disp = arm64SlotDisplacement(slot)
+	if arm64VRegIsGpr(destReg) 'gpr'
+		arm64EmitFrameSlot(code, rt: arm64GprField(destReg), byteOffset: disp, unscaledOp: Arm64OpLdurX, scaledOp: Arm64OpLdrX)
+	end 'gpr' else 'fp'
+		arm64EmitFrameSlot(code, rt: arm64FpField(destReg), byteOffset: disp, unscaledOp: Arm64OpLdurD, scaledOp: Arm64OpLdrD)
+	end 'fp'
+end 'arm64EmitLoadSlot'
+
+// MSUB Xd, Xn, Xm, Xa => Xd = Xa − Xn*Xm (the remainder builder — `rem = dividend − quotient*divisor`).
+function arm64EmitMsub(code ByteArray, rd MachineWord, rn MachineWord, rm MachineWord, ra MachineWord)
+	emitArm64Insn(code, insn: Arm64OpMsub or (rm shl Arm64RmShift) or (ra shl Arm64MsubRaShift) or (rn shl Arm64RnShift) or rd)
+end 'arm64EmitMsub'
+
+// `bl` to a named function — placeholder imm26, `CallFixup` recorded (concat resolves it by name to a
+// PC-relative 26-bit displacement).
+function arm64EmitBranchLink(code ByteArray, callFixups CallFixupArray, targetName ByteArray)
+	callFixups.push(CallFixup.create(code.count(), targetName: targetName))
+	emitArm64Insn(code, insn: Arm64OpBl)
+end 'arm64EmitBranchLink'
+
+// ADRP Rd, page(label) + ADD Rd, Rd, #pageoff(label) — the ±4 GiB PIE address-materialisation pair
+// the M1 traps mandate for ALL func/global/rdata addresses (NEVER a bare ADR, whose ±1 MiB reach
+// silently truncates). The ADRP files the page reloc, the ADD the within-page reloc; the writer
+// patches both fields once section VAs are known (`patchArm64Adrp`/`patchArm64PageOff`).
+function arm64EmitAdrpAddPair(code ByteArray, rdataRelocs RdataRelocationArray, dest MachineWord, label ByteArray, adrpKind RdataRelocKind, pageOffKind RdataRelocKind)
+	rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: String.from(label), kind: adrpKind))
+	emitArm64Insn(code, insn: Arm64OpAdrp or dest)
+	rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: String.from(label), kind: pageOffKind))
+	arm64EmitAddSubImm12(code, opcode: Arm64OpAddImm, rd: dest, rn: dest, imm12: 0, shiftHi: false)
+end 'arm64EmitAdrpAddPair'
+
+// Load an f64 `.rdata` constant: materialise its address into the IP scratch x16 with the ADRP+ADD
+// pair (±4 GiB reach), then LDR Dd, [x16]. Reuses the address pair rather than an FP LDR-literal so
+// the constant island is reachable at any distance and the within-page reloc lands on an ADD (0x91),
+// which `patchArm64PageOff` already handles.
+function arm64EmitFpLoadRdata(code ByteArray, rdataRelocs RdataRelocationArray, dest MachineWord, label ByteArray)
+	arm64EmitAdrpAddPair(code, rdataRelocs: rdataRelocs, dest: Arm64Ip0, label: label, adrpKind: RdataRelocKind.arm64Adrp, pageOffKind: RdataRelocKind.arm64PageOff)
+	arm64EmitScaledMem(code, opcode: Arm64OpLdrD, rt: dest, baseReg: Arm64Ip0, byteOffset: 0, scale: SpillSlotBytes)
+end 'arm64EmitFpLoadRdata'
+
+// leaFuncAddr materialises a FUNCTION's `.text` address. ⚠ STOP-AND-REPORT: encoding it as the
+// mandated ADRP+ADD pair is straightforward, but the frozen `FunctionCodeChunk`/`CodeResult` contract
+// carries NO channel for a code→`.text`-function ADRP+ADD relocation (v1 carries it via a dedicated
+// `Arm64AdrFixupArray` → `Arm64FuncAdrpRelocArray`; `CodeResult.maxon` records that shv2 "OMITTED"
+// those arm64 ADR-fixup arrays, to "grow those fields back at the arm64 milestone"). Wiring that field
+// spans `FunctionCodeChunk`, `CodeResult` and the writer — a cross-cutting change owned by the
+// coordinator/writer agent, not this encoder. The scalar-core ISel does not emit `arm64LeaFuncAddr`
+// this rung (function values arrive with closures), so this blocks nothing exercised; if one appears,
+// this panics LOUDLY rather than emitting a placeholder whose address would stay zero.
+function arm64EmitLeaFuncAddr(code ByteArray, dest MachineWord, funcName ByteArray)
+	panic("arm64EmitLeaFuncAddr: a code→.text-function ADRP+ADD relocation has no channel in the frozen FunctionCodeChunk/CodeResult contract (v1's Arm64FuncAdrpReloc arrays were omitted — see CodeResult.maxon). Wiring `arm64FuncAdrpRelocs` through the chunk, CodeResult and the writer is a coordinator/writer integration. dest=x{dest}, funcName={String.from(funcName)}, at code offset {code.count()}")
+end 'arm64EmitLeaFuncAddr'
+
+// ==========================================================================
+// Prologue / epilogue expansion (the frame ops the prologue pass inserts)
+// ==========================================================================
+
+// The saved frame record (x29/x30) occupies the first 16 bytes of every frame; the spill/callee-save
+// slot area opens above it. The single source of the arm64 frame-record size, shared with
+// `arm64SlotDisplacement` and the prologue pass.
+export let Arm64FrameRecordBytes = 16
+
+// Open the frame: STP x29, x30, [sp, #-N]! + MOV x29, sp for a frame within the pre-index reach, else
+// a SUB-sp split (the imm7 field cannot encode a large frame) with the record stored at the new sp.
+// The `mov x29, sp` is ADD x29, sp, #0 — a MOV involving SP MUST be the ADD alias, never the ORR/XZR
+// form (register 31 is SP here, not XZR — M1 trap).
+function arm64EmitPrologue(code ByteArray, frameSize StackSize)
+	if frameSize <= Arm64FramePairIndexMax 'compact'
+		arm64EmitStpPreIndex(code, frameSize: frameSize)
+		arm64EmitMovFpFromSp(code)
+	end 'compact' else 'large'
+		arm64EmitStackAlloc(code, amount: frameSize)
+		arm64EmitFrameRecordPair(code, opcode: Arm64OpStpOffX, offset: 0)
+		arm64EmitMovFpFromSp(code)
+	end 'large'
+end 'arm64EmitPrologue'
+
+// Close the frame: LDP x29, x30, [sp], #N for a compact frame, else reload the record and free the
+// frame with an ADD-sp split. The `ret` is the separate `arm64Ret` terminator, exactly as x64's
+// `epilogue` releases the frame and leaves the `ret` to the terminator.
+function arm64EmitEpilogue(code ByteArray, frameSize StackSize)
+	if frameSize <= Arm64FramePairIndexMax 'compact'
+		arm64EmitLdpPostIndex(code, frameSize: frameSize)
+	end 'compact' else 'large'
+		arm64EmitFrameRecordPair(code, opcode: Arm64OpLdpOffX, offset: 0)
+		arm64EmitStackFree(code, amount: frameSize)
+	end 'large'
+end 'arm64EmitEpilogue'
+
+// STP x29, x30, [sp, #-frameSize]! (pre-indexed). imm7 is signed, scaled by 8.
+function arm64EmitStpPreIndex(code ByteArray, frameSize StackSize)
+	let imm7 = ((0 - frameSize) / 8) and Arm64PairImm7Mask
+	emitArm64Insn(code, insn: Arm64OpStpPreX or (imm7 shl Arm64PairImm7Shift) or (Arm64Lr shl Arm64Rt2Shift) or (Arm64SpBaseField shl Arm64RnShift) or Arm64Fp)
+end 'arm64EmitStpPreIndex'
+
+// LDP x29, x30, [sp], #frameSize (post-indexed).
+function arm64EmitLdpPostIndex(code ByteArray, frameSize StackSize)
+	let imm7 = (frameSize / 8) and Arm64PairImm7Mask
+	emitArm64Insn(code, insn: Arm64OpLdpPostX or (imm7 shl Arm64PairImm7Shift) or (Arm64Lr shl Arm64Rt2Shift) or (Arm64SpBaseField shl Arm64RnShift) or Arm64Fp)
+end 'arm64EmitLdpPostIndex'
+
+// STP/LDP x29, x30, [sp, #offset] (plain signed offset) — the large-frame record store/reload.
+// `opcode` selects STP (`Arm64OpStpOffX`) or LDP (`Arm64OpLdpOffX`).
+function arm64EmitFrameRecordPair(code ByteArray, opcode MachineWord, offset MachineWord)
+	emitArm64Insn(code, insn: opcode or (((offset / 8) and Arm64PairImm7Mask) shl Arm64PairImm7Shift) or (Arm64Lr shl Arm64Rt2Shift) or (Arm64SpBaseField shl Arm64RnShift) or Arm64Fp)
+end 'arm64EmitFrameRecordPair'
+
+// MOV x29, sp = ADD x29, sp, #0 (NOT the ORR/XZR MOV alias — see the SP-vs-XZR note).
+function arm64EmitMovFpFromSp(code ByteArray)
+	arm64EmitAddSubImm12(code, opcode: Arm64OpAddImm, rd: Arm64Fp, rn: Arm64SpBaseField, imm12: 0, shiftHi: false)
+end 'arm64EmitMovFpFromSp'
+
+// SUB sp, sp, #amount — reserve a large frame, splitting across the imm12 limit (a frame past 4 KiB
+// needs the hi/lo pair; the pre-index STP could not encode it at all). SP cannot be a shifted-register
+// operand, so the ADD/SUB-immediate `sh` split is the only scratch-free form.
+function arm64EmitStackAlloc(code ByteArray, amount StackSize)
+	arm64EmitAddSubImmWide(code, opcode: Arm64OpSubImm, rd: Arm64SpBaseField, rn: Arm64SpBaseField, imm: amount)
+end 'arm64EmitStackAlloc'
+
+// ADD sp, sp, #amount — free the frame (mirror of `arm64EmitStackAlloc`).
+function arm64EmitStackFree(code ByteArray, amount StackSize)
+	arm64EmitAddSubImmWide(code, opcode: Arm64OpAddImm, rd: Arm64SpBaseField, rn: Arm64SpBaseField, imm: amount)
+end 'arm64EmitStackFree'
+
+// ==========================================================================
+// Per-function chunk emission
+// ==========================================================================
+
+// Emit one function into a FunctionCodeChunk with CHUNK-LOCAL fixup offsets — the arm64 twin of
+// `X64Backend.emitFunctionChunk`. Inter-function `bl` fixups (`callFixups`) and code→data references
+// (`rdataRelocs`) are rebased by concat; within-function block branches are resolved HERE, since a
+// function's blocks are contiguous within its one chunk.
+export function emitArm64FunctionChunk(module TargetModule, func IrFunction) returns FunctionCodeChunk
+	var code = ByteArray.create()
+	var callFixups = CallFixupArray.create()
+	var rdataRelocs = RdataRelocationArray.create()
+	var branchFixups = Arm64BlockBranchFixupArray.create()
+	var blockOffsets = Arm64BlockOffsetMap.create()
+
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("emitArm64FunctionChunk: blockRef from func.blockRefs not in module.blocks")
+
+		blockOffsets.upsert(block.id, value: code.count())
+
+		for opIdx in block.opRefs 'eachOp'
+			let op = try module.ops.get(opIdx) otherwise panic("emitArm64FunctionChunk: opIdx {opIdx} not in module.ops")
+			emitArm64TargetOp(op, code: code, callFixups: callFixups, rdataRelocs: rdataRelocs, branchFixups: branchFixups)
+		end 'eachOp'
+
+		if block.hasTerminatorOp() 'hasTerm'
+			let termOp = try module.ops.get(block.terminatorIndex()) otherwise panic("emitArm64FunctionChunk: terminator not in module.ops")
+			emitArm64TargetOp(termOp, code: code, callFixups: callFixups, rdataRelocs: rdataRelocs, branchFixups: branchFixups)
+		end 'hasTerm'
+	end 'eachBlock'
+
+	arm64ResolveBlockBranches(code, blockOffsets: blockOffsets, fixups: branchFixups)
+
+	// The scalar core registers no rdata constants inside a function chunk (float islands are
+	// registered upstream by the lowering); the field stays empty, exactly as x64's does this rung.
+	return FunctionCodeChunk.createWith(func.name, code: code, callFixups: callFixups, rdataRelocs: rdataRelocs, iatRelocs: RelocationArray.create(), rdataConstants: GlobalDataTable.create())
+end 'emitArm64FunctionChunk'
+
+// Append the hand-assembled arm64 runtime chunks (entry stub, div-by-zero panic path, symbol table)
+// after user code — the arm64 twin of `appendX64RuntimeChunks`. ⭐ WAVE-2 STUB: the runtime chunks
+// are `Arm64Runtime.maxon`'s deliverable (the RUNTIME agent's wave); this is the seam it fills.
+export function appendArm64RuntimeChunks(chunks FunctionCodeChunkArray)
+	panic("appendArm64RuntimeChunks: the arm64 runtime chunks (entry stub, div-by-zero panic path) are Arm64Runtime.maxon's deliverable — not yet landed (RUNTIME agent, wave 2) [{chunks.count()} user chunk(s)]")
+end 'appendArm64RuntimeChunks'
+
+// ==========================================================================
+// Concatenation: lay out .text, rebase fixups, resolve intra-module calls
+// ==========================================================================
+
+typealias Arm64FuncLabelOffsetMap = Map with (ByteArray, CodeOffset)
+
+// Concatenate the per-function chunks into `.text`, rebase each chunk's fixups to absolute offsets,
+// resolve the intra-module `bl` calls to 26-bit displacements, resolve every code→data reference to
+// its section offset (the writer adds the section VA), and package a format-neutral CodeResult — the
+// arm64 twin of `concatX64FunctionChunks`.
+//
+// ⚠ The `.text`-closing `__symtable` + the mrt_start-is-first guard x64's concat carries depend on the
+// runtime chunk (`mrt_start`, `__symtable`) and on x64-file-private helpers (`buildSymbolTableBytes`);
+// both belong with the RUNTIME agent's wave. This concat lays out `.text` and resolves fixups — its
+// standalone job — and leaves symtable emission to that integration (noted for the coordinator).
+export function concatArm64FunctionChunks(targetModule TargetModule, stdModule StdModule, chunks FunctionCodeChunkArray, globalData GlobalDataTable) returns CodeResult
+	var code = ByteArray.create()
+	var callFixups = CallFixupArray.create()
+	var labelOffsets = Arm64FuncLabelOffsetMap.create()
+	var debugSymbols = DebugSymbolArray.create()
+	var rdataRelocations = RdataRelocationArray.create()
+
+	for chunk in chunks 'eachChunk'
+		let funcStart = code.count()
+		labelOffsets.upsert(chunk.funcName, value: funcStart)
+		debugSymbols.push(DebugSymbol.create(chunk.funcName, codeOffset: funcStart))
+		code.append(chunk.code)
+
+		for fx in chunk.callFixups 'rebaseCalls'
+			callFixups.push(CallFixup.create(funcStart + fx.codeOffset, targetName: fx.targetName))
+		end 'rebaseCalls'
+		for rr in chunk.rdataRelocs 'rebaseRdata'
+			var reloc = RdataRelocation.create(funcStart + rr.codeOffset, rdataLabel: rr.rdataLabel, kind: rr.kind)
+			reloc.rdataOffset = arm64SectionOffsetOfReloc(globalData, reloc: rr)
+			rdataRelocations.push(reloc)
+		end 'rebaseRdata'
+	end 'eachChunk'
+
+	arm64ResolveCallFixups(code, labelOffsets: labelOffsets, callFixups: callFixups)
+
+	var result = CodeResult.create(code, mainCallFixupOffset: 0, relocations: RelocationArray.create(), globalData: globalData, targetModule: targetModule, stdModule: stdModule, rdata: globalData.rdataImage(), rdataRelocations: rdataRelocations, symdata: ByteArray.create(), covDataSectionBytes: ByteArray.create())
+	result.debugSymbols = debugSymbols
+	result.dataPrelude = globalData.dataSectionImage()
+	return result
+end 'concatArm64FunctionChunks'
+
+// The offset of a code→data reference's target WITHIN ITS OWN SECTION — the arm64 twin of x64's
+// `sectionOffsetOfReloc`. The kind names the section: the ADRP/ADD `.rdata` pair resolves against
+// rdata, the `.data` pair against the data section. A kind the arm64 encoder never files panics
+// rather than defaulting to either section (they answer different small integers — a wrong-section
+// resolve, not a near miss).
+function arm64SectionOffsetOfReloc(globalData GlobalDataTable, reloc RdataRelocation) returns CodeOffset
+	return match reloc.kind 'kind'
+		arm64Adrp gives globalData.rdataOffsetOf(reloc.rdataLabel)
+		arm64PageOff gives globalData.rdataOffsetOf(reloc.rdataLabel)
+		dataSectionArm64Adrp gives globalData.dataSectionOffsetOf(reloc.rdataLabel)
+		dataSectionArm64PageOff gives globalData.dataSectionOffsetOf(reloc.rdataLabel)
+		ripRelDisp32 to covdataRipRelDisp32 panic("arm64SectionOffsetOfReloc: '{reloc.rdataLabel}' carries an x64 RIP-relative reloc kind in the arm64 backend")
+		arm64Adr to covdataArm64Adr panic("arm64SectionOffsetOfReloc: '{reloc.rdataLabel}' is a single-ADR reloc kind, which the arm64 encoder does not file (it uses the ADRP+ADD pair — M1 trap)")
+		covdataArm64Adrp to covdataArm64PageOff panic("arm64SectionOffsetOfReloc: '{reloc.rdataLabel}' is a `.covdata` reference, and the scalar-core backend emits no coverage — covdata grows back at its milestone")
+		funcAbs64InRdata panic("arm64SectionOffsetOfReloc: '{reloc.rdataLabel}' is a function-pointer slot inside rdata — layout descriptors arrive with generics")
+	end 'kind'
+end 'arm64SectionOffsetOfReloc'
+
+// Patch every `bl` to the 26-bit PC-relative displacement of its named target (the arm64 twin of
+// `resolveCallFixups`). A bare stdlib-qualified/unqualified fallback is not needed this rung —
+// scalar-core calls resolve directly by name.
+function arm64ResolveCallFixups(code ByteArray, labelOffsets Arm64FuncLabelOffsetMap, callFixups CallFixupArray)
+	for fixup in callFixups 'resolve'
+		let targetOffset = try labelOffsets.get(fixup.targetName) otherwise panic("arm64ResolveCallFixups: bl to unknown function '{String.from(fixup.targetName)}'")
+		arm64PatchBranch26(code, codeOffset: fixup.codeOffset, targetOffset: targetOffset)
+	end 'resolve'
+end 'arm64ResolveCallFixups'
+
+// ==========================================================================
+// Backend driver
+// ==========================================================================
+
+// Run the arm64 backend — the arm64 twin of `BackendDispatch.buildX64Backend`. The SHARED stages
+// (`allocateRegisters`, `augmentWithRuntime`) are reused as-is (the one-allocator / unified-`TargetOp`
+// design); the ISA-specific stages are the arm64 isel (`lowerStdToArm64`), frame
+// (`insertArm64PrologueEpilogue`), encoder and link. `throws CompileError` because register
+// allocation can fail for a real reason (E5001), exactly as the x64 backend does.
 export function buildArm64Backend(stdModule StdModule, target Target, globalData GlobalDataTable, project Project) returns CodeResult throws CompileError
 	let iselProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.isel)
-	// The class column travels forward WITH the module — see StdToArm64Conversion. This stub panics,
-	// so the stages below are the contract wave 1 fills, in this order.
 	var (targetModule, valueClasses) = lowerStdToArm64(stdModule, globalData: globalData)
 	recordPhase(project, phase: CompilePhase.isel, probe: iselProbe)
 
@@ -44,23 +1174,3 @@ export function buildArm64Backend(stdModule StdModule, target Target, globalData
 
 	return codeResult
 end 'buildArm64Backend'
-
-// Encode one function into a FunctionCodeChunk. Wave 1 maps each colored arm64 `TargetOp` (its
-// `RegNum` operands resolved to `Arm64Register`) to its 32-bit encoding — the arm64 twin of
-// `X64Backend.emitFunctionChunk`, with the ADRP+ADD reach guards and the load/store scaling ladders
-// the M1 notes list as arm64 encoding traps.
-export function emitArm64FunctionChunk(module TargetModule, func IrFunction) returns FunctionCodeChunk
-	panic("arm64 emitArm64FunctionChunk: not yet implemented (wave 1) [{module.funcCount()} fn, @{String.from(func.name)}]")
-end 'emitArm64FunctionChunk'
-
-// Append the hand-assembled arm64 runtime chunks (entry stub bytes, the divide-by-zero panic path)
-// after user code — the arm64 twin of `appendX64RuntimeChunks`.
-export function appendArm64RuntimeChunks(chunks FunctionCodeChunkArray)
-	panic("arm64 appendArm64RuntimeChunks: not yet implemented (wave 1) [{chunks.count()} chunk(s)]")
-end 'appendArm64RuntimeChunks'
-
-// Concatenate the per-function chunks into a CodeResult, resolving branch/call/rdata/global fixups
-// against the final `.text`/`.rdata`/`.data` placement — the arm64 twin of `concatX64FunctionChunks`.
-export function concatArm64FunctionChunks(targetModule TargetModule, stdModule StdModule, chunks FunctionCodeChunkArray, globalData GlobalDataTable) returns CodeResult
-	panic("arm64 concatArm64FunctionChunks: not yet implemented (wave 1) [{targetModule.funcCount()} fn, {stdModule.funcCount()} std, {chunks.count()} chunk(s), {globalData.dataSection.count()} data]")
-end 'concatArm64FunctionChunks'

@@ -1,12 +1,208 @@
 // Arm64PrologueEpilogue — inserts the arm64 frame setup/teardown after register allocation, the
 // arm64 twin of `X64PrologueEpilogue.insertPrologueEpilogue`.
 //
-// ⭐ WAVE-1 STUB (arm64-macOS foundation rung). Wave 1 emits, per function: `stp x29, x30, [sp,
-// #-16]!` + `mov x29, sp` to open the saved-FP chain (the same chain the x64 side keeps, needed by
-// the panic backtrace and growable green-thread stacks), the callee-saved `stp`/`ldp` pairs the
-// coloring actually used (x19..x28, d8..d15), and the frame reservation via `sub sp` — with the
-// `arm64EmitStackAlloc` split for frames past the STP pre-index reach (M1 encoding notes). It emits
-// the neutral `arm64Prologue`/`arm64Epilogue` ops the encoder expands.
+// EVERY function gets a REAL FRAME RECORD: the prologue opens with `stp x29, x30, [sp, #-N]!` +
+// `mov x29, sp`, saving the caller's frame pointer and the return address and pointing x29 at them.
+// That saved-x29 chain is a linked list of live frames — exactly what the panic backtrace walks and
+// what a growable green-thread stack's `morestack` relocates — so, like the x64 side, leaves are
+// framed too (a chain with a hole is not a chain). The frame RESERVATION beyond the 16-byte record is
+// still only as large as the function's slots need.
+//
+// ⭐ THE CALLEE-SAVED REGISTERS ARE SPILLED TO FRAME SLOTS, NOT A SEPARATE STP AREA. The arm64
+// allocatable pool includes x19..x28 and d8..d15 (callee-saved), so the coloring may put a value in
+// one; each such register must be preserved. This pass reserves a dedicated frame SLOT per used
+// callee-saved register — ABOVE the allocator's spill slots — and preserves it with the SAME
+// `storeSlotReg`/`loadRegSlot` ops (and the same `[x29 + 16 + slot*8]` addressing) the spiller uses.
+// Reusing the slot ops rather than minting an `stp`-pair op is what keeps the frozen `TargetOp`
+// contract intact: `arm64Prologue`/`arm64Epilogue` carry ONLY the frame size (they cannot carry the
+// callee-saved set), and this is what fills that gap without one.
+//
+// The frame ops are neutral — `arm64Prologue(N)`/`arm64Epilogue(N)` — and the encoder expands each to
+// the real frame sequence (`Arm64Backend.arm64EmitPrologue`/`arm64EmitEpilogue`), with the large-frame
+// SUB-sp split for a frame past the STP pre-index reach.
+
+typealias Arm64RegNumArray = Array with RegNum
+
+// The callee-saved GPR range x19..x28 (RegNum 19..28) and the callee-saved SIMD count d8..d15 (8
+// registers starting at `firstVector + 8`). x29/x30 are the frame record (saved by the STP directly),
+// x16/x17 scratch and x18 the untouchable platform register are never colored, so none appear here.
+let Arm64CalleeSavedGprLow = 19
+let Arm64CalleeSavedGprEnd = 29
+let Arm64CalleeSavedFpFirst = 8
+let Arm64CalleeSavedFpEnd = 16
+
+// Insert prologue/epilogue ops for every function in the module.
 export function insertArm64PrologueEpilogue(module TargetModule, target Target)
-	panic("arm64 insertArm64PrologueEpilogue: not yet implemented (wave 1) [{module.funcCount()} fn, {targetToString(target)}]")
+	logDebug(LogCategory.codegen, message: function() gives "arm64 prologue/epilogue insertion ({targetToString(target)}): {module.funcCount()} function(s)")
+	for func in module.functions 'eachFunc'
+		insertArm64FrameForFunction(module, func: func)
+	end 'eachFunc'
 end 'insertArm64PrologueEpilogue'
+
+// Insert a function's frame: open the frame record, spill the callee-saved registers its coloring
+// used to dedicated slots above the spill area, and mirror both on every `arm64Ret` block.
+//
+// `usedCallee` is read BEFORE anything is inserted, so it reports the COLORING's registers and never
+// this pass's own frame ops.
+function insertArm64FrameForFunction(module TargetModule, func IrFunction)
+	if func.outgoingArgSize != 0 'hasOutgoing'
+		// A frame with outgoing (>8th) stack args needs the record placed ABOVE the outgoing block —
+		// a layout the encoder cannot derive from `arm64Prologue`'s frame size alone (the op does not
+		// carry the outgoing size). The scalar core passes ≤8 int / ≤8 fp args, so this is 0; a >8-arg
+		// call is a later milestone.
+		panic("insertArm64FrameForFunction: '{String.from(func.name)}' has outgoingArgSize {func.outgoingArgSize} — >8-argument calls need the outgoing-arg frame layout, a later arm64 milestone")
+	end 'hasOutgoing'
+
+	let usedCallee = arm64UsedCalleeSaved(module, func: func)
+	let spillSlotCount = func.stackSize / SpillSlotBytes
+	let calleeBytes = usedCallee.count() * SpillSlotBytes
+	let frameSize = alignUp(Arm64FrameRecordBytes + func.stackSize + calleeBytes, alignment: StackFrameAlignment)
+
+	var isFirstBlock = true
+	for blockRef in func.blockRefs 'eachBlock'
+		var block = try module.blocks.get(blockRef) otherwise panic("insertArm64PrologueEpilogue: blockRef from func.blockRefs not in module.blocks")
+
+		if isFirstBlock 'entry'
+			insertArm64PrologueAtEntry(module, block: block, usedCallee: usedCallee, spillSlotCount: spillSlotCount, frameSize: frameSize)
+		end 'entry'
+		isFirstBlock = false
+
+		if blockEndsWithArm64Return(module, block: block) 'returnBlock'
+			appendArm64EpilogueBeforeReturn(module, block: block, usedCallee: usedCallee, spillSlotCount: spillSlotCount, frameSize: frameSize)
+		end 'returnBlock'
+	end 'eachBlock'
+end 'insertArm64FrameForFunction'
+
+// Prepend, to the entry block: the frame-open `arm64Prologue`, then a `storeSlotReg` saving each used
+// callee-saved register to its dedicated slot. Built by prepending each save and the prologue LAST
+// (so the prologue lands at index 0 and every save runs after it — the saves need x29, which the
+// prologue's `mov x29, sp` establishes). The order among the independent saves does not matter.
+function insertArm64PrologueAtEntry(module TargetModule, block IrBlock, usedCallee Arm64RegNumArray, spillSlotCount SpillSlot, frameSize StackSize)
+	for i in 0 upto usedCallee.count() 'eachSave'
+		let reg = try usedCallee.get(i) otherwise panic("insertArm64PrologueAtEntry: usedCallee.get OOB")
+		arm64PrependOp(module, block: block, op: TargetOp.storeSlotReg(spillSlotCount + i, srcReg: arm64PhysVReg(reg)))
+	end 'eachSave'
+	arm64PrependOp(module, block: block, op: TargetOp.arm64Prologue(frameSize))
+end 'insertArm64PrologueAtEntry'
+
+// Append, before the `arm64Ret` terminator: a `loadRegSlot` restoring each used callee-saved register
+// from its slot, then the frame-close `arm64Epilogue`. The restores run while x29 is still valid; the
+// epilogue then tears the frame down and the `arm64Ret` terminator returns.
+function appendArm64EpilogueBeforeReturn(module TargetModule, block IrBlock, usedCallee Arm64RegNumArray, spillSlotCount SpillSlot, frameSize StackSize)
+	for i in 0 upto usedCallee.count() 'eachRestore'
+		let reg = try usedCallee.get(i) otherwise panic("appendArm64EpilogueBeforeReturn: usedCallee.get OOB")
+		module.appendOp(block, op: TargetOp.loadRegSlot(arm64PhysVReg(reg), slot: spillSlotCount + i))
+	end 'eachRestore'
+	module.appendOp(block, op: TargetOp.arm64Epilogue(frameSize))
+end 'appendArm64EpilogueBeforeReturn'
+
+// The callee-saved registers a function's colored body references, in a fixed order (x19..x28, then
+// d8..d15). The coloring puts a value into one of these when it is live across a call or under
+// pressure; each must be preserved. Scanned by unioning every op's physical registers and
+// intersecting with the callee-saved set.
+function arm64UsedCalleeSaved(module TargetModule, func IrFunction) returns Arm64RegNumArray
+	let mask = arm64ScanPhysicalRegs(module, func: func)
+	let fpBase = arm64RegisterFile().firstVector
+	var used = Arm64RegNumArray.create()
+
+	for reg in Arm64CalleeSavedGprLow upto Arm64CalleeSavedGprEnd 'gprs'
+		if regMaskContains(mask, regNum: reg) 'isUsed'
+			used.push(reg)
+		end 'isUsed'
+	end 'gprs'
+	for k in Arm64CalleeSavedFpFirst upto Arm64CalleeSavedFpEnd 'fps'
+		let reg = fpBase + k
+		if regMaskContains(mask, regNum: reg) 'isUsed'
+			used.push(reg)
+		end 'isUsed'
+	end 'fps'
+
+	return used
+end 'arm64UsedCalleeSaved'
+
+// The union of every physical register the function's colored ops name — the mask
+// `arm64UsedCalleeSaved` filters. Runs on the fully-colored, post-SSA-destruction program, so
+// `xchgRegReg` may be present.
+function arm64ScanPhysicalRegs(module TargetModule, func IrFunction) returns RegMask
+	var mask = 0 as RegMask
+	var buf = OperandList.create()
+
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("arm64ScanPhysicalRegs: blockRef from func.blockRefs not in module.blocks")
+		for opIdx in block.opRefs 'eachOp'
+			mask = mask or arm64OpPhysicalRegs(try module.ops.get(opIdx) otherwise panic("arm64ScanPhysicalRegs: opIdx {opIdx} not in module.ops"), buf: buf)
+		end 'eachOp'
+		if block.hasTerminatorOp() 'hasTerm'
+			mask = mask or arm64OpPhysicalRegs(try module.ops.get(block.terminatorIndex()) otherwise panic("arm64ScanPhysicalRegs: terminator not in module.ops"), buf: buf)
+		end 'hasTerm'
+	end 'eachBlock'
+
+	return mask
+end 'arm64ScanPhysicalRegs'
+
+// Every physical register a colored arm64 `TargetOp` names, as a mask. `xchgRegReg` is a
+// POST-COLORING op the operand model rejects, so it is read directly; every other op arm64 emits is
+// read through the shared `targetOpOperands`, so this pass reuses the ONE operand model rather than
+// respelling a per-op register list (the trap x64's hand-written `opPhysicalRegs` still pays). The
+// two ranges flank `xchgRegReg` exactly — it is the sole op between `cmpRegImm32` and `callDirect` —
+// so the match stays exhaustive over `TargetOp` with no bare default.
+function arm64OpPhysicalRegs(op TargetOp, buf OperandList) returns RegMask
+	return match op 'p'
+		xchgRegReg(a, b) gives arm64VRegBit(a) or arm64VRegBit(b)
+		prologue to cmpRegImm32 gives arm64MaskFromOperands(op, buf: buf)
+		callDirect to arm64FpLoadRdata gives arm64MaskFromOperands(op, buf: buf)
+	end 'p'
+end 'arm64OpPhysicalRegs'
+
+// The physical registers of `op`'s explicit operands, via the shared operand model. Implicit
+// registers (a call's caller-saved clobbers, `arm64Ret`'s x0) are deliberately excluded: they are
+// caller-saved and need no preservation, exactly as x64's scan excludes them.
+function arm64MaskFromOperands(op TargetOp, buf OperandList) returns RegMask
+	targetOpOperands(op, buf: buf)
+	var mask = 0 as RegMask
+	for operand in buf 'each'
+		if not operandIsVirtual(operand) 'physical'
+			mask = regMaskAdd(mask, regNum: operandPayload(operand) as RegNum)
+		end 'physical'
+	end 'each'
+	return mask
+end 'arm64MaskFromOperands'
+
+// The single-register mask of a colored operand (for the post-coloring `xchgRegReg`, read outside the
+// operand model). Every operand is physical at this point; a virtual is an allocator bug.
+function arm64VRegBit(vreg TargetVReg) returns RegMask
+	match vreg 'v'
+		physical(reg) then return regMaskAdd(0, regNum: reg)
+		virtual(id) then panic("arm64OpPhysicalRegs: unresolved virtual register v{id} reached the prologue pass — register allocation must color every operand first")
+	end 'v'
+end 'arm64VRegBit'
+
+// A physical arm64 operand from a colored `RegNum`. `TargetVReg.physical` takes the neutral number
+// directly (the callee-saved registers this pass names are already `RegNum`s), so no enum round-trip
+// is needed.
+function arm64PhysVReg(reg RegNum) returns TargetVReg
+	return TargetVReg.physical(reg)
+end 'arm64PhysVReg'
+
+// Prepend `op` at the front of `block`'s op list (a fresh `module.ops` slot). The arm64 twin of x64's
+// prologue-pass prepend; the block's saves and its `arm64Prologue` both use it.
+function arm64PrependOp(module TargetModule, block IrBlock, op TargetOp)
+	let opIdx = module.ops.count()
+	module.ops.push(op)
+	insertOpRef(block, at: 0, opIdx: opIdx)
+end 'arm64PrependOp'
+
+// True when the block's terminator is `arm64Ret` — the site an `arm64Epilogue` precedes. EXHAUSTIVE
+// over `TargetOp` (the ranges cover the whole union), so a new terminator kind fails to compile here
+// until its return-ness is declared.
+function blockEndsWithArm64Return(module TargetModule, block IrBlock) returns bool
+	if not block.hasTerminatorOp() 'noTerm'
+		return false
+	end 'noTerm'
+	let op = try module.ops.get(block.terminatorIndex()) otherwise panic("blockEndsWithArm64Return: terminator not in module.ops")
+	return match op 'check'
+		prologue to leaRegRdata gives false
+		arm64Ret gives true
+		arm64Branch to arm64FpLoadRdata gives false
+	end 'check'
+end 'blockEndsWithArm64Return'
