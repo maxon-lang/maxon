@@ -430,28 +430,6 @@ end 'main'
 error E3054: specs/fragments/error-handling/error.main-cannot-throw.test:7:10: main cannot throw: 'main'
 ```
 
-<!-- test: error.managed-return-throws-unsupported -->
-```maxon
-// A throwing function whose return type is MANAGED (a String, a struct box, or a
-// boxed union) has no value to hand back on the error path, so its adopted result
-// has nothing valid to drop. Rejected at the declaration until P1.4b wave 2.
-enum E implements Error
-	bad
-end 'E'
-
-function mk() returns String throws E
-	throw E.bad
-end 'mk'
-
-function main() returns ExitCode
-	let s = try mk() otherwise "x"
-	return s.byteLength()
-end 'main'
-```
-```maxoncstderr
-error E2015: specs/fragments/error-handling/error.managed-return-throws-unsupported.test:9:10: Unsupported: a throwing function with a managed return type (String, struct, or union) is not yet supported — its error path yields no value, so a managed result would have nothing valid to drop; return a scalar and signal failure through the thrown error (managed error values arrive at P1.4b wave 2)
-```
-
 <!-- test: error.otherwise-type-mismatch -->
 ```maxon
 
@@ -1018,8 +996,7 @@ end 'main'
 7
 ```
 
-<!-- disabled-test: error.otherwise-return-managed-struct -->
-<!-- [wave2-managed] managed struct try-result on the error edge -->
+<!-- test: error.otherwise-return-managed-struct -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -1066,8 +1043,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: error.otherwise-return-string -->
-<!-- [wave2-managed] managed String try-result on the error edge -->
+<!-- test: error.otherwise-return-string -->
 ```maxon
 
 // Regression: try returning String + otherwise return <string literal>.
@@ -1094,6 +1070,191 @@ function main() returns ExitCode
 	let b = wrap(true)
 	if a == "ok" 'x'
 		if b == "??" 'y'
+			return 0
+		end 'y'
+	end 'x'
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: error.otherwise-value-managed-string -->
+```maxon
+
+// A managed String try-result with a fallback STRING LITERAL. The result phi merges the owned ok
+// result with the immortal `otherwise` literal, which must be PROMOTED to an owned copy so the phi
+// drops exactly once on every edge (no decref of read-only rdata, no leak, no NULL decref on the throw).
+enum MyError implements Error
+	failed
+end 'MyError'
+
+function tryIt(flag bool) returns String throws MyError
+	if flag 'c'
+		throw MyError.failed
+	end 'c'
+	return "ok"
+end 'tryIt'
+
+function pick(flag bool) returns String
+	let s = try tryIt(flag) otherwise "fallback"
+	return s
+end 'pick'
+
+function main() returns ExitCode
+	let a = pick(false)
+	let b = pick(true)
+	if a == "ok" 'x'
+		if b == "fallback" 'y'
+			return 0
+		end 'y'
+	end 'x'
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: error.otherwise-value-managed-string-call -->
+```maxon
+
+// A managed String try-result whose `otherwise` fallback is itself an OWNED String from a call — both
+// phi edges are owned, so the phi drops once with no promotion, on the ok AND the error edge alike.
+enum MyError implements Error
+	failed
+end 'MyError'
+
+function tryIt(flag bool) returns String throws MyError
+	if flag 'c'
+		throw MyError.failed
+	end 'c'
+	return "ok"
+end 'tryIt'
+
+function fallback() returns String
+	return "fb"
+end 'fallback'
+
+function pick(flag bool) returns String
+	let s = try tryIt(flag) otherwise fallback()
+	return s
+end 'pick'
+
+function main() returns ExitCode
+	let a = pick(false)
+	let b = pick(true)
+	if a == "ok" 'x'
+		if b == "fb" 'y'
+			return 0
+		end 'y'
+	end 'x'
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: error.discard-managed-result -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+// A managed String try-result whose value is DISCARDED (bare `try` propagate). On the ok edge the box
+// must drop on the ok path (statement drain); on the error edge the result register is NULL and the
+// propagate must not touch it.
+enum MyError implements Error
+	failed
+end 'MyError'
+
+function makeStr(flag bool) returns String throws MyError
+	if flag 'c'
+		throw MyError.failed
+	end 'c'
+	return "hi"
+end 'makeStr'
+
+function runIt(flag bool) returns Integer throws MyError
+	try makeStr(flag)
+	return 5
+end 'runIt'
+
+function main() returns ExitCode
+	let good = try runIt(false) otherwise return 1
+	let bad = try runIt(true) otherwise return good
+	return bad
+end 'main'
+```
+```exitcode
+5
+```
+
+<!-- test: error.propagate-managed-return -->
+```maxon
+
+// A throwing function that RETURNS a managed String, binding a propagated try-result and handing it
+// back. The ok path moves the box out to the caller; the error path propagates (result NULL, untouched),
+// and the caller's own live owned binding still drops on its `otherwise return`.
+enum MyError implements Error
+	failed
+end 'MyError'
+
+function inner(flag bool) returns String throws MyError
+	if flag 'c'
+		throw MyError.failed
+	end 'c'
+	return "value"
+end 'inner'
+
+function outer(flag bool) returns String throws MyError
+	let s = try inner(flag)
+	return s
+end 'outer'
+
+function main() returns ExitCode
+	let a = try outer(false) otherwise return 1
+	if a == "value" 'x'
+		let b = try outer(true) otherwise return 0
+		return 2
+	end 'x'
+	return 3
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: error.otherwise-ignore-managed -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+// A managed String try-result discarded via `otherwise ignore` (the fell-through path). On the ok edge
+// the box drops in the ok block before the merge; on the error edge nothing is owned. No leak, no NULL
+// decref in the shared continuation.
+enum MyError implements Error
+	failed
+end 'MyError'
+
+function makeStr(flag bool) returns String throws MyError
+	if flag 'c'
+		throw MyError.failed
+	end 'c'
+	return "hi"
+end 'makeStr'
+
+function run(flag bool) returns Integer
+	try makeStr(flag) otherwise ignore
+	return 9
+end 'run'
+
+function main() returns ExitCode
+	let a = run(false)
+	let b = run(true)
+	if a == 9 'x'
+		if b == 9 'y'
 			return 0
 		end 'y'
 	end 'x'

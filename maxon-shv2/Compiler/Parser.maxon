@@ -3195,22 +3195,6 @@ export type Parser
 		// and the lowering (`ret` → `errorReturn` inside a throwing function) can read it off `func`.
 		let throwsClause = try self.parseOptionalThrowsClause()
 
-		// ⭐ **A THROWING FUNCTION WITH A MANAGED RETURN TYPE IS A DEFERRED MECHANISM (P1.4b wave 2), NOT A
-		// CRASH.** Wave 1 is SCALAR error handling: a `try`'s error edge binds the result register to
-		// nothing, so a call site adopting a MANAGED result (String / struct box / boxed union) has nothing
-		// valid on that edge to drop or hand back — a segfault for a String, a "use dominates its def"
-		// register-allocation panic for a struct/union box. Every OTHER unsupported error construct this rung
-		// rejects cleanly; this one was left to crash. Reject it here, at the declaration (like
-		// `checkMainCannotThrow`'s E3054), rather than at each call site — the signature is what is
-		// unsupported. It MUST be here and not in `semanticCheck`: `resolveTypes` runs before that pass and
-		// erases a union return type to `integer` (TypeResolution's enum arm), so a boxed-union return is no
-		// longer distinguishable there; in the real parse the type is still `named` and `classifyUnionPayload`
-		// resolves it. `returnTypeOwnsHeapBox` reuses the same classification the construct/drop sites do, so
-		// this guard fires on EXACTLY the return types that crash and no scalar (Integer/ExitCode/bool/enum).
-		if throwsClauseIsThrowing(throwsClause) and returnTypeOwnsHeapBox(self.signatures, typeNames: self.artifact.typeNames, ret: returnType) 'managedThrowingReturn'
-			throw ParseError.unsupported("a throwing function with a managed return type (String, struct, or union) is not yet supported — its error path yields no value, so a managed result would have nothing valid to drop; return a scalar and signal failure through the thrown error (managed error values arrive at P1.4b wave 2)", line: nameTok.line, column: nameTok.column)
-		end 'managedThrowingReturn'
-
 		// Fresh per-function value numbering, seeded at the function's paramCount so
 		// parameter ids occupy 0..paramCount-1 by Std-ABI convention (a body value
 		// then starts at paramCount — see IrValueId's ValueIdRef contract). The value-TYPE
@@ -4497,6 +4481,19 @@ export type Parser
 		// is what it carries; the error handler may reassign them (`otherwise 'err' result = 42`).
 		let entryVals = self.snapshotBindings(self.mutableVars)
 
+		// ⭐ **A MANAGED tryCall RESULT IS OWNED ONLY ON THE OK EDGE — pull it out of the ENTRY-block drop
+		// set before the handler parses.** `mintOwnedCallResult` tracked the result as an owned pending
+		// temp in the entry block, which flows to BOTH `tryok` and `tryerr`; on the `tryerr` edge the
+		// result register is NULL (a throw zeroes it). An error handler that drains the pending temps
+		// (`otherwise return`/`throw`, whose exit runs `emitHandoffExitDrops`) would then decref that NULL —
+		// a segfault. Removing it here confines every touch of the result to the ok path; each finish path
+		// re-scopes the still-owned value (the owned-heap bit is untouched, so `valueIsOwnedHeap` still
+		// answers true) to the ok block, the phi, or an ok-block drop. A scalar result owns no heap, is in
+		// no drop set, and this is a no-op for it — the Wave-1 behaviour, unchanged.
+		if self.valueIsOwnedHeap(result) 'managedResultOffEntry'
+			self.removeFromPendingTemps(result)
+		end 'managedResultOffEntry'
+
 		self.currentBlock = errBlock
 		let handler = try self.parseOtherwiseHandler(func, result: result, flag: flag, callee: callee, resultUsed: resultUsed, tryTok: tryTok)
 		var errEnd = self.currentBlock
@@ -4514,6 +4511,18 @@ export type Parser
 	function finishTerminatedTry(okBlock IrBlock, entryVals ValueIdArray, result ValueId) returns ValueId
 		self.restoreBindings(self.mutableVars, snapshot: entryVals)
 		self.currentBlock = okBlock
+
+		// ⭐ **RE-ENROL A MANAGED RESULT AS AN OWNED TEMP ON THE OK PATH.** The error handler terminated, so
+		// only `okBlock` continues, and here the managed result is a live owned box — exactly a plain managed
+		// call result. `desugarTry` pulled it off the entry drop set (it is NULL on the dead error edge); put
+		// it back so the ok continuation binds it (`let s = …` → `parseBinding` moves it to a scope-exit drop)
+		// or drops it (a discarded `try f()` → the statement drain), on the ok path only. The owned-heap bit
+		// survived the removal, so only the pending enrolment is restored; a scalar result owns no heap and is
+		// re-enrolled in nothing.
+		if self.valueIsOwnedHeap(result) 'reenrollManagedResult'
+			self.pendingTempDrops.push(result)
+		end 'reenrollManagedResult'
+
 		return result
 	end 'finishTerminatedTry'
 
@@ -4524,13 +4533,31 @@ export type Parser
 		var cont = self.newBlock(func, label: b"trycont", line: tryTok.line)
 		let phiId = self.mintPhi(cont, tag: self.tagOf(result), nameId: try self.valueNameIds.get(result) otherwise panic("finishValueTry: result has no name column"))
 
+		// ⭐ **A MANAGED RESULT PHI IS OWNED — reconcile both edges to owned before wiring them in.** When the
+		// try-result owns heap, the phi is the sole owner of whichever value reaches the merge and is dropped
+		// once at its scope exit, so each edge's contribution must transfer ownership IN: the ok `result` was
+		// already pulled off the entry drop set (`desugarTry`), and the err `otherwiseValue` — an owned call
+		// result, or a borrowed String literal PROMOTED to an owned copy in `errEnd` (currentBlock here), the
+		// same reconciliation an expression `match`'s result phi makes — leaves its pending list into the phi.
+		// `parseUnboundOtherwiseForm` already refused a fallback that could not become an owned managed value
+		// of the result's type, so the only borrowed case reaching here is a promotable String literal. A
+		// SCALAR result keeps the borrowed phi the Wave-1 path built — nothing is owned, nothing is dropped.
+		var errEdgeValue = otherwiseValue
+		if self.valueIsOwnedHeap(result) 'managedResultPhi'
+			if not self.valueIsOwnedHeap(otherwiseValue) 'promoteBorrowedFallback'
+				errEdgeValue = self.promoteToOwnedString(otherwiseValue, range: SourceRange.ofToken(tryTok))
+			end 'promoteBorrowedFallback'
+			self.removeFromPendingTemps(errEdgeValue)
+			self.trackOwnedTemp(phiId)
+		end 'managedResultPhi'
+
 		var okArgs = ValueIdArray.create()
 		okArgs.push(result)
 		self.recordBranchEdge(okBlock, targetId: cont.id, argIds: okArgs)
 		self.emitBranch(okBlock, targetId: cont.id)
 
 		var errArgs = ValueIdArray.create()
-		errArgs.push(otherwiseValue)
+		errArgs.push(errEdgeValue)
 		self.recordBranchEdge(errEnd, targetId: cont.id, argIds: errArgs)
 		self.emitBranch(errEnd, targetId: cont.id)
 
@@ -4545,6 +4572,18 @@ export type Parser
 		var cont = self.newBlock(func, label: b"trycont", line: tryTok.line)
 		let errVals = self.snapshotBindings(self.mutableVars)
 		self.mergeAtContinuation(okBlock, predB: errEnd, cont: cont, bindings: self.mutableVars, valsA: entryVals, valsB: errVals)
+
+		// ⭐ **A DISCARDED MANAGED RESULT DROPS ON THE OK EDGE, IN `okBlock`.** A fell-through handler
+		// (`otherwise ignore`, or a block that ran off its end) always discards the try's value, and a managed
+		// result is a live owned box on the ok edge but NULL on the error edge. Its drop goes into `okBlock`,
+		// BEFORE its branch to the shared `cont` — never in `cont` (reached by both edges, so a drop there
+		// would decref the NULL error-edge register) and never on the error edge. `desugarTry` already pulled
+		// it off the pending list, so the post-statement drain never sees it and this is its only drop.
+		if self.valueIsOwnedHeap(result) 'dropManagedResultOnOk'
+			self.currentBlock = okBlock
+			self.emitDecref(result, range: SourceRange.ofToken(tryTok))
+		end 'dropManagedResultOnOk'
+
 		self.emitBranch(okBlock, targetId: cont.id)
 		self.emitBranch(errEnd, targetId: cont.id)
 		self.currentBlock = cont
@@ -4623,6 +4662,28 @@ export type Parser
 		if resultUsed and tagIsFloat(self.tagOf(otherwiseValue)) != tagIsFloat(self.tagOf(result)) 'typeMismatch'
 			throw ParseError.errorTypeMismatch("otherwise type '{typeTagName(self.tagOf(otherwiseValue))}' does not match expected type '{typeTagName(self.tagOf(result))}'", line: tryTok.line, column: tryTok.column)
 		end 'typeMismatch'
+
+		// ⭐ **A MANAGED try-result and its `otherwise` fallback merge through an OWNED result phi**
+		// (`finishValueTry`), dropped once at its scope exit — so both edges must contribute an OWNED value
+		// of the SAME managed type. Two ways that can be violated, both a wild free at the phi's drop, so
+		// both are refused HERE where the fallback's type is in hand (and regardless of `resultUsed`: the
+		// phi is dropped on the discard path too):
+		//   • a TAG MISMATCH — a `String` result with an `int` fallback — whose phi drop would decref an
+		//     integer as a String pointer.
+		//   • a BORROWED AGGREGATE fallback — a struct/union parameter (or a re-borrow) — which cannot
+		//     transfer into the phi because its own owner keeps a live reference: dropping the phi on the
+		//     fallback edge would double-free it. This is the same refusal `parseReturnStatement` makes for a
+		//     borrowed aggregate return; a borrowed String LITERAL is the one exception, promoted to an owned
+		//     copy at the merge (`finishValueTry`).
+		if self.valueIsOwnedHeap(result) 'managedOtherwise'
+			if self.tagOf(otherwiseValue) != self.tagOf(result) 'managedOtherwiseTypeMismatch'
+				throw ParseError.errorTypeMismatch("otherwise type '{typeTagName(self.tagOf(otherwiseValue))}' does not match expected type '{typeTagName(self.tagOf(result))}'", line: tryTok.line, column: tryTok.column)
+			end 'managedOtherwiseTypeMismatch'
+			if not self.valueIsOwnedHeap(otherwiseValue) and not tagIsText(self.tagOf(otherwiseValue)) 'borrowedAggregateOtherwise'
+				throw ParseError.unsupported("an `otherwise` fallback that is a borrowed struct/union value — it merges with the try's owned result through a phi dropped exactly once, and a borrowed aggregate's own owner keeps a live reference, so dropping the merged value would free it twice. Return an OWNED value (a fresh factory call), or catch the error in an `otherwise (e) 'label' … end` block; consuming a borrowed aggregate arrives with cross-call consume", line: tryTok.line, column: tryTok.column)
+			end 'borrowedAggregateOtherwise'
+		end 'managedOtherwise'
+
 		return TryHandler.value(otherwiseValue)
 	end 'parseUnboundOtherwiseForm'
 
