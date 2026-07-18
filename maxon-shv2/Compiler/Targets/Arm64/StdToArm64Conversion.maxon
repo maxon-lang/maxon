@@ -18,9 +18,11 @@
 //     optimisation, and the reason the compare/branch-fusion analysis stays x64-only for now) for a
 //     structure that needs no flag-lifetime reasoning: a `cbnz` reads a register, not NZCV, so the
 //     divide-by-zero guard's `cmp` between a compare and its branch can never disturb it.
-//   • DIVIDE-BY-ZERO IS GUARDED — arm64 `sdiv`/`udiv` RETURN 0 on a zero divisor (no `#DE` trap), so
-//     `a / 0` must be turned into a clean panic with an explicit `cbz divisor, <panic>` (M1 design
-//     notes). The guard splits the block, so it is threaded through the op walk (see `lowerDivMod`).
+//   • DIVIDE-BY-ZERO IS NOT A TRAP — AArch64 `sdiv`/`udiv` are DEFINED to return 0 on a zero divisor
+//     (no `#DE`, unlike x64's `idiv`), and the spec adopts that: `a / 0` yields 0, and the
+//     divide/modulo-by-zero tests are gated to x64-windows (safety.md). So a division lowers to a bare
+//     `sdiv` (+ `msub` for the remainder) with NO guard block and NO panic routine — nothing splits the
+//     block, so the op walk is a straight one-block-in, one-block-out lowering exactly like x64's.
 //
 // The macOS OS-primitive lowering (`osAllocPages`/`osWriteStdout`) is NOT needed by the scalar core
 // (which allocates nothing and does not `print`), so those two Std ops panic here rather than lower.
@@ -44,30 +46,18 @@ let Arm64IntReturnReg = Arm64Register.x0
 // The primary FLOAT return register (AAPCS64) — a float result returns in d0, not x0.
 let Arm64FloatReturnReg = Arm64Register.d0
 
-// The IP scratch register the isel materialises a multiplier immediate into: arm64 has no
-// multiply-by-immediate, so `x * imm` becomes `movz x16, imm; mul dest, src, x16`. x16/x17 are the
-// platform IP scratch registers — free to clobber for exactly this, and NOT in the allocatable pool,
-// so no value is ever coloured into one and the two-op lifetime here can conflict with nothing.
-let Arm64MulImmScratch = Arm64Register.x16
+// The IP scratch register the isel materialises an immediate into when no immediate op-form fits:
+// a multiplier (arm64 has no multiply-by-immediate), or a non-bitmask logical immediate (AArch64
+// `and`/`or`/`xor` #imm encode only rotated bitmasks). `movz x16, imm` then a register op follows.
+// x16/x17 are the platform IP scratch registers — free to clobber for exactly this, and NOT in the
+// allocatable pool, so no value is ever coloured into one and the two-op lifetime here can conflict
+// with nothing.
+let Arm64Scratch = Arm64Register.x16
 
 // The bitmask the LOGICAL `not` flips: a bool lives in the 0/1 domain, so complementing it is
 // flipping bit 0 — `eor dest, src, #1` — not the 64-bit `mvn` (which would turn true into -2, still
 // truthy). The INTEGER `not` is a separate Std opcode (`bitNot` → `mvn`), so this can never reach one.
 let Arm64LogicalNotMask = 1 as Imm32
-
-// The immediate a `cbnz`-tested boolean is compared against elsewhere is implicit (zero); this names
-// the divide-by-zero guard's comparand — the value a divisor must NOT equal.
-let Arm64DivisorZeroImm = 0 as Imm32
-
-// The runtime symbol the divide-by-zero guard branches-and-links to: it prints the panic and exits,
-// and never returns. Hand-assembled in the arm64 runtime (Arm64Runtime, wave 1) alongside the entry
-// stub — the same split `RuntimeInitName` uses.
-let Arm64DivByZeroPanicName = b"mrt_div_by_zero"
-
-// The label a divide-by-zero PANIC block carries, and the label a divide CONTINUATION block carries.
-// File-scope slices, shared by every guard, rather than a fresh allocation per division.
-let Arm64DivPanicLabel = b"divpanic"
-let Arm64DivContinueLabel = b"divcont"
 
 // The label every f64 constant island carries — an immutable IEEE bit pattern the code only ever
 // loads, so it belongs in read-only `.rdata`. Mirrors x64's `FloatConstantLabelPrefix`.
@@ -275,13 +265,6 @@ type StdToArm64Lowering
 		column.refill(scanFunctionValueCount(self.targetModule, func: srcFunc), value: RegClass.gpr)
 
 		for blockRef in srcFunc.blockRefs 'eachBlock'
-			// Skip the guard/continuation blocks the divide-by-zero split minted: they exist only in
-			// `targetModule.blocks`, so a lookup in `stdModule.blocks` is out of range — and they define
-			// no value (a guard is a `cmp`/`cbz`/`bl`), so they contribute nothing to a value-class column.
-			if blockRef >= self.stdModule.blocks.count() 'targetOnlyBlock'
-				continue
-			end 'targetOnlyBlock'
-
 			self.recordBlockArgClasses(blockRef, column: column)
 			self.recordBlockOpClasses(blockRef, column: column)
 		end 'eachBlock'
@@ -375,53 +358,34 @@ type StdToArm64Lowering
 	// ==========================================================================
 
 	function lowerFunction(funcIdx FuncIndex)
-		// CAPTURED BEFORE the walk: the divide-by-zero guard appends continuation/panic blocks to this
-		// function's `blockRefs`, and those exist only in `targetModule.blocks` — revisiting one would
-		// look it up out of range in `stdModule.blocks` and lower nothing into an already-complete block.
-		let originalBlockCount = self.stdBlockCountOf(funcIdx)
-		self.lowerFunctionBlocks(funcIdx, originalBlockCount: originalBlockCount)
-	end 'lowerFunction'
-
-	function stdBlockCountOf(funcIdx FuncIndex) returns BlockCount
-		let srcFunc = self.stdModule.getFunc(funcIdx)
-		return srcFunc.blockRefs.count()
-	end 'stdBlockCountOf'
-
-	function lowerFunctionBlocks(funcIdx FuncIndex, originalBlockCount BlockCount)
 		let srcFunc = self.stdModule.getFunc(funcIdx)
 		let returnType = srcFunc.returnType
-		for i in 0 upto originalBlockCount 'eachBlock'
-			let blockRef = try srcFunc.blockRefs.get(i) otherwise panic("lowerStdToArm64: blockRefs.get OOB at {i} despite the captured bound")
-			self.lowerOneBlock(funcIdx, blockRef: blockRef, returnType: returnType)
+		// A 1:1 lowering: every op of a Std block lowers into the SAME Target block, and no pass in this
+		// file mints new blocks during the walk (the divide-by-zero split that once did is gone — `a / 0`
+		// is a bare `sdiv` now). So `blockRefs` is fixed across the walk and iterating it directly is safe.
+		for blockRef in srcFunc.blockRefs 'eachBlock'
+			self.lowerOneBlock(blockRef, returnType: returnType)
 		end 'eachBlock'
-	end 'lowerFunctionBlocks'
+	end 'lowerFunction'
 
-	// Lower ONE Std block's ops and terminator. The `currentRef` may CHANGE mid-block: the
-	// divide-by-zero guard finishes the current Target block with a `cbz` and continues the division
-	// (and every op after it) in a freshly-minted continuation block. The terminator lands in whatever
-	// block is current at the end, with the original block's phi edges moved onto it. `currentRef` is a
-	// scalar (a BlockRef), so switching it holds no borrow of `targetModule.blocks` across the mint.
-	function lowerOneBlock(funcIdx FuncIndex, blockRef BlockRef, returnType StdReturnType)
+	// Lower ONE Std block's ops and terminator, both into `blockRef`'s Target block. The terminator's
+	// phi edges were copied onto that block by `prepareSkeleton` and stay there — nothing splits the
+	// block, so there is no continuation to move them to.
+	function lowerOneBlock(blockRef BlockRef, returnType StdReturnType)
 		let opCount = self.stdBlockOpCount(blockRef)
-		var currentRef = blockRef
 		for i in 0 upto opCount 'eachOp'
 			let stdOp = self.stdBlockOpAt(blockRef, index: i)
-			currentRef = self.lowerBodyOp(stdOp, funcIdx: funcIdx, dstRef: currentRef, returnType: returnType)
+			self.lowerBodyOp(stdOp, dstRef: blockRef, returnType: returnType)
 		end 'eachOp'
 
 		if self.stdBlockHasTerminator(blockRef) 'hasTerm'
 			let termOp = self.stdBlockTerminator(blockRef)
-			// The terminator's phi edges live on the ORIGINAL Target block (prepareSkeleton copied them);
-			// when the block split, they must move to the continuation the terminator now lands in.
-			if currentRef != blockRef 'moved'
-				self.moveBranchEdges(blockRef, toRef: currentRef)
-			end 'moved'
-			self.lowerTerminatorOp(termOp, dstRef: currentRef, returnType: returnType)
+			self.lowerTerminatorOp(termOp, dstRef: blockRef, returnType: returnType)
 		end 'hasTerm'
 	end 'lowerOneBlock'
 
-	// Scoped reads of a Std block, so the walk holds no borrow of `stdModule.blocks` across the mint the
-	// guard performs (E3019). Each returns a scalar / a copied op, never a borrowed block.
+	// Scoped reads of a Std block: each returns a scalar or a COPIED op, never a borrowed block, so the
+	// walk never holds a `stdModule.blocks` borrow across an `emit` into `targetModule` (E3019).
 	function stdBlockOpCount(blockRef BlockRef) returns BlockOpPos
 		let block = try self.stdModule.blocks.get(blockRef) otherwise panic("stdBlockOpCount: blockRef {blockRef} not in stdModule.blocks")
 		return block.opRefs.count()
@@ -444,7 +408,7 @@ type StdToArm64Lowering
 	end 'stdBlockTerminator'
 
 	// Append `op` to the Target block named by `dstRef`, in a scope that holds the block borrow only for
-	// the append — so the caller may still mint blocks (which pushes to the same array) between appends.
+	// the append.
 	function emit(dstRef BlockRef, op TargetOp)
 		var block = try self.targetModule.blocks.get(dstRef) otherwise panic("emit: dstRef {dstRef} not in targetModule.blocks")
 		self.targetModule.appendOp(block, op: op)
@@ -460,10 +424,9 @@ type StdToArm64Lowering
 		self.targetModule.setTerminator(block, op: op)
 	end 'emitTerminator'
 
-	// Lower a regular (non-terminator) Std op into the block named by `dstRef`, and RETURN the block the
-	// NEXT op should lower into — the same `dstRef` for every op except a `div`/`mod`, whose guard
-	// switches the walk to a fresh continuation block.
-	function lowerBodyOp(op StdOp, funcIdx FuncIndex, dstRef BlockRef, returnType StdReturnType) returns BlockRef
+	// Lower a regular (non-terminator) Std op into the block named by `dstRef`. Every op lowers into the
+	// SAME block — nothing splits the walk (div/mod is a bare `sdiv`/`msub`, not a guarded block).
+	function lowerBodyOp(op StdOp, dstRef BlockRef, returnType StdReturnType)
 		match op 'lower'
 			const(resultId, value, valueType) then self.lowerConst(resultId, value: value, valueType: valueType, dstRef: dstRef)
 			binOp(resultId, lhs, rhs, opcode, operandType) then self.lowerBinOp(resultId, lhs: lhs, rhs: rhs, opcode: opcode, operandType: operandType, dstRef: dstRef)
@@ -471,8 +434,8 @@ type StdToArm64Lowering
 			cmp(resultId, lhs, rhs, pred, operandType) then self.lowerCmp(resultId, lhs: lhs, rhs: rhs, pred: pred, operandType: operandType, dstRef: dstRef)
 			binOpImm(resultId, lhs, imm, opcode) then self.lowerBinOpImm(resultId, lhs: lhs, imm: imm, opcode: opcode, dstRef: dstRef)
 			cmpImm(resultId, lhs, imm, pred) then self.lowerCmpImm(resultId, lhs: lhs, imm: imm, pred: pred, dstRef: dstRef)
-			div(resultId, lhs, rhs) then return self.lowerDivMod(resultId, lhs: lhs, rhs: rhs, isRemainder: false, funcIdx: funcIdx, dstRef: dstRef)
-			mod(resultId, lhs, rhs) then return self.lowerDivMod(resultId, lhs: lhs, rhs: rhs, isRemainder: true, funcIdx: funcIdx, dstRef: dstRef)
+			div(resultId, lhs, rhs) then self.lowerDivMod(resultId, lhs: lhs, rhs: rhs, isRemainder: false, dstRef: dstRef)
+			mod(resultId, lhs, rhs) then self.lowerDivMod(resultId, lhs: lhs, rhs: rhs, isRemainder: true, dstRef: dstRef)
 			param(resultId, index, _) then self.lowerParam(resultId, index: index, dstRef: dstRef)
 			call(resultId, callee, args) then self.lowerCall(resultId, callee: callee, args: args, dstRef: dstRef)
 			ret(retValId) then self.lowerReturn(retValId, dstRef: dstRef, returnType: returnType, asTerminator: false)
@@ -486,7 +449,6 @@ type StdToArm64Lowering
 			osWriteStdout then panic("lowerStdToArm64: `osWriteStdout` (`print`) is not in the scalar core — it lands with the arm64 macOS `write` primitive")
 			rdataAddr(resultId, label) then self.emit(dstRef, op: TargetOp.arm64LeaRdata(TargetVReg.virtual(resultId), label: label))
 		end 'lower'
-		return dstRef
 	end 'lowerBodyOp'
 
 	function lowerTerminatorOp(op StdOp, dstRef BlockRef, returnType StdReturnType)
@@ -636,9 +598,7 @@ type StdToArm64Lowering
 			add then self.emit(dstRef, op: TargetOp.arm64AddImm(dest, src: src, imm: imm))
 			sub then self.emit(dstRef, op: TargetOp.arm64SubImm(dest, src: src, imm: imm))
 			mul then self.lowerMulImm(dest, src: src, imm: imm, dstRef: dstRef)
-			bitAnd then self.emit(dstRef, op: TargetOp.arm64AndImm(dest, src: src, imm: imm))
-			bitOr then self.emit(dstRef, op: TargetOp.arm64OrrImm(dest, src: src, imm: imm))
-			bitXor then self.emit(dstRef, op: TargetOp.arm64EorImm(dest, src: src, imm: imm))
+			bitAnd to bitXor then self.lowerLogicalImm(dest, src: src, imm: imm, opcode: opcode, dstRef: dstRef)
 			shl to shrLogical then self.lowerShiftImm(dest, src: src, imm: imm, instr: arm64ShiftInstrOf(opcode), dstRef: dstRef)
 			div then panic("lowerBinOpImm: `div` is float division and no NEON form takes an immediate — foldConstOperands must never produce this")
 		end 'op'
@@ -648,10 +608,35 @@ type StdToArm64Lowering
 	// scratch x16 (a physical def of a non-allocatable register, so it forbids nothing and collides with
 	// nothing) and do a register `mul`. The two ops are adjacent, so x16 is live only between them.
 	function lowerMulImm(dest TargetVReg, src TargetVReg, imm Imm32, dstRef BlockRef)
-		let scratch = arm64PhysReg(Arm64MulImmScratch)
+		let scratch = arm64PhysReg(Arm64Scratch)
 		self.emit(dstRef, op: TargetOp.arm64MovImm(scratch, value: imm))
 		self.emit(dstRef, op: TargetOp.arm64Mul(dest, lhs: src, rhs: scratch))
 	end 'lowerMulImm'
+
+	// `dest = src <op> imm` for a logical op (`and`/`or`/`xor`). AArch64 `#bimm` forms encode ONLY
+	// rotated-bitmask patterns, so a value that is not one (e.g. `10` = 0b1010) cannot use the immediate
+	// form — the ENCODER would refuse it. `arm64ImmIsEncodableLogical` is the encoder's own predicate,
+	// so this choice can never disagree with what it will encode. A non-bitmask immediate is materialised
+	// into the IP scratch (x16, exactly as `lowerMulImm`) and the register form is used.
+	function lowerLogicalImm(dest TargetVReg, src TargetVReg, imm Imm32, opcode StdBinOpcode, dstRef BlockRef)
+		if arm64ImmIsEncodableLogical(imm) 'bitmask'
+			match opcode 'imm'
+				bitAnd then self.emit(dstRef, op: TargetOp.arm64AndImm(dest, src: src, imm: imm))
+				bitOr then self.emit(dstRef, op: TargetOp.arm64OrrImm(dest, src: src, imm: imm))
+				bitXor then self.emit(dstRef, op: TargetOp.arm64EorImm(dest, src: src, imm: imm))
+				default panic("lowerLogicalImm: non-logical opcode {opcode.rawValue}")
+			end 'imm'
+			return
+		end 'bitmask'
+		let scratch = arm64PhysReg(Arm64Scratch)
+		self.emit(dstRef, op: TargetOp.arm64MovImm(scratch, value: imm))
+		match opcode 'reg'
+			bitAnd then self.emit(dstRef, op: TargetOp.arm64And(dest, lhs: src, rhs: scratch))
+			bitOr then self.emit(dstRef, op: TargetOp.arm64Orr(dest, lhs: src, rhs: scratch))
+			bitXor then self.emit(dstRef, op: TargetOp.arm64Eor(dest, lhs: src, rhs: scratch))
+			default panic("lowerLogicalImm: non-logical opcode {opcode.rawValue}")
+		end 'reg'
+	end 'lowerLogicalImm'
 
 	function lowerLoadIndirect(resultId ValueId, addrId ValueId, offset ByteOffset, valueType StdType, dstRef BlockRef)
 		self.emit(dstRef, op: TargetOp.loadRegBaseDisp(TargetVReg.virtual(resultId), base: TargetVReg.virtual(addrId), disp: arm64MemoryDisplacement(offset), width: arm64AccessWidthFor(valueType)))
@@ -661,98 +646,27 @@ type StdToArm64Lowering
 		self.emit(dstRef, op: TargetOp.storeBaseDispReg(TargetVReg.virtual(addrId), disp: arm64MemoryDisplacement(offset), src: TargetVReg.virtual(valueId), width: arm64AccessWidthFor(valueType)))
 	end 'lowerStoreIndirect'
 
-	// Lower a Std `div`/`mod` to `sdiv` (+ `msub` for the remainder), GUARDED against a zero divisor.
+	// Lower a Std `div`/`mod` to `sdiv` (+ `msub` for the remainder). NO zero-divisor guard: AArch64
+	// `sdiv`/`udiv` return 0 on a zero divisor (defined behaviour, unlike x64's `idiv` #DE), and the spec
+	// adopts that — `a / 0` is 0, and the divide/modulo-by-zero tests are gated to x64-windows (see the
+	// file header / safety.md). So the division lowers straight into `dstRef` and never splits the block.
 	//
-	// ⚠ arm64 `sdiv`/`udiv` RETURN 0 on a zero divisor — they do NOT trap like x64's `idiv` (#DE) — so
-	// `a / 0` would silently answer 0 (a shipped v1 arm64 bug). The guard turns it into a clean panic:
-	//
-	//     cmp: cbz divisor, <panic>   ; if divisor == 0 take the panic, else fall to <cont>
-	//          b   <cont>
-	//     panic: bl mrt_div_by_zero   ; prints + exits, never returns
-	//            ret                   ; dead terminator (panic never returns), for well-formedness
-	//     cont:  sdiv/msub …           ; and everything after the division continues here
-	//
-	// The guard SPLITS the block: the division and every subsequent op move into `cont`, so this returns
-	// `cont`'s ref for the walk to continue lowering into. The panic block is minted per division (its
-	// `bl` target is the shared runtime symbol). Blocks are minted BEFORE any of them is filled, so no
-	// borrow of `targetModule.blocks` is held across a push.
-	function lowerDivMod(resultId ValueId, lhs ValueId, rhs ValueId, isRemainder bool, funcIdx FuncIndex, dstRef BlockRef) returns BlockRef
+	// `mod` is `x − (x/y)*y` via `sdiv` then `msub`. The quotient is an intermediate the isel cannot mint
+	// a fresh virtual for (the parser owns the value space), so it goes through the IP scratch x16:
+	// `sdiv x16, lhs, divisor; msub dest, x16, divisor, lhs`. x16 is non-allocatable and live only across
+	// these two adjacent ops.
+	function lowerDivMod(resultId ValueId, lhs ValueId, rhs ValueId, isRemainder bool, dstRef BlockRef)
 		let divisor = TargetVReg.virtual(rhs)
-
-		let panicRef = self.addDivGuardBlock(funcIdx, label: Arm64DivPanicLabel)
-		let contRef = self.addDivGuardBlock(funcIdx, label: Arm64DivContinueLabel)
-		let panicId = self.blockIdOf(panicRef)
-		let contId = self.blockIdOf(contRef)
-
-		// Finish the current block with the guard: take the panic on a zero divisor, else fall through to
-		// the continuation. `cbz` is the fused zero-test arm64 has and x64 does not — no separate `cmp`.
-		self.emitCondBranch(dstRef, op: TargetOp.arm64Cbz(divisor, targetBlockId: panicId))
-		self.emitTerminator(dstRef, op: TargetOp.arm64Branch(contId))
-
-		// The panic block: call the runtime and (dead) `ret`. `bl` never returns, so the ret is only for
-		// a well-formed CFG (every block has a terminator).
-		self.emit(panicRef, op: TargetOp.arm64BranchLink(Arm64DivByZeroPanicName))
-		self.emitTerminator(panicRef, op: TargetOp.arm64Ret)
-
-		// The continuation: the actual division. `mod` is `x - (x/y)*y` via `sdiv` then `msub` — the
-		// quotient stays in a scratch virtual? No: `msub`'s `mulLhs` is the quotient, so the quotient's
-		// own result id is reused only when it is the `div`; for `mod` the quotient is an intermediate.
 		let dest = TargetVReg.virtual(resultId)
 		let lhsReg = TargetVReg.virtual(lhs)
 		if isRemainder 'mod'
-			// Remainder needs the quotient in a register too. It is an intermediate the isel cannot mint a
-			// fresh virtual for (the parser owns the value space), so it goes through the IP scratch x16:
-			// `sdiv x16, lhs, divisor; msub dest, x16, divisor, lhs`. x16 is non-allocatable and live only
-			// across these two adjacent ops.
-			let quot = arm64PhysReg(Arm64MulImmScratch)
-			self.emit(contRef, op: TargetOp.arm64Sdiv(quot, lhs: lhsReg, rhs: divisor))
-			self.emit(contRef, op: TargetOp.arm64Msub(dest, mulLhs: quot, mulRhs: divisor, minuend: lhsReg))
+			let quot = arm64PhysReg(Arm64Scratch)
+			self.emit(dstRef, op: TargetOp.arm64Sdiv(quot, lhs: lhsReg, rhs: divisor))
+			self.emit(dstRef, op: TargetOp.arm64Msub(dest, mulLhs: quot, mulRhs: divisor, minuend: lhsReg))
 		end 'mod' else 'div'
-			self.emit(contRef, op: TargetOp.arm64Sdiv(dest, lhs: lhsReg, rhs: divisor))
+			self.emit(dstRef, op: TargetOp.arm64Sdiv(dest, lhs: lhsReg, rhs: divisor))
 		end 'div'
-
-		return contRef
 	end 'lowerDivMod'
-
-	// Mint an empty divide-guard block (panic or continuation): a fresh function-local id, an entry in
-	// `targetModule.blocks`, and its ref registered on the function. Mirrors `addSplitBlock`
-	// (SsaDestruction) — the established way a Target-tier pass grows the CFG. The function is fetched
-	// HERE by index and mutated directly, so its borrow never escapes to the walk.
-	function addDivGuardBlock(funcIdx FuncIndex, label ByteArray) returns BlockRef
-		var srcFunc = self.stdModule.getFunc(funcIdx)
-		let newId = srcFunc.nextBlockId
-		srcFunc.nextBlockId = srcFunc.nextBlockId + 1
-		self.targetModule.blocks.push(IrBlock.create(newId, label: label))
-		let newRef = self.targetModule.blocks.count() - 1
-		srcFunc.blockRefs.push(newRef)
-		return newRef
-	end 'addDivGuardBlock'
-
-	// The id of `blockRef`'s block — a scoped read, so the caller never holds this borrow.
-	function blockIdOf(blockRef BlockRef) returns BlockId
-		let block = try self.targetModule.blocks.get(blockRef) otherwise panic("blockIdOf: blockRef {blockRef} not in targetModule.blocks")
-		return block.id
-	end 'blockIdOf'
-
-	// Move every phi branch edge from `fromRef`'s block onto `toRef`'s — the split moved the terminator
-	// (and thus the outgoing edges) into the continuation. The edges are the SAME objects (the Target
-	// tier owns them and no later pass in this file rewrites them), so a move, not a clone.
-	function moveBranchEdges(fromRef BlockRef, toRef BlockRef)
-		let moved = self.takeBranchEdges(fromRef)
-		self.putBranchEdges(toRef, edges: moved)
-	end 'moveBranchEdges'
-
-	function takeBranchEdges(fromRef BlockRef) returns BranchEdgeArray
-		var block = try self.targetModule.blocks.get(fromRef) otherwise panic("takeBranchEdges: fromRef {fromRef} not in targetModule.blocks")
-		let edges = block.branchEdges
-		block.branchEdges = BranchEdgeArray.create()
-		return edges
-	end 'takeBranchEdges'
-
-	function putBranchEdges(toRef BlockRef, edges BranchEdgeArray)
-		var block = try self.targetModule.blocks.get(toRef) otherwise panic("putBranchEdges: toRef {toRef} not in targetModule.blocks")
-		block.branchEdges = edges
-	end 'putBranchEdges'
 
 	// Lower a Std `cmp` to `cmp`/`fcmp` + `cset` — the compare ALWAYS materialises its boolean into a
 	// register (see this file's header). A following `condBranch` truth-tests that bool with `cbnz`.

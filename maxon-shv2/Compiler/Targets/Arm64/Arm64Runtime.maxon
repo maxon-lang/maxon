@@ -1,22 +1,59 @@
-// Arm64Runtime — the arm64-macOS entry stub + runtime-init name, the arm64 twin of X64Runtime's
-// `mrt_start` / `RuntimeInitName`.
+// Arm64Runtime — the arm64-macOS entry stub `mrt_start`, the arm64 twin of `X64Runtime`/`mrt_start`.
 //
-// ⭐ WAVE-1 STUB (arm64-macOS foundation rung). The RESOLVED M1 design (design notes, both surveys):
-// link `/usr/lib/libSystem.B.dylib` via dyld chained fixups and call `_exit` — NEVER a raw SVC
-// (Apple-forbidden). `mrt_start` is laid out FIRST in `.text` (so `LC_MAIN.entryoff` points at it),
-// reads argc/argv/envp from x0/x1/x2, zeroes x29/x30 to end the frame chain, calls the runtime init
-// then `main`, bridges `main`'s x0 return to `_exit`'s argument (import call sequence: `adrp x16,
-// got; ldr x16, [x16, #off]; blr x16`), and ends with `brk #0`. Wave 1 hand-assembles it.
+// ⭐ HAND-ASSEMBLED, NOT A MODULE FUNCTION. x64's `mrt_start` is built from `TargetOp`s and prepended
+// to the module (`prependEntryStub`), because every instruction it needs — `push`, `call rel32`, the
+// IAT `call [rip]` — is a `TargetOp`. The arm64 stub cannot be: it terminates the process by calling
+// libSystem's `_exit` through a dyld-bound GOT slot (macOS forbids raw syscalls), and that GOT-
+// indirect call has NO `TargetOp` channel — minting one would band-append to the shared `TargetOp`
+// union (outside this backend). So the stub is hand-assembled here into a `FunctionCodeChunk` from
+// `Arm64Backend`'s encoder primitives, exactly as `X64Runtime` hand-assembles its panic runtime. The
+// chunk is laid out FIRST in `.text` (`buildArm64Backend`), so `LC_MAIN.entryoff` points at it.
+//
+// THE SCALAR CORE NEEDS NO RUNTIME FLOOR. It allocates nothing (no slab/MM init, no leak check), it
+// spawns nothing (no scheduler), and its only trap-shaped case — divide-by-zero — is defined to
+// return 0 on AArch64 (spec ruling; see `StdToArm64Conversion`), so there is no fault handler and no
+// `mrt_runtime_init` to call before user code. The whole runtime is therefore this one stub; the MM
+// and green-thread floors GROW back at their milestones exactly as x64's do.
 
-// The runtime-init function the arm64 entry stub calls before any user code — SHARED with x64
-// (`X64Runtime.RuntimeInitName`, `mrt_runtime_init`): the fault handler it installs is a runtime
-// concern, not an ISA one. Named here so the arm64 entry stub has a single spelling to reference.
-export let Arm64RuntimeInitName = b"mrt_runtime_init"
+// Build `mrt_start` and return it as a `FunctionCodeChunk`. dyld enters at `mrt_start` with argc/argv/
+// envp in x0/x1/x2 and sp 16-byte aligned; the stub bridges Maxon's `main` (AAPCS64, ExitCode in x0)
+// to `_exit`:
+//
+//   mrt_start:
+//     bl   main                    ; x0 = main's ExitCode (AAPCS64 primary return)
+//     adrp x16, _exit@GOTPAGE       ; }
+//     ldr  x16, [x16, _exit@GOTOFF] ; }  _exit(x0) — x0 already holds the code, no move needed
+//     blr  x16                      ; }  never returns
+//     brk  #0                       ; trap if _exit ever returns (unreachable)
+//
+// NO FRAME. The stub never touches sp — dyld's 16-byte alignment survives to both `bl` and `blr` by
+// construction — and the scalar core has no backtrace that would need x29/x30 chained, so a frame
+// would be dead ceremony. `leakCheck` gates the future MM leak bridge exactly as the x64 stub does;
+// it is `false` for the scalar core, which has no allocator and cannot leak.
+export function buildArm64EntryStubChunk(leakCheck bool) returns FunctionCodeChunk
+	var code = ByteArray.create()
+	var callFixups = CallFixupArray.create()
+	var iatRelocs = RelocationArray.create()
 
-// Prepend the arm64 `mrt_start` entry stub and register the `libSystem` `_exit` import. `checkLeaks`
-// gates the leak-check bridge on the exit path exactly as the x64 stub does (a program that reaches
-// the heap checks itself before exiting). Runs AFTER register allocation + prologue/epilogue, so the
-// hand-built stub is never reprocessed.
-export function prependArm64EntryStub(module TargetModule, checkLeaks bool)
-	panic("arm64 prependArm64EntryStub: not yet implemented (wave 1) [{module.funcCount()} fn, leakCheck={checkLeaks}, entry calls {String.from(Arm64RuntimeInitName)}]")
-end 'prependArm64EntryStub'
+	// bl main — filed as a CallFixup; concat resolves it to main's `.text` offset (mirrors x64's
+	// `callDirect(UserEntryName)`). `UserEntryName` is the canonical `String` spelling; the fixup
+	// matches against the function's `ByteArray` name, so it is rendered to bytes here.
+	arm64EmitBranchLink(code, callFixups: callFixups, targetName: UserEntryName.toByteArray())
+
+	// The leak gate (future MM milestone). `__mm_leak_check` is an ordinary AAPCS64 function — it
+	// takes the ExitCode in x0 and returns the adjusted code (or 101) in x0 — so the value flows
+	// straight through with no move. Never emitted for the scalar core (`leakCheck` is false).
+	if leakCheck 'leakGate'
+		arm64EmitBranchLink(code, callFixups: callFixups, targetName: MmLeakCheckName)
+	end 'leakGate'
+
+	// _exit(x0) through the libSystem GOT import. x0 already holds the ExitCode. Records the GOT slot
+	// as a Relocation the Mach-O writer patches (the macOS twin of x64's `iatCall` → ExitProcess).
+	arm64EmitImportCall(code, iatRelocs: iatRelocs, slotIndex: machoImportSlotIndex(MachoImportSlot.exit))
+
+	// brk #0 — SIGTRAP if `_exit` ever returns (it does not); stops execution running off the end of
+	// `.text` into the next function rather than trusting the import never to return.
+	arm64EmitBrk(code)
+
+	return FunctionCodeChunk.createWith(EntryPointName, code: code, callFixups: callFixups, rdataRelocs: RdataRelocationArray.create(), iatRelocs: iatRelocs, rdataConstants: GlobalDataTable.create())
+end 'buildArm64EntryStubChunk'

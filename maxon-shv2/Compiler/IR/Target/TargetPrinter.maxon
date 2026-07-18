@@ -84,6 +84,10 @@ export function printTargetModule(module TargetModule, globalData GlobalDataTabl
 	// globals reads as `data { … }` then its functions, and one WITHOUT is byte-for-byte unchanged.
 	var afterFirst = dataText.byteLength() > 0
 
+	// The module's ISA, recovered once and threaded down so the SHARED ops (which carry no ISA of their
+	// own) name their operands against the right register file. See `moduleTargetCpu`.
+	let cpu = moduleTargetCpu(module)
+
 	for func in module.functions 'eachFunc'
 		if not includeRuntime and isRuntimeFunction(func.name) 'skipRuntime'
 			continue
@@ -93,7 +97,7 @@ export function printTargetModule(module TargetModule, globalData GlobalDataTabl
 			body.append("\n")
 		end 'separator'
 
-		body.append(printTargetFunction(module, func: func))
+		body.append(printTargetFunction(module, func: func, cpu: cpu))
 		afterFirst = true
 	end 'eachFunc'
 
@@ -110,7 +114,7 @@ end 'isRuntimeFunction'
 
 // Serialize one function: `func @<name> {`, then each block as `<label>:` followed
 // by its ops (and terminator) one per line, then the closing brace.
-function printTargetFunction(module TargetModule, func IrFunction) returns String
+function printTargetFunction(module TargetModule, func IrFunction, cpu CpuArch) returns String
 	let openBrace = "\{"
 	let closeBrace = "\}"
 	var sb = StringBuilder.create()
@@ -125,11 +129,11 @@ function printTargetFunction(module TargetModule, func IrFunction) returns Strin
 		sb.append("{BlockLabelIndent}{String.from(block.label)}:\n")
 
 		for opIdx in block.opRefs 'eachOp'
-			sb.append(printOpLine(module, opIdx: opIdx, blocks: funcBlocks))
+			sb.append(printOpLine(module, opIdx: opIdx, blocks: funcBlocks, cpu: cpu))
 		end 'eachOp'
 
 		if block.hasTerminatorOp() 'hasTerm'
-			sb.append(printOpLine(module, opIdx: block.terminatorIndex(), blocks: funcBlocks))
+			sb.append(printOpLine(module, opIdx: block.terminatorIndex(), blocks: funcBlocks, cpu: cpu))
 		end 'hasTerm'
 	end 'eachBlock'
 
@@ -140,26 +144,52 @@ end 'printTargetFunction'
 // One op, indented, ISA-prefixed, newline-terminated. An out-of-range op index
 // is an invariant violation (a block references an op not in `module.ops`), not
 // a user error, so it panics rather than printing a sentinel.
-function printOpLine(module TargetModule, opIdx OpIndex, blocks IrBlockArray) returns String
+function printOpLine(module TargetModule, opIdx OpIndex, blocks IrBlockArray, cpu CpuArch) returns String
 	let op = try module.ops.get(opIdx) otherwise panic("printOpLine: op index {opIdx} out of range in module.ops")
-	return "{OpIndent}{opIsaPrefix(op)}{formatTargetOp(op, blocks: blocks)}\n"
+	return "{OpIndent}{opIsaPrefix(cpu)}{formatTargetOp(op, blocks: blocks, cpu: cpu)}\n"
 end 'printOpLine'
 
-// The ISA namespace an op prints under, chosen by which BAND it falls in — the x64 arms print
-// `x64.`, the arm64 arms `arm64.`. A module is single-target, so this never mixes within one
-// printout; deriving the prefix from the op (rather than threading the target through the printer)
-// keeps the x64 output byte-identical and the arm64 output correct from the one exhaustive match.
-function opIsaPrefix(op TargetOp) returns String
-	match op 'p'
-		prologue to leaRegRdata then return X64OpPrefix
-		arm64Ret to arm64FpLoadRdata then return Arm64OpPrefix
-	end 'p'
+// The ISA namespace ops print under — the whole module's, not the op's. A module is single-target
+// (buildBackend dispatches on cpu), so every op prints `x64.` or `arm64.` uniformly; a SHARED op
+// (movRegReg, the spill/reload forms, xchgRegReg) prints under the module's ISA, not the x64 band it
+// happens to sit in. x64 output stays byte-identical (an x64 module's ops all printed `x64.` before).
+function opIsaPrefix(cpu CpuArch) returns String
+	return match cpu 'c'
+		x64 gives X64OpPrefix
+		arm64 gives Arm64OpPrefix
+		wasm32 panic("opIsaPrefix: maxon-shv2 has no wasm Target printer")
+	end 'c'
 end 'opIsaPrefix'
 
-// Render one TargetOp as `<mnemonic> <operands>` (the `x64.` namespace is added
-// by the caller). EXHAUSTIVE over every TargetOp variant — see the file header:
-// no bare `default`, so a new variant is a compile error here, not a silent `??`.
-function formatTargetOp(op TargetOp, blocks IrBlockArray) returns String
+// The ISA a Target module was lowered for, recovered from its ops: any op in the arm64 band means an
+// arm64 module, else x64. A module is single-ISA, and the SHARED ops carry no ISA of their own, so
+// their operands can only be named against the module's ISA — recovered here once (the printer's
+// caller lives in another tier's file, so deriving it keeps the name rendering self-contained).
+function moduleTargetCpu(module TargetModule) returns CpuArch
+	for op in module.ops 'eachOp'
+		if opIsArm64Band(op) 'arm64'
+			return CpuArch.arm64
+		end 'arm64'
+	end 'eachOp'
+	return CpuArch.x64
+end 'moduleTargetCpu'
+
+// True when `op` is one of the arm64-SPECIFIC ops (the `arm64Ret..arm64FpLoadRdata` band) — the shared
+// ops (in the x64 band positionally) and the x64-specific ops are false, so a module is arm64 iff it
+// holds at least one of these. Exhaustive, so a new op variant is a compile error, not a mis-classify.
+function opIsArm64Band(op TargetOp) returns bool
+	return match op 'p'
+		prologue to leaRegRdata gives false
+		arm64Ret to arm64FpLoadRdata gives true
+	end 'p'
+end 'opIsArm64Band'
+
+// Render one TargetOp as `<mnemonic> <operands>` (the ISA namespace is added by the caller).
+// EXHAUSTIVE over every TargetOp variant — see the file header: no bare `default`, so a new variant is
+// a compile error here, not a silent `??`. `cpu` names the module's ISA so the SHARED ops render their
+// operands against the right register file (`sharedVregName`); the x64/arm64-specific arms need no
+// dispatch (they only ever appear in their own ISA's modules).
+function formatTargetOp(op TargetOp, blocks IrBlockArray, cpu CpuArch) returns String
 	return match op 'op'
 		prologue(stackSize) gives "prologue {stackSize}"
 		epilogue(stackSize) gives "epilogue {stackSize}"
@@ -168,7 +198,7 @@ function formatTargetOp(op TargetOp, blocks IrBlockArray) returns String
 		jcc(cond, targetBlockId) gives "jcc {condCodeName(cond)}, {String.from(resolveBlockLabel(targetBlockId, blocks: blocks))}"
 		movRegImm(dest, value) gives "movRegImm {vregName(dest)}, {value}"
 		movRegImm32(dest, value) gives "movRegImm32 {vregName(dest)}, {value}"
-		movRegReg(destReg, srcReg) gives "movRegReg {vregName(destReg)}, {vregName(srcReg)}"
+		movRegReg(destReg, srcReg) gives "movRegReg {sharedVregName(destReg, cpu: cpu)}, {sharedVregName(srcReg, cpu: cpu)}"
 		movReg32Reg32(destReg, srcReg) gives "movReg32Reg32 {vregName(destReg)}, {vregName(srcReg)}"
 		subRegReg(dest, lhs, rhs) gives "subRegReg {vregName(dest)}, {vregName(lhs)}, {vregName(rhs)}"
 		imulRegReg(dest, lhs, rhs) gives "imulRegReg {vregName(dest)}, {vregName(lhs)}, {vregName(rhs)}"
@@ -178,15 +208,15 @@ function formatTargetOp(op TargetOp, blocks IrBlockArray) returns String
 		leaRegRegImm32(dest, base, disp) gives "leaRegRegImm32 {vregName(dest)}, {vregName(base)}, {disp}"
 		imulRegRegImm32(dest, src, imm) gives "imulRegRegImm32 {vregName(dest)}, {vregName(src)}, {imm}"
 		cmpRegImm32(reg, imm) gives "cmpRegImm32 {vregName(reg)}, {imm}"
-		xchgRegReg(a, b) gives "xchgRegReg {vregName(a)}, {vregName(b)}"
+		xchgRegReg(a, b) gives "xchgRegReg {sharedVregName(a, cpu: cpu)}, {sharedVregName(b, cpu: cpu)}"
 		callDirect(targetName) gives "callDirect {String.from(targetName)}"
 		iatCall(slotIndex) gives "iatCall {slotIndex}"
 		cqo gives "cqo"
 		idivReg(divisor) gives "idivReg {vregName(divisor)}"
 		pushReg(reg) gives "pushReg {registerName(reg)}"
 		popReg(reg) gives "popReg {registerName(reg)}"
-		storeSlotReg(slot, srcReg) gives "storeSlotReg slot{slot}, {vregName(srcReg)}"
-		loadRegSlot(destReg, slot) gives "loadRegSlot {vregName(destReg)}, slot{slot}"
+		storeSlotReg(slot, srcReg) gives "storeSlotReg slot{slot}, {sharedVregName(srcReg, cpu: cpu)}"
+		loadRegSlot(destReg, slot) gives "loadRegSlot {sharedVregName(destReg, cpu: cpu)}, slot{slot}"
 		andRegReg(dest, lhs, rhs) gives "andRegReg {vregName(dest)}, {vregName(lhs)}, {vregName(rhs)}"
 		orRegReg(dest, lhs, rhs) gives "orRegReg {vregName(dest)}, {vregName(lhs)}, {vregName(rhs)}"
 		xorRegReg(dest, lhs, rhs) gives "xorRegReg {vregName(dest)}, {vregName(lhs)}, {vregName(rhs)}"
@@ -204,8 +234,8 @@ function formatTargetOp(op TargetOp, blocks IrBlockArray) returns String
 		// The data-section band. The LABEL is printed, because it is what the golden pins: a fragment
 		// showing `leaRegGlobal rax, __data_counter` is what makes a wrong slot a reviewable diff.
 		leaRegGlobal(dest, label) gives "leaRegGlobal {vregName(dest)}, {String.from(label)}"
-		loadRegBaseDisp(dest, base, disp, width) gives "loadRegBaseDisp.{accessWidthName(width)} {vregName(dest)}, [{vregName(base)} + {disp}]"
-		storeBaseDispReg(base, disp, src, width) gives "storeBaseDispReg.{accessWidthName(width)} [{vregName(base)} + {disp}], {vregName(src)}"
+		loadRegBaseDisp(dest, base, disp, width) gives "loadRegBaseDisp.{accessWidthName(width)} {sharedVregName(dest, cpu: cpu)}, [{sharedVregName(base, cpu: cpu)} + {disp}]"
+		storeBaseDispReg(base, disp, src, width) gives "storeBaseDispReg.{accessWidthName(width)} [{sharedVregName(base, cpu: cpu)} + {disp}], {sharedVregName(src, cpu: cpu)}"
 		addsdRegReg(dest, lhs, rhs) gives "addsdRegReg {vregName(dest)}, {vregName(lhs)}, {vregName(rhs)}"
 		subsdRegReg(dest, lhs, rhs) gives "subsdRegReg {vregName(dest)}, {vregName(lhs)}, {vregName(rhs)}"
 		mulsdRegReg(dest, lhs, rhs) gives "mulsdRegReg {vregName(dest)}, {vregName(lhs)}, {vregName(rhs)}"
@@ -270,6 +300,19 @@ function formatTargetOp(op TargetOp, blocks IrBlockArray) returns String
 		arm64FpLoadRdata(dest, label) gives "fpLoadRdata {arm64VregName(dest)}, [rdata + {String.from(label)}]"
 	end 'op'
 end 'formatTargetOp'
+
+// The printed form of a SHARED op's operand — one that appears in BOTH ISAs (movRegReg, the
+// spill/reload and base+disp forms, xchgRegReg) and so carries a neutral `RegNum` with no ISA of its
+// own. It names the operand against the MODULE's register file: the x64 names in an x64 module, the
+// arm64 names in an arm64 module. Without this a shared op in an arm64 module would print `rax` for
+// RegNum 0 where it means `x0` — the register file is right, only the naming table was wrong.
+function sharedVregName(vreg TargetVReg, cpu CpuArch) returns String
+	return match cpu 'c'
+		x64 gives vregName(vreg)
+		arm64 gives arm64VregName(vreg)
+		wasm32 panic("sharedVregName: maxon-shv2 has no wasm Target printer")
+	end 'c'
+end 'sharedVregName'
 
 // The printed form of an arm64 operand: a colored physical register by its arm64 name (`x0`, `d5`,
 // …) or a still-virtual value by its SSA id. `TargetVReg.physical` carries a neutral `RegNum`, which

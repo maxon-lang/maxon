@@ -123,14 +123,16 @@ function buildX64Backend(stdModule StdModule, target Target, globalData GlobalDa
 	return codeResult
 end 'buildX64Backend'
 
-// Install the OS entry point. M1 = "prepend the `mrt_start` entry stub + register
-// the ExitProcess import." Runs AFTER register allocation and prologue/epilogue so
-// the hand-built stub (all-physical registers, its own explicit frame) is never
-// reprocessed by those passes.
+// Install the OS entry point at the MODULE level. x64-windows prepends `mrt_start` as a module
+// function (all-physical registers, its own explicit frame), which concat lays out first; it runs
+// AFTER register allocation and prologue/epilogue so the hand-built stub is never reprocessed. This
+// pass is WINDOWS-ONLY: arm64-macOS has no module-level entry, because its stub calls `_exit`
+// through a GOT import that has no TargetOp channel, so it is hand-assembled as a FunctionCodeChunk
+// in the encode phase instead (see `Arm64Backend.buildArm64Backend` / `Arm64Runtime`).
 export function augmentWithRuntime(module TargetModule, target Target)
 	match target.os 'os'
 		windows then prependEntryStub(module, checkLeaks: moduleHasFunction(module, name: MmLeakCheckName))
-		macos then prependArm64EntryStub(module, checkLeaks: moduleHasFunction(module, name: MmLeakCheckName))
+		macos then panic("augmentWithRuntime: arm64-macOS installs its entry stub as a hand-assembled chunk (Arm64Backend.buildArm64Backend), not a module function — this module-level pass is windows-only")
 		linux then panic("augmentWithRuntime: maxon-shv2 has no linux entry stub yet (got {targetToString(target)})")
 		wasi then panic("augmentWithRuntime: maxon-shv2 has no wasi entry stub yet (got {targetToString(target)})")
 	end 'os'
@@ -139,8 +141,9 @@ end 'augmentWithRuntime'
 // Whether the MM runtime was installed — i.e. whether the program reaches the heap at all. The
 // entry stub asks the MODULE rather than being told, because by this point the module IS the
 // answer: `installMmRuntime` put the function there, and a second flag threaded down from
-// `compileToCodeResult` would be the same fact written down twice, free to disagree.
-function moduleHasFunction(module TargetModule, name ByteArray) returns bool
+// `compileToCodeResult` would be the same fact written down twice, free to disagree. Exported so the
+// arm64 backend's chunk-built entry stub decides its leak gate from the same one question.
+export function moduleHasFunction(module TargetModule, name ByteArray) returns bool
 	for func in module.functions 'eachFunc'
 		if func.name == name 'found'
 			return true
@@ -228,13 +231,3 @@ export function writeExecutable(codeResult CodeResult, target Target, outputPath
 		wasi then panic("writeExecutable: maxon-shv2 has no WASM writer yet (got {targetToString(target)})")
 	end 'os'
 end 'writeExecutable'
-
-// ⚠⚠ TEMP — REPLACED AT MACH-O INTEGRATION. The real `writeMachO` lives in
-// `Targets/Macos/MachOWriter.maxon`, owned by a PARALLEL agent (ad-hoc signing, PIE relocs, GOT +
-// chained fixups). shv2 needs the symbol to COMPILE, so this local panicking stub stands in until
-// that file lands — at which point the coordinator DELETES this stub and the exported one takes
-// over. It is never reached this rung: the arm64 build panics at the isel stub, far before
-// `writeExecutable`. See the writeup's "MachO seam".
-function writeMachO(outputPath FilePath, codeResult CodeResult, target Target)
-	panic("writeMachO: not yet implemented (MachO integration — Targets/Macos/MachOWriter.maxon, parallel agent) [{outputPath}, {codeResult.targetModule.funcCount()} fn, {targetToString(target)}]")
-end 'writeMachO'

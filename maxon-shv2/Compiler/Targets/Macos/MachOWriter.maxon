@@ -1,0 +1,776 @@
+// Mach-O writer for arm64-macOS executables — the format-neutral CodeResult →
+// Mach-O seam, the macOS sibling of Windows/PeWriter.
+//
+// Produces a PIE, ad-hoc-signed `MH_EXECUTE`: __PAGEZERO / __TEXT / __DATA /
+// __LINKEDIT, dyld chained-fixup imports through a __got, and an embedded ad-hoc
+// code signature (an unsigned arm64 binary is SIGKILL'd by AMFI on Apple
+// Silicon). The layout reproduces the C# bootstrap's MachOLayout/MachOWriter —
+// the recipe proven to launch on this host today — with the reach-guarded ARM64
+// patchers this compiler already carries in BinaryHelpers.
+//
+// THIN for M1 (scalar core). It handles what the M1 CodeResult carries: __text,
+// float constants in __const, top-level `var` globals in __data, and GOT imports.
+// It does NOT yet emit the DYLD_CHAINED_PTR_64_OFFSET *rebases* v1 threads through
+// __DATA for absolute function pointers — the scalar core produces none (string
+// buffers arrive at P1.2, witness/layout function pointers at P1.6), so every data
+// reference is PC-relative (ADRP-based) and slide-safe with no rebase. That
+// machinery GROWS back at those milestones, exactly as CodeResult's own
+// arm64-fixup fields do. `symdata`/`covdata` are empty at M1 and their relocation
+// arms panic rather than silently emit an unbacked section — the day one is
+// emitted is a loud failure, not a wrong address.
+//
+// Unlike PeWriter's fixed-base image (`patchStringBufferFixups` bakes an absolute
+// VA), macOS arm64 is always ASLR/PIE: there is no fixed base to bake, so absolute
+// pointers become dyld rebases (deferred above) and code stays position-
+// independent.
+
+// --- Page sizes ---
+// Segments are 16 KiB-aligned (the arm64 macOS VM page); the code signature hashes
+// in 4 KiB pages (CS_PAGE_SIZE_LOG2 below). The two are deliberately different.
+let MachoPageSize = 0x4000
+let MachoTextVmAddr = 0x100000000
+let MachoPageZeroSize = 0x100000000
+
+// --- Mach-O header ---
+let MhMagic64 = 0xFEEDFACF
+let CpuTypeArm64 = 0x0100000C
+let CpuSubtypeArm64All = 0
+let MhExecute = 2
+let MhDyldLink = 0x4
+let MhTwoLevel = 0x80
+let MhPie = 0x200000
+
+// --- Load command types ---
+let LcSegment64 = 0x19
+let LcSymtab = 0x02
+let LcDysymtab = 0x0B
+let LcCodeSignature = 0x1D
+let LcMain = 0x80000028
+let LcLoadDylib = 0x0C
+let LcLoadDylinker = 0x0E
+let LcUuid = 0x1B
+let LcBuildVersion = 0x32
+let LcDyldChainedFixups = 0x80000034
+let LcDyldExportsTrie = 0x80000033
+
+// --- VM protection flags ---
+let VmProtRead = 0x01
+let VmProtWrite = 0x02
+let VmProtExecute = 0x04
+
+// --- Section flags ---
+let SRegular = 0x00000000
+let SAttrPureInstructions = 0x80000000
+let SAttrSomeInstructions = 0x00000400
+
+// --- Code signing constants (the whole blob is BIG-ENDIAN) ---
+let CsMagicEmbeddedSignature = 0xFADE0CC0
+let CsMagicCodeDirectory = 0xFADE0C02
+let CsSlotCodeDirectory = 0
+let CsAdhoc = 0x2
+let CsLinkerSigned = 0x20000
+let CsHashTypeSha256 = 2
+let CsSha256Len = 32
+// The signature hashes the file in 2^12 = 4096-byte pages, NOT the 16 KiB segment
+// page. This is the value the loader assumes for an ad-hoc CodeDirectory.
+let CsPageSizeLog2 = 12
+// CS_EXECSEG_MAIN_BINARY: this signed executable segment is the process's main
+// binary. AMFI rejects a zero-length exec segment, so execSegLimit must be the
+// real __TEXT file size.
+let CsExecSegMainBinary = 0x1
+// CodeDirectory version 0x20400 is the first that carries the execSeg fields.
+let CsCodeDirectoryVersion = 0x20400
+let CodeDirectoryHeaderSize = 88
+// SuperBlob header (magic+length+count = 12) + one BlobIndex (type+offset = 8).
+let SuperBlobHeaderSize = 20
+
+// --- Chained fixups ---
+// Pointer format 6 = DYLD_CHAINED_PTR_64_OFFSET (the slide-safe 64-bit format the
+// bootstrap uses on this host). GOT entries are BIND entries (bit 63 set), which
+// carry an import ordinal rather than a target address, so they are format-neutral.
+let DyldChainedPtr64Offset = 6
+let DyldChainedImportFormat = 1
+// A __DATA page on which no fixup chain BEGINS. dyld still follows a chain that
+// flows onto a page via a predecessor's `next` field; this only marks starts.
+let DyldChainedPtrStartNone = 0xFFFF
+
+// The dyld path and the one dylib every OS call resolves through. macOS forbids raw
+// syscalls, so `_exit`/`_write`/... are GOT-indirect calls into libSystem.
+let DyldPath = "/usr/lib/dyld"
+let LibSystemPath = "/usr/lib/libSystem.B.dylib"
+
+// nlist_64 bits for the (debugger-only) symbol table.
+let NExt = 0x01
+let NSect = 0x0E
+let MachoTextSectionIndex = 1
+
+// Fixed load-command sizes (bytes). A segment_command_64 header is 72 bytes; each
+// section_64 that follows adds 80.
+let SegmentCommandBaseSize = 72
+let SectionHeaderSize = 80
+let SymtabCommandSize = 24
+let DysymtabCommandSize = 80
+let MainCommandSize = 24
+let UuidCommandSize = 24
+let BuildVersionCommandSize = 24
+let CodeSignatureCommandSize = 16
+let ChainedFixupsCommandSize = 16
+let ExportsTrieCommandSize = 16
+// LC_LOAD_DYLINKER: 12-byte header + "/usr/lib/dyld\0" (14), aligned up to 8 → 32.
+let DylinkerCommandSize = 32
+// LC_LOAD_DYLIB: 24-byte header + "/usr/lib/libSystem.B.dylib\0" (27), up to 8 → 56.
+let DylibCommandSize = 56
+let MachHeaderSize = 32
+// M1 always emits: __PAGEZERO, __TEXT, __DATA, __LINKEDIT, LC_SYMTAB, LC_DYSYMTAB,
+// LC_LOAD_DYLINKER, LC_MAIN, LC_UUID, LC_LOAD_DYLIB, LC_BUILD_VERSION,
+// LC_DYLD_CHAINED_FIXUPS, LC_DYLD_EXPORTS_TRIE, LC_CODE_SIGNATURE.
+let MachoNumCommands = 14
+
+// LC_BUILD_VERSION platform = PLATFORM_MACOS, minos = 13.0.0 (encoded X<<16 | Y<<8).
+let PlatformMacos = 1
+let MinOsMacos13 = 0x000D0000
+
+// __heap-free at M1: the runtime allocator mmaps its own arenas, so __DATA holds
+// only globals + the GOT. Segment vmsize == filesize (no zerofill tail needed).
+
+// The libSystem imports M1 needs, one GOT slot each. Mirrors PeWriter's `IatSlot`:
+// the reloc a call site records is `machoImportSlotIndex(slot)`, and the GOT + the
+// chained-fixup import table + the symbol pool all size themselves off `allCases`,
+// so adding an import is: append a case here and its symbol in `machoImportSymbol`.
+//
+// `exit` terminates the process with main's return code. `write` is the panic
+// runtime's route to stderr (macOS has no CRT `fprintf`; a panic is `write(2, …)`).
+// arm64 needs no fault-handler import — the scalar core's only trap-shaped case,
+// divide-by-zero, is guarded inline (arm64 `sdiv` by 0 does not fault), and the
+// scalar core allocates nothing so there is no page-source import either.
+export enum MachoImportSlot
+	exit
+	write
+end 'MachoImportSlot'
+
+// The GOT slot index a call site records and the writer patches its ADRP+LDR
+// against. One accessor over the enum, exactly like `iatSlotIndex`.
+export function machoImportSlotIndex(slot MachoImportSlot) returns RelocSlotIndex
+	return slot.ordinal as RelocSlotIndex
+end 'machoImportSlotIndex'
+
+// The Mach-O symbol name for a slot, INCLUDING the platform ABI's leading
+// underscore (a C `exit` is the Mach-O symbol `_exit`). Kept as an explicit map,
+// not the enum case name, because the case name cannot begin with `_`.
+function machoImportSymbol(slot MachoImportSlot) returns String
+	return match slot 'sym'
+		exit gives "_exit"
+		write gives "_write"
+	end 'sym'
+end 'machoImportSymbol'
+
+// libSystem import symbols in slot order — the sequence the GOT, the import table
+// and the symbol pool all iterate.
+function machoImportSymbols() returns StringArray
+	var names = StringArray.create()
+	for slot in MachoImportSlot.allCases 'each'
+		names.push(machoImportSymbol(slot))
+	end 'each'
+	return names
+end 'machoImportSymbols'
+
+function machoImportCount() returns ByteCount
+	return MachoImportSlot.allCases.count()
+end 'machoImportCount'
+
+// --- Segment / section header helpers ---
+
+// Write a 16-byte, NUL-padded segment/section name (Mach-O names are ASCII
+// literals fixed at their call sites, so a non-ASCII byte is a programmer error).
+function writeMachoName(buf ByteArray, name String)
+	var written = 0
+	for ch in name 'chars'
+		let b = try ch.asciiValue() otherwise panic("writeMachoName: non-ASCII character in Mach-O name '{name}'")
+		buf.push(b)
+		written = written + 1
+	end 'chars'
+	while written < 16 'pad'
+		buf.push(0)
+		written = written + 1
+	end 'pad'
+end 'writeMachoName'
+
+function writeSegmentCommand(buf ByteArray, segname String, vmaddr MachineWord, vmsize MachineWord, fileoff MachineWord, filesize MachineWord, maxprot MachineWord, initprot MachineWord, nsects ByteCount)
+	writeDword(buf, value: LcSegment64)
+	writeDword(buf, value: SegmentCommandBaseSize + SectionHeaderSize * nsects)
+	writeMachoName(buf, name: segname)
+	writeQword(buf, value: vmaddr)
+	writeQword(buf, value: vmsize)
+	writeQword(buf, value: fileoff)
+	writeQword(buf, value: filesize)
+	writeDword(buf, value: maxprot)
+	writeDword(buf, value: initprot)
+	writeDword(buf, value: nsects)
+	writeDword(buf, value: 0)  // flags
+end 'writeSegmentCommand'
+
+function writeMachoSectionHeader(buf ByteArray, sectname String, segname String, addr MachineWord, size MachineWord, offset MachineWord, alignLog2 MachineWord, flags MachineWord)
+	writeMachoName(buf, name: sectname)
+	writeMachoName(buf, name: segname)
+	writeQword(buf, value: addr)
+	writeQword(buf, value: size)
+	writeDword(buf, value: offset)
+	writeDword(buf, value: alignLog2)
+	writeDword(buf, value: 0)  // reloff
+	writeDword(buf, value: 0)  // nreloc
+	writeDword(buf, value: flags)
+	writeDword(buf, value: 0)  // reserved1
+	writeDword(buf, value: 0)  // reserved2
+	writeDword(buf, value: 0)  // reserved3
+end 'writeMachoSectionHeader'
+
+// --- GOT ---
+
+// Build the __got: one 8-byte chained-fixup BIND entry per import slot. Entry
+// format: bit 63 = 1 (bind), bits 51-62 = `next`, bits 0-23 = import ordinal. dyld
+// walks the chain by `next`, which counts 4-byte words to the following fixup; each
+// GOT slot is 8 bytes, so every entry but the last carries next = 2 (the last is 0).
+function buildGot() returns ByteArray
+	var got = ByteArray.create()
+	let count = machoImportCount()
+	got.reserve(count * 8)
+
+	for slot in 0 upto count 'eachSlot'
+		let isLast = slot == count - 1
+		let nextField = 0 if isLast else 2
+		let entry = (1 shl 63) or (nextField shl 51) or slot
+		writeQword(got, value: entry)
+	end 'eachSlot'
+
+	return got
+end 'buildGot'
+
+// --- Chained fixups (__LINKEDIT payload) ---
+
+// Build the LC_DYLD_CHAINED_FIXUPS blob describing the single import-bind chain
+// that lives in the __got. The __DATA segment's page_start table has one entry per
+// 16 KiB page of the segment's file image: the page the GOT begins on carries its
+// in-page start offset, every other page is START_NONE. A __DATA that outgrows one
+// page (many globals ahead of the GOT) therefore still points dyld at the right
+// page — the bootstrap learned this the hard way ("chain overflow … max=1").
+function buildChainedFixups(dataSegmentFileOff MachineWord, dataSegmentFileSize ByteCount, gotSectionOffset ByteOffset) returns ByteArray
+	var cf = ByteArray.create()
+	cf.reserve(256)
+
+	let importCount = machoImportCount()
+	let startsOffset = 0x20
+	let segCount = 4
+	let startsSize = 4 + segCount * 4
+
+	let dataPageCount = (dataSegmentFileSize + MachoPageSize - 1) / MachoPageSize
+	let gotChainStartPage = gotSectionOffset / MachoPageSize
+	let gotChainStartInPage = gotSectionOffset mod MachoPageSize
+	// dyld_chained_starts_in_segment: size(4)+page_size(2)+pointer_format(2)+
+	// segment_offset(8)+max_valid_pointer(4)+page_count(2)+page_start[pageCount].
+	let dataSegStartsSize = 22 + 2 * dataPageCount
+	let dataSegStartsOffset = startsSize
+
+	let importsOffset = alignUp(startsOffset + startsSize + dataSegStartsSize, alignment: 4)
+	let symbolsOffset = importsOffset + importCount * 4
+
+	// dyld_chained_fixups_header (0x20 bytes).
+	writeDword(cf, value: 0)  // fixups_version
+	writeDword(cf, value: startsOffset)
+	writeDword(cf, value: importsOffset)
+	writeDword(cf, value: symbolsOffset)
+	writeDword(cf, value: importCount)
+	writeDword(cf, value: DyldChainedImportFormat)
+	writeDword(cf, value: 0)  // symbols_format (uncompressed)
+	writeDword(cf, value: 0)  // pad to startsOffset (0x20)
+
+	// dyld_chained_starts_in_image: one offset per segment (only __DATA has starts).
+	writeDword(cf, value: segCount)
+	writeDword(cf, value: 0)  // __PAGEZERO
+	writeDword(cf, value: 0)  // __TEXT
+	writeDword(cf, value: dataSegStartsOffset)  // __DATA
+	writeDword(cf, value: 0)  // __LINKEDIT
+
+	// dyld_chained_starts_in_segment for __DATA.
+	writeDword(cf, value: dataSegStartsSize)
+	writeWord(cf, value: MachoPageSize)
+	writeWord(cf, value: DyldChainedPtr64Offset)
+	writeQword(cf, value: dataSegmentFileOff)
+	writeDword(cf, value: 0)  // max_valid_pointer
+	writeWord(cf, value: dataPageCount)
+	for page in 0 upto dataPageCount 'eachPage'
+		let start = gotChainStartInPage if page == gotChainStartPage else DyldChainedPtrStartNone
+		writeWord(cf, value: start)
+	end 'eachPage'
+
+	padTo(cf, size: importsOffset)
+
+	// dyld_chained_import entries (4 bytes each): lib_ordinal=1 (libSystem), weak=0,
+	// name_offset into the symbol pool. The pool opens with a NUL, so the first name
+	// sits at offset 1 and each following name trails the previous `_name\0`.
+	let importNames = machoImportSymbols()
+	var nameOff = 1
+	for name in importNames 'eachImport'
+		let importEntry = 1 or (0 shl 8) or (nameOff shl 9)
+		writeDword(cf, value: importEntry)
+		nameOff = nameOff + name.toByteArray().count() + 1
+	end 'eachImport'
+
+	// Symbol pool: leading NUL, then each `_name\0`.
+	cf.push(0)
+	for name in importNames 'eachSymbol'
+		cf.append(name.toByteArray())
+		cf.push(0)
+	end 'eachSymbol'
+
+	while cf.count() mod 8 != 0 'align8'
+		cf.push(0)
+	end 'align8'
+
+	return cf
+end 'buildChainedFixups'
+
+// --- Relocation patching ---
+
+// Patch each import call's ADRP+LDR pair to its __got entry. The call site emits
+// `ADRP x16, <got page>` at `codeOffset` and `LDR x16, [x16, <page off>]` at
+// `codeOffset+4`; both are filled here from the resolved GOT entry VA. Reuses the
+// reach-guarded shared patchers (ADRP page ±4 GiB; the LDR's imm12 always fits the
+// within-page offset), so a blown reach is a loud link error, not a wrong page.
+function patchImportRelocations(code ByteArray, relocations RelocationArray, textSectionVmAddr MachineWord, gotSectionVmAddr MachineWord)
+	for reloc in relocations 'patch'
+		let gotEntryVa = gotSectionVmAddr + reloc.slotIndex * 8
+		let adrpVa = textSectionVmAddr + reloc.codeOffset
+		patchArm64Adrp(code, codeOffset: reloc.codeOffset, instrAddr: adrpVa, targetAddr: gotEntryVa)
+		patchArm64PageOff(code, codeOffset: reloc.codeOffset + 4, targetAddr: gotEntryVa)
+	end 'patch'
+end 'patchImportRelocations'
+
+// Patch code→section references (ADR / ADRP+off / LDR-literal). `arm64*` kinds
+// reach __const (float constants, read-only in __TEXT); `dataSection*` kinds reach
+// the top-level `var` globals in __data. Every other arm is named and PANICS: the
+// x64 kinds cannot appear in an arm64 image; `symdata`/`covdata` sections are not
+// emitted at M1; and `funcAbs64InRdata` is a PIE rebase (P1.6 layout descriptors),
+// not a code patch. Naming them one by one makes the day one is emitted a loud
+// failure rather than a silently unpatched displacement — PeWriter's discipline.
+function patchSectionRelocations(code ByteArray, rdataRelocs RdataRelocationArray, textSectionVmAddr MachineWord, constSectionVmAddr MachineWord, dataSectionVmAddr MachineWord)
+	for reloc in rdataRelocs 'patch'
+		let instrVa = textSectionVmAddr + reloc.codeOffset
+		match reloc.kind 'kind'
+			ripRelDisp32 then panic("MachOWriter: x64 RIP-relative relocation in an arm64 image — target/emitter mismatch")
+			symdataRipRelDisp32 then panic("MachOWriter: x64 symdata relocation in an arm64 image — target/emitter mismatch")
+			dataSectionRipRelDisp32 then panic("MachOWriter: x64 data-section relocation in an arm64 image — target/emitter mismatch")
+			covdataRipRelDisp32 then panic("MachOWriter: x64 covdata relocation in an arm64 image — target/emitter mismatch")
+			arm64Adr then patchArm64Adr(code, codeOffset: reloc.codeOffset, instrAddr: instrVa, targetAddr: constSectionVmAddr + reloc.rdataOffset)
+			arm64LdrLiteral then patchArm64LdrLiteral(code, codeOffset: reloc.codeOffset, instrAddr: instrVa, targetAddr: constSectionVmAddr + reloc.rdataOffset)
+			symdataArm64Adr then panic("MachOWriter: symdata section is empty at M1 — a symdataArm64Adr relocation has no section to reach; it arrives at the reflection milestone")
+			dataSectionArm64Adr then patchArm64Adr(code, codeOffset: reloc.codeOffset, instrAddr: instrVa, targetAddr: dataSectionVmAddr + reloc.rdataOffset)
+			covdataArm64Adr then panic("MachOWriter: coverage is not emitted for arm64-macos yet — no .covdata section")
+			arm64Adrp then patchArm64Adrp(code, codeOffset: reloc.codeOffset, instrAddr: instrVa, targetAddr: constSectionVmAddr + reloc.rdataOffset)
+			arm64PageOff then patchArm64PageOff(code, codeOffset: reloc.codeOffset, targetAddr: constSectionVmAddr + reloc.rdataOffset)
+			dataSectionArm64Adrp then patchArm64Adrp(code, codeOffset: reloc.codeOffset, instrAddr: instrVa, targetAddr: dataSectionVmAddr + reloc.rdataOffset)
+			dataSectionArm64PageOff then patchArm64PageOff(code, codeOffset: reloc.codeOffset, targetAddr: dataSectionVmAddr + reloc.rdataOffset)
+			covdataArm64Adrp then panic("MachOWriter: coverage is not emitted for arm64-macos yet — no .covdata section")
+			covdataArm64PageOff then panic("MachOWriter: coverage is not emitted for arm64-macos yet — no .covdata section")
+			funcAbs64InRdata then panic("MachOWriter: funcAbs64InRdata is a PIE rebase into rdata (a layout descriptor's function-pointer slot), not a code patch — it arrives with witness/layout descriptors (P1.6)")
+		end 'kind'
+	end 'patch'
+end 'patchSectionRelocations'
+
+// --- Code signature ---
+
+// Build the embedded ad-hoc signature: an EmbeddedSignature SuperBlob wrapping a
+// single CodeDirectory that SHA-256-hashes the file in 4 KiB pages up to
+// `codeLimit` (the signature's own offset). All multi-byte fields are big-endian.
+// The circularity — the signature covers the file, which contains the signature —
+// is broken by up-front deterministic layout: `codeLimit` and every size are known
+// before a byte is written, the signature is appended last, and the signed region
+// is exactly `[0, codeLimit)`.
+function buildCodeSignature(fileData ByteArray, codeLimit MachineWord, execSegLimit MachineWord, identifier String) returns ByteArray
+	let hashPageSize = 1 shl CsPageSizeLog2
+	let nCodeSlots = (codeLimit + hashPageSize - 1) / hashPageSize
+
+	let identifierBytes = identifier.toByteArray()
+	let identLen = identifierBytes.count() + 1  // NUL-terminated
+
+	let hashOffset = CodeDirectoryHeaderSize + identLen
+	let cdSize = hashOffset + nCodeSlots * CsSha256Len
+	let codeSignatureSize = SuperBlobHeaderSize + cdSize
+
+	var sig = ByteArray.create()
+	sig.reserve(codeSignatureSize)
+
+	// SuperBlob header + BlobIndex[0].
+	writeDwordBE(sig, value: CsMagicEmbeddedSignature)
+	writeDwordBE(sig, value: codeSignatureSize)
+	writeDwordBE(sig, value: 1)  // blob count
+	writeDwordBE(sig, value: CsSlotCodeDirectory)
+	writeDwordBE(sig, value: SuperBlobHeaderSize)  // offset to the CodeDirectory
+
+	// CodeDirectory header.
+	writeDwordBE(sig, value: CsMagicCodeDirectory)
+	writeDwordBE(sig, value: cdSize)
+	writeDwordBE(sig, value: CsCodeDirectoryVersion)
+	writeDwordBE(sig, value: CsAdhoc or CsLinkerSigned)  // flags
+	writeDwordBE(sig, value: hashOffset)
+	writeDwordBE(sig, value: CodeDirectoryHeaderSize)  // identOffset
+	writeDwordBE(sig, value: 0)  // nSpecialSlots
+	writeDwordBE(sig, value: nCodeSlots)
+	writeDwordBE(sig, value: codeLimit)
+	sig.push(CsSha256Len)  // hashSize
+	sig.push(CsHashTypeSha256)  // hashType
+	sig.push(0)  // platform
+	sig.push(CsPageSizeLog2)  // pageSize (log2)
+	writeDwordBE(sig, value: 0)  // spare2
+	writeDwordBE(sig, value: 0)  // scatterOffset
+	writeDwordBE(sig, value: 0)  // teamOffset
+	writeDwordBE(sig, value: 0)  // spare3
+	writeQwordBE(sig, value: 0)  // codeLimit64
+	writeQwordBE(sig, value: 0)  // execSegBase (__TEXT is at file offset 0)
+	writeQwordBE(sig, value: execSegLimit)  // execSegLimit = __TEXT file size
+	writeQwordBE(sig, value: CsExecSegMainBinary)  // execSegFlags
+
+	// Identifier, NUL-terminated.
+	sig.append(identifierBytes)
+	sig.push(0)
+
+	// Page hashes: SHA-256 of each 4 KiB page; the last page hashed at its real
+	// (short) length, not padded.
+	for slot in 0 upto nCodeSlots 'hashPages'
+		let pageStart = slot * hashPageSize
+		var pageEnd = pageStart + hashPageSize
+		if pageEnd > codeLimit 'clamp'
+			pageEnd = codeLimit
+		end 'clamp'
+
+		var pageData = ByteArray.create()
+		pageData.reserve(pageEnd - pageStart)
+		for i in pageStart upto pageEnd 'copyPage'
+			// pageEnd <= codeLimit <= fileData.count() (the caller signs the file it
+			// just built), so every index is in range.
+			let b = try fileData.get(i) otherwise panic("buildCodeSignature: page byte {i} past fileData ({fileData.count()} bytes) despite pageEnd <= codeLimit — layout bug")
+			pageData.push(b)
+		end 'copyPage'
+
+		sig.append(sha256(pageData))
+	end 'hashPages'
+
+	return sig
+end 'buildCodeSignature'
+
+// --- Symbol table (debugger-only; the loader ignores it) ---
+
+// The nlist_64 string table + per-symbol name offsets. Mach-O strtab opens with a
+// NUL; each name is underscore-prefixed (platform ABI) and NUL-terminated. Returns
+// the strtab bytes and the parallel offsets. When there are no debug symbols the
+// strtab is a single NUL (an empty, valid table).
+type MachoSymtab
+	export var strtab as ByteArray
+	export var nameOffsets as ByteOffsetArray
+
+	static function build(debugSymbols DebugSymbolArray) returns MachoSymtab
+		var strtab = ByteArray.create()
+		strtab.push(0)
+		var nameOffsets = ByteOffsetArray.create()
+		for sym in debugSymbols 'eachSym'
+			nameOffsets.push(strtab.count())
+			strtab.push(0x5F)  // '_'
+			strtab.append(sym.name)
+			strtab.push(0)
+		end 'eachSym'
+		return Self{strtab: strtab, nameOffsets: nameOffsets}
+	end 'build'
+end 'MachoSymtab'
+
+// --- LC_UUID payload ---
+
+// The 16-byte LC_UUID content: SHA-256 of the (fixup-resolved) code bytes, first
+// 16 bytes. dyld on macOS 26+ rejects a binary with no LC_UUID; deriving it from
+// the code makes it deterministic (repeat builds of the same input are
+// byte-identical) yet distinct across distinct programs.
+function machoUuid(code ByteArray) returns ByteArray
+	let digest = sha256(code)
+	var uuid = ByteArray.create()
+	uuid.reserve(16)
+	for i in 0 upto 16 'take'
+		let b = try digest.get(i) otherwise panic("machoUuid: sha256 returned fewer than 16 bytes")
+		uuid.push(b)
+	end 'take'
+	return uuid
+end 'machoUuid'
+
+// --- Main writer ---
+
+export function writeMachO(outputPath FilePath, codeResult CodeResult, target Target)
+	logInfo(LogCategory.binary, message: function() gives "Writing Mach-O file: {outputPath} ({targetToString(target)})")
+
+	if target.cpu != CpuArch.arm64 or target.os != Os.macos 'wrongTarget'
+		panic("writeMachO: the Mach-O writer emits arm64-macos only (got {targetToString(target)})")
+	end 'wrongTarget'
+
+	var code = codeResult.code
+	let codeSize = code.count()
+	let rdataSize = codeResult.rdata.count()
+	let preludeSize = codeResult.dataPrelude.count()
+
+	// symdata (reflection) and covdata (coverage) are not produced at M1. If either
+	// ever arrives, the section that backs it must be laid down here first — fail
+	// loudly rather than reference a section that does not exist.
+	if codeResult.symdata.count() > 0 'hasSymdata'
+		panic("writeMachO: symdata is non-empty but the arm64-macos writer emits no __symtab section yet — it arrives at the reflection milestone")
+	end 'hasSymdata'
+	if codeResult.covDataSectionBytes.count() > 0 'hasCovdata'
+		panic("writeMachO: covdata is non-empty but the arm64-macos writer emits no coverage section yet")
+	end 'hasCovdata'
+
+	let hasRdata = rdataSize > 0
+	let hasPrelude = preludeSize > 0
+
+	// --- Section counts ---
+	// __TEXT: __text [+ __const]. __DATA: [__data] + __got (imports always present).
+	var textSectionCount = 1
+	if hasRdata 'countConst'
+		textSectionCount = textSectionCount + 1
+	end 'countConst'
+	var dataSectionCount = 1  // __got
+	if hasPrelude 'countData'
+		dataSectionCount = dataSectionCount + 1
+	end 'countData'
+
+	// --- Load-command sizes ---
+	let textCmdSize = SegmentCommandBaseSize + SectionHeaderSize * textSectionCount
+	let dataCmdSize = SegmentCommandBaseSize + SectionHeaderSize * dataSectionCount
+	let loadCommandsSize = SegmentCommandBaseSize + textCmdSize + dataCmdSize + SegmentCommandBaseSize + SymtabCommandSize + DysymtabCommandSize + DylinkerCommandSize + MainCommandSize + UuidCommandSize + DylibCommandSize + BuildVersionCommandSize + ChainedFixupsCommandSize + ExportsTrieCommandSize + CodeSignatureCommandSize
+
+	// --- __TEXT layout ---
+	let textSectionOffset = alignUp(MachHeaderSize + loadCommandsSize, alignment: 4)
+	let textSectionVmAddr = MachoTextVmAddr + textSectionOffset
+	// __const sits right after __text, still in read-only __TEXT (the scalar core
+	// bakes no absolute function pointers into rdata, so it needs no PIE rebase and
+	// no move to writable __DATA — see the file header). 8-byte aligned.
+	let constSectionOffset = alignUp(textSectionOffset + codeSize, alignment: 8)
+	let constSectionVmAddr = MachoTextVmAddr + constSectionOffset
+	let textSegmentContentEnd = constSectionOffset + rdataSize if hasRdata else textSectionOffset + codeSize
+	let textSegmentFileSize = alignUp(textSegmentContentEnd, alignment: MachoPageSize)
+
+	// --- __DATA layout: [__data (globals)] then __got ---
+	let dataSegmentFileOff = textSegmentFileSize
+	let dataSegmentVmAddr = MachoTextVmAddr + textSegmentFileSize
+	let dataSectionVmAddr = dataSegmentVmAddr  // globals begin at the segment start
+	let gotOffsetInData = alignUp(preludeSize, alignment: 8)
+	let gotSectionVmAddr = dataSegmentVmAddr + gotOffsetInData
+	let got = buildGot()
+	let gotSize = got.count()
+	let dataSegmentFileSize = alignUp(gotOffsetInData + gotSize, alignment: MachoPageSize)
+
+	// --- __LINKEDIT layout ---
+	let linkeditFileOff = dataSegmentFileOff + dataSegmentFileSize
+	let linkeditVmAddr = dataSegmentVmAddr + alignUp(dataSegmentFileSize, alignment: MachoPageSize)
+
+	let chainedFixupsData = buildChainedFixups(dataSegmentFileOff, dataSegmentFileSize: dataSegmentFileSize, gotSectionOffset: gotOffsetInData)
+	let chainedFixupsOff = linkeditFileOff
+	let chainedFixupsSize = chainedFixupsData.count()
+
+	// A minimal (empty) exports trie — one 8-byte terminal node.
+	var exportsTrieData = ByteArray.create()
+	writeQword(exportsTrieData, value: 0)
+	let exportsTrieOff = alignUp(chainedFixupsOff + chainedFixupsSize, alignment: 8)
+	let exportsTrieSize = exportsTrieData.count()
+
+	// Symbol / string table (empty unless the backend emitted debug symbols).
+	let symtab = MachoSymtab.build(codeResult.debugSymbols)
+	let nsyms = codeResult.debugSymbols.count()
+	let symtabOff = alignUp(exportsTrieOff + exportsTrieSize, alignment: 8)
+	let symtabSize = nsyms * 16
+	let strtabOff = alignUp(symtabOff + symtabSize, alignment: 4)
+	let strtabSize = symtab.strtab.count()
+
+	// --- Code signature: offset and size known up front (the layout is circular
+	// only if you patch after the fact; here every size is deterministic). ---
+	let codeSignatureOff = alignUp(strtabOff + strtabSize, alignment: 16)
+	let identifier = outputPath.stem()
+	let identLen = identifier.toByteArray().count() + 1
+	let csHashPageSize = 1 shl CsPageSizeLog2
+	let csNCodeSlots = (codeSignatureOff + csHashPageSize - 1) / csHashPageSize
+	let csCdSize = CodeDirectoryHeaderSize + identLen + csNCodeSlots * CsSha256Len
+	let codeSignatureSize = SuperBlobHeaderSize + csCdSize
+
+	let linkeditEnd = codeSignatureOff + codeSignatureSize
+	let linkeditFileSize = alignUp(linkeditEnd - linkeditFileOff, alignment: MachoPageSize)
+
+	// --- Patch relocations into the code image (before it is written) ---
+	patchImportRelocations(code, relocations: codeResult.relocations, textSectionVmAddr: textSectionVmAddr, gotSectionVmAddr: gotSectionVmAddr)
+	patchSectionRelocations(code, rdataRelocs: codeResult.rdataRelocations, textSectionVmAddr: textSectionVmAddr, constSectionVmAddr: constSectionVmAddr, dataSectionVmAddr: dataSectionVmAddr)
+
+	let entryOff = textSectionOffset + codeResult.mainCallFixupOffset
+	// macOS arm64 forces PIE — the kernel SIGKILLs a non-PIE main executable. MH_PIE
+	// lets dyld slide the image; all code addressing is PC-relative (ADRP), and the
+	// only absolute values (GOT binds) are dyld-resolved, so the slide is safe.
+	let flags = MhDyldLink or MhTwoLevel or MhPie
+
+	// --- Emit ---
+	var macho = ByteArray.create()
+	macho.reserve(codeSignatureOff + 4096)
+
+	// mach_header_64.
+	writeDword(macho, value: MhMagic64)
+	writeDword(macho, value: CpuTypeArm64)
+	writeDword(macho, value: CpuSubtypeArm64All)
+	writeDword(macho, value: MhExecute)
+	writeDword(macho, value: MachoNumCommands)
+	writeDword(macho, value: loadCommandsSize)
+	writeDword(macho, value: flags)
+	writeDword(macho, value: 0)  // reserved
+
+	// __PAGEZERO.
+	writeSegmentCommand(macho, segname: "__PAGEZERO", vmaddr: 0, vmsize: MachoPageZeroSize, fileoff: 0, filesize: 0, maxprot: 0, initprot: 0, nsects: 0)
+
+	// __TEXT.
+	writeSegmentCommand(macho, segname: "__TEXT", vmaddr: MachoTextVmAddr, vmsize: textSegmentFileSize, fileoff: 0, filesize: textSegmentFileSize, maxprot: VmProtRead or VmProtExecute, initprot: VmProtRead or VmProtExecute, nsects: textSectionCount)
+	writeMachoSectionHeader(macho, sectname: "__text", segname: "__TEXT", addr: textSectionVmAddr, size: codeSize, offset: textSectionOffset, alignLog2: 2, flags: SAttrPureInstructions or SAttrSomeInstructions or SRegular)
+	if hasRdata 'writeConstHeader'
+		writeMachoSectionHeader(macho, sectname: "__const", segname: "__TEXT", addr: constSectionVmAddr, size: rdataSize, offset: constSectionOffset, alignLog2: 3, flags: SRegular)
+	end 'writeConstHeader'
+
+	// __DATA.
+	writeSegmentCommand(macho, segname: "__DATA", vmaddr: dataSegmentVmAddr, vmsize: dataSegmentFileSize, fileoff: dataSegmentFileOff, filesize: dataSegmentFileSize, maxprot: VmProtRead or VmProtWrite, initprot: VmProtRead or VmProtWrite, nsects: dataSectionCount)
+	if hasPrelude 'writeDataHeader'
+		writeMachoSectionHeader(macho, sectname: "__data", segname: "__DATA", addr: dataSectionVmAddr, size: preludeSize, offset: dataSegmentFileOff, alignLog2: 3, flags: SRegular)
+	end 'writeDataHeader'
+	writeMachoSectionHeader(macho, sectname: "__got", segname: "__DATA", addr: gotSectionVmAddr, size: gotSize, offset: dataSegmentFileOff + gotOffsetInData, alignLog2: 3, flags: SRegular)
+
+	// __LINKEDIT.
+	writeSegmentCommand(macho, segname: "__LINKEDIT", vmaddr: linkeditVmAddr, vmsize: linkeditFileSize, fileoff: linkeditFileOff, filesize: linkeditFileSize, maxprot: VmProtRead, initprot: VmProtRead, nsects: 0)
+
+	// LC_SYMTAB.
+	writeDword(macho, value: LcSymtab)
+	writeDword(macho, value: SymtabCommandSize)
+	writeDword(macho, value: symtabOff)
+	writeDword(macho, value: nsyms)
+	writeDword(macho, value: strtabOff)
+	writeDword(macho, value: strtabSize)
+
+	// LC_DYSYMTAB — all emitted symbols are local defined symbols.
+	writeDword(macho, value: LcDysymtab)
+	writeDword(macho, value: DysymtabCommandSize)
+	writeDword(macho, value: 0)  // ilocalsym
+	writeDword(macho, value: nsyms)  // nlocalsym
+	writeDword(macho, value: nsyms)  // iextdefsym
+	writeDword(macho, value: 0)  // nextdefsym
+	writeDword(macho, value: nsyms)  // iundefsym
+	writeDword(macho, value: 0)  // nundefsym
+	writeZeros(macho, n: 48)  // toc / modtab / extref / indirect / reloc — 12 dwords
+
+	// LC_LOAD_DYLINKER.
+	writeDword(macho, value: LcLoadDylinker)
+	writeDword(macho, value: DylinkerCommandSize)
+	writeDword(macho, value: 12)  // name offset within the command
+	writeMachoLcString(macho, text: DyldPath, commandSize: DylinkerCommandSize, nameOffset: 12)
+
+	// LC_MAIN.
+	writeDword(macho, value: LcMain)
+	writeDword(macho, value: MainCommandSize)
+	writeQword(macho, value: entryOff)
+	writeQword(macho, value: 0)  // stacksize
+
+	// LC_UUID.
+	writeDword(macho, value: LcUuid)
+	writeDword(macho, value: UuidCommandSize)
+	macho.append(machoUuid(code))
+
+	// LC_LOAD_DYLIB (libSystem).
+	writeDword(macho, value: LcLoadDylib)
+	writeDword(macho, value: DylibCommandSize)
+	writeDword(macho, value: 24)  // name offset within the command
+	writeDword(macho, value: 0)  // timestamp
+	writeDword(macho, value: 0)  // current_version
+	writeDword(macho, value: 0)  // compat_version
+	writeMachoLcString(macho, text: LibSystemPath, commandSize: DylibCommandSize, nameOffset: 24)
+
+	// LC_BUILD_VERSION.
+	writeDword(macho, value: LcBuildVersion)
+	writeDword(macho, value: BuildVersionCommandSize)
+	writeDword(macho, value: PlatformMacos)
+	writeDword(macho, value: MinOsMacos13)
+	writeDword(macho, value: 0)  // sdk
+	writeDword(macho, value: 0)  // ntools
+
+	// LC_DYLD_CHAINED_FIXUPS.
+	writeDword(macho, value: LcDyldChainedFixups)
+	writeDword(macho, value: ChainedFixupsCommandSize)
+	writeDword(macho, value: chainedFixupsOff)
+	writeDword(macho, value: chainedFixupsSize)
+
+	// LC_DYLD_EXPORTS_TRIE.
+	writeDword(macho, value: LcDyldExportsTrie)
+	writeDword(macho, value: ExportsTrieCommandSize)
+	writeDword(macho, value: exportsTrieOff)
+	writeDword(macho, value: exportsTrieSize)
+
+	// LC_CODE_SIGNATURE.
+	writeDword(macho, value: LcCodeSignature)
+	writeDword(macho, value: CodeSignatureCommandSize)
+	writeDword(macho, value: codeSignatureOff)
+	writeDword(macho, value: codeSignatureSize)
+
+	// --- Section contents ---
+	padTo(macho, size: textSectionOffset)
+	macho.append(code)
+	if hasRdata 'writeConst'
+		padTo(macho, size: constSectionOffset)
+		macho.append(codeResult.rdata)
+	end 'writeConst'
+	padTo(macho, size: textSegmentFileSize)
+
+	if hasPrelude 'writeData'
+		padTo(macho, size: dataSegmentFileOff)
+		macho.append(codeResult.dataPrelude)
+	end 'writeData'
+	padTo(macho, size: dataSegmentFileOff + gotOffsetInData)
+	macho.append(got)
+	padTo(macho, size: dataSegmentFileOff + dataSegmentFileSize)
+
+	// --- __LINKEDIT contents ---
+	macho.append(chainedFixupsData)
+	padTo(macho, size: exportsTrieOff)
+	macho.append(exportsTrieData)
+
+	if nsyms > 0 'writeSyms'
+		padTo(macho, size: symtabOff)
+		let nType = NExt or NSect
+		for (iter, sym) in codeResult.debugSymbols.withIterator() 'eachSym'
+			let nameOff = try symtab.nameOffsets.get(iter.index()) otherwise panic("writeMachO: symtab nameOffsets[{iter.index()}] OOB ({symtab.nameOffsets.count()} entries)")
+			writeDword(macho, value: nameOff)  // n_strx
+			macho.push(nType and 0xFF)  // n_type
+			macho.push(MachoTextSectionIndex and 0xFF)  // n_sect
+			writeWord(macho, value: 0)  // n_desc
+			writeQword(macho, value: textSectionVmAddr + sym.codeOffset)  // n_value
+		end 'eachSym'
+	end 'writeSyms'
+
+	padTo(macho, size: strtabOff)
+	macho.append(symtab.strtab)
+	padTo(macho, size: codeSignatureOff)
+
+	// --- Sign, append, finalize ---
+	let sig = buildCodeSignature(macho, codeLimit: codeSignatureOff, execSegLimit: textSegmentFileSize, identifier: identifier)
+	macho.append(sig)
+	padTo(macho, size: linkeditFileOff + linkeditFileSize)
+
+	try File.writeBinary(outputPath, content: macho, mode: FilePermission.executable) otherwise 'writeErr'
+		logError(LogCategory.binary, message: function() gives "Failed to write Mach-O file: {outputPath}")
+	end 'writeErr'
+
+	logInfo(LogCategory.binary, message: function() gives "Mach-O write complete: {macho.count()} bytes")
+end 'writeMachO'
+
+// Append a NUL-terminated load-command string and pad the command out to
+// `commandSize`. `nameOffset` is where the string begins within the command (the
+// header bytes already written before this call), so the pad count is exactly the
+// slack after the header + string + NUL.
+function writeMachoLcString(buf ByteArray, text String, commandSize ByteCount, nameOffset ByteCount)
+	let bytes = text.toByteArray()
+	buf.append(bytes)
+	buf.push(0)
+	let written = nameOffset + bytes.count() + 1
+	writeZeros(buf, n: commandSize - written)
+end 'writeMachoLcString'

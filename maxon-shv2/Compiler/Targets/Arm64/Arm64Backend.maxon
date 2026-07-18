@@ -132,6 +132,9 @@ let Arm64OpCbnz = 0xB5000000
 let Arm64OpBlr = 0xD63F0000
 // RET returns through x30 (LR); the LR is baked into this fully-formed encoding.
 let Arm64OpRet = 0xD65F03C0
+// BRK #0 — a software breakpoint (raises SIGTRAP, terminating the process); the entry stub's guard
+// after `_exit`. imm16 is 0 (the conventional abort breakpoint), baked into this fully-formed word.
+let Arm64OpBrk = 0xD4200000
 let Arm64Imm26Mask = 0x3FFFFFF
 let Arm64Imm19Mask = 0x7FFFF
 let Arm64Imm19Shift = 5
@@ -393,6 +396,18 @@ function arm64EncodeLogicalImm(value MachineWord) returns Arm64LogicalImmResult
 	let n = ((nImms shr 6) and 0x1) xor 0x1
 	return Arm64LogicalImmResult.encodable(n, immr: immr, imms: imms)
 end 'arm64EncodeLogicalImm'
+
+// Whether `imm` — widened exactly as the encoder widens it (`imm32ToWord`) — is an encodable
+// AArch64 logical bitmask immediate. The ISEL asks this to choose the `#bimm` form vs materialising
+// the constant into a register: it is the SAME predicate `arm64EmitLogicalImm` enforces, so the two
+// can never disagree (one fact, one home — the encoder's). A non-bitmask value (e.g. 10 = 0b1010)
+// returns false and the ISEL emits the register form instead.
+export function arm64ImmIsEncodableLogical(imm Imm32) returns bool
+	match arm64EncodeLogicalImm(imm32ToWord(imm)) 'enc'
+		encodable then return true
+		notEncodable then return false
+	end 'enc'
+end 'arm64ImmIsEncodableLogical'
 
 // The all-ones mask of a given power-of-two bit width (64 handled without a 1<<64 overflow).
 function fullMaskOfSize(size MachineWord) returns MachineWord
@@ -905,11 +920,29 @@ function arm64EmitMsub(code ByteArray, rd MachineWord, rn MachineWord, rm Machin
 end 'arm64EmitMsub'
 
 // `bl` to a named function — placeholder imm26, `CallFixup` recorded (concat resolves it by name to a
-// PC-relative 26-bit displacement).
-function arm64EmitBranchLink(code ByteArray, callFixups CallFixupArray, targetName ByteArray)
+// PC-relative 26-bit displacement). Exported so the hand-assembled entry stub (`Arm64Runtime`) emits
+// its `bl main` through the same primitive the isel does.
+export function arm64EmitBranchLink(code ByteArray, callFixups CallFixupArray, targetName ByteArray)
 	callFixups.push(CallFixup.create(code.count(), targetName: targetName))
 	emitArm64Insn(code, insn: Arm64OpBl)
 end 'arm64EmitBranchLink'
+
+// A GOT-indirect import call — the macOS twin of x64's `iatCall`. `adrp x16, <got page>; ldr x16,
+// [x16, <page off>]; blr x16` calls the libSystem import dyld bound into GOT slot `slotIndex`. The
+// Mach-O writer patches the ADRP+LDR pair against the resolved GOT-entry VA — it reads the pair at the
+// Relocation's `codeOffset` and `codeOffset + 4` — so the Relocation is filed AT the ADRP. x16 is the
+// IP scratch, free to clobber for the trampoline; the import reads its arguments from x0.. as usual.
+export function arm64EmitImportCall(code ByteArray, iatRelocs RelocationArray, slotIndex RelocSlotIndex)
+	iatRelocs.push(Relocation.create(code.count(), slotIndex: slotIndex))
+	emitArm64Insn(code, insn: Arm64OpAdrp or Arm64Ip0)
+	arm64EmitScaledMem(code, opcode: Arm64OpLdrX, rt: Arm64Ip0, baseReg: Arm64Ip0, byteOffset: 0, scale: SpillSlotBytes)
+	emitArm64Insn(code, insn: Arm64OpBlr or (Arm64Ip0 shl Arm64RnShift))
+end 'arm64EmitImportCall'
+
+// BRK #0 — the entry stub's trap after `_exit`, in case the import ever returns (it does not).
+export function arm64EmitBrk(code ByteArray)
+	emitArm64Insn(code, insn: Arm64OpBrk)
+end 'arm64EmitBrk'
 
 // ADRP Rd, page(label) + ADD Rd, Rd, #pageoff(label) — the ±4 GiB PIE address-materialisation pair
 // the M1 traps mandate for ALL func/global/rdata addresses (NEVER a bare ADR, whose ±1 MiB reach
@@ -1053,11 +1086,15 @@ export function emitArm64FunctionChunk(module TargetModule, func IrFunction) ret
 	return FunctionCodeChunk.createWith(func.name, code: code, callFixups: callFixups, rdataRelocs: rdataRelocs, iatRelocs: RelocationArray.create(), rdataConstants: GlobalDataTable.create())
 end 'emitArm64FunctionChunk'
 
-// Append the hand-assembled arm64 runtime chunks (entry stub, div-by-zero panic path, symbol table)
-// after user code — the arm64 twin of `appendX64RuntimeChunks`. ⭐ WAVE-2 STUB: the runtime chunks
-// are `Arm64Runtime.maxon`'s deliverable (the RUNTIME agent's wave); this is the seam it fills.
-export function appendArm64RuntimeChunks(chunks FunctionCodeChunkArray)
-	panic("appendArm64RuntimeChunks: the arm64 runtime chunks (entry stub, div-by-zero panic path) are Arm64Runtime.maxon's deliverable — not yet landed (RUNTIME agent, wave 2) [{chunks.count()} user chunk(s)]")
+// Append the hand-assembled arm64 runtime chunks. At the scalar core the runtime is JUST the entry
+// stub `mrt_start` (no fault handler — arm64 `sdiv`-by-0 is defined to return 0; no MM/scheduler
+// floor — the scalar core allocates and spawns nothing). It is appended to the STILL-EMPTY chunk list
+// so it LEADS `.text` and `LC_MAIN.entryoff = 0` — the opposite placement from x64's
+// `appendX64RuntimeChunks`, whose appended runtime is the TRAILING panic handler (x64's `mrt_start` is
+// a module function already laid out first). The panic/software runtime GROWS back here at its
+// milestone. `leakCheck` gates the entry stub's future MM leak bridge (false at the scalar core).
+export function appendArm64RuntimeChunks(chunks FunctionCodeChunkArray, leakCheck bool)
+	chunks.push(buildArm64EntryStubChunk(leakCheck))
 end 'appendArm64RuntimeChunks'
 
 // ==========================================================================
@@ -1066,18 +1103,21 @@ end 'appendArm64RuntimeChunks'
 
 typealias Arm64FuncLabelOffsetMap = Map with (ByteArray, CodeOffset)
 
-// Concatenate the per-function chunks into `.text`, rebase each chunk's fixups to absolute offsets,
-// resolve the intra-module `bl` calls to 26-bit displacements, resolve every code→data reference to
-// its section offset (the writer adds the section VA), and package a format-neutral CodeResult — the
-// arm64 twin of `concatX64FunctionChunks`.
+// Concatenate the per-function chunks into `.text`, rebase each chunk's CHUNK-LOCAL fixups to absolute
+// offsets, resolve the intra-module `bl` calls to 26-bit displacements (`bl main` among them), rebase
+// the GOT import calls (the entry stub's `_exit`) into the writer's slot-indexed `relocations`, and
+// resolve every code→data reference to its section offset (the writer adds the section VA) — the arm64
+// twin of `concatX64FunctionChunks`.
 //
-// ⚠ The `.text`-closing `__symtable` + the mrt_start-is-first guard x64's concat carries depend on the
-// runtime chunk (`mrt_start`, `__symtable`) and on x64-file-private helpers (`buildSymbolTableBytes`);
-// both belong with the RUNTIME agent's wave. This concat lays out `.text` and resolves fixups — its
-// standalone job — and leaves symtable emission to that integration (noted for the coordinator).
+// `mrt_start` MUST lead `.text` so `LC_MAIN.entryoff` (= `mainCallFixupOffset`) is its offset, 0;
+// `appendArm64RuntimeChunks` appends it first, and the guard below asserts that layout at the one
+// place that decides it. There is NO `__symtable`: x64 closes `.text` with it for the panic runtime's
+// backtrace, but the scalar core has no fault backtrace, so the table (and its `buildSymbolTableBytes`)
+// have nothing to symbolize and are omitted — they grow back with the arm64 panic runtime.
 export function concatArm64FunctionChunks(targetModule TargetModule, stdModule StdModule, chunks FunctionCodeChunkArray, globalData GlobalDataTable) returns CodeResult
 	var code = ByteArray.create()
 	var callFixups = CallFixupArray.create()
+	var relocations = RelocationArray.create()
 	var labelOffsets = Arm64FuncLabelOffsetMap.create()
 	var debugSymbols = DebugSymbolArray.create()
 	var rdataRelocations = RdataRelocationArray.create()
@@ -1091,6 +1131,11 @@ export function concatArm64FunctionChunks(targetModule TargetModule, stdModule S
 		for fx in chunk.callFixups 'rebaseCalls'
 			callFixups.push(CallFixup.create(funcStart + fx.codeOffset, targetName: fx.targetName))
 		end 'rebaseCalls'
+		// GOT import calls (the entry stub's `_exit`) rebase into the writer's slot-indexed relocations,
+		// the same channel as x64's IAT relocations. The writer patches the ADRP+LDR pair at each.
+		for r in chunk.iatRelocs 'rebaseImports'
+			relocations.push(Relocation.create(funcStart + r.codeOffset, slotIndex: r.slotIndex))
+		end 'rebaseImports'
 		for rr in chunk.rdataRelocs 'rebaseRdata'
 			var reloc = RdataRelocation.create(funcStart + rr.codeOffset, rdataLabel: rr.rdataLabel, kind: rr.kind)
 			reloc.rdataOffset = arm64SectionOffsetOfReloc(globalData, reloc: rr)
@@ -1100,7 +1145,15 @@ export function concatArm64FunctionChunks(targetModule TargetModule, stdModule S
 
 	arm64ResolveCallFixups(code, labelOffsets: labelOffsets, callFixups: callFixups)
 
-	var result = CodeResult.create(code, mainCallFixupOffset: 0, relocations: RelocationArray.create(), globalData: globalData, targetModule: targetModule, stdModule: stdModule, rdata: globalData.rdataImage(), rdataRelocations: rdataRelocations, symdata: ByteArray.create(), covDataSectionBytes: ByteArray.create())
+	// `mrt_start` is the entry point; `LC_MAIN.entryoff` is its `.text` offset. It MUST be laid out
+	// first (`appendArm64RuntimeChunks` appends it before user code); the guard turns "the entry stub is
+	// first" from a cosmetic property of the chunk list into a checked invariant at the point of layout.
+	let entryOffset = try labelOffsets.get(EntryPointName) otherwise panic("concatArm64FunctionChunks: '{String.from(EntryPointName)}' was not laid out — appendArm64RuntimeChunks did not run before emission")
+	if entryOffset != 0 'entryNotFirst'
+		panic("concatArm64FunctionChunks: '{String.from(EntryPointName)}' must lead .text but is at offset {entryOffset} — LC_MAIN.entryoff is its offset, so anything below it would move the process entry off the stub")
+	end 'entryNotFirst'
+
+	var result = CodeResult.create(code, mainCallFixupOffset: entryOffset, relocations: relocations, globalData: globalData, targetModule: targetModule, stdModule: stdModule, rdata: globalData.rdataImage(), rdataRelocations: rdataRelocations, symdata: ByteArray.create(), covDataSectionBytes: ByteArray.create())
 	result.debugSymbols = debugSymbols
 	result.dataPrelude = globalData.dataSectionImage()
 	return result
@@ -1138,11 +1191,14 @@ end 'arm64ResolveCallFixups'
 // Backend driver
 // ==========================================================================
 
-// Run the arm64 backend — the arm64 twin of `BackendDispatch.buildX64Backend`. The SHARED stages
-// (`allocateRegisters`, `augmentWithRuntime`) are reused as-is (the one-allocator / unified-`TargetOp`
-// design); the ISA-specific stages are the arm64 isel (`lowerStdToArm64`), frame
-// (`insertArm64PrologueEpilogue`), encoder and link. `throws CompileError` because register
-// allocation can fail for a real reason (E5001), exactly as the x64 backend does.
+// Run the arm64 backend — the arm64 twin of `BackendDispatch.buildX64Backend`. The register allocator
+// (`allocateRegisters`) is reused as-is (the one-allocator / unified-`TargetOp` design); the
+// ISA-specific stages are the arm64 isel (`lowerStdToArm64`), frame (`insertArm64PrologueEpilogue`),
+// encoder and link. There is NO module-level `augmentWithRuntime` step (x64's, which prepends
+// `mrt_start` as a module function): the arm64 entry stub calls `_exit` through a GOT import with no
+// TargetOp channel, so it is hand-assembled as a chunk in the encode phase (`appendArm64RuntimeChunks`)
+// and laid out first. `throws CompileError` because register allocation can fail for a real reason
+// (E5001), exactly as the x64 backend does.
 export function buildArm64Backend(stdModule StdModule, target Target, globalData GlobalDataTable, project Project) returns CodeResult throws CompileError
 	let iselProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.isel)
 	var (targetModule, valueClasses) = lowerStdToArm64(stdModule, globalData: globalData)
@@ -1156,16 +1212,18 @@ export function buildArm64Backend(stdModule StdModule, target Target, globalData
 	insertArm64PrologueEpilogue(targetModule, target: target)
 	recordPhase(project, phase: CompilePhase.prologueEpilogue, probe: prologueProbe)
 
-	let runtimeProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.runtimeAugment)
-	augmentWithRuntime(targetModule, target: target)
-	recordPhase(project, phase: CompilePhase.runtimeAugment, probe: runtimeProbe)
-
 	let encodeProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.encode)
 	var chunks = FunctionCodeChunkArray.create()
+	// The arm64-macOS runtime is just the entry stub `mrt_start` — the scalar core needs no panic
+	// handler and no MM/scheduler floor. It is hand-assembled (its `_exit` GOT call has no TargetOp
+	// channel — see Arm64Runtime) and appended FIRST so it LEADS `.text` and `LC_MAIN.entryoff = 0`,
+	// exactly as x64's `mrt_start` leads `.text`. There is NO module-level `augmentWithRuntime` step
+	// here — the stub is a chunk, not a module function, so it cannot be prepended to the module the
+	// way x64's is; it is assembled in the encode phase alongside the user chunks.
+	appendArm64RuntimeChunks(chunks, leakCheck: moduleHasFunction(targetModule, name: MmLeakCheckName))
 	for func in targetModule.functions 'eachFunc'
 		chunks.push(emitArm64FunctionChunk(targetModule, func: func))
 	end 'eachFunc'
-	appendArm64RuntimeChunks(chunks)
 	recordPhase(project, phase: CompilePhase.encode, probe: encodeProbe)
 
 	let linkProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.link)
