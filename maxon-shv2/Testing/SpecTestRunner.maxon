@@ -198,14 +198,16 @@ end 'runOneSpec'
 
 // The tests of `specFile` that this run will actually execute, in DECLARATION order.
 //
-// THE ONE PLACE THE SELECTION RULES LIVE — the `draft` skip and the `--filter` match — and it has to
-// be, because BOTH HALVES OF THE POOL ASK THE SAME QUESTION IN DIFFERENT PROCESSES. The parent asks
-// it to decide what the run will report and to weight the job queue (`buildPlans`); the worker asks
-// it to decide what to run (`runOneSpec`). Written out twice, the two copies could drift — a rule
-// added to one and not the other — and the drift would not read as a bug: the parent would sit
-// waiting for records the worker was never going to send, or count tests nobody ran.
-// `resultsFromLines` turns that into a panic, but ONE shared rule is what makes the panic
-// unreachable rather than merely loud.
+// THE ONE PLACE THE SELECTION RULES LIVE — the `draft` skip, the `--filter` match, and the per-target
+// gate — and it has to be, because BOTH HALVES OF THE POOL ASK THE SAME QUESTION IN DIFFERENT
+// PROCESSES. The parent asks it to decide what the run will report and to weight the job queue
+// (`buildPlans`); the worker asks it to decide what to run (`runOneSpec`). Written out twice, the two
+// copies could drift — a rule added to one and not the other — and the drift would not read as a bug:
+// the parent would sit waiting for records the worker was never going to send, or count tests nobody
+// ran. `resultsFromLines` turns that into a panic, but ONE shared rule is what makes the panic
+// unreachable rather than merely loud. The target gate is why this discipline matters here and not only
+// in principle: it is what makes the same suite green on x64-windows AND arm64-macos, so it MUST be
+// applied identically on both sides of the pool.
 export function selectedTests(specFile SpecFile, specName String, filter String) returns SpecTestArray
 	var selected = SpecTestArray.create()
 
@@ -213,14 +215,40 @@ export function selectedTests(specFile SpecFile, specName String, filter String)
 		return selected
 	end 'draftSpec'
 
+	// Resolved ONCE, not per test: the host is fixed for the whole run, and both halves of the pool
+	// run on the same host, so this is the string every test's `targets` list is checked against.
+	let hostTarget = targetToString(detectHostTarget())
+
 	for test in specFile.tests 'eachTest'
-		if selectedByFilter(specName, testName: test.name, filter: filter) 'isSelected'
+		if selectedByFilter(specName, testName: test.name, filter: filter) and selectedByTarget(test, hostTarget: hostTarget) 'isSelected'
 			selected.push(test)
 		end 'isSelected'
 	end 'eachTest'
 
 	return selected
 end 'selectedTests'
+
+// Does this test run on `hostTarget`? A test with a non-empty `targets` list (a `<!-- targets: … -->`
+// marker) runs ONLY on a target it names; the ordinary marker-less test has an EMPTY list and runs
+// everywhere. A gated-out test is SKIPPED — not selected, not run, not failed — exactly as a draft or
+// filtered-out test is, which is why this lives beside `selectedByFilter` under the one door.
+//
+// The membership is an explicit walk rather than an `Array.contains`: the list is one or two entries,
+// and the comparison it needs is String equality, which a bare `contains` on an element type would have
+// to be told anyway.
+function selectedByTarget(test SpecTest, hostTarget String) returns bool
+	if test.targets.count() == 0 'universal'
+		return true
+	end 'universal'
+
+	for target in test.targets 'eachTarget'
+		if target == hostTarget 'matches'
+			return true
+		end 'matches'
+	end 'eachTarget'
+
+	return false
+end 'selectedByTarget'
 
 // This spec's private scratch directory: `<specDir>/.spec-tmp/<specName>/`.
 //

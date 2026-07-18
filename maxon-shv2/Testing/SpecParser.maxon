@@ -83,6 +83,25 @@ let TestMarker = "<!-- test:"
 // the other. Both are still tested explicitly, in one place, so that stays true
 // if either literal is ever edited.
 let DisabledTestMarker = "<!-- disabled-test:"
+
+// The per-target gate — a marker that may sit on any comment line between a test's
+// `<!-- test: NAME -->` (or `<!-- disabled-test: NAME -->`) and its first ```maxon block. It restricts
+// the test to the `targetToString` forms it names (`x64-windows`, `arm64-macos`); on any other target
+// the runner SKIPS it. A missing marker — or one with a blank value — is "no restriction": the test
+// runs on every target (see `SpecTest.targets` and `SpecTestRunner.selectedByTarget`).
+//
+// It is NOT a superstring of `TestMarker` or `DisabledTestMarker` ("<!-- targets:" first differs from
+// "<!-- test:" at the `a`/`e`), so the marker checks are independent and none can swallow another —
+// exactly the property that keeps `DisabledTestMarker` and `TestMarker` from colliding.
+//
+// COMMA is the separator, not because shv2 chose it but because the spec format is SHARED: the C#
+// reference (`SpecParser.cs` `TargetsDirectiveRegex`) and v1 (`SpecParser.maxon`
+// `parseTargetsDirective`) both split a `targets:` value on `,`, and these are the same `.md` files a
+// third compiler reads. A second, shv2-only spelling of one directive would be this project's
+// signature bug — one fact written down twice — in a place where both would "work".
+let TargetsMarker = "<!-- targets:"
+let TargetSeparator = ","
+
 let TestMarkerNameSep = ": "
 let TestMarkerEnd = " -->"
 let SourceFence = "```maxon"
@@ -230,6 +249,11 @@ end 'SpecSourceFile'
 
 export typealias SpecSourceFileArray = Array with SpecSourceFile
 
+// The `targetToString` forms a `<!-- targets: … -->` marker restricts a test to. EMPTY means "no
+// restriction" — the common case, and the literal count of targets a marker-less test names — so it
+// is not a sentinel. Named for its PURPOSE (the target keys), not its type.
+export typealias TargetKeyArray = Array with String
+
 // One active test: its name, its ```maxon source VERBATIM, and its expectation.
 export type SpecTest
 	export let name as String
@@ -243,11 +267,16 @@ export type SpecTest
 	// sentinel — it is the literal count of file markers in the block, and "no markers" is exactly
 	// what a single-file test is.
 	export let sourceFiles as SpecSourceFileArray
+	// The `targetToString` forms this test is restricted to (a `<!-- targets: … -->` marker), or EMPTY
+	// for the ordinary test that runs on every target. The runner SKIPS a test whose non-empty list
+	// omits the host target (`SpecTestRunner.selectedByTarget`) — the same treatment a draft or
+	// filtered-out test gets, never a failure.
+	export let targets as TargetKeyArray
 
 	// The split is derived HERE, from the very source that will be compiled, so a test can never
 	// exist with a file list that disagrees with its text.
-	export static function create(name String, source String, expectation SpecExpectation) returns SpecTest
-		return Self{name: name, source: source, expectation: expectation, sourceFiles: splitSourceFiles(source)}
+	export static function create(name String, source String, expectation SpecExpectation, targets TargetKeyArray) returns SpecTest
+		return Self{name: name, source: source, expectation: expectation, sourceFiles: splitSourceFiles(source), targets: targets}
 	end 'create'
 
 	// True when this test's block declares `// --- file:` sections — i.e. it compiles as a
@@ -440,6 +469,7 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 	var stderr = SpecStderr.unpinned
 	var stdout = SpecStdout.unpinned
 	var requiredData = SpecRequiredData.unpinned
+	var targets = TargetKeyArray.create()
 	var i = markerIndex + 1
 
 	while i < lineCount 'blocks'
@@ -455,6 +485,17 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 		if line.contains(TestMarker) or line.contains(DisabledTestMarker) 'nextMarker'
 			break
 		end 'nextMarker'
+
+		// The per-target gate — one of the comment lines that may sit between this test's marker and
+		// its first fence. It is neither a fence nor a next-test marker, so without this it would fall
+		// through to `i = i + 1` and be silently ignored (which is exactly how safety.md's four markers
+		// went unread until this rung). Parsed here so a disabled case consumes it identically to a live
+		// one; the disabled case then discards the whole test, targets and all.
+		if line.contains(TargetsMarker) 'targetsMarker'
+			targets = parseTargetKeys(line)
+			i = i + 1
+			continue
+		end 'targetsMarker'
 
 		// CompilerError MUST be checked before Source: "```maxoncstderr" also
 		// startsWith "```maxon", so the source arm would otherwise consume it. The
@@ -522,14 +563,14 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 	// and a spec carrying both is asserting the compile FAILS — which no exit code of the
 	// program it never produced could also be true of.
 	if haveCompilerError 'rejected'
-		tests.push(SpecTest.create(name, source: source, expectation: SpecExpectation.compilerError(compilerError)))
+		tests.push(SpecTest.create(name, source: source, expectation: SpecExpectation.compilerError(compilerError), targets: targets))
 		return i
 	end 'rejected'
 
 	// An ```exitcode block, plus whatever ```stderr accompanied it, is ONE claim about ONE
 	// execution.
 	if haveExitCode 'ran'
-		tests.push(SpecTest.create(name, source: source, expectation: SpecExpectation.run(exitCode, stderr: stderr, stdout: stdout, requiredData: requiredData)))
+		tests.push(SpecTest.create(name, source: source, expectation: SpecExpectation.run(exitCode, stderr: stderr, stdout: stdout, requiredData: requiredData), targets: targets))
 	end 'ran'
 
 	return i
@@ -590,7 +631,9 @@ function splitSourceFiles(source String) returns SpecSourceFileArray
 end 'splitSourceFiles'
 
 // The VALUE of an HTML-comment marker line: the text between the first ": " and the trailing
-// " -->", trimmed — i.e. NAME out of `<!-- test: NAME -->`.
+// " -->", trimmed — i.e. NAME out of `<!-- test: NAME -->`, or the target list out of
+// `<!-- targets: k1, k2 -->`. It reads any `<!-- key: value -->` marker, because the two share one
+// grammar; a target key holds no ": ", so the first separator is always the marker's own.
 function markerValue(line String) returns String
 	// Advance one index past the ':' and let trim() drop the surrounding spaces — this avoids
 	// measuring the module-const separator's length, because a method call directly on a
@@ -600,6 +643,22 @@ function markerValue(line String) returns String
 	let endIdx = try line.findFirst(TestMarkerEnd) otherwise line.endIndex()
 	return line.slice(valueStart, endIndex: endIdx).trim()
 end 'markerValue'
+
+// The target keys a `<!-- targets: k1, k2 -->` marker names — its value split on `,`, each part
+// trimmed, empties dropped. An EMPTY result (a blank value) is "no restriction", which the runner
+// treats exactly as a marker-less test. Comma is the shared spec-format separator (see `TargetsMarker`);
+// this splits it the same way the C# and v1 parsers do so one `.md` reads identically in all three.
+function parseTargetKeys(line String) returns TargetKeyArray
+	var result = TargetKeyArray.create()
+	let rawValue = markerValue(line)
+	for part in rawValue.split(TargetSeparator) 'eachTarget'
+		let trimmed = part.trim()
+		if not trimmed.isEmpty() 'nonEmpty'
+			result.push(trimmed)
+		end 'nonEmpty'
+	end 'eachTarget'
+	return result
+end 'parseTargetKeys'
 
 // Lines joined by "\n", with no leading and no trailing newline.
 //
