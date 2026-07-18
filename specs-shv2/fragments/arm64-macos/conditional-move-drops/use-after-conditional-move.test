@@ -1,0 +1,20 @@
+// Test: use-after-conditional-move
+typealias Integer = int(i64.min to i64.max)
+
+function build(x Integer) returns String
+	return "built value {x} padded out long enough to heap allocate"
+end 'build'
+
+function main() returns ExitCode
+	let a = build(1)
+	let flag = 1
+	if flag > 0 'b'
+		let u = a
+		print(u)
+	end 'b'
+	print(a)
+	return 0
+end 'main'
+---
+CompilerError:
+error E3102: <fragment>:15:8: use of moved value 'a': its ownership moved to another binding at an earlier bind or assignment
