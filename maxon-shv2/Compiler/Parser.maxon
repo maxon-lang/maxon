@@ -4274,21 +4274,22 @@ export type Parser
 		//     its bytes into a fresh owned record — the same single-`__mm_alloc` fused-record path an
 		//     interpolation builds, with the source as its one part — gives the caller a box it may
 		//     safely drop. `return "{x}"` and `return t` are already owned, so they pass through here.
-		//   • MOVE the owned return OUT of both drop sets. It belongs to the caller now: out of
-		//     `ownedBindings` so `emitScopeDrops` does not double-free `return t`, and out of
-		//     `pendingTempDrops` so the interp/promoted temporary is not dropped on the dead path the
-		//     `ret` leaves behind. The `pendingTempDrops` removal is PERMANENT — that list is
-		//     statement-local and this return drains-and-resets it below, so no other path reads it.
-		//     The `ownedBindings` removal is SCOPED to this return's drops and UNDONE after them
-		//     (`savedOwnedBindings`, restored past `emitScopeDrops`): `ownedBindings` OUTLIVES the
-		//     `return`, and the returned binding may sit in an enclosing block with other LIVE exit
-		//     edges — a loop body's per-iteration fall-through, a `break`/`continue`, a sibling `return`
-		//     on the other branch — whose drops are emitted LATER in the parse and still own it on their
-		//     runtime path. Removing it permanently stripped it from those edges too, so every
-		//     non-returning iteration of `while … 'l' let c = build(i); if … return c end 'l'` leaked its
-		//     copy — the leak gate's exit 101 on a program that prints the right answer.
-		//     `removeFromOwnedBindings` builds a NEW array, so `savedOwnedBindings` names the untouched
-		//     original those sibling edges go on to read.
+		//     This half is return-specific and stays here; the MOVE below is the shared hand-off cleanup.
+		//   • MOVE the owned return OUT of both drop sets — the shared `emitHandoffExitDrops` (the throw
+		//     twin performs the SAME move). It belongs to the caller now: out of `ownedBindings` so
+		//     `emitScopeDrops` does not double-free `return t`, and out of `pendingTempDrops` so the
+		//     interp/promoted temporary is not dropped on the dead path the `ret` leaves behind. The
+		//     `pendingTempDrops` removal is PERMANENT — that list is statement-local and the hand-off
+		//     cleanup drains-and-resets it, so no other path reads it. The `ownedBindings` removal is
+		//     SCOPED to this return's drops and UNDONE after them (the helper's `savedOwnedBindings`,
+		//     restored past `emitScopeDrops`): `ownedBindings` OUTLIVES the `return`, and the returned
+		//     binding may sit in an enclosing block with other LIVE exit edges — a loop body's
+		//     per-iteration fall-through, a `break`/`continue`, a sibling `return` on the other branch —
+		//     whose drops are emitted LATER in the parse and still own it on their runtime path. Removing
+		//     it permanently stripped it from those edges too, so every non-returning iteration of
+		//     `while … 'l' let c = build(i); if … return c end 'l'` leaked its copy — the leak gate's exit
+		//     101 on a program that prints the right answer. `removeFromOwnedBindings` builds a NEW array,
+		//     so the saved list names the untouched original those sibling edges go on to read.
 		var returned = retVal
 		if tagIsText(retTag) and not self.valueIsOwnedHeap(returned) 'promoteBorrowed'
 			returned = self.promoteToOwnedString(returned, range: SourceRange.ofToken(retTok))
@@ -4309,48 +4310,14 @@ export type Parser
 			throw ParseError.unsupported("returning a borrowed `{typeTagName(returnedTag)}` value — a struct/union parameter (or a re-borrow of one) is a heap box the caller would adopt and free while the borrow's own owner frees it too, a double free. Return an OWNED value; consuming or copying a borrowed aggregate to return it arrives at P1.4b", line: retTok.line, column: retTok.column)
 		end 'borrowedAggregateReturn'
 
-		let savedOwnedBindings = self.moveOutForExit(returned)
-
-		// ⭐⭐ **THE DROP GOES HERE — AFTER THE VALUE, BEFORE THE TERMINATOR — AND BOTH HALVES OF
-		// THAT ARE LOAD-BEARING.**
-		//
-		//   • AFTER the value, because `return p.x + p.y` READS the box. Dropping `p` first would
-		//     free the very memory the two `loadIndirect`s are about to read: the answer would be 7
-		//     today (a bump allocator reclaims nothing, so the bytes survive) and garbage the moment
-		//     P1.2 gives `__mm_free` a free list to return the slot to. A use-after-free that passes
-		//     its test is the worst outcome available here, so the ordering is not left to luck.
-		//   • BEFORE the terminator, because a `ret` ENDS the block. Anything emitted after it sits
-		//     on a path control has already left, and the box would leak — exit 101.
-		//
-		// `returned` is already computed, so it is a value in a register and no longer a read of the
-		// box. That is what makes the window between the two lines safe.
-		//
-		// ⚠ **AN OWNED heap RETURN — String, struct box, or boxed union — HAS ALREADY LEFT THIS DROP SET
-		// (moved out above), which is what makes the caller its sole owner.** The move-out asks
-		// `valueIsOwnedHeap`, the ONE owned predicate, so it covers all three uniformly: a factory's
-		// `return Self{…}` (an owned temporary), a `return t` from an owned struct/union LOCAL BINDING
-		// (`removeFromOwnedBindings` takes it off the callee's drop list), and a `return U.case(x)`. Every
-		// producer set the bit, so none of these is dropped by the callee and every one is adopted by the
-		// caller. A BORROWED aggregate was refused above, so it cannot reach here.
-		//
-		// TWO drop sets empty here, both before the `ret` and both with the returned value already moved
-		// out: the owned TEMPORARIES this return's expression created but does NOT hand back, and the
-		// owned BINDINGS in scope. The temporary case is `return wrap("v{x}")` — the interpolation is
-		// built here, handed to `wrap` (which BORROWS it), and belongs to this statement, which owns and
-		// drops it exactly as `print("{x}")` does. `parseStatement`'s statement-end drain cannot: a `ret`
-		// has terminated the block, so it sees the termination and skips, and the drop has to land here
-		// instead. The `count() > 0` guard is that drain's own — `drainPendingTemps` reallocates the list
-		// and almost no return leaves a temporary, so the common return pays nothing. Temporaries drop
-		// before bindings: the return expression's temporaries are the last owned values built.
-		if self.pendingTempDrops.count() > 0 'dropReturnTemps'
-			self.drainPendingTemps(retTok)
-		end 'dropReturnTemps'
-
-		self.emitScopeDrops(WholeFunctionScopeFloor, anchor: retTok)
-
-		// Undo the scoped owned-binding move-out: sibling exit edges of an enclosing block still own
-		// the returned binding on their runtime path and their drops are emitted after this `ret`.
-		self.ownedBindings = savedOwnedBindings
+		// ⭐⭐ **THE DROPS GO HERE — AFTER THE VALUE, BEFORE THE TERMINATOR — AND BOTH HALVES ARE LOAD-BEARING.**
+		// AFTER the value, because `return p.x + p.y` READS the box; dropping `p` first would free the memory
+		// the `loadIndirect`s are about to read (a use-after-free that passes today only because the bump
+		// allocator reclaims nothing). BEFORE the terminator, because a `ret` ENDS the block. `returned` is
+		// already in a register — no longer a heap read — which makes the window safe. An OWNED heap return
+		// (String, struct box, or boxed union) is moved out by the shared cleanup, so the caller is its sole
+		// owner; a BORROWED aggregate was refused above and cannot reach here.
+		self.emitHandoffExitDrops(returned, anchor: retTok)
 
 		self.artifact.emitTerminator(self.currentBlock, op: MaxonOp.ret(returned), range: SourceRange.ofToken(retTok))
 	end 'parseReturnStatement'
@@ -4390,13 +4357,11 @@ export type Parser
 		// ⭐ **THROW TRANSFERS THE BOX OUT OF THE LOCAL DROP SETS — BEFORE the scope drops.** The box is
 		// handed to the caller, so the scope cleanup releases every OTHER owned local on the throw edge but
 		// not the box in flight — else it is freed here AND adopted by the caller (a double free, OPEN #16
-		// family). The SAME move-out `parseReturnStatement` performs — a freshly-constructed `throw U.case(x)`
-		// leaves the pending-temp list, a re-thrown caught `(e)` binding the owned-binding list — restored past
-		// the drops for a sibling exit edge that still owns it. A SCALAR error owns no heap, so it is inert —
-		// the Wave-1 behaviour, unchanged.
-		let savedOwnedBindings = self.moveOutForExit(errValue)
-		self.emitScopeDrops(WholeFunctionScopeFloor, anchor: anchor)
-		self.ownedBindings = savedOwnedBindings
+		// family). This is the SAME hand-off cleanup a `return <value>` performs (`emitHandoffExitDrops`):
+		// the thrown box leaves the local drop sets, the throw expression's leftover temporaries and every
+		// other owned binding drop, and the owned list is restored for a sibling exit edge that still owns
+		// it. A SCALAR error owns no heap, so its move-out is inert — the Wave-1 behaviour, unchanged.
+		self.emitHandoffExitDrops(errValue, anchor: anchor)
 
 		self.artifact.emitTerminator(self.currentBlock, op: MaxonOp.throwError(errValue, errorIsBoxed: errorIsBoxed), range: SourceRange.ofToken(anchor))
 	end 'emitThrowError'
@@ -5099,23 +5064,41 @@ export type Parser
 		self.ownedBindings = kept
 	end 'removeFromOwnedBindings'
 
-	// ⭐ **MOVE AN OWNED VALUE OUT OF THE LOCAL DROP SETS FOR AN EXIT THAT HANDS IT TO THE CALLER** — a
-	// `return <owned>` or a `throw <owned box>`. The exit's scope cleanup must release every OTHER owned
-	// local but not THIS value (the caller adopts and drops it), so it leaves BOTH the pending-temp list (a
-	// freshly built temporary) and the owned-binding list (a caught/held binding); one call each, both no-ops
-	// on the other's case. Returns the ownedBindings list to RESTORE past those drops: `ownedBindings`
-	// OUTLIVES the exit, and a sibling exit edge of an enclosing block still owns the value on ITS runtime
-	// path (this exit terminated only its own), so `removeFromOwnedBindings`' NEW array leaves the original
-	// for those edges. A no-op for a non-owned value (a scalar), whose returned list is unchanged. The two
-	// exits (`parseReturnStatement`, `emitThrowError`) cannot drift on which lists a handed-off value leaves.
-	function moveOutForExit(value ValueId) returns VarInfoArray
-		let saved = self.ownedBindings
-		if self.valueIsOwnedHeap(value) 'movedOut'
-			self.removeFromOwnedBindings(value)
-			self.removeFromPendingTemps(value)
+	// ⭐ **THE OWNED-VALUE CLEANUP A `return <value>` AND A `throw <value>` SHARE** — the two exits that
+	// HAND a heap value to the caller. Both must, in this exact order, drop every owned value this function
+	// still holds EXCEPT the one in flight, then let the caller emit its own terminator (`ret` / `throwError`):
+	//
+	//   • MOVE the handed-off value out of the local drop sets — it leaves BOTH the pending-temp list (a
+	//     freshly built `return U.case(x)` / `throw U.case(x)` temporary) and the owned-binding list (a
+	//     `return t` / re-thrown `throw e` caught binding), one call each, both no-ops on the other's case —
+	//     so the caller becomes its sole owner and neither drop below frees it. A no-op for a scalar.
+	//   • DROP the exit expression's leftover TEMPORARIES: `return wrap("v{x}")` / `throw E.p(len("v{x}"))`
+	//     build an interpolation this statement owns but does NOT hand back. The `count() > 0` guard is
+	//     `drainPendingTemps`' own — almost no exit leaves a temporary, so the common exit pays nothing.
+	//   • DROP every owned BINDING in scope (`emitScopeDrops`).
+	//   • RESTORE the owned-binding list past those drops: it OUTLIVES this exit, and a SIBLING exit edge of
+	//     an enclosing block still owns the handed-off binding on ITS runtime path (this exit terminated only
+	//     its own), so `removeFromOwnedBindings`' NEW array leaves the original for those edges.
+	//
+	// The drops land AFTER the caller computed the handed-off value (already a register read, no longer a
+	// heap access) and BEFORE the caller's terminator (a `ret`/`throwError` ENDS the block — anything after
+	// it sits on a path control has left, and the value leaks: exit 101). Factoring the WHOLE sequence, not
+	// just the move-out, is what keeps the two exits from drifting on it: a `throw` that drained its bindings
+	// but not its temporaries leaked exactly one interpolation buffer until this became one path.
+	function emitHandoffExitDrops(handedOff ValueId, anchor Token)
+		let savedOwnedBindings = self.ownedBindings
+		if self.valueIsOwnedHeap(handedOff) 'movedOut'
+			self.removeFromOwnedBindings(handedOff)
+			self.removeFromPendingTemps(handedOff)
 		end 'movedOut'
-		return saved
-	end 'moveOutForExit'
+
+		if self.pendingTempDrops.count() > 0 'dropExitTemps'
+			self.drainPendingTemps(anchor)
+		end 'dropExitTemps'
+
+		self.emitScopeDrops(WholeFunctionScopeFloor, anchor: anchor)
+		self.ownedBindings = savedOwnedBindings
+	end 'emitHandoffExitDrops'
 
 	// Does `binding` currently owe a scope-exit drop — i.e. is it a LIVE owner in `ownedBindings`? The
 	// reassignment path's test for whether the value being OVERWRITTEN is owned. It reads MEMBERSHIP,

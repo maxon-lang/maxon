@@ -1329,3 +1329,40 @@ end 'main'
 ```maxoncstderr
 error E2015: specs/fragments/error-handling/error.throw-borrowed-union-unsupported.test:13:2: Unsupported: throwing a borrowed union value — a union parameter (or a re-borrow of one) is a heap box the caller would adopt and free while the borrow's own owner frees it too, a double free. Throw an OWNED value (a fresh `throw U.case(x)` or a caught `(e)` binding); consuming a borrowed union to throw it arrives with cross-call consume
 ```
+
+<!-- test: error.throw-payload-expr-temp-decref -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+// A throw whose PAYLOAD expression builds an owned temporary it does NOT hand to the box: the
+// interpolation `"val={x}"` is borrowed by `len` (which returns only its byte count), so the buffer
+// belongs to this statement and must drop on the throw edge — exactly as a `return len("val={x}")`
+// drops it. The throw and return exits share ONE hand-off cleanup for that reason; a throw that dropped
+// its bindings but not this leftover temporary leaked the buffer (exit 101). A clean throw/catch of
+// `"val=7".byteLength()` is 5.
+union E implements Error
+	problem(code Integer)
+end 'E'
+
+function len(s String) returns Integer
+	return s.byteLength()
+end 'len'
+
+function mk(x Integer) returns Integer throws E
+	throw E.problem(len("val={x}"))
+end 'mk'
+
+function main() returns ExitCode
+	var n = 0 as ExitCode
+	try mk(7) otherwise (e) 'h'
+		match e 'm'
+			problem(code) then n = code as ExitCode
+		end 'm'
+	end 'h'
+	return n
+end 'main'
+```
+```exitcode
+5
+```
