@@ -1,0 +1,810 @@
+// The low-level wasm binary encoder — the wasm sibling of PeWriter/MachOWriter, but one
+// tier lower: those render a finished CodeResult into an OS container, while this renders
+// individual wasm instructions and a whole CORE module into the raw bytes the wasm binary
+// format specifies. StdToWasm (agent A2) codes against the API here and NEVER touches a raw
+// opcode byte or a LEB128 immediate — that split is the whole point of this file.
+//
+// SCOPE: the scalar slice (integer/bool arithmetic, comparisons, structured control flow,
+// calls). Only the opcodes and sections that slice needs are here — no tables, no data
+// segments, no float ALU, no narrow loads/stores, no bulk memory. Those grow the file when
+// their milestone lands, appended the way v1's WasmBinary grew.
+//
+// TWO CONTRACT DEVIATIONS, both forced (see the CONTRACT §3 Seam 1):
+//   • `end()` → `endOp()`. `end` is a reserved block-delimiter keyword (Lexer TokenKind.end),
+//     so no method can be named `end`. The contract's own `returnOp`/`elseClause` names show
+//     its author was already dodging keywords (`return`/`else`); `end` slipped through. Renamed
+//     to `endOp()` to match the `returnOp` convention. A2 calls `body.endOp()`.
+//   • `i64Sub_wrapNeg()` is OMITTED. Its name carries an underscore (forbidden), and it is
+//     explicitly optional in the contract ("or A2 does (0 - x)"). wasm has no integer negate
+//     opcode, so a single instruction cannot express one anyway: A2 materializes `neg` as
+//     `i64Const(0)` (or `i32Const(0)`) BELOW the operand, then `i64Sub()` (`i32Sub()`);
+//     `bitNot` as operand then `i64Const(-1)` then `i64Xor()` (xor is commutative, so operand
+//     order is free); `logicalNot` as `i32Eqz()`. Every primitive that composition needs is
+//     already in the API, so no dedicated helper is warranted.
+//
+// DETERMINISM: everything here iterates ordered arrays (insertion order) and index ranges —
+// no map iteration, no addresses — so the same StdModule yields byte-identical output every
+// run, which the worker-count byte-identity gate and the fragment gate both depend on.
+
+// The wasm spec index space: function/type/local/memory indices, label depths, and page
+// counts are all u32 in the binary format. UNSIGNED, which also makes `shr` on this type a
+// LOGICAL shift (see writeUleb128) — exactly what unsigned LEB128 wants.
+export typealias Wasm32Index = int(0 to u32.max)
+export typealias Wasm32IndexArray = Array with Wasm32Index
+
+// --- LEB128 ---
+// wasm uses two variable-length integer encodings, and mixing them up is a silent
+// instantiate-time failure, not a compile error, so the choice per field is load-bearing:
+//   • ULEB128 (unsigned) for every count / index / size / label depth.
+//   • SLEB128 (signed)   for `i32.const` / `i64.const` immediates. v1 paid for this
+//     (WasmBinary.maxon:416-428): a uleb offset whose final byte has bit 7 clear but bit 6
+//     set sleb-decodes as NEGATIVE and fails the module's bounds/type checks.
+
+// A u32 encodes in at most 5 ULEB128 bytes (ceil(32/7) = 5).
+let ulebMaxBytes = 5
+
+// A 64-bit integer encodes in at most 10 SLEB128 bytes (ceil(64/7) = 10).
+let slebMaxBytes = 10
+
+// The 7 payload bits carried by each LEB128 byte, and the continuation bit (bit 7) set on
+// every byte except the last.
+let lebPayloadMask = 0x7F
+let lebContinuationBit = 0x80
+
+// SLEB128's sign bit within a byte's 7-bit payload (bit 6). A group whose sign bit disagrees
+// with the remaining value forces one more byte so the decoder recovers the sign.
+let slebSignBit = 0x40
+
+// Encode an unsigned wasm index/count/size as ULEB128. `value` is unsigned (Wasm32Index),
+// so `value shr 7` is a LOGICAL shift (ShiftSemantics: unsigned left operand ⇒ zero-fill),
+// which is precisely unsigned LEB128's requirement.
+function writeUleb128(buf ByteArray, value Wasm32Index)
+	var v = value
+
+	for _ in 0 upto ulebMaxBytes 'encode'
+		let b = v and lebPayloadMask
+		v = v shr 7
+
+		if v == 0 'last'
+			buf.push(b)
+			return
+		end 'last'
+
+		buf.push(b or lebContinuationBit)
+	end 'encode'
+
+	panic("writeUleb128: {value} did not terminate within {ulebMaxBytes} bytes — outside the u32 index space")
+end 'writeUleb128'
+
+// Encode a signed constant immediate as SLEB128. `value` is signed (ParsedInt), so
+// `v shr 7` is an ARITHMETIC shift (ShiftSemantics: signed left operand ⇒ sign-fill): a
+// negative value converges to -1 and a non-negative one to 0, with the sign preserved. That
+// is exactly what SLEB128 needs, so — unlike v1, which shifted an unsigned word and re-set
+// the top 7 bits by hand — no manual sign extension is required here.
+function writeSleb128(buf ByteArray, value ParsedInt)
+	var v = value
+
+	for _ in 0 upto slebMaxBytes 'encode'
+		let b = v and lebPayloadMask
+		v = v shr 7
+
+		let signBitSet = (b and slebSignBit) != 0
+		let last = (v == 0 and not signBitSet) or (v == -1 and signBitSet)
+
+		if last 'done'
+			buf.push(b)
+			return
+		end 'done'
+
+		buf.push(b or lebContinuationBit)
+	end 'encode'
+
+	panic("writeSleb128: {value} did not terminate within {slebMaxBytes} bytes — not a 64-bit integer")
+end 'writeSleb128'
+
+// --- Value types ---
+// The wasm value types the scalar slice produces. i32 backs i1/i8..i32; i64 backs i64/u64;
+// the floats arrive with their milestone. A2 chooses the width per op (see CONTRACT §4).
+export enum WasmValType
+	i32
+	i64
+	f32
+	f64
+end 'WasmValType'
+
+export typealias WasmValTypeArray = Array with WasmValType
+
+// The binary-format encoding of each value type (a single negative-sleb byte in the spec,
+// stored here as its unsigned byte value). Kept as an explicit map rather than enum raw
+// values so the enum stays a plain type list matching the contract.
+let wasmTypeI32 = 0x7F
+let wasmTypeI64 = 0x7E
+let wasmTypeF32 = 0x7D
+let wasmTypeF64 = 0x7C
+
+// The valtype's binary-format encoding, carried as MachineWord — the encoder's integer idiom
+// (v1/MachOWriter/BinaryHelpers spell binary-format byte values MachineWord; `Byte` is reserved
+// for genuine byte-array elements). `push` narrows it to the byte it always is.
+function valTypeByte(t WasmValType) returns MachineWord
+	return match t 'ty'
+		i32 gives wasmTypeI32
+		i64 gives wasmTypeI64
+		f32 gives wasmTypeF32
+		f64 gives wasmTypeF64
+	end 'ty'
+end 'valTypeByte'
+
+// --- Instruction opcodes ---
+// Named per the wasm spec's mnemonics. Control flow first, then locals, constants, the i32
+// and i64 ALU/compare/conversion bands. `end` (0x0B) closes both a block and a function body.
+let opUnreachable = 0x00
+let opBlock = 0x02
+let opLoop = 0x03
+let opIf = 0x04
+let opElse = 0x05
+let opEnd = 0x0B
+let opBr = 0x0C
+let opBrIf = 0x0D
+let opBrTable = 0x0E
+let opReturn = 0x0F
+let opCall = 0x10
+let opDrop = 0x1A
+
+// The block signature byte shared by block/loop/if. Every scalar-slice construct is a VOID
+// block (values flow through locals, not the operand stack across block boundaries), so the
+// signature is always the empty type 0x40.
+let wasmBlockTypeEmpty = 0x40
+
+let opLocalGet = 0x20
+let opLocalSet = 0x21
+let opLocalTee = 0x22
+
+let opI32Const = 0x41
+let opI64Const = 0x42
+
+let opI32Eqz = 0x45
+let opI32Eq = 0x46
+let opI32Ne = 0x47
+let opI32LtS = 0x48
+let opI32GtS = 0x4A
+let opI32LeS = 0x4C
+let opI32GeS = 0x4E
+
+let opI64Eqz = 0x50
+let opI64Eq = 0x51
+let opI64Ne = 0x52
+let opI64LtS = 0x53
+let opI64GtS = 0x55
+let opI64LeS = 0x57
+let opI64GeS = 0x59
+
+let opI32Add = 0x6A
+let opI32Sub = 0x6B
+let opI32Mul = 0x6C
+let opI32DivS = 0x6D
+let opI32RemS = 0x6F
+let opI32And = 0x71
+let opI32Or = 0x72
+let opI32Xor = 0x73
+let opI32Shl = 0x74
+let opI32ShrS = 0x75
+let opI32ShrU = 0x76
+
+let opI64Add = 0x7C
+let opI64Sub = 0x7D
+let opI64Mul = 0x7E
+let opI64DivS = 0x7F
+let opI64RemS = 0x81
+let opI64And = 0x83
+let opI64Or = 0x84
+let opI64Xor = 0x85
+let opI64Shl = 0x86
+let opI64ShrS = 0x87
+let opI64ShrU = 0x88
+
+let opI32WrapI64 = 0xA7
+let opI64ExtendI32S = 0xAC
+let opI64ExtendI32U = 0xAD
+
+// --- WasmBody: a function body under construction ---
+// Each method APPENDS the encoded instruction(s) to the body's byte buffer. `bytes()` returns
+// the raw instruction stream ONLY — the local declarations and the trailing `end` are framed
+// by WasmModuleBuilder.addFunction, which is the one place that knows a body's locals.
+export type WasmBody
+	var buf as ByteArray
+
+	export static function create() returns WasmBody
+		return Self{buf: ByteArray.create()}
+	end 'create'
+
+	// Structured control flow. block/loop/if open a void-typed region; `beginIf` consumes an
+	// i32 condition from the stack; `elseClause` splits an if; `endOp` closes the innermost
+	// region (the wasm `end` opcode, renamed off the keyword — see the file header).
+	export function beginBlock()
+		self.buf.push(opBlock)
+		self.buf.push(wasmBlockTypeEmpty)
+	end 'beginBlock'
+
+	export function beginLoop()
+		self.buf.push(opLoop)
+		self.buf.push(wasmBlockTypeEmpty)
+	end 'beginLoop'
+
+	export function beginIf()
+		self.buf.push(opIf)
+		self.buf.push(wasmBlockTypeEmpty)
+	end 'beginIf'
+
+	export function elseClause()
+		self.buf.push(opElse)
+	end 'elseClause'
+
+	export function endOp()
+		self.buf.push(opEnd)
+	end 'endOp'
+
+	// Branch out `relativeDepth` enclosing regions. `brIf` branches only if the i32 it
+	// consumes is non-zero; `brTable` is the dispatcher's jump — it consumes an i32 index and
+	// branches to `targets[index]`, or to `defaultTarget` when the index is out of range.
+	export function br(relativeDepth Wasm32Index)
+		self.buf.push(opBr)
+		writeUleb128(self.buf, value: relativeDepth)
+	end 'br'
+
+	export function brIf(relativeDepth Wasm32Index)
+		self.buf.push(opBrIf)
+		writeUleb128(self.buf, value: relativeDepth)
+	end 'brIf'
+
+	export function brTable(targets Wasm32IndexArray, defaultTarget Wasm32Index)
+		self.buf.push(opBrTable)
+		writeUleb128(self.buf, value: targets.count() as Wasm32Index)
+
+		for target in targets 'each'
+			writeUleb128(self.buf, value: target)
+		end 'each'
+
+		writeUleb128(self.buf, value: defaultTarget)
+	end 'brTable'
+
+	export function returnOp()
+		self.buf.push(opReturn)
+	end 'returnOp'
+
+	export function unreachable()
+		self.buf.push(opUnreachable)
+	end 'unreachable'
+
+	export function drop()
+		self.buf.push(opDrop)
+	end 'drop'
+
+	export function call(funcIdx Wasm32Index)
+		self.buf.push(opCall)
+		writeUleb128(self.buf, value: funcIdx)
+	end 'call'
+
+	// Locals — the identity register file. Every SSA ValueId is one wasm local; params are
+	// locals 0..paramCount-1, declared locals follow.
+	export function localGet(idx Wasm32Index)
+		self.buf.push(opLocalGet)
+		writeUleb128(self.buf, value: idx)
+	end 'localGet'
+
+	export function localSet(idx Wasm32Index)
+		self.buf.push(opLocalSet)
+		writeUleb128(self.buf, value: idx)
+	end 'localSet'
+
+	export function localTee(idx Wasm32Index)
+		self.buf.push(opLocalTee)
+		writeUleb128(self.buf, value: idx)
+	end 'localTee'
+
+	// Constants carry SIGNED (SLEB128) immediates. i32Const takes the 32-bit Imm32 the Std
+	// tier carries; i64Const takes the full ParsedInt a `const` op holds (i64.min..i64.max).
+	export function i32Const(v Imm32)
+		self.buf.push(opI32Const)
+		writeSleb128(self.buf, value: v)
+	end 'i32Const'
+
+	export function i64Const(v ParsedInt)
+		self.buf.push(opI64Const)
+		writeSleb128(self.buf, value: v)
+	end 'i64Const'
+
+	// i64 ALU (two i64 → i64).
+	export function i64Add()
+		self.buf.push(opI64Add)
+	end 'i64Add'
+
+	export function i64Sub()
+		self.buf.push(opI64Sub)
+	end 'i64Sub'
+
+	export function i64Mul()
+		self.buf.push(opI64Mul)
+	end 'i64Mul'
+
+	export function i64DivS()
+		self.buf.push(opI64DivS)
+	end 'i64DivS'
+
+	export function i64RemS()
+		self.buf.push(opI64RemS)
+	end 'i64RemS'
+
+	export function i64And()
+		self.buf.push(opI64And)
+	end 'i64And'
+
+	export function i64Or()
+		self.buf.push(opI64Or)
+	end 'i64Or'
+
+	export function i64Xor()
+		self.buf.push(opI64Xor)
+	end 'i64Xor'
+
+	export function i64Shl()
+		self.buf.push(opI64Shl)
+	end 'i64Shl'
+
+	export function i64ShrS()
+		self.buf.push(opI64ShrS)
+	end 'i64ShrS'
+
+	export function i64ShrU()
+		self.buf.push(opI64ShrU)
+	end 'i64ShrU'
+
+	// i64 compares (two i64 → i32 bool).
+	export function i64Eq()
+		self.buf.push(opI64Eq)
+	end 'i64Eq'
+
+	export function i64Ne()
+		self.buf.push(opI64Ne)
+	end 'i64Ne'
+
+	export function i64LtS()
+		self.buf.push(opI64LtS)
+	end 'i64LtS'
+
+	export function i64GtS()
+		self.buf.push(opI64GtS)
+	end 'i64GtS'
+
+	export function i64LeS()
+		self.buf.push(opI64LeS)
+	end 'i64LeS'
+
+	export function i64GeS()
+		self.buf.push(opI64GeS)
+	end 'i64GeS'
+
+	// i64 unary: `== 0` (i64 → i32), for logicalNot and cond materialization on i64 values.
+	export function i64Eqz()
+		self.buf.push(opI64Eqz)
+	end 'i64Eqz'
+
+	// Width conversions inserted only where wasm's type discipline forces an i64↔i32 boundary
+	// (notably the `$run` entry's `i32.wrap_i64` of main's result).
+	export function i32WrapI64()
+		self.buf.push(opI32WrapI64)
+	end 'i32WrapI64'
+
+	export function i64ExtendI32S()
+		self.buf.push(opI64ExtendI32S)
+	end 'i64ExtendI32S'
+
+	export function i64ExtendI32U()
+		self.buf.push(opI64ExtendI32U)
+	end 'i64ExtendI32U'
+
+	// i32 twins of the i64 ALU/compare/eqz set. A2 picks i32.* vs i64.* by the op's width.
+	export function i32Add()
+		self.buf.push(opI32Add)
+	end 'i32Add'
+
+	export function i32Sub()
+		self.buf.push(opI32Sub)
+	end 'i32Sub'
+
+	export function i32Mul()
+		self.buf.push(opI32Mul)
+	end 'i32Mul'
+
+	export function i32DivS()
+		self.buf.push(opI32DivS)
+	end 'i32DivS'
+
+	export function i32RemS()
+		self.buf.push(opI32RemS)
+	end 'i32RemS'
+
+	export function i32And()
+		self.buf.push(opI32And)
+	end 'i32And'
+
+	export function i32Or()
+		self.buf.push(opI32Or)
+	end 'i32Or'
+
+	export function i32Xor()
+		self.buf.push(opI32Xor)
+	end 'i32Xor'
+
+	export function i32Shl()
+		self.buf.push(opI32Shl)
+	end 'i32Shl'
+
+	export function i32ShrS()
+		self.buf.push(opI32ShrS)
+	end 'i32ShrS'
+
+	export function i32ShrU()
+		self.buf.push(opI32ShrU)
+	end 'i32ShrU'
+
+	export function i32Eq()
+		self.buf.push(opI32Eq)
+	end 'i32Eq'
+
+	export function i32Ne()
+		self.buf.push(opI32Ne)
+	end 'i32Ne'
+
+	export function i32LtS()
+		self.buf.push(opI32LtS)
+	end 'i32LtS'
+
+	export function i32GtS()
+		self.buf.push(opI32GtS)
+	end 'i32GtS'
+
+	export function i32LeS()
+		self.buf.push(opI32LeS)
+	end 'i32LeS'
+
+	export function i32GeS()
+		self.buf.push(opI32GeS)
+	end 'i32GeS'
+
+	export function i32Eqz()
+		self.buf.push(opI32Eqz)
+	end 'i32Eqz'
+
+	// The raw instruction bytes — NO local declarations, NO trailing `end`. addFunction frames
+	// the complete body around this stream.
+	export function bytes() returns ByteArray
+		return self.buf
+	end 'bytes'
+end 'WasmBody'
+
+// --- Section IDs (canonical order) ---
+// A wasm module's sections MUST appear in ascending id order; finish() emits exactly this
+// subset in this order. Ids 4 (table), 6 (global), 8 (start), 9 (element), 11 (data) are
+// unused by the scalar slice.
+let wasmSectionType = 1
+let wasmSectionImport = 2
+let wasmSectionFunction = 3
+let wasmSectionMemory = 5
+let wasmSectionExport = 7
+let wasmSectionCode = 10
+
+// The functype form byte that prefixes every `(params) -> (results)` entry in the type section.
+let wasmFunctypeForm = 0x60
+
+// Import/export descriptor kinds. Only functions are imported; functions and the one memory
+// are exported.
+let wasmImportKindFunc = 0x00
+let wasmExportKindFunc = 0x00
+let wasmExportKindMemory = 0x02
+
+// A memory's limits flag: 0x00 = a minimum page count with no maximum.
+let wasmLimitsFlagMin = 0x00
+
+// The single memory a module declares/exports lives at memory index 0.
+let wasmMemoryIndexZero = 0
+
+// The 4 bytes of the module magic, in file order — the ASCII of "\0asm". Spelled as explicit
+// byte values (like v1) rather than a byte-string literal, because "\x00asm" is ambiguous: the
+// 'a' that follows the \x00 escape is itself a hex digit.
+let wasmMagicByte0 = 0x00
+let wasmMagicByte1 = 0x61
+let wasmMagicByte2 = 0x73
+let wasmMagicByte3 = 0x6D
+
+// The wasm binary format version this encoder emits (little-endian dword).
+let wasmModuleVersion = 1
+
+// Write the module preamble: the "\0asm" magic then the version dword.
+function writeModuleHeader(buf ByteArray)
+	buf.push(wasmMagicByte0)
+	buf.push(wasmMagicByte1)
+	buf.push(wasmMagicByte2)
+	buf.push(wasmMagicByte3)
+	writeDword(buf, value: wasmModuleVersion)
+end 'writeModuleHeader'
+
+// Write a wasm "name": a ULEB128 byte-length prefix followed by the UTF-8 bytes.
+function writeWasmName(buf ByteArray, name ByteArray)
+	writeUleb128(buf, value: name.count() as Wasm32Index)
+	buf.append(name)
+end 'writeWasmName'
+
+// Write a section: id byte, then the ULEB128 byte length of the payload, then the payload.
+function writeSectionRaw(module ByteArray, sectionId MachineWord, contents ByteArray)
+	module.push(sectionId)
+	writeUleb128(module, value: contents.count() as Wasm32Index)
+	module.append(contents)
+end 'writeSectionRaw'
+
+// Encode one functype: form byte, ULEB128 param count + param valtype bytes, then the same
+// for results.
+function encodeFuncType(params WasmValTypeArray, results WasmValTypeArray) returns ByteArray
+	var enc = ByteArray.create()
+	enc.push(wasmFunctypeForm)
+
+	writeUleb128(enc, value: params.count() as Wasm32Index)
+	for p in params 'eachParam'
+		enc.push(valTypeByte(p))
+	end 'eachParam'
+
+	writeUleb128(enc, value: results.count() as Wasm32Index)
+	for r in results 'eachResult'
+		enc.push(valTypeByte(r))
+	end 'eachResult'
+
+	return enc
+end 'encodeFuncType'
+
+// Encode a function body's local declarations as run-length `(count, valtype)` groups: adjacent
+// locals of the same type share one group. `localTypes` is the DECLARED locals only (past the
+// params). Two passes are unavoidable — the group count is ULEB128-prefixed, so it must be known
+// before the groups are written — but the corpus of local types is tiny, so building the groups
+// first costs nothing measurable.
+function writeLocalDecls(buf ByteArray, localTypes WasmValTypeArray)
+	var groupCounts = Wasm32IndexArray.create()
+	var groupTypes = WasmValTypeArray.create()
+
+	for t in localTypes 'each'
+		let n = groupTypes.count()
+		var extended = false
+
+		if n > 0 'checkRun'
+			let lastType = try groupTypes.get(n - 1) otherwise panic("writeLocalDecls: groupTypes.get(last) OOB with count {n}")
+
+			if lastType == t 'sameRun'
+				// Primitive read is a copy, so this get/set pair has no borrow conflict.
+				let lastCount = try groupCounts.get(n - 1) otherwise panic("writeLocalDecls: groupCounts.get(last) OOB with count {n}")
+				try groupCounts.set(n - 1, value: (lastCount + 1) as Wasm32Index) otherwise panic("writeLocalDecls: groupCounts.set(last) OOB with count {n}")
+				extended = true
+			end 'sameRun'
+		end 'checkRun'
+
+		if not extended 'newGroup'
+			groupCounts.push(1)
+			groupTypes.push(t)
+		end 'newGroup'
+	end 'each'
+
+	writeUleb128(buf, value: groupTypes.count() as Wasm32Index)
+	for (iter, gt) in groupTypes.withIterator() 'emit'
+		let count = try groupCounts.get(iter.index()) otherwise panic("writeLocalDecls: groupCounts/groupTypes fell out of lockstep at {iter.index()}")
+		writeUleb128(buf, value: count)
+		buf.push(valTypeByte(gt))
+	end 'emit'
+end 'writeLocalDecls'
+
+// One export entry, held until finish() so exports emit in the order A2 declared them (which
+// determinism requires and the component tooling expects: memory before the run function).
+type WasmExport
+	var name as ByteArray
+	var kind as MachineWord
+	var index as Wasm32Index
+
+	static function create(name ByteArray, kind MachineWord, index Wasm32Index) returns WasmExport
+		return Self{name: name, kind: kind, index: index}
+	end 'create'
+end 'WasmExport'
+
+typealias WasmExportArray = Array with WasmExport
+
+// --- WasmModuleBuilder: assembles a complete CORE wasm module ---
+// FUNCTION INDEX SPACE (the contract A2 mirrors): imports take indices 0..importCount-1 in
+// addImportFunc call order; defined functions take importCount, importCount+1, … in addFunction
+// call order. So A2 must add ALL imports before ANY function — addFunction returns the index it
+// assigned, computed from the import count at that moment.
+export type WasmModuleBuilder
+	// Interned functype encodings, position = type index. Deduplicated so identical signatures
+	// share one entry (the type section is small; a linear scan over its bytes is ample).
+	var funcTypes as ByteArrayArray
+
+	// Imports, in call order: parallel columns of module name, field name, and type index.
+	var importModules as ByteArrayArray
+	var importFields as ByteArrayArray
+	var importTypeIndices as Wasm32IndexArray
+
+	// Defined functions, in call order: the type index and the FRAMED body (local decls +
+	// instruction bytes + trailing `end`) of each.
+	var funcTypeIndices as Wasm32IndexArray
+	var funcBodies as ByteArrayArray
+
+	// Exports, in declaration order.
+	var exportEntries as WasmExportArray
+
+	// The single linear memory, declared/exported by exportMemory.
+	var hasMemory as bool
+	var memoryMinPages as Wasm32Index
+
+	export static function create() returns WasmModuleBuilder
+		return Self{funcTypes: ByteArrayArray.create(), importModules: ByteArrayArray.create(), importFields: ByteArrayArray.create(), importTypeIndices: Wasm32IndexArray.create(), funcTypeIndices: Wasm32IndexArray.create(), funcBodies: ByteArrayArray.create(), exportEntries: WasmExportArray.create(), hasMemory: false, memoryMinPages: 0}
+	end 'create'
+
+	// Intern a functype, returning its (deduplicated) type index.
+	export function internFuncType(params WasmValTypeArray, results WasmValTypeArray) returns Wasm32Index
+		let enc = encodeFuncType(params, results: results)
+
+		for (iter, existing) in self.funcTypes.withIterator() 'search'
+			if existing.equals(enc) 'found'
+				return iter.index() as Wasm32Index
+			end 'found'
+		end 'search'
+
+		let idx = self.funcTypes.count() as Wasm32Index
+		self.funcTypes.push(enc)
+		return idx
+	end 'internFuncType'
+
+	// Add an imported function, returning its function index (imports precede all defined
+	// functions in the index space).
+	export function addImportFunc(moduleName ByteArray, fieldName ByteArray, typeIdx Wasm32Index) returns Wasm32Index
+		let idx = self.importModules.count() as Wasm32Index
+		self.importModules.push(moduleName)
+		self.importFields.push(fieldName)
+		self.importTypeIndices.push(typeIdx)
+		return idx
+	end 'addImportFunc'
+
+	// Add a defined function, returning its function index. `body` is WasmBody.bytes() (raw
+	// instructions); this frames it with the local declarations and the trailing `end`.
+	export function addFunction(typeIdx Wasm32Index, localTypes WasmValTypeArray, body ByteArray) returns Wasm32Index
+		let funcIdx = (self.importModules.count() + self.funcBodies.count()) as Wasm32Index
+
+		var framed = ByteArray.create()
+		writeLocalDecls(framed, localTypes: localTypes)
+		framed.append(body)
+		framed.push(opEnd)
+
+		self.funcTypeIndices.push(typeIdx)
+		self.funcBodies.push(framed)
+		return funcIdx
+	end 'addFunction'
+
+	export function exportFunc(name ByteArray, funcIdx Wasm32Index)
+		self.exportEntries.push(WasmExport.create(name, kind: wasmExportKindFunc, index: funcIdx))
+	end 'exportFunc'
+
+	// Declare the module's single memory with `minPages` initial pages and export it under
+	// `name` (memory index 0).
+	export function exportMemory(name ByteArray, minPages Wasm32Index)
+		self.hasMemory = true
+		self.memoryMinPages = minPages
+		self.exportEntries.push(WasmExport.create(name, kind: wasmExportKindMemory, index: wasmMemoryIndexZero))
+	end 'exportMemory'
+
+	// Emit the finished CORE module: preamble + sections in canonical id order. Empty sections
+	// are omitted (a wasm module names only the sections it uses); for the scalar slice every
+	// section below is non-empty in practice.
+	export function finish() returns ByteArray
+		var module = ByteArray.create()
+		writeModuleHeader(module)
+
+		self.emitTypeSection(module)
+		self.emitImportSection(module)
+		self.emitFunctionSection(module)
+		self.emitMemorySection(module)
+		self.emitExportSection(module)
+		self.emitCodeSection(module)
+
+		return module
+	end 'finish'
+
+	function emitTypeSection(module ByteArray)
+		if self.funcTypes.count() == 0 'empty'
+			return
+		end 'empty'
+
+		var contents = ByteArray.create()
+		writeUleb128(contents, value: self.funcTypes.count() as Wasm32Index)
+		for t in self.funcTypes 'each'
+			contents.append(t)
+		end 'each'
+
+		writeSectionRaw(module, sectionId: wasmSectionType, contents: contents)
+	end 'emitTypeSection'
+
+	function emitImportSection(module ByteArray)
+		let importCount = self.importModules.count()
+		if importCount == 0 'empty'
+			return
+		end 'empty'
+
+		var contents = ByteArray.create()
+		writeUleb128(contents, value: importCount as Wasm32Index)
+		for (iter, moduleName) in self.importModules.withIterator() 'each'
+			let fieldName = try self.importFields.get(iter.index()) otherwise panic("emitImportSection: importFields out of lockstep with importModules at {iter.index()}")
+			let typeIdx = try self.importTypeIndices.get(iter.index()) otherwise panic("emitImportSection: importTypeIndices out of lockstep at {iter.index()}")
+
+			writeWasmName(contents, name: moduleName)
+			writeWasmName(contents, name: fieldName)
+			contents.push(wasmImportKindFunc)
+			writeUleb128(contents, value: typeIdx)
+		end 'each'
+
+		writeSectionRaw(module, sectionId: wasmSectionImport, contents: contents)
+	end 'emitImportSection'
+
+	function emitFunctionSection(module ByteArray)
+		let funcCount = self.funcTypeIndices.count()
+		if funcCount == 0 'empty'
+			return
+		end 'empty'
+
+		var contents = ByteArray.create()
+		writeUleb128(contents, value: funcCount as Wasm32Index)
+		for typeIdx in self.funcTypeIndices 'each'
+			writeUleb128(contents, value: typeIdx)
+		end 'each'
+
+		writeSectionRaw(module, sectionId: wasmSectionFunction, contents: contents)
+	end 'emitFunctionSection'
+
+	function emitMemorySection(module ByteArray)
+		if not self.hasMemory 'none'
+			return
+		end 'none'
+
+		var contents = ByteArray.create()
+		writeUleb128(contents, value: 1)
+		contents.push(wasmLimitsFlagMin)
+		writeUleb128(contents, value: self.memoryMinPages)
+
+		writeSectionRaw(module, sectionId: wasmSectionMemory, contents: contents)
+	end 'emitMemorySection'
+
+	function emitExportSection(module ByteArray)
+		let exportCount = self.exportEntries.count()
+		if exportCount == 0 'empty'
+			return
+		end 'empty'
+
+		var contents = ByteArray.create()
+		writeUleb128(contents, value: exportCount as Wasm32Index)
+		for entry in self.exportEntries 'each'
+			writeWasmName(contents, name: entry.name)
+			contents.push(entry.kind)
+			writeUleb128(contents, value: entry.index)
+		end 'each'
+
+		writeSectionRaw(module, sectionId: wasmSectionExport, contents: contents)
+	end 'emitExportSection'
+
+	function emitCodeSection(module ByteArray)
+		let funcCount = self.funcBodies.count()
+		if funcCount == 0 'empty'
+			return
+		end 'empty'
+
+		var contents = ByteArray.create()
+		writeUleb128(contents, value: funcCount as Wasm32Index)
+		for body in self.funcBodies 'each'
+			writeUleb128(contents, value: body.count() as Wasm32Index)
+			contents.append(body)
+		end 'each'
+
+		writeSectionRaw(module, sectionId: wasmSectionCode, contents: contents)
+	end 'emitCodeSection'
+end 'WasmModuleBuilder'
