@@ -1486,7 +1486,7 @@ end 'main'
 ### Break in Exhaustive Enum Match
 
 <!-- disabled-test: match-statements.break-exhaustive-enum -->
-<!-- P1.4: `process(c Container)` matches a union PARAMETER, and `main` passes a union across a call (a struct/union param is not yet a `structRef` binding — E2015 today); the payload construct + scalar extract themselves are P1.3 slice 1 -->
+<!-- blocked by `break` OUT OF A MATCH (E2047 "'break' can only be used inside a loop") — a separate feature, NOT cross-call ownership: the union-parameter mechanism it was thought to test is already GREEN (match-enum-typed-binding/match-enum-typed-binding-compare, isGreen(p Pixel)). It unlocks when a match label becomes a `break` target. -->
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)

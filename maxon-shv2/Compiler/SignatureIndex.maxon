@@ -1506,6 +1506,16 @@ export type ProgramSignatures
 		return DeclaredStruct.declared(layout)
 	end 'structOf'
 
+	// Is `name` a declared `type` — the `bool` half of `structOf`, and a HOT-PATH allocation guard, the
+	// twin of `containsEnum`. `structOf` returns a `DeclaredStruct`, a Maxon union VALUE that boxes on
+	// its `undeclared` case as much as any other, so a caller that only needs "is it a struct?" for the
+	// COMMON no answer (`Parser.resolveNamedStruct` asks it of every `named` parameter/return type,
+	// most of them ranged int aliases) must not pay that box just to throw it away. A `Map.contains`
+	// allocates nothing.
+	export function containsStruct(name ByteArray) returns bool
+		return self.structTypes.contains(name)
+	end 'containsStruct'
+
 	// The enum/union `name` denotes, declared in ANY file — `structOf`'s twin, and the door the
 	// PARSER asks every enum question through: is this scrutinee an enum? what tag is a case? which
 	// cases does a range arm cover? The layout it hands back carries plain NAMES and INTS (no ids),
@@ -1536,6 +1546,42 @@ export type ProgramSignatures
 		let declared = try layout.fieldTypes.get(index) otherwise panic("ProgramSignatures.fieldTypeOf: field {index} is out of range for `type {String.from(structName)}`, which declares {layout.fieldCount()} — every index handed out came from `indexOfField`")
 		return self.adoptType(declared, into: into)
 	end 'fieldTypeOf'
+
+	// Does field `index` of struct `structName` own DROPPABLE HEAP — a String, a struct, or a
+	// payload-bearing (boxed) union? The question `Parser.rejectManagedStructFields` asks of EVERY field
+	// of EVERY constructed struct: a struct box's drop does not cascade to free such a field, so building
+	// one is refused until Wave 2. It is answered ENTIRELY INSIDE this index — over `self.typeNames`, the
+	// interner the layout's types were minted against — so it neither re-interns the field type (no
+	// `adoptType`, unlike `fieldTypeOf`) nor boxes a `DeclaredEnum`/`DeclaredStruct` to decide struct- or
+	// enum-hood: the `contains` guards answer allocation-free, which matters because a scalar field (the
+	// overwhelming majority) must reach the `false` return without allocating. A ranged int alias and a
+	// payload-free enum are scalars; a `float`/`int`/`bool` is a scalar.
+	//
+	// The struct and index are preconditions, not cases — every caller reached here through a `structOf`
+	// that answered `declared`, and `index` is one `indexOfField` handed out.
+	export function structFieldIsManaged(structName ByteArray, index FieldIndex) returns bool
+		let layout = try self.structTypes.get(structName) otherwise panic("ProgramSignatures.structFieldIsManaged: no `type {String.from(structName)}` is declared — every caller asks `structOf` first")
+		let fieldType = try layout.fieldTypes.get(index) otherwise panic("ProgramSignatures.structFieldIsManaged: field {index} is out of range for `type {String.from(structName)}`, which declares {layout.fieldCount()} — every index handed out came from `indexOfField`")
+
+		let tag = maxonTypeTag(fieldType)
+		if tagIsText(tag) or tagIsStructRef(tag) 'stringOrStruct'
+			return true
+		end 'stringOrStruct'
+		if tag != ValueTypeTag.named 'notNamed'
+			return false
+		end 'notNamed'
+
+		let name = try self.typeNames.nameOf(typeNameIdOf(fieldType)) otherwise panic("ProgramSignatures.structFieldIsManaged: a `named` field type's id is not in this index's interner — the layout's types were minted against exactly this table")
+		if self.structTypes.contains(name) 'namedStruct'
+			return true
+		end 'namedStruct'
+		if not self.enumTypes.contains(name) 'notEnum'
+			return false
+		end 'notEnum'
+
+		let enumLayout = try self.enumTypes.get(name) otherwise panic("ProgramSignatures.structFieldIsManaged: enumTypes.contains({String.from(name)}) is true but get failed")
+		return enumLayout.isBoxed()
+	end 'structFieldIsManaged'
 
 	// The declared return type of `callee`, ADOPTED into `into` — the calling file's own artifact
 	// interner. THE one door out of this index (see the header): a `named` type crosses by NAME and

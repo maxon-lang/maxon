@@ -210,8 +210,7 @@ end 'main'
 50
 ```
 
-<!-- disabled-test: struct-param -->
-<!-- P1.4 ownership — a struct crossing a call boundary as a PARAMETER forces the borrow-vs-consume ruling, which is deferred to P1.4 -->
+<!-- test: struct-param -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -239,8 +238,7 @@ end 'main'
 10
 ```
 
-<!-- disabled-test: struct-return -->
-<!-- P1.4 ownership — a struct crossing a call boundary as a PARAMETER forces the borrow-vs-consume ruling, which is deferred to P1.4 -->
+<!-- test: struct-return -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -267,8 +265,7 @@ end 'main'
 12
 ```
 
-<!-- disabled-test: struct-literal-as-arg -->
-<!-- P1.4 ownership — a struct crossing a call boundary as a PARAMETER forces the borrow-vs-consume ruling, which is deferred to P1.4 -->
+<!-- test: struct-literal-as-arg -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)

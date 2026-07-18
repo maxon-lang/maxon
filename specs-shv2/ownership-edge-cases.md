@@ -112,8 +112,7 @@ end 'main'
 7
 ```
 
-<!-- disabled-test: rc-return-transfers-ownership -->
-<!-- beyond P1.2: heap-struct ownership trace not yet in shv2 -->
+<!-- test: rc-return-transfers-ownership -->
 Returning a struct skips its decref; caller receives ownership and frees it at its own scope exit.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -687,7 +686,7 @@ end 'main'
 ```
 
 <!-- disabled-test: rc-return-from-inner-block-cleanup -->
-<!-- beyond P1.2: heap-struct ownership trace not yet in shv2 -->
+<!-- blocked by the `@heap` statement annotation (E2015 "@ statement"), a separate feature — NOT cross-call ownership: `compute` returns an Integer, no struct crosses a call. The nested-block struct-drop-on-return it exercises is already covered; it unlocks when `@` annotations parse. -->
 Returning from inside a nested block must decref all locals in every enclosing block before returning.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -1188,8 +1187,7 @@ end 'main'
 2
 ```
 
-<!-- disabled-test: rc-return-struct-literal -->
-<!-- beyond P1.2: heap-struct ownership trace not yet in shv2 -->
+<!-- test: rc-return-struct-literal -->
 Returning a struct literal directly from a function must transfer ownership at rc=1.
 The callee constructs the struct (rc=0), increfs it for the assignment, and transfers
 ownership to the caller via KeepVars. The caller must not incref again.

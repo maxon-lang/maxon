@@ -173,8 +173,8 @@ end 'main'
 error E3066: specs/fragments/enum-match-only/error.enum-eq-associated.test:13:7: cannot compare union values using '==', use 'match' instead
 ```
 
-<!-- test: error.union-return -->
-A payload-bearing union cannot yet be RETURNED across a call — the caller cannot adopt the returned heap box as owned, so `let c = make()` would leak it (that half of cross-call union ownership arrives at P1.4, with the union-parameter half). Refused at the return-type annotation. A payload-FREE union/enum return is a bare tag and stays allowed.
+<!-- test: union-return -->
+A payload-bearing union RETURNED across a call (OPEN #44, closed at P1.4a). The callee builds an owned heap box and MOVES it out; the caller ADOPTS it (`let c = make()`) — owned, dropped exactly once at scope exit, no leak (a leak is exit 101). The result is recognized as owned via a `named` + `isBoxed` LAYOUT lookup, not the tag: a boxed union and a bare enum both carry the `named` tag, but only the boxed one owns a box the caller must free.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -195,8 +195,8 @@ function main() returns ExitCode
 	end 'k'
 end 'main'
 ```
-```maxoncstderr
-error E2015: specs/fragments/enum-match-only/error.union-return.test:9:17: Unsupported: returning a `union Container` value — a payload-bearing union is a heap box, and the caller adopting that box as owned (so `let c = make()` frees it rather than leaking) is the cross-call union ownership that arrives with the union-parameter half at P1.4; a payload-free union/enum return is a bare tag and is allowed
+```exitcode
+5
 ```
 
 <!-- test: error.default-without-throws -->

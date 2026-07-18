@@ -2856,13 +2856,13 @@ export type Parser
 		try self.parseFunctionParameters(paramNames, paramTypes: paramTypes, paramRanges: paramRanges)
 		try self.consume(TokenKind.rightParen)
 
-		// The token the return-type annotation begins at (`returns`, or the body's first token when
-		// there is none), captured for the boxed-union-return diagnostic below. Read in the REAL parse
-		// only — never in `recordScannedSignature`'s tolerant sweep, where the enum layouts it consults
-		// are not yet recorded (see `parseTypeReference`'s two-pass header).
-		let returnAnchor = self.current()
-		let returnType = try self.parseOptionalReturnType()
-		try self.requireReturnTypeLowerable(returnType, anchor: returnAnchor)
+		// ⭐ **A STRUCT PARAMETER OR RETURN TYPE IS RE-TAGGED `structRef` HERE**, in the real parse where
+		// the whole-program struct registry is complete — the step `parseTypeReference` could not take in
+		// the tolerant sweep (see `resolveNamedStruct`). Both lists are rewritten BEFORE anything reads
+		// them: the value-tag seeding below, `bindParameters`, `func.maxonParamTypes`, the recorded
+		// signature, and `parseReturnStatement`'s declared-type check all then see a struct as a struct.
+		paramTypes = self.resolveNamedStructAll(paramTypes)
+		let returnType = self.resolveNamedStructReturn(try self.parseOptionalReturnType())
 
 		// Fresh per-function value numbering, seeded at the function's paramCount so
 		// parameter ids occupy 0..paramCount-1 by Std-ABI convention (a body value
@@ -3097,46 +3097,6 @@ export type Parser
 		return MaxonReturnType.value(try self.parseTypeReference())
 	end 'parseOptionalReturnType'
 
-	// A return type the current rung can actually lower. Runs in the REAL parse only (see
-	// `parseFunction`), so the enum layouts it consults are fully recorded — the tolerant sweep never
-	// reaches here. `void` and every scalar type pass; the one refusal is a payload-bearing union
-	// (below).
-	function requireReturnTypeLowerable(returnType MaxonReturnType, anchor Token) throws ParseError
-		match returnType 'rt'
-			void then break 'rt'
-			value(inner) then try self.rejectBoxedUnionReturnType(inner, anchor: anchor)
-		end 'rt'
-	end 'requireReturnTypeLowerable'
-
-	// ⭐ **A PAYLOAD-BEARING (HEAP-BOXED) UNION CANNOT YET BE RETURNED ACROSS A CALL.** A boxed union
-	// is `named`-tagged, so a call RESULT is indistinguishable by tag from a bare enum value —
-	// `valueIsOwned` recognizes a struct result by its `structRef` tag but has no such handle here, and
-	// the box's owned-heap provenance bit is set only at its `emitEnumBox` construct site, never on a
-	// value arriving from a callee. So `let c = make()` would bind `c` to a box it does not know it
-	// owns and never drop it: a silent exit-101 LEAK. Refused at the return-type ANNOTATION until the
-	// caller-adopts-the-returned-box half of cross-call union ownership lands at P1.4 — the same rung
-	// the union PARAMETER half is deferred to, so a boxed union is uniformly not-yet-passable in either
-	// direction rather than rejected one way and leaking the other. A payload-FREE union/enum return is
-	// a bare i64 tag with no box and no ownership, so it stays allowed (`isBoxed` is the whole test).
-	function rejectBoxedUnionReturnType(returnType MaxonType, anchor Token) throws ParseError
-		if maxonTypeTag(returnType) != ValueTypeTag.named 'notNamed'
-			return
-		end 'notNamed'
-
-		let name = try self.artifact.typeNames.nameOf(typeNameIdOf(returnType)) otherwise panic("rejectBoxedUnionReturnType: a `named` return type's id is not in this file's interner — `parseTypeReference` interned it from a name in the same table")
-		let decl = self.signatures.enumOf(name)
-		if not enumMatchIsDeclared(decl) 'notEnum'
-			return
-		end 'notEnum'
-
-		let layout = requireEnumLayout(decl)
-		if not layout.isBoxed() 'payloadFree'
-			return
-		end 'payloadFree'
-
-		throw ParseError.unsupported("returning a `{layout.kindWord()} {String.from(name)}` value — a payload-bearing union is a heap box, and the caller adopting that box as owned (so `let c = make()` frees it rather than leaking) is the cross-call union ownership that arrives with the union-parameter half at P1.4; a payload-free union/enum return is a bare tag and is allowed", line: anchor.line, column: anchor.column)
-	end 'rejectBoxedUnionReturnType'
-
 	// A type reference. M1: a bare identifier (a named type like `ExitCode`,
 	// interned into the artifact's local interner) or a bare primitive keyword.
 	// Ranged/generic/qualified type syntax grows at M2+.
@@ -3222,6 +3182,59 @@ export type Parser
 	function namesEnclosingType(name ByteArray) returns bool
 		return not self.enclosingType.isEmpty() and self.enclosingType.equals(name)
 	end 'namesEnclosingType'
+
+	// ⭐ **RESOLVE A `named` STRUCT REFERENCE TO `structRef` — the parse-time half of what `resolveTypes`
+	// does to a signature.** `parseTypeReference` mints `structRef` SYNTACTICALLY for `Self` and the
+	// enclosing type's own name (they need no registry), but leaves every OTHER type name `named`,
+	// because it runs in the tolerant declaration sweep too — where "is `Vec2` a struct?" has no answer.
+	// This runs in the REAL parse ONLY (`self.signatures` is the complete whole-program index), so it CAN
+	// ask, and it re-tags a `named` that denotes a declared `type` as `structRef` — which is what makes a
+	// struct PARAMETER (`a Vec2`) a struct base for `a.x`, a struct RETURN (`returns Pair`) agree with the
+	// `structRef` a factory hands back, and a struct CALL RESULT (`let p = makePair()`) bind a struct.
+	//
+	// A `named` that denotes a UNION/ENUM stays `named` — a union value carries the `named` tag
+	// (`enumMatchFor` reads it) — and a ranged int ALIAS stays `named` (it IS the integer). `structRef`
+	// (a `Self`/own-name reference) and every non-`named` type pass through untouched, so this is
+	// idempotent and safe to fold over an already-partly-resolved list. `resolveTypes`'s `structRef` arm
+	// then finds the signature already resolved and leaves it, so the two cannot drift.
+	//
+	// The `containsStruct` guard, not `structOf`, for the reason its header states: this is asked of
+	// EVERY `named` parameter and return type, most of them int aliases, and `structOf` would box a
+	// throwaway `DeclaredStruct.undeclared` for each.
+	function resolveNamedStruct(t MaxonType) returns MaxonType
+		if maxonTypeTag(t) != ValueTypeTag.named 'notNamed'
+			return t
+		end 'notNamed'
+
+		let id = typeNameIdOf(t)
+		let name = try self.artifact.typeNames.nameOf(id) otherwise panic("resolveNamedStruct: a `named` type's id is not in this file's interner — `parseTypeReference` interned it from a name in the same table")
+		if not self.signatures.containsStruct(name) 'notStruct'
+			return t
+		end 'notStruct'
+
+		return MaxonType.structRef(id)
+	end 'resolveNamedStruct'
+
+	// `resolveNamedStruct` folded over a parameter-type list — the whole struct-`named` → `structRef`
+	// rewrite for one function's parameters, done ONCE after they are parsed so every downstream reader
+	// (the value-tag seeding, the binding types, the recorded signature) sees the same resolved list.
+	function resolveNamedStructAll(types MaxonTypeArray) returns MaxonTypeArray
+		var resolved = MaxonTypeArray.create()
+		for t in types 'each'
+			resolved.push(self.resolveNamedStruct(t))
+		end 'each'
+		return resolved
+	end 'resolveNamedStructAll'
+
+	// `resolveNamedStruct` for a return type: a `returns Pair` resolves its inner struct-`named` to
+	// `structRef` so `parseReturnStatement`'s declared-type check agrees with the `structRef` a factory's
+	// `return Self{…}` hands back, and so the recorded signature matches the call site's adopted result.
+	function resolveNamedStructReturn(rt MaxonReturnType) returns MaxonReturnType
+		return match rt 'r'
+			void gives rt
+			value(inner) gives MaxonReturnType.value(self.resolveNamedStruct(inner))
+		end 'r'
+	end 'resolveNamedStructReturn'
 
 	// Statement list until the closing `end`, emitting into `block`. Returns the block
 	// the LAST statement left control in — the same `block` for straight-line code, but
@@ -3395,19 +3408,19 @@ export type Parser
 			self.mutableVars.push(binding)
 		end 'trackVar'
 
-		// ⭐ **A STRUCT BINDING OWNS ITS BOX**, so it joins the list every `return` drops (see
-		// `ownedBindings`). `let` and `var` alike: ownership is a property of the TYPE, not of the
-		// mutability — `var p = Point.create(…)` owns exactly what a `let` one does.
+		// ⭐ **A BINDING OWNS A DROP IFF ITS VALUE OWNS DROPPABLE HEAP** (`valueIsOwnedHeap` — a struct
+		// box, a boxed union, an owned interpolation/promotion String, an adopted call result), so it
+		// joins the list every scope exit drops (see `ownedBindings`). `let` and `var` alike: ownership is
+		// a property of the VALUE, never the mutability — `var p = Point.create(…)` owns exactly what a
+		// `let` one does.
 		//
-		// It keys on the TAG, which is the parser's one type oracle, rather than on where the value
-		// came from. So a binding is owned iff it holds a struct, whatever expression produced it —
-		// and there is no second question to get wrong the day a struct arrives from somewhere other
-		// than a factory call.
-		// A binding OWNS a drop iff its value is a fresh owned value (`valueIsOwned` — a struct box or an
-		// owned interpolation String). `let s = "hi"` is NOT owned: a literal sets no provenance bit, so the
-		// binding is borrowed and never dropped, exactly as an immortal rdata String must be. `let` and `var`
-		// alike: ownership is a property of the VALUE, never the mutability.
-		if self.valueIsOwned(boundValue, tag: self.tagOf(boundValue)) 'trackOwned'
+		// It keys on the PROVENANCE BIT, not the type tag, and that is what tells an owned box from a
+		// BORROWED one: `let s = "hi"` (an immortal rdata literal) and `let q = a` where `a` is a struct
+		// PARAMETER (a borrowed pointer) both hold a struct/String tag yet own nothing — no bit, so the
+		// binding is borrowed and never dropped. `let u = t` from an already-owned binding DOES own (the
+		// bit rides the value), and MOVES it (below). The day a struct arrives from somewhere other than a
+		// factory call, its producer set the same bit, and this asks no new question.
+		if self.valueIsOwnedHeap(boundValue) 'trackOwned'
 			// ⭐ **MOVE-ON-BIND.** If the initializer was a bare reference to an ALREADY-owned binding
 			// (`let u = t`), `boundValue` is that binding's value: it MOVES to this new one. Poison the
 			// source so a later read of it is use-after-move and only the new owner drops the value.
@@ -3579,7 +3592,7 @@ export type Parser
 		let declaredTag = maxonTypeTag(binding.varType)
 		try self.requireAssignable(nameTok, value: valueTag, declared: declaredTag)
 
-		self.reassignBindingValue(binding, nameTok: nameTok, value: value, valueTag: valueTag, rhsWasBareLocal: rhsWasBareLocal)
+		self.reassignBindingValue(binding, nameTok: nameTok, value: value, rhsWasBareLocal: rhsWasBareLocal)
 	end 'parseAssignment'
 
 	// ⭐ **REBIND A `var` TO A NEW VALUE, RELEASING WHAT IT OWNED.** The rebinding half is one line —
@@ -3598,7 +3611,7 @@ export type Parser
 	// phi carries no owned-heap provenance bit (the bit rides the value flowing INTO the merge, not the
 	// merge) — so the value column reads `false` for a binding the loop genuinely owns, and the
 	// overwritten allocation would leak every iteration. Membership is the only record that survives the
-	// phi. `newIsOwned` is `valueIsOwned` — the SAME predicate `parseBinding` enrols a fresh binding by —
+	// phi. `newIsOwned` is `valueIsOwnedHeap` — the SAME predicate `parseBinding` enrols a fresh binding by —
 	// so the reassign and the declaration cannot drift on what "owned" means.
 	//
 	// ⚠ **AN OWNED BINDING STAYS OWNED — a borrowed RHS is PROMOTED to an owned copy rather than the
@@ -3611,7 +3624,7 @@ export type Parser
 	// owned heap copy — the SAME fused-record copy a borrowed `return` makes (`promoteToOwnedString`) —
 	// keeps every reassignment of an owned binding a uniform owned→owned: the binding never moves, and
 	// an `if`/loop merge is handled by the phi machinery exactly as for any other carried value.
-	function reassignBindingValue(binding VarInfo, nameTok Token, value ValueId, valueTag ValueTypeTag, rhsWasBareLocal bool)
+	function reassignBindingValue(binding VarInfo, nameTok Token, value ValueId, rhsWasBareLocal bool)
 		let oldValue = binding.boundValue
 
 		// `s = s` (a self-rebind): the value and its ownership are unchanged, so there is nothing to drop
@@ -3647,10 +3660,10 @@ export type Parser
 		// (owned→borrowed `s = "literal"`, or a moved-from binding revived with a literal) to an owned
 		// copy, so the binding keeps owning a droppable value rather than being deleted from the middle
 		// of the owned-binding stack (see the header). Reached only for a String: a struct binding's RHS
-		// is always a struct box (`tagIsStructRef`, already owned), and `requireAssignable` rejects any
-		// other type.
+		// is always a fresh owned struct box (its producer set the provenance bit), and `requireAssignable`
+		// rejects any other type.
 		var newValue = value
-		var newIsOwned = self.valueIsOwned(value, tag: valueTag)
+		var newIsOwned = self.valueIsOwnedHeap(value)
 		if inOwnedSet and not newIsOwned 'promoteBorrowed'
 			newValue = self.promoteToOwnedString(value, range: SourceRange.ofToken(nameTok))
 			newIsOwned = true
@@ -3876,6 +3889,21 @@ export type Parser
 			returned = self.promoteToOwnedString(returned, range: SourceRange.ofToken(retTok))
 		end 'promoteBorrowed'
 
+		// ⭐ **A RETURNED STRUCT / BOXED UNION MUST BE OWNED — a BORROWED one is refused, not miscompiled.**
+		// The caller ADOPTS a returned heap box as owned and drops it once (`mintOwnedCallResult`). An OWNED
+		// box (a factory's `return Self{…}`, `return t` from an owned local, `return U.case(x)`) carries the
+		// provenance bit and is moved out below, so exactly one owner drops it. A BORROWED aggregate does
+		// NOT — a struct/union PARAMETER (`function id(a Vec2) returns Vec2 … return a`), or a re-borrow of
+		// one — has an owner ELSEWHERE (the caller of THIS function still holds and drops the original), so
+		// handing the box back as owned makes two owners free one box: a double free. Consuming or copying a
+		// borrowed aggregate to return it is the cross-call CONSUME half deferred to P1.4b; until then it is
+		// a clean reject. A String is PROMOTED above (a copy is cheap and defined); a scalar or payload-free
+		// enum carries no box and is always fine (`valueIsBoxedUnion` is `false` for it).
+		let returnedTag = self.tagOf(returned)
+		if (tagIsStructRef(returnedTag) or self.valueIsBoxedUnion(returned)) and not self.valueIsOwnedHeap(returned) 'borrowedAggregateReturn'
+			throw ParseError.unsupported("returning a borrowed `{typeTagName(returnedTag)}` value — a struct/union parameter (or a re-borrow of one) is a heap box the caller would adopt and free while the borrow's own owner frees it too, a double free. Return an OWNED value; consuming or copying a borrowed aggregate to return it arrives at P1.4b", line: retTok.line, column: retTok.column)
+		end 'borrowedAggregateReturn'
+
 		let movedOut = self.valueIsOwnedHeap(returned)
 		let savedOwnedBindings = self.ownedBindings
 		if movedOut 'moveOut'
@@ -3897,13 +3925,13 @@ export type Parser
 		// `returned` is already computed, so it is a value in a register and no longer a read of the
 		// box. That is what makes the window between the two lines safe.
 		//
-		// ⚠ **AN OWNED String RETURN HAS ALREADY LEFT THIS DROP SET (moved out above), which is what
-		// makes the caller its sole owner.** A returned STRUCT is the one owned value the move-out does
-		// NOT yet cover, and it cannot arise at this rung: the only struct-returning function is a
-		// factory, whose `return Self{…}` returns a TEMPORARY bound to no name and so in no scope
-		// (`emitStructLiteral` mints a value, not a binding). The day a struct is returned through a
-		// BINDING (`struct-return`, still `disabled-test:`, P1.4), the move-out above must also ask
-		// `tagIsStructRef` — today it asks only `valueIsOwnedHeap`, which a struct box never sets.
+		// ⚠ **AN OWNED heap RETURN — String, struct box, or boxed union — HAS ALREADY LEFT THIS DROP SET
+		// (moved out above), which is what makes the caller its sole owner.** The move-out asks
+		// `valueIsOwnedHeap`, the ONE owned predicate, so it covers all three uniformly: a factory's
+		// `return Self{…}` (an owned temporary), a `return t` from an owned struct/union LOCAL BINDING
+		// (`removeFromOwnedBindings` takes it off the callee's drop list), and a `return U.case(x)`. Every
+		// producer set the bit, so none of these is dropped by the callee and every one is adopted by the
+		// caller. A BORROWED aggregate was refused above, so it cannot reach here.
 		//
 		// TWO drop sets empty here, both before the `ret` and both with the returned value already moved
 		// out: the owned TEMPORARIES this return's expression created but does NOT hand back, and the
@@ -4063,25 +4091,28 @@ export type Parser
 		self.pendingTempDrops.push(value)
 	end 'trackOwnedTemp'
 
-	// Does `value` own a droppable heap allocation? Read by `parseBinding` (the String half of "is this
-	// binding owned?") and by the reassignment/return paths as they arrive. It is provenance, NOT the type
-	// tag — see `valueOwnsHeap`'s header for why the tag cannot answer. An O(1) column read, seeded `false`
-	// for every minted value and set `true` by `trackOwnedTemp`.
+	// ⭐ **THE ONE DEFINITION OF "OWNED": does `value` own a droppable heap allocation it must transfer or
+	// drop?** The single predicate the DECLARATION (`parseBinding`), the REASSIGNMENT
+	// (`reassignBindingValue`), the RETURN move-out, and the match `gives` transfer all ask, so none of
+	// them can drift on what enrols a binding in `ownedBindings`. It is PROVENANCE, never the type tag —
+	// see `valueOwnsHeap`'s header for why the tag cannot answer:
+	//
+	//   • a String's tag conflates an owned heap copy with a borrowed immortal rdata literal;
+	//   • a struct/boxed-union tag (`structRef`/`named`) conflates a fresh OWNED box with a BORROWED
+	//     PARAMETER — a struct param is `structRef` and a union param `named`, and neither owns anything.
+	//     A borrowed aggregate treated as owned would make `let q = a` (re-borrow of a struct param) move
+	//     ownership out of a borrow and free it twice — the cross-call double-free this rung exists to
+	//     avoid. The bit says NO for a param (`bindParameters` never sets it) and YES for every owned box.
+	//
+	// So the bit is the whole answer, uniformly across String / struct / union: it is set at every owned
+	// heap PRODUCER (`trackOwnedTemp` — an interpolation, a promotion, a struct literal, a boxed-union
+	// construct, an owned call result, a managed payload moved out of an owned union) and nowhere else. An
+	// O(1) column read, seeded `false` by `mintValue`/`recordValueType`. The day a third owned heap kind
+	// (an owned array) lands, its producer calls `trackOwnedTemp` and this answers for it too — no arm to
+	// add, because the bit already means exactly "owns droppable heap".
 	function valueIsOwnedHeap(value ValueId) returns bool
 		return try self.valueOwnsHeap.get(value) otherwise panic("valueIsOwnedHeap: v{value} has no owned-heap slot — every SSA value must be minted through mintValue, which seeds the column")
 	end 'valueIsOwnedHeap'
-
-	// ⭐ **DOES BINDING A FRESH VALUE MAKE ITS BINDING OWNED — owe a scope-exit drop?** The ONE definition
-	// of "owned", shared by the DECLARATION (`parseBinding`) and the REASSIGNMENT (`reassignBindingValue`)
-	// so the two cannot drift on what enrols a binding in `ownedBindings`. A value is owned iff it is a
-	// struct box (every struct is heap, so the TAG answers — `tagIsStructRef`) or an owned
-	// interpolation/promotion String (`valueIsOwnedHeap` PROVENANCE, because the tag conflates it with a
-	// borrowed-immortal literal). It is the UNION both enrolment sites test; `valueIsOwnedHeap` is only the
-	// String half of it. The day a third owned kind (an owned array) lands it is added HERE, once, and both
-	// sites agree by construction rather than by a comment asking them to.
-	function valueIsOwned(value ValueId, tag ValueTypeTag) returns bool
-		return tagIsStructRef(tag) or self.valueIsOwnedHeap(value)
-	end 'valueIsOwned'
 
 	// Ownership of `value` has been TRANSFERRED to a binding, so the statement no longer owes its drop:
 	// remove it from the pending list. A filter-rebuild rather than a pop because, while the transferred
@@ -4148,7 +4179,7 @@ export type Parser
 	end 'bindingIsOwned'
 
 	// ⭐ **WHAT MAKES AN OWNED-SET ENTRY THE ONE LIVE OWNER OF `value`**: it holds that value AND has not
-	// itself been moved from. Single-homed on purpose — the `valueIsOwned` pattern. `bindingIsOwned`
+	// itself been moved from. Single-homed on purpose — the `valueIsOwnedHeap` pattern. `bindingIsOwned`
 	// (does this binding still owe a drop?) and `poisonMoveSource` (which binding does a move poison?)
 	// both need exactly this predicate, and if it drifted between the two — a new ownership flag taught
 	// to one scan and not the other — one would count a `movedFrom` ghost as a live owner: a double-free
@@ -5555,7 +5586,7 @@ export type Parser
 	// skips its drop and a later read of it is use-after-move. A borrowed/scalar give owns nothing, so both
 	// calls are no-ops — a borrowed String is promoted at the merge instead, where phi ownership is decided.
 	function transferGiveToPhi(give ValueId)
-		if not self.valueIsOwned(give, tag: self.tagOf(give)) 'borrowed'
+		if not self.valueIsOwnedHeap(give) 'borrowed'
 			return
 		end 'borrowed'
 		self.removeFromPendingTemps(give)
@@ -5580,7 +5611,7 @@ export type Parser
 		for i in 0 upto reachingArms.count() 'anyOwned'
 			let a = try reachingArms.get(i) otherwise panic("resolveGivesOwnership: reachingArms.get OOB at {i}")
 			let give = self.giveValueOf(a.give)
-			if self.valueIsOwned(give, tag: self.tagOf(give)) 'owned'
+			if self.valueIsOwnedHeap(give) 'owned'
 				resultOwned = true
 			end 'owned'
 		end 'anyOwned'
@@ -5588,7 +5619,7 @@ export type Parser
 		for i in 0 upto reachingArms.count() 'collectGives'
 			let a = try reachingArms.get(i) otherwise panic("resolveGivesOwnership: reachingArms.get OOB at {i}")
 			let give = self.giveValueOf(a.give)
-			if resultOwned and not self.valueIsOwned(give, tag: self.tagOf(give)) 'promoteBorrowed'
+			if resultOwned and not self.valueIsOwnedHeap(give) 'promoteBorrowed'
 				finalGives.push(self.promoteBorrowedGive(give, arm: a, matchTok: matchTok))
 			end 'promoteBorrowed' else 'keepGive'
 				finalGives.push(give)
@@ -5857,6 +5888,23 @@ export type Parser
 		return requireEnumLayout(decl).isUnion
 	end 'valueIsUnion'
 
+	// Is `value` a payload-bearing (HEAP-BOXED) enum/union — a `named(X)` whose layout `isBoxed`?
+	// `valueIsUnion`'s twin, differing only in the layout bit it reads: `isBoxed` (a heap box exists),
+	// not `isUnion` (a union vs a bare enum). It is what tells a call RESULT that owns a heap box (a
+	// boxed-union `make()`, adopted by the caller) from a payload-free enum value (a bare i64 tag,
+	// dropped by no one) — the OPEN #44 distinction the tag alone cannot make, since both are `named`.
+	// The same `named` tag pre-check is the hot-path allocation guard `valueIsUnion` documents.
+	function valueIsBoxedUnion(value ValueId) returns bool
+		if self.tagOf(value) != ValueTypeTag.named 'notNamed'
+			return false
+		end 'notNamed'
+		let decl = self.enumMatchFor(value)
+		if not enumMatchIsDeclared(decl) 'notEnum'
+			return false
+		end 'notEnum'
+		return requireEnumLayout(decl).isBoxed()
+	end 'valueIsBoxedUnion'
+
 	// One arm's enum pattern: the boolean condition plus any payload bindings the arm body declares.
 	// Alternatives are OR-folded (`red or blue`) exactly as the scalar path does — a bitwise `or` over
 	// the `bool`s, eager because a pattern has no side effects. A payload BINDING is legal only on a
@@ -5989,13 +6037,14 @@ export type Parser
 			throw ParseError.unsupported("binding the managed payload '{String.from(nameTok.value)}' out of a `{layout.kindWord()} {String.from(layout.name)}` that is not an OWNED local — a borrowed union (a parameter, a receiver) cannot have its payload MOVED out; that cross-call ownership arrives at P1.4 (match a payload-free / `_`-discarded arm to borrow it instead)", line: nameTok.line, column: nameTok.column)
 		end 'borrowedScrut'
 
-		// A String binding owns heap the tag alone cannot tell from a borrowed literal, so record its
-		// provenance; a struct box is owned via `tagIsStructRef` and needs none. The binding owns the drop
-		// (it is in `ownedBindings`), not the statement, so the value leaves the pending-temp list.
-		if self.tagOf(loaded) == ValueTypeTag.string 'stringOwned'
-			self.trackOwnedTemp(loaded)
-			self.removeFromPendingTemps(loaded)
-		end 'stringOwned'
+		// The moved-out payload (a String or a struct box — this path is reached only for a managed field)
+		// is now OWNED by this binding, so it carries the provenance bit `valueIsOwnedHeap` reads: a later
+		// `let q = <it>` re-moves it correctly, and a struct payload is no longer mistaken for a borrow. The
+		// binding owns the drop (it is in `ownedBindings`), not the statement, so it leaves the pending-temp
+		// list — the `trackOwnedTemp`/`removeFromPendingTemps` pair nets to "bit set, not pending", which is
+		// what a value dropped by a binding rather than by the statement needs.
+		self.trackOwnedTemp(loaded)
+		self.removeFromPendingTemps(loaded)
 		self.ownedBindings.push(bindingInfo)
 
 		let zero = self.emitLiteral(0 as ParsedInt, valueType: MaxonType.integer, range: range)
@@ -7386,10 +7435,31 @@ export type Parser
 	// (`parseStructLiteralFields`), then the field's declared DEFAULT (`applyFieldDefaults`). The
 	// literal always wins — the default is consulted only for a slot `filled` says nothing wrote.
 	// `requireAllFieldsInitialized` then rejects whatever neither supplied.
+	// ⚠ **CONSTRUCTING A STRUCT WITH A MANAGED FIELD IS REFUSED — the CONSUME-into-field half of cross-call
+	// ownership (Wave 2 / P1.4b).** A struct field that owns heap — a `String`, a struct-typed field, a
+	// payload-bearing union — needs its drop to CASCADE (free the field, then the box) when the struct is
+	// dropped, and today a struct box takes the generic `__mm_decref` that frees ONLY the box
+	// (`decrefCalleeFor`). So a value stored into such a field is never freed (a leak) OR — when it is a
+	// BORROW of a caller's temp (`Self{name: name}` from a String parameter) — freed by that temp's owner
+	// while the field still points at it (a dangling read, a use-after-free the bump allocator masks).
+	// Moving a value into DURABLE struct storage is exactly the consume the borrow-by-default ruling defers
+	// to Wave 2, alongside the destructor cascade. Refused at the CONSTRUCT site (a struct with a managed
+	// field may still be DECLARED — the layout is fine; it is building one that is not yet lowerable), the
+	// same use-site placement `requireStructBase` and the union-payload rejection use.
+	function rejectManagedStructFields(layout StructLayout, anchor Token) throws ParseError
+		for i in 0 upto layout.fieldCount() 'eachField'
+			if self.signatures.structFieldIsManaged(layout.name, index: i) 'managed'
+				let fieldName = try layout.fieldNames.get(i) otherwise panic("rejectManagedStructFields: fieldNames.get OOB at {i} — the layout's name column is sized to its field count")
+				throw ParseError.unsupported("constructing `type {String.from(layout.name)}` with the managed field '{String.from(fieldName)}' — a struct field that owns heap (a String, a struct, or a payload-bearing union) needs a destructor cascade to free it when the struct is dropped, and moving a value into durable struct storage is the CONSUME half of cross-call ownership; both arrive at Wave 2 (P1.4b). A scalar-field struct crosses a call today.", line: anchor.line, column: anchor.column)
+			end 'managed'
+		end 'eachField'
+	end 'rejectManagedStructFields'
+
 	function parseStructLiteral(func IrFunction) returns ValueId throws ParseError
 		let typeTok = self.current()
 		let typeName = try self.readStructLiteralTypeName()
 		let layout = try self.requireConstructible(typeName, anchor: typeTok)
+		try self.rejectManagedStructFields(layout, anchor: typeTok)
 
 		try self.consume(TokenKind.leftBrace)
 		// Parallel to the LAYOUT, not to the source: `fieldValues[i]` is the value for the field the
@@ -7586,9 +7656,18 @@ export type Parser
 	// `parseTypeReference` typed its `returns Self` the same way. The two meet at
 	// `parseReturnStatement`'s `checkDeclaredType`, and they agree because both came from the
 	// enclosing type's name.
+	//
+	// ⭐ **THE BOX IS ENROLLED AS AN OWNED HEAP TEMPORARY** (`trackOwnedTemp`), exactly as a boxed union
+	// construct and an interpolation String are: it sets the provenance bit `valueIsOwnedHeap` reads, so a
+	// binding of it drops at scope exit and an UNBOUND `Self{…}` (a struct literal passed as a borrowed
+	// call argument) is freed at statement end. A `return Self{…}` moves it back OUT of the pending list
+	// (`parseReturnStatement`), so the factory does not drop what it hands to its caller. It is the bit —
+	// not the `structRef` tag — that owns the drop, because a borrowed struct PARAMETER also carries the
+	// tag and owns nothing.
 	function emitStructLiteral(layout StructLayout, fieldValues ValueIdArray, range SourceRange) returns ValueId
 		let size = self.emitLiteral(layout.sizeBytes(), valueType: MaxonType.integer, range: range)
 		let box = self.emitBoxAlloc(size, resultTag: ValueTypeTag.structRef, resultNameId: self.artifact.typeNames.intern(layout.name), range: range)
+		self.trackOwnedTemp(box)
 
 		for i in 0 upto layout.fieldCount() 'eachField'
 			let value = try fieldValues.get(i) otherwise panic("emitStructLiteral: fieldValues.get OOB at {i} — the column is sized to the layout's field count")
@@ -8638,8 +8717,9 @@ export type Parser
 			structRef then return declared
 			unresolved then panic("fieldStorageType: a field is declared `unresolved` — `parseTypeReference` produces only `named`, `structRef` and the three primitive keywords, so no field declaration can carry one")
 			// A String field stores an i64 POINTER, exactly like a struct-ref field — `maxonTypeToStdType`
-			// gives it the machine word. (No enabled case declares one; a String field can only hold an
-			// immortal literal at Wave A, and the owned-heap-String field is Wave B's.)
+			// gives it the machine word. This width is still needed (a self-field READ loads through it),
+			// but a struct with a managed field cannot yet be CONSTRUCTED — `rejectManagedStructFields`
+			// refuses it, because a struct box's drop does not cascade to free such a field (Wave 2).
 			string then return declared
 			named then break 'kind'
 		end 'kind'
@@ -9521,19 +9601,30 @@ export type Parser
 		return self.mintValue(ValueTypeTag.void, nameId: UnnamedTypeId)
 	end 'mintDeclaredCallResult'
 
-	// The SSA value a VALUE-returning callee defines, minted from its declared return type. A
-	// `returns String` callee hands back a uniformly OWNED heap String (`parseReturnStatement` moved
-	// it out of the callee, promoting a borrowed literal if need be), so the CALLER owns the result
-	// and must drop it. It is enrolled exactly as an interpolation temporary is — `parseBinding`
-	// transfers a bound result to a scope-exit drop, `drainPendingTemps` frees an unbound one after
-	// the consuming statement — through the one owned-temp door, `trackOwnedTemp`. A non-String result
-	// owns no heap, so it is enrolled in nothing. String-ness is the tag `ValueTypeTag.string`, read
-	// through the same `tagIsText` predicate every String site asks.
+	// The SSA value a VALUE-returning callee defines, minted from its declared return type — and ADOPTED
+	// as owned when that type is a heap box. A callee that returns a heap value moves it OUT of itself
+	// (`parseReturnStatement` — the box leaves the callee's drop sets), so the CALLER becomes its sole
+	// owner and must drop it once. Three return types own a droppable box, and the caller adopts each the
+	// same way:
+	//
+	//   • a `returns String` — a fused heap record (a borrowed literal was promoted to one at the return);
+	//   • a `returns Pair` — a struct box (`resolveNamedStruct` re-tags the `named` signature type to
+	//     `structRef` first, so the result binds a struct and `p.first` resolves — the two-place agreement
+	//     the tolerant sweep's `named` return could not make on its own);
+	//   • a `returns Container` — a payload-bearing (boxed) union/enum box (`valueIsBoxedUnion`), the
+	//     OPEN #44 case: a `named` result whose LAYOUT `isBoxed`, indistinguishable by tag from a bare
+	//     enum value, which owns no box and is adopted by no one.
+	//
+	// Adoption is the one owned-temp door, `trackOwnedTemp`, exactly as an interpolation temporary rides:
+	// `parseBinding` transfers a bound result to a scope-exit drop, `drainPendingTemps` frees an unbound
+	// one after the consuming statement. A scalar / payload-free-enum result owns no heap and is enrolled
+	// in nothing.
 	function mintOwnedCallResult(inner MaxonType) returns ValueId
-		let result = self.mintValueOfType(inner)
-		if tagIsText(self.tagOf(result)) 'ownsStringResult'
+		let result = self.mintValueOfType(self.resolveNamedStruct(inner))
+		let tag = self.tagOf(result)
+		if tagIsText(tag) or tagIsStructRef(tag) or self.valueIsBoxedUnion(result) 'adoptsHeapBox'
 			self.trackOwnedTemp(result)
-		end 'ownsStringResult'
+		end 'adoptsHeapBox'
 		return result
 	end 'mintOwnedCallResult'
 

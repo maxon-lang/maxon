@@ -48,8 +48,7 @@ end 'main'
 3
 ```
 
-<!-- disabled-test: match-enum-typed-binding-compare -->
-<!-- P1.4: matches a union PARAMETER (isGreen(p Pixel)) and passes a union across a call (a struct/union param is not yet a `structRef` binding — E2015 today) -->
+<!-- test: match-enum-typed-binding-compare -->
 Bind an enum-typed associated value in a match and compare it.
 ```maxon
 enum Color
