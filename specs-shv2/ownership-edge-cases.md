@@ -255,9 +255,8 @@ end 'main'
 8
 ```
 
-<!-- disabled-test: rc-nested-struct-field-incref -->
-<!-- beyond P1.2: struct-typed struct fields not yet in shv2 -->
-When a struct literal is assigned as a field, the field value is incref'd; both outer and inner are freed correctly.
+<!-- test: rc-nested-struct-field-incref -->
+When a struct is consumed into a struct-typed field, the outer's destructor cascade drops the inner field; both outer and inner are freed exactly once (the consumed argument moves, so the caller does not double-drop it).
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -287,9 +286,8 @@ end 'main'
 55
 ```
 
-<!-- disabled-test: rc-nested-struct-deep-freed -->
-<!-- beyond P1.2: struct-typed struct fields not yet in shv2 -->
-Three-level nested struct: all three levels are freed when the outermost var leaves scope.
+<!-- test: rc-nested-struct-deep-freed -->
+Three-level nested struct: all three levels are freed when the outermost var leaves scope, each consumed one level up so no level is double-dropped.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 

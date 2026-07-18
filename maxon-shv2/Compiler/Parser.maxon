@@ -1237,6 +1237,47 @@ type BlockMark
 	end 'create'
 end 'BlockMark'
 
+// A snapshot of the PATH-SENSITIVE move state of every owned binding in scope — the twin of
+// `snapshotBindings` (which snapshots `boundValue` for the merge phis), for the one bit that must be
+// reconciled at a control-flow join rather than accumulated monotonically.
+//
+// `movedFrom` is that bit: it says "this binding's owned value was handed to another owner, so its
+// scope-exit drop is skipped". Set unconditionally where a move is WRITTEN, it leaks onto sibling
+// branches — a value moved on ONE `if` branch reads as moved on the branch that never moved it, so its
+// drop is skipped there and it LEAKS. Reconciling this bit at each join (restore it around a sibling
+// branch, drop the value on the branches that kept it live) is what makes the drop path-sensitive.
+//
+// `partiallyMoved` is deliberately NOT snapshotted: it never SKIPS a drop (a partially-moved union box
+// still drops through its cascade), so leaking it across a branch only over-rejects a later read — sound
+// — while the value is always dropped correctly. Only `movedFrom` gates a drop, so only it needs this.
+//
+// Positional over `ownedBindings`, whose height is STABLE at every join point (a branch's own owned
+// bindings are declared above the join's owned floor and popped at the branch's `end` before the join
+// runs). `values` carries each binding's `boundValue` at capture time, so a drop placed on an edge that
+// kept a binding LIVE decrefs the value that edge actually holds.
+type MoveMark
+	export let moved as BoolArray
+	export let values as ValueIdArray
+
+	export static function create(moved BoolArray, values ValueIdArray) returns MoveMark
+		return Self{moved: moved, values: values}
+	end 'create'
+end 'MoveMark'
+
+// One incoming edge at a control-flow join, for the move reconciliation: the predecessor block a drop is
+// emitted INTO when this edge kept a binding live, paired with the move state that edge carries. An
+// `if`/`else` builds two (the then and else ends); a `match` builds one per reaching arm.
+type ReachingMoveEdge
+	export let block as IrBlock
+	export let mark as MoveMark
+
+	export static function create(block IrBlock, mark MoveMark) returns ReachingMoveEdge
+		return Self{block: block, mark: mark}
+	end 'create'
+end 'ReachingMoveEdge'
+
+typealias ReachingMoveEdgeArray = Array with ReachingMoveEdge
+
 // A loop-header (or loop-exit) phi: the mutable BINDING it carries, paired with the
 // block-arg ValueId minted for it. POSITIONAL — the k-th phi var corresponds to
 // `blockArgs[k]` on the merge block and to `argIds[k]` on every predecessor's
@@ -1396,9 +1437,13 @@ type MatchArmExit
 	export var exitBlock as IrBlock
 	export var exitVals as ValueIdArray
 	export var give as MatchGiveValue
+	// The owned-binding move state this arm carries into the merge — the twin of `exitVals` for the
+	// drop-gating bit, reconciled across the reaching arms so a value moved in one arm but left live in
+	// another is dropped on the live arms' edges (`finalizeMatchMerge` → `reconcileMovesAtMerge`).
+	export var moveMark as MoveMark
 
-	export static function create(exitBlock IrBlock, exitVals ValueIdArray, give MatchGiveValue) returns MatchArmExit
-		return Self{exitBlock: exitBlock, exitVals: exitVals, give: give}
+	export static function create(exitBlock IrBlock, exitVals ValueIdArray, give MatchGiveValue, moveMark MoveMark) returns MatchArmExit
+		return Self{exitBlock: exitBlock, exitVals: exitVals, give: give, moveMark: moveMark}
 	end 'create'
 end 'MatchArmExit'
 
@@ -3671,7 +3716,7 @@ export type Parser
 			// Gated on `boundBareLocal`, so a consume never pays the owned-set scan; run BEFORE the push
 			// below, so the scan cannot find this new binding (it aliases the same value).
 			if boundBareLocal 'moveOnBind'
-				self.poisonMoveSource(boundValue)
+				try self.poisonMoveSource(boundValue, anchor: nameTok)
 			end 'moveOnBind'
 			self.ownedBindings.push(binding)
 			// Ownership TRANSFERS from the statement to the binding, so the statement must no longer drop it
@@ -3834,7 +3879,7 @@ export type Parser
 		let declaredTag = maxonTypeTag(binding.varType)
 		try self.requireAssignable(nameTok, value: valueTag, declared: declaredTag)
 
-		self.reassignBindingValue(binding, nameTok: nameTok, value: value, rhsWasBareLocal: rhsWasBareLocal)
+		try self.reassignBindingValue(binding, nameTok: nameTok, value: value, rhsWasBareLocal: rhsWasBareLocal)
 	end 'parseAssignment'
 
 	// ⭐ **REBIND A `var` TO A NEW VALUE, RELEASING WHAT IT OWNED.** The rebinding half is one line —
@@ -3866,7 +3911,7 @@ export type Parser
 	// owned heap copy — the SAME fused-record copy a borrowed `return` makes (`promoteToOwnedString`) —
 	// keeps every reassignment of an owned binding a uniform owned→owned: the binding never moves, and
 	// an `if`/loop merge is handled by the phi machinery exactly as for any other carried value.
-	function reassignBindingValue(binding VarInfo, nameTok Token, value ValueId, rhsWasBareLocal bool)
+	function reassignBindingValue(binding VarInfo, nameTok Token, value ValueId, rhsWasBareLocal bool) throws ParseError
 		let oldValue = binding.boundValue
 
 		// `s = s` (a self-rebind): the value and its ownership are unchanged, so there is nothing to drop
@@ -3885,7 +3930,7 @@ export type Parser
 		// the scan matches the SOURCE's value rather than this binding's (which `setValue` is about to
 		// overwrite with the moved value).
 		if rhsWasBareLocal 'moveOnAssign'
-			self.poisonMoveSource(value)
+			try self.poisonMoveSource(value, anchor: nameTok)
 		end 'moveOnAssign'
 
 		// Is `binding` a LIVE owner (owes a drop of `oldValue`), and/or already enrolled in
@@ -4246,6 +4291,92 @@ export type Parser
 		_ = self.emitRuntimeCall(callee, args: singletonArgs(value), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 	end 'emitDecref'
 
+	// ⭐ **PATH-SENSITIVE MOVE STATE — CAPTURE.** Snapshot the `movedFrom` bit (and current value) of every
+	// owned binding in scope, so a branch's moves can be UNDONE for a sibling path (`restoreMoveMark`) or
+	// reconciled at a join (`reconcileMovesAtMerge`). The twin of `snapshotBindings` for the drop-gating
+	// bit. Positional over `ownedBindings`; see `MoveMark` for why only `movedFrom` rides and why the
+	// height is stable at every capture point.
+	function captureMoveMark() returns MoveMark
+		var moved = BoolArray.create()
+		var values = ValueIdArray.create()
+		for binding in self.ownedBindings 'each'
+			moved.push(binding.movedFrom)
+			values.push(binding.boundValue)
+		end 'each'
+		return MoveMark.create(moved, values: values)
+	end 'captureMoveMark'
+
+	// ⭐ **PATH-SENSITIVE MOVE STATE — RESTORE.** Rewind every owned binding's `movedFrom` bit to a
+	// captured mark, undoing the moves a sibling branch made so the next path is parsed against the
+	// pre-branch ownership state (the twin of `restoreBindings`). Written THROUGH the shared `VarInfo`
+	// reference, so every holder observes it. The owned height must match the capture — a branch's own
+	// owned bindings were popped before this runs (see `MoveMark`), so a mismatch is a lockstep break.
+	function restoreMoveMark(mark MoveMark)
+		if self.ownedBindings.count() != mark.moved.count() 'drifted'
+			panic("restoreMoveMark: owned-binding height {self.ownedBindings.count()} differs from the captured mark's {mark.moved.count()} — a branch's owned bindings must be popped before its move state is restored")
+		end 'drifted'
+		var i = 0
+		while i < self.ownedBindings.count() 'each'
+			var binding = try self.ownedBindings.get(i) otherwise panic("restoreMoveMark: ownedBindings.get OOB at {i}")
+			binding.movedFrom = try mark.moved.get(i) otherwise panic("restoreMoveMark: mark.moved.get OOB at {i}")
+			i = i + 1
+		end 'each'
+	end 'restoreMoveMark'
+
+	// ⭐⭐ **PATH-SENSITIVE MOVE STATE — RECONCILE AT A JOIN.** Given the edges that REACH a merge (each an
+	// already-live predecessor block paired with the move state it carries), settle every owned binding to
+	// a UNIFORM post-merge state so the later scope-exit drop is correct on every path:
+	//   • moved on SOME edges, live on OTHERS ⇒ the value was given away on the moved edges but is still
+	//     owned on the live ones. Emit its drop on each LIVE edge (using that edge's own value), and mark
+	//     the binding moved after the merge — settled on every path, so the scope-exit drop skips it.
+	//   • moved on ALL edges ⇒ already given away everywhere; mark moved, drop nothing.
+	//   • live on ALL edges ⇒ still owned everywhere; mark live, drop nothing — the scope exit drops it.
+	// A binding moved before the whole construct is moved on every reaching edge (the flag is monotonic
+	// within a path), so it stays moved; a binding no branch touched is live on every edge and stays live.
+	// The reaching edges are UNTERMINATED blocks (a terminated branch dropped its own values and
+	// contributes no edge), so a decref appended to one lands before the merge branch the caller emits
+	// next. Called only with at least one reaching edge — an all-terminating construct has a dead merge and
+	// leaves the move state alone.
+	function reconcileMovesAtMerge(edges ReachingMoveEdgeArray, anchor Token)
+		let n = self.ownedBindings.count()
+		for edge in edges 'checkAligned'
+			if edge.mark.moved.count() != n 'drifted'
+				panic("reconcileMovesAtMerge: a reaching edge's mark holds {edge.mark.moved.count()} entries but {n} owned bindings are in scope — the marks drifted out of lockstep with the owned-binding stack")
+			end 'drifted'
+		end 'checkAligned'
+
+		var i = 0
+		while i < n 'eachBinding'
+			var anyMoved = false
+			var anyLive = false
+			for edge in edges 'scan'
+				let movedHere = try edge.mark.moved.get(i) otherwise panic("reconcileMovesAtMerge: edge mark moved.get OOB at {i}")
+				if movedHere 'movedHere'
+					anyMoved = true
+				end 'movedHere' else 'liveHere'
+					anyLive = true
+				end 'liveHere'
+			end 'scan'
+
+			if anyMoved and anyLive 'mixed'
+				let saved = self.currentBlock
+				for edge in edges 'dropLive'
+					let movedOnEdge = try edge.mark.moved.get(i) otherwise panic("reconcileMovesAtMerge: edge mark moved.get OOB at {i}")
+					if not movedOnEdge 'liveEdge'
+						self.currentBlock = edge.block
+						let liveValue = try edge.mark.values.get(i) otherwise panic("reconcileMovesAtMerge: edge mark values.get OOB at {i}")
+						self.emitDecref(liveValue, range: SourceRange.ofToken(anchor))
+					end 'liveEdge'
+				end 'dropLive'
+				self.currentBlock = saved
+			end 'mixed'
+
+			var binding = try self.ownedBindings.get(i) otherwise panic("reconcileMovesAtMerge: ownedBindings.get OOB at {i}")
+			binding.movedFrom = anyMoved
+			i = i + 1
+		end 'eachBinding'
+	end 'reconcileMovesAtMerge'
+
 	// ⭐ **WHICH RUNTIME ENTRY DROPS `value`** — one tag-and-type router, extended per managed kind (Wave
 	// D's ruling generalised):
 	//   • a STRING (`__str_decref`) frees its record AND the external buffer a grown String leaves behind
@@ -4512,7 +4643,17 @@ export type Parser
 	// O(ownedBindings) scan. **The callers GATE it on `rhsWasBareLocalReference`**, so it runs only when
 	// the RHS actually was a bare local reference — never on a consume, which is what kept it off the hot
 	// path of every owned bind (the scan-and-find-nothing that made accumulating N owned bindings O(N²)).
-	function poisonMoveSource(value ValueId)
+	//
+	// ⚠ **A MOVE OF A BINDING DECLARED OUTSIDE THE INNERMOST LOOP IS REJECTED HERE** (`anchor` positions the
+	// diagnostic). The path-sensitive drop reconciliation (`reconcileMovesAtMerge`) settles an `if`/`match`
+	// join, but a LOOP has two exits the join model does not reach: the back edge (which would re-move the
+	// binding on the next iteration — a double-free) and a `break` (which leaves the binding live on the
+	// normal exit while giving it away on the break edge — a leak or, once the join restores the sibling
+	// path, a double-free). Placing the compensating drop on those edges needs elaboration across the loop
+	// boundary, a later wave; until then a move that escapes the innermost loop is refused rather than
+	// miscompiled. A binding declared INSIDE the loop body (index at or above the loop's owned floor) is
+	// reconciled within the body, once per iteration, and is unaffected.
+	function poisonMoveSource(value ValueId, anchor Token) throws ParseError
 		var i = 0
 		while i < self.ownedBindings.count() 'each'
 			// A `var` bound from `.get(i)`, not a bare `for` element: a field write needs a mutable
@@ -4521,12 +4662,28 @@ export type Parser
 			// loop-phi list.
 			var owned = try self.ownedBindings.get(i) otherwise panic("poisonMoveSource: ownedBindings.get OOB at {i} — the list is only appended to and drained at a block's end")
 			if self.isLiveOwnerOf(owned, value: value) 'source'
+				if self.bindingIndexEscapesLoop(i as BindingMark) 'escapesLoop'
+					throw ParseError.unsupported("moving a value declared outside this loop from inside the loop body — its drop on the loop's other exit paths (the back edge would re-move it next iteration; a `break` leaves it live on the normal exit) needs path-sensitive elaboration across the loop boundary, which arrives with a later wave. Move the value into the loop body, or restructure so the move does not cross the loop boundary", line: anchor.line, column: anchor.column)
+				end 'escapesLoop'
 				owned.movedFrom = true
 				return
 			end 'source'
 			i = i + 1
 		end 'each'
 	end 'poisonMoveSource'
+
+	// Does moving the owned binding at `index` cross OUT of the innermost enclosing loop — i.e. was that
+	// binding declared before the loop body was entered (`LoopContext.ownedFloor`)? Only such a move is
+	// unsound at this rung (see `poisonMoveSource`); a move of a body-local binding, or any move outside a
+	// loop entirely, is fine. The innermost loop is the top of the loop-context stack.
+	function bindingIndexEscapesLoop(index BindingMark) returns bool
+		if self.loops.count() == 0 'notInLoop'
+			return false
+		end 'notInLoop'
+
+		let innermost = try self.loops.get(self.loops.count() - 1) otherwise panic("bindingIndexEscapesLoop: loops.get failed on a non-empty stack")
+		return index < innermost.ownedFloor
+	end 'bindingIndexEscapesLoop'
 
 	// ⭐ **PROMOTE A BORROWED String TO AN OWNED HEAP COPY** so a `returns String` function ALWAYS hands
 	// back something owned. `return "hi"` yields an immortal rdata literal (capacity == -2), and a
@@ -4625,6 +4782,10 @@ export type Parser
 		// Values entering the branches (the condition only reads, so `entry`'s values
 		// are unchanged by it). Positional over `assignedBindings`.
 		let entryVals = self.snapshotBindings(assignedBindings)
+		// The move state entering the branches — the twin of `entryVals` for the drop-gating bit, over the
+		// owned bindings the branches might move (a `let` String, a consumed param), which are NOT the
+		// assigned `var`s `entryVals` covers. Reconciled at the join so a conditional move drops correctly.
+		let entryMoveMark = self.captureMoveMark()
 
 		// `var` because these blocks are passed to functions that mutate them (the
 		// statement parser fills the block; the finalizers wire its terminator) — a
@@ -4632,13 +4793,15 @@ export type Parser
 		var thenBlock = self.newBlock(func, label: thenLabel.value, line: thenLabel.line)
 		var thenEnd = try self.parseBlockBody(func, block: thenBlock)
 
-		// Snapshot the then-branch's exit values, then rewind to the entry state so the
-		// else/false path is parsed against the pre-`if` values, not the then-branch's.
+		// Snapshot the then-branch's exit values and move state, then rewind BOTH to the entry state so the
+		// else/false path is parsed against the pre-`if` values and pre-`if` ownership, not the then-branch's.
 		let thenVals = self.snapshotBindings(assignedBindings)
+		let thenMoveMark = self.captureMoveMark()
 		self.restoreBindings(assignedBindings, snapshot: entryVals)
+		self.restoreMoveMark(entryMoveMark)
 
 		if not self.at(TokenKind.else) 'noElse'
-			let cont = self.finalizeIfNoElse(func, entry: entry, cond: cond, ifTok: ifTok, thenBlock: thenBlock, thenEnd: thenEnd, bindings: assignedBindings, entryVals: entryVals, thenVals: thenVals)
+			let cont = self.finalizeIfNoElse(func, entry: entry, cond: cond, ifTok: ifTok, thenBlock: thenBlock, thenEnd: thenEnd, bindings: assignedBindings, entryVals: entryVals, thenVals: thenVals, entryMoveMark: entryMoveMark, thenMoveMark: thenMoveMark)
 			self.assertScanAligned("parseIfStatement", predictedEnd: ifEnd)
 			return cont
 		end 'noElse'
@@ -4647,7 +4810,8 @@ export type Parser
 		var elseBlock = self.newBlock(func, label: b"ifelse", line: ifTok.line)
 		var elseEnd = try self.parseElseBody(func, elseBlock: elseBlock)
 		let elseVals = self.snapshotBindings(assignedBindings)
-		let cont = self.finalizeIfElse(func, entry: entry, cond: cond, ifTok: ifTok, thenBlock: thenBlock, thenEnd: thenEnd, elseBlock: elseBlock, elseEnd: elseEnd, bindings: assignedBindings, thenVals: thenVals, elseVals: elseVals)
+		let elseMoveMark = self.captureMoveMark()
+		let cont = self.finalizeIfElse(func, entry: entry, cond: cond, ifTok: ifTok, thenBlock: thenBlock, thenEnd: thenEnd, elseBlock: elseBlock, elseEnd: elseEnd, bindings: assignedBindings, thenVals: thenVals, elseVals: elseVals, thenMoveMark: thenMoveMark, elseMoveMark: elseMoveMark)
 		self.assertScanAligned("parseIfStatement", predictedEnd: ifEnd)
 		return cont
 	end 'parseIfStatement'
@@ -4677,16 +4841,66 @@ export type Parser
 	// continuation merges the false-edge values (`entryVals`) with the then-branch's
 	// exit values (`thenVals`) — a differing var gets a continuation phi. When the then
 	// branch returns, the continuation is reached only from the false edge, whose values
-	// are already the restored `entryVals`.
-	function finalizeIfNoElse(func IrFunction, entry IrBlock, cond ValueId, ifTok Token, thenBlock IrBlock, thenEnd IrBlock, bindings VarInfoArray, entryVals ValueIdArray, thenVals ValueIdArray) returns IrBlock
+	// are already the restored `entryVals` (and whose move state is the restored `entryMoveMark`).
+	//
+	// ⭐ **A CONDITIONAL MOVE IS RECONCILED HERE.** An owned binding the then branch MOVED but the false
+	// path left LIVE must be dropped on the false path so it does not leak. When the then branch FALLS
+	// THROUGH, both edges reach the continuation: `reconcileMovesAtMerge` drops the binding on the false
+	// edge (routed through a fresh block, since the direct entry->cont edge has none) and marks it moved.
+	// When the then branch RETURNS, the continuation is reached only from the false edge — the move state
+	// is already the caller's restored `entryMoveMark`, so the binding stays live and its scope exit drops it.
+	function finalizeIfNoElse(func IrFunction, entry IrBlock, cond ValueId, ifTok Token, thenBlock IrBlock, thenEnd IrBlock, bindings VarInfoArray, entryVals ValueIdArray, thenVals ValueIdArray, entryMoveMark MoveMark, thenMoveMark MoveMark) returns IrBlock
 		var cont = self.newBlock(func, label: b"ifcont", line: ifTok.line)
-		self.emitCondBranch(entry, cond: cond, thenId: thenBlock.id, elseId: cont.id, ifTok: ifTok)
-		if not thenEnd.isTerminated() 'thenFallsThrough'
+		if thenEnd.isTerminated() 'thenTerminated'
+			self.emitCondBranch(entry, cond: cond, thenId: thenBlock.id, elseId: cont.id, ifTok: ifTok)
+			return cont
+		end 'thenTerminated'
+
+		// Both the false edge (entry state) and the then edge (then state) reach the continuation. A binding
+		// the then branch MOVED but the entry left LIVE must be dropped on the false path — but the direct
+		// entry->cont false edge is `entry`, which already ends in the two-way condBranch and cannot take an
+		// appended decref. Only then is a fresh `iffalse` block minted on that edge to hold the drop; an `if`
+		// with no such conditional move takes the direct edge and its codegen is byte-identical to before.
+		if self.thenMovesLiveBinding(entryMoveMark, thenMoveMark: thenMoveMark) 'falseEdgeDrop'
+			var falseBlock = self.newBlock(func, label: b"iffalse", line: ifTok.line)
+			self.emitCondBranch(entry, cond: cond, thenId: thenBlock.id, elseId: falseBlock.id, ifTok: ifTok)
+
+			var edges = ReachingMoveEdgeArray.create()
+			edges.push(ReachingMoveEdge.create(falseBlock, mark: entryMoveMark))
+			edges.push(ReachingMoveEdge.create(thenEnd, mark: thenMoveMark))
+			self.reconcileMovesAtMerge(edges, anchor: ifTok)
+
+			self.mergeAtContinuation(falseBlock, predB: thenEnd, cont: cont, bindings: bindings, valsA: entryVals, valsB: thenVals)
+			self.emitBranch(falseBlock, targetId: cont.id)
+			self.emitBranch(thenEnd, targetId: cont.id)
+		end 'falseEdgeDrop' else 'directFalseEdge'
+			self.emitCondBranch(entry, cond: cond, thenId: thenBlock.id, elseId: cont.id, ifTok: ifTok)
+			// The false edge is the direct entry->cont edge; the post-merge move state is the then state (a
+			// binding moved before the `if` stays moved on both edges, and nothing new was moved to drop).
+			self.restoreMoveMark(thenMoveMark)
 			self.mergeAtContinuation(entry, predB: thenEnd, cont: cont, bindings: bindings, valsA: entryVals, valsB: thenVals)
 			self.emitBranch(thenEnd, targetId: cont.id)
-		end 'thenFallsThrough'
+		end 'directFalseEdge'
 		return cont
 	end 'finalizeIfNoElse'
+
+	// Does the then branch move an owned binding the ENTRY left live — the one shape an `if` with no `else`
+	// must place a drop on its false edge for (see `finalizeIfNoElse`)? The move flag is monotonic within a
+	// path, so a binding live at entry and moved after the then branch was moved BY that branch. A binding
+	// already moved before the `if` is moved on both edges (nothing to reconcile); a binding no branch
+	// touched is live on both.
+	function thenMovesLiveBinding(entryMoveMark MoveMark, thenMoveMark MoveMark) returns bool
+		var i = 0
+		while i < entryMoveMark.moved.count() 'scan'
+			let entryLive = not (try entryMoveMark.moved.get(i) otherwise panic("thenMovesLiveBinding: entryMoveMark.moved.get OOB at {i}"))
+			let thenMoved = try thenMoveMark.moved.get(i) otherwise panic("thenMovesLiveBinding: thenMoveMark.moved.get OOB at {i}")
+			if entryLive and thenMoved 'movedInThenOnly'
+				return true
+			end 'movedInThenOnly'
+			i = i + 1
+		end 'scan'
+		return false
+	end 'thenMovesLiveBinding'
 
 	// Finalize an `if`/`else`: the entry's condBranch targets the then and else blocks.
 	// The continuation is reachable only when a branch falls through; when BOTH return
@@ -4694,7 +4908,7 @@ export type Parser
 	// merges their exit values (`thenVals`/`elseVals`) with phis for the vars that
 	// differ. When only ONE falls through, the continuation simply carries that branch's
 	// values (no phi — a single predecessor).
-	function finalizeIfElse(func IrFunction, entry IrBlock, cond ValueId, ifTok Token, thenBlock IrBlock, thenEnd IrBlock, elseBlock IrBlock, elseEnd IrBlock, bindings VarInfoArray, thenVals ValueIdArray, elseVals ValueIdArray) returns IrBlock
+	function finalizeIfElse(func IrFunction, entry IrBlock, cond ValueId, ifTok Token, thenBlock IrBlock, thenEnd IrBlock, elseBlock IrBlock, elseEnd IrBlock, bindings VarInfoArray, thenVals ValueIdArray, elseVals ValueIdArray, thenMoveMark MoveMark, elseMoveMark MoveMark) returns IrBlock
 		self.emitCondBranch(entry, cond: cond, thenId: thenBlock.id, elseId: elseBlock.id, ifTok: ifTok)
 		let thenTerminated = thenEnd.isTerminated()
 		let elseTerminated = elseEnd.isTerminated()
@@ -4709,16 +4923,27 @@ export type Parser
 
 		var cont = self.newBlock(func, label: b"ifcont", line: ifTok.line)
 		if not thenTerminated and not elseTerminated 'bothFallThrough'
+			// ⭐ **CONDITIONAL MOVE RECONCILED across the two live edges** — a binding moved in one branch and
+			// left live in the other is dropped on the live edge (both are real, unterminated blocks) and
+			// marked uniformly moved past the merge. Emitted BEFORE `mergeAtContinuation` records the phi
+			// edges and before the branches, so the decref lands in the branch's own body.
+			var edges = ReachingMoveEdgeArray.create()
+			edges.push(ReachingMoveEdge.create(thenEnd, mark: thenMoveMark))
+			edges.push(ReachingMoveEdge.create(elseEnd, mark: elseMoveMark))
+			self.reconcileMovesAtMerge(edges, anchor: ifTok)
+
 			self.mergeAtContinuation(thenEnd, predB: elseEnd, cont: cont, bindings: bindings, valsA: thenVals, valsB: elseVals)
 			self.emitBranch(thenEnd, targetId: cont.id)
 			self.emitBranch(elseEnd, targetId: cont.id)
 		end 'bothFallThrough' else if not thenTerminated 'onlyThen'
-			// Only the then branch reaches the continuation — its values carry through.
+			// Only the then branch reaches the continuation — its values AND its move state carry through
+			// (the else branch terminated, having dropped its own live values on the way out).
 			self.restoreBindings(bindings, snapshot: thenVals)
+			self.restoreMoveMark(thenMoveMark)
 			self.emitBranch(thenEnd, targetId: cont.id)
 		end 'onlyThen' else 'onlyElse'
-			// Only the else branch reaches the continuation (its values are already the
-			// current bindings after parsing it, but restore explicitly for symmetry).
+			// Only the else branch reaches the continuation — its values and move state are already the
+			// current state (parsed last), but restore the values explicitly for symmetry.
 			self.restoreBindings(bindings, snapshot: elseVals)
 			self.emitBranch(elseEnd, targetId: cont.id)
 		end 'onlyElse'
@@ -5359,6 +5584,12 @@ export type Parser
 			self.removeFromPendingTemps(scrut)
 		end 'enrollTempScrutinee'
 
+		// The move state entering the arms — captured after the temp-scrutinee enrolment so the scrutinee
+		// binding is included. Each FRESH arm is parsed from it (`restoreMoveMark` at the arm-restore sites,
+		// the twin of `restoreBindings`), and each reaching arm captures its own exit move state for the
+		// merge reconciliation. A `and fallthrough` arm does NOT restore — it inherits the prior arm's state.
+		let entryMoveMark = self.captureMoveMark()
+
 		while true 'arms'
 			self.skipNewlines()
 			// The closing `end` — unless it is a keyword CASE NAME arm (`end gives …`) on an enum
@@ -5400,18 +5631,19 @@ export type Parser
 					end 'defaultFailEdge'
 				end 'defaultIsFtTarget' else 'defaultFresh'
 					self.restoreBindings(carried, snapshot: entryVals)
+					self.restoreMoveMark(entryMoveMark)
 				end 'defaultFresh'
 
 				let defaultArmBody = try self.parseArmBody(func, bodyBlock: defaultBody, isExpression: isExpression, carried: carried)
 				// A `default gives …` arm's OWNED give escapes to the result phi — move it out of its owner
 				// so the post-match drain does not free it (the pattern-arm rule, for the catch-all arm).
 				if isExpression 'transferDefaultGive'
-					self.transferGiveToPhi(self.giveValueOf(defaultArmBody.give))
+					try self.transferGiveToPhi(self.giveValueOf(defaultArmBody.give), anchor: matchTok)
 				end 'transferDefaultGive'
 				// `default` is the last arm, so a fall-through has no next arm to reach — it simply
 				// continues to the merge. So the test is "did control leave?", not `reachesMerge`.
 				if not defaultArmBody.exitBlock.isTerminated() 'defaultReaches'
-					reachingArms.push(MatchArmExit.create(defaultArmBody.exitBlock, exitVals: defaultArmBody.exitVals, give: defaultArmBody.give))
+					reachingArms.push(MatchArmExit.create(defaultArmBody.exitBlock, exitVals: defaultArmBody.exitVals, give: defaultArmBody.give, moveMark: self.captureMoveMark()))
 				end 'defaultReaches'
 				sawDefault = true
 				prevFallthrough = false
@@ -5446,6 +5678,7 @@ export type Parser
 					matchEdgeArgs = self.setupFallthroughTargetPhis(bodyBlock, carried: carried, entryVals: entryVals, prevExitBlock: prevExitBlock, prevExitVals: prevExitVals)
 				end 'armIsFtTarget' else 'armFresh'
 					self.restoreBindings(carried, snapshot: entryVals)
+					self.restoreMoveMark(entryMoveMark)
 				end 'armFresh'
 
 				self.recordBranchEdge(currentTestBlock, targetId: bodyBlock.id, argIds: matchEdgeArgs)
@@ -5483,7 +5716,7 @@ export type Parser
 				// the post-match drain. A gives arm always reaches the merge (an expression cannot terminate
 				// its block), so the transfer is unconditional for `isExpression`.
 				if isExpression 'transferPatternGive'
-					self.transferGiveToPhi(self.giveValueOf(armBody.give))
+					try self.transferGiveToPhi(self.giveValueOf(armBody.give), anchor: patternTok)
 				end 'transferPatternGive'
 				self.dropArmScopedOwned(armOwnedFloor, exitBlock: armBody.exitBlock, anchor: patternTok)
 
@@ -5494,7 +5727,7 @@ export type Parser
 				end 'fellThrough' else 'notFallThrough'
 					prevFallthrough = false
 					if armBody.reachesMerge 'armReaches'
-						reachingArms.push(MatchArmExit.create(armBody.exitBlock, exitVals: armBody.exitVals, give: armBody.give))
+						reachingArms.push(MatchArmExit.create(armBody.exitBlock, exitVals: armBody.exitVals, give: armBody.give, moveMark: self.captureMoveMark()))
 					end 'armReaches'
 				end 'notFallThrough'
 
@@ -5521,7 +5754,7 @@ export type Parser
 			// give is `none`. A SCALAR match cannot reach this with `prevFallthrough`: a trailing
 			// fallthrough with no `default` is rejected by the `notExhaustive` throw below.
 			if prevFallthrough 'trailingFallthrough'
-				reachingArms.push(MatchArmExit.create(prevExitBlock, exitVals: prevExitVals, give: MatchGiveValue.none))
+				reachingArms.push(MatchArmExit.create(prevExitBlock, exitVals: prevExitVals, give: MatchGiveValue.none, moveMark: self.captureMoveMark()))
 			end 'trailingFallthrough'
 		end 'enumFallOffUnreachable'
 
@@ -5751,6 +5984,18 @@ export type Parser
 		var finalGives = ValueIdArray.create()
 		let resultOwned = self.resolveGivesOwnership(reachingArms, isExpression: isExpression, matchTok: matchTok, finalGives: finalGives)
 
+		// ⭐ **CONDITIONAL MOVE RECONCILED across the reaching arms** — an owned binding moved in one arm and
+		// left live in another is dropped on the live arms' exit blocks (all reaching arms are unterminated)
+		// and marked uniformly moved past the merge. Emitted BEFORE the branches so the decref lands in the
+		// arm's own body. A returning/breaking arm contributed no reaching entry, so it is not reconciled —
+		// it dropped its own live values on the way out.
+		var moveEdges = ReachingMoveEdgeArray.create()
+		for i in 0 upto reachingArms.count() 'collectMoveEdges'
+			let arm = try reachingArms.get(i) otherwise panic("finalizeMatchMerge: reachingArms.get OOB at {i}")
+			moveEdges.push(ReachingMoveEdge.create(arm.exitBlock, mark: arm.moveMark))
+		end 'collectMoveEdges'
+		self.reconcileMovesAtMerge(moveEdges, anchor: matchTok)
+
 		// Every reaching arm branches to the merge (its exit block is, by definition, unterminated).
 		for i in 0 upto reachingArms.count() 'branchToMerge'
 			let arm = try reachingArms.get(i) otherwise panic("finalizeMatchMerge: reachingArms.get OOB at {i}")
@@ -5845,12 +6090,12 @@ export type Parser
 	// (the payload binding of `text(s) gives s`, or an outer owned binding) is poisoned so `emitScopeDrops`
 	// skips its drop and a later read of it is use-after-move. A borrowed/scalar give owns nothing, so both
 	// calls are no-ops — a borrowed String is promoted at the merge instead, where phi ownership is decided.
-	function transferGiveToPhi(give ValueId)
+	function transferGiveToPhi(give ValueId, anchor Token) throws ParseError
 		if not self.valueIsOwnedHeap(give) 'borrowed'
 			return
 		end 'borrowed'
 		self.removeFromPendingTemps(give)
-		self.poisonMoveSource(give)
+		try self.poisonMoveSource(give, anchor: anchor)
 	end 'transferGiveToPhi'
 
 	// Decide whether an expression match's result phi OWNS its value, and make every arm's give owned so it
@@ -8233,7 +8478,7 @@ export type Parser
 		end 'structOrUnion'
 
 		// An already-owned managed value moves out of its source into the box.
-		self.transferOwnedInto(arg, argBareLocal: argBareLocal)
+		try self.transferOwnedInto(arg, argBareLocal: argBareLocal, anchor: anchor)
 		return arg
 	end 'moveInPayload'
 
@@ -8241,9 +8486,9 @@ export type Parser
 	// POISONED (`movedFrom` — E3102 on later use); an owned temporary is removed from the statement's pending
 	// drops (the box owns it now). THE one place the "who no longer owns this value" bookkeeping lives, so a
 	// union payload move and a struct-field move cannot drift on it.
-	function transferOwnedInto(arg ValueId, argBareLocal bool)
+	function transferOwnedInto(arg ValueId, argBareLocal bool, anchor Token) throws ParseError
 		if argBareLocal 'moveOnBind'
-			self.poisonMoveSource(arg)
+			try self.poisonMoveSource(arg, anchor: anchor)
 		end 'moveOnBind' else 'consumeTemp'
 			self.removeFromPendingTemps(arg)
 		end 'consumeTemp'
@@ -10000,7 +10245,7 @@ export type Parser
 		if not self.valueIsOwnedHeap(argValue) 'borrowedManaged'
 			throw ParseError.unsupported("passing a borrowed struct/String value at a CONSUMING argument position — the callee moves it into durable storage, so ownership must transfer, and a borrowed value's owner keeps a live reference the callee's field would dangle behind; forwarding a borrowed parameter to a consuming callee is the transitive-consume case handled by the call-graph fixpoint (P1.4a wave 2+)", line: anchor.line, column: anchor.column)
 		end 'borrowedManaged'
-		self.poisonMoveSource(argValue)
+		try self.poisonMoveSource(argValue, anchor: anchor)
 		self.removeFromPendingTemps(argValue)
 	end 'transferConsumedArg'
 

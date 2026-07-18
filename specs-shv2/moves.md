@@ -24,9 +24,11 @@ The source is left MOVED-FROM: reading it is a compile error (use-after-move), a
 drop is SKIPPED — the value drops once, through its new owner. A fresh owned temporary (`build()`,
 `"{x}"`) is owned by no binding, so binding it is a CONSUME, not a move — nothing is poisoned.
 
-A WRITE to a moved-from `var` REVIVES it: the binding owns the new value and is usable again. So a
-value moved on some-but-not-all paths of an `if`/`while` becomes a (conservative) use-after-move past
-the merge — the flag is set unconditionally where the move is written, with no dataflow join.
+A WRITE to a moved-from `var` REVIVES it: the binding owns the new value and is usable again. A value
+moved on some-but-not-all paths of an `if`/`else`/`match` is DROPPED path-sensitively — its drop is
+placed on the paths that did not move it, reconciled at the control-flow join (see
+`conditional-move-drops.md`) — but READING it past the join stays a CONSERVATIVE use-after-move: being
+maybe-moved, it may not be read, even though it is correctly dropped where it was not moved.
 
 ## Tests
 
