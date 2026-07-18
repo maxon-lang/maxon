@@ -4309,12 +4309,7 @@ export type Parser
 			throw ParseError.unsupported("returning a borrowed `{typeTagName(returnedTag)}` value — a struct/union parameter (or a re-borrow of one) is a heap box the caller would adopt and free while the borrow's own owner frees it too, a double free. Return an OWNED value; consuming or copying a borrowed aggregate to return it arrives at P1.4b", line: retTok.line, column: retTok.column)
 		end 'borrowedAggregateReturn'
 
-		let movedOut = self.valueIsOwnedHeap(returned)
-		let savedOwnedBindings = self.ownedBindings
-		if movedOut 'moveOut'
-			self.removeFromOwnedBindings(returned)
-			self.removeFromPendingTemps(returned)
-		end 'moveOut'
+		let savedOwnedBindings = self.moveOutForExit(returned)
 
 		// ⭐⭐ **THE DROP GOES HERE — AFTER THE VALUE, BEFORE THE TERMINATOR — AND BOTH HALVES OF
 		// THAT ARE LOAD-BEARING.**
@@ -4379,9 +4374,31 @@ export type Parser
 	// keyword their caller consumed — `throw` vs `throws`).
 	function emitThrowError(func IrFunction, anchor Token) throws ParseError
 		let errValue = try self.parseExpression(func, block: self.currentBlock)
-		let errType = self.typeOf(errValue)
+		let errorIsBoxed = self.throwsTypeIsBoxedUnion(self.typeOf(errValue))
+
+		// ⭐ **A THROWN BOX MUST BE OWNED — a BORROWED one is refused, not double-freed.** A boxed error is
+		// handed to the caller through the flag register, which ADOPTS and drops it once. Throwing a
+		// BORROWED union (a `throw <union param>`, or a re-borrow of one) whose owner lives in THIS function's
+		// caller would make two owners free one box; a borrowed aggregate has no `clone` to transfer, so it
+		// is a clean reject (the throw twin of `parseReturnStatement`'s borrowed-aggregate refusal) until
+		// cross-call consume. An OWNED box (a fresh `throw U.case(x)` or a caught `(e)` binding) carries the
+		// provenance bit and is moved out below.
+		if errorIsBoxed and not self.valueIsOwnedHeap(errValue) 'borrowedThrow'
+			throw ParseError.unsupported("throwing a borrowed union value — a union parameter (or a re-borrow of one) is a heap box the caller would adopt and free while the borrow's own owner frees it too, a double free. Throw an OWNED value (a fresh `throw U.case(x)` or a caught `(e)` binding); consuming a borrowed union to throw it arrives with cross-call consume", line: anchor.line, column: anchor.column)
+		end 'borrowedThrow'
+
+		// ⭐ **THROW TRANSFERS THE BOX OUT OF THE LOCAL DROP SETS — BEFORE the scope drops.** The box is
+		// handed to the caller, so the scope cleanup releases every OTHER owned local on the throw edge but
+		// not the box in flight — else it is freed here AND adopted by the caller (a double free, OPEN #16
+		// family). The SAME move-out `parseReturnStatement` performs — a freshly-constructed `throw U.case(x)`
+		// leaves the pending-temp list, a re-thrown caught `(e)` binding the owned-binding list — restored past
+		// the drops for a sibling exit edge that still owns it. A SCALAR error owns no heap, so it is inert —
+		// the Wave-1 behaviour, unchanged.
+		let savedOwnedBindings = self.moveOutForExit(errValue)
 		self.emitScopeDrops(WholeFunctionScopeFloor, anchor: anchor)
-		self.artifact.emitTerminator(self.currentBlock, op: MaxonOp.throwError(errValue, errorType: errType), range: SourceRange.ofToken(anchor))
+		self.ownedBindings = savedOwnedBindings
+
+		self.artifact.emitTerminator(self.currentBlock, op: MaxonOp.throwError(errValue, errorIsBoxed: errorIsBoxed), range: SourceRange.ofToken(anchor))
 	end 'emitThrowError'
 
 	// `panic("message")` — abort the process after printing the message. Emits a `panicAbort` body op
@@ -4581,14 +4598,7 @@ export type Parser
 
 		try self.consume(TokenKind.otherwise)
 
-		if self.at(TokenKind.ignore) 'ignoreForm'
-			try self.consume(TokenKind.ignore)
-			if resultUsed 'ignoreInValue'
-				throw ParseError.errorTypeMismatch("'otherwise ignore' cannot be used in assignment", line: tryTok.line, column: tryTok.column)
-			end 'ignoreInValue'
-			return TryHandler.fellThrough
-		end 'ignoreForm'
-
+		// Block forms own their caught box end-to-end (`parseOtherwiseBlock` enrols, binds and drops it).
 		if self.at(TokenKind.leftParen) 'bindingForm'
 			return try self.parseOtherwiseBinding(func, flag: flag, callee: callee)
 		end 'bindingForm'
@@ -4597,7 +4607,39 @@ export type Parser
 			return try self.parseOtherwiseBlock(func, bindingName: EmptySourceText, hasBinding: false, flag: flag, callee: callee)
 		end 'blockForm'
 
-		// The single-statement CONTROL-FLOW forms terminate the error block.
+		// ⭐ **THE NON-BLOCK FORMS DISCARD THE CAUGHT ERROR, SO ITS BOX MUST DROP HERE.** `otherwise ignore`,
+		// a fallback VALUE, and the single-statement `return`/`break`/`continue`/`throw <fresh>` each catch a
+		// boxed error and then throw it away — so its box, owned by this try, drops exactly once on the error
+		// edge. Enrol it (ANONYMOUS — these forms name no `e`) so a terminating form's own `emitScopeDrops`
+		// releases it, then drop it here for the non-terminating forms (`dropArmScopedOwned` frees it on a live
+		// exit, drains it either way). A SCALAR error owns no box, so `boxed` is false and this is inert — the
+		// existing scalar forms are untouched. (`otherwise panic` aborts the process before any free matters.)
+		let eType = self.tryErrorEnumType(callee)
+		let ownedFloor = self.ownedBindings.count()
+		if self.throwsTypeIsBoxedUnion(eType) 'enrolBox'
+			self.enrollCaughtBox(flag, eType: eType, binding: VarInfo.createValueBinding(EmptySourceText, varType: eType, mutable: false, boundValue: flag))
+		end 'enrolBox'
+
+		let handler = try self.parseUnboundOtherwiseForm(func, result: result, resultUsed: resultUsed, tryTok: tryTok)
+		self.dropArmScopedOwned(ownedFloor, exitBlock: self.currentBlock, anchor: tryTok)
+		return handler
+	end 'parseOtherwiseHandler'
+
+	// The `otherwise` forms that bind no `e` and open no block: `ignore`, a single-statement `return`/`break`/
+	// `continue`/`throw`/`panic`, or a fallback VALUE. Split out of `parseOtherwiseHandler` so its caller can
+	// bracket them with the caught-box enrol/drop every one of them shares — each DISCARDS the caught error.
+	// Returns how the form affects the merge; on entry `currentBlock` is the error block.
+	function parseUnboundOtherwiseForm(func IrFunction, result ValueId, resultUsed bool, tryTok Token) returns TryHandler throws ParseError
+		if self.at(TokenKind.ignore) 'ignoreForm'
+			try self.consume(TokenKind.ignore)
+			if resultUsed 'ignoreInValue'
+				throw ParseError.errorTypeMismatch("'otherwise ignore' cannot be used in assignment", line: tryTok.line, column: tryTok.column)
+			end 'ignoreInValue'
+			return TryHandler.fellThrough
+		end 'ignoreForm'
+
+		// The single-statement CONTROL-FLOW forms terminate the error block; their own scope drops release
+		// the caught box the caller enrolled.
 		if self.at(TokenKind.return) or self.at(TokenKind.break) or self.at(TokenKind.continue) 'controlFlow'
 			_ = try self.parseStatement(func, block: self.currentBlock)
 			return TryHandler.terminated
@@ -4617,7 +4659,7 @@ export type Parser
 			throw ParseError.errorTypeMismatch("otherwise type '{typeTagName(self.tagOf(otherwiseValue))}' does not match expected type '{typeTagName(self.tagOf(result))}'", line: tryTok.line, column: tryTok.column)
 		end 'typeMismatch'
 		return TryHandler.value(otherwiseValue)
-	end 'parseOtherwiseHandler'
+	end 'parseUnboundOtherwiseForm'
 
 	// `otherwise (e) 'label' … end 'label'` — bind the caught error `e = flag - 1` (typed as the callee's
 	// throws enum so `match e` recognizes it), then parse the labelled handler block. In a match arm this
@@ -4628,6 +4670,19 @@ export type Parser
 		try self.consume(TokenKind.rightParen)
 		return try self.parseOtherwiseBlock(func, bindingName: eNameTok.value, hasBinding: true, flag: flag, callee: callee)
 	end 'parseOtherwiseBinding'
+
+	// ⭐ **ENROL A CAUGHT BOXED ERROR AS OWNED.** The flag IS the box pointer (the throw ENCODE wrote it
+	// verbatim), so the binding takes it with NO decode arithmetic — only its type columns are re-recorded to
+	// the union (`retypeValue`) so `match e` dispatches through the box (`enumMatchFor`) and the scope-exit
+	// drop routes to `__destruct_<U>` (`decrefCalleeFor`), both of which read the value TAG. `markValueOwnsHeap`
+	// enrols it so the scope machinery releases it exactly once. `binding` is the NAMED `(e)` binding, or an
+	// ANONYMOUS one for a discarding form (a no-binding block, `otherwise ignore`, a fallback value). ONE
+	// enrolment shape for every catching form, so they cannot drift on how a transferred box becomes owned.
+	function enrollCaughtBox(flag ValueId, eType MaxonType, binding VarInfo)
+		self.retypeValue(flag, valueType: eType)
+		self.markValueOwnsHeap(flag)
+		self.ownedBindings.push(binding)
+	end 'enrollCaughtBox'
 
 	// Parse an `otherwise` handler BLOCK (`otherwise ['(e)'] 'label' … end 'label'`) into the error block.
 	// When `hasBinding`, `e = flag - 1` is declared in a fresh scope frame before the body. Both forms are
@@ -4646,20 +4701,45 @@ export type Parser
 		try self.consume(TokenKind.charLiteral)
 
 		var errBlock = self.currentBlock
+		let eType = self.tryErrorEnumType(callee)
+		let boxed = self.throwsTypeIsBoxedUnion(eType)
+
+		// The owned-binding height BEFORE the caught box is enrolled — a handler-local drop FLOOR, the try
+		// twin of `openBlock`'s `ownedCount` (drained by `dropArmScopedOwned` below). A boxed error is an
+		// owned heap value this handler received ownership of; a scalar error owns no heap and adds none.
+		let ownedFloor = self.ownedBindings.count()
 		self.scope.pushScope()
-		if hasBinding 'bindE'
-			let eType = self.tryErrorEnumType(callee)
-			// DECODE the caught flag back to the enum ordinal: `e = flag - ErrorFlagOrdinalBias`, the exact
-			// inverse of the Std-tier throw ENCODE (`lowerThrowError`). Both read the one `ErrorFlagOrdinalBias`
-			// so a change to the bias cannot leave this decode silently binding `match e` to the wrong case.
-			let bias = self.emitLiteral(ErrorFlagOrdinalBias, valueType: MaxonType.integer, range: SourceRange.ofToken(labelTok))
-			let eValue = self.mintValueOfType(eType)
-			self.artifact.emitOp(errBlock, op: MaxonOp.binOp(eValue, lhs: flag, rhs: bias, op: MaxonBinOp.sub), range: SourceRange.ofToken(labelTok))
-			_ = try self.scope.declareValueBinding(bindingName, varType: eType, mutable: false, value: eValue) otherwise throw ParseError.localShadowsSelfField(String.from(bindingName), typeName: String.from(self.enclosingType), line: labelTok.line, column: labelTok.column)
-		end 'bindE'
+
+		if boxed 'boxedError'
+			// The caught box is enrolled owned — NAMED for `(e)`, ANONYMOUS for a `otherwise 'l'` — so a
+			// binding-less block on a heap error still releases the transferred box exactly once.
+			// `dropArmScopedOwned` frees it on the edge that leaves the handler, and a `throw e` that moved it
+			// out first is skipped.
+			var eBinding = VarInfo.createValueBinding(EmptySourceText, varType: eType, mutable: false, boundValue: flag)
+			if hasBinding 'nameBoxedE'
+				eBinding = try self.scope.declareValueBinding(bindingName, varType: eType, mutable: false, value: flag) otherwise throw ParseError.localShadowsSelfField(String.from(bindingName), typeName: String.from(self.enclosingType), line: labelTok.line, column: labelTok.column)
+			end 'nameBoxedE'
+			self.enrollCaughtBox(flag, eType: eType, binding: eBinding)
+		end 'boxedError' else 'scalarError'
+			if hasBinding 'bindScalarE'
+				// DECODE the caught flag back to the enum ordinal: `e = flag - ErrorFlagOrdinalBias`, the exact
+				// inverse of the Std-tier throw ENCODE (`lowerThrowError`). Both read the one `ErrorFlagOrdinalBias`
+				// so a change to the bias cannot leave this decode silently binding `match e` to the wrong case.
+				let bias = self.emitLiteral(ErrorFlagOrdinalBias, valueType: MaxonType.integer, range: SourceRange.ofToken(labelTok))
+				let eValue = self.mintValueOfType(eType)
+				self.artifact.emitOp(errBlock, op: MaxonOp.binOp(eValue, lhs: flag, rhs: bias, op: MaxonBinOp.sub), range: SourceRange.ofToken(labelTok))
+				_ = try self.scope.declareValueBinding(bindingName, varType: eType, mutable: false, value: eValue) otherwise throw ParseError.localShadowsSelfField(String.from(bindingName), typeName: String.from(self.enclosingType), line: labelTok.line, column: labelTok.column)
+			end 'bindScalarE'
+		end 'scalarError'
 
 		let errEnd = try self.parseBlockBody(func, block: errBlock)
 		self.scope.popScope()
+
+		// Release the caught box on whichever edge leaves the handler — a `__destruct_<U>`/decref on a live
+		// fall-through (into `errEnd`), the terminating statement's own `emitScopeDrops` on a return/throw —
+		// and drain it off the owned list either way, so the function-end drop never sees a handler binding.
+		// A no-op when the handler enrolled nothing (a scalar error, or none).
+		self.dropArmScopedOwned(ownedFloor, exitBlock: errEnd, anchor: labelTok)
 
 		if errEnd.isTerminated() 'terminated'
 			return TryHandler.terminated
@@ -4676,6 +4756,24 @@ export type Parser
 			throwing(name) gives MaxonType.named(self.artifact.typeNames.intern(name.toByteArray()))
 		end 'k'
 	end 'tryErrorEnumType'
+
+	// ⭐ **IS THE THROWN/CAUGHT ERROR A BOXED (payload-bearing) UNION?** — the ONE fact the error-flag ABI
+	// turns on, and the derive-once point for it. Read at BOTH ends so the flag round-trips: the throw
+	// ENCODE (`emitThrowError`, which stamps it on the `throwError` op for `lowerThrowError` to write the box
+	// pointer verbatim) and the catch DECODE (`parseOtherwiseBlock`, which binds `e` to that pointer
+	// verbatim). Both funnel through the one `enumOf(name).isBoxed()` here, so a boxed union cannot be
+	// encoded as a pointer at one end and decoded as an `ordinal + bias` at the other. A SCALAR enum and a
+	// non-`named` type are `false` — their flag is `ordinal + ErrorFlagOrdinalBias`.
+	function throwsTypeIsBoxedUnion(errorType MaxonType) returns bool
+		if maxonTypeTag(errorType) != ValueTypeTag.named 'notNamed'
+			return false
+		end 'notNamed'
+		let name = try self.artifact.typeNames.nameOf(typeNameIdOf(errorType)) otherwise return false
+		return match self.signatures.enumOf(name) 'e'
+			declared(layout) gives layout.isBoxed()
+			undeclared gives false
+		end 'e'
+	end 'throwsTypeIsBoxedUnion'
 
 	// Does SOME file declare `callee`? The whole-program signature index answers before any file is
 	// parsed. Used to keep the E3055 (`try` on a non-throwing call) check off an UNDECLARED callee, whose
@@ -5000,6 +5098,24 @@ export type Parser
 		end 'each'
 		self.ownedBindings = kept
 	end 'removeFromOwnedBindings'
+
+	// ⭐ **MOVE AN OWNED VALUE OUT OF THE LOCAL DROP SETS FOR AN EXIT THAT HANDS IT TO THE CALLER** — a
+	// `return <owned>` or a `throw <owned box>`. The exit's scope cleanup must release every OTHER owned
+	// local but not THIS value (the caller adopts and drops it), so it leaves BOTH the pending-temp list (a
+	// freshly built temporary) and the owned-binding list (a caught/held binding); one call each, both no-ops
+	// on the other's case. Returns the ownedBindings list to RESTORE past those drops: `ownedBindings`
+	// OUTLIVES the exit, and a sibling exit edge of an enclosing block still owns the value on ITS runtime
+	// path (this exit terminated only its own), so `removeFromOwnedBindings`' NEW array leaves the original
+	// for those edges. A no-op for a non-owned value (a scalar), whose returned list is unchanged. The two
+	// exits (`parseReturnStatement`, `emitThrowError`) cannot drift on which lists a handed-off value leaves.
+	function moveOutForExit(value ValueId) returns VarInfoArray
+		let saved = self.ownedBindings
+		if self.valueIsOwnedHeap(value) 'movedOut'
+			self.removeFromOwnedBindings(value)
+			self.removeFromPendingTemps(value)
+		end 'movedOut'
+		return saved
+	end 'moveOutForExit'
 
 	// Does `binding` currently owe a scope-exit drop — i.e. is it a LIVE owner in `ownedBindings`? The
 	// reassignment path's test for whether the value being OVERWRITTEN is owned. It reads MEMBERSHIP,
@@ -7259,6 +7375,17 @@ export type Parser
 	function mintValueOfType(valueType MaxonType) returns ValueId
 		return self.mintValue(maxonTypeTag(valueType), nameId: typeNameIdOf(valueType))
 	end 'mintValueOfType'
+
+	// Re-record an EXISTING value's type columns in place. The caught error flag is a box POINTER that
+	// `desugarTry` minted as `integer` for the `flag != 0` null test; a boxed `(e)` binding re-records it as
+	// its UNION type so `match e` dispatches through the box (`enumMatchFor`) and its scope-exit drop routes
+	// to `__destruct_<U>` (`decrefCalleeFor`), both of which read the value TAG. Only the two type columns
+	// move — the value's Std width is unchanged (`valueTagToStdType` collapses both `integer` and `named` to
+	// i64), so the already-emitted `flag != 0` compare and the `tryCall`'s flag register are unaffected.
+	function retypeValue(value ValueId, valueType MaxonType)
+		try self.valueTags.set(value, value: maxonTypeTag(valueType)) otherwise panic("retypeValue: v{value} has no type slot — every SSA value is minted through mintValue")
+		try self.valueNameIds.set(value, value: typeNameIdOf(valueType)) otherwise panic("retypeValue: v{value} has no type-name slot — the two type columns are filled in lockstep")
+	end 'retypeValue'
 
 	// Append a value's type to the columns WITHOUT allocating an id — for the parameters,
 	// whose ids (0..paramCount-1) the value numbering RESERVED rather than minted.

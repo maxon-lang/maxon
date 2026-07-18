@@ -602,13 +602,15 @@ export union MaxonOp
 	// PARSER emits (`compare(errorFlag != 0)` + `condBranch`) is what reads the flag; the value is used
 	// on the success edge. Category `callFree`, the same band as `call` — it IS `call` plus the flag def.
 	tryCall(result ValueId, errorFlag ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray) = MaxonOpMeta{category: OpCategory.callFree}
-	// THROW a scalar error — a `throw E.case` or `otherwise (e) throw e`. TERMINATOR (control leaves the
-	// function via the error edge). `errorValue` is the enum ORDINAL as an SSA value (a literal for
-	// `throw E.case`, the caught `(e)` binding for `throw e`); `errorType` is the thrown enum. The
-	// `ordinal + 1` re-encoding is applied in `lowerMaxonToStd` (the ABI lives in ONE place), NOT here —
-	// which is why this carries the ordinal and `propagateError` carries the already-encoded flag, and
-	// the two are kept DISTINCT so the +1 never doubles up. Category `plain`, like the other terminators.
-	throwError(errorValue ValueId, errorType MaxonType) = MaxonOpMeta{category: OpCategory.plain}
+	// THROW an error — a `throw E.case` / `throw U.case(x)` or `otherwise (e) throw e`. TERMINATOR (control
+	// leaves the function via the error edge). `errorValue` is either the enum ORDINAL (a SCALAR error) or a
+	// heap-box POINTER (a payload-bearing/boxed union), and `errorIsBoxed` is which — the ONE bit the
+	// re-encode in `lowerMaxonToStd` needs, DERIVED in the parser (which alone holds the enum registry) so
+	// lowering carries no classification. A SCALAR error's `ordinal + 1` re-encoding is applied in
+	// `lowerMaxonToStd` (the ABI lives in ONE place); a BOXED error's pointer is written to the flag VERBATIM
+	// (it is already non-zero, so `flag != 0` still reads "error in flight"). `propagateError` carries an
+	// ALREADY-encoded flag, kept DISTINCT so the +1 never doubles up. Category `plain`, like the other terminators.
+	throwError(errorValue ValueId, errorIsBoxed bool) = MaxonOpMeta{category: OpCategory.plain}
 	// PROPAGATE a caught error flag verbatim — an uncaught `try f()` inside a throwing function
 	// re-publishes the callee's flag to its own caller. TERMINATOR. `errorFlag` is ALREADY the
 	// `ordinal + 1` encoding (it came out of a `tryCall`), so lowering re-emits it into the error

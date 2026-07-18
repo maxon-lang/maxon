@@ -397,7 +397,7 @@ type MaxonToStdLowering
 		match hlOp 'lower'
 			ret(retVal) then self.emitRetOrErrorReturn(retVal, dstBlock: dstBlock, asTerminator: true)
 			retVoid then self.emitRetVoidOrErrorReturn(dstBlock, asTerminator: true)
-			throwError(errValue, _) then self.lowerThrowError(errValue, dstBlock: dstBlock)
+			throwError(errValue, errIsBoxed) then self.lowerThrowError(errValue, errIsBoxed: errIsBoxed, dstBlock: dstBlock)
 			propagateError(errorFlag) then self.lowerPropagateError(errorFlag, dstBlock: dstBlock)
 			condBranch(cond, thenBlockId, elseBlockId) then self.lowerCondBranch(cond, thenBlockId: thenBlockId, elseBlockId: elseBlockId, dstBlock: dstBlock)
 			branch(targetBlockId) then self.lowerBranch(targetBlockId, dstBlock: dstBlock)
@@ -661,13 +661,28 @@ type MaxonToStdLowering
 		self.emitTerminatorOrBody(dstBlock, op: StdOp.retVoid, asTerminator: asTerminator)
 	end 'emitRetVoidOrErrorReturn'
 
-	// `throw E.case` / `throw e` — the `ordinal + ErrorFlagOrdinalBias` re-encoding lives HERE (the ABI in
-	// one place, per PLAN.md), not in the parser: `errValue` is the caught ordinal (a `throw E.case` literal
-	// or the `(e)` binding), and the flag is `errValue + bias` — the runtime add covering both the
-	// compile-time-constant and the caught-runtime-value case uniformly. The primary register carries a
-	// family-default `0`, which the caller ignores when the flag is non-zero. The parser's `(e)`-binding
-	// DECODE (`flag - bias`) reads the SAME `ErrorFlagOrdinalBias`, so encode and decode cannot drift.
-	function lowerThrowError(errValue ValueId, dstBlock IrBlock)
+	// `throw E.case` / `throw U.case(x)` / `throw e` — the error-flag ENCODE lives HERE (the ABI in one
+	// place, per PLAN.md), not in the parser. `errIsBoxed` (set by the parser, which alone holds the enum
+	// registry that classifies the thrown type) picks the encoding:
+	//   • a BOXED union — `errValue` is the heap-box POINTER, written to the flag VERBATIM. It is non-zero
+	//     (`__mm_alloc` never returns 0), so `flag != 0` still reads "error in flight", and there is NO
+	//     `+ bias` add: the pointer must survive round-trip to the caller's `(e)` binding intact.
+	//   • a SCALAR enum — `errValue` is the ORDINAL, and the flag is `errValue + ErrorFlagOrdinalBias` (the
+	//     runtime add covering both the compile-time-constant `throw E.case` and the caught-runtime-value
+	//     `throw e` uniformly), reserving 0 for "no error".
+	// The primary register carries a family-default `0`, which the caller ignores when the flag is non-zero.
+	// The parser's `(e)`-binding DECODE reads the SAME `errIsBoxed` fact (via `throwsTypeIsBoxedUnion`) and
+	// the SAME `ErrorFlagOrdinalBias`, so encode and decode cannot drift on either.
+	function lowerThrowError(errValue ValueId, errIsBoxed bool, dstBlock IrBlock)
+		// A BOXED error's `errValue` is already the flag (the box pointer) — no `const`/`add`, so the primary
+		// `0` is the only op. A SCALAR error emits `bias`, `flag = errValue + bias`, then the primary `0`, in
+		// that order so its ValueId numbering and op sequence — and therefore its emitted code — are byte-for-
+		// byte what they were before boxed errors existed (the scalar goldens must not move).
+		if errIsBoxed 'boxed'
+			let boxedDefault = self.emitZeroConst(dstBlock)
+			self.stdModule.setTerminator(dstBlock, op: StdOp.errorReturn(boxedDefault, errorFlagId: errValue))
+			return
+		end 'boxed'
 		let bias = self.mintStdValueId()
 		self.stdModule.appendOp(dstBlock, op: StdOp.const(bias, value: ErrorFlagOrdinalBias, valueType: StdType.i64))
 		let flag = self.mintStdValueId()

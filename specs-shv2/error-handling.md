@@ -762,8 +762,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: error.assoc-value-throw-catch -->
-<!-- [wave2-managed] union error payload -->
+<!-- test: error.assoc-value-throw-catch -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -796,8 +795,7 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: error.assoc-value-throw-catch-2 -->
-<!-- [wave2-managed] union error payload -->
+<!-- test: error.assoc-value-throw-catch-2 -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -905,8 +903,7 @@ end 'risky'
 7
 ```
 
-<!-- disabled-test: error.otherwise-block-reused-binding -->
-<!-- [wave2-managed] union error payload + managed (e) binding -->
+<!-- test: error.otherwise-block-reused-binding -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -1245,4 +1242,90 @@ end 'main'
 ```
 ```exitcode
 7
+```
+
+
+<!-- test: error.string-payload-throw-catch -->
+```maxon
+
+// A MANAGED (String) payload NESTED in an error union — the only shape that proves the
+// caught box's cascade drops the payload before freeing the box. `throw E.failed("boom")`
+// hands the box to the caller; `otherwise (e)` adopts it; `match e { failed(m) ... }` moves
+// the String out (using it, then dropping it at the arm's end) and the box is freed once by
+// its `__destruct_E` cascade (which null-guards the moved-out slot). A leak or double-free of
+// either the String or the box is exit 101; a clean `"boom".byteLength()` is 4.
+union E implements Error
+	failed(msg String)
+end 'E'
+
+function mk() returns ExitCode throws E
+	throw E.failed("boom")
+end 'mk'
+
+function main() returns ExitCode
+	var n = 0 as ExitCode
+	try mk() otherwise (e) 'h'
+		match e 'm'
+			failed(msg) then n = msg.byteLength() as ExitCode
+		end 'm'
+	end 'h'
+	return n
+end 'main'
+```
+```exitcode
+4
+```
+
+<!-- test: error.otherwise-no-binding-boxed-decref -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+// A binding-less `otherwise` block catching a BOXED (associated-value) error must decref the
+// transferred box exactly once — the handler names no `e`, so the release is implicit. (Positional
+// twin of throw-transfers-ownership.md's `propagate-throw-otherwise-no-binding-decrefs`, which the
+// corpus writes with a labeled union-case argument shv2 does not yet parse.) A leak or double-free
+// of the box is exit 101; a clean fall-through returns 5.
+union LexErr implements Error
+	problem(code Integer)
+end 'LexErr'
+
+function tokenize() returns Integer throws LexErr
+	throw LexErr.problem(13)
+end 'tokenize'
+
+function main() returns ExitCode
+	var ran = 0 as ExitCode
+	try tokenize() otherwise 'noBinding'
+		ran = 5
+	end 'noBinding'
+	return ran
+end 'main'
+```
+```exitcode
+5
+```
+
+<!-- test: error.throw-borrowed-union-unsupported -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+// Throwing a BORROWED union value (a union parameter) would hand its box to the caller while this
+// function's own caller — the box's owner — still frees it: a double free. A borrowed aggregate has no
+// clone to transfer, so it is refused until cross-call consume (Wave 2c+), the throw twin of the
+// borrowed-aggregate RETURN refusal.
+union Fault implements Error
+	bad(code Integer)
+end 'Fault'
+
+function rethrow(e Fault) returns Integer throws Fault
+	throw e
+end 'rethrow'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: specs/fragments/error-handling/error.throw-borrowed-union-unsupported.test:13:2: Unsupported: throwing a borrowed union value — a union parameter (or a re-borrow of one) is a heap box the caller would adopt and free while the borrow's own owner frees it too, a double free. Throw an OWNED value (a fresh `throw U.case(x)` or a caught `(e)` binding); consuming a borrowed union to throw it arrives with cross-call consume
 ```
