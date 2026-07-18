@@ -4,10 +4,10 @@
 // format specifies. StdToWasm (agent A2) codes against the API here and NEVER touches a raw
 // opcode byte or a LEB128 immediate — that split is the whole point of this file.
 //
-// SCOPE: the scalar slice (integer/bool arithmetic, comparisons, structured control flow,
-// calls). Only the opcodes and sections that slice needs are here — no tables, no data
-// segments, no float ALU, no narrow loads/stores, no bulk memory. Those grow the file when
-// their milestone lands, appended the way v1's WasmBinary grew.
+// SCOPE: the scalar slice (integer/bool AND f64 arithmetic, comparisons, structured control
+// flow, calls). Only the opcodes and sections that slice needs are here — no tables, no data
+// segments, no narrow loads/stores, no bulk memory. Those grow the file when their milestone
+// lands, appended the way v1's WasmBinary grew (the f64 band was added exactly this way).
 //
 // TWO CONTRACT DEVIATIONS, both forced (see the CONTRACT §3 Seam 1):
 //   • `end()` → `endOp()`. `end` is a reserved block-delimiter keyword (Lexer TokenKind.end),
@@ -104,7 +104,8 @@ end 'writeSleb128'
 
 // --- Value types ---
 // The wasm value types the scalar slice produces. i32 backs i1/i8..i32; i64 backs i64/u64;
-// the floats arrive with their milestone. A2 chooses the width per op (see CONTRACT §4).
+// f64 backs a Maxon `float`. f32 is declared for completeness but nothing produces one (the
+// language's `float` is f64), so no f32 ALU exists in this file. A2 chooses the width per op.
 export enum WasmValType
 	i32
 	i64
@@ -205,6 +206,38 @@ let opI64ShrU = 0x88
 let opI32WrapI64 = 0xA7
 let opI64ExtendI32S = 0xAC
 let opI64ExtendI32U = 0xAD
+
+// The f64 band, appended the way v1's WasmBinary grew — floats need no runtime, no `.rdata`
+// constant pool and no data section (unlike x64/arm64, which stash a double's bits in `.rdata`
+// and load them): wasm has a native f64.const immediate and a native f64 ALU.
+//
+// `f64.const` (0x44) is FIXED-WIDTH — 8 raw little-endian IEEE-754 bytes, NOT an SLEB128 like the
+// integer consts. Mixing the two up is a silent instantiate-time failure, so the width is
+// load-bearing exactly as the LEB128 choice is.
+let opF64Const = 0x44
+
+// f64 compares (two f64 → i32 bool). wasm carries IEEE-754 unordered semantics natively: each
+// relational predicate is FALSE when either operand is NaN, and `f64.ne` is TRUE — the NaN-safe
+// answer the native backends build by hand (the `ucomisd` parity dance), delivered by one opcode.
+let opF64Eq = 0x61
+let opF64Ne = 0x62
+let opF64Lt = 0x63
+let opF64Gt = 0x64
+let opF64Le = 0x65
+let opF64Ge = 0x66
+
+// f64 ALU (two f64 → f64). Float division is IEEE-754 (inf/nan, never a trap), which is why it
+// rides the pure `binOp` band rather than the trapping integer `div`/`mod` — see StdDialect.
+let opF64Add = 0xA0
+let opF64Sub = 0xA1
+let opF64Mul = 0xA2
+let opF64Div = 0xA3
+
+// int ↔ f64 conversions. `i64.trunc_f64_s` truncates an f64 toward zero to a signed i64 — the
+// `_s`/TRUNCATING form (not a rounding one), which is why it is right for `trunc()`.
+// `f64.convert_i64_s` widens a signed i64 to f64.
+let opI64TruncF64S = 0xB0
+let opF64ConvertI64S = 0xB9
 
 // --- WasmBody: a function body under construction ---
 // Each method APPENDS the encoded instruction(s) to the body's byte buffer. `bytes()` returns
@@ -474,6 +507,68 @@ export type WasmBody
 	export function i32Eqz()
 		self.buf.push(opI32Eqz)
 	end 'i32Eqz'
+
+	// f64 constant. `v` is the double's IEEE-754 bit pattern reinterpreted as a signed integer
+	// (the ParsedInt a `const` op carries — the SAME value the `.data`/`.rdata` scalar serializer
+	// renders), written as 8 RAW little-endian bytes. Fixed-width, NOT SLEB128: `f64.const` is the
+	// one const opcode whose immediate is not a LEB128.
+	export function f64Const(v ParsedInt)
+		self.buf.push(opF64Const)
+		writeQword(self.buf, value: v as MachineWord)
+	end 'f64Const'
+
+	// f64 ALU (two f64 -> f64).
+	export function f64Add()
+		self.buf.push(opF64Add)
+	end 'f64Add'
+
+	export function f64Sub()
+		self.buf.push(opF64Sub)
+	end 'f64Sub'
+
+	export function f64Mul()
+		self.buf.push(opF64Mul)
+	end 'f64Mul'
+
+	export function f64Div()
+		self.buf.push(opF64Div)
+	end 'f64Div'
+
+	// f64 compares (two f64 -> i32 bool), NaN-safe per IEEE-754 (see the opcode band).
+	export function f64Eq()
+		self.buf.push(opF64Eq)
+	end 'f64Eq'
+
+	export function f64Ne()
+		self.buf.push(opF64Ne)
+	end 'f64Ne'
+
+	export function f64Lt()
+		self.buf.push(opF64Lt)
+	end 'f64Lt'
+
+	export function f64Gt()
+		self.buf.push(opF64Gt)
+	end 'f64Gt'
+
+	export function f64Le()
+		self.buf.push(opF64Le)
+	end 'f64Le'
+
+	export function f64Ge()
+		self.buf.push(opF64Ge)
+	end 'f64Ge'
+
+	// int <-> f64 conversions. `f64ConvertI64S` reads a signed i64 and produces f64 (siToFp);
+	// `i64TruncF64S` reads an f64 and produces a signed i64, TRUNCATING toward zero (fpToSi /
+	// `trunc()`).
+	export function f64ConvertI64S()
+		self.buf.push(opF64ConvertI64S)
+	end 'f64ConvertI64S'
+
+	export function i64TruncF64S()
+		self.buf.push(opI64TruncF64S)
+	end 'i64TruncF64S'
 
 	// The raw instruction bytes — NO local declarations, NO trailing `end`. addFunction frames
 	// the complete body around this stream.

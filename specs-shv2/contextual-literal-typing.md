@@ -265,6 +265,7 @@ end 'main'
 ```
 
 <!-- test: float-vs-float -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let a = 3.14

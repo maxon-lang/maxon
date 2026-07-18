@@ -201,8 +201,8 @@ end 'buildCalleeParamTypesMap'
 // ⭐ THE ONE DOOR from a Std type to a wasm valtype. Everything up to 32 bits lives in an
 // i32 wasm local (wasm has no sub-word local); i64/u64 in an i64; the floats map straight
 // across. `i1` (a bool) is an i32, which is what `condBranch`/`if` consume and what a compare
-// produces. Floats are out of the scalar slice, but the mapping is total so a stray float
-// value is misclassified nowhere — the op that would use it panics instead.
+// produces. A Maxon `float` is an f64, so f64 is the float valtype every float op selects; the
+// f32 mapping is total for classification completeness, but nothing produces an f32 value.
 function wasmValTypeOf(t StdType) returns WasmValType
 	return match t 'w'
 		i1 gives WasmValType.i32
@@ -220,15 +220,27 @@ function wasmValTypeOf(t StdType) returns WasmValType
 end 'wasmValTypeOf'
 
 // True when an integer op of type `t` selects the i64.* instruction family rather than i32.*.
-// A float `t` reaching an integer-op emitter is out of the scalar slice — panic naming `what`.
+// A float `t` reaching here means an integer-op emitter did not take its float path first — a
+// lowering bug, not an out-of-slice case — so it panics naming `what`.
 function isWideInt(t StdType, what String) returns bool
 	match wasmValTypeOf(t) 'w'
 		i32 then return false
 		i64 then return true
 		f32 then panic("wasm: {what} on an f32 operand is not in the scalar slice")
-		f64 then panic("wasm: {what} on an f64 operand is not in the scalar slice")
+		f64 then panic("wasm: {what} on an f64 operand — this integer-op emitter should have taken the float path first")
 	end 'w'
 end 'isWideInt'
+
+// shv2's `float` is f64 THROUGHOUT — the wasm float path, like the native backends
+// (arm64RequireScalarDouble / its x64 twin), is scalar-double only. Nothing in the frontend
+// produces an f32 (a Maxon `float` is an f64), so an f32 reaching a float emitter is a
+// lowering bug, not an unsupported-slice case — and `f64.const`/`f64.*` would encode the wrong
+// width for one silently. This is the one door that says so.
+function requireF64(t StdType, what String)
+	if t != StdType.f64 'notDouble'
+		panic("wasm: {what} on {t.name} — the wasm float path is f64-only (Maxon's `float` is f64); nothing produces an f32")
+	end 'notDouble'
+end 'requireF64'
 
 function funcParamValTypes(func IrFunction) returns WasmValTypeArray
 	var params = WasmValTypeArray.create()
@@ -256,8 +268,12 @@ end 'singletonValTypes'
 // Coerce the value on top of the stack from `from` to `to` when a value's width differs from the
 // width the consuming context requires. The native backends never need this — every value sits in a
 // 64-bit register, so a narrow `ExitCode` return of an `i64` arithmetic result is a no-op there — but
-// wasm's typed stack rejects `i64` where `i32` is declared. Floats are beyond the scalar slice, so
-// only the i32/i64 pair is handled; a signed widen matches `int`'s signedness.
+// wasm's typed stack rejects `i64` where `i32` is declared. A same-valtype coercion (including
+// `f64 -> f64`) is a NO-OP, so a float that already sits at its own width passes through untouched.
+// A CROSS-DOMAIN coercion (int <-> float) is never generated: the frontend inserts an explicit
+// `siToFp`/`fpToSi` op for every domain change (int->int carries none, which is why the i32/i64 pair
+// IS handled here), so an int<->float pair reaching this point is a lowering bug, and the panic
+// names it as one. A signed widen matches `int`'s signedness.
 function coerceOnStack(body WasmBody, from WasmValType, to WasmValType)
 	if from == to 'same'
 		return
@@ -273,7 +289,7 @@ function coerceOnStack(body WasmBody, from WasmValType, to WasmValType)
 		return
 	end 'widen'
 
-	panic("coerceOnStack: unsupported wasm valtype coercion {from.name} -> {to.name} (float coercions are beyond the scalar slice)")
+	panic("coerceOnStack: {from.name} -> {to.name} crosses the int/float domain with no explicit conversion — the frontend inserts siToFp/fpToSi for every domain change, so this is a lowering bug")
 end 'coerceOnStack'
 
 // ==========================================================================
@@ -299,9 +315,9 @@ end 'setValtype'
 
 // The valtype of a unary op's RESULT. `neg`/`bitNot`/`logicalNot` compute what they consume;
 // the two conversions INVERT (`operandType` is always the source — `siToFp` reads an int and
-// yields f64, `fpToSi` reads f64 and yields an int), so their result type is not `operandType`.
-// The conversions are out of the scalar slice, but the mapping is kept correct so the table is
-// never a source of a wrong classification.
+// yields f64, `fpToSi` reads f64 and yields an int), so their result type is NOT `operandType`.
+// Reading `operandType` as the result here would put the conversion's result in the wrong local
+// class (an f64 result recorded i64, or the reverse) — see StdUnaryOpcode's header.
 function unaryResultValType(opcode StdUnaryOpcode, operandType StdType) returns WasmValType
 	return match opcode 'k'
 		neg gives wasmValTypeOf(operandType)
@@ -685,9 +701,23 @@ type WasmFuncEmitter
 	end 'emitBodyOp'
 
 	function emitConst(resultId ValueId, value ParsedInt, valueType StdType)
-		self.emitIntConst(isWideInt(valueType, what: "const"), value: value)
+		if stdTypeIsFloat(valueType) 'float'
+			self.emitFloatConst(value, valueType: valueType)
+		end 'float' else 'int'
+			self.emitIntConst(isWideInt(valueType, what: "const"), value: value)
+		end 'int'
 		self.body.localSet(resultId as Wasm32Index)
 	end 'emitConst'
+
+	// Materialize an f64 constant. `value` is the double's IEEE-754 bits reinterpreted as an
+	// integer (the SAME ParsedInt the `.data`/`.rdata` serializer renders — see
+	// GlobalDataTable.scalarImage), which `f64.const` takes as 8 raw little-endian bytes. NO
+	// constant pool: unlike x64/arm64, which stash the bits in `.rdata` and load them, wasm has a
+	// native f64 immediate.
+	function emitFloatConst(value ParsedInt, valueType StdType)
+		requireF64(valueType, what: "const")
+		self.body.f64Const(value)
+	end 'emitFloatConst'
 
 	// Push an integer constant of the selected width. The i32 form takes the low 32 bits of the
 	// value reinterpreted as signed, so a `u32`/negative literal encodes correctly.
@@ -710,6 +740,11 @@ type WasmFuncEmitter
 	end 'pushOperandAt'
 
 	function emitBinOp(resultId ValueId, lhs ValueId, rhs ValueId, opcode StdBinOpcode, operandType StdType)
+		if stdTypeIsFloat(operandType) 'float'
+			self.emitFloatBinOp(resultId, lhs: lhs, rhs: rhs, opcode: opcode, operandType: operandType)
+			return
+		end 'float'
+
 		let wide = isWideInt(operandType, what: "binOp")
 		let opVt = WasmValType.i64 if wide else WasmValType.i32
 		self.pushOperandAt(lhs, targetVt: opVt)
@@ -717,6 +752,28 @@ type WasmFuncEmitter
 		self.emitBinOpcode(opcode, wide: wide)
 		self.body.localSet(resultId as Wasm32Index)
 	end 'emitBinOp'
+
+	// A FLOAT binary op — add/sub/mul, and `div` (float division rides `binOp` because it is
+	// IEEE-754 pure, never a trap, unlike the integer `StdOp.div`). Both operands sit at f64; the
+	// bitwise/shift opcodes have no float form and are a lowering bug here (rejected at the Maxon
+	// tier for a float operand). Mirrors arm64's `lowerFloatBinOp`.
+	function emitFloatBinOp(resultId ValueId, lhs ValueId, rhs ValueId, opcode StdBinOpcode, operandType StdType)
+		requireF64(operandType, what: "binOp")
+		self.pushOperandAt(lhs, targetVt: WasmValType.f64)
+		self.pushOperandAt(rhs, targetVt: WasmValType.f64)
+		self.emitFloatBinOpcode(opcode)
+		self.body.localSet(resultId as Wasm32Index)
+	end 'emitFloatBinOp'
+
+	function emitFloatBinOpcode(opcode StdBinOpcode)
+		match opcode 'op'
+			add then self.body.f64Add()
+			sub then self.body.f64Sub()
+			mul then self.body.f64Mul()
+			div then self.body.f64Div()
+			bitAnd to shrLogical then panic("wasm: `binOp({opcode.rawValue})` has no float form — the bitwise/shift operators are integer-only and a float operand is rejected at the Maxon tier")
+		end 'op'
+	end 'emitFloatBinOpcode'
 
 	function emitBinOpImm(resultId ValueId, lhs ValueId, imm Imm32, opcode StdBinOpcode)
 		// `binOpImm` carries no operand type; its width is `lhs`'s (the immediate right operand
@@ -767,11 +824,35 @@ type WasmFuncEmitter
 			neg then self.emitNegExpr(operand, wide: isWideInt(operandType, what: "neg"))
 			bitNot then self.emitBitNotExpr(operand, wide: isWideInt(operandType, what: "bitNot"))
 			logicalNot then self.emitLogicalNotExpr(operand)
-			siToFp then panic("wasm: siToFp (int→float conversion) not in scalar slice")
-			fpToSi then panic("wasm: fpToSi (float→int conversion) not in scalar slice")
+			siToFp then self.emitSiToFp(operand, operandType: operandType)
+			fpToSi then self.emitFpToSi(operand, operandType: operandType)
 		end 'op'
 		self.body.localSet(resultId as Wasm32Index)
 	end 'emitUnaryOp'
+
+	// int -> f64 (`promoteToFloat`). ⚠ `operandType` is the SOURCE, an INTEGER — the opcode names
+	// the RESULT (see StdUnaryOpcode's header). `f64.convert_i64_s` reads a signed i64, so a
+	// narrower int source (a promoted i32 ExitCode literal, say) is widened first — the same
+	// width-gap `pushOperandAt` closes for a mixed-width binOp. The result is f64 (the valtype
+	// table records `siToFp` -> f64).
+	function emitSiToFp(operand ValueId, operandType StdType)
+		if stdTypeIsFloat(operandType) 'notInt'
+			panic("wasm: `siToFp` with a FLOAT operand type — a conversion's operandType is its SOURCE, which for siToFp is an integer (the Maxon tier's assertConversionCrossesDomain enforces this)")
+		end 'notInt'
+		self.pushOperandAt(operand, targetVt: WasmValType.i64)
+		self.body.f64ConvertI64S()
+	end 'emitSiToFp'
+
+	// f64 -> int, TRUNCATING toward zero — the `trunc()` bridge nearly every float test ends on.
+	// `operandType` is the SOURCE, an f64. `i64.trunc_f64_s` (the `_s`/trunc form, NOT a rounding
+	// one — `trunc(3.99)` is 3, not 4) yields a signed i64; the result is recorded i64, and a
+	// narrower consumer (`return trunc(x)` into an i32 ExitCode) narrows it through the usual `ret`
+	// coercion.
+	function emitFpToSi(operand ValueId, operandType StdType)
+		requireF64(operandType, what: "fpToSi source")
+		self.pushOperandAt(operand, targetVt: WasmValType.f64)
+		self.body.i64TruncF64S()
+	end 'emitFpToSi'
 
 	// Integer negate as `0 - operand` (wasm has no unary negate). The operand is coerced to the op's
 	// width (from `operandType`, which the result also carries): the frontend can leave it a different
@@ -810,6 +891,11 @@ type WasmFuncEmitter
 	end 'emitLogicalNotExpr'
 
 	function emitCmp(resultId ValueId, lhs ValueId, rhs ValueId, pred StdCmpPred, operandType StdType)
+		if stdTypeIsFloat(operandType) 'float'
+			self.emitFloatCmp(resultId, lhs: lhs, rhs: rhs, pred: pred, operandType: operandType)
+			return
+		end 'float'
+
 		let wide = isWideInt(operandType, what: "cmp")
 		let opVt = WasmValType.i64 if wide else WasmValType.i32
 		self.pushOperandAt(lhs, targetVt: opVt)
@@ -817,6 +903,33 @@ type WasmFuncEmitter
 		self.emitCmpPred(pred, wide: wide)
 		self.body.localSet(resultId as Wasm32Index)
 	end 'emitCmp'
+
+	// A FLOAT compare pops two f64s and pushes an i32 (0/1) — the same i1->i32 bool an integer
+	// compare yields, so its result local is i32 (the valtype table records every `cmp` as i32).
+	// ⭐ NO OPERAND SWAP, NO PARITY TEST: wasm's f64 compares carry IEEE-754 unordered semantics
+	// natively — each relational predicate is FALSE when either operand is NaN and `f64.ne` is TRUE
+	// — which is exactly the NaN-safe answer x64's `ucomisd`/`jp` dance and arm64's float condition
+	// family build by hand. One opcode delivers it. (There is no float `cmpImm`: `binOpImm`/`cmpImm`
+	// are integer-only — no SSE/wasm compare takes an encoded immediate — so `foldConstOperands`
+	// never folds a float rhs, and this emitter is the only float-compare path.)
+	function emitFloatCmp(resultId ValueId, lhs ValueId, rhs ValueId, pred StdCmpPred, operandType StdType)
+		requireF64(operandType, what: "cmp")
+		self.pushOperandAt(lhs, targetVt: WasmValType.f64)
+		self.pushOperandAt(rhs, targetVt: WasmValType.f64)
+		self.emitFloatCmpPred(pred)
+		self.body.localSet(resultId as Wasm32Index)
+	end 'emitFloatCmp'
+
+	function emitFloatCmpPred(pred StdCmpPred)
+		match pred 'p'
+			eq then self.body.f64Eq()
+			ne then self.body.f64Ne()
+			lt then self.body.f64Lt()
+			gt then self.body.f64Gt()
+			le then self.body.f64Le()
+			ge then self.body.f64Ge()
+		end 'p'
+	end 'emitFloatCmpPred'
 
 	function emitCmpImm(resultId ValueId, lhs ValueId, imm Imm32, pred StdCmpPred)
 		// Like `binOpImm`, `cmpImm` carries no operand type — the compare width is `lhs`'s.

@@ -91,6 +91,7 @@ arrives.
 ## Tests
 
 <!-- test: gt-else-edge-phi -->
+<!-- targets: wasm32-wasi -->
 The single-jump relational case. `r` is assigned only in the then-branch, so the merge block
 takes a phi and the ELSE edge carries `r`'s incoming `7`. `3.5 > 9.5` is false, so the else
 edge is the one taken and 7 is the value that must arrive.
@@ -110,6 +111,7 @@ end 'main'
 ```
 
 <!-- test: lt-operand-swap -->
+<!-- targets: wasm32-wasi -->
 `<` is lowered by SWAPPING the operands and emitting the `above` family, so this must agree
 with `gt-else-edge-phi` read backwards. A lowering that instead emitted `jb` would still
 pass THIS test — only `lt-nan-is-false` below can tell the two apart — so the pair has to be
@@ -130,6 +132,7 @@ end 'main'
 ```
 
 <!-- test: le-boundary-equal -->
+<!-- targets: wasm32-wasi -->
 `<=` swaps to `jae`, whose ZF=1 case is the one that distinguishes it from `ja`. Equal
 operands take the then-branch.
 ```maxon
@@ -148,6 +151,7 @@ end 'main'
 ```
 
 <!-- test: eq-ordered-else-edge-phi -->
+<!-- targets: wasm32-wasi -->
 `==` on two ORDERED, unequal operands: the `jp` is not taken, the `je` is not taken, and the
 else edge is reached by the fallthrough out of the SECOND block. That is the edge v1 got
 right. `r`'s incoming `7` must arrive on it.
@@ -167,6 +171,7 @@ end 'main'
 ```
 
 <!-- test: eq-ordered-then-edge-phi -->
+<!-- targets: wasm32-wasi -->
 The same lowering with the `je` TAKEN — the then edge, out of the second block, past a phi.
 ```maxon
 function main() returns ExitCode
