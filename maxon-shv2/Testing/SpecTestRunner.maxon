@@ -22,6 +22,16 @@
 let SpecFileExtension = ".md"
 let MaxonFragmentExtension = ".maxon"
 let TempSubdirName = ".spec-tmp"
+
+// A multi-file test's staged source DIRECTORY hangs off `<tempDir>/<name>.src`, NOT `<tempDir>/<name>`
+// — because `<tempDir>/<name>` is exactly the `-o` output base (`exeBase`, runOneTest). With no suffix
+// the two collide: on a host whose `executableExtension` is EMPTY (macOS, Linux) `build <dir> -o <dir>`
+// resolves the exe path back onto the source directory, the compile reports success but writes no
+// runnable file, and spawning the directory fails (126). x64-windows only escaped it because its
+// `.exe` suffix made the output land beside the directory rather than on it. The suffix makes the
+// source and the exe SIBLINGS on every host; it never reaches a golden (every compiled path is
+// normalized to `<fragment>`), so the committed x64 fragments are byte-unchanged.
+let MultiFileSourceDirSuffix = ".src"
 let DraftStatus = "draft"
 let BuildSubcommand = "build"
 let OutputFlag = "-o"
@@ -447,7 +457,8 @@ end 'stageTest'
 // on its own leftovers" is a failure this project has already had twice (OPEN.md #6). Whatever this
 // run did not write, this run removes.
 function stageSourceFiles(tempDir FilePath, test SpecTest) returns StagingResult
-	let testDir = tempDir.join(test.name)
+	// `.src`-suffixed so it never equals `exeBase` (`<tempDir>/<name>`) — see MultiFileSourceDirSuffix.
+	let testDir = tempDir.join("{test.name}{MultiFileSourceDirSuffix}")
 	if not Directory.create(testDir) 'noTestDir'
 		return StagingResult.failed("could not create source directory {testDir.toString()}")
 	end 'noTestDir'
