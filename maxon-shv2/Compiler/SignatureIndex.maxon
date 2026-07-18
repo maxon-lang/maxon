@@ -681,6 +681,36 @@ export function payloadClassIsString(class PayloadClass) returns bool
 	end 'c'
 end 'payloadClassIsString'
 
+// Does a classified type OWN A HEAP BOX — a `managed` (String or struct box) OR a `nestedUnion` (a
+// boxed union). BROADER than `payloadClassIsManaged` (which is `managed` only): a boxed union owns its
+// box even though its OWN destructor cascade is a later rung, so "does a value of this type need a
+// drop?" is true for it too. This is the type-level twin of the parser's value-keyed `valueIsManagedHeap`
+// (String / struct box / boxed union), routed through `classifyUnionPayload` so the two answer "owns
+// heap" with one classification. Read by `returnTypeOwnsHeapBox` (see below).
+export function payloadClassOwnsHeapBox(class PayloadClass) returns bool
+	return match class 'c'
+		managed gives true
+		nestedUnion gives true
+		scalar gives false
+		floatPayload gives false
+		undeclaredName gives false
+	end 'c'
+end 'payloadClassOwnsHeapBox'
+
+// ⭐ **DOES A FUNCTION'S RETURN TYPE OWN A HEAP BOX THAT ITS CALLER MUST DROP** — String / struct box /
+// boxed union, the exact set `valueIsManagedHeap` names at a value. Asked at a function SIGNATURE (in the
+// real parse, where the type is still `named`/`structRef`/`string` and `classifyUnionPayload` can resolve
+// it — `resolveTypes` later ERASES a union to `integer`, so this question cannot be asked once that pass
+// has run). Its one caller rejects a THROWING function with such a return type: a `try`'s error edge binds
+// the result register to nothing, so a managed result adopted from it has nothing valid to drop or hand
+// back (P1.4b wave 2 implements managed error values). A `void` return owns nothing.
+export function returnTypeOwnsHeapBox(signatures ProgramSignatures, typeNames TypeNameInterner, ret MaxonReturnType) returns bool
+	return match ret 'r'
+		void gives false
+		value(inner) gives payloadClassOwnsHeapBox(classifyUnionPayload(signatures, typeNames: typeNames, fieldType: inner))
+	end 'r'
+end 'returnTypeOwnsHeapBox'
+
 // The CONCRETE storage type a classified payload occupies its slot as — what the `loadIndirect`/
 // `storeIndirect` carries. A managed payload's storage is a `structRef`/`string` (an i64 pointer);
 // float/nested-union are rejected before any store reaches here.

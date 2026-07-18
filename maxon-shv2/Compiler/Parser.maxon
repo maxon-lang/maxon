@@ -3195,6 +3195,22 @@ export type Parser
 		// and the lowering (`ret` → `errorReturn` inside a throwing function) can read it off `func`.
 		let throwsClause = try self.parseOptionalThrowsClause()
 
+		// ⭐ **A THROWING FUNCTION WITH A MANAGED RETURN TYPE IS A DEFERRED MECHANISM (P1.4b wave 2), NOT A
+		// CRASH.** Wave 1 is SCALAR error handling: a `try`'s error edge binds the result register to
+		// nothing, so a call site adopting a MANAGED result (String / struct box / boxed union) has nothing
+		// valid on that edge to drop or hand back — a segfault for a String, a "use dominates its def"
+		// register-allocation panic for a struct/union box. Every OTHER unsupported error construct this rung
+		// rejects cleanly; this one was left to crash. Reject it here, at the declaration (like
+		// `checkMainCannotThrow`'s E3054), rather than at each call site — the signature is what is
+		// unsupported. It MUST be here and not in `semanticCheck`: `resolveTypes` runs before that pass and
+		// erases a union return type to `integer` (TypeResolution's enum arm), so a boxed-union return is no
+		// longer distinguishable there; in the real parse the type is still `named` and `classifyUnionPayload`
+		// resolves it. `returnTypeOwnsHeapBox` reuses the same classification the construct/drop sites do, so
+		// this guard fires on EXACTLY the return types that crash and no scalar (Integer/ExitCode/bool/enum).
+		if throwsClauseIsThrowing(throwsClause) and returnTypeOwnsHeapBox(self.signatures, typeNames: self.artifact.typeNames, ret: returnType) 'managedThrowingReturn'
+			throw ParseError.unsupported("a throwing function with a managed return type (String, struct, or union) is not yet supported — its error path yields no value, so a managed result would have nothing valid to drop; return a scalar and signal failure through the thrown error (managed error values arrive at P1.4b wave 2)", line: nameTok.line, column: nameTok.column)
+		end 'managedThrowingReturn'
+
 		// Fresh per-function value numbering, seeded at the function's paramCount so
 		// parameter ids occupy 0..paramCount-1 by Std-ABI convention (a body value
 		// then starts at paramCount — see IrValueId's ValueIdRef contract). The value-TYPE

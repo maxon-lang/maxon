@@ -430,6 +430,28 @@ end 'main'
 error E3054: specs/fragments/error-handling/error.main-cannot-throw.test:7:10: main cannot throw: 'main'
 ```
 
+<!-- test: error.managed-return-throws-unsupported -->
+```maxon
+// A throwing function whose return type is MANAGED (a String, a struct box, or a
+// boxed union) has no value to hand back on the error path, so its adopted result
+// has nothing valid to drop. Rejected at the declaration until P1.4b wave 2.
+enum E implements Error
+	bad
+end 'E'
+
+function mk() returns String throws E
+	throw E.bad
+end 'mk'
+
+function main() returns ExitCode
+	let s = try mk() otherwise "x"
+	return s.byteLength()
+end 'main'
+```
+```maxoncstderr
+error E2015: specs/fragments/error-handling/error.managed-return-throws-unsupported.test:9:10: Unsupported: a throwing function with a managed return type (String, struct, or union) is not yet supported — its error path yields no value, so a managed result would have nothing valid to drop; return a scalar and signal failure through the thrown error (managed error values arrive at P1.4b wave 2)
+```
+
 <!-- test: error.otherwise-type-mismatch -->
 ```maxon
 
