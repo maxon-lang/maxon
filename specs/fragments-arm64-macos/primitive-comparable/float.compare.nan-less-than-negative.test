@@ -1,6 +1,8 @@
 // Test: float.compare.nan-less-than-negative
 function main() returns ExitCode
-	let nan = 0.0 / 0.0
+	// NaN from overflow (inf - inf), not division — see nan-less-than-normal.
+	let inf = 1.0e308 * 10.0
+	let nan = inf - inf
 	let x = -999999.0
 	let result = nan.compare(x)
 	match result 'check'
@@ -17,12 +19,13 @@ module {
   func @main() -> u8 {
   entry:
     arm64.prologue stack_size=48
-    arm64.fldr d0, [__float_0]
-    arm64.fldr d1, [__float_0]
-    arm64.fdiv d2, d0, d1
-    arm64.fldr d3, [__float_-999999]
-    arm64.fmov d0, d2
-    arm64.fmov d1, d3
+    arm64.fldr d0, [__float_1E+308]
+    arm64.fldr d1, [__float_10]
+    arm64.fmul d2, d0, d1
+    arm64.fsub d3, d2, d2
+    arm64.fldr d4, [__float_-999999]
+    arm64.fmov d0, d3
+    arm64.fmov d1, d4
     arm64.bl stdlib.float.compare
     arm64.str x0, [x29, #-8]
     arm64.b main.check_0.cmp0

@@ -1,7 +1,10 @@
 // Test: float.compare.nan-nan-equal
 function main() returns ExitCode
-	let a = 0.0 / 0.0
-	let b = 0.0 / 0.0
+	// Two NaNs from overflow (inf - inf), not division — see nan-less-than-normal.
+	let infA = 1.0e308 * 10.0
+	let a = infA - infA
+	let infB = 1.0e308 * 10.0
+	let b = infB - infB
 	let result = a.compare(b)
 	match result 'check'
 		lessThan then return 1
@@ -17,14 +20,16 @@ module {
   func @main() -> u8 {
   entry:
     arm64.prologue stack_size=48
-    arm64.fldr d0, [__float_0]
-    arm64.fldr d1, [__float_0]
-    arm64.fdiv d2, d0, d1
-    arm64.fldr d3, [__float_0]
-    arm64.fldr d4, [__float_0]
-    arm64.fdiv d5, d3, d4
-    arm64.fmov d0, d2
-    arm64.fmov d1, d5
+    arm64.fldr d0, [__float_1E+308]
+    arm64.fldr d1, [__float_10]
+    arm64.fmul d2, d0, d1
+    arm64.fsub d3, d2, d2
+    arm64.fldr d4, [__float_1E+308]
+    arm64.fldr d5, [__float_10]
+    arm64.fmul d6, d4, d5
+    arm64.fsub d7, d6, d6
+    arm64.fmov d0, d3
+    arm64.fmov d1, d7
     arm64.bl stdlib.float.compare
     arm64.str x0, [x29, #-8]
     arm64.b main.check_0.cmp0

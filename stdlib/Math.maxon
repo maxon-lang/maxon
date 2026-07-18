@@ -39,7 +39,10 @@ export type Math
 		while n < 12.0 'series'
 			// Next term: multiply by -x^2 / ((2n)(2n+1))
 			let two_n = 2.0 * n
-			term = term * (-x_squared) / (two_n * (two_n + 1.0))
+			// `n >= 1`, so `two_n >= 2` and the divisor `(2n)(2n+1) >= 6`. Float `/` is fallible at
+			// the type level with no float ranged type to express "always positive", so the guaranteed-
+			// safe divide rides `try`; the `otherwise` is unreachable.
+			term = try (term * (-x_squared) / (two_n * (two_n + 1.0))) otherwise panic("sin series divisor (2n)(2n+1) is >= 6")
 			sum = sum + term
 			n = n + 1.0
 		end 'series'
@@ -82,7 +85,9 @@ export type Math
 		while n < 12.0 'series'
 			// Next term: multiply by -x^2 / ((2n-1)(2n))
 			let two_n = 2.0 * n
-			term = term * (-x_squared) / ((two_n - 1.0) * two_n)
+			// `n >= 1`, so `two_n >= 2` and the divisor `(2n-1)(2n) >= 2`. Guaranteed-safe divide with
+			// no ranged type to prove it, so it rides `try`; the `otherwise` is unreachable.
+			term = try (term * (-x_squared) / ((two_n - 1.0) * two_n)) otherwise panic("cos series divisor (2n-1)(2n) is >= 2")
 			sum = sum + term
 			n = n + 1.0
 		end 'series'
@@ -122,7 +127,9 @@ export type Math
 		while k < 20.0 'series'
 			term = term * val
 			let k_float = k
-			term = term / k_float
+			// `k` starts at 1.0 and only increments, so `k_float >= 1`. Safe divide, no ranged type to
+			// prove it — rides `try`, `otherwise` unreachable.
+			term = try (term / k_float) otherwise panic("exp series divisor k is >= 1")
 			sum = sum + term
 			k = k + 1
 		end 'series'
@@ -135,7 +142,9 @@ export type Math
 
 		// Handle negative input
 		if is_negative 'invert'
-			result = 1.0 / result
+			// `result` is exp(val) for val >= 0, a sum seeded at 1.0 with non-negative terms, so
+			// `result >= 1`. Safe divide with no ranged type to prove it — rides `try`, unreachable otherwise.
+			result = try (1.0 / result) otherwise panic("exp result is >= 1 before inversion")
 		end 'invert'
 
 		return result
@@ -173,16 +182,20 @@ export type Math
 		// where z = (y-1)/(y+1), converges for all y > 0
 		let num = y - 1.0
 		let den = y + 1.0
-		let z = num / den
+		// `den = y + 1.0` with `y > 0`, so `den > 1`. Safe divide, no ranged type to prove it —
+		// rides `try`, `otherwise` unreachable.
+		let z = try (num / den) otherwise panic("log series divisor y+1 is > 1")
 		let z_squared = z * z
-		var term = num / den
+		var term = try (num / den) otherwise panic("log series divisor y+1 is > 1")
 		var sum = term
 
 		// Compute first 20 terms for good precision
 		for k in 1 upto 20 'series'
 			term = term * z_squared
 			let divisor = 2.0 * k + 1.0
-			sum = sum + term / divisor
+			// `k >= 1`, so `divisor = 2k+1 >= 3`. Safe divide, no ranged type to prove it — rides
+			// `try`, `otherwise` unreachable.
+			sum = sum + (try (term / divisor) otherwise panic("series divisor 2k+1 is >= 3"))
 		end 'series'
 
 		var result = 2.0 * sum
@@ -247,15 +260,19 @@ export type Math
 		// ln(y) via series: ln(y) = 2 * sum(z^(2k+1)/(2k+1)) where z = (y-1)/(y+1)
 		let num = y - 1.0
 		let den = y + 1.0
-		let z = num / den
+		// `den = y + 1.0` with `y > 0`, so `den > 1`. Safe divide, no ranged type to prove it —
+		// rides `try`, `otherwise` unreachable.
+		let z = try (num / den) otherwise panic("log series divisor y+1 is > 1")
 		let z_squared = z * z
-		var term = num / den
+		var term = try (num / den) otherwise panic("log series divisor y+1 is > 1")
 		var sum = term
 
 		for k in 1 upto 30 'series'
 			term = term * z_squared
 			let divisor = 2.0 * k + 1.0
-			sum = sum + term / divisor
+			// `k >= 1`, so `divisor = 2k+1 >= 3`. Safe divide, no ranged type to prove it — rides
+			// `try`, `otherwise` unreachable.
+			sum = sum + (try (term / divisor) otherwise panic("series divisor 2k+1 is >= 3"))
 		end 'series'
 
 		let ln_y = 2.0 * sum
@@ -289,7 +306,9 @@ export type Math
 			return -1000000000.0
 		end 'div_zero'
 
-		return s / c
+		// `c` is guarded non-zero just above (its sign is unknown, so no single float ranged type
+		// expresses "non-zero"). The guaranteed-safe divide rides `try`; the `otherwise` is unreachable.
+		return try (s / c) otherwise panic("tan: cos(x) is guarded non-zero above")
 	end 'tan'
 
 	/// Calculate base^exponent for Real values
@@ -340,7 +359,10 @@ export type Math
 					var result = 1.0
 					var i = 0.0
 					while i < neg_exp 'div_loop'
-						result = result / base
+						// `base` is guarded non-zero (== 0.0 returns early) and positive (< 0.0 returns
+						// early), but could be < 1, so no float ranged type proves it. Safe divide rides
+						// `try`; the `otherwise` is unreachable.
+						result = try (result / base) otherwise panic("pow: base is guarded positive above")
 						i = i + 1.0
 					end 'div_loop'
 					return result
@@ -363,12 +385,13 @@ export type Math
 
 		let pi_half = 1.5707963267948966
 
-		// For |z| > 1, use atan(z) = sign(z) * π/2 - atan(1/z)
+		// For |z| > 1, use atan(z) = sign(z) * π/2 - atan(1/z). In each branch `|z| > 1`, so the
+		// divide is safe; no float ranged type expresses "magnitude > 1", so it rides `try`.
 		if z > 1.0 'large_pos'
-			return pi_half - Math.atan(1.0 / z)
+			return pi_half - Math.atan(try (1.0 / z) otherwise panic("atan: z > 1 in this branch"))
 		end 'large_pos'
 		if z < -1.0 'large_neg'
-			return -pi_half - Math.atan(1.0 / z)
+			return -pi_half - Math.atan(try (1.0 / z) otherwise panic("atan: z < -1 in this branch"))
 		end 'large_neg'
 
 		// Taylor series for |z| <= 1: atan(z) = z - z^3/3 + z^5/5 - z^7/7 + ...
@@ -380,7 +403,9 @@ export type Math
 		while k < 25.0 'series'
 			term = term * (-z_squared)
 			let divisor = 2.0 * k + 1.0
-			sum = sum + term / divisor
+			// `k >= 1`, so `divisor = 2k+1 >= 3`. Safe divide, no ranged type to prove it — rides
+			// `try`, `otherwise` unreachable.
+			sum = sum + (try (term / divisor) otherwise panic("series divisor 2k+1 is >= 3"))
 			k = k + 1.0
 		end 'series'
 
@@ -395,14 +420,14 @@ export type Math
 		let pi_half = 1.5707963267948966
 
 		if x > 0.0 'x_pos'
-			return Math.atan(y / x)
+			return Math.atan(try (y / x) otherwise panic("atan2: x is guarded non-zero in this branch"))
 		end 'x_pos'
 
 		if x < 0.0 'x_neg'
 			if y >= 0.0 'y_nonneg'
-				return Math.atan(y / x) + pi
+				return Math.atan(try (y / x) otherwise panic("atan2: x is guarded non-zero in this branch")) + pi
 			end 'y_nonneg'
-			return Math.atan(y / x) - pi
+			return Math.atan(try (y / x) otherwise panic("atan2: x is guarded non-zero in this branch")) - pi
 		end 'x_neg'
 
 		// x == 0

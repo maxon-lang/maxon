@@ -2248,6 +2248,11 @@ public static partial class MaxonToStandardConversion {
   ///   • on NON-ZERO, run the real signed/unsigned Div/Rem — byte-for-byte the bare divide the
   ///     provably-non-zero path emits for the same operands.
   ///
+  /// The op's ResultKind selects the operand type: an integer divide compares and divides in i64, a
+  /// FLOAT divide (`__checked_div` with a Float/Float32 result) in f64/f32 — including the zero test,
+  /// which is a FLOAT compare `divisor == 0.0` and NEVER an integer bit-compare, so it catches both
+  /// `+0.0` and `-0.0` (IEEE makes them equal) and stops the ±inf a bare float divide would produce.
+  ///
   /// The block is split entry → {zero, ok} → merge, exactly like the OOB path in LowerManagedMemGet:
   /// both arms store into a result temp the merge reloads, so the caller sees one value whichever
   /// path ran.
@@ -2264,34 +2269,30 @@ public static partial class MaxonToStandardConversion {
     MaxonCallOp? sourceCallOp) {
     if (callee is not ("__checked_div" or "__checked_mod")) return false;
 
-    // The op carries the signedness the divide needs; lowering has already discarded the ranged
-    // type it came from, so it must ride on the op. A checked divide is ALWAYS a try-call, so the
-    // metadata is always present — its absence is a compiler bug, not an input error.
+    // The op carries the operand kind + signedness the divide needs; lowering has already discarded
+    // the ranged type it came from, so it must ride on the op. A checked divide is ALWAYS a try-call,
+    // so the metadata is always present — its absence is a compiler bug, not an input error.
     if (sourceCallOp is not MaxonCheckedDivTryCallOp checkedDiv)
       throw new InvalidOperationException($"'{callee}' must be lowered from a MaxonCheckedDivTryCallOp");
 
-    var dividend = (StdI64)valueMap[args[0]];
-    var divisor = (StdI64)valueMap[args[1]];
+    var kind = checkedDiv.ResultKind!.Value;
+    var dividend = valueMap[args[0]];
+    var divisor = valueMap[args[1]];
 
     // Error flag: divisionByZero (ordinal 0) → 1. Computed once here; both arms and the merge see it.
-    var zeroConst = new StdConstI64Op(0);
-    block.AddOp(zeroConst);
-    var isZero = new StdCmpI64Op("eq", divisor, zeroConst.Result);
-    block.AddOp(isZero);
-    EmitBoundsCheckErrorFlag(block, isZero.Result, 1, valueMap, varTypes, errorFlagValue);
+    var isZero = EmitDivisorZeroTest(block, kind, divisor);
+    EmitBoundsCheckErrorFlag(block, isZero, 1, valueMap, varTypes, errorFlagValue);
 
-    // Result temp, seeded to 0 so the error (zero-divisor) path leaves a defined value.
+    // Result temp, seeded to a typed 0 so the error (zero-divisor) path leaves a defined value.
     var uid = IrContext.Current.NextId();
     var resultTemp = $"__checked_div_result_{uid}";
-    varTypes[resultTemp] = "i64";
-    var seed = new StdConstI64Op(0);
-    block.AddOp(seed);
-    EmitStore(block, seed.Result, resultTemp, varTypes);
+    var seed = EmitNumericZeroConst(block, kind);
+    EmitStore(block, seed, resultTemp, varTypes);
 
     var zeroLabel = $"__div_zero_{uid}";
     var okLabel = $"__div_ok_{uid}";
     var mergeLabel = $"__div_merge_{uid}";
-    block.AddOp(new StdCondBrOp(isZero.Result, zeroLabel, okLabel));
+    block.AddOp(new StdCondBrOp(isZero, zeroLabel, okLabel));
 
     // Zero path: no divide (idiv would fault); the temp is already 0. Branch to merge.
     var zeroBlock = func.Body.AddBlock(zeroLabel);
@@ -2300,11 +2301,7 @@ public static partial class MaxonToStandardConversion {
     // Non-zero path: the real divide, then store to the temp. Reuse the exact factories the bare
     // MaxonBinOp.Div/.Rem path uses, so a checked divide and a bare one emit identical arithmetic.
     block = func.Body.AddBlock(okLabel);
-    var divOp = checkedDiv.IsMod ? MaxonBinOperator.Mod : MaxonBinOperator.Div;
-    var (arithOp, quotient) = checkedDiv.IsUnsigned
-      ? CreateUnsignedIntBinOp(divOp, dividend, divisor)
-      : BinOpFactories[(divOp, MaxonValueKind.Integer)](dividend, divisor);
-    block.AddOp(arithOp);
+    var quotient = EmitCheckedDivideOp(block, checkedDiv, dividend, divisor);
     EmitStore(block, quotient, resultTemp, varTypes);
     block.AddOp(new StdBrOp(mergeLabel));
 
@@ -2314,10 +2311,68 @@ public static partial class MaxonToStandardConversion {
       var mergedFlag = (StdI64)EmitLoad(block, "__error_flag", varTypes);
       valueMap[errorFlagValue] = mergedFlag;
     }
-    var mergedResult = (StdI64)EmitLoad(block, resultTemp, varTypes);
+    var mergedResult = EmitLoad(block, resultTemp, varTypes);
     if (result != null) valueMap[result] = mergedResult;
 
     return true;
+  }
+
+  /// The divisor-is-zero test for a checked divide, dispatched on the operand kind. FLOAT uses a
+  /// float compare `divisor == 0.0` — never an integer bit-compare: IEEE makes `-0.0 == +0.0`, and
+  /// both `x / ±0.0` are the degenerate ±inf the throw exists to replace, so both must read as zero.
+  private static StdBool EmitDivisorZeroTest(IrBlock<StandardOp> block, MaxonValueKind kind, StdValue divisor) {
+    switch (kind) {
+      case MaxonValueKind.Float: {
+        var cmp = new StdCmpF64Op("eq", (StdF64)divisor, (StdF64)EmitNumericZeroConst(block, kind));
+        block.AddOp(cmp);
+        return cmp.Result;
+      }
+      case MaxonValueKind.Float32: {
+        var cmp = new StdCmpF32Op("eq", (StdF32)divisor, (StdF32)EmitNumericZeroConst(block, kind));
+        block.AddOp(cmp);
+        return cmp.Result;
+      }
+      case MaxonValueKind.Integer:
+      case MaxonValueKind.Short: {
+        var cmp = new StdCmpI64Op("eq", (StdI64)divisor, (StdI64)EmitNumericZeroConst(block, kind));
+        block.AddOp(cmp);
+        return cmp.Result;
+      }
+      default:
+        throw new InvalidOperationException($"checked divide over non-numeric kind {kind}");
+    }
+  }
+
+  /// A typed literal 0 for the checked divide's zero test and its result-temp seed. Shorts share the
+  /// integer form: they occupy an i64 register at the Standard tier exactly as integers do.
+  private static StdValue EmitNumericZeroConst(IrBlock<StandardOp> block, MaxonValueKind kind) {
+    switch (kind) {
+      case MaxonValueKind.Float: { var c = new StdConstF64Op(0.0); block.AddOp(c); return c.Result; }
+      case MaxonValueKind.Float32: { var c = new StdConstF32Op(0f); block.AddOp(c); return c.Result; }
+      case MaxonValueKind.Integer:
+      case MaxonValueKind.Short: { var c = new StdConstI64Op(0); block.AddOp(c); return c.Result; }
+      default:
+        throw new InvalidOperationException($"checked divide over non-numeric kind {kind}");
+    }
+  }
+
+  /// The real divide on the non-zero path, dispatched on the op's kind + signedness. Reuses the exact
+  /// factories the bare MaxonBinOp.Div/.Rem path uses, so a checked divide and a provably-safe bare
+  /// one emit identical arithmetic. `mod` is integer-only (no float remainder operator exists).
+  private static StdValue EmitCheckedDivideOp(IrBlock<StandardOp> block,
+      MaxonCheckedDivTryCallOp checkedDiv, StdValue dividend, StdValue divisor) {
+    var divOp = checkedDiv.IsMod ? MaxonBinOperator.Mod : MaxonBinOperator.Div;
+    (StandardOp Op, StdValue Result) emitted = checkedDiv.ResultKind switch {
+      MaxonValueKind.Float => BinOpFactories[(divOp, MaxonValueKind.Float)](dividend, divisor),
+      MaxonValueKind.Float32 => BinOpFactories[(divOp, MaxonValueKind.Float32)](dividend, divisor),
+      MaxonValueKind.Integer or MaxonValueKind.Short => checkedDiv.IsUnsigned
+        ? CreateUnsignedIntBinOp(divOp, (StdI64)dividend, (StdI64)divisor)
+        : BinOpFactories[(divOp, MaxonValueKind.Integer)](dividend, divisor),
+      _ => throw new InvalidOperationException(
+        $"checked divide over non-numeric kind {checkedDiv.ResultKind}"),
+    };
+    block.AddOp(emitted.Op);
+    return emitted.Result;
   }
 
   /// <summary>

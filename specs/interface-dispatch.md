@@ -942,3 +942,44 @@ end 'main'
 ```exitcode
 14
 ```
+
+<!-- test: interface-param-checked-float-divide-survives-specialization -->
+### A possibly-zero FLOAT divide in an interface-param function survives specialization
+The float sibling of the integer case above. Float `/` is throwing too, so a possibly-zero one is
+a `__checked_div` op whose ResultKind is Float; the interface-alias specialization cloner must carry
+that kind through, or the clone strands as a plain try-call the lowering cannot emit.
+```maxon
+typealias Real = float(f64.min to f64.max)
+
+interface Scorer
+	function score() returns Real
+end 'Scorer'
+
+type Alpha implements Scorer
+	let n as Real
+	function score() returns Real
+		return n * 2.0
+	end 'score'
+	static function create(n Real) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Alpha'
+
+function opaque(x Real) returns Real
+	return x
+end 'opaque'
+
+function ratioVia(s Scorer, d Real) returns Real
+	let base = s.score()
+	return try (base / d) otherwise panic("ratioVia: d was 0")
+end 'ratioVia'
+
+function main() returns ExitCode
+	let a = Alpha.create(21.0)
+	let r = ratioVia(a, d: opaque(3.0))
+	return 14 if r == 14.0 else 1
+end 'main'
+```
+```exitcode
+14
+```

@@ -1,6 +1,6 @@
 /// RFC 8259 JSON parser and serializer.
 /// @category Text
-/// 
+///
 /// Maxon disallows recursive struct types (E4014), so JSON values can't be
 /// represented as a directly-recursive union. Instead, a `JsonDoc` owns a flat
 /// arena of `JsonNode`s; arrays and objects reference their children by
@@ -663,7 +663,10 @@ function numberFromBytes(bytes ByteArray, start BytePos, endPos BytePos) returns
 					break
 				end 'stopFrac'
 				fracScale = fracScale * 10.0
-				fracValue = fracValue + (fb - 0x30) / fracScale
+				// `fracScale` is seeded to 1.0 and multiplied by 10.0 immediately above, so it is >= 10
+				// here. Float `/` is fallible with no float ranged type to prove the divisor non-zero,
+				// so the safe divide rides `try`; the `otherwise` is unreachable.
+				fracValue = fracValue + (try ((fb - 0x30) / fracScale) otherwise panic("json parse: fracScale is >= 10"))
 				i = i + 1
 			end 'fracLoop'
 		end 'dot'

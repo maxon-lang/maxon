@@ -166,7 +166,10 @@ end 'main'
 <!-- test: float.compare.nan-less-than-normal -->
 ```maxon
 function main() returns ExitCode
-	let nan = 0.0 / 0.0
+	// NaN from overflow (inf - inf), NOT `0.0 / 0.0` — a literal zero divisor is now a compile
+	// error and a runtime one throws DivisionByZero. Overflow and inf - inf stay silent.
+	let inf = 1.0e308 * 10.0
+	let nan = inf - inf
 	let x = 42.0
 	let result = nan.compare(x)
 	match result 'check'
@@ -183,7 +186,9 @@ end 'main'
 <!-- test: float.compare.normal-greater-than-nan -->
 ```maxon
 function main() returns ExitCode
-	let nan = 0.0 / 0.0
+	// NaN from overflow (inf - inf), not division — see nan-less-than-normal.
+	let inf = 1.0e308 * 10.0
+	let nan = inf - inf
 	let x = 42.0
 	let result = x.compare(nan)
 	match result 'check'
@@ -200,8 +205,11 @@ end 'main'
 <!-- test: float.compare.nan-nan-equal -->
 ```maxon
 function main() returns ExitCode
-	let a = 0.0 / 0.0
-	let b = 0.0 / 0.0
+	// Two NaNs from overflow (inf - inf), not division — see nan-less-than-normal.
+	let infA = 1.0e308 * 10.0
+	let a = infA - infA
+	let infB = 1.0e308 * 10.0
+	let b = infB - infB
 	let result = a.compare(b)
 	match result 'check'
 		lessThan then return 1
@@ -217,7 +225,9 @@ end 'main'
 <!-- test: float.compare.nan-less-than-negative -->
 ```maxon
 function main() returns ExitCode
-	let nan = 0.0 / 0.0
+	// NaN from overflow (inf - inf), not division — see nan-less-than-normal.
+	let inf = 1.0e308 * 10.0
+	let nan = inf - inf
 	let x = -999999.0
 	let result = nan.compare(x)
 	match result 'check'

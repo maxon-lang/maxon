@@ -270,7 +270,10 @@ export function __float_fromString(input String) returns ParsedFloat throws Pars
 						let digit = cp - '0'
 						if pastDot 'after_dot'
 							fracDiv = fracDiv * 10.0
-							fracPart = fracPart + digit / fracDiv
+							// `fracDiv` is seeded to 1.0 and multiplied by 10.0 immediately above, so it
+							// is >= 10 here. Float `/` is fallible with no float ranged type to prove the
+							// divisor non-zero, so the safe divide rides `try`; the `otherwise` is unreachable.
+							fracPart = fracPart + (try (digit / fracDiv) otherwise panic("float parse: fracDiv is >= 10"))
 						end 'after_dot' else 'before_dot'
 							intPart = intPart * 10 + digit
 						end 'before_dot'

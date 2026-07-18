@@ -21,18 +21,26 @@ dialog.
 The fault-handler infrastructure does not yet support `recover()` — once a fault
 fires, the process always exits.
 
-Integer divide-by-zero is NOT one of these faults. Integer `/` and `mod` are
-throwing operations at the language level: a divide whose divisor cannot be proven
-non-zero throws `DivisionByZero`, so the caller must handle it with `try ... otherwise`
-(or propagate it). A divisor proven non-zero — a non-zero literal, or a ranged type
-whose range excludes 0 — compiles to a bare divide with no check. A divisor the
-compiler holds as the constant 0 (`a / 0`) is rejected at compile time. Because the
-failure is in the type system rather than in a CPU trap, the behavior is identical on
-every target: x64 no longer relies on the `idiv` `#DE`, and AArch64 no longer returns
-0 from `SDIV`/`UDIV`. The fault handler still classifies a stray `SIGFPE` it happens to
-receive (e.g. a floating-point trap) to a divide-by-zero panic, but a correctly
-compiled integer divide never reaches it. The nil-pointer (`SIGSEGV`/`SIGBUS`) path
-traps identically on both architectures.
+Divide-by-zero is NOT one of these faults. `/` and integer `mod` are throwing
+operations at the language level: a divide whose divisor cannot be proven non-zero
+throws `DivisionByZero`, so the caller must handle it with `try ... otherwise` (or
+propagate it). A divisor proven non-zero — a non-zero literal, or a ranged type whose
+range excludes 0 — compiles to a bare divide with no check. A divisor the compiler
+holds as the constant 0 (`a / 0`) is rejected at compile time. Because the failure is
+in the type system rather than in a CPU trap, the behavior is identical on every
+target: x64 no longer relies on the `idiv` `#DE`, and AArch64 no longer returns 0 from
+`SDIV`/`UDIV`. The fault handler still classifies a stray `SIGFPE` it happens to receive
+(e.g. a floating-point trap) to a divide-by-zero panic, but a correctly compiled integer
+divide never reaches it. The nil-pointer (`SIGSEGV`/`SIGBUS`) path traps identically on
+both architectures.
+
+Float `/` is fallible on the same terms. `x / 0.0` is `±inf` and `0.0 / 0.0` is `NaN` —
+representable values, but a division by zero is a logic error all the same, so it is
+surfaced in the type rather than silently produced: a possibly-zero float divisor throws
+`DivisionByZero`, a constant `0.0` or `-0.0` divisor (both give `±inf`) is a compile-time
+error, and a non-zero literal divisor is a bare divide. Only division is affected — an
+`inf` or `NaN` from a NON-division source (overflow to `inf`, `inf - inf`, a domain error)
+is still produced silently. Float `mod` does not exist (`mod` is integer-only).
 
 ## Tests
 
@@ -94,6 +102,40 @@ end 'main'
 ```
 ```exitcode
 7
+```
+
+<!-- test: float-divide-by-zero -->
+### Float divide-by-zero throws DivisionByZero, caught with try/otherwise
+```maxon
+typealias Float = float(f64.min to f64.max)
+
+// An opaque source so the divisor is possibly-zero (the compiler cannot fold it,
+// so `100.0 / zero` throws rather than being a compile-time `a / 0.0` error). Float
+// `/` is fallible exactly as integer `/` is: `x / 0.0` would be ±inf — a representable
+// value, but still a logic error — so it is surfaced in the type, not silently produced.
+function opaque(x Float) returns Float
+	return x
+end 'opaque'
+
+function main() returns ExitCode
+	let zero = opaque(0.0)
+	var result = 0
+	try 'work'
+		let q = 100.0 / zero
+		// Unreachable: the divide throws before this runs. `q > 0.0` keeps the value used so the
+		// divide is not elided, without casting a float to the ExitCode.
+		result = 1 if q > 0.0 else 2
+	end 'work'
+	otherwise (e) 'handle'
+		match e 'kind'
+			divisionByZero then result = 42
+		end 'kind'
+	end 'handle'
+	return result as ExitCode
+end 'main'
+```
+```exitcode
+42
 ```
 
 <!-- test: force-segfault -->

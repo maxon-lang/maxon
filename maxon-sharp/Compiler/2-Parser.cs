@@ -6821,6 +6821,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     // A folded constant is a fact about the SSA values of ONE function. Keeping them would not be
     // wrong (ids are unique process-wide), but it would make the map grow with the whole file.
     _intConstValues.Clear();
+    _floatConstValues.Clear();
     _blockCounter = 0;
 
     return func;
@@ -15675,13 +15676,18 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         continue;
       }
 
-      // Integer `/` / `mod` is a throwing operation unless the divisor is provably non-zero. The
+      // `/` (and integer `mod`) is a throwing operation unless the divisor is provably non-zero. The
       // decision is made HERE, at the Maxon level, because the divisor's ranged type / folded value
-      // — the whole basis of the proof — is discarded by lowering. See EmitIntegerDivOrMod.
-      if (resolvedOp is MaxonBinOperator.Div or MaxonBinOperator.Mod
-          && kind is MaxonValueKind.Integer or MaxonValueKind.Short) {
+      // — the whole basis of the proof — is discarded by lowering. See EmitDivOrMod. `mod` is
+      // integer-only (there is no float remainder operator), so only `/` reaches this for floats.
+      var isIntDivMod = resolvedOp is MaxonBinOperator.Div or MaxonBinOperator.Mod
+        && kind is MaxonValueKind.Integer or MaxonValueKind.Short;
+      var isFloatDiv = resolvedOp is MaxonBinOperator.Div
+        && kind is MaxonValueKind.Float or MaxonValueKind.Float32;
+
+      if (isIntDivMod || isFloatDiv) {
         lhs = new ExprResult.Direct(
-          EmitIntegerDivOrMod(resolvedOp, rhs, promotedLhs, promotedRhs, kind, optimalType, opToken));
+          EmitDivOrMod(resolvedOp, rhs, promotedLhs, promotedRhs, kind, optimalType, opToken));
         continue;
       }
 
@@ -17514,6 +17520,8 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     // as a literal) is born here. See _intConstValues.
     if (constValue is long intValue)
       _intConstValues[op.Result] = new FoldedInt(intValue, IsLiteralOp: true);
+    else if (constValue is double floatValue)
+      _floatConstValues[op.Result] = floatValue;
 
     return new ExprResult.Direct(op.Result);
   }
@@ -22125,6 +22133,17 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   private FoldedInt? TryFoldIntConst(MaxonValue value) =>
     _intConstValues.TryGetValue(value, out var folded) ? folded : null;
 
+  /// The float sibling of <see cref="_intConstValues"/>: every SSA value born as a float literal
+  /// (`2.0`, `-0.0`, a resolved top-level float `let`), all through <see cref="EmitConstantLiteral"/>.
+  /// Its ONE reader is the float divide-by-zero proof (<see cref="DivisorIsProvablyNonZero"/>) — the
+  /// float `/` counterpart of the shift-count rule — so a value it misses only ever costs a needless
+  /// `try`, never an unsafe bare divide. Cleared per function with the integer map, for the same reason.
+  private readonly Dictionary<MaxonValue, double> _floatConstValues = [];
+
+  /// The folded float behind `value`, or null when the compiler genuinely cannot see it.
+  private double? TryFoldFloatConst(MaxonValue value) =>
+    _floatConstValues.TryGetValue(value, out var folded) ? folded : null;
+
   /// Fold `lhs <op> rhs` over two integers the parser already holds. Only the operators whose
   /// folded value is TOTAL: a division by zero, and a shift (whose rule is ShiftSemantics', asked
   /// by <see cref="EmitShift"/> and nowhere else), are decided by the code that diagnoses them —
@@ -22149,10 +22168,10 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   /// Materialize `value` as a literal op, remember it, and hand back its SSA value.
   private MaxonValue EmitIntLiteral(long value) => EmitConstantLiteral(value).Value;
 
-  /// Emit an integer `/` or `mod`. THE one place the divide-by-zero policy lives:
+  /// Emit an integer or float `/` (or integer `mod`). THE one place the divide-by-zero policy lives:
   ///
-  ///   • A divisor proven to be ZERO (a folded constant 0) is an unconditional bug — neither
-  ///     recoverable nor safe — and is rejected at compile time (E3103).
+  ///   • A divisor proven to be ZERO (a folded constant 0 / 0.0 / -0.0) is an unconditional bug —
+  ///     neither recoverable nor safe — and is rejected at compile time (E3103).
   ///   • A divisor proven NON-ZERO — a non-zero folded constant, or a ranged type whose range
   ///     excludes 0 — is a bare <see cref="MaxonBinOp"/> Div/Rem, byte-for-byte what this compiler
   ///     emitted before `/` became fallible.
@@ -22160,15 +22179,19 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   ///     desugared to a throwing <c>__checked_div</c> / <c>__checked_mod</c> builtin call that rides
   ///     the existing error path (the `try` requirement, MaxonTryCallOp promotion, error-flag
   ///     routing) with no new operator plumbing.
-  private MaxonValue EmitIntegerDivOrMod(MaxonBinOperator op, ExprResult divisorExpr,
+  ///
+  /// Float `/` is fallible on the SAME terms as integer `/`: `x / 0.0` is ±inf — a representable
+  /// value, but a logic error all the same — so the zero divisor is surfaced in the type rather than
+  /// silently producing an infinity. The proof and the desugar differ only in the numeric kind.
+  private MaxonValue EmitDivOrMod(MaxonBinOperator op, ExprResult divisorExpr,
       MaxonValue dividend, MaxonValue divisor, MaxonValueKind kind, IrType? optimalType, Token opToken) {
-    if (DivisorIsProvablyZero(divisor)) {
+    if (DivisorIsProvablyZero(divisor, kind)) {
       throw new CompileError(ErrorCode.SemanticDivisionByZero,
         $"division by zero: the divisor of '{(op == MaxonBinOperator.Mod ? "mod" : "/")}' is always 0",
         opToken.Line, opToken.Column);
     }
 
-    if (DivisorIsProvablyNonZero(divisorExpr, divisor))
+    if (DivisorIsProvablyNonZero(divisorExpr, divisor, kind))
       return EmitBinOp(op, dividend, divisor, kind, optimalType);
 
     // Possibly-zero divisor: the divide is a throwing operation, so it requires `try` (reusing
@@ -22184,19 +22207,39 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   }
 
   /// A divisor the compiler holds as a compile-time constant 0 (`a / 0`, or `a / z` where `z`
-  /// folded to 0). Always a bug; never routed to the throwing path (see EmitIntegerDivOrMod).
-  private bool DivisorIsProvablyZero(MaxonValue divisor) =>
-    TryFoldIntConst(divisor) is { Value: 0 };
+  /// folded to 0). Always a bug; never routed to the throwing path (see EmitDivOrMod). The float
+  /// arm treats BOTH `0.0` and `-0.0` as zero — `f == 0.0` is true for `-0.0` (IEEE), and both give
+  /// `x / ±0.0 = ±inf`.
+  private bool DivisorIsProvablyZero(MaxonValue divisor, MaxonValueKind kind) =>
+    IsFloatDivKind(kind)
+      ? TryFoldFloatConst(divisor) is { } f && f == 0.0
+      : TryFoldIntConst(divisor) is { Value: 0 };
 
   /// A divisor that can never be zero: a non-zero folded constant, or a ranged type whose range
   /// excludes 0. Such a divide stays a bare Div/Rem (no check, no `try`).
   ///
   /// The ranged-range test mirrors <see cref="IrRangedPrimitiveType"/>: a range excludes 0 iff it
-  /// is wholly positive (`lo > 0`) or wholly negative (`lo < 0 && effectiveUpper < 0`). The `lo < 0`
-  /// guard keeps the unsigned quirk out of the negative arm — `int(0 to u64.max)` rides with
-  /// `hi == -1`, but its `lo == 0` never reaches the `hi < 0` test, so it reads (correctly) as
-  /// including 0.
-  private bool DivisorIsProvablyNonZero(ExprResult divisorExpr, MaxonValue divisor) {
+  /// is wholly positive (`lo > 0`) or wholly negative (`lo < 0 && effectiveUpper < 0`). For integer
+  /// ranges the `lo < 0` guard keeps the unsigned quirk out of the negative arm — `int(0 to u64.max)`
+  /// rides with `hi == -1`, but its `lo == 0` never reaches the `hi < 0` test, so it reads (correctly)
+  /// as including 0. Float ranges have no unsigned form, and a continuum has no `-1` predecessor, so
+  /// the exclusive upper bound is negative iff `hi <= 0` (values approach but never reach `hi`).
+  private bool DivisorIsProvablyNonZero(ExprResult divisorExpr, MaxonValue divisor, MaxonValueKind kind) {
+    if (IsFloatDivKind(kind)) {
+      if (TryFoldFloatConst(divisor) is { } f)
+        return f != 0.0;
+
+      var floatRangedName = DivisorRangedTypeName(divisorExpr, divisor);
+      if (floatRangedName != null && _typeRegistry.TryGetValue(floatRangedName, out var floatRanged)
+          && floatRanged is IrRangedPrimitiveType frpt && frpt.IsFloatBased) {
+        var lo = frpt.FloatLower;
+        var upperNegative = frpt.UpperInclusive ? frpt.FloatUpper < 0 : frpt.FloatUpper <= 0;
+        return lo > 0 || (lo < 0 && upperNegative);
+      }
+
+      return false;
+    }
+
     if (TryFoldIntConst(divisor) is { } folded)
       return folded.Value != 0;
 
@@ -22210,6 +22253,11 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
     return false;
   }
+
+  /// True for the numeric kinds a float `/` produces — the ones whose divide-by-zero proof reads
+  /// <see cref="_floatConstValues"/> and whose lowering emits a float compare and a float divide.
+  private static bool IsFloatDivKind(MaxonValueKind kind) =>
+    kind is MaxonValueKind.Float or MaxonValueKind.Float32;
 
   /// The divisor's ranged-typealias name. Read from the DECLARATION when the divisor is a variable
   /// reference (reliable across blocks, and immune to the value-scan blind spots documented on

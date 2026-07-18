@@ -28,14 +28,15 @@ Multiplication, division, and modulo have higher precedence than addition and su
 
 ### Division by zero
 
-Integer `/` and `mod` are **fallible operations**: dividing by zero is not a silent 0, an
-unhandled panic, or a CPU trap — the failure lives in the type system.
+`/` (and integer `mod`) is a **fallible operation**: dividing by zero is not a silent 0, an
+`inf`/`NaN`, an unhandled panic, or a CPU trap — the failure lives in the type system. This
+holds for **both integer and float** division.
 
-- A divisor the compiler can prove **non-zero** — a non-zero literal (`x / 4`), or a value
-  whose ranged type excludes 0 (`int(1 to 100)`) — compiles to a bare divide with no check.
-- A divisor the compiler cannot prove non-zero (a plain `int`, which includes 0) makes the
-  divide **throw `DivisionByZero`**. Like any throwing operation it must be handled with
-  `try`, or propagated:
+- A divisor the compiler can prove **non-zero** — a non-zero literal (`x / 4`, `x / 2.0`), or a
+  value whose ranged type excludes 0 (`int(1 to 100)`) — compiles to a bare divide with no check.
+- A divisor the compiler cannot prove non-zero (a plain `int`, or a runtime `float`, either of
+  which includes 0) makes the divide **throw `DivisionByZero`**. Like any throwing operation it
+  must be handled with `try`, or propagated:
 
   ```maxon
   let q = try (a / b) otherwise 0        // supply a fallback
@@ -47,11 +48,13 @@ unhandled panic, or a CPU trap — the failure lives in the type system.
   end 'ratio'
   ```
 
-- A divisor the compiler holds as the constant **0** (`a / 0`) is neither recoverable nor
-  safe — it is a bug, and is rejected at compile time.
+- A divisor the compiler holds as the constant **0** — `a / 0`, or a float `a / 0.0` / `a / -0.0`
+  (both give `±inf`) — is neither recoverable nor safe: it is a bug, and is rejected at compile time.
 
-Because the check is in the language rather than in a CPU trap, the behavior is identical on
-every target (float division is unaffected and never throws).
+Because the check is in the language rather than in a CPU trap, the behavior is identical on every
+target. Only DIVISION is fallible: an `inf` or `NaN` produced by a non-division operation (overflow
+to `inf`, `inf - inf`, a domain error) is still produced silently. Float `mod` does not exist —
+`mod` is integer-only.
 ### Example
 
 ```maxon
