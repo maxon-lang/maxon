@@ -456,7 +456,7 @@ serializable-in-order, so a future cache has a stable id space to build on rathe
 | **Errors** | v1's design **verbatim**: dual-register `(value, errorFlag)`. No unwind tables. Already minimal. |
 | **Stdlib lowering** | **Reachability-seeded — lower only the stdlib bodies the program transitively reaches.** *Not an optimization: it is what makes Phase 1 a phase.* See §"The stdlib cone." |
 | **Stdlib fork** | `stdlib-shv2/stdlib/` — ❌ **NOT NEEDED. Re-deferred 2026-07-13 on measurement (P1.0c).** It was un-deferred as the backstop for `Map`, *"if reachability-seeded lowering proves insufficient."* **It proved sufficient** — `Map` is laid out and never codegen'd. The one edge it *could* have cut (`String.trim()` → `CharacterSet` → `Set`) we chose NOT to cut: do the hard things early ⇒ `Set` is in Phase 1 (P1.7b). **So the fork now gates nothing, and its original ~1 s justification is still dead.** Do not resurrect it without a NEW reason. |
-| **Targets** | x64-windows only through Phase 2. |
+| **Targets** | ~~x64-windows only through Phase 2.~~ **SUPERSEDED — arm64-macOS pulled forward (user ruling 2026-07-17), parallel to Phase 1.** The arm64-macOS **scalar-core backend LANDED 2026-07-18** (`85237f70d`): shv2 emits running, ad-hoc-signed Mach-O, and `specs-shv2` runs GREEN natively on arm64 (**497/0**) via new per-target `<!-- targets: -->` gating; ~150 M2+ (heap/String/struct/union/print) tests are gated to x64-windows until the arm64 **runtime floor** (the next arm64 rung). Neutral register model — one allocator, both ISAs; x64 codegen byte-identical. wasm still Beyond. |
 
 ### ⭐ Frontend parallelism — the pre-scan FANS OUT; the barrier is cheap and STAYS
 
@@ -1386,7 +1386,7 @@ at the Phase-1 GATE sharpens from "`-j1` and `-jN` agree on the *verdicts*" to "
 
 ## Beyond the two phases
 
-**Broaden:** general `Iterable` + associated types · `List`/Json/… · arm64 + wasm · coverage ·
+**Broaden:** general `Iterable` + associated types · `List`/Json/… · ~~arm64~~ (macOS **scalar core DONE 2026-07-18** — see the Targets row; the arm64 **runtime floor** is its next rung) + wasm · coverage ·
 inliner. *(Two things LEFT this list on 2026-07-13. **`async`/green threads** are core, at P1.5.
 **Porting the spec suite** is no longer an endgame chore — it is **Workstream S**, the driver of
 every rung, starting at P1.0b.)*
