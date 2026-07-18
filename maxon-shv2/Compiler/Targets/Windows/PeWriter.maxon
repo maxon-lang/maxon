@@ -1,15 +1,16 @@
 // PE64 writer for Windows executables — the format-neutral CodeResult → PE seam.
 //
 // THIN for maxon-shv2: writes the smallest runnable x64-windows PE — `.text`
-// (the code) + `.idata` (a single kernel32 `ExitProcess` import) + headers, with
-// an optional `.rdata` / `.symtab` / `.data` section when the backend produced any
-// and a trailing COFF symbol table for debuggers when debug symbols are
-// present. P1.0d.5b added `.data`: a WRITABLE section holding the initial image of every
-// top-level `var`. v1's writer additionally lays down a heap arena in that section, a
-// `.covdata` coverage section, a `.rsrc` manifest, and an 84-slot multi-DLL import table
-// (kernel32 / shell32 / ws2_32); those GROW back at their milestones (P1.2 heap,
-// coverage, networking). The arm64 relocation paths are likewise deferred to the
-// arm64 milestone — x64 only today.
+// (the code) + `.idata` (a single kernel32 `ExitProcess` import) + `.rsrc` (the embedded
+// `asInvoker` application manifest) + headers, with an optional `.rdata` / `.symtab` /
+// `.data` section when the backend produced any and a trailing COFF symbol table for
+// debuggers when debug symbols are present. P1.0d.5b added `.data`: a WRITABLE section
+// holding the initial image of every top-level `var`. The `.rsrc` manifest opts every
+// produced binary out of Windows' UAC installer-detection heuristic (see buildRsrcSection).
+// v1's writer additionally lays down a heap arena in `.data`, a `.covdata` coverage section,
+// and an 84-slot multi-DLL import table (kernel32 / shell32 / ws2_32); those GROW back at
+// their milestones (P1.2 heap, coverage, networking). The arm64 relocation paths are
+// likewise deferred to the arm64 milestone — x64 only today.
 
 typealias Rva = int(0 to u64.max)
 typealias SectionFlags = int(0 to u64.max)
@@ -23,7 +24,7 @@ let SectionAlignment = 4096
 let ImageBase = 0x140000000
 
 // One PE data-directory entry is 8 bytes (RVA + size). Used to skip the
-// directories M1 leaves empty (Export, Resource, TLS, …).
+// directories M1 leaves empty (Export, TLS, …); Resource (#2) now points at `.rsrc`.
 let DataDirEntrySize = 8
 
 // --- Section characteristics ---
@@ -41,6 +42,10 @@ let SectionSymtabFlags = 0xC0000040  // INITIALIZED_DATA | READ | WRITE
 // this comment credited a `classifyGlobalLabel` that had no callers and has since been deleted; see
 // `DataLabelPrefix` in SignatureIndex.maxon for the measurement that settled it.)
 let SectionDataFlags = 0xC0000040  // INITIALIZED_DATA | READ | WRITE
+
+// `.rsrc` — INITIALIZED_DATA | READ. The embedded application manifest is read-only data,
+// like `.rdata`; the loader reads it but never writes it, so no WRITE bit.
+let SectionRsrcFlags = 0x40000040  // INITIALIZED_DATA | READ
 
 // --- Fixed header field sizes ---
 let DosAndPeSigBytes = 68  // 64-byte DOS stub + 4-byte "PE\0\0"
@@ -392,7 +397,7 @@ end 'writeCoffSymbolTable'
 
 // Build the emitted-section list in emission order — the section-symbol numbering
 // must match the section header order in `writePe`.
-function buildSectionList(codeSize ByteCount, hasRdata bool, rdataSize ByteCount, hasSymdata bool, symdataSize ByteCount, hasData bool, dataSize ByteCount, idataSize ByteCount) returns PeSectionList
+function buildSectionList(codeSize ByteCount, hasRdata bool, rdataSize ByteCount, hasSymdata bool, symdataSize ByteCount, hasData bool, dataSize ByteCount, idataSize ByteCount, rsrcSize ByteCount) returns PeSectionList
 	var sections = PeSectionList.create()
 	sections.push(PeSectionRec.create(".text", rawSize: codeSize))
 	if hasRdata 'rdata'
@@ -405,8 +410,86 @@ function buildSectionList(codeSize ByteCount, hasRdata bool, rdataSize ByteCount
 		sections.push(PeSectionRec.create(".data", rawSize: dataSize))
 	end 'data'
 	sections.push(PeSectionRec.create(".idata", rawSize: idataSize))
+	sections.push(PeSectionRec.create(".rsrc", rawSize: rsrcSize))
 	return sections
 end 'buildSectionList'
+
+// --- Resource section (.rsrc): embedded application manifest ---
+
+// Windows' Installer Detection heuristic treats an exe whose NAME contains an
+// installer-ish token ("update", "setup", "patch") as a legacy installer and demands
+// elevation at CreateProcess time UNLESS the binary declares an explicit
+// requestedExecutionLevel. Spec tests compile to exes named after the test
+// (`while-loops.loop-carried-var-narrower-than-its-update.exe`), so spawning them
+// failed with "The requested operation requires elevation"; a user compiling
+// `myapp-update.exe` hits the same wall. Embedding the standard `asInvoker` manifest
+// opts every produced binary out of the heuristic.
+//
+// The section holds the minimal single-resource tree:
+//   root IMAGE_RESOURCE_DIRECTORY (16) + 1 entry (8)   → type dir   @24
+//   type IMAGE_RESOURCE_DIRECTORY (16) + 1 entry (8)   → lang dir   @48
+//   lang IMAGE_RESOURCE_DIRECTORY (16) + 1 entry (8)   → data entry @72
+//   IMAGE_RESOURCE_DATA_ENTRY (16)                     → manifest   @88
+let RsrcTypeDirOffset = 24
+let RsrcLangDirOffset = 48
+let RsrcDataEntryOffset = 72
+let RsrcManifestOffset = 88
+
+// High bit of a directory entry's offset field marks "points at a subdirectory".
+let RsrcSubdirBit = 0x80000000
+let RtManifestTypeId = 24
+let CreateProcessManifestResourceId = 1
+let RsrcLangIdEnUs = 0x409
+
+typealias ResourceEntryCount = int(0 to 65535)
+
+function manifestXml() returns ByteArray
+	let xml = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><assembly xmlns=\"urn:schemas-microsoft-com:asm.v1\" manifestVersion=\"1.0\"><trustInfo xmlns=\"urn:schemas-microsoft-com:asm.v3\"><security><requestedPrivileges><requestedExecutionLevel level=\"asInvoker\" uiAccess=\"false\"/></requestedPrivileges></security></trustInfo></assembly>"
+	return xml.toByteArray()
+end 'manifestXml'
+
+// One IMAGE_RESOURCE_DIRECTORY header with `idEntries` ID-keyed entries.
+function writeResourceDirHeader(buf ByteArray, idEntries ResourceEntryCount)
+	writeDword(buf, value: 0)  // Characteristics
+	writeDword(buf, value: 0)  // TimeDateStamp
+	writeWord(buf, value: 0)  // MajorVersion
+	writeWord(buf, value: 0)  // MinorVersion
+	writeWord(buf, value: 0)  // NumberOfNamedEntries
+	writeWord(buf, value: idEntries)
+end 'writeResourceDirHeader'
+
+// Build the minimal 3-level resource tree carrying the single RT_MANIFEST resource.
+// `rsrcRva` is the `.rsrc` section's own RVA, needed because the data entry's manifest
+// pointer is IMAGE-relative (not section-relative like the directory-entry offsets).
+function buildRsrcSection(rsrcRva Rva) returns ByteArray
+	var rsrc = ByteArray.create()
+	let manifest = manifestXml()
+
+	// Root directory: one ID entry (the RT_MANIFEST type) → type subdirectory.
+	writeResourceDirHeader(rsrc, idEntries: 1)
+	writeDword(rsrc, value: RtManifestTypeId)
+	writeDword(rsrc, value: RsrcSubdirBit or RsrcTypeDirOffset)
+
+	// Type-level directory: one entry (resource ID 1) → language subdirectory.
+	writeResourceDirHeader(rsrc, idEntries: 1)
+	writeDword(rsrc, value: CreateProcessManifestResourceId)
+	writeDword(rsrc, value: RsrcSubdirBit or RsrcLangDirOffset)
+
+	// Language-level directory: one entry (en-US) → data entry (leaf: no subdir bit).
+	writeResourceDirHeader(rsrc, idEntries: 1)
+	writeDword(rsrc, value: RsrcLangIdEnUs)
+	writeDword(rsrc, value: RsrcDataEntryOffset)
+
+	// IMAGE_RESOURCE_DATA_ENTRY: the manifest's RVA is image-relative (NOT
+	// section-relative, unlike the directory-entry offsets above).
+	writeDword(rsrc, value: rsrcRva + RsrcManifestOffset)
+	writeDword(rsrc, value: manifest.count())
+	writeDword(rsrc, value: 0)  // CodePage
+	writeDword(rsrc, value: 0)  // Reserved
+
+	rsrc.append(manifest)
+	return rsrc
+end 'buildRsrcSection'
 
 // --- Main PE writer ---
 
@@ -427,8 +510,8 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 	let hasSymdata = symdataSize > 0
 	let hasData = dataSize > 0
 
-	// Sections: .text + .idata always; .rdata / .symtab / .data only when non-empty.
-	var numSections = 2
+	// Sections: .text + .idata + .rsrc always; .rdata / .symtab / .data only when non-empty.
+	var numSections = 3
 	if hasRdata 'countRdata'
 		numSections = numSections + 1
 	end 'countRdata'
@@ -478,7 +561,17 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 	let idataSizeAligned = alignUp(idataSize, alignment: FileAlignment)
 	let idataSizeVirtual = alignUp(idataSize, alignment: SectionAlignment)
 
-	let imageSize = idataRva + idataSizeVirtual
+	// .rsrc — the embedded `asInvoker` manifest, ALWAYS emitted. Placed LAST so no
+	// existing section RVA shifts (the IAT relocations are RVA-sensitive). The manifest's
+	// data-entry pointer is image-relative, so `.rsrc`'s own RVA must be fixed before the
+	// section is built.
+	let rsrcRva = idataRva + idataSizeVirtual
+	let rsrcData = buildRsrcSection(rsrcRva)
+	let rsrcSize = rsrcData.count()
+	let rsrcSizeAligned = alignUp(rsrcSize, alignment: FileAlignment)
+	let rsrcSizeVirtual = alignUp(rsrcSize, alignment: SectionAlignment)
+
+	let imageSize = rsrcRva + rsrcSizeVirtual
 
 	// Patch IAT + rdata relocations in the code image before it is written.
 	patchRelocationsX86(code, relocations: codeResult.relocations, textRva: textRva, idataRva: idataRva)
@@ -512,7 +605,7 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 	// === Optional header PE32+ (240 bytes) ===
 	pe.append(b"\x0b\x02\x0e\x00")  // Magic (PE32+), MajorLinkerVersion 14, MinorLinkerVersion 0
 	writeDword(pe, value: codeSizeAligned)  // SizeOfCode
-	writeDword(pe, value: rdataSizeAligned + symdataSizeAligned + dataSizeAligned + idataSizeAligned)  // SizeOfInitializedData
+	writeDword(pe, value: rdataSizeAligned + symdataSizeAligned + dataSizeAligned + idataSizeAligned + rsrcSizeAligned)  // SizeOfInitializedData
 	pe.append(b"\x00\x00\x00\x00")  // SizeOfUninitializedData
 	writeDword(pe, value: entryPointRva)  // AddressOfEntryPoint
 	writeDword(pe, value: textRva)  // BaseOfCode
@@ -530,12 +623,13 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 	pe.append(b"\x00\x00\x00\x00\x03\x00\x00\x81\x00\x00\x10\x00\x00\x00\x00\x00\x00\x10\x00\x00\x00\x00\x00\x00\x00\x00\x10\x00\x00\x00\x00\x00\x00\x10\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x10\x00\x00\x00")
 
 	// Data directories (16 entries × 8 bytes). #0 Export: empty. #1 Import.
-	// #2 Resource: empty (no .rsrc at M1). #3-#11 (9 entries): empty. #12 IAT.
+	// #2 Resource: the .rsrc manifest. #3-#11 (9 entries): empty. #12 IAT.
 	// #13-#15 (3 entries): empty.
 	writeZeros(pe, n: DataDirEntrySize)
 	writeDword(pe, value: idata.importDirRva)
 	writeDword(pe, value: idata.importDirSize)
-	writeZeros(pe, n: DataDirEntrySize)
+	writeDword(pe, value: rsrcRva)
+	writeDword(pe, value: rsrcSize)
 	writeZeros(pe, n: DataDirEntrySize * 9)
 	writeDword(pe, value: idata.iatRva)
 	writeDword(pe, value: idata.iatDirSize)
@@ -557,6 +651,8 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 		nextFilePointer = nextFilePointer + dataSizeAligned
 	end 'dataHeader'
 	writeSectionHeader(pe, name: ".idata", virtualSize: idataSize, virtualAddress: idataRva, rawDataSize: idataSizeAligned, rawDataPointer: nextFilePointer, characteristics: SectionIdataFlags)
+	nextFilePointer = nextFilePointer + idataSizeAligned
+	writeSectionHeader(pe, name: ".rsrc", virtualSize: rsrcSize, virtualAddress: rsrcRva, rawDataSize: rsrcSizeAligned, rawDataPointer: nextFilePointer, characteristics: SectionRsrcFlags)
 
 	padTo(pe, size: headersAligned)
 
@@ -582,10 +678,13 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 	pe.append(idata.data)
 	padTo(pe, size: headersAligned + codeSizeAligned + rdataSizeAligned + symdataSizeAligned + dataSizeAligned + idataSizeAligned)
 
+	pe.append(rsrcData)
+	padTo(pe, size: headersAligned + codeSizeAligned + rdataSizeAligned + symdataSizeAligned + dataSizeAligned + idataSizeAligned + rsrcSizeAligned)
+
 	// === COFF symbol table (appended past the last loadable section) ===
 	if codeResult.debugSymbols.count() > 0 'writeCoff'
 		let symbolTableFileOffset = pe.count()
-		let sections = buildSectionList(codeSize, hasRdata: hasRdata, rdataSize: rdataSize, hasSymdata: hasSymdata, symdataSize: symdataSize, hasData: hasData, dataSize: dataSize, idataSize: idataSize)
+		let sections = buildSectionList(codeSize, hasRdata: hasRdata, rdataSize: rdataSize, hasSymdata: hasSymdata, symdataSize: symdataSize, hasData: hasData, dataSize: dataSize, idataSize: idataSize, rsrcSize: rsrcSize)
 		let totalSymbolCount = writeCoffSymbolTable(pe, debugSymbols: codeResult.debugSymbols, sections: sections)
 		patchDword(pe, offset: pointerToSymbolTableOffset, value: symbolTableFileOffset)
 		patchDword(pe, offset: numberOfSymbolsOffset, value: totalSymbolCount)
