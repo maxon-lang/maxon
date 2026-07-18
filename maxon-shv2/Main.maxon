@@ -10,9 +10,9 @@
 // diagnostics (the `maxoncstderr` spec contract).
 //
 // CLI (documented):
-//   maxon-shv2 build <file|directory> [-o <output>] [--emit-ir]
+//   maxon-shv2 build <file|directory> [-o <output>] [--emit-ir] [--target=<cpu>-<os>]
 //   maxon-shv2 verify-warm-rebuild <file>
-//   maxon-shv2 spec-test [dir] [--filter=<pattern>] [--update-required] [--workers=<n>]
+//   maxon-shv2 spec-test [dir] [--filter=<pattern>] [--update-required] [--workers=<n>] [--target=<cpu>-<os>]
 
 // The default spec directory `spec-test` scans when no directory is given
 // (resolved against the process cwd — the runner is invoked from the repo root).
@@ -27,6 +27,10 @@ export let SpecTestCommandName = "spec-test"
 export let WorkerPersistentFlag = "--worker-persistent"
 export let FilterFlagPrefix = "--filter="
 export let UpdateRequiredFlag = "--update-required"
+// `--target=` is in this re-emitted set (not with `build`'s options) because a cross-target
+// spec run forwards it to every worker's command line — see SpecWorkerPool.spawnNoWait. The
+// parser below reads it back through this same constant, so the two halves cannot drift.
+export let TargetFlagPrefix = "--target="
 let WorkersFlagPrefix = "--workers="
 
 function main() returns ExitCode
@@ -63,7 +67,7 @@ end 'TargetResolution'
 // accepting a spelling the compiler cannot name back. A spec that names none of them
 // is rejected; the list grows as backends land.
 function parseBuildTarget(spec String) returns TargetResolution
-	let supported = [Target.create(CpuArch.x64, os: Os.windows), Target.create(CpuArch.arm64, os: Os.macos)]
+	let supported = [Target.create(CpuArch.x64, os: Os.windows), Target.create(CpuArch.arm64, os: Os.macos), Target.create(CpuArch.wasm32, os: Os.wasi)]
 	for candidate in supported 'each'
 		if targetToString(candidate) == spec 'match'
 			return TargetResolution.resolved(candidate)
@@ -71,6 +75,17 @@ function parseBuildTarget(spec String) returns TargetResolution
 	end 'each'
 	return TargetResolution.unrecognized(spec)
 end 'parseBuildTarget'
+
+// Resolve the optional `--target` flag shared by `build` and `spec-test`: the host target
+// (`detectHostTarget`) when the flag is empty, otherwise whatever `parseBuildTarget` makes of the
+// spelling (`unrecognized` when it names no known target). Folding the host default into one place
+// keeps the two commands from drifting on what "no --target" means.
+function resolveTargetFlag(spec String) returns TargetResolution
+	if spec.isEmpty() 'host'
+		return TargetResolution.resolved(detectHostTarget())
+	end 'host'
+	return parseBuildTarget(spec)
+end 'resolveTargetFlag'
 
 // Report a `--target` spelling that names no known target, as an exit code the
 // build command returns directly. Separate from the match arm because a match arm
@@ -92,12 +107,10 @@ function runBuild(args MaxonArgs) returns ExitCode
 	end 'badPath'
 
 	var target = detectHostTarget()
-	if not args.targetSpec.isEmpty() 'explicitTarget'
-		match parseBuildTarget(args.targetSpec) 'sel'
-			resolved(t) then target = t
-			unrecognized(spec) then return reportUnknownTarget(spec)
-		end 'sel'
-	end 'explicitTarget'
+	match resolveTargetFlag(args.targetSpec) 'targetSel'
+		resolved(t) then target = t
+		unrecognized(spec) then return reportUnknownTarget(spec)
+	end 'targetSel'
 	let outputPath = try compile(inputPath, target: target, outputOverride: args.outputOverride, emitIr: args.emitIr, metricsPath: args.metricsPath) otherwise (e) 'compileErr'
 		reportCompileError(e)
 		return 1
@@ -156,14 +169,27 @@ function runSpecTest(args MaxonArgs) returns ExitCode
 		return 1
 	end 'noExe'
 
+	// The effective target for this run: the host unless `--target` overrode it. Resolved up front so
+	// BOTH sides run the SAME target — the dispatcher's pool AND a relaunched worker, which re-parses
+	// the same `--target` from its own command line (SpecWorkerPool.spawnNoWait forwards it) and
+	// reaches this same resolution. A bad spelling fails once, here. The target reaches each selected
+	// test's build (`--target=<cpu>-<os>`) and, for a cross target, its run under the vendored runtime.
+	// Resolving before the worker branch prints nothing on the success path (only an unrecognized
+	// spelling prints, to stderr, and returns), so the worker's stdout wire stays untouched.
+	var effectiveTarget = detectHostTarget()
+	match resolveTargetFlag(args.targetSpec) 'targetSel'
+		resolved(t) then effectiveTarget = t
+		unrecognized(spec) then return reportUnknownTarget(spec)
+	end 'targetSel'
+
 	// A WORKER, not a dispatcher: this process was spawned by a parent's pool and speaks the job
 	// protocol on stdin/stdout instead of running a suite and reporting on it. It must be checked
 	// before anything is printed — a worker's stdout is a wire, not a report.
 	if args.workerPersistent 'isPoolWorker'
-		return runPersistentWorker(compilerExe, specDir: specDir, filter: args.filter, updateRequired: args.updateRequired)
+		return runPersistentWorker(compilerExe, specDir: specDir, filter: args.filter, updateRequired: args.updateRequired, effectiveTarget: effectiveTarget)
 	end 'isPoolWorker'
 
-	let run = try runSpecPool(compilerExe, specDir: specDir, filter: args.filter, updateRequired: args.updateRequired, workerCount: args.workers) otherwise (e) 'runErr'
+	let run = try runSpecPool(compilerExe, specDir: specDir, filter: args.filter, updateRequired: args.updateRequired, workerCount: args.workers, effectiveTarget: effectiveTarget) otherwise (e) 'runErr'
 		reportCompileError(e)
 		return 1
 	end 'runErr'
@@ -299,8 +325,10 @@ function printUsage()
 	print("Options:\n")
 	print("  -o, --output=<path>           Output executable path (default: derived from input)\n")
 	print("  --emit-ir                     Also write the lowered Target IR beside the exe as <output>.ir\n")
-	print("  --target=<cpu>-<os>           (build) Compile for this target instead of the host, e.g.\n")
-	print("                                x64-windows or arm64-macos (default: the host target)\n")
+	print("  --target=<cpu>-<os>           (build, spec-test) Use this target instead of the host, e.g.\n")
+	print("                                x64-windows, arm64-macos or wasm32-wasi (default: the host\n")
+	print("                                target). For spec-test a cross target cross-compiles each\n")
+	print("                                selected test and runs it under the vendored runtime.\n")
 	print("  --metrics=<path>              (build) Write this compile's per-phase time + memory\n")
 	print("                                attribution to <path> as TSV. `--log=compiler:debug` prints\n")
 	print("                                the same numbers as a human-readable table.\n")
@@ -402,10 +430,11 @@ export type MaxonArgs
 	// to be read by a person; the day a phase name outgrows its column, a scrape would silently
 	// mis-parse rather than fail. A caller that wants data gets data.
 	export let resultJson as String
-	// `--target=<cpu>-<os>` (build only): compile for this target instead of the host
-	// (`detectHostTarget`). Empty selects the host. Parsed to a Target in `runBuild`;
-	// an unknown spelling aborts the build. Needed to cross-compile x64-windows on an
-	// arm64 host for golden verification, and to select arm64-macos explicitly.
+	// `--target=<cpu>-<os>` (build, spec-test): use this target instead of the host
+	// (`detectHostTarget`). Empty selects the host. Resolved to a Target via `resolveTargetFlag` in
+	// both `runBuild` and `runSpecTest`; an unknown spelling aborts. Needed to cross-compile
+	// x64-windows on an arm64 host for golden verification, to select arm64-macos explicitly, and to
+	// drive the spec suite through the wasm32-wasi backend (cross-compile-and-run under wasmtime).
 	export let targetSpec as String
 	// Set when an argument could not be understood. The driver refuses to run rather
 	// than proceed on a command line it only partly parsed — see `parse`.
@@ -495,7 +524,7 @@ export type MaxonArgs
 				note = try CommandLine.optionValue(arg) otherwise ""
 			end 'noteFlag' else if arg.startsWith("--result-json=") 'resultJsonFlag'
 				resultJson = try CommandLine.optionValue(arg) otherwise ""
-			end 'resultJsonFlag' else if arg.startsWith("--target=") 'targetFlag'
+			end 'resultJsonFlag' else if arg.startsWith(TargetFlagPrefix) 'targetFlag'
 				targetSpec = try CommandLine.optionValue(arg) otherwise ""
 			end 'targetFlag' else if arg.startsWith("--log=") 'logFlag'
 				var spec = try CommandLine.optionValue(arg) otherwise ""

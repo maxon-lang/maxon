@@ -33,6 +33,7 @@ end 'main'
 ## Tests
 
 <!-- test: override-precedence -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	return (2 + 3) * 4
@@ -44,6 +45,7 @@ end 'main'
 
 
 <!-- test: nested-parentheses -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	return ((5 + 3) * 2) - 6

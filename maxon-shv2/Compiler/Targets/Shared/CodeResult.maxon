@@ -178,12 +178,19 @@ export typealias FunctionCodeChunkArray = Array with FunctionCodeChunk
 // backend lowered FROM — v1 carried its MIR module here for the WASM backend,
 // which consumes the machine-level IR directly instead of going through a target
 // dialect; with the MIR tier gone (see StdDialect), Std IS that machine-level IR,
-// so the wasm backend (M17) reads this field. x64/PE ignore it. `dataPrelude`
+// so the wasm backend reads this field. x64/PE ignore it. `dataPrelude`
 // holds the initial `.data` bytes for top-level / static globals (empty for
 // `return 42`). `covDataSectionBytes` is the .covdata section image (empty unless
 // coverage is enabled — the writer then omits the section entirely).
 // `debugSymbols` pairs function names with `.text` offsets for symbol-table
 // emission.
+//
+// `wasmCoreModule` is the wasm backend's ONE output: a complete WASI-Preview2
+// CORE module as a byte blob (magic + sections), not a `.text` image. The wasm
+// path fills it and leaves every machine-code field empty, because it consumes
+// the StdModule directly with no register allocation and no Target dialect (see
+// StdToWasm); `writeWasm` reads it and wraps it into a component. Empty for every
+// other backend.
 export type CodeResult
 	export var code as ByteArray
 	export var mainCallFixupOffset as CodeOffset
@@ -197,6 +204,7 @@ export type CodeResult
 	export var covDataSectionBytes as ByteArray
 	export var dataPrelude as ByteArray
 	export var debugSymbols as DebugSymbolArray
+	export var wasmCoreModule as ByteArray
 
 	export static function create(code ByteArray, mainCallFixupOffset CodeOffset, relocations RelocationArray, globalData GlobalDataTable, targetModule TargetModule, stdModule StdModule, rdata ByteArray, rdataRelocations RdataRelocationArray, symdata ByteArray, covDataSectionBytes ByteArray) returns CodeResult
 		return Self{
@@ -211,7 +219,31 @@ export type CodeResult
 			symdata: symdata,
 			covDataSectionBytes: covDataSectionBytes,
 			dataPrelude: ByteArray.create(),
-			debugSymbols: DebugSymbolArray.create()
+			debugSymbols: DebugSymbolArray.create(),
+			wasmCoreModule: ByteArray.create()
 		}
 	end 'create'
+
+	// The wasm backend's CodeResult: it emits a whole CORE module as a byte blob rather than a
+	// `.text` image + relocations, so every machine-code field is empty and `wasmCoreModule` carries
+	// the output. `targetModule` is an empty module — the wasm path never builds a Target dialect —
+	// and `stdModule` is retained for the IR printer / diagnostics, exactly as the x64/arm64 path
+	// retains it. `writeWasm` reads `wasmCoreModule` and wraps it into a Preview2 component.
+	export static function forWasm(stdModule StdModule, wasmCoreModule ByteArray) returns CodeResult
+		return Self{
+			code: ByteArray.create(),
+			mainCallFixupOffset: 0,
+			relocations: RelocationArray.create(),
+			globalData: GlobalDataTable.create(),
+			targetModule: TargetModule.create(),
+			stdModule: stdModule,
+			rdata: ByteArray.create(),
+			rdataRelocations: RdataRelocationArray.create(),
+			symdata: ByteArray.create(),
+			covDataSectionBytes: ByteArray.create(),
+			dataPrelude: ByteArray.create(),
+			debugSymbols: DebugSymbolArray.create(),
+			wasmCoreModule: wasmCoreModule
+		}
+	end 'forWasm'
 end 'CodeResult'

@@ -202,14 +202,14 @@ typealias SpecResultBuckets = Array with SpecTestResultArray
 // redundancy is the point: the parent's list is the oracle the answers are checked against. It is
 // also nearly free — parsing nineteen markdown files costs less than one of the compiles it is
 // about to dispatch.
-function buildPlans(specDir FilePath, filter String) returns SpecPlanArray throws CompileError
+function buildPlans(specDir FilePath, filter String, effectiveTarget Target) returns SpecPlanArray throws CompileError
 	var plans = SpecPlanArray.create()
 
 	let specPaths = try specFilePaths(specDir)
 	for specPath in specPaths 'eachSpec'
 		let specFile = try parseSpecFile(specPath)
 		let specName = specPath.stem()
-		let tests = selectedTests(specFile, specName: specName, filter: filter)
+		let tests = selectedTests(specFile, specName: specName, filter: filter, effectiveTarget: effectiveTarget)
 		if tests.count() == 0 'selectsNothing'
 			continue
 		end 'selectsNothing'
@@ -312,7 +312,7 @@ end 'popHeaviestJob'
 // included. Print none and the parent waits forever on a line that is never coming; print two and
 // the NEXT job's drain ends early, with that job's records read as the job after it. A blank line,
 // which consumed no job, therefore owes no READY. All three READY sites are below.
-export function runPersistentWorker(compilerExe FilePath, specDir FilePath, filter String, updateRequired bool) returns ExitCode
+export function runPersistentWorker(compilerExe FilePath, specDir FilePath, filter String, updateRequired bool, effectiveTarget Target) returns ExitCode
 	var stdin = Console.stdin()
 	print("{WorkerReadyMarker}\n")
 
@@ -342,7 +342,7 @@ export function runPersistentWorker(compilerExe FilePath, specDir FilePath, filt
 			continue
 		end 'unknownJob'
 
-		runSinglesJob(compilerExe, specDir: specDir, specName: sliceAfterPrefix(job, prefix: JobSinglesPrefix), filter: filter, updateRequired: updateRequired)
+		runSinglesJob(compilerExe, specDir: specDir, specName: sliceAfterPrefix(job, prefix: JobSinglesPrefix), filter: filter, updateRequired: updateRequired, effectiveTarget: effectiveTarget)
 		print("{WorkerReadyMarker}\n")
 	end 'jobLoop'
 
@@ -358,8 +358,8 @@ end 'runPersistentWorker'
 // when it dies, so panicking routes this diagnostic through `abortOnDeadWorker`, which prints it.
 // Returning quietly instead would leave the parent to notice a missing record and abort with no
 // idea why.
-function runSinglesJob(compilerExe FilePath, specDir FilePath, specName String, filter String, updateRequired bool)
-	let results = try runOneSpec(compilerExe, specDir: specDir, specName: specName, filter: filter, updateRequired: updateRequired) otherwise (e) 'specFailed'
+function runSinglesJob(compilerExe FilePath, specDir FilePath, specName String, filter String, updateRequired bool, effectiveTarget Target)
+	let results = try runOneSpec(compilerExe, specDir: specDir, specName: specName, filter: filter, updateRequired: updateRequired, effectiveTarget: effectiveTarget) otherwise (e) 'specFailed'
 		reportCompileError(e)
 		panic("spec worker: could not run spec '{specName}' — see the error above")
 	end 'specFailed'
@@ -656,11 +656,11 @@ type PersistentWorkerHandle
 	// hellos, so every worker's process creation and runtime init OVERLAP under a single readiness
 	// barrier instead of each one queueing behind the previous worker's hello.
 	//
-	// `filter` and `updateRequired` MUST be forwarded. A worker that selected a different set of
-	// tests than the parent counted would return records the parent never asked for and omit ones
-	// it did — `resultsFromLines` turns that into a panic, but forwarding the flag is the actual
+	// `filter`, `updateRequired` and the effective TARGET MUST be forwarded. A worker that selected a
+	// different set of tests than the parent counted would return records the parent never asked for
+	// and omit ones it did — `resultsFromLines` turns that into a panic, but forwarding is the actual
 	// fix, and the panic is only there to make forgetting it impossible to miss.
-	export static function spawnNoWait(compilerExe FilePath, workerId WorkerId, specDir FilePath, filter String, updateRequired bool) returns PersistentWorkerHandle throws SubprocessError
+	export static function spawnNoWait(compilerExe FilePath, workerId WorkerId, specDir FilePath, filter String, updateRequired bool, effectiveTarget Target) returns PersistentWorkerHandle throws SubprocessError
 		var argv = StringArray.create()
 		argv.push(SpecTestCommandName)
 		argv.push(WorkerPersistentFlag)
@@ -676,6 +676,19 @@ type PersistentWorkerHandle
 		if updateRequired 'isUpdate'
 			argv.push(UpdateRequiredFlag)
 		end 'isUpdate'
+
+		// Forward the effective target ONLY when it differs from the host the worker would otherwise
+		// default to. A worker is this exe relaunched; with no `--target` it resolves
+		// `detectHostTarget()`, which on the same machine is exactly the parent's target for an
+		// ordinary (host) run — so a native run adds nothing to the argv and `--workers=N` stays
+		// byte-identical to `--workers=1`, as it always has. A CROSS run (`--target=wasm32-wasi`)
+		// differs, so it IS forwarded, and the worker re-parses it through Main's arg parser to reach
+		// the SAME effectiveTarget the parent's plan used. It is NOT forwarded unconditionally: a host
+		// whose `targetToString` spelling `Main.parseBuildTarget` does not list (e.g. x64-linux) would
+		// then reject its own `--target` and never come up.
+		if targetToString(effectiveTarget) != targetToString(detectHostTarget()) 'nonHostTarget'
+			argv.push("{TargetFlagPrefix}{targetToString(effectiveTarget)}")
+		end 'nonHostTarget'
 
 		let child = try StreamingSubprocess.spawn(Executable.path(compilerExe), arguments: argv)
 		return Self{child: child, workerId: workerId}
@@ -795,8 +808,8 @@ end 'NoSlot'
 
 // Run the whole suite on a pool of `workerCount` persistent workers and return every verdict in
 // report order.
-export function runSpecPool(compilerExe FilePath, specDir FilePath, filter String, updateRequired bool, workerCount WorkerCount) returns PoolRun throws CompileError
-	let plans = try buildPlans(specDir, filter: filter)
+export function runSpecPool(compilerExe FilePath, specDir FilePath, filter String, updateRequired bool, workerCount WorkerCount, effectiveTarget Target) returns PoolRun throws CompileError
+	let plans = try buildPlans(specDir, filter: filter, effectiveTarget: effectiveTarget)
 	if plans.count() == 0 'selectsNothing'
 		// Main owns the "no tests selected" diagnostic and reads it off an empty result array.
 		// Spawning a pool only to tell it there is nothing to do would add a way for that message
@@ -819,7 +832,7 @@ export function runSpecPool(compilerExe FilePath, specDir FilePath, filter Strin
 		poolSize = jobQueue.count() as WorkerCount
 	end 'moreWorkersThanJobs'
 
-	var workers = spawnPool(compilerExe, count: poolSize, specDir: specDir, filter: filter, updateRequired: updateRequired)
+	var workers = spawnPool(compilerExe, count: poolSize, specDir: specDir, filter: filter, updateRequired: updateRequired, effectiveTarget: effectiveTarget)
 
 	// Per-slot state as PARALLEL ARRAYS rather than one array of slot structs: the in-flight drain
 	// Promise cannot live inside a struct the loop also keeps mutating (see `drainResultsThunk`),
@@ -954,11 +967,11 @@ end 'prepareSharedDirs'
 // A worker that cannot be spawned, or that says anything other than WORKER_READY, is a PANIC.
 // There is no degraded mode to fall back to, and a pool that quietly ran with fewer workers than
 // it was asked for would be a harness lying about what it did.
-function spawnPool(compilerExe FilePath, count WorkerCount, specDir FilePath, filter String, updateRequired bool) returns PersistentWorkerHandleArray
+function spawnPool(compilerExe FilePath, count WorkerCount, specDir FilePath, filter String, updateRequired bool, effectiveTarget Target) returns PersistentWorkerHandleArray
 	var workers = PersistentWorkerHandleArray.create()
 
 	for i in 0 upto count 'spawnPhase'
-		let handle = try PersistentWorkerHandle.spawnNoWait(compilerExe, workerId: i, specDir: specDir, filter: filter, updateRequired: updateRequired) otherwise (e) 'spawnFailed'
+		let handle = try PersistentWorkerHandle.spawnNoWait(compilerExe, workerId: i, specDir: specDir, filter: filter, updateRequired: updateRequired, effectiveTarget: effectiveTarget) otherwise (e) 'spawnFailed'
 			panic("spec worker pool: could not spawn worker {i}: {e.displayReason()}")
 		end 'spawnFailed'
 		workers.push(handle)

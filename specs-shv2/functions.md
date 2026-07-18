@@ -61,6 +61,7 @@ class shipped as a silent miscompile once, and it is a running test that catches
 ## Tests
 
 <!-- test: add-labelled -->
+<!-- targets: wasm32-wasi -->
 `add(2, b: 3)` binds `2` positionally to `a` and `3` (labelled) to `b`, returning 5.
 ```maxon
 function add(a int, b int) returns int
@@ -76,6 +77,7 @@ end 'main'
 ```
 
 <!-- test: subtract-order -->
+<!-- targets: wasm32-wasi -->
 The positional argument fills the first parameter and the labelled one the second, so
 `sub(20, b: 8)` is `20 - 8` = 12 — argument ORDER is preserved through the labelling.
 ```maxon
@@ -92,6 +94,7 @@ end 'main'
 ```
 
 <!-- test: zero-arg-call -->
+<!-- targets: wasm32-wasi -->
 A call to a parameterless function.
 ```maxon
 function answer() returns int
@@ -107,6 +110,7 @@ end 'main'
 ```
 
 <!-- test: six-args -->
+<!-- targets: wasm32-wasi -->
 Six arguments — the full register-argument set (`rcx`, `rdx`, `rax`, `r9`, `rsi`,
 `rdi`). Their sum is 1+2+3+4+5+6 = 21.
 ```maxon
@@ -123,6 +127,7 @@ end 'main'
 ```
 
 <!-- test: nested-calls -->
+<!-- targets: wasm32-wasi -->
 `inc(inc(inc(zero())))` — each call's result is the next call's argument. `zero()` = 7,
 then +1 three times = 10.
 ```maxon
@@ -143,6 +148,7 @@ end 'main'
 ```
 
 <!-- test: call-result-in-expression -->
+<!-- targets: wasm32-wasi -->
 Call results feed a larger expression, `add(2, b: 3) + add(10, b: 20) * 2` = 5 + 60 =
 65. The first call's result is live ACROSS the second call, so it lands in a callee-saved
 register.
@@ -160,6 +166,7 @@ end 'main'
 ```
 
 <!-- test: recursion-factorial -->
+<!-- targets: wasm32-wasi -->
 Recursive `factorial(5)` = 120. The parameter `n` is live across the recursive call
 (`n * factorial(n - 1)`), so it is preserved in a callee-saved register across the call.
 ```maxon
@@ -179,6 +186,7 @@ end 'main'
 ```
 
 <!-- test: recursion-fib -->
+<!-- targets: wasm32-wasi -->
 `fib(10)` = 55 — two recursive calls, where the first call's result is live across the
 second (`fib(n - 1) + fib(n - 2)`).
 ```maxon
@@ -198,6 +206,7 @@ end 'main'
 ```
 
 <!-- test: value-live-across-call -->
+<!-- targets: wasm32-wasi -->
 `n` (a parameter, non-constant) is passed to `add` AND used again afterward, so it is
 live across the call. It cannot stay in a caller-saved register — the allocator colors
 it into a callee-saved register the function push/pops. `compute(5)` = add(5, 100) + 5 =
@@ -221,6 +230,7 @@ end 'main'
 ```
 
 <!-- test: param-passed-as-later-arg -->
+<!-- targets: wasm32-wasi -->
 An early parameter (`a`) is passed as a NON-FIRST argument (`y: a`) to an internal call
 while a LATER parameter (`c`) is live ACROSS that call. The entry parameter captures form
 a parallel copy out of the incoming ABI registers, so `a`'s capture destination must never
@@ -247,6 +257,7 @@ end 'main'
 ```
 
 <!-- test: call-in-loop -->
+<!-- targets: wasm32-wasi -->
 A call inside a loop, where the loop-carried accumulator `sum` and counter `i` are both
 live across the call — each is colored to a callee-saved register and push/popped once,
 with nothing added inside the loop but the argument move and the call. Sum of `dbl(i)`
@@ -271,6 +282,7 @@ end 'main'
 ```
 
 <!-- test: bare-call-statement -->
+<!-- targets: wasm32-wasi -->
 A call may stand alone as a statement, its result discarded. `noop(5)` runs for effect
 (none here); the program returns 0.
 ```maxon

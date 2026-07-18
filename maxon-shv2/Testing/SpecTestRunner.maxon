@@ -113,6 +113,37 @@ let NoLineOffset = 0 as LineIndex
 // so its rendering of a path is a format contract, exactly like the fence names in SpecParser.
 let ReferenceFragmentDir = "specs/fragments"
 
+// --- The cross-compile-and-run path (restored from v1: buildWasmRunCommand / findWasmtimePath) ---
+//
+// A NATIVE target is one the runner executes by spawning a HOST process directly. A CROSS target
+// (wasm32-wasi today) the host cannot spawn: the test is built with an explicit `--target=…` and
+// the produced `.wasm` COMPONENT is run through the vendored wasmtime. The native set is derived
+// FROM `targetToString` (see `nativeTargetKeys`), not written as literals, so its spelling has ONE
+// source — the same producer a `<!-- targets: … -->` marker was authored against.
+let VendorDirName = "vendor"
+let WasmtimeDirName = "wasmtime"
+
+// The vendor tree ships BOTH binaries side by side — a Windows `wasmtime.exe` and an extensionless
+// macOS/Linux `wasmtime` — so on either host the OTHER host's binary is present but NOT runnable.
+// Probe the one matching THIS host first: v1 (`SpecTestRunner.maxon:588`) paid for this, because
+// running the Mach-O `wasmtime` through the Win32 subprocess path faults.
+let WasmtimeUnixBinary = "wasmtime"
+let WasmtimeWindowsBinary = "wasmtime.exe"
+
+// The upward-search bound: enough levels to climb from any spec scratch subdirectory to the repo
+// root that holds `vendor/`. Mirrors v1's `findWasmtimePath` depth.
+let WasmtimeSearchDepth = 10
+
+let WasmtimeRunSubcommand = "run"
+
+// `-S cli-exit-with-code=y` enables the gated `cli-exit-with-code` proposal so the component's
+// `wasi:cli/exit#exit-with-code` import resolves — the WIT marks it `@unstable(cli-exit-with-code)`,
+// and without the flag wasmtime rejects the module. The scalar slice needs no other `-S` setting
+// (no file or socket I/O). All `-S` flags MUST precede the module path; anything after it is
+// forwarded as guest argv.
+let WasmtimeSettingFlag = "-S"
+let WasmtimeExitWithCodeSetting = "cli-exit-with-code=y"
+
 typealias FilePathArray = Array with FilePath
 
 // PASS, or FAIL carrying a human-readable reason. A union (not a `bool` + a
@@ -173,11 +204,11 @@ end 'runProcess'
 // spec NAME on stdin and calls exactly this. Nothing above this function walks a directory
 // — the pool does that once, in the parent, because the listing ORDER is also the report
 // order and only one process may own it.
-export function runOneSpec(compilerExe FilePath, specDir FilePath, specName String, filter String, updateRequired bool) returns SpecTestResultArray throws CompileError
+export function runOneSpec(compilerExe FilePath, specDir FilePath, specName String, filter String, updateRequired bool, effectiveTarget Target) returns SpecTestResultArray throws CompileError
 	var results = SpecTestResultArray.create()
 
 	let specFile = try parseSpecFile(specDir.join("{specName}{SpecFileExtension}"))
-	let tests = selectedTests(specFile, specName: specName, filter: filter)
+	let tests = selectedTests(specFile, specName: specName, filter: filter, effectiveTarget: effectiveTarget)
 	if tests.count() == 0 'selectsNothing'
 		// A `draft` spec, or one every test of which the filter rejected. The pool never dispatches
 		// such a spec — its parent built the same list from the same function — so this is not the
@@ -191,15 +222,19 @@ export function runOneSpec(compilerExe FilePath, specDir FilePath, specName Stri
 		throw CompileError.directoryNotFound(tempDir)
 	end 'noTempDir'
 
-	let host = detectHostTarget()
-	let exeExtension = executableExtension(host)
-	let fragmentDir = fragmentsRootDir(specDir, target: host).join(specName)
+	// The exe suffix follows the EFFECTIVE target — `.wasm` under `--target=wasm32-wasi`, the host
+	// suffix otherwise — so the path reconstructed to run matches what the build's `resolveOutputPath`
+	// wrote for the same `--target`. The fragment root stays HOST-keyed: only the native path writes a
+	// golden (the wasm path emits no Target IR and skips it — see `runStagedTest`), and the pool's
+	// `prepareSharedDirs` keys the shared root the same way.
+	let exeExtension = executableExtension(effectiveTarget)
+	let fragmentDir = fragmentsRootDir(specDir, target: detectHostTarget()).join(specName)
 	// mkdir -p; a create failure just means fragments for this spec won't be written
 	// (checkTestFragment swallows the ensuing write error) — never a test gate.
 	_ = Directory.create(fragmentDir)
 
 	for test in tests 'eachTest'
-		let outcome = runOneTest(compilerExe, test: test, specName: specName, tempDir: tempDir, exeExtension: exeExtension, fragmentDir: fragmentDir, updateRequired: updateRequired)
+		let outcome = runOneTest(compilerExe, test: test, specName: specName, tempDir: tempDir, exeExtension: exeExtension, fragmentDir: fragmentDir, updateRequired: updateRequired, effectiveTarget: effectiveTarget)
 		results.push(SpecTestResult.create(specName, testName: test.name, outcome: outcome))
 	end 'eachTest'
 
@@ -218,19 +253,21 @@ end 'runOneSpec'
 // unreachable rather than merely loud. The target gate is why this discipline matters here and not only
 // in principle: it is what makes the same suite green on x64-windows AND arm64-macos, so it MUST be
 // applied identically on both sides of the pool.
-export function selectedTests(specFile SpecFile, specName String, filter String) returns SpecTestArray
+export function selectedTests(specFile SpecFile, specName String, filter String, effectiveTarget Target) returns SpecTestArray
 	var selected = SpecTestArray.create()
 
 	if specFile.status == DraftStatus 'draftSpec'
 		return selected
 	end 'draftSpec'
 
-	// Resolved ONCE, not per test: the host is fixed for the whole run, and both halves of the pool
-	// run on the same host, so this is the string every test's `targets` list is checked against.
-	let hostTarget = targetToString(detectHostTarget())
+	// Resolved ONCE, not per test: the effective target is fixed for the whole run, and both halves of
+	// the pool resolve it to the same value (the worker re-parses the parent's forwarded `--target`),
+	// so this is the string every test's `targets` list is checked against.
+	let effectiveTargetKey = targetToString(effectiveTarget)
+	let nativeKeys = nativeTargetKeys()
 
 	for test in specFile.tests 'eachTest'
-		if selectedByFilter(specName, testName: test.name, filter: filter) and selectedByTarget(test, hostTarget: hostTarget) 'isSelected'
+		if selectedByFilter(specName, testName: test.name, filter: filter) and selectedByTarget(test, effectiveTargetKey: effectiveTargetKey, nativeKeys: nativeKeys) 'isSelected'
 			selected.push(test)
 		end 'isSelected'
 	end 'eachTest'
@@ -238,27 +275,80 @@ export function selectedTests(specFile SpecFile, specName String, filter String)
 	return selected
 end 'selectedTests'
 
-// Does this test run on `hostTarget`? A test with a non-empty `targets` list (a `<!-- targets: … -->`
-// marker) runs ONLY on a target it names; the ordinary marker-less test has an EMPTY list and runs
-// everywhere. A gated-out test is SKIPPED — not selected, not run, not failed — exactly as a draft or
-// filtered-out test is, which is why this lives beside `selectedByFilter` under the one door.
+// Does this test run under `effectiveTargetKey`? The rule is ADDITIVE and backward-compatible (a
+// coordinator design ruling), and it is the whole reason a wasm marker can enable a cross run WITHOUT
+// disturbing the two native hosts:
 //
-// The membership is an explicit walk rather than an `Array.contains`: the list is one or two entries,
-// and the comparison it needs is String equality, which a bare `contains` on an element type would have
-// to be told anyway.
-function selectedByTarget(test SpecTest, hostTarget String) returns bool
-	if test.targets.count() == 0 'universal'
-		return true
-	end 'universal'
-
-	for target in test.targets 'eachTarget'
-		if target == hostTarget 'matches'
+//   nativeTargets  = { x64-windows, arm64-macos }   (nativeKeys)
+//   listedNative   = test.targets ∩ nativeTargets
+//   effectiveNative = listedNative empty ? nativeTargets : listedNative
+//   under a NATIVE effective target T:  runs iff T ∈ effectiveNative
+//   under a CROSS  effective target T:  runs iff T ∈ test.targets   (only when explicitly listed)
+//
+// Consequences, all checked against the pre-existing behaviour:
+//   • a marker-LESS test lists no native ⇒ effectiveNative = both natives ⇒ runs on either host
+//     (UNCHANGED), and under a cross target it is NOT listed ⇒ SKIPPED;
+//   • an existing native marker (`x64-windows`) lists a native ⇒ runs only on that host (UNCHANGED);
+//   • a new `wasm32-wasi` marker lists NO native ⇒ effectiveNative = both natives ⇒ STILL runs on
+//     both hosts, and additionally runs under `--target=wasm32-wasi`.
+//
+// A gated-out test is SKIPPED — not selected, not run, not failed — exactly as a draft or
+// filtered-out test is, which is why this lives beside `selectedByFilter` under the one door.
+function selectedByTarget(test SpecTest, effectiveTargetKey String, nativeKeys StringArray) returns bool
+	if keyInList(effectiveTargetKey, list: nativeKeys) 'nativeTarget'
+		// effectiveNative = listedNative if the test names ANY native target, else all natives. So
+		// under a native target the test runs iff it names no native target (⇒ both natives ⇒ this
+		// one) OR it names this one specifically.
+		if not testListsAnyNativeTarget(test, nativeKeys: nativeKeys) 'noNativeListed'
 			return true
-		end 'matches'
-	end 'eachTarget'
+		end 'noNativeListed'
+		return keyInList(effectiveTargetKey, list: test.targets)
+	end 'nativeTarget'
 
-	return false
+	// A CROSS target (wasm32-wasi): the test runs ONLY when it explicitly lists this target.
+	return keyInList(effectiveTargetKey, list: test.targets)
 end 'selectedByTarget'
+
+// The `targetToString` spellings of the targets the runner executes by spawning a HOST process
+// directly. Built from `Target` values, not string literals, so the spelling has ONE source — the
+// same `targetToString` a `<!-- targets: … -->` marker was authored against, and the same set
+// `Main.parseBuildTarget` calls "supported native". Any other target is CROSS (see `isCrossTarget`).
+function nativeTargetKeys() returns StringArray
+	var keys = StringArray.create()
+	keys.push(targetToString(Target.create(CpuArch.x64, os: Os.windows)))
+	keys.push(targetToString(Target.create(CpuArch.arm64, os: Os.macos)))
+	return keys
+end 'nativeTargetKeys'
+
+// Does `target` need an external runner (wasmtime) rather than a direct host spawn? Derived from the
+// one native-key set so the gate (over a test's listed keys) and the build/run path (over the
+// effective `Target`) can never disagree about what "cross" means.
+function isCrossTarget(target Target) returns bool
+	return not keyInList(targetToString(target), list: nativeTargetKeys())
+end 'isCrossTarget'
+
+// Whether any of the test's declared targets is a native one — i.e. `listedNative` is non-empty.
+function testListsAnyNativeTarget(test SpecTest, nativeKeys StringArray) returns bool
+	for target in test.targets 'eachTarget'
+		if keyInList(target, list: nativeKeys) 'native'
+			return true
+		end 'native'
+	end 'eachTarget'
+	return false
+end 'testListsAnyNativeTarget'
+
+// Whether `key` appears in `list`, by String equality — the one membership walk the two callers
+// (a test's declared `targets`, and the native-key set) share. An explicit walk rather than an
+// `Array.contains`: the element comparison String equality needs is exactly what a bare `contains`
+// would have to be told, and each list this serves is one or two entries.
+function keyInList(key String, list StringArray) returns bool
+	for entry in list 'eachEntry'
+		if entry == key 'match'
+			return true
+		end 'match'
+	end 'eachEntry'
+	return false
+end 'keyInList'
 
 // This spec's private scratch directory: `<specDir>/.spec-tmp/<specName>/`.
 //
@@ -375,7 +465,7 @@ end 'StagingResult'
 // Compile one test via a subprocess build (with `--emit-ir` so the Target-IR sidecar is produced),
 // check its expectation, then check the emitted IR against the committed `.test` golden. Everything
 // written is cleaned up before returning.
-function runOneTest(compilerExe FilePath, test SpecTest, specName String, tempDir FilePath, exeExtension String, fragmentDir FilePath, updateRequired bool) returns TestOutcome
+function runOneTest(compilerExe FilePath, test SpecTest, specName String, tempDir FilePath, exeExtension String, fragmentDir FilePath, updateRequired bool, effectiveTarget Target) returns TestOutcome
 	let exeBase = tempDir.join(test.name)
 	// The driver appends the platform extension to the `-o` value
 	// (resolveOutputPath), so the produced exe is `<exeBase><ext>` — reconstruct
@@ -389,37 +479,48 @@ function runOneTest(compilerExe FilePath, test SpecTest, specName String, tempDi
 
 	match stageTest(tempDir, test: test) 'staging'
 		failed(reason) then return TestOutcome.fail(reason)
-		staged(s) then return runStagedTest(compilerExe, test: test, specName: specName, staged: s, exeBase: exeBase, exePath: exePath, irPath: irPath, fragmentDir: fragmentDir, updateRequired: updateRequired)
+		staged(s) then return runStagedTest(compilerExe, test: test, specName: specName, staged: s, exeBase: exeBase, exePath: exePath, irPath: irPath, fragmentDir: fragmentDir, updateRequired: updateRequired, effectiveTarget: effectiveTarget)
 	end 'staging'
 end 'runOneTest'
 
 // Compile a test whose source is already on disk, check its behaviour, then check its golden.
 // Split out of `runOneTest` only because staging can FAIL, and a union's arms are the honest way to
 // say so — the two functions are one story read top to bottom.
-function runStagedTest(compilerExe FilePath, test SpecTest, specName String, staged StagedTest, exeBase FilePath, exePath FilePath, irPath FilePath, fragmentDir FilePath, updateRequired bool) returns TestOutcome
+function runStagedTest(compilerExe FilePath, test SpecTest, specName String, staged StagedTest, exeBase FilePath, exePath FilePath, irPath FilePath, fragmentDir FilePath, updateRequired bool, effectiveTarget Target) returns TestOutcome
+	let cross = isCrossTarget(effectiveTarget)
+
 	var compileArgv = StringArray.create()
 	compileArgv.push(BuildSubcommand)
 	compileArgv.push(staged.buildTarget.toString())
 	compileArgv.push(OutputFlag)
 	compileArgv.push(exeBase.toString())
-	compileArgv.push(EmitIrFlag)
+	if cross 'crossCompile'
+		// The wasm backend consumes the Std module directly and emits NO Target IR, so there is no
+		// `--emit-ir` sidecar to read and no golden to pin — the RUN is the whole gate (see the
+		// fragment skip below). Point the build at the cross target instead.
+		compileArgv.push("{TargetFlagPrefix}{targetToString(effectiveTarget)}")
+	end 'crossCompile' else 'hostCompile'
+		compileArgv.push(EmitIrFlag)
+	end 'hostCompile'
 
 	let compile = try runProcess(compilerExe, argv: compileArgv) otherwise (e) 'compileSpawnFailed'
 		cleanup(staged, exePath: exePath, irPath: irPath)
 		return TestOutcome.fail("compiler spawn failed: {e.displayReason()}")
 	end 'compileSpawnFailed'
 
-	let outcome = checkExpectation(test, specName: specName, compile: compile, staged: staged, exePath: exePath)
+	let outcome = checkExpectation(test, specName: specName, compile: compile, staged: staged, exePath: exePath, effectiveTarget: effectiveTarget)
 
-	// The BEHAVIOUR gate ran above: the program compiled, ran, and returned what it should. The
-	// fragment is the CODE-QUALITY gate, and it only makes sense to ask "is this still the code we
-	// agreed on?" of a test whose behaviour is already right — a failing test's IR is noise, and
-	// reporting a golden mismatch on top of it would bury the real failure. Run it before cleanup,
-	// while the `--emit-ir` sidecar is still on disk.
-	if not outcome.isPass() 'behaviourAlreadyFailed'
+	// The fragment is the CODE-QUALITY gate over the emitted Target IR, and it is skipped in two
+	// cases:
+	//   (1) BEHAVIOUR already FAILED — a failing test's IR is noise, and a golden mismatch on top
+	//       would bury the real failure;
+	//   (2) a CROSS target (wasm) — the wasm backend emits no Target IR, so there is nothing to pin;
+	//       the RUN plus the worker-count byte-identity gate are the whole check for it.
+	// The native, passing path runs it before cleanup, while the `--emit-ir` sidecar is still on disk.
+	if not outcome.isPass() or cross 'noFragmentGate'
 		cleanup(staged, exePath: exePath, irPath: irPath)
 		return outcome
-	end 'behaviourAlreadyFailed'
+	end 'noFragmentGate'
 
 	let fragmentOutcome = checkTestFragment(fragmentDir, test: test, compile: compile, staged: staged, irPath: irPath, updateRequired: updateRequired)
 
@@ -645,9 +746,9 @@ function buildErrorFragment(test SpecTest, compile ProcessCapture, staged Staged
 	return "{fragmentHeader(test)}{CompilerErrorLabel}\n{normalizedError}\n"
 end 'buildErrorFragment'
 
-function checkExpectation(test SpecTest, specName String, compile ProcessCapture, staged StagedTest, exePath FilePath) returns TestOutcome
+function checkExpectation(test SpecTest, specName String, compile ProcessCapture, staged StagedTest, exePath FilePath, effectiveTarget Target) returns TestOutcome
 	return match test.expectation 'e'
-		run(expected, stderr, stdout, requiredData) gives checkRun(expected, stderr: stderr, stdout: stdout, requiredData: requiredData, compile: compile, exePath: exePath)
+		run(expected, stderr, stdout, requiredData) gives checkRun(expected, stderr: stderr, stdout: stdout, requiredData: requiredData, compile: compile, exePath: exePath, effectiveTarget: effectiveTarget)
 		compilerError(text) gives checkCompilerError(text, specName: specName, testName: test.name, compile: compile, staged: staged)
 	end 'e'
 end 'checkExpectation'
@@ -679,10 +780,91 @@ function checkCompilerError(expectedText String, specName String, testName Strin
 	return TestOutcome.fail("compiler-error mismatch\n    expected: {expected}\n    actual:   {actual}")
 end 'checkCompilerError'
 
+// The exe + argv pair one RUN goes through, whichever target produced the binary. Native runs the
+// binary with no argv; a wasm run puts the module behind wasmtime and its flags. One type so the
+// single `runProcess` call in `checkRun` is target-agnostic.
+type RunCommand
+	export let exe as FilePath
+	export let argv as StringArray
+
+	export static function create(exe FilePath, argv StringArray) returns RunCommand
+		return Self{exe: exe, argv: argv}
+	end 'create'
+end 'RunCommand'
+
+// How to execute the binary the build just produced. A NATIVE target's binary is spawned directly
+// with an empty argv (spec tests take no runtime arguments — shv2's SpecParser has no `Args`
+// directive). A CROSS target's `.wasm` COMPONENT cannot be spawned by the host, so it goes behind
+// the vendored wasmtime. Restored from v1 `SpecTestRunner.maxon:623` (`buildRunCommand`).
+function buildRunCommand(modulePath FilePath, effectiveTarget Target) returns RunCommand
+	if isCrossTarget(effectiveTarget) 'wasm'
+		return buildWasmRunCommand(modulePath)
+	end 'wasm'
+
+	return RunCommand.create(modulePath, argv: StringArray.create())
+end 'buildRunCommand'
+
+// `wasmtime run -S cli-exit-with-code=y <module.wasm>` — the exact command the wasm component
+// skeleton was proven under (see the contract golden). No guest argv, no `--dir`/socket preopens:
+// the scalar slice does no I/O. Ported from v1 `SpecTestRunner.maxon:650` (`buildWasmRunCommand`),
+// trimmed to the one `-S` setting the scalar surface needs.
+function buildWasmRunCommand(modulePath FilePath) returns RunCommand
+	let wasmtimeExe = findWasmtimePath()
+
+	var argv = StringArray.create()
+	argv.push(WasmtimeRunSubcommand)
+	argv.push(WasmtimeSettingFlag)
+	argv.push(WasmtimeExitWithCodeSetting)
+	// The module path MUST come after every `-S`: anything after it is forwarded to the guest as argv.
+	argv.push(modulePath.toString())
+
+	return RunCommand.create(wasmtimeExe, argv: argv)
+end 'buildWasmRunCommand'
+
+// Locate the vendored wasmtime by walking UP from the cwd looking for `vendor/wasmtime/`, preferring
+// the binary that matches THIS host's os (see WasmtimeUnixBinary / WasmtimeWindowsBinary). PANICS if
+// it is nowhere on the way to the filesystem root — the wasm run path cannot proceed without it, and
+// there is no valid FilePath to return in its place (a "" sentinel is what this project forbids).
+// Ported from v1 `SpecTestRunner.maxon:588` (`findWasmtimePath`), whose "" return is replaced here.
+function findWasmtimePath() returns FilePath
+	let hostIsWindows = detectHostTarget().os == Os.windows
+	let preferred = WasmtimeWindowsBinary if hostIsWindows else WasmtimeUnixBinary
+	let fallback = WasmtimeUnixBinary if hostIsWindows else WasmtimeWindowsBinary
+
+	var dir = Directory.currentPath()
+	for _ in 0 upto WasmtimeSearchDepth 'search'
+		let preferredPath = wasmtimeBinaryIn(dir, binary: preferred)
+		if File.exists(preferredPath) 'foundPreferred'
+			return preferredPath
+		end 'foundPreferred'
+
+		let fallbackPath = wasmtimeBinaryIn(dir, binary: fallback)
+		if File.exists(fallbackPath) 'foundFallback'
+			return fallbackPath
+		end 'foundFallback'
+
+		// The filesystem root has no parent — nowhere left to look, so stop climbing and fall
+		// through to the panic below.
+		let parentDir = try dir.parent() otherwise break
+		dir = parentDir
+	end 'search'
+
+	panic("SpecTestRunner: wasmtime not found under {VendorDirName}/{WasmtimeDirName}/ (searched up {WasmtimeSearchDepth} levels from the cwd) — the wasm run path needs the vendored binary")
+end 'findWasmtimePath'
+
+// The path `<dir>/vendor/wasmtime/<binary>` (existence NOT checked — the caller probes it). The
+// relative path is built once through `FilePath.from` (as `fragmentsRootDir` builds its own) rather
+// than by chaining `join(String)`, whose String/FilePath overloads are ambiguous on a bare constant.
+function wasmtimeBinaryIn(dir FilePath, binary String) returns FilePath
+	let rel = "{VendorDirName}{PathSeparator}{WasmtimeDirName}{PathSeparator}{binary}"
+	let relPath = try FilePath.from(rel) otherwise panic("SpecTestRunner: wasmtime path '{rel}' must be a valid relative path")
+	return dir.join(relPath)
+end 'wasmtimeBinaryIn'
+
 // A RUN test (an ```exitcode block, plus the ```stderr / ```stdout blocks that may accompany it): the
 // compile MUST succeed, then the produced exe is spawned and EVERY half of the expectation is checked
 // against that one execution — its exit code, what it wrote to stderr, and what it wrote to stdout.
-function checkRun(expected ExitCodeValue, stderr SpecStderr, stdout SpecStdout, requiredData SpecRequiredData, compile ProcessCapture, exePath FilePath) returns TestOutcome
+function checkRun(expected ExitCodeValue, stderr SpecStderr, stdout SpecStdout, requiredData SpecRequiredData, compile ProcessCapture, exePath FilePath, effectiveTarget Target) returns TestOutcome
 	if compile.exitCode != 0 'compileFailed'
 		return TestOutcome.fail("compilation failed (exit {compile.exitCode}): {compile.stderr.trim()}")
 	end 'compileFailed'
@@ -691,14 +873,19 @@ function checkRun(expected ExitCodeValue, stderr SpecStderr, stdout SpecStdout, 
 	// what was linked, not of what executing it happened to touch. A layout failure reported here
 	// rather than after the run also names the actual defect: a program whose globals are laid out
 	// wrong usually still exits with some number, and "exit code mismatch" would send the reader
-	// looking in the wrong place entirely.
+	// looking in the wrong place entirely. It is a NATIVE-binary property; a wasm test never pins it
+	// (the scalar slice has no `.data`), so `unpinned` short-circuits this to a pass under wasm.
 	let dataOutcome = checkRequiredData(requiredData, exePath: exePath)
 	match dataOutcome 'data'
 		pass then break 'data'
 		fail then return dataOutcome
 	end 'data'
 
-	let run = try runProcess(exePath, argv: StringArray.create()) otherwise (e) 'runSpawnFailed'
+	// The native path spawns the exe directly; a CROSS target's `.wasm` component cannot be spawned
+	// by the host, so it is run through the vendored wasmtime instead — everything checked against
+	// that one execution afterwards is IDENTICAL either way.
+	let runCommand = buildRunCommand(exePath, effectiveTarget: effectiveTarget)
+	let run = try runProcess(runCommand.exe, argv: runCommand.argv) otherwise (e) 'runSpawnFailed'
 		return TestOutcome.fail("program spawn failed: {e.displayReason()}")
 	end 'runSpawnFailed'
 

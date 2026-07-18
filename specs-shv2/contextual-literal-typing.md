@@ -249,6 +249,7 @@ end 'main'
 ```
 
 <!-- test: int-vs-int -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let a = 1000

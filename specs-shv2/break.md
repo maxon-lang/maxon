@@ -50,6 +50,7 @@ error E2048: <fragment>:6:12: 'continue' with label 'loop' targets its own loop;
 ```
 
 <!-- test: break.multiple-conditions -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	var x = 5

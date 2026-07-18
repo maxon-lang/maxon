@@ -31,6 +31,7 @@ and `==` (M3) — and is recorded under `## Deferred` below so it is re-enabled 
 those milestones rather than forgotten.
 
 <!-- test: let-declaration -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let x = 42
@@ -42,6 +43,7 @@ end 'main'
 ```
 
 <!-- test: var-declaration -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let x = 10
@@ -53,6 +55,7 @@ end 'main'
 ```
 
 <!-- test: multiple-variables -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let a = 10

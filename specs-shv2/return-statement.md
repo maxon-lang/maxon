@@ -31,6 +31,7 @@ statement. The tests needing function calls + unreachable-code detection
 below.
 
 <!-- test: simple-return -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	return 42
@@ -41,6 +42,7 @@ end 'main'
 ```
 
 <!-- test: expression-return -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	return 2 + 3 * 4
@@ -51,6 +53,7 @@ end 'main'
 ```
 
 <!-- test: conditional-return -->
+<!-- targets: wasm32-wasi -->
 A function with two exits must have BOTH of them executed. Written as `let x = 5; if x > 3 then
 return 1; return 0`, the condition is a constant the run always takes, so the tail `return 0` is
 compiled and never entered — its return lowering (the R8 move, the epilogue) is checked by the
@@ -82,6 +85,7 @@ end 'main'
 ```
 
 <!-- test: tail-return-is-last -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let x = 7
@@ -93,6 +97,7 @@ end 'main'
 ```
 
 <!-- test: return-in-if-then-reachable -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 function classify(x ExitCode) returns ExitCode
 	if x > 0 'positive'

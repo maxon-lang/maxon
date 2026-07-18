@@ -1,0 +1,1146 @@
+// StdToWasm — the wasm backend's Std-module → WASI-Preview2 CORE-module lowering.
+//
+// ⭐ A SIBLING OF x64/arm64, NOT A DESCENDANT. The register-allocating backends run
+// Std → Target (isel) → colour → SSA-destruction → encode. The wasm backend skips ALL of
+// that: wasm's operand stack has an unbounded local file, so every SSA `ValueId` simply
+// IS a wasm local (v1's identity model), there is no register pressure to allocate for, and
+// there is no Target dialect to lower into. This file consumes the `StdModule` directly and
+// emits the byte-encoded module through A1's `WasmBinary` seam. That is why the `wasm32`
+// arms in RegisterAllocator/RegBits/SsaDestruction/TargetPrinter stay dead-but-exhaustive:
+// the wasm path never reaches them.
+//
+// ⭐ WHAT IS DELIBERATELY NOT REUSED FROM shv2's SHARED BACKEND CODE, AND WHY:
+//   • `SsaDestruction.sequenceParallelCopy` — it is module-private (not exported), typed on
+//     physical `RegNum`s (this tier has only `ValueId`s), and breaks copy cycles with `xchg`,
+//     which wasm has no instruction for. wasm breaks a cycle by staging through a SCRATCH
+//     local per valtype (v1's `WasmCopyEmitter` did exactly this: `hasXchg = false`). So the
+//     algorithm is re-implemented here over local indices with scratch-local cycle breaking —
+//     the SAME standard parallel-move algorithm, a different cycle primitive.
+//   • `PhiEdgeView.resolve` — its `PhiEdgeConsumer` context enum names only the three
+//     register-allocator consumers; the edge/arg pairing is resolved locally instead so a
+//     wasm arity mismatch reports against wasm, not a mislabelled `ssaDestruction`.
+//
+// ⭐ CONTROL FLOW IS A `loop`+`br_table` STATE MACHINE, NOT A RELOOPER. Each block gets a
+// dispatch index; a single outer `loop` wrapped in one `block` per basic block re-enters and
+// `br_table`s to the current block. It handles ANY reducible CFG shape with no structural
+// analysis. Reference: v1 `maxon-selfhosted/Compiler/Targets/Wasm/MirToWasm.maxon`
+// `emitStructuredCfg` (:2004) and its phi-copy handling (:2092-2183) — the shapes are taken;
+// v1's 42-func Preview2 import table and its heap/print/async paths are not (this slice needs
+// only `exit-with-code`).
+//
+// SCALAR SLICE ONLY. The `memory`/`system`/`sugar` Std bands are out of scope this slice —
+// their emitters `panic`, which is unreachable given the spec-runner gating that only compiles
+// scalar programs to wasm. That mirrors the existing dead-but-exhaustive target arms.
+
+// Wasm indices/counts are u32 in the format; this backend uses A1's exported `Wasm32Index`
+// (= int(0 to u32.max)) and `Wasm32IndexArray` for every function/type/local/dispatch index,
+// so the values flow into the `WasmBinary` seam's params with no cast. The one narrowing is at
+// the `ValueId → local index` boundary (`as Wasm32Index`), where a value id always fits u32.
+
+// Per-function block-id → dispatch-index map (position in `func.blockRefs`).
+typealias BlockDispatchMap = Map with (BlockId, Wasm32Index)
+
+// The cycle-break scratch local reserved for each valtype that appears among a function's
+// block-args — the local a phi-copy cycle stages through (wasm has no register exchange).
+typealias ScratchLocalMap = Map with (WasmValType, Wasm32Index)
+
+// The set of valtypes present among a function's block-args, used to reserve exactly the
+// scratch locals a phi cycle in that function could need.
+typealias PhiValTypeSet = Set with WasmValType
+
+// Callee name → its wasm function index, and → its Std return type. Both are built once per
+// module (the index from the deterministic import-then-defined ordering, the return type from
+// each function's signature) so a `call` op resolves its target and its void-ness in O(1).
+typealias CalleeFuncIdxMap = Map with (ByteArray, Wasm32Index)
+typealias CalleeReturnTypeMap = Map with (ByteArray, StdReturnType)
+typealias CalleeParamTypesMap = Map with (ByteArray, WasmValTypeArray)
+
+// A dependent op's result value id → the value id whose width it inherits (its `lhs`). Only
+// `binOpImm`/`div`/`mod` populate it — the three ops whose result width the Std tier does not
+// carry on the op (see `buildValtypeTable`).
+typealias DependentLhsMap = Map with (ValueId, ValueId)
+
+// Exactly one function is imported — `wasi:cli/exit@0.2.6` `exit-with-code` — so it takes
+// func index 0 and every defined function is offset by one.
+let WasmImportCount = 1 as Wasm32Index
+let ExitImportFuncIdx = 0 as Wasm32Index
+
+// One page (64 KiB) of linear memory, exported as `memory`. Nothing in the scalar slice
+// touches it, but the WASI `run` component skeleton requires a memory export.
+let WasmMemoryMinPages = 1 as Wasm32Index
+
+// The `run` result value pushed after `call $exit`: `exit-with-code` never returns, so this
+// i32 is unreachable, but the validator requires the `(result i32)` on the stack at the end.
+let RunOkResult = 0 as Imm32
+
+// The entry function the synthesized `$run` calls. `main` returns `ExitCode`; `$run` wraps it
+// to i32 and hands it to `exit-with-code`.
+let WasmMainFunctionName = b"main"
+
+// The Preview2 import and the component export names — the exact interface identifiers the
+// golden component skeleton was built and run against (CONTRACT §5).
+let WasiExitModuleName = b"wasi:cli/exit@0.2.6"
+let WasiExitFieldName = b"exit-with-code"
+let WasiRunExportName = b"wasi:cli/run@0.2.6#run"
+let WasmMemoryExportName = b"memory"
+
+// ==========================================================================
+// Seam 2 — the whole-module entry (the ONLY external symbol)
+// ==========================================================================
+
+// Lower a fully-compiled Std module to a WASI-Preview2 CORE wasm module. The module imports
+// `exit-with-code`, defines every function in `module.functions` under the identity-local
+// model, synthesizes the `wasi:cli/run@0.2.6#run` entry (`call $main; i32.wrap_i64; call
+// $exit; i32.const 0`), and exports `memory` + `run`. Deterministic: output is driven entirely
+// by module/block/op/arg ORDER, never by map iteration, so worker-count byte-identity holds.
+export function buildWasmCoreModule(module StdModule) returns ByteArray
+	let calleeFuncIdx = buildCalleeFuncIdxMap(module)
+	let calleeReturnType = buildCalleeReturnTypeMap(module)
+	let calleeParamTypes = buildCalleeParamTypesMap(module)
+
+	var builder = WasmModuleBuilder.create()
+
+	// Imports FIRST, so the defined functions get the indices `calleeFuncIdx` precomputed
+	// (importCount + position). `exit-with-code` takes one i32 (the status code), no result.
+	let exitTypeIdx = builder.internFuncType(singletonValTypes(WasmValType.i32), results: WasmValTypeArray.create())
+	_ = builder.addImportFunc(WasiExitModuleName, fieldName: WasiExitFieldName, typeIdx: exitTypeIdx)
+
+	// Defined functions, in `module.functions` order — the order `calleeFuncIdx` assumes.
+	for funcIdx in 0 upto module.funcCount() 'eachFunc'
+		let func = module.getFunc(funcIdx)
+		var emitter = WasmFuncEmitter.create(module, func: func, calleeFuncIdx: calleeFuncIdx, calleeReturnType: calleeReturnType, calleeParamTypes: calleeParamTypes)
+		emitter.emit()
+		let typeIdx = builder.internFuncType(funcParamValTypes(func), results: funcResultValTypes(func.returnType))
+		_ = builder.addFunction(typeIdx, localTypes: emitter.localTypes, body: emitter.body.bytes())
+	end 'eachFunc'
+
+	let runFuncIdx = appendRunEntry(builder, module: module, calleeFuncIdx: calleeFuncIdx)
+
+	builder.exportMemory(WasmMemoryExportName, minPages: WasmMemoryMinPages)
+	builder.exportFunc(WasiRunExportName, funcIdx: runFuncIdx)
+
+	return builder.finish()
+end 'buildWasmCoreModule'
+
+// Synthesize the component entry `wasi:cli/run@0.2.6#run() -> i32`: run `main`, hand its
+// exit code to `exit-with-code`, and leave the ok-discriminant on the stack. Returns the
+// entry's wasm function index (for the export).
+function appendRunEntry(builder WasmModuleBuilder, module StdModule, calleeFuncIdx CalleeFuncIdxMap) returns Wasm32Index
+	let mainFuncIdx = try calleeFuncIdx.get(WasmMainFunctionName) otherwise panic("buildWasmCoreModule: no `main` function in the module — the wasm `run` entry has nothing to call")
+	let mainReturnValType = mainReturnValueType(module)
+
+	var runBody = WasmBody.create()
+	runBody.call(mainFuncIdx)
+	// `main` returns `ExitCode` (i64 in the corpus); `exit-with-code` takes an i32. Wrap only
+	// when the return actually is i64 — a narrower ExitCode is already an i32.
+	if mainReturnValType == WasmValType.i64 'wrap'
+		runBody.i32WrapI64()
+	end 'wrap'
+	runBody.call(ExitImportFuncIdx)
+	runBody.i32Const(RunOkResult)
+
+	let runTypeIdx = builder.internFuncType(WasmValTypeArray.create(), results: singletonValTypes(WasmValType.i32))
+	return builder.addFunction(runTypeIdx, localTypes: WasmValTypeArray.create(), body: runBody.bytes())
+end 'appendRunEntry'
+
+// The valtype of `main`'s return value. `main` must return a value (`ExitCode`) — a void
+// `main` would leave the run entry nothing to pass to `exit-with-code`.
+function mainReturnValueType(module StdModule) returns WasmValType
+	for func in module.functions 'eachFunc'
+		if func.name == WasmMainFunctionName 'isMain'
+			match func.returnType 'rt'
+				void then panic("buildWasmCoreModule: `main` returns void, but the wasm `run` entry needs an ExitCode to pass to exit-with-code")
+				value(inner) then return wasmValTypeOf(inner)
+			end 'rt'
+		end 'isMain'
+	end 'eachFunc'
+	panic("buildWasmCoreModule: no `main` function in the module")
+end 'mainReturnValueType'
+
+// ==========================================================================
+// Module-level maps (built once, looked up O(1) — never iterated for output)
+// ==========================================================================
+
+// Callee name → wasm function index. Defined functions land at `importCount + position`
+// because `buildWasmCoreModule` adds the sole import first, then the functions in this exact
+// order — so the index is computable here without depending on `addFunction`'s return.
+function buildCalleeFuncIdxMap(module StdModule) returns CalleeFuncIdxMap
+	var map = CalleeFuncIdxMap.create()
+	for i in 0 upto module.funcCount() 'eachFunc'
+		let func = module.getFunc(i)
+		map.upsert(func.name, value: (WasmImportCount + i) as Wasm32Index)
+	end 'eachFunc'
+	return map
+end 'buildCalleeFuncIdxMap'
+
+// Callee name → Std return type, so a `call`'s result is stored only when the callee returns
+// a value (a void callee pushes nothing on the wasm stack — a `local.set` there underflows).
+function buildCalleeReturnTypeMap(module StdModule) returns CalleeReturnTypeMap
+	var map = CalleeReturnTypeMap.create()
+	for func in module.functions 'eachFunc'
+		map.upsert(func.name, value: func.returnType)
+	end 'eachFunc'
+	return map
+end 'buildCalleeReturnTypeMap'
+
+// callee name → its parameter valtypes, in declaration order. Used by `emitCall` to coerce each
+// argument to the width the callee's parameter declares — an `i64` literal passed to an `ExitCode`
+// (i32) parameter needs an `i32.wrap_i64`, which the native backends never emit (64-bit registers).
+function buildCalleeParamTypesMap(module StdModule) returns CalleeParamTypesMap
+	var map = CalleeParamTypesMap.create()
+	for func in module.functions 'eachFunc'
+		map.upsert(func.name, value: funcParamValTypes(func))
+	end 'eachFunc'
+	return map
+end 'buildCalleeParamTypesMap'
+
+// ==========================================================================
+// Std type → wasm valtype, and the function-signature valtype lists
+// ==========================================================================
+
+// ⭐ THE ONE DOOR from a Std type to a wasm valtype. Everything up to 32 bits lives in an
+// i32 wasm local (wasm has no sub-word local); i64/u64 in an i64; the floats map straight
+// across. `i1` (a bool) is an i32, which is what `condBranch`/`if` consume and what a compare
+// produces. Floats are out of the scalar slice, but the mapping is total so a stray float
+// value is misclassified nowhere — the op that would use it panics instead.
+function wasmValTypeOf(t StdType) returns WasmValType
+	return match t 'w'
+		i1 gives WasmValType.i32
+		i8 gives WasmValType.i32
+		i16 gives WasmValType.i32
+		i32 gives WasmValType.i32
+		u8 gives WasmValType.i32
+		u16 gives WasmValType.i32
+		u32 gives WasmValType.i32
+		i64 gives WasmValType.i64
+		u64 gives WasmValType.i64
+		f32 gives WasmValType.f32
+		f64 gives WasmValType.f64
+	end 'w'
+end 'wasmValTypeOf'
+
+// True when an integer op of type `t` selects the i64.* instruction family rather than i32.*.
+// A float `t` reaching an integer-op emitter is out of the scalar slice — panic naming `what`.
+function isWideInt(t StdType, what String) returns bool
+	match wasmValTypeOf(t) 'w'
+		i32 then return false
+		i64 then return true
+		f32 then panic("wasm: {what} on an f32 operand is not in the scalar slice")
+		f64 then panic("wasm: {what} on an f64 operand is not in the scalar slice")
+	end 'w'
+end 'isWideInt'
+
+function funcParamValTypes(func IrFunction) returns WasmValTypeArray
+	var params = WasmValTypeArray.create()
+	for pt in func.paramTypes 'each'
+		params.push(wasmValTypeOf(pt))
+	end 'each'
+	return params
+end 'funcParamValTypes'
+
+function funcResultValTypes(returnType StdReturnType) returns WasmValTypeArray
+	var results = WasmValTypeArray.create()
+	match returnType 'r'
+		void then break 'r'
+		value(inner) then results.push(wasmValTypeOf(inner))
+	end 'r'
+	return results
+end 'funcResultValTypes'
+
+function singletonValTypes(vt WasmValType) returns WasmValTypeArray
+	var one = WasmValTypeArray.create()
+	one.push(vt)
+	return one
+end 'singletonValTypes'
+
+// Coerce the value on top of the stack from `from` to `to` when a value's width differs from the
+// width the consuming context requires. The native backends never need this — every value sits in a
+// 64-bit register, so a narrow `ExitCode` return of an `i64` arithmetic result is a no-op there — but
+// wasm's typed stack rejects `i64` where `i32` is declared. Floats are beyond the scalar slice, so
+// only the i32/i64 pair is handled; a signed widen matches `int`'s signedness.
+function coerceOnStack(body WasmBody, from WasmValType, to WasmValType)
+	if from == to 'same'
+		return
+	end 'same'
+
+	if from == WasmValType.i64 and to == WasmValType.i32 'narrow'
+		body.i32WrapI64()
+		return
+	end 'narrow'
+
+	if from == WasmValType.i32 and to == WasmValType.i64 'widen'
+		body.i64ExtendI32S()
+		return
+	end 'widen'
+
+	panic("coerceOnStack: unsupported wasm valtype coercion {from.name} -> {to.name} (float coercions are beyond the scalar slice)")
+end 'coerceOnStack'
+
+// ==========================================================================
+// Per-ValueId valtype table (dense 0..maxValueId), driving local declarations
+// ==========================================================================
+
+// Read a value's declared valtype from the table. Every value an op defines is recorded, so a
+// read is always in range; `i64` is the fill for the padding slots of any value-id gaps DCE
+// left behind (an unused local, never referenced).
+function getValtype(valtypes WasmValTypeArray, v ValueId) returns WasmValType
+	return try valtypes.get(v) otherwise WasmValType.i64
+end 'getValtype'
+
+// Write `vt` at `v`, extending the (i64-filled) table to reach it. `growFilled` grows the
+// backing geometrically, so recording defs in id order is amortized-linear.
+function setValtype(valtypes WasmValTypeArray, v ValueId, vt WasmValType)
+	if v >= valtypes.count() 'extend'
+		valtypes.growFilled(v + 1, value: WasmValType.i64)
+	end 'extend'
+
+	try valtypes.set(v, value: vt) otherwise panic("setValtype: v{v} OOB after growFilled — a grow that just ensured the slot cannot leave it missing")
+end 'setValtype'
+
+// The valtype of a unary op's RESULT. `neg`/`bitNot`/`logicalNot` compute what they consume;
+// the two conversions INVERT (`operandType` is always the source — `siToFp` reads an int and
+// yields f64, `fpToSi` reads f64 and yields an int), so their result type is not `operandType`.
+// The conversions are out of the scalar slice, but the mapping is kept correct so the table is
+// never a source of a wrong classification.
+function unaryResultValType(opcode StdUnaryOpcode, operandType StdType) returns WasmValType
+	return match opcode 'k'
+		neg gives wasmValTypeOf(operandType)
+		bitNot gives wasmValTypeOf(operandType)
+		logicalNot gives wasmValTypeOf(operandType)
+		siToFp gives WasmValType.f64
+		fpToSi gives WasmValType.i64
+	end 'k'
+end 'unaryResultValType'
+
+// The valtype of a `call`'s result — the callee's return type. A void callee still names a
+// result value in the Std IR (nothing reads it in the scalar slice); i64 is a harmless
+// placeholder for that unread local.
+function callResultValType(callee ByteArray, calleeReturnType CalleeReturnTypeMap) returns WasmValType
+	let rt = try calleeReturnType.get(callee) otherwise panic("callResultValType: no Std function named '{String.from(callee)}'")
+	return match rt 'r'
+		void gives WasmValType.i64
+		value(inner) gives wasmValTypeOf(inner)
+	end 'r'
+end 'callResultValType'
+
+// Build the dense per-ValueId valtype table for `func`. Params own ids 0..paramCount-1;
+// block-args and op results own the rest. Most ops carry their result's type directly; the
+// three whose result width the Std tier does NOT carry — `binOpImm`/`div`/`mod`, whose result
+// is exactly as wide as their `lhs` — are recorded as DEPENDENT and resolved afterward, so the
+// table is correct regardless of block/op order (a single forward pass would need `blockRefs`
+// to be in dominance order, which is not guaranteed here).
+function buildValtypeTable(module StdModule, func IrFunction, calleeReturnType CalleeReturnTypeMap) returns WasmValTypeArray
+	var valtypes = WasmValTypeArray.create()
+
+	for i in 0 upto func.paramCount 'eachParam'
+		let pt = try func.paramTypes.get(i) otherwise panic("buildValtypeTable: paramTypes.get OOB at {i} (paramCount={func.paramCount})")
+		setValtype(valtypes, v: i, vt: wasmValTypeOf(pt))
+	end 'eachParam'
+
+	var depResult = ValueIdArray.create()
+	var depLhs = ValueIdArray.create()
+
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("buildValtypeTable: blockRef {blockRef} not in module.blocks")
+
+		for arg in block.blockArgs 'eachArg'
+			setValtype(valtypes, v: arg.valueId, vt: wasmValTypeOf(arg.argType))
+		end 'eachArg'
+
+		for opIdx in block.opRefs 'eachOp'
+			recordDefValtype(try module.ops.get(opIdx) otherwise panic("buildValtypeTable: opIdx {opIdx} not in module.ops"), valtypes: valtypes, depResult: depResult, depLhs: depLhs, calleeReturnType: calleeReturnType)
+		end 'eachOp'
+
+		if block.hasTerminatorOp() 'hasTerm'
+			recordDefValtype(try module.ops.get(block.terminatorIndex()) otherwise panic("buildValtypeTable: terminatorIndex not in module.ops"), valtypes: valtypes, depResult: depResult, depLhs: depLhs, calleeReturnType: calleeReturnType)
+		end 'hasTerm'
+	end 'eachBlock'
+
+	resolveDependents(valtypes, depResult: depResult, depLhs: depLhs)
+	return valtypes
+end 'buildValtypeTable'
+
+// Record one op's defined-value valtype, or queue it as dependent. Exhaustive over `StdOp`
+// with no bare `default`: a new value-defining op fails to compile here rather than defaulting
+// a value to the wrong width. Terminators and the out-of-scope memory/system ops define
+// nothing this backend declares a local for (a memory/system op present at all makes the body
+// emitter panic before this table is ever consumed).
+function recordDefValtype(op StdOp, valtypes WasmValTypeArray, depResult ValueIdArray, depLhs ValueIdArray, calleeReturnType CalleeReturnTypeMap)
+	match op 'def'
+		const(resultId, _, valueType) then setValtype(valtypes, v: resultId, vt: wasmValTypeOf(valueType))
+		binOp(resultId, _, _, _, operandType) then setValtype(valtypes, v: resultId, vt: wasmValTypeOf(operandType))
+		unaryOp(resultId, _, opcode, operandType) then setValtype(valtypes, v: resultId, vt: unaryResultValType(opcode, operandType: operandType))
+		cmp(resultId, _, _, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i32)
+		binOpImm(resultId, lhs, _, _) then recordDependentValtype(valtypes, depResult: depResult, depLhs: depLhs, resultId: resultId, lhs: lhs)
+		cmpImm(resultId, _, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i32)
+		div(resultId, lhs, _) then recordDependentValtype(valtypes, depResult: depResult, depLhs: depLhs, resultId: resultId, lhs: lhs)
+		mod(resultId, lhs, _) then recordDependentValtype(valtypes, depResult: depResult, depLhs: depLhs, resultId: resultId, lhs: lhs)
+		condBranch then break 'def'
+		branch then break 'def'
+		ret then break 'def'
+		param(resultId, _, paramType) then setValtype(valtypes, v: resultId, vt: wasmValTypeOf(paramType))
+		call(resultId, callee, _) then setValtype(valtypes, v: resultId, vt: callResultValType(callee, calleeReturnType: calleeReturnType))
+		retVoid then break 'def'
+		globalAddr then break 'def'
+		loadIndirect then break 'def'
+		storeIndirect then break 'def'
+		osAllocPages then break 'def'
+		osWriteStdout then break 'def'
+		rdataAddr then break 'def'
+	end 'def'
+end 'recordDefValtype'
+
+// Reserve `resultId`'s slot (i64 placeholder) and queue its width to be copied from `lhs`.
+function recordDependentValtype(valtypes WasmValTypeArray, depResult ValueIdArray, depLhs ValueIdArray, resultId ValueId, lhs ValueId)
+	setValtype(valtypes, v: resultId, vt: WasmValType.i64)
+	depResult.push(resultId)
+	depLhs.push(lhs)
+end 'recordDependentValtype'
+
+// Resolve every dependent op's width to its `lhs`'s width. A dependent op's `lhs` is either a
+// self-typed value (already in the table) or another dependent op, and the chain is acyclic
+// (SSA dominance, and a phi/param/const always terminates it), so a memoized walk resolves all
+// of them in O(values).
+function resolveDependents(valtypes WasmValTypeArray, depResult ValueIdArray, depLhs ValueIdArray)
+	var depLhsByResult = DependentLhsMap.create()
+	for k in 0 upto depResult.count() 'index'
+		let r = try depResult.get(k) otherwise panic("resolveDependents: depResult.get OOB at {k}")
+		let l = try depLhs.get(k) otherwise panic("resolveDependents: depLhs.get OOB at {k}")
+		depLhsByResult.upsert(r, value: l)
+	end 'index'
+
+	var resolved = StdValueUseSet.create()
+	for k in 0 upto depResult.count() 'resolve'
+		let r = try depResult.get(k) otherwise panic("resolveDependents: depResult.get OOB at {k}")
+		_ = widthOfValue(r, valtypes: valtypes, depLhsByResult: depLhsByResult, resolved: resolved)
+	end 'resolve'
+end 'resolveDependents'
+
+// The valtype of `v`, resolving a dependent op's width through its `lhs` and memoizing the
+// answer into the table so a shared prefix is walked once. A `v` not in the dependent map is
+// self-typed and its table entry is already correct.
+function widthOfValue(v ValueId, valtypes WasmValTypeArray, depLhsByResult DependentLhsMap, resolved StdValueUseSet) returns WasmValType
+	if resolved.contains(v) 'memo'
+		return getValtype(valtypes, v: v)
+	end 'memo'
+
+	let lhs = try depLhsByResult.get(v) otherwise return getValtype(valtypes, v: v)
+	let w = widthOfValue(lhs, valtypes: valtypes, depLhsByResult: depLhsByResult, resolved: resolved)
+	setValtype(valtypes, v: v, vt: w)
+	resolved.insert(v)
+	return w
+end 'widthOfValue'
+
+// ==========================================================================
+// WasmFuncEmitter — per-function body + local-declaration emission
+// ==========================================================================
+
+type WasmFuncEmitter
+	var module as StdModule
+	var func as IrFunction
+	var calleeFuncIdx as CalleeFuncIdxMap
+	var calleeReturnType as CalleeReturnTypeMap
+	var calleeParamTypes as CalleeParamTypesMap
+
+	// Dense per-ValueId valtype table (0..maxValueId).
+	var valtypes as WasmValTypeArray
+	// The instruction-byte accumulator (no local decls, no trailing 0x0B — the module builder
+	// frames the body around A2's bytes). Exported: `buildWasmCoreModule` reads `body.bytes()`.
+	export var body as WasmBody
+	// The valtypes of the declared locals (indices paramCount..lastLocal), in index order:
+	// value locals, then the dispatch local, then the phi cycle-break scratch locals. Handed to
+	// `WasmModuleBuilder.addFunction`, which run-length-encodes them. Exported: read from
+	// `buildWasmCoreModule`.
+	export var localTypes as WasmValTypeArray
+
+	// Multi-block functions (and single-block self-loops) run under the loop+br_table
+	// dispatcher; a lone straight-line block that ends in a return does not.
+	var useDispatcher as bool
+	// The i32 local holding the next block's dispatch index (only when `useDispatcher`).
+	var dispatchLocal as Wasm32Index
+	// Valtype → its reserved cycle-break scratch local (only for valtypes present among
+	// block-args, only when `useDispatcher`).
+	var scratchLocalByValType as ScratchLocalMap
+	// Block id → dispatch index (position in `func.blockRefs`), for branch targets.
+	var blockDispatchById as BlockDispatchMap
+
+	static function create(module StdModule, func IrFunction, calleeFuncIdx CalleeFuncIdxMap, calleeReturnType CalleeReturnTypeMap, calleeParamTypes CalleeParamTypesMap) returns WasmFuncEmitter
+		let valtypes = buildValtypeTable(module, func: func, calleeReturnType: calleeReturnType)
+		let useDispatcher = decideDispatcher(module, func: func)
+
+		var emitter = Self{
+			module: module,
+			func: func,
+			calleeFuncIdx: calleeFuncIdx,
+			calleeReturnType: calleeReturnType,
+			calleeParamTypes: calleeParamTypes,
+			valtypes: valtypes,
+			body: WasmBody.create(),
+			localTypes: WasmValTypeArray.create(),
+			useDispatcher: useDispatcher,
+			dispatchLocal: 0 as Wasm32Index,
+			scratchLocalByValType: ScratchLocalMap.create(),
+			blockDispatchById: BlockDispatchMap.create()
+		}
+
+		emitter.buildBlockDispatchMap()
+		emitter.buildLocalDeclarations()
+		return emitter
+	end 'create'
+
+	// Local layout, in the order `localTypes` (and the wasm local index space) demands:
+	//   0..paramCount-1        parameters (from the function SIGNATURE, NOT declared here)
+	//   paramCount..maxValueId value locals (identity model: value id == local index)
+	//   maxValueId+1           dispatch local (i32), when the dispatcher is used
+	//   then                   one scratch local per block-arg valtype, when the dispatcher is used
+	// A single running cursor assigns the reserved locals so adding one never renumbers another.
+	function buildLocalDeclarations()
+		let valueLocalCount = self.valtypes.count()
+
+		for i in self.func.paramCount upto valueLocalCount 'valueLocals'
+			self.localTypes.push(getValtype(self.valtypes, v: i))
+		end 'valueLocals'
+
+		if not self.useDispatcher 'noDispatcher'
+			return
+		end 'noDispatcher'
+
+		self.dispatchLocal = valueLocalCount as Wasm32Index
+		self.localTypes.push(WasmValType.i32)
+
+		var nextScratch = (self.dispatchLocal + 1) as Wasm32Index
+		let phiValTypes = self.collectPhiValTypes()
+		for vt in WasmValType.allCases 'canonical'
+			if phiValTypes.contains(vt) 'present'
+				self.scratchLocalByValType.upsert(vt, value: nextScratch)
+				self.localTypes.push(vt)
+				nextScratch = (nextScratch + 1) as Wasm32Index
+			end 'present'
+		end 'canonical'
+	end 'buildLocalDeclarations'
+
+	// The distinct valtypes appearing among this function's block-args — the only valtypes a
+	// phi-copy cycle can stage through, and so the only scratch locals worth reserving.
+	function collectPhiValTypes() returns PhiValTypeSet
+		var present = PhiValTypeSet.create()
+		for blockRef in self.func.blockRefs 'eachBlock'
+			let block = try self.module.blocks.get(blockRef) otherwise panic("collectPhiValTypes: blockRef {blockRef} not in module.blocks")
+			for arg in block.blockArgs 'eachArg'
+				present.insert(wasmValTypeOf(arg.argType))
+			end 'eachArg'
+		end 'eachBlock'
+		return present
+	end 'collectPhiValTypes'
+
+	function buildBlockDispatchMap()
+		for i in 0 upto self.func.blockRefs.count() 'eachBlock'
+			let blockRef = try self.func.blockRefs.get(i) otherwise panic("buildBlockDispatchMap: blockRefs.get OOB at {i}")
+			let block = try self.module.blocks.get(blockRef) otherwise panic("buildBlockDispatchMap: blockRef {blockRef} not in module.blocks")
+			self.blockDispatchById.upsert(block.id, value: i as Wasm32Index)
+		end 'eachBlock'
+	end 'buildBlockDispatchMap'
+
+	// ----------------------------------------------------------------------
+	// Body emission
+	// ----------------------------------------------------------------------
+
+	function emit()
+		let blockCount = self.func.blockRefs.count()
+		if blockCount == 0 'empty'
+			self.body.unreachable()
+			return
+		end 'empty'
+
+		if self.useDispatcher 'dispatch'
+			self.emitDispatcher(blockCount)
+		end 'dispatch' else 'single'
+			self.emitSingleBlock()
+		end 'single'
+	end 'emit'
+
+	// A lone block that returns: straight-line body then its return terminator. No dispatcher,
+	// no dispatch local, no wrapping structure.
+	function emitSingleBlock()
+		let blockRef = try self.func.blockRefs.get(0) otherwise panic("emitSingleBlock: blockRefs.get(0) OOB")
+		let block = try self.module.blocks.get(blockRef) otherwise panic("emitSingleBlock: blockRef {blockRef} not in module.blocks")
+
+		for opIdx in block.opRefs 'eachOp'
+			self.emitBodyOp(try self.module.ops.get(opIdx) otherwise panic("emitSingleBlock: opIdx {opIdx} not in module.ops"))
+		end 'eachOp'
+
+		if block.hasTerminatorOp() 'hasTerm'
+			self.emitStraightLineTerminator(try self.module.ops.get(block.terminatorIndex()) otherwise panic("emitSingleBlock: terminatorIndex not in module.ops"))
+		end 'hasTerm' else 'noTerm'
+			self.body.unreachable()
+		end 'noTerm'
+	end 'emitSingleBlock'
+
+	function emitStraightLineTerminator(op StdOp)
+		match op 'term'
+			ret(retValId) then self.emitRet(retValId)
+			retVoid then self.emitRetVoid()
+			const to mod then panic("emitStraightLineTerminator: an arith op is not a terminator")
+			condBranch then panic("emitStraightLineTerminator: a `condBranch` block should have taken the dispatcher path")
+			branch then panic("emitStraightLineTerminator: a `branch` block should have taken the dispatcher path")
+			param then panic("emitStraightLineTerminator: a `param` op is not a terminator")
+			call then panic("emitStraightLineTerminator: a `call` op is not a terminator")
+			globalAddr to rdataAddr then panic("emitStraightLineTerminator: a memory/system op is not a terminator")
+		end 'term'
+	end 'emitStraightLineTerminator'
+
+	// The loop+br_table dispatcher (CONTRACT §1, v1 `emitStructuredCfg`). One outer `loop`; one
+	// `block` nested per basic block; a `br_table` off the dispatch local jumps to block N's
+	// code (which sits just after the N-th nested `end`). Each block ends by either returning or
+	// setting the dispatch local and branching back to the loop. Handles any reducible CFG.
+	function emitDispatcher(blockCount BlockCount)
+		self.body.beginLoop()
+
+		for _ in 0 upto blockCount 'nest'
+			self.body.beginBlock()
+		end 'nest'
+
+		self.body.localGet(self.dispatchLocal)
+		var targets = Wasm32IndexArray.create()
+		for i in 0 upto blockCount 'tableEntry'
+			targets.push(i as Wasm32Index)
+		end 'tableEntry'
+		self.body.brTable(targets, defaultTarget: 0)
+
+		for i in 0 upto blockCount 'eachBlock'
+			// Close the i-th nested block; its `end` is exactly where block i's code begins, so
+			// `br_table` entry i lands here.
+			self.body.endOp()
+
+			let blockRef = try self.func.blockRefs.get(i) otherwise panic("emitDispatcher: blockRefs.get OOB at {i}")
+			let block = try self.module.blocks.get(blockRef) otherwise panic("emitDispatcher: blockRef {blockRef} not in module.blocks")
+
+			for opIdx in block.opRefs 'eachOp'
+				self.emitBodyOp(try self.module.ops.get(opIdx) otherwise panic("emitDispatcher: opIdx {opIdx} not in module.ops"))
+			end 'eachOp'
+
+			// The distance from block-code depth to the outer loop: after i+1 `end`s, the loop is
+			// the (blockCount-1-i)-th enclosing structure.
+			let loopDepth = (blockCount - 1 - i) as Wasm32Index
+			if block.hasTerminatorOp() 'hasTerm'
+				self.emitDispatcherTerminator(try self.module.ops.get(block.terminatorIndex()) otherwise panic("emitDispatcher: terminatorIndex not in module.ops"), currentBlock: block, loopDepth: loopDepth)
+			end 'hasTerm' else 'noTerm'
+				self.body.unreachable()
+			end 'noTerm'
+		end 'eachBlock'
+
+		self.body.endOp()
+		// After the loop: every block returns or branches back, so control never falls out —
+		// but the validator checks the stack at the function end, and `unreachable` makes it
+		// polymorphic, satisfying any result type (CONTRACT §4.4).
+		self.body.unreachable()
+	end 'emitDispatcher'
+
+	function emitDispatcherTerminator(op StdOp, currentBlock IrBlock, loopDepth Wasm32Index)
+		match op 'term'
+			ret(retValId) then self.emitRet(retValId)
+			retVoid then self.emitRetVoid()
+			branch(targetBlockId) then self.emitDispatchBranch(targetBlockId, currentBlock: currentBlock, loopDepth: loopDepth)
+			condBranch(condId, thenBlockId, elseBlockId) then self.emitDispatchCondBranch(condId, thenBlockId: thenBlockId, elseBlockId: elseBlockId, currentBlock: currentBlock, loopDepth: loopDepth)
+			const to mod then panic("emitDispatcherTerminator: an arith op is not a terminator")
+			param then panic("emitDispatcherTerminator: a `param` op is not a terminator")
+			call then panic("emitDispatcherTerminator: a `call` op is not a terminator")
+			globalAddr to rdataAddr then panic("emitDispatcherTerminator: a memory/system op is not a terminator")
+		end 'term'
+	end 'emitDispatcherTerminator'
+
+	// ----------------------------------------------------------------------
+	// Per-StdOp body emitters (arith + call bands)
+	// ----------------------------------------------------------------------
+
+	// Emit one non-terminator op. `ret`/`retVoid` are accepted here too (a Std `ret` is normally
+	// the terminator, but is handled uniformly if it appears in a block body). Branch ops are
+	// terminators and panic; the memory/system bands are out of the scalar slice and panic.
+	function emitBodyOp(op StdOp)
+		match op 'body'
+			const(resultId, value, valueType) then self.emitConst(resultId, value: value, valueType: valueType)
+			binOp(resultId, lhs, rhs, opcode, operandType) then self.emitBinOp(resultId, lhs: lhs, rhs: rhs, opcode: opcode, operandType: operandType)
+			unaryOp(resultId, operand, opcode, operandType) then self.emitUnaryOp(resultId, operand: operand, opcode: opcode, operandType: operandType)
+			cmp(resultId, lhs, rhs, pred, operandType) then self.emitCmp(resultId, lhs: lhs, rhs: rhs, pred: pred, operandType: operandType)
+			binOpImm(resultId, lhs, imm, opcode) then self.emitBinOpImm(resultId, lhs: lhs, imm: imm, opcode: opcode)
+			cmpImm(resultId, lhs, imm, pred) then self.emitCmpImm(resultId, lhs: lhs, imm: imm, pred: pred)
+			div(resultId, lhs, rhs) then self.emitDivMod(resultId, lhs: lhs, rhs: rhs, isRemainder: false)
+			mod(resultId, lhs, rhs) then self.emitDivMod(resultId, lhs: lhs, rhs: rhs, isRemainder: true)
+			condBranch then panic("emitBodyOp: a `condBranch` is always a terminator, never a body op")
+			branch then panic("emitBodyOp: a `branch` is always a terminator, never a body op")
+			ret(retValId) then self.emitRet(retValId)
+			param(resultId, index, _) then self.emitParam(resultId, index: index)
+			call(resultId, callee, args) then self.emitCall(resultId, callee: callee, args: args)
+			retVoid then self.emitRetVoid()
+			globalAddr then panic("wasm: globalAddr not in scalar slice")
+			loadIndirect then panic("wasm: loadIndirect not in scalar slice")
+			storeIndirect then panic("wasm: storeIndirect not in scalar slice")
+			osAllocPages then panic("wasm: osAllocPages not in scalar slice")
+			osWriteStdout then panic("wasm: osWriteStdout not in scalar slice")
+			rdataAddr then panic("wasm: rdataAddr not in scalar slice")
+		end 'body'
+	end 'emitBodyOp'
+
+	function emitConst(resultId ValueId, value ParsedInt, valueType StdType)
+		self.emitIntConst(isWideInt(valueType, what: "const"), value: value)
+		self.body.localSet(resultId as Wasm32Index)
+	end 'emitConst'
+
+	// Push an integer constant of the selected width. The i32 form takes the low 32 bits of the
+	// value reinterpreted as signed, so a `u32`/negative literal encodes correctly.
+	function emitIntConst(wide bool, value ParsedInt)
+		if wide 'i64'
+			self.body.i64Const(value)
+		end 'i64' else 'i32'
+			self.body.i32Const(narrowToImm32(value))
+		end 'i32'
+	end 'emitIntConst'
+
+	function emitBinOp(resultId ValueId, lhs ValueId, rhs ValueId, opcode StdBinOpcode, operandType StdType)
+		let wide = isWideInt(operandType, what: "binOp")
+		self.body.localGet(lhs as Wasm32Index)
+		self.body.localGet(rhs as Wasm32Index)
+		self.emitBinOpcode(opcode, wide: wide)
+		self.body.localSet(resultId as Wasm32Index)
+	end 'emitBinOp'
+
+	function emitBinOpImm(resultId ValueId, lhs ValueId, imm Imm32, opcode StdBinOpcode)
+		// `binOpImm` carries no operand type; its width is `lhs`'s (the immediate right operand
+		// is folded in). The immediate is pushed as a same-width const so wasm's typed ALU op is
+		// balanced (e.g. `i64.shl` pops two i64s).
+		let wide = getValtype(self.valtypes, v: lhs) == WasmValType.i64
+		self.body.localGet(lhs as Wasm32Index)
+		self.emitIntConst(wide, value: imm)
+		self.emitBinOpcode(opcode, wide: wide)
+		self.body.localSet(resultId as Wasm32Index)
+	end 'emitBinOpImm'
+
+	// The integer ALU opcode of the selected width. `div` (StdBinOpcode) is FLOAT division and
+	// out of the scalar slice; integer division is the separate `StdOp.div`, so a `binOp(div)`
+	// here is a lowering bug.
+	function emitBinOpcode(opcode StdBinOpcode, wide bool)
+		if wide 'i64'
+			match opcode 'w'
+				add then self.body.i64Add()
+				sub then self.body.i64Sub()
+				mul then self.body.i64Mul()
+				bitAnd then self.body.i64And()
+				bitOr then self.body.i64Or()
+				bitXor then self.body.i64Xor()
+				shl then self.body.i64Shl()
+				shr then self.body.i64ShrS()
+				shrLogical then self.body.i64ShrU()
+				div then panic("wasm: `binOp(div)` is float division (out of the scalar slice); integer division is `StdOp.div`")
+			end 'w'
+		end 'i64' else 'i32'
+			match opcode 'n'
+				add then self.body.i32Add()
+				sub then self.body.i32Sub()
+				mul then self.body.i32Mul()
+				bitAnd then self.body.i32And()
+				bitOr then self.body.i32Or()
+				bitXor then self.body.i32Xor()
+				shl then self.body.i32Shl()
+				shr then self.body.i32ShrS()
+				shrLogical then self.body.i32ShrU()
+				div then panic("wasm: `binOp(div)` is float division (out of the scalar slice); integer division is `StdOp.div`")
+			end 'n'
+		end 'i32'
+	end 'emitBinOpcode'
+
+	function emitUnaryOp(resultId ValueId, operand ValueId, opcode StdUnaryOpcode, operandType StdType)
+		match opcode 'op'
+			neg then self.emitNegExpr(operand, wide: isWideInt(operandType, what: "neg"))
+			bitNot then self.emitBitNotExpr(operand, wide: isWideInt(operandType, what: "bitNot"))
+			logicalNot then self.emitLogicalNotExpr(operand)
+			siToFp then panic("wasm: siToFp (int→float conversion) not in scalar slice")
+			fpToSi then panic("wasm: fpToSi (float→int conversion) not in scalar slice")
+		end 'op'
+		self.body.localSet(resultId as Wasm32Index)
+	end 'emitUnaryOp'
+
+	// Integer negate as `0 - operand` (wasm has no unary negate).
+	function emitNegExpr(operand ValueId, wide bool)
+		self.emitIntConst(wide, value: 0)
+		self.body.localGet(operand as Wasm32Index)
+		if wide 'i64'
+			self.body.i64Sub()
+		end 'i64' else 'i32'
+			self.body.i32Sub()
+		end 'i32'
+	end 'emitNegExpr'
+
+	// Bitwise complement as `operand xor -1` (all-ones flips every bit).
+	function emitBitNotExpr(operand ValueId, wide bool)
+		self.body.localGet(operand as Wasm32Index)
+		self.emitIntConst(wide, value: -1)
+		if wide 'i64'
+			self.body.i64Xor()
+		end 'i64' else 'i32'
+			self.body.i32Xor()
+		end 'i32'
+	end 'emitBitNotExpr'
+
+	// Logical NOT of a 0/1 bool as `operand xor 1` (flip bit 0). A bool is an i1 → i32 local,
+	// matching the native backends' `eor #1` / `xor reg, 1` convention.
+	function emitLogicalNotExpr(operand ValueId)
+		self.body.localGet(operand as Wasm32Index)
+		self.body.i32Const(1 as Imm32)
+		self.body.i32Xor()
+	end 'emitLogicalNotExpr'
+
+	function emitCmp(resultId ValueId, lhs ValueId, rhs ValueId, pred StdCmpPred, operandType StdType)
+		let wide = isWideInt(operandType, what: "cmp")
+		self.body.localGet(lhs as Wasm32Index)
+		self.body.localGet(rhs as Wasm32Index)
+		self.emitCmpPred(pred, wide: wide)
+		self.body.localSet(resultId as Wasm32Index)
+	end 'emitCmp'
+
+	function emitCmpImm(resultId ValueId, lhs ValueId, imm Imm32, pred StdCmpPred)
+		// Like `binOpImm`, `cmpImm` carries no operand type — the compare width is `lhs`'s.
+		let wide = getValtype(self.valtypes, v: lhs) == WasmValType.i64
+		self.body.localGet(lhs as Wasm32Index)
+		self.emitIntConst(wide, value: imm)
+		self.emitCmpPred(pred, wide: wide)
+		self.body.localSet(resultId as Wasm32Index)
+	end 'emitCmpImm'
+
+	// A wasm compare pops two operands and pushes an i32 (0/1) — exactly the i1→i32 bool the Std
+	// `cmp`/`cmpImm` result is typed as, so no extension is needed. Std compares are SIGNED (the
+	// native backends treat every Std integer as signed), so the signed families are used.
+	function emitCmpPred(pred StdCmpPred, wide bool)
+		if wide 'i64'
+			match pred 'w'
+				eq then self.body.i64Eq()
+				ne then self.body.i64Ne()
+				lt then self.body.i64LtS()
+				gt then self.body.i64GtS()
+				le then self.body.i64LeS()
+				ge then self.body.i64GeS()
+			end 'w'
+		end 'i64' else 'i32'
+			match pred 'n'
+				eq then self.body.i32Eq()
+				ne then self.body.i32Ne()
+				lt then self.body.i32LtS()
+				gt then self.body.i32GtS()
+				le then self.body.i32LeS()
+				ge then self.body.i32GeS()
+			end 'n'
+		end 'i32'
+	end 'emitCmpPred'
+
+	// Signed integer division / remainder. Width from `lhs` (div/mod carry no operand type).
+	// wasm traps natively on a zero divisor and on INT_MIN/-1, matching the intended semantics;
+	// the Tier-1 division specs all use non-zero divisors (CONTRACT §4.7).
+	function emitDivMod(resultId ValueId, lhs ValueId, rhs ValueId, isRemainder bool)
+		let wide = getValtype(self.valtypes, v: lhs) == WasmValType.i64
+		self.body.localGet(lhs as Wasm32Index)
+		self.body.localGet(rhs as Wasm32Index)
+		if isRemainder 'rem'
+			if wide 'remWide'
+				self.body.i64RemS()
+			end 'remWide' else 'remNarrow'
+				self.body.i32RemS()
+			end 'remNarrow'
+		end 'rem' else 'div'
+			if wide 'divWide'
+				self.body.i64DivS()
+			end 'divWide' else 'divNarrow'
+				self.body.i32DivS()
+			end 'divNarrow'
+		end 'div'
+		self.body.localSet(resultId as Wasm32Index)
+	end 'emitDivMod'
+
+	// A parameter already occupies its own local (id == index in the scalar ABI), so the copy is
+	// emitted only for the general case where the two differ.
+	function emitParam(resultId ValueId, index ParamCount)
+		if resultId != index 'needsCopy'
+			self.body.localGet(index as Wasm32Index)
+			self.body.localSet(resultId as Wasm32Index)
+		end 'needsCopy'
+	end 'emitParam'
+
+	// Push each argument (in parameter order — `lowerCall` already reordered any labelled args),
+	// call the callee, and store the result only if the callee returns a value.
+	function emitCall(resultId ValueId, callee ByteArray, args ValueIdArray)
+		let paramTypes = try self.calleeParamTypes.get(callee) otherwise panic("emitCall: no param types for callee '{String.from(callee)}'")
+		for argIdx in 0 upto args.count() 'eachArg'
+			let arg = try args.get(argIdx) otherwise panic("emitCall: args.get OOB at {argIdx}")
+			self.body.localGet(arg as Wasm32Index)
+			let paramVt = try paramTypes.get(argIdx) otherwise panic("emitCall: callee '{String.from(callee)}' declares fewer params than the {argIdx + 1} args passed")
+			coerceOnStack(self.body, from: getValtype(self.valtypes, v: arg), to: paramVt)
+		end 'eachArg'
+
+		let funcIdx = try self.calleeFuncIdx.get(callee) otherwise panic("emitCall: no wasm function index for callee '{String.from(callee)}'")
+		self.body.call(funcIdx)
+
+		let rt = try self.calleeReturnType.get(callee) otherwise panic("emitCall: no return type for callee '{String.from(callee)}'")
+		if not stdReturnTypeIsVoid(rt) 'hasResult'
+			self.body.localSet(resultId as Wasm32Index)
+		end 'hasResult'
+	end 'emitCall'
+
+	// Value return: push the return value and `return`. A `void` return type here means a value
+	// `ret` in a void function — the parser rejects that source, so it is a lowering bug.
+	function emitRet(retValId ValueId)
+		if stdReturnTypeIsVoid(self.func.returnType) 'void'
+			panic("emitRet: a value `ret` in a void-returning function — a void return lowers to `retVoid`")
+		end 'void'
+		self.body.localGet(retValId as Wasm32Index)
+		let resultTypes = funcResultValTypes(self.func.returnType)
+		let resultVt = try resultTypes.get(0) otherwise panic("emitRet: value-returning function has no result valtype")
+		coerceOnStack(self.body, from: getValtype(self.valtypes, v: retValId), to: resultVt)
+		self.body.returnOp()
+	end 'emitRet'
+
+	// Void return: nothing on the stack, bare `return`. A value return type here would leave the
+	// caller reading nothing — the parser rejects that source, so it is a lowering bug.
+	function emitRetVoid()
+		if not stdReturnTypeIsVoid(self.func.returnType) 'valueExpected'
+			panic("emitRetVoid: a `retVoid` in a value-returning function — the caller would read nothing")
+		end 'valueExpected'
+		self.body.returnOp()
+	end 'emitRetVoid'
+
+	// ----------------------------------------------------------------------
+	// Dispatcher terminators: branch / cond-branch (with phi copies)
+	// ----------------------------------------------------------------------
+
+	function emitDispatchBranch(targetBlockId BlockId, currentBlock IrBlock, loopDepth Wasm32Index)
+		self.emitEdgePhiCopies(currentBlock, targetBlockId: targetBlockId)
+		self.emitSetDispatch(self.dispatchIndexOf(targetBlockId))
+		self.body.br(loopDepth)
+	end 'emitDispatchBranch'
+
+	// Two-way branch: test the condition, and inside each arm emit ONLY that edge's phi copies
+	// (they are valid only on the path actually taken — emitting both unconditionally would
+	// clobber the not-taken target's phi locals, v1's `String.trim` corruption), set the dispatch
+	// index, then `br` back to the loop after the `if`/`end`.
+	function emitDispatchCondBranch(condId ValueId, thenBlockId BlockId, elseBlockId BlockId, currentBlock IrBlock, loopDepth Wasm32Index)
+		self.body.localGet(condId as Wasm32Index)
+		// `if` consumes an i32; a bool is already i32, but a condition widened to i64 must be
+		// narrowed first.
+		if getValtype(self.valtypes, v: condId) == WasmValType.i64 'wideCond'
+			self.body.i32WrapI64()
+		end 'wideCond'
+		self.body.beginIf()
+
+		self.emitEdgePhiCopies(currentBlock, targetBlockId: thenBlockId)
+		self.emitSetDispatch(self.dispatchIndexOf(thenBlockId))
+
+		self.body.elseClause()
+
+		self.emitEdgePhiCopies(currentBlock, targetBlockId: elseBlockId)
+		self.emitSetDispatch(self.dispatchIndexOf(elseBlockId))
+
+		self.body.endOp()
+		self.body.br(loopDepth)
+	end 'emitDispatchCondBranch'
+
+	function emitSetDispatch(dispatchIndex Wasm32Index)
+		self.body.i32Const(dispatchIndex as Imm32)
+		self.body.localSet(self.dispatchLocal)
+	end 'emitSetDispatch'
+
+	function dispatchIndexOf(blockId BlockId) returns Wasm32Index
+		return try self.blockDispatchById.get(blockId) otherwise panic("dispatchIndexOf: branch targets block id {blockId} not in func.blockRefs")
+	end 'dispatchIndexOf'
+
+	// ----------------------------------------------------------------------
+	// Phi (block-arg) parallel copies on a branch edge
+	// ----------------------------------------------------------------------
+
+	// Copy the values `currentBlock` passes on its edge to `targetBlockId` into that block's
+	// block-arg locals, as a SEQUENTIALIZED parallel copy (§4.1). The incoming values live on
+	// the predecessor's `branchEdges` entry for the target; the destinations are the target's
+	// `blockArgs`. A target with block-args must have a matching edge from every predecessor
+	// (IrBlock's phi-model contract), so a missing edge is only valid when the target has none.
+	function emitEdgePhiCopies(currentBlock IrBlock, targetBlockId BlockId)
+		let targetBlock = self.blockById(targetBlockId)
+
+		// A condBranch's then/else targets are distinct and a branch has one target, so a target
+		// appears at most once among the predecessor's phi edges — the first match is the edge.
+		for edge in currentBlock.branchEdges 'eachEdge'
+			if edge.targetBlockId == targetBlockId 'thisEdge'
+				self.emitPhiCopyForEdge(edge, currentBlock: currentBlock, targetBlock: targetBlock)
+				return
+			end 'thisEdge'
+		end 'eachEdge'
+
+		// No phi edge to this target: valid only when the target carries no block-args (a block
+		// with block-args records an edge from every predecessor — IrBlock's phi-model contract).
+		if targetBlock.blockArgs.count() > 0 'missingArgs'
+			panic("emitEdgePhiCopies: block '{String.from(currentBlock.label)}' branches to '{String.from(targetBlock.label)}' which has {targetBlock.blockArgs.count()} block-args, but records no branch edge carrying them")
+		end 'missingArgs'
+	end 'emitEdgePhiCopies'
+
+	function emitPhiCopyForEdge(edge BranchEdge, currentBlock IrBlock, targetBlock IrBlock)
+		if edge.argIds.count() != targetBlock.blockArgs.count() 'arity'
+			panic("emitPhiCopyForEdge: edge '{String.from(currentBlock.label)}' → '{String.from(targetBlock.label)}' carries {edge.argIds.count()} args but the block has {targetBlock.blockArgs.count()} block-args")
+		end 'arity'
+
+		var dsts = ValueIdArray.create()
+		var srcs = ValueIdArray.create()
+		for k in 0 upto targetBlock.blockArgs.count() 'eachPhi'
+			let dst = (try targetBlock.blockArgs.get(k) otherwise panic("emitPhiCopyForEdge: blockArgs.get OOB at {k}")).valueId
+			let src = try edge.argIds.get(k) otherwise panic("emitPhiCopyForEdge: argIds.get OOB at {k}")
+			if dst != src 'realMove'
+				dsts.push(dst)
+				srcs.push(src)
+			end 'realMove'
+		end 'eachPhi'
+
+		self.sequenceParallelCopy(dsts, srcs: srcs)
+	end 'emitPhiCopyForEdge'
+
+	function blockById(blockId BlockId) returns IrBlock
+		let idx = self.dispatchIndexOf(blockId)
+		let blockRef = try self.func.blockRefs.get(idx) otherwise panic("blockById: blockRefs.get OOB at {idx}")
+		return try self.module.blocks.get(blockRef) otherwise panic("blockById: blockRef {blockRef} not in module.blocks")
+	end 'blockById'
+
+	// Sequence a parallel copy (`dsts[k]` ← `srcs[k]`, dsts distinct) into ordered local copies.
+	// Repeatedly emit a leaf (a dst that is no other move's source); when only cycles remain,
+	// break one by exchanging its two locals through a valtype-matched scratch local (wasm has
+	// no `xchg`) and rewrite the remaining sources through the exchange. Consumes `dsts`/`srcs`
+	// as worklists. The standard parallel-move algorithm, with a scratch-staged swap in place of
+	// the register backends' `xchg`.
+	function sequenceParallelCopy(dsts ValueIdArray, srcs ValueIdArray)
+		while dsts.count() > 0 'seq'
+			removeSatisfiedMoves(dsts, srcs: srcs)
+			if dsts.count() == 0 'done'
+				break
+			end 'done'
+
+			let leaf = findLeafMove(dsts, srcs: srcs)
+			if leaf < dsts.count() 'foundLeaf'
+				let d = try dsts.get(leaf) otherwise panic("sequenceParallelCopy: dsts.get OOB at leaf {leaf}")
+				let s = try srcs.get(leaf) otherwise panic("sequenceParallelCopy: srcs.get OOB at leaf {leaf}")
+				self.emitLocalCopy(d as Wasm32Index, srcLocal: s)
+				removeMoveAt(dsts, srcs: srcs, idx: leaf)
+			end 'foundLeaf' else 'cycle'
+				let a = try dsts.get(0) otherwise panic("sequenceParallelCopy: dsts.get(0) OOB")
+				let b = try srcs.get(0) otherwise panic("sequenceParallelCopy: srcs.get(0) OOB")
+				let scratch = self.scratchFor(getValtype(self.valtypes, v: a))
+				// Exchange a and b via scratch, satisfying (a ← b): scratch←a; a←b; b←scratch.
+				self.emitLocalCopy(scratch, srcLocal: a as Wasm32Index)
+				self.emitLocalCopy(a as Wasm32Index, srcLocal: b)
+				self.emitLocalCopy(b as Wasm32Index, srcLocal: scratch)
+				removeMoveAt(dsts, srcs: srcs, idx: 0)
+				rewriteSourcesThroughSwap(srcs, a: a, b: b)
+			end 'cycle'
+		end 'seq'
+	end 'sequenceParallelCopy'
+
+	function emitLocalCopy(dstLocal Wasm32Index, srcLocal Wasm32Index)
+		self.body.localGet(srcLocal)
+		self.body.localSet(dstLocal)
+	end 'emitLocalCopy'
+
+	function scratchFor(vt WasmValType) returns Wasm32Index
+		return try self.scratchLocalByValType.get(vt) otherwise panic("scratchFor: no cycle-break scratch local reserved for valtype {vt.name} — collectPhiValTypes missed a block-arg type")
+	end 'scratchFor'
+end 'WasmFuncEmitter'
+
+// ==========================================================================
+// Free helpers: constant narrowing, dispatcher decision, parallel-copy worklist
+// ==========================================================================
+
+// The low 32 bits of `value`, reinterpreted as a signed i32 — what a wasm `i32.const` (an
+// SLEB128 of a 32-bit two's-complement value) encodes. Lets a `u32`/negative literal round-trip
+// through the signed `Imm32` the encoder carries.
+function narrowToImm32(value ParsedInt) returns Imm32
+	let low = value and 0xFFFFFFFF
+	if low > i32.max 'negative'
+		return (low - 0x100000000) as Imm32
+	end 'negative'
+	return low as Imm32
+end 'narrowToImm32'
+
+// Whether `func` needs the loop+br_table dispatcher. Any multi-block function does; a
+// single-block function does too when its terminator branches (a self-loop) rather than
+// returning — a lone returning block emits straight-line.
+function decideDispatcher(module StdModule, func IrFunction) returns bool
+	let blockCount = func.blockRefs.count()
+	if blockCount > 1 'multi'
+		return true
+	end 'multi'
+	if blockCount == 0 'empty'
+		return false
+	end 'empty'
+
+	let blockRef = try func.blockRefs.get(0) otherwise panic("decideDispatcher: blockRefs.get(0) OOB")
+	let block = try module.blocks.get(blockRef) otherwise panic("decideDispatcher: blockRef {blockRef} not in module.blocks")
+	if not block.hasTerminatorOp() 'noTerm'
+		return false
+	end 'noTerm'
+
+	let term = try module.ops.get(block.terminatorIndex()) otherwise panic("decideDispatcher: terminatorIndex not in module.ops")
+	match term 'k'
+		const to mod then break 'k'
+		condBranch then return true
+		branch then return true
+		ret then break 'k'
+		param then break 'k'
+		call then break 'k'
+		retVoid then break 'k'
+		globalAddr to rdataAddr then break 'k'
+	end 'k'
+	return false
+end 'decideDispatcher'
+
+// Index of a move whose dst is not any pending move's source (safe to emit now), or the move
+// count when every remaining dst is still needed as a source (a pure cycle).
+function findLeafMove(dsts ValueIdArray, srcs ValueIdArray) returns ValueId
+	for i in 0 upto dsts.count() 'each'
+		let d = try dsts.get(i) otherwise panic("findLeafMove: dsts.get OOB at {i}")
+		if not isAnySource(srcs, valueId: d) 'leaf'
+			return i
+		end 'leaf'
+	end 'each'
+	return dsts.count()
+end 'findLeafMove'
+
+function isAnySource(srcs ValueIdArray, valueId ValueId) returns bool
+	for s in srcs 'each'
+		if s == valueId 'match'
+			return true
+		end 'match'
+	end 'each'
+	return false
+end 'isAnySource'
+
+// Remove every move already satisfied (dst == src) — the self-copies a preceding scratch swap
+// just fulfilled (a source rewritten through the exchange now equals its dst). Scans back-to-
+// front so removals do not shift not-yet-visited indices.
+function removeSatisfiedMoves(dsts ValueIdArray, srcs ValueIdArray)
+	let n = dsts.count()
+	for ri in 0 upto n 'each'
+		let i = n - 1 - ri
+		let d = try dsts.get(i) otherwise panic("removeSatisfiedMoves: dsts.get OOB at {i}")
+		let s = try srcs.get(i) otherwise panic("removeSatisfiedMoves: srcs.get OOB at {i}")
+		if d == s 'satisfied'
+			removeMoveAt(dsts, srcs: srcs, idx: i)
+		end 'satisfied'
+	end 'each'
+end 'removeSatisfiedMoves'
+
+function removeMoveAt(dsts ValueIdArray, srcs ValueIdArray, idx ValueId)
+	_ = try dsts.remove(idx) otherwise panic("removeMoveAt: dsts.remove OOB at {idx}")
+	_ = try srcs.remove(idx) otherwise panic("removeMoveAt: srcs.remove OOB at {idx}")
+end 'removeMoveAt'
+
+// After exchanging locals a and b, a pending move reading a now finds its value in b and
+// vice-versa.
+function rewriteSourcesThroughSwap(srcs ValueIdArray, a ValueId, b ValueId)
+	for i in 0 upto srcs.count() 'each'
+		let s = try srcs.get(i) otherwise panic("rewriteSourcesThroughSwap: srcs.get OOB at {i}")
+		if s == a 'wasA'
+			try srcs.set(i, value: b) otherwise panic("rewriteSourcesThroughSwap: srcs.set OOB at {i}")
+		end 'wasA' else if s == b 'wasB'
+			try srcs.set(i, value: a) otherwise panic("rewriteSourcesThroughSwap: srcs.set OOB at {i}")
+		end 'wasB'
+	end 'each'
+end 'rewriteSourcesThroughSwap'

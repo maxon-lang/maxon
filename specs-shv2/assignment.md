@@ -35,6 +35,7 @@ reassignment across two variables, and the canonical accumulator loop. All three
 fit the placeholder register allocator's pool.
 
 <!-- test: basic-assignment -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	var x = 3
@@ -47,6 +48,7 @@ end 'main'
 ```
 
 <!-- test: multiple-assignments -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	var x = 10
@@ -61,6 +63,7 @@ end 'main'
 ```
 
 <!-- test: assignment-in-loop -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	var sum = 0

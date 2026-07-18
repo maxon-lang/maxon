@@ -44,6 +44,7 @@ end 'main'
 ## Tests
 
 <!-- test: basic-bool -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let x = true
@@ -61,6 +62,7 @@ end 'main'
 
 
 <!-- test: bool-parameter -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -83,6 +85,7 @@ end 'main'
 
 
 <!-- test: bool-from-comparison -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let result = 5 > 3

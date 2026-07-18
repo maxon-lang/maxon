@@ -37,6 +37,7 @@ would pass every one of them. `false-direction-and-boundary` is the companion th
 closes it, and it is also the only test of `<` and `>=`.
 
 <!-- test: equality -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let x = 42
@@ -51,6 +52,7 @@ end 'main'
 ```
 
 <!-- test: not-equal -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let x = 10
@@ -65,6 +67,7 @@ end 'main'
 ```
 
 <!-- test: greater-than -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	if 5 > 3 'check'
@@ -78,6 +81,7 @@ end 'main'
 ```
 
 <!-- test: less-than-or-equal -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let a = 5
@@ -93,6 +97,7 @@ end 'main'
 ```
 
 <!-- test: false-direction-and-boundary -->
+<!-- targets: wasm32-wasi -->
 Every test above takes its branch, and that is a hole: a comparison lowered to an
 UNCONDITIONAL jump passes `not-equal`, `greater-than`, and `less-than-or-equal`
 unchanged, and an off-by-one condition code — `>` emitted as `JGE`, `<=` as `JL` —
@@ -136,6 +141,7 @@ end 'main'
 ```
 
 <!-- test: fused-compare-is-highest-value -->
+<!-- targets: wasm32-wasi -->
 A fused compare — one whose boolean is consumed only as the EFLAGS a `jcc` reads, never
 out of a register — leaves NO trace among the target ops: it is neither an operand nor a
 def there. So when it is the function's HIGHEST-numbered value, `scanFunctionValueCount`

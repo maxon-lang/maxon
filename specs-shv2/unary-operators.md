@@ -30,6 +30,7 @@ M4) and `negate-float` (needs floats + `trunc`, later) are DEFERRED and recorded
 under `## Deferred` below.
 
 <!-- test: unary-minus -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let x = -42

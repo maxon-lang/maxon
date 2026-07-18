@@ -43,6 +43,7 @@ phi), the `while true` loop (`while-loops.break`), and the `mod`-using
 `nested-control` are DEFERRED under `## Deferred`.
 
 <!-- test: while-loops.zero-iterations -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	var x = 10
@@ -57,6 +58,7 @@ end 'main'
 ```
 
 <!-- test: while-loops.continue -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	var sum = 0
@@ -77,6 +79,7 @@ end 'main'
 
 
 <!-- test: while-loops.sequential-loops -->
+<!-- targets: wasm32-wasi -->
 Two loops one after another, each with its own counter. The second loop's blocks are reachable
 only after the first loop's exit, so nothing from one is live in the other. `i0` counts to 3 and
 `i1` counts to 3, so `3 + 3 = 6`.
@@ -102,6 +105,7 @@ end 'main'
 ```
 
 <!-- test: while-loops.sequential-loops-across-a-call -->
+<!-- targets: wasm32-wasi -->
 **A register-allocator regression test, and the reason it exists is worth stating.** Two sequential
 loops, each CALLING a function and each carrying an accumulator, plus a `total` that is live ACROSS
 both loops. Every loop-carried value here is live across a call, so it is forbidden all nine
@@ -152,6 +156,7 @@ end 'main'
 ```
 
 <!-- test: while-loops.sequential-loops-dead-phis -->
+<!-- targets: wasm32-wasi -->
 **The false-`E5001` regression test.** Two sequential loops, each calling a function, each carrying
 SIX accumulators — and the first loop's accumulators are DEAD by the time the second loop starts.
 
@@ -231,6 +236,7 @@ end 'main'
 
 
 <!-- test: while-loops.break -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	var x = 5
@@ -249,6 +255,7 @@ end 'main'
 
 
 <!-- test: while-loops.basic -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	var x = 5
@@ -268,6 +275,7 @@ end 'main'
 ```
 
 <!-- test: while-loops.carried-var-assigned-only-inside-an-if -->
+<!-- targets: wasm32-wasi -->
 **The guard on WHEN a loop-header phi is minted, and it is a wrong-answer test, not a crash test.**
 
 A loop carries a phi only for the mutable vars its body ASSIGNS (`Parser.parseWhileStatement` reads
@@ -300,6 +308,7 @@ end 'main'
 ```
 
 <!-- test: while-loops.loop-reads-a-var-it-never-assigns -->
+<!-- targets: wasm32-wasi -->
 **A var the loop READS but never ASSIGNS gets no phi at all — and that is correct, not a shortcut.**
 
 Its value cannot change across iterations, so its pre-loop definition **dominates** the header and the
@@ -324,6 +333,7 @@ end 'main'
 ```
 
 <!-- test: while-loops.inner-declaration-shadows-a-carried-var -->
+<!-- targets: wasm32-wasi -->
 **The token scan OVER-approximates, on purpose, and this is the case that proves it is harmless.**
 
 The inner `var t` shadows the outer one, and at token level `t =` is indistinguishable from a

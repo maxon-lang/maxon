@@ -62,6 +62,7 @@ end 'main'
 ## Tests
 
 <!-- test: addition -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	return 5 + 3
@@ -73,6 +74,7 @@ end 'main'
 
 
 <!-- test: multiplication -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	return 6 * 7
@@ -84,6 +86,7 @@ end 'main'
 
 
 <!-- test: precedence -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	return 2 + 3 * 4
@@ -95,6 +98,7 @@ end 'main'
 
 
 <!-- test: division-truncating-int -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	return 20 / 3
@@ -106,6 +110,7 @@ end 'main'
 
 
 <!-- test: trunc-division-optimizes -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	return 20 / 3             // int/int = truncating int, returns 6
@@ -117,6 +122,7 @@ end 'main'
 
 
 <!-- test: variable-division-optimizes -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let a = 7
@@ -130,6 +136,7 @@ end 'main'
 
 
 <!-- test: negative-division -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let neg = -7
@@ -146,6 +153,7 @@ end 'main'
 
 
 <!-- test: modulo -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	return 17 mod 5
@@ -157,6 +165,7 @@ end 'main'
 
 
 <!-- test: complex-expression -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let a = 10

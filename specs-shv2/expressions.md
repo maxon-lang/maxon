@@ -43,6 +43,7 @@ Operands must have compatible types:
 ## Tests
 
 <!-- test: compound -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	return (2 + 3) * 5
@@ -54,6 +55,7 @@ end 'main'
 
 
 <!-- test: with-function-call -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -73,6 +75,7 @@ end 'add'
 
 
 <!-- test: multiple-variables -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let x = 42
@@ -87,6 +90,7 @@ end 'main'
 
 
 <!-- test: mixed-operators -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let a = 10
@@ -100,6 +104,7 @@ end 'main'
 
 
 <!-- test: comparison-in-expression -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let isGreater = 10 > 5

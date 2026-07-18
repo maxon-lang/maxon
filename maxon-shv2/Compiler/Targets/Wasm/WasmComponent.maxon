@@ -1,0 +1,160 @@
+// WasmComponent — the post-processing step that turns the wasm backend's emitted CORE module into a
+// runnable WASI-Preview2 COMPONENT, plus the vendored-tool location helpers that step needs.
+//
+// The backend (`buildWasmBackend` → StdToWasm) emits a core module that imports the raw Preview2
+// interface funcs (`wasi:cli/exit`) and exports `wasi:cli/run`. wasmtime runs COMPONENTS, not bare
+// core modules, so `writeWasm` hands the written `.wasm` here to be wrapped in place: `wasm-tools
+// component embed` records the `maxon:app/command` world (so the component model knows which
+// interfaces the core lifts/lowers), then `component new` produces the final component. There is NO
+// asyncify pass — that is async-only, and shv2 has no `async` yet (v1 asyncified every module for its
+// green-thread runtime; the scalar slice has none).
+//
+// `findFileUpward` / `hostWasmToolCandidates` are the general vendored-binary locators, exported so
+// any other vendored-tool lookup (e.g. the spec-test runner's `wasmtime`) can reuse the SAME upward
+// walk instead of growing a second copy — a divergent search is how two callers end up disagreeing
+// about which vendored binary is "the" one.
+
+// One candidate path expressed as its ordered path segments; `findFileUpward` joins each onto the
+// level it is probing. An Array-of-Arrays so a caller can offer several spellings of the same file
+// (e.g. `.exe` vs extensionless) and take the first that exists.
+export typealias StringArrayArray = Array with StringArray
+
+// How many parent levels up from the cwd `findFileUpward` climbs before giving up. Ten is deep enough
+// to reach the repo root (which holds `vendor/`) from any build or spec-test working directory the
+// compiler runs in.
+let VendorSearchDepth = 10
+
+// Walk up from the current working directory (at most `VendorSearchDepth` parent levels, stopping at
+// the filesystem root) and return the first candidate that exists. Each entry of `candidateSegments` is the
+// path-segment list for one candidate, joined onto the level's directory in order — so the join stays
+// per-segment and cross-platform. Returns an empty FilePath when nothing matches at any level (the
+// not-found sentinel callers check with `.isEmpty()`).
+export function findFileUpward(candidateSegments StringArrayArray) returns FilePath
+	var dir = Directory.currentPath()
+	for _ in 0 upto VendorSearchDepth 'search'
+		for segments in candidateSegments 'eachCandidate'
+			var candidate = dir
+			for segment in segments 'join'
+				candidate = candidate.join(segment)
+			end 'join'
+			if File.exists(candidate) 'found'
+				return candidate
+			end 'found'
+		end 'eachCandidate'
+		// dir.parent() returns no value at the filesystem root; bail out empty.
+		let parentDir = try dir.parent() otherwise return FilePath from ""
+		dir = parentDir
+	end 'search'
+	return FilePath from ""
+end 'findFileUpward'
+
+// Order the `.exe` and extensionless candidate paths for a vendored host tool by the HOST os: the
+// binary that can actually exec here must come first. The vendor tree ships BOTH a Windows
+// `<tool>.exe` AND an extensionless native binary `<tool>` side-by-side, so a fixed order is wrong on
+// one host — on Windows the extensionless name resolves to the non-Windows binary (not absent), and
+// exec'ing it faults. Gate on `detectHostTarget()` (resolved per host at the compiler's own build) so
+// each host runs its own binary. `tool` is the vendor subdir, which equals the tool's basename (e.g.
+// "wasm-tools" → `vendor/wasm-tools/wasm-tools`).
+export function hostWasmToolCandidates(tool String) returns StringArrayArray
+	var candidates = StringArrayArray.create()
+
+	var exe = StringArray.create()
+	exe.push("vendor")
+	exe.push(tool)
+	exe.push("{tool}.exe")
+
+	var noExt = StringArray.create()
+	noExt.push("vendor")
+	noExt.push(tool)
+	noExt.push(tool)
+
+	if detectHostTarget().os == Os.windows 'winHost'
+		candidates.push(exe)
+		candidates.push(noExt)
+	end 'winHost' else 'nativeHost'
+		candidates.push(noExt)
+		candidates.push(exe)
+	end 'nativeHost'
+
+	return candidates
+end 'hostWasmToolCandidates'
+
+// Find the vendored `wasm-tools` (used to wrap the emitted core module into a WASI Preview2
+// component), preferring the binary that matches the host OS. Returns an empty FilePath if not found.
+function findWasmToolsPath() returns FilePath
+	return findFileUpward(hostWasmToolCandidates("wasm-tools"))
+end 'findWasmToolsPath'
+
+// Locate the vendored WASI WIT package directory (`vendor/wasi-wit`). We search for the `world.wit`
+// file via the same upward walk, then return its PARENT directory — `wasm-tools component embed`
+// wants the package root, not the file. Returns an empty FilePath if not found.
+function findWasmWitDir() returns FilePath
+	var candidates = StringArrayArray.create()
+
+	var full = StringArray.create()
+	full.push("vendor")
+	full.push("wasi-wit")
+	full.push("world.wit")
+	candidates.push(full)
+
+	let witFile = findFileUpward(candidates)
+	if witFile.isEmpty() 'missing'
+		return FilePath from ""
+	end 'missing'
+	return try witFile.parent() otherwise return FilePath from ""
+end 'findWasmWitDir'
+
+// Wrap the just-written core module into a WASI Preview2 component, IN PLACE. `component embed`
+// records the `maxon:app/command` world so the component model knows which interfaces the core module
+// lifts/lowers; `component new` produces the final component wasmtime runs. The `cli-exit-with-code`
+// feature must be enabled at embed time because the `wasi:cli/exit` import is gated
+// `@unstable(cli-exit-with-code)` in the WIT. A missing tool or a tool failure PANICS with the tool's
+// own stderr — an unrecoverable environment/emitter fault, surfaced verbatim so the reason is not
+// swallowed.
+export function wrapWasmComponent(outputPath FilePath)
+	let wasmToolsExe = findWasmToolsPath()
+	if wasmToolsExe.isEmpty() 'missingTool'
+		panic("wrapWasmComponent: wasm-tools not found in vendor/wasm-tools/ — required to wrap the wasm core module into a Preview2 component")
+	end 'missingTool'
+
+	let witDir = findWasmWitDir()
+	if witDir.isEmpty() 'missingWit'
+		panic("wrapWasmComponent: WASI WIT package not found at vendor/wasi-wit/ — required to wrap the wasm core module into a Preview2 component")
+	end 'missingWit'
+
+	// The embedded intermediate (component metadata recorded, not yet a component) lives next to the
+	// output so it shares the same writable directory.
+	let tmpEmbed = outputPath.changeExtension(".embed.wasm")
+	let cwd = Directory.currentPath()
+
+	var embedArgs = StringArray.create()
+	embedArgs.push("component")
+	embedArgs.push("embed")
+	embedArgs.push(witDir.toString())
+	embedArgs.push(outputPath.toString())
+	embedArgs.push("-o")
+	embedArgs.push(tmpEmbed.toString())
+	embedArgs.push("--world")
+	embedArgs.push("maxon:app/command")
+	embedArgs.push("--features")
+	embedArgs.push("cli-exit-with-code")
+	let embedResult = try Subprocess.run(Executable.path(wasmToolsExe), arguments: embedArgs, workingDirectory: cwd) otherwise (err) 'embedRunFail'
+		panic("wrapWasmComponent: failed to run wasm-tools component embed: {err.displayReason()}")
+	end 'embedRunFail'
+	if not embedResult.succeeded() 'embedFailed'
+		panic("wrapWasmComponent: wasm-tools component embed exited {embedResult.exitCode()}:\n{embedResult.stderr}")
+	end 'embedFailed'
+
+	var newArgs = StringArray.create()
+	newArgs.push("component")
+	newArgs.push("new")
+	newArgs.push(tmpEmbed.toString())
+	newArgs.push("-o")
+	newArgs.push(outputPath.toString())
+	let newResult = try Subprocess.run(Executable.path(wasmToolsExe), arguments: newArgs, workingDirectory: cwd) otherwise (err) 'newRunFail'
+		panic("wrapWasmComponent: failed to run wasm-tools component new: {err.displayReason()}")
+	end 'newRunFail'
+	if not newResult.succeeded() 'newFailed'
+		panic("wrapWasmComponent: wasm-tools component new exited {newResult.exitCode()}:\n{newResult.stderr}")
+	end 'newFailed'
+end 'wrapWasmComponent'
