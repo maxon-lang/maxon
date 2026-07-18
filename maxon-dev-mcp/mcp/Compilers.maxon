@@ -14,9 +14,10 @@
 // are generated from. It no longer matters which compiler is deprecated, because
 // the registry is not any compiler's.
 //
-// shv2's spec-test runner implements `--filter`, `--update-required`, and `--log`,
-// and NOTHING else: no `--mm-trace`, no `--target`, no `--verbose`. Its driver has
-// no `fmt` and no `--dump-stages`. Every tool used to carry the chosen compiler
+// shv2's spec-test runner implements `--filter`, `--update-required`, `--log`, and
+// `--target` (added 2026-07-18 with the wasm backend — `wasm32-wasi` cross-compiles
+// and runs the emitted component under the vendored wasmtime): no `--mm-trace`, no
+// `--verbose`. Its driver has no `fmt` and no `--dump-stages`. Every tool used to carry the chosen compiler
 // around as a bare String and re-derive "which binary, which flags" inline, which
 // is precisely how a flag one compiler has never heard of ends up being handed to
 // it anyway. This file is the single place that knows.
@@ -46,7 +47,6 @@ end 'CompilerArgError'
 /// option it doesn't know.
 export enum UnsupportedFlag implements Error
 	mmTrace
-	crossTarget
 	dumpStages
 end 'UnsupportedFlag'
 
@@ -124,7 +124,6 @@ end 'compilerArgErrorReason'
 export function unsupportedFlagReason(flag UnsupportedFlag, compiler Compiler) returns String
 	let capability = match flag 'f'
 		mmTrace gives "`mmTrace` (--mm-trace) — it has no memory-manager trace"
-		crossTarget gives "`target` (--target) — it only builds for the host"
 		dumpStages gives "`dumpStages` (--dump-stages) — it emits no per-stage IR artifacts"
 	end 'f'
 
@@ -184,11 +183,6 @@ export function checkSpecTestFlags(argsDoc JsonDoc, argsId JsonNodeId, compiler 
 	if mmTrace 'wantsMmTrace'
 		throw UnsupportedFlag.mmTrace
 	end 'wantsMmTrace'
-
-	let target = try argsDoc.getString(argsId, key: "target") otherwise ""
-	if not target.isEmpty() 'wantsCrossTarget'
-		throw UnsupportedFlag.crossTarget
-	end 'wantsCrossTarget'
 end 'checkSpecTestFlags'
 
 /// Reject `dumpStages: true` against a compiler with no per-stage IR emission.

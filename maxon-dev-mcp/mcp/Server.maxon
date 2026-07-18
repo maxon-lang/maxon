@@ -246,7 +246,7 @@ function schemaFieldsForRunSpecTest(doc JsonDoc) returns SchemaFieldArray
 	let updateRequiredSchema = schemaBoolean(doc, description: "Pass --update-required to regenerate RequiredIR blocks (csharp) or the committed .test goldens (shv2) in place. Pair it with `filter` — unfiltered, it rewrites the whole suite.")
 	let logSchema = schemaString(doc, description: "Optional logging spec passed to --log=<value> (e.g. \"codegen:trace\").")
 	let mmTraceSchema = schemaBoolean(doc, description: "Pass --mm-trace to enable runtime memory-manager trace output. Not supported by shv2.")
-	let targetSchema = schemaString(doc, description: "Optional cross-compile target passed to --target=<value> (not supported by shv2, which only builds for the host). Examples: \"x64-windows\", \"arm64-macos\", \"wasm32-wasi\", \"all\".")
+	let targetSchema = schemaString(doc, description: "Optional cross-compile target passed to --target=<value>. Examples: \"wasm32-wasi\", \"x64-windows\", \"arm64-macos\", \"all\". Both compilers accept it; shv2's \"wasm32-wasi\" cross-compiles and runs the emitted component under the vendored wasmtime. A cross-target the host cannot execute natively (e.g. x64-windows on arm64) compiles but its run-tests fail.")
 
 	var fields = SchemaFieldArray.create()
 	fields.push(SchemaField.create("compiler", schemaId: compilerSchema, required: false))
@@ -340,7 +340,7 @@ let SpecTestOutcomeDescription = "Run spec-tests with a filter, returning struct
 function schemaFieldsForSpecTestOutcome(doc JsonDoc) returns SchemaFieldArray
 	let filterSchema = schemaString(doc, description: "Pattern passed to --filter=<pattern>. Typically a single test name like `arithmetic/addition`.")
 	let compilerSchema = schemaStringEnum(doc, choices: compilerTokens(), description: "Which compiler. Default csharp.")
-	let targetSchema = schemaString(doc, description: "Optional cross-compile target passed to --target=<value> (not supported by shv2, which only builds for the host). Examples: \"x64-windows\", \"arm64-macos\", \"wasm32-wasi\", \"all\".")
+	let targetSchema = schemaString(doc, description: "Optional cross-compile target passed to --target=<value>. Examples: \"wasm32-wasi\", \"x64-windows\", \"arm64-macos\", \"all\". Both compilers accept it; shv2's \"wasm32-wasi\" cross-compiles and runs the emitted component under the vendored wasmtime. A cross-target the host cannot execute natively (e.g. x64-windows on arm64) compiles but its run-tests fail.")
 
 	var fields = SchemaFieldArray.create()
 	fields.push(SchemaField.create("filter", schemaId: filterSchema, required: true))

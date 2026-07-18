@@ -14,7 +14,7 @@
 // Inputs (JSON):
 //   filter: String          — required; passed to `--filter=<filter>`
 //   compiler?: "csharp" | "shv2"   (default "csharp")
-//   target?: String         — passed to `--target=<value>` (not shv2)
+//   target?: String         — passed to `--target=<value>` (shv2 too, since 2026-07-18)
 //
 // Output (JSON):
 //   compiler, filter, total, passed, failed, durationMs, memoryLeak,
@@ -58,8 +58,8 @@ export function specOutcomeHandler(argsDoc JsonDoc, argsId JsonNodeId, repoRoot 
 		argv.push("--verbose")
 	end 'needsVerbose'
 
-	// `checkSpecTestFlags` has already rejected `target` for the compiler that
-	// cannot cross-compile, so reaching here with one set means it is supported.
+	// `target` is passed straight through to `--target=<value>`; both compilers accept
+	// it (shv2's `wasm32-wasi` runs the emitted component under the vendored wasmtime).
 	let target = try argsDoc.getString(argsId, key: "target") otherwise ""
 	if not target.isEmpty() 'haveTarget'
 		argv.push("--target={target}")
