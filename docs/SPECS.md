@@ -244,7 +244,7 @@ To test cross-file behavior (e.g., export visibility, multi-file builds), use `/
 
 ```maxon
 // --- file: helper.maxon
-export function helper() returns int
+export function helper() returns ExitCode
 		return 42
 end 'helper'
 
@@ -261,7 +261,7 @@ When `// --- file:` markers are present, each section is written to a separate t
 
 ```maxon
 // --- file: helper.maxon
-function privateHelper() returns int
+function privateHelper() returns ExitCode
 		return 99
 end 'privateHelper'
 
@@ -448,7 +448,7 @@ end 'main'
 <!-- test: abs.zero -->
 ```maxon
 function main() returns ExitCode
-		return abs(0.0) as int
+		return trunc(abs(0.0))
 end 'main'
 ```
 ```exitcode

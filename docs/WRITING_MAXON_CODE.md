@@ -353,7 +353,7 @@ _ = sideEffect()     // discard (RHS MUST be a function call)
 
 Use `var` for any variable you call mutating methods on (`push`, `set`, `remove`, `clear`, `append`, etc.):
 ```maxon
-var items = Array with int{}   // var because we call push
+var items = Array with Integer{}   // var because we call push
 items.push(1)
 ```
 

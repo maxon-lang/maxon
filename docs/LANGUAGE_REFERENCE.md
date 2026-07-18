@@ -586,8 +586,8 @@ Types are user-defined composite types containing named fields. Use `var` for mu
 
 ```maxon
 type Point
-		var x as int
-		var y as int
+		var x as Integer
+		var y as Integer
 end 'Point'
 ```
 
@@ -640,14 +640,14 @@ Methods are defined **inside the type body** and can access fields directly (imp
 
 ```maxon
 type Point
-		var x as int
-		var y as int
+		var x as Integer
+		var y as Integer
 
 		function add(other Point) returns Point
 				return Point{x: x + other.x, y: y + other.y}
 		end 'add'
 
-		export function magnitude() returns float
+		export function magnitude() returns Real
 				return sqrt((x * x + y * y) as Real)
 		end 'magnitude'
 end 'Point'
@@ -698,18 +698,18 @@ Static methods belong to a type but don't have access to instance data. They are
 
 ```maxon
 type Point
-		var x as int
-		var y as int
+		var x as Integer
+		var y as Integer
 
 		static function origin() returns Point
 				return Point{x: 0, y: 0}
 		end 'origin'
 
-		static function create(x int, y int) returns Point
+		static function create(x Integer, y Integer) returns Point
 				return Point{x: x, y: y}
 		end 'create'
 
-		function magnitude() returns float
+		function magnitude() returns Real
 				return sqrt((x * x + y * y) as Real)
 		end 'magnitude'
 end 'Point'
@@ -747,7 +747,7 @@ type Counter
 		static var count = 0
 		static let MAX_COUNT = 1000
 
-		var id as int
+		var id as Integer
 
 		static function create() returns Counter
 				Counter.count = Counter.count + 1
@@ -881,7 +881,7 @@ Interfaces define a set of method signatures that types can implement:
 
 ```maxon
 interface Hashable
-		function hash() returns int
+		function hash() returns Integer
 end 'Hashable'
 ```
 
@@ -889,10 +889,10 @@ Structs declare conformance using the `implements` keyword:
 
 ```maxon
 type Point implements Hashable
-		var x as int
-		var y as int
+		var x as Integer
+		var y as Integer
 
-		function hash() returns int
+		function hash() returns Integer
 				return x + y * 31
 		end 'hash'
 end 'Point'
@@ -1035,7 +1035,7 @@ Extensions add methods to interfaces that are automatically available on all typ
 
 ```maxon
 extension Iterable
-	function count() returns int
+	function count() returns Integer
 		var n = 0
 		for _ in self 'loop'
 			n = n + 1
@@ -1057,7 +1057,7 @@ Extensions can use the interface's associated types. These are automatically sub
 
 ```maxon
 interface Container uses Element
-	function get(index int) returns Element
+	function get(index Integer) returns Element
 end 'Container'
 
 extension Container
@@ -1124,7 +1124,7 @@ An interface can have both unconditional extensions and conditional extensions. 
 
 ```maxon
 extension Seq
-	function countItems() returns int
+	function countItems() returns Integer
 		var n = 0
 		for _ in self 'loop'
 			n = n + 1
@@ -1480,7 +1480,7 @@ The simplest form of union defines named cases with no additional data:
 
 ```maxon
 union Option
-		some(value int)
+		some(value Integer)
 		none
 end 'Option'
 ```
@@ -1491,8 +1491,8 @@ Cases can carry additional data called associated values:
 
 ```maxon
 union Result
-		success(value int)
-		failure(code int, message String)
+		success(value Integer)
+		failure(code Integer, message String)
 		pending
 end 'Result'
 ```
@@ -1589,7 +1589,7 @@ For unions with associated values, pass the values as additional arguments when 
 ```maxon
 union Container
 		empty
-		value(n int)
+		value(n Integer)
 end 'Container'
 
 // With associated values (name must be compile-time literal)
@@ -1661,7 +1661,7 @@ union MirOp
 	store(addr VarSlot, src VarSlot)        = OpMeta{latency: 3, isMemory: true}
 end 'MirOp'
 
-let op = MirOp.load(dest: d, addr: a)
+let op = MirOp.load(d, addr: a)
 let lat = op.rawValue.latency     // 4
 let mem = op.rawValue.isMemory    // true
 ```
@@ -1766,9 +1766,9 @@ let name = "Maxon"
 Calling a mutating method on a `let` variable is a compile error. Mutating methods include `push`, `pop`, `set`, `remove`, `clear`, `append`, `insert`, `resize`, `reserve`, `setLength`, `grow`, `upsert`, and similar methods that modify the receiver's state. Use `var` for variables that need mutation:
 
 ```maxon
-let items = Array with int{}
+let items = Array with Integer{}
 // items.push(1)        // ERROR: cannot call mutating method 'push' on immutable variable
-var items2 = Array with int{}
+var items2 = Array with Integer{}
 items2.push(1)           // OK — items2 is var
 ```
 
@@ -1781,7 +1781,7 @@ items2.push(1)           // OK — items2 is var
 - For struct-typed variables, `var b = a` creates a reference (alias to the same object); use `var b = a.clone()` for an independent copy (see [Reference-by-Default Assignment](#reference-by-default-assignment))
 - Assigning an immutable (`let`) reference-type variable to a mutable (`var`) binding is an error (E3078). Value types (int, float, bool, byte) are always independent copies and are allowed. Use `let` instead of `var`, or call `.clone()` to create an independent mutable copy:
   ```maxon
-  let a = Point.create(x: 1, y: 2)
+  let a = Point.create(1, y: 2)
   // var b = a              // ERROR E3078: cannot assign immutable variable 'a' to mutable binding 'b'
   let b = a                 // OK — b is immutable
   var c = a.clone()         // OK — c is an independent mutable copy
@@ -2187,13 +2187,13 @@ Maxon uses a **first-positional, rest-named** rule for function and method calls
 **Examples:**
 
 ```maxon
-function add(a int, b int) returns int
+function add(a Integer, b Integer) returns Integer
 		return a + b
 end 'add'
 
 add(3, b: 4)      // First positional, second named
 
-function connect(host String, port int) returns bool
+function connect(host String, port Port) returns bool
 		// ...
 end 'connect'
 
@@ -2280,11 +2280,11 @@ Maxon supports function overloading — multiple functions with the same name bu
 When overloads differ in their parameter types, the compiler automatically selects the correct overload based on the argument types at the call site:
 
 ```maxon
-function process(value int) returns int
+function process(value Integer) returns Integer
 		return value * 2
 end 'process'
 
-function process(value String) returns int
+function process(value String) returns Integer
 		return value.count()
 end 'process'
 
@@ -2341,7 +2341,7 @@ Box.getValue()    // static   — returns 9
 
 **No Parameters**
 ```maxon
-function getAnswer() returns int
+function getAnswer() returns Integer
 		return 42
 end 'getAnswer'
 ```
@@ -2355,7 +2355,7 @@ end 'greet'
 
 **Multiple Parameters**
 ```maxon
-function add(a int, b int) returns int
+function add(a Integer, b Integer) returns Integer
 		return a + b
 end 'add'
 
@@ -2379,7 +2379,7 @@ var result = divide(10, divisor: 2)  // first arg positional, rest named
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
-function sum(numbers IntArray) returns int
+function sum(numbers IntArray) returns Integer
 		var total = 0
 		for num in numbers 'loop'
 				total = total + num
@@ -2407,7 +2407,7 @@ Maxon uses **automatic pass-by-reference** for parameters that are assigned to i
 **By-reference (mutated parameters):** If a function assigns to a parameter (directly or through a field or element), the compiler passes a pointer to the caller's storage. This allows the called function to mutate the caller's variable.
 
 ```maxon
-function increment(n int)
+function increment(n Integer)
 		n = n + 1       // assigns to n — passed by reference
 end 'increment'
 
@@ -2425,7 +2425,7 @@ end 'main'
 - If the caller passes a literal or expression (not a named variable), the compiler creates a temporary immutable stack slot. Mutations inside the function do not propagate anywhere.
 
 ```maxon
-function double(n int)
+function double(n Integer)
 		n = n * 2
 end 'double'
 
@@ -2491,7 +2491,7 @@ Closures are anonymous functions expressed inline using `gives` syntax:
 ```maxon
 function main() returns ExitCode
 		var x = 10
-		let addX = (n int) gives n + x   // captures x by reference
+		let addX = (n Integer) gives n + x   // captures x by reference
 		x = 20
 		var result = addX(5)             // evaluates with x == 20, result is 25
 		return result
@@ -2522,7 +2522,7 @@ end 'makeAdder'
 - Closure parameters may optionally omit the type annotation when the type can be inferred from context.
 - Closures can only appear where a function-type value is expected.
 - Captured variables follow the same mutability rules as parameters: a closure that assigns to a captured `let` variable produces a compile error.
-- Closure parameters are checked for unused (E3012). Use `_` to discard an unused parameter: `(_ int) gives 42`
+- Closure parameters are checked for unused (E3012). Use `_` to discard an unused parameter: `(_ Integer) gives 42`
 - A closure declared inside an instance method may reference `self` (and therefore `self.field` and `self.method(...)`); the receiver is captured like any other local. A closure inside a free function or static method that mentions `self` is rejected with **E2001**.
 
 ### Function Purity and Discarded Results
@@ -2547,7 +2547,7 @@ Functions with no return type are always considered impure (their result cannot 
 Pure function results **must** be used -- they cannot be discarded, even with `_ =`. Since a pure function has no side effects, calling it without using the result is always a mistake.
 
 ```maxon
-function double(x int) returns int
+function double(x Integer) returns Integer
 		return x * 2
 end 'double'
 
@@ -2562,7 +2562,7 @@ Impure function results **must** be explicitly acknowledged. A bare statement-le
 
 ```maxon
 var counter = 0
-function incrementAndGet() returns int
+function incrementAndGet() returns Integer
 		counter = counter + 1
 		return counter
 end 'incrementAndGet'
@@ -2578,7 +2578,7 @@ Methods that take `self` as their first parameter and return the same type are *
 
 ```maxon
 type Counter
-		var value as int
+		var value as Integer
 
 		function increment() returns Counter
 				value = value + 1
@@ -2610,8 +2610,8 @@ var (result, _) = pureFunc()   // OK: one element used
 
 Declare external functions (Windows API, C libraries):
 ```maxon
-extern function GetStdHandle(nStdHandle int) returns int
-extern function ExitProcess(uExitCode int) returns int
+extern function GetStdHandle(nStdHandle Integer) returns Integer
+extern function ExitProcess(uExitCode Integer) returns Integer
 ```
 
 **Notes:**
@@ -3110,8 +3110,8 @@ For enums with associated values, use `CaseName(bindings)` syntax to extract val
 
 ```maxon
 enum Result
-		success(value int)
-		failure(code int)
+		success(value Integer)
+		failure(code Integer)
 end 'Result'
 
 var r = Result.success(42)
@@ -3180,7 +3180,7 @@ Range patterns match numeric values within a range using Rust-style syntax:
 | `..` | Wildcard (matches any value) | `..` equivalent to `default` |
 
 ```maxon
-function classify(n int) returns int
+function classify(n Integer) returns Integer
 		match n 'check'
 				1..=5 then return 1      // 1 to 5 inclusive
 				6..<10 then return 2     // 6 to 9 (exclusive of 10)
@@ -3193,7 +3193,7 @@ end 'classify'
 Range patterns work with integers, floats, and any type implementing the `Comparable` interface (like `Character`):
 
 ```maxon
-function charType(c Character) returns int
+function charType(c Character) returns Integer
 		match c 'classify'
 				'a'..='z' then return 1  // lowercase letters
 				'A'..='Z' then return 2  // uppercase letters
@@ -3243,7 +3243,7 @@ end 'convert'
 ```maxon
 enum Container
 		empty
-		value(n int)
+		value(n Integer)
 end 'Container'
 
 var c = Container.value(10)
@@ -3345,16 +3345,16 @@ end 'describeShape'
 
 ```maxon
 enum Shape
-		circle(radius float)
-		square(side float)
-		triangle(base float, height float)
+		circle(radius Real)
+		square(side Real)
+		triangle(base Real, height Real)
 end 'Shape'
 
 enum ShapeError implements Error
 		unsupported
 end 'ShapeError'
 
-function getArea(shape Shape) returns float throws ShapeError
+function getArea(shape Shape) returns Real throws ShapeError
 		return match shape 'calc'
 				circle(r) gives 3.14159 * r * r
 				square(s) gives s * s
@@ -3494,7 +3494,7 @@ panic("something went wrong")
 The argument can be a plain string literal or an interpolated string. The program prints a panic message to stderr including the source file and line number, followed by a stack trace, then exits with code 1.
 
 ```maxon
-function processValue(x int) returns int
+function processValue(x Integer) returns Integer
 		if x < 0 'negative'
 				panic("processValue: negative input, got {x}")
 		end 'negative'
@@ -3588,7 +3588,7 @@ Each of these statements terminates the error path, so the success value still f
 
 ```maxon
 // Early return on error
-function runIt() returns int
+function runIt() returns Integer
 		let value = try mayFail() otherwise return -1
 		return value
 end 'runIt'
@@ -3606,7 +3606,7 @@ for item in items 'items'
 end 'items'
 
 // Re-throw as a different error type
-function outer() returns int throws OuterError
+function outer() returns Integer throws OuterError
 		let v = try inner() otherwise throw OuterError.failed
 		return v
 end 'outer'
@@ -3628,7 +3628,7 @@ end 'handler'
 The block executes only if an error is thrown.
 
 ```maxon
-function loadData() returns int
+function loadData() returns Integer
 		var result = 0
 		try parseFile("data.txt") otherwise 'err'
 				result = -1  // Mark as failed
@@ -3732,7 +3732,7 @@ end 'reading'
 otherwise panic("unreachable: data.json is bundled with the binary")
 
 // Re-throw a fixed error to the caller.
-function compute() returns int throws AppError
+function compute() returns Integer throws AppError
 		try 'work'
 				doStuff()
 		end 'work'
@@ -3741,7 +3741,7 @@ function compute() returns int throws AppError
 end 'compute'
 
 // Bind the original error and wrap it as the payload of the new error.
-function compute2() returns int throws AppError
+function compute2() returns Integer throws AppError
 		try 'work'
 				doStuff()
 		end 'work'
@@ -3881,7 +3881,7 @@ enum ParseError implements Error
 		unexpectedEnd
 end 'ParseError'
 
-function parseNumber(s String) returns int throws ParseError
+function parseNumber(s String) returns Integer throws ParseError
 		if s.isEmpty() 'empty'
 				throw ParseError.unexpectedEnd
 		end 'empty'
@@ -4815,8 +4815,8 @@ Assigning a struct-typed variable to another variable copies the **heap pointer*
 
 ```maxon
 type Point
-	export var x as int
-	export var y as int
+	export var x as Integer
+	export var y as Integer
 end 'Point'
 
 var a = Point{x: 1, y: 2}
@@ -4892,8 +4892,8 @@ The compiler also auto-generates `Equatable` conformance for structs whose field
 
 ```maxon
 type Point
-	export var x as int
-	export var y as int
+	export var x as Integer
+	export var y as Integer
 end 'Point'
 
 // Point auto-conforms to Equatable (all fields are primitive)
@@ -4930,7 +4930,7 @@ a is c                      // true -- same object
 When a struct variable goes out of scope, the compiler automatically releases its heap allocation. The runtime uses reference counting: each heap allocation has a refcount header. When a reference is created (via assignment), the refcount is incremented. When a variable goes out of scope, the runtime decrements the refcount and frees the memory if it reaches zero.
 
 ```maxon
-function compute() returns int
+function compute() returns Integer
 	var a = Point{x: 10, y: 20}  // allocated on heap, refcount = 1
 	var b = Point{x: 30, y: 40}  // allocated on heap, refcount = 1
 	return a.x + b.y              // a and b released here (refcount -> 0 -> freed)
@@ -4951,7 +4951,7 @@ end 'makePoint'
 ```maxon
 typealias TokenList = List with Token
 
-function example() returns int
+function example() returns Integer
 	var list = TokenList.create()
 	list.append(Token{id: 1})   // Token incref'd by the managed list node
 	list.append(Token{id: 2})   // Token incref'd by the managed list node
@@ -5066,15 +5066,15 @@ end 'iter'
 
 ### Factorial Example
 ```maxon
-function factorial(n int) returns int
+function factorial(n Integer) returns Integer
 		if n <= 1 'base'
 				return 1
 		end 'base'
-		return n * factorial(n: n - 1)
+		return n * factorial(n - 1)
 end 'factorial'
 
 function main() returns ExitCode
-		var result = factorial(n: 5)
+		var result = factorial(5)
 		print("{result}")  // 120
 		return 0
 end 'main'
@@ -5129,7 +5129,7 @@ var x = 5 + "string"    // ERROR: Type mismatch
 
 **Missing Return**
 ```maxon
-function test() returns int
+function test() returns Integer
 		var x = 5
 		// ERROR: Missing return statement
 end 'test'
@@ -5162,7 +5162,7 @@ return x                // ERROR E3077: variable 'x' is never reassigned; use 'l
 
 **Var From Immutable**
 ```maxon
-let a = Point.create(x: 1, y: 2)
+let a = Point.create(1, y: 2)
 var b = a               // ERROR E3078: cannot assign immutable variable 'a' to mutable binding 'b'
 ```
 
@@ -5215,7 +5215,7 @@ CPU faults — division (or modulo) by zero, null pointer dereference, and stack
 
 4. **Return from all code paths**:
    ```maxon
-	 function test(x int) returns int
+	 function test(x Integer) returns Integer
 			 if x > 0 'pos'
 					 return 1
 			 end 'pos'

@@ -163,7 +163,7 @@ t.0   // 10
 t.1   // 20
 
 // Tuple as function return type
-function minMax(a int, b int) returns (int, int)
+function minMax(a Integer, b Integer) returns (Integer, Integer)
 		return (a, b)
 end 'minMax'
 
@@ -188,7 +188,7 @@ var y = 0
 ## Functions
 
 ```maxon
-function add(a int, b int) returns int
+function add(a Integer, b Integer) returns Integer
 		return a + b
 end 'add'
 
@@ -221,13 +221,13 @@ greet("Smith", title: "Dr.")
 ## Closures
 
 ```maxon
-let addX = function(n int) gives n + x   // single expression body
-let double = function(n int) gives n * 2
+let addX = function(n Integer) gives n + x   // single expression body
+let double = function(n Integer) gives n * 2
 ```
 
 Closures capture variables from the enclosing scope **by reference**. Changes to a captured variable after the closure is created are visible inside the closure when it runs.
 
-Closure parameters are checked for unused (E3012). Use `_` to discard: `function(_ int) gives 42`
+Closure parameters are checked for unused (E3012). Use `_` to discard: `function(_ Integer) gives 42`
 
 Inside an instance method, a closure may reference `self` (and `self.field`, `self.method(...)`); the receiver is captured like any other local. A closure inside a free function or static method that mentions `self` is rejected with **E2001**.
 
@@ -416,14 +416,14 @@ In a match *expression*, individual arms may also use `pattern panic("message")`
 
 ```maxon
 type Point implements Hashable, Describable   // interface conformance
-		export var x as int                   // public mutable field
+		export var x as Integer               // public mutable field
 		export let name = "point"   // public immutable with default
-		var internal as int                   // private field
+		var internal as Integer               // private field
 
 		static var count = 0               // static mutable field
 		static let MAX = 100               // static immutable constant
 
-		function hash() returns int   // interface method
+		function hash() returns Integer   // interface method
 				return x * 31 + y
 		end 'hash'
 
@@ -476,16 +476,16 @@ calls a factory. Field declarations accept three forms:
 
 ```maxon
 interface Hashable
-		function hash() returns int
+		function hash() returns Integer
 end 'Hashable'
 
 interface Container uses Element       // associated type
-		function get(index int) returns Element
+		function get(index Integer) returns Element
 end 'Container'
 
 typealias Integer = int(i64.min to i64.max)
 type IntBox implements Container with Integer  // specify associated type
-		function get(index int) returns Integer
+		function get(index Integer) returns Integer
 				// ...
 		end 'get'
 end 'IntBox'
@@ -678,8 +678,8 @@ Unions can also have a per-variant struct backing — see [Struct-Backed Unions]
 ```maxon
 // Associated values
 union Result
-		success(value int)
-		failure(code int, message String)
+		success(value Integer)
+		failure(code Integer, message String)
 		pending
 end 'Result'
 var r = Result.success(42)
@@ -734,7 +734,7 @@ union MirOp
 	store(addr VarSlot, src VarSlot)        = OpMeta{latency: 3, isMemory: true}
 end 'MirOp'
 
-let lat = MirOp.load(dest: d, addr: a).rawValue.latency   // 4
+let lat = MirOp.load(d, addr: a).rawValue.latency   // 4
 ```
 
 Same rules as struct-backed enums: every variant must provide a backing value of the same struct type, all field values are compile-time constants.

@@ -432,7 +432,7 @@ When you intentionally handle only a subset of enum or union cases, use `default
 
 ```maxon
 ' Recoverable: caller decides what to do (Shape is a union with associated values)
-function areaOf(shape Shape) returns float throws ShapeError
+function areaOf(shape Shape) returns Real throws ShapeError
 	return match shape 'calc'
 		circle(r) gives 3.14159 * r * r
 		square(s) gives s * s

@@ -1120,7 +1120,7 @@ var c = try arr.cursor() otherwise panic("empty array")
 ### Example
 
 ```maxon
-typealias IntIter = ArrayIterator with int
+typealias IntIter = ArrayIterator with Integer
 
 var arr = [1, 2, 3, 4, 5]
 var c = try arr.cursor() otherwise panic("empty")
