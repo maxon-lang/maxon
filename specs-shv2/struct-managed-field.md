@@ -36,6 +36,7 @@ struct box takes ownership of it:
 ## Tests
 
 <!-- test: string-field-construct-drop -->
+<!-- targets: wasm32-wasi -->
 A struct with a `String` field, constructed from a literal, is dropped at scope
 exit through its cascade — the field is freed, no leak (a leak is exit 101).
 ```maxon
@@ -57,6 +58,7 @@ end 'main'
 ```
 
 <!-- test: string-field-read -->
+<!-- targets: wasm32-wasi -->
 The `String` field can be read back through the box and compared, then dropped — no leak.
 ```maxon
 type Named
@@ -80,6 +82,7 @@ end 'main'
 ```
 
 <!-- test: two-string-fields-drop -->
+<!-- targets: wasm32-wasi -->
 A struct with two `String` fields drops both through the cascade — no leak.
 ```maxon
 type Pair
@@ -104,6 +107,7 @@ end 'main'
 ```
 
 <!-- test: nested-struct-string-field-drop -->
+<!-- targets: wasm32-wasi -->
 A struct whose field is another struct that owns a `String`: the outer cascade
 drops the inner struct through *its* destructor, which drops the String — no leak.
 ```maxon
@@ -133,6 +137,7 @@ end 'main'
 ```
 
 <!-- test: param-consumed-into-field -->
+<!-- targets: wasm32-wasi -->
 A constructor stores its struct parameter into a field, consuming it. The caller
 passes an owned local; the struct owns the field and drops it once — no leak, no
 double-free.
@@ -166,6 +171,7 @@ end 'main'
 ```
 
 <!-- test: nested-field-write-through-loaded-box -->
+<!-- targets: wasm32-wasi -->
 A struct-typed field can be read and written through the loaded box
 (`o.inner.x`), and the whole chain is dropped once.
 ```maxon
@@ -199,6 +205,7 @@ end 'main'
 ```
 
 <!-- test: string-field-reassign-drops-old -->
+<!-- targets: wasm32-wasi -->
 Writing a managed field drops the old value before storing the new one — the old
 String is freed once, no leak.
 ```maxon
@@ -224,6 +231,7 @@ end 'main'
 ```
 
 <!-- test: managed-self-field-write -->
+<!-- targets: wasm32-wasi -->
 Writing a managed field from inside an instance method (`name = n`) drops the old
 value and moves the new one in — the borrowed String argument is promoted to an
 owned copy, so nothing dangles and nothing leaks.

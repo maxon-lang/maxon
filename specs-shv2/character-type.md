@@ -71,6 +71,7 @@ For non-ASCII characters (multi-byte UTF-8 or values >= 128), `asciiValue()` ret
 ## Tests
 
 <!-- test: basic-character -->
+<!-- targets: wasm32-wasi -->
 ### Basic Character
 
 ```maxon
@@ -87,6 +88,7 @@ end 'main'
 ```
 
 <!-- test: character-comparison -->
+<!-- targets: wasm32-wasi -->
 ### Character Comparison
 
 ```maxon
@@ -104,6 +106,7 @@ end 'main'
 ```
 
 <!-- test: character-in-variable -->
+<!-- targets: wasm32-wasi -->
 ### Character in Variable
 
 ```maxon

@@ -48,6 +48,7 @@ end 'main'
 ```
 
 <!-- test: heap-string-equality -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let a = "This string is definitely longer than fifteen bytes"
@@ -68,6 +69,7 @@ end 'main'
 ```
 
 <!-- test: heap-string-inequality -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let a = "This string is definitely longer than fifteen bytes"
@@ -675,6 +677,7 @@ hello
 ### String.append
 
 <!-- test: string-append-basic -->
+<!-- targets: wasm32-wasi -->
 ### Basic Append
 Append a string literal to an existing string.
 ```maxon
@@ -693,6 +696,7 @@ Hello World
 ```
 
 <!-- test: string-append-interp -->
+<!-- targets: wasm32-wasi -->
 ### Append with Interpolation
 Append an interpolated string directly into the target buffer without materializing a temporary.
 ```maxon
@@ -712,6 +716,7 @@ Hello World!
 ```
 
 <!-- test: string-append-loop -->
+<!-- targets: wasm32-wasi -->
 ### Append in Loop
 Append in a loop builds the string efficiently with amortized O(1) per append.
 ```maxon
@@ -734,6 +739,7 @@ end 'main'
 ```
 
 <!-- test: string-append-variable -->
+<!-- targets: wasm32-wasi -->
 ### Append Variable
 Append another string variable.
 ```maxon
@@ -777,6 +783,7 @@ end 'main'
 ```
 
 <!-- test: string-append-multi-parts -->
+<!-- targets: wasm32-wasi -->
 ### Append Multiple Interpolation Parts
 Append with multiple interpolated expressions written directly into buffer.
 ```maxon

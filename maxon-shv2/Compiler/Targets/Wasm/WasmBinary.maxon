@@ -239,23 +239,42 @@ let opF64Div = 0xA3
 let opI64TruncF64S = 0xB0
 let opF64ConvertI64S = 0xB9
 
-// The data-section memory-access band (the top-level-`var` milestone), appended the way v1's
-// WasmBinary grew each time a milestone needed new opcodes. A load/store carries a MEMARG — an
-// `align` ULEB then an `offset` ULEB — and the scalar-plus-float global corpus stores only
-// word-width scalars (an `int` is i64, a `float` is f64), so only the 8-byte forms are here.
-// Narrow (byte/half) forms grow the band when a byte-width global (`bool`/`u8`) is lowered to
-// wasm — see StdToWasm's `requireWordGlobal`, which is the one door that says a narrow global is
-// not in this slice yet.
+// The memory-access band (the top-level-`var` milestone, then the heap-String one), appended the way
+// v1's WasmBinary grew each time a milestone needed new opcodes. A load/store carries a MEMARG — an
+// `align` ULEB then an `offset` ULEB. The WORD forms below (an `int`/pointer is i64, a `float` is f64)
+// serve globals and heap-record fields; the BYTE forms that follow serve a heap String's per-byte
+// access. StdToWasm's `wasmMemAccessType` is the one door mapping a Std type to the width — and to the
+// P1.9 `as`-cast for the narrow integers still beyond the backend.
 let opI64Load = 0x29
 let opF64Load = 0x2B
 let opI64Store = 0x37
 let opF64Store = 0x39
 
+// The NARROW byte forms — the heap-String milestone. A String's bytes are accessed one at a time
+// (`buffer[i]`), so a `loadIndirect`/`storeIndirect` of `u8` lowers here: `i32.load8_u` ZERO-extends
+// the byte into the i32 a byte-width value occupies (see wasmValTypeOf — everything ≤ 32 bits is an
+// i32 local), and `i32.store8` writes the LOW byte of the i32 operand. Only the `u8`/`i1` byte forms
+// join the word forms above, because the shared native `accessWidthFor` door lowers only BYTE
+// (`i1`/`u8`) and WORD (`i64`/`f64`) accesses today — a wider narrow integer needs the `as` cast
+// (P1.9), which the wasm backend refuses identically (StdToWasm's `wasmMemAccessType`). The narrower
+// forms grow the file when that cast lands, the way v1's WasmBinary grew each milestone.
+let opI32Load8U = 0x2D
+let opI32Store8 = 0x3A
+
+// `memory.grow` (opcode 0x40, from v1 `WasmBinary.maxon:210`) — the wasm slab-allocator primitive.
+// It grows linear memory 0 by the i32 page count on the stack and pushes the PREVIOUS page count, or
+// -1 on failure. The single trailing byte is the memory index (0 — the MVP has exactly one memory).
+// Its whole `osAllocPages` sequence (size→pages rounding, the OOM trap, the page→byte-base shift) is
+// StdToWasm's `emitOsAllocPages`.
+let opMemoryGrow = 0x40
+let wasmMemoryGrowMemZero = 0x00
+
 // A memarg's `align` is the log2 of the access's byte width — the NATURAL alignment. It is a
 // hint only: it never changes semantics (a wasm load/store is defined at any address, aligned or
 // not) and validation requires only that it not EXCEED the natural alignment, so the natural
-// value is always legal and is the canonical choice. Every op in this band is an 8-byte
-// (word64) access, so the hint is 3 (2^3 = 8) throughout.
+// value is always legal and is the canonical choice. The word forms are 8-byte (word64) accesses,
+// so their hint is 3 (2^3 = 8); a byte access is 1-byte, so its hint is 0 (2^0 = 1).
+let wasmMemAlignByte = 0
 let wasmMemAlignWord64 = 3
 
 // --- WasmBody: a function body under construction ---
@@ -615,6 +634,25 @@ export type WasmBody
 	export function f64Store(offset Wasm32Index)
 		self.pushMemAccess(opF64Store, align: wasmMemAlignWord64, offset: offset)
 	end 'f64Store'
+
+	// Narrow byte load/store — the heap-String byte access (`buffer[i]`). `i32.load8_u`
+	// zero-extends the byte into an i32; `i32.store8` writes the low byte of the i32 operand
+	// already on the stack. The byte access's natural alignment log2 is 0 (2^0 = 1).
+	export function i32Load8U(offset Wasm32Index)
+		self.pushMemAccess(opI32Load8U, align: wasmMemAlignByte, offset: offset)
+	end 'i32Load8U'
+
+	export function i32Store8(offset Wasm32Index)
+		self.pushMemAccess(opI32Store8, align: wasmMemAlignByte, offset: offset)
+	end 'i32Store8'
+
+	// `memory.grow(pages)` — grow linear memory 0 by the i32 page count on the stack; pushes the
+	// previous page count, or -1 on OOM. The slab allocator's `osAllocPages` lowering wraps this
+	// with the size→pages rounding and the OOM trap (StdToWasm's `emitOsAllocPages`).
+	export function memoryGrow()
+		self.buf.push(opMemoryGrow)
+		self.buf.push(wasmMemoryGrowMemZero)
+	end 'memoryGrow'
 
 	// The raw instruction bytes — NO local declarations, NO trailing `end`. addFunction frames
 	// the complete body around this stream.

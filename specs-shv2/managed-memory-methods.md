@@ -121,6 +121,7 @@ end 'main'
 ```
 
 <!-- test: string-operations -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let s = "hello world"
@@ -132,6 +133,7 @@ end 'main'
 ```
 
 <!-- test: string-append -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	var s = "hello"

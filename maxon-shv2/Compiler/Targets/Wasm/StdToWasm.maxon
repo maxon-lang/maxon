@@ -28,9 +28,14 @@
 // v1's 42-func Preview2 import table and its heap/print/async paths are not (this slice needs
 // only `exit-with-code`).
 //
-// SCALAR SLICE ONLY. The `memory`/`system`/`sugar` Std bands are out of scope this slice —
-// their emitters `panic`, which is unreachable given the spec-runner gating that only compiles
-// scalar programs to wasm. That mirrors the existing dead-but-exhaustive target arms.
+// SCOPE grows the way v1's did: scalar core, then f64, then top-level-`var` globals + String
+// literals (`.data`/`.rdata` active segments, `print`), and now the HEAP — `osAllocPages` →
+// `memory.grow`, the narrow BYTE load/store band a String's per-byte access needs, and the leak gate
+// (`__mm_leak_check`) on the exit path. The allocator/refcount/String builders themselves are Std-IR
+// runtime functions emitted through the ordinary function path, not hand-written here. What remains
+// beyond the backend (`sugar` ops, error-handling `tryCall`/`osExit`, and the narrow-integer `as`
+// cast) still `panic` in the exhaustive matches below — unreachable given the spec-runner gating,
+// mirroring the dead-but-exhaustive native target arms.
 
 // Wasm indices/counts are u32 in the format; this backend uses A1's exported `Wasm32Index`
 // (= int(0 to u32.max)) and `Wasm32IndexArray` for every function/type/local/dispatch index,
@@ -97,6 +102,11 @@ let WasmDataBaseOffset = 1024 as Wasm32Index
 // (a divide would desugar to a throwing checked-division call — see the throwing-division rung).
 let WasmPageSizeLog2 = 16
 let WasmPageSizeMask = 0xFFFF as ByteCount
+
+// `memory.grow` returns the previous page count, or this sentinel — -1 as an i32, which
+// `emitOsAllocPages` sign-extends to -1 in i64 — on OOM. The allocator lowering tests for it and
+// traps.
+let WasmMemoryGrowOom = -1 as ParsedInt
 
 // The minimum page count a memory must declare to hold a `.data` image ending at `base +
 // dataSize`, rounded up to whole 64 KiB pages. `base` is a positive constant, so the count is
@@ -255,9 +265,14 @@ function appendRunEntry(builder WasmModuleBuilder, module StdModule, calleeFuncI
 
 	var runBody = WasmBody.create()
 	runBody.call(mainFuncIdx)
-	// `main` returns `ExitCode` (i64 in the corpus); `exit-with-code` takes an i32. Wrap only
-	// when the return actually is i64 — a narrower ExitCode is already an i32.
-	if mainReturnValType == WasmValType.i64 'wrap'
+
+	// THE LEAK GATE — the sibling of the native backends' entry-stub gate
+	// (BackendDispatch.prependEntryStub). When the MM runtime installed `__mm_leak_check`, main's
+	// exit code is routed through it before exit; a leaked program comes back as 101. `exit-with-code`
+	// takes an i32, so the resulting code — i64 after the gate, else main's own return width — is
+	// wrapped last. `main` returns `ExitCode` (i64 in the corpus); a narrower ExitCode is already i32.
+	let exitCodeVt = appendLeakGate(runBody, mainReturnValType: mainReturnValType, calleeFuncIdx: calleeFuncIdx)
+	if exitCodeVt == WasmValType.i64 'wrap'
 		runBody.i32WrapI64()
 	end 'wrap'
 	runBody.call(ExitImportFuncIdx)
@@ -266,6 +281,23 @@ function appendRunEntry(builder WasmModuleBuilder, module StdModule, calleeFuncI
 	let runTypeIdx = builder.internFuncType(WasmValTypeArray.create(), results: singletonValTypes(WasmValType.i32))
 	return builder.addFunction(runTypeIdx, localTypes: WasmValTypeArray.create(), body: runBody.bytes())
 end 'appendRunEntry'
+
+// THE LEAK GATE on the wasm exit path (P1.0r), ported from the native `prependEntryStub`
+// (BackendDispatch:205). When the MM runtime installed `__mm_leak_check`, main's exit code (on the
+// stack) is routed through it: it returns the code UNCHANGED, or LeakExitCode (101) when any
+// allocation outlived the program — so a leaking heap program FAILS with 101 rather than passing
+// invisibly. `__mm_leak_check` is an ordinary i64→i64 Std function, so a narrower ExitCode is widened
+// to i64 first. Without the MM runtime the program cannot leak (nothing was allocated), so the gate
+// is skipped and the code passes straight through — keeping the non-heap path byte-identical. The MM
+// runtime is present ⟺ `__mm_leak_check` is a callee, so `calleeFuncIdx` answers the same question
+// the native gate asks `moduleHasFunction`, and hands back the func index in one lookup. Returns the
+// valtype now on the stack: i64 after the gate, else main's own return valtype.
+function appendLeakGate(runBody WasmBody, mainReturnValType WasmValType, calleeFuncIdx CalleeFuncIdxMap) returns WasmValType
+	let leakCheckIdx = try calleeFuncIdx.get(MmLeakCheckName) otherwise return mainReturnValType
+	coerceOnStack(runBody, from: mainReturnValType, to: WasmValType.i64)
+	runBody.call(leakCheckIdx)
+	return WasmValType.i64
+end 'appendLeakGate'
 
 // The valtype of `main`'s return value. `main` must return a value (`ExitCode`) — a void
 // `main` would leave the run entry nothing to pass to `exit-with-code`.
@@ -527,7 +559,7 @@ function recordDefValtype(op StdOp, valtypes WasmValTypeArray, depResult ValueId
 		globalAddr(resultId, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i32)
 		loadIndirect(resultId, _, _, valueType) then setValtype(valtypes, v: resultId, vt: wasmValTypeOf(valueType))
 		storeIndirect then break 'def'
-		osAllocPages then break 'def'
+		osAllocPages(resultId, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
 		osWriteStdout then break 'def'
 		// A wasm linear-memory ADDRESS IS AN i32 (like `globalAddr`), not the i64 pointer width the
 		// native backends carry. `rdataAddr` materializes an `i32.const`, so its result local is i32 —
@@ -833,7 +865,7 @@ type WasmFuncEmitter
 			globalAddr(resultId, label) then self.emitGlobalAddr(resultId, label: label)
 			loadIndirect(resultId, addrId, offset, valueType) then self.emitLoadIndirect(resultId, addrId: addrId, offset: offset, valueType: valueType)
 			storeIndirect(addrId, offset, valueId, valueType) then self.emitStoreIndirect(addrId, offset: offset, valueId: valueId, valueType: valueType)
-			osAllocPages then panic("wasm: osAllocPages not in scalar slice")
+			osAllocPages(resultId, sizeId) then self.emitOsAllocPages(resultId, sizeId: sizeId)
 			osWriteStdout(bufId, lenId) then self.emitOsWriteStdout(bufId, lenId: lenId)
 			rdataAddr(resultId, label) then self.emitRdataAddr(resultId, label: label)
 			tryCall to osExit then panic("wasm: error-handling op (throws/try/panic) not in scalar slice")
@@ -1030,10 +1062,15 @@ type WasmFuncEmitter
 		end 'i32'
 	end 'emitBitNotExpr'
 
-	// Logical NOT of a 0/1 bool as `operand xor 1` (flip bit 0). A bool is an i1 → i32 local,
-	// matching the native backends' `eor #1` / `xor reg, 1` convention.
+	// Logical NOT of a 0/1 bool as `operand xor 1` (flip bit 0), matching the native backends'
+	// `eor #1` / `xor reg, 1` convention. ⚠ THE OPERAND IS COERCED TO i32, not pushed bare: a bool
+	// is usually an i1 → i32 local, but a bool-RETURNING function lowers to an i64 return in this
+	// tier (`__str_eq` returns i64), so `not (a == b)` on Strings hands this an i64 operand — and a
+	// bare `i32.xor` over it faults the typed stack (i64 vs i32). `pushOperandAt` wraps the i64 to
+	// i32 first (a no-op for an already-i32 bool, so the scalar case stays byte-identical) — the same
+	// width gap `emitNegExpr`/`emitBitNotExpr` already close for their operands.
 	function emitLogicalNotExpr(operand ValueId)
-		self.body.localGet(operand as Wasm32Index)
+		self.pushOperandAt(operand, targetVt: WasmValType.i32)
 		self.body.i32Const(1 as Imm32)
 		self.body.i32Xor()
 	end 'emitLogicalNotExpr'
@@ -1204,42 +1241,49 @@ type WasmFuncEmitter
 	end 'emitGlobalAddr'
 
 	// `loadIndirect` → push the base address as an i32, then `<width>.load offset=<offset>`. The
-	// static `offset` (0 for a plain global, non-zero once a struct field rides this op) folds into
-	// the memarg. Only word-width globals are in this slice — `requireWordGlobal` rejects a
-	// byte/narrow global loudly — so the load is i64 or f64.
+	// static `offset` (0 for a plain global, non-zero for a struct/heap-record field riding this op)
+	// folds into the memarg. The width is `valueType`'s: a `u8`/`i1` BYTE (a heap String's bytes,
+	// zero-extended) or an `i64`/`f64` WORD — the set `wasmMemAccessType` admits.
 	//
-	// ⚠ THE BASE IS COERCED TO i32 (`pushOperandAt`), NOT pushed bare. A `globalAddr` result is
-	// already i32, so the coercion is a no-op and this stays byte-identical — but a String pointer
-	// (`__print_string`'s i64 `strPtr` param) used as a load base needs an `i32.wrap_i64`, and
-	// wasm's typed stack rejects the bare i64 under `i64.load`. Real addresses are < 4 GiB, so the
-	// wrap is lossless.
+	// ⚠ THE BASE IS COERCED TO i32 (`pushOperandAt`), NOT pushed bare. A `globalAddr`/`rdataAddr`
+	// result is already i32, so the coercion is a no-op and this stays byte-identical — but a heap or
+	// String pointer (an i64 in a register on the native backends) used as a load base needs an
+	// `i32.wrap_i64`, and wasm's typed stack rejects the bare i64 under a `*.load`. Real addresses are
+	// < 4 GiB, so the wrap is lossless.
 	function emitLoadIndirect(resultId ValueId, addrId ValueId, offset ByteOffset, valueType StdType)
 		self.pushOperandAt(addrId, targetVt: WasmValType.i32)
 		let memOffset = wasmMemOffset(offset)
-		if requireWordGlobal(valueType, what: "loadIndirect") == WasmValType.i64 'i64'
-			self.body.i64Load(memOffset)
-		end 'i64' else 'f64'
-			self.body.f64Load(memOffset)
-		end 'f64'
+		// The access VALTYPE also names the width: i32 return ⟺ a BYTE access (the only i32-backed
+		// types accepted are byte-width — see `wasmMemAccessType`), which zero-extends via
+		// `i32.load8_u`; a word loads as i64/f64.
+		match wasmMemAccessType(valueType, what: "loadIndirect") 'w'
+			i32 then self.body.i32Load8U(memOffset)
+			i64 then self.body.i64Load(memOffset)
+			f64 then self.body.f64Load(memOffset)
+			f32 then panic("emitLoadIndirect: wasmMemAccessType never returns f32")
+		end 'w'
 		self.body.localSet(resultId as Wasm32Index)
 	end 'emitLoadIndirect'
 
-	// `storeIndirect` → push the base address as an i32, then the value (coerced to the global's
+	// `storeIndirect` → push the base address as an i32, then the value (coerced to the access
 	// width), then `<width>.store offset=<offset>`. Address BELOW value is the order the store opcode
-	// pops. `pushOperandAt` coerces BOTH: the base to i32 (a no-op for a `globalAddr` result, an
-	// `i32.wrap_i64` for an i64 String pointer — the same reason `emitLoadIndirect` coerces it) and
-	// the value to the store width (a value-meets-declared-type boundary, like `ret`/call args).
-	// Defines nothing, so no `local.set`.
+	// pops. `pushOperandAt` coerces BOTH: the base to i32 (a no-op for a `globalAddr`/`rdataAddr`
+	// result, an `i32.wrap_i64` for an i64 heap/String pointer — the same reason `emitLoadIndirect`
+	// coerces it) and the value to the store width (a value-meets-declared-type boundary, like
+	// `ret`/call args). A byte store is the STRING-BUILDER path: an i64 char stored as one byte
+	// (StringRuntime:921) is wrapped to i32 here, then written by `i32.store8`. Defines nothing, so
+	// no `local.set`.
 	function emitStoreIndirect(addrId ValueId, offset ByteOffset, valueId ValueId, valueType StdType)
 		self.pushOperandAt(addrId, targetVt: WasmValType.i32)
-		let storeVt = requireWordGlobal(valueType, what: "storeIndirect")
+		let storeVt = wasmMemAccessType(valueType, what: "storeIndirect")
 		self.pushOperandAt(valueId, targetVt: storeVt)
 		let memOffset = wasmMemOffset(offset)
-		if storeVt == WasmValType.i64 'i64'
-			self.body.i64Store(memOffset)
-		end 'i64' else 'f64'
-			self.body.f64Store(memOffset)
-		end 'f64'
+		match storeVt 'w'
+			i32 then self.body.i32Store8(memOffset)
+			i64 then self.body.i64Store(memOffset)
+			f64 then self.body.f64Store(memOffset)
+			f32 then panic("emitStoreIndirect: wasmMemAccessType never returns f32")
+		end 'w'
 	end 'emitStoreIndirect'
 
 	// ----------------------------------------------------------------------
@@ -1256,6 +1300,41 @@ type WasmFuncEmitter
 		self.body.i32Const(wasmLinearAddress(self.rdataBase, byteOffset: recordOffset))
 		self.body.localSet(resultId as Wasm32Index)
 	end 'emitRdataAddr'
+
+	// `osAllocPages(size) -> base` → `memory.grow` (v1 `emitOsAllocPages`, MirToWasm.maxon:3227,
+	// ported verbatim). The slab allocator asks for `size` bytes; wasm grows linear memory a PAGE at
+	// a time, so the size is rounded UP to whole 64 KiB pages, memory is grown, and the previous page
+	// count `memory.grow` returns is shifted back to the BYTE base of the freshly-grown region — the
+	// address `resultId` carries. `memory.grow` signals OOM by returning -1 (i32); the result is
+	// sign-extended to i64 (so -1 stays -1 in the i64 world every ValueId lives in) and an OOM TRAPS
+	// via `unreachable`, matching the native allocators' abort. `resultId` doubles as the scratch
+	// across the OOM test, exactly as in v1.
+	function emitOsAllocPages(resultId ValueId, sizeId ValueId)
+		// pages = (size + 65535) >> 16  — ceil(size / 64 KiB)
+		self.pushOperandAt(sizeId, targetVt: WasmValType.i64)
+		self.body.i64Const(WasmPageSizeMask as ParsedInt)
+		self.body.i64Add()
+		self.body.i64Const(WasmPageSizeLog2 as ParsedInt)
+		self.body.i64ShrU()
+		self.body.i32WrapI64()
+		// grow linear memory 0 by that page count → previous page count (or -1 on OOM)
+		self.body.memoryGrow()
+		// widen to i64 so the OOM test stays in the i64 world; -1 sign-extends to -1
+		self.body.i64ExtendI32S()
+		self.body.localSet(resultId as Wasm32Index)
+		// if (base == -1) unreachable  — OOM traps, surfacing as a wasmtime runtime trap
+		self.body.localGet(resultId as Wasm32Index)
+		self.body.i64Const(WasmMemoryGrowOom)
+		self.body.i64Eq()
+		self.body.beginIf()
+		self.body.unreachable()
+		self.body.endOp()
+		// base = prevPages << 16  — the byte base of the freshly-grown region
+		self.body.localGet(resultId as Wasm32Index)
+		self.body.i64Const(WasmPageSizeLog2 as ParsedInt)
+		self.body.i64Shl()
+		self.body.localSet(resultId as Wasm32Index)
+	end 'emitOsAllocPages'
 
 	// `osWriteStdout(buf, len)` → the WASI-Preview2 stdout write, fire-and-forget (the result is
 	// ignored). Stack-balanced: `get-stdout` pushes the i32 stream handle; the buffer address and the
@@ -1442,22 +1521,28 @@ function narrowToImm32(value ParsedInt) returns Imm32
 	return low as Imm32
 end 'narrowToImm32'
 
-// The wasm valtype a global of `valueType` loads/stores as. THE ONE DOOR that says which globals
-// the memory slice lowers: only word-width scalars — an `int` (i64) and a `float` (f64). A
-// byte-width global (`bool`/`u8`, an i32 valtype backed by one storage byte) has no wasm memory
-// form here yet: it needs the narrow `i32.load8_u`/`i32.store8` band, and a wider narrow integer
-// its P1.9 `as`-cast (which decides sign/zero extension) — the SAME line the shared
-// `accessWidthFor` draws for the native backends. An f32 cannot occur (Maxon's `float` is f64).
-// Both callers pick the load vs the store opcode off the returned i64/f64.
-function requireWordGlobal(valueType StdType, what String) returns WasmValType
-	let vt = wasmValTypeOf(valueType)
-	match vt 'vt'
-		i64 then return vt
-		f64 then return vt
-		i32 then panic("wasm: {what} of a byte/narrow-width global ({valueType.name}) is not in the memory slice — only i64 and f64 globals are lowered; a byte global needs the i32.load8_u/i32.store8 band and a wider narrow needs P1.9's `as`-cast")
-		f32 then panic("wasm: {what} of an f32 global — Maxon's `float` is f64, so nothing produces an f32")
-	end 'vt'
-end 'requireWordGlobal'
+// The wasm valtype a `loadIndirect`/`storeIndirect` of `valueType` transfers — and, because a byte
+// access and a word access take different opcodes, the ONE DOOR that also decides WHICH the callers
+// emit. It mirrors the shared native `accessWidthFor`: the language can put only a BYTE (`i1`/`u8`)
+// or a WORD (`i64`/`f64`) behind a load/store today, so a byte returns i32 (the `i32.load8_u` /
+// `i32.store8` forms — everything ≤ 32 bits is an i32 local) and a word returns i64/f64. The
+// returned valtype is UNAMBIGUOUS about width because the only i32-backed types admitted are
+// byte-width: an i32 return ⟺ a byte access. Every other width panics rather than picking a nearby
+// one — a narrow integer needs the `as` cast (P1.9), whose SIGNEDNESS then decides the
+// sign/zero-extending load — exactly the line `accessWidthFor` draws for the native backends. An f32
+// cannot occur (Maxon's `float` is f64). A `bool`/`u8` byte zero-extends, which is why the one byte
+// load form (`i32.load8_u`) is unsigned; a signed byte (`i8`) is P1.9-gated below.
+function wasmMemAccessType(valueType StdType, what String) returns WasmValType
+	match valueType 'w'
+		i1 then return WasmValType.i32
+		u8 then return WasmValType.i32
+		i64 then return WasmValType.i64
+		f64 then return WasmValType.f64
+		i8 to i32 then panic("wasm: {what} of {valueType.name} — a narrow signed integer needs the `as` cast (P1.9), whose signedness picks the sign/zero-extending load; only i1/u8 (byte) and i64/f64 (word) are lowered, mirroring the native accessWidthFor")
+		u16 to u64 then panic("wasm: {what} of {valueType.name} — an unsigned integer wider than a byte needs the `as` cast (P1.9); only u8 (byte) and i64/f64 (word) are lowered")
+		f32 then panic("wasm: {what} of an f32 — Maxon's `float` is f64, so nothing produces an f32")
+	end 'w'
+end 'wasmMemAccessType'
 
 // A linear-memory ABSOLUTE address: a section base plus a byte offset within it, as the signed
 // `Imm32` an `i32.const` carries. Shared by `globalAddr` (`.data`), `rdataAddr` and the String

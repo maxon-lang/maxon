@@ -39,6 +39,7 @@ read-only rdata), and a borrowed-to-owned one (`var s = ""; s = build(1)`) puts 
 nothing), but the golden pins the three decrefs that make it a clean single-free of each.
 
 <!-- test: straight-line -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -69,6 +70,7 @@ the previous iteration's `build(i)`. Each is dropped exactly once at the reassig
 final value once at scope exit — no leak, no double-free of the exit value.
 
 <!-- test: loop-carried -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -102,6 +104,7 @@ the binding LEAVES the owned set — so scope exit does not decref the borrowed 
 (which would fault on read-only memory).
 
 <!-- test: owned-to-borrowed -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -131,6 +134,7 @@ owned copy), so it is never deleted from the middle of the owned-binding stack �
 `t`'s block-local drop and reference a value on a path where it is undefined.
 
 <!-- test: owned-to-borrowed-in-if -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -164,6 +168,7 @@ the outer `s` is reassigned a literal inside the body. `s` stays owned across th
 removed from the owned stack, so the loop body's drop floor stays valid.
 
 <!-- test: owned-to-borrowed-in-loop -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -197,6 +202,7 @@ Two owned reassignments followed by a borrowed one: `build(1)` and `build(2)` ar
 dropped at their overwrite, and the final literal takes the binding out of the owned set.
 
 <!-- test: owned-owned-borrowed -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -254,6 +260,7 @@ overwritten box; without the drop the first box leaks (the leak counter catches 
 because a struct box is never enrolled as a statement temporary to be drained).
 
 <!-- test: struct-reassign -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 type Point
 	var x as int
@@ -281,6 +288,7 @@ end 'main'
 `oldValue == value` guard prevents a drop-then-keep (which would decref a value still bound).
 
 <!-- test: self-assign -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
