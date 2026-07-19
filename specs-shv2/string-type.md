@@ -269,6 +269,46 @@ end 'main'
 Hello, World!
 ```
 
+<!-- test: print-multiple-literals-and-global -->
+<!-- targets: arm64-macos, wasm32-wasi -->
+<!--
+	Foundation guard for the wasm print slice (Phase B builds on it): three DISTINCT literals
+	force three `.rdata` records + blobs + `buffer@0` fixups, so a fixup patched with the wrong
+	blob's address (swapped, or off by another blob's offset) prints the wrong bytes here; the
+	top-level `var` forces a `.data` segment ALONGSIDE the `.rdata` one, catching an overlap or a
+	dropped segment; and `main` calling `bump` exercises the wasm import-shift (a defined function
+	resolves to `WasmImportCount + position`, not its bare position, once print pushed the import
+	count to three). Deterministic exit (b - a - 5 = 15 - 10 - 5 = 0) plus exact stdout.
+
+	Gated to arm64-macos + wasm32-wasi, NOT x64-windows: its committed x64 codegen golden must be
+	regenerated on a Windows host (the frontend's `os()` follows the host), so authoring it here
+	would bake a macOS-host x64 fragment. The wasm behaviour it guards is target-agnostic; arm64
+	is the second target to prove the same program agrees natively.
+-->
+```maxon
+var total = 0
+
+function bump(n int) returns int
+	total = total + n
+	return total
+end 'bump'
+
+function main() returns ExitCode
+	print("foo")
+	let a = bump(10)
+	print("bar")
+	let b = bump(5)
+	print("baz")
+	return b - a - 5
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+foobarbaz
+```
+
 <!-- test: string-interpolation-concatenation -->
 ```maxon
 function main() returns ExitCode

@@ -1,0 +1,61 @@
+// Test: print-multiple-literals-and-global
+var total = 0
+
+function bump(n int) returns int
+	total = total + n
+	return total
+end 'bump'
+
+function main() returns ExitCode
+	print("foo")
+	let a = bump(10)
+	print("bar")
+	let b = bump(5)
+	print("baz")
+	return b - a - 5
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __data_total@0 = i64 0
+}
+
+func @bump {
+  entry:
+    arm64.prologue 16
+    arm64.leaGlobal x1, __data_total
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
+    arm64.add x0, x1, x0
+    arm64.leaGlobal x1, __data_total
+    arm64.storeBaseDispReg.word64 [x1 + 0], x0
+    arm64.leaGlobal x0, __data_total
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.leaRdata x0, __str_rec_1
+    arm64.bl __print_string
+    arm64.movImm x0, 10
+    arm64.bl bump
+    arm64.movRegReg x19, x0
+    arm64.leaRdata x0, __str_rec_3
+    arm64.bl __print_string
+    arm64.movImm x0, 5
+    arm64.bl bump
+    arm64.movRegReg x20, x0
+    arm64.leaRdata x0, __str_rec_5
+    arm64.bl __print_string
+    arm64.sub x0, x20, x19
+    arm64.sub x0, x0, 5
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
