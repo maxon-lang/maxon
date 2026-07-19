@@ -739,6 +739,16 @@ type WasmFuncEmitter
 		coerceOnStack(self.body, from: getValtype(self.valtypes, v: v), to: targetVt)
 	end 'pushOperandAt'
 
+	// Push both operands of a binary op (binOp/cmp/div/mod, integer AND float) at the op's chosen
+	// width, in lhs-then-rhs order — the shape every wasm binary ALU/compare op wants on the stack.
+	// The width choice is the caller's (i32/i64 by `isWideInt`, f64 for the float path, `lhs`'s width
+	// for div/mod); this only guarantees BOTH operands are coerced to the SAME `opVt` the opcode pops,
+	// so a new binary emitter cannot forget to coerce one side (the gap `pushOperandAt`'s header names).
+	function pushBinaryOperands(lhs ValueId, rhs ValueId, opVt WasmValType)
+		self.pushOperandAt(lhs, targetVt: opVt)
+		self.pushOperandAt(rhs, targetVt: opVt)
+	end 'pushBinaryOperands'
+
 	function emitBinOp(resultId ValueId, lhs ValueId, rhs ValueId, opcode StdBinOpcode, operandType StdType)
 		if stdTypeIsFloat(operandType) 'float'
 			self.emitFloatBinOp(resultId, lhs: lhs, rhs: rhs, opcode: opcode, operandType: operandType)
@@ -747,8 +757,7 @@ type WasmFuncEmitter
 
 		let wide = isWideInt(operandType, what: "binOp")
 		let opVt = WasmValType.i64 if wide else WasmValType.i32
-		self.pushOperandAt(lhs, targetVt: opVt)
-		self.pushOperandAt(rhs, targetVt: opVt)
+		self.pushBinaryOperands(lhs, rhs: rhs, opVt: opVt)
 		self.emitBinOpcode(opcode, wide: wide)
 		self.body.localSet(resultId as Wasm32Index)
 	end 'emitBinOp'
@@ -759,8 +768,7 @@ type WasmFuncEmitter
 	// tier for a float operand). Mirrors arm64's `lowerFloatBinOp`.
 	function emitFloatBinOp(resultId ValueId, lhs ValueId, rhs ValueId, opcode StdBinOpcode, operandType StdType)
 		requireF64(operandType, what: "binOp")
-		self.pushOperandAt(lhs, targetVt: WasmValType.f64)
-		self.pushOperandAt(rhs, targetVt: WasmValType.f64)
+		self.pushBinaryOperands(lhs, rhs: rhs, opVt: WasmValType.f64)
 		self.emitFloatBinOpcode(opcode)
 		self.body.localSet(resultId as Wasm32Index)
 	end 'emitFloatBinOp'
@@ -898,8 +906,7 @@ type WasmFuncEmitter
 
 		let wide = isWideInt(operandType, what: "cmp")
 		let opVt = WasmValType.i64 if wide else WasmValType.i32
-		self.pushOperandAt(lhs, targetVt: opVt)
-		self.pushOperandAt(rhs, targetVt: opVt)
+		self.pushBinaryOperands(lhs, rhs: rhs, opVt: opVt)
 		self.emitCmpPred(pred, wide: wide)
 		self.body.localSet(resultId as Wasm32Index)
 	end 'emitCmp'
@@ -914,8 +921,7 @@ type WasmFuncEmitter
 	// never folds a float rhs, and this emitter is the only float-compare path.)
 	function emitFloatCmp(resultId ValueId, lhs ValueId, rhs ValueId, pred StdCmpPred, operandType StdType)
 		requireF64(operandType, what: "cmp")
-		self.pushOperandAt(lhs, targetVt: WasmValType.f64)
-		self.pushOperandAt(rhs, targetVt: WasmValType.f64)
+		self.pushBinaryOperands(lhs, rhs: rhs, opVt: WasmValType.f64)
 		self.emitFloatCmpPred(pred)
 		self.body.localSet(resultId as Wasm32Index)
 	end 'emitFloatCmp'
@@ -974,8 +980,7 @@ type WasmFuncEmitter
 		// frontend left it a different width (same gap as a mixed-width `binOp`).
 		let opVt = getValtype(self.valtypes, v: lhs)
 		let wide = opVt == WasmValType.i64
-		self.pushOperandAt(lhs, targetVt: opVt)
-		self.pushOperandAt(rhs, targetVt: opVt)
+		self.pushBinaryOperands(lhs, rhs: rhs, opVt: opVt)
 		if isRemainder 'rem'
 			if wide 'remWide'
 				self.body.i64RemS()
