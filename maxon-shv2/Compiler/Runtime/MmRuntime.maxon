@@ -549,22 +549,28 @@ function closeDestructorNeeds(usage RuntimeUsage, project Project, signatures Pr
 	end 'fixpoint'
 end 'closeDestructorNeeds'
 
-// Add the nested `__destruct_<T>` of each managed field of struct `layout` to the needed set; return
-// whether the set grew. A field whose drop callee is a destructor symbol (a managed struct/union) contributes
-// its symbol; a String (`__str_decref`) or scalar-only box (`__mm_decref`) contributes none. `layout` is the
-// caller's PROJECT layout, NOT a re-fetch from `signatures`: its field-type ids and `project.typeNames` are
-// then the same interner, so `managedFieldDropCallee` resolves each id against the interner it lives in. Reading
-// the signatures layout instead leaked a signatures-interner id into `project.typeNames` and misresolved it (a
-// panic when the misread name was no declared type, a WRONG destructor when it happened to be one) — the twin
-// `synthesizeStructDestructor` reads the project layout for exactly this reason.
+// The drop callee for MANAGED field `index` of PROJECT struct `layout` — its field-type id read off the
+// project layout and resolved against `project.typeNames`, the ONE interner that layout's ids live in. SOLE
+// home of that pairing: both the needs closure (`addNestedStructDestructors`) and the body synthesis
+// (`synthesizeStructDestructor`) route through here, so neither can drift back to re-fetching a `signatures`
+// layout and misresolving its id against `project.typeNames` — the OPEN #56 mismatch (a panic when the misread
+// name was no declared type, a WRONG destructor when it happened to be one), now unrepresentable rather than
+// re-asserted by a comment at each site. Precondition: the caller checked `structFieldIsManaged`.
+function managedStructFieldDropCallee(layout StructLayout, index FieldIndex, project Project, signatures ProgramSignatures) returns ByteArray
+	let fieldType = try layout.fieldTypes.get(index) otherwise panic("managedStructFieldDropCallee: fieldTypes.get OOB at {index}")
+	return managedFieldDropCallee(signatures, typeNames: project.typeNames, fieldType: fieldType)
+end 'managedStructFieldDropCallee'
+
+// Add the nested `__destruct_<T>` of each managed field of struct `layout` to the needed set; return whether
+// the set grew. A field whose drop callee is a destructor symbol (a managed struct/union) contributes its
+// symbol; a String (`__str_decref`) or scalar-only box (`__mm_decref`) contributes none.
 function addNestedStructDestructors(usage RuntimeUsage, layout StructLayout, project Project, signatures ProgramSignatures) returns bool
 	var grew = false
 	for i in 0 upto layout.fieldCount() 'eachField'
 		if not signatures.structFieldIsManaged(layout.name, index: i) 'scalar'
 			continue
 		end 'scalar'
-		let fieldType = try layout.fieldTypes.get(i) otherwise panic("addNestedStructDestructors: fieldTypes.get OOB at {i}")
-		if insertIfDestructorSymbol(usage, callee: managedFieldDropCallee(signatures, typeNames: project.typeNames, fieldType: fieldType)) 'added'
+		if insertIfDestructorSymbol(usage, callee: managedStructFieldDropCallee(layout, index: i, project: project, signatures: signatures)) 'added'
 			grew = true
 		end 'added'
 	end 'eachField'
@@ -728,8 +734,7 @@ function synthesizeStructDestructor(module StdModule, layout StructLayout, proje
 		if not signatures.structFieldIsManaged(layout.name, index: i) 'scalarField'
 			continue
 		end 'scalarField'
-		let fieldType = try layout.fieldTypes.get(i) otherwise panic("synthesizeStructDestructor: fieldTypes.get OOB at {i}")
-		let callee = managedFieldDropCallee(signatures, typeNames: project.typeNames, fieldType: fieldType)
+		let callee = managedStructFieldDropCallee(layout, index: i, project: project, signatures: signatures)
 		cur = emitNullGuardedDrop(module, cur: cur, box: box, offset: layout.offsetOfField(i), callee: callee, ids: ids, func: func)
 	end 'eachField'
 	module.setTerminator(cur, op: StdOp.branch(free.id))
