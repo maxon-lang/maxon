@@ -537,7 +537,7 @@ function closeDestructorNeeds(usage RuntimeUsage, project Project, signatures Pr
 	while changed 'fixpoint'
 		changed = false
 		for (_, layout) in project.structTypes 'eachStruct'
-			if usage.neededDestructors.contains(destructorSymbol(layout.name)) and addNestedStructDestructors(usage, structName: layout.name, project: project, signatures: signatures) 'grew'
+			if usage.neededDestructors.contains(destructorSymbol(layout.name)) and addNestedStructDestructors(usage, layout: layout, project: project, signatures: signatures) 'grew'
 				changed = true
 			end 'grew'
 		end 'eachStruct'
@@ -549,14 +549,18 @@ function closeDestructorNeeds(usage RuntimeUsage, project Project, signatures Pr
 	end 'fixpoint'
 end 'closeDestructorNeeds'
 
-// Add the nested `__destruct_<T>` of each managed field of struct `structName` to the needed set; return
+// Add the nested `__destruct_<T>` of each managed field of struct `layout` to the needed set; return
 // whether the set grew. A field whose drop callee is a destructor symbol (a managed struct/union) contributes
-// its symbol; a String (`__str_decref`) or scalar-only box (`__mm_decref`) contributes none.
-function addNestedStructDestructors(usage RuntimeUsage, structName ByteArray, project Project, signatures ProgramSignatures) returns bool
-	let layout = requireDeclaredStruct(signatures, structName: structName, context: "addNestedStructDestructors")
+// its symbol; a String (`__str_decref`) or scalar-only box (`__mm_decref`) contributes none. `layout` is the
+// caller's PROJECT layout, NOT a re-fetch from `signatures`: its field-type ids and `project.typeNames` are
+// then the same interner, so `managedFieldDropCallee` resolves each id against the interner it lives in. Reading
+// the signatures layout instead leaked a signatures-interner id into `project.typeNames` and misresolved it (a
+// panic when the misread name was no declared type, a WRONG destructor when it happened to be one) — the twin
+// `synthesizeStructDestructor` reads the project layout for exactly this reason.
+function addNestedStructDestructors(usage RuntimeUsage, layout StructLayout, project Project, signatures ProgramSignatures) returns bool
 	var grew = false
 	for i in 0 upto layout.fieldCount() 'eachField'
-		if not signatures.structFieldIsManaged(structName, index: i) 'scalar'
+		if not signatures.structFieldIsManaged(layout.name, index: i) 'scalar'
 			continue
 		end 'scalar'
 		let fieldType = try layout.fieldTypes.get(i) otherwise panic("addNestedStructDestructors: fieldTypes.get OOB at {i}")

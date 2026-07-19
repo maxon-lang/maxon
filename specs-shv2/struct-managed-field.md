@@ -136,6 +136,42 @@ end 'main'
 3
 ```
 
+<!-- test: nested-managed-field-ranged-create-param -->
+The inner struct's `create` takes a RANGED-INT-ALIAS parameter. That alias adds a name
+to the project interner, shifting its ids relative to the signatures interner's. The
+destructor-needs closure re-fetched the inner struct layout from `signatures` (ids in
+the signatures interner) but resolved its managed field's type id against
+`project.typeNames` — so it misread the field's name and panicked on this VALID program.
+The closure now takes the project layout the caller already holds, like the destructor
+body synthesis does, so the id and the interner that resolves it always agree.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type BoxA
+	export var label as String
+
+	static function create(x Integer) returns Self
+		return Self{label: "v{x}"}
+	end 'create'
+end 'BoxA'
+
+type WrapA
+	export var inner as BoxA
+
+	static function create() returns Self
+		return Self{inner: BoxA.create(1)}
+	end 'create'
+end 'WrapA'
+
+function main() returns ExitCode
+	let w = WrapA.create()
+	return 3
+end 'main'
+```
+```exitcode
+3
+```
+
 <!-- test: param-consumed-into-field -->
 <!-- targets: wasm32-wasi -->
 A constructor stores its struct parameter into a field, consuming it. The caller
