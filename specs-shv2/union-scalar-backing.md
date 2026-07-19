@@ -62,6 +62,7 @@ end 'main'
 
 
 <!-- test: int-backed-union-match -->
+<!-- targets: wasm32-wasi -->
 A scalar-backed union matches like an enum — bare case names, exhaustive.
 ```maxon
 union Status
@@ -88,6 +89,7 @@ end 'main'
 
 
 <!-- test: error.unknown-union-case -->
+<!-- targets: wasm32-wasi -->
 A match arm naming a case the union does not have is E3034, worded "union" — the
 reference compiler distinguishes a union from an enum here (`IsUnion ? "union" :
 "enum"`), unlike the always-"enum" declaration diagnostics.

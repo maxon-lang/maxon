@@ -39,6 +39,7 @@ Short-circuit semantics compose through chains of `and`/`or` expressions. In
 ## Tests
 
 <!-- test: and-skips-right-when-left-false -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 var sideEffectCount = 0
 
@@ -60,6 +61,7 @@ end 'main'
 ```
 
 <!-- test: and-evaluates-right-when-left-true -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 var sideEffectCount = 0
 
@@ -81,6 +83,7 @@ end 'main'
 ```
 
 <!-- test: or-skips-right-when-left-true -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 var sideEffectCount = 0
 
@@ -102,6 +105,7 @@ end 'main'
 ```
 
 <!-- test: or-evaluates-right-when-left-false -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 var sideEffectCount = 0
 
@@ -123,6 +127,7 @@ end 'main'
 ```
 
 <!-- test: and-chain-short-circuits-on-first-false -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 var sideEffectCount = 0
 
@@ -144,6 +149,7 @@ end 'main'
 ```
 
 <!-- test: or-chain-short-circuits-on-first-true -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 var sideEffectCount = 0
 
@@ -224,6 +230,7 @@ end 'main'
 ```
 
 <!-- test: short-circuit-in-while-condition -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 var trace = 0
 

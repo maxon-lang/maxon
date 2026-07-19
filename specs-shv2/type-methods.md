@@ -80,6 +80,7 @@ end 'Point'
 ## Tests
 
 <!-- test: type-method-basic -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -111,6 +112,7 @@ end 'main'
 ```
 
 <!-- test: type-method-with-params -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -143,6 +145,7 @@ end 'main'
 ```
 
 <!-- test: type-method-returning-value -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -169,6 +172,7 @@ end 'main'
 ```
 
 <!-- test: type-multiple-methods -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -210,6 +214,7 @@ end 'main'
 ```
 
 <!-- test: type-method-chain -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)

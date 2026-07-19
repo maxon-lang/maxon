@@ -48,6 +48,7 @@ can never be confused again.
 ## Tests
 
 <!-- test: void-result-in-binding -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 function noop()
 	return
@@ -63,6 +64,7 @@ error E2004: <fragment>:7:10: Function 'noop' does not return a value
 ```
 
 <!-- test: void-result-in-arithmetic -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 function noop()
 	return
@@ -77,6 +79,7 @@ error E2004: <fragment>:7:9: Function 'noop' does not return a value
 ```
 
 <!-- test: void-result-in-condition -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 function noop()
 	return
@@ -94,6 +97,7 @@ error E2004: <fragment>:7:5: Function 'noop' does not return a value
 ```
 
 <!-- test: void-result-as-argument -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -114,6 +118,7 @@ error E2004: <fragment>:13:17: Function 'noop' does not return a value
 ```
 
 <!-- test: void-result-returned -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 function noop()
 	return
@@ -128,6 +133,7 @@ error E2004: <fragment>:7:9: Function 'noop' does not return a value
 ```
 
 <!-- test: cross-file-void-result -->
+<!-- targets: wasm32-wasi -->
 A void callee in ANOTHER file is the same error, and it is the case the two-meaning sentinel hid
 best: the parser could see neither the callee nor its voidness, and reported the same `unresolved`
 for both.
@@ -148,6 +154,7 @@ error E2004: <fragment>:9:10: Function 'noop' does not return a value
 ```
 
 <!-- test: void-call-statement-is-legal -->
+<!-- targets: wasm32-wasi -->
 ⚠ THE OVER-REJECTION GUARD. A void call in STATEMENT position is exactly what that position is for,
 and it must keep compiling — the check is about the RESULT being used, not about the call.
 ```maxon
@@ -165,6 +172,7 @@ end 'main'
 ```
 
 <!-- test: value-call-result-may-still-be-discarded -->
+<!-- targets: wasm32-wasi -->
 A value-returning call in statement position keeps its existing behaviour: the result is discarded,
 and that is not this error.
 ```maxon

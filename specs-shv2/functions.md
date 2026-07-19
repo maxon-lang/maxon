@@ -300,6 +300,7 @@ end 'main'
 ```
 
 <!-- test: first-arg-named -->
+<!-- targets: wasm32-wasi -->
 The first argument is positional — a label on it is E2052.
 ```maxon
 function add(a int, b int) returns int
@@ -315,6 +316,7 @@ error E2052: <fragment>:7:13: the first argument cannot be named; only the secon
 ```
 
 <!-- test: second-arg-unnamed -->
+<!-- targets: wasm32-wasi -->
 The second and later arguments must be labelled — a bare value there is E2053.
 ```maxon
 function add(a int, b int) returns int
@@ -330,6 +332,7 @@ error E2053: <fragment>:7:16: the second and later arguments must be named ('nam
 ```
 
 <!-- test: arity-mismatch -->
+<!-- targets: wasm32-wasi -->
 The argument count must match the callee's parameter count — E3036.
 ```maxon
 function add(a int, b int) returns int
@@ -345,6 +348,7 @@ error E3036: <fragment>:7:9: 'add' expects 2 argument(s) but 1 were provided
 ```
 
 <!-- test: unknown-function -->
+<!-- targets: wasm32-wasi -->
 A call to a function that does not exist is E3004.
 ```maxon
 function main() returns ExitCode
@@ -356,6 +360,7 @@ error E3004: <fragment>:3:9: call to undefined function 'frobnicate'
 ```
 
 <!-- test: unknown-label -->
+<!-- targets: wasm32-wasi -->
 A `name:` label that matches no parameter is E3037.
 ```maxon
 function add(a int, b int) returns int

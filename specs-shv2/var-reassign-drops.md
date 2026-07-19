@@ -232,6 +232,7 @@ JOINS the owned set, and the owned value is not also statement-dropped — so it
 `print` and is freed exactly once at scope exit.
 
 <!-- test: borrowed-to-owned -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 

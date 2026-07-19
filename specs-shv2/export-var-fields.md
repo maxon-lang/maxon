@@ -74,6 +74,7 @@ All fields (exported or not) can be initialized in struct literals, since the ty
 ## Tests
 
 <!-- test: export-var-basic -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -97,6 +98,7 @@ end 'main'
 ```
 
 <!-- test: export-var-write -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -120,6 +122,7 @@ end 'main'
 ```
 
 <!-- test: export-let-readonly -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -142,6 +145,7 @@ end 'main'
 ```
 
 <!-- test: private-field-in-method -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -174,6 +178,7 @@ end 'main'
 ```
 
 <!-- test: mixed-export-fields -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -201,6 +206,7 @@ end 'main'
 ```
 
 <!-- test: error.unexported-field-read -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -223,6 +229,7 @@ error E3014: specs/fragments/export-var-fields/error.unexported-field-read.test:
 ```
 
 <!-- test: error.unexported-field-write -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -246,6 +253,7 @@ error E3014: specs/fragments/export-var-fields/error.unexported-field-write.test
 ```
 
 <!-- test: all-fields-private-by-default -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)

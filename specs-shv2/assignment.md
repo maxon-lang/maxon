@@ -80,6 +80,7 @@ end 'main'
 ```
 
 <!-- test: assign-to-let-error -->
+<!-- targets: wasm32-wasi -->
 Assigning to a `let` binding is rejected — only `var` bindings are mutable.
 ```maxon
 function main() returns ExitCode
@@ -93,6 +94,7 @@ error E2013: <fragment>:4:2: cannot assign to immutable variable: 'x'
 ```
 
 <!-- test: error.retype-struct-to-other-struct-errors -->
+<!-- targets: wasm32-wasi -->
 Two different structs are two different types, even though both are "a struct". A kind alone cannot
 tell them apart, so a bare `structRef == structRef` tag check passes this retype and the overwritten
 box is later dropped under the binding's declared destructor — a wrong answer in the bootstrap
@@ -130,6 +132,7 @@ error E3005: specs/fragments/assignment/error.retype-struct-to-other-struct-erro
 ```
 
 <!-- test: error.reassign-wrong-struct -->
+<!-- targets: wasm32-wasi -->
 The same retype with MANAGED (String-field) structs — the case OPEN #54 was filed for. The scalar tag
 check accepts it; the overwrite drops the old `BoxA` and the scope exit drops `a` under `BoxA`'s
 destructor while it holds a `BoxB` box. Rejected at the reassignment, before either drop.

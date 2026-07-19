@@ -340,6 +340,7 @@ value is correctly dropped on the path that did not move it. Path-sensitive DROP
 conservative use-after-move rule.
 
 <!-- test: use-after-conditional-move -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -369,6 +370,7 @@ would re-move the already-moved `a` on the next iteration — a double-free. Pla
 needs elaboration across the loop boundary (a later wave), so the move is refused rather than miscompiled.
 
 <!-- test: outer-move-in-loop-rejected -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -402,6 +404,7 @@ error E2015: <fragment>:12:7: Unsupported: moving a value declared outside this 
 across the loop boundary deferred to a later wave. Refused at the move rather than leaked or double-freed.
 
 <!-- test: break-out-of-moved-branch-rejected -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 

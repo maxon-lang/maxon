@@ -262,6 +262,7 @@ error E5001: the loop at <fragment>:32 needs 4 more register(s) than are availab
 ```
 
 <!-- test: hot-loop-across-call -->
+<!-- targets: wasm32-wasi -->
 A call inside a loop is **NOT** E5001 — it is case 2, the forced bracket. Five accumulators AND
 the loop counter (six values) are live across the `sink` call inside the loop, but only five
 callee-saved registers survive a call. One value therefore *cannot* stay in a register: the ABI
@@ -312,6 +313,7 @@ end 'main'
 ```
 
 <!-- test: rescued-idle-around-loop -->
+<!-- targets: wasm32-wasi -->
 The CONTRAST to `hot-loop-overflow`: the SAME sixteen values, but now they are idle across
 the loop (computed before it, summed after it) rather than updated inside it. The loop's
 genuine working set is just `sum` and `i` — two values — so it fits, and the cold-spill
@@ -734,6 +736,7 @@ error E5001: the loop at <fragment>:30 needs 2 more register(s) than are availab
 ```
 
 <!-- test: relievable-param-live-across-loop -->
+<!-- targets: wasm32-wasi -->
 A parameter LIVE ACROSS the loop but not USED inside it is cold-spillable, so high pressure
 here is relieved — no E5001. `p` is read before the loop (the `k` computations) and after it
 (the `return`), so it is live across the loop; but the loop body touches only `sum` and `i`.

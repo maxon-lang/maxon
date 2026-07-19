@@ -65,6 +65,7 @@ end 'main'
 ```
 
 <!-- test: double-negation -->
+<!-- targets: wasm32-wasi -->
 `- -x` fails at the second `-`: a unary operand is a primary, and a leading `-` is
 not a primary.
 ```maxon
@@ -85,6 +86,7 @@ in this `## Deferred` section — NOT `## Tests` — so the spec-test parser (wh
 scans only `## Tests`, up to the next `## ` heading) never extracts them, and
 they carry NO `<!-- test: … -->` marker. To re-enable: move the test up into
 `## Tests` and prefix it with its `<!-- test: NAME -->` marker.
+<!-- targets: wasm32-wasi -->
 
 ### negate-int
 

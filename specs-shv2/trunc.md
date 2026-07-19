@@ -36,6 +36,7 @@ var z = trunc(neg)   // -3 (toward zero, removes fractional part)
 ## Tests
 
 <!-- test: trunc.basic -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let neg = -3.7
@@ -48,6 +49,7 @@ end 'main'
 ```
 
 <!-- test: trunc.positive -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let x = 7.9
@@ -60,6 +62,7 @@ end 'main'
 ```
 
 <!-- test: trunc.zero -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let x = 0.5

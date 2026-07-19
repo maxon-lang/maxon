@@ -262,6 +262,7 @@ end 'main'
 ```
 
 <!-- test: error.consume-then-reuse -->
+<!-- targets: wasm32-wasi -->
 Reusing an argument after it was consumed into a struct field is use-after-move.
 ```maxon
 typealias Integer = int(i64.min to i64.max)

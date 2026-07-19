@@ -13,6 +13,7 @@ When an enum case has an associated value whose type is itself an enum, the matc
 ## Tests
 
 <!-- test: match-enum-typed-binding-pass-to-function -->
+<!-- targets: wasm32-wasi -->
 Bind an enum-typed associated value in a match and pass it to a function.
 ```maxon
 enum Direction
@@ -49,6 +50,7 @@ end 'main'
 ```
 
 <!-- test: match-enum-typed-binding-compare -->
+<!-- targets: wasm32-wasi -->
 Bind an enum-typed associated value in a match and compare it.
 ```maxon
 enum Color

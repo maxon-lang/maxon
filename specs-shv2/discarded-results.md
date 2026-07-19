@@ -120,6 +120,7 @@ error E3064: specs/fragments/discarded-results/pure-function-let-discard.test:10
 ```
 
 <!-- test: pure-function-used -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -182,6 +183,7 @@ end 'main'
 ```
 
 <!-- test: void-function-ok -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 
 function doNothing()

@@ -68,6 +68,7 @@ end 'main'
 ```
 
 <!-- test: var-explicit-type-error -->
+<!-- targets: wasm32-wasi -->
 Explicit type annotations are not allowed on var declarations.
 ```maxon
 function main() returns ExitCode
@@ -80,6 +81,7 @@ error E2010: <fragment>:3:7: Expected '=' but got ':'
 ```
 
 <!-- test: let-explicit-type-error -->
+<!-- targets: wasm32-wasi -->
 Explicit type annotations are not allowed on let declarations.
 ```maxon
 function main() returns ExitCode
@@ -98,6 +100,7 @@ in this `## Deferred` section — NOT `## Tests` — so the spec-test parser (wh
 scans only `## Tests`, up to the next `## ` heading) never extracts them, and
 they carry NO `<!-- test: … -->` marker. To re-enable: move the test up into
 `## Tests` and prefix it with its `<!-- test: NAME -->` marker.
+<!-- targets: wasm32-wasi -->
 
 ### top-level-string-constant
 

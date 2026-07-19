@@ -69,6 +69,7 @@ c.count = 5     // OK: field is var
 ## Tests
 
 <!-- test: var-struct-field-assign -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -93,6 +94,7 @@ end 'main'
 ```
 
 <!-- test: var-field-assign -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -117,6 +119,7 @@ end 'main'
 ```
 
 <!-- test: error.let-struct-field-assign -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -141,6 +144,7 @@ error E2013: specs/fragments/structs/error.let-struct-field-assign.test:16:2: ca
 ```
 
 <!-- test: error.let-field-assign -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -165,6 +169,7 @@ error E2013: specs/fragments/structs/error.let-field-assign.test:16:2: cannot as
 ```
 
 <!-- test: simple-type -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -188,6 +193,7 @@ end 'main'
 ```
 
 <!-- test: struct-field-access -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -211,6 +217,7 @@ end 'main'
 ```
 
 <!-- test: struct-param -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -239,6 +246,7 @@ end 'main'
 ```
 
 <!-- test: struct-return -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -266,6 +274,7 @@ end 'main'
 ```
 
 <!-- test: struct-literal-as-arg -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -322,6 +331,7 @@ end 'main'
 ```
 
 <!-- test: struct-field-inferred-type -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 type Settings
 	export let maxRetries = 5
@@ -342,6 +352,7 @@ end 'main'
 ```
 
 <!-- test: error.return-wrong-struct -->
+<!-- targets: wasm32-wasi -->
 Returning a DIFFERENT struct than declared is a memory-safety hole, not merely a wrong answer
 (OPEN #54). The value passes the scalar tag check — two structs share the `structRef` tag — and is
 then handed back and dropped under the DECLARED return type's destructor: a wild free (this program
@@ -380,6 +391,7 @@ error E3005: specs/fragments/structs/error.return-wrong-struct.test:21:2: Cannot
 ```
 
 <!-- test: error.callarg-wrong-struct-consumed -->
+<!-- targets: wasm32-wasi -->
 Passing a DIFFERENT struct than the parameter declares is a memory-safety hole, not merely a wrong
 answer (OPEN #54 Slice B). At a CONSUMING call site — `WrapA.create` moves its `BoxA` argument into a
 managed field — the wrong struct passes the scalar tag check (two structs share the `structRef` tag)
@@ -421,6 +433,7 @@ error E3005: specs/fragments/structs/error.callarg-wrong-struct-consumed.test:26
 ```
 
 <!-- test: error.callarg-wrong-struct-borrowed -->
+<!-- targets: wasm32-wasi -->
 The identity check is ownership-independent: a wrong struct handed to a plain BORROWING parameter is a
 type error too — the callee would read the wrong type's field layout — so it is rejected at the call
 argument exactly as the consuming case is, not only at a consuming move. Here both structs are

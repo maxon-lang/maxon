@@ -147,6 +147,7 @@ If any case is missing, the compiler reports an error listing the uncovered case
 ## Tests
 
 <!-- test: match-statements.simple -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let x = 2
@@ -162,6 +163,7 @@ end 'main'
 ```
 
 <!-- test: match-statements.default -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let x = 99
@@ -177,6 +179,7 @@ end 'main'
 ```
 
 <!-- test: match-statements.first-case -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let x = 1
@@ -192,6 +195,7 @@ end 'main'
 ```
 
 <!-- test: match-statements.or-patterns -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let x = 3
@@ -207,6 +211,7 @@ end 'main'
 ```
 
 <!-- test: match-statements.or-patterns-first -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let x = 1
@@ -222,6 +227,7 @@ end 'main'
 ```
 
 <!-- test: match-statements.or-patterns-second -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let x = 2
@@ -238,6 +244,7 @@ end 'main'
 
 
 <!-- test: match-expression.basic -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let x = 2
@@ -254,6 +261,7 @@ end 'main'
 ```
 
 <!-- test: match-expression.or-patterns -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let x = 4
@@ -270,6 +278,7 @@ end 'main'
 ```
 
 <!-- test: match-expression.default -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let x = 99
@@ -287,6 +296,7 @@ end 'main'
 
 
 <!-- test: match-statements.fallthrough -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let x = 1
@@ -304,6 +314,7 @@ end 'main'
 ```
 
 <!-- test: match-statements.fallthrough-chain -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let x = 1
@@ -322,6 +333,7 @@ end 'main'
 ```
 
 <!-- test: match-statements.fallthrough-to-default -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let x = 3
@@ -340,6 +352,7 @@ end 'main'
 ```
 
 <!-- test: match-statements.nested-in-function -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -361,6 +374,7 @@ end 'main'
 ```
 
 <!-- test: match-statements.assignment -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let x = 2
@@ -378,6 +392,7 @@ end 'main'
 ```
 
 <!-- test: match-statements.function-call -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -402,6 +417,7 @@ end 'main'
 ```
 
 <!-- test: match-enum.exhaustive -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 enum Color
 	red
@@ -423,6 +439,7 @@ end 'main'
 ```
 
 <!-- test: error.match-enum-default -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 enum Color
 	red
@@ -443,6 +460,7 @@ error E2046: specs/fragments/match-simple/error.match-enum-default.test:12:3: 'd
 ```
 
 <!-- test: match-enum.expression -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 enum Status
 	pending
@@ -465,6 +483,7 @@ end 'main'
 ```
 
 <!-- test: match-expression.used-in-expression -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let x = 2
@@ -481,6 +500,7 @@ end 'main'
 ```
 
 <!-- test: error.match-expression-fallthrough -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let x = 1
@@ -496,6 +516,7 @@ error E2001: specs/fragments/match-simple/error.match-expression-fallthrough.tes
 ```
 
 <!-- test: error.match-fallthrough-with-return -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let x = 1
@@ -510,6 +531,7 @@ error E2025: specs/fragments/match-simple/error.match-fallthrough-with-return.te
 ```
 
 <!-- test: error.match-enum-not-exhaustive -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 enum Color
 	red
@@ -530,6 +552,7 @@ error E2026: specs/fragments/match-simple/error.match-enum-not-exhaustive.test:1
 ```
 
 <!-- test: error.match-duplicate-pattern -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let x = 1
@@ -545,6 +568,7 @@ error E2027: specs/fragments/match-simple/error.match-duplicate-pattern.test:6:3
 ```
 
 <!-- test: error.match-missing-block-id -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let x = 1
@@ -559,6 +583,7 @@ error E2042: specs/fragments/match-simple/error.match-missing-block-id.test:4:9:
 ```
 
 <!-- test: error.match-mismatched-block-id -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let x = 1
@@ -573,6 +598,7 @@ error E2043: specs/fragments/match-simple/error.match-mismatched-block-id.test:7
 ```
 
 <!-- test: error.match-default-not-last -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let x = 1
@@ -588,6 +614,7 @@ error E2029: specs/fragments/match-simple/error.match-default-not-last.test:6:3:
 ```
 
 <!-- test: error.match-not-exhaustive -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let x = 1

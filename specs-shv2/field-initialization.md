@@ -58,6 +58,7 @@ conditional write that reaches the return only on some paths is rejected.
 ## Tests
 
 <!-- test: all-in-literal -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -81,6 +82,7 @@ end 'main'
 ```
 
 <!-- test: all-defaults -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 type Defaults
 	export var a = 10
@@ -101,6 +103,7 @@ end 'main'
 ```
 
 <!-- test: literal-overrides-default -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 type Thing
 	export var value = 7
@@ -122,6 +125,7 @@ end 'main'
 ```
 
 <!-- test: mixed-default-and-literal -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)

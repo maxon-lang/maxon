@@ -43,6 +43,7 @@ end 'main'
 ```
 
 <!-- test: unary-negate-literal -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let x = -5
@@ -54,6 +55,7 @@ end 'main'
 ```
 
 <!-- test: unary-double-negate -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let x = 42
@@ -66,6 +68,7 @@ error E2004: specs/fragments/unary-negation/unary-double-negate.test:4:11: Expec
 ```
 
 <!-- test: unary-negate-expression -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let x = 10
@@ -79,6 +82,7 @@ end 'main'
 ```
 
 <!-- test: unary-negate-float -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let f = 3.5
@@ -91,6 +95,7 @@ end 'main'
 ```
 
 <!-- test: unary-double-negate-float -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let f = 42.0

@@ -239,6 +239,7 @@ end 'main'
 ```
 
 <!-- test: function-call-in-constant-error -->
+<!-- targets: wasm32-wasi -->
 Function calls are not allowed in constant expressions.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -258,6 +259,7 @@ error E2045: <fragment>:8:14: Function calls are not allowed in global variable 
 ```
 
 <!-- test: circular-dependency-error -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 let A = B + 1
 let B = A + 1

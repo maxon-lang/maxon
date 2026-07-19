@@ -66,6 +66,7 @@ Every test is self-verifying: `0` on an exact match, `99` otherwise.
 ## Tests
 
 <!-- test: idle-lets-across-a-loop -->
+<!-- targets: wasm32-wasi -->
 The CONTROL. Fifteen `let` bindings are computed before a loop, never touched inside it, and
 summed after. They are ordinary values, so the cold-spill splitter stores the excess in the
 PREHEADER and reloads them after the loop, adding nothing to the body. This has always worked;
@@ -110,6 +111,7 @@ end 'main'
 ```
 
 <!-- test: idle-vars-across-a-loop -->
+<!-- targets: wasm32-wasi -->
 THE FALSE E5001, and the program that forced `elimTrivialBlockArgs`. Character for character the
 test above with `let` replaced by `var`. The vars are never reassigned, so the two programs are
 SEMANTICALLY IDENTICAL and must compile identically.
@@ -165,6 +167,7 @@ end 'main'
 ```
 
 <!-- test: idle-vars-across-nested-loops -->
+<!-- targets: wasm32-wasi -->
 The same folding, but the phis CHAIN. In nested loops the inner header's phi for `k` is fed by the
 OUTER header's phi for `k`, which is fed by `k`'s real def — so the inner one only becomes trivial
 once the outer one has been folded away. That is why the fold is a FIXPOINT rather than a single
@@ -211,6 +214,7 @@ end 'main'
 ```
 
 <!-- test: idle-vars-past-a-break-in-a-branch -->
+<!-- targets: wasm32-wasi -->
 **The fold chain must be re-asked at EVERY link, not just the first.** Character for character
 `idle-vars-across-a-loop`, with the loop moved inside an `if` and given a `break`. Both additions
 are load-bearing, and each one adds a link to the chain the fold has to walk:
@@ -280,6 +284,7 @@ end 'main'
 ```
 
 <!-- test: five-across-call-in-loop -->
+<!-- targets: wasm32-wasi -->
 The LOWER side of the callee-saved boundary — the case that must need NO bracket at all.
 
 Counting the values live across the call is the whole exercise, and it is easy to get wrong: the
@@ -328,6 +333,7 @@ end 'main'
 ```
 
 <!-- test: seven-across-call-in-loop -->
+<!-- targets: wasm32-wasi -->
 The UPPER side, with a deficit of THREE. Seven accumulators plus the loop counter are EIGHT values
 live across the call (the counter counts — see the test above), and only five callee-saved
 registers survive one, so three must go to memory. The placement is FORCED: the ABI made the
@@ -377,6 +383,7 @@ end 'main'
 ```
 
 <!-- test: hall-nonlaminar-confined-by-different-calls -->
+<!-- targets: wasm32-wasi -->
 Hall's condition on masks that are NOT laminar. Each of `v1`..`v6` is used AFTER a call in its OWN
 arm of an `else if` chain, so each is live across a DIFFERENT call and each is confined to the five
 callee-saved registers. Liveness is path-sensitive, so no single call has more than one of them
@@ -437,6 +444,7 @@ end 'main'
 ```
 
 <!-- test: break-out-of-a-pressured-loop -->
+<!-- targets: wasm32-wasi -->
 A `break` out of a loop under pressure. The early exit is a SECOND edge out of the loop, carrying
 the loop-carried phis to the exit block alongside the normal exit edge — so the exit block has two
 predecessors with two arg vectors, and the splitter's reloads must dominate the uses on BOTH paths.
@@ -483,6 +491,7 @@ end 'main'
 ```
 
 <!-- test: nested-loops-pressure-at-depth-two -->
+<!-- targets: wasm32-wasi -->
 Pressure at loop depth TWO. Twelve values are idle across BOTH loops, and the accumulator work
 happens in the inner one — so a cold spill must be hoisted clear out to depth 0, not merely to the
 outer loop's preheader (which is still inside nothing, but the inner loop's preheader is at depth

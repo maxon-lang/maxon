@@ -65,6 +65,7 @@ See `specs/array-clone-element-size.md`.
 ## Tests
 
 <!-- test: back-edge-swap -->
+<!-- targets: wasm32-wasi -->
 The 2-CYCLE — the smallest input that must emit an `xchg`, and the one that caught the
 bug above. `a` and `b` are both live at the loop header, so they interfere and hold
 different registers; the back edge passes them to each other's phi. The whole parallel
@@ -99,6 +100,7 @@ end 'main'
 ```
 
 <!-- test: back-edge-rotate-three -->
+<!-- targets: wasm32-wasi -->
 A 3-CYCLE. One `xchg` cannot discharge it: breaking `(a b c)` leaves a 2-cycle whose
 source must be rewritten through the swap before it can be emitted. So this is the
 smallest program that exercises `rewriteSourcesThroughSwap` producing a move that is
@@ -135,6 +137,7 @@ end 'main'
 ```
 
 <!-- test: back-edge-rotate-five -->
+<!-- targets: wasm32-wasi -->
 A 5-CYCLE — four chained `xchg`s and four successive rounds of
 `rewriteSourcesThroughSwap`, each rewriting the sources of the moves that remain. An
 off-by-one in that rewrite (updating only one direction of the swap, or using a stale
@@ -175,6 +178,7 @@ end 'main'
 ```
 
 <!-- test: cycle-plus-leaf-moves -->
+<!-- targets: wasm32-wasi -->
 A CYCLE AND A LEAF ON THE SAME EDGE, which pins the ORDER. `a`, `b`, `c` rotate — a
 3-cycle — and `d` additionally takes `a`'s OLD value, so the edge's move set is
 `phi_a ← reg(b)`, `phi_b ← reg(c)`, `phi_c ← reg(a)`, `phi_d ← reg(a)`. Nothing reads
@@ -216,6 +220,7 @@ end 'main'
 ```
 
 <!-- test: two-preds-different-permutations -->
+<!-- targets: wasm32-wasi -->
 TWO predecessors feeding ONE merge block with DIFFERENT permutations. The `then` arm
 swaps `a` with `b`; the `else` arm swaps `b` with `c`. Both arms flow to the same merge,
 whose phis for `a`, `b`, `c` therefore receive a different arg vector on each incoming
@@ -260,6 +265,7 @@ end 'main'
 ```
 
 <!-- test: permutation-under-pressure -->
+<!-- targets: wasm32-wasi -->
 A back-edge SWAP under enough pressure to force SPILLING. `k1`..`k12` are computed
 before the loop and summed after it, and never touched inside, so the cold-spill splitter
 lifts several of them out around the loop — while the loop itself carries a 2-cycle in
@@ -308,6 +314,7 @@ end 'main'
 ```
 
 <!-- test: swap-across-call-callee-saved -->
+<!-- targets: wasm32-wasi -->
 The swapped pair is ALSO live across a CALL, so both values are forbidden the nine
 caller-saved registers and the `xchg` operates on CALLEE-SAVED ones. That makes the
 prologue's `usedCalleeSavedRegs` scan load-bearing over an `xchg`: the op has TWO register

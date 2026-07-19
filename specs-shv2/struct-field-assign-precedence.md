@@ -58,6 +58,7 @@ field on a non-struct through an immutable binding.
 ## Tests
 
 <!-- test: immutable-instance-outranks-immutable-field -->
+<!-- targets: wasm32-wasi -->
 Both are immutable: `let c` AND `export let version`. Exactly one diagnostic is printed, and
 it must be the INSTANCE's. Anchored at the root variable `c`, which is column 2 — the same
 anchor both halves use, and never the field.
@@ -85,6 +86,7 @@ error E2013: <fragment>:15:2: cannot assign to immutable variable: 'c'
 ```
 
 <!-- test: error.not-a-struct-outranks-immutable-instance -->
+<!-- targets: wasm32-wasi -->
 Rank 1. `n` is BOTH immutable AND not a struct, so both bands have something to say. The
 resolution message must win: `var n` — the only change the permission message could ask for —
 leaves `n.x = 1` just as broken, because an `int` has no field `x` however it is declared.

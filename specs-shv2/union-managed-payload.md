@@ -346,6 +346,7 @@ reassign first payload string long enough to be a real heap allocationreassign s
 ```
 
 <!-- test: error.construct-moves-string-source -->
+<!-- targets: wasm32-wasi -->
 Moving a String binding into a union payload poisons it; a later read is E3102.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -371,6 +372,7 @@ error E3102: <fragment>:16:8: use of moved value 'msg': its ownership moved to a
 ```
 
 <!-- test: error.construct-moves-struct-source -->
+<!-- targets: wasm32-wasi -->
 Moving a struct binding into a union payload poisons it; a later read is E3102.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -399,6 +401,7 @@ error E3102: <fragment>:20:9: use of moved value 'b': its ownership moved to ano
 ```
 
 <!-- test: error.match-consume-then-use -->
+<!-- targets: wasm32-wasi -->
 A binding match consumes the union; a later read of the scrutinee is E3102.
 ```maxon
 typealias Integer = int(i64.min to i64.max)

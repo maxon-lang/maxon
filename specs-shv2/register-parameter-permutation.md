@@ -53,6 +53,7 @@ answers are far larger than 255 and a raw exit code would wrap mod 256.
 ## Tests
 
 <!-- test: reverse-six-params -->
+<!-- targets: wasm32-wasi -->
 A six-parameter function that immediately calls a six-parameter function with the arguments
 FULLY REVERSED — a permutation through the argument registers on capture AND on setup. Slot `k`
 receives parameter `5 − k`, so `RCX ← f`, `RDX ← e`, `RAX ← d`, `R9 ← c`, `RSI ← b`, `RDI ← a`.
@@ -82,6 +83,7 @@ end 'main'
 ```
 
 <!-- test: rotate-six-params -->
+<!-- targets: wasm32-wasi -->
 A 6-CYCLE (`g(b, c, d, e, f, a)`) — the permutation with NO fixed point and no 2-cycle to
 decompose into, so every argument register is both a source and a destination of the copy. Slot
 `k` gets parameter `k + 1` (mod 6): `RCX ← b`, `RDX ← c`, `RAX ← d`, `R9 ← e`, `RSI ← f`,
@@ -110,6 +112,7 @@ end 'main'
 ```
 
 <!-- test: named-args-out-of-declaration-order -->
+<!-- targets: wasm32-wasi -->
 **THE SHARPEST PROBE IN THIS FILE.** The labelled arguments are WRITTEN in one order and BOUND
 to the callee's parameters in another, so evaluation order and slot order disagree. The
 resulting slot map is `RCX ← a`, `RDX ← d`, `RAX ← b`, `R9 ← f`, `RSI ← e`, `RDI ← c`.
@@ -145,6 +148,7 @@ end 'main'
 ```
 
 <!-- test: order-sensitive-body-through-a-reversal -->
+<!-- targets: wasm32-wasi -->
 The callee's body is ORDER-SENSITIVE by construction: the coefficients `+1, −2, +3, −4, +5, −6`
 are pairwise DISTINCT, so exchanging any two arguments changes the result by
 `(c_i − c_j)(v_j − v_i) ≠ 0`. A symmetric sum (`a + b + c + …`) would absorb a register mixup
@@ -175,6 +179,7 @@ end 'main'
 ```
 
 <!-- test: six-args-all-live-after-the-call -->
+<!-- targets: wasm32-wasi -->
 All SIX parameters are passed (reversed) to the call AND read again AFTER it. A value live
 across a call is confined to the five CALLEE-SAVED registers — and there are SIX of them. Hall's
 condition fails, and the splitter must BRACKET one: a `storeSlotReg` at its DEF (which, for a
@@ -208,6 +213,7 @@ end 'main'
 ```
 
 <!-- test: reverse-six-params-across-an-idiv -->
+<!-- targets: wasm32-wasi -->
 THE COLLISION, in one function. An `idiv` runs BEFORE the reversed call and all six parameters
 are live across it, so on top of the cross-parameter forbid every one of them is ALSO forbidden
 `{RAX, RDX}`. That takes parameter `c` (incoming **RAX**) and parameter `b` (incoming **RDX**)
@@ -242,6 +248,7 @@ end 'main'
 ```
 
 <!-- test: recursive-permuting-six-params -->
+<!-- targets: wasm32-wasi -->
 RECURSION through a six-parameter function that PERMUTES its arguments at every level: the first
 five rotate left and the sixth is the depth counter. The same six-register parallel copy runs on
 capture and on setup at every level, and the mapping is a 5-cycle (`p1←p2, p2←p3, p3←p4, p4←p5,

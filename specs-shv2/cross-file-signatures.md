@@ -59,6 +59,7 @@ to lie to.
 ## Tests
 
 <!-- test: cross-file-bool-plus-int -->
+<!-- targets: wasm32-wasi -->
 A `bool` returned from another file cannot be added to an `int`. This is the headline case: it
 compiled, and returned 42.
 ```maxon
@@ -80,6 +81,7 @@ error E2004: <fragment>:12:11: Cannot operate on bool and int
 ```
 
 <!-- test: cross-file-word-operator-mixed-operands -->
+<!-- targets: wasm32-wasi -->
 The false-tag twin. `flag and crossFileInt()` used to mint a merge phi tagged `bool` carrying the
 int `7`; `if m` branched on `7` and the program returned 1.
 ```maxon
@@ -105,6 +107,7 @@ error E3005: <fragment>:12:15: operator 'and' requires both operands to be the s
 ```
 
 <!-- test: cross-file-comparison-mixed-operands -->
+<!-- targets: wasm32-wasi -->
 A comparison is class-strict across files too: the only thing there is to compare is the bool's 0/1
 payload, which is not what the source wrote.
 ```maxon
@@ -126,6 +129,7 @@ error E3005: <fragment>:9:15: type mismatch: 'cannot compare bool with int'
 ```
 
 <!-- test: cross-file-int-call-still-compiles -->
+<!-- targets: wasm32-wasi -->
 ⚠ THE OVER-REJECTION GUARD. Refusing an operand whose type the parser could not pin would reject
 this — a correct program — and over-rejection is the worse failure. The fix was to LOOK, not to
 refuse.
@@ -147,6 +151,7 @@ end 'main'
 ```
 
 <!-- test: cross-file-bool-short-circuits -->
+<!-- targets: wasm32-wasi -->
 ⚠ THE SECOND OVER-REJECTION GUARD, and the one that rules out the tempting one-liner. Making the
 word operator DEFER on an unpinned operand would type `ready() and enabled()` as unknown, and `not`
 refuses an unknown operand — so this correct program would stop compiling. It compiles, and the
@@ -178,6 +183,7 @@ end 'main'
 ```
 
 <!-- test: cross-file-declaration-order -->
+<!-- targets: wasm32-wasi -->
 A callee declared in a file that sorts AFTER the caller is typed exactly the same. Order does not
 decide meaning — here the `and` short-circuits over two cross-file bools regardless.
 ```maxon
@@ -199,6 +205,7 @@ end 'alwaysTrue'
 ```
 
 <!-- test: undefined-function-rejected -->
+<!-- targets: wasm32-wasi -->
 The one thing `unresolved` still means: a callee no file declares. The program is rejected, so the
 deferral can never reach codegen.
 ```maxon

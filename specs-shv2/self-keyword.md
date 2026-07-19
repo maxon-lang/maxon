@@ -53,6 +53,7 @@ end 'Point'
 ## Tests
 
 <!-- test: self-explicit-access -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -85,6 +86,7 @@ end 'main'
 ```
 
 <!-- test: self-implicit-access -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -118,6 +120,7 @@ end 'main'
 ```
 
 <!-- test: self-with-params -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -151,6 +154,7 @@ end 'main'
 ```
 
 <!-- test: self-multiple-fields -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -182,6 +186,7 @@ end 'main'
 ```
 
 <!-- test: self-modify-and-return -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -213,6 +218,7 @@ end 'main'
 ```
 
 <!-- test: self-implicit-multiple-fields -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)

@@ -49,6 +49,7 @@ authored the `var` twin of `file-private-same-name-cross-file` on the same groun
 ## Tests
 
 <!-- test: loop-writes-a-field-it-reads -->
+<!-- targets: wasm32-wasi -->
 The accumulator IS the field, so the loop's every read of it is a load and its every write is
 a store. Five iterations of `c.value = c.value + 1` from 0 give **5**. A hoisted load would
 read 0 on every iteration, store 1 every time, and return **1** — a plausible number, and the

@@ -26,6 +26,7 @@ slot and silently return a wrong number.
 ## Tests
 
 <!-- test: file-private-same-name-cross-file-var -->
+<!-- targets: wasm32-wasi -->
 Two files each declare a file-private `var counter` with a different value and mutate it by a
 different amount. Each file's `counter` is its own slot: `bumpA` sees 7 and `bumpB` sees 100.
 

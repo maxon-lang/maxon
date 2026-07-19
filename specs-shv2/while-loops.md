@@ -399,6 +399,7 @@ this `## Deferred` section — NOT `## Tests` — so the spec-test parser (which
 only `## Tests`, up to the next `## ` heading) never extracts them, and they carry
 NO `<!-- test: … -->` marker. To re-enable: move the test up into `## Tests` and
 prefix it with its `<!-- test: NAME -->` marker.
+<!-- targets: wasm32-wasi -->
 
 ### nested-control
 
