@@ -199,6 +199,38 @@ end 'main'
 5
 ```
 
+<!-- test: error.return-wrong-union -->
+A boxed union carries its NAME (`named`) at the parser, so the same aggregate identity check that
+rejects a wrong struct rejects a wrong union: returning a `Palette` where a `Shape` is declared would
+hand back the wrong boxed layout to be dropped under `Shape`'s destructor (OPEN #54). Union identity
+is the interned name, exact — the `resolveTypes` → integer erasure that a scalar tag would see is a
+later concern, and this is caught before it.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+union Shape
+	circle(r Integer)
+	square(s Integer)
+end 'Shape'
+
+union Palette
+	red
+	blue
+end 'Palette'
+
+function bad() returns Shape
+	return Palette.red
+end 'bad'
+
+function main() returns ExitCode
+	let s = bad()
+	return 0 as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/enum-match-only/error.return-wrong-union.test:15:2: Cannot return 'Palette' from function declared to return 'Shape'
+```
+
 <!-- test: error.default-without-throws -->
 ```maxon
 enum Color

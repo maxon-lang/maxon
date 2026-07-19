@@ -341,3 +341,41 @@ end 'main'
 55
 ```
 
+<!-- test: error.return-wrong-struct -->
+Returning a DIFFERENT struct than declared is a memory-safety hole, not merely a wrong answer
+(OPEN #54). The value passes the scalar tag check — two structs share the `structRef` tag — and is
+then handed back and dropped under the DECLARED return type's destructor: a wild free (this program
+compiled clean and exited 139 before the check). Struct identity is the interned name, and a struct
+is never a subtype of another, so the mismatch is rejected outright.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type BoxA
+	export var s as String
+
+	static function create(x Integer) returns Self
+		return Self{s: "v{x}"}
+	end 'create'
+end 'BoxA'
+
+type BoxB
+	export var n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'BoxB'
+
+function bad() returns BoxA
+	return BoxB.create(9)
+end 'bad'
+
+function main() returns ExitCode
+	let b = bad()
+	return 0 as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/structs/error.return-wrong-struct.test:21:2: Cannot return 'BoxB' from function declared to return 'BoxA'
+```
+

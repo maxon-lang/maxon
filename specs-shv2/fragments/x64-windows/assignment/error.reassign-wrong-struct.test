@@ -1,0 +1,27 @@
+// Test: error.reassign-wrong-struct
+typealias Integer = int(i64.min to i64.max)
+
+type BoxA
+	export var s as String
+
+	static function create(x Integer) returns Self
+		return Self{s: "v{x}"}
+	end 'create'
+end 'BoxA'
+
+type BoxB
+	export var t as String
+
+	static function create(x Integer) returns Self
+		return Self{t: "w{x}"}
+	end 'create'
+end 'BoxB'
+
+function main() returns ExitCode
+	var a = BoxA.create(1)
+	a = BoxB.create(2)
+	return 0 as ExitCode
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:22:2: cannot assign 'BoxB' to variable 'a' of type 'BoxA'

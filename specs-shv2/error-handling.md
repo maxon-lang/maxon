@@ -1555,3 +1555,47 @@ end 'main'
 ```exitcode
 5
 ```
+
+<!-- test: error.otherwise-wrong-struct -->
+An `otherwise` fallback of a DIFFERENT named aggregate than the try's result would merge into the
+owned result phi and be dropped under the RESULT's destructor — a wild free (OPEN #54; this program
+compiled clean and exited 139 before the check). The scalar checks below cannot see it: `BoxA` and
+`BoxB` share the `structRef` tag. Identity is the interned name, exact.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+enum Err implements Error
+	bad
+end 'Err'
+
+type BoxA
+	export var s as String
+
+	static function create(x Integer) returns Self
+		return Self{s: "v{x}"}
+	end 'create'
+end 'BoxA'
+
+type BoxB
+	export var n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'BoxB'
+
+function makeA(x Integer) returns BoxA throws Err
+	if x > 5 'guard'
+		throw Err.bad
+	end 'guard'
+	return BoxA.create(x)
+end 'makeA'
+
+function main() returns ExitCode
+	let a = try makeA(9) otherwise BoxB.create(9)
+	return 0 as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3059: specs/fragments/error-handling/error.otherwise-wrong-struct.test:32:10: type mismatch: 'otherwise type 'BoxB' does not match expected type 'BoxA''
+```

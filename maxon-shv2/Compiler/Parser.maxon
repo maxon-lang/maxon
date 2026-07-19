@@ -878,6 +878,35 @@ function constantValueType(tag ValueTypeTag) returns MaxonType
 	panic("constantValueType: a top-level constant is tagged '{typeTagName(tag)}' — the evaluator folds integers, bools and floats only")
 end 'constantValueType'
 
+// The interned-NAME id of a function's declared return type, for a function KNOWN to return a value —
+// the id half of `maxonReturnTypeTag` (MaxonDialect), read where the aggregate-identity check needs a
+// return type's NAME and a scalar tag carries none (OPEN #54). It returns the SCALAR id, never
+// materializing the inner `MaxonType`: `typeNameIdOf` reads the borrowed inner's id, so a
+// scalar-returning function allocates nothing here — the same reason every type rule is stated over
+// the dense `valueTags`/`valueNameIds` columns (see TypeRules' header). Void is a caller bug: every
+// caller is gated on `maxonReturnTypeIsVoid`, and a void `return <expr>` is its own diagnostic.
+function maxonReturnTypeNameId(ref MaxonReturnType) returns TypeNameId
+	match ref 'k'
+		void then panic("maxonReturnTypeNameId: a void return type has no value — the caller must gate on maxonReturnTypeIsVoid first")
+		value(inner) then return typeNameIdOf(inner)
+	end 'k'
+end 'maxonReturnTypeNameId'
+
+// ⭐ **TWO NAMED AGGREGATES ARE THE SAME TYPE IFF THEIR INTERNED NAMES ARE EQUAL** — the ONE
+// name-comparison every coercion site (`return`, reassignment, `otherwise` value) and the
+// struct-literal-field / union-payload sites share (OPEN #54). A struct is never a subtype of another
+// (v1's `argTypesCompatible`, SemanticCheck.maxon:2527), so a value of the wrong aggregate would pass
+// the scalar tag check — `structRef == structRef` holds for ANY two structs — and later be dropped
+// under the DECLARED type's destructor: a wild free.
+//
+// `expected`/`got` are `aggregateNameOf` results, so an EMPTY one means "not a named aggregate". Two
+// values CONFLICT only when both name an aggregate and the names differ; every other pair (a scalar on
+// either side, or the same aggregate) defers to the caller's existing tag check, which the name-check
+// runs ALONGSIDE and never instead of.
+function namedAggregatesConflict(expected ByteArray, got ByteArray) returns bool
+	return not expected.isEmpty() and not got.isEmpty() and not got.equals(expected)
+end 'namedAggregatesConflict'
+
 // IEEE-754's sign bit — the top bit of the 64-bit pattern. Negating a float literal FLIPS it; it is
 // not an arithmetic negate, because a `ParsedInt` holding a float carries the BITS (see
 // `Parser.parseFloatLiteral`) and `0 - bits` would be nonsense.
@@ -3979,6 +4008,21 @@ export type Parser
 
 		let valueTag = self.tagOf(value)
 		let declaredTag = maxonTypeTag(binding.varType)
+
+		// ⭐ OPEN #54: reassigning a `var` to a DIFFERENT named aggregate is a retype the scalar tag
+		// check cannot see (`structRef == structRef` for any two structs); the overwritten box would
+		// later be dropped under the binding's declared destructor — a wild free. `requireAssignable`
+		// stays tag-based (its scalar-coercion job is, and it is SHARED with the global-store and
+		// field-default callers, which carry no declared aggregate). Identity is the interned name,
+		// EXACT. Read from the scalar tag/id columns — no `MaxonType` is materialized.
+		let declaredAggregate = self.aggregateNameOf(declaredTag, nameId: typeNameIdOf(binding.varType))
+		if not declaredAggregate.isEmpty() 'aggregateReassign'
+			let assignedAggregate = self.aggregateNameOf(valueTag, nameId: self.valueNameId(value))
+			if namedAggregatesConflict(declaredAggregate, got: assignedAggregate) 'aggregateReassignMismatch'
+				throw ParseError.assignTypeMismatch(String.from(nameTok.value), got: String.from(assignedAggregate), expected: String.from(declaredAggregate), line: nameTok.line, column: nameTok.column)
+			end 'aggregateReassignMismatch'
+		end 'aggregateReassign'
+
 		try self.requireAssignable(nameTok, value: valueTag, declared: declaredTag)
 
 		try self.reassignBindingValue(binding, nameTok: nameTok, value: value, rhsWasBareLocal: rhsWasBareLocal)
@@ -4170,6 +4214,58 @@ export type Parser
 		end 'declared'
 	end 'requireAssignable'
 
+	// The interned NAME behind a `named`/`structRef` id, from THIS file's interner — where every id a
+	// type check sees was minted: the value during this parse, a declared return/field/binding type
+	// from this file. A miss is a compiler invariant break, never user input (see TypeNameInterner).
+	function internedName(id TypeNameId) returns ByteArray
+		return try self.artifact.typeNames.nameOf(id) otherwise panic("Parser.internedName: type-name id {id} is not in this file's interner — every `named`/`structRef` id is minted from it")
+	end 'internedName'
+
+	// The interned type-name id of an SSA value, read straight from the dense `valueNameIds` column —
+	// the id `typeOf` and `valueIsUnsigned` both need, and a scalar (no `MaxonType` materialized). A
+	// miss is a parser invariant break: the two type columns are minted in lockstep for every value.
+	function valueNameId(value ValueId) returns TypeNameId
+		return try self.valueNameIds.get(value) otherwise panic("Parser.valueNameId: value v{value} has no recorded type name — the two type columns fell out of lockstep")
+	end 'valueNameId'
+
+	// ⭐ **THE INTERNED NAME OF THE DECLARED AGGREGATE A (tag, nameId) PAIR DENOTES, OR `EmptySourceText`
+	// FOR ANYTHING THAT IS NOT ONE** — a scalar, a ranged-int alias, a String. The `aggregateNameOf`
+	// half of the OPEN #54 identity check, ported from v1's `namedStructOrEnumName`
+	// (SemanticCheck.maxon:2687), which tells a struct/enum name apart from a numeric alias by the same
+	// registry lookup.
+	//
+	// It takes the SCALAR (tag, nameId) pair, never a `MaxonType`, so a coercion site reads it off the
+	// `valueTags`/`valueNameIds` columns (or a declared type's tag/id) and materializes no heap union —
+	// the discipline TypeRules' header states for every type rule, and the reason `structRef`-returning
+	// is checked without an allocation on the common scalar-returning path.
+	//
+	//   • `structRef` is ALWAYS a declared struct — its name, no registry lookup (the parser mints the
+	//     arm only for a declared `type`, so `structRef` cannot name anything else).
+	//   • `named` is a boxed union/enum HERE at the parser (TypeResolution erases it to an integer only
+	//     later), so it is an aggregate exactly when the signature index registers its name — a
+	//     ranged-int alias is `named` too and is numeric, NOT an aggregate (the theorem `typeClassOf`
+	//     rests on).
+	//   • every other tag names no aggregate.
+	//
+	// The "none" answer is `EmptySourceText`, matching this file's `enclosingType` idiom: a real
+	// aggregate name is never empty, so `isEmpty()` distinguishes it exactly (`namedAggregatesConflict`).
+	function aggregateNameOf(tag ValueTypeTag, nameId TypeNameId) returns ByteArray
+		if tag == ValueTypeTag.structRef 'struct'
+			return self.internedName(nameId)
+		end 'struct'
+
+		if tag != ValueTypeTag.named 'notNamed'
+			return EmptySourceText
+		end 'notNamed'
+
+		let name = self.internedName(nameId)
+		if self.signatures.containsStruct(name) or self.signatures.containsEnum(name) 'registeredAggregate'
+			return name
+		end 'registeredAggregate'
+
+		return EmptySourceText
+	end 'aggregateNameOf'
+
 	// The name is not a local and not a top-level `var`. Say which of the two remaining things it is.
 	function rejectNonGlobalAssignment(nameTok Token) throws ParseError
 		match self.signatures.constantValueOf(nameTok.value, readerFilePath: self.filePath) 'constant'
@@ -4243,6 +4339,21 @@ export type Parser
 		// a ranged int, and `typeTagName` prints the resolved primitive the bootstrap prints.
 		let retTag = self.tagOf(retVal)
 		let declaredTag = maxonReturnTypeTag(func.maxonReturnType)
+
+		// ⭐ OPEN #54: a `return` of a DIFFERENT named aggregate is handed back and dropped under the
+		// DECLARED return type's destructor — a wild free the scalar tag check below cannot see (two
+		// structs share the `structRef` tag). Identity is the interned name, EXACT (no subtyping). Read
+		// from the scalar tag/id columns — no `MaxonType` is materialized — so a scalar-returning
+		// function (the common case) allocates nothing here. Additive: the tag check still runs on every
+		// path this leaves alone.
+		let declaredReturnName = self.aggregateNameOf(declaredTag, nameId: maxonReturnTypeNameId(func.maxonReturnType))
+		if not declaredReturnName.isEmpty() 'aggregateReturn'
+			let returnedName = self.aggregateNameOf(retTag, nameId: self.valueNameId(retVal))
+			if namedAggregatesConflict(declaredReturnName, got: returnedName) 'aggregateReturnMismatch'
+				throw ParseError.returnTypeMismatch(String.from(returnedName), expected: String.from(declaredReturnName), line: retTok.line, column: retTok.column)
+			end 'aggregateReturnMismatch'
+		end 'aggregateReturn'
+
 		match checkDeclaredType(retTag, declared: declaredTag) 'declared'
 			ok then break 'declared'
 			mismatch then throw ParseError.returnTypeMismatch(typeTagName(retTag), expected: typeTagName(declaredTag), line: retTok.line, column: retTok.column)
@@ -4671,6 +4782,21 @@ export type Parser
 
 		// `otherwise <expr>` — a fallback VALUE that merges with the success value.
 		let otherwiseValue = try self.parseExpression(func, block: self.currentBlock)
+
+		// ⭐ OPEN #54: a struct/union `otherwise` fallback of the WRONG named aggregate merges into the
+		// try's owned result phi and is dropped under the RESULT's destructor — a wild free the scalar
+		// checks below cannot see (two structs share the `structRef` tag). Runs regardless of
+		// `resultUsed`: the phi is dropped on the discard path too (see the managed-result handling
+		// below). Identity is the interned name, EXACT. Read from the scalar tag/id columns — no
+		// `MaxonType` is materialized — so a scalar try-result (the common case) allocates nothing here.
+		let resultAggregate = self.aggregateNameOf(self.tagOf(result), nameId: self.valueNameId(result))
+		if not resultAggregate.isEmpty() 'aggregateOtherwise'
+			let fallbackAggregate = self.aggregateNameOf(self.tagOf(otherwiseValue), nameId: self.valueNameId(otherwiseValue))
+			if namedAggregatesConflict(resultAggregate, got: fallbackAggregate) 'aggregateOtherwiseMismatch'
+				throw ParseError.errorTypeMismatch("otherwise type '{String.from(fallbackAggregate)}' does not match expected type '{String.from(resultAggregate)}'", line: tryTok.line, column: tryTok.column)
+			end 'aggregateOtherwiseMismatch'
+		end 'aggregateOtherwise'
+
 		if resultUsed and tagIsFloat(self.tagOf(otherwiseValue)) != tagIsFloat(self.tagOf(result)) 'typeMismatch'
 			throw ParseError.errorTypeMismatch("otherwise type '{typeTagName(self.tagOf(otherwiseValue))}' does not match expected type '{typeTagName(self.tagOf(result))}'", line: tryTok.line, column: tryTok.column)
 		end 'typeMismatch'
@@ -7523,8 +7649,7 @@ export type Parser
 			return false
 		end 'notAnAlias'
 
-		let nameId = try self.valueNameIds.get(value) otherwise panic("Parser.valueIsUnsigned: value v{value} has no recorded type name — the two type columns fell out of lockstep")
-		let name = try self.artifact.typeNames.nameOf(nameId) otherwise panic("Parser.valueIsUnsigned: type-name id {nameId} is not in this file's interner — every `named` tag is minted with an id from it")
+		let name = self.internedName(self.valueNameId(value))
 
 		// An alias NO file declares is a user error (E3011, reported by TypeResolution against the
 		// merged registry, which is the authority). It is not this rule's to report — the sweep is
@@ -7540,8 +7665,7 @@ export type Parser
 	// union, so it allocates — which is why it is called only where a `MaxonType` is genuinely
 	// STORED (a binding's declared type), and never on a per-value or per-operator path.
 	function typeOf(value ValueId) returns MaxonType
-		let nameId = try self.valueNameIds.get(value) otherwise panic("Parser.typeOf: value v{value} has no recorded type name — the two type columns fell out of lockstep")
-		return maxonTypeOfTag(self.tagOf(value), nameId: nameId)
+		return maxonTypeOfTag(self.tagOf(value), nameId: self.valueNameId(value))
 	end 'typeOf'
 
 	// Record the block-arg values `block` passes to `targetId` for the Std-tier
@@ -8826,9 +8950,9 @@ export type Parser
 			return
 		end 'stringOk'
 
-		let wantName = try self.artifact.typeNames.nameOf(typeNameIdOf(storage)) otherwise panic("requireManagedValueMatches: the slot's struct name id is not in this file's interner")
-		let gotName = try self.artifact.typeNames.nameOf(typeNameIdOf(self.typeOf(value))) otherwise panic("requireManagedValueMatches: the value's struct name id is not in this file's interner")
-		if not wantName.equals(gotName) 'nameMismatch'
+		let wantName = self.aggregateNameOf(maxonTypeTag(storage), nameId: typeNameIdOf(storage))
+		let gotName = self.aggregateNameOf(self.tagOf(value), nameId: self.valueNameId(value))
+		if namedAggregatesConflict(wantName, got: gotName) 'nameMismatch'
 			throw ParseError.assignTypeMismatch(siteName, got: String.from(gotName), expected: String.from(wantName), line: anchor.line, column: anchor.column)
 		end 'nameMismatch'
 	end 'requireManagedValueMatches'
