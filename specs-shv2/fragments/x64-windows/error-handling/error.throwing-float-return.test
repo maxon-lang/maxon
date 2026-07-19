@@ -1,0 +1,79 @@
+// Test: error.throwing-float-return
+enum MathError implements Error
+	negative
+end 'MathError'
+
+typealias Float = float(f64.min to f64.max)
+
+function safeRoot(n int) returns Float throws MathError
+	if n < 0 'neg'
+		throw MathError.negative
+	end 'neg'
+	return 2.0
+end 'safeRoot'
+
+function main() returns ExitCode
+	let bad = try safeRoot(-1) otherwise 0.0
+	let ok = try safeRoot(5) otherwise 0.0
+	return trunc(bad) + trunc(ok)
+end 'main'
+---
+ExitCode: 2
+---
+func @safeRoot {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, neg
+    x64.jmp ifcont
+  neg:
+    x64.movRegImm32 rax, 0
+    x64.leaRegRegImm32 r10, rax, 1
+    x64.movsdRegRip xmm0, [rip + __fconst_0]
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movsdRegRip xmm0, [rip + __fconst_1]
+    x64.movRegImm32 r10, 0
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 48
+    x64.movRegImm32 rcx, 1
+    x64.negReg rcx, rcx
+    x64.callDirect safeRoot
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movsdRegRip xmm0, [rip + __fconst_0]
+    x64.jmp trycont
+  tryok:
+    x64.jmp trycont
+  trycont:
+    x64.storeSlotReg slot0, xmm0
+    x64.movRegImm32 rcx, 5
+    x64.callDirect safeRoot
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movsdRegRip xmm0, [rip + __fconst_0]
+    x64.jmp trycont
+  tryok:
+    x64.jmp trycont
+  trycont:
+    x64.loadRegSlot xmm1, slot0
+    x64.cvttsd2siRegReg rax, xmm1
+    x64.cvttsd2siRegReg rcx, xmm0
+    x64.leaRegRegReg r8, rax, rcx
+    x64.epilogue 48
+    x64.popReg rbp
+    x64.ret
+}

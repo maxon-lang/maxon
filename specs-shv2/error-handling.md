@@ -1610,3 +1610,35 @@ end 'main'
 ```maxoncstderr
 error E3059: specs/fragments/error-handling/error.otherwise-wrong-struct.test:32:10: type mismatch: 'otherwise type 'BoxB' does not match expected type 'BoxA''
 ```
+
+<!-- test: error.throwing-float-return -->
+A THROWING function that RETURNS a float. The OK edge places the real double in the return register
+(F2a); the THROW edge's family-default primary value — which the caller ignores once the error flag is
+set — must be classed for the SAME register file, an XMM zero rather than a GPR zero. Before F3b the
+throw edge emitted an i64 GPR zero, which the backend's `errorReturn` move then routed to XMM0 for the
+float return type and panicked (`move from rax to xmm0 crosses register files`). F3b types the throw-edge
+default to the function's return type. `safeRoot(-1)` throws (caught → 0.0) and `safeRoot(5)` returns
+2.0, so `trunc(bad) + trunc(ok)` is 0 + 2.
+```maxon
+enum MathError implements Error
+	negative
+end 'MathError'
+
+typealias Float = float(f64.min to f64.max)
+
+function safeRoot(n int) returns Float throws MathError
+	if n < 0 'neg'
+		throw MathError.negative
+	end 'neg'
+	return 2.0
+end 'safeRoot'
+
+function main() returns ExitCode
+	let bad = try safeRoot(-1) otherwise 0.0
+	let ok = try safeRoot(5) otherwise 0.0
+	return trunc(bad) + trunc(ok)
+end 'main'
+```
+```exitcode
+2
+```

@@ -1268,13 +1268,13 @@ type StdToX64Lowering
 	// `X64PrologueEpilogue`, which recognizes the `ret` terminator this emits exactly as it does an
 	// ordinary return's.
 	//
-	// ⚠ **A THROWING FLOAT function's THROW path is NOT yet supported** (no spec exercises it). Its OK
-	// path works — `errorReturn(<float>, 0)` moves the real float to XMM0 here. But `lowerThrowError`
-	// (LowerMaxonToStd) hands the THROW path a GPR-typed zero as the primary value (a dead value the
-	// caller ignores once the flag is set), and routing that to XMM0 for a float return type is a
-	// cross-file move `emitRegRegMove` rejects. Closing it needs the throw-path default typed to the
-	// RETURN type (a float zero for a float function), upstream in LowerMaxonToStd — outside F2a's files.
-	// Not a regression: before F2a a throwing float function's OK path already crossed files (float → R8).
+	// A THROWING FLOAT function's THROW path IS handled (F3b / OPEN #60): `lowerThrowError`
+	// (LowerMaxonToStd) types the throw-edge primary default to the RETURN type via
+	// `emitZeroConstOfReturnType` — a float zero (XMM) for a float return, an i64 zero (GPR) otherwise —
+	// keyed off the SAME `stdReturnTypeIsFloat`/`returnType` this move reads, so the default's register
+	// file and this move's target register cannot disagree. Both the OK path (the real float) and the
+	// throw path (a dead XMM zero the caller ignores once the flag is set) reach `emitReturnValueMove`
+	// with a correctly-classed primary value.
 	function lowerErrorReturn(retValId ValueId, errorFlagId ValueId, dstBlock IrBlock, returnType StdReturnType, asTerminator bool)
 		self.emitReturnValueMove(retValId, dstBlock: dstBlock, returnType: returnType)
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.r10), srcReg: TargetVReg.virtual(errorFlagId)))

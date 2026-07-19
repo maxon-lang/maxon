@@ -260,6 +260,13 @@ type MaxonToStdLowering
 	// `valueTags`. `emitRetOrErrorReturn` reads it to decide whether a normal `ret`/`retVoid` becomes the
 	// dual-register `errorReturn` (a THROWING function writes both the value AND a zero error flag).
 	var currentThrows as ThrowsClause
+	// The Std RETURN TYPE of the function CURRENTLY being lowered (F3b) — re-pointed per function like
+	// `currentThrows`, from the SAME `IrFunction.returnType` the backend reads. A throwing function's
+	// throw-edge primary value is a family-default the caller ignores, so only its REGISTER FILE matters;
+	// `emitZeroConstOfReturnType` reads this to class that default as the return type's file (an XMM zero
+	// for a float return, else a GPR zero) — the identical field `emitReturnValueMove` keys the return
+	// register off, so the throw-edge default and the return register cannot come to disagree.
+	var currentReturnType as StdReturnType
 	// The next fresh ValueId for the CURRENT function — a plain counter (no per-function object) seeded at
 	// the parser's dense id count, i.e. the next free id. The ops this pass synthesizes (the flag re-encode
 	// of a throw, the zero flag of a normal throwing return, the exit code a `panicAbort` expands into) mint
@@ -268,7 +275,7 @@ type MaxonToStdLowering
 	var nextValueId as ValueId
 
 	static function create(maxonModule MaxonModule, funcSignatures FuncSignatureMap, globalData GlobalDataTable) returns MaxonToStdLowering
-		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), funcSignatures: funcSignatures, globalData: globalData, valueTags: ValueTypeTagArray.create(), currentThrows: ThrowsClause.none, nextValueId: 0}
+		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), funcSignatures: funcSignatures, globalData: globalData, valueTags: ValueTypeTagArray.create(), currentThrows: ThrowsClause.none, currentReturnType: StdReturnType.void, nextValueId: 0}
 	end 'create'
 
 	// The Std type a VALUE computes in — the truth the arith band's `operandType` carries, and a
@@ -324,6 +331,9 @@ type MaxonToStdLowering
 			// column is dense per function, so every `stdTypeOf` below reads the right one.
 			self.valueTags = srcFunc.valueTags
 			self.currentThrows = srcFunc.throwsTypeName
+			// The Std return type was collapsed onto `srcFunc.returnType` in the `transferFuncs` pass above,
+			// so it is final here — read it, don't re-collapse `maxonReturnType`.
+			self.currentReturnType = srcFunc.returnType
 			// The next free ValueId is the count of the dense per-value column the parser handed over.
 			self.nextValueId = srcFunc.valueTags.count()
 			self.emitParams(srcFunc)
@@ -745,16 +755,20 @@ type MaxonToStdLowering
 	//   • a SCALAR enum — `errValue` is the ORDINAL, and the flag is `errValue + ErrorFlagOrdinalBias` (the
 	//     runtime add covering both the compile-time-constant `throw E.case` and the caught-runtime-value
 	//     `throw e` uniformly), reserving 0 for "no error".
-	// The primary register carries a family-default `0`, which the caller ignores when the flag is non-zero.
-	// The parser's `(e)`-binding DECODE reads the SAME `errIsBoxed` fact (via `throwsTypeIsBoxedUnion`) and
-	// the SAME `ErrorFlagOrdinalBias`, so encode and decode cannot drift on either.
+	// The primary register carries a family-default `0` the caller ignores when the flag is non-zero — but
+	// it is CLASSED for the return type's register file (`emitZeroConstOfReturnType`: an XMM zero for a
+	// float return), or the backend's `errorReturn` move would cross register files. The parser's
+	// `(e)`-binding DECODE reads the SAME `errIsBoxed` fact (via `throwsTypeIsBoxedUnion`) and the SAME
+	// `ErrorFlagOrdinalBias`, so encode and decode cannot drift on either.
 	function lowerThrowError(errValue ValueId, errIsBoxed bool, dstBlock IrBlock)
 		// A BOXED error's `errValue` is already the flag (the box pointer) — no `const`/`add`, so the primary
-		// `0` is the only op. A SCALAR error emits `bias`, `flag = errValue + bias`, then the primary `0`, in
-		// that order so its ValueId numbering and op sequence — and therefore its emitted code — are byte-for-
-		// byte what they were before boxed errors existed (the scalar goldens must not move).
+		// default is the only op. A SCALAR error emits `bias`, `flag = errValue + bias`, then the primary
+		// default, in that order so its ValueId numbering and op sequence stay what they were before boxed
+		// errors existed: `emitZeroConstOfReturnType` mints exactly one id like the plain zero it replaced,
+		// so the scalar goldens do not move — only a FLOAT return (which previously PANICKED the backend, so
+		// has no prior golden) now emits an XMM zero here instead of a GPR one.
 		if errIsBoxed 'boxed'
-			let boxedDefault = self.emitZeroConst(dstBlock)
+			let boxedDefault = self.emitZeroConstOfReturnType(dstBlock)
 			self.stdModule.setTerminator(dstBlock, op: StdOp.errorReturn(boxedDefault, errorFlagId: errValue))
 			return
 		end 'boxed'
@@ -762,7 +776,7 @@ type MaxonToStdLowering
 		self.stdModule.appendOp(dstBlock, op: StdOp.const(bias, value: ErrorFlagOrdinalBias, valueType: StdType.i64))
 		let flag = self.mintStdValueId()
 		self.stdModule.appendOp(dstBlock, op: StdOp.binOp(flag, lhs: errValue, rhs: bias, opcode: StdBinOpcode.add, operandType: StdType.i64))
-		let defaultVal = self.emitZeroConst(dstBlock)
+		let defaultVal = self.emitZeroConstOfReturnType(dstBlock)
 		self.stdModule.setTerminator(dstBlock, op: StdOp.errorReturn(defaultVal, errorFlagId: flag))
 	end 'lowerThrowError'
 
@@ -770,7 +784,7 @@ type MaxonToStdLowering
 	// encoding (it came straight out of a `tryCall`), so there is NO re-encoding — the whole reason
 	// `propagateError` is distinct from `throwError`.
 	function lowerPropagateError(errorFlag ValueId, dstBlock IrBlock)
-		let defaultVal = self.emitZeroConst(dstBlock)
+		let defaultVal = self.emitZeroConstOfReturnType(dstBlock)
 		self.stdModule.setTerminator(dstBlock, op: StdOp.errorReturn(defaultVal, errorFlagId: errorFlag))
 	end 'lowerPropagateError'
 
@@ -803,13 +817,32 @@ type MaxonToStdLowering
 		self.stdModule.appendOp(dstBlock, op: StdOp.osExit(code))
 	end 'lowerPanicAbort'
 
-	// A fresh `const 0` (i64) — the family-default primary value and the zero error flag both need one, at
-	// several sites, so the mint-and-append lives in one place.
+	// A fresh `const 0` (i64) — the ZERO ERROR FLAG (always a GPR value) needs one, at several sites, so
+	// the mint-and-append lives in one place. The family-default PRIMARY value is a different call
+	// (`emitZeroConstOfReturnType`): a flag is always integral, but a primary value must be born in the
+	// return type's register file.
 	function emitZeroConst(dstBlock IrBlock) returns ValueId
 		let zero = self.mintStdValueId()
 		self.stdModule.appendOp(dstBlock, op: StdOp.const(zero, value: 0, valueType: StdType.i64))
 		return zero
 	end 'emitZeroConst'
+
+	// The THROW-edge PRIMARY value — a family-default the caller reads ONLY for its register file, never
+	// its bits (once the error flag is set the value is dead). It must be born in the file the return type
+	// occupies, or the backend's `errorReturn` move crosses register files and the x64 emitter panics
+	// (`move from rax to xmm0 crosses register files`). A FLOAT return needs an XMM-classed zero — an f64
+	// `const 0`, which `buildValueClassColumns` classes XMM from its Std type (the f64 bits of 0.0 are 0);
+	// every other return type, and a void one, keeps the i64 GPR zero. Both branches mint EXACTLY ONE
+	// ValueId, so the id numbering — and hence every non-float golden — is byte-for-byte unchanged.
+	function emitZeroConstOfReturnType(dstBlock IrBlock) returns ValueId
+		if stdReturnTypeIsFloat(self.currentReturnType) 'float'
+			let zero = self.mintStdValueId()
+			self.stdModule.appendOp(dstBlock, op: StdOp.const(zero, value: 0, valueType: StdType.f64))
+			return zero
+		end 'float'
+
+		return self.emitZeroConst(dstBlock)
+	end 'emitZeroConstOfReturnType'
 
 	// A fresh ValueId for the current function, past the parser's dense id space — a plain counter bump,
 	// no per-function object. The Std passes downstream grow their dense columns to fit the highest id, so

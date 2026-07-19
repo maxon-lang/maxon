@@ -735,10 +735,10 @@ type StdToArm64Lowering
 	// return's, since this emits the same `arm64Ret`). Both moves unconditional, mirroring x64's
 	// `lowerErrorReturn`; a void return type targets x0, where the family-default zero belongs.
 	//
-	// ⚠ A THROWING FLOAT function's THROW path is NOT yet supported (same gap as x64's `lowerErrorReturn`):
-	// `lowerThrowError` (LowerMaxonToStd) hands the throw path a GPR-typed zero, and routing it to d0 for a
-	// float return type is a cross-file move. The fix (throw-path default typed to the return type) is
-	// upstream in LowerMaxonToStd; the OK path (real float → d0) works.
+	// A THROWING FLOAT function's THROW path IS handled (F3b / OPEN #60, same fix as x64's `lowerErrorReturn`):
+	// `lowerThrowError` (LowerMaxonToStd) types the throw-edge primary default to the return type via
+	// `emitZeroConstOfReturnType` — a d0-classed float zero for a float return — so both the OK path (real
+	// float → d0) and the throw path (a dead d0 zero the caller ignores) reach `emitReturnValueMove` correctly classed.
 	function lowerErrorReturn(retValId ValueId, errorFlagId ValueId, dstRef BlockRef, returnType StdReturnType, asTerminator bool)
 		self.emitReturnValueMove(retValId, dstRef: dstRef, returnType: returnType)
 		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64FlagReturnReg), srcReg: TargetVReg.virtual(errorFlagId)))
