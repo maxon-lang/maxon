@@ -87,14 +87,18 @@ function typeClassOf(tag ValueTypeTag) returns TypeClass
 		boolean gives TypeClass.boolean
 		integer gives TypeClass.numeric
 		float gives TypeClass.numeric
-		// A `named` type is a ranged typealias, and EVERY alias shv2 can declare is an INT one:
-		// `Parser.parseTypeAlias` accepts only `int(low to high)` — it rejects every other form
-		// with a positioned `unsupported` — and hands `RangedTypeAlias.create` a literal
-		// `MaxonType.integer` as the underlying type at its single construction site. So this
-		// arm is a THEOREM about the current compiler, not a guess. It stops being one the day a
-		// `bool` or `float` alias becomes legal, and on that day this arm must resolve through
-		// the alias registry — which needs the alias's NAME id, which the parser already
-		// computes (`Parser.valueNameIds`) and would then have to publish alongside the tags.
+		// A `named` type is a ranged typealias, and EVERY alias shv2 can declare is NUMERIC:
+		// `Parser.readTypeAliasDeclaration` accepts `int(low to high)` and `float(low to high)` — it
+		// rejects every other form with a positioned `unsupported` — and hands `RangedTypeAlias.create`
+		// a literal `MaxonType.integer` or `MaxonType.float` as the underlying type. Both are
+		// `TypeClass.numeric` (the two arms above), so this arm stays correct: a float alias is numeric
+		// exactly as an int one is, and the promotion design puts them in one class deliberately.
+		//
+		// It remains a THEOREM about the current compiler, not a guess — its one KILL condition is now
+		// a `bool` alias, which the parser refuses (a `bool` has no range). The day a NON-numeric alias
+		// (bool, or a String/struct alias) becomes legal, this arm must resolve through the alias
+		// registry — which needs the alias's NAME id, which the parser already computes
+		// (`Parser.valueNameIds`) and would then have to publish alongside the tags.
 		named gives TypeClass.numeric
 		exitCode gives TypeClass.numeric
 		unresolved gives TypeClass.unknown
@@ -261,9 +265,14 @@ export function tagIsIntegral(tag ValueTypeTag) returns bool
 		boolean gives false
 		integer gives true
 		float gives false
-		// Every alias shv2 can declare is a ranged INT (`Parser.parseTypeAlias` accepts only
-		// `int(low to high)`) — the same theorem `typeClassOf` and `notOperatorFor` state, and it
-		// is what makes `takeInt(x Integer)` an integer parameter here.
+		// A `named` type is a ranged alias — as of F1 an `int(low to high)` OR a `float(low to high)`
+		// one (`Parser.readTypeAliasDeclaration`). A float alias is NOT integral, so unlike `typeClassOf`
+		// (where both aliases are numeric) this arm is no longer a theorem. It stays `true` deliberately:
+		// a float-alias value carries a `named` tag ONLY in a param/field position, every one of which
+		// F1 defers to the float ABI (F2), and the int reading here is what turns a float op on such a
+		// value into a type error (or an x64 ABI panic) rather than a wrong answer — while keeping
+		// `takeInt(x Integer)` an integer parameter. Reporting `false` for a float alias needs `named`
+		// resolved through the alias registry, which is that F2 work.
 		named gives true
 		exitCode gives true
 		// NOT integral, and this is the arm the composed spelling gets wrong: `unresolved` agrees
@@ -291,9 +300,11 @@ export function typeTagName(tag ValueTypeTag) returns String
 		boolean gives "bool"
 		integer gives "int"
 		float gives "float"
-		// Both render as `int` for the same reason they classify as `numeric`: every alias is a
-		// ranged int, and `ExitCode` is an unsigned 32-bit one. The bootstrap agrees — it reports
-		// `return <bool>` from a `returns ExitCode` function as "declared to return 'int'".
+		// Both render as `int`: `ExitCode` is an unsigned 32-bit ranged int, and a `named` alias is a
+		// ranged int — or, as of F1, a ranged float, which this arm also prints as `int` (the same int
+		// reading `tagIsIntegral`/`valueTagToStdType` give a `named` value in the param/field cases F1
+		// defers to the float ABI at F2). The bootstrap agrees — it reports `return <bool>` from a
+		// `returns ExitCode` function as "declared to return 'int'".
 		named gives "int"
 		exitCode gives "int"
 		// A type the parser could not pin — today, only a call to a function no file declares
@@ -1129,11 +1140,14 @@ export function notOperatorFor(operand ValueTypeTag) returns NotOperator
 		// source language, exactly as `3.14 and 2.0` is (see `BinOpOperands.nonIntegralOperands`),
 		// and no hardware would help.
 		float gives NotOperator.nonIntegralOperand
-		// `named` is a ranged typealias, and every alias shv2 can declare is a ranged INT
-		// (`Parser.parseTypeAlias` accepts only `int(low to high)`) — so the bitwise reading is
-		// right, and this arm is a THEOREM about the current compiler exactly as `typeClassOf`'s
-		// is. `exitCode` is `int(0 to u32.max)`, an integer by the same token. The day a `float`
-		// alias becomes legal, THIS arm becomes the bug that `float` above just was.
+		// `named` is a ranged typealias. As of F1 (`Parser.readTypeAliasDeclaration`) it may be a
+		// `float(low to high)` one, for which the bitwise reading is WRONG — a double has no `not`,
+		// exactly as the `float` arm above records — so this is no longer the theorem `typeClassOf`'s
+		// is. It stays bitwise because a float alias is tagged `named` only in a param/field position F1
+		// defers to the float ABI (F2): a `not` on such a value crosses register files and the x64
+		// allocator PANICS before any wrong answer, rather than complementing a double. `exitCode` is
+		// `int(0 to u32.max)`, an integer for real. Making a float alias take the `float` arm's answer
+		// needs `named` resolved through the alias registry — that F2 work.
 		named to exitCode gives NotOperator.op(MaxonUnaryOp.bitNot, resultTag: ValueTypeTag.integer)
 		// `unresolved` — a call to a function no file declares (there is no reading to choose).
 		// `void` — a call to a function that returns nothing; `Parser.parseCall` rejects it at the

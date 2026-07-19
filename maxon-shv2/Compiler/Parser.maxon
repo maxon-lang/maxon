@@ -583,6 +583,28 @@ let I32MaxBound = i32.max as ParsedInt
 let I64MinBound = i64.min as ParsedInt
 let I64MaxBound = i64.max as ParsedInt
 
+// The finite extremes `f32`/`f64`'s `.min` / `.max` denote in a `float(...)` range declaration,
+// carried as the IEEE-754 **f64** bit pattern the `ParsedInt` bound field holds. A float alias
+// resolves to `MaxonType.float` (= f64) with NO width narrowing (v1 TypeResolution.maxon:90 does the
+// same — int narrows via an optimal-width choice, float never does), so an `f32` alias's bounds are
+// the f64 VALUES of the f32 extremes, not an f32 encoding. `.min` is the most-negative finite and
+// `.max` the most-positive — the sign bit apart, which is why `negatedFloatBits` relates the pair.
+//
+// Spelled as decimal bit patterns rather than `f64.max as ParsedInt`: an `as` cast would TRUNCATE the
+// float VALUE to an integer, not reinterpret its bits, so the type-identifier spelling the integer
+// bounds use (`u32.max as ParsedInt`) cannot express a float bound. A `.min`/`.max` pair differs only
+// in the sign bit (`negatedFloatBits` is the runtime form of that relation), but a top-level `let`
+// takes no call, so each is written out.
+//
+// ⚠ These are NOT v1's `floatTypeBoundsTable` f32 values (Parser.maxon:21112): v1 stored
+// `f32.max = 5727507168572555263` (= 0x4F7C316C97453FFF), which decodes to 7.97e74 — GARBAGE, never
+// the f32 extreme 3.4e38. v1 never caught it because a full-range alias is exempt from range checks,
+// so nothing ever read the bound. v1's f64 pair IS correct and matches below.
+let F64MaxBound = 9218868437227405311 as ParsedInt    // 0x7FEF_FFFF_FFFF_FFFF  = +1.7976931348623157e308
+let F64MinBound = -4503599627370497 as ParsedInt      // 0xFFEF_FFFF_FFFF_FFFF  = -1.7976931348623157e308
+let F32MaxBound = 5183643170566569984 as ParsedInt    // 0x47EF_FFFF_E000_0000  = +3.4028234663852886e38
+let F32MinBound = -4039728866288205824 as ParsedInt   // 0xC7EF_FFFF_E000_0000  = -3.4028234663852886e38
+
 // The `.min` / `.max` field names a type-qualified bound may carry.
 let MinBoundField = b"min"
 let MaxBoundField = b"max"
@@ -647,17 +669,19 @@ let TrivialDestructor = 0 as ParsedInt
 // (a float bound is a missing FEATURE; an unknown name is a typo).
 union SizedTypeBound
 	value(bound ParsedInt)
-	// `f32` / `f64` — genuinely sized numeric types, but their bounds are FLOAT values
-	// this milestone cannot represent. Rejected loudly rather than silently collapsed
-	// to an integer.
-	floatBound
+	// `f32` / `f64` — the bound is a FLOAT extreme, carried as the IEEE-754 f64 bit pattern
+	// `ParsedInt` holds (a float alias resolves to `MaxonType.float` = f64). Legal only inside a
+	// `float(...)` typealias; the int-alias and expression callers reject it (`floatBoundInFloatAlias`).
+	floatBound(bits ParsedInt)
 	notASizedType
 end 'SizedTypeBound'
 
-// The bound `<typeName>.<min|max>` denotes, for the eight sized INTEGER types. Shared
-// by the range-declaration parser (`typealias Port = int(0 to u16.max)`) and the
-// expression parser (`let x = u16.max`), which are the same three tokens in two
-// positions — so they resolve through one table rather than two that can disagree.
+// The bound `<typeName>.<min|max>` denotes, for the eight sized INTEGER types plus `f32`/`f64`
+// (whose bounds ride as f64 bit patterns — see `floatBound`). Shared by the range-declaration
+// parser (`typealias Port = int(0 to u16.max)`, `typealias Pct = float(f64.min to f64.max)`) and
+// the expression parser (`let x = u16.max`), which are the same three tokens in two positions — so
+// they resolve through one table rather than two that can disagree. Whether a float bound is LEGAL
+// in a given position is the caller's decision, not this table's: it only says what the tokens name.
 function sizedTypeBound(typeName ByteArray, wantMax bool) returns SizedTypeBound
 	if typeName.equals(b"u8") 'u8'
 		return SizedTypeBound.value(pickBound(UnsignedMinBound, high: U8MaxBound, wantMax: wantMax))
@@ -683,9 +707,12 @@ function sizedTypeBound(typeName ByteArray, wantMax bool) returns SizedTypeBound
 	if typeName.equals(b"i64") 'i64'
 		return SizedTypeBound.value(pickBound(I64MinBound, high: I64MaxBound, wantMax: wantMax))
 	end 'i64'
-	if typeName.equals(b"f32") or typeName.equals(b"f64") 'float'
-		return SizedTypeBound.floatBound
-	end 'float'
+	if typeName.equals(b"f32") 'f32'
+		return SizedTypeBound.floatBound(pickBound(F32MinBound, high: F32MaxBound, wantMax: wantMax))
+	end 'f32'
+	if typeName.equals(b"f64") 'f64'
+		return SizedTypeBound.floatBound(pickBound(F64MinBound, high: F64MaxBound, wantMax: wantMax))
+	end 'f64'
 	return SizedTypeBound.notASizedType
 end 'sizedTypeBound'
 
@@ -695,6 +722,19 @@ function pickBound(low ParsedInt, high ParsedInt, wantMax bool) returns ParsedIn
 	end 'max'
 	return low
 end 'pickBound'
+
+// The bits of an `f32`/`f64` `.min`/`.max` bound, but ONLY where a float bound is legal — inside a
+// `float(...)` typealias (`isFloat`). In an int alias (`int(0 to f64.max)`) or in expression position
+// (`let x = f64.max`) there is no integer value that carries an f64 bit pattern, so it is a positioned
+// error rather than a silently reinterpreted number — the same rejection the old `floatBound` arm
+// made, now that a float alias is the ONE place the bound belongs. A free function because the match
+// arm that needs it cannot host the labelled `if`.
+function floatBoundInFloatAlias(bits ParsedInt, isFloat bool, typeTok Token, fieldTok Token) returns ParsedInt throws ParseError
+	if not isFloat 'notFloatAlias'
+		throw ParseError.unsupported("the float bound '{String.from(typeTok.value)}.{String.from(fieldTok.value)}' outside a `float(...)` typealias — only a float range can carry an f64 bound", line: typeTok.line, column: typeTok.column)
+	end 'notFloatAlias'
+	return bits
+end 'floatBoundInFloatAlias'
 
 // True iff `names` already holds `name`. A linear scan — parameter lists are tiny (the
 // only caller is parameter-name duplicate detection), so no membership set is worth its
@@ -2685,10 +2725,10 @@ export type Parser
 		return i
 	end 'initializerEndIndex'
 
-	// Parse a ranged typealias declaration: `typealias <Name> = int(<low> to|upto <high>)`.
-	// Nearly every real Maxon file opens with one — `int` is almost never written bare in
-	// a type position (specs/ranged-typealias.md) — so this is the declaration that gates
-	// most of the corpus.
+	// Parse a ranged typealias declaration: `typealias <Name> = int(<low> to|upto <high>)` or
+	// `typealias <Name> = float(<low> to <high>)`. Nearly every real Maxon file opens with one —
+	// `int` is almost never written bare in a type position (specs/ranged-typealias.md) — so this
+	// is the declaration that gates most of the corpus.
 	//
 	// It emits NO op: an alias is a DECLARATION, and its whole effect is the registry
 	// entry its caller records, which TypeResolution substitutes for every `MaxonType.named`
@@ -2711,22 +2751,31 @@ export type Parser
 		try self.requireUnreservedName(nameTok)
 		try self.consume(TokenKind.equals)
 
-		// `int(...)` only. A `float(...)` alias needs float literals for its bounds, a
-		// generic alias (`Array with T`) needs generics, and a bare `i64` is not legal
-		// Maxon at all — each is rejected here, naming its own gap, rather than being
-		// mapped onto the integer path where it would silently mean something else.
-		if not self.at(TokenKind.int) 'notInt'
+		// `int(...)` or `float(...)`. A `bool` alias has no range, a generic alias (`Array with T`)
+		// needs generics, and a bare `i64` is not legal Maxon at all — each is rejected here, naming
+		// its own gap, rather than being mapped onto a numeric path where it would silently mean
+		// something else. The two numeric forms differ ONLY in how their bounds read (int literals +
+		// `<int>.min/.max` versus float literals + `f32`/`f64.min/.max`), so `isFloat` threads through
+		// the shared bound parser rather than forking it.
+		let isFloat = self.at(TokenKind.float)
+		if not self.at(TokenKind.int) and not isFloat 'notNumeric'
 			let tok = self.current()
-			throw ParseError.unsupported("a typealias over '{tok.kind.rawValue}' (only `int(low to high)` is parsed; float, generic and bare-sized aliases arrive with the milestones that give them meaning)", line: tok.line, column: tok.column)
-		end 'notInt'
-		try self.consume(TokenKind.int)
+			throw ParseError.unsupported("a typealias over '{tok.kind.rawValue}' (only `int(low to high)` and `float(low to high)` are parsed; generic and bare-sized aliases arrive with the milestones that give them meaning)", line: tok.line, column: tok.column)
+		end 'notNumeric'
+
+		if isFloat 'consumeFloat'
+			try self.consume(TokenKind.float)
+		end 'consumeFloat' else 'consumeInt'
+			try self.consume(TokenKind.int)
+		end 'consumeInt'
 
 		try self.consume(TokenKind.leftParen)
-		let low = try self.parseRangeBound()
-		let high = try self.parseRangeUpperBound()
+		let low = try self.parseRangeBound(isFloat)
+		let high = try self.parseRangeUpperBound(isFloat)
 		try self.consume(TokenKind.rightParen)
 
-		return RangedTypeAlias.create(nameTok.value, underlying: MaxonType.integer, low: low, high: high)
+		let underlying = MaxonType.float if isFloat else MaxonType.integer
+		return RangedTypeAlias.create(nameTok.value, underlying: underlying, low: low, high: high)
 	end 'readTypeAliasDeclaration'
 
 	// The `to <high>` / `upto <high>` half of a range, returned as an INCLUSIVE upper
@@ -2738,10 +2787,19 @@ export type Parser
 	// representable value. Rejected with a positioned error, because the subtraction that
 	// normalizes it would otherwise underflow `ParsedInt` and take the COMPILER down on a
 	// source file it should merely have diagnosed.
-	function parseRangeUpperBound() returns ParsedInt throws ParseError
+	function parseRangeUpperBound(isFloat bool) returns ParsedInt throws ParseError
 		if self.at(TokenKind.upto) 'exclusive'
 			let uptoTok = try self.consume(TokenKind.upto)
-			let bound = try self.parseRangeBound()
+
+			// `upto` normalizes to an inclusive `high - 1` (below) — INTEGER arithmetic on the bound.
+			// A float bound is an IEEE-754 bit pattern, not a count, so `bits - 1` is nonsense on it,
+			// and no float alias in the corpus uses `upto`. Rejected rather than mis-normalized; a
+			// float exclusive bound is a concern only for the P1.9 range check that would read it.
+			if isFloat 'floatExclusive'
+				throw ParseError.unsupported("an exclusive `upto` upper bound on a float typealias — a float bound is a bit pattern with no integer predecessor; use `to`", line: uptoTok.line, column: uptoTok.column)
+			end 'floatExclusive'
+
+			let bound = try self.parseRangeBound(isFloat)
 			if bound == I64MinBound 'unrepresentable'
 				throw ParseError.unsupported("an exclusive upper bound of i64.min — its inclusive form is one below the smallest 64-bit integer, so the range is empty and not representable", line: uptoTok.line, column: uptoTok.column)
 			end 'unrepresentable'
@@ -2749,12 +2807,18 @@ export type Parser
 		end 'exclusive'
 
 		try self.consume(TokenKind.to)
-		return try self.parseRangeBound()
+		return try self.parseRangeBound(isFloat)
 	end 'parseRangeUpperBound'
 
-	// One endpoint of a range: an integer literal (`0`, `-273`, `0xFFFF`) or a
-	// type-qualified bound (`i64.min`, `u32.max`).
-	function parseRangeBound() returns ParsedInt throws ParseError
+	// One endpoint of a range. For an INT alias: an integer literal (`0`, `-273`, `0xFFFF`) or a
+	// type-qualified bound (`i64.min`, `u32.max`). For a FLOAT alias (`isFloat`): a float literal or a
+	// float type-qualified bound — see `parseFloatRangeBound`. The two endpoints of one range are
+	// parsed with the same `isFloat`, so a range cannot mix an int and a float bound.
+	function parseRangeBound(isFloat bool) returns ParsedInt throws ParseError
+		if isFloat 'float'
+			return try self.parseFloatRangeBound()
+		end 'float'
+
 		if self.at(TokenKind.minus) 'negative'
 			try self.consume(TokenKind.minus)
 			let tok = try self.consume(TokenKind.intLiteral)
@@ -2766,8 +2830,31 @@ export type Parser
 			return try self.intLiteralValue(tok, negated: false)
 		end 'literal'
 
-		return try self.parseTypeQualifiedBound()
+		return try self.parseTypeQualifiedBound(false)
 	end 'parseRangeBound'
+
+	// One endpoint of a FLOAT range: a float literal (`0.0`, `100.0`, `-2.5`) or a type-qualified
+	// float bound (`f32.min`, `f64.max`). The value is the endpoint's IEEE-754 **f64** bit pattern,
+	// carried in the same `ParsedInt` an integer bound uses — a float alias resolves to
+	// `MaxonType.float` = f64, so its bounds are f64 bits (`RangedTypeAlias`). The literal path reuses
+	// the one float decoder `parseFloatLiteral` does (`parseFloatBits`), so `0.0` reads the same bits
+	// in a bound as in an expression. A negated literal FLIPS the sign bit (`negatedFloatBits`) rather
+	// than subtracting: `0 - bits` on a bit pattern would be nonsense (see `FloatSignBit`).
+	function parseFloatRangeBound() returns ParsedInt throws ParseError
+		if self.at(TokenKind.minus) 'negative'
+			try self.consume(TokenKind.minus)
+			let tok = try self.consume(TokenKind.floatLiteral)
+			let bits = try parseFloatBits(tok.value) otherwise throw ParseError.floatLiteralOverflow(tok.line, column: tok.column)
+			return negatedFloatBits(bits)
+		end 'negative'
+
+		if self.at(TokenKind.floatLiteral) 'literal'
+			let tok = try self.consume(TokenKind.floatLiteral)
+			return try parseFloatBits(tok.value) otherwise throw ParseError.floatLiteralOverflow(tok.line, column: tok.column)
+		end 'literal'
+
+		return try self.parseTypeQualifiedBound(true)
+	end 'parseFloatRangeBound'
 
 	// Convert an integer-literal token's text to its value, re-raising NumberParsing's
 	// overflow as a POSITIONED parse error. THE one place a literal's text becomes a
@@ -2788,17 +2875,24 @@ export type Parser
 
 	// A type-qualified numeric bound — `<sized>.min` / `<sized>.max`, three tokens
 	// (identifier, `.`, identifier). Shared by the range-declaration parser and the
-	// expression parser, which meet the same three tokens in two positions.
-	function parseTypeQualifiedBound() returns ParsedInt throws ParseError
+	// expression parser, which meet the same three tokens in two positions. `isFloat` is the
+	// caller's domain: true only for the bound of a `float(...)` alias, where an `f32`/`f64` bound
+	// is what is wanted; false for an int alias and for expression position (`let x = u16.max`),
+	// where a float bound has no integer value to carry and is rejected.
+	function parseTypeQualifiedBound(isFloat bool) returns ParsedInt throws ParseError
 		let typeTok = try self.consume(TokenKind.identifier)
 		try self.consume(TokenKind.dot)
 		let fieldTok = try self.consume(TokenKind.identifier)
 		let wantMax = try self.boundFieldIsMax(fieldTok)
 
 		match sizedTypeBound(typeTok.value, wantMax: wantMax) 'resolve'
+			// An integer bound is accepted in every position — including a `float(...)` alias, where
+			// `float(0.0 to i64.max)` is as malformed as an out-of-order int range and left equally
+			// unchecked (F1 emits no range check that would read the bound; this matches the int path's
+			// existing laxness rather than adding a validation the int path does not have).
 			value(bound) then return bound
-			floatBound then throw ParseError.unsupported("the float bound '{String.from(typeTok.value)}.{String.from(fieldTok.value)}' (float bounds arrive with floats)", line: typeTok.line, column: typeTok.column)
-			notASizedType then throw ParseError.unexpectedToken("a sized numeric type (u8/u16/u32/u64/i8/i16/i32/i64)", got: String.from(typeTok.value), line: typeTok.line, column: typeTok.column)
+			floatBound(bits) then return try floatBoundInFloatAlias(bits, isFloat: isFloat, typeTok: typeTok, fieldTok: fieldTok)
+			notASizedType then throw ParseError.unexpectedToken("a sized numeric type (u8/u16/u32/u64/i8/i16/i32/i64/f32/f64)", got: String.from(typeTok.value), line: typeTok.line, column: typeTok.column)
 		end 'resolve'
 	end 'parseTypeQualifiedBound'
 
@@ -10288,7 +10382,7 @@ export type Parser
 	// what `u64.max` is. It materializes an ordinary integer literal.
 	function parseTypeQualifiedBoundExpression() returns ValueId throws ParseError
 		let boundTok = self.current()
-		let value = try self.parseTypeQualifiedBound()
+		let value = try self.parseTypeQualifiedBound(false)
 		return self.emitLiteral(value, valueType: MaxonType.integer, range: SourceRange.ofToken(boundTok))
 	end 'parseTypeQualifiedBoundExpression'
 
@@ -10840,7 +10934,7 @@ export type Parser
 		end 'call'
 
 		if self.peekKind() == TokenKind.dot 'qualifiedBound'
-			let value = try self.parseTypeQualifiedBound() otherwise (err) 'badBound'
+			let value = try self.parseTypeQualifiedBound(false) otherwise (err) 'badBound'
 				throw ConstEvalError.defective(err)
 			end 'badBound'
 			return ConstValue.create(value, tag: ValueTypeTag.integer)

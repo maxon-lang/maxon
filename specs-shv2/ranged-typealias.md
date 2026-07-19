@@ -180,8 +180,7 @@ end 'main'
 
 ### Float ranged typealias
 
-<!-- disabled-test: float-range -->
-<!-- floats + the `trunc` builtin -->
+<!-- test: float-range -->
 ```maxon
 typealias Pct = float(0.0 to 100.0)
 
@@ -414,7 +413,7 @@ Stack trace:
 ### Return value range check: float return
 
 <!-- disabled-test: return-float-range-check -->
-<!-- floats + the `trunc` builtin -->
+<!-- F2 float ABI: a float PARAMETER (xmm arg slot) and float RETURN (xmm0) across a call boundary. Float aliases are nameable as of F1; the blocker is now the ABI, not the type. -->
 ```maxon
 typealias Float = float(f64.min to f64.max)
 typealias Pct = float(0.0 to 100.0)
@@ -588,8 +587,7 @@ end 'main'
 
 ### f32 range alias with float operations
 
-<!-- disabled-test: f32-range -->
-<!-- floats + the `trunc` builtin -->
+<!-- test: f32-range -->
 ```maxon
 typealias SmallFloat = float(f32.min to f32.max)
 
@@ -605,8 +603,7 @@ end 'main'
 
 ### F32 arithmetic
 
-<!-- disabled-test: f32-arithmetic -->
-<!-- floats + the `trunc` builtin -->
+<!-- test: f32-arithmetic -->
 ```maxon
 typealias F = float(f32.min to f32.max)
 
@@ -626,8 +623,7 @@ end 'main'
 
 ### F32 comparison
 
-<!-- disabled-test: f32-comparison -->
-<!-- floats -->
+<!-- test: f32-comparison -->
 ```maxon
 typealias F = float(f32.min to f32.max)
 
@@ -647,7 +643,7 @@ end 'main'
 ### F32 function parameter and return
 
 <!-- disabled-test: f32-function-param-return -->
-<!-- floats + the `trunc` builtin -->
+<!-- F2 float ABI: a float PARAMETER (xmm arg slot) and float RETURN (xmm0) across a call boundary. Float aliases are nameable as of F1; the blocker is now the ABI, not the type. -->
 ```maxon
 typealias F = float(f32.min to f32.max)
 
@@ -665,8 +661,7 @@ end 'main'
 
 ### F32 truncation to int
 
-<!-- disabled-test: f32-to-int -->
-<!-- floats + the `trunc` builtin -->
+<!-- test: f32-to-int -->
 ```maxon
 typealias F = float(f32.min to f32.max)
 

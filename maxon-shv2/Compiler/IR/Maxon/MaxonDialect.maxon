@@ -82,15 +82,19 @@ export typealias TypeNameId = int(0 to u64.max)
 // heap-allocated, refcounted box (P1.0r). It is a SEPARATE ARM FROM `named`, and that separation
 // is the whole reason this rung could add structs without breaking six rules at once.
 //
-// ⭐ **`named` MEANS "A RANGED INT ALIAS", AND FIVE PLACES DEPEND ON IT BEING A THEOREM.**
+// ⭐ **`named` MEANS "A RANGED NUMERIC ALIAS", AND FIVE PLACES READ IT.**
 // `TypeRules.typeClassOf` calls a `named` type `numeric`; `tagIsIntegral` calls it integral;
 // `typeTagName` prints it as `int`; `notOperatorFor` gives it the BITWISE `not`; and
-// `valueTagToStdType` collapses it to i64. Every one of those says, in its own words, that it is a
-// theorem resting on `Parser.readTypeAliasDeclaration` accepting only `int(low to high)`. Filing a
-// struct under `named` would have made all five FALSE at once and silently: `p + 1` would compile
-// to pointer arithmetic, `return p` from an `ExitCode` function would hand back the box's address,
-// and `not p` would complement it. The tag is what the rules read, so the tag is where the
-// distinction has to live.
+// `valueTagToStdType` collapses it to i64. As of F1 `Parser.readTypeAliasDeclaration` accepts an
+// `int(low to high)` OR a `float(low to high)` alias, so only `typeClassOf` is still a theorem (both
+// aliases are numeric); the other four treat a `named` value as an INT — correct for an int alias and
+// DELIBERATELY approximate for a float one, because a float alias is tagged `named` only in the
+// param/field positions F1 defers to the float ABI (F2), where the int reading yields a type error or
+// an x64 ABI panic, never a wrong answer (each of those four says so in its own words and names the
+// alias-registry resolution F2 needs). Filing a struct under `named` would instead have made all five
+// FALSE at once and silently: `p + 1` would compile to pointer arithmetic, `return p` from an
+// `ExitCode` function would hand back the box's address, and `not p` would complement it. The tag is
+// what the rules read, so the tag is where the distinction has to live.
 //
 // Its width IS assigned at the Maxon→Std boundary like every other arm's (`valueTagToStdType` →
 // i64), so this arm keeps MaxonType width-free exactly as `exitCode` does — a pointer is a machine

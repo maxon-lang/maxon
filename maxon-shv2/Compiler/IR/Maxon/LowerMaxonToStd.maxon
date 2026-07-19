@@ -83,10 +83,13 @@ end 'maxonTypeToStdType'
 // `MaxonType.named` reaching lowering means TypeResolution left a residue; a `named` TAG is
 // perfectly ordinary, because `TypeResolution.resolveTypes` rewrites function SIGNATURES and
 // never the parser's `valueTags` column — so a parameter declared with a ranged alias still
-// carries a `named` tag right here. It is an INT because every alias shv2 can declare is a ranged
-// int: `Parser.parseTypeAlias` accepts only `int(low to high)`. TypeRules' `typeClassOf` states
-// the identical theorem from the identical fact, and the day a `float` alias becomes legal both
-// must resolve through the alias registry instead.
+// carries a `named` tag right here. It collapses to i64 because a `named` value is an INT in every
+// position F1 can reach one: as of F1 a `float(low to high)` alias is also legal
+// (`Parser.readTypeAliasDeclaration`), but a float alias is tagged `named` only as a param/field, all
+// deferred to the float ABI (F2), and the i64 collapse there forces a cross-file move the x64
+// allocator PANICS on rather than passing a double in a GPR — never a wrong answer. Classing a float
+// alias as f64 needs `named` resolved through the alias registry, which is that F2 work (TypeRules'
+// `typeClassOf`/`tagIsIntegral`/`notOperatorFor` all cite the same resolution).
 export function valueTagToStdType(tag ValueTypeTag) returns StdType
 	match tag 'collapse'
 		boolean then return StdType.i1
