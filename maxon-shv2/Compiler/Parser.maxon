@@ -5091,9 +5091,9 @@ export type Parser
 	//     owned payloads the generic decref would leak;
 	//   • everything else (a SCALAR union box, a struct box whose fields are all scalars, a raw interpolation
 	//     buffer) is the generic refcounted `__mm_decref` — its `TrivialDestructor` frees exactly the box.
-	// A struct/union routed to a cascade is decided off `managedFieldDropCallee` / `unionHasManagedField`,
-	// the SAME predicates the destructor synthesis (and `noteDestructorUsage`) emit from, so a box routed to
-	// a cascade here always has one built for it.
+	// A struct/union routed to a cascade is decided off `managedFieldDropCallee` / `unionBoxDropCallee`,
+	// which wrap the SAME predicates the destructor synthesis (and `noteDestructorUsage`) emit from, so a
+	// box routed to a cascade here always has one built for it.
 	function decrefCalleeFor(value ValueId) returns ByteArray
 		let tag = self.tagOf(value)
 		if tag == ValueTypeTag.string 'string'
@@ -5116,10 +5116,11 @@ export type Parser
 		end 'notUnion'
 		let decl = self.enumMatchFor(value)
 		if enumMatchIsDeclared(decl) 'union'
-			let layout = requireEnumLayout(decl)
-			if unionHasManagedField(self.signatures, typeNames: self.artifact.typeNames, layout: layout, wantStringOnly: false) 'managedUnion'
-				return destructorSymbol(layout.name)
-			end 'managedUnion'
+			// The drop callee is decided INSIDE `ProgramSignatures`, over the layout's own interner —
+			// NOT here with `self.artifact.typeNames`. A signatures layout's payload ids live in the
+			// signatures interner, and resolving them against this file's interner misread a managed
+			// payload whenever a ranged alias shifted the interning order (a leak / wild-free, OPEN #52).
+			return self.signatures.unionBoxDropCallee(requireEnumLayout(decl))
 		end 'union'
 		return MmDecrefName
 	end 'decrefCalleeFor'
@@ -7280,7 +7281,9 @@ export type Parser
 				continue
 			end 'discard'
 			let range = SourceRange.ofToken(binding.nameTok)
-			let class = classifyUnionPayload(self.signatures, typeNames: self.artifact.typeNames, fieldType: binding.field.declaredType)
+			// Adopt the signatures-layout payload id into this file's interner before classifying — the
+			// match-bind twin of the construct-site adopt in `requirePayloadLowerable` (OPEN #52).
+			let class = classifyUnionPayload(self.signatures, typeNames: self.artifact.typeNames, fieldType: self.signatures.adoptType(binding.field.declaredType, into: self.artifact.typeNames))
 			let loaded = try self.emitUnionPayloadLoad(scrutBox, field: binding.field, slot: binding.slot, layout: layout, posTok: binding.nameTok, range: range)
 			var bindingInfo = try self.scope.declareValueBinding(binding.nameTok.value, varType: self.typeOf(loaded), mutable: false, value: loaded) otherwise throw ParseError.localShadowsSelfField(String.from(binding.nameTok.value), typeName: String.from(self.enclosingType), line: binding.nameTok.line, column: binding.nameTok.column)
 			if payloadClassIsManaged(class) 'managedMoveOut'
@@ -9300,7 +9303,10 @@ export type Parser
 	// type and, for a managed payload, whether it is a String. The reject is at the construct/extract USE
 	// site (not the declaration), so the tolerant enum sweep never truncates a layout over it.
 	function requirePayloadLowerable(field PayloadField, layout EnumLayout, posTok Token) returns PayloadClass throws ParseError
-		let class = classifyUnionPayload(self.signatures, typeNames: self.artifact.typeNames, fieldType: field.declaredType)
+		// The payload's `declaredType` is a signatures-layout id; adopt it into this file's interner
+		// before classifying, or a ranged alias that shifts the interning order makes `classifyUnionPayload`
+		// read the wrong name off the id — the wrong E3005 reject (OPEN #52). `adoptType` re-interns by NAME.
+		let class = classifyUnionPayload(self.signatures, typeNames: self.artifact.typeNames, fieldType: self.signatures.adoptType(field.declaredType, into: self.artifact.typeNames))
 		match class 'c'
 			scalar then break 'c'
 			managed then break 'c'
@@ -9360,7 +9366,10 @@ export type Parser
 	function emitUnionPayloadLoad(box ValueId, field PayloadField, slot CaseIndex, layout EnumLayout, posTok Token, range SourceRange) returns ValueId throws ParseError
 		let class = try self.requirePayloadLowerable(field, layout: layout, posTok: posTok)
 		let storage = payloadStorageOf(class)
-		let valueType = payloadValueTypeOf(class, declared: field.declaredType)
+		// A scalar payload's loaded value is tagged with its DECLARED type (an enum payload stays
+		// `named(<Enum>)` so a nested `match` recognizes it); adopt that id into this file's interner
+		// or the minted value carries a signatures id `enumMatchFor` would misresolve (OPEN #52).
+		let valueType = payloadValueTypeOf(class, declared: self.signatures.adoptType(field.declaredType, into: self.artifact.typeNames))
 		return self.emitIndirectLoad(valueType, box: box, offset: layout.payloadSlotOffset(slot), storageType: storage, range: range)
 	end 'emitUnionPayloadLoad'
 

@@ -834,8 +834,13 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: error.file-private-union-caught-cross-file -->
-<!-- [wave2-managed] union error payload -->
+<!-- test: error.file-private-union-caught-cross-file -->
+A file-private error union declared in the FORWARD file (`liberr.maxon` sorts
+before `main.maxon`, so it is folded into the signatures index before the catch
+site is parsed) is caught across files. Its `bad(code Code)` payload type crosses
+by NAME through the union-payload adopt door (OPEN #52), so `(e)` recovers
+`LibErr` and `match e` dispatches — the wrong-interner misread that kept this
+disabled is gone.
 ```maxon
 // --- file: liberr.maxon
 typealias Code = int(i64.min to i64.max)
@@ -870,7 +875,13 @@ end 'main'
 ```
 
 <!-- disabled-test: error.cross-file-throws-caught-later-file -->
-<!-- [wave2-managed] union error payload -->
+<!-- BACKWARD ordering, NOT covered by the OPEN #52 union-payload interner doors:
+     `risky`/`Woe` are declared in `zzz.maxon`, which sorts AFTER the catch site in
+     `app.maxon`. The adopt doors re-intern a payload type by NAME, but only once the
+     union LAYOUT is in the signatures index; here the body of `app.maxon` is parsed
+     before `zzz.maxon`'s layout is folded in. Enabling this needs a declaration-order
+     union-layout PRESCAN (seed every file's union layouts before any body is parsed) —
+     a separate rung. -->
 ```maxon
 // --- file: app.maxon
 // The throwing callee `risky` is declared in `zzz.maxon`, which sorts AFTER

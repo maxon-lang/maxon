@@ -857,9 +857,15 @@ export type ProgramSignatures
 	// ⭐ Enum/union name -> its declaration, with the CASE ORDER and TAGS the parser needs. THE door
 	// an enum `match` asks through — is `c` an enum? what tag is `red`? which cases does `low to
 	// high` cover? — and here for `structTypes`' reason: the answer is needed at PARSE time and the
-	// `enum` may be declared below its use or in another file. UNLIKE `structTypes` it carries no
-	// ids: a case is a plain NAME and a tag a plain INT, so it travels by name and arrives by name,
-	// needing no interner and no remap (contrast `foldFile`'s `remapStructLayoutFieldTypes`).
+	// `enum` may be declared below its use or in another file.
+	//
+	// ⚠ **LIKE `structTypes`, IT CARRIES IDS** — a case NAME and a tag INT carry none, but a
+	// PAYLOAD field's declared type is a `MaxonType`, and `holds(inner BoxA)`'s `named(BoxA)` is
+	// meaningless outside the interner that minted it. So a payload-bearing union obeys the header's
+	// ID PROBLEM exactly as `structTypes` does: `foldFile` remaps each file's payload ids into
+	// `typeNames` on the way in (`remapEnumLayoutPayloadTypes`, the enum twin of
+	// `remapStructLayoutFieldTypes`), and the parser re-interns on the way out (`adoptType`, the
+	// same door `fieldTypeOf` uses). A payload-FREE enum carries no ids and travels by name alone.
 	var enumTypes as EnumLayoutMap
 	// The interner every `named` id in `returnTypes` belongs to. PRIVATE, and it has to be: an id
 	// may not leave this type. `returnTypeOf` re-interns it into the caller's own table.
@@ -1762,6 +1768,23 @@ export type ProgramSignatures
 		return self.enumTypes.contains(name)
 	end 'containsEnum'
 
+	// The runtime entry that drops an owned box of `layout` — `__destruct_<U>` for a managed-payload
+	// union (its own tag-conditional cascade), the trivial `__mm_decref` for a scalar-only one. THE
+	// door `decrefCalleeFor` routes a boxed union's scope-exit drop through.
+	//
+	// ⚠ It resolves the layout's payload types against `self.typeNames` — the interner they were
+	// minted against (a signatures layout's payload ids live here, remapped in by
+	// `remapEnumLayoutPayloadTypes`), NOT the caller's. The interner is NOT the caller's to choose:
+	// `decrefCalleeFor` used to pass its own artifact interner, which misread a managed payload
+	// whenever a ranged alias perturbed the interning order — answering `__mm_decref` for a
+	// managed-payload union (a LEAK) or a wrong `__destruct_<T>` (a wild-free). Keeping the
+	// resolution here, over this index's own interner, is the fix (OPEN #52).
+	//
+	// Precondition: `layout` came from `self.enumOf`, so its payload ids live in `self.typeNames`.
+	export function unionBoxDropCallee(layout EnumLayout) returns ByteArray
+		return unionNameDropCallee(self, typeNames: self.typeNames, layout: layout)
+	end 'unionBoxDropCallee'
+
 	// The DECLARED type of field `index` of struct `structName`, ADOPTED into `into` — the calling
 	// file's own artifact interner. `returnTypeOf`'s exact shape and exact reason: a `named` type
 	// crosses by NAME and is re-interned on arrival, so the id the parser stores is one its own
@@ -1875,9 +1898,17 @@ export type ProgramSignatures
 
 	// Re-intern the name an id-bearing `MaxonType` carries into `into`, so the type is
 	// indistinguishable from one the calling file had parsed itself. THE one place this index's ids
-	// cross out of it (see the header's ID PROBLEM); `returnTypeOf` and `fieldTypeOf` are its two
-	// callers, and neither re-derives it.
-	function adoptType(t MaxonType, into TypeNameInterner) returns MaxonType
+	// cross out of it (see the header's ID PROBLEM); its callers — `fieldTypeOf`, `adoptValueReturn`
+	// (for `returnTypeOf`), and the parser's union-payload sites — re-intern a member/return/payload
+	// type by NAME, and none re-derives it. It re-interns by NAME, never leaking a raw id, so the
+	// returned type's id belongs to `into` and the "an id may not leave this type" invariant holds.
+	//
+	// Exported for the union-payload sites: unlike a struct field or a return type, a union payload's
+	// `declaredType` is already in the caller's hand (it fetched the layout and walked `payloadsAt`),
+	// so it needs this bare crossing rather than a name+index fetch door like `fieldTypeOf`. Routing
+	// those sites through here is what stopped a signatures-interner payload id being classified /
+	// minted against the parser's own interner (OPEN #52).
+	export function adoptType(t MaxonType, into TypeNameInterner) returns MaxonType
 		return match t 'r'
 			named(id) gives MaxonType.named(into.intern(self.nameOfId(id)))
 			structRef(id) gives MaxonType.structRef(into.intern(self.nameOfId(id)))

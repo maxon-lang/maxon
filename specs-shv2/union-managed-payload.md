@@ -421,3 +421,71 @@ end 'main'
 ```maxoncstderr
 error E3102: <fragment>:23:21: use of moved value 's': its ownership moved to another binding at an earlier bind or assignment
 ```
+
+<!-- test: union-struct-payload-ranged-alias -->
+The `create` parameter is a RANGED-INT-ALIAS, which adds a name to this file's
+interner and shifts its ids relative to the signatures interner's. The union's
+`BoxA` payload type is minted in the signatures interner; classifying it against
+the file interner without re-interning let the shift misread it as `int` — a
+wrong `E3005` reject at construct, and (once the construct is allowed) a
+misrouted scope-exit drop that leaks the payload. The payload type is now
+ADOPTED into the file interner before it is classified (the `fieldTypeOf`/
+`adoptType` door the struct side already used), and the drop callee is chosen
+inside `ProgramSignatures` over its own interner, so id and interner always
+agree (OPEN #52).
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type BoxA
+	export var label as String
+
+	static function create(x Integer) returns Self
+		return Self{label: "v{x}"}
+	end 'create'
+end 'BoxA'
+
+union UHold
+	holds(inner BoxA)
+end 'UHold'
+
+function main() returns ExitCode
+	let u = UHold.holds(BoxA.create(1))
+	return 4
+end 'main'
+```
+```exitcode
+4
+```
+
+<!-- test: union-struct-payload-ranged-alias-match -->
+The match-bind path shares the construct path's interner mismatch: with the
+ranged-int alias present, the bound payload's `BoxA` type (a signatures id) was
+classified against the file interner, so the managed payload could be misread as
+a scalar and never moved out — a leak. Binding the payload now adopts its type
+first, so the move-out and the scope-exit drop agree on what the payload is
+(OPEN #52).
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type BoxA
+	export var label as String
+
+	static function create(x Integer) returns Self
+		return Self{label: "v{x}"}
+	end 'create'
+end 'BoxA'
+
+union UHold
+	holds(inner BoxA)
+end 'UHold'
+
+function main() returns ExitCode
+	let u = UHold.holds(BoxA.create(1))
+	match u 'm'
+		holds(inner) then return 6
+	end 'm'
+end 'main'
+```
+```exitcode
+6
+```
