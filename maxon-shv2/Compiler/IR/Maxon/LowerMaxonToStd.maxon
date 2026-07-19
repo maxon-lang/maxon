@@ -202,6 +202,21 @@ export function maxonCmpOpToStdPred(op MaxonCmpOp) returns StdCmpPred
 	end 'map'
 end 'maxonCmpOpToStdPred'
 
+// Does any parameter of `sig` have `float` type — the ONLY thing that can force an int→float
+// argument widening (see `MaxonToStdLowering.widenIntArgsToFloatParams`). A bounded scan (parameters
+// are capped at the register-arg ABI count), so it is O(1) per call and allocates nothing; it is what
+// lets the overwhelmingly common no-float call return its arguments verbatim rather than build a fresh
+// array it would never change. `sig.paramTypes` is alias-resolved by TypeResolution, so
+// `maxonTypeToStdType` cannot meet a residual `named` here.
+function signatureHasFloatParam(sig FuncSignature) returns bool
+	for paramType in sig.paramTypes 'eachParam'
+		if stdTypeIsFloat(maxonTypeToStdType(paramType)) 'float'
+			return true
+		end 'float'
+	end 'eachParam'
+	return false
+end 'signatureHasFloatParam'
+
 // Public entry: lower a whole MaxonModule to a fresh StdModule. Takes the project's
 // `funcSignatures` registry so `lowerCall` can reorder each call's labelled arguments
 // to the callee's declaration order (the registry is the only whole-program source of
@@ -485,7 +500,7 @@ type MaxonToStdLowering
 
 		let sig = try self.funcSignatures.get(callee) otherwise panic("lowerCall: callee '{String.from(callee)}' has no signature — SemanticCheck must reject an unknown callee before lowering")
 		match slotCallArgs(sig, args: args, argLabels: argLabels) 'slot'
-			ordered(argIds) then self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: callee, args: argIds))
+			ordered(argIds) then self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: callee, args: self.widenIntArgsToFloatParams(argIds, sig: sig, dstBlock: dstBlock)))
 			arityMismatch then panic("lowerCall: arity mismatch for '{String.from(callee)}' reached lowering — SemanticCheck must gate it")
 			unknownLabel then panic("lowerCall: unknown argument label for '{String.from(callee)}' reached lowering — SemanticCheck must gate it")
 			duplicateArg then panic("lowerCall: duplicate argument for '{String.from(callee)}' reached lowering — SemanticCheck must gate it")
@@ -509,6 +524,63 @@ type MaxonToStdLowering
 
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: callee, args: args))
 	end 'lowerRuntimeCall'
+
+	// ⭐ **int→float ARGUMENT WIDENING (F3a)** — the CALL-SITE dual of the `return`/assignment float
+	// coercions the parser already owns, and it lives HERE because this is the first tier that holds a
+	// callee's ALIAS-RESOLVED parameter types (`funcSignatures`, re-synced by TypeResolution) beside
+	// the one `slotCallArgs` the check and the lowering share. An integer argument at a `float`
+	// parameter is a LOSSLESS widening the language performs implicitly — `SemanticCheck.checkArgTypes`
+	// accepts it as `ok` (the lossy `float`→`int` is E3009, and is NOT this) — but the int value is
+	// born in a GPR while a float parameter is passed in an XMM register, so with no conversion the
+	// backend meets a GPR→XMM move that `crosses register files` and panics. Each integral ordered
+	// argument at a float parameter is converted with `siToFp` (`cvtsi2sd`), the SAME op
+	// `Parser.promoteToFloat` inserts for `x + 2.0`; the result is XMM-classed (`unaryResultClass`), so
+	// the value-class column and the backend's XMM arg routing (`argFpRegisterAt`) then agree the
+	// argument belongs in an XMM slot — this pass inserts the conversion and the backend needs no change.
+	//
+	// ⚠ THE PARSER CANNOT DO THIS. A callee's parameter types are a WHOLE-PROGRAM fact — the callee may
+	// be declared in another file — and shv2 has them only after the per-file parses merge (the
+	// SignatureIndex carries return types, not parameter types). This tier is the first place they
+	// exist, resolved.
+	//
+	// It EMITS each conversion into `dstBlock` before returning, so the `call`/`tryCall` the caller
+	// appends NEXT sees the converted value already defined (the emit happens while this call's result
+	// is evaluated as the `args:` argument, ahead of the enclosing `appendOp`).
+	function widenIntArgsToFloatParams(argIds ValueIdArray, sig FuncSignature, dstBlock IrBlock) returns ValueIdArray
+		// FAST PATH, and it is what keeps this allocation-neutral on the hot call-lowering path: only a
+		// float PARAMETER can force a widening, and almost no callee has one, so a signature with none
+		// returns its arguments verbatim — no `ValueIdArray` built, no op emitted. Without it every
+		// lowered call allocates a fresh array it never changes (measured: a linear per-call allocation
+		// delta across the scale ladder).
+		if not signatureHasFloatParam(sig) 'noFloatParam'
+			return argIds
+		end 'noFloatParam'
+
+		var widened = ValueIdArray.create()
+		for i in 0 upto argIds.count() 'eachArg'
+			let argId = try argIds.get(i) otherwise panic("widenIntArgsToFloatParams: argIds.get OOB at {i}")
+			let paramType = try sig.paramTypes.get(i) otherwise panic("widenIntArgsToFloatParams: sig.paramTypes.get OOB at {i} — slotCallArgs returned {argIds.count()} ordered args against a {sig.paramCount()}-parameter signature")
+			widened.push(self.floatWidenedArg(argId, paramType: paramType, dstBlock: dstBlock))
+		end 'eachArg'
+		return widened
+	end 'widenIntArgsToFloatParams'
+
+	// One argument: widened to `float` when its parameter is `float` and the argument is integral,
+	// else the argument verbatim. A non-float argument bound for a float parameter is ALWAYS an
+	// integer — SemanticCheck has already rejected every other type (`bool`/`String`/struct disagree
+	// with `float`, E3005) — so `not stdTypeIsFloat` on the argument is exactly "the integer that
+	// widens", and it is also what keeps `assertConversionCrossesDomain` satisfied (`siToFp`'s operand
+	// is never a float). The conversion REUSES `lowerUnaryOp` through the `promoteToFloat` unary op
+	// (which maps to `siToFp`), so the op construction and its guard stay in the one place that owns them.
+	function floatWidenedArg(argId ValueId, paramType MaxonType, dstBlock IrBlock) returns ValueId
+		if not stdTypeIsFloat(maxonTypeToStdType(paramType)) or stdTypeIsFloat(self.stdTypeOf(argId)) 'noWiden'
+			return argId
+		end 'noWiden'
+
+		let widened = self.mintStdValueId()
+		self.lowerUnaryOp(widened, operand: argId, op: MaxonUnaryOp.promoteToFloat, dstBlock: dstBlock)
+		return widened
+	end 'floatWidenedArg'
 
 	// Lower a Maxon binary op to its Std counterpart. The operand and result
 	// ValueIds pass through verbatim (this pass never renumbers — see the header);
@@ -708,7 +780,7 @@ type MaxonToStdLowering
 	function lowerTryCall(result ValueId, errorFlag ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, dstBlock IrBlock)
 		let sig = try self.funcSignatures.get(callee) otherwise panic("lowerTryCall: throwing callee '{String.from(callee)}' has no signature — SemanticCheck must reject an unknown callee before lowering")
 		match slotCallArgs(sig, args: args, argLabels: argLabels) 'slot'
-			ordered(argIds) then self.stdModule.appendOp(dstBlock, op: StdOp.tryCall(result, errorFlagId: errorFlag, callee: callee, args: argIds))
+			ordered(argIds) then self.stdModule.appendOp(dstBlock, op: StdOp.tryCall(result, errorFlagId: errorFlag, callee: callee, args: self.widenIntArgsToFloatParams(argIds, sig: sig, dstBlock: dstBlock)))
 			arityMismatch then panic("lowerTryCall: arity mismatch for '{String.from(callee)}' reached lowering — SemanticCheck must gate it")
 			unknownLabel then panic("lowerTryCall: unknown argument label for '{String.from(callee)}' reached lowering — SemanticCheck must gate it")
 			duplicateArg then panic("lowerTryCall: duplicate argument for '{String.from(callee)}' reached lowering — SemanticCheck must gate it")

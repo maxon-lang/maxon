@@ -88,8 +88,7 @@ end 'main'
 
 ## Tests
 
-<!-- disabled-test: int-literal-to-float-param -->
-<!-- P1.0d.4 wave 2: float ABI (a float PARAMETER needs the xmm arg slots Wave 1 does not model) -->
+<!-- test: int-literal-to-float-param -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -107,8 +106,7 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: int-var-to-float-param -->
-<!-- P1.0d.4 wave 2: float ABI (a float PARAMETER needs the xmm arg slots Wave 1 does not model) -->
+<!-- test: int-var-to-float-param -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -188,8 +186,7 @@ end 'main'
 error E3009: specs/fragments/implicit-type-conversion/float-to-int-return-rejected.test:7:2: cannot implicitly convert 'float' to 'int': the conversion is lossy and must be explicit — use trunc(x) to truncate toward zero (or round/floor/ceil)
 ```
 
-<!-- disabled-test: expression-to-float-param -->
-<!-- P1.0d.4 wave 2: float ABI (a float PARAMETER needs the xmm arg slots Wave 1 does not model) -->
+<!-- test: expression-to-float-param -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
