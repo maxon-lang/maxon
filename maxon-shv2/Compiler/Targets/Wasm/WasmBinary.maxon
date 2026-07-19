@@ -239,6 +239,25 @@ let opF64Div = 0xA3
 let opI64TruncF64S = 0xB0
 let opF64ConvertI64S = 0xB9
 
+// The data-section memory-access band (the top-level-`var` milestone), appended the way v1's
+// WasmBinary grew each time a milestone needed new opcodes. A load/store carries a MEMARG — an
+// `align` ULEB then an `offset` ULEB — and the scalar-plus-float global corpus stores only
+// word-width scalars (an `int` is i64, a `float` is f64), so only the 8-byte forms are here.
+// Narrow (byte/half) forms grow the band when a byte-width global (`bool`/`u8`) is lowered to
+// wasm — see StdToWasm's `requireWordGlobal`, which is the one door that says a narrow global is
+// not in this slice yet.
+let opI64Load = 0x29
+let opF64Load = 0x2B
+let opI64Store = 0x37
+let opF64Store = 0x39
+
+// A memarg's `align` is the log2 of the access's byte width — the NATURAL alignment. It is a
+// hint only: it never changes semantics (a wasm load/store is defined at any address, aligned or
+// not) and validation requires only that it not EXCEED the natural alignment, so the natural
+// value is always legal and is the canonical choice. Every op in this band is an 8-byte
+// (word64) access, so the hint is 3 (2^3 = 8) throughout.
+let wasmMemAlignWord64 = 3
+
 // --- WasmBody: a function body under construction ---
 // Each method APPENDS the encoded instruction(s) to the body's byte buffer. `bytes()` returns
 // the raw instruction stream ONLY — the local declarations and the trailing `end` are framed
@@ -570,6 +589,33 @@ export type WasmBody
 		self.buf.push(opI64TruncF64S)
 	end 'i64TruncF64S'
 
+	// Data-section loads/stores. Each carries a MEMARG (`align` then `offset`, both ULEB); the
+	// dynamic base address is the i32 already on the stack (a load consumes it; a store consumes
+	// it below the value it writes). `offset` is the static displacement folded into the effective
+	// address, and `align` is the op's natural alignment (see `wasmMemAlignWord64`). The load/store
+	// pushing is factored so the four public ops cannot disagree on the memarg layout.
+	function pushMemAccess(opcode MachineWord, align Wasm32Index, offset Wasm32Index)
+		self.buf.push(opcode)
+		writeUleb128(self.buf, value: align)
+		writeUleb128(self.buf, value: offset)
+	end 'pushMemAccess'
+
+	export function i64Load(offset Wasm32Index)
+		self.pushMemAccess(opI64Load, align: wasmMemAlignWord64, offset: offset)
+	end 'i64Load'
+
+	export function f64Load(offset Wasm32Index)
+		self.pushMemAccess(opF64Load, align: wasmMemAlignWord64, offset: offset)
+	end 'f64Load'
+
+	export function i64Store(offset Wasm32Index)
+		self.pushMemAccess(opI64Store, align: wasmMemAlignWord64, offset: offset)
+	end 'i64Store'
+
+	export function f64Store(offset Wasm32Index)
+		self.pushMemAccess(opF64Store, align: wasmMemAlignWord64, offset: offset)
+	end 'f64Store'
+
 	// The raw instruction bytes — NO local declarations, NO trailing `end`. addFunction frames
 	// the complete body around this stream.
 	export function bytes() returns ByteArray
@@ -579,14 +625,21 @@ end 'WasmBody'
 
 // --- Section IDs (canonical order) ---
 // A wasm module's sections MUST appear in ascending id order; finish() emits exactly this
-// subset in this order. Ids 4 (table), 6 (global), 8 (start), 9 (element), 11 (data) are
-// unused by the scalar slice.
+// subset in this order. Ids 4 (table), 6 (global), 8 (start), 9 (element) stay unused by this
+// slice; id 11 (data) carries the top-level-`var` `.data` image.
 let wasmSectionType = 1
 let wasmSectionImport = 2
 let wasmSectionFunction = 3
 let wasmSectionMemory = 5
 let wasmSectionExport = 7
 let wasmSectionCode = 10
+let wasmSectionData = 11
+
+// A data segment's leading byte. `0x00` selects the active, memory-0, i32.const-offset form; in
+// the MVP encoding the very same byte reads as the explicit memory index 0, so this one value
+// serves both readings. The segment body that follows is the offset expression (`i32.const
+// <base>` then `end`) and then the ULEB-length-prefixed byte vector.
+let wasmDataSegmentActiveMem0 = 0x00
 
 // The functype form byte that prefixes every `(params) -> (results)` entry in the type section.
 let wasmFunctypeForm = 0x60
@@ -745,8 +798,15 @@ export type WasmModuleBuilder
 	var hasMemory as bool
 	var memoryMinPages as Wasm32Index
 
+	// The single active `.data` segment: the top-level `var` image (`dataSegmentBytes`) copied
+	// verbatim into linear memory at `dataSegmentBase` at instantiation. `hasDataSegment` stays
+	// false for a program with no top-level `var`, which emits no data section at all.
+	var hasDataSegment as bool
+	var dataSegmentBase as Wasm32Index
+	var dataSegmentBytes as ByteArray
+
 	export static function create() returns WasmModuleBuilder
-		return Self{funcTypes: ByteArrayArray.create(), funcTypeDedup: FuncTypeDedupMap.create(), importModules: ByteArrayArray.create(), importFields: ByteArrayArray.create(), importTypeIndices: Wasm32IndexArray.create(), funcTypeIndices: Wasm32IndexArray.create(), funcBodies: ByteArrayArray.create(), exportEntries: WasmExportArray.create(), hasMemory: false, memoryMinPages: 0}
+		return Self{funcTypes: ByteArrayArray.create(), funcTypeDedup: FuncTypeDedupMap.create(), importModules: ByteArrayArray.create(), importFields: ByteArrayArray.create(), importTypeIndices: Wasm32IndexArray.create(), funcTypeIndices: Wasm32IndexArray.create(), funcBodies: ByteArrayArray.create(), exportEntries: WasmExportArray.create(), hasMemory: false, memoryMinPages: 0, hasDataSegment: false, dataSegmentBase: 0, dataSegmentBytes: ByteArray.create()}
 	end 'create'
 
 	// Intern a functype, returning its (deduplicated) type index. The dedup is an O(1) map lookup on
@@ -802,9 +862,18 @@ export type WasmModuleBuilder
 		self.exportEntries.push(WasmExport.create(name, kind: wasmExportKindMemory, index: wasmMemoryIndexZero))
 	end 'exportMemory'
 
+	// Record the single active `.data` segment: `bytes` are laid into linear memory at `base`
+	// when the module is instantiated. One segment holds the whole top-level-`var` image; the
+	// caller sizes the memory (`exportMemory`'s `minPages`) to cover `base + bytes.count()`.
+	export function addDataSegment(base Wasm32Index, bytes ByteArray)
+		self.hasDataSegment = true
+		self.dataSegmentBase = base
+		self.dataSegmentBytes = bytes
+	end 'addDataSegment'
+
 	// Emit the finished CORE module: preamble + sections in canonical id order. Empty sections
-	// are omitted (a wasm module names only the sections it uses); for the scalar slice every
-	// section below is non-empty in practice.
+	// are omitted (a wasm module names only the sections it uses) — the data section when the
+	// program has no top-level `var`, every other section being non-empty in practice.
 	export function finish() returns ByteArray
 		var module = ByteArray.create()
 		writeModuleHeader(module)
@@ -815,6 +884,7 @@ export type WasmModuleBuilder
 		self.emitMemorySection(module)
 		self.emitExportSection(module)
 		self.emitCodeSection(module)
+		self.emitDataSection(module)
 
 		return module
 	end 'finish'
@@ -914,4 +984,28 @@ export type WasmModuleBuilder
 
 		writeSectionRaw(module, sectionId: wasmSectionCode, contents: contents)
 	end 'emitCodeSection'
+
+	// One active data segment: the flag/memory-0 byte, the `i32.const <base>` offset expression
+	// (SLEB immediate, terminated by `end`), then the ULEB-length-prefixed byte vector. Omitted
+	// when there is no top-level `var` — an empty segment would only bloat the module.
+	function emitDataSection(module ByteArray)
+		if not self.hasDataSegment 'none'
+			return
+		end 'none'
+
+		if self.dataSegmentBytes.count() == 0 'empty'
+			return
+		end 'empty'
+
+		var contents = ByteArray.create()
+		writeUleb128(contents, value: 1)
+		contents.push(wasmDataSegmentActiveMem0)
+		contents.push(opI32Const)
+		writeSleb128(contents, value: self.dataSegmentBase as ParsedInt)
+		contents.push(opEnd)
+		writeUleb128(contents, value: self.dataSegmentBytes.count() as Wasm32Index)
+		contents.append(self.dataSegmentBytes)
+
+		writeSectionRaw(module, sectionId: wasmSectionData, contents: contents)
+	end 'emitDataSection'
 end 'WasmModuleBuilder'

@@ -62,6 +62,7 @@ let PRIMES = [2, 3, 5, 7, 11]
 ## Tests
 
 <!-- test: basic-integer-constant -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 let ANSWER = 42
 
@@ -74,6 +75,7 @@ end 'main'
 ```
 
 <!-- test: basic-float-constant -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 let PI = 3.14
 
@@ -86,6 +88,7 @@ end 'main'
 ```
 
 <!-- test: arithmetic-in-constant -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 let BASE = 10
 let DOUBLED = BASE * 2
@@ -99,6 +102,7 @@ end 'main'
 ```
 
 <!-- test: forward-reference -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 let TOTAL = FIRST + SECOND
 let FIRST = 30
@@ -113,6 +117,7 @@ end 'main'
 ```
 
 <!-- test: boolean-constant -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 let DEBUG = true
 
@@ -128,6 +133,7 @@ end 'main'
 ```
 
 <!-- test: constant-in-expression -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 let OFFSET = 10
 
@@ -141,6 +147,7 @@ end 'main'
 ```
 
 <!-- test: multiple-constants -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 let A = 1
 let B = 2
@@ -155,6 +162,7 @@ end 'main'
 ```
 
 <!-- test: unary-minus-in-constant -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 let NEGATIVE = -42
 
@@ -167,6 +175,7 @@ end 'main'
 ```
 
 <!-- test: comparison-in-constant -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 let IS_LARGE = 100 > 50
 
@@ -182,6 +191,7 @@ end 'main'
 ```
 
 <!-- test: logical-operations -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 let BOTH = true and true
 let EITHER = false or true
@@ -199,6 +209,7 @@ end 'main'
 ```
 
 <!-- test: cast-in-constant -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 let OFFSET = 10
 let SCALED = OFFSET * 3
@@ -212,6 +223,7 @@ end 'main'
 ```
 
 <!-- test: complex-constant-chain -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 let A = 2
 let B = A * 3
@@ -259,6 +271,7 @@ error E2012: <fragment>:3:5: Circular dependency detected among global constants
 ```
 
 <!-- test: export-let-cross-file -->
+<!-- targets: wasm32-wasi -->
 Exported constants are visible from other files.
 ```maxon
 // --- file: api/constants.maxon

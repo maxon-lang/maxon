@@ -69,7 +69,7 @@ export function buildBackend(stdModule StdModule, target Target, globalData Glob
 	match target.cpu 'cpu'
 		x64 then return try buildX64Backend(stdModule, target: target, globalData: globalData, project: project)
 		arm64 then return try buildArm64Backend(stdModule, target: target, globalData: globalData, project: project)
-		wasm32 then return buildWasmBackend(stdModule, project: project)
+		wasm32 then return buildWasmBackend(stdModule, globalData: globalData, project: project)
 	end 'cpu'
 end 'buildBackend'
 
@@ -78,13 +78,15 @@ end 'buildBackend'
 // StdToWasm's header) — so this backend's isel, encode and link work is fused into the single
 // `buildWasmCoreModule` call and billed together to `encode`. The `$run` entry (and the `wasi:cli/exit`
 // import it calls) are synthesized inside that call, so `augmentWithRuntime` is NOT run for wasm and
-// its `wasi` arm stays unreached. The bytes ride in the CodeResult's `wasmCoreModule` field; every
-// machine-code field is empty (see `CodeResult.forWasm`), and `writeWasm` wraps the bytes into a
-// component. It takes no `target`: the sole wasm target is wasm32-wasi, and `buildBackend` has already
-// dispatched on it.
-function buildWasmBackend(module StdModule, project Project) returns CodeResult
+// its `wasi` arm stays unreached. `globalData` reaches it because a top-level `var` is a `.data` slot
+// this backend lays into an active linear-memory segment and resolves every `globalAddr` against —
+// the same laid-out table the native writers serialize into their `.data` section. The bytes ride in
+// the CodeResult's `wasmCoreModule` field; every machine-code field is empty (see
+// `CodeResult.forWasm`), and `writeWasm` wraps the bytes into a component. It takes no `target`: the
+// sole wasm target is wasm32-wasi, and `buildBackend` has already dispatched on it.
+function buildWasmBackend(module StdModule, globalData GlobalDataTable, project Project) returns CodeResult
 	let encodeProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.encode)
-	let coreModule = buildWasmCoreModule(module)
+	let coreModule = buildWasmCoreModule(module, globalData: globalData)
 	recordPhase(project, phase: CompilePhase.encode, probe: encodeProbe)
 
 	return CodeResult.forWasm(module, wasmCoreModule: coreModule)

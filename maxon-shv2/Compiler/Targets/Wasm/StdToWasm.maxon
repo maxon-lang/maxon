@@ -65,9 +65,27 @@ typealias DependentLhsMap = Map with (ValueId, ValueId)
 let WasmImportCount = 1 as Wasm32Index
 let ExitImportFuncIdx = 0 as Wasm32Index
 
-// One page (64 KiB) of linear memory, exported as `memory`. Nothing in the scalar slice
-// touches it, but the WASI `run` component skeleton requires a memory export.
-let WasmMemoryMinPages = 1 as Wasm32Index
+// The linear-memory address the top-level-`var` `.data` image is laid at. Low memory below it is
+// a NULL GUARD — no global's address is ever 0 — matching v1's convention and keeping any future
+// null/None sentinel distinct from real data. 8-aligned (1024 = 128·8), so every word64 global
+// slot lands naturally aligned; the exact value is otherwise free (nothing else in this slice
+// touches linear memory). A `globalAddr` resolves to `base + the global's `.data` offset`.
+let WasmDataBaseOffset = 1024 as Wasm32Index
+
+// A wasm linear-memory page is 64 KiB. The memory's declared minimum must cover the whole `.data`
+// image (`base + size`); the page size is a power of two, so rounding up is a shift, not a divide
+// (a divide would desugar to a throwing checked-division call — see the throwing-division rung).
+let WasmPageSizeLog2 = 16
+let WasmPageSizeMask = 0xFFFF as ByteCount
+
+// The minimum page count a memory must declare to hold a `.data` image ending at `base +
+// dataSize`, rounded up to whole 64 KiB pages. `base` is a positive constant, so the count is
+// always at least one — the WASI `run` skeleton requires a memory export whether or not the
+// program has any global.
+function wasmMemoryMinPages(base Wasm32Index, dataSize ByteCount) returns Wasm32Index
+	let endByte = (base as ByteCount) + dataSize
+	return ((endByte + WasmPageSizeMask) shr WasmPageSizeLog2) as Wasm32Index
+end 'wasmMemoryMinPages'
 
 // The `run` result value pushed after `call $exit`: `exit-with-code` never returns, so this
 // i32 is unreachable, but the validator requires the `(result i32)` on the stack at the end.
@@ -93,12 +111,18 @@ let WasmMemoryExportName = b"memory"
 // model, synthesizes the `wasi:cli/run@0.2.6#run` entry (`call $main; i32.wrap_i64; call
 // $exit; i32.const 0`), and exports `memory` + `run`. Deterministic: output is driven entirely
 // by module/block/op/arg ORDER, never by map iteration, so worker-count byte-identity holds.
-export function buildWasmCoreModule(module StdModule) returns ByteArray
+export function buildWasmCoreModule(module StdModule, globalData GlobalDataTable) returns ByteArray
 	let calleeFuncIdx = buildCalleeFuncIdxMap(module)
 	let calleeReturnType = buildCalleeReturnTypeMap(module)
 	let calleeParamTypes = buildCalleeParamTypesMap(module)
 
 	var builder = WasmModuleBuilder.create()
+
+	// The top-level-`var` `.data` image and its linear-memory placement. Rendered ONCE, in
+	// `GlobalDataTable`'s layout order (deterministic — no map iteration), and shared by every
+	// `globalAddr` (through the emitter, which resolves a label to `base + its `.data` offset`)
+	// and by the module's memory + data sections. Empty for a program with no top-level `var`.
+	let dataImage = globalData.dataSectionImage()
 
 	// Imports FIRST, so the defined functions get the indices `calleeFuncIdx` precomputed
 	// (importCount + position). `exit-with-code` takes one i32 (the status code), no result.
@@ -108,7 +132,7 @@ export function buildWasmCoreModule(module StdModule) returns ByteArray
 	// Defined functions, in `module.functions` order — the order `calleeFuncIdx` assumes.
 	for funcIdx in 0 upto module.funcCount() 'eachFunc'
 		let func = module.getFunc(funcIdx)
-		var emitter = WasmFuncEmitter.create(module, func: func, calleeFuncIdx: calleeFuncIdx, calleeReturnType: calleeReturnType, calleeParamTypes: calleeParamTypes)
+		var emitter = WasmFuncEmitter.create(module, func: func, globalData: globalData, dataBase: WasmDataBaseOffset, calleeFuncIdx: calleeFuncIdx, calleeReturnType: calleeReturnType, calleeParamTypes: calleeParamTypes)
 		emitter.emit()
 		let typeIdx = builder.internFuncType(funcParamValTypes(func), results: funcResultValTypes(func.returnType))
 		_ = builder.addFunction(typeIdx, localTypes: emitter.localTypes, body: emitter.body.bytes())
@@ -116,7 +140,13 @@ export function buildWasmCoreModule(module StdModule) returns ByteArray
 
 	let runFuncIdx = appendRunEntry(builder, module: module, calleeFuncIdx: calleeFuncIdx)
 
-	builder.exportMemory(WasmMemoryExportName, minPages: WasmMemoryMinPages)
+	// The memory must cover the whole `.data` image; the segment lays that image at `base` when
+	// the module is instantiated. Only a program WITH a top-level `var` emits the data section —
+	// an empty image would only bloat the module.
+	builder.exportMemory(WasmMemoryExportName, minPages: wasmMemoryMinPages(WasmDataBaseOffset, dataSize: dataImage.count()))
+	if dataImage.count() > 0 'hasGlobals'
+		builder.addDataSegment(WasmDataBaseOffset, bytes: dataImage)
+	end 'hasGlobals'
 	builder.exportFunc(WasiRunExportName, funcIdx: runFuncIdx)
 
 	return builder.finish()
@@ -397,8 +427,11 @@ function recordDefValtype(op StdOp, valtypes WasmValTypeArray, depResult ValueId
 		param(resultId, _, paramType) then setValtype(valtypes, v: resultId, vt: wasmValTypeOf(paramType))
 		call(resultId, callee, _) then setValtype(valtypes, v: resultId, vt: callResultValType(callee, calleeReturnType: calleeReturnType))
 		retVoid then break 'def'
-		globalAddr then break 'def'
-		loadIndirect then break 'def'
+		// ⚠ A wasm linear-memory ADDRESS IS AN i32, not the i64 pointer width the native backends
+		// carry in a 64-bit register. `globalAddr` materializes an `i32.const`, so its result local
+		// must be i32 — the width `loadIndirect`/`storeIndirect` then consume as the base address.
+		globalAddr(resultId, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i32)
+		loadIndirect(resultId, _, _, valueType) then setValtype(valtypes, v: resultId, vt: wasmValTypeOf(valueType))
 		storeIndirect then break 'def'
 		osAllocPages then break 'def'
 		osWriteStdout then break 'def'
@@ -455,6 +488,11 @@ end 'widthOfValue'
 type WasmFuncEmitter
 	var module as StdModule
 	var func as IrFunction
+	// The laid-out `.data` table (a `globalAddr` resolves its label to a byte offset here) and the
+	// linear-memory base those offsets are relative to. Both are module-wide constants; each emitter
+	// holds them so a `globalAddr` resolves its address in O(1) with no per-function setup.
+	var globalData as GlobalDataTable
+	var dataBase as Wasm32Index
 	var calleeFuncIdx as CalleeFuncIdxMap
 	var calleeReturnType as CalleeReturnTypeMap
 	var calleeParamTypes as CalleeParamTypesMap
@@ -481,13 +519,15 @@ type WasmFuncEmitter
 	// Block id → dispatch index (position in `func.blockRefs`), for branch targets.
 	var blockDispatchById as BlockDispatchMap
 
-	static function create(module StdModule, func IrFunction, calleeFuncIdx CalleeFuncIdxMap, calleeReturnType CalleeReturnTypeMap, calleeParamTypes CalleeParamTypesMap) returns WasmFuncEmitter
+	static function create(module StdModule, func IrFunction, globalData GlobalDataTable, dataBase Wasm32Index, calleeFuncIdx CalleeFuncIdxMap, calleeReturnType CalleeReturnTypeMap, calleeParamTypes CalleeParamTypesMap) returns WasmFuncEmitter
 		let valtypes = buildValtypeTable(module, func: func, calleeReturnType: calleeReturnType)
 		let useDispatcher = decideDispatcher(module, func: func)
 
 		var emitter = Self{
 			module: module,
 			func: func,
+			globalData: globalData,
+			dataBase: dataBase,
 			calleeFuncIdx: calleeFuncIdx,
 			calleeReturnType: calleeReturnType,
 			calleeParamTypes: calleeParamTypes,
@@ -690,9 +730,9 @@ type WasmFuncEmitter
 			param(resultId, index, _) then self.emitParam(resultId, index: index)
 			call(resultId, callee, args) then self.emitCall(resultId, callee: callee, args: args)
 			retVoid then self.emitRetVoid()
-			globalAddr then panic("wasm: globalAddr not in scalar slice")
-			loadIndirect then panic("wasm: loadIndirect not in scalar slice")
-			storeIndirect then panic("wasm: storeIndirect not in scalar slice")
+			globalAddr(resultId, label) then self.emitGlobalAddr(resultId, label: label)
+			loadIndirect(resultId, addrId, offset, valueType) then self.emitLoadIndirect(resultId, addrId: addrId, offset: offset, valueType: valueType)
+			storeIndirect(addrId, offset, valueId, valueType) then self.emitStoreIndirect(addrId, offset: offset, valueId: valueId, valueType: valueType)
 			osAllocPages then panic("wasm: osAllocPages not in scalar slice")
 			osWriteStdout then panic("wasm: osWriteStdout not in scalar slice")
 			rdataAddr then panic("wasm: rdataAddr not in scalar slice")
@@ -1049,6 +1089,53 @@ type WasmFuncEmitter
 	end 'emitRetVoid'
 
 	// ----------------------------------------------------------------------
+	// Memory band: top-level `var` globals (globalAddr / loadIndirect / storeIndirect)
+	// ----------------------------------------------------------------------
+
+	// `globalAddr` → `i32.const <base + the global's `.data` offset>`. On the native backends this
+	// is a `lea` of a relocated address; on wasm a global's home is a fixed linear-memory byte, so
+	// its address is a compile-time i32 CONSTANT — the base plus the offset `GlobalDataTable`
+	// assigned the label at layout. The result local is i32 (recorded by `buildValtypeTable`), the
+	// width `loadIndirect`/`storeIndirect` consume as the base address.
+	function emitGlobalAddr(resultId ValueId, label ByteArray)
+		let slotOffset = self.globalData.dataSectionOffsetOf(String.from(label))
+		self.body.i32Const(wasmGlobalAddress(self.dataBase, slotOffset: slotOffset))
+		self.body.localSet(resultId as Wasm32Index)
+	end 'emitGlobalAddr'
+
+	// `loadIndirect` → push the i32 base address, then `<width>.load offset=<offset>`. The static
+	// `offset` (0 for a plain global, non-zero once a struct field rides this op) folds into the
+	// memarg. Only word-width globals are in this slice — `requireWordGlobal` rejects a byte/narrow
+	// global loudly — so the load is i64 or f64.
+	function emitLoadIndirect(resultId ValueId, addrId ValueId, offset ByteOffset, valueType StdType)
+		self.body.localGet(addrId as Wasm32Index)
+		let memOffset = wasmMemOffset(offset)
+		if requireWordGlobal(valueType, what: "loadIndirect") == WasmValType.i64 'i64'
+			self.body.i64Load(memOffset)
+		end 'i64' else 'f64'
+			self.body.f64Load(memOffset)
+		end 'f64'
+		self.body.localSet(resultId as Wasm32Index)
+	end 'emitLoadIndirect'
+
+	// `storeIndirect` → push the i32 base address, then the value (coerced to the global's width),
+	// then `<width>.store offset=<offset>`. Address BELOW value is the order the store opcode pops.
+	// `pushOperandAt` coerces the value to the store width the same way `ret`/call-arg boundaries do
+	// — a store is a value-meets-declared-type boundary — a no-op when the widths already agree.
+	// Defines nothing, so no `local.set`.
+	function emitStoreIndirect(addrId ValueId, offset ByteOffset, valueId ValueId, valueType StdType)
+		self.body.localGet(addrId as Wasm32Index)
+		let storeVt = requireWordGlobal(valueType, what: "storeIndirect")
+		self.pushOperandAt(valueId, targetVt: storeVt)
+		let memOffset = wasmMemOffset(offset)
+		if storeVt == WasmValType.i64 'i64'
+			self.body.i64Store(memOffset)
+		end 'i64' else 'f64'
+			self.body.f64Store(memOffset)
+		end 'f64'
+	end 'emitStoreIndirect'
+
+	// ----------------------------------------------------------------------
 	// Dispatcher terminators: branch / cond-branch (with phi copies)
 	// ----------------------------------------------------------------------
 
@@ -1216,6 +1303,45 @@ function narrowToImm32(value ParsedInt) returns Imm32
 	end 'negative'
 	return low as Imm32
 end 'narrowToImm32'
+
+// The wasm valtype a global of `valueType` loads/stores as. THE ONE DOOR that says which globals
+// the memory slice lowers: only word-width scalars — an `int` (i64) and a `float` (f64). A
+// byte-width global (`bool`/`u8`, an i32 valtype backed by one storage byte) has no wasm memory
+// form here yet: it needs the narrow `i32.load8_u`/`i32.store8` band, and a wider narrow integer
+// its P1.9 `as`-cast (which decides sign/zero extension) — the SAME line the shared
+// `accessWidthFor` draws for the native backends. An f32 cannot occur (Maxon's `float` is f64).
+// Both callers pick the load vs the store opcode off the returned i64/f64.
+function requireWordGlobal(valueType StdType, what String) returns WasmValType
+	let vt = wasmValTypeOf(valueType)
+	match vt 'vt'
+		i64 then return vt
+		f64 then return vt
+		i32 then panic("wasm: {what} of a byte/narrow-width global ({valueType.name}) is not in the memory slice — only i64 and f64 globals are lowered; a byte global needs the i32.load8_u/i32.store8 band and a wider narrow needs P1.9's `as`-cast")
+		f32 then panic("wasm: {what} of an f32 global — Maxon's `float` is f64, so nothing produces an f32")
+	end 'vt'
+end 'requireWordGlobal'
+
+// A global's absolute linear-memory address: the data base plus the byte offset the label was
+// laid out at, as the signed `Imm32` an `i32.const` carries. The whole `.data` image sits inside
+// one 64 KiB page well below i32.max, so the address always fits; a violation is an invariant
+// break (a `.data` section larger than 2 GiB), not a user error.
+function wasmGlobalAddress(base Wasm32Index, slotOffset ByteOffset) returns Imm32
+	let addr = (base as ByteOffset) + slotOffset
+	if addr > i32.max 'tooFar'
+		panic("wasmGlobalAddress: global address {addr} (base {base} + offset {slotOffset}) does not fit the signed i32 a wasm address is — the `.data` image exceeds 2 GiB, which the single-page memory this slice declares cannot hold")
+	end 'tooFar'
+	return addr as Imm32
+end 'wasmGlobalAddress'
+
+// A memory-band byte offset as the ULEB `offset` a wasm memarg carries (a u32). Every offset in
+// this slice is 0 (a plain global's load/store); the bound starts mattering at P1.1's struct
+// fields. A value past u32.max is an invariant break — no single 64 KiB memory reaches that far.
+function wasmMemOffset(offset ByteOffset) returns Wasm32Index
+	if offset > u32.max 'tooFar'
+		panic("wasmMemOffset: memarg offset {offset} exceeds the u32 a wasm memarg encodes — an access reaching that far past its base is outside a single linear memory")
+	end 'tooFar'
+	return offset as Wasm32Index
+end 'wasmMemOffset'
 
 // Whether `func` needs the loop+br_table dispatcher. Any multi-block function does; a
 // single-block function does too when its terminator branches (a self-loop) rather than
