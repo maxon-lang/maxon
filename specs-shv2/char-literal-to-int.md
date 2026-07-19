@@ -31,7 +31,6 @@ var value = digit - '0'  // '0' coerced to 48, result is 5
 ## Tests
 
 <!-- test: char-literal-eq-codepoint -->
-<!-- targets: wasm32-wasi -->
 ### Compare codepoint with character literal using ==
 
 ```maxon
@@ -48,7 +47,6 @@ end 'main'
 ```
 
 <!-- test: char-literal-ne-codepoint -->
-<!-- targets: wasm32-wasi -->
 ### Compare codepoint with character literal using !=
 
 ```maxon
@@ -65,7 +63,6 @@ end 'main'
 ```
 
 <!-- test: char-literal-ge-le-codepoint -->
-<!-- targets: wasm32-wasi -->
 ### Compare codepoint with character literal using >= and <=
 
 ```maxon
@@ -84,7 +81,6 @@ end 'main'
 ```
 
 <!-- test: char-literal-arithmetic -->
-<!-- targets: wasm32-wasi -->
 ### Subtract character literal from codepoint
 
 ```maxon
@@ -99,7 +95,6 @@ end 'main'
 ```
 
 <!-- test: char-literal-escape-coercion -->
-<!-- targets: wasm32-wasi -->
 ### Escape sequence character literal coerced to int
 
 ```maxon
@@ -116,7 +111,6 @@ end 'main'
 ```
 
 <!-- test: char-literal-lhs-coercion -->
-<!-- targets: wasm32-wasi -->
 ### Character literal on left-hand side of comparison
 
 ```maxon
@@ -133,7 +127,6 @@ end 'main'
 ```
 
 <!-- test: char-literal-both-sides-still-character -->
-<!-- targets: wasm32-wasi -->
 ### Two character literals compared stay as Character
 
 ```maxon

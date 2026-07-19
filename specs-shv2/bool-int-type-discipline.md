@@ -79,7 +79,6 @@ rest of the rule uses.
 ### An `int` and a `bool` cannot be arithmetic operands
 
 <!-- test: int-plus-bool -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let flag = true
@@ -92,7 +91,6 @@ error E2004: <fragment>:4:12: Cannot operate on int and bool
 ```
 
 <!-- test: int-times-bool -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let flag = true
@@ -105,7 +103,6 @@ error E2004: <fragment>:4:12: Cannot operate on int and bool
 ```
 
 <!-- test: bool-minus-int -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let flag = true
@@ -120,7 +117,6 @@ error E2004: <fragment>:4:15: Cannot operate on bool and int
 ### A shift is integral on BOTH sides
 
 <!-- test: bool-shl-int -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let flag = true
@@ -133,7 +129,6 @@ error E2004: <fragment>:4:15: Cannot operate on bool and int
 ```
 
 <!-- test: int-shr-bool -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let flag = true
@@ -153,7 +148,6 @@ it. (This is one of the three cases the bootstrap answers with an internal error
 `Unsupported binop: Add on Bool`.)
 
 <!-- test: bool-plus-bool -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let a = true
@@ -171,7 +165,6 @@ error E2004: <fragment>:5:12: Cannot operate on bool and bool
 Negating a bool negated its 1 payload and produced **-1** — which is still TRUE in a condition.
 
 <!-- test: negate-bool -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let flag = true
@@ -192,7 +185,6 @@ error E2004: <fragment>:4:10: Cannot negate bool
 source says and is always false.
 
 <!-- test: int-less-than-bool -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let flag = true
@@ -207,7 +199,6 @@ error E3005: <fragment>:4:7: type mismatch: 'cannot compare int with bool'
 ```
 
 <!-- test: bool-equals-int -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let flag = true
@@ -227,7 +218,6 @@ The guard against over-applying the rule: `a == b` is two operands of the SAME c
 exactly what the rule asks for. `false == false` is true, so this returns 1.
 
 <!-- test: bool-equals-bool -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let a = true
@@ -250,7 +240,6 @@ end 'main'
 ### A condition is a `bool`, not "anything nonzero"
 
 <!-- test: int-as-if-condition -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let n = 4
@@ -265,7 +254,6 @@ error E3005: <fragment>:4:5: 'if' requires a bool condition, got 'int'
 ```
 
 <!-- test: int-as-while-condition -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	var n = 4
@@ -283,7 +271,6 @@ The diagnostic anchors on the CONDITION, not on the keyword — the message is a
 expression's type, and a condition spanning several lines should not point at the `if`.
 
 <!-- test: int-expression-as-condition -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let a = 3
@@ -308,7 +295,6 @@ the operator, the condition or the call argument downstream sees an `int` and wa
 which is `implicit-type-conversion.md`'s `no-bool-to-int` defeated by adding one `if`.
 
 <!-- test: assign-bool-to-int-var -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	var x = 5
@@ -321,7 +307,6 @@ error E3005: <fragment>:4:2: cannot assign 'bool' to variable 'x' of type 'int'
 ```
 
 <!-- test: assign-int-to-bool-var -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	var flag = true
@@ -334,7 +319,6 @@ error E3005: <fragment>:4:2: cannot assign 'int' to variable 'flag' of type 'boo
 ```
 
 <!-- test: laundered-bool-into-arithmetic -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	var x = 5
@@ -349,7 +333,6 @@ error E3005: <fragment>:5:3: cannot assign 'bool' to variable 'x' of type 'int'
 ```
 
 <!-- test: laundered-int-into-condition -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	var flag = true
@@ -370,7 +353,6 @@ error E3005: <fragment>:7:3: cannot assign 'int' to variable 'flag' of type 'boo
 ```
 
 <!-- test: laundered-bool-through-loop-phi -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	var x = 0
@@ -389,7 +371,6 @@ error E3005: <fragment>:7:3: cannot assign 'bool' to variable 'x' of type 'int'
 ```
 
 <!-- test: laundered-bool-into-int-param -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -415,7 +396,6 @@ The guard: reassigning a `var` is ordinary, and a `bool` var may take any bool w
 var takes any int. Only a change of CLASS is refused. This returns 1.
 
 <!-- test: reassign-within-class -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	var flag = true
@@ -446,7 +426,6 @@ The argument-position bug in reverse: the bool's 1 payload would go back through
 register as the integer 1.
 
 <!-- test: return-bool-from-int-function -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -464,7 +443,6 @@ error E3005: <fragment>:6:2: Cannot return 'bool' from function declared to retu
 ```
 
 <!-- test: return-int-from-bool-function -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function isBig() returns bool
 	return 1
@@ -488,7 +466,6 @@ into CLASSES (bool vs number), and every alias, `ExitCode` included, is a number
 regressed, every program in the corpus would stop compiling.
 
 <!-- test: int-returned-as-exitcode -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 

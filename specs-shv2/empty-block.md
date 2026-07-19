@@ -91,7 +91,6 @@ error E3082: specs/fragments/empty-block/empty-for-range.test:4:2: empty block: 
 ```
 
 <!-- test: valid-nonempty-if -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	if true 'check'
@@ -105,7 +104,6 @@ end 'main'
 ```
 
 <!-- test: valid-empty-function -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function doNothing()
 end 'doNothing'

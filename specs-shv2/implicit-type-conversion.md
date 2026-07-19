@@ -128,7 +128,6 @@ end 'main'
 ```
 
 <!-- test: float-to-int-param-rejected -->
-<!-- targets: wasm32-wasi -->
 A `float` argument to an `int` parameter is a compile error, not a silent truncation. The fix the
 message names is `trunc(f)` -- which `float-to-int-param-explicit-trunc` below then compiles.
 ```maxon
@@ -149,7 +148,6 @@ error E3009: specs/fragments/implicit-type-conversion/float-to-int-param-rejecte
 ```
 
 <!-- test: float-to-int-param-explicit-trunc -->
-<!-- targets: wasm32-wasi -->
 The half that still works, and the reason the rejection above costs nothing: say which rounding you
 meant and the same program compiles. `trunc` truncates toward zero, so `3.7` is `3` -- the very
 value the implicit form used to produce silently.
@@ -171,7 +169,6 @@ end 'main'
 ```
 
 <!-- test: float-to-int-return-rejected -->
-<!-- targets: wasm32-wasi -->
 The rule is not special to arguments: a `float` meeting a declared `int` RETURN type is the same
 E3009. A rule drawn only at the call boundary would leave this one silent.
 ```maxon
@@ -244,7 +241,6 @@ error E3005: specs/fragments/implicit-type-conversion/no-string-to-int.test:11:9
 ```
 
 <!-- test: no-bool-to-int -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -263,7 +259,6 @@ error E3005: specs/fragments/implicit-type-conversion/no-bool-to-int.test:11:9: 
 ```
 
 <!-- test: no-int-to-bool -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)

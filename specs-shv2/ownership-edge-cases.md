@@ -113,7 +113,6 @@ end 'main'
 ```
 
 <!-- test: rc-return-transfers-ownership -->
-<!-- targets: wasm32-wasi -->
 Returning a struct skips its decref; caller receives ownership and frees it at its own scope exit.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -257,7 +256,6 @@ end 'main'
 ```
 
 <!-- test: rc-nested-struct-field-incref -->
-<!-- targets: wasm32-wasi -->
 When a struct is consumed into a struct-typed field, the outer's destructor cascade drops the inner field; both outer and inner are freed exactly once (the consumed argument moves, so the caller does not double-drop it).
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -289,7 +287,6 @@ end 'main'
 ```
 
 <!-- test: rc-nested-struct-deep-freed -->
-<!-- targets: wasm32-wasi -->
 Three-level nested struct: all three levels are freed when the outermost var leaves scope, each consumed one level up so no level is double-dropped.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -810,7 +807,6 @@ end 'main'
 ```
 
 <!-- test: rc-enum-no-struct-payload-freed -->
-<!-- targets: wasm32-wasi -->
 A simple enum enum (no struct payload) is freed correctly at scope exit.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -1190,7 +1186,6 @@ end 'main'
 ```
 
 <!-- test: rc-return-struct-literal -->
-<!-- targets: wasm32-wasi -->
 Returning a struct literal directly from a function must transfer ownership at rc=1.
 The callee constructs the struct (rc=0), increfs it for the assignment, and transfers
 ownership to the caller via KeepVars. The caller must not incref again.
@@ -1846,7 +1841,6 @@ hell0 world
 ```
 
 <!-- test: rc-string-concat-loop-no-leak -->
-<!-- targets: wasm32-wasi -->
 Repeatedly appending strings in a loop must not leak memory. Each append grows the buffer in-place; any old buffer freed during reallocation must be properly cleaned up.
 ```maxon
 function main() returns ExitCode

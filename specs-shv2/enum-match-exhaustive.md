@@ -27,7 +27,6 @@ Overlapping patterns are not allowed — each enum case must be covered by exact
 ## Tests
 
 <!-- test: enum-exhaustive.all-explicit -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 enum Color
 		red
@@ -49,7 +48,6 @@ end 'main'
 ```
 
 <!-- test: enum-exhaustive.single-range -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 enum Color
 		red
@@ -69,7 +67,6 @@ end 'main'
 ```
 
 <!-- test: enum-exhaustive.multiple-ranges -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 enum Priority
 		low
@@ -91,7 +88,6 @@ end 'main'
 ```
 
 <!-- test: enum-exhaustive.mix-explicit-and-range -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 enum Priority
 		low
@@ -113,7 +109,6 @@ end 'main'
 ```
 
 <!-- test: enum-exhaustive.int-backed-range-covers-upper-bound -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 enum Level
 	low = 10
@@ -138,7 +133,6 @@ end 'main'
 ```
 
 <!-- test: enum-exhaustive.int-backed-range-covers-lower-bound -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 enum Level
 	low = 10
@@ -163,7 +157,6 @@ end 'main'
 ```
 
 <!-- test: enum-exhaustive.int-backed-range-excludes-outside-case -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 enum Level
 	low = 10
@@ -188,7 +181,6 @@ end 'main'
 ```
 
 <!-- test: enum-exhaustive.int-backed-range-is-declaration-order-not-raw-order -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 enum Code
 	ok = 500
@@ -213,7 +205,6 @@ end 'main'
 ```
 
 <!-- test: enum-exhaustive.int-backed-range-declaration-order-matches-second-case -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 enum Code
 	ok = 500
@@ -238,7 +229,6 @@ end 'main'
 ```
 
 <!-- test: enum-exhaustive.expression -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 enum Status
 		pending
@@ -260,7 +250,6 @@ end 'main'
 ```
 
 <!-- test: enum-exhaustive.upto-range -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 enum Color
 		red
@@ -281,7 +270,6 @@ end 'main'
 ```
 
 <!-- test: enum-exhaustive.trailing-fallthrough -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 enum Color
 		red
@@ -337,7 +325,6 @@ end 'main'
 ```
 
 <!-- test: enum-exhaustive.float-backed-range -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 enum Threshold
 		low = 0.1
@@ -357,7 +344,6 @@ end 'main'
 ```
 
 <!-- test: error.enum-not-exhaustive -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 enum Color
 		red
@@ -378,7 +364,6 @@ error E2026: specs/fragments/enum-match-exhaustive/error.enum-not-exhaustive.tes
 ```
 
 <!-- test: error.enum-default-without-throws -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 enum Color
 		red
@@ -399,7 +384,6 @@ error E2046: specs/fragments/enum-match-exhaustive/error.enum-default-without-th
 ```
 
 <!-- test: error.enum-gap-in-ranges -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 enum Priority
 		low
@@ -421,7 +405,6 @@ error E2026: specs/fragments/enum-match-exhaustive/error.enum-gap-in-ranges.test
 ```
 
 <!-- test: error.enum-overlapping-ranges -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 enum Priority
 		low
@@ -443,7 +426,6 @@ error E2027: specs/fragments/enum-match-exhaustive/error.enum-overlapping-ranges
 ```
 
 <!-- test: error.enum-explicit-overlaps-range -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 enum Color
 		red
@@ -464,7 +446,6 @@ error E2027: specs/fragments/enum-match-exhaustive/error.enum-explicit-overlaps-
 ```
 
 <!-- test: enum-exhaustive.bare-case-names -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 enum Color
 		red
@@ -486,7 +467,6 @@ end 'main'
 ```
 
 <!-- test: enum-exhaustive.bare-case-range -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 enum Priority
 		low
@@ -508,7 +488,6 @@ end 'main'
 ```
 
 <!-- test: enum-exhaustive.bare-case-expression -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 enum Status
 		pending
@@ -531,7 +510,6 @@ end 'main'
 ```
 
 <!-- test: error.enum-qualified-case-name -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 enum Color
 		red

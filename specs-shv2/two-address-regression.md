@@ -71,7 +71,6 @@ mandatory, because an `imul x, x` in place would destroy `x`.
 ## Tests
 
 <!-- test: mul-loop -->
-<!-- targets: wasm32-wasi -->
 `product = product * i` over two loop-carried values. The `imul` reuse def coalesces
 into `product`'s register (`imulRegReg r8, r8, rcx`) — NO copy in the loop body.
 ```maxon
@@ -90,7 +89,6 @@ end 'main'
 ```
 
 <!-- test: sub-loop -->
-<!-- targets: wasm32-wasi -->
 `acc = acc - i` over two loop-carried values. The `sub` reuse def coalesces into
 `acc`'s register (`subRegReg` with dest == lhs) — NO copy in the loop body.
 ```maxon
@@ -109,7 +107,6 @@ end 'main'
 ```
 
 <!-- test: reuse-copy-outlives -->
-<!-- targets: wasm32-wasi -->
 `b = a - b` with `a` loop-invariant (used every iteration, so it outlives the `sub`).
 Here the allocator MUST materialize `mov b_new, a` before the `sub` — the one case that
 legitimately needs a reuse copy. The loop runs `b = 20 - b` three times from `b = 5`:
@@ -131,7 +128,6 @@ end 'main'
 ```
 
 <!-- test: same-value-twice -->
-<!-- targets: wasm32-wasi -->
 `x * x` and `x - x` read ONE value as BOTH operands of a two-address op. `x` OUTLIVES both
 (it is read again at the end), so both need a reuse copy — emit the `imul` in place and `x`
 is destroyed. `y * y` is the same op with its input DYING, so its dest coalesces; the value
@@ -162,7 +158,6 @@ end 'main'
 ```
 
 <!-- test: return-a-minus-b -->
-<!-- targets: wasm32-wasi -->
 `return a - b` — the R8 return hint and the reuse-dest hint want DIFFERENT registers for the
 same value. The fixed hint wins, so the `sub`'s dest takes R8 and the reuse copy becomes
 `mov r8, a`, after which the return move self-elides. `chainDiff` then chains two `sub`s, so
@@ -192,7 +187,6 @@ end 'main'
 ```
 
 <!-- test: deep-reuse-chain -->
-<!-- targets: wasm32-wasi -->
 FIVE two-address `sub`s that all reuse the SAME input, and `a` outlives every one of them (it
 is read again at the end). So EVERY `sub` needs its own `mov r_i, a` reuse copy — five copies,
 not one — and the copy-partner hint (`copyHint[a]` is set once, to `r1`) must not convince the
@@ -230,7 +224,6 @@ end 'main'
 ```
 
 <!-- test: neg-chain -->
-<!-- targets: wasm32-wasi -->
 Three chained two-address `neg`s. `x` OUTLIVES the first one (it is read again in `x * 100`),
 so that one needs a reuse copy; the two inner results each DIE at the next `neg`, so those
 coalesce and negate in place. Exactly one `mov` for three `neg`s — drop it and the first `neg`
@@ -262,7 +255,6 @@ end 'main'
 ```
 
 <!-- test: loop-reuse-transient-overflow -->
-<!-- targets: wasm32-wasi -->
 The reuse-copy transient is the SOLE cause of an overflow, INSIDE A LOOP. `b = a - b` with `a`
 loop-invariant: `a` outlives the `sub`, so the allocator materializes `mov b_new, a` before it
 — one extra register. Entering the `sub`, fourteen values are live (`k1`..`k11`, `a`, `b`, `i`)
@@ -312,7 +304,6 @@ end 'main'
 ```
 
 <!-- test: reuse-dest-cannot-coalesce -->
-<!-- targets: wasm32-wasi -->
 A reuse def whose DEST is confined and whose INPUT, on its own, is not — the case that would
 need a reuse copy the pressure model never counted, and the one the SCARCE-CLASS RULE exists
 to make impossible.

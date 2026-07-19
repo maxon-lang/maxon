@@ -39,7 +39,6 @@ the `return <int> → exit <int>` case — restricted to what the M1 parser acce
 to their milestones (M3/M4).
 
 <!-- test: return-literal -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	return 42
@@ -50,7 +49,6 @@ end 'main'
 ```
 
 <!-- test: no-main -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function notmain() returns ExitCode
 	return 42
@@ -61,7 +59,6 @@ error E3001: No 'main' function found
 ```
 
 <!-- test: main-no-return-type -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function main()
 	return

@@ -159,7 +159,6 @@ the run does that, which is why the run must reach every branch it can.
 ## Tests
 
 <!-- test: idle-across-loop -->
-<!-- targets: wasm32-wasi -->
 Fifteen values (`k1`..`k15`) are computed before a loop and summed after it, but none
 is touched inside the loop. Register pressure across the loop exceeds the pool, so the
 splitter stores several of them in the PREHEADER and reloads them after the loop — the
@@ -200,7 +199,6 @@ end 'main'
 ```
 
 <!-- test: straight-line-belady -->
-<!-- targets: wasm32-wasi -->
 Eighteen live values with no loop: depth-0 Belady eviction stores the values used
 furthest in the future and reloads each right before its use. Result is
 `sum(1..18) = 171`.
@@ -236,7 +234,6 @@ end 'main'
 ```
 
 <!-- test: rematerialized-constant -->
-<!-- targets: wasm32-wasi -->
 The constant `c` is used as a division divisor (which needs a register — it cannot be
 an immediate) and is live across fourteen other values, so it would push the pool over
 its limit. Instead of spilling it, the splitter REMATERIALIZES it: the fragment
@@ -272,7 +269,6 @@ end 'main'
 ```
 
 <!-- test: used-before-and-after-peak -->
-<!-- targets: wasm32-wasi -->
 `a1` is used BEFORE a high-pressure peak (`w = a1 + p`) and AGAIN after it (`z = a1 + peak`),
 while fifteen other values (`b1`..`b15`) are live at the peak. The splitter splits `a1`'s live
 range AT the peak — storing it at its DEF and reloading it before its post-peak use,
@@ -314,7 +310,6 @@ end 'main'
 ```
 
 <!-- test: six-values-live-across-call -->
-<!-- targets: wasm32-wasi -->
 Six values `a1`..`a6` are all live ACROSS a call to `sink`, but only five callee-saved registers
 survive a call — so the nominal pool of fourteen is not the binding constraint; the reduced pool
 of five AT the call is. The splitter treats the call as a pressure point against `pool ∖
@@ -346,7 +341,6 @@ end 'main'
 ```
 
 <!-- test: reuse-transient-overflow -->
-<!-- targets: wasm32-wasi -->
 At the two-address `d = a - rhs`, fourteen values are live entering the op (raw pressure equals
 the pool) AND the reuse input `a` OUTLIVES it — so the colorer materializes a `mov dest, a` before
 it, one extra register the peak-finder must count. The peak-finder adds the same reuse-copy
@@ -384,7 +378,6 @@ end 'main'
 ```
 
 <!-- test: multi-peak-two -->
-<!-- targets: wasm32-wasi -->
 `a` (= 100) is live across TWO disjoint pressure peaks — the `b`-sum and the `c`-sum, each
 of which alone exceeds the pool — and is read BETWEEN them (`u1 = a + s1`) and AFTER the
 second (`u2 = a + s2`). So `a` must be split out around *both* peaks: stored, reloaded for
@@ -442,7 +435,6 @@ end 'main'
 ```
 
 <!-- test: multi-peak-three -->
-<!-- targets: wasm32-wasi -->
 `a` (= 100) is live across THREE disjoint peaks (`b`, `c`, `d` sums) and read after each
 (`u1`, `u2`, `u3`), so its reload lineage is split three times — once per peak. `s1 = s2 =
 s3 = 91`, `u1 = u2 = u3 = 191`, `f(0) = 573`; `main` returns `0` iff correct.
@@ -510,7 +502,6 @@ end 'main'
 ```
 
 <!-- test: multi-peak-two-values -->
-<!-- targets: wasm32-wasi -->
 TWO independent values `a` (= 100) and `e` (= 50) are BOTH live across BOTH peaks and read
 between and after each — so the splitter maintains two separate reload lineages at once,
 each split around both peaks. `u1 = a + s1 = 191`, `w1 = e + s1 = 141`, `u2 = 191`, `w2 =
@@ -567,7 +558,6 @@ end 'main'
 ```
 
 <!-- test: multi-peak-across-call -->
-<!-- targets: wasm32-wasi -->
 `a` (= 100) crosses a straight-line peak (the `b`-sum, forcing it out) AND a `sink` CALL,
 whose reduced pool of five callee-saved registers is the binding constraint. `a` is read
 after the peak (`u1 = a + s1`) and after the call (`u2 = a + d… + r`), so its reload must
@@ -620,7 +610,6 @@ end 'main'
 ```
 
 <!-- test: remat-constant-live-only-around-the-back-edge -->
-<!-- targets: wasm32-wasi -->
 A REMAT victim must be killed at the peak, exactly as a spill victim must — and this is the
 program that proves it. The divisor `c` is a constant that needs a register (an `idiv` divisor
 cannot be an immediate), and its ONLY use is the loop header's `i mod c`, which sits BEFORE the
@@ -674,7 +663,6 @@ end 'main'
 ```
 
 <!-- test: forced-spill-with-edge-arg-before-the-peak -->
-<!-- targets: wasm32-wasi -->
 THE STORE ANCHOR IS THE DEF, and this program is why. `t` is used once BEFORE the call's peak —
 as the branch-edge ARG the `then` arm passes to `m`'s merge phi — and once after it, in the
 return sum. The old splitter anchored a store "after the value's last before-peak use", which
@@ -734,7 +722,6 @@ end 'main'
 ```
 
 <!-- test: values-confined-by-different-calls -->
-<!-- targets: wasm32-wasi -->
 The reduced pool at a call is a property of the VALUE, not of the call — a value live across a
 call is forbidden the 9 caller-saved registers for its *whole* live range, not merely at the call
 op. So the confinement can bite at a point that is **not itself a call**, and the peak-finder must
@@ -829,7 +816,6 @@ end 'main'
 ```
 
 <!-- test: loop-invariant-read-across-a-call-in-a-loop -->
-<!-- targets: wasm32-wasi -->
 SIX loop-invariants, each read BOTH BEFORE AND AFTER a call inside the loop. Every one of them is
 live across that call — so all six are confined to the five callee-saved registers, and one of them
 cannot stay in a register. But the split at the eviction point cannot cut ANY of their ranges: each
@@ -879,7 +865,6 @@ end 'main'
 ```
 
 <!-- test: loop-invariant-constant-read-across-a-call-in-a-loop -->
-<!-- targets: wasm32-wasi -->
 The same shape, but the sixth confined value is a CONSTANT (`c`, read as `c - i` on both sides of
 the call, which needs it in a register — a `sub`'s minuend cannot be an immediate). Five invariants
 `a1`..`a5` take the five callee-saved registers, and `c` is the one that cannot stay.

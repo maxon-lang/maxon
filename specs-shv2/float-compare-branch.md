@@ -91,7 +91,6 @@ arrives.
 ## Tests
 
 <!-- test: gt-else-edge-phi -->
-<!-- targets: wasm32-wasi -->
 The single-jump relational case. `r` is assigned only in the then-branch, so the merge block
 takes a phi and the ELSE edge carries `r`'s incoming `7`. `3.5 > 9.5` is false, so the else
 edge is the one taken and 7 is the value that must arrive.
@@ -111,7 +110,6 @@ end 'main'
 ```
 
 <!-- test: lt-operand-swap -->
-<!-- targets: wasm32-wasi -->
 `<` is lowered by SWAPPING the operands and emitting the `above` family, so this must agree
 with `gt-else-edge-phi` read backwards. A lowering that instead emitted `jb` would still
 pass THIS test — only `lt-nan-is-false` below can tell the two apart — so the pair has to be
@@ -132,7 +130,6 @@ end 'main'
 ```
 
 <!-- test: le-boundary-equal -->
-<!-- targets: wasm32-wasi -->
 `<=` swaps to `jae`, whose ZF=1 case is the one that distinguishes it from `ja`. Equal
 operands take the then-branch.
 ```maxon
@@ -151,7 +148,6 @@ end 'main'
 ```
 
 <!-- test: eq-ordered-else-edge-phi -->
-<!-- targets: wasm32-wasi -->
 `==` on two ORDERED, unequal operands: the `jp` is not taken, the `je` is not taken, and the
 else edge is reached by the fallthrough out of the SECOND block. That is the edge v1 got
 right. `r`'s incoming `7` must arrive on it.
@@ -171,7 +167,6 @@ end 'main'
 ```
 
 <!-- test: eq-ordered-then-edge-phi -->
-<!-- targets: wasm32-wasi -->
 The same lowering with the `je` TAKEN — the then edge, out of the second block, past a phi.
 ```maxon
 function main() returns ExitCode
@@ -189,7 +184,6 @@ end 'main'
 ```
 
 <!-- test: eq-nan-else-edge-phi -->
-<!-- targets: wasm32-wasi -->
 ⭐ **THE REGRESSION.** `nan == nan` is FALSE, and it is decided by the `jp` in the FIRST
 block — the edge v1's SSA destruction never rewired. `r`'s incoming `7` must arrive on it;
 v1's bug is exactly the case where it does not, and the value that arrives is whatever the
@@ -216,7 +210,6 @@ end 'main'
 ```
 
 <!-- test: ne-nan-then-edge-phi -->
-<!-- targets: wasm32-wasi -->
 The mirror: `nan != nan` is TRUE, IEEE's one predicate that is true on unordered, and here
 the `jp` takes the THEN edge. So this is the same first-block jump as `eq-nan-else-edge-phi`
 carrying a phi to the OTHER successor — a lowering that routed only the second block's jump
@@ -239,7 +232,6 @@ end 'main'
 ```
 
 <!-- test: lt-nan-is-false -->
-<!-- targets: wasm32-wasi -->
 `nan < x` must be FALSE. This is the case the operand swap buys: a `jb` lowering reads CF,
 which `ucomisd` SETS on unordered, so it would take the then-branch and return 1. Only an
 `above`-family jump on swapped operands returns 7.
@@ -262,7 +254,6 @@ end 'main'
 ```
 
 <!-- test: le-nan-is-false -->
-<!-- targets: wasm32-wasi -->
 `nan <= x` must be FALSE, for the same reason with ZF also set.
 ```maxon
 var zeroA = 0.0
@@ -283,7 +274,6 @@ end 'main'
 ```
 
 <!-- test: gt-nan-is-false -->
-<!-- targets: wasm32-wasi -->
 `nan > x` must be FALSE — the case that needs NO parity test, because `ja` requires CF=0 and
 unordered sets CF. It is here to pin that the lowering does NOT grow a `jp` it does not
 need: if this ever starts emitting one, the `above` family's whole reason for existing has
@@ -307,7 +297,6 @@ end 'main'
 ```
 
 <!-- test: float-cmp-materialized -->
-<!-- targets: wasm32-wasi -->
 A float compare whose result is a VALUE rather than a branch condition — it is stored into a
 `var` the merge reads, so it cannot be fused into a `jcc` and must materialize through
 `setcc`. The unordered case has to survive that path too: `nan == nan` materializes FALSE

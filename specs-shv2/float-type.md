@@ -44,7 +44,6 @@ end 'main'
 ## Tests
 
 <!-- test: basic-float -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let x = 3.14
@@ -60,7 +59,6 @@ end 'main'
 
 
 <!-- test: float-comparison -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let x = 3.5
@@ -77,7 +75,6 @@ end 'main'
 
 
 <!-- test: float-arithmetic -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let a = 10.0
@@ -92,7 +89,6 @@ end 'main'
 
 
 <!-- test: float-promotion -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let x = 5
@@ -107,7 +103,6 @@ end 'main'
 
 
 <!-- test: float-phi-loop-carried -->
-<!-- targets: wasm32-wasi -->
 A float ACCUMULATOR — the commonest float idiom there is. The loop header takes a phi whose
 value is a float, so the phi's own register class must be XMM. Every other float test in this
 suite keeps its floats in straight-line code, where no phi is minted at all.
@@ -128,7 +123,6 @@ end 'main'
 
 
 <!-- test: float-phi-through-branch -->
-<!-- targets: wasm32-wasi -->
 An if-merge phi carrying a float, guarded by an INT compare. The int guard is the point: it
 isolates the phi's class from the float-compare lowering, so a failure here can only be the
 phi. `float-compare-branch.md` puts a phi on a float compare's edges, but the value it carries
@@ -152,7 +146,6 @@ end 'main'
 
 
 <!-- test: float-phi-both-arms -->
-<!-- targets: wasm32-wasi -->
 Both arms assign the float, so the merge phi has two real incoming values rather than one
 incoming plus the fall-through definition.
 ```maxon

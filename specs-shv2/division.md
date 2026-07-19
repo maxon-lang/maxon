@@ -42,7 +42,6 @@ runtime fault handler (a later deliverable), so there is no compiler-inserted gu
 ## Tests
 
 <!-- test: div-simple -->
-<!-- targets: wasm32-wasi -->
 `20 / 4` = 5. The dividend `20` materializes into `RAX`, the divisor `4` into a
 non-`RAX`/`RDX` register (`rcx`), and the quotient is read from `RAX`.
 ```maxon
@@ -55,7 +54,6 @@ end 'main'
 ```
 
 <!-- test: mod-simple -->
-<!-- targets: wasm32-wasi -->
 `17 mod 5` = 2. Same `idiv`, but the REMAINDER is read from `RDX` instead of the
 quotient from `RAX`.
 ```maxon
@@ -68,7 +66,6 @@ end 'main'
 ```
 
 <!-- test: div-truncates -->
-<!-- targets: wasm32-wasi -->
 `100 / 7` = 14 — integer division truncates toward zero (14.28… → 14).
 ```maxon
 function main() returns ExitCode
@@ -80,7 +77,6 @@ end 'main'
 ```
 
 <!-- test: mod-remainder -->
-<!-- targets: wasm32-wasi -->
 `100 mod 7` = 2 (100 = 14·7 + 2).
 ```maxon
 function main() returns ExitCode
@@ -92,7 +88,6 @@ end 'main'
 ```
 
 <!-- test: div-precedence -->
-<!-- targets: wasm32-wasi -->
 `/` binds tighter than `+`: `10 + 20 / 4` is `10 + (20 / 4)` = 10 + 5 = 15, not
 `(10 + 20) / 4` = 7.
 ```maxon
@@ -105,7 +100,6 @@ end 'main'
 ```
 
 <!-- test: mod-precedence -->
-<!-- targets: wasm32-wasi -->
 `mod` sits at the multiplicative level alongside `*`, left-associative: `2 * 6 mod 4`
 is `((2 * 6) mod 4)` = `12 mod 4` = 0, not `2 * (6 mod 4)` = 4.
 ```maxon
@@ -118,7 +112,6 @@ end 'main'
 ```
 
 <!-- test: div-mod-variables -->
-<!-- targets: wasm32-wasi -->
 `/` and `mod` over VARIABLES, both dividing the same `a` by the same `b`. `a` and
 `b` are loop-free but each live across BOTH `idiv`s, so the allocator keeps them —
 and the first quotient, which must survive the second `idiv`'s `RAX`/`RDX` clobber —
@@ -137,7 +130,6 @@ end 'main'
 ```
 
 <!-- test: div-in-loop -->
-<!-- targets: wasm32-wasi -->
 Division inside a loop, where the divisor is the loop-carried counter `i`. `i` is
 live across every `idiv` AND updated each iteration, so it MUST be colored to a
 register that is neither `RAX` (the dividend) nor `RDX` (clobbered by `cqo`/`idiv`)

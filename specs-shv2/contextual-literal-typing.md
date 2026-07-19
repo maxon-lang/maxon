@@ -112,7 +112,6 @@ end 'main'
 ```
 
 <!-- test: int-vs-float-error -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let x = 5
@@ -128,7 +127,6 @@ error E3005: specs/fragments/contextual-literal-typing/int-vs-float-error.test:5
 ```
 
 <!-- test: float-vs-int-error -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let x = 5.0
@@ -144,7 +142,6 @@ error E3005: specs/fragments/contextual-literal-typing/float-vs-int-error.test:5
 ```
 
 <!-- test: int-literal-vs-float-error -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let x = 5.0
@@ -159,7 +156,6 @@ error E3005: specs/fragments/contextual-literal-typing/int-literal-vs-float-erro
 ```
 
 <!-- test: float-literal-vs-int-error -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let x = 5
@@ -253,7 +249,6 @@ end 'main'
 ```
 
 <!-- test: int-vs-int -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let a = 1000
@@ -269,7 +264,6 @@ end 'main'
 ```
 
 <!-- test: float-vs-float -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let a = 3.14

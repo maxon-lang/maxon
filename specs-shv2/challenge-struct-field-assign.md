@@ -15,7 +15,6 @@ Struct fields can be modified after the struct is created.
 ## Tests
 
 <!-- test: struct-field-reassignment -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -39,7 +38,6 @@ end 'main'
 ```
 
 <!-- test: immutable-field-assign-error -->
-<!-- targets: wasm32-wasi -->
 Assigning to an immutable (`let`) field should be a compile-time error.
 
 ```maxon
@@ -66,7 +64,6 @@ error E2013: specs/fragments/challenge-struct-field-assign/immutable-field-assig
 ```
 
 <!-- test: nested-struct-field-reassignment -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)

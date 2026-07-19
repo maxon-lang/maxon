@@ -30,7 +30,6 @@ M4) and `negate-float` (needs floats + `trunc`, later) are DEFERRED and recorded
 under `## Deferred` below.
 
 <!-- test: unary-minus -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let x = -42
@@ -43,7 +42,6 @@ end 'main'
 ```
 
 <!-- test: unary-minus-widened -->
-<!-- targets: wasm32-wasi -->
 **Negate of a NARROW value in a WIDER context — a wasm codegen regression test.** `r` is an
 `ExitCode` (a narrow ranged int) but `-r` is evaluated in an `int`-wide expression, so the neg's
 operand is one width and the neg itself a wider one. wasm materializes neg as `0 - operand`, and the
@@ -65,7 +63,6 @@ end 'main'
 ```
 
 <!-- test: double-negation -->
-<!-- targets: wasm32-wasi -->
 `- -x` fails at the second `-`: a unary operand is a primary, and a leading `-` is
 not a primary.
 ```maxon
@@ -86,7 +83,6 @@ in this `## Deferred` section — NOT `## Tests` — so the spec-test parser (wh
 scans only `## Tests`, up to the next `## ` heading) never extracts them, and
 they carry NO `<!-- test: … -->` marker. To re-enable: move the test up into
 `## Tests` and prefix it with its `<!-- test: NAME -->` marker.
-<!-- targets: wasm32-wasi -->
 
 ### negate-int
 

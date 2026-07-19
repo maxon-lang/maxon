@@ -30,7 +30,6 @@ what the bootstrap says. Only a genuine GP↔XMM crossing reaches the refusal be
 ## Tests
 
 <!-- test: error.int-and-float-arms -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let x = 1
@@ -46,7 +45,6 @@ error E2015: specs/fragments/match-expr-divergent-class/error.int-and-float-arms
 ```
 
 <!-- test: error.float-then-int-arms -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let x = 1

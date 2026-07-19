@@ -37,7 +37,6 @@ parameter NAMES carry one). That is an accepted, documented limitation, not a ne
 ## Tests
 
 <!-- test: field-unknown-type-read -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 
 type Value
@@ -58,7 +57,6 @@ error E3011: Unknown type 'Nonexistent'
 ```
 
 <!-- test: field-unknown-type-unread -->
-<!-- targets: wasm32-wasi -->
 An undeclared field type is a DECLARATION error, so it is reported even when no code ever reads
 the field. The walk is over the registry, not over the uses — which is what makes it a check on
 the declaration rather than an accident of a load site being present.

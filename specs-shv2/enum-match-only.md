@@ -57,7 +57,6 @@ The enclosing function must declare `throws MyError`. Callers must use `try`/`ot
 ## Tests
 
 <!-- test: error.enum-eq -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -79,7 +78,6 @@ error E3066: specs/fragments/enum-match-only/error.enum-eq.test:11:7: cannot com
 ```
 
 <!-- test: error.enum-ne -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -101,7 +99,6 @@ error E3066: specs/fragments/enum-match-only/error.enum-ne.test:11:7: cannot com
 ```
 
 <!-- test: error.enum-lt -->
-<!-- targets: wasm32-wasi -->
 An ORDERING operator on a union is refused exactly as `==`/`!=` are: a union carries no comparison of any kind, and `<` would compare two box addresses. The message names the operator the author actually wrote.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -154,7 +151,6 @@ error E3066: specs/fragments/enum-match-only/error.enum-eq-method.test:9:11: can
 ```
 
 <!-- test: error.enum-eq-associated -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -178,7 +174,6 @@ error E3066: specs/fragments/enum-match-only/error.enum-eq-associated.test:13:7:
 ```
 
 <!-- test: union-return -->
-<!-- targets: wasm32-wasi -->
 A payload-bearing union RETURNED across a call (OPEN #44, closed at P1.4a). The callee builds an owned heap box and MOVES it out; the caller ADOPTS it (`let c = make()`) — owned, dropped exactly once at scope exit, no leak (a leak is exit 101). The result is recognized as owned via a `named` + `isBoxed` LAYOUT lookup, not the tag: a boxed union and a bare enum both carry the `named` tag, but only the boxed one owns a box the caller must free.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -205,7 +200,6 @@ end 'main'
 ```
 
 <!-- test: error.return-wrong-union -->
-<!-- targets: wasm32-wasi -->
 A boxed union carries its NAME (`named`) at the parser, so the same aggregate identity check that
 rejects a wrong struct rejects a wrong union: returning a `Palette` where a `Shape` is declared would
 hand back the wrong boxed layout to be dropped under `Shape`'s destructor (OPEN #54). Union identity
@@ -238,7 +232,6 @@ error E3005: specs/fragments/enum-match-only/error.return-wrong-union.test:15:2:
 ```
 
 <!-- test: error.default-without-throws -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 enum Color
 	red

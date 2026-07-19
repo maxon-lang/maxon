@@ -26,7 +26,6 @@ the same question, in one place: `TypeRules.typesAgree`.
 ## Tests
 
 <!-- test: bool-and-int -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let flag = true
@@ -42,7 +41,6 @@ error E3005: specs/fragments/word-operator-mixed-operands/bool-and-int.test:4:15
 ```
 
 <!-- test: int-and-bool -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let flag = true
@@ -58,7 +56,6 @@ error E3005: specs/fragments/word-operator-mixed-operands/int-and-bool.test:4:12
 ```
 
 <!-- test: int-or-bool -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let flag = false
@@ -74,7 +71,6 @@ error E3005: specs/fragments/word-operator-mixed-operands/int-or-bool.test:4:12:
 ```
 
 <!-- test: bool-xor-int -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let flag = true

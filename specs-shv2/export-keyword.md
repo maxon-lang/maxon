@@ -103,7 +103,6 @@ The same model applies to **typealiases**: two exported typealiases with the sam
 ## Tests
 
 <!-- test: export-function-basic -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 // --- file: api/lib.maxon
 typealias Integer = int(i64.min to i64.max)
@@ -151,7 +150,6 @@ end 'main'
 ```
 
 <!-- test: non-export-function-works -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -169,7 +167,6 @@ end 'main'
 ```
 
 <!-- test: mixed-export-and-non-export -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 // --- file: api/lib.maxon
 typealias Integer = int(i64.min to i64.max)
@@ -291,7 +288,6 @@ end 'main'
 ```
 
 <!-- test: exported-function-cross-file -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 // --- file: api/helper.maxon
 typealias Integer = int(i64.min to i64.max)
@@ -310,7 +306,6 @@ end 'main'
 ```
 
 <!-- test: non-exported-function-same-file -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -534,7 +529,6 @@ end 'main'
 ```
 
 <!-- test: exported-var-cross-file -->
-<!-- targets: wasm32-wasi -->
 Cross-file access to an exported module-level var with a simple constant value.
 ```maxon
 // --- file: api/counter.maxon
@@ -578,7 +572,6 @@ end 'main'
 ```
 
 <!-- test: error.non-exported-var-cross-file -->
-<!-- targets: wasm32-wasi -->
 Non-exported module-level var should not be accessible from another file.
 ```maxon
 // --- file: state.maxon

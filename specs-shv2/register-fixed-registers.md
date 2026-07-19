@@ -49,7 +49,6 @@ value destroyed by an argument pre-move all surface as a wrong constant or a har
 ## Tests
 
 <!-- test: live-across-idiv-and-call -->
-<!-- targets: wasm32-wasi -->
 `a` is live across BOTH an `idiv` (it is the dividend, and is read again after) and a CALL.
 Its forbidden set is the UNION of two reductions — `{RAX, RDX}` from the divide and the nine
 caller-saved from the call — leaving only the five callee-saved. The quotient `q` is live
@@ -80,7 +79,6 @@ end 'main'
 ```
 
 <!-- test: div-and-mod-into-rdx-and-rax -->
-<!-- targets: wasm32-wasi -->
 THE TWO-CYCLE. `n / d`'s quotient is born in **RAX**; `n mod d`'s remainder is born in
 **RDX**. They are then passed as arguments 2 and 3, whose slots are **RDX** and **RAX** — so
 the two values must cross through exactly the pair `idiv` pinned, over physical-def `mov`s
@@ -109,7 +107,6 @@ end 'main'
 ```
 
 <!-- test: six-div-results-into-six-arg-slots -->
-<!-- targets: wasm32-wasi -->
 SIX `idiv` sequences whose results are all simultaneously live, feeding all six argument
 slots — including slot 1 (`RDX`) and slot 2 (`RAX`). Every earlier quotient is live across
 every later divide, so each is forbidden `{RAX, RDX}`, and each is additionally forbidden
@@ -142,7 +139,6 @@ end 'main'
 ```
 
 <!-- test: six-div-results-live-across-the-call -->
-<!-- targets: wasm32-wasi -->
 THE DEEPEST STACK IN THIS FILE. The same six `idiv` results, but every one is ALSO read
 AFTER the call. So each carries both reductions at once: `{RAX, RDX}` from the divides it is
 live across, and the nine caller-saved from the call — leaving the five callee-saved. SIX
@@ -186,7 +182,6 @@ end 'main'
 ```
 
 <!-- test: nested-div-as-divisor -->
-<!-- targets: wasm32-wasi -->
 `a / (b / c)` — the INNER quotient, born in `RAX` and hinted there, is the OUTER divide's
 DIVISOR. It must be out of `RAX` before `mov rax, a` overwrites it, and out of `RDX` before
 `cqo` fills that with the sign extension — and it must be out of both AT the `idiv`, which is
@@ -213,7 +208,6 @@ end 'main'
 ```
 
 <!-- test: nested-div-both-sides -->
-<!-- targets: wasm32-wasi -->
 `(a / b) / (c / d)` — THREE `idiv`s. The first quotient is live across the SECOND divide (so
 it is forbidden `RAX`/`RDX`) and then becomes the THIRD divide's DIVIDEND (so it is copied
 back INTO `RAX`); the second quotient is the third divide's DIVISOR (so it must stay OUT of
@@ -239,7 +233,6 @@ end 'main'
 ```
 
 <!-- test: divide-by-self -->
-<!-- targets: wasm32-wasi -->
 `x / x` and `x mod x` — the SAME virtual value is the dividend (read by the physical-def
 `mov rax, x`) AND the divisor (an explicit `idiv` operand). Two different mechanisms must
 agree about it: `applyForbidden` keeps it out of `RAX` because it is live across the
@@ -266,7 +259,6 @@ end 'main'
 ```
 
 <!-- test: divisor-live-across-call -->
-<!-- targets: wasm32-wasi -->
 The DIVISOR is live across a CALL, so it carries both constraints at once: forbidden the nine
 caller-saved (so it survives `bump`) and forbidden `RAX`/`RDX` (so the `idiv` can read it).
 Its only home is the callee-saved set, and the prologue must push it.
@@ -294,7 +286,6 @@ end 'main'
 ```
 
 <!-- test: div-result-crosses-a-call -->
-<!-- targets: wasm32-wasi -->
 The `idiv` RESULT is passed as an argument AND read after the call. Its birth register is
 `RAX` and the `mov q, rax` hints it there — but `RAX` is caller-saved, so the call forbids it,
 the fixed hint MISSES, and `q` must land callee-saved. It is then argument 0, so `mov rcx, q`
@@ -322,7 +313,6 @@ end 'main'
 ```
 
 <!-- test: idiv-under-loop-pressure -->
-<!-- targets: wasm32-wasi -->
 An `idiv` inside a loop with a genuine eleven-value working set. `k1`..`k9` are re-read every
 iteration, so the cold-spill splitter may NOT lift them out (Rule 2); the accumulator `sum` is
 live across the divide; and the loop counter `i` is the DIVISOR. All eleven are live across the

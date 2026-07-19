@@ -33,7 +33,6 @@ treats `isPure` as licence to move.
 ## Tests
 
 <!-- test: loop-reads-a-global-it-writes -->
-<!-- targets: wasm32-wasi -->
 The accumulator and the induction variable are BOTH globals, so the loop's every read is a
 load. `0+1+2+3+4 = 10`. A hoisted read of `i` would make the condition permanently true and
 the program would never terminate; a hoisted read of `acc` would return 4.
@@ -55,7 +54,6 @@ end 'main'
 ```
 
 <!-- test: loop-calls-a-function-that-writes-the-global -->
-<!-- targets: wasm32-wasi -->
 The write is not even in this function: `bump` stores to `counter`, and `main`'s loop reads
 it back through a call boundary. A load hoisted out of the loop would read 0 five times and
 return 0.
@@ -86,7 +84,6 @@ end 'main'
 ```
 
 <!-- test: global-read-twice-around-a-write -->
-<!-- targets: wasm32-wasi -->
 The same global is read, written, and read again in one straight-line block. The two reads
 must produce DIFFERENT values, so the second cannot be CSE'd onto the first — the same
 `isPure: false` that forbids the hoist forbids the fold.

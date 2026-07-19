@@ -45,7 +45,6 @@ makes the boundary between user identifiers and compiler internals explicit.
 ## Tests
 
 <!-- test: let-declaration -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let __foo = 5
@@ -57,7 +56,6 @@ error E2051: specs/fragments/reserved-double-underscore/let-declaration.test:3:6
 ```
 
 <!-- test: var-declaration -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	var __counter = 0
@@ -70,7 +68,6 @@ error E2051: specs/fragments/reserved-double-underscore/var-declaration.test:3:6
 ```
 
 <!-- test: function-declaration -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function __helper() returns ExitCode
 	return 0
@@ -85,7 +82,6 @@ error E2051: specs/fragments/reserved-double-underscore/function-declaration.tes
 ```
 
 <!-- test: function-parameter -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -103,7 +99,6 @@ error E2051: specs/fragments/reserved-double-underscore/function-parameter.test:
 ```
 
 <!-- test: type-declaration -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 type __Hidden
 	export var x as int
@@ -118,7 +113,6 @@ error E2051: specs/fragments/reserved-double-underscore/type-declaration.test:2:
 ```
 
 <!-- test: type-field -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 type Point
 	export var __x as int
@@ -134,7 +128,6 @@ error E2051: specs/fragments/reserved-double-underscore/type-field.test:3:13: id
 ```
 
 <!-- test: typealias-declaration -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 typealias __Score = int(0 to 100)
 
@@ -147,7 +140,6 @@ error E2051: specs/fragments/reserved-double-underscore/typealias-declaration.te
 ```
 
 <!-- test: enum-case -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 enum Color
 	red
@@ -183,7 +175,6 @@ error E2051: specs/fragments/reserved-double-underscore/closure-parameter.test:9
 ```
 
 <!-- test: enum-name -->
-<!-- targets: wasm32-wasi -->
 The bootstrap spec omits the enum/union NAME (only the enum CASE is covered), but the bootstrap rejects
 a `__`-prefixed enum name just as it does every other declaration — measured `E2051 @1:6`. shv2 guards it
 at `parseEnumDeclaration`'s name consume, the site distinct from `readEnumCaseInto` (which covers cases).
@@ -202,7 +193,6 @@ error E2051: specs/fragments/reserved-double-underscore/enum-name.test:2:6: iden
 ```
 
 <!-- test: union-name -->
-<!-- targets: wasm32-wasi -->
 The same guard covers a `union` name — `parseEnumDeclaration` handles both via `isUnion`, so ONE
 `requireUnreservedName` call reserves both.
 ```maxon

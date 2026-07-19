@@ -31,7 +31,6 @@ Both are verified against the bootstrap oracle, which produces the identical cod
 ## Tests
 
 <!-- test: error.other-type-cannot-read-private -->
-<!-- targets: wasm32-wasi -->
 `type B`'s method reads `type A`'s unexported field. Same file, different type. The diagnostic points
 at the FIELD token — the token that is wrong — never at the value it is read from.
 ```maxon
@@ -69,7 +68,6 @@ error E3014: specs/fragments/field-visibility-is-type-scoped/error.other-type-ca
 ```
 
 <!-- test: error.other-type-cannot-write-private -->
-<!-- targets: wasm32-wasi -->
 The WRITE half, pinned separately. `requireFieldAccessible` has one home and two callers, and this
 is the second: a rule taught to the read site alone would let a private field be WRITTEN from another
 type where reading it correctly reports. An accepted access that should have been refused is a wrong
@@ -110,7 +108,6 @@ error E3014: specs/fragments/field-visibility-is-type-scoped/error.other-type-ca
 ```
 
 <!-- test: own-type-reaches-its-own-private-field -->
-<!-- targets: wasm32-wasi -->
 The positive companion, and the reason the gate cannot simply be "reject every access through a
 binding": `type A`'s own method reaches A's unexported field through a LOCAL of its own type — not
 through `self`. This is the access the self-field path never sees, so it is the one that proves the

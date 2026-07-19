@@ -168,7 +168,6 @@ When you assign a string to another variable, they share storage. If either is m
 ## Tests
 
 <!-- test: basic-declaration -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let s = "hello"
@@ -183,7 +182,6 @@ end 'main'
 ```
 
 <!-- test: empty-string -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let s = ""
@@ -198,7 +196,6 @@ end 'main'
 ```
 
 <!-- test: long-string -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let s = "this string is longer than fifteen bytes"
@@ -213,7 +210,6 @@ end 'main'
 ```
 
 <!-- test: inequality -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let s = "hello"
@@ -228,7 +224,6 @@ end 'main'
 ```
 
 <!-- test: equality-with-logical-and -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let s = "hello"
@@ -244,7 +239,6 @@ end 'main'
 ```
 
 <!-- test: print-string -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let s = "hello"
@@ -260,7 +254,6 @@ hello
 ```
 
 <!-- test: print-literal -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	print("Hello, World!")
@@ -275,7 +268,6 @@ Hello, World!
 ```
 
 <!-- test: print-multiple-literals-and-global -->
-<!-- targets: arm64-macos, wasm32-wasi -->
 <!--
 	Foundation guard for the wasm print slice (Phase B builds on it): three DISTINCT literals
 	force three `.rdata` records + blobs + `buffer@0` fixups, so a fixup patched with the wrong
@@ -285,10 +277,10 @@ Hello, World!
 	resolves to `WasmImportCount + position`, not its bare position, once print pushed the import
 	count to three). Deterministic exit (b - a - 5 = 15 - 10 - 5 = 0) plus exact stdout.
 
-	Gated to arm64-macos + wasm32-wasi, NOT x64-windows: its committed x64 codegen golden must be
-	regenerated on a Windows host (the frontend's `os()` follows the host), so authoring it here
-	would bake a macOS-host x64 fragment. The wasm behaviour it guards is target-agnostic; arm64
-	is the second target to prove the same program agrees natively.
+	Runs on ALL targets (unrestricted). Its wasm run is the point (run-checked, no golden); arm64's
+	codegen golden is committed. NOTE its x64-windows golden must be authored on a Windows host — the
+	frontend's `os()` follows the host, so a macOS-authored x64 fragment would be wrong. That is the
+	standard cross-host golden convention (do not regenerate x64 goldens on macOS), not a run-gate.
 -->
 ```maxon
 var total = 0
@@ -315,7 +307,6 @@ foobarbaz
 ```
 
 <!-- test: string-interpolation-concatenation -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let a = "hello"

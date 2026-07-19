@@ -34,7 +34,6 @@ comparison-condition `break` loop compiles and runs correctly, but no such case 
 verbatim in `specs/break.md`. All deferred cases live under `## Deferred`.
 
 <!-- test: break.error-continue-own-label -->
-<!-- targets: wasm32-wasi -->
 Labelling a `continue` with its own (innermost) loop's label is redundant.
 ```maxon
 function main() returns ExitCode
@@ -51,7 +50,6 @@ error E2048: <fragment>:6:12: 'continue' with label 'loop' targets its own loop;
 ```
 
 <!-- test: break.multiple-conditions -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	var x = 5
@@ -78,7 +76,6 @@ this `## Deferred` section — NOT `## Tests` — so the spec-test parser (which
 only `## Tests`, up to the next `## ` heading) never extracts them, and they carry
 NO `<!-- test: … -->` marker. To re-enable: move the test up into `## Tests` and
 prefix it with its `<!-- test: NAME -->` marker.
-<!-- targets: wasm32-wasi -->
 
 ### break.in-loop / break.with-if / break.labeled-break-outer / break.labeled-break-triple-nested / break.error-break-own-label
 

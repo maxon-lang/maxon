@@ -75,7 +75,6 @@ var vert = dir.isVertical() // true
 ## Tests
 
 <!-- test: simple-enum -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 enum Direction
 	north
@@ -100,7 +99,6 @@ end 'main'
 ```
 
 <!-- test: enum-assignment -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 enum Color
 	red
@@ -124,7 +122,6 @@ end 'main'
 ```
 
 <!-- test: enum-not-equal -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 enum Status
 	pending
@@ -147,7 +144,6 @@ end 'main'
 ```
 
 <!-- test: enum-comparison -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 enum Status
 	pending
@@ -169,7 +165,6 @@ end 'main'
 ```
 
 <!-- test: enum-function-param -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 enum Status
 	on
@@ -197,7 +192,6 @@ end 'main'
 ```
 
 <!-- test: enum-return-type -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 enum Result
 	success
@@ -225,7 +219,6 @@ end 'main'
 ```
 
 <!-- test: float-backed -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 enum FloatBacked
 	North = 1.1
@@ -306,7 +299,6 @@ end 'main'
 ```
 
 <!-- test: error.duplicate-case -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 enum Color
 	red
@@ -322,7 +314,6 @@ error E3030: specs/fragments/enums-simple/error.duplicate-case.test:4:2: duplica
 ```
 
 <!-- test: error.unknown-enum-case -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 enum Color
 	red
@@ -339,7 +330,6 @@ error E3034: specs/fragments/enums-simple/error.unknown-enum-case.test:8:11: unk
 ```
 
 <!-- test: error.duplicate-raw-value -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 enum Status
 	ok = 200
@@ -355,7 +345,6 @@ error E3031: specs/fragments/enums-simple/error.duplicate-raw-value.test:4:2: du
 ```
 
 <!-- test: error.raw-value-type-mismatch -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 enum Status
 	ok = 100
@@ -371,7 +360,6 @@ error E3032: specs/fragments/enums-simple/error.raw-value-type-mismatch.test:4:2
 ```
 
 <!-- test: keyword-as-case-name -->
-<!-- targets: wasm32-wasi -->
 Keywords can be used as enum case names (e.g., `function`, `return`, `end`).
 ```maxon
 enum TokenType

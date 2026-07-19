@@ -259,10 +259,9 @@ export function selectedTests(specFile SpecFile, specName String, filter String,
 	// the pool resolve it to the same value (the worker re-parses the parent's forwarded `--target`),
 	// so this is the string every test's `targets` list is checked against.
 	let effectiveTargetKey = targetToString(effectiveTarget)
-	let nativeKeys = nativeTargetKeys()
 
 	for test in specFile.tests 'eachTest'
-		if selectedByFilter(specName, testName: test.name, filter: filter) and selectedByTarget(test, effectiveTargetKey: effectiveTargetKey, nativeKeys: nativeKeys) 'isSelected'
+		if selectedByFilter(specName, testName: test.name, filter: filter) and selectedByTarget(test, effectiveTargetKey: effectiveTargetKey) 'isSelected'
 			selected.push(test)
 		end 'isSelected'
 	end 'eachTest'
@@ -270,37 +269,18 @@ export function selectedTests(specFile SpecFile, specName String, filter String,
 	return selected
 end 'selectedTests'
 
-// Does this test run under `effectiveTargetKey`? The rule is ADDITIVE and backward-compatible (a
-// coordinator design ruling), and it is the whole reason a wasm marker can enable a cross run WITHOUT
-// disturbing the two native hosts:
-//
-//   nativeTargets  = { x64-windows, arm64-macos }   (nativeKeys)
-//   listedNative   = test.targets ∩ nativeTargets
-//   effectiveNative = listedNative empty ? nativeTargets : listedNative
-//   under a NATIVE effective target T:  runs iff T ∈ effectiveNative
-//   under a CROSS  effective target T:  runs iff T ∈ test.targets   (only when explicitly listed)
-//
-// Consequences, all checked against the pre-existing behaviour:
-//   • a marker-LESS test lists no native ⇒ effectiveNative = both natives ⇒ runs on either host
-//     (UNCHANGED), and under a cross target it is NOT listed ⇒ SKIPPED;
-//   • an existing native marker (`x64-windows`) lists a native ⇒ runs only on that host (UNCHANGED);
-//   • a new `wasm32-wasi` marker lists NO native ⇒ effectiveNative = both natives ⇒ STILL runs on
-//     both hosts, and additionally runs under `--target=wasm32-wasi`.
-//
-// A gated-out test is SKIPPED — not selected, not run, not failed — exactly as a draft or
-// filtered-out test is, which is why this lives beside `selectedByFilter` under the one door.
-function selectedByTarget(test SpecTest, effectiveTargetKey String, nativeKeys StringArray) returns bool
-	if keyInList(effectiveTargetKey, list: nativeKeys) 'nativeTarget'
-		// effectiveNative = listedNative if the test names ANY native target, else all natives. So
-		// under a native target the test runs iff it names no native target (⇒ both natives ⇒ this
-		// one) OR it names this one specifically.
-		if not testListsAnyNativeTarget(test, nativeKeys: nativeKeys) 'noNativeListed'
-			return true
-		end 'noNativeListed'
-		return keyInList(effectiveTargetKey, list: test.targets)
-	end 'nativeTarget'
-
-	// A CROSS target (wasm32-wasi): the test runs ONLY when it explicitly lists this target.
+// Does this test run under `effectiveTargetKey`? UNIFORM rule for EVERY target (native and cross
+// alike): a test runs on ALL targets unless it declares a `<!-- targets: … -->` RESTRICTION, in which
+// case it runs ONLY on the listed targets. A marker is a restriction for a TECHNICAL reason — an
+// ISA-specific register-allocation test (its register pool), a `RequiredData` test (the native
+// `.data` section a wasm module has no equivalent of), a fault-handler-dependent test — NEVER a
+// per-target opt-in. So an unmarked test runs on x64-windows, arm64-macos AND wasm32-wasi; there is no
+// marking to "enable" a target. A gated-out test is SKIPPED (not run, not failed), exactly as a draft
+// or filtered-out test is, which is why this lives beside `selectedByFilter` under the one door.
+function selectedByTarget(test SpecTest, effectiveTargetKey String) returns bool
+	if test.targets.isEmpty() 'unrestricted'
+		return true
+	end 'unrestricted'
 	return keyInList(effectiveTargetKey, list: test.targets)
 end 'selectedByTarget'
 
@@ -321,16 +301,6 @@ end 'nativeTargetKeys'
 function isCrossTarget(target Target) returns bool
 	return not keyInList(targetToString(target), list: nativeTargetKeys())
 end 'isCrossTarget'
-
-// Whether any of the test's declared targets is a native one — i.e. `listedNative` is non-empty.
-function testListsAnyNativeTarget(test SpecTest, nativeKeys StringArray) returns bool
-	for target in test.targets 'eachTarget'
-		if keyInList(target, list: nativeKeys) 'native'
-			return true
-		end 'native'
-	end 'eachTarget'
-	return false
-end 'testListsAnyNativeTarget'
 
 // Whether `key` appears in `list`, by String equality — the one membership walk the two callers
 // (a test's declared `targets`, and the native-key set) share. An explicit walk rather than an

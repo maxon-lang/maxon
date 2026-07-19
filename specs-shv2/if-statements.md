@@ -65,7 +65,6 @@ ever entered. `else-if-chain-every-arm` is the shv2-native test that closes that
 puts the chain in a helper and calls it once per arm, so every arm executes.
 
 <!-- test: if-statements.simple -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let x = 10
@@ -80,7 +79,6 @@ end 'main'
 ```
 
 <!-- test: if-statements.else -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let x = 5
@@ -96,7 +94,6 @@ end 'main'
 ```
 
 <!-- test: if-statements.else-false -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let x = 3
@@ -112,7 +109,6 @@ end 'main'
 ```
 
 <!-- test: if-statements.else-if-chain -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let x = 2
@@ -130,7 +126,6 @@ end 'main'
 ```
 
 <!-- test: if-statements.nested -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let x = 3
@@ -150,7 +145,6 @@ end 'main'
 ```
 
 <!-- test: else-if-chain-every-arm -->
-<!-- targets: wasm32-wasi -->
 `if-statements.else-if-chain` and `if-statements.nested` each run with ONE `x`, so exactly
 one arm of the chain is ever entered — the other arms are compiled and never executed, and a
 miscompiled arm among them (a wrong constant, a branch to the wrong block) is invisible to the
@@ -201,7 +195,6 @@ end 'main'
 ```
 
 <!-- test: if-statements.else-if-in-helper -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -232,7 +225,6 @@ end 'main'
 
 
 <!-- test: if-statements.nested-if-with-multiple-returns -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -265,7 +257,6 @@ in this `## Deferred` section — NOT `## Tests` — so the spec-test parser (wh
 scans only `## Tests`, up to the next `## ` heading) never extracts them, and
 they carry NO `<!-- test: … -->` marker. To re-enable: move the test up into
 `## Tests` and prefix it with its `<!-- test: NAME -->` marker.
-<!-- targets: wasm32-wasi -->
 
 ### if-statements.nested-if-with-scoped-string
 

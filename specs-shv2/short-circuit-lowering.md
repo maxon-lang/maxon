@@ -42,7 +42,6 @@ been a silent coverage regression dressed up as a cleanup.
 ## Tests
 
 <!-- test: rhs-is-evaluated-when-lhs-does-not-decide -->
-<!-- targets: wasm32-wasi -->
 The other direction, and the one an over-eager elision would break: `and` MUST evaluate its
 right operand when the left is true, and `or` MUST when the left is false. All four
 truth-table entries of each operator, folded into one exit code.
@@ -84,7 +83,6 @@ end 'main'
 ```
 
 <!-- test: comparison-operands -->
-<!-- targets: wasm32-wasi -->
 The operands of a short-circuit may be COMPARISONS, and this is the case that forces
 boolean materialization: the right-hand compare's result flows into the merge phi, so it
 cannot stay in EFLAGS — it must be written to a register (`setcc`).
@@ -111,7 +109,6 @@ end 'main'
 ```
 
 <!-- test: result-bound-to-a-let -->
-<!-- targets: wasm32-wasi -->
 A short-circuit is an EXPRESSION, not a statement: its merged value can be bound and read
 later, in a block the merge does not terminate.
 
@@ -146,7 +143,6 @@ end 'main'
 ```
 
 <!-- test: not-over-a-short-circuit -->
-<!-- targets: wasm32-wasi -->
 `not` applied to a short-circuit's merged value. The `not` must be the LOGICAL one (flip
 bit 0) — the integer one would turn `false` into -1, which still reads as TRUE in a
 condition, so a wrong opcode here is invisible to the value and fatal to the branch.
@@ -179,7 +175,6 @@ end 'main'
 ```
 
 <!-- test: in-a-call-argument -->
-<!-- targets: wasm32-wasi -->
 A short-circuit inside a call ARGUMENT moves the block the call itself must be emitted
 into. Emitting the call where it started would strand it on a path its own arguments never
 reach.
@@ -214,7 +209,6 @@ end 'main'
 ```
 
 <!-- test: in-a-return-value -->
-<!-- targets: wasm32-wasi -->
 `return a and b` — the `ret` terminator belongs on the block the expression ENDED in (the
 merge), not the one it started in. Put it on the wrong block and the merge is left
 unterminated and the returned value is unreachable from the `ret`.
@@ -252,7 +246,6 @@ end 'main'
 ```
 
 <!-- test: loop-carried-var-across-a-short-circuit-condition -->
-<!-- targets: wasm32-wasi -->
 The same shape, but the loop actually RUNS and carries a `var` through its header phis while
 the condition short-circuits every iteration. The exit's phi operands come from the block the
 condition ended in, not the header — get that wrong and the post-loop value is the pre-loop
@@ -285,7 +278,6 @@ end 'main'
 ```
 
 <!-- test: nested-in-the-right-operand -->
-<!-- targets: wasm32-wasi -->
 A short-circuit nested inside another's RIGHT operand: the inner one's blocks slot between
 the outer's rhs and merge, and the outer's merge edge must come from the INNER merge (the
 block control actually leaves the rhs in), not from the rhs block it started in.
@@ -318,7 +310,6 @@ end 'main'
 ```
 
 <!-- test: integer-and-is-bitwise-not-logical -->
-<!-- targets: wasm32-wasi -->
 `and` on INTEGERS is the bit operation, and this is the case that tells the two readings
 apart: `12 and 3` is `1100 & 0011` = **0**, where a logical reading of two non-zero
 (truthy) operands would be `true`. It also proves the integer path evaluates both operands —

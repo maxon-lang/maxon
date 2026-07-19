@@ -141,7 +141,6 @@ end 'loadConfig'
 ## Tests
 
 <!-- test: error.enum-simple-error -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 // Simple enum error type
 enum MyError implements Error
@@ -158,7 +157,6 @@ end 'main'
 ```
 
 <!-- test: error.enum-int-backed-error -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 // Int-backed enum error type (type inferred from values)
 enum MyError implements Error
@@ -418,7 +416,6 @@ end 'main'
 ```
 
 <!-- test: error.main-cannot-throw -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 // main cannot be declared with throws
 enum MyError implements Error
@@ -434,7 +431,6 @@ error E3054: specs/fragments/error-handling/error.main-cannot-throw.test:7:10: m
 ```
 
 <!-- test: error.otherwise-type-mismatch -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -458,7 +454,6 @@ error E3059: specs/fragments/error-handling/error.otherwise-type-mismatch.test:1
 ```
 
 <!-- test: error.throwing-function-requires-try -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -482,7 +477,6 @@ error E3057: specs/fragments/error-handling/error.throwing-function-requires-try
 ```
 
 <!-- test: error.throwing-method-requires-try -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -504,7 +498,6 @@ error E3057: specs/fragments/error-handling/error.throwing-method-requires-try.t
 ```
 
 <!-- test: error.try-on-non-throwing-function -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -524,7 +517,6 @@ error E3055: specs/fragments/error-handling/error.try-on-non-throwing-function.t
 ```
 
 <!-- test: error.try-on-non-throwing-method -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 typealias Int = int(i64.min to i64.max)
 
@@ -543,7 +535,6 @@ error E3055: specs/fragments/error-handling/error.try-on-non-throwing-method.tes
 ```
 
 <!-- test: error.try-on-non-throwing-instance-method -->
-<!-- targets: wasm32-wasi -->
 
 Regression: `try recv.method()` on a non-throwing **instance method** must also
 report E3055. The error-handling check originally inspected only `call` /
@@ -578,7 +569,6 @@ error E3055: specs/fragments/error-handling/error.try-on-non-throwing-instance-m
 ```
 
 <!-- test: error.otherwise-without-try -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -600,7 +590,6 @@ error E3058: specs/fragments/error-handling/error.otherwise-without-try.test:13:
 ```
 
 <!-- test: error.otherwise-ignore-in-assignment -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -624,7 +613,6 @@ error E3059: specs/fragments/error-handling/error.otherwise-ignore-in-assignment
 ```
 
 <!-- test: error.otherwise-block-fallthrough-in-assignment -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -653,7 +641,6 @@ error E3059: specs/fragments/error-handling/error.otherwise-block-fallthrough-in
 ```
 
 <!-- test: error.void-try-in-assignment -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 // Assigning from a void-returning try call is an error
 enum MyError implements Error
@@ -1509,7 +1496,6 @@ end 'main'
 ```
 
 <!-- test: error.throw-borrowed-union-unsupported -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -1571,7 +1557,6 @@ end 'main'
 ```
 
 <!-- test: error.otherwise-wrong-struct -->
-<!-- targets: wasm32-wasi -->
 An `otherwise` fallback of a DIFFERENT named aggregate than the try's result would merge into the
 owned result phi and be dropped under the RESULT's destructor — a wild free (OPEN #54; this program
 compiled clean and exited 139 before the check). The scalar checks below cannot see it: `BoxA` and

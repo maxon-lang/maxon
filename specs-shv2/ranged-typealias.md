@@ -230,7 +230,6 @@ end 'main'
 ### Ranged type as function parameter and return
 
 <!-- test: function-param-return -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 typealias Score = int(0 to 100)
 
@@ -314,7 +313,6 @@ end 'main'
 ### Integer division truncates
 
 <!-- test: int-division-truncates -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let a = 7
@@ -354,7 +352,6 @@ end 'main'
 ### Return value range check: literal in range
 
 <!-- test: return-literal-in-range -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 typealias Score = int(0 to 100)
 
@@ -373,7 +370,6 @@ end 'main'
 ### Return value range check: runtime pass
 
 <!-- test: return-runtime-check-pass -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 typealias Score = int(0 to 100)
 
@@ -507,7 +503,6 @@ end 'main'
 A typealias with `int(0 to u64.max)` covers all 64-bit values and should not emit runtime range checks.
 
 <!-- test: type-qualified-u64-max -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 typealias BigId = int(0 to u64.max)
 
@@ -782,7 +777,6 @@ error E3005: specs/fragments/ranged-typealias/error.mismatched-type-bounds.test:
 ### Range identifier in variable assignment
 
 <!-- test: range-id-assign -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let x = u16.max
@@ -796,7 +790,6 @@ end 'main'
 ### Range identifier in comparison
 
 <!-- test: range-id-comparison -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let x = i32.max
@@ -813,7 +806,6 @@ end 'main'
 ### Range identifier i8.min in expression
 
 <!-- test: range-id-i8-min -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let x = i8.min
@@ -827,7 +819,6 @@ end 'main'
 ### Range identifier in arithmetic
 
 <!-- test: range-id-arithmetic -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let x = u8.max + 1

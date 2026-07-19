@@ -32,7 +32,6 @@ error E3019: specs/fragments/immutable-method-call/push-on-let-array-error.test:
 ```
 
 <!-- test: append-on-let-string-error -->
-<!-- targets: wasm32-wasi -->
 Calling `append` on a `let` string should produce a compile-time error.
 
 ```maxon

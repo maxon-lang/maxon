@@ -150,7 +150,6 @@ let d = a shl count   // 0 — the same answer the folded form gives
 ## Tests
 
 <!-- test: bitwise-and -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let a = 12
@@ -163,7 +162,6 @@ end 'main'
 ```
 
 <!-- test: bitwise-or -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let a = 12
@@ -176,7 +174,6 @@ end 'main'
 ```
 
 <!-- test: bitwise-xor -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let a = 12
@@ -189,7 +186,6 @@ end 'main'
 ```
 
 <!-- test: left-shift -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let a = 1
@@ -201,7 +197,6 @@ end 'main'
 ```
 
 <!-- test: right-shift -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let a = 16
@@ -213,7 +208,6 @@ end 'main'
 ```
 
 <!-- test: shift-chained -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let a = 1
@@ -225,7 +219,6 @@ end 'main'
 ```
 
 <!-- test: bitwise-and-or-precedence -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	// and has higher precedence than or
@@ -238,7 +231,6 @@ end 'main'
 ```
 
 <!-- test: bitwise-xor-precedence -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	// and has higher precedence than xor
@@ -251,7 +243,6 @@ end 'main'
 ```
 
 <!-- test: shr-is-arithmetic -->
-<!-- targets: wasm32-wasi -->
 ⚠ THE CASE NEITHER SPEC FILE PINNED, WHICH IS WHY THE TWO COMPILERS DIVERGED. Go: "the shift
 operators implement arithmetic shifts if the left operand is a signed integer". A bare Maxon `int`
 IS signed, so `shr` sign-propagates on one. Unpinned, the bootstrap zero-filled — `(0-8) shr 60`
@@ -278,7 +269,6 @@ end 'main'
 ```
 
 <!-- test: shr-signedness-is-the-left-operand-only -->
-<!-- targets: wasm32-wasi -->
 A shift is NOT symmetric in its operands: the right one is a DISTANCE, and its declared type says
 nothing about how the shift fills. Only the value being SHIFTED decides that.
 
@@ -319,7 +309,6 @@ end 'main'
 ```
 
 <!-- test: shr-nonnegative-zero-fills -->
-<!-- targets: wasm32-wasi -->
 The other half of the same rule: an arithmetic shift of a NON-NEGATIVE value fills with a sign bit
 that is 0, so it zero-fills naturally. Making `shr` arithmetic did not change this.
 ```maxon
@@ -332,7 +321,6 @@ end 'main'
 ```
 
 <!-- test: shl-count-negative -->
-<!-- targets: wasm32-wasi -->
 A negative shift count reads as "shift the other way" and is not that at all: masked, `shl -1`
 silently became `shl 63` — the MAXIMUM left shift, a wrong answer with the opposite sign. The
 compiler is holding the count, so it rejects it.
@@ -347,7 +335,6 @@ error E2054: specs/fragments/bitwise-operators/shl-count-negative.test:4:15: Shi
 ```
 
 <!-- test: shr-count-negative -->
-<!-- targets: wasm32-wasi -->
 The same rule, asked of `shr`.
 ```maxon
 function main() returns ExitCode
@@ -360,7 +347,6 @@ error E2054: specs/fragments/bitwise-operators/shr-count-negative.test:4:15: Shi
 ```
 
 <!-- test: shl-count-negative-named -->
-<!-- targets: wasm32-wasi -->
 ⚠ THE CASE THE CHECK'S OWN MOTIVATING EXAMPLE MISSED. The count is the same -1; only its SPELLING
 differs. A check that asks "is this token span a literal?" does not see it. A check that asks the
 CONSTANT FOLDER — which is holding the value — does.
@@ -376,7 +362,6 @@ error E2054: specs/fragments/bitwise-operators/shl-count-negative-named.test:5:1
 ```
 
 <!-- test: shl-count-negative-parenthesized -->
-<!-- targets: wasm32-wasi -->
 `-(1)` is -1 written so that a paren-stripping loop runs BEFORE the `-` is ever tested, and so
 never finds a literal to reject. The folder has no such blind spot.
 ```maxon
@@ -390,7 +375,6 @@ error E2054: specs/fragments/bitwise-operators/shl-count-negative-parenthesized.
 ```
 
 <!-- test: shl-count-64 -->
-<!-- targets: wasm32-wasi -->
 ⚠ NOT AN ERROR. 64 shifts every bit out, which is exactly what Go says it means — "there is no
 upper limit on the shift count". Rejecting it (which this compiler briefly did) OVER-rejects a
 correct program; MASKING it (which the hardware does) computes `a shl 0` and leaves `a` UNCHANGED,
@@ -409,7 +393,6 @@ end 'main'
 ```
 
 <!-- test: shl-count-100 -->
-<!-- targets: wasm32-wasi -->
 The commit message's own example — `1 shl 100` — through both a named constant and a literal.
 Masked, it was `1 shl 36` = 68719476736.
 ```maxon
@@ -430,7 +413,6 @@ end 'main'
 ```
 
 <!-- test: shr-count-past-width -->
-<!-- targets: wasm32-wasi -->
 A right shift past the width saturates to the SIGN, not to zero — because a sign-filling shift that
 moves every bit out leaves the sign behind. `x shr 63` already IS the sign, which is why the
 compiler saturates the COUNT here rather than selecting the result.
@@ -450,7 +432,6 @@ end 'main'
 ```
 
 <!-- test: shift-count-arithmetic -->
-<!-- targets: wasm32-wasi -->
 A count the compiler can fold is a count it can check, however it is spelled. All three of these
 are a count of 64, and none of them is a literal.
 ```maxon
@@ -473,7 +454,6 @@ end 'main'
 ```
 
 <!-- test: shift-by-variable-count -->
-<!-- targets: wasm32-wasi -->
 ⚠ THE GUARD AGAINST OVER-REJECTING, AND THE PROOF THE FOLD AND THE CODEGEN AGREE. A count that
 arrives as a VALUE is still legal — and it must give the SAME answer the folded form gives. The
 hardware masks the `cl` count to its low 6 bits, so an unguarded `7 shl 64` would be `7 shl 0` = 7.
@@ -493,7 +473,6 @@ end 'main'
 ```
 
 <!-- test: shift-by-parameter-count -->
-<!-- targets: wasm32-wasi -->
 The same, with a count NO pass can see: a parameter. This is the case the GUARD exists for —
 unguarded, 65 masks to 1 and `7 shl 65` is 14; 100 masks to 36. Every answer here matches the
 constant-folded one above, which is the whole point: one rule, two readings.
@@ -562,7 +541,6 @@ panic at shift-by-negative-runtime-count-panics.test:5: negative shift count
 ```
 
 <!-- test: shift-vs-comparison -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	// Shift has higher precedence than comparison
@@ -578,7 +556,6 @@ end 'main'
 ```
 
 <!-- test: bitwise-with-logical -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let a = 5 and 3        // 1
@@ -593,7 +570,6 @@ end 'main'
 ```
 
 <!-- test: bit-masking -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let flags = 5         // binary 101 (bit 0 and bit 2 set)
@@ -605,7 +581,6 @@ end 'main'
 ```
 
 <!-- test: bit-clear -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	var flags = 7        // binary 111
@@ -619,7 +594,6 @@ end 'main'
 ```
 
 <!-- test: power-of-two -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	// Calculate 2^n using shift
@@ -632,7 +606,6 @@ end 'main'
 ```
 
 <!-- test: divide-by-power-of-two -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	// Divide by 4 using shift
@@ -645,7 +618,6 @@ end 'main'
 ```
 
 <!-- test: multiply-by-power-of-two -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	// Multiply by 8 using shift
@@ -689,7 +661,6 @@ end 'main'
 ```
 
 <!-- test: bitwise-not-double -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let a = 42
@@ -701,7 +672,6 @@ end 'main'
 ```
 
 <!-- test: bitwise-not-masking -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let value = 125    // 0x7D
@@ -819,7 +789,6 @@ end 'main'
 ```
 
 <!-- test: shr-unsigned-operand-zero-fills -->
-<!-- targets: wasm32-wasi -->
 ⭐ **THE CASE THAT DISCRIMINATES.** `u64.max shr 60` is **15** under the logical reading and **-1**
 under the arithmetic one, so it is the one shift that can tell the two compilers apart — and until
 it was written down, they *were* apart: the bootstrap answered 15 and shv2 answered -1, for this
@@ -880,7 +849,6 @@ end 'main'
 ```
 
 <!-- test: shr-signed-operand-still-sign-fills -->
-<!-- targets: wasm32-wasi -->
 The other half of the same sentence, and the reason the unsigned case above is a *narrowing* of the
 rule rather than a reversal of it: a **signed** left operand still shifts arithmetically. Both
 compilers must keep answering -1 here while answering 15 above — the operand's type is the only
@@ -924,7 +892,6 @@ end 'main'
 ```
 
 <!-- test: shl-zero-fills-whatever-the-operand-signedness -->
-<!-- targets: wasm32-wasi -->
 A LEFT shift vacates the *low* bits and always fills them with zeros — an unsigned left operand
 changes nothing about it. Pinned so that "the left operand's type decides the fill" is not
 over-applied to the one shift whose fill is not in question.
@@ -958,7 +925,6 @@ end 'main'
 ```
 
 <!-- test: shift-signedness-survives-a-branch -->
-<!-- targets: wasm32-wasi -->
 ⚠ A shift's fill is a property of its LEFT OPERAND'S TYPE, so it cannot depend on **which block the
 operand is read in**. It did, in the bootstrap: reading a variable outside the block that assigned
 it mints a fresh SSA value, and the compiler resolved a ranged type by *searching for a variable

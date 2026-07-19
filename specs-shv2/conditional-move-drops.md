@@ -40,7 +40,6 @@ through path (`return Wrap.empty`). Driven down the LIVE path (`makeWrap(0)`): `
 there. Before path-sensitive drops the move flag persisted onto the live path and `s` leaked (exit 101).
 
 <!-- test: union-payload-cond-move-return -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -76,7 +75,6 @@ on the fall-through branch (which builds the struct from a literal). Driven down
 sensitive drops the field-consume's move flag persisted onto the fall-through path and `f` leaked.
 
 <!-- test: field-consume-cond-move-return -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 type Named
 	export var name as String
@@ -108,7 +106,6 @@ untouched on the `else` branch. Both branches fall through to the merge. Driven 
 (`flag = 0`): `a` must be dropped once on that path. The drop is placed on the else edge at the join.
 
 <!-- test: ifelse-move-one-branch -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -142,7 +139,6 @@ false path. Driven down the LIVE false path (`flag = 0`): `a` must be dropped on
 false-edge block minted at the join, since the then branch fell through rather than returning.
 
 <!-- test: ifnoelse-move-fallthrough -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -174,7 +170,6 @@ false use-after-move (E3102). With path-sensitive move state each branch moves `
 value is given away on every path — dropped nowhere by `makeWrap`, no double-free.
 
 <!-- test: both-branches-move -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -210,7 +205,6 @@ a LIVE arm (`Color.green`): `a` must be dropped once on that arm's path. The dro
 arms' exit blocks at the match merge.
 
 <!-- test: match-arm-move-one-arm -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -252,7 +246,6 @@ live and fall through past the match to `return Wrap.empty`. Driven down a LIVE 
 must be dropped once. The returning arm contributes no merge edge, so the live path keeps its live state.
 
 <!-- test: match-arm-move-return -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -300,7 +293,6 @@ iteration `s` is either moved (and dropped through `u`) or left live (and droppe
 exactly once per iteration. Runs two iterations, one of each kind.
 
 <!-- test: loop-body-local-cond-move -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -340,7 +332,6 @@ value is correctly dropped on the path that did not move it. Path-sensitive DROP
 conservative use-after-move rule.
 
 <!-- test: use-after-conditional-move -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -370,7 +361,6 @@ would re-move the already-moved `a` on the next iteration — a double-free. Pla
 needs elaboration across the loop boundary (a later wave), so the move is refused rather than miscompiled.
 
 <!-- test: outer-move-in-loop-rejected -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -404,7 +394,6 @@ error E2015: <fragment>:12:7: Unsupported: moving a value declared outside this 
 across the loop boundary deferred to a later wave. Refused at the move rather than leaked or double-freed.
 
 <!-- test: break-out-of-moved-branch-rejected -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 

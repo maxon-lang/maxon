@@ -31,7 +31,6 @@ end 'build'
 ### Owned Interpolation Result, Bound
 
 <!-- test: owned-interp-bound -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -55,7 +54,6 @@ val 5
 ### Owned Interpolation Result, Unbound
 
 <!-- test: owned-interp-unbound -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -78,7 +76,6 @@ val 5
 ### Return an Owned Binding
 
 <!-- test: owned-binding -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -103,7 +100,6 @@ n3
 ### Return a Borrowed Literal (Promoted to Owned)
 
 <!-- test: borrowed-literal-promoted -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function g() returns String
 	return "hi"
@@ -125,7 +121,6 @@ hi
 ### Returned String Consumed Repeatedly in a Loop
 
 <!-- test: owned-return-in-loop -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -157,7 +152,6 @@ returned, is an owned temporary that must be dropped before the `ret` — the ca
 drop lands in the return statement itself, not at the (skipped) statement-end drain.
 
 <!-- test: owned-temp-arg-in-return -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 

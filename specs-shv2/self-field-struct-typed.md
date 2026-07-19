@@ -58,7 +58,6 @@ store itself needs the ownership analysis and is not this rung's to invent.
 ## Tests
 
 <!-- test: error.struct-typed-field-read -->
-<!-- targets: wasm32-wasi -->
 `next.a` inside `type Node`'s own method. Refused at the BASE token — `next` is what cannot be
 addressed, not `a`. Sabotage it by deleting the `isSelfField` arm of `requireStructBase` and this
 case does not merely go red: it goes **green with the wrong code**, silently returning `self.a`.
@@ -84,7 +83,6 @@ error E2015: <fragment>:10:10: Unsupported: a field access through 'next', which
 ```
 
 <!-- test: error.struct-typed-field-method-call -->
-<!-- targets: wasm32-wasi -->
 The METHOD-CALL path reaches `requireStructBase` through a different caller (`parseMethodCall`) and
 must refuse identically — it passed the alias's 0 as the RECEIVER, which is why the unguarded build
 emitted a `callDirect` with no argument setup whatsoever.
@@ -114,7 +112,6 @@ error E2015: <fragment>:10:10: Unsupported: a field access through 'next', which
 ```
 
 <!-- test: error.struct-typed-field-write -->
-<!-- targets: wasm32-wasi -->
 The WRITE path, anchored at the base token. Before the fix this reported E2013 *"cannot assign to
 immutable variable: 'next'"* — a rejection, but by accident (a self-field alias is built
 `mutable: false`, which is the BINDING's mutability and says nothing about the field's) and with a
@@ -141,7 +138,6 @@ error E2015: <fragment>:10:3: Unsupported: a field access through 'next', which 
 ```
 
 <!-- test: error.scalar-field-base-is-not-a-struct -->
-<!-- targets: wasm32-wasi -->
 **The ORDER inside `requireStructBase`, which is the half a reader would get wrong.** A SCALAR
 field's alias is not a struct base either, but it is not a struct-typed field and must not be told
 it is: the `structRef` gate is asked FIRST, so `count.x` reports what is actually wrong with it.

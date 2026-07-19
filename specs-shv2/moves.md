@@ -38,7 +38,6 @@ maybe-moved, it may not be read, even though it is correctly dropped where it wa
 through `u` at scope exit, with `t`'s drop skipped — so no leak and no double-free.
 
 <!-- test: legal-move -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -66,7 +65,6 @@ v1
 use.
 
 <!-- test: use-after-move-on-bind -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -92,7 +90,6 @@ both bindings ended up owning `t`'s box and it was decref'd twice at scope exit 
 leak gate reported as exit 101. Now `t` is moved-from and skipped, so each box drops exactly once.
 
 <!-- test: assign-owned-from-owned -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -120,7 +117,6 @@ v2
 `s = t` moves `t`; the following `print(t)` reads the moved-from binding and is rejected at the use.
 
 <!-- test: use-after-move-on-assign -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -147,7 +143,6 @@ box and is usable again — while `b` owns the box moved out of `a`. Both print,
 double-dropped by the reassignment (it belongs to `b` now, not `a`).
 
 <!-- test: reassign-revives -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -176,7 +171,6 @@ v10v20
 `let b = a` moves `a`; `let c = a` then reads the moved-from `a` and is rejected at the use.
 
 <!-- test: multiple-alias -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -203,7 +197,6 @@ use-after-move even though the non-taken branch never moved it. This over-reject
 sound minimum for this rung (a moved-on-all-paths dataflow join is a later rung).
 
 <!-- test: conditional-poisoning -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -233,7 +226,6 @@ its drop is skipped, so the box drops exactly once through `q`. Without the move
 and the leak gate would fire (exit 101).
 
 <!-- test: struct-move-drop-skip -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 type Point
 	export var x as int
@@ -265,7 +257,6 @@ one box at scope exit — a double-free (exit 101). The gate now strips redundan
 moved-from and skipped and the box drops exactly once.
 
 <!-- test: paren-move -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -294,7 +285,6 @@ binding and is rejected at the use. The parens do not exempt the source from poi
 through them to the bare local reference underneath.
 
 <!-- test: paren-use-after-move -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -321,7 +311,6 @@ a moved-from base is rejected at the base, before the field load is emitted. (Wi
 returned the moved struct's field: a latent use-after-free once the new owner drops first.)
 
 <!-- test: field-read-after-move -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 type Point
 	export var x as int
@@ -350,7 +339,6 @@ owns (the one `q` holds), so it is rejected at the base. Only a FULL reassignmen
 observable wrong answer for a program shv2 must reject.
 
 <!-- test: field-store-after-move -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 type Point
 	export var x as int
@@ -377,7 +365,6 @@ error E3102: <fragment>:13:2: use of moved value 'p': its ownership moved to ano
 as receiver. The receiver is a use of `p`, so it is rejected at the base before the call is emitted.
 
 <!-- test: method-call-after-move -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 type Point
 	export var x as int
@@ -410,7 +397,6 @@ exactly once (no leak). This pins that a field store reads the CURRENT moved-fro
 not a stale one.
 
 <!-- test: reassign-revives-then-field-store -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 type Point
 	export var x as int
@@ -440,7 +426,6 @@ end 'main'
 use-after-move guard fires ONLY when the base binding is moved-from. Reads back 0.
 
 <!-- test: field-access-on-live-struct -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 type Point
 	export var x as int

@@ -34,7 +34,6 @@ precedence proof. The division/modulo tests — and every test that also needs
 forgotten.
 
 <!-- test: addition -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	return 10 + 5
@@ -45,7 +44,6 @@ end 'main'
 ```
 
 <!-- test: subtraction -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	return 20-8
@@ -56,7 +54,6 @@ end 'main'
 ```
 
 <!-- test: multiplication -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	return 6 * 7
@@ -67,7 +64,6 @@ end 'main'
 ```
 
 <!-- test: complex-expression -->
-<!-- targets: wasm32-wasi -->
 Proves `*` binds tighter than `+`: `10 + 5 * 2` is `10 + (5 * 2)` = 20, not
 `(10 + 5) * 2` = 30.
 ```maxon
@@ -86,7 +82,6 @@ in this `## Deferred` section — NOT `## Tests` — so the spec-test parser (wh
 scans only `## Tests`, up to the next `## ` heading) never extracts them, and
 they carry NO `<!-- test: … -->` marker. To re-enable: move the test up into
 `## Tests` and prefix it with its `<!-- test: NAME -->` marker.
-<!-- targets: wasm32-wasi -->
 
 Prerequisites:
 

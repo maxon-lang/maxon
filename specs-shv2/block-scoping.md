@@ -122,7 +122,6 @@ error E2004: specs/fragments/block-scoping/for-destructured-not-accessible-after
 ```
 
 <!-- test: if-body-var-not-accessible-after -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	if true 'check'
@@ -136,7 +135,6 @@ error E2004: specs/fragments/block-scoping/if-body-var-not-accessible-after.test
 ```
 
 <!-- test: if-else-body-var-not-accessible-after -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	if false 'check'
@@ -152,7 +150,6 @@ error E2004: specs/fragments/block-scoping/if-else-body-var-not-accessible-after
 ```
 
 <!-- test: while-body-var-not-accessible-after -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	var i = 0
@@ -206,7 +203,6 @@ end 'main'
 ```
 
 <!-- test: var-redeclare-after-scope -->
-<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	if true 'check'
