@@ -29,13 +29,24 @@
 // only `exit-with-code`).
 //
 // SCOPE grows the way v1's did: scalar core, then f64, then top-level-`var` globals + String
-// literals (`.data`/`.rdata` active segments, `print`), and now the HEAP — `osAllocPages` →
+// literals (`.data`/`.rdata` active segments, `print`), the HEAP — `osAllocPages` →
 // `memory.grow`, the narrow BYTE load/store band a String's per-byte access needs, and the leak gate
-// (`__mm_leak_check`) on the exit path. The allocator/refcount/String builders themselves are Std-IR
-// runtime functions emitted through the ordinary function path, not hand-written here. What remains
-// beyond the backend (`sugar` ops, error-handling `tryCall`/`osExit`, and the narrow-integer `as`
-// cast) still `panic` in the exhaustive matches below — unreachable given the spec-runner gating,
-// mirroring the dead-but-exhaustive native target arms.
+// (`__mm_leak_check`) on the exit path — and now scalar ERROR HANDLING (`throws`/`try`/`throw`/`panic`).
+// The allocator/refcount/String builders themselves are Std-IR runtime functions emitted through the
+// ordinary function path, not hand-written here.
+//
+// ⭐ THE ERROR-HANDLING ABI — shv2's native DUAL-REGISTER model mapped onto wasm MULTI-VALUE. A
+// throwing function returns its primary value in R8/x0 AND an i64 error flag in R10/x9 on the native
+// backends; wasm has no second return register, so the flag rides a SECOND RESULT in the function's
+// multi-value signature: a value-returning throwing function is `(params) -> (resultVt, i64)`, a
+// void-returning one `(params) -> (i64)`. There is no separate success-`ret` path to augment — the
+// frontend routes EVERY exit of a throwing function through `errorReturn` (a normal return carries a
+// zero flag, a `throw` a non-zero one), so `ret`/`retVoid` never appear inside a throwing function and
+// `emitRet`/`emitRetVoid` are untouched. `tryCall` reads both results off the callee's multi-value
+// return (flag on top of the stack); `osExit` (from `panic`) calls `exit-with-code` and traps. What
+// remains beyond the backend (`sugar` ops and the narrow-integer `as` cast) still `panic` in the
+// exhaustive matches below — unreachable given the spec-runner gating, mirroring the dead-but-exhaustive
+// native target arms.
 
 // Wasm indices/counts are u32 in the format; this backend uses A1's exported `Wasm32Index`
 // (= int(0 to u32.max)) and `Wasm32IndexArray` for every function/type/local/dispatch index,
@@ -193,7 +204,7 @@ export function buildWasmCoreModule(module StdModule, globalData GlobalDataTable
 		let func = module.getFunc(funcIdx)
 		var emitter = WasmFuncEmitter.create(module, func: func, globalData: globalData, dataBase: WasmDataBaseOffset, rdataBase: rdataBase, calleeFuncIdx: calleeFuncIdx, calleeReturnType: calleeReturnType, calleeParamTypes: calleeParamTypes)
 		emitter.emit()
-		let typeIdx = builder.internFuncType(funcParamValTypes(func), results: funcResultValTypes(func.returnType))
+		let typeIdx = builder.internFuncType(funcParamValTypes(func), results: funcSignatureResultValTypes(func))
 		_ = builder.addFunction(typeIdx, localTypes: emitter.localTypes, body: emitter.body.bytes())
 	end 'eachFunc'
 
@@ -415,6 +426,21 @@ function funcResultValTypes(returnType StdReturnType) returns WasmValTypeArray
 	return results
 end 'funcResultValTypes'
 
+// The wasm result signature of a whole function: its value result (if any), plus — for a THROWING
+// function — the i64 error flag as a SECOND result (or, for a void-throwing function, the sole one).
+// This is the multi-value image of shv2's dual-register error ABI: a throwing function exits through
+// `errorReturn`, which pushes the value then the flag (or, void, just the flag), so the wasm type must
+// declare both. The native backends need no such split — the flag rides a fixed second register
+// (R10/x9) outside the signature. `funcResultValTypes` alone still names the PRIMARY result the body's
+// `errorReturn`/`ret` coerce to (see `emitErrorReturn`/`emitRet`); this is the signature-only view.
+function funcSignatureResultValTypes(func IrFunction) returns WasmValTypeArray
+	var results = funcResultValTypes(func.returnType)
+	if throwsClauseIsThrowing(func.throwsTypeName) 'throwing'
+		results.push(WasmValType.i64)
+	end 'throwing'
+	return results
+end 'funcSignatureResultValTypes'
+
 function singletonValTypes(vt WasmValType) returns WasmValTypeArray
 	var one = WasmValTypeArray.create()
 	one.push(vt)
@@ -565,9 +591,22 @@ function recordDefValtype(op StdOp, valtypes WasmValTypeArray, depResult ValueId
 		// native backends carry. `rdataAddr` materializes an `i32.const`, so its result local is i32 —
 		// the width `loadIndirect`/`osWriteStdout` then consume as the base address.
 		rdataAddr(resultId, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i32)
-		tryCall to osExit then panic("recordDefValtype: error-handling op (throws/try/panic) is not in the wasm scalar slice")
+		// A `tryCall` defines TWO values (like `call` plus the flag); `errorReturn`/`osExit` define
+		// none (a return terminator, a diverging exit). See `recordTryCallDefs`.
+		tryCall(resultId, errorFlagId, callee, _) then recordTryCallDefs(valtypes, resultId: resultId, errorFlagId: errorFlagId, callee: callee, calleeReturnType: calleeReturnType)
+		errorReturn then break 'def'
+		osExit then break 'def'
 	end 'def'
 end 'recordDefValtype'
+
+// Record a `tryCall`'s two defined values: its primary result — the callee's return width, exactly as
+// a plain `call` (`callResultValType`) — and its error flag, always i64 (the dual-register flag the
+// native backends carry in R10/x9). A void-returning throwing callee still names an (unread) result
+// value; `callResultValType` gives it the same i64 placeholder a void `call` result gets.
+function recordTryCallDefs(valtypes WasmValTypeArray, resultId ValueId, errorFlagId ValueId, callee ByteArray, calleeReturnType CalleeReturnTypeMap)
+	setValtype(valtypes, v: resultId, vt: callResultValType(callee, calleeReturnType: calleeReturnType))
+	setValtype(valtypes, v: errorFlagId, vt: WasmValType.i64)
+end 'recordTryCallDefs'
 
 // Reserve `resultId`'s slot (i64 placeholder) and queue its width to be copied from `lhs`.
 function recordDependentValtype(valtypes WasmValTypeArray, depResult ValueIdArray, depLhs ValueIdArray, resultId ValueId, lhs ValueId)
@@ -774,7 +813,9 @@ type WasmFuncEmitter
 			param then panic("emitStraightLineTerminator: a `param` op is not a terminator")
 			call then panic("emitStraightLineTerminator: a `call` op is not a terminator")
 			globalAddr to rdataAddr then panic("emitStraightLineTerminator: a memory/system op is not a terminator")
-			tryCall to osExit then panic("emitStraightLineTerminator: error-handling op (throws/try/panic) is not in the wasm scalar slice")
+			tryCall then panic("emitStraightLineTerminator: a `tryCall` is a value-producing body op, never a terminator")
+			errorReturn(retValId, errorFlagId) then self.emitErrorReturn(retValId, errorFlagId: errorFlagId)
+			osExit then panic("emitStraightLineTerminator: an `osExit` is a body op followed by a dead return, never a terminator")
 		end 'term'
 	end 'emitStraightLineTerminator'
 
@@ -835,7 +876,9 @@ type WasmFuncEmitter
 			param then panic("emitDispatcherTerminator: a `param` op is not a terminator")
 			call then panic("emitDispatcherTerminator: a `call` op is not a terminator")
 			globalAddr to rdataAddr then panic("emitDispatcherTerminator: a memory/system op is not a terminator")
-			tryCall to osExit then panic("emitDispatcherTerminator: error-handling op (throws/try/panic) is not in the wasm scalar slice")
+			tryCall then panic("emitDispatcherTerminator: a `tryCall` is a value-producing body op, never a terminator")
+			errorReturn(retValId, errorFlagId) then self.emitErrorReturn(retValId, errorFlagId: errorFlagId)
+			osExit then panic("emitDispatcherTerminator: an `osExit` is a body op followed by a dead return, never a terminator")
 		end 'term'
 	end 'emitDispatcherTerminator'
 
@@ -868,7 +911,11 @@ type WasmFuncEmitter
 			osAllocPages(resultId, sizeId) then self.emitOsAllocPages(resultId, sizeId: sizeId)
 			osWriteStdout(bufId, lenId) then self.emitOsWriteStdout(bufId, lenId: lenId)
 			rdataAddr(resultId, label) then self.emitRdataAddr(resultId, label: label)
-			tryCall to osExit then panic("wasm: error-handling op (throws/try/panic) not in scalar slice")
+			tryCall(resultId, errorFlagId, callee, args) then self.emitTryCall(resultId, errorFlagId: errorFlagId, callee: callee, args: args)
+			// An `errorReturn` is normally the block terminator (like `ret`), but is handled here too for
+			// the rare mid-block early-error return, exactly as `ret`/`retVoid` are above.
+			errorReturn(retValId, errorFlagId) then self.emitErrorReturn(retValId, errorFlagId: errorFlagId)
+			osExit(codeId) then self.emitOsExit(codeId)
 		end 'body'
 	end 'emitBodyOp'
 
@@ -1183,9 +1230,12 @@ type WasmFuncEmitter
 		end 'needsCopy'
 	end 'emitParam'
 
-	// Push each argument (in parameter order — `lowerCall` already reordered any labelled args),
-	// call the callee, and store the result only if the callee returns a value.
-	function emitCall(resultId ValueId, callee ByteArray, args ValueIdArray)
+	// Push each argument (in parameter order — `lowerCall` already reordered any labelled args), each
+	// coerced to the callee's declared parameter width, then emit the `call`. The argument marshalling
+	// and the call itself are IDENTICAL for a plain `call` and a throwing `tryCall` — only the RESULT
+	// capture differs (a plain call reads one value or none; a `tryCall` reads the value AND the error
+	// flag off the callee's multi-value return), so both share this.
+	function emitCallArgsAndCall(callee ByteArray, args ValueIdArray)
 		let paramTypes = try self.calleeParamTypes.get(callee) otherwise panic("emitCall: no param types for callee '{String.from(callee)}'")
 		for argIdx in 0 upto args.count() 'eachArg'
 			let arg = try args.get(argIdx) otherwise panic("emitCall: args.get OOB at {argIdx}")
@@ -1196,12 +1246,38 @@ type WasmFuncEmitter
 
 		let funcIdx = try self.calleeFuncIdx.get(callee) otherwise panic("emitCall: no wasm function index for callee '{String.from(callee)}'")
 		self.body.call(funcIdx)
+	end 'emitCallArgsAndCall'
+
+	// A plain (non-throwing) call: marshal the args, call, and store the single result only when the
+	// callee returns a value (a void callee pushes nothing — a `local.set` would underflow).
+	function emitCall(resultId ValueId, callee ByteArray, args ValueIdArray)
+		self.emitCallArgsAndCall(callee, args: args)
 
 		let rt = try self.calleeReturnType.get(callee) otherwise panic("emitCall: no return type for callee '{String.from(callee)}'")
 		if not stdReturnTypeIsVoid(rt) 'hasResult'
 			self.body.localSet(resultId as Wasm32Index)
 		end 'hasResult'
 	end 'emitCall'
+
+	// A throwing call `resultId = try callee(args…)`: marshal + call exactly as `emitCall`, then capture
+	// the callee's MULTI-VALUE return. A throwing callee's wasm signature is `(params) -> (resultVt, i64)`
+	// (value-returning) or `(params) -> (i64)` (void-returning), so its results sit on the stack with the
+	// i64 error FLAG on TOP. `local.set` pops top-first, so the flag is captured FIRST, then the primary
+	// value — for a void-returning throwing callee the call pushes only the flag, so there is no value to
+	// capture (`calleeReturnType` is the callee's OWN return type, void-vs-value). The two captures never
+	// need the native backends' parallel-copy resolver: a wasm stack pop targets a distinct local, so
+	// there is no register-cycle to break. A `tryCall` only ever targets a THROWING callee (the parser
+	// rejects a non-throwing `try` via E3055), so the flag is always present.
+	function emitTryCall(resultId ValueId, errorFlagId ValueId, callee ByteArray, args ValueIdArray)
+		self.emitCallArgsAndCall(callee, args: args)
+
+		self.body.localSet(errorFlagId as Wasm32Index)
+
+		let rt = try self.calleeReturnType.get(callee) otherwise panic("emitTryCall: no return type for callee '{String.from(callee)}'")
+		if not stdReturnTypeIsVoid(rt) 'hasResult'
+			self.body.localSet(resultId as Wasm32Index)
+		end 'hasResult'
+	end 'emitTryCall'
 
 	// Value return: push the return value and `return`. A `void` return type here means a value
 	// `ret` in a void function — the parser rejects that source, so it is a lowering bug.
@@ -1224,6 +1300,47 @@ type WasmFuncEmitter
 		end 'valueExpected'
 		self.body.returnOp()
 	end 'emitRetVoid'
+
+	// The dual-register `errorReturn(retVal, flag)` mapped onto wasm multi-value — the ONLY exit a
+	// THROWING function takes. The frontend routes every return of a throwing function through this op
+	// (a normal return carries a ZERO flag, a `throw` a non-zero one — LowerMaxonToStd.emitRetOrError-
+	// Return / lowerThrowError), so a throwing function never emits a plain `ret`/`retVoid`, and this
+	// is the wasm twin of the native `lowerErrorReturn` (which writes R8 + R10). The signature declares
+	// `(resultVt, i64)` for a value-returning function and `(i64)` for a void one (`funcSignature-
+	// ResultValTypes`), so the stack must hold the value THEN the flag (value-returning) or just the
+	// flag (void). The primary value is coerced to the result valtype exactly as `emitRet` does — the
+	// same value-meets-declared-type width gap. For a void-returning throwing function the op still
+	// carries a placeholder `retVal`, but the signature has no value result, so it is DROPPED (not
+	// pushed): only the flag is returned.
+	function emitErrorReturn(retValId ValueId, errorFlagId ValueId)
+		if not stdReturnTypeIsVoid(self.func.returnType) 'value'
+			self.body.localGet(retValId as Wasm32Index)
+			let resultTypes = funcResultValTypes(self.func.returnType)
+			let resultVt = try resultTypes.get(0) otherwise panic("emitErrorReturn: value-returning function has no result valtype")
+			coerceOnStack(self.body, from: getValtype(self.valtypes, v: retValId), to: resultVt)
+		end 'value'
+
+		self.body.localGet(errorFlagId as Wasm32Index)
+		// The flag is always i64 (a zero `const`, a scalar `ordinal + bias`, or a propagated `tryCall`
+		// flag — all i64), so this coercion is a no-op; it is kept for the same value-meets-declared-type
+		// robustness every other push in this file carries, and matches the i64 second result the
+		// signature declares.
+		coerceOnStack(self.body, from: getValtype(self.valtypes, v: errorFlagId), to: WasmValType.i64)
+		self.body.returnOp()
+	end 'emitErrorReturn'
+
+	// `osExit(code)` — the process-exit primitive a `panic(...)` ends on (LowerMaxonToStd.lowerPanic-
+	// Abort). Hand the code to the `exit-with-code` import (func idx 0), wrapped to the i32 the import
+	// declares — `code` is an i64 in the Std IR, so `pushOperandAt` emits the `i32.wrap_i64`. wasmtime
+	// masks the status to the low 8 bits, matching the native `ExitProcess`/`_exit`. `exit-with-code`
+	// never returns, so `unreachable` follows: the process is gone and the dead return the parser emits
+	// after this op is unreachable code (the trailing `unreachable` also makes the stack polymorphic, so
+	// that dead terminator validates whatever result arity the function declares). Defines no value.
+	function emitOsExit(codeId ValueId)
+		self.pushOperandAt(codeId, targetVt: WasmValType.i32)
+		self.body.call(ExitImportFuncIdx)
+		self.body.unreachable()
+	end 'emitOsExit'
 
 	// ----------------------------------------------------------------------
 	// Memory band: top-level `var` globals (globalAddr / loadIndirect / storeIndirect)
@@ -1595,7 +1712,11 @@ function decideDispatcher(module StdModule, func IrFunction) returns bool
 		call then break 'k'
 		retVoid then break 'k'
 		globalAddr to rdataAddr then break 'k'
-		tryCall to osExit then panic("decideDispatcher: error-handling op (throws/try/panic) is not in the wasm scalar slice")
+		// `errorReturn` is a non-branching (return) terminator — a throwing function's single block
+		// ending in it is straight-line, exactly like `ret`. `tryCall`/`osExit` are never terminators.
+		tryCall then panic("decideDispatcher: a `tryCall` is a value-producing body op, never a terminator")
+		errorReturn then break 'k'
+		osExit then panic("decideDispatcher: an `osExit` is a body op followed by a dead return, never a terminator")
 	end 'k'
 	return false
 end 'decideDispatcher'
