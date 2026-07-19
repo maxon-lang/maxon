@@ -239,6 +239,7 @@ end 'main'
 ```
 
 <!-- test: print-string -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	let s = "hello"
@@ -254,6 +255,7 @@ hello
 ```
 
 <!-- test: print-literal -->
+<!-- targets: wasm32-wasi -->
 ```maxon
 function main() returns ExitCode
 	print("Hello, World!")

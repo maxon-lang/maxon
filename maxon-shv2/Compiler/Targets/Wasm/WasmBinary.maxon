@@ -760,6 +760,22 @@ end 'WasmExport'
 
 typealias WasmExportArray = Array with WasmExport
 
+// One active data segment: `bytes` laid into linear memory at `base` when the module is
+// instantiated. Held until `finish()` so segments emit in the order A2 declared them, which
+// determinism requires. The scalar-plus-float milestone had ONE (the top-level-`var` `.data`
+// image); the String-literal milestone adds a SECOND (the `.rdata` record/blob image at a
+// higher base), so the builder holds a LIST rather than a single triple.
+type WasmDataSegment
+	export var base as Wasm32Index
+	export var bytes as ByteArray
+
+	static function create(base Wasm32Index, bytes ByteArray) returns WasmDataSegment
+		return Self{base: base, bytes: bytes}
+	end 'create'
+end 'WasmDataSegment'
+
+typealias WasmDataSegmentArray = Array with WasmDataSegment
+
 // Encoded functype bytes → the type index already interned for them, so `internFuncType` dedups in
 // O(1) instead of a linear scan over every interned type. Keyed on the rendered BYTES, exactly like
 // GlobalDataTable's `valueDedup` (same reason: interning N distinct signatures by scanning was O(N²) —
@@ -798,15 +814,14 @@ export type WasmModuleBuilder
 	var hasMemory as bool
 	var memoryMinPages as Wasm32Index
 
-	// The single active `.data` segment: the top-level `var` image (`dataSegmentBytes`) copied
-	// verbatim into linear memory at `dataSegmentBase` at instantiation. `hasDataSegment` stays
-	// false for a program with no top-level `var`, which emits no data section at all.
-	var hasDataSegment as bool
-	var dataSegmentBase as Wasm32Index
-	var dataSegmentBytes as ByteArray
+	// The active `.data`/`.rdata` segments, in declaration order. Each is copied verbatim into
+	// linear memory at its own `base` at instantiation. Empty for a program with no top-level
+	// `var` and no String literal, which emits no data section at all. The caller sizes the
+	// memory (`exportMemory`'s `minPages`) to cover the highest `base + bytes.count()`.
+	var dataSegments as WasmDataSegmentArray
 
 	export static function create() returns WasmModuleBuilder
-		return Self{funcTypes: ByteArrayArray.create(), funcTypeDedup: FuncTypeDedupMap.create(), importModules: ByteArrayArray.create(), importFields: ByteArrayArray.create(), importTypeIndices: Wasm32IndexArray.create(), funcTypeIndices: Wasm32IndexArray.create(), funcBodies: ByteArrayArray.create(), exportEntries: WasmExportArray.create(), hasMemory: false, memoryMinPages: 0, hasDataSegment: false, dataSegmentBase: 0, dataSegmentBytes: ByteArray.create()}
+		return Self{funcTypes: ByteArrayArray.create(), funcTypeDedup: FuncTypeDedupMap.create(), importModules: ByteArrayArray.create(), importFields: ByteArrayArray.create(), importTypeIndices: Wasm32IndexArray.create(), funcTypeIndices: Wasm32IndexArray.create(), funcBodies: ByteArrayArray.create(), exportEntries: WasmExportArray.create(), hasMemory: false, memoryMinPages: 0, dataSegments: WasmDataSegmentArray.create()}
 	end 'create'
 
 	// Intern a functype, returning its (deduplicated) type index. The dedup is an O(1) map lookup on
@@ -862,13 +877,12 @@ export type WasmModuleBuilder
 		self.exportEntries.push(WasmExport.create(name, kind: wasmExportKindMemory, index: wasmMemoryIndexZero))
 	end 'exportMemory'
 
-	// Record the single active `.data` segment: `bytes` are laid into linear memory at `base`
-	// when the module is instantiated. One segment holds the whole top-level-`var` image; the
-	// caller sizes the memory (`exportMemory`'s `minPages`) to cover `base + bytes.count()`.
+	// Record one active data segment: `bytes` are laid into linear memory at `base` when the
+	// module is instantiated. Called once per non-empty image (the top-level-`var` `.data`, then
+	// the String-literal `.rdata`); each caller guards its own emptiness, so a recorded segment
+	// always carries bytes.
 	export function addDataSegment(base Wasm32Index, bytes ByteArray)
-		self.hasDataSegment = true
-		self.dataSegmentBase = base
-		self.dataSegmentBytes = bytes
+		self.dataSegments.push(WasmDataSegment.create(base, bytes: bytes))
 	end 'addDataSegment'
 
 	// Emit the finished CORE module: preamble + sections in canonical id order. Empty sections
@@ -985,26 +999,26 @@ export type WasmModuleBuilder
 		writeSectionRaw(module, sectionId: wasmSectionCode, contents: contents)
 	end 'emitCodeSection'
 
-	// One active data segment: the flag/memory-0 byte, the `i32.const <base>` offset expression
-	// (SLEB immediate, terminated by `end`), then the ULEB-length-prefixed byte vector. Omitted
-	// when there is no top-level `var` — an empty segment would only bloat the module.
+	// The data section: a count, then each segment (the flag/memory-0 byte, an `i32.const <base>`
+	// offset expression — SLEB immediate, terminated by `end` — then the ULEB-length-prefixed byte
+	// vector). Omitted entirely when there is no segment — an empty section would only bloat the
+	// module.
 	function emitDataSection(module ByteArray)
-		if not self.hasDataSegment 'none'
+		let segmentCount = self.dataSegments.count()
+		if segmentCount == 0 'none'
 			return
 		end 'none'
 
-		if self.dataSegmentBytes.count() == 0 'empty'
-			return
-		end 'empty'
-
 		var contents = ByteArray.create()
-		writeUleb128(contents, value: 1)
-		contents.push(wasmDataSegmentActiveMem0)
-		contents.push(opI32Const)
-		writeSleb128(contents, value: self.dataSegmentBase as ParsedInt)
-		contents.push(opEnd)
-		writeUleb128(contents, value: self.dataSegmentBytes.count() as Wasm32Index)
-		contents.append(self.dataSegmentBytes)
+		writeUleb128(contents, value: segmentCount as Wasm32Index)
+		for segment in self.dataSegments 'each'
+			contents.push(wasmDataSegmentActiveMem0)
+			contents.push(opI32Const)
+			writeSleb128(contents, value: segment.base as ParsedInt)
+			contents.push(opEnd)
+			writeUleb128(contents, value: segment.bytes.count() as Wasm32Index)
+			contents.append(segment.bytes)
+		end 'each'
 
 		writeSectionRaw(module, sectionId: wasmSectionData, contents: contents)
 	end 'emitDataSection'

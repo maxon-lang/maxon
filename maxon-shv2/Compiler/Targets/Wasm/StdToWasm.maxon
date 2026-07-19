@@ -60,10 +60,30 @@ typealias CalleeParamTypesMap = Map with (ByteArray, WasmValTypeArray)
 // carry on the op (see `buildValtypeTable`).
 typealias DependentLhsMap = Map with (ValueId, ValueId)
 
-// Exactly one function is imported — `wasi:cli/exit@0.2.6` `exit-with-code` — so it takes
-// func index 0 and every defined function is offset by one.
-let WasmImportCount = 1 as Wasm32Index
+// THREE functions are imported, in this fixed order — so their func indices are the constants
+// below and every DEFINED function is offset by `WasmImportCount`. `buildWasmCoreModule` MUST
+// `addImportFunc` them in exactly this order for the indices to hold; `buildCalleeFuncIdxMap`
+// assigns each defined function `WasmImportCount + position` on the same assumption. The
+// component embed maps imports by NAME, so their ORDER is otherwise free — only this
+// index bookkeeping must be exact.
+//   0  wasi:cli/exit@0.2.6 exit-with-code                              (param i32) -> ()
+//   1  wasi:cli/stdout@0.2.6 get-stdout                               () -> (result i32)
+//   2  wasi:io/streams@0.2.6 [method]output-stream.blocking-write-and-flush  (i32,i32,i32,i32) -> ()
+let WasmImportCount = 3 as Wasm32Index
 let ExitImportFuncIdx = 0 as Wasm32Index
+let GetStdoutImportFuncIdx = 1 as Wasm32Index
+let BlockingWriteFlushImportFuncIdx = 2 as Wasm32Index
+
+// The canonical-ABI RETURN AREA `osWriteStdout` hands `blocking-write-and-flush` its
+// `result<_, stream-error>` into. It sits in the low scratch region BELOW the `.data` base
+// (1024) and within page 0, so it never overlaps real data. The write result is ignored
+// (fire-and-forget), so the area is written but never read — 256 leaves ample room to the
+// data base. Mirrors v1's `wasiRetAreaBase` (MirToWasm.maxon:324).
+let WasmRetAreaBase = 256 as Imm32
+
+// `blocking-write-and-flush(handle, ptr, len, retArea)` takes four i32 params — the stream handle,
+// the contents pointer, the contents length, and the canonical-ABI return area.
+let WasmWriteFlushParamCount = 4
 
 // The linear-memory address the top-level-`var` `.data` image is laid at. Low memory below it is
 // a NULL GUARD — no global's address is ever 0 — matching v1's convention and keeping any future
@@ -102,6 +122,22 @@ let WasiExitFieldName = b"exit-with-code"
 let WasiRunExportName = b"wasi:cli/run@0.2.6#run"
 let WasmMemoryExportName = b"memory"
 
+// The Preview2 stdout-write imports (P1.2 wave A — `print`). `osWriteStdout` gets the stdout
+// output-stream handle via `wasi:cli/stdout` `get-stdout`, then writes+flushes via
+// `wasi:io/streams` `[method]output-stream.blocking-write-and-flush`. The versioned interface
+// ids and the `[method]…` field spelling are what `wasm-tools component new` matches against the
+// WIT world — verbatim from v1 (`MirToWasm.maxon:1134-1153`).
+let WasiStdoutModuleName = b"wasi:cli/stdout@0.2.6"
+let WasiGetStdoutFieldName = b"get-stdout"
+let WasiStreamsModuleName = b"wasi:io/streams@0.2.6"
+let WasiBlockingWriteFlushFieldName = b"[method]output-stream.blocking-write-and-flush"
+
+// The `.rdata` image (String-literal records + blobs) is laid in linear memory immediately
+// after the `.data` image, rounded up to 8 so every 8-byte record field lands naturally
+// aligned. The base is otherwise free — nothing else in this slice touches linear memory
+// above the `.data` image.
+let WasmRdataAlignment = 8 as ByteCount
+
 // ==========================================================================
 // Seam 2 — the whole-module entry (the ONLY external symbol)
 // ==========================================================================
@@ -118,21 +154,34 @@ export function buildWasmCoreModule(module StdModule, globalData GlobalDataTable
 
 	var builder = WasmModuleBuilder.create()
 
-	// The top-level-`var` `.data` image and its linear-memory placement. Rendered ONCE, in
-	// `GlobalDataTable`'s layout order (deterministic — no map iteration), and shared by every
-	// `globalAddr` (through the emitter, which resolves a label to `base + its `.data` offset`)
-	// and by the module's memory + data sections. Empty for a program with no top-level `var`.
+	// The two linear-memory images, rendered ONCE in `GlobalDataTable`'s layout order
+	// (deterministic — no map iteration):
+	//   • `.data`  — the top-level-`var` slots, at `WasmDataBaseOffset`. Empty for a program with
+	//     no top-level `var`.
+	//   • `.rdata` — the String-literal records + blobs, at `rdataBase` (immediately after the
+	//     `.data` image, 8-aligned). Empty for a program with no String literal.
+	// Both are shared by the per-function emitters (a `globalAddr` resolves against `.data`, an
+	// `rdataAddr` against `.rdata`) and by the module's memory + data sections.
 	let dataImage = globalData.dataSectionImage()
+	let rdataBase = wasmRdataBase(WasmDataBaseOffset, dataSize: dataImage.count())
 
-	// Imports FIRST, so the defined functions get the indices `calleeFuncIdx` precomputed
-	// (importCount + position). `exit-with-code` takes one i32 (the status code), no result.
-	let exitTypeIdx = builder.internFuncType(singletonValTypes(WasmValType.i32), results: WasmValTypeArray.create())
-	_ = builder.addImportFunc(WasiExitModuleName, fieldName: WasiExitFieldName, typeIdx: exitTypeIdx)
+	// A String literal's record carries `buffer@0` = the ABSOLUTE address of its byte blob, which
+	// only exists once `rdataBase` is fixed. wasm is fixed-base, so that address is compile-time
+	// computable (`rdataBase + blobOffset`); bake it into the `.rdata` IMAGE now, exactly as the
+	// PE writer patches `.rdata` before writing it (`PeWriter.patchStringBufferFixups`).
+	var rdataImage = globalData.rdataImage()
+	applyStringBufferFixups(rdataImage, globalData: globalData, rdataBase: rdataBase)
+
+	// Imports FIRST, in the order the `*ImportFuncIdx` constants fix, so every defined function
+	// gets the index `calleeFuncIdx` precomputed (`WasmImportCount + position`). Order among
+	// imports is otherwise free (the component embed maps by name), but the func-index
+	// bookkeeping depends on it.
+	appendWasiImports(builder)
 
 	// Defined functions, in `module.functions` order — the order `calleeFuncIdx` assumes.
 	for funcIdx in 0 upto module.funcCount() 'eachFunc'
 		let func = module.getFunc(funcIdx)
-		var emitter = WasmFuncEmitter.create(module, func: func, globalData: globalData, dataBase: WasmDataBaseOffset, calleeFuncIdx: calleeFuncIdx, calleeReturnType: calleeReturnType, calleeParamTypes: calleeParamTypes)
+		var emitter = WasmFuncEmitter.create(module, func: func, globalData: globalData, dataBase: WasmDataBaseOffset, rdataBase: rdataBase, calleeFuncIdx: calleeFuncIdx, calleeReturnType: calleeReturnType, calleeParamTypes: calleeParamTypes)
 		emitter.emit()
 		let typeIdx = builder.internFuncType(funcParamValTypes(func), results: funcResultValTypes(func.returnType))
 		_ = builder.addFunction(typeIdx, localTypes: emitter.localTypes, body: emitter.body.bytes())
@@ -140,17 +189,62 @@ export function buildWasmCoreModule(module StdModule, globalData GlobalDataTable
 
 	let runFuncIdx = appendRunEntry(builder, module: module, calleeFuncIdx: calleeFuncIdx)
 
-	// The memory must cover the whole `.data` image; the segment lays that image at `base` when
-	// the module is instantiated. Only a program WITH a top-level `var` emits the data section —
-	// an empty image would only bloat the module.
-	builder.exportMemory(WasmMemoryExportName, minPages: wasmMemoryMinPages(WasmDataBaseOffset, dataSize: dataImage.count()))
+	// The memory must cover BOTH images; `.rdata` sits above `.data`, so `rdataBase + rdataSize`
+	// is the high-water mark (and `rdataBase >= WasmDataBaseOffset` even with no globals, so the
+	// WASI `run` skeleton's mandatory memory export is always at least one page). Each non-empty
+	// image is laid as its own active segment at its base — an empty image emits none.
+	builder.exportMemory(WasmMemoryExportName, minPages: wasmMemoryMinPages(rdataBase, dataSize: rdataImage.count()))
 	if dataImage.count() > 0 'hasGlobals'
 		builder.addDataSegment(WasmDataBaseOffset, bytes: dataImage)
 	end 'hasGlobals'
+	if rdataImage.count() > 0 'hasRdata'
+		builder.addDataSegment(rdataBase, bytes: rdataImage)
+	end 'hasRdata'
 	builder.exportFunc(WasiRunExportName, funcIdx: runFuncIdx)
 
 	return builder.finish()
 end 'buildWasmCoreModule'
+
+// Add the three WASI imports in the order the `*ImportFuncIdx` constants pin: `exit-with-code`
+// (0), `get-stdout` (1), `blocking-write-and-flush` (2). `exit-with-code` takes one i32 (the
+// status) and returns nothing; `get-stdout` takes nothing and returns the i32 stream handle;
+// `blocking-write-and-flush` takes (handle, ptr, len, retArea) — four i32 — and returns nothing.
+function appendWasiImports(builder WasmModuleBuilder)
+	let exitTypeIdx = builder.internFuncType(singletonValTypes(WasmValType.i32), results: WasmValTypeArray.create())
+	_ = builder.addImportFunc(WasiExitModuleName, fieldName: WasiExitFieldName, typeIdx: exitTypeIdx)
+
+	let getStdoutTypeIdx = builder.internFuncType(WasmValTypeArray.create(), results: singletonValTypes(WasmValType.i32))
+	_ = builder.addImportFunc(WasiStdoutModuleName, fieldName: WasiGetStdoutFieldName, typeIdx: getStdoutTypeIdx)
+
+	// `blocking-write-and-flush(handle, ptr, len, retArea)` — four i32 params, no result.
+	var writeFlushParams = WasmValTypeArray.create()
+	for _ in 0 upto WasmWriteFlushParamCount 'eachParam'
+		writeFlushParams.push(WasmValType.i32)
+	end 'eachParam'
+	let writeFlushTypeIdx = builder.internFuncType(writeFlushParams, results: WasmValTypeArray.create())
+	_ = builder.addImportFunc(WasiStreamsModuleName, fieldName: WasiBlockingWriteFlushFieldName, typeIdx: writeFlushTypeIdx)
+end 'appendWasiImports'
+
+// Bake each String literal's `buffer@0` field into the `.rdata` image: overwrite the record's
+// first 8 bytes with the blob's absolute linear-memory address (`rdataBase + blobOffset`) in the
+// low 4 bytes, the high 4 left zero — the slot is 8 bytes but a wasm address is an i32. The
+// `.data`→`.data` twin of `PeWriter.patchStringBufferFixups`, over an absolute (fixed-base) wasm
+// address rather than an `ImageBase`-relative VA. Deterministic: `stringBufferFixups` is in
+// registration order.
+function applyStringBufferFixups(rdataImage ByteArray, globalData GlobalDataTable, rdataBase Wasm32Index)
+	for fixup in globalData.stringBufferFixups 'each'
+		let recordOffset = globalData.rdataOffsetOf(fixup.recordLabel)
+		let blobAddr = wasmLinearAddress(rdataBase, byteOffset: globalData.rdataOffsetOf(fixup.blobLabel))
+		patchQword(rdataImage, offset: recordOffset + StringBufferOffset, value: blobAddr as MachineWord)
+	end 'each'
+end 'applyStringBufferFixups'
+
+// The `.rdata` base: the first 8-aligned linear-memory address at or after the end of the
+// `.data` image. `WasmDataBaseOffset` is itself 8-aligned, so a program with no top-level `var`
+// puts `.rdata` at `WasmDataBaseOffset`.
+function wasmRdataBase(dataBase Wasm32Index, dataSize ByteCount) returns Wasm32Index
+	return alignUp((dataBase as ByteCount) + dataSize, alignment: WasmRdataAlignment) as Wasm32Index
+end 'wasmRdataBase'
 
 // Synthesize the component entry `wasi:cli/run@0.2.6#run() -> i32`: run `main`, hand its
 // exit code to `exit-with-code`, and leave the ok-discriminant on the stack. Returns the
@@ -435,7 +529,10 @@ function recordDefValtype(op StdOp, valtypes WasmValTypeArray, depResult ValueId
 		storeIndirect then break 'def'
 		osAllocPages then break 'def'
 		osWriteStdout then break 'def'
-		rdataAddr then break 'def'
+		// A wasm linear-memory ADDRESS IS AN i32 (like `globalAddr`), not the i64 pointer width the
+		// native backends carry. `rdataAddr` materializes an `i32.const`, so its result local is i32 —
+		// the width `loadIndirect`/`osWriteStdout` then consume as the base address.
+		rdataAddr(resultId, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i32)
 		tryCall to osExit then panic("recordDefValtype: error-handling op (throws/try/panic) is not in the wasm scalar slice")
 	end 'def'
 end 'recordDefValtype'
@@ -488,11 +585,13 @@ end 'widthOfValue'
 type WasmFuncEmitter
 	var module as StdModule
 	var func as IrFunction
-	// The laid-out `.data` table (a `globalAddr` resolves its label to a byte offset here) and the
-	// linear-memory base those offsets are relative to. Both are module-wide constants; each emitter
-	// holds them so a `globalAddr` resolves its address in O(1) with no per-function setup.
+	// The laid-out data tables and the linear-memory bases their offsets are relative to: a
+	// `globalAddr` resolves its label to a `.data` offset (base `dataBase`), an `rdataAddr` to a
+	// `.rdata` offset (base `rdataBase`). All module-wide constants; each emitter holds them so an
+	// address resolves in O(1) with no per-function setup.
 	var globalData as GlobalDataTable
 	var dataBase as Wasm32Index
+	var rdataBase as Wasm32Index
 	var calleeFuncIdx as CalleeFuncIdxMap
 	var calleeReturnType as CalleeReturnTypeMap
 	var calleeParamTypes as CalleeParamTypesMap
@@ -519,7 +618,7 @@ type WasmFuncEmitter
 	// Block id → dispatch index (position in `func.blockRefs`), for branch targets.
 	var blockDispatchById as BlockDispatchMap
 
-	static function create(module StdModule, func IrFunction, globalData GlobalDataTable, dataBase Wasm32Index, calleeFuncIdx CalleeFuncIdxMap, calleeReturnType CalleeReturnTypeMap, calleeParamTypes CalleeParamTypesMap) returns WasmFuncEmitter
+	static function create(module StdModule, func IrFunction, globalData GlobalDataTable, dataBase Wasm32Index, rdataBase Wasm32Index, calleeFuncIdx CalleeFuncIdxMap, calleeReturnType CalleeReturnTypeMap, calleeParamTypes CalleeParamTypesMap) returns WasmFuncEmitter
 		let valtypes = buildValtypeTable(module, func: func, calleeReturnType: calleeReturnType)
 		let useDispatcher = decideDispatcher(module, func: func)
 
@@ -528,6 +627,7 @@ type WasmFuncEmitter
 			func: func,
 			globalData: globalData,
 			dataBase: dataBase,
+			rdataBase: rdataBase,
 			calleeFuncIdx: calleeFuncIdx,
 			calleeReturnType: calleeReturnType,
 			calleeParamTypes: calleeParamTypes,
@@ -734,8 +834,8 @@ type WasmFuncEmitter
 			loadIndirect(resultId, addrId, offset, valueType) then self.emitLoadIndirect(resultId, addrId: addrId, offset: offset, valueType: valueType)
 			storeIndirect(addrId, offset, valueId, valueType) then self.emitStoreIndirect(addrId, offset: offset, valueId: valueId, valueType: valueType)
 			osAllocPages then panic("wasm: osAllocPages not in scalar slice")
-			osWriteStdout then panic("wasm: osWriteStdout not in scalar slice")
-			rdataAddr then panic("wasm: rdataAddr not in scalar slice")
+			osWriteStdout(bufId, lenId) then self.emitOsWriteStdout(bufId, lenId: lenId)
+			rdataAddr(resultId, label) then self.emitRdataAddr(resultId, label: label)
 			tryCall to osExit then panic("wasm: error-handling op (throws/try/panic) not in scalar slice")
 		end 'body'
 	end 'emitBodyOp'
@@ -1099,16 +1199,22 @@ type WasmFuncEmitter
 	// width `loadIndirect`/`storeIndirect` consume as the base address.
 	function emitGlobalAddr(resultId ValueId, label ByteArray)
 		let slotOffset = self.globalData.dataSectionOffsetOf(String.from(label))
-		self.body.i32Const(wasmGlobalAddress(self.dataBase, slotOffset: slotOffset))
+		self.body.i32Const(wasmLinearAddress(self.dataBase, byteOffset: slotOffset))
 		self.body.localSet(resultId as Wasm32Index)
 	end 'emitGlobalAddr'
 
-	// `loadIndirect` → push the i32 base address, then `<width>.load offset=<offset>`. The static
-	// `offset` (0 for a plain global, non-zero once a struct field rides this op) folds into the
-	// memarg. Only word-width globals are in this slice — `requireWordGlobal` rejects a byte/narrow
-	// global loudly — so the load is i64 or f64.
+	// `loadIndirect` → push the base address as an i32, then `<width>.load offset=<offset>`. The
+	// static `offset` (0 for a plain global, non-zero once a struct field rides this op) folds into
+	// the memarg. Only word-width globals are in this slice — `requireWordGlobal` rejects a
+	// byte/narrow global loudly — so the load is i64 or f64.
+	//
+	// ⚠ THE BASE IS COERCED TO i32 (`pushOperandAt`), NOT pushed bare. A `globalAddr` result is
+	// already i32, so the coercion is a no-op and this stays byte-identical — but a String pointer
+	// (`__print_string`'s i64 `strPtr` param) used as a load base needs an `i32.wrap_i64`, and
+	// wasm's typed stack rejects the bare i64 under `i64.load`. Real addresses are < 4 GiB, so the
+	// wrap is lossless.
 	function emitLoadIndirect(resultId ValueId, addrId ValueId, offset ByteOffset, valueType StdType)
-		self.body.localGet(addrId as Wasm32Index)
+		self.pushOperandAt(addrId, targetVt: WasmValType.i32)
 		let memOffset = wasmMemOffset(offset)
 		if requireWordGlobal(valueType, what: "loadIndirect") == WasmValType.i64 'i64'
 			self.body.i64Load(memOffset)
@@ -1118,13 +1224,14 @@ type WasmFuncEmitter
 		self.body.localSet(resultId as Wasm32Index)
 	end 'emitLoadIndirect'
 
-	// `storeIndirect` → push the i32 base address, then the value (coerced to the global's width),
-	// then `<width>.store offset=<offset>`. Address BELOW value is the order the store opcode pops.
-	// `pushOperandAt` coerces the value to the store width the same way `ret`/call-arg boundaries do
-	// — a store is a value-meets-declared-type boundary — a no-op when the widths already agree.
+	// `storeIndirect` → push the base address as an i32, then the value (coerced to the global's
+	// width), then `<width>.store offset=<offset>`. Address BELOW value is the order the store opcode
+	// pops. `pushOperandAt` coerces BOTH: the base to i32 (a no-op for a `globalAddr` result, an
+	// `i32.wrap_i64` for an i64 String pointer — the same reason `emitLoadIndirect` coerces it) and
+	// the value to the store width (a value-meets-declared-type boundary, like `ret`/call args).
 	// Defines nothing, so no `local.set`.
 	function emitStoreIndirect(addrId ValueId, offset ByteOffset, valueId ValueId, valueType StdType)
-		self.body.localGet(addrId as Wasm32Index)
+		self.pushOperandAt(addrId, targetVt: WasmValType.i32)
 		let storeVt = requireWordGlobal(valueType, what: "storeIndirect")
 		self.pushOperandAt(valueId, targetVt: storeVt)
 		let memOffset = wasmMemOffset(offset)
@@ -1134,6 +1241,37 @@ type WasmFuncEmitter
 			self.body.f64Store(memOffset)
 		end 'f64'
 	end 'emitStoreIndirect'
+
+	// ----------------------------------------------------------------------
+	// rdata band + system band: String-literal records and the stdout write
+	// ----------------------------------------------------------------------
+
+	// `rdataAddr` → `i32.const <rdataBase + the record's `.rdata` offset>`. The `.rdata` twin of
+	// `emitGlobalAddr`: a String literal's 48-byte record lives at a fixed linear-memory byte, so its
+	// address is a compile-time i32 CONSTANT. The result local is i32 (recorded by
+	// `buildValtypeTable`); it reaches `__print_string`'s i64 `strPtr` param through the
+	// call-argument coercion (`i64.extend_i32`), and is wrapped back to i32 at the load base.
+	function emitRdataAddr(resultId ValueId, label ByteArray)
+		let recordOffset = self.globalData.rdataOffsetOf(String.from(label))
+		self.body.i32Const(wasmLinearAddress(self.rdataBase, byteOffset: recordOffset))
+		self.body.localSet(resultId as Wasm32Index)
+	end 'emitRdataAddr'
+
+	// `osWriteStdout(buf, len)` → the WASI-Preview2 stdout write, fire-and-forget (the result is
+	// ignored). Stack-balanced: `get-stdout` pushes the i32 stream handle; the buffer address and the
+	// byte length are each wrapped to i32 (a String's `buffer@0`/`length@8` are i64 in the Std IR — a
+	// 64-bit pointer/count in a register on the native backends — but a wasm address/length is i32);
+	// the canonical-ABI return area is a constant i32. `blocking-write-and-flush` writes its
+	// `result<_, stream-error>` into that area and returns nothing, so the stack is empty after —
+	// `osWriteStdout` defines no value. The stream handle leaks, which is acceptable: stdout is
+	// process-lived and the host reclaims it on exit (matches v1's `emitOsWrite`).
+	function emitOsWriteStdout(bufId ValueId, lenId ValueId)
+		self.body.call(GetStdoutImportFuncIdx)
+		self.pushOperandAt(bufId, targetVt: WasmValType.i32)
+		self.pushOperandAt(lenId, targetVt: WasmValType.i32)
+		self.body.i32Const(WasmRetAreaBase)
+		self.body.call(BlockingWriteFlushImportFuncIdx)
+	end 'emitOsWriteStdout'
 
 	// ----------------------------------------------------------------------
 	// Dispatcher terminators: branch / cond-branch (with phi copies)
@@ -1321,17 +1459,18 @@ function requireWordGlobal(valueType StdType, what String) returns WasmValType
 	end 'vt'
 end 'requireWordGlobal'
 
-// A global's absolute linear-memory address: the data base plus the byte offset the label was
-// laid out at, as the signed `Imm32` an `i32.const` carries. The whole `.data` image sits inside
-// one 64 KiB page well below i32.max, so the address always fits; a violation is an invariant
-// break (a `.data` section larger than 2 GiB), not a user error.
-function wasmGlobalAddress(base Wasm32Index, slotOffset ByteOffset) returns Imm32
-	let addr = (base as ByteOffset) + slotOffset
+// A linear-memory ABSOLUTE address: a section base plus a byte offset within it, as the signed
+// `Imm32` an `i32.const` carries. Shared by `globalAddr` (`.data`), `rdataAddr` and the String
+// buffer fixup (`.rdata`) — all fixed-base wasm addresses. The whole image sits well below
+// i32.max, so the address always fits; a violation is an invariant break (a section larger than 2
+// GiB, which the single-page memory this slice declares cannot hold), not a user error.
+function wasmLinearAddress(base Wasm32Index, byteOffset ByteOffset) returns Imm32
+	let addr = (base as ByteOffset) + byteOffset
 	if addr > i32.max 'tooFar'
-		panic("wasmGlobalAddress: global address {addr} (base {base} + offset {slotOffset}) does not fit the signed i32 a wasm address is — the `.data` image exceeds 2 GiB, which the single-page memory this slice declares cannot hold")
+		panic("wasmLinearAddress: address {addr} (base {base} + offset {byteOffset}) does not fit the signed i32 a wasm linear-memory address is — the data/rdata image exceeds 2 GiB, which the single-page memory this slice declares cannot hold")
 	end 'tooFar'
 	return addr as Imm32
-end 'wasmGlobalAddress'
+end 'wasmLinearAddress'
 
 // A memory-band byte offset as the ULEB `offset` a wasm memarg carries (a u32). Every offset in
 // this slice is 0 (a plain global's load/store); the bound starts mattering at P1.1's struct
