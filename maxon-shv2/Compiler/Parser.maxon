@@ -207,6 +207,15 @@ export union ParseError implements Error
 	// 'int'` (2-Parser.cs:7840) — positioned at the `return`. The declared type prints as its
 	// RESOLVED primitive, which is what the bootstrap prints (see TypeRules' typeTagName).
 	returnTypeMismatch(got String, expected String, line LineNumber, column ColumnNumber)
+	// OPEN #54 Slice C: a match EXPRESSION whose `gives` arms produce values of different types
+	// (`match c { 0 gives "s"; default gives 5 }`, or two different structs/unions). The result phi
+	// takes the FIRST arm's type, so a later arm's value is wrong-typed through it — a String pointer
+	// read off an integer (segfault), or a wild free when the phi is dropped under the first type's
+	// destructor. Renders as E3005, positioned at the `match`. `got`/`expected` are the mismatching
+	// arm's type and the first arm's, each already the printable name (`typeTagName` for a scalar
+	// class, the interned aggregate name for two structs/unions) — the same shape `returnTypeMismatch`
+	// carries, so the three coercion-site messages phrase one rule one way.
+	giveTypeMismatch(got String, expected String, line LineNumber, column ColumnNumber)
 	// A `not` whose operand's type the parser cannot determine. Since the whole-program signature
 	// index landed, that is reachable only for a call to a function NO FILE DECLARES — a program
 	// already doomed (E3004). Renders as E3005, positioned at the `not`. It is a REJECTION rather
@@ -6737,6 +6746,47 @@ export type Parser
 				throw ParseError.unsupported("a match expression whose arms give values of different register classes (a float arm and a non-float arm) — unifying them promotes the integer arms to float, whose result has no nameable type until the float type system lands (a `float` typealias is itself not yet parsed), and it arrives with that rung", line: matchTok.line, column: matchTok.column)
 			end 'crossClass'
 		end 'checkGiveClass'
+
+		// ⭐ **OPEN #54 SLICE C — EVERY REACHING `gives` ARM MUST YIELD THE FIRST ARM'S TYPE.** The result
+		// phi minted below takes the FIRST arm's type (`mintPhi` off `firstGive`), and a value's type is
+		// fixed at birth — so an arm giving a value of another type hands the phi a value its own type is a
+		// lie about, with no diagnostic. The float/non-float split threw `unsupported` above, so a surviving
+		// mismatch is same-register-class and takes one of two shapes, each a memory-SAFETY defect:
+		//   • a SCALAR-CLASS disagreement — a `String` give and an `int` give, a `bool` give and an `int`
+		//     give — whose phi derefs the wrong-domain value as the first arm's type (the int read as a
+		//     String pointer: a segfault). Caught by `typesAgree`, the SYMMETRIC form of the rule the
+		//     coercion-site twins (`return`, reassignment, `otherwise`, the call argument) ask one-sided as
+		//     `checkDeclaredType`. It is `typesAgree`, NOT a raw tag compare, so a ranged-int alias give and
+		//     a plain `int` give (both numeric) — or an `ExitCode` give and an `int` give — STAY valid: the
+		//     numeric subtypes share a register file and a phi holds either.
+		//   • an AGGREGATE disagreement — two DIFFERENT structs or unions — sharing the `structRef`/`named`
+		//     class (so `typesAgree` passes them) but naming distinct types, whose phi is later dropped
+		//     under the FIRST arm's destructor: a wild free. Caught by `namedAggregatesConflict`, the ONE
+		//     name-agreement rule Slice A/B/#52 share (TypeRules), read off the scalar tag/name columns so a
+		//     scalar match materializes no `MaxonType` and allocates nothing here.
+		// Placed BEFORE `resolveGivesOwnership` and the phi so an ill-typed match is refused before any phi
+		// is built. Expression-only: a statement match gives no value, exactly as the float check above.
+		if isExpression 'checkGiveTypes'
+			let firstGive = self.giveValueOf(firstArm.give)
+			let firstTag = self.tagOf(firstGive)
+			let firstAggregate = self.aggregateNameOf(firstTag, nameId: self.valueNameId(firstGive))
+			for i in 1 upto reachingArms.count() 'scanGiveType'
+				let arm = try reachingArms.get(i) otherwise panic("finalizeMatchMerge: reachingArms.get OOB at {i}")
+				let giveVal = self.giveValueOf(arm.give)
+				let giveTag = self.tagOf(giveVal)
+
+				if not typesAgree(giveTag, right: firstTag) 'classMismatch'
+					throw ParseError.giveTypeMismatch(typeTagName(giveTag), expected: typeTagName(firstTag), line: matchTok.line, column: matchTok.column)
+				end 'classMismatch'
+
+				if not firstAggregate.isEmpty() 'aggregateGive'
+					let giveAggregate = self.aggregateNameOf(giveTag, nameId: self.valueNameId(giveVal))
+					if namedAggregatesConflict(firstAggregate, got: giveAggregate) 'aggregateGiveMismatch'
+						throw ParseError.giveTypeMismatch(String.from(giveAggregate), expected: String.from(firstAggregate), line: matchTok.line, column: matchTok.column)
+					end 'aggregateGiveMismatch'
+				end 'aggregateGive'
+			end 'scanGiveType'
+		end 'checkGiveTypes'
 
 		// ⭐ **OWNED-GIVE OWNERSHIP TRANSFER (P1.3).** If any reaching arm gives an OWNED value the result
 		// phi takes over ownership (`resultOwned` → the phi is marked owned below): each arm's give value has
