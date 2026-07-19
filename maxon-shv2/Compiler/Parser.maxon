@@ -6122,11 +6122,20 @@ export type Parser
 	// and that `if` is the opener whose `end` closes it. Counting `else if` as an opener would
 	// leave one `end` unaccounted for and run the extent past the loop, which is safe but
 	// wrong; counting it correctly keeps the scan exact and the drift guard meaningful.
+	//
+	// `otherwise` is the other subtle one: only the BLOCK forms of a `try … otherwise` open a
+	// block (`otherwiseOpensBlock`). The rest (`ignore`, a fallback value, a single-statement
+	// return/break/continue/throw/panic) open nothing, so counting a bare `otherwise` would
+	// leave an `end` unaccounted for — the very miscount OPEN #62 was.
 	function opensBlockAt(index TokenIndex) returns bool
 		let kind = self.kindAt(index)
 		if kind == TokenKind.if or kind == TokenKind.while or kind == TokenKind.match 'alwaysOpens'
 			return not self.keywordIsMatchCaseName(index)
 		end 'alwaysOpens'
+
+		if kind == TokenKind.otherwise 'tryBlock'
+			return self.otherwiseOpensBlock(index)
+		end 'tryBlock'
 
 		if kind != TokenKind.else 'notElse'
 			return false
@@ -6134,6 +6143,26 @@ export type Parser
 
 		return self.kindAt(index + 1) != TokenKind.if and not self.keywordIsMatchCaseName(index)
 	end 'opensBlockAt'
+
+	// Does the `otherwise` at `index` begin a BLOCK-form handler — one closed by its own `end`?
+	// Two block forms exist: `otherwise 'label' … end` (a bare charLiteral label) and
+	// `otherwise (e) 'label' … end` (a caught-error binding). The NON-block forms open nothing:
+	// `otherwise ignore`, a fallback VALUE, and the single-statement `return`/`break`/`continue`/
+	// `throw`/`panic`. This is `parseOtherwiseHandler`'s split written down a second time (the drift
+	// guard keeps them honest), but with ONE extra care it does not need: `otherwise` IS a legal
+	// enum case name (`tokenNamesEnumCase`), so a keyword-spelled match arm `otherwise(x) then` also
+	// leads with `otherwise (`. The binding form is told apart by its full SHAPE — `( identifier )`
+	// followed by the label charLiteral — which a payload case (`( bindings ) then/gives`, or
+	// multi-binding `( a , b )`) never matches. `parseOtherwiseHandler` needs no such check because
+	// by the time it runs the leading `try` has already disambiguated the context.
+	function otherwiseOpensBlock(index TokenIndex) returns bool
+		let next = self.kindAt(index + 1)
+		if next == TokenKind.charLiteral 'labelForm'
+			return true
+		end 'labelForm'
+
+		return next == TokenKind.leftParen and self.kindAt(index + 2) == TokenKind.identifier and self.kindAt(index + 3) == TokenKind.rightParen and self.kindAt(index + 4) == TokenKind.charLiteral
+	end 'otherwiseOpensBlock'
 
 	// Is the keyword at `index` being used as a match-arm CASE NAME rather than as control flow?
 	//

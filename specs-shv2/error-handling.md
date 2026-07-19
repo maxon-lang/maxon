@@ -1783,3 +1783,100 @@ end 'main'
 ```exitcode
 2
 ```
+
+<!-- test: error.try-binding-block-in-while -->
+A block-form `try … otherwise (e) 'label' … end` STATEMENT nested inside a `while`
+loop. The loop's carried-variable pre-scan re-derives block structure at the token
+level (`opensBlockAt`), and must recognize the block-form `otherwise` as opening a
+block — else it mis-predicts the loop's closing `end` and the drift guard panics
+(OPEN #62). `i` is assigned AFTER the try-block, so it is exactly the carried var a
+too-short extent would lose. `risky` always throws, so the handler runs each
+iteration: `acc` counts the 4 iterations.
+```maxon
+typealias Code = int(i64.min to i64.max)
+
+enum Fault implements Error
+	broken
+end 'Fault'
+
+function risky(n Code) returns Code throws Fault
+	throw Fault.broken
+end 'risky'
+
+function main() returns ExitCode
+	var acc = 0 as Code
+	var i = 0 as Code
+	while i < 4 'loop'
+		try risky(i) otherwise (e) 'h'
+			acc = acc + 1
+		end 'h'
+		i = i + 1
+	end 'loop'
+	return acc
+end 'main'
+```
+```exitcode
+4
+```
+
+<!-- test: error.try-label-block-in-while -->
+The no-binding block form `try … otherwise 'label' … end` (a bare charLiteral label
+after `otherwise`, no `(e)`) nested in a `while`. Exercises the other `opensBlockAt`
+branch. `i` increments after the try-block.
+```maxon
+typealias Code = int(i64.min to i64.max)
+
+enum Fault implements Error
+	broken
+end 'Fault'
+
+function risky(n Code) returns Code throws Fault
+	throw Fault.broken
+end 'risky'
+
+function main() returns ExitCode
+	var acc = 0 as Code
+	var i = 0 as Code
+	while i < 4 'loop'
+		try risky(i) otherwise 'h'
+			acc = acc + 1
+		end 'h'
+		i = i + 1
+	end 'loop'
+	return acc
+end 'main'
+```
+```exitcode
+4
+```
+
+<!-- test: error.try-block-in-if -->
+A block-form `try … otherwise (e) 'label' … end` inside an `if` body, with a var
+assigned AFTER the try-block. `parseIfStatement` shares the same carried-variable
+pre-scan + drift guard as `parseWhileStatement`, so it panics identically without
+the `opensBlockAt` fix. `acc` is set to 7 in the handler then incremented to 8.
+```maxon
+typealias Code = int(i64.min to i64.max)
+
+enum Fault implements Error
+	broken
+end 'Fault'
+
+function risky(n Code) returns Code throws Fault
+	throw Fault.broken
+end 'risky'
+
+function main() returns ExitCode
+	var acc = 0 as Code
+	if acc < 5 'guard'
+		try risky(3) otherwise (e) 'h'
+			acc = 7
+		end 'h'
+		acc = acc + 1
+	end 'guard'
+	return acc
+end 'main'
+```
+```exitcode
+8
+```

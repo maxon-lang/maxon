@@ -1,0 +1,72 @@
+// Test: error.try-label-block-in-while
+typealias Code = int(i64.min to i64.max)
+
+enum Fault implements Error
+	broken
+end 'Fault'
+
+function risky(n Code) returns Code throws Fault
+	throw Fault.broken
+end 'risky'
+
+function main() returns ExitCode
+	var acc = 0 as Code
+	var i = 0 as Code
+	while i < 4 'loop'
+		try risky(i) otherwise 'h'
+			acc = acc + 1
+		end 'h'
+		i = i + 1
+	end 'loop'
+	return acc
+end 'main'
+---
+ExitCode: 4
+---
+func @risky {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 0
+    arm64.add x9, x0, 1
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 0
+    arm64.movImm x20, 0
+    arm64.b whilehdr
+  whilehdr:
+    arm64.cmp x20, 4
+    arm64.cset x0, lt
+    arm64.cbnz x0, loop
+    arm64.b whileexit
+  loop:
+    arm64.movRegReg x0, x20
+    arm64.bl risky
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.add x0, x19, 1
+    arm64.b trycont
+  tryok:
+    arm64.movRegReg x0, x19
+    arm64.b trycont
+  trycont:
+    arm64.add x20, x20, 1
+    arm64.movRegReg x19, x0
+    arm64.b whilehdr
+  whileexit:
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
