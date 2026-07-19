@@ -62,6 +62,24 @@ end 'memoryDisplacement'
 // once per lowering.
 export typealias CalleeResultClassMap = Map with (ByteArray, RegClass)
 
+// A per-parameter GPR/XMM bitmask: bit k set iff parameter k is a FLOAT (an f64, which travels in
+// an XMM/SIMD argument register rather than a GPR). Only the low parameter-count bits are
+// meaningful, but the storage is a full machine word, mirroring `RegMask`'s bitmask idiom — a
+// parameter list is capped at the parser's register-argument limit, well under 64.
+export typealias ParamFloatMask = int(0 to u64.max)
+
+// Callee name -> its `ParamFloatMask`. Built once per module beside `CalleeResultClassMap` so a
+// call site's per-argument register-FILE decision is an O(1) lookup rather than a Θ(calls ×
+// functions) scan of `stdModule.functions` for the callee's parameter types.
+//
+// A MASK, not the `Map with (ByteArray, RegClassArray)` that would be the array-shaped mirror of
+// `CalleeResultClassMap`: a parameter's class is ONE bit (GPR vs XMM), and a per-callee array would
+// heap-box one small array for EVERY function in the module — most all-integer and never the target
+// of a float-argument call. The scalar mask keeps this index as allocation-flat as
+// `CalleeResultClassMap` (a scalar per entry). The bit is read back as a `RegClass` by
+// `calleeParamClass`, the one door the caller-side argument routing consults.
+export typealias CalleeParamClassMap = Map with (ByteArray, ParamFloatMask)
+
 // ⭐ THE ONE DOOR from a Std type to a register FILE. A value's class is what its TYPE says, and
 // nothing else — the whole content of `ValueClassColumn`'s "produced by the lowering, not derived in
 // the backend".
@@ -130,6 +148,65 @@ export function buildCalleeResultClasses(stdModule StdModule) returns CalleeResu
 	end 'eachFunc'
 	return calleeResultClasses
 end 'buildCalleeResultClasses'
+
+// Build the callee name → `ParamFloatMask` index, once per module — the argument-side twin of
+// `buildCalleeResultClasses`. Each backend builds it in its `create` and threads the one instance
+// into the argument-move emission (`lowerCall`/`lowerTryCall`), so a float argument's XMM
+// destination and the callee's declared parameter type are the ONE fact, never two that could
+// disagree.
+export function buildCalleeParamClasses(stdModule StdModule) returns CalleeParamClassMap
+	var calleeParamClasses = CalleeParamClassMap.create()
+	for func in stdModule.functions 'eachFunc'
+		calleeParamClasses.upsert(func.name, value: floatParamMaskOf(func.paramTypes))
+	end 'eachFunc'
+	return calleeParamClasses
+end 'buildCalleeParamClasses'
+
+// The `ParamFloatMask` for one parameter list: bit k set iff parameter k is an f64.
+function floatParamMaskOf(paramTypes StdTypeArray) returns ParamFloatMask
+	var mask = 0 as ParamFloatMask
+	for i in 0 upto paramTypes.count() 'eachParam'
+		let paramType = try paramTypes.get(i) otherwise panic("floatParamMaskOf: paramTypes.get OOB at {i}")
+		if stdTypeIsFloat(paramType) 'float'
+			mask = mask or (1 shl i)
+		end 'float'
+	end 'eachParam'
+	return mask
+end 'floatParamMaskOf'
+
+// The register FILE argument `paramIndex` travels in — the callee's PARAM class, looked up by name.
+// Exported so the caller-side arg routing picks the SAME file (XMM for a float, else GPR) the callee
+// captures the parameter into (`lowerParam` reads the parameter's own f64 Std type through the
+// value-class column): one door, so the argument's destination register and its allocation class
+// cannot disagree. Mirrors `calleeResultClass`.
+export function calleeParamClass(calleeParamClasses CalleeParamClassMap, callee ByteArray, paramIndex ParamCount) returns RegClass
+	let mask = try calleeParamClasses.get(callee) otherwise panic("calleeParamClass: no Std function is named '{String.from(callee)}' — every callee reaching the lowering is one LowerMaxonToStd resolved against the merged module")
+	return RegClass.xmm if ((mask shr paramIndex) and 1) != 0 else RegClass.gpr
+end 'calleeParamClass'
+
+// The calling-convention SLOT index of parameter/argument `paramIndex`: the count of PRECEDING
+// parameters that share its register FILE. The integer and float ABI registers are counted by
+// SEPARATE counters (v1's internal convention), so a float parameter at source-index 1 that follows
+// an integer parameter is FP-slot 0, not slot 1.
+//
+// This is the WHOLE cross-target ABI contract, and the reason it lives here: the callee-side
+// `lowerParam` (which lowers each `param` op independently and so recomputes the slot per parameter)
+// and the caller-side argument routing (which walks the arguments once with running counters) MUST
+// assign the same slot to the same parameter, or a float argument written to xmm0 is read back from
+// xmm1. Deriving both from Std types alone, in one place, is what makes them agree by construction.
+// Ported from v1's `StdOpHelpers.computeParamSlotIndex`.
+export function computeParamSlotIndex(paramIndex ParamCount, paramTypes StdTypeArray) returns ParamCount
+	let targetType = try paramTypes.get(paramIndex) otherwise panic("computeParamSlotIndex: paramIndex {paramIndex} out of range for a {paramTypes.count()}-parameter list")
+	let targetIsFloat = stdTypeIsFloat(targetType)
+	var slotIndex = 0 as ParamCount
+	for i in 0 upto paramIndex 'countPreceding'
+		let precedingType = try paramTypes.get(i) otherwise panic("computeParamSlotIndex: preceding paramIndex {i} out of range for a {paramTypes.count()}-parameter list")
+		if stdTypeIsFloat(precedingType) == targetIsFloat 'sameFile'
+			slotIndex = slotIndex + 1
+		end 'sameFile'
+	end 'countPreceding'
+	return slotIndex
+end 'computeParamSlotIndex'
 
 // One function's column. Pre-sized to `scanFunctionValueCount` (a LOWER bound — operand-used values)
 // and EXTENDED by `setValueClass` for the walk-defined values beyond it. `gpr` is the FILL for ids no

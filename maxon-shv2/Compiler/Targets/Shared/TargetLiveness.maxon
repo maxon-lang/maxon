@@ -2840,7 +2840,12 @@ function stepBackwardOverOp(module TargetModule, opIdx OpIndex, liveRow BitWordA
 	var clobberMask = op.rawValue.implicitDefs
 	for o in buf 'physDefs'
 		if operandIsDef(o) and not operandIsVirtual(o) 'physDef'
-			clobberMask = clobberMask or regMaskOf(operandRegister(o))
+			// A physical DEF's register number is a target-neutral `RegNum`, NOT an `X64Register`: this
+			// SHARED census sees arm64 SIMD arg registers (d1..d7 = 32..38) a multi-float-argument call
+			// emits, which the x64 `operandRegister`/`X64Register.fromRawValue` door range-check-panicked
+			// on. `regMaskAdd` forms the same clobber bit from the `RegNum` directly — bit-identical for the
+			// x64 registers this already handled (an `X64Register.rawValue` IS its `RegNum`).
+			clobberMask = regMaskAdd(clobberMask, regNum: operandPhysicalRegNum(o))
 		end 'physDef'
 	end 'physDefs'
 	if clobberMask != 0 'hasClobber'

@@ -84,7 +84,7 @@ let OperandConstraintTagFixed = 2
 
 // Encode a vreg's payload into the high bits, tagging physical vs virtual. A
 // physical operand's payload IS its `RegNum` — the packed operand model is neutral
-// across ISAs exactly as `TargetVReg` is (see `operandRegister`).
+// across ISAs exactly as `TargetVReg` is (see `operandPhysicalRegNum`).
 function packVRegBits(vreg TargetVReg) returns MachineWord
 	return match vreg 'v'
 		physical(reg) gives reg shl OperandVRegShift
@@ -175,12 +175,17 @@ export function operandValueId(op Operand) returns ValueId
 	return operandPayload(op)
 end 'operandValueId'
 
-// The physical register of a PHYSICAL operand (caller must have checked
-// `not operandIsVirtual`). The payload was built from a real `X64Register.rawValue`
-// (0..15), so `fromRawValue` never fails here.
-export function operandRegister(op Operand) returns X64Register
-	return try X64Register.fromRawValue(operandPayload(op)) otherwise panic("operandRegister: packed physical operand payload {operandPayload(op)} is not a valid X64Register number")
-end 'operandRegister'
+// The physical register NUMBER of a PHYSICAL operand (caller must have checked
+// `not operandIsVirtual`) — the physical twin of `operandValueId`. The payload was built from a
+// `TargetVReg.physical(reg RegNum)`, so it is a unified `RegNum` (0..63), NOT an `X64Register`: an
+// arm64 SIMD register numbers past the x64 file (d1 is 32, which no `X64Register` names). Decoding a
+// physical operand as an `X64Register` was an x64-only door that range-check-panicked on exactly
+// those arm64 SIMD arg registers a multi-float-argument call now emits — the same per-ISA hazard
+// `operandClass` was already hardened against. A `RegNum` is target-neutral, and the one consumer
+// (the liveness clobber census) wants a mask bit, which `regMaskAdd` forms from a `RegNum` directly.
+export function operandPhysicalRegNum(op Operand) returns RegNum
+	return operandPayload(op) as RegNum
+end 'operandPhysicalRegNum'
 
 // Decode `reuse(i)`'s operand index (caller must have checked `operandIsReuseDef`).
 export function operandReuseIndex(op Operand) returns OperandIndex

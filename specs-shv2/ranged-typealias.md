@@ -642,8 +642,7 @@ end 'main'
 
 ### F32 function parameter and return
 
-<!-- disabled-test: f32-function-param-return -->
-<!-- F2 float ABI: a float PARAMETER (xmm arg slot) and float RETURN (xmm0) across a call boundary. Float aliases are nameable as of F1; the blocker is now the ABI, not the type. -->
+<!-- test: f32-function-param-return -->
 ```maxon
 typealias F = float(f32.min to f32.max)
 

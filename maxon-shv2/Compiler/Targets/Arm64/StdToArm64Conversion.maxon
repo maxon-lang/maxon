@@ -36,6 +36,15 @@
 // parser rejects up front (`MaxRegisterParams`).
 let arm64ArgRegisters = [Arm64Register.x0, Arm64Register.x1, Arm64Register.x2, Arm64Register.x3, Arm64Register.x4, Arm64Register.x5, Arm64Register.x6, Arm64Register.x7]
 
+// The AAPCS64 FLOAT argument registers, in slot order: a FLOAT parameter/argument travels in
+// `arm64FpArgRegisters[fpSlot]` = d0..d7, where `fpSlot` is counted by a SEPARATE FP counter from the
+// integer `arm64ArgRegisters` (the same separate-counter convention x64 uses — see
+// `computeParamSlotIndex`). d0 doubles as the float RETURN register (`Arm64FloatReturnReg`), exactly as
+// x0 is both the first integer arg register and the integer return register. The whole SIMD file is
+// caller-saved for d0..d7 (see `arm64CallerSavedMask`), so a float live across a call is spilled by the
+// allocator with no hand-holding.
+let arm64FpArgRegisters = [Arm64Register.d0, Arm64Register.d1, Arm64Register.d2, Arm64Register.d3, Arm64Register.d4, Arm64Register.d5, Arm64Register.d6, Arm64Register.d7]
+
 // The primary integer return register (AAPCS64) — where `lowerReturn` moves an integer result, and
 // where `lowerCall` reads a callee's integer result from.
 let Arm64IntReturnReg = Arm64Register.x0
@@ -110,6 +119,14 @@ end 'arm64PhysReg'
 function arm64ArgRegisterAt(index ParamCount) returns Arm64Register
 	return try arm64ArgRegisters.get(index) otherwise panic("arm64ArgRegisterAt: argument index {index} exceeds the {arm64ArgRegisters.count()} register-argument slots — the parser caps parameters at that count until stack arguments land")
 end 'arm64ArgRegisterAt'
+
+// The physical SIMD register FP argument slot `index` occupies — the float twin of
+// `arm64ArgRegisterAt`. A slot past the file is a compiler-invariant break (the parser caps
+// parameters, and a float overflow arg would need a stack slot, a later milestone), so it rejects
+// cleanly here rather than mis-storing from the wrong file.
+function arm64FpArgRegisterAt(index ParamCount) returns Arm64Register
+	return try arm64FpArgRegisters.get(index) otherwise panic("arm64FpArgRegisterAt: float argument slot {index} exceeds the {arm64FpArgRegisters.count()} SIMD register-argument slots — the parser caps parameters at that count until stack arguments land")
+end 'arm64FpArgRegisterAt'
 
 // Map a Std comparison predicate to the arm64 condition code its `b.cond`/`cset` tests, in the DIRECT
 // (predicate-holds) sense — every compare here materialises with `cset(cond)` and every branch takes
@@ -216,9 +233,15 @@ type StdToArm64Lowering
 	// so a float result's CAPTURE register and its allocation CLASS are the one `calleeResultClass` fact.
 	// Exported like `targetModule`: `lowerStdToArm64` reads it to thread the one instance into the column.
 	export var calleeResultClasses as CalleeResultClassMap
+	// Callee name → its parameters' register FILES as a bitmask — the ARGUMENT-side twin of
+	// `calleeResultClasses`. Built ONCE here and read by `emitCallArgMoves` to route each argument to a
+	// GPR (x0..x7) or a SIMD (d0..d7) arg register by the callee's declared parameter type. Only the
+	// argument routing consults it (the value-class column classes a `param` result from its own carried
+	// f64 type), so unlike `calleeResultClasses` it is not threaded into `buildValueClassColumns`.
+	var calleeParamClasses as CalleeParamClassMap
 
 	static function create(stdModule StdModule, globalData GlobalDataTable) returns StdToArm64Lowering
-		return Self{stdModule: stdModule, globalData: globalData, targetModule: TargetModule.create(), calleeResultClasses: buildCalleeResultClasses(stdModule)}
+		return Self{stdModule: stdModule, globalData: globalData, targetModule: TargetModule.create(), calleeResultClasses: buildCalleeResultClasses(stdModule), calleeParamClasses: buildCalleeParamClasses(stdModule)}
 	end 'create'
 
 	// Whole-module setup: relocate every StdModule block 1:1 into `targetModule.blocks` (preserving the
@@ -251,18 +274,18 @@ type StdToArm64Lowering
 		// file mints new blocks during the walk (the divide-by-zero split that once did is gone — `a / 0`
 		// is a bare `sdiv` now). So `blockRefs` is fixed across the walk and iterating it directly is safe.
 		for blockRef in srcFunc.blockRefs 'eachBlock'
-			self.lowerOneBlock(blockRef, returnType: returnType)
+			self.lowerOneBlock(blockRef, returnType: returnType, paramTypes: srcFunc.paramTypes)
 		end 'eachBlock'
 	end 'lowerFunction'
 
 	// Lower ONE Std block's ops and terminator, both into `blockRef`'s Target block. The terminator's
 	// phi edges were copied onto that block by `prepareSkeleton` and stay there — nothing splits the
 	// block, so there is no continuation to move them to.
-	function lowerOneBlock(blockRef BlockRef, returnType StdReturnType)
+	function lowerOneBlock(blockRef BlockRef, returnType StdReturnType, paramTypes StdTypeArray)
 		let opCount = self.stdBlockOpCount(blockRef)
 		for i in 0 upto opCount 'eachOp'
 			let stdOp = self.stdBlockOpAt(blockRef, index: i)
-			self.lowerBodyOp(stdOp, dstRef: blockRef, returnType: returnType)
+			self.lowerBodyOp(stdOp, dstRef: blockRef, returnType: returnType, paramTypes: paramTypes)
 		end 'eachOp'
 
 		if self.stdBlockHasTerminator(blockRef) 'hasTerm'
@@ -313,7 +336,7 @@ type StdToArm64Lowering
 
 	// Lower a regular (non-terminator) Std op into the block named by `dstRef`. Every op lowers into the
 	// SAME block — nothing splits the walk (div/mod is a bare `sdiv`/`msub`, not a guarded block).
-	function lowerBodyOp(op StdOp, dstRef BlockRef, returnType StdReturnType)
+	function lowerBodyOp(op StdOp, dstRef BlockRef, returnType StdReturnType, paramTypes StdTypeArray)
 		match op 'lower'
 			const(resultId, value, valueType) then self.lowerConst(resultId, value: value, valueType: valueType, dstRef: dstRef)
 			binOp(resultId, lhs, rhs, opcode, operandType) then self.lowerBinOp(resultId, lhs: lhs, rhs: rhs, opcode: opcode, operandType: operandType, dstRef: dstRef)
@@ -323,7 +346,7 @@ type StdToArm64Lowering
 			cmpImm(resultId, lhs, imm, pred) then self.lowerCmpImm(resultId, lhs: lhs, imm: imm, pred: pred, dstRef: dstRef)
 			div(resultId, lhs, rhs) then self.lowerDivMod(resultId, lhs: lhs, rhs: rhs, isRemainder: false, dstRef: dstRef)
 			mod(resultId, lhs, rhs) then self.lowerDivMod(resultId, lhs: lhs, rhs: rhs, isRemainder: true, dstRef: dstRef)
-			param(resultId, index, _) then self.lowerParam(resultId, index: index, dstRef: dstRef)
+			param(resultId, index, paramType) then self.lowerParam(resultId, index: index, paramType: paramType, paramTypes: paramTypes, dstRef: dstRef)
 			call(resultId, callee, args) then self.lowerCall(resultId, callee: callee, args: args, dstRef: dstRef)
 			ret(retValId) then self.lowerReturn(retValId, dstRef: dstRef, returnType: returnType, asTerminator: false)
 			retVoid then self.lowerVoidReturn(dstRef, returnType: returnType, asTerminator: false)
@@ -636,23 +659,21 @@ type StdToArm64Lowering
 	end 'emitPrimaryReturnMove'
 
 	// Lower a Std `param` to the entry move that captures the parameter's incoming ABI register into its
-	// virtual: `mov virtual(resultId), physical(x[index])`. Modelled as a copy from a physical source so
-	// the allocator's fixed-register hint biases the value toward its own argument register (the move
+	// virtual: `mov virtual(resultId), physical(argReg[slot])`. Modelled as a copy from a physical source
+	// so the allocator's fixed-register hint biases the value toward its own argument register (the move
 	// then self-elides when free).
 	//
-	// ⚠ INTEGER params only (x0..x7 by index). A FLOAT param arrives in d0..d7 under a SEPARATE AAPCS64
-	// counter — the same gap x64's `lowerParam` has (it captures every param from a GPR). The scalar
-	// core's floats are locals and return values, not parameters; handling float-arg passing is a
-	// follow-up shared with x64.
-	function lowerParam(resultId ValueId, index ParamCount, dstRef BlockRef)
-		self.emit(dstRef, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: arm64PhysReg(arm64ArgRegisterAt(index))))
+	// ⭐ A FLOAT parameter captures from a SIMD arg register (d0..d7) chosen by a SEPARATE FP counter —
+	// the slot is the count of preceding SAME-FILE parameters (`computeParamSlotIndex`, the cross-target
+	// ABI contract), NOT the source `index`. The parameter value is XMM-classed by the value-class column
+	// (from its f64 Std type), so `movRegReg` sees two FP ends (`fmov`); an integer parameter captures from
+	// x0..x7 exactly as before.
+	function lowerParam(resultId ValueId, index ParamCount, paramType StdType, paramTypes StdTypeArray, dstRef BlockRef)
+		let slot = computeParamSlotIndex(index, paramTypes: paramTypes)
+		let argReg = arm64FpArgRegisterAt(slot) if stdTypeIsFloat(paramType) else arm64ArgRegisterAt(slot)
+		self.emit(dstRef, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: arm64PhysReg(argReg)))
 	end 'lowerParam'
 
-	// Lower a Std `call`: move each argument into its ABI register (x0..x7), `bl` the callee, then move
-	// the x0 return value into the result. Forward-order emission is sound without an explicit
-	// parallel-copy sequencer: each `mov x[k], arg_k` is a physical def of x[k], which liveness forbids
-	// to every value live ACROSS it, so an argument live into a later move can never be coloured to an
-	// earlier argument register (the read-after-clobber class). Integer args only, as `lowerParam` notes.
 	// The physical register a call to `callee` returns its PRIMARY value in — **d0** for a float-returning
 	// callee, **x0** otherwise. Read off the SAME `calleeResultClasses` index the value-class column uses
 	// (`calleeResultClass`), so the captured value is coloured in the file the register it reads from lives
@@ -661,11 +682,35 @@ type StdToArm64Lowering
 		return Arm64FloatReturnReg if calleeResultClass(self.calleeResultClasses, callee: callee) == RegClass.xmm else Arm64IntReturnReg
 	end 'callResultRegister'
 
-	function lowerCall(resultId ValueId, callee ByteArray, args ValueIdArray, dstRef BlockRef)
+	// Move each argument into its ABI register — a FLOAT argument to a SIMD arg register (d0..d7) chosen
+	// by a SEPARATE FP counter, an integer argument to a GPR arg register (x0..x7) by a separate GPR
+	// counter. The two counters are independent (the running-counter twin of `computeParamSlotIndex`), and
+	// each argument's file is the CALLEE's PARAM class from the `calleeParamClasses` index
+	// (`calleeParamClass`). Shared by `lowerCall` and `lowerTryCall`, whose argument passing is identical.
+	//
+	// Forward-order emission is sound without an explicit parallel-copy sequencer, for BOTH files: each
+	// `mov argReg, arg_k` is a physical def that liveness forbids to every value live ACROSS it (keyed on
+	// `RegNum`, class-agnostic), so an argument live into a later same-file move can never be coloured to an
+	// earlier argument register (the read-after-clobber class), now covering the SIMD arg registers too.
+	function emitCallArgMoves(callee ByteArray, args ValueIdArray, dstRef BlockRef)
+		var gprSlot = 0 as ParamCount
+		var fpSlot = 0 as ParamCount
 		for k in 0 upto args.count() 'eachArg'
-			let argId = try args.get(k) otherwise panic("lowerCall: args.get OOB at {k}")
-			self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(arm64ArgRegisterAt(k)), srcReg: TargetVReg.virtual(argId)))
+			let argId = try args.get(k) otherwise panic("emitCallArgMoves: args.get OOB at {k}")
+			if calleeParamClass(self.calleeParamClasses, callee: callee, paramIndex: k) == RegClass.xmm 'floatArg'
+				self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(arm64FpArgRegisterAt(fpSlot)), srcReg: TargetVReg.virtual(argId)))
+				fpSlot = fpSlot + 1
+			end 'floatArg' else 'intArg'
+				self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(arm64ArgRegisterAt(gprSlot)), srcReg: TargetVReg.virtual(argId)))
+				gprSlot = gprSlot + 1
+			end 'intArg'
 		end 'eachArg'
+	end 'emitCallArgMoves'
+
+	// Lower a Std `call`: move each argument into its ABI register (`emitCallArgMoves`), `bl` the callee,
+	// then move the return value (`callResultRegister`) into the result.
+	function lowerCall(resultId ValueId, callee ByteArray, args ValueIdArray, dstRef BlockRef)
+		self.emitCallArgMoves(callee, args: args, dstRef: dstRef)
 		self.emit(dstRef, op: TargetOp.arm64BranchLink(callee))
 		self.emit(dstRef, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: arm64PhysReg(self.callResultRegister(callee))))
 	end 'lowerCall'
@@ -678,10 +723,7 @@ type StdToArm64Lowering
 	// after the call so its "call followed by two virtual-dest/physical-src moves" test identifies the pair.
 	// A float primary (d0) and the GPR flag (x9) are in different files, so the pair has no cross-file cycle.
 	function lowerTryCall(resultId ValueId, errorFlagId ValueId, callee ByteArray, args ValueIdArray, dstRef BlockRef)
-		for k in 0 upto args.count() 'eachArg'
-			let argId = try args.get(k) otherwise panic("lowerTryCall: args.get OOB at {k}")
-			self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(arm64ArgRegisterAt(k)), srcReg: TargetVReg.virtual(argId)))
-		end 'eachArg'
+		self.emitCallArgMoves(callee, args: args, dstRef: dstRef)
 		self.emit(dstRef, op: TargetOp.arm64BranchLink(callee))
 		self.emit(dstRef, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: arm64PhysReg(self.callResultRegister(callee))))
 		self.emit(dstRef, op: TargetOp.movRegReg(TargetVReg.virtual(errorFlagId), srcReg: arm64PhysReg(Arm64FlagReturnReg)))

@@ -3339,7 +3339,16 @@ export type Parser
 		self.valueConstKnown = BoolArray.create()
 		self.valueOwnsHeap = BoolArray.create()
 		for paramType in paramTypes 'seedParamTypes'
-			self.recordValueType(paramType)
+			// ⭐ A FLOAT-ALIAS parameter is a genuine FLOAT value, so its value TAG must be `float`, not the
+			// `named` a ranged alias otherwise carries — exactly as F2a resolves a float-returning callee's
+			// result type at `mintOwnedCallResult`. Left `named`, arithmetic on the parameter reads it as
+			// integral (`operandsAreFloat` is true and `promoteToFloat` is NOT idempotent on it), emitting a
+			// spurious `siToFp` on an already-float value that the backend rejects as a cross-file convert.
+			// An INT alias stays `named` (its name carries the signedness `valueIsUnsigned` reads); only a
+			// proven float alias is lifted (see `resolveFloatAliasType`). `paramTypes` itself is UNCHANGED —
+			// the recorded signature, `func.maxonParamTypes` and the parameter bindings keep the declared
+			// alias — so this touches ONLY the value-tag column the operators dispatch on.
+			self.recordValueType(self.resolveFloatAliasType(paramType))
 		end 'seedParamTypes'
 
 		// ⭐ **THE FIELD ALIASES ARE DECLARED BEFORE THE PARAMETERS, AND THE ORDER IS THE E3006

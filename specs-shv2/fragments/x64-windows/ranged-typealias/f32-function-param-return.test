@@ -1,0 +1,35 @@
+// Test: f32-function-param-return
+typealias F = float(f32.min to f32.max)
+
+function double(x F) returns F
+	return x * 2.0
+end 'double'
+
+function main() returns ExitCode
+	return trunc(double(21.0))
+end 'main'
+---
+ExitCode: 42
+---
+func @double {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movsdRegRip xmm1, [rip + __fconst_0]
+    x64.mulsdRegReg xmm0, xmm0, xmm1
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movsdRegRip xmm0, [rip + __fconst_1]
+    x64.callDirect double
+    x64.cvttsd2siRegReg r8, xmm0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
