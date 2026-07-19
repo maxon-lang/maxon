@@ -1,0 +1,30 @@
+// Test: match-gives-same-type
+function main() returns ExitCode
+	let c = 0
+	let r = match c 'pick'
+		0 gives 10
+		default gives 20
+	end 'pick'
+	return r
+end 'main'
+---
+ExitCode: 10
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 0
+    arm64.cmp x0, 0
+    arm64.cset x0, eq
+    arm64.cbnz x0, matcharm
+    arm64.b matchnext
+  matcharm:
+    arm64.movImm x0, 10
+    arm64.b matchcont
+  matchnext:
+    arm64.movImm x0, 20
+    arm64.b matchcont
+  matchcont:
+    arm64.epilogue 16
+    arm64.ret
+}
