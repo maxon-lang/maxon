@@ -892,21 +892,6 @@ function maxonReturnTypeNameId(ref MaxonReturnType) returns TypeNameId
 	end 'k'
 end 'maxonReturnTypeNameId'
 
-// ⭐ **TWO NAMED AGGREGATES ARE THE SAME TYPE IFF THEIR INTERNED NAMES ARE EQUAL** — the ONE
-// name-comparison every coercion site (`return`, reassignment, `otherwise` value) and the
-// struct-literal-field / union-payload sites share (OPEN #54). A struct is never a subtype of another
-// (v1's `argTypesCompatible`, SemanticCheck.maxon:2527), so a value of the wrong aggregate would pass
-// the scalar tag check — `structRef == structRef` holds for ANY two structs — and later be dropped
-// under the DECLARED type's destructor: a wild free.
-//
-// `expected`/`got` are `aggregateNameOf` results, so an EMPTY one means "not a named aggregate". Two
-// values CONFLICT only when both name an aggregate and the names differ; every other pair (a scalar on
-// either side, or the same aggregate) defers to the caller's existing tag check, which the name-check
-// runs ALONGSIDE and never instead of.
-function namedAggregatesConflict(expected ByteArray, got ByteArray) returns bool
-	return not expected.isEmpty() and not got.isEmpty() and not got.equals(expected)
-end 'namedAggregatesConflict'
-
 // IEEE-754's sign bit — the top bit of the 64-bit pattern. Negating a float literal FLIPS it; it is
 // not an arithmetic negate, because a `ParsedInt` holding a float carries the BITS (see
 // `Parser.parseFloatLiteral`) and `0 - bits` would be nonsense.
@@ -1661,8 +1646,11 @@ export type Parser
 	// signature and so cannot live here — see IrFunction.valueTags), and copying it out at the
 	// end of each body would allocate a dead array per function for nothing.
 	//
-	// `valueNameIds` is NOT shared — nothing downstream needs an alias's NAME, only its class
-	// (TypeRules' `typeClassOf`), so it stays parser-local and is dropped at the next function.
+	// `valueNameIds` — the parallel interned-NAME column — is handed to `IrFunction.create` BY
+	// REFERENCE alongside `valueTags`, for the one downstream reader that needs an aggregate's NAME
+	// and not just its class: SemanticCheck's call-argument identity check (two structs share the
+	// `structRef` tag, so telling a `BoxA` argument from a `BoxB` one needs the name — OPEN #54
+	// Slice B). See IrFunction.valueNameIds.
 	var valueTags as ValueTypeTagArray
 	var valueNameIds as TypeNameIdArray
 	// THE PARSER'S CONSTANT FOLDER — two more columns in lockstep with `valueTags`, holding the
@@ -3268,12 +3256,12 @@ export type Parser
 		// (a reassignment is E2013); mutating a parameter needs a local shadow.
 		try self.bindParameters(name, paramNames: paramNames, paramTypes: paramTypes, paramRanges: paramRanges)
 
-		// `self.valueTags` is handed over BY REFERENCE, already seeded with the parameter types.
-		// Every `mintValue` below therefore pushes straight into the function's own type column
-		// — there is no second array and no copy-back at the end of the body. It is safe because
-		// `self.valueTags` is re-created (not cleared) for the next function, so nothing aliases
-		// this one afterwards. See IrFunction.valueTags for what the column is FOR.
-		var func = IrFunction.create(name, maxonReturnType: returnType, paramCount: paramCount, maxonParamTypes: paramTypes, valueTags: self.valueTags, returnLine: nameTok.line, throwsTypeName: throwsClause)
+		// `self.valueTags` and `self.valueNameIds` are handed over BY REFERENCE, already seeded with
+		// the parameter types. Every `mintValue` below therefore pushes straight into the function's
+		// own type columns — there is no second array and no copy-back at the end of the body. It is
+		// safe because both are re-created (not cleared) for the next function, so nothing aliases
+		// these afterwards. See IrFunction.valueTags / valueNameIds for what the columns are FOR.
+		var func = IrFunction.create(name, maxonReturnType: returnType, paramCount: paramCount, maxonParamTypes: paramTypes, valueTags: self.valueTags, valueNameIds: self.valueNameIds, returnLine: nameTok.line, throwsTypeName: throwsClause)
 		func.namespace = self.namespace
 		func.visibility = visibility
 		func.sourceFilePath = self.filePath

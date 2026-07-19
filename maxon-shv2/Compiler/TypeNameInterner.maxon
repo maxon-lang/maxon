@@ -118,6 +118,25 @@ export function remapMaxonType(t MaxonType, remap TypeNameRemap) returns MaxonTy
 	end 'r'
 end 'remapMaxonType'
 
+// Rewrite the name id of ONE entry of a dense per-value type column (`IrFunction.valueNameIds`)
+// through a remap, TAG-AWARE — the column half of a `MaxonType` that `remapMaxonType` cannot reach,
+// because the value's type is carried as the parallel (tag, nameId) columns the parser keeps rather
+// than a materialized union.
+//
+// ⚠ A scalar's slot holds the `UnnamedTypeId` FILLER, not a real name — so it must NOT be remapped:
+// `remap.apply(0)` would rewrite the filler to whatever id 0 folded to (a real name), and a later
+// reader gated on a name-bearing tag would then resolve a wrong name. Reconstructing the `MaxonType`
+// from the tag and running it through `remapMaxonType` is what makes this filler-safe WITHOUT a second
+// copy of "which tags bear names": `typeNameIdOf` already encodes it, and this is its exact inverse
+// composed with the remap. `void` names no value (its slot is filler too) and `maxonTypeOfTag` panics
+// on it, so it short-circuits.
+export function remapValueNameId(tag ValueTypeTag, nameId TypeNameId, remap TypeNameRemap) returns TypeNameId
+	if tag == ValueTypeTag.void 'void'
+		return nameId
+	end 'void'
+	return typeNameIdOf(remapMaxonType(maxonTypeOfTag(tag, nameId: nameId), remap: remap))
+end 'remapValueNameId'
+
 // Rewrite the named-type id a `MaxonReturnType` may carry (its `value` inner).
 export function remapMaxonReturnType(rt MaxonReturnType, remap TypeNameRemap) returns MaxonReturnType
 	return match rt 'r'

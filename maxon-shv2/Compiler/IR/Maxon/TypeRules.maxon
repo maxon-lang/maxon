@@ -221,6 +221,29 @@ export function implicitNarrowingMessage(sourceType String, targetType String) r
 	return "cannot implicitly convert '{sourceType}' to '{targetType}': the conversion is lossy and must be explicit — use trunc(x) to truncate toward zero (or round/floor/ceil)"
 end 'implicitNarrowingMessage'
 
+// ⭐ **TWO NAMED AGGREGATES ARE THE SAME TYPE IFF THEIR INTERNED NAMES ARE EQUAL** — the ONE
+// name-comparison every site that meets a value against a declared aggregate shares (OPEN #54): the
+// parser's coercion sites (`return`, reassignment, `otherwise` value, struct-literal field,
+// union payload) AND SemanticCheck's call ARGUMENT (the one rule that needs a callee's whole-program
+// signature, so it cannot live in the parser). A struct is never a subtype of another (v1's
+// `argTypesCompatible`, SemanticCheck.maxon:2527), so a value of the wrong aggregate would pass the
+// scalar tag check — `structRef == structRef` holds for ANY two structs — and later be dropped under
+// the DECLARED type's destructor: a wild free.
+//
+// It lives HERE, beside `checkDeclaredType`, because it is a coercion-site type rule and a rule with
+// two homes drifts. The NAME-EXTRACTION legitimately differs by tier — the parser resolves an id
+// against its file-local interner and consults its signature index for the `named` (enum/union) case;
+// SemanticCheck resolves against the merged `project.typeNames` and needs only the `structRef` case —
+// but the COMPARISON RULE is this one function, called by both.
+//
+// `expected`/`got` are aggregate-name results, so an EMPTY one means "not a named aggregate". Two
+// values CONFLICT only when both name an aggregate and the names differ; every other pair (a scalar on
+// either side, or the same aggregate) defers to the caller's existing tag check, which the name-check
+// runs ALONGSIDE and never instead of.
+export function namedAggregatesConflict(expected ByteArray, got ByteArray) returns bool
+	return not expected.isEmpty() and not got.isEmpty() and not got.equals(expected)
+end 'namedAggregatesConflict'
+
 // True for every tag that is DEFINITELY an integer — `int`, a ranged alias, `ExitCode`. It is the
 // `numeric` class minus `float`, and it is the half a float cannot reach without dropping its
 // fraction.

@@ -99,13 +99,26 @@ export type IrFunction
 	//
 	// TAGS, not `MaxonType`s: a Maxon union value is a heap object, so a `MaxonTypeArray` here
 	// would put one live allocation on every SSA value in the program (MaxonDialect's
-	// ValueTypeTag header has the measurement). The parallel `TypeNameId` column the parser
-	// keeps is deliberately NOT published — nothing downstream needs an alias's NAME, only its
-	// class, and every alias shv2 can declare is a ranged int (TypeRules' `typeClassOf`).
+	// ValueTypeTag header has the measurement).
 	//
 	// Empty on a Std-phase function (`createFromStd`) — the tier that reads it is upstream of
 	// those.
 	export var valueTags as ValueTypeTagArray
+	// THE PARALLEL NAME COLUMN: the interned `TypeNameId` behind each SSA value's type, DENSE by
+	// ValueId in lockstep with `valueTags` (a scalar's slot holds the `UnnamedTypeId` filler). A
+	// `named`/`structRef` value carries a real id here; every other tag's is filler and is never
+	// read (the tag gates it — see MaxonDialect's `typeNameIdOf`).
+	//
+	// It IS published, for the reason `valueTags` is: the ONE call-argument identity rule that cannot
+	// live in the parser (the callee may be in another file) now needs an argument's aggregate NAME,
+	// not just its class. Two DIFFERENT structs share the `structRef` tag, so `checkArgTypes` cannot
+	// tell a `BoxA` argument from a `BoxB` one off `valueTags` alone — a wrong-struct argument would
+	// pass and, at a consuming position, be dropped under the parameter's destructor: a wild free
+	// (OPEN #54 Slice B). SemanticCheck reads THIS column, resolved against `project.typeNames`
+	// (`mergeArtifact` remaps it project-global), to reject the mismatch.
+	//
+	// Empty on a Std-phase function (`createFromStd`), exactly like `valueTags`.
+	export var valueNameIds as TypeNameIdArray
 	// `throws E` clause from the declaration; `ThrowsClause.none` for non-throwing.
 	export var throwsTypeName as ThrowsClause
 	// Persistent per-function symbol table, handed off by the parser. Std-phase
@@ -137,12 +150,12 @@ export type IrFunction
 	// populated; Std-phase fields default. Visibility defaults to `file` so the
 	// parser must positively widen it — synthesized functions stay file-private.
 	//
-	// `valueTags` is taken, not created: the parser has already seeded it with the parameter
-	// types before it gets here, and it goes on pushing into it — BY REFERENCE — as the body's
-	// values are minted. Constructing an empty one here and having the parser overwrite it at
-	// the end of the body would leave one dead array per function on the heap (`scale-test`
-	// charged that exactly: +48 allocations on the smallest rung, doubling with the corpus).
-	export static function create(name ByteArray, maxonReturnType MaxonReturnType, paramCount ParamCount, maxonParamTypes MaxonTypeArray, valueTags ValueTypeTagArray, returnLine LineNumber, throwsTypeName ThrowsClause = ThrowsClause.none) returns IrFunction
+	// `valueTags` and `valueNameIds` are taken, not created: the parser has already seeded both with
+	// the parameter types before it gets here, and it goes on pushing into them — BY REFERENCE, in
+	// lockstep — as the body's values are minted. Constructing empty ones here and having the parser
+	// overwrite them at the end of the body would leave dead arrays per function on the heap
+	// (`scale-test` charged that exactly: +48 allocations on the smallest rung, doubling with the corpus).
+	export static function create(name ByteArray, maxonReturnType MaxonReturnType, paramCount ParamCount, maxonParamTypes MaxonTypeArray, valueTags ValueTypeTagArray, valueNameIds TypeNameIdArray, returnLine LineNumber, throwsTypeName ThrowsClause = ThrowsClause.none) returns IrFunction
 		return Self{
 			name: name,
 			namespace: "",
@@ -157,6 +170,7 @@ export type IrFunction
 			maxonReturnType: maxonReturnType,
 			maxonParamTypes: maxonParamTypes,
 			valueTags: valueTags,
+			valueNameIds: valueNameIds,
 			throwsTypeName: throwsTypeName,
 			scope: Scope.create(),
 			returnType: StdReturnType.void,
@@ -187,6 +201,7 @@ export type IrFunction
 			maxonReturnType: MaxonReturnType.void,
 			maxonParamTypes: MaxonTypeArray.create(),
 			valueTags: ValueTypeTagArray.create(),
+			valueNameIds: TypeNameIdArray.create(),
 			throwsTypeName: throwsTypeName,
 			scope: Scope.create(),
 			returnType: returnType,
@@ -221,6 +236,7 @@ export type IrFunction
 			maxonReturnType: src.maxonReturnType,
 			maxonParamTypes: src.maxonParamTypes,
 			valueTags: src.valueTags,
+			valueNameIds: src.valueNameIds,
 			throwsTypeName: src.throwsTypeName,
 			scope: src.scope,
 			returnType: src.returnType,

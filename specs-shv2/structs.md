@@ -379,3 +379,82 @@ end 'main'
 error E3005: specs/fragments/structs/error.return-wrong-struct.test:21:2: Cannot return 'BoxB' from function declared to return 'BoxA'
 ```
 
+<!-- test: error.callarg-wrong-struct-consumed -->
+Passing a DIFFERENT struct than the parameter declares is a memory-safety hole, not merely a wrong
+answer (OPEN #54 Slice B). At a CONSUMING call site — `WrapA.create` moves its `BoxA` argument into a
+managed field — the wrong struct passes the scalar tag check (two structs share the `structRef` tag)
+and is then dropped under the DECLARED parameter type's destructor, which reads `BoxB`'s scalar `n` as
+a `String` pointer and frees it: a wild free (this program compiled clean and exited 139 before the
+check). Struct identity is the interned name, EXACT — a struct is never a subtype of another — and the
+check is at the call argument, which every call passes through, so it is caught regardless of ownership.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type BoxA
+	export var label as String
+end 'BoxA'
+
+type BoxB
+	export var n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'BoxB'
+
+type WrapA
+	export var inner as BoxA
+
+	static function create(inner BoxA) returns Self
+		return Self{inner: inner}
+	end 'create'
+end 'WrapA'
+
+function main() returns ExitCode
+	let b = BoxB.create(7)
+	let w = WrapA.create(b)
+	return 0 as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/structs/error.callarg-wrong-struct-consumed.test:26:10: argument type mismatch for 'inner': expected 'BoxA', got 'BoxB'
+```
+
+<!-- test: error.callarg-wrong-struct-borrowed -->
+The identity check is ownership-independent: a wrong struct handed to a plain BORROWING parameter is a
+type error too — the callee would read the wrong type's field layout — so it is rejected at the call
+argument exactly as the consuming case is, not only at a consuming move. Here both structs are
+scalar-only, so nothing crashes; the value read is simply wrong (this returned 5, `BoxB.b` read through
+`BoxA.a`, before the check).
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type BoxA
+	export var a as Integer
+
+	static function create(a Integer) returns Self
+		return Self{a: a}
+	end 'create'
+end 'BoxA'
+
+type BoxB
+	export var b as Integer
+
+	static function create(b Integer) returns Self
+		return Self{b: b}
+	end 'create'
+end 'BoxB'
+
+function readA(x BoxA) returns Integer
+	return x.a
+end 'readA'
+
+function main() returns ExitCode
+	let bb = BoxB.create(5)
+	return readA(bb) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/structs/error.callarg-wrong-struct-borrowed.test:26:9: argument type mismatch for 'x': expected 'BoxA', got 'BoxB'
+```
+

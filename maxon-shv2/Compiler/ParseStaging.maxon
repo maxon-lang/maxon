@@ -283,8 +283,8 @@ function commitTypeAliases(project Project, artifact FileParseArtifact)
 end 'commitTypeAliases'
 
 // Rewrite every file-local `named(id)` that a LATER pass will READ — the module's
-// function return types + param types — to its project-global id. The `funcSignatures`
-// registry's param types are deliberately NOT remapped here: `resolveTypes`
+// function return types + param types + per-value name column — to its project-global id. The
+// `funcSignatures` registry's param types are deliberately NOT remapped here: `resolveTypes`
 // (`syncResolvedSignature`) unconditionally OVERWRITES each signature's param types with
 // the function's own (already-remapped, then resolved) `maxonParamTypes` before the merge
 // output is ever consumed, and no consumer reads a signature's param types regardless
@@ -300,6 +300,20 @@ function remapArtifact(artifact FileParseArtifact, remap TypeNameRemap)
 			remappedParams.push(remapMaxonType(pt, remap: remap))
 		end 'eachParam'
 		func.maxonParamTypes = remappedParams
+
+		// The per-value NAME column moves with the signature: a body value typed `structRef(SomeStruct)`
+		// for a struct declared in ANOTHER file carries a file-local id this merge is moving, and
+		// SemanticCheck's call-argument identity check (OPEN #54 Slice B) resolves that id against the
+		// merged `project.typeNames`. Rebuilt tag-aware — a scalar slot keeps its `UnnamedTypeId` filler
+		// (see `remapValueNameId`) — in lockstep with `valueTags`, which is interner-independent and so
+		// is never remapped. Only the multi-file (non-identity) path reaches here.
+		var remappedNames = TypeNameIdArray.create()
+		for k in 0 upto func.valueNameIds.count() 'eachValue'
+			let tag = try func.valueTags.get(k) otherwise panic("remapArtifact: valueTags.get OOB at {k} — the two type columns fell out of lockstep")
+			let nameId = try func.valueNameIds.get(k) otherwise panic("remapArtifact: valueNameIds.get OOB at {k} — the two type columns fell out of lockstep")
+			remappedNames.push(remapValueNameId(tag, nameId: nameId, remap: remap))
+		end 'eachValue'
+		func.valueNameIds = remappedNames
 	end 'eachFunc'
 
 	for j in 0 upto artifact.funcReturnTypes.count() 'eachEntry'
