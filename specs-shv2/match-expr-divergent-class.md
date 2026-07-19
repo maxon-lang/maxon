@@ -46,7 +46,14 @@ arm's type, checked BEFORE the phi is built:
   symmetric form of the coercion rule the other sites ask one-sided. It is `typesAgree`, not a raw tag
   compare, so numeric SUBTYPES still agree: a ranged-int alias give and a plain `int` give, or an
   `ExitCode` give and an `int` give, share a register file and a phi holds either — they STAY valid.
-- an AGGREGATE disagreement (two different structs, or two different unions) shares the
+- an AGGREGATE-NESS disagreement — a boxed struct/union give beside a SCALAR give (`match c { 0 gives
+  Holder.holds(box); default gives 7 }`). The value tag `named` is OVERLOADED: a boxed union carries it,
+  and so does a ranged-int alias — so `typesAgree(named, integer)` wrongly AGREES, and the phi
+  dereferences the int `7` as a box pointer (a segfault). The tag cannot tell a real aggregate from a
+  named scalar, but `aggregateNameOf` can — it names a declared struct/union and returns empty for every
+  scalar (including a `named`-tagged ranged alias) — so the two gives disagree exactly when one has an
+  aggregate name and the other does not.
+- an AGGREGATE-NAME disagreement (two different structs, or two different unions) shares the
   `structRef`/`named` class — `typesAgree` passes it — but names distinct types, so it is caught by
   `namedAggregatesConflict`, the one name-agreement rule the whole trilogy shares.
 
@@ -173,6 +180,36 @@ end 'main'
 ```
 ```maxoncstderr
 error E3005: specs/fragments/match-expr-divergent-class/error.match-gives-two-unions.test:16:10: match arms give incompatible types: 'Toggle' vs 'Shape'
+```
+
+<!-- test: error.match-gives-union-and-int -->
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Boxed
+	export var v as Num
+
+	export static function create(n Num) returns Boxed
+		return Boxed{v: n}
+	end 'create'
+end 'Boxed'
+
+union Holder
+	nothing
+	holds(b Boxed)
+end 'Holder'
+
+function main() returns ExitCode
+	let c = 1
+	let r = match c 'pick'
+		0 gives Holder.holds(Boxed.create(1))
+		default gives 7
+	end 'pick'
+	return 7
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/match-expr-divergent-class/error.match-gives-union-and-int.test:19:10: match arms give incompatible types: 'int' vs 'Holder'
 ```
 
 <!-- test: match-gives-same-type -->

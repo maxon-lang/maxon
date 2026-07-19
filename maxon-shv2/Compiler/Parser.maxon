@@ -6751,7 +6751,7 @@ export type Parser
 		// phi minted below takes the FIRST arm's type (`mintPhi` off `firstGive`), and a value's type is
 		// fixed at birth — so an arm giving a value of another type hands the phi a value its own type is a
 		// lie about, with no diagnostic. The float/non-float split threw `unsupported` above, so a surviving
-		// mismatch is same-register-class and takes one of two shapes, each a memory-SAFETY defect:
+		// mismatch is same-register-class and takes one of THREE shapes, each a memory-SAFETY defect:
 		//   • a SCALAR-CLASS disagreement — a `String` give and an `int` give, a `bool` give and an `int`
 		//     give — whose phi derefs the wrong-domain value as the first arm's type (the int read as a
 		//     String pointer: a segfault). Caught by `typesAgree`, the SYMMETRIC form of the rule the
@@ -6759,13 +6759,25 @@ export type Parser
 		//     `checkDeclaredType`. It is `typesAgree`, NOT a raw tag compare, so a ranged-int alias give and
 		//     a plain `int` give (both numeric) — or an `ExitCode` give and an `int` give — STAY valid: the
 		//     numeric subtypes share a register file and a phi holds either.
-		//   • an AGGREGATE disagreement — two DIFFERENT structs or unions — sharing the `structRef`/`named`
-		//     class (so `typesAgree` passes them) but naming distinct types, whose phi is later dropped
-		//     under the FIRST arm's destructor: a wild free. Caught by `namedAggregatesConflict`, the ONE
-		//     name-agreement rule Slice A/B/#52 share (TypeRules), read off the scalar tag/name columns so a
-		//     scalar match materializes no `MaxonType` and allocates nothing here.
-		// Placed BEFORE `resolveGivesOwnership` and the phi so an ill-typed match is refused before any phi
-		// is built. Expression-only: a statement match gives no value, exactly as the float check above.
+		//   • an AGGREGATE-NESS disagreement — a boxed struct/union give and a SCALAR give (`match c { 0
+		//     gives Holder.holds(box); default gives 7 }`). `ValueTypeTag.named` is OVERLOADED — a boxed
+		//     union VALUE carries it, and so does a ranged-int alias — so `typesAgree(named, integer)`
+		//     wrongly AGREES and the phi derefs the int `7` as a box pointer: a segfault. The tag cannot
+		//     tell a real aggregate from a named scalar, but `aggregateNameOf` can (it gates on
+		//     `containsStruct`/`containsEnum`, so it NAMES a declared struct/union and returns EMPTY for
+		//     every scalar, String, or ranged-int alias). So the two gives disagree exactly when one has an
+		//     aggregate name and the other does not. (This is the one shape Slice A/B leave to the
+		//     cross-cutting `named`-overload rung #59 at their own sites; here it is a live SEGFAULT this
+		//     rung exists to catch, so it is closed LOCALLY without touching the shared rule.)
+		//   • an AGGREGATE-NAME disagreement — two DIFFERENT structs or unions, both aggregates but naming
+		//     distinct types, whose phi is later dropped under the FIRST arm's destructor: a wild free.
+		//     Caught by `namedAggregatesConflict`, the ONE name-agreement rule Slice A/B/#52 share
+		//     (TypeRules) — reused, not re-copied.
+		// The three compose: both-scalar → `typesAgree`; one-aggregate-one-scalar → the emptiness disagreement;
+		// both-aggregate → `namedAggregatesConflict`. Read off the scalar tag/name columns, so a scalar match
+		// materializes no `MaxonType` and allocates nothing. Placed BEFORE `resolveGivesOwnership` and the phi
+		// so an ill-typed match is refused before any phi is built. Expression-only: a statement match gives
+		// no value, exactly as the float check above.
 		if isExpression 'checkGiveTypes'
 			let firstGive = self.giveValueOf(firstArm.give)
 			let firstTag = self.tagOf(firstGive)
@@ -6774,17 +6786,14 @@ export type Parser
 				let arm = try reachingArms.get(i) otherwise panic("finalizeMatchMerge: reachingArms.get OOB at {i}")
 				let giveVal = self.giveValueOf(arm.give)
 				let giveTag = self.tagOf(giveVal)
+				let giveAggregate = self.aggregateNameOf(giveTag, nameId: self.valueNameId(giveVal))
 
-				if not typesAgree(giveTag, right: firstTag) 'classMismatch'
-					throw ParseError.giveTypeMismatch(typeTagName(giveTag), expected: typeTagName(firstTag), line: matchTok.line, column: matchTok.column)
-				end 'classMismatch'
-
-				if not firstAggregate.isEmpty() 'aggregateGive'
-					let giveAggregate = self.aggregateNameOf(giveTag, nameId: self.valueNameId(giveVal))
-					if namedAggregatesConflict(firstAggregate, got: giveAggregate) 'aggregateGiveMismatch'
-						throw ParseError.giveTypeMismatch(String.from(giveAggregate), expected: String.from(firstAggregate), line: matchTok.line, column: matchTok.column)
-					end 'aggregateGiveMismatch'
-				end 'aggregateGive'
+				let classDisagrees = not typesAgree(giveTag, right: firstTag)
+				let aggregatenessDisagrees = firstAggregate.isEmpty() != giveAggregate.isEmpty()
+				let nameDisagrees = namedAggregatesConflict(firstAggregate, got: giveAggregate)
+				if classDisagrees or aggregatenessDisagrees or nameDisagrees 'giveTypeMismatch'
+					throw ParseError.giveTypeMismatch(self.giveTypeName(giveTag, aggregateName: giveAggregate), expected: self.giveTypeName(firstTag, aggregateName: firstAggregate), line: matchTok.line, column: matchTok.column)
+				end 'giveTypeMismatch'
 			end 'scanGiveType'
 		end 'checkGiveTypes'
 
@@ -6884,6 +6893,20 @@ export type Parser
 
 		return MatchOutcome.create(merge, result: result)
 	end 'finalizeMatchMerge'
+
+	// The name a `gives` value prints under in a match type-agreement diagnostic: a declared struct or
+	// union by its interned aggregate NAME, and every scalar — an `int`, a `bool`, a `String`, a
+	// ranged-int alias whose overloaded `named` tag is NOT an aggregate — by its resolved primitive name.
+	// `aggregateName` is `aggregateNameOf`'s result for the value, which is empty for anything that is not
+	// a declared aggregate — so the choice is exactly whether that name is present. One home for the two
+	// `got`/`expected` operands so the three mismatch shapes phrase the value one way.
+	function giveTypeName(tag ValueTypeTag, aggregateName ByteArray) returns String
+		if aggregateName.isEmpty() 'scalar'
+			return typeTagName(tag)
+		end 'scalar'
+
+		return String.from(aggregateName)
+	end 'giveTypeName'
 
 	// The `gives` value an expression arm carries. Only ever asked of an expression-match arm, so a
 	// `none` is a parser invariant break, not a program error. Takes the `MatchGiveValue` itself so both
