@@ -4357,6 +4357,51 @@ export type Parser
 		return EmptySourceText
 	end 'aggregateNameOf'
 
+	// ⭐ **DOES `nameId` NAME A RANGED FLOAT ALIAS?** — the F2 fact `named` was too coarse to carry. A
+	// `float(low to high)` alias (`Parser.readTypeAliasDeclaration`) is the ONE `named` type whose VALUE
+	// is a genuine float; an `int(low to high)` alias is `named` too and is an int. It is decided through
+	// the SAME whole-program `aliasOf` door `valueIsUnsigned`/`fieldStorageType` already ask, so a float
+	// alias declared in ANY file resolves — and NEVER a String/struct/union `named` (`aliasOf` answers
+	// `undeclared` for those). The parse-time twin of `TypeResolution.resolveNamedType`'s alias arm.
+	//
+	// ⚠ The caller must know the tag is `named` before asking: `nameId` for a non-`named` type is
+	// `UnnamedTypeId`, which is not in the interner (`internedName` would panic). `floatResolvedTag` /
+	// `resolveFloatAliasType` are the two gated doors, and every reader goes through one of them.
+	function namedIsFloatAlias(nameId TypeNameId) returns bool
+		let name = self.internedName(nameId)
+		return match self.signatures.aliasOf(name) 'a'
+			declared(alias) gives tagIsFloat(maxonTypeTag(alias.underlying))
+			undeclared gives false
+		end 'a'
+	end 'namedIsFloatAlias'
+
+	// A `named` TAG that names a ranged float alias resolves to `float`; every other tag passes through —
+	// an INT alias stays `named` (`checkDeclaredType` reads it identically, and its name still carries the
+	// signedness `valueIsUnsigned` needs), a scalar/struct/String carries no alias. THE F2a resolution for
+	// a DECLARED type met at a coercion site: `checkDeclaredType(3.14's float, Float)` must ask
+	// `checkDeclaredType(float, float)` and answer `ok`, not read `Float`'s overloaded `named` tag as an
+	// integer and report a false narrowing (E3009). `resolveFloatAliasType` is its twin for a produced
+	// VALUE's type; both delegate the alias lookup to `namedIsFloatAlias`.
+	function floatResolvedTag(tag ValueTypeTag, nameId TypeNameId) returns ValueTypeTag
+		if tag != ValueTypeTag.named 'notNamed'
+			return tag
+		end 'notNamed'
+		return ValueTypeTag.float if self.namedIsFloatAlias(nameId) else tag
+	end 'floatResolvedTag'
+
+	// Resolve a float-alias `named` TYPE to `MaxonType.float` — the produced-VALUE twin of
+	// `floatResolvedTag`. A `returns Float` CALL RESULT is a genuine float value, so its tag must be
+	// `float` (matching the XMM class the value-class column gives a float return from the callee's f64
+	// Std return type), or `trunc(x)` reads the `named` tag as already-integral and returns `x` unchanged
+	// and `return x` moves an XMM value through a GPR. An int alias keeps its `named` type (its name
+	// carries signedness); a struct/scalar/String passes through.
+	function resolveFloatAliasType(t MaxonType) returns MaxonType
+		if maxonTypeTag(t) != ValueTypeTag.named 'notNamed'
+			return t
+		end 'notNamed'
+		return MaxonType.float if self.namedIsFloatAlias(typeNameIdOf(t)) else t
+	end 'resolveFloatAliasType'
+
 	// The name is not a local and not a top-level `var`. Say which of the two remaining things it is.
 	function rejectNonGlobalAssignment(nameTok Token) throws ParseError
 		match self.signatures.constantValueOf(nameTok.value, readerFilePath: self.filePath) 'constant'
@@ -4425,11 +4470,18 @@ export type Parser
 		// would be handed back through the return register as the integer 1. And `return 3.7` from
 		// one is the LOSSY half — the classes agree, so only a one-sided rule can see it.
 		//
-		// The declared type here is the RAW parse-time one (a `named` alias, not yet resolved),
-		// which is exactly what `typeClassOf` is built to take — every alias shv2 can declare is
-		// a ranged int, and `typeTagName` prints the resolved primitive the bootstrap prints.
+		// The declared type here is the RAW parse-time one (a `named` alias, not yet resolved by
+		// `TypeResolution`, which runs after the parse). A ranged INT alias's `named` tag is what
+		// `typeClassOf`/`tagIsIntegral` are built to read; a ranged FLOAT alias's is not — `named` is
+		// `tagIsIntegral`, so `checkDeclaredType(3.14's float, Float)` would read the alias as an int and
+		// report a false narrowing (E3009) on `return 3.14`. `floatResolvedTag` resolves a float alias to
+		// `float` HERE, at the call site, leaving the shared `named`-is-int rules untouched: `named` still
+		// means int everywhere those rules read it, and only a proven float alias is lifted out of it.
+		// `typeTagName` then prints `float` for the float alias and `int` for the int one, both the
+		// resolved primitive the bootstrap prints.
 		let retTag = self.tagOf(retVal)
-		let declaredTag = maxonReturnTypeTag(func.maxonReturnType)
+		let declaredNameId = maxonReturnTypeNameId(func.maxonReturnType)
+		let declaredTag = self.floatResolvedTag(maxonReturnTypeTag(func.maxonReturnType), nameId: declaredNameId)
 
 		// The tag check runs FIRST: a genuine CLASS mismatch (a bool, or a struct, where an int is
 		// declared) keeps its tag-based message, and the aggregate-name check below only NEWLY catches
@@ -4448,7 +4500,7 @@ export type Parser
 		// name, EXACT (no subtyping). Un-gated — both names are computed unconditionally, `aggregateNameOf`
 		// returning the shared empty for a scalar with no allocation — and `giveTypeName` prints the
 		// scalar side's primitive (`int`), not an empty name.
-		let declaredReturnName = self.aggregateNameOf(declaredTag, nameId: maxonReturnTypeNameId(func.maxonReturnType))
+		let declaredReturnName = self.aggregateNameOf(declaredTag, nameId: declaredNameId)
 		let returnedName = self.aggregateNameOf(retTag, nameId: self.valueNameId(retVal))
 		if namedAggregatesConflict(declaredReturnName, got: returnedName) 'aggregateReturnMismatch'
 			throw ParseError.returnTypeMismatch(self.giveTypeName(retTag, aggregateName: returnedName), expected: self.giveTypeName(declaredTag, aggregateName: declaredReturnName), line: retTok.line, column: retTok.column)
@@ -11315,7 +11367,12 @@ export type Parser
 	// one after the consuming statement. A scalar / payload-free-enum result owns no heap and is enrolled
 	// in nothing.
 	function mintOwnedCallResult(inner MaxonType) returns ValueId
-		let result = self.mintValueOfType(self.resolveNamedStruct(inner))
+		// `resolveNamedStruct` re-tags a struct-`named` return to `structRef`; `resolveFloatAliasType` then
+		// resolves a float-alias `named` return (`returns Float`) to `float` (F2a). Both are needed and
+		// compose cleanly — a type is a struct, a float alias, an int alias or a scalar, never two — so the
+		// result of a `returns Float` callee binds a `float` (XMM) value that `trunc` truncates and `return`
+		// moves cleanly, rather than a `named` value the tag says is an int while the backend files it in XMM.
+		let result = self.mintValueOfType(self.resolveFloatAliasType(self.resolveNamedStruct(inner)))
 		let tag = self.tagOf(result)
 		if tagIsText(tag) or tagIsStructRef(tag) or self.valueIsBoxedUnion(result) 'adoptsHeapBox'
 			self.trackOwnedTemp(result)

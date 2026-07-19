@@ -430,7 +430,7 @@ export function lowerStdToX64(stdModule StdModule, globalData GlobalDataTable) r
 	// TARGET ops, so every op has to exist before it can be measured. `buildValueClassColumns` is the
 	// shared, target-independent producer (see `Targets/Shared/StdLoweringShared.maxon`); bind it
 	// FIRST so its borrow of `targetModule` closes before the tuple moves `targetModule` out.
-	let valueClasses = buildValueClassColumns(lowering.stdModule, targetModule: lowering.targetModule)
+	let valueClasses = buildValueClassColumns(lowering.stdModule, targetModule: lowering.targetModule, calleeResultClasses: lowering.calleeResultClasses)
 	return (lowering.targetModule, valueClasses)
 end 'lowerStdToX64'
 
@@ -482,9 +482,15 @@ type StdToX64Lowering
 	// binds it), and then it emits `cmp` + `setcc` + `jcc` — sound because `setcc` and `movzx`
 	// READ the flags rather than writing them.
 	var valuesReadFromRegisters as StdValueUseSet
+	// Callee name → the register FILE its result comes back in — XMM0 for a float-returning callee, R8
+	// otherwise (see `callResultRegister`). Built ONCE here (not per call site) and threaded into
+	// `buildValueClassColumns` too, so a float result's CAPTURE register and its allocation CLASS are the
+	// one `calleeResultClass` fact rather than two that could disagree. Exported like `targetModule`:
+	// `lowerStdToX64` reads it to thread the one instance into `buildValueClassColumns`.
+	export var calleeResultClasses as CalleeResultClassMap
 
 	static function create(stdModule StdModule, globalData GlobalDataTable) returns StdToX64Lowering
-		return Self{stdModule: stdModule, globalData: globalData, targetModule: TargetModule.create(), cmpPreds: CmpPredMap.create(), fusedFloatCmps: StdValueUseSet.create(), orderedBlockIds: OrderedBlockIdMap.create(), valuesReadFromRegisters: StdValueUseSet.create()}
+		return Self{stdModule: stdModule, globalData: globalData, targetModule: TargetModule.create(), cmpPreds: CmpPredMap.create(), fusedFloatCmps: StdValueUseSet.create(), orderedBlockIds: OrderedBlockIdMap.create(), valuesReadFromRegisters: StdValueUseSet.create(), calleeResultClasses: buildCalleeResultClasses(stdModule)}
 	end 'create'
 
 	// The value-class column producer — the pass that answers "what register file does this op's
@@ -806,7 +812,7 @@ type StdToX64Lowering
 			osWriteStdout(bufId, lenId) then self.lowerOsWriteStdout(bufId, lenId: lenId, dstBlock: dstBlock)
 			rdataAddr(resultId, label) then self.targetModule.appendOp(dstBlock, op: TargetOp.leaRegRdata(TargetVReg.virtual(resultId), label: label))
 			tryCall(resultId, errorFlagId, callee, args) then self.lowerTryCall(resultId, errorFlagId: errorFlagId, callee: callee, args: args, dstBlock: dstBlock)
-			errorReturn(retValId, errorFlagId) then self.lowerErrorReturn(retValId, errorFlagId: errorFlagId, dstBlock: dstBlock, asTerminator: false)
+			errorReturn(retValId, errorFlagId) then self.lowerErrorReturn(retValId, errorFlagId: errorFlagId, dstBlock: dstBlock, returnType: returnType, asTerminator: false)
 			osExit(codeId) then self.lowerOsExit(codeId, dstBlock: dstBlock)
 		end 'lower'
 	end 'lowerBodyOp'
@@ -836,7 +842,7 @@ type StdToX64Lowering
 			osWriteStdout then panic("lowerStdToX64: an `osWriteStdout` op appeared as a block terminator (lowering bug — a stdout write is a body op)")
 			rdataAddr then panic("lowerStdToX64: an `rdataAddr` op appeared as a block terminator (lowering bug — an rdata address is a value-producing body op)")
 			tryCall then panic("lowerStdToX64: a `tryCall` op appeared as a block terminator (lowering bug — a throwing call is a value-producing body op)")
-			errorReturn(retValId, errorFlagId) then self.lowerErrorReturn(retValId, errorFlagId: errorFlagId, dstBlock: dstBlock, asTerminator: true)
+			errorReturn(retValId, errorFlagId) then self.lowerErrorReturn(retValId, errorFlagId: errorFlagId, dstBlock: dstBlock, returnType: returnType, asTerminator: true)
 			osExit then panic("lowerStdToX64: an `osExit` op appeared as a block terminator (lowering bug — a process exit is a body op followed by a dead return)")
 		end 'lower'
 	end 'lowerTerminatorOp'
@@ -1159,40 +1165,66 @@ type StdToX64Lowering
 	// no explicit operands, so its caller-saved `implicitDefs` clobber is applied ONLY to
 	// values live across the call (never to the just-established argument registers), and
 	// `forbidOperandsFromImplicit` is a no-op on it.
+	// The physical register a call to `callee` returns its PRIMARY value in — **XMM0** for a
+	// float-returning callee, **R8** otherwise. Read off the SAME `calleeResultClasses` index the
+	// value-class column uses (`calleeResultClass`), so the value the capture move writes into is coloured
+	// in the file the register it reads from lives in: a float result is XMM-classed, so `movRegReg` sees
+	// two XMM ends (a `movsd`), never a cross-file `mov r, xmm`. The error-flag register (R10) is separate
+	// and unconditional — it is always a GPR.
+	function callResultRegister(callee ByteArray) returns X64Register
+		return X64Register.xmm0 if calleeResultClass(self.calleeResultClasses, callee: callee) == RegClass.xmm else X64Register.r8
+	end 'callResultRegister'
+
 	function lowerCall(resultId ValueId, callee ByteArray, args ValueIdArray, dstBlock IrBlock)
 		for k in 0 upto args.count() 'eachArg'
 			let argId = try args.get(k) otherwise panic("lowerCall: args.get OOB at {k}")
 			self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(argRegisterAt(k)), srcReg: TargetVReg.virtual(argId)))
 		end 'eachArg'
 		self.targetModule.appendOp(dstBlock, op: TargetOp.callDirect(callee))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: x64PhysReg(X64Register.r8)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: x64PhysReg(self.callResultRegister(callee))))
 	end 'lowerCall'
 
 	// Lower a throwing `tryCall`: the arguments and `callDirect` exactly as `lowerCall`, then capture BOTH
-	// return registers — the primary value from **R8** and the error flag from **R10**. The two capture
-	// moves (`result ← R8`, `flag ← R10`) are a PARALLEL COPY that SSA destruction resequences through
-	// `sequenceParallelCopy` (see `colorAndDropSelfMoves`): a naive `mov;mov` collapses a value/flag swap
-	// when the allocator colors them cyclically. R10 is caller-saved, not an argument register, and
-	// allocatable — mirroring R8's own "no return/argument register conflict" — so it is unconditionally
-	// free to carry the flag out. The capture moves are emitted CONSECUTIVELY and right after the call, so
-	// the resequencer's "a call followed by two virtual-dest/physical-src moves" test identifies the pair.
+	// return registers — the primary value from `callResultRegister(callee)` (**XMM0** for a float-returning
+	// callee, else **R8**) and the error flag from **R10**. The two capture moves are a PARALLEL COPY that
+	// SSA destruction resequences through `sequenceParallelCopy` (see `colorAndDropSelfMoves`): a naive
+	// `mov;mov` collapses a value/flag swap when the allocator colors them cyclically. R10 is caller-saved,
+	// not an argument register, and allocatable — mirroring R8's own "no return/argument register conflict"
+	// — so it is unconditionally free to carry the flag out. The capture moves are emitted CONSECUTIVELY and
+	// right after the call, so the resequencer's "a call followed by two virtual-dest/physical-src moves"
+	// test identifies the pair.
+	//
+	// ⚠ A FLOAT primary and the flag are in DIFFERENT register files (XMM0 value, GPR R10 flag), so they can
+	// never colour to one physical register and the pair has no cross-file cycle — the resequencer is a
+	// correct no-op for it, exactly as it is for the all-GPR (int result) pair it already handled.
 	function lowerTryCall(resultId ValueId, errorFlagId ValueId, callee ByteArray, args ValueIdArray, dstBlock IrBlock)
 		for k in 0 upto args.count() 'eachArg'
 			let argId = try args.get(k) otherwise panic("lowerTryCall: args.get OOB at {k}")
 			self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(argRegisterAt(k)), srcReg: TargetVReg.virtual(argId)))
 		end 'eachArg'
 		self.targetModule.appendOp(dstBlock, op: TargetOp.callDirect(callee))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: x64PhysReg(X64Register.r8)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: x64PhysReg(self.callResultRegister(callee))))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(TargetVReg.virtual(errorFlagId), srcReg: x64PhysReg(X64Register.r10)))
 	end 'lowerTryCall'
 
-	// Lower the dual-register `errorReturn`: write the primary value to **R8** and the error flag to
-	// **R10**, then the return terminator. This is the ONE place the second register is written. Both
-	// moves are unconditional (even a void throwing function's caller reads the flag register); the frame
-	// epilogue is inserted separately by `X64PrologueEpilogue`, which recognizes the `ret` terminator this
-	// emits exactly as it does an ordinary return's.
-	function lowerErrorReturn(retValId ValueId, errorFlagId ValueId, dstBlock IrBlock, asTerminator bool)
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.r8), srcReg: TargetVReg.virtual(retValId)))
+	// Lower the dual-register `errorReturn`: write the primary value to its return register (**XMM0** for a
+	// float return, else **R8** — through the SAME `emitReturnValueMove` the ordinary `ret` uses, so the
+	// float branch is not written twice) and the error flag to **R10**, then the return terminator. This is
+	// the ONE place the second register is written. Both moves are unconditional (even a void throwing
+	// function's caller reads the flag register — for a void return type `emitReturnValueMove` targets R8,
+	// where the family-default zero belongs); the frame epilogue is inserted separately by
+	// `X64PrologueEpilogue`, which recognizes the `ret` terminator this emits exactly as it does an
+	// ordinary return's.
+	//
+	// ⚠ **A THROWING FLOAT function's THROW path is NOT yet supported** (no spec exercises it). Its OK
+	// path works — `errorReturn(<float>, 0)` moves the real float to XMM0 here. But `lowerThrowError`
+	// (LowerMaxonToStd) hands the THROW path a GPR-typed zero as the primary value (a dead value the
+	// caller ignores once the flag is set), and routing that to XMM0 for a float return type is a
+	// cross-file move `emitRegRegMove` rejects. Closing it needs the throw-path default typed to the
+	// RETURN type (a float zero for a float function), upstream in LowerMaxonToStd — outside F2a's files.
+	// Not a regression: before F2a a throwing float function's OK path already crossed files (float → R8).
+	function lowerErrorReturn(retValId ValueId, errorFlagId ValueId, dstBlock IrBlock, returnType StdReturnType, asTerminator bool)
+		self.emitReturnValueMove(retValId, dstBlock: dstBlock, returnType: returnType)
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.r10), srcReg: TargetVReg.virtual(errorFlagId)))
 		self.emitRet(dstBlock, asTerminator: asTerminator)
 	end 'lowerErrorReturn'
@@ -1761,28 +1793,38 @@ type StdToX64Lowering
 		end 'asBody'
 	end 'emitRet'
 
-	// Move the primary return value into R8 (Maxon's internal calling convention
-	// returns in R8, NOT RAX). The float (XMM0) return path GROWS in at M3 when floats
-	// land.
+	// Move a return VALUE into its primary-return register — **XMM0** for a float return, **R8** otherwise
+	// (Maxon's internal calling convention returns in R8, NOT RAX). A float value is XMM-classed by the
+	// value-class column (from its f64 Std type), so `movRegReg(xmm0, retVal)` sees two XMM ends and emits
+	// `movsd`; an integer value and R8 are both GPR. The register is chosen from the RETURN TYPE so the
+	// ordinary `ret` path is ABI-correct, and `emitRegRegMove` would panic on any cross-file pair — the
+	// backstop against colouring a return value into the wrong file.
 	//
-	// A `void` StdReturnType reaching here means a VALUE return (`StdOp.ret`) inside a
-	// function declared void. What ESTABLISHES that it cannot is the parser: a return
-	// statement's op is chosen from the function's DECLARED return type, and a `return
-	// <expr>` in a void function is rejected there as E3005 (Parser.parseReturnStatement)
-	// — it is not merely assumed to be absent. Before that check existed this panic was
-	// reachable from ordinary source (`function f(x int) return x end`), which is how a
-	// compiler crash gets shipped behind a comment asserting it cannot happen.
+	// Shared by the ordinary `ret` (via `emitPrimaryReturnMove`, which rejects a void return type first)
+	// and the throwing `errorReturn` (whose void form legitimately carries a family-default zero-int value:
+	// `stdReturnTypeIsFloat(void)` is `false`, so it lands in R8, where a GPR zero belongs and the caller
+	// ignores it once the flag is set).
+	function emitReturnValueMove(retValId ValueId, dstBlock IrBlock, returnType StdReturnType)
+		let retReg = X64Register.xmm0 if stdReturnTypeIsFloat(returnType) else X64Register.r8
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(retReg), srcReg: TargetVReg.virtual(retValId)))
+	end 'emitReturnValueMove'
+
+	// The ordinary `ret`'s primary move. A `void` StdReturnType reaching here means a VALUE return
+	// (`StdOp.ret`) inside a function declared void. What ESTABLISHES that it cannot is the parser: a return
+	// statement's op is chosen from the function's DECLARED return type, and a `return <expr>` in a void
+	// function is rejected there as E3005 (Parser.parseReturnStatement) — it is not merely assumed to be
+	// absent. Before that check existed this panic was reachable from ordinary source (`function f(x int)
+	// return x end`), which is how a compiler crash gets shipped behind a comment asserting it cannot happen.
 	//
-	// So a `void` here is now a LOWERING bug, not a user error, and it panics rather than
-	// silently dropping the value. `lowerVoidReturn` guards the opposite direction.
+	// So a `void` here is now a LOWERING bug, not a user error, and it panics rather than silently dropping
+	// the value. `lowerVoidReturn` guards the opposite direction. (The throwing `errorReturn` path does NOT
+	// come through here — its void form has a real dummy value to place, so it calls `emitReturnValueMove`
+	// directly.)
 	function emitPrimaryReturnMove(retValId ValueId, dstBlock IrBlock, returnType StdReturnType)
 		if stdReturnTypeIsVoid(returnType) 'void'
 			panic("lowerStdToX64: a value `ret` in a void-returning function — a void return lowers to `StdOp.retVoid`, which never reaches this path")
 		end 'void'
-		if stdReturnTypeIsFloat(returnType) 'float'
-			panic("lowerStdToX64: float return values (XMM0) are not supported until M3 — the `return 42` slice is integer-only")
-		end 'float'
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.r8), srcReg: TargetVReg.virtual(retValId)))
+		self.emitReturnValueMove(retValId, dstBlock: dstBlock, returnType: returnType)
 	end 'emitPrimaryReturnMove'
 end 'StdToX64Lowering'
 

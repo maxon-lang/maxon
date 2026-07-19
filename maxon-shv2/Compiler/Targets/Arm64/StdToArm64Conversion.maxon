@@ -200,7 +200,7 @@ export function lowerStdToArm64(stdModule StdModule, globalData GlobalDataTable)
 	// The value-class column producer is the shared, target-independent `buildValueClassColumns` (see
 	// `Targets/Shared/StdLoweringShared.maxon`); bind it FIRST so its borrow of `targetModule` closes
 	// before the tuple moves `targetModule` out.
-	let valueClasses = buildValueClassColumns(lowering.stdModule, targetModule: lowering.targetModule)
+	let valueClasses = buildValueClassColumns(lowering.stdModule, targetModule: lowering.targetModule, calleeResultClasses: lowering.calleeResultClasses)
 	return (lowering.targetModule, valueClasses)
 end 'lowerStdToArm64'
 
@@ -211,9 +211,14 @@ type StdToArm64Lowering
 	// the arm64 concat once sections are laid out.
 	var globalData as GlobalDataTable
 	export var targetModule as TargetModule
+	// Callee name → the register FILE its result comes back in — d0 for a float-returning callee, x0
+	// otherwise (see `callResultRegister`). Built ONCE here and threaded into `buildValueClassColumns` too,
+	// so a float result's CAPTURE register and its allocation CLASS are the one `calleeResultClass` fact.
+	// Exported like `targetModule`: `lowerStdToArm64` reads it to thread the one instance into the column.
+	export var calleeResultClasses as CalleeResultClassMap
 
 	static function create(stdModule StdModule, globalData GlobalDataTable) returns StdToArm64Lowering
-		return Self{stdModule: stdModule, globalData: globalData, targetModule: TargetModule.create()}
+		return Self{stdModule: stdModule, globalData: globalData, targetModule: TargetModule.create(), calleeResultClasses: buildCalleeResultClasses(stdModule)}
 	end 'create'
 
 	// Whole-module setup: relocate every StdModule block 1:1 into `targetModule.blocks` (preserving the
@@ -331,7 +336,7 @@ type StdToArm64Lowering
 			osWriteStdout(bufId, lenId) then self.lowerOsWriteStdout(bufId, lenId: lenId, dstRef: dstRef)
 			rdataAddr(resultId, label) then self.emit(dstRef, op: TargetOp.arm64LeaRdata(TargetVReg.virtual(resultId), label: label))
 			tryCall(resultId, errorFlagId, callee, args) then self.lowerTryCall(resultId, errorFlagId: errorFlagId, callee: callee, args: args, dstRef: dstRef)
-			errorReturn(retValId, errorFlagId) then self.lowerErrorReturn(retValId, errorFlagId: errorFlagId, dstRef: dstRef, asTerminator: false)
+			errorReturn(retValId, errorFlagId) then self.lowerErrorReturn(retValId, errorFlagId: errorFlagId, dstRef: dstRef, returnType: returnType, asTerminator: false)
 			osExit(codeId) then self.lowerOsExit(codeId, dstRef: dstRef)
 		end 'lower'
 	end 'lowerBodyOp'
@@ -357,7 +362,7 @@ type StdToArm64Lowering
 			osWriteStdout then panic("lowerStdToArm64: an `osWriteStdout` op appeared as a block terminator (lowering bug)")
 			rdataAddr then panic("lowerStdToArm64: an `rdataAddr` op appeared as a block terminator (lowering bug)")
 			tryCall then panic("lowerStdToArm64: a `tryCall` op appeared as a block terminator (lowering bug — a throwing call is a body op)")
-			errorReturn(retValId, errorFlagId) then self.lowerErrorReturn(retValId, errorFlagId: errorFlagId, dstRef: dstRef, asTerminator: true)
+			errorReturn(retValId, errorFlagId) then self.lowerErrorReturn(retValId, errorFlagId: errorFlagId, dstRef: dstRef, returnType: returnType, asTerminator: true)
 			osExit then panic("lowerStdToArm64: an `osExit` op appeared as a block terminator (lowering bug — a process exit is a body op)")
 		end 'lower'
 	end 'lowerTerminatorOp'
@@ -610,15 +615,24 @@ type StdToArm64Lowering
 		end 'asBody'
 	end 'emitRet'
 
-	// Move the primary return value into its AAPCS64 register: x0 for an integer, d0 for a float. A
-	// `void` reaching here is a value `ret` (`StdOp.ret`) inside a void function — a lowering bug, since
-	// a void return lowers to `retVoid` (guarded oppositely in `lowerVoidReturn`).
+	// Move a return VALUE into its AAPCS64 register: x0 for an integer, d0 for a float. Shared by the
+	// ordinary `ret` (via `emitPrimaryReturnMove`, which rejects a void return type first) and the throwing
+	// `errorReturn` (whose void form legitimately carries a family-default zero-int value:
+	// `stdReturnTypeIsFloat(void)` is `false`, so it lands in x0, where a GPR zero belongs).
+	function emitReturnValueMove(retValId ValueId, dstRef BlockRef, returnType StdReturnType)
+		let retReg = Arm64FloatReturnReg if stdReturnTypeIsFloat(returnType) else Arm64IntReturnReg
+		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(retReg), srcReg: TargetVReg.virtual(retValId)))
+	end 'emitReturnValueMove'
+
+	// The ordinary `ret`'s primary move. A `void` reaching here is a value `ret` (`StdOp.ret`) inside a void
+	// function — a lowering bug, since a void return lowers to `retVoid` (guarded oppositely in
+	// `lowerVoidReturn`). The throwing `errorReturn` path does NOT come through here — its void form has a
+	// real dummy value to place, so it calls `emitReturnValueMove` directly.
 	function emitPrimaryReturnMove(retValId ValueId, dstRef BlockRef, returnType StdReturnType)
 		if stdReturnTypeIsVoid(returnType) 'void'
 			panic("lowerStdToArm64: a value `ret` in a void-returning function — a void return lowers to `StdOp.retVoid`, which never reaches this path")
 		end 'void'
-		let retReg = Arm64FloatReturnReg if stdReturnTypeIsFloat(returnType) else Arm64IntReturnReg
-		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(retReg), srcReg: TargetVReg.virtual(retValId)))
+		self.emitReturnValueMove(retValId, dstRef: dstRef, returnType: returnType)
 	end 'emitPrimaryReturnMove'
 
 	// Lower a Std `param` to the entry move that captures the parameter's incoming ABI register into its
@@ -639,36 +653,52 @@ type StdToArm64Lowering
 	// parallel-copy sequencer: each `mov x[k], arg_k` is a physical def of x[k], which liveness forbids
 	// to every value live ACROSS it, so an argument live into a later move can never be coloured to an
 	// earlier argument register (the read-after-clobber class). Integer args only, as `lowerParam` notes.
+	// The physical register a call to `callee` returns its PRIMARY value in — **d0** for a float-returning
+	// callee, **x0** otherwise. Read off the SAME `calleeResultClasses` index the value-class column uses
+	// (`calleeResultClass`), so the captured value is coloured in the file the register it reads from lives
+	// in: a float result is XMM-classed, so `movRegReg` sees two FP ends (`fmov`), never a cross-file move.
+	function callResultRegister(callee ByteArray) returns Arm64Register
+		return Arm64FloatReturnReg if calleeResultClass(self.calleeResultClasses, callee: callee) == RegClass.xmm else Arm64IntReturnReg
+	end 'callResultRegister'
+
 	function lowerCall(resultId ValueId, callee ByteArray, args ValueIdArray, dstRef BlockRef)
 		for k in 0 upto args.count() 'eachArg'
 			let argId = try args.get(k) otherwise panic("lowerCall: args.get OOB at {k}")
 			self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(arm64ArgRegisterAt(k)), srcReg: TargetVReg.virtual(argId)))
 		end 'eachArg'
 		self.emit(dstRef, op: TargetOp.arm64BranchLink(callee))
-		self.emit(dstRef, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: arm64PhysReg(Arm64IntReturnReg)))
+		self.emit(dstRef, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: arm64PhysReg(self.callResultRegister(callee))))
 	end 'lowerCall'
 
 	// The arm64 twin of x64's `lowerTryCall` (P1.4b): args + `bl` as `lowerCall`, then capture BOTH return
-	// registers — the primary value from **x0** and the error flag from **x9**. The two capture moves are
-	// resequenced through the parallel-copy sequencer (`colorAndDropSelfMoves`), exactly as x64's are — the
-	// resequencer is target-agnostic (it reads whatever physical sources the captures name). Emitted
-	// consecutively right after the call so its "call followed by two virtual-dest/physical-src moves" test
-	// identifies the pair.
+	// registers — the primary value from `callResultRegister(callee)` (**d0** for a float-returning callee,
+	// else **x0**) and the error flag from **x9**. The two capture moves are resequenced through the
+	// parallel-copy sequencer (`colorAndDropSelfMoves`), exactly as x64's are — the resequencer is
+	// target-agnostic (it reads whatever physical sources the captures name). Emitted consecutively right
+	// after the call so its "call followed by two virtual-dest/physical-src moves" test identifies the pair.
+	// A float primary (d0) and the GPR flag (x9) are in different files, so the pair has no cross-file cycle.
 	function lowerTryCall(resultId ValueId, errorFlagId ValueId, callee ByteArray, args ValueIdArray, dstRef BlockRef)
 		for k in 0 upto args.count() 'eachArg'
 			let argId = try args.get(k) otherwise panic("lowerTryCall: args.get OOB at {k}")
 			self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(arm64ArgRegisterAt(k)), srcReg: TargetVReg.virtual(argId)))
 		end 'eachArg'
 		self.emit(dstRef, op: TargetOp.arm64BranchLink(callee))
-		self.emit(dstRef, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: arm64PhysReg(Arm64IntReturnReg)))
+		self.emit(dstRef, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: arm64PhysReg(self.callResultRegister(callee))))
 		self.emit(dstRef, op: TargetOp.movRegReg(TargetVReg.virtual(errorFlagId), srcReg: arm64PhysReg(Arm64FlagReturnReg)))
 	end 'lowerTryCall'
 
-	// The arm64 dual-register `errorReturn`: write the value to **x0** and the flag to **x9**, then the
-	// return terminator (which `Arm64PrologueEpilogue` recognizes exactly as an ordinary return's, since
-	// this emits the same `arm64Ret`). Both moves unconditional, mirroring x64's `lowerErrorReturn`.
-	function lowerErrorReturn(retValId ValueId, errorFlagId ValueId, dstRef BlockRef, asTerminator bool)
-		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64IntReturnReg), srcReg: TargetVReg.virtual(retValId)))
+	// The arm64 dual-register `errorReturn`: write the value to its return register (**d0** for a float
+	// return, else **x0** — through the SAME `emitReturnValueMove` the ordinary `ret` uses) and the flag to
+	// **x9**, then the return terminator (which `Arm64PrologueEpilogue` recognizes exactly as an ordinary
+	// return's, since this emits the same `arm64Ret`). Both moves unconditional, mirroring x64's
+	// `lowerErrorReturn`; a void return type targets x0, where the family-default zero belongs.
+	//
+	// ⚠ A THROWING FLOAT function's THROW path is NOT yet supported (same gap as x64's `lowerErrorReturn`):
+	// `lowerThrowError` (LowerMaxonToStd) hands the throw path a GPR-typed zero, and routing it to d0 for a
+	// float return type is a cross-file move. The fix (throw-path default typed to the return type) is
+	// upstream in LowerMaxonToStd; the OK path (real float → d0) works.
+	function lowerErrorReturn(retValId ValueId, errorFlagId ValueId, dstRef BlockRef, returnType StdReturnType, asTerminator bool)
+		self.emitReturnValueMove(retValId, dstRef: dstRef, returnType: returnType)
 		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64FlagReturnReg), srcReg: TargetVReg.virtual(errorFlagId)))
 		self.emitRet(dstRef, asTerminator: asTerminator)
 	end 'lowerErrorReturn'

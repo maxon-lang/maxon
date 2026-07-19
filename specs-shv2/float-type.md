@@ -168,8 +168,7 @@ end 'main'
 ```
 
 
-<!-- disabled-test: float-return-from-function -->
-<!-- P1.0d.4 wave 2: float ABI (a float RETURN needs the xmm0 return slot Wave 1 does not model) -->
+<!-- test: float-return-from-function -->
 ```maxon
 typealias Float = float(f64.min to f64.max)
 

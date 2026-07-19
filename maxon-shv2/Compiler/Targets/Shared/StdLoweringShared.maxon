@@ -54,7 +54,13 @@ end 'memoryDisplacement'
 // class is an O(1) lookup rather than a Θ(calls × functions) scan of `stdModule.functions` per call
 // site. Stores the CLASS (a scalar enum), NOT the payload-carrying `StdReturnType` union, so the map
 // heap-boxes nothing per function.
-typealias CalleeResultClassMap = Map with (ByteArray, RegClass)
+//
+// EXPORTED because the lowering itself now needs it, not only the value-class column: `lowerCall` must
+// capture a float-returning callee's result from XMM0/d0 rather than R8/x0, which is the same
+// `calleeResultClass` fact the column reads. Each backend builds ONE map (in its `create`) and threads
+// that same instance into both `lowerCall`/`lowerTryCall` and `buildValueClassColumns`, so it is built
+// once per lowering.
+export typealias CalleeResultClassMap = Map with (ByteArray, RegClass)
 
 // ⭐ THE ONE DOOR from a Std type to a register FILE. A value's class is what its TYPE says, and
 // nothing else — the whole content of `ValueClassColumn`'s "produced by the lowering, not derived in
@@ -106,8 +112,7 @@ end 'setValueClass'
 // module (the source of truth for ops/blocks/functions) and the Target module (whose operand-derived
 // `scanFunctionValueCount` sizes the column). EXHAUSTIVE over `StdOp` with no bare `default`, so a new
 // op that defines a value fails to compile here rather than defaulting a float into a GPR.
-export function buildValueClassColumns(stdModule StdModule, targetModule TargetModule) returns ValueClassColumns
-	let calleeResultClasses = buildCalleeResultClasses(stdModule)
+export function buildValueClassColumns(stdModule StdModule, targetModule TargetModule, calleeResultClasses CalleeResultClassMap) returns ValueClassColumns
 	var columns = ValueClassColumns.create()
 	for funcIndex in 0 upto stdModule.funcCount() 'eachFunc'
 		columns.push(buildFunctionValueClasses(stdModule, targetModule: targetModule, funcIndex: funcIndex, calleeResultClasses: calleeResultClasses))
@@ -115,8 +120,10 @@ export function buildValueClassColumns(stdModule StdModule, targetModule TargetM
 	return columns
 end 'buildValueClassColumns'
 
-// Build the callee name → RESULT CLASS index, once per module.
-function buildCalleeResultClasses(stdModule StdModule) returns CalleeResultClassMap
+// Build the callee name → RESULT CLASS index, once per module. Exported so each backend's `create`
+// builds it and stores it, threading the one instance into both the lowering (`lowerCall`) and
+// `buildValueClassColumns`.
+export function buildCalleeResultClasses(stdModule StdModule) returns CalleeResultClassMap
 	var calleeResultClasses = CalleeResultClassMap.create()
 	for func in stdModule.functions 'eachFunc'
 		calleeResultClasses.upsert(func.name, value: returnTypeResultClass(func.returnType))
@@ -218,7 +225,9 @@ end 'recordOpResultClass'
 
 // The class of a CALL's result — the callee's return type, looked up by name. A VOID call still
 // DEFINES a value (`lowerCall` moves the return register into it unconditionally), so a miss on `void`
-// is `gpr` and not an error: the value is a garbage integer nobody may read.
-function calleeResultClass(calleeResultClasses CalleeResultClassMap, callee ByteArray) returns RegClass
+// is `gpr` and not an error: the value is a garbage integer nobody may read. Exported so `lowerCall`
+// picks the SAME capture register (XMM0/d0 for a float result, else R8/x0) the column classes the
+// result under — one door, so the capture and the class cannot disagree.
+export function calleeResultClass(calleeResultClasses CalleeResultClassMap, callee ByteArray) returns RegClass
 	return try calleeResultClasses.get(callee) otherwise panic("calleeResultClass: no Std function is named '{String.from(callee)}' — every callee reaching the lowering is one LowerMaxonToStd resolved against the merged module")
 end 'calleeResultClass'
