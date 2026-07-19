@@ -237,11 +237,14 @@ end 'implicitNarrowingMessage'
 // but the COMPARISON RULE is this one function, called by both.
 //
 // `expected`/`got` are aggregate-name results, so an EMPTY one means "not a named aggregate". Two
-// values CONFLICT only when both name an aggregate and the names differ; every other pair (a scalar on
-// either side, or the same aggregate) defers to the caller's existing tag check, which the name-check
-// runs ALONGSIDE and never instead of.
+// values CONFLICT whenever their aggregate IDENTITIES differ: two DIFFERENT named aggregates (both
+// non-empty, unequal names), OR an aggregate meeting a SCALAR (exactly one empty). The scalar case is
+// the one a tag check cannot see, because `ValueTypeTag.named` is OVERLOADED — a boxed union VALUE and
+// a ranged-int alias SCALAR share it, so `checkDeclaredType(named, named)` wrongly AGREES for a union
+// standing where an alias is declared. Only two SCALARS (both empty) defer to the caller's tag check,
+// which the name check runs AFTER — never instead of — so a genuine class mismatch keeps its tag message.
 export function namedAggregatesConflict(expected ByteArray, got ByteArray) returns bool
-	return not expected.isEmpty() and not got.isEmpty() and not got.equals(expected)
+	return not (expected.isEmpty() and got.isEmpty()) and not got.equals(expected)
 end 'namedAggregatesConflict'
 
 // True for every tag that is DEFINITELY an integer — `int`, a ranged alias, `ExitCode`. It is the

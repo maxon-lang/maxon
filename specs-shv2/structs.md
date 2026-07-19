@@ -379,6 +379,41 @@ end 'main'
 error E3005: specs/fragments/structs/error.return-wrong-struct.test:21:2: Cannot return 'BoxB' from function declared to return 'BoxA'
 ```
 
+<!-- test: error.return-union-as-scalar -->
+Returning a boxed union where a scalar type is declared (returns Integer) is a memory-safety hole
+(OPEN 59). The ValueTypeTag.named tag is overloaded: a boxed union value and a ranged-int alias share
+it, so the tag check wrongly agrees and the union box is dropped under the scalar return's absent
+destructor, a leak. The aggregate-name check runs after the tag check and catches this case (a real
+aggregate meeting a scalar) via the shared namedAggregatesConflict, now extended to fire when exactly
+one side is an aggregate.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type BoxA
+	export var s as String
+
+	static function create(x Integer) returns Self
+		return Self{s: "v{x}"}
+	end 'create'
+end 'BoxA'
+
+union Holder
+	holds(inner BoxA)
+end 'Holder'
+
+function bad() returns Integer
+	return Holder.holds(BoxA.create(9))
+end 'bad'
+
+function main() returns ExitCode
+	let r = bad()
+	return 0 as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/structs/error.return-union-as-scalar.test:17:2: Cannot return 'Holder' from function declared to return 'int'
+```
+
 <!-- test: error.callarg-wrong-struct-consumed -->
 Passing a DIFFERENT struct than the parameter declares is a memory-safety hole, not merely a wrong
 answer (OPEN #54 Slice B). At a CONSUMING call site — `WrapA.create` moves its `BoxA` argument into a

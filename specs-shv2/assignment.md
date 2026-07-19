@@ -158,3 +158,34 @@ end 'main'
 ```maxoncstderr
 error E3005: specs/fragments/assignment/error.reassign-wrong-struct.test:22:2: cannot assign 'BoxB' to variable 'a' of type 'BoxA'
 ```
+
+<!-- test: error.reassign-union-as-scalar -->
+Reassigning a scalar-typed var to a boxed union (OPEN 59): the var declares Integer (a scalar) but the
+value is a boxed Holder union. The tag check accepts named-vs-named (the ValueTypeTag.named overload is
+a boxed union value AND a ranged-int alias), so the union box would be dropped under the scalar var's
+absent destructor at scope exit, a leak. The aggregate-name check runs after the tag check and rejects
+a real aggregate assigned where a scalar is declared.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type BoxA
+	export var s as String
+
+	static function create(x Integer) returns Self
+		return Self{s: "v{x}"}
+	end 'create'
+end 'BoxA'
+
+union Holder
+	holds(inner BoxA)
+end 'Holder'
+
+function main() returns ExitCode
+	var n = 5
+	n = Holder.holds(BoxA.create(9))
+	return 0 as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/assignment/error.reassign-union-as-scalar.test:18:2: cannot assign 'Holder' to variable 'n' of type 'int'
+```

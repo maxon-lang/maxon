@@ -4006,21 +4006,21 @@ export type Parser
 		let valueTag = self.tagOf(value)
 		let declaredTag = maxonTypeTag(binding.varType)
 
-		// ⭐ OPEN #54: reassigning a `var` to a DIFFERENT named aggregate is a retype the scalar tag
-		// check cannot see (`structRef == structRef` for any two structs); the overwritten box would
-		// later be dropped under the binding's declared destructor — a wild free. `requireAssignable`
-		// stays tag-based (its scalar-coercion job is, and it is SHARED with the global-store and
-		// field-default callers, which carry no declared aggregate). Identity is the interned name,
-		// EXACT. Read from the scalar tag/id columns — no `MaxonType` is materialized.
-		let declaredAggregate = self.aggregateNameOf(declaredTag, nameId: typeNameIdOf(binding.varType))
-		if not declaredAggregate.isEmpty() 'aggregateReassign'
-			let assignedAggregate = self.aggregateNameOf(valueTag, nameId: self.valueNameId(value))
-			if namedAggregatesConflict(declaredAggregate, got: assignedAggregate) 'aggregateReassignMismatch'
-				throw ParseError.assignTypeMismatch(String.from(nameTok.value), got: String.from(assignedAggregate), expected: String.from(declaredAggregate), line: nameTok.line, column: nameTok.column)
-			end 'aggregateReassignMismatch'
-		end 'aggregateReassign'
-
 		try self.requireAssignable(nameTok, value: valueTag, declared: declaredTag)
+
+		// ⭐ OPEN #54/#59: reassigning a `var` to the WRONG named aggregate — a DIFFERENT struct/union, OR
+		// an aggregate where the binding declares a SCALAR — is a retype the tag check above cannot see
+		// (`structRef == structRef` for any two structs; a boxed union and a ranged-int alias share
+		// `named`); the overwritten box would later be dropped under the binding's declared destructor —
+		// a wild free / leak. `requireAssignable` stays tag-based (its scalar-coercion job is, and it is
+		// SHARED with the global-store and field-default callers). Identity is the interned name, EXACT.
+		// Un-gated — both names are computed unconditionally, empty for a scalar with no allocation — and
+		// `giveTypeName` prints the scalar side's primitive, not an empty name.
+		let declaredAggregate = self.aggregateNameOf(declaredTag, nameId: typeNameIdOf(binding.varType))
+		let assignedAggregate = self.aggregateNameOf(valueTag, nameId: self.valueNameId(value))
+		if namedAggregatesConflict(declaredAggregate, got: assignedAggregate) 'aggregateReassignMismatch'
+			throw ParseError.assignTypeMismatch(String.from(nameTok.value), got: self.giveTypeName(valueTag, aggregateName: assignedAggregate), expected: self.giveTypeName(declaredTag, aggregateName: declaredAggregate), line: nameTok.line, column: nameTok.column)
+		end 'aggregateReassignMismatch'
 
 		try self.reassignBindingValue(binding, nameTok: nameTok, value: value, rhsWasBareLocal: rhsWasBareLocal)
 	end 'parseAssignment'
@@ -4337,25 +4337,28 @@ export type Parser
 		let retTag = self.tagOf(retVal)
 		let declaredTag = maxonReturnTypeTag(func.maxonReturnType)
 
-		// ⭐ OPEN #54: a `return` of a DIFFERENT named aggregate is handed back and dropped under the
-		// DECLARED return type's destructor — a wild free the scalar tag check below cannot see (two
-		// structs share the `structRef` tag). Identity is the interned name, EXACT (no subtyping). Read
-		// from the scalar tag/id columns — no `MaxonType` is materialized — so a scalar-returning
-		// function (the common case) allocates nothing here. Additive: the tag check still runs on every
-		// path this leaves alone.
-		let declaredReturnName = self.aggregateNameOf(declaredTag, nameId: maxonReturnTypeNameId(func.maxonReturnType))
-		if not declaredReturnName.isEmpty() 'aggregateReturn'
-			let returnedName = self.aggregateNameOf(retTag, nameId: self.valueNameId(retVal))
-			if namedAggregatesConflict(declaredReturnName, got: returnedName) 'aggregateReturnMismatch'
-				throw ParseError.returnTypeMismatch(String.from(returnedName), expected: String.from(declaredReturnName), line: retTok.line, column: retTok.column)
-			end 'aggregateReturnMismatch'
-		end 'aggregateReturn'
-
+		// The tag check runs FIRST: a genuine CLASS mismatch (a bool, or a struct, where an int is
+		// declared) keeps its tag-based message, and the aggregate-name check below only NEWLY catches
+		// the case the tag check WRONGLY AGREES on — a boxed union returned where a scalar is declared,
+		// where `checkDeclaredType(named, named)` agrees because `ValueTypeTag.named` is overloaded.
 		match checkDeclaredType(retTag, declared: declaredTag) 'declared'
 			ok then break 'declared'
 			mismatch then throw ParseError.returnTypeMismatch(typeTagName(retTag), expected: typeTagName(declaredTag), line: retTok.line, column: retTok.column)
 			narrowsFloatToInt then throw ParseError.implicitNarrowing(typeTagName(retTag), targetType: typeTagName(declaredTag), line: retTok.line, column: retTok.column)
 		end 'declared'
+
+		// ⭐ OPEN #54/#59: a `return` of the WRONG named aggregate — a DIFFERENT struct/union, OR an
+		// aggregate where a SCALAR is declared — is handed back and dropped under the DECLARED return
+		// type's destructor: a wild free / leak the tag check above cannot see (two structs share the
+		// `structRef` tag; a boxed union and a ranged-int alias share `named`). Identity is the interned
+		// name, EXACT (no subtyping). Un-gated — both names are computed unconditionally, `aggregateNameOf`
+		// returning the shared empty for a scalar with no allocation — and `giveTypeName` prints the
+		// scalar side's primitive (`int`), not an empty name.
+		let declaredReturnName = self.aggregateNameOf(declaredTag, nameId: maxonReturnTypeNameId(func.maxonReturnType))
+		let returnedName = self.aggregateNameOf(retTag, nameId: self.valueNameId(retVal))
+		if namedAggregatesConflict(declaredReturnName, got: returnedName) 'aggregateReturnMismatch'
+			throw ParseError.returnTypeMismatch(self.giveTypeName(retTag, aggregateName: returnedName), expected: self.giveTypeName(declaredTag, aggregateName: declaredReturnName), line: retTok.line, column: retTok.column)
+		end 'aggregateReturnMismatch'
 
 		// ⭐ **A `returns String` FUNCTION HANDS BACK A UNIFORMLY OWNED HEAP String**, and the caller
 		// drops that result unconditionally (`mintOwnedCallResult`). So the callee must return
@@ -4780,23 +4783,23 @@ export type Parser
 		// `otherwise <expr>` — a fallback VALUE that merges with the success value.
 		let otherwiseValue = try self.parseExpression(func, block: self.currentBlock)
 
-		// ⭐ OPEN #54: a struct/union `otherwise` fallback of the WRONG named aggregate merges into the
-		// try's owned result phi and is dropped under the RESULT's destructor — a wild free the scalar
-		// checks below cannot see (two structs share the `structRef` tag). Runs regardless of
-		// `resultUsed`: the phi is dropped on the discard path too (see the managed-result handling
-		// below). Identity is the interned name, EXACT. Read from the scalar tag/id columns — no
-		// `MaxonType` is materialized — so a scalar try-result (the common case) allocates nothing here.
-		let resultAggregate = self.aggregateNameOf(self.tagOf(result), nameId: self.valueNameId(result))
-		if not resultAggregate.isEmpty() 'aggregateOtherwise'
-			let fallbackAggregate = self.aggregateNameOf(self.tagOf(otherwiseValue), nameId: self.valueNameId(otherwiseValue))
-			if namedAggregatesConflict(resultAggregate, got: fallbackAggregate) 'aggregateOtherwiseMismatch'
-				throw ParseError.errorTypeMismatch("otherwise type '{String.from(fallbackAggregate)}' does not match expected type '{String.from(resultAggregate)}'", line: tryTok.line, column: tryTok.column)
-			end 'aggregateOtherwiseMismatch'
-		end 'aggregateOtherwise'
-
 		if resultUsed and tagIsFloat(self.tagOf(otherwiseValue)) != tagIsFloat(self.tagOf(result)) 'typeMismatch'
 			throw ParseError.errorTypeMismatch("otherwise type '{typeTagName(self.tagOf(otherwiseValue))}' does not match expected type '{typeTagName(self.tagOf(result))}'", line: tryTok.line, column: tryTok.column)
 		end 'typeMismatch'
+
+		// ⭐ OPEN #54/#59: an `otherwise` fallback of the WRONG named aggregate — a DIFFERENT struct/union,
+		// OR an aggregate where the try-result is a SCALAR (or the reverse) — merges into the try's owned
+		// result phi and is dropped under the RESULT's destructor: a wild free / leak the float check above
+		// cannot see (two structs share the `structRef` tag; a boxed union and a ranged-int alias share
+		// `named`). Runs regardless of `resultUsed`: the phi is dropped on the discard path too (see the
+		// managed-result handling below). Identity is the interned name, EXACT. Un-gated — both names are
+		// computed unconditionally, empty for a scalar with no allocation — and `giveTypeName` prints the
+		// scalar side's primitive, not an empty name.
+		let resultAggregate = self.aggregateNameOf(self.tagOf(result), nameId: self.valueNameId(result))
+		let fallbackAggregate = self.aggregateNameOf(self.tagOf(otherwiseValue), nameId: self.valueNameId(otherwiseValue))
+		if namedAggregatesConflict(resultAggregate, got: fallbackAggregate) 'aggregateOtherwiseMismatch'
+			throw ParseError.errorTypeMismatch("otherwise type '{self.giveTypeName(self.tagOf(otherwiseValue), aggregateName: fallbackAggregate)}' does not match expected type '{self.giveTypeName(self.tagOf(result), aggregateName: resultAggregate)}'", line: tryTok.line, column: tryTok.column)
+		end 'aggregateOtherwiseMismatch'
 
 		// ⭐ **A MANAGED try-result and its `otherwise` fallback merge through an OWNED result phi**
 		// (`finishValueTry`), dropped once at its scope exit — so both edges must contribute an OWNED value
@@ -6751,7 +6754,7 @@ export type Parser
 		// phi minted below takes the FIRST arm's type (`mintPhi` off `firstGive`), and a value's type is
 		// fixed at birth — so an arm giving a value of another type hands the phi a value its own type is a
 		// lie about, with no diagnostic. The float/non-float split threw `unsupported` above, so a surviving
-		// mismatch is same-register-class and takes one of THREE shapes, each a memory-SAFETY defect:
+		// mismatch is same-register-class and takes one of TWO shapes, each a memory-SAFETY defect:
 		//   • a SCALAR-CLASS disagreement — a `String` give and an `int` give, a `bool` give and an `int`
 		//     give — whose phi derefs the wrong-domain value as the first arm's type (the int read as a
 		//     String pointer: a segfault). Caught by `typesAgree`, the SYMMETRIC form of the rule the
@@ -6759,25 +6762,19 @@ export type Parser
 		//     `checkDeclaredType`. It is `typesAgree`, NOT a raw tag compare, so a ranged-int alias give and
 		//     a plain `int` give (both numeric) — or an `ExitCode` give and an `int` give — STAY valid: the
 		//     numeric subtypes share a register file and a phi holds either.
-		//   • an AGGREGATE-NESS disagreement — a boxed struct/union give and a SCALAR give (`match c { 0
-		//     gives Holder.holds(box); default gives 7 }`). `ValueTypeTag.named` is OVERLOADED — a boxed
-		//     union VALUE carries it, and so does a ranged-int alias — so `typesAgree(named, integer)`
-		//     wrongly AGREES and the phi derefs the int `7` as a box pointer: a segfault. The tag cannot
-		//     tell a real aggregate from a named scalar, but `aggregateNameOf` can (it gates on
-		//     `containsStruct`/`containsEnum`, so it NAMES a declared struct/union and returns EMPTY for
-		//     every scalar, String, or ranged-int alias). So the two gives disagree exactly when one has an
-		//     aggregate name and the other does not. (This is the one shape Slice A/B leave to the
-		//     cross-cutting `named`-overload rung #59 at their own sites; here it is a live SEGFAULT this
-		//     rung exists to catch, so it is closed LOCALLY without touching the shared rule.)
-		//   • an AGGREGATE-NAME disagreement — two DIFFERENT structs or unions, both aggregates but naming
-		//     distinct types, whose phi is later dropped under the FIRST arm's destructor: a wild free.
-		//     Caught by `namedAggregatesConflict`, the ONE name-agreement rule Slice A/B/#52 share
-		//     (TypeRules) — reused, not re-copied.
-		// The three compose: both-scalar → `typesAgree`; one-aggregate-one-scalar → the emptiness disagreement;
-		// both-aggregate → `namedAggregatesConflict`. Read off the scalar tag/name columns, so a scalar match
-		// materializes no `MaxonType` and allocates nothing. Placed BEFORE `resolveGivesOwnership` and the phi
-		// so an ill-typed match is refused before any phi is built. Expression-only: a statement match gives
-		// no value, exactly as the float check above.
+		//   • an AGGREGATE-IDENTITY disagreement — two DIFFERENT structs/unions (both aggregates, naming
+		//     distinct types), OR a boxed struct/union give and a SCALAR give (`match c { 0 gives
+		//     Holder.holds(box); default gives 7 }`). Both are caught by `namedAggregatesConflict` (the ONE
+		//     name-agreement rule the coercion sites share, extended by #59 to fire on aggregate-vs-scalar
+		//     too). `ValueTypeTag.named` is OVERLOADED — a boxed union VALUE carries it, and so does a
+		//     ranged-int alias — so `typesAgree(named, integer)` wrongly AGREES and the phi would deref the
+		//     int `7` as a box pointer; but `aggregateNameOf` NAMES a declared struct/union and returns EMPTY
+		//     for every scalar/String/ranged-int alias, so the two gives disagree exactly when their
+		//     aggregate names differ (one empty, or both non-empty and unequal).
+		// The two compose: both-scalar → `typesAgree`; anything with an aggregate → `namedAggregatesConflict`.
+		// Read off the scalar tag/name columns, so a scalar match materializes no `MaxonType` and allocates
+		// nothing. Placed BEFORE `resolveGivesOwnership` and the phi so an ill-typed match is refused before
+		// any phi is built. Expression-only: a statement match gives no value, exactly as the float check above.
 		if isExpression 'checkGiveTypes'
 			let firstGive = self.giveValueOf(firstArm.give)
 			let firstTag = self.tagOf(firstGive)
@@ -6789,9 +6786,8 @@ export type Parser
 				let giveAggregate = self.aggregateNameOf(giveTag, nameId: self.valueNameId(giveVal))
 
 				let classDisagrees = not typesAgree(giveTag, right: firstTag)
-				let aggregatenessDisagrees = firstAggregate.isEmpty() != giveAggregate.isEmpty()
 				let nameDisagrees = namedAggregatesConflict(firstAggregate, got: giveAggregate)
-				if classDisagrees or aggregatenessDisagrees or nameDisagrees 'giveTypeMismatch'
+				if classDisagrees or nameDisagrees 'giveTypeMismatch'
 					throw ParseError.giveTypeMismatch(self.giveTypeName(giveTag, aggregateName: giveAggregate), expected: self.giveTypeName(firstTag, aggregateName: firstAggregate), line: matchTok.line, column: matchTok.column)
 				end 'giveTypeMismatch'
 			end 'scanGiveType'
@@ -9014,10 +9010,15 @@ export type Parser
 			return
 		end 'stringOk'
 
+		// The tag check above (`got != wantTag`) is EXACT, so reaching here means both tags are equal — and
+		// the only tag a struct/union storage and a value can share while disagreeing on aggregate identity
+		// is the overloaded `named` (a boxed union slot met by a ranged-int alias value, or the reverse).
+		// `namedAggregatesConflict` (extended by #59) catches that scalar-vs-aggregate case as well as two
+		// distinct aggregates, and `giveTypeName` prints the scalar side's primitive rather than an empty name.
 		let wantName = self.aggregateNameOf(maxonTypeTag(storage), nameId: typeNameIdOf(storage))
 		let gotName = self.aggregateNameOf(self.tagOf(value), nameId: self.valueNameId(value))
 		if namedAggregatesConflict(wantName, got: gotName) 'nameMismatch'
-			throw ParseError.assignTypeMismatch(siteName, got: String.from(gotName), expected: String.from(wantName), line: anchor.line, column: anchor.column)
+			throw ParseError.assignTypeMismatch(siteName, got: self.giveTypeName(got, aggregateName: gotName), expected: self.giveTypeName(wantTag, aggregateName: wantName), line: anchor.line, column: anchor.column)
 		end 'nameMismatch'
 	end 'requireManagedValueMatches'
 
