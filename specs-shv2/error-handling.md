@@ -874,22 +874,24 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: error.cross-file-throws-caught-later-file -->
-<!-- BACKWARD ordering, NOT covered by the OPEN #52 union-payload interner doors:
-     `risky`/`Woe` are declared in `zzz.maxon`, which sorts AFTER the catch site in
-     `app.maxon`. The adopt doors re-intern a payload type by NAME, but only once the
-     union LAYOUT is in the signatures index; here the body of `app.maxon` is parsed
-     before `zzz.maxon`'s layout is folded in. Enabling this needs a declaration-order
-     union-layout PRESCAN (seed every file's union layouts before any body is parsed) —
-     a separate rung. -->
+<!-- test: error.cross-file-throws-caught-later-file -->
+BACKWARD ordering: `risky`/`Woe` are declared in `zzz.maxon`, which sorts AFTER
+the catch site in `app.maxon`. The whole-program signature sweep
+(`queryProgramSignatures` → `foldDeclaredSignaturesInto` → `foldFile`) folds every
+file's union LAYOUTS and `throws` clauses into the shared index BEFORE any body is
+parsed, so `Woe`'s layout is already seeded when `app.maxon`'s body is parsed; the
+union-payload adopt doors then re-intern the payload type by name into the reader
+file's interner. That is the declaration-order union-layout prescan OPEN #52's
+backward slice asked for — it already exists.
 ```maxon
 // --- file: app.maxon
 // The throwing callee `risky` is declared in `zzz.maxon`, which sorts AFTER
-// this file. The single-pass parser parses `app.maxon` first, so without a
-// project-wide throws-clause prescan the `(e)` binding here can't recover
-// `risky`'s error union — it falls back to `integer` and the `match e` below
-// reports E3005 "match scrutinee must be an enum-typed value". Seeding every
-// file's `throws` clause before any body is parsed keeps `e` typed as `Woe`.
+// this file. The single-pass parser parses `app.maxon` first, so a project-wide
+// throws-clause prescan is what lets the `(e)` binding here recover `risky`'s
+// error union `Woe` (rather than falling back to `integer`, which would make the
+// `match e` below report E3005 "match scrutinee must be an enum-typed value").
+// Seeding every file's `throws` clause before any body is parsed keeps `e` typed
+// as `Woe`.
 function main() returns ExitCode
 	var result = 0
 	try risky(9) otherwise (e) 'handler'
@@ -915,6 +917,145 @@ export function risky(n Code) returns Code throws Woe
 	end 'big'
 	return n
 end 'risky'
+```
+```exitcode
+7
+```
+
+<!-- test: error.cross-file-throws-string-payload-later-file -->
+BACKWARD ordering with a MANAGED (String) payload: `Woe.bad(msg String)` is
+declared in `zzz.maxon` (sorts after `app.maxon`), thrown by `risky`, and caught
+in `app.maxon` where `match e` binds and reads the String payload. The payload's
+own drop (`__str_decref` at the handler `end`) must route through the union's
+destructor cascade — resolved against the reader file's interner via the adopt
+door — so a wrong-interner misread here would be a leak or a wild-free, not just a
+wrong number. This pins the managed backward path the scalar case above cannot.
+```maxon
+// --- file: app.maxon
+function main() returns ExitCode
+	var result = 0
+	try risky(9) otherwise (e) 'handler'
+		match e 'check'
+			bad(msg) then result = msg.byteLength()
+			ok then result = 1
+		end 'check'
+	end 'handler'
+	return result
+end 'main'
+
+// --- file: zzz.maxon
+typealias Code = int(i64.min to i64.max)
+
+export union Woe implements Error
+	bad(msg String)
+	ok
+end 'Woe'
+
+export function risky(n Code) returns Code throws Woe
+	if n > 5 'big'
+		throw Woe.bad("hello")
+	end 'big'
+	return n
+end 'risky'
+```
+```exitcode
+5
+```
+
+<!-- test: error.cross-file-throws-struct-payload-later-file -->
+BACKWARD ordering with a MANAGED (struct) payload: `Woe.bad(p Payload)` and the
+struct `Payload` are declared in `zzz.maxon` (sorts after `app.maxon`). The catch
+site in `app.maxon` binds the struct payload and reads `p.mass`. Classifying the
+`named` payload `Payload` at the reader's match-bind site resolves its type id
+against `app.maxon`'s interner (via the adopt door) — the exact interner-mismatch
+family that panicked `classifyUnionPayload` before the doors landed.
+```maxon
+// --- file: app.maxon
+function main() returns ExitCode
+	var result = 0
+	try risky(9) otherwise (e) 'handler'
+		match e 'check'
+			bad(p) then result = p.mass
+			ok then result = 1
+		end 'check'
+	end 'handler'
+	return result
+end 'main'
+
+// --- file: zzz.maxon
+typealias Code = int(i64.min to i64.max)
+
+type Payload
+	export var mass as Code
+
+	static function create(m Code) returns Self
+		return Self{mass: m}
+	end 'create'
+end 'Payload'
+
+export union Woe implements Error
+	bad(p Payload)
+	ok
+end 'Woe'
+
+export function risky(n Code) returns Code throws Woe
+	if n > 5 'big'
+		throw Woe.bad(Payload.create(7))
+	end 'big'
+	return n
+end 'risky'
+```
+```exitcode
+7
+```
+
+<!-- test: error.cross-file-union-constructed-later-file -->
+BACKWARD ordering with the earlier file DECLARING DECOY types that SHIFT its
+interner: `app.maxon` constructs and matches `Woe.bad(Payload.create(7))` whose
+`Woe`/`Payload` live in `zzz.maxon` (sorts later), but first declares `Decoy1`
+(three fields) and `Decoy2` (one field) so `app.maxon`'s type interner is offset
+from `zzz.maxon`'s. If the payload type id were resolved against the wrong
+interner it would name a decoy (a wrong layout / wrong field offset → a wrong
+answer or crash), not `Payload`. This is the adversarial interner-robustness pin.
+```maxon
+// --- file: app.maxon
+typealias Tiny = int(0 to 7)
+
+type Decoy1
+	export var alpha as Tiny
+	export var beta as Tiny
+	export var gamma as Tiny
+end 'Decoy1'
+
+type Decoy2
+	export var only as Tiny
+end 'Decoy2'
+
+function main() returns ExitCode
+	let w = Woe.bad(Payload.create(7))
+	var result = 0
+	match w 'check'
+		bad(p) then result = p.mass
+		ok then result = 1
+	end 'check'
+	return result
+end 'main'
+
+// --- file: zzz.maxon
+typealias Code = int(i64.min to i64.max)
+
+type Payload
+	export var mass as Code
+
+	static function create(m Code) returns Self
+		return Self{mass: m}
+	end 'create'
+end 'Payload'
+
+export union Woe implements Error
+	bad(p Payload)
+	ok
+end 'Woe'
 ```
 ```exitcode
 7

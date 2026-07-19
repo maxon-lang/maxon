@@ -1,0 +1,107 @@
+// Test: error.cross-file-union-constructed-later-file
+// --- file: app.maxon
+typealias Tiny = int(0 to 7)
+
+type Decoy1
+	export var alpha as Tiny
+	export var beta as Tiny
+	export var gamma as Tiny
+end 'Decoy1'
+
+type Decoy2
+	export var only as Tiny
+end 'Decoy2'
+
+function main() returns ExitCode
+	let w = Woe.bad(Payload.create(7))
+	var result = 0
+	match w 'check'
+		bad(p) then result = p.mass
+		ok then result = 1
+	end 'check'
+	return result
+end 'main'
+
+// --- file: zzz.maxon
+typealias Code = int(i64.min to i64.max)
+
+type Payload
+	export var mass as Code
+
+	static function create(m Code) returns Self
+		return Self{mass: m}
+	end 'create'
+end 'Payload'
+
+export union Woe implements Error
+	bad(p Payload)
+	ok
+end 'Woe'
+---
+ExitCode: 7
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 7
+    arm64.bl Payload.create
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.movRegReg x20, x0
+    arm64.movImm x0, 0
+    arm64.storeBaseDispReg.word64 [x20 + 0], x0
+    arm64.storeBaseDispReg.word64 [x20 + 8], x19
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 0]
+    arm64.cmp x0, 0
+    arm64.cset x1, eq
+    arm64.cbnz x1, matcharm
+    arm64.b matchnext
+  matcharm:
+    arm64.loadRegBaseDisp.word64 x0, [x20 + 8]
+    arm64.movImm x1, 0
+    arm64.storeBaseDispReg.word64 [x20 + 8], x1
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
+    arm64.bl __mm_decref
+    arm64.b matchcont
+  matchnext:
+    arm64.cmp x0, 1
+    arm64.cset x0, eq
+    arm64.cbnz x0, matcharm
+    arm64.b matchnext
+  matcharm:
+    arm64.movImm x19, 1
+    arm64.b matchcont
+  matchcont:
+    arm64.movRegReg x0, x20
+    arm64.bl __destruct_Woe
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  matchnext:
+}
+
+func @Payload.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
