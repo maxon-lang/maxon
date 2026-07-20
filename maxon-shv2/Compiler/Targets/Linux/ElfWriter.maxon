@@ -92,13 +92,22 @@ let ElfStrtabAlign = 1
 let ElfSymtabFirstGlobal = 1
 
 // A PT_LOAD segment with `p_filesz == 0` is degenerate. The globals prelude is empty for any program
-// with no top-level `var`, so the `.data` segment is FLOORED at these 8 bytes to stay non-empty.
+// with no top-level `var`, so the `.data` SEGMENT is FLOORED at these 8 bytes to stay non-empty.
 //
-// ⚠ A FLOOR, NOT A TAIL — it is `max`, never `+`. `.data`'s size is `p_filesz`/`p_memsz` AND the
-// `sh_size` a section reader believes, so adding 8 unconditionally would over-report the globals area
-// by 8 bytes in every program that HAS globals. That is invisible to the loader (it maps 8 harmless
-// zeros) and NOT invisible to a reader of the section — which is exactly what the `RequiredData` gate
-// grows here.
+// ⚠ A FLOOR, NOT A TAIL — it is `max`, never `+`. A `+ 8` would push the segment 8 bytes past the
+// globals in every program that HAS globals; the loader would not care (it maps 8 harmless zeros)
+// but the file would be describing storage nothing put there.
+//
+// ⚠⚠ AND IT IS THE SEGMENT'S FLOOR ONLY — `sh_size` IS NOT FLOORED. The two are different claims
+// about different things: `p_filesz`/`p_memsz` say what the loader must MAP (a page-granular fact,
+// where a non-degenerate minimum is a loader requirement), and `sh_size` says how far the `.data`
+// SECTION extends (an exact fact about what was laid down). Flooring both made a 1-byte `bool`
+// global advertise 8 bytes of `.data`, and the `RequiredData` gate reads `sh_size`: the seven zeros
+// after the bool were indistinguishable, TO THE GATE, from globals the compiler had actually
+// emitted. `specs-shv2/static-variables.md`'s prefix comparison then passed a program missing its
+// trailing zero-valued globals — a regression the arm64-macOS and x64-windows twins of the same
+// spec both CAUGHT, because Mach-O's `size` and PE's virtual size are the true extent on those
+// targets. A cross-target gate that is weaker on one target is a gate that lies about that target.
 let ElfDataSegmentMinBytes = 8
 
 // Write one Elf64_Phdr (56 bytes). Every segment this writer emits keeps `p_vaddr == p_paddr` (there
@@ -293,7 +302,11 @@ export function writeElf(outputPath FilePath, codeResult CodeResult, target Targ
 	elf.append(codeResult.dataPrelude)
 	padTo(elf, size: dataFileOffset + dataSegmentSize)
 
-	writeElfDebugSections(elf, codeResult: codeResult, textVAddr: textVAddr, textFileOffset: textFileOffset, codeSize: codeSize, rodataVAddr: rodataVAddr, rodataFileOffset: rodataFileOffset, rdataSize: rdataSize, dataVAddr: dataVAddr, dataFileOffset: dataFileOffset, dataSize: dataSegmentSize, shoffFieldOffset: shoffFieldOffset, shentsizeFieldOffset: shentsizeFieldOffset, shnumFieldOffset: shnumFieldOffset, shstrndxFieldOffset: shstrndxFieldOffset)
+	// `dataSize` is `preludeSize`, NOT `dataSegmentSize` — the SECTION's extent is what was laid down,
+	// while the segment's floor is a loader concern (see `ElfDataSegmentMinBytes`). The padding
+	// between them stays inside the segment and outside the section, exactly as Mach-O's page padding
+	// sits outside `__DATA,__data`.
+	writeElfDebugSections(elf, codeResult: codeResult, textVAddr: textVAddr, textFileOffset: textFileOffset, codeSize: codeSize, rodataVAddr: rodataVAddr, rodataFileOffset: rodataFileOffset, rdataSize: rdataSize, dataVAddr: dataVAddr, dataFileOffset: dataFileOffset, dataSize: preludeSize, shoffFieldOffset: shoffFieldOffset, shentsizeFieldOffset: shentsizeFieldOffset, shnumFieldOffset: shnumFieldOffset, shstrndxFieldOffset: shstrndxFieldOffset)
 
 	// `mode` is NOT optional. PeWriter omits it because Windows derives executability from the file's
 	// contents; every POSIX loader derives it from the mode bits, and a file written without them

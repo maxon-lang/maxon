@@ -828,29 +828,56 @@ type RunCommand
 	end 'create'
 end 'RunCommand'
 
-// ⭐ THE RUNNER REGISTRY. How to execute the binary the build just produced.
+// ⭐ THE RUNNER REGISTRY — the program that runs a binary this host cannot spawn itself.
 //
-// The HOST's own binary is spawned directly with an empty argv (spec tests take no runtime
-// arguments — shv2's SpecParser has no `Args` directive). Anything else needs a program that knows
-// how to run it, and WHICH program is a property of the target's OS:
+// The HOST's own binary needs none of this: it is spawned directly (see `buildRunCommand`).
+// Anything else needs a program that knows how to run it, and WHICH program is a property of the
+// target's OS:
 //   * `wasi`  — a `.wasm` COMPONENT, run under the vendored wasmtime.
 //   * `linux` — a static aarch64 ELF, run inside an OrbStack Linux VM.
-// Restored from v1 `SpecTestRunner.maxon:623` (`buildRunCommand`), which had only the first two arms.
+//
+// ⚠ THIS UNION IS WHY THE TABLE IS WRITTEN ONCE. Two callers ask the OS the same question in
+// different words — `buildRunCommand` turns the answer into a command, `requireRunnerAvailable`
+// turns the SAME answer into a preflight probe — and they had each carried their own `match` over
+// `Os`, with the two unreachable arms' panic text duplicated verbatim between them. Nothing made the
+// copies agree: a runner added to one and not the other passes preflight and then panics per test,
+// or probes for a runner no test will use. Routed through this union, adding an arm here makes BOTH
+// matches fail to compile until they are taught about it — a drift that was silent becomes a build
+// error.
+union ExternalRunner
+	wasmtime
+	orbstack
+end 'ExternalRunner'
+
+// Which external runner executes a binary built for `target`. The one table, per the note above.
 //
 // EXHAUSTIVE over `Os`, with no bare `default`: a host that cannot run its own target's binaries is
 // a contradiction, so the two remaining arms are reachable only by cross-compiling to an OS this
-// harness has no runner for. That panics naming both targets rather than spawning an executable the
+// harness has no runner for. They panic naming both targets rather than spawning an executable the
 // kernel will refuse in some less legible way.
+function externalRunnerFor(target Target) returns ExternalRunner
+	return match target.os 'runner'
+		wasi gives ExternalRunner.wasmtime
+		linux gives ExternalRunner.orbstack
+		windows panic("SpecTestRunner: no runner for a {targetToString(target)} binary on a {targetToString(detectHostTarget())} host — a PE can only be spawned on Windows, so this suite must run its tests on that host")
+		macos panic("SpecTestRunner: no runner for a {targetToString(target)} binary on a {targetToString(detectHostTarget())} host — a Mach-O can only be spawned on macOS, so this suite must run its tests on that host")
+	end 'runner'
+end 'externalRunnerFor'
+
+// How to execute the binary the build just produced.
+//
+// The HOST's own binary is spawned directly with an empty argv (spec tests take no runtime
+// arguments — shv2's SpecParser has no `Args` directive); everything else goes behind the runner
+// `externalRunnerFor` names. Restored from v1 `SpecTestRunner.maxon:623` (`buildRunCommand`), which
+// had only the first two arms.
 function buildRunCommand(modulePath FilePath, effectiveTarget Target) returns RunCommand
 	if not needsExternalRunner(effectiveTarget) 'hostSpawn'
 		return RunCommand.create(Executable.path(modulePath), argv: StringArray.create())
 	end 'hostSpawn'
 
-	return match effectiveTarget.os 'runner'
-		wasi gives buildWasmRunCommand(modulePath)
-		linux gives buildLinuxVmRunCommand(modulePath)
-		windows panic("SpecTestRunner: no runner for a {targetToString(effectiveTarget)} binary on a {targetToString(detectHostTarget())} host — a PE can only be spawned on Windows, so this suite must run its tests on that host")
-		macos panic("SpecTestRunner: no runner for a {targetToString(effectiveTarget)} binary on a {targetToString(detectHostTarget())} host — a Mach-O can only be spawned on macOS, so this suite must run its tests on that host")
+	return match externalRunnerFor(effectiveTarget) 'runner'
+		wasmtime gives buildWasmRunCommand(modulePath)
+		orbstack gives buildLinuxVmRunCommand(modulePath)
 	end 'runner'
 end 'buildRunCommand'
 
@@ -936,11 +963,9 @@ export function requireRunnerAvailable(effectiveTarget Target)
 		return
 	end 'hostSpawn'
 
-	match effectiveTarget.os 'runner'
-		wasi then _ = findWasmtimePath()
-		linux then requireOrbMachineReachable()
-		windows then panic("SpecTestRunner: no runner for a {targetToString(effectiveTarget)} binary on a {targetToString(detectHostTarget())} host — a PE can only be spawned on Windows, so this suite must run its tests on that host")
-		macos then panic("SpecTestRunner: no runner for a {targetToString(effectiveTarget)} binary on a {targetToString(detectHostTarget())} host — a Mach-O can only be spawned on macOS, so this suite must run its tests on that host")
+	match externalRunnerFor(effectiveTarget) 'runner'
+		wasmtime then _ = findWasmtimePath()
+		orbstack then requireOrbMachineReachable()
 	end 'runner'
 end 'requireRunnerAvailable'
 
@@ -958,12 +983,18 @@ function requireOrbMachineReachable()
 	argv.push(OrbMachineName)
 	argv.push(OrbProbeCommand)
 
+	// DERIVED from a `Target`, never spelled as a literal — the same discipline the deleted
+	// `nativeTargetKeys` was built on. A message that tells the reader to drop `--target=arm64-linux`
+	// has to name the flag `parseBuildTarget` actually accepts, and `targetToString` is the one
+	// producer of that spelling; a literal here is a second copy that a renaming would not reach.
+	let orbTargetKey = targetToString(Target.create(CpuArch.arm64, os: Os.linux))
+
 	let probe = try runProcess(Executable.name(OrbExecutableName), argv: argv) otherwise (e) 'notInstalled'
-		panic("SpecTestRunner: could not run '{OrbExecutableName}' ({e.displayReason()}) — running an arm64-linux binary from a non-Linux host needs OrbStack (https://orbstack.dev); install it, or drop {TargetFlagPrefix}arm64-linux and run the suite for this host")
+		panic("SpecTestRunner: could not run '{OrbExecutableName}' ({e.displayReason()}) — running a {orbTargetKey} binary from a non-Linux host needs OrbStack (https://orbstack.dev); install it, or drop {TargetFlagPrefix}{orbTargetKey} and run the suite for this host")
 	end 'notInstalled'
 
 	if probe.exitCode != 0 'machineUnreachable'
-		panic("SpecTestRunner: '{OrbExecutableName} {OrbRunSubcommand} {OrbMachineFlag} {OrbMachineName} {OrbProbeCommand}' failed (exit {probe.exitCode}): {probe.stderr.trim()} — the arm64-linux run path needs an OrbStack Linux machine named '{OrbMachineName}' (`orb create ubuntu {OrbMachineName}`)")
+		panic("SpecTestRunner: '{OrbExecutableName} {OrbRunSubcommand} {OrbMachineFlag} {OrbMachineName} {OrbProbeCommand}' failed (exit {probe.exitCode}): {probe.stderr.trim()} — the {orbTargetKey} run path needs an OrbStack Linux machine named '{OrbMachineName}' (`orb create ubuntu {OrbMachineName}`)")
 	end 'machineUnreachable'
 end 'requireOrbMachineReachable'
 

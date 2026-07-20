@@ -37,14 +37,36 @@ export function imageReadU64(image ByteArray, at ByteOffset) returns MachineWord
 	return imageReadU32(image, at: at) or (imageReadU32(image, at: at + 4) shl 32)
 end 'imageReadU64'
 
+// Does the byte range `[start, start + count)` lie wholly inside `image`? The guard each of the three
+// readers runs before slicing a section out, so it can report ITS OWN `truncated` error — naming the
+// file and the section — rather than let `imageSlice` panic.
+//
+// ⚠ A SUBTRACTION, NOT `start + count > image.count()`. The three readers each carried that addition,
+// and it does not guard: a `ByteOffset` is a 64-bit word, so a section header claiming
+// `sh_offset = 0xC000000000000000` with `sh_size = 0x4000000000000000` sums to ZERO, sails through,
+// and panics inside `imageSlice` on the first byte — with a message blaming a caller that did check.
+// (Measured on a hand-corrupted ELF: `imageSlice: get OOB at -4611686018427387904`, the wrapped value
+// printing as negative because the machine word is signed.) Subtracting cannot wrap in turn, because
+// the `count > image.count()` test above it has already made the difference non-negative.
+//
+// Written here rather than three times because it is the same arithmetic in all three formats, and a
+// guard that differs between them is a guard one of them does not have.
+export function imageRangeFits(image ByteArray, start ByteOffset, count ByteCount) returns bool
+	if count > image.count() 'longerThanWholeFile'
+		return false
+	end 'longerThanWholeFile'
+
+	return start <= image.count() - count
+end 'imageRangeFits'
+
 // `count` bytes of `image` starting at `start`. PANICS on an out-of-range read rather than
-// truncating: every caller checks `start + count <= image.count()` against the file's real length
-// first and reports a `truncated` error naming the image, so reaching here with a bad range means
-// that check was skipped — a bug in the reader, not a malformed input.
+// truncating: every caller checks `imageRangeFits` against the file's real length first and reports a
+// `truncated` error naming the image, so reaching here with a bad range means that check was
+// skipped — a bug in the reader, not a malformed input.
 export function imageSlice(image ByteArray, start ByteOffset, count ByteCount) returns ByteArray
 	var out = ByteArray.create()
 	for i in 0 upto count 'each'
-		out.push(try image.get(start + i) otherwise panic("imageSlice: get OOB at {start + i} — the caller checked start+count <= image.count()"))
+		out.push(try image.get(start + i) otherwise panic("imageSlice: get OOB at {start + i} — the caller is required to have checked imageRangeFits(start, count) first"))
 	end 'each'
 	return out
 end 'imageSlice'

@@ -17,11 +17,14 @@
 // So: ELF header → `.shstrtab`'s header → the section header whose name is `.data` → its
 // `sh_size` bytes at `sh_offset`.
 //
-// ⚠ IT READS `sh_size`, WHICH IS WHY `ElfWriter.ElfDataSegmentMinBytes` IS A FLOOR AND NOT A TAIL.
-// The `.data` segment is floored at 8 bytes so a program with no globals does not produce a
-// degenerate `p_filesz == 0` PT_LOAD. Had that floor been written as `preludeSize + 8` instead of
-// `max(preludeSize, 8)`, every program that HAS globals would advertise 8 bytes more `.data` than it
-// laid down — invisible to the loader, and visible to exactly this reader.
+// ⚠ IT READS `sh_size`, AND `sh_size` IS THE GLOBALS' TRUE EXTENT — not the `.data` SEGMENT's.
+// `ElfWriter` floors the segment at `ElfDataSegmentMinBytes` so a program with no globals does not
+// produce a degenerate `p_filesz == 0` PT_LOAD, and writes the section header from `preludeSize`
+// instead. The distinction is this reader's whole correctness condition: floored into `sh_size`, a
+// program with a single 1-byte `bool` global advertised 8 bytes of `.data`, and the seven zeros of
+// segment padding after it were indistinguishable HERE from globals the compiler had emitted —
+// which quietly made the `RequiredData` gate weaker on this target than on the two whose readers
+// report the true extent (Mach-O's `size`, PE's virtual size).
 
 // The section a top-level `var`'s image lives in — the ELF spelling, which happens to match PE's.
 // Named here rather than shared with `PeSectionReader.DataSectionName` because it is a contract with
@@ -111,7 +114,7 @@ export function readElfSectionData(path FilePath, sectionName String) returns By
 
 		let size = imageReadU64(image, at: header + ShdrSizeOffset)
 		let fileOffset = imageReadU64(image, at: header + ShdrFileOffsetOffset)
-		if fileOffset + size > image.count() 'runsPastEof'
+		if not imageRangeFits(image, start: fileOffset, count: size) 'runsPastEof'
 			throw ElfReadError.truncated(path, sectionName: sectionName)
 		end 'runsPastEof'
 
