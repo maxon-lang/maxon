@@ -4936,6 +4936,18 @@ export type Parser
 		end 'panicForm'
 
 		// `otherwise <expr>` — a fallback VALUE that merges with the success value.
+		//
+		// A void `try` (its call returns nothing) has no success value for a fallback VALUE to stand in
+		// for, so `otherwise <expr>` is ill-formed here — `finishValueTry` would mint a void phi that
+		// lowering cannot type (OPEN #55). The valueless forms a void `try` DOES take (`ignore`, a block,
+		// a single-statement return/break/continue/throw/panic) are all handled above, so reaching here
+		// means a genuine value. This is the statement-position twin of `parseTry`'s value-position void
+		// reject; both are E3059. (A value-position void `try` is rejected before the handler parses, so
+		// `result` is void here only in statement position.)
+		if self.tagOf(result) == ValueTypeTag.void 'voidTryOtherwiseValue'
+			throw ParseError.errorTypeMismatch("a void `try` (its call returns nothing) cannot take an `otherwise <value>` fallback — the success path yields no value for the fallback to stand in for; use `otherwise ignore`, an `otherwise 'block' … end`, or a single-statement `otherwise return`/`throw`", line: tryTok.line, column: tryTok.column)
+		end 'voidTryOtherwiseValue'
+
 		let otherwiseValue = try self.parseExpression(func, block: self.currentBlock)
 
 		if resultUsed and tagIsFloat(self.tagOf(otherwiseValue)) != tagIsFloat(self.tagOf(result)) 'typeMismatch'

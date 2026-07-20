@@ -453,6 +453,32 @@ end 'main'
 error E3059: specs/fragments/error-handling/error.otherwise-type-mismatch.test:15:12: type mismatch: 'otherwise type 'float' does not match expected type 'int''
 ```
 
+<!-- test: error.void-try-otherwise-value -->
+A void-returning throwing call has no success value, so an `otherwise <value>`
+fallback is ill-formed — there is nothing for the fallback to stand in for. This is
+the statement-position twin of the value-position void-`try` reject (`parseTry`);
+both are E3059. (The valueless forms a void `try` DOES take — `otherwise ignore`, an
+`otherwise 'block' … end`, a single-statement `otherwise return`/`throw` — compile.)
+```maxon
+enum Fault implements Error
+	broken
+end 'Fault'
+
+function doIt(n int) throws Fault
+	if n > 5 'big'
+		throw Fault.broken
+	end 'big'
+end 'doIt'
+
+function main() returns ExitCode
+	try doIt(9) otherwise 0
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3059: <fragment>:13:2: type mismatch: 'a void `try` (its call returns nothing) cannot take an `otherwise <value>` fallback — the success path yields no value for the fallback to stand in for; use `otherwise ignore`, an `otherwise 'block' … end`, or a single-statement `otherwise return`/`throw`'
+```
+
 <!-- test: error.throwing-function-requires-try -->
 ```maxon
 
