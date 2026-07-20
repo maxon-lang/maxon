@@ -2919,6 +2919,12 @@ public partial class X86CodeEmitter {
     EmitMovRegImm(X86Register.Rax, GtStatusWaiting);
     EmitMovIndirectMemReg(X86Register.R10, GtOffStatus, X86Register.Rax);
 
+    // OPEN #66: clear ioYielded=0 BEFORE arming the overlapped WSA op, not after in the async-yield
+    // branch (see EmitIoSubmitPipeOverlapped for the full rationale). The sync-completion paths
+    // below restore ioYielded=1 since they never park (FILE_SKIP_COMPLETION suppresses their packet).
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
+    EmitMovIndirectMemReg(X86Register.R10, GtOffIoYielded, X86Register.Rax);
+
     // Build WSABUF at [rbp-0x30]: { ULONG len (4 bytes + 4 padding), CHAR* buf (8 bytes) }
     // WSABUF.len at [rbp-0x30], WSABUF.buf at [rbp-0x28]
     EmitXorRegReg(X86Register.Rax, X86Register.Rax);
@@ -3002,6 +3008,9 @@ public partial class X86CodeEmitter {
     EmitXorRegReg(X86Register.Rcx, X86Register.Rcx);
     EmitMovIndirectMemReg(X86Register.R10, GtOffIoHandle, X86Register.Rcx); // clear io_handle
     EmitMovIndirectMemReg(X86Register.R10, GtOffStatus, X86Register.Rcx); // status = ready (0)
+    // OPEN #66: restore ioYielded=1 (never parked on this sync-error path).
+    EmitMovRegImm(X86Register.Rax, 1);
+    EmitMovIndirectMemReg(X86Register.R10, GtOffIoYielded, X86Register.Rax);
     EmitMovRegMem(X86Register.Rax, -0x38, 8); // restore error code
     EmitMovIndirectMemReg(X86Register.R10, GtOffIoErrorCode, X86Register.Rax);
     // Free ctx
@@ -3026,6 +3035,9 @@ public partial class X86CodeEmitter {
     EmitMovIndirectMemReg(X86Register.R10, GtOffIoResultVal, X86Register.Rcx); // gt->io_result_val = bytes
     EmitXorRegReg(X86Register.Rax, X86Register.Rax);
     EmitMovIndirectMemReg(X86Register.R10, GtOffStatus, X86Register.Rax); // status = ready (0)
+    // OPEN #66: restore ioYielded=1 (never parked on this sync-completion path).
+    EmitMovRegImm(X86Register.Rax, 1);
+    EmitMovIndirectMemReg(X86Register.R10, GtOffIoYielded, X86Register.Rax);
     // Free ctx
     EmitMovRegMem(X86Register.Rcx, -0x20, 8);
 
@@ -3273,6 +3285,18 @@ public partial class X86CodeEmitter {
     EmitMovRegImm(X86Register.Rax, GtStatusWaiting);
     EmitMovIndirectMemReg(X86Register.R10, GtOffStatus, X86Register.Rax);
 
+    // OPEN #66 fix: clear ioYielded=0 BEFORE arming the overlapped read — not after, in the
+    // async-yield branch below. The old order armed the IOCP read while ioYielded still held
+    // the stale 1 a running GT carries, so a completion reaped in that window passed
+    // __io_complete_gt's spin-gate and enqueued this GT while it was still executing here — a
+    // second M then resumed it onto its pre-__gt_morestack (relocated, munmapped) stack.
+    // With the clear moved ahead of the arm, ioYielded==0 for the entire armed period, so the
+    // completer's spin-gate blocks until this GT actually parks and its resumer republishes
+    // ioYielded=1. The sync-completion paths (FILE_SKIP_COMPLETION_PORT_ON_SUCCESS suppresses
+    // their IOCP packet, so no completer targets them) restore ioYielded=1 since they never park.
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
+    EmitMovIndirectMemReg(X86Register.R10, GtOffIoYielded, X86Register.Rax);
+
     // Call ReadFile/WriteFile(hPipe, buf, nBytes, &bytesOut, lpOverlapped=ctx).
     // For overlapped I/O lpNumberOfBytes can be NULL per the docs, but the
     // sync-completion path (FILE_SKIP_COMPLETION_PORT_ON_SUCCESS) DOES fill
@@ -3334,6 +3358,9 @@ public partial class X86CodeEmitter {
     EmitXorRegReg(X86Register.Rcx, X86Register.Rcx);
     EmitMovIndirectMemReg(X86Register.R10, GtOffIoHandle, X86Register.Rcx); // clear io_handle
     EmitMovIndirectMemReg(X86Register.R10, GtOffStatus, X86Register.Rcx);   // status = ready
+    // OPEN #66: restore ioYielded=1 (cleared before the arm above; this GT never parked).
+    EmitMovRegImm(X86Register.Rax, 1);
+    EmitMovIndirectMemReg(X86Register.R10, GtOffIoYielded, X86Register.Rax);
     EmitMovRegMem(X86Register.Rax, -0x48, 8);
     EmitMovIndirectMemReg(X86Register.R10, GtOffIoErrorCode, X86Register.Rax);
     EmitMovRegMem(X86Register.Rcx, -0x20, 8); // free ctx
@@ -3349,6 +3376,9 @@ public partial class X86CodeEmitter {
     EmitMovIndirectMemReg(X86Register.R10, GtOffIoHandle, X86Register.Rcx);
     EmitMovIndirectMemReg(X86Register.R10, GtOffStatus, X86Register.Rcx);
     EmitMovIndirectMemReg(X86Register.R10, GtOffIoErrorCode, X86Register.Rcx); // no error
+    // OPEN #66: restore ioYielded=1 (cleared before the arm above; this GT never parked).
+    EmitMovRegImm(X86Register.Rax, 1);
+    EmitMovIndirectMemReg(X86Register.R10, GtOffIoYielded, X86Register.Rax);
     EmitMovRegMem(X86Register.Rcx, -0x20, 8);
 
     EmitCallRuntimeLabel("mm_raw_free", zeroSecondArg: Compiler.MmTrace);
@@ -3366,6 +3396,9 @@ public partial class X86CodeEmitter {
     EmitMovIndirectMemReg(X86Register.R10, GtOffIoResultVal, X86Register.Rcx);
     EmitXorRegReg(X86Register.Rax, X86Register.Rax);
     EmitMovIndirectMemReg(X86Register.R10, GtOffStatus, X86Register.Rax);
+    // OPEN #66: restore ioYielded=1 (cleared before the arm above; this GT never parked).
+    EmitMovRegImm(X86Register.Rax, 1);
+    EmitMovIndirectMemReg(X86Register.R10, GtOffIoYielded, X86Register.Rax);
     // Free ctx — the IOCP packet has been suppressed.
     EmitMovRegMem(X86Register.Rcx, -0x20, 8);
     EmitCallRuntimeLabel("mm_raw_free", zeroSecondArg: Compiler.MmTrace);
@@ -3387,6 +3420,8 @@ public partial class X86CodeEmitter {
     // io_result_val. Just clear our own ioYielded flag and switch — the
     // mainThread's mainthread_loop is the canonical owner of its status
     // field and decides when to transition it.
+    // (ioYielded was already cleared to 0 before the arm above — OPEN #66; this keeps the
+    // historical "clear before the context switch" invariant explicit and is a harmless no-op.)
     EmitXorRegReg(X86Register.Rax, X86Register.Rax);
     EmitMovIndirectMemReg(X86Register.Rcx, GtOffIoYielded, X86Register.Rax);
     EmitCallRuntimeLabel("__gt_context_switch");
@@ -7628,6 +7663,15 @@ public partial class X86CodeEmitter {
     EmitMovRegImm(X86Register.Rax, GtStatusWaiting);
     EmitMovIndirectMemReg(X86Register.R10, GtOffStatus, X86Register.Rax);
 
+    // OPEN #66: clear ioYielded=0 BEFORE arming the overlapped op, not after in the async-yield
+    // branch (see EmitIoSubmitPipeOverlapped for the full rationale — a completion reaped in the
+    // arm→clear window otherwise passed __io_complete_gt's spin-gate on the stale ioYielded==1 a
+    // running GT carries and enqueued it while it was still executing here). The sync-completion
+    // paths below restore ioYielded=1 since they never park (FILE_SKIP_COMPLETION suppresses their
+    // IOCP packet, so no completer targets them).
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
+    EmitMovIndirectMemReg(X86Register.R10, GtOffIoYielded, X86Register.Rax);
+
     // Call ReadFile/WriteFile:
     //   handle=rcx, buf=rdx, size=r8, lpBytesTransferred=NULL, overlapped=ctx
     EmitSystemStackEnter(0x30); // shadow(0x20) + 1 stack arg + pad = 0x30
@@ -7657,6 +7701,9 @@ public partial class X86CodeEmitter {
     EmitXorRegReg(X86Register.Rcx, X86Register.Rcx);
     EmitMovIndirectMemReg(X86Register.R10, GtOffIoHandle, X86Register.Rcx); // clear io_handle
     EmitMovIndirectMemReg(X86Register.R10, GtOffStatus, X86Register.Rcx); // status = ready (0)
+    // OPEN #66: restore ioYielded=1 (never parked on this sync-error path).
+    EmitMovRegImm(X86Register.Rax, 1);
+    EmitMovIndirectMemReg(X86Register.R10, GtOffIoYielded, X86Register.Rax);
     EmitMovRegMem(X86Register.Rax, -0x28, 8); // restore error code
     EmitMovIndirectMemReg(X86Register.R10, GtOffIoErrorCode, X86Register.Rax);
     // Free ctx
@@ -7681,6 +7728,9 @@ public partial class X86CodeEmitter {
     EmitMovIndirectMemReg(X86Register.R10, GtOffIoResultVal, X86Register.Rcx); // gt->io_result_val = bytes
     EmitXorRegReg(X86Register.Rax, X86Register.Rax);
     EmitMovIndirectMemReg(X86Register.R10, GtOffStatus, X86Register.Rax); // status = ready (0)
+    // OPEN #66: restore ioYielded=1 (never parked on this sync-completion path).
+    EmitMovRegImm(X86Register.Rax, 1);
+    EmitMovIndirectMemReg(X86Register.R10, GtOffIoYielded, X86Register.Rax);
     // Free ctx
     EmitMovRegMem(X86Register.Rcx, -0x20, 8);
 
