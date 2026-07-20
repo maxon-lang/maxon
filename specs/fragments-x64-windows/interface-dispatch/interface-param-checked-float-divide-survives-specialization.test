@@ -1,0 +1,180 @@
+// Test: interface-param-checked-float-divide-survives-specialization
+typealias Real = float(f64.min to f64.max)
+
+interface Scorer
+	function score() returns Real
+end 'Scorer'
+
+type Alpha implements Scorer
+	let n as Real
+	function score() returns Real
+		return n * 2.0
+	end 'score'
+	static function create(n Real) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Alpha'
+
+function opaque(x Real) returns Real
+	return x
+end 'opaque'
+
+function ratioVia(s Scorer, d Real) returns Real
+	let base = s.score()
+	return try (base / d) otherwise panic("ratioVia: d was 0")
+end 'ratioVia'
+
+function main() returns ExitCode
+	let a = Alpha.create(21.0)
+	let r = ratioVia(a, d: opaque(3.0))
+	return 14 if r == 14.0 else 1
+end 'main'
+---
+ExitCode: 14
+---
+// CompiledIR
+module {
+  func @Alpha.score(__self_ptr: i64) -> f64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.movsd xmm0, [rax+0]
+    x64.movsd xmm1, [rip+__float_2]
+    x64.movsd xmm2, xmm0
+    x64.mulsd xmm2, xmm1
+    x64.movsd xmm0, xmm2
+    x64.epilogue
+    x64.ret
+  }
+  func @Alpha.create(n: f64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.movsd [rbp-16], xmm0
+    x64.mov rcx, 8
+    x64.xor edx, edx
+    x64.mov r8, 1
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.movsd xmm0, [rbp-16]
+    x64.movsd [rax+0], xmm0
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
+    x64.epilogue
+    x64.ret
+  }
+  func @opaque(x: f64) -> f64 {
+  entry:
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.movsd xmm0, [rip+__float_21]
+    x64.call Alpha.create
+    x64.mov [rbp-8], rax
+    x64.movsd xmm1, [rip+__float_3]
+    x64.movsd xmm0, xmm1
+    x64.call opaque
+    x64.mov rax, [rbp-8]
+    x64.movsd xmm1, xmm0
+    x64.mov rcx, [rbp-8]
+    x64.call ratioVia$Alpha
+    x64.movsd xmm2, [rip+__float_14]
+    x64.ucomisd xmm0, xmm2
+    x64.jne main.ternary_0.false
+    x64.jp main.ternary_0.false
+  ternary_0.true:
+    x64.mov rax, 14
+    x64.mov [rbp-16], rax
+    x64.jmp main.ternary_0.merge
+  ternary_0.false:
+    x64.mov rax, 1
+    x64.mov [rbp-16], rax
+    x64.jmp main.ternary_0.merge
+  ternary_0.merge:
+    x64.mov rax, [rbp-16]
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rbx, [rbp-8]
+    x64.test rbx, rbx
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rax, [rbp-16]
+    x64.epilogue
+    x64.ret
+  }
+  func @ratioVia$Alpha(s: i64, d: f64) -> f64 {
+  entry:
+    x64.prologue stack_size=48
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.movsd [rbp-40], xmm1
+    x64.mov rcx, [rbp-8]
+    x64.call Alpha.score
+    x64.movsd xmm1, [rip+__float_0]
+    x64.movsd xmm2, [rbp-40]
+    x64.ucomisd xmm2, xmm1
+    x64.sete rcx
+    x64.movzx rcx, rcxb
+    x64.setnp rdx
+    x64.movzx rdx, rdxb
+    x64.and rcx, rdx
+    x64.mov rbx, 1
+    x64.xor esi, esi
+    x64.test rcx, rcx
+    x64.mov rdi, rsi
+    x64.cmovne rdi, rbx
+    x64.mov [rbp-16], rdi
+    x64.movsd xmm1, [rip+__float_0]
+    x64.movsd [rbp-24], xmm1
+    x64.test rcx, rcx
+    x64.movsd [rbp-48], xmm0
+    x64.je ratioVia$Alpha.__div_ok_51
+  __div_zero_0:
+    x64.jmp ratioVia$Alpha.__div_merge_51
+  __div_ok_0:
+    x64.movsd xmm1, [rbp-40]
+    x64.movsd xmm0, [rbp-48]
+    x64.movsd xmm2, xmm0
+    x64.divsd xmm2, xmm1
+    x64.movsd [rbp-24], xmm2
+    x64.jmp ratioVia$Alpha.__div_merge_51
+  __div_merge_0:
+    x64.mov rax, [rbp-16]
+    x64.movsd xmm0, [rbp-24]
+    x64.movsd [rbp-32], xmm0
+    x64.xor ecx, ecx
+    x64.cmp rax, rcx
+    x64.je ratioVia$Alpha.otherwise_continue_1
+  otherwise_panic_0:
+    x64.lea_symdata rax, [__panic_msg_1]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  otherwise_continue_0:
+    x64.movsd xmm0, [rbp-32]
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_Alpha(ptr: i64) {
+  entry:
+    x64.jmp __destruct_Alpha.done
+  done:
+    x64.ret
+  }
+}
+---

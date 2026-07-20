@@ -1,0 +1,17 @@
+// Test: error.circular-dependency-cross-file
+// --- file: app/main.maxon
+export let A = B + 1
+
+function main() returns ExitCode
+	return 0
+end 'main'
+
+// --- file: api/b.maxon
+export let B = A + 1
+---
+MaxoncStderr: ```
+error E2012: api/specs/fragments/top-level-let/error.circular-dependency-cross-file.test:10:12: Circular dependency detected among global constants: A, B
+error E2012: app/specs/fragments/top-level-let/error.circular-dependency-cross-file.test:3:12: Circular dependency detected among global constants: B, A
+```
+---
+---

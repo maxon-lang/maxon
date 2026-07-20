@@ -1,17 +1,22 @@
-// Test: divide-by-zero
-typealias Integer = int(i64.min to i64.max)
+// Test: float-divide-by-zero
+typealias Float = float(f64.min to f64.max)
 
 // An opaque source so the divisor is possibly-zero (the compiler cannot fold it,
-// so `100 / zero` is a throwing operation rather than a compile-time `a / 0` error).
-function opaque(x Integer) returns Integer
+// so `100.0 / zero` throws rather than being a compile-time `a / 0.0` error). Float
+// `/` is fallible exactly as integer `/` is: `x / 0.0` would be ±inf — a representable
+// value, but still a logic error — so it is surfaced in the type, not silently produced.
+function opaque(x Float) returns Float
 	return x
 end 'opaque'
 
 function main() returns ExitCode
-	let zero = opaque(0)
+	let zero = opaque(0.0)
 	var result = 0
 	try 'work'
-		result = 100 / zero
+		let q = 100.0 / zero
+		// Unreachable: the divide throws before this runs. `q > 0.0` keeps the value used so the
+		// divide is not elided, without casting a float to the ExitCode.
+		result = 1 if q > 0.0 else 2
 	end 'work'
 	otherwise (e) 'handle'
 		match e 'kind'
@@ -25,55 +30,69 @@ ExitCode: 42
 ---
 // CompiledIR
 module {
-  func @opaque(x: i64) -> i64 {
+  func @opaque(x: f64) -> f64 {
   entry:
-    x64.mov rax, rcx
     x64.ret
   }
   func @main() -> u32 {
   entry:
-    x64.prologue stack_size=64
-    x64.xor ecx, ecx
+    x64.prologue stack_size=80
+    x64.movsd xmm0, [rip+__float_0]
     x64.call opaque
-    x64.xor ecx, ecx
-    x64.mov [rbp-8], rcx
-    x64.mov rcx, 100
-    x64.xor edx, edx
-    x64.cmp rax, rdx
-    x64.sete rdx
+    x64.xor eax, eax
+    x64.mov [rbp-8], rax
+    x64.movsd xmm1, [rip+__float_100]
+    x64.movsd xmm2, [rip+__float_0]
+    x64.ucomisd xmm0, xmm2
+    x64.sete rcx
+    x64.movzx rcx, rcxb
+    x64.setnp rdx
     x64.movzx rdx, rdxb
+    x64.and rcx, rdx
     x64.mov rbx, 1
     x64.xor esi, esi
-    x64.test rdx, rdx
+    x64.test rcx, rcx
     x64.mov rdi, rsi
     x64.cmovne rdi, rbx
     x64.mov [rbp-16], rdi
-    x64.xor ebx, ebx
-    x64.mov [rbp-24], rbx
-    x64.test rdx, rdx
-    x64.mov [rbp-56], rax
+    x64.movsd xmm3, [rip+__float_0]
+    x64.movsd [rbp-24], xmm3
+    x64.test rcx, rcx
+    x64.movsd [rbp-64], xmm0
+    x64.movsd [rbp-72], xmm1
     x64.je main.__div_ok_0
   __div_zero_0:
     x64.jmp main.__div_merge_0
   __div_ok_0:
-    x64.mov rax, [rbp-56]
-    x64.mov rcx, 100
-    x64.mov rbx, rax
-    x64.mov rax, rcx
-    x64.cqo
-    x64.idiv rbx
-    x64.mov [rbp-24], rax
+    x64.movsd xmm0, [rbp-64]
+    x64.movsd xmm1, [rbp-72]
+    x64.movsd xmm2, xmm1
+    x64.divsd xmm2, xmm0
+    x64.movsd [rbp-24], xmm2
     x64.jmp main.__div_merge_0
   __div_merge_0:
     x64.mov rax, [rbp-16]
-    x64.mov rcx, [rbp-24]
-    x64.mov [rbp-32], rcx
+    x64.movsd xmm0, [rbp-24]
+    x64.movsd [rbp-32], xmm0
     x64.mov [rbp-40], rax
-    x64.xor edx, edx
-    x64.cmp rax, rdx
+    x64.xor ecx, ecx
+    x64.cmp rax, rcx
     x64.jne main.try_block_throw_0
   try_block_continue_0:
-    x64.mov rax, [rbp-32]
+    x64.movsd xmm0, [rbp-32]
+    x64.movsd xmm1, [rip+__float_0]
+    x64.ucomisd xmm0, xmm1
+    x64.jbe main.ternary_0.false
+  ternary_0.true:
+    x64.mov rax, 1
+    x64.mov [rbp-48], rax
+    x64.jmp main.ternary_0.merge
+  ternary_0.false:
+    x64.mov rax, 2
+    x64.mov [rbp-48], rax
+    x64.jmp main.ternary_0.merge
+  ternary_0.merge:
+    x64.mov rax, [rbp-48]
     x64.mov [rbp-8], rax
     x64.jmp main.try_block_after_0
   try_block_throw_0:
@@ -82,10 +101,10 @@ module {
     x64.mov rax, [rbp-40]
     x64.mov rcx, 1
     x64.sub rax, rcx
-    x64.mov [rbp-48], rax
+    x64.mov [rbp-56], rax
     x64.jmp main.kind_0.cmp0
   kind_0.cmp0:
-    x64.mov rax, [rbp-48]
+    x64.mov rax, [rbp-56]
     x64.xor ecx, ecx
     x64.cmp rax, rcx
     x64.jne main.kind_0.merge

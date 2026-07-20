@@ -1,0 +1,176 @@
+// Test: interface-param-checked-divide-survives-specialization
+typealias Integer = int(i64.min to i64.max)
+
+interface Scorer
+	function score() returns Integer
+end 'Scorer'
+
+type Alpha implements Scorer
+	let n as Integer
+	function score() returns Integer
+		return n * 2
+	end 'score'
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Alpha'
+
+function opaque(x Integer) returns Integer
+	return x
+end 'opaque'
+
+function ratioVia(s Scorer, d Integer) returns Integer
+	let base = s.score()
+	return try (base / d) otherwise panic("ratioVia: d was 0")
+end 'ratioVia'
+
+function main() returns ExitCode
+	let a = Alpha.create(21)
+	return ratioVia(a, d: opaque(3)) as ExitCode
+end 'main'
+---
+ExitCode: 14
+---
+// CompiledIR
+module {
+  func @Alpha.score(__self_ptr: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rdx, [rax+0]
+    x64.mov rax, 2
+    x64.imul rdx, rax
+    x64.mov rax, rdx
+    x64.epilogue
+    x64.ret
+  }
+  func @Alpha.create(n: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-16], rcx
+    x64.mov rcx, 8
+    x64.xor edx, edx
+    x64.mov r8, 1
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-16]
+    x64.mov [rax+0], rcx
+    x64.mov rdx, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
+    x64.epilogue
+    x64.ret
+  }
+  func @opaque(x: i64) -> i64 {
+  entry:
+    x64.mov rax, rcx
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rcx, 21
+    x64.call Alpha.create
+    x64.mov [rbp-8], rax
+    x64.mov rcx, 3
+    x64.call opaque
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, rax
+    x64.call ratioVia$Alpha
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.xor ebx, ebx
+    x64.mov esi, 4294967295
+    x64.cmp rax, rsi
+    x64.jg main.__range_panic_1
+    x64.cmp rax, rbx
+    x64.jl main.__range_panic_1
+    x64.jmp main.__range_ok_1
+  __range_panic_1:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_1:
+    x64.mov rdi, [rbp-8]
+    x64.mov [rbp-16], rax
+    x64.test rdi, rdi
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rax, [rbp-16]
+    x64.epilogue
+    x64.ret
+  }
+  func @ratioVia$Alpha(s: i64, d: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=48
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov [rbp-40], rdx
+    x64.mov rcx, [rbp-8]
+    x64.call Alpha.score
+    x64.xor ecx, ecx
+    x64.mov rdx, [rbp-40]
+    x64.cmp rdx, rcx
+    x64.sete rbx
+    x64.movzx rbx, rbxb
+    x64.mov rsi, 1
+    x64.xor edi, edi
+    x64.test rbx, rbx
+    x64.mov r8, rdi
+    x64.cmovne r8, rsi
+    x64.mov [rbp-16], r8
+    x64.xor r9d, r9d
+    x64.mov [rbp-24], r9
+    x64.test rbx, rbx
+    x64.mov [rbp-48], rax
+    x64.je ratioVia$Alpha.__div_ok_50
+  __div_zero_0:
+    x64.jmp ratioVia$Alpha.__div_merge_50
+  __div_ok_0:
+    x64.mov rax, [rbp-40]
+    x64.mov rcx, [rbp-48]
+    x64.mov rbx, rax
+    x64.mov rax, rcx
+    x64.cqo
+    x64.idiv rbx
+    x64.mov [rbp-24], rax
+    x64.jmp ratioVia$Alpha.__div_merge_50
+  __div_merge_0:
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, [rbp-24]
+    x64.mov [rbp-32], rcx
+    x64.xor edx, edx
+    x64.cmp rax, rdx
+    x64.je ratioVia$Alpha.otherwise_continue_1
+  otherwise_panic_0:
+    x64.lea_symdata rax, [__panic_msg_1]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  otherwise_continue_0:
+    x64.mov rax, [rbp-32]
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_Alpha(ptr: i64) {
+  entry:
+    x64.jmp __destruct_Alpha.done
+  done:
+    x64.ret
+  }
+}
+---
