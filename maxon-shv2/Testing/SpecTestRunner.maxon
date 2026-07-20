@@ -214,8 +214,32 @@ end 'ProcessCapture'
 // Takes an `Executable` rather than a `FilePath` so a caller can name a tool to be found on PATH
 // (`orb`) as easily as one whose exact location it already computed. The distinction belongs to the
 // caller — this is only the spawn.
+// ⚠ EVERY SPAWN CARRIES A DEADLINE, because `Subprocess`'s default is to wait FOREVER
+// (`timeoutMs = 0`) and a merge gate that hangs indefinitely is strictly worse than one that fails:
+// it reports NOTHING, so there is nothing to act on.
+//
+// Not hypothetical. A cross run through `orb` was observed blocking for **18m35s AFTER the guest
+// process had already exited and been reaped** (caught inside the VM as `<defunct>`); SIGTERM did
+// not clear it, SIGKILL did, and the suite then finished normally. It showed ZERO output for those
+// 19 minutes because the runner's stdout is block-buffered when redirected — so the failure mode is
+// not merely slow, it is silent. Rate was ~1 in 700 harness-driven execs and 0 in 300 shell-driven
+// ones, which puts the fault in the external runner rather than here; the CONSEQUENCE is still this
+// harness's to bound, and bounding it is the only part we control.
+//
+// The value is deliberately ~1000x the headroom it needs rather than tuned to observed timings: all
+// 780 tests COMPILE AND RUN in ~90 s serially (~0.12 s per test per phase), so no legitimate spec
+// can approach it. It exists to convert an unbounded silent hang into a named failure
+// (`SubprocessError.timeout` renders as "timed out after 120000ms"), NOT to police slow tests — a
+// tight deadline would inject flakes into a suite that currently has none, which is the one way
+// this guard could leave things worse than it found them.
+let SpecSpawnTimeoutMs = 120000
+
 export function runProcess(exe Executable, argv StringArray) returns ProcessCapture throws SubprocessError
-	let collected = try Subprocess.run(exe, arguments: argv)
+	var config = Configuration.create(exe)
+	config.arguments = argv
+	config.timeoutMs = SpecSpawnTimeoutMs
+
+	let collected = try Subprocess.runConfiguration(config)
 	return ProcessCapture.create(collected.exitCode(), stdout: collected.stdout, stderr: collected.stderr)
 end 'runProcess'
 
