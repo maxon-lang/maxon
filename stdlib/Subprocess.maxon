@@ -90,13 +90,20 @@ export union Executable
 	name(value String)
 	path(value FilePath)
 
-	/// Resolve to a concrete launchable `FilePath`. For `.path(p)` this is `p`
-	/// unchanged. For `.name(n)` this performs a PATH lookup via the
-	/// `subprocessResolveOnPath` runtime helper; resolution misses fall back
-	/// to the bare name so the OS spawn primitive can perform its own lookup
-	/// (Windows CreateProcessW + PATHEXT, POSIX execvp). Throws
-	/// `ExecutableError.notFound` only on hosts where the OS primitive
-	/// requires a pre-resolved path.
+	/// Wrap either arm as a `FilePath`, WITHOUT resolving anything. For
+	/// `.path(p)` this is `p` unchanged; for `.name(n)` it is the bare name as
+	/// a path, which is exactly what the OS spawn primitive wants — it does
+	/// its own PATH lookup (Windows CreateProcessW + PATHEXT, POSIX execvp).
+	/// Throws `ExecutableError.notFound` only if `n` is not a well-formed path
+	/// string; a name that is simply absent from PATH resolves fine here and
+	/// fails later, at the spawn.
+	///
+	/// ⚠ THIS IS NOT A PATH LOOKUP AND CANNOT BE USED AS AN EXISTENCE CHECK.
+	/// The `subprocessResolveOnPath` helper is called by `resolveByName`
+	/// during `runConfiguration`, not here. This comment previously claimed
+	/// the opposite, and a caller believed it: it built "is this tool
+	/// installed?" on top of `resolve()` and got a confident `notFound` for a
+	/// tool that was plainly on PATH. To probe for a tool, SPAWN it.
 	export function resolve() returns FilePath throws ExecutableError
 		return match self 'r'
 			name(n) gives try FilePath.from(n) otherwise throw ExecutableError.notFound
