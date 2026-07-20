@@ -207,6 +207,21 @@ export union ParseError implements Error
 	// 'int'` (2-Parser.cs:7840) — positioned at the `return`. The declared type prints as its
 	// RESOLVED primitive, which is what the bootstrap prints (see TypeRules' typeTagName).
 	returnTypeMismatch(got String, expected String, line LineNumber, column ColumnNumber)
+	// P1.5-A1: a FUNCTION VALUE stored into a NON-function place (`slot = dbl` where `slot` holds an
+	// int). Renders as E3005 with the spec's exact text — "cannot assign a value of type 'function' to
+	// {noun} '{name}', which holds '{heldType}': …" — positioned at the target. `noun` is "variable" for
+	// a local and "global" for a top-level one (the two spellings the spec distinguishes). Its own
+	// variant, not `assignTypeMismatch`, because the wording and the noun both differ.
+	functionValueIntoNonFunction(noun String, name String, heldType String, line LineNumber, column ColumnNumber)
+	// P1.5-A1: a FUNCTION VALUE RETURNED where a NON-function return type is declared (`return dbl` from
+	// a `returns Integer` function). Renders as E3005 with the spec's exact text — "Cannot return
+	// 'function' from function declared to return '{returnType}': …" — positioned at the `return`.
+	functionValueReturned(returnType String, line LineNumber, column ColumnNumber)
+	// P1.5-A1: a THROWING function referenced as a VALUE (`let f = risky`). A function type has no throws
+	// clause, so the binding would drop it and there is no indirect try-call to carry it back. Renders as
+	// E3101, positioned at the function name. `errorType` is the thrown enum's name (the callee's `throws
+	// E` clause), named in the message.
+	throwingFunctionAsValue(name String, errorType String, line LineNumber, column ColumnNumber)
 	// OPEN #54 Slice C: a match EXPRESSION whose `gives` arms produce values of different types
 	// (`match c { 0 gives "s"; default gives 5 }`, or two different structs/unions). The result phi
 	// takes the FIRST arm's type, so a later arm's value is wrong-typed through it — a String pointer
@@ -1896,6 +1911,10 @@ export type Parser
 	export function foldDeclaredSignaturesInto(index ProgramSignatures)
 		var entries = FuncReturnTypeEntryArray.create()
 		var aliases = RangedTypeAliasArray.create()
+		// ⭐ FUNCTION typealiases (P1.5-A1) — recorded from the SAME token walk as the ranged ones, into
+		// their own array (a function alias is not a ranged one). Folded whole-program so a function-typed
+		// place resolves whether the alias is declared above, below, or in another file.
+		var functionAliases = FunctionTypeAliasArray.create()
 		var structs = StructLayoutArray.create()
 		var enums = EnumLayoutArray.create()
 		var bindings = TopLevelDeclArray.create()
@@ -1940,7 +1959,7 @@ export type Parser
 			end 'isFunction'
 
 			if self.at(TokenKind.typealias) 'isTypeAlias'
-				self.recordScannedTypeAlias(aliases)
+				self.recordScannedTypeAlias(aliases, functionAliases: functionAliases)
 				continue
 			end 'isTypeAlias'
 
@@ -1976,7 +1995,7 @@ export type Parser
 		end 'scan'
 		self.pos = resume
 
-		index.foldFile(entries, aliases: aliases, structs: structs, enums: enums, bindings: bindings, paramConsumes: paramConsumes, throwsEntries: throwsEntries, fileTypeNames: self.artifact.typeNames)
+		index.foldFile(entries, aliases: aliases, functionAliases: functionAliases, structs: structs, enums: enums, bindings: bindings, paramConsumes: paramConsumes, throwsEntries: throwsEntries, fileTypeNames: self.artifact.typeNames)
 	end 'foldDeclaredSignaturesInto'
 
 	// Is the cursor on a `let` or a `var` — the two keywords that introduce a top-level binding?
@@ -2294,9 +2313,8 @@ export type Parser
 	// the sweep and the parse cannot drift into two opinions of what a range MEANS. That shared
 	// routine consumes the `typealias` keyword before it can fail, so the cursor always advances and
 	// the caller's loop cannot spin.
-	function recordScannedTypeAlias(aliases RangedTypeAliasArray)
-		let alias = try self.readTypeAliasDeclaration() otherwise return
-		aliases.push(alias)
+	function recordScannedTypeAlias(aliases RangedTypeAliasArray, functionAliases FunctionTypeAliasArray)
+		try self.readTypeAliasDeclaration(aliases, functionOut: functionAliases) otherwise return
 	end 'recordScannedTypeAlias'
 
 	// Cursor is AT `type`. Append the struct it declares, plus a `FuncReturnTypeEntry` for each
@@ -2484,7 +2502,7 @@ export type Parser
 		// asks the same rule (`requireAssignable`) rather than a second opinion about floats.
 		try self.consume(TokenKind.equals)
 		let given = try self.readFieldDefaultLiteral()
-		try self.requireAssignable(nameTok, value: given.tag, declared: maxonTypeTag(fieldType))
+		try self.requireAssignable(nameTok, value: given.tag, declared: maxonTypeTag(fieldType), noun: "field")
 		layout.addField(nameTok.value, declaredType: fieldType, mutable: mutable, exported: exported, defaultValue: FieldDefault.literal(given.payload))
 	end 'readStructFieldInto'
 
@@ -2606,7 +2624,7 @@ export type Parser
 			// A FILE-scope function takes no receiver: there is no enclosing type for one to be.
 			try self.parseFunction(visibility, takesReceiver: false)
 		end 'isFunction' else if self.at(TokenKind.typealias) 'isTypeAlias'
-			self.artifact.recordTypeAlias(try self.readTypeAliasDeclaration())
+			try self.readTypeAliasDeclaration(self.artifact.typeAliases, functionOut: self.artifact.functionTypeAliases)
 		end 'isTypeAlias' else if self.at(TokenKind.type) 'isTypeDecl'
 			try self.parseTypeDeclaration()
 		end 'isTypeDecl' else if self.at(TokenKind.enum) or self.at(TokenKind.union) 'isEnumDecl'
@@ -2753,20 +2771,30 @@ export type Parser
 	// alias creates no nominal distinction — and a use in a type position needs no parser
 	// change at all (`parseTypeReference` already interns a bare identifier).
 	//
-	// It READS and does not RECORD, because it has two callers that record differently: the real
-	// parse files the alias in this file's artifact, and the whole-program declaration sweep
-	// (`recordScannedTypeAlias`) folds it into the cross-file index the shift rule reads. One
-	// reader, so the two can never disagree about what a range means.
+	// It READS and PUSHES into the caller's arrays, because it has two callers that collect differently:
+	// the real parse files the alias in this file's artifact arrays, and the whole-program declaration
+	// sweep folds it into its own arrays. One reader, so the two can never disagree about what a range
+	// means. A typealias is EITHER a ranged numeric one (into `rangedOut`) or a FUNCTION one (into
+	// `functionOut`), and pushing into the target array directly avoids boxing a discriminated-union
+	// return on the per-typealias path (nearly every file opens with a `typealias`, so it is a hot one).
 	//
 	// The RANGE is not yet enforced as a bound: a narrowing conversion into a ranged alias is
 	// checked at run time, and that check is a later milestone. It IS read, and by more than the
 	// registry — a range whose low bound is 0 declares an UNSIGNED type, and that decides how every
 	// `shr` on a value of it fills (TypeRules' `rangeIsUnsigned`).
-	function readTypeAliasDeclaration() returns RangedTypeAlias throws ParseError
+	function readTypeAliasDeclaration(rangedOut RangedTypeAliasArray, functionOut FunctionTypeAliasArray) throws ParseError
 		try self.consume(TokenKind.typealias)
 		let nameTok = try self.consume(TokenKind.identifier)
 		try self.requireUnreservedName(nameTok)
 		try self.consume(TokenKind.equals)
+
+		// A FUNCTION typealias — `function(paramTypes) [returns T]` (P1.5-A1). The literal `function(…)`
+		// form is legal ONLY as a typealias RHS (the spec), so this is the one place it is parsed as a
+		// type. It records its own registry (`FunctionTypeAlias`), not the ranged one.
+		if self.at(TokenKind.function) 'functionAlias'
+			functionOut.push(try self.readFunctionTypeAlias(nameTok))
+			return
+		end 'functionAlias'
 
 		// `int(...)` or `float(...)`. A `bool` alias has no range, a generic alias (`Array with T`)
 		// needs generics, and a bare `i64` is not legal Maxon at all — each is rejected here, naming
@@ -2777,7 +2805,7 @@ export type Parser
 		let isFloat = self.at(TokenKind.float)
 		if not self.at(TokenKind.int) and not isFloat 'notNumeric'
 			let tok = self.current()
-			throw ParseError.unsupported("a typealias over '{tok.kind.rawValue}' (only `int(low to high)` and `float(low to high)` are parsed; generic and bare-sized aliases arrive with the milestones that give them meaning)", line: tok.line, column: tok.column)
+			throw ParseError.unsupported("a typealias over '{tok.kind.rawValue}' (only `int(low to high)`, `float(low to high)` and `function(...)` are parsed; generic and bare-sized aliases arrive with the milestones that give them meaning)", line: tok.line, column: tok.column)
 		end 'notNumeric'
 
 		if isFloat 'consumeFloat'
@@ -2792,8 +2820,75 @@ export type Parser
 		try self.consume(TokenKind.rightParen)
 
 		let underlying = MaxonType.float if isFloat else MaxonType.integer
-		return RangedTypeAlias.create(nameTok.value, underlying: underlying, low: low, high: high)
+		rangedOut.push(RangedTypeAlias.create(nameTok.value, underlying: underlying, low: low, high: high))
 	end 'readTypeAliasDeclaration'
+
+	// Parse `function(paramTypes) [returns T]` on a typealias RHS (P1.5-A1), the cursor sitting on
+	// `function`. A1 stores only the RETURN type — an indirect call needs it to type its result; arg-type
+	// and arity checking against the PARAMETER types is a later rung, so the params are parsed (to consume
+	// the syntax and to reject a malformed one) and DISCARDED. An absent `returns` clause is a void
+	// function type. The return type is stored INTERNER-FREE (tag + name) so it rides the no-remap fold.
+	function readFunctionTypeAlias(nameTok Token) returns FunctionTypeAlias throws ParseError
+		try self.consume(TokenKind.function)
+		try self.consume(TokenKind.leftParen)
+
+		if not self.at(TokenKind.rightParen) 'params'
+			while true 'paramLoop'
+				try self.readFunctionTypeParam()
+				if not self.at(TokenKind.comma) 'endParams'
+					break
+				end 'endParams'
+				try self.consume(TokenKind.comma)
+			end 'paramLoop'
+		end 'params'
+
+		try self.consume(TokenKind.rightParen)
+
+		var returnTag = ValueTypeTag.void
+		var returnTypeName = EmptySourceText
+		if self.at(TokenKind.returns) 'hasReturn'
+			try self.consume(TokenKind.returns)
+			let returnType = try self.parseTypeReference()
+			returnTag = maxonTypeTag(returnType)
+			returnTypeName = self.functionAliasReturnName(returnType)
+		end 'hasReturn'
+
+		return FunctionTypeAlias.create(nameTok.value, returnTag: returnTag, returnTypeName: returnTypeName)
+	end 'readFunctionTypeAlias'
+
+	// One parameter of a function-type signature — an optional NAME followed by a type, or a bare type.
+	// Parameter names are documentation only (the spec), so both the name and the type are DISCARDED at
+	// A1; only the return type of a function alias is recorded. A `name Type` param is one where an
+	// identifier is followed by another type-starting token (`function(x Score)`); otherwise the token IS
+	// the type (`function(Integer)`, `function(Integer, Integer)`).
+	function readFunctionTypeParam() throws ParseError
+		if self.at(TokenKind.identifier) and self.peekStartsType() 'namedParam'
+			try self.consume(TokenKind.identifier)
+		end 'namedParam'
+		_ = try self.parseTypeReference()
+	end 'readFunctionTypeParam'
+
+	// True when the token ONE past the cursor can BEGIN a type reference — an identifier (a named type
+	// or `String`), the `int`/`bool`/`float` keywords, or `Self`. Used to tell a function-type param's
+	// optional NAME from its TYPE (`x Score` vs a bare `Integer`).
+	function peekStartsType() returns bool
+		let k = self.peekKind()
+		return k == TokenKind.identifier or k == TokenKind.int or k == TokenKind.bool or k == TokenKind.float or k == TokenKind.selfType
+	end 'peekStartsType'
+
+	// The interned NAME behind a function alias's return type, stored so the return type can be
+	// re-interned into any reader's own interner at an indirect call (see FunctionTypeAlias). A primitive
+	// return (`bool`/`int`/`float`/`ExitCode`/`void`) carries no name and yields the empty string.
+	function functionAliasReturnName(returnType MaxonType) returns ByteArray
+		return match returnType 'k'
+			named(id) gives self.internedName(id)
+			structRef(id) gives self.internedName(id)
+			function(id) gives self.internedName(id)
+			boolean to float gives EmptySourceText
+			exitCode to unresolved gives EmptySourceText
+			string gives EmptySourceText
+		end 'k'
+	end 'functionAliasReturnName'
 
 	// The `to <high>` / `upto <high>` half of a range, returned as an INCLUSIVE upper
 	// bound: `upto` is exclusive, so it normalizes to `high - 1` here and the registry
@@ -3670,7 +3765,19 @@ export type Parser
 			if self.namesEnclosingType(tok.value) 'ownName'
 				return try self.enclosingStructType(tok)
 			end 'ownName'
-			return MaxonType.named(self.artifact.typeNames.intern(tok.value))
+
+			let id = self.artifact.typeNames.intern(tok.value)
+			// A FUNCTION typealias name resolves to a `function` type, NEVER a `named` one (P1.5-A1) — so
+			// a param/field/return declared with a function alias carries the `function` tag, which is what
+			// makes a function value assignable to it and an indirect call reach it. The whole-program
+			// signature index has the answer here in the REAL parse (the sweep is complete); during the
+			// SWEEP itself `functionAliasOf` is still being built and returns `undeclared`, leaving the raw
+			// scanned record a `named` — which the READ sites (call-result / field-load typing) functionize.
+			if self.signatures.isFunctionAlias(tok.value) 'functionAlias'
+				return MaxonType.function(id)
+			end 'functionAlias'
+
+			return MaxonType.named(id)
 		end 'named'
 		if self.at(TokenKind.int) 'primInt'
 			try self.consume(TokenKind.int)
@@ -3740,6 +3847,28 @@ export type Parser
 
 		return MaxonType.structRef(id)
 	end 'resolveNamedStruct'
+
+	// ⭐ **RESOLVE A `named` FUNCTION-ALIAS REFERENCE TO `function`** (P1.5-A1) — the read-side twin of
+	// `resolveNamedStruct`, for the types the WHOLE-PROGRAM signature index hands back as `named` because
+	// the SWEEP that recorded them ran before the function alias was known: a call RESULT
+	// (`returnTypeOf` → `let f = pickDouble()`) and a struct-FIELD read (`fieldTypeOf` → `let f = h.op`).
+	// `parseTypeReference` already re-tags a PARAMETER/return/annotation directly (the sweep is complete
+	// by the real parse), so this catches only the sweep-sourced types. A `named` that is NOT a function
+	// alias, and every non-`named` type, pass through untouched — so this is idempotent and safe to fold
+	// alongside `resolveNamedStruct`/`resolveFloatAliasType` (a name is a struct, a float alias, a
+	// function alias or a ranged int, never two of them).
+	function resolveFunctionAlias(t MaxonType) returns MaxonType
+		if maxonTypeTag(t) != ValueTypeTag.named 'notNamed'
+			return t
+		end 'notNamed'
+
+		let id = typeNameIdOf(t)
+		let name = try self.artifact.typeNames.nameOf(id) otherwise panic("resolveFunctionAlias: a `named` type's id is not in this file's interner — `parseTypeReference`/`fieldTypeOf` interned it from a name in the same table")
+		if self.signatures.isFunctionAlias(name) 'fa'
+			return MaxonType.function(id)
+		end 'fa'
+		return t
+	end 'resolveFunctionAlias'
 
 	// `resolveNamedStruct` folded over a parameter-type list — the whole struct-`named` → `structRef`
 	// rewrite for one function's parameters, done ONCE after they are parsed so every downstream reader
@@ -4130,7 +4259,7 @@ export type Parser
 		let valueTag = self.tagOf(value)
 		let declaredTag = maxonTypeTag(binding.varType)
 
-		try self.requireAssignable(nameTok, value: valueTag, declared: declaredTag)
+		try self.requireAssignable(nameTok, value: valueTag, declared: declaredTag, noun: "variable")
 
 		// ⭐ OPEN #54/#59: reassigning a `var` to the WRONG named aggregate — a DIFFERENT struct/union, OR
 		// an aggregate where the binding declares a SCALAR — is a retype the tag check above cannot see
@@ -4279,7 +4408,7 @@ export type Parser
 	function emitCheckedGlobalStore(func IrFunction, block IrBlock, nameTok Token, label ByteArray, tag ValueTypeTag) throws ParseError
 		let value = try self.parseExpression(func, block: block)
 
-		try self.requireAssignable(nameTok, value: self.tagOf(value), declared: tag)
+		try self.requireAssignable(nameTok, value: self.tagOf(value), declared: tag, noun: "global")
 
 		self.emitGlobalStore(label, tag: tag, value: value, range: SourceRange.ofToken(nameTok))
 	end 'emitCheckedGlobalStore'
@@ -4327,11 +4456,15 @@ export type Parser
 	// were already two copies of the same three lines and would now have been two copies of the
 	// same five. A global is no less able to be handed a bool where it declared an int, or a float
 	// where it declared an int, than a local is; both anchor the diagnostic on the assigned NAME.
-	function requireAssignable(nameTok Token, value ValueTypeTag, declared ValueTypeTag) throws ParseError
+	function requireAssignable(nameTok Token, value ValueTypeTag, declared ValueTypeTag, noun String) throws ParseError
 		match checkDeclaredType(value, declared: declared) 'declared'
 			ok then break 'declared'
 			mismatch then throw ParseError.assignTypeMismatch(String.from(nameTok.value), got: typeTagName(value), expected: typeTagName(declared), line: nameTok.line, column: nameTok.column)
 			narrowsFloatToInt then throw ParseError.implicitNarrowing(typeTagName(value), targetType: typeTagName(declared), line: nameTok.line, column: nameTok.column)
+			// A FUNCTION VALUE into a NON-function place (P1.5-A1) — the spec's specific E3005 ("cannot
+			// assign a value of type 'function' to {noun} '{name}', which holds '{held}'"). `noun` is what
+			// the caller names the place ("variable" for a local, "global"/"field" for the others).
+			functionIntoNonFunction then throw ParseError.functionValueIntoNonFunction(noun, name: String.from(nameTok.value), heldType: typeTagName(declared), line: nameTok.line, column: nameTok.column)
 		end 'declared'
 	end 'requireAssignable'
 
@@ -4552,6 +4685,11 @@ export type Parser
 			ok then break 'declared'
 			mismatch then throw ParseError.returnTypeMismatch(typeTagName(retTag), expected: typeTagName(declaredTag), line: retTok.line, column: retTok.column)
 			narrowsFloatToInt then throw ParseError.implicitNarrowing(typeTagName(retTag), targetType: typeTagName(declaredTag), line: retTok.line, column: retTok.column)
+			// A FUNCTION VALUE returned where a NON-function type is declared (P1.5-A1) — the spec's
+			// specific E3005 ("Cannot return 'function' from function declared to return '{declared}': …").
+			// A function returned from a function-typed return (`return double` from `returns UnaryOp`)
+			// agrees and never reaches this.
+			functionIntoNonFunction then throw ParseError.functionValueReturned(typeTagName(declaredTag), line: retTok.line, column: retTok.column)
 		end 'declared'
 
 		// ⭐ OPEN #54/#59: a `return` of the WRONG named aggregate — a DIFFERENT struct/union, OR an
@@ -4808,7 +4946,10 @@ export type Parser
 		let op = try self.artifact.module.ops.get(opIdx) otherwise panic("rewriteLastCallToTryCall: last opRef {opIdx} not in module.ops")
 		return match op 'rewrite'
 			call(result, callee, args, argLabels, argRanges) gives self.commitTryCallRewrite(opIdx, result: result, errorFlag: errorFlag, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges)
-			literal to panicAbort gives try self.rejectTryTarget(tryTok)
+			// Extended to `indirectCall` (P1.5-A1): only a DIRECT `call` can be `try`ed. An `indirectCall`
+			// is never throwing — a throwing function cannot be a function value (E3101) — and a
+			// `functionRef` is not a call at all, so both reject `try` exactly as the other non-call ops do.
+			literal to indirectCall gives try self.rejectTryTarget(tryTok)
 		end 'rewrite'
 	end 'rewriteLastCallToTryCall'
 
@@ -8465,7 +8606,7 @@ export type Parser
 	function parseUnary(func IrFunction) returns ValueId throws ParseError
 		if self.at(TokenKind.minus) 'neg'
 			let opTok = try self.consume(TokenKind.minus)
-			let operand = try self.parsePostfixCast(try self.parsePrimary(func))
+			let operand = try self.parsePostfix(func, value: try self.parsePrimary(func))
 			let operandTag = self.tagOf(operand)
 			if not typeClassAdmits(TypeClass.numeric, tag: operandTag) 'notANumber'
 				throw ParseError.nonNumericNegation(typeTagName(operandTag), line: opTok.line, column: opTok.column)
@@ -8489,21 +8630,42 @@ export type Parser
 			end 'which'
 		end 'not'
 
-		return try self.parsePostfixCast(try self.parsePrimary(func))
+		return try self.parsePostfix(func, value: try self.parsePrimary(func))
 	end 'parseUnary'
 
-	// A primary followed by any trailing `as <Type>` casts. A cast to a coercible integer type
-	// (`0 as ExitCode`, `n as Integer`) is a compile-time NO-OP: the value's bytes are unchanged and a
-	// `return`/assignment coerces its tag via `checkDeclaredType`, so the value passes through with its own
-	// tag. ⚠ Only same-representation numeric casts are modelled; float↔int and struct/String casts are a
-	// follow-up (shv2's `as` in expressions was otherwise unimplemented; no Wave-1 case needs the others).
-	function parsePostfixCast(value ValueId) returns ValueId throws ParseError
-		while self.at(TokenKind.as) 'cast'
-			try self.consume(TokenKind.as)
-			_ = try self.parseTypeReference()
-		end 'cast'
-		return value
-	end 'parsePostfixCast'
+	// A primary followed by any trailing postfix operators — an `as <Type>` cast, or an INDIRECT CALL
+	// `(args)` through a function VALUE (P1.5-A1). This is the ONE place a trailing `(` on a function
+	// value becomes an indirect call, which is what makes every producer of a function value callable
+	// UNIFORMLY: a local (`f(21)`), a call result (`pick()(21)`), and a field read (`h.op(21)`,
+	// `o.inner.op(21)`, `self.op(x)`) all reach here holding a `function`-tagged value, and the trailing
+	// `(` is applied the same way regardless of how the value was produced. It also chains — `pick()(2)`
+	// or a curried `g(1)(2)` — because an indirect call's result is itself a value the loop re-examines.
+	//
+	// A cast to a coercible integer type (`0 as ExitCode`, `n as Integer`) is a compile-time NO-OP: the
+	// value's bytes are unchanged and a `return`/assignment coerces its tag via `checkDeclaredType`, so
+	// the value passes through with its own tag. ⚠ Only same-representation numeric casts are modelled;
+	// float↔int and struct/String casts are a follow-up.
+	function parsePostfix(func IrFunction, value ValueId) returns ValueId throws ParseError
+		var current = value
+		while true 'postfix'
+			if self.at(TokenKind.as) 'cast'
+				try self.consume(TokenKind.as)
+				_ = try self.parseTypeReference()
+				continue
+			end 'cast'
+
+			// A trailing `(` on a FUNCTION value is an indirect call; on anything else it is not a postfix
+			// operator at all and the loop ends (a `(` after a non-function value is left for the caller,
+			// which is a syntax error there — calling a non-function).
+			if self.at(TokenKind.leftParen) and self.tagOf(current) == ValueTypeTag.function 'indirectCall'
+				current = try self.parseIndirectCall(func, callee: current)
+				continue
+			end 'indirectCall'
+
+			break
+		end 'postfix'
+		return current
+	end 'parsePostfix'
 
 	// Append a `binOp` op combining two SSA values; return the ValueId it defines. The
 	// result's TYPE is the operator's: arithmetic and shifts are integer; `and`/`or`/`xor`
@@ -8766,6 +8928,16 @@ export type Parser
 			// makes it a STRUCT LITERAL; `.` makes it one of the three DOTTED forms
 			// (`parseDottedPrimary` splits those); anything else is a variable reference.
 			if self.peekKind() == TokenKind.leftParen 'callExpr'
+				// A LOCAL binding of FUNCTION type shadowed by the same name is called THROUGH its value
+				// — an INDIRECT call (`f(21)` where `let f = double`), not a direct call to a function
+				// NAMED `f` (P1.5-A1). Resolve it as a variable reference and let the postfix loop
+				// (`parsePostfix`) apply the `(args)`. A non-function local named the same as a call
+				// keeps the direct-call path (`x(5)` with an int `x` is still "call function x", E3004),
+				// so only a function-typed local diverts here.
+				if self.scope.contains(self.current().value) and maxonTypeTag(self.scope.getInfo(self.current().value).varType) == ValueTypeTag.function 'functionLocalCall'
+					return try self.parseVariableReference()
+				end 'functionLocalCall'
+
 				// A call in an EXPRESSION — its result IS the expression, so a void callee has nothing
 				// to give and `parseCall` rejects it (E2004).
 				return try self.parseCall(func, resultUsed: true)
@@ -9258,6 +9430,9 @@ export type Parser
 				ok then break 'declared'
 				mismatch then throw ParseError.assignTypeMismatch(String.from(anchor.value), got: typeTagName(got), expected: typeTagName(declaredTag), line: anchor.line, column: anchor.column)
 				narrowsFloatToInt then throw ParseError.implicitNarrowing(typeTagName(got), targetType: typeTagName(declaredTag), line: anchor.line, column: anchor.column)
+				// A FUNCTION VALUE into a NON-function struct FIELD (P1.5-A1) — the struct-literal twin of the
+				// assignment site, noun "field". A function value into a function-typed field agrees above.
+				functionIntoNonFunction then throw ParseError.functionValueIntoNonFunction("field", name: String.from(anchor.value), heldType: typeTagName(declaredTag), line: anchor.line, column: anchor.column)
 			end 'declared'
 		end 'scalarField'
 	end 'requireFieldType'
@@ -9801,6 +9976,11 @@ export type Parser
 			ok then break 'declared'
 			mismatch then throw ParseError.assignTypeMismatch("{String.from(layout.name)}.{String.from(caseTok.value)}({String.from(field.name)})", got: typeTagName(got), expected: typeTagName(declared), line: caseTok.line, column: caseTok.column)
 			narrowsFloatToInt then throw ParseError.implicitNarrowing(typeTagName(got), targetType: typeTagName(declared), line: caseTok.line, column: caseTok.column)
+			// A FUNCTION VALUE into a scalar union PAYLOAD (P1.5-A1) — unreachable by A1's enabled cases (a
+			// function value in a union payload co-lands with closures at P1.5-A2, where a function-typed
+			// payload is functionized like a struct field). The arm keeps the `match` exhaustive with the
+			// shared E3005; A2 supplies the accept path.
+			functionIntoNonFunction then throw ParseError.functionValueIntoNonFunction("payload", name: String.from(field.name), heldType: typeTagName(declared), line: caseTok.line, column: caseTok.column)
 		end 'declared'
 	end 'requireScalarPayloadArg'
 
@@ -9938,7 +10118,26 @@ export type Parser
 
 		let base = try self.requireStructBase(binding, baseTok: baseTok)
 
-		return try self.parseCallNamed(func, callee: qualifiedMethodName(base.layout.name, methodName: self.current().value), anchor: baseTok, receiver: ReceiverArg.value(base.box), resultUsed: resultUsed)
+		// A member that is a FUNCTION-typed FIELD, not a method — `h.op(21)` / `self.op(x)`, where `op` is
+		// a function-typed field (P1.5-A1). It is an INDIRECT call, not a method dispatch: load the field
+		// (a `function` value) and let the postfix loop (`parsePostfix`) apply the `(args)`. Only a
+		// FUNCTION-typed field diverts here — a non-function field followed by `(` (`p.count(…)` on an int
+		// field) is not a callable member and falls through to the method path, which reports it as an
+		// unknown method exactly as before, keeping existing behaviour unchanged. `resultUsed` does not
+		// apply: the field load is a value producer; the value/statement position is decided at the
+		// indirect call the postfix loop emits.
+		let memberTok = self.current()
+		let fieldIndex = base.layout.indexOfField(memberTok.value)
+		if fieldIndex < base.layout.fieldCount() 'fieldMember'
+			let fieldType = self.signatures.fieldTypeOf(base.layout.name, index: fieldIndex, into: self.artifact.typeNames)
+			if maxonTypeTag(fieldType) == ValueTypeTag.function 'functionField'
+				try self.consume(TokenKind.identifier)
+				try self.requireFieldAccessible(base.layout, index: fieldIndex, fieldTok: memberTok)
+				return self.emitFieldLoad(base.box, layout: base.layout, index: fieldIndex, range: SourceRange.between(baseTok, last: memberTok))
+			end 'functionField'
+		end 'fieldMember'
+
+		return try self.parseCallNamed(func, callee: qualifiedMethodName(base.layout.name, methodName: memberTok.value), anchor: baseTok, receiver: ReceiverArg.value(base.box), resultUsed: resultUsed)
 	end 'parseMethodCall'
 
 	// A STRING'S BUILTIN METHODS -- s.append(t) and s.byteLength(). String is the one non-struct type
@@ -10555,6 +10754,10 @@ export type Parser
 	// A parameter declared `Integer` already lives with exactly this split (`valueTagToStdType`'s
 	// `named` arm exists for it), so this is that arrangement reaching one op further, not a new one.
 	function emitFieldLoad(box ValueId, layout StructLayout, index FieldIndex, range SourceRange) returns ValueId
+		// A FUNCTION-typed field (`export var op as UnaryOp`) arrives from `fieldTypeOf` already re-tagged
+		// `function` (it functionizes over the whole-program function-alias registry, since the SWEEP that
+		// recorded the layout ran before the alias was known), which is what makes the loaded value carry
+		// the `function` tag so `h.op(21)` reaches an indirect call (P1.5-A1).
 		let declared = self.signatures.fieldTypeOf(layout.name, index: index, into: self.artifact.typeNames)
 		let offset = layout.offsetOfField(index)
 		let result = self.emitIndirectLoad(declared, box: box, offset: offset, storageType: self.fieldStorageType(declared), range: range)
@@ -10635,6 +10838,10 @@ export type Parser
 			// gives it the machine word. A managed field IS now constructed (`moveInPayload`), and its
 			// self-field READ loads through this same width.
 			string then return declared
+			// A FUNCTION-typed field (P1.5-A1) stores an i64 code POINTER, exactly like a struct/String
+			// field — `maxonTypeToStdType`/`valueTagToStdType` give it the machine word. `emitFieldLoad`
+			// functionizes a `named` function alias BEFORE this, so a function field arrives here concrete.
+			function then return declared
 			named then break 'kind'
 		end 'kind'
 
@@ -10792,9 +10999,42 @@ export type Parser
 	function topLevelGlobalRead(tok Token) returns ValueId throws ParseError
 		match self.signatures.globalDeclFor(tok.value, readerFilePath: self.filePath) 'global'
 			found(label, tag) then return self.emitGlobalLoad(label, tag: tag, range: SourceRange.ofToken(tok))
-			notFound then throw ParseError.undefinedVariable(String.from(tok.value), line: tok.line, column: tok.column)
+			notFound then return try self.emitFunctionRef(tok)
 		end 'global'
 	end 'topLevelGlobalRead'
+
+	// ⭐ **A BARE FUNCTION NAME USED AS A VALUE → a `functionRef`** (P1.5-A1), the last resort a name
+	// falls to after it is not a local, a self-field, a top-level constant or a `var`. It is what makes
+	// `let f = double`, `apply(triple, x: 10)` and `return double` bind a function VALUE — a code pointer.
+	//
+	// It resolves through the WHOLE-PROGRAM signature index, so a FORWARD reference (a function declared
+	// LATER in the file, the `.forward-reference-*` cases) resolves here at parse time exactly as a
+	// backward one does — the sweep recorded every declaration before any file was parsed, which is the
+	// shv2 thesis (no `unresolvedRead` placeholder, no TypeResolution rewrite pass). A name NO file
+	// declares as a function is a genuine undefined variable (E2004), the answer this path used to give
+	// unconditionally.
+	//
+	// A THROWING function is refused here (E3101): a function type has no throws clause, so the binding
+	// would drop it and `indirectCall` has no error channel to carry it back. Refused at the point the
+	// name becomes a value, with the callee's `throws E` type named.
+	//
+	// The value's type is `function(intern(name))` — the FUNCTION's own name governs its signature, which
+	// is how an indirect call on it (`f(21)`) recovers the return type (`returnTypeOf(name)`).
+	function emitFunctionRef(tok Token) returns ValueId throws ParseError
+		match self.signatures.returnTypeOf(tok.value, into: self.artifact.typeNames) 'callee'
+			declared then break 'callee'
+			undeclared then throw ParseError.undefinedVariable(String.from(tok.value), line: tok.line, column: tok.column)
+		end 'callee'
+
+		match self.signatures.throwsOf(tok.value) 'throwsClause'
+			throwing(errorType) then throw ParseError.throwingFunctionAsValue(String.from(tok.value), errorType: errorType, line: tok.line, column: tok.column)
+			none then break 'throwsClause'
+		end 'throwsClause'
+
+		let result = self.mintValue(ValueTypeTag.function, nameId: self.artifact.typeNames.intern(tok.value))
+		self.artifact.emitOp(self.currentBlock, op: MaxonOp.functionRef(result, funcName: tok.value), range: SourceRange.ofToken(tok))
+		return result
+	end 'emitFunctionRef'
 
 	// `globalAddr <label>` then `loadIndirect <addr> 0` — the two ops a global's read is.
 	//
@@ -11634,13 +11874,97 @@ export type Parser
 		// compose cleanly — a type is a struct, a float alias, an int alias or a scalar, never two — so the
 		// result of a `returns Float` callee binds a `float` (XMM) value that `trunc` truncates and `return`
 		// moves cleanly, rather than a `named` value the tag says is an int while the backend files it in XMM.
-		let result = self.mintValueOfType(self.resolveFloatAliasType(self.resolveNamedStruct(inner)))
+		let result = self.mintValueOfType(self.resolveFunctionAlias(self.resolveFloatAliasType(self.resolveNamedStruct(inner))))
 		let tag = self.tagOf(result)
 		if tagIsText(tag) or tagIsStructRef(tag) or self.valueIsBoxedUnion(result) 'adoptsHeapBox'
 			self.trackOwnedTemp(result)
 		end 'adoptsHeapBox'
 		return result
 	end 'mintOwnedCallResult'
+
+	// ⭐ **A CALL THROUGH A FUNCTION VALUE** (P1.5-A1) — `f(21)`, `h.op(21)`, `pick()(21)`. The cursor sits
+	// on the `(`; `callee` is the SSA value holding the code pointer (a `function`-tagged value produced by
+	// a functionRef, a param, a field load, or another call). Arguments are POSITIONAL: a function type's
+	// parameter names are documentation only, so there is nothing to label — `f(a, b)` is two positional
+	// args, which a direct call would reject (rest-labelled), so indirect calls have their own arg parser.
+	function parseIndirectCall(func IrFunction, callee ValueId) returns ValueId throws ParseError
+		let anchor = self.current()
+		try self.consume(TokenKind.leftParen)
+
+		let args = try self.parseIndirectCallArgs(func)
+
+		let rparenTok = try self.consume(TokenKind.rightParen)
+
+		let result = self.mintIndirectCallResult(callee)
+		self.artifact.emitOp(self.currentBlock, op: MaxonOp.indirectCall(result, callee: callee, args: args), range: SourceRange.between(anchor, last: rparenTok))
+		return result
+	end 'parseIndirectCall'
+
+	// The POSITIONAL arguments of an indirect call — comma-separated expressions, no labels (a function
+	// TYPE has no parameter names, so `indirectCall` carries no `argLabels`/`argRanges`; see MaxonDialect).
+	// The climber (`parseBinary`), not `parseExpression`, for `parseCallArgs`' reason: an argument is
+	// parsed inside an expression that already seeded `currentBlock`.
+	function parseIndirectCallArgs(func IrFunction) returns ValueIdArray throws ParseError
+		var args = ValueIdArray.create()
+		if self.at(TokenKind.rightParen) 'noArgs'
+			return args
+		end 'noArgs'
+
+		while true 'argLoop'
+			args.push(try self.parseBinary(func, minPrec: OrPrecedence))
+
+			if not self.at(TokenKind.comma) 'endArgs'
+				break
+			end 'endArgs'
+			try self.consume(TokenKind.comma)
+		end 'argLoop'
+		return args
+	end 'parseIndirectCallArgs'
+
+	// Mint the SSA value an indirect call defines, typed from the CALLEE FUNCTION VALUE's return type —
+	// the mirror of `mintCallResult` for a direct call, which reads `returnTypeOf(callee-name)`. Here the
+	// return type is recovered from the callee value's OWN function type (its governing name), and the tag
+	// tail (`mintOwnedCallResult`) is shared, so an indirect call binds its result exactly as a direct one
+	// does. A VOID function type called in value position mints a `void` value, which a value-position use
+	// rejects downstream exactly as a void direct call does.
+	function mintIndirectCallResult(callee ValueId) returns ValueId
+		return match self.functionValueReturnType(callee) 'r'
+			value(inner) gives self.mintOwnedCallResult(inner)
+			void gives self.mintValue(ValueTypeTag.void, nameId: UnnamedTypeId)
+		end 'r'
+	end 'mintIndirectCallResult'
+
+	// The RETURN type of a function VALUE, recovered from its governing name (see MaxonType's `function`
+	// arm): a function-TYPEALIAS value reads its return from the function-alias registry; a functionRef
+	// value's governing name IS a function, so its return is `returnTypeOf`. The two are disjoint — a name
+	// is a function alias or a function, never both — so trying the alias first and the function second is
+	// unambiguous.
+	function functionValueReturnType(callee ValueId) returns MaxonReturnType
+		let name = self.internedName(self.valueNameId(callee))
+
+		match self.signatures.functionAliasOf(name) 'alias'
+			declared(alias) then return self.functionAliasReturnType(alias)
+			undeclared then break 'alias'
+		end 'alias'
+
+		match self.signatures.returnTypeOf(name, into: self.artifact.typeNames) 'fn'
+			declared(returnType) then return returnType
+			undeclared then panic("functionValueReturnType: a `function`-tagged value's governing name '{String.from(name)}' is neither a function alias nor a declared function — every function value is minted from one or the other (emitFunctionRef / parseTypeReference)")
+		end 'fn'
+	end 'functionValueReturnType'
+
+	// Reconstruct a function alias's declared return type from its interner-free (tag, name) storage (see
+	// FunctionTypeAlias), re-interning the name into THIS file's interner. `void` means the function
+	// returns nothing; a primitive return carries no name; a `named`/`structRef`/function return carries
+	// the name it re-interns from.
+	function functionAliasReturnType(alias FunctionTypeAlias) returns MaxonReturnType
+		if alias.returnTag == ValueTypeTag.void 'voidReturn'
+			return MaxonReturnType.void
+		end 'voidReturn'
+
+		let nameId = UnnamedTypeId if alias.returnTypeName.isEmpty() else self.artifact.typeNames.intern(alias.returnTypeName)
+		return MaxonReturnType.value(maxonTypeOfTag(alias.returnTag, nameId: nameId))
+	end 'functionAliasReturnType'
 
 	// Parse an integer literal token into a `literal` op, and return the value it defines.
 	// The token's text becomes a number through the shared `intLiteralValue`, so a literal

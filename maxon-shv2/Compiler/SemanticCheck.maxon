@@ -81,6 +81,11 @@ function checkCalls(project Project, module MaxonModule, throwsMap FuncThrowsMap
 					tryCall(_, _, callee, args, argLabels, argRanges) then validateCall(project, func: func, opIndex: opIdx, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges)
 					// The error terminators and the panic op read no callee signature.
 					throwError to panicAbort then break 'op'
+					// P1.5-A1: a `functionRef`'s "does this function name resolve?" was answered by the parser
+					// (`emitFunctionRef` checks `returnTypeOf`, else E2004); an `indirectCall`'s callee is a
+					// VALUE, not a name to resolve, and A1 does not type-check its positional arguments. Neither
+					// has anything for this call-validation check to say.
+					functionRef to indirectCall then break 'op'
 				end 'op'
 			end 'eachOp'
 		end 'eachBlock'
@@ -206,6 +211,11 @@ function checkArgTypes(project Project, func IrFunction, sig FuncSignature, argI
 			// question is which argument — but the rule's own sentence is `implicitNarrowingMessage`'s,
 			// shared verbatim, so the four sites cannot come to explain one rule four ways.
 			narrowsFloatToInt then reportPositioned(project, code: ErrorCode.semanticUnsafeCast, message: "argument '{String.from(paramName)}': {implicitNarrowingMessage(typeTagName(argTag), targetType: typeTagName(paramTag))}", line: callRange.line, column: callRange.column, filePath: filePath)
+			// A FUNCTION VALUE passed to a NON-function parameter (P1.5-A1) — the argument twin of the
+			// parser's assignment/return sites, sharing `FunctionValueMisuseSuffix` so all four explain one
+			// rule one way. (Reached only through the whole-program signature the parser cannot see, which
+			// is why the rule's argument arm lives here rather than at the call site.)
+			functionIntoNonFunction then reportPositioned(project, code: ErrorCode.typeMismatch, message: "cannot pass a value of type 'function' as argument '{String.from(paramName)}', which holds '{typeTagName(paramTag)}': {FunctionValueMisuseSuffix}", line: callRange.line, column: callRange.column, filePath: filePath)
 		end 'declared'
 	end 'eachArg'
 end 'checkArgTypes'
@@ -293,5 +303,6 @@ function isExitCodeType(t MaxonType) returns bool
 		unresolved gives false
 		structRef gives false
 		string gives false
+		function gives false
 	end 'r'
 end 'isExitCodeType'

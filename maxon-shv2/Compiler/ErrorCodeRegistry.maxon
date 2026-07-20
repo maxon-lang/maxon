@@ -208,6 +208,19 @@ export enum ErrorCode
 	// struct-literal field-init checks and the post-body definite-assignment
 	// dataflow pass.
 	semanticFieldNotInitialized = "E3086"
+	// A `throws` function is referenced as a VALUE (`let f = risky`). A function type cannot
+	// express `throws` -- the grammar is `function(T) returns U`, with no throws clause -- so the
+	// binding silently drops it, and there is no indirect try-call to carry it: `StdIndirectCallOp`
+	// has no ErrorFlag, unlike `StdTryCallOp`.
+	// Before this check the call was not merely unchecked, it was WRONG. The callee took the error
+	// return (ordinal in RDX, `xor rax, rax` in RAX); the indirect caller read RAX and ignored RDX,
+	// so the throw vanished and the caller received 0 -- the dummy -- as a normal result. `try` was
+	// bypassed entirely by round-tripping the function through a value.
+	// Refused rather than supported, on evidence: no spec, no stdlib file, and none of
+	// maxon-selfhosted's 191,487 lines ever wanted a throwing function value. Adding `throws` to
+	// the function-type grammar plus an indirect try-call ABI is a FEATURE, and would be built for
+	// nobody. If a real need appears, that is the shape -- and this code is what says so.
+	throwingFunctionAsValue = "E3101"
 	// A binding is READ after its owned heap value was MOVED OUT of it. Under shv2's static
 	// single-owner model an owned value (an owned String, a struct box) has exactly one owner; a
 	// `let u = t` / `s = t` whose RHS is a bare reference to an owned binding TRANSFERS ownership to

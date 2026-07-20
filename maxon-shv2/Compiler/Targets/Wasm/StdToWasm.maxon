@@ -596,6 +596,12 @@ function recordDefValtype(op StdOp, valtypes WasmValTypeArray, depResult ValueId
 		tryCall(resultId, errorFlagId, callee, _) then recordTryCallDefs(valtypes, resultId: resultId, errorFlagId: errorFlagId, callee: callee, calleeReturnType: calleeReturnType)
 		errorReturn then break 'def'
 		osExit then break 'def'
+		// P1.5-A1 non-capturing function values are out of the scalar slice: a `.text` code address
+		// and a call THROUGH it have no scalar-core lowering. Rejected here (the first pass over the
+		// body, run in `WasmFuncEmitter.create`) — an EXPLICIT reject, not the wrong-width default the
+		// header warns against for a value-defining op.
+		funcAddr then panic("wasm: a function-value address (`funcAddr`) is out of the scalar slice (P1.5-A1)")
+		callIndirect then panic("wasm: an indirect call through a function value (`callIndirect`) is out of the scalar slice (P1.5-A1)")
 	end 'def'
 end 'recordDefValtype'
 
@@ -816,6 +822,10 @@ type WasmFuncEmitter
 			tryCall then panic("emitStraightLineTerminator: a `tryCall` is a value-producing body op, never a terminator")
 			errorReturn(retValId, errorFlagId) then self.emitErrorReturn(retValId, errorFlagId: errorFlagId)
 			osExit then panic("emitStraightLineTerminator: an `osExit` is a body op followed by a dead return, never a terminator")
+			// A `funcAddr`/`callIndirect` is a value-producing body op, never a terminator — the exact
+			// mirror of the `call`/`tryCall` arms above (P1.5-A1).
+			funcAddr then panic("emitStraightLineTerminator: a `funcAddr` is a value-producing body op, never a terminator")
+			callIndirect then panic("emitStraightLineTerminator: a `callIndirect` is a value-producing body op, never a terminator")
 		end 'term'
 	end 'emitStraightLineTerminator'
 
@@ -879,6 +889,10 @@ type WasmFuncEmitter
 			tryCall then panic("emitDispatcherTerminator: a `tryCall` is a value-producing body op, never a terminator")
 			errorReturn(retValId, errorFlagId) then self.emitErrorReturn(retValId, errorFlagId: errorFlagId)
 			osExit then panic("emitDispatcherTerminator: an `osExit` is a body op followed by a dead return, never a terminator")
+			// A `funcAddr`/`callIndirect` is a value-producing body op, never a terminator — the exact
+			// mirror of the `call`/`tryCall` arms above (P1.5-A1).
+			funcAddr then panic("emitDispatcherTerminator: a `funcAddr` is a value-producing body op, never a terminator")
+			callIndirect then panic("emitDispatcherTerminator: a `callIndirect` is a value-producing body op, never a terminator")
 		end 'term'
 	end 'emitDispatcherTerminator'
 
@@ -916,6 +930,11 @@ type WasmFuncEmitter
 			// the rare mid-block early-error return, exactly as `ret`/`retVoid` are above.
 			errorReturn(retValId, errorFlagId) then self.emitErrorReturn(retValId, errorFlagId: errorFlagId)
 			osExit(codeId) then self.emitOsExit(codeId)
+			// P1.5-A1 non-capturing function values have no scalar-core lowering — the body-emit door for
+			// the same rejection `recordDefValtype` makes first (a `funcAddr` code address, a `callIndirect`
+			// call THROUGH it). Mirrors the `div`-out-of-scalar-slice rejections in `emitBinOp`.
+			funcAddr then panic("emitBodyOp: a function-value address (`funcAddr`) is out of the scalar slice (P1.5-A1)")
+			callIndirect then panic("emitBodyOp: an indirect call (`callIndirect`) is out of the scalar slice (P1.5-A1)")
 		end 'body'
 	end 'emitBodyOp'
 
@@ -1717,6 +1736,10 @@ function decideDispatcher(module StdModule, func IrFunction) returns bool
 		tryCall then panic("decideDispatcher: a `tryCall` is a value-producing body op, never a terminator")
 		errorReturn then break 'k'
 		osExit then panic("decideDispatcher: an `osExit` is a body op followed by a dead return, never a terminator")
+		// A `funcAddr`/`callIndirect` is a value-producing body op, never a terminator — the same
+		// invariant `tryCall`/`osExit` assert (P1.5-A1).
+		funcAddr then panic("decideDispatcher: a `funcAddr` is a value-producing body op, never a terminator")
+		callIndirect then panic("decideDispatcher: a `callIndirect` is a value-producing body op, never a terminator")
 	end 'k'
 	return false
 end 'decideDispatcher'

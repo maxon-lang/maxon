@@ -78,6 +78,14 @@ export enum TypeClass
 	noValue
 	structRef
 	text
+	// The class of a non-capturing FUNCTION VALUE (P1.5-A1). Like `structRef`/`text`, it converts to
+	// nothing and nothing converts to it — a function value is a code pointer, not a number and not a
+	// bool, so `f + 1`, `return f` from an `ExitCode` function and `if f` are all one error. It AGREES
+	// with another `function` and nothing else, which is exactly the type rule the spec states: "a
+	// function value is only usable where a function type declared with 'typealias' is expected." Two
+	// function types agreeing at the class level is A1's assignability (tag-level, not structural — the
+	// arity/param-type identity a function-to-function mismatch would need arrives with a later rung).
+	function
 end 'TypeClass'
 
 // The class a source-level type belongs to. Exhaustive over `ValueTypeTag`, so a new type
@@ -110,6 +118,9 @@ function typeClassOf(tag ValueTypeTag) returns TypeClass
 		// builtin, not a declared `type`, and must not be admitted to `p == q`'s reference-equality
 		// rejection or a struct's field lookup). Its own class, agreeing only with itself.
 		string gives TypeClass.text
+		// A function value. Its own class — see TypeClass's `function` arm. A function value fits a
+		// function-typed place (both `function`) and nothing else (E3005 everywhere else).
+		function gives TypeClass.function
 	end 'k'
 end 'typeClassOf'
 
@@ -189,6 +200,15 @@ export enum DeclaredTypeMatch
 	// `type-casting.md` blesses even the explicit `100 as float`, and `arithResultTag` promotes on
 	// it. Only the lossy direction is a lie.
 	narrowsFloatToInt
+	// ⭐ **A FUNCTION VALUE MEETING A DECLARED NON-FUNCTION TYPE** (P1.5-A1) — `loc = dbl`, `slot = dbl`,
+	// `return dbl` from a `returns int` function, a function arg to an int parameter. Its OWN verdict, not
+	// `mismatch`, because the spec's E3005 for it has SPECIFIC advice ("a function value is only usable
+	// where a function type declared with 'typealias' is expected"), and — the reason it lives HERE rather
+	// than as an `== function` check at each site — a function value into a FUNCTION place is `ok` while
+	// into anything else is this, and stating that boundary once is what keeps the return site and the
+	// assignment sites from ever disagreeing about it. Each site emits its own noun'd message
+	// (`FunctionValueMisuseSuffix` is the shared tail); the CONDITION is decided once, here.
+	functionIntoNonFunction
 end 'DeclaredTypeMatch'
 
 // **THE COERCION RULE.** Every site where a value meets a declared type asks this, and none of
@@ -199,6 +219,15 @@ end 'DeclaredTypeMatch'
 // `returns int` is not a "narrowing"), so agreement is established FIRST and the narrowing rule
 // then runs on a pair already known to be two numbers.
 export function checkDeclaredType(value ValueTypeTag, declared ValueTypeTag) returns DeclaredTypeMatch
+	// A function value fits a function-typed place and nothing else (P1.5-A1). Tested FIRST, so a function
+	// value meeting a non-function place gets its specific verdict rather than the generic class
+	// `mismatch` (both would be E3005, but the function one carries the "use a function typealias" advice).
+	// A function into a FUNCTION place falls through to agree below; a NON-function into a function place is
+	// an ordinary class `mismatch`, which is why the guard is one-sided.
+	if value == ValueTypeTag.function and declared != ValueTypeTag.function 'functionValue'
+		return DeclaredTypeMatch.functionIntoNonFunction
+	end 'functionValue'
+
 	if not typesAgree(value, right: declared) 'disagree'
 		return DeclaredTypeMatch.mismatch
 	end 'disagree'
@@ -224,6 +253,13 @@ end 'checkDeclaredType'
 export function implicitNarrowingMessage(sourceType String, targetType String) returns String
 	return "cannot implicitly convert '{sourceType}' to '{targetType}': the conversion is lossy and must be explicit — use trunc(x) to truncate toward zero (or round/floor/ceil)"
 end 'implicitNarrowingMessage'
+
+// ⭐ **THE ONE EXPLANATION OF THE FUNCTION-VALUE TYPE RULE** (P1.5-A1), written once. It is the tail of
+// every E3005 a function value provokes — an assignment, a global store, a return, a call argument — and
+// those sites must not phrase one rule several ways. It names WHERE a function value IS legal (a
+// function-typed place declared with `typealias`), which is the whole content of the rule the spec
+// states: "a function value is only usable where a function type declared with 'typealias' is expected."
+export let FunctionValueMisuseSuffix = "a function value is only usable where a function type declared with 'typealias' is expected"
 
 // ⭐ **TWO NAMED AGGREGATES ARE THE SAME TYPE IFF THEIR INTERNED NAMES ARE EQUAL** — the ONE
 // name-comparison every site that meets a value against a declared aggregate shares (OPEN #54): the
@@ -291,6 +327,9 @@ export function tagIsIntegral(tag ValueTypeTag) returns bool
 		// A String is a pointer, not a number the language will convert anything INTO. Nothing narrows
 		// to a String, so `false` here is the statement "a String is not an integer".
 		string gives false
+		// A function value is a code pointer, not a number the language will convert anything INTO.
+		// Nothing narrows to a function, so `false` here is the statement "a function is not an integer".
+		function gives false
 	end 'k'
 end 'tagIsIntegral'
 
@@ -331,6 +370,10 @@ export function typeTagName(tag ValueTypeTag) returns String
 		// The `String` builtin. Both reference compilers print the builtin's name here (the bootstrap's
 		// `E3005: operator '+' is not defined for type 'String'`), so a String type error names `String`.
 		string gives "String"
+		// A function value. `function` is what the spec's E3005 messages interpolate as `{got}` — "cannot
+		// assign a value of type 'function' to …". A tag is a scalar and carries no name (see this file's
+		// header), so it names the KIND, not a specific signature — which is all the type rule needs.
+		function gives "function"
 	end 'k'
 end 'typeTagName'
 
@@ -1167,5 +1210,8 @@ export function notOperatorFor(operand ValueTypeTag) returns NotOperator
 		// A STRING — rejected for the FLOAT/struct arm's reason: `not` is defined on the bool domain
 		// and the integer domain, and on nothing else. Complementing a byte pointer is not a question.
 		string gives NotOperator.nonIntegralOperand
+		// A FUNCTION value — rejected for the struct/String arm's reason: `not` has no reading on a code
+		// pointer (P1.5-A1). Complementing a `.text` address is not a question.
+		function gives NotOperator.nonIntegralOperand
 	end 'k'
 end 'notOperatorFor'

@@ -1246,6 +1246,14 @@ function emitTargetOp(op TargetOp, code ByteArray, callFixups CallFixupArray, ia
 		// x64 encoder only ever sees x64 ops (`buildBackend` dispatches on `target.cpu`). The
 		// band-append invariant forced this arm; a panic keeps the ISA boundary loud.
 		arm64Ret to arm64Syscall then panic("emitTargetOp: an arm64 op reached the x64 encoder — the arm64 backend (wave 1) encodes the arm64 band")
+		// P1.5-A1: a function's address (`lea dest, [rip+disp32]` + a `.text` CallFixup — the existing
+		// `encodeLeaRegFuncAddr`, until now called only by the runtime stubs), and a register-indirect
+		// call (`FF /2`, mod=11 — `call reg`). `encodeModRmExtDirect` emits `REX.W FF /2`; REX.W is IGNORED
+		// for a near call in long mode (the operand size is forced to 64-bit), so `48 FF D0` decodes as
+		// `call rax` and REX.B still selects r8..r15 — the same reg-direct group-5 encoding `iatCall` uses
+		// in its RIP-relative form.
+		leaRegFunc(dest, funcName) then encodeLeaRegFuncAddr(code, callFixups: callFixups, dest: resolveGpr(dest), targetName: funcName)
+		callReg(reg) then encodeModRmExtDirect(code, opcode: OpcodeCallIndirect, ext: Grp5ExtCall, rmField: resolveGpr(reg))
 	end 'emit'
 end 'emitTargetOp'
 

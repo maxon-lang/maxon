@@ -101,6 +101,12 @@ let TypeShapeStructRef = 15 as ContentHash
 // served for the other.
 let TypeShapeString = 23 as ContentHash
 
+// A FUNCTION value's type shape (P1.5-A1) — so a `returns UnaryOp` return type hashes distinctly. Its
+// own discriminator for `TypeShapeStructRef`'s reason. (A function type reaches the SCANNED signature
+// path only if a future producer stores one; the sweep records a function-alias reference as `named`
+// until the alias is known, so today this arm is exhaustiveness insurance, hashed not panicked.)
+let TypeShapeFunction = 29 as ContentHash
+
 // A declared FIELD's mutability, mixed into the hash beside its name and type (P1.1a wave 2). The
 // struct twin of `DeclShapeConstant`/`DeclShapeMutable`, and distinct constants rather than a reuse
 // of them: those two discriminate a top-level `let` from a `var`, and colliding a field's `let` with
@@ -149,6 +155,11 @@ let ConsumeBitClear = 26 as ContentHash
 // exactly as `recordParamConsume` records only consuming ones — so a non-throwing function costs no
 // hash movement.
 let DeclShapeThrows = 27 as ContentHash
+
+// A FUNCTION typealias's shape discriminator (P1.5-A1) — `DeclShapeAlias`'s twin, for its reason: a name
+// that stops being a ranged alias and becomes a function one, or whose function return type changes,
+// changes what a caller binding a value of it compiles to, so a caller's parse memo must move with it.
+let DeclShapeFunctionAlias = 28 as ContentHash
 
 // The separator between a file's path and a constant's bare name in a FILE-PRIVATE constant's
 // storage key. `|` is legal in neither a Maxon identifier nor a Windows path, so the composite is
@@ -484,6 +495,11 @@ function globalStdType(tag ValueTypeTag, name ByteArray) returns StdType
 		// `.data` storage; a String is a heap/rdata pointer that a `.data` image cannot hold as a
 		// constant), so it never reaches here.
 		string then panic("globalStdType: top-level var '{String.from(name)}' is tagged '{typeTagName(tag)}' — a String global is a pointer a constant `.data` image cannot hold, rejected at parse by requireStorableGlobal")
+		// A FUNCTION global is unreachable (P1.5-A1): a global takes no type annotation and a function
+		// reference is not a constant initializer, so a global's inferred type is never `function` (a bare
+		// function name at top level is rejected before this — `var g = double` is E2045, no call in a
+		// constant initializer). Were it to reach here, the honest answer is still not a width.
+		function then panic("globalStdType: top-level var '{String.from(name)}' is tagged '{typeTagName(tag)}' — a function value is not a constant initializer, so a global's inferred type is never a function")
 	end 'reachable'
 
 	return valueTagToStdType(tag)
@@ -516,6 +532,15 @@ export union DeclaredAlias
 	declared(alias RangedTypeAlias)
 	undeclared
 end 'DeclaredAlias'
+
+// What the index knows about a FUNCTION typealias (P1.5-A1) — `DeclaredAlias`'s twin, and a union for
+// the identical reason: "no file declares a function alias of this name" is an ANSWER, not a failure.
+// THE door `Parser.parseTypeReference` asks "is this name a function type?" through — a hit re-tags the
+// reference `MaxonType.function`; a miss leaves it a `named` for the ranged/struct/enum registries.
+export union DeclaredFunctionAlias
+	declared(alias FunctionTypeAlias)
+	undeclared
+end 'DeclaredFunctionAlias'
 
 // What the index knows about a declared STRUCT TYPE — `DeclaredAlias`'s twin, and a union for the
 // identical reason. "No file declares a `type` of this name" is an ANSWER: the name is probably a
@@ -584,6 +609,10 @@ export function classifyUnionPayload(signatures ProgramSignatures, typeNames Typ
 		string then return PayloadClass.managed(fieldType, isString: true)
 		structRef then return PayloadClass.managed(fieldType, isString: false)
 		unresolved then panic("classifyUnionPayload: a payload field is declared `unresolved` — `parseTypeReference` produces only `named`, `structRef` and the three primitive keywords, so no payload declaration can carry one")
+		// A FUNCTION-typed payload (P1.5-A1) is a SCALAR: a code pointer is an i64 stored inline, owns no
+		// heap, and the cascade skips it (nothing to drop). It stores through `maxonTypeToStdType(function)`
+		// → i64, exactly as a scalar does.
+		function then return PayloadClass.scalar(fieldType)
 		named then break 'kind'
 	end 'kind'
 
@@ -857,6 +886,12 @@ export type ProgramSignatures
 	// so unlike `returnTypes` it needs no interner and no remap: it travels by name and arrives by
 	// name.
 	var typeAliases as RangedTypeAliasMap
+	// FUNCTION typealias name -> its declaration (P1.5-A1). Like `typeAliases` it carries NO type-name
+	// ids — a function alias's return type is stored interner-free as a (tag, name-ByteArray) pair (see
+	// FunctionTypeAlias) — so it travels by name and arrives by name, needing no interner and no remap.
+	// THE door `Parser.parseTypeReference` asks "is this name a function alias?" through, and the one an
+	// indirect call recovers the callee's return type from.
+	var functionTypeAliases as FunctionTypeAliasMap
 	// ⭐ Struct-type name -> its declaration, with the FIELD ORDER the parser needs. THE door `p.x`
 	// asks through, and the reason it must be here rather than in `Project`: a field's offset is
 	// needed at PARSE time, and `type Point` may be declared BELOW the function that reads a
@@ -930,7 +965,7 @@ export type ProgramSignatures
 	export var hash as ContentHash
 
 	export static function create() returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedTypeAliasMap.create(), structTypes: StructLayoutMap.create(), enumTypes: EnumLayoutMap.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), hash: fnvOffsetBasis()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedTypeAliasMap.create(), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), enumTypes: EnumLayoutMap.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), hash: fnvOffsetBasis()}
 	end 'create'
 
 	// Fold ONE file's scanned declarations into the index. Called in SOURCE-PATH order, so the
@@ -942,10 +977,17 @@ export type ProgramSignatures
 	// machinery `mergeArtifact` uses for the identical job — `TypeNameInterner.foldInto` +
 	// `remapMaxonReturnType`. One mechanism, two callers: a second copy of "reconcile a file's ids
 	// into a bigger table" would be free to disagree with this one about what an id means.
-	export function foldFile(scanned FuncReturnTypeEntryArray, aliases RangedTypeAliasArray, structs StructLayoutArray, enums EnumLayoutArray, bindings TopLevelDeclArray, paramConsumes ParamConsumeEntryArray, throwsEntries ThrowsClauseEntryArray, fileTypeNames TypeNameInterner)
+	export function foldFile(scanned FuncReturnTypeEntryArray, aliases RangedTypeAliasArray, functionAliases FunctionTypeAliasArray, structs StructLayoutArray, enums EnumLayoutArray, bindings TopLevelDeclArray, paramConsumes ParamConsumeEntryArray, throwsEntries ThrowsClauseEntryArray, fileTypeNames TypeNameInterner)
 		for alias in aliases 'eachAlias'
 			self.recordAlias(alias)
 		end 'eachAlias'
+
+		// Function aliases travel by NAME and carry no interner ids (their return type is stored as a
+		// tag + a name ByteArray), so they fold here alongside the ranged aliases, before the interner
+		// reconciliation below — nothing about them needs remapping (like `paramConsumes`/`throwsEntries`).
+		for functionAlias in functionAliases 'eachFunctionAlias'
+			self.recordFunctionTypeAlias(functionAlias)
+		end 'eachFunctionAlias'
 
 		// Consume facts travel by NAME and carry no ids, so they fold before the interner reconciliation
 		// below — nothing about them needs remapping (like `enumTypes`).
@@ -1206,6 +1248,16 @@ export type ProgramSignatures
 		let named = mixBytes(mix(self.hash, value: DeclShapeAlias), bytes: alias.name)
 		self.hash = mix(mix(named, value: low), value: high)
 	end 'recordAlias'
+
+	// Add one FUNCTION typealias to the index AND fold it into the hash — the one write, for
+	// `recordAlias`'s reason. The RETURN type rides the hash (its tag, then its name): a caller that
+	// binds a function value of this alias and calls it recovers the result type FROM this return type,
+	// so a change to it changes what that caller compiles to and its parse memo must move with it.
+	function recordFunctionTypeAlias(alias FunctionTypeAlias)
+		self.functionTypeAliases.upsert(alias.name, value: alias)
+		let named = mixBytes(mix(self.hash, value: DeclShapeFunctionAlias), bytes: alias.name)
+		self.hash = mixBytes(mix(named, value: alias.returnTag.rawValue as ContentHash), bytes: alias.returnTypeName)
+	end 'recordFunctionTypeAlias'
 
 	// Add one top-level DECLARATION (a `let` or a `var`) to the arena. No value yet:
 	// `evaluateInitializers` supplies that once every file has been folded in.
@@ -1729,6 +1781,9 @@ export type ProgramSignatures
 			// `requireStorableGlobal`, and a String `let` initializer (a string literal) is not a
 			// foldable constant, so the const evaluator rejects it upstream.
 			string then panic("ProgramSignatures.mixValueTag: a top-level binding is tagged '{typeTagName(tag)}' — a String global is rejected at parse (requireStorableGlobal), and a string-literal constant is not foldable")
+			// A FUNCTION top-level binding never reaches here (P1.5-A1): a function reference is not a
+			// constant initializer, so the const evaluator never folds one to a `function`-tagged value.
+			function then panic("ProgramSignatures.mixValueTag: a top-level binding is tagged '{typeTagName(tag)}' — a function value is not a constant initializer, so it is never folded to a top-level constant")
 		end 'k'
 	end 'mixValueTag'
 
@@ -1738,6 +1793,27 @@ export type ProgramSignatures
 		let alias = try self.typeAliases.get(name) otherwise return DeclaredAlias.undeclared
 		return DeclaredAlias.declared(alias)
 	end 'aliasOf'
+
+	// ⭐ **IS `name` A FUNCTION TYPEALIAS, AND WHAT DOES IT RETURN?** (P1.5-A1). THE door
+	// `Parser.parseTypeReference` re-tags a `named` reference `MaxonType.function` through, and the one an
+	// indirect call recovers the callee's return type from. `undeclared` is the common answer (most names
+	// are not function aliases), spelled as a union arm rather than a sentinel for `DeclaredAlias`'s reason.
+	// It carries no interner ids (the return type is a tag + a name ByteArray), so it needs no `into`.
+	export function functionAliasOf(name ByteArray) returns DeclaredFunctionAlias
+		let alias = try self.functionTypeAliases.get(name) otherwise return DeclaredFunctionAlias.undeclared
+		return DeclaredFunctionAlias.declared(alias)
+	end 'functionAliasOf'
+
+	// Is `name` a declared FUNCTION typealias — the `bool` half of `functionAliasOf`, and a HOT-PATH
+	// allocation guard, exactly like `containsStruct`/`containsEnum` are for their `*Of` twins. Asked of
+	// EVERY `named` type REFERENCE (`parseTypeReference`), field READ (`fieldTypeOf`) and call RESULT
+	// (`resolveFunctionAlias`) — most of them ranged int aliases, none of them function aliases — so it
+	// must not pay `functionAliasOf`'s `DeclaredFunctionAlias` box (a Maxon union value is a heap object
+	// EVERY case, `undeclared` included) just to throw it away. A `Map.contains` allocates nothing. Only
+	// the cold indirect-call return-type recovery, which needs the alias itself, calls `functionAliasOf`.
+	export function isFunctionAlias(name ByteArray) returns bool
+		return self.functionTypeAliases.contains(name)
+	end 'isFunctionAlias'
 
 	// The struct type `name` denotes, declared in ANY file — `aliasOf`'s twin, and the door the
 	// PARSER asks every struct question through: is this name a `type`? how big is its box? which
@@ -1810,6 +1886,19 @@ export type ProgramSignatures
 	export function fieldTypeOf(structName ByteArray, index FieldIndex, into TypeNameInterner) returns MaxonType
 		let layout = try self.structTypes.get(structName) otherwise panic("ProgramSignatures.fieldTypeOf: no `type {String.from(structName)}` is declared — every caller asks `structOf` first")
 		let declared = try layout.fieldTypes.get(index) otherwise panic("ProgramSignatures.fieldTypeOf: field {index} is out of range for `type {String.from(structName)}`, which declares {layout.fieldCount()} — every index handed out came from `indexOfField`")
+
+		// A FUNCTION-typed field (`export var op as UnaryOp`) arrives as a `named` — the SWEEP that
+		// recorded this layout ran before the function alias was known — so it is re-tagged `function`
+		// HERE, over this index's own function-alias registry (P1.5-A1). One place, so every reader (a
+		// field READ, a `Self{op: op}` construction check, the store-width query) sees a function VALUE
+		// and not an int. Re-interned into `into` by NAME exactly as `adoptType`'s `named` arm is.
+		if maxonTypeTag(declared) == ValueTypeTag.named 'maybeFunctionAlias'
+			let name = self.nameOfId(typeNameIdOf(declared))
+			if self.isFunctionAlias(name) 'functionAlias'
+				return MaxonType.function(into.intern(name))
+			end 'functionAlias'
+		end 'maybeFunctionAlias'
+
 		return self.adoptType(declared, into: into)
 	end 'fieldTypeOf'
 
@@ -1909,6 +1998,8 @@ export type ProgramSignatures
 			// A `String` return type carries no interned name (it is a builtin, like a primitive), so
 			// crossing files needs no re-interning — it passes through unchanged.
 			string gives rt
+			// A FUNCTION return type carries its governing name id (P1.5-A1), so it re-interns like `named`.
+			function gives MaxonReturnType.value(self.adoptType(inner, into: into))
 		end 'r'
 	end 'adoptValueReturn'
 
@@ -1932,6 +2023,8 @@ export type ProgramSignatures
 			exitCode to unresolved gives t
 			// A `String` carries no name id, so like a primitive it passes through unchanged.
 			string gives t
+			// A FUNCTION value carries its governing name id (P1.5-A1), re-interned by NAME like `named`.
+			function(id) gives MaxonType.function(into.intern(self.nameOfId(id)))
 		end 'r'
 	end 'adoptType'
 
@@ -1972,6 +2065,9 @@ export type ProgramSignatures
 			// A `String` (P1.2 wave A) — its own shape, and no name to mix (a builtin carries none). A
 			// signature declaring `returns String` hashes distinctly from every other return type.
 			string gives mix(state, value: TypeShapeString)
+			// A FUNCTION value (P1.5-A1) — its own shape, then its governing NAME (never its id, for
+			// `mixDeclaration`'s reason).
+			function(id) gives mixBytes(mix(state, value: TypeShapeFunction), bytes: self.nameOfId(id))
 		end 'r'
 	end 'mixType'
 

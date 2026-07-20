@@ -199,6 +199,31 @@ export typealias RangedTypeAliasArray = Array with RangedTypeAlias
 // TypeResolution to collapse `MaxonType.named` to a primitive.
 export typealias RangedTypeAliasMap = Map with (ByteArray, RangedTypeAlias)
 
+// ⭐ **A FUNCTION TYPEALIAS (P1.5-A1)** — `typealias UnaryOp = function(Integer) returns Integer`. It is
+// its OWN registry, NOT a `RangedTypeAlias`, because a function alias names a function TYPE, not a ranged
+// numeric one: a value of it is a code pointer (`TypeClass.function`), and `Parser.parseTypeReference`
+// resolves a reference to it as `MaxonType.function`, never `named` — so it must never be mistaken for a
+// ranged alias (the `typeClassOf`/`fieldStorageType`/`resolveNamedType` consumers of the ranged registry
+// all read a numeric `underlying`, which a function alias has none of).
+//
+// For A1 it carries only the RETURN type (an indirect call needs it to type its result; arg-type/arity
+// checking against the PARAM types is a later rung, so they are parsed-and-discarded, not stored). The
+// return type is stored INTERNER-FREE — its TAG plus the NAME behind a `named`/`structRef` return (empty
+// for a primitive) — so it rides the no-remap alias fold and re-interns cleanly into any reader's own
+// interner (`Parser.functionAliasReturnType`). `returnTag == void` means the function returns nothing.
+export type FunctionTypeAlias
+	export let name as ByteArray
+	export let returnTag as ValueTypeTag
+	export let returnTypeName as ByteArray
+
+	export static function create(name ByteArray, returnTag ValueTypeTag, returnTypeName ByteArray) returns FunctionTypeAlias
+		return Self{name: name, returnTag: returnTag, returnTypeName: returnTypeName}
+	end 'create'
+end 'FunctionTypeAlias'
+
+export typealias FunctionTypeAliasArray = Array with FunctionTypeAlias
+export typealias FunctionTypeAliasMap = Map with (ByteArray, FunctionTypeAlias)
+
 // --- Declared struct types (P1.0r) ---
 
 // The index of a field within its struct's declaration order. It IS the field's identity — the
@@ -682,6 +707,11 @@ export type Project
 	// Declared ranged typealiases, keyed by name (see RangedTypeAlias). The registry
 	// TypeResolution resolves every `MaxonType.named` against.
 	export var typeAliases as RangedTypeAliasMap
+	// Declared FUNCTION typealiases, keyed by name (see FunctionTypeAlias) — P1.5-A1. Its OWN registry,
+	// not folded into `typeAliases`, because a function alias is not a ranged numeric one (see
+	// FunctionTypeAlias). The parser reads it to resolve a function-typed place and to type an indirect
+	// call's result.
+	export var functionTypeAliases as FunctionTypeAliasMap
 	// Declared struct types, keyed by name (see StructLayout). The registry's OTHER half: a
 	// `MaxonType.named` resolves against the aliases above OR against this, and a name in neither
 	// is E3011.
@@ -740,6 +770,7 @@ export type Project
 			funcReturnTypes: FuncReturnTypeMap.create(),
 			funcSignatures: FuncSignatureMap.create(),
 			typeAliases: RangedTypeAliasMap.create(),
+			functionTypeAliases: FunctionTypeAliasMap.create(),
 			structTypes: StructLayoutMap.create(),
 			enumTypes: EnumLayoutMap.create(),
 			typeNames: TypeNameInterner.create(),

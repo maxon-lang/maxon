@@ -274,6 +274,13 @@ function opPhysicalRegs(op TargetOp) returns RegMask
 		// a register the x64 prologue counts). `gives` cannot host a `panic`; the band-append
 		// invariant forced this arm.
 		arm64Ret to arm64Syscall gives 0
+		// ⚠ The P1.5-A1 function-value band MUST be counted, and this is another arm where a miss is a
+		// real miscompile, not a missed optimization: BOTH name a GPR the coloring can place in a
+		// callee-saved register (rbx/r12-r15) — `leaRegFunc`'s dest and `callReg`'s callee-address use —
+		// so if either is absent from this mask the prologue never saves that register and the function
+		// silently clobbers its CALLER's. The same trap the `leaRegGlobal`/`leaRegRdata` arms document.
+		leaRegFunc(d, _) gives physRegBit(d)
+		callReg(r) gives physRegBit(r)
 	end 'p'
 end 'opPhysicalRegs'
 
@@ -393,5 +400,7 @@ function blockEndsWithReturn(module TargetModule, block IrBlock) returns bool
 		// Unreachable this rung (arm64 uses Arm64PrologueEpilogue, wave 1). `gives` cannot host a
 		// `panic`; wave 1 answers `arm64Ret` true here when it wires the arm64 return block.
 		arm64Ret to arm64Syscall gives false
+		// `leaRegFunc`/`callReg` (P1.5-A1) are value-producing body ops, never a `ret`.
+		leaRegFunc to callReg gives false
 	end 'check'
 end 'blockEndsWithReturn'

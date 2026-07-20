@@ -308,6 +308,9 @@ function classifyRuntimeCall(op MaxonOp, usage RuntimeUsage)
 		// throw/propagate terminators and `panicAbort` name no user callee (panic exits directly) (P1.4b).
 		tryCall(_, _, callee, _, _, _) then recordCallUsage(callee, usage: usage)
 		throwError to panicAbort then break 'op'
+		// P1.5-A1: a `functionRef` is a `lea` and an `indirectCall` calls through a code POINTER — neither
+		// names a runtime callee (`__mm_*`/`__str_*`/`print`), so neither records any runtime usage.
+		functionRef to indirectCall then break 'op'
 	end 'op'
 end 'classifyRuntimeCall'
 

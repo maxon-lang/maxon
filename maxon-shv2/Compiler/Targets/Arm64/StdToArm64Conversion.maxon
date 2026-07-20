@@ -383,6 +383,11 @@ type StdToArm64Lowering
 			tryCall(resultId, errorFlagId, callee, args) then self.lowerTryCall(resultId, errorFlagId: errorFlagId, callee: callee, args: args, dstRef: dstRef)
 			errorReturn(retValId, errorFlagId) then self.lowerErrorReturn(retValId, errorFlagId: errorFlagId, dstRef: dstRef, returnType: returnType, asTerminator: false)
 			osExit(codeId) then self.lowerOsExit(codeId, dstRef: dstRef)
+			// P1.5-A1: a function's address (ADRP+ADD via `arm64LeaFuncAddr`), and a call THROUGH a function
+			// value (`blr` via `arm64BranchLinkReg`). The isel PRODUCER Arm64Backend.maxon:1033 noted was
+			// missing — the target ops themselves already exist and are fully wired (encoder/allocator/splitter).
+			funcAddr(resultId, funcName) then self.emit(dstRef, op: TargetOp.arm64LeaFuncAddr(TargetVReg.virtual(resultId), funcName: funcName))
+			callIndirect(resultId, calleeReg, args) then self.lowerCallIndirect(resultId, calleeReg: calleeReg, args: args, dstRef: dstRef)
 		end 'lower'
 	end 'lowerBodyOp'
 
@@ -409,6 +414,8 @@ type StdToArm64Lowering
 			tryCall then panic("lowerStdToArm64: a `tryCall` op appeared as a block terminator (lowering bug — a throwing call is a body op)")
 			errorReturn(retValId, errorFlagId) then self.lowerErrorReturn(retValId, errorFlagId: errorFlagId, dstRef: dstRef, returnType: returnType, asTerminator: true)
 			osExit then panic("lowerStdToArm64: an `osExit` op appeared as a block terminator (lowering bug — a process exit is a body op)")
+			funcAddr then panic("lowerStdToArm64: a `funcAddr` op appeared as a block terminator (lowering bug — a function address is a value-producing body op)")
+			callIndirect then panic("lowerStdToArm64: a `callIndirect` op appeared as a block terminator (lowering bug — an indirect call is a value-producing body op)")
 		end 'lower'
 	end 'lowerTerminatorOp'
 
@@ -736,6 +743,30 @@ type StdToArm64Lowering
 		self.emit(dstRef, op: TargetOp.arm64BranchLink(callee))
 		self.emit(dstRef, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: arm64PhysReg(self.callResultRegister(callee))))
 	end 'lowerCall'
+
+	// Lower a Std `callIndirect` (P1.5-A1): move each argument into its ABI register, `blr` THROUGH the
+	// callee register (`arm64BranchLinkReg` carries `calleeReg` as an explicit USE, so the allocator keeps
+	// the callee address live to the call), then move the x0 return value into the result. The mirror of
+	// `lowerCall`: A1 function values pass INTEGER arguments and return an INTEGER, so the result is x0 and
+	// every argument is a GPR argument register (x0..x5). Per-argument float classification arrives with
+	// floats-in-function-values (the function TYPE would then carry the param types a name-keyed direct
+	// call reads from `calleeParamClasses`).
+	function lowerCallIndirect(resultId ValueId, calleeReg ValueId, args ValueIdArray, dstRef BlockRef)
+		self.emitIndirectCallArgMoves(args, dstRef: dstRef)
+		self.emit(dstRef, op: TargetOp.arm64BranchLinkReg(TargetVReg.virtual(calleeReg)))
+		self.emit(dstRef, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: arm64PhysReg(Arm64IntReturnReg)))
+	end 'lowerCallIndirect'
+
+	// Move each indirect-call argument into its GPR argument register, positionally — the arm64 twin of the
+	// x64 `emitIndirectCallArgMoves`. A1 function values pass INTEGER arguments only, so every argument is a
+	// GPR (x0..x5); the soundness argument is `emitCallArgMoves`' (each `mov argReg, arg_k` is a physical
+	// def liveness forbids to values live across it, so forward-order emission is correct).
+	function emitIndirectCallArgMoves(args ValueIdArray, dstRef BlockRef)
+		for k in 0 upto args.count() 'eachArg'
+			let argId = try args.get(k) otherwise panic("emitIndirectCallArgMoves: args.get OOB at {k}")
+			self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(arm64ArgRegisterAt(k as ParamCount)), srcReg: TargetVReg.virtual(argId)))
+		end 'eachArg'
+	end 'emitIndirectCallArgMoves'
 
 	// The arm64 twin of x64's `lowerTryCall` (P1.4b): args + `bl` as `lowerCall`, then capture BOTH return
 	// registers — the primary value from `callResultRegister(callee)` (**d0** for a float-returning callee,

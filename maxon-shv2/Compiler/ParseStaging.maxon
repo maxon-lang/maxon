@@ -76,6 +76,11 @@ export type FileParseArtifact
 	// — specs/duplicate-typealias.md — so a merge-time collision is not an error the
 	// way a duplicate function is).
 	export var typeAliases as RangedTypeAliasArray
+	// This file's declared FUNCTION typealiases (P1.5-A1), in declaration order. The twin of
+	// `typeAliases`, and positionless + remap-free for the same reasons: nothing reports a diagnostic
+	// against a typealias DECLARATION, and a function alias's return type is stored interner-free (a tag
+	// + a name ByteArray), so `mergeArtifact` folds it by NAME with no id rewrite.
+	export var functionTypeAliases as FunctionTypeAliasArray
 	// This file's declared struct types (`type Point`), in declaration order. The twin of
 	// `typeAliases`, and positionless for the same reason: nothing reports a diagnostic against a
 	// `type` DECLARATION yet. (A duplicate `type` name across files IS a real gap — it is not
@@ -101,6 +106,7 @@ export type FileParseArtifact
 			funcReturnTypes: FuncReturnTypeEntryArray.create(),
 			funcSignatures: FuncSignatureEntryArray.create(),
 			typeAliases: RangedTypeAliasArray.create(),
+			functionTypeAliases: FunctionTypeAliasArray.create(),
 			structTypes: StructLayoutArray.create(),
 			enumTypes: EnumLayoutArray.create(),
 			typeNames: TypeNameInterner.create()
@@ -179,9 +185,10 @@ export type FileParseArtifact
 	// Record a ranged-typealias declaration as this file's contribution to the
 	// project-wide `typeAliases` registry — the same NEVER-touch-Project discipline
 	// `recordFuncReturnType` / `recordFuncSignature` follow.
-	export function recordTypeAlias(alias RangedTypeAlias)
-		self.typeAliases.push(alias)
-	end 'recordTypeAlias'
+	// The typealias arrays (`typeAliases` / `functionTypeAliases`) are PUSHED INTO DIRECTLY by
+	// `Parser.readTypeAliasDeclaration`, which is handed the target array — the real parse passes the
+	// artifact's, the declaration sweep passes its own — so one reader files a ranged alias in one array
+	// and a function alias in the other with no boxed-union hop. `mergeArtifact` folds both into `Project`.
 
 	// Record a declared struct type as this file's contribution to the project-wide `structTypes`
 	// registry — the same NEVER-touch-Project discipline every `record*` above follows.
@@ -238,6 +245,7 @@ export function mergeArtifact(project Project, target MaxonModule, artifact File
 	commitFuncReturnTypes(project, artifact: artifact)
 	commitFuncSignatures(project, artifact: artifact)
 	commitTypeAliases(project, artifact: artifact)
+	commitFunctionTypeAliases(project, artifact: artifact)
 	commitStructTypes(project, artifact: artifact)
 	commitEnumTypes(project, artifact: artifact)
 end 'mergeArtifact'
@@ -281,6 +289,14 @@ function commitTypeAliases(project Project, artifact FileParseArtifact)
 		project.typeAliases.upsert(alias.name, value: alias)
 	end 'each'
 end 'commitTypeAliases'
+
+// Commit the artifact's FUNCTION typealiases into the project registry (P1.5-A1) — the twin of
+// `commitTypeAliases`, a plain upsert and remap-free (a function alias carries no interner ids).
+function commitFunctionTypeAliases(project Project, artifact FileParseArtifact)
+	for alias in artifact.functionTypeAliases 'each'
+		project.functionTypeAliases.upsert(alias.name, value: alias)
+	end 'each'
+end 'commitFunctionTypeAliases'
 
 // Rewrite every file-local `named(id)` that a LATER pass will READ — the module's
 // function return types + param types + per-value name column — to its project-global id. The

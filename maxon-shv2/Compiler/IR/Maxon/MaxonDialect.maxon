@@ -132,6 +132,30 @@ export union MaxonType
 	unresolved
 	structRef(id TypeNameId)
 	string
+	// A non-capturing FUNCTION VALUE (P1.5-A1) — a bare code pointer, no environment. `id` is the
+	// interned name that GOVERNS the value's signature: the FUNCTION's own name for a `functionRef`
+	// (`let f = double` → `function(intern("double"))`), or a function-TYPEALIAS name for a declared
+	// place (`f UnaryOp` → `function(intern("UnaryOp"))`). An indirect call recovers the return type
+	// by that name (`ProgramSignatures.returnTypeOf` / `functionAliasReturnOf`), which is why the id
+	// is a real interned NAME and rides the value column's name slot exactly as `named`/`structRef`
+	// do — it interns, remaps and hashes by the same machinery.
+	//
+	// It is its OWN arm, NEVER `named`, for the identical reason `structRef`/`string` are: the five
+	// rules that read `named` (`typeClassOf`, `tagIsIntegral`, `typeTagName`, `notOperatorFor`,
+	// `valueTagToStdType`) all treat it as a ranged INT, and filing a function under `named` would
+	// make `f + 1`, `return f` from an `ExitCode` function and `not f` all compile as integer
+	// arithmetic on a code pointer. A function is `TypeClass.function`, agreeing only with another
+	// function value (which is what makes a function value assignable to a function-typed place and
+	// nothing else — the E3005 discipline).
+	//
+	// Its width is a machine word (a `.text` address), assigned at the Maxon→Std boundary
+	// (`valueTagToStdType` → i64) exactly as every other arm's is, so MaxonType stays width-free. It
+	// carries no ownership: a code pointer is never allocated, refcounted or dropped.
+	//
+	// ⚠ APPENDED AT THE END OF THE UNION, past `string`, per the band-append invariant — the same
+	// range arms (`boolean to float`, `exitCode to unresolved`) that guard `structRef`/`string`
+	// placement guard this one, and appending past the tail is the only placement the compiler checks.
+	function(id TypeNameId)
 end 'MaxonType'
 
 export typealias MaxonTypeArray = Array with MaxonType
@@ -193,6 +217,11 @@ export enum ValueTypeTag
 	// every other append here is: `unresolved to void` and `named to exitCode` are range arms, and a
 	// range adopts whatever is inserted between its endpoints without a word.
 	string
+	// The tag of a non-capturing FUNCTION VALUE — a pointer to a `.text` code address (see MaxonType's
+	// `function` arm for why it is not `named`). APPENDED AT THE END, past `string`, for the same
+	// reason every other append here is: `unresolved to void` and `named to exitCode` are range arms,
+	// and a range adopts whatever is inserted between its endpoints without a word.
+	function
 end 'ValueTypeTag'
 
 export typealias ValueTypeTagArray = Array with ValueTypeTag
@@ -210,6 +239,7 @@ export function maxonTypeTag(t MaxonType) returns ValueTypeTag
 		unresolved gives ValueTypeTag.unresolved
 		structRef gives ValueTypeTag.structRef
 		string gives ValueTypeTag.string
+		function gives ValueTypeTag.function
 	end 'k'
 end 'maxonTypeTag'
 
@@ -225,6 +255,11 @@ export function typeNameIdOf(t MaxonType) returns TypeNameId
 	return match t 'k'
 		named(id) gives id
 		structRef(id) gives id
+		// A function value's `id` is the interned NAME governing its signature (see MaxonType's
+		// `function` arm), so it rides the name column exactly as `named`/`structRef` do — which is
+		// what lets it intern, remap and hash by the same machinery. It is NOT collapsed into the
+		// `named to structRef` range: `exitCode`/`unresolved` and now `string` sit between them.
+		function(id) gives id
 		boolean to float gives UnnamedTypeId
 		exitCode to unresolved gives UnnamedTypeId
 		// A String is a builtin with no interned name — its identity is the `string` tag, not a name.
@@ -262,6 +297,10 @@ export function maxonTypeOfTag(tag ValueTypeTag, nameId TypeNameId) returns Maxo
 		// `UnnamedTypeId`). `Parser.parseBinding` is the caller that matters: `let s = "hello"` types
 		// the binding from this.
 		string then return MaxonType.string
+		// A function value rebuilds from its governing name id — the FUNCTION's own name (functionRef)
+		// or a function-typealias name (declared place). `Parser.parseBinding` is the caller that
+		// matters: `let f = double` types the binding from this so `f(21)` can find its return type.
+		function then return MaxonType.function(nameId)
 	end 'k'
 end 'maxonTypeOfTag'
 
@@ -628,6 +667,36 @@ export union MaxonOp
 	// `osWriteStdout(buffer, length)` + `osExit(code)` — the first occupant of the `panicking` band, which
 	// has been declared and empty since M1.
 	panicAbort(message ValueId) = MaxonOpMeta{category: OpCategory.panicking}
+	// --- P1.5-A1: non-capturing function values ---
+	//
+	// ⚠ APPENDED AT THE END OF THE UNION, past `panicAbort`, per the band-append invariant: a mid-union
+	// insert is silently swallowed by any range arm (`globalAddr to storeIndirect`, `literal to
+	// storeIndirect`, `throwError to propagateError`). Their `OpCategory` metadata places each variant
+	// logically, independent of this tail position.
+	//
+	// A named function used as a VALUE — address-of, `let f = double`. `funcName` is identifier TEXT (a
+	// NAME, looked up — not a value), per the MaxonOp header's value/name split. It has NO env, NO heap
+	// and NO effect: a bare code pointer, allocation-free. It lands in `plain` (matched by variant,
+	// standing alone) exactly as `literal`/`stringLiteral` do — NOT in the reserved `closureProducer`
+	// band, which is for A2's `closureCreate`, the op that allocates a heap environment block and is what
+	// a coarse "does this produce a heap closure?" membership test will want. functionRef allocates
+	// nothing, so it is not that.
+	functionRef(result ValueId, funcName ByteArray) = MaxonOpMeta{category: OpCategory.plain}
+	// A call THROUGH a function VALUE — `f(21)`, `h.op(21)`, `pick()(21)`. `callee` is a `ValueId` holding
+	// the code pointer (unlike `call`'s `callee ByteArray` NAME) — the whole reason it is a distinct op. It
+	// has full call-barrier semantics like `call`, so category `callFree` (the same band as `call`/`tryCall`).
+	//
+	// ⚠ **NO `argLabels`/`argRanges` (a DEVIATION from `call`, DELIBERATE).** A1 indirect calls are
+	// POSITIONAL — a function TYPE has no parameter names, so there is nothing to label — and this rung does
+	// not validate an indirect call's arguments, so per-argument labels and spans would be dead weight:
+	// always empty and read by nothing. This mirrors the Std `callIndirect(resultId, calleeReg, args)` it
+	// lowers to, which carries neither. `args` alone is what an indirect call needs.
+	//
+	// ⚠ Its `args` (an `Array with ValueId`) must be BOUND in a SMALL match, never destructured by
+	// `lowerMaxonToStd.lowerOp`'s big one — see `LowerMaxonToStd.lowerIndirectCall` for the bootstrap
+	// miscompile that forces the indirection (a tail-slot `Array` binding in a large match corrupts the
+	// scrutinee's decref). A design fact about how this op is CONSUMED, recorded where it is DECLARED.
+	indirectCall(result ValueId, callee ValueId, args ValueIdArray) = MaxonOpMeta{category: OpCategory.callFree}
 end 'MaxonOp'
 
 // The dual-register error-flag ABI BIAS (P1.4b). The error flag is `0` for "no error in flight" and

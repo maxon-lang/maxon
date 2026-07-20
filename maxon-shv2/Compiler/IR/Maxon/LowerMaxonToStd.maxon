@@ -61,6 +61,10 @@ export function maxonTypeToStdType(ref MaxonType) returns StdType
 		// `String` builtin directly (syntactically, like `Self`), so it is already concrete. Its width
 		// is a machine word (a pointer), assigned one line down by the same table every arm's comes from.
 		string then break 'residue'
+		// A function value is NOT a residue — `Parser.parseTypeReference`/`emitFunctionRef` produce
+		// `MaxonType.function` directly, so it is already concrete. Its width is a machine word (a `.text`
+		// code pointer), assigned one line down by the same table every arm's comes from.
+		function then break 'residue'
 	end 'residue'
 
 	return valueTagToStdType(maxonTypeTag(ref))
@@ -113,6 +117,10 @@ export function valueTagToStdType(tag ValueTypeTag) returns StdType
 		// passed and returned like any other i64. Nothing above this line knows the width, which is the
 		// point: MaxonType stays width-free and the machine word is named exactly once, here.
 		string then return StdType.i64
+		// ⭐ A FUNCTION VALUE IS A POINTER — a `.text` code address. One machine word, in a GPR, passed
+		// and returned like any other i64. Nothing above this line knows the width, which is the point:
+		// MaxonType stays width-free and the machine word is named exactly once, here.
+		function then return StdType.i64
 	end 'collapse'
 end 'valueTagToStdType'
 
@@ -414,6 +422,12 @@ type MaxonToStdLowering
 			tryCall(result, errorFlag, callee, args, argLabels, _) then self.lowerTryCall(result, errorFlag: errorFlag, callee: callee, args: args, argLabels: argLabels, dstBlock: dstBlock)
 			// `panicAbort` expands into `osExit` (the message is validated but not printed — see the helper).
 			panicAbort then self.lowerPanicAbort(dstBlock)
+			// A function VALUE — a `.text` code address (P1.5-A1). Lowers 1:1 to the Std `funcAddr`, the
+			// `.text` twin of `globalAddr`; the `funcName` passes through verbatim.
+			functionRef(result, funcName) then self.stdModule.appendOp(dstBlock, op: StdOp.funcAddr(result, funcName: funcName))
+			// A call THROUGH a function value (P1.5-A1) — lowers to the Std `callIndirect`, the callee value
+			// passing through as the register the call goes through. Positional args, no labels to slot.
+			indirectCall then self.lowerIndirectCall(hlOp, dstBlock: dstBlock)
 			// The error terminators are never body ops.
 			throwError to propagateError then panic("lowerMaxonToStd: an error terminator appeared as a body op (parser bug — throwError/propagateError are always block terminators)")
 		end 'lower'
@@ -438,6 +452,8 @@ type MaxonToStdLowering
 			stringLiteral then panic("lowerMaxonToStd: a `stringLiteral` op appeared as a block terminator (parser bug — a string literal is a value-producing body op, never a terminator)")
 			tryCall then panic("lowerMaxonToStd: a `tryCall` op appeared as a block terminator (parser bug — a throwing call is a value-producing body op, never a terminator)")
 			panicAbort then panic("lowerMaxonToStd: a `panicAbort` op appeared as a block terminator (parser bug — panicAbort is a body op followed by a dead return terminator)")
+			functionRef then panic("lowerMaxonToStd: a `functionRef` op appeared as a block terminator (parser bug — a function reference is a value-producing body op, never a terminator)")
+			indirectCall then panic("lowerMaxonToStd: an `indirectCall` op appeared as a block terminator (parser bug — an indirect call is a value-producing body op, never a terminator)")
 		end 'lower'
 	end 'lowerTerminator'
 
@@ -534,6 +550,30 @@ type MaxonToStdLowering
 
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: callee, args: args))
 	end 'lowerRuntimeCall'
+
+	// Lower a Maxon `indirectCall` to `StdOp.callIndirect` (P1.5-A1). There is NO signature to slot
+	// against — a function TYPE has no parameter names, so the arguments are already in call order (the
+	// parser parsed them positionally, and the op carries no labels). The callee value passes through as
+	// the register the call goes through. Routed through this helper, not constructed inline in `lowerOp`'s
+	// `match` arm, for the same shape `lowerCall` uses: the C# reference miscompiles the SCRUTINEE's decref
+	// when the arm binds a managed array (`args`) and consumes it inline (measured: a `mm_decref` on a
+	// sentinel pointer crashing every `try`/`throw` program's lowering); handing `args` to a function first
+	// is exactly what `call`/`tryCall` do, and it compiles cleanly.
+	// ⚠ It takes the WHOLE `MaxonOp` and RE-MATCHES it here rather than receiving `(result, callee, args)`
+	// destructured by `lowerOp`'s big `match`, and that indirection is NOT gratuitous. The C# reference
+	// (which compiles shv2) MISCOMPILES a `match` arm that BINDS an `Array with …` payload sitting in the
+	// TAIL field slot of its variant, when the arm lives in a large match: it corrupts the SCRUTINEE's
+	// decref and crashes every `try`/`throw` program's lowering with a `mm_decref` on a sentinel pointer.
+	// (`call`/`tryCall` bind `args` safely only because a later `argRanges` field follows it; `indirectCall`
+	// has no trailing field.) Binding `args` in a SMALL dedicated match here sidesteps the reference's bug,
+	// keeps the natural field order, and is a Std→Maxon lowering with no other cost. The self-hosted
+	// compiler will not need it, but the bootstrap does today.
+	function lowerIndirectCall(op MaxonOp, dstBlock IrBlock)
+		match op 'ic'
+			indirectCall(result, callee, args) then self.stdModule.appendOp(dstBlock, op: StdOp.callIndirect(result, calleeReg: callee, args: args))
+			default panic("lowerIndirectCall: expected an `indirectCall` op, got a different MaxonOp variant — `lowerOp` routes only `indirectCall` here")
+		end 'ic'
+	end 'lowerIndirectCall'
 
 	// ⭐ **int→float ARGUMENT WIDENING (F3a)** — the CALL-SITE dual of the `return`/assignment float
 	// coercions the parser already owns, and it lives HERE because this is the first tier that holds a

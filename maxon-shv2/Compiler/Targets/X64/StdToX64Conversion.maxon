@@ -152,7 +152,9 @@ function stdOpOutgoingArgBytes(op StdOp) returns StackSize
 		rdataAddr gives 0
 		// A `tryCall` passes its args in registers (≤6, like `call`); `errorReturn`/`osExit` have no
 		// outgoing args. None reserves stack argument space at this rung.
-		tryCall to osExit gives 0
+		// A `funcAddr` is a register-only `lea`; a `callIndirect` passes its args in registers exactly
+		// like `call`. Neither reserves outgoing stack-argument space at this rung.
+		tryCall to callIndirect gives 0
 	end 'o'
 end 'stdOpOutgoingArgBytes'
 
@@ -700,7 +702,9 @@ type StdToX64Lowering
 				condBranch(condId, _, _) then self.recordFusableCompare(block, condId: condId, fused: fused, floatCmps: floatCmps)
 				const to mod then break 'term'
 				branch to rdataAddr then break 'term'
-				tryCall to osExit then break 'term'
+				// `funcAddr`/`callIndirect` are value-producing body ops, never a block terminator — a
+				// non-`condBranch` terminator fuses nothing, so like every other arm here it breaks (P1.5-A1).
+				tryCall to callIndirect then break 'term'
 			end 'term'
 		end 'eachBlock'
 	end 'computeFusedCmps'
@@ -746,7 +750,12 @@ type StdToX64Lowering
 				// Declining a fusion is always safe. (`rdataAddr` never reaches here — the loop guards on
 				// `clobbersFlags` and it sets none — but it is named rather than swallowed.)
 				div to rdataAddr then break 'isTheCompare'
-				tryCall to osExit then break 'isTheCompare'
+				// `callIndirect` declares `clobbersFlags: true` (it is a call), so it CAN genuinely land here
+				// as the last flag-writer before a branch, exactly as `call`/`tryCall` do — and like them it
+				// is not the compare, so the scan stops and no fusion is recorded (declining is always safe).
+				// `funcAddr` sets no flags (a `lea`), so the loop guard skips it before it reaches here — it
+				// is named rather than swallowed. (P1.5-A1)
+				tryCall to callIndirect then break 'isTheCompare'
 			end 'isTheCompare'
 			return
 		end 'scanBackward'
@@ -809,7 +818,9 @@ type StdToX64Lowering
 			condBranch(condId, _, _) gives self.cmpPreds.contains(condId)
 			const to mod gives false
 			branch to rdataAddr gives false
-			tryCall to osExit gives false
+			// A `funcAddr`/`callIndirect` is never a block terminator — only a `condBranch` gets a
+			// non-false answer here (P1.5-A1).
+			tryCall to callIndirect gives false
 		end 'term'
 	end 'terminatorReadsFusedFlags'
 
@@ -841,6 +852,9 @@ type StdToX64Lowering
 			tryCall(resultId, errorFlagId, callee, args) then self.lowerTryCall(resultId, errorFlagId: errorFlagId, callee: callee, args: args, dstBlock: dstBlock)
 			errorReturn(retValId, errorFlagId) then self.lowerErrorReturn(retValId, errorFlagId: errorFlagId, dstBlock: dstBlock, returnType: returnType, asTerminator: false)
 			osExit(codeId) then self.lowerOsExit(codeId, dstBlock: dstBlock)
+			// P1.5-A1: a function's address (`lea dest, [rip+func]`), and a call THROUGH a function value.
+			funcAddr(resultId, funcName) then self.targetModule.appendOp(dstBlock, op: TargetOp.leaRegFunc(TargetVReg.virtual(resultId), funcName: funcName))
+			callIndirect(resultId, calleeReg, args) then self.lowerCallIndirect(resultId, calleeReg: calleeReg, args: args, dstBlock: dstBlock)
 		end 'lower'
 	end 'lowerBodyOp'
 
@@ -871,6 +885,8 @@ type StdToX64Lowering
 			tryCall then panic("lowerStdToX64: a `tryCall` op appeared as a block terminator (lowering bug — a throwing call is a value-producing body op)")
 			errorReturn(retValId, errorFlagId) then self.lowerErrorReturn(retValId, errorFlagId: errorFlagId, dstBlock: dstBlock, returnType: returnType, asTerminator: true)
 			osExit then panic("lowerStdToX64: an `osExit` op appeared as a block terminator (lowering bug — a process exit is a body op followed by a dead return)")
+			funcAddr then panic("lowerStdToX64: a `funcAddr` op appeared as a block terminator (lowering bug — a function address is a value-producing body op)")
+			callIndirect then panic("lowerStdToX64: a `callIndirect` op appeared as a block terminator (lowering bug — an indirect call is a value-producing body op)")
 		end 'lower'
 	end 'lowerTerminatorOp'
 
@@ -1238,6 +1254,33 @@ type StdToX64Lowering
 		self.targetModule.appendOp(dstBlock, op: TargetOp.callDirect(callee))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: x64PhysReg(self.callResultRegister(callee))))
 	end 'lowerCall'
+
+	// Lower a Std `callIndirect` to the x64 call-through-register sequence (P1.5-A1): move each argument
+	// into its ABI register, `callReg` THROUGH the callee register, then move the R8 return value into the
+	// result. The mirror of `lowerCall` with two differences: the call goes through a register (`callReg`
+	// carries `calleeReg` as an explicit USE, so the allocator keeps the callee address live to the call
+	// in a register the argument moves have not written), and there is no callee NAME to class the result
+	// or arguments against — A1 function values pass INTEGER arguments and return an INTEGER, so the
+	// result is R8 and every argument is a GPR argument register.
+	function lowerCallIndirect(resultId ValueId, calleeReg ValueId, args ValueIdArray, dstBlock IrBlock)
+		self.emitIndirectCallArgMoves(args, dstBlock: dstBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.callReg(TargetVReg.virtual(calleeReg)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: x64PhysReg(X64Register.r8)))
+	end 'lowerCallIndirect'
+
+	// Move each indirect-call argument into its GPR argument register, positionally. A1 function values
+	// pass INTEGER arguments only (a function type's params are int at this rung), so there is no float
+	// classification to do — every argument is a GPR. Per-argument float classification (an XMM argument
+	// to a function value) arrives with floats-in-function-values, which needs the callee's param types the
+	// function TYPE would then carry (a direct call reads them from `calleeParamClasses` by name; an
+	// indirect call has no name). The soundness argument is `emitCallArgMoves`': each `mov argReg, arg_k`
+	// is a physical def liveness forbids to values live across it, so forward-order emission is correct.
+	function emitIndirectCallArgMoves(args ValueIdArray, dstBlock IrBlock)
+		for k in 0 upto args.count() 'eachArg'
+			let argId = try args.get(k) otherwise panic("emitIndirectCallArgMoves: args.get OOB at {k}")
+			self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(argRegisterAt(k as ParamCount)), srcReg: TargetVReg.virtual(argId)))
+		end 'eachArg'
+	end 'emitIndirectCallArgMoves'
 
 	// Lower a throwing `tryCall`: the arguments and `callDirect` exactly as `lowerCall` (via the shared
 	// `emitCallArgMoves`), then capture BOTH return registers — the primary value from
@@ -1664,7 +1707,9 @@ type StdToX64Lowering
 			condBranch(condId, _, _) gives self.settleFloatEqualityCondition(condId)
 			const to mod gives false
 			branch to rdataAddr gives false
-			tryCall to osExit gives false
+			// A `funcAddr`/`callIndirect` is never a block terminator — only a `condBranch` gets a
+			// non-false answer here (P1.5-A1).
+			tryCall to callIndirect gives false
 		end 'term'
 	end 'settleFloatEqualityBranch'
 
@@ -1796,7 +1841,9 @@ type StdToX64Lowering
 			condBranch(condId, thenBlockId, elseBlockId) gives (condId, thenBlockId, elseBlockId)
 			const to mod panic("condBranchFieldsOf: the terminator of block ref {blockRef} is not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			branch to rdataAddr panic("condBranchFieldsOf: the terminator of block ref {blockRef} is not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
-			tryCall to osExit panic("condBranchFieldsOf: the terminator of block ref {blockRef} is not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
+			// A `funcAddr`/`callIndirect` is never a block terminator; like every non-`condBranch`
+			// arm here it cannot occur and panics (P1.5-A1).
+			tryCall to callIndirect panic("condBranchFieldsOf: the terminator of block ref {blockRef} is not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 		end 'term'
 	end 'condBranchFieldsOf'
 

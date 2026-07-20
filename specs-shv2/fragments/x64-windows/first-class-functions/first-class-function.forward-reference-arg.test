@@ -1,0 +1,70 @@
+// Test: first-class-function.forward-reference-arg
+
+typealias Integer = int(i64.min to i64.max)
+typealias UnaryOp = function(Integer) returns Integer
+
+function apply(f UnaryOp, x Integer) returns Integer
+	return f(x)
+end 'apply'
+
+function driver() returns Integer
+	return apply(dbl, x: 21)
+end 'driver'
+
+function dbl(n Integer) returns Integer
+	return n * 2
+end 'dbl'
+
+function main() returns ExitCode
+	return driver()
+end 'main'
+---
+ExitCode: 42
+---
+func @apply {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegReg rcx, rdx
+    x64.callReg rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @driver {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.leaRegFunc rcx, [rip + dbl]
+    x64.movRegImm32 rdx, 21
+    x64.callDirect apply
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @dbl {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.imulRegRegImm32 r8, rcx, 2
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect driver
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

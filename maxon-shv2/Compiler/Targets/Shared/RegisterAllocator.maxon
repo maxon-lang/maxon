@@ -388,6 +388,11 @@ function assertX64CallClobbers()
 	let pool = callerSavedMask()
 	assertOneCallClobber(TargetOp.callDirect(""), name: "callDirect", pool: pool, calleeWitness: X64Register.rbx.rawValue, calleeName: "rbx")
 	assertOneCallClobber(TargetOp.iatCall(0), name: "iatCall", pool: pool, calleeWitness: X64Register.rbx.rawValue, calleeName: "rbx")
+	// P1.5-A1: the register-indirect call carries the SAME caller-saved clobber mask as `callDirect`
+	// (a call destroys the caller-saved set whether its target is a name or a register). Its callee
+	// register (rbx here is just the callee-saved WITNESS the assert checks is NOT clobbered) is an
+	// explicit USE, but the clobber assertion is about `implicitDefs`, which must equal the pool.
+	assertOneCallClobber(TargetOp.callReg(TargetVReg.virtual(0)), name: "callReg", pool: pool, calleeWitness: X64Register.rbx.rawValue, calleeName: "rbx")
 end 'assertX64CallClobbers'
 
 // The arm64 call ops against the arm64 caller-saved pool, with x19 (callee-saved) the drift witness.
@@ -726,6 +731,11 @@ function collectOpHints(op TargetOp, hints ColorHints)
 		// capture, the call-arg pre-move, the return move — are the SHARED `movRegReg` handled above,
 		// not an arm64-band op. So every arm64 arm simply breaks, like the bit / data-section bands.
 		arm64Ret to arm64Syscall then break 'hint'
+		// The P1.5-A1 function-value band carries no COPY hint: `leaRegFunc` is a `lea` (like
+		// `leaRegRdata`) and `callReg` is a call (like `callDirect`) — neither is a move, so no two of
+		// its operands want the same register. Its callee-address use rides `collectReuseHints`' scan
+		// of the operand model, which finds no reuse def and adds nothing.
+		leaRegFunc to callReg then break 'hint'
 	end 'hint'
 end 'collectOpHints'
 
@@ -1441,6 +1451,12 @@ export function colorTargetOp(op TargetOp, alloc Allocation) returns TargetOp
 		// Neither OS-call form names a register operand (their args are pre-moved into x0..), so both
 		// pass through unchanged, exactly like `arm64BranchLink` and x64's `iatCall`.
 		arm64ImportCall to arm64Syscall then return op
+		// --- P1.5-A1 function-value band (x64) ---
+		// `leaRegFunc` colors its GPR dest exactly like `leaRegRdata`/`leaRegGlobal`. `callReg` colors
+		// its callee-address USE exactly like `arm64BranchLinkReg` — NOT a pass-through like
+		// `callDirect`/`iatCall`, which carry no explicit register operand at all.
+		leaRegFunc(dest, funcName) then return TargetOp.leaRegFunc(colorVRegWith(dest, alloc: alloc), funcName: funcName)
+		callReg(reg) then return TargetOp.callReg(colorVRegWith(reg, alloc: alloc))
 	end 'rewrite'
 end 'colorTargetOp'
 

@@ -287,6 +287,14 @@ function recordOpResultClass(op StdOp, column ValueClassColumn, calleeResultClas
 		osAllocPages(resultId, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		// An `.rdata` address is an integer, never float-classed.
 		rdataAddr(resultId, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+		// A `.text` function address is an integer, exactly like `globalAddr`/`rdataAddr` — never
+		// float-classed (P1.5-A1).
+		funcAddr(resultId, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+		// A call THROUGH a function value classes its result GPR: A1 function values return an INTEGER,
+		// captured from R8 (see `lowerCallIndirect`). There is no callee NAME to look a return type up
+		// against as `call`/`tryCall` do — the function TYPE carrying param/return classes arrives with
+		// floats-in-function-values.
+		callIndirect(resultId, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		// The ops that define NOTHING. Named individually rather than collapsed into a range: `StdOp`'s
 		// declaration order interleaves value-defining ops (`param`, `call`) between the non-defining
 		// ones, so a tempting range would span them. Naming each keeps the band-append rule enforcing it.

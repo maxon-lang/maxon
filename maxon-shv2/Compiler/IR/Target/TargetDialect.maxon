@@ -954,6 +954,36 @@ export union TargetOp
 	// `let`, so the mask is inline (`assertArm64CallClobbers` holds it equal to
 	// `arm64CallerSavedMask`).
 	arm64Syscall(number MachineWord) = TargetOpMeta{isMemory: true, isStore: true, isCall: true, implicitUses: 0, implicitDefs: 0x7FFF807F8000FFFF}
+	// --- P1.5-A1: x64 non-capturing function values ---
+	//
+	// ⚠ APPENDED AT THE VERY END OF THE UNION, past the arm64 band, per the band-append invariant every
+	// preceding band documents: every range arm over `TargetOp` stops at or before `leaRegRdata` (x64) or
+	// `arm64Syscall` (arm64), so an op inserted anywhere else would be SILENTLY swallowed and
+	// misclassified. Appending past the last arm makes each stale match fail to compile until it is
+	// consciously extended. These are x64 ops (the isel produces them only for x64); their position after
+	// the arm64 band is the band-append discipline, not a claim they belong to it.
+	//
+	// `lea dest, [rip + disp32]` to a FUNCTION — the `.text` twin of `leaRegRdata` (`.rdata`). It shares
+	// that op's every property: ONE plain def, NO uses, reads no allocatable register (RIP is not
+	// allocatable), sets no flags. The disp32 is emitted ZERO and a `CallFixup` to the named function is
+	// recorded — resolved intra-`.text` by `resolveCallFixups` (NOT the PeWriter's rdata/data path, which
+	// is why it files a `CallFixup` where `leaRegRdata` files an `RdataRelocation`). `funcName` is a name,
+	// not a value, so a `ByteArray`.
+	leaRegFunc(dest TargetVReg, funcName ByteArray) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
+	// Register-indirect call `call reg` (`FF /2`, mod=11) — the twin of `callDirect`, calling THROUGH a
+	// register holding the callee address rather than a fixed target name. `reg` is a genuine value USE
+	// (the callee address must be live at the call), unlike `callDirect`/`iatCall` which carry no explicit
+	// operand.
+	//
+	// ⚠⚠ **THE SAME CLOBBER MASK AS `callDirect`/`iatCall`, AND IT MUST STAY THAT WAY.** A call destroys
+	// the caller-saved set whether the target is a name or a register, so `implicitDefs` is the custom
+	// ABI's caller-saved mask `0xFFFF0FC7` — held equal to `callerSavedMask()` by
+	// `assertCallClobberConsistent` alongside `callDirect`/`iatCall` (the one-fact-one-place guard). The
+	// callee register is a USE, so the liveness census forbids it the caller-saved set only if it is ALSO
+	// live ACROSS the call; live only UP TO the call (the common case), it may sit in an arg register the
+	// arg moves have not yet written. A union-backing literal cannot reference a named `let`, so the mask
+	// is inline and guarded there.
+	callReg(reg TargetVReg) = TargetOpMeta{isMemory: true, isStore: true, isCall: true, implicitUses: 0, implicitDefs: 0xFFFF0FC7}
 end 'TargetOp'
 
 // The memory-access widths the `.data` load/store encoders have. TWO, because two are what the

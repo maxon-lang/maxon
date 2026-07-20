@@ -625,6 +625,28 @@ export union StdOp
 	// target-neutral tier; and it appends at the END of the union, where the append is LOUD. Full
 	// call-barrier metadata: it IS a diverging call once lowered.
 	osExit(codeId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+	// --- P1.5-A1: non-capturing function values ---
+	//
+	// ⚠ APPENDED PAST THE END OF THE UNION (`osExit` was the last variant), which is the band-append
+	// invariant working in the reviewer's favour: every stale `… to osExit` / `branch to osAllocPages`
+	// full-tail range arm now FAILS TO COMPILE until it is consciously extended. The `category` metadata
+	// places each variant logically (a `memory`-band `funcAddr`, a `call`-band `callIndirect`)
+	// independently of this tail position.
+	//
+	// The RIP-relative ADDRESS of a named function — the `.text` twin of `globalAddr` (`.data`) and
+	// `rdataAddr` (`.rdata`): identical operand shape (a `funcName` NAME, one plain def, no value use) and
+	// identical metadata (`isPure: true` — it recomputes an address that cannot change, freely
+	// rematerializable; `isMemory: false` — a `lea` touches no memory). They are distinct ops rather than
+	// one with a section field because the section is the whole difference the relocation kind carries:
+	// `globalAddr`→a `.data` reloc, `rdataAddr`→an `.rdata` one, this→a `.text` function-symbol fixup (x64
+	// `CallFixup`, resolved intra-`.text` by `resolveCallFixups`).
+	funcAddr(resultId ValueId, funcName ByteArray) = StdOpMeta{category: StdOpCategory.memory, role: OpRole.plain, isPure: true, isUnsupportedInInlineBody: false, isMemory: false, isStore: false, isCall: false, clobbersFlags: false, isCmp: false}
+	// A call THROUGH a function VALUE — `resultId = calleeReg(args…)`. `calleeReg` is the SSA value holding
+	// the code pointer (from a `funcAddr`, a param, or a field load), NOT a name — the whole reason it is
+	// distinct from `call`. Metadata identical to `call`: full call-barrier semantics. The x64/arm64
+	// lowering moves each arg into its ABI register, calls THROUGH the callee register (`callReg` /
+	// `arm64BranchLinkReg`), then moves the R8/x0 return value into `resultId`.
+	callIndirect(resultId ValueId, calleeReg ValueId, args ValueIdArray) = StdOpMeta{category: StdOpCategory.call, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 end 'StdOp'
 
 export typealias StdOpArray = Array with StdOp
@@ -717,6 +739,11 @@ export function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 		errorReturn(retValId, errorFlagId) then insertUsePair(referenced, a: retValId, b: errorFlagId)
 		// The exit code is the one value operand `osExit` reads.
 		osExit(codeId) then referenced.insert(codeId)
+		// `funcAddr` reads nothing — its `funcName` is a NAME, not a value (its result is a def), exactly
+		// like `globalAddr`/`rdataAddr`.
+		funcAddr then break 'u'
+		// An indirect call reads the callee register AND its arguments; `resultId` is a def.
+		callIndirect(_, calleeReg, args) then insertUseCalleeAndArgs(referenced, calleeReg: calleeReg, args: args)
 	end 'u'
 end 'collectStdOpUses'
 
@@ -732,6 +759,14 @@ function insertUsePair(referenced StdValueUseSet, a ValueId, b ValueId)
 	referenced.insert(a)
 	referenced.insert(b)
 end 'insertUsePair'
+
+// An indirect call reads its callee register AND every argument. The callee is a value operand (the
+// code pointer), unlike a direct `call` whose callee is a NAME — so it must be inserted alongside the
+// args or the value holding the function pointer would look dead and be pruned.
+function insertUseCalleeAndArgs(referenced StdValueUseSet, calleeReg ValueId, args ValueIdArray)
+	referenced.insert(calleeReg)
+	insertUseArgs(referenced, args: args)
+end 'insertUseCalleeAndArgs'
 
 // `op` with every READ mapped through `subst` — a DENSE column, `subst[v]` being what `v` is
 // rewritten to (and `v` itself where nothing changes). The mirror of `collectStdOpUses`: it
@@ -779,6 +814,12 @@ module function remapStdOpUses(op StdOp, subst ValueIdArray) returns StdOp
 		tryCall(resultId, errorFlagId, callee, args) gives StdOp.tryCall(resultId, errorFlagId: errorFlagId, callee: callee, args: remappedArgs(args, subst: subst))
 		errorReturn(retValId, errorFlagId) gives StdOp.errorReturn(remappedValue(retValId, subst: subst), errorFlagId: remappedValue(errorFlagId, subst: subst))
 		osExit(codeId) gives StdOp.osExit(remappedValue(codeId, subst: subst))
+		// `funcAddr` reports no use (its `funcName` is a name), so it rewrites nothing and is handed back
+		// unchanged — the exact mirror of `collectStdOpUses`'s `globalAddr`/`rdataAddr`/`funcAddr` arms.
+		funcAddr gives op
+		// The exact mirror of `collectStdOpUses`: `callIndirect` rewrites its callee register and its args
+		// (its result is a def).
+		callIndirect(resultId, calleeReg, args) gives StdOp.callIndirect(resultId, calleeReg: remappedValue(calleeReg, subst: subst), args: remappedArgs(args, subst: subst))
 	end 'r'
 end 'remapStdOpUses'
 
