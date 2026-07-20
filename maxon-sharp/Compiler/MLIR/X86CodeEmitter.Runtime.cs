@@ -7280,8 +7280,9 @@ public partial class X86CodeEmitter {
     EmitXorRegReg(X86Register.Rax, X86Register.Rax);
     EmitMovIndirectMemReg(X86Register.Rcx, GtOffStatus, X86Register.Rax); // status = ready
 
-    // ⚠ KNOWN GAP, DELIBERATELY NOT PATCHED HERE — the x86 analogue of the arm64
-    // `--workers>=5` double-schedule (fixed in ARM64CodeEmitter.Runtime.cs's
+    // ⚠ KNOWN GAP — FILED AS maxon-shv2/OPEN.md #66, DELIBERATELY NOT PATCHED HERE.
+    // The x86 analogue of the arm64 `--workers>=5` double-schedule (fixed in
+    // ARM64CodeEmitter.Runtime.cs's
     // `__io_poll_kqueue` / `__gt_timer_check`). This path has the stackBase guard below but
     // NOT the `ioYielded` gate: `__io_submit_*` posts its overlapped read to the SHARED IOCP
     // and only THEN parks, so in that window another M draining the port can reap the
