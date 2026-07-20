@@ -96,6 +96,19 @@ export type FileParseArtifact
 	// This file's LOCAL type-name interner. Its ids are file-local; `mergeArtifact`
 	// folds them into the project interner and remaps this artifact's ids.
 	export var typeNames as TypeNameInterner
+	// ⭐ **THE LOCAL INDEX OF THE FUNCTION CURRENTLY BEING PARSED** — the key `recordValueOrigin` /
+	// `recordParamOrigin` file each value's origin under. It used to be read straight off
+	// `module.funcCount()`, on the assumption that the function being parsed is always the NEXT one to be
+	// pushed (funcCount() == its eventual index). That held while functions were parsed strictly one at a
+	// time — until closure literals (P1.5-A2a), whose lifted top-level function is parsed and pushed in the
+	// MIDDLE of its enclosing function's body. With two functions in flight, `funcCount()` no longer names
+	// either one's final index, and the two would collide on it (the enclosing function's early values and
+	// the closure's values both keyed to the same index — a corrupted origin table, an E5001 pointing at
+	// the wrong source). `parseFunction` now pushes each function up front and stamps this field with the
+	// index it landed at, and `parseClosureExpression` saves/sets/restores it around the lifted body — so
+	// every value is filed under the index its function actually occupies. Zero for the tolerant
+	// declaration sweep, which parses no bodies and records no origins.
+	export var currentFuncIndex as FuncIndex
 
 	export static function create(filePath FilePath) returns FileParseArtifact
 		return Self{
@@ -109,7 +122,8 @@ export type FileParseArtifact
 			functionTypeAliases: FunctionTypeAliasArray.create(),
 			structTypes: StructLayoutArray.create(),
 			enumTypes: EnumLayoutArray.create(),
-			typeNames: TypeNameInterner.create()
+			typeNames: TypeNameInterner.create(),
+			currentFuncIndex: 0
 		}
 	end 'create'
 
@@ -144,27 +158,34 @@ export type FileParseArtifact
 
 	// Record the origin of the value `op` defines (if any) as this file's contribution
 	// to the whole-program `ValueOrigin` table. The current function's LOCAL index is
-	// `self.module.funcCount()`: the parser pushes a function to `module.functions` only
-	// AFTER parsing its whole body (`Parser.parseFunction`), so while a body's ops emit,
-	// the count is exactly the index this function will occupy. A `none`-result op
-	// (`ret`/`retVoid`/`condBranch`/`branch`) defines no value and records nothing.
+	// `self.currentFuncIndex`, stamped by `parseFunction` (and re-stamped by
+	// `parseClosureExpression` around a lifted closure body): the function is pushed to
+	// `module.functions` UP FRONT and this field records the index it landed at, so a closure
+	// parsed in the middle of its enclosing function's body does not make `funcCount()` name
+	// the wrong function. A `none`-result op (`ret`/`retVoid`/`condBranch`/`branch`) defines no
+	// value and records nothing.
 	function recordValueOrigin(op MaxonOp, opIndex OpIndex)
 		match maxonOpResultValue(op) 'result'
 			none then break 'result'
-			value(id) then self.valueOrigins.record(self.module.funcCount(), valueId: id, opIndex: opIndex)
+			value(id) then self.valueOrigins.record(self.currentFuncIndex, valueId: id, opIndex: opIndex)
 		end 'result'
 	end 'recordValueOrigin'
 
 	// Record a PARAMETER's declaration span as this file's contribution to the whole-program
 	// origin table. Called by the parser as it binds each parameter (a param is minted by no
 	// op, so it has no `recordValueOrigin` entry — it needs this separate site). Keyed by the
-	// current function's LOCAL index — `self.module.funcCount()` — for the same reason
-	// `recordValueOrigin` is: the parser pushes a function to `module.functions` only AFTER
-	// parsing its whole body, so while the body (and its parameter bindings) are processed the
-	// count is exactly the index this function will occupy.
+	// current function's LOCAL index — `self.currentFuncIndex` — for `recordValueOrigin`'s reason.
 	export function recordParamOrigin(valueId ValueId, range SourceRange)
-		self.valueOrigins.recordParam(self.module.funcCount(), valueId: valueId, range: range)
+		self.valueOrigins.recordParam(self.currentFuncIndex, valueId: valueId, range: range)
 	end 'recordParamOrigin'
+
+	// Stamp the local index of the function whose body the parser is about to emit into — the value
+	// `recordValueOrigin`/`recordParamOrigin` file every origin under. `parseFunction` calls this with the
+	// index the function was just pushed at; `parseClosureExpression` saves the current value, sets the
+	// lifted closure's index for the body, and restores it afterwards.
+	export function setCurrentFuncIndex(index FuncIndex)
+		self.currentFuncIndex = index
+	end 'setCurrentFuncIndex'
 
 	// Record a function's return type as this file's contribution to the
 	// project-wide `funcReturnTypes` registry. Called by the parser after it

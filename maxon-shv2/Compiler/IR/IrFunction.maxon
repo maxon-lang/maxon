@@ -15,11 +15,13 @@
 //     (M6): ownership lives on values/bindings/signatures + explicit `own.*` ops
 //     (see OwnershipKind in MaxonDialect.maxon), NOT in per-function sidetables.
 //   • The generics / ABI-companion fields (implicitWitnessConstraints →
-//     WhereClause, paramReservations, scopeSlotToAbiParamIndex, closure counters,
+//     WhereClause, paramReservations, scopeSlotToAbiParamIndex,
 //     contentHash, slotMaxonTypes, calleeSaved regs) are omitted until their
-//     milestones (M5 ABI, M13 closures, M14 generics, backend/query chunks) add
+//     milestones (M5 ABI, M14 generics, backend/query chunks) add
 //     them. Keeping them out now avoids dragging the whole generics/backend cone
-//     into the M1 type layer.
+//     into the M1 type layer. (The per-function closure counter is present as of
+//     P1.5-A2a — see `closureSubCounter` — because non-capturing closure literals
+//     lift to top-level functions and need a source-deterministic name.)
 //
 // What remains is the stable cross-phase container the `return 42` slice needs:
 // identity + signature (Maxon + Std shapes) + the per-function `Scope` + the
@@ -57,6 +59,11 @@ export function throwsClauseIsThrowing(clause ThrowsClause) returns bool
 end 'throwsClauseIsThrowing'
 
 export typealias ThrowsClauseArray = Array with ThrowsClause
+
+// The per-function counter that names lifted NON-CAPTURING closure literals (P1.5-A2a). A count with
+// no meaningful upper bound (a function may hold arbitrarily many closures), so the range is wide by
+// the ranged-type convention rather than pinned to a false ceiling.
+export typealias ClosureSubIndex = int(0 to u64.max)
 
 export type IrFunction
 	// --- Common fields (all phases) ---
@@ -146,6 +153,14 @@ export type IrFunction
 	// lint. Defaults true; the analysis lowers it on impure constructs.
 	export var isPure as bool
 
+	// ⭐ **THE PER-FUNCTION CLOSURE COUNTER (P1.5-A2a).** The k-th non-capturing closure literal in this
+	// function's body lifts to a top-level function named `<name>$closure_<k>`; `parseClosureExpression`
+	// reads this value for `k` and post-increments it. Source-deterministic — the same source mints the
+	// same closure names regardless of how many sibling functions parsed before it. Zero for a function
+	// with no closures. A closure body threads its OWN lifted `IrFunction` as the enclosing function, so a
+	// closure nested inside a closure uses THAT function's counter (`<outer>$closure_0$closure_0`).
+	export var closureSubCounter as ClosureSubIndex
+
 	// Create an IrFunction at the Maxon phase. Maxon-phase type fields are
 	// populated; Std-phase fields default. Visibility defaults to `file` so the
 	// parser must positively widen it — synthesized functions stay file-private.
@@ -178,7 +193,8 @@ export type IrFunction
 			varSlotCount: 0,
 			stackSize: 0,
 			outgoingArgSize: 0,
-			isPure: true
+			isPure: true,
+			closureSubCounter: 0
 		}
 	end 'create'
 
@@ -209,7 +225,8 @@ export type IrFunction
 			varSlotCount: 0,
 			stackSize: 0,
 			outgoingArgSize: 0,
-			isPure: true
+			isPure: true,
+			closureSubCounter: 0
 		}
 	end 'createFromStd'
 
@@ -244,7 +261,8 @@ export type IrFunction
 			varSlotCount: src.varSlotCount,
 			stackSize: src.stackSize,
 			outgoingArgSize: src.outgoingArgSize,
-			isPure: src.isPure
+			isPure: src.isPure,
+			closureSubCounter: src.closureSubCounter
 		}
 	end 'shallowCopy'
 

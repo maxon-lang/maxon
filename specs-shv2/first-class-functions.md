@@ -240,8 +240,8 @@ end 'main'
 30
 ```
 
-<!-- disabled-test: first-class-function.closure-in-variable -->
-<!-- P1.5-A2 (closures + escape) -->
+<!-- test: first-class-function.closure-in-variable -->
+<!-- targets: x64-windows, wasm32-wasi -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -255,8 +255,8 @@ end 'main'
 40
 ```
 
-<!-- disabled-test: first-class-function.closure-as-argument -->
-<!-- P1.5-A2 (closures + escape) -->
+<!-- test: first-class-function.closure-as-argument -->
+<!-- targets: x64-windows, wasm32-wasi -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -369,8 +369,8 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: first-class-function.typealias-with-closure -->
-<!-- P1.5-A2 (closures + escape) -->
+<!-- test: first-class-function.typealias-with-closure -->
+<!-- targets: x64-windows, wasm32-wasi -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -841,8 +841,8 @@ end 'main'
 32
 ```
 
-<!-- disabled-test: first-class-function.non-capturing-closure-in-field -->
-<!-- P1.5-A2 (closures + escape) -->
+<!-- test: first-class-function.non-capturing-closure-in-field -->
+<!-- targets: x64-windows, wasm32-wasi -->
 A closure that captures NOTHING is a plain function reference — it has no environment to
 lose — so it is stored in a function-typed field and called like any other. This is the
 half of the boundary that must keep working: it is what a table of handlers is built from.
@@ -1369,8 +1369,8 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: first-class-function.non-capturing-closure-returned -->
-<!-- P1.5-A2 (closures + escape) -->
+<!-- test: first-class-function.non-capturing-closure-returned -->
+<!-- targets: x64-windows, wasm32-wasi -->
 A closure that captures NOTHING is returned freely: it lowers to a plain function reference
 and has no environment to lose. This is what keeps `makeAdder`'s refusal narrow — the check
 keys on carrying an environment, not on being a closure.
@@ -1392,8 +1392,8 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: first-class-function.non-capturing-closure-in-union-payload -->
-<!-- P1.5-A2 (closures + escape) -->
+<!-- test: first-class-function.non-capturing-closure-in-union-payload -->
+<!-- targets: x64-windows, wasm32-wasi -->
 The union payload's accept side: a non-capturing closure rides in an associated value and is
 matched back out.
 ```maxon
@@ -1530,7 +1530,7 @@ error E3099: specs/fragments/first-class-functions/first-class-function.capturin
 ```
 
 <!-- disabled-test: first-class-function.non-capturing-closure-through-ternary -->
-<!-- P1.5-A2 (closures + escape) -->
+<!-- inline conditional expression `a if c else b` (NOT closures) — shv2 does not parse it yet; a separate front-end rung -->
 The accept side of the ternary rule. A closure that captures NOTHING has no environment to
 lose, so it merges through a ternary like any other function value — and the merged result is
 callable, which requires the signature to have survived the merge.

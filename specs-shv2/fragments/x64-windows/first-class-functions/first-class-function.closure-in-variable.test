@@ -1,0 +1,34 @@
+// Test: first-class-function.closure-in-variable
+
+typealias Integer = int(i64.min to i64.max)
+
+function main() returns ExitCode
+	let f = function(x Integer) gives x * 5
+	return f(8)
+end 'main'
+---
+ExitCode: 40
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.leaRegFunc rbx, [rip + main$closure_0]
+    x64.movRegImm32 rcx, 8
+    x64.callReg rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main$closure_0 {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.imulRegRegImm32 r8, rcx, 5
+    x64.popReg rbp
+    x64.ret
+}

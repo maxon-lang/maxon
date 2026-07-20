@@ -1842,6 +1842,27 @@ export type Parser
 	var lastFieldReadValue as ValueId
 	var lastFieldReadBox as ValueId
 	var lastFieldReadOffset as ByteOffset
+	// ⭐ **THE RETURN TYPE OF EVERY NON-CAPTURING CLOSURE LIFTED IN THIS FILE (P1.5-A2a), keyed by its
+	// synthetic name.** A lifted closure's signature is FILE-LOCAL: it never reaches the whole-program
+	// `SignatureIndex` (built from tokens before any body is parsed, and a closure is an EXPRESSION inside a
+	// body, not a top-level declaration the token sweep can see). So an indirect call through a closure
+	// bound to a local (`let f = function(x) gives x*2; f(8)`) cannot recover its return type the way A1's
+	// `functionValueReturnType` recovers a top-level function's — from the index. This map is that recovery:
+	// `parseClosureExpression` files each lift's return type under its `$`-suffixed name (unwritable in
+	// source, so it can never collide with a real function or alias), and `functionValueReturnType` consults
+	// it first. File-scoped, never reset: names are unique per file and a closure value is only ever CALLED
+	// within its own defining function (returning one out hands the caller a function-ALIAS-typed value,
+	// whose return comes from the alias, not from here).
+	var closureReturns as FuncReturnTypeMap
+	// ⭐ **THE ENCLOSING-FUNCTION SCOPES A CLOSURE BODY MUST NOT REACH INTO (P1.5-A2a) — the capture
+	// detector's input.** Empty outside a closure. `parseClosureExpression` pushes the enclosing `Scope` on
+	// entry and pops it on exit, so while a closure body parses this holds the chain of scopes whose
+	// bindings would be CAPTURES. `parseVariableReference` checks it before falling through to the top-level
+	// registries: a name resolving to one of these scopes (an enclosing local, parameter, or self-field
+	// alias) is a capture, refused for A2a and handled for real at A2b. A STACK, not a single scope, so a
+	// closure nested inside a closure detects a capture of any enclosing frame, not just its immediate
+	// parent — which is what stops an outer local silently resolving to a same-named global.
+	var closureCaptureScopes as ScopeArray
 
 	export static function create(tokens TokenArray, filePath FilePath, namespace String, signatures ProgramSignatures) returns Parser
 		return Self{
@@ -1869,7 +1890,9 @@ export type Parser
 			lastFieldReadValid: false,
 			lastFieldReadValue: 0,
 			lastFieldReadBox: 0,
-			lastFieldReadOffset: 0
+			lastFieldReadOffset: 0,
+			closureReturns: FuncReturnTypeMap.create(),
+			closureCaptureScopes: ScopeArray.create()
 		}
 	end 'create'
 
@@ -3466,6 +3489,38 @@ export type Parser
 			self.recordValueType(self.resolveFloatAliasType(paramType))
 		end 'seedParamTypes'
 
+		// `self.valueTags` and `self.valueNameIds` are handed over BY REFERENCE, already seeded with
+		// the parameter types. Every `mintValue` below therefore pushes straight into the function's
+		// own type columns — there is no second array and no copy-back at the end of the body. It is
+		// safe because both are re-created (not cleared) for the next function, so nothing aliases
+		// these afterwards. See IrFunction.valueTags / valueNameIds for what the columns are FOR.
+		var func = IrFunction.create(name, maxonReturnType: returnType, paramCount: paramCount, maxonParamTypes: paramTypes, valueTags: self.valueTags, valueNameIds: self.valueNameIds, returnLine: nameTok.line, throwsTypeName: throwsClause)
+		func.namespace = self.namespace
+		func.visibility = visibility
+		func.sourceFilePath = self.filePath
+		func.nameLine = nameTok.line
+		func.nameColumn = nameTok.column
+
+		// ⭐ **THE FUNCTION IS PUSHED UP FRONT, NOT AT THE END, AND THAT IS WHAT MAKES ValueOrigin CORRECT
+		// UNDER NESTED PARSING (P1.5-A2a).** A non-capturing closure literal lifts to a top-level function
+		// that is parsed and pushed in the MIDDLE of this body (`parseClosureExpression`), so if this
+		// function were pushed only at the END, the closure would take this function's index and every origin
+		// keyed to `funcCount()` mid-body would name the wrong function. Pushing here reserves this
+		// function's final index BEFORE any closure can push after it, and `currentFuncIndex` records it so
+		// `recordValueOrigin`/`recordParamOrigin` (below, in `bindParameters` and every body emit) file
+		// against the right function. For a body with no closures the module order is unchanged — a function
+		// still completes before the next one starts — so this is index-for-index identical to the old
+		// push-at-end for every closure-free program.
+		let funcIndex = self.artifact.module.funcCount()
+		self.artifact.module.pushFunc(func)
+		self.artifact.setCurrentFuncIndex(funcIndex)
+
+		// Create the entry block (registered in func.blockRefs). It also displaces the detached
+		// placeholder `currentBlock` was created with — from here on, every op the parser emits goes to a
+		// block that belongs to a real function.
+		var entry = self.artifact.module.addBlockAt(func, label: b"entry", filePath: self.filePath.toString(), firstLine: nameTok.line)
+		self.currentBlock = entry
+
 		// ⭐ **THE FIELD ALIASES ARE DECLARED BEFORE THE PARAMETERS, AND THE ORDER IS THE E3006
 		// CONTRACT.** Both a parameter and a body local are bound through `declareValueBinding`,
 		// which refuses to displace a self-field alias — so declaring the aliases into the
@@ -3480,27 +3535,10 @@ export type Parser
 		// Bind each parameter name to its reserved ValueId (i for parameter i), so a
 		// body reference resolves straight to the parameter's SSA value — the same
 		// value-substitution model `let`/`var` bindings use. Parameters are immutable
-		// (a reassignment is E2013); mutating a parameter needs a local shadow.
+		// (a reassignment is E2013); mutating a parameter needs a local shadow. Runs after the push +
+		// `setCurrentFuncIndex` above so each parameter's `recordParamOrigin` is filed under this
+		// function's real index.
 		try self.bindParameters(name, paramNames: paramNames, paramTypes: paramTypes, paramRanges: paramRanges)
-
-		// `self.valueTags` and `self.valueNameIds` are handed over BY REFERENCE, already seeded with
-		// the parameter types. Every `mintValue` below therefore pushes straight into the function's
-		// own type columns — there is no second array and no copy-back at the end of the body. It is
-		// safe because both are re-created (not cleared) for the next function, so nothing aliases
-		// these afterwards. See IrFunction.valueTags / valueNameIds for what the columns are FOR.
-		var func = IrFunction.create(name, maxonReturnType: returnType, paramCount: paramCount, maxonParamTypes: paramTypes, valueTags: self.valueTags, valueNameIds: self.valueNameIds, returnLine: nameTok.line, throwsTypeName: throwsClause)
-		func.namespace = self.namespace
-		func.visibility = visibility
-		func.sourceFilePath = self.filePath
-		func.nameLine = nameTok.line
-		func.nameColumn = nameTok.column
-
-		// Create the entry block (registered in func.blockRefs) BEFORE pushing the
-		// function, mirroring the backend's own function-building order. It also displaces
-		// the detached placeholder `currentBlock` was created with — from here on, every op
-		// the parser emits goes to a block that belongs to a real function.
-		var entry = self.artifact.module.addBlockAt(func, label: b"entry", filePath: self.filePath.toString(), firstLine: nameTok.line)
-		self.currentBlock = entry
 
 		self.skipNewlines()
 		// parseStatements threads a "current block" that control-flow statements can
@@ -3512,7 +3550,6 @@ export type Parser
 		try self.consume(TokenKind.end)
 		self.skipOptionalLabel()
 
-		self.artifact.module.pushFunc(func)
 		self.artifact.recordFuncReturnType(name, returnType: returnType)
 		let paramAggregateNames = self.paramAggregateNamesOf(paramTypes)
 		self.artifact.recordFuncSignature(name, signature: FuncSignature.create(paramNames, paramTypes: paramTypes, paramAggregateNames: paramAggregateNames), nameLine: nameTok.line, nameColumn: nameTok.column, sourceFilePath: self.filePath)
@@ -4705,62 +4742,59 @@ export type Parser
 			throw ParseError.returnTypeMismatch(self.giveTypeName(retTag, aggregateName: returnedName), expected: self.giveTypeName(declaredTag, aggregateName: declaredReturnName), line: retTok.line, column: retTok.column)
 		end 'aggregateReturnMismatch'
 
-		// ⭐ **A `returns String` FUNCTION HANDS BACK A UNIFORMLY OWNED HEAP String**, and the caller
-		// drops that result unconditionally (`mintOwnedCallResult`). So the callee must return
-		// something OWNED and must not drop it — two adjustments, in this order, BEFORE the scope drops:
-		//
-		//   • PROMOTE a borrowed return. `return "hi"` is an immortal rdata literal (capacity == -2),
-		//     not owned heap; handed back as-is, the caller would `__mm_decref` read-only data. Copying
-		//     its bytes into a fresh owned record — the same single-`__mm_alloc` fused-record path an
-		//     interpolation builds, with the source as its one part — gives the caller a box it may
-		//     safely drop. `return "{x}"` and `return t` are already owned, so they pass through here.
-		//     This half is return-specific and stays here; the MOVE below is the shared hand-off cleanup.
-		//   • MOVE the owned return OUT of both drop sets — the shared `emitHandoffExitDrops` (the throw
-		//     twin performs the SAME move). It belongs to the caller now: out of `ownedBindings` so
-		//     `emitScopeDrops` does not double-free `return t`, and out of `pendingTempDrops` so the
-		//     interp/promoted temporary is not dropped on the dead path the `ret` leaves behind. The
-		//     `pendingTempDrops` removal is PERMANENT — that list is statement-local and the hand-off
-		//     cleanup drains-and-resets it, so no other path reads it. The `ownedBindings` removal is
-		//     SCOPED to this return's drops and UNDONE after them (the helper's `savedOwnedBindings`,
-		//     restored past `emitScopeDrops`): `ownedBindings` OUTLIVES the `return`, and the returned
-		//     binding may sit in an enclosing block with other LIVE exit edges — a loop body's
-		//     per-iteration fall-through, a `break`/`continue`, a sibling `return` on the other branch —
-		//     whose drops are emitted LATER in the parse and still own it on their runtime path. Removing
-		//     it permanently stripped it from those edges too, so every non-returning iteration of
-		//     `while … 'l' let c = build(i); if … return c end 'l'` leaked its copy — the leak gate's exit
-		//     101 on a program that prints the right answer. `removeFromOwnedBindings` builds a NEW array,
-		//     so the saved list names the untouched original those sibling edges go on to read.
+		try self.emitOwnedValueReturn(retVal, anchor: retTok)
+	end 'parseReturnStatement'
+
+	// ⭐ **EMIT A VALUE `ret` THAT HANDS ITS VALUE TO THE CALLER AS AN OWNED ONE** — the shared tail of a
+	// value `return` and a non-capturing closure body's `gives <expr>` (P1.5-A2a). A closure body IS a
+	// value return (its expression is the lifted function's returned value), so both go through here rather
+	// than each spelling the promotion/reject/drop dance. `anchor` is the token a diagnostic and the span
+	// point at (`return`'s keyword, or the closure's `gives`).
+	//
+	// **A `returns String` FUNCTION HANDS BACK A UNIFORMLY OWNED HEAP String**, and the caller drops that
+	// result unconditionally (`mintOwnedCallResult`). So the callee must return something OWNED and must not
+	// drop it — two adjustments, in this order, BEFORE the scope drops:
+	//
+	//   • PROMOTE a borrowed return. `return "hi"` is an immortal rdata literal (capacity == -2), not owned
+	//     heap; handed back as-is, the caller would `__mm_decref` read-only data. Copying its bytes into a
+	//     fresh owned record — the same single-`__mm_alloc` fused-record path an interpolation builds, with
+	//     the source as its one part — gives the caller a box it may safely drop. `return "{x}"` and
+	//     `return t` are already owned, so they pass through here. This half is return-specific and stays
+	//     here; the MOVE below is the shared hand-off cleanup.
+	//   • MOVE the owned return OUT of both drop sets — the shared `emitHandoffExitDrops` (the throw twin
+	//     performs the SAME move). It belongs to the caller now: out of `ownedBindings` so `emitScopeDrops`
+	//     does not double-free `return t`, and out of `pendingTempDrops` so the interp/promoted temporary is
+	//     not dropped on the dead path the `ret` leaves behind. The `ownedBindings` removal is SCOPED to
+	//     this return's drops and UNDONE after them (the helper's `savedOwnedBindings`), because
+	//     `ownedBindings` OUTLIVES the `return` and the returned binding may sit in an enclosing block with
+	//     other LIVE exit edges whose drops are emitted LATER in the parse and still own it.
+	//
+	// **A RETURNED STRUCT / BOXED UNION MUST BE OWNED — a BORROWED one is refused, not miscompiled.** An
+	// OWNED box carries the provenance bit and is moved out, so exactly one owner drops it. A BORROWED
+	// aggregate (a struct/union parameter, or a re-borrow of one) has an owner ELSEWHERE, so handing the box
+	// back as owned makes two owners free one box: a double free. Consuming or copying a borrowed aggregate
+	// to return it is the cross-call CONSUME half deferred to P1.4b; until then it is a clean reject. A
+	// String is PROMOTED above; a scalar or payload-free enum carries no box and is always fine.
+	//
+	// **THE DROPS GO AFTER THE VALUE, BEFORE THE TERMINATOR.** AFTER the value, because `return p.x + p.y`
+	// READS the box; dropping first would free the memory the loads are about to read. BEFORE the
+	// terminator, because a `ret` ENDS the block. `returned` is already in a register by then.
+	function emitOwnedValueReturn(retVal ValueId, anchor Token) throws ParseError
+		let retTag = self.tagOf(retVal)
 		var returned = retVal
 		if tagIsText(retTag) and not self.valueIsOwnedHeap(returned) 'promoteBorrowed'
-			returned = self.promoteToOwnedString(returned, range: SourceRange.ofToken(retTok))
+			returned = self.promoteToOwnedString(returned, range: SourceRange.ofToken(anchor))
 		end 'promoteBorrowed'
 
-		// ⭐ **A RETURNED STRUCT / BOXED UNION MUST BE OWNED — a BORROWED one is refused, not miscompiled.**
-		// The caller ADOPTS a returned heap box as owned and drops it once (`mintOwnedCallResult`). An OWNED
-		// box (a factory's `return Self{…}`, `return t` from an owned local, `return U.case(x)`) carries the
-		// provenance bit and is moved out below, so exactly one owner drops it. A BORROWED aggregate does
-		// NOT — a struct/union PARAMETER (`function id(a Vec2) returns Vec2 … return a`), or a re-borrow of
-		// one — has an owner ELSEWHERE (the caller of THIS function still holds and drops the original), so
-		// handing the box back as owned makes two owners free one box: a double free. Consuming or copying a
-		// borrowed aggregate to return it is the cross-call CONSUME half deferred to P1.4b; until then it is
-		// a clean reject. A String is PROMOTED above (a copy is cheap and defined); a scalar or payload-free
-		// enum carries no box and is always fine (`valueIsBoxedUnion` is `false` for it).
 		let returnedTag = self.tagOf(returned)
 		if (tagIsStructRef(returnedTag) or self.valueIsBoxedUnion(returned)) and not self.valueIsOwnedHeap(returned) 'borrowedAggregateReturn'
-			throw ParseError.unsupported("returning a borrowed `{typeTagName(returnedTag)}` value — a struct/union parameter (or a re-borrow of one) is a heap box the caller would adopt and free while the borrow's own owner frees it too, a double free. Return an OWNED value; consuming or copying a borrowed aggregate to return it arrives at P1.4b", line: retTok.line, column: retTok.column)
+			throw ParseError.unsupported("returning a borrowed `{typeTagName(returnedTag)}` value — a struct/union parameter (or a re-borrow of one) is a heap box the caller would adopt and free while the borrow's own owner frees it too, a double free. Return an OWNED value; consuming or copying a borrowed aggregate to return it arrives at P1.4b", line: anchor.line, column: anchor.column)
 		end 'borrowedAggregateReturn'
 
-		// ⭐⭐ **THE DROPS GO HERE — AFTER THE VALUE, BEFORE THE TERMINATOR — AND BOTH HALVES ARE LOAD-BEARING.**
-		// AFTER the value, because `return p.x + p.y` READS the box; dropping `p` first would free the memory
-		// the `loadIndirect`s are about to read (a use-after-free that passes today only because the bump
-		// allocator reclaims nothing). BEFORE the terminator, because a `ret` ENDS the block. `returned` is
-		// already in a register — no longer a heap read — which makes the window safe. An OWNED heap return
-		// (String, struct box, or boxed union) is moved out by the shared cleanup, so the caller is its sole
-		// owner; a BORROWED aggregate was refused above and cannot reach here.
-		self.emitHandoffExitDrops(returned, anchor: retTok)
+		self.emitHandoffExitDrops(returned, anchor: anchor)
 
-		self.artifact.emitTerminator(self.currentBlock, op: MaxonOp.ret(returned), range: SourceRange.ofToken(retTok))
-	end 'parseReturnStatement'
+		self.artifact.emitTerminator(self.currentBlock, op: MaxonOp.ret(returned), range: SourceRange.ofToken(anchor))
+	end 'emitOwnedValueReturn'
 
 	// ============================================================================
 	// P1.4b — scalar error handling: throw / try / otherwise / panic
@@ -8908,6 +8942,14 @@ export type Parser
 			return try self.parseTry(func, resultUsed: true)
 		end 'tryExpr'
 
+		// `function(params) gives <expr>` — a CLOSURE LITERAL in value position (P1.5-A2a). `function` is
+		// its own keyword, so it cannot ride the identifier arm below. A NON-capturing closure lifts to a
+		// top-level function and yields a plain `functionRef` value (the A1 machinery); one that captures an
+		// enclosing local is refused (A2b). See `parseClosureExpression`.
+		if self.at(TokenKind.function) 'closureLiteral'
+			return try self.parseClosureExpression(func)
+		end 'closureLiteral'
+
 		// `Self{…}` — a struct literal naming the enclosing type. `Self` is its own KEYWORD token, not
 		// an identifier, so it cannot ride the identifier arm below; and `{` is what tells it from
 		// `Self` in a type position, which never reaches an expression at all.
@@ -10367,6 +10409,14 @@ export type Parser
 	function parseSelfPrimary(func IrFunction) returns ValueId throws ParseError
 		let selfTok = self.current()
 
+		// ⭐ **`self` INSIDE A CLOSURE IS A CAPTURE (P1.5-A2a).** A lifted closure has no receiver — its
+		// ValueId 0 is its first PARAMETER, not the enclosing method's `self` — so resolving `self` here
+		// (which reads the hardcoded receiver slot 0) would read a parameter as a struct box: a silent wrong
+		// answer or crash. It is refused as the capture it is; A2b captures the receiver into the env block.
+		if self.closureCaptureScopes.count() > 0 'capturedSelf'
+			throw ParseError.unsupported("a closure that captures `self` (P1.5-A2b: capturing closures + env block)", line: selfTok.line, column: selfTok.column)
+		end 'capturedSelf'
+
 		// The receiver is required for EITHER destination, so it is established once, here, before
 		// the split — which is also what keeps `self` in a `static function` out of
 		// `parseMethodCall`, whose binding lookup would panic rather than report.
@@ -10946,8 +10996,32 @@ export type Parser
 			return binding.boundValue
 		end 'local'
 
+		// ⭐ **CAPTURE DETECTION (P1.5-A2a).** The name is not one of the CLOSURE's own bindings (the
+		// closure's scope, checked above). If it resolves into an ENCLOSING function's scope, it is a
+		// CAPTURE — refused for A2a. Checked BEFORE the top-level fall-through so an enclosing local that
+		// SHADOWS a same-named global is caught as the capture it is, not silently resolved to the global (a
+		// wrong answer). Outside a closure `closureCaptureScopes` is empty and this is a no-op.
+		try self.rejectIfCaptured(tok)
+
 		return try self.topLevelBindingReference(tok)
 	end 'parseVariableReference'
+
+	// ⭐ **REFUSE A CLOSURE THAT CAPTURES AN ENCLOSING BINDING (P1.5-A2a) — the seam A2b replaces with a
+	// real environment block.** A name is a capture iff it resolves into one of the enclosing scopes a
+	// closure body is nested in (`closureCaptureScopes`) — an enclosing local, parameter, or self-field
+	// alias. References to GLOBALS, top-level `let`/`var`, other FUNCTIONS, and the closure's OWN
+	// parameters are NOT captures (none of them lives in an enclosing `Scope`), so they fall through to the
+	// ordinary resolution untouched. The STACK is walked so a closure nested inside a closure detects a
+	// capture of ANY enclosing frame, not just its immediate parent. A no-op outside a closure (the stack
+	// is empty), so every non-closure call site pays one `count()` read.
+	function rejectIfCaptured(tok Token) throws ParseError
+		for i in 0 upto self.closureCaptureScopes.count() 'eachEnclosing'
+			let enclosing = try self.closureCaptureScopes.get(i) otherwise panic("rejectIfCaptured: closureCaptureScopes.get OOB at {i}")
+			if enclosing.contains(tok.value) 'captured'
+				throw ParseError.unsupported("a closure that captures its enclosing scope (P1.5-A2b: capturing closures + env block)", line: tok.line, column: tok.column)
+			end 'captured'
+		end 'eachEnclosing'
+	end 'rejectIfCaptured'
 
 	// A bare name that is not a local: a top-level constant, a top-level `var`, or nothing.
 	function topLevelBindingReference(tok Token) returns ValueId throws ParseError
@@ -11035,6 +11109,171 @@ export type Parser
 		self.artifact.emitOp(self.currentBlock, op: MaxonOp.functionRef(result, funcName: tok.value), range: SourceRange.ofToken(tok))
 		return result
 	end 'emitFunctionRef'
+
+	// ⭐ **PARSE A CLOSURE LITERAL, LIFTING A NON-CAPTURING ONE TO A TOP-LEVEL FUNCTION (P1.5-A2a).**
+	//
+	// `function(p1 T1, p2 T2) gives <expr>` is an anonymous function written inline. A closure that
+	// captures NOTHING is semantically a plain function reference — it binds no environment to the
+	// enclosing frame — so it lifts to an ordinary top-level function `<enclosing>$closure_<k>` and yields
+	// the SAME `functionRef` value A1 mints for a named function. Everything downstream (the indirect-call
+	// lowering, `funcAddr` → `leaRegFunc`/`callReg`) is then A1's, unchanged — this rung adds NO IR op and
+	// NO backend path. A closure that captures an enclosing local is refused (A2b); the DETECTION is built
+	// here as the seam (`parseVariableReference`/`parseSelfPrimary` check `closureCaptureScopes`).
+	//
+	// The body parses into a FRESH function context — its own scope, value numbering, blocks and type
+	// columns — swapped in around the parse and restored verbatim after, so the enclosing function's parse
+	// is undisturbed. The lift is v1's `parseClosure` (Parser.maxon:17203) shorn of its env/capture
+	// machinery (`closureCreate`/`closureEnvLoad`/`__env`), which is A2b's; the state save/restore is v1's,
+	// adapted to shv2's field set (its `currentFunc`/`inClosure`/`closureOuterScope` become the swapped
+	// per-function columns plus the `closureCaptureScopes` stack, and the `funcCount()`-keyed ValueOrigin
+	// needs the `currentFuncIndex` re-stamp that v1's index model did not).
+	function parseClosureExpression(func IrFunction) returns ValueId throws ParseError
+		let functionTok = try self.consume(TokenKind.function)
+		try self.consume(TokenKind.leftParen)
+
+		// Parse the parameters through the shared `parseFunctionParameters` — `name Type` pairs, the
+		// no-default and MaxRegisterParams rules, and the reserved-name check all apply identically. `_` is
+		// a legal identifier the check accepts (the corpus's `function(_ Integer) gives …`). An UNTYPED
+		// parameter (`function(p) gives …`) is a separate feature — its type is inferred from the call-arg
+		// slot at TypeResolution — and the A2a corpus types every one, so `parseTypeReference` rejecting the
+		// `,`/`)` that follows an omitted type is the correct interim refusal.
+		var paramNames = ByteArrayArray.create()
+		var paramTypes = MaxonTypeArray.create()
+		var paramRanges = SourceRangeArray.create()
+		try self.parseFunctionParameters(paramNames, paramTypes: paramTypes, paramRanges: paramRanges)
+		try self.consume(TokenKind.rightParen)
+		// A struct parameter is re-tagged `structRef` here, exactly as `parseFunction` does — the whole-program
+		// struct registry is complete in the real parse (see `resolveNamedStruct`).
+		paramTypes = self.resolveNamedStructAll(paramTypes)
+		let givesTok = try self.consume(TokenKind.gives)
+
+		// The lifted name — `<enclosing>$closure_<k>`. `$` is unwritable in a Maxon identifier, so the name
+		// can collide with no user function, alias, or OTHER closure (the counter is per enclosing
+		// function). Post-increment so sibling closures get 0, 1, 2, … in source order.
+		let k = func.closureSubCounter
+		func.closureSubCounter = k + 1
+		let closureName = "{String.from(func.name)}$closure_{k}".toByteArray()
+
+		// --- Switch into the lifted function's own parse context. Every per-function column is captured
+		//     here and restored verbatim below; the closure gets fresh ones so the enclosing function's SSA
+		//     numbering, scope, drop sets and blocks are untouched. ---
+		let savedScope = self.scope
+		let savedValueIds = self.valueIds
+		let savedMutableVars = self.mutableVars
+		let savedLoops = self.loops
+		let savedCurrentBlock = self.currentBlock
+		let savedValueTags = self.valueTags
+		let savedValueNameIds = self.valueNameIds
+		let savedValueConsts = self.valueConsts
+		let savedValueConstKnown = self.valueConstKnown
+		let savedValueOwnsHeap = self.valueOwnsHeap
+		let savedOwnedBindings = self.ownedBindings
+		let savedPendingTempDrops = self.pendingTempDrops
+		let savedLastFieldReadValid = self.lastFieldReadValid
+		let savedInMatchArmBody = self.inMatchArmBody
+		let savedFuncIndex = self.artifact.currentFuncIndex
+
+		let paramCount = paramNames.count()
+		// A FRESH scope (not `scope.reset()`) so the enclosing one survives in `savedScope` to be restored;
+		// every other per-body column is re-created exactly as `parseFunction` re-creates it (a stray entry
+		// carried into the closure body would name a value in the ENCLOSING body's SSA space). This mirrors
+		// `parseFunction`'s reset rather than sharing a helper with it: extracting the reassignments into a
+		// method that stores into ~11 aliased `self` array-fields tripped a bootstrap ownership crash
+		// (`mm_decref` in the compiler itself), so the two copies stay inline and the reviewer's
+		// duplication note is answered here rather than by a helper the bootstrap cannot compile.
+		self.scope = Scope.create()
+		self.valueIds = ValueIdRef.create(paramCount)
+		self.mutableVars = VarInfoArray.create()
+		self.ownedBindings = VarInfoArray.create()
+		self.pendingTempDrops = ValueIdArray.create()
+		self.lastFieldReadValid = false
+		self.loops = LoopContextArray.create()
+		self.valueTags = ValueTypeTagArray.create()
+		self.valueNameIds = TypeNameIdArray.create()
+		self.valueConsts = ParsedIntArray.create()
+		self.valueConstKnown = BoolArray.create()
+		self.valueOwnsHeap = BoolArray.create()
+		self.inMatchArmBody = false
+		// The enclosing scope becomes a CAPTURE scope for the duration of the body — a body name resolving
+		// into it (an enclosing local/param/self-field, not the closure's own params) is a capture. Pushed
+		// here, popped just before the restore.
+		self.closureCaptureScopes.push(savedScope)
+
+		// Seed the closure's value-type columns with its parameter types (ids 0..paramCount-1), exactly as
+		// `parseFunction` seeds a function's, so `tagOf(param)` answers the operators before any op runs. A
+		// float-alias parameter is lifted to a genuine `float` tag (`resolveFloatAliasType`), the same care.
+		for paramType in paramTypes 'seedParamTypes'
+			self.recordValueType(self.resolveFloatAliasType(paramType))
+		end 'seedParamTypes'
+
+		// The lifted function, created with a PLACEHOLDER return type — the real one falls out of the body
+		// expression and is patched below. File-private (a closure is never callable across files by name),
+		// and it NEVER throws (the closure grammar has no throws clause).
+		var lifted = IrFunction.create(closureName, maxonReturnType: MaxonReturnType.value(MaxonType.unresolved), paramCount: paramCount, maxonParamTypes: paramTypes, valueTags: self.valueTags, valueNameIds: self.valueNameIds, returnLine: givesTok.line)
+		lifted.namespace = self.namespace
+		lifted.visibility = Visibility.file
+		lifted.sourceFilePath = self.filePath
+		lifted.nameLine = functionTok.line
+		lifted.nameColumn = functionTok.column
+
+		// Push up front — reserving the closure's index AFTER the enclosing function's (which was pushed at
+		// its own start) — and re-stamp `currentFuncIndex` so the body's value origins file under the
+		// closure, not the enclosing function.
+		let closureIndex = self.artifact.module.funcCount()
+		self.artifact.module.pushFunc(lifted)
+		self.artifact.setCurrentFuncIndex(closureIndex)
+
+		let entry = self.artifact.module.addBlockAt(lifted, label: b"entry", filePath: self.filePath.toString(), firstLine: givesTok.line)
+		self.currentBlock = entry
+
+		try self.bindParameters(closureName, paramNames: paramNames, paramTypes: paramTypes, paramRanges: paramRanges)
+
+		// Parse the single body expression, then close the lifted function like a value `return`: the body
+		// IS the closure's returned value, so `emitOwnedValueReturn` promotes a borrowed String to owned and
+		// drains the (single-expression body's) drop sets, exactly as `parseReturnStatement` does. This is
+		// what materializes a bare-string-literal body — shv2's `stringLiteral` already emits a backing op,
+		// so unlike v1 the `ret` never references an unbound value, and the promotion makes it an owned
+		// return the caller can drop (`closure-capture.string-literal-body`).
+		let bodyValue = try self.parseExpression(lifted, block: entry)
+		let bodyType = self.typeOf(bodyValue)
+		try self.emitOwnedValueReturn(bodyValue, anchor: givesTok)
+
+		// Patch the return type now the body is known, and register the lift so it is callable (module +
+		// project signature registries) and its return type is resolvable at an indirect call through a
+		// closure-bound local (`closureReturns`, read by `functionValueReturnType`).
+		let returnType = MaxonReturnType.value(bodyType)
+		lifted.maxonReturnType = returnType
+		self.artifact.recordFuncReturnType(closureName, returnType: returnType)
+		let paramAggregateNames = self.paramAggregateNamesOf(paramTypes)
+		self.artifact.recordFuncSignature(closureName, signature: FuncSignature.create(paramNames, paramTypes: paramTypes, paramAggregateNames: paramAggregateNames), nameLine: functionTok.line, nameColumn: functionTok.column, sourceFilePath: self.filePath)
+		self.closureReturns.upsert(closureName, value: returnType)
+
+		// --- Restore the enclosing function's parse context. ---
+		_ = try self.closureCaptureScopes.pop() otherwise panic("parseClosureExpression: closureCaptureScopes underflow — the enclosing scope pushed at entry is missing")
+		self.scope = savedScope
+		self.valueIds = savedValueIds
+		self.mutableVars = savedMutableVars
+		self.loops = savedLoops
+		self.currentBlock = savedCurrentBlock
+		self.valueTags = savedValueTags
+		self.valueNameIds = savedValueNameIds
+		self.valueConsts = savedValueConsts
+		self.valueConstKnown = savedValueConstKnown
+		self.valueOwnsHeap = savedValueOwnsHeap
+		self.ownedBindings = savedOwnedBindings
+		self.pendingTempDrops = savedPendingTempDrops
+		self.lastFieldReadValid = savedLastFieldReadValid
+		self.inMatchArmBody = savedInMatchArmBody
+		self.artifact.setCurrentFuncIndex(savedFuncIndex)
+
+		// In the ENCLOSING function's value space now: mint the closure VALUE — a `function`-tagged code
+		// pointer governed by the lifted name — and emit the `functionRef` A1 lowers to `funcAddr`. This is
+		// `emitFunctionRef`'s tail minus the throws check (a closure never throws) and the index lookup (the
+		// synthetic name resolves through `closureReturns`, not the whole-program index).
+		let result = self.mintValue(ValueTypeTag.function, nameId: self.artifact.typeNames.intern(closureName))
+		self.artifact.emitOp(self.currentBlock, op: MaxonOp.functionRef(result, funcName: closureName), range: SourceRange.ofToken(functionTok))
+		return result
+	end 'parseClosureExpression'
 
 	// `globalAddr <label>` then `loadIndirect <addr> 0` — the two ops a global's read is.
 	//
@@ -11942,6 +12181,15 @@ export type Parser
 	function functionValueReturnType(callee ValueId) returns MaxonReturnType
 		let name = self.internedName(self.valueNameId(callee))
 
+		// ⭐ **A LIFTED CLOSURE first (P1.5-A2a).** Its return type is FILE-LOCAL — the whole-program index
+		// never saw it (see `closureReturns`) — so an indirect call through a closure bound to a local
+		// (`let f = function(x) gives x*2; f(8)`) recovers it from here. Its `$`-suffixed name is unwritable
+		// in source, so this can shadow no real function or alias; a non-closure name misses and falls
+		// through to the two whole-program lookups below.
+		if let closureReturn = try self.closureReturns.get(name) 'closure'
+			return closureReturn
+		end 'closure'
+
 		match self.signatures.functionAliasOf(name) 'alias'
 			declared(alias) then return self.functionAliasReturnType(alias)
 			undeclared then break 'alias'
@@ -11949,7 +12197,7 @@ export type Parser
 
 		match self.signatures.returnTypeOf(name, into: self.artifact.typeNames) 'fn'
 			declared(returnType) then return returnType
-			undeclared then panic("functionValueReturnType: a `function`-tagged value's governing name '{String.from(name)}' is neither a function alias nor a declared function — every function value is minted from one or the other (emitFunctionRef / parseTypeReference)")
+			undeclared then panic("functionValueReturnType: a `function`-tagged value's governing name '{String.from(name)}' is neither a lifted closure, a function alias, nor a declared function — every function value is minted from one of the three (parseClosureExpression / parseTypeReference / emitFunctionRef)")
 		end 'fn'
 	end 'functionValueReturnType'
 
