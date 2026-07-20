@@ -30,7 +30,7 @@ and the no-binding `otherwise` form decrefs once to release the transfer.
 ## Tests
 
 <!-- disabled-test: propagate-throw-through-local-struct -->
-<!-- P1.4b wave 2c — union self-FIELDS + reload-after-call -->
+<!-- P1.4b wave 2c — constructing a struct with a boxed-union FIELD (`var pendingError as OuterErr`) needs the nested-destructor CONSTRUCT move (E2015 today); labeled union-case args are NOT the blocker (this rung, OPEN #53, adds those, but the struct-field-of-union construct remains unimplemented) -->
 ### Propagating a heap-allocated error through a function holding a local struct
 
 A function creates a local struct, calls a method that throws an
@@ -95,8 +95,7 @@ end 'main'
 20
 ```
 
-<!-- disabled-test: propagate-throw-otherwise-no-binding-decrefs -->
-<!-- needs labeled union-case arguments (`column: 13`) — a pre-existing union-construction gap, its own rung; the no-binding boxed decref this proves is covered positionally by error.otherwise-no-binding-boxed-decref -->
+<!-- test: propagate-throw-otherwise-no-binding-decrefs -->
 ### A binding-less `otherwise` on a heap-allocated error path decrefs once
 
 When a `try ... otherwise` block catches an associated-value error without

@@ -238,7 +238,7 @@ union Pair
 end 'Pair'
 
 function main() returns ExitCode
-	let p = Pair.both("the first heap string is long", "the second heap string is long too")
+	let p = Pair.both("the first heap string is long", b: "the second heap string is long too")
 	return 6
 end 'main'
 ```
@@ -258,7 +258,7 @@ union Pair
 end 'Pair'
 
 function main() returns ExitCode
-	let p = Pair.both("bound first string long enough to heap", "discarded second string also heap")
+	let p = Pair.both("bound first string long enough to heap", b: "discarded second string also heap")
 	match p 'check'
 		none then return 0
 		both(a, _) then print(a)
@@ -488,4 +488,134 @@ end 'main'
 ```
 ```exitcode
 6
+```
+
+<!-- test: labeled-payload-args-two-scalar-fields -->
+A two-field case constructed with a labelled second argument
+(`pair(7, column: 13)`) follows the call-argument rule — the first argument is
+positional, the second is named — and slots each value against the payload field
+its label names. So `line` carries 7 and `column` carries 13, and the match sums
+them to 20. The construct is layout-parallel, not source-parallel: the label is
+the destination, exactly as a struct literal's field name is.
+```maxon
+typealias Code = int(0 to 100)
+
+union LexErr
+	none
+	pair(line Code, column Code)
+end 'LexErr'
+
+function main() returns ExitCode
+	let e = LexErr.pair(7, column: 13)
+	match e 'k'
+		none then return 0
+		pair(line, column) then return (line + column)
+	end 'k'
+end 'main'
+```
+```exitcode
+20
+```
+
+<!-- test: error.payload-second-arg-positional -->
+The payload argument list follows the call-argument rule: the second and later
+arguments must be named. A bare second argument (`pair(7, 13)`) is rejected — the
+same `consumeArgLabel` rule a call obeys.
+```maxon
+typealias Code = int(0 to 100)
+
+union LexErr
+	none
+	pair(line Code, column Code)
+end 'LexErr'
+
+function main() returns ExitCode
+	let e = LexErr.pair(7, 13)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2053: <fragment>:10:25: the second and later arguments must be named ('name: value')
+```
+
+<!-- test: error.payload-first-arg-named -->
+The FIRST payload argument must be positional. A labelled first argument
+(`pair(line: 7, column: 13)`) is rejected — a case's payload is ordered by its
+declaration, so the first slot needs no name to find its place.
+```maxon
+typealias Code = int(0 to 100)
+
+union LexErr
+	none
+	pair(line Code, column Code)
+end 'LexErr'
+
+function main() returns ExitCode
+	let e = LexErr.pair(line: 7, column: 13)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2052: <fragment>:10:22: the first argument cannot be named; only the second and later arguments take 'name:' labels
+```
+
+<!-- test: error.payload-unknown-label -->
+A named payload argument whose label names no payload field of the case
+(`pair(7, bogus: 9)`) is rejected as an unknown field.
+```maxon
+typealias Code = int(0 to 100)
+
+union LexErr
+	none
+	pair(line Code, column Code)
+end 'LexErr'
+
+function main() returns ExitCode
+	let e = LexErr.pair(7, bogus: 9)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3018: <fragment>:10:25: type 'LexErr' has no field named 'bogus'
+```
+
+<!-- test: error.payload-duplicate-label -->
+Filling the same payload slot twice — here `column` positionally-then-by-name is
+avoided, so a genuine repeat (`pair(7, column: 13, column: 14)`) is rejected as a
+duplicate.
+```maxon
+typealias Code = int(0 to 100)
+
+union LexErr
+	none
+	pair(line Code, column Code)
+end 'LexErr'
+
+function main() returns ExitCode
+	let e = LexErr.pair(7, column: 13, column: 14)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3018: <fragment>:10:37: field 'column' of 'LexErr' is initialized twice by this literal
+```
+
+<!-- test: error.payload-missing-arg -->
+Every declared payload slot must be given a value; a union payload has no
+defaults. Omitting `column` (`pair(7)`) is rejected as an uninitialized field.
+```maxon
+typealias Code = int(0 to 100)
+
+union LexErr
+	none
+	pair(line Code, column Code)
+end 'LexErr'
+
+function main() returns ExitCode
+	let e = LexErr.pair(7)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3086: <fragment>:10:17: field 'column' of 'LexErr' is not initialized by this literal, and it has no default value
 ```

@@ -9432,41 +9432,133 @@ export type Parser
 		return self.emitEnumTagLiteral(layout.name, tag: layout.tagOfIndex(index), range: range)
 	end 'parseEnumLiteral'
 
-	// ⭐ **CONSTRUCT A BOXED UNION VALUE** — `Move.walk(Direction.east)`, or a payload-free case of a
-	// boxed union (`Container.empty`). Parses the payload argument list (absent for an arity-0 case),
-	// validates its count against the case's declared arity, and hands off to `emitEnumBox`, which
-	// validates each field's TYPE (rejecting the managed/float ones slice 1 cannot lower) before it
-	// emits a single op.
+	// ⭐ **CONSTRUCT A BOXED UNION VALUE** — `Move.walk(Direction.east)`, `LexErr.pair(7, column: 13)`,
+	// or a payload-free case of a boxed union (`Container.empty`). Parses the payload argument list into
+	// LAYOUT-parallel slot columns (`parsePayloadArgs`), checks every declared slot was filled
+	// (`requireAllPayloadsProvided`), and hands off to `emitEnumBox`, which validates each field's TYPE
+	// (rejecting the managed/float ones slice 1 cannot lower) before it emits a single op.
+	//
+	// ⭐ **THE PAYLOAD ARGUMENT LIST FOLLOWS THE CALL-ARG RULE** — the first argument is positional, the
+	// second and later are named (`consumeArgLabel`) — crossed with the struct literal's slot-by-name: a
+	// named argument lands in the slot whose payload FIELD its label names, whatever position it was written
+	// in. A case's payload is ordered by its declaration, so the first argument needs no name to find its
+	// place; the rest do, exactly as a call's arguments do. This is where the two syntaxes meet, and it is
+	// why `slotBareLocal` is captured per SLOT and not per source position — `emitEnumBox`/`moveInPayload`
+	// reads `argsBareLocal[i]` for the field at slot `i`, so a reordering named argument must poison the
+	// right source (get it wrong and a managed payload's move-in poisons a use-after-move or leaks).
 	function parseEnumBoxConstruct(func IrFunction, layout EnumLayout, caseIndex CaseIndex, caseTok Token, range SourceRange) returns ValueId throws ParseError
+		let payloads = layout.payloadsAt(caseIndex)
 		let arity = layout.payloadArityAt(caseIndex)
 
-		var args = ValueIdArray.create()
-		// Per-argument: was it a bare reference to a local binding (`U.case(t)`)? A MANAGED payload MOVES
-		// its argument in, and only a bare-local RHS can poison a source binding — captured off the token
-		// position, exactly as `parseBinding`'s move-on-bind does (see `rhsWasBareLocalReference`).
-		var argsBareLocal = BoolArray.create()
+		// LAYOUT-parallel columns, the union twin of `parseStructLiteral`'s field columns: `slotValues[i]`
+		// is the value for the payload field the case declares at slot `i`, whatever position/label the
+		// construct wrote it in; `filled[i]` turns an unwritten slot into a missing-argument error rather
+		// than a zero nobody chose; `slotBareLocal[i]` records whether slot `i`'s value was a bare reference
+		// to a local binding — what a managed payload's move-in poisons (`moveInPayload`).
+		var slotValues = ValueIdArray.create()
+		var filled = BoolArray.create()
+		var slotBareLocal = BoolArray.create()
+		for _ in 0 upto arity 'initSlots'
+			slotValues.push(0 as ValueId)
+			filled.push(false)
+			slotBareLocal.push(false)
+		end 'initSlots'
+
 		if self.at(TokenKind.leftParen) 'withArgs'
-			try self.consume(TokenKind.leftParen)
-			while true 'argLoop'
-				// The climber, not `parseExpression`, for `parseStructLiteralFields`' reason: an
-				// argument is parsed INSIDE an expression that already seeded `currentBlock`.
-				let argStart = self.pos
-				args.push(try self.parseBinary(func, minPrec: OrPrecedence))
-				argsBareLocal.push(self.rhsWasBareLocalReference(argStart))
-				if not self.at(TokenKind.comma) 'endArgs'
-					break
-				end 'endArgs'
-				try self.consume(TokenKind.comma)
-			end 'argLoop'
-			try self.consume(TokenKind.rightParen)
+			try self.parsePayloadArgs(func, layout: layout, payloads: payloads, slotValues: slotValues, filled: filled, slotBareLocal: slotBareLocal, caseTok: caseTok)
 		end 'withArgs'
 
-		if args.count() != arity 'arityMismatch'
-			throw ParseError.unsupported("`{layout.kindWord()} {String.from(layout.name)}.{String.from(caseTok.value)}` expects {arity} payload argument(s), got {args.count()}", line: caseTok.line, column: caseTok.column)
-		end 'arityMismatch'
+		try self.requireAllPayloadsProvided(layout, payloads: payloads, filled: filled, caseTok: caseTok)
 
-		return try self.emitEnumBox(layout, caseIndex: caseIndex, args: args, argsBareLocal: argsBareLocal, caseTok: caseTok, range: range)
+		return try self.emitEnumBox(layout, caseIndex: caseIndex, args: slotValues, argsBareLocal: slotBareLocal, caseTok: caseTok, range: range)
 	end 'parseEnumBoxConstruct'
+
+	// Parse the `(pos, label: value, …)` payload argument list into the layout-parallel columns. The caller
+	// has confirmed the `(`; this consumes it through the closing `)`. The FIRST argument is positional and
+	// fills slot 0; every later argument is named and slots by the payload FIELD name it labels
+	// (`payloadSlotFor`). A slot written twice is a duplicate, mirroring `parseStructLiteralFields` — a
+	// payload field IS a field, so the same struct-literal diagnostics fit.
+	function parsePayloadArgs(func IrFunction, layout EnumLayout, payloads PayloadFieldArray, slotValues ValueIdArray, filled BoolArray, slotBareLocal BoolArray, caseTok Token) throws ParseError
+		try self.consume(TokenKind.leftParen)
+
+		// A case that declares NO payload takes no argument LIST — it is written `U.empty`, never `U.empty()`
+		// or `U.empty(x)` (both reference compilers reject the parens). Rejected before any argument is
+		// parsed, because the columns are empty and every slot lookup below would be out of bounds. A
+		// payload-free case with no parens skips this function entirely and constructs a bare-tag box.
+		if payloads.count() == 0 'noPayload'
+			throw ParseError.unsupported("a payload argument list on case '{String.from(caseTok.value)}' of `{layout.kindWord()} {String.from(layout.name)}`, which declares no payload for that case", line: caseTok.line, column: caseTok.column)
+		end 'noPayload'
+
+		var argIndex = 0 as ParamCount
+		while true 'argLoop'
+			// The label token anchors an unknown/duplicate-label diagnostic; captured before `consumeArgLabel`
+			// consumes it, exactly as `parseCallArgs` captures `argFirstTok`.
+			let labelTok = self.current()
+			let label = try self.consumeArgLabel(argIndex)
+			let slot = try self.payloadSlotFor(layout, payloads: payloads, argIndex: argIndex, label: label, labelTok: labelTok)
+
+			let alreadyFilled = try filled.get(slot) otherwise panic("parsePayloadArgs: filled.get OOB at slot {slot} — the columns are sized to the case's arity and payloadSlotFor returns an in-range slot")
+			if alreadyFilled 'duplicate'
+				throw ParseError.duplicateFieldInitializer(String.from(layout.name), fieldName: String.from(label), line: labelTok.line, column: labelTok.column)
+			end 'duplicate'
+
+			// The climber, not `parseExpression`, for `parseStructLiteralFields`' reason: an argument is
+			// parsed INSIDE an expression that already seeded `currentBlock`. The value's start position is
+			// captured first so `rhsWasBareLocalReference` can decide, after the value is parsed, whether it
+			// was a bare local — a managed payload's move-in poisons that source.
+			let valueStart = self.pos
+			let value = try self.parseBinary(func, minPrec: OrPrecedence)
+
+			try slotValues.set(slot, value: value) otherwise panic("parsePayloadArgs: slotValues.set OOB at slot {slot} — the columns are sized to the case's arity")
+			try filled.set(slot, value: true) otherwise panic("parsePayloadArgs: filled.set OOB at slot {slot} — the columns are sized to the case's arity")
+			try slotBareLocal.set(slot, value: self.rhsWasBareLocalReference(valueStart)) otherwise panic("parsePayloadArgs: slotBareLocal.set OOB at slot {slot} — the columns are sized to the case's arity")
+
+			argIndex = argIndex + 1
+
+			if not self.at(TokenKind.comma) 'endArgs'
+				break
+			end 'endArgs'
+			try self.consume(TokenKind.comma)
+		end 'argLoop'
+
+		try self.consume(TokenKind.rightParen)
+	end 'parsePayloadArgs'
+
+	// The layout SLOT a payload argument fills. Argument 0 is positional (`consumeArgLabel` guaranteed it
+	// carries no label) and fills slot 0 in declaration order — the payload twin of a call's first argument
+	// filling parameter 0. A later argument is named and slots by the payload FIELD name it labels; a label
+	// naming no field of this case is an unknown-field error, mirroring `requireFieldIndex`. Slot 0 is in
+	// range because a payload-free case never reaches the argument loop (`parsePayloadArgs` rejects its
+	// parens before any lookup).
+	function payloadSlotFor(layout EnumLayout, payloads PayloadFieldArray, argIndex ParamCount, label ByteArray, labelTok Token) returns CaseIndex throws ParseError
+		if argIndex == 0 'positional'
+			return 0 as CaseIndex
+		end 'positional'
+
+		for i in 0 upto payloads.count() 'each'
+			let field = try payloads.get(i) otherwise panic("payloadSlotFor: payloadsAt returned fewer fields than its own count at {i}")
+			if field.name.equals(label) 'match'
+				return i
+			end 'match'
+		end 'each'
+
+		throw ParseError.unknownField(String.from(layout.name), fieldName: String.from(label), line: labelTok.line, column: labelTok.column)
+	end 'payloadSlotFor'
+
+	// Every declared payload slot must have been given a value. A union payload has NO defaults (unlike a
+	// struct field, so there is no `applyFieldDefaults` step here), which makes an omitted slot always an
+	// error — reported at the FIRST unfilled slot in declaration order, mirroring `requireAllFieldsInitialized`,
+	// so the message is a function of the case rather than of a hash walk. Anchored at the case name.
+	function requireAllPayloadsProvided(layout EnumLayout, payloads PayloadFieldArray, filled BoolArray, caseTok Token) throws ParseError
+		for i in 0 upto payloads.count() 'each'
+			let wasFilled = try filled.get(i) otherwise panic("requireAllPayloadsProvided: filled.get OOB at {i} — the column is sized to the case's arity")
+			if wasFilled 'given'
+				continue
+			end 'given'
+			let field = try payloads.get(i) otherwise panic("requireAllPayloadsProvided: payloadsAt returned fewer fields than its own count at {i}")
+			throw ParseError.fieldNotInitialized(String.from(layout.name), fieldName: String.from(field.name), line: caseTok.line, column: caseTok.column)
+		end 'each'
+	end 'requireAllPayloadsProvided'
 
 	// Emit the box: validate + classify every payload field (reject float/nested-union, type-check each
 	// argument) BEFORE any op, then `__mm_alloc` the `8 + maxArity*8` bytes, store the case TAG at
