@@ -30,7 +30,7 @@ and the no-binding `otherwise` form decrefs once to release the transfer.
 ## Tests
 
 <!-- disabled-test: propagate-throw-through-local-struct -->
-<!-- P1.4b wave 2c DELIVERED the boxed-union struct FIELD this test needs — construct (`Self{pendingError: OuterErr…}`), reassign (`pendingError = …`), scope-exit drop, AND the throw-of-field MOVE-OUT `throw pendingError` requires (shv2 has no `__mm_incref`, so a thrown borrowed field is transferred by nulling its slot; see the boxed-union-field-throw-* cases below, which pin that mechanism on the SAME ownership shapes). This test stays disabled on a SEPARATE, later blocker the original note missed: the BARE method call `bump()` (implicit self) in `run()`. shv2 has no implicit-self method resolution — a bare `bump()` is a free call → E3004. The language needs `<EnclosingType>.<name>` method-name resolution with static-vs-instance receiver handling (oracle-verified: a bare instance `helper()` prepends self, a bare static `mk()` gets no receiver), which is a distinct feature/rung, NOT boxed-union fields. Every other construct here — bare self-field read/write, `throw <self-field>`, propagation via `return try lex.run()` — works today. -->
+<!-- P1.4b wave 2c DELIVERED the boxed-union struct FIELD this test builds on — construct (`Self{pendingError: OuterErr…}`), reassign (`pendingError = …`), scope-exit drop, and the OWNED-LOCAL throw-of-field MOVE-OUT (see boxed-union-field-throw-owned-local). But it stays disabled on TWO separate later blockers, NEITHER of them boxed-union fields: (1) the BARE method call `bump()` (implicit self) in `run()` → E3004 — shv2 has no implicit-self method resolution (the language needs `<EnclosingType>.<name>` resolution with static-vs-instance receiver handling; oracle-verified a bare instance `helper()` prepends self, a bare static `mk()` gets none); (2) `run()` throws its own `pendingError` through a BORROWED `self`, and a borrowed-container field throw is REFUSED until cross-call move tracking / escape analysis (P1.5) — nulling the field through the borrow writes the caller's box, unsound if the caller catches and re-reads (see error.boxed-union-field-throw-borrowed-self below). Both are distinct later rungs. -->
 ### Propagating a heap-allocated error through a function holding a local struct
 
 A function creates a local struct, calls a method that throws an
@@ -174,16 +174,19 @@ end 'main'
 20
 ```
 
-<!-- test: boxed-union-field-throw-borrowed-self -->
-### Throwing a boxed-union self-field through a BORROWED receiver, propagated
+<!-- test: error.boxed-union-field-throw-borrowed-self -->
+### Throwing a boxed-union self-field through a BORROWED receiver is refused
 
-The exact ownership shape of the disabled `propagate-throw-through-local-struct`
-(minus the implicit-self method call it also needs): an instance method throws its
-own boxed-union self-field. `self` is BORROWED — its owner is the caller's `lex`
-local — so the throw moves the box out by nulling the field through the borrow, and
-the caller PROPAGATES (`return try lex.run()`), tearing `lex` down while the nulled
-slot makes its destructor skip the transferred box. The error reaches `main`'s
-handler once, no leak, no double-free.
+An instance method throws its own boxed-union `self`-field. `self` is BORROWED — its
+owner is the caller's local — and shv2 has no `__mm_incref`, so the only transfer is a
+MOVE: nulling the field slot. Through the borrow that nulls the CALLER's box, which is
+sound when the caller then tears the container down (propagation, `return try lex.run()`)
+but a use-after-move when the caller CATCHES and re-reads the field — and nothing at the
+throw site can tell those two callers apart. Until cross-call move tracking (escape
+analysis, P1.5) can, a borrowed-container field throw is refused, the same conservative
+reject `moveOutManagedPayload` makes for a borrowed match-scrutinee. Throwing a boxed-union
+field of an OWNED LOCAL (see `boxed-union-field-throw-owned-local`) IS supported — that
+container dies with its frame, so no surviving caller can read the nulled slot.
 
 ```maxon
 typealias N = int(0 to i64.max)
@@ -205,21 +208,10 @@ type Lex
 	end 'run'
 end 'Lex'
 
-function outer() returns N throws OuterErr
-	var lex = Lex.create()
-	return try lex.run()
-end 'outer'
-
 function main() returns ExitCode
-	let v = try outer() otherwise (e) 'fail'
-		match e 'kind'
-			unterminatedString(line, column) then return (line + column)
-			unexpectedEof(line, column) then return (line + column + 100)
-		end 'kind'
-	end 'fail'
-	return (v + 200)
+	return 0
 end 'main'
 ```
-```exitcode
-20
+```maxoncstderr
+error E2015: specs/fragments/throw-transfers-ownership/error.boxed-union-field-throw-borrowed-self.test:17:3: Unsupported: throwing a boxed-union FIELD of a BORROWED container — a `self`-field in an instance method, whose receiver the CALLER owns. shv2 has no `__mm_incref`, so the throw would MOVE the box out by nulling the field slot, but through the borrow that nulls the CALLER's box: sound if the caller tears the container down, a use-after-move if it CATCHES and re-reads the field. Refused until cross-call move tracking (escape analysis, P1.5) — throw a boxed-union field of an OWNED LOCAL, or a fresh `throw U.case(x)` / caught `(e)` binding
 ```

@@ -555,7 +555,6 @@ type FieldChainStep
 	end 'create'
 end 'FieldChainStep'
 
-
 // --- Ranged-typealias range bounds ---
 //
 // The inclusive bounds each sized numeric type's `.min` / `.max` denotes in a range
@@ -4614,24 +4613,33 @@ export type Parser
 		let errValue = try self.parseExpression(func, block: self.currentBlock)
 		let errorIsBoxed = self.throwsTypeIsBoxedUnion(self.typeOf(errValue))
 
-		// ⭐ **A THROWN BOX MUST BE OWNED — a BORROWED one is either MOVED OUT (a field) or refused.** A boxed
-		// error is handed to the caller through the flag register, which ADOPTS and drops it once. An OWNED box
-		// (a fresh `throw U.case(x)` or a caught `(e)` binding) carries the provenance bit and is moved out
-		// below. A BORROWED box splits two ways:
-		//   • a boxed-union struct/self FIELD read — the CONTAINER owns the box, and the throw TRANSFERS it out
-		//     by MOVE: `moveOutThrownField` nulls the field slot (so the container's `__destruct_<T>` cascade
-		//     skips it) and marks the value owned, so the same owned hand-off below transfers it. shv2 has no
-		//     `__mm_incref` (MmRuntime's ⛔ note), so this MOVE is the only transfer there is (P1.4b wave 2c).
-		//   • anything else borrowed (a `throw <union param>`, or a re-borrow of one) is owned by THIS
-		//     function's CALLER, not by a container this function can null — two owners would free one box, and
-		//     with no clone there is no transfer. A clean reject (the throw twin of `parseReturnStatement`'s
-		//     borrowed-aggregate refusal) until cross-call consume.
+		// ⭐ **A THROWN BOX MUST BE OWNED BY THIS FRAME — a box owned elsewhere is either MOVED OUT of an
+		// OWNED-LOCAL container, or refused.** A boxed error is handed to the caller through the flag register,
+		// which ADOPTS and drops it once. An OWNED box (a fresh `throw U.case(x)` or a caught `(e)` binding)
+		// carries the provenance bit and is moved out below. A box that is NOT owned here splits two ways:
+		//   • a boxed-union FIELD read whose CONTAINER is an OWNED LOCAL of THIS function — the throw TRANSFERS
+		//     it out by MOVE: `moveOutThrownField` nulls the field slot (so the container's `__destruct_<T>`
+		//     cascade skips it) and marks the value owned, so the same owned hand-off below transfers it. Sound
+		//     because the owned-local container dies with this frame — no surviving caller can read the nulled
+		//     slot. shv2 has no `__mm_incref` (MmRuntime's ⛔ note), so this MOVE is the only transfer (wave 2c).
+		//   • anything else NOT owned here — a `throw <union param>` (or a re-borrow of one), OR a boxed-union
+		//     FIELD of a BORROWED container (a `self`-field in an instance method, whose receiver the CALLER
+		//     owns). Two owners would free one box (a double free), and a borrowed-container move-out would null
+		//     a slot the caller may still read after catching (the cross-call move-tracking gap
+		//     `moveOutManagedPayload` refuses a borrowed scrutinee for — a caller that CATCHES and re-reads the
+		//     field observes the hole). A clean reject (the throw twin of `parseReturnStatement`'s
+		//     borrowed-aggregate refusal) until cross-call consume / escape analysis (P1.5).
 		if errorIsBoxed and not self.valueIsOwnedHeap(errValue) 'borrowedThrow'
-			if self.lastFieldReadValid and self.lastFieldReadValue == errValue 'fieldThrow'
+			let thrownIsFieldRead = self.lastFieldReadValid and self.lastFieldReadValue == errValue
+			if thrownIsFieldRead and self.valueIsOwnedHeap(self.lastFieldReadBox) 'fieldThrow'
 				self.moveOutThrownField(errValue, anchor: anchor)
-			end 'fieldThrow' else 'borrowedNonField'
-				throw ParseError.unsupported("throwing a borrowed union value — a union parameter (or a re-borrow of one) is a heap box the caller would adopt and free while the borrow's own owner frees it too, a double free. Throw an OWNED value (a fresh `throw U.case(x)`, a caught `(e)` binding, or a boxed-union FIELD the throw moves out); consuming a borrowed union to throw it arrives with cross-call consume", line: anchor.line, column: anchor.column)
-			end 'borrowedNonField'
+			end 'fieldThrow' else 'borrowedReject'
+				if thrownIsFieldRead 'borrowedField'
+					throw ParseError.unsupported("throwing a boxed-union FIELD of a BORROWED container — a `self`-field in an instance method, whose receiver the CALLER owns. shv2 has no `__mm_incref`, so the throw would MOVE the box out by nulling the field slot, but through the borrow that nulls the CALLER's box: sound if the caller tears the container down, a use-after-move if it CATCHES and re-reads the field. Refused until cross-call move tracking (escape analysis, P1.5) — throw a boxed-union field of an OWNED LOCAL, or a fresh `throw U.case(x)` / caught `(e)` binding", line: anchor.line, column: anchor.column)
+				end 'borrowedField' else 'borrowedNonField'
+					throw ParseError.unsupported("throwing a borrowed union value — a union parameter (or a re-borrow of one) is a heap box the caller would adopt and free while the borrow's own owner frees it too, a double free. Throw an OWNED value (a fresh `throw U.case(x)`, a caught `(e)` binding, or a boxed-union FIELD the throw moves out); consuming a borrowed union to throw it arrives with cross-call consume", line: anchor.line, column: anchor.column)
+				end 'borrowedNonField'
+			end 'borrowedReject'
 		end 'borrowedThrow'
 
 		// ⭐ **THROW TRANSFERS THE BOX OUT OF THE LOCAL DROP SETS — BEFORE the scope drops.** The box is
@@ -4646,18 +4654,18 @@ export type Parser
 		self.artifact.emitTerminator(self.currentBlock, op: MaxonOp.throwError(errValue, errorIsBoxed: errorIsBoxed), range: SourceRange.ofToken(anchor))
 	end 'emitThrowError'
 
-	// ⭐ **MOVE A THROWN BOXED-UNION FIELD OUT OF ITS CONTAINER.** The field READ borrowed the box (its
-	// container owns it); throwing it transfers ownership to the caller. shv2 has no `__mm_incref`, so the
-	// transfer is a MOVE: NULL the slot the value was loaded from (recorded by `emitFieldLoad` in
-	// `managedFieldReads`), so the container's `__destruct_<T>` cascade's null-guard SKIPS it — else the
+	// ⭐ **MOVE A THROWN BOXED-UNION FIELD OUT OF ITS OWNED-LOCAL CONTAINER.** The field READ borrowed the
+	// box (its container owns it); throwing it transfers ownership to the caller. shv2 has no `__mm_incref`,
+	// so the transfer is a MOVE: NULL the slot the value was loaded from (recorded by `emitFieldLoad` in the
+	// `lastFieldRead*` fields), so the container's `__destruct_<T>` cascade's null-guard SKIPS it — else the
 	// container would free the box the caller has just adopted (a double free). Marking the value OWNED then
 	// routes it through the SAME hand-off + `throwError` transfer a fresh `throw U.case(x)` takes. This is the
-	// throw twin of match's `moveOutManagedPayload`, one field-load out. ⚠ **SOUNDNESS BOUNDARY:** for a
-	// borrowed self/param container the null writes THROUGH the borrow into the caller's box, which is sound
-	// while the caller then TEARS THE CONTAINER DOWN (`return try …`, the propagation the corpus spec exercises)
-	// — a caller that instead CATCHES and keeps reading the container would observe the nulled field, the same
-	// cross-call move-tracking gap `moveOutManagedPayload` refuses a borrowed scrutinee for. A container that
-	// is an OWNED LOCAL of THIS function is fully sound (its own scope-exit drop honours the null).
+	// throw twin of match's `moveOutManagedPayload`, one field-load out. **The caller GATES this on an OWNED
+	// LOCAL container** (`valueIsOwnedHeap(lastFieldReadBox)`): such a container dies with this frame, so its
+	// own scope-exit drop honours the null and no surviving caller can read the nulled slot. A BORROWED
+	// container (a `self`-field) is refused at the `borrowedThrow` split above — nulling through the borrow
+	// writes the caller's box, and a caller that catches and re-reads would observe the hole, the cross-call
+	// move-tracking gap resolved at P1.5.
 	//
 	// The null store is an i64 pointer write — a boxed-union field slot holds a machine-word box address
 	// (`fieldStorageType` gives a boxed-union field `integer`), the same width `moveOutManagedPayload` nulls

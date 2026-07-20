@@ -1814,9 +1814,10 @@ export type ProgramSignatures
 	end 'fieldTypeOf'
 
 	// Does field `index` of struct `structName` own DROPPABLE HEAP — a String, a struct, or a
-	// payload-bearing (boxed) union? The question `Parser.rejectManagedStructFields` asks of EVERY field
-	// of EVERY constructed struct: a struct box's drop does not cascade to free such a field, so building
-	// one is refused until Wave 2. It is answered ENTIRELY INSIDE this index — over `self.typeNames`, the
+	// payload-bearing (boxed) union? Drives the struct's `__destruct_<T>` drop CASCADE: every field this
+	// answers `true` for is freed (through its own destructor / decref) when the struct box is torn down.
+	// P1.4b wave 2c folded the boxed-union field into that cascade — earlier waves refused such a field
+	// because the drop did not yet reach it. It is answered ENTIRELY INSIDE this index — over `self.typeNames`, the
 	// interner the layout's types were minted against — so it neither re-interns the field type (no
 	// `adoptType`, unlike `fieldTypeOf`) nor boxes a `DeclaredEnum`/`DeclaredStruct` to decide struct- or
 	// enum-hood: the `contains` guards answer allocation-free, which matters because a scalar field (the
