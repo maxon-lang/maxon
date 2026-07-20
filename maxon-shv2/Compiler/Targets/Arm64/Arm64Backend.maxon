@@ -77,6 +77,7 @@ let Arm64OpMovReg = 0xAA0003E0
 // SOURCE through the Rm field (bit 16) with XZR in the Rn field — the zero register is NOT folded into
 // the opcode, so the source must land at Rm, not Rn.
 let Arm64OpOrn = 0xAA200000
+
 // The XZR register field value in a data-processing op (31 — the same field value SP takes in a
 // load/store base, context deciding which; named apart from `Arm64SpBaseField` for readability).
 let Arm64XzrField = 31
@@ -86,6 +87,7 @@ let Arm64OpAddImm = 0x91000000
 let Arm64OpSubImm = 0xD1000000
 let Arm64ImmShift = 10
 let Arm64ImmMask = 0xFFF
+
 // The `sh` bit (22): a set `sh` shifts the 12-bit immediate left by 12, extending ADD/SUB-immediate
 // reach to a full 24-bit frame/offset in a hi/lo split.
 let Arm64ImmShiftHiBit = 0x400000
@@ -139,16 +141,20 @@ let Arm64OpBcond = 0x54000000
 let Arm64OpCbz = 0xB4000000
 let Arm64OpCbnz = 0xB5000000
 let Arm64OpBlr = 0xD63F0000
+
 // RET returns through x30 (LR); the LR is baked into this fully-formed encoding.
 let Arm64OpRet = 0xD65F03C0
+
 // BRK #0 — a software breakpoint (raises SIGTRAP, terminating the process); the entry stub's guard
 // after the exit primitive. imm16 is 0 (the conventional abort breakpoint), baked into this
 // fully-formed word.
 let Arm64OpBrk = 0xD4200000
+
 // SVC #0 — the Linux supervisor call. imm16 is 0 (AArch64 Linux ignores it and reads the syscall
 // number from x8), baked into this fully-formed word. NEVER emitted for macOS, which forbids raw
 // syscalls and routes every OS primitive through a libSystem GOT import instead.
 let Arm64OpSvc = 0xD4000001
+
 // x8 — where the AArch64 Linux syscall ABI reads the syscall number from. It is inside the
 // caller-saved half `arm64Syscall`'s call clobber declares, so writing it here forbids nothing.
 let Arm64SyscallNumberReg = 8
@@ -169,6 +175,7 @@ let Arm64OpStrB = 0x39000000
 let Arm64OpLdrB = 0x39400000
 let Arm64LoadStoreImm12Shift = 10
 let Arm64LoadStoreImm12Mask = 0xFFF
+
 // Unscaled signed-offset forms (STUR/LDUR, simm9 at bit 12, ±256). Below the 256-byte threshold a
 // spill/reload uses these; at or above it the scaled form is MANDATORY — STUR's 9-bit field silently
 // truncates any offset ≥ 256 and would spill to the wrong slot (M1 trap).
@@ -188,6 +195,7 @@ let Arm64OpStpOffX = 0xA9000000
 let Arm64OpLdpOffX = 0xA9400000
 let Arm64PairImm7Shift = 15
 let Arm64PairImm7Mask = 0x7F
+
 // The STP pre-index / LDP post-index imm7 reaches -512..+504 (scaled by 8). The smaller bound
 // governs both so one threshold decides the compact-vs-split frame form (M1 trap: larger frames use
 // a SUB-sp split).

@@ -53,6 +53,7 @@ let ElfSectionAlign = 8
 // `e_ident`: magic, ELFCLASS64, ELFDATA2LSB, EV_CURRENT, ELFOSABI_SYSV, then 8 padding bytes.
 let ElfIdent = b"\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00"
 let ElfTypeExec = 2
+
 // EM_AARCH64. The ONLY machine this writer emits — there is no `match target.cpu` here (v1's had
 // one, because v1 shipped x86-64-linux too); shv2's ELF writer is arm64-only and says so in its
 // entry guard rather than carrying a dispatch with one live arm.
@@ -91,7 +92,13 @@ let ElfStrtabAlign = 1
 let ElfSymtabFirstGlobal = 1
 
 // A PT_LOAD segment with `p_filesz == 0` is degenerate. The globals prelude is empty for any program
-// with no top-level `var`, so the `.data` segment carries this 8-byte zero tail to stay non-empty.
+// with no top-level `var`, so the `.data` segment is FLOORED at these 8 bytes to stay non-empty.
+//
+// ⚠ A FLOOR, NOT A TAIL — it is `max`, never `+`. `.data`'s size is `p_filesz`/`p_memsz` AND the
+// `sh_size` a section reader believes, so adding 8 unconditionally would over-report the globals area
+// by 8 bytes in every program that HAS globals. That is invisible to the loader (it maps 8 harmless
+// zeros) and NOT invisible to a reader of the section — which is exactly what the `RequiredData` gate
+// grows here.
 let ElfDataSegmentMinBytes = 8
 
 // Write one Elf64_Phdr (56 bytes). Every segment this writer emits keeps `p_vaddr == p_paddr` (there
@@ -126,7 +133,7 @@ end 'writeElfSectionHeader'
 function writeElfSymbol(elf ByteArray, nameOffset MachineWord, info MachineWord, shndx MachineWord, value MachineWord)
 	writeDword(elf, value: nameOffset)
 	elf.push(info and 0xFF)  // st_info
-	elf.push(0)              // st_other (STV_DEFAULT)
+	elf.push(0)  // st_other (STV_DEFAULT)
 	writeWord(elf, value: shndx)
 	writeQword(elf, value: value)
 	writeQword(elf, value: 0)  // st_size — the chunk layout does not record per-function sizes
@@ -134,9 +141,14 @@ end 'writeElfSymbol'
 
 // Append a NUL-terminated name to a string table and return the offset it was placed at. The table
 // must already carry its leading NUL (ELF reserves offset 0 for the empty name).
-function appendElfStringTableName(strtab ByteArray, name String) returns ByteOffset
+//
+// Takes the name as BYTES, not a `String`: a debug symbol's name IS a `ByteArray` (`DebugSymbol.name`)
+// and a section name is a byte literal, so a `String` parameter made the one hot caller round-trip
+// `ByteArray → String → ByteArray` — two heap allocations per debug symbol to hand this function the
+// bytes it already had. `MachoSymtab.build` appends `sym.name` directly for the same reason.
+function appendElfStringTableName(strtab ByteArray, name ByteArray) returns ByteOffset
 	let offset = strtab.count()
-	strtab.append(name.toByteArray())
+	strtab.append(name)
 	strtab.push(0)
 	return offset
 end 'appendElfStringTableName'
@@ -200,6 +212,18 @@ export function writeElf(outputPath FilePath, codeResult CodeResult, target Targ
 	// `.text` begins immediately after the program headers, which is 4-byte aligned for every legal
 	// header count (64 and 56 are both multiples of 4), as AArch64 instructions require.
 	let textFileOffset = headerSize
+
+	// ⚠ THE SECTION HEADER BELOW ADVERTISES `ElfTextAlign`, AND ONLY THE HEADER COUNT MAKES THAT TRUE.
+	// `.text`'s offset is not rounded up to anything — it is wherever the program headers end — so the
+	// advertised `sh_addralign` is a CLAIM about `64 + n*56`, not a property this writer establishes.
+	// At n = 2 it is 176, which is 16-aligned by arithmetic accident; at the n = 3 this file already
+	// plans for (the `.covdata` PT_LOAD at the coverage milestone) it would be 232, and the section
+	// header would then declare an alignment `.text` does not have. Assert rather than re-derive: the
+	// day the count changes, this fails the build instead of shipping a section header that lies.
+	if textFileOffset mod ElfTextAlign != 0 'textMisaligned'
+		panic("writeElf: .text lands at file offset {textFileOffset}, which is not {ElfTextAlign}-aligned, but its section header advertises sh_addralign = {ElfTextAlign} — {programHeaderCount} program headers put it there; either pad .text up to the advertised alignment or lower ElfTextAlign to what the layout provides")
+	end 'textMisaligned'
+
 	let textVAddr = ElfLoadAddr + textFileOffset
 	let rodataFileOffset = textFileOffset + alignUp(codeSize, alignment: ElfSectionAlign)
 	let rodataVAddr = ElfLoadAddr + rodataFileOffset
@@ -214,7 +238,7 @@ export function writeElf(outputPath FilePath, codeResult CodeResult, target Targ
 	// needs; a 64 KiB tail would be v1's allocator baked into a compiler that does not have it.
 	let dataFileOffset = alignUp(codeSegmentSize, alignment: ElfPageSize)
 	let dataVAddr = ElfLoadAddr + dataFileOffset
-	let dataSegmentSize = preludeSize + ElfDataSegmentMinBytes
+	let dataSegmentSize = ElfDataSegmentMinBytes if preludeSize < ElfDataSegmentMinBytes else preludeSize
 
 	// The process entry point. `mainCallFixupOffset` is the entry stub's own `.text` offset (concat
 	// asserts the stub leads `.text`), read from the CodeResult exactly as MachOWriter reads it for
@@ -316,18 +340,18 @@ function writeElfDebugSections(elf ByteArray, codeResult CodeResult, textVAddr M
 	strtab.push(0)
 	var symbolNameOffsets = ByteOffsetArray.create()
 	for sym in codeResult.debugSymbols 'eachSym'
-		symbolNameOffsets.push(appendElfStringTableName(strtab, name: String.from(sym.name)))
+		symbolNameOffsets.push(appendElfStringTableName(strtab, name: sym.name))
 	end 'eachSym'
 
 	// `.shstrtab` — the section names, in the order the headers below are written.
 	var shstrtab = ByteArray.create()
 	shstrtab.push(0)
-	let textNameOffset = appendElfStringTableName(shstrtab, name: ".text")
-	let rodataNameOffset = appendElfStringTableName(shstrtab, name: ".rodata") if hasRodata else 0
-	let dataNameOffset = appendElfStringTableName(shstrtab, name: ".data")
-	let symtabNameOffset = appendElfStringTableName(shstrtab, name: ".symtab")
-	let strtabNameOffset = appendElfStringTableName(shstrtab, name: ".strtab")
-	let shstrtabNameOffset = appendElfStringTableName(shstrtab, name: ".shstrtab")
+	let textNameOffset = appendElfStringTableName(shstrtab, name: b".text")
+	let rodataNameOffset = appendElfStringTableName(shstrtab, name: b".rodata") if hasRodata else 0
+	let dataNameOffset = appendElfStringTableName(shstrtab, name: b".data")
+	let symtabNameOffset = appendElfStringTableName(shstrtab, name: b".symtab")
+	let strtabNameOffset = appendElfStringTableName(shstrtab, name: b".strtab")
+	let shstrtabNameOffset = appendElfStringTableName(shstrtab, name: b".shstrtab")
 
 	// Lay the three tables and the section header table out on an 8-byte cursor.
 	let symtabFileOffset = alignUp(elf.count(), alignment: ElfSectionAlign)
