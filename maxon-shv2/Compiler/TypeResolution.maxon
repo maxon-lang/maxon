@@ -117,12 +117,18 @@ end 'checkStructFieldTypes'
 // param NAMES are untouched (resolution never renames a parameter). A function with
 // no registered signature (none at M5 — the parser records one per function it
 // builds) is left alone rather than fabricated.
+//
+// The pre-erasure `paramAggregateNames` column (OPEN #54 Slice B2) is carried STRAIGHT
+// THROUGH — it is precisely the union/enum identity that resolving `func.maxonParamTypes`
+// destroys (a `named` union collapses to `integer` here), so it must be read off the
+// SIGNATURE (which the parser captured before this pass) and never re-derived from the
+// now-erased param types.
 function syncResolvedSignature(project Project, func IrFunction)
 	if not project.funcSignatures.contains(func.name) 'noSig'
 		return
 	end 'noSig'
 	let sig = try project.funcSignatures.get(func.name) otherwise panic("syncResolvedSignature: contains({String.from(func.name)}) true but get failed")
-	project.funcSignatures.upsert(func.name, value: FuncSignature.create(sig.paramNames, paramTypes: func.maxonParamTypes))
+	project.funcSignatures.upsert(func.name, value: FuncSignature.create(sig.paramNames, paramTypes: func.maxonParamTypes, paramAggregateNames: sig.paramAggregateNames))
 end 'syncResolvedSignature'
 
 function resolveReturnType(project Project, ret MaxonReturnType) returns MaxonReturnType

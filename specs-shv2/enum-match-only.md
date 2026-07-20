@@ -231,6 +231,130 @@ end 'main'
 error E3005: specs/fragments/enum-match-only/error.return-wrong-union.test:15:2: Cannot return 'Palette' from function declared to return 'Shape'
 ```
 
+<!-- test: error.callarg-wrong-union-borrowed -->
+The aggregate-identity check reaches CALL ARGUMENTS, not just returns (OPEN #54 Slice B2). Its subtlety
+for a union is that a `union`/`enum` PARAMETER loses its name before the check runs — `resolveTypes`
+erases the parameter's `named` tag to bare `integer` — so the check reads the name from a pre-erasure
+carrier the parser stashes on the signature (`FuncSignature.paramAggregateNames`), the same carrier the
+struct case does not need because a `structRef` survives resolution. Here `BoxA` carries a managed
+`String` and `BoxB` a scalar, and `readA` merely BORROWS its argument, so nothing crashes — but handing
+a `BoxB` where a `BoxA` is declared is a type error the callee would read through the wrong layout, and
+it is rejected at the argument (this returned a garbage `1` before the check).
+```maxon
+typealias Integer = int(0 to i64.max)
+
+union BoxA
+	msg(text String)
+end 'BoxA'
+
+union BoxB
+	code(n Integer)
+end 'BoxB'
+
+function readA(e BoxA) returns Integer
+	match e 'k'
+		msg then return 1
+	end 'k'
+end 'readA'
+
+function main() returns ExitCode
+	let bb = BoxB.code(5)
+	return readA(bb) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/enum-match-only/error.callarg-wrong-union-borrowed.test:20:9: argument type mismatch for 'e': expected 'BoxA', got 'BoxB'
+```
+
+<!-- test: error.callarg-wrong-union-consumed -->
+The union identity check is a memory-safety fix, not merely a wrong-answer one, exactly as for structs
+(OPEN #54 Slice B2). At a CONSUMING argument — `WrapA.create` moves its `BoxA` argument into a managed
+field — passing a `BoxB` would store the wrong box and later drop it under `BoxA`'s destructor, which
+expects a `String`-carrying case and would free `BoxB`'s scalar as a heap pointer: a wild free the
+scalar tag check cannot see (both unions erase to `integer`). Union identity is the interned name, EXACT
+— a union is never a subtype of another — and the check is at the call argument, so it is caught
+regardless of ownership.
+```maxon
+typealias Integer = int(0 to i64.max)
+
+union BoxA
+	msg(text String)
+end 'BoxA'
+
+union BoxB
+	code(n Integer)
+end 'BoxB'
+
+type WrapA
+	export var inner as BoxA
+
+	static function create(inner BoxA) returns Self
+		return Self{inner: inner}
+	end 'create'
+end 'WrapA'
+
+function main() returns ExitCode
+	let b = BoxB.code(7)
+	let w = WrapA.create(b)
+	return 0 as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/enum-match-only/error.callarg-wrong-union-consumed.test:22:10: argument type mismatch for 'inner': expected 'BoxA', got 'BoxB'
+```
+
+<!-- test: error.callarg-int-to-union -->
+An aggregate meets a SCALAR: passing a bare `int` where a union is declared is a conflict too, because
+`ValueTypeTag.named` is overloaded — a boxed union and a ranged-int alias share it — so the erased
+`integer` parameter would agree with an integer argument on the tag alone. The identity check names the
+scalar the argument actually is (`got 'int'`), not the union it was supposed to be.
+```maxon
+typealias Integer = int(0 to i64.max)
+
+union BoxA
+	msg(text String)
+end 'BoxA'
+
+function takesBoxA(e BoxA) returns Integer
+	match e 'k'
+		msg then return 1
+	end 'k'
+end 'takesBoxA'
+
+function main() returns ExitCode
+	return takesBoxA(7) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/enum-match-only/error.callarg-int-to-union.test:15:9: argument type mismatch for 'e': expected 'BoxA', got 'int'
+```
+
+<!-- test: callarg-union-same-type -->
+The mirror of the rejections above: passing the SAME union the parameter declares COMPILES and runs, so
+the identity check does not over-reject a correct call. `readA(BoxA.num(42))` returns 42.
+```maxon
+typealias Integer = int(0 to i64.max)
+
+union BoxA
+	msg(text String)
+	num(n Integer)
+end 'BoxA'
+
+function readA(e BoxA) returns Integer
+	match e 'k'
+		msg then return 1
+		num(n) then return n
+	end 'k'
+end 'readA'
+
+function main() returns ExitCode
+	return readA(BoxA.num(42)) as ExitCode
+end 'main'
+```
+```exitcode
+42
+```
+
 <!-- test: error.default-without-throws -->
 ```maxon
 enum Color

@@ -235,10 +235,14 @@ end 'implicitNarrowingMessage'
 // the DECLARED type's destructor: a wild free.
 //
 // It lives HERE, beside `checkDeclaredType`, because it is a coercion-site type rule and a rule with
-// two homes drifts. The NAME-EXTRACTION legitimately differs by tier — the parser resolves an id
-// against its file-local interner and consults its signature index for the `named` (enum/union) case;
-// SemanticCheck resolves against the merged `project.typeNames` and needs only the `structRef` case —
-// but the COMPARISON RULE is this one function, called by both.
+// two homes drifts. The NAME-EXTRACTION legitimately differs by tier only in WHICH interner it reads —
+// the parser resolves an id against its file-local interner, SemanticCheck against the merged
+// `project.typeNames` — but both handle the SAME two aggregate cases (`structRef` struct, `named`
+// registered union/enum): the parser's `aggregateNameOf` and SemanticCheck's `aggregateNameFor` are
+// full twins. A union PARAMETER is the one place a name is unrecoverable at the SemanticCheck tier
+// (`resolveTypes` erased its `named` to `integer`), so the parser stashes it pre-erasure on the
+// signature (`FuncSignature.paramAggregateNames`, OPEN #54 Slice B2). The COMPARISON RULE is this one
+// function, called by both.
 //
 // `expected`/`got` are aggregate-name results, so an EMPTY one means "not a named aggregate". Two
 // values CONFLICT whenever their aggregate IDENTITIES differ: two DIFFERENT named aggregates (both

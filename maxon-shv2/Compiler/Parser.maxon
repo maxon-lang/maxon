@@ -3419,7 +3419,8 @@ export type Parser
 
 		self.artifact.module.pushFunc(func)
 		self.artifact.recordFuncReturnType(name, returnType: returnType)
-		self.artifact.recordFuncSignature(name, signature: FuncSignature.create(paramNames, paramTypes: paramTypes), nameLine: nameTok.line, nameColumn: nameTok.column, sourceFilePath: self.filePath)
+		let paramAggregateNames = self.paramAggregateNamesOf(paramTypes)
+		self.artifact.recordFuncSignature(name, signature: FuncSignature.create(paramNames, paramTypes: paramTypes, paramAggregateNames: paramAggregateNames), nameLine: nameTok.line, nameColumn: nameTok.column, sourceFilePath: self.filePath)
 	end 'parseFunction'
 
 	// Close a function body. `bodyEnd` is the block its last statement left control in;
@@ -4349,10 +4350,18 @@ export type Parser
 	end 'valueNameId'
 
 	// ⭐ **THE INTERNED NAME OF THE DECLARED AGGREGATE A (tag, nameId) PAIR DENOTES, OR `EmptySourceText`
-	// FOR ANYTHING THAT IS NOT ONE** — a scalar, a ranged-int alias, a String. The `aggregateNameOf`
-	// half of the OPEN #54 identity check, ported from v1's `namedStructOrEnumName`
-	// (SemanticCheck.maxon:2687), which tells a struct/enum name apart from a numeric alias by the same
-	// registry lookup.
+	// FOR ANYTHING THAT IS NOT ONE** — a scalar, a ranged-int alias, a String. The parser-tier half of
+	// the OPEN #54 identity check, ported from v1's `namedStructOrEnumName` (SemanticCheck.maxon:2687),
+	// which tells a struct/enum name apart from a numeric alias by the same registry lookup.
+	//
+	// ⚠ **KEEP IN LOCKSTEP WITH ITS SemanticCheck TWIN `aggregateNameFor`** — the two answer the SAME
+	// question (which tags name an aggregate, and how) on the two interners the two tiers hold (this one
+	// on the file-local `self.artifact.typeNames` + `self.signatures`; the other on the merged
+	// `project.typeNames` + `project.structTypes`/`enumTypes`). The classification MUST match — teach a
+	// new aggregate tag to one and not the other and a value the parser names an aggregate would slip the
+	// call-argument check as a scalar. They cannot share a call (different tier, different interner), so
+	// the safety net is the specs on BOTH sides: `error.return-wrong-union` guards this one,
+	// `error.callarg-wrong-union-*` guards the twin.
 	//
 	// It takes the SCALAR (tag, nameId) pair, never a `MaxonType`, so a coercion site reads it off the
 	// `valueTags`/`valueNameIds` columns (or a declared type's tag/id) and materializes no heap union —
@@ -4385,6 +4394,29 @@ export type Parser
 
 		return EmptySourceText
 	end 'aggregateNameOf'
+
+	// ⭐ **THE PRE-ERASURE UNION/ENUM IDENTITY COLUMN A SIGNATURE CARRIES (OPEN #54 Slice B2)** — one
+	// `ByteArray` per parameter for `FuncSignature.paramAggregateNames`, the interned name of a declared
+	// boxed union/enum parameter and `EmptySourceText` for anything else. Captured HERE, at the real
+	// parse, because this is the last point a union parameter still knows its name: `resolveTypes`
+	// erases its `named` tag to bare `integer` (TypeResolution.resolveNamedType), leaving SemanticCheck's
+	// call-argument check no name to compare. A STRUCT is deliberately left empty — its `structRef(id)`
+	// survives resolution, so the check reads its name off `paramTypes` and the name is never stored
+	// twice. The gate is exactly `tag == named`: a struct is `structRef` (skipped), a scalar or a ranged
+	// alias is not `named` (skipped), and a `named` ranged/float alias yields `EmptySourceText` from
+	// `aggregateNameOf` (not registered), so only a genuine boxed union/enum lands a non-empty entry.
+	function paramAggregateNamesOf(paramTypes MaxonTypeArray) returns ByteArrayArray
+		var names = ByteArrayArray.create()
+		for pt in paramTypes 'each'
+			let tag = maxonTypeTag(pt)
+			if tag == ValueTypeTag.named 'erasableAggregate'
+				names.push(self.aggregateNameOf(tag, nameId: typeNameIdOf(pt)))
+			end 'erasableAggregate' else 'notErasable'
+				names.push(EmptySourceText)
+			end 'notErasable'
+		end 'each'
+		return names
+	end 'paramAggregateNamesOf'
 
 	// ⭐ **DOES `nameId` NAME A RANGED FLOAT ALIAS?** — the F2 fact `named` was too coarse to carry. A
 	// `float(low to high)` alias (`Parser.readTypeAliasDeclaration`) is the ONE `named` type whose VALUE

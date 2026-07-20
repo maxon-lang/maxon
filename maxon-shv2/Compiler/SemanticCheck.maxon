@@ -166,21 +166,30 @@ function checkArgTypes(project Project, func IrFunction, sig FuncSignature, argI
 		let paramTag = maxonTypeTag(paramType)
 		let paramName = try sig.paramNames.get(i) otherwise panic("checkArgTypes: paramNames.get OOB at {i}")
 
-		// ⭐ OPEN #54 Slice B: a DIFFERENT named struct passed where a struct is declared shares the
-		// `structRef` tag, so the `checkDeclaredType` tag check below would ACCEPT it — and at a
-		// CONSUMING argument (a constructor storing it into a field) it is then dropped under the
-		// DECLARED parameter type's destructor: a wild free the tag check cannot see (two structs are
-		// one tag). Identity is the interned name, EXACT — a struct is never a subtype of another. The
-		// comparison RULE is `namedAggregatesConflict`, shared verbatim with the parser's coercion
-		// sites; only the name EXTRACTION is local (resolved against the merged `project.typeNames`).
-		// Additive — the tag check still runs on every path this leaves alone — and it reads the
-		// arg's name column only when the PARAMETER is a struct, so a scalar call allocates nothing.
-		let expectedAggregate = structRefName(project, tag: paramTag, nameId: typeNameIdOf(paramType))
+		// ⭐ OPEN #54 Slice B/B2: a DIFFERENT named aggregate passed where one is declared shares the
+		// scalar tag — two STRUCTS both `structRef`, two boxed UNIONS both erased to `integer` — so the
+		// `checkDeclaredType` tag check below would ACCEPT it, and at a CONSUMING argument (a constructor
+		// storing it into a field) it is then dropped under the DECLARED parameter type's destructor: a
+		// wild free the tag check cannot see. Identity is the interned name, EXACT — an aggregate is never
+		// a subtype of another. The comparison RULE is `namedAggregatesConflict`, shared verbatim with the
+		// parser's coercion sites; only the name EXTRACTION is local.
+		//
+		// A STRUCT parameter keeps its `structRef(id)` through `resolveTypes`, so `aggregateNameFor` reads
+		// its name straight off `paramType` (Slice B). A UNION/ENUM parameter does NOT — `resolveTypes`
+		// erased its `named` tag to bare `integer`, so `aggregateNameFor` returns empty and the name comes
+		// from the signature's pre-erasure `paramAggregateNames` carrier the parser stashed before that
+		// erasure (Slice B2). The ARG side always resolves live, because an argument keeps its `named`/
+		// `structRef` tag (`aggregateNameFor` handles both). Additive — the tag check still runs on every
+		// path this leaves alone — and it reads a name only when the PARAMETER is an aggregate.
+		var expectedAggregate = aggregateNameFor(project, tag: paramTag, nameId: typeNameIdOf(paramType))
+		if expectedAggregate.isEmpty() 'erasedUnionParam'
+			expectedAggregate = try sig.paramAggregateNames.get(i) otherwise panic("checkArgTypes: paramAggregateNames.get OOB at {i} — a signature's param columns (names, types, aggregate names) are built in lockstep")
+		end 'erasedUnionParam'
 		if not expectedAggregate.isEmpty() 'aggregateParam'
 			let argNameId = try func.valueNameIds.get(argId) otherwise panic("checkArgTypes: value v{argId} of function '{String.from(func.name)}' has no recorded type name — the two type columns are minted in lockstep")
-			let gotAggregate = structRefName(project, tag: argTag, nameId: argNameId)
+			let gotAggregate = aggregateNameFor(project, tag: argTag, nameId: argNameId)
 			if namedAggregatesConflict(expectedAggregate, got: gotAggregate) 'aggregateArgMismatch'
-				reportPositioned(project, code: ErrorCode.typeMismatch, message: "argument type mismatch for '{String.from(paramName)}': expected '{String.from(expectedAggregate)}', got '{String.from(gotAggregate)}'", line: callRange.line, column: callRange.column, filePath: filePath)
+				reportPositioned(project, code: ErrorCode.typeMismatch, message: "argument type mismatch for '{String.from(paramName)}': expected '{String.from(expectedAggregate)}', got '{aggregateArgDisplay(gotAggregate, tag: argTag)}'", line: callRange.line, column: callRange.column, filePath: filePath)
 				continue
 			end 'aggregateArgMismatch'
 		end 'aggregateParam'
@@ -201,19 +210,48 @@ function checkArgTypes(project Project, func IrFunction, sig FuncSignature, argI
 	end 'eachArg'
 end 'checkArgTypes'
 
-// The interned name of the declared STRUCT a (tag, nameId) pair denotes, or `EmptySourceText` for
-// anything that is not one — the SemanticCheck half of the OPEN #54 identity check, and the parser's
-// `aggregateNameOf` twin. Two deliberate differences, each the contract's: it is scoped to `structRef`
-// (a union parameter is ERASED to `integer` before this pass runs — TypeResolution — so its name is
-// gone and its arg-side check is Slice B2), and it resolves against the MERGED `project.typeNames`
-// (an arg's name id was remapped project-global at merge — mergeArtifact) rather than a file-local
-// interner. The "none" answer is `EmptySourceText`, which `namedAggregatesConflict` reads off `isEmpty()`.
-function structRefName(project Project, tag ValueTypeTag, nameId TypeNameId) returns ByteArray
-	if not tagIsStructRef(tag) 'notStruct'
+// The interned name of the declared STRUCT or boxed UNION/ENUM a (tag, nameId) pair denotes, or
+// `EmptySourceText` for anything that is not one — the SemanticCheck half of the OPEN #54 identity
+// check, and the full twin of the parser's `aggregateNameOf`. It resolves against the MERGED
+// `project.typeNames` (an arg's name id was remapped project-global at merge — mergeArtifact) rather
+// than the file-local interner the parser reads, but the SHAPE is identical:
+//
+//   • `structRef` is ALWAYS a declared struct — its name, no registry lookup.
+//   • `named` is a boxed union/enum EXACTLY when the signature index registered its name; a ranged-int
+//     alias is `named` too and is numeric, NOT an aggregate (Slice B2 — an argument still carries its
+//     `named` tag, unlike a PARAMETER, which `resolveTypes` erased to `integer` before this pass runs).
+//   • every other tag names no aggregate.
+//
+// The "none" answer is `EmptySourceText`, which `namedAggregatesConflict` reads off `isEmpty()`.
+function aggregateNameFor(project Project, tag ValueTypeTag, nameId TypeNameId) returns ByteArray
+	if tagIsStructRef(tag) 'struct'
+		return try project.typeNames.nameOf(nameId) otherwise panic("aggregateNameFor: structRef id {nameId} is not in the project interner — a structRef's name id is remapped project-global at merge (mergeArtifact)")
+	end 'struct'
+
+	if tag != ValueTypeTag.named 'notNamed'
 		return EmptySourceText
-	end 'notStruct'
-	return try project.typeNames.nameOf(nameId) otherwise panic("structRefName: structRef id {nameId} is not in the project interner — a structRef's name id is remapped project-global at merge (mergeArtifact)")
-end 'structRefName'
+	end 'notNamed'
+
+	let name = try project.typeNames.nameOf(nameId) otherwise panic("aggregateNameFor: named id {nameId} is not in the project interner — a named value's name id is remapped project-global at merge (mergeArtifact)")
+	if project.structTypes.contains(name) or project.enumTypes.contains(name) 'registeredAggregate'
+		return name
+	end 'registeredAggregate'
+
+	return EmptySourceText
+end 'aggregateNameFor'
+
+// How the ARGUMENT reads in the identity diagnostic: its aggregate NAME when it has one (`BoxB`), else
+// the scalar TYPE it actually is (`int` for a bare integer meeting a union parameter). An aggregate
+// meeting a SCALAR is a real conflict `namedAggregatesConflict` reports, and the reference names the
+// scalar there ("got 'int'"), so a bare `got ''` from an empty aggregate name would be strictly worse
+// text for the same rejection. The EXPECTED side never needs this — the check only runs once it holds a
+// non-empty aggregate name for the parameter.
+function aggregateArgDisplay(aggregate ByteArray, tag ValueTypeTag) returns String
+	if aggregate.isEmpty() 'scalar'
+		return typeTagName(tag)
+	end 'scalar'
+	return String.from(aggregate)
+end 'aggregateArgDisplay'
 
 // Report a per-ARGUMENT call error anchored on the offending argument's own source
 // span (from the call op's inline `argRanges`), so the diagnostic points at the bad
