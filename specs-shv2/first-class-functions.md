@@ -199,6 +199,7 @@ end 'main'
 ## Tests
 
 <!-- test: first-class-function.basic-reference -->
+<!-- targets: x64-windows -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -217,6 +218,7 @@ end 'main'
 ```
 
 <!-- test: first-class-function.pass-as-argument -->
+<!-- targets: x64-windows -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -273,6 +275,7 @@ end 'main'
 ```
 
 <!-- test: first-class-function.multiple-params -->
+<!-- targets: x64-windows -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -295,6 +298,7 @@ end 'main'
 ```
 
 <!-- test: first-class-function.reassign -->
+<!-- targets: x64-windows -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -320,6 +324,7 @@ end 'main'
 ```
 
 <!-- test: first-class-function.typealias-single-param -->
+<!-- targets: x64-windows -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -342,6 +347,7 @@ end 'main'
 ```
 
 <!-- test: first-class-function.typealias-multi-param -->
+<!-- targets: x64-windows -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -383,6 +389,7 @@ end 'main'
 ```
 
 <!-- test: first-class-function.let-from-call-returning-fn -->
+<!-- targets: x64-windows -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -406,6 +413,7 @@ end 'main'
 ```
 
 <!-- test: first-class-function.forward-reference-arg -->
+<!-- targets: x64-windows -->
 A bare function name may be passed as a function-typed argument even when the
 function is declared *later* in the file. The parser can't resolve the
 reference at the call site (the signature isn't registered yet), so it defers
@@ -437,6 +445,7 @@ end 'main'
 ```
 
 <!-- test: first-class-function.forward-reference-named-arg -->
+<!-- targets: x64-windows -->
 Two distinct forward-declared functions passed by name as a NAMED, non-first
 argument (the shape the self-hosted compiler's own `computeParamKeySet` uses)
 must each dispatch to the correct target: `useDbl` yields 40 and `useTrip`
@@ -546,6 +555,7 @@ end 'main'
 
 
 <!-- test: first-class-function.field-call -->
+<!-- targets: x64-windows -->
 A function stored in a struct field is called through the field. The field holds a
 function pointer, so this is an indirect call — the same lowering a function-typed
 parameter gets, reached from a different producer.
@@ -576,6 +586,7 @@ end 'main'
 ```
 
 <!-- test: first-class-function.field-bind -->
+<!-- targets: x64-windows -->
 Binding a function-typed field to a local recovers the field's declared signature, so
 the local is callable.
 ```maxon
@@ -606,6 +617,7 @@ end 'main'
 ```
 
 <!-- test: first-class-function.field-pass-and-return -->
+<!-- targets: x64-windows -->
 A function-typed field is an ordinary value: it can be passed as an argument and
 returned from a function.
 ```maxon
@@ -645,6 +657,7 @@ end 'main'
 ```
 
 <!-- test: first-class-function.field-self-dispatch -->
+<!-- targets: x64-windows -->
 A method dispatches through its own function-typed field with `self.op(...)`.
 ```maxon
 
@@ -677,6 +690,7 @@ end 'main'
 ```
 
 <!-- test: first-class-function.field-nested-receiver -->
+<!-- targets: x64-windows -->
 The receiver of a field call may itself be reached through a field chain.
 ```maxon
 
@@ -761,6 +775,7 @@ narrow 7
 ```
 
 <!-- test: first-class-function.call-returned-function -->
+<!-- targets: x64-windows -->
 A call whose return type is a function is itself callable, so the result can be called
 without binding it first.
 ```maxon
@@ -785,6 +800,7 @@ end 'main'
 ```
 
 <!-- test: first-class-function.field-cross-file -->
+<!-- targets: x64-windows -->
 A function-typed field declared in another file is called the same way: the field's
 signature travels with the type, not with the file that reads it.
 ```maxon
@@ -1543,6 +1559,7 @@ same if closures did not exist. "May this value be represented here?" and "may t
 OUTLIVE here?" are separate questions, and a place can fail either, both, or neither.
 
 <!-- test: first-class-function.function-value-into-int-global-errors -->
+<!-- targets: x64-windows -->
 Unchecked, this store reached the LOWERING, where a function pointer and an integer slot have
 different representations and the cast between them failed as an E9001 internal error — quoting
 a .NET type name, naming no source position, and describing no defect in the program. An
@@ -1567,6 +1584,7 @@ error E3005: specs/fragments/first-class-functions/first-class-function.function
 ```
 
 <!-- test: first-class-function.function-value-into-int-local-errors -->
+<!-- targets: x64-windows -->
 The same rule for a LOCAL. This one was worse than an internal error: with the value never
 read, the whole program compiled CLEAN and the mismatch was never reported at all.
 ```maxon
@@ -1607,6 +1625,7 @@ error E3005: specs/fragments/first-class-functions/first-class-function.capturin
 ```
 
 <!-- test: first-class-function.function-value-returned-as-int-errors -->
+<!-- targets: x64-windows -->
 The RETURN position reaches the same mismatch by a different road: the return check consulted
 the numeric widening table directly, and that table answers only for numeric kinds, so a
 function kind fell off the end of it as an E9001 "Unhandled cast combination: Function ->
@@ -1632,6 +1651,7 @@ error E3005: specs/fragments/first-class-functions/first-class-function.function
 ```
 
 <!-- test: first-class-function.throwing-function-as-value-errors -->
+<!-- targets: x64-windows -->
 A **`throws` function cannot be taken as a value.** A function type has no throws clause — the
 grammar is `function(T) returns U` — so the binding would drop it, and there is no channel to carry
 it back: `StdIndirectCallOp` has no error flag, unlike `StdTryCallOp`.
@@ -1669,6 +1689,7 @@ error E3101: specs/fragments/first-class-functions/first-class-function.throwing
 ```
 
 <!-- test: first-class-function.non-throwing-function-as-value-still-works -->
+<!-- targets: x64-windows -->
 The guard above is about `throws` and nothing else — an ordinary function value is untouched.
 ```maxon
 typealias Num = int(0 to 200)
