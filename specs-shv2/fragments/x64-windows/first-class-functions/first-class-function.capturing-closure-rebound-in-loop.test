@@ -1,0 +1,93 @@
+// Test: first-class-function.capturing-closure-rebound-in-loop
+
+typealias Integer = int(i64.min to i64.max)
+
+function main() returns ExitCode
+	var total = 0 as Integer
+	var i = 0 as Integer
+
+	while i < 5 'l'
+		let bump = i * 10
+		let f = function(n Integer) gives n + bump
+
+		if true 'inner'
+			total = total + f(1)
+		end 'inner'
+
+		i = i + 1
+	end 'l'
+
+	return total as ExitCode
+end 'main'
+---
+ExitCode: 105
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 40
+    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 r12, 0
+    x64.jmp whilehdr
+  whilehdr:
+    x64.cmpRegImm32 r12, 5
+    x64.jcc less, l
+    x64.jmp whileexit
+  l:
+    x64.imulRegRegImm32 r13, r12, 10
+    x64.leaRegFunc r14, [rip + main$closure_0]
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r15, r8
+    x64.storeBaseDispReg.word64 [r15 + 0], r13
+    x64.movRegImm32 rax, 1
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, inner
+    x64.jmp critsplit
+  inner:
+    x64.movRegImm32 rcx, 1
+    x64.movRegReg rdx, r15
+    x64.callReg r14
+    x64.leaRegRegReg rbx, rbx, r8
+    x64.jmp ifcont
+  critsplit:
+    x64.jmp ifcont
+  ifcont:
+    x64.leaRegRegImm32 r12, r12, 1
+    x64.movRegReg rcx, r15
+    x64.callDirect __mm_decref
+    x64.jmp whilehdr
+  whileexit:
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main$closure_0 {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.loadRegBaseDisp.word64 rax, [rdx + 0]
+    x64.leaRegRegReg r8, rcx, rax
+    x64.popReg rbp
+    x64.ret
+}

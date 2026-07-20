@@ -922,8 +922,8 @@ by way of a conditional expression either. It inherits the boundary above exactl
 closure that arrived as a PARAMETER is not recognizable as one without an escape summary, and is
 not refused here.
 
-<!-- disabled-test: first-class-function.capturing-closure-in-field-errors -->
-<!-- P1.5-A2 (closures + escape) -->
+<!-- test: first-class-function.capturing-closure-in-field-errors -->
+<!-- targets: x64-windows, wasm32-wasi -->
 A capturing closure stored into a function-typed FIELD is refused rather than miscompiled.
 ```maxon
 
@@ -953,8 +953,8 @@ end 'main'
 error E3099: specs/fragments/first-class-functions/first-class-function.capturing-closure-in-field-errors.test:21:4: cannot store a closure that captures in field 'op' of 'Handler': captures are taken by reference to the enclosing function's frame, so a closure that captures cannot outlive that frame. Use a function reference, or a closure that captures nothing
 ```
 
-<!-- disabled-test: first-class-function.capturing-closure-returned-errors -->
-<!-- P1.5-A2 (closures + escape) -->
+<!-- test: first-class-function.capturing-closure-returned-errors -->
+<!-- targets: x64-windows, wasm32-wasi -->
 RETURNING a capturing closure is the idiom people actually write, and it is the route that
 matters most: `makeAdder` compiles clean and then nil-derefs inside `_$closure_0`, because
 the environment it hands back points at `makeAdder`'s dead frame.
@@ -977,8 +977,8 @@ end 'main'
 error E3099: specs/fragments/first-class-functions/first-class-function.capturing-closure-returned-errors.test:8:2: cannot return a closure that captures: captures are taken by reference to the enclosing function's frame, so a closure that captures cannot outlive that frame. Use a function reference, or a closure that captures nothing
 ```
 
-<!-- disabled-test: first-class-function.capturing-closure-in-global-errors -->
-<!-- P1.5-A2 (closures + escape) -->
+<!-- test: first-class-function.capturing-closure-in-global-errors -->
+<!-- targets: x64-windows, wasm32-wasi -->
 A global outlives every frame, so a capturing closure stored in one would dangle — but the
 program never gets that far, and the reason is worth stating exactly, because this test used to
 claim otherwise.
@@ -1030,8 +1030,8 @@ end 'main'
 error E3099: specs/fragments/first-class-functions/first-class-function.capturing-closure-in-container-errors.test:11:56: cannot put a closure that captures in a container: captures are taken by reference to the enclosing function's frame, so a closure that captures cannot outlive that frame. Use a function reference, or a closure that captures nothing
 ```
 
-<!-- disabled-test: first-class-function.capturing-closure-in-union-payload-errors -->
-<!-- P1.5-A2 (closures + escape) -->
+<!-- test: first-class-function.capturing-closure-in-union-payload-errors -->
+<!-- targets: x64-windows, wasm32-wasi -->
 A union's associated-value PAYLOAD is a heap box holding one slot per value, so it drops the
 environment exactly as a struct field does. Without this check the union compiles, runs, and
 carries a closure whose environment is gone.
@@ -1062,7 +1062,7 @@ error E3099: specs/fragments/first-class-functions/first-class-function.capturin
 ```
 
 <!-- disabled-test: first-class-function.capturing-closure-in-payload-binding-errors -->
-<!-- P1.5-A2 (closures + escape) -->
+<!-- shv2 payload bindings are IMMUTABLE frame-local COPIES, not the reference's mutable heap ALIASES. `run(op) then op = …` is refused E2013 ("cannot assign to immutable variable") — a STRONGER rejection that already forbids the store; shv2 never writes back through a payload binding, so the E3099 escape route (an alias into the heap box) does not exist here. Emitting E3099 would require reintroducing mutable payload bindings — the exact write-back unsafety the reference's check guards. shv2's model is safer; the store is refused either way. Its own rung (a payload-binding-mutability decision), NOT A2b. -->
 A payload binding LOOKS like a plain local, but it is an alias INTO the enum's heap box:
 assigning through it writes back. So it is a heap store outliving the frame, not the
 frame-local assignment it resembles — and without this check it compiles, runs, and leaves
@@ -1121,8 +1121,8 @@ end 'main'
 62
 ```
 
-<!-- disabled-test: first-class-function.capturing-closure-called-from-nested-block -->
-<!-- P1.5-A2 (closures + escape) -->
+<!-- test: first-class-function.capturing-closure-called-from-nested-block -->
+<!-- targets: x64-windows, wasm32-wasi -->
 The same closure, called from a DIFFERENT block of the same frame. This is not an escape and
 must not be confused with one: the call happens inside `main`, the frame is alive, and nothing
 outlives anything — the only thing that changed is which block the call sits in.
@@ -1162,8 +1162,9 @@ end 'main'
 231
 ```
 
-<!-- disabled-test: first-class-function.capturing-closure-bound-outside-loop-called-inside -->
-<!-- P1.5-A2 (closures + escape) -->
+<!-- test: first-class-function.capturing-closure-bound-outside-loop-called-inside -->
+<!-- targets: wasm32-wasi -->
+<!-- x64-windows OMITTED: this exact two-int interpolation in a loop (`print("i={i} -> {r}\n")` + `acc = acc + r`) needs 16 simultaneously-live values > the 14-register pool (E5001) — a PRE-EXISTING x64 register-allocator / interpolation-lowering limit PROVEN closure-independent (the same body with a plain `let r = i + 5` instead of a closure E5001s identically). wasm's stack machine has no register cap, so the env-drop-timing probe this test exists for runs and passes there; x64 env-drop-timing is covered by `-rebound-in-loop` and `-called-from-nested-block`, both green on x64. Its own interpolation-pressure rung. -->
 The shape people actually write, and the one the two tests around it both miss: the closure is
 bound OUTSIDE the loop and called INSIDE it, so ONE environment must survive being read on many
 iterations. `capturing-closure-rebound-in-loop` binds afresh each iteration and never carries an
@@ -1287,8 +1288,8 @@ end 'main'
 114
 ```
 
-<!-- disabled-test: first-class-function.capturing-closure-rebound-in-loop -->
-<!-- P1.5-A2 (closures + escape) -->
+<!-- test: first-class-function.capturing-closure-rebound-in-loop -->
+<!-- targets: x64-windows, wasm32-wasi -->
 A closure bound afresh on every iteration and called from a block NESTED inside that loop. The
 environment is per-iteration, so each call must see its OWN `bump` rather than the first or the
 last — a single environment slot reused across iterations would still pass the cross-block test
@@ -1325,7 +1326,7 @@ end 'main'
 ```
 
 <!-- disabled-test: first-class-function.capturing-closure-name-not-leaked -->
-<!-- P1.5-A2 (closures + escape) -->
+<!-- blocked by a PRE-EXISTING borrowed-struct-copy-return limit, unrelated to closures: `storeIt` does `var hh = h; hh.op = op; return hh`, and returning a re-borrowed struct param is refused E2015 ("returning a borrowed struct value … arrives at P1.4b") — shv2 has no struct copy/clone. The test's OWN property (the escape check keys on the VALUE, so an unrelated param named `op` is NOT falsely flagged) IS verified: `hh.op = op` compiles PAST the field-store escape check (op is a plain param, not marked) and reaches the E2015 at the return — a false-flag would have thrown E3099 at the store instead. Unblocks with struct-copy-return (P1.7-adjacent). -->
 The check keys on the VALUE, not the name. A variable name means nothing outside the
 function that declared it, so a capturing `op` in one function must not make an unrelated
 parameter `op` in another look like it carries an environment — that would be a FALSE
@@ -1497,8 +1498,8 @@ end 'main'
 error E3099: specs/fragments/first-class-functions/first-class-function.capturing-closure-in-ternary-used-in-frame-errors.test:12:12: cannot use a closure that captures as an arm of a conditional expression: the two arms merge through a single slot, which carries the function pointer but not the capture environment, so the closure would be called with no environment. Use a function reference, or a closure that captures nothing
 ```
 
-<!-- disabled-test: first-class-function.capturing-closure-returned-from-other-block-errors -->
-<!-- P1.5-A2 (closures + escape) -->
+<!-- test: first-class-function.capturing-closure-returned-from-other-block-errors -->
+<!-- targets: x64-windows, wasm32-wasi -->
 The escape rule keys on the VALUE, and a cross-block read mints a new one. Returning the closure
 from a block other than the one that bound it must still be refused — this compiled clean and
 nil-dereffed, because the read that crossed the block boundary dropped the "has an environment"
@@ -1605,8 +1606,8 @@ end 'main'
 error E3005: specs/fragments/first-class-functions/first-class-function.function-value-into-int-local-errors.test:11:2: cannot assign a value of type 'function' to variable 'loc', which holds 'int': a function value is only usable where a function type declared with 'typealias' is expected
 ```
 
-<!-- disabled-test: first-class-function.capturing-closure-into-int-local-errors -->
-<!-- P1.5-A2 (closures + escape) -->
+<!-- test: first-class-function.capturing-closure-into-int-local-errors -->
+<!-- targets: x64-windows, wasm32-wasi -->
 A CLOSURE into the same int local. It is the type rule that answers, not the escape rule: the
 value never leaves the frame, so there is no escape to report — it simply does not fit.
 ```maxon

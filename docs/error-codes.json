@@ -1,6 +1,6 @@
 {
   "generatedFrom": "docs/error-codes.txt",
-  "sourceHash": "178f3be97e2e95bd",
+  "sourceHash": "748001c82f5d8b71",
   "note": "GENERATED. Do not edit. Run `maxon error-codes generate`. A reader MUST hash generatedFrom's bytes (FNV-1a 64, hex) and refuse to answer unless it equals sourceHash.",
   "compilers": ["csharp", "selfhosted", "shv2"],
   "codes": [
@@ -1045,8 +1045,8 @@
       "name": "SemanticCapturingClosureEscapes",
       "stage": "semantic",
       "doc": "A closure that CAPTURES, ESCAPING the frame its captures point into.\nTHE RULE: a closure that captures may not escape its defining frame.\nA closure captures BY REFERENCE: LowerClosureCreate allocates an environment and\nfills it with the ADDRESSES of the enclosing frame's stack slots, so that reads\nthrough a capture see later mutations of the captured variable. The environment is\ntherefore only meaningful while that frame is alive. Let the closure outlive the\nframe and every captured read dereferences a dead frame -- the classic upward-funarg\nproblem. It compiles clean and dies at runtime, so it is refused where the mistake\nis still legible rather than left to fault inside emitted code the author never wrote.\nThe routes refused are every store the parser can see WITHOUT interprocedural\nanalysis:\n- RETURNING one out of the frame that built it (`makeAdder` -- the common idiom, and\nthe reason this exists). Returning a closure an OUTER frame built is fine and is\nallowed: that environment points into a frame that is still alive.\n- storing one in a struct FIELD, a GLOBAL/static, a CONTAINER (array/map literal)\nelement, a union's associated-value PAYLOAD, or through a PAYLOAD BINDING (which\nlooks like a plain local but is an alias INTO the enum's heap box, so assigning\nthrough it writes back). Each is one 8-byte slot holding the code pointer alone,\nand each is heap memory outliving every frame, so the store drops the environment;\nthe call then passes env=0 and the first captured read dereferences null.\nDELIBERATELY NOT REFUSED -- the interprocedural route: a capturing closure passed as a\nCALL ARGUMENT to a callee that then stores it (`Handler.create(function(n) gives n +\nbump)`), and symmetrically a capturing closure arriving as a call's RETURN value. At\nthat store the value is a *parameter*, and whether it carries an environment is a fact\nabout the CALLER -- deciding it needs a per-parameter escape summary propagated over\nthe call graph, i.e. escape analysis proper. That is scoped OUT of the bootstrap and\nstays a runtime nil-deref. Passing a capturing closure DOWN to a callee that only\nCALLS it is perfectly safe and must keep working.\nA NON-capturing closure is unaffected and must keep working -- it lowers to a plain\nMaxonFunctionRefOp, has no environment to lose, and passes every check above BY\nCONSTRUCTION rather than by an exception carved for it. It is what a table of handlers\nor passes keyed by a struct field is built from.\nWhat would MAKE the refused routes work is escape analysis plus by-value (or boxed)\ncapture, so a closure's environment outlives the frame that built it. That is a real\nlanguage mechanism and it is DELIBERATELY DEFERRED here: adopting it would change the\nby-reference capture semantics the closure specs currently pin. shv2 schedules it at\nP1.5, where it co-lands with `async` -- a green-thread capture IS an escape.",
-      "emittedBy": {"csharp": "SemanticCapturingClosureEscapes"},
-      "notEmittedBy": ["selfhosted", "shv2"]
+      "emittedBy": {"csharp": "SemanticCapturingClosureEscapes", "shv2": "capturingClosureEscapes"},
+      "notEmittedBy": ["selfhosted"]
     },
     {
       "code": 3100,

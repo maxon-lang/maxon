@@ -61,6 +61,22 @@ let MaxRegisterParams = 6 as ParamCount
 // that point the two must be told apart by a reader.
 let GlobalSlotOffset = 0 as ByteOffset
 
+// One capture occupies one 8-byte slot in a closure's environment block — a scalar VALUE stored by-value
+// for A2b-1 (a pointer, in a later slice). The env block is `__mm_alloc(captureCount * EnvSlotBytes)`, and
+// capture slot `i` lives at `env + i * EnvSlotBytes`.
+let EnvSlotBytes = 8 as ByteOffset
+
+// The index of a capture within a closure's environment — a slot number, and a count of slots.
+typealias EnvSlotIndex = int(0 to u64.max)
+
+// The shared tail of every E3099 (capturing-closure-escapes) message: WHY the closure may not escape. The
+// route-specific prefix ("cannot return …", "cannot store … in field …") is built at each site; this is the
+// ONE copy of the reason. ⚠ The wording ("by reference") follows the ported golden and the reference
+// compilers' by-REFERENCE model; shv2 captures by VALUE into a heap env, but that env is dropped at the
+// enclosing frame's scope exit, so the "cannot outlive that frame" conclusion holds identically and the
+// byte-identical golden stands. See the `capturingClosureEscapes` ParseError header.
+let CapturingClosureEscapeSuffix = "captures are taken by reference to the enclosing function's frame, so a closure that captures cannot outlive that frame. Use a function reference, or a closure that captures nothing"
+
 // The parser's failure modes. Distinct from NumberParsing's `ParserError` (which
 // `parseIntLiteral` catches and re-raises as `integerOverflow`). queryParseOps
 // turns a thrown `ParseError` into a project diagnostic — the parser itself never
@@ -222,6 +238,16 @@ export union ParseError implements Error
 	// E3101, positioned at the function name. `errorType` is the thrown enum's name (the callee's `throws
 	// E` clause), named in the message.
 	throwingFunctionAsValue(name String, errorType String, line LineNumber, column ColumnNumber)
+	// P1.5-A2b: a CAPTURING closure ESCAPES its defining frame — stored where it can outlive the frame
+	// (a return, a struct field, a union payload, a match payload binding). Renders as E3099, positioned at
+	// the store. `message` is the WHOLE route-specific text (built at the throw site, since the four routes
+	// name different things — a field-and-type, a payload-and-case, a binding) rather than a route enum
+	// re-expanded here: the shared suffix is `CapturingClosureEscapeSuffix`, so the one fact "why this is
+	// refused" lives once even though the prefixes differ. ⚠ The suffix says "by reference" — the wording of
+	// the ported golden and the reference compilers' by-REFERENCE model; shv2 captures BY VALUE into a
+	// heap env, but that env is dropped at the enclosing frame's scope exit, so the "cannot outlive that
+	// frame" conclusion holds identically and the byte-identical golden stands.
+	capturingClosureEscapes(message String, line LineNumber, column ColumnNumber)
 	// OPEN #54 Slice C: a match EXPRESSION whose `gives` arms produce values of different types
 	// (`match c { 0 gives "s"; default gives 5 }`, or two different structs/unions). The result phi
 	// takes the FIRST arm's type, so a later arm's value is wrong-typed through it — a String pointer
@@ -1380,6 +1406,14 @@ union TryHandler
 	fellThrough
 end 'TryHandler'
 
+// The result of `captureEnclosing` (P1.5-A2b): a name that resolved into an enclosing frame yields
+// `captured` with the value read out of the env block; any other name is `notCaptured` and resolves
+// through the ordinary top-level path.
+union CaptureResult
+	captured(value ValueId)
+	notCaptured
+end 'CaptureResult'
+
 // One incoming edge at a control-flow join, for the move reconciliation: the predecessor block a drop is
 // emitted INTO when this edge kept a binding live, paired with the move state that edge carries. An
 // `if`/`else` builds two (the then and else ends); a `match` builds one per reaching arm.
@@ -1756,6 +1790,32 @@ export type Parser
 	// makes each query O(1); its one added bool per value is strictly linear and dwarfed by the four sibling
 	// columns already carried per value. Reset per function.
 	var valueOwnsHeap as BoolArray
+	// ⭐ **THE CAPTURING-CLOSURE MARK AND ITS ENVIRONMENT (P1.5-A2b), carried ON THE VALUE — not in a
+	// mutable sidetable.** Two per-value columns in the same lockstep as `valueOwnsHeap`/`valueConstKnown`:
+	// `valueIsCapturingClosure[v]` is true iff value `v` is a closure that CAPTURES; `valueClosureEnv[v]` is
+	// then its heap environment block's ValueId (meaningless when the flag is false). A non-capturing closure
+	// and every other value carry `false`, so the mark keys on the VALUE and cannot leak to an unrelated
+	// binding of the same NAME in another function (`capturing-closure-name-not-leaked`). This is shv2's
+	// replacement for v1's `fnEnvVarNames` (a `ValueId→ValueId` map mutated during LOWERING, its documented
+	// bug source): the env is minted at PARSE time and rides the value directly, so an in-frame call reads
+	// `valueClosureEnv` to decide whether to pass an env, and the escape checks read `valueIsCapturingClosure`
+	// to decide whether a store is refused — both at parse time, both keyed on the value. Reset per function
+	// and SWAPPED across a closure body's context (a closure's value ids are its own SSA space), exactly like
+	// the sibling value columns.
+	var valueIsCapturingClosure as BoolArray
+	var valueClosureEnv as ValueIdArray
+	// ⭐ **THE CAPTURE SET OF THE CLOSURE CURRENTLY BEING PARSED (P1.5-A2b).** Populated by `captureEnclosing`
+	// as the body reads enclosing names (first-seen order = env slot order), read by `parseClosureExpression`
+	// after the body parse to build the env block (one `storeIndirect` per capture, by VALUE). SWAPPED across
+	// a nested closure body so each closure collects its own. `closureEnvParamId` is the ValueId reserved for
+	// the lifted body's trailing `__env` parameter — the address every capture read loads through
+	// (`loadIndirect(closureEnvParamId, slot*8)`). It is set at the start of every closure body parse and
+	// read only while `closureCaptureScopes` is non-empty, so its value outside a closure body (0) is a
+	// never-read placeholder, not a sentinel any code compares against.
+	var captureNames as ByteArrayArray
+	var captureValues as ValueIdArray
+	var captureTypes as MaxonTypeArray
+	var closureEnvParamId as ValueId
 	// Every function declared ANYWHERE IN THE PROGRAM, with its return type — the whole-program
 	// signature index (SignatureIndex.maxon), built from every file's TOKENS before any file is
 	// parsed and handed to every Parser.
@@ -1882,6 +1942,12 @@ export type Parser
 			valueConsts: ParsedIntArray.create(),
 			valueConstKnown: BoolArray.create(),
 			valueOwnsHeap: BoolArray.create(),
+			valueIsCapturingClosure: BoolArray.create(),
+			valueClosureEnv: ValueIdArray.create(),
+			captureNames: ByteArrayArray.create(),
+			captureValues: ValueIdArray.create(),
+			captureTypes: MaxonTypeArray.create(),
+			closureEnvParamId: 0,
 			signatures: signatures,
 			enclosingType: EmptySourceText,
 			ownedBindings: VarInfoArray.create(),
@@ -3476,6 +3542,8 @@ export type Parser
 		self.valueConsts = ParsedIntArray.create()
 		self.valueConstKnown = BoolArray.create()
 		self.valueOwnsHeap = BoolArray.create()
+		self.valueIsCapturingClosure = BoolArray.create()
+		self.valueClosureEnv = ValueIdArray.create()
 		for paramType in paramTypes 'seedParamTypes'
 			// ⭐ A FLOAT-ALIAS parameter is a genuine FLOAT value, so its value TAG must be `float`, not the
 			// `named` a ranged alias otherwise carries — exactly as F2a resolves a float-returning callee's
@@ -4694,6 +4762,14 @@ export type Parser
 		// backend panic) and put the `ret` on a path the value it returns does not reach.
 		let retVal = try self.parseExpression(func, block: block)
 
+		// ⭐ **ESCAPE (P1.5-A2b): a capturing closure may not be RETURNED** — the env it carries is dropped at
+		// this frame's scope exit, so handing it back would leave the caller a closure whose environment is
+		// gone. This is the route people actually write (`makeAdder`), and the frame guard is structural: the
+		// closure mark is a per-function column, so `retVal` can only be a capturing closure of THIS frame. It
+		// rides the stable `boundValue`, so a `return f` from a nested block refuses just as one from the top
+		// does — the value crossing the block boundary is the same SSA id, still marked.
+		try self.rejectEscapingClosure(retVal, message: "cannot return a closure that captures: {CapturingClosureEscapeSuffix}", tok: retTok)
+
 		// The value must satisfy what the function PROMISED — `checkDeclaredType`, the same
 		// COERCION-SITE rule the call arguments and the assignments ask, and deliberately not the
 		// symmetric `typesAgree` an operator's two operands ask. `return flag` from a function
@@ -5665,6 +5741,40 @@ export type Parser
 	function valueIsOwnedHeap(value ValueId) returns bool
 		return try self.valueOwnsHeap.get(value) otherwise panic("valueIsOwnedHeap: v{value} has no owned-heap slot — every SSA value must be minted through mintValue, which seeds the column")
 	end 'valueIsOwnedHeap'
+
+	// ⭐ **RECORD THAT `closureValue` IS A CAPTURING CLOSURE carrying `env` (P1.5-A2b).** The two facts move
+	// together — a value is a capturing closure IFF it has an env — so one door sets both columns and they
+	// cannot drift. Read back by `isCapturingClosure` (the escape checks) and `closureEnvOf` (the call
+	// threading).
+	function markCapturingClosure(closureValue ValueId, env ValueId)
+		try self.valueIsCapturingClosure.set(closureValue, value: true) otherwise panic("markCapturingClosure: v{closureValue} has no closure-mark slot — every SSA value is minted through mintValue, which seeds the column")
+		try self.valueClosureEnv.set(closureValue, value: env) otherwise panic("markCapturingClosure: v{closureValue} has no closure-env slot — the two closure columns are filled in lockstep")
+	end 'markCapturingClosure'
+
+	// Is `value` a closure that CAPTURES its enclosing frame? The escape checks (return / field / payload /
+	// payload-binding) and the in-frame call threading both ask this ONE predicate, keyed on the VALUE — so
+	// an unrelated binding of the same NAME in another function is never flagged (`-name-not-leaked`).
+	function isCapturingClosure(value ValueId) returns bool
+		return try self.valueIsCapturingClosure.get(value) otherwise panic("isCapturingClosure: v{value} has no closure-mark slot — every SSA value is minted through mintValue, which seeds the column")
+	end 'isCapturingClosure'
+
+	// The heap environment block a capturing closure carries — only meaningful when `isCapturingClosure` is
+	// true, which every caller checks first. It is what an in-frame call passes as the trailing `__env` arg.
+	function closureEnvOf(value ValueId) returns ValueId
+		return try self.valueClosureEnv.get(value) otherwise panic("closureEnvOf: v{value} has no closure-env slot — every SSA value is minted through mintValue, which seeds the column")
+	end 'closureEnvOf'
+
+	// ⭐ **REFUSE A CAPTURING CLOSURE THAT ESCAPES ITS FRAME (E3099).** The ONE gate every escape route funnels
+	// through — a return, a struct-field store, a union payload, a payload-binding store — so the "is this a
+	// capturing closure?" question is answered once (keyed on the VALUE), and only the route-specific message
+	// and position differ at each site. A non-capturing closure and a plain function reference pass freely, so
+	// this never fires for the values A2a already handles. In-frame USES (a call, a pass DOWN to a callee that
+	// only calls it) are NOT stores and never reach here — over-rejecting them would be the worse failure.
+	function rejectEscapingClosure(value ValueId, message String, tok Token) throws ParseError
+		if self.isCapturingClosure(value) 'escapes'
+			throw ParseError.capturingClosureEscapes(message, line: tok.line, column: tok.column)
+		end 'escapes'
+	end 'rejectEscapingClosure'
 
 	// Ownership of `value` has been TRANSFERRED to a binding, so the statement no longer owes its drop:
 	// remove it from the pending list. A filter-rebuild rather than a pop because, while the transferred
@@ -8082,6 +8192,10 @@ export type Parser
 		// on the one value an interpolation allocates. The slot must exist before that call, exactly as
 		// the constant slot must exist before `recordConst`.
 		self.valueOwnsHeap.push(false)
+		// The capturing-closure mark + its env ride the same lockstep, seeded NOT-a-capture / no-env; set by
+		// `parseClosureExpression` on the one value a capturing closure produces (see the field header).
+		self.valueIsCapturingClosure.push(false)
+		self.valueClosureEnv.push(0)
 		return id
 	end 'mintValue'
 
@@ -8114,6 +8228,10 @@ export type Parser
 		// A parameter is never a fresh interpolation result, so it starts NOT owned — but its slot must
 		// exist so the column stays indexable by every ValueId, params included.
 		self.valueOwnsHeap.push(false)
+		// A parameter is never a capturing closure; the slots must exist so the columns stay indexable by
+		// every ValueId, params (including a lifted closure's trailing `__env`) included.
+		self.valueIsCapturingClosure.push(false)
+		self.valueClosureEnv.push(0)
 	end 'recordValueType'
 
 	// Remember the integer behind a value the parser has just DEFINED. Called by the emitters, on
@@ -9793,6 +9911,12 @@ export type Parser
 			let valueStart = self.pos
 			let value = try self.parseBinary(func, minPrec: OrPrecedence)
 
+			// ⭐ **ESCAPE (P1.5-A2b): a capturing closure may not fill a union PAYLOAD** — the payload is a heap
+			// box slot that outlives the frame, so it would carry a closure whose env is gone (exactly a struct
+			// field, one indirection out). Positioned at the token after the argument, matching the golden.
+			let payloadField = try payloads.get(slot) otherwise panic("parsePayloadArgs: payloads.get OOB at slot {slot} — the columns are sized to the case's arity")
+			try self.rejectEscapingClosure(value, message: "cannot store a closure that captures in payload '{String.from(payloadField.name)}' of case '{String.from(caseTok.value)}': {CapturingClosureEscapeSuffix}", tok: self.current())
+
 			try slotValues.set(slot, value: value) otherwise panic("parsePayloadArgs: slotValues.set OOB at slot {slot} — the columns are sized to the case's arity")
 			try filled.set(slot, value: true) otherwise panic("parsePayloadArgs: filled.set OOB at slot {slot} — the columns are sized to the case's arity")
 			try slotBareLocal.set(slot, value: self.rhsWasBareLocalReference(valueStart)) otherwise panic("parsePayloadArgs: slotBareLocal.set OOB at slot {slot} — the columns are sized to the case's arity")
@@ -10541,6 +10665,11 @@ export type Parser
 	// value across the write and the old one is freed exactly once. Mirrors the `var`-String reassignment
 	// drop model, one indirection out.
 	function emitFieldWrite(box ValueId, layout StructLayout, index FieldIndex, value ValueId, argBareLocal bool, anchor Token, range SourceRange) throws ParseError
+		// ⭐ **ESCAPE (P1.5-A2b): a capturing closure may not be stored in a struct FIELD** — a struct box is
+		// heap memory that outlives the frame, so the field would hold a closure whose env is gone. Positioned
+		// at the field name (`anchor`).
+		try self.rejectEscapingClosure(value, message: "cannot store a closure that captures in field '{String.from(anchor.value)}' of '{String.from(layout.name)}': {CapturingClosureEscapeSuffix}", tok: anchor)
+
 		let fieldType = self.signatures.fieldTypeOf(layout.name, index: index, into: self.artifact.typeNames)
 		let class = classifyUnionPayload(self.signatures, typeNames: self.artifact.typeNames, fieldType: fieldType)
 		if not payloadClassIsManaged(class) 'scalarField'
@@ -10996,32 +11125,91 @@ export type Parser
 			return binding.boundValue
 		end 'local'
 
-		// ⭐ **CAPTURE DETECTION (P1.5-A2a).** The name is not one of the CLOSURE's own bindings (the
-		// closure's scope, checked above). If it resolves into an ENCLOSING function's scope, it is a
-		// CAPTURE — refused for A2a. Checked BEFORE the top-level fall-through so an enclosing local that
-		// SHADOWS a same-named global is caught as the capture it is, not silently resolved to the global (a
-		// wrong answer). Outside a closure `closureCaptureScopes` is empty and this is a no-op.
-		try self.rejectIfCaptured(tok)
+		// ⭐ **CAPTURE (P1.5-A2b).** The name is not one of the CLOSURE's own bindings (its scope, checked
+		// above). If it resolves into an ENCLOSING function's scope it is a CAPTURE: `captureEnclosing`
+		// records it in the current closure's capture set and returns the value read out of the env block
+		// (one `loadIndirect` — capture is BY VALUE). Checked BEFORE the top-level fall-through so an
+		// enclosing local that SHADOWS a same-named global is caught as the capture it is, not silently
+		// resolved to the global (a wrong answer). Outside a closure `closureCaptureScopes` is empty and this
+		// returns `notCaptured` after one `count()` read.
+		match try self.captureEnclosing(tok) 'capture'
+			captured(value) then return value
+			notCaptured then break 'capture'
+		end 'capture'
 
 		return try self.topLevelBindingReference(tok)
 	end 'parseVariableReference'
 
-	// ⭐ **REFUSE A CLOSURE THAT CAPTURES AN ENCLOSING BINDING (P1.5-A2a) — the seam A2b replaces with a
-	// real environment block.** A name is a capture iff it resolves into one of the enclosing scopes a
-	// closure body is nested in (`closureCaptureScopes`) — an enclosing local, parameter, or self-field
-	// alias. References to GLOBALS, top-level `let`/`var`, other FUNCTIONS, and the closure's OWN
-	// parameters are NOT captures (none of them lives in an enclosing `Scope`), so they fall through to the
-	// ordinary resolution untouched. The STACK is walked so a closure nested inside a closure detects a
-	// capture of ANY enclosing frame, not just its immediate parent. A no-op outside a closure (the stack
-	// is empty), so every non-closure call site pays one `count()` read.
-	function rejectIfCaptured(tok Token) throws ParseError
-		for i in 0 upto self.closureCaptureScopes.count() 'eachEnclosing'
-			let enclosing = try self.closureCaptureScopes.get(i) otherwise panic("rejectIfCaptured: closureCaptureScopes.get OOB at {i}")
+	// ⭐ **CAPTURE AN ENCLOSING BINDING INTO THE CLOSURE'S ENVIRONMENT (P1.5-A2b) — the real env handling
+	// that replaces A2a's E2015 refusal.** A name is a capture iff it resolves into one of the enclosing
+	// scopes a closure body is nested in (`closureCaptureScopes`) — an enclosing local or parameter.
+	// References to GLOBALS, top-level `let`/`var`, other FUNCTIONS, and the closure's OWN parameters are NOT
+	// captures (none lives in an enclosing `Scope`), so they fall through as `notCaptured`.
+	//
+	// ⭐⭐ **CAPTURE IS BY VALUE — a thesis-forced divergence from v1 / the bootstrap's by-REFERENCE model.**
+	// v1 stores the ADDRESS of each captured stack slot (`sys.stackAddr`) and reads a capture through TWO
+	// indirect loads, so a read sees later mutations of the captured `var`. shv2 has NO addressable stack
+	// slots — locals are SSA values in registers, there is no `stackAddr` and no mem2reg — so the env stores
+	// the captured VALUE and a read is ONE `loadIndirect`. The corpus captures only immutable `let`s, so the
+	// two models AGREE on every test; a captured-then-mutated `var` would differ, and no test exercises that.
+	//
+	// The env slot is assigned in first-seen order and DEDUPED by name (a capture read twice occupies one
+	// slot); the enclosing binding's value + type are recorded now, read after the body parse by
+	// `parseClosureExpression` to fill the env. The capture read loads through the reserved `__env` parameter
+	// (`closureEnvParamId`). A capture from a NON-immediate enclosing frame (a nested capturing closure) needs
+	// an env chain this slice does not build, so it is refused cleanly (E2015 → A2b-2).
+	function captureEnclosing(tok Token) returns CaptureResult throws ParseError
+		let depth = self.closureCaptureScopes.count()
+		if depth == 0 'notInClosure'
+			return CaptureResult.notCaptured
+		end 'notInClosure'
+
+		// Innermost enclosing frame first — a name resolves to the nearest scope that binds it, exactly as an
+		// ordinary lookup would (`popScope`'s shadowing rules), so the FIRST hit walking down is the capture
+		// source.
+		var i = depth
+		while i > 0 'eachEnclosing'
+			i = i - 1
+			let enclosing = try self.closureCaptureScopes.get(i) otherwise panic("captureEnclosing: closureCaptureScopes.get OOB at {i}")
 			if enclosing.contains(tok.value) 'captured'
-				throw ParseError.unsupported("a closure that captures its enclosing scope (P1.5-A2b: capturing closures + env block)", line: tok.line, column: tok.column)
+				if i != depth - 1 'nested'
+					throw ParseError.unsupported("a closure that captures a variable from a non-immediate enclosing frame (nested capturing closures — P1.5-A2b-2)", line: tok.line, column: tok.column)
+				end 'nested'
+				return CaptureResult.captured(self.emitCaptureRead(tok, enclosing: enclosing))
 			end 'captured'
 		end 'eachEnclosing'
-	end 'rejectIfCaptured'
+
+		return CaptureResult.notCaptured
+	end 'captureEnclosing'
+
+	// Assign (or reuse) the env slot for a captured name and emit its BY-VALUE read: `loadIndirect __env,
+	// slot*8`. The slot column (`captureNames`) is env-array order; the parallel `captureValues`/`captureTypes`
+	// carry the enclosing value to store and the type to read back, filled in lockstep on FIRST sight only so
+	// a name captured twice shares one slot and one env store.
+	function emitCaptureRead(tok Token, enclosing Scope) returns ValueId
+		let binding = enclosing.getInfo(tok.value)
+		let captureType = self.resolveFloatAliasType(binding.varType)
+		let slot = self.captureSlotFor(tok.value, enclosingValue: binding.boundValue, captureType: captureType)
+		let result = self.mintValueOfType(captureType)
+		self.artifact.emitOp(self.currentBlock, op: MaxonOp.loadIndirect(result, addr: self.closureEnvParamId, offset: (slot * EnvSlotBytes) as ByteOffset, valueType: captureType), range: SourceRange.ofToken(tok))
+		return result
+	end 'emitCaptureRead'
+
+	// The env slot for `name`, appending a fresh one (recording the enclosing value + type to store) on first
+	// sight and reusing it thereafter. Dedup keeps `multiple-captures` (`x + a + b`) at one slot per distinct
+	// name and, more importantly, keeps a name read twice from storing — and later dropping — two slots.
+	function captureSlotFor(name ByteArray, enclosingValue ValueId, captureType MaxonType) returns EnvSlotIndex
+		for k in 0 upto self.captureNames.count() 'existing'
+			let seen = try self.captureNames.get(k) otherwise panic("captureSlotFor: captureNames.get OOB at {k}")
+			if seen == name 'reuse'
+				return k
+			end 'reuse'
+		end 'existing'
+		self.captureNames.push(name)
+		self.captureValues.push(enclosingValue)
+		self.captureTypes.push(captureType)
+		return self.captureNames.count() - 1
+	end 'captureSlotFor'
 
 	// A bare name that is not a local: a top-level constant, a top-level `var`, or nothing.
 	function topLevelBindingReference(tok Token) returns ValueId throws ParseError
@@ -11183,8 +11371,26 @@ export type Parser
 		let savedLastFieldReadOffset = self.lastFieldReadOffset
 		let savedInMatchArmBody = self.inMatchArmBody
 		let savedFuncIndex = self.artifact.currentFuncIndex
+		// The two closure columns and the capture-collection set are per-function and per-CLOSURE, so they
+		// swap with the rest of the context — a nested closure collects its own captures without disturbing
+		// the enclosing closure's.
+		let savedValueIsCapturingClosure = self.valueIsCapturingClosure
+		let savedValueClosureEnv = self.valueClosureEnv
+		let savedCaptureNames = self.captureNames
+		let savedCaptureValues = self.captureValues
+		let savedCaptureTypes = self.captureTypes
+		let savedClosureEnvParamId = self.closureEnvParamId
 
 		let paramCount = paramNames.count()
+		// ⭐ **RESERVE THE TRAILING `__env` PARAMETER'S ValueId UP FRONT (P1.5-A2b).** A capturing closure
+		// receives its environment as a trailing parameter (`closureEnvParamId = paramCount`), and every
+		// capture read loads through it — so its id must be fixed BEFORE the body parses, which is BEFORE we
+		// know whether the closure captures. So the slot is always reserved: value numbering starts at
+		// `paramCount + 1` and the value columns carry one extra entry for it. Whether the closure actually
+		// captures is settled AFTER the body parse (`captureNames` non-empty), and only then is the reserved
+		// slot promoted to a real parameter (`lifted.paramCount` patched). A non-capturing closure leaves the
+		// slot an unused hole — no op references it, so it is dead and the lifted body is A2a-identical.
+		//
 		// A FRESH scope (not `scope.reset()`) so the enclosing one survives in `savedScope` to be restored;
 		// every other per-body column is re-created exactly as `parseFunction` re-creates it (a stray entry
 		// carried into the closure body would name a value in the ENCLOSING body's SSA space). This mirrors
@@ -11193,7 +11399,7 @@ export type Parser
 		// (`mm_decref` in the compiler itself), so the two copies stay inline and the reviewer's
 		// duplication note is answered here rather than by a helper the bootstrap cannot compile.
 		self.scope = Scope.create()
-		self.valueIds = ValueIdRef.create(paramCount)
+		self.valueIds = ValueIdRef.create((paramCount + 1) as ParamCount)
 		self.mutableVars = VarInfoArray.create()
 		self.ownedBindings = VarInfoArray.create()
 		self.pendingTempDrops = ValueIdArray.create()
@@ -11204,6 +11410,12 @@ export type Parser
 		self.valueConsts = ParsedIntArray.create()
 		self.valueConstKnown = BoolArray.create()
 		self.valueOwnsHeap = BoolArray.create()
+		self.valueIsCapturingClosure = BoolArray.create()
+		self.valueClosureEnv = ValueIdArray.create()
+		self.captureNames = ByteArrayArray.create()
+		self.captureValues = ValueIdArray.create()
+		self.captureTypes = MaxonTypeArray.create()
+		self.closureEnvParamId = paramCount
 		self.inMatchArmBody = false
 		// The enclosing scope becomes a CAPTURE scope for the duration of the body — a body name resolving
 		// into it (an enclosing local/param/self-field, not the closure's own params) is a capture. Pushed
@@ -11216,10 +11428,14 @@ export type Parser
 		for paramType in paramTypes 'seedParamTypes'
 			self.recordValueType(self.resolveFloatAliasType(paramType))
 		end 'seedParamTypes'
+		// The reserved `__env` slot (ValueId `paramCount`) gets its own column entry — an i64 heap pointer —
+		// so the columns stay indexable by every ValueId whether or not the closure ends up capturing.
+		self.recordValueType(MaxonType.integer)
 
-		// The lifted function, created with a PLACEHOLDER return type — the real one falls out of the body
-		// expression and is patched below. File-private (a closure is never callable across files by name),
-		// and it NEVER throws (the closure grammar has no throws clause).
+		// The lifted function, created with a PLACEHOLDER return type and its NON-capturing signature (the
+		// user parameters only). If the body captures, `paramCount`/`maxonParamTypes` are patched below to
+		// carry the trailing `__env`. File-private (a closure is never callable across files by name), and it
+		// NEVER throws (the closure grammar has no throws clause).
 		var lifted = IrFunction.create(closureName, maxonReturnType: MaxonReturnType.value(MaxonType.unresolved), paramCount: paramCount, maxonParamTypes: paramTypes, valueTags: self.valueTags, valueNameIds: self.valueNameIds, returnLine: givesTok.line)
 		lifted.namespace = self.namespace
 		lifted.visibility = Visibility.file
@@ -11249,9 +11465,30 @@ export type Parser
 		let bodyType = self.typeOf(bodyValue)
 		try self.emitOwnedValueReturn(bodyValue, anchor: givesTok)
 
+		// Did the body capture? Snapshot the collected set before it is restored away. When it captured,
+		// PROMOTE the reserved `__env` slot to a real trailing parameter now, while still in the closure's
+		// context: `emitParams` (lowering) reads `paramCount`/`maxonParamTypes`, so a patch here is seen.
+		let captureCount = self.captureNames.count()
+		let capturedValuesSnapshot = self.captureValues
+		let capturedTypesSnapshot = self.captureTypes
+		if captureCount > 0 'promoteEnvParam'
+			lifted.paramCount = (paramCount + 1) as ParamCount
+			var liftedParamTypes = MaxonTypeArray.create()
+			for pt in paramTypes 'copyUserParams'
+				liftedParamTypes.push(pt)
+			end 'copyUserParams'
+			liftedParamTypes.push(MaxonType.integer)
+			lifted.maxonParamTypes = liftedParamTypes
+			// Give the `__env` param a source origin (its declaring `function` keyword) so the register-pressure
+			// diagnostic can resolve it, exactly as `bindParameters` records one per user parameter.
+			self.artifact.recordParamOrigin(paramCount, range: SourceRange.ofToken(functionTok))
+		end 'promoteEnvParam'
+
 		// Patch the return type now the body is known, and register the lift so it is callable (module +
 		// project signature registries) and its return type is resolvable at an indirect call through a
-		// closure-bound local (`closureReturns`, read by `functionValueReturnType`).
+		// closure-bound local (`closureReturns`, read by `functionValueReturnType`). The signature keeps the
+		// USER parameters only — an indirect call is positional and never slot-validates against it, and the
+		// `__env` is a lowering-level detail the caller supplies from `valueClosureEnv`, not a source arg.
 		let returnType = MaxonReturnType.value(bodyType)
 		lifted.maxonReturnType = returnType
 		self.artifact.recordFuncReturnType(closureName, returnType: returnType)
@@ -11281,15 +11518,58 @@ export type Parser
 		self.lastFieldReadOffset = savedLastFieldReadOffset
 		self.inMatchArmBody = savedInMatchArmBody
 		self.artifact.setCurrentFuncIndex(savedFuncIndex)
+		self.valueIsCapturingClosure = savedValueIsCapturingClosure
+		self.valueClosureEnv = savedValueClosureEnv
+		self.captureNames = savedCaptureNames
+		self.captureValues = savedCaptureValues
+		self.captureTypes = savedCaptureTypes
+		self.closureEnvParamId = savedClosureEnvParamId
 
 		// In the ENCLOSING function's value space now: mint the closure VALUE — a `function`-tagged code
-		// pointer governed by the lifted name — and emit the `functionRef` A1 lowers to `funcAddr`. This is
-		// `emitFunctionRef`'s tail minus the throws check (a closure never throws) and the index lookup (the
-		// synthetic name resolves through `closureReturns`, not the whole-program index).
+		// pointer governed by the lifted name — and emit the `functionRef` A1 lowers to `funcAddr`.
 		let result = self.mintValue(ValueTypeTag.function, nameId: self.artifact.typeNames.intern(closureName))
 		self.artifact.emitOp(self.currentBlock, op: MaxonOp.functionRef(result, funcName: closureName), range: SourceRange.ofToken(functionTok))
+
+		// A NON-capturing closure IS `emitFunctionRef`'s value: a bare code pointer, done. A CAPTURING one
+		// additionally allocates its environment here in the ENCLOSING frame and marks the value, so every
+		// in-frame call reads `valueClosureEnv` and passes the env as the trailing `__env` arg.
+		if captureCount > 0 'buildEnv'
+			self.buildClosureEnv(result, captureCount: captureCount, capturedValues: capturedValuesSnapshot, capturedTypes: capturedTypesSnapshot, anchor: functionTok)
+		end 'buildEnv'
+
 		return result
 	end 'parseClosureExpression'
+
+	// ⭐ **BUILD A CAPTURING CLOSURE'S ENVIRONMENT (P1.5-A2b), in the enclosing frame.** The env is a real
+	// `__mm_alloc(captureCount * EnvSlotBytes)` heap block carrying each captured value BY VALUE (one
+	// `storeIndirect` per capture, matching the `loadIndirect` the body reads through `__env`). It owns
+	// NOTHING — the captures are copies of the enclosing frame's values, borrowed for the closure's lifetime —
+	// so it takes the trivial destructor (`emitBoxAlloc`) and, tagged `integer`, its drop routes to the plain
+	// `__mm_decref` (`decrefCalleeFor`), a single free with no cascade.
+	//
+	// ⭐⭐ **THE ENV IS ENROLLED AS AN ANONYMOUS OWNED BINDING, not a statement-scoped pending temp** — so it
+	// drops at the SCOPE that created the closure, exactly once, via the ordinary `emitScopeDrops` machinery
+	// (the same `ownedBindings.push` a temporary match scrutinee uses). A closure bound OUTSIDE a loop lands
+	// its env at function scope → dropped once at the return, alive across every iteration
+	// (`-bound-outside-loop-called-inside`); one REBOUND inside the loop body lands its env in the loop-body
+	// frame → dropped on each back edge, five allocated and five freed (`-rebound-in-loop`). A pending temp
+	// would free it at the end of the `let f = …` statement — before the first call — so the scope-scoped
+	// binding is load-bearing, not a stylistic choice.
+	function buildClosureEnv(closureValue ValueId, captureCount EnvSlotIndex, capturedValues ValueIdArray, capturedTypes MaxonTypeArray, anchor Token)
+		let range = SourceRange.ofToken(anchor)
+		let size = self.emitLiteral((captureCount * EnvSlotBytes) as ParsedInt, valueType: MaxonType.integer, range: range)
+		let env = self.emitBoxAlloc(size, resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+
+		for i in 0 upto captureCount 'storeEach'
+			let capValue = try capturedValues.get(i) otherwise panic("buildClosureEnv: capturedValues.get OOB at {i} — filled in lockstep with captureNames")
+			let capType = try capturedTypes.get(i) otherwise panic("buildClosureEnv: capturedTypes.get OOB at {i} — filled in lockstep with captureNames")
+			self.artifact.emitOp(self.currentBlock, op: MaxonOp.storeIndirect(env, offset: (i * EnvSlotBytes) as ByteOffset, value: capValue, valueType: capType), range: range)
+		end 'storeEach'
+
+		self.markValueOwnsHeap(env)
+		self.ownedBindings.push(VarInfo.createValueBinding(EmptySourceText, varType: MaxonType.integer, mutable: false, boundValue: env))
+		self.markCapturingClosure(closureValue, env: env)
+	end 'buildClosureEnv'
 
 	// `globalAddr <label>` then `loadIndirect <addr> 0` — the two ops a global's read is.
 	//
@@ -12146,9 +12426,19 @@ export type Parser
 		let anchor = self.current()
 		try self.consume(TokenKind.leftParen)
 
-		let args = try self.parseIndirectCallArgs(func)
+		var args = try self.parseIndirectCallArgs(func)
 
 		let rparenTok = try self.consume(TokenKind.rightParen)
+
+		// ⭐ **THE ENV TRAVELS WITH THE VALUE (P1.5-A2b).** A capturing closure's call passes its environment
+		// as the trailing `__env` arg — the one place the (fn, env) convention is honored, keyed on the
+		// callee VALUE via `valueClosureEnv`. A non-capturing callee (a plain function ref or non-capturing
+		// closure) appends nothing, so its call is A1's env-less `callIndirect`, byte-identical. This is the
+		// single point that answers "what env travels with this value?" — a plain call and (at A2b-2) a
+		// try-call read the SAME `closureEnvOf`.
+		if self.isCapturingClosure(callee) 'capturingCallee'
+			args.push(self.closureEnvOf(callee))
+		end 'capturingCallee'
 
 		let result = self.mintIndirectCallResult(callee)
 		self.artifact.emitOp(self.currentBlock, op: MaxonOp.indirectCall(result, callee: callee, args: args), range: SourceRange.between(anchor, last: rparenTok))
