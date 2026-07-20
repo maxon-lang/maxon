@@ -77,6 +77,15 @@ typealias EnvSlotIndex = int(0 to u64.max)
 // byte-identical golden stands. See the `capturingClosureEscapes` ParseError header.
 let CapturingClosureEscapeSuffix = "captures are taken by reference to the enclosing function's frame, so a closure that captures cannot outlive that frame. Use a function reference, or a closure that captures nothing"
 
+// The shared tail of every E3099 raised when a capturing closure reaches a MERGE (a match-expression
+// `gives` arm, an `otherwise <value>` fallback — and, once the front-end parses it, a ternary arm). A
+// merge joins its edges through ONE phi slot that carries the function pointer alone; the env rides a
+// separate per-value side column that a phi cannot merge, so the merged closure would be called with no
+// environment REGARDLESS of whether the result escapes the frame. The reachable twin of the (front-end-
+// unreachable) ternary-arm refusal the corpus already pins; the route-specific prefix ("as a `gives` arm
+// …", "as the value of an `otherwise` …") is built at each site so the one reason lives once.
+let CapturingClosureMergeSuffix = "a merge joins its arms through a single slot that carries the function pointer but not the capture environment, so the closure would be called with no environment. Use a function reference, or a closure that captures nothing"
+
 // The parser's failure modes. Distinct from NumberParsing's `ParserError` (which
 // `parseIntLiteral` catches and re-raises as `integerOverflow`). queryParseOps
 // turns a thrown `ParseError` into a project diagnostic — the parser itself never
@@ -5302,7 +5311,16 @@ export type Parser
 			throw ParseError.errorTypeMismatch("a void `try` (its call returns nothing) cannot take an `otherwise <value>` fallback — the success path yields no value for the fallback to stand in for; use `otherwise ignore`, an `otherwise 'block' … end`, or a single-statement `otherwise return`/`throw`", line: tryTok.line, column: tryTok.column)
 		end 'voidTryOtherwiseValue'
 
+		let otherwiseTok = self.current()
 		let otherwiseValue = try self.parseExpression(func, block: self.currentBlock)
+
+		// ⭐ **MERGE (P1.5-A2b): a capturing closure may not be an `otherwise <value>` fallback** — it merges
+		// with the try's success value through one result phi (the code pointer alone), and the env rides a
+		// side column a phi cannot carry, so on the error edge the merged closure would be called with env=0
+		// and nil-deref. The same merge hazard as a match-expression arm, refused through the same E3099 gate.
+		// (The try's SUCCESS value cannot itself be a capturing closure — a function may not RETURN one, so the
+		// callee is refused at its own `return` — leaving only the fallback to guard here.)
+		try self.rejectEscapingClosure(otherwiseValue, message: "cannot use a closure that captures as the value of an `otherwise` fallback: {CapturingClosureMergeSuffix}", tok: otherwiseTok)
 
 		if resultUsed and tagIsFloat(self.tagOf(otherwiseValue)) != tagIsFloat(self.tagOf(result)) 'typeMismatch'
 			throw ParseError.errorTypeMismatch("otherwise type '{typeTagName(self.tagOf(otherwiseValue))}' does not match expected type '{typeTagName(self.tagOf(result))}'", line: tryTok.line, column: tryTok.column)
@@ -5775,6 +5793,22 @@ export type Parser
 			throw ParseError.capturingClosureEscapes(message, line: tok.line, column: tok.column)
 		end 'escapes'
 	end 'rejectEscapingClosure'
+
+	// ⭐ **REFUSE A CAPTURING CLOSURE PASSED AS A CALL ARGUMENT (P1.5-A2b-1).** The env travels with a
+	// capturing closure ONLY at a DIRECT indirect call (`f(x)`, where `parseIndirectCall` appends
+	// `closureEnvOf(callee)`). Handed to another function as an argument, the closure arrives as that
+	// callee's PARAMETER — a value in the callee's own SSA space that carries no env — so the callee calls
+	// it with `__env = 0` and the first captured read nil-dereferences. Threading the env across the call
+	// boundary needs a hidden per-parameter env slot (a fact about the CALLER propagated over the call
+	// graph), which arrives at A2b-2; until then this is refused as UNSUPPORTED rather than compiled into a
+	// segfault. Asked once, from every call-argument site (direct/method/try via `parseCallArgs`, indirect
+	// via `parseIndirectCallArgs`), keyed on the VALUE exactly as the escape gate is — a non-capturing
+	// closure or a plain function reference passes freely.
+	function rejectCapturingClosureArg(value ValueId, tok Token) throws ParseError
+		if self.isCapturingClosure(value) 'capturingArg'
+			throw ParseError.unsupported("passing a closure that captures as a call argument — its environment is not threaded to the callee, so the callee would call it with no environment; a capturing closure may only be called directly for now (arrives at P1.5-A2b-2)", line: tok.line, column: tok.column)
+		end 'capturingArg'
+	end 'rejectCapturingClosureArg'
 
 	// Ownership of `value` has been TRANSFERRED to a binding, so the statement no longer owes its drop:
 	// remove it from the pending list. A filter-rebuild rather than a pop because, while the transferred
@@ -7205,7 +7239,17 @@ export type Parser
 
 		if isExpression 'givesArm'
 			try self.consume(TokenKind.gives)
+			let valueTok = self.current()
 			let value = try self.parseExpression(func, block: self.currentBlock)
+
+			// ⭐ **MERGE (P1.5-A2b): a capturing closure may not be a `gives` arm of a match EXPRESSION** —
+			// every arm feeds ONE result phi (one slot, the code pointer), and the env rides a side column a
+			// phi cannot carry, so the merged closure would be called with env=0 and nil-deref, whether or not
+			// the result escapes. This is the REACHABLE form of the ternary-arm refusal (match is parsed;
+			// `a if c else b` is not), so it must be caught here or a closure launders through the merge into a
+			// segfault. Refused via the same E3099 gate the escape routes use, with the merge message.
+			try self.rejectEscapingClosure(value, message: "cannot use a closure that captures as a `gives` arm of a match expression: {CapturingClosureMergeSuffix}", tok: valueTok)
+
 			let exitBlock = self.currentBlock
 			// `and fallthrough` is meaningless where every arm must yield a value. The climber
 			// already stopped at the `and` (see parseBinary), so it sits here as a stray token.
@@ -9556,6 +9600,13 @@ export type Parser
 			let valueStart = self.pos
 			let value = try self.parseBinary(func, minPrec: OrPrecedence)
 			try self.requireFieldType(layout, index: index, value: value, anchor: nameTok)
+
+			// ⭐ **ESCAPE (P1.5-A2b): a capturing closure may not fill a struct field at CONSTRUCTION either** —
+			// a `Self{op: closure}` box is the same heap slot `x.op = closure` writes (one carries only the
+			// code pointer, not the env), and construction bypasses `emitFieldWrite`, so the escape gate must be
+			// asked HERE too or the closure reaches lowering and panics on its unresolved env. Same message and
+			// route as the field-WRITE site, positioned at the field name.
+			try self.rejectEscapingClosure(value, message: "cannot store a closure that captures in field '{String.from(nameTok.value)}' of '{String.from(layout.name)}': {CapturingClosureEscapeSuffix}", tok: nameTok)
 
 			try fieldValues.set(index, value: value) otherwise panic("parseStructLiteralFields: fieldValues.set OOB at {index} — the columns are sized to the layout's field count")
 			try filled.set(index, value: true) otherwise panic("parseStructLiteralFields: filled.set OOB at {index} — the columns are sized to the layout's field count")
@@ -12240,6 +12291,10 @@ export type Parser
 			// short-circuit an EARLIER argument performed.
 			let value = try self.parseBinary(func, minPrec: OrPrecedence)
 
+			// A capturing closure handed to another function has no env at the callee (see
+			// `rejectCapturingClosureArg`) — refuse it here, where the argument's leading token anchors the span.
+			try self.rejectCapturingClosureArg(value, tok: argFirstTok)
+
 			pushCallArg(args, argLabels: argLabels, argRanges: argRanges, value: value, label: label, range: SourceRange.ofToken(argFirstTok))
 			argIndex = argIndex + 1
 
@@ -12456,7 +12511,14 @@ export type Parser
 		end 'noArgs'
 
 		while true 'argLoop'
-			args.push(try self.parseBinary(func, minPrec: OrPrecedence))
+			let argTok = self.current()
+			let argValue = try self.parseBinary(func, minPrec: OrPrecedence)
+
+			// The same refusal the direct-call path makes: a capturing closure passed as an argument (here to
+			// an indirect callee) has no env at the callee. Asked before the arg is appended, so the env the
+			// indirect call itself later threads for a capturing CALLEE is never mistaken for one.
+			try self.rejectCapturingClosureArg(argValue, tok: argTok)
+			args.push(argValue)
 
 			if not self.at(TokenKind.comma) 'endArgs'
 				break

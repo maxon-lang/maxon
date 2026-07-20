@@ -953,6 +953,35 @@ end 'main'
 error E3099: specs/fragments/first-class-functions/first-class-function.capturing-closure-in-field-errors.test:21:4: cannot store a closure that captures in field 'op' of 'Handler': captures are taken by reference to the enclosing function's frame, so a closure that captures cannot outlive that frame. Use a function reference, or a closure that captures nothing
 ```
 
+<!-- test: first-class-function.capturing-closure-in-struct-construction-errors -->
+<!-- targets: x64-windows, wasm32-wasi -->
+A capturing closure stored into a function-typed field at CONSTRUCTION (`Self{op: closure}`) is the
+same heap store as `x.op = closure`, but it reaches the box through a different path — the struct
+literal, not `emitFieldWrite`. Without a check HERE the construction slipped past the escape gate and
+the closure reached lowering, which panicked on its unresolved environment. It is refused with the same
+E3099 the field-write route gives, at the field name in the literal.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+typealias UnaryOp = function(Integer) returns Integer
+
+type Handler
+	export var op as UnaryOp
+
+	static function trap(bump Integer) returns Self
+		return Self{op: function(n Integer) gives n + bump}
+	end 'trap'
+end 'Handler'
+
+function main() returns ExitCode
+	let h = Handler.trap(20)
+	return h.op(22)
+end 'main'
+```
+```maxoncstderr
+error E3099: specs/fragments/first-class-functions/first-class-function.capturing-closure-in-struct-construction-errors.test:10:15: cannot store a closure that captures in field 'op' of 'Handler': captures are taken by reference to the enclosing function's frame, so a closure that captures cannot outlive that frame. Use a function reference, or a closure that captures nothing
+```
+
 <!-- test: first-class-function.capturing-closure-returned-errors -->
 <!-- targets: x64-windows, wasm32-wasi -->
 RETURNING a capturing closure is the idiom people actually write, and it is the route that
@@ -1096,11 +1125,11 @@ error E3099: specs/fragments/first-class-functions/first-class-function.capturin
 ```
 
 <!-- disabled-test: first-class-function.capturing-closure-used-in-frame -->
-<!-- P1.5-A2 (closures + escape) -->
-The ACCEPT side, and the ordinary case: a capturing closure that stays inside its own frame.
-It may be called directly, and it may be passed DOWN to a callee that only CALLS it — the
-frame is still alive for the whole of that callee's execution, so the environment is live.
-Over-rejecting this would be the worse failure.
+<!-- A2b-1 threads the env ONLY at a DIRECT indirect call (`f(x)`). Passing a capturing closure DOWN to a callee (`apply(f, …)`) does NOT thread the env — the closure arrives as the callee's PARAMETER, which carries no env, so the callee calls it with `__env = 0` and nil-dereferences. This compiled clean and SEGFAULTED (139) until A2b-1's review; it is now REFUSED (E2015 unsupported, see `capturing-closure-passed-as-arg-errors`). Making it WORK needs a hidden per-parameter env slot threaded over the call graph, which arrives at A2b-2; the `let direct = f(2)` half is fine (direct call). Re-enable as an ACCEPT test when env threading lands. -->
+The would-be ACCEPT side: a capturing closure called directly AND passed DOWN to a callee that only
+CALLS it. The direct call `f(2)` works today, but the pass-down `apply(f, …)` does not — the env does
+not travel with the closure across the call boundary in A2b-1, so it is refused rather than compiled
+into the nil-deref it used to be.
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -1119,6 +1148,32 @@ end 'main'
 ```
 ```exitcode
 62
+```
+
+<!-- test: first-class-function.capturing-closure-passed-as-arg-errors -->
+<!-- targets: x64-windows, wasm32-wasi -->
+Passing a capturing closure DOWN to a callee is refused (E2015) rather than miscompiled. A2b-1 threads
+the environment only at a DIRECT indirect call (`f(x)`, where the call appends `closureEnvOf`); handed
+to `apply` as an argument, the closure arrives as `apply`'s PARAMETER, which carries no environment, so
+`apply` would call it with `__env = 0` and the first captured read would nil-dereference. Until the env
+is threaded across the call boundary (A2b-2) this is unsupported, not a segfault.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+typealias UnaryOp = function(Integer) returns Integer
+
+function apply(f UnaryOp, x Integer) returns Integer
+	return f(x)
+end 'apply'
+
+function main() returns ExitCode
+	let bump = 20
+	let f = function(n Integer) gives n + bump
+	return apply(f, x: 20) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: specs/fragments/first-class-functions/first-class-function.capturing-closure-passed-as-arg-errors.test:13:15: Unsupported: passing a closure that captures as a call argument — its environment is not threaded to the callee, so the callee would call it with no environment; a capturing closure may only be called directly for now (arrives at P1.5-A2b-2)
 ```
 
 <!-- test: first-class-function.capturing-closure-called-from-nested-block -->
@@ -1214,7 +1269,7 @@ i=4 -> 9
 ```
 
 <!-- disabled-test: first-class-function.capturing-closure-bound-outside-loop-passed-down -->
-<!-- P1.5-A2 (closures + escape) -->
+<!-- Same pass-down limit as `capturing-closure-used-in-frame`: A2b-1 does not thread the env to a callee, so `apply(f, …)` is REFUSED E2015 (see `capturing-closure-passed-as-arg-errors`), not the accept this asserts. Re-enable as an ACCEPT test when env threading lands (A2b-2). -->
 The same environment, read across iterations through a CALLEE rather than directly. The callee
 receives the closure as a parameter, so its environment arrives as the caller's — borrowed for
 the length of the call. The callee must not release it: its own scope_end cleans a parameter
@@ -1248,7 +1303,7 @@ end 'main'
 ```
 
 <!-- disabled-test: first-class-function.capturing-closure-passed-to-try-call -->
-<!-- P1.5-A2 (closures + escape) -->
+<!-- Same pass-down limit as `capturing-closure-used-in-frame`, reached through `try`: a try free-call parses its arguments through `parseCallArgs` too, so `try applyChecked(f, …)` is REFUSED E2015 (see `capturing-closure-passed-as-arg-errors`), not the accept this asserts. Re-enable as an ACCEPT test when env threading lands (A2b-2). -->
 A capturing closure handed to a THROWING callee, through `try`. A try-call flattens its arguments
 exactly as a plain call does, but it was never given the maps that say what environment a function
 value carries, so it could only answer 0 — and this failed in ANY block, including the one that
@@ -1496,6 +1551,75 @@ end 'main'
 ```
 ```maxoncstderr
 error E3099: specs/fragments/first-class-functions/first-class-function.capturing-closure-in-ternary-used-in-frame-errors.test:12:12: cannot use a closure that captures as an arm of a conditional expression: the two arms merge through a single slot, which carries the function pointer but not the capture environment, so the closure would be called with no environment. Use a function reference, or a closure that captures nothing
+```
+
+<!-- test: first-class-function.capturing-closure-in-match-arm-errors -->
+<!-- targets: x64-windows, wasm32-wasi -->
+The REACHABLE twin of the ternary-arm refusal above: `a if c else b` is not parsed yet, but a match
+EXPRESSION is, and it merges its `gives` arms through the same single result phi. A capturing closure as
+an arm carries only its code pointer through that phi (the env rides a side column a phi cannot merge),
+so the merged closure would be called with no environment. Without this check it compiled clean and
+nil-dereferenced inside `_$closure_0`, exactly as the ternary case describes.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+typealias UnaryOp = function(Integer) returns Integer
+
+function dbl(n Integer) returns Integer
+	return n * 2
+end 'dbl'
+
+function main() returns ExitCode
+	let bump = 20
+	let f = function(n Integer) gives n + bump
+	let sel = 1 as Integer
+	let h = match sel 'pick'
+		1 gives f
+		default gives dbl
+	end 'pick'
+	return h(22)
+end 'main'
+```
+```maxoncstderr
+error E3099: specs/fragments/first-class-functions/first-class-function.capturing-closure-in-match-arm-errors.test:15:11: cannot use a closure that captures as a `gives` arm of a match expression: a merge joins its arms through a single slot that carries the function pointer but not the capture environment, so the closure would be called with no environment. Use a function reference, or a closure that captures nothing
+```
+
+<!-- test: first-class-function.capturing-closure-in-otherwise-errors -->
+<!-- targets: x64-windows, wasm32-wasi -->
+The other reachable merge: `try call() otherwise <value>` joins the success value and the fallback
+through one result phi. A capturing closure as the `otherwise` fallback would be called with no
+environment on the error edge, so it is refused — regardless of whether the call actually throws, since
+the parser cannot know which edge runs. The try's SUCCESS value cannot itself be a capturing closure (a
+function may not return one), so only the fallback needs guarding.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+typealias UnaryOp = function(Integer) returns Integer
+
+function dbl(n Integer) returns Integer
+	return n * 2
+end 'dbl'
+
+enum E implements Error
+	bad = 1
+end 'E'
+
+function pick(x Integer) returns UnaryOp throws E
+	if x < 0 'g'
+		throw E.bad
+	end 'g'
+	return dbl
+end 'pick'
+
+function main() returns ExitCode
+	let bump = 20
+	let f = function(n Integer) gives n + bump
+	let h = try pick(-1) otherwise f
+	return h(22) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3099: specs/fragments/first-class-functions/first-class-function.capturing-closure-in-otherwise-errors.test:24:33: cannot use a closure that captures as the value of an `otherwise` fallback: a merge joins its arms through a single slot that carries the function pointer but not the capture environment, so the closure would be called with no environment. Use a function reference, or a closure that captures nothing
 ```
 
 <!-- test: first-class-function.capturing-closure-returned-from-other-block-errors -->
