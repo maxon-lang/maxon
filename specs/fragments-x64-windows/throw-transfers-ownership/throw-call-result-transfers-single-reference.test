@@ -1,0 +1,185 @@
+// Test: throw-call-result-transfers-single-reference
+union PErr implements Error
+	unsupported(msg String)
+end 'PErr'
+
+function buildErr() returns PErr
+	return PErr.unsupported("callee built this heap error")
+end 'buildErr'
+
+function mayFail() throws PErr
+	throw buildErr()
+end 'mayFail'
+
+function main() returns ExitCode
+	try mayFail() otherwise (e) 'caught'
+		match e 'k'
+			unsupported(msg) then return (msg.byteLength() as ExitCode)
+		end 'k'
+	end 'caught'
+	return 200
+end 'main'
+---
+ExitCode: 28
+---
+// CompiledIR
+module {
+  func @buildErr() -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.lea rax, [rip+__static_lit_0]
+    x64.mov rcx, rax
+    x64.mov rdx, 32
+    x64.add rcx, rdx
+    x64.mov [rbp-8], rcx
+    x64.mov rbx, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.lea_func rsi, [__destruct_PErr]
+    x64.mov rdi, rsi
+    x64.mov rdx, rdi
+    x64.mov rcx, 16
+    x64.mov r8, 5
+    x64.call mm_alloc
+    x64.mov [rbp-16], rax
+    x64.xor r8d, r8d
+    x64.mov [rax+0], r8
+    x64.mov r9, [rbp-8]
+    x64.mov [rax+8], r9
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, [rbp-16]
+    x64.call mm_incref
+    x64.mov rax, [rbp-16]
+    x64.epilogue
+    x64.ret
+  }
+  func @mayFail() {
+  entry:
+    x64.prologue stack_size=16
+    x64.call buildErr
+    x64.mov [rbp-8], rax
+    x64.mov rdx, [rbp-8]
+    x64.xor eax, eax
+    x64.epilogue
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=64
+    x64.call mayFail
+    x64.mov [rbp-8], rdx
+    x64.xor eax, eax
+    x64.cmp rdx, rax
+    x64.je main.otherwise_continue_0
+  otherwise_error_0:
+    x64.mov rax, [rbp-8]
+    x64.mov [rbp-16], rax
+    x64.mov rcx, [rbp-16]
+    x64.mov rdx, [rcx+0]
+    x64.mov [rbp-24], rax
+    x64.mov rbx, [rbp-24]
+    x64.mov [rbp-56], rdx
+    x64.mov rcx, [rbp-24]
+    x64.call mm_incref
+    x64.mov rsi, [rbp-56]
+    x64.mov [rbp-32], rsi
+    x64.jmp main.k_0.cmp0
+  k_0.cmp0:
+    x64.mov rax, [rbp-32]
+    x64.xor ecx, ecx
+    x64.cmp rax, rcx
+    x64.jne main.k_0.merge
+  k_0.case0:
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, [rax+8]
+    x64.mov [rbp-40], rcx
+    x64.mov rdx, [rbp-40]
+    x64.mov rcx, [rbp-40]
+    x64.call mm_incref
+    x64.mov rbx, [rbp-40]
+    x64.mov [rbp-48], rbx
+    x64.mov rsi, [rbp-48]
+    x64.mov rdi, [rsi+8]
+    x64.xor r8d, r8d
+    x64.mov r9, 4294967295
+    x64.cmp rdi, r9
+    x64.jg main.__range_panic_0
+    x64.cmp rdi, r8
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.xor eax, eax
+    x64.mov ecx, 4294967295
+    x64.cmp rdi, rcx
+    x64.jg main.__range_panic_1
+    x64.cmp rdi, rax
+    x64.jl main.__range_panic_1
+    x64.jmp main.__range_ok_1
+  __range_panic_1:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_1:
+    x64.mov rdx, [rbp-24]
+    x64.mov [rbp-56], rdi
+    x64.test rdx, rdx
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-24]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rax, [rbp-40]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_1
+    x64.mov rcx, [rbp-40]
+    x64.call mm_decref
+    x64.label __nonnull_skip_1
+    x64.mov rcx, [rbp-16]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_2
+    x64.call mm_decref
+    x64.label __nonnull_skip_2
+    x64.mov rax, [rbp-56]
+    x64.epilogue
+    x64.ret
+  k_0.merge:
+  otherwise_continue_0:
+    x64.mov rax, 200
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_PErr(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.xor edx, edx
+    x64.cmp rcx, rdx
+    x64.jne __destruct_PErr.done
+  case_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+8]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_0
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.jmp __destruct_PErr.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

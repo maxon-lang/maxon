@@ -2385,7 +2385,7 @@ public static partial class MaxonToStandardConversion {
               break;
             }
             case MaxonThrowOp throwOp: {
-              LowerThrow(throwOp, newBlock, valueMap, varTypes, module.TypeDefs);
+              LowerThrow(throwOp, newBlock, valueMap, varTypes, module.TypeDefs, temps);
               break;
             }
             case MaxonManagedMemGetOp memGetOp:

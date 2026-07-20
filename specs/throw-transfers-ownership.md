@@ -128,3 +128,43 @@ end 'main'
 ```exitcode
 0
 ```
+
+<!-- test: throw-call-result-transfers-single-reference -->
+### Throwing a call result transfers its one owned reference (no double-incref)
+
+`throw <call-result>` is the one throw shape whose value arrives ALREADY owned:
+a callee that returns an associated-value union hands back a reference at rc>=1
+through its own return-incref. The throw site must forward that single reference
+to its caller, NOT incref a second time. An extra incref would leave the error
+at rc=1 after the receiver's single decref — a leak (OPEN #47 / #16). This is
+the mirror image of a FRESH construct (`throw Union.case(...)`, rc=0) or a
+BORROWED value (`throw self.field`), each of which DOES need the incref to reach
+owned-on-delivery. `main` catches the error and reads its payload, proving the
+heap object outlived the transfer and was released exactly once (a leak would
+surface as exit code 101 from the runtime leak check).
+
+```maxon
+union PErr implements Error
+	unsupported(msg String)
+end 'PErr'
+
+function buildErr() returns PErr
+	return PErr.unsupported("callee built this heap error")
+end 'buildErr'
+
+function mayFail() throws PErr
+	throw buildErr()
+end 'mayFail'
+
+function main() returns ExitCode
+	try mayFail() otherwise (e) 'caught'
+		match e 'k'
+			unsupported(msg) then return (msg.byteLength() as ExitCode)
+		end 'k'
+	end 'caught'
+	return 200
+end 'main'
+```
+```exitcode
+28
+```

@@ -452,7 +452,8 @@ public static partial class MaxonToStandardConversion {
     IrBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
-    Dictionary<string, IrType> typeDefs) {
+    Dictionary<string, IrType> typeDefs,
+    VarRegistry temps) {
     // Scope cleanup is handled by MaxonScopeEndOp lowering before throw ops.
 
     // Check if this is an associated-value error enum
@@ -460,16 +461,25 @@ public static partial class MaxonToStandardConversion {
         && typeDefs.TryGetValue(throwOp.ErrorTypeName, out var errorTypeDef)
         && errorTypeDef is IrEnumType errorEnumType && errorEnumType.HasAssociatedValues) {
       // Error return expects a heap pointer in RDX — already a heap pointer.
-      // Convention: throws transfer an owned reference (rc>=1) to the caller.
-      // Incref so the value survives the caller's scope cleanup of locals that
-      // may transitively own this pointer (e.g. `throw self.field` where the
-      // self-struct's destructor would otherwise decref the field). For
-      // freshly-allocated throws (rc=0 from mm_alloc), this brings rc to 1,
-      // matching the same owned-on-delivery convention. The receiving end
-      // (MaxonErrorFlagToEnumOp + assign of the binding) consumes this owned
-      // reference — see MaxonErrorFlagToEnumOp lowering — instead of doing
-      // its own incref.
-      EmitIncref(block, throwHp.VarName!, varTypes, scopeName: throwOp.ErrorTypeName);
+      // Convention: throws transfer an owned reference (rc>=1) to the caller,
+      // which the receiving end (MaxonErrorFlagToEnumOp + assign of the binding)
+      // consumes with a single decref instead of incref'ing again.
+      //
+      // Whether this site must MINT that reference depends on the thrown value's
+      // provenance:
+      //  - A FRESH construct (`throw PErr.x(...)`) arrives rc=0 from mm_alloc, and
+      //    a BORROWED value (`throw self.field`) is owned by another local whose
+      //    destructor would otherwise reclaim it during the caller's scope
+      //    cleanup. Both need this incref to reach owned-on-delivery.
+      //  - A CALL RESULT (`throw buildErr()`) already arrives rc=1: the callee
+      //    transferred a reference through its own return-incref. Incref'ing here
+      //    would deliver rc=2 against the receiver's single decref, leaking the
+      //    error (OPEN #47 / #16). Skip it.
+      // This mirrors LowerReturn, whose transfer-incref likewise excludes an
+      // Orphan|CallReturn temp — see the isEnum/StructManagedTemp `!Orphan` guards.
+      if (!temps.IsCallReturnTransfer(throwHp.VarName!)) {
+        EmitIncref(block, throwHp.VarName!, varTypes, scopeName: throwOp.ErrorTypeName);
+      }
       var heapPtr = EmitLoad(block, throwHp.VarName!, varTypes);
       block.AddOp(new StdErrorReturnOp(heapPtr));
     } else {
