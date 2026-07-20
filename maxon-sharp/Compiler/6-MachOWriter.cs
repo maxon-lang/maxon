@@ -162,11 +162,28 @@ public class MachOWriter {
     byte[] exportsTrieData = [];
 
     if (hasImports) {
-      // Patch GOT entries with chained fixup bind pointers
+      // Patch GOT entries with chained fixup bind pointers.
+      //
+      // A CHAIN MUST NOT CROSS A PAGE BOUNDARY. dyld walks each page independently, starting from
+      // that page's page_start[] entry, and a `next` is a 12-bit offset interpreted WITHIN the page
+      // — so a chain that runs off the end of its page is not merely unusual, it is unwalkable. Any
+      // entry whose successor lands on a different page therefore TERMINATES its chain (next = 0),
+      // and that next page begins a fresh chain from its own start (see the page_start[] loop
+      // below, which is the other half of this and must agree with it exactly).
+      //
+      // Before this was handled, the GOT was emitted as ONE chain across every import while
+      // page_start[] named a single page. Once the GOT straddled a 16KB boundary, every slot past
+      // it was never bound and still held its raw BIND entry (bit 63 set), so calling one jumped to
+      // e.g. 0x8000000000000037 — where 0x37 is the import's own ordinal. It was a pure size
+      // lottery: the same source built green until the image grew ~20KB and moved the GOT's start
+      // address across a page. The segment-level version of this same bug is recorded above.
+      var gotChainPageSize = (uint)MachOLayout.PageSize;
       var patchedGot = new byte[got.Length];
       for (int i = 0; i < importCount; i++) {
         ulong ordinal = (uint)i;
-        ulong next = (i < importCount - 1) ? 2u : 0u;
+        var thisPage = (gotSectionOffset + (uint)i * 8) / gotChainPageSize;
+        var nextPage = (gotSectionOffset + (uint)(i + 1) * 8) / gotChainPageSize;
+        ulong next = (i < importCount - 1 && nextPage == thisPage) ? 2u : 0u;
         ulong bindEntry = (1UL << 63) | (next << 51) | ordinal;
         var bytes = BitConverter.GetBytes(bindEntry);
         Array.Copy(bytes, 0, patchedGot, i * 8, 8);
@@ -191,8 +208,19 @@ public class MachOWriter {
       // right.
       var chainPageSize = (uint)MachOLayout.PageSize;
       var dataPageCount = (ushort)((dataSegmentFileSize + chainPageSize - 1) / chainPageSize);
-      var gotChainStartPage = gotSectionOffset / chainPageSize;
-      var gotChainStartInPage = (ushort)(gotSectionOffset % chainPageSize);
+      // The FIRST GOT slot living on each page — that page's chain start, or START_NONE for a page
+      // the GOT does not reach. The GOT occupies [gotSectionOffset, gotSectionOffset + importCount*8)
+      // contiguously, so a page holds a slot iff that range intersects it, and the first such slot is
+      // at the page's own start (for a page the GOT runs THROUGH) or at gotSectionOffset (for the
+      // page the GOT begins on).
+      var gotStartsPerPage = new ushort[dataPageCount];
+      for (var page = 0; page < dataPageCount; page++) gotStartsPerPage[page] = DYLD_CHAINED_PTR_START_NONE;
+      for (var i = 0; i < importCount; i++) {
+        var slotOffset = gotSectionOffset + (uint)i * 8;
+        var page = slotOffset / chainPageSize;
+        if (gotStartsPerPage[page] == DYLD_CHAINED_PTR_START_NONE)
+          gotStartsPerPage[page] = (ushort)(slotOffset % chainPageSize);
+      }
       // Struct header (size,page_size,pointer_format,segment_offset,max_valid_pointer,page_count) is
       // 22 bytes; the page_start[] array follows, one uint16 per page.
       var dataSegStartsSize = 4u + 2u + 2u + 8u + 4u + 2u + dataPageCount * 2u;
@@ -234,10 +262,10 @@ public class MachOWriter {
       cw.Write((ulong)dataSegmentFileOff);
       cw.Write(0u);
       cw.Write(dataPageCount);
-      // The GOT is one contiguous chain (each entry's `next` steps 8 bytes to the following one), so
-      // exactly one page holds its start; every other page has no chain of its own.
+      // One start per page the GOT touches — NOT one for the whole GOT. The chain is cut at every
+      // page boundary above, so each page the GOT spans begins a chain of its own and must say where.
       for (uint page = 0; page < dataPageCount; page++)
-        cw.Write(page == gotChainStartPage ? gotChainStartInPage : DYLD_CHAINED_PTR_START_NONE);
+        cw.Write(gotStartsPerPage[page]);
 
       while (cf.Position < importsOffset) cw.Write((byte)0);
 
