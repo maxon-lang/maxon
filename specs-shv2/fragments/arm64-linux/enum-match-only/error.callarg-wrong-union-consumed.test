@@ -1,0 +1,27 @@
+// Test: error.callarg-wrong-union-consumed
+typealias Integer = int(0 to i64.max)
+
+union BoxA
+	msg(text String)
+end 'BoxA'
+
+union BoxB
+	code(n Integer)
+end 'BoxB'
+
+type WrapA
+	export var inner as BoxA
+
+	static function create(inner BoxA) returns Self
+		return Self{inner: inner}
+	end 'create'
+end 'WrapA'
+
+function main() returns ExitCode
+	let b = BoxB.code(7)
+	let w = WrapA.create(b)
+	return 0 as ExitCode
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:22:10: argument type mismatch for 'inner': expected 'BoxA', got 'BoxB'
