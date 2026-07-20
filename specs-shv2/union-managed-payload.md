@@ -619,3 +619,30 @@ end 'main'
 ```maxoncstderr
 error E3086: <fragment>:10:17: field 'column' of 'LexErr' is not initialized by this literal, and it has no default value
 ```
+
+<!-- test: error.nested-union-payload -->
+A union PAYLOAD that is itself a payload-bearing (boxed) union is refused. A boxed
+union is now a managed field kind (a boxed-union STRUCT FIELD is constructible — see
+`struct-managed-field.md`), but storing one in a union PAYLOAD slot needs the slot's
+width derived the field way rather than from `payloadStorageOf` (which for a boxed
+union is the un-lowerable `named` type). A clean reject at the construct site, not a
+crash, until that follow-up slice.
+```maxon
+typealias N = int(0 to i64.max)
+
+union Inner
+	a(x N)
+end 'Inner'
+
+union Wrap
+	wrap(inner Inner)
+end 'Wrap'
+
+function main() returns ExitCode
+	let w = Wrap.wrap(Inner.a(5))
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:13:15: Unsupported: a payload field 'inner' of type 'union Inner' on `union Wrap` — a nested payload-bearing union payload needs its own destructor cascade, which arrives at a later rung (String and struct payloads are supported)
+```

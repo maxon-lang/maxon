@@ -1694,7 +1694,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/fragments/error-handling/error.throw-borrowed-union-unsupported.test:13:2: Unsupported: throwing a borrowed union value — a union parameter (or a re-borrow of one) is a heap box the caller would adopt and free while the borrow's own owner frees it too, a double free. Throw an OWNED value (a fresh `throw U.case(x)` or a caught `(e)` binding); consuming a borrowed union to throw it arrives with cross-call consume
+error E2015: specs/fragments/error-handling/error.throw-borrowed-union-unsupported.test:13:2: Unsupported: throwing a borrowed union value — a union parameter (or a re-borrow of one) is a heap box the caller would adopt and free while the borrow's own owner frees it too, a double free. Throw an OWNED value (a fresh `throw U.case(x)`, a caught `(e)` binding, or a boxed-union FIELD the throw moves out); consuming a borrowed union to throw it arrives with cross-call consume
 ```
 
 <!-- test: error.throw-payload-expr-temp-decref -->

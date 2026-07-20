@@ -30,7 +30,7 @@ and the no-binding `otherwise` form decrefs once to release the transfer.
 ## Tests
 
 <!-- disabled-test: propagate-throw-through-local-struct -->
-<!-- P1.4b wave 2c — constructing a struct with a boxed-union FIELD (`var pendingError as OuterErr`) needs the nested-destructor CONSTRUCT move (E2015 today); labeled union-case args are NOT the blocker (this rung, OPEN #53, adds those, but the struct-field-of-union construct remains unimplemented) -->
+<!-- P1.4b wave 2c DELIVERED the boxed-union struct FIELD this test needs — construct (`Self{pendingError: OuterErr…}`), reassign (`pendingError = …`), scope-exit drop, AND the throw-of-field MOVE-OUT `throw pendingError` requires (shv2 has no `__mm_incref`, so a thrown borrowed field is transferred by nulling its slot; see the boxed-union-field-throw-* cases below, which pin that mechanism on the SAME ownership shapes). This test stays disabled on a SEPARATE, later blocker the original note missed: the BARE method call `bump()` (implicit self) in `run()`. shv2 has no implicit-self method resolution — a bare `bump()` is a free call → E3004. The language needs `<EnclosingType>.<name>` method-name resolution with static-vs-instance receiver handling (oracle-verified: a bare instance `helper()` prepends self, a bare static `mk()` gets no receiver), which is a distinct feature/rung, NOT boxed-union fields. Every other construct here — bare self-field read/write, `throw <self-field>`, propagation via `return try lex.run()` — works today. -->
 ### Propagating a heap-allocated error through a function holding a local struct
 
 A function creates a local struct, calls a method that throws an
@@ -128,4 +128,98 @@ end 'main'
 ```
 ```exitcode
 0
+```
+
+<!-- test: boxed-union-field-throw-owned-local -->
+### Throwing a boxed-union field of an OWNED LOCAL struct transfers it out (P1.4b wave 2c)
+
+A function holds an owned local struct with a boxed-union field and throws that
+field. shv2 has no incref, so the throw MOVES the box out of the field (nulls the
+slot); the function's own scope-exit drop of the struct then skips the nulled slot
+(the cascade's null-guard), and the box reaches the caller alive. Caught and matched,
+it yields the transferred payload once — no leak, no double-free.
+
+```maxon
+typealias N = int(0 to i64.max)
+
+union OuterErr implements Error
+	unterminatedString(line N, column N)
+	unexpectedEof(line N, column N)
+end 'OuterErr'
+
+type Holder
+	export var pending as OuterErr
+
+	static function create() returns Holder
+		return Self{pending: OuterErr.unterminatedString(7, column: 13)}
+	end 'create'
+end 'Holder'
+
+function process() returns N throws OuterErr
+	var h = Holder.create()
+	throw h.pending
+end 'process'
+
+function main() returns ExitCode
+	let v = try process() otherwise (e) 'fail'
+		match e 'kind'
+			unterminatedString(line, column) then return (line + column)
+			unexpectedEof(line, column) then return (line + column + 100)
+		end 'kind'
+	end 'fail'
+	return (v + 200)
+end 'main'
+```
+```exitcode
+20
+```
+
+<!-- test: boxed-union-field-throw-borrowed-self -->
+### Throwing a boxed-union self-field through a BORROWED receiver, propagated
+
+The exact ownership shape of the disabled `propagate-throw-through-local-struct`
+(minus the implicit-self method call it also needs): an instance method throws its
+own boxed-union self-field. `self` is BORROWED — its owner is the caller's `lex`
+local — so the throw moves the box out by nulling the field through the borrow, and
+the caller PROPAGATES (`return try lex.run()`), tearing `lex` down while the nulled
+slot makes its destructor skip the transferred box. The error reaches `main`'s
+handler once, no leak, no double-free.
+
+```maxon
+typealias N = int(0 to i64.max)
+
+union OuterErr implements Error
+	unterminatedString(line N, column N)
+	unexpectedEof(line N, column N)
+end 'OuterErr'
+
+type Lex
+	export var pendingError as OuterErr
+
+	static function create() returns Lex
+		return Self{pendingError: OuterErr.unterminatedString(7, column: 13)}
+	end 'create'
+
+	function run() returns N throws OuterErr
+		throw pendingError
+	end 'run'
+end 'Lex'
+
+function outer() returns N throws OuterErr
+	var lex = Lex.create()
+	return try lex.run()
+end 'outer'
+
+function main() returns ExitCode
+	let v = try outer() otherwise (e) 'fail'
+		match e 'kind'
+			unterminatedString(line, column) then return (line + column)
+			unexpectedEof(line, column) then return (line + column + 100)
+		end 'kind'
+	end 'fail'
+	return (v + 200)
+end 'main'
+```
+```exitcode
+20
 ```

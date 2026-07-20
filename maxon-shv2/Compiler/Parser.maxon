@@ -555,6 +555,7 @@ type FieldChainStep
 	end 'create'
 end 'FieldChainStep'
 
+
 // --- Ranged-typealias range bounds ---
 //
 // The inclusive bounds each sized numeric type's `.min` / `.max` denotes in a range
@@ -1814,6 +1815,19 @@ export type Parser
 	// E2049. `parseArmBody` sets it around its `parseStatement` call; `parseTry` reads it to raise the
 	// block-form diagnostics at the right position. Saved/restored so nested constructs unwind it.
 	var inMatchArmBody as bool
+	// ⭐ **THE LAST `named` FIELD READ** (P1.4b wave 2c) — so `throw <boxed-union field>` can MOVE the box out
+	// of its container (`emitThrowError` nulls the recorded `(box, offset)`) rather than reject it, the
+	// transfer shv2 has no `__mm_incref` to make by sharing. Four SCALAR fields rather than a struct so a
+	// field read allocates nothing — a boxed union is thrown as the LAST op before the throw, so recognizing
+	// the thrown value by IDENTITY against `lastFieldReadValue` is enough, and an equal value id can only have
+	// come from this exact `(box, offset)`. A mismatch (an intervening read, a non-field throw) simply MISSES
+	// the move-out and falls to the borrowed-throw reject — never a wrong slot nulled, never a leak. Reset
+	// invalid per function (`lastFieldReadValid = false`) so a stale `box` never names a previous function's
+	// value; the other three fields are dead while invalid and need no reset.
+	var lastFieldReadValid as bool
+	var lastFieldReadValue as ValueId
+	var lastFieldReadBox as ValueId
+	var lastFieldReadOffset as ByteOffset
 
 	export static function create(tokens TokenArray, filePath FilePath, namespace String, signatures ProgramSignatures) returns Parser
 		return Self{
@@ -1837,7 +1851,11 @@ export type Parser
 			enclosingType: EmptySourceText,
 			ownedBindings: VarInfoArray.create(),
 			pendingTempDrops: ValueIdArray.create(),
-			inMatchArmBody: false
+			inMatchArmBody: false,
+			lastFieldReadValid: false,
+			lastFieldReadValue: 0,
+			lastFieldReadBox: 0,
+			lastFieldReadOffset: 0
 		}
 	end 'create'
 
@@ -3332,6 +3350,9 @@ export type Parser
 		// Re-created per function for the same reason `ownedBindings` is: a stray pending temp carried
 		// across a function boundary would decref a value from the PREVIOUS function's SSA space.
 		self.pendingTempDrops = ValueIdArray.create()
+		// Invalidated per function for the same reason: a stale `box` id names a value in the PREVIOUS
+		// function's SSA space, so a move-out would null the wrong slot.
+		self.lastFieldReadValid = false
 		self.loops = LoopContextArray.create()
 		self.valueTags = ValueTypeTagArray.create()
 		self.valueNameIds = TypeNameIdArray.create()
@@ -4593,15 +4614,24 @@ export type Parser
 		let errValue = try self.parseExpression(func, block: self.currentBlock)
 		let errorIsBoxed = self.throwsTypeIsBoxedUnion(self.typeOf(errValue))
 
-		// ⭐ **A THROWN BOX MUST BE OWNED — a BORROWED one is refused, not double-freed.** A boxed error is
-		// handed to the caller through the flag register, which ADOPTS and drops it once. Throwing a
-		// BORROWED union (a `throw <union param>`, or a re-borrow of one) whose owner lives in THIS function's
-		// caller would make two owners free one box; a borrowed aggregate has no `clone` to transfer, so it
-		// is a clean reject (the throw twin of `parseReturnStatement`'s borrowed-aggregate refusal) until
-		// cross-call consume. An OWNED box (a fresh `throw U.case(x)` or a caught `(e)` binding) carries the
-		// provenance bit and is moved out below.
+		// ⭐ **A THROWN BOX MUST BE OWNED — a BORROWED one is either MOVED OUT (a field) or refused.** A boxed
+		// error is handed to the caller through the flag register, which ADOPTS and drops it once. An OWNED box
+		// (a fresh `throw U.case(x)` or a caught `(e)` binding) carries the provenance bit and is moved out
+		// below. A BORROWED box splits two ways:
+		//   • a boxed-union struct/self FIELD read — the CONTAINER owns the box, and the throw TRANSFERS it out
+		//     by MOVE: `moveOutThrownField` nulls the field slot (so the container's `__destruct_<T>` cascade
+		//     skips it) and marks the value owned, so the same owned hand-off below transfers it. shv2 has no
+		//     `__mm_incref` (MmRuntime's ⛔ note), so this MOVE is the only transfer there is (P1.4b wave 2c).
+		//   • anything else borrowed (a `throw <union param>`, or a re-borrow of one) is owned by THIS
+		//     function's CALLER, not by a container this function can null — two owners would free one box, and
+		//     with no clone there is no transfer. A clean reject (the throw twin of `parseReturnStatement`'s
+		//     borrowed-aggregate refusal) until cross-call consume.
 		if errorIsBoxed and not self.valueIsOwnedHeap(errValue) 'borrowedThrow'
-			throw ParseError.unsupported("throwing a borrowed union value — a union parameter (or a re-borrow of one) is a heap box the caller would adopt and free while the borrow's own owner frees it too, a double free. Throw an OWNED value (a fresh `throw U.case(x)` or a caught `(e)` binding); consuming a borrowed union to throw it arrives with cross-call consume", line: anchor.line, column: anchor.column)
+			if self.lastFieldReadValid and self.lastFieldReadValue == errValue 'fieldThrow'
+				self.moveOutThrownField(errValue, anchor: anchor)
+			end 'fieldThrow' else 'borrowedNonField'
+				throw ParseError.unsupported("throwing a borrowed union value — a union parameter (or a re-borrow of one) is a heap box the caller would adopt and free while the borrow's own owner frees it too, a double free. Throw an OWNED value (a fresh `throw U.case(x)`, a caught `(e)` binding, or a boxed-union FIELD the throw moves out); consuming a borrowed union to throw it arrives with cross-call consume", line: anchor.line, column: anchor.column)
+			end 'borrowedNonField'
 		end 'borrowedThrow'
 
 		// ⭐ **THROW TRANSFERS THE BOX OUT OF THE LOCAL DROP SETS — BEFORE the scope drops.** The box is
@@ -4615,6 +4645,29 @@ export type Parser
 
 		self.artifact.emitTerminator(self.currentBlock, op: MaxonOp.throwError(errValue, errorIsBoxed: errorIsBoxed), range: SourceRange.ofToken(anchor))
 	end 'emitThrowError'
+
+	// ⭐ **MOVE A THROWN BOXED-UNION FIELD OUT OF ITS CONTAINER.** The field READ borrowed the box (its
+	// container owns it); throwing it transfers ownership to the caller. shv2 has no `__mm_incref`, so the
+	// transfer is a MOVE: NULL the slot the value was loaded from (recorded by `emitFieldLoad` in
+	// `managedFieldReads`), so the container's `__destruct_<T>` cascade's null-guard SKIPS it — else the
+	// container would free the box the caller has just adopted (a double free). Marking the value OWNED then
+	// routes it through the SAME hand-off + `throwError` transfer a fresh `throw U.case(x)` takes. This is the
+	// throw twin of match's `moveOutManagedPayload`, one field-load out. ⚠ **SOUNDNESS BOUNDARY:** for a
+	// borrowed self/param container the null writes THROUGH the borrow into the caller's box, which is sound
+	// while the caller then TEARS THE CONTAINER DOWN (`return try …`, the propagation the corpus spec exercises)
+	// — a caller that instead CATCHES and keeps reading the container would observe the nulled field, the same
+	// cross-call move-tracking gap `moveOutManagedPayload` refuses a borrowed scrutinee for. A container that
+	// is an OWNED LOCAL of THIS function is fully sound (its own scope-exit drop honours the null).
+	//
+	// The null store is an i64 pointer write — a boxed-union field slot holds a machine-word box address
+	// (`fieldStorageType` gives a boxed-union field `integer`), the same width `moveOutManagedPayload` nulls
+	// a match-scrutinee slot at.
+	function moveOutThrownField(value ValueId, anchor Token)
+		let range = SourceRange.ofToken(anchor)
+		let zero = self.emitLiteral(0 as ParsedInt, valueType: MaxonType.integer, range: range)
+		self.emitIndirectStore(self.lastFieldReadBox, offset: self.lastFieldReadOffset, value: zero, storageType: MaxonType.integer, range: range)
+		self.markValueOwnsHeap(value)
+	end 'moveOutThrownField'
 
 	// `panic("message")` — abort the process after printing the message. Emits a `panicAbort` body op
 	// (expanded to `osWriteStdout` + `osExit` in lowering) followed by a dead return terminator (control
@@ -9010,45 +9063,19 @@ export type Parser
 	// (`parseStructLiteralFields`), then the field's declared DEFAULT (`applyFieldDefaults`). The
 	// literal always wins — the default is consulted only for a slot `filled` says nothing wrote.
 	// `requireAllFieldsInitialized` then rejects whatever neither supplied.
-	// ⚠ **CONSTRUCTING A STRUCT WITH A MANAGED FIELD IS REFUSED — the CONSUME-into-field half of cross-call
-	// ownership (Wave 2 / P1.4b).** A struct field that owns heap — a `String`, a struct-typed field, a
-	// payload-bearing union — needs its drop to CASCADE (free the field, then the box) when the struct is
-	// dropped, and today a struct box takes the generic `__mm_decref` that frees ONLY the box
-	// (`decrefCalleeFor`). So a value stored into such a field is never freed (a leak) OR — when it is a
-	// BORROW of a caller's temp (`Self{name: name}` from a String parameter) — freed by that temp's owner
-	// while the field still points at it (a dangling read, a use-after-free the bump allocator masks).
-	// Moving a value into DURABLE struct storage is exactly the consume the borrow-by-default ruling defers
-	// to Wave 2, alongside the destructor cascade. Refused at the CONSTRUCT site (a struct with a managed
-	// field may still be DECLARED — the layout is fine; it is building one that is not yet lowerable), the
-	// same use-site placement `requireStructBase` and the union-payload rejection use.
-	// ⭐ **THE ONE MANAGED FIELD KIND WAVE 2 DOES NOT YET CONSTRUCT — a payload-bearing (boxed) UNION
-	// field.** Wave 2 lifted the blanket reject on managed struct fields for the two supported kinds — a
-	// `String` (promoted/moved in, dropped through `__str_decref`) and a `struct` (moved in, dropped through
-	// its own `__destruct_<Struct>`). A boxed-union field is left refused because `moveInPayload` has no
-	// move for it (a `nestedUnion` classification is not `managed`, so it would be stored as a raw scalar and
-	// never move-tracked — a leak or double-free), and the drop routing that WOULD reach its destructor is
-	// present but its CONSTRUCT move is not. Refused at the CONSTRUCT site (a struct with such a field may
-	// still be DECLARED — the layout is fine), the same use-site placement `requireStructBase` uses.
-	function rejectUnsupportedManagedStructField(layout StructLayout, anchor Token) throws ParseError
-		for i in 0 upto layout.fieldCount() 'eachField'
-			let fieldType = self.signatures.fieldTypeOf(layout.name, index: i, into: self.artifact.typeNames)
-			match classifyUnionPayload(self.signatures, typeNames: self.artifact.typeNames, fieldType: fieldType) 'class'
-				nestedUnion then break 'class'
-				scalar then continue
-				managed then continue
-				floatPayload then continue
-				undeclaredName then continue
-			end 'class'
-			let fieldName = try layout.fieldNames.get(i) otherwise panic("rejectUnsupportedManagedStructField: fieldNames.get OOB at {i} — the layout's name column is sized to its field count")
-			throw ParseError.unsupported("constructing `type {String.from(layout.name)}` with the boxed-union field '{String.from(fieldName)}' — a struct field that is a payload-bearing union needs the nested-destructor CONSTRUCT move a later rung adds; a `String` and a `struct` field are supported at Wave 2", line: anchor.line, column: anchor.column)
-		end 'eachField'
-	end 'rejectUnsupportedManagedStructField'
-
+	//
+	// ⭐ **A MANAGED FIELD IS MOVED IN** (`emitStructLiteral` → `moveInPayload`), not stored raw — the
+	// CONSUME-into-field half of cross-call ownership. Every managed field kind is now constructible: a
+	// `String` (promoted/moved in, dropped through `__str_decref`), a `struct` (moved in, dropped through
+	// its own `__destruct_<Struct>`), and a payload-bearing (boxed) UNION field (moved in, dropped through
+	// the union's `__destruct_<U>` or the trivial `__mm_decref` for a scalar-only box — P1.4b wave 2c). The
+	// box becomes the field's sole owner and its `__destruct_<Struct>` cascade drops it exactly once. A
+	// borrowed struct/union value has no `clone`, so moving one into durable storage is refused
+	// (`moveInPayload` — the transitive cross-call consume the call-graph fixpoint owns).
 	function parseStructLiteral(func IrFunction) returns ValueId throws ParseError
 		let typeTok = self.current()
 		let typeName = try self.readStructLiteralTypeName()
 		let layout = try self.requireConstructible(typeName, anchor: typeTok)
-		try self.rejectUnsupportedManagedStructField(layout, anchor: typeTok)
 
 		try self.consume(TokenKind.leftBrace)
 		// Parallel to the LAYOUT, not to the source: `fieldValues[i]` is the value for the field the
@@ -9669,11 +9696,20 @@ export type Parser
 		self.emitIndirectStore(box, offset: UnionTagOffset, value: tagLit, storageType: MaxonType.integer, range: range)
 	end 'emitUnionTagStore'
 
-	// Classify a payload field's storage, rejecting the ones this rung cannot lower — a FLOAT (needs the
-	// bitcast ops a later rung adds) and a NESTED boxed-union payload (its own destructor cascade is a
-	// later rung). A SCALAR, a String, and a struct are lowerable; the returned class carries the storage
-	// type and, for a managed payload, whether it is a String. The reject is at the construct/extract USE
-	// site (not the declaration), so the tolerant enum sweep never truncates a layout over it.
+	// Classify a payload field's storage, rejecting the ones this rung's UNION-payload store cannot lower —
+	// a FLOAT (needs the bitcast ops a later rung adds) and a NESTED boxed-union payload. A SCALAR, a
+	// String, and a struct are lowerable; the returned class carries the storage type and, for a managed
+	// payload, whether it is a String. The reject is at the construct/extract USE site (not the
+	// declaration), so the tolerant enum sweep never truncates a layout over it.
+	//
+	// ⚠ **THE nestedUnion REJECT IS THE UNION-PAYLOAD SITE'S ALONE — a boxed-union STRUCT FIELD lowers.**
+	// A boxed union is now a MANAGED class (its move-in and drop are wired), so a boxed-union struct FIELD
+	// is constructible (its store width comes from `fieldStorageType` → i64). But a union PAYLOAD's store
+	// width comes from `payloadStorageOf`, which for a `nestedUnion` is the `named(<union>)` type — and
+	// `maxonTypeToStdType` PANICS on a `named`. Storing a boxed-union payload IN A BOX needs the payload
+	// slot's width derived the field way (a follow-up slice); until then this refuses it cleanly rather
+	// than panic the lowering. Only `emitEnumBox`/`emitUnionPayloadLoad` call this — the struct-field path
+	// classifies through `classifyUnionPayload` directly and never reaches here.
 	function requirePayloadLowerable(field PayloadField, layout EnumLayout, posTok Token) returns PayloadClass throws ParseError
 		// The payload's `declaredType` is a signatures-layout id; adopt it into this file's interner
 		// before classifying, or a ranged alias that shifts the interning order makes `classifyUnionPayload`
@@ -9684,10 +9720,23 @@ export type Parser
 			managed then break 'c'
 			undeclaredName then break 'c'
 			floatPayload then throw ParseError.unsupported(self.floatPayloadMessage(field, layout: layout), line: posTok.line, column: posTok.column)
-			nestedUnion(display) then throw ParseError.unsupported(self.nestedUnionPayloadMessage(field, layout: layout, typeName: display), line: posTok.line, column: posTok.column)
+			nestedUnion(storage) then throw ParseError.unsupported(self.nestedUnionPayloadMessage(field, layout: layout, typeName: self.boxedUnionDisplay(storage)), line: posTok.line, column: posTok.column)
 		end 'c'
 		return class
 	end 'requirePayloadLowerable'
+
+	// The "union U"/"enum U" text a boxed-union payload's rejection message names, derived from the payload's
+	// `named(<union>)` storage type — a COLD path (only a nested-union-payload reject reaches it), which is why
+	// `nestedUnion` carries the type rather than a precomputed `String` every classification would allocate.
+	// The storage id lives in this file's interner (`classifyUnionPayload` adopted it), and it always names a
+	// declared boxed union (that is what made the classification `nestedUnion`).
+	function boxedUnionDisplay(storage MaxonType) returns String
+		let name = try self.artifact.typeNames.nameOf(typeNameIdOf(storage)) otherwise panic("boxedUnionDisplay: a nestedUnion storage type's id is not in this file's interner — classifyUnionPayload adopts it before classifying")
+		match self.signatures.enumOf(name) 'e'
+			declared(layout) then return "{layout.kindWord()} {String.from(name)}"
+			undeclared then panic("boxedUnionDisplay: '{String.from(name)}' names no declared enum/union — classifyUnionPayload classifies `nestedUnion` only for a boxed EnumLayout")
+		end 'e'
+	end 'boxedUnionDisplay'
 
 	// A payload argument must agree with its field's classified type. A SCALAR uses `checkDeclaredType`,
 	// the same coercion-site rule a struct literal field, a call argument and a `return` ask; a MANAGED
@@ -10467,7 +10516,22 @@ export type Parser
 	// `named` arm exists for it), so this is that arrangement reaching one op further, not a new one.
 	function emitFieldLoad(box ValueId, layout StructLayout, index FieldIndex, range SourceRange) returns ValueId
 		let declared = self.signatures.fieldTypeOf(layout.name, index: index, into: self.artifact.typeNames)
-		return self.emitIndirectLoad(declared, box: box, offset: layout.offsetOfField(index), storageType: self.fieldStorageType(declared), range: range)
+		let offset = layout.offsetOfField(index)
+		let result = self.emitIndirectLoad(declared, box: box, offset: offset, storageType: self.fieldStorageType(declared), range: range)
+
+		// ⭐ **RECORD A BOXED-UNION-CANDIDATE FIELD READ**, so a THROW of it can MOVE it out of the container
+		// (`emitThrowError` nulls this slot — shv2's only transfer for a borrowed error). Gated on the `named`
+		// tag, which a boxed union carries (as do a ranged-int alias and a scalar enum — the throw path
+		// filters those out via `throwsTypeIsBoxedUnion`); a scalar/String/struct field is not `named` and is
+		// never a thrown error, so the common field read leaves this slot untouched.
+		if maxonTypeTag(declared) == ValueTypeTag.named 'namedFieldRead'
+			self.lastFieldReadValid = true
+			self.lastFieldReadValue = result
+			self.lastFieldReadBox = box
+			self.lastFieldReadOffset = offset
+		end 'namedFieldRead'
+
+		return result
 	end 'emitFieldLoad'
 
 	// ⭐ **THE ONE `loadIndirect` EMIT.** A field read (`p.x`), a union tag load and a union payload
@@ -10528,9 +10592,8 @@ export type Parser
 			structRef then return declared
 			unresolved then panic("fieldStorageType: a field is declared `unresolved` — `parseTypeReference` produces only `named`, `structRef` and the three primitive keywords, so no field declaration can carry one")
 			// A String field stores an i64 POINTER, exactly like a struct-ref field — `maxonTypeToStdType`
-			// gives it the machine word. This width is still needed (a self-field READ loads through it),
-			// but a struct with a managed field cannot yet be CONSTRUCTED — `rejectManagedStructFields`
-			// refuses it, because a struct box's drop does not cascade to free such a field (Wave 2).
+			// gives it the machine word. A managed field IS now constructed (`moveInPayload`), and its
+			// self-field READ loads through this same width.
 			string then return declared
 			named then break 'kind'
 		end 'kind'
@@ -10538,16 +10601,23 @@ export type Parser
 		let name = try self.artifact.typeNames.nameOf(typeNameIdOf(declared)) otherwise panic("fieldStorageType: a field's named type has an id that is not in this file's interner — the layout's types are adopted through `fieldTypeOf`, which re-interns into exactly this table")
 		match self.signatures.aliasOf(name) 'alias'
 			declared(alias) then return alias.underlying
-			// A field typed with a name NO file declares, or with a `type` the sweep recorded but
-			// whose reference the parser typed `named` rather than `structRef` (a field declared
-			// with its own struct's name is `structRef` and never reaches here). The FIRST is a user
-			// error — E3011, which `TypeResolution` reports against the merged registry, the
-			// authority — and it is not this routine's to report: the sweep is the tolerant half.
-			// Returning `integer` keeps the op well-formed for the instant before the pipeline's
-			// error gate throws, which is exactly what `resolveNamedType`'s own recovery does and
-			// for the same reason.
-			undeclared then return MaxonType.integer
+			undeclared then break 'alias'
 		end 'alias'
+
+		// A declared enum/union field stores an i64 — a payload-free enum's value IS its i64 tag, and a
+		// boxed-union field is an i64 POINTER to its box (P1.4b wave 2c). Both collapse to `integer`,
+		// exactly as `TypeResolution.resolveNamedType` erases a declared enum/union to `integer`.
+		if self.signatures.containsEnum(name) 'enumOrUnion'
+			return MaxonType.integer
+		end 'enumOrUnion'
+
+		// A name NO file declares, or a `type` the sweep recorded but whose reference the parser typed
+		// `named` rather than `structRef` (a field declared with its own struct's name is `structRef` and
+		// never reaches here). The first is a user error — E3011, which `TypeResolution` reports against
+		// the merged registry, the authority — and it is not this routine's to report: the sweep is the
+		// tolerant half. Returning `integer` keeps the op well-formed for the instant before the
+		// pipeline's error gate throws, exactly as `resolveNamedType`'s own recovery does.
+		return MaxonType.integer
 	end 'fieldStorageType'
 
 	// ⭐ **THE SCALAR-VS-MANAGED PAYLOAD DECISION — the boundary of slice 1.** The concrete storage

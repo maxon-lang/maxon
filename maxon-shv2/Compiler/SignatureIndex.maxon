@@ -552,9 +552,17 @@ export union PayloadClass
 	managed(storage MaxonType, isString bool)
 	// A `float` payload — needs the bitcast ops a later rung adds (a scalar-only union is int-tagged).
 	floatPayload
-	// A boxed-union payload (a nested payload-bearing union) — its own destructor cascade is a later
-	// rung (P1.7+). `display` is the "union U"/"enum U" text a rejection message names.
-	nestedUnion(display String)
+	// A boxed-union field/payload (a nested payload-bearing union) — a MANAGED owned heap pointer, exactly
+	// like a `managed` struct box: construct MOVES it in (no incref), and the cascade drops it through its
+	// OWN `__destruct_<U>` (or the trivial `__mm_decref` for a scalar-only union box). It is kept a case
+	// DISTINCT from `managed` so the UNION-payload path — whose store width comes from `payloadStorageOf`
+	// and CANNOT carry the `named` tag through `maxonTypeToStdType` — can still reject a nested boxed-union
+	// PAYLOAD cleanly (`requirePayloadLowerable`); the STRUCT-field path derives its store width from
+	// `fieldStorageType` instead, so it lowers a boxed-union field fine (P1.4b wave 2c). `storage` is the
+	// field's `named(<union>)` type — the value tag a struct-field type-check compares, a moved-out load
+	// carries, AND the union-payload reject derives its "union U" message text from (at the error site, not
+	// eagerly — the message is a cold path, so nothing precomputes a `String` on every classification).
+	nestedUnion(storage MaxonType)
 	// A name no file declares — `TypeResolution` reports it as E3011; the caller keeps the op
 	// well-formed for the instant before the pipeline's error gate throws.
 	undeclaredName
@@ -589,9 +597,9 @@ export function classifyUnionPayload(signatures ProgramSignatures, typeNames Typ
 	end 'alias'
 
 	// A payload-FREE enum's value is an i64 tag — a scalar; a BOXED union is a managed heap pointer
-	// whose own destructor cascade is a later rung.
+	// (its box carries the field's `named(<union>)` id, which `enumPayloadClass` reads off `fieldType`).
 	match signatures.enumOf(name) 'asEnum'
-		declared(enumLayout) then return enumPayloadClass(enumLayout)
+		declared(enumLayout) then return enumPayloadClass(enumLayout, fieldType: fieldType)
 		undeclared then break 'asEnum'
 	end 'asEnum'
 
@@ -615,10 +623,11 @@ function aliasPayloadClass(alias RangedTypeAlias) returns PayloadClass
 end 'aliasPayloadClass'
 
 // A payload whose type is another enum/union: a payload-FREE enum is a scalar (its value is its i64
-// tag, stored inline); a BOXED union is a managed heap pointer whose ownership is a later rung.
-function enumPayloadClass(enumLayout EnumLayout) returns PayloadClass
+// tag, stored inline); a BOXED union is a MANAGED heap pointer carrying the field's own `named(<union>)`
+// type (`fieldType`) — the value tag its move-in/move-out/drop all read.
+function enumPayloadClass(enumLayout EnumLayout, fieldType MaxonType) returns PayloadClass
 	if enumLayout.isBoxed() 'boxed'
-		return PayloadClass.nestedUnion("{enumLayout.kindWord()} {String.from(enumLayout.name)}")
+		return PayloadClass.nestedUnion(fieldType)
 	end 'boxed'
 	return PayloadClass.scalar(MaxonType.integer)
 end 'enumPayloadClass'
@@ -661,9 +670,9 @@ end 'caseHasManagedField'
 export function payloadClassIsManaged(class PayloadClass) returns bool
 	return match class 'c'
 		managed gives true
+		nestedUnion gives true
 		scalar gives false
 		floatPayload gives false
-		nestedUnion gives false
 		undeclaredName gives false
 	end 'c'
 end 'payloadClassIsManaged'
@@ -682,29 +691,35 @@ export function payloadClassIsString(class PayloadClass) returns bool
 end 'payloadClassIsString'
 
 // The CONCRETE storage type a classified payload occupies its slot as — what the `loadIndirect`/
-// `storeIndirect` carries. A managed payload's storage is a `structRef`/`string` (an i64 pointer);
-// float/nested-union are rejected before any store reaches here.
+// `storeIndirect` carries. A managed payload's storage is a `structRef`/`string` (an i64 pointer); a
+// boxed-union (`nestedUnion`) payload's is the field's `named(<union>)` — the value tag a struct-field
+// type-check compares against the value (`requireManagedValueMatches`, tag-only, never lowered here).
+// A `float` payload is rejected before any store reaches here. ⚠ A `named` storage does NOT lower
+// through `maxonTypeToStdType` (it panics), so the UNION-payload store — whose width comes from
+// `payloadStorageOf` — must never receive a `nestedUnion` (`requirePayloadLowerable` rejects it first);
+// the STRUCT-field store derives its width from `fieldStorageType` (→ i64), not from here.
 export function payloadStorageOf(class PayloadClass) returns MaxonType
 	match class 'c'
 		scalar(storage) then return storage
 		managed(storage, _) then return storage
+		nestedUnion(storage) then return storage
 		undeclaredName then return MaxonType.integer
 		floatPayload then panic("payloadStorageOf: a float payload has no lowerable storage — requirePayloadLowerable rejects it before any store")
-		nestedUnion then panic("payloadStorageOf: a nested-union payload has no lowerable storage — requirePayloadLowerable rejects it before any store")
 	end 'c'
 end 'payloadStorageOf'
 
 // The MaxonType a LOADED payload value is tagged with: a managed payload's concrete storage (so a
-// struct binding reads as `structRef` — required by `requireStructBase` — and a String as `string`),
-// but a scalar's DECLARED type (so a ranged alias's low bound stays readable by the shift rule, exactly
-// as `emitFieldLoad` keeps a scalar field's alias).
+// struct binding reads as `structRef` — required by `requireStructBase` — and a String as `string`); a
+// boxed-union payload's `named(<union>)` (so a moved-out load is recognized as a boxed union by
+// `enumMatchFor`/`decrefCalleeFor`); a scalar's DECLARED type (so a ranged alias's low bound stays
+// readable by the shift rule, exactly as `emitFieldLoad` keeps a scalar field's alias).
 export function payloadValueTypeOf(class PayloadClass, declared MaxonType) returns MaxonType
 	match class 'c'
 		scalar then return declared
 		managed(storage, _) then return storage
+		nestedUnion(storage) then return storage
 		undeclaredName then return declared
 		floatPayload then panic("payloadValueTypeOf: a float payload has no lowerable value type — requirePayloadLowerable rejects it before any load")
-		nestedUnion then panic("payloadValueTypeOf: a nested-union payload has no lowerable value type — requirePayloadLowerable rejects it before any load")
 	end 'c'
 end 'payloadValueTypeOf'
 

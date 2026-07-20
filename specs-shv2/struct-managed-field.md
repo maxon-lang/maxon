@@ -354,3 +354,99 @@ end 'main'
 ```exitcode
 10
 ```
+
+<!-- test: boxed-union-field-construct-match -->
+A struct field that is a payload-bearing (boxed) `union` is constructed by moving the
+box into the field slot (P1.4b wave 2c), read back through the box, and matched — the
+scalar payloads bind and the container is dropped at scope exit through its cascade,
+no leak.
+```maxon
+typealias N = int(0 to i64.max)
+
+union OuterErr implements Error
+	unterminatedString(line N, column N)
+	unexpectedEof(line N, column N)
+end 'OuterErr'
+
+type Holder
+	export var pending as OuterErr
+
+	static function create() returns Self
+		return Self{pending: OuterErr.unterminatedString(7, column: 13)}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.create()
+	let r = match h.pending 'k'
+		unterminatedString(line, column) gives (line + column)
+		unexpectedEof(line, column) gives (line + column + 100)
+	end 'k'
+	return r
+end 'main'
+```
+```exitcode
+20
+```
+
+<!-- test: boxed-union-field-reassign-drops-old -->
+Reassigning a boxed-union field drops the old box before moving the new one in — the
+old union box is freed once, no leak, and the new value reads back.
+```maxon
+typealias N = int(0 to i64.max)
+
+union OuterErr implements Error
+	unterminatedString(line N, column N)
+	unexpectedEof(line N, column N)
+end 'OuterErr'
+
+type Holder
+	export var pending as OuterErr
+
+	static function create() returns Self
+		return Self{pending: OuterErr.unexpectedEof(1, column: 2)}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	var h = Holder.create()
+	h.pending = OuterErr.unterminatedString(7, column: 13)
+	let r = match h.pending 'k'
+		unterminatedString(line, column) gives (line + column)
+		unexpectedEof(line, column) gives (line + column + 100)
+	end 'k'
+	return r
+end 'main'
+```
+```exitcode
+20
+```
+
+<!-- test: boxed-union-field-drop-scope-exit -->
+A container holding a boxed-union field it never touches is still dropped at scope
+exit — the field's box is freed exactly once by the cascade, no leak (a leak is 101).
+```maxon
+typealias N = int(0 to i64.max)
+
+union OuterErr implements Error
+	unterminatedString(line N, column N)
+	unexpectedEof(line N, column N)
+end 'OuterErr'
+
+type Holder
+	export var pending as OuterErr
+	export var flag as bool
+
+	static function create() returns Self
+		return Self{pending: OuterErr.unterminatedString(7, column: 13), flag: false}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.create()
+	return 4
+end 'main'
+```
+```exitcode
+4
+```
