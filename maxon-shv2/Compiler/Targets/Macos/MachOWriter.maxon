@@ -488,15 +488,15 @@ end 'buildChainedFixups'
 
 // Patch each import call's ADRP+LDR pair to its __got entry. The call site emits
 // `ADRP x16, <got page>` at `codeOffset` and `LDR x16, [x16, <page off>]` at
-// `codeOffset+4`; both are filled here from the resolved GOT entry VA. Reuses the
-// reach-guarded shared patchers (ADRP page ±4 GiB; the LDR's imm12 always fits the
-// within-page offset), so a blown reach is a loud link error, not a wrong page.
+// `codeOffset+4`; both are filled here from the resolved GOT entry VA via the shared
+// `patchArm64AdrpPair` (the same ADRP+second-instruction patcher the func-address
+// relocs use — `patchArm64PageOff` handles the LDR's scaled imm12). The reach-guarded
+// shared patchers turn a blown reach into a loud link error, not a wrong page.
 function patchImportRelocations(code ByteArray, relocations RelocationArray, textSectionVmAddr MachineWord, gotSectionVmAddr MachineWord)
 	for reloc in relocations 'patch'
 		let gotEntryVa = gotSectionVmAddr + reloc.slotIndex * MachoGotEntryBytes
 		let adrpVa = textSectionVmAddr + reloc.codeOffset
-		patchArm64Adrp(code, codeOffset: reloc.codeOffset, instrAddr: adrpVa, targetAddr: gotEntryVa)
-		patchArm64PageOff(code, codeOffset: reloc.codeOffset + 4, targetAddr: gotEntryVa)
+		patchArm64AdrpPair(code, adrpOffset: reloc.codeOffset, instrVa: adrpVa, targetVa: gotEntryVa)
 	end 'patch'
 end 'patchImportRelocations'
 
@@ -743,6 +743,7 @@ export function writeMachO(outputPath FilePath, codeResult CodeResult, target Ta
 	// --- Patch relocations into the code image (before it is written) ---
 	patchImportRelocations(code, relocations: codeResult.relocations, textSectionVmAddr: textSectionVmAddr, gotSectionVmAddr: gotSectionVmAddr)
 	patchArm64SectionRelocations(code, rdataRelocs: codeResult.rdataRelocations, textVmAddr: textSectionVmAddr, rdataVmAddr: constSectionVmAddr, dataVmAddr: dataSectionVmAddr)
+	patchArm64FuncAdrpRelocs(code, funcAdrpRelocs: codeResult.arm64FuncAdrpRelocs, textVmAddr: textSectionVmAddr)
 
 	let entryOff = textSectionOffset + codeResult.mainCallFixupOffset
 	// macOS arm64 forces PIE — the kernel SIGKILLs a non-PIE main executable. MH_PIE

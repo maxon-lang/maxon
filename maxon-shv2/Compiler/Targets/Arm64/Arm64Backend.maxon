@@ -854,13 +854,15 @@ end 'arm64RelInstructions'
 // The per-op encoder
 // ==========================================================================
 
-// Encode one arm64 `TargetOp` into `code`, recording call / rdata / block-branch fixups. `callFixups`
-// collects `bl` sites concat resolves by name; `rdataRelocs` collects the ADRP+ADD/LDR code→data
-// references the writer patches; `branchFixups` collects within-function branches resolved once every
-// block's offset is known. EXHAUSTIVE over `TargetOp`: the x64-only arms panic (the x64 encoder owns
-// them — `buildBackend` dispatches on `target.cpu`), and the SHARED arms arm64 reuses (`movRegReg`,
-// the spill/reload and base+disp forms, `xchgRegReg`) are encoded here.
-function emitArm64TargetOp(op TargetOp, code ByteArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, iatRelocs RelocationArray, branchFixups Arm64BlockBranchFixupArray)
+// Encode one arm64 `TargetOp` into `code`, recording call / rdata / func-address / block-branch fixups.
+// `callFixups` collects `bl` sites concat resolves by name; `rdataRelocs` collects the ADRP+ADD/LDR
+// code→data references the writer patches; `funcAdrpRelocs` collects `leaFuncAddr` code→`.text`-function
+// address pairs (concat resolves the target offset, the writer patches the pair); `branchFixups` collects
+// within-function branches resolved once every block's offset is known. EXHAUSTIVE over `TargetOp`: the
+// x64-only arms panic (the x64 encoder owns them — `buildBackend` dispatches on `target.cpu`), and the
+// SHARED arms arm64 reuses (`movRegReg`, the spill/reload and base+disp forms, `xchgRegReg`) are encoded
+// here.
+function emitArm64TargetOp(op TargetOp, code ByteArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, iatRelocs RelocationArray, funcAdrpRelocs Arm64FuncAdrpRelocArray, branchFixups Arm64BlockBranchFixupArray)
 	match op 'emit'
 		// --- x64-only control/frame band ---
 		prologue to movRegImm32 then panic("emitArm64TargetOp: an x64 control/frame op reached the arm64 encoder — the x64 encoder owns the x64 band (buildBackend dispatches on target.cpu)")
@@ -916,7 +918,7 @@ function emitArm64TargetOp(op TargetOp, code ByteArray, callFixups CallFixupArra
 		arm64Cmp(lhs, rhs) then arm64EmitCmpReg(code, rn: arm64GprField(lhs), rm: arm64GprField(rhs))
 		arm64CmpImm(reg, imm) then arm64EmitCmpImm(code, rn: arm64GprField(reg), imm: imm)
 		arm64Cset(dest, cond) then arm64EmitCset(code, rd: arm64GprField(dest), cond: cond)
-		arm64LeaFuncAddr(dest, funcName) then arm64EmitLeaFuncAddr(code, dest: arm64GprField(dest), funcName: funcName)
+		arm64LeaFuncAddr(dest, funcName) then arm64EmitLeaFuncAddr(code, funcAdrpRelocs: funcAdrpRelocs, dest: arm64GprField(dest), funcName: funcName)
 		arm64LeaRdata(dest, label) then arm64EmitAdrpAddPair(code, rdataRelocs: rdataRelocs, dest: arm64GprField(dest), label: label, adrpKind: RdataRelocKind.arm64Adrp, pageOffKind: RdataRelocKind.arm64PageOff)
 		arm64LeaGlobal(dest, label) then arm64EmitAdrpAddPair(code, rdataRelocs: rdataRelocs, dest: arm64GprField(dest), label: label, adrpKind: RdataRelocKind.dataSectionArm64Adrp, pageOffKind: RdataRelocKind.dataSectionArm64PageOff)
 		arm64BranchLink(targetName) then arm64EmitBranchLink(code, callFixups: callFixups, targetName: targetName)
@@ -1029,17 +1031,18 @@ function arm64EmitFpLoadRdata(code ByteArray, rdataRelocs RdataRelocationArray, 
 	arm64EmitScaledMem(code, opcode: Arm64OpLdrD, rt: dest, baseReg: Arm64Ip0, byteOffset: 0, scale: SpillSlotBytes)
 end 'arm64EmitFpLoadRdata'
 
-// leaFuncAddr materialises a FUNCTION's `.text` address. ⚠ STOP-AND-REPORT: encoding it as the
-// mandated ADRP+ADD pair is straightforward, but the frozen `FunctionCodeChunk`/`CodeResult` contract
-// carries NO channel for a code→`.text`-function ADRP+ADD relocation (v1 carries it via a dedicated
-// `Arm64AdrFixupArray` → `Arm64FuncAdrpRelocArray`; `CodeResult.maxon` records that shv2 "OMITTED"
-// those arm64 ADR-fixup arrays, to "grow those fields back at the arm64 milestone"). Wiring that field
-// spans `FunctionCodeChunk`, `CodeResult` and the writer — a cross-cutting change owned by the
-// coordinator/writer agent, not this encoder. The scalar-core ISel does not emit `arm64LeaFuncAddr`
-// this rung (function values arrive with closures), so this blocks nothing exercised; if one appears,
-// this panics LOUDLY rather than emitting a placeholder whose address would stay zero.
-function arm64EmitLeaFuncAddr(code ByteArray, dest MachineWord, funcName ByteArray)
-	panic("arm64EmitLeaFuncAddr: a code→.text-function ADRP+ADD relocation has no channel in the frozen FunctionCodeChunk/CodeResult contract (v1's Arm64FuncAdrpReloc arrays were omitted — see CodeResult.maxon). Wiring `arm64FuncAdrpRelocs` through the chunk, CodeResult and the writer is a coordinator/writer integration. dest=x{dest}, funcName={String.from(funcName)}, at code offset {code.count()}")
+// leaFuncAddr materialises a FUNCTION's `.text` address into `dest` as the mandated ADRP+ADD pair
+// (`ADRP dest, page(func)` + `ADD dest, dest, #pageoff(func)`; NEVER a bare ADR, whose ±1 MiB reach
+// silently truncates). It files ONE `Arm64FuncAdrpReloc` AT THE ADRP naming the target function; the
+// concat pass resolves the target's `.text` offset from the function-label map, and both arm64 writers
+// patch the pair against `.text`'s VMADDR (`patchArm64FuncAdrpRelocs`). The `.text`-function twin of
+// `arm64EmitAdrpAddPair`, which materialises `.rdata`/`.data` addresses — same instruction pair, a
+// function symbol rather than a data label, so a dedicated code→`.text` reloc channel (P1.5-A1 / OPEN
+// #67) rather than the section-targeting `rdataRelocs`.
+function arm64EmitLeaFuncAddr(code ByteArray, funcAdrpRelocs Arm64FuncAdrpRelocArray, dest MachineWord, funcName ByteArray)
+	funcAdrpRelocs.push(Arm64FuncAdrpReloc.create(code.count(), funcName: funcName))
+	emitArm64Insn(code, insn: Arm64OpAdrp or dest)
+	arm64EmitAddSubImm12(code, opcode: Arm64OpAddImm, rd: dest, rn: dest, imm12: 0, shiftHi: false)
 end 'arm64EmitLeaFuncAddr'
 
 // ==========================================================================
@@ -1118,13 +1121,18 @@ end 'arm64EmitStackFree'
 // ==========================================================================
 
 // Emit one function into a FunctionCodeChunk with CHUNK-LOCAL fixup offsets — the arm64 twin of
-// `X64Backend.emitFunctionChunk`. Inter-function `bl` fixups (`callFixups`) and code→data references
-// (`rdataRelocs`) are rebased by concat; within-function block branches are resolved HERE, since a
-// function's blocks are contiguous within its one chunk.
+// `X64Backend.emitFunctionChunk`. Inter-function `bl` fixups (`callFixups`), code→data references
+// (`rdataRelocs`) and `leaFuncAddr` code→`.text`-function pairs (`funcAdrpRelocs`) are rebased by concat;
+// within-function block branches are resolved HERE, since a function's blocks are contiguous within its
+// one chunk.
 export function emitArm64FunctionChunk(module TargetModule, func IrFunction) returns FunctionCodeChunk
 	var code = ByteArray.create()
 	var callFixups = CallFixupArray.create()
 	var rdataRelocs = RdataRelocationArray.create()
+	// A `leaFuncAddr`'s ADRP+ADD pair, chunk-local like the others; concat resolves each to its target
+	// function's `.text` offset and both writers patch the pair. Empty for a function that takes no
+	// function value.
+	var funcAdrpRelocs = Arm64FuncAdrpRelocArray.create()
 	// The libSystem GOT import calls this function makes (`osAllocPages`→mmap, `osWriteStdout`→write).
 	// Chunk-local like the others; concat rebases each into the writer's slot-indexed relocations, the
 	// same channel the entry stub's `_exit` rides. Empty for a function that touches no OS primitive.
@@ -1139,12 +1147,12 @@ export function emitArm64FunctionChunk(module TargetModule, func IrFunction) ret
 
 		for opIdx in block.opRefs 'eachOp'
 			let op = try module.ops.get(opIdx) otherwise panic("emitArm64FunctionChunk: opIdx {opIdx} not in module.ops")
-			emitArm64TargetOp(op, code: code, callFixups: callFixups, rdataRelocs: rdataRelocs, iatRelocs: iatRelocs, branchFixups: branchFixups)
+			emitArm64TargetOp(op, code: code, callFixups: callFixups, rdataRelocs: rdataRelocs, iatRelocs: iatRelocs, funcAdrpRelocs: funcAdrpRelocs, branchFixups: branchFixups)
 		end 'eachOp'
 
 		if block.hasTerminatorOp() 'hasTerm'
 			let termOp = try module.ops.get(block.terminatorIndex()) otherwise panic("emitArm64FunctionChunk: terminator not in module.ops")
-			emitArm64TargetOp(termOp, code: code, callFixups: callFixups, rdataRelocs: rdataRelocs, iatRelocs: iatRelocs, branchFixups: branchFixups)
+			emitArm64TargetOp(termOp, code: code, callFixups: callFixups, rdataRelocs: rdataRelocs, iatRelocs: iatRelocs, funcAdrpRelocs: funcAdrpRelocs, branchFixups: branchFixups)
 		end 'hasTerm'
 	end 'eachBlock'
 
@@ -1152,7 +1160,11 @@ export function emitArm64FunctionChunk(module TargetModule, func IrFunction) ret
 
 	// The scalar core registers no rdata constants inside a function chunk (float islands are
 	// registered upstream by the lowering); the field stays empty, exactly as x64's does this rung.
-	return FunctionCodeChunk.createWith(func.name, code: code, callFixups: callFixups, rdataRelocs: rdataRelocs, iatRelocs: iatRelocs, rdataConstants: GlobalDataTable.create())
+	// `funcAdrpRelocs` is assigned after the fact so `createWith`'s signature — shared with the x64
+	// runtimes — stays unchanged (only arm64 chunks carry any).
+	var chunk = FunctionCodeChunk.createWith(func.name, code: code, callFixups: callFixups, rdataRelocs: rdataRelocs, iatRelocs: iatRelocs, rdataConstants: GlobalDataTable.create())
+	chunk.funcAdrpRelocs = funcAdrpRelocs
+	return chunk
 end 'emitArm64FunctionChunk'
 
 // Append the hand-assembled arm64 runtime chunks. At the scalar core the runtime is JUST the entry
@@ -1192,6 +1204,7 @@ export function concatArm64FunctionChunks(targetModule TargetModule, stdModule S
 	var labelOffsets = Arm64FuncLabelOffsetMap.create()
 	var debugSymbols = DebugSymbolArray.create()
 	var rdataRelocations = RdataRelocationArray.create()
+	var funcAdrpRelocs = Arm64FuncAdrpRelocArray.create()
 
 	for chunk in chunks 'eachChunk'
 		let funcStart = code.count()
@@ -1212,9 +1225,17 @@ export function concatArm64FunctionChunks(targetModule TargetModule, stdModule S
 			reloc.rdataOffset = arm64SectionOffsetOfReloc(globalData, reloc: rr)
 			rdataRelocations.push(reloc)
 		end 'rebaseRdata'
+		// `leaFuncAddr` pairs rebase their ADRP `codeOffset` here; the target's `.text` offset can only
+		// be resolved once EVERY chunk is laid out (a `leaFuncAddr` may name a function placed later), so
+		// `textOffset` is filled by `arm64ResolveFuncAdrpRelocs` after the loop — the same reason
+		// `arm64ResolveCallFixups` runs there.
+		for fr in chunk.funcAdrpRelocs 'rebaseFuncAddr'
+			funcAdrpRelocs.push(Arm64FuncAdrpReloc.create(funcStart + fr.codeOffset, funcName: fr.funcName))
+		end 'rebaseFuncAddr'
 	end 'eachChunk'
 
 	arm64ResolveCallFixups(code, labelOffsets: labelOffsets, callFixups: callFixups)
+	arm64ResolveFuncAdrpRelocs(funcAdrpRelocs, labelOffsets: labelOffsets)
 
 	// `mrt_start` is the entry point; `LC_MAIN.entryoff` is its `.text` offset. It MUST be laid out
 	// first (`appendArm64RuntimeChunks` appends it before user code); the guard turns "the entry stub is
@@ -1227,6 +1248,7 @@ export function concatArm64FunctionChunks(targetModule TargetModule, stdModule S
 	var result = CodeResult.create(code, mainCallFixupOffset: entryOffset, relocations: relocations, globalData: globalData, targetModule: targetModule, stdModule: stdModule, rdata: globalData.rdataImage(), rdataRelocations: rdataRelocations, symdata: ByteArray.create(), covDataSectionBytes: ByteArray.create())
 	result.debugSymbols = debugSymbols
 	result.dataPrelude = globalData.dataSectionImage()
+	result.arm64FuncAdrpRelocs = funcAdrpRelocs
 	return result
 end 'concatArm64FunctionChunks'
 
@@ -1286,6 +1308,33 @@ export function patchArm64SectionRelocations(code ByteArray, rdataRelocs RdataRe
 	end 'patch'
 end 'patchArm64SectionRelocations'
 
+// Patch an ADRP + following (ADD/LDR) page-relative address pair against `targetVa`: the ADRP at
+// `adrpOffset` (whose own VA is `instrVa`) takes the target's PAGE, and the instruction at
+// `adrpOffset + 4` takes the 12-bit within-page offset — an ADD-imm for a materialised address, an LDR
+// for a GOT load, which `patchArm64PageOff` tells apart from the opcode. The ONE place the AArch64
+// "the second half of the pair is 4 bytes past the ADRP" convention is spelled: shared by the
+// `.text`-function relocs (`patchArm64FuncAdrpRelocs`) and the macOS GOT import calls
+// (`patchImportRelocations`). `patchArm64Adrp`/`patchArm64PageOff` guard the ±4 GiB reach, so an
+// out-of-reach pair is a loud link error, not a wrong page.
+export function patchArm64AdrpPair(code ByteArray, adrpOffset CodeOffset, instrVa MachineWord, targetVa MachineWord)
+	patchArm64Adrp(code, codeOffset: adrpOffset, instrAddr: instrVa, targetAddr: targetVa)
+	patchArm64PageOff(code, codeOffset: adrpOffset + 4, targetAddr: targetVa)
+end 'patchArm64AdrpPair'
+
+// Patch every `leaFuncAddr` ADRP+ADD pair against its target function's absolute `.text` VA — the
+// SHARED func-address twin of `patchArm64SectionRelocations`, called by both arm64 writers with their
+// own `.text` VMADDR. `arm64EmitLeaFuncAddr` filed the reloc AT THE ADRP (`codeOffset`); the paired ADD
+// is patched by `patchArm64AdrpPair`. Both target and instruction sit in `.text`, so the page delta is
+// invariant under a page-aligned image base and a PIE slide moves them together — no dyld rebase entry,
+// unlike a data pointer.
+export function patchArm64FuncAdrpRelocs(code ByteArray, funcAdrpRelocs Arm64FuncAdrpRelocArray, textVmAddr MachineWord)
+	for reloc in funcAdrpRelocs 'patch'
+		let instrVa = textVmAddr + reloc.codeOffset
+		let targetVa = textVmAddr + reloc.textOffset
+		patchArm64AdrpPair(code, adrpOffset: reloc.codeOffset, instrVa: instrVa, targetVa: targetVa)
+	end 'patch'
+end 'patchArm64FuncAdrpRelocs'
+
 // Patch every `bl` to the 26-bit PC-relative displacement of its named target (the arm64 twin of
 // `resolveCallFixups`). A bare stdlib-qualified/unqualified fallback is not needed this rung —
 // scalar-core calls resolve directly by name.
@@ -1295,6 +1344,21 @@ function arm64ResolveCallFixups(code ByteArray, labelOffsets Arm64FuncLabelOffse
 		arm64PatchBranch26(code, codeOffset: fixup.codeOffset, targetOffset: targetOffset)
 	end 'resolve'
 end 'arm64ResolveCallFixups'
+
+// Resolve every `leaFuncAddr` ADRP+ADD pair to its target function's `.text` offset — the func-address
+// twin of `arm64ResolveCallFixups`, and it runs beside it AFTER the layout loop for the same reason: a
+// `leaFuncAddr` may name a function laid out later, so the name→offset map must be complete first. Unlike
+// `arm64ResolveCallFixups`, this does NOT touch `code` — the section VMADDR is unknown here, so it only
+// fills each reloc's `textOffset`; the writers add `.text`'s base and patch (`patchArm64FuncAdrpRelocs`),
+// exactly as they add a section VMADDR to a resolved `RdataRelocation.rdataOffset`. `textOffset` is
+// written THROUGH the array's reference (`Arm64FuncAdrpReloc` is a `type`), so the by-index `var` get is
+// the same in-place mutation idiom `GlobalDataTable.layOut` uses.
+function arm64ResolveFuncAdrpRelocs(funcAdrpRelocs Arm64FuncAdrpRelocArray, labelOffsets Arm64FuncLabelOffsetMap)
+	for i in 0 upto funcAdrpRelocs.count() 'resolve'
+		var reloc = try funcAdrpRelocs.get(i) otherwise panic("arm64ResolveFuncAdrpRelocs: index {i} OOB despite the upto bound")
+		reloc.textOffset = try labelOffsets.get(reloc.funcName) otherwise panic("arm64ResolveFuncAdrpRelocs: leaFuncAddr of unknown function '{String.from(reloc.funcName)}'")
+	end 'resolve'
+end 'arm64ResolveFuncAdrpRelocs'
 
 // ==========================================================================
 // Backend driver

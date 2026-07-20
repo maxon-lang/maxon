@@ -9,12 +9,16 @@
 // bottom of this file. The reusable, Target-independent relocation / symbol /
 // label-classification value types they are built from live above.
 //
-// STILL THIN: the arm64 ADR-fixup arrays that v1's structs carry are OMITTED —
-// M1 is x64-windows only, so `FunctionCodeChunk` and `CodeResult` grow those
-// fields back at the arm64 milestone (nothing on x64 references them). The cache
-// codec (writeRdataRelocKind/read…) + the debug-symbol / funcAbs64 link-time
-// helper functions remain deferred (serialization is Chunk C; the link helpers
-// are backend, Chunk B2).
+// The arm64 function-address ADRP+ADD relocation channel v1's structs carry is
+// now present (OPEN #67): `FunctionCodeChunk.funcAdrpRelocs` and
+// `CodeResult.arm64FuncAdrpRelocs` below carry a `leaFuncAddr`'s address pair from
+// the encoder through concat to both arm64 writers. v1's remaining single-ADR
+// fixup arrays (green-thread func pointers, the ±1 MiB ADR forms) are STILL OMITTED
+// — the scalar core emits none of them, so they grow back with their features
+// (nothing on x64 references either array). The cache codec
+// (writeRdataRelocKind/read…) + the debug-symbol / funcAbs64 link-time helper
+// functions remain deferred (serialization is Chunk C; the link helpers are
+// backend, Chunk B2).
 //
 // GROWTH CONTRACT: the value types above this line are Chunk-A content — GROW,
 // never redefine them. The two structs below are B1 additions.
@@ -115,6 +119,29 @@ end 'FuncAbs64Slot'
 
 export typealias FuncAbs64SlotArray = Array with FuncAbs64Slot
 
+// An arm64 function-address ADRP+ADD relocation — the `.text`-function twin of the
+// `.rdata`/`.data` `RdataRelocation` channel. `arm64EmitLeaFuncAddr` emits the
+// address-materialisation pair `ADRP Rd, page(func)` + `ADD Rd, Rd, #pageoff(func)`
+// with placeholder immediates and files ONE of these AT THE ADRP (`codeOffset`); the
+// paired ADD is always at `codeOffset + 4`. `funcName` names the target function; the
+// concat pass resolves it to `textOffset` — the target's offset within `.text` — via
+// the function-label map, exactly as `RdataRelocation.rdataOffset` is resolved from
+// `rdataLabel` (a writer knows section VMADDRs, not per-function offsets). Both writers
+// then patch the pair against `textVmAddr + textOffset` (page into the ADRP, page
+// offset into the ADD). ADRP+ADD is fully PC-relative, so a PIE slide moves the
+// instruction and its target together — no dyld rebase entry is needed.
+export type Arm64FuncAdrpReloc
+	export var codeOffset as CodeOffset
+	export var funcName as ByteArray
+	export var textOffset as CodeOffset
+
+	export static function create(codeOffset CodeOffset, funcName ByteArray) returns Arm64FuncAdrpReloc
+		return Self{codeOffset: codeOffset, funcName: funcName, textOffset: 0}
+	end 'create'
+end 'Arm64FuncAdrpReloc'
+
+export typealias Arm64FuncAdrpRelocArray = Array with Arm64FuncAdrpReloc
+
 // Per-function code chunk. B2's incremental backend emits one chunk per
 // function, then a module-level fixup pass concatenates them into the final
 // `.text` section. All offsets inside a chunk are CHUNK-LOCAL (`entryOffset` is
@@ -129,7 +156,9 @@ export typealias FuncAbs64SlotArray = Array with FuncAbs64Slot
 // for Windows IAT entries. `rdataConstants` captures the rdata constants this
 // chunk's code registered lazily during emission (float/mask constants), so a
 // cache HIT that skips op emission still re-registers them; empty for the
-// `return 42` slice.
+// `return 42` slice. `funcAdrpRelocs` records this chunk's arm64 `leaFuncAddr`
+// address pairs (chunk-local `codeOffset`, rebased at concat like `callFixups`);
+// empty for every x64 chunk and for any arm64 chunk that takes no function value.
 export type FunctionCodeChunk
 	export var funcName as ByteArray
 	export var code as ByteArray
@@ -138,6 +167,7 @@ export type FunctionCodeChunk
 	export var rdataRelocs as RdataRelocationArray
 	export var iatRelocs as RelocationArray
 	export var rdataConstants as GlobalDataTable
+	export var funcAdrpRelocs as Arm64FuncAdrpRelocArray
 
 	export static function create(funcName ByteArray) returns FunctionCodeChunk
 		return Self{
@@ -147,13 +177,17 @@ export type FunctionCodeChunk
 			callFixups: CallFixupArray.create(),
 			rdataRelocs: RdataRelocationArray.create(),
 			iatRelocs: RelocationArray.create(),
-			rdataConstants: GlobalDataTable.create()
+			rdataConstants: GlobalDataTable.create(),
+			funcAdrpRelocs: Arm64FuncAdrpRelocArray.create()
 		}
 	end 'create'
 
 	// Assemble a chunk from an emitter's accumulated buffers in one shot. The
 	// per-op emitter mutates local `var` buffers (`code`/`callFixups`/…) then hands
 	// them here, keeping the chunk itself an immutable `let` at the call site.
+	// `funcAdrpRelocs` starts empty and is assigned by the arm64 encoder after the
+	// fact (only its chunks carry any), so this signature — shared by both x64
+	// runtimes — stays unchanged.
 	export static function createWith(funcName ByteArray, code ByteArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, iatRelocs RelocationArray, rdataConstants GlobalDataTable) returns FunctionCodeChunk
 		return Self{
 			funcName: funcName,
@@ -162,7 +196,8 @@ export type FunctionCodeChunk
 			callFixups: callFixups,
 			rdataRelocs: rdataRelocs,
 			iatRelocs: iatRelocs,
-			rdataConstants: rdataConstants
+			rdataConstants: rdataConstants,
+			funcAdrpRelocs: Arm64FuncAdrpRelocArray.create()
 		}
 	end 'createWith'
 end 'FunctionCodeChunk'
@@ -191,6 +226,10 @@ export typealias FunctionCodeChunkArray = Array with FunctionCodeChunk
 // the StdModule directly with no register allocation and no Target dialect (see
 // StdToWasm); `writeWasm` reads it and wraps it into a component. Empty for every
 // other backend.
+//
+// `arm64FuncAdrpRelocs` carries the arm64 `leaFuncAddr` address pairs the concat
+// pass rebased and resolved; both arm64 writers patch them against `.text`'s
+// VMADDR (`patchArm64FuncAdrpRelocs`). Empty for the x64/PE and wasm paths.
 export type CodeResult
 	export var code as ByteArray
 	export var mainCallFixupOffset as CodeOffset
@@ -205,6 +244,7 @@ export type CodeResult
 	export var dataPrelude as ByteArray
 	export var debugSymbols as DebugSymbolArray
 	export var wasmCoreModule as ByteArray
+	export var arm64FuncAdrpRelocs as Arm64FuncAdrpRelocArray
 
 	export static function create(code ByteArray, mainCallFixupOffset CodeOffset, relocations RelocationArray, globalData GlobalDataTable, targetModule TargetModule, stdModule StdModule, rdata ByteArray, rdataRelocations RdataRelocationArray, symdata ByteArray, covDataSectionBytes ByteArray) returns CodeResult
 		return Self{
@@ -220,7 +260,8 @@ export type CodeResult
 			covDataSectionBytes: covDataSectionBytes,
 			dataPrelude: ByteArray.create(),
 			debugSymbols: DebugSymbolArray.create(),
-			wasmCoreModule: ByteArray.create()
+			wasmCoreModule: ByteArray.create(),
+			arm64FuncAdrpRelocs: Arm64FuncAdrpRelocArray.create()
 		}
 	end 'create'
 
@@ -243,7 +284,8 @@ export type CodeResult
 			covDataSectionBytes: ByteArray.create(),
 			dataPrelude: ByteArray.create(),
 			debugSymbols: DebugSymbolArray.create(),
-			wasmCoreModule: wasmCoreModule
+			wasmCoreModule: wasmCoreModule,
+			arm64FuncAdrpRelocs: Arm64FuncAdrpRelocArray.create()
 		}
 	end 'forWasm'
 end 'CodeResult'
