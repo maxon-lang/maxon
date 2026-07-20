@@ -4796,6 +4796,16 @@ export type Parser
 	// and `otherwiseValue` (err). No carried-var phis: an `otherwise` VALUE is an expression, which
 	// assigns no binding, so the ok and err edges agree on every carried var.
 	function finishValueTry(func IrFunction, okBlock IrBlock, errEnd IrBlock, result ValueId, otherwiseValue ValueId, tryTok Token) returns ValueId
+		// CONSUMER GUARD for the void-result invariant OPEN #55 fixed at the producer: a void `try`-result
+		// has no width, so a value merge is ill-formed and `mintPhi` below would build a void phi block-arg
+		// lowering can't type. `parseUnboundOtherwiseForm`'s value-form guard already rejects it (E3059) —
+		// it is the ONE `TryHandler.value` producer and runs strictly before here — so this can only trip on
+		// a FUTURE value-handler producer that forgets the check, and it names that invariant rather than
+		// deferring the crash to the confusing `valueTagToStdType` lowering panic it used to be.
+		if self.tagOf(result) == ValueTypeTag.void 'voidResultPhi'
+			panic("finishValueTry: a void try-result reached the value merge — parseUnboundOtherwiseForm's value-form guard (OPEN #55) must reject `try <voidCall> otherwise <value>` before here")
+		end 'voidResultPhi'
+
 		var cont = self.newBlock(func, label: b"trycont", line: tryTok.line)
 		let phiId = self.mintPhi(cont, tag: self.tagOf(result), nameId: try self.valueNameIds.get(result) otherwise panic("finishValueTry: result has no name column"))
 
