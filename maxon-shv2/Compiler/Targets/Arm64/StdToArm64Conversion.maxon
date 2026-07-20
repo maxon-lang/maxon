@@ -384,8 +384,14 @@ type StdToArm64Lowering
 			errorReturn(retValId, errorFlagId) then self.lowerErrorReturn(retValId, errorFlagId: errorFlagId, dstRef: dstRef, returnType: returnType, asTerminator: false)
 			osExit(codeId) then self.lowerOsExit(codeId, dstRef: dstRef)
 			// P1.5-A1: a function's address (ADRP+ADD via `arm64LeaFuncAddr`), and a call THROUGH a function
-			// value (`blr` via `arm64BranchLinkReg`). The isel PRODUCER Arm64Backend.maxon:1033 noted was
-			// missing — the target ops themselves already exist and are fully wired (encoder/allocator/splitter).
+			// value (`blr` via `arm64BranchLinkReg`). This supplies the isel PRODUCER Arm64Backend.maxon:1033
+			// noted was missing. The ops are wired through the allocator and splitter, and
+			// `arm64BranchLinkReg`'s encoder is complete (`blr`, Arm64Backend.maxon:923) — but
+			// `arm64LeaFuncAddr`'s encoder is a DELIBERATE PANIC STUB (`arm64EmitLeaFuncAddr`,
+			// Arm64Backend.maxon:1042): the code→`.text`-function ADRP+ADD relocation has no channel in the
+			// frozen FunctionCodeChunk/CodeResult contract yet. So an arm64-macOS function-value program
+			// panics LOUDLY at that encoder rather than miscompiling — which is exactly why A1's cases are
+			// restricted to `x64-windows, wasm32-wasi` and arm64 function-value codegen is a follow-up rung.
 			funcAddr(resultId, funcName) then self.emit(dstRef, op: TargetOp.arm64LeaFuncAddr(TargetVReg.virtual(resultId), funcName: funcName))
 			callIndirect(resultId, calleeReg, args) then self.lowerCallIndirect(resultId, calleeReg: calleeReg, args: args, dstRef: dstRef)
 		end 'lower'
