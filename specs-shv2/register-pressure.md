@@ -146,7 +146,7 @@ error E5001: the loop at <fragment>:21 needs 3 more register(s) than are availab
 ```
 
 <!-- test: hot-loop-overflow-arm64 -->
-<!-- targets: arm64-macos -->
+<!-- targets: arm64-macos, arm64-linux -->
 arm64 allocates from 26 GPRs (x0-x15 ∪ x19-x28), not x64's 14, so an overflow needs more live values than `hot-loop-overflow`. Twenty-eight accumulators `s1`..`s28` are all updated every iteration, plus the counter `i`, plus the loop condition's materialized boolean — arm64 lowers `i < N` to `cmp`+`cset` into a GPR, where x64 fuses `cmp`+`jcc` and materializes nothing — so thirty values are live at the loop header against a pool of twenty-six. The deficit is exactly 4 (30 − 26), reported against the FULL arm64 pool, and each accumulator points at its declaration span.
 ```maxon
 function hot(p int) returns int
@@ -431,7 +431,7 @@ error E5001: the loop at <fragment>:18 needs 1 more register(s) than are availab
 ```
 
 <!-- test: hot-loop-param-used-arm64 -->
-<!-- targets: arm64-macos -->
+<!-- targets: arm64-macos, arm64-linux -->
 The arm64 twin of `hot-loop-param-used`: a PARAMETER read every iteration is part of the hot working set and must resolve to its declaration span through `ParamOriginTable` (it is minted by no op) rather than trip the Rule-3 panic. `p` is read in `s1 = s1 + i + p`, so with twenty-six accumulators, the counter, and the condition boolean it is one of twenty-nine values live against arm64's 26-GPR pool. It ranks first (`<fragment>:2:14` — the `p` token); the counter `i` ranks last. Deficit 3.
 ```maxon
 function hot(p int) returns int
@@ -623,7 +623,7 @@ error E5001: the loop at <fragment>:19 needs 2 more register(s) than are availab
 ```
 
 <!-- test: hot-loop-rematerialized-constant-arm64 -->
-<!-- targets: arm64-macos -->
+<!-- targets: arm64-macos, arm64-linux -->
 The arm64 twin of `hot-loop-rematerialized-constant`: a constant the loop uses (`let d`, read by `s26 = d - s26`) is REMATERIALIZED by the splitter with a fresh ValueId that has no origin of its own, and must be chased through `SplitLineage` back to the `let d` literal (`<fragment>:56:11`) rather than trip the Rule-3 panic. Twenty-six accumulators plus the counter plus the rematerialized constant overflow arm64's 26-GPR pool by two.
 ```maxon
 function hot() returns int
