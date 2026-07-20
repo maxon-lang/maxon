@@ -145,14 +145,15 @@ end 'buildX64Backend'
 // Install the OS entry point at the MODULE level. x64-windows prepends `mrt_start` as a module
 // function (all-physical registers, its own explicit frame), which concat lays out first; it runs
 // AFTER register allocation and prologue/epilogue so the hand-built stub is never reprocessed. This
-// pass is WINDOWS-ONLY: arm64-macOS has no module-level entry, because its stub calls `_exit`
-// through a GOT import that has no TargetOp channel, so it is hand-assembled as a FunctionCodeChunk
-// in the encode phase instead (see `Arm64Backend.buildArm64Backend` / `Arm64Runtime`).
+// pass is WINDOWS-ONLY: the arm64 backend has no module-level entry, because its macOS stub calls
+// `_exit` through a GOT import that has no TargetOp channel, so it is hand-assembled as a
+// FunctionCodeChunk in the encode phase instead (see `Arm64Backend.buildArm64Backend` /
+// `Arm64Runtime`); arm64-linux shares that chunk, differing only in its exit route. So both non-wasi
+// non-windows arms answer the same thing and are consolidated into one.
 export function augmentWithRuntime(module TargetModule, target Target)
 	match target.os 'os'
 		windows then prependEntryStub(module, checkLeaks: moduleHasFunction(module, name: MmLeakCheckName))
-		macos then panic("augmentWithRuntime: arm64-macOS installs its entry stub as a hand-assembled chunk (Arm64Backend.buildArm64Backend), not a module function — this module-level pass is windows-only")
-		linux then panic("augmentWithRuntime: maxon-shv2 has no linux entry stub yet (got {targetToString(target)})")
+		linux to macos then panic("augmentWithRuntime: the arm64 backend installs its entry stub as a hand-assembled chunk (Arm64Backend.buildArm64Backend), not a module function — this module-level pass is windows-only, and there is no x64 backend for either OS (got {targetToString(target)})")
 		wasi then panic("augmentWithRuntime: maxon-shv2 has no wasi entry stub yet (got {targetToString(target)})")
 	end 'os'
 end 'augmentWithRuntime'
@@ -240,13 +241,13 @@ function prependFunction(module TargetModule, func IrFunction)
 	module.functions = reordered
 end 'prependFunction'
 
-// Write the CodeResult to a runnable executable, dispatched on target OS: an x64-windows PE, a macOS
-// Mach-O, or a wasm32-wasi component (`writeWasm`). The ELF writer arrives at its milestone.
+// Write the CodeResult to a runnable executable, dispatched on target OS: an x64-windows PE, an
+// arm64-macOS Mach-O, an arm64-linux static ELF, or a wasm32-wasi component (`writeWasm`).
 export function writeExecutable(codeResult CodeResult, target Target, outputPath FilePath)
 	match target.os 'os'
 		windows then writePe(outputPath, codeResult: codeResult, target: target)
 		macos then writeMachO(outputPath, codeResult: codeResult, target: target)
-		linux then panic("writeExecutable: maxon-shv2 has no ELF writer yet (got {targetToString(target)})")
+		linux then writeElf(outputPath, codeResult: codeResult, target: target)
 		wasi then writeWasm(outputPath, codeResult: codeResult)
 	end 'os'
 end 'writeExecutable'

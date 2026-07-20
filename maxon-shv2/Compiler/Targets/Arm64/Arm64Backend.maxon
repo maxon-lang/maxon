@@ -142,8 +142,16 @@ let Arm64OpBlr = 0xD63F0000
 // RET returns through x30 (LR); the LR is baked into this fully-formed encoding.
 let Arm64OpRet = 0xD65F03C0
 // BRK #0 — a software breakpoint (raises SIGTRAP, terminating the process); the entry stub's guard
-// after `_exit`. imm16 is 0 (the conventional abort breakpoint), baked into this fully-formed word.
+// after the exit primitive. imm16 is 0 (the conventional abort breakpoint), baked into this
+// fully-formed word.
 let Arm64OpBrk = 0xD4200000
+// SVC #0 — the Linux supervisor call. imm16 is 0 (AArch64 Linux ignores it and reads the syscall
+// number from x8), baked into this fully-formed word. NEVER emitted for macOS, which forbids raw
+// syscalls and routes every OS primitive through a libSystem GOT import instead.
+let Arm64OpSvc = 0xD4000001
+// x8 — where the AArch64 Linux syscall ABI reads the syscall number from. It is inside the
+// caller-saved half `arm64Syscall`'s call clobber declares, so writing it here forbids nothing.
+let Arm64SyscallNumberReg = 8
 let Arm64Imm26Mask = 0x3FFFFFF
 let Arm64Imm19Mask = 0x7FFFF
 let Arm64Imm19Shift = 5
@@ -917,6 +925,10 @@ function emitArm64TargetOp(op TargetOp, code ByteArray, callFixups CallFixupArra
 		// `arm64EmitImportCall` the hand-assembled entry stub uses for `_exit`, so a call inside a
 		// register-allocated function and one in the stub file the SAME relocation shape.
 		arm64ImportCall(slotIndex) then arm64EmitImportCall(code, iatRelocs: iatRelocs, slotIndex: slotIndex)
+		// The Linux raw supervisor call (`osExit`/`osWriteStdout`/`osAllocPages` on arm64-linux). The
+		// same `arm64EmitSyscall` the hand-assembled entry stub uses for `exit_group`, so a syscall
+		// inside a register-allocated function and one in the stub encode identically.
+		arm64Syscall(number) then arm64EmitSyscall(code, number: number)
 	end 'emit'
 end 'emitArm64TargetOp'
 
@@ -965,7 +977,21 @@ export function arm64EmitImportCall(code ByteArray, iatRelocs RelocationArray, s
 	emitArm64Insn(code, insn: Arm64OpBlr or (Arm64Ip0 shl Arm64RnShift))
 end 'arm64EmitImportCall'
 
-// BRK #0 — the entry stub's trap after `_exit`, in case the import ever returns (it does not).
+// A raw Linux supervisor call: `movz x8, #number` then `svc #0`. The AArch64 Linux syscall ABI puts
+// the number in x8 and arguments in x0..x5 (which the isel pre-moved, exactly as it pre-moves a
+// call's arguments), and returns the result in x0. Exported so the hand-assembled entry stub
+// (`Arm64Runtime`) emits its `exit_group` through the same primitive the isel does.
+//
+// The number goes through the shared `arm64EmitMovImm` ladder rather than a bare `movz`: every Linux
+// syscall number in use fits one halfword, but a hard-coded single `movz` would SILENTLY TRUNCATE a
+// future number above 0xFFFF, and the ladder that handles it correctly already exists. It costs
+// nothing — for a one-halfword value the ladder emits exactly the single `movz` by construction.
+export function arm64EmitSyscall(code ByteArray, number MachineWord)
+	arm64EmitMovImm(code, rd: Arm64SyscallNumberReg, value: number)
+	emitArm64Insn(code, insn: Arm64OpSvc)
+end 'arm64EmitSyscall'
+
+// BRK #0 — the entry stub's trap after the exit primitive, in case it ever returns (it does not).
 export function arm64EmitBrk(code ByteArray)
 	emitArm64Insn(code, insn: Arm64OpBrk)
 end 'arm64EmitBrk'
@@ -1122,9 +1148,11 @@ end 'emitArm64FunctionChunk'
 // so it LEADS `.text` and `LC_MAIN.entryoff = 0` — the opposite placement from x64's
 // `appendX64RuntimeChunks`, whose appended runtime is the TRAILING panic handler (x64's `mrt_start` is
 // a module function already laid out first). The panic/software runtime GROWS back here at its
-// milestone. `leakCheck` gates the entry stub's future MM leak bridge (false at the scalar core).
-export function appendArm64RuntimeChunks(chunks FunctionCodeChunkArray, leakCheck bool)
-	chunks.push(buildArm64EntryStubChunk(leakCheck))
+// milestone. `leakCheck` gates the entry stub's future MM leak bridge (false at the scalar core), and
+// `os` picks the stub's exit route — a libSystem GOT call on macOS, a raw `svc #0` on Linux (see
+// `Arm64Runtime.arm64OsCallKind`).
+export function appendArm64RuntimeChunks(chunks FunctionCodeChunkArray, leakCheck bool, os Os)
+	chunks.push(buildArm64EntryStubChunk(leakCheck, os: os))
 end 'appendArm64RuntimeChunks'
 
 // ==========================================================================
@@ -1207,6 +1235,44 @@ function arm64SectionOffsetOfReloc(globalData GlobalDataTable, reloc RdataReloca
 	end 'kind'
 end 'arm64SectionOffsetOfReloc'
 
+// Patch every code→section reference (ADR / ADRP+page-off / LDR-literal) against the resolved
+// section addresses — the WRITER-side twin of `arm64SectionOffsetOfReloc` above, which answers
+// which section a kind names; this one applies it. `arm64*` kinds reach the read-only constant
+// section (float islands, String literal records); `dataSection*` kinds reach the top-level `var`
+// globals. Every other arm is named and PANICS: the x64 kinds cannot appear in an arm64 image,
+// `symdata`/`covdata` are not emitted at this milestone, and `funcAbs64InRdata` patches a slot
+// INSIDE the constant section rather than a field in code. Naming them one by one makes the day
+// one is emitted a loud failure rather than a silently unpatched displacement — PeWriter's
+// discipline.
+//
+// SHARED BY BOTH arm64 OBJECT WRITERS. `writeMachO` (`__const`/`__data` vmaddrs) and `writeElf`
+// (`.rodata`/`.data` vaddrs) differ only in what they pass as the three addresses; the patch
+// arithmetic is pure AArch64 instruction knowledge, so it is spelled here once instead of once
+// per format — a second copy is exactly how two writers drift on which kinds they honour.
+export function patchArm64SectionRelocations(code ByteArray, rdataRelocs RdataRelocationArray, textVmAddr MachineWord, rdataVmAddr MachineWord, dataVmAddr MachineWord)
+	for reloc in rdataRelocs 'patch'
+		let instrVa = textVmAddr + reloc.codeOffset
+		match reloc.kind 'kind'
+			ripRelDisp32 then panic("patchArm64SectionRelocations: x64 RIP-relative relocation in an arm64 image — target/emitter mismatch")
+			symdataRipRelDisp32 then panic("patchArm64SectionRelocations: x64 symdata relocation in an arm64 image — target/emitter mismatch")
+			dataSectionRipRelDisp32 then panic("patchArm64SectionRelocations: x64 data-section relocation in an arm64 image — target/emitter mismatch")
+			covdataRipRelDisp32 then panic("patchArm64SectionRelocations: x64 covdata relocation in an arm64 image — target/emitter mismatch")
+			arm64Adr then patchArm64Adr(code, codeOffset: reloc.codeOffset, instrAddr: instrVa, targetAddr: rdataVmAddr + reloc.rdataOffset)
+			arm64LdrLiteral then patchArm64LdrLiteral(code, codeOffset: reloc.codeOffset, instrAddr: instrVa, targetAddr: rdataVmAddr + reloc.rdataOffset)
+			symdataArm64Adr then panic("patchArm64SectionRelocations: the symdata section is empty at this milestone — a symdataArm64Adr relocation has no section to reach; it arrives at the reflection milestone")
+			dataSectionArm64Adr then patchArm64Adr(code, codeOffset: reloc.codeOffset, instrAddr: instrVa, targetAddr: dataVmAddr + reloc.rdataOffset)
+			covdataArm64Adr then panic("patchArm64SectionRelocations: coverage is not emitted for arm64 yet — no .covdata section")
+			arm64Adrp then patchArm64Adrp(code, codeOffset: reloc.codeOffset, instrAddr: instrVa, targetAddr: rdataVmAddr + reloc.rdataOffset)
+			arm64PageOff then patchArm64PageOff(code, codeOffset: reloc.codeOffset, targetAddr: rdataVmAddr + reloc.rdataOffset)
+			dataSectionArm64Adrp then patchArm64Adrp(code, codeOffset: reloc.codeOffset, instrAddr: instrVa, targetAddr: dataVmAddr + reloc.rdataOffset)
+			dataSectionArm64PageOff then patchArm64PageOff(code, codeOffset: reloc.codeOffset, targetAddr: dataVmAddr + reloc.rdataOffset)
+			covdataArm64Adrp then panic("patchArm64SectionRelocations: coverage is not emitted for arm64 yet — no .covdata section")
+			covdataArm64PageOff then panic("patchArm64SectionRelocations: coverage is not emitted for arm64 yet — no .covdata section")
+			funcAbs64InRdata then panic("patchArm64SectionRelocations: funcAbs64InRdata patches a function-pointer slot INSIDE the constant section (a layout descriptor's), not a field in code — it arrives with witness/layout descriptors (P1.6)")
+		end 'kind'
+	end 'patch'
+end 'patchArm64SectionRelocations'
+
 // Patch every `bl` to the 26-bit PC-relative displacement of its named target (the arm64 twin of
 // `resolveCallFixups`). A bare stdlib-qualified/unqualified fallback is not needed this rung —
 // scalar-core calls resolve directly by name.
@@ -1231,7 +1297,10 @@ end 'arm64ResolveCallFixups'
 // (E5001), exactly as the x64 backend does.
 export function buildArm64Backend(stdModule StdModule, target Target, globalData GlobalDataTable, project Project) returns CodeResult throws CompileError
 	let iselProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.isel)
-	var (targetModule, valueClasses) = lowerStdToArm64(stdModule, globalData: globalData)
+	// `target` reaches the ISEL because the three OS-primitive lowerings differ per OS: macOS routes
+	// them through libSystem GOT imports, Linux through raw `svc #0` (see `arm64OsCallKind`), and the
+	// mmap anonymous-mapping flag word is a different number on each.
+	var (targetModule, valueClasses) = lowerStdToArm64(stdModule, target: target, globalData: globalData)
 	recordPhase(project, phase: CompilePhase.isel, probe: iselProbe)
 
 	let regAllocProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.regalloc)
@@ -1244,13 +1313,13 @@ export function buildArm64Backend(stdModule StdModule, target Target, globalData
 
 	let encodeProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.encode)
 	var chunks = FunctionCodeChunkArray.create()
-	// The arm64-macOS runtime is just the entry stub `mrt_start` — the scalar core needs no panic
-	// handler and no MM/scheduler floor. It is hand-assembled (its `_exit` GOT call has no TargetOp
-	// channel — see Arm64Runtime) and appended FIRST so it LEADS `.text` and `LC_MAIN.entryoff = 0`,
-	// exactly as x64's `mrt_start` leads `.text`. There is NO module-level `augmentWithRuntime` step
-	// here — the stub is a chunk, not a module function, so it cannot be prepended to the module the
-	// way x64's is; it is assembled in the encode phase alongside the user chunks.
-	appendArm64RuntimeChunks(chunks, leakCheck: moduleHasFunction(targetModule, name: MmLeakCheckName))
+	// The arm64 runtime is just the entry stub `mrt_start` — the scalar core needs no panic handler
+	// and no MM/scheduler floor. It is hand-assembled (its macOS `_exit` GOT call has no TargetOp
+	// channel — see Arm64Runtime) and appended FIRST so it LEADS `.text` and the image's entry offset
+	// is 0, exactly as x64's `mrt_start` leads `.text`. There is NO module-level `augmentWithRuntime`
+	// step here — the stub is a chunk, not a module function, so it cannot be prepended to the module
+	// the way x64's is; it is assembled in the encode phase alongside the user chunks.
+	appendArm64RuntimeChunks(chunks, leakCheck: moduleHasFunction(targetModule, name: MmLeakCheckName), os: target.os)
 	for func in targetModule.functions 'eachFunc'
 		chunks.push(emitArm64FunctionChunk(targetModule, func: func))
 	end 'eachFunc'

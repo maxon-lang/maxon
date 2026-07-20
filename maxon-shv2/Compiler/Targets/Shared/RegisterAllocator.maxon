@@ -393,13 +393,16 @@ end 'assertX64CallClobbers'
 // The arm64 call ops against the arm64 caller-saved pool, with x19 (callee-saved) the drift witness.
 // It holds the same one-fact-one-place guard the x64 pair does: the `0x7FFF807F8000FFFF` literal on
 // `arm64BranchLink`/`arm64BranchLinkReg`/`arm64ImportCall` must equal `arm64CallerSavedMask`, or a value
-// live across a call is mis-constrained. `arm64ImportCall` (the mmap/write GOT call) is a call and so
-// answers here too — the M2 case the x64 `iatCall` comment warns about, on the arm64 side.
+// live across a call is mis-constrained. Both OS-call forms are calls and so answer here too —
+// `arm64ImportCall` (the macOS mmap/write GOT call) is the M2 case the x64 `iatCall` comment warns
+// about on the arm64 side, and `arm64Syscall` (its Linux `svc #0` sibling) crosses the same barrier:
+// the kernel clobbers the caller-saved half exactly as a libSystem call does.
 function assertArm64CallClobbers()
 	let pool = arm64CallerSavedMask()
 	assertOneCallClobber(TargetOp.arm64BranchLink(b""), name: "arm64BranchLink", pool: pool, calleeWitness: 19, calleeName: "x19")
 	assertOneCallClobber(TargetOp.arm64BranchLinkReg(TargetVReg.virtual(0)), name: "arm64BranchLinkReg", pool: pool, calleeWitness: 19, calleeName: "x19")
 	assertOneCallClobber(TargetOp.arm64ImportCall(0), name: "arm64ImportCall", pool: pool, calleeWitness: 19, calleeName: "x19")
+	assertOneCallClobber(TargetOp.arm64Syscall(0), name: "arm64Syscall", pool: pool, calleeWitness: 19, calleeName: "x19")
 end 'assertArm64CallClobbers'
 
 // One call op's clobber mask against its ABI's caller-saved `pool`, and against a `calleeWitness`
@@ -722,7 +725,7 @@ function collectOpHints(op TargetOp, hints ColorHints)
 		// two-address reuse to bias). The arm64 moves that DO carry a fixed-register hint — the param
 		// capture, the call-arg pre-move, the return move — are the SHARED `movRegReg` handled above,
 		// not an arm64-band op. So every arm64 arm simply breaks, like the bit / data-section bands.
-		arm64Ret to arm64ImportCall then break 'hint'
+		arm64Ret to arm64Syscall then break 'hint'
 	end 'hint'
 end 'collectOpHints'
 
@@ -1435,9 +1438,9 @@ export function colorTargetOp(op TargetOp, alloc Allocation) returns TargetOp
 		arm64Scvtf(dest, src) then return TargetOp.arm64Scvtf(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc))
 		arm64Fcvtzs(dest, src) then return TargetOp.arm64Fcvtzs(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc))
 		arm64FpLoadRdata(dest, label) then return TargetOp.arm64FpLoadRdata(colorVRegWith(dest, alloc: alloc), label: label)
-		// The import call names no register operand (its args are pre-moved into x0..), so it passes
-		// through unchanged, exactly like `arm64BranchLink` and x64's `iatCall`.
-		arm64ImportCall then return op
+		// Neither OS-call form names a register operand (their args are pre-moved into x0..), so both
+		// pass through unchanged, exactly like `arm64BranchLink` and x64's `iatCall`.
+		arm64ImportCall to arm64Syscall then return op
 	end 'rewrite'
 end 'colorTargetOp'
 

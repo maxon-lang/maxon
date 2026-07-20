@@ -1,0 +1,373 @@
+// ELF64 writer for arm64-Linux executables — the format-neutral CodeResult → ELF seam, the Linux
+// sibling of Windows/PeWriter and Macos/MachOWriter.
+//
+// ⭐ IT IS A THIRD THE SIZE OF THE MACH-O WRITER, AND ONE FACT EXPLAINS ALL OF IT: **Linux permits
+// raw syscalls, macOS forbids them.** Every OS primitive on macOS must be a libSystem call, which
+// drags in a dynamic linker, a `__got`, dyld chained fixups, an LC_UUID and an ad-hoc code signature
+// (an unsigned arm64 binary is SIGKILL'd by AMFI). On Linux `osExit`/`osWriteStdout`/`osAllocPages`
+// are `svc #0` (see `Arm64Runtime.arm64OsCallKind`), so this image needs **none** of it: a STATIC
+// `ET_EXEC` at a FIXED load address, no PT_INTERP, no GOT, no PLT, no relocation section, no signing.
+//
+// THE FIXED BASE IS WHAT MAKES IT EASY. `ELF_LOAD_ADDR` is pinned and nothing slides the image, so
+// every absolute address is known AT WRITE TIME and baked straight into the bytes — exactly PeWriter's
+// strategy (`ImageBase` pinned, DYNAMIC_BASE clear), and exactly what MachOWriter CANNOT do, which is
+// why the String-literal `buffer@0` pointer is one `patchQword` here and a whole dyld rebase-chain
+// apparatus there. A future PIE/`ET_DYN` writer would need a `.rela.dyn` section so the loader could
+// apply these; this one does not.
+//
+// Layout: two PT_LOAD segments, always.
+//   Segment 1 (R+X), file offset 0: ELF header + program headers + `.text` + `.rodata`
+//   Segment 2 (R+W), page-aligned:  `.data` (the top-level `var` globals prelude)
+//
+// (v1's ELF writer has a third for `.covdata`. shv2 does NOT port it — see the coverage guard in
+// `writeElf`: shv2's backends hard-code the coverage image to empty, so the segment could never
+// execute and could only rot. It grows back here and in MachOWriter together, at that milestone.)
+//
+// ⚠ SEGMENT 1 MAPS FROM FILE OFFSET 0, so the ELF header and the program headers are INSIDE the
+// executable segment. The entry point must therefore point past them — it is `.text`'s address plus
+// `mainCallFixupOffset`, never the start of the segment.
+//
+// Debug symbols: `.symtab` + `.strtab` + `.shstrtab` and a section header table are appended after
+// every loadable segment. The loader follows program headers only and never reads them, so they
+// cannot affect whether the image runs; debuggers (lldb, `readelf -s`) resolve function names through
+// them. Ported from v1's ElfWriter, which is where this whole file comes from.
+
+// --- Fixed ELF64 structure sizes ---
+let ElfHeaderSize = 64
+let ElfProgramHeaderSize = 56
+let ElfSectionHeaderSize = 64
+let ElfSymbolSize = 24
+
+// The load address of segment 1 and the page granularity every segment is aligned to. ELF requires
+// `p_offset ≡ p_vaddr (mod p_align)`; keeping `vaddr == ELF_LOAD_ADDR + fileOffset` throughout makes
+// that true by construction, because the load address is itself page-aligned. A violation makes the
+// loader either reject the file or silently map a section to the wrong place.
+let ElfLoadAddr = 0x400000
+let ElfPageSize = 0x1000
+
+// Sections are laid out on an 8-byte cursor within a segment: `.rodata` holds f64 constant islands
+// and String literal records, both 8-byte quantities.
+let ElfSectionAlign = 8
+
+// --- ELF identification / header fields ---
+// `e_ident`: magic, ELFCLASS64, ELFDATA2LSB, EV_CURRENT, ELFOSABI_SYSV, then 8 padding bytes.
+let ElfIdent = b"\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+let ElfTypeExec = 2
+// EM_AARCH64. The ONLY machine this writer emits — there is no `match target.cpu` here (v1's had
+// one, because v1 shipped x86-64-linux too); shv2's ELF writer is arm64-only and says so in its
+// entry guard rather than carrying a dispatch with one live arm.
+let ElfMachineAarch64 = 0xB7
+let ElfVersionCurrent = 1
+
+// --- Program header types and flags ---
+let ElfPtLoad = 1
+let ElfPfExec = 0x1
+let ElfPfWrite = 0x2
+let ElfPfRead = 0x4
+
+// --- Section header types and flags ---
+let ElfShtNull = 0
+let ElfShtProgbits = 1
+let ElfShtSymtab = 2
+let ElfShtStrtab = 3
+
+let ElfShfWrite = 0x1
+let ElfShfAlloc = 0x2
+let ElfShfExecinstr = 0x4
+
+// --- Symbol table (st_info) ---
+let ElfStbGlobal = 1
+let ElfSttFunc = 2
+let ElfStInfoBindShift = 4
+
+// Section alignments advertised in the section header table (`sh_addralign`). `.text` is 16 for
+// cache-line friendliness; the data sections ride the 8-byte section cursor; the string tables are
+// unaligned byte streams.
+let ElfTextAlign = 16
+let ElfStrtabAlign = 1
+
+// `.symtab`'s `sh_info` is the index of the first NON-local symbol. Every function symbol is emitted
+// STB_GLOBAL, so the only local is the leading STN_UNDEF entry and the boundary is 1.
+let ElfSymtabFirstGlobal = 1
+
+// A PT_LOAD segment with `p_filesz == 0` is degenerate. The globals prelude is empty for any program
+// with no top-level `var`, so the `.data` segment carries this 8-byte zero tail to stay non-empty.
+let ElfDataSegmentMinBytes = 8
+
+// Write one Elf64_Phdr (56 bytes). Every segment this writer emits keeps `p_vaddr == p_paddr` (there
+// is no physical-address distinction for a userspace image) and page alignment, so those two fields
+// are derived here rather than passed — one fewer way for a caller to break the congruence rule.
+function writeElfProgramHeader(elf ByteArray, flags MachineWord, fileOffset MachineWord, vaddr MachineWord, fileSize MachineWord, memSize MachineWord)
+	writeDword(elf, value: ElfPtLoad)
+	writeDword(elf, value: flags)
+	writeQword(elf, value: fileOffset)
+	writeQword(elf, value: vaddr)
+	writeQword(elf, value: vaddr)  // p_paddr — ignored for a userspace image, conventionally p_vaddr
+	writeQword(elf, value: fileSize)
+	writeQword(elf, value: memSize)
+	writeQword(elf, value: ElfPageSize)
+end 'writeElfProgramHeader'
+
+// Write one Elf64_Shdr (64 bytes).
+function writeElfSectionHeader(elf ByteArray, nameOffset MachineWord, sectionType MachineWord, flags MachineWord, addr MachineWord, fileOffset MachineWord, size MachineWord, link MachineWord, info MachineWord, addralign MachineWord, entsize MachineWord)
+	writeDword(elf, value: nameOffset)
+	writeDword(elf, value: sectionType)
+	writeQword(elf, value: flags)
+	writeQword(elf, value: addr)
+	writeQword(elf, value: fileOffset)
+	writeQword(elf, value: size)
+	writeDword(elf, value: link)
+	writeDword(elf, value: info)
+	writeQword(elf, value: addralign)
+	writeQword(elf, value: entsize)
+end 'writeElfSectionHeader'
+
+// Write one Elf64_Sym (24 bytes).
+function writeElfSymbol(elf ByteArray, nameOffset MachineWord, info MachineWord, shndx MachineWord, value MachineWord)
+	writeDword(elf, value: nameOffset)
+	elf.push(info and 0xFF)  // st_info
+	elf.push(0)              // st_other (STV_DEFAULT)
+	writeWord(elf, value: shndx)
+	writeQword(elf, value: value)
+	writeQword(elf, value: 0)  // st_size — the chunk layout does not record per-function sizes
+end 'writeElfSymbol'
+
+// Append a NUL-terminated name to a string table and return the offset it was placed at. The table
+// must already carry its leading NUL (ELF reserves offset 0 for the empty name).
+function appendElfStringTableName(strtab ByteArray, name String) returns ByteOffset
+	let offset = strtab.count()
+	strtab.append(name.toByteArray())
+	strtab.push(0)
+	return offset
+end 'appendElfStringTableName'
+
+// ⭐ **BAKE EACH STRING LITERAL'S `buffer@0`.** A String record's buffer field holds the ABSOLUTE
+// address of its byte blob — a value that cannot exist until `.rodata`'s address is known, so
+// `LowerMaxonToStd` emitted it as 0 and left a `(record, blob)` fixup for the writer. This image is
+// FIXED-BASE and static, so `rodataVAddr + blobOffset` IS the blob's runtime address, patched
+// straight into the `.rodata` IMAGE (not the code) at the record's `buffer@0`.
+//
+// It runs on the SAME `.rodata` bytes the writer is about to lay down, BEFORE they are written, so
+// the baked address reaches the file. A wrong or missing address is a SILENT failure, not a crash:
+// `write(1, NULL, len)` returns EFAULT and prints nothing.
+//
+// This is PeWriter's `patchStringBufferFixups` over an absolute VA instead of an `ImageBase`-relative
+// RVA — the same three lines. It is duplicated rather than shared because consolidating would mean
+// editing PeWriter, which is outside this rung's file set; see the report's follow-up note.
+function bakeElfStringBufferAddresses(rdata ByteArray, globalData GlobalDataTable, rodataVAddr MachineWord)
+	for fixup in globalData.stringBufferFixups 'each'
+		let recordOffset = globalData.rdataOffsetOf(fixup.recordLabel)
+		let blobOffset = globalData.rdataOffsetOf(fixup.blobLabel)
+		patchQword(rdata, offset: recordOffset + StringBufferOffset, value: rodataVAddr + blobOffset)
+	end 'each'
+end 'bakeElfStringBufferAddresses'
+
+export function writeElf(outputPath FilePath, codeResult CodeResult, target Target)
+	logInfo(LogCategory.binary, message: function() gives "Writing ELF file: {outputPath} ({targetToString(target)})")
+
+	if target.cpu != CpuArch.arm64 or target.os != Os.linux 'wrongTarget'
+		panic("writeElf: the ELF writer emits arm64-linux only (got {targetToString(target)})")
+	end 'wrongTarget'
+
+	var code = codeResult.code
+	let codeSize = code.count()
+	let rdataSize = codeResult.rdata.count()
+	let preludeSize = codeResult.dataPrelude.count()
+
+	// symdata (reflection) and covdata (coverage) are not produced at this milestone. If either ever
+	// arrives, the section backing it must be laid down here first — fail loudly rather than reference
+	// a section that does not exist. (symdata's relocation kind panics in
+	// `patchArm64SectionRelocations` for the same reason.)
+	//
+	// ⚠ These are MachOWriter's two guards verbatim, and matching them IS the cross-target-consistency
+	// rule — NOT porting v1's third `.covdata` PT_LOAD. shv2's backends hard-code
+	// `covDataSectionBytes` to empty, so a coverage segment here could never execute, could never be
+	// tested, and would be written against a layout nobody has designed yet: it could only rot, and it
+	// would read as support that does not exist. A panic naming the gap is the honest placeholder. The
+	// segment grows back HERE and in MachOWriter together, at the coverage milestone.
+	if codeResult.symdata.count() > 0 'hasSymdata'
+		panic("writeElf: symdata is non-empty but the arm64-linux writer emits no .symdata section yet — it arrives at the reflection milestone")
+	end 'hasSymdata'
+	if codeResult.covDataSectionBytes.count() > 0 'hasCovdata'
+		panic("writeElf: covdata is non-empty but the arm64-linux writer emits no .covdata section yet — it arrives at the coverage milestone")
+	end 'hasCovdata'
+
+	// Two PT_LOADs, always: R+X (headers | .text | .rodata), then R+W (.data).
+	let programHeaderCount = 2
+	let headerSize = ElfHeaderSize + programHeaderCount * ElfProgramHeaderSize
+
+	// --- Segment 1 (R+X): headers | .text | .rodata ---
+	// `.text` begins immediately after the program headers, which is 4-byte aligned for every legal
+	// header count (64 and 56 are both multiples of 4), as AArch64 instructions require.
+	let textFileOffset = headerSize
+	let textVAddr = ElfLoadAddr + textFileOffset
+	let rodataFileOffset = textFileOffset + alignUp(codeSize, alignment: ElfSectionAlign)
+	let rodataVAddr = ElfLoadAddr + rodataFileOffset
+	let codeSegmentSize = rodataFileOffset + rdataSize
+
+	// --- Segment 2 (R+W): .data (the top-level `var` globals prelude) ---
+	// ⚠ NO BSS/heap tail, and that is a DEPARTURE FROM v1. v1's ELF writer gave this segment a 64 KiB
+	// `p_memsz` because v1's bump allocator lived in `.data` and needed the loader to zero-fill an
+	// arena. shv2's allocator mmaps its own arenas (`osAllocPages`), so `.data` holds globals and
+	// nothing else — the same conclusion MachOWriter states as "segment vmsize == filesize (no
+	// zerofill tail needed)". `p_memsz == p_filesz` therefore describes what this image actually
+	// needs; a 64 KiB tail would be v1's allocator baked into a compiler that does not have it.
+	let dataFileOffset = alignUp(codeSegmentSize, alignment: ElfPageSize)
+	let dataVAddr = ElfLoadAddr + dataFileOffset
+	let dataSegmentSize = preludeSize + ElfDataSegmentMinBytes
+
+	// The process entry point. `mainCallFixupOffset` is the entry stub's own `.text` offset (concat
+	// asserts the stub leads `.text`), read from the CodeResult exactly as MachOWriter reads it for
+	// `LC_MAIN.entryoff` — NOT derived positionally from the header size, which would silently assume
+	// a layout this writer does not control.
+	let entryPoint = textVAddr + codeResult.mainCallFixupOffset
+
+	logInfo(LogCategory.binary, message: function() gives "Code size: {codeSize} bytes, rodata: {rdataSize} bytes, data: {preludeSize} bytes, entry point: {entryPoint}")
+
+	// --- Resolve every address into the images before they are written ---
+	patchArm64SectionRelocations(code, rdataRelocs: codeResult.rdataRelocations, textVmAddr: textVAddr, rdataVmAddr: rodataVAddr, dataVmAddr: dataVAddr)
+	bakeElfStringBufferAddresses(codeResult.rdata, globalData: codeResult.globalData, rodataVAddr: rodataVAddr)
+
+	var elf = ByteArray.create()
+	elf.reserve(dataFileOffset + dataSegmentSize)
+
+	// === Elf64_Ehdr (64 bytes) ===
+	// `e_shoff`/`e_shentsize`/`e_shnum`/`e_shstrndx` are written as zero placeholders and backpatched
+	// only if debug symbols produce a section header table; a file with none legitimately has no
+	// section headers at all.
+	elf.append(ElfIdent)
+	writeWord(elf, value: ElfTypeExec)
+	writeWord(elf, value: ElfMachineAarch64)
+	writeDword(elf, value: ElfVersionCurrent)
+	writeQword(elf, value: entryPoint)
+	writeQword(elf, value: ElfHeaderSize)  // e_phoff — program headers follow the ELF header
+	let shoffFieldOffset = elf.count()
+	writeQword(elf, value: 0)  // e_shoff
+	writeDword(elf, value: 0)  // e_flags
+	writeWord(elf, value: ElfHeaderSize)  // e_ehsize
+	writeWord(elf, value: ElfProgramHeaderSize)  // e_phentsize
+	writeWord(elf, value: programHeaderCount)  // e_phnum
+	let shentsizeFieldOffset = elf.count()
+	writeWord(elf, value: 0)  // e_shentsize
+	let shnumFieldOffset = elf.count()
+	writeWord(elf, value: 0)  // e_shnum
+	let shstrndxFieldOffset = elf.count()
+	writeWord(elf, value: 0)  // e_shstrndx
+
+	// === Program headers ===
+	// Segment 1 maps from file offset 0, so it covers the ELF header and these program headers too —
+	// which is why `entryPoint` is `.text`'s address and not the segment's.
+	writeElfProgramHeader(elf, flags: ElfPfRead or ElfPfExec, fileOffset: 0, vaddr: ElfLoadAddr, fileSize: codeSegmentSize, memSize: codeSegmentSize)
+	writeElfProgramHeader(elf, flags: ElfPfRead or ElfPfWrite, fileOffset: dataFileOffset, vaddr: dataVAddr, fileSize: dataSegmentSize, memSize: dataSegmentSize)
+
+	// === Segment contents ===
+	padTo(elf, size: textFileOffset)
+	elf.append(code)
+	padTo(elf, size: rodataFileOffset)
+	elf.append(codeResult.rdata)
+	padTo(elf, size: dataFileOffset)
+	elf.append(codeResult.dataPrelude)
+	padTo(elf, size: dataFileOffset + dataSegmentSize)
+
+	writeElfDebugSections(elf, codeResult: codeResult, textVAddr: textVAddr, textFileOffset: textFileOffset, codeSize: codeSize, rodataVAddr: rodataVAddr, rodataFileOffset: rodataFileOffset, rdataSize: rdataSize, dataVAddr: dataVAddr, dataFileOffset: dataFileOffset, dataSize: dataSegmentSize, shoffFieldOffset: shoffFieldOffset, shentsizeFieldOffset: shentsizeFieldOffset, shnumFieldOffset: shnumFieldOffset, shstrndxFieldOffset: shstrndxFieldOffset)
+
+	// `mode` is NOT optional. PeWriter omits it because Windows derives executability from the file's
+	// contents; every POSIX loader derives it from the mode bits, and a file written without them
+	// fails at SPAWN with a permission error — long after the build reported success.
+	try File.writeBinary(outputPath, content: elf, mode: FilePermission.executable) otherwise 'writeErr'
+		logError(LogCategory.binary, message: function() gives "Failed to write ELF file: {outputPath}")
+		return
+	end 'writeErr'
+
+	logInfo(LogCategory.binary, message: function() gives "ELF write complete: {elf.count()} bytes")
+end 'writeElf'
+
+// Append `.symtab` / `.strtab` / `.shstrtab` and the section header table, then backpatch the four
+// ELF-header fields that describe them. Everything here sits AFTER every loadable segment: the loader
+// follows program headers only, so none of it can affect whether the image runs — it exists so lldb
+// and `readelf -s` can name a function. A build with no debug symbols writes none of it and leaves
+// the header's section fields zero, which is a valid ELF.
+//
+// Section indices are positions in the table being built: [0] SHT_NULL, [1] `.text`, then the
+// optional `.rodata`, `.data`, and finally the three tables. Only `.text`'s
+// index (every function symbol's `st_shndx`) and the trailing three are ever referenced, so the
+// intermediate ones stay implicit in the write order.
+function writeElfDebugSections(elf ByteArray, codeResult CodeResult, textVAddr MachineWord, textFileOffset MachineWord, codeSize ByteCount, rodataVAddr MachineWord, rodataFileOffset MachineWord, rdataSize ByteCount, dataVAddr MachineWord, dataFileOffset MachineWord, dataSize ByteCount, shoffFieldOffset ByteOffset, shentsizeFieldOffset ByteOffset, shnumFieldOffset ByteOffset, shstrndxFieldOffset ByteOffset)
+	let symbolCount = codeResult.debugSymbols.count()
+	if symbolCount == 0 'noSymbols'
+		return
+	end 'noSymbols'
+
+	let hasRodata = rdataSize > 0
+
+	let textShndx = 1
+	var allocatedSectionCount = 2  // SHT_NULL + .text
+	if hasRodata 'countRodata'
+		allocatedSectionCount = allocatedSectionCount + 1
+	end 'countRodata'
+	allocatedSectionCount = allocatedSectionCount + 1  // .data
+	let symtabShndx = allocatedSectionCount
+	let strtabShndx = symtabShndx + 1
+	let shstrtabShndx = strtabShndx + 1
+	let sectionCount = shstrtabShndx + 1
+
+	// `.strtab` — the function names, in symbol order. The leading NUL is ELF's reserved empty name.
+	var strtab = ByteArray.create()
+	strtab.push(0)
+	var symbolNameOffsets = ByteOffsetArray.create()
+	for sym in codeResult.debugSymbols 'eachSym'
+		symbolNameOffsets.push(appendElfStringTableName(strtab, name: String.from(sym.name)))
+	end 'eachSym'
+
+	// `.shstrtab` — the section names, in the order the headers below are written.
+	var shstrtab = ByteArray.create()
+	shstrtab.push(0)
+	let textNameOffset = appendElfStringTableName(shstrtab, name: ".text")
+	let rodataNameOffset = appendElfStringTableName(shstrtab, name: ".rodata") if hasRodata else 0
+	let dataNameOffset = appendElfStringTableName(shstrtab, name: ".data")
+	let symtabNameOffset = appendElfStringTableName(shstrtab, name: ".symtab")
+	let strtabNameOffset = appendElfStringTableName(shstrtab, name: ".strtab")
+	let shstrtabNameOffset = appendElfStringTableName(shstrtab, name: ".shstrtab")
+
+	// Lay the three tables and the section header table out on an 8-byte cursor.
+	let symtabFileOffset = alignUp(elf.count(), alignment: ElfSectionAlign)
+	let symtabSize = (symbolCount + 1) * ElfSymbolSize  // + the leading STN_UNDEF
+	let strtabFileOffset = symtabFileOffset + symtabSize
+	let strtabSize = strtab.count()
+	let shstrtabFileOffset = strtabFileOffset + strtabSize
+	let shstrtabSize = shstrtab.count()
+	let sectionHeaderTableOffset = alignUp(shstrtabFileOffset + shstrtabSize, alignment: ElfSectionAlign)
+
+	// `.symtab`: the reserved STN_UNDEF entry, then one Elf64_Sym per function. Every function lives
+	// in `.text`, so each symbol's `st_shndx` is `textShndx`.
+	padTo(elf, size: symtabFileOffset)
+	writeElfSymbol(elf, nameOffset: 0, info: 0, shndx: 0, value: 0)
+	let functionSymbolInfo = (ElfStbGlobal shl ElfStInfoBindShift) or ElfSttFunc
+	for (iter, sym) in codeResult.debugSymbols.withIterator() 'writeSyms'
+		let nameOffset = try symbolNameOffsets.get(iter.index()) otherwise panic("writeElfDebugSections: symbolNameOffsets[{iter.index()}] OOB ({symbolNameOffsets.count()} entries) — the name pass and the symbol pass fell out of lockstep")
+		writeElfSymbol(elf, nameOffset: nameOffset, info: functionSymbolInfo, shndx: textShndx, value: textVAddr + sym.codeOffset)
+	end 'writeSyms'
+
+	elf.append(strtab)
+	elf.append(shstrtab)
+	padTo(elf, size: sectionHeaderTableOffset)
+
+	writeElfSectionHeader(elf, nameOffset: 0, sectionType: ElfShtNull, flags: 0, addr: 0, fileOffset: 0, size: 0, link: 0, info: 0, addralign: 0, entsize: 0)
+	writeElfSectionHeader(elf, nameOffset: textNameOffset, sectionType: ElfShtProgbits, flags: ElfShfAlloc or ElfShfExecinstr, addr: textVAddr, fileOffset: textFileOffset, size: codeSize, link: 0, info: 0, addralign: ElfTextAlign, entsize: 0)
+	if hasRodata 'rodataShdr'
+		writeElfSectionHeader(elf, nameOffset: rodataNameOffset, sectionType: ElfShtProgbits, flags: ElfShfAlloc, addr: rodataVAddr, fileOffset: rodataFileOffset, size: rdataSize, link: 0, info: 0, addralign: ElfSectionAlign, entsize: 0)
+	end 'rodataShdr'
+	writeElfSectionHeader(elf, nameOffset: dataNameOffset, sectionType: ElfShtProgbits, flags: ElfShfAlloc or ElfShfWrite, addr: dataVAddr, fileOffset: dataFileOffset, size: dataSize, link: 0, info: 0, addralign: ElfSectionAlign, entsize: 0)
+	// `sh_link` of a SYMTAB names its string table; `sh_info` is the index of the first non-local
+	// symbol (see `ElfSymtabFirstGlobal`).
+	writeElfSectionHeader(elf, nameOffset: symtabNameOffset, sectionType: ElfShtSymtab, flags: 0, addr: 0, fileOffset: symtabFileOffset, size: symtabSize, link: strtabShndx, info: ElfSymtabFirstGlobal, addralign: ElfSectionAlign, entsize: ElfSymbolSize)
+	writeElfSectionHeader(elf, nameOffset: strtabNameOffset, sectionType: ElfShtStrtab, flags: 0, addr: 0, fileOffset: strtabFileOffset, size: strtabSize, link: 0, info: 0, addralign: ElfStrtabAlign, entsize: 0)
+	writeElfSectionHeader(elf, nameOffset: shstrtabNameOffset, sectionType: ElfShtStrtab, flags: 0, addr: 0, fileOffset: shstrtabFileOffset, size: shstrtabSize, link: 0, info: 0, addralign: ElfStrtabAlign, entsize: 0)
+
+	patchQword(elf, offset: shoffFieldOffset, value: sectionHeaderTableOffset)
+	patchWord(elf, offset: shentsizeFieldOffset, value: ElfSectionHeaderSize)
+	patchWord(elf, offset: shnumFieldOffset, value: sectionCount)
+	patchWord(elf, offset: shstrndxFieldOffset, value: shstrtabShndx)
+
+	logDebug(LogCategory.binary, message: function() gives "ELF debug symbols: {symbolCount} entries, section header table at file offset {sectionHeaderTableOffset}")
+end 'writeElfDebugSections'

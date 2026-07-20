@@ -1279,7 +1279,7 @@ function opIsCondBranch(op TargetOp) returns bool
 		// are not conditional branches.
 		arm64Ret to arm64Branch gives false
 		arm64CondBranch to arm64Cbnz gives true
-		arm64MovImm to arm64ImportCall gives false
+		arm64MovImm to arm64Syscall gives false
 	end 'check'
 end 'opIsCondBranch'
 
@@ -1300,7 +1300,7 @@ function terminatorIsUnconditionalBranch(module TargetModule, block IrBlock) ret
 		andRegReg to leaRegRdata gives false
 		arm64Ret gives false
 		arm64Branch gives true
-		arm64CondBranch to arm64ImportCall gives false
+		arm64CondBranch to arm64Syscall gives false
 	end 'check'
 end 'terminatorIsUnconditionalBranch'
 
@@ -1343,7 +1343,7 @@ function collectBlockSuccessorIds(module TargetModule, block IrBlock, out BlockI
 			// terminator (their then-target is read via `condBranchTargetOf`), never terminators here.
 			arm64Ret then break 'termCtrl'
 			arm64Branch(target) then out.push(target)
-			arm64CondBranch to arm64ImportCall then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a non-terminator arm64 op as its terminator")
+			arm64CondBranch to arm64Syscall then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a non-terminator arm64 op as its terminator")
 		end 'termCtrl'
 	end 'hasTerm'
 end 'collectBlockSuccessorIds'
@@ -2740,7 +2740,7 @@ export function collectEntryParamCaptures(module TargetModule, topo FuncTopology
 			movReg32Reg32 to popReg then break 'capture'
 			storeSlotReg to loadRegSlot then break 'capture'
 			andRegReg to leaRegRdata then break 'capture'
-			arm64Ret to arm64ImportCall then break 'capture'
+			arm64Ret to arm64Syscall then break 'capture'
 		end 'capture'
 	end 'eachOp'
 	return captures
@@ -3030,7 +3030,7 @@ export function spillStoreSlotOf(op TargetOp) returns ValueSpillSlot
 		// arm64 spills go through the SHARED `storeSlotReg` (handled above), so the arm64 band never
 		// carries a spill store — `none` is unreachable this rung AND correct. `gives` cannot host a
 		// `panic`.
-		arm64Ret to arm64ImportCall gives ValueSpillSlot.none
+		arm64Ret to arm64Syscall gives ValueSpillSlot.none
 	end 'k'
 end 'spillStoreSlotOf'
 

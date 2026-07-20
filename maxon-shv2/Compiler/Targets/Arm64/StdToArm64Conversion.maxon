@@ -24,11 +24,13 @@
 //     `sdiv` (+ `msub` for the remainder) with NO guard block and NO panic routine — nothing splits the
 //     block, so the op walk is a straight one-block-in, one-block-out lowering exactly like x64's.
 //
-// The macOS OS-primitive lowering (`osAllocPages`/`osWriteStdout`, the M2 runtime floor) bottoms the
-// Std-tier slab and String runtimes out in libSystem `mmap`/`write` through the GOT (`arm64ImportCall`).
-// These are the ONLY arm64-specific gaps in the heap/String path: the slab allocator, refcounting and
-// the whole String runtime are Std-tier and target-neutral, inherited unchanged (see the two functions
-// at the end of this file, and MachOWriter's `MachoImportSlot`).
+// The OS-primitive lowering (`osExit`/`osAllocPages`/`osWriteStdout`, the M2 runtime floor) bottoms the
+// Std-tier slab and String runtimes out in the platform's `exit`/`mmap`/`write` — on macOS through
+// libSystem GOT imports (`arm64ImportCall`), on Linux through raw `svc #0` (`arm64Syscall`). Which route
+// is asked ONCE, at `arm64OsCallKind` (see Arm64Runtime for why the two OSes differ at all), and the
+// three lowerings below share the one `emitOsPrimitiveCall` door rather than each carrying its own
+// OS match. These are the ONLY arm64-specific gaps in the heap/String path: the slab allocator,
+// refcounting and the whole String runtime are Std-tier and target-neutral, inherited unchanged.
 
 // The AAPCS64 integer ARGUMENT / return registers: argument `k` arrives in (and is passed in)
 // `arm64ArgRegisters[k]` = x0..x7, and an integer value returns in x0. The array LENGTH caps the
@@ -59,20 +61,35 @@ let Arm64FloatReturnReg = Arm64Register.d0
 // machine's suite, so this path is verified by the arm64 BUILD, not by execution.
 let Arm64FlagReturnReg = Arm64Register.x9
 
-// The macOS `mmap` call shape `lowerOsAllocPages` emits: `mmap(NULL, size, PROT_READ|PROT_WRITE,
-// MAP_ANON|MAP_PRIVATE, -1, 0)` — the macOS twin of x64's VirtualAlloc constants. Named rather than
+// The `mmap` call shape `lowerOsAllocPages` emits: `mmap(NULL, size, PROT_READ|PROT_WRITE,
+// MAP_ANON|MAP_PRIVATE, -1, 0)` — the POSIX twin of x64's VirtualAlloc constants. Named rather than
 // spelled as bare hex at the call site: `0x1002` is unreadable and `MAP_ANON|MAP_PRIVATE` is the fact.
 //
 // ⭐ MAP_ANON IS WHAT MAKES THE ZEROING CONTRACT TRUE. An anonymous mapping is kernel-zeroed on first
 // touch, which is the entire basis for `__slab_alloc` handing out bump slots without memzeroing them —
 // exactly the role `MEM_COMMIT` plays for x64's VirtualAlloc. MAP_PRIVATE travels with it, and a
-// MAP_ANON mapping must name NO file, which is why `fd` is -1. The values are macOS's (`MAP_ANON`
-// is 0x1000 on Darwin, unlike Linux's 0x20).
+// MAP_ANON mapping must name NO file, which is why `fd` is -1.
+//
+// ⚠ THE FLAG WORD IS THE ONE NUMBER THAT DIFFERS BETWEEN THE TWO OSes — everything else about the
+// call (argument order, prot bits, the -1 fd, the zero offset) is identical. `MAP_ANON` is 0x1000 on
+// Darwin and `MAP_ANONYMOUS` is 0x20 on Linux, over a shared `MAP_PRIVATE` of 0x2, so the words are
+// 0x1002 and 0x22. A blanket value would map a FILE on one of the two and hand the slab a mapping
+// that is neither anonymous nor zeroed.
 let MmapKernelChoosesBase = 0x0             // addr = NULL: the kernel picks the base.
 let MmapProtReadWrite = 0x3                 // PROT_READ (0x1) | PROT_WRITE (0x2)
-let MmapAnonPrivate = 0x1002                // MAP_ANON (0x1000) | MAP_PRIVATE (0x2)
+let MmapAnonPrivateMacos = 0x1002           // Darwin:  MAP_ANON (0x1000)      | MAP_PRIVATE (0x2)
+let MmapAnonPrivateLinux = 0x22             // Linux:   MAP_ANONYMOUS (0x20)   | MAP_PRIVATE (0x2)
 let MmapAnonFd = 0xFFFFFFFFFFFFFFFF         // fd = -1 (two's-complement): MAP_ANON names no file.
 let MmapNoOffset = 0x0                      // offset = 0 (ignored for an anonymous mapping).
+
+// The anonymous-private mapping flag word for `os`. Routed through `arm64OsCallKind` rather than a
+// second `match os`, so the set of OSes this backend serves is stated in exactly one place.
+function mmapAnonPrivateFlags(os Os) returns MachineWord
+	return match arm64OsCallKind(os) 'route'
+		importCall gives MmapAnonPrivateMacos
+		syscall gives MmapAnonPrivateLinux
+	end 'route'
+end 'mmapAnonPrivateFlags'
 
 // `write(1, buf, len)` — the stdout primitive `lowerOsWriteStdout` emits. FAR simpler than x64's
 // GetStdHandle+WriteFile: no handle call, no bytes-written out-param, no stack args.
@@ -203,8 +220,8 @@ function arm64RequireScalarDouble(t StdType, what String)
 	end 'notDouble'
 end 'arm64RequireScalarDouble'
 
-export function lowerStdToArm64(stdModule StdModule, globalData GlobalDataTable) returns (TargetModule, ValueClassColumns)
-	var lowering = StdToArm64Lowering.create(stdModule, globalData: globalData)
+export function lowerStdToArm64(stdModule StdModule, target Target, globalData GlobalDataTable) returns (TargetModule, ValueClassColumns)
+	var lowering = StdToArm64Lowering.create(stdModule, target: target, globalData: globalData)
 	lowering.prepareSkeleton()
 	// BY INDEX, never by iteration: `lowerFunction` MUTATES the function it lowers (the divide-by-zero
 	// guard appends blocks to its `blockRefs` and bumps `nextBlockId`), so no `srcFunc` borrowed out of
@@ -224,6 +241,11 @@ end 'lowerStdToArm64'
 type StdToArm64Lowering
 	// Exported like `targetModule`: `lowerStdToArm64` hands both to the shared `buildValueClassColumns`.
 	export var stdModule as StdModule
+	// The compilation target — read ONLY by the three OS-primitive lowerings, which differ between
+	// arm64-macOS and arm64-linux (import call vs. raw syscall, and the mmap flag word). Every other
+	// lowering in this file is OS-invariant: the ISA is the same and shv2 emits no varargs and no
+	// sub-64-bit values, so Apple's caller-extends-small-ints divergence is satisfied vacuously.
+	var target as Target
 	// The backend's data table — where a float constant's `.rdata` island is registered, resolved by
 	// the arm64 concat once sections are laid out.
 	var globalData as GlobalDataTable
@@ -240,8 +262,8 @@ type StdToArm64Lowering
 	// f64 type), so unlike `calleeResultClasses` it is not threaded into `buildValueClassColumns`.
 	var calleeParamClasses as CalleeParamClassMap
 
-	static function create(stdModule StdModule, globalData GlobalDataTable) returns StdToArm64Lowering
-		return Self{stdModule: stdModule, globalData: globalData, targetModule: TargetModule.create(), calleeResultClasses: buildCalleeResultClasses(stdModule), calleeParamClasses: buildCalleeParamClasses(stdModule)}
+	static function create(stdModule StdModule, target Target, globalData GlobalDataTable) returns StdToArm64Lowering
+		return Self{stdModule: stdModule, target: target, globalData: globalData, targetModule: TargetModule.create(), calleeResultClasses: buildCalleeResultClasses(stdModule), calleeParamClasses: buildCalleeParamClasses(stdModule)}
 	end 'create'
 
 	// Whole-module setup: relocate every StdModule block 1:1 into `targetModule.blocks` (preserving the
@@ -745,47 +767,67 @@ type StdToArm64Lowering
 		self.emitRet(dstRef, asTerminator: asTerminator)
 	end 'lowerErrorReturn'
 
-	// Lower `osExit(code)` to `_exit(code)` through the libSystem GOT — the macOS twin of x64's ExitProcess
-	// path (the same import the arm64 entry stub uses). AAPCS64 puts the code in x0.
+	// ⭐ THE ONE DOOR EVERY OS PRIMITIVE GOES THROUGH. Emit the call that reaches the kernel: a
+	// GOT-indirect libSystem call on macOS, a raw `svc #0` on Linux (`arm64OsCallKind` — see
+	// Arm64Runtime for why the two OSes differ at all). Both take their arguments in x0.. and return
+	// in x0, which is exactly why ONE door works: the three lowerings below emit IDENTICAL argument
+	// moves and read the result from the same register on both OSes, and differ only in this call.
+	//
+	// Each caller names BOTH routes' identity for its primitive — the import slot and the syscall
+	// number — so a primitive can never be wired to the right slot and the wrong number.
+	function emitOsPrimitiveCall(dstRef BlockRef, importSlot OsImportSlot, syscallNumber MachineWord)
+		match arm64OsCallKind(self.target.os) 'route'
+			importCall then self.emit(dstRef, op: TargetOp.arm64ImportCall(osImportSlotIndex(importSlot)))
+			syscall then self.emit(dstRef, op: TargetOp.arm64Syscall(syscallNumber))
+		end 'route'
+	end 'emitOsPrimitiveCall'
+
+	// Lower `osExit(code)` to the platform's process-exit primitive — libSystem `_exit` through the GOT
+	// on macOS, `exit_group` via `svc #0` on Linux — the arm64 twin of x64's ExitProcess path (the same
+	// primitive the arm64 entry stub uses). AAPCS64 and the Linux syscall ABI both put the code in x0.
 	function lowerOsExit(codeId ValueId, dstRef BlockRef)
 		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x0), srcReg: TargetVReg.virtual(codeId)))
-		self.emit(dstRef, op: TargetOp.arm64ImportCall(machoImportSlotIndex(MachoImportSlot.exit)))
+		self.emitOsPrimitiveCall(dstRef, importSlot: OsImportSlot.exit, syscallNumber: LinuxSyscallExitGroup)
 	end 'lowerOsExit'
 
-	// Lower `osAllocPages(size)` to the macOS page source `mmap(NULL, size, PROT_READ|PROT_WRITE,
-	// MAP_ANON|MAP_PRIVATE, -1, 0)` through the libSystem GOT — the arm64 twin of x64's `lowerOsAllocPages`
-	// (VirtualAlloc), and FAR simpler: AAPCS64's argument registers x0..x7 ARE the call ABI, so there is
-	// no custom-ABI↔OS-ABI mismatch to bridge (the whole reason x64 needs its own op rather than a
-	// `call`). The six arguments go straight into x0..x5 and the result reads back from x0. MAP_ANON
-	// returns ZEROED pages, satisfying the slab's zeroing contract (see the mmap constants), exactly as
-	// x64's MEM_COMMIT does.
+	// Lower `osAllocPages(size)` to the POSIX page source `mmap(NULL, size, PROT_READ|PROT_WRITE,
+	// MAP_ANON|MAP_PRIVATE, -1, 0)` — the arm64 twin of x64's `lowerOsAllocPages` (VirtualAlloc), and FAR
+	// simpler: AAPCS64's argument registers x0..x7 ARE the call ABI, so there is no custom-ABI↔OS-ABI
+	// mismatch to bridge (the whole reason x64 needs its own op rather than a `call`). The six arguments
+	// go straight into x0..x5 and the result reads back from x0. MAP_ANON returns ZEROED pages, satisfying
+	// the slab's zeroing contract (see the mmap constants), exactly as x64's MEM_COMMIT does.
+	//
+	// ⭐ THE ARGUMENT MOVES ARE OS-INVARIANT AND THE SYSCALL ABI IS WHY. Linux's `svc` reads its six
+	// arguments from x0..x5 — the SAME registers AAPCS64 passes the libSystem call's in — so only the
+	// call itself and the flag word change between the two OSes, not this sequence.
 	//
 	// Forward-order emission is sound for the one live operand (`size`): each `mov x[k], …` is a physical
 	// def of x[k] that liveness forbids to every value live across it, so `size` (live into its own move)
 	// can never be coloured to an argument register set before it — the same argument `lowerCall` makes.
-	// The `arm64ImportCall`'s caller-saved clobber confines any value live ACROSS the call to the
-	// callee-saved half, which is what keeps `__slab_alloc`'s bookkeeping (live across the page call)
-	// correct — the exact miscompile the x64 `iatCall` clobber comment records for `VirtualAlloc`.
+	// The OS call's caller-saved clobber confines any value live ACROSS it to the callee-saved half,
+	// which is what keeps `__slab_alloc`'s bookkeeping (live across the page call) correct — the exact
+	// miscompile the x64 `iatCall` clobber comment records for `VirtualAlloc`.
 	function lowerOsAllocPages(resultId ValueId, sizeId ValueId, dstRef BlockRef)
 		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x0), value: MmapKernelChoosesBase))
 		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x1), srcReg: TargetVReg.virtual(sizeId)))
 		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x2), value: MmapProtReadWrite))
-		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x3), value: MmapAnonPrivate))
+		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x3), value: mmapAnonPrivateFlags(self.target.os)))
 		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x4), value: MmapAnonFd))
 		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x5), value: MmapNoOffset))
-		self.emit(dstRef, op: TargetOp.arm64ImportCall(machoImportSlotIndex(MachoImportSlot.mmap)))
+		self.emitOsPrimitiveCall(dstRef, importSlot: OsImportSlot.mmap, syscallNumber: LinuxSyscallMmap)
 		self.emit(dstRef, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: arm64PhysReg(Arm64IntReturnReg)))
 	end 'lowerOsAllocPages'
 
-	// Lower `osWriteStdout(buf, len)` to `write(1, buf, len)` through the libSystem GOT; the result is
-	// ignored. FAR simpler than x64's `lowerOsWriteStdout` (GetStdHandle then WriteFile with a handle, an
-	// out-param and a stack argument): a single POSIX `write` with three register arguments. `buf`/`len`
-	// move forward into x1/x2 — a `len` colouring x1 is forbidden by the physical def of x1 that reads
-	// `buf`, exactly as `lowerCall`'s arg moves are sound in order.
+	// Lower `osWriteStdout(buf, len)` to `write(1, buf, len)`; the result is ignored. FAR simpler than
+	// x64's `lowerOsWriteStdout` (GetStdHandle then WriteFile with a handle, an out-param and a stack
+	// argument): a single POSIX `write` with three register arguments, and the Linux syscall takes them
+	// in the same x0/x1/x2 the libSystem call does. `buf`/`len` move forward into x1/x2 — a `len`
+	// colouring x1 is forbidden by the physical def of x1 that reads `buf`, exactly as `lowerCall`'s arg
+	// moves are sound in order.
 	function lowerOsWriteStdout(bufId ValueId, lenId ValueId, dstRef BlockRef)
 		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x0), value: WriteStdoutFd))
 		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x1), srcReg: TargetVReg.virtual(bufId)))
 		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x2), srcReg: TargetVReg.virtual(lenId)))
-		self.emit(dstRef, op: TargetOp.arm64ImportCall(machoImportSlotIndex(MachoImportSlot.write)))
+		self.emitOsPrimitiveCall(dstRef, importSlot: OsImportSlot.write, syscallNumber: LinuxSyscallWrite)
 	end 'lowerOsWriteStdout'
 end 'StdToArm64Lowering'

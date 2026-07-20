@@ -368,10 +368,11 @@ export function targetOpOperands(op TargetOp, buf OperandList)
 		arm64Scvtf(dest, src) then pushDefFromUse(buf, dest: dest, src: src)
 		arm64Fcvtzs(dest, src) then pushDefFromUse(buf, dest: dest, src: src)
 		arm64FpLoadRdata(dest, _) then pushDef(buf, vreg: dest)
-		// The GOT-indirect import call names NO explicit register operand — its arguments are pre-moved
-		// into x0.. and its caller-saved clobbers ride `TargetOpMeta.implicitDefs`, exactly as `iatCall`
-		// and `arm64BranchLink` do (both `break` above).
-		arm64ImportCall then break 'operands'
+		// Neither OS-call form names an explicit register operand — arguments are pre-moved into x0..
+		// and the caller-saved clobbers ride `TargetOpMeta.implicitDefs`, exactly as `iatCall` and
+		// `arm64BranchLink` do (both `break` above). The Linux `svc` additionally writes x8, which the
+		// same call clobber already covers.
+		arm64ImportCall to arm64Syscall then break 'operands'
 	end 'operands'
 end 'targetOpOperands'
 

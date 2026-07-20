@@ -1,0 +1,35 @@
+// OsImportSlot — the OS primitives a dynamically-linked target reaches through an import
+// table, and the slot index a call site records for its writer to patch.
+//
+// ⭐ THE SLOT-INDEX MODEL IS OS-NEUTRAL; ONLY THE SYMBOL SPELLING IS NOT. A call site emits
+// "call through import slot k" and the object writer resolves k to an address: the Mach-O
+// writer against a `__got` entry dyld binds, the PE writer against an IAT entry (`IatSlot`,
+// the identical shape). Nothing about `k` is Mach-O, which is why this enum does NOT belong
+// in `Targets/Macos/` — two files under `Targets/Arm64/` (the isel and the entry stub) named
+// a Mach-O type to say "the exit primitive", a layering leak that only became visible when
+// arm64-linux arrived and needed the same three primitives with NO import table at all.
+//
+// The per-format SYMBOL map stays with its writer (`machoImportSymbol` renders the Mach-O
+// ABI's leading underscore: a C `exit` is the symbol `_exit`), because that IS format
+// knowledge. Adding an import is still: append a case here and its symbol there.
+//
+// ⚠ arm64-LINUX USES NONE OF THIS. Linux permits raw syscalls, so `osExit`/`osWriteStdout`/
+// `osAllocPages` lower to `svc #0` and the ELF image carries no import table, no GOT and no
+// dynamic linker (see `Arm64Runtime.arm64OsCallKind`). The enum is reached only on the
+// import-table route.
+//
+// `exit` terminates the process with main's return code. `write` is both the panic runtime's
+// route to stderr and the `osWriteStdout`/`print` primitive. `mmap` is the page source
+// `osAllocPages` bottoms out in; MAP_ANON returns ZEROED pages, satisfying the slab's zeroing
+// contract. No `munmap`: the slab never decommits, so a page-free import would be dead.
+export enum OsImportSlot
+	exit
+	write
+	mmap
+end 'OsImportSlot'
+
+// The import slot index a call site records and the writer patches against. One accessor
+// over the enum, exactly like `iatSlotIndex`.
+export function osImportSlotIndex(slot OsImportSlot) returns RelocSlotIndex
+	return slot.ordinal as RelocSlotIndex
+end 'osImportSlotIndex'

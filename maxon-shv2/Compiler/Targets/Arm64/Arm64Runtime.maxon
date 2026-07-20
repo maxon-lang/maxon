@@ -1,13 +1,20 @@
-// Arm64Runtime — the arm64-macOS entry stub `mrt_start`, the arm64 twin of `X64Runtime`/`mrt_start`.
+// Arm64Runtime — the arm64 OS boundary: HOW this backend reaches the kernel, and the entry stub
+// `mrt_start` that bridges Maxon's `main` to process exit. The arm64 twin of `X64Runtime`.
 //
-// ⭐ HAND-ASSEMBLED, NOT A MODULE FUNCTION. x64's `mrt_start` is built from `TargetOp`s and prepended
-// to the module (`prependEntryStub`), because every instruction it needs — `push`, `call rel32`, the
-// IAT `call [rip]` — is a `TargetOp`. The arm64 stub cannot be: it terminates the process by calling
-// libSystem's `_exit` through a dyld-bound GOT slot (macOS forbids raw syscalls), and that GOT-
-// indirect call has NO `TargetOp` channel — minting one would band-append to the shared `TargetOp`
-// union (outside this backend). So the stub is hand-assembled here into a `FunctionCodeChunk` from
-// `Arm64Backend`'s encoder primitives, exactly as `X64Runtime` hand-assembles its panic runtime. The
-// chunk is laid out FIRST in `.text` (`buildArm64Backend`), so `LC_MAIN.entryoff` points at it.
+// ⭐ ONE FACT SPLITS THE TWO arm64 OSes, AND IT IS NOT THE OBJECT FORMAT. **macOS forbids raw
+// syscalls**: every OS primitive must go through libSystem, which forces a dynamic linker, a GOT,
+// dyld chained fixups, ad-hoc code signing and an LC_UUID. **Linux permits them**, so the same
+// primitives become a bare `svc #0` and NONE of that apparatus exists — no PT_INTERP, no GOT, no
+// import table, a static ET_EXEC. That single difference is why the Mach-O writer is 948 lines and
+// the ELF writer is a third of it, and it is asked here, once, by `arm64OsCallKind`.
+//
+// ⭐ THE STUB IS HAND-ASSEMBLED, NOT A MODULE FUNCTION. x64's `mrt_start` is built from `TargetOp`s
+// and prepended to the module (`prependEntryStub`), because every instruction it needs — `push`,
+// `call rel32`, the IAT `call [rip]` — is a `TargetOp`. The arm64 stub cannot be: on macOS it
+// terminates through a dyld-bound GOT slot, which has no `TargetOp` channel outside this backend.
+// So it is hand-assembled here into a `FunctionCodeChunk` from `Arm64Backend`'s encoder primitives,
+// exactly as `X64Runtime` hand-assembles its panic runtime. The chunk is laid out FIRST in `.text`
+// (`buildArm64Backend`), so the image's entry point is its offset.
 //
 // THE SCALAR CORE NEEDS NO RUNTIME FLOOR. It allocates nothing (no slab/MM init, no leak check), it
 // spawns nothing (no scheduler), and its only trap-shaped case — divide-by-zero — is defined to
@@ -15,22 +22,71 @@
 // `mrt_runtime_init` to call before user code. The whole runtime is therefore this one stub; the MM
 // and green-thread floors GROW back at their milestones exactly as x64's do.
 
-// Build `mrt_start` and return it as a `FunctionCodeChunk`. dyld enters at `mrt_start` with argc/argv/
-// envp in x0/x1/x2 and sp 16-byte aligned; the stub bridges Maxon's `main` (AAPCS64, ExitCode in x0)
-// to `_exit`:
+// How the arm64 backend reaches the OS. ONE door, asked by every OS-primitive lowering
+// (`osExit`/`osWriteStdout`/`osAllocPages`) and by the entry stub below, so those four sites cannot
+// drift on which OSes this backend supports or on how each one gets there.
+export enum Arm64OsCallKind
+	// A GOT-indirect libSystem call (`adrp x16, GOTPAGE; ldr x16, [x16, GOTOFF]; blr x16`), the slot
+	// named by an `OsImportSlot` and bound by dyld. macOS's only route.
+	importCall
+	// A raw supervisor call (`movz x8, #number; svc #0`), the number named per-primitive. Linux's.
+	syscall
+end 'Arm64OsCallKind'
+
+// Exported: the isel (`StdToArm64Conversion`) asks it for every OS-primitive lowering and for the
+// mmap flag word, and this stub asks it for its exit route — the one place either can ask.
+export function arm64OsCallKind(os Os) returns Arm64OsCallKind
+	return match os 'os'
+		macos gives Arm64OsCallKind.importCall
+		linux gives Arm64OsCallKind.syscall
+		windows panic("arm64OsCallKind: there is no arm64-windows backend — `buildBackend` dispatches arm64 to this backend only for macos/linux")
+		wasi panic("arm64OsCallKind: wasm32-wasi is not an arm64 target — the wasm backend reaches the OS through WASI imports, not through this file")
+	end 'os'
+end 'arm64OsCallKind'
+
+// --- Linux syscall numbers (AArch64) ---
 //
-//   mrt_start:
-//     bl   main                    ; x0 = main's ExitCode (AAPCS64 primary return)
-//     adrp x16, _exit@GOTPAGE       ; }
-//     ldr  x16, [x16, _exit@GOTOFF] ; }  _exit(x0) — x0 already holds the code, no move needed
-//     blr  x16                      ; }  never returns
-//     brk  #0                       ; trap if _exit ever returns (unreachable)
+// The AArch64 table, NOT x86-64's: `write` is 64 here and 1 there, `mmap` 222 and 9. Named because
+// a bare 64 at a call site is unreadable and the number IS the primitive's identity.
 //
-// NO FRAME. The stub never touches sp — dyld's 16-byte alignment survives to both `bl` and `blr` by
-// construction — and the scalar core has no backtrace that would need x29/x30 chained, so a frame
-// would be dead ceremony. `leakCheck` gates the future MM leak bridge exactly as the x64 stub does;
-// it is `false` for the scalar core, which has no allocator and cannot leak.
-export function buildArm64EntryStubChunk(leakCheck bool) returns FunctionCodeChunk
+// ⚠ `exit_group` (94), NOT `exit` (93) — a DELIBERATE DIVERGENCE from v1, which emits 93. `exit`
+// terminates the calling THREAD; `exit_group` terminates the whole thread group, which is what a C
+// `_exit` actually invokes and what `main` returning means. The two are indistinguishable in a
+// single-threaded process, so this costs nothing today and stays correct the day shv2 grows OS
+// threads (P1.5) — at which point 93 would silently leave the other threads running.
+export let LinuxSyscallWrite = 64
+export let LinuxSyscallMmap = 222
+export let LinuxSyscallExitGroup = 94
+
+// Build `mrt_start` and return it as a `FunctionCodeChunk`. It bridges Maxon's `main` (AAPCS64,
+// ExitCode in x0) to the platform's process-exit primitive — which takes its code in x0 too, so the
+// value flows through with no move on either OS:
+//
+//   macOS:                                   Linux:
+//     bl   main                                bl   main
+//     adrp x16, _exit@GOTPAGE                  movz x8, #94        ; __NR_exit_group
+//     ldr  x16, [x16, _exit@GOTOFF]            svc  #0
+//     blr  x16
+//     brk  #0                                  brk  #0
+//
+// NO FRAME, and the reason differs per OS but the conclusion does not. The stub never touches sp, so
+// the OS's 16-byte-aligned entry sp survives to the `bl` by construction, and the scalar core has no
+// backtrace that would need x29/x30 chained. On macOS dyld enters through a call-like path; on Linux
+// the kernel enters `_start` with **x30 UNDEFINED** — there is no return address — so the stub must
+// never `ret`. It does not: both routes end in a non-returning exit, and the `brk #0` catches the
+// impossible fall-through rather than letting execution run off into the next function.
+//
+// ⚠ argv IS NOT AVAILABLE THE WAY macOS MAKES IT AVAILABLE — a landmine for whoever wires it later.
+// dyld hands macOS `mrt_start` argc/argv in **x0/x1**. The Linux kernel does NOT: it enters with
+// **argc at `[sp]`, argv at `sp+8`, envp after its NUL terminator**, and x0/x1 architecturally
+// UNSPECIFIED. v1 stashes from x0/x1 unconditionally on both (`Arm64Dialect.maxon:266-272`,
+// `Arm64PrologueEpilogue.maxon:42-64`), which is a latent bug on Linux. The scalar core needs no
+// argv at all, so this stub dodges it entirely — but a future argv slice must read the stack on
+// Linux, not the registers, and must do so BEFORE anything perturbs sp.
+//
+// `leakCheck` gates the future MM leak bridge exactly as the x64 stub does; it is `false` for the
+// scalar core, which has no allocator and cannot leak.
+export function buildArm64EntryStubChunk(leakCheck bool, os Os) returns FunctionCodeChunk
 	var code = ByteArray.create()
 	var callFixups = CallFixupArray.create()
 	var iatRelocs = RelocationArray.create()
@@ -47,12 +103,16 @@ export function buildArm64EntryStubChunk(leakCheck bool) returns FunctionCodeChu
 		arm64EmitBranchLink(code, callFixups: callFixups, targetName: MmLeakCheckName)
 	end 'leakGate'
 
-	// _exit(x0) through the libSystem GOT import. x0 already holds the ExitCode. Records the GOT slot
-	// as a Relocation the Mach-O writer patches (the macOS twin of x64's `iatCall` → ExitProcess).
-	arm64EmitImportCall(code, iatRelocs: iatRelocs, slotIndex: machoImportSlotIndex(MachoImportSlot.exit))
+	// Terminate with the ExitCode already in x0. macOS records the `_exit` GOT slot as a Relocation
+	// the Mach-O writer patches (the twin of x64's `iatCall` → ExitProcess); Linux needs no
+	// relocation at all, which is the whole shape of this rung.
+	match arm64OsCallKind(os) 'exitRoute'
+		importCall then arm64EmitImportCall(code, iatRelocs: iatRelocs, slotIndex: osImportSlotIndex(OsImportSlot.exit))
+		syscall then arm64EmitSyscall(code, number: LinuxSyscallExitGroup)
+	end 'exitRoute'
 
-	// brk #0 — SIGTRAP if `_exit` ever returns (it does not); stops execution running off the end of
-	// `.text` into the next function rather than trusting the import never to return.
+	// brk #0 — SIGTRAP if the exit primitive ever returns (it does not); stops execution running off
+	// the end of this chunk into the next function rather than trusting it never to return.
 	arm64EmitBrk(code)
 
 	return FunctionCodeChunk.createWith(EntryPointName, code: code, callFixups: callFixups, rdataRelocs: RdataRelocationArray.create(), iatRelocs: iatRelocs, rdataConstants: GlobalDataTable.create())

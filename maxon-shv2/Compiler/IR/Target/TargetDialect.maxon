@@ -803,7 +803,7 @@ export union TargetOp
 	// preceding band documents: every range arm over `TargetOp` in the x64/shared passes stops at or
 	// before `leaRegRdata`, so an arm64 op inserted anywhere else would be SILENTLY swallowed and
 	// misclassified. Appending past the last arm makes each of those matches fail to compile until it
-	// is consciously extended with an `arm64Ret to arm64ImportCall` arm.
+	// is consciously extended with an `arm64Ret to arm64Syscall` arm.
 	//
 	// One allocator, one op union (USER RULING): these arms carry the NEUTRAL `TargetVReg` and the
 	// neutral `RegNum`, exactly as the x64 arms do — the arm64 ENCODER (wave 1) maps a resolved
@@ -930,6 +930,30 @@ export union TargetOp
 	// reference a named `let`, so the mask is inline (guarded there). `slotIndex` names the libSystem GOT
 	// slot the Mach-O writer patches.
 	arm64ImportCall(slotIndex RelocSlotIndex) = TargetOpMeta{isMemory: true, isStore: true, isCall: true, implicitUses: 0, implicitDefs: 0x7FFF807F8000FFFF}
+	// A raw Linux `svc #0` supervisor call (`movz x8, #number; svc #0`) — the LINUX sibling of
+	// `arm64ImportCall`, and the reason arm64-linux needs no import table, no GOT and no dynamic
+	// linker at all: macOS FORBIDS raw syscalls and forces every OS primitive through libSystem,
+	// Linux permits them. `osExit`/`osWriteStdout`/`osAllocPages` lower to this on Linux and to
+	// `arm64ImportCall` on macOS (`Arm64Runtime.arm64OsCallKind` is the one door that decides).
+	//
+	// ⭐ IT IS AN ORDINARY CALL, NOT A SECOND ABI. v1 modelled its syscall as a SLOT-based op
+	// carrying its own operand array (`syscall(resultSlot, number, argSlots)`), because v1's
+	// backend is slot-based — its operands live at `[x29, #16+i*8]` and are invisible to coloring.
+	// shv2 is SSA/vreg with a real allocator, so bolting a parallel slot path onto it would be a
+	// second, uncoloured argument convention. Instead the LOWERING moves arguments into physical
+	// x0..x5 and reads the result out of x0 exactly as `lowerCall` does — the same machinery, the
+	// same liveness argument — and this op carries only the syscall NUMBER (materialised into x8
+	// by the encoder, where the AArch64 Linux ABI wants it).
+	//
+	// The meta is `arm64BranchLink`'s, byte for byte, and that is what makes the above sound:
+	// `isCall: true` plus implicitDefs = 0x7FFF807F8000FFFF (GPRs x0..x15, SIMD d0..d7 and
+	// d16..d31 — every AAPCS64 caller-saved register; x19..x28/d8..d15 excluded) confines any
+	// value live ACROSS the syscall to the callee-saved half. x8 is inside that mask, so the
+	// encoder is free to clobber it. v1 additionally declared `implicitGprDefs: 1`, which is
+	// redundant once the call clobber covers x0. A union-backing literal cannot reference a named
+	// `let`, so the mask is inline (`assertArm64CallClobbers` holds it equal to
+	// `arm64CallerSavedMask`).
+	arm64Syscall(number MachineWord) = TargetOpMeta{isMemory: true, isStore: true, isCall: true, implicitUses: 0, implicitDefs: 0x7FFF807F8000FFFF}
 end 'TargetOp'
 
 // The memory-access widths the `.data` load/store encoders have. TWO, because two are what the

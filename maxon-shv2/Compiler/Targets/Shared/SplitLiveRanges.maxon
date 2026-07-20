@@ -1989,7 +1989,7 @@ function opIsConstMaterialization(module TargetModule, opIdx OpIndex) returns bo
 		// x64 ALU band above is not.
 		arm64Ret to arm64Cbnz gives false
 		arm64MovImm gives true
-		arm64Prologue to arm64ImportCall gives false
+		arm64Prologue to arm64Syscall gives false
 	end 'k'
 end 'opIsConstMaterialization'
 
@@ -2541,7 +2541,7 @@ function constDefInfo(module TargetModule, opIdx OpIndex) returns (MachineWord, 
 		prologue to jcc panic("constDefInfo: def is not a constant materialization")
 		movRegReg to leaRegRdata panic("constDefInfo: def is not a constant materialization")
 		arm64Ret to arm64Cbnz panic("constDefInfo: def is not a constant materialization")
-		arm64Prologue to arm64ImportCall panic("constDefInfo: def is not a constant materialization")
+		arm64Prologue to arm64Syscall panic("constDefInfo: def is not a constant materialization")
 	end 'k'
 end 'constDefInfo'
 
@@ -2713,9 +2713,9 @@ function substituteValueInOp(op TargetOp, from ValueId, to ValueId) returns Targ
 		arm64Scvtf(dest, src) then return TargetOp.arm64Scvtf(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to))
 		arm64Fcvtzs(dest, src) then return TargetOp.arm64Fcvtzs(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to))
 		arm64FpLoadRdata(dest, label) then return TargetOp.arm64FpLoadRdata(substituteVReg(dest, from: from, to: to), label: label)
-		// No register operand to substitute — the import call's args are pre-moved into x0.. (like
-		// `arm64BranchLink` and `iatCall`).
-		arm64ImportCall then return op
+		// No register operand to substitute — both OS-call forms take their args pre-moved into x0..
+		// (like `arm64BranchLink` and `iatCall`).
+		arm64ImportCall to arm64Syscall then return op
 	end 'rewrite'
 end 'substituteValueInOp'
 

@@ -163,35 +163,17 @@ let MinOsMacos13 = 0x000D0000
 // __heap-free at M1: the runtime allocator mmaps its own arenas, so __DATA holds
 // only globals + the GOT. Segment vmsize == filesize (no zerofill tail needed).
 
-// The libSystem imports M1 needs, one GOT slot each. Mirrors PeWriter's `IatSlot`:
-// the reloc a call site records is `machoImportSlotIndex(slot)`, and the GOT + the
-// chained-fixup import table + the symbol pool all size themselves off `allCases`,
-// so adding an import is: append a case here and its symbol in `machoImportSymbol`.
+// The libSystem imports M1 needs, one GOT slot each. The SLOT SET itself is OS-neutral and
+// lives in `Targets/Shared/OsImportSlot.maxon` (it is PE's `IatSlot` shape, and arm64-linux
+// needs the same three primitives with no import table at all); what stays here is the one
+// genuinely Mach-O fact — how a slot's symbol is SPELLED. The GOT + the chained-fixup import
+// table + the symbol pool all size themselves off `allCases`, so adding an import is: append
+// a case there and its symbol in `machoImportSymbol` here.
 //
-// `exit` terminates the process with main's return code. `write` is both the panic
-// runtime's route to stderr (macOS has no CRT `fprintf`; a panic is `write(2, …)`) and,
-// since the M2 runtime floor, the `osWriteStdout`/`print` primitive (`write(1, …)`).
-// `mmap` is the page source `osAllocPages` bottoms out in (the macOS twin of x64's
-// `VirtualAlloc`); MAP_ANON returns ZEROED pages, satisfying the slab's zeroing contract.
-// arm64 needs no fault-handler import — the scalar core's only trap-shaped case,
-// divide-by-zero, is guarded inline (arm64 `sdiv` by 0 does not fault). No `munmap`: the
-// slab never decommits (there is no `osDecommit`), so a page-free import would be dead.
-export enum MachoImportSlot
-	exit
-	write
-	mmap
-end 'MachoImportSlot'
-
-// The GOT slot index a call site records and the writer patches its ADRP+LDR
-// against. One accessor over the enum, exactly like `iatSlotIndex`.
-export function machoImportSlotIndex(slot MachoImportSlot) returns RelocSlotIndex
-	return slot.ordinal as RelocSlotIndex
-end 'machoImportSlotIndex'
-
-// The Mach-O symbol name for a slot, INCLUDING the platform ABI's leading
-// underscore (a C `exit` is the Mach-O symbol `_exit`). Kept as an explicit map,
-// not the enum case name, because the case name cannot begin with `_`.
-function machoImportSymbol(slot MachoImportSlot) returns String
+// The Mach-O symbol name for a slot, INCLUDING the platform ABI's leading underscore (a C
+// `exit` is the Mach-O symbol `_exit`). Kept as an explicit map, not the enum case name,
+// because the case name cannot begin with `_`.
+function machoImportSymbol(slot OsImportSlot) returns String
 	return match slot 'sym'
 		exit gives "_exit"
 		write gives "_write"
@@ -203,14 +185,14 @@ end 'machoImportSymbol'
 // and the symbol pool all iterate.
 function machoImportSymbols() returns StringArray
 	var names = StringArray.create()
-	for slot in MachoImportSlot.allCases 'each'
+	for slot in OsImportSlot.allCases 'each'
 		names.push(machoImportSymbol(slot))
 	end 'each'
 	return names
 end 'machoImportSymbols'
 
 function machoImportCount() returns ByteCount
-	return MachoImportSlot.allCases.count()
+	return OsImportSlot.allCases.count()
 end 'machoImportCount'
 
 // --- Segment / section header helpers ---
@@ -502,36 +484,10 @@ function patchImportRelocations(code ByteArray, relocations RelocationArray, tex
 	end 'patch'
 end 'patchImportRelocations'
 
-// Patch code→section references (ADR / ADRP+off / LDR-literal). `arm64*` kinds
-// reach __const (float constants, read-only in __TEXT); `dataSection*` kinds reach
-// the top-level `var` globals in __data. Every other arm is named and PANICS: the
-// x64 kinds cannot appear in an arm64 image; `symdata`/`covdata` sections are not
-// emitted at M1; and `funcAbs64InRdata` is a PIE rebase (P1.6 layout descriptors),
-// not a code patch. Naming them one by one makes the day one is emitted a loud
-// failure rather than a silently unpatched displacement — PeWriter's discipline.
-function patchSectionRelocations(code ByteArray, rdataRelocs RdataRelocationArray, textSectionVmAddr MachineWord, constSectionVmAddr MachineWord, dataSectionVmAddr MachineWord)
-	for reloc in rdataRelocs 'patch'
-		let instrVa = textSectionVmAddr + reloc.codeOffset
-		match reloc.kind 'kind'
-			ripRelDisp32 then panic("MachOWriter: x64 RIP-relative relocation in an arm64 image — target/emitter mismatch")
-			symdataRipRelDisp32 then panic("MachOWriter: x64 symdata relocation in an arm64 image — target/emitter mismatch")
-			dataSectionRipRelDisp32 then panic("MachOWriter: x64 data-section relocation in an arm64 image — target/emitter mismatch")
-			covdataRipRelDisp32 then panic("MachOWriter: x64 covdata relocation in an arm64 image — target/emitter mismatch")
-			arm64Adr then patchArm64Adr(code, codeOffset: reloc.codeOffset, instrAddr: instrVa, targetAddr: constSectionVmAddr + reloc.rdataOffset)
-			arm64LdrLiteral then patchArm64LdrLiteral(code, codeOffset: reloc.codeOffset, instrAddr: instrVa, targetAddr: constSectionVmAddr + reloc.rdataOffset)
-			symdataArm64Adr then panic("MachOWriter: symdata section is empty at M1 — a symdataArm64Adr relocation has no section to reach; it arrives at the reflection milestone")
-			dataSectionArm64Adr then patchArm64Adr(code, codeOffset: reloc.codeOffset, instrAddr: instrVa, targetAddr: dataSectionVmAddr + reloc.rdataOffset)
-			covdataArm64Adr then panic("MachOWriter: coverage is not emitted for arm64-macos yet — no .covdata section")
-			arm64Adrp then patchArm64Adrp(code, codeOffset: reloc.codeOffset, instrAddr: instrVa, targetAddr: constSectionVmAddr + reloc.rdataOffset)
-			arm64PageOff then patchArm64PageOff(code, codeOffset: reloc.codeOffset, targetAddr: constSectionVmAddr + reloc.rdataOffset)
-			dataSectionArm64Adrp then patchArm64Adrp(code, codeOffset: reloc.codeOffset, instrAddr: instrVa, targetAddr: dataSectionVmAddr + reloc.rdataOffset)
-			dataSectionArm64PageOff then patchArm64PageOff(code, codeOffset: reloc.codeOffset, targetAddr: dataSectionVmAddr + reloc.rdataOffset)
-			covdataArm64Adrp then panic("MachOWriter: coverage is not emitted for arm64-macos yet — no .covdata section")
-			covdataArm64PageOff then panic("MachOWriter: coverage is not emitted for arm64-macos yet — no .covdata section")
-			funcAbs64InRdata then panic("MachOWriter: funcAbs64InRdata is a PIE rebase into rdata (a layout descriptor's function-pointer slot), not a code patch — it arrives with witness/layout descriptors (P1.6)")
-		end 'kind'
-	end 'patch'
-end 'patchSectionRelocations'
+// Patching code→section references (ADR / ADRP+off / LDR-literal) is the SAME arithmetic in
+// every arm64 object format — only the section addresses differ — so it lives once, next to
+// `arm64SectionOffsetOfReloc` (the sibling question "which section does this kind name?"), in
+// `Arm64Backend.patchArm64SectionRelocations`. `writeMachO` and `writeElf` both call it.
 
 // --- Code signature ---
 
@@ -770,7 +726,7 @@ export function writeMachO(outputPath FilePath, codeResult CodeResult, target Ta
 
 	// --- Patch relocations into the code image (before it is written) ---
 	patchImportRelocations(code, relocations: codeResult.relocations, textSectionVmAddr: textSectionVmAddr, gotSectionVmAddr: gotSectionVmAddr)
-	patchSectionRelocations(code, rdataRelocs: codeResult.rdataRelocations, textSectionVmAddr: textSectionVmAddr, constSectionVmAddr: constSectionVmAddr, dataSectionVmAddr: dataSectionVmAddr)
+	patchArm64SectionRelocations(code, rdataRelocs: codeResult.rdataRelocations, textVmAddr: textSectionVmAddr, rdataVmAddr: constSectionVmAddr, dataVmAddr: dataSectionVmAddr)
 
 	let entryOff = textSectionOffset + codeResult.mainCallFixupOffset
 	// macOS arm64 forces PIE — the kernel SIGKILLs a non-PIE main executable. MH_PIE
