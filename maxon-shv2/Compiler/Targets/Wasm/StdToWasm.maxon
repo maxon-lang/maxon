@@ -71,6 +71,15 @@ typealias CalleeFuncIdxMap = Map with (ByteArray, Wasm32Index)
 typealias CalleeReturnTypeMap = Map with (ByteArray, StdReturnType)
 typealias CalleeParamTypesMap = Map with (ByteArray, WasmValTypeArray)
 
+// An indirect call's ARG COUNT → the interned wasm functype index for its `(i64^n) -> i64` signature
+// (P1.5-A1). The Std `callIndirect` op carries NO signature, and none needs to reach the wasm tier on it:
+// every A1 function value is `(i64^n) -> i64` (its params and return are integer/named types, all of which
+// collapse to i64; void and non-integer function values are out of the A1 slice), so the arg count fully
+// determines the type. Built once per module — pre-interned into the WasmModuleBuilder before body emission
+// — and read by `emitCallIndirect`, which cannot mutate the shared builder mid-emit. Empty ⟺ the module has
+// no indirect call, in which case no funcref table is declared.
+typealias IndirectCallTypeIdxMap = Map with (ParamCount, Wasm32Index)
+
 // A dependent op's result value id → the value id whose width it inherits (its `lhs`). Only
 // `binOpImm`/`div`/`mod` populate it — the three ops whose result width the Std tier does not
 // carry on the op (see `buildValtypeTable`).
@@ -175,6 +184,20 @@ export function buildWasmCoreModule(module StdModule, globalData GlobalDataTable
 
 	var builder = WasmModuleBuilder.create()
 
+	// The WASI import functypes are interned FIRST (their indices are otherwise free but must precede any
+	// interning that assumes them). Do it before pre-interning the indirect-call functypes below so the
+	// type-section order stays deterministic.
+	appendWasiImports(builder)
+
+	// Pre-intern one wasm functype per distinct indirect-call arg count (the `(i64^n) -> i64` shape every
+	// A1 function value has), so `emitCallIndirect` reads the type index out of a map instead of mutating
+	// the shared builder mid-body. When any indirect call exists, the module needs a funcref table covering
+	// every function — enable it here, before the functions (and the run entry) are added.
+	let indirectCallTypeIdx = buildIndirectCallTypeIdxMap(module, builder: builder)
+	if indirectCallTypeIdx.count() > 0 'usesFunctionValues'
+		builder.enableFuncrefTable()
+	end 'usesFunctionValues'
+
 	// The two linear-memory images, rendered ONCE in `GlobalDataTable`'s layout order
 	// (deterministic — no map iteration):
 	//   • `.data`  — the top-level-`var` slots, at `WasmDataBaseOffset`. Empty for a program with
@@ -193,16 +216,15 @@ export function buildWasmCoreModule(module StdModule, globalData GlobalDataTable
 	var rdataImage = globalData.rdataImage()
 	applyStringBufferFixups(rdataImage, globalData: globalData, rdataBase: rdataBase)
 
-	// Imports FIRST, in the order the `*ImportFuncIdx` constants fix, so every defined function
-	// gets the index `calleeFuncIdx` precomputed (`WasmImportCount + position`). Order among
-	// imports is otherwise free (the component embed maps by name), but the func-index
-	// bookkeeping depends on it.
-	appendWasiImports(builder)
+	// The WASI imports were added FIRST (above), in the order the `*ImportFuncIdx` constants fix, so every
+	// defined function gets the index `calleeFuncIdx` precomputed (`WasmImportCount + position`). Order
+	// among imports is otherwise free (the component embed maps by name), but the func-index bookkeeping
+	// depends on it.
 
 	// Defined functions, in `module.functions` order — the order `calleeFuncIdx` assumes.
 	for funcIdx in 0 upto module.funcCount() 'eachFunc'
 		let func = module.getFunc(funcIdx)
-		var emitter = WasmFuncEmitter.create(module, func: func, globalData: globalData, dataBase: WasmDataBaseOffset, rdataBase: rdataBase, calleeFuncIdx: calleeFuncIdx, calleeReturnType: calleeReturnType, calleeParamTypes: calleeParamTypes)
+		var emitter = WasmFuncEmitter.create(module, func: func, globalData: globalData, dataBase: WasmDataBaseOffset, rdataBase: rdataBase, calleeFuncIdx: calleeFuncIdx, calleeReturnType: calleeReturnType, calleeParamTypes: calleeParamTypes, indirectCallTypeIdx: indirectCallTypeIdx)
 		emitter.emit()
 		let typeIdx = builder.internFuncType(funcParamValTypes(func), results: funcSignatureResultValTypes(func))
 		_ = builder.addFunction(typeIdx, localTypes: emitter.localTypes, body: emitter.body.bytes())
@@ -360,6 +382,58 @@ function buildCalleeParamTypesMap(module StdModule) returns CalleeParamTypesMap
 	end 'eachFunc'
 	return map
 end 'buildCalleeParamTypesMap'
+
+// Scan every live op for `callIndirect`s and pre-intern one wasm functype per distinct ARG COUNT — the
+// `(i64^n) -> i64` shape every A1 function value has (see `IndirectCallTypeIdxMap`). Pre-interning here,
+// BEFORE any body is emitted, lets `emitCallIndirect` look the type index up by arg count instead of
+// mutating the shared `builder` while it is threading bytes into a body. Returns the arg-count → type-index
+// map; empty when the module has no indirect call — the signal that no funcref table is needed.
+function buildIndirectCallTypeIdxMap(module StdModule, builder WasmModuleBuilder) returns IndirectCallTypeIdxMap
+	var map = IndirectCallTypeIdxMap.create()
+	for funcIdx in 0 upto module.funcCount() 'eachFunc'
+		let func = module.getFunc(funcIdx)
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise panic("buildIndirectCallTypeIdxMap: blockRef {blockRef} not in module.blocks")
+			for opIdx in block.opRefs 'eachOp'
+				let op = try module.ops.get(opIdx) otherwise panic("buildIndirectCallTypeIdxMap: opIdx {opIdx} not in module.ops")
+				internIndirectCallTypeFor(op, map: map, builder: builder)
+			end 'eachOp'
+		end 'eachBlock'
+	end 'eachFunc'
+	return map
+end 'buildIndirectCallTypeIdxMap'
+
+// If `op` is a `callIndirect`, intern the functype for its arg count into `map`; ignore any other op. The
+// two-arm range match leans on the band-append invariant: `callIndirect` is the LAST StdOp variant, so
+// `const to funcAddr` covers every other variant and a newly-appended one FAILS TO COMPILE here rather than
+// being silently swept into the ignore arm. Only body ops carry a `callIndirect` (never a terminator), so
+// scanning `block.opRefs` alone is complete.
+function internIndirectCallTypeFor(op StdOp, map IndirectCallTypeIdxMap, builder WasmModuleBuilder)
+	match op 'k'
+		const to funcAddr then break 'k'
+		callIndirect(_, _, args) then internIndirectCallType(map, builder: builder, argCount: args.count())
+	end 'k'
+end 'internIndirectCallTypeFor'
+
+// Intern the wasm functype `(i64^argCount) -> i64` for indirect calls of `argCount` arguments and record
+// its index in `map`. `internFuncType` dedups by the encoded bytes, so a repeated arg count re-derives the
+// SAME index (and a signature that equals a real function's own type shares one type-section entry). The
+// single door that builds an indirect call's wasm signature, so the pre-interned type and the call-site
+// `call_indirect` immediate cannot disagree.
+function internIndirectCallType(map IndirectCallTypeIdxMap, builder WasmModuleBuilder, argCount ParamCount)
+	let typeIdx = builder.internFuncType(indirectCallParamValTypes(argCount), results: singletonValTypes(WasmValType.i64))
+	map.upsert(argCount, value: typeIdx)
+end 'internIndirectCallType'
+
+// The wasm parameter valtypes of an A1 indirect call: `argCount` copies of i64 (see
+// `IndirectCallTypeIdxMap` for why every function value is `(i64^n) -> i64`).
+function indirectCallParamValTypes(argCount ParamCount) returns WasmValTypeArray
+	var params = WasmValTypeArray.create()
+	for _ in 0 upto argCount 'each'
+		params.push(WasmValType.i64)
+	end 'each'
+	return params
+end 'indirectCallParamValTypes'
 
 // ==========================================================================
 // Std type → wasm valtype, and the function-signature valtype lists
@@ -596,12 +670,14 @@ function recordDefValtype(op StdOp, valtypes WasmValTypeArray, depResult ValueId
 		tryCall(resultId, errorFlagId, callee, _) then recordTryCallDefs(valtypes, resultId: resultId, errorFlagId: errorFlagId, callee: callee, calleeReturnType: calleeReturnType)
 		errorReturn then break 'def'
 		osExit then break 'def'
-		// P1.5-A1 non-capturing function values are out of the scalar slice: a `.text` code address
-		// and a call THROUGH it have no scalar-core lowering. Rejected here (the first pass over the
-		// body, run in `WasmFuncEmitter.create`) — an EXPLICIT reject, not the wrong-width default the
-		// header warns against for a value-defining op.
-		funcAddr then panic("wasm: a function-value address (`funcAddr`) is out of the scalar slice (P1.5-A1)")
-		callIndirect then panic("wasm: an indirect call through a function value (`callIndirect`) is out of the scalar slice (P1.5-A1)")
+		// P1.5-A1 non-capturing function values. A function value is a machine word (its Std type collapses
+		// to i64 — valueTagToStdType), so BOTH a `funcAddr` (which materializes the callee's table index)
+		// and a `callIndirect` result (the callee's i64 return — every A1 function value returns an
+		// integer/named type) are i64. `funcAddr` is narrowed to the i32 `call_indirect` table-index operand
+		// only at the call itself (`emitFuncAddr`/`emitCallIndirect`), so it FLOWS as i64 like every other
+		// function value — unlike a `globalAddr`/`rdataAddr`, an i32 address consumed in place.
+		funcAddr(resultId, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
+		callIndirect(resultId, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
 	end 'def'
 end 'recordDefValtype'
 
@@ -672,6 +748,9 @@ type WasmFuncEmitter
 	var calleeFuncIdx as CalleeFuncIdxMap
 	var calleeReturnType as CalleeReturnTypeMap
 	var calleeParamTypes as CalleeParamTypesMap
+	// Indirect-call arg count → its pre-interned `(i64^n) -> i64` functype index, read by
+	// `emitCallIndirect` (see `IndirectCallTypeIdxMap`). Module-wide; shared read-only by every emitter.
+	var indirectCallTypeIdx as IndirectCallTypeIdxMap
 
 	// Dense per-ValueId valtype table (0..maxValueId).
 	var valtypes as WasmValTypeArray
@@ -695,7 +774,7 @@ type WasmFuncEmitter
 	// Block id → dispatch index (position in `func.blockRefs`), for branch targets.
 	var blockDispatchById as BlockDispatchMap
 
-	static function create(module StdModule, func IrFunction, globalData GlobalDataTable, dataBase Wasm32Index, rdataBase Wasm32Index, calleeFuncIdx CalleeFuncIdxMap, calleeReturnType CalleeReturnTypeMap, calleeParamTypes CalleeParamTypesMap) returns WasmFuncEmitter
+	static function create(module StdModule, func IrFunction, globalData GlobalDataTable, dataBase Wasm32Index, rdataBase Wasm32Index, calleeFuncIdx CalleeFuncIdxMap, calleeReturnType CalleeReturnTypeMap, calleeParamTypes CalleeParamTypesMap, indirectCallTypeIdx IndirectCallTypeIdxMap) returns WasmFuncEmitter
 		let valtypes = buildValtypeTable(module, func: func, calleeReturnType: calleeReturnType)
 		let useDispatcher = decideDispatcher(module, func: func)
 
@@ -708,6 +787,7 @@ type WasmFuncEmitter
 			calleeFuncIdx: calleeFuncIdx,
 			calleeReturnType: calleeReturnType,
 			calleeParamTypes: calleeParamTypes,
+			indirectCallTypeIdx: indirectCallTypeIdx,
 			valtypes: valtypes,
 			body: WasmBody.create(),
 			localTypes: WasmValTypeArray.create(),
@@ -930,11 +1010,10 @@ type WasmFuncEmitter
 			// the rare mid-block early-error return, exactly as `ret`/`retVoid` are above.
 			errorReturn(retValId, errorFlagId) then self.emitErrorReturn(retValId, errorFlagId: errorFlagId)
 			osExit(codeId) then self.emitOsExit(codeId)
-			// P1.5-A1 non-capturing function values have no scalar-core lowering — the body-emit door for
-			// the same rejection `recordDefValtype` makes first (a `funcAddr` code address, a `callIndirect`
-			// call THROUGH it). Mirrors the `div`-out-of-scalar-slice rejections in `emitBinOp`.
-			funcAddr then panic("emitBodyOp: a function-value address (`funcAddr`) is out of the scalar slice (P1.5-A1)")
-			callIndirect then panic("emitBodyOp: an indirect call (`callIndirect`) is out of the scalar slice (P1.5-A1)")
+			// P1.5-A1 non-capturing function values: materialize a function's table index (`funcAddr`) and
+			// call THROUGH one (`callIndirect`). See the two emitters for the funcref-table lowering.
+			funcAddr(resultId, funcName) then self.emitFuncAddr(resultId, funcName: funcName)
+			callIndirect(resultId, calleeReg, args) then self.emitCallIndirect(resultId, calleeReg: calleeReg, args: args)
 		end 'body'
 	end 'emitBodyOp'
 
@@ -1297,6 +1376,47 @@ type WasmFuncEmitter
 			self.body.localSet(resultId as Wasm32Index)
 		end 'hasResult'
 	end 'emitTryCall'
+
+	// A function VALUE (`funcAddr`, P1.5-A1): its wasm value is the callee's TABLE INDEX. The module builds
+	// one funcref table with table[i] == function i, so a function's table index equals its wasm funcIdx —
+	// exactly what `calleeFuncIdx` already holds. Materialized as an i64: a function value's Std type is a
+	// machine word, so it flows through params/fields/returns/block-args as i64 like every other value, and
+	// is narrowed to the i32 table-index operand only at the `call_indirect` (`emitCallIndirect`). This is
+	// the `.text`-address sibling of `emitGlobalAddr`/`emitRdataAddr`, but a value that FLOWS rather than an
+	// address consumed in place — which is why it is i64 here, not the i32 those two produce.
+	function emitFuncAddr(resultId ValueId, funcName ByteArray)
+		let funcIdx = try self.calleeFuncIdx.get(funcName) otherwise panic("emitFuncAddr: no wasm function index for function value '{String.from(funcName)}'")
+		self.body.i64Const(funcIdx as ParsedInt)
+		self.body.localSet(resultId as Wasm32Index)
+	end 'emitFuncAddr'
+
+	// A call THROUGH a function value (`callIndirect`, P1.5-A1): `resultId = calleeReg(args…)`. Marshal each
+	// argument coerced to i64 (the function-value parameter width), push the table index (the function value,
+	// wrapped from its i64 flow-width down to the i32 `call_indirect` operand), then `call_indirect (type
+	// $sig) (table 0)`. `$sig` is the pre-interned `(i64^n) -> i64` functype for this arg count, which wasm
+	// checks at runtime against the funcref's OWN type — and since every target function's parameters and
+	// return are the same integer/named types, the two match. The result is the callee's i64 return.
+	//
+	// ⭐ WHY the signature is derivable WITHOUT the function type on the op. The Std `callIndirect` carries no
+	// signature (a cross-tier field would touch x64/arm64 too), and none is needed: a function value's
+	// params and return are integer/named types, all of which the Maxon→Std collapse maps to i64
+	// (valueTagToStdType), and void / non-integer function values are out of the A1 slice — so every A1
+	// function value is `(i64^n) -> i64` for n = args.count(), a wasm-tier-local fact. This is the SAME
+	// slice invariant x64's `lowerCallIndirect` relies on ("A1 function values pass INTEGER arguments and
+	// return an INTEGER" → GPR arguments, R8 result).
+	function emitCallIndirect(resultId ValueId, calleeReg ValueId, args ValueIdArray)
+		for argIdx in 0 upto args.count() 'eachArg'
+			let arg = try args.get(argIdx) otherwise panic("emitCallIndirect: args.get OOB at {argIdx}")
+			self.pushOperandAt(arg, targetVt: WasmValType.i64)
+		end 'eachArg'
+
+		self.pushOperandAt(calleeReg, targetVt: WasmValType.i32)
+
+		let typeIdx = try self.indirectCallTypeIdx.get(args.count()) otherwise panic("emitCallIndirect: no interned functype for a {args.count()}-argument indirect call — buildIndirectCallTypeIdxMap missed it")
+		self.body.callIndirect(typeIdx)
+
+		self.body.localSet(resultId as Wasm32Index)
+	end 'emitCallIndirect'
 
 	// Value return: push the return value and `return`. A `void` return type here means a value
 	// `ret` in a void function — the parser rejects that source, so it is a lowering bug.

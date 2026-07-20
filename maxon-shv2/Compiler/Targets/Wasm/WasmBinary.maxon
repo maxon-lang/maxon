@@ -149,6 +149,7 @@ let opBrIf = 0x0D
 let opBrTable = 0x0E
 let opReturn = 0x0F
 let opCall = 0x10
+let opCallIndirect = 0x11
 let opDrop = 0x1A
 
 // The block signature byte shared by block/loop/if. Every scalar-slice construct is a VOID
@@ -277,6 +278,21 @@ let wasmMemoryGrowMemZero = 0x00
 let wasmMemAlignByte = 0
 let wasmMemAlignWord64 = 3
 
+// The function-value funcref table (P1.5-A1). `call_indirect` dispatches through a single table of
+// `funcref` at table index 0; `wasmRefTypeFuncref` (0x70) is the table's reference type. Declared here,
+// before WasmBody, so `WasmBody.callIndirect` can name the table index without a forward reference — the
+// table/element SECTIONS themselves are emitted by WasmModuleBuilder below. `wasmElemSegmentActiveFuncref`
+// (0x00) is the active element segment's leading flag: active, table 0, i32.const offset, funcidx-vector
+// payload (the funcref element type is implied — no elemkind byte), the elem twin of
+// `wasmDataSegmentActiveMem0`.
+let wasmRefTypeFuncref = 0x70
+let wasmTableIndexZero = 0
+let wasmElemSegmentActiveFuncref = 0x00
+
+// The element segment fills the funcref table starting at table slot 0, so table[i] == function i (a
+// function's table index then equals its wasm funcIdx — what `funcAddr` materializes).
+let wasmElemTableStartOffset = 0
+
 // --- WasmBody: a function body under construction ---
 // Each method APPENDS the encoded instruction(s) to the body's byte buffer. `bytes()` returns
 // the raw instruction stream ONLY — the local declarations and the trailing `end` are framed
@@ -354,6 +370,16 @@ export type WasmBody
 		self.buf.push(opCall)
 		writeUleb128(self.buf, value: funcIdx)
 	end 'call'
+
+	// `call_indirect (type typeIdx) (table 0)` — a call THROUGH a funcref table entry (P1.5-A1). It pops
+	// the i32 table index from the top of the stack, then the arguments below it, and CHECKS the referenced
+	// function's type against `typeIdx` at runtime (a mismatch traps). The immediate is `(type_index,
+	// table_index)`, both ULEB128; the table index is always 0 — the module declares a single funcref table.
+	export function callIndirect(typeIdx Wasm32Index)
+		self.buf.push(opCallIndirect)
+		writeUleb128(self.buf, value: typeIdx)
+		writeUleb128(self.buf, value: wasmTableIndexZero)
+	end 'callIndirect'
 
 	// Locals — the identity register file. Every SSA ValueId is one wasm local; params are
 	// locals 0..paramCount-1, declared locals follow.
@@ -663,13 +689,16 @@ end 'WasmBody'
 
 // --- Section IDs (canonical order) ---
 // A wasm module's sections MUST appear in ascending id order; finish() emits exactly this
-// subset in this order. Ids 4 (table), 6 (global), 8 (start), 9 (element) stay unused by this
-// slice; id 11 (data) carries the top-level-`var` `.data` image.
+// subset in this order. Ids 6 (global) and 8 (start) stay unused by this slice; ids 4 (table)
+// and 9 (element) carry the function-value funcref table (P1.5-A1); id 11 (data) carries the
+// top-level-`var` `.data` image.
 let wasmSectionType = 1
 let wasmSectionImport = 2
 let wasmSectionFunction = 3
+let wasmSectionTable = 4
 let wasmSectionMemory = 5
 let wasmSectionExport = 7
+let wasmSectionElement = 9
 let wasmSectionCode = 10
 let wasmSectionData = 11
 
@@ -688,7 +717,8 @@ let wasmImportKindFunc = 0x00
 let wasmExportKindFunc = 0x00
 let wasmExportKindMemory = 0x02
 
-// A memory's limits flag: 0x00 = a minimum page count with no maximum.
+// A wasm `limits` flag: 0x00 = a minimum with no maximum. Shared by the memory's page limits and the
+// funcref table's size limits — one and the same `limits` encoding in the binary format.
 let wasmLimitsFlagMin = 0x00
 
 // The single memory a module declares/exports lives at memory index 0.
@@ -726,6 +756,15 @@ function writeSectionRaw(module ByteArray, sectionId MachineWord, contents ByteA
 	writeUleb128(module, value: contents.count() as Wasm32Index)
 	module.append(contents)
 end 'writeSectionRaw'
+
+// Write a constant OFFSET EXPRESSION — `i32.const <offset>` (SLEB immediate) terminated by `end` — the
+// active-segment offset both a data segment and an element segment carry (each lays its bytes at this
+// linear-memory / table position). One door so the two encoders cannot drift on the expression's shape.
+function writeI32ConstOffsetExpr(buf ByteArray, offset ParsedInt)
+	buf.push(opI32Const)
+	writeSleb128(buf, value: offset)
+	buf.push(opEnd)
+end 'writeI32ConstOffsetExpr'
 
 // Encode one functype: form byte, ULEB128 param count + param valtype bytes, then the same
 // for results.
@@ -858,8 +897,14 @@ export type WasmModuleBuilder
 	// memory (`exportMemory`'s `minPages`) to cover the highest `base + bytes.count()`.
 	var dataSegments as WasmDataSegmentArray
 
+	// Whether the module declares the function-value funcref table + element segment (P1.5-A1). Set by
+	// `enableFuncrefTable` when the Std module contains an indirect call; the table then covers EVERY
+	// function so a function's table index equals its wasm funcIdx. False keeps a program with no function
+	// value byte-identical — no table (id 4) and no element (id 9) section at all.
+	var funcrefTable as bool
+
 	export static function create() returns WasmModuleBuilder
-		return Self{funcTypes: ByteArrayArray.create(), funcTypeDedup: FuncTypeDedupMap.create(), importModules: ByteArrayArray.create(), importFields: ByteArrayArray.create(), importTypeIndices: Wasm32IndexArray.create(), funcTypeIndices: Wasm32IndexArray.create(), funcBodies: ByteArrayArray.create(), exportEntries: WasmExportArray.create(), hasMemory: false, memoryMinPages: 0, dataSegments: WasmDataSegmentArray.create()}
+		return Self{funcTypes: ByteArrayArray.create(), funcTypeDedup: FuncTypeDedupMap.create(), importModules: ByteArrayArray.create(), importFields: ByteArrayArray.create(), importTypeIndices: Wasm32IndexArray.create(), funcTypeIndices: Wasm32IndexArray.create(), funcBodies: ByteArrayArray.create(), exportEntries: WasmExportArray.create(), hasMemory: false, memoryMinPages: 0, dataSegments: WasmDataSegmentArray.create(), funcrefTable: false}
 	end 'create'
 
 	// Intern a functype, returning its (deduplicated) type index. The dedup is an O(1) map lookup on
@@ -923,6 +968,21 @@ export type WasmModuleBuilder
 		self.dataSegments.push(WasmDataSegment.create(base, bytes: bytes))
 	end 'addDataSegment'
 
+	// Declare that the module needs the function-value funcref table + element segment (P1.5-A1). Called
+	// once by `buildWasmCoreModule` when the Std module contains an indirect call. The table is sized to
+	// hold every function and the element segment lists them in index order (`emitTableSection` /
+	// `emitElementSection`), so table[i] == function i and a function's table index equals its wasm funcIdx.
+	export function enableFuncrefTable()
+		self.funcrefTable = true
+	end 'enableFuncrefTable'
+
+	// The module's total function count — imports (indices 0..importCount-1) followed by defined functions.
+	// The size the funcref table must reach for every function's index to be a valid slot, and the length
+	// of the element segment that fills it.
+	function totalFunctionCount() returns Wasm32Index
+		return (self.importModules.count() + self.funcBodies.count()) as Wasm32Index
+	end 'totalFunctionCount'
+
 	// Emit the finished CORE module: preamble + sections in canonical id order. Empty sections
 	// are omitted (a wasm module names only the sections it uses) — the data section when the
 	// program has no top-level `var`, every other section being non-empty in practice.
@@ -933,8 +993,10 @@ export type WasmModuleBuilder
 		self.emitTypeSection(module)
 		self.emitImportSection(module)
 		self.emitFunctionSection(module)
+		self.emitTableSection(module)
 		self.emitMemorySection(module)
 		self.emitExportSection(module)
+		self.emitElementSection(module)
 		self.emitCodeSection(module)
 		self.emitDataSection(module)
 
@@ -990,6 +1052,47 @@ export type WasmModuleBuilder
 
 		writeSectionRaw(module, sectionId: wasmSectionFunction, contents: contents)
 	end 'emitFunctionSection'
+
+	// The funcref table (id 4) the function-value feature needs: ONE table of `funcref`, sized to hold
+	// EVERY function (imports + defined), so any function's index is a valid table slot. Emitted only when
+	// the module uses function values (`enableFuncrefTable`); a program with no indirect call declares no
+	// table and stays byte-identical. `emitElementSection` populates it.
+	function emitTableSection(module ByteArray)
+		if not self.funcrefTable 'none'
+			return
+		end 'none'
+
+		var contents = ByteArray.create()
+		writeUleb128(contents, value: 1)
+		contents.push(wasmRefTypeFuncref)
+		contents.push(wasmLimitsFlagMin)
+		writeUleb128(contents, value: self.totalFunctionCount())
+
+		writeSectionRaw(module, sectionId: wasmSectionTable, contents: contents)
+	end 'emitTableSection'
+
+	// The active element segment (id 9) that fills the funcref table: ONE segment at table offset 0 listing
+	// every function index in order, so table[i] == function i. That makes a function's table index equal
+	// its wasm funcIdx — exactly what `funcAddr` materializes — and satisfies wasm's rule that a function
+	// used as a value appear in an element segment. Emitted only alongside the table.
+	function emitElementSection(module ByteArray)
+		if not self.funcrefTable 'none'
+			return
+		end 'none'
+
+		let funcCount = self.totalFunctionCount()
+
+		var contents = ByteArray.create()
+		writeUleb128(contents, value: 1)
+		contents.push(wasmElemSegmentActiveFuncref)
+		writeI32ConstOffsetExpr(contents, offset: wasmElemTableStartOffset)
+		writeUleb128(contents, value: funcCount)
+		for funcIdx in 0 upto funcCount 'each'
+			writeUleb128(contents, value: funcIdx as Wasm32Index)
+		end 'each'
+
+		writeSectionRaw(module, sectionId: wasmSectionElement, contents: contents)
+	end 'emitElementSection'
 
 	function emitMemorySection(module ByteArray)
 		if not self.hasMemory 'none'
@@ -1051,9 +1154,7 @@ export type WasmModuleBuilder
 		writeUleb128(contents, value: segmentCount as Wasm32Index)
 		for segment in self.dataSegments 'each'
 			contents.push(wasmDataSegmentActiveMem0)
-			contents.push(opI32Const)
-			writeSleb128(contents, value: segment.base as ParsedInt)
-			contents.push(opEnd)
+			writeI32ConstOffsetExpr(contents, offset: segment.base as ParsedInt)
 			writeUleb128(contents, value: segment.bytes.count() as Wasm32Index)
 			contents.append(segment.bytes)
 		end 'each'
