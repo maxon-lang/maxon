@@ -7280,6 +7280,33 @@ public partial class X86CodeEmitter {
     EmitXorRegReg(X86Register.Rax, X86Register.Rax);
     EmitMovIndirectMemReg(X86Register.Rcx, GtOffStatus, X86Register.Rax); // status = ready
 
+    // ⚠ KNOWN GAP, DELIBERATELY NOT PATCHED HERE — the x86 analogue of the arm64
+    // `--workers>=5` double-schedule (fixed in ARM64CodeEmitter.Runtime.cs's
+    // `__io_poll_kqueue` / `__gt_timer_check`). This path has the stackBase guard below but
+    // NOT the `ioYielded` gate: `__io_submit_*` posts its overlapped read to the SHARED IOCP
+    // and only THEN parks, so in that window another M draining the port can reap the
+    // completion and enqueue a GT that is still executing on some M's stack. A third M then
+    // switches in on its stale `gt.sp`. On arm64 that reproduced as two Ms with the same
+    // `P->currentGt`, one running on a stack the other had already relocated and munmapped.
+    //
+    // ⚠⚠ IT IS NOT A MECHANICAL PORT, WHICH IS WHY IT IS WRITTEN DOWN RATHER THAN GUESSED.
+    // The arm64 fix works by DECLINING to consume the wakeup: the kqueue event is skipped
+    // non-blockingly and the timer entry is left in the heap, so a later poll retries it. An
+    // IOCP completion has no such option — dequeuing it from the port CONSUMES it, so a gate
+    // that merely skipped the enqueue would LOSE the wakeup and hang that GT forever. A
+    // correct fix needs somewhere to hold the completion plus a re-drive: a design decision,
+    // not a copied guard.
+    //
+    // Compounding it, the two backends implement the `ioYielded` protocol DIFFERENTLY —
+    // arm64's `__gt_context_switch` sets `from.ioYielded = 1` itself; x86's does not, and
+    // relies on the resumer setting it after the switch returns. So x86 publishes "parked"
+    // LATER than arm64 does, and a naive gate here could read 0 for a GT that is genuinely
+    // parked. That asymmetry was undocumented until now, and it is the first thing to verify.
+    //
+    // This host is arm64-macOS and cannot execute the Windows IOCP path at all, so patching
+    // blind would risk trading a rare race for a reproducible hang that could not surface
+    // here. Fix it on a Windows host, with the park-side re-check verified first.
+    //
     // Only enqueue regular GTs (stackBase != 0). MainThread GTs (stackBase == 0)
     // are driven by inline scheduling loops and must NOT be in the global run queue.
     EmitMovRegIndirectMem(X86Register.Rax, X86Register.Rcx, GtOffStackBase);
