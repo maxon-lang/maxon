@@ -591,6 +591,21 @@ public partial class RuntimeEmitter {
   // Frame size: 0x50
   // =========================================================================
 
+  /// <summary>
+  /// Jump to <paramref name="targetLabel"/> when <paramref name="gtReg"/> is the GT currently
+  /// running on this P — i.e. "this timer belongs to US". Both of __gt_timer_check's park-gate
+  /// decisions turn on that one question, and it is the kind of test that must not drift
+  /// between its two uses: the gate lets a self-owned timer through, and the fire path relies
+  /// on that same answer to skip the enqueue. Written once so they cannot disagree.
+  /// Clobbers Scratch2; leaves <paramref name="gtReg"/> intact.
+  /// </summary>
+  private void EmitJumpIfCurrentGt(VReg gtReg, string targetLabel) {
+    _b.LoadCurrentP(VReg.Scratch2);
+    _b.LoadIndirect(VReg.Scratch2, VReg.Scratch2, POffCurrentGt);
+    _b.CmpRegReg(VReg.Scratch2, gtReg);
+    _b.JumpIf(Condition.Equal, targetLabel);
+  }
+
   public void EmitGtTimerCheck() {
     _b.FunctionStart("__gt_timer_check", 0, 0x50);
 
@@ -633,6 +648,50 @@ public partial class RuntimeEmitter {
     _b.LoadLocal(VReg.Scratch0, 1);
     _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, TimerOffGt);
     _b.StoreLocal(2, VReg.Scratch1);
+
+    // --- PARK GATE: never fire a GT that is still running on some M's stack ---
+    //
+    // maxon_sleep publishes into this GLOBAL heap (__gt_timer_add) and only THEN parks:
+    // it still has to __gt_dequeue a successor and __gt_context_switch away, and when the
+    // dequeue comes up empty it runs the scheduler INLINE on its own stack (the
+    // __sleep_mainthread_loop park loop, which can block in kevent for milliseconds).
+    // Throughout that stretch the entry is visible to every other M polling here. Firing it
+    // would enqueue a GT that is mid-execution; a third M then dequeues it and context
+    // switches in, restoring the STALE gt.sp saved at its previous suspension — so two Ms
+    // run one GT on two different stacks. That is the --workers>=5 crash: caught under lldb
+    // with P0->currentGt == P4->currentGt, one of them executing on the pre-__gt_morestack
+    // stack the other had already relocated and munmapped.
+    //
+    // ioYielded==1 is this runtime's existing "parked, off-stack, safe to hand to another M"
+    // signal — the same gate __gt_process_pending_waiter, __io_op_done and
+    // EmitAwaitedStackVacatedGate already stand on. The timer was the one wakeup path that
+    // never got it.
+    //
+    // The gate is checked BEFORE the pop, so a not-yet-parked GT stays in the heap and fires
+    // on a later poll. Popping first and skipping the enqueue instead would LOSE the wakeup:
+    // nothing would ever put that GT back on a run queue.
+    _b.LoadIndirect(VReg.Scratch2, VReg.Scratch1, GtOffIoYielded);
+    _b.JumpIfNonZero(VReg.Scratch2, "__gt_timer_check_may_fire");
+
+    // Not parked. The one safe exception is "it is US": a sleeping GT polls this from its own
+    // park loop, and nothing else can be handed a GT that is this P's currentGt. Without this
+    // exception a GT in that loop could never fire its OWN deadline — it would wait for itself
+    // to park, and it cannot park until it wakes.
+    //
+    // P is non-NULL here. Every caller of __gt_timer_check is a scheduler or green-thread
+    // context that owns a P (__sched_worker_loop, the __gt_await / __gt_try_await / sleep park
+    // loops, __io_poll_kqueue's return path); the one P-less thread, __io_sync_worker_loop,
+    // calls neither this nor __io_poll_kqueue. That is why this needs no NULL check while
+    // __gt_enqueue, which IS reachable from that thread, carries one.
+    EmitJumpIfCurrentGt(VReg.Scratch1, "__gt_timer_check_may_fire");
+
+    // Running on ANOTHER M. Leave heap[0] untouched and stop scanning: this is a min-heap, so
+    // every remaining deadline is later than one we are declining to fire. Head-of-line delay
+    // is bounded by how long that M takes to park (the dequeue/switch window) or by its own
+    // next park-loop poll, which fires it through the exception above.
+    _b.Jump("__gt_timer_check_unlock");
+
+    _b.DefineLabel("__gt_timer_check_may_fire");
 
     // count--
     _b.LoadGlobal(VReg.Scratch0, "__gt_timer_count");
@@ -768,6 +827,11 @@ public partial class RuntimeEmitter {
     // Skip enqueue if mainThread (stackBase == 0)
     _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, GtOffStackBase);
     _b.JumpIfZero(VReg.Scratch1, "__gt_timer_check_skip_enqueue");
+    // Skip enqueue if the GT is US — the park-gate exception above. status=ready is the whole
+    // wakeup: maxon_sleep's park loop rechecks its own status every iteration and resumes
+    // inline. Enqueueing would publish a GT that is running on this very stack, which is the
+    // double-schedule the gate exists to prevent. Same contract as the mainThread skip.
+    EmitJumpIfCurrentGt(VReg.Scratch0, "__gt_timer_check_skip_enqueue");
     // Enqueue the expired GT (first arg = gt in slot 0... but we need to set up arg)
     // Call convention: arg0 goes in Arg0 register. On x86 that's RCX, on ARM64 that's X0.
     // The Call("__gt_enqueue") expects the argument in the platform's first arg register.
