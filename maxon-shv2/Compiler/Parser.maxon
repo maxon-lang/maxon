@@ -11169,7 +11169,18 @@ export type Parser
 		let savedValueOwnsHeap = self.valueOwnsHeap
 		let savedOwnedBindings = self.ownedBindings
 		let savedPendingTempDrops = self.pendingTempDrops
+		// The last-field-read record is ONE fact spread over FOUR fields, and ALL FOUR are saved/restored as
+		// a unit — not `lastFieldReadValid` alone. The closure body opens with `lastFieldReadValid = false`,
+		// but if it reads a `named` field it overwrites `lastFieldReadValue`/`Box`/`Offset` with ids in the
+		// CLOSURE's SSA space; restoring only `Valid` would leave the enclosing function believing its live
+		// field read is a value/box the CLOSURE numbered. The mechanism's whole safety argument (an equal
+		// value id can only have come from this exact `(box, offset)`) holds only WITHIN one function's SSA
+		// numbering, which a nested closure breaks — so a `throw <named field>` after the closure could
+		// mis-fire `moveOutThrownField` on a wrong slot (a closure id that collides with an enclosing one).
 		let savedLastFieldReadValid = self.lastFieldReadValid
+		let savedLastFieldReadValue = self.lastFieldReadValue
+		let savedLastFieldReadBox = self.lastFieldReadBox
+		let savedLastFieldReadOffset = self.lastFieldReadOffset
 		let savedInMatchArmBody = self.inMatchArmBody
 		let savedFuncIndex = self.artifact.currentFuncIndex
 
@@ -11262,7 +11273,12 @@ export type Parser
 		self.valueOwnsHeap = savedValueOwnsHeap
 		self.ownedBindings = savedOwnedBindings
 		self.pendingTempDrops = savedPendingTempDrops
+		// Restore the whole last-field-read record, not just its `Valid` flag — see the save block: the
+		// closure body may have overwritten the value/box/offset with its own SSA ids.
 		self.lastFieldReadValid = savedLastFieldReadValid
+		self.lastFieldReadValue = savedLastFieldReadValue
+		self.lastFieldReadBox = savedLastFieldReadBox
+		self.lastFieldReadOffset = savedLastFieldReadOffset
 		self.inMatchArmBody = savedInMatchArmBody
 		self.artifact.setCurrentFuncIndex(savedFuncIndex)
 
