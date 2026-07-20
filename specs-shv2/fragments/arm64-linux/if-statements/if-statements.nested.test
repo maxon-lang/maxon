@@ -1,0 +1,44 @@
+// Test: if-statements.nested
+function main() returns ExitCode
+	let x = 3
+	if x == 1 'outer'
+		return 1
+	end 'outer' else 'else_outer'
+		if x == 2 'inner'
+			return 2
+		end 'inner' else 'else_inner'
+			return 3
+		end 'else_inner'
+	end 'else_outer'
+end 'main'
+---
+ExitCode: 3
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 3
+    arm64.cmp x0, 1
+    arm64.cset x1, eq
+    arm64.cbnz x1, outer
+    arm64.b ifelse
+  outer:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+  ifelse:
+    arm64.cmp x0, 2
+    arm64.cset x0, eq
+    arm64.cbnz x0, inner
+    arm64.b ifelse
+  inner:
+    arm64.movImm x0, 2
+    arm64.epilogue 16
+    arm64.ret
+  ifelse:
+    arm64.movImm x0, 3
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+  ifcont:
+}

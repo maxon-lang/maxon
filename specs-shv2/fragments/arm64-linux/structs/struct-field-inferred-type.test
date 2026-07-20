@@ -1,0 +1,56 @@
+// Test: struct-field-inferred-type
+type Settings
+	export let maxRetries = 5
+	export var timeout = 50.0
+
+	static function create() returns Self
+		return Self{}
+	end 'create'
+end 'Settings'
+
+function main() returns ExitCode
+	let s = Settings.create()
+	return s.maxRetries + trunc(s.timeout)
+end 'main'
+---
+ExitCode: 55
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @Settings.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, d8
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x19, 5
+    arm64.fpLoadRdata d8, [rdata + __fconst_0]
+    arm64.movImm x0, 16
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.storeBaseDispReg.word64 [x0 + 8], d8
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot d8, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.bl Settings.create
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.loadRegBaseDisp.word64 d0, [x0 + 8]
+    arm64.fcvtzs x2, d0
+    arm64.add x19, x1, x2
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}

@@ -1,0 +1,72 @@
+// Testing/BinaryImageReader.maxon — the little-endian scalar reads the spec suite's THREE
+// executable-format readers share (`PeSectionReader`, `MachoSectionReader`, `ElfSectionReader`).
+//
+// ⭐ WHAT IS SHARED HERE, AND WHAT DELIBERATELY IS NOT.
+//
+// The three format readers exist to DISAGREE with the three writers (`Targets/Windows/PeWriter`,
+// `Targets/Macos/MachOWriter`, `Targets/Linux/ElfWriter`): a gate that decoded an image with the
+// very code that encoded it could only ever prove the writer agrees with itself. That independence
+// is a property of the FORMAT knowledge — the field offsets, the header walk, the size rule (PE's
+// virtual-vs-raw `min`, Mach-O's direct file offset, ELF's section header table). None of that
+// lives here, none of it is shared between the readers, and none of it is shared with any writer.
+//
+// "Byte `n+1` of a little-endian word is the high half" is not format knowledge. It is arithmetic,
+// and it had been written out three times: `imageReadU16`/`imageReadU32`/`byteAt`/`slice` in all
+// three readers, `readU64` in two, and the NUL-padded name walk in all three differing only in its
+// width constant. Three copies of arithmetic cannot catch a writer bug that one copy would miss —
+// they can only drift apart, which is the one failure mode a gate must not have.
+//
+// A read past the end of the image answers 0 rather than throwing. Every caller has already
+// established the file is of its format, and a header claiming more than the file holds is caught
+// by that reader's own bounds guard with a message naming the file — a per-byte throw would push
+// that noise through a dozen call sites to say strictly less.
+
+export function imageByteAt(image ByteArray, at ByteOffset) returns MachineWord
+	return try image.get(at) otherwise 0
+end 'imageByteAt'
+
+export function imageReadU16(image ByteArray, at ByteOffset) returns MachineWord
+	return imageByteAt(image, at: at) or (imageByteAt(image, at: at + 1) shl 8)
+end 'imageReadU16'
+
+export function imageReadU32(image ByteArray, at ByteOffset) returns MachineWord
+	return imageReadU16(image, at: at) or (imageReadU16(image, at: at + 2) shl 16)
+end 'imageReadU32'
+
+export function imageReadU64(image ByteArray, at ByteOffset) returns MachineWord
+	return imageReadU32(image, at: at) or (imageReadU32(image, at: at + 4) shl 32)
+end 'imageReadU64'
+
+// `count` bytes of `image` starting at `start`. PANICS on an out-of-range read rather than
+// truncating: every caller checks `start + count <= image.count()` against the file's real length
+// first and reports a `truncated` error naming the image, so reaching here with a bad range means
+// that check was skipped — a bug in the reader, not a malformed input.
+export function imageSlice(image ByteArray, start ByteOffset, count ByteCount) returns ByteArray
+	var out = ByteArray.create()
+	for i in 0 upto count 'each'
+		out.push(try image.get(start + i) otherwise panic("imageSlice: get OOB at {start + i} — the caller checked start+count <= image.count()"))
+	end 'each'
+	return out
+end 'imageSlice'
+
+// The name at `at`: bytes up to the first NUL, reading at most `maxBytes`.
+//
+// ONE walk serves both shapes of name the three formats use, because they differ only in that
+// bound. A FIXED-WIDTH, NUL-PADDED field passes its width (PE's 8-byte section name, Mach-O's
+// 16-byte segment/section name); a NUL-TERMINATED string-table entry (ELF's `.shstrtab`) is
+// bounded only by the image, so it passes the image's length.
+//
+// Running off the end of the image yields the EMPTY name rather than the partial one read so far:
+// a name that does not fit in the file is not a name, and every caller is comparing against a
+// known section name, so "" simply never matches and the walk moves on.
+export function imageNameAt(image ByteArray, at ByteOffset, maxBytes ByteCount) returns String
+	var name = ByteArray.create()
+	for i in 0 upto maxBytes 'each'
+		let b = try image.get(at + i) otherwise return ""
+		if b == 0 'nulTerminator'
+			break
+		end 'nulTerminator'
+		name.push(b)
+	end 'each'
+	return String.from(name)
+end 'imageNameAt'

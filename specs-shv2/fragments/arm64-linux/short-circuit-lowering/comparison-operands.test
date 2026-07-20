@@ -1,0 +1,92 @@
+// Test: comparison-operands
+function main() returns ExitCode
+	let x = 4
+	let y = 0
+	var code = 0
+	if x > 0 and y > 0 'both'
+		code = code + 1
+	end 'both'
+	if x > 0 or y > 0 'either'
+		code = code + 2
+	end 'either'
+	if x > 0 and y == 0 'mixed'
+		code = code + 4
+	end 'mixed'
+	return code
+end 'main'
+---
+ExitCode: 6
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 4
+    arm64.movImm x1, 0
+    arm64.movImm x2, 0
+    arm64.cmp x0, 0
+    arm64.cset x6, gt
+    arm64.movImm x7, 0
+    arm64.cbnz x6, andrhs
+    arm64.b critsplit
+  andrhs:
+    arm64.cmp x1, 0
+    arm64.cset x6, gt
+    arm64.b scmerge
+  critsplit:
+    arm64.movRegReg x6, x7
+    arm64.b scmerge
+  scmerge:
+    arm64.cbnz x6, both
+    arm64.b critsplit
+  both:
+    arm64.add x2, x2, 1
+    arm64.b ifcont
+  critsplit:
+    arm64.b ifcont
+  ifcont:
+    arm64.cmp x0, 0
+    arm64.cset x6, gt
+    arm64.movImm x7, 1
+    arm64.cbnz x6, critsplit
+    arm64.b orrhs
+  critsplit:
+    arm64.b scmerge
+  orrhs:
+    arm64.cmp x1, 0
+    arm64.cset x6, gt
+    arm64.movRegReg x7, x6
+    arm64.b scmerge
+  scmerge:
+    arm64.cbnz x7, either
+    arm64.b critsplit
+  either:
+    arm64.add x2, x2, 2
+    arm64.b ifcont
+  critsplit:
+    arm64.b ifcont
+  ifcont:
+    arm64.cmp x0, 0
+    arm64.cset x0, gt
+    arm64.movImm x6, 0
+    arm64.cbnz x0, andrhs
+    arm64.b critsplit
+  andrhs:
+    arm64.cmp x1, 0
+    arm64.cset x0, eq
+    arm64.b scmerge
+  critsplit:
+    arm64.movRegReg x0, x6
+    arm64.b scmerge
+  scmerge:
+    arm64.cbnz x0, mixed
+    arm64.b critsplit
+  mixed:
+    arm64.add x0, x2, 4
+    arm64.b ifcont
+  critsplit:
+    arm64.movRegReg x0, x2
+    arm64.b ifcont
+  ifcont:
+    arm64.epilogue 16
+    arm64.ret
+}

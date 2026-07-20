@@ -1,0 +1,66 @@
+// Test: live-across-idiv-and-call
+function sink(x int) returns int
+	return x + 1
+end 'sink'
+
+function f(p int) returns int
+	let a = p + 100
+	let q = a / 7
+	let s = sink(3)
+	return a + q + s
+end 'f'
+
+function main() returns ExitCode
+	let v = f(0)
+	if v == 118 'ok'
+		return 0
+	end 'ok'
+	return 99
+end 'main'
+---
+ExitCode: 0
+---
+func @sink {
+  entry:
+    arm64.prologue 16
+    arm64.add x0, x0, 1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @f {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.add x19, x0, 100
+    arm64.movImm x0, 7
+    arm64.sdiv x20, x19, x0
+    arm64.movImm x0, 3
+    arm64.bl sink
+    arm64.add x1, x19, x20
+    arm64.add x0, x1, x0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 0
+    arm64.bl f
+    arm64.cmp x0, 118
+    arm64.cset x0, eq
+    arm64.cbnz x0, ok
+    arm64.b ifcont
+  ok:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 99
+    arm64.epilogue 16
+    arm64.ret
+}

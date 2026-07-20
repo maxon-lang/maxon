@@ -8,13 +8,11 @@
 // bytes with the very code that encoded them could only prove the writer agrees with itself; an
 // independent reading is the only kind that can disagree.
 //
-// That independence is also why this reader carries its own little-endian primitives instead of
-// reaching into `PeSectionReader`'s: the two are DELIBERATELY separate readers of two different
-// formats (the PE reader's `.data` path is frozen — it cannot even be executed on this arm64-macOS
-// host, only on Windows — so it is not refactored here), and each re-deriving the four trivial reads
-// it needs is exactly the "independent reading" the header above argues for, not accidental
-// duplication. The field OFFSETS below mirror the LAYOUT `MachOWriter.writeSegmentCommand` /
-// `writeMachoSectionHeader` lay down, but nothing here calls that code.
+// The independence that matters is independence from the WRITER, and it is intact: the field
+// OFFSETS below mirror the LAYOUT `MachOWriter.writeSegmentCommand` / `writeMachoSectionHeader` lay
+// down, but nothing here calls that code. The little-endian arithmetic underneath comes from
+// `BinaryImageReader`, shared with the PE and ELF readers — see that file's header for why sharing
+// it costs the independence nothing and why keeping three copies of it cost something real.
 //
 // Mach-O section headers carry a section's file offset and size DIRECTLY (there is no PE
 // virtual/raw split), so the reader walks: mach_header_64 → the LC_SEGMENT_64 named `__DATA` →
@@ -90,31 +88,31 @@ end 'MachoReadError'
 export function readMachoSectionData(path FilePath, segname String, sectname String) returns ByteArray throws MachoReadError
 	let image = try File.readBinary(path) otherwise throw MachoReadError.unreadable(path)
 
-	if machoReadU32(image, at: 0) != MhMagic64 'notMacho'
+	if imageReadU32(image, at: 0) != MhMagic64 'notMacho'
 		throw MachoReadError.notAMachoFile(path)
 	end 'notMacho'
 
-	let ncmds = machoReadU32(image, at: MhNcmdsOffset)
+	let ncmds = imageReadU32(image, at: MhNcmdsOffset)
 	var cmdStart = MachHeaderSize as ByteOffset
 	for _ in 0 upto ncmds 'eachCommand'
-		let cmd = machoReadU32(image, at: cmdStart + LcCmdOffset)
-		let cmdSize = machoReadU32(image, at: cmdStart + LcCmdSizeOffset)
+		let cmd = imageReadU32(image, at: cmdStart + LcCmdOffset)
+		let cmdSize = imageReadU32(image, at: cmdStart + LcCmdSizeOffset)
 
-		if cmd == LcSegment64 and machoNameAt(image, at: cmdStart + SegSegnameOffset) == segname 'thisSegment'
-			let nsects = machoReadU32(image, at: cmdStart + SegNsectsOffset)
+		if cmd == LcSegment64 and imageNameAt(image, at: cmdStart + SegSegnameOffset, maxBytes: MachoNameBytes) == segname 'thisSegment'
+			let nsects = imageReadU32(image, at: cmdStart + SegNsectsOffset)
 			for s in 0 upto nsects 'eachSection'
 				let sectStart = cmdStart + SegmentCommandBaseSize + s * SectionHeaderSize
-				if machoNameAt(image, at: sectStart + SectSectnameOffset) != sectname 'notThisSection'
+				if imageNameAt(image, at: sectStart + SectSectnameOffset, maxBytes: MachoNameBytes) != sectname 'notThisSection'
 					continue
 				end 'notThisSection'
 
-				let size = machoReadU64(image, at: sectStart + SectSizeOffset)
-				let fileOffset = machoReadU32(image, at: sectStart + SectFileOffsetOffset)
+				let size = imageReadU64(image, at: sectStart + SectSizeOffset)
+				let fileOffset = imageReadU32(image, at: sectStart + SectFileOffsetOffset)
 				if fileOffset + size > image.count() 'runsPastEof'
 					throw MachoReadError.truncated(path, sectionName: sectname)
 				end 'runsPastEof'
 
-				return machoSlice(image, start: fileOffset, count: size)
+				return imageSlice(image, start: fileOffset, count: size)
 			end 'eachSection'
 
 			throw MachoReadError.sectionMissing(path, segmentName: segname, sectionName: sectname)
@@ -126,83 +124,6 @@ export function readMachoSectionData(path FilePath, segname String, sectname Str
 	throw MachoReadError.segmentMissing(path, segmentName: segname)
 end 'readMachoSectionData'
 
-// A 16-byte segment/section name field, NUL-padding stripped. The Mach-O twin of PE's 8-byte
-// `sectionNameAt`; the widths differ (Mach-O names are 16 bytes), which is the concrete reason
-// this is its own function rather than a shared one.
-function machoNameAt(image ByteArray, at ByteOffset) returns String
-	var name = ByteArray.create()
-	for i in 0 upto MachoNameBytes 'each'
-		let b = try image.get(at + i) otherwise return ""
-		if b == 0 'nulPad'
-			break
-		end 'nulPad'
-		name.push(b)
-	end 'each'
-	return String.from(name)
-end 'machoNameAt'
-
-// --- Little-endian scalar reads over a byte image ---
-//
-// The reader's own, per the independence note in the header. A read past the end answers 0 rather
-// than throwing: every caller has already established the file is a Mach-O, and a truncated header
-// is caught by the `runsPastEof` guard with a message that names the file. `readU64` is the one
-// width the PE reader never needs (a section's `size` is a u64); the rest mirror its composition.
-
-function machoByteAt(image ByteArray, at ByteOffset) returns MachineWord
-	return try image.get(at) otherwise 0
-end 'machoByteAt'
-
-function machoReadU16(image ByteArray, at ByteOffset) returns MachineWord
-	return machoByteAt(image, at: at) or (machoByteAt(image, at: at + 1) shl 8)
-end 'machoReadU16'
-
-function machoReadU32(image ByteArray, at ByteOffset) returns MachineWord
-	return machoReadU16(image, at: at) or (machoReadU16(image, at: at + 2) shl 16)
-end 'machoReadU32'
-
-function machoReadU64(image ByteArray, at ByteOffset) returns MachineWord
-	return machoReadU32(image, at: at) or (machoReadU32(image, at: at + 4) shl 32)
-end 'machoReadU64'
-
-function machoSlice(image ByteArray, start ByteOffset, count ByteCount) returns ByteArray
-	var out = ByteArray.create()
-	for i in 0 upto count 'each'
-		out.push(try image.get(start + i) otherwise panic("machoSlice: get OOB at {start + i} — the caller checked start+count <= image.count()"))
-	end 'each'
-	return out
-end 'machoSlice'
-
-// --- Format dispatch: read the linked binary's `.data` regardless of executable format ---
-
-// A read failure from whichever executable format the host produced — the PE reader's error on a
-// Windows host, the Mach-O reader's on a macOS host — joined so the one `.data`-gate call site
-// (`SpecTestRunner.compareDataSection`) catches a single type. It exists only to unify two
-// independent format readers under one `throws`; each arm delegates rendering to the reader that
-// raised it.
-export union DataSectionReadError implements Error
-	pe(inner PeReadError)
-	macho(inner MachoReadError)
-
-	export function displayReason() returns String
-		return match self 'k'
-			pe(inner) gives inner.displayReason()
-			macho(inner) gives inner.displayReason()
-		end 'k'
-	end 'displayReason'
-end 'DataSectionReadError'
-
-// Read the top-level-`var` storage section out of the linked test binary, dispatching on the HOST
-// os because the runner only ever inspects a binary it built for its own host: Mach-O `__DATA,__data`
-// on macOS, PE `.data` everywhere else (the suite runs only on macOS and Windows hosts today). The
-// PE branch is the ORIGINAL call, unchanged — the Mach-O branch is purely additive.
-export function readLinkedDataSection(exePath FilePath) returns ByteArray throws DataSectionReadError
-	if detectHostTarget().os == Os.macos 'macho'
-		return try readMachoSectionData(exePath, segname: MachoDataSegmentName, sectname: MachoDataSectionName) otherwise (e) 'machoErr'
-			throw DataSectionReadError.macho(e)
-		end 'machoErr'
-	end 'macho'
-
-	return try readPeSectionData(exePath, sectionName: DataSectionName) otherwise (e) 'peErr'
-		throw DataSectionReadError.pe(e)
-	end 'peErr'
-end 'readLinkedDataSection'
+// The format dispatch that used to sit here — `DataSectionReadError` and `readLinkedDataSection` —
+// now lives in `LinkedDataSection.maxon`. It reads THREE formats, so a home inside any one of them
+// made the other two look subordinate to Mach-O; it belongs beside all three, not inside one.

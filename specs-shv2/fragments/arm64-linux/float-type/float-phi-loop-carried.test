@@ -1,0 +1,34 @@
+// Test: float-phi-loop-carried
+function main() returns ExitCode
+	var f = 0.0
+	var i = 0
+	while i < 4 'loop'
+		f = f + 2.5
+		i = i + 1
+	end 'loop'
+	return trunc(f)
+end 'main'
+---
+ExitCode: 10
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.fpLoadRdata d0, [rdata + __fconst_0]
+    arm64.movImm x0, 0
+    arm64.b whilehdr
+  whilehdr:
+    arm64.cmp x0, 4
+    arm64.cset x1, lt
+    arm64.cbnz x1, loop
+    arm64.b whileexit
+  loop:
+    arm64.fpLoadRdata d1, [rdata + __fconst_1]
+    arm64.fadd d0, d0, d1
+    arm64.add x0, x0, 1
+    arm64.b whilehdr
+  whileexit:
+    arm64.fcvtzs x0, d0
+    arm64.epilogue 16
+    arm64.ret
+}

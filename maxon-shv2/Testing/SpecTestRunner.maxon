@@ -83,6 +83,7 @@ let FragmentPathToken = "<fragment>"
 // so everything from there on is re-joined rather than dropped.
 let PositionSeparator = ":"
 let MinPositionFields = 3
+
 // DERIVED, not restated: the message begins exactly where the position's fields end. Written as its
 // own `3` the two would be free to drift, and a drift would silently truncate a diagnostic's message
 // or read a column as one.
@@ -115,12 +116,18 @@ let ReferenceFragmentDir = "specs/fragments"
 
 // --- The cross-compile-and-run path (restored from v1: buildWasmRunCommand / findWasmtimePath) ---
 //
-// A NATIVE target is one the runner executes by spawning a HOST process directly. A CROSS target
-// (wasm32-wasi today) the host cannot spawn: the test is built with an explicit `--target=…` and
-// the produced `.wasm` COMPONENT is run through the vendored wasmtime. The native set is derived
-// FROM `targetToString` (see `nativeTargetKeys`), not written as literals, so its spelling has ONE
-// source — the same producer a `<!-- targets: … -->` marker was authored against.
+// ⭐ TWO INDEPENDENT QUESTIONS, AND THEY USED TO BE ONE BOOLEAN. `isCrossTarget` answered "is this
+// not one of the two native targets?" and its answer was used to mean THREE different things —
+// needs an external runner, emits no Target IR, is not the host. For wasm32-wasi, the only
+// non-native target there had ever been, all three coincided, so nothing forced them apart.
+//
+// arm64-linux is the first target that splits them: an ELF cannot be spawned on macOS (so it NEEDS
+// an external runner) but it goes through the whole register backend (so it DOES emit Target IR and
+// MUST be pinned by a golden). Under one boolean it would have silently lost its golden gate. The
+// two predicates below — `needsExternalRunner` and `emitsTargetIr` — are that split, each derived
+// from the one fact it actually asks about rather than from a list of target names.
 let VendorDirName = "vendor"
+
 // The vendor SUBDIR for wasmtime, which also equals the tool's basename — so it is what
 // `hostWasmToolCandidates` (WasmComponent) is handed to build the `vendor/wasmtime/wasmtime[.exe]`
 // candidate paths, host-preferred. The upward walk, the host-preferred ordering, and the
@@ -138,6 +145,25 @@ let WasmtimeRunSubcommand = "run"
 // forwarded as guest argv.
 let WasmtimeSettingFlag = "-S"
 let WasmtimeExitWithCodeSetting = "cli-exit-with-code=y"
+
+// --- OrbStack: the arm64-linux runner ---
+//
+// `orb run -m <machine> <exe>` executes a binary that lives on the MAC's filesystem inside a Linux
+// VM, which mirrors the Mac's tree at IDENTICAL real paths. That mirroring is the whole reason an
+// arm64-linux spec run works from this host with no copying, no image and no cross-mount: the ELF
+// the build just wrote under `specs-shv2/.spec-tmp/` is already visible to the VM at the same path.
+//
+// ⚠ UNLIKE WASMTIME, `orb` IS A SYSTEM INSTALL, NOT VENDORED. There is no `vendor/` tree to walk up
+// to and no in-repo copy to prefer; the locator for a system tool is PATH, which is exactly what
+// `Executable.name` models. See `requireOrbMachineReachable` for the not-found behaviour.
+let OrbExecutableName = "orb"
+let OrbRunSubcommand = "run"
+let OrbMachineFlag = "-m"
+let OrbMachineName = "maxon-linux"
+
+// The cheapest command that proves the machine can execute one — coreutils' no-op, present in every
+// Linux image. See `requireOrbMachineReachable`.
+let OrbProbeCommand = "true"
 
 typealias FilePathArray = Array with FilePath
 
@@ -185,8 +211,11 @@ export type ProcessCapture
 	end 'create'
 end 'ProcessCapture'
 
-export function runProcess(exe FilePath, argv StringArray) returns ProcessCapture throws SubprocessError
-	let collected = try Subprocess.run(Executable.path(exe), arguments: argv)
+// Takes an `Executable` rather than a `FilePath` so a caller can name a tool to be found on PATH
+// (`orb`) as easily as one whose exact location it already computed. The distinction belongs to the
+// caller — this is only the spawn.
+export function runProcess(exe Executable, argv StringArray) returns ProcessCapture throws SubprocessError
+	let collected = try Subprocess.run(exe, arguments: argv)
 	return ProcessCapture.create(collected.exitCode(), stdout: collected.stdout, stderr: collected.stderr)
 end 'runProcess'
 
@@ -217,16 +246,25 @@ export function runOneSpec(compilerExe FilePath, specDir FilePath, specName Stri
 		throw CompileError.directoryNotFound(tempDir)
 	end 'noTempDir'
 
-	// The exe suffix follows the EFFECTIVE target — `.wasm` under `--target=wasm32-wasi`, the host
-	// suffix otherwise — so the path reconstructed to run matches what the build's `resolveOutputPath`
-	// wrote for the same `--target`. The fragment root stays HOST-keyed: only the native path writes a
-	// golden (the wasm path emits no Target IR and skips it — see `runStagedTest`), and the pool's
-	// `prepareSharedDirs` keys the shared root the same way.
+	// BOTH follow the EFFECTIVE target. The exe suffix must, so the path reconstructed to run matches
+	// what the build's `resolveOutputPath` wrote for the same `--target`.
+	//
+	// ⚠ THE FRAGMENT ROOT MUST TOO, AND IT USED TO BE HOST-KEYED. That was survivable only while the
+	// one cross target wrote no golden at all: `--target=wasm32-wasi` skipped the fragment gate, so
+	// nothing noticed the root it would have written into was the HOST's. arm64-linux writes goldens,
+	// so a host-keyed root would send arm64-linux IR into `fragments/arm64-macos/` and CLOBBER the
+	// host's committed tree — a cross run silently rewriting the goldens of a target it did not build
+	// for. The pool's `prepareSharedDirs` keys the shared root off the same effective target.
 	let exeExtension = executableExtension(effectiveTarget)
-	let fragmentDir = fragmentsRootDir(specDir, target: detectHostTarget()).join(specName)
-	// mkdir -p; a create failure just means fragments for this spec won't be written
-	// (checkTestFragment swallows the ensuing write error) — never a test gate.
-	_ = Directory.create(fragmentDir)
+	let fragmentDir = fragmentsRootDir(specDir, target: effectiveTarget).join(specName)
+	// mkdir -p, but ONLY for a target that has goldens. `runStagedTest` skips the fragment gate
+	// entirely when the target emits no Target IR, so creating the tree under wasm32-wasi would
+	// leave a directory per spec that nothing will ever write a `.test` into — empty scaffolding for
+	// a gate that does not exist. A create failure is not a test gate either way: `checkTestFragment`
+	// swallows the ensuing write error.
+	if emitsTargetIr(effectiveTarget) 'hasGoldens'
+		_ = Directory.create(fragmentDir)
+	end 'hasGoldens'
 
 	for test in tests 'eachTest'
 		let outcome = runOneTest(compilerExe, test: test, specName: specName, tempDir: tempDir, exeExtension: exeExtension, fragmentDir: fragmentDir, updateRequired: updateRequired, effectiveTarget: effectiveTarget)
@@ -281,39 +319,60 @@ function selectedByTarget(test SpecTest, effectiveTargetKey String) returns bool
 	if test.targets.isEmpty() 'unrestricted'
 		return true
 	end 'unrestricted'
-	return keyInList(effectiveTargetKey, list: test.targets)
+
+	// An explicit walk rather than an `Array.contains`: the element comparison String equality needs
+	// is exactly what a bare `contains` would have to be told, and a restriction list is one to four
+	// entries.
+	for listed in test.targets 'eachListed'
+		if listed == effectiveTargetKey 'restrictionAllows'
+			return true
+		end 'restrictionAllows'
+	end 'eachListed'
+
+	return false
 end 'selectedByTarget'
 
-// The `targetToString` spellings of the targets the runner executes by spawning a HOST process
-// directly. Built from `Target` values, not string literals, so the spelling has ONE source — the
-// same `targetToString` a `<!-- targets: … -->` marker was authored against, and the same set
-// `Main.parseBuildTarget` calls "supported native". Any other target is CROSS (see `isCrossTarget`).
-function nativeTargetKeys() returns StringArray
-	var keys = StringArray.create()
-	keys.push(targetToString(Target.create(CpuArch.x64, os: Os.windows)))
-	keys.push(targetToString(Target.create(CpuArch.arm64, os: Os.macos)))
-	return keys
-end 'nativeTargetKeys'
+// ⭐ Does a binary built for `target` need an EXTERNAL RUNNER, rather than being spawned directly?
+//
+// The fact this asks about is "is this the host?", and it asks it of the host itself — NOT of a list
+// of target names. A process can spawn exactly one thing: a binary for the machine it is running on.
+// Anything else is somebody else's instruction set or somebody else's loader, and needs a program
+// that knows how to run it (wasmtime, an OrbStack Linux VM). Written as a name list instead, the
+// same target would be "native" on the host that can run it and on the three that cannot — which is
+// how `x64-windows` came to be classified native on an arm64-macOS host, where spawning it can only
+// fail.
+//
+// ⚠ THIS IS NOT `not emitsTargetIr`, AND CONFLATING THE TWO IS THE BUG THIS RUNG FIXES. arm64-linux
+// answers TRUE here and TRUE there: it cannot be spawned on macOS, and it is fully pinned by a
+// golden. See `buildRunCommand` for which runner each answer routes to.
+function needsExternalRunner(target Target) returns bool
+	let host = detectHostTarget()
+	return target.cpu != host.cpu or target.os != host.os
+end 'needsExternalRunner'
 
-// Does `target` need an external runner (wasmtime) rather than a direct host spawn? Derived from the
-// one native-key set so the gate (over a test's listed keys) and the build/run path (over the
-// effective `Target`) can never disagree about what "cross" means.
-function isCrossTarget(target Target) returns bool
-	return not keyInList(targetToString(target), list: nativeTargetKeys())
-end 'isCrossTarget'
-
-// Whether `key` appears in `list`, by String equality — the one membership walk the two callers
-// (a test's declared `targets`, and the native-key set) share. An explicit walk rather than an
-// `Array.contains`: the element comparison String equality needs is exactly what a bare `contains`
-// would have to be told, and each list this serves is one or two entries.
-function keyInList(key String, list StringArray) returns bool
-	for entry in list 'eachEntry'
-		if entry == key 'match'
-			return true
-		end 'match'
-	end 'eachEntry'
-	return false
-end 'keyInList'
+// ⭐ Does `target` emit a Target-IR module — i.e. is there a golden to pin?
+//
+// Keyed on the CPU, because that IS the fact: a REGISTER backend lowers Std IR into the Target
+// dialect, allocates registers over it and encodes it, and `--emit-ir` writes that dialect out as
+// the `.ir` sidecar the `.test` fragments gate. wasm32 has no register file at all (`RegBits
+// .registerFileFor` panics for it) — its backend consumes the Std module directly, so there is no
+// Target dialect for it to emit and nothing for a golden to hold.
+//
+// That is what makes wasm's `false` UNFORGEABLE by either predicate drifting: it does not come from
+// a name, an OS, or a list that someone must remember to update, but from the same property that
+// decides whether the register allocator runs. Every register backend — x64 and arm64, on every
+// OS — is TRUE, including the ones that need an external runner.
+//
+// Exported for the same reason `fragmentsRootDir` is: BOTH HALVES OF THE POOL ASK IT, in different
+// processes. The parent gates `prepareSharedDirs` on it; the worker gates the `--emit-ir` flag and
+// the fragment write. A second copy in either is a copy that can disagree.
+export function emitsTargetIr(target Target) returns bool
+	return match target.cpu 'cpu'
+		x64 gives true
+		arm64 gives true
+		wasm32 gives false
+	end 'cpu'
+end 'emitsTargetIr'
 
 // This spec's private scratch directory: `<specDir>/.spec-tmp/<specName>/`.
 //
@@ -355,9 +414,12 @@ function selectedByFilter(specName String, testName String, filter String) retur
 	return "{specName}/{testName}".contains(filter)
 end 'selectedByFilter'
 
-// The committed-fragment root for this host target: `<specDir>/fragments/<target>`
+// The committed-fragment root for `target`: `<specDir>/fragments/<target>`
 // (e.g. `specs-shv2/fragments/x64-windows`). Each spec's `.test` files hang off a
 // per-spec subdirectory of this root.
+//
+// `target` is the run's EFFECTIVE target, never the host — the goldens belong to the code that was
+// GENERATED, and which machine generated it says nothing about that.
 //
 // Exported for the same reason as `specTempRootDir`: the pool creates this shared parent once,
 // in the parent process, rather than letting N workers race to make it.
@@ -452,23 +514,23 @@ end 'runOneTest'
 // Split out of `runOneTest` only because staging can FAIL, and a union's arms are the honest way to
 // say so — the two functions are one story read top to bottom.
 function runStagedTest(compilerExe FilePath, test SpecTest, specName String, staged StagedTest, exeBase FilePath, exePath FilePath, irPath FilePath, fragmentDir FilePath, updateRequired bool, effectiveTarget Target) returns TestOutcome
-	let cross = isCrossTarget(effectiveTarget)
+	let pinnable = emitsTargetIr(effectiveTarget)
 
 	var compileArgv = StringArray.create()
 	compileArgv.push(BuildSubcommand)
 	compileArgv.push(staged.buildTarget.toString())
 	compileArgv.push(OutputFlag)
 	compileArgv.push(exeBase.toString())
-	if cross 'crossCompile'
-		// The wasm backend consumes the Std module directly and emits NO Target IR, so there is no
-		// `--emit-ir` sidecar to read and no golden to pin — the RUN is the whole gate (see the
-		// fragment skip below). Point the build at the cross target instead.
-		compileArgv.push("{TargetFlagPrefix}{targetToString(effectiveTarget)}")
-	end 'crossCompile' else 'hostCompile'
+	// ALWAYS explicit, even when the effective target IS the host. The runner states what it is
+	// testing rather than trusting the build's default to agree with it — and the two ARE the same
+	// value on the host path (`Main.resolveTargetFlag` defaults to `detectHostTarget()`), so this
+	// changes no byte of a host build, only who said so.
+	compileArgv.push("{TargetFlagPrefix}{targetToString(effectiveTarget)}")
+	if pinnable 'emitGolden'
 		compileArgv.push(EmitIrFlag)
-	end 'hostCompile'
+	end 'emitGolden'
 
-	let compile = try runProcess(compilerExe, argv: compileArgv) otherwise (e) 'compileSpawnFailed'
+	let compile = try runProcess(Executable.path(compilerExe), argv: compileArgv) otherwise (e) 'compileSpawnFailed'
 		cleanup(staged, exePath: exePath, irPath: irPath)
 		return TestOutcome.fail("compiler spawn failed: {e.displayReason()}")
 	end 'compileSpawnFailed'
@@ -479,10 +541,13 @@ function runStagedTest(compilerExe FilePath, test SpecTest, specName String, sta
 	// cases:
 	//   (1) BEHAVIOUR already FAILED — a failing test's IR is noise, and a golden mismatch on top
 	//       would bury the real failure;
-	//   (2) a CROSS target (wasm) — the wasm backend emits no Target IR, so there is nothing to pin;
-	//       the RUN plus the worker-count byte-identity gate are the whole check for it.
-	// The native, passing path runs it before cleanup, while the `--emit-ir` sidecar is still on disk.
-	if not outcome.isPass() or cross 'noFragmentGate'
+	//   (2) the target emits NO Target IR (wasm32 alone — see `emitsTargetIr`), so there is nothing
+	//       to pin; the RUN plus the worker-count byte-identity gate are the whole check for it.
+	// ⚠ The second condition is `emitsTargetIr`, NOT "is this the host". A cross target that goes
+	// through a register backend — arm64-linux — is pinned exactly like a host build; it was the old
+	// single `cross` boolean here that would have silently dropped its golden.
+	// The pinnable, passing path runs it before cleanup, while the `--emit-ir` sidecar is still on disk.
+	if not outcome.isPass() or not pinnable 'noFragmentGate'
 		cleanup(staged, exePath: exePath, irPath: irPath)
 		return outcome
 	end 'noFragmentGate'
@@ -745,28 +810,48 @@ function checkCompilerError(expectedText String, specName String, testName Strin
 	return TestOutcome.fail("compiler-error mismatch\n    expected: {expected}\n    actual:   {actual}")
 end 'checkCompilerError'
 
-// The exe + argv pair one RUN goes through, whichever target produced the binary. Native runs the
-// binary with no argv; a wasm run puts the module behind wasmtime and its flags. One type so the
-// single `runProcess` call in `checkRun` is target-agnostic.
+// The executable + argv pair one RUN goes through, whichever target produced the binary. The host's
+// own binary runs with no argv; a wasm module goes behind wasmtime and its flags; an ELF goes behind
+// `orb run`. One type so the single `runProcess` call in `checkRun` is target-agnostic.
+//
+// `exe` is an `Executable`, not a `FilePath`, because the three runners are found in genuinely
+// different ways and the stdlib already names that difference: a built binary and the VENDORED
+// wasmtime are `.path` (an exact location this runner computed), while `orb` is a SYSTEM install
+// located by PATH, which is `.name` — and the PATH search that backs it lives inside the spawn
+// (`Subprocess.resolveByName`), not in `Executable.resolve()`.
 type RunCommand
-	export let exe as FilePath
+	export let exe as Executable
 	export let argv as StringArray
 
-	export static function create(exe FilePath, argv StringArray) returns RunCommand
+	export static function create(exe Executable, argv StringArray) returns RunCommand
 		return Self{exe: exe, argv: argv}
 	end 'create'
 end 'RunCommand'
 
-// How to execute the binary the build just produced. A NATIVE target's binary is spawned directly
-// with an empty argv (spec tests take no runtime arguments — shv2's SpecParser has no `Args`
-// directive). A CROSS target's `.wasm` COMPONENT cannot be spawned by the host, so it goes behind
-// the vendored wasmtime. Restored from v1 `SpecTestRunner.maxon:623` (`buildRunCommand`).
+// ⭐ THE RUNNER REGISTRY. How to execute the binary the build just produced.
+//
+// The HOST's own binary is spawned directly with an empty argv (spec tests take no runtime
+// arguments — shv2's SpecParser has no `Args` directive). Anything else needs a program that knows
+// how to run it, and WHICH program is a property of the target's OS:
+//   * `wasi`  — a `.wasm` COMPONENT, run under the vendored wasmtime.
+//   * `linux` — a static aarch64 ELF, run inside an OrbStack Linux VM.
+// Restored from v1 `SpecTestRunner.maxon:623` (`buildRunCommand`), which had only the first two arms.
+//
+// EXHAUSTIVE over `Os`, with no bare `default`: a host that cannot run its own target's binaries is
+// a contradiction, so the two remaining arms are reachable only by cross-compiling to an OS this
+// harness has no runner for. That panics naming both targets rather than spawning an executable the
+// kernel will refuse in some less legible way.
 function buildRunCommand(modulePath FilePath, effectiveTarget Target) returns RunCommand
-	if isCrossTarget(effectiveTarget) 'wasm'
-		return buildWasmRunCommand(modulePath)
-	end 'wasm'
+	if not needsExternalRunner(effectiveTarget) 'hostSpawn'
+		return RunCommand.create(Executable.path(modulePath), argv: StringArray.create())
+	end 'hostSpawn'
 
-	return RunCommand.create(modulePath, argv: StringArray.create())
+	return match effectiveTarget.os 'runner'
+		wasi gives buildWasmRunCommand(modulePath)
+		linux gives buildLinuxVmRunCommand(modulePath)
+		windows panic("SpecTestRunner: no runner for a {targetToString(effectiveTarget)} binary on a {targetToString(detectHostTarget())} host — a PE can only be spawned on Windows, so this suite must run its tests on that host")
+		macos panic("SpecTestRunner: no runner for a {targetToString(effectiveTarget)} binary on a {targetToString(detectHostTarget())} host — a Mach-O can only be spawned on macOS, so this suite must run its tests on that host")
+	end 'runner'
 end 'buildRunCommand'
 
 // `wasmtime run -S cli-exit-with-code=y <module.wasm>` — the exact command the wasm component
@@ -774,8 +859,6 @@ end 'buildRunCommand'
 // the scalar slice does no I/O. Ported from v1 `SpecTestRunner.maxon:650` (`buildWasmRunCommand`),
 // trimmed to the one `-S` setting the scalar surface needs.
 function buildWasmRunCommand(modulePath FilePath) returns RunCommand
-	let wasmtimeExe = findWasmtimePath()
-
 	var argv = StringArray.create()
 	argv.push(WasmtimeRunSubcommand)
 	argv.push(WasmtimeSettingFlag)
@@ -783,7 +866,7 @@ function buildWasmRunCommand(modulePath FilePath) returns RunCommand
 	// The module path MUST come after every `-S`: anything after it is forwarded to the guest as argv.
 	argv.push(modulePath.toString())
 
-	return RunCommand.create(wasmtimeExe, argv: argv)
+	return RunCommand.create(Executable.path(findWasmtimePath()), argv: argv)
 end 'buildWasmRunCommand'
 
 // Locate the vendored wasmtime through the SAME upward-walk + host-preferred-binary locator the
@@ -802,6 +885,88 @@ function findWasmtimePath() returns FilePath
 	return found
 end 'findWasmtimePath'
 
+// `orb run -m maxon-linux <exe>` — run a static aarch64 ELF inside the OrbStack Linux machine.
+//
+// ⚠ THE PATH IS MADE ABSOLUTE BEFORE IT CROSSES, AND THAT IS NOT DEFENSIVENESS. The VM mirrors the
+// Mac's filesystem at IDENTICAL REAL paths, which is what lets it run a binary the build wrote
+// moments ago with no copying — but "identical" is about the path the KERNEL sees, and the two sides
+// do not agree on every spelling of one. macOS's `/tmp` is a symlink to `/private/tmp`; the VM's
+// `/tmp` is its own separate, empty directory. Hand `orb` a relative path and it resolves against
+// whatever cwd the VM inherited; hand it `/tmp/x` and it looks in a directory that is not the one
+// the file is in. (Measured: `/private/tmp/probe` ran and exited 7, `/tmp/probe` failed 127.)
+//
+// Resolving against the cwd fixes the relative half outright. It cannot rewrite a symlinked prefix —
+// the stdlib has no realpath — but it does not need to: `Directory.currentPath()` is `getcwd`, which
+// is already the PHYSICAL path, and the runner's binaries live under the spec directory, which is
+// itself derived from that cwd (`Main.resolveSpecDir`). The one way back into the trap is an
+// explicit `spec-test /tmp/...` argument on a host whose `/tmp` is a symlink.
+//
+// ⚠ WHY `orb` IS NAMED AND NOT LOCATED. `findWasmtimePath` walks up to a VENDORED binary because
+// there IS an in-repo copy and it is the one that must win. `orb` is a SYSTEM install with no
+// canonical location, so the locator for it is PATH — and the PATH search that honours
+// `Executable.name` lives inside the SPAWN (`Subprocess.resolveByName` → `subprocessResolveOnPath`),
+// not in `Executable.resolve()`, which despite its doc comment only wraps the bare name. Naming it
+// is therefore the way to get the lookup; pre-resolving it here would not.
+//
+// A missing `orb` is caught ONCE, up front, by `requireRunnerAvailable` — not here, per test.
+function buildLinuxVmRunCommand(exePath FilePath) returns RunCommand
+	var argv = StringArray.create()
+	argv.push(OrbRunSubcommand)
+	argv.push(OrbMachineFlag)
+	argv.push(OrbMachineName)
+	argv.push(exePath.resolve(Directory.currentPath()).toString())
+
+	return RunCommand.create(Executable.name(OrbExecutableName), argv: argv)
+end 'buildLinuxVmRunCommand'
+
+// ⭐ CAN THIS HOST EXECUTE BINARIES BUILT FOR `effectiveTarget` AT ALL? Asked ONCE, by the parent,
+// before a single worker is spawned.
+//
+// A missing runner is not a property of any one test — it is a property of the RUN, and answering it
+// per test answers it 780 times and reports it as 780 unrelated failures (or, in the pool, as a dead
+// worker whose real message is buried in another process's stderr). Asked here, it costs one probe
+// and it names the fix while the reader is still looking at the command they typed.
+//
+// The wasm arm's probe is the LOCATOR itself — finding the vendored binary is exactly the question,
+// and `findWasmtimePath` already panics with its own fix when it cannot. The linux arm has to
+// actually ASK, because it is checking two things PATH cannot answer on its own: that OrbStack is
+// installed, and that the machine the run names exists and can execute something.
+export function requireRunnerAvailable(effectiveTarget Target)
+	if not needsExternalRunner(effectiveTarget) 'hostSpawn'
+		return
+	end 'hostSpawn'
+
+	match effectiveTarget.os 'runner'
+		wasi then _ = findWasmtimePath()
+		linux then requireOrbMachineReachable()
+		windows then panic("SpecTestRunner: no runner for a {targetToString(effectiveTarget)} binary on a {targetToString(detectHostTarget())} host — a PE can only be spawned on Windows, so this suite must run its tests on that host")
+		macos then panic("SpecTestRunner: no runner for a {targetToString(effectiveTarget)} binary on a {targetToString(detectHostTarget())} host — a Mach-O can only be spawned on macOS, so this suite must run its tests on that host")
+	end 'runner'
+end 'requireRunnerAvailable'
+
+// Probe the OrbStack machine by running the smallest possible command in it.
+//
+// It answers THREE questions in one spawn, and each has a different fix: is `orb` installed, does the
+// machine this runner names exist, and can it execute a binary. A probe rather than a file-existence
+// check because two of the three are not questions the filesystem can answer — and because a stopped
+// machine is STARTED by this call, so the first real test does not pay that latency inside its own
+// timing.
+function requireOrbMachineReachable()
+	var argv = StringArray.create()
+	argv.push(OrbRunSubcommand)
+	argv.push(OrbMachineFlag)
+	argv.push(OrbMachineName)
+	argv.push(OrbProbeCommand)
+
+	let probe = try runProcess(Executable.name(OrbExecutableName), argv: argv) otherwise (e) 'notInstalled'
+		panic("SpecTestRunner: could not run '{OrbExecutableName}' ({e.displayReason()}) — running an arm64-linux binary from a non-Linux host needs OrbStack (https://orbstack.dev); install it, or drop {TargetFlagPrefix}arm64-linux and run the suite for this host")
+	end 'notInstalled'
+
+	if probe.exitCode != 0 'machineUnreachable'
+		panic("SpecTestRunner: '{OrbExecutableName} {OrbRunSubcommand} {OrbMachineFlag} {OrbMachineName} {OrbProbeCommand}' failed (exit {probe.exitCode}): {probe.stderr.trim()} — the arm64-linux run path needs an OrbStack Linux machine named '{OrbMachineName}' (`orb create ubuntu {OrbMachineName}`)")
+	end 'machineUnreachable'
+end 'requireOrbMachineReachable'
+
 // A RUN test (an ```exitcode block, plus the ```stderr / ```stdout blocks that may accompany it): the
 // compile MUST succeed, then the produced exe is spawned and EVERY half of the expectation is checked
 // against that one execution — its exit code, what it wrote to stderr, and what it wrote to stdout.
@@ -816,7 +981,10 @@ function checkRun(expected ExitCodeValue, stderr SpecStderr, stdout SpecStdout, 
 	// wrong usually still exits with some number, and "exit code mismatch" would send the reader
 	// looking in the wrong place entirely. It is a NATIVE-binary property; a wasm test never pins it
 	// (the scalar slice has no `.data`), so `unpinned` short-circuits this to a pass under wasm.
-	let dataOutcome = checkRequiredData(requiredData, exePath: exePath)
+	//
+	// The EFFECTIVE target selects which executable format to parse — the file on disk is an ELF
+	// under `--target=arm64-linux` however macOS-shaped the host is.
+	let dataOutcome = checkRequiredData(requiredData, exePath: exePath, effectiveTarget: effectiveTarget)
 	match dataOutcome 'data'
 		pass then break 'data'
 		fail then return dataOutcome
@@ -858,19 +1026,19 @@ end 'checkRun'
 // executable catches the layer between: a section header with a wrong RVA, a raw pointer off by an
 // alignment, an image the writer padded instead of wrote. This is a faithful port of
 // `TestRunner.cs`'s `CheckRequiredData` → `CheckRequiredSection`, including the PREFIX rule below.
-function checkRequiredData(requiredData SpecRequiredData, exePath FilePath) returns TestOutcome
+function checkRequiredData(requiredData SpecRequiredData, exePath FilePath, effectiveTarget Target) returns TestOutcome
 	match requiredData 'pin'
 		unpinned then return TestOutcome.pass
-		pinned(text) then return compareDataSection(text, exePath: exePath)
+		pinned(text) then return compareDataSection(text, exePath: exePath, effectiveTarget: effectiveTarget)
 	end 'pin'
 end 'checkRequiredData'
 
-function compareDataSection(expectedText String, exePath FilePath) returns TestOutcome
+function compareDataSection(expectedText String, exePath FilePath, effectiveTarget Target) returns TestOutcome
 	let expected = try parseTypedSectionValues(expectedText) otherwise (e) 'badBlock'
 		return TestOutcome.fail("RequiredData block is malformed: {e.displayReason()}")
 	end 'badBlock'
 
-	let actual = try readLinkedDataSection(exePath) otherwise (e) 'noSection'
+	let actual = try readLinkedDataSection(exePath, target: effectiveTarget) otherwise (e) 'noSection'
 		return TestOutcome.fail("could not read the data section of {exePath.toString()}: {e.displayReason()}")
 	end 'noSection'
 

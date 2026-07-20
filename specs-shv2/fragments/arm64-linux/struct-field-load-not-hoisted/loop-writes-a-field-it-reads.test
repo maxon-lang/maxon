@@ -1,0 +1,71 @@
+// Test: loop-writes-a-field-it-reads
+
+typealias Integer = int(i64.min to i64.max)
+
+type Counter
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Counter'
+
+function main() returns ExitCode
+	var c = Counter.create(0)
+	var i = 0
+	while i < 5 'loop'
+		c.value = c.value + 1
+		i = i + 1
+	end 'loop'
+	return c.value
+end 'main'
+---
+ExitCode: 5
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @Counter.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 0
+    arm64.bl Counter.create
+    arm64.movImm x1, 0
+    arm64.b whilehdr
+  whilehdr:
+    arm64.cmp x1, 5
+    arm64.cset x2, lt
+    arm64.cbnz x2, loop
+    arm64.b whileexit
+  loop:
+    arm64.loadRegBaseDisp.word64 x2, [x0 + 0]
+    arm64.add x2, x2, 1
+    arm64.storeBaseDispReg.word64 [x0 + 0], x2
+    arm64.add x1, x1, 1
+    arm64.b whilehdr
+  whileexit:
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}

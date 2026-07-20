@@ -1,0 +1,96 @@
+// Test: while-loops.sequential-loops-across-a-call
+function work(x int) returns int
+	return x + 1
+end 'work'
+
+function big(n int) returns int
+	var total = 0
+	var a = 1
+	var i0 = 0
+	while i0 < n 'L0'
+		let r = work(i0)
+		a = a + r
+		i0 = i0 + 1
+	end 'L0'
+	total = total + a
+	var b = 1
+	var i1 = 0
+	while i1 < n 'L1'
+		let s = work(i1)
+		b = b + s
+		i1 = i1 + 1
+	end 'L1'
+	total = total + b
+	return total
+end 'big'
+
+function main() returns ExitCode
+	return big(3)
+end 'main'
+---
+ExitCode: 14
+---
+func @work {
+  entry:
+    arm64.prologue 16
+    arm64.add x0, x0, 1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @big {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x20, 1
+    arm64.movImm x21, 0
+    arm64.b whilehdr
+  whilehdr:
+    arm64.cmp x21, x19
+    arm64.cset x0, lt
+    arm64.cbnz x0, L0
+    arm64.b whileexit
+  L0:
+    arm64.movRegReg x0, x21
+    arm64.bl work
+    arm64.add x20, x20, x0
+    arm64.add x21, x21, 1
+    arm64.b whilehdr
+  whileexit:
+    arm64.add x20, x20, 0
+    arm64.movImm x21, 1
+    arm64.movImm x22, 0
+    arm64.b whilehdr
+  whilehdr:
+    arm64.cmp x22, x19
+    arm64.cset x0, lt
+    arm64.cbnz x0, L1
+    arm64.b whileexit
+  L1:
+    arm64.movRegReg x0, x22
+    arm64.bl work
+    arm64.add x21, x21, x0
+    arm64.add x22, x22, 1
+    arm64.b whilehdr
+  whileexit:
+    arm64.add x0, x20, x21
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.epilogue 48
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 3
+    arm64.bl big
+    arm64.epilogue 16
+    arm64.ret
+}

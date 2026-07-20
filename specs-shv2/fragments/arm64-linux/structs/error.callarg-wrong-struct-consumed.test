@@ -1,0 +1,31 @@
+// Test: error.callarg-wrong-struct-consumed
+typealias Integer = int(i64.min to i64.max)
+
+type BoxA
+	export var label as String
+end 'BoxA'
+
+type BoxB
+	export var n as Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'BoxB'
+
+type WrapA
+	export var inner as BoxA
+
+	static function create(inner BoxA) returns Self
+		return Self{inner: inner}
+	end 'create'
+end 'WrapA'
+
+function main() returns ExitCode
+	let b = BoxB.create(7)
+	let w = WrapA.create(b)
+	return 0 as ExitCode
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:26:10: argument type mismatch for 'inner': expected 'BoxA', got 'BoxB'

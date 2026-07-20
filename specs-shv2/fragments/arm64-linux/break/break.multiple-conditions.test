@@ -1,0 +1,44 @@
+// Test: break.multiple-conditions
+function main() returns ExitCode
+	var x = 5
+	var count = 0
+	while x < 100 'loop'
+		x = x + 1
+		count = count + 1
+		if count == 3 'check'
+			break
+		end 'check'
+	end 'loop'
+	return x
+end 'main'
+---
+ExitCode: 8
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 5
+    arm64.movImm x1, 0
+    arm64.b whilehdr
+  whilehdr:
+    arm64.cmp x0, 100
+    arm64.cset x2, lt
+    arm64.cbnz x2, loop
+    arm64.b critsplit
+  loop:
+    arm64.add x0, x0, 1
+    arm64.add x1, x1, 1
+    arm64.cmp x1, 3
+    arm64.cset x2, eq
+    arm64.cbnz x2, check
+    arm64.b ifcont
+  check:
+    arm64.b whileexit
+  ifcont:
+    arm64.b whilehdr
+  critsplit:
+    arm64.b whileexit
+  whileexit:
+    arm64.epilogue 16
+    arm64.ret
+}

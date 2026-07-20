@@ -1,0 +1,90 @@
+// Test: self-explicit-access
+
+typealias Integer = int(i64.min to i64.max)
+
+type Counter
+	var count as Integer
+
+	function increment()
+		self.count = self.count + 1
+	end 'increment'
+
+	function get() returns Integer
+		return self.count
+	end 'get'
+
+	static function create(count Integer) returns Self
+		return Self{count: count}
+	end 'create'
+end 'Counter'
+
+function main() returns ExitCode
+	var c = Counter.create(0)
+	c.increment()
+	c.increment()
+	return c.get()
+end 'main'
+---
+ExitCode: 2
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @Counter.increment {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x1, [x0 + 0]
+    arm64.add x1, x1, 1
+    arm64.storeBaseDispReg.word64 [x0 + 0], x1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Counter.get {
+  entry:
+    arm64.prologue 16
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @Counter.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 0
+    arm64.bl Counter.create
+    arm64.movRegReg x19, x0
+    arm64.movRegReg x0, x19
+    arm64.bl Counter.increment
+    arm64.movRegReg x0, x19
+    arm64.bl Counter.increment
+    arm64.movRegReg x0, x19
+    arm64.bl Counter.get
+    arm64.movRegReg x20, x0
+    arm64.movRegReg x0, x19
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x20
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}

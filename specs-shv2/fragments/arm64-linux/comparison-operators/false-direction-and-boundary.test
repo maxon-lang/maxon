@@ -1,0 +1,96 @@
+// Test: false-direction-and-boundary
+function main() returns ExitCode
+	let x = 5
+	var r = 0
+	if x == 6 'eqFalse'
+		r = r + 1
+	end 'eqFalse'
+	if x != 5 'neFalse'
+		r = r + 2
+	end 'neFalse'
+	if x > 5 'gtBoundary'
+		r = r + 4
+	end 'gtBoundary'
+	if x <= 5 'leBoundary'
+		r = r + 8
+	end 'leBoundary'
+	if x >= 5 'geBoundary'
+		r = r + 16
+	end 'geBoundary'
+	if x < 5 'ltFalse'
+		r = r + 32
+	end 'ltFalse'
+	return r
+end 'main'
+---
+ExitCode: 24
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 5
+    arm64.movImm x1, 0
+    arm64.cmp x0, 6
+    arm64.cset x2, eq
+    arm64.cbnz x2, eqFalse
+    arm64.b critsplit
+  eqFalse:
+    arm64.add x1, x1, 1
+    arm64.b ifcont
+  critsplit:
+    arm64.b ifcont
+  ifcont:
+    arm64.cmp x0, 5
+    arm64.cset x2, ne
+    arm64.cbnz x2, neFalse
+    arm64.b critsplit
+  neFalse:
+    arm64.add x1, x1, 2
+    arm64.b ifcont
+  critsplit:
+    arm64.b ifcont
+  ifcont:
+    arm64.cmp x0, 5
+    arm64.cset x2, gt
+    arm64.cbnz x2, gtBoundary
+    arm64.b critsplit
+  gtBoundary:
+    arm64.add x1, x1, 4
+    arm64.b ifcont
+  critsplit:
+    arm64.b ifcont
+  ifcont:
+    arm64.cmp x0, 5
+    arm64.cset x2, le
+    arm64.cbnz x2, leBoundary
+    arm64.b critsplit
+  leBoundary:
+    arm64.add x1, x1, 8
+    arm64.b ifcont
+  critsplit:
+    arm64.b ifcont
+  ifcont:
+    arm64.cmp x0, 5
+    arm64.cset x2, ge
+    arm64.cbnz x2, geBoundary
+    arm64.b critsplit
+  geBoundary:
+    arm64.add x1, x1, 16
+    arm64.b ifcont
+  critsplit:
+    arm64.b ifcont
+  ifcont:
+    arm64.cmp x0, 5
+    arm64.cset x0, lt
+    arm64.cbnz x0, ltFalse
+    arm64.b critsplit
+  ltFalse:
+    arm64.add x0, x1, 32
+    arm64.b ifcont
+  critsplit:
+    arm64.movRegReg x0, x1
+    arm64.b ifcont
+  ifcont:
+    arm64.epilogue 16
+    arm64.ret
+}

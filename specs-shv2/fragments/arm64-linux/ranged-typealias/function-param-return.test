@@ -1,0 +1,30 @@
+// Test: function-param-return
+typealias Score = int(0 to 100)
+
+function double(s Score) returns Score
+	return s * 2
+end 'double'
+
+function main() returns ExitCode
+	return double(21)
+end 'main'
+---
+ExitCode: 42
+---
+func @double {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x16, 2
+    arm64.mul x0, x0, x16
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 21
+    arm64.bl double
+    arm64.epilogue 16
+    arm64.ret
+}

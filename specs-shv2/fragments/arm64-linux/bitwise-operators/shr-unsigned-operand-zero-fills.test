@@ -1,0 +1,139 @@
+// Test: shr-unsigned-operand-zero-fills
+typealias Wide = int(0 to u64.max)
+typealias Num = int(i64.min to i64.max)
+
+function shrConst(v Wide) returns Wide
+	return v shr 60
+end 'shrConst'
+
+function shrDynamic(v Wide, d Num) returns Wide
+	return v shr d
+end 'shrDynamic'
+
+function shrPastWidth(v Wide) returns Wide
+	return v shr 64
+end 'shrPastWidth'
+
+function main() returns ExitCode
+	// An UNSIGNED left operand zero-fills. Folded count, then a count the compiler cannot see.
+	if shrConst(u64.max) != 15 'foldedCount'
+		return 1
+	end 'foldedCount'
+	if shrDynamic(u64.max, d: 60) != 15 'dynamicCount'
+		return 2
+	end 'dynamicCount'
+
+	// Zero-filling, so shifting every bit out leaves 0 — NOT the sign, and NOT the masked shift
+	// the hardware would have performed.
+	if shrPastWidth(u64.max) != 0 'foldedPastWidth'
+		return 3
+	end 'foldedPastWidth'
+	if shrDynamic(u64.max, d: 100) != 0 'dynamicPastWidth'
+		return 4
+	end 'dynamicPastWidth'
+
+	// A count of 0 is the identity, under either fill.
+	if shrDynamic(u64.max, d: 0) != u64.max 'zeroCount'
+		return 5
+	end 'zeroCount'
+
+	return 42
+end 'main'
+---
+ExitCode: 42
+---
+func @shrConst {
+  entry:
+    arm64.prologue 16
+    arm64.lsr x0, x0, 60
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @shrDynamic {
+  entry:
+    arm64.prologue 16
+    arm64.and x2, x1, -64
+    arm64.neg x6, x2
+    arm64.orr x2, x2, x6
+    arm64.asr x2, x2, 63
+    arm64.lsrv x0, x0, x1
+    arm64.mvn x1, x2
+    arm64.and x0, x0, x1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @shrPastWidth {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, -1
+    arm64.bl shrConst
+    arm64.cmp x0, 15
+    arm64.cset x0, ne
+    arm64.cbnz x0, foldedCount
+    arm64.b ifcont
+  foldedCount:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, -1
+    arm64.movImm x1, 60
+    arm64.bl shrDynamic
+    arm64.cmp x0, 15
+    arm64.cset x0, ne
+    arm64.cbnz x0, dynamicCount
+    arm64.b ifcont
+  dynamicCount:
+    arm64.movImm x0, 2
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, -1
+    arm64.bl shrPastWidth
+    arm64.cmp x0, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, foldedPastWidth
+    arm64.b ifcont
+  foldedPastWidth:
+    arm64.movImm x0, 3
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, -1
+    arm64.movImm x1, 100
+    arm64.bl shrDynamic
+    arm64.cmp x0, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, dynamicPastWidth
+    arm64.b ifcont
+  dynamicPastWidth:
+    arm64.movImm x0, 4
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, -1
+    arm64.movImm x1, 0
+    arm64.bl shrDynamic
+    arm64.cmp x0, -1
+    arm64.cset x0, ne
+    arm64.cbnz x0, zeroCount
+    arm64.b ifcont
+  zeroCount:
+    arm64.movImm x0, 5
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 42
+    arm64.epilogue 16
+    arm64.ret
+}

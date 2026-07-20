@@ -1,0 +1,30 @@
+// Test: exported-function-cross-file
+// --- file: api/helper.maxon
+typealias Integer = int(i64.min to i64.max)
+
+export function helper() returns Integer
+	return 42
+end 'helper'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return helper()
+end 'main'
+---
+ExitCode: 42
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.bl helper
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @helper {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 42
+    arm64.epilogue 16
+    arm64.ret
+}

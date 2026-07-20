@@ -1,0 +1,60 @@
+// Test: data-section-multiple-bools
+var a = true
+var b = false
+var c = true
+
+function main() returns ExitCode
+	if a and c and (b == false) 'read'
+		return 0
+	end 'read'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __data_a@0 = i1 1
+  __data_b@1 = i1 0
+  __data_c@2 = i1 1
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.leaGlobal x0, __data_a
+    arm64.loadRegBaseDisp.byte x0, [x0 + 0]
+    arm64.movImm x1, 0
+    arm64.cbnz x0, andrhs
+    arm64.b critsplit
+  andrhs:
+    arm64.leaGlobal x0, __data_c
+    arm64.loadRegBaseDisp.byte x0, [x0 + 0]
+    arm64.b scmerge
+  critsplit:
+    arm64.movRegReg x0, x1
+    arm64.b scmerge
+  scmerge:
+    arm64.movImm x1, 0
+    arm64.cbnz x0, andrhs
+    arm64.b critsplit
+  andrhs:
+    arm64.leaGlobal x0, __data_b
+    arm64.loadRegBaseDisp.byte x0, [x0 + 0]
+    arm64.cmp x0, 0
+    arm64.cset x0, eq
+    arm64.b scmerge
+  critsplit:
+    arm64.movRegReg x0, x1
+    arm64.b scmerge
+  scmerge:
+    arm64.cbnz x0, read
+    arm64.b ifcont
+  read:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+}

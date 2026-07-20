@@ -1,0 +1,24 @@
+// Test: error.match-gives-two-unions
+typealias Amt = int(0 to 100)
+
+union Shape
+	empty
+	dot(x Amt)
+end 'Shape'
+
+union Toggle
+	off
+	on(y Amt)
+end 'Toggle'
+
+function main() returns ExitCode
+	let c = 1
+	let r = match c 'pick'
+		0 gives Shape.empty
+		default gives Toggle.off
+	end 'pick'
+	return 0
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:16:10: match arms give incompatible types: 'Toggle' vs 'Shape'

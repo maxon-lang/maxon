@@ -1,0 +1,79 @@
+// Test: error.throwing-float-return
+enum MathError implements Error
+	negative
+end 'MathError'
+
+typealias Float = float(f64.min to f64.max)
+
+function safeRoot(n int) returns Float throws MathError
+	if n < 0 'neg'
+		throw MathError.negative
+	end 'neg'
+	return 2.0
+end 'safeRoot'
+
+function main() returns ExitCode
+	let bad = try safeRoot(-1) otherwise 0.0
+	let ok = try safeRoot(5) otherwise 0.0
+	return trunc(bad) + trunc(ok)
+end 'main'
+---
+ExitCode: 2
+---
+func @safeRoot {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x0, 0
+    arm64.cset x0, lt
+    arm64.cbnz x0, neg
+    arm64.b ifcont
+  neg:
+    arm64.movImm x0, 0
+    arm64.add x9, x0, 1
+    arm64.fpLoadRdata d0, [rdata + __fconst_0]
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.fpLoadRdata d0, [rdata + __fconst_1]
+    arm64.movImm x9, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, d8
+    arm64.movImm x0, 1
+    arm64.neg x0, x0
+    arm64.bl safeRoot
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.fpLoadRdata d8, [rdata + __fconst_0]
+    arm64.b trycont
+  tryok:
+    arm64.movRegReg d8, d0
+    arm64.b trycont
+  trycont:
+    arm64.movImm x0, 5
+    arm64.bl safeRoot
+    arm64.cmp x9, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.fpLoadRdata d0, [rdata + __fconst_0]
+    arm64.b trycont
+  tryok:
+    arm64.b trycont
+  trycont:
+    arm64.fcvtzs x0, d8
+    arm64.fcvtzs x1, d0
+    arm64.add x0, x0, x1
+    arm64.loadRegSlot d8, slot0
+    arm64.epilogue 32
+    arm64.ret
+}

@@ -1,0 +1,37 @@
+// Test: char-literal-ge-le-codepoint
+function main() returns ExitCode
+	let cp = 53
+	if cp >= '0' 'ge'
+		if cp <= '9' 'le'
+			return 0
+		end 'le'
+	end 'ge'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 53
+    arm64.cmp x0, 48
+    arm64.cset x1, ge
+    arm64.cbnz x1, ge
+    arm64.b ifcont
+  ge:
+    arm64.cmp x0, 57
+    arm64.cset x0, le
+    arm64.cbnz x0, le
+    arm64.b ifcont
+  le:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.b ifcont
+  ifcont:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+}

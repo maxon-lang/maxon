@@ -1,0 +1,44 @@
+// Test: enum-exhaustive.upto-range
+enum Color
+		red
+		green
+		blue
+end 'Color'
+
+function main() returns ExitCode
+	let c = Color.red
+	match c 'check'
+		red upto blue then return 1
+		blue then return 2
+	end 'check'
+end 'main'
+---
+ExitCode: 1
+---
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 0
+    arm64.cmp x0, 0
+    arm64.cset x1, ge
+    arm64.cmp x0, 1
+    arm64.cset x2, le
+    arm64.and x1, x1, x2
+    arm64.cbnz x1, matcharm
+    arm64.b matchnext
+  matcharm:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+  matchnext:
+    arm64.cmp x0, 2
+    arm64.cset x0, eq
+    arm64.cbnz x0, matcharm
+    arm64.b matchnext
+  matcharm:
+    arm64.movImm x0, 2
+    arm64.epilogue 16
+    arm64.ret
+  matchnext:
+  matchcont:
+}

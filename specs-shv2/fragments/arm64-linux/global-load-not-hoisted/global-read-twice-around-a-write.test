@@ -1,0 +1,34 @@
+// Test: global-read-twice-around-a-write
+
+typealias Integer = int(i64.min to i64.max)
+
+var slot = 3
+
+function main() returns ExitCode
+	let before = slot
+	slot = 40
+	let after = slot
+	return before + after - 1
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __data_slot@0 = i64 3
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.leaGlobal x0, __data_slot
+    arm64.loadRegBaseDisp.word64 x0, [x0 + 0]
+    arm64.movImm x1, 40
+    arm64.leaGlobal x2, __data_slot
+    arm64.storeBaseDispReg.word64 [x2 + 0], x1
+    arm64.leaGlobal x1, __data_slot
+    arm64.loadRegBaseDisp.word64 x1, [x1 + 0]
+    arm64.add x0, x0, x1
+    arm64.sub x0, x0, 1
+    arm64.epilogue 16
+    arm64.ret
+}

@@ -817,7 +817,7 @@ export function runSpecPool(compilerExe FilePath, specDir FilePath, filter Strin
 		return PoolRun.create(SpecTestResultArray.create(), failedWorkers: 0)
 	end 'selectsNothing'
 
-	try prepareSharedDirs(specDir)
+	try prepareSharedDirs(specDir, effectiveTarget: effectiveTarget)
 
 	var jobQueue = SpecJobArray.create()
 	for i in 0 upto plans.count() 'enqueue'
@@ -950,7 +950,7 @@ end 'concatBuckets'
 // per-spec subdirectory under each root, so the only thing they could race on is the creation of
 // the shared parent — and `Directory.create`'s mkdir -p from N processes at once is exactly that
 // race.
-function prepareSharedDirs(specDir FilePath) throws CompileError
+function prepareSharedDirs(specDir FilePath, effectiveTarget Target) throws CompileError
 	let tempRoot = specTempRootDir(specDir)
 	if not Directory.create(tempRoot) 'noTempRoot'
 		throw CompileError.directoryNotFound(tempRoot)
@@ -959,7 +959,14 @@ function prepareSharedDirs(specDir FilePath) throws CompileError
 	// A fragments root that cannot be created is NOT a gate — `checkTestFragment` swallows the
 	// ensuing write error and the behaviour tests still run — so unlike the scratch root, a failure
 	// here is not fatal. It is created up front only so that N workers do not race to make it.
-	_ = Directory.create(fragmentsRootDir(specDir, target: detectHostTarget()))
+	//
+	// ⚠ BOTH CONDITIONS MIRROR `runOneSpec` EXACTLY, and they have to: this is the parent's half of a
+	// path whose other half the workers compute in their own processes. Keyed off a different target,
+	// the parent would create the host's root while the workers wrote into the target's; gated on a
+	// different predicate, it would scaffold a tree for a target that writes no goldens at all.
+	if emitsTargetIr(effectiveTarget) 'hasGoldens'
+		_ = Directory.create(fragmentsRootDir(specDir, target: effectiveTarget))
+	end 'hasGoldens'
 end 'prepareSharedDirs'
 
 // Two-phase startup: fire all N spawns back to back, THEN drain the N hellos.

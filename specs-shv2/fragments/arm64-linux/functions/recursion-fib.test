@@ -1,0 +1,51 @@
+// Test: recursion-fib
+function fib(n int) returns int
+	if n <= 1 'base'
+		return n
+	end 'base'
+	return fib(n - 1) + fib(n - 2)
+end 'fib'
+
+function main() returns ExitCode
+	return fib(10)
+end 'main'
+---
+ExitCode: 55
+---
+func @fib {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.cmp x19, 1
+    arm64.cset x0, le
+    arm64.cbnz x0, base
+    arm64.b ifcont
+  base:
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+  ifcont:
+    arm64.sub x0, x19, 1
+    arm64.bl fib
+    arm64.movRegReg x20, x0
+    arm64.sub x0, x19, 2
+    arm64.bl fib
+    arm64.add x0, x20, x0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 10
+    arm64.bl fib
+    arm64.epilogue 16
+    arm64.ret
+}

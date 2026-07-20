@@ -1,0 +1,27 @@
+// Test: error.match-gives-union-and-int
+typealias Num = int(i64.min to i64.max)
+
+type Boxed
+	export var v as Num
+
+	export static function create(n Num) returns Boxed
+		return Boxed{v: n}
+	end 'create'
+end 'Boxed'
+
+union Holder
+	nothing
+	holds(b Boxed)
+end 'Holder'
+
+function main() returns ExitCode
+	let c = 1
+	let r = match c 'pick'
+		0 gives Holder.holds(Boxed.create(1))
+		default gives 7
+	end 'pick'
+	return 7
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:19:10: match arms give incompatible types: 'int' vs 'Holder'

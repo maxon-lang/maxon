@@ -14,6 +14,11 @@
 // PeWriter.maxon` and not a shared codec: a gate that formatted the bytes with the very code that
 // wrote them could only ever prove the writer agrees with itself. The duplication is the test — an
 // independent reading is the only kind that can disagree.
+//
+// That argument is about the WRITER, and it does not reach the little-endian arithmetic underneath:
+// `imageReadU16` and friends come from `BinaryImageReader`, shared with the Mach-O and ELF readers.
+// See that file's header — three copies of "byte n+1 is the high half" cannot catch a writer bug one
+// copy would miss, they can only drift.
 
 // The section a top-level `var`'s image lives in. Named here rather than inlined at the call site
 // because it is a contract with `PeWriter.writeSectionHeader`, not a string.
@@ -88,53 +93,40 @@ end 'TypedValueError'
 export function readPeSectionData(path FilePath, sectionName String) returns ByteArray throws PeReadError
 	let image = try File.readBinary(path) otherwise throw PeReadError.unreadable(path)
 
-	if readU16(image, at: 0) != DosHeaderMagic 'notDos'
+	if imageReadU16(image, at: 0) != DosHeaderMagic 'notDos'
 		throw PeReadError.notAPeFile(path)
 	end 'notDos'
 
-	let peOffset = readU32(image, at: PeSignatureOffsetField)
-	if readU32(image, at: peOffset) != PeSignature 'notPe'
+	let peOffset = imageReadU32(image, at: PeSignatureOffsetField)
+	if imageReadU32(image, at: peOffset) != PeSignature 'notPe'
 		throw PeReadError.notAPeFile(path)
 	end 'notPe'
 
 	let coffStart = peOffset + 4
-	let sectionCount = readU16(image, at: coffStart + CoffNumberOfSectionsOffset)
-	let optionalHeaderSize = readU16(image, at: coffStart + CoffSizeOfOptionalHeaderOffset)
+	let sectionCount = imageReadU16(image, at: coffStart + CoffNumberOfSectionsOffset)
+	let optionalHeaderSize = imageReadU16(image, at: coffStart + CoffSizeOfOptionalHeaderOffset)
 	let firstSectionHeader = coffStart + CoffHeaderSize + optionalHeaderSize
 
 	for i in 0 upto sectionCount 'eachSection'
 		let header = firstSectionHeader + i * SectionHeaderSize
-		if sectionNameAt(image, at: header) != sectionName 'notThisOne'
+		if imageNameAt(image, at: header, maxBytes: SectionNameBytes) != sectionName 'notThisOne'
 			continue
 		end 'notThisOne'
 
-		let virtualSize = readU32(image, at: header + SectionVirtualSizeOffset)
-		let rawSize = readU32(image, at: header + SectionRawSizeOffset)
-		let rawPointer = readU32(image, at: header + SectionRawPointerOffset)
+		let virtualSize = imageReadU32(image, at: header + SectionVirtualSizeOffset)
+		let rawSize = imageReadU32(image, at: header + SectionRawSizeOffset)
+		let rawPointer = imageReadU32(image, at: header + SectionRawPointerOffset)
 		let size = virtualSize if virtualSize < rawSize else rawSize
 
 		if rawPointer + size > image.count() 'runsPastEof'
 			throw PeReadError.truncated(path, sectionName: sectionName)
 		end 'runsPastEof'
 
-		return sliceBytes(image, start: rawPointer, count: size)
+		return imageSlice(image, start: rawPointer, count: size)
 	end 'eachSection'
 
 	throw PeReadError.sectionMissing(path, sectionName: sectionName)
 end 'readPeSectionData'
-
-// A section header's 8-byte name field, NUL-padding stripped.
-function sectionNameAt(image ByteArray, at ByteOffset) returns String
-	var name = ByteArray.create()
-	for i in 0 upto SectionNameBytes 'each'
-		let b = try image.get(at + i) otherwise return ""
-		if b == 0 'nulPad'
-			break
-		end 'nulPad'
-		name.push(b)
-	end 'each'
-	return String.from(name)
-end 'sectionNameAt'
 
 // ⭐ Parse a ```RequiredData block — `<type> <value>` per line — into the bytes it claims.
 // Little-endian, matching both the x64 image and the reference's `BitConverter.GetBytes`.
@@ -221,32 +213,6 @@ function appendLittleEndian(out ByteArray, value ParsedInt, byteCount ByteCount)
 		out.push((bits shr (i * 8)) and 0xFF)
 	end 'eachByte'
 end 'appendLittleEndian'
-
-// --- Little-endian scalar reads over a byte image ---
-//
-// A read past the end answers 0 rather than throwing: every caller here has already established the
-// file is a PE, and a truncated header is caught by the `runsPastEof` guard with a message that
-// names the file. A per-byte throw would push that noise through six call sites to say less.
-
-function readU16(image ByteArray, at ByteOffset) returns MachineWord
-	return byteAt(image, at: at) or (byteAt(image, at: at + 1) shl 8)
-end 'readU16'
-
-function readU32(image ByteArray, at ByteOffset) returns MachineWord
-	return readU16(image, at: at) or (readU16(image, at: at + 2) shl 16)
-end 'readU32'
-
-function byteAt(image ByteArray, at ByteOffset) returns MachineWord
-	return try image.get(at) otherwise 0
-end 'byteAt'
-
-function sliceBytes(image ByteArray, start ByteOffset, count ByteCount) returns ByteArray
-	var out = ByteArray.create()
-	for i in 0 upto count 'each'
-		out.push(try image.get(start + i) otherwise panic("sliceBytes: get OOB at {start + i} — the caller checked start+count <= image.count()"))
-	end 'each'
-	return out
-end 'sliceBytes'
 
 // --- Hex rendering for a mismatch message ---
 //

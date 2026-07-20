@@ -1,0 +1,64 @@
+// Test: rc-return-transfers-ownership
+typealias Integer = int(i64.min to i64.max)
+
+type Token
+	export var kind as Integer
+
+	static function create(kind Integer) returns Self
+		return Self{kind: kind}
+	end 'create'
+end 'Token'
+
+function makeToken(k Integer) returns Token
+	let t = Token.create(k)
+	return t
+end 'makeToken'
+
+function main() returns ExitCode
+	let tok = makeToken(99)
+	return tok.kind
+end 'main'
+---
+ExitCode: 99
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @Token.create {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 8
+    arm64.movImm x1, 0
+    arm64.bl __mm_alloc
+    arm64.storeBaseDispReg.word64 [x0 + 0], x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}
+
+func @makeToken {
+  entry:
+    arm64.prologue 16
+    arm64.bl Token.create
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 99
+    arm64.bl makeToken
+    arm64.loadRegBaseDisp.word64 x19, [x0 + 0]
+    arm64.bl __mm_decref
+    arm64.movRegReg x0, x19
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}

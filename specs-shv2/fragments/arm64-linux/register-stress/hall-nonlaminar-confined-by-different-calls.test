@@ -1,0 +1,177 @@
+// Test: hall-nonlaminar-confined-by-different-calls
+function sink(x int) returns int
+	return x
+end 'sink'
+
+function pick(k int) returns int
+	let v1 = k + 11
+	let v2 = k + 22
+	let v3 = k + 33
+	let v4 = k + 44
+	let v5 = k + 55
+	let v6 = k + 66
+	var out = 0
+	if k == 1 'b1'
+		let t = sink(1)
+		out = v1 + t
+	end 'b1' else if k == 2 'b2'
+		let t2 = sink(2)
+		out = v2 + t2
+	end 'b2' else if k == 3 'b3'
+		let t3 = sink(3)
+		out = v3 + t3
+	end 'b3' else if k == 4 'b4'
+		let t4 = sink(4)
+		out = v4 + t4
+	end 'b4' else if k == 5 'b5'
+		let t5 = sink(5)
+		out = v5 + t5
+	end 'b5' else 'b6'
+		let t6 = sink(6)
+		out = v6 + t6
+	end 'b6'
+	return out
+end 'pick'
+
+function main() returns ExitCode
+	let total = pick(1) + pick(2) + pick(3) + pick(4) + pick(5) + pick(6)
+	if total == 273 'ok'
+		return 0
+	end 'ok'
+	return 99
+end 'main'
+---
+ExitCode: 0
+---
+func @sink {
+  entry:
+    arm64.prologue 16
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @pick {
+  entry:
+    arm64.prologue 64
+    arm64.storeSlotReg slot5, x24
+    arm64.storeSlotReg slot4, x23
+    arm64.storeSlotReg slot3, x22
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.add x19, x0, 11
+    arm64.add x20, x0, 22
+    arm64.add x21, x0, 33
+    arm64.add x22, x0, 44
+    arm64.add x23, x0, 55
+    arm64.add x24, x0, 66
+    arm64.cmp x0, 1
+    arm64.cset x1, eq
+    arm64.cbnz x1, b1
+    arm64.b ifelse
+  b1:
+    arm64.movImm x0, 1
+    arm64.bl sink
+    arm64.add x0, x19, x0
+    arm64.b ifcont
+  ifelse:
+    arm64.cmp x0, 2
+    arm64.cset x1, eq
+    arm64.cbnz x1, b2
+    arm64.b ifelse
+  b2:
+    arm64.movImm x0, 2
+    arm64.bl sink
+    arm64.add x0, x20, x0
+    arm64.b ifcont
+  ifelse:
+    arm64.cmp x0, 3
+    arm64.cset x1, eq
+    arm64.cbnz x1, b3
+    arm64.b ifelse
+  b3:
+    arm64.movImm x0, 3
+    arm64.bl sink
+    arm64.add x0, x21, x0
+    arm64.b ifcont
+  ifelse:
+    arm64.cmp x0, 4
+    arm64.cset x1, eq
+    arm64.cbnz x1, b4
+    arm64.b ifelse
+  b4:
+    arm64.movImm x0, 4
+    arm64.bl sink
+    arm64.add x0, x22, x0
+    arm64.b ifcont
+  ifelse:
+    arm64.cmp x0, 5
+    arm64.cset x0, eq
+    arm64.cbnz x0, b5
+    arm64.b ifelse
+  b5:
+    arm64.movImm x0, 5
+    arm64.bl sink
+    arm64.add x0, x23, x0
+    arm64.b ifcont
+  ifelse:
+    arm64.movImm x0, 6
+    arm64.bl sink
+    arm64.add x0, x24, x0
+    arm64.b ifcont
+  ifcont:
+    arm64.b ifcont
+  ifcont:
+    arm64.b ifcont
+  ifcont:
+    arm64.b ifcont
+  ifcont:
+    arm64.b ifcont
+  ifcont:
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.loadRegSlot x22, slot3
+    arm64.loadRegSlot x23, slot4
+    arm64.loadRegSlot x24, slot5
+    arm64.epilogue 64
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 32
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 1
+    arm64.bl pick
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 2
+    arm64.bl pick
+    arm64.add x19, x19, x0
+    arm64.movImm x0, 3
+    arm64.bl pick
+    arm64.add x19, x19, x0
+    arm64.movImm x0, 4
+    arm64.bl pick
+    arm64.add x19, x19, x0
+    arm64.movImm x0, 5
+    arm64.bl pick
+    arm64.add x19, x19, x0
+    arm64.movImm x0, 6
+    arm64.bl pick
+    arm64.add x0, x19, x0
+    arm64.cmp x0, 273
+    arm64.cset x0, eq
+    arm64.cbnz x0, ok
+    arm64.b ifcont
+  ok:
+    arm64.movImm x0, 0
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 99
+    arm64.loadRegSlot x19, slot0
+    arm64.epilogue 32
+    arm64.ret
+}

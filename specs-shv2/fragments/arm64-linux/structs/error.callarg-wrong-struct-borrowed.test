@@ -1,0 +1,30 @@
+// Test: error.callarg-wrong-struct-borrowed
+typealias Integer = int(i64.min to i64.max)
+
+type BoxA
+	export var a as Integer
+
+	static function create(a Integer) returns Self
+		return Self{a: a}
+	end 'create'
+end 'BoxA'
+
+type BoxB
+	export var b as Integer
+
+	static function create(b Integer) returns Self
+		return Self{b: b}
+	end 'create'
+end 'BoxB'
+
+function readA(x BoxA) returns Integer
+	return x.a
+end 'readA'
+
+function main() returns ExitCode
+	let bb = BoxB.create(5)
+	return readA(bb) as ExitCode
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:26:9: argument type mismatch for 'x': expected 'BoxA', got 'BoxB'

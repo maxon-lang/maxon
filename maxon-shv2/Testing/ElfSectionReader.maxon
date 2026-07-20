@@ -1,0 +1,122 @@
+// Testing/ElfSectionReader.maxon — read a named section's bytes back out of a linked arm64-Linux
+// ELF executable, the third sibling of `PeSectionReader.readPeSectionData` and
+// `MachoSectionReader.readMachoSectionData`.
+//
+// It exists for the SAME reason those two do (see `PeSectionReader.maxon:1-16`): the `.data` gate is
+// the spec suite's ONLY look at what was actually LINKED, so it must read the section back out of
+// the image rather than ask the compiler what it thinks it wrote. And it is held to the same
+// discipline — it shares NO code with `Targets/Linux/ElfWriter.maxon`. The field offsets below
+// mirror the LAYOUT `writeElfSectionHeader` lays down, but nothing here calls that code. (The
+// little-endian arithmetic in `BinaryImageReader` IS shared with the other two readers, and that
+// file's header explains why sharing it costs the independence nothing.)
+//
+// THE WALK IS SHORTER THAN EITHER SIBLING'S, and one fact explains it: ELF keeps section names in a
+// SECTION of their own. There is no segment to descend into (PE nests nothing; Mach-O nests sections
+// inside `LC_SEGMENT_64`) and no name field inside the header — `e_shstrndx` names the string-table
+// section, that section's `sh_offset` is the base, and every header's `sh_name` is an offset into it.
+// So: ELF header → `.shstrtab`'s header → the section header whose name is `.data` → its
+// `sh_size` bytes at `sh_offset`.
+//
+// ⚠ IT READS `sh_size`, WHICH IS WHY `ElfWriter.ElfDataSegmentMinBytes` IS A FLOOR AND NOT A TAIL.
+// The `.data` segment is floored at 8 bytes so a program with no globals does not produce a
+// degenerate `p_filesz == 0` PT_LOAD. Had that floor been written as `preludeSize + 8` instead of
+// `max(preludeSize, 8)`, every program that HAS globals would advertise 8 bytes more `.data` than it
+// laid down — invisible to the loader, and visible to exactly this reader.
+
+// The section a top-level `var`'s image lives in — the ELF spelling, which happens to match PE's.
+// Named here rather than shared with `PeSectionReader.DataSectionName` because it is a contract with
+// `ElfWriter`'s own `.shstrtab` entry: the two formats agreeing on a name today is a coincidence of
+// convention, not a fact either writer promises the other.
+export let ElfDataSectionName = ".data"
+
+// --- ELF64 structural constants (the reader's own; see the header on why they are not shared) ---
+
+// `e_ident`: `\x7fELF` then EI_CLASS. ELFCLASS64 is the only class this reader decodes — the field
+// offsets below are the 64-bit ones, so a 32-bit image must be rejected rather than misread.
+let ElfMagic = 0x464C457F
+let ElfClassOffset = 4
+let ElfClass64 = 2
+
+// Elf64_Ehdr field offsets. `e_shoff` is the file offset of the section header table, `e_shentsize`
+// its stride, `e_shnum` its length, and `e_shstrndx` the index within it of the section-name string
+// table.
+let EhdrShoffOffset = 40
+let EhdrShentsizeOffset = 58
+let EhdrShnumOffset = 60
+let EhdrShstrndxOffset = 62
+
+// Elf64_Shdr field offsets, measured from the header's start. `sh_name` is an offset into
+// `.shstrtab`; `sh_offset` and `sh_size` are the section's FILE offset and length, carried directly
+// (ELF has no PE-style virtual/raw split).
+let ShdrNameOffset = 0
+let ShdrFileOffsetOffset = 24
+let ShdrSizeOffset = 32
+
+// Why an ELF could not be read. A union rather than an empty-array sentinel, for the same reason
+// `PeReadError` and `MachoReadError` are ones: "this image has no `.data` section" and "its `.data`
+// section is empty" are different facts, and a spec pinning an empty layout must tell them apart.
+//
+// `noSectionHeaders` is its own arm rather than a flavour of `sectionMissing`, because it is a
+// different diagnosis with a different fix: `ElfWriter.writeElfDebugSections` returns early when a
+// build produced no debug symbols, leaving a valid ELF with NO section header table at all. An image
+// in that state has not lost its `.data` — it has lost the only map this reader can read.
+export union ElfReadError implements Error
+	unreadable(path FilePath)
+	notAnElfFile(path FilePath)
+	noSectionHeaders(path FilePath)
+	sectionMissing(path FilePath, sectionName String)
+	truncated(path FilePath, sectionName String)
+
+	/// Human-readable rendering, following `PeReadError.displayReason`'s convention so every
+	/// spec-runner section-read failure reads the same way whichever format it came from.
+	export function displayReason() returns String
+		return match self 'k'
+			unreadable(path) gives "cannot open {path.toString()}"
+			notAnElfFile(path) gives "{path.toString()} is not an ELF64 image (bad magic or EI_CLASS)"
+			noSectionHeaders(path) gives "{path.toString()} has no section header table (a build with no debug symbols writes none)"
+			sectionMissing(path, sectionName) gives "{path.toString()} has no {sectionName} section"
+			truncated(path, sectionName) gives "{path.toString()}'s {sectionName} section runs past the end of the file"
+		end 'k'
+	end 'displayReason'
+end 'ElfReadError'
+
+// The bytes of the `sectionName` section of the ELF at `path`.
+export function readElfSectionData(path FilePath, sectionName String) returns ByteArray throws ElfReadError
+	let image = try File.readBinary(path) otherwise throw ElfReadError.unreadable(path)
+
+	if imageReadU32(image, at: 0) != ElfMagic or imageByteAt(image, at: ElfClassOffset) != ElfClass64 'notElf'
+		throw ElfReadError.notAnElfFile(path)
+	end 'notElf'
+
+	let sectionHeaderTable = imageReadU64(image, at: EhdrShoffOffset)
+	let sectionHeaderSize = imageReadU16(image, at: EhdrShentsizeOffset)
+	let sectionCount = imageReadU16(image, at: EhdrShnumOffset)
+	if sectionCount == 0 'noHeaders'
+		throw ElfReadError.noSectionHeaders(path)
+	end 'noHeaders'
+
+	// `.shstrtab`'s own header is found by INDEX (`e_shstrndx`), not by name — its name lives inside
+	// the table it is, so any name-first walk would have to read it to find it.
+	let shstrtabHeader = sectionHeaderTable + imageReadU16(image, at: EhdrShstrndxOffset) * sectionHeaderSize
+	let nameTableBase = imageReadU64(image, at: shstrtabHeader + ShdrFileOffsetOffset)
+
+	for i in 0 upto sectionCount 'eachSection'
+		let header = sectionHeaderTable + i * sectionHeaderSize
+		// A string-table entry is bounded only by the image, so the image's length is its bound;
+		// the walk stops at the NUL or at end-of-file, whichever comes first.
+		let name = imageNameAt(image, at: nameTableBase + imageReadU32(image, at: header + ShdrNameOffset), maxBytes: image.count())
+		if name != sectionName 'notThisSection'
+			continue
+		end 'notThisSection'
+
+		let size = imageReadU64(image, at: header + ShdrSizeOffset)
+		let fileOffset = imageReadU64(image, at: header + ShdrFileOffsetOffset)
+		if fileOffset + size > image.count() 'runsPastEof'
+			throw ElfReadError.truncated(path, sectionName: sectionName)
+		end 'runsPastEof'
+
+		return imageSlice(image, start: fileOffset, count: size)
+	end 'eachSection'
+
+	throw ElfReadError.sectionMissing(path, sectionName: sectionName)
+end 'readElfSectionData'

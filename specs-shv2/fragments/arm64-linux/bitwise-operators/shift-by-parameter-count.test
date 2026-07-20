@@ -1,0 +1,132 @@
+// Test: shift-by-parameter-count
+typealias Num = int(i64.min to i64.max)
+
+function shiftLeft(value Num, count Num) returns Num
+	return value shl count
+end 'shiftLeft'
+
+function shiftRight(value Num, count Num) returns Num
+	return value shr count
+end 'shiftRight'
+
+function main() returns ExitCode
+	if shiftLeft(7, count: 65) != 0 'shlPastWidth'
+		return 1
+	end 'shlPastWidth'
+	if shiftLeft(7, count: 3) != 56 'shlInRange'
+		return 2
+	end 'shlInRange'
+	if shiftRight(0 - 1, count: 100) != 0 - 1 'shrNegPastWidth'
+		return 3
+	end 'shrNegPastWidth'
+	if shiftRight(8, count: 100) != 0 'shrPosPastWidth'
+		return 4
+	end 'shrPosPastWidth'
+	if shiftRight(0 - 8, count: 1) != 0 - 4 'shrInRange'
+		return 5
+	end 'shrInRange'
+	return 42
+end 'main'
+---
+ExitCode: 42
+---
+func @shiftLeft {
+  entry:
+    arm64.prologue 16
+    arm64.and x2, x1, -64
+    arm64.neg x6, x2
+    arm64.orr x2, x2, x6
+    arm64.asr x2, x2, 63
+    arm64.lslv x0, x0, x1
+    arm64.mvn x1, x2
+    arm64.and x0, x0, x1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @shiftRight {
+  entry:
+    arm64.prologue 16
+    arm64.and x2, x1, -64
+    arm64.neg x6, x2
+    arm64.orr x2, x2, x6
+    arm64.asr x2, x2, 63
+    arm64.orr x1, x1, x2
+    arm64.asrv x0, x0, x1
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 7
+    arm64.movImm x1, 65
+    arm64.bl shiftLeft
+    arm64.cmp x0, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, shlPastWidth
+    arm64.b ifcont
+  shlPastWidth:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 7
+    arm64.movImm x1, 3
+    arm64.bl shiftLeft
+    arm64.cmp x0, 56
+    arm64.cset x0, ne
+    arm64.cbnz x0, shlInRange
+    arm64.b ifcont
+  shlInRange:
+    arm64.movImm x0, 2
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 0
+    arm64.sub x0, x0, 1
+    arm64.movImm x1, 100
+    arm64.bl shiftRight
+    arm64.movImm x1, 0
+    arm64.sub x1, x1, 1
+    arm64.cmp x0, x1
+    arm64.cset x0, ne
+    arm64.cbnz x0, shrNegPastWidth
+    arm64.b ifcont
+  shrNegPastWidth:
+    arm64.movImm x0, 3
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 8
+    arm64.movImm x1, 100
+    arm64.bl shiftRight
+    arm64.cmp x0, 0
+    arm64.cset x0, ne
+    arm64.cbnz x0, shrPosPastWidth
+    arm64.b ifcont
+  shrPosPastWidth:
+    arm64.movImm x0, 4
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 0
+    arm64.sub x0, x0, 8
+    arm64.movImm x1, 1
+    arm64.bl shiftRight
+    arm64.movImm x1, 0
+    arm64.sub x1, x1, 4
+    arm64.cmp x0, x1
+    arm64.cset x0, ne
+    arm64.cbnz x0, shrInRange
+    arm64.b ifcont
+  shrInRange:
+    arm64.movImm x0, 5
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 42
+    arm64.epilogue 16
+    arm64.ret
+}

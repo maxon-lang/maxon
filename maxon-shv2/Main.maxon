@@ -190,6 +190,12 @@ function runSpecTest(args MaxonArgs) returns ExitCode
 		return runPersistentWorker(compilerExe, specDir: specDir, filter: args.filter, updateRequired: args.updateRequired, effectiveTarget: effectiveTarget)
 	end 'isPoolWorker'
 
+	// Whether this host can EXECUTE what it is about to build, asked once and by the PARENT. A
+	// cross-target run whose runner is missing fails identically for every test, so discovering it
+	// per test turns one fact into hundreds of failures — and inside a worker, into a dead pipe whose
+	// real message is in another process's stderr. The workers inherit the answer by never starting.
+	requireRunnerAvailable(effectiveTarget)
+
 	let run = try runSpecPool(compilerExe, specDir: specDir, filter: args.filter, updateRequired: args.updateRequired, workerCount: args.workers, effectiveTarget: effectiveTarget) otherwise (e) 'runErr'
 		reportCompileError(e)
 		return 1

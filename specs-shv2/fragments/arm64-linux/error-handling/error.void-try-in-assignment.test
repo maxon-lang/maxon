@@ -1,0 +1,19 @@
+// Test: error.void-try-in-assignment
+// Assigning from a void-returning try call is an error
+enum MyError implements Error
+	failed
+end 'MyError'
+
+function mayFail() throws MyError
+	throw MyError.failed
+end 'mayFail'
+
+function main() returns ExitCode
+	let val = try mayFail() otherwise 'handler'
+		return 1
+	end 'handler'
+	return 0
+end 'main'
+---
+CompilerError:
+error E3059: <fragment>:12:12: type mismatch: ''mayFail' does not return a value'

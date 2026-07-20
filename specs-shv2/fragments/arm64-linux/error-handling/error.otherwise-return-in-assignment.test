@@ -1,0 +1,99 @@
+// Test: error.otherwise-return-in-assignment
+
+typealias Integer = int(i64.min to i64.max)
+
+// Single-statement otherwise: success path still yields a value
+enum MyError implements Error
+	failed
+end 'MyError'
+
+function maybeFail(flag bool) returns Integer throws MyError
+	if flag 'check'
+		throw MyError.failed
+	end 'check'
+	return 42
+end 'maybeFail'
+
+function runIt(flag bool) returns Integer
+	let value = try maybeFail(flag) otherwise return -1
+	return value
+end 'runIt'
+
+function main() returns ExitCode
+	let good = runIt(false)
+	if good == 42 'checkGood'
+		let bad = runIt(true)
+		if bad == -1 'checkBad'
+			return 7
+		end 'checkBad'
+	end 'checkGood'
+	return 0
+end 'main'
+---
+ExitCode: 7
+---
+func @maybeFail {
+  entry:
+    arm64.prologue 16
+    arm64.cbnz x0, check
+    arm64.b ifcont
+  check:
+    arm64.movImm x0, 0
+    arm64.add x9, x0, 1
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 42
+    arm64.movImm x9, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @runIt {
+  entry:
+    arm64.prologue 16
+    arm64.bl maybeFail
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x0, 1
+    arm64.neg x0, x0
+    arm64.epilogue 16
+    arm64.ret
+  tryok:
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 0
+    arm64.bl runIt
+    arm64.cmp x0, 42
+    arm64.cset x0, eq
+    arm64.cbnz x0, checkGood
+    arm64.b ifcont
+  checkGood:
+    arm64.movImm x0, 1
+    arm64.bl runIt
+    arm64.movImm x1, 1
+    arm64.neg x1, x1
+    arm64.cmp x0, x1
+    arm64.cset x0, eq
+    arm64.cbnz x0, checkBad
+    arm64.b ifcont
+  checkBad:
+    arm64.movImm x0, 7
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.b ifcont
+  ifcont:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

@@ -1,0 +1,75 @@
+// Test: error.otherwise-return
+
+typealias Integer = int(i64.min to i64.max)
+
+// Single-statement otherwise: return on error
+enum MyError implements Error
+	failed
+end 'MyError'
+
+function mayFail() returns Integer throws MyError
+	throw MyError.failed
+end 'mayFail'
+
+function runIt() returns Integer
+	let value = try mayFail() otherwise return -1
+	return value
+end 'runIt'
+
+function main() returns ExitCode
+	let v = runIt()
+	if v == -1 'check'
+		return 99
+	end 'check'
+	return 0
+end 'main'
+---
+ExitCode: 99
+---
+func @mayFail {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, 0
+    arm64.add x9, x0, 1
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @runIt {
+  entry:
+    arm64.prologue 16
+    arm64.bl mayFail
+    arm64.cmp x9, 0
+    arm64.cset x1, ne
+    arm64.cbnz x1, tryerr
+    arm64.b tryok
+  tryerr:
+    arm64.movImm x0, 1
+    arm64.neg x0, x0
+    arm64.epilogue 16
+    arm64.ret
+  tryok:
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.bl runIt
+    arm64.movImm x1, 1
+    arm64.neg x1, x1
+    arm64.cmp x0, x1
+    arm64.cset x0, eq
+    arm64.cbnz x0, check
+    arm64.b ifcont
+  check:
+    arm64.movImm x0, 99
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}

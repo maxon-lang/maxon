@@ -1,0 +1,96 @@
+// Test: if-statements.else-if-in-helper
+
+typealias Integer = int(i64.min to i64.max)
+
+function classify(x Integer) returns Integer
+	if x == 0 'zero'
+		return 0
+	end 'zero' else if x < 10 'small'
+		return 1
+	end 'small' else if x < 100 'medium'
+		return 2
+	end 'medium' else 'large'
+		return 3
+	end 'large'
+end 'classify'
+
+function main() returns ExitCode
+	let a = classify(0)
+	let b = classify(5)
+	let c = classify(50)
+	let d = classify(200)
+	return a + b * 3 + c * 9 + d * 27
+end 'main'
+---
+ExitCode: 102
+---
+func @classify {
+  entry:
+    arm64.prologue 16
+    arm64.cmp x0, 0
+    arm64.cset x1, eq
+    arm64.cbnz x1, zero
+    arm64.b ifelse
+  zero:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+  ifelse:
+    arm64.cmp x0, 10
+    arm64.cset x1, lt
+    arm64.cbnz x1, small
+    arm64.b ifelse
+  small:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+  ifelse:
+    arm64.cmp x0, 100
+    arm64.cset x0, lt
+    arm64.cbnz x0, medium
+    arm64.b ifelse
+  medium:
+    arm64.movImm x0, 2
+    arm64.epilogue 16
+    arm64.ret
+  ifelse:
+    arm64.movImm x0, 3
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+  ifcont:
+  ifcont:
+}
+
+func @main {
+  entry:
+    arm64.prologue 48
+    arm64.storeSlotReg slot2, x21
+    arm64.storeSlotReg slot1, x20
+    arm64.storeSlotReg slot0, x19
+    arm64.movImm x0, 0
+    arm64.bl classify
+    arm64.movRegReg x19, x0
+    arm64.movImm x0, 5
+    arm64.bl classify
+    arm64.movRegReg x20, x0
+    arm64.movImm x0, 50
+    arm64.bl classify
+    arm64.movRegReg x21, x0
+    arm64.movImm x0, 200
+    arm64.bl classify
+    arm64.movImm x16, 3
+    arm64.mul x1, x20, x16
+    arm64.add x1, x19, x1
+    arm64.movImm x16, 9
+    arm64.mul x2, x21, x16
+    arm64.add x1, x1, x2
+    arm64.movImm x16, 27
+    arm64.mul x0, x0, x16
+    arm64.add x0, x1, x0
+    arm64.loadRegSlot x19, slot0
+    arm64.loadRegSlot x20, slot1
+    arm64.loadRegSlot x21, slot2
+    arm64.epilogue 48
+    arm64.ret
+}

@@ -1,0 +1,100 @@
+// Test: shift-signedness-survives-a-branch
+typealias Wide = int(0 to u64.max)
+typealias Num = int(i64.min to i64.max)
+
+function afterBranch(v Wide, flag bool) returns Wide
+	if flag 'taken'
+		return v shr 60
+	end 'taken'
+	return 0
+end 'afterBranch'
+
+function insideLoop(v Wide, n Num) returns Wide
+	var acc = 0
+	var i = 0
+	while i < n 'each'
+		acc = v shr 60
+		i = i + 1
+	end 'each'
+	return acc
+end 'insideLoop'
+
+function main() returns ExitCode
+	if afterBranch(u64.max, flag: true) != 15 'branch'
+		return 1
+	end 'branch'
+	if insideLoop(u64.max, n: 3) != 15 'loop'
+		return 2
+	end 'loop'
+	return 42
+end 'main'
+---
+ExitCode: 42
+---
+func @afterBranch {
+  entry:
+    arm64.prologue 16
+    arm64.cbnz x1, taken
+    arm64.b ifcont
+  taken:
+    arm64.lsr x0, x0, 60
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 0
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @insideLoop {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x2, 0
+    arm64.movImm x6, 0
+    arm64.b whilehdr
+  whilehdr:
+    arm64.cmp x6, x1
+    arm64.cset x7, lt
+    arm64.cbnz x7, each
+    arm64.b whileexit
+  each:
+    arm64.lsr x2, x0, 60
+    arm64.add x6, x6, 1
+    arm64.b whilehdr
+  whileexit:
+    arm64.movRegReg x0, x2
+    arm64.epilogue 16
+    arm64.ret
+}
+
+func @main {
+  entry:
+    arm64.prologue 16
+    arm64.movImm x0, -1
+    arm64.movImm x1, 1
+    arm64.bl afterBranch
+    arm64.cmp x0, 15
+    arm64.cset x0, ne
+    arm64.cbnz x0, branch
+    arm64.b ifcont
+  branch:
+    arm64.movImm x0, 1
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, -1
+    arm64.movImm x1, 3
+    arm64.bl insideLoop
+    arm64.cmp x0, 15
+    arm64.cset x0, ne
+    arm64.cbnz x0, loop
+    arm64.b ifcont
+  loop:
+    arm64.movImm x0, 2
+    arm64.epilogue 16
+    arm64.ret
+  ifcont:
+    arm64.movImm x0, 42
+    arm64.epilogue 16
+    arm64.ret
+}
