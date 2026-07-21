@@ -25,7 +25,10 @@ A `match` handles two owned heap values whose lifetime the arms decide:
   is therefore not dropped on the arm's edge nor in the post-match drain. When the
   arms disagree (one owned give, one borrowed literal) the borrowed give is promoted
   to an owned copy so the phi is uniformly owned and its consumer drops it
-  unconditionally.
+  unconditionally. A borrowed **non-text aggregate** give (a struct or boxed-union
+  field read) has no such copy — the same boundary that refuses `return <borrowed
+  aggregate>` — so a match that merges one into an owned result is refused at parse
+  (E2015), exactly as the equivalent ternary is (OPEN #14).
 
 Every case below is leak-free (a leak is exit 101) and crash-free (a double-free is
 `0xC0000005`).
@@ -258,4 +261,82 @@ end 'main'
 ```
 ```stdout
 temporary scrutinee payload long enough to heap
+```
+
+<!-- test: match-borrowed-aggregate-give-refused -->
+A `match … gives` whose arms merge a BORROWED aggregate give (`e.kind`, a field read of a
+borrowed struct parameter) with an OWNED one (`remapKind(e.kind)`, a fresh call result) is the
+same leak the equivalent ternary hits: the owned result phi would free the borrowed box while
+its real owner frees it too. shv2 has no cheap copy for a borrowed aggregate, so the construct
+is refused cleanly at parse (E2015), reported at the `match` — the shared merge, so the ternary
+and the match reject through the same code (OPEN #14).
+```maxon
+typealias Id = int(0 to 1000)
+
+union Kind
+	none
+	value(inner Id)
+end 'Kind'
+
+type Entry
+	export var kind as Kind
+
+	static function create(kind Kind) returns Self
+		return Self{kind: kind}
+	end 'create'
+end 'Entry'
+
+function remapKind(k Kind) returns Kind
+	return match k 'r'
+		none gives Kind.none
+		value(inner) gives Kind.value(inner + 1)
+	end 'r'
+end 'remapKind'
+
+function chooseKind(e Entry, sel Id) returns Kind
+	return match sel 'c'
+		0 gives e.kind
+		default gives remapKind(e.kind)
+	end 'c'
+end 'chooseKind'
+
+function record(k Kind) returns Id
+	return match k 'r'
+		none gives 0
+		value(inner) gives inner
+	end 'r'
+end 'record'
+
+function main() returns ExitCode
+	let e = Entry.create(Kind.value(3))
+	let n = record(chooseKind(e, sel: 0))
+	print("{n}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: specs/fragments/match-owned-value-flow/match-borrowed-aggregate-give-refused.test:25:9: Unsupported: a match or conditional arm that gives a borrowed `Kind` value while another arm gives an OWNED one — the merged result would adopt and free the borrowed struct/union box while the borrow's own owner frees it too, a double free. Give an OWNED value on every arm; consuming or copying a borrowed aggregate to give it arrives with cross-call consume
+```
+
+<!-- test: gives-owned-string-arm-undeclared-call -->
+An owned interpolation give in one arm makes the result phi owned, so the other arm is routed
+through the borrowed-give promotion. Here that arm is an UNDECLARED call — an UNRESOLVED give that
+is neither a String to promote nor an aggregate to refuse. The merge must DEFER it so semantic
+analysis reports the real `E3004`, never a parser panic. (Twin of the ternary regression guard:
+the shared `promoteBorrowedGive` must not crash on an unresolved give.)
+```maxon
+function pick(x int, c bool) returns String
+	return match c 'm'
+		true gives "{x}"
+		default gives undefinedThing()
+	end 'm'
+end 'pick'
+
+function main() returns ExitCode
+	let s = pick(5, c: true)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3004: specs/fragments/match-owned-value-flow/gives-owned-string-arm-undeclared-call.test:5:17: call to undefined function 'undefinedThing'
 ```

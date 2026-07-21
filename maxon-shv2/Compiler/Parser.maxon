@@ -3885,12 +3885,24 @@ export type Parser
 	end 'bindClosureEnvParams'
 
 	// Is `value` a managed HEAP value — a struct box, a String, or a boxed union — the kinds a consumed
-	// parameter can own (and this function must drop) and a consumed argument must transfer? Mirrors
-	// `mintOwnedCallResult`'s adoption test: a ranged-alias / `int` / `bool` owns no heap.
+	// parameter can own (and this function must drop) and a consumed argument must transfer? A ranged-alias /
+	// `int` / `bool` owns no heap. This is the one owned-temp adoption test, so `mintOwnedCallResult` routes
+	// through it rather than re-spelling the three tags. A managed heap value is a String (text) or a non-text
+	// aggregate, so it is derived from `valueIsNonTextAggregate` to keep the aggregate half stated once.
 	function valueIsManagedHeap(value ValueId) returns bool
-		let tag = self.tagOf(value)
-		return tagIsText(tag) or tagIsStructRef(tag) or self.valueIsBoxedUnion(value)
+		return tagIsText(self.tagOf(value)) or self.valueIsNonTextAggregate(value)
 	end 'valueIsManagedHeap'
+
+	// Is `value` a managed heap AGGREGATE — a struct box or a boxed union — but NOT a String? This is the
+	// boundary a BORROWED value cannot cross as owned: unlike a String (which promotes with the fused-record
+	// blit `promoteToOwnedString`), an aggregate has no cheap owning copy — shv2 has neither `__mm_incref`
+	// nor an aggregate deep-copy — so handing one off as owned would give two owners one box (a double free).
+	// Named once because two refusals draw exactly this line: `return <borrowed aggregate>`
+	// (`emitOwnedValueReturn`) and a borrowed-aggregate `gives`/ternary arm merged into an owned result phi
+	// (`promoteBorrowedGive`). Both wait on the same cross-call consume (P1.5).
+	function valueIsNonTextAggregate(value ValueId) returns bool
+		return tagIsStructRef(self.tagOf(value)) or self.valueIsBoxedUnion(value)
+	end 'valueIsNonTextAggregate'
 
 	// `returns <Type>` or nothing (void). The return type flows to the registry
 	// (for SemanticCheck) and to lowering (via the function signature).
@@ -4969,7 +4981,7 @@ export type Parser
 		end 'promoteBorrowed'
 
 		let returnedTag = self.tagOf(returned)
-		if (tagIsStructRef(returnedTag) or self.valueIsBoxedUnion(returned)) and not self.valueIsOwnedHeap(returned) 'borrowedAggregateReturn'
+		if self.valueIsNonTextAggregate(returned) and not self.valueIsOwnedHeap(returned) 'borrowedAggregateReturn'
 			throw ParseError.unsupported("returning a borrowed `{typeTagName(returnedTag)}` value — a struct/union parameter (or a re-borrow of one) is a heap box the caller would adopt and free while the borrow's own owner frees it too, a double free. Return an OWNED value; consuming or copying a borrowed aggregate to return it arrives at P1.4b", line: anchor.line, column: anchor.column)
 		end 'borrowedAggregateReturn'
 
@@ -7603,7 +7615,7 @@ export type Parser
 		// gives an owned value the phi stays borrowed, exactly as before. `finalGives` carries each reaching
 		// arm's post-promotion give value (empty for a statement match), used below for the phi and the edges.
 		var finalGives = ValueIdArray.create()
-		let resultOwned = self.resolveGivesOwnership(reachingArms, isExpression: isExpression, matchTok: matchTok, finalGives: finalGives)
+		let resultOwned = try self.resolveGivesOwnership(reachingArms, isExpression: isExpression, matchTok: matchTok, finalGives: finalGives)
 
 		// ⭐ **CONDITIONAL MOVE RECONCILED across the reaching arms** — an owned binding moved in one arm and
 		// left live in another is dropped on the live arms' exit blocks (all reaching arms are unterminated)
@@ -7735,14 +7747,15 @@ export type Parser
 
 	// Decide whether an expression match's result phi OWNS its value, and make every arm's give owned so it
 	// does. The phi is owned iff any reaching arm gives an owned value (`finalizeMatchMerge` then marks it an
-	// owned temp); when it is, each arm that gives a BORROWED value (a String literal) is promoted to an
-	// owned copy so the phi is uniformly owned across all edges. A statement match, or an expression match
-	// whose arms all give scalars / immortal rdata, keeps a borrowed phi (returns false).
+	// owned temp); when it is, each arm that gives a BORROWED value is made owned by `promoteBorrowedGive`
+	// (a borrowed String is copied; a borrowed non-text aggregate has no cheap copy and is E2015-refused)
+	// so the phi is uniformly owned across all edges. A statement match, or an expression match whose arms
+	// all give scalars / immortal rdata, keeps a borrowed phi (returns false).
 	//
 	// The per-arm give value the merge should use — after any promotion — is collected into `finalGives`
 	// (one entry per reaching arm, in order) rather than written back onto the `MatchArmExit`, so nothing
 	// here mutates the arm records the caller still reads. `finalGives` is empty for a statement match.
-	function resolveGivesOwnership(reachingArms MatchArmExitArray, isExpression bool, matchTok Token, finalGives ValueIdArray) returns bool
+	function resolveGivesOwnership(reachingArms MatchArmExitArray, isExpression bool, matchTok Token, finalGives ValueIdArray) returns bool throws ParseError
 		if not isExpression 'statementMatch'
 			return false
 		end 'statementMatch'
@@ -7760,7 +7773,7 @@ export type Parser
 			let a = try reachingArms.get(i) otherwise panic("resolveGivesOwnership: reachingArms.get OOB at {i}")
 			let give = self.giveValueOf(a.give)
 			if resultOwned and not self.valueIsOwnedHeap(give) 'promoteBorrowed'
-				finalGives.push(self.promoteBorrowedGive(give, arm: a, matchTok: matchTok))
+				finalGives.push(try self.promoteBorrowedGive(give, arm: a, matchTok: matchTok))
 			end 'promoteBorrowed' else 'keepGive'
 				finalGives.push(give)
 			end 'keepGive'
@@ -7769,23 +7782,53 @@ export type Parser
 		return resultOwned
 	end 'resolveGivesOwnership'
 
-	// Promote a BORROWED `gives` value to an owned heap copy in its own arm's exit block, so a match whose
-	// OTHER arms give owned values has a uniformly-owned result phi its consumer can drop unconditionally.
-	// Only a String is promotable (a struct give is always owned; a scalar never co-occurs with an owned
-	// give in well-typed code), so a non-String borrowed give — a give-type mismatch the type system will
-	// reject — is left as-is rather than mis-promoted. The copy is the SAME fused-record blit a borrowed
-	// `return`/`var` makes (`promoteToOwnedString`), emitted into the arm's still-unterminated exit block;
-	// it is a fresh owned temp the arm hands straight to the phi, so it leaves the pending list at once.
-	function promoteBorrowedGive(give ValueId, arm MatchArmExit, matchTok Token) returns ValueId
-		if not tagIsText(self.tagOf(give)) 'notText'
+	// Make a BORROWED `gives` value owned so a match/conditional whose OTHER arms give owned values has a
+	// uniformly-owned result phi its consumer can drop unconditionally. A borrowed STRING is copied — the
+	// SAME fused-record blit a borrowed `return`/`var` makes (`promoteToOwnedString`), emitted into the
+	// arm's still-unterminated exit block; it is a fresh owned temp the arm hands straight to the phi, so it
+	// leaves the pending list at once.
+	//
+	// A borrowed non-text AGGREGATE (a struct box or a boxed union — a field read, or a re-borrowed param)
+	// has NO cheap promotion: shv2 has neither `__mm_incref` nor an aggregate deep-copy, exactly the
+	// boundary that already E2015-refuses `return <borrowed aggregate>` (`emitOwnedValueReturn`). Left
+	// unpromoted it would hand the owned phi a box it does not own, and the phi's single drop double-frees
+	// the box the borrow's real owner also frees — a leak/UAF (OPEN #14, reachable via a `match … gives`
+	// arm AND a ternary arm alike). So it is REFUSED here (E2015), not returned unpromoted: every program
+	// this rejects currently leaks (exit 101), so the refusal cannot break a passing one.
+	//
+	// An UNRESOLVED give reaches here too, and is DEFERRED, not refused: a give whose type could not be
+	// pinned at parse is a call NO file declares (`mintCallResult` defers rather than throwing), and
+	// `checkGiveTypes` let it through because `typesAgree` lets `unresolved` agree with anything and its
+	// `aggregateNameOf` is empty. The program is doomed — SemanticCheck rejects the undeclared call (E3004)
+	// before any codegen, so the phi's ownership never matters — so the give is left unpromoted (the pre-#14
+	// behavior) to let the real diagnostic surface instead of a parser panic. A RESOLVED scalar give cannot
+	// reach here: `checkGiveTypes` rejects a resolved scalar arm mixed with an owned aggregate/String give,
+	// so it is a parser invariant break.
+	function promoteBorrowedGive(give ValueId, arm MatchArmExit, matchTok Token) returns ValueId throws ParseError
+		let giveTag = self.tagOf(give)
+		if tagIsText(giveTag) 'text'
+			let saved = self.currentBlock
+			self.currentBlock = arm.exitBlock
+			let owned = self.promoteToOwnedString(give, range: SourceRange.ofToken(matchTok))
+			self.removeFromPendingTemps(owned)
+			self.currentBlock = saved
+			return owned
+		end 'text'
+
+		if self.valueIsNonTextAggregate(give) 'borrowedAggregate'
+			// `named` is the boxed-union tag whose `typeTagName` reads as a bare `int` (it is erased to one
+			// later), so the aggregate's real name comes from the registry via `aggregateNameOf` — the same
+			// column `checkGiveTypes` names a give by. Non-empty for both throwing shapes (a struct's name, a
+			// registered union's name), so the interpolation always names the declared aggregate.
+			let aggregateName = self.aggregateNameOf(giveTag, nameId: self.valueNameId(give))
+			throw ParseError.unsupported("a match or conditional arm that gives a borrowed `{String.from(aggregateName)}` value while another arm gives an OWNED one — the merged result would adopt and free the borrowed struct/union box while the borrow's own owner frees it too, a double free. Give an OWNED value on every arm; consuming or copying a borrowed aggregate to give it arrives with cross-call consume", line: matchTok.line, column: matchTok.column)
+		end 'borrowedAggregate'
+
+		if tagIsUnresolved(giveTag) 'deferredCallError'
 			return give
-		end 'notText'
-		let saved = self.currentBlock
-		self.currentBlock = arm.exitBlock
-		let owned = self.promoteToOwnedString(give, range: SourceRange.ofToken(matchTok))
-		self.removeFromPendingTemps(owned)
-		self.currentBlock = saved
-		return owned
+		end 'deferredCallError'
+
+		panic("promoteBorrowedGive: a RESOLVED borrowed scalar give reached an OWNED result phi — checkGiveTypes rejects a resolved scalar mixed with an owned aggregate/String give, and an unresolved give is deferred above, so this is unreachable")
 	end 'promoteBorrowedGive'
 
 	// Emit one arm's pattern as a single boolean condition, OR-folding the alternatives (`1 or 2 or
@@ -12914,8 +12957,7 @@ export type Parser
 		// result of a `returns Float` callee binds a `float` (XMM) value that `trunc` truncates and `return`
 		// moves cleanly, rather than a `named` value the tag says is an int while the backend files it in XMM.
 		let result = self.mintValueOfType(self.resolveFunctionAlias(self.resolveFloatAliasType(self.resolveNamedStruct(inner))))
-		let tag = self.tagOf(result)
-		if tagIsText(tag) or tagIsStructRef(tag) or self.valueIsBoxedUnion(result) 'adoptsHeapBox'
+		if self.valueIsManagedHeap(result) 'adoptsHeapBox'
 			self.trackOwnedTemp(result)
 		end 'adoptsHeapBox'
 		return result
