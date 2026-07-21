@@ -165,6 +165,29 @@ let OrbMachineName = "maxon-linux"
 // Linux image. See `requireOrbMachineReachable`.
 let OrbProbeCommand = "true"
 
+// --- WSL: the x64-linux runner (Windows host) ---
+//
+// `wsl --cd <windows-dir> -e ./<exe>` runs a static x86-64 ELF under WSL2's genuine Linux kernel — the
+// Windows twin of the OrbStack path. Because WSL2 is a real kernel, a static, raw-syscall ELF (no libc,
+// no dynamic linker) runs with NOTHING installed inside the distro. Two facts shape the invocation:
+//   * `--cd <dir>` is handed the parent directory as a RAW Windows path (`C:\...`); WSL translates it
+//     to its `/mnt/<drive>/...` mirror itself, so this runner carries no `/mnt` mapping of its own and
+//     is robust to a non-default automount root. The binary is then named `./<exe>` relative to that
+//     cwd — a bare name would be a guest PATH lookup instead.
+//   * `-e` execs the command directly (no login shell), and exit codes propagate unchanged
+//     (`wsl -e ./false` → 1, `./true` → 0, verified) — which is exactly what `checkRun` reads.
+// `wsl` is a SYSTEM install located by PATH (CreateProcessW + PATHEXT resolves `wsl`→`wsl.exe`), so it
+// is `Executable.name`, the same as `orb` and for the same reason.
+let WslExecutableName = "wsl"
+let WslCwdFlag = "--cd"
+let WslExecFlag = "-e"
+// A binary named relative to the `--cd` directory; WSL resolves `./name` against the translated cwd.
+let WslRelativePrefix = "./"
+// coreutils' no-op at its absolute path — `-e` execs the given command with no shell PATH search, so
+// the probe names `/bin/true` outright. The cheapest command that proves WSL is installed and a distro
+// can execute a binary. See `requireWslAvailable`.
+let WslProbeCommand = "/bin/true"
+
 typealias FilePathArray = Array with FilePath
 
 // PASS, or FAIL carrying a human-readable reason. A union (not a `bool` + a
@@ -858,7 +881,8 @@ end 'RunCommand'
 // Anything else needs a program that knows how to run it, and WHICH program is a property of the
 // target's OS:
 //   * `wasi`  — a `.wasm` COMPONENT, run under the vendored wasmtime.
-//   * `linux` — a static aarch64 ELF, run inside an OrbStack Linux VM.
+//   * `linux` — a static ELF, run under WSL (from a Windows host) or an OrbStack Linux VM (from a
+//               macOS host). WHICH one is a property of the HOST, not the target — see `externalRunnerFor`.
 //
 // ⚠ THIS UNION IS WHY THE TABLE IS WRITTEN ONCE. Two callers ask the OS the same question in
 // different words — `buildRunCommand` turns the answer into a command, `requireRunnerAvailable`
@@ -871,22 +895,39 @@ end 'RunCommand'
 union ExternalRunner
 	wasmtime
 	orbstack
+	wsl
 end 'ExternalRunner'
 
 // Which external runner executes a binary built for `target`. The one table, per the note above.
 //
 // EXHAUSTIVE over `Os`, with no bare `default`: a host that cannot run its own target's binaries is
-// a contradiction, so the two remaining arms are reachable only by cross-compiling to an OS this
+// a contradiction, so the `windows`/`macos` arms are reachable only by cross-compiling to an OS this
 // harness has no runner for. They panic naming both targets rather than spawning an executable the
-// kernel will refuse in some less legible way.
+// kernel will refuse in some less legible way. The `linux` arm is the one place `target.os` alone is
+// NOT the answer: a Linux ELF runs under WSL from Windows and OrbStack from macOS, so it defers to the
+// host (`linuxRunnerForHost`).
 function externalRunnerFor(target Target) returns ExternalRunner
 	return match target.os 'runner'
 		wasi gives ExternalRunner.wasmtime
-		linux gives ExternalRunner.orbstack
+		linux gives linuxRunnerForHost()
 		windows panic("SpecTestRunner: no runner for a {targetToString(target)} binary on a {targetToString(detectHostTarget())} host — a PE can only be spawned on Windows, so this suite must run its tests on that host")
 		macos panic("SpecTestRunner: no runner for a {targetToString(target)} binary on a {targetToString(detectHostTarget())} host — a Mach-O can only be spawned on macOS, so this suite must run its tests on that host")
 	end 'runner'
 end 'externalRunnerFor'
+
+// The runner for a Linux ELF, chosen by the HOST rather than the target: a Linux target is not one
+// thing to run but two ways to run it — WSL on a Windows host, an OrbStack VM on a macOS host. A Linux
+// host runs its own-CPU Linux binaries natively (`needsExternalRunner` is false there), and a
+// cross-CPU Linux target from a Linux host has no runner in this harness. `wasi` is never a host OS
+// (`detectHostTarget` returns only windows/macos/linux), so that arm is unreachable and says so.
+function linuxRunnerForHost() returns ExternalRunner
+	return match detectHostTarget().os 'host'
+		windows gives ExternalRunner.wsl
+		macos gives ExternalRunner.orbstack
+		linux panic("SpecTestRunner: a Linux ELF for a foreign CPU cannot be run from a Linux host by this harness (host {targetToString(detectHostTarget())}) — run the suite on a host whose CPU matches the target")
+		wasi panic("SpecTestRunner: 'wasi' is not a host OS — detectHostTarget never returns it, so this arm is unreachable")
+	end 'host'
+end 'linuxRunnerForHost'
 
 // How to execute the binary the build just produced.
 //
@@ -902,6 +943,7 @@ function buildRunCommand(modulePath FilePath, effectiveTarget Target) returns Ru
 	return match externalRunnerFor(effectiveTarget) 'runner'
 		wasmtime gives buildWasmRunCommand(modulePath)
 		orbstack gives buildLinuxVmRunCommand(modulePath)
+		wsl gives buildWslRunCommand(modulePath)
 	end 'runner'
 end 'buildRunCommand'
 
@@ -970,6 +1012,27 @@ function buildLinuxVmRunCommand(exePath FilePath) returns RunCommand
 	return RunCommand.create(Executable.name(OrbExecutableName), argv: argv)
 end 'buildLinuxVmRunCommand'
 
+// `wsl --cd <windows-dir> -e ./<exe>` — run a static x86-64 ELF under WSL2. See the WSL constants block.
+//
+// The exe is made ABSOLUTE first (as the orb path does), then SPLIT: `--cd` takes the parent DIRECTORY
+// as a raw Windows path (WSL translates it to `/mnt/...` itself), and the binary is named `./<fileName>`
+// relative to that cwd. Splitting this way keeps the runner out of the business of translating a full
+// Windows path in-process — WSL owns that mapping — so it carries no assumption about the automount root.
+//
+// A missing WSL is caught ONCE, up front, by `requireRunnerAvailable` — not here, per test.
+function buildWslRunCommand(exePath FilePath) returns RunCommand
+	let absPath = exePath.resolve(Directory.currentPath())
+	let dir = try absPath.parent() otherwise panic("buildWslRunCommand: the built exe path '{absPath}' has no parent directory — every compiled test binary lives under the per-spec scratch dir, which always has one")
+
+	var argv = StringArray.create()
+	argv.push(WslCwdFlag)
+	argv.push(dir.toString())
+	argv.push(WslExecFlag)
+	argv.push("{WslRelativePrefix}{absPath.filename()}")
+
+	return RunCommand.create(Executable.name(WslExecutableName), argv: argv)
+end 'buildWslRunCommand'
+
 // ⭐ CAN THIS HOST EXECUTE BINARIES BUILT FOR `effectiveTarget` AT ALL? Asked ONCE, by the parent,
 // before a single worker is spawned.
 //
@@ -990,6 +1053,7 @@ export function requireRunnerAvailable(effectiveTarget Target)
 	match externalRunnerFor(effectiveTarget) 'runner'
 		wasmtime then _ = findWasmtimePath()
 		orbstack then requireOrbMachineReachable()
+		wsl then requireWslAvailable()
 	end 'runner'
 end 'requireRunnerAvailable'
 
@@ -1021,6 +1085,27 @@ function requireOrbMachineReachable()
 		panic("SpecTestRunner: '{OrbExecutableName} {OrbRunSubcommand} {OrbMachineFlag} {OrbMachineName} {OrbProbeCommand}' failed (exit {probe.exitCode}): {probe.stderr.trim()} — the {orbTargetKey} run path needs an OrbStack Linux machine named '{OrbMachineName}' (`orb create ubuntu {OrbMachineName}`)")
 	end 'machineUnreachable'
 end 'requireOrbMachineReachable'
+
+// Probe WSL by running the smallest possible command through it: `wsl -e /bin/true`. Like the orb
+// probe it answers two questions in one spawn — is `wsl` installed, and can a distro execute a binary
+// — each with its own fix. A static raw-syscall ELF needs nothing installed inside the distro, so a
+// reachable distro that runs `/bin/true` is proof enough the suite's binaries will run. The target key
+// is DERIVED from a `Target`, never spelled literally — the same discipline the orb probe follows.
+function requireWslAvailable()
+	let wslTargetKey = targetToString(Target.create(CpuArch.x64, os: Os.linux))
+
+	var argv = StringArray.create()
+	argv.push(WslExecFlag)
+	argv.push(WslProbeCommand)
+
+	let probe = try runProcess(Executable.name(WslExecutableName), argv: argv) otherwise (e) 'notInstalled'
+		panic("SpecTestRunner: could not run '{WslExecutableName}' ({e.displayReason()}) — running a {wslTargetKey} binary from a Windows host needs WSL2 (`wsl --install`); install it, or drop {TargetFlagPrefix}{wslTargetKey} and run the suite for this host")
+	end 'notInstalled'
+
+	if probe.exitCode != 0 'distroUnreachable'
+		panic("SpecTestRunner: '{WslExecutableName} {WslExecFlag} {WslProbeCommand}' failed (exit {probe.exitCode}): {probe.stderr.trim()} — the {wslTargetKey} run path needs a working WSL2 distribution (`wsl --install`, then confirm `wsl -e /bin/true` exits 0)")
+	end 'distroUnreachable'
+end 'requireWslAvailable'
 
 // A RUN test (an ```exitcode block, plus the ```stderr / ```stdout blocks that may accompany it): the
 // compile MUST succeed, then the produced exe is spawned and EVERY half of the expectation is checked

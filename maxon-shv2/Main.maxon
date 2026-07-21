@@ -68,7 +68,7 @@ end 'TargetResolution'
 // accepting a spelling the compiler cannot name back. A spec that names none of them
 // is rejected; the list grows as backends land.
 function parseBuildTarget(spec String) returns TargetResolution
-	let supported = [Target.create(CpuArch.x64, os: Os.windows), Target.create(CpuArch.arm64, os: Os.macos), Target.create(CpuArch.arm64, os: Os.linux), Target.create(CpuArch.wasm32, os: Os.wasi)]
+	let supported = [Target.create(CpuArch.x64, os: Os.windows), Target.create(CpuArch.x64, os: Os.linux), Target.create(CpuArch.arm64, os: Os.macos), Target.create(CpuArch.arm64, os: Os.linux), Target.create(CpuArch.wasm32, os: Os.wasi)]
 	for candidate in supported 'each'
 		if targetToString(candidate) == spec 'match'
 			return TargetResolution.resolved(candidate)
@@ -92,7 +92,7 @@ end 'resolveTargetFlag'
 // build command returns directly. Separate from the match arm because a match arm
 // is one statement, and this one both prints and yields the code.
 function reportUnknownTarget(spec String) returns ExitCode
-	printError("error: unknown --target '{spec}' (expected e.g. x64-windows or arm64-macos)\n")
+	printError("error: unknown --target '{spec}' (expected e.g. x64-windows, x64-linux or arm64-macos)\n")
 	return 1
 end 'reportUnknownTarget'
 
@@ -333,7 +333,7 @@ function printUsage()
 	print("  -o, --output=<path>           Output executable path (default: derived from input)\n")
 	print("  --emit-ir                     Also write the lowered Target IR beside the exe as <output>.ir\n")
 	print("  --target=<cpu>-<os>           (build, spec-test) Use this target instead of the host, e.g.\n")
-	print("                                x64-windows, arm64-macos or wasm32-wasi (default: the host\n")
+	print("                                x64-windows, x64-linux, arm64-macos or wasm32-wasi (default: the host\n")
 	print("                                target). For spec-test a cross target cross-compiles each\n")
 	print("                                selected test and runs it under the vendored runtime.\n")
 	print("  --metrics=<path>              (build) Write this compile's per-phase time + memory\n")
