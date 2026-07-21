@@ -631,6 +631,14 @@ type MaxonToStdLowering
 	// slotting `match` uses statement arms (a panic on a mis-slotting SemanticCheck should have gated), the
 	// same shape `lowerCall` uses.
 	function emitAsyncSpawn(result ValueId, callee ByteArray, argIds ValueIdArray, dstBlock IrBlock)
+		// The buffer is a FIXED MaxAsyncArgs slots; one store per argument at `k * GtArgSlotBytes`. A callee with
+		// more parameters than that would store PAST the buffer (MaxAsyncArgs currently equals the parser's
+		// MaxRegisterParams cap, so this cannot fire today) — guard it so a future cap divergence is a compile
+		// panic here, not a silent slab overrun the trampoline then mis-loads.
+		if argIds.count() > MaxAsyncArgs 'overflow'
+			panic("emitAsyncSpawn: async callee '{String.from(callee)}' has {argIds.count()} arguments but the argument buffer holds only MaxAsyncArgs ({MaxAsyncArgs}) slots — the parser's parameter cap and MaxAsyncArgs have diverged")
+		end 'overflow'
+
 		// argBuf = __slab_alloc(ArgBufBytes) — a fixed MaxAsyncArgs-slot buffer (slab-zeroed, so the slots the
 		// call does not fill stay zero, which the trampoline harmlessly loads into unread argument registers).
 		let sizeId = self.mintStdValueId()

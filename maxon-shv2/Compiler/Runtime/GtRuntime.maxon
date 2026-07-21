@@ -65,14 +65,15 @@ export let GtStatusCompleted = 2
 // The green-thread stack: a fixed 1 MiB region (see the header note on morestack).
 export let GtStackSize = 0x100000
 
-// The saved-register frame `__gt_context_switch` builds on a GT stack: five callee-saved GPRs
-// (rbx, r12, r13, r14, r15 — shv2's callee-saved set, `RegisterAllocator.calleeSavedMask`) plus the
-// return-address slot = 6 words = 48 bytes. `__gt_spawn` lays a fresh such frame whose TOP word is
-// `&__gt_trampoline`, so the first switch-in's final `ret` enters the trampoline. It MUST byte-match the
-// context switch's push/pop order — a mismatch is a wild `ret` — which is why the count lives here, read
-// by both the frame layout below and (implicitly) the hand-assembled switch.
-let GtSwitchFramePushBytes = 40  // 5 callee-saved GPR words
-export let GtInitialFrameBytes = 48  // + the return-address word
+// The saved-register frame `__gt_context_switch` builds on a GT stack: the five callee-saved GPRs
+// (rbx, r12, r13, r14, r15 — shv2's callee-saved set, `RegisterAllocator.calleeSavedMask`, spelled once as
+// `calleeSavedOrder` in X64PrologueEpilogue) plus the return-address slot = 6 words = 48 bytes. `__gt_spawn`
+// lays a fresh such frame whose TOP word is `&__gt_trampoline`, so the first switch-in's final `ret` enters
+// the trampoline. It MUST byte-match the context switch's push/pop order — a mismatch is a wild `ret` — so the
+// Target tier's `assertGtFrameConsistent` (X64GtRuntime) CHECKS this constant against `calleeSavedOrder.count()`
+// at chunk-build time; if a callee-saved register is added there without moving this number, an async compile
+// panics rather than miscompiling.
+export let GtInitialFrameBytes = 48  // 5 callee-saved words + the return-address word (checked in X64GtRuntime)
 
 // The argument buffer holds MaxAsyncArgs i64 slots. The trampoline loads ALL of them into the GPR
 // argument registers unconditionally (a callee reads only the slots it declares; the rest are the

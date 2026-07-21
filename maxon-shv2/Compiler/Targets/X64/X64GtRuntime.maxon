@@ -16,11 +16,12 @@
 // it must preserve precisely what any call preserves, no more (rsi/rdi/rax are ARGUMENT registers here, hence
 // caller-saved, hence NOT saved — the one place shv2's ABI diverges from v1's, whose rsi/rdi are callee-saved).
 
-// The callee-saved GPRs the context switch saves and restores, in push order. The pop order is the exact
-// reverse. This ORDER is the contract `__gt_spawn`'s initial frame layout byte-matches: `GtInitialFrameBytes`
-// = these five words + the return-address word, and the trampoline address sits in that top word so the
-// first switch-in's `ret` enters the trampoline.
-let GtCalleeSavedPushOrder = [X64Register.rbx, X64Register.r12, X64Register.r13, X64Register.r14, X64Register.r15]
+// The callee-saved GPRs the context switch saves and restores, in push order (pop order is the exact
+// reverse) — the SAME `calleeSavedOrder` the ordinary prologue/epilogue pushes (X64PrologueEpilogue), so the
+// switch preserves EXACTLY what any call preserves, from one shared list rather than a second copy. This
+// ORDER is the contract `__gt_spawn`'s initial frame layout byte-matches: `GtInitialFrameBytes` = these words
+// + the return-address word, and the trampoline address sits in that top word so the first switch-in's `ret`
+// enters the trampoline. `assertGtFrameConsistent` (below) enforces that byte-match at chunk-build time.
 
 // The register the context switch reads `from` (arg 0) and `to` (arg 1) from — the ABI's first two integer
 // argument registers. `to` rides through UNMODIFIED so a fresh GT's trampoline reads its GT from rdx.
@@ -34,14 +35,30 @@ let GtTrampGtReg = X64Register.r12
 let GtTrampArgBufReg = X64Register.r10
 let GtTrampFuncPtrReg = X64Register.r11
 
+// ⭐ Enforce the ONE fact the Std-tier frame builder (`__gt_spawn` in GtRuntime, which lays `GtInitialFrameBytes`)
+// and this Target-tier byte code SHARE: a fresh GT's initial context-switch frame is `calleeSavedOrder.count()`
+// callee-saved words + one return-address word, each an 8-byte machine word (`GtArgSlotBytes`, the file's i64
+// word size). If a callee-saved register is added to or removed from `calleeSavedOrder` without moving
+// `GtInitialFrameBytes` in lockstep, the first switch-in pops the wrong number of words and `ret`s into a WILD
+// address. This turns that silent cross-tier drift into a compile-time panic on every async compile — a CHECK
+// where the two sides were previously tied only by a comment (feedback: DERIVE > CHECK > COMMENT).
+function assertGtFrameConsistent()
+	let framedBytes = (calleeSavedOrder.count() + 1) * GtArgSlotBytes
+
+	if framedBytes != GtInitialFrameBytes 'drift'
+		panic("GT frame drift: the context switch saves {calleeSavedOrder.count()} callee-saved words + 1 return-address word = {framedBytes} bytes, but GtInitialFrameBytes (the frame __gt_spawn lays) is {GtInitialFrameBytes} — a mismatch is a wild ret on the first switch-in")
+	end 'drift'
+end 'assertGtFrameConsistent'
+
 // `__gt_context_switch(from = rcx, to = rdx)` — save the current GT's callee-saved register + rsp/rbp state
 // into `from`, restore `to`'s, and `ret` into `to`'s saved return address (a resumed GT's await-loop
 // continuation, or — for a fresh GT — the trampoline). No frame, no `.data`.
 function buildGtContextSwitchChunk() returns FunctionCodeChunk
+	assertGtFrameConsistent()
 	var code = ByteArray.create()
 
 	// Save callee-saved on the current (from) stack, in push order.
-	for reg in GtCalleeSavedPushOrder 'push'
+	for reg in calleeSavedOrder 'push'
 		encodePushReg(code, reg: reg)
 	end 'push'
 
@@ -53,8 +70,8 @@ function buildGtContextSwitchChunk() returns FunctionCodeChunk
 	encodeLoadRegBaseDisp(code, destReg: X64Register.rbp, base: GtSwitchToReg, disp: GtOffFp as Imm32, wide: true)
 
 	// Restore callee-saved from the new stack, in reverse push order, then `ret` into to's saved return addr.
-	for i in 0 upto GtCalleeSavedPushOrder.count() 'pop'
-		let reg = try GtCalleeSavedPushOrder.get(GtCalleeSavedPushOrder.count() - 1 - i) otherwise panic("buildGtContextSwitchChunk: pop index derived from count is in range")
+	for i in 0 upto calleeSavedOrder.count() 'pop'
+		let reg = try calleeSavedOrder.get(calleeSavedOrder.count() - 1 - i) otherwise panic("buildGtContextSwitchChunk: pop index derived from count is in range")
 		encodePopReg(code, reg: reg)
 	end 'pop'
 	code.push(OpcodeRet)

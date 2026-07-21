@@ -74,7 +74,10 @@ export let ShadowSpaceBytes = 32 as StackSize
 // allocator may color values into any of these; the prologue pushes exactly the ones a
 // function's coloring used, and the epilogue pops them. rbx + r12–r15 mirror
 // RegisterAllocator.calleeSavedMask (kept in one order here so push/pop stay paired).
-let calleeSavedOrder = [X64Register.rbx, X64Register.r12, X64Register.r13, X64Register.r14, X64Register.r15]
+// EXPORTED so the GT context switch (X64GtRuntime) saves EXACTLY the set the prologue
+// pushes — one ordered list, not a second copy free to drift into register corruption
+// across a switch.
+export let calleeSavedOrder = [X64Register.rbx, X64Register.r12, X64Register.r13, X64Register.r14, X64Register.r15]
 
 typealias X64RegisterArray = Array with X64Register
 
