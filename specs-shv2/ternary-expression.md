@@ -265,6 +265,118 @@ end 'main'
 no
 ```
 
+<!-- test: ternary-expression.nested-in-loop-body -->
+A ternary in a `let` binding inside a loop body. The `while`'s carried-variable
+token scan (`blockStatementEndIndex`/`opensBlockAt`) walks this body BEFORE it is
+parsed, and must NOT count the ternary's `if`/`else` as block openers — they open
+no `end`, so counting them over-runs the loop's extent and trips the drift guard.
+```maxon
+function main() returns ExitCode
+	var total = 0
+	var i = 0
+	while i < 3 'l'
+		let x = 5 if i > 0 else 9
+		total = total + x
+		i = i + 1
+	end 'l'
+	return total
+end 'main'
+```
+```exitcode
+19
+```
+
+<!-- test: ternary-expression.nested-in-if-body -->
+The same token-scan hazard for an `if` body rather than a loop body.
+```maxon
+function main() returns ExitCode
+	var total = 0
+	let c = true
+	if c 'g'
+		let x = 5 if c else 9
+		total = total + x
+	end 'g'
+	return total
+end 'main'
+```
+```exitcode
+5
+```
+
+<!-- test: ternary-expression.in-if-condition -->
+A ternary inside an `if` CONDITION. The condition is parsed as a value expression,
+and the enclosing `if`'s token scan runs over the ternary's `if`/`else` in the
+condition — which must not be mistaken for the statement's own block structure.
+```maxon
+function main() returns ExitCode
+	let c = true
+	if (5 if c else 3) > 4 'g'
+		return 1
+	end 'g'
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: ternary-expression.in-while-condition -->
+A ternary inside a `while` CONDITION.
+```maxon
+function main() returns ExitCode
+	var i = 0
+	let lim = true
+	while i < (3 if lim else 1) 'l'
+		i = i + 1
+	end 'l'
+	return i
+end 'main'
+```
+```exitcode
+3
+```
+
+<!-- test: ternary-expression.as-match-scrutinee -->
+A ternary as a `match` SCRUTINEE — the same token-scan hazard for the `match`
+statement's extent.
+```maxon
+function main() returns ExitCode
+	let c = true
+	match (1 if c else 2) 'm'
+		1 then return 11
+		default then return 22
+	end 'm'
+end 'main'
+```
+```exitcode
+11
+```
+
+<!-- test: ternary-expression.owned-arm-moved-read-in-condition -->
+The TRUE arm gives an owned binding (moving it out), while the CONDITION — which
+runs first but parses second — reads that same binding LIVE. The move state the
+true arm left must be rewound before the condition parses, or the condition falsely
+sees the binding as already moved (a spurious use-after-move). Selecting the true
+arm here, its value transfers exactly once with no leak.
+```maxon
+function hasContent(s String) returns bool
+	return s.byteLength() > 0
+end 'hasContent'
+
+function main() returns ExitCode
+	let k = "key{1}"
+	let s = k if hasContent(k) else "fallback"
+	print(s)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+key1
+```
+
 <!-- disabled-test: ternary-expression.in-extension-method-before-sibling -->
 <!-- interfaces + `extension` blocks are not parsed yet (E2015 "top-level interface"); their own rung -->
 

@@ -6670,11 +6670,22 @@ export type Parser
 	// `parseWhileStatement` rather than by hope: get this wrong and that panic fires, loudly,
 	// on the first program that nests the missing construct in a loop.
 	//
-	// `else` is the subtle one. A plain `else 'label'` opens a block body of its own, but an
-	// `else if` does NOT — the else branch simply IS a nested `if` statement (parseElseBody),
-	// and that `if` is the opener whose `end` closes it. Counting `else if` as an opener would
-	// leave one `end` unaccounted for and run the extent past the loop, which is safe but
-	// wrong; counting it correctly keeps the scan exact and the drift guard meaningful.
+	// ⭐ `if`/`else` ARE THE SUBTLE PAIR, because the inline conditional `<t> if <c> else <f>`
+	// (P1.5-A2c) spells BOTH keywords in EXPRESSION position with NO closing `end`. Counting a
+	// ternary `if`/`else` as a block opener over-counts the depth and runs the extent past the real
+	// `end`, so the drift guard fires (`let x = a if c else b` inside a loop body is enough). A block
+	// `if`/`else` is told from a ternary one by POSITION — the same split the reference bootstrap
+	// draws (2-Parser.cs `SkipToMatchingEnd`):
+	//   • a block `if` is at STATEMENT START — the previous token is a `newline` (a fresh statement)
+	//     or an `else` (an `else if` chain); a ternary `if` follows an operand (`ifBeginsStatement`).
+	//   • a block `else` closes a then-branch — it follows that branch's `end` and its one optional
+	//     label (`elseFollowsBlockEnd`); a ternary `else` follows the condition operand.
+	// `while` (statement-only) and `match` (statement OR expression) always close with their own
+	// `end`, so both unconditionally open a block.
+	//
+	// `else`'s pre-ternary subtlety is still live: a plain `else 'label'` opens a block body of its
+	// own, but an `else if` does NOT — the else branch simply IS a nested `if` statement
+	// (parseElseBody), and that `if` is the opener whose `end` closes it.
 	//
 	// `otherwise` is the other subtle one: only the BLOCK forms of a `try … otherwise` open a
 	// block (`otherwiseOpensBlock`). The rest (`ignore`, a fallback value, a single-statement
@@ -6682,9 +6693,13 @@ export type Parser
 	// leave an `end` unaccounted for — the very miscount OPEN #62 was.
 	function opensBlockAt(index TokenIndex) returns bool
 		let kind = self.kindAt(index)
-		if kind == TokenKind.if or kind == TokenKind.while or kind == TokenKind.match 'alwaysOpens'
+		if kind == TokenKind.while or kind == TokenKind.match 'alwaysOpens'
 			return not self.keywordIsMatchCaseName(index)
 		end 'alwaysOpens'
+
+		if kind == TokenKind.if 'ifKw'
+			return self.ifBeginsStatement(index) and not self.keywordIsMatchCaseName(index)
+		end 'ifKw'
 
 		if kind == TokenKind.otherwise 'tryBlock'
 			return self.otherwiseOpensBlock(index)
@@ -6694,8 +6709,48 @@ export type Parser
 			return false
 		end 'notElse'
 
-		return self.kindAt(index + 1) != TokenKind.if and not self.keywordIsMatchCaseName(index)
+		if self.kindAt(index + 1) == TokenKind.if or self.keywordIsMatchCaseName(index) 'notBlockElse'
+			return false
+		end 'notBlockElse'
+
+		return self.elseFollowsBlockEnd(index)
 	end 'opensBlockAt'
+
+	// Is the `if` at `index` a block-opening STATEMENT `if` rather than the `if` of an inline
+	// conditional `<t> if <c> else <f>`? A block `if` sits at statement start: the preceding token is
+	// a `newline` (a new statement) or an `else` (the `if` of an `else if` chain). A ternary `if`
+	// follows an operand, so neither holds. Index 0 has nothing before it and cannot be a ternary, so
+	// it counts as statement start. Mirrors the reference bootstrap (2-Parser.cs `SkipToMatchingEnd`:
+	// a block `if` iff `prevWasNewline || prev == else`).
+	function ifBeginsStatement(index TokenIndex) returns bool
+		if index == 0 'atStart'
+			return true
+		end 'atStart'
+
+		let prev = self.kindAt(index - 1)
+		return prev == TokenKind.newline or prev == TokenKind.else
+	end 'ifBeginsStatement'
+
+	// Does the `else` at `index` close an if/else then-branch (a block `else`) rather than tail an
+	// inline conditional? A block `else` follows the then-branch's `end` and its ONE optional block
+	// label — the backward twin of `elseFollowsEnd` (`end 'x' else` or bare `end else`). A ternary
+	// `else` follows the condition operand, so the token before it (past an optional label) is not
+	// `end`. Index 0 cannot be an `else`, so it is never a block `else`.
+	function elseFollowsBlockEnd(index TokenIndex) returns bool
+		if index == 0 'atStart'
+			return false
+		end 'atStart'
+
+		var prev = index - 1
+		if self.kindAt(prev) == TokenKind.charLiteral 'skipLabel'
+			if prev == 0 'noRoom'
+				return false
+			end 'noRoom'
+			prev = prev - 1
+		end 'skipLabel'
+
+		return self.kindAt(prev) == TokenKind.end
+	end 'elseFollowsBlockEnd'
 
 	// Does the `otherwise` at `index` begin a BLOCK-form handler — one closed by its own `end`?
 	// Two block forms exist: `otherwise 'label' … end` (a bare charLiteral label) and

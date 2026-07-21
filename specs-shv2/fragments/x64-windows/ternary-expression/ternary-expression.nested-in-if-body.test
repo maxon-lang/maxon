@@ -1,0 +1,41 @@
+// Test: ternary-expression.nested-in-if-body
+function main() returns ExitCode
+	var total = 0
+	let c = true
+	if c 'g'
+		let x = 5 if c else 9
+		total = total + x
+	end 'g'
+	return total
+end 'main'
+---
+ExitCode: 5
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 rax, 1
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, g
+    x64.jmp critsplit
+  g:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, ternarytrue
+    x64.jmp ternaryfalse
+  ternarytrue:
+    x64.movRegImm32 rax, 5
+    x64.jmp matchcont
+  ternaryfalse:
+    x64.movRegImm32 rax, 9
+    x64.jmp matchcont
+  matchcont:
+    x64.leaRegRegImm32 r8, rax, 0
+    x64.jmp ifcont
+  critsplit:
+    x64.jmp ifcont
+  ifcont:
+    x64.popReg rbp
+    x64.ret
+}
