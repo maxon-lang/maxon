@@ -905,11 +905,11 @@ end 'ExternalRunner'
 // harness has no runner for. They panic naming both targets rather than spawning an executable the
 // kernel will refuse in some less legible way. The `linux` arm is the one place `target.os` alone is
 // NOT the answer: a Linux ELF runs under WSL from Windows and OrbStack from macOS, so it defers to the
-// host (`linuxRunnerForHost`).
+// host (`linuxRunnerForHost`), which also needs the target to reject a CPU the host runner cannot execute.
 function externalRunnerFor(target Target) returns ExternalRunner
 	return match target.os 'runner'
 		wasi gives ExternalRunner.wasmtime
-		linux gives linuxRunnerForHost()
+		linux gives linuxRunnerForHost(target)
 		windows panic("SpecTestRunner: no runner for a {targetToString(target)} binary on a {targetToString(detectHostTarget())} host — a PE can only be spawned on Windows, so this suite must run its tests on that host")
 		macos panic("SpecTestRunner: no runner for a {targetToString(target)} binary on a {targetToString(detectHostTarget())} host — a Mach-O can only be spawned on macOS, so this suite must run its tests on that host")
 	end 'runner'
@@ -920,14 +920,28 @@ end 'externalRunnerFor'
 // host runs its own-CPU Linux binaries natively (`needsExternalRunner` is false there), and a
 // cross-CPU Linux target from a Linux host has no runner in this harness. `wasi` is never a host OS
 // (`detectHostTarget` returns only windows/macos/linux), so that arm is unreachable and says so.
-function linuxRunnerForHost() returns ExternalRunner
-	return match detectHostTarget().os 'host'
-		windows gives ExternalRunner.wsl
+function linuxRunnerForHost(target Target) returns ExternalRunner
+	let host = detectHostTarget()
+	return match host.os 'host'
+		windows gives windowsLinuxRunner(target, host: host)
 		macos gives ExternalRunner.orbstack
-		linux panic("SpecTestRunner: a Linux ELF for a foreign CPU cannot be run from a Linux host by this harness (host {targetToString(detectHostTarget())}) — run the suite on a host whose CPU matches the target")
+		linux panic("SpecTestRunner: a Linux ELF for a foreign CPU cannot be run from a Linux host by this harness (host {targetToString(host)}) — run the suite on a host whose CPU matches the target")
 		wasi panic("SpecTestRunner: 'wasi' is not a host OS — detectHostTarget never returns it, so this arm is unreachable")
 	end 'host'
 end 'linuxRunnerForHost'
+
+// WSL runs only the HOST CPU's Linux binaries — there is no in-box binfmt/qemu cross-execution — so a
+// foreign-CPU Linux target (e.g. `arm64-linux` on an x86-64 Windows host) has NO runner here. Saying so
+// up front, at the preflight, beats letting the WSL probe pass and then every test fail with the
+// kernel's opaque "exec format error". The matching-CPU case (this rung's `x64-linux` on x64-windows) is
+// the one that returns a runner. macOS's OrbStack is not gated this way — it runs arm64-linux natively
+// and x64-linux under Rosetta — so only the WSL path carries this check.
+function windowsLinuxRunner(target Target, host Target) returns ExternalRunner
+	if target.cpu != host.cpu 'foreignCpu'
+		panic("SpecTestRunner: no runner for a {targetToString(target)} binary on a {targetToString(host)} host — WSL runs only the host CPU's Linux binaries (no in-box cross-CPU emulation), so build it on a matching host or drop {TargetFlagPrefix}{targetToString(target)}")
+	end 'foreignCpu'
+	return ExternalRunner.wsl
+end 'windowsLinuxRunner'
 
 // How to execute the binary the build just produced.
 //
@@ -1052,8 +1066,8 @@ export function requireRunnerAvailable(effectiveTarget Target)
 
 	match externalRunnerFor(effectiveTarget) 'runner'
 		wasmtime then _ = findWasmtimePath()
-		orbstack then requireOrbMachineReachable()
-		wsl then requireWslAvailable()
+		orbstack then requireOrbMachineReachable(effectiveTarget)
+		wsl then requireWslAvailable(effectiveTarget)
 	end 'runner'
 end 'requireRunnerAvailable'
 
@@ -1064,18 +1078,19 @@ end 'requireRunnerAvailable'
 // check because two of the three are not questions the filesystem can answer — and because a stopped
 // machine is STARTED by this call, so the first real test does not pay that latency inside its own
 // timing.
-function requireOrbMachineReachable()
+function requireOrbMachineReachable(effectiveTarget Target)
 	var argv = StringArray.create()
 	argv.push(OrbRunSubcommand)
 	argv.push(OrbMachineFlag)
 	argv.push(OrbMachineName)
 	argv.push(OrbProbeCommand)
 
-	// DERIVED from a `Target`, never spelled as a literal — the same discipline the deleted
-	// `nativeTargetKeys` was built on. A message that tells the reader to drop `--target=arm64-linux`
-	// has to name the flag `parseBuildTarget` actually accepts, and `targetToString` is the one
-	// producer of that spelling; a literal here is a second copy that a renaming would not reach.
-	let orbTargetKey = targetToString(Target.create(CpuArch.arm64, os: Os.linux))
+	// DERIVED from the target the caller is actually running, never spelled as a literal — the same
+	// discipline the deleted `nativeTargetKeys` was built on. A message that tells the reader to drop
+	// `--target=<x>` has to name the flag `parseBuildTarget` accepts, and `targetToString` is the one
+	// producer of that spelling; a literal here would misname a cross-CPU orb target (x64-linux under
+	// Rosetta) and could not be reached by a renaming.
+	let orbTargetKey = targetToString(effectiveTarget)
 
 	let probe = try runProcess(Executable.name(OrbExecutableName), argv: argv) otherwise (e) 'notInstalled'
 		panic("SpecTestRunner: could not run '{OrbExecutableName}' ({e.displayReason()}) — running a {orbTargetKey} binary from a non-Linux host needs OrbStack (https://orbstack.dev); install it, or drop {TargetFlagPrefix}{orbTargetKey} and run the suite for this host")
@@ -1091,8 +1106,8 @@ end 'requireOrbMachineReachable'
 // — each with its own fix. A static raw-syscall ELF needs nothing installed inside the distro, so a
 // reachable distro that runs `/bin/true` is proof enough the suite's binaries will run. The target key
 // is DERIVED from a `Target`, never spelled literally — the same discipline the orb probe follows.
-function requireWslAvailable()
-	let wslTargetKey = targetToString(Target.create(CpuArch.x64, os: Os.linux))
+function requireWslAvailable(effectiveTarget Target)
+	let wslTargetKey = targetToString(effectiveTarget)
 
 	var argv = StringArray.create()
 	argv.push(WslExecFlag)
