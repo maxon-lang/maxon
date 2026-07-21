@@ -199,6 +199,34 @@ end 'main'
 7
 ```
 
+<!-- test: async-scheduler.await-loop-bounded -->
+<!-- targets: x64-windows -->
+A spawn/await loop reuses ONE recycled 1 MiB stack rather than committing a fresh one per spawn — so 5000
+iterations stay bounded and exit cleanly. Without the stack free-list this leaks ~1 MiB of committed memory
+per spawn (measured: 15000 spawns → 14.27 GB pre-fix vs 0.4 MB post-fix), which exhausts commit and crashes
+on a bounded-pagefile machine.
+```maxon
+
+function noop() returns int
+	return 0
+end 'noop'
+
+function main() returns ExitCode
+	var i = 0
+	var acc = 0
+	while i < 5000 'loop'
+		let p = async noop()
+		let r = await p
+		acc = acc + r
+		i = i + 1
+	end 'loop'
+	return acc as ExitCode
+end 'main'
+```
+```exitcode
+0
+```
+
 <!-- test: async-scheduler.managed-result-refused -->
 <!-- targets: x64-windows -->
 An async function returning a managed `String` result is refused — the runtime captures the result through

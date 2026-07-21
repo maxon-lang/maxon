@@ -101,6 +101,14 @@ let GtCurrentGtLabel = b"__gt_current_gt"  // the running GT; drivers own it (se
 let GtRunQueueHeadLabel = b"__gt_run_queue_head"
 let GtRunQueueTailLabel = b"__gt_run_queue_tail"
 let GtInitDoneLabel = b"__gt_init_done"  // idempotency guard for __gt_init
+// ⭐ THE STACK FREE-LIST HEAD (P1.5-B1a, stack recycling). A LIFO of idle 1 MiB GT stacks, chained
+// INTRUSIVELY: a freed stack's first word (`[stackBase]`, the lowest address — the stack grows DOWN from the
+// top, so the bottom word is never touched by a running GT unless it overflows, which is out of scope) holds
+// the previous free head. `__gt_await` pushes a completed GT's stack here after the switch off it; `__gt_spawn`
+// pops one instead of committing a fresh 1 MiB. This bounds a spawn/await LOOP to ONE resident stack — without
+// it every spawn leaks a 1 MiB `osAllocPages` commit, invisible to the `__mm` gate (measured: 15000 spawns →
+// 14.27 GB). The GT STRUCT is deliberately NOT recycled (it stays resident for re-await) — see OPEN.md.
+let GtStackFreeHeadLabel = b"__gt_stack_free_head"
 
 // The prefix every GT runtime entry point shares — the "does this program spawn a green thread?" test.
 let GtRuntimeCallPrefix = b"__gt_"
@@ -122,6 +130,7 @@ export function gtRuntimeGlobals() returns DataSectionEntryArray
 	out.push(DataSectionEntry.create(String.from(GtRunQueueHeadLabel), valueType: StdType.i64, value: 0))
 	out.push(DataSectionEntry.create(String.from(GtRunQueueTailLabel), valueType: StdType.i64, value: 0))
 	out.push(DataSectionEntry.create(String.from(GtInitDoneLabel), valueType: StdType.i64, value: 0))
+	out.push(DataSectionEntry.create(String.from(GtStackFreeHeadLabel), valueType: StdType.i64, value: 0))
 	return out
 end 'gtRuntimeGlobals'
 
@@ -200,6 +209,10 @@ function buildGtSpawn(module StdModule)
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry")
+	var reuseStack = module.addBlock(func, label: b"reusestack")
+	var allocStack = module.addBlock(func, label: b"allocstack")
+	var haveStack = module.addBlock(func, label: b"havestack")
+
 	emitParams(module, block: entry, count: 2)
 	let funcPtr = 0 as ValueId
 	let argBuf = 1 as ValueId
@@ -215,42 +228,68 @@ function buildGtSpawn(module StdModule)
 	let gt = ids.mint()
 	module.appendOp(entry, op: StdOp.call(gt, callee: SlabAllocName, args: argsOf(structSize)))
 
-	// stackBase = osAllocPages(GtStackSize) — a fresh 1 MiB stack, zero-filled by MEM_COMMIT.
+	// ⭐ ACQUIRE THE 1 MiB STACK — pop a recycled one off the free-list, else commit a fresh one. This is what
+	// bounds a spawn/await loop to one resident stack. `stackBase` differs by branch, so each branch STORES it
+	// into `gt.stackBase` and `haveStack` reloads it — a memory round-trip rather than a builder-tier phi
+	// (MmRuntime's builders are phi-free; a load is cheaper than teaching them block args for one value).
 	let stackSizeVal = ids.mint()
 	module.appendOp(entry, op: StdOp.const(stackSizeVal, value: GtStackSize, valueType: StdType.i64))
+	let freeHeadAddr = ids.mint()
+	module.appendOp(entry, op: StdOp.globalAddr(freeHeadAddr, label: GtStackFreeHeadLabel))
+	let freeHead = ids.mint()
+	module.appendOp(entry, op: StdOp.loadIndirect(freeHead, addrId: freeHeadAddr, offset: 0, valueType: StdType.i64))
+	let zeroConst = ids.mint()
+	module.appendOp(entry, op: StdOp.const(zeroConst, value: 0, valueType: StdType.i64))
+	let freeEmpty = ids.mint()
+	module.appendOp(entry, op: StdOp.cmp(freeEmpty, lhs: freeHead, rhs: zeroConst, pred: StdCmpPred.eq, operandType: StdType.i64))
+	module.setTerminator(entry, op: StdOp.condBranch(freeEmpty, thenBlockId: allocStack.id, elseBlockId: reuseStack.id))
+
+	// reuseStack: pop the LIFO — free head = the popped stack's intrusive link at [freeHead]; stackBase = freeHead.
+	let poppedNext = ids.mint()
+	module.appendOp(reuseStack, op: StdOp.loadIndirect(poppedNext, addrId: freeHead, offset: 0, valueType: StdType.i64))
+	module.appendOp(reuseStack, op: StdOp.storeIndirect(freeHeadAddr, offset: 0, valueId: poppedNext, valueType: StdType.i64))
+	module.appendOp(reuseStack, op: StdOp.storeIndirect(gt, offset: GtOffStackBase, valueId: freeHead, valueType: StdType.i64))
+	module.setTerminator(reuseStack, op: StdOp.branch(haveStack.id))
+
+	// allocStack: commit a fresh 1 MiB stack (zero-filled by MEM_COMMIT).
+	let freshBase = ids.mint()
+	module.appendOp(allocStack, op: StdOp.osAllocPages(freshBase, sizeId: stackSizeVal))
+	module.appendOp(allocStack, op: StdOp.storeIndirect(gt, offset: GtOffStackBase, valueId: freshBase, valueType: StdType.i64))
+	module.setTerminator(allocStack, op: StdOp.branch(haveStack.id))
+
+	// haveStack: the stack is now in gt.stackBase whichever branch ran. Record the remaining fields and lay the
+	// initial context-switch frame at the TOP of the stack. status/waiter/next/result/fp are the slab's zeros.
 	let stackBase = ids.mint()
-	module.appendOp(entry, op: StdOp.osAllocPages(stackBase, sizeId: stackSizeVal))
+	module.appendOp(haveStack, op: StdOp.loadIndirect(stackBase, addrId: gt, offset: GtOffStackBase, valueType: StdType.i64))
+	module.appendOp(haveStack, op: StdOp.storeIndirect(gt, offset: GtOffStackSize, valueId: stackSizeVal, valueType: StdType.i64))
+	module.appendOp(haveStack, op: StdOp.storeIndirect(gt, offset: GtOffFuncPtr, valueId: funcPtr, valueType: StdType.i64))
+	module.appendOp(haveStack, op: StdOp.storeIndirect(gt, offset: GtOffArgBuf, valueId: argBuf, valueType: StdType.i64))
 
-	// Record the fields the trampoline and completion read. status/waiter/next/result/fp are already the
-	// zeros the slab guarantees, so only these four are written.
-	module.appendOp(entry, op: StdOp.storeIndirect(gt, offset: GtOffStackBase, valueId: stackBase, valueType: StdType.i64))
-	module.appendOp(entry, op: StdOp.storeIndirect(gt, offset: GtOffStackSize, valueId: stackSizeVal, valueType: StdType.i64))
-	module.appendOp(entry, op: StdOp.storeIndirect(gt, offset: GtOffFuncPtr, valueId: funcPtr, valueType: StdType.i64))
-	module.appendOp(entry, op: StdOp.storeIndirect(gt, offset: GtOffArgBuf, valueId: argBuf, valueType: StdType.i64))
-
-	// Lay the initial context-switch frame at the TOP of the stack. stackTop = stackBase + GtStackSize.
+	// stackTop = stackBase + GtStackSize.
 	let stackTop = ids.mint()
-	module.appendOp(entry, op: StdOp.binOp(stackTop, lhs: stackBase, rhs: stackSizeVal, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	// [stackTop - 8] = &__gt_trampoline (the return address the first `ret` pops). The five callee-saved
-	// slots below it ([stackTop-48 .. stackTop-8)) are already the slab/MEM_COMMIT zeros the switch pops.
+	module.appendOp(haveStack, op: StdOp.binOp(stackTop, lhs: stackBase, rhs: stackSizeVal, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	// [stackTop - 8] = &__gt_trampoline (the return address the first `ret` pops). On a FRESH stack the five
+	// callee-saved slots below it are the MEM_COMMIT zeros; on a RECYCLED stack they are the previous tenant's
+	// bytes — either way DON'T-CARE, because they become this GT's initial callee-saved registers, which the
+	// user function establishes before it reads them. Only the trampoline return-address slot must be written.
 	let eightConst = ids.mint()
-	module.appendOp(entry, op: StdOp.const(eightConst, value: 8, valueType: StdType.i64))
+	module.appendOp(haveStack, op: StdOp.const(eightConst, value: 8, valueType: StdType.i64))
 	let retSlotAddr = ids.mint()
-	module.appendOp(entry, op: StdOp.binOp(retSlotAddr, lhs: stackTop, rhs: eightConst, opcode: StdBinOpcode.sub, operandType: StdType.i64))
+	module.appendOp(haveStack, op: StdOp.binOp(retSlotAddr, lhs: stackTop, rhs: eightConst, opcode: StdBinOpcode.sub, operandType: StdType.i64))
 	let trampAddr = ids.mint()
-	module.appendOp(entry, op: StdOp.funcAddr(trampAddr, funcName: GtTrampolineName))
-	module.appendOp(entry, op: StdOp.storeIndirect(retSlotAddr, offset: 0, valueId: trampAddr, valueType: StdType.i64))
+	module.appendOp(haveStack, op: StdOp.funcAddr(trampAddr, funcName: GtTrampolineName))
+	module.appendOp(haveStack, op: StdOp.storeIndirect(retSlotAddr, offset: 0, valueId: trampAddr, valueType: StdType.i64))
 	// gt.sp = stackTop - GtInitialFrameBytes (points at the lowest saved-register slot); gt.fp is 0 (slab).
 	let frameConst = ids.mint()
-	module.appendOp(entry, op: StdOp.const(frameConst, value: GtInitialFrameBytes, valueType: StdType.i64))
+	module.appendOp(haveStack, op: StdOp.const(frameConst, value: GtInitialFrameBytes, valueType: StdType.i64))
 	let spVal = ids.mint()
-	module.appendOp(entry, op: StdOp.binOp(spVal, lhs: stackTop, rhs: frameConst, opcode: StdBinOpcode.sub, operandType: StdType.i64))
-	module.appendOp(entry, op: StdOp.storeIndirect(gt, offset: GtOffSp, valueId: spVal, valueType: StdType.i64))
+	module.appendOp(haveStack, op: StdOp.binOp(spVal, lhs: stackTop, rhs: frameConst, opcode: StdBinOpcode.sub, operandType: StdType.i64))
+	module.appendOp(haveStack, op: StdOp.storeIndirect(gt, offset: GtOffSp, valueId: spVal, valueType: StdType.i64))
 
 	// Enqueue as ready and return the GT as the promise handle.
 	let enqResult = ids.mint()
-	module.appendOp(entry, op: StdOp.call(enqResult, callee: GtEnqueueName, args: argsOf(gt)))
-	module.setTerminator(entry, op: StdOp.ret(gt))
+	module.appendOp(haveStack, op: StdOp.call(enqResult, callee: GtEnqueueName, args: argsOf(gt)))
+	module.setTerminator(haveStack, op: StdOp.ret(gt))
 
 	module.functions.push(func)
 end 'buildGtSpawn'
@@ -352,6 +391,7 @@ function buildGtAwait(module StdModule)
 	var loopHdr = module.addBlock(func, label: b"loophdr")
 	var drive = module.addBlock(func, label: b"drive")
 	var run = module.addBlock(func, label: b"run")
+	var recycle = module.addBlock(func, label: b"recycle")
 	var extract = module.addBlock(func, label: b"extract")
 
 	emitParams(module, block: entry, count: 1)
@@ -383,13 +423,32 @@ function buildGtAwait(module StdModule)
 	module.setTerminator(drive, op: StdOp.condBranch(gNull, thenBlockId: extract.id, elseBlockId: run.id))
 
 	// run: g.waiter = selfGt (so g's trampoline switches BACK to us); __gt_current_gt = g; switch into g;
-	// on resume, restore __gt_current_gt = selfGt and re-check the promise.
+	// on resume, restore __gt_current_gt = selfGt.
 	module.appendOp(run, op: StdOp.storeIndirect(g, offset: GtOffWaiter, valueId: selfGt, valueType: StdType.i64))
 	module.appendOp(run, op: StdOp.storeIndirect(curAddr, offset: 0, valueId: g, valueType: StdType.i64))
 	let switchResult = ids.mint()
 	module.appendOp(run, op: StdOp.call(switchResult, callee: GtContextSwitchName, args: args2(selfGt, second: g)))
 	module.appendOp(run, op: StdOp.storeIndirect(curAddr, offset: 0, valueId: selfGt, valueType: StdType.i64))
-	module.setTerminator(run, op: StdOp.branch(loopHdr.id))
+	// ⭐ RECYCLE g's STACK. `g` has run to completion (B1a GTs never yield mid-body) and control is back on
+	// `selfGt`'s stack, so `g`'s 1 MiB stack is now IDLE — push it onto the free-list for the next spawn. This
+	// is the WAITER's job, NOT the trampoline's: the trampoline's completion switch is still executing ON g's
+	// stack, so g's stack only becomes safe to reuse here, after that switch has landed us back on selfGt. The
+	// guard skips GT0/main (stackBase 0); only spawned GTs are ever dequeued, but the guard costs one compare.
+	let gStackBase = ids.mint()
+	module.appendOp(run, op: StdOp.loadIndirect(gStackBase, addrId: g, offset: GtOffStackBase, valueType: StdType.i64))
+	let gStackNull = ids.mint()
+	module.appendOp(run, op: StdOp.cmp(gStackNull, lhs: gStackBase, rhs: zeroConst, pred: StdCmpPred.eq, operandType: StdType.i64))
+	module.setTerminator(run, op: StdOp.condBranch(gStackNull, thenBlockId: loopHdr.id, elseBlockId: recycle.id))
+
+	// recycle: push g's idle stack onto the free-list — its intrusive link (`[gStackBase]`, the bottom word)
+	// takes the old head, then the head takes g's stack. `gStackBase` is drive's `zeroConst`-comparable pointer.
+	let recycleFreeHeadAddr = ids.mint()
+	module.appendOp(recycle, op: StdOp.globalAddr(recycleFreeHeadAddr, label: GtStackFreeHeadLabel))
+	let recycleOldHead = ids.mint()
+	module.appendOp(recycle, op: StdOp.loadIndirect(recycleOldHead, addrId: recycleFreeHeadAddr, offset: 0, valueType: StdType.i64))
+	module.appendOp(recycle, op: StdOp.storeIndirect(gStackBase, offset: 0, valueId: recycleOldHead, valueType: StdType.i64))
+	module.appendOp(recycle, op: StdOp.storeIndirect(recycleFreeHeadAddr, offset: 0, valueId: gStackBase, valueType: StdType.i64))
+	module.setTerminator(recycle, op: StdOp.branch(loopHdr.id))
 
 	// extract: result = promise.result.
 	let result = ids.mint()
