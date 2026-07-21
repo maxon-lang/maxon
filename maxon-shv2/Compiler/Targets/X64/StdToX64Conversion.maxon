@@ -123,8 +123,8 @@ let RangePanicExitCode = 1 as MachineWord
 // The two WriteFile outgoing stack SLOTS `__print_string`'s frame reserves, past the shadow space:
 // slot 0 = the 5th argument `lpOverlapped` (NULL), slot 1 = a scratch DWORD `lpNumberOfBytesWritten`
 // points at (WriteFile writes the count there; it must be a valid pointer, not NULL). These are SLOT
-// INDICES, not byte displacements — `writeFileArgDisp` turns each into `[rsp + shadow + slot*8]`, and
-// `stringPrintOutgoingArgBytes` sizes the frame region — so the byte layout lives with ShadowSpaceBytes/
+// INDICES, not byte displacements — `win64OutgoingArgDisp` turns each into `[rsp + shadow + slot*8]`, and
+// `win64OutgoingArgBytes` sizes the frame region — so the byte layout lives with ShadowSpaceBytes/
 // SpillSlotBytes rather than being respelled as a literal.
 let WriteFileOverlappedSlot = 0
 let WriteFileBytesWrittenSlot = 1
@@ -134,7 +134,7 @@ let WriteFileOutgoingSlots = 2
 // CreateProcessA takes TEN arguments; the first four (lpApplicationName, lpCommandLine, lpProcessAttributes,
 // lpThreadAttributes) go in rcx/rdx/r8/r9, and arguments 5-10 go on the stack. Only the last two are real
 // values (the STARTUPINFOA and PROCESS_INFORMATION pointers); the middle four are FALSE/0/NULL. SLOT INDICES,
-// not byte displacements — `createProcessArgDisp` turns each into `[rsp + shadow + slot*8]` — so the byte
+// not byte displacements — `win64OutgoingArgDisp` turns each into `[rsp + shadow + slot*8]` — so the byte
 // layout lives with ShadowSpaceBytes/SpillSlotBytes rather than being respelled as a literal.
 let CreateProcessInheritHandlesSlot = 0  // arg5 bInheritHandles = FALSE
 let CreateProcessCreationFlagsSlot = 1   // arg6 dwCreationFlags = 0
@@ -144,37 +144,26 @@ let CreateProcessStartupInfoSlot = 4     // arg9 lpStartupInfo
 let CreateProcessProcInfoSlot = 5        // arg10 lpProcessInformation
 let CreateProcessOutgoingSlots = 6
 
-// The `[rsp + disp]` displacement of a WriteFile outgoing stack slot — past the 32-byte shadow space,
-// one `SpillSlotBytes`-sized slot per index. `spillSlotBaseDisp` places every spill slot ABOVE
-// `ShadowSpaceBytes + outgoingArgSize`, so these never overlap a spill. Computed here (not a top-level
-// const) so the two cross-file frame constants are read at runtime — the same reads `computeFrameBytes`
-// makes — rather than folded, which a cross-file constant initializer cannot do.
-function writeFileArgDisp(slot MachineWord) returns Imm32
+// The `[rsp + disp]` displacement of a Win64 OUTGOING stack-argument slot — past the 32-byte shadow space,
+// one `SpillSlotBytes`-sized slot per index. The Win64 ABI fact shared by EVERY >4-argument import call the
+// isel lowers (WriteFile's 2 stack slots, CreateProcessA's 6): the 5th-and-later arguments land at
+// `[rsp + shadow + slot*8]`. `spillSlotBaseDisp` places every spill slot ABOVE `ShadowSpaceBytes +
+// outgoingArgSize`, so these never overlap a spill. Computed here (not a top-level const) so the two
+// cross-file frame constants are read at runtime — the same reads `computeFrameBytes` makes — rather than
+// folded, which a cross-file constant initializer cannot do.
+function win64OutgoingArgDisp(slot MachineWord) returns Imm32
 	return (ShadowSpaceBytes + slot * SpillSlotBytes) as Imm32
-end 'writeFileArgDisp'
+end 'win64OutgoingArgDisp'
 
-// The frame region `__print_string` reserves for WriteFile's outgoing stack args — the two slots
-// `writeFileArgDisp` addresses. The single source of BOTH the frame reservation (via
-// `stdOpOutgoingArgBytes`, applied to the function by `lowerFunctionBlocks`) and the slot displacements
-// this file's lowering writes, so they are ONE fact. A FUNCTION rather than a const so the
-// `SpillSlotBytes` read is at runtime (see above). NOT exported: this is an x64 frame fact, set here in
-// the x64 isel — the target-neutral String runtime deliberately no longer sets `outgoingArgSize`.
-function stringPrintOutgoingArgBytes() returns StackSize
-	return (WriteFileOutgoingSlots * SpillSlotBytes) as StackSize
-end 'stringPrintOutgoingArgBytes'
-
-// The `[rsp + disp]` displacement of a CreateProcessA outgoing stack slot — the twin of `writeFileArgDisp`,
-// past the 32-byte shadow space, one `SpillSlotBytes`-sized slot per index.
-function createProcessArgDisp(slot MachineWord) returns Imm32
-	return (ShadowSpaceBytes + slot * SpillSlotBytes) as Imm32
-end 'createProcessArgDisp'
-
-// The frame region `__gt_process_run` reserves for CreateProcessA's six outgoing stack args — the single
-// source of BOTH the frame reservation (via `stdOpOutgoingArgBytes`) and the slot displacements the spawn
-// lowering writes, so they are ONE fact, exactly as `stringPrintOutgoingArgBytes` is for WriteFile.
-function createProcessOutgoingArgBytes() returns StackSize
-	return (CreateProcessOutgoingSlots * SpillSlotBytes) as StackSize
-end 'createProcessOutgoingArgBytes'
+// The frame region an import call reserves for its `slotCount` outgoing stack args — the single source of
+// BOTH the frame reservation (via `stdOpOutgoingArgBytes`, applied to the function by `lowerFunctionBlocks`)
+// and the slot displacements the lowering writes, so the two are ONE fact per call (WriteFile passes
+// `WriteFileOutgoingSlots`, CreateProcessA passes `CreateProcessOutgoingSlots`). A FUNCTION rather than a
+// const so the `SpillSlotBytes` read is at runtime (see above). NOT exported: this is an x64 frame fact, set
+// here in the x64 isel — the target-neutral runtimes deliberately no longer set `outgoingArgSize`.
+function win64OutgoingArgBytes(slotCount MachineWord) returns StackSize
+	return (slotCount * SpillSlotBytes) as StackSize
+end 'win64OutgoingArgBytes'
 
 // The OUTGOING stack-argument bytes an `StdOp`'s x64 lowering needs. Only `osWriteStdout` needs any: its
 // `WriteFile` lowering passes the 5th argument (`lpOverlapped`) and a scratch pointer for the
@@ -184,10 +173,10 @@ end 'createProcessOutgoingArgBytes'
 // then the two tail ops), so a band-appended op cannot slip in unclassified.
 function stdOpOutgoingArgBytes(op StdOp) returns StackSize
 	return match op 'o'
-		osWriteStdout gives stringPrintOutgoingArgBytes()
+		osWriteStdout gives win64OutgoingArgBytes(WriteFileOutgoingSlots)
 		// The ONLY subprocess op with outgoing stack args: CreateProcessA passes its last six of ten arguments
-		// on the stack (see `createProcessArgDisp`). The other four subprocess ops are ≤4-argument, register-only.
-		osProcessSpawn gives createProcessOutgoingArgBytes()
+		// on the stack (see `win64OutgoingArgDisp`). The other four subprocess ops are ≤4-argument, register-only.
+		osProcessSpawn gives win64OutgoingArgBytes(CreateProcessOutgoingSlots)
 		const to osAllocPages gives 0
 		rdataAddr gives 0
 		// A `tryCall` passes its args in registers (≤6, like `call`); `errorReturn`/`osExit` have no
@@ -1512,12 +1501,12 @@ type StdToX64Lowering
 	// PANIC runtime does, where there are no live virtuals) would bypass the clobber and miscompile.
 	//
 	// Win64 ABI (NOT Maxon's): args rcx/rdx/r8/r9 then stack, result in RAX. The 5th arg (`lpOverlapped
-	// = NULL`) is a stack argument at `[rsp + writeFileArgDisp(WriteFileOverlappedSlot)]`; the 4th
+	// = NULL`) is a stack argument at `[rsp + win64OutgoingArgDisp(WriteFileOverlappedSlot)]`; the 4th
 	// (`lpNumberOfBytesWritten`) must be a valid pointer (WriteFile writes the count there), so r9 points
-	// at a scratch slot at `[rsp + writeFileArgDisp(WriteFileBytesWrittenSlot)]`. Both live in
+	// at a scratch slot at `[rsp + win64OutgoingArgDisp(WriteFileBytesWrittenSlot)]`. Both live in
 	// `__print_string`'s `outgoingArgSize` region.
 	// ⭐ ON LINUX THE PRIMITIVE IS A SINGLE `write(1, buf, len)` syscall — no handle call, no bytes-written
-	// out-param, no stack argument, so none of the WriteFile apparatus above (`writeFileArgDisp`, the
+	// out-param, no stack argument, so none of the WriteFile apparatus above (`win64OutgoingArgDisp`, the
 	// outgoing-arg slots, the RAX NULL scratch). The three arguments move into rdi/rsi/rdx (the Linux
 	// syscall's first three), where Win64 uses rcx/rdx/r8; `buf`/`len` move forward soundly because each
 	// physical arg-register def liveness forbids to a value live across it. The result is ignored.
@@ -1540,9 +1529,9 @@ type StdToX64Lowering
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: x64PhysReg(X64Register.rax)))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdx), srcReg: TargetVReg.virtual(bufId)))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.r8), srcReg: TargetVReg.virtual(lenId)))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.leaRegRegImm32(x64PhysReg(X64Register.r9), base: x64PhysReg(X64Register.rsp), disp: writeFileArgDisp(WriteFileBytesWrittenSlot)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.leaRegRegImm32(x64PhysReg(X64Register.r9), base: x64PhysReg(X64Register.rsp), disp: win64OutgoingArgDisp(WriteFileBytesWrittenSlot)))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rax), value: NullPointer))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(x64PhysReg(X64Register.rsp), disp: writeFileArgDisp(WriteFileOverlappedSlot), src: x64PhysReg(X64Register.rax), width: X64AccessWidth.word64))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(x64PhysReg(X64Register.rsp), disp: win64OutgoingArgDisp(WriteFileOverlappedSlot), src: x64PhysReg(X64Register.rax), width: X64AccessWidth.word64))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.WriteFile)))
 	end 'lowerOsWriteStdoutWin64'
 
@@ -1611,18 +1600,18 @@ type StdToX64Lowering
 	function lowerOsProcessSpawnWin64(cmdlinePtrId ValueId, startupPtrId ValueId, procInfoPtrId ValueId, dstBlock IrBlock)
 		// The two OUT-struct pointers (args 9/10) onto their stack slots FIRST, while every register is still
 		// free — each reads its virtual and writes to the frame, clobbering no other operand's register.
-		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(x64PhysReg(X64Register.rsp), disp: createProcessArgDisp(CreateProcessStartupInfoSlot), src: TargetVReg.virtual(startupPtrId), width: X64AccessWidth.word64))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(x64PhysReg(X64Register.rsp), disp: createProcessArgDisp(CreateProcessProcInfoSlot), src: TargetVReg.virtual(procInfoPtrId), width: X64AccessWidth.word64))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(x64PhysReg(X64Register.rsp), disp: win64OutgoingArgDisp(CreateProcessStartupInfoSlot), src: TargetVReg.virtual(startupPtrId), width: X64AccessWidth.word64))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(x64PhysReg(X64Register.rsp), disp: win64OutgoingArgDisp(CreateProcessProcInfoSlot), src: TargetVReg.virtual(procInfoPtrId), width: X64AccessWidth.word64))
 		// lpCommandLine (arg 2) -> rdx.
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdx), srcReg: TargetVReg.virtual(cmdlinePtrId)))
 		// The four FALSE/0/NULL middle stack args (5-8): one zeroed scratch register (rax, clobbered by the call
 		// anyway) stored into each slot. An 8-byte zero store into a slot the callee reads as a 4-byte BOOL/DWORD
 		// is correct — CreateProcessA reads only the low bytes and the high bytes are its own slot's padding.
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rax), value: NullPointer))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(x64PhysReg(X64Register.rsp), disp: createProcessArgDisp(CreateProcessInheritHandlesSlot), src: x64PhysReg(X64Register.rax), width: X64AccessWidth.word64))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(x64PhysReg(X64Register.rsp), disp: createProcessArgDisp(CreateProcessCreationFlagsSlot), src: x64PhysReg(X64Register.rax), width: X64AccessWidth.word64))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(x64PhysReg(X64Register.rsp), disp: createProcessArgDisp(CreateProcessEnvironmentSlot), src: x64PhysReg(X64Register.rax), width: X64AccessWidth.word64))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(x64PhysReg(X64Register.rsp), disp: createProcessArgDisp(CreateProcessCurrentDirSlot), src: x64PhysReg(X64Register.rax), width: X64AccessWidth.word64))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(x64PhysReg(X64Register.rsp), disp: win64OutgoingArgDisp(CreateProcessInheritHandlesSlot), src: x64PhysReg(X64Register.rax), width: X64AccessWidth.word64))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(x64PhysReg(X64Register.rsp), disp: win64OutgoingArgDisp(CreateProcessCreationFlagsSlot), src: x64PhysReg(X64Register.rax), width: X64AccessWidth.word64))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(x64PhysReg(X64Register.rsp), disp: win64OutgoingArgDisp(CreateProcessEnvironmentSlot), src: x64PhysReg(X64Register.rax), width: X64AccessWidth.word64))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(x64PhysReg(X64Register.rsp), disp: win64OutgoingArgDisp(CreateProcessCurrentDirSlot), src: x64PhysReg(X64Register.rax), width: X64AccessWidth.word64))
 		// The three NULL register args: lpApplicationName=rcx (1), lpProcessAttributes=r8 (3), lpThreadAttributes=r9 (4).
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rcx), value: NullPointer))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r8), value: NullPointer))
