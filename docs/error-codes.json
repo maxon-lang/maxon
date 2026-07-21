@@ -1,6 +1,6 @@
 {
   "generatedFrom": "docs/error-codes.txt",
-  "sourceHash": "748001c82f5d8b71",
+  "sourceHash": "d3b4ea5b4ce84b99",
   "note": "GENERATED. Do not edit. Run `maxon error-codes generate`. A reader MUST hash generatedFrom's bytes (FNV-1a 64, hex) and refuse to answer unless it equals sourceHash.",
   "compilers": ["csharp", "selfhosted", "shv2"],
   "codes": [
@@ -1054,8 +1054,8 @@
       "name": "SemanticPromiseAlreadyAwaited",
       "stage": "semantic",
       "doc": "A promise is awaited a SECOND time. `await` is LINEAR: a promise is awaited exactly once.\n3100 rather than 3099: E3099 is SemanticCapturingClosureEscapes, which landed on main while\nthis was in review. Both of us picked \"the next code free\" and both of us were right, because\nthe registry is written down TWICE -- here and in maxon-selfhosted/Compiler/ErrorCode.maxon --\nand neither copy sees the other's pending codes. Same disease as the promise's two bits, one\nlevel up. Keep the two files in step until there is only one of them.\nThe thunk owns its result and HANDS IT OVER at the await -- that is the ownership model the\nlanguage already has everywhere else. A second await would take a second +1 on a payload the\nthunk only ever owned once, and the two releases underflow the refcount and free it twice\n(\"mm_decref: refcount underflow (already zero)\"). It is not an error-handling bug and does\nnot need a throwing thunk: a plain `async` returning a String double-frees identically.\nSo the double-free is made UNREPRESENTABLE rather than fixed. The check is flow-sensitive --\ntwo awaits of the same promise in mutually exclusive branches are each the only await on\ntheir own path, and are allowed; what is refused is a second await REACHABLE from a first.",
-      "emittedBy": {"csharp": "SemanticPromiseAlreadyAwaited"},
-      "notEmittedBy": ["selfhosted", "shv2"]
+      "emittedBy": {"csharp": "SemanticPromiseAlreadyAwaited", "shv2": "promiseAlreadyAwaited"},
+      "notEmittedBy": ["selfhosted"]
     },
     {
       "code": 3101,

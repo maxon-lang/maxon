@@ -1,0 +1,74 @@
+// Test: async-linearity.await-aliased-loop-element
+function makeValue(i int) returns int
+	return i
+end 'makeValue'
+
+function main() returns ExitCode
+	var i = 0
+	var acc = 0
+	while i < 3 'await'
+		let p = async makeValue(i)
+		let q = p
+		let s = await q
+		acc = acc + s
+		i = i + 1
+	end 'await'
+	return acc as ExitCode
+end 'main'
+---
+ExitCode: 3
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+  __gt_current_gt@24 = i64 0
+  __gt_run_queue_head@32 = i64 0
+  __gt_run_queue_tail@40 = i64 0
+  __gt_init_done@48 = i64 0
+  __gt_stack_free_head@56 = i64 0
+}
+
+func @makeValue {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegReg r8, rcx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 r12, 0
+    x64.jmp whilehdr
+  whilehdr:
+    x64.cmpRegImm32 rbx, 3
+    x64.jcc less, await
+    x64.jmp whileexit
+  await:
+    x64.movRegImm32 rcx, 48
+    x64.callDirect __slab_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.leaRegFunc rcx, [rip + makeValue]
+    x64.movRegReg rdx, r8
+    x64.callDirect __gt_spawn
+    x64.movRegReg rcx, r8
+    x64.callDirect __gt_await
+    x64.leaRegRegReg r12, r12, r8
+    x64.leaRegRegImm32 rbx, rbx, 1
+    x64.jmp whilehdr
+  whileexit:
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

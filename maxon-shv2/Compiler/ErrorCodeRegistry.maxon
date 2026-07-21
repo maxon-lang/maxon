@@ -246,6 +246,21 @@ export enum ErrorCode
 	// by-reference capture semantics the closure specs currently pin. shv2 schedules it at
 	// P1.5, where it co-lands with `async` -- a green-thread capture IS an escape.
 	capturingClosureEscapes = "E3099"
+	// A promise is awaited a SECOND time. `await` is LINEAR: a promise is awaited exactly once.
+	// 3100 rather than 3099: E3099 is SemanticCapturingClosureEscapes, which landed on main while
+	// this was in review. Both of us picked "the next code free" and both of us were right, because
+	// the registry is written down TWICE -- here and in maxon-selfhosted/Compiler/ErrorCode.maxon --
+	// and neither copy sees the other's pending codes. Same disease as the promise's two bits, one
+	// level up. Keep the two files in step until there is only one of them.
+	// The thunk owns its result and HANDS IT OVER at the await -- that is the ownership model the
+	// language already has everywhere else. A second await would take a second +1 on a payload the
+	// thunk only ever owned once, and the two releases underflow the refcount and free it twice
+	// ("mm_decref: refcount underflow (already zero)"). It is not an error-handling bug and does
+	// not need a throwing thunk: a plain `async` returning a String double-frees identically.
+	// So the double-free is made UNREPRESENTABLE rather than fixed. The check is flow-sensitive --
+	// two awaits of the same promise in mutually exclusive branches are each the only await on
+	// their own path, and are allowed; what is refused is a second await REACHABLE from a first.
+	promiseAlreadyAwaited = "E3100"
 	// A `throws` function is referenced as a VALUE (`let f = risky`). A function type cannot
 	// express `throws` -- the grammar is `function(T) returns U`, with no throws clause -- so the
 	// binding silently drops it, and there is no indirect try-call to carry it: `StdIndirectCallOp`

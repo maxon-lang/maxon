@@ -34,6 +34,8 @@ export function semanticCheck(project Project, module MaxonModule)
 	// a capturing closure passed to a callee that persists the parameter.
 	let escapeSummary = buildEscapeSummary(module)
 	checkCalls(project, module: module, throwsMap: throwsMap, escapeSummary: escapeSummary)
+	// E3100 (P1.5-B2a): a green thread awaited more than once on a single flow path.
+	checkLinearAwait(project, module: module)
 end 'semanticCheck'
 
 // E3054 — `main` cannot declare `throws`: there is no caller left to handle the error. Scans the merged
@@ -192,6 +194,268 @@ function boolArrayAny(bits BoolArray) returns bool
 	end 'each'
 	return false
 end 'boolArrayAny'
+
+// ⭐ **E3100 — LINEAR AWAIT (P1.5-B2a).** `await` is LINEAR: the green thread a promise names is awaited AT
+// MOST ONCE on any single flow path. A second await REACHABLE from a first takes a second reference to a
+// payload the awaited thunk owned only once — the two releases underflow the refcount and free it twice — so a
+// reachable re-await is REFUSED, making the double free UNREPRESENTABLE rather than a runtime-survivable event.
+// (A scalar promise owns no heap, but the rule is structural: at-most-once is exactly what lets a GT struct be
+// recycled after its single await — OPEN #87.)
+//
+// ⭐⭐ **KEYED ON THE PROMISE'S SSA VALUE ID — a thesis-forced divergence from the bootstrap's GreenThreadId.**
+// The bootstrap keys linearity on a synthetic GreenThreadId minted at each `async` spawn and carried across
+// every alias and every cross-block re-read, BECAUSE its parser COPIES a promise value on `let q = p` and MINTS
+// A FRESH SSA value on every cross-block read (`MaxonVarRefOp`) — so one thread wears many SSA ids and needs a
+// second, stable identity laid over them. shv2 does NEITHER: `let q = p` binds `q` to `p`'s ValueId verbatim
+// (`Parser.parseVariableReference` returns `binding.boundValue`), and a cross-block read resolves to that same
+// ValueId (SSA dominance — there is no re-tagging op). So in shv2 the promise's SSA ValueId ALREADY IS the
+// stable thread identity: aliasing shares it, cross-block reads share it, and a RE-ARM (`p = async g()`) mints a
+// FRESH `asyncCall` ValueId — the new thread — automatically. A separate GreenThreadId column would be a 1:1
+// relabelling of the `asyncCall`'s ValueId — one fact written twice, the exact regression this rewrite exists to
+// remove. It is NOT the E3102 move model either: both names keep the shared ValueId LIVE and awaitable, so
+// `let q = p; await p` (one await of the shared thread) is ACCEPTED; only a SECOND reachable await is refused.
+//
+// ⭐ **FLOW-SENSITIVE REACHABILITY, and the RE-ARM KILL is the DEFINITION, not a binding-reassignment op.** From
+// each `await Vp`, walk the CFG forward; a second `await` of the SAME Vp reachable (INCLUDING via a loop
+// back-edge) is the violation. A path is KILLED when it re-passes the `asyncCall` that DEFINES Vp — re-executing
+// the spawn re-arms the promise with a fresh green thread, so an await after it is a FIRST await of a new
+// instance. This is shv2's analogue of the bootstrap's "kill when the binding is reassigned": the bootstrap
+// detects the re-arm as a `MaxonAssignOp` in the block stream, but shv2 emits NO op for a `var` rebind (SSA
+// rebinds at parse time), so the ground-truth re-arm signal is re-passing the SSA DEFINITION. It separates the
+// two loop shapes exactly: a promise spawned OUTSIDE a loop and awaited inside re-reaches its await without
+// re-passing the definition (double-await-in-loop → REFUSED); a promise re-armed INSIDE the loop re-passes the
+// definition before the await (await-aliased-loop-element → ACCEPTED, one await per iteration).
+function checkLinearAwait(project Project, module MaxonModule)
+	for func in module.functions 'eachFunc'
+		checkLinearAwaitInFunction(project, module: module, func: func)
+	end 'eachFunc'
+end 'checkLinearAwait'
+
+// Per-function driver. `functionHasAwait` is the cheap, NON-ALLOCATING gate — mirroring `buildEscapeSummary`'s
+// `functionHasFunctionParam` — that keeps the reachability machinery (its per-function block map, site list, and
+// walk state) off every await-free function, which is the entire scale corpus. Reports the FIRST violation in op
+// order and stops: a function with a double-await needs one diagnostic, and the deterministic op-order scan makes
+// the choice worker-invariant.
+function checkLinearAwaitInFunction(project Project, module MaxonModule, func IrFunction)
+	if not functionHasAwait(func, module: module) 'noAwait'
+		return
+	end 'noAwait'
+
+	let sites = collectAwaitSites(func, module: module)
+	let blockById = buildBlockByIdMap(func, module: module)
+	for site in sites 'eachSite'
+		if checkAwaitSite(project, module: module, blockById: blockById, func: func, site: site) 'reported'
+			return
+		end 'reported'
+	end 'eachSite'
+end 'checkLinearAwaitInFunction'
+
+// Does `func`'s body contain an `await` op at all? The gate that keeps the reachability walk off every
+// await-free function — a bounded tag check per op, no allocation, so it costs the scale corpus a scan and
+// nothing more (`scale-test` measures memory; this allocates none).
+function functionHasAwait(func IrFunction, module MaxonModule) returns bool
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("functionHasAwait: blockRef from func.blockRefs not in module.blocks")
+		for opIdx in block.opRefs 'eachOp'
+			match try module.ops.get(opIdx) otherwise panic("functionHasAwait: opIdx {opIdx} not in module.ops") 'op'
+				call to indirectCall then break 'op'
+				asyncCall then break 'op'
+				await then return true
+			end 'op'
+		end 'eachOp'
+	end 'eachBlock'
+	return false
+end 'functionHasAwait'
+
+// One first-await to check: the block and body position of the `await`, and the promise `ValueId` it awaits —
+// which IS the green-thread identity (see the header). Collected in op order so the FIRST violation reported is
+// deterministic (worker-invariant). Only built for await-bearing functions, behind the `functionHasAwait` gate.
+type AwaitSite
+	export let block as IrBlock
+	export let pos as BlockOpPos
+	export let promise as ValueId
+
+	export static function create(block IrBlock, pos BlockOpPos, promise ValueId) returns AwaitSite
+		return Self{block: block, pos: pos, promise: promise}
+	end 'create'
+end 'AwaitSite'
+
+typealias AwaitSiteArray = Array with AwaitSite
+
+function collectAwaitSites(func IrFunction, module MaxonModule) returns AwaitSiteArray
+	var sites = AwaitSiteArray.create()
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("collectAwaitSites: blockRef from func.blockRefs not in module.blocks")
+		for pos in 0 upto block.opRefs.count() 'eachOp'
+			let opIdx = try block.opRefs.get(pos) otherwise panic("collectAwaitSites: opRefs.get OOB at {pos}")
+			match try module.ops.get(opIdx) otherwise panic("collectAwaitSites: opIdx {opIdx} not in module.ops") 'op'
+				call to indirectCall then break 'op'
+				asyncCall then break 'op'
+				await(_, promise) then sites.push(AwaitSite.create(block, pos: pos, promise: promise))
+			end 'op'
+		end 'eachOp'
+	end 'eachBlock'
+	return sites
+end 'collectAwaitSites'
+
+// Check one await site; report E3100 and return `true` iff a second await of its thread is reachable from it.
+function checkAwaitSite(project Project, module MaxonModule, blockById BlockByIdMap, func IrFunction, site AwaitSite) returns bool
+	match reachableReawait(module, blockById: blockById, startBlock: site.block, startPos: site.pos, promise: site.promise) 'reach'
+		found(secondOpIdx) then return reportedViolation(project, func: func, secondOpIdx: secondOpIdx)
+		none then break 'reach'
+	end 'reach'
+	return false
+end 'checkAwaitSite'
+
+// Report E3100 at the SECOND await's own `await`-keyword span — the await that is "already" spent, matching the
+// reference compiler's anchor — and return `true` so the caller stops at the first violation. Never spells the
+// number: `ErrorCode.promiseAlreadyAwaited` is the registry member.
+function reportedViolation(project Project, func IrFunction, secondOpIdx OpIndex) returns bool
+	let range = project.opRanges.get(secondOpIdx)
+	reportPositioned(project, code: ErrorCode.promiseAlreadyAwaited, message: "this promise has already been awaited: 'await' is linear — a promise is awaited exactly once, because the awaited thunk hands its result over and a second await would release it twice", line: range.line, column: range.column, filePath: func.sourceFilePath)
+	return true
+end 'reportedViolation'
+
+// A function-local map from a successor terminator's `BlockId` to the `BlockRef` that fetches the block from
+// `module.blocks`. `func.blockRefs` is in LAYOUT order and a terminator names its successors by `BlockId`, so a
+// walk that follows terminators needs this to resolve them. Built once per await-bearing function (rare).
+typealias BlockByIdMap = Map with (BlockId, BlockRef)
+
+function buildBlockByIdMap(func IrFunction, module MaxonModule) returns BlockByIdMap
+	var byId = BlockByIdMap.create()
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("buildBlockByIdMap: blockRef from func.blockRefs not in module.blocks")
+		byId.upsert(block.id, value: blockRef)
+	end 'eachBlock'
+	return byId
+end 'buildBlockByIdMap'
+
+// The outcome of scanning one block's body ops for a re-await of the tracked promise.
+union AwaitScan
+	// A second `await` of the tracked promise — its flat op index, which keys the diagnostic's source span.
+	foundSecond(secondOpIdx OpIndex)
+	// The tracked promise's DEFINING `asyncCall` was re-passed: the promise is re-armed here (a fresh green
+	// thread), so this path is dead for the await the walk started from.
+	rearmed
+	// Neither — control ran off the block's body; follow its successors.
+	ranOff
+end 'AwaitScan'
+
+// The result of the whole reachability walk from one first-await.
+union ReachableReawait
+	found(secondOpIdx OpIndex)
+	none
+end 'ReachableReawait'
+
+// One op's relation to the tracked promise, so `scanBlockForReawait`'s arms stay single statements.
+union OpAwaitRole
+	// The op is an `await` whose operand is the tracked promise (a re-await).
+	reawaitOf
+	// The op is the `asyncCall` that defines (re-arms) the tracked promise.
+	rearmOf
+	// The op touches the tracked promise in neither way.
+	unrelated
+end 'OpAwaitRole'
+
+typealias BlockIdSet = Set with BlockId
+
+// Is a second `await` of `promise` reachable from the first await at `(startBlock, startPos)`? Walks the CFG
+// forward: the start block's TAIL (strictly after the first await), then a breadth-first sweep of successors,
+// each block entered from its top at most once (`visited`). A path DIES at the `asyncCall` that re-defines
+// `promise` (the re-arm). A block reached again via a loop back-edge is scanned from the top — which is what
+// makes a single lexical await inside a loop reach ITSELF and be refused.
+function reachableReawait(module MaxonModule, blockById BlockByIdMap, startBlock IrBlock, startPos BlockOpPos, promise ValueId) returns ReachableReawait
+	match scanBlockForReawait(module, block: startBlock, from: startPos + 1, promise: promise) 'tail'
+		foundSecond(idx) then return ReachableReawait.found(idx)
+		// SSA guarantees the definition dominates (precedes) the await, so a re-arm cannot sit in the tail —
+		// but the arm is handled rather than assumed, so a future non-SSA shape cannot fall through silently.
+		rearmed then return ReachableReawait.none
+		ranOff then break 'tail'
+	end 'tail'
+
+	var visited = BlockIdSet.create()
+	var worklist = BlockIdArray.create()
+	collectAwaitSuccessors(module, block: startBlock, into: worklist)
+
+	var head = 0 as BlockOpPos
+	while head < worklist.count() 'bfs'
+		let blockId = try worklist.get(head) otherwise panic("reachableReawait: worklist.get OOB at {head}")
+		head = head + 1
+		if visited.contains(blockId) 'seen'
+			continue
+		end 'seen'
+		visited.insert(blockId)
+
+		let blockRef = try blockById.get(blockId) otherwise panic("reachableReawait: successor BlockId {blockId} not in this function's block map")
+		let block = try module.blocks.get(blockRef) otherwise panic("reachableReawait: blockRef from block map not in module.blocks")
+		match scanBlockForReawait(module, block: block, from: 0, promise: promise) 'scan'
+			foundSecond(idx) then return ReachableReawait.found(idx)
+			// Re-armed here — do NOT follow this block's successors; the promise past this point is a new thread.
+			rearmed then break 'scan'
+			ranOff then collectAwaitSuccessors(module, block: block, into: worklist)
+		end 'scan'
+	end 'bfs'
+
+	return ReachableReawait.none
+end 'reachableReawait'
+
+// Scan `block`'s body ops from position `from` for the tracked promise: a re-await (`foundSecond`), the
+// re-arming definition (`rearmed`), or neither (`ranOff`). Only BODY ops (`opRefs`) can be an `await`/`asyncCall`
+// — a terminator is a branch/return, handled by `collectAwaitSuccessors` — so this never inspects the terminator.
+function scanBlockForReawait(module MaxonModule, block IrBlock, from BlockOpPos, promise ValueId) returns AwaitScan
+	for pos in from upto block.opRefs.count() 'eachOp'
+		let opIdx = try block.opRefs.get(pos) otherwise panic("scanBlockForReawait: opRefs.get OOB at {pos}")
+		match classifyOpForPromise(try module.ops.get(opIdx) otherwise panic("scanBlockForReawait: opIdx {opIdx} not in module.ops"), promise: promise) 'role'
+			reawaitOf then return AwaitScan.foundSecond(opIdx)
+			rearmOf then return AwaitScan.rearmed
+			unrelated then break 'role'
+		end 'role'
+	end 'eachOp'
+	return AwaitScan.ranOff
+end 'scanBlockForReawait'
+
+// Classify `op` against the tracked promise. `await(_, awaited)` with `awaited == promise` is a re-await;
+// `asyncCall(result, …)` with `result == promise` is the re-arm; everything else is unrelated. The `call to
+// indirectCall` band range covers every non-async body op, so a newly appended op FAILS TO COMPILE here rather
+// than being silently misclassified (the band-append invariant).
+function classifyOpForPromise(op MaxonOp, promise ValueId) returns OpAwaitRole
+	match op 'op'
+		call to indirectCall then break 'op'
+		asyncCall(result, _, _, _, _) then return roleIfEqual(result, promise: promise, role: OpAwaitRole.rearmOf)
+		await(_, awaited) then return roleIfEqual(awaited, promise: promise, role: OpAwaitRole.reawaitOf)
+	end 'op'
+	return OpAwaitRole.unrelated
+end 'classifyOpForPromise'
+
+// `role` when `value` is the tracked promise, else `unrelated` — the equality test the two async arms share.
+function roleIfEqual(value ValueId, promise ValueId, role OpAwaitRole) returns OpAwaitRole
+	if value == promise 'equal'
+		return role
+	end 'equal'
+	return OpAwaitRole.unrelated
+end 'roleIfEqual'
+
+// Append `block`'s CFG successor BlockIds to `into`. Successors come from the block's TERMINATOR op — a
+// `branch` (one target) or a `condBranch` (two) — never from a body op; every other terminator (`ret`/`retVoid`
+// /`throwError`/`propagateError`/`panicAbort`) leaves the function and has no in-function successor. A block
+// with no terminator op (`dead`/`unset`) has none.
+function collectAwaitSuccessors(module MaxonModule, block IrBlock, into BlockIdArray)
+	if not block.hasTerminatorOp() 'noTerminator'
+		return
+	end 'noTerminator'
+	match try module.ops.get(block.terminatorIndex()) otherwise panic("collectAwaitSuccessors: terminatorIndex not in module.ops") 'term'
+		call to compare then break 'term'
+		condBranch(_, thenBlockId, elseBlockId) then pushSuccessorPair(into, thenId: thenBlockId, elseId: elseBlockId)
+		branch(targetBlockId) then into.push(targetBlockId)
+		globalAddr to await then break 'term'
+	end 'term'
+end 'collectAwaitSuccessors'
+
+// Append a conditional branch's two successors — factored out so the `condBranch` arm above is one statement.
+function pushSuccessorPair(into BlockIdArray, thenId BlockId, elseId BlockId)
+	into.push(thenId)
+	into.push(elseId)
+end 'pushSuccessorPair'
 
 // Validate every `call` op against its callee's signature. Walked by FUNCTION (not the
 // flat op array) so each call's diagnostic can name its declaring file (`func.sourceFilePath`);
