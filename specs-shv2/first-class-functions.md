@@ -1811,6 +1811,63 @@ end 'main'
 error E3005: specs/fragments/first-class-functions/first-class-function.function-value-returned-as-int-errors.test:10:2: Cannot return 'function' from function declared to return 'int': a function value is only usable where a function type declared with 'typealias' is expected
 ```
 
+<!-- test: first-class-function.function-value-as-arg-errors -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
+The CALL-ARGUMENT position reaches the same type rule through `SemanticCheck.checkArgTypes`. Without a
+test here a sabotage of the `functionIntoNonFunction` routing at that site stays green — the condition
+is single-homed (`checkDeclaredType`) but this ROUTE was pinned by nothing (OPEN.md #69). The bootstrap
+also rejects this E3005-class.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+function dbl(n Integer) returns Integer
+	return n * 2
+end 'dbl'
+
+function takesInt(n Integer) returns Integer
+	return n
+end 'takesInt'
+
+function main() returns ExitCode
+	return takesInt(dbl) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/first-class-functions/first-class-function.function-value-as-arg-errors.test:14:9: cannot pass a value of type 'function' as argument 'n', which holds 'int': a function value is only usable where a function type declared with 'typealias' is expected
+```
+
+<!-- test: first-class-function.function-value-into-field-errors -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
+The FIELD-STORE position (`b.slot = dbl`, a struct field holding a non-function). The other unpinned
+route of OPEN.md #69 — a sabotage of the field-store `functionIntoNonFunction` arm stayed green without
+this. The bootstrap also rejects this E3005-class.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var slot as Integer
+
+	static function create() returns Self
+		return Self{slot: 0}
+	end 'create'
+end 'Box'
+
+function dbl(n Integer) returns Integer
+	return n * 2
+end 'dbl'
+
+function main() returns ExitCode
+	var b = Box.create()
+	b.slot = dbl
+	return b.slot as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/first-class-functions/first-class-function.function-value-into-field-errors.test:19:4: cannot assign a value of type 'function' to field 'slot', which holds 'int': a function value is only usable where a function type declared with 'typealias' is expected
+```
+
 <!-- test: first-class-function.throwing-function-as-value-errors -->
 <!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 A **`throws` function cannot be taken as a value.** A function type has no throws clause — the
