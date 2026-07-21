@@ -337,3 +337,28 @@ end 'main'
 ```maxoncstderr
 error E3059: <fragment>:17:10: try propagates 'AError' but enclosing function throws 'BError' — add 'otherwise' to convert
 ```
+
+<!-- test: async-try-await.error.double-try-await -->
+`try await` is LINEAR exactly as plain `await` is — awaiting one throwing promise twice would release its
+green thread twice. The linearity pass counts `tryAwait` sites, not only plain `await`, so the second
+`try await` of the same promise is refused (E3100). This locks in the soundness that the exhaustive
+op-match structurally protects.
+```maxon
+enum WorkError implements Error
+	failed
+end 'WorkError'
+
+function compute() returns int throws WorkError
+	return 42
+end 'compute'
+
+function main() returns ExitCode
+	let p = async compute()
+	let a = try await p otherwise 0
+	let b = try await p otherwise 0
+	return (a + b) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3100: <fragment>:13:14: this promise has already been awaited: 'await' is linear — a promise is awaited exactly once, because the awaited thunk hands its result over and a second await would release it twice
+```
