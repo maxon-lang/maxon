@@ -85,6 +85,40 @@ end 'main'
 45
 ```
 
+<!-- test: async-subprocess.multi-concurrent -->
+<!-- targets: x64-windows -->
+Three children are spawned BEFORE any await, so all three park on their processes SIMULTANEOUSLY — the netpoll
+blocks on a `WaitForMultipleObjects` of THREE handles, and `__gt_proc_check`'s parallel-array swap-remove runs with
+a multi-entry store (the path `sequence`, `spawn-loop` and `interleave` never reach, each parking ≤1 child at a
+time). Each exit code is read back into its own digit, so `123` proves all three resumed independently with the
+right handle-to-thread mapping and no cross-talk.
+```maxon
+function c1() returns int
+	return runProcess("cmd /c exit 1")
+end 'c1'
+
+function c2() returns int
+	return runProcess("cmd /c exit 2")
+end 'c2'
+
+function c3() returns int
+	return runProcess("cmd /c exit 3")
+end 'c3'
+
+function main() returns ExitCode
+	let p1 = async c1()
+	let p2 = async c2()
+	let p3 = async c3()
+	let r1 = await p1
+	let r2 = await p2
+	let r3 = await p3
+	return (r1 * 100 + r2 * 10 + r3) as ExitCode
+end 'main'
+```
+```exitcode
+123
+```
+
 <!-- test: async-subprocess.interleave-with-sleep -->
 <!-- targets: x64-windows -->
 A slow child (a ~1 s `ping` delay) and a short (50 ms) sleeper run concurrently. The sleeper's timer fires WHILE
@@ -158,6 +192,34 @@ end 'main'
 ```
 ```exitcode
 1
+```
+
+<!-- test: async-subprocess.store-overflow-aborts -->
+<!-- targets: x64-windows -->
+Parking more than the store's capacity (64, `WaitForMultipleObjects`'s `MAXIMUM_WAIT_OBJECTS`) children
+concurrently must NOT write past the 64-slot parallel arrays. Seventy children are spawned before any await (the
+discarded promises keep their GTs parked); driving them all would overflow the store, so `__gt_proc_add` aborts
+with exit code 70 (`ProcStoreOverflowExitCode`) rather than corrupt the heap — a documented, safe hard bound. This
+is heavier than the other cases (~64 real child spawns before the abort) because it is the regression test for a
+memory-safety guard.
+```maxon
+function child() returns int
+	return runProcess("cmd /c exit 1")
+end 'child'
+
+function main() returns ExitCode
+	var i = 0
+	while i < 70 'l'
+		let p = async child()
+		i = i + 1
+	end 'l'
+	let q = async child()
+	let r = await q
+	return r as ExitCode
+end 'main'
+```
+```exitcode
+70
 ```
 
 <!-- test: async-subprocess.error.non-string-arg-rejected -->

@@ -141,11 +141,14 @@ let TimerNoDeadline = 0
 // the layout follows it. Both regions are `__slab_alloc`'d once in `__gt_init` (like the timer heap), because
 // `.data` entries are single scalar slots. Removal is swap-with-last across BOTH arrays in lockstep.
 //
-// ⚠ CAPACITY IS BOUNDED BY `MAXIMUM_WAIT_OBJECTS` = 64: `WaitForMultipleObjects` refuses an `nCount` above 64,
-// so at most 64 children may be parked SIMULTANEOUSLY. The subprocess-seed specs park ≤2 at once (one process +
-// one sleeper in the interleave case; one at a time in the spawn loop), far below the cap; the full harness's
-// >64-way fan-in is a later IOCP rung. There is no runtime cap here (like `__gt_timer_add`, the store is a plain
-// append) — the bound is documented, not silently enforced, exactly as the plan requires.
+// ⚠ CAPACITY IS `MAXIMUM_WAIT_OBJECTS` = 64, and it is a HARD, ENFORCED bound — not a comment. `WaitForMultipleObjects`
+// refuses an `nCount` above 64, so at most 64 children may be parked SIMULTANEOUSLY. `__gt_proc_add` CHECKS
+// `count >= ProcStoreCapacity` before every append and aborts (`ProcStoreOverflowExitCode`) rather than writing
+// `procHandles[64]`/`procGts[64]` past the 64-slot slab arrays — an unchecked append would be heap corruption, and
+// then `emitProcWait` would pass `pc > 64` to `WaitForMultipleObjects`, which fails → the same null-handle busy-spin
+// class. The subprocess-seed specs park ≤3 at once (three concurrent children; one process + one sleeper in the
+// interleave case), far below the cap, and the harness uses ~12 workers; real >64-way fan-in is the later IOCP rung
+// (C), which has no consumer yet. A documented, SAFE hard bound — never silent corruption.
 let ProcStoreCapacity = 64
 let ProcSlotBytes = 8  // one i64 handle / gt pointer per parallel-array entry
 let ProcStoreBytes = ProcStoreCapacity * ProcSlotBytes
@@ -176,6 +179,12 @@ let TrailingNulBytes = 1  // the one extra byte for the cmdline's NUL terminator
 // message-carrying panic would need the parser's `.rdata` interner, which the builder-built runtime has no handle
 // to at this rung — a richer diagnostic is a follow-up). `runProcess` on a valid command never reaches here.
 let SpawnFailedExitCode = 1
+// The exit code `__gt_proc_add` aborts with when the process store is FULL (a program parks more than
+// `ProcStoreCapacity` = 64 children concurrently — beyond `WaitForMultipleObjects`'s `MAXIMUM_WAIT_OBJECTS`). A
+// DISTINCT value from `SpawnFailedExitCode` and from every subprocess-spec child exit code (1/2/3/4/5/25/45/123),
+// so the store-overflow regression test can pin exactly this path. Aborting is the honest SAFE response to hitting
+// the seed's documented concurrency ceiling; real >64-way fan-in is the later IOCP rung.
+let ProcStoreOverflowExitCode = 70
 
 // --- Monotonic clock (P1.5 mid-body-yield) ---
 // `ns = ticks * 1e9 / freq`, evaluated as the OVERFLOW-SAFE split identity
@@ -1154,53 +1163,73 @@ end 'buildGtSleep'
 
 // `__gt_proc_add(gt, handle)` — park `gt` on child `handle`: append `handle`/`gt` to the two parallel arrays,
 // then mark `gt` waiting and record the handle in `gt.io_handle` (its durable home across the yield). An UNSORTED
-// append (like `__gt_timer_add`); no capacity guard — the concurrent parked-child count is bounded by
-// simultaneously-in-flight children (≤2 in the specs), far below the 64-handle WaitForMultipleObjects cap.
+// append (like `__gt_timer_add`), but — unlike the timer store — CAPACITY-GUARDED: parking a 65th child
+// concurrently would write `procHandles[64]`/`procGts[64]` one slot PAST the 64-slot slab arrays (heap
+// corruption), and then hand `WaitForMultipleObjects` a `pc > MAXIMUM_WAIT_OBJECTS` it refuses. So `count >=
+// ProcStoreCapacity` aborts (`ProcStoreOverflowExitCode`) rather than corrupt the heap — the seed's documented
+// concurrency ceiling made a hard, safe bound (see `ProcStoreCapacity`).
 function buildGtProcAdd(module StdModule)
 	var func = IrFunction.createFromStd(GtProcAddName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry")
+	var overflow = module.addBlock(func, label: b"overflow")
+	var doAdd = module.addBlock(func, label: b"doadd")
 	emitParams(module, block: entry, count: 2)
 	let gt = 0 as ValueId
 	let handle = 1 as ValueId
 
+	// entry: load count; if it has reached the store's capacity → overflow (abort), else → doAdd.
 	let countAddr = ids.mint()
 	module.appendOp(entry, op: StdOp.globalAddr(countAddr, label: GtProcCountLabel))
 	let count = ids.mint()
 	module.appendOp(entry, op: StdOp.loadIndirect(count, addrId: countAddr, offset: 0, valueType: StdType.i64))
+	let capacityConst = ids.mint()
+	module.appendOp(entry, op: StdOp.const(capacityConst, value: ProcStoreCapacity, valueType: StdType.i64))
+	let isFull = ids.mint()
+	module.appendOp(entry, op: StdOp.cmp(isFull, lhs: count, rhs: capacityConst, pred: StdCmpPred.ge, operandType: StdType.i64))
+	module.setTerminator(entry, op: StdOp.condBranch(isFull, thenBlockId: overflow.id, elseBlockId: doAdd.id))
+
+	// overflow: the store is full — abort rather than write past the 64-slot arrays. `osExit` diverges, so the
+	// trailing `retVoid` is a dead terminator (mirrors `__gt_process_run`'s `spawnFailed`).
+	let overflowCodeConst = ids.mint()
+	module.appendOp(overflow, op: StdOp.const(overflowCodeConst, value: ProcStoreOverflowExitCode, valueType: StdType.i64))
+	module.appendOp(overflow, op: StdOp.osExit(overflowCodeConst))
+	module.setTerminator(overflow, op: StdOp.retVoid)
+
+	// doAdd: append the entry to both parallel arrays, bump the count, and mark the GT waiting.
 	let slotBytesConst = ids.mint()
-	module.appendOp(entry, op: StdOp.const(slotBytesConst, value: ProcSlotBytes, valueType: StdType.i64))
+	module.appendOp(doAdd, op: StdOp.const(slotBytesConst, value: ProcSlotBytes, valueType: StdType.i64))
 	let entryOff = ids.mint()
-	module.appendOp(entry, op: StdOp.binOp(entryOff, lhs: count, rhs: slotBytesConst, opcode: StdBinOpcode.mul, operandType: StdType.i64))
+	module.appendOp(doAdd, op: StdOp.binOp(entryOff, lhs: count, rhs: slotBytesConst, opcode: StdBinOpcode.mul, operandType: StdType.i64))
 	// procHandles[count] = handle.
 	let handlesBaseAddr = ids.mint()
-	module.appendOp(entry, op: StdOp.globalAddr(handlesBaseAddr, label: GtProcHandlesBaseLabel))
+	module.appendOp(doAdd, op: StdOp.globalAddr(handlesBaseAddr, label: GtProcHandlesBaseLabel))
 	let handlesBase = ids.mint()
-	module.appendOp(entry, op: StdOp.loadIndirect(handlesBase, addrId: handlesBaseAddr, offset: 0, valueType: StdType.i64))
+	module.appendOp(doAdd, op: StdOp.loadIndirect(handlesBase, addrId: handlesBaseAddr, offset: 0, valueType: StdType.i64))
 	let handleSlot = ids.mint()
-	module.appendOp(entry, op: StdOp.binOp(handleSlot, lhs: handlesBase, rhs: entryOff, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	module.appendOp(entry, op: StdOp.storeIndirect(handleSlot, offset: 0, valueId: handle, valueType: StdType.i64))
+	module.appendOp(doAdd, op: StdOp.binOp(handleSlot, lhs: handlesBase, rhs: entryOff, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	module.appendOp(doAdd, op: StdOp.storeIndirect(handleSlot, offset: 0, valueId: handle, valueType: StdType.i64))
 	// procGts[count] = gt.
 	let gtsBaseAddr = ids.mint()
-	module.appendOp(entry, op: StdOp.globalAddr(gtsBaseAddr, label: GtProcGtsBaseLabel))
+	module.appendOp(doAdd, op: StdOp.globalAddr(gtsBaseAddr, label: GtProcGtsBaseLabel))
 	let gtsBase = ids.mint()
-	module.appendOp(entry, op: StdOp.loadIndirect(gtsBase, addrId: gtsBaseAddr, offset: 0, valueType: StdType.i64))
+	module.appendOp(doAdd, op: StdOp.loadIndirect(gtsBase, addrId: gtsBaseAddr, offset: 0, valueType: StdType.i64))
 	let gtSlot = ids.mint()
-	module.appendOp(entry, op: StdOp.binOp(gtSlot, lhs: gtsBase, rhs: entryOff, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	module.appendOp(entry, op: StdOp.storeIndirect(gtSlot, offset: 0, valueId: gt, valueType: StdType.i64))
+	module.appendOp(doAdd, op: StdOp.binOp(gtSlot, lhs: gtsBase, rhs: entryOff, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	module.appendOp(doAdd, op: StdOp.storeIndirect(gtSlot, offset: 0, valueId: gt, valueType: StdType.i64))
 	// count++.
 	let oneConst = ids.mint()
-	module.appendOp(entry, op: StdOp.const(oneConst, value: 1, valueType: StdType.i64))
+	module.appendOp(doAdd, op: StdOp.const(oneConst, value: 1, valueType: StdType.i64))
 	let newCount = ids.mint()
-	module.appendOp(entry, op: StdOp.binOp(newCount, lhs: count, rhs: oneConst, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	module.appendOp(entry, op: StdOp.storeIndirect(countAddr, offset: 0, valueId: newCount, valueType: StdType.i64))
+	module.appendOp(doAdd, op: StdOp.binOp(newCount, lhs: count, rhs: oneConst, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	module.appendOp(doAdd, op: StdOp.storeIndirect(countAddr, offset: 0, valueId: newCount, valueType: StdType.i64))
 	// gt.status = waiting ; gt.io_handle = handle.
 	let waitingConst = ids.mint()
-	module.appendOp(entry, op: StdOp.const(waitingConst, value: GtStatusWaiting, valueType: StdType.i64))
-	module.appendOp(entry, op: StdOp.storeIndirect(gt, offset: GtOffStatus, valueId: waitingConst, valueType: StdType.i64))
-	module.appendOp(entry, op: StdOp.storeIndirect(gt, offset: GtOffIoHandle, valueId: handle, valueType: StdType.i64))
-	module.setTerminator(entry, op: StdOp.retVoid)
+	module.appendOp(doAdd, op: StdOp.const(waitingConst, value: GtStatusWaiting, valueType: StdType.i64))
+	module.appendOp(doAdd, op: StdOp.storeIndirect(gt, offset: GtOffStatus, valueId: waitingConst, valueType: StdType.i64))
+	module.appendOp(doAdd, op: StdOp.storeIndirect(gt, offset: GtOffIoHandle, valueId: handle, valueType: StdType.i64))
+	module.setTerminator(doAdd, op: StdOp.retVoid)
 
 	module.functions.push(func)
 end 'buildGtProcAdd'
