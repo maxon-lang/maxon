@@ -1,0 +1,38 @@
+// Test: match-statements.default
+function main() returns ExitCode
+	let x = 99
+	match x 'check'
+		1 then return 10
+		2 then return 20
+		default then return 0
+	end 'check'
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 rax, 99
+    x64.cmpRegImm32 rax, 1
+    x64.jcc equal, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.movRegImm32 r8, 10
+    x64.popReg rbp
+    x64.ret
+  matchnext:
+    x64.cmpRegImm32 rax, 2
+    x64.jcc equal, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.movRegImm32 r8, 20
+    x64.popReg rbp
+    x64.ret
+  matchnext:
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+  matchcont:
+}

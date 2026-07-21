@@ -1,0 +1,199 @@
+// Test: error.otherwise-value-managed-string
+
+// A managed String try-result with a fallback STRING LITERAL. The result phi merges the owned ok
+// result with the immortal `otherwise` literal, which must be PROMOTED to an owned copy so the phi
+// drops exactly once on every edge (no decref of read-only rdata, no leak, no NULL decref on the throw).
+enum MyError implements Error
+	failed
+end 'MyError'
+
+function tryIt(flag bool) returns String throws MyError
+	if flag 'c'
+		throw MyError.failed
+	end 'c'
+	return "ok"
+end 'tryIt'
+
+function pick(flag bool) returns String
+	let s = try tryIt(flag) otherwise "fallback"
+	return s
+end 'pick'
+
+function main() returns ExitCode
+	let a = pick(false)
+	let b = pick(true)
+	if a == "ok" 'x'
+		if b == "fallback" 'y'
+			return 0
+		end 'y'
+	end 'x'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @tryIt {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.prologue 32
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, c
+    x64.jmp ifcont
+  c:
+    x64.movRegImm32 rax, 0
+    x64.leaRegRegImm32 r10, rax, 1
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.leaRegRdata rax, [rip + __str_rec_1]
+    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
+    x64.loadRegBaseDisp.word64 r12, [rax + 8]
+    x64.leaRegRegImm32 rcx, r12, 49
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r13, r8
+    x64.leaRegRegImm32 r14, r13, 48
+    x64.movRegReg rcx, r14
+    x64.movRegReg rdx, rbx
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, r14, r12
+    x64.storeBaseDispReg.word64 [r13 + 0], r14
+    x64.storeBaseDispReg.word64 [r13 + 8], r12
+    x64.storeBaseDispReg.word64 [r13 + 16], r12
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r13 + 24], rax
+    x64.movRegImm rax, -3
+    x64.storeBaseDispReg.word64 [r13 + 32], rax
+    x64.movRegImm32 r10, 0
+    x64.movRegReg r8, r13
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @pick {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.prologue 32
+    x64.callDirect tryIt
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.leaRegRdata rax, [rip + __str_rec_3]
+    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
+    x64.loadRegBaseDisp.word64 r12, [rax + 8]
+    x64.leaRegRegImm32 rcx, r12, 49
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r13, r8
+    x64.leaRegRegImm32 r14, r13, 48
+    x64.movRegReg rcx, r14
+    x64.movRegReg rdx, rbx
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, r14, r12
+    x64.storeBaseDispReg.word64 [r13 + 0], r14
+    x64.storeBaseDispReg.word64 [r13 + 8], r12
+    x64.storeBaseDispReg.word64 [r13 + 16], r12
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r13 + 24], rax
+    x64.movRegImm rax, -3
+    x64.storeBaseDispReg.word64 [r13 + 32], rax
+    x64.movRegReg r8, r13
+    x64.jmp trycont
+  tryok:
+    x64.jmp trycont
+  trycont:
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegImm32 rcx, 0
+    x64.callDirect pick
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 1
+    x64.callDirect pick
+    x64.movRegReg r12, r8
+    x64.leaRegRdata rdx, [rip + __str_rec_1]
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_eq
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, x
+    x64.jmp ifcont
+  x:
+    x64.leaRegRdata rdx, [rip + __str_rec_3]
+    x64.movRegReg rcx, r12
+    x64.callDirect __str_eq
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, y
+    x64.jmp ifcont
+  y:
+    x64.movRegImm32 r13, 0
+    x64.movRegReg rcx, r12
+    x64.callDirect __str_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_decref
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegImm32 r13, 1
+    x64.movRegReg rcx, r12
+    x64.callDirect __str_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_decref
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

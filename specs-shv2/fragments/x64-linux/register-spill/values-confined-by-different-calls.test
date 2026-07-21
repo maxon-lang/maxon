@@ -1,0 +1,231 @@
+// Test: values-confined-by-different-calls
+function sink(x int) returns int
+	return x
+end 'sink'
+
+function pick(k int) returns int
+	let v1 = k + 11
+	let v2 = k + 22
+	let v3 = k + 33
+	let v4 = k + 44
+	let v5 = k + 55
+	let v6 = k + 66
+	var out = 0
+	if k == 1 'b1'
+		let t = sink(1)
+		out = v1 + t
+	end 'b1' else if k == 2 'b2'
+		let t = sink(2)
+		out = v2 + t
+	end 'b2' else if k == 3 'b3'
+		let t = sink(3)
+		out = v3 + t
+	end 'b3' else if k == 4 'b4'
+		let t = sink(4)
+		out = v4 + t
+	end 'b4' else if k == 5 'b5'
+		let t = sink(5)
+		out = v5 + t
+	end 'b5' else 'b6'
+		let t = sink(6)
+		out = v6 + t
+	end 'b6'
+	return out
+end 'pick'
+
+function main() returns ExitCode
+	if pick(1) != 13 'a1'
+		return 1
+	end 'a1'
+	if pick(2) != 26 'a2'
+		return 2
+	end 'a2'
+	if pick(3) != 39 'a3'
+		return 3
+	end 'a3'
+	if pick(4) != 52 'a4'
+		return 4
+	end 'a4'
+	if pick(5) != 65 'a5'
+		return 5
+	end 'a5'
+	if pick(6) != 78 'a6'
+		return 6
+	end 'a6'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @sink {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegReg r8, rcx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @pick {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 40
+    x64.leaRegRegImm32 rbx, rcx, 11
+    x64.leaRegRegImm32 r12, rcx, 22
+    x64.leaRegRegImm32 r13, rcx, 33
+    x64.leaRegRegImm32 r14, rcx, 44
+    x64.leaRegRegImm32 r15, rcx, 55
+    x64.leaRegRegImm32 rax, rcx, 66
+    x64.storeSlotReg slot0, rax
+    x64.cmpRegImm32 rcx, 1
+    x64.jcc equal, b1
+    x64.jmp ifelse
+  b1:
+    x64.movRegImm32 rcx, 1
+    x64.callDirect sink
+    x64.leaRegRegReg r8, rbx, r8
+    x64.jmp ifcont
+  ifelse:
+    x64.cmpRegImm32 rcx, 2
+    x64.jcc equal, b2
+    x64.jmp ifelse
+  b2:
+    x64.movRegImm32 rcx, 2
+    x64.callDirect sink
+    x64.leaRegRegReg rax, r12, r8
+    x64.jmp ifcont
+  ifelse:
+    x64.cmpRegImm32 rcx, 3
+    x64.jcc equal, b3
+    x64.jmp ifelse
+  b3:
+    x64.movRegImm32 rcx, 3
+    x64.callDirect sink
+    x64.leaRegRegReg rax, r13, r8
+    x64.jmp ifcont
+  ifelse:
+    x64.cmpRegImm32 rcx, 4
+    x64.jcc equal, b4
+    x64.jmp ifelse
+  b4:
+    x64.movRegImm32 rcx, 4
+    x64.callDirect sink
+    x64.leaRegRegReg rax, r14, r8
+    x64.jmp ifcont
+  ifelse:
+    x64.cmpRegImm32 rcx, 5
+    x64.jcc equal, b5
+    x64.jmp ifelse
+  b5:
+    x64.movRegImm32 rcx, 5
+    x64.callDirect sink
+    x64.leaRegRegReg rax, r15, r8
+    x64.jmp ifcont
+  ifelse:
+    x64.movRegImm32 rcx, 6
+    x64.callDirect sink
+    x64.loadRegSlot rax, slot0
+    x64.leaRegRegReg rax, rax, r8
+    x64.jmp ifcont
+  ifcont:
+    x64.jmp ifcont
+  ifcont:
+    x64.jmp ifcont
+  ifcont:
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegReg r8, rax
+    x64.jmp ifcont
+  ifcont:
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 1
+    x64.callDirect pick
+    x64.cmpRegImm32 r8, 13
+    x64.jcc notEqual, a1
+    x64.jmp ifcont
+  a1:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 rcx, 2
+    x64.callDirect pick
+    x64.cmpRegImm32 r8, 26
+    x64.jcc notEqual, a2
+    x64.jmp ifcont
+  a2:
+    x64.movRegImm32 r8, 2
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 rcx, 3
+    x64.callDirect pick
+    x64.cmpRegImm32 r8, 39
+    x64.jcc notEqual, a3
+    x64.jmp ifcont
+  a3:
+    x64.movRegImm32 r8, 3
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 rcx, 4
+    x64.callDirect pick
+    x64.cmpRegImm32 r8, 52
+    x64.jcc notEqual, a4
+    x64.jmp ifcont
+  a4:
+    x64.movRegImm32 r8, 4
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 rcx, 5
+    x64.callDirect pick
+    x64.cmpRegImm32 r8, 65
+    x64.jcc notEqual, a5
+    x64.jmp ifcont
+  a5:
+    x64.movRegImm32 r8, 5
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 rcx, 6
+    x64.callDirect pick
+    x64.cmpRegImm32 r8, 78
+    x64.jcc notEqual, a6
+    x64.jmp ifcont
+  a6:
+    x64.movRegImm32 r8, 6
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

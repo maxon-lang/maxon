@@ -1,0 +1,150 @@
+// Test: error.otherwise-return-managed-struct
+
+typealias Integer = int(i64.min to i64.max)
+
+// Regression: when a try call returns a heap-managed struct and the otherwise
+// branch returns early, the uninitialized __try_result_ slot must not be
+// decref'd on the error path (would crash mm_decref with garbage pointer).
+enum MyError implements Error
+	failed
+end 'MyError'
+
+type Box
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Box'
+
+function makeBox(flag bool) returns Box throws MyError
+	if flag 'check'
+		throw MyError.failed
+	end 'check'
+	return Box.create(7)
+end 'makeBox'
+
+function getBoxValue(flag bool) returns Integer
+	let box = try makeBox(flag) otherwise return -1
+	return box.value
+end 'getBoxValue'
+
+function main() returns ExitCode
+	let good = getBoxValue(false)
+	if good == 7 'g'
+		let bad = getBoxValue(true)
+		if bad == -1 'b'
+			return 0
+		end 'b'
+	end 'g'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @Box.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @makeBox {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, check
+    x64.jmp ifcont
+  check:
+    x64.movRegImm32 rax, 0
+    x64.leaRegRegImm32 r10, rax, 1
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 rcx, 7
+    x64.callDirect Box.create
+    x64.movRegImm32 r10, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @getBoxValue {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.callDirect makeBox
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 r8, 1
+    x64.negReg r8, r8
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.loadRegBaseDisp.word64 rbx, [r8 + 0]
+    x64.movRegReg rcx, r8
+    x64.callDirect __mm_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 0
+    x64.callDirect getBoxValue
+    x64.cmpRegImm32 r8, 7
+    x64.jcc equal, g
+    x64.jmp ifcont
+  g:
+    x64.movRegImm32 rcx, 1
+    x64.callDirect getBoxValue
+    x64.movRegImm32 rax, 1
+    x64.negReg rax, rax
+    x64.cmpRegReg r8, rax
+    x64.jcc equal, b
+    x64.jmp ifcont
+  b:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

@@ -1,0 +1,29 @@
+// Test: fused-compare-is-highest-value
+function main() returns ExitCode
+	let a = 7
+	let b = 3
+	if a < b 'lt'
+		return b
+	end 'lt'
+	return a
+end 'main'
+---
+ExitCode: 7
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 7
+    x64.movRegImm32 rax, 3
+    x64.cmpRegImm32 r8, 3
+    x64.jcc less, lt
+    x64.jmp ifcont
+  lt:
+    x64.movRegReg r8, rax
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.popReg rbp
+    x64.ret
+}

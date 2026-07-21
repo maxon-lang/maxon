@@ -1,0 +1,140 @@
+// Test: six-div-results-live-across-the-call
+function digits6(p1 int, p2 int, p3 int, p4 int, p5 int, p6 int) returns int
+	return p1 * 100000 + p2 * 10000 + p3 * 1000 + p4 * 100 + p5 * 10 + p6
+end 'digits6'
+
+function divsAcross(p int) returns int
+	let n1 = p + 100
+	let n2 = p + 45
+	let n3 = p + 23
+	let d1 = p + 12
+	let d2 = p + 7
+	let d3 = p + 9
+	let q1 = n1 / d1
+	let q2 = n1 mod d1
+	let q3 = n2 / d2
+	let q4 = n2 mod d2
+	let q5 = n3 / d3
+	let q6 = n3 mod d3
+	let r = digits6(q1, p2: q2, p3: q3, p4: q4, p5: q5, p6: q6)
+	return r + q1 * 100000 + q2 * 10000 + q3 * 1000 + q4 * 100 + q5 * 10 + q6
+end 'divsAcross'
+
+function main() returns ExitCode
+	let v = divsAcross(0)
+	if v == 1692650 'ok'
+		return 0
+	end 'ok'
+	return 99
+end 'main'
+---
+ExitCode: 0
+---
+func @digits6 {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.imulRegRegImm32 rcx, rcx, 100000
+    x64.imulRegRegImm32 rdx, rdx, 10000
+    x64.leaRegRegReg rcx, rcx, rdx
+    x64.imulRegRegImm32 rax, rax, 1000
+    x64.leaRegRegReg rax, rcx, rax
+    x64.imulRegRegImm32 rcx, r9, 100
+    x64.leaRegRegReg rax, rax, rcx
+    x64.imulRegRegImm32 rcx, rsi, 10
+    x64.leaRegRegReg rax, rax, rcx
+    x64.leaRegRegReg r8, rax, rdi
+    x64.popReg rbp
+    x64.ret
+}
+
+func @divsAcross {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 40
+    x64.leaRegRegImm32 rsi, rcx, 100
+    x64.leaRegRegImm32 rdi, rcx, 45
+    x64.leaRegRegImm32 r8, rcx, 23
+    x64.leaRegRegImm32 r9, rcx, 12
+    x64.leaRegRegImm32 r10, rcx, 7
+    x64.leaRegRegImm32 rcx, rcx, 9
+    x64.movRegReg rax, rsi
+    x64.cqo
+    x64.idivReg r9
+    x64.movRegReg rbx, rax
+    x64.movRegReg rax, rsi
+    x64.cqo
+    x64.idivReg r9
+    x64.movRegReg r12, rdx
+    x64.movRegReg rax, rdi
+    x64.cqo
+    x64.idivReg r10
+    x64.movRegReg r13, rax
+    x64.movRegReg rax, rdi
+    x64.cqo
+    x64.idivReg r10
+    x64.movRegReg r14, rdx
+    x64.movRegReg rax, r8
+    x64.cqo
+    x64.idivReg rcx
+    x64.movRegReg r15, rax
+    x64.movRegReg rax, r8
+    x64.cqo
+    x64.idivReg rcx
+    x64.movRegReg rdi, rdx
+    x64.storeSlotReg slot0, rdi
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, r13
+    x64.movRegReg r9, r14
+    x64.movRegReg rsi, r15
+    x64.callDirect digits6
+    x64.imulRegRegImm32 rax, rbx, 100000
+    x64.leaRegRegReg rax, r8, rax
+    x64.imulRegRegImm32 rcx, r12, 10000
+    x64.leaRegRegReg rax, rax, rcx
+    x64.imulRegRegImm32 rcx, r13, 1000
+    x64.leaRegRegReg rax, rax, rcx
+    x64.imulRegRegImm32 rcx, r14, 100
+    x64.leaRegRegReg rax, rax, rcx
+    x64.imulRegRegImm32 rcx, r15, 10
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot0
+    x64.leaRegRegReg r8, rax, rcx
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 0
+    x64.callDirect divsAcross
+    x64.cmpRegImm32 r8, 1692650
+    x64.jcc equal, ok
+    x64.jmp ifcont
+  ok:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 99
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

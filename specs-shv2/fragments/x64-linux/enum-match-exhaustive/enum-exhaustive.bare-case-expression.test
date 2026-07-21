@@ -1,0 +1,49 @@
+// Test: enum-exhaustive.bare-case-expression
+enum Status
+		pending
+		approved
+		rejected
+end 'Status'
+
+function main() returns ExitCode
+	let s = Status.approved
+	let code = match s 'eval'
+		pending gives 0
+		approved gives 1
+		rejected gives 2
+	end 'eval'
+	return code
+end 'main'
+---
+ExitCode: 1
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 rax, 1
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.movRegImm32 r8, 0
+    x64.jmp matchcont
+  matchnext:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc equal, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.movRegImm32 r8, 1
+    x64.jmp matchcont
+  matchnext:
+    x64.cmpRegImm32 rax, 2
+    x64.jcc equal, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.movRegImm32 r8, 2
+    x64.jmp matchcont
+  matchcont:
+    x64.popReg rbp
+    x64.ret
+  matchnext:
+}

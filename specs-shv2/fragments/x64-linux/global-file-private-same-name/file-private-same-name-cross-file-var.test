@@ -1,0 +1,78 @@
+// Test: file-private-same-name-cross-file-var
+// --- file: featA/a.maxon
+typealias Num = int(i64.min to i64.max)
+
+var counter = 7
+
+export function bumpA() returns Num
+	counter = counter + 1
+	return counter
+end 'bumpA'
+
+// --- file: featB/b.maxon
+typealias Num = int(i64.min to i64.max)
+
+var counter = 100
+
+export function bumpB() returns Num
+	counter = counter + 10
+	return counter
+end 'bumpB'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return bumpA() + bumpB()
+end 'main'
+---
+ExitCode: 118
+---
+data {
+  __data_counter@0 = i64 7
+  __data_counter$1@8 = i64 100
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.callDirect bumpA
+    x64.movRegReg rbx, r8
+    x64.callDirect bumpB
+    x64.leaRegRegReg r8, rbx, r8
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @bumpA {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.leaRegGlobal rax, __data_counter
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.leaRegGlobal rcx, __data_counter
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+    x64.leaRegGlobal rax, __data_counter
+    x64.loadRegBaseDisp.word64 r8, [rax + 0]
+    x64.popReg rbp
+    x64.ret
+}
+
+func @bumpB {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.leaRegGlobal rax, __data_counter$1
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.leaRegRegImm32 rax, rax, 10
+    x64.leaRegGlobal rcx, __data_counter$1
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+    x64.leaRegGlobal rax, __data_counter$1
+    x64.loadRegBaseDisp.word64 r8, [rax + 0]
+    x64.popReg rbp
+    x64.ret
+}

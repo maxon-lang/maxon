@@ -1,0 +1,41 @@
+// Test: if-statements.else-if-chain
+function main() returns ExitCode
+	let x = 2
+	if x == 1 'case1'
+		return 1
+	end 'case1' else if x == 2 'case2'
+		return 2
+	end 'case2' else 'default'
+		return 0
+	end 'default'
+end 'main'
+---
+ExitCode: 2
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 rax, 2
+    x64.cmpRegImm32 rax, 1
+    x64.jcc equal, case1
+    x64.jmp ifelse
+  case1:
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+  ifelse:
+    x64.cmpRegImm32 rax, 2
+    x64.jcc equal, case2
+    x64.jmp ifelse
+  case2:
+    x64.movRegImm32 r8, 2
+    x64.popReg rbp
+    x64.ret
+  ifelse:
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+  ifcont:
+}

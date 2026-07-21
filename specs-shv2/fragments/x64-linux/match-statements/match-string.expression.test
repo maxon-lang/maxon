@@ -1,0 +1,48 @@
+// Test: match-string.expression
+function main() returns ExitCode
+	let name = "bob"
+	let code = match name 'lookup'
+		"alice" gives 60
+		"bob" gives 120
+		default gives 0
+	end 'lookup'
+	return code
+end 'main'
+---
+ExitCode: 120
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.leaRegRdata rbx, [rip + __str_rec_1]
+    x64.leaRegRdata rdx, [rip + __str_rec_3]
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_eq
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.movRegImm32 r8, 60
+    x64.jmp matchcont
+  matchnext:
+    x64.leaRegRdata rdx, [rip + __str_rec_1]
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_eq
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.movRegImm32 r8, 120
+    x64.jmp matchcont
+  matchnext:
+    x64.movRegImm32 r8, 0
+    x64.jmp matchcont
+  matchcont:
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

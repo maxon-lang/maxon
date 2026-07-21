@@ -1,0 +1,50 @@
+// Test: first-class-function.non-capturing-closure-returned
+
+typealias Integer = int(i64.min to i64.max)
+typealias UnaryOp = function(Integer) returns Integer
+
+function pick() returns UnaryOp
+	return function(n Integer) gives n * 2
+end 'pick'
+
+function main() returns ExitCode
+	let f = pick()
+	return f(21)
+end 'main'
+---
+ExitCode: 42
+---
+func @pick {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.leaRegFunc r8, [rip + pick$closure_0]
+    x64.popReg rbp
+    x64.ret
+}
+
+func @pick$closure_0 {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.imulRegRegImm32 r8, rcx, 2
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.callDirect pick
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 21
+    x64.movRegImm32 rdx, 0
+    x64.callReg rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

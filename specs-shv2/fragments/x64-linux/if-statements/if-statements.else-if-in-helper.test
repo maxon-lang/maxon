@@ -1,0 +1,94 @@
+// Test: if-statements.else-if-in-helper
+
+typealias Integer = int(i64.min to i64.max)
+
+function classify(x Integer) returns Integer
+	if x == 0 'zero'
+		return 0
+	end 'zero' else if x < 10 'small'
+		return 1
+	end 'small' else if x < 100 'medium'
+		return 2
+	end 'medium' else 'large'
+		return 3
+	end 'large'
+end 'classify'
+
+function main() returns ExitCode
+	let a = classify(0)
+	let b = classify(5)
+	let c = classify(50)
+	let d = classify(200)
+	return a + b * 3 + c * 9 + d * 27
+end 'main'
+---
+ExitCode: 102
+---
+func @classify {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, zero
+    x64.jmp ifelse
+  zero:
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+  ifelse:
+    x64.cmpRegImm32 rcx, 10
+    x64.jcc less, small
+    x64.jmp ifelse
+  small:
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+  ifelse:
+    x64.cmpRegImm32 rcx, 100
+    x64.jcc less, medium
+    x64.jmp ifelse
+  medium:
+    x64.movRegImm32 r8, 2
+    x64.popReg rbp
+    x64.ret
+  ifelse:
+    x64.movRegImm32 r8, 3
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+  ifcont:
+  ifcont:
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegImm32 rcx, 0
+    x64.callDirect classify
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 5
+    x64.callDirect classify
+    x64.movRegReg r12, r8
+    x64.movRegImm32 rcx, 50
+    x64.callDirect classify
+    x64.movRegReg r13, r8
+    x64.movRegImm32 rcx, 200
+    x64.callDirect classify
+    x64.imulRegRegImm32 rax, r12, 3
+    x64.leaRegRegReg rax, rbx, rax
+    x64.imulRegRegImm32 rcx, r13, 9
+    x64.leaRegRegReg rax, rax, rcx
+    x64.imulRegRegImm32 rcx, r8, 27
+    x64.leaRegRegReg r8, rax, rcx
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

@@ -1,0 +1,91 @@
+// Test: false-direction-and-boundary
+function main() returns ExitCode
+	let x = 5
+	var r = 0
+	if x == 6 'eqFalse'
+		r = r + 1
+	end 'eqFalse'
+	if x != 5 'neFalse'
+		r = r + 2
+	end 'neFalse'
+	if x > 5 'gtBoundary'
+		r = r + 4
+	end 'gtBoundary'
+	if x <= 5 'leBoundary'
+		r = r + 8
+	end 'leBoundary'
+	if x >= 5 'geBoundary'
+		r = r + 16
+	end 'geBoundary'
+	if x < 5 'ltFalse'
+		r = r + 32
+	end 'ltFalse'
+	return r
+end 'main'
+---
+ExitCode: 24
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 rax, 5
+    x64.movRegImm32 rcx, 0
+    x64.cmpRegImm32 rax, 6
+    x64.jcc equal, eqFalse
+    x64.jmp critsplit
+  eqFalse:
+    x64.leaRegRegImm32 rcx, rcx, 1
+    x64.jmp ifcont
+  critsplit:
+    x64.jmp ifcont
+  ifcont:
+    x64.cmpRegImm32 rax, 5
+    x64.jcc notEqual, neFalse
+    x64.jmp critsplit
+  neFalse:
+    x64.leaRegRegImm32 rcx, rcx, 2
+    x64.jmp ifcont
+  critsplit:
+    x64.jmp ifcont
+  ifcont:
+    x64.cmpRegImm32 rax, 5
+    x64.jcc greater, gtBoundary
+    x64.jmp critsplit
+  gtBoundary:
+    x64.leaRegRegImm32 rcx, rcx, 4
+    x64.jmp ifcont
+  critsplit:
+    x64.jmp ifcont
+  ifcont:
+    x64.cmpRegImm32 rax, 5
+    x64.jcc lessEqual, leBoundary
+    x64.jmp critsplit
+  leBoundary:
+    x64.leaRegRegImm32 rcx, rcx, 8
+    x64.jmp ifcont
+  critsplit:
+    x64.jmp ifcont
+  ifcont:
+    x64.cmpRegImm32 rax, 5
+    x64.jcc greaterEqual, geBoundary
+    x64.jmp critsplit
+  geBoundary:
+    x64.leaRegRegImm32 rcx, rcx, 16
+    x64.jmp ifcont
+  critsplit:
+    x64.jmp ifcont
+  ifcont:
+    x64.cmpRegImm32 rax, 5
+    x64.jcc less, ltFalse
+    x64.jmp critsplit
+  ltFalse:
+    x64.leaRegRegImm32 r8, rcx, 32
+    x64.jmp ifcont
+  critsplit:
+    x64.movRegReg r8, rcx
+    x64.jmp ifcont
+  ifcont:
+    x64.popReg rbp
+    x64.ret
+}

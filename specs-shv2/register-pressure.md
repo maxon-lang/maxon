@@ -61,7 +61,7 @@ the ` ```maxoncstderr ` blocks below assert.
 ## Tests
 
 <!-- test: hot-loop-overflow -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, x64-linux -->
 Sixteen accumulators `s1`..`s16` are ALL updated every iteration, plus the loop counter `i`
 — seventeen values the loop genuinely uses, against a pool of fourteen. None is idle across
 the loop, so the cold-spill splitter cannot relieve any of them: this is a HOT overflow, and
@@ -354,7 +354,7 @@ end 'main'
 ```
 
 <!-- test: hot-loop-param-used -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, x64-linux -->
 A PARAMETER used every iteration is part of the hot working set, so it can appear in a
 blocking set — and it is a user-visible, deletable value. Here `p` is read inside the loop
 (`s1 = s1 + i + p`), so with thirteen accumulators plus the counter it is one of fifteen
@@ -542,7 +542,7 @@ error E5001: the loop at <fragment>:30 needs 3 more register(s) than are availab
 ```
 
 <!-- test: hot-loop-rematerialized-constant -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, x64-linux -->
 A constant the loop uses (`let d`, read by `s14 = d - s14`) is REMATERIALIZED by the
 splitter — re-emitted before its use with a FRESH ValueId — and that fresh id, minted after
 parsing, has no origin of its own. When it lands in the blocking set it must NOT trip the

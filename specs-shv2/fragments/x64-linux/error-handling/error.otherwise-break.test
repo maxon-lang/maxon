@@ -1,0 +1,94 @@
+// Test: error.otherwise-break
+
+typealias Integer = int(i64.min to i64.max)
+
+// Single-statement otherwise: break out of enclosing loop on error
+enum MyError implements Error
+	failed
+end 'MyError'
+
+var counter = 0 as Integer
+
+function mayFail() returns Integer throws MyError
+	counter = counter + 1
+	if counter == 3 'check'
+		throw MyError.failed
+	end 'check'
+	return counter
+end 'mayFail'
+
+function main() returns ExitCode
+	var total = 0
+	while true 'loop'
+		let v = try mayFail() otherwise break
+		total = total + v
+	end 'loop'
+	return total
+end 'main'
+---
+ExitCode: 3
+---
+data {
+  __data_counter@0 = i64 0
+}
+
+func @mayFail {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.leaRegGlobal rax, __data_counter
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.leaRegGlobal rcx, __data_counter
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+    x64.leaRegGlobal rax, __data_counter
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.cmpRegImm32 rax, 3
+    x64.jcc equal, check
+    x64.jmp ifcont
+  check:
+    x64.movRegImm32 rax, 0
+    x64.leaRegRegImm32 r10, rax, 1
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.leaRegGlobal rax, __data_counter
+    x64.loadRegBaseDisp.word64 r8, [rax + 0]
+    x64.movRegImm32 r10, 0
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegImm32 rbx, 0
+    x64.jmp whilehdr
+  whilehdr:
+    x64.movRegImm32 rax, 1
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, loop
+    x64.jmp critsplit
+  loop:
+    x64.callDirect mayFail
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.jmp whileexit
+  tryok:
+    x64.leaRegRegReg rbx, rbx, r8
+    x64.jmp whilehdr
+  critsplit:
+    x64.jmp whileexit
+  whileexit:
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

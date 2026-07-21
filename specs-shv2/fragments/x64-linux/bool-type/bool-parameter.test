@@ -1,0 +1,47 @@
+// Test: bool-parameter
+
+typealias Integer = int(i64.min to i64.max)
+
+function test_bool_param(flag bool) returns Integer
+	if flag 'check'
+		return 1
+	end 'check' else 'else_check'
+		return 0
+	end 'else_check'
+end 'test_bool_param'
+
+function main() returns ExitCode
+	return test_bool_param(true)
+end 'main'
+---
+ExitCode: 1
+---
+func @test_bool_param {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, check
+    x64.jmp ifelse
+  check:
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+  ifelse:
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 1
+    x64.callDirect test_bool_param
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

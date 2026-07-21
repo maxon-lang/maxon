@@ -1,0 +1,29 @@
+// Test: shift-by-variable-count
+function main() returns ExitCode
+	let a = 7
+	let count = 64
+	if a shl count != 0 'wrong'
+		return 1
+	end 'wrong'
+	return 42
+end 'main'
+---
+ExitCode: 42
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 rax, 0
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, wrong
+    x64.jmp ifcont
+  wrong:
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 42
+    x64.popReg rbp
+    x64.ret
+}

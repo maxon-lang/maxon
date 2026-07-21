@@ -1,0 +1,114 @@
+// Test: reuse-dest-cannot-coalesce
+function sink(x int) returns int
+	return x
+end 'sink'
+
+function tight(p int) returns int
+	let a = p + 100
+	let b = p + 50
+	let k1 = p + 1
+	let k2 = p + 2
+	let k3 = p + 3
+	let k4 = p + 4
+	let k5 = p + 5
+	let k6 = p + 6
+	let k7 = p + 7
+	let k8 = p + 8
+	let k9 = p + 9
+	let k10 = p + 10
+	let k11 = p + 11
+	let k12 = p + 12
+	let d = a - b
+	let t = k1 + k2 + k3 + k4 + k5 + k6 + k7 + k8 + k9 + k10 + k11 + k12
+	let s = sink(t)
+	return d + s
+end 'tight'
+
+function main() returns ExitCode
+	let r = tight(0)
+	if r == 128 'ok'
+		return 0
+	end 'ok'
+	return 99
+end 'main'
+---
+ExitCode: 0
+---
+func @sink {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegReg r8, rcx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @tight {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 40
+    x64.leaRegRegImm32 rbx, rcx, 100
+    x64.leaRegRegImm32 rax, rcx, 50
+    x64.leaRegRegImm32 rdx, rcx, 1
+    x64.leaRegRegImm32 rsi, rcx, 2
+    x64.leaRegRegImm32 rdi, rcx, 3
+    x64.leaRegRegImm32 r8, rcx, 4
+    x64.leaRegRegImm32 r9, rcx, 5
+    x64.leaRegRegImm32 r10, rcx, 6
+    x64.leaRegRegImm32 r11, rcx, 7
+    x64.leaRegRegImm32 r12, rcx, 8
+    x64.leaRegRegImm32 r13, rcx, 9
+    x64.leaRegRegImm32 r14, rcx, 10
+    x64.leaRegRegImm32 r15, rcx, 11
+    x64.leaRegRegImm32 rcx, rcx, 12
+    x64.subRegReg rbx, rbx, rax
+    x64.leaRegRegReg rax, rdx, rsi
+    x64.leaRegRegReg rax, rax, rdi
+    x64.leaRegRegReg rax, rax, r8
+    x64.leaRegRegReg rax, rax, r9
+    x64.leaRegRegReg rax, rax, r10
+    x64.leaRegRegReg rax, rax, r11
+    x64.leaRegRegReg rax, rax, r12
+    x64.leaRegRegReg rax, rax, r13
+    x64.leaRegRegReg rax, rax, r14
+    x64.leaRegRegReg rax, rax, r15
+    x64.leaRegRegReg rcx, rax, rcx
+    x64.callDirect sink
+    x64.leaRegRegReg r8, rbx, r8
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 0
+    x64.callDirect tight
+    x64.cmpRegImm32 r8, 128
+    x64.jcc equal, ok
+    x64.jmp ifcont
+  ok:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 99
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

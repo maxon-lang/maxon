@@ -1,0 +1,19 @@
+// Test: error.struct-typed-field-write
+
+typealias Integer = int(i64.min to i64.max)
+
+type Node
+	export var a as Integer
+	export var next as Node
+
+	export function writeNextA()
+		next.a = 99
+	end 'writeNextA'
+end 'Node'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:10:3: Unsupported: a field access through 'next', which is a struct-typed FIELD of the enclosing type (its box has to be loaded out of the receiver before it can be addressed, which arrives with the rung that gives a field a struct type — no struct-typed field can be constructed yet)

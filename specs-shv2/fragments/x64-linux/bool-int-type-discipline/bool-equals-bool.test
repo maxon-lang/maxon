@@ -1,0 +1,43 @@
+// Test: bool-equals-bool
+function main() returns ExitCode
+	let a = true
+	let b = false
+
+	if a == b 'same'
+		return 0
+	end 'same'
+
+	if b == false 'bothFalse'
+		return 1
+	end 'bothFalse'
+	return 2
+end 'main'
+---
+ExitCode: 1
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 rax, 1
+    x64.movRegImm32 rcx, 0
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, same
+    x64.jmp ifcont
+  same:
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, bothFalse
+    x64.jmp ifcont
+  bothFalse:
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 2
+    x64.popReg rbp
+    x64.ret
+}

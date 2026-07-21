@@ -1161,7 +1161,7 @@ end 'main'
 ```
 
 <!-- test: ternary-expression.function-arms -->
-<!-- targets: x64-windows, wasm32-wasi -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 ### Both arms are functions, and the result is callable
 The merged result's SIGNATURE has to survive the merge. It is read back through a `var_ref`,
 which carries only a kind, so if the ternary does not put the signature on the merged binding
@@ -1188,7 +1188,7 @@ end 'main'
 ```
 
 <!-- test: ternary-expression.function-arms-called-directly -->
-<!-- targets: x64-windows, wasm32-wasi -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 ### A parenthesized ternary of functions is callable in place
 The same signature, reaching the other consumer: the `(` suffix that turns a function VALUE
 into a call.

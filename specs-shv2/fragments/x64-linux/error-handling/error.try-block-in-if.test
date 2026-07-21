@@ -1,0 +1,70 @@
+// Test: error.try-block-in-if
+typealias Code = int(i64.min to i64.max)
+
+enum Fault implements Error
+	broken
+end 'Fault'
+
+function risky(n Code) returns Code throws Fault
+	throw Fault.broken
+end 'risky'
+
+function main() returns ExitCode
+	var acc = 0 as Code
+	if acc < 5 'guard'
+		try risky(3) otherwise (e) 'h'
+			acc = 7
+		end 'h'
+		acc = acc + 1
+	end 'guard'
+	return acc
+end 'main'
+---
+ExitCode: 8
+---
+func @risky {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 rax, 0
+    x64.leaRegRegImm32 r10, rax, 1
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegImm32 rbx, 0
+    x64.cmpRegImm32 rbx, 5
+    x64.jcc less, guard
+    x64.jmp critsplit
+  guard:
+    x64.movRegImm32 rcx, 3
+    x64.callDirect risky
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.leaRegRegImm32 rax, r10, -1
+    x64.movRegImm32 rax, 7
+    x64.jmp trycont
+  tryok:
+    x64.movRegReg rax, rbx
+    x64.jmp trycont
+  trycont:
+    x64.leaRegRegImm32 r8, rax, 1
+    x64.jmp ifcont
+  critsplit:
+    x64.movRegReg r8, rbx
+    x64.jmp ifcont
+  ifcont:
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

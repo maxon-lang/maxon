@@ -1,0 +1,62 @@
+// Test: ternary-expression.function-arms
+typealias Integer = int(i64.min to i64.max)
+
+function dbl(n Integer) returns Integer
+	return n * 2
+end 'dbl'
+
+function trp(n Integer) returns Integer
+	return n * 3
+end 'trp'
+
+function main() returns ExitCode
+	let c = 1
+	let h = dbl if c > 0 else trp
+	return h(21)
+end 'main'
+---
+ExitCode: 42
+---
+func @dbl {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.imulRegRegImm32 r8, rcx, 2
+    x64.popReg rbp
+    x64.ret
+}
+
+func @trp {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.imulRegRegImm32 r8, rcx, 3
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegImm32 rax, 1
+    x64.cmpRegImm32 rax, 0
+    x64.jcc greater, ternarytrue
+    x64.jmp ternaryfalse
+  ternarytrue:
+    x64.leaRegFunc rbx, [rip + __fnref_dbl]
+    x64.jmp matchcont
+  ternaryfalse:
+    x64.leaRegFunc rbx, [rip + __fnref_trp]
+    x64.jmp matchcont
+  matchcont:
+    x64.movRegImm32 rcx, 21
+    x64.movRegImm32 rdx, 0
+    x64.callReg rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

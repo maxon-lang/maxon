@@ -1,0 +1,41 @@
+// Test: shl-count-100
+function main() returns ExitCode
+	let a = 1
+	let SHIFT = 100
+	if a shl SHIFT != 0 'namedWrong'
+		return 1
+	end 'namedWrong'
+	if a shl 100 != 0 'literalWrong'
+		return 2
+	end 'literalWrong'
+	return 42
+end 'main'
+---
+ExitCode: 42
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 rax, 0
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, namedWrong
+    x64.jmp ifcont
+  namedWrong:
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 rax, 0
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, literalWrong
+    x64.jmp ifcont
+  literalWrong:
+    x64.movRegImm32 r8, 2
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 42
+    x64.popReg rbp
+    x64.ret
+}

@@ -1,0 +1,42 @@
+// Test: divide-by-self
+function main() returns ExitCode
+	var x = 37
+	let q = x / x
+	let m = x mod x
+	let r = x * 100 + q * 10 + m
+	if r == 3710 'ok'
+		return 0
+	end 'ok'
+	return 99
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 rcx, 37
+    x64.movRegReg rax, rcx
+    x64.cqo
+    x64.idivReg rcx
+    x64.movRegReg rsi, rax
+    x64.movRegReg rax, rcx
+    x64.cqo
+    x64.idivReg rcx
+    x64.imulRegRegImm32 rax, rcx, 100
+    x64.imulRegRegImm32 rcx, rsi, 10
+    x64.leaRegRegReg rax, rax, rcx
+    x64.leaRegRegReg rax, rax, rdx
+    x64.cmpRegImm32 rax, 3710
+    x64.jcc equal, ok
+    x64.jmp ifcont
+  ok:
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 99
+    x64.popReg rbp
+    x64.ret
+}

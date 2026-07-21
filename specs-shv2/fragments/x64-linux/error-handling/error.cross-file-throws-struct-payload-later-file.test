@@ -1,0 +1,145 @@
+// Test: error.cross-file-throws-struct-payload-later-file
+// --- file: app.maxon
+function main() returns ExitCode
+	var result = 0
+	try risky(9) otherwise (e) 'handler'
+		match e 'check'
+			bad(p) then result = p.mass
+			ok then result = 1
+		end 'check'
+	end 'handler'
+	return result
+end 'main'
+
+// --- file: zzz.maxon
+typealias Code = int(i64.min to i64.max)
+
+type Payload
+	export var mass as Code
+
+	static function create(m Code) returns Self
+		return Self{mass: m}
+	end 'create'
+end 'Payload'
+
+export union Woe implements Error
+	bad(p Payload)
+	ok
+end 'Woe'
+
+export function risky(n Code) returns Code throws Woe
+	if n > 5 'big'
+		throw Woe.bad(Payload.create(7))
+	end 'big'
+	return n
+end 'risky'
+---
+ExitCode: 7
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 rcx, 9
+    x64.callDirect risky
+    x64.movRegReg r12, r10
+    x64.cmpRegImm32 r12, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.loadRegBaseDisp.word64 rcx, [r12 + 8]
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r12 + 8], rax
+    x64.loadRegBaseDisp.word64 rbx, [rcx + 0]
+    x64.callDirect __mm_decref
+    x64.jmp matchcont
+  matchnext:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc equal, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.movRegImm32 rbx, 1
+    x64.jmp matchcont
+  matchcont:
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_Woe
+    x64.movRegReg r8, rbx
+    x64.jmp trycont
+  matchnext:
+  tryok:
+    x64.movRegReg r8, rbx
+    x64.jmp trycont
+  trycont:
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Payload.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @risky {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.cmpRegImm32 rcx, 5
+    x64.jcc greater, big
+    x64.jmp ifcont
+  big:
+    x64.movRegImm32 rcx, 7
+    x64.callDirect Payload.create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg rax, r8
+    x64.movRegImm32 rcx, 0
+    x64.storeBaseDispReg.word64 [rax + 0], rcx
+    x64.storeBaseDispReg.word64 [rax + 8], rbx
+    x64.movRegImm32 r8, 0
+    x64.movRegReg r10, rax
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r10, 0
+    x64.movRegReg r8, rcx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

@@ -1,0 +1,83 @@
+// Test: or-chain-short-circuits-on-first-true
+var sideEffectCount = 0
+
+function trackAndReturn(result bool) returns bool
+	sideEffectCount = sideEffectCount + 1
+	return result
+end 'trackAndReturn'
+
+function main() returns ExitCode
+	let result = trackAndReturn(false) or trackAndReturn(true) or trackAndReturn(false)
+	if not result 'r'
+		return 99
+	end 'r'
+	return sideEffectCount
+end 'main'
+---
+ExitCode: 2
+---
+data {
+  __data_sideEffectCount@0 = i64 0
+}
+
+func @trackAndReturn {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.leaRegGlobal rax, __data_sideEffectCount
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.leaRegGlobal rdx, __data_sideEffectCount
+    x64.storeBaseDispReg.word64 [rdx + 0], rax
+    x64.movRegReg r8, rcx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 0
+    x64.callDirect trackAndReturn
+    x64.movRegImm32 rax, 1
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, critsplit
+    x64.jmp orrhs
+  critsplit:
+    x64.jmp scmerge
+  orrhs:
+    x64.movRegImm32 rcx, 1
+    x64.callDirect trackAndReturn
+    x64.movRegReg rax, r8
+    x64.jmp scmerge
+  scmerge:
+    x64.movRegImm32 rcx, 1
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, critsplit
+    x64.jmp orrhs
+  critsplit:
+    x64.jmp scmerge
+  orrhs:
+    x64.movRegImm32 rcx, 0
+    x64.callDirect trackAndReturn
+    x64.movRegReg rcx, r8
+    x64.jmp scmerge
+  scmerge:
+    x64.xorRegImm32 rcx, rcx, 1
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, r
+    x64.jmp ifcont
+  r:
+    x64.movRegImm32 r8, 99
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.leaRegGlobal rax, __data_sideEffectCount
+    x64.loadRegBaseDisp.word64 r8, [rax + 0]
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

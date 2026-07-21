@@ -33,7 +33,7 @@ var values = items.map(function(_) gives defaultValue)
 ## Tests
 
 <!-- test: closure-capture.basic -->
-<!-- targets: x64-windows, wasm32-wasi -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -54,7 +54,7 @@ end 'main'
 ```
 
 <!-- test: closure-capture.ignore-param -->
-<!-- targets: x64-windows, wasm32-wasi -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -75,7 +75,7 @@ end 'main'
 ```
 
 <!-- test: closure-capture.struct-field -->
-<!-- targets: x64-windows, wasm32-wasi -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -129,7 +129,7 @@ end 'main'
 ```
 
 <!-- test: closure-capture.multiple-captures -->
-<!-- targets: x64-windows, wasm32-wasi -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -151,7 +151,7 @@ end 'main'
 ```
 
 <!-- test: closure-capture.no-capture-regression -->
-<!-- targets: x64-windows, wasm32-wasi -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -171,7 +171,7 @@ end 'main'
 ```
 
 <!-- test: closure-capture.capture-string -->
-<!-- targets: x64-windows, wasm32-wasi -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -307,7 +307,7 @@ end 'main'
 ```
 
 <!-- test: closure-capture.block-local-method-receiver -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, x64-linux -->
 <!-- wasm32-wasi OMITTED: the closure returns `ExitCode` (via `b.doubled() returns ExitCode`), and an ExitCode-returning function VALUE traps on wasm — a PRE-EXISTING A1 limitation, closure-INDEPENDENT and NOT the method-on-captured-struct mechanism (the same shape with `Integer` returns runs clean on wasm). `ExitCode` lowers to u32/i32 (valueTagToStdType), but the wasm `call_indirect` functype is ARG-COUNT-derived to `(i64^n) -> i64` (A1's "every fn value is (i64ⁿ)→i64" assumption), so a `(i64)->i32` closure mismatches `(i64)->i64` and wasmtime traps "indirect call type mismatch". Fixing it needs the callIndirect to carry its RESULT width to the wasm tier — an A1-design change, its own follow-up rung. The method-on-captured-struct mechanism itself is target-neutral and covered on x64 here. -->
 A `let` declared inside an `if`-block body — a nested block scope — captured
 into a closure whose body calls a METHOD on it (`b.doubled()`). Historically a
@@ -356,7 +356,7 @@ end 'main'
 ### Closure body that is a bare string literal
 
 <!-- test: closure-capture.string-literal-body -->
-<!-- targets: x64-windows, wasm32-wasi -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 ```maxon
 
 typealias Msg = function(Integer) returns String

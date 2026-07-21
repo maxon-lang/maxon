@@ -1,0 +1,24 @@
+// Test: outer-move-in-loop-rejected
+typealias Integer = int(i64.min to i64.max)
+
+function build(x Integer) returns String
+	return "built value {x} padded out long enough to heap allocate"
+end 'build'
+
+function run(n Integer) returns ExitCode
+	let a = build(1)
+	var i = 0
+	while i < n 'l'
+		let u = a
+		print(u)
+		i = i + 1
+	end 'l'
+	return 0
+end 'run'
+
+function main() returns ExitCode
+	return run(0)
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:12:7: Unsupported: moving a value declared outside this loop from inside the loop body — its drop on the loop's other exit paths (the back edge would re-move it next iteration; a `break` leaves it live on the normal exit) needs path-sensitive elaboration across the loop boundary, which arrives with a later wave. Move the value into the loop body, or restructure so the move does not cross the loop boundary

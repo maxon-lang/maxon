@@ -1,0 +1,72 @@
+// Test: try-otherwise-value-flow.propagation-success
+enum E
+	bad
+end 'E'
+
+function double(x ExitCode) returns ExitCode throws E
+	return x * 2
+end 'double'
+
+function wrap() returns ExitCode throws E
+	let v = try double(5)
+	return v
+end 'wrap'
+
+function main() returns ExitCode
+	let v = try wrap() otherwise 99
+	return v
+end 'main'
+---
+ExitCode: 10
+---
+func @double {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.imulRegRegImm32 r8, rcx, 2
+    x64.movRegImm32 r10, 0
+    x64.popReg rbp
+    x64.ret
+}
+
+func @wrap {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 5
+    x64.callDirect double
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.movRegImm32 r10, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect wrap
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 r8, 99
+    x64.jmp trycont
+  tryok:
+    x64.jmp trycont
+  trycont:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

@@ -1,0 +1,26 @@
+// Test: top-level-var-basic
+var counter = 0
+
+function main() returns ExitCode
+	counter = 42
+	return counter
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __data_counter@0 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 rax, 42
+    x64.leaRegGlobal rcx, __data_counter
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+    x64.leaRegGlobal rax, __data_counter
+    x64.loadRegBaseDisp.word64 r8, [rax + 0]
+    x64.popReg rbp
+    x64.ret
+}

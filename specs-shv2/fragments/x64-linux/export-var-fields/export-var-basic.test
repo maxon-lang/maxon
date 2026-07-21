@@ -1,0 +1,63 @@
+// Test: export-var-basic
+
+typealias Integer = int(i64.min to i64.max)
+
+type Value
+	export var n as Integer
+	var private as Integer
+
+	static function create() returns Self
+		return Value{n: 42, private: 100}
+	end 'create'
+end 'Value'
+
+function main() returns ExitCode
+	let v = Value.create()
+	return v.n
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @Value.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm32 rbx, 42
+    x64.movRegImm32 r12, 100
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.storeBaseDispReg.word64 [r8 + 8], r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.callDirect Value.create
+    x64.loadRegBaseDisp.word64 rbx, [r8 + 0]
+    x64.movRegReg rcx, r8
+    x64.callDirect __mm_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

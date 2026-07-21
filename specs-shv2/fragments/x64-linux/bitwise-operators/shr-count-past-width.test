@@ -1,0 +1,44 @@
+// Test: shr-count-past-width
+function main() returns ExitCode
+	if (0 - 1) shr 100 != 0 - 1 'negWrong'
+		return 1
+	end 'negWrong'
+	if 8 shr 100 != 0 'posWrong'
+		return 2
+	end 'posWrong'
+	return 42
+end 'main'
+---
+ExitCode: 42
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 rax, 0
+    x64.leaRegRegImm32 rax, rax, -1
+    x64.sarRegImm8 rax, rax, 63
+    x64.movRegImm32 rcx, 0
+    x64.leaRegRegImm32 rcx, rcx, -1
+    x64.cmpRegReg rax, rcx
+    x64.jcc notEqual, negWrong
+    x64.jmp ifcont
+  negWrong:
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 rax, 8
+    x64.sarRegImm8 rax, rax, 63
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, posWrong
+    x64.jmp ifcont
+  posWrong:
+    x64.movRegImm32 r8, 2
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 42
+    x64.popReg rbp
+    x64.ret
+}

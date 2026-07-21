@@ -1,0 +1,53 @@
+// Test: first-class-function.closure-as-argument
+
+typealias Integer = int(i64.min to i64.max)
+typealias UnaryOp = function(Integer) returns Integer
+
+function apply(f UnaryOp, x Integer) returns Integer
+	return f(x)
+end 'apply'
+
+function main() returns ExitCode
+	return apply(function(n Integer) gives n + 7, x: 10)
+end 'main'
+---
+ExitCode: 17
+---
+func @apply {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegReg rcx, rdx
+    x64.movRegReg rdx, rax
+    x64.callReg rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.leaRegFunc rcx, [rip + main$closure_0]
+    x64.movRegImm32 rdx, 10
+    x64.movRegImm32 rax, 0
+    x64.callDirect apply
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main$closure_0 {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.leaRegRegImm32 r8, rcx, 7
+    x64.popReg rbp
+    x64.ret
+}

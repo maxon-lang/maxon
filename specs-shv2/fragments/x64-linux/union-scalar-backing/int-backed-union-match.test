@@ -1,0 +1,62 @@
+// Test: int-backed-union-match
+union Status
+	ok = 200
+	notFound = 404
+	serverError = 500
+end 'Status'
+
+function classify(s Status) returns ExitCode
+	return match s 'm'
+		ok gives 0
+		notFound gives 4
+		serverError gives 5
+	end 'm'
+end 'classify'
+
+function main() returns ExitCode
+	return classify(Status.notFound)
+end 'main'
+---
+ExitCode: 4
+---
+func @classify {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.cmpRegImm32 rcx, 200
+    x64.jcc equal, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.movRegImm32 r8, 0
+    x64.jmp matchcont
+  matchnext:
+    x64.cmpRegImm32 rcx, 404
+    x64.jcc equal, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.movRegImm32 r8, 4
+    x64.jmp matchcont
+  matchnext:
+    x64.cmpRegImm32 rcx, 500
+    x64.jcc equal, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.movRegImm32 r8, 5
+    x64.jmp matchcont
+  matchcont:
+    x64.popReg rbp
+    x64.ret
+  matchnext:
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 404
+    x64.callDirect classify
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

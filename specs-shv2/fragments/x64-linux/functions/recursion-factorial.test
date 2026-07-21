@@ -1,0 +1,52 @@
+// Test: recursion-factorial
+function factorial(n int) returns int
+	if n <= 1 'base'
+		return 1
+	end 'base'
+	return n * factorial(n - 1)
+end 'factorial'
+
+function main() returns ExitCode
+	return factorial(5)
+end 'main'
+---
+ExitCode: 120
+---
+func @factorial {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.cmpRegImm32 rbx, 1
+    x64.jcc lessEqual, base
+    x64.jmp ifcont
+  base:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.leaRegRegImm32 rcx, rbx, -1
+    x64.callDirect factorial
+    x64.imulRegReg rbx, rbx, r8
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 5
+    x64.callDirect factorial
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

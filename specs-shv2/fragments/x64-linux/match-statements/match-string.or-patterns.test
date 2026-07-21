@@ -1,0 +1,66 @@
+// Test: match-string.or-patterns
+function main() returns ExitCode
+	let name = "carol"
+	match name 'greet'
+		"alice" or "bob" then return 1
+		"carol" or "dave" then return 2
+		default then return 0
+	end 'greet'
+end 'main'
+---
+ExitCode: 2
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.leaRegRdata rbx, [rip + __str_rec_1]
+    x64.leaRegRdata rdx, [rip + __str_rec_3]
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_eq
+    x64.movRegReg r12, r8
+    x64.leaRegRdata rdx, [rip + __str_rec_5]
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_eq
+    x64.orRegReg r12, r12, r8
+    x64.cmpRegImm32 r12, 0
+    x64.jcc notEqual, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  matchnext:
+    x64.leaRegRdata rdx, [rip + __str_rec_1]
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_eq
+    x64.movRegReg r12, r8
+    x64.leaRegRdata rdx, [rip + __str_rec_7]
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_eq
+    x64.orRegReg r12, r12, r8
+    x64.cmpRegImm32 r12, 0
+    x64.jcc notEqual, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.movRegImm32 r8, 2
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  matchnext:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  matchcont:
+}

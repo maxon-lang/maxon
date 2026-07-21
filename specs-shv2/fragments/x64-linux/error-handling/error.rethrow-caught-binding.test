@@ -1,0 +1,110 @@
+// Test: error.rethrow-caught-binding
+
+typealias Integer = int(i64.min to i64.max)
+
+// Re-throw a caught `(e)` binding from an expression-form `try ... otherwise (e)`
+// handler. `outer` catches `inner`'s error into `e`, then `throw e` re-publishes
+// the SAME error to `outer`'s caller. The propagated variant must survive the
+// hop: `main` distinguishes `low` (1) from `high` (7) by re-throwing it again
+// and matching at the top, proving the ordinal carries through every re-throw.
+enum Fault implements Error
+	low
+	high
+end 'Fault'
+
+function inner() returns Integer throws Fault
+	throw Fault.high
+end 'inner'
+
+function outer() returns Integer throws Fault
+	return try inner() otherwise (e) 'h'
+		throw e
+	end 'h'
+end 'outer'
+
+function main() returns ExitCode
+	var code = 0 as ExitCode
+	try outer() otherwise (e) 'top'
+		match e 'm'
+			low then code = 1
+			high then code = 7
+		end 'm'
+	end 'top'
+	return code
+end 'main'
+---
+ExitCode: 7
+---
+func @inner {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 rax, 1
+    x64.leaRegRegImm32 r10, rax, 1
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}
+
+func @outer {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect inner
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.leaRegRegImm32 rax, r10, -1
+    x64.leaRegRegImm32 r10, rax, 1
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.movRegImm32 r10, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegImm32 rbx, 0
+    x64.callDirect outer
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.leaRegRegImm32 rax, r10, -1
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.movRegImm32 rax, 1
+    x64.jmp matchcont
+  matchnext:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc equal, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.movRegImm32 rax, 7
+    x64.jmp matchcont
+  matchcont:
+    x64.movRegReg r8, rax
+    x64.jmp trycont
+  matchnext:
+  tryok:
+    x64.movRegReg r8, rbx
+    x64.jmp trycont
+  trycont:
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

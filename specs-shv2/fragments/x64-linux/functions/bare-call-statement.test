@@ -1,0 +1,33 @@
+// Test: bare-call-statement
+function noop(x int) returns int
+	return x
+end 'noop'
+
+function main() returns ExitCode
+	noop(5)
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @noop {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegReg r8, rcx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 5
+    x64.callDirect noop
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

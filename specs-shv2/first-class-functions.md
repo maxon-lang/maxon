@@ -199,7 +199,7 @@ end 'main'
 ## Tests
 
 <!-- test: first-class-function.basic-reference -->
-<!-- targets: x64-windows, wasm32-wasi -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -218,7 +218,7 @@ end 'main'
 ```
 
 <!-- test: first-class-function.pass-as-argument -->
-<!-- targets: x64-windows, wasm32-wasi -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -241,7 +241,7 @@ end 'main'
 ```
 
 <!-- test: first-class-function.closure-in-variable -->
-<!-- targets: x64-windows, wasm32-wasi -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -256,7 +256,7 @@ end 'main'
 ```
 
 <!-- test: first-class-function.closure-as-argument -->
-<!-- targets: x64-windows, wasm32-wasi -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -275,7 +275,7 @@ end 'main'
 ```
 
 <!-- test: first-class-function.multiple-params -->
-<!-- targets: x64-windows, wasm32-wasi -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -298,7 +298,7 @@ end 'main'
 ```
 
 <!-- test: first-class-function.reassign -->
-<!-- targets: x64-windows, wasm32-wasi -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -324,7 +324,7 @@ end 'main'
 ```
 
 <!-- test: first-class-function.typealias-single-param -->
-<!-- targets: x64-windows, wasm32-wasi -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -347,7 +347,7 @@ end 'main'
 ```
 
 <!-- test: first-class-function.typealias-multi-param -->
-<!-- targets: x64-windows, wasm32-wasi -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -370,7 +370,7 @@ end 'main'
 ```
 
 <!-- test: first-class-function.typealias-with-closure -->
-<!-- targets: x64-windows, wasm32-wasi -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -389,7 +389,7 @@ end 'main'
 ```
 
 <!-- test: first-class-function.let-from-call-returning-fn -->
-<!-- targets: x64-windows, wasm32-wasi -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -413,7 +413,7 @@ end 'main'
 ```
 
 <!-- test: first-class-function.forward-reference-arg -->
-<!-- targets: x64-windows, wasm32-wasi -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 A bare function name may be passed as a function-typed argument even when the
 function is declared *later* in the file. The parser can't resolve the
 reference at the call site (the signature isn't registered yet), so it defers
@@ -445,7 +445,7 @@ end 'main'
 ```
 
 <!-- test: first-class-function.forward-reference-named-arg -->
-<!-- targets: x64-windows, wasm32-wasi -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 Two distinct forward-declared functions passed by name as a NAMED, non-first
 argument (the shape the self-hosted compiler's own `computeParamKeySet` uses)
 must each dispatch to the correct target: `useDbl` yields 40 and `useTrip`
@@ -555,7 +555,7 @@ end 'main'
 
 
 <!-- test: first-class-function.field-call -->
-<!-- targets: x64-windows, wasm32-wasi -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 A function stored in a struct field is called through the field. The field holds a
 function pointer, so this is an indirect call — the same lowering a function-typed
 parameter gets, reached from a different producer.
@@ -586,7 +586,7 @@ end 'main'
 ```
 
 <!-- test: first-class-function.field-bind -->
-<!-- targets: x64-windows, wasm32-wasi -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 Binding a function-typed field to a local recovers the field's declared signature, so
 the local is callable.
 ```maxon
@@ -617,7 +617,7 @@ end 'main'
 ```
 
 <!-- test: first-class-function.field-pass-and-return -->
-<!-- targets: x64-windows, wasm32-wasi -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 A function-typed field is an ordinary value: it can be passed as an argument and
 returned from a function.
 ```maxon
@@ -657,7 +657,7 @@ end 'main'
 ```
 
 <!-- test: first-class-function.field-self-dispatch -->
-<!-- targets: x64-windows, wasm32-wasi -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 A method dispatches through its own function-typed field with `self.op(...)`.
 ```maxon
 
@@ -690,7 +690,7 @@ end 'main'
 ```
 
 <!-- test: first-class-function.field-nested-receiver -->
-<!-- targets: x64-windows, wasm32-wasi -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 The receiver of a field call may itself be reached through a field chain.
 ```maxon
 
@@ -775,7 +775,7 @@ narrow 7
 ```
 
 <!-- test: first-class-function.call-returned-function -->
-<!-- targets: x64-windows, wasm32-wasi -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 A call whose return type is a function is itself callable, so the result can be called
 without binding it first.
 ```maxon
@@ -800,7 +800,7 @@ end 'main'
 ```
 
 <!-- test: first-class-function.field-cross-file -->
-<!-- targets: x64-windows, wasm32-wasi -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 A function-typed field declared in another file is called the same way: the field's
 signature travels with the type, not with the file that reads it.
 ```maxon
@@ -842,7 +842,7 @@ end 'main'
 ```
 
 <!-- test: first-class-function.non-capturing-closure-in-field -->
-<!-- targets: x64-windows, wasm32-wasi -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 A closure that captures NOTHING is a plain function reference — it has no environment to
 lose — so it is stored in a function-typed field and called like any other. This is the
 half of the boundary that must keep working: it is what a table of handlers is built from.
@@ -923,7 +923,7 @@ closure that arrived as a PARAMETER is not recognizable as one without an escape
 not refused here.
 
 <!-- test: first-class-function.capturing-closure-in-field-errors -->
-<!-- targets: x64-windows, wasm32-wasi -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 A capturing closure stored into a function-typed FIELD is refused rather than miscompiled.
 ```maxon
 
@@ -954,7 +954,7 @@ error E3099: specs/fragments/first-class-functions/first-class-function.capturin
 ```
 
 <!-- test: first-class-function.capturing-closure-in-struct-construction-errors -->
-<!-- targets: x64-windows, wasm32-wasi -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 A capturing closure stored into a function-typed field at CONSTRUCTION (`Self{op: closure}`) is the
 same heap store as `x.op = closure`, but it reaches the box through a different path — the struct
 literal, not `emitFieldWrite`. Without a check HERE the construction slipped past the escape gate and
@@ -983,7 +983,7 @@ error E3099: specs/fragments/first-class-functions/first-class-function.capturin
 ```
 
 <!-- test: first-class-function.capturing-closure-returned-errors -->
-<!-- targets: x64-windows, wasm32-wasi -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 RETURNING a capturing closure is the idiom people actually write, and it is the route that
 matters most: `makeAdder` compiles clean and then nil-derefs inside `_$closure_0`, because
 the environment it hands back points at `makeAdder`'s dead frame.
@@ -1007,7 +1007,7 @@ error E3099: specs/fragments/first-class-functions/first-class-function.capturin
 ```
 
 <!-- test: first-class-function.capturing-closure-in-global-errors -->
-<!-- targets: x64-windows, wasm32-wasi -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 A global outlives every frame, so a capturing closure stored in one would dangle — but the
 program never gets that far, and the reason is worth stating exactly, because this test used to
 claim otherwise.
@@ -1060,7 +1060,7 @@ error E3099: specs/fragments/first-class-functions/first-class-function.capturin
 ```
 
 <!-- test: first-class-function.capturing-closure-in-union-payload-errors -->
-<!-- targets: x64-windows, wasm32-wasi -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 A union's associated-value PAYLOAD is a heap box holding one slot per value, so it drops the
 environment exactly as a struct field does. Without this check the union compiles, runs, and
 carries a closure whose environment is gone.
@@ -1125,7 +1125,7 @@ error E3099: specs/fragments/first-class-functions/first-class-function.capturin
 ```
 
 <!-- test: first-class-function.capturing-closure-used-in-frame -->
-<!-- targets: x64-windows, wasm32-wasi -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 The ACCEPT side: a capturing closure called directly AND passed DOWN to a callee that only CALLS it. The
 env travels with the value across the call boundary — `apply` receives a companion environment parameter,
 and its `f(x)` threads it — so `apply(f, …)` returns the captured `bump` correctly. A callee that only
@@ -1152,7 +1152,7 @@ end 'main'
 ```
 
 <!-- test: first-class-function.capturing-closure-stored-by-callee-errors -->
-<!-- targets: x64-windows, wasm32-wasi -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 The INTERPROCEDURAL escape reject (P1.5-A2b-2). Pass-down to a callee that only CALLS the closure is safe
 (above), but a callee that PERSISTS it — here `Handler.create` STORES the parameter into a struct field —
 keeps only the fn-ptr; the captured environment belongs to `main`'s frame and dangles the moment `main`
@@ -1186,7 +1186,7 @@ error E3099: specs/fragments/first-class-functions/first-class-function.capturin
 ```
 
 <!-- test: first-class-function.capturing-closure-returned-by-callee-errors -->
-<!-- targets: x64-windows, wasm32-wasi -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 The other interprocedural escape route: a callee that RETURNS the parameter (`identity(f) → return f`)
 persists it past the passing frame exactly as a store does — the returned fn-ptr outlives `main`'s frame,
 whose environment the closure captured. The escape summary marks `identity`'s parameter escaping (its body
@@ -1213,7 +1213,7 @@ error E3099: specs/fragments/first-class-functions/first-class-function.capturin
 ```
 
 <!-- test: first-class-function.capturing-closure-called-from-nested-block -->
-<!-- targets: x64-windows, wasm32-wasi -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 The same closure, called from a DIFFERENT block of the same frame. This is not an escape and
 must not be confused with one: the call happens inside `main`, the frame is alive, and nothing
 outlives anything — the only thing that changed is which block the call sits in.
@@ -1305,7 +1305,7 @@ i=4 -> 9
 ```
 
 <!-- test: first-class-function.capturing-closure-bound-outside-loop-passed-down -->
-<!-- targets: x64-windows, wasm32-wasi -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 The same environment, read across iterations through a CALLEE rather than directly. The callee
 receives the closure as a parameter, so its environment arrives as the caller's — borrowed for
 the length of the call. The callee must not release it: its own scope_end cleans a parameter
@@ -1380,7 +1380,7 @@ end 'main'
 ```
 
 <!-- test: first-class-function.capturing-closure-rebound-in-loop -->
-<!-- targets: x64-windows, wasm32-wasi -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 A closure bound afresh on every iteration and called from a block NESTED inside that loop. The
 environment is per-iteration, so each call must see its OWN `bump` rather than the first or the
 last — a single environment slot reused across iterations would still pass the cross-block test
@@ -1462,7 +1462,7 @@ end 'main'
 ```
 
 <!-- test: first-class-function.non-capturing-closure-returned -->
-<!-- targets: x64-windows, wasm32-wasi -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 A closure that captures NOTHING is returned freely: it lowers to a plain function reference
 and has no environment to lose. This is what keeps `makeAdder`'s refusal narrow — the check
 keys on carrying an environment, not on being a closure.
@@ -1485,7 +1485,7 @@ end 'main'
 ```
 
 <!-- test: first-class-function.non-capturing-closure-in-union-payload -->
-<!-- targets: x64-windows, wasm32-wasi -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 The union payload's accept side: a non-capturing closure rides in an associated value and is
 matched back out.
 ```maxon
@@ -1515,7 +1515,7 @@ end 'main'
 ```
 
 <!-- test: first-class-function.capturing-closure-in-ternary-arm-errors -->
-<!-- targets: x64-windows, wasm32-wasi -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 A capturing closure as a ternary ARM is refused. This one also RETURNS the result, which is the
 shape that made the defect visible: it compiled clean and nil-dereffed inside `_$closure_0` —
 the exact failure the escape rule exists to prevent, reached by laundering the closure through a
@@ -1541,7 +1541,7 @@ error E3099: specs/fragments/first-class-functions/first-class-function.capturin
 ```
 
 <!-- test: first-class-function.capturing-closure-in-ternary-to-global-errors -->
-<!-- targets: x64-windows, wasm32-wasi -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 The same laundering, into a GLOBAL. Through the ternary this was an internal `StdPtr`/`StdI64`
 cast crash at lowering rather than a diagnostic.
 ```maxon
@@ -1566,7 +1566,7 @@ error E3099: specs/fragments/first-class-functions/first-class-function.capturin
 ```
 
 <!-- test: first-class-function.capturing-closure-in-ternary-used-in-frame-errors -->
-<!-- targets: x64-windows, wasm32-wasi -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 Refused even when the result NEVER LEAVES THE FRAME. This is what makes the merge different
 from an escape route: the environment is dropped by the merge itself, so `h(22)` here called a
 closure with `env=0` and nil-dereffed without escaping anything.
@@ -1590,7 +1590,7 @@ error E3099: specs/fragments/first-class-functions/first-class-function.capturin
 ```
 
 <!-- test: first-class-function.capturing-closure-in-match-arm-errors -->
-<!-- targets: x64-windows, wasm32-wasi -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 The REACHABLE twin of the ternary-arm refusal above: `a if c else b` is not parsed yet, but a match
 EXPRESSION is, and it merges its `gives` arms through the same single result phi. A capturing closure as
 an arm carries only its code pointer through that phi (the env rides a side column a phi cannot merge),
@@ -1621,7 +1621,7 @@ error E3099: specs/fragments/first-class-functions/first-class-function.capturin
 ```
 
 <!-- test: first-class-function.capturing-closure-in-otherwise-errors -->
-<!-- targets: x64-windows, wasm32-wasi -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 The other reachable merge: `try call() otherwise <value>` joins the success value and the fallback
 through one result phi. A capturing closure as the `otherwise` fallback would be called with no
 environment on the error edge, so it is refused — regardless of whether the call actually throws, since
@@ -1659,7 +1659,7 @@ error E3099: specs/fragments/first-class-functions/first-class-function.capturin
 ```
 
 <!-- test: first-class-function.capturing-closure-returned-from-other-block-errors -->
-<!-- targets: x64-windows, wasm32-wasi -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 The escape rule keys on the VALUE, and a cross-block read mints a new one. Returning the closure
 from a block other than the one that bound it must still be refused — this compiled clean and
 nil-dereffed, because the read that crossed the block boundary dropped the "has an environment"
@@ -1691,7 +1691,7 @@ error E3099: specs/fragments/first-class-functions/first-class-function.capturin
 ```
 
 <!-- test: first-class-function.non-capturing-closure-through-ternary -->
-<!-- targets: x64-windows, wasm32-wasi -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 The accept side of the ternary rule. A closure that captures NOTHING has no environment to
 lose, so it merges through a ternary like any other function value — and the merged result is
 callable, which requires the signature to have survived the merge.
@@ -1720,7 +1720,7 @@ same if closures did not exist. "May this value be represented here?" and "may t
 OUTLIVE here?" are separate questions, and a place can fail either, both, or neither.
 
 <!-- test: first-class-function.function-value-into-int-global-errors -->
-<!-- targets: x64-windows, wasm32-wasi -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 Unchecked, this store reached the LOWERING, where a function pointer and an integer slot have
 different representations and the cast between them failed as an E9001 internal error — quoting
 a .NET type name, naming no source position, and describing no defect in the program. An
@@ -1745,7 +1745,7 @@ error E3005: specs/fragments/first-class-functions/first-class-function.function
 ```
 
 <!-- test: first-class-function.function-value-into-int-local-errors -->
-<!-- targets: x64-windows, wasm32-wasi -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 The same rule for a LOCAL. This one was worse than an internal error: with the value never
 read, the whole program compiled CLEAN and the mismatch was never reported at all.
 ```maxon
@@ -1767,7 +1767,7 @@ error E3005: specs/fragments/first-class-functions/first-class-function.function
 ```
 
 <!-- test: first-class-function.capturing-closure-into-int-local-errors -->
-<!-- targets: x64-windows, wasm32-wasi -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 A CLOSURE into the same int local. It is the type rule that answers, not the escape rule: the
 value never leaves the frame, so there is no escape to report — it simply does not fit.
 ```maxon
@@ -1786,7 +1786,7 @@ error E3005: specs/fragments/first-class-functions/first-class-function.capturin
 ```
 
 <!-- test: first-class-function.function-value-returned-as-int-errors -->
-<!-- targets: x64-windows, wasm32-wasi -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 The RETURN position reaches the same mismatch by a different road: the return check consulted
 the numeric widening table directly, and that table answers only for numeric kinds, so a
 function kind fell off the end of it as an E9001 "Unhandled cast combination: Function ->
@@ -1812,7 +1812,7 @@ error E3005: specs/fragments/first-class-functions/first-class-function.function
 ```
 
 <!-- test: first-class-function.throwing-function-as-value-errors -->
-<!-- targets: x64-windows, wasm32-wasi -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 A **`throws` function cannot be taken as a value.** A function type has no throws clause — the
 grammar is `function(T) returns U` — so the binding would drop it, and there is no channel to carry
 it back: `StdIndirectCallOp` has no error flag, unlike `StdTryCallOp`.
@@ -1850,7 +1850,7 @@ error E3101: specs/fragments/first-class-functions/first-class-function.throwing
 ```
 
 <!-- test: first-class-function.non-throwing-function-as-value-still-works -->
-<!-- targets: x64-windows, wasm32-wasi -->
+<!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 The guard above is about `throws` and nothing else — an ordinary function value is untouched.
 ```maxon
 typealias Num = int(0 to 200)

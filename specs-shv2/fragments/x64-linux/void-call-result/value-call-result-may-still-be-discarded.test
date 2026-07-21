@@ -1,0 +1,34 @@
+// Test: value-call-result-may-still-be-discarded
+typealias Integer = int(i64.min to i64.max)
+
+function answer() returns Integer
+	return 42
+end 'answer'
+
+function main() returns ExitCode
+	answer()
+	return 42
+end 'main'
+---
+ExitCode: 42
+---
+func @answer {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 42
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect answer
+    x64.movRegImm32 r8, 42
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

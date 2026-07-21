@@ -1,0 +1,84 @@
+// Test: match-statements.try-otherwise-stmt
+enum Err implements Error
+	bad
+end 'Err'
+
+function leaf() throws Err
+	throw Err.bad
+end 'leaf'
+
+function dispatch(kind Tally) returns Score
+	match kind 'k'
+		1 then try leaf() otherwise return 7
+		default panic("unreachable")
+	end 'k'
+	return 99
+end 'dispatch'
+
+typealias Tally = int(0 to 100)
+typealias Score = int(0 to 100)
+
+function main() returns ExitCode
+	return dispatch(1)
+end 'main'
+---
+ExitCode: 7
+---
+func @leaf {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 rax, 0
+    x64.leaRegRegImm32 r10, rax, 1
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}
+
+func @dispatch {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.cmpRegImm32 rcx, 1
+    x64.jcc equal, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.callDirect leaf
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 r8, 7
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.jmp matchcont
+  matchcont:
+    x64.movRegImm32 r8, 99
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  matchnext:
+    x64.leaRegRdata rax, [rip + __str_rec_1]
+    x64.movRegImm32 rdi, 134
+    x64.movReg32Reg32 rdi, rdi
+    x64.x64Syscall 231
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 1
+    x64.callDirect dispatch
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

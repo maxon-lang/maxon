@@ -1,0 +1,52 @@
+// Test: float-phi-both-arms
+function work(a int) returns int
+	var f = a + 0.0
+	if a > 100 'big'
+		f = f * 2.0
+	end 'big' else 'small'
+		f = f - 4.5
+	end 'small'
+	return trunc(f)
+end 'work'
+
+function main() returns ExitCode
+	return work(19)
+end 'main'
+---
+ExitCode: 14
+---
+func @work {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movsdRegRip xmm0, [rip + __fconst_0]
+    x64.cvtsi2sdRegReg xmm1, rcx
+    x64.addsdRegReg xmm1, xmm1, xmm0
+    x64.cmpRegImm32 rcx, 100
+    x64.jcc greater, big
+    x64.jmp ifelse
+  big:
+    x64.movsdRegRip xmm0, [rip + __fconst_1]
+    x64.mulsdRegReg xmm1, xmm1, xmm0
+    x64.jmp ifcont
+  ifelse:
+    x64.movsdRegRip xmm0, [rip + __fconst_2]
+    x64.subsdRegReg xmm1, xmm1, xmm0
+    x64.jmp ifcont
+  ifcont:
+    x64.cvttsd2siRegReg r8, xmm1
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 19
+    x64.callDirect work
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

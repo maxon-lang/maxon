@@ -1,0 +1,77 @@
+// Test: default-throws-expression
+enum Color
+	red
+	green
+	blue
+end 'Color'
+
+enum MatchError
+	unmatched
+end 'MatchError'
+
+function colorValue(c Color) returns ExitCode throws MatchError
+	let result = match c 'check'
+		red gives 10
+		green gives 20
+		default throws MatchError.unmatched
+	end 'check'
+	return result
+end 'colorValue'
+
+function main() returns ExitCode
+	let c = Color.green
+	let result = try colorValue(c) otherwise 0
+	return result
+end 'main'
+---
+ExitCode: 20
+---
+func @colorValue {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.movRegImm32 r8, 10
+    x64.jmp matchcont
+  matchnext:
+    x64.cmpRegImm32 rcx, 1
+    x64.jcc equal, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.movRegImm32 r8, 20
+    x64.jmp matchcont
+  matchcont:
+    x64.movRegImm32 r10, 0
+    x64.popReg rbp
+    x64.ret
+  matchnext:
+    x64.movRegImm32 rax, 0
+    x64.leaRegRegImm32 r10, rax, 1
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 1
+    x64.callDirect colorValue
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 r8, 0
+    x64.jmp trycont
+  tryok:
+    x64.jmp trycont
+  trycont:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

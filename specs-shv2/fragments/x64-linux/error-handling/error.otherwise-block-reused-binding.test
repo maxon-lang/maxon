@@ -1,0 +1,142 @@
+// Test: error.otherwise-block-reused-binding
+
+typealias Integer = int(i64.min to i64.max)
+
+// Regression: two sibling `try ... otherwise (e) 'label' ... end 'label'`
+// blocks reusing the same binding name `e` but with different error types
+// (one associated-value enum, one simple enum). Without per-block scoping,
+// the first block's managed-type registration of `e` persists and the
+// function epilogue incorrectly decrefs the second block's integer `e`.
+union AssocError implements Error
+	withCode(code Integer)
+	plain
+end 'AssocError'
+
+enum SimpleError implements Error
+	broken
+end 'SimpleError'
+
+function mayFailAssoc() returns Integer throws AssocError
+	throw AssocError.withCode(7)
+end 'mayFailAssoc'
+
+function mayFailSimple() returns Integer throws SimpleError
+	throw SimpleError.broken
+end 'mayFailSimple'
+
+function main() returns ExitCode
+	var result = 0
+	try mayFailAssoc() otherwise (e) 'handler1'
+		match e 'check1'
+			withCode(code) then result = result + code
+			plain then result = result + 1
+		end 'check1'
+	end 'handler1'
+	try mayFailSimple() otherwise (e) 'handler2'
+		match e 'check2'
+			broken then result = result + 35
+		end 'check2'
+	end 'handler2'
+	return result
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @mayFailAssoc {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegImm32 rbx, 7
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg rax, r8
+    x64.movRegImm32 rcx, 0
+    x64.storeBaseDispReg.word64 [rax + 0], rcx
+    x64.storeBaseDispReg.word64 [rax + 8], rbx
+    x64.movRegImm32 r8, 0
+    x64.movRegReg r10, rax
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @mayFailSimple {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 rax, 0
+    x64.leaRegRegImm32 r10, rax, 1
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegImm32 rbx, 0
+    x64.callDirect mayFailAssoc
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.loadRegBaseDisp.word64 rax, [r10 + 0]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.loadRegBaseDisp.word64 rax, [r10 + 8]
+    x64.leaRegRegImm32 rbx, rax, 0
+    x64.jmp matchcont
+  matchnext:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc equal, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.leaRegRegImm32 rbx, rbx, 1
+    x64.jmp matchcont
+  matchcont:
+    x64.movRegReg rcx, r10
+    x64.callDirect __mm_decref
+    x64.jmp trycont
+  matchnext:
+  tryok:
+    x64.jmp trycont
+  trycont:
+    x64.callDirect mayFailSimple
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.leaRegRegImm32 rax, r10, -1
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.leaRegRegImm32 r8, rbx, 35
+    x64.jmp matchcont
+  matchcont:
+    x64.jmp trycont
+  matchnext:
+  tryok:
+    x64.movRegReg r8, rbx
+    x64.jmp trycont
+  trycont:
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

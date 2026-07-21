@@ -1,0 +1,128 @@
+// Test: seven-across-call-in-loop
+function bump(x int) returns int
+	return x + 1
+end 'bump'
+
+function sevenAcross(p int) returns int
+	var a1 = p + 1
+	var a2 = p + 2
+	var a3 = p + 3
+	var a4 = p + 4
+	var a5 = p + 5
+	var a6 = p + 6
+	var a7 = p + 7
+	var i = 0
+	while i < 3 'loop'
+		let d = bump(i)
+		a1 = a1 + d
+		a2 = a2 + d
+		a3 = a3 + d
+		a4 = a4 + d
+		a5 = a5 + d
+		a6 = a6 + d
+		a7 = a7 + d
+		i = i + 1
+	end 'loop'
+	return a1 + a2 + a3 + a4 + a5 + a6 + a7
+end 'sevenAcross'
+
+function main() returns ExitCode
+	let r = sevenAcross(0)
+	if r == 70 'ok'
+		return 0
+	end 'ok'
+	return 99
+end 'main'
+---
+ExitCode: 0
+---
+func @bump {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.leaRegRegImm32 r8, rcx, 1
+    x64.popReg rbp
+    x64.ret
+}
+
+func @sevenAcross {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 56
+    x64.leaRegRegImm32 rbx, rcx, 1
+    x64.leaRegRegImm32 r12, rcx, 2
+    x64.leaRegRegImm32 r13, rcx, 3
+    x64.leaRegRegImm32 r14, rcx, 4
+    x64.leaRegRegImm32 r15, rcx, 5
+    x64.leaRegRegImm32 rax, rcx, 6
+    x64.leaRegRegImm32 rcx, rcx, 7
+    x64.movRegImm32 rdx, 0
+    x64.jmp whilehdr
+  whilehdr:
+    x64.storeSlotReg slot2, rax
+    x64.storeSlotReg slot1, rcx
+    x64.storeSlotReg slot0, rdx
+    x64.cmpRegImm32 rdx, 3
+    x64.jcc less, loop
+    x64.jmp whileexit
+  loop:
+    x64.movRegReg rcx, rdx
+    x64.callDirect bump
+    x64.leaRegRegReg rbx, rbx, r8
+    x64.leaRegRegReg r12, r12, r8
+    x64.leaRegRegReg r13, r13, r8
+    x64.leaRegRegReg r14, r14, r8
+    x64.leaRegRegReg r15, r15, r8
+    x64.loadRegSlot rax, slot2
+    x64.leaRegRegReg rax, rax, r8
+    x64.loadRegSlot rcx, slot1
+    x64.leaRegRegReg rcx, rcx, r8
+    x64.loadRegSlot rdx, slot0
+    x64.leaRegRegImm32 rdx, rdx, 1
+    x64.jmp whilehdr
+  whileexit:
+    x64.leaRegRegReg rax, rbx, r12
+    x64.leaRegRegReg rax, rax, r13
+    x64.leaRegRegReg rax, rax, r14
+    x64.leaRegRegReg rax, rax, r15
+    x64.loadRegSlot rcx, slot2
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot1
+    x64.leaRegRegReg r8, rax, rcx
+    x64.epilogue 56
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 0
+    x64.callDirect sevenAcross
+    x64.cmpRegImm32 r8, 70
+    x64.jcc equal, ok
+    x64.jmp ifcont
+  ok:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 99
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

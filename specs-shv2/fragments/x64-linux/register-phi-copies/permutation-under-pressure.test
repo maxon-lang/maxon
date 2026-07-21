@@ -1,0 +1,120 @@
+// Test: permutation-under-pressure
+function permutePressure(p int) returns int
+	let k1 = p + 1
+	let k2 = p + 2
+	let k3 = p + 3
+	let k4 = p + 4
+	let k5 = p + 5
+	let k6 = p + 6
+	let k7 = p + 7
+	let k8 = p + 8
+	let k9 = p + 9
+	let k10 = p + 10
+	let k11 = p + 11
+	let k12 = p + 12
+	var a = p + 1
+	var b = p + 2
+	var i = 0
+	while i < 3 'loop'
+		var t = a
+		a = b
+		b = t
+		i = i + 1
+	end 'loop'
+	return a * 100 + b * 10 + k1 + k2 + k3 + k4 + k5 + k6 + k7 + k8 + k9 + k10 + k11 + k12
+end 'permutePressure'
+
+function main() returns ExitCode
+	let r = permutePressure(0)
+	if r == 288 'ok'
+		return 0
+	end 'ok'
+	return 99
+end 'main'
+---
+ExitCode: 0
+---
+func @permutePressure {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 16
+    x64.leaRegRegImm32 rax, rcx, 1
+    x64.leaRegRegImm32 rdx, rcx, 2
+    x64.leaRegRegImm32 rsi, rcx, 3
+    x64.leaRegRegImm32 rdi, rcx, 4
+    x64.leaRegRegImm32 r8, rcx, 5
+    x64.leaRegRegImm32 r9, rcx, 6
+    x64.leaRegRegImm32 r10, rcx, 7
+    x64.leaRegRegImm32 r11, rcx, 8
+    x64.leaRegRegImm32 rbx, rcx, 9
+    x64.leaRegRegImm32 r12, rcx, 10
+    x64.leaRegRegImm32 r13, rcx, 11
+    x64.leaRegRegImm32 r14, rcx, 12
+    x64.storeSlotReg slot0, r14
+    x64.leaRegRegImm32 r14, rcx, 1
+    x64.leaRegRegImm32 rcx, rcx, 2
+    x64.movRegImm32 r15, 0
+    x64.xchgRegReg rcx, r14
+    x64.jmp whilehdr
+  whilehdr:
+    x64.cmpRegImm32 r15, 3
+    x64.jcc less, loop
+    x64.jmp whileexit
+  loop:
+    x64.leaRegRegImm32 r15, r15, 1
+    x64.xchgRegReg rcx, r14
+    x64.jmp whilehdr
+  whileexit:
+    x64.imulRegRegImm32 rcx, rcx, 100
+    x64.imulRegRegImm32 r14, r14, 10
+    x64.leaRegRegReg rcx, rcx, r14
+    x64.leaRegRegReg rax, rcx, rax
+    x64.leaRegRegReg rax, rax, rdx
+    x64.leaRegRegReg rax, rax, rsi
+    x64.leaRegRegReg rax, rax, rdi
+    x64.leaRegRegReg rax, rax, r8
+    x64.leaRegRegReg rax, rax, r9
+    x64.leaRegRegReg rax, rax, r10
+    x64.leaRegRegReg rax, rax, r11
+    x64.leaRegRegReg rax, rax, rbx
+    x64.leaRegRegReg rax, rax, r12
+    x64.leaRegRegReg rax, rax, r13
+    x64.loadRegSlot rcx, slot0
+    x64.leaRegRegReg r8, rax, rcx
+    x64.epilogue 16
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 0
+    x64.callDirect permutePressure
+    x64.cmpRegImm32 r8, 288
+    x64.jcc equal, ok
+    x64.jmp ifcont
+  ok:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 99
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

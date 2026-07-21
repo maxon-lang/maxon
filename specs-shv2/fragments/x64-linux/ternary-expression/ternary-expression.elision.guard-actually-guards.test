@@ -1,0 +1,55 @@
+// Test: ternary-expression.elision.guard-actually-guards
+typealias Integer = int(i64.min to i64.max)
+typealias Small = int(0 to 10)
+
+function clampOrGuard(useDefault bool, big Integer) returns Integer
+	// `big as Small` range-check-panics for big > 10; it sits in the arm that
+	// `useDefault` does NOT select, so it must never run.
+	return 5 if useDefault else (big as Small)
+end 'clampOrGuard'
+
+function main() returns ExitCode
+	let guarded = clampOrGuard(true, big: 1000) // the cast is in the arm NOT selected
+	let direct = clampOrGuard(false, big: 7)
+	return (guarded + direct) as ExitCode
+end 'main'
+---
+ExitCode: 12
+---
+func @clampOrGuard {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, ternarytrue
+    x64.jmp ternaryfalse
+  ternarytrue:
+    x64.movRegImm32 r8, 5
+    x64.jmp matchcont
+  ternaryfalse:
+    x64.movRegReg r8, rdx
+    x64.jmp matchcont
+  matchcont:
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 1000
+    x64.callDirect clampOrGuard
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 0
+    x64.movRegImm32 rdx, 7
+    x64.callDirect clampOrGuard
+    x64.leaRegRegReg r8, rbx, r8
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

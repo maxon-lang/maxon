@@ -1,0 +1,26 @@
+// Test: error.boxed-union-field-throw-borrowed-self
+typealias N = int(0 to i64.max)
+
+union OuterErr implements Error
+	unterminatedString(line N, column N)
+	unexpectedEof(line N, column N)
+end 'OuterErr'
+
+type Lex
+	export var pendingError as OuterErr
+
+	static function create() returns Lex
+		return Self{pendingError: OuterErr.unterminatedString(7, column: 13)}
+	end 'create'
+
+	function run() returns N throws OuterErr
+		throw pendingError
+	end 'run'
+end 'Lex'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:17:3: Unsupported: throwing a boxed-union FIELD of a BORROWED container — a `self`-field in an instance method, whose receiver the CALLER owns. shv2 has no `__mm_incref`, so the throw would MOVE the box out by nulling the field slot, but through the borrow that nulls the CALLER's box: sound if the caller tears the container down, a use-after-move if it CATCHES and re-reads the field. Refused until cross-call move tracking (escape analysis, P1.5) — throw a boxed-union field of an OWNED LOCAL, or a fresh `throw U.case(x)` / caught `(e)` binding

@@ -1,0 +1,34 @@
+// Test: float-phi-loop-carried
+function main() returns ExitCode
+	var f = 0.0
+	var i = 0
+	while i < 4 'loop'
+		f = f + 2.5
+		i = i + 1
+	end 'loop'
+	return trunc(f)
+end 'main'
+---
+ExitCode: 10
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movsdRegRip xmm0, [rip + __fconst_0]
+    x64.movRegImm32 rax, 0
+    x64.jmp whilehdr
+  whilehdr:
+    x64.cmpRegImm32 rax, 4
+    x64.jcc less, loop
+    x64.jmp whileexit
+  loop:
+    x64.movsdRegRip xmm1, [rip + __fconst_1]
+    x64.addsdRegReg xmm0, xmm0, xmm1
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.jmp whilehdr
+  whileexit:
+    x64.cvttsd2siRegReg r8, xmm0
+    x64.popReg rbp
+    x64.ret
+}

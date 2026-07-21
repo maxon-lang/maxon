@@ -1,0 +1,97 @@
+// Test: try-otherwise-value-flow.nested-try-in-arg
+enum E
+	bad
+end 'E'
+
+function getString(i ExitCode) returns ExitCode throws E
+	if i == 0 'zero'
+		throw E.bad
+	end 'zero'
+	return 42
+end 'getString'
+
+function consume(x ExitCode) returns ExitCode throws E
+	if x == 0 'empty'
+		throw E.bad
+	end 'empty'
+	return x
+end 'consume'
+
+function main() returns ExitCode
+	let n = try consume(try getString(1) otherwise 0) otherwise 0
+	return n
+end 'main'
+---
+ExitCode: 42
+---
+func @getString {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, zero
+    x64.jmp ifcont
+  zero:
+    x64.movRegImm32 rax, 0
+    x64.leaRegRegImm32 r10, rax, 1
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 42
+    x64.movRegImm32 r10, 0
+    x64.popReg rbp
+    x64.ret
+}
+
+func @consume {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, empty
+    x64.jmp ifcont
+  empty:
+    x64.movRegImm32 rax, 0
+    x64.leaRegRegImm32 r10, rax, 1
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r10, 0
+    x64.movRegReg r8, rcx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 1
+    x64.callDirect getString
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 rcx, 0
+    x64.jmp trycont
+  tryok:
+    x64.movRegReg rcx, r8
+    x64.jmp trycont
+  trycont:
+    x64.callDirect consume
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 r8, 0
+    x64.jmp trycont
+  tryok:
+    x64.jmp trycont
+  trycont:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

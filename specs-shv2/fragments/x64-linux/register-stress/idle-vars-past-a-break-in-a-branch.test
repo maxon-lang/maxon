@@ -1,0 +1,180 @@
+// Test: idle-vars-past-a-break-in-a-branch
+function gate(p int) returns bool
+	return p >= 0
+end 'gate'
+
+function idleVarsPastABreak(p int) returns int
+	var k1 = p + 1
+	var k2 = p + 2
+	var k3 = p + 3
+	var k4 = p + 4
+	var k5 = p + 5
+	var k6 = p + 6
+	var k7 = p + 7
+	var k8 = p + 8
+	var k9 = p + 9
+	var k10 = p + 10
+	var k11 = p + 11
+	var k12 = p + 12
+	var k13 = p + 13
+	var k14 = p + 14
+	var k15 = p + 15
+	var sum = 0
+	var i = 0
+	if gate(p) 'guard'
+		while i < 100 'loop'
+			sum = sum + i
+			i = i + 1
+			if i > 3 'done'
+				break
+			end 'done'
+		end 'loop'
+	end 'guard'
+	return sum + k1 + k2 + k3 + k4 + k5 + k6 + k7 + k8 + k9 + k10 + k11 + k12 + k13 + k14 + k15
+end 'idleVarsPastABreak'
+
+function main() returns ExitCode
+	let r = idleVarsPastABreak(0)
+	if r == 126 'ok'
+		return 0
+	end 'ok'
+	return 99
+end 'main'
+---
+ExitCode: 0
+---
+func @gate {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.cmpRegImm32 rcx, 0
+    x64.setccReg greaterEqual, r8
+    x64.popReg rbp
+    x64.ret
+}
+
+func @idleVarsPastABreak {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 136
+    x64.leaRegRegImm32 rbx, rcx, 1
+    x64.leaRegRegImm32 r12, rcx, 2
+    x64.leaRegRegImm32 r13, rcx, 3
+    x64.leaRegRegImm32 r14, rcx, 4
+    x64.leaRegRegImm32 r15, rcx, 5
+    x64.leaRegRegImm32 rax, rcx, 6
+    x64.storeSlotReg slot11, rax
+    x64.leaRegRegImm32 rax, rcx, 7
+    x64.storeSlotReg slot10, rax
+    x64.leaRegRegImm32 rax, rcx, 8
+    x64.storeSlotReg slot9, rax
+    x64.leaRegRegImm32 rax, rcx, 9
+    x64.storeSlotReg slot8, rax
+    x64.leaRegRegImm32 rax, rcx, 10
+    x64.storeSlotReg slot7, rax
+    x64.leaRegRegImm32 rax, rcx, 11
+    x64.storeSlotReg slot6, rax
+    x64.leaRegRegImm32 rax, rcx, 12
+    x64.storeSlotReg slot3, rax
+    x64.leaRegRegImm32 rax, rcx, 13
+    x64.storeSlotReg slot0, rax
+    x64.leaRegRegImm32 rax, rcx, 14
+    x64.storeSlotReg slot1, rax
+    x64.leaRegRegImm32 rax, rcx, 15
+    x64.storeSlotReg slot2, rax
+    x64.movRegImm32 rax, 0
+    x64.storeSlotReg slot4, rax
+    x64.movRegImm32 rax, 0
+    x64.storeSlotReg slot5, rax
+    x64.callDirect gate
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, guard
+    x64.jmp critsplit
+  guard:
+    x64.loadRegSlot rax, slot4
+    x64.loadRegSlot rcx, slot5
+    x64.jmp whilehdr
+  whilehdr:
+    x64.cmpRegImm32 rcx, 100
+    x64.jcc less, loop
+    x64.jmp critsplit
+  loop:
+    x64.leaRegRegReg rax, rax, rcx
+    x64.leaRegRegImm32 rcx, rcx, 1
+    x64.cmpRegImm32 rcx, 3
+    x64.jcc greater, done
+    x64.jmp ifcont
+  done:
+    x64.jmp whileexit
+  ifcont:
+    x64.jmp whilehdr
+  critsplit:
+    x64.jmp whileexit
+  whileexit:
+    x64.jmp ifcont
+  critsplit:
+    x64.loadRegSlot rax, slot4
+    x64.jmp ifcont
+  ifcont:
+    x64.leaRegRegReg rax, rax, rbx
+    x64.leaRegRegReg rax, rax, r12
+    x64.leaRegRegReg rax, rax, r13
+    x64.leaRegRegReg rax, rax, r14
+    x64.leaRegRegReg rax, rax, r15
+    x64.loadRegSlot rcx, slot11
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot10
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot9
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot8
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot7
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot6
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot3
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot0
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot1
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot2
+    x64.leaRegRegReg r8, rax, rcx
+    x64.epilogue 136
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 0
+    x64.callDirect idleVarsPastABreak
+    x64.cmpRegImm32 r8, 126
+    x64.jcc equal, ok
+    x64.jmp ifcont
+  ok:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 99
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
