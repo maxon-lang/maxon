@@ -628,15 +628,10 @@ typealias DescriptorNeedMap = Map with (ByteArray, bool)
 typealias SelfCalleesMap = Map with (ByteArray, ByteArrayArray)
 
 // A generic method's bare name -> its dense index in the type's method list (P1.6-B1). The descriptor-need
-// fixpoint reverses the self-call graph into flat integer arrays (CSR) keyed by this index, so it stays
-// borrow-safe (the ownership model forbids appending to an array stored inside a map).
-typealias MethodIndexMap = Map with (ByteArray, MethodIndex)
-
-// A dense method index, and a flat array of them — the CSR reverse-adjacency backbone of the descriptor-need
-// fixpoint (`solveDescriptorNeedFixpoint`): row offsets, per-callee caller lists, and the BFS worklist. Ranged
-// like `TokenIndex` (a count with no fixed compile-time bound).
-typealias MethodIndex = int(0 to u64.max)
-typealias MethodIndexArray = Array with MethodIndex
+// fixpoint reverses the self-call graph into the shared CSR adjacency (`buildCsr`, over CsrGraph's dense
+// `CsrIndex` key space) keyed by this dense index, so it stays borrow-safe (the ownership model forbids
+// appending to an array stored inside a map).
+typealias MethodIndexMap = Map with (ByteArray, CsrIndex)
 
 // A single shared EMPTY descriptor-need map, held as the INITIAL `Parser.typeDescriptorNeeds` so a parser
 // allocates none of its own (a per-file sweep parser never touches the field at all). A generic type REPLACES
@@ -2635,81 +2630,54 @@ export type Parser
 	// wide generic type: mN reads sizeof(T), m(i) calls m(i+1), so need propagates one hop per round against
 	// declaration order, forcing O(methods) rounds).
 	//
-	// The reversal is a counting sort into FLAT integer arrays (CSR), not a map of growing per-callee lists:
-	// the ownership model forbids appending to an array stored inside a map (`get` yields an immutable borrow),
-	// and a copy-on-append rebuild would be quadratic on a high-in-degree method (a star: every sibling calls
-	// one). Method names are densely indexed so the whole graph lives in scalar arrays.
+	// The reversal is `buildCsr` — THE shared counting sort (CsrGraph), the same one the CFG's pred/succ lists
+	// and the register allocator's death lists build through — fed the self-call edges with (callee, caller)
+	// SWAPPED, exactly as `TargetLiveness` swaps (from, to) to turn successors into predecessors. Growing a
+	// fourth hand-rolled count/prefix-sum/scatter here is precisely what CsrGraph's header forbids.
 	function solveDescriptorNeedFixpoint(methodNames ByteArrayArray, directSizeof DescriptorNeedMap, selfCallees SelfCalleesMap)
 		let methodCount = methodNames.count()
 
-		// Dense index per method name, so the self-call graph reverses into flat integer arrays below.
+		// Dense index per method name, so the self-call graph reverses into the CSR's dense key space below.
 		var nameToIndex = MethodIndexMap.create()
 		for i in 0 upto methodCount 'index'
-			nameToIndex.upsert(try methodNames.get(i) otherwise panic("solveDescriptorNeedFixpoint: methodNames.get({i}) OOB below count {methodCount}"), value: i as MethodIndex)
+			nameToIndex.upsert(try methodNames.get(i) otherwise panic("solveDescriptorNeedFixpoint: methodNames.get({i}) OOB below count {methodCount}"), value: i)
 		end 'index'
 
-		// CSR pass A — count how many siblings call each method (its reverse in-degree). A self-call to a name
-		// that is not a sibling method is never a real edge, so it is skipped in BOTH passes, in lockstep.
-		var callerCount = MethodIndexArray.create()
-		for _ in 0 upto methodCount 'zeroCounts'
-			callerCount.push(0)
-		end 'zeroCounts'
-		for i in 0 upto methodCount 'countPass'
+		// The REVERSED self-call edges: a forward edge (caller `i` -> sibling callee `c`) is recorded as
+		// `c -> i`, so a BFS from a needing method reaches the siblings that call it. A self-call to a name that
+		// is not a sibling method is not a real edge and is dropped. `buildCsr` counting-sorts these into the
+		// reverse adjacency (`callersOf`) in O(edges + methods).
+		var edgeCallee = CsrColumn.create()
+		var edgeCaller = CsrColumn.create()
+		for i in 0 upto methodCount 'edges'
 			for calleeName in self.calleesOf(methodNames, selfCallees: selfCallees, callerIndex: i) 'edge'
 				if let c = try nameToIndex.get(calleeName) 'realEdge'
-					try callerCount.set(c, value: (try callerCount.get(c) otherwise panic("callerCount.get({c})")) + 1) otherwise panic("callerCount.set({c})")
+					edgeCallee.push(c)
+					edgeCaller.push(i)
 				end 'realEdge'
 			end 'edge'
-		end 'countPass'
-
-		// Prefix sums -> row starts (methodCount + 1 entries); `edgeTotal` is the real self-call edge count.
-		var rowStart = MethodIndexArray.create()
-		rowStart.push(0)
-		var edgeTotal = 0 as MethodIndex
-		for c in 0 upto methodCount 'prefix'
-			edgeTotal = edgeTotal + (try callerCount.get(c) otherwise panic("callerCount.get({c}) in prefix"))
-			rowStart.push(edgeTotal)
-		end 'prefix'
-
-		// CSR pass B — scatter each caller into its callee's row; `cursor` is the moving write head per row.
-		var cursor = MethodIndexArray.create()
-		for c in 0 upto methodCount 'cursorInit'
-			cursor.push(try rowStart.get(c) otherwise panic("rowStart.get({c})"))
-		end 'cursorInit'
-		var flatCallers = MethodIndexArray.create()
-		for _ in 0 upto edgeTotal 'zeroFlat'
-			flatCallers.push(0)
-		end 'zeroFlat'
-		for i in 0 upto methodCount 'fillPass'
-			for calleeName in self.calleesOf(methodNames, selfCallees: selfCallees, callerIndex: i) 'edge'
-				if let c = try nameToIndex.get(calleeName) 'realEdge'
-					let slot = try cursor.get(c) otherwise panic("cursor.get({c})")
-					try flatCallers.set(slot, value: i as MethodIndex) otherwise panic("flatCallers.set({slot})")
-					try cursor.set(c, value: slot + 1) otherwise panic("cursor.set({c})")
-				end 'realEdge'
-			end 'edge'
-		end 'fillPass'
+		end 'edges'
+		let callersOf = buildCsr(edgeCallee, to: edgeCaller, nodeCount: methodCount)
 
 		// Seed `needs` with each method's direct-sizeof bit; the directly-needing methods prime the worklist.
 		var needs = BoolArray.create()
-		var worklist = MethodIndexArray.create()
+		var worklist = CsrColumn.create()
 		for i in 0 upto methodCount 'seed'
 			let seed = try directSizeof.get(try methodNames.get(i) otherwise panic("methodNames.get({i}) in seed")) otherwise false
 			needs.push(seed)
 			if seed 'root'
-				worklist.push(i as MethodIndex)
+				worklist.push(i)
 			end 'root'
 		end 'seed'
 
 		// Reverse-reachability BFS over the CSR rows: a needing method turns on every sibling that calls it.
 		// The worklist is drained by a head cursor (each index is enqueued at most once), so this is O(edges).
-		var head = 0 as MethodIndex
+		var head = 0 as CsrIndex
 		while head < worklist.count() 'drain'
 			let needed = try worklist.get(head) otherwise panic("worklist.get({head})")
 			head = head + 1
-			let rowEnd = try rowStart.get(needed + 1) otherwise panic("rowStart.get({needed}+1)")
-			for k in (try rowStart.get(needed) otherwise panic("rowStart.get({needed})")) upto rowEnd 'caller'
-				let caller = try flatCallers.get(k) otherwise panic("flatCallers.get({k})")
+			for k in 0 upto callersOf.degree(needed) 'caller'
+				let caller = callersOf.neighbour(needed, k: k)
 				if not (try needs.get(caller) otherwise panic("needs.get({caller})")) 'newlyNeeds'
 					try needs.set(caller, value: true) otherwise panic("needs.set({caller})")
 					worklist.push(caller)
@@ -10574,6 +10542,22 @@ export type Parser
 		try self.consume(TokenKind.rightParen)
 
 		if maxonTypeTag(operand) == ValueTypeTag.typeParameter 'runtimeSize'
+			// ⚠ **A RECEIVER MUST BE IN SCOPE (B1).** The layout descriptor reaches a body by being THREADED
+			// from the receiver instance a method is called on (dictionary-passing). A `static function` (called
+			// on the TYPE) and a lifted closure (whose ValueId 0 is its first param, not the enclosing `self`)
+			// are both RECEIVERLESS, so a caller has no instance whose descriptor to pass. The parser would
+			// still reserve the hidden slot for such a body, but a call site would then reach
+			// `finalizeCallArgsWithLayout` with no receiver argument (static) — or the closure's own
+			// `sizeofType` op would reach lowering with no descriptor param — and PANIC. So reject `sizeof(T)`
+			// here, cleanly (E2015), exactly like the multi-parameter case below. `__self` is bound in scope
+			// ONLY inside an instance method's own body (the receiver param, the same binding
+			// `requireReceiverValue` reads), so its absence IS the receiverless test. Read the size through an
+			// instance method on `self` (or a concrete instance); threading a descriptor into a static call
+			// site's alias, or capturing it into a closure, is a later slice.
+			if not self.scope.contains(SelfParamName) 'noReceiver'
+				throw ParseError.unsupported("sizeof of a type parameter with no instance receiver in scope — a `static function` and a closure are both receiverless, and B1 threads the layout descriptor from the instance a method is called on; read the size through an instance method on `self`, or a concrete instance, instead", line: sizeofTok.line, column: sizeofTok.column)
+			end 'noReceiver'
+
 			// ⚠ **SINGLE-TYPE-PARAMETER ONLY (B1).** The layout descriptor carries ONE `elementLogicalSize`
 			// slot, so `sizeof(K)` in a `uses K, V` generic — which would need a per-parameter size — is a
 			// clean E2015 here, not a lowering panic. A multi-parameter descriptor is a later slice.
@@ -10599,7 +10583,12 @@ export type Parser
 			return self.namedStructSizeBytes(typeNameIdOf(t))
 		end 'struct'
 		if tag == ValueTypeTag.genericInstance 'instance'
-			return self.genericInstanceBoxSizeBytes(typeNameIdOf(t))
+			// The instance's box size is THE one authority on ProgramSignatures — the same
+			// `genericInstanceBoxSize` the descriptor's `size@0` slot is emitted through — so a concrete
+			// `sizeof(Box with Integer)` folded here and a `sizeof(T)` descriptor read for the same instance
+			// cannot drift apart. The gid is whole-program (resolved in the real parse), so it needs no
+			// file-local interner, unlike the `structRef` arm above.
+			return self.signatures.genericInstanceBoxSize(typeNameIdOf(t)) as ParsedInt
 		end 'instance'
 		return primitiveTypeByteSize(tag) as ParsedInt
 	end 'concreteSizeofBytes'
@@ -10613,17 +10602,6 @@ export type Parser
 			undeclared then panic("namedStructSizeBytes: `structRef` names '{String.from(name)}', which `resolveNamedStruct` only tags for a declared struct")
 		end 'lookup'
 	end 'namedStructSizeBytes'
-
-	// The box byteSize of a concrete generic INSTANCE — its base struct's own layout (`Box with Integer`
-	// has `Box`'s box). The instance carries no substituted layout at this slice (a `T` field is an opaque
-	// 8-byte slot like any other), so the base struct's `sizeBytes` IS the instance's box size.
-	function genericInstanceBoxSizeBytes(gid GenericInstanceId) returns ParsedInt
-		let baseName = self.signatures.genericInstanceBaseName(gid)
-		match self.signatures.structOf(baseName) 'lookup'
-			declared(layout) then return layout.sizeBytes() as ParsedInt
-			undeclared then panic("genericInstanceBoxSizeBytes: generic instance base '{String.from(baseName)}' is not a declared struct")
-		end 'lookup'
-	end 'genericInstanceBoxSizeBytes'
 
 	// `( <expr> )` — grouping, which is what makes `(2 + 3) * 4` mean 20 rather than 14.
 	// The parentheses produce NO op: the group's value IS the inner expression's, so the

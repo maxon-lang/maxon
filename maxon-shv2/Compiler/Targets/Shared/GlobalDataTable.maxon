@@ -150,15 +150,26 @@ export type GlobalDataTable
 		return try self.valueDedup.get(bytes) otherwise 'fresh'
 			let label = "{prefix}{self.nextStringId}"
 			self.nextStringId = self.nextStringId + 1
-			self.rdataOffsets.upsert(label, value: self.rdataSizeSoFar)
-			self.rdataSizeSoFar = self.rdataSizeSoFar + bytes.count()
-			self.nameIndex.upsert(label, value: self.names.count())
-			self.names.push(label)
-			self.values.push(bytes)
+			self.appendRdataPayload(label, bytes: bytes)
 			self.valueDedup.upsert(bytes, value: label)
 			return label
 		end 'fresh'
 	end 'registerRdataConstant'
+
+	// Append one FRESH `.rdata` payload under `label`: assign its offset (the running total), advance the
+	// total by this payload's length, and index it by name. The ONE writer of a new rdata slot's offset/name
+	// bookkeeping — shared by `registerRdataConstant`'s fresh path and `registerRdataConstantLabeled` so the
+	// two cannot come to disagree about how a slot is recorded. The byte-keyed `valueDedup` pool is
+	// deliberately NOT touched here: only the label-minting caller joins it (a structural descriptor label
+	// must never be handed back as a later bytes-dedup answer), so pool membership — the sole real difference
+	// between the two callers — stays with the caller that owns it.
+	function appendRdataPayload(label String, bytes ByteArray)
+		self.rdataOffsets.upsert(label, value: self.rdataSizeSoFar)
+		self.rdataSizeSoFar = self.rdataSizeSoFar + bytes.count()
+		self.nameIndex.upsert(label, value: self.names.count())
+		self.names.push(label)
+		self.values.push(bytes)
+	end 'appendRdataPayload'
 
 	// ⭐ REGISTER a read-only constant under an EXACT, caller-supplied label — the layout-descriptor
 	// twin of `registerRdataConstant` (P1.6-B1). A descriptor's label is STRUCTURAL
@@ -170,17 +181,14 @@ export type GlobalDataTable
 	// ⚠ It deliberately does NOT participate in the bytes-keyed `valueDedup` pool: a descriptor and a
 	// String literal that happened to share bytes must keep their own labels, and a descriptor must never
 	// be handed back as the dedup answer to a later `registerRdataConstant`. The offset/name bookkeeping is
-	// otherwise `registerRdataConstant`'s fresh path exactly, so `rdataImage`'s drift assert covers it too.
+	// the shared `appendRdataPayload` — `registerRdataConstant`'s fresh path minus the dedup join, so
+	// `rdataImage`'s drift assert covers it too.
 	export function registerRdataConstantLabeled(label String, bytes ByteArray) returns String
 		if self.rdataOffsets.contains(label) 'alreadyRegistered'
 			return label
 		end 'alreadyRegistered'
 
-		self.rdataOffsets.upsert(label, value: self.rdataSizeSoFar)
-		self.rdataSizeSoFar = self.rdataSizeSoFar + bytes.count()
-		self.nameIndex.upsert(label, value: self.names.count())
-		self.names.push(label)
-		self.values.push(bytes)
+		self.appendRdataPayload(label, bytes: bytes)
 		return label
 	end 'registerRdataConstantLabeled'
 
