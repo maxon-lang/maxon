@@ -86,6 +86,14 @@ export enum TypeClass
 	// function types agreeing at the class level is A1's assignability (tag-level, not structural — the
 	// arity/param-type identity a function-to-function mismatch would need arrives with a later rung).
 	function
+	// The class of a TYPE-PARAMETER value (P1.6-A) — `T` inside a generic type. It is OPAQUE: at this
+	// trivial slice `T` is never substituted, so a `T` value may hold ANY concrete type (an int, a
+	// bool, a trivial struct), and a concrete value may meet a `T` place. So it AGREES WITH ANYTHING,
+	// exactly like `unknown` — a DEFERRAL, not a contradiction. Unlike `unknown` it is not "a callee no
+	// file declares": it is a real, deliberately opaque type, so it gets its own class rather than
+	// borrowing `unknown`'s (which carries E3004 semantics). It lets `IntBox.create(42)` pass an int to
+	// a `T` parameter and `b.get() == 42` compare a `T` result as an i64.
+	typeParameter
 end 'TypeClass'
 
 // The class a source-level type belongs to. Exhaustive over `ValueTypeTag`, so a new type
@@ -121,6 +129,13 @@ function typeClassOf(tag ValueTypeTag) returns TypeClass
 		// A function value. Its own class — see TypeClass's `function` arm. A function value fits a
 		// function-typed place (both `function`) and nothing else (E3005 everywhere else).
 		function gives TypeClass.function
+		// A type parameter is OPAQUE and agrees with anything (P1.6-A) — its own deferral class.
+		typeParameter gives TypeClass.typeParameter
+		// A generic INSTANCE is a struct pointer, so it shares the `structRef` class (a reference that
+		// converts to nothing). It reaches here only if a place is declared with a generic-instance
+		// alias — the trivial slice never mints a genericInstance-tagged VALUE (a factory returns
+		// `Self`, i.e. `structRef`), so this is the sound answer for the type, not a hot path.
+		genericInstance gives TypeClass.structRef
 	end 'k'
 end 'typeClassOf'
 
@@ -141,6 +156,12 @@ function typeClassesAgree(left TypeClass, right TypeClass) returns bool
 	if left == TypeClass.unknown or right == TypeClass.unknown 'deferred'
 		return true
 	end 'deferred'
+	// A TYPE PARAMETER agrees with anything (P1.6-A) — the same deferral `unknown` gets, for the
+	// different reason that `T` is a real, opaque type that ANY concrete type may inhabit at this
+	// trivial slice (no substitution). Tested after `noValue` so a `T` never meets a non-value.
+	if left == TypeClass.typeParameter or right == TypeClass.typeParameter 'typeParam'
+		return true
+	end 'typeParam'
 	return left == right
 end 'typeClassesAgree'
 
@@ -330,6 +351,11 @@ export function tagIsIntegral(tag ValueTypeTag) returns bool
 		// A function value is a code pointer, not a number the language will convert anything INTO.
 		// Nothing narrows to a function, so `false` here is the statement "a function is not an integer".
 		function gives false
+		// A type parameter is OPAQUE (P1.6-A): nothing narrows INTO a `T`, so `false` keeps a
+		// `float`-into-`T` from reading as a lossy conversion (`checkDeclaredType`). A generic instance
+		// is a struct pointer, not an integer.
+		typeParameter gives false
+		genericInstance gives false
 	end 'k'
 end 'tagIsIntegral'
 
@@ -374,6 +400,11 @@ export function typeTagName(tag ValueTypeTag) returns String
 		// assign a value of type 'function' to …". A tag is a scalar and carries no name (see this file's
 		// header), so it names the KIND, not a specific signature — which is all the type rule needs.
 		function gives "function"
+		// A type parameter and a generic instance (P1.6-A). A tag carries no name, so these name the
+		// KIND: "type parameter" for an opaque `T`, "struct" for a generic instance (which IS a struct
+		// pointer, matching what a plain `structRef` prints).
+		typeParameter gives "type parameter"
+		genericInstance gives "struct"
 	end 'k'
 end 'typeTagName'
 
@@ -1358,5 +1389,10 @@ export function notOperatorFor(operand ValueTypeTag) returns NotOperator
 		// A FUNCTION value — rejected for the struct/String arm's reason: `not` has no reading on a code
 		// pointer (P1.5-A1). Complementing a `.text` address is not a question.
 		function gives NotOperator.nonIntegralOperand
+		// A TYPE PARAMETER / GENERIC INSTANCE (P1.6-A) — `not` has no reading on an opaque `T` or a struct
+		// pointer, rejected for the struct/function arm's reason. A `T` agrees with anything for AGREEMENT,
+		// but agreement is not an operator: `not t` is refused here exactly as `t + 1` is elsewhere.
+		typeParameter gives NotOperator.nonIntegralOperand
+		genericInstance gives NotOperator.nonIntegralOperand
 	end 'k'
 end 'notOperatorFor'

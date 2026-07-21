@@ -107,6 +107,17 @@ let TypeShapeString = 23 as ContentHash
 // until the alias is known, so today this arm is exhaustiveness insurance, hashed not panicked.)
 let TypeShapeFunction = 29 as ContentHash
 
+// A TYPE-PARAMETER reference's shape (P1.6-A) — `get() returns T` hashes distinctly. Its POSITION
+// is mixed after the shape (a stable identity — declaration order — never the global id), so
+// `uses A, B`'s `returns A` and `returns B` hash apart. A distinct prime for `TypeShapeStructRef`'s
+// reason.
+let TypeShapeTypeParameter = 31 as ContentHash
+
+// A GENERIC-INSTANCE's shape (P1.6-A) — a `returns IntBox` hashes distinctly. The BASE name and each
+// ARG's shape are mixed after it (names, never ids), so `Box with Integer` and `Box with Bool` hash
+// apart. A distinct prime for `TypeShapeStructRef`'s reason.
+let TypeShapeGenericInstance = 37 as ContentHash
+
 // A declared FIELD's mutability, mixed into the hash beside its name and type (P1.1a wave 2). The
 // struct twin of `DeclShapeConstant`/`DeclShapeMutable`, and distinct constants rather than a reuse
 // of them: those two discriminate a top-level `let` from a `var`, and colliding a field's `let` with
@@ -160,6 +171,16 @@ let DeclShapeThrows = 27 as ContentHash
 // that stops being a ranged alias and becomes a function one, or whose function return type changes,
 // changes what a caller binding a value of it compiles to, so a caller's parse memo must move with it.
 let DeclShapeFunctionAlias = 28 as ContentHash
+
+// A generic-instance TYPEALIAS's shape discriminator (P1.6-A) — `DeclShapeAlias`'s twin. `IntBox =
+// Box with Integer` changing base or args changes what `IntBox.create(…)` resolves to and type-checks
+// against in ANY file, so a reader's parse memo must move with it.
+let DeclShapeGenericAlias = 30 as ContentHash
+
+// A declared generic type's TYPE-PARAMETER shape discriminator (P1.6-A). A change to `type Box uses T`'s
+// param list — a rename or, load-bearingly, a change in COUNT — changes which `Box with …` instantiations
+// are the right arity in any file, so a reader's parse memo must move with the count.
+let DeclShapeTypeParam = 32 as ContentHash
 
 // The separator between a file's path and a constant's bare name in a FILE-PRIVATE constant's
 // storage key. `|` is legal in neither a Maxon identifier nor a Windows path, so the composite is
@@ -500,6 +521,11 @@ function globalStdType(tag ValueTypeTag, name ByteArray) returns StdType
 		// function name at top level is rejected before this — `var g = double` is E2045, no call in a
 		// constant initializer). Were it to reach here, the honest answer is still not a width.
 		function then panic("globalStdType: top-level var '{String.from(name)}' is tagged '{typeTagName(tag)}' — a function value is not a constant initializer, so a global's inferred type is never a function")
+		// A TYPE-PARAMETER / GENERIC-INSTANCE global is unreachable (P1.6-A): a type parameter names no
+		// value outside a generic body and a generic instance is a heap pointer, and a global's type is a
+		// folded scalar constant — neither can be one.
+		typeParameter then panic("globalStdType: top-level var '{String.from(name)}' is tagged '{typeTagName(tag)}' — a type parameter names no value at module scope")
+		genericInstance then panic("globalStdType: top-level var '{String.from(name)}' is tagged '{typeTagName(tag)}' — a generic instance is a heap pointer a constant `.data` image cannot hold")
 	end 'reachable'
 
 	return valueTagToStdType(tag)
@@ -613,6 +639,18 @@ export function classifyUnionPayload(signatures ProgramSignatures, typeNames Typ
 		// heap, and the cascade skips it (nothing to drop). It stores through `maxonTypeToStdType(function)`
 		// → i64, exactly as a scalar does.
 		function then return PayloadClass.scalar(fieldType)
+		// ⭐ A TYPE-PARAMETER field is a TRIVIAL SCALAR (P1.6-A) — and this is what keeps the shared
+		// destructor sound. `T` is opaque and its trivial argument is stored as-is (an 8-byte word), so
+		// the box neither increfs it on the way in (`moveInPayload` plain-stores it) nor drops it (the
+		// cascade skips it — `structFieldIsManaged` is false), which makes `type Box uses T`'s destructor
+		// the TRIVIAL `__mm_decref`, byte-identical to the equivalent monomorphic struct. Its concrete
+		// managed argument is REJECTED at instantiation (`checkGenericInstanceArg`), so the borrow this
+		// implies (the box holds a pointer it does not own) is only ever a trivial scalar or a caller-owned
+		// trivial struct — never a String or a managed-field struct that would leak here.
+		typeParameter then return PayloadClass.scalar(fieldType)
+		// A generic-INSTANCE field is treated the same opaque way — its concrete drop is deferred to
+		// slice B's descriptors, so at this slice it is a trivial 8-byte slot (a caller-owned borrow).
+		genericInstance then return PayloadClass.scalar(fieldType)
 		named then break 'kind'
 	end 'kind'
 
@@ -876,6 +914,85 @@ function unionNameDropCallee(signatures ProgramSignatures, typeNames TypeNameInt
 	return MmDecrefName
 end 'unionNameDropCallee'
 
+// --- Generic instances (P1.6-A) ---
+
+// The composite-key index a `GenericInstanceRegistry` interns through, and the alias-name map that
+// resolves `IntBox` to its interned instance. Keyed on `ByteArray` — a cheap string key built from
+// the base id and the arg (tag, id) pairs — so interning is O(1) amortized (NOT v1's linear
+// structural scan over every prior entry, `Project.maxon:2002-2014`).
+export typealias GenericInstanceIndexMap = Map with (ByteArray, GenericInstanceId)
+export typealias GenericAliasMap = Map with (ByteArray, GenericInstanceId)
+
+// ⭐ **THE GENERIC-INSTANCE INTERNER (P1.6-A)** — `Box with Integer` ⇒ a `GenericInstanceId`, with the
+// `(baseId, argTypes)` payload held OUT OF LINE (inlining args into `MaxonType` would make the union
+// recursively aggregate — E4014). Two instances with the same base and structurally equal args share
+// an id, so a downstream identity check is an integer compare.
+//
+// ⚠ **INTERNED THROUGH A MAP INDEX, NOT A LINEAR SCAN.** v1's `GenericInstanceRegistry.intern`
+// (`maxon-selfhosted/Compiler/Project.maxon:2002-2014`) walks every prior entry doing a full
+// structural arg-array compare — O(n²) over a self-compile. Here a cheap composite key (`instanceKey`)
+// keys `index`, so interning is O(1) amortized. The parallel `baseIds`/`argLists` columns are the id
+// ⇒ payload direction; `index` is the payload ⇒ id direction.
+export type GenericInstanceRegistry
+	var baseIds as TypeNameIdArray
+	var argLists as MaxonTypeArrayArray
+	var index as GenericInstanceIndexMap
+
+	export static function create() returns GenericInstanceRegistry
+		return Self{baseIds: TypeNameIdArray.create(), argLists: MaxonTypeArrayArray.create(), index: GenericInstanceIndexMap.create()}
+	end 'create'
+
+	// The cheap composite key that makes interning O(1): the base id and each arg's (tag, id) pair,
+	// joined. Two structurally equal instances build the SAME key — the arg TAG plus its name/registry
+	// id is the whole of a slice-A type's identity (a trivial arg is a primitive, a struct name id, or
+	// a nested-instance giid), so equal keys mean equal instances.
+	function instanceKey(baseId TypeNameId, args MaxonTypeArray) returns ByteArray
+		var key = "{baseId}"
+		for arg in args 'eachArg'
+			key.append("|{maxonTypeTag(arg).rawValue}:{typeNameIdOf(arg)}")
+		end 'eachArg'
+		return key.toByteArray()
+	end 'instanceKey'
+
+	// Intern `(baseId, args)`, returning an existing id for a structural repeat. O(1) amortized via
+	// `index`.
+	export function intern(baseId TypeNameId, args MaxonTypeArray) returns GenericInstanceId
+		let key = self.instanceKey(baseId, args: args)
+		if let existing = try self.index.get(key) 'hit'
+			return existing
+		end 'hit'
+		let id = self.baseIds.count()
+		self.baseIds.push(baseId)
+		self.argLists.push(args)
+		self.index.upsert(key, value: id)
+		return id
+	end 'intern'
+
+	export function instanceBaseId(id GenericInstanceId) returns TypeNameId
+		return try self.baseIds.get(id) otherwise panic("GenericInstanceRegistry.instanceBaseId: invalid GenericInstanceId {id}")
+	end 'instanceBaseId'
+
+	export function instanceArgs(id GenericInstanceId) returns MaxonTypeArray
+		return try self.argLists.get(id) otherwise panic("GenericInstanceRegistry.instanceArgs: argLists desync at GenericInstanceId {id}")
+	end 'instanceArgs'
+end 'GenericInstanceRegistry'
+
+// One generic-instance TYPEALIAS the sweep found (P1.6-A): `typealias IntBox = Box with Integer` ⇒
+// `(IntBox, Box, [Integer])`. The args are `MaxonType`s minted against the SCANNING file's interner;
+// `foldFile` remaps them into the index's interner before interning the instance. It travels by NAME
+// (alias name + base name), the way every whole-program registry entry does.
+export type GenericAliasEntry
+	export var aliasName as ByteArray
+	export var baseName as ByteArray
+	export var args as MaxonTypeArray
+
+	export static function create(aliasName ByteArray, baseName ByteArray, args MaxonTypeArray) returns GenericAliasEntry
+		return Self{aliasName: aliasName, baseName: baseName, args: args}
+	end 'create'
+end 'GenericAliasEntry'
+
+export typealias GenericAliasEntryArray = Array with GenericAliasEntry
+
 export type ProgramSignatures
 	// Function name -> its declared return type. Last-wins on a duplicate name, exactly as the
 	// project's own `funcReturnTypes` registry is; the duplicate itself is reported by
@@ -917,6 +1034,16 @@ export type ProgramSignatures
 	// `remapStructLayoutFieldTypes`), and the parser re-interns on the way out (`adoptType`, the
 	// same door `fieldTypeOf` uses). A payload-FREE enum carries no ids and travels by name alone.
 	var enumTypes as EnumLayoutMap
+	// ⭐ Generic-instance interner (P1.6-A) — `Box with Integer` ⇒ a `GenericInstanceId`, id ⇒
+	// `(baseId, argTypes)`. LIKE `structTypes` IT CARRIES IDS (an arg is a `MaxonType`), so `foldFile`
+	// remaps each entry's args into `typeNames` before interning. Read by the parser to resolve a
+	// generic-alias call base and to check a generic instance's arity / managed args.
+	var genericInstances as GenericInstanceRegistry
+	// ⭐ Generic-instance TYPEALIAS name ⇒ its interned instance (P1.6-A) — `IntBox` ⇒ the giid for
+	// `Box with Integer`. THE door `Parser.parseQualifiedCall` resolves `IntBox.create` to `Box.create`
+	// through, and the one the instantiation checks read the base + args from. It carries no ids of its
+	// own (the giid indexes `genericInstances`), so it travels by name.
+	var genericAliases as GenericAliasMap
 	// The interner every `named` id in `returnTypes` belongs to. PRIVATE, and it has to be: an id
 	// may not leave this type. `returnTypeOf` re-interns it into the caller's own table.
 	var typeNames as TypeNameInterner
@@ -965,7 +1092,7 @@ export type ProgramSignatures
 	export var hash as ContentHash
 
 	export static function create() returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedTypeAliasMap.create(), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), enumTypes: EnumLayoutMap.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), hash: fnvOffsetBasis()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedTypeAliasMap.create(), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), enumTypes: EnumLayoutMap.create(), genericInstances: GenericInstanceRegistry.create(), genericAliases: GenericAliasMap.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), hash: fnvOffsetBasis()}
 	end 'create'
 
 	// Fold ONE file's scanned declarations into the index. Called in SOURCE-PATH order, so the
@@ -977,7 +1104,7 @@ export type ProgramSignatures
 	// machinery `mergeArtifact` uses for the identical job — `TypeNameInterner.foldInto` +
 	// `remapMaxonReturnType`. One mechanism, two callers: a second copy of "reconcile a file's ids
 	// into a bigger table" would be free to disagree with this one about what an id means.
-	export function foldFile(scanned FuncReturnTypeEntryArray, aliases RangedTypeAliasArray, functionAliases FunctionTypeAliasArray, structs StructLayoutArray, enums EnumLayoutArray, bindings TopLevelDeclArray, paramConsumes ParamConsumeEntryArray, throwsEntries ThrowsClauseEntryArray, fileTypeNames TypeNameInterner)
+	export function foldFile(scanned FuncReturnTypeEntryArray, aliases RangedTypeAliasArray, functionAliases FunctionTypeAliasArray, structs StructLayoutArray, enums EnumLayoutArray, genericAliasEntries GenericAliasEntryArray, bindings TopLevelDeclArray, paramConsumes ParamConsumeEntryArray, throwsEntries ThrowsClauseEntryArray, fileTypeNames TypeNameInterner)
 		for alias in aliases 'eachAlias'
 			self.recordAlias(alias)
 		end 'eachAlias'
@@ -1040,6 +1167,14 @@ export type ProgramSignatures
 		for enumLayout in enums 'eachEnum'
 			self.recordEnum(enumLayout)
 		end 'eachEnum'
+
+		// Generic-instance typealiases (P1.6-A). Folded BEFORE the return-type split below (which returns
+		// early on the identity fast path), so they are recorded whether or not ids moved. Each entry's
+		// args are minted against the file's interner, so `recordGenericAlias` remaps them into this
+		// index's interner (`remap`) before interning the instance — exactly as struct field types above.
+		for genericAlias in genericAliasEntries 'eachGenericAlias'
+			self.recordGenericAlias(genericAlias, remap: remap)
+		end 'eachGenericAlias'
 
 		// The remap is loop-INVARIANT, so the identity test is hoisted OUT of the per-declaration
 		// loop rather than asked once per function — the same shape `mergeArtifact` uses for the same
@@ -1161,6 +1296,14 @@ export type ProgramSignatures
 		self.structTypes.upsert(layout.name, value: layout)
 
 		var state = mixBytes(mix(self.hash, value: DeclShapeStruct), bytes: layout.name)
+		// The type PARAMETERS ride the hash (P1.6-A): a change to `uses T` — a rename, or a change in
+		// COUNT — changes which `Box with …` instantiations are the right arity in any file, so a reader's
+		// parse memo must move with it. Mixed BEFORE the fields (a field's `typeParameter(pos)` is only
+		// meaningful against this list).
+		for i in 0 upto layout.typeParamCount() 'eachTypeParam'
+			let paramName = try layout.typeParamNames.get(i) otherwise panic("ProgramSignatures.recordStruct: typeParamNames.get OOB at {i}")
+			state = mixBytes(mix(state, value: DeclShapeTypeParam), bytes: paramName)
+		end 'eachTypeParam'
 		for i in 0 upto layout.fieldCount() 'eachField'
 			state = self.mixField(state, layout: layout, index: i)
 		end 'eachField'
@@ -1187,6 +1330,29 @@ export type ProgramSignatures
 		end 'eachCase'
 		self.hash = state
 	end 'recordEnum'
+
+	// Add one generic-instance typealias to the index AND fold it into the hash (P1.6-A) —
+	// `recordStruct`'s twin. The base NAME is interned into this index's own interner, the args are
+	// REMAPPED into it (they were minted against the scanning file's interner), the instance is
+	// interned to a `GenericInstanceId`, and the alias name is mapped to it. Last-wins on a duplicate
+	// alias (a duplicate typealias is reported elsewhere), exactly as `recordAlias` is.
+	function recordGenericAlias(entry GenericAliasEntry, remap TypeNameRemap)
+		let baseId = self.typeNames.intern(entry.baseName)
+		var args = MaxonTypeArray.create()
+		for arg in entry.args 'eachArg'
+			args.push(remapMaxonType(arg, remap: remap))
+		end 'eachArg'
+		let giid = self.genericInstances.intern(baseId, args: args)
+		self.genericAliases.upsert(entry.aliasName, value: giid)
+
+		// The alias name, its base name and each arg's SHAPE ride the hash — a change to any of the
+		// three changes what a `IntBox.create(…)` in another file resolves and type-checks against.
+		var state = mixBytes(mixBytes(mix(self.hash, value: DeclShapeGenericAlias), bytes: entry.aliasName), bytes: entry.baseName)
+		for arg in args 'eachHash'
+			state = self.mixType(state, t: arg)
+		end 'eachHash'
+		self.hash = state
+	end 'recordGenericAlias'
 
 	// Fold one case's NAME and TAG into the enum's hash. Split out so the SIGNED tag (`ParsedInt`)
 	// crosses to the UNSIGNED hash domain through a local — `recordAlias`/`mixDefaultPayload` have
@@ -1784,6 +1950,11 @@ export type ProgramSignatures
 			// A FUNCTION top-level binding never reaches here (P1.5-A1): a function reference is not a
 			// constant initializer, so the const evaluator never folds one to a `function`-tagged value.
 			function then panic("ProgramSignatures.mixValueTag: a top-level binding is tagged '{typeTagName(tag)}' — a function value is not a constant initializer, so it is never folded to a top-level constant")
+			// A TYPE-PARAMETER / GENERIC-INSTANCE top-level binding is unreachable (P1.6-A) for
+			// `structRef`'s reason: neither is a folded scalar constant, so the const evaluator never
+			// produces one at module scope.
+			typeParameter then panic("ProgramSignatures.mixValueTag: a top-level binding is tagged '{typeTagName(tag)}' — a type parameter names no value at module scope")
+			genericInstance then panic("ProgramSignatures.mixValueTag: a top-level binding is tagged '{typeTagName(tag)}' — a generic instance is a heap pointer, never a folded constant")
 		end 'k'
 	end 'mixValueTag'
 
@@ -1840,6 +2011,28 @@ export type ProgramSignatures
 	export function containsStruct(name ByteArray) returns bool
 		return self.structTypes.contains(name)
 	end 'containsStruct'
+
+	// --- Generic-instance queries (P1.6-A) ---
+
+	// Is `name` a declared generic-instance TYPEALIAS (`IntBox`)? THE hot-path guard the parser asks of
+	// every type reference and every qualified-call base, so it must allocate nothing (`Map.contains`).
+	export function isGenericAlias(name ByteArray) returns bool
+		return self.genericAliases.contains(name)
+	end 'isGenericAlias'
+
+	// The `GenericInstanceId` a generic-instance alias names. Precondition: `isGenericAlias(name)`.
+	export function genericAliasInstance(name ByteArray) returns GenericInstanceId
+		return try self.genericAliases.get(name) otherwise panic("ProgramSignatures.genericAliasInstance: '{String.from(name)}' is not a generic-instance alias — every caller asks isGenericAlias first")
+	end 'genericAliasInstance'
+
+	// The base STRUCT name a generic-instance id refers to (`Box` for `Box with Integer`) — what
+	// `Parser.parseQualifiedCall` rewrites `IntBox.create` to `Box.create` through. The instance's
+	// ARGUMENT types are not exposed: at this trivial slice a member type is never SUBSTITUTED (a `T`
+	// stays opaque), so nothing reads them out — the checks that need them (arity, managed) read them
+	// straight off the parser-local `MaxonType` list at the instantiation site.
+	export function genericInstanceBaseName(id GenericInstanceId) returns ByteArray
+		return self.nameOfId(self.genericInstances.instanceBaseId(id))
+	end 'genericInstanceBaseName'
 
 	// The enum/union `name` denotes, declared in ANY file — `structOf`'s twin, and the door the
 	// PARSER asks every enum question through: is this scrutinee an enum? what tag is a case? which
@@ -2000,6 +2193,11 @@ export type ProgramSignatures
 			string gives rt
 			// A FUNCTION return type carries its governing name id (P1.5-A1), so it re-interns like `named`.
 			function gives MaxonReturnType.value(self.adoptType(inner, into: into))
+			// A TYPE-PARAMETER / GENERIC-INSTANCE return type (P1.6-A) — `get() returns T`. Neither carries a
+			// per-file interner id (a POSITION / a whole-program giid), so like a primitive it crosses files
+			// unchanged. `adoptType` handles both identically; routing through it keeps the one crossing door.
+			typeParameter gives MaxonReturnType.value(self.adoptType(inner, into: into))
+			genericInstance gives MaxonReturnType.value(self.adoptType(inner, into: into))
 		end 'r'
 	end 'adoptValueReturn'
 
@@ -2025,6 +2223,11 @@ export type ProgramSignatures
 			string gives t
 			// A FUNCTION value carries its governing name id (P1.5-A1), re-interned by NAME like `named`.
 			function(id) gives MaxonType.function(into.intern(self.nameOfId(id)))
+			// A type-parameter reference and a generic instance (P1.6-A) carry GLOBAL ids — a param
+			// POSITION and a `GenericInstanceId` keyed on THIS index's own registry — not per-file
+			// interner ids, so there is nothing to remap: they pass through unchanged, like a primitive.
+			typeParameter gives t
+			genericInstance gives t
 		end 'r'
 	end 'adoptType'
 
@@ -2068,8 +2271,26 @@ export type ProgramSignatures
 			// A FUNCTION value (P1.5-A1) — its own shape, then its governing NAME (never its id, for
 			// `mixDeclaration`'s reason).
 			function(id) gives mixBytes(mix(state, value: TypeShapeFunction), bytes: self.nameOfId(id))
+			// A TYPE-PARAMETER reference (P1.6-A) — its own shape, then its POSITION. The position is a
+			// stable identity (declaration order), NOT a global id, so hashing it does not over-invalidate:
+			// `uses A, B`'s `returns A` (position 0) and `returns B` (position 1) hash apart.
+			typeParameter(id) gives mix(mix(state, value: TypeShapeTypeParameter), value: id)
+			// A GENERIC INSTANCE (P1.6-A) — its own shape, then its base NAME (never its id) and each ARG's
+			// shape (recursed), so `Box with Integer` and `Box with Bool` hash apart. `mixGenericInstance`
+			// reads the `(baseId, args)` payload out of THIS index's own registry.
+			genericInstance(id) gives self.mixGenericInstance(mix(state, value: TypeShapeGenericInstance), id: id)
 		end 'r'
 	end 'mixType'
+
+	// Fold a generic instance's base name and args into the hash — the recursive half of `mixType`'s
+	// `genericInstance` arm, split out because it decodes the registry and folds a list.
+	function mixGenericInstance(state ContentHash, id GenericInstanceId) returns ContentHash
+		var out = mixBytes(state, bytes: self.nameOfId(self.genericInstances.instanceBaseId(id)))
+		for arg in self.genericInstances.instanceArgs(id) 'eachArg'
+			out = self.mixType(out, t: arg)
+		end 'eachArg'
+		return out
+	end 'mixGenericInstance'
 
 	function nameOfId(id TypeNameId) returns ByteArray
 		return try self.typeNames.nameOf(id) otherwise panic("ProgramSignatures: type-name id {id} is not in this index's own interner — every id it stores was minted by foldFile's fold into that table")

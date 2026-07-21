@@ -378,13 +378,32 @@ export type StructLayout
 	// decodes it for one `FieldIndex`.
 	export var fieldExported as BoolArray
 	export var fieldDefaults as FieldDefaultArray
+	// The GENERIC TYPE PARAMETERS this type declares (P1.6-A): `uses T` ⇒ `[T]`, `uses A, B` ⇒
+	// `[A, B]`, empty for a non-generic type. Recorded IN DECLARATION ORDER — a `T` in a field/method
+	// type is `typeParameter(POSITION)`, so the order IS the identity, and `Box with X` binds arg 0 to
+	// the param at position 0. It rides on the layout (which already travels whole-program) so the
+	// instantiation-site arity check reads it straight off `structOf`, needing no separate registry.
+	export var typeParamNames as ByteArrayArray
 
-	// An EMPTY layout, filled by `addField`. It does not take the columns, deliberately: handing
-	// five pre-built parallel arrays across a call boundary is exactly the shape that lets four of
-	// them arrive.
+	// An EMPTY layout, filled by `addField` (and, for a generic type, `recordTypeParams`). It does not
+	// take the columns, deliberately: handing pre-built parallel arrays across a call boundary is
+	// exactly the shape that lets one arrive short.
 	export static function create(name ByteArray) returns StructLayout
-		return Self{name: name, fieldNames: ByteArrayArray.create(), fieldTypes: MaxonTypeArray.create(), fieldMutable: BoolArray.create(), fieldExported: BoolArray.create(), fieldDefaults: FieldDefaultArray.create()}
+		return Self{name: name, fieldNames: ByteArrayArray.create(), fieldTypes: MaxonTypeArray.create(), fieldMutable: BoolArray.create(), fieldExported: BoolArray.create(), fieldDefaults: FieldDefaultArray.create(), typeParamNames: ByteArrayArray.create()}
 	end 'create'
+
+	// Record the type's `uses` parameter names, in declaration order (P1.6-A). Replaces the column
+	// wholesale rather than appending per name — the whole list is known at once (the `uses` clause is
+	// parsed as a unit), and the parser and the tolerant sweep must record the SAME list.
+	export function recordTypeParams(names ByteArrayArray)
+		self.typeParamNames = names
+	end 'recordTypeParams'
+
+	// The number of generic type parameters (P1.6-A) — 0 for a non-generic type, the arity a
+	// `Base with Args` instantiation must match.
+	export function typeParamCount() returns FieldIndex
+		return self.typeParamNames.count()
+	end 'typeParamCount'
 
 	// Append one declared field. THE one writer of the columns — every column, one push, so they
 	// cannot drift.

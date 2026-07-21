@@ -1,6 +1,6 @@
 {
   "generatedFrom": "docs/error-codes.txt",
-  "sourceHash": "d3b4ea5b4ce84b99",
+  "sourceHash": "e6d1a9752a73a166",
   "note": "GENERATED. Do not edit. Run `maxon error-codes generate`. A reader MUST hash generatedFrom's bytes (FNV-1a 64, hex) and refuse to answer unless it equals sourceHash.",
   "compilers": ["csharp", "selfhosted", "shv2"],
   "codes": [
@@ -397,6 +397,33 @@
       "doc": "A shift ('shl'/'shr') whose count the compiler FOLDED and found NEGATIVE --\n'a shl -1', 'a shl -(1)', 'let SHIFT = -1' ... 'a shl SHIFT'. A negative count is\nnot a shift the other way: the hardware MASKS it, so 'a shl -1' silently computed\n'a shl 63' -- the MAXIMUM LEFT shift, a wrong answer with the opposite sign.\nMaxon follows Go: the count must be non-negative; a constant one is this compile\nerror, and one that only appears at RUN TIME panics.\nWARNING -- a count of 64 OR MORE IS NOT THIS ERROR. It is a legal, well-defined\nshift that moves every bit out ('x shl 64' == 0), because Go puts no upper limit\non a shift count. This code briefly rejected it, which OVER-rejects a correct\nprogram. The compiler SATURATES such a count instead of masking it.\nA PARSE-time check, positioned at the count as WRITTEN. It asks the CONSTANT\nFOLDER, not the token shape: 'let SHIFT = -1' is the same -1 as the literal, and a\ncheck that only looked for a bare literal token missed its own motivating example.",
       "emittedBy": {"csharp": "ParserShiftCountNegative", "shv2": "shiftCountNegative"},
       "notEmittedBy": ["selfhosted"]
+    },
+    {
+      "code": 2055,
+      "tag": "E2055",
+      "name": "GenericBaseNotGeneric",
+      "stage": "parser",
+      "doc": "A 'Base with Args' instantiation names a 'Base' that declares no type parameters --\na non-generic type, or a name that is not a generic 'type' at all. The oracle reports\n\"Type 'X' has no associated types\" for exactly this (P1.6-A).",
+      "emittedBy": {"shv2": "genericBaseNotGeneric"},
+      "notEmittedBy": ["csharp", "selfhosted"]
+    },
+    {
+      "code": 2056,
+      "tag": "E2056",
+      "name": "GenericArityMismatch",
+      "stage": "parser",
+      "doc": "A generic instantiation supplies the wrong number of type arguments -- 'Pair with Integer'\nwhere 'type Pair uses A, B' expects two (P1.6-A).",
+      "emittedBy": {"shv2": "genericArityMismatch"},
+      "notEmittedBy": ["csharp", "selfhosted"]
+    },
+    {
+      "code": 2057,
+      "tag": "E2057",
+      "name": "GenericManagedArg",
+      "stage": "parser",
+      "doc": "A generic type argument of a managed type -- a String, or a struct with a managed field --\nis not yet supported. The trivial slice's shared destructor drops nothing, so a managed\nargument would leak; it is deferred to the layout descriptors of P1.6-B.",
+      "emittedBy": {"shv2": "genericManagedArg"},
+      "notEmittedBy": ["csharp", "selfhosted"]
     },
     {
       "code": 3001,

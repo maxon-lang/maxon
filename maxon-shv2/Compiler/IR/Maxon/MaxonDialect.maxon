@@ -55,6 +55,21 @@ end 'isTrivialOwnership'
 // unbounded (one entry per distinct named reference seen in source).
 export typealias TypeNameId = int(0 to u64.max)
 
+// A generic type's type-PARAMETER reference (P1.6-A): `T` in `type Box uses T`. The id is the
+// param's POSITION in its declaring type's `uses` list (`T` is 0, the second is 1, …), which is
+// all a TRIVIAL type parameter needs — it lowers to an opaque 8-byte value and is never
+// substituted at this slice, so the position IS its whole identity and no registry has to intern
+// it. Same underlying range as `TypeNameId` deliberately: a `typeParameter` value rides the dense
+// `nameId` column exactly as `named`/`structRef` do (`maxonTypeOfTag`), so the two ranges must be
+// assignment-compatible.
+export typealias TypeParamId = int(0 to u64.max)
+
+// A generic INSTANCE `Base with Args` (P1.6-A): `Box with Integer`. The id keys the
+// `GenericInstanceRegistry` (SignatureIndex), which holds the `(baseId, argTypes)` payload OUT OF
+// LINE — inlining it into the union would make `MaxonType` recursively aggregate (E4014). Same
+// underlying range as `TypeNameId` for the reason `TypeParamId` is.
+export typealias GenericInstanceId = int(0 to u64.max)
+
 // --- MaxonType: source-level type system ---
 //
 // bool is the only standalone primitive a user writes directly; `integer` /
@@ -156,9 +171,32 @@ export union MaxonType
 	// range arms (`boolean to float`, `exitCode to unresolved`) that guard `structRef`/`string`
 	// placement guard this one, and appending past the tail is the only placement the compiler checks.
 	function(id TypeNameId)
+	// A TYPE-PARAMETER reference (P1.6-A) — `T` inside `type Box uses T`. It is OPAQUE: a trivial
+	// type parameter lowers to an 8-byte machine word (`valueTagToStdType` → i64) exactly as
+	// `structRef`/`string`/`function` do, so a generic type's method bodies compile ONCE against `T`
+	// and are byte-identical to the equivalent monomorphic struct. `id` is the param's POSITION in
+	// its declaring type's `uses` list (see `TypeParamId`), the whole of its identity at this slice —
+	// there is no substitution, so `Box.get() returns T` binds an opaque value the use site compares
+	// as an i64. It agrees with any concrete type (`TypeClass.typeParameter`), the deferral that lets
+	// a concrete argument meet a `T` parameter and a `T` result meet a concrete comparison.
+	//
+	// ⚠ APPENDED AT THE END, past `function`, per the band-append invariant — the same range arms
+	// (`boolean to float`, `exitCode to unresolved`) that guard `structRef`/`string`/`function`
+	// placement guard this one, and appending past the tail is the only placement the compiler checks.
+	typeParameter(id TypeParamId)
+	// A generic INSTANCE `Base with Args` (P1.6-A) — `Box with Integer`, the resolved form of a
+	// generic-instance typealias. It is a POINTER to the base struct's box (a machine word, i64), so
+	// a value of an instance type is a struct reference like any other. `id` keys the
+	// `GenericInstanceRegistry` for its `(baseId, argTypes)` payload (OUT OF LINE — see
+	// `GenericInstanceId`). APPENDED AT THE END, past `typeParameter`, per the band-append invariant.
+	genericInstance(id GenericInstanceId)
 end 'MaxonType'
 
 export typealias MaxonTypeArray = Array with MaxonType
+
+// A generic instance's argument list is a `MaxonTypeArray`, and the `GenericInstanceRegistry`
+// (SignatureIndex) keeps one per interned instance (P1.6-A) — hence an array OF them.
+export typealias MaxonTypeArrayArray = Array with MaxonTypeArray
 
 // --- ValueTypeTag: MaxonType's discriminant, WITHOUT its payload ---
 //
@@ -222,6 +260,14 @@ export enum ValueTypeTag
 	// reason every other append here is: `unresolved to void` and `named to exitCode` are range arms,
 	// and a range adopts whatever is inserted between its endpoints without a word.
 	function
+	// The tag of a TYPE-PARAMETER value (P1.6-A) — a reference to `T` inside a generic type (see
+	// MaxonType's `typeParameter` arm). Opaque: it lowers to an i64 and agrees with any concrete type.
+	// APPENDED AT THE END, past `function`, for the same reason every other append here is: the range
+	// arms adopt whatever is inserted between their endpoints without a word.
+	typeParameter
+	// The tag of a generic-INSTANCE value (P1.6-A) — a pointer to the base struct's box (see MaxonType's
+	// `genericInstance` arm). APPENDED AT THE END, past `typeParameter`.
+	genericInstance
 end 'ValueTypeTag'
 
 export typealias ValueTypeTagArray = Array with ValueTypeTag
@@ -240,6 +286,8 @@ export function maxonTypeTag(t MaxonType) returns ValueTypeTag
 		structRef gives ValueTypeTag.structRef
 		string gives ValueTypeTag.string
 		function gives ValueTypeTag.function
+		typeParameter gives ValueTypeTag.typeParameter
+		genericInstance gives ValueTypeTag.genericInstance
 	end 'k'
 end 'maxonTypeTag'
 
@@ -260,6 +308,11 @@ export function typeNameIdOf(t MaxonType) returns TypeNameId
 		// what lets it intern, remap and hash by the same machinery. It is NOT collapsed into the
 		// `named to structRef` range: `exitCode`/`unresolved` and now `string` sit between them.
 		function(id) gives id
+		// A type-parameter reference and a generic instance both carry an id (a POSITION and a
+		// GenericInstanceId respectively, P1.6-A); both ride the name column so a value of that type
+		// round-trips through `maxonTypeOfTag`. NOT collapsed into a range: other arms sit between.
+		typeParameter(id) gives id
+		genericInstance(id) gives id
 		boolean to float gives UnnamedTypeId
 		exitCode to unresolved gives UnnamedTypeId
 		// A String is a builtin with no interned name — its identity is the `string` tag, not a name.
@@ -301,6 +354,11 @@ export function maxonTypeOfTag(tag ValueTypeTag, nameId TypeNameId) returns Maxo
 		// or a function-typealias name (declared place). `Parser.parseBinding` is the caller that
 		// matters: `let f = double` types the binding from this so `f(21)` can find its return type.
 		function then return MaxonType.function(nameId)
+		// A type-parameter reference / generic instance rebuilds from the id column exactly as `named`
+		// does (P1.6-A) — the id is a param POSITION / a GenericInstanceId (see MaxonType). A binding of
+		// a `T`-typed value (`let v = b.get()`) types from this.
+		typeParameter then return MaxonType.typeParameter(nameId)
+		genericInstance then return MaxonType.genericInstance(nameId)
 	end 'k'
 end 'maxonTypeOfTag'
 

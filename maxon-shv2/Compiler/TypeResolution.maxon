@@ -163,6 +163,13 @@ function resolveType(project Project, t MaxonType) returns MaxonType
 		// `MaxonType.function` directly (a function alias re-tagged, or a functionRef's own name), so it
 		// never arrives as a `named` to resolve. Idempotent under a second `resolveTypes` — nothing to do.
 		function then return t
+		// Already concrete, and by the PARSER (P1.6-A): `Parser.parseTypeReference` mints a
+		// `typeParameter` for a `T` in scope and a `genericInstance` for a generic-instance alias
+		// reference, both directly. There is no substitution at this trivial slice — a `T` stays `T` (an
+		// opaque i64) and an instance stays an instance (a struct pointer) — so resolution leaves both
+		// untouched, exactly as it leaves `structRef`/`string`/`function`.
+		typeParameter then return t
+		genericInstance then return t
 	end 'r'
 end 'resolveType'
 

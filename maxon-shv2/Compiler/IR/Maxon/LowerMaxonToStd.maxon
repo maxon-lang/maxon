@@ -65,6 +65,11 @@ export function maxonTypeToStdType(ref MaxonType) returns StdType
 		// `MaxonType.function` directly, so it is already concrete. Its width is a machine word (a `.text`
 		// code pointer), assigned one line down by the same table every arm's comes from.
 		function then break 'residue'
+		// A type parameter and a generic instance are NOT residues (P1.6-A) — the parser produces them
+		// directly and `resolveType` leaves them alone (they are already concrete: an opaque i64 and a
+		// struct pointer). Their width is a machine word, assigned one line down by the same table.
+		typeParameter then break 'residue'
+		genericInstance then break 'residue'
 	end 'residue'
 
 	return valueTagToStdType(maxonTypeTag(ref))
@@ -121,6 +126,14 @@ export function valueTagToStdType(tag ValueTypeTag) returns StdType
 		// and returned like any other i64. Nothing above this line knows the width, which is the point:
 		// MaxonType stays width-free and the machine word is named exactly once, here.
 		function then return StdType.i64
+		// ⭐ A TYPE PARAMETER IS AN OPAQUE MACHINE WORD (P1.6-A). `T` in `type Box uses T` lowers to an
+		// i64, which is the WHOLE of what makes a generic type's method bodies compile ONCE and be
+		// byte-identical to the equivalent monomorphic struct: a trivial type argument is passed in a
+		// GPR and stored in an 8-byte slot like any other scalar. Nothing above this line knows the
+		// width — MaxonType stays width-free — and the machine word is named exactly once, here.
+		typeParameter then return StdType.i64
+		// A GENERIC INSTANCE IS A POINTER to the base struct's box — one machine word, like `structRef`.
+		genericInstance then return StdType.i64
 	end 'collapse'
 end 'valueTagToStdType'
 

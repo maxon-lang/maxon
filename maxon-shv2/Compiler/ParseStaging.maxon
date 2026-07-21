@@ -128,6 +128,16 @@ export type FileParseArtifact
 	// every value is filed under the index its function actually occupies. Zero for the tolerant
 	// declaration sweep, which parses no bodies and records no origins.
 	export var currentFuncIndex as FuncIndex
+	// ⭐ DIAGNOSTICS THE PARSER RAISES WITHOUT UNWINDING (P1.6-A). The parser reports a malformed
+	// construct by THROWING a `ParseError` (which aborts the file's parse), but a WHOLE-PROGRAM
+	// SEMANTIC error a pure per-file parser detects — a generic instantiation whose base is not
+	// generic, whose arity is wrong, or whose argument is managed — is not a reason to abort the
+	// parse: it is a diagnostic that gates the build, exactly like `SemanticCheck`'s do. The parser
+	// records it here rather than in `project.diagnostics` (which it must not touch — the pure-parser
+	// invariant), and `mergeArtifact` folds this list into `project.diagnostics`, the single writer.
+	// The tolerant declaration SWEEP uses a DIFFERENT artifact that is never merged, so a spurious
+	// diagnostic it records against the still-building signature index is discarded for free.
+	export var diagnostics as DiagnosticArray
 
 	export static function create(filePath FilePath) returns FileParseArtifact
 		return Self{
@@ -143,7 +153,8 @@ export type FileParseArtifact
 			structTypes: StructLayoutArray.create(),
 			enumTypes: EnumLayoutArray.create(),
 			typeNames: TypeNameInterner.create(),
-			currentFuncIndex: 0
+			currentFuncIndex: 0,
+			diagnostics: DiagnosticArray.create()
 		}
 	end 'create'
 
@@ -298,7 +309,18 @@ export function mergeArtifact(project Project, target MaxonModule, artifact File
 	commitFunctionTypeAliases(project, artifact: artifact)
 	commitStructTypes(project, artifact: artifact)
 	commitEnumTypes(project, artifact: artifact)
+	commitDiagnostics(project, artifact: artifact)
 end 'mergeArtifact'
+
+// Fold this file's parser-raised diagnostics into `project.diagnostics` (P1.6-A) — the last
+// contribution, and the one that carries no ids to remap (a `Diagnostic` is a finished
+// (code, message, position) record). `reportDiagnostic` is the single project sink, so a
+// parser-recorded diagnostic and a `SemanticCheck`-recorded one are indistinguishable downstream.
+function commitDiagnostics(project Project, artifact FileParseArtifact)
+	for diagnostic in artifact.diagnostics 'each'
+		reportDiagnostic(project, diagnostic: diagnostic)
+	end 'each'
+end 'commitDiagnostics'
 
 // Commit the artifact's declared struct types into the project registry — the registry
 // `TypeResolution.resolveNamedType` turns a `MaxonType.named` for a declared `type` into a
