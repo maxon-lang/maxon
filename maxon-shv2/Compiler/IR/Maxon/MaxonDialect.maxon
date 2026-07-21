@@ -785,6 +785,18 @@ export union MaxonOp
 	// flag exactly as it does for a `tryCall`. Category `awaiting`, the same band as `await` — it IS `await`
 	// plus the flag def.
 	tryAwait(result ValueId, errorFlag ValueId, promise ValueId) = MaxonOpMeta{category: OpCategory.awaiting}
+	// --- P1.6-B1: `sizeof(Type)` ---
+	//
+	// ⚠ APPENDED AT THE END OF THE UNION, past `tryAwait`, per the band-append invariant: a mid-union
+	// insert is silently swallowed by any range arm. Its `OpCategory.plain` (it stands alone, matched by
+	// variant — like `literal`) is metadata independent of this tail position.
+	//
+	// The byte size of `targetType`. A CONCRETE operand (a primitive, a declared struct) is a compile-time
+	// constant `lowerMaxonToStd` folds to a `const`; a `typeParameter(pos)` operand — `sizeof(T)` inside a
+	// generic body compiled ONCE against an opaque `T` — has no single compile-time answer, so it lowers to a
+	// runtime load of the enclosing instance's layout descriptor `elementLogicalSize@56` slot (the
+	// dictionary-passing model — see LayoutDescriptor). `result` is the integer it defines.
+	sizeofType(result ValueId, targetType MaxonType) = MaxonOpMeta{category: OpCategory.plain}
 end 'MaxonOp'
 
 // The dual-register error-flag ABI BIAS (P1.4b). The error flag is `0` for "no error in flight" and

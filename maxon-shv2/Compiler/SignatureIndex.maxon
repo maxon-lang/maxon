@@ -2071,6 +2071,78 @@ export type ProgramSignatures
 		return self.nameOfId(self.genericInstances.instanceBaseId(id))
 	end 'genericInstanceBaseName'
 
+	// --- Layout-descriptor sizing (P1.6-B1) ---
+	//
+	// The box byteSize of a concrete generic instance — its BASE struct's own layout (`Box with Integer`
+	// has `Box`'s box). At this slice a `T` field is an opaque 8-byte slot like any other, so no argument
+	// is substituted into the layout and the base struct's `sizeBytes` IS the instance's box size. This is
+	// the descriptor's `size@0` field, and the interner-owning door lowering computes it through.
+	export function genericInstanceBoxSize(id GenericInstanceId) returns ByteOffset
+		match self.structOf(self.genericInstanceBaseName(id)) 'base'
+			declared(layout) then return layout.sizeBytes()
+			undeclared then panic("genericInstanceBoxSize: generic instance {id}'s base is not a declared struct")
+		end 'base'
+	end 'genericInstanceBoxSize'
+
+	// The full source-level `sizeof` of a single-type-parameter instance's ONE type argument — the
+	// descriptor's `elementLogicalSize@56`, which `sizeof(T)` reads. `Sizer with bool` ⇒ 1; `Sizer with
+	// Pair` (Pair is two Integers) ⇒ 16.
+	//
+	// ⚠ **SINGLE type argument only** (B1). A multi-parameter generic needs per-argument logical sizes,
+	// which a single-slot descriptor cannot carry — `parseSizeof` rejects `sizeof` of a multi-parameter
+	// generic's type parameter (a clean E2015), so a call site never asks this of one.
+	export function genericInstanceSoleArgLogicalSize(id GenericInstanceId) returns ByteOffset
+		let args = self.genericInstances.instanceArgs(id)
+		if args.count() != 1 'notSingle'
+			panic("genericInstanceSoleArgLogicalSize: instance {id} has {args.count()} type arguments — the B1 layout descriptor carries a single element size; parseSizeof rejects sizeof(T) on a multi-parameter generic before a descriptor is asked for")
+		end 'notSingle'
+		return self.typeLogicalByteSize(try args.get(0) otherwise panic("genericInstanceSoleArgLogicalSize: instanceArgs.get(0) failed despite count == 1"))
+	end 'genericInstanceSoleArgLogicalSize'
+
+	// The full source-level byte size of a type argument, resolved against THIS index's own interner. A
+	// declared struct (stored `named` by the sweep, which does not resolve `structRef`) is its full box; a
+	// nested generic instance is its base box; a `named` that is not a struct is a ranged alias (a machine
+	// word); every other type is its `primitiveTypeByteSize`.
+	function typeLogicalByteSize(t MaxonType) returns ByteOffset
+		let tag = maxonTypeTag(t)
+		if tag == ValueTypeTag.named or tag == ValueTypeTag.structRef 'namedOrStruct'
+			match self.structOf(self.nameOfId(typeNameIdOf(t))) 'lookup'
+				declared(layout) then return layout.sizeBytes()
+				undeclared then return primitiveTypeByteSize(tag)
+			end 'lookup'
+		end 'namedOrStruct'
+		if tag == ValueTypeTag.genericInstance 'nested'
+			return self.genericInstanceBoxSize(typeNameIdOf(t))
+		end 'nested'
+		return primitiveTypeByteSize(tag)
+	end 'typeLogicalByteSize'
+
+	// A structural, BUILD-STABLE mangling of a type argument for a descriptor's `.rdata` label —
+	// `bool` ⇒ "bool", a declared `Pair` ⇒ "Pair", a nested `Box with Integer` ⇒ "Box_Integer". It is
+	// derived from the argument's STRUCTURE (base name + args), never from a gid number, so the label is
+	// identical across cold and warm builds (a gid's numeric value is a build-order artifact).
+	export function mangleTypeArg(t MaxonType) returns String
+		let tag = maxonTypeTag(t)
+		if tag == ValueTypeTag.named or tag == ValueTypeTag.structRef 'namedOrStruct'
+			return String.from(self.nameOfId(typeNameIdOf(t)))
+		end 'namedOrStruct'
+		if tag == ValueTypeTag.genericInstance 'nested'
+			return self.mangleGenericInstance(typeNameIdOf(t))
+		end 'nested'
+		return primitiveTypeTagName(tag)
+	end 'mangleTypeArg'
+
+	// The structural mangling of a generic instance itself — `Box_Integer` for `Box with Integer` — the
+	// base name joined to each argument's mangling. Shared by `mangleTypeArg` (a nested-instance argument)
+	// and lowering's descriptor-label builder.
+	export function mangleGenericInstance(id GenericInstanceId) returns String
+		var out = String.from(self.genericInstanceBaseName(id))
+		for arg in self.genericInstances.instanceArgs(id) 'eachArg'
+			out.append("_{self.mangleTypeArg(arg)}")
+		end 'eachArg'
+		return out
+	end 'mangleGenericInstance'
+
 	// The enum/union `name` denotes, declared in ANY file — `structOf`'s twin, and the door the
 	// PARSER asks every enum question through: is this scrutinee an enum? what tag is a case? which
 	// cases does a range arm cover? The layout it hands back carries plain NAMES and INTS (no ids),

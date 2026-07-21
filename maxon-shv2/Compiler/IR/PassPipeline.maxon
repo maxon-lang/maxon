@@ -166,8 +166,9 @@ end 'buildDefaultPipeline'
 // vestigial-tier residue the `mirModule` field was.
 export type PassPipeline
 	// The project owns the shared state the Maxon-tier passes read/write
-	// (interner, registries, diagnostics). resolveTypes/semanticCheck need it;
-	// the lowering does not, but every pass dispatches uniformly through `self`.
+	// (interner, registries, diagnostics). resolveTypes/semanticCheck need it, and since P1.6-B1 the
+	// lowering does too — it materialises a `sizeof(T)` receiver's layout descriptor from the project's
+	// struct/generic-instance registries; every pass dispatches uniformly through `self` regardless.
 	export var project as Project
 	export var maxonModule as MaxonModule
 	export var stdModule as StdModule
@@ -221,7 +222,7 @@ export type PassPipeline
 		match pass 'dispatch'
 			resolveTypes then resolveTypes(self.project, module: self.maxonModule)
 			semanticCheck then semanticCheck(self.project, module: self.maxonModule)
-			lowerMaxonToStd then self.stdModule = lowerMaxonToStd(self.maxonModule, funcSignatures: self.project.funcSignatures, globalData: self.project.globalData)
+			lowerMaxonToStd then self.stdModule = lowerMaxonToStd(self.maxonModule, project: self.project)
 			insertRangeChecks then insertRangeChecks(self.project, module: self.stdModule)
 			pruneDeadBlockArgs then pruneDeadBlockArgs(self.stdModule)
 			elimTrivialBlockArgs then elimTrivialBlockArgs(self.stdModule)

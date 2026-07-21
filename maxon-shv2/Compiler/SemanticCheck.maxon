@@ -158,6 +158,7 @@ function opEscapesParam(op MaxonOp, param ValueId) returns bool
 		// argument); an `await`/`try await`'s operand is a runtime promise handle, not a persisted value.
 		asyncCall(_, _, args, _, _) then return valueIdInArray(args, value: param)
 		await to tryAwait then break 'op'
+		sizeofType then break 'op'
 	end 'op'
 	return false
 end 'opEscapesParam'
@@ -170,6 +171,7 @@ function terminatorEscapesParam(term MaxonOp, param ValueId) returns bool
 		call to literal then break 'term'
 		ret(value) then return value == param
 		retVoid to tryAwait then break 'term'
+		sizeofType then break 'term'
 	end 'term'
 	return false
 end 'terminatorEscapesParam'
@@ -261,6 +263,7 @@ function functionHasAwait(func IrFunction, module MaxonModule) returns bool
 				call to indirectCall then break 'op'
 				asyncCall then break 'op'
 				await to tryAwait then return true
+				sizeofType then break 'op'
 			end 'op'
 		end 'eachOp'
 	end 'eachBlock'
@@ -295,6 +298,7 @@ function collectAwaitSites(func IrFunction, module MaxonModule) returns AwaitSit
 				// A `try await` awaits (and consumes) its promise exactly as a plain `await` does — linearity
 				// is a property of the green thread, not of whether the error is caught — so it is an await site.
 				tryAwait(_, _, promise) then sites.push(AwaitSite.create(block, pos: pos, promise: promise))
+				sizeofType then break 'op'
 			end 'op'
 		end 'eachOp'
 	end 'eachBlock'
@@ -428,6 +432,7 @@ function classifyOpForPromise(op MaxonOp, promise ValueId) returns OpAwaitRole
 		await(_, awaited) then return roleIfEqual(awaited, promise: promise, role: OpAwaitRole.reawaitOf)
 		// A `try await` of the tracked promise is a re-await exactly as a plain `await` is.
 		tryAwait(_, _, awaited) then return roleIfEqual(awaited, promise: promise, role: OpAwaitRole.reawaitOf)
+		sizeofType then break 'op'
 	end 'op'
 	return OpAwaitRole.unrelated
 end 'classifyOpForPromise'
@@ -453,6 +458,7 @@ function collectAwaitSuccessors(module MaxonModule, block IrBlock, into BlockIdA
 		condBranch(_, thenBlockId, elseBlockId) then pushSuccessorPair(into, thenId: thenBlockId, elseId: elseBlockId)
 		branch(targetBlockId) then into.push(targetBlockId)
 		globalAddr to tryAwait then break 'term'
+		sizeofType then break 'term'
 	end 'term'
 end 'collectAwaitSuccessors'
 
@@ -501,6 +507,7 @@ function checkCalls(project Project, module MaxonModule, throwsMap FuncThrowsMap
 					// awaited function was validated at its `async` spawn site. The `try await` throws-compatibility
 					// (E3057 plain-await, E3059 propagate mismatch) is checked by the parser at the await/try token.
 					await to tryAwait then break 'op'
+					sizeofType then break 'op'
 				end 'op'
 			end 'eachOp'
 		end 'eachBlock'
@@ -646,6 +653,16 @@ function checkArgTypes(project Project, func IrFunction, sig FuncSignature, argI
 
 		let paramTag = maxonTypeTag(paramType)
 		let paramName = try sig.paramNames.get(i) otherwise panic("checkArgTypes: paramNames.get OOB at {i}")
+
+		// ⭐ THE RECEIVER ARGUMENT (`__self`, position 0 of an instance-method call) IS COMPATIBLE WITH ITS
+		// METHOD'S RECEIVER PARAMETER BY CONSTRUCTION — the callee was mangled FROM the receiver's own type
+		// (`dispatchMethodOnBase`), so a method declared on `Sizer` is only ever reached through a `Sizer`.
+		// The checks below assume the arg and param share a tagging: a generic INSTANCE receiver (P1.6-B1) is
+		// tagged `genericInstance` while its `__self` param is the base `structRef`, which they would read as
+		// a spurious mismatch. The receiver's correctness is the dispatch's, not this coercion check's.
+		if paramName.equals(SelfParamName) 'receiverArg'
+			continue
+		end 'receiverArg'
 
 		// ⭐ OPEN #54 Slice B/B2: a DIFFERENT named aggregate passed where one is declared shares the
 		// scalar tag — two STRUCTS both `structRef`, two boxed UNIONS both erased to `integer` — so the

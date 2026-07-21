@@ -251,18 +251,40 @@ function signatureHasFunctionParam(sig FuncSignature) returns bool
 	return false
 end 'signatureHasFunctionParam'
 
-// Public entry: lower a whole MaxonModule to a fresh StdModule. Takes the project's
-// `funcSignatures` registry so `lowerCall` can reorder each call's labelled arguments
-// to the callee's declaration order (the registry is the only whole-program source of
-// parameter names — `IrFunction` carries types but not names).
+// Public entry: lower a whole MaxonModule to a fresh StdModule. Takes the whole `Project`, because the
+// lowering now needs three things off it: the `funcSignatures` registry (label→positional argument
+// slotting), the `.rdata` table (`globalData`, where string literals and — P1.6-B1 — layout descriptors
+// register), and the whole-program `ProgramSignatures` (`queryProgramSignatures`, memoized before the
+// pipeline) whose `genericInstances`/`structTypes` size and mangle a generic instance's layout descriptor.
+//
+// ⚠ **`project` is a P1.6-B1 addition** — the pre-B1 lowering took only `funcSignatures` + `globalData`
+// and never touched the project. Dictionary-passing forced it: a `sizeof(T)` call site must materialise
+// the receiver instance's descriptor, which needs the whole-program `(baseId, args)` payload that lives
+// only on `ProgramSignatures`, and that is reachable only through the project.
 // The process exit code a user `panic(…)` terminates with — a conventional abort code (128 + SIGABRT).
 // The value is untested by the corpus (no Wave-1 panic is ever reached at runtime); it must only be
 // non-zero so a reached panic is observably a failure.
 let UserPanicExitCode = 134 as ParsedInt
 
-export function lowerMaxonToStd(maxonModule MaxonModule, funcSignatures FuncSignatureMap, globalData GlobalDataTable) returns StdModule
-	return MaxonToStdLowering.create(maxonModule, funcSignatures: funcSignatures, globalData: globalData).lower()
+// The set of qualified function names whose body reads `sizeof(T)` and therefore carries a hidden
+// trailing layout-descriptor parameter (P1.6-B1). Built once per lowering by an op-scan; read at a call
+// site to decide whether to append the descriptor argument, and per callee to bind the descriptor param.
+export typealias LayoutNeedingFuncSet = Map with (ByteArray, bool)
+
+export function lowerMaxonToStd(maxonModule MaxonModule, project Project) returns StdModule
+	return MaxonToStdLowering.create(maxonModule, project: project).lower()
 end 'lowerMaxonToStd'
+
+// Is `op` a `sizeofType`? A one-variant test over `MaxonOp`: `sizeofType` is the band-append TAIL, so the
+// range arm `call to tryAwait` names every OTHER variant and the tail is the only `true`. A variant
+// appended after `sizeofType` would extend past this range and force the arm to be revisited — the
+// band-append invariant working in the reviewer's favour.
+function maxonOpIsSizeofType(op MaxonOp) returns bool
+	return match op 'is'
+		call to tryAwait gives false
+		sizeofType gives true
+	end 'is'
+end 'maxonOpIsSizeofType'
 
 type MaxonToStdLowering
 	var maxonModule as MaxonModule
@@ -270,6 +292,18 @@ type MaxonToStdLowering
 	// Whole-program parameter signatures (names + types), for `lowerCall`'s
 	// label→positional argument slotting.
 	var funcSignatures as FuncSignatureMap
+	// The whole-program signature index (`queryProgramSignatures`) — P1.6-B1's source for a generic
+	// instance's `(baseId, args)` payload: `ensureLayoutDescriptor` sizes and mangles a descriptor
+	// through `genericInstanceBoxSize` / `genericInstanceSoleArgLogicalSize` / `mangleGenericInstance`.
+	var signatures as ProgramSignatures
+	// The qualified names of functions that carry a hidden layout-descriptor parameter (P1.6-B1) — built
+	// once by `buildLayoutNeedingFuncs` (an op-scan for `sizeofType(typeParameter)`), then read at every
+	// call site (append the descriptor argument?) and per callee (bind the descriptor param?).
+	var layoutNeedingFuncs as LayoutNeedingFuncSet
+	// `GenericInstanceId` ⇒ the `.rdata` label of its emitted descriptor blob (P1.6-B1). Filled lazily by
+	// `ensureLayoutDescriptor` — one blob per instance actually used as a `sizeof(T)` receiver — so a
+	// program pays for exactly the descriptors it references.
+	var layoutDescriptors as LayoutDescriptorRegistry
 	// The backend's `.rdata` table — where `stringLiteral` registers its immortal 48-byte record and
 	// its NUL-terminated byte blob (P1.2 wave A). It is the SAME table the backend later resolves the
 	// emitted `rdataAddr` label against, and the one that carries the buffer fixups to the PE writer.
@@ -294,6 +328,20 @@ type MaxonToStdLowering
 	// re-pointed per function like `valueTags`, from the SAME `IrFunction.valueClosureEnv` the parser
 	// published. `appendCalleeEnvArgs` reads it to thread a function-value ARGUMENT's environment to a callee.
 	var valueClosureEnv as ValueIdArray
+	// The per-value NAME column of the function CURRENTLY being lowered — re-pointed per function like
+	// `valueTags`, from `IrFunction.valueNameIds`. For a `genericInstance`-tagged receiver at a `sizeof(T)`
+	// call site it carries the `GenericInstanceId`, which `materializeLayoutArg` resolves to a descriptor.
+	var valueNameIds as TypeNameIdArray
+	// The name of the function CURRENTLY being lowered — re-pointed per function, for the diagnostics the
+	// dictionary-passing invariant checks raise (`bindImplicitLayoutParam` / `forwardCallerLayout`).
+	var currentFuncName as ByteArray
+	// The ValueId of the CURRENT function's hidden layout-descriptor parameter (P1.6-B1), or an unused 0
+	// when it carries none — `hasImplicitLayout` is the authoritative "does it carry one?" bit, because a
+	// zero-user-parameter generic method's descriptor slot is legitimately ValueId 0 (no sentinel).
+	var implicitLayoutValueId as ValueId
+	// Does the CURRENT function carry a layout-descriptor parameter? The non-sentinel gate on
+	// `implicitLayoutValueId` — read by `sizeof(T)` lowering and `forwardCallerLayout`.
+	var hasImplicitLayout as bool
 	// The `throws` clause of the function CURRENTLY being lowered (P1.4b) — re-pointed per function like
 	// `valueTags`. `emitRetOrErrorReturn` reads it to decide whether a normal `ret`/`retVoid` becomes the
 	// dual-register `errorReturn` (a THROWING function writes both the value AND a zero error flag).
@@ -312,8 +360,12 @@ type MaxonToStdLowering
 	// columns to fit the highest id, so a monotonic counter is all that is required.
 	var nextValueId as ValueId
 
-	static function create(maxonModule MaxonModule, funcSignatures FuncSignatureMap, globalData GlobalDataTable) returns MaxonToStdLowering
-		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), funcSignatures: funcSignatures, globalData: globalData, valueTags: ValueTypeTagArray.create(), valueClosureEnv: ValueIdArray.create(), currentThrows: ThrowsClause.none, currentReturnType: StdReturnType.void, nextValueId: 0}
+	static function create(maxonModule MaxonModule, project Project) returns MaxonToStdLowering
+		// `queryProgramSignatures` is memoized and was computed by `compileToCodeResult` before the
+		// pipeline runs, so this is an O(1) cache hit; a fresh FAILURE here is impossible (a signature
+		// error would already have thrown before lowering was scheduled).
+		let signatures = try queryProgramSignatures(project) otherwise panic("MaxonToStdLowering.create: queryProgramSignatures failed inside the lowering pass — it is computed and memoized by compileToCodeResult before the pipeline runs, so it cannot fail fresh here")
+		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), funcSignatures: project.funcSignatures, signatures: signatures, layoutNeedingFuncs: LayoutNeedingFuncSet.create(), layoutDescriptors: LayoutDescriptorRegistry.create(), globalData: project.globalData, valueTags: ValueTypeTagArray.create(), valueClosureEnv: ValueIdArray.create(), valueNameIds: TypeNameIdArray.create(), currentFuncName: EmptySourceText, implicitLayoutValueId: 0, hasImplicitLayout: false, currentThrows: ThrowsClause.none, currentReturnType: StdReturnType.void, nextValueId: 0}
 	end 'create'
 
 	// The Std type a VALUE computes in — the truth the arith band's `operandType` carries, and a
@@ -324,6 +376,11 @@ type MaxonToStdLowering
 	end 'stdTypeOf'
 
 	function lower() returns StdModule
+		// Which functions carry a hidden layout-descriptor parameter (P1.6-B1) — computed ONCE, up front,
+		// so both directions of the ABI (a callee binding its slot, a caller appending the argument) read
+		// one whole-program answer. An op-scan over the Maxon module; O(total ops), linear.
+		self.buildLayoutNeedingFuncs()
+
 		// Relocate blocks 1:1 first so blockRef indices stay aligned between the
 		// source MaxonModule and the dest StdModule; each dest block starts empty
 		// and its ops are appended during the per-function walk below. The
@@ -378,6 +435,12 @@ type MaxonToStdLowering
 			// The closure-environment column travels with it (P1.5-A2b-2): `appendCalleeEnvArgs` threads a
 			// function-value argument's env from here.
 			self.valueClosureEnv = srcFunc.valueClosureEnv
+			// The name column travels with it too (P1.6-B1): `materializeLayoutArg` reads a `genericInstance`
+			// receiver's `GenericInstanceId` out of it.
+			self.valueNameIds = srcFunc.valueNameIds
+			self.currentFuncName = srcFunc.name
+			// Bind this function's hidden layout-descriptor parameter (P1.6-B1), if it carries one.
+			self.bindImplicitLayoutParam(srcFunc)
 			self.currentThrows = srcFunc.throwsTypeName
 			// The Std return type was collapsed onto `srcFunc.returnType` in the `transferFuncs` pass above,
 			// so it is final here — read it, don't re-collapse `maxonReturnType`.
@@ -477,6 +540,9 @@ type MaxonToStdLowering
 			asyncCall(result, callee, args, argLabels, _) then self.lowerAsyncCall(result, callee: callee, args: args, argLabels: argLabels, dstBlock: dstBlock)
 			await(result, promise) then self.lowerAwait(result, promise: promise, dstBlock: dstBlock)
 			tryAwait(result, errorFlag, promise) then self.lowerTryAwait(result, errorFlag: errorFlag, promise: promise, dstBlock: dstBlock)
+			// `sizeof(T)` — a runtime read of the enclosing instance's layout descriptor (P1.6-B1). The
+			// parser folds every CONCRETE sizeof to a literal, so this op only ever carries a typeParameter.
+			sizeofType(result, targetType) then self.lowerSizeofType(result, targetType: targetType, dstBlock: dstBlock)
 		end 'lower'
 	end 'lowerOp'
 
@@ -502,6 +568,7 @@ type MaxonToStdLowering
 			functionRef then panic("lowerMaxonToStd: a `functionRef` op appeared as a block terminator (parser bug — a function reference is a value-producing body op, never a terminator)")
 			indirectCall then panic("lowerMaxonToStd: an `indirectCall` op appeared as a block terminator (parser bug — an indirect call is a value-producing body op, never a terminator)")
 			asyncCall to tryAwait then panic("lowerMaxonToStd: an async/await op appeared as a block terminator (parser bug — `async`/`await`/`try await` are value-producing body ops, never terminators)")
+			sizeofType then panic("lowerMaxonToStd: a `sizeofType` op appeared as a block terminator (parser bug — sizeof is a value-producing body op, never a terminator)")
 		end 'lower'
 	end 'lowerTerminator'
 
@@ -553,6 +620,149 @@ type MaxonToStdLowering
 		end 'eachParam'
 	end 'emitParams'
 
+	// --- Dictionary-passing substrate (P1.6-B1) ---
+
+	// Build `layoutNeedingFuncs`: every function whose body reads `sizeof(T)` and therefore carries the
+	// hidden layout-descriptor parameter. An op-scan over the whole Maxon module — a function qualifies iff
+	// one of its ops is a `sizeofType` (the parser emits that op ONLY for a type parameter; a concrete
+	// sizeof is already a literal). O(total ops), linear.
+	function buildLayoutNeedingFuncs()
+		for func in self.maxonModule.functions 'eachFunc'
+			if self.functionReadsSizeofTypeParam(func) 'needsLayout'
+				self.layoutNeedingFuncs.upsert(func.name, value: true)
+			end 'needsLayout'
+		end 'eachFunc'
+	end 'buildLayoutNeedingFuncs'
+
+	// Does `func`'s body contain a `sizeofType` op? Walks the function's live body ops (a `sizeofType` is a
+	// value-producing body op, never a terminator, so the terminator is not scanned).
+	function functionReadsSizeofTypeParam(func IrFunction) returns bool
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try self.maxonModule.blocks.get(blockRef) otherwise panic("functionReadsSizeofTypeParam: blockRef from func.blockRefs not in maxonModule.blocks")
+			for opIdx in block.opRefs 'eachOp'
+				let op = try self.maxonModule.ops.get(opIdx) otherwise panic("functionReadsSizeofTypeParam: opIdx from block.opRefs not in maxonModule.ops")
+				if maxonOpIsSizeofType(op) 'found'
+					return true
+				end 'found'
+			end 'eachOp'
+		end 'eachBlock'
+		return false
+	end 'functionReadsSizeofTypeParam'
+
+	// Bind the CURRENT function's hidden layout-descriptor parameter. It carries one iff its name is in
+	// `layoutNeedingFuncs`; the parser reserved that parameter as the LAST param slot (after user + env
+	// companions), so its ValueId is `paramCount - 1` and `emitParams` materialises its capture like any
+	// other parameter. The assert catches a divergence between the parser's slot reservation (a body-token
+	// pre-scan) and this op-scan: they must agree, or the last user/env parameter would be rebound as the
+	// descriptor and silently miscompiled.
+	function bindImplicitLayoutParam(func IrFunction)
+		self.hasImplicitLayout = self.layoutNeedingFuncs.contains(func.name)
+		self.implicitLayoutValueId = 0
+		if not self.hasImplicitLayout 'noLayout'
+			return
+		end 'noLayout'
+
+		let withoutLayout = func.maxonParamTypes.count() + self.envParamCount(func)
+		if func.paramCount != withoutLayout + 1 'reservationMismatch'
+			panic("bindImplicitLayoutParam: '{String.from(func.name)}' reads sizeof(T) but its paramCount ({func.paramCount}) is not user+env+1 ({withoutLayout}+1) — the parser's layout-slot reservation and this lowering's op-scan disagree")
+		end 'reservationMismatch'
+		self.implicitLayoutValueId = (func.paramCount - 1) as ValueId
+	end 'bindImplicitLayoutParam'
+
+	// The number of companion-environment parameters `func` carries (P1.5-A2b-2) — one per function-typed
+	// user parameter — used to locate the layout slot that sits past them.
+	function envParamCount(func IrFunction) returns ParamCount
+		var n = 0 as ParamCount
+		for pt in func.maxonParamTypes 'each'
+			if maxonTypeTag(pt) == ValueTypeTag.function 'fnParam'
+				n = n + 1
+			end 'fnParam'
+		end 'each'
+		return n
+	end 'envParamCount'
+
+	// `finalizeCallArgs` (float widening + companion env args) PLUS the hidden layout-descriptor argument
+	// when the callee needs one. The descriptor rides LAST — after the user args and any env companions —
+	// matching the `[user][env][layout]` parameter order the parser reserved it at, so the caller's
+	// argument register and the callee's `param` op meet.
+	function finalizeCallArgsWithLayout(argIds ValueIdArray, sig FuncSignature, callee ByteArray, dstBlock IrBlock) returns ValueIdArray
+		let baseArgs = self.finalizeCallArgs(argIds, sig: sig, dstBlock: dstBlock)
+		if not self.layoutNeedingFuncs.contains(callee) 'noLayout'
+			return baseArgs
+		end 'noLayout'
+
+		// The receiver is the first slotted argument (`self` at position 0) — the value of the concrete
+		// generic instance whose descriptor the callee reads. Read from `argIds` (the ORIGINAL receiver),
+		// never from `baseArgs`, which may hold widened/env-derived values.
+		let receiver = try argIds.get(0) otherwise panic("finalizeCallArgsWithLayout: layout-needing callee '{String.from(callee)}' has no receiver argument — an instance method's receiver is its first parameter")
+		// A FRESH array — `baseArgs` may BE the slotted `argIds` verbatim (finalizeCallArgs's fast path
+		// returns them unchanged), so pushing into it would mutate a possibly-shared array. Only the rare
+		// layout-needing call pays this copy; the common path already returned `baseArgs` above.
+		var out = ValueIdArray.create()
+		out.append(baseArgs)
+		out.push(self.materializeLayoutArg(receiver, callee: callee, dstBlock: dstBlock))
+		return out
+	end 'finalizeCallArgsWithLayout'
+
+	// The layout-descriptor address to pass for a call whose receiver is `receiver`. A CONCRETE generic
+	// instance receiver → the RIP-relative address of its descriptor blob (`rdataAddr`); a receiver that is
+	// the caller's OWN type parameter (a generic body calling another generic method on a `T` value) →
+	// FORWARD the caller's own layout slot. B1's acceptance calls come from a non-generic `main` on a
+	// concrete instance, so the forward arm is reached only by a generic-to-generic call.
+	function materializeLayoutArg(receiver ValueId, callee ByteArray, dstBlock IrBlock) returns ValueId
+		let tag = try self.valueTags.get(receiver) otherwise panic("materializeLayoutArg: receiver v{receiver} has no type tag — the column is dense over every ValueId")
+		if tag == ValueTypeTag.genericInstance 'concrete'
+			let gid = try self.valueNameIds.get(receiver) otherwise panic("materializeLayoutArg: genericInstance receiver v{receiver} has no name-id (its GenericInstanceId) — the two type columns are dense and in lockstep")
+			let descId = self.mintStdValueId()
+			self.stdModule.appendOp(dstBlock, op: StdOp.rdataAddr(descId, label: self.ensureLayoutDescriptor(gid).toByteArray()))
+			return descId
+		end 'concrete'
+		if tag == ValueTypeTag.typeParameter 'forward'
+			return self.forwardCallerLayout(callee)
+		end 'forward'
+		panic("materializeLayoutArg: call to layout-needing '{String.from(callee)}' has a receiver of tag {tag.name} — an instance method's receiver is a concrete generic instance or (inside a generic body) a type parameter")
+	end 'materializeLayoutArg'
+
+	// Forward the CURRENT (generic) function's own layout slot to a callee — when a generic body calls
+	// another layout-needing method on a value of its own type parameter. The caller MUST carry a layout
+	// param (`hasImplicitLayout`); a non-generic caller has nothing to forward, which is a phase-ordering
+	// bug rather than a state to paper over with a sentinel.
+	function forwardCallerLayout(callee ByteArray) returns ValueId
+		if not self.hasImplicitLayout 'noSlot'
+			panic("forwardCallerLayout: caller '{String.from(self.currentFuncName)}' has no layout descriptor to forward to '{String.from(callee)}' — a non-generic caller cannot supply a generic receiver's descriptor")
+		end 'noSlot'
+		return self.implicitLayoutValueId
+	end 'forwardCallerLayout'
+
+	// The `.rdata` label of `gid`'s descriptor blob, emitting it on first reference. The blob is PURE DATA
+	// — box size, alignment, the T-slot storage width, and the source-level `elementLogicalSize` that
+	// `sizeof(T)` reads; every function-pointer slot is 0, so no relocation is emitted. Idempotent: a gid
+	// referenced at several call sites registers one blob and shares the label.
+	function ensureLayoutDescriptor(gid GenericInstanceId) returns String
+		if self.layoutDescriptors.contains(gid) 'cached'
+			return self.layoutDescriptors.labelFor(gid)
+		end 'cached'
+
+		let descriptor = LayoutDescriptor.create(self.signatures.genericInstanceBoxSize(gid), alignment: LAYOUT_MIN_ALIGNMENT, elementSize: LAYOUT_TYPE_PARAM_SLOT_BYTES, elementLogicalSize: self.signatures.genericInstanceSoleArgLogicalSize(gid))
+		let label = self.globalData.registerRdataConstantLabeled("__layout_{self.signatures.mangleGenericInstance(gid)}", bytes: encodeLayoutDescriptor(descriptor))
+		self.layoutDescriptors.record(gid, label: label)
+		return label
+	end 'ensureLayoutDescriptor'
+
+	// Lower `sizeof(T)` (P1.6-B1) to a runtime read of `elementLogicalSize@56` from the CURRENT function's
+	// layout descriptor. The parser folds every CONCRETE sizeof to a literal, so this op only ever carries
+	// a typeParameter; and it reserved the descriptor parameter whenever a body reads sizeof(T), so reaching
+	// here without one is a pre-scan/op-scan divergence — a loud bug, not a silent wrong load.
+	function lowerSizeofType(result ValueId, targetType MaxonType, dstBlock IrBlock)
+		if maxonTypeTag(targetType) != ValueTypeTag.typeParameter 'notTypeParam'
+			panic("lowerSizeofType: sizeofType carries a {maxonTypeTag(targetType).name} operand — the parser folds every concrete sizeof to a literal, so only the type-parameter case reaches this op")
+		end 'notTypeParam'
+		if not self.hasImplicitLayout 'noLayout'
+			panic("lowerSizeofType: sizeof(T) in '{String.from(self.currentFuncName)}' but the function carries no layout descriptor parameter — the parser's slot reservation and this lowering's op-scan disagree")
+		end 'noLayout'
+		self.stdModule.appendOp(dstBlock, op: StdOp.loadIndirect(result, addrId: self.implicitLayoutValueId, offset: LAYOUT_OFFSET_ELEMENT_LOGICAL_SIZE, valueType: StdType.i64))
+	end 'lowerSizeofType'
+
 	// Lower a Maxon `call` to `StdOp.call`. The parser recorded the argument SSA values
 	// in SOURCE order with their labels; here they are reordered to the callee's
 	// declaration order via `slotCallArgs` against the `funcSignatures` registry. Every
@@ -574,7 +784,7 @@ type MaxonToStdLowering
 
 		let sig = try self.funcSignatures.get(callee) otherwise panic("lowerCall: callee '{String.from(callee)}' has no signature — SemanticCheck must reject an unknown callee before lowering")
 		match slotCallArgs(sig, args: args, argLabels: argLabels) 'slot'
-			ordered(argIds) then self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: callee, args: self.finalizeCallArgs(argIds, sig: sig, dstBlock: dstBlock)))
+			ordered(argIds) then self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: callee, args: self.finalizeCallArgsWithLayout(argIds, sig: sig, callee: callee, dstBlock: dstBlock)))
 			arityMismatch then panic("lowerCall: arity mismatch for '{String.from(callee)}' reached lowering — SemanticCheck must gate it")
 			unknownLabel then panic("lowerCall: unknown argument label for '{String.from(callee)}' reached lowering — SemanticCheck must gate it")
 			duplicateArg then panic("lowerCall: duplicate argument for '{String.from(callee)}' reached lowering — SemanticCheck must gate it")
@@ -1012,7 +1222,7 @@ type MaxonToStdLowering
 	function lowerTryCall(result ValueId, errorFlag ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, dstBlock IrBlock)
 		let sig = try self.funcSignatures.get(callee) otherwise panic("lowerTryCall: throwing callee '{String.from(callee)}' has no signature — SemanticCheck must reject an unknown callee before lowering")
 		match slotCallArgs(sig, args: args, argLabels: argLabels) 'slot'
-			ordered(argIds) then self.stdModule.appendOp(dstBlock, op: StdOp.tryCall(result, errorFlagId: errorFlag, callee: callee, args: self.finalizeCallArgs(argIds, sig: sig, dstBlock: dstBlock)))
+			ordered(argIds) then self.stdModule.appendOp(dstBlock, op: StdOp.tryCall(result, errorFlagId: errorFlag, callee: callee, args: self.finalizeCallArgsWithLayout(argIds, sig: sig, callee: callee, dstBlock: dstBlock)))
 			arityMismatch then panic("lowerTryCall: arity mismatch for '{String.from(callee)}' reached lowering — SemanticCheck must gate it")
 			unknownLabel then panic("lowerTryCall: unknown argument label for '{String.from(callee)}' reached lowering — SemanticCheck must gate it")
 			duplicateArg then panic("lowerTryCall: duplicate argument for '{String.from(callee)}' reached lowering — SemanticCheck must gate it")

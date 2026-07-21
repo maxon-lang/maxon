@@ -582,6 +582,7 @@ function asyncCalleeIfMatch(op MaxonOp, promise ValueId) returns AsyncCalleeLook
 		call to indirectCall gives AsyncCalleeLookup.none
 		asyncCall(result, callee, _, _, _) gives foundCalleeIfEqual(result, callee: callee, promise: promise)
 		await to tryAwait gives AsyncCalleeLookup.none
+		sizeofType gives AsyncCalleeLookup.none
 	end 'op'
 end 'asyncCalleeIfMatch'
 
@@ -616,7 +617,7 @@ end 'asyncReturnTypeTag'
 // by anything and no corpus case names it; the alternative (binding the receiver under the `self`
 // KEYWORD's own text, which no parameter can ever be called) closes it for free but departs from
 // both references' convention, so it is recorded here rather than taken unilaterally.
-let SelfParamName = b"__self"
+export let SelfParamName = b"__self"
 
 // The prefix Maxon RESERVES for compiler-internal names — every symbol the compiler emits
 // (`__mm_alloc`, `__print_string`, `__destruct_String`, the `__discard_*` parser temporaries, and
@@ -1140,6 +1141,7 @@ let PrintArity = 1 as ParamCount
 // are parsed: it takes ordinary call syntax but emits no `MaxonOp.call` to a user function — it routes to the
 // `__gt_sleep(ms)` scheduler runtime entry (which parks the current green thread on a timer and yields).
 let SleepBuiltinName = b"sleep"
+
 // `sleep` takes exactly one INTEGER argument — the duration in milliseconds (per `specs/sleep.md`) — and
 // returns void.
 let SleepArity = 1 as ParamCount
@@ -2487,6 +2489,62 @@ export type Parser
 			paramConsumes.push(ParamConsumeEntry.create(funcName, info: ParamConsumeInfo.create(paramNames, bits: consumed)))
 		end 'consumes'
 	end 'scanConsumeBits'
+
+	// Does this function's body read `sizeof(T)` for the enclosing generic type's parameter (P1.6-B1)? A
+	// peek-only walk from `bodyStart` to the function's own `end` (block depth 0) — the SAME framework
+	// `scanConsumeBits` uses (`opensBlockAt` / `keywordIsMatchCaseName`), so the two agree on where the body
+	// ends. Only a GENERIC type's method can name a type parameter, so a non-generic scope short-circuits.
+	//
+	// The answer reserves the hidden layout-descriptor parameter (`parseFunction`), and it MUST match
+	// `LowerMaxonToStd`'s op-scan (which reads the emitted `sizeofType(typeParameter)` op) case-for-case, or
+	// the callee's reserved slot and the caller's appended argument disagree. They do match: this looks for
+	// the 4 contiguous tokens `sizeof ( <typeParamName> )` — precisely the shape `parseSizeof` resolves to a
+	// `sizeofType(typeParameter)` op (it consumes them with no newline tolerance) — and the lowering asserts
+	// the reservation is present before it binds the slot.
+	function bodyReferencesSizeofOfTypeParam(bodyStart TokenIndex) returns bool
+		if self.enclosingTypeParams.isEmpty() 'notGeneric'
+			return false
+		end 'notGeneric'
+
+		var blockDepth = 0 as BlockDepth
+		var q = bodyStart
+		while self.kindAt(q) != TokenKind.eof 'walk'
+			if blockDepth == 0 and self.kindAt(q) == TokenKind.end and not self.keywordIsMatchCaseName(q) 'funcEnd'
+				break
+			end 'funcEnd'
+
+			if self.kindAt(q) == TokenKind.sizeof and self.sizeofOperandIsTypeParamAt(q) 'found'
+				return true
+			end 'found'
+
+			if self.opensBlockAt(q) 'opensBlock'
+				blockDepth = blockDepth + 1
+			end 'opensBlock' else 'notOpener'
+				if self.kindAt(q) == TokenKind.end and blockDepth > 0 and not self.keywordIsMatchCaseName(q) 'closesBlock'
+					blockDepth = blockDepth - 1
+				end 'closesBlock'
+			end 'notOpener'
+
+			q = q + 1
+		end 'walk'
+		return false
+	end 'bodyReferencesSizeofOfTypeParam'
+
+	// Is the `sizeof` at `sizeofPos` a `sizeof(<typeParam>)` — the 4 contiguous tokens `sizeof ( ident )`
+	// whose identifier names an enclosing type parameter? `parseSizeof` consumes exactly this shape with no
+	// newline tolerance, so matching it token-for-token keeps the pre-scan and the real parse in lockstep.
+	function sizeofOperandIsTypeParamAt(sizeofPos TokenIndex) returns bool
+		if self.kindAt(sizeofPos + 1) != TokenKind.leftParen 'noOpen'
+			return false
+		end 'noOpen'
+		if self.kindAt(sizeofPos + 2) != TokenKind.identifier 'notIdent'
+			return false
+		end 'notIdent'
+		if self.kindAt(sizeofPos + 3) != TokenKind.rightParen 'noClose'
+			return false
+		end 'noClose'
+		return self.typeParamPositionOf(self.tokenAt(sizeofPos + 2).value) < self.enclosingTypeParams.count()
+	end 'sizeofOperandIsTypeParamAt'
 
 	// Is the innermost OPEN bracket a `{` (a struct literal)? The stack's top decides whether a `:` is a
 	// struct-field separator (yes) or a labelled call argument's (no).
@@ -4004,7 +4062,18 @@ export type Parser
 		// recorded signature keep the USER parameters only (an env companion is a lowering detail, never a
 		// source argument); `LowerMaxonToStd.transferFuncs` grows the Std parameter list to match `paramCount`.
 		let userParamCount = paramNames.count()
-		let paramCount = userParamCount + self.countFunctionParams(paramTypes)
+		// ⭐ **A GENERIC METHOD THAT READS `sizeof(T)` NEEDS A HIDDEN LAYOUT-DESCRIPTOR PARAMETER**
+		// (P1.6-B1, the dictionary). It is reserved HERE — before value numbering — as ONE extra trailing
+		// slot, so its ValueId lands in `[0, paramCount)` and the backend's param-capture clobber guard
+		// (`ParamCrossForbid`, which only protects `vid < paramCount`) covers it exactly like a user
+		// parameter; a fresh id past the dense space would be left unprotected and could be clobbered by a
+		// sibling capture. A body-token pre-scan decides it BEFORE the body is parsed, because the slot must
+		// be reserved before any body value is numbered. It matches `LowerMaxonToStd`'s op-scan (which reads
+		// the emitted `sizeofType(typeParameter)` op) case-for-case, since both test the identical
+		// source-level fact — the lowering asserts the two agree.
+		let needsLayoutParam = self.bodyReferencesSizeofOfTypeParam(self.pos)
+		let layoutParamCount = 1 if needsLayoutParam else 0
+		let paramCount = userParamCount + self.countFunctionParams(paramTypes) + layoutParamCount
 		if paramCount > MaxRegisterParams 'tooManyAbiParams'
 			throw ParseError.unsupported("a function whose parameters plus their companion environment parameters exceed {MaxRegisterParams} (a function-typed parameter carries a hidden environment argument under the uniform closure ABI; M5 passes arguments in registers only, so the total must fit the register-argument slots — stack arguments are a later milestone)", line: nameTok.line, column: nameTok.column)
 		end 'tooManyAbiParams'
@@ -4054,6 +4123,16 @@ export type Parser
 		// ValueIds `userParamCount`.. (P1.5-A2b-2). Each function-typed user parameter's `valueClosureEnv` is
 		// then pointed at its companion, so the body's `f(x)` threads that env (`emitClosureEnvArg`).
 		self.bindClosureEnvParams(paramTypes, paramRanges: paramRanges, userParamCount: userParamCount)
+
+		// Seed the hidden layout-descriptor parameter's value columns (P1.6-B1) — AFTER the user + env
+		// slots, so it occupies the LAST param ValueId (`paramCount - 1`). It is an i64 pointer, unnamed
+		// (`bindParameters` never binds it — only the `sizeof(T)` lowering reads it, by position), and its
+		// span is the method name (no source token declares it), exactly like an env companion. Seeding here
+		// keeps every value column dense through the parameter block.
+		if needsLayoutParam 'seedLayoutParam'
+			self.recordValueType(MaxonType.integer)
+			self.artifact.recordParamOrigin((paramCount - 1) as ValueId, range: SourceRange.ofToken(nameTok))
+		end 'seedLayoutParam'
 
 		// `self.valueTags` and `self.valueNameIds` are handed over BY REFERENCE, already seeded with
 		// the parameter types. Every `mintValue` below therefore pushes straight into the function's
@@ -4380,7 +4459,12 @@ export type Parser
 	// (`emitOwnedValueReturn`) and a borrowed-aggregate `gives`/ternary arm merged into an owned result phi
 	// (`promoteBorrowedGive`). Both wait on the same cross-call consume (P1.5).
 	function valueIsNonTextAggregate(value ValueId) returns bool
-		return tagIsStructRef(self.tagOf(value)) or self.valueIsBoxedUnion(value)
+		let tag = self.tagOf(value)
+		// A generic INSTANCE (`Sizer with bool`, P1.6-B1) is a heap box exactly like a plain `structRef`: a
+		// pointer to a refcounted record with a baked destructor. It carries the SAME managed-aggregate
+		// obligations — owned, dropped once at scope exit, never handed off borrowed-as-owned — so it joins
+		// the boundary here rather than being read as a trivial scalar and leaked.
+		return tagIsStructRef(tag) or tag == ValueTypeTag.genericInstance or self.valueIsBoxedUnion(value)
 	end 'valueIsNonTextAggregate'
 
 	// `returns <Type>` or nothing (void). The return type flows to the registry
@@ -5717,6 +5801,7 @@ export type Parser
 			// reject `try` exactly as the other non-call ops do.
 			literal to asyncCall gives try self.rejectTryTarget(tryTok)
 			tryAwait gives try self.rejectTryTarget(tryTok)
+			sizeofType gives try self.rejectTryTarget(tryTok)
 		end 'rewrite'
 	end 'rewriteLastCallToTryCall'
 
@@ -10222,6 +10307,13 @@ export type Parser
 			return try self.parseSelfPrimary(func)
 		end 'selfReceiver'
 
+		// `sizeof(Type)` (P1.6-B1) — its own arm because `sizeof` is a KEYWORD, so it cannot ride the
+		// identifier arm below (which would treat it as a value-position call to a function named `sizeof`,
+		// leaving `T` an "undefined variable").
+		if self.at(TokenKind.sizeof) 'sizeofExpr'
+			return try self.parseSizeof()
+		end 'sizeofExpr'
+
 		if self.at(TokenKind.identifier) 'namedPrimary'
 			// One-token lookaheads split the four forms an identifier can open. `(` makes it a CALL
 			// (the same shape the statement parser uses to tell a call apart from a bare name); `{`
@@ -10254,6 +10346,68 @@ export type Parser
 		let tok = self.current()
 		throw ParseError.expectedExpression(tok.kind.rawValue, line: tok.line, column: tok.column)
 	end 'parsePrimary'
+
+	// ⭐ **`sizeof(Type)`** (P1.6-B1) — the byte size of a type. Two outcomes, decided by the operand:
+	//
+	//   • A CONCRETE type (a primitive, a ranged alias, a declared struct) is a COMPILE-TIME CONSTANT,
+	//     folded to a `literal` right HERE — which is where the struct registry lives. It must fold here
+	//     and cannot ride the `sizeofType` op as a `structRef(id)`: `mergeArtifact` remaps signatures and
+	//     field types but NOT op operands, so a file-local struct id would survive into a multi-file
+	//     lowering as garbage. A concrete `sizeof` is a constant anyway, exactly like `let n = 42`.
+	//   • A TYPE PARAMETER (`sizeof(T)` inside `type Sizer uses T`) has NO single compile-time answer — the
+	//     body compiles ONCE against an opaque `T` — so it emits a `sizeofType(typeParameter)` op that
+	//     lowers to a runtime read of the instance's layout descriptor. `typeParameter` carries a POSITION,
+	//     not an interned id, so it survives the merge unremapped.
+	function parseSizeof() returns ValueId throws ParseError
+		let sizeofTok = try self.consume(TokenKind.sizeof)
+		try self.consume(TokenKind.leftParen)
+		let operand = self.resolveNamedStruct(try self.parseTypeReference())
+		try self.consume(TokenKind.rightParen)
+
+		if maxonTypeTag(operand) == ValueTypeTag.typeParameter 'runtimeSize'
+			let result = self.mintValueOfType(MaxonType.integer)
+			self.artifact.emitOp(self.currentBlock, op: MaxonOp.sizeofType(result, targetType: operand), range: SourceRange.ofToken(sizeofTok))
+			return result
+		end 'runtimeSize'
+
+		return self.emitLiteral(self.concreteSizeofBytes(operand), valueType: MaxonType.integer, range: SourceRange.ofToken(sizeofTok))
+	end 'parseSizeof'
+
+	// The byte size of a CONCRETE `sizeof` operand, computed at parse time. A struct is its full laid-out
+	// box (`StructLayout.sizeBytes`); a generic INSTANCE is the base struct's box; every non-aggregate type
+	// is its `primitiveTypeByteSize`. `typeParameter` never reaches here (its caller routes it to the
+	// descriptor path); `unresolved` is a TypeResolution bug and `void` is not a value type.
+	function concreteSizeofBytes(t MaxonType) returns ParsedInt
+		let tag = maxonTypeTag(t)
+		if tag == ValueTypeTag.structRef 'struct'
+			return self.namedStructSizeBytes(typeNameIdOf(t))
+		end 'struct'
+		if tag == ValueTypeTag.genericInstance 'instance'
+			return self.genericInstanceBoxSizeBytes(typeNameIdOf(t))
+		end 'instance'
+		return primitiveTypeByteSize(tag) as ParsedInt
+	end 'concreteSizeofBytes'
+
+	// The full box byteSize of a declared struct, by its interned name id (a `structRef` operand's id is
+	// against THIS file's interner, so it resolves through the file table, not the merged one).
+	function namedStructSizeBytes(id TypeNameId) returns ParsedInt
+		let name = try self.artifact.typeNames.nameOf(id) otherwise panic("namedStructSizeBytes: a `structRef` id is not in this file's interner — `resolveNamedStruct` interned it from a name in the same table")
+		match self.signatures.structOf(name) 'lookup'
+			declared(layout) then return layout.sizeBytes() as ParsedInt
+			undeclared then panic("namedStructSizeBytes: `structRef` names '{String.from(name)}', which `resolveNamedStruct` only tags for a declared struct")
+		end 'lookup'
+	end 'namedStructSizeBytes'
+
+	// The box byteSize of a concrete generic INSTANCE — its base struct's own layout (`Box with Integer`
+	// has `Box`'s box). The instance carries no substituted layout at this slice (a `T` field is an opaque
+	// 8-byte slot like any other), so the base struct's `sizeBytes` IS the instance's box size.
+	function genericInstanceBoxSizeBytes(gid GenericInstanceId) returns ParsedInt
+		let baseName = self.signatures.genericInstanceBaseName(gid)
+		match self.signatures.structOf(baseName) 'lookup'
+			declared(layout) then return layout.sizeBytes() as ParsedInt
+			undeclared then panic("genericInstanceBoxSizeBytes: generic instance base '{String.from(baseName)}' is not a declared struct")
+		end 'lookup'
+	end 'genericInstanceBoxSizeBytes'
 
 	// `( <expr> )` — grouping, which is what makes `(2 + 3) * 4` mean 20 rather than 14.
 	// The parentheses produce NO op: the group's value IS the inner expression's, so the
@@ -11374,8 +11528,35 @@ export type Parser
 	function parseQualifiedCall(func IrFunction) returns ValueId throws ParseError
 		let typeTok = try self.consume(TokenKind.identifier)
 		try self.consume(TokenKind.dot)
-		return try self.parseCallNamed(func, callee: qualifiedMethodName(self.qualifiedCallBaseName(typeTok.value), methodName: self.current().value), anchor: typeTok, receiver: ReceiverArg.none, resultUsed: true)
+		let result = try self.parseCallNamed(func, callee: qualifiedMethodName(self.qualifiedCallBaseName(typeTok.value), methodName: self.current().value), anchor: typeTok, receiver: ReceiverArg.none, resultUsed: true)
+		self.retypeGenericAliasConstructorResult(result, aliasName: typeTok.value)
+		return result
 	end 'parseQualifiedCall'
+
+	// ⭐ **A GENERIC-ALIAS CONSTRUCTOR'S RESULT IS THE INSTANCE, not the base struct (P1.6-B1).**
+	// `BoolSizer.create(…)` links to `Sizer.create`, which returns `Self` — the BASE struct `Sizer`
+	// (`structRef`) — because the shared body is compiled once against the opaque `T`. But the VALUE is a
+	// `Sizer with bool`, and dictionary-passing needs that instance identity ON the value so a later
+	// `s.typeSize()` can pass the right layout descriptor. So when the result adopted the base struct's
+	// type, retype it to `genericInstance(gid)`, carrying the gid the method call site reads out of the
+	// value's name column. A method returning a SCALAR (`typeSize() returns Integer`) or a DIFFERENT struct
+	// keeps its type — only a `Self`/base-struct return is the instance, which the base-id guard enforces.
+	function retypeGenericAliasConstructorResult(result ValueId, aliasName ByteArray)
+		if not self.signatures.isGenericAlias(aliasName) 'notAlias'
+			return
+		end 'notAlias'
+		if self.tagOf(result) != ValueTypeTag.structRef 'notBaseStruct'
+			return
+		end 'notBaseStruct'
+
+		let gid = self.signatures.genericAliasInstance(aliasName)
+		let baseId = self.artifact.typeNames.intern(self.signatures.genericInstanceBaseName(gid))
+		let resultNameId = try self.valueNameIds.get(result) otherwise panic("retypeGenericAliasConstructorResult: result v{result} has no name-id — the two type columns are dense and in lockstep")
+		if resultNameId != baseId 'notThisBase'
+			return
+		end 'notThisBase'
+		self.retypeValue(result, valueType: MaxonType.genericInstance(gid))
+	end 'retypeGenericAliasConstructorResult'
 
 	// ⭐ **THE STRUCT A QUALIFIED CALL'S METHOD IS DECLARED ON (P1.6-A).** A generic-instance alias
 	// (`IntBox`) dispatches its static methods to the BASE struct (`Box`) — the SHARED body compiled once
@@ -12114,8 +12295,12 @@ export type Parser
 		// home; `parseVariableReference` is the first. See `requireBindingLive`.
 		try self.requireBindingLive(binding, nameTok: baseTok)
 
-		if maxonTypeTag(binding.varType) != ValueTypeTag.structRef 'notAStruct'
-			throw ParseError.unsupported("a field access on '{String.from(baseTok.value)}', which is declared '{typeTagName(maxonTypeTag(binding.varType))}' and not a struct type (only a struct has fields)", line: baseTok.line, column: baseTok.column)
+		// A struct box OR a generic INSTANCE (`Sizer with bool`, P1.6-B1) can be a method/field base — both
+		// resolve to a struct layout (the instance's base struct, its methods compiled once against the
+		// opaque `T`). Every other tag has no fields.
+		let baseTag = maxonTypeTag(binding.varType)
+		if baseTag != ValueTypeTag.structRef and baseTag != ValueTypeTag.genericInstance 'notAStruct'
+			throw ParseError.unsupported("a field access on '{String.from(baseTok.value)}', which is declared '{typeTagName(baseTag)}' and not a struct type (only a struct has fields)", line: baseTok.line, column: baseTok.column)
 		end 'notAStruct'
 
 		// ⚠ **A STRUCT-TYPED FIELD USED AS A BASE IS REFUSED, NOT LOADED** — `next.a` inside `type
@@ -12143,12 +12328,23 @@ export type Parser
 	// `binding.boundValue`) can resolve its layout the identical way (`resolveCapturedFieldChain`). The
 	// binding's `structRef` name keys the layout registry. Assumes the `structRef` gate above already held.
 	function structLayoutOfBinding(binding VarInfo, baseTok Token) returns StructLayout throws ParseError
-		let typeName = try self.artifact.typeNames.nameOf(typeNameIdOf(binding.varType)) otherwise panic("structLayoutOfBinding: '{String.from(baseTok.value)}' carries a structRef whose name id is not in this file's interner — every structRef the parser mints is interned from a name in the same table")
+		let typeName = self.baseStructNameOfBinding(binding, baseTok: baseTok)
 		match self.signatures.structOf(typeName) 'declared'
 			declared(layout) then return layout
-			undeclared then panic("structLayoutOfBinding: '{String.from(baseTok.value)}' is typed `structRef({String.from(typeName)})` but no file declares that type — a structRef is only minted for a name the declaration sweep recorded (Parser.parseTypeReference)")
+			undeclared then panic("structLayoutOfBinding: '{String.from(baseTok.value)}' resolves to base struct '{String.from(typeName)}' but no file declares that type — a struct base is only minted for a name the declaration sweep recorded (Parser.parseTypeReference / a generic instance's base)")
 		end 'declared'
 	end 'structLayoutOfBinding'
+
+	// The BASE struct name a method/field base resolves to: the struct itself for a `structRef`, or the
+	// generic instance's base struct for a `genericInstance` (`Sizer with bool` ⇒ `Sizer`, P1.6-B1) — the
+	// SHARED body its methods were compiled once against. The caller's `requireStructBase` has already
+	// gated the tag to one of these two.
+	function baseStructNameOfBinding(binding VarInfo, baseTok Token) returns ByteArray
+		if maxonTypeTag(binding.varType) == ValueTypeTag.genericInstance 'instance'
+			return self.signatures.genericInstanceBaseName(typeNameIdOf(binding.varType))
+		end 'instance'
+		return try self.artifact.typeNames.nameOf(typeNameIdOf(binding.varType)) otherwise panic("baseStructNameOfBinding: '{String.from(baseTok.value)}' carries a structRef whose name id is not in this file's interner — every structRef the parser mints is interned from a name in the same table")
+	end 'baseStructNameOfBinding'
 
 	// `loadIndirect <box> <offset>` — the one op a field read is.
 	//

@@ -12,8 +12,7 @@ Returns the size of a type in bytes as a compile-time integer constant.
 
 ## Tests
 
-<!-- disabled-test: sizeof.type-parameter -->
-<!-- P1.6-B: sizeof(T) needs the layout descriptor -->
+<!-- test: sizeof.type-parameter -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -40,8 +39,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: sizeof.type-parameter-struct -->
-<!-- P1.6-B: sizeof(T) needs the layout descriptor -->
+<!-- test: sizeof.type-parameter-struct -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -75,4 +73,25 @@ end 'main'
 ```
 ```exitcode
 16
+```
+
+<!-- test: sizeof.concrete -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Pair
+	export var a as Integer
+	export var b as Integer
+
+	static function create(a Integer, b Integer) returns Self
+		return Self{a: a, b: b}
+	end 'create'
+end 'Pair'
+
+function main() returns ExitCode
+	return sizeof(bool) + sizeof(Integer) + sizeof(Pair)
+end 'main'
+```
+```exitcode
+25
 ```

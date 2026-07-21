@@ -160,6 +160,30 @@ export type GlobalDataTable
 		end 'fresh'
 	end 'registerRdataConstant'
 
+	// ⭐ REGISTER a read-only constant under an EXACT, caller-supplied label — the layout-descriptor
+	// twin of `registerRdataConstant` (P1.6-B1). A descriptor's label is STRUCTURAL
+	// (`__layout_Sizer_bool`, from the instance's base + argument names), so it must be the label
+	// verbatim — not a `{prefix}{nextStringId}` mint, whose numeric suffix is a build-order artifact the
+	// golden fragments and `verify-warm-rebuild` would see move. Idempotent by LABEL: a second call for
+	// the same instance (a descriptor referenced at two call sites) returns without re-registering.
+	//
+	// ⚠ It deliberately does NOT participate in the bytes-keyed `valueDedup` pool: a descriptor and a
+	// String literal that happened to share bytes must keep their own labels, and a descriptor must never
+	// be handed back as the dedup answer to a later `registerRdataConstant`. The offset/name bookkeeping is
+	// otherwise `registerRdataConstant`'s fresh path exactly, so `rdataImage`'s drift assert covers it too.
+	export function registerRdataConstantLabeled(label String, bytes ByteArray) returns String
+		if self.rdataOffsets.contains(label) 'alreadyRegistered'
+			return label
+		end 'alreadyRegistered'
+
+		self.rdataOffsets.upsert(label, value: self.rdataSizeSoFar)
+		self.rdataSizeSoFar = self.rdataSizeSoFar + bytes.count()
+		self.nameIndex.upsert(label, value: self.names.count())
+		self.names.push(label)
+		self.values.push(bytes)
+		return label
+	end 'registerRdataConstantLabeled'
+
 	// Record that `recordLabel`'s `buffer@0` must be patched with `blobLabel`'s absolute VA — see
 	// StringBufferFixup. Both are `.rdata` labels this table minted; the writer resolves their offsets
 	// through `rdataOffsetOf`.

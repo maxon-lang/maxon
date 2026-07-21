@@ -320,6 +320,9 @@ function classifyRuntimeCall(op MaxonOp, usage RuntimeUsage)
 		// (their `__gt_*` calls do not exist until lowering), and imply the HEAP too — `__gt_spawn`
 		// `__slab_alloc`s the GT struct and the argument buffer.
 		asyncCall to tryAwait then recordGtUsage(usage)
+		// `sizeof(T)` lowers to a plain `loadIndirect` of the layout descriptor — it names no runtime callee
+		// and pulls in no runtime floor (the descriptor is pure `.rdata`), so it records no usage (P1.6-B1).
+		sizeofType then break 'op'
 	end 'op'
 end 'classifyRuntimeCall'
 
