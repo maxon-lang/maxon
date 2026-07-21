@@ -619,6 +619,34 @@ end 'asyncReturnTypeTag'
 // both references' convention, so it is recorded here rather than taken unilaterally.
 export let SelfParamName = b"__self"
 
+// A generic type's bare-method-name -> "does it carry a layout-descriptor param?" map (P1.6-B1). See
+// `Parser.typeDescriptorNeeds`.
+typealias DescriptorNeedMap = Map with (ByteArray, bool)
+
+// A generic method's bare name -> the sibling methods it calls on `self` (P1.6-B1) — the self-call edges the
+// descriptor-need fixpoint (`solveDescriptorNeedFixpoint`) propagates over.
+typealias SelfCalleesMap = Map with (ByteArray, ByteArrayArray)
+
+// A single shared EMPTY descriptor-need map, held as the INITIAL `Parser.typeDescriptorNeeds` so a parser
+// allocates none of its own (a per-file sweep parser never touches the field at all). A generic type REPLACES
+// the field with a fresh map (`computeTypeDescriptorNeeds`), and a non-generic method never reads it (gated on
+// `enclosingTypeParams`), so this shared instance is only ever an unread placeholder and is never mutated —
+// safe to share across the per-file parse fan-out.
+let sharedEmptyDescriptorNeeds = DescriptorNeedMap.create()
+
+// The signals one method's body contributes to the descriptor-need fixpoint (P1.6-B1): whether it directly
+// reads `sizeof(T)`, the siblings it calls on `self`, and the token position just past its `end` (so the
+// type-body walk resumes there). Returned by `Parser.scanOneMethodDescriptorSignals`.
+type MethodDescriptorScan
+	export let direct as bool
+	export let callees as ByteArrayArray
+	export let endPos as TokenIndex
+
+	export static function create(direct bool, callees ByteArrayArray, endPos TokenIndex) returns MethodDescriptorScan
+		return Self{direct: direct, callees: callees, endPos: endPos}
+	end 'create'
+end 'MethodDescriptorScan'
+
 // The prefix Maxon RESERVES for compiler-internal names — every symbol the compiler emits
 // (`__mm_alloc`, `__print_string`, `__destruct_String`, the `__discard_*` parser temporaries, and
 // `__self` above) starts with it. `requireUnreservedName` forbids a USER DECLARATION from taking it.
@@ -2007,6 +2035,15 @@ export type Parser
 	// `typeParameter(POSITION)` — the position is the name's index in this list. Written and cleared in
 	// lockstep with `enclosingType` (`parseTypeDeclaration`/`recordScannedType` are the writers).
 	var enclosingTypeParams as ByteArrayArray
+	// ⭐ **WHICH METHODS OF THE GENERIC TYPE CURRENTLY BEING DECLARED NEED THE LAYOUT-DESCRIPTOR PARAM**
+	// (P1.6-B1), keyed by bare method name. Computed ONCE by `computeTypeDescriptorNeeds` when the type
+	// declaration opens — a TRANSITIVE fixpoint over the type's own methods: a method needs the descriptor
+	// if it directly reads `sizeof(T)` OR calls (on `self`) a sibling method that needs one. `parseFunction`
+	// reads it to reserve the descriptor param BEFORE numbering the method's body values (the slot must be a
+	// real parameter in `[0, paramCount)` for the backend's clobber guard). The self-call graph is LOCAL to
+	// one type declaration (a method self-calls only siblings, same file, contiguous), so no whole-program
+	// index is needed. Empty for a non-generic type.
+	var typeDescriptorNeeds as DescriptorNeedMap
 	// A REUSED sink for the REAL parse's generic-instance typealiases (P1.6-A). The whole-program index
 	// records every generic alias in the SWEEP (`foldFile`), so the real parse's `readTypeAliasDeclaration`
 	// has nowhere to fold one and nothing downstream reads it — but the shared reader records into a
@@ -2140,6 +2177,7 @@ export type Parser
 			signatures: signatures,
 			enclosingType: EmptySourceText,
 			enclosingTypeParams: ByteArrayArray.create(),
+			typeDescriptorNeeds: sharedEmptyDescriptorNeeds,
 			genericAliasScratch: GenericAliasEntryArray.create(),
 			emptyTypeParamFlags: BoolArray.create(),
 			emptyTypeParams: ByteArrayArray.create(),
@@ -2490,45 +2528,122 @@ export type Parser
 		end 'consumes'
 	end 'scanConsumeBits'
 
-	// Does this function's body read `sizeof(T)` for the enclosing generic type's parameter (P1.6-B1)? A
-	// peek-only walk from `bodyStart` to the function's own `end` (block depth 0) — the SAME framework
-	// `scanConsumeBits` uses (`opensBlockAt` / `keywordIsMatchCaseName`), so the two agree on where the body
-	// ends. Only a GENERIC type's method can name a type parameter, so a non-generic scope short-circuits.
+	// ⭐ **THE TRANSITIVE LAYOUT-DESCRIPTOR-NEED FIXPOINT** (P1.6-B1) — populate `typeDescriptorNeeds` for the
+	// generic type whose body the cursor sits at. A method needs the hidden descriptor param iff it directly
+	// reads `sizeof(T)` OR calls a sibling method ON `self` that needs one — so `indirectSize` that only does
+	// `return self.directSize()` still carries (and forwards) the descriptor. The self-call graph is LOCAL to
+	// this one type declaration (a method self-calls only siblings, same file, contiguous), so the whole
+	// fixpoint is a single peek-only walk of the type body plus a cheap iterate-to-stable — no whole-program
+	// index. A non-generic type has no such methods, so it clears the map and returns.
 	//
-	// The answer reserves the hidden layout-descriptor parameter (`parseFunction`), and it MUST match
-	// `LowerMaxonToStd`'s op-scan (which reads the emitted `sizeofType(typeParameter)` op) case-for-case, or
-	// the callee's reserved slot and the caller's appended argument disagree. They do match: this looks for
-	// the 4 contiguous tokens `sizeof ( <typeParamName> )` — precisely the shape `parseSizeof` resolves to a
-	// `sizeofType(typeParameter)` op (it consumes them with no newline tolerance) — and the lowering asserts
-	// the reservation is present before it binds the slot.
-	function bodyReferencesSizeofOfTypeParam(bodyStart TokenIndex) returns bool
+	// The same framework `scanConsumeBits` uses (`opensBlockAt` / `keywordIsMatchCaseName`) delimits each
+	// method body; a named `function <ident>` opens one (a closure is `function(` — no name, no `end`).
+	function computeTypeDescriptorNeeds()
+		// A NON-generic type has no method that can carry a descriptor, so it allocates NOTHING here (the
+		// scale corpus is all non-generic types — a per-type `Map` here would be a linear regression). The
+		// stale `typeDescriptorNeeds` from a previous type is never read for it: `parseFunction` gates its read
+		// on `enclosingTypeParams` being non-empty.
 		if self.enclosingTypeParams.isEmpty() 'notGeneric'
-			return false
+			return
 		end 'notGeneric'
+		self.typeDescriptorNeeds = DescriptorNeedMap.create()
 
-		var blockDepth = 0 as BlockDepth
+		var directSizeof = DescriptorNeedMap.create()
+		var selfCallees = SelfCalleesMap.create()
+		var methodNames = ByteArrayArray.create()
+
+		var q = self.pos
+		while self.kindAt(q) != TokenKind.eof 'walk'
+			if self.kindAt(q) == TokenKind.end and not self.keywordIsMatchCaseName(q) 'typeEnd'
+				break
+			end 'typeEnd'
+			// A named `function <ident>` at the member level opens a method body (a closure is `function(` —
+			// no name, no `end`). Its whole body is scanned in one nested pass, and the walk resumes past its
+			// `end` — so this outer loop only ever sees member-level tokens.
+			if self.kindAt(q) == TokenKind.function and self.kindAt(q + 1) == TokenKind.identifier 'method'
+				let methodName = self.tokenAt(q + 1).value
+				let scan = self.scanOneMethodDescriptorSignals(q + 2)
+				directSizeof.upsert(methodName, value: scan.direct)
+				selfCallees.upsert(methodName, value: scan.callees)
+				methodNames.push(methodName)
+				q = scan.endPos
+				continue
+			end 'method'
+			q = q + 1
+		end 'walk'
+
+		self.solveDescriptorNeedFixpoint(methodNames, directSizeof: directSizeof, selfCallees: selfCallees)
+	end 'computeTypeDescriptorNeeds'
+
+	// Scan ONE method's body — from `bodyStart` (just past `function <name>`) to its own `end` — for the two
+	// descriptor signals: a direct `sizeof(T)`, and the sibling methods it calls on `self`. `depth` starts at 1
+	// because the method's own block is already open. Split into its own function so the accumulators are simple
+	// straight-line locals (no loop-carried array reassignment across the outer type walk).
+	function scanOneMethodDescriptorSignals(bodyStart TokenIndex) returns MethodDescriptorScan
+		var direct = false
+		var callees = ByteArrayArray.create()
+		var depth = 1 as BlockDepth
 		var q = bodyStart
 		while self.kindAt(q) != TokenKind.eof 'walk'
-			if blockDepth == 0 and self.kindAt(q) == TokenKind.end and not self.keywordIsMatchCaseName(q) 'funcEnd'
-				break
-			end 'funcEnd'
-
-			if self.kindAt(q) == TokenKind.sizeof and self.sizeofOperandIsTypeParamAt(q) 'found'
-				return true
-			end 'found'
+			let kind = self.kindAt(q)
+			if kind == TokenKind.sizeof and self.sizeofOperandIsTypeParamAt(q) 'directSizeof'
+				direct = true
+			end 'directSizeof'
+			if kind == TokenKind.self and self.isSelfMethodCallAt(q) 'selfCall'
+				callees.push(self.tokenAt(q + 2).value)
+			end 'selfCall'
 
 			if self.opensBlockAt(q) 'opensBlock'
-				blockDepth = blockDepth + 1
+				depth = depth + 1
 			end 'opensBlock' else 'notOpener'
-				if self.kindAt(q) == TokenKind.end and blockDepth > 0 and not self.keywordIsMatchCaseName(q) 'closesBlock'
-					blockDepth = blockDepth - 1
-				end 'closesBlock'
+				if kind == TokenKind.end and not self.keywordIsMatchCaseName(q) 'closes'
+					depth = depth - 1
+					if depth == 0 'methodEnd'
+						return MethodDescriptorScan.create(direct, callees: callees, endPos: (q + 1) as TokenIndex)
+					end 'methodEnd'
+				end 'closes'
 			end 'notOpener'
 
 			q = q + 1
 		end 'walk'
-		return false
-	end 'bodyReferencesSizeofOfTypeParam'
+		return MethodDescriptorScan.create(direct, callees: callees, endPos: q)
+	end 'scanOneMethodDescriptorSignals'
+
+	// Is the token at `selfPos` the start of a `self.<method>(` call — the self-call the descriptor-need
+	// fixpoint threads through? `self` `.` `<ident>` `(`, four contiguous tokens.
+	function isSelfMethodCallAt(selfPos TokenIndex) returns bool
+		return self.kindAt(selfPos + 1) == TokenKind.dot and self.kindAt(selfPos + 2) == TokenKind.identifier and self.kindAt(selfPos + 3) == TokenKind.leftParen
+	end 'isSelfMethodCallAt'
+
+	// Iterate the descriptor-need relation to its least fixpoint: a method needs the descriptor if it directly
+	// reads sizeof(T) (the seed) or self-calls a method that needs one. Bounded by the method count (each round
+	// can only turn more bits on), and method counts per type are tiny.
+	function solveDescriptorNeedFixpoint(methodNames ByteArrayArray, directSizeof DescriptorNeedMap, selfCallees SelfCalleesMap)
+		for m in methodNames 'seed'
+			let seed = try directSizeof.get(m) otherwise false
+			self.typeDescriptorNeeds.upsert(m, value: seed)
+		end 'seed'
+
+		var changed = true
+		while changed 'iterate'
+			changed = false
+			for m in methodNames 'eachMethod'
+				let alreadyNeeds = try self.typeDescriptorNeeds.get(m) otherwise false
+				if alreadyNeeds 'skip'
+					continue
+				end 'skip'
+				let callees = try selfCallees.get(m) otherwise ByteArrayArray.create()
+				for callee in callees 'eachCallee'
+					let calleeNeeds = try self.typeDescriptorNeeds.get(callee) otherwise false
+					if calleeNeeds 'propagate'
+						self.typeDescriptorNeeds.upsert(m, value: true)
+						changed = true
+						break
+					end 'propagate'
+				end 'eachCallee'
+			end 'eachMethod'
+		end 'iterate'
+	end 'solveDescriptorNeedFixpoint'
 
 	// Is the `sizeof` at `sizeofPos` a `sizeof(<typeParam>)` — the 4 contiguous tokens `sizeof ( ident )`
 	// whose identifier names an enclosing type parameter? `parseSizeof` consumes exactly this shape with no
@@ -3671,6 +3786,11 @@ export type Parser
 		// methods below, and the arity check reads the list off the recorded layout.
 		self.openTypeParamScope(layout)
 
+		// Which of this type's methods carry a layout-descriptor param (P1.6-B1) — a TRANSITIVE fixpoint over
+		// the type's own methods, computed NOW (the cursor sits at the body start) so `parseFunction` can
+		// reserve the param before it numbers a method's body values. A peek-only walk; the cursor is untouched.
+		self.computeTypeDescriptorNeeds()
+
 		while true 'members'
 			self.skipNewlines()
 			if self.at(TokenKind.end) 'closes'
@@ -4067,11 +4187,15 @@ export type Parser
 		// slot, so its ValueId lands in `[0, paramCount)` and the backend's param-capture clobber guard
 		// (`ParamCrossForbid`, which only protects `vid < paramCount`) covers it exactly like a user
 		// parameter; a fresh id past the dense space would be left unprotected and could be clobbered by a
-		// sibling capture. A body-token pre-scan decides it BEFORE the body is parsed, because the slot must
-		// be reserved before any body value is numbered. It matches `LowerMaxonToStd`'s op-scan (which reads
-		// the emitted `sizeofType(typeParameter)` op) case-for-case, since both test the identical
-		// source-level fact — the lowering asserts the two agree.
-		let needsLayoutParam = self.bodyReferencesSizeofOfTypeParam(self.pos)
+		// sibling capture. The need is the TRANSITIVE fixpoint `computeTypeDescriptorNeeds` computed when this
+		// type declaration opened (direct `sizeof(T)` OR a self-call to a sibling that needs one), keyed by the
+		// bare method name — decided BEFORE the body is parsed, because the slot must be reserved before any
+		// body value is numbered. `LowerMaxonToStd` detects the reserved slot by param count, so a caller
+		// appends the descriptor argument for exactly the methods that carry the param.
+		var needsLayoutParam = false
+		if not self.enclosingTypeParams.isEmpty() 'genericMethod'
+			needsLayoutParam = try self.typeDescriptorNeeds.get(nameTok.value) otherwise false
+		end 'genericMethod'
 		let layoutParamCount = 1 if needsLayoutParam else 0
 		let paramCount = userParamCount + self.countFunctionParams(paramTypes) + layoutParamCount
 		if paramCount > MaxRegisterParams 'tooManyAbiParams'
@@ -10365,6 +10489,13 @@ export type Parser
 		try self.consume(TokenKind.rightParen)
 
 		if maxonTypeTag(operand) == ValueTypeTag.typeParameter 'runtimeSize'
+			// ⚠ **SINGLE-TYPE-PARAMETER ONLY (B1).** The layout descriptor carries ONE `elementLogicalSize`
+			// slot, so `sizeof(K)` in a `uses K, V` generic — which would need a per-parameter size — is a
+			// clean E2015 here, not a lowering panic. A multi-parameter descriptor is a later slice.
+			if self.enclosingTypeParams.count() > 1 'multiParamGeneric'
+				throw ParseError.unsupported("sizeof of a type parameter of a MULTI-parameter generic type (its layout descriptor carries a single element size, so per-parameter sizes need a wider descriptor — a later slice); sizeof(T) on a single-type-parameter generic is supported", line: sizeofTok.line, column: sizeofTok.column)
+			end 'multiParamGeneric'
+
 			let result = self.mintValueOfType(MaxonType.integer)
 			self.artifact.emitOp(self.currentBlock, op: MaxonOp.sizeofType(result, targetType: operand), range: SourceRange.ofToken(sizeofTok))
 			return result
@@ -11664,8 +11795,42 @@ export type Parser
 			end 'functionField'
 		end 'fieldMember'
 
+		try self.requireSelfForDescriptorForwarding(base, memberTok: memberTok)
+
 		return try self.parseCallNamed(func, callee: qualifiedMethodName(base.layout.name, methodName: memberTok.value), anchor: baseTok, receiver: ReceiverArg.value(base.box), resultUsed: resultUsed)
 	end 'dispatchMethodOnBase'
+
+	// ⚠ **B1 FORWARDS A LAYOUT DESCRIPTOR ONLY FROM `self`, NOT FROM A `Self`-RETURNING RESULT** (P1.6-B1). A
+	// method that reads `sizeof(T)` needs the descriptor threaded to it. When the receiver is a value of the
+	// enclosing generic type — `self` (ValueId 0) or a `let c = self.makeCopy()` bound local — the descriptor
+	// must be FORWARDED from the caller's own slot, which the caller holds only when its own transitive need
+	// was set. `self` always qualifies; a non-`self` same-type value does not (the enclosing method may hold
+	// no descriptor to forward, and the token pre-scan cannot see that `c` is same-typed), so it is a CLEAN
+	// E2015 here rather than a lowering panic. A CONCRETE-instance receiver (`genericInstance`, not
+	// `structRef`) supplies its OWN descriptor and never reaches this guard.
+	function requireSelfForDescriptorForwarding(base StructBase, memberTok Token) throws ParseError
+		// Only a method INSIDE a generic type can forward a descriptor, so a non-generic context — every
+		// struct-method call in a program with no generics — short-circuits on this O(1) check BEFORE the
+		// `typeDescriptorNeeds` lookup below, which would otherwise box a `Maybe` on every method call.
+		if self.enclosingTypeParams.isEmpty() 'notGenericContext'
+			return
+		end 'notGenericContext'
+		if self.tagOf(base.box) != ValueTypeTag.structRef 'notSameTypeValue'
+			return
+		end 'notSameTypeValue'
+		if base.box == 0 'isSelf'
+			return
+		end 'isSelf'
+		// A `structRef` receiver whose base is the enclosing generic type is a `Self`-returning result; every
+		// other `structRef` (a plain non-generic struct local) resolves against no `typeDescriptorNeeds` entry.
+		if not base.layout.name.equals(self.enclosingType) 'notEnclosingType'
+			return
+		end 'notEnclosingType'
+		let needsDescriptor = try self.typeDescriptorNeeds.get(memberTok.value) otherwise false
+		if needsDescriptor 'reject'
+			throw ParseError.unsupported("calling '{String.from(memberTok.value)}' (which reads sizeof of the type parameter) on a value of the enclosing type that is NOT `self` — B1 forwards the layout descriptor only from `self`, so read the size through `self` (or a concrete instance) instead; forwarding from a `Self`-returning result is a later slice", line: memberTok.line, column: memberTok.column)
+		end 'reject'
+	end 'requireSelfForDescriptorForwarding'
 
 	// ⭐ **A METHOD CALL ON A CAPTURED STRUCT RECEIVER (P1.5-A2b-2).** `b.doubled()` where `b` is an enclosing
 	// struct captured by the closure. The receiver box is READ OUT OF THE ENV (`emitCaptureRead` — a borrowed

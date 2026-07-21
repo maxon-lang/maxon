@@ -275,17 +275,6 @@ export function lowerMaxonToStd(maxonModule MaxonModule, project Project) return
 	return MaxonToStdLowering.create(maxonModule, project: project).lower()
 end 'lowerMaxonToStd'
 
-// Is `op` a `sizeofType`? A one-variant test over `MaxonOp`: `sizeofType` is the band-append TAIL, so the
-// range arm `call to tryAwait` names every OTHER variant and the tail is the only `true`. A variant
-// appended after `sizeofType` would extend past this range and force the arm to be revisited — the
-// band-append invariant working in the reviewer's favour.
-function maxonOpIsSizeofType(op MaxonOp) returns bool
-	return match op 'is'
-		call to tryAwait gives false
-		sizeofType gives true
-	end 'is'
-end 'maxonOpIsSizeofType'
-
 type MaxonToStdLowering
 	var maxonModule as MaxonModule
 	var stdModule as StdModule
@@ -622,50 +611,38 @@ type MaxonToStdLowering
 
 	// --- Dictionary-passing substrate (P1.6-B1) ---
 
-	// Build `layoutNeedingFuncs`: every function whose body reads `sizeof(T)` and therefore carries the
-	// hidden layout-descriptor parameter. An op-scan over the whole Maxon module — a function qualifies iff
-	// one of its ops is a `sizeofType` (the parser emits that op ONLY for a type parameter; a concrete
-	// sizeof is already a literal). O(total ops), linear.
+	// Build `layoutNeedingFuncs`: every function that carries the hidden layout-descriptor parameter (P1.6-B1)
+	// — which the PARSER reserved, as the LAST param, for every method whose TRANSITIVE need
+	// (`computeTypeDescriptorNeeds`: direct `sizeof(T)` or a self-call to a sibling that needs one) was set. So
+	// a method like `indirectSize` that only does `return self.directSize()` carries the param even though it
+	// has no `sizeofType` op of its own — which is exactly why detection is by PARAM COUNT here, not an op-scan:
+	// the reserved slot is the whole-program fact a caller reads to decide whether to append the descriptor arg.
 	function buildLayoutNeedingFuncs()
 		for func in self.maxonModule.functions 'eachFunc'
-			if self.functionReadsSizeofTypeParam(func) 'needsLayout'
+			if self.functionHasDescriptorParam(func) 'needsLayout'
 				self.layoutNeedingFuncs.upsert(func.name, value: true)
 			end 'needsLayout'
 		end 'eachFunc'
 	end 'buildLayoutNeedingFuncs'
 
-	// Does `func`'s body contain a `sizeofType` op? Walks the function's live body ops (a `sizeofType` is a
-	// value-producing body op, never a terminator, so the terminator is not scanned).
-	function functionReadsSizeofTypeParam(func IrFunction) returns bool
-		for blockRef in func.blockRefs 'eachBlock'
-			let block = try self.maxonModule.blocks.get(blockRef) otherwise panic("functionReadsSizeofTypeParam: blockRef from func.blockRefs not in maxonModule.blocks")
-			for opIdx in block.opRefs 'eachOp'
-				let op = try self.maxonModule.ops.get(opIdx) otherwise panic("functionReadsSizeofTypeParam: opIdx from block.opRefs not in maxonModule.ops")
-				if maxonOpIsSizeofType(op) 'found'
-					return true
-				end 'found'
-			end 'eachOp'
-		end 'eachBlock'
-		return false
-	end 'functionReadsSizeofTypeParam'
+	// Does `func` carry a layout-descriptor parameter (P1.6-B1)? The parser reserves it as the LAST param, and
+	// at this slice the descriptor is the ONLY trailing param it can add past the user + companion-env params
+	// — so a `paramCount` above the user+env count means it is present.
+	function functionHasDescriptorParam(func IrFunction) returns bool
+		return func.paramCount > func.maxonParamTypes.count() + self.envParamCount(func)
+	end 'functionHasDescriptorParam'
 
-	// Bind the CURRENT function's hidden layout-descriptor parameter. It carries one iff its name is in
-	// `layoutNeedingFuncs`; the parser reserved that parameter as the LAST param slot (after user + env
-	// companions), so its ValueId is `paramCount - 1` and `emitParams` materialises its capture like any
-	// other parameter. The assert catches a divergence between the parser's slot reservation (a body-token
-	// pre-scan) and this op-scan: they must agree, or the last user/env parameter would be rebound as the
-	// descriptor and silently miscompiled.
+	// Bind the CURRENT function's hidden layout-descriptor parameter — the LAST param slot the parser reserved
+	// (after user + env companions), so its ValueId is `paramCount - 1` and `emitParams` materialises its
+	// capture like any other parameter. `hasImplicitLayout` is the authoritative bit (a zero-user-param generic
+	// method's descriptor slot is legitimately ValueId 0, so the id cannot double as the presence flag).
 	function bindImplicitLayoutParam(func IrFunction)
-		self.hasImplicitLayout = self.layoutNeedingFuncs.contains(func.name)
+		self.hasImplicitLayout = self.functionHasDescriptorParam(func)
 		self.implicitLayoutValueId = 0
 		if not self.hasImplicitLayout 'noLayout'
 			return
 		end 'noLayout'
 
-		let withoutLayout = func.maxonParamTypes.count() + self.envParamCount(func)
-		if func.paramCount != withoutLayout + 1 'reservationMismatch'
-			panic("bindImplicitLayoutParam: '{String.from(func.name)}' reads sizeof(T) but its paramCount ({func.paramCount}) is not user+env+1 ({withoutLayout}+1) — the parser's layout-slot reservation and this lowering's op-scan disagree")
-		end 'reservationMismatch'
 		self.implicitLayoutValueId = (func.paramCount - 1) as ValueId
 	end 'bindImplicitLayoutParam'
 
@@ -717,19 +694,25 @@ type MaxonToStdLowering
 			self.stdModule.appendOp(dstBlock, op: StdOp.rdataAddr(descId, label: self.ensureLayoutDescriptor(gid).toByteArray()))
 			return descId
 		end 'concrete'
-		if tag == ValueTypeTag.typeParameter 'forward'
+		// ⭐ A `structRef`(base) receiver is the enclosing generic body's OWN instance — `self` — so the
+		// descriptor to pass is the caller's own, FORWARDED. A `typeParameter` receiver (a value of the caller's
+		// `T`) forwards for the same reason. Both are the generic-to-generic threading that lets a shared body
+		// drive another. The parser rejects the residual shape (a descriptor call on a non-`self` same-base
+		// value) before lowering, so the caller here always carries a layout param.
+		if tag == ValueTypeTag.structRef or tag == ValueTypeTag.typeParameter 'forward'
 			return self.forwardCallerLayout(callee)
 		end 'forward'
-		panic("materializeLayoutArg: call to layout-needing '{String.from(callee)}' has a receiver of tag {tag.name} — an instance method's receiver is a concrete generic instance or (inside a generic body) a type parameter")
+		panic("materializeLayoutArg: call to layout-needing '{String.from(callee)}' has a receiver of tag {tag.name} — an instance method's receiver is a concrete generic instance, the enclosing self (structRef), or a type parameter")
 	end 'materializeLayoutArg'
 
-	// Forward the CURRENT (generic) function's own layout slot to a callee — when a generic body calls
-	// another layout-needing method on a value of its own type parameter. The caller MUST carry a layout
-	// param (`hasImplicitLayout`); a non-generic caller has nothing to forward, which is a phase-ordering
-	// bug rather than a state to paper over with a sentinel.
+	// Forward the CURRENT (generic) function's own layout slot to a callee — when a generic body calls another
+	// layout-needing method on `self` or on a value of its own type parameter. The caller MUST carry a layout
+	// param: the parser's TRANSITIVE reservation gives one to every method that reaches such a call, and the
+	// parser rejects the residual shape (a descriptor call on a non-`self` same-base value) before lowering, so
+	// a missing slot here is a genuine internal invariant break rather than a user error.
 	function forwardCallerLayout(callee ByteArray) returns ValueId
 		if not self.hasImplicitLayout 'noSlot'
-			panic("forwardCallerLayout: caller '{String.from(self.currentFuncName)}' has no layout descriptor to forward to '{String.from(callee)}' — a non-generic caller cannot supply a generic receiver's descriptor")
+			panic("forwardCallerLayout: caller '{String.from(self.currentFuncName)}' has no layout descriptor to forward to '{String.from(callee)}' — the parser's transitive reservation and residual-rejection should make this unreachable")
 		end 'noSlot'
 		return self.implicitLayoutValueId
 	end 'forwardCallerLayout'
