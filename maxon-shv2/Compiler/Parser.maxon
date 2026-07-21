@@ -1853,6 +1853,22 @@ export type Parser
 	var captureValues as ValueIdArray
 	var captureTypes as MaxonTypeArray
 	var closureEnvParamId as ValueId
+	// ⭐ **THE RANGE-CHECK SITES OF THE FUNCTION CURRENTLY BEING PARSED (P1.9).** Two accumulators
+	// plus the function's return-alias name: every `as` cast into a ranged alias appends to
+	// `rangeCheckCastSites`; every `return <expr>` in a ranged-int-alias-returning function appends to
+	// `rangeCheckReturnSites`; `rangeCheckReturnAlias` is that alias's name (EMPTY when the return type
+	// is not a ranged int alias, which is what gates the return recording). All three are RESET at the
+	// top of `parseFunction` and COMMITTED to the artifact at its end (`recordFunctionRangeChecks`),
+	// keyed by the function's name — the `InsertRangeChecks` Std pass reads them back by name.
+	//
+	// ⚠ They are NOT swapped across a nested closure body the way the per-value columns are (that path
+	// is P1.5-owned and this rung does not touch it), so a ranged `as` cast written INSIDE a closure
+	// would be filed against its enclosing function. No P1.9 or pre-existing case casts inside a
+	// closure, so the mis-attribution is unreachable today; when closures grow ranged casts, this
+	// wants the same save/restore `parseClosureExpression` already does for `valueTags`.
+	var rangeCheckCastSites as RangeCheckCastSiteArray
+	var rangeCheckReturnSites as RangeCheckReturnSiteArray
+	var rangeCheckReturnAlias as ByteArray
 	// Every function declared ANYWHERE IN THE PROGRAM, with its return type — the whole-program
 	// signature index (SignatureIndex.maxon), built from every file's TOKENS before any file is
 	// parsed and handed to every Parser.
@@ -1993,6 +2009,9 @@ export type Parser
 			captureValues: ValueIdArray.create(),
 			captureTypes: MaxonTypeArray.create(),
 			closureEnvParamId: 0,
+			rangeCheckCastSites: RangeCheckCastSiteArray.create(),
+			rangeCheckReturnSites: RangeCheckReturnSiteArray.create(),
+			rangeCheckReturnAlias: EmptySourceText,
 			signatures: signatures,
 			enclosingType: EmptySourceText,
 			ownedBindings: VarInfoArray.create(),
@@ -3603,6 +3622,12 @@ export type Parser
 		self.valueOwnsHeap = BoolArray.create()
 		self.valueIsCapturingClosure = BoolArray.create()
 		self.valueClosureEnv = ValueIdArray.create()
+		// P1.9 range-check accumulators, reset per function (see the field header). The return-alias
+		// name is fixed by the DECLARED return type and known here, before the body is parsed; the two
+		// site lists fill as the body emits casts / returns.
+		self.rangeCheckCastSites = RangeCheckCastSiteArray.create()
+		self.rangeCheckReturnSites = RangeCheckReturnSiteArray.create()
+		self.rangeCheckReturnAlias = self.rangedReturnAliasName(returnType)
 		for paramType in paramTypes 'seedParamTypes'
 			// ⭐ A FLOAT-ALIAS parameter is a genuine FLOAT value, so its value TAG must be `float`, not the
 			// `named` a ranged alias otherwise carries — exactly as F2a resolves a float-returning callee's
@@ -3685,7 +3710,52 @@ export type Parser
 		self.artifact.recordFuncReturnType(name, returnType: returnType)
 		let paramAggregateNames = self.paramAggregateNamesOf(paramTypes)
 		self.artifact.recordFuncSignature(name, signature: FuncSignature.create(paramNames, paramTypes: paramTypes, paramAggregateNames: paramAggregateNames), nameLine: nameTok.line, nameColumn: nameTok.column, sourceFilePath: self.filePath)
+		self.commitRangeChecks(name)
 	end 'parseFunction'
+
+	// Commit this function's accumulated range-check sites to the artifact (P1.9), keyed by `name`.
+	// Files nothing when the function has no cast into a ranged alias AND no ranged return — the
+	// common case — so the registry stays proportional to the checks a program actually contains.
+	function commitRangeChecks(name ByteArray)
+		if self.rangeCheckCastSites.isEmpty() and self.rangeCheckReturnSites.isEmpty() 'noChecks'
+			return
+		end 'noChecks'
+		self.artifact.recordFunctionRangeChecks(name, checks: FunctionRangeChecks.create(self.filePath, castSites: self.rangeCheckCastSites, returnAliasName: self.rangeCheckReturnAlias, returnSites: self.rangeCheckReturnSites))
+	end 'commitRangeChecks'
+
+	// The name of the function's return type IF it is a ranged INT alias, else EMPTY. A float alias
+	// returns empty (float returns are not range-checked at this rung — the one case that would,
+	// `return-float-range-check`, is gated on the float ABI), as does `ExitCode`/a bare primitive/void
+	// (none is a user ranged alias). Asked once per function, off the DECLARED return type, before
+	// `resolveTypes` collapses the alias away — which is the whole reason the pass reads a side table
+	// rather than the resolved return type.
+	function rangedReturnAliasName(returnType MaxonReturnType) returns ByteArray
+		return match returnType 'r'
+			void gives EmptySourceText
+			value(inner) gives self.rangedAliasNameOfType(inner)
+		end 'r'
+	end 'rangedReturnAliasName'
+
+	// The ranged-INT-alias name a `named` type denotes, else EMPTY. Shared by the return path above
+	// and the `as`-cast path so both read a name's alias-ness through one door.
+	function rangedAliasNameOfType(t MaxonType) returns ByteArray
+		if maxonTypeTag(t) != ValueTypeTag.named 'notNamed'
+			return EmptySourceText
+		end 'notNamed'
+		return match self.signatures.aliasOf(self.internedName(typeNameIdOf(t))) 'a'
+			declared(alias) gives self.rangedIntAliasName(alias)
+			undeclared gives EmptySourceText
+		end 'a'
+	end 'rangedAliasNameOfType'
+
+	// The alias's NAME when it is an INTEGER ranged alias, else EMPTY — a float alias is not
+	// range-checked here. Split out so `rangedReturnAliasName` reads as one expression.
+	function rangedIntAliasName(alias RangedTypeAlias) returns ByteArray
+		if tagIsFloat(maxonTypeTag(alias.underlying)) 'float'
+			return EmptySourceText
+		end 'float'
+		return alias.name
+	end 'rangedIntAliasName'
 
 	// Close a function body. `bodyEnd` is the block its last statement left control in;
 	// when that block has no terminator, control can FALL OFF THE END of the function
@@ -4935,6 +5005,14 @@ export type Parser
 		if namedAggregatesConflict(declaredReturnName, got: returnedName) 'aggregateReturnMismatch'
 			throw ParseError.returnTypeMismatch(self.giveTypeName(retTag, aggregateName: returnedName), expected: self.giveTypeName(declaredTag, aggregateName: declaredReturnName), line: retTok.line, column: retTok.column)
 		end 'aggregateReturnMismatch'
+
+		// P1.9: a `return` in a ranged-int-alias-returning function is a narrowing site. `retVal` is the
+		// scalar the `ret` terminator will carry (a ranged int return is never an owned value, so
+		// `emitOwnedValueReturn` passes it through unwrapped), so recording it here matches the id the
+		// Std pass finds on the `ret` op. Anchored on the `return` keyword (the E3005 position).
+		if not self.rangeCheckReturnAlias.isEmpty() 'rangedReturn'
+			self.rangeCheckReturnSites.push(RangeCheckReturnSite.create(retVal, line: retTok.line, column: retTok.column))
+		end 'rangedReturn'
 
 		try self.emitOwnedValueReturn(retVal, anchor: retTok)
 	end 'parseReturnStatement'
@@ -8853,7 +8931,7 @@ export type Parser
 	// No arm rejects anything any more. The old "a comparison is not a value" throw is gone
 	// with the machinery that forced it.
 	function parseBinary(func IrFunction, minPrec InfixPrecedence) returns ValueId throws ParseError
-		var left = try self.parseUnary(func)
+		var left = try self.parseCast(func)
 
 		while true 'climb'
 			let opTok = self.current()
@@ -9191,6 +9269,22 @@ export type Parser
 	// no reading — it negated the bool's 1 payload and produced -1, which is still TRUE in a
 	// condition — so it is rejected by the same numeric-domain rule the binary arithmetic
 	// operators use (TypeRules' `typeClassAdmits`).
+	// The `as`-cast layer, LOOSER than unary `-`/`not` but TIGHTER than every binary operator: `-5 as Age`
+	// is `(-5) as Age`, matching the bootstrap (whose `as` loop sits outside `ParsePrimary`, after the
+	// unary), so a negative literal narrowed into a ranged alias is checked as the NEGATIVE value — which
+	// is what `error.negative-out-of-range` pins. The cast is therefore NOT a `parsePostfix` operator
+	// (that band — the indirect call `f(x)` — stays TIGHTER than `-`, so `-f()` is `-(f())`); it wraps the
+	// whole unary result here. `applyCast` retags / range-checks / float-converts (P1.9).
+	function parseCast(func IrFunction) returns ValueId throws ParseError
+		var current = try self.parseUnary(func)
+		while self.at(TokenKind.as) 'cast'
+			let asTok = try self.consume(TokenKind.as)
+			let targetType = try self.parseTypeReference()
+			current = try self.applyCast(current, targetType: targetType, asTok: asTok)
+		end 'cast'
+		return current
+	end 'parseCast'
+
 	function parseUnary(func IrFunction) returns ValueId throws ParseError
 		if self.at(TokenKind.minus) 'neg'
 			let opTok = try self.consume(TokenKind.minus)
@@ -9221,27 +9315,20 @@ export type Parser
 		return try self.parsePostfix(func, value: try self.parsePrimary(func))
 	end 'parseUnary'
 
-	// A primary followed by any trailing postfix operators — an `as <Type>` cast, or an INDIRECT CALL
-	// `(args)` through a function VALUE (P1.5-A1). This is the ONE place a trailing `(` on a function
-	// value becomes an indirect call, which is what makes every producer of a function value callable
-	// UNIFORMLY: a local (`f(21)`), a call result (`pick()(21)`), and a field read (`h.op(21)`,
-	// `o.inner.op(21)`, `self.op(x)`) all reach here holding a `function`-tagged value, and the trailing
-	// `(` is applied the same way regardless of how the value was produced. It also chains — `pick()(2)`
-	// or a curried `g(1)(2)` — because an indirect call's result is itself a value the loop re-examines.
+	// A primary followed by any trailing INDIRECT CALL `(args)` through a function VALUE (P1.5-A1). This
+	// is the ONE place a trailing `(` on a function value becomes an indirect call, which is what makes
+	// every producer of a function value callable UNIFORMLY: a local (`f(21)`), a call result
+	// (`pick()(21)`), and a field read (`h.op(21)`, `o.inner.op(21)`, `self.op(x)`) all reach here holding
+	// a `function`-tagged value, and the trailing `(` is applied the same way regardless of how the value
+	// was produced. It also chains — `pick()(2)` or a curried `g(1)(2)` — because an indirect call's
+	// result is itself a value the loop re-examines.
 	//
-	// A cast to a coercible integer type (`0 as ExitCode`, `n as Integer`) is a compile-time NO-OP: the
-	// value's bytes are unchanged and a `return`/assignment coerces its tag via `checkDeclaredType`, so
-	// the value passes through with its own tag. ⚠ Only same-representation numeric casts are modelled;
-	// float↔int and struct/String casts are a follow-up.
+	// ⚠ The `as`-CAST is NOT handled here — it is a LOOSER operator than unary `-` (see `parseCast`), so
+	// `-5 as Age` is `(-5) as Age`. An indirect call, by contrast, binds TIGHTER than `-` (`-f()` is
+	// `-(f())`), which is why it stays in this postfix band and the cast does not.
 	function parsePostfix(func IrFunction, value ValueId) returns ValueId throws ParseError
 		var current = value
 		while true 'postfix'
-			if self.at(TokenKind.as) 'cast'
-				try self.consume(TokenKind.as)
-				_ = try self.parseTypeReference()
-				continue
-			end 'cast'
-
 			// A trailing `(` on a FUNCTION value is an indirect call; on anything else it is not a postfix
 			// operator at all and the loop ends (a `(` after a non-function value is left for the caller,
 			// which is a syntax error there — calling a non-function).
@@ -9254,6 +9341,52 @@ export type Parser
 		end 'postfix'
 		return current
 	end 'parsePostfix'
+
+	// Apply one `as <targetType>` cast to `value` (P1.9). Four shapes, decided by the source value's
+	// domain and the target's:
+	//   • int → float  — emit `promoteToFloat` (`cvtsi2sd`); the value BECOMES a float. This is the
+	//     conversion the old no-op `as` skipped (`explicit-cast-int-to-float`).
+	//   • float → int  — emit `trunc` (`cvttsd2si`), the truncating bridge out of the float domain.
+	//   • same representation (int→int, float→float) — the value flows on UNCHANGED, keeping its own tag,
+	//     exactly as the old no-op `as` left it (so a `X as ExitCode` that already compiled keeps its
+	//     codegen byte-for-byte). It is deliberately NOT retagged to the target alias: a `named` value
+	//     TYPE reaches `lowerMaxonToStd` unresolved through a closure capture or an op's stored type
+	//     (`maxonTypeToStdType` panics on it — `resolveTypes` rewrites signatures, not per-value types),
+	//     and the alias name a narrowing check needs rides the recorded site, not the value tag. When the
+	//     target is a ranged INT alias, that site is recorded so `InsertRangeChecks` guards / E3005s it.
+	function applyCast(value ValueId, targetType MaxonType, asTok Token) returns ValueId throws ParseError
+		let sourceIsFloat = tagIsFloat(self.tagOf(value))
+		let targetIsFloat = self.typeIsFloatDomain(targetType)
+
+		if sourceIsFloat and not targetIsFloat 'floatToInt'
+			return self.emitUnaryOp(value, op: MaxonUnaryOp.trunc, resultTag: ValueTypeTag.integer, opTok: asTok)
+		end 'floatToInt'
+
+		if not sourceIsFloat and targetIsFloat 'intToFloat'
+			return self.promoteToFloat(value, opTok: asTok)
+		end 'intToFloat'
+
+		let aliasName = self.rangedAliasNameOfType(targetType)
+		if not aliasName.isEmpty() 'rangedInt'
+			self.rangeCheckCastSites.push(RangeCheckCastSite.create(value, aliasName: aliasName, line: asTok.line, column: asTok.column))
+		end 'rangedInt'
+
+		return value
+	end 'applyCast'
+
+	// Is `t` in the FLOAT domain — the bare `float` keyword, or a `named` type that denotes a ranged
+	// float alias? Everything else (bare int, an int alias, `ExitCode`, a struct/String/function) is
+	// the integer/pointer domain. Exhaustive over `ValueTypeTag`, so a new tag cannot slip through as a
+	// silent `false`. `namedIsFloatAlias` is asked only on the `named` arm, where its interner
+	// precondition holds.
+	function typeIsFloatDomain(t MaxonType) returns bool
+		return match maxonTypeTag(t) 'k'
+			boolean to integer gives false
+			float gives true
+			named gives self.namedIsFloatAlias(typeNameIdOf(t))
+			exitCode to function gives false
+		end 'k'
+	end 'typeIsFloatDomain'
 
 	// Append a `binOp` op combining two SSA values; return the ValueId it defines. The
 	// result's TYPE is the operator's: arithmetic and shifts are integer; `and`/`or`/`xor`

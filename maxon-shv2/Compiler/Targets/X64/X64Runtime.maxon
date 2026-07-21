@@ -181,6 +181,9 @@ let PrintFrameName = b"mrt_panic_print_frame"
 let WalkFramesName = b"mrt_panic_walk_frames"
 let FaultBacktraceName = b"mrt_fault_backtrace"
 let FaultThunkName = b"mrt_fault_thunk"
+// The callable SOFTWARE panic entry (P1.9 range checks). EXPORTED so `StdToX64Conversion.lowerRangePanic`
+// names the SAME chunk the `osRangePanic` guard's `callDirect` targets — one string, one fixup.
+export let PanicName = b"mrt_panic"
 
 // ==========================================================================
 // The chunk assembler
@@ -854,6 +857,49 @@ function buildRuntimeInitChunk() returns FunctionCodeChunk
 end 'buildRuntimeInitChunk'
 
 // ==========================================================================
+// mrt_panic(rcx = NUL-terminated cstr)  — the callable software-panic entry
+// ==========================================================================
+
+// The panic a P1.9 range guard calls when a value falls outside its typealias. Prints the caller's
+// message, a `Stack trace:` header, a symbolized backtrace, and exits 1. It ASSEMBLES the existing
+// fault-path primitives — it does not reimplement any of them:
+//   (1) `mrt_write_cstr_stderr` prints the cstr in RCX (the pass bakes the whole `panic at …\n` line);
+//   (2) the same writer prints the `Stack trace:` header;
+//   (3) `mrt_panic_walk_frames`'s SOFTWARE arm (`stack_high == 0`, which trusts the saved-rbp chain the
+//       compiled frames build rather than range-validating it) walks from THIS frame — so `[rbp+8]`,
+//       the return address into the function whose guard fired, is the first symbolized frame and
+//       `mrt_panic` never appears in the trace;
+//   (4) `ExitProcess(1)`.
+//
+// This is the reader the walker's software arm was written for and had been waiting on (X64Runtime's
+// header noted the arm was unreached until P1.2's `panic()`; the range guard reaches it first). It
+// preserves rbp across the two writer calls (Win64 callee-saved, restored by their `pop rbp`), so the
+// current frame pointer is still valid when it is loaded for the walk. Win64 ABI throughout, and it
+// takes NO slots — the message is consumed immediately and nothing is live across the calls.
+function buildPanicChunk() returns FunctionCodeChunk
+	var asm = X64RuntimeAsm.beginFunction(0)
+
+	// (1) The caller's message — already in RCX, NUL-terminated and newline-suffixed by the pass.
+	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: WriteStderrName)
+
+	// (2) The `Stack trace:` header.
+	emitPrintString(asm, bytes: b"Stack trace:\n")
+
+	// (3) Walk from this frame with the software arm: rcx = current rbp, rdx = stack_low (unused when
+	// stack_high == 0), r8 = stack_high = 0.
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rcx, src: X64Register.rbp, wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: X64Register.rdx, src: X64Register.rdx, wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: X64Register.r8, src: X64Register.r8, wide: true)
+	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: WalkFramesName)
+
+	// (4) ExitProcess(PanicExitCode).
+	encodeMovRegImm32(asm.code, dest: X64Register.rcx, value: PanicExitCode)
+	encodeIatCall(asm.code, iatRelocs: asm.iatRelocs, slotIndex: iatSlotIndex(IatSlot.ExitProcess))
+
+	return asm.finishFunction(PanicName)
+end 'buildPanicChunk'
+
+// ==========================================================================
 // Assembly
 // ==========================================================================
 
@@ -861,6 +907,7 @@ end 'buildRuntimeInitChunk'
 // the runtime lays out above user code; `__symtable` closes `.text` after all of it.
 export function appendX64RuntimeChunks(chunks FunctionCodeChunkArray)
 	chunks.push(buildRuntimeInitChunk())
+	chunks.push(buildPanicChunk())
 	chunks.push(buildFaultThunkChunk())
 	chunks.push(buildFaultBacktraceChunk())
 	chunks.push(buildWalkFramesChunk())

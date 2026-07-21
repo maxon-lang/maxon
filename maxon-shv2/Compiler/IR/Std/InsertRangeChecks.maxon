@@ -1,0 +1,542 @@
+// InsertRangeChecks — the P1.9 ranged-typealias guard pass. A Std→Std pass that turns the parser's
+// recorded range-check sites (`project.rangeChecks`) into the compile-time E3005s and runtime panics a
+// narrowing `as` cast / ranged `return` promises. It runs right after `lowerMaxonToStd`, before the
+// other Std passes.
+//
+// ⭐ WHY STD-TIER, AND NOT THE MAXON-TIER MARKER OP THE PLAN SKETCHED. The narrowing guard needs a
+// primitive the Maxon dialect does not have — "abort with a symbolized backtrace and exit 1" — and the
+// only way to add one at the Maxon tier is a new `MaxonOp` variant, which forces a fresh arm into EVERY
+// exhaustive `MaxonOp` match, including the escape-analysis functions in `SemanticCheck.maxon` /
+// `FnRefThunk.maxon` that the closures/async rung owns and is actively editing. So the guard is emitted
+// HERE instead, where the panic is a PLAIN `StdOp.call` to the `mrt_panic` runtime chunk (no new op in
+// any dialect) and the compare cascade is the ordinary `cmp`/`condBranch` the tier already carries. The
+// cast alias name and source spans — which the Std tier's ops do not carry — ride the parser's
+// `project.rangeChecks` side table instead of an op.
+//
+// ⭐ ONE GUARD EMITTER, one unsigned strategy, one panic-message builder, serving BOTH the cast sites and
+// the return sites (`emitGuardAt`). This is the whole point of the rewrite: v1 emits the guard TWICE (a
+// Maxon `expandCastRangeChecks` for casts, a Std `insertRangeChecks` for returns) and the two copies have
+// drifted on unsigned handling. Here there is one.
+//
+// ⚠ SIGNED COMPARES, in a CASCADE. shv2's Std tier has no unsigned integer compare (`StdCmpPred` is
+// signed only) and no `setcc`, so a two-bound check is a CASCADE of fused `cmp`+`condBranch` — one block
+// per bound, each branching to the shared panic on violation — not the bootstrap's `cmp`+`cmp`+`or` over
+// materialized bools. Signed compares give the SAME in/out verdict the bootstrap's do (see
+// `TypeRules.literalInRange` / the range predicates), so only the emitted instructions differ.
+
+// One bound of a range check: the predicate that means "out of range past this bound", and the bound
+// itself. `lt`/`lo` for the lower bound (panic when `value < lo`), `gt`/`hi` for the upper.
+type RangeBoundCheck
+	export var pred as StdCmpPred
+	export var bound as ParsedInt
+
+	static function create(pred StdCmpPred, bound ParsedInt) returns RangeBoundCheck
+		return Self{pred: pred, bound: bound}
+	end 'create'
+end 'RangeBoundCheck'
+
+typealias RangeBoundCheckArray = Array with RangeBoundCheck
+
+// A guard's insertion point: the block to split and the `opRefs` position to split it at (ops before
+// stay in the head, ops from here on move to the continuation).
+type GuardSite
+	export var block as IrBlock
+	export var position as BlockOpPos
+
+	static function create(block IrBlock, position BlockOpPos) returns GuardSite
+		return Self{block: block, position: position}
+	end 'create'
+end 'GuardSite'
+
+// The block whose terminator is `ret(value)` — the return site to guard. `notFound` covers the value
+// having been folded away or otherwise not surviving as a `ret` (defensive; a recorded ranged return
+// always has one).
+union RetBlockLookup
+	notFound
+	found(block IrBlock)
+end 'RetBlockLookup'
+
+// Run the pass over every function that has recorded range-check sites. Functions with none are skipped
+// without touching their blocks.
+export function insertRangeChecks(project Project, module StdModule)
+	logDebug(LogCategory.ir, message: function() gives "insertRangeChecks: {module.funcCount()} function(s)")
+	for func in module.functions 'eachFunc'
+		if not project.rangeChecks.contains(func.name) 'noChecks'
+			continue
+		end 'noChecks'
+		let checks = try project.rangeChecks.get(func.name) otherwise panic("insertRangeChecks: rangeChecks.contains said yes but get failed for '{String.from(func.name)}'")
+		var emitter = RangeCheckEmitter.create(project, module: module, func: func)
+		emitter.run(checks)
+	end 'eachFunc'
+end 'insertRangeChecks'
+
+// Per-function emitter: owns the module + function it rewrites and the fresh-ValueId counter its guard
+// ops draw from (seeded past every id the function already uses).
+type RangeCheckEmitter
+	var project as Project
+	var module as StdModule
+	var func as IrFunction
+	var nextId as ValueId
+
+	static function create(project Project, module StdModule, func IrFunction) returns RangeCheckEmitter
+		return Self{project: project, module: module, func: func, nextId: nextFreeValueId(module, func: func)}
+	end 'create'
+
+	// A fresh ValueId for a guard op. The colored register file / dense value columns downstream grow to
+	// fit the highest id, so a monotonically increasing id past the function's current maximum is all
+	// that is required.
+	function mintId() returns ValueId
+		let id = self.nextId
+		self.nextId = self.nextId + 1
+		return id
+	end 'mintId'
+
+	// Process one function's sites. Casts FIRST (they split blocks and move terminators onto new
+	// continuation blocks), then returns (re-found from the CURRENT block structure, since a cast may
+	// have moved a `ret` terminator). The literal/const map is built ONCE over the original ops — the
+	// values a site checks are original, never the guard consts this pass appends afterward.
+	function run(checks FunctionRangeChecks)
+		let constMap = self.buildConstMap()
+		for site in checks.castSites 'eachCast'
+			self.processCastSite(site, filePath: checks.filePath, constMap: constMap)
+		end 'eachCast'
+		if not checks.returnAliasName.isEmpty() 'rangedReturn'
+			self.processReturnSites(checks.returnAliasName, sites: checks.returnSites, filePath: checks.filePath, constMap: constMap)
+		end 'rangedReturn'
+	end 'run'
+
+	// ---- cast sites ----
+
+	function processCastSite(site RangeCheckCastSite, filePath FilePath, constMap RangeConstMap)
+		match self.boundsOf(site.aliasName) 'bounds'
+			none then return
+			some(alias) then self.guardCast(site, alias: alias, filePath: filePath, constMap: constMap)
+		end 'bounds'
+	end 'processCastSite'
+
+	function guardCast(site RangeCheckCastSite, alias RangedTypeAlias, filePath FilePath, constMap RangeConstMap)
+		if not self.needsRuntimeGuard(site.value, alias: alias, aliasName: site.aliasName, line: site.line, column: site.column, filePath: filePath, constMap: constMap) 'noGuard'
+			return
+		end 'noGuard'
+		self.emitGuardAt(self.castGuardSite(site.value), value: site.value, low: alias.low, high: alias.high, message: self.rangeCheckMessage(filePath, line: site.line, aliasName: site.aliasName))
+	end 'guardCast'
+
+	// ---- return sites ----
+
+	function processReturnSites(returnAliasName ByteArray, sites RangeCheckReturnSiteArray, filePath FilePath, constMap RangeConstMap)
+		match self.boundsOf(returnAliasName) 'bounds'
+			none then return
+			some(alias) then self.guardReturns(alias, aliasName: returnAliasName, sites: sites, filePath: filePath, constMap: constMap)
+		end 'bounds'
+	end 'processReturnSites'
+
+	function guardReturns(alias RangedTypeAlias, aliasName ByteArray, sites RangeCheckReturnSiteArray, filePath FilePath, constMap RangeConstMap)
+		for site in sites 'eachSite'
+			if not self.needsRuntimeGuard(site.value, alias: alias, aliasName: aliasName, line: site.line, column: site.column, filePath: filePath, constMap: constMap) 'noGuard'
+				continue
+			end 'noGuard'
+			match self.findRetBlock(site.value) 'ret'
+				notFound then break 'ret'
+				found(retBlock) then self.emitGuardAt(GuardSite.create(retBlock, position: retBlock.opRefs.count()), value: site.value, low: alias.low, high: alias.high, message: self.rangeCheckMessage(filePath, line: site.line, aliasName: aliasName))
+			end 'ret'
+		end 'eachSite'
+	end 'guardReturns'
+
+	// ---- the shared decision ----
+
+	// Whether a site needs a RUNTIME guard. A full-range alias never does; a literal never does (its
+	// out-of-range use is reported here as a compile-time E3005, its in-range use needs no code); a
+	// non-literal into a non-full range does.
+	function needsRuntimeGuard(value ValueId, alias RangedTypeAlias, aliasName ByteArray, line LineNumber, column ColumnNumber, filePath FilePath, constMap RangeConstMap) returns bool
+		if rangeIsFullI64(alias.low, high: alias.high) 'full'
+			return false
+		end 'full'
+
+		if constMap.contains(value) 'literal'
+			let v = constMap.constantOf(value)
+			if not literalInRange(v, low: alias.low, high: alias.high) 'outOfRange'
+				reportPositioned(self.project, code: ErrorCode.typeMismatch, message: "Value {v} is outside the range of '{String.from(aliasName)}' ({formatRangeDisplay(alias.low, high: alias.high)})", line: line, column: column, filePath: filePath)
+			end 'outOfRange'
+			return false
+		end 'literal'
+
+		return true
+	end 'needsRuntimeGuard'
+
+	// Split the site's block, emit the panic block, and thread the compare cascade between them.
+	function emitGuardAt(site GuardSite, value ValueId, low ParsedInt, high ParsedInt, message ByteArray)
+		let checks = boundChecks(low, high: high)
+		if checks.isEmpty() 'noBoundNeeded'
+			// Both bounds elide (a signed range whose only stored bound is a negative upper) — nothing to
+			// guard. Matches the bootstrap's both-elided path, which returns the value unchecked.
+			return
+		end 'noBoundNeeded'
+
+		let ok = self.splitBlock(site.block, position: site.position)
+		let panicBlock = self.emitPanicBlock(message)
+		self.emitCascade(site.block, value: value, checks: checks, panicId: panicBlock.id, okId: ok.id)
+	end 'emitGuardAt'
+
+	// Split `head` at `position`: ops before it stay in `head`; ops from it on, plus `head`'s
+	// terminator / conditional branch / outgoing edges, move to a fresh continuation block returned
+	// here. `head` is left un-terminated for the cascade to finish.
+	function splitBlock(head IrBlock, position BlockOpPos) returns IrBlock
+		var ok = self.module.addBlock(self.func, label: b"__rc_ok")
+		// A mutable alias to the head block (a parameter binding is immutable; field writes need a `var`).
+		// It is the SAME heap object — IrBlock is a reference type — so these writes land on the real block.
+		var headBlock = head
+
+		var headOps = OpIndexArray.create()
+		var tailOps = OpIndexArray.create()
+		for i in 0 upto headBlock.opRefs.count() 'partition'
+			let opIdx = try headBlock.opRefs.get(i) otherwise panic("splitBlock: opRefs.get OOB at {i}")
+			if i < position 'inHead'
+				headOps.push(opIdx)
+			end 'inHead' else 'inTail'
+				tailOps.push(opIdx)
+			end 'inTail'
+		end 'partition'
+
+		ok.opRefs = tailOps
+		ok.terminator = headBlock.terminator
+		ok.condBranch = headBlock.condBranch
+		ok.branchEdges = headBlock.branchEdges
+
+		headBlock.opRefs = headOps
+		headBlock.terminator = Terminator.unset
+		headBlock.condBranch = CondBranch.none
+		headBlock.branchEdges = BranchEdgeArray.create()
+		return ok
+	end 'splitBlock'
+
+	// The panic block: `osRangePanic <message-label>`, then a dead return (the panic never returns, but
+	// every block must terminate). The message is interned as a NUL-terminated `.rdata` cstr blob — the
+	// same immortal-rdata path a String literal's blob uses, deduped by bytes — and `osRangePanic`
+	// carries its label to the backend, which loads the address into the ABI's first-arg register and
+	// calls `mrt_panic`.
+	function emitPanicBlock(message ByteArray) returns IrBlock
+		var panicBlock = self.module.addBlock(self.func, label: b"__rc_panic")
+		let blobLabel = registerStringBlob(self.project.globalData, bytes: message)
+		self.module.appendOp(panicBlock, op: StdOp.osRangePanic(blobLabel.toByteArray()))
+		self.emitDeadReturn(panicBlock)
+		return panicBlock
+	end 'emitPanicBlock'
+
+	// The unreachable terminator after `mrt_panic`: a `retVoid` for a void function, else a `ret` of a
+	// zero constant in the return type's register file (an f64 zero for a float return, an i64 zero
+	// otherwise — the same class rule `emitZeroConstOfReturnType` follows so the backend's return move
+	// never crosses register files). Mirrors the parser's `emitDeadReturn` after `panicAbort`.
+	function emitDeadReturn(block IrBlock)
+		if stdReturnTypeIsVoid(self.func.returnType) 'void'
+			self.module.setTerminator(block, op: StdOp.retVoid)
+			return
+		end 'void'
+		let zero = self.mintId()
+		let zeroType = StdType.f64 if stdReturnTypeIsFloat(self.func.returnType) else StdType.i64
+		self.module.appendOp(block, op: StdOp.const(zero, value: 0, valueType: zeroType))
+		self.module.setTerminator(block, op: StdOp.ret(zero))
+	end 'emitDeadReturn'
+
+	// Emit the compare cascade, `head` first: each check is `const bound; cmp value <pred> bound;
+	// condBranch (out-of-range) -> panic, (in-range) -> next`. The last check's in-range edge lands on
+	// `ok`; every earlier one lands on a fresh intermediate block. The `const` is left as a register
+	// operand — `foldConstOperands`, which runs after this pass, folds it into the `cmp`'s immediate.
+	function emitCascade(head IrBlock, value ValueId, checks RangeBoundCheckArray, panicId BlockId, okId BlockId)
+		var current = head
+		let lastIndex = checks.count() - 1
+		for i in 0 upto checks.count() 'eachCheck'
+			let check = try checks.get(i) otherwise panic("emitCascade: checks.get OOB at {i}")
+			let boundId = self.mintId()
+			self.module.appendOp(current, op: StdOp.const(boundId, value: check.bound, valueType: StdType.i64))
+			let condId = self.mintId()
+			self.module.appendOp(current, op: StdOp.cmp(condId, lhs: value, rhs: boundId, pred: check.pred, operandType: StdType.i64))
+
+			if i == lastIndex 'lastCheck'
+				self.module.setTerminator(current, op: StdOp.condBranch(condId, thenBlockId: panicId, elseBlockId: okId))
+			end 'lastCheck' else 'moreChecks'
+				let next = self.module.addBlock(self.func, label: b"__rc_chk")
+				self.module.setTerminator(current, op: StdOp.condBranch(condId, thenBlockId: panicId, elseBlockId: next.id))
+				current = next
+			end 'moreChecks'
+		end 'eachCheck'
+	end 'emitCascade'
+
+	// ---- lookups ----
+
+	// The bounds of a ranged alias by name, or `none` when the name is not in the ranged-alias registry
+	// (a builtin like `ExitCode`, or a stdlib alias not reachable from this program) — which is exactly
+	// the "not a checkable range" case, treated as no check.
+	function boundsOf(aliasName ByteArray) returns RangeAliasLookup
+		if not self.project.typeAliases.contains(aliasName) 'unknown'
+			return RangeAliasLookup.none
+		end 'unknown'
+		return RangeAliasLookup.some(try self.project.typeAliases.get(aliasName) otherwise panic("boundsOf: contains said yes but get failed for '{String.from(aliasName)}'"))
+	end 'boundsOf'
+
+	// Where a CAST guard goes: after all params (a cast of a parameter, the common case — the guard must
+	// not split the param run), else right after the value's defining op.
+	function castGuardSite(value ValueId) returns GuardSite
+		if value < self.func.paramCount 'param'
+			let entryRef = try self.func.blockRefs.get(0) otherwise panic("castGuardSite: function '{String.from(self.func.name)}' has no entry block")
+			let entry = self.module.getBlock(entryRef)
+			return GuardSite.create(entry, position: leadingParamCount(self.module, block: entry))
+		end 'param'
+		return self.defGuardSite(value)
+	end 'castGuardSite'
+
+	// The guard site for a non-parameter cast value: its defining op's block, one past that op.
+	function defGuardSite(value ValueId) returns GuardSite
+		for blockRef in self.func.blockRefs 'eachBlock'
+			let block = self.module.getBlock(blockRef)
+			for i in 0 upto block.opRefs.count() 'eachOp'
+				let opIdx = try block.opRefs.get(i) otherwise panic("defGuardSite: opRefs.get OOB at {i}")
+				let op = try self.module.ops.get(opIdx) otherwise panic("defGuardSite: opIdx {opIdx} not in module.ops")
+				if stdOpDefinedIdOrZero(op) == value and stdOpDefinesValue(op) 'def'
+					return GuardSite.create(block, position: i + 1)
+				end 'def'
+			end 'eachOp'
+		end 'eachBlock'
+		panic("defGuardSite: cast value v{value} is defined by no op in '{String.from(self.func.name)}' — a recorded cast site names a value the function does not define")
+	end 'defGuardSite'
+
+	// The block whose terminator is `ret(value)`.
+	function findRetBlock(value ValueId) returns RetBlockLookup
+		for blockRef in self.func.blockRefs 'eachBlock'
+			let block = self.module.getBlock(blockRef)
+			if block.hasTerminatorOp() 'hasTerm'
+				let term = try self.module.ops.get(block.terminatorIndex()) otherwise panic("findRetBlock: terminatorIndex not in module.ops")
+				if retMatchesValue(term, target: value) 'match'
+					return RetBlockLookup.found(block)
+				end 'match'
+			end 'hasTerm'
+		end 'eachBlock'
+		return RetBlockLookup.notFound
+	end 'findRetBlock'
+
+	// ---- the panic message ----
+
+	// The runtime panic string, baked at compile time: `panic at <file>:<line>: Range check failed:
+	// value outside typealias '<Alias>'\n`. `<file>` is the source BASENAME (the bootstrap's
+	// `Path.GetFileName`), `<line>` the `as`/`return` source line. `mrt_panic` prints this verbatim,
+	// then the `Stack trace:` block, then exits 1.
+	function rangeCheckMessage(filePath FilePath, line LineNumber, aliasName ByteArray) returns ByteArray
+		return "panic at {baseName(filePath.toString())}:{line}: Range check failed: value outside typealias '{String.from(aliasName)}'\n".toByteArray()
+	end 'rangeCheckMessage'
+
+	// Map each `const` result value id to its constant — the literals whose out-of-range use is the
+	// compile-time E3005 and whose in-range use needs no runtime code. Built once per function over the
+	// pre-guard ops.
+	function buildConstMap() returns RangeConstMap
+		var constMap = RangeConstMap.create()
+		for opIdx in self.module.liveOpIndices(self.func) 'eachOp'
+			let op = try self.module.ops.get(opIdx) otherwise panic("buildConstMap: live op index {opIdx} not in module.ops")
+			match op 'c'
+				const(resultId, value, _) then constMap.upsert(resultId, value: value)
+				// A NEGATED literal (`-5 as Positive`) survives lowering as `unaryOp neg` over a `const`, not
+				// a folded `const`, so the E3005 literal check would miss it and emit a runtime guard where the
+				// spec expects a COMPILE error. Fold it here — the `const` operand is already recorded (it is
+				// emitted before the `neg`, and ops are walked in order). Only `neg` folds; every other unary
+				// (a domain conversion, a bitwise `not`) is left to the runtime path.
+				binOp then break 'c'
+				unaryOp(resultId, operand, opcode, _) then recordConstNeg(constMap, resultId: resultId, operand: operand, opcode: opcode)
+				cmp to osRangePanic then break 'c'
+			end 'c'
+		end 'eachOp'
+		return constMap
+	end 'buildConstMap'
+end 'RangeCheckEmitter'
+
+// The result of a ranged-alias lookup — a bounds struct or "not a checkable range".
+union RangeAliasLookup
+	none
+	some(alias RangedTypeAlias)
+end 'RangeAliasLookup'
+
+// The bound checks a `[low, high]` range needs, in cascade order (lower then upper). Empty when the
+// range is unbounded on both sides in signed space — which only the full-range case reaches before this
+// (elided earlier), or a signed range with a negative upper (matched to the bootstrap's both-elided
+// path). See TypeRules' `rangeNeedsLowerCheck` / `rangeNeedsUpperCheck`.
+function boundChecks(low ParsedInt, high ParsedInt) returns RangeBoundCheckArray
+	var checks = RangeBoundCheckArray.create()
+	if rangeNeedsLowerCheck(low) 'lower'
+		checks.push(RangeBoundCheck.create(StdCmpPred.lt, bound: low))
+	end 'lower'
+	if rangeNeedsUpperCheck(high) 'upper'
+		checks.push(RangeBoundCheck.create(StdCmpPred.gt, bound: high))
+	end 'upper'
+	return checks
+end 'boundChecks'
+
+// The number of leading `param` ops in a block — where a cast guard on a parameter goes (after them
+// all, so the param run is never split).
+function leadingParamCount(module StdModule, block IrBlock) returns BlockOpPos
+	var count = 0 as BlockOpPos
+	for i in 0 upto block.opRefs.count() 'eachOp'
+		let opIdx = try block.opRefs.get(i) otherwise panic("leadingParamCount: opRefs.get OOB at {i}")
+		let op = try module.ops.get(opIdx) otherwise panic("leadingParamCount: opIdx {opIdx} not in module.ops")
+		if not stdOpIsParam(op) 'notParam'
+			return count
+		end 'notParam'
+		count = count + 1
+	end 'eachOp'
+	return count
+end 'leadingParamCount'
+
+function stdOpIsParam(op StdOp) returns bool
+	return match op 'p'
+		const to ret gives false
+		param gives true
+		call to osRangePanic gives false
+	end 'p'
+end 'stdOpIsParam'
+
+// Record a negated-constant result: `neg` of a recorded constant `operand` is `-operand`. Any other
+// unary opcode is not an integer constant this check reads, so nothing is recorded.
+function recordConstNeg(constMap RangeConstMap, resultId ValueId, operand ValueId, opcode StdUnaryOpcode)
+	if opcode != StdUnaryOpcode.neg 'notNeg'
+		return
+	end 'notNeg'
+	if not constMap.contains(operand) 'operandNotConst'
+		return
+	end 'operandNotConst'
+	constMap.upsert(resultId, value: 0 - constMap.constantOf(operand))
+end 'recordConstNeg'
+
+// Does `term` return exactly `target`?
+function retMatchesValue(term StdOp, target ValueId) returns bool
+	return match term 'term'
+		const to branch gives false
+		ret(retValId) gives retValId == target
+		param to osRangePanic gives false
+	end 'term'
+end 'retMatchesValue'
+
+// The next unused ValueId in the function: one past the highest id any op DEFINES or any block-arg
+// carries. Scanning defs (and phi results) suffices — dense SSA numbers every value once, so the
+// maximum def id is the maximum id, and a use can only name an id that some def already introduced.
+function nextFreeValueId(module StdModule, func IrFunction) returns ValueId
+	var maxId = 0 as ValueId
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("nextFreeValueId: blockRef from func.blockRefs not in module.blocks")
+		for arg in block.blockArgs 'eachArg'
+			maxId = maxValueId(maxId, other: arg.valueId)
+		end 'eachArg'
+	end 'eachBlock'
+	for opIdx in module.liveOpIndices(func) 'eachOp'
+		let op = try module.ops.get(opIdx) otherwise panic("nextFreeValueId: live op index {opIdx} not in module.ops")
+		if stdOpDefinesValue(op) 'defines'
+			maxId = maxValueId(maxId, other: stdOpDefinedIdOrZero(op))
+		end 'defines'
+	end 'eachOp'
+	return maxId + 1
+end 'nextFreeValueId'
+
+function maxValueId(a ValueId, other ValueId) returns ValueId
+	return a if a >= other else other
+end 'maxValueId'
+
+// True iff `op` DEFINES a value (has a result). The `false` set is the terminators / stores / effect
+// ops that define nothing. Exhaustive over StdOp, matching `collectStdOpUses`'s discipline — a new
+// variant is a compile error here rather than a silently-missed def.
+function stdOpDefinesValue(op StdOp) returns bool
+	return match op 'd'
+		const to cmpImm gives true
+		div to mod gives true
+		condBranch to branch gives false
+		ret gives false
+		param gives true
+		call gives true
+		retVoid gives false
+		globalAddr to loadIndirect gives true
+		storeIndirect gives false
+		rdataAddr gives true
+		tryCall gives true
+		errorReturn to osExit gives false
+		osAllocPages gives true
+		osWriteStdout gives false
+		funcAddr gives true
+		callIndirect gives true
+		osRangePanic gives false
+	end 'd'
+end 'stdOpDefinesValue'
+
+// The ValueId `op` defines, or 0 for a non-defining op (safe filler for a MAX, never a real answer read
+// on its own — every caller gates on `stdOpDefinesValue`). Exhaustive over StdOp.
+function stdOpDefinedIdOrZero(op StdOp) returns ValueId
+	return match op 'r'
+		const(resultId, _, _) gives resultId
+		binOp(resultId, _, _, _, _) gives resultId
+		unaryOp(resultId, _, _, _) gives resultId
+		cmp(resultId, _, _, _, _) gives resultId
+		binOpImm(resultId, _, _, _) gives resultId
+		cmpImm(resultId, _, _, _) gives resultId
+		div(resultId, _, _) gives resultId
+		mod(resultId, _, _) gives resultId
+		condBranch to branch gives 0
+		ret gives 0
+		param(resultId, _, _) gives resultId
+		call(resultId, _, _) gives resultId
+		retVoid gives 0
+		globalAddr(resultId, _) gives resultId
+		loadIndirect(resultId, _, _, _) gives resultId
+		storeIndirect gives 0
+		rdataAddr(resultId, _) gives resultId
+		tryCall(resultId, _, _, _) gives resultId
+		errorReturn to osExit gives 0
+		osAllocPages(resultId, _) gives resultId
+		osWriteStdout gives 0
+		funcAddr(resultId, _) gives resultId
+		callIndirect(resultId, _, _) gives resultId
+		osRangePanic gives 0
+	end 'r'
+end 'stdOpDefinedIdOrZero'
+
+// The base file name (last path segment) of a compiler source path, for the runtime panic message —
+// the shv2 equivalent of the bootstrap's `Path.GetFileName`. Strips both separators so a Windows temp
+// path and a POSIX one both reduce to `<name>.test`.
+function baseName(path String) returns String
+	return lastSegment(lastSegment(path, separator: "/"), separator: "\\")
+end 'baseName'
+
+function lastSegment(s String, separator String) returns String
+	let parts = s.split(separator)
+	if parts.isEmpty() 'whole'
+		return s
+	end 'whole'
+	return try parts.get(parts.count() - 1) otherwise s
+end 'lastSegment'
+
+// The const-value map (P1.9) — each `const` result id to the literal it materializes, so a cast/return
+// of a literal is a compile-time decision (E3005 or nothing) rather than a runtime guard. Two dense
+// columns, not a `Map`, for the reason `StdValueUseSet` gives: a ValueId is already a dense index.
+// (A near-twin of `foldConstOperands`'s private `RangeConstMap`; kept separate rather than exported to
+// avoid coupling two passes' internals, and it stays tiny.)
+type RangeConstMap
+	var isConst as BoolArray
+	var constant as ParsedIntArray
+
+	static function create() returns RangeConstMap
+		return Self{isConst: BoolArray.create(), constant: ParsedIntArray.create()}
+	end 'create'
+
+	function upsert(valueId ValueId, value ParsedInt)
+		self.isConst.growFilled(valueId + 1, value: false)
+		self.constant.growFilled(valueId + 1, value: 0)
+		try self.isConst.set(valueId, value: true) otherwise panic("RangeConstMap.upsert: isConst.set OOB at {valueId}")
+		try self.constant.set(valueId, value: value) otherwise panic("RangeConstMap.upsert: constant.set OOB at {valueId}")
+	end 'upsert'
+
+	function contains(valueId ValueId) returns bool
+		if valueId >= self.isConst.count() 'notAConst'
+			return false
+		end 'notAConst'
+		return try self.isConst.get(valueId) otherwise panic("RangeConstMap.contains: isConst.get OOB at {valueId}")
+	end 'contains'
+
+	function constantOf(valueId ValueId) returns ParsedInt
+		if not self.contains(valueId) 'notAConst'
+			panic("RangeConstMap.constantOf: value v{valueId} is not a `const` — check `contains` first")
+		end 'notAConst'
+		return try self.constant.get(valueId) otherwise panic("RangeConstMap.constantOf: constant.get OOB at {valueId}")
+	end 'constantOf'
+end 'RangeConstMap'

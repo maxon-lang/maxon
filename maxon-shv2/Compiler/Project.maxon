@@ -199,6 +199,69 @@ export typealias RangedTypeAliasArray = Array with RangedTypeAlias
 // TypeResolution to collapse `MaxonType.named` to a primitive.
 export typealias RangedTypeAliasMap = Map with (ByteArray, RangedTypeAlias)
 
+// --- Range-check sites (P1.9) — the parser's carrier for `InsertRangeChecks` ---
+//
+// ⭐ WHY A SIDE TABLE AND NOT A MARKER OP. A narrowing `as` cast has no value of its own — it
+// RETAGS the operand and flows it on unchanged — so there is nothing for an IR op to define,
+// and the two places that must be checked (a `as`-cast operand, and a ranged `return`'s value)
+// are found by the parser at PARSE time, not by any later structural walk. A dedicated
+// `MaxonOp` would ALSO force a new arm into every exhaustive `MaxonOp` match — including the
+// escape-analysis functions the closures/async rung owns and is actively editing — so the cast
+// is recorded HERE instead, keyed by the enclosing function's (unique) name, and resolved by
+// the Std-tier `InsertRangeChecks` pass.
+//
+// The bounds live only in `typeAliases` (an alias resolves AWAY to its primitive before the
+// pass runs), so a site carries the alias NAME and the pass looks the bounds up — the linchpin
+// the "retain the alias" requirement exists for. `value` is the flat Std `ValueId` the operand
+// carries (ids pass through `lowerMaxonToStd` verbatim), never a name string. `line`/`column`
+// anchor the E3005 diagnostic and the runtime panic message on the source `as`/`return`.
+
+// One `as`-cast into a ranged alias, recorded where it was written.
+export type RangeCheckCastSite
+	export var value as ValueId
+	export var aliasName as ByteArray
+	export var line as LineNumber
+	export var column as ColumnNumber
+
+	export static function create(value ValueId, aliasName ByteArray, line LineNumber, column ColumnNumber) returns RangeCheckCastSite
+		return Self{value: value, aliasName: aliasName, line: line, column: column}
+	end 'create'
+end 'RangeCheckCastSite'
+
+export typealias RangeCheckCastSiteArray = Array with RangeCheckCastSite
+
+// One `return <expr>` in a function whose declared return type is a ranged alias. The pass
+// finds the `ret` op by `value` and reports/guards against the function's `returnAliasName`.
+export type RangeCheckReturnSite
+	export var value as ValueId
+	export var line as LineNumber
+	export var column as ColumnNumber
+
+	export static function create(value ValueId, line LineNumber, column ColumnNumber) returns RangeCheckReturnSite
+		return Self{value: value, line: line, column: column}
+	end 'create'
+end 'RangeCheckReturnSite'
+
+export typealias RangeCheckReturnSiteArray = Array with RangeCheckReturnSite
+
+// Every range-check site in one function. `filePath` is stamped by `mergeArtifact` (the
+// function's file); `returnAliasName` is EMPTY unless the function returns a ranged INT alias.
+export type FunctionRangeChecks
+	export var filePath as FilePath
+	export var castSites as RangeCheckCastSiteArray
+	export var returnAliasName as ByteArray
+	export var returnSites as RangeCheckReturnSiteArray
+
+	export static function create(filePath FilePath, castSites RangeCheckCastSiteArray, returnAliasName ByteArray, returnSites RangeCheckReturnSiteArray) returns FunctionRangeChecks
+		return Self{filePath: filePath, castSites: castSites, returnAliasName: returnAliasName, returnSites: returnSites}
+	end 'create'
+end 'FunctionRangeChecks'
+
+// Registry: function name -> its range-check sites. Populated by `mergeArtifact` from each
+// file's artifact; read by `InsertRangeChecks` (Std tier). Keyed by name — unique per program
+// (E3006) — so it survives the merge with no id remap, exactly like `funcSignatures`.
+export typealias RangeCheckPlanMap = Map with (ByteArray, FunctionRangeChecks)
+
 // ⭐ **A FUNCTION TYPEALIAS (P1.5-A1)** — `typealias UnaryOp = function(Integer) returns Integer`. It is
 // its OWN registry, NOT a `RangedTypeAlias`, because a function alias names a function TYPE, not a ranged
 // numeric one: a value of it is a code pointer (`TypeClass.function`), and `Parser.parseTypeReference`
@@ -707,6 +770,12 @@ export type Project
 	// Declared ranged typealiases, keyed by name (see RangedTypeAlias). The registry
 	// TypeResolution resolves every `MaxonType.named` against.
 	export var typeAliases as RangedTypeAliasMap
+	// Range-check sites, keyed by function name (see FunctionRangeChecks) — P1.9. The parser
+	// records every `as` cast into a ranged alias and every ranged `return`; `InsertRangeChecks`
+	// (Std tier) reads this to emit the guards / E3005. Kept SEPARATE from `funcReturnTypes`
+	// because that registry is COLLAPSED to primitives by `resolveTypes`, which discards the
+	// alias name a check needs; this one is written once at merge and never resolved away.
+	export var rangeChecks as RangeCheckPlanMap
 	// Declared FUNCTION typealiases, keyed by name (see FunctionTypeAlias) — P1.5-A1. Its OWN registry,
 	// not folded into `typeAliases`, because a function alias is not a ranged numeric one (see
 	// FunctionTypeAlias). The parser reads it to resolve a function-typed place and to type an indirect
@@ -770,6 +839,7 @@ export type Project
 			funcReturnTypes: FuncReturnTypeMap.create(),
 			funcSignatures: FuncSignatureMap.create(),
 			typeAliases: RangedTypeAliasMap.create(),
+			rangeChecks: RangeCheckPlanMap.create(),
 			functionTypeAliases: FunctionTypeAliasMap.create(),
 			structTypes: StructLayoutMap.create(),
 			enumTypes: EnumLayoutMap.create(),

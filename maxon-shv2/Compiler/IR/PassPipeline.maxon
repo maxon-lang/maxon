@@ -37,6 +37,13 @@ export union PassKind
 	semanticCheck
 	// Phase 3: Maxon → Std.
 	lowerMaxonToStd
+	// Phase 3.4: Std → Std ranged-typealias narrowing guards (P1.9). Turns the parser's recorded
+	// range-check sites into compile-time E3005s and runtime panic guards. It runs right after the
+	// lowering (value ids are freshest and unrenumbered) and BEFORE `foldConstOperands`, which then
+	// folds each guard's bound `const` into the `cmp`'s immediate. Appended after `lowerMaxonToStd` so
+	// the existing `pruneDeadBlockArgs to foldConstOperands` union range still names the three
+	// block-arg/const passes exactly.
+	insertRangeChecks
 	// Phase 3.5: Std → Std machine-form rewrites.
 	//
 	// `pruneDeadBlockArgs` deletes the loop-header phis nothing ever reads — a var the loop
@@ -86,6 +93,7 @@ export function classifyPass(pass PassKind) returns PassClassification
 		resolveTypes gives PassClassification.wholeModule
 		semanticCheck gives PassClassification.wholeModule
 		lowerMaxonToStd gives PassClassification.perFunction
+		insertRangeChecks gives PassClassification.perFunction
 		pruneDeadBlockArgs gives PassClassification.perFunction
 		elimTrivialBlockArgs gives PassClassification.perFunction
 		foldConstOperands gives PassClassification.perFunction
@@ -102,6 +110,7 @@ export function compilePhaseOfPass(pass PassKind) returns CompilePhase
 		resolveTypes gives CompilePhase.resolveTypes
 		semanticCheck gives CompilePhase.semanticCheck
 		lowerMaxonToStd gives CompilePhase.lowerMaxonToStd
+		insertRangeChecks gives CompilePhase.insertRangeChecks
 		pruneDeadBlockArgs gives CompilePhase.pruneDeadBlockArgs
 		elimTrivialBlockArgs gives CompilePhase.elimTrivialBlockArgs
 		foldConstOperands gives CompilePhase.foldConstOperands
@@ -114,6 +123,7 @@ export function passKindToString(pass PassKind) returns String
 		resolveTypes gives "resolveTypes"
 		semanticCheck gives "semanticCheck"
 		lowerMaxonToStd gives "lowerMaxonToStd"
+		insertRangeChecks gives "insertRangeChecks"
 		pruneDeadBlockArgs gives "pruneDeadBlockArgs"
 		elimTrivialBlockArgs gives "elimTrivialBlockArgs"
 		foldConstOperands gives "foldConstOperands"
@@ -137,6 +147,7 @@ export function buildDefaultPipeline() returns PassKindArray
 	passes.push(PassKind.resolveTypes)
 	passes.push(PassKind.semanticCheck)
 	passes.push(PassKind.lowerMaxonToStd)
+	passes.push(PassKind.insertRangeChecks)
 	passes.push(PassKind.pruneDeadBlockArgs)
 	passes.push(PassKind.elimTrivialBlockArgs)
 	passes.push(PassKind.foldConstOperands)
@@ -211,6 +222,7 @@ export type PassPipeline
 			resolveTypes then resolveTypes(self.project, module: self.maxonModule)
 			semanticCheck then semanticCheck(self.project, module: self.maxonModule)
 			lowerMaxonToStd then self.stdModule = lowerMaxonToStd(self.maxonModule, funcSignatures: self.project.funcSignatures, globalData: self.project.globalData)
+			insertRangeChecks then insertRangeChecks(self.project, module: self.stdModule)
 			pruneDeadBlockArgs then pruneDeadBlockArgs(self.stdModule)
 			elimTrivialBlockArgs then elimTrivialBlockArgs(self.stdModule)
 			foldConstOperands then foldConstOperands(self.stdModule)

@@ -647,6 +647,21 @@ export union StdOp
 	// lowering moves each arg into its ABI register, calls THROUGH the callee register (`callReg` /
 	// `arm64BranchLinkReg`), then moves the R8/x0 return value into `resultId`.
 	callIndirect(resultId ValueId, calleeReg ValueId, args ValueIdArray) = StdOpMeta{category: StdOpCategory.call, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+	// A ranged-typealias RANGE-CHECK PANIC (P1.9): abort with the interned message at `.rdata` label
+	// `label`, printing it plus a symbolized backtrace and exiting 1. A `system`-band op — the same
+	// shape and rationale as `osExit`/`osWriteStdout`: it says WHAT is wanted (panic with this message)
+	// and each backend says HOW (x64 loads the address into the ABI's first-arg register and calls the
+	// `mrt_panic` runtime chunk; arm64/wasm have no panic runtime yet and reject it). It is spelled as a
+	// dedicated op rather than an `StdOp.call` because `mrt_panic` is a hand-assembled runtime chunk with
+	// NO Std function, so the callee-argument-class lookup a normal `call` performs has nothing to resolve
+	// against — exactly why `osExit`/`osAllocPages` are their own ops too. `isCall: true` so
+	// `functionMakesCall` reserves the shadow space the call needs; it defines no value and never returns.
+	//
+	// ⚠ APPENDED PAST THE END OF THE UNION, past `callIndirect`, per the band-append invariant: every
+	// stale `… to callIndirect` full-tail range arm now FAILS TO COMPILE until it is consciously extended
+	// (the invariant working in the reviewer's favour). Its `category: system` places it logically,
+	// independent of this tail position.
+	osRangePanic(label ByteArray) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 end 'StdOp'
 
 export typealias StdOpArray = Array with StdOp
@@ -744,6 +759,9 @@ export function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 		funcAddr then break 'u'
 		// An indirect call reads the callee register AND its arguments; `resultId` is a def.
 		callIndirect(_, calleeReg, args) then insertUseCalleeAndArgs(referenced, calleeReg: calleeReg, args: args)
+		// A range panic reads nothing — its `label` is a NAME (an `.rdata` symbol), not a value, and it
+		// defines nothing.
+		osRangePanic then break 'u'
 	end 'u'
 end 'collectStdOpUses'
 
@@ -820,6 +838,9 @@ module function remapStdOpUses(op StdOp, subst ValueIdArray) returns StdOp
 		// The exact mirror of `collectStdOpUses`: `callIndirect` rewrites its callee register and its args
 		// (its result is a def).
 		callIndirect(resultId, calleeReg, args) gives StdOp.callIndirect(resultId, calleeReg: remappedValue(calleeReg, subst: subst), args: remappedArgs(args, subst: subst))
+		// `osRangePanic` reads no value (its `label` is a name), so it rewrites nothing and is handed back
+		// unchanged — the mirror of `funcAddr`/`rdataAddr`.
+		osRangePanic gives op
 	end 'r'
 end 'remapStdOpUses'
 

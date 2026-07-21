@@ -154,7 +154,7 @@ function stdOpOutgoingArgBytes(op StdOp) returns StackSize
 		// outgoing args. None reserves stack argument space at this rung.
 		// A `funcAddr` is a register-only `lea`; a `callIndirect` passes its args in registers exactly
 		// like `call`. Neither reserves outgoing stack-argument space at this rung.
-		tryCall to callIndirect gives 0
+		tryCall to osRangePanic gives 0
 	end 'o'
 end 'stdOpOutgoingArgBytes'
 
@@ -708,7 +708,7 @@ type StdToX64Lowering
 				branch to rdataAddr then break 'term'
 				// `funcAddr`/`callIndirect` are value-producing body ops, never a block terminator — a
 				// non-`condBranch` terminator fuses nothing, so like every other arm here it breaks (P1.5-A1).
-				tryCall to callIndirect then break 'term'
+				tryCall to osRangePanic then break 'term'
 			end 'term'
 		end 'eachBlock'
 	end 'computeFusedCmps'
@@ -759,7 +759,7 @@ type StdToX64Lowering
 				// is not the compare, so the scan stops and no fusion is recorded (declining is always safe).
 				// `funcAddr` sets no flags (a `lea`), so the loop guard skips it before it reaches here — it
 				// is named rather than swallowed. (P1.5-A1)
-				tryCall to callIndirect then break 'isTheCompare'
+				tryCall to osRangePanic then break 'isTheCompare'
 			end 'isTheCompare'
 			return
 		end 'scanBackward'
@@ -824,7 +824,7 @@ type StdToX64Lowering
 			branch to rdataAddr gives false
 			// A `funcAddr`/`callIndirect` is never a block terminator — only a `condBranch` gets a
 			// non-false answer here (P1.5-A1).
-			tryCall to callIndirect gives false
+			tryCall to osRangePanic gives false
 		end 'term'
 	end 'terminatorReadsFusedFlags'
 
@@ -859,6 +859,7 @@ type StdToX64Lowering
 			// P1.5-A1: a function's address (`lea dest, [rip+func]`), and a call THROUGH a function value.
 			funcAddr(resultId, funcName) then self.targetModule.appendOp(dstBlock, op: TargetOp.leaRegFunc(TargetVReg.virtual(resultId), funcName: funcName))
 			callIndirect(resultId, calleeReg, args) then self.lowerCallIndirect(resultId, calleeReg: calleeReg, args: args, dstBlock: dstBlock)
+			osRangePanic(label) then self.lowerRangePanic(label, dstBlock: dstBlock)
 		end 'lower'
 	end 'lowerBodyOp'
 
@@ -891,6 +892,7 @@ type StdToX64Lowering
 			osExit then panic("lowerStdToX64: an `osExit` op appeared as a block terminator (lowering bug — a process exit is a body op followed by a dead return)")
 			funcAddr then panic("lowerStdToX64: a `funcAddr` op appeared as a block terminator (lowering bug — a function address is a value-producing body op)")
 			callIndirect then panic("lowerStdToX64: a `callIndirect` op appeared as a block terminator (lowering bug — an indirect call is a value-producing body op)")
+			osRangePanic then panic("lowerStdToX64: an `osRangePanic` op appeared as a block terminator (lowering bug — a range panic is a body op followed by a dead return)")
 		end 'lower'
 	end 'lowerTerminatorOp'
 
@@ -1353,6 +1355,18 @@ type StdToX64Lowering
 		self.targetModule.appendOp(dstBlock, op: TargetOp.x64Syscall(LinuxSyscallExitGroup))
 	end 'lowerOsExitLinux'
 
+	// Lower `osRangePanic <label>` to the software-panic call (P1.9): `lea rcx, [rip + <message>]` then
+	// `call mrt_panic`. The message address goes in RCX (the Win64 first-argument register) exactly as
+	// `lowerOsExit` puts the exit code there; `mrt_panic` reads it, prints it plus a backtrace, and exits.
+	// A `callDirect` (not `iatCall`) because `mrt_panic` is one of the program's own `.text` runtime
+	// chunks, resolved by the intra-`.text` call fixup. `functionMakesCall` sees the `callDirect` and
+	// reserves the shadow space it needs. RCX is written and immediately consumed by the call, so no
+	// intervening op can clobber it — the same adjacency `lowerOsExit` relies on.
+	function lowerRangePanic(label ByteArray, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.leaRegRdata(x64PhysReg(X64Register.rcx), label: label))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.callDirect(PanicName))
+	end 'lowerRangePanic'
+
 	// Lower `osAllocPages` to the x64-windows page source: `VirtualAlloc(NULL, size,
 	// MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE)` through the IAT.
 	//
@@ -1787,7 +1801,7 @@ type StdToX64Lowering
 			branch to rdataAddr gives false
 			// A `funcAddr`/`callIndirect` is never a block terminator — only a `condBranch` gets a
 			// non-false answer here (P1.5-A1).
-			tryCall to callIndirect gives false
+			tryCall to osRangePanic gives false
 		end 'term'
 	end 'settleFloatEqualityBranch'
 
@@ -1921,7 +1935,7 @@ type StdToX64Lowering
 			branch to rdataAddr panic("condBranchFieldsOf: the terminator of block ref {blockRef} is not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			// A `funcAddr`/`callIndirect` is never a block terminator; like every non-`condBranch`
 			// arm here it cannot occur and panics (P1.5-A1).
-			tryCall to callIndirect panic("condBranchFieldsOf: the terminator of block ref {blockRef} is not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
+			tryCall to osRangePanic panic("condBranchFieldsOf: the terminator of block ref {blockRef} is not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 		end 'term'
 	end 'condBranchFieldsOf'
 

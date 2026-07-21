@@ -605,6 +605,77 @@ export function rangeIsUnsigned(low ParsedInt) returns bool
 	return low >= 0
 end 'rangeIsUnsigned'
 
+// --- Ranged-typealias narrowing checks (P1.9) ---
+//
+// A ranged alias's bounds are stored INCLUSIVE as i64 bit patterns on `RangedTypeAlias`
+// (`upto` normalized to `high - 1` at parse; an unsigned upper such as `u64.max` rides as
+// its signed pattern `-1`). The three predicates below decide, from those two i64s alone,
+// whether a NARROWING conversion (`as` cast / ranged `return`) needs a runtime guard and
+// which bounds it must test — mirroring the bootstrap's `EmitRuntimeRangeCheck`
+// (2-Parser.cs:18108-18127).
+//
+// ⚠ SIGNED, NOT UNSIGNED, and that is a shv2 constraint, not a design choice: the Std/Maxon
+// tiers carry ONLY signed integer compares (`StdCmpPred` has no `ugt`/`ult`) and there is no
+// `setcc`, so `InsertRangeChecks` emits a CASCADE of fused signed compare+branch — one block
+// per needed bound, each `cmp` fused with its `condBranch` — never the bootstrap's
+// `cmp`+`cmp`+`or` over materialized bools. Signed compares answer the SAME in/out verdict as
+// the bootstrap's on every representable range (a negative value fails the signed lower check
+// exactly where an unsigned value would fail the unsigned upper one), so only the emitted
+// instructions differ, never the behaviour.
+
+// The i64 pattern an unsigned `u64.max` upper bound rides as — named so the `-1`-means-
+// `u64.max` reinterpretation is not a bare literal (see RangedTypeAlias, and the sentinel case
+// in specs/ranged-typealias.md).
+let UnsignedFullUpperPattern = (0 - 1) as ParsedInt
+
+// True when the alias covers EVERY i64 bit pattern, so no value can be out of range and NO
+// guard — nor compile-time literal check — is needed. Two spans cover the whole 64-bit space:
+// the signed-full `int(i64.min to i64.max)` and the unsigned-full `int(0 to u64.max)` (whose
+// upper rides as the signed `-1`). A byte/u16/u32 sub-range is NOT full here: shv2 flows every
+// ranged value at the i64 base with no per-alias storage width, so only the two 64-bit spans
+// are unconditionally safe. `ExitCode`/`Byte`-style sub-ranges therefore still take a check for
+// a NON-literal value — every enabled case that casts into one uses a literal, so the
+// compile-time path elides it and no runtime code differs.
+export function rangeIsFullI64(low ParsedInt, high ParsedInt) returns bool
+	if low == i64.min and high == i64.max 'signedFull'
+		return true
+	end 'signedFull'
+	return low == 0 and high == UnsignedFullUpperPattern
+end 'rangeIsFullI64'
+
+// Does the LOWER bound need a runtime compare? Only when it is above the smallest i64 — a
+// `low == i64.min` can never be violated. (Bootstrap: `IntLower > long.MinValue`.)
+export function rangeNeedsLowerCheck(low ParsedInt) returns bool
+	return low > i64.min
+end 'rangeNeedsLowerCheck'
+
+// Does the UPPER bound need a runtime compare? Only for a NON-NEGATIVE bound below i64.max. A
+// negative stored upper is the wrapped `u64.max`-family (unbounded in signed space), and the
+// only such range that is not already elided by `rangeIsFullI64` cannot occur — this keeps the
+// signed upper compare from firing on a value the range actually admits. (Bootstrap:
+// `IntUpper >= 0 && IntUpper < long.MaxValue`.)
+export function rangeNeedsUpperCheck(high ParsedInt) returns bool
+	return high >= 0 and high < i64.max
+end 'rangeNeedsUpperCheck'
+
+// Is a literal `value` within `[low, high]` (inclusive)? The compile-time E3005 test. Signed
+// throughout, and correct because the ONE range where a negative literal could reinterpret to
+// an in-range unsigned value is the unsigned-full span, which `rangeIsFullI64` has already
+// elided before this is asked. Every other unsigned range has a modest positive upper, so a
+// negative literal fails the signed lower bound exactly as its huge unsigned image would fail
+// the upper — the same verdict the bootstrap's `(ulong)` compares give.
+export function literalInRange(value ParsedInt, low ParsedInt, high ParsedInt) returns bool
+	return value >= low and value <= high
+end 'literalInRange'
+
+// The `int(<lo> to <hi>)` spelling for an E3005 message (`Value N is outside the range of
+// 'Alias' (int(lo to hi))`). Bounds shown SIGNED — every enabled case is a `to` range over a
+// signed-displayable span; an exclusive `upto` alias is normalized to `high - 1` at parse and
+// no enabled case surfaces one here, so the `to` spelling is the only one reached.
+export function formatRangeDisplay(low ParsedInt, high ParsedInt) returns String
+	return "int({low} to {high})"
+end 'formatRangeDisplay'
+
 // **DOES THIS SHIFT FILL WITH THE SIGN, OR WITH ZEROS?** THE one place THAT is answered — the
 // question `evalShift` (the fold), `Parser.emitShift` (the opcode) and `Parser.emitGuardedShift`
 // (the runtime saturation) must never answer differently, because a fold and a codegen that

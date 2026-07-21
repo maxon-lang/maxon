@@ -394,6 +394,9 @@ type StdToArm64Lowering
 			// restricted to `x64-windows, wasm32-wasi` and arm64 function-value codegen is a follow-up rung.
 			funcAddr(resultId, funcName) then self.emit(dstRef, op: TargetOp.arm64LeaFuncAddr(TargetVReg.virtual(resultId), funcName: funcName))
 			callIndirect(resultId, calleeReg, args) then self.lowerCallIndirect(resultId, calleeReg: calleeReg, args: args, dstRef: dstRef)
+			// P1.9: arm64 has NO panic runtime yet (`Arm64Backend` grows one with a later rung), so the two
+			// range-check-panic spec cases are restricted to `x64-windows`. A range panic must not reach here.
+			osRangePanic then panic("lowerStdToArm64: no arm64 panic runtime yet — the range-check-panic spec cases are restricted to x64-windows (see Arm64Backend / X64Runtime.mrt_panic)")
 		end 'lower'
 	end 'lowerBodyOp'
 
@@ -422,6 +425,7 @@ type StdToArm64Lowering
 			osExit then panic("lowerStdToArm64: an `osExit` op appeared as a block terminator (lowering bug — a process exit is a body op)")
 			funcAddr then panic("lowerStdToArm64: a `funcAddr` op appeared as a block terminator (lowering bug — a function address is a value-producing body op)")
 			callIndirect then panic("lowerStdToArm64: a `callIndirect` op appeared as a block terminator (lowering bug — an indirect call is a value-producing body op)")
+			osRangePanic then panic("lowerStdToArm64: an `osRangePanic` op appeared as a block terminator (lowering bug — a range panic is a body op followed by a dead return)")
 		end 'lower'
 	end 'lowerTerminatorOp'
 

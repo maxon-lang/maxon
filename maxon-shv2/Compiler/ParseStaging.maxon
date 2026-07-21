@@ -50,6 +50,22 @@ end 'FuncSignatureEntry'
 
 export typealias FuncSignatureEntryArray = Array with FuncSignatureEntry
 
+// One function's range-check contribution (P1.9): its name paired with the sites the parser
+// recorded (see FunctionRangeChecks). Keyed by name, folded into `project.rangeChecks` by
+// `commitRangeChecks` — the same NEVER-touch-Project discipline the other `*Entry` families
+// follow. The alias/site NAMES are plain ByteArrays and the value ids are function-local, so —
+// like a `FunctionTypeAlias` — this rides the merge with NO interner remap.
+export type FunctionRangeCheckEntry
+	export var name as ByteArray
+	export var checks as FunctionRangeChecks
+
+	export static function create(name ByteArray, checks FunctionRangeChecks) returns FunctionRangeCheckEntry
+		return Self{name: name, checks: checks}
+	end 'create'
+end 'FunctionRangeCheckEntry'
+
+export typealias FunctionRangeCheckEntryArray = Array with FunctionRangeCheckEntry
+
 export type FileParseArtifact
 	// The file this artifact was parsed from (its identity + merge order anchor).
 	export var filePath as FilePath
@@ -70,6 +86,9 @@ export type FileParseArtifact
 	export var funcReturnTypes as FuncReturnTypeEntryArray
 	// This file's `funcSignatures` registry contributions, in declaration order.
 	export var funcSignatures as FuncSignatureEntryArray
+	// This file's range-check contributions (P1.9), one per function that has a cast into a
+	// ranged alias or a ranged `return`. Folded into `project.rangeChecks` by `commitRangeChecks`.
+	export var rangeChecks as FunctionRangeCheckEntryArray
 	// This file's ranged-typealias declarations, in declaration order. Unlike the two
 	// registries above these carry no source position: nothing reports a diagnostic
 	// against a typealias DECLARATION yet (a same-named alias in another file is legal
@@ -118,6 +137,7 @@ export type FileParseArtifact
 			valueOrigins: ValueOriginTable.create(),
 			funcReturnTypes: FuncReturnTypeEntryArray.create(),
 			funcSignatures: FuncSignatureEntryArray.create(),
+			rangeChecks: FunctionRangeCheckEntryArray.create(),
 			typeAliases: RangedTypeAliasArray.create(),
 			functionTypeAliases: FunctionTypeAliasArray.create(),
 			structTypes: StructLayoutArray.create(),
@@ -203,6 +223,14 @@ export type FileParseArtifact
 		self.funcSignatures.push(FuncSignatureEntry.create(name, signature: signature, nameLine: nameLine, nameColumn: nameColumn, sourceFilePath: sourceFilePath))
 	end 'recordFuncSignature'
 
+	// Record a function's range-check sites as this file's contribution to `project.rangeChecks`
+	// (P1.9). Called by the parser at function completion, and ONLY when the function actually has
+	// a cast into a ranged alias or a ranged `return` — a function with neither files nothing, so
+	// the registry stays proportional to the range checks a program contains, not its function count.
+	export function recordFunctionRangeChecks(name ByteArray, checks FunctionRangeChecks)
+		self.rangeChecks.push(FunctionRangeCheckEntry.create(name, checks: checks))
+	end 'recordFunctionRangeChecks'
+
 	// Record a ranged-typealias declaration as this file's contribution to the
 	// project-wide `typeAliases` registry — the same NEVER-touch-Project discipline
 	// `recordFuncReturnType` / `recordFuncSignature` follow.
@@ -265,6 +293,7 @@ export function mergeArtifact(project Project, target MaxonModule, artifact File
 	project.valueOrigins.appendFrom(artifact.valueOrigins, funcOffset: funcOffset, opOffset: opOffset)
 	commitFuncReturnTypes(project, artifact: artifact)
 	commitFuncSignatures(project, artifact: artifact)
+	commitRangeChecks(project, artifact: artifact)
 	commitTypeAliases(project, artifact: artifact)
 	commitFunctionTypeAliases(project, artifact: artifact)
 	commitStructTypes(project, artifact: artifact)
@@ -298,6 +327,15 @@ function commitEnumTypes(project Project, artifact FileParseArtifact)
 		project.enumTypes.upsert(layout.name, value: layout)
 	end 'each'
 end 'commitEnumTypes'
+
+// Commit the artifact's range-check contributions into `project.rangeChecks` (P1.9) — a plain
+// upsert keyed by function name, which is UNIQUE per program (the whole-program E3006 check runs
+// in `commitFuncSignatures`), so no collision handling is needed. Read by `InsertRangeChecks`.
+function commitRangeChecks(project Project, artifact FileParseArtifact)
+	for entry in artifact.rangeChecks 'each'
+		project.rangeChecks.upsert(entry.name, value: entry.checks)
+	end 'each'
+end 'commitRangeChecks'
 
 // Commit the artifact's ranged-typealias declarations into the project registry. A
 // plain upsert, and DELIBERATELY not a duplicate check: a non-exported typealias is
