@@ -933,7 +933,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/ranged-typealias/error.unsigned-max-upper-literal-out-of-range.test:5:12: Value 3 is outside the range of 'Big' (int(5 to -1))
+error E3005: specs/fragments/ranged-typealias/error.unsigned-max-upper-literal-out-of-range.test:5:12: Value 3 is outside the range of 'Big' (int(5 to 18446744073709551615))
 ```
 
 ### Error: top-level let cast out of range

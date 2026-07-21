@@ -1,0 +1,56 @@
+// Test: unsigned-max-upper-runtime-pass
+typealias Big = int(5 to u64.max)
+
+function main() returns ExitCode
+	let big = 1 shl 63
+	let r = big as Big
+	if r == 1 shl 63 'ok'
+		return 7
+	end 'ok'
+	return 3
+end 'main'
+---
+ExitCode: 7
+---
+// CompiledIR
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rax, 1
+    x64.mov rcx, 63
+    x64.mov rdx, rax
+    x64.shl rdx, cl
+    x64.xor ebx, ebx
+    x64.cmp rdx, rbx
+    x64.setge rsi
+    x64.movzx rsi, rsib
+    x64.mov rdi, 5
+    x64.cmp rdx, rdi
+    x64.setl r8
+    x64.movzx r8, r8b
+    x64.and rsi, r8
+    x64.test rsi, rsi
+    x64.je main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rax, 1
+    x64.mov rcx, 63
+    x64.mov rbx, rax
+    x64.shl rbx, cl
+    x64.cmp rdx, rbx
+    x64.jne main.ok_0.after
+  ok_0:
+    x64.mov rax, 7
+    x64.epilogue
+    x64.ret
+  ok_0.after:
+    x64.mov rax, 3
+    x64.epilogue
+    x64.ret
+  }
+}
+---

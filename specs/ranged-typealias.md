@@ -505,6 +505,32 @@ end 'main'
 0
 ```
 
+### Unsigned-max upper: runtime cast of a bit-63-set value
+
+An `int(N>0 to u64.max)` range is UNSIGNED — a value with bit 63 set is a huge
+unsigned that the range admits, not a negative below the low bound. The runtime
+check treats out-of-range as `value >= 0 AND value < N`, so a bit-63-set value
+(negative in signed terms) passes rather than tripping a naive signed lower
+check. This makes the runtime check agree with the compile-time LITERAL check,
+which already reads the bound unsigned.
+
+<!-- test: unsigned-max-upper-runtime-pass -->
+```maxon
+typealias Big = int(5 to u64.max)
+
+function main() returns ExitCode
+	let big = 1 shl 63
+	let r = big as Big
+	if r == 1 shl 63 'ok'
+		return 7
+	end 'ok'
+	return 3
+end 'main'
+```
+```exitcode
+7
+```
+
 ### Type-qualified bound: i8 range
 
 <!-- test: type-qualified-i8-range -->

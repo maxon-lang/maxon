@@ -18128,33 +18128,56 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
     MaxonValue? outOfRange = null;
 
-    // Emit lower bound check: value < lowerBound
-    if (needsLowerCheck) {
-      MaxonLiteralOp lowerLit = rangedType.IsFloatBased
-        ? new MaxonLiteralOp(rangedType.FloatLower)
-        : new MaxonLiteralOp(rangedType.IntLower);
-      _currentBlock!.AddOp(lowerLit);
-      var cmpLower = new MaxonBinOp(MaxonBinOperator.Lt, value, lowerLit.Result, cmpKind);
-      _currentBlock!.AddOp(cmpLower);
-      outOfRange = cmpLower.Result;
-    }
+    // `int(N>0 to u64.max)` is an UNSIGNED range whose upper rides as the signed -1, so
+    // needsUpperCheck is false and the ordinary path below would emit only the signed lower
+    // check `value < N` — which wrongly rejects a bit-63-set value that is a huge unsigned the
+    // range admits. Out-of-range for this shape is `value >= 0 AND value < N` (a non-negative
+    // value below the low bound; a negative value is in range). This makes the runtime check
+    // agree with the unsigned-correct compile-time LITERAL check above (`IntLower >= 0` branch).
+    // Mirrors the And(Ge, Lt) range-membership idiom used by pattern matching.
+    bool unsignedMaxUpper = !rangedType.IsFloatBased && rangedType.IntLower > 0 && rangedType.IntUpper == -1;
 
-    // Emit upper bound check: value > upperBound (or value >= for upto)
-    if (needsUpperCheck) {
-      var upperOp = rangedType.UpperInclusive ? MaxonBinOperator.Gt : MaxonBinOperator.Ge;
-      MaxonLiteralOp upperLit = rangedType.IsFloatBased
-        ? new MaxonLiteralOp(rangedType.FloatUpper)
-        : new MaxonLiteralOp(rangedType.IntUpper);
-      _currentBlock!.AddOp(upperLit);
-      var cmpUpper = new MaxonBinOp(upperOp, value, upperLit.Result, cmpKind);
-      _currentBlock!.AddOp(cmpUpper);
+    if (unsignedMaxUpper) {
+      var zeroLit = new MaxonLiteralOp(0L);
+      _currentBlock!.AddOp(zeroLit);
+      var geZero = new MaxonBinOp(MaxonBinOperator.Ge, value, zeroLit.Result, cmpKind);
+      _currentBlock!.AddOp(geZero);
+      var lowLit = new MaxonLiteralOp(rangedType.IntLower);
+      _currentBlock!.AddOp(lowLit);
+      var ltLow = new MaxonBinOp(MaxonBinOperator.Lt, value, lowLit.Result, cmpKind);
+      _currentBlock!.AddOp(ltLow);
+      var andOp = new MaxonBinOp(MaxonBinOperator.And, geZero.Result, ltLow.Result, MaxonValueKind.Bool);
+      _currentBlock!.AddOp(andOp);
+      outOfRange = andOp.Result;
+    } else {
+      // Emit lower bound check: value < lowerBound
+      if (needsLowerCheck) {
+        MaxonLiteralOp lowerLit = rangedType.IsFloatBased
+          ? new MaxonLiteralOp(rangedType.FloatLower)
+          : new MaxonLiteralOp(rangedType.IntLower);
+        _currentBlock!.AddOp(lowerLit);
+        var cmpLower = new MaxonBinOp(MaxonBinOperator.Lt, value, lowerLit.Result, cmpKind);
+        _currentBlock!.AddOp(cmpLower);
+        outOfRange = cmpLower.Result;
+      }
 
-      if (outOfRange != null) {
-        var orOp = new MaxonBinOp(MaxonBinOperator.Or, outOfRange, cmpUpper.Result, MaxonValueKind.Bool);
-        _currentBlock!.AddOp(orOp);
-        outOfRange = orOp.Result;
-      } else {
-        outOfRange = cmpUpper.Result;
+      // Emit upper bound check: value > upperBound (or value >= for upto)
+      if (needsUpperCheck) {
+        var upperOp = rangedType.UpperInclusive ? MaxonBinOperator.Gt : MaxonBinOperator.Ge;
+        MaxonLiteralOp upperLit = rangedType.IsFloatBased
+          ? new MaxonLiteralOp(rangedType.FloatUpper)
+          : new MaxonLiteralOp(rangedType.IntUpper);
+        _currentBlock!.AddOp(upperLit);
+        var cmpUpper = new MaxonBinOp(upperOp, value, upperLit.Result, cmpKind);
+        _currentBlock!.AddOp(cmpUpper);
+
+        if (outOfRange != null) {
+          var orOp = new MaxonBinOp(MaxonBinOperator.Or, outOfRange, cmpUpper.Result, MaxonValueKind.Bool);
+          _currentBlock!.AddOp(orOp);
+          outOfRange = orOp.Result;
+        } else {
+          outOfRange = cmpUpper.Result;
+        }
       }
     }
 

@@ -653,6 +653,13 @@ end 'rangeIsUnsigned'
 // in specs/ranged-typealias.md).
 let UnsignedFullUpperPattern = (0 - 1) as ParsedInt
 
+// The unsigned-decimal spelling of that same sentinel, for display. `ParsedInt` is a signed i64
+// with no unsigned-render helper, and `u64.max` is the only writable bound that stores negative
+// (every `uN.max` for N<64 is positive; a negative low is unwritable) — so this one named
+// constant is correct and sufficient. Matches the bootstrap's `FormatRange`, which renders the
+// bound via `(ulong)`.
+let UnsignedFullUpperDecimal = "18446744073709551615"
+
 // True when the alias covers EVERY i64 bit pattern, so no value can be out of range and NO
 // guard — nor compile-time literal check — is needed. Two spans cover the whole 64-bit space:
 // the signed-full `int(i64.min to i64.max)` and the unsigned-full `int(0 to u64.max)` (whose
@@ -724,12 +731,23 @@ export function literalOutOfRangeMessage(value ParsedInt, aliasName String, low 
 	return "Value {value} is outside the range of '{aliasName}' ({formatRangeDisplay(low, high: high)})"
 end 'literalOutOfRangeMessage'
 
+// A single range bound as source text: the `u64.max` sentinel (stored as the signed -1) renders
+// as its unsigned decimal, every other bound as its signed value. Applied to BOTH bounds
+// defensively, though only `high` reaches the sentinel in practice.
+function formatBound(bound ParsedInt) returns String
+	if bound == UnsignedFullUpperPattern 'unsigned'
+		return UnsignedFullUpperDecimal
+	end 'unsigned'
+	return "{bound}"
+end 'formatBound'
+
 // The `int(<lo> to <hi>)` spelling for an E3005 message (`Value N is outside the range of
-// 'Alias' (int(lo to hi))`). Bounds shown SIGNED — every enabled case is a `to` range over a
-// signed-displayable span; an exclusive `upto` alias is normalized to `high - 1` at parse and
-// no enabled case surfaces one here, so the `to` spelling is the only one reached.
+// 'Alias' (int(lo to hi))`). Each bound renders through `formatBound`, so a `u64.max` upper
+// shows as its unsigned decimal — matching the bootstrap's `FormatRange` — rather than the raw
+// signed -1. An exclusive `upto` alias is normalized to `high - 1` at parse and no enabled case
+// surfaces one here, so the `to` spelling is the only one reached.
 export function formatRangeDisplay(low ParsedInt, high ParsedInt) returns String
-	return "int({low} to {high})"
+	return "int({formatBound(low)} to {formatBound(high)})"
 end 'formatRangeDisplay'
 
 // **DOES THIS SHIFT FILL WITH THE SIGN, OR WITH ZEROS?** THE one place THAT is answered — the
