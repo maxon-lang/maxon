@@ -20,19 +20,39 @@
 //
 // ⚠ SIGNED COMPARES, in a CASCADE. shv2's Std tier has no unsigned integer compare (`StdCmpPred` is
 // signed only) and no `setcc`, so a two-bound check is a CASCADE of fused `cmp`+`condBranch` — one block
-// per bound, each branching to the shared panic on violation — not the bootstrap's `cmp`+`cmp`+`or` over
-// materialized bools. Signed compares give the SAME in/out verdict the bootstrap's do (see
-// `TypeRules.literalInRange` / the range predicates), so only the emitted instructions differ.
+// per bound — not the bootstrap's `cmp`+`cmp`+`or` over materialized bools. A check usually branches to
+// the shared panic on violation; the one exception is the unsigned-max-upper shape's sign check, whose
+// TRUE edge is IN RANGE (see `RangeCheckEdge`). Signed compares give the same in/out verdict as the
+// bootstrap's for every ordinary range; for the `int(N>0 to u64.max)` shape they give the CORRECT
+// unsigned verdict, which the bootstrap's RUNTIME check gets wrong (it panics on a bit-63-set value) —
+// see `TypeRules.rangeIsUnsignedMaxUpper` / `boundChecks` for why that divergence is deliberate.
 
-// One bound of a range check: the predicate that means "out of range past this bound", and the bound
-// itself. `lt`/`lo` for the lower bound (panic when `value < lo`), `gt`/`hi` for the upper.
+// Where a cascade check's TRUE edge (the predicate SATISFIED) goes. Almost every check means
+// "out of range past this bound", so its true edge is the shared `panic`. The one exception is
+// the unsigned-max-upper shape's FIRST check (`value < 0`), whose satisfied predicate proves the
+// value is a huge unsigned that the range ADMITS — its true edge is `inRange`, jumping past the
+// remaining checks to the ok block.
+enum RangeCheckEdge
+	panic
+	inRange
+end 'RangeCheckEdge'
+
+// One bound of a range check: the predicate that means "the check FIRED past this bound", the bound
+// itself, and where a fired check leads. `lt`/`lo` for the lower bound (panic when `value < lo`),
+// `gt`/`hi` for the upper — both leading to `panic`. `create` builds the common panic-edge check;
+// `createInRange` the one check whose satisfied predicate means IN range (see `RangeCheckEdge`).
 type RangeBoundCheck
 	export var pred as StdCmpPred
 	export var bound as ParsedInt
+	export var onTrue as RangeCheckEdge
 
 	static function create(pred StdCmpPred, bound ParsedInt) returns RangeBoundCheck
-		return Self{pred: pred, bound: bound}
+		return Self{pred: pred, bound: bound, onTrue: RangeCheckEdge.panic}
 	end 'create'
+
+	static function createInRange(pred StdCmpPred, bound ParsedInt) returns RangeBoundCheck
+		return Self{pred: pred, bound: bound, onTrue: RangeCheckEdge.inRange}
+	end 'createInRange'
 end 'RangeBoundCheck'
 
 typealias RangeBoundCheckArray = Array with RangeBoundCheck
@@ -155,7 +175,7 @@ type RangeCheckEmitter
 		if constMap.contains(value) 'literal'
 			let v = constMap.constantOf(value)
 			if not literalInRange(v, low: alias.low, high: alias.high) 'outOfRange'
-				reportPositioned(self.project, code: ErrorCode.typeMismatch, message: "Value {v} is outside the range of '{String.from(aliasName)}' ({formatRangeDisplay(alias.low, high: alias.high)})", line: line, column: column, filePath: filePath)
+				reportPositioned(self.project, code: ErrorCode.typeMismatch, message: literalOutOfRangeMessage(v, aliasName: String.from(aliasName), low: alias.low, high: alias.high), line: line, column: column, filePath: filePath)
 			end 'outOfRange'
 			return false
 		end 'literal'
@@ -238,8 +258,9 @@ type RangeCheckEmitter
 	end 'emitDeadReturn'
 
 	// Emit the compare cascade, `head` first: each check is `const bound; cmp value <pred> bound;
-	// condBranch (out-of-range) -> panic, (in-range) -> next`. The last check's in-range edge lands on
-	// `ok`; every earlier one lands on a fresh intermediate block. The `const` is left as a register
+	// condBranch (predicate TRUE) -> trueTarget, (FALSE) -> next`. The TRUE target is `panicId` for an
+	// out-of-range check and `okId` for an in-range one (see `RangeCheckEdge`); the FALSE edge falls
+	// through to the next check, or to `okId` for the last one. The `const` is left as a register
 	// operand — `foldConstOperands`, which runs after this pass, folds it into the `cmp`'s immediate.
 	function emitCascade(head IrBlock, value ValueId, checks RangeBoundCheckArray, panicId BlockId, okId BlockId)
 		var current = head
@@ -251,11 +272,12 @@ type RangeCheckEmitter
 			let condId = self.mintId()
 			self.module.appendOp(current, op: StdOp.cmp(condId, lhs: value, rhs: boundId, pred: check.pred, operandType: StdType.i64))
 
+			let trueTarget = okId if check.onTrue == RangeCheckEdge.inRange else panicId
 			if i == lastIndex 'lastCheck'
-				self.module.setTerminator(current, op: StdOp.condBranch(condId, thenBlockId: panicId, elseBlockId: okId))
+				self.module.setTerminator(current, op: StdOp.condBranch(condId, thenBlockId: trueTarget, elseBlockId: okId))
 			end 'lastCheck' else 'moreChecks'
 				let next = self.module.addBlock(self.func, label: b"__rc_chk")
-				self.module.setTerminator(current, op: StdOp.condBranch(condId, thenBlockId: panicId, elseBlockId: next.id))
+				self.module.setTerminator(current, op: StdOp.condBranch(condId, thenBlockId: trueTarget, elseBlockId: next.id))
 				current = next
 			end 'moreChecks'
 		end 'eachCheck'
@@ -339,12 +361,31 @@ union RangeAliasLookup
 	some(alias RangedTypeAlias)
 end 'RangeAliasLookup'
 
-// The bound checks a `[low, high]` range needs, in cascade order (lower then upper). Empty when the
-// range is unbounded on both sides in signed space — which only the full-range case reaches before this
-// (elided earlier), or a signed range with a negative upper (matched to the bootstrap's both-elided
-// path). See TypeRules' `rangeNeedsLowerCheck` / `rangeNeedsUpperCheck`.
+// The i64 the sign check compares against: a value `< 0` (signed) has bit 63 set, which for the
+// unsigned-max upper shape proves it is a huge unsigned the range ADMITS. Named so the sign
+// boundary is not a bare `0` sitting beside the range's own bounds.
+let SignBoundary = 0 as ParsedInt
+
+// The bound checks a `[low, high]` range needs, in cascade order. Empty when the range is unbounded
+// on both sides in signed space — which only the full-range case reaches before this (elided
+// earlier), or a signed range with a negative upper (matched to the bootstrap's both-elided path).
+// See TypeRules' `rangeNeedsLowerCheck` / `rangeNeedsUpperCheck`.
 function boundChecks(low ParsedInt, high ParsedInt) returns RangeBoundCheckArray
 	var checks = RangeBoundCheckArray.create()
+
+	// ⭐ THE UNSIGNED-MAX UPPER SHAPE — `int(N to u64.max)` over a non-negative low bound. Signed
+	// compares cannot express its upper (it rides as `-1`), so out-of-range is `value >= 0 AND
+	// value < low`: a negative (bit-63-set) value is a huge unsigned IN range, a non-negative value
+	// below `low` is out. The cascade is `value < 0 → in range` then `value < low → panic`, which the
+	// backend fuses to `cmp value,0; jl ok; cmp value,low; jl panic; jmp ok`. The full-unsigned
+	// `int(0 to u64.max)` (low == 0) never reaches here — `rangeIsFullI64` elides it in
+	// `needsRuntimeGuard` — so the only shape this arm serves is a POSITIVE low bound.
+	if rangeIsUnsignedMaxUpper(low, high: high) 'unsignedMaxUpper'
+		checks.push(RangeBoundCheck.createInRange(StdCmpPred.lt, bound: SignBoundary))
+		checks.push(RangeBoundCheck.create(StdCmpPred.lt, bound: low))
+		return checks
+	end 'unsignedMaxUpper'
+
 	if rangeNeedsLowerCheck(low) 'lower'
 		checks.push(RangeBoundCheck.create(StdCmpPred.lt, bound: low))
 	end 'lower'

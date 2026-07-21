@@ -867,3 +867,111 @@ end 'main'
 ```exitcode
 5
 ```
+
+### Unsigned-max upper: runtime cast of a bit-63-set value
+
+An `int(N>0 to u64.max)` range is UNSIGNED — a value with bit 63 set is a huge
+unsigned that the range admits, not a negative below the low bound. The runtime
+cascade tests `value < 0 → in range` before `value < N → panic`, so a bit-63-set
+value passes rather than tripping the naive signed lower check. (The bootstrap's
+own LITERAL check agrees the value is in range; only its RUNTIME check keeps the
+signed lower bound and panics — a bootstrap inconsistency this does not copy.)
+
+<!-- test: unsigned-max-upper-runtime-pass -->
+<!-- targets: x64-windows -->
+```maxon
+typealias Big = int(5 to u64.max)
+
+function main() returns ExitCode
+	let big = 1 shl 63
+	let r = big as Big
+	if r == 1 shl 63 'ok'
+		return 7
+	end 'ok'
+	return 3
+end 'main'
+```
+```exitcode
+7
+```
+
+### Unsigned-max upper: negative literal is in range
+
+A negative literal into `int(5 to u64.max)` wraps to a huge unsigned inside the
+range, so `-1 as Big` is `u64.max` — in range, no compile error.
+
+<!-- test: unsigned-max-upper-literal-in-range -->
+<!-- targets: x64-windows -->
+```maxon
+typealias Big = int(5 to u64.max)
+
+function main() returns ExitCode
+	let x = -1 as Big
+	if x == u64.max 'ok'
+		return 7
+	end 'ok'
+	return 3
+end 'main'
+```
+```exitcode
+7
+```
+
+### Error: unsigned-max upper literal below the low bound
+
+A small non-negative literal below the low bound is still out of range for
+`int(5 to u64.max)` — the unsigned upper does not admit `3`.
+
+<!-- test: error.unsigned-max-upper-literal-out-of-range -->
+<!-- targets: x64-windows -->
+```maxon
+typealias Big = int(5 to u64.max)
+
+function main() returns ExitCode
+	let x = 3 as Big
+	return x as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/ranged-typealias/error.unsigned-max-upper-literal-out-of-range.test:5:12: Value 3 is outside the range of 'Big' (int(5 to -1))
+```
+
+### Error: top-level let cast out of range
+
+A top-level `let` is a compile-time constant, so an out-of-range cast in its
+initializer is caught with the same E3005 a body cast gets — even though a
+top-level `let` is not a function and records no runtime-guard site.
+
+<!-- test: error.top-level-cast-out-of-range -->
+<!-- targets: x64-windows -->
+```maxon
+typealias SmallByte = int(0 to 10)
+
+let BAD = 300 as SmallByte
+
+function main() returns ExitCode
+	return BAD as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/ranged-typealias/error.top-level-cast-out-of-range.test:4:15: Value 300 is outside the range of 'SmallByte' (int(0 to 10))
+```
+
+### Top-level let cast in range
+
+An in-range top-level `let` cast compiles and its value is usable.
+
+<!-- test: top-level-cast-in-range -->
+<!-- targets: x64-windows -->
+```maxon
+typealias SmallByte = int(0 to 10)
+
+let GOOD = 7 as SmallByte
+
+function main() returns ExitCode
+	return GOOD as ExitCode
+end 'main'
+```
+```exitcode
+7
+```

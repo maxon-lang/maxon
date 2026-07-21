@@ -344,6 +344,15 @@ export union ParseError implements Error
 	// `UnresolvedConstExpr` union carries `add`/`sub`/`mul` and no `div` — Project.maxon:3401-3423),
 	// so the question never reaches it.
 	constantDivisionByZero(op String, line LineNumber, column ColumnNumber)
+	// A top-level constant cast whose LITERAL value is outside the ranged alias it is cast into
+	// (`let BAD = 300 as Byte`). Renders as E3005 with the SAME words and format `InsertRangeChecks`
+	// gives a body cast — `literalOutOfRangeMessage` — positioned at the `as` token. It is a distinct
+	// arm rather than a runtime guard because a top-level `let` is CONST-ONLY (folded before any code
+	// exists), so its only failure is the compile-time one; the runtime cascade a body cast can also
+	// emit has no place to live here. The body-cast check happens in the Std pass off the recorded
+	// site; a top-level `let` is not a function and records no site, so the const evaluator makes the
+	// same call itself. `low`/`high` ride along so the message renders through the one `formatRangeDisplay`.
+	constantCastOutOfRange(value ParsedInt, aliasName String, low ParsedInt, high ParsedInt, line LineNumber, column ColumnNumber)
 	// --- The struct arms (P1.0r) ---
 	//
 	// A struct literal (`Point{…}`) written outside the type's OWN methods. Renders as E3076,
@@ -12591,18 +12600,59 @@ export type Parser
 		return value
 	end 'evalConstPostfix'
 
-	// Consume one `as <Type>` cast and return the value unchanged (see `evalConstPostfix`). The target is a
-	// named alias or a primitive keyword — a single token at this rung (a ranged `int(low to high)` cast is
-	// a follow-up).
+	// Consume one `as <Type>` cast and return the value (unchanged on the bytes; see `evalConstPostfix`).
+	// The target is a named alias or a primitive keyword — a single token at this rung (a ranged
+	// `int(low to high)` cast is a follow-up). When the target is a ranged INT alias and the value is an
+	// integer LITERAL, the range is checked HERE — a top-level `let` is not a function, so it records no
+	// site for `InsertRangeChecks` to guard, and the compile-time E3005 that a body cast gets from that
+	// pass must be raised by the evaluator instead.
 	function applyConstCast(value ConstValue) returns ConstValue throws ConstEvalError
+		let asTok = self.current()
 		try self.consumeConstToken(TokenKind.as)
 		if self.at(TokenKind.identifier) or self.at(TokenKind.int) or self.at(TokenKind.bool) or self.at(TokenKind.float) 'targetType'
+			let targetTok = self.current()
 			self.advance()
+			try self.checkConstCastRange(value, targetTok: targetTok, asTok: asTok)
 			return value
 		end 'targetType'
 		let tok = self.current()
 		throw ConstEvalError.defective(ParseError.nonConstantInitializer("cast target", leftover: String.from(tok.value), line: tok.line, column: tok.column))
 	end 'applyConstCast'
+
+	// Compile-time range check for a constant `as` cast — the top-level `let` half of the narrowing
+	// E3005, mirroring `InsertRangeChecks.needsRuntimeGuard`'s literal path. It fires only for an
+	// INTEGER literal cast into a ranged INT alias: a bare `int`/`bool`/`float` primitive target has no
+	// range; a non-integer const carries no integer to test (a float const is an IEEE bit pattern, not
+	// a number); a name that is not a ranged int alias (a struct, a float alias, an undeclared name) is
+	// not a checkable range. The out-of-range verdict is `literalInRange`'s — the same decider the body
+	// path uses, so the const and runtime casts cannot disagree — and the message is the shared one,
+	// anchored at the `as` token as the body cast is.
+	function checkConstCastRange(value ConstValue, targetTok Token, asTok Token) throws ConstEvalError
+		if targetTok.kind != TokenKind.identifier or not tagIsInteger(value.tag) 'notCheckable'
+			return
+		end 'notCheckable'
+
+		match self.signatures.aliasOf(targetTok.value) 'a'
+			undeclared then break 'a'
+			declared(alias) then try self.reportConstCastIfOutOfRange(value, alias: alias, asTok: asTok)
+		end 'a'
+	end 'checkConstCastRange'
+
+	// Raise the E3005 when `value` is outside `alias`. A FLOAT alias is not range-checked here (its
+	// bounds are f64 bit patterns and an int literal into it is a promotion, not a narrowing); that
+	// carve-out is `rangedIntAliasName`'s — the ONE place a float alias is excluded — reused here rather
+	// than re-tested, so an empty name means "not a ranged int alias" and the check is skipped.
+	function reportConstCastIfOutOfRange(value ConstValue, alias RangedTypeAlias, asTok Token) throws ConstEvalError
+		if self.rangedIntAliasName(alias).isEmpty() 'notRangedInt'
+			return
+		end 'notRangedInt'
+
+		if literalInRange(value.payload, low: alias.low, high: alias.high) 'inRange'
+			return
+		end 'inRange'
+
+		throw ConstEvalError.defective(ParseError.constantCastOutOfRange(value.payload, aliasName: String.from(alias.name), low: alias.low, high: alias.high, line: asTok.line, column: asTok.column))
+	end 'reportConstCastIfOutOfRange'
 
 	// Consume `kind` in the constant evaluator, wrapping a mismatch as a `ConstEvalError`.
 	function consumeConstToken(kind TokenKind) throws ConstEvalError
