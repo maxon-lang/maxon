@@ -1,0 +1,89 @@
+// Test: async-subprocess.sequence
+function childA() returns int
+	return runProcess("cmd /c exit 4")
+end 'childA'
+
+function childB() returns int
+	return runProcess("cmd /c exit 5")
+end 'childB'
+
+function main() returns ExitCode
+	let pa = async childA()
+	let a = await pa
+	let pb = async childB()
+	let b = await pb
+	return (a * 10 + b) as ExitCode
+end 'main'
+---
+ExitCode: 45
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+  __gt_current_gt@24 = i64 0
+  __gt_run_queue_head@32 = i64 0
+  __gt_run_queue_tail@40 = i64 0
+  __gt_init_done@48 = i64 0
+  __gt_stack_free_head@56 = i64 0
+  __gt_timer_count@64 = i64 0
+  __gt_timer_heap_base@72 = i64 0
+  __gt_clock_ticks@80 = i64 0
+  __gt_clock_freq@88 = i64 0
+  __gt_proc_count@96 = i64 0
+  __gt_proc_handles_base@104 = i64 0
+  __gt_proc_gts_base@112 = i64 0
+}
+
+func @childA {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.leaRegRdata rcx, [rip + __str_rec_1]
+    x64.callDirect __gt_process_run
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @childB {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.leaRegRdata rcx, [rip + __str_rec_3]
+    x64.callDirect __gt_process_run
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegImm32 rcx, 48
+    x64.callDirect __slab_alloc
+    x64.leaRegFunc rcx, [rip + childA]
+    x64.movRegReg rdx, r8
+    x64.callDirect __gt_spawn
+    x64.movRegReg rcx, r8
+    x64.callDirect __gt_await
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 48
+    x64.callDirect __slab_alloc
+    x64.leaRegFunc rcx, [rip + childB]
+    x64.movRegReg rdx, r8
+    x64.callDirect __gt_spawn
+    x64.movRegReg rcx, r8
+    x64.callDirect __gt_await
+    x64.imulRegRegImm32 rax, rbx, 10
+    x64.leaRegRegReg r8, rax, r8
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
