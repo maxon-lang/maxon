@@ -181,9 +181,9 @@ function opIsArm64Band(op TargetOp) returns bool
 	return match op 'p'
 		prologue to leaRegRdata gives false
 		arm64Ret to arm64Syscall gives true
-		// P1.5-A1: the x64 `leaRegFunc`/`callReg` are appended past the arm64 band (band-append), but they
-		// are x64 ops, so `false` — a module is NOT arm64 for holding them.
-		leaRegFunc to callReg gives false
+		// P1.5-A1: the x64 `leaRegFunc`/`callReg`, and the x64-linux `x64Syscall`, are appended past the
+		// arm64 band (band-append), but they are x64 ops, so `false` — a module is NOT arm64 for holding them.
+		leaRegFunc to x64Syscall gives false
 	end 'p'
 end 'opIsArm64Band'
 
@@ -305,6 +305,7 @@ function formatTargetOp(op TargetOp, blocks IrBlockArray, cpu CpuArch) returns S
 		arm64Syscall(number) gives "syscall {number}"
 		leaRegFunc(dest, funcName) gives "leaRegFunc {vregName(dest)}, [rip + {String.from(funcName)}]"
 		callReg(reg) gives "callReg {vregName(reg)}"
+		x64Syscall(number) gives "x64Syscall {number}"
 	end 'op'
 end 'formatTargetOp'
 

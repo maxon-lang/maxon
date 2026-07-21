@@ -150,11 +150,11 @@ function arm64OpPhysicalRegs(op TargetOp, buf OperandList) returns RegMask
 	return match op 'p'
 		xchgRegReg(a, b) gives arm64VRegBit(a) or arm64VRegBit(b)
 		prologue to cmpRegImm32 gives arm64MaskFromOperands(op, buf: buf)
-		// The tail range extends past `arm64Syscall` to the P1.5-A1 x64-only `leaRegFunc`/`callReg`:
-		// like every other op here they are read through the shared operand model (their operands are
-		// declared in `targetOpOperands`), so no per-op register list is respelled. They never appear on
-		// a colored arm64 program, but the arm keeps the match exhaustive over `TargetOp`.
-		callDirect to callReg gives arm64MaskFromOperands(op, buf: buf)
+		// The tail range extends past `arm64Syscall` to the x64-only ops (P1.5-A1 `leaRegFunc`/`callReg`,
+		// x64-linux `x64Syscall`): like every other op here they are read through the shared operand model
+		// (their operands are declared in `targetOpOperands`), so no per-op register list is respelled.
+		// They never appear on a colored arm64 program, but the arm keeps the match exhaustive over `TargetOp`.
+		callDirect to x64Syscall gives arm64MaskFromOperands(op, buf: buf)
 	end 'p'
 end 'arm64OpPhysicalRegs'
 
@@ -207,8 +207,9 @@ function blockEndsWithArm64Return(module TargetModule, block IrBlock) returns bo
 	return match op 'check'
 		prologue to leaRegRdata gives false
 		arm64Ret gives true
-		// Extended past `arm64Syscall` to the P1.5-A1 x64-only `leaRegFunc`/`callReg`: neither is
-		// `arm64Ret`, so the block does not end in an arm64 return (they never appear on arm64 at all).
-		arm64Branch to callReg gives false
+		// Extended past `arm64Syscall` to the x64-only ops (P1.5-A1 `leaRegFunc`/`callReg`, x64-linux
+		// `x64Syscall`): none is `arm64Ret`, so the block does not end in an arm64 return (and none ever
+		// appears on arm64 at all).
+		arm64Branch to x64Syscall gives false
 	end 'check'
 end 'blockEndsWithArm64Return'

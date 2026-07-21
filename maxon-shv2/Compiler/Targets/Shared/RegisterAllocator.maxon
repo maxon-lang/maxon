@@ -393,6 +393,12 @@ function assertX64CallClobbers()
 	// register (rbx here is just the callee-saved WITNESS the assert checks is NOT clobbered) is an
 	// explicit USE, but the clobber assertion is about `implicitDefs`, which must equal the pool.
 	assertOneCallClobber(TargetOp.callReg(TargetVReg.virtual(0)), name: "callReg", pool: pool, calleeWitness: X64Register.rbx.rawValue, calleeName: "rbx")
+	// The Linux `syscall` (x64-linux `osExit`/`osWriteStdout`/`osAllocPages` and the entry stub's
+	// `exit_group`) crosses the same barrier: the kernel returns in rax and the `syscall` instruction
+	// clobbers rcx/r11, all inside the caller-saved pool, exactly as `iatCall` does — its
+	// `0xFFFF0FC7` literal must equal the pool, or a value live across it is mis-constrained. The
+	// arm64 twin holds `arm64Syscall` here for the identical reason (`assertArm64CallClobbers`).
+	assertOneCallClobber(TargetOp.x64Syscall(0), name: "x64Syscall", pool: pool, calleeWitness: X64Register.rbx.rawValue, calleeName: "rbx")
 end 'assertX64CallClobbers'
 
 // The arm64 call ops against the arm64 caller-saved pool, with x19 (callee-saved) the drift witness.
@@ -734,8 +740,9 @@ function collectOpHints(op TargetOp, hints ColorHints)
 		// The P1.5-A1 function-value band carries no COPY hint: `leaRegFunc` is a `lea` (like
 		// `leaRegRdata`) and `callReg` is a call (like `callDirect`) — neither is a move, so no two of
 		// its operands want the same register. Its callee-address use rides `collectReuseHints`' scan
-		// of the operand model, which finds no reuse def and adds nothing.
-		leaRegFunc to callReg then break 'hint'
+		// of the operand model, which finds no reuse def and adds nothing. The Linux `x64Syscall` names
+		// no register operand at all, so it carries no hint either.
+		leaRegFunc to x64Syscall then break 'hint'
 	end 'hint'
 end 'collectOpHints'
 
@@ -1457,6 +1464,9 @@ export function colorTargetOp(op TargetOp, alloc Allocation) returns TargetOp
 		// `callDirect`/`iatCall`, which carry no explicit register operand at all.
 		leaRegFunc(dest, funcName) then return TargetOp.leaRegFunc(colorVRegWith(dest, alloc: alloc), funcName: funcName)
 		callReg(reg) then return TargetOp.callReg(colorVRegWith(reg, alloc: alloc))
+		// The Linux `syscall` names no register operand (its args are pre-moved into rdi..), so it passes
+		// through unchanged, exactly like `arm64Syscall` and x64's `iatCall`.
+		x64Syscall then return op
 	end 'rewrite'
 end 'colorTargetOp'
 

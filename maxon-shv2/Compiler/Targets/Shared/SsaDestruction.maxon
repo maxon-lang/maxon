@@ -337,9 +337,9 @@ function isCaptureMove(op TargetOp) returns bool
 		prologue to movRegImm32 gives false
 		movReg32Reg32 to leaRegRdata gives false
 		arm64Ret to arm64Syscall gives false
-		// `leaRegFunc`/`callReg` (P1.5-A1) are not a `movRegReg`, so neither is a call-result capture
-		// move — the same `false` every non-`movRegReg` op gets here.
-		leaRegFunc to callReg gives false
+		// `leaRegFunc`/`callReg` (P1.5-A1) and the Linux `x64Syscall` are not a `movRegReg`, so none is a
+		// call-result capture move — the same `false` every non-`movRegReg` op gets here.
+		leaRegFunc to x64Syscall gives false
 	end 'm'
 end 'isCaptureMove'
 
@@ -442,9 +442,9 @@ function isPhysicalSelfMove(op TargetOp) returns bool
 		// arm64 reg-reg moves are the SHARED `movRegReg` (handled above), so the arm64 band — arm64's
 		// own ALU / control / call ops — is never a register-to-register move, hence never a self-move.
 		arm64Ret to arm64Syscall then return false
-		// `leaRegFunc`/`callReg` (P1.5-A1) are not register-to-register moves (a `lea` and a call), so
-		// neither can be a `mov r, r` self-move.
-		leaRegFunc to callReg then return false
+		// `leaRegFunc`/`callReg` (P1.5-A1) and the Linux `x64Syscall` are not register-to-register moves
+		// (a `lea`, a call, a syscall), so none can be a `mov r, r` self-move.
+		leaRegFunc to x64Syscall then return false
 	end 'sm'
 end 'isPhysicalSelfMove'
 
@@ -684,9 +684,9 @@ function retargetControlOp(module TargetModule, predRef BlockRef, oldTarget Bloc
 			arm64Ret then break 'term'
 			arm64Branch(target) then retargeted = retargetArm64Branch(module, opIdx: ti, target: target, oldTarget: oldTarget, newTarget: newTarget) or retargeted
 			arm64CondBranch to arm64Syscall then panic("retargetControlOp: an arm64 non-terminator op reached as a terminator")
-			// `leaRegFunc`/`callReg` (P1.5-A1) are value-producing x64 body ops, never a terminator — the
-			// same non-terminator panic the x64 ALU/data bands above raise.
-			leaRegFunc to callReg then panic("retargetControlOp: non-terminator op as terminator")
+			// `leaRegFunc`/`callReg` (P1.5-A1) and the Linux `x64Syscall` are value-producing x64 body
+			// ops, never a terminator — the same non-terminator panic the x64 ALU/data bands above raise.
+			leaRegFunc to x64Syscall then panic("retargetControlOp: non-terminator op as terminator")
 		end 'term'
 	end 'hasTerm'
 

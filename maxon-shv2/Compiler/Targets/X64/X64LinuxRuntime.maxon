@@ -1,0 +1,71 @@
+// X64LinuxRuntime — the x64 OS boundary: HOW this backend reaches the kernel on each OS it serves, and
+// the Linux syscall facts that answer it. The x64 twin of `Arm64Runtime`'s OS-boundary section.
+//
+// ⭐ ONE FACT SPLITS THE TWO x64 OSes, AND IT IS THE SYSCALL. **Windows forbids raw syscalls** (the ABI
+// is the undocumented, version-shifting `ntdll` boundary): every OS primitive must go through an
+// imported function, which forces an Import Address Table the PE loader binds. **Linux permits them**,
+// so the same primitives become a bare `syscall` (0F 05) and NONE of that apparatus exists — no IAT, no
+// import directory, a static `ET_EXEC` at a fixed base. That single difference is why the ELF writer is
+// a third of the PE writer, and it is asked here, once, by `x64OsCallKind` — the exact mirror of
+// `Arm64Runtime.arm64OsCallKind` (whose split is macOS-libSystem vs Linux-syscall).
+//
+// THE ENTRY STUB IS NOT HERE. Unlike arm64 — whose macOS stub terminates through a dyld-bound GOT slot
+// that has no `TargetOp` channel, forcing a hand-assembled chunk in `Arm64Runtime` — the x64-linux exit
+// route IS a `TargetOp` (`x64Syscall`), so the Linux entry stub `mrt_start` is built from `TargetOp`s in
+// `BackendDispatch.prependLinuxEntryStub`, exactly as the Windows stub is. This file holds only the
+// syscall-ABI facts that stub and the three OS-primitive lowerings consult.
+
+// How the x64 backend reaches the OS. ONE door, asked by every OS-primitive lowering
+// (`lowerOsExit`/`lowerOsWriteStdout`/`lowerOsAllocPages` in `StdToX64Conversion`), so those three sites
+// cannot drift on which OSes this backend supports or on how each one gets there. The macho/wasi arms
+// panic because x64 serves neither: macOS dispatches to the arm64 backend, and wasm has no Target tier.
+export enum X64OsCallKind
+	// An IAT-indirect import call (`call [rip + disp32]` through an Import Address Table slot the PE
+	// writer binds — `iatCall`). Windows's only route.
+	importCall
+	// A raw Linux supervisor call (`mov eax, number; syscall`, the number named per-primitive). Linux's.
+	syscall
+end 'X64OsCallKind'
+
+// Exported: the isel (`StdToX64Conversion`) asks it for every OS-primitive lowering — the one place
+// either the Windows or the Linux route is chosen.
+export function x64OsCallKind(os Os) returns X64OsCallKind
+	return match os 'os'
+		windows gives X64OsCallKind.importCall
+		linux gives X64OsCallKind.syscall
+		macos panic("x64OsCallKind: there is no x64-macOS backend — `buildBackend` dispatches macOS to the arm64 backend, whose OS boundary is `Arm64Runtime.arm64OsCallKind`")
+		wasi panic("x64OsCallKind: wasm32-wasi is not an x64 target — the wasm backend reaches the OS through WASI imports, not through this file")
+	end 'os'
+end 'x64OsCallKind'
+
+// --- Linux syscall numbers (x86-64) ---
+//
+// The x86-64 table, NOT AArch64's: `write` is 1 here and 64 there, `mmap` 9 and 222. Named because a
+// bare 1 at a call site is unreadable and the number IS the primitive's identity.
+//
+// ⚠ `exit_group` (231), NOT `exit` (60) — a DELIBERATE DIVERGENCE from v1, which emits 60, and the same
+// divergence the arm64 side makes (94 not 93). `exit` terminates the calling THREAD; `exit_group`
+// terminates the whole thread group, which is what `main` returning means and what a C `_exit` invokes.
+// The two are indistinguishable in a single-threaded process, so this costs nothing today and stays
+// correct the day shv2 grows OS threads (P1.5) — at which point 60 would leave the others running.
+export let LinuxSyscallWrite = 1
+export let LinuxSyscallMmap = 9
+export let LinuxSyscallExitGroup = 231
+
+// --- Linux mmap parameters (shared POSIX ABI) ---
+//
+// The `mmap(NULL, size, PROT_READ|PROT_WRITE, MAP_ANONYMOUS|MAP_PRIVATE, -1, 0)` `lowerOsAllocPages`
+// emits on Linux — the raw-syscall twin of the Windows `VirtualAlloc(NULL, size, MEM_COMMIT|MEM_RESERVE,
+// PAGE_READWRITE)`. MAP_ANONYMOUS returns ZEROED pages, which is the slab's zeroing contract (exactly as
+// Windows's MEM_COMMIT is). These are the same POSIX values `StdToArm64Conversion` names for arm64-linux
+// (the flag word differs on Darwin, which x64 never targets); duplicated rather than shared because
+// arm64's are module-private to that file — see the report's follow-up note.
+export let MmapKernelChoosesBase = 0x0  // addr = NULL: the kernel picks the base.
+export let MmapProtReadWrite = 0x3  // PROT_READ (0x1) | PROT_WRITE (0x2)
+export let MmapAnonPrivateLinux = 0x22  // MAP_ANONYMOUS (0x20) | MAP_PRIVATE (0x2)
+export let MmapAnonFd = 0xFFFFFFFFFFFFFFFF  // fd = -1 (two's-complement): MAP_ANONYMOUS names no file.
+export let MmapNoOffset = 0x0  // offset = 0 (ignored for an anonymous mapping).
+
+// `write(1, buf, len)` — the stdout primitive `lowerOsWriteStdout` emits on Linux. FAR simpler than
+// Windows's GetStdHandle+WriteFile: no handle call, no bytes-written out-param, no stack args.
+export let WriteStdoutFd = 0x1  // fd = 1 (STDOUT_FILENO).

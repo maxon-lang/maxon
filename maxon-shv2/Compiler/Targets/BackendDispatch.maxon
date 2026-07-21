@@ -108,7 +108,7 @@ function buildX64Backend(stdModule StdModule, target Target, globalData GlobalDa
 	// The two come back TOGETHER because a `TargetModule` alone is not a complete answer: it carries no
 	// types, so nothing downstream could say what file any of its values belongs in. Returning the pair
 	// is what makes it impossible to hand the allocator one without the other.
-	var (targetModule, valueClasses) = lowerStdToX64(stdModule, globalData: globalData)
+	var (targetModule, valueClasses) = lowerStdToX64(stdModule, target: target, globalData: globalData)
 	recordPhase(project, phase: CompilePhase.isel, probe: iselProbe)
 
 	let regAllocProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.regalloc)
@@ -132,7 +132,17 @@ function buildX64Backend(stdModule StdModule, target Target, globalData GlobalDa
 	// in `augmentWithRuntime` — there is no Std or Target spelling of "read CONTEXT.Rip" or
 	// "walk a saved-RBP chain" at this milestone (see X64Runtime's header). It appends AFTER
 	// user code, which keeps `mrt_start` at `.text` offset 0 where the backtrace needs it.
-	appendX64RuntimeChunks(chunks)
+	//
+	// ⚠ WINDOWS ONLY. The panic runtime installs a Windows Vectored Exception Handler and terminates
+	// through ExitProcess — both x64-windows facts. Linux's scalar core has no fault handler (the
+	// divide-by-zero and force-segfault tests are windows-gated) and reaches the OS through raw syscalls,
+	// so it appends no runtime floor at all — exactly as the arm64-linux backend appends only its entry
+	// stub. macos/wasi never reach here for an x64 module: `augmentWithRuntime` above already rejected them.
+	match target.os 'panicRuntime'
+		windows then appendX64RuntimeChunks(chunks)
+		linux then break 'panicRuntime'
+		macos to wasi then panic("buildX64Backend: augmentWithRuntime should have rejected {targetToString(target)} before the encode phase")
+	end 'panicRuntime'
 	recordPhase(project, phase: CompilePhase.encode, probe: encodeProbe)
 
 	let linkProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.link)
@@ -153,8 +163,9 @@ end 'buildX64Backend'
 export function augmentWithRuntime(module TargetModule, target Target)
 	match target.os 'os'
 		windows then prependEntryStub(module, checkLeaks: moduleHasFunction(module, name: MmLeakCheckName))
-		linux to macos then panic("augmentWithRuntime: the arm64 backend installs its entry stub as a hand-assembled chunk (Arm64Backend.buildArm64Backend), not a module function — this module-level pass is windows-only, and there is no x64 backend for either OS (got {targetToString(target)})")
-		wasi then panic("augmentWithRuntime: maxon-shv2 has no wasi entry stub yet (got {targetToString(target)})")
+		linux then prependLinuxEntryStub(module, checkLeaks: moduleHasFunction(module, name: MmLeakCheckName))
+		macos then panic("augmentWithRuntime: there is no x64-macOS backend — `buildBackend` dispatches macOS to the arm64 backend, whose entry stub is a hand-assembled chunk (Arm64Backend.buildArm64Backend), not a module function")
+		wasi then panic("augmentWithRuntime: wasm32-wasi does not use the x64 backend — the wasm backend synthesizes its own $run entry (buildWasmCoreModule), so this module-level pass is never reached for it")
 	end 'os'
 end 'augmentWithRuntime'
 
@@ -215,10 +226,7 @@ function prependEntryStub(module TargetModule, checkLeaks bool)
 	//
 	// The argument goes in RCX and the result comes back in R8: `__mm_leak_check` is an ordinary
 	// Maxon-ABI function (arg 0 = rcx, primary return = r8), not a Win64 import.
-	if checkLeaks 'leakGate'
-		module.appendOp(block, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: x64PhysReg(X64Register.r8)))
-		module.appendOp(block, op: TargetOp.callDirect(MmLeakCheckName))
-	end 'leakGate'
+	appendLeakGate(module, block: block, checkLeaks: checkLeaks)
 
 	module.appendOp(block, op: TargetOp.movReg32Reg32(x64PhysReg(X64Register.rcx), srcReg: x64PhysReg(X64Register.r8)))
 	module.appendOp(block, op: TargetOp.iatCall(iatSlotIndex(IatSlot.ExitProcess)))
@@ -228,6 +236,58 @@ function prependEntryStub(module TargetModule, checkLeaks bool)
 
 	prependFunction(module, func: func)
 end 'prependEntryStub'
+
+// ⭐ THE LEAK GATE (P1.0r) — the one seam on the exit path, shared by both entry stubs. `main` has
+// returned its ExitCode in R8; `__mm_leak_check` takes that code (arg 0 in RCX, custom Maxon ABI) and
+// gives back either the same code (nothing outstanding) or 101 (something was allocated and never
+// freed), in R8. The value flow r8 -> rcx -> (adjusted) r8 is identical on Windows and Linux — only the
+// surrounding process-exit primitive differs — so the gate is written once here. It is skipped entirely
+// for a program with no allocator (`checkLeaks` false), which cannot leak; every program that touches
+// the heap therefore checks itself, and a missing decref is a FAILING TEST rather than an invisible one.
+function appendLeakGate(module TargetModule, block IrBlock, checkLeaks bool)
+	if checkLeaks 'leakGate'
+		module.appendOp(block, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: x64PhysReg(X64Register.r8)))
+		module.appendOp(block, op: TargetOp.callDirect(MmLeakCheckName))
+	end 'leakGate'
+end 'appendLeakGate'
+
+// Build the x64-LINUX entry stub `mrt_start` as a module function and lay it out FIRST — its `.text`
+// offset is the ELF entry point (`writeElf`'s `entryPoint = textVAddr + mainCallFixupOffset`, and concat
+// asserts the stub leads `.text`). The Linux twin of `prependEntryStub`, and CARRYING NO FRAME, for
+// reasons that all point the same way:
+//
+//   call main            main returns its ExitCode in R8 (custom ABI)
+//   [leak gate]          mov rcx, r8 ; call __mm_leak_check  ->  adjusted code / 101 in R8
+//   mov edi, r8d         hand R8's low 32 bits to exit_group's rdi (Linux syscall arg 0)
+//   x64Syscall(exit_group)   mov eax, 231 ; syscall  — terminates the process
+//   ret                  dead (exit_group never returns); kept as the block's terminator for
+//                        well-formedness, exactly as the Windows stub's trailing `ret` is.
+//
+// ⚠ NO `push rbp`, AND THAT IS DELIBERATE — IT IS THE ALIGNMENT. The Linux kernel enters `_start` with
+// rsp ≡ 0 (mod 16) (argc at `[rsp]`, NO return address), where the Windows loader enters ≡ 8 (as if via
+// `call`). So `call main` from the kernel's alignment lands `main` at rsp ≡ 8 (mod 16) — exactly what a
+// shv2 function expects — with no push to invert the parity. The Windows stub's `push rbp` (which opens
+// the backtrace chain) would flip it the WRONG way here and misalign `main`. And the stub needs no
+// frame: there is no panic-runtime backtrace to chain this rung, no Win64 shadow space to reserve (raw
+// syscalls carry no imports, and shv2 functions spill to their OWN frames), and exit_group never
+// returns. The kernel also zeroes rbp at entry (SysV ABI), so any callee's saved-rbp chain terminates
+// cleanly without this stub setting one up.
+function prependLinuxEntryStub(module TargetModule, checkLeaks bool)
+	var func = IrFunction.createFromStd(EntryPointName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var block = module.addBlock(func, label: b"entry")
+
+	module.appendOp(block, op: TargetOp.callDirect(UserEntryName))
+	appendLeakGate(module, block: block, checkLeaks: checkLeaks)
+
+	// ExitCode (R8, custom ABI) -> EDI (Linux syscall arg 0). A 32-bit move, exactly as the Windows stub
+	// hands R8 to ECX for ExitProcess: an exit status is the low 8 bits, and the zero-extending `mov r32`
+	// clears the high half.
+	module.appendOp(block, op: TargetOp.movReg32Reg32(x64PhysReg(X64Register.rdi), srcReg: x64PhysReg(X64Register.r8)))
+	module.appendOp(block, op: TargetOp.x64Syscall(LinuxSyscallExitGroup))
+	module.setTerminator(block, op: TargetOp.ret)
+
+	prependFunction(module, func: func)
+end 'prependLinuxEntryStub'
 
 // Move `func` to the front of the module's function list so it lays out first in
 // `.text`. Block refs are flat `module.blocks` indices, so reordering the

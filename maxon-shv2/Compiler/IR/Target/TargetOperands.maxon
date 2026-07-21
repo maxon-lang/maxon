@@ -379,6 +379,9 @@ export function targetOpOperands(op TargetOp, buf OperandList)
 		// it by the liveness census, not an explicit operand — the same shape as `arm64BranchLinkReg`.
 		leaRegFunc(dest, _) then pushDef(buf, vreg: dest)
 		callReg(reg) then pushUse(buf, vreg: reg)
+		// The Linux `syscall` names no explicit register operand — its arguments are pre-moved into
+		// rdi.. and the caller-saved clobbers ride `TargetOpMeta.implicitDefs`, exactly as `iatCall` does.
+		x64Syscall then break 'operands'
 	end 'operands'
 end 'targetOpOperands'
 

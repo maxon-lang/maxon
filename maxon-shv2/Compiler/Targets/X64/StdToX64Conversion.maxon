@@ -437,8 +437,8 @@ let FloatOrderedLabel = b"fordered"
 // carries no types, so a `TargetModule` alone does not say which file any of its values lives in,
 // and the allocator cannot recover it (see `ValueClassColumn`). Handing them back together is what
 // makes it impossible to have one without the other.
-export function lowerStdToX64(stdModule StdModule, globalData GlobalDataTable) returns (TargetModule, ValueClassColumns)
-	var lowering = StdToX64Lowering.create(stdModule, globalData: globalData)
+export function lowerStdToX64(stdModule StdModule, target Target, globalData GlobalDataTable) returns (TargetModule, ValueClassColumns)
+	var lowering = StdToX64Lowering.create(stdModule, target: target, globalData: globalData)
 	lowering.prepareSkeleton()
 	// BY INDEX, never by iteration: `lowerFunction` MUTATES the function it lowers — the
 	// float-equality split appends to its `blockRefs` and bumps its `nextBlockId` — so no
@@ -460,6 +460,10 @@ end 'lowerStdToX64'
 type StdToX64Lowering
 	// Exported like `targetModule`: `lowerStdToX64` hands both to the shared `buildValueClassColumns`.
 	export var stdModule as StdModule
+	// The compilation target — read for its OS by the three OS-primitive lowerings
+	// (`lowerOsExit`/`lowerOsWriteStdout`/`lowerOsAllocPages`), which route through `x64OsCallKind` to a
+	// Windows IAT call or a raw Linux syscall. The arm64 isel carries the same field for the same reason.
+	var target as Target
 	// The backend's data table — where a float constant's `.rdata` island is registered. Shared
 	// with concat, which resolves each `movsdRegRip`'s label against it once sections are laid out.
 	var globalData as GlobalDataTable
@@ -518,8 +522,8 @@ type StdToX64Lowering
 	// own carried f64 type — so, unlike `calleeResultClasses`, it is not threaded into `buildValueClassColumns`.
 	var calleeParamClasses as CalleeParamClassMap
 
-	static function create(stdModule StdModule, globalData GlobalDataTable) returns StdToX64Lowering
-		return Self{stdModule: stdModule, globalData: globalData, targetModule: TargetModule.create(), cmpPreds: CmpPredMap.create(), fusedFloatCmps: StdValueUseSet.create(), orderedBlockIds: OrderedBlockIdMap.create(), valuesReadFromRegisters: StdValueUseSet.create(), calleeResultClasses: buildCalleeResultClasses(stdModule), calleeParamClasses: buildCalleeParamClasses(stdModule)}
+	static function create(stdModule StdModule, target Target, globalData GlobalDataTable) returns StdToX64Lowering
+		return Self{stdModule: stdModule, target: target, globalData: globalData, targetModule: TargetModule.create(), cmpPreds: CmpPredMap.create(), fusedFloatCmps: StdValueUseSet.create(), orderedBlockIds: OrderedBlockIdMap.create(), valuesReadFromRegisters: StdValueUseSet.create(), calleeResultClasses: buildCalleeResultClasses(stdModule), calleeParamClasses: buildCalleeParamClasses(stdModule)}
 	end 'create'
 
 	// The value-class column producer — the pass that answers "what register file does this op's
@@ -1324,13 +1328,30 @@ type StdToX64Lowering
 		self.emitRet(dstBlock, asTerminator: asTerminator)
 	end 'lowerErrorReturn'
 
-	// Lower `osExit(code)` to `ExitProcess(code)` through the IAT — the Win64 exit primitive a `panic(…)`
-	// ends on. The code goes in ECX (the Win64 first-argument register); `iatCall` clobbers the caller-saved
-	// set, but `code` is dead after (the process is gone), so nothing is live across it.
+	// Lower `osExit(code)` to the platform's process-exit primitive — `ExitProcess(code)` through the IAT
+	// on Windows (the primitive a `panic(…)` ends on), `exit_group(code)` via a raw `syscall` on Linux
+	// (`x64OsCallKind` — see X64LinuxRuntime). `code` is dead after (the process is gone), so nothing is
+	// live across the call. The two ABIs put the first argument in DIFFERENT registers — Win64 in ECX,
+	// the Linux syscall in EDI — which is why the argument move, not just the terminal call, is inside the
+	// OS branch (unlike arm64, where AAPCS64 and the syscall ABI share x0).
 	function lowerOsExit(codeId ValueId, dstBlock IrBlock)
+		match x64OsCallKind(self.target.os) 'route'
+			importCall then self.lowerOsExitWin64(codeId, dstBlock: dstBlock)
+			syscall then self.lowerOsExitLinux(codeId, dstBlock: dstBlock)
+		end 'route'
+	end 'lowerOsExit'
+
+	// Win64: the code in ECX (the first-argument register), then `ExitProcess` through the IAT.
+	function lowerOsExitWin64(codeId ValueId, dstBlock IrBlock)
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movReg32Reg32(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(codeId)))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.ExitProcess)))
-	end 'lowerOsExit'
+	end 'lowerOsExitWin64'
+
+	// Linux: the code in EDI (syscall arg 0), then `exit_group` via a raw syscall.
+	function lowerOsExitLinux(codeId ValueId, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movReg32Reg32(x64PhysReg(X64Register.rdi), srcReg: TargetVReg.virtual(codeId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.x64Syscall(LinuxSyscallExitGroup))
+	end 'lowerOsExitLinux'
 
 	// Lower `osAllocPages` to the x64-windows page source: `VirtualAlloc(NULL, size,
 	// MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE)` through the IAT.
@@ -1345,16 +1366,51 @@ type StdToX64Lowering
 	//
 	// The Std tier never learns any of this: it asked for PAGES. `VirtualAlloc` is named only as
 	// `IatSlot.VirtualAlloc`, whose spelling and import live in `Targets/Windows/PeWriter.maxon`.
+	//
+	// ⭐ ON LINUX THE PAGE SOURCE IS `mmap(NULL, size, PROT_READ|PROT_WRITE, MAP_ANONYMOUS|MAP_PRIVATE,
+	// -1, 0)` via a raw syscall (`x64OsCallKind` — see X64LinuxRuntime), and the argument PLACEMENT
+	// differs from Win64's, not just the terminal call: the Linux syscall ABI reads its six arguments
+	// from rdi/rsi/rdx/**r10**/r8/r9 (the 4th in r10, NOT rcx — the `syscall` instruction destroys rcx),
+	// where Win64 reads rcx/rdx/r8/r9. Both return the base in RAX. `MAP_ANONYMOUS` returns ZEROED pages,
+	// satisfying the slab's zeroing contract exactly as Windows's `MEM_COMMIT` does. The immediate loads
+	// go through `constMaterializationOp` (not a bare `movRegImm32`) so the -1 `fd` — outside the u32 the
+	// 32-bit form zero-extends — takes the 64-bit `mov`. The single live operand `size` moves forward
+	// soundly for the same reason the arm64 twin's does: each physical arg-register def liveness forbids
+	// to a value live across it, so `size` can never be coloured to an argument register clobbered before
+	// its own move.
 	function lowerOsAllocPages(resultId ValueId, sizeId ValueId, dstBlock IrBlock)
+		match x64OsCallKind(self.target.os) 'route'
+			importCall then self.lowerOsAllocPagesWin64(sizeId, dstBlock: dstBlock)
+			syscall then self.lowerOsAllocPagesLinux(sizeId, dstBlock: dstBlock)
+		end 'route'
+		// RAX, not R8 — Win64's VirtualAlloc and the Linux mmap syscall both return in RAX, where Maxon's
+		// own ABI returns in R8. This capture is the whole reason `osAllocPages` is its own op.
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: x64PhysReg(X64Register.rax)))
+	end 'lowerOsAllocPages'
+
+	// Win64: `VirtualAlloc(NULL, size, MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE)`, args rcx/rdx/r8/r9.
+	function lowerOsAllocPagesWin64(sizeId ValueId, dstBlock IrBlock)
 		// lpAddress = NULL: the OS picks the base. A zeroed rcx is the request, not a missing argument.
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rcx), value: VirtualAllocLetOsChooseBase))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdx), srcReg: TargetVReg.virtual(sizeId)))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r8), value: VirtualAllocCommitAndReserve))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r9), value: VirtualAllocPageReadWrite))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.VirtualAlloc)))
-		// RAX, not R8 — see above. This single line is the whole reason the op exists.
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: x64PhysReg(X64Register.rax)))
-	end 'lowerOsAllocPages'
+	end 'lowerOsAllocPagesWin64'
+
+	// Linux: `mmap(NULL, size, PROT_READ|PROT_WRITE, MAP_ANONYMOUS|MAP_PRIVATE, -1, 0)`, args in the
+	// syscall ABI registers rdi/rsi/rdx/r10/r8/r9 (the 4th in r10, NOT rcx — the `syscall` instruction
+	// destroys rcx). The immediates go through `constMaterializationOp` so the -1 `fd`, outside the u32
+	// the 32-bit form zero-extends, takes the 64-bit `mov`.
+	function lowerOsAllocPagesLinux(sizeId ValueId, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: constMaterializationOp(x64PhysReg(X64Register.rdi), value: MmapKernelChoosesBase))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rsi), srcReg: TargetVReg.virtual(sizeId)))
+		self.targetModule.appendOp(dstBlock, op: constMaterializationOp(x64PhysReg(X64Register.rdx), value: MmapProtReadWrite))
+		self.targetModule.appendOp(dstBlock, op: constMaterializationOp(x64PhysReg(X64Register.r10), value: MmapAnonPrivateLinux))
+		self.targetModule.appendOp(dstBlock, op: constMaterializationOp(x64PhysReg(X64Register.r8), value: MmapAnonFd))
+		self.targetModule.appendOp(dstBlock, op: constMaterializationOp(x64PhysReg(X64Register.r9), value: MmapNoOffset))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.x64Syscall(LinuxSyscallMmap))
+	end 'lowerOsAllocPagesLinux'
 
 	// Lower `osWriteStdout(buf, len)` to `GetStdHandle(STD_OUTPUT_HANDLE)` + `WriteFile(handle, buf,
 	// len, &written, NULL)`, both through the IAT (P1.2 wave A — `print`).
@@ -1370,7 +1426,21 @@ type StdToX64Lowering
 	// (`lpNumberOfBytesWritten`) must be a valid pointer (WriteFile writes the count there), so r9 points
 	// at a scratch slot at `[rsp + writeFileArgDisp(WriteFileBytesWrittenSlot)]`. Both live in
 	// `__print_string`'s `outgoingArgSize` region.
+	// ⭐ ON LINUX THE PRIMITIVE IS A SINGLE `write(1, buf, len)` syscall — no handle call, no bytes-written
+	// out-param, no stack argument, so none of the WriteFile apparatus above (`writeFileArgDisp`, the
+	// outgoing-arg slots, the RAX NULL scratch). The three arguments move into rdi/rsi/rdx (the Linux
+	// syscall's first three), where Win64 uses rcx/rdx/r8; `buf`/`len` move forward soundly because each
+	// physical arg-register def liveness forbids to a value live across it. The result is ignored.
 	function lowerOsWriteStdout(bufId ValueId, lenId ValueId, dstBlock IrBlock)
+		match x64OsCallKind(self.target.os) 'route'
+			importCall then self.lowerOsWriteStdoutWin64(bufId, lenId: lenId, dstBlock: dstBlock)
+			syscall then self.lowerOsWriteStdoutLinux(bufId, lenId: lenId, dstBlock: dstBlock)
+		end 'route'
+	end 'lowerOsWriteStdout'
+
+	// Win64: `GetStdHandle(STD_OUTPUT_HANDLE)` then `WriteFile(handle, buf, len, &written, NULL)`, both
+	// through the IAT, with the 4th/5th arguments on the reserved outgoing-arg stack slots.
+	function lowerOsWriteStdoutWin64(bufId ValueId, lenId ValueId, dstBlock IrBlock)
 		// GetStdHandle(STD_OUTPUT_HANDLE) -> RAX (the handle).
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rcx), value: StdOutputHandle))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.GetStdHandle)))
@@ -1384,7 +1454,15 @@ type StdToX64Lowering
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rax), value: NullPointer))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(x64PhysReg(X64Register.rsp), disp: writeFileArgDisp(WriteFileOverlappedSlot), src: x64PhysReg(X64Register.rax), width: X64AccessWidth.word64))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.WriteFile)))
-	end 'lowerOsWriteStdout'
+	end 'lowerOsWriteStdoutWin64'
+
+	// Linux: a single `write(1, buf, len)` syscall, args rdi/rsi/rdx — no handle, no out-param, no stack.
+	function lowerOsWriteStdoutLinux(bufId ValueId, lenId ValueId, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: constMaterializationOp(x64PhysReg(X64Register.rdi), value: WriteStdoutFd))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rsi), srcReg: TargetVReg.virtual(bufId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdx), srcReg: TargetVReg.virtual(lenId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.x64Syscall(LinuxSyscallWrite))
+	end 'lowerOsWriteStdoutLinux'
 
 	// Lower a Std `cmpImm` (constant right operand) to `cmp reg, imm32` — the same two-part
 	// protocol `lowerCmp` uses, so the fold that moved the right operand into an immediate

@@ -939,11 +939,12 @@ function emitArm64TargetOp(op TargetOp, code ByteArray, callFixups CallFixupArra
 		// same `arm64EmitSyscall` the hand-assembled entry stub uses for `exit_group`, so a syscall
 		// inside a register-allocated function and one in the stub encode identically.
 		arm64Syscall(number) then arm64EmitSyscall(code, number: number)
-		// --- x64-only non-capturing-function-value band (P1.5-A1) ---
+		// --- x64-only tail bands (P1.5-A1 function values, x64-linux syscall) ---
 		// `leaRegFunc`/`callReg` are the x64 isel's function-value ops (`lea dest, [rip+func]` and
-		// `call reg`); reaching the arm64 encoder is the same target-dispatch bug the x64-only bands
-		// above panic on. arm64's own function-value ops are `arm64LeaFuncAddr`/`arm64BranchLinkReg`.
-		leaRegFunc to callReg then panic("emitArm64TargetOp: an x64 function-value op (`leaRegFunc`/`callReg`) reached the arm64 encoder — the x64 encoder owns the x64 band (buildBackend dispatches on target.cpu)")
+		// `call reg`), and `x64Syscall` is the x64-linux raw syscall; reaching the arm64 encoder is the
+		// same target-dispatch bug the x64-only bands above panic on. arm64's own function-value ops are
+		// `arm64LeaFuncAddr`/`arm64BranchLinkReg`, and its syscall is `arm64Syscall`.
+		leaRegFunc to x64Syscall then panic("emitArm64TargetOp: an x64-only op (`leaRegFunc`/`callReg`/`x64Syscall`) reached the arm64 encoder — the x64 encoder owns the x64 band (buildBackend dispatches on target.cpu)")
 	end 'emit'
 end 'emitArm64TargetOp'
 

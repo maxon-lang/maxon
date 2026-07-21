@@ -133,6 +133,10 @@ let OpcodeJmpRel32 = 0xE9  // jmp rel32 (unconditional near jump)
 let OpcodePushBase = 0x50  // push r64 (50+r) — 64-bit operand size by default in long mode
 let OpcodePopBase = 0x58  // pop r64  (58+r) — the mirror of push
 
+// The second byte of `syscall` (0F 05) — a two-byte opcode (the `0F` escape then this), with no
+// ModR/M, no REX and no operands. The number goes in eax (loaded by the shared `encodeMovRegImm32`).
+let OpcodeSyscallSecondByte = 0x05
+
 // --- SSE opcodes (all TWO-byte: the 0F escape, then this byte, under a mandatory prefix) ---
 //
 // The prefix is not optional decoration — see `SseMandatoryPrefix`. Each comment states the
@@ -1097,6 +1101,21 @@ export function encodeIatCall(code ByteArray, iatRelocs RelocationArray, slotInd
 	writeDword(code, value: 0)
 end 'encodeIatCall'
 
+// A raw Linux x86-64 supervisor call: `mov eax, number` then `syscall` (0F 05). The x86-64 Linux ABI
+// puts the number in eax/rax and arguments in rdi/rsi/rdx/r10/r8/r9 (which the isel pre-moved, exactly
+// as it pre-moves a call's arguments), and returns the result in rax. Exported so the Linux entry stub
+// (`BackendDispatch.prependLinuxEntryStub`) and the OS-primitive lowerings emit their syscalls through
+// the one primitive — the twin of `arm64EmitSyscall` (`movz x8`/`svc`).
+//
+// The number rides the shared `encodeMovRegImm32`, whose `writeDword` carries the whole 32-bit value,
+// so every in-use Linux syscall number (all far below u32.max) reaches eax intact; the zero-extending
+// `mov r32` clears the high half exactly as the ABI wants the number to appear in rax.
+export function encodeX64Syscall(code ByteArray, number MachineWord)
+	encodeMovRegImm32(code, dest: X64Register.rax, value: number)
+	code.push(TwoByteOpcodeEscape)
+	code.push(OpcodeSyscallSecondByte)
+end 'encodeX64Syscall'
+
 // Resolve a colored operand to its physical register. A virtual reg here is an
 // allocator bug (register allocation must run before emission).
 //
@@ -1254,6 +1273,9 @@ function emitTargetOp(op TargetOp, code ByteArray, callFixups CallFixupArray, ia
 		// in its RIP-relative form.
 		leaRegFunc(dest, funcName) then encodeLeaRegFuncAddr(code, callFixups: callFixups, dest: resolveGpr(dest), targetName: funcName)
 		callReg(reg) then encodeModRmExtDirect(code, opcode: OpcodeCallIndirect, ext: Grp5ExtCall, rmField: resolveGpr(reg))
+		// x64-linux: a raw `syscall`. The number is the op's immediate (`mov eax, number`); its arguments
+		// were pre-moved into rdi/rsi/rdx/r10/r8/r9 by the OS-primitive lowering, exactly as a call's are.
+		x64Syscall(number) then encodeX64Syscall(code, number: number)
 	end 'emit'
 end 'emitTargetOp'
 

@@ -1994,8 +1994,8 @@ function opIsConstMaterialization(module TargetModule, opIdx OpIndex) returns bo
 		// `leaRegGlobal`/`leaRegRdata`/`movsdRegRip` `false`: it reads no register and its `.text` address
 		// cannot change, but it lives behind a relocation, not an integer `constValueOfDef` holds, so this
 		// integer-remat predicate answers `false`. `callReg` reads its callee register and is a call —
-		// not a const materialization either.
-		leaRegFunc to callReg gives false
+		// not a const materialization either. The Linux `x64Syscall` is a call, likewise `false`.
+		leaRegFunc to x64Syscall gives false
 	end 'k'
 end 'opIsConstMaterialization'
 
@@ -2548,9 +2548,9 @@ function constDefInfo(module TargetModule, opIdx OpIndex) returns (MachineWord, 
 		movRegReg to leaRegRdata panic("constDefInfo: def is not a constant materialization")
 		arm64Ret to arm64Cbnz panic("constDefInfo: def is not a constant materialization")
 		arm64Prologue to arm64Syscall panic("constDefInfo: def is not a constant materialization")
-		// `leaRegFunc`/`callReg` (P1.5-A1) are not const materializations — `opIsConstMaterialization`
-		// answers false for both, so neither reaches here; named rather than swallowed.
-		leaRegFunc to callReg panic("constDefInfo: def is not a constant materialization")
+		// `leaRegFunc`/`callReg` (P1.5-A1) and the Linux `x64Syscall` are not const materializations —
+		// `opIsConstMaterialization` answers false for all, so none reaches here; named rather than swallowed.
+		leaRegFunc to x64Syscall panic("constDefInfo: def is not a constant materialization")
 	end 'k'
 end 'constDefInfo'
 
@@ -2729,6 +2729,8 @@ function substituteValueInOp(op TargetOp, from ValueId, to ValueId) returns Targ
 		// the callee register (unlike `callDirect`/`iatCall`, which have no explicit operand and `return op`).
 		leaRegFunc(dest, funcName) then return TargetOp.leaRegFunc(substituteVReg(dest, from: from, to: to), funcName: funcName)
 		callReg(reg) then return TargetOp.callReg(substituteVReg(reg, from: from, to: to))
+		// The Linux `syscall` carries only its number — no register operand to substitute, like `iatCall`.
+		x64Syscall then return op
 	end 'rewrite'
 end 'substituteValueInOp'
 

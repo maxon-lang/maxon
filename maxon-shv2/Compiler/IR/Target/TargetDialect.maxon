@@ -984,6 +984,35 @@ export union TargetOp
 	// arg moves have not yet written. A union-backing literal cannot reference a named `let`, so the mask
 	// is inline and guarded there.
 	callReg(reg TargetVReg) = TargetOpMeta{isMemory: true, isStore: true, isCall: true, implicitUses: 0, implicitDefs: 0xFFFF0FC7}
+	// A raw Linux x86-64 `syscall` (`mov eax, number; 0F 05`) — the x64 sibling of `arm64Syscall`, and
+	// the reason x64-linux needs no import table, no IAT and no loader-bound imports: Windows reaches
+	// every OS primitive through the IAT (`iatCall`), Linux permits raw syscalls.
+	// `osExit`/`osWriteStdout`/`osAllocPages` lower to this on Linux and to `iatCall` on Windows
+	// (`X64LinuxRuntime.x64OsCallKind` is the one door that decides), and the Linux entry stub exits
+	// through it (`prependLinuxEntryStub`).
+	//
+	// ⭐ IT IS AN ORDINARY CALL, NOT A SECOND ABI — the same design `arm64Syscall`'s comment sets out.
+	// v1 modelled its syscall as a SLOT-based op carrying its own operand array; shv2 is SSA/vreg with a
+	// real allocator, so the LOWERING moves arguments into the physical Linux syscall-ABI registers
+	// (rdi, rsi, rdx, r10, r8, r9) and reads the result out of rax exactly as `lowerCall` does, and this
+	// op carries only the syscall NUMBER (the encoder materialises it into eax, where the ABI wants it).
+	//
+	// ⚠⚠ THE SAME CLOBBER MASK AS `iatCall`/`callDirect`, AND IT MUST STAY THAT WAY. `isCall: true` plus
+	// implicitDefs = 0xFFFF0FC7 (the custom ABI's caller-saved set — rax/rcx/rdx/rsi/rdi/r8..r11 + every
+	// XMM) confines any value live ACROSS the syscall to the callee-saved half, which is what keeps
+	// `__slab_alloc`'s bookkeeping (live across its mmap syscall) correct — the exact miscompile the
+	// `iatCall` comment records for `VirtualAlloc`. The `syscall` instruction clobbers rcx (rip) and r11
+	// (rflags) and the kernel returns in rax — all three are inside this mask, so the encoder is free to
+	// use them. It over-approximates by the arg registers a given syscall does not use (write leaves
+	// r8/r9/r10 free), which is never wrong; the arg registers a syscall DOES use are pre-moved physical
+	// defs the liveness census already forbids to a cross-syscall value. `assertX64CallClobbers` holds
+	// this literal equal to `callerSavedMask()` alongside `callDirect`/`iatCall`/`callReg` (the
+	// one-fact-one-place guard). A union-backing literal cannot reference a named `let`, so the mask is
+	// inline. APPENDED at the very END of the union (band-append invariant): every range arm over
+	// `TargetOp` stops at or before `callReg`, so an op inserted anywhere else would be silently
+	// swallowed — appending past the last arm makes each stale match fail to compile until it is
+	// consciously extended.
+	x64Syscall(number MachineWord) = TargetOpMeta{isMemory: true, isStore: true, isCall: true, implicitUses: 0, implicitDefs: 0xFFFF0FC7}
 end 'TargetOp'
 
 // The memory-access widths the `.data` load/store encoders have. TWO, because two are what the

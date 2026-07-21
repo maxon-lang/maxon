@@ -1,5 +1,7 @@
-// ELF64 writer for arm64-Linux executables — the format-neutral CodeResult → ELF seam, the Linux
-// sibling of Windows/PeWriter and Macos/MachOWriter.
+// ELF64 writer for Linux executables (arm64 AND x64) — the format-neutral CodeResult → ELF seam, the
+// Linux sibling of Windows/PeWriter and Macos/MachOWriter. The image is CPU-invariant except for the
+// `e_machine` word and the relocation patcher (both a `match target.cpu` in `writeElf`); everything else
+// — the static ET_EXEC at a fixed base, the two PT_LOADs, the symtab — is shared.
 //
 // ⭐ IT IS A THIRD THE SIZE OF THE MACH-O WRITER, AND ONE FACT EXPLAINS ALL OF IT: **Linux permits
 // raw syscalls, macOS forbids them.** Every OS primitive on macOS must be a libSystem call, which
@@ -54,10 +56,13 @@ let ElfSectionAlign = 8
 let ElfIdent = b"\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00"
 let ElfTypeExec = 2
 
-// EM_AARCH64. The ONLY machine this writer emits — there is no `match target.cpu` here (v1's had
-// one, because v1 shipped x86-64-linux too); shv2's ELF writer is arm64-only and says so in its
-// entry guard rather than carrying a dispatch with one live arm.
-let ElfMachineAarch64 = 0xB7
+// The `e_machine` field, selected per CPU by the `match target.cpu` in `writeElf`: EM_AARCH64 for
+// arm64-linux, EM_X86_64 for x64-linux. The rest of the image is CPU-INVARIANT — a static `ET_EXEC` at a fixed base, two PT_LOADs,
+// the same headers and symtab — because the ELF container does not care which ISA fills `.text`; the
+// ONLY per-CPU divergence below is relocation patching (RIP-relative disp32 vs the ADRP/ADD pair), which
+// is exactly the split v1's x86-64+arm64 ELF writer had.
+let ElfMachineAarch64 = 0xB7  // EM_AARCH64
+let ElfMachineX86_64 = 0x3E  // EM_X86_64
 let ElfVersionCurrent = 1
 
 // --- Program header types and flags ---
@@ -183,12 +188,69 @@ function bakeElfStringBufferAddresses(rdata ByteArray, globalData GlobalDataTabl
 	end 'each'
 end 'bakeElfStringBufferAddresses'
 
+// Patch every arm64 relocation the ELF carries: the ADRP/ADD PIE pairs for section references
+// (`patchArm64SectionRelocations`) and the ones for `.text`→`.text` function addresses
+// (`patchArm64FuncAdrpRelocs`, which x64 has no analog for — it resolves those chunk-locally in concat).
+// Bundled so the CPU dispatch in `writeElf` stays one call per arm; the two arm64 patchers live in
+// `Arm64Backend` (the x64 twin, `patchX64SectionRelocations`, is below).
+function patchArm64ElfRelocations(code ByteArray, codeResult CodeResult, textVmAddr MachineWord, rdataVmAddr MachineWord, dataVmAddr MachineWord)
+	patchArm64SectionRelocations(code, rdataRelocs: codeResult.rdataRelocations, textVmAddr: textVmAddr, rdataVmAddr: rdataVmAddr, dataVmAddr: dataVmAddr)
+	patchArm64FuncAdrpRelocs(code, funcAdrpRelocs: codeResult.arm64FuncAdrpRelocs, textVmAddr: textVmAddr)
+end 'patchArm64ElfRelocations'
+
+// Patch every x64 code→data-section RIP-relative disp32 relocation to the distance from the end of the
+// instruction to its target's absolute VA — the x64 twin of `patchArm64SectionRelocations`, and the
+// exact algorithm of PeWriter's `patchRdataRelocationsX86` over an absolute VA instead of an
+// `ImageBase`-relative RVA. A RIP-relative disp is PC-relative, so the two forms compute the SAME
+// displacement (the base cancels in `target - ripAtReloc`); only the absolute numbers fed in differ,
+// which is why the ELF layout's VAs (`textVmAddr`/`rdataVmAddr`/`dataVmAddr`) drop straight in.
+//
+// `ripRelDisp32` targets `.rodata` (a String literal or f64 island); `dataSectionRipRelDisp32` targets
+// `.data` (a top-level `var`'s `lea`). Every other kind PANICS rather than defaulting: symdata/covdata
+// are not emitted this rung, the arm64 pairs never appear in an x64 module, and `funcAbs64InRdata`
+// patches a slot INSIDE rdata (a layout descriptor's), not a disp32 in code. This is duplicated from
+// PeWriter rather than shared because consolidating would mean editing PeWriter, outside this rung's
+// file set — the same reason `bakeElfStringBufferAddresses` duplicates `patchStringBufferFixups`; see
+// the report's follow-up note.
+function patchX64SectionRelocations(code ByteArray, rdataRelocs RdataRelocationArray, textVmAddr MachineWord, rdataVmAddr MachineWord, dataVmAddr MachineWord)
+	for reloc in rdataRelocs 'patch'
+		let ripAtReloc = textVmAddr + reloc.codeOffset + X64Disp32Width
+		match reloc.kind 'kind'
+			ripRelDisp32 then patchElfSectionRipRel(code, reloc: reloc, sectionVmAddr: rdataVmAddr, ripAtReloc: ripAtReloc)
+			dataSectionRipRelDisp32 then patchElfSectionRipRel(code, reloc: reloc, sectionVmAddr: dataVmAddr, ripAtReloc: ripAtReloc)
+			symdataRipRelDisp32 then panic("patchX64SectionRelocations: '{reloc.rdataLabel}' is a `.symtab` reference, and shv2's backend emits none — symdata grows back at its own milestone")
+			covdataRipRelDisp32 then panic("patchX64SectionRelocations: '{reloc.rdataLabel}' is a `.covdata` reference, and shv2's backend emits none — coverage grows back at its own milestone")
+			arm64Adr to arm64LdrLiteral then panic("patchX64SectionRelocations: '{reloc.rdataLabel}' carries an arm64 relocation kind in the x64 ELF writer")
+			symdataArm64Adr to covdataArm64PageOff then panic("patchX64SectionRelocations: '{reloc.rdataLabel}' carries an arm64 relocation kind in the x64 ELF writer")
+			funcAbs64InRdata then panic("patchX64SectionRelocations: '{reloc.rdataLabel}' is a function-pointer slot INSIDE rdata (a layout descriptor's), patched with a `.text` VA rather than a disp32 in code — layout descriptors arrive with generics")
+		end 'kind'
+	end 'patch'
+end 'patchX64SectionRelocations'
+
+// Patch one x64 RIP-relative disp32 to `sectionVmAddr + reloc.rdataOffset` minus the address of the end
+// of the disp32 field. The two live arms above share it: the arithmetic is identical and only the
+// section differs, so a `.data` reference and a `.rodata` one cannot drift on the end-of-field
+// convention. Mirrors PeWriter's `patchSectionRipRel`.
+function patchElfSectionRipRel(code ByteArray, reloc RdataRelocation, sectionVmAddr MachineWord, ripAtReloc MachineWord)
+	let targetVmAddr = sectionVmAddr + reloc.rdataOffset
+	patchX64Rel32(code, codeOffset: reloc.codeOffset, rel: targetVmAddr - ripAtReloc, what: PatchSite.x64RdataDisp32, targetAddr: targetVmAddr)
+end 'patchElfSectionRipRel'
+
 export function writeElf(outputPath FilePath, codeResult CodeResult, target Target)
 	logInfo(LogCategory.binary, message: function() gives "Writing ELF file: {outputPath} ({targetToString(target)})")
 
-	if target.cpu != CpuArch.arm64 or target.os != Os.linux 'wrongTarget'
-		panic("writeElf: the ELF writer emits arm64-linux only (got {targetToString(target)})")
-	end 'wrongTarget'
+	// The ELF writer emits Linux only, on the two CPUs shv2 has native backends for (arm64 and x64). The
+	// OS is what this file's whole shape depends on (raw syscalls, static ET_EXEC); the CPU only picks the
+	// `e_machine` word and the relocation patcher. A wasm32 or non-Linux target is a `writeExecutable`
+	// dispatch bug, not a user error.
+	if target.os != Os.linux 'wrongOs'
+		panic("writeElf: the ELF writer emits Linux executables only (got {targetToString(target)})")
+	end 'wrongOs'
+	let elfMachine = match target.cpu 'machine'
+		arm64 gives ElfMachineAarch64
+		x64 gives ElfMachineX86_64
+		wasm32 panic("writeElf: wasm32 is not an ELF target — the wasm backend emits a WASI component (writeWasm), and writeExecutable never routes it here")
+	end 'machine'
 
 	var code = codeResult.code
 	let codeSize = code.count()
@@ -258,8 +320,16 @@ export function writeElf(outputPath FilePath, codeResult CodeResult, target Targ
 	logInfo(LogCategory.binary, message: function() gives "Code size: {codeSize} bytes, rodata: {rdataSize} bytes, data: {preludeSize} bytes, entry point: {entryPoint}")
 
 	// --- Resolve every address into the images before they are written ---
-	patchArm64SectionRelocations(code, rdataRelocs: codeResult.rdataRelocations, textVmAddr: textVAddr, rdataVmAddr: rodataVAddr, dataVmAddr: dataVAddr)
-	patchArm64FuncAdrpRelocs(code, funcAdrpRelocs: codeResult.arm64FuncAdrpRelocs, textVmAddr: textVAddr)
+	// The ONE per-CPU divergence in this writer. arm64 patches the ADRP/ADD PIE pairs (section
+	// references and `.text`→`.text` func addresses); x64 patches RIP-relative disp32s (section
+	// references only — its `.text`→`.text` func `lea`s are resolved chunk-locally by concat as
+	// CallFixups, so there is no x64 analog of `arm64FuncAdrpRelocs`). The string-buffer bake and every
+	// later section are CPU-invariant.
+	match target.cpu 'relocs'
+		arm64 then patchArm64ElfRelocations(code, codeResult: codeResult, textVmAddr: textVAddr, rdataVmAddr: rodataVAddr, dataVmAddr: dataVAddr)
+		x64 then patchX64SectionRelocations(code, rdataRelocs: codeResult.rdataRelocations, textVmAddr: textVAddr, rdataVmAddr: rodataVAddr, dataVmAddr: dataVAddr)
+		wasm32 then panic("writeElf: wasm32 reached the ELF relocation patcher — the entry guard rejects it")
+	end 'relocs'
 	bakeElfStringBufferAddresses(codeResult.rdata, globalData: codeResult.globalData, rodataVAddr: rodataVAddr)
 
 	var elf = ByteArray.create()
@@ -271,7 +341,7 @@ export function writeElf(outputPath FilePath, codeResult CodeResult, target Targ
 	// section headers at all.
 	elf.append(ElfIdent)
 	writeWord(elf, value: ElfTypeExec)
-	writeWord(elf, value: ElfMachineAarch64)
+	writeWord(elf, value: elfMachine)
 	writeDword(elf, value: ElfVersionCurrent)
 	writeQword(elf, value: entryPoint)
 	writeQword(elf, value: ElfHeaderSize)  // e_phoff — program headers follow the ELF header

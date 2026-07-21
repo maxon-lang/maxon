@@ -1280,8 +1280,9 @@ function opIsCondBranch(op TargetOp) returns bool
 		arm64Ret to arm64Branch gives false
 		arm64CondBranch to arm64Cbnz gives true
 		arm64MovImm to arm64Syscall gives false
-		// `leaRegFunc`/`callReg` (P1.5-A1) are a `lea` and a call — neither is a conditional branch.
-		leaRegFunc to callReg gives false
+		// `leaRegFunc`/`callReg` (P1.5-A1) are a `lea` and a call, and the Linux `x64Syscall` a call —
+		// none is a conditional branch.
+		leaRegFunc to x64Syscall gives false
 	end 'check'
 end 'opIsCondBranch'
 
@@ -1303,9 +1304,9 @@ function terminatorIsUnconditionalBranch(module TargetModule, block IrBlock) ret
 		arm64Ret gives false
 		arm64Branch gives true
 		arm64CondBranch to arm64Syscall gives false
-		// `leaRegFunc`/`callReg` (P1.5-A1) are value-producing body ops, never a terminator — so
-		// never the ISA's unconditional branch.
-		leaRegFunc to callReg gives false
+		// `leaRegFunc`/`callReg` (P1.5-A1) and the Linux `x64Syscall` are value-producing body ops,
+		// never a terminator — so never the ISA's unconditional branch.
+		leaRegFunc to x64Syscall gives false
 	end 'check'
 end 'terminatorIsUnconditionalBranch'
 
@@ -1349,9 +1350,9 @@ function collectBlockSuccessorIds(module TargetModule, block IrBlock, out BlockI
 			arm64Ret then break 'termCtrl'
 			arm64Branch(target) then out.push(target)
 			arm64CondBranch to arm64Syscall then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a non-terminator arm64 op as its terminator")
-			// `leaRegFunc`/`callReg` (P1.5-A1) are value-producing x64 body ops, never a terminator —
-			// the same non-terminator panic the x64 ALU/data bands above raise.
-			leaRegFunc to callReg then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a non-terminator op as its terminator")
+			// `leaRegFunc`/`callReg` (P1.5-A1) and the Linux `x64Syscall` are value-producing x64 body
+			// ops, never a terminator — the same non-terminator panic the x64 ALU/data bands above raise.
+			leaRegFunc to x64Syscall then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a non-terminator op as its terminator")
 		end 'termCtrl'
 	end 'hasTerm'
 end 'collectBlockSuccessorIds'
@@ -2749,9 +2750,9 @@ export function collectEntryParamCaptures(module TargetModule, topo FuncTopology
 			storeSlotReg to loadRegSlot then break 'capture'
 			andRegReg to leaRegRdata then break 'capture'
 			arm64Ret to arm64Syscall then break 'capture'
-			// `leaRegFunc`/`callReg` (P1.5-A1) are not a `movRegReg`, so neither is an entry param
-			// capture — skipped exactly like every other non-`movRegReg` op here.
-			leaRegFunc to callReg then break 'capture'
+			// `leaRegFunc`/`callReg` (P1.5-A1) and the Linux `x64Syscall` are not a `movRegReg`, so none
+			// is an entry param capture — skipped exactly like every other non-`movRegReg` op here.
+			leaRegFunc to x64Syscall then break 'capture'
 		end 'capture'
 	end 'eachOp'
 	return captures
@@ -3042,9 +3043,9 @@ export function spillStoreSlotOf(op TargetOp) returns ValueSpillSlot
 		// carries a spill store — `none` is unreachable this rung AND correct. `gives` cannot host a
 		// `panic`.
 		arm64Ret to arm64Syscall gives ValueSpillSlot.none
-		// `leaRegFunc`/`callReg` (P1.5-A1) write no stack slot — a `lea` and a call are not spill
-		// stores, so `none`, exactly like the `.data` store above.
-		leaRegFunc to callReg gives ValueSpillSlot.none
+		// `leaRegFunc`/`callReg` (P1.5-A1) and the Linux `x64Syscall` write no stack slot — a `lea`, a
+		// call and a syscall are not spill stores, so `none`, exactly like the `.data` store above.
+		leaRegFunc to x64Syscall gives ValueSpillSlot.none
 	end 'k'
 end 'spillStoreSlotOf'
 
