@@ -1,0 +1,143 @@
+// Runtime/FnRefThunk.maxon — the `__fnref_<name>` environment thunks that make a PLAIN named function
+// usable as a first-class value under the uniform `(userargs, env)` calling convention (P1.5-A2b-2).
+//
+// ⭐ **WHY A WRAPPER, AND WHY ONLY FOR PLAIN FUNCTIONS.** A function VALUE is called through ONE uniform
+// indirect signature `(userargs, env) -> R`: a value passed DOWN to a generic `apply(f, x)` is called
+// `f(x, env)` with no static knowledge of whether it captures, so every callable value must accept the
+// trailing env. A LIFTED CLOSURE already carries that shape (its `__env` parameter — see
+// `Parser.parseClosureExpression`). A plain named function `triple(n)` does NOT, and it cannot simply gain
+// the parameter: its DIRECT calls `triple(10)` must stay `(userargs) -> R` (unchurned — and on wasm a
+// direct `call`'s arity is checked too). So `functionRef(triple)` materializes the address of a thunk
+// `__fnref_triple(n, __env)` whose signature IS `(userargs, env) -> R` — it ignores `__env` and forwards to
+// `triple`. On wasm the `call_indirect` functype is arg-count-derived, so the table element's own functype
+// must match; on register targets the extra arg would be harmless, but ONE thunk keeps a single
+// cross-target lowering. This is v1's `__fnref_` design (LowerMaxonToStd.maxon:11408) — its knowledge, not
+// its cost curve: the thunk is synthesized once per referenced plain function, not per reference.
+//
+// ⚠ HIGHER-ORDER FUNCTION VALUES ARE OUT OF SCOPE. Binding a function that ITSELF takes a function
+// parameter as a value (`let g = apply`) would need the thunk to forward `apply`'s hidden companion-env
+// parameters too — a fact this thunk does not have. No enabled case does this; `functionRef` of such a
+// function is not reached at this rung.
+
+// A set of symbol names, for O(1) dedup while collecting thunk targets in source order.
+export typealias FnRefThunkSet = Set with ByteArray
+
+// True iff `name` is a lifted closure's synthesized name — `<enclosing>$closure_<k>` (see
+// `Parser.parseClosureExpression`). The `$` byte is the tell: it is unwritable in a Maxon identifier and no
+// other synthesized name contains it, so a function name carrying it is a lifted closure and nothing else —
+// which is exactly what tells a closure (already `(userargs, __env)`-shaped) from a plain function (whose
+// value use needs a thunk). (Inline `'$'` is the Lexer's char-comparison idiom; a top-level char constant is
+// not a constant expression in the bootstrap.)
+export function isLiftedClosureName(name ByteArray) returns bool
+	for b in name 'each'
+		if b == '$' 'marker'
+			return true
+		end 'marker'
+	end 'each'
+	return false
+end 'isLiftedClosureName'
+
+// The name of the env-thunk for plain function `funcName`. ONE builder, shared by the reference lowering
+// (`LowerMaxonToStd.lowerFunctionRef`, which emits `funcAddr(__fnref_<name>)`) and the synthesis below, so
+// the two spellings of the name cannot drift.
+export function fnRefThunkName(funcName ByteArray) returns ByteArray
+	return "__fnref_{String.from(funcName)}".toByteArray()
+end 'fnRefThunkName'
+
+// Collect every PLAIN function referenced as a value (`functionRef`), in first-seen source order, deduped.
+// A lifted closure is skipped — it carries its own `__env` parameter and needs no thunk. Read post-pipeline
+// by `installFnRefThunks`; the walk mirrors `StringRuntime.scanRuntimeUsage`'s — one linear pass over the
+// Maxon ops.
+export function collectFnRefThunkTargets(module MaxonModule) returns ByteArrayArray
+	var seen = FnRefThunkSet.create()
+	var targets = ByteArrayArray.create()
+	for func in module.functions 'eachFunc'
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise panic("collectFnRefThunkTargets: blockRef from func.blockRefs not in module.blocks")
+			for opIdx in block.opRefs 'eachOp'
+				let op = try module.ops.get(opIdx) otherwise panic("collectFnRefThunkTargets: opIdx {opIdx} not in module.ops")
+				noteIfFunctionRef(op, seen: seen, targets: targets)
+			end 'eachOp'
+		end 'eachBlock'
+	end 'eachFunc'
+	return targets
+end 'collectFnRefThunkTargets'
+
+// Record a `functionRef` op's PLAIN target for thunking. It RANGES over the whole `MaxonOp` union so a
+// newly-appended op FAILS TO COMPILE here rather than being silently ignored (the band-append invariant):
+// `call to panicAbort` is every op before `functionRef`, `indirectCall` the one after (the last variant).
+function noteIfFunctionRef(op MaxonOp, seen FnRefThunkSet, targets ByteArrayArray)
+	match op 'op'
+		call to panicAbort then break 'op'
+		functionRef(_, funcName) then noteFnRefTarget(funcName, seen: seen, targets: targets)
+		indirectCall then break 'op'
+	end 'op'
+end 'noteIfFunctionRef'
+
+// A plain (non-closure) target seen for the first time joins the ordered thunk list.
+function noteFnRefTarget(funcName ByteArray, seen FnRefThunkSet, targets ByteArrayArray)
+	if isLiftedClosureName(funcName) 'closure'
+		return
+	end 'closure'
+	if seen.contains(funcName) 'already'
+		return
+	end 'already'
+	seen.insert(funcName)
+	targets.push(funcName)
+end 'noteFnRefTarget'
+
+// Synthesize the `__fnref_<name>` env-thunk for every plain function used as a value. Appended
+// already-lowered AFTER the pipeline (like the destructor cascades), so they are never re-optimized and
+// still flow through the whole backend (ISel, register allocation, frames) — and on wasm get a funcref-table
+// slot at their funcIdx, which is what `funcAddr(__fnref_<name>)` materializes.
+export function installFnRefThunks(module StdModule, project Project, targets ByteArrayArray)
+	for target in targets 'each'
+		synthesizeFnRefThunk(module, project: project, targetName: target)
+	end 'each'
+end 'installFnRefThunks'
+
+// Emit `__fnref_<name>(userargs..., __env) -> R`:
+//
+//   entry: materialize each parameter (the trailing `__env` is discarded), `call <name>(userargs...)`,
+//          `ret` the result.
+//
+// The thunk's parameters are ALL i64 — a function value's uniform ABI is `(i64^n) -> i64` (the wasm
+// `call_indirect` functype is arg-count-derived to exactly this shape), and every function-value argument at
+// this rung is int / named / String / struct-pointer width. The forwarded call is a DIRECT `call` to the
+// target by name (a wasm `call`, arity-checked against the target's OWN `(userargs) -> R` functype), so the
+// thunk is precisely what bridges the two signatures.
+function synthesizeFnRefThunk(module StdModule, project Project, targetName ByteArray)
+	let sig = try project.funcSignatures.get(targetName) otherwise panic("synthesizeFnRefThunk: no signature for '{String.from(targetName)}' — a functionRef must name a registered function")
+	let ret = try project.funcReturnTypes.get(targetName) otherwise panic("synthesizeFnRefThunk: no return type for '{String.from(targetName)}'")
+	let userParamCount = sig.paramCount()
+	let thunkParamCount = (userParamCount + 1) as ParamCount
+	let stdReturn = maxonReturnTypeToStdReturnType(ret)
+
+	// A void-returning function value cannot satisfy the `(i64^n) -> i64` indirect signature (its result
+	// slot is i64), and it is uncallable as a value anyway (OPEN #68 — statement-position indirect calls are
+	// unsupported). No `functionRef` of a void function is reached; guard it loudly if one ever is.
+	match stdReturn 'r'
+		value then break 'r'
+		void then panic("synthesizeFnRefThunk: void-returning '{String.from(targetName)}' cannot be used as a first-class value (OPEN #68 — a void function type is uncallable through the uniform (i64^n) -> i64 indirect ABI)")
+	end 'r'
+
+	var paramTypes = StdTypeArray.create()
+	for _ in 0 upto thunkParamCount 'eachParamType'
+		paramTypes.push(StdType.i64)
+	end 'eachParamType'
+
+	let func = IrFunction.createFromStd(fnRefThunkName(targetName), returnType: stdReturn, paramCount: thunkParamCount, paramTypes: paramTypes, returnLine: 0)
+	var entry = module.addBlock(func, label: b"entry")
+	emitParams(module, block: entry, count: thunkParamCount)
+
+	var forwardArgs = ValueIdArray.create()
+	for i in 0 upto userParamCount 'eachArg'
+		forwardArgs.push(i as ValueId)
+	end 'eachArg'
+
+	let result = thunkParamCount
+	module.appendOp(entry, op: StdOp.call(result, callee: targetName, args: forwardArgs))
+	module.setTerminator(entry, op: StdOp.ret(result))
+
+	module.functions.push(func)
+end 'synthesizeFnRefThunk'

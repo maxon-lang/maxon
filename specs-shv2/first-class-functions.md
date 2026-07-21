@@ -1124,8 +1124,8 @@ end 'main'
 error E3099: specs/fragments/first-class-functions/first-class-function.capturing-closure-in-payload-binding-errors.test:19:16: cannot store a closure that captures in payload binding 'op': captures are taken by reference to the enclosing function's frame, so a closure that captures cannot outlive that frame. Use a function reference, or a closure that captures nothing
 ```
 
-<!-- disabled-test: first-class-function.capturing-closure-used-in-frame -->
-<!-- A2b-1 threads the env ONLY at a DIRECT indirect call (`f(x)`). Passing a capturing closure DOWN to a callee (`apply(f, …)`) does NOT thread the env — the closure arrives as the callee's PARAMETER, which carries no env, so the callee calls it with `__env = 0` and nil-dereferences. This compiled clean and SEGFAULTED (139) until A2b-1's review; it is now REFUSED (E2015 unsupported, see `capturing-closure-passed-as-arg-errors`). Making it WORK needs a hidden per-parameter env slot threaded over the call graph, which arrives at A2b-2; the `let direct = f(2)` half is fine (direct call). Re-enable as an ACCEPT test when env threading lands. -->
+<!-- test: first-class-function.capturing-closure-used-in-frame -->
+<!-- targets: x64-windows, wasm32-wasi -->
 The would-be ACCEPT side: a capturing closure called directly AND passed DOWN to a callee that only
 CALLS it. The direct call `f(2)` works today, but the pass-down `apply(f, …)` does not — the env does
 not travel with the closure across the call boundary in A2b-1, so it is refused rather than compiled
@@ -1148,32 +1148,6 @@ end 'main'
 ```
 ```exitcode
 62
-```
-
-<!-- test: first-class-function.capturing-closure-passed-as-arg-errors -->
-<!-- targets: x64-windows, wasm32-wasi -->
-Passing a capturing closure DOWN to a callee is refused (E2015) rather than miscompiled. A2b-1 threads
-the environment only at a DIRECT indirect call (`f(x)`, where the call appends `closureEnvOf`); handed
-to `apply` as an argument, the closure arrives as `apply`'s PARAMETER, which carries no environment, so
-`apply` would call it with `__env = 0` and the first captured read would nil-dereference. Until the env
-is threaded across the call boundary (A2b-2) this is unsupported, not a segfault.
-```maxon
-
-typealias Integer = int(i64.min to i64.max)
-typealias UnaryOp = function(Integer) returns Integer
-
-function apply(f UnaryOp, x Integer) returns Integer
-	return f(x)
-end 'apply'
-
-function main() returns ExitCode
-	let bump = 20
-	let f = function(n Integer) gives n + bump
-	return apply(f, x: 20) as ExitCode
-end 'main'
-```
-```maxoncstderr
-error E2015: specs/fragments/first-class-functions/first-class-function.capturing-closure-passed-as-arg-errors.test:13:15: Unsupported: passing a closure that captures as a call argument — its environment is not threaded to the callee, so the callee would call it with no environment; a capturing closure may only be called directly for now (arrives at P1.5-A2b-2)
 ```
 
 <!-- test: first-class-function.capturing-closure-called-from-nested-block -->
@@ -1268,8 +1242,8 @@ i=3 -> 8
 i=4 -> 9
 ```
 
-<!-- disabled-test: first-class-function.capturing-closure-bound-outside-loop-passed-down -->
-<!-- Same pass-down limit as `capturing-closure-used-in-frame`: A2b-1 does not thread the env to a callee, so `apply(f, …)` is REFUSED E2015 (see `capturing-closure-passed-as-arg-errors`), not the accept this asserts. Re-enable as an ACCEPT test when env threading lands (A2b-2). -->
+<!-- test: first-class-function.capturing-closure-bound-outside-loop-passed-down -->
+<!-- targets: x64-windows, wasm32-wasi -->
 The same environment, read across iterations through a CALLEE rather than directly. The callee
 receives the closure as a parameter, so its environment arrives as the caller's — borrowed for
 the length of the call. The callee must not release it: its own scope_end cleans a parameter
@@ -1303,7 +1277,7 @@ end 'main'
 ```
 
 <!-- disabled-test: first-class-function.capturing-closure-passed-to-try-call -->
-<!-- Same pass-down limit as `capturing-closure-used-in-frame`, reached through `try`: a try free-call parses its arguments through `parseCallArgs` too, so `try applyChecked(f, …)` is REFUSED E2015 (see `capturing-closure-passed-as-arg-errors`), not the accept this asserts. Re-enable as an ACCEPT test when env threading lands (A2b-2). -->
+<!-- BLOCKED by STRING-BACKED error-enum raw values, NOT by env threading. `enum ApplyError implements Error / negative = "n must not be negative"` needs a string-backed enum case, which shv2 does not parse yet (E2015 "only integer and float raw values are parsed; string/char/struct/function backings arrive with later rungs") — an orthogonal later rung. The try-call env threading THIS case exists to test IS implemented and verified (lowerTryCall → finalizeCallArgs → appendCalleeEnvArgs; probed green with an int-backed error enum). Enable when string-backed enum raw values land. -->
 A capturing closure handed to a THROWING callee, through `try`. A try-call flattens its arguments
 exactly as a plain call does, but it was never given the maps that say what environment a function
 value carries, so it could only answer 0 — and this failed in ANY block, including the one that

@@ -1,22 +1,20 @@
-// Test: closure-capture.string-literal-body
+// Test: closure-capture.capture-string
 
-typealias Msg = function(Integer) returns String
 typealias Integer = int(i64.min to i64.max)
 
-function apply(f Msg, x Integer) returns String
+typealias FnTypeAlias1 = function(Integer) returns String
+function apply(f FnTypeAlias1, x Integer) returns String
 	return f(x)
 end 'apply'
 
-// The closure body is a bare string literal — not a capture. The literal comes
-// back as a deferred `stringConst` (no backing op), so the lifted closure's
-// `ret` referenced an unbound value until the body materializes it. The closure
-// captures nothing; it just returns "hi".
 function main() returns ExitCode
-	let s = apply(function(_ Integer) gives "hi", x: 0)
-	return s.byteLength()
+	let prefix = "hello"
+	let result = apply(function(_ Integer) gives prefix, x: 0)
+	print(result)
+	return 0
 end 'main'
 ---
-ExitCode: 2
+ExitCode: 0
 ---
 data {
   __slab_cursor@0 = i64 0
@@ -45,16 +43,32 @@ func @main {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
     x64.prologue 40
-    x64.leaRegFunc rcx, [rip + main$closure_0]
+    x64.leaRegRdata rbx, [rip + __str_rec_1]
+    x64.leaRegFunc r12, [rip + main$closure_0]
+    x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
-    x64.movRegImm32 rax, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r13, r8
+    x64.storeBaseDispReg.word64 [r13 + 0], rbx
+    x64.movRegImm32 rdx, 0
+    x64.movRegReg rcx, r12
+    x64.movRegReg rax, r13
     x64.callDirect apply
-    x64.loadRegBaseDisp.word64 rbx, [r8 + 8]
-    x64.movRegReg rcx, r8
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __print_string
+    x64.movRegImm32 r12, 0
+    x64.movRegReg rcx, rbx
     x64.callDirect __str_decref
-    x64.movRegReg r8, rbx
+    x64.movRegReg rcx, r13
+    x64.callDirect __mm_decref
+    x64.movRegReg r8, r12
     x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
@@ -69,7 +83,7 @@ func @main$closure_0 {
     x64.pushReg r13
     x64.pushReg r14
     x64.prologue 32
-    x64.leaRegRdata rax, [rip + __str_rec_1]
+    x64.loadRegBaseDisp.word64 rax, [rdx + 0]
     x64.loadRegBaseDisp.word64 rbx, [rax + 0]
     x64.loadRegBaseDisp.word64 r12, [rax + 8]
     x64.leaRegRegImm32 rcx, r12, 49

@@ -1423,6 +1423,14 @@ union CaptureResult
 	notCaptured
 end 'CaptureResult'
 
+// The result of `captureScopeOf` (P1.5-A2b-2): the immediate enclosing scope that binds a name for capture,
+// or `notCaptured`. Distinct from `CaptureResult` — this yields the SCOPE (so a caller can read the binding's
+// TYPE, e.g. to resolve a captured struct base's layout), where `CaptureResult` yields the read VALUE.
+union CaptureScopeResult
+	found(scope Scope)
+	notCaptured
+end 'CaptureScopeResult'
+
 // One incoming edge at a control-flow join, for the move reconciliation: the predecessor block a drop is
 // emitted INTO when this edge kept a binding live, paired with the move state that edge carries. An
 // `if`/`else` builds two (the then and else ends); a `match` builds one per reaching arm.
@@ -3530,7 +3538,20 @@ export type Parser
 		// then starts at paramCount — see IrValueId's ValueIdRef contract). The value-TYPE
 		// column is seeded in lockstep, with the parameters' declared types, so
 		// `valueTypes[i]` is parameter `i`'s type from the very first lookup.
-		let paramCount = paramNames.count()
+		//
+		// ⭐ **THE UNIFORM ABI APPENDS A COMPANION ENVIRONMENT PARAMETER PER FUNCTION-TYPED PARAMETER
+		// (P1.5-A2b-2).** A value passed DOWN to a `function`-typed parameter carries an environment (a
+		// capturing closure's block, or null); this function's own `f(x)` call threads it, so the environment
+		// must arrive as a parameter. The companions are appended AFTER the user parameters — so every user
+		// parameter keeps its own ABI position and the call machinery needs no source-slot→ABI-slot remap — and
+		// the full count reserves their ValueIds here so the body numbers after them. `maxonParamTypes` and the
+		// recorded signature keep the USER parameters only (an env companion is a lowering detail, never a
+		// source argument); `LowerMaxonToStd.transferFuncs` grows the Std parameter list to match `paramCount`.
+		let userParamCount = paramNames.count()
+		let paramCount = userParamCount + self.countFunctionParams(paramTypes)
+		if paramCount > MaxRegisterParams 'tooManyAbiParams'
+			throw ParseError.unsupported("a function whose parameters plus their companion environment parameters exceed {MaxRegisterParams} (a function-typed parameter carries a hidden environment argument under the uniform closure ABI; M5 passes arguments in registers only, so the total must fit the register-argument slots — stack arguments are a later milestone)", line: nameTok.line, column: nameTok.column)
+		end 'tooManyAbiParams'
 		self.scope.reset()
 		self.valueIds = ValueIdRef.create(paramCount)
 		self.mutableVars = VarInfoArray.create()
@@ -3566,12 +3587,17 @@ export type Parser
 			self.recordValueType(self.resolveFloatAliasType(paramType))
 		end 'seedParamTypes'
 
+		// Seed and wire the companion environment parameters — AFTER the user parameters, so they occupy
+		// ValueIds `userParamCount`.. (P1.5-A2b-2). Each function-typed user parameter's `valueClosureEnv` is
+		// then pointed at its companion, so the body's `f(x)` threads that env (`emitClosureEnvArg`).
+		self.bindClosureEnvParams(paramTypes, paramRanges: paramRanges, userParamCount: userParamCount)
+
 		// `self.valueTags` and `self.valueNameIds` are handed over BY REFERENCE, already seeded with
 		// the parameter types. Every `mintValue` below therefore pushes straight into the function's
 		// own type columns — there is no second array and no copy-back at the end of the body. It is
 		// safe because both are re-created (not cleared) for the next function, so nothing aliases
 		// these afterwards. See IrFunction.valueTags / valueNameIds for what the columns are FOR.
-		var func = IrFunction.create(name, maxonReturnType: returnType, paramCount: paramCount, maxonParamTypes: paramTypes, valueTags: self.valueTags, valueNameIds: self.valueNameIds, returnLine: nameTok.line, throwsTypeName: throwsClause)
+		var func = IrFunction.create(name, maxonReturnType: returnType, paramCount: paramCount, maxonParamTypes: paramTypes, valueTags: self.valueTags, valueNameIds: self.valueNameIds, valueClosureEnv: self.valueClosureEnv, returnLine: nameTok.line, throwsTypeName: throwsClause)
 		func.namespace = self.namespace
 		func.visibility = visibility
 		func.sourceFilePath = self.filePath
@@ -3786,6 +3812,48 @@ export type Parser
 			end 'consumedManaged'
 		end 'eachParam'
 	end 'bindParameters'
+
+	// The number of `function`-typed parameters — each of which needs a companion environment parameter under
+	// the uniform ABI (P1.5-A2b-2). A function alias was already resolved to `MaxonType.function` by
+	// `parseTypeReference`, so the tag is the whole test.
+	function countFunctionParams(paramTypes MaxonTypeArray) returns ParamCount
+		var n = 0 as ParamCount
+		for pt in paramTypes 'each'
+			if maxonTypeTag(pt) == ValueTypeTag.function 'fnParam'
+				n = n + 1
+			end 'fnParam'
+		end 'each'
+		return n
+	end 'countFunctionParams'
+
+	// ⭐ **SEED AND WIRE THE COMPANION ENVIRONMENT PARAMETERS (P1.5-A2b-2).** Under the uniform ABI a
+	// function-typed PARAMETER travels with an environment: the caller supplies the (fn ptr, env) pair, and
+	// this function's own `f(x)` call threads that env. The companions are APPENDED after the user parameters
+	// (ValueIds `userParamCount`..), each an i64 heap pointer, and each function-typed user parameter's
+	// `valueClosureEnv` is pointed at its companion. Appending — rather than v1's interleave, which puts the
+	// env immediately after its fn parameter — keeps every USER parameter at its own ABI position, so the call
+	// machinery needs no source-slot→ABI-slot remap; multiple function parameters compose (their companions
+	// append in declaration order, which the caller's `appendCalleeEnvArgs` matches). A companion carries no
+	// source name (it is never referenced by the body, only by the indirect call THROUGH the function
+	// parameter, via `valueClosureEnv`), so `bindParameters` does not bind it. Its ValueId's value columns are
+	// seeded here so the columns stay dense; `recordParamOrigin` gives it the declaring parameter's span for
+	// the register-pressure diagnostic.
+	function bindClosureEnvParams(paramTypes MaxonTypeArray, paramRanges SourceRangeArray, userParamCount ParamCount)
+		var envSlot = userParamCount
+		for i in 0 upto userParamCount 'eachParam'
+			let paramType = try paramTypes.get(i) otherwise panic("bindClosureEnvParams: paramTypes.get OOB at {i}")
+			if maxonTypeTag(paramType) != ValueTypeTag.function 'notFunction'
+				continue
+			end 'notFunction'
+			// Seed the companion's value columns (an i64 pointer) at ValueId `envSlot` — the next push — then
+			// point the function parameter at it. Seeding pushes to every value column, so it must precede the set.
+			self.recordValueType(MaxonType.integer)
+			try self.valueClosureEnv.set(i, value: envSlot) otherwise panic("bindClosureEnvParams: function parameter v{i} has no closure-env slot — the value columns are seeded before this")
+			let paramRange = try paramRanges.get(i) otherwise panic("bindClosureEnvParams: paramRanges.get OOB at {i}")
+			self.artifact.recordParamOrigin(envSlot, range: paramRange)
+			envSlot = envSlot + 1
+		end 'eachParam'
+	end 'bindClosureEnvParams'
 
 	// Is `value` a managed HEAP value — a struct box, a String, or a boxed union — the kinds a consumed
 	// parameter can own (and this function must drop) and a consumed argument must transfer? Mirrors
@@ -5776,11 +5844,35 @@ export type Parser
 		return try self.valueIsCapturingClosure.get(value) otherwise panic("isCapturingClosure: v{value} has no closure-mark slot — every SSA value is minted through mintValue, which seeds the column")
 	end 'isCapturingClosure'
 
-	// The heap environment block a capturing closure carries — only meaningful when `isCapturingClosure` is
-	// true, which every caller checks first. It is what an in-frame call passes as the trailing `__env` arg.
+	// The environment a function value carries, or 0 when it carries none. A real environment is ALWAYS a
+	// minted value id (`>= 1` — a heap env block, a materialized companion-env parameter, or a const-0 op is
+	// never id 0, which is the first parameter), so a stored 0 unambiguously means "no environment". Set for a
+	// capturing closure literal (its heap block, `markCapturingClosure`) AND for a function-typed parameter
+	// (its companion env parameter, `bindClosureEnvParams`) — the two producers of a value that travels with a
+	// live environment under the uniform ABI.
 	function closureEnvOf(value ValueId) returns ValueId
 		return try self.valueClosureEnv.get(value) otherwise panic("closureEnvOf: v{value} has no closure-env slot — every SSA value is minted through mintValue, which seeds the column")
 	end 'closureEnvOf'
+
+	// Does function value `value` travel with a live environment (a capturing closure's heap block or a
+	// function-typed parameter's companion env)? A plain function reference and a non-capturing closure carry
+	// none — the uniform ABI passes a null in their place. Keyed on the VALUE through `valueClosureEnv`.
+	function valueCarriesEnv(value ValueId) returns bool
+		return self.closureEnvOf(value) != 0
+	end 'valueCarriesEnv'
+
+	// ⭐ **THE ENVIRONMENT ARGUMENT THREADED AT A CALL THROUGH A FUNCTION VALUE (P1.5-A2b-2).** Under the
+	// uniform `(userargs, env)` ABI EVERY indirect call passes an environment: the value's OWN environment
+	// when it carries one, else a materialized null. This is the ONE place that answers "what environment
+	// travels with this value?" for an indirect call, keyed on the callee VALUE — the mirror of the direct
+	// call's `closureEnvOf`-driven threading (`LowerMaxonToStd.appendCalleeEnvArgs`). A non-capturing value
+	// gets a fresh `0` literal so the wasm `call_indirect` functype (arg-count-derived) still has its env slot.
+	function emitClosureEnvArg(callee ValueId, range SourceRange) returns ValueId
+		if self.valueCarriesEnv(callee) 'carriesEnv'
+			return self.closureEnvOf(callee)
+		end 'carriesEnv'
+		return self.emitLiteral(0, valueType: MaxonType.integer, range: range)
+	end 'emitClosureEnvArg'
 
 	// ⭐ **REFUSE A CAPTURING CLOSURE THAT ESCAPES ITS FRAME (E3099).** The ONE gate every escape route funnels
 	// through — a return, a struct-field store, a union payload, a payload-binding store — so the "is this a
@@ -5794,19 +5886,17 @@ export type Parser
 		end 'escapes'
 	end 'rejectEscapingClosure'
 
-	// ⭐ **REFUSE A CAPTURING CLOSURE PASSED AS A CALL ARGUMENT (P1.5-A2b-1).** The env travels with a
-	// capturing closure ONLY at a DIRECT indirect call (`f(x)`, where `parseIndirectCall` appends
-	// `closureEnvOf(callee)`). Handed to another function as an argument, the closure arrives as that
-	// callee's PARAMETER — a value in the callee's own SSA space that carries no env — so the callee calls
-	// it with `__env = 0` and the first captured read nil-dereferences. Threading the env across the call
-	// boundary needs a hidden per-parameter env slot (a fact about the CALLER propagated over the call
-	// graph), which arrives at A2b-2; until then this is refused as UNSUPPORTED rather than compiled into a
-	// segfault. Asked once, from every call-argument site (direct/method/try via `parseCallArgs`, indirect
-	// via `parseIndirectCallArgs`), keyed on the VALUE exactly as the escape gate is — a non-capturing
-	// closure or a plain function reference passes freely.
+	// ⭐ **REFUSE A CAPTURING CLOSURE PASSED AS AN INDIRECT-CALL ARGUMENT (P1.5-A2b-2).** A capturing closure
+	// handed DOWN to a DIRECT callee now works — the lowering threads its environment as the companion
+	// argument at the function-typed parameter position (`LowerMaxonToStd.appendCalleeEnvArgs`). But an
+	// INDIRECT call `f(g)` — where `f` is itself a function VALUE whose type takes a function parameter `g` —
+	// has no resolved parameter types to drive that threading (a function TYPE carries none), so the closure's
+	// environment would not reach `f`'s eventual callee: the higher-order function-VALUE case, which no case at
+	// this rung reaches. Refused as UNSUPPORTED rather than compiled into a segfault, keyed on the VALUE
+	// exactly as the escape gate is — a non-capturing closure or a plain function reference passes freely.
 	function rejectCapturingClosureArg(value ValueId, tok Token) throws ParseError
 		if self.isCapturingClosure(value) 'capturingArg'
-			throw ParseError.unsupported("passing a closure that captures as a call argument — its environment is not threaded to the callee, so the callee would call it with no environment; a capturing closure may only be called directly for now (arrives at P1.5-A2b-2)", line: tok.line, column: tok.column)
+			throw ParseError.unsupported("passing a closure that captures as an argument to an INDIRECT call — a function VALUE's type carries no parameter types, so the closure's environment cannot be threaded to its callee (a direct call to a named function threads it; a higher-order function value does not yet)", line: tok.line, column: tok.column)
 		end 'capturingArg'
 	end 'rejectCapturingClosureArg'
 
@@ -9820,6 +9910,14 @@ export type Parser
 			return try self.parseFieldAccess()
 		end 'fieldAccess'
 
+		// A CAPTURED enclosing struct is the base (P1.5-A2b-2): `level.rawValue` inside a closure. The base is
+		// not in the closure's OWN scope (the check above), but it resolves into an enclosing capture scope, so
+		// `parseFieldAccess` (via `resolveFieldChain`'s captured arm) reads it out of the env. Asked BEFORE the
+		// type-bound fallback for the same "a value outranks a type name" reason a local base is.
+		if self.captureBinds(self.current()) 'capturedFieldAccess'
+			return try self.parseFieldAccess()
+		end 'capturedFieldAccess'
+
 		// `Color.red` and `Move.walk(Direction.east)` — an ENUM CASE reference or a UNION CONSTRUCT,
 		// the base being a declared enum/union. Asked AFTER the scope-based forms above (a bound base
 		// outranks a type name, exactly as `u16.max` is the last resort) but BEFORE the qualified STATIC
@@ -10320,29 +10418,41 @@ export type Parser
 	// need that analysis at the moment a sink can be written, and not before.
 	function parseMethodCall(func IrFunction, resultUsed bool) returns ValueId throws ParseError
 		let baseTok = self.current()
-		let binding = self.scope.getInfo(self.baseBindingName(baseTok))
+		if self.scope.contains(self.baseBindingName(baseTok)) 'localReceiver'
+			let binding = self.scope.getInfo(self.baseBindingName(baseTok))
 
-		// A STRING RECEIVER is dispatched to the builtin String methods (append, byteLength) rather than
-		// through requireStructBase, which would reject it as not a struct. String is the one non-struct
-		// type carrying methods at this rung; the split is on the binding's TAG, the parser's type oracle.
-		// (self never names a String -- a receiver is always a struct -- so baseBindingName is untouched.)
-		if maxonTypeTag(binding.varType) == ValueTypeTag.string 'stringMethod'
-			return try self.parseStringMethodCall(func, binding: binding, baseTok: baseTok, resultUsed: resultUsed)
-		end 'stringMethod'
+			// A STRING RECEIVER is dispatched to the builtin String methods (append, byteLength) rather than
+			// through requireStructBase, which would reject it as not a struct. String is the one non-struct
+			// type carrying methods at this rung; the split is on the binding's TAG, the parser's type oracle.
+			// (self never names a String -- a receiver is always a struct -- so baseBindingName is untouched.)
+			if maxonTypeTag(binding.varType) == ValueTypeTag.string 'stringMethod'
+				return try self.parseStringMethodCall(func, binding: binding, baseTok: baseTok, resultUsed: resultUsed)
+			end 'stringMethod'
 
-		self.advance()
-		try self.consume(TokenKind.dot)
+			self.advance()
+			try self.consume(TokenKind.dot)
+			return try self.dispatchMethodOnBase(func, base: try self.requireStructBase(binding, baseTok: baseTok), baseTok: baseTok, resultUsed: resultUsed)
+		end 'localReceiver'
 
-		let base = try self.requireStructBase(binding, baseTok: baseTok)
+		// A CAPTURED enclosing struct is the receiver (P1.5-A2b-2): `b.doubled()` inside a closure that
+		// captures the struct `b`. `methodCallsAt` already gated this — the base is not in the closure's own
+		// scope but resolves into a capture scope — so a `notCaptured` here is a driver invariant violation.
+		match try self.captureScopeOf(baseTok) 'captured'
+			found(enclosing) then return try self.capturedMethodCall(func, baseTok: baseTok, enclosing: enclosing, resultUsed: resultUsed)
+			notCaptured then panic("parseMethodCall: '{String.from(baseTok.value)}' is neither a local binding nor a capture, but `methodCallsAt` gated this call — the two must agree on what a method receiver is")
+		end 'captured'
+	end 'parseMethodCall'
 
-		// A member that is a FUNCTION-typed FIELD, not a method — `h.op(21)` / `self.op(x)`, where `op` is
-		// a function-typed field (P1.5-A1). It is an INDIRECT call, not a method dispatch: load the field
-		// (a `function` value) and let the postfix loop (`parsePostfix`) apply the `(args)`. Only a
-		// FUNCTION-typed field diverts here — a non-function field followed by `(` (`p.count(…)` on an int
-		// field) is not a callable member and falls through to the method path, which reports it as an
-		// unknown method exactly as before, keeping existing behaviour unchanged. `resultUsed` does not
-		// apply: the field load is a value producer; the value/statement position is decided at the
-		// indirect call the postfix loop emits.
+	// Dispatch a method (or a function-typed FIELD load) on an already-resolved struct base — the shared tail
+	// of a LOCAL receiver and a CAPTURED one (P1.5-A2b-2). The cursor sits on the member name.
+	//
+	// A member that is a FUNCTION-typed FIELD, not a method — `h.op(21)` / `self.op(x)`, where `op` is a
+	// function-typed field (P1.5-A1) — is an INDIRECT call, not a method dispatch: load the field (a `function`
+	// value) and let the postfix loop (`parsePostfix`) apply the `(args)`. Only a FUNCTION-typed field diverts
+	// here — a non-function field followed by `(` (`p.count(…)` on an int field) is not a callable member and
+	// falls through to the method path, which reports it as an unknown method. `resultUsed` does not apply to
+	// the field load: the value/statement position is decided at the indirect call the postfix loop emits.
+	function dispatchMethodOnBase(func IrFunction, base StructBase, baseTok Token, resultUsed bool) returns ValueId throws ParseError
 		let memberTok = self.current()
 		let fieldIndex = base.layout.indexOfField(memberTok.value)
 		if fieldIndex < base.layout.fieldCount() 'fieldMember'
@@ -10355,7 +10465,33 @@ export type Parser
 		end 'fieldMember'
 
 		return try self.parseCallNamed(func, callee: qualifiedMethodName(base.layout.name, methodName: memberTok.value), anchor: baseTok, receiver: ReceiverArg.value(base.box), resultUsed: resultUsed)
-	end 'parseMethodCall'
+	end 'dispatchMethodOnBase'
+
+	// ⭐ **A METHOD CALL ON A CAPTURED STRUCT RECEIVER (P1.5-A2b-2).** `b.doubled()` where `b` is an enclosing
+	// struct captured by the closure. The receiver box is READ OUT OF THE ENV (`emitCaptureRead` — a borrowed
+	// pointer copy), its layout resolved from the enclosing binding's struct type, then dispatched exactly as a
+	// local receiver: the borrowed box is passed as `__self` (the method borrows its receiver). A captured
+	// non-struct is refused (only a struct carries methods here; a captured String's builtin methods are not
+	// reached by any case at this rung).
+	function capturedMethodCall(func IrFunction, baseTok Token, enclosing Scope, resultUsed bool) returns ValueId throws ParseError
+		self.advance()
+		try self.consume(TokenKind.dot)
+		return try self.dispatchMethodOnBase(func, base: try self.capturedStructBase(baseTok, enclosing: enclosing), baseTok: baseTok, resultUsed: resultUsed)
+	end 'capturedMethodCall'
+
+	// ⭐ **RESOLVE A CAPTURED STRUCT BASE TO ITS (box, layout) (P1.5-A2b-2)** — the shared resolution behind a
+	// captured field access (`level.rawValue`) and a captured method call (`b.doubled()`). The box is READ OUT
+	// OF THE ENV (`emitCaptureRead` — a borrowed pointer copy, one `loadIndirect`, cursor-independent so a
+	// caller may have already consumed the base token), and its layout is resolved from the enclosing binding's
+	// struct type exactly as `requireStructBase` does for a local base. A captured non-struct is refused (only a
+	// struct carries fields and methods; a captured String's builtin methods are reached by no case here).
+	function capturedStructBase(baseTok Token, enclosing Scope) returns StructBase throws ParseError
+		let binding = enclosing.getInfo(baseTok.value)
+		if maxonTypeTag(binding.varType) != ValueTypeTag.structRef 'notAStruct'
+			throw ParseError.unsupported("a field access or method call on the captured '{String.from(baseTok.value)}', which is declared '{typeTagName(maxonTypeTag(binding.varType))}' and not a struct type (only a struct has fields and methods)", line: baseTok.line, column: baseTok.column)
+		end 'notAStruct'
+		return StructBase.create(try self.structLayoutOfBinding(binding, baseTok: baseTok), box: self.emitCaptureRead(baseTok, enclosing: enclosing))
+	end 'capturedStructBase'
 
 	// A STRING'S BUILTIN METHODS -- s.append(t) and s.byteLength(). String is the one non-struct type
 	// carrying methods at this rung, so it has its own dispatch rather than riding requireStructBase.
@@ -10458,13 +10594,32 @@ export type Parser
 	// read's expression continues).
 	function resolveFieldChain() returns FieldChainStep throws ParseError
 		let baseTok = try self.consume(TokenKind.identifier)
-		if not self.scope.contains(baseTok.value) 'undeclared'
-			throw ParseError.undefinedVariable(String.from(baseTok.value), line: baseTok.line, column: baseTok.column)
-		end 'undeclared'
-		let baseBinding = self.scope.getInfo(baseTok.value)
-		let base = try self.requireStructBase(baseBinding, baseTok: baseTok)
-		return try self.resolveFieldChainFrom(base.box, layout: base.layout, baseTok: baseTok, baseBinding: baseBinding)
+		if self.scope.contains(baseTok.value) 'localBase'
+			let baseBinding = self.scope.getInfo(baseTok.value)
+			let base = try self.requireStructBase(baseBinding, baseTok: baseTok)
+			return try self.resolveFieldChainFrom(base.box, layout: base.layout, baseTok: baseTok, baseBinding: baseBinding)
+		end 'localBase'
+		// A CAPTURED enclosing struct is the base (P1.5-A2b-2): `level.rawValue` inside a closure that captures
+		// `level`. The base is not in the closure's own scope; `resolveCapturedFieldChain` reads the box out of
+		// the env and resolves its layout the same way `requireStructBase` does.
+		match try self.captureScopeOf(baseTok) 'captured'
+			found(enclosing) then return try self.resolveCapturedFieldChain(baseTok, enclosing: enclosing)
+			notCaptured then break 'captured'
+		end 'captured'
+		throw ParseError.undefinedVariable(String.from(baseTok.value), line: baseTok.line, column: baseTok.column)
 	end 'resolveFieldChain'
+
+	// ⭐ **RESOLVE A FIELD-ACCESS CHAIN ON A CAPTURED STRUCT BASE (P1.5-A2b-2).** `level.rawValue` inside a
+	// closure that captures the enclosing struct `level`. The box is READ OUT OF THE ENV (`emitCaptureRead` —
+	// a borrowed pointer copy, one `loadIndirect`), and its layout is resolved from the ENCLOSING binding's
+	// struct type, identical to a local base. The enclosing binding is threaded as `baseBinding` so a WRITE
+	// through a captured base (`level.x = …`) is correctly refused: a captured `let` is immutable (E2013).
+	function resolveCapturedFieldChain(baseTok Token, enclosing Scope) returns FieldChainStep throws ParseError
+		let base = try self.capturedStructBase(baseTok, enclosing: enclosing)
+		// The enclosing binding is threaded as `baseBinding` so a WRITE through a captured base (`level.x = …`)
+		// is correctly refused — a captured `let` is immutable (E2013). A read never reads it.
+		return try self.resolveFieldChainFrom(base.box, layout: base.layout, baseTok: baseTok, baseBinding: enclosing.getInfo(baseTok.value))
+	end 'resolveCapturedFieldChain'
 
 	// Consume one `.field` on `(box, layout)`. The final field (no `.` after) is RETURNED unread for the
 	// caller to read or write; an INTERMEDIATE field (a `.` follows) must be a struct — it is LOADED as the
@@ -10961,12 +11116,20 @@ export type Parser
 			throw ParseError.unsupported("a field access through '{String.from(baseTok.value)}', which is a struct-typed FIELD of the enclosing type (its box has to be loaded out of the receiver before it can be addressed, which arrives with the rung that gives a field a struct type — no struct-typed field can be constructed yet)", line: baseTok.line, column: baseTok.column)
 		end 'structTypedField'
 
-		let typeName = try self.artifact.typeNames.nameOf(typeNameIdOf(binding.varType)) otherwise panic("requireStructBase: '{String.from(baseTok.value)}' carries a structRef whose name id is not in this file's interner — every structRef the parser mints is interned from a name in the same table")
-		match self.signatures.structOf(typeName) 'declared'
-			declared(layout) then return StructBase.create(layout, box: binding.boundValue)
-			undeclared then panic("requireStructBase: '{String.from(baseTok.value)}' is typed `structRef({String.from(typeName)})` but no file declares that type — a structRef is only minted for a name the declaration sweep recorded (Parser.parseTypeReference)")
-		end 'declared'
+		return StructBase.create(try self.structLayoutOfBinding(binding, baseTok: baseTok), box: binding.boundValue)
 	end 'requireStructBase'
+
+	// The `StructLayout` a struct-typed binding names — the guarded layout half of `requireStructBase`,
+	// factored out so a CAPTURED struct base (whose box is the value read out of the env, not
+	// `binding.boundValue`) can resolve its layout the identical way (`resolveCapturedFieldChain`). The
+	// binding's `structRef` name keys the layout registry. Assumes the `structRef` gate above already held.
+	function structLayoutOfBinding(binding VarInfo, baseTok Token) returns StructLayout throws ParseError
+		let typeName = try self.artifact.typeNames.nameOf(typeNameIdOf(binding.varType)) otherwise panic("structLayoutOfBinding: '{String.from(baseTok.value)}' carries a structRef whose name id is not in this file's interner — every structRef the parser mints is interned from a name in the same table")
+		match self.signatures.structOf(typeName) 'declared'
+			declared(layout) then return layout
+			undeclared then panic("structLayoutOfBinding: '{String.from(baseTok.value)}' is typed `structRef({String.from(typeName)})` but no file declares that type — a structRef is only minted for a name the declaration sweep recorded (Parser.parseTypeReference)")
+		end 'declared'
+	end 'structLayoutOfBinding'
 
 	// `loadIndirect <box> <offset>` — the one op a field read is.
 	//
@@ -11210,28 +11373,49 @@ export type Parser
 	// (`closureEnvParamId`). A capture from a NON-immediate enclosing frame (a nested capturing closure) needs
 	// an env chain this slice does not build, so it is refused cleanly (E2015 → A2b-2).
 	function captureEnclosing(tok Token) returns CaptureResult throws ParseError
-		let depth = self.closureCaptureScopes.count()
-		if depth == 0 'notInClosure'
-			return CaptureResult.notCaptured
-		end 'notInClosure'
+		match try self.captureScopeOf(tok) 'scope'
+			found(enclosing) then return CaptureResult.captured(self.emitCaptureRead(tok, enclosing: enclosing))
+			notCaptured then return CaptureResult.notCaptured
+		end 'scope'
+	end 'captureEnclosing'
 
-		// Innermost enclosing frame first — a name resolves to the nearest scope that binds it, exactly as an
-		// ordinary lookup would (`popScope`'s shadowing rules), so the FIRST hit walking down is the capture
-		// source.
+	// Does `tok` resolve to a CAPTURE — a binding in any enclosing scope this closure body is nested in? A
+	// cheap membership predicate that neither emits a capture nor raises the nested-frame error (the actual
+	// capture through `captureScopeOf` does both). Used by `parseDottedPrimary` to route `capturedStruct.field`
+	// to field access. False outside a closure (`closureCaptureScopes` empty).
+	function captureBinds(tok Token) returns bool
+		for enclosing in self.closureCaptureScopes 'each'
+			if enclosing.contains(tok.value) 'bound'
+				return true
+			end 'bound'
+		end 'each'
+		return false
+	end 'captureBinds'
+
+	// ⭐ **THE CAPTURE-SCOPE WALK (P1.5-A2b) — the ONE place that answers "is this name a capture, and from
+	// which enclosing frame?"** Shared by the bare read (`captureEnclosing`) and the field/method base
+	// (`resolveFieldChain`/`methodBaseCapture`), so they cannot disagree about what is captured. Walks the
+	// enclosing scopes innermost-first — a name resolves to the nearest scope that binds it, exactly as an
+	// ordinary lookup would (`popScope`'s shadowing rules), so the FIRST hit walking down is the capture
+	// source. A hit in a NON-immediate enclosing frame is a nested capturing closure, refused cleanly (the env
+	// chain this slice does not build). Outside a closure `closureCaptureScopes` is empty and this returns
+	// `notCaptured` after one `count()` read.
+	function captureScopeOf(tok Token) returns CaptureScopeResult throws ParseError
+		let depth = self.closureCaptureScopes.count()
 		var i = depth
 		while i > 0 'eachEnclosing'
 			i = i - 1
-			let enclosing = try self.closureCaptureScopes.get(i) otherwise panic("captureEnclosing: closureCaptureScopes.get OOB at {i}")
+			let enclosing = try self.closureCaptureScopes.get(i) otherwise panic("captureScopeOf: closureCaptureScopes.get OOB at {i}")
 			if enclosing.contains(tok.value) 'captured'
 				if i != depth - 1 'nested'
 					throw ParseError.unsupported("a closure that captures a variable from a non-immediate enclosing frame (nested capturing closures — P1.5-A2b-2)", line: tok.line, column: tok.column)
 				end 'nested'
-				return CaptureResult.captured(self.emitCaptureRead(tok, enclosing: enclosing))
+				return CaptureScopeResult.found(enclosing)
 			end 'captured'
 		end 'eachEnclosing'
 
-		return CaptureResult.notCaptured
-	end 'captureEnclosing'
+		return CaptureScopeResult.notCaptured
+	end 'captureScopeOf'
 
 	// Assign (or reuse) the env slot for a captured name and emit its BY-VALUE read: `loadIndirect __env,
 	// slot*8`. The slot column (`captureNames`) is env-array order; the parallel `captureValues`/`captureTypes`
@@ -11487,7 +11671,7 @@ export type Parser
 		// user parameters only). If the body captures, `paramCount`/`maxonParamTypes` are patched below to
 		// carry the trailing `__env`. File-private (a closure is never callable across files by name), and it
 		// NEVER throws (the closure grammar has no throws clause).
-		var lifted = IrFunction.create(closureName, maxonReturnType: MaxonReturnType.value(MaxonType.unresolved), paramCount: paramCount, maxonParamTypes: paramTypes, valueTags: self.valueTags, valueNameIds: self.valueNameIds, returnLine: givesTok.line)
+		var lifted = IrFunction.create(closureName, maxonReturnType: MaxonReturnType.value(MaxonType.unresolved), paramCount: paramCount, maxonParamTypes: paramTypes, valueTags: self.valueTags, valueNameIds: self.valueNameIds, valueClosureEnv: self.valueClosureEnv, returnLine: givesTok.line)
 		lifted.namespace = self.namespace
 		lifted.visibility = Visibility.file
 		lifted.sourceFilePath = self.filePath
@@ -11516,24 +11700,28 @@ export type Parser
 		let bodyType = self.typeOf(bodyValue)
 		try self.emitOwnedValueReturn(bodyValue, anchor: givesTok)
 
-		// Did the body capture? Snapshot the collected set before it is restored away. When it captured,
-		// PROMOTE the reserved `__env` slot to a real trailing parameter now, while still in the closure's
-		// context: `emitParams` (lowering) reads `paramCount`/`maxonParamTypes`, so a patch here is seen.
+		// Did the body capture? Snapshot the collected set before it is restored away.
 		let captureCount = self.captureNames.count()
 		let capturedValuesSnapshot = self.captureValues
 		let capturedTypesSnapshot = self.captureTypes
-		if captureCount > 0 'promoteEnvParam'
-			lifted.paramCount = (paramCount + 1) as ParamCount
-			var liftedParamTypes = MaxonTypeArray.create()
-			for pt in paramTypes 'copyUserParams'
-				liftedParamTypes.push(pt)
-			end 'copyUserParams'
-			liftedParamTypes.push(MaxonType.integer)
-			lifted.maxonParamTypes = liftedParamTypes
-			// Give the `__env` param a source origin (its declaring `function` keyword) so the register-pressure
-			// diagnostic can resolve it, exactly as `bindParameters` records one per user parameter.
-			self.artifact.recordParamOrigin(paramCount, range: SourceRange.ofToken(functionTok))
-		end 'promoteEnvParam'
+		// ⭐ **PROMOTE THE RESERVED `__env` SLOT TO A REAL TRAILING PARAMETER — ALWAYS (P1.5-A2b-2).** Under the
+		// uniform `(userargs, env)` ABI EVERY function value is called through the SAME indirect signature, so a
+		// lifted closure's own type must be `(userargs, __env) -> R` whether or not it captures — on wasm the
+		// `call_indirect` functype is derived from the ARG COUNT (userargs + env), and the table element's own
+		// functype must match. A NON-capturing closure never reads the slot (its body has no capture load), so the
+		// param is inert there, but its presence keeps the closure's functype uniform with a capturing one and with
+		// a plain function's `__fnref_` thunk. `emitParams` (lowering) reads `paramCount`/`maxonParamTypes`, so a
+		// patch here is seen.
+		lifted.paramCount = (paramCount + 1) as ParamCount
+		var liftedParamTypes = MaxonTypeArray.create()
+		for pt in paramTypes 'copyUserParams'
+			liftedParamTypes.push(pt)
+		end 'copyUserParams'
+		liftedParamTypes.push(MaxonType.integer)
+		lifted.maxonParamTypes = liftedParamTypes
+		// Give the `__env` param a source origin (its declaring `function` keyword) so the register-pressure
+		// diagnostic can resolve it, exactly as `bindParameters` records one per user parameter.
+		self.artifact.recordParamOrigin(paramCount, range: SourceRange.ofToken(functionTok))
 
 		// Patch the return type now the body is known, and register the lift so it is callable (module +
 		// project signature registries) and its return type is resolvable at an indirect call through a
@@ -12291,10 +12479,10 @@ export type Parser
 			// short-circuit an EARLIER argument performed.
 			let value = try self.parseBinary(func, minPrec: OrPrecedence)
 
-			// A capturing closure handed to another function has no env at the callee (see
-			// `rejectCapturingClosureArg`) — refuse it here, where the argument's leading token anchors the span.
-			try self.rejectCapturingClosureArg(value, tok: argFirstTok)
-
+			// A capturing closure handed DOWN to a direct callee is now SUPPORTED (P1.5-A2b-2): its environment
+			// travels as the companion argument the lowering appends at the function-typed parameter position
+			// (`LowerMaxonToStd.appendCalleeEnvArgs`), so the callee's `f(x)` reads the right env. No refusal
+			// here. (A capturing closure at a NON-function parameter is a type error caught by SemanticCheck.)
 			pushCallArg(args, argLabels: argLabels, argRanges: argRanges, value: value, label: label, range: SourceRange.ofToken(argFirstTok))
 			argIndex = argIndex + 1
 
@@ -12485,15 +12673,13 @@ export type Parser
 
 		let rparenTok = try self.consume(TokenKind.rightParen)
 
-		// ⭐ **THE ENV TRAVELS WITH THE VALUE (P1.5-A2b).** A capturing closure's call passes its environment
-		// as the trailing `__env` arg — the one place the (fn, env) convention is honored, keyed on the
-		// callee VALUE via `valueClosureEnv`. A non-capturing callee (a plain function ref or non-capturing
-		// closure) appends nothing, so its call is A1's env-less `callIndirect`, byte-identical. This is the
-		// single point that answers "what env travels with this value?" — a plain call and (at A2b-2) a
-		// try-call read the SAME `closureEnvOf`.
-		if self.isCapturingClosure(callee) 'capturingCallee'
-			args.push(self.closureEnvOf(callee))
-		end 'capturingCallee'
+		// ⭐ **THE ENV TRAVELS WITH THE VALUE — UNIFORMLY (P1.5-A2b-2).** Every indirect call passes an
+		// environment as the trailing arg: the callee VALUE's own env when it carries one (a capturing closure's
+		// block, or a function-typed parameter's companion env), else a materialized null. The uniform ABI is
+		// what lets a callee that is only known to be `function(T) returns R` — a value passed DOWN to a generic
+		// `apply(f, x)` — be called without static knowledge of whether it captures. `emitClosureEnvArg` answers
+		// once, keyed on the value.
+		args.push(self.emitClosureEnvArg(callee, range: SourceRange.between(anchor, last: rparenTok)))
 
 		let result = self.mintIndirectCallResult(callee)
 		self.artifact.emitOp(self.currentBlock, op: MaxonOp.indirectCall(result, callee: callee, args: args), range: SourceRange.between(anchor, last: rparenTok))
@@ -12764,7 +12950,10 @@ export type Parser
 		if self.kindAt(index + 1) != TokenKind.dot or self.kindAt(index + 2) != TokenKind.identifier or self.kindAt(index + 3) != TokenKind.leftParen 'notADottedCall'
 			return false
 		end 'notADottedCall'
-		return self.scope.contains(self.baseBindingName(self.tokenAt(index)))
+		// A LOCAL receiver, or a CAPTURED enclosing one (`b.doubled()` inside a closure — P1.5-A2b-2). Either
+		// is a VALUE the method dispatches on, which is what separates it from a static call on a TYPE name.
+		let baseTok = self.tokenAt(index)
+		return self.scope.contains(self.baseBindingName(baseTok)) or self.captureBinds(baseTok)
 	end 'methodCallsAt'
 
 	// The kind of the token ONE past the cursor. The parser's two-token lookahead:

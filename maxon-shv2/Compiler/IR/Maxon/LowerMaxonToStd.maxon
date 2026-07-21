@@ -225,6 +225,19 @@ function signatureHasFloatParam(sig FuncSignature) returns bool
 	return false
 end 'signatureHasFloatParam'
 
+// Does any parameter of `sig` have `function` type — the ONLY thing that forces a companion environment
+// argument to be threaded at the call (see `MaxonToStdLowering.appendCalleeEnvArgs`). Bounded scan (the same
+// shape as `signatureHasFloatParam`), so the overwhelmingly common no-function call returns its slotted
+// arguments verbatim rather than building a fresh array.
+function signatureHasFunctionParam(sig FuncSignature) returns bool
+	for paramType in sig.paramTypes 'eachParam'
+		if maxonTypeTag(paramType) == ValueTypeTag.function 'function'
+			return true
+		end 'function'
+	end 'eachParam'
+	return false
+end 'signatureHasFunctionParam'
+
 // Public entry: lower a whole MaxonModule to a fresh StdModule. Takes the project's
 // `funcSignatures` registry so `lowerCall` can reorder each call's labelled arguments
 // to the callee's declaration order (the registry is the only whole-program source of
@@ -264,6 +277,10 @@ type MaxonToStdLowering
 	// It is a per-function BINDING rather than a parameter threaded through `lowerOp`, because
 	// every op in a function shares one column and the walk is already per-function.
 	var valueTags as ValueTypeTagArray
+	// The per-value closure-environment column of the function CURRENTLY being lowered (P1.5-A2b-2) —
+	// re-pointed per function like `valueTags`, from the SAME `IrFunction.valueClosureEnv` the parser
+	// published. `appendCalleeEnvArgs` reads it to thread a function-value ARGUMENT's environment to a callee.
+	var valueClosureEnv as ValueIdArray
 	// The `throws` clause of the function CURRENTLY being lowered (P1.4b) — re-pointed per function like
 	// `valueTags`. `emitRetOrErrorReturn` reads it to decide whether a normal `ret`/`retVoid` becomes the
 	// dual-register `errorReturn` (a THROWING function writes both the value AND a zero error flag).
@@ -283,7 +300,7 @@ type MaxonToStdLowering
 	var nextValueId as ValueId
 
 	static function create(maxonModule MaxonModule, funcSignatures FuncSignatureMap, globalData GlobalDataTable) returns MaxonToStdLowering
-		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), funcSignatures: funcSignatures, globalData: globalData, valueTags: ValueTypeTagArray.create(), currentThrows: ThrowsClause.none, currentReturnType: StdReturnType.void, nextValueId: 0}
+		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), funcSignatures: funcSignatures, globalData: globalData, valueTags: ValueTypeTagArray.create(), valueClosureEnv: ValueIdArray.create(), currentThrows: ThrowsClause.none, currentReturnType: StdReturnType.void, nextValueId: 0}
 	end 'create'
 
 	// The Std type a VALUE computes in — the truth the arith band's `operandType` carries, and a
@@ -326,6 +343,13 @@ type MaxonToStdLowering
 			for paramType in func.maxonParamTypes 'eachParam'
 				stdParams.push(maxonTypeToStdType(paramType))
 			end 'eachParam'
+			// The uniform ABI's companion environment parameters (P1.5-A2b-2) sit PAST the user parameters:
+			// `paramCount` counts them, `maxonParamTypes` does not (each is an i64 pointer with no source type).
+			// Grow the Std parameter list to `paramCount` so `emitParams` materializes every incoming register and
+			// the wasm functype covers every slot.
+			for _ in func.maxonParamTypes.count() upto func.paramCount 'envParam'
+				stdParams.push(StdType.i64)
+			end 'envParam'
 			func.returnType = maxonReturnTypeToStdReturnType(func.maxonReturnType)
 			func.paramTypes = stdParams
 			self.stdModule.functions.push(func)
@@ -338,6 +362,9 @@ type MaxonToStdLowering
 			// Point the type oracle at THIS function before any of its ops are lowered — the
 			// column is dense per function, so every `stdTypeOf` below reads the right one.
 			self.valueTags = srcFunc.valueTags
+			// The closure-environment column travels with it (P1.5-A2b-2): `appendCalleeEnvArgs` threads a
+			// function-value argument's env from here.
+			self.valueClosureEnv = srcFunc.valueClosureEnv
 			self.currentThrows = srcFunc.throwsTypeName
 			// The Std return type was collapsed onto `srcFunc.returnType` in the `transferFuncs` pass above,
 			// so it is final here — read it, don't re-collapse `maxonReturnType`.
@@ -422,9 +449,10 @@ type MaxonToStdLowering
 			tryCall(result, errorFlag, callee, args, argLabels, _) then self.lowerTryCall(result, errorFlag: errorFlag, callee: callee, args: args, argLabels: argLabels, dstBlock: dstBlock)
 			// `panicAbort` expands into `osExit` (the message is validated but not printed — see the helper).
 			panicAbort then self.lowerPanicAbort(dstBlock)
-			// A function VALUE — a `.text` code address (P1.5-A1). Lowers 1:1 to the Std `funcAddr`, the
-			// `.text` twin of `globalAddr`; the `funcName` passes through verbatim.
-			functionRef(result, funcName) then self.stdModule.appendOp(dstBlock, op: StdOp.funcAddr(result, funcName: funcName))
+			// A function VALUE — a `.text` code address (P1.5-A1). Lowers to the Std `funcAddr`, the
+			// `.text` twin of `globalAddr`; a PLAIN function routes through its `__fnref_` env-thunk so the
+			// materialized address has the uniform `(userargs, env) -> R` shape (P1.5-A2b-2).
+			functionRef(result, funcName) then self.lowerFunctionRef(result, funcName: funcName, dstBlock: dstBlock)
 			// A call THROUGH a function value (P1.5-A1) — lowers to the Std `callIndirect`, the callee value
 			// passing through as the register the call goes through. Positional args, no labels to slot.
 			indirectCall then self.lowerIndirectCall(hlOp, dstBlock: dstBlock)
@@ -526,7 +554,7 @@ type MaxonToStdLowering
 
 		let sig = try self.funcSignatures.get(callee) otherwise panic("lowerCall: callee '{String.from(callee)}' has no signature — SemanticCheck must reject an unknown callee before lowering")
 		match slotCallArgs(sig, args: args, argLabels: argLabels) 'slot'
-			ordered(argIds) then self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: callee, args: self.widenIntArgsToFloatParams(argIds, sig: sig, dstBlock: dstBlock)))
+			ordered(argIds) then self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: callee, args: self.finalizeCallArgs(argIds, sig: sig, dstBlock: dstBlock)))
 			arityMismatch then panic("lowerCall: arity mismatch for '{String.from(callee)}' reached lowering — SemanticCheck must gate it")
 			unknownLabel then panic("lowerCall: unknown argument label for '{String.from(callee)}' reached lowering — SemanticCheck must gate it")
 			duplicateArg then panic("lowerCall: duplicate argument for '{String.from(callee)}' reached lowering — SemanticCheck must gate it")
@@ -574,6 +602,17 @@ type MaxonToStdLowering
 			default panic("lowerIndirectCall: expected an `indirectCall` op, got a different MaxonOp variant — `lowerOp` routes only `indirectCall` here")
 		end 'ic'
 	end 'lowerIndirectCall'
+
+	// Materialize a function value's `.text` address (P1.5-A2b-2). Under the uniform `(userargs, env) -> R`
+	// ABI every function value is called through the SAME indirect signature, so the address must name a
+	// function of that shape. A LIFTED CLOSURE already is one (its trailing `__env` parameter). A PLAIN named
+	// function is not, and its direct calls must stay unchurned — so its value use materializes the address of
+	// its `__fnref_` thunk instead, which `installFnRefThunks` synthesizes with the env-carrying signature.
+	// The thunk names cannot drift: `fnRefThunkName` is the ONE builder both this site and the synthesis read.
+	function lowerFunctionRef(result ValueId, funcName ByteArray, dstBlock IrBlock)
+		let target = funcName if isLiftedClosureName(funcName) else fnRefThunkName(funcName)
+		self.stdModule.appendOp(dstBlock, op: StdOp.funcAddr(result, funcName: target))
+	end 'lowerFunctionRef'
 
 	// ⭐ **int→float ARGUMENT WIDENING (F3a)** — the CALL-SITE dual of the `return`/assignment float
 	// coercions the parser already owns, and it lives HERE because this is the first tier that holds a
@@ -631,6 +670,60 @@ type MaxonToStdLowering
 		self.lowerUnaryOp(widened, operand: argId, op: MaxonUnaryOp.promoteToFloat, dstBlock: dstBlock)
 		return widened
 	end 'floatWidenedArg'
+
+	// ⭐ **APPEND THE COMPANION ENVIRONMENT ARGUMENT FOR EACH FUNCTION-TYPED PARAMETER (P1.5-A2b-2).** The
+	// uniform ABI splits a function value into (fn ptr, env): the slotted `argIds` carry the fn-ptr half at
+	// each function-typed parameter's position, and this appends the env half — the argument value's OWN
+	// environment (a capturing closure's block, else a null for a plain function reference or a non-capturing
+	// closure). The environments append in PARAMETER order, exactly the order the callee's
+	// `Parser.bindClosureEnvParams` assigned its companion parameters, so fn-ptr and env meet at the callee.
+	// This is the DIRECT-call dual of `Parser.emitClosureEnvArg` (the indirect-call threading); it lives at
+	// this tier because it needs the callee's ALIAS-RESOLVED parameter types (a `function` parameter may be
+	// declared in another file), which the parser does not have.
+	// The two call-argument transforms a slotted call needs, composed in one place so `lowerCall` and
+	// `lowerTryCall` cannot apply them in different orders: an int→float widening at a float parameter (F3a),
+	// then a companion environment appended per function parameter (P1.5-A2b-2). They are independent (a
+	// parameter is float, function, or neither), and widening preserves the arg count, so the env append's
+	// per-position scan stays aligned with the signature.
+	function finalizeCallArgs(argIds ValueIdArray, sig FuncSignature, dstBlock IrBlock) returns ValueIdArray
+		return self.appendCalleeEnvArgs(self.widenIntArgsToFloatParams(argIds, sig: sig, dstBlock: dstBlock), sig: sig, dstBlock: dstBlock)
+	end 'finalizeCallArgs'
+
+	function appendCalleeEnvArgs(argIds ValueIdArray, sig FuncSignature, dstBlock IrBlock) returns ValueIdArray
+		// FAST PATH: almost no callee takes a function parameter, so a signature with none returns its
+		// arguments verbatim — no array built, no op emitted (the shape `widenIntArgsToFloatParams` uses).
+		if not signatureHasFunctionParam(sig) 'noFunctionParam'
+			return argIds
+		end 'noFunctionParam'
+
+		var withEnvs = ValueIdArray.create()
+		for argId in argIds 'copyUser'
+			withEnvs.push(argId)
+		end 'copyUser'
+		for i in 0 upto argIds.count() 'eachParam'
+			let paramType = try sig.paramTypes.get(i) otherwise panic("appendCalleeEnvArgs: sig.paramTypes.get OOB at {i} — slotCallArgs returned {argIds.count()} ordered args against a {sig.paramCount()}-parameter signature")
+			if maxonTypeTag(paramType) != ValueTypeTag.function 'notFunction'
+				continue
+			end 'notFunction'
+			let argId = try argIds.get(i) otherwise panic("appendCalleeEnvArgs: argIds.get OOB at {i}")
+			withEnvs.push(self.calleeEnvArg(argId, dstBlock: dstBlock))
+		end 'eachParam'
+		return withEnvs
+	end 'appendCalleeEnvArgs'
+
+	// The environment a function-value ARGUMENT carries: its own env when it has one (`valueClosureEnv != 0` —
+	// a capturing closure's block, published by the parser), else a freshly materialized null. A stored 0
+	// unambiguously means "no environment" (a real env id is always `>= 1`), so a null is minted for a plain
+	// function reference / non-capturing closure argument.
+	function calleeEnvArg(argId ValueId, dstBlock IrBlock) returns ValueId
+		let env = try self.valueClosureEnv.get(argId) otherwise panic("calleeEnvArg: v{argId} has no closure-env slot — the column is dense over every ValueId the parser minted")
+		if env != 0 'carriesEnv'
+			return env
+		end 'carriesEnv'
+		let nullEnv = self.mintStdValueId()
+		self.stdModule.appendOp(dstBlock, op: StdOp.const(nullEnv, value: 0, valueType: StdType.i64))
+		return nullEnv
+	end 'calleeEnvArg'
 
 	// Lower a Maxon binary op to its Std counterpart. The operand and result
 	// ValueIds pass through verbatim (this pass never renumbers — see the header);
@@ -834,7 +927,7 @@ type MaxonToStdLowering
 	function lowerTryCall(result ValueId, errorFlag ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, dstBlock IrBlock)
 		let sig = try self.funcSignatures.get(callee) otherwise panic("lowerTryCall: throwing callee '{String.from(callee)}' has no signature — SemanticCheck must reject an unknown callee before lowering")
 		match slotCallArgs(sig, args: args, argLabels: argLabels) 'slot'
-			ordered(argIds) then self.stdModule.appendOp(dstBlock, op: StdOp.tryCall(result, errorFlagId: errorFlag, callee: callee, args: self.widenIntArgsToFloatParams(argIds, sig: sig, dstBlock: dstBlock)))
+			ordered(argIds) then self.stdModule.appendOp(dstBlock, op: StdOp.tryCall(result, errorFlagId: errorFlag, callee: callee, args: self.finalizeCallArgs(argIds, sig: sig, dstBlock: dstBlock)))
 			arityMismatch then panic("lowerTryCall: arity mismatch for '{String.from(callee)}' reached lowering — SemanticCheck must gate it")
 			unknownLabel then panic("lowerTryCall: unknown argument label for '{String.from(callee)}' reached lowering — SemanticCheck must gate it")
 			duplicateArg then panic("lowerTryCall: duplicate argument for '{String.from(callee)}' reached lowering — SemanticCheck must gate it")

@@ -126,6 +126,17 @@ export type IrFunction
 	//
 	// Empty on a Std-phase function (`createFromStd`), exactly like `valueTags`.
 	export var valueNameIds as TypeNameIdArray
+	// ⭐ **THE PER-VALUE CLOSURE-ENVIRONMENT COLUMN (P1.5-A2b-2), DENSE by ValueId in lockstep with
+	// `valueTags`.** The environment a function VALUE carries, or 0 when it carries none. A real environment
+	// is always a minted value id (`>= 1` — a heap env block, a companion-env parameter, or a const-0 op is
+	// never id 0, the first parameter), so a stored 0 unambiguously means "no environment". PUBLISHED here
+	// (like `valueTags`/`valueNameIds`), and for the same reason a call-argument rule cannot live wholly in the
+	// parser: threading a function-value ARGUMENT's environment to a callee is done at LOWERING
+	// (`LowerMaxonToStd.appendCalleeEnvArgs`), the first tier that holds the callee's ALIAS-RESOLVED parameter
+	// types (a function-typed parameter may be declared in another file). The parser cannot know there which
+	// arguments land at function-typed parameters, so it publishes each value's environment here and the
+	// lowering reads it. Empty on a Std-phase function (`createFromStd`).
+	export var valueClosureEnv as ValueIdArray
 	// `throws E` clause from the declaration; `ThrowsClause.none` for non-throwing.
 	export var throwsTypeName as ThrowsClause
 	// Persistent per-function symbol table, handed off by the parser. Std-phase
@@ -170,7 +181,7 @@ export type IrFunction
 	// lockstep — as the body's values are minted. Constructing empty ones here and having the parser
 	// overwrite them at the end of the body would leave dead arrays per function on the heap
 	// (`scale-test` charged that exactly: +48 allocations on the smallest rung, doubling with the corpus).
-	export static function create(name ByteArray, maxonReturnType MaxonReturnType, paramCount ParamCount, maxonParamTypes MaxonTypeArray, valueTags ValueTypeTagArray, valueNameIds TypeNameIdArray, returnLine LineNumber, throwsTypeName ThrowsClause = ThrowsClause.none) returns IrFunction
+	export static function create(name ByteArray, maxonReturnType MaxonReturnType, paramCount ParamCount, maxonParamTypes MaxonTypeArray, valueTags ValueTypeTagArray, valueNameIds TypeNameIdArray, valueClosureEnv ValueIdArray, returnLine LineNumber, throwsTypeName ThrowsClause = ThrowsClause.none) returns IrFunction
 		return Self{
 			name: name,
 			namespace: "",
@@ -186,6 +197,7 @@ export type IrFunction
 			maxonParamTypes: maxonParamTypes,
 			valueTags: valueTags,
 			valueNameIds: valueNameIds,
+			valueClosureEnv: valueClosureEnv,
 			throwsTypeName: throwsTypeName,
 			scope: Scope.create(),
 			returnType: StdReturnType.void,
@@ -218,6 +230,7 @@ export type IrFunction
 			maxonParamTypes: MaxonTypeArray.create(),
 			valueTags: ValueTypeTagArray.create(),
 			valueNameIds: TypeNameIdArray.create(),
+			valueClosureEnv: ValueIdArray.create(),
 			throwsTypeName: throwsTypeName,
 			scope: Scope.create(),
 			returnType: returnType,
@@ -254,6 +267,7 @@ export type IrFunction
 			maxonParamTypes: src.maxonParamTypes,
 			valueTags: src.valueTags,
 			valueNameIds: src.valueNameIds,
+			valueClosureEnv: src.valueClosureEnv,
 			throwsTypeName: src.throwsTypeName,
 			scope: src.scope,
 			returnType: src.returnType,
