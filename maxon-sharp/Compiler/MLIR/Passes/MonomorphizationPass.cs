@@ -2399,7 +2399,7 @@ public static class MonomorphizationPass {
       case MaxonReturnOp ret:
         return new MaxonReturnOp(ret.Value != null ? mapValue(ret.Value) : null, ret.IsErrorPropagation);
       case MaxonThrowOp th:
-        return new MaxonThrowOp(mapValue(th.ErrorValue), th.ErrorTypeName);
+        return new MaxonThrowOp(mapValue(th.ErrorValue), th.ErrorTypeName) { IsOwnedLocalTransfer = th.IsOwnedLocalTransfer };
       case MaxonStructLiteralOp structLit: {
         var newFieldValues = structLit.FieldValues.Select(fv => (fv.FieldName, mapValue(fv.Value))).ToList();
         var cloned = new MaxonStructLiteralOp(sub.SubstituteName(structLit.TypeName), newFieldValues) {

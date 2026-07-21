@@ -475,9 +475,21 @@ public static partial class MaxonToStandardConversion {
       //    transferred a reference through its own return-incref. Incref'ing here
       //    would deliver rc=2 against the receiver's single decref, leaking the
       //    error (OPEN #47 / #16). Skip it.
-      // This mirrors LowerReturn, whose transfer-incref likewise excludes an
-      // Orphan|CallReturn temp — see the isEnum/StructManagedTemp `!Orphan` guards.
-      if (!temps.IsCallReturnTransfer(throwHp.VarName!)) {
+      //  - A KEPT OWNED LOCAL (`throw e`, or a re-thrown caught error) is a parser-level
+      //    binding, NOT a lowering temp: scope-end now TRANSFERS it (keepVars, OPEN #63)
+      //    instead of reclaiming it, so it already arrives rc=1. Incref'ing it too would
+      //    deliver rc=2 against the receiver's single decref — a leak. So the incref fires
+      //    only for a managed TEMP (a fresh construct or a borrowed field read) or a PARAM
+      //    (`throw errArg`, owned by the caller), never a plain owned local. This mirrors
+      //    LowerReturn, whose transfer-incref is likewise `isEnumParam || managed-temp`.
+      // A KEPT OWNED LOCAL already owns its reference at rc=1; scope-end TRANSFERS it (keepVars),
+      // so incref'ing it too delivers rc=2 against the receiver's single decref — a leak (OPEN #63).
+      // Everything else reaching here still needs the incref to become owned-on-delivery: a fresh
+      // CONSTRUCT (Orphan temp, rc=0), a BORROWED self-field (owned by the receiver's box, whose
+      // destructor reclaims it during the caller's cleanup), and a PARAM (owned by the caller). So skip
+      // the incref ONLY for a plain owned LOCAL binding — one that is NOT a lowering temp and NOT
+      // borrowed / a self-field / a param — the same value scope-end's keepVars just protected.
+      if (!temps.IsCallReturnTransfer(throwHp.VarName!) && !throwOp.IsOwnedLocalTransfer) {
         EmitIncref(block, throwHp.VarName!, varTypes, scopeName: throwOp.ErrorTypeName);
       }
       var heapPtr = EmitLoad(block, throwHp.VarName!, varTypes);

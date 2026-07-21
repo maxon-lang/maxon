@@ -940,6 +940,13 @@ public sealed class MaxonThrowOp(MaxonValue errorValue, string errorTypeName) : 
   public override string Mnemonic => $"maxon.throw @{ErrorTypeName}";
   public MaxonValue ErrorValue { get; } = errorValue;
   public string ErrorTypeName { get; } = errorTypeName;
+  // True when the thrown value is a plain OWNED LOCAL binding (`throw e`, or a re-thrown caught error):
+  // it owns its reference at rc=1 and scope-end TRANSFERS it (keepVars), so LowerThrow must NOT incref
+  // it a second time (OPEN #63 — that would leak). Decided in the parser, which has the binding's
+  // VarInfo; a self-field / parameter / fresh construct / call-result is NOT this and still needs the
+  // transfer-incref. The lowering cannot re-derive it (an owned local and a borrowed self-field look
+  // identical there — both non-temps).
+  public bool IsOwnedLocalTransfer { get; init; }
   public override IReadOnlyList<MaxonValue> Results => [];
   public override IReadOnlyList<MaxonValue> Operands => [ErrorValue];
 }

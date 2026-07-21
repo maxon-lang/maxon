@@ -8406,31 +8406,9 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
           _currentFunction!.ReturnsSelf = false;
         }
       }
-      // Emit scope end — cleans all tracked vars except the returned one.
-      // When returning a managed value that was not directly named (e.g. `return foo()` or
-      // `return try foo() otherwise bar`), find its backing variable so scope cleanup skips it —
-      // the caller takes ownership of the returned reference.
-      HashSet<string>? keepVars = null;
-      if (returnVarName != null) {
-        keepVars = [returnVarName];
-      } else if (expr is ExprResult.Direct) {
-        // For `return foo()`: last op is a MaxonAssignOp for __call_tmp_X.
-        // For `return try foo() otherwise bar`: last op is a MaxonStructVarRefOp/__MaxonEnumVarRefOp
-        // for __try_result_X (or a plain MaxonVarRefOp when the return type is a
-        // generic TypeParameter — monomorphization substitutes the concrete
-        // struct type later).
-        var lastOp = _currentBlock!.Operations.Count > 0 ? _currentBlock.Operations[^1] : null;
-        string? backedByVar = lastOp switch {
-          MaxonStructVarRefOp sv => sv.VarName,
-          MaxonEnumVarRefOp ev => ev.VarName,
-          MaxonVarRefOp vr when vr.VarName.StartsWith("__try_result_") => vr.VarName,
-          MaxonAssignOp { IsDeclaration: true } av when av.VarName.StartsWith("__call_tmp_") => av.VarName,
-          MaxonAssignOp { IsDeclaration: true } av when av.VarName.StartsWith("__lit_tmp_") => av.VarName,
-          _ => null
-        };
-        if (backedByVar != null && _variables.ContainsKey(backedByVar))
-          keepVars = [backedByVar];
-      }
+      // Emit scope end — cleans all tracked vars except the returned one, whose owned reference
+      // transfers to the caller (see ComputeTransferKeepVars, shared with the throw sites).
+      var keepVars = ComputeTransferKeepVars(expr);
       _currentBlock!.AddOp(new MaxonScopeEndOp(GetScopeEndVars(), keepVars) { VarMetadata = _variables.GetScopeEndVarMetadata() });
       _currentBlock!.AddOp(new MaxonReturnOp(value));
     } else {
@@ -8521,6 +8499,45 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     }
   }
 
+  // The variable a `return` or `throw` TRANSFERS to the caller — scope cleanup must SKIP it, or the
+  // owned reference is decref'd (and its slot nulled) before the terminator hands it over. It is named
+  // directly (`return e` / `throw e`), or — for `return foo()` / `throw foo()` — the backing temp the
+  // last op produced. Shared by both transfer terminators so scope-end protects the transferred value
+  // the SAME way. (OPEN #63: the three throw sites once passed no keepVars, so `throw e` freed + nulled
+  // `e` before the throw loaded it → `mm_incref NULL`; the return sites already computed this.)
+  private HashSet<string>? ComputeTransferKeepVars(ExprResult expr) {
+    if (expr is ExprResult.VarRef rv)
+      return [rv.VarName];
+    if (expr is ExprResult.Direct) {
+      // For `foo()`: last op is a MaxonAssignOp for __call_tmp_X. For `try foo() otherwise bar`: a
+      // MaxonStructVarRefOp/MaxonEnumVarRefOp for __try_result_X (or a plain MaxonVarRefOp when the type
+      // is a generic TypeParameter monomorphization resolves later).
+      var lastOp = _currentBlock!.Operations.Count > 0 ? _currentBlock.Operations[^1] : null;
+      string? backedByVar = lastOp switch {
+        MaxonStructVarRefOp sv => sv.VarName,
+        MaxonEnumVarRefOp ev => ev.VarName,
+        MaxonVarRefOp vr when vr.VarName.StartsWith("__try_result_") => vr.VarName,
+        MaxonAssignOp { IsDeclaration: true } av when av.VarName.StartsWith("__call_tmp_") => av.VarName,
+        MaxonAssignOp { IsDeclaration: true } av when av.VarName.StartsWith("__lit_tmp_") => av.VarName,
+        _ => null
+      };
+      if (backedByVar != null && _variables.ContainsKey(backedByVar))
+        return [backedByVar];
+    }
+    return null;
+  }
+
+  // True when `expr` names a plain OWNED LOCAL binding — a heap error the local holds at rc=1, which
+  // scope-end transfers (ComputeTransferKeepVars) and the throw must therefore NOT re-incref (OPEN #63).
+  // A self-field (Borrowed / IsSelfField) or a parameter still needs the incref; a construct / call
+  // result is not a VarRef, so it is not this either.
+  private bool ThrowsOwnedLocal(ExprResult expr) =>
+    expr is ExprResult.VarRef rv
+    && _variables.TryGetValue(rv.VarName, out var vi)
+    && !vi.IsSelfField
+    && !vi.Flags.HasFlag(OwnershipFlags.Borrowed)
+    && !vi.Flags.HasFlag(OwnershipFlags.IsParam);
+
   private void ParseThrow() {
     var throwToken = Advance(); // consume 'throw'
     var expr = ParseExpression();
@@ -8531,8 +8548,11 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     // Inside an active try block, route the error to the block's shared handler — do not
     // emit ScopeEnd here (that would release managed vars the handler still needs live).
     if (RouteBareThrowToTryBlock(errorValue, enumVal.TypeName, throwToken)) return;
-    _currentBlock!.AddOp(new MaxonScopeEndOp(GetScopeEndVars()) { VarMetadata = _variables.GetScopeEndVarMetadata() });
-    _currentBlock!.AddOp(new MaxonThrowOp(errorValue, enumVal.TypeName));
+    // Keep the thrown value alive across scope cleanup — it transfers to the caller exactly as a
+    // returned value does (OPEN #63). Without this, `throw e` frees + nulls `e` before the throw
+    // loads it → mm_incref NULL.
+    _currentBlock!.AddOp(new MaxonScopeEndOp(GetScopeEndVars(), ComputeTransferKeepVars(expr)) { VarMetadata = _variables.GetScopeEndVarMetadata() });
+    _currentBlock!.AddOp(new MaxonThrowOp(errorValue, enumVal.TypeName) { IsOwnedLocalTransfer = ThrowsOwnedLocal(expr) });
   }
 
   /// <summary>
@@ -8717,8 +8737,9 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
             throwsToken.Line, throwsToken.Column);
         }
         if (!RouteBareThrowToTryBlock(errorValue, enumVal.TypeName, throwsToken)) {
-          _currentBlock!.AddOp(new MaxonScopeEndOp(GetScopeEndVars()) { VarMetadata = _variables.GetScopeEndVarMetadata() });
-          _currentBlock!.AddOp(new MaxonThrowOp(errorValue, enumVal.TypeName));
+          // Keep the thrown value alive across scope cleanup — transfers to the caller (OPEN #63).
+          _currentBlock!.AddOp(new MaxonScopeEndOp(GetScopeEndVars(), ComputeTransferKeepVars(throwExpr)) { VarMetadata = _variables.GetScopeEndVarMetadata() });
+          _currentBlock!.AddOp(new MaxonThrowOp(errorValue, enumVal.TypeName) { IsOwnedLocalTransfer = ThrowsOwnedLocal(throwExpr) });
         }
       }
 
@@ -14093,8 +14114,9 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     // Inside an active try block, route the error to the block's shared handler — do not
     // emit ScopeEnd here (that would release managed vars the handler still needs live).
     if (!RouteBareThrowToTryBlock(errorValue, enumVal.TypeName, armToken)) {
-      _currentBlock!.AddOp(new MaxonScopeEndOp(GetScopeEndVars()) { VarMetadata = _variables.GetScopeEndVarMetadata() });
-      _currentBlock!.AddOp(new MaxonThrowOp(errorValue, enumVal.TypeName));
+      // Keep the thrown value alive across scope cleanup — transfers to the caller (OPEN #63).
+      _currentBlock!.AddOp(new MaxonScopeEndOp(GetScopeEndVars(), ComputeTransferKeepVars(throwExpr)) { VarMetadata = _variables.GetScopeEndVarMetadata() });
+      _currentBlock!.AddOp(new MaxonThrowOp(errorValue, enumVal.TypeName) { IsOwnedLocalTransfer = ThrowsOwnedLocal(throwExpr) });
     }
   }
 

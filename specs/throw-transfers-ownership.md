@@ -168,3 +168,76 @@ end 'main'
 ```exitcode
 28
 ```
+
+<!-- test: throw-local-heap-error-transfers-single-reference -->
+### Throwing a heap error held in a LOCAL transfers its one reference (no free-before-throw)
+
+`throw e`, where `e` is a local binding holding an associated-value union, is the
+mirror of the call-result case: the local already OWNS the error at rc=1, so the
+throw must TRANSFER that single reference — scope cleanup must not decref+null `e`
+before the throw loads it (which read NULL → `mm_incref` panic, OPEN #63), and the
+throw must not incref it a second time (which would leak, exactly as a double-incref
+of a call result does). The local's `keepVars` protection at the throw site mirrors
+the return path. `main` reads the payload, proving the heap object outlived the
+transfer and was released exactly once (a leak surfaces as exit code 101).
+
+```maxon
+union PErr implements Error
+	unsupported(msg String)
+end 'PErr'
+
+function risky() throws PErr
+	let e = PErr.unsupported("boom")
+	throw e
+end 'risky'
+
+function main() returns ExitCode
+	try risky() otherwise (caught) 'c'
+		match caught 'k'
+			unsupported(msg) then return (msg.byteLength() as ExitCode)
+		end 'k'
+	end 'c'
+	return 200
+end 'main'
+```
+```exitcode
+4
+```
+
+<!-- test: rethrow-caught-heap-error-transfers-single-reference -->
+### Re-throwing a CAUGHT heap error transfers its one reference
+
+`otherwise (e) 'h' throw e end` re-throws the error bound by the handler — the same
+owned-local throw shape (OPEN #63), reached through a catch binding rather than a
+`let`. The caught `e` owns the error at rc=1; the re-throw transfers that single
+reference to the outer caller without a free-before-throw NULL panic and without a
+second incref. `main` reads the payload after two hops, proving the heap object
+survived both transfers and was released exactly once.
+
+```maxon
+union PErr implements Error
+	unsupported(msg String)
+end 'PErr'
+
+function inner() throws PErr
+	throw PErr.unsupported("boom")
+end 'inner'
+
+function outer() throws PErr
+	try inner() otherwise (e) 'h'
+		throw e
+	end 'h'
+end 'outer'
+
+function main() returns ExitCode
+	try outer() otherwise (caught) 'c'
+		match caught 'k'
+			unsupported(msg) then return (msg.byteLength() as ExitCode)
+		end 'k'
+	end 'c'
+	return 200
+end 'main'
+```
+```exitcode
+4
+```

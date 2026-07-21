@@ -393,7 +393,7 @@ internal class FunctionCloner {
       case MaxonCondBrOp cb: return new MaxonCondBrOp(MapValue(cb.Condition), cb.ThenBlock, cb.ElseBlock);
       case MaxonBrOp br: return new MaxonBrOp(br.Target);
       case MaxonReturnOp ret: return new MaxonReturnOp(ret.Value != null ? MapValue(ret.Value) : null, ret.IsErrorPropagation);
-      case MaxonThrowOp th: return new MaxonThrowOp(MapValue(th.ErrorValue), th.ErrorTypeName);
+      case MaxonThrowOp th: return new MaxonThrowOp(MapValue(th.ErrorValue), th.ErrorTypeName) { IsOwnedLocalTransfer = th.IsOwnedLocalTransfer };
       case MaxonPanicOp p: return new MaxonPanicOp(p.Message, p.IsStdlib);
       case MaxonPanicDynamicOp pd: return new MaxonPanicDynamicOp((MaxonStruct)MapValue(pd.MessageStruct));
       case MaxonRefEqOp req: { var c = new MaxonRefEqOp(MapValue(req.Lhs), MapValue(req.Rhs), req.Negate); RegisterResult(req.Result, c.Result); return c; }
