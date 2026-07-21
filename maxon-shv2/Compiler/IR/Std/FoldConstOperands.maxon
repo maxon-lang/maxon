@@ -28,14 +28,21 @@
 // so hashing one buys a cache miss and nothing else. This pass looks one up at every operand of every
 // `binOp` and `cmp` in the program.
 //
+// EXPORTED, and read by TWO Std passes: this one (fold a const operand into an immediate) and
+// `InsertRangeChecks` (decide whether a narrowing cast/return checks a compile-time literal). The two
+// share the CONTAINER but not its FILL — each has its own populate walk (`collectConstValues` here,
+// `buildConstMap` there, which additionally folds a `neg` of a const). It is one type because the two
+// were byte-identical: a second copy is a dense column whose `growFilled` trap and bounds logic nothing
+// keeps in step with this one, which is the drift `StdValueUseSet` is a single exported type to avoid.
+//
 // (`ParsedIntArray` — the column of parsed integers — is declared in NumberParsing, beside the type
-// it is a column of. The parser's constant folder keeps one too.)
+// it is a column of. The parser's constant folder keeps one too, over its own tier's value ids.)
 
-type ConstValueMap
+export type ConstValueMap
 	var isConst as BoolArray
 	var constant as ParsedIntArray
 
-	static function create() returns ConstValueMap
+	export static function create() returns ConstValueMap
 		return Self{isConst: BoolArray.create(), constant: ParsedIntArray.create()}
 	end 'create'
 
@@ -44,7 +51,7 @@ type ConstValueMap
 	// reserves exactly the length it is given) would be quadratic in a column extended one id at a time,
 	// which is what a walk over the ops in order does. See `StdValueUseSet.insert`, the same column and
 	// the same trap.
-	function upsert(valueId ValueId, value ParsedInt)
+	export function upsert(valueId ValueId, value ParsedInt)
 		self.isConst.growFilled(valueId + 1, value: false)
 		self.constant.growFilled(valueId + 1, value: 0)
 
@@ -52,7 +59,7 @@ type ConstValueMap
 		try self.constant.set(valueId, value: value) otherwise panic("ConstValueMap.upsert: constant.set OOB at {valueId}")
 	end 'upsert'
 
-	function contains(valueId ValueId) returns bool
+	export function contains(valueId ValueId) returns bool
 		if valueId >= self.isConst.count() 'notAConst'
 			return false
 		end 'notAConst'
@@ -62,7 +69,7 @@ type ConstValueMap
 	// The constant `valueId` materializes. Panics for a value that is not a `const` — every caller has
 	// already established that with `contains`, so there is no sentinel to return and none to mistake
 	// for a real constant (0 is one).
-	function constantOf(valueId ValueId) returns ParsedInt
+	export function constantOf(valueId ValueId) returns ParsedInt
 		if not self.contains(valueId) 'notAConst'
 			panic("ConstValueMap.constantOf: value {valueId} is not a `const` — check `contains` first")
 		end 'notAConst'

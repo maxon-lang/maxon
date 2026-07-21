@@ -107,14 +107,14 @@ type RangeCheckEmitter
 
 	// ---- cast sites ----
 
-	function processCastSite(site RangeCheckCastSite, filePath FilePath, constMap RangeConstMap)
+	function processCastSite(site RangeCheckCastSite, filePath FilePath, constMap ConstValueMap)
 		match self.boundsOf(site.aliasName) 'bounds'
 			none then return
 			some(alias) then self.guardCast(site, alias: alias, filePath: filePath, constMap: constMap)
 		end 'bounds'
 	end 'processCastSite'
 
-	function guardCast(site RangeCheckCastSite, alias RangedTypeAlias, filePath FilePath, constMap RangeConstMap)
+	function guardCast(site RangeCheckCastSite, alias RangedTypeAlias, filePath FilePath, constMap ConstValueMap)
 		if not self.needsRuntimeGuard(site.value, alias: alias, aliasName: site.aliasName, line: site.line, column: site.column, filePath: filePath, constMap: constMap) 'noGuard'
 			return
 		end 'noGuard'
@@ -123,14 +123,14 @@ type RangeCheckEmitter
 
 	// ---- return sites ----
 
-	function processReturnSites(returnAliasName ByteArray, sites RangeCheckReturnSiteArray, filePath FilePath, constMap RangeConstMap)
+	function processReturnSites(returnAliasName ByteArray, sites RangeCheckReturnSiteArray, filePath FilePath, constMap ConstValueMap)
 		match self.boundsOf(returnAliasName) 'bounds'
 			none then return
 			some(alias) then self.guardReturns(alias, aliasName: returnAliasName, sites: sites, filePath: filePath, constMap: constMap)
 		end 'bounds'
 	end 'processReturnSites'
 
-	function guardReturns(alias RangedTypeAlias, aliasName ByteArray, sites RangeCheckReturnSiteArray, filePath FilePath, constMap RangeConstMap)
+	function guardReturns(alias RangedTypeAlias, aliasName ByteArray, sites RangeCheckReturnSiteArray, filePath FilePath, constMap ConstValueMap)
 		for site in sites 'eachSite'
 			if not self.needsRuntimeGuard(site.value, alias: alias, aliasName: aliasName, line: site.line, column: site.column, filePath: filePath, constMap: constMap) 'noGuard'
 				continue
@@ -147,7 +147,7 @@ type RangeCheckEmitter
 	// Whether a site needs a RUNTIME guard. A full-range alias never does; a literal never does (its
 	// out-of-range use is reported here as a compile-time E3005, its in-range use needs no code); a
 	// non-literal into a non-full range does.
-	function needsRuntimeGuard(value ValueId, alias RangedTypeAlias, aliasName ByteArray, line LineNumber, column ColumnNumber, filePath FilePath, constMap RangeConstMap) returns bool
+	function needsRuntimeGuard(value ValueId, alias RangedTypeAlias, aliasName ByteArray, line LineNumber, column ColumnNumber, filePath FilePath, constMap ConstValueMap) returns bool
 		if rangeIsFullI64(alias.low, high: alias.high) 'full'
 			return false
 		end 'full'
@@ -326,8 +326,8 @@ type RangeCheckEmitter
 	// Map each `const` result value id to its constant — the literals whose out-of-range use is the
 	// compile-time E3005 and whose in-range use needs no runtime code. Built once per function over the
 	// pre-guard ops.
-	function buildConstMap() returns RangeConstMap
-		var constMap = RangeConstMap.create()
+	function buildConstMap() returns ConstValueMap
+		var constMap = ConstValueMap.create()
 		for opIdx in self.module.liveOpIndices(self.func) 'eachOp'
 			let op = try self.module.ops.get(opIdx) otherwise panic("buildConstMap: live op index {opIdx} not in module.ops")
 			match op 'c'
@@ -392,7 +392,7 @@ end 'stdOpIsParam'
 
 // Record a negated-constant result: `neg` of a recorded constant `operand` is `-operand`. Any other
 // unary opcode is not an integer constant this check reads, so nothing is recorded.
-function recordConstNeg(constMap RangeConstMap, resultId ValueId, operand ValueId, opcode StdUnaryOpcode)
+function recordConstNeg(constMap ConstValueMap, resultId ValueId, operand ValueId, opcode StdUnaryOpcode)
 	if opcode != StdUnaryOpcode.neg 'notNeg'
 		return
 	end 'notNeg'
@@ -506,37 +506,9 @@ function lastSegment(s String, separator String) returns String
 	return try parts.get(parts.count() - 1) otherwise s
 end 'lastSegment'
 
-// The const-value map (P1.9) — each `const` result id to the literal it materializes, so a cast/return
-// of a literal is a compile-time decision (E3005 or nothing) rather than a runtime guard. Two dense
-// columns, not a `Map`, for the reason `StdValueUseSet` gives: a ValueId is already a dense index.
-// (A near-twin of `foldConstOperands`'s private `RangeConstMap`; kept separate rather than exported to
-// avoid coupling two passes' internals, and it stays tiny.)
-type RangeConstMap
-	var isConst as BoolArray
-	var constant as ParsedIntArray
-
-	static function create() returns RangeConstMap
-		return Self{isConst: BoolArray.create(), constant: ParsedIntArray.create()}
-	end 'create'
-
-	function upsert(valueId ValueId, value ParsedInt)
-		self.isConst.growFilled(valueId + 1, value: false)
-		self.constant.growFilled(valueId + 1, value: 0)
-		try self.isConst.set(valueId, value: true) otherwise panic("RangeConstMap.upsert: isConst.set OOB at {valueId}")
-		try self.constant.set(valueId, value: value) otherwise panic("RangeConstMap.upsert: constant.set OOB at {valueId}")
-	end 'upsert'
-
-	function contains(valueId ValueId) returns bool
-		if valueId >= self.isConst.count() 'notAConst'
-			return false
-		end 'notAConst'
-		return try self.isConst.get(valueId) otherwise panic("RangeConstMap.contains: isConst.get OOB at {valueId}")
-	end 'contains'
-
-	function constantOf(valueId ValueId) returns ParsedInt
-		if not self.contains(valueId) 'notAConst'
-			panic("RangeConstMap.constantOf: value v{valueId} is not a `const` — check `contains` first")
-		end 'notAConst'
-		return try self.constant.get(valueId) otherwise panic("RangeConstMap.constantOf: constant.get OOB at {valueId}")
-	end 'constantOf'
-end 'RangeConstMap'
+// The literal-const map this pass reads is `ConstValueMap` (FoldConstOperands) — each `const` result id
+// to the literal it materializes, so a cast/return of a literal is a compile-time decision (E3005 or
+// nothing) rather than a runtime guard. It was a byte-identical private copy here (`RangeConstMap`);
+// it is now the ONE exported container both Std passes share. Only the POPULATE walk stays this pass's
+// own — `buildConstMap`, which additionally folds a `neg` of a `const` (`recordConstNeg`) that
+// FoldConstOperands has no reason to.
