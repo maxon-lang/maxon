@@ -542,7 +542,58 @@ export union ParseError implements Error
 	// parser holds that token — the emitted `tryCall` op's span anchors on the callee, and the append-only
 	// span table cannot be retargeted after the fact. `callee` names the non-throwing function.
 	tryOnNonThrowing(callee String, line LineNumber, column ColumnNumber)
+	// A plain `await p` of a promise whose thunk THROWS — `await` lowers to `__gt_await`, which drops the
+	// error flag (P1.5-B2b). Renders as **E3057** (the throwing-call-needs-`try` code SemanticCheck reports
+	// for an ordinary throwing call), positioned at the `await` token. It is a PARSE error because only the
+	// parser holds the promise → awaited-callee mapping (the promise mark and the defining `asyncCall` are
+	// per-function parse state). `callee` names the awaited throwing function.
+	awaitThrowingPromiseNeedsTry(callee String, line LineNumber, column ColumnNumber)
+	// A bare `try f()` / `try await p` (PROPAGATE form) whose propagated error type differs from the
+	// enclosing function's `throws` type (P1.4b completion, exercised by P1.5-B2b). Renders as **E3059**,
+	// positioned at the `try` token. Without `otherwise`, the caught flag is re-published verbatim into the
+	// enclosing function's error register, so the caller would decode one enum's ordinals as another's tags —
+	// a silent miscompile a boxed union turns into a wild free. `propagated` is the callee's error type,
+	// `enclosing` the function's.
+	propagateTypeMismatch(propagated String, enclosing String, line LineNumber, column ColumnNumber)
 end 'ParseError'
+
+// The result of recovering a promise handle's AWAITED callee name from its defining `asyncCall`
+// (P1.5-B2b) — `found` for a real async spawn's result, `none` for a value that is not one.
+union AsyncCalleeLookup
+	found(callee ByteArray)
+	none
+end 'AsyncCalleeLookup'
+
+// The awaited callee for one op if it is the `asyncCall` that minted `promise`, else `none` (keep scanning).
+// Split from `asyncCallCalleeOf`'s loop so the equality test — which a match arm cannot host inline — lives
+// in `foundCalleeIfEqual`, and the loop body stays one statement. The `call to indirectCall` / `await to
+// tryAwait` band ranges cover every non-`asyncCall` op, so a newly appended op FAILS TO COMPILE here rather
+// than being silently misclassified (the band-append invariant).
+function asyncCalleeIfMatch(op MaxonOp, promise ValueId) returns AsyncCalleeLookup
+	return match op 'op'
+		call to indirectCall gives AsyncCalleeLookup.none
+		asyncCall(result, callee, _, _, _) gives foundCalleeIfEqual(result, callee: callee, promise: promise)
+		await to tryAwait gives AsyncCalleeLookup.none
+	end 'op'
+end 'asyncCalleeIfMatch'
+
+// `found(callee)` when `result` IS the tracked promise (this `asyncCall` minted it), else `none`.
+function foundCalleeIfEqual(result ValueId, callee ByteArray, promise ValueId) returns AsyncCalleeLookup
+	if result == promise 'eq'
+		return AsyncCalleeLookup.found(callee)
+	end 'eq'
+	return AsyncCalleeLookup.none
+end 'foundCalleeIfEqual'
+
+// A `MaxonReturnType` as a value tag, VOID included — the void-tolerant twin of `maxonReturnTypeTag` (which
+// panics on void), because an async result may legitimately be void (P1.5-B2b: a void throwing async carries
+// only an error flag). Delegates the value case rather than re-matching it.
+function asyncReturnTypeTag(returnType MaxonReturnType) returns ValueTypeTag
+	if maxonReturnTypeIsVoid(returnType) 'void'
+		return ValueTypeTag.void
+	end 'void'
+	return maxonReturnTypeTag(returnType)
+end 'asyncReturnTypeTag'
 
 // **THE NAME OF THE RECEIVER PARAMETER.** An instance method's parameter 0, pushed by
 // `parseFunction` and bound by `bindParameters` exactly like every other parameter — so the
@@ -5225,7 +5276,7 @@ export type Parser
 
 		let result = try self.parseTryCallTarget(func)
 		let flag = self.mintValue(ValueTypeTag.integer, nameId: UnnamedTypeId)
-		let callee = try self.rewriteLastCallToTryCall(flag, tryTok: tryTok)
+		let callee = try self.rewriteLastCallToTryCall(func, flag: flag, tryTok: tryTok)
 
 		// E3055 — `try` on a call that cannot throw. Checked here (not SemanticCheck) so it anchors on the
 		// `try` token. A callee NO file declares is left to SemanticCheck's E3004 (a `try <typo>` is an
@@ -5258,8 +5309,17 @@ export type Parser
 				return try self.parseDottedPrimary(func)
 			end 'dotted'
 		end 'named'
+		// P1.5-B2b: `try await p` — the awaited THROWING promise is the try target (the AWAIT is the throwing
+		// operation). Emit the `await` op via the SHARED `emitAwaitOp`, WITHOUT the plain-await E3057 reject:
+		// catching the thrown error is exactly what `try await` does. `rewriteLastCallToTryCall` then converts
+		// the `await` into a `tryAwait`, and `parseTry`'s E3055 check refuses a NON-throwing promise here.
+		if self.at(TokenKind.await) 'awaitTarget'
+			let awaitTok = try self.consume(TokenKind.await)
+			let promise = try self.parseUnary(func)
+			return try self.emitAwaitOp(func, promise: promise, awaitTok: awaitTok)
+		end 'awaitTarget'
 		let tok = self.current()
-		throw ParseError.unsupported("`try` must be applied to a call — `try f(…)` or `try obj.method(…)` (got '{tok.kind.rawValue}')", line: tok.line, column: tok.column)
+		throw ParseError.unsupported("`try` must be applied to a call — `try f(…)`, `try obj.method(…)`, or `try await p` (got '{tok.kind.rawValue}')", line: tok.line, column: tok.column)
 	end 'parseTryCallTarget'
 
 	// Rewrite the just-emitted `call` op in `currentBlock` into a `tryCall` defining `errorFlag` as its
@@ -5267,7 +5327,7 @@ export type Parser
 	// call in place for the same reason: it makes nested tries (`try consume(try get() otherwise 0)`)
 	// work — each inner try rewrites its OWN call, and the outer rewrites the last op after the whole
 	// parse, which is its own call.
-	function rewriteLastCallToTryCall(errorFlag ValueId, tryTok Token) returns ByteArray throws ParseError
+	function rewriteLastCallToTryCall(func IrFunction, flag ValueId, tryTok Token) returns ByteArray throws ParseError
 		let refCount = self.currentBlock.opRefs.count()
 		if refCount == 0 'noOp'
 			throw ParseError.unsupported("`try` must be applied to a call — the expression after `try` emitted no call", line: tryTok.line, column: tryTok.column)
@@ -5275,11 +5335,17 @@ export type Parser
 		let opIdx = try self.currentBlock.opRefs.get(refCount - 1) otherwise panic("rewriteLastCallToTryCall: opRefs.get OOB on a non-empty block")
 		let op = try self.artifact.module.ops.get(opIdx) otherwise panic("rewriteLastCallToTryCall: last opRef {opIdx} not in module.ops")
 		return match op 'rewrite'
-			call(result, callee, args, argLabels, argRanges) gives self.commitTryCallRewrite(opIdx, result: result, errorFlag: errorFlag, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges)
-			// Extended to `indirectCall` (P1.5-A1): only a DIRECT `call` can be `try`ed. An `indirectCall`
-			// is never throwing — a throwing function cannot be a function value (E3101) — and a
-			// `functionRef` is not a call at all, so both reject `try` exactly as the other non-call ops do.
-			literal to await gives try self.rejectTryTarget(tryTok)
+			call(result, callee, args, argLabels, argRanges) gives self.commitTryCallRewrite(opIdx, result: result, errorFlag: flag, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges)
+			// P1.5-B2b: `try await p` — rewrite the `await` op into a `tryAwait` defining the error flag,
+			// exactly as `call` → `tryCall`. The awaited callee (recovered from the promise) is returned for
+			// the desugar's E3055/E3059 checks and its `otherwise` error-type binding.
+			await(result, promise) gives self.commitTryAwaitRewrite(func, opIdx: opIdx, result: result, flag: flag, promise: promise)
+			// Only a DIRECT `call` or an `await` can be `try`ed. An `indirectCall`/`functionRef` (P1.5-A1) is
+			// never throwing — a throwing function cannot be a function value (E3101) — an `asyncCall` (a spawn)
+			// is not the throwing operation (the AWAIT is), and a `tryAwait` cannot be a fresh try target. All
+			// reject `try` exactly as the other non-call ops do.
+			literal to asyncCall gives try self.rejectTryTarget(tryTok)
+			tryAwait gives try self.rejectTryTarget(tryTok)
 		end 'rewrite'
 	end 'rewriteLastCallToTryCall'
 
@@ -5289,6 +5355,38 @@ export type Parser
 		try self.artifact.module.ops.set(opIdx, value: MaxonOp.tryCall(result, errorFlag: errorFlag, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges)) otherwise panic("commitTryCallRewrite: module.ops.set OOB at {opIdx}")
 		return callee
 	end 'commitTryCallRewrite'
+
+	// Replace the `await` op at `opIdx` with a `tryAwait` defining the `flag` second result (P1.5-B2b), and
+	// return the AWAITED callee name for the desugar's diagnostics + `otherwise` error-type binding. The
+	// callee is recovered from the promise's defining `asyncCall`; `emitAwaitOp` only accepts a promise-marked
+	// value, which is minted by an `asyncCall`, so the lookup cannot miss (a miss is a parser invariant break).
+	function commitTryAwaitRewrite(func IrFunction, opIdx OpIndex, result ValueId, flag ValueId, promise ValueId) returns ByteArray
+		try self.artifact.module.ops.set(opIdx, value: MaxonOp.tryAwait(result, errorFlag: flag, promise: promise)) otherwise panic("commitTryAwaitRewrite: module.ops.set OOB at {opIdx}")
+		match self.asyncCallCalleeOf(func, promise: promise) 'callee'
+			found(callee) then return callee
+			none then panic("commitTryAwaitRewrite: `try await` target v{promise} has no defining asyncCall — emitAwaitOp only accepts a promise-marked value, which is minted by an asyncCall")
+		end 'callee'
+	end 'commitTryAwaitRewrite'
+
+	// The AWAITED callee name a promise handle carries — recovered from the `asyncCall` op that minted it, by
+	// scanning this function's emitted blocks. A promise ValueId is minted by exactly ONE `asyncCall` in its
+	// OWN function (the promise mark is per-function, so the search never crosses a frame), so the first match
+	// is THE one. `none` means the value is not an async spawn's result — the caller reports its own
+	// "not a promise" / invariant diagnostic. Read at the `try await`/plain-`await` sites (rare), so an
+	// O(function ops) scan costs nothing on the await-free program and keeps the promise → callee fact off
+	// every value (no per-value column that the scale corpus, which has no async, would pay for).
+	function asyncCallCalleeOf(func IrFunction, promise ValueId) returns AsyncCalleeLookup
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try self.artifact.module.blocks.get(blockRef) otherwise panic("asyncCallCalleeOf: blockRef from func.blockRefs not in module.blocks")
+			for opIdx in block.opRefs 'eachOp'
+				match asyncCalleeIfMatch(try self.artifact.module.ops.get(opIdx) otherwise panic("asyncCallCalleeOf: opIdx {opIdx} not in module.ops"), promise: promise) 'm'
+					found(callee) then return AsyncCalleeLookup.found(callee)
+					none then break 'm'
+				end 'm'
+			end 'eachOp'
+		end 'eachBlock'
+		return AsyncCalleeLookup.none
+	end 'asyncCallCalleeOf'
 
 	// The expression after `try` was not a call. Typed `returns ByteArray` so it slots into
 	// `rewriteLastCallToTryCall`'s `match`, but it always throws.
@@ -5446,7 +5544,10 @@ export type Parser
 	// report how it affects the merge. On entry `currentBlock` is the error block.
 	function parseOtherwiseHandler(func IrFunction, result ValueId, flag ValueId, callee ByteArray, resultUsed bool, tryTok Token) returns TryHandler throws ParseError
 		if not self.at(TokenKind.otherwise) 'propagate'
-			// Uncaught `try f()` — re-publish the callee's flag to this function's caller.
+			// Uncaught `try f()` / `try await p` — re-publish the callee's flag to this function's caller. The
+			// flag is re-emitted VERBATIM, so the propagated error type MUST match this function's `throws`
+			// type or the caller decodes one enum's ordinals as another's (E3059, checked here).
+			try self.checkPropagateType(func, callee: callee, tryTok: tryTok)
 			self.emitScopeDrops(WholeFunctionScopeFloor, anchor: tryTok)
 			self.artifact.emitTerminator(self.currentBlock, op: MaxonOp.propagateError(flag), range: SourceRange.ofToken(tryTok))
 			return TryHandler.terminated
@@ -5664,6 +5765,36 @@ export type Parser
 	// The MaxonType of the enum a throwing `callee` throws — the type an `(e)` binding recovers. A callee
 	// with no throws clause is rejected by SemanticCheck (E3055), so the fallback `integer` here is never
 	// lowered; it only keeps the parser from panicking while building IR the error gate will discard.
+	// ⭐ **E3059 — PROPAGATE TYPE MISMATCH.** A bare `try …` (no `otherwise`) re-publishes the caught flag
+	// VERBATIM into the ENCLOSING function's error register, so if the propagated callee throws a DIFFERENT
+	// error type than the enclosing function declares, the caller decodes one enum's ordinals as another's
+	// tags — a silent miscompile a boxed union turns into a wild free. Refused when both types are named and
+	// differ. Shared by `try call()` and `try await p`: the awaited callee's throws type IS the promise's, and
+	// reaches here through the same `callee` the desugar threads. An enclosing NON-throwing function that
+	// propagates is a separate defect this does not diagnose.
+	function checkPropagateType(func IrFunction, callee ByteArray, tryTok Token) throws ParseError
+		match self.signatures.throwsOf(callee) 'calleeThrows'
+			none then break 'calleeThrows'
+			throwing(propagated) then try self.rejectPropagateAgainstEnclosing(func, propagated: propagated, tryTok: tryTok)
+		end 'calleeThrows'
+	end 'checkPropagateType'
+
+	// The enclosing-function half of the propagate-type check: refuse when the enclosing function throws a
+	// DIFFERENT named type than `propagated`. Split so the nested `match`/comparison is not an inline
+	// labelled-if in a match arm (which the parser rejects).
+	function rejectPropagateAgainstEnclosing(func IrFunction, propagated String, tryTok Token) throws ParseError
+		match func.throwsTypeName 'enclosing'
+			none then break 'enclosing'
+			throwing(enclosing) then try self.rejectIfDifferentThrows(propagated, enclosing: enclosing, tryTok: tryTok)
+		end 'enclosing'
+	end 'rejectPropagateAgainstEnclosing'
+
+	function rejectIfDifferentThrows(propagated String, enclosing String, tryTok Token) throws ParseError
+		if not propagated.equals(enclosing) 'mismatch'
+			throw ParseError.propagateTypeMismatch(propagated, enclosing: enclosing, line: tryTok.line, column: tryTok.column)
+		end 'mismatch'
+	end 'rejectIfDifferentThrows'
+
 	function tryErrorEnumType(callee ByteArray) returns MaxonType
 		return match self.signatures.throwsOf(callee) 'k'
 			none gives MaxonType.integer
@@ -9362,7 +9493,7 @@ export type Parser
 		if self.at(TokenKind.await) 'await'
 			let awaitTok = try self.consume(TokenKind.await)
 			let promise = try self.parseUnary(func)
-			return try self.emitAwait(promise, awaitTok: awaitTok)
+			return try self.emitAwait(func, promise: promise, awaitTok: awaitTok)
 		end 'await'
 
 		return try self.parsePostfix(func, value: try self.parsePrimary(func))
@@ -13108,10 +13239,16 @@ export type Parser
 
 	// Mint the Promise handle an `async` spawn defines and emit the `asyncCall` op. B1a is SCALAR ONLY: the
 	// trampoline passes arguments through the GPR arg registers and captures the result from R8, so a
-	// managed/float ARGUMENT or a managed/float/void RESULT is REFUSED here (E2015) rather than leaked or
+	// managed/float ARGUMENT or a managed/float RESULT is REFUSED here (E2015) rather than leaked or
 	// miscompiled. The callee's PARAMETER types are checked by SemanticCheck, which alone holds the resolved
-	// signature. The handle's TAG is its awaited scalar type — set here so `await` reads the result type off
-	// `tagOf` — and it is a GPR scalar (int/bool), so it owns no heap and enrols in no drop.
+	// signature.
+	//
+	// ⭐ **THE PROMISE IS AN i64 HANDLE, tagged `integer` — NOT the awaited scalar (P1.5-B2b).** The handle is
+	// the spawned GT's pointer; its value is an i64 whatever the awaited result type is. Earlier B1a tagged it
+	// with the awaited scalar so `await` could read the result type off `tagOf`, but a VOID async's handle
+	// would then be void-tagged and `let p = async voidFn()` could not bind it (a void tag names no value).
+	// So the handle carries `integer`, and `await`/`try await` recover the awaited result type from the
+	// callee (`awaitedResultTag`) — the same defining-`asyncCall` lookup the `try await` desugar already uses.
 	function emitAsyncCall(callee ByteArray, anchor Token, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, rparenTok Token) returns ValueId throws ParseError
 		for i in 0 upto args.count() 'eachArg'
 			let argValue = try args.get(i) otherwise panic("emitAsyncCall: args.get OOB at {i} — args are pushed in lockstep by parseCallArgs")
@@ -13120,46 +13257,78 @@ export type Parser
 			end 'managedArg'
 		end 'eachArg'
 
-		let innerTag = try self.asyncResultTag(callee, anchor: anchor)
-		let result = self.mintValue(innerTag, nameId: UnnamedTypeId)
+		try self.requireAsyncResult(callee, anchor: anchor)
+		let result = self.mintValue(ValueTypeTag.integer, nameId: UnnamedTypeId)
 		self.markValuePromise(result)
 		self.artifact.emitOp(self.currentBlock, op: MaxonOp.asyncCall(result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges), range: SourceRange.between(anchor, last: rparenTok))
 		return result
 	end 'emitAsyncCall'
 
-	// The awaited-result TAG for `async callee(…)` — the callee's declared return type, which must be a GPR
-	// scalar. `returnTypeOf` answers PRE-resolution, so a union/alias/struct return is `named`/`structRef`
-	// here and correctly refused. An UNDECLARED callee defers to SemanticCheck's E3004 (an integer placeholder
-	// keeps parsing going; the doomed program is rejected before lowering).
-	function asyncResultTag(callee ByteArray, anchor Token) returns ValueTypeTag throws ParseError
+	// Refuse a `async callee(…)` whose awaited RESULT is not scalar-or-void (a managed/float result has no
+	// GPR channel). `returnTypeOf` answers PRE-resolution, so a union/alias/struct return is `named`/`structRef`
+	// here and correctly refused; an UNDECLARED callee defers to SemanticCheck's E3004 (its `integer`
+	// placeholder passes). Void passes (P1.5-B2b — the awaiter discards a void async's R8 garbage).
+	function requireAsyncResult(callee ByteArray, anchor Token) throws ParseError
+		let resultTag = self.calleeReturnTag(callee)
+		if resultTag != ValueTypeTag.void and not tagIsAsyncScalar(resultTag) 'nonScalarResult'
+			throw ParseError.unsupported("`async {String.from(callee)}(…)` must return a scalar (int/bool) or void — the green-thread runtime captures the result through R8, so a managed (String/struct) or float result has no channel to await at this rung (managed async is P1.5-B1c)", line: anchor.line, column: anchor.column)
+		end 'nonScalarResult'
+	end 'requireAsyncResult'
+
+	// The awaited-result tag a promise carries — its callee's declared return type — recovered from the
+	// defining `asyncCall` (the same lookup `commitTryAwaitRewrite` uses). A promise-marked value always has
+	// one (invariant). Read by both `await` and `try await` so a void async's result is void and a scalar's
+	// is its scalar, without the handle needing to carry the (possibly-void) tag.
+	function awaitedResultTag(func IrFunction, promise ValueId) returns ValueTypeTag
+		match self.asyncCallCalleeOf(func, promise: promise) 'callee'
+			found(callee) then return self.calleeReturnTag(callee)
+			none then panic("awaitedResultTag: promise v{promise} has no defining asyncCall — every promise-marked value is minted by an asyncCall")
+		end 'callee'
+	end 'awaitedResultTag'
+
+	// The declared return type of `callee` as a value tag, VOID included (an undeclared callee → `integer`
+	// placeholder, its doomed program rejected before lowering). The shared async result-type reader.
+	function calleeReturnTag(callee ByteArray) returns ValueTypeTag
 		return match self.signatures.returnTypeOf(callee, into: self.artifact.typeNames) 'r'
-			declared(returnType) gives try self.requireAsyncResultTag(returnType, callee: callee, anchor: anchor)
+			declared(returnType) gives asyncReturnTypeTag(returnType)
 			undeclared gives ValueTypeTag.integer
 		end 'r'
-	end 'asyncResultTag'
+	end 'calleeReturnTag'
 
-	function requireAsyncResultTag(returnType MaxonReturnType, callee ByteArray, anchor Token) returns ValueTypeTag throws ParseError
-		let innerTag = match returnType 'rt'
-			value(inner) gives maxonTypeTag(inner)
-			void gives ValueTypeTag.void
-		end 'rt'
-		if not tagIsAsyncScalar(innerTag) 'nonScalarResult'
-			throw ParseError.unsupported("`async {String.from(callee)}(…)` must return a scalar (int/bool) — the green-thread runtime captures the result through R8, so a managed (String/struct), float or void result has no channel to await at this rung (managed async is P1.5-B1c)", line: anchor.line, column: anchor.column)
-		end 'nonScalarResult'
-		return innerTag
-	end 'requireAsyncResultTag'
+	// ⭐ **`await p` — BLOCK ON A PROMISE** (P1.5-B1a/B2b). PLAIN (non-`try`) await. Refuses a THROWING promise
+	// (E3057): a plain `await` lowers to `__gt_await`, which yields only the result and DROPS the R10 error
+	// flag — a throw would be delivered as a wrong answer (and a boxed error would leak). A throwing promise
+	// must be `try await`ed, which the `try` target path (`parseTryCallTarget`) reaches via the SAME
+	// `emitAwaitOp` WITHOUT this reject, because catching the error is exactly what `try await` does.
+	function emitAwait(func IrFunction, promise ValueId, awaitTok Token) returns ValueId throws ParseError
+		match self.asyncCallCalleeOf(func, promise: promise) 'throwing'
+			found(callee) then try self.rejectPlainAwaitOfThrowing(callee, awaitTok: awaitTok)
+			none then break 'throwing'
+		end 'throwing'
+		return try self.emitAwaitOp(func, promise: promise, awaitTok: awaitTok)
+	end 'emitAwait'
 
-	// ⭐ **`await p` — BLOCK ON A PROMISE** (P1.5-B1a). The operand must be an `async` spawn's handle (the
-	// promise mark, keyed on the VALUE), and the result is its awaited scalar — the handle's own tag, set at
-	// `emitAsyncCall` to the callee's return scalar. A GPR scalar, so the result owns no heap.
-	function emitAwait(promise ValueId, awaitTok Token) returns ValueId throws ParseError
+	// Refuse a plain `await` of a THROWING awaited callee (E3057) — the await twin of `try` on a throwing
+	// call. A non-throwing callee is accepted (no-op). A non-promise operand reaches `none` in `emitAwait` and
+	// is refused by `emitAwaitOp` instead.
+	function rejectPlainAwaitOfThrowing(callee ByteArray, awaitTok Token) throws ParseError
+		if throwsClauseIsThrowing(self.signatures.throwsOf(callee)) 'throwing'
+			throw ParseError.awaitThrowingPromiseNeedsTry(String.from(callee), line: awaitTok.line, column: awaitTok.column)
+		end 'throwing'
+	end 'rejectPlainAwaitOfThrowing'
+
+	// Emit the `await` op for a validated promise operand — the shared core of plain `await` (`emitAwait`) and
+	// the `try await` target (`parseTryCallTarget`). Refuses a non-promise operand (E2015). The result tag is
+	// the AWAITED result type (recovered from the callee — the handle carries only `integer`), so a void async
+	// yields a void await result the desugar handles and a scalar async yields its scalar.
+	function emitAwaitOp(func IrFunction, promise ValueId, awaitTok Token) returns ValueId throws ParseError
 		if not self.valueIsPromise(promise) 'notPromise'
 			throw ParseError.unsupported("`await` applies to a Promise produced by an `async` call — the operand here is not an async spawn's result", line: awaitTok.line, column: awaitTok.column)
 		end 'notPromise'
-		let result = self.mintValue(self.tagOf(promise), nameId: self.valueNameId(promise))
+		let result = self.mintValue(self.awaitedResultTag(func, promise: promise), nameId: UnnamedTypeId)
 		self.artifact.emitOp(self.currentBlock, op: MaxonOp.await(result, promise: promise), range: SourceRange.ofToken(awaitTok))
 		return result
-	end 'emitAwait'
+	end 'emitAwaitOp'
 
 	// ⭐ **TRANSFER OWNERSHIP OF EVERY CONSUMED ARGUMENT** (P1.4a wave 2). For a callee that consumes at
 	// least one parameter, slot each SOURCE argument to its parameter position (positional by index,

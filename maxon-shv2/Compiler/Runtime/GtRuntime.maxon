@@ -53,7 +53,14 @@ export let GtOffWaiter = 0x30  // the GT to context-switch back to when this GT 
 let GtOffNext = 0x38  // run-queue FIFO chain
 export let GtOffFuncPtr = 0x40  // the async function's address
 export let GtOffArgBuf = 0x48  // the __slab_alloc'd argument buffer (MaxAsyncArgs i64 slots)
-export let GtStructSize = 0x50  // 80 bytes — must be a multiple of 8 (whole-word fields)
+// The dual-register ERROR FLAG the trampoline captures from R10 when a THROWING async thunk returns
+// (P1.5-B2b): 0 = success, non-zero = threw (a scalar error's `ordinal + ErrorFlagOrdinalBias`, or a boxed
+// union's box pointer — whatever the thunk left in R10). Read ONLY by `__gt_try_await`, which returns it as
+// the second register of its dual-register exit; `__gt_await` (a non-throwing await) never reads it, so a
+// non-throwing thunk leaving garbage in R10 here is harmless. Offset 0x58 (a one-word gap at 0x50) is
+// byte-identical to the authoritative GtLayout (`Arm64MacosGreenThread.maxon:93`), so a later port grafts on.
+export let GtOffThrew = 0x58
+export let GtStructSize = 0x60  // 96 bytes — must be a multiple of 8 (whole-word fields)
 
 // --- GT status ---
 // Only `ready` (the slab-zeroed initial state) and `completed` (set by the trampoline, read by
@@ -93,6 +100,7 @@ export let GtSpawnName = b"__gt_spawn"
 export let GtEnqueueName = b"__gt_enqueue"
 export let GtDequeueName = b"__gt_dequeue"
 export let GtAwaitName = b"__gt_await"
+export let GtTryAwaitName = b"__gt_try_await"
 
 // --- `.data` globals (all i64, zero-initialized) ---
 // The zero image IS the initial state: no current GT, an empty run queue, init not yet run — exactly as
@@ -142,7 +150,8 @@ export function installGtRuntime(module StdModule)
 	buildGtSpawn(module)
 	buildGtEnqueue(module)
 	buildGtDequeue(module)
-	buildGtAwait(module)
+	buildGtAwaitDriver(module, name: GtAwaitName, throwing: false)
+	buildGtAwaitDriver(module, name: GtTryAwaitName, throwing: true)
 end 'installGtRuntime'
 
 // A two-argument `ValueIdArray` — the shape `__gt_spawn(funcPtr, argBuf)` and `__gt_context_switch(from, to)`
@@ -373,18 +382,26 @@ function buildGtDequeue(module StdModule)
 	module.functions.push(func)
 end 'buildGtDequeue'
 
-// `__gt_await(promise) -> result` — THE COOPERATIVE SCHEDULER DRIVE, and the only place a switch is
-// driven. `self` = the running GT (`__gt_current_gt`). While the promise has not completed, dequeue a
-// ready GT, set it to return to `self`, publish it as current, and switch into it; it runs to completion
-// (B1a async functions never yield mid-body — E3073 is deferred) and its trampoline switches back to
-// `self`. When the promise's own GT is the one that ran, its status becomes `completed` and we extract.
+// `__gt_await(promise) -> result` (when `throwing` is false) / `__gt_try_await(promise) -> (result, threw)`
+// (when true) — THE COOPERATIVE SCHEDULER DRIVE, and the only place a switch is driven. `self` = the running
+// GT (`__gt_current_gt`). While the promise has not completed, dequeue a ready GT, set it to return to
+// `self`, publish it as current, and switch into it; it runs to completion (B1a async functions never yield
+// mid-body — E3073 is deferred) and its trampoline switches back to `self`. When the promise's own GT is the
+// one that ran, its status becomes `completed` and we fall into `extract`.
+//
+// The `throwing` flag decides ONLY the exit terminator, the entire difference between the two drivers: a
+// non-throwing await returns `promise.result` plainly (`ret`); a throwing `try await` also loads
+// `promise.threw` (the trampoline captured the thunk's R10 there) and exits through the dual-register error
+// ABI (`errorReturn(result, threw)`), so the caller's `tryCall` receives both. `__gt_await` never reads
+// `threw` — a throwing promise is only ever `try await`ed (the parser refuses a plain `await` of one,
+// E3057), so a non-throwing thunk's garbage R10 never reaches a reader.
 //
 // Because a spawned GT is enqueued at spawn and cannot vanish, the awaited promise is always reachable by
 // draining the queue, so the loop terminates. A `__gt_dequeue` miss (empty queue, promise not completed)
 // cannot arise in B1a's cooperative model; it bails to `extract` rather than spin, so a future deadlock is
 // a wrong answer to diagnose (B2's real park/deadlock detection) rather than a hang.
-function buildGtAwait(module StdModule)
-	var func = IrFunction.createFromStd(GtAwaitName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+function buildGtAwaitDriver(module StdModule, name ByteArray, throwing bool)
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry")
@@ -450,10 +467,19 @@ function buildGtAwait(module StdModule)
 	module.appendOp(recycle, op: StdOp.storeIndirect(recycleFreeHeadAddr, offset: 0, valueId: gStackBase, valueType: StdType.i64))
 	module.setTerminator(recycle, op: StdOp.branch(loopHdr.id))
 
-	// extract: result = promise.result.
+	// extract: result = promise.result, then the exit `throwing` selects. It is `errorReturn`, not `ret`, that
+	// makes the throwing driver a throwing function — the x64 backend keys the dual-register exit off the
+	// terminator and the i64 return type, so no `throws`-clause name is needed (and none exists — the runtime
+	// re-throws whatever type the awaited thunk threw).
 	let result = ids.mint()
 	module.appendOp(extract, op: StdOp.loadIndirect(result, addrId: promise, offset: GtOffResult, valueType: StdType.i64))
-	module.setTerminator(extract, op: StdOp.ret(result))
+	if throwing 'throwingExit'
+		let threw = ids.mint()
+		module.appendOp(extract, op: StdOp.loadIndirect(threw, addrId: promise, offset: GtOffThrew, valueType: StdType.i64))
+		module.setTerminator(extract, op: StdOp.errorReturn(result, errorFlagId: threw))
+	end 'throwingExit' else 'plainExit'
+		module.setTerminator(extract, op: StdOp.ret(result))
+	end 'plainExit'
 
 	module.functions.push(func)
-end 'buildGtAwait'
+end 'buildGtAwaitDriver'

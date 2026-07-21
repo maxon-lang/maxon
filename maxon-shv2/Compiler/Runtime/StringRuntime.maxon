@@ -316,10 +316,10 @@ function classifyRuntimeCall(op MaxonOp, usage RuntimeUsage)
 		// P1.5-A1: a `functionRef` is a `lea` and an `indirectCall` calls through a code POINTER — neither
 		// names a runtime callee (`__mm_*`/`__str_*`/`print`), so neither records any runtime usage.
 		functionRef to indirectCall then break 'op'
-		// P1.5-B1a: `async`/`await` carry the green-thread scheduler. Detected by OP KIND (their `__gt_*`
-		// calls do not exist until lowering), and imply the HEAP too — `__gt_spawn` `__slab_alloc`s the GT
-		// struct and the argument buffer.
-		asyncCall to await then recordGtUsage(usage)
+		// P1.5-B1a/B2b: `async`/`await`/`try await` carry the green-thread scheduler. Detected by OP KIND
+		// (their `__gt_*` calls do not exist until lowering), and imply the HEAP too — `__gt_spawn`
+		// `__slab_alloc`s the GT struct and the argument buffer.
+		asyncCall to tryAwait then recordGtUsage(usage)
 	end 'op'
 end 'classifyRuntimeCall'
 

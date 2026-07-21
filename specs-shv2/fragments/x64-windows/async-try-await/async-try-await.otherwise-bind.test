@@ -1,0 +1,115 @@
+// Test: async-try-await.otherwise-bind
+enum TaskError implements Error
+	timedOut
+	crashed
+end 'TaskError'
+
+function mayFail(mode int) returns int throws TaskError
+	if mode == 0 'ok'
+		return 1
+	end 'ok'
+	if mode == 1 'slow'
+		throw TaskError.timedOut
+	end 'slow'
+	throw TaskError.crashed
+end 'mayFail'
+
+function main() returns ExitCode
+	let p = async mayFail(2)
+	let r = try await p otherwise (e) 'failed'
+		return match e 'why'
+			timedOut gives 7
+			crashed gives 9
+		end 'why'
+	end 'failed'
+	return r as ExitCode
+end 'main'
+---
+ExitCode: 9
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+  __gt_current_gt@24 = i64 0
+  __gt_run_queue_head@32 = i64 0
+  __gt_run_queue_tail@40 = i64 0
+  __gt_init_done@48 = i64 0
+  __gt_stack_free_head@56 = i64 0
+}
+
+func @mayFail {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, ok
+    x64.jmp ifcont
+  ok:
+    x64.movRegImm32 r8, 1
+    x64.movRegImm32 r10, 0
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.cmpRegImm32 rcx, 1
+    x64.jcc equal, slow
+    x64.jmp ifcont
+  slow:
+    x64.movRegImm32 rax, 0
+    x64.leaRegRegImm32 r10, rax, 1
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 rax, 1
+    x64.leaRegRegImm32 r10, rax, 1
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegImm32 rbx, 2
+    x64.movRegImm32 rcx, 48
+    x64.callDirect __slab_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.leaRegFunc rcx, [rip + mayFail]
+    x64.movRegReg rdx, r8
+    x64.callDirect __gt_spawn
+    x64.movRegReg rcx, r8
+    x64.callDirect __gt_try_await
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.leaRegRegImm32 rax, r10, -1
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.movRegImm32 r8, 7
+    x64.jmp matchcont
+  matchnext:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc equal, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.movRegImm32 r8, 9
+    x64.jmp matchcont
+  matchcont:
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  matchnext:
+  tryok:
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

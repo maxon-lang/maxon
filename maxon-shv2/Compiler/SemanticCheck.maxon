@@ -155,9 +155,9 @@ function opEscapesParam(op MaxonOp, param ValueId) returns bool
 		throwError to functionRef then break 'op'
 		indirectCall(_, _, args) then return valueIdInArray(args, value: param)
 		// P1.5-B1a: an async spawn's arguments cross into a green thread (an escape route like a call
-		// argument); an `await`'s operand is a runtime promise handle, not a persisted value.
+		// argument); an `await`/`try await`'s operand is a runtime promise handle, not a persisted value.
 		asyncCall(_, _, args, _, _) then return valueIdInArray(args, value: param)
-		await then break 'op'
+		await to tryAwait then break 'op'
 	end 'op'
 	return false
 end 'opEscapesParam'
@@ -169,7 +169,7 @@ function terminatorEscapesParam(term MaxonOp, param ValueId) returns bool
 	match term 'term'
 		call to literal then break 'term'
 		ret(value) then return value == param
-		retVoid to await then break 'term'
+		retVoid to tryAwait then break 'term'
 	end 'term'
 	return false
 end 'terminatorEscapesParam'
@@ -260,7 +260,7 @@ function functionHasAwait(func IrFunction, module MaxonModule) returns bool
 			match try module.ops.get(opIdx) otherwise panic("functionHasAwait: opIdx {opIdx} not in module.ops") 'op'
 				call to indirectCall then break 'op'
 				asyncCall then break 'op'
-				await then return true
+				await to tryAwait then return true
 			end 'op'
 		end 'eachOp'
 	end 'eachBlock'
@@ -292,6 +292,9 @@ function collectAwaitSites(func IrFunction, module MaxonModule) returns AwaitSit
 				call to indirectCall then break 'op'
 				asyncCall then break 'op'
 				await(_, promise) then sites.push(AwaitSite.create(block, pos: pos, promise: promise))
+				// A `try await` awaits (and consumes) its promise exactly as a plain `await` does — linearity
+				// is a property of the green thread, not of whether the error is caught — so it is an await site.
+				tryAwait(_, _, promise) then sites.push(AwaitSite.create(block, pos: pos, promise: promise))
 			end 'op'
 		end 'eachOp'
 	end 'eachBlock'
@@ -423,6 +426,8 @@ function classifyOpForPromise(op MaxonOp, promise ValueId) returns OpAwaitRole
 		call to indirectCall then break 'op'
 		asyncCall(result, _, _, _, _) then return roleIfEqual(result, promise: promise, role: OpAwaitRole.rearmOf)
 		await(_, awaited) then return roleIfEqual(awaited, promise: promise, role: OpAwaitRole.reawaitOf)
+		// A `try await` of the tracked promise is a re-await exactly as a plain `await` is.
+		tryAwait(_, _, awaited) then return roleIfEqual(awaited, promise: promise, role: OpAwaitRole.reawaitOf)
 	end 'op'
 	return OpAwaitRole.unrelated
 end 'classifyOpForPromise'
@@ -447,7 +452,7 @@ function collectAwaitSuccessors(module MaxonModule, block IrBlock, into BlockIdA
 		call to compare then break 'term'
 		condBranch(_, thenBlockId, elseBlockId) then pushSuccessorPair(into, thenId: thenBlockId, elseId: elseBlockId)
 		branch(targetBlockId) then into.push(targetBlockId)
-		globalAddr to await then break 'term'
+		globalAddr to tryAwait then break 'term'
 	end 'term'
 end 'collectAwaitSuccessors'
 
@@ -492,7 +497,10 @@ function checkCalls(project Project, module MaxonModule, throwsMap FuncThrowsMap
 					// callee's PARAMETERS to be GPR scalars (the trampoline passes them through the integer
 					// arg registers); `await`'s operand is a runtime promise handle, not a callee to resolve.
 					asyncCall(_, callee, args, argLabels, argRanges) then validateAsyncCall(project, func: func, opIndex: opIdx, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, escapeSummary: escapeSummary)
-					await then break 'op'
+					// An `await`/`try await`'s operand is a runtime promise handle, not a callee to resolve; the
+					// awaited function was validated at its `async` spawn site. The `try await` throws-compatibility
+					// (E3057 plain-await, E3059 propagate mismatch) is checked by the parser at the await/try token.
+					await to tryAwait then break 'op'
 				end 'op'
 			end 'eachOp'
 		end 'eachBlock'

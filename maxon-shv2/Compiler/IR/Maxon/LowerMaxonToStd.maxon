@@ -463,6 +463,7 @@ type MaxonToStdLowering
 			// this big match because a later field (`argLabels`/`argRanges`) follows it — see lowerIndirectCall.
 			asyncCall(result, callee, args, argLabels, _) then self.lowerAsyncCall(result, callee: callee, args: args, argLabels: argLabels, dstBlock: dstBlock)
 			await(result, promise) then self.lowerAwait(result, promise: promise, dstBlock: dstBlock)
+			tryAwait(result, errorFlag, promise) then self.lowerTryAwait(result, errorFlag: errorFlag, promise: promise, dstBlock: dstBlock)
 		end 'lower'
 	end 'lowerOp'
 
@@ -487,7 +488,7 @@ type MaxonToStdLowering
 			panicAbort then panic("lowerMaxonToStd: a `panicAbort` op appeared as a block terminator (parser bug — panicAbort is a body op followed by a dead return terminator)")
 			functionRef then panic("lowerMaxonToStd: a `functionRef` op appeared as a block terminator (parser bug — a function reference is a value-producing body op, never a terminator)")
 			indirectCall then panic("lowerMaxonToStd: an `indirectCall` op appeared as a block terminator (parser bug — an indirect call is a value-producing body op, never a terminator)")
-			asyncCall to await then panic("lowerMaxonToStd: an async/await op appeared as a block terminator (parser bug — `async`/`await` are value-producing body ops, never terminators)")
+			asyncCall to tryAwait then panic("lowerMaxonToStd: an async/await op appeared as a block terminator (parser bug — `async`/`await`/`try await` are value-producing body ops, never terminators)")
 		end 'lower'
 	end 'lowerTerminator'
 
@@ -665,6 +666,14 @@ type MaxonToStdLowering
 	function lowerAwait(result ValueId, promise ValueId, dstBlock IrBlock)
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: GtAwaitName, args: argsOf(promise)))
 	end 'lowerAwait'
+
+	// `try await p` → `__gt_try_await(p)`, a THROWING call: the awaited scalar in R8 (`result`), the error
+	// flag in R10 (`errorFlag`). The runtime driver returns both through `errorReturn`; this `tryCall`
+	// captures both, exactly as `lowerTryCall` does for a throwing free call. The parser's `try … otherwise …`
+	// desugar (already emitted around this op) reads the flag.
+	function lowerTryAwait(result ValueId, errorFlag ValueId, promise ValueId, dstBlock IrBlock)
+		self.stdModule.appendOp(dstBlock, op: StdOp.tryCall(result, errorFlagId: errorFlag, callee: GtTryAwaitName, args: argsOf(promise)))
+	end 'lowerTryAwait'
 
 	// Materialize a function value's `.text` address (P1.5-A2b-2). Under the uniform `(userargs, env) -> R`
 	// ABI every function value is called through the SAME indirect signature, so the address must name a

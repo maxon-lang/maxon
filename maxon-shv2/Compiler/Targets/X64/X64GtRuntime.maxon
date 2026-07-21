@@ -107,9 +107,16 @@ function buildGtTrampolineChunk() returns FunctionCodeChunk
 		encodeLoadRegBaseDisp(code, destReg: argRegisterAt(k as ParamCount), base: GtTrampArgBufReg, disp: (k * GtArgSlotBytes) as Imm32, wide: true)
 	end 'args'
 
-	// Call the async function; capture its R8 result into the GT; mark completed.
+	// Call the async function; capture its R8 result AND its R10 error flag into the GT; mark completed.
+	// R8 (result) and R10 (the dual-register error flag) are the throws ABI's two return registers and are
+	// NOT argument registers, so both survive the arg-register loads above and hold the thunk's return values
+	// here. R10 is captured UNCONDITIONALLY: for a NON-throwing thunk it is garbage, but harmless — only
+	// `__gt_try_await` ever reads `gt.threw`, and a non-throwing promise is awaited via `__gt_await`, which
+	// does not. This is the same r10 the trampoline used as its arg-buffer scratch (`GtTrampArgBufReg`) before
+	// the call; that use is finished once the args are loaded, so the register is free to receive the flag.
 	encodeCallReg(code, reg: GtTrampFuncPtrReg)
 	encodeStoreBaseDispReg(code, base: GtTrampGtReg, disp: GtOffResult as Imm32, srcReg: X64Register.r8)
+	encodeStoreBaseDispReg(code, base: GtTrampGtReg, disp: GtOffThrew as Imm32, srcReg: X64Register.r10)
 	encodeMovRegImm32(code, dest: X64Register.rax, value: GtStatusCompleted)
 	encodeStoreBaseDispReg(code, base: GtTrampGtReg, disp: GtOffStatus as Imm32, srcReg: X64Register.rax)
 

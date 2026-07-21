@@ -713,6 +713,20 @@ export union MaxonOp
 	// AWAIT `promise`'s green thread and yield its result. `promise` is the i64 handle `asyncCall` produced;
 	// `result` is the awaited scalar. Lowers to `__gt_await(promise)`.
 	await(result ValueId, promise ValueId) = MaxonOpMeta{category: OpCategory.awaiting}
+	// --- P1.5-B2b: error-carrying `try await` ---
+	//
+	// ⚠ APPENDED AT THE END OF THE UNION, past `await`, per the band-append invariant: a mid-union insert is
+	// silently swallowed by any range arm. Its `OpCategory.awaiting` (shared with `await`) is metadata
+	// independent of this tail position.
+	//
+	// A THROWING await `try await promise`. The dual-register twin of `await`, plus a SECOND def: `result` is
+	// the awaited primary value (R8 on return), `errorFlag` is the dual-register error flag (R10) the awaited
+	// thunk threw — `0` when it returned normally, `ordinal + 1`/box-pointer when it threw. The parser rewrites
+	// an `await` target of a `try` into this op (as it rewrites `call` into `tryCall`); it lowers to
+	// `__gt_try_await(promise)`, the throwing scheduler driver, and the `try … otherwise …` desugar reads the
+	// flag exactly as it does for a `tryCall`. Category `awaiting`, the same band as `await` — it IS `await`
+	// plus the flag def.
+	tryAwait(result ValueId, errorFlag ValueId, promise ValueId) = MaxonOpMeta{category: OpCategory.awaiting}
 end 'MaxonOp'
 
 // The dual-register error-flag ABI BIAS (P1.4b). The error flag is `0` for "no error in flight" and

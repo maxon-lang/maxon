@@ -426,6 +426,11 @@ function reportParseError(project Project, path FilePath, error ParseError)
 		errorTypeMismatch(detail, line, column) then reportPositioned(project, code: ErrorCode.errorTypeMismatch, message: "type mismatch: '{detail}'", line: line, column: column, filePath: path)
 		tryBlockFormInMatchArm(isOtherwiseForm, line, column) then reportPositioned(project, code: ErrorCode.matchBlockStatement, message: tryBlockFormMessage(isOtherwiseForm), line: line, column: column, filePath: path)
 		tryOnNonThrowing(callee, line, column) then reportPositioned(project, code: ErrorCode.tryRequiresThrowingFunction, message: "try requires a throwing function: '{callee}' does not throw'", line: line, column: column, filePath: path)
+			// P1.5-B2b: a plain `await` of a throwing promise (E3057), and a `try …` propagate whose error type
+			// differs from the enclosing function's (E3059). E3057 shares SemanticCheck's throwing-call-needs-try
+			// code; E3059 shares the `errorTypeMismatch` code with its own full-sentence message.
+			awaitThrowingPromiseNeedsTry(callee, line, column) then reportPositioned(project, code: ErrorCode.throwingFunctionRequiresTry, message: "throwing function requires try: 'await' on a promise from throwing '{callee}' drops the error — use 'try await'", line: line, column: column, filePath: path)
+			propagateTypeMismatch(propagated, enclosing, line, column) then reportPositioned(project, code: ErrorCode.errorTypeMismatch, message: "try propagates '{propagated}' but enclosing function throws '{enclosing}' — add 'otherwise' to convert", line: line, column: column, filePath: path)
 	end 'kind'
 end 'reportParseError'
 

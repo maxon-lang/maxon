@@ -244,7 +244,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:8:16: Unsupported: `async greet(…)` must return a scalar (int/bool) — the green-thread runtime captures the result through R8, so a managed (String/struct), float or void result has no channel to await at this rung (managed async is P1.5-B1c)
+error E2015: <fragment>:8:16: Unsupported: `async greet(…)` must return a scalar (int/bool) or void — the green-thread runtime captures the result through R8, so a managed (String/struct) or float result has no channel to await at this rung (managed async is P1.5-B1c)
 ```
 
 <!-- test: async-scheduler.managed-arg-refused -->

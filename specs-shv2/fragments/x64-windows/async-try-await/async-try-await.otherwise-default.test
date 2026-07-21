@@ -1,0 +1,105 @@
+// Test: async-try-await.otherwise-default
+enum WorkError implements Error
+	failed
+end 'WorkError'
+
+function mayFail(succeed bool) returns int throws WorkError
+	if succeed 'ok'
+		return 42
+	end 'ok'
+	throw WorkError.failed
+end 'mayFail'
+
+function main() returns ExitCode
+	let p1 = async mayFail(true)
+	let r1 = try await p1 otherwise 0
+	let p2 = async mayFail(false)
+	let r2 = try await p2 otherwise 80
+	return (r1 + r2) as ExitCode
+end 'main'
+---
+ExitCode: 122
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+  __gt_current_gt@24 = i64 0
+  __gt_run_queue_head@32 = i64 0
+  __gt_run_queue_tail@40 = i64 0
+  __gt_init_done@48 = i64 0
+  __gt_stack_free_head@56 = i64 0
+}
+
+func @mayFail {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, ok
+    x64.jmp ifcont
+  ok:
+    x64.movRegImm32 r8, 42
+    x64.movRegImm32 r10, 0
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 rax, 0
+    x64.leaRegRegImm32 r10, rax, 1
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm32 rbx, 1
+    x64.movRegImm32 rcx, 48
+    x64.callDirect __slab_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.leaRegFunc rcx, [rip + mayFail]
+    x64.movRegReg rdx, r8
+    x64.callDirect __gt_spawn
+    x64.movRegReg rcx, r8
+    x64.callDirect __gt_try_await
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 rbx, 0
+    x64.jmp trycont
+  tryok:
+    x64.movRegReg rbx, r8
+    x64.jmp trycont
+  trycont:
+    x64.movRegImm32 r12, 0
+    x64.movRegImm32 rcx, 48
+    x64.callDirect __slab_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], r12
+    x64.leaRegFunc rcx, [rip + mayFail]
+    x64.movRegReg rdx, r8
+    x64.callDirect __gt_spawn
+    x64.movRegReg rcx, r8
+    x64.callDirect __gt_try_await
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 rax, 80
+    x64.jmp trycont
+  tryok:
+    x64.movRegReg rax, r8
+    x64.jmp trycont
+  trycont:
+    x64.leaRegRegReg r8, rbx, rax
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

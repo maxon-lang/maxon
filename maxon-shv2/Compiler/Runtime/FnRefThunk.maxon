@@ -65,16 +65,16 @@ end 'collectFnRefThunkTargets'
 
 // Record a `functionRef` op's PLAIN target for thunking. It RANGES over the whole `MaxonOp` union so a
 // newly-appended op FAILS TO COMPILE here rather than being silently ignored (the band-append invariant):
-// `call to panicAbort` is every op before `functionRef`, `indirectCall` the one after (the last variant).
+// `call to panicAbort` is every op before `functionRef`, `indirectCall` the one after it.
 function noteIfFunctionRef(op MaxonOp, seen FnRefThunkSet, targets ByteArrayArray)
 	match op 'op'
 		call to panicAbort then break 'op'
 		functionRef(_, funcName) then noteFnRefTarget(funcName, seen: seen, targets: targets)
 		indirectCall then break 'op'
-		// P1.5-B1a: an async spawn takes the DIRECT function's address in lowering (not a `functionRef`
+		// P1.5-B1a/B2b: an async spawn takes the DIRECT function's address in lowering (not a `functionRef`
 		// through the uniform `(userargs, env)` ABI — the trampoline calls it with user args only), so it
-		// names no thunk target; `await` references no function value.
-		asyncCall to await then break 'op'
+		// names no thunk target; `await`/`try await` reference no function value.
+		asyncCall to tryAwait then break 'op'
 	end 'op'
 end 'noteIfFunctionRef'
 

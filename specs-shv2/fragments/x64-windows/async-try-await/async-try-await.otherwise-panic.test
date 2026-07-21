@@ -1,0 +1,67 @@
+// Test: async-try-await.otherwise-panic
+enum WorkError implements Error
+	failed
+end 'WorkError'
+
+function succeeds() returns int throws WorkError
+	return 7
+end 'succeeds'
+
+function main() returns ExitCode
+	let p = async succeeds()
+	let r = try await p otherwise panic("should not fail")
+	return r as ExitCode
+end 'main'
+---
+ExitCode: 7
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+  __gt_current_gt@24 = i64 0
+  __gt_run_queue_head@32 = i64 0
+  __gt_run_queue_tail@40 = i64 0
+  __gt_init_done@48 = i64 0
+  __gt_stack_free_head@56 = i64 0
+}
+
+func @succeeds {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 7
+    x64.movRegImm32 r10, 0
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 48
+    x64.callDirect __slab_alloc
+    x64.leaRegFunc rcx, [rip + succeeds]
+    x64.movRegReg rdx, r8
+    x64.callDirect __gt_spawn
+    x64.movRegReg rcx, r8
+    x64.callDirect __gt_try_await
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.leaRegRdata rax, [rip + __str_rec_1]
+    x64.movRegImm32 rcx, 134
+    x64.movReg32Reg32 rcx, rcx
+    x64.iatCall 0
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
