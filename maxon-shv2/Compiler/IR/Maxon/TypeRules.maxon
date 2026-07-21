@@ -618,10 +618,18 @@ end 'rangeIsUnsigned'
 // tiers carry ONLY signed integer compares (`StdCmpPred` has no `ugt`/`ult`) and there is no
 // `setcc`, so `InsertRangeChecks` emits a CASCADE of fused signed compare+branch — one block
 // per needed bound, each `cmp` fused with its `condBranch` — never the bootstrap's
-// `cmp`+`cmp`+`or` over materialized bools. Signed compares answer the SAME in/out verdict as
-// the bootstrap's on every representable range (a negative value fails the signed lower check
-// exactly where an unsigned value would fail the unsigned upper one), so only the emitted
-// instructions differ, never the behaviour.
+// `cmp`+`cmp`+`or` over materialized bools. Signed compares answer the same in/out verdict as
+// the bootstrap's for every range the enabled corpus uses and every range with a `0` (or
+// negative) low bound — a value fails the signed lower/upper check exactly where its unsigned
+// image would.
+//
+// ⚠ KNOWN GAP (not covered, tracked in OPEN.md): a range with a POSITIVE low bound AND an
+// unsigned-max upper — `int(N>0 to u64.max)` — miscompiles. Its upper check is elided (the
+// upper rides as `-1`), and its signed lower check `value < N` wrongly REJECTS a bit-63-set
+// value that is unsigned-in-range (`1 shl 63 as int(5 to u64.max)` panics but should pass).
+// A correct fix needs unsigned compares in the Std tier, or a declaration-time rejection of
+// the shape (which shv2 does not yet validate — the `error.*` declaration specs are disabled).
+// No enabled case constructs such a range.
 
 // The i64 pattern an unsigned `u64.max` upper bound rides as — named so the `-1`-means-
 // `u64.max` reinterpretation is not a bare literal (see RangedTypeAlias, and the sentinel case
@@ -650,20 +658,22 @@ export function rangeNeedsLowerCheck(low ParsedInt) returns bool
 end 'rangeNeedsLowerCheck'
 
 // Does the UPPER bound need a runtime compare? Only for a NON-NEGATIVE bound below i64.max. A
-// negative stored upper is the wrapped `u64.max`-family (unbounded in signed space), and the
-// only such range that is not already elided by `rangeIsFullI64` cannot occur — this keeps the
-// signed upper compare from firing on a value the range actually admits. (Bootstrap:
-// `IntUpper >= 0 && IntUpper < long.MaxValue`.)
+// negative stored upper is the wrapped `u64.max`-family (unbounded in signed space); eliding
+// the upper compare keeps it from firing on a value the range actually admits. (Bootstrap:
+// `IntUpper >= 0 && IntUpper < long.MaxValue`.) ⚠ For `int(N>0 to u64.max)` this elision leaves
+// only a signed LOWER check, which mis-rejects bit-63-set unsigned-in-range values — the KNOWN
+// GAP documented on `literalInRange`/the header above and tracked in OPEN.md.
 export function rangeNeedsUpperCheck(high ParsedInt) returns bool
 	return high >= 0 and high < i64.max
 end 'rangeNeedsUpperCheck'
 
 // Is a literal `value` within `[low, high]` (inclusive)? The compile-time E3005 test. Signed
-// throughout, and correct because the ONE range where a negative literal could reinterpret to
-// an in-range unsigned value is the unsigned-full span, which `rangeIsFullI64` has already
-// elided before this is asked. Every other unsigned range has a modest positive upper, so a
-// negative literal fails the signed lower bound exactly as its huge unsigned image would fail
-// the upper — the same verdict the bootstrap's `(ulong)` compares give.
+// throughout, and correct for the unsigned-full span (elided by `rangeIsFullI64` before this is
+// asked) and for every range with a modest positive upper — a negative literal fails the signed
+// lower bound exactly as its huge unsigned image would fail the upper, the verdict the
+// bootstrap's `(ulong)` compares give. ⚠ It shares the KNOWN GAP (see the header / OPEN.md):
+// for `int(N>0 to u64.max)` a bit-63-set literal is wrongly judged out of range. No enabled
+// case constructs such a range.
 export function literalInRange(value ParsedInt, low ParsedInt, high ParsedInt) returns bool
 	return value >= low and value <= high
 end 'literalInRange'
