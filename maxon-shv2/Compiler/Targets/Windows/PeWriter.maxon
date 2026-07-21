@@ -110,7 +110,15 @@ let ImportThunkPasses = 2  // the IAT and the ILT hold identical thunks
 // APPENDED AFTER `VirtualAlloc` so every existing slot INDEX (and hence every existing `iatCall`
 // relocation) is unchanged — a reorder would silently repoint every prior import.
 //
-// ⚠ All eight are kernel32, so this is still ONE DLL and `Kernel32DirEntries` stays 1 —
+// `CreateProcessA`/`GetExitCodeProcess`/`WaitForSingleObject`/`WaitForMultipleObjects`/`CloseHandle` (P1.5
+// subprocess seed) are the green-thread SUBPROCESS substrate's spawn + yielding-wait + reap: `__gt_process_run`
+// spawns a child with CreateProcessA and parks the GT; the scheduler's netpoll blocks the single M on
+// WaitForMultipleObjects (or per-handle WaitForSingleObject polls) and, once a child exits, reads its code with
+// GetExitCodeProcess and closes both handles. They lower from the Std `osProcessSpawn`/`osProcessExitCode`/
+// `osWaitHandles`/`osWaitHandle`/`osCloseHandle` ops. APPENDED AFTER `Sleep` so every existing slot INDEX (and
+// hence every existing `iatCall` relocation) is unchanged — a reorder would silently repoint every prior import.
+//
+// ⚠ All thirteen are kernel32, so this is still ONE DLL and `Kernel32DirEntries` stays 1 —
 // that constant counts import DIRECTORY entries (DLLs), not imports.
 export enum IatSlot
 	ExitProcess
@@ -121,6 +129,11 @@ export enum IatSlot
 	QueryPerformanceCounter
 	QueryPerformanceFrequency
 	Sleep
+	CreateProcessA
+	GetExitCodeProcess
+	WaitForSingleObject
+	WaitForMultipleObjects
+	CloseHandle
 end 'IatSlot'
 
 // The IAT slot index of an import — the `slotIndex` an `iatCall` records and the PE writer

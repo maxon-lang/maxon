@@ -60,6 +60,12 @@ export let GtOffArgBuf = 0x48  // the __slab_alloc'd argument buffer (MaxAsyncAr
 // non-throwing thunk leaving garbage in R10 here is harmless. Offset 0x58 (a one-word gap at 0x50) is
 // byte-identical to the authoritative GtLayout (`Arm64MacosGreenThread.maxon:93`), so a later port grafts on.
 export let GtOffThrew = 0x58
+// The child process HANDLE the running GT is parked on (P1.5 subprocess seed). Written by `__gt_proc_add` when a
+// GT parks on `runProcess`, read back after the GT resumes to reap the exit code and close the handle. Offset
+// 0x80 is exactly the `io_handle` slot the authoritative GtLayout names in the 0x60–0xA0 reserved gap (see the
+// note below), so the later IOCP/subprocess-pipe slices graft on without moving a field. Written and read only
+// from Std here, so — like `GtOffStackBase`/`GtOffNext` — it stays local, not exported to the hand-asm chunks.
+let GtOffIoHandle = 0x80
 // The PARKED flag (P1.5 mid-body-yield). Set by `__gt_sleep` just before a SPAWNED GT switches back to its
 // driver ("I am off my run queue, suspended in the timer heap"); cleared on resume. Offset 0xA8 is the SAME
 // slot the authoritative GtLayout (`Arm64MacosGreenThread.maxon` / v1 `GtLayout`) calls `io_yielded`, so the
@@ -126,6 +132,43 @@ let TimerHeapBytes = TimerHeapCapacity * TimerEntrySize
 // positive nanosecond instant, so 0 unambiguously means "no timers".
 let TimerNoDeadline = 0
 
+// --- Process store (P1.5 subprocess seed) ---
+// The parked-child store: TWO PARALLEL arrays, `procHandles[i]` (the child's process HANDLE) and `procGts[i]`
+// (the GT waiting on it), each an i64 slot. A DELIBERATE departure from the timer store's INTERLEAVED (deadline,
+// gt) layout: `WaitForMultipleObjects` wants a CONTIGUOUS handle array, so keeping handles in their own array
+// lets `procHandles` feed the netpoll's wait DIRECTLY with no gather copy and no gather buffer — the access
+// pattern genuinely differs from the timer store's (which reads deadline+gt together in its earliest-scan), so
+// the layout follows it. Both regions are `__slab_alloc`'d once in `__gt_init` (like the timer heap), because
+// `.data` entries are single scalar slots. Removal is swap-with-last across BOTH arrays in lockstep.
+//
+// ⚠ CAPACITY IS BOUNDED BY `MAXIMUM_WAIT_OBJECTS` = 64: `WaitForMultipleObjects` refuses an `nCount` above 64,
+// so at most 64 children may be parked SIMULTANEOUSLY. The subprocess-seed specs park ≤2 at once (one process +
+// one sleeper in the interleave case; one at a time in the spawn loop), far below the cap; the full harness's
+// >64-way fan-in is a later IOCP rung. There is no runtime cap here (like `__gt_timer_add`, the store is a plain
+// append) — the bound is documented, not silently enforced, exactly as the plan requires.
+let ProcStoreCapacity = 64
+let ProcSlotBytes = 8  // one i64 handle / gt pointer per parallel-array entry
+let ProcStoreBytes = ProcStoreCapacity * ProcSlotBytes
+
+// --- Win32 wait / process constants (P1.5 subprocess seed) ---
+// `WAIT_OBJECT_0` (0) is what `WaitForSingleObject`/`WaitForMultipleObjects` return for a SIGNALED handle (an
+// exited child); `__gt_proc_check` polls each handle with a zero timeout and tests for it.
+let WaitObject0 = 0
+let WaitPollTimeout = 0  // WaitForSingleObject timeout=0 — poll, never block (the netpoll owns the blocking wait)
+let WaitInfinite = 0xFFFFFFFF  // INFINITE — the netpoll's block when no timer bounds the wait
+// STARTUPINFOA is 0x68 bytes; its first field `cb` must equal that size. Every other field is 0 (slab-zeroed),
+// so `dwFlags = 0` and the child inherits the parent console — `cmd /c exit N` runs and exits with its code.
+let StartupInfoSize = 0x68
+let StartupInfoCbOffset = 0
+// PROCESS_INFORMATION is 0x18 bytes: hProcess@0, hThread@8 (dwProcessId@16, dwThreadId@20 are unused here).
+let ProcInfoSize = 0x18
+let ProcInfoHProcessOffset = 0
+let ProcInfoHThreadOffset = 8
+// The 8-byte slab slot `GetExitCodeProcess` writes the child's DWORD exit code into; the runtime reads it back
+// as a zero-extended u32 (a 4-byte read that ignores the high dword, so a dirty high half cannot corrupt it).
+let ExitCodeSlotBytes = 8
+let TrailingNulBytes = 1  // the one extra byte for the cmdline's NUL terminator (slab-zeroed → free)
+
 // --- Monotonic clock (P1.5 mid-body-yield) ---
 // `ns = ticks * 1e9 / freq`, evaluated as the OVERFLOW-SAFE split identity
 // `ns = (ticks/freq)*1e9 + ((ticks mod freq)*1e9)/freq` — see `buildGtNowNs`.
@@ -149,6 +192,12 @@ let GtNowNsName = b"__gt_now_ns"
 let GtTimerAddName = b"__gt_timer_add"
 let GtTimerCheckName = b"__gt_timer_check"
 let GtTimerEarliestName = b"__gt_timer_earliest"
+// P1.5 subprocess seed. `__gt_process_run` is the front-end target for `runProcess(cmd)`; the rest are the
+// scheduler internals it and the netpoll share.
+export let GtProcessRunName = b"__gt_process_run"
+let GtProcAddName = b"__gt_proc_add"
+let GtProcCountName = b"__gt_proc_count"
+let GtProcCheckName = b"__gt_proc_check"
 
 // --- `.data` globals (all i64, zero-initialized) ---
 // The zero image IS the initial state: no current GT, an empty run queue, init not yet run — exactly as
@@ -174,6 +223,11 @@ let GtTimerHeapBaseLabel = b"__gt_timer_heap_base"
 // `__gt_now_ns` is straight-line with no yield point inside it — it cannot be re-entered mid-read.
 let GtClockTicksLabel = b"__gt_clock_ticks"
 let GtClockFreqLabel = b"__gt_clock_freq"
+// P1.5 subprocess store: the live parked-child COUNT and the base addresses of the two `__slab_alloc`'d parallel
+// arrays (handles + waiting GTs). All 0 until `__gt_init` allocates the regions and seeds the bases.
+let GtProcCountLabel = b"__gt_proc_count"
+let GtProcHandlesBaseLabel = b"__gt_proc_handles_base"
+let GtProcGtsBaseLabel = b"__gt_proc_gts_base"
 
 // The prefix every GT runtime entry point shares — the "does this program spawn a green thread?" test.
 let GtRuntimeCallPrefix = b"__gt_"
@@ -201,6 +255,10 @@ export function gtRuntimeGlobals() returns DataSectionEntryArray
 	out.push(DataSectionEntry.create(String.from(GtTimerHeapBaseLabel), valueType: StdType.i64, value: 0))
 	out.push(DataSectionEntry.create(String.from(GtClockTicksLabel), valueType: StdType.i64, value: 0))
 	out.push(DataSectionEntry.create(String.from(GtClockFreqLabel), valueType: StdType.i64, value: 0))
+	// P1.5 subprocess store: the parked-child count + the two parallel-array bases.
+	out.push(DataSectionEntry.create(String.from(GtProcCountLabel), valueType: StdType.i64, value: 0))
+	out.push(DataSectionEntry.create(String.from(GtProcHandlesBaseLabel), valueType: StdType.i64, value: 0))
+	out.push(DataSectionEntry.create(String.from(GtProcGtsBaseLabel), valueType: StdType.i64, value: 0))
 	return out
 end 'gtRuntimeGlobals'
 
@@ -220,6 +278,10 @@ export function installGtRuntime(module StdModule)
 	buildGtAwaitDriver(module, name: GtAwaitName, throwing: false)
 	buildGtAwaitDriver(module, name: GtTryAwaitName, throwing: true)
 	buildGtSleep(module)
+	buildGtProcAdd(module)
+	buildGtProcCount(module)
+	buildGtProcCheck(module)
+	buildGtProcessRun(module)
 end 'installGtRuntime'
 
 // A two-argument `ValueIdArray` — the shape `__gt_spawn(funcPtr, argBuf)` and `__gt_context_switch(from, to)`
@@ -274,6 +336,20 @@ function buildGtInit(module StdModule)
 	let heapBaseAddr = ids.mint()
 	module.appendOp(doInit, op: StdOp.globalAddr(heapBaseAddr, label: GtTimerHeapBaseLabel))
 	module.appendOp(doInit, op: StdOp.storeIndirect(heapBaseAddr, offset: 0, valueId: heapBase, valueType: StdType.i64))
+	// The process store's two parallel arrays (handles + waiting GTs), each `__slab_alloc`'d once (slab-zeroed,
+	// so the count starts at 0) with its base published — parallel to the timer heap above.
+	let procRegionSizeConst = ids.mint()
+	module.appendOp(doInit, op: StdOp.const(procRegionSizeConst, value: ProcStoreBytes, valueType: StdType.i64))
+	let procHandlesBase = ids.mint()
+	module.appendOp(doInit, op: StdOp.call(procHandlesBase, callee: SlabAllocName, args: argsOf(procRegionSizeConst)))
+	let procHandlesBaseAddr = ids.mint()
+	module.appendOp(doInit, op: StdOp.globalAddr(procHandlesBaseAddr, label: GtProcHandlesBaseLabel))
+	module.appendOp(doInit, op: StdOp.storeIndirect(procHandlesBaseAddr, offset: 0, valueId: procHandlesBase, valueType: StdType.i64))
+	let procGtsBase = ids.mint()
+	module.appendOp(doInit, op: StdOp.call(procGtsBase, callee: SlabAllocName, args: argsOf(procRegionSizeConst)))
+	let procGtsBaseAddr = ids.mint()
+	module.appendOp(doInit, op: StdOp.globalAddr(procGtsBaseAddr, label: GtProcGtsBaseLabel))
+	module.appendOp(doInit, op: StdOp.storeIndirect(procGtsBaseAddr, offset: 0, valueId: procGtsBase, valueType: StdType.i64))
 	// __gt_init_done = 1.
 	let oneConst = ids.mint()
 	module.appendOp(doInit, op: StdOp.const(oneConst, value: 1, valueType: StdType.i64))
@@ -753,17 +829,51 @@ function buildGtTimerCheck(module StdModule)
 	module.functions.push(func)
 end 'buildGtTimerCheck'
 
+// Emit `ceil((earliest - now) / 1e6)` into `block` and return the deltaMs id — the millisecond delta both the
+// timer-only Sleep and the timer-bounded process wait block for. Rounding UP guarantees ≥1 ms, so a
+// sub-millisecond remainder cannot busy-spin. Factored so the two netpoll blocks that compute it stay one fact.
+function emitCeilMs(module StdModule, block IrBlock, ids ValueMinter, earliest ValueId, now ValueId) returns ValueId
+	let delta = ids.mint()
+	module.appendOp(block, op: StdOp.binOp(delta, lhs: earliest, rhs: now, opcode: StdBinOpcode.sub, operandType: StdType.i64))
+	let milliMinusOne = ids.mint()
+	module.appendOp(block, op: StdOp.const(milliMinusOne, value: NanosPerMilli - 1, valueType: StdType.i64))
+	let deltaRounded = ids.mint()
+	module.appendOp(block, op: StdOp.binOp(deltaRounded, lhs: delta, rhs: milliMinusOne, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	let milliConst = ids.mint()
+	module.appendOp(block, op: StdOp.const(milliConst, value: NanosPerMilli, valueType: StdType.i64))
+	let deltaMs = ids.mint()
+	module.appendOp(block, op: StdOp.div(deltaMs, lhs: deltaRounded, rhs: milliConst))
+	return deltaMs
+end 'emitCeilMs'
+
+// Emit the netpoll's single-M block on the parked children into `block`: `WaitForMultipleObjects(procHandles, pc,
+// FALSE, timeoutMs)` then `__gt_proc_check()` to wake every child that has since exited. `timeoutMs` is INFINITE
+// when no timer bounds the wait, else the timer delta. The handle array is the store's `procHandles` array itself
+// — parallel-array storage keeps it contiguous, so no gather copy is needed. Factored so the two blocks that
+// block on children (bounded and unbounded) share one spelling of the wait+recheck.
+function emitProcWait(module StdModule, block IrBlock, ids ValueMinter, pc ValueId, timeoutMs ValueId)
+	let handlesBaseAddr = ids.mint()
+	module.appendOp(block, op: StdOp.globalAddr(handlesBaseAddr, label: GtProcHandlesBaseLabel))
+	let handlesBase = ids.mint()
+	module.appendOp(block, op: StdOp.loadIndirect(handlesBase, addrId: handlesBaseAddr, offset: 0, valueType: StdType.i64))
+	module.appendOp(block, op: StdOp.osWaitHandles(handlesBase, countId: pc, timeoutMsId: timeoutMs))
+	let checkResult = ids.mint()
+	module.appendOp(block, op: StdOp.call(checkResult, callee: GtProcCheckName, args: ValueIdArray.create()))
+end 'emitProcWait'
+
 // ⭐ `__gt_drive_until(targetGt, targetStatus)` — THE SHARED COOPERATIVE DRIVE, and the only place a switch is
 // driven. `selfGt` = the running driver (`__gt_current_gt`: GT0 for a top-level await/sleep, a nested GT for
 // a nested one). It loops: dequeue a ready GT, publish it, switch into it, and on switch-back RECYCLE its
-// stack ONLY IF it `completed` (a GT that yielded mid-body via `__gt_sleep` is `waiting`, not `completed`, so
-// its stack is KEPT — recycling a yielded GT's stack is a use-after-free when it resumes, the #1 trap). When
-// the run queue empties, NETPOLL: `__gt_timer_check(now)` wakes any due GTs, else `Sleep` on the earliest
-// deadline (a real wait, never a busy-spin) and re-poll. Runs UNTIL `targetGt.status == targetStatus`.
+// stack ONLY IF it `completed` (a GT that yielded mid-body via `__gt_sleep`/`__gt_process_run` is `waiting`, not
+// `completed`, so its stack is KEPT — recycling a yielded GT's stack is a use-after-free when it resumes, the #1
+// trap). When the run queue empties, NETPOLL: wake any due timers / exited children, else BLOCK the single M on
+// whichever is pending — `Sleep` on the earliest timer, `WaitForMultipleObjects` on the parked children (bounded
+// by the earliest timer if both are pending), never a busy-spin — and re-poll. Runs UNTIL `targetGt.status ==
+// targetStatus`.
 //
-// `__gt_await(p)` drives until the promise's GT is `completed`; a top-level `__gt_sleep` drives until its own
-// GT is `ready` (woken by its timer). The loop state lives entirely in memory (the current GT, the run queue,
-// the timer store), so this is phi-free — each iteration reloads what it needs.
+// `__gt_await(p)` drives until the promise's GT is `completed`; a top-level `__gt_sleep`/`__gt_process_run` drives
+// until its own GT is `ready` (woken by its timer / its child's exit). The loop state lives entirely in memory
+// (the current GT, the run queue, the timer + process stores), so this is phi-free — each iteration reloads it.
 function buildGtDriveUntil(module StdModule)
 	var func = IrFunction.createFromStd(GtDriveUntilName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(2)
@@ -775,9 +885,14 @@ function buildGtDriveUntil(module StdModule)
 	var recycle = module.addBlock(func, label: b"recycle")
 	var pushStack = module.addBlock(func, label: b"pushstack")
 	var netpoll = module.addBlock(func, label: b"netpoll")
-	var haveTimer = module.addBlock(func, label: b"havetimer")
+	var timerOnly = module.addBlock(func, label: b"timeronly")
+	var timerDecide = module.addBlock(func, label: b"timerdecide")
 	var firenow = module.addBlock(func, label: b"firenow")
 	var sleepwait = module.addBlock(func, label: b"sleepwait")
+	var haveProcs = module.addBlock(func, label: b"haveprocs")
+	var procInfinite = module.addBlock(func, label: b"procinfinite")
+	var procTimerDecide = module.addBlock(func, label: b"proctimerdecide")
+	var procWaitBounded = module.addBlock(func, label: b"procwaitbounded")
 	var doneBlock = module.addBlock(func, label: b"done")
 
 	emitParams(module, block: entry, count: 2)
@@ -837,40 +952,72 @@ function buildGtDriveUntil(module StdModule)
 	module.appendOp(pushStack, op: StdOp.storeIndirect(freeHeadAddr, offset: 0, valueId: gStackBase, valueType: StdType.i64))
 	module.setTerminator(pushStack, op: StdOp.branch(loopHdr.id))
 
-	// netpoll: the run queue is empty. now = now_ns(); earliest = timer_earliest(); an empty store here is a
-	// deadlock (nothing ready and no parked GT) → done (the caller reads its result, matching B1a's bail).
+	// netpoll: the run queue is empty. Block the single M until something becomes ready — a parked TIMER fires or a
+	// parked CHILD exits. `pc` = parked children, `earliest` = the nearest timer deadline (0 = none). When BOTH are
+	// empty this is a deadlock (nothing ready, nothing pending) → done (the caller reads its result, matching the
+	// original B1a bail). A pending child never bails: `haveProcs` always blocks on it.
+	let pc = ids.mint()
+	module.appendOp(netpoll, op: StdOp.call(pc, callee: GtProcCountName, args: ValueIdArray.create()))
 	let now = ids.mint()
 	module.appendOp(netpoll, op: StdOp.call(now, callee: GtNowNsName, args: ValueIdArray.create()))
 	let earliest = ids.mint()
 	module.appendOp(netpoll, op: StdOp.call(earliest, callee: GtTimerEarliestName, args: ValueIdArray.create()))
+	let noProcs = ids.mint()
+	module.appendOp(netpoll, op: StdOp.cmp(noProcs, lhs: pc, rhs: zeroConst, pred: StdCmpPred.eq, operandType: StdType.i64))
+	module.setTerminator(netpoll, op: StdOp.condBranch(noProcs, thenBlockId: timerOnly.id, elseBlockId: haveProcs.id))
+
+	// timerOnly (pc == 0): the pre-subprocess path, byte-for-byte the same behaviour — no timer → deadlock done,
+	// else decide.
 	let noTimers = ids.mint()
-	module.appendOp(netpoll, op: StdOp.cmp(noTimers, lhs: earliest, rhs: zeroConst, pred: StdCmpPred.eq, operandType: StdType.i64))
-	module.setTerminator(netpoll, op: StdOp.condBranch(noTimers, thenBlockId: doneBlock.id, elseBlockId: haveTimer.id))
+	module.appendOp(timerOnly, op: StdOp.cmp(noTimers, lhs: earliest, rhs: zeroConst, pred: StdCmpPred.eq, operandType: StdType.i64))
+	module.setTerminator(timerOnly, op: StdOp.condBranch(noTimers, thenBlockId: doneBlock.id, elseBlockId: timerDecide.id))
 
-	// haveTimer: if the earliest deadline has passed → firenow, else → sleepwait.
+	// timerDecide: if the earliest deadline has passed → firenow, else → sleepwait.
 	let isDue = ids.mint()
-	module.appendOp(haveTimer, op: StdOp.cmp(isDue, lhs: earliest, rhs: now, pred: StdCmpPred.le, operandType: StdType.i64))
-	module.setTerminator(haveTimer, op: StdOp.condBranch(isDue, thenBlockId: firenow.id, elseBlockId: sleepwait.id))
+	module.appendOp(timerDecide, op: StdOp.cmp(isDue, lhs: earliest, rhs: now, pred: StdCmpPred.le, operandType: StdType.i64))
+	module.setTerminator(timerDecide, op: StdOp.condBranch(isDue, thenBlockId: firenow.id, elseBlockId: sleepwait.id))
 
-	// firenow: wake the due GTs (and, in the self-drive case, set our own status) then re-check the loop.
+	// firenow: wake the due GTs (and, in the self-drive case, set our own status) then re-check the loop. SHARED by
+	// the timer-only path and the process path's "a timer is already due" case — fire it without blocking on procs.
 	let checkResult = ids.mint()
 	module.appendOp(firenow, op: StdOp.call(checkResult, callee: GtTimerCheckName, args: argsOf(now)))
 	module.setTerminator(firenow, op: StdOp.branch(loopHdr.id))
 
-	// sleepwait: earliest > now, so delta > 0. Sleep ceil(delta / 1e6) ms — rounding UP guarantees ≥1 ms, so a
-	// sub-millisecond remainder cannot busy-spin — then re-poll.
-	let delta = ids.mint()
-	module.appendOp(sleepwait, op: StdOp.binOp(delta, lhs: earliest, rhs: now, opcode: StdBinOpcode.sub, operandType: StdType.i64))
-	let milliMinusOne = ids.mint()
-	module.appendOp(sleepwait, op: StdOp.const(milliMinusOne, value: NanosPerMilli - 1, valueType: StdType.i64))
-	let deltaRounded = ids.mint()
-	module.appendOp(sleepwait, op: StdOp.binOp(deltaRounded, lhs: delta, rhs: milliMinusOne, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	let milliConst = ids.mint()
-	module.appendOp(sleepwait, op: StdOp.const(milliConst, value: NanosPerMilli, valueType: StdType.i64))
-	let deltaMs = ids.mint()
-	module.appendOp(sleepwait, op: StdOp.div(deltaMs, lhs: deltaRounded, rhs: milliConst))
-	module.appendOp(sleepwait, op: StdOp.osSleepMs(deltaMs))
+	// sleepwait: pc == 0, earliest > now → plain Sleep on the timer delta, then re-poll (no GT is enqueued yet, so
+	// re-entering netpoll cannot hit the deadlock bail — the timer is still in the store until `firenow` fires it).
+	let sleepMs = emitCeilMs(module, block: sleepwait, ids: ids, earliest: earliest, now: now)
+	module.appendOp(sleepwait, op: StdOp.osSleepMs(sleepMs))
 	module.setTerminator(sleepwait, op: StdOp.branch(netpoll.id))
+
+	// haveProcs (pc >= 1): block on the children. No timer bounds the wait → INFINITE; else bound it by the timer.
+	let noTimersProcs = ids.mint()
+	module.appendOp(haveProcs, op: StdOp.cmp(noTimersProcs, lhs: earliest, rhs: zeroConst, pred: StdCmpPred.eq, operandType: StdType.i64))
+	module.setTerminator(haveProcs, op: StdOp.condBranch(noTimersProcs, thenBlockId: procInfinite.id, elseBlockId: procTimerDecide.id))
+
+	// procInfinite: no timer → block on the children with INFINITE; a child exit is the only thing that can wake
+	// us. After the wait `__gt_proc_check` has enqueued whatever exited, so re-check via loopHdr (NOT netpoll — a
+	// just-woken GT sits in the run queue, and netpoll would read the now-empty stores as a false deadlock).
+	let infiniteConst = ids.mint()
+	module.appendOp(procInfinite, op: StdOp.const(infiniteConst, value: WaitInfinite, valueType: StdType.i64))
+	emitProcWait(module, block: procInfinite, ids: ids, pc: pc, timeoutMs: infiniteConst)
+	module.setTerminator(procInfinite, op: StdOp.branch(loopHdr.id))
+
+	// procTimerDecide: a timer exists. If it is ALREADY due, fire it first (firenow) without blocking; else block
+	// on the children bounded by the timer delta.
+	let procIsDue = ids.mint()
+	module.appendOp(procTimerDecide, op: StdOp.cmp(procIsDue, lhs: earliest, rhs: now, pred: StdCmpPred.le, operandType: StdType.i64))
+	module.setTerminator(procTimerDecide, op: StdOp.condBranch(procIsDue, thenBlockId: firenow.id, elseBlockId: procWaitBounded.id))
+
+	// procWaitBounded: block on the children for at most the timer delta, then poll BOTH the children (in
+	// `emitProcWait`) and — with a FRESH clock, since the wait consumed time — the timers, since either a child
+	// exited OR the timer expired during the wait. Re-check via loopHdr, for the same reason procInfinite does.
+	let boundedMs = emitCeilMs(module, block: procWaitBounded, ids: ids, earliest: earliest, now: now)
+	emitProcWait(module, block: procWaitBounded, ids: ids, pc: pc, timeoutMs: boundedMs)
+	let nowAfter = ids.mint()
+	module.appendOp(procWaitBounded, op: StdOp.call(nowAfter, callee: GtNowNsName, args: ValueIdArray.create()))
+	let timerCheckResult = ids.mint()
+	module.appendOp(procWaitBounded, op: StdOp.call(timerCheckResult, callee: GtTimerCheckName, args: argsOf(nowAfter)))
+	module.setTerminator(procWaitBounded, op: StdOp.branch(loopHdr.id))
 
 	module.setTerminator(doneBlock, op: StdOp.retVoid)
 	module.functions.push(func)
@@ -996,3 +1143,353 @@ function buildGtSleep(module StdModule)
 	module.setTerminator(doneBlock, op: StdOp.retVoid)
 	module.functions.push(func)
 end 'buildGtSleep'
+
+// `__gt_proc_add(gt, handle)` — park `gt` on child `handle`: append `handle`/`gt` to the two parallel arrays,
+// then mark `gt` waiting and record the handle in `gt.io_handle` (its durable home across the yield). An UNSORTED
+// append (like `__gt_timer_add`); no capacity guard — the concurrent parked-child count is bounded by
+// simultaneously-in-flight children (≤2 in the specs), far below the 64-handle WaitForMultipleObjects cap.
+function buildGtProcAdd(module StdModule)
+	var func = IrFunction.createFromStd(GtProcAddName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry")
+	emitParams(module, block: entry, count: 2)
+	let gt = 0 as ValueId
+	let handle = 1 as ValueId
+
+	let countAddr = ids.mint()
+	module.appendOp(entry, op: StdOp.globalAddr(countAddr, label: GtProcCountLabel))
+	let count = ids.mint()
+	module.appendOp(entry, op: StdOp.loadIndirect(count, addrId: countAddr, offset: 0, valueType: StdType.i64))
+	let slotBytesConst = ids.mint()
+	module.appendOp(entry, op: StdOp.const(slotBytesConst, value: ProcSlotBytes, valueType: StdType.i64))
+	let entryOff = ids.mint()
+	module.appendOp(entry, op: StdOp.binOp(entryOff, lhs: count, rhs: slotBytesConst, opcode: StdBinOpcode.mul, operandType: StdType.i64))
+	// procHandles[count] = handle.
+	let handlesBaseAddr = ids.mint()
+	module.appendOp(entry, op: StdOp.globalAddr(handlesBaseAddr, label: GtProcHandlesBaseLabel))
+	let handlesBase = ids.mint()
+	module.appendOp(entry, op: StdOp.loadIndirect(handlesBase, addrId: handlesBaseAddr, offset: 0, valueType: StdType.i64))
+	let handleSlot = ids.mint()
+	module.appendOp(entry, op: StdOp.binOp(handleSlot, lhs: handlesBase, rhs: entryOff, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	module.appendOp(entry, op: StdOp.storeIndirect(handleSlot, offset: 0, valueId: handle, valueType: StdType.i64))
+	// procGts[count] = gt.
+	let gtsBaseAddr = ids.mint()
+	module.appendOp(entry, op: StdOp.globalAddr(gtsBaseAddr, label: GtProcGtsBaseLabel))
+	let gtsBase = ids.mint()
+	module.appendOp(entry, op: StdOp.loadIndirect(gtsBase, addrId: gtsBaseAddr, offset: 0, valueType: StdType.i64))
+	let gtSlot = ids.mint()
+	module.appendOp(entry, op: StdOp.binOp(gtSlot, lhs: gtsBase, rhs: entryOff, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	module.appendOp(entry, op: StdOp.storeIndirect(gtSlot, offset: 0, valueId: gt, valueType: StdType.i64))
+	// count++.
+	let oneConst = ids.mint()
+	module.appendOp(entry, op: StdOp.const(oneConst, value: 1, valueType: StdType.i64))
+	let newCount = ids.mint()
+	module.appendOp(entry, op: StdOp.binOp(newCount, lhs: count, rhs: oneConst, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	module.appendOp(entry, op: StdOp.storeIndirect(countAddr, offset: 0, valueId: newCount, valueType: StdType.i64))
+	// gt.status = waiting ; gt.io_handle = handle.
+	let waitingConst = ids.mint()
+	module.appendOp(entry, op: StdOp.const(waitingConst, value: GtStatusWaiting, valueType: StdType.i64))
+	module.appendOp(entry, op: StdOp.storeIndirect(gt, offset: GtOffStatus, valueId: waitingConst, valueType: StdType.i64))
+	module.appendOp(entry, op: StdOp.storeIndirect(gt, offset: GtOffIoHandle, valueId: handle, valueType: StdType.i64))
+	module.setTerminator(entry, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildGtProcAdd'
+
+// `__gt_proc_count() -> count` — the live parked-child count (the netpoll's WaitForMultipleObjects `nCount`).
+function buildGtProcCount(module StdModule)
+	var func = IrFunction.createFromStd(GtProcCountName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var ids = ValueMinter.create(0)
+
+	var entry = module.addBlock(func, label: b"entry")
+	let countAddr = ids.mint()
+	module.appendOp(entry, op: StdOp.globalAddr(countAddr, label: GtProcCountLabel))
+	let count = ids.mint()
+	module.appendOp(entry, op: StdOp.loadIndirect(count, addrId: countAddr, offset: 0, valueType: StdType.i64))
+	module.setTerminator(entry, op: StdOp.ret(count))
+
+	module.functions.push(func)
+end 'buildGtProcCount'
+
+// `__gt_proc_check()` — poll every parked child; wake the GTs whose child has EXITED. For each entry:
+// `osWaitHandle(handle, 0) == WAIT_OBJECT_0` means the child exited → set gt.status=ready, re-enqueue it (UNLESS
+// it is `__gt_current_gt`, a self-driving GT0 already on its own stack), and remove the entry (swap the last live
+// entry into the hole across BOTH parallel arrays, count--, re-examine the same index). Mirrors
+// `__gt_timer_check`'s fire/afterfire, with a zero-timeout wait poll in place of the deadline compare.
+function buildGtProcCheck(module StdModule)
+	var func = IrFunction.createFromStd(GtProcCheckName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var ids = ValueMinter.create(0)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var loopHdr = module.addBlock(func, label: b"loophdr")
+	var loopBody = module.addBlock(func, label: b"loopbody")
+	var advance = module.addBlock(func, label: b"advance")
+	var fire = module.addBlock(func, label: b"fire")
+	var doEnqueue = module.addBlock(func, label: b"enqueue")
+	var afterFire = module.addBlock(func, label: b"afterfire")
+	var doneBlock = module.addBlock(func, label: b"done")
+
+	let countAddr = ids.mint()
+	module.appendOp(entry, op: StdOp.globalAddr(countAddr, label: GtProcCountLabel))
+	let count0 = ids.mint()
+	module.appendOp(entry, op: StdOp.loadIndirect(count0, addrId: countAddr, offset: 0, valueType: StdType.i64))
+	let handlesBaseAddr = ids.mint()
+	module.appendOp(entry, op: StdOp.globalAddr(handlesBaseAddr, label: GtProcHandlesBaseLabel))
+	let handlesBase = ids.mint()
+	module.appendOp(entry, op: StdOp.loadIndirect(handlesBase, addrId: handlesBaseAddr, offset: 0, valueType: StdType.i64))
+	let gtsBaseAddr = ids.mint()
+	module.appendOp(entry, op: StdOp.globalAddr(gtsBaseAddr, label: GtProcGtsBaseLabel))
+	let gtsBase = ids.mint()
+	module.appendOp(entry, op: StdOp.loadIndirect(gtsBase, addrId: gtsBaseAddr, offset: 0, valueType: StdType.i64))
+	let zeroConst = ids.mint()
+	module.appendOp(entry, op: StdOp.const(zeroConst, value: 0, valueType: StdType.i64))
+	let slotBytesConst = ids.mint()
+	module.appendOp(entry, op: StdOp.const(slotBytesConst, value: ProcSlotBytes, valueType: StdType.i64))
+	module.setTerminator(entry, op: StdOp.branch(loopHdr.id))
+
+	// loopHdr(i, count): if i >= count → done(count), else → loopBody.
+	let i = ids.mint()
+	let count = ids.mint()
+	loopHdr.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
+	loopHdr.blockArgs.push(IrBlockArg.create(count, argType: StdType.i64))
+	entry.branchEdges.push(BranchEdge.create(loopHdr.id, argIds: args2(zeroConst, second: count0)))
+	let atEnd = ids.mint()
+	module.appendOp(loopHdr, op: StdOp.cmp(atEnd, lhs: i, rhs: count, pred: StdCmpPred.ge, operandType: StdType.i64))
+	module.setTerminator(loopHdr, op: StdOp.condBranch(atEnd, thenBlockId: doneBlock.id, elseBlockId: loopBody.id))
+
+	// loopBody: h = procHandles[i]; poll it; if signaled (child exited) → fire, else → advance.
+	let off = ids.mint()
+	module.appendOp(loopBody, op: StdOp.binOp(off, lhs: i, rhs: slotBytesConst, opcode: StdBinOpcode.mul, operandType: StdType.i64))
+	let handleAddr = ids.mint()
+	module.appendOp(loopBody, op: StdOp.binOp(handleAddr, lhs: handlesBase, rhs: off, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	let handle = ids.mint()
+	module.appendOp(loopBody, op: StdOp.loadIndirect(handle, addrId: handleAddr, offset: 0, valueType: StdType.i64))
+	let pollTimeoutConst = ids.mint()
+	module.appendOp(loopBody, op: StdOp.const(pollTimeoutConst, value: WaitPollTimeout, valueType: StdType.i64))
+	let waitResult = ids.mint()
+	module.appendOp(loopBody, op: StdOp.osWaitHandle(waitResult, handleId: handle, timeoutMsId: pollTimeoutConst))
+	let signaledConst = ids.mint()
+	module.appendOp(loopBody, op: StdOp.const(signaledConst, value: WaitObject0, valueType: StdType.i64))
+	let isSignaled = ids.mint()
+	module.appendOp(loopBody, op: StdOp.cmp(isSignaled, lhs: waitResult, rhs: signaledConst, pred: StdCmpPred.eq, operandType: StdType.i64))
+	module.setTerminator(loopBody, op: StdOp.condBranch(isSignaled, thenBlockId: fire.id, elseBlockId: advance.id))
+
+	// advance: not signaled → loopHdr(i+1, count).
+	let oneAdv = ids.mint()
+	module.appendOp(advance, op: StdOp.const(oneAdv, value: 1, valueType: StdType.i64))
+	let iAdv = ids.mint()
+	module.appendOp(advance, op: StdOp.binOp(iAdv, lhs: i, rhs: oneAdv, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	module.setTerminator(advance, op: StdOp.branch(loopHdr.id))
+	advance.branchEdges.push(BranchEdge.create(loopHdr.id, argIds: args2(iAdv, second: count)))
+
+	// fire: gt = procGts[i]; gt.status = ready; skip enqueue when gt is the current (self-driving) GT.
+	let fireOff = ids.mint()
+	module.appendOp(fire, op: StdOp.binOp(fireOff, lhs: i, rhs: slotBytesConst, opcode: StdBinOpcode.mul, operandType: StdType.i64))
+	let gtAddr = ids.mint()
+	module.appendOp(fire, op: StdOp.binOp(gtAddr, lhs: gtsBase, rhs: fireOff, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	let gt = ids.mint()
+	module.appendOp(fire, op: StdOp.loadIndirect(gt, addrId: gtAddr, offset: 0, valueType: StdType.i64))
+	let readyConst = ids.mint()
+	module.appendOp(fire, op: StdOp.const(readyConst, value: GtStatusReady, valueType: StdType.i64))
+	module.appendOp(fire, op: StdOp.storeIndirect(gt, offset: GtOffStatus, valueId: readyConst, valueType: StdType.i64))
+	let curAddr = ids.mint()
+	module.appendOp(fire, op: StdOp.globalAddr(curAddr, label: GtCurrentGtLabel))
+	let curGt = ids.mint()
+	module.appendOp(fire, op: StdOp.loadIndirect(curGt, addrId: curAddr, offset: 0, valueType: StdType.i64))
+	let isCurrent = ids.mint()
+	module.appendOp(fire, op: StdOp.cmp(isCurrent, lhs: gt, rhs: curGt, pred: StdCmpPred.eq, operandType: StdType.i64))
+	module.setTerminator(fire, op: StdOp.condBranch(isCurrent, thenBlockId: afterFire.id, elseBlockId: doEnqueue.id))
+
+	// doEnqueue: put the woken GT back on the run queue.
+	let enqResult = ids.mint()
+	module.appendOp(doEnqueue, op: StdOp.call(enqResult, callee: GtEnqueueName, args: argsOf(gt)))
+	module.setTerminator(doEnqueue, op: StdOp.branch(afterFire.id))
+
+	// afterFire: remove entry i — copy the last live entry over it in BOTH arrays, count--, re-examine i.
+	let oneRem = ids.mint()
+	module.appendOp(afterFire, op: StdOp.const(oneRem, value: 1, valueType: StdType.i64))
+	let newCount = ids.mint()
+	module.appendOp(afterFire, op: StdOp.binOp(newCount, lhs: count, rhs: oneRem, opcode: StdBinOpcode.sub, operandType: StdType.i64))
+	let lastOff = ids.mint()
+	module.appendOp(afterFire, op: StdOp.binOp(lastOff, lhs: newCount, rhs: slotBytesConst, opcode: StdBinOpcode.mul, operandType: StdType.i64))
+	let curOff = ids.mint()
+	module.appendOp(afterFire, op: StdOp.binOp(curOff, lhs: i, rhs: slotBytesConst, opcode: StdBinOpcode.mul, operandType: StdType.i64))
+	// A self-copy when i == newCount is harmless. procHandles[i] = procHandles[last].
+	let lastHandleAddr = ids.mint()
+	module.appendOp(afterFire, op: StdOp.binOp(lastHandleAddr, lhs: handlesBase, rhs: lastOff, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	let movedHandle = ids.mint()
+	module.appendOp(afterFire, op: StdOp.loadIndirect(movedHandle, addrId: lastHandleAddr, offset: 0, valueType: StdType.i64))
+	let holeHandleAddr = ids.mint()
+	module.appendOp(afterFire, op: StdOp.binOp(holeHandleAddr, lhs: handlesBase, rhs: curOff, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	module.appendOp(afterFire, op: StdOp.storeIndirect(holeHandleAddr, offset: 0, valueId: movedHandle, valueType: StdType.i64))
+	// procGts[i] = procGts[last].
+	let lastGtAddr = ids.mint()
+	module.appendOp(afterFire, op: StdOp.binOp(lastGtAddr, lhs: gtsBase, rhs: lastOff, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	let movedGt = ids.mint()
+	module.appendOp(afterFire, op: StdOp.loadIndirect(movedGt, addrId: lastGtAddr, offset: 0, valueType: StdType.i64))
+	let holeGtAddr = ids.mint()
+	module.appendOp(afterFire, op: StdOp.binOp(holeGtAddr, lhs: gtsBase, rhs: curOff, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	module.appendOp(afterFire, op: StdOp.storeIndirect(holeGtAddr, offset: 0, valueId: movedGt, valueType: StdType.i64))
+	module.setTerminator(afterFire, op: StdOp.branch(loopHdr.id))
+	afterFire.branchEdges.push(BranchEdge.create(loopHdr.id, argIds: args2(i, second: newCount)))
+
+	// done(count): publish the surviving entry count.
+	let doneCount = ids.mint()
+	doneBlock.blockArgs.push(IrBlockArg.create(doneCount, argType: StdType.i64))
+	loopHdr.branchEdges.push(BranchEdge.create(doneBlock.id, argIds: argsOf(count)))
+	let doneCountAddr = ids.mint()
+	module.appendOp(doneBlock, op: StdOp.globalAddr(doneCountAddr, label: GtProcCountLabel))
+	module.appendOp(doneBlock, op: StdOp.storeIndirect(doneCountAddr, offset: 0, valueId: doneCount, valueType: StdType.i64))
+	module.setTerminator(doneBlock, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildGtProcCheck'
+
+// `__gt_process_run(strPtr) -> code` — spawn the Windows child named by the command-line String, wait for it to
+// exit (yielding the current GT while it runs), and return its scalar exit code. THE subprocess mid-body yield.
+// The command line is BORROWED: `strPtr` is the 48-byte String record, whose `buffer`/`length` this reads exactly
+// as `__print_string` does; ownership stays with the caller. Lazily runs `__gt_init` first (a top-level
+// `runProcess` may reach here without ever having spawned a green thread).
+function buildGtProcessRun(module StdModule)
+	var func = IrFunction.createFromStd(GtProcessRunName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var copyHdr = module.addBlock(func, label: b"copyhdr")
+	var copyBody = module.addBlock(func, label: b"copybody")
+	var afterCopy = module.addBlock(func, label: b"aftercopy")
+	var selfDrive = module.addBlock(func, label: b"selfdrive")
+	var parkSwitch = module.addBlock(func, label: b"parkswitch")
+	var reap = module.addBlock(func, label: b"reap")
+
+	emitParams(module, block: entry, count: 1)
+	let strPtr = 0 as ValueId
+
+	// Lazy one-time scheduler init. A void call mints an unread result id.
+	let initResult = ids.mint()
+	module.appendOp(entry, op: StdOp.call(initResult, callee: GtInitName, args: ValueIdArray.create()))
+
+	// cmdlinePtr = strPtr.buffer ; cmdlineLen = strPtr.length — borrowed, exactly as `__print_string` reads them.
+	let cmdlinePtr = ids.mint()
+	module.appendOp(entry, op: StdOp.loadIndirect(cmdlinePtr, addrId: strPtr, offset: StringBufferOffset, valueType: StdType.i64))
+	let cmdlineLen = ids.mint()
+	module.appendOp(entry, op: StdOp.loadIndirect(cmdlineLen, addrId: strPtr, offset: StringLengthOffset, valueType: StdType.i64))
+
+	// startupPtr = slab_alloc(0x68) (slab-zeroed) ; startupPtr.cb = 0x68 — the one field CreateProcessA requires.
+	let startupSizeConst = ids.mint()
+	module.appendOp(entry, op: StdOp.const(startupSizeConst, value: StartupInfoSize, valueType: StdType.i64))
+	let startupPtr = ids.mint()
+	module.appendOp(entry, op: StdOp.call(startupPtr, callee: SlabAllocName, args: argsOf(startupSizeConst)))
+	module.appendOp(entry, op: StdOp.storeIndirect(startupPtr, offset: StartupInfoCbOffset, valueId: startupSizeConst, valueType: StdType.i64))
+
+	// procInfoPtr = slab_alloc(0x18) (slab-zeroed) — CreateProcessA fills hProcess@0, hThread@8.
+	let procInfoSizeConst = ids.mint()
+	module.appendOp(entry, op: StdOp.const(procInfoSizeConst, value: ProcInfoSize, valueType: StdType.i64))
+	let procInfoPtr = ids.mint()
+	module.appendOp(entry, op: StdOp.call(procInfoPtr, callee: SlabAllocName, args: argsOf(procInfoSizeConst)))
+
+	// cmBuf = slab_alloc(cmdlineLen + 1) — a MUTABLE, NUL-terminated copy of the command line (CreateProcessA may
+	// write to lpCommandLine, and the .rdata String blob is neither writable nor NUL-terminated). The trailing
+	// byte stays the slab's zero, so the NUL is free — the copy writes only the `cmdlineLen` command bytes.
+	let oneConst = ids.mint()
+	module.appendOp(entry, op: StdOp.const(oneConst, value: TrailingNulBytes, valueType: StdType.i64))
+	let cmBufSize = ids.mint()
+	module.appendOp(entry, op: StdOp.binOp(cmBufSize, lhs: cmdlineLen, rhs: oneConst, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	let cmBuf = ids.mint()
+	module.appendOp(entry, op: StdOp.call(cmBuf, callee: SlabAllocName, args: argsOf(cmBufSize)))
+	let zeroConst = ids.mint()
+	module.appendOp(entry, op: StdOp.const(zeroConst, value: 0, valueType: StdType.i64))
+	module.setTerminator(entry, op: StdOp.branch(copyHdr.id))
+
+	// copyHdr(i): the byte-copy loop guard. cmdlines are short, so a byte loop is well within budget.
+	let i = ids.mint()
+	copyHdr.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
+	entry.branchEdges.push(BranchEdge.create(copyHdr.id, argIds: argsOf(zeroConst)))
+	let atEnd = ids.mint()
+	module.appendOp(copyHdr, op: StdOp.cmp(atEnd, lhs: i, rhs: cmdlineLen, pred: StdCmpPred.ge, operandType: StdType.i64))
+	module.setTerminator(copyHdr, op: StdOp.condBranch(atEnd, thenBlockId: afterCopy.id, elseBlockId: copyBody.id))
+
+	// copyBody: cmBuf[i] = (u8) cmdlinePtr[i] ; loop to copyHdr(i+1). A u8 load/store — one command byte.
+	let srcAddr = ids.mint()
+	module.appendOp(copyBody, op: StdOp.binOp(srcAddr, lhs: cmdlinePtr, rhs: i, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	let srcByte = ids.mint()
+	module.appendOp(copyBody, op: StdOp.loadIndirect(srcByte, addrId: srcAddr, offset: 0, valueType: StdType.u8))
+	let dstAddr = ids.mint()
+	module.appendOp(copyBody, op: StdOp.binOp(dstAddr, lhs: cmBuf, rhs: i, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	module.appendOp(copyBody, op: StdOp.storeIndirect(dstAddr, offset: 0, valueId: srcByte, valueType: StdType.u8))
+	let oneStep = ids.mint()
+	module.appendOp(copyBody, op: StdOp.const(oneStep, value: 1, valueType: StdType.i64))
+	let iNext = ids.mint()
+	module.appendOp(copyBody, op: StdOp.binOp(iNext, lhs: i, rhs: oneStep, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	module.setTerminator(copyBody, op: StdOp.branch(copyHdr.id))
+	copyBody.branchEdges.push(BranchEdge.create(copyHdr.id, argIds: argsOf(iNext)))
+
+	// afterCopy: spawn the child, close the (unneeded) thread handle, park the current GT on the process, and hand
+	// control to the scheduler. Mirrors `__gt_sleep`'s park: a top-level GT0 (waiter == 0) SELF-DRIVES until its
+	// own timer/process fires; a spawned GT switches back to the driver that ran it and resumes on re-schedule.
+	module.appendOp(afterCopy, op: StdOp.osProcessSpawn(cmBuf, startupPtrId: startupPtr, procInfoPtrId: procInfoPtr))
+	let hProcess = ids.mint()
+	module.appendOp(afterCopy, op: StdOp.loadIndirect(hProcess, addrId: procInfoPtr, offset: ProcInfoHProcessOffset, valueType: StdType.i64))
+	let hThread = ids.mint()
+	module.appendOp(afterCopy, op: StdOp.loadIndirect(hThread, addrId: procInfoPtr, offset: ProcInfoHThreadOffset, valueType: StdType.i64))
+	module.appendOp(afterCopy, op: StdOp.osCloseHandle(hThread))
+	// selfGt = __gt_current_gt ; park it on the child (`__gt_proc_add` sets status=waiting, io_handle=hProcess).
+	let curAddr = ids.mint()
+	module.appendOp(afterCopy, op: StdOp.globalAddr(curAddr, label: GtCurrentGtLabel))
+	let selfGt = ids.mint()
+	module.appendOp(afterCopy, op: StdOp.loadIndirect(selfGt, addrId: curAddr, offset: 0, valueType: StdType.i64))
+	let addResult = ids.mint()
+	module.appendOp(afterCopy, op: StdOp.call(addResult, callee: GtProcAddName, args: args2(selfGt, second: hProcess)))
+	// waiter == 0 (top-level GT0) → self-drive; else (spawned GT) → switch back to the driver.
+	let waiter = ids.mint()
+	module.appendOp(afterCopy, op: StdOp.loadIndirect(waiter, addrId: selfGt, offset: GtOffWaiter, valueType: StdType.i64))
+	let zeroWaiterConst = ids.mint()
+	module.appendOp(afterCopy, op: StdOp.const(zeroWaiterConst, value: 0, valueType: StdType.i64))
+	let waiterNull = ids.mint()
+	module.appendOp(afterCopy, op: StdOp.cmp(waiterNull, lhs: waiter, rhs: zeroWaiterConst, pred: StdCmpPred.eq, operandType: StdType.i64))
+	module.setTerminator(afterCopy, op: StdOp.condBranch(waiterNull, thenBlockId: selfDrive.id, elseBlockId: parkSwitch.id))
+
+	// selfDrive: drive the scheduler until our own process fires (our status → ready), then reap. The drive's
+	// netpoll blocks the single M on the child's handle (and any timer delta) — a real wait, never a busy-spin.
+	let readyConst = ids.mint()
+	module.appendOp(selfDrive, op: StdOp.const(readyConst, value: GtStatusReady, valueType: StdType.i64))
+	let driveResult = ids.mint()
+	module.appendOp(selfDrive, op: StdOp.call(driveResult, callee: GtDriveUntilName, args: args2(selfGt, second: readyConst)))
+	module.setTerminator(selfDrive, op: StdOp.branch(reap.id))
+
+	// parkSwitch: mark parked (io_yielded=1), switch back to the driver; when it re-schedules us we resume HERE —
+	// clear parked and reap. Reuses `__gt_context_switch`, exactly as `__gt_sleep`'s park does.
+	let oneYieldConst = ids.mint()
+	module.appendOp(parkSwitch, op: StdOp.const(oneYieldConst, value: 1, valueType: StdType.i64))
+	module.appendOp(parkSwitch, op: StdOp.storeIndirect(selfGt, offset: GtOffIoYielded, valueId: oneYieldConst, valueType: StdType.i64))
+	let switchResult = ids.mint()
+	module.appendOp(parkSwitch, op: StdOp.call(switchResult, callee: GtContextSwitchName, args: args2(selfGt, second: waiter)))
+	let clearYieldConst = ids.mint()
+	module.appendOp(parkSwitch, op: StdOp.const(clearYieldConst, value: 0, valueType: StdType.i64))
+	module.appendOp(parkSwitch, op: StdOp.storeIndirect(selfGt, offset: GtOffIoYielded, valueId: clearYieldConst, valueType: StdType.i64))
+	module.setTerminator(parkSwitch, op: StdOp.branch(reap.id))
+
+	// reap: the child has exited. Reload hProcess from `selfGt.io_handle` (its durable home across the yield — the
+	// value in a register cannot be assumed to survive an arbitrary number of intervening switches), then read the
+	// exit code and close the handle. codePtr = slab_alloc(8) ; GetExitCodeProcess(hProcess, codePtr) ; code =
+	// codePtr[0] (i64 read).
+	// ⭐ THE PRE-ZERO IS WHY THE i64 READ IS CLEAN. GetExitCodeProcess writes only the low DWORD (4 bytes) of the
+	// 8-byte slot; the slab returns the slot already ZEROED, so the high DWORD stays 0 and an i64 load yields the
+	// exit code with no dirty high half (a full-word load is the only wide memory form — a u32 read would need an
+	// `as` cast the runtime builder cannot spell). This is the plan's "pre-zero the result slot" satisfied by the
+	// slab's zeroing contract rather than by an extra store.
+	let reapHandle = ids.mint()
+	module.appendOp(reap, op: StdOp.loadIndirect(reapHandle, addrId: selfGt, offset: GtOffIoHandle, valueType: StdType.i64))
+	let codeSlotSizeConst = ids.mint()
+	module.appendOp(reap, op: StdOp.const(codeSlotSizeConst, value: ExitCodeSlotBytes, valueType: StdType.i64))
+	let codePtr = ids.mint()
+	module.appendOp(reap, op: StdOp.call(codePtr, callee: SlabAllocName, args: argsOf(codeSlotSizeConst)))
+	module.appendOp(reap, op: StdOp.osProcessExitCode(reapHandle, codePtrId: codePtr))
+	let code = ids.mint()
+	module.appendOp(reap, op: StdOp.loadIndirect(code, addrId: codePtr, offset: 0, valueType: StdType.i64))
+	module.appendOp(reap, op: StdOp.osCloseHandle(reapHandle))
+	module.setTerminator(reap, op: StdOp.ret(code))
+
+	module.functions.push(func)
+end 'buildGtProcessRun'

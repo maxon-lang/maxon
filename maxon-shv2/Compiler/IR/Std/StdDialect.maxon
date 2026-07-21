@@ -688,6 +688,48 @@ export union StdOp
 	// wait on the earliest timer deadline (never a busy-spin). One VALUE operand (the millisecond count), no
 	// result. APPENDED at the END of the union, after `osReadClock`.
 	osSleepMs(msId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+	// --- P1.5 subprocess seed: the five OS-import primitives the green-thread SUBPROCESS substrate needs ---
+	//
+	// ⚠ APPENDED PAST THE END OF THE UNION (`osSleepMs` was the last variant), per the band-append invariant:
+	// every stale `… to osSleepMs` full-tail range arm now FAILS TO COMPILE until it is consciously extended (the
+	// invariant working in the reviewer's favour). Their `category: system` places them logically in the system
+	// band, independent of this tail position.
+	//
+	// All five are `system`-band ops for the SAME two reasons `osAllocPages`/`osReadClock`/`osSleepMs` are: they
+	// say WHAT is wanted (spawn a child, wait on a handle, read an exit code, close a handle) and let each backend
+	// say HOW (x64-windows: `CreateProcessA`/`WaitForSingle`|`MultipleObjects`/`GetExitCodeProcess`/`CloseHandle`
+	// through the IAT, `Targets/Windows/PeWriter.maxon`; arm64/wasm have no subprocess primitive at this rung and
+	// reject it), keeping the Win32 import table out of the target-neutral tier. Full call-barrier metadata: each
+	// IS an indirect call once lowered, exactly like `osAllocPages`.
+	//
+	// ⭐ ONLY `osWaitHandle` DEFINES A VALUE, and it is declared LAST among the five for that reason: keeping the
+	// four result-less ops contiguous lets the value-class classifiers (`recordOpResultClass`, `stdOpDefinesValue`,
+	// `stdOpDefinedIdOrZero`) cover them with ONE range arm instead of carving `osWaitHandle` out of a range's
+	// middle. The other four consume their `BOOL` result via MEMORY (an exit code lands in `codePtr`) or ignore it
+	// (the netpoll re-scans after `osWaitHandles`), exactly as `osWriteStdout` ignores `WriteFile`'s `BOOL` — so
+	// they carry no result id and their x64 lowering emits no RAX capture.
+	//
+	// `osProcessSpawn(cmdlinePtr, startupPtr, procInfoPtr)` = `CreateProcessA(NULL, cmdlinePtr, NULL, NULL, FALSE,
+	// 0, NULL, NULL, startupPtr, procInfoPtr)`. Three VALUE operands (the mutable cmdline buffer + the two OUT
+	// structs); ten Win64 arguments, six of them on the stack (see `createProcessArgDisp`). It is the only op here
+	// with outgoing stack-argument space (`stdOpOutgoingArgBytes`), which is why it is declared FIRST.
+	osProcessSpawn(cmdlinePtrId ValueId, startupPtrId ValueId, procInfoPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+	// `osProcessExitCode(handle, codePtr)` = `GetExitCodeProcess(handle, codePtr)` — writes the child's DWORD exit
+	// code to `[codePtr]` (an out-param buffer, like `osReadClock`'s). Two VALUE operands, no result.
+	osProcessExitCode(handleId ValueId, codePtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+	// `osWaitHandles(handleArrayPtr, count, timeoutMs)` = `WaitForMultipleObjects(count, handleArrayPtr, FALSE,
+	// timeoutMs)` — the netpoll's single-M block on the parked children (and the earliest timer delta). Three VALUE
+	// operands, no result: the netpoll re-scans each handle with `osWaitHandle(h, 0)` after the wait returns, so
+	// the aggregate wait result is not read.
+	osWaitHandles(handleArrayPtrId ValueId, countId ValueId, timeoutMsId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+	// `osCloseHandle(handle)` = `CloseHandle(handle)`. One VALUE operand, no result (the `BOOL` is ignored, like
+	// `osWriteStdout`'s).
+	osCloseHandle(handleId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+	// `osWaitHandle(handle, timeoutMs)` = `WaitForSingleObject(handle, timeoutMs)` — the per-handle poll
+	// `__gt_proc_check` runs with `timeoutMs = 0` to test `== WAIT_OBJECT_0 (0)`. THE ONE op here that DEFINES a
+	// value (the wait result, a GPR i64 captured from RAX). Declared LAST so the four result-less ops stay
+	// contiguous (see the ⭐ note above).
+	osWaitHandle(resultId ValueId, handleId ValueId, timeoutMsId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 end 'StdOp'
 
 export typealias StdOpArray = Array with StdOp
@@ -793,6 +835,13 @@ export function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 		// the allocator would free the address/count registers early and the OS call would read garbage.
 		osReadClock(ticksPtrId, freqPtrId) then insertUsePair(referenced, a: ticksPtrId, b: freqPtrId)
 		osSleepMs(msId) then referenced.insert(msId)
+		// P1.5 subprocess: each reads its operands and (except `osWaitHandle`) defines nothing. `osWaitHandle`'s
+		// `resultId` is a DEF, so it is skipped here exactly as `osAllocPages`'s result id is.
+		osProcessSpawn(cmdlinePtr, startupPtr, procInfoPtr) then insertUseTriple(referenced, a: cmdlinePtr, b: startupPtr, c: procInfoPtr)
+		osProcessExitCode(handle, codePtr) then insertUsePair(referenced, a: handle, b: codePtr)
+		osWaitHandles(handleArrayPtr, count, timeoutMs) then insertUseTriple(referenced, a: handleArrayPtr, b: count, c: timeoutMs)
+		osCloseHandle(handle) then referenced.insert(handle)
+		osWaitHandle(_, handle, timeoutMs) then insertUsePair(referenced, a: handle, b: timeoutMs)
 	end 'u'
 end 'collectStdOpUses'
 
@@ -808,6 +857,14 @@ function insertUsePair(referenced StdValueUseSet, a ValueId, b ValueId)
 	referenced.insert(a)
 	referenced.insert(b)
 end 'insertUsePair'
+
+// The three-operand twin of `insertUsePair` — for the subprocess ops that read three value operands
+// (`osProcessSpawn`'s cmdline + two out-struct pointers; `osWaitHandles`'s handle array + count + timeout).
+function insertUseTriple(referenced StdValueUseSet, a ValueId, b ValueId, c ValueId)
+	referenced.insert(a)
+	referenced.insert(b)
+	referenced.insert(c)
+end 'insertUseTriple'
 
 // An indirect call reads its callee register AND every argument. The callee is a value operand (the
 // code pointer), unlike a direct `call` whose callee is a NAME — so it must be inserted alongside the
@@ -876,6 +933,13 @@ module function remapStdOpUses(op StdOp, subst ValueIdArray) returns StdOp
 		// `osSleepMs` rewrites its millisecond count. Both define nothing.
 		osReadClock(ticksPtrId, freqPtrId) gives StdOp.osReadClock(remappedValue(ticksPtrId, subst: subst), freqPtrId: remappedValue(freqPtrId, subst: subst))
 		osSleepMs(msId) gives StdOp.osSleepMs(remappedValue(msId, subst: subst))
+		// The exact mirror of `collectStdOpUses`'s subprocess arms: rewrite exactly the operands they read;
+		// `osWaitHandle`'s `resultId` is a def, so it passes through unmapped.
+		osProcessSpawn(cmdlinePtr, startupPtr, procInfoPtr) gives StdOp.osProcessSpawn(remappedValue(cmdlinePtr, subst: subst), startupPtrId: remappedValue(startupPtr, subst: subst), procInfoPtrId: remappedValue(procInfoPtr, subst: subst))
+		osProcessExitCode(handle, codePtr) gives StdOp.osProcessExitCode(remappedValue(handle, subst: subst), codePtrId: remappedValue(codePtr, subst: subst))
+		osWaitHandles(handleArrayPtr, count, timeoutMs) gives StdOp.osWaitHandles(remappedValue(handleArrayPtr, subst: subst), countId: remappedValue(count, subst: subst), timeoutMsId: remappedValue(timeoutMs, subst: subst))
+		osCloseHandle(handle) gives StdOp.osCloseHandle(remappedValue(handle, subst: subst))
+		osWaitHandle(resultId, handle, timeoutMs) gives StdOp.osWaitHandle(resultId, handleId: remappedValue(handle, subst: subst), timeoutMsId: remappedValue(timeoutMs, subst: subst))
 	end 'r'
 end 'remapStdOpUses'
 

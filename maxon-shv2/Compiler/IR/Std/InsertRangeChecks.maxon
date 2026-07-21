@@ -348,7 +348,7 @@ type RangeCheckEmitter
 				// (a domain conversion, a bitwise `not`) is left to the runtime path.
 				binOp then break 'c'
 				unaryOp(resultId, operand, opcode, _) then recordConstNeg(constMap, resultId: resultId, operand: operand, opcode: opcode)
-				cmp to osSleepMs then break 'c'
+				cmp to osWaitHandle then break 'c'
 			end 'c'
 		end 'eachOp'
 		return constMap
@@ -412,7 +412,7 @@ function retMatchesValue(term StdOp, target ValueId) returns bool
 	return match term 'term'
 		const to branch gives false
 		ret(retValId) gives retValId == target
-		param to osSleepMs gives false
+		param to osWaitHandle gives false
 	end 'term'
 end 'retMatchesValue'
 
@@ -461,7 +461,10 @@ function stdOpDefinesValue(op StdOp) returns bool
 		osWriteStdout gives false
 		funcAddr gives true
 		callIndirect gives true
-		osRangePanic to osSleepMs gives false
+		// P1.5 subprocess: only `osWaitHandle` (the `WaitForSingleObject` poll) defines a value; the other four
+		// consume their `BOOL` via memory or ignore it (see StdDialect's ⭐ note).
+		osWaitHandle gives true
+		osRangePanic to osCloseHandle gives false
 	end 'd'
 end 'stdOpDefinesValue'
 
@@ -492,7 +495,9 @@ function stdOpDefinedIdOrZero(op StdOp) returns ValueId
 		osWriteStdout gives 0
 		funcAddr(resultId, _) gives resultId
 		callIndirect(resultId, _, _) gives resultId
-		osRangePanic to osSleepMs gives 0
+		// P1.5 subprocess: `osWaitHandle` defines the wait result; the other four define nothing (see above).
+		osWaitHandle(resultId, _, _) gives resultId
+		osRangePanic to osCloseHandle gives 0
 	end 'r'
 end 'stdOpDefinedIdOrZero'
 

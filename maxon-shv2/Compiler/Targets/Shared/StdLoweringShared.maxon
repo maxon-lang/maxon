@@ -320,10 +320,14 @@ function recordOpResultClass(op StdOp, column ValueClassColumn, calleeResultClas
 		osWriteStdout then break 'result'
 		// `errorReturn` (a terminator) and `osExit` define no value (P1.4b).
 		errorReturn to osExit then break 'result'
+		// The subprocess wait result is a GPR i64 (the `WaitForSingleObject` return code `proc_check` reads).
+		osWaitHandle(resultId, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		// `osRangePanic` defines no value (P1.9) — it aborts. `osReadClock`/`osSleepMs` (P1.5 mid-body-yield)
 		// define no value either: the clock read writes its results to caller-provided out-param buffers, and
-		// the OS sleep returns nothing.
-		osRangePanic to osSleepMs then break 'result'
+		// the OS sleep returns nothing. The four result-less P1.5 subprocess ops (`osProcessSpawn`,
+		// `osProcessExitCode`, `osWaitHandles`, `osCloseHandle`) join the range — they consume their `BOOL` via
+		// memory or ignore it, so none defines a value (`osWaitHandle`, which does, is named just above).
+		osRangePanic to osCloseHandle then break 'result'
 	end 'result'
 end 'recordOpResultClass'
 

@@ -110,6 +110,11 @@ let StdOutputHandle = 0xFFFFFFF5  // (DWORD)-11 — GetStdHandle's STD_OUTPUT_HA
 // WriteFile's `lpOverlapped` — NULL for a synchronous write.
 let NullPointer = 0x0
 
+// WaitForMultipleObjects' `bWaitAll` — FALSE: the netpoll wakes on the FIRST signaled handle (any child that
+// exited), not when ALL have. WaitForSingleObject / WaitForMultipleObjects return WAIT_OBJECT_0 (0) for the
+// (first) signaled handle; `__gt_proc_check` tests that value.
+let WaitAnyHandle = 0x0
+
 // The exit code a range-check violation ends the process with on an OS that has no panic-backtrace
 // runtime yet (x64-linux). The x64 twin of arm64's/wasm's `RangePanicExitCode` — same value 1, so a
 // range violation is a plain non-zero exit wherever the message-printing `mrt_panic` is unavailable.
@@ -124,6 +129,20 @@ let RangePanicExitCode = 1 as MachineWord
 let WriteFileOverlappedSlot = 0
 let WriteFileBytesWrittenSlot = 1
 let WriteFileOutgoingSlots = 2
+
+// The six CreateProcessA outgoing stack SLOTS `__gt_process_run`'s frame reserves, past the shadow space.
+// CreateProcessA takes TEN arguments; the first four (lpApplicationName, lpCommandLine, lpProcessAttributes,
+// lpThreadAttributes) go in rcx/rdx/r8/r9, and arguments 5-10 go on the stack. Only the last two are real
+// values (the STARTUPINFOA and PROCESS_INFORMATION pointers); the middle four are FALSE/0/NULL. SLOT INDICES,
+// not byte displacements — `createProcessArgDisp` turns each into `[rsp + shadow + slot*8]` — so the byte
+// layout lives with ShadowSpaceBytes/SpillSlotBytes rather than being respelled as a literal.
+let CreateProcessInheritHandlesSlot = 0  // arg5 bInheritHandles = FALSE
+let CreateProcessCreationFlagsSlot = 1   // arg6 dwCreationFlags = 0
+let CreateProcessEnvironmentSlot = 2     // arg7 lpEnvironment = NULL
+let CreateProcessCurrentDirSlot = 3      // arg8 lpCurrentDirectory = NULL
+let CreateProcessStartupInfoSlot = 4     // arg9 lpStartupInfo
+let CreateProcessProcInfoSlot = 5        // arg10 lpProcessInformation
+let CreateProcessOutgoingSlots = 6
 
 // The `[rsp + disp]` displacement of a WriteFile outgoing stack slot — past the 32-byte shadow space,
 // one `SpillSlotBytes`-sized slot per index. `spillSlotBaseDisp` places every spill slot ABOVE
@@ -144,6 +163,19 @@ function stringPrintOutgoingArgBytes() returns StackSize
 	return (WriteFileOutgoingSlots * SpillSlotBytes) as StackSize
 end 'stringPrintOutgoingArgBytes'
 
+// The `[rsp + disp]` displacement of a CreateProcessA outgoing stack slot — the twin of `writeFileArgDisp`,
+// past the 32-byte shadow space, one `SpillSlotBytes`-sized slot per index.
+function createProcessArgDisp(slot MachineWord) returns Imm32
+	return (ShadowSpaceBytes + slot * SpillSlotBytes) as Imm32
+end 'createProcessArgDisp'
+
+// The frame region `__gt_process_run` reserves for CreateProcessA's six outgoing stack args — the single
+// source of BOTH the frame reservation (via `stdOpOutgoingArgBytes`) and the slot displacements the spawn
+// lowering writes, so they are ONE fact, exactly as `stringPrintOutgoingArgBytes` is for WriteFile.
+function createProcessOutgoingArgBytes() returns StackSize
+	return (CreateProcessOutgoingSlots * SpillSlotBytes) as StackSize
+end 'createProcessOutgoingArgBytes'
+
 // The OUTGOING stack-argument bytes an `StdOp`'s x64 lowering needs. Only `osWriteStdout` needs any: its
 // `WriteFile` lowering passes the 5th argument (`lpOverlapped`) and a scratch pointer for the
 // bytes-written out-param ON THE STACK. Every other op lowers register-only or in-frame → 0. This is an
@@ -153,6 +185,9 @@ end 'stringPrintOutgoingArgBytes'
 function stdOpOutgoingArgBytes(op StdOp) returns StackSize
 	return match op 'o'
 		osWriteStdout gives stringPrintOutgoingArgBytes()
+		// The ONLY subprocess op with outgoing stack args: CreateProcessA passes its last six of ten arguments
+		// on the stack (see `createProcessArgDisp`). The other four subprocess ops are ≤4-argument, register-only.
+		osProcessSpawn gives createProcessOutgoingArgBytes()
 		const to osAllocPages gives 0
 		rdataAddr gives 0
 		// A `tryCall` passes its args in registers (≤6, like `call`); `errorReturn`/`osExit` have no
@@ -160,6 +195,8 @@ function stdOpOutgoingArgBytes(op StdOp) returns StackSize
 		// A `funcAddr` is a register-only `lea`; a `callIndirect` passes its args in registers exactly
 		// like `call`. Neither reserves outgoing stack-argument space at this rung.
 		tryCall to osSleepMs gives 0
+		// The four ≤4-argument subprocess ops (spawn is named above) reserve no outgoing stack space.
+		osProcessExitCode to osWaitHandle gives 0
 	end 'o'
 end 'stdOpOutgoingArgBytes'
 
@@ -716,7 +753,7 @@ type StdToX64Lowering
 				branch to rdataAddr then break 'term'
 				// `funcAddr`/`callIndirect` are value-producing body ops, never a block terminator — a
 				// non-`condBranch` terminator fuses nothing, so like every other arm here it breaks (P1.5-A1).
-				tryCall to osSleepMs then break 'term'
+				tryCall to osWaitHandle then break 'term'
 			end 'term'
 		end 'eachBlock'
 	end 'computeFusedCmps'
@@ -767,7 +804,7 @@ type StdToX64Lowering
 				// is not the compare, so the scan stops and no fusion is recorded (declining is always safe).
 				// `funcAddr` sets no flags (a `lea`), so the loop guard skips it before it reaches here — it
 				// is named rather than swallowed. (P1.5-A1)
-				tryCall to osSleepMs then break 'isTheCompare'
+				tryCall to osWaitHandle then break 'isTheCompare'
 			end 'isTheCompare'
 			return
 		end 'scanBackward'
@@ -832,7 +869,7 @@ type StdToX64Lowering
 			branch to rdataAddr gives false
 			// A `funcAddr`/`callIndirect` is never a block terminator — only a `condBranch` gets a
 			// non-false answer here (P1.5-A1).
-			tryCall to osSleepMs gives false
+			tryCall to osWaitHandle gives false
 		end 'term'
 	end 'terminatorReadsFusedFlags'
 
@@ -871,6 +908,12 @@ type StdToX64Lowering
 			// P1.5 mid-body-yield: the green-thread sleep substrate's clock read and OS wait.
 			osReadClock(ticksPtrId, freqPtrId) then self.lowerOsReadClock(ticksPtrId, freqPtrId: freqPtrId, dstBlock: dstBlock)
 			osSleepMs(msId) then self.lowerOsSleepMs(msId, dstBlock: dstBlock)
+			// P1.5 subprocess seed: the green-thread SUBPROCESS substrate's spawn/wait/exit-code/close.
+			osProcessSpawn(cmdlinePtrId, startupPtrId, procInfoPtrId) then self.lowerOsProcessSpawn(cmdlinePtrId, startupPtrId: startupPtrId, procInfoPtrId: procInfoPtrId, dstBlock: dstBlock)
+			osProcessExitCode(handleId, codePtrId) then self.lowerOsProcessExitCode(handleId, codePtrId: codePtrId, dstBlock: dstBlock)
+			osWaitHandles(handleArrayPtrId, countId, timeoutMsId) then self.lowerOsWaitHandles(handleArrayPtrId, countId: countId, timeoutMsId: timeoutMsId, dstBlock: dstBlock)
+			osCloseHandle(handleId) then self.lowerOsCloseHandle(handleId, dstBlock: dstBlock)
+			osWaitHandle(resultId, handleId, timeoutMsId) then self.lowerOsWaitHandle(resultId, handleId: handleId, timeoutMsId: timeoutMsId, dstBlock: dstBlock)
 		end 'lower'
 	end 'lowerBodyOp'
 
@@ -906,6 +949,7 @@ type StdToX64Lowering
 			osRangePanic then panic("lowerStdToX64: an `osRangePanic` op appeared as a block terminator (lowering bug — a range panic is a body op followed by a dead return)")
 			osReadClock then panic("lowerStdToX64: an `osReadClock` op appeared as a block terminator (lowering bug — a clock read is a value-consuming body op)")
 			osSleepMs then panic("lowerStdToX64: an `osSleepMs` op appeared as a block terminator (lowering bug — an OS sleep is a body op)")
+			osProcessSpawn to osWaitHandle then panic("lowerStdToX64: a P1.5 subprocess op appeared as a block terminator (lowering bug — spawn/wait/exit-code/close are all body ops)")
 		end 'lower'
 	end 'lowerTerminatorOp'
 
@@ -1546,9 +1590,113 @@ type StdToX64Lowering
 	end 'lowerOsSleepMs'
 
 	function lowerOsSleepMsWin64(msId ValueId, dstBlock IrBlock)
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(msId)))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.Sleep)))
+		self.lowerOsWin64Call1(IatSlot.Sleep, arg0: msId, dstBlock: dstBlock)
 	end 'lowerOsSleepMsWin64'
+
+	// Lower `osProcessSpawn(cmdlinePtr, startupPtr, procInfoPtr)` to `CreateProcessA(NULL, cmdlinePtr, NULL, NULL,
+	// FALSE, 0, NULL, NULL, startupPtr, procInfoPtr)` through the IAT (P1.5 subprocess seed). Ten Win64 arguments:
+	// the first four in rcx/rdx/r8/r9, arguments 5-10 on the stack past the shadow space (the WriteFile stack-arg
+	// template). Everything goes through the clobber-correct `iatCall`, so `procInfoPtr` — the ONE operand live
+	// ACROSS the call (the runtime reads `hProcess`/`hThread` out of it afterwards) — is forced callee-saved by the
+	// allocator with no hand-holding, exactly as WriteFile's `buf`/`len` are.
+	//
+	// ⭐ x64-WINDOWS ONLY, like the whole green-thread substrate; the syscall route rejects.
+	function lowerOsProcessSpawn(cmdlinePtrId ValueId, startupPtrId ValueId, procInfoPtrId ValueId, dstBlock IrBlock)
+		match x64OsCallKind(self.target.os) 'route'
+			importCall then self.lowerOsProcessSpawnWin64(cmdlinePtrId, startupPtrId: startupPtrId, procInfoPtrId: procInfoPtrId, dstBlock: dstBlock)
+			syscall then panic("lowerOsProcessSpawn: CreateProcessA is x64-windows only — the green-thread subprocess substrate is x64-windows-gated at this rung")
+		end 'route'
+	end 'lowerOsProcessSpawn'
+
+	function lowerOsProcessSpawnWin64(cmdlinePtrId ValueId, startupPtrId ValueId, procInfoPtrId ValueId, dstBlock IrBlock)
+		// The two OUT-struct pointers (args 9/10) onto their stack slots FIRST, while every register is still
+		// free — each reads its virtual and writes to the frame, clobbering no other operand's register.
+		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(x64PhysReg(X64Register.rsp), disp: createProcessArgDisp(CreateProcessStartupInfoSlot), src: TargetVReg.virtual(startupPtrId), width: X64AccessWidth.word64))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(x64PhysReg(X64Register.rsp), disp: createProcessArgDisp(CreateProcessProcInfoSlot), src: TargetVReg.virtual(procInfoPtrId), width: X64AccessWidth.word64))
+		// lpCommandLine (arg 2) -> rdx.
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdx), srcReg: TargetVReg.virtual(cmdlinePtrId)))
+		// The four FALSE/0/NULL middle stack args (5-8): one zeroed scratch register (rax, clobbered by the call
+		// anyway) stored into each slot. An 8-byte zero store into a slot the callee reads as a 4-byte BOOL/DWORD
+		// is correct — CreateProcessA reads only the low bytes and the high bytes are its own slot's padding.
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rax), value: NullPointer))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(x64PhysReg(X64Register.rsp), disp: createProcessArgDisp(CreateProcessInheritHandlesSlot), src: x64PhysReg(X64Register.rax), width: X64AccessWidth.word64))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(x64PhysReg(X64Register.rsp), disp: createProcessArgDisp(CreateProcessCreationFlagsSlot), src: x64PhysReg(X64Register.rax), width: X64AccessWidth.word64))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(x64PhysReg(X64Register.rsp), disp: createProcessArgDisp(CreateProcessEnvironmentSlot), src: x64PhysReg(X64Register.rax), width: X64AccessWidth.word64))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(x64PhysReg(X64Register.rsp), disp: createProcessArgDisp(CreateProcessCurrentDirSlot), src: x64PhysReg(X64Register.rax), width: X64AccessWidth.word64))
+		// The three NULL register args: lpApplicationName=rcx (1), lpProcessAttributes=r8 (3), lpThreadAttributes=r9 (4).
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rcx), value: NullPointer))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r8), value: NullPointer))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r9), value: NullPointer))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.CreateProcessA)))
+	end 'lowerOsProcessSpawnWin64'
+
+	// Lower `osProcessExitCode(handle, codePtr)` to `GetExitCodeProcess(handle, codePtr)` — args rcx/rdx; the
+	// child's DWORD exit code is written to `[codePtr]` (the runtime reads it back, like `osReadClock`'s
+	// out-params). No result captured.
+	function lowerOsProcessExitCode(handleId ValueId, codePtrId ValueId, dstBlock IrBlock)
+		match x64OsCallKind(self.target.os) 'route'
+			importCall then self.lowerOsWin64Call2(IatSlot.GetExitCodeProcess, arg0: handleId, arg1: codePtrId, dstBlock: dstBlock)
+			syscall then panic("lowerOsProcessExitCode: GetExitCodeProcess is x64-windows only — the green-thread subprocess substrate is x64-windows-gated at this rung")
+		end 'route'
+	end 'lowerOsProcessExitCode'
+
+	// Lower `osWaitHandles(handleArrayPtr, count, timeoutMs)` to `WaitForMultipleObjects(count, handleArrayPtr,
+	// FALSE, timeoutMs)` through the IAT — the netpoll's single-M block on the parked children. Win64 args:
+	// count=rcx, handleArrayPtr=rdx, bWaitAll=FALSE=r8, timeoutMs=r9. No result captured (the netpoll re-scans).
+	function lowerOsWaitHandles(handleArrayPtrId ValueId, countId ValueId, timeoutMsId ValueId, dstBlock IrBlock)
+		match x64OsCallKind(self.target.os) 'route'
+			importCall then self.lowerOsWaitHandlesWin64(handleArrayPtrId, countId: countId, timeoutMsId: timeoutMsId, dstBlock: dstBlock)
+			syscall then panic("lowerOsWaitHandles: WaitForMultipleObjects is x64-windows only — the green-thread subprocess substrate is x64-windows-gated at this rung")
+		end 'route'
+	end 'lowerOsWaitHandles'
+
+	function lowerOsWaitHandlesWin64(handleArrayPtrId ValueId, countId ValueId, timeoutMsId ValueId, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(countId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdx), srcReg: TargetVReg.virtual(handleArrayPtrId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r8), value: WaitAnyHandle))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.r9), srcReg: TargetVReg.virtual(timeoutMsId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.WaitForMultipleObjects)))
+	end 'lowerOsWaitHandlesWin64'
+
+	// Lower `osCloseHandle(handle)` to `CloseHandle(handle)` through the IAT — arg rcx, result ignored.
+	function lowerOsCloseHandle(handleId ValueId, dstBlock IrBlock)
+		match x64OsCallKind(self.target.os) 'route'
+			importCall then self.lowerOsWin64Call1(IatSlot.CloseHandle, arg0: handleId, dstBlock: dstBlock)
+			syscall then panic("lowerOsCloseHandle: CloseHandle is x64-windows only — the green-thread subprocess substrate is x64-windows-gated at this rung")
+		end 'route'
+	end 'lowerOsCloseHandle'
+
+	// Lower `osWaitHandle(handle, timeoutMs)` to `WaitForSingleObject(handle, timeoutMs)` — args rcx/rdx — and
+	// CAPTURE the wait result from RAX (the one subprocess op whose result is read: `__gt_proc_check` polls with
+	// `timeoutMs = 0` and tests `== WAIT_OBJECT_0`).
+	function lowerOsWaitHandle(resultId ValueId, handleId ValueId, timeoutMsId ValueId, dstBlock IrBlock)
+		match x64OsCallKind(self.target.os) 'route'
+			importCall then self.lowerOsWaitHandleWin64(resultId, handleId: handleId, timeoutMsId: timeoutMsId, dstBlock: dstBlock)
+			syscall then panic("lowerOsWaitHandle: WaitForSingleObject is x64-windows only — the green-thread subprocess substrate is x64-windows-gated at this rung")
+		end 'route'
+	end 'lowerOsWaitHandle'
+
+	function lowerOsWaitHandleWin64(resultId ValueId, handleId ValueId, timeoutMsId ValueId, dstBlock IrBlock)
+		self.lowerOsWin64Call2(IatSlot.WaitForSingleObject, arg0: handleId, arg1: timeoutMsId, dstBlock: dstBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: x64PhysReg(X64Register.rax)))
+	end 'lowerOsWaitHandleWin64'
+
+	// The shared Win64 ONE-argument import-call shape: the single value into rcx, then the `iatCall`. Sleep and
+	// CloseHandle both take exactly it, factored to one place so their rcx spelling cannot drift.
+	function lowerOsWin64Call1(slot IatSlot, arg0 ValueId, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(arg0)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(slot)))
+	end 'lowerOsWin64Call1'
+
+	// The shared Win64 TWO-argument import-call shape (arg0 in rcx, arg1 in rdx, then the `iatCall`) that
+	// GetExitCodeProcess and WaitForSingleObject both take. The register allocator's per-arg-register def
+	// liveness keeps each still-needed source out of a register clobbered before its own move, so the emission
+	// order is free — the same guarantee `lowerOsWriteStdout`/`lowerOsAllocPages` rely on.
+	function lowerOsWin64Call2(slot IatSlot, arg0 ValueId, arg1 ValueId, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(arg0)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdx), srcReg: TargetVReg.virtual(arg1)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(slot)))
+	end 'lowerOsWin64Call2'
 
 	// Lower a Std `cmpImm` (constant right operand) to `cmp reg, imm32` — the same two-part
 	// protocol `lowerCmp` uses, so the fold that moved the right operand into an immediate
@@ -1873,7 +2021,7 @@ type StdToX64Lowering
 			branch to rdataAddr gives false
 			// A `funcAddr`/`callIndirect` is never a block terminator — only a `condBranch` gets a
 			// non-false answer here (P1.5-A1).
-			tryCall to osSleepMs gives false
+			tryCall to osWaitHandle gives false
 		end 'term'
 	end 'settleFloatEqualityBranch'
 
@@ -2007,7 +2155,7 @@ type StdToX64Lowering
 			branch to rdataAddr panic("condBranchFieldsOf: the terminator of block ref {blockRef} is not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			// A `funcAddr`/`callIndirect` is never a block terminator; like every non-`condBranch`
 			// arm here it cannot occur and panics (P1.5-A1).
-			tryCall to osSleepMs panic("condBranchFieldsOf: the terminator of block ref {blockRef} is not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
+			tryCall to osWaitHandle panic("condBranchFieldsOf: the terminator of block ref {blockRef} is not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 		end 'term'
 	end 'condBranchFieldsOf'
 

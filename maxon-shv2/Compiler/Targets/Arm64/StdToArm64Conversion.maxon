@@ -395,6 +395,10 @@ type StdToArm64Lowering
 			// yet, and a `sleep` program is spec-gated to x64-windows, so neither op ever reaches arm64 lowering.
 			osReadClock then panic("lowerStdToArm64: `osReadClock` is x64-windows only — the green-thread sleep substrate is x64-windows-gated at this rung")
 			osSleepMs then panic("lowerStdToArm64: `osSleepMs` is x64-windows only — the green-thread sleep substrate is x64-windows-gated at this rung")
+			// P1.5 subprocess (`osProcessSpawn`/`osProcessExitCode`/`osWaitHandles`/`osCloseHandle`/`osWaitHandle`)
+			// is x64-windows only — CreateProcessA and the wait/handle imports have no arm64 primitive at this rung,
+			// and an `async runProcess` program is spec-gated to x64-windows, so none reaches arm64 lowering.
+			osProcessSpawn to osWaitHandle then panic("lowerStdToArm64: the P1.5 subprocess ops are x64-windows only — the green-thread subprocess substrate is x64-windows-gated at this rung")
 		end 'lower'
 	end 'lowerBodyOp'
 
@@ -426,6 +430,7 @@ type StdToArm64Lowering
 			osRangePanic then panic("lowerStdToArm64: an `osRangePanic` op appeared as a block terminator (lowering bug — a range panic is a body op followed by a dead return)")
 			osReadClock then panic("lowerStdToArm64: an `osReadClock` op appeared as a block terminator (lowering bug — a clock read is a value-consuming body op; also x64-windows only)")
 			osSleepMs then panic("lowerStdToArm64: an `osSleepMs` op appeared as a block terminator (lowering bug — an OS sleep is a body op; also x64-windows only)")
+			osProcessSpawn to osWaitHandle then panic("lowerStdToArm64: a P1.5 subprocess op appeared as a block terminator (lowering bug — spawn/wait/exit-code/close are all body ops; also x64-windows only)")
 		end 'lower'
 	end 'lowerTerminatorOp'
 

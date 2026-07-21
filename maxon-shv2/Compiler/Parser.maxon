@@ -1144,6 +1144,15 @@ let SleepBuiltinName = b"sleep"
 // returns void.
 let SleepArity = 1 as ParamCount
 
+// **THE `runProcess` BUILTIN** (P1.5 subprocess seed). Like `sleep`, recognized by name after its arguments are
+// parsed: ordinary call syntax, but it emits no `MaxonOp.call` to a user function — it routes to the
+// `__gt_process_run(strPtr)` scheduler runtime entry (which spawns a Windows child, parks the current green
+// thread with a YIELDING wait, and returns the child's scalar exit code once it finishes).
+let RunProcessBuiltinName = b"runProcess"
+// `runProcess` takes exactly one STRING argument — the command line — and returns an INTEGER (the child's exit
+// code), so unlike `sleep` its result IS usable in value position.
+let RunProcessArity = 1 as ParamCount
+
 // **THE BUILTIN STRING METHODS** (P1.2 wave D). `append` grows a `var` String in place; `byteLength` reads
 // its byte count. String is the one non-struct type with methods at this rung, dispatched by name in
 // `parseStringMethodCall` off a String-typed receiver.
@@ -13448,6 +13457,10 @@ export type Parser
 			return try self.emitSleep(args, calleeTok: anchor, resultUsed: resultUsed)
 		end 'sleepBuiltin'
 
+		if callee.equals(RunProcessBuiltinName) 'runProcessBuiltin'
+			return try self.emitRunProcess(args, calleeTok: anchor)
+		end 'runProcessBuiltin'
+
 		return try self.emitCall(callee, anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, rparenTok: rparenTok, resultUsed: resultUsed)
 	end 'parseCallNamed'
 
@@ -13545,6 +13558,33 @@ export type Parser
 		callArgs.push(arg)
 		return self.emitRuntimeCall(GtSleepName, args: callArgs, resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(calleeTok))
 	end 'emitSleep'
+
+	// `runProcess(cmd)` — **SPAWN A WINDOWS CHILD AND AWAIT ITS EXIT CODE**, yielding the current green thread
+	// while it runs (P1.5 subprocess seed). A compiler BUILTIN like `sleep`: ordinary call syntax, but it emits no
+	// `MaxonOp.call` to a user function — it routes to the `__gt_process_run(strPtr)` scheduler runtime entry
+	// (which spawns the child with CreateProcessA, parks the GT on the process, and — once the netpoll observes
+	// the child exit — resumes and returns its scalar exit code). It requires exactly one STRING argument (the
+	// command line; a non-String is refused with E3005, mirroring `emitSleep`'s integer check) and returns an
+	// INTEGER, so — unlike `sleep`'s void — its result IS usable in value position and needs no `resultUsed` gate.
+	//
+	// The String is BORROWED, exactly as `print` borrows its argument: `__gt_process_run` reads the command
+	// line's `buffer`/`length` out of the 48-byte record (like `__print_string` does) and never takes ownership,
+	// so a literal command line needs no decref.
+	function emitRunProcess(args ValueIdArray, calleeTok Token) returns ValueId throws ParseError
+		if args.count() != RunProcessArity 'arity'
+			throw ParseError.builtinArity(String.from(RunProcessBuiltinName), expected: RunProcessArity, got: args.count(), line: calleeTok.line, column: calleeTok.column)
+		end 'arity'
+
+		let arg = try args.get(0) otherwise panic("emitRunProcess: args.count() == RunProcessArity just checked but get(0) failed")
+		let argTag = self.tagOf(arg)
+		if not tagIsText(argTag) 'notAString'
+			throw ParseError.builtinOperandType(String.from(RunProcessBuiltinName), required: typeTagName(ValueTypeTag.string), got: typeTagName(argTag), line: calleeTok.line, column: calleeTok.column)
+		end 'notAString'
+
+		var callArgs = ValueIdArray.create()
+		callArgs.push(arg)
+		return self.emitRuntimeCall(GtProcessRunName, args: callArgs, resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(calleeTok))
+	end 'emitRunProcess'
 
 	// Parse a comma-separated argument list into the parallel `args`/`argLabels`/
 	// `argRanges` lists (all empty for `()`). The caller has consumed `(`; this leaves
