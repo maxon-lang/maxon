@@ -9359,20 +9359,33 @@ export type Parser
 		let targetIsFloat = self.typeIsFloatDomain(targetType)
 
 		if sourceIsFloat and not targetIsFloat 'floatToInt'
-			return self.emitUnaryOp(value, op: MaxonUnaryOp.trunc, resultTag: ValueTypeTag.integer, opTok: asTok)
+			// The trunc RESULT is the narrowed integer, so it — not the float source — is what a ranged INT
+			// target checks (`500.7 as Byte` guards `500`). The result has its own Std op, but the guard still
+			// anchors at the cast's BLOCK (below) for the same reason an int->int cast does.
+			let narrowed = self.emitUnaryOp(value, op: MaxonUnaryOp.trunc, resultTag: ValueTypeTag.integer, opTok: asTok)
+			self.recordCastSite(narrowed, targetType: targetType, asTok: asTok)
+			return narrowed
 		end 'floatToInt'
 
 		if not sourceIsFloat and targetIsFloat 'intToFloat'
 			return self.promoteToFloat(value, opTok: asTok)
 		end 'intToFloat'
 
-		let aliasName = self.rangedAliasNameOfType(targetType)
-		if not aliasName.isEmpty() 'rangedInt'
-			self.rangeCheckCastSites.push(RangeCheckCastSite.create(value, aliasName: aliasName, line: asTok.line, column: asTok.column))
-		end 'rangedInt'
-
+		self.recordCastSite(value, targetType: targetType, asTok: asTok)
 		return value
 	end 'applyCast'
+
+	// Record a narrowing-check site for `value` when `targetType` is a ranged INT alias (P1.9). `block` is
+	// the CAST'S evaluation block (`self.currentBlock`), so the guard runs on the path the cast is on — an
+	// unselected ternary arm / if-branch does not fire it. A non-ranged target (a float alias, `ExitCode`,
+	// a bare primitive) records nothing.
+	function recordCastSite(value ValueId, targetType MaxonType, asTok Token)
+		let aliasName = self.rangedAliasNameOfType(targetType)
+		if aliasName.isEmpty() 'notRanged'
+			return
+		end 'notRanged'
+		self.rangeCheckCastSites.push(RangeCheckCastSite.create(value, aliasName: aliasName, block: self.currentBlock.id, line: asTok.line, column: asTok.column))
+	end 'recordCastSite'
 
 	// Is `t` in the FLOAT domain — the bare `float` keyword, or a `named` type that denotes a ranged
 	// float alias? Everything else (bare int, an int alias, `ExitCode`, a struct/String/function) is

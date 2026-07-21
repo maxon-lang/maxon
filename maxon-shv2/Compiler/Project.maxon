@@ -216,15 +216,22 @@ export typealias RangedTypeAliasMap = Map with (ByteArray, RangedTypeAlias)
 // carries (ids pass through `lowerMaxonToStd` verbatim), never a name string. `line`/`column`
 // anchor the E3005 diagnostic and the runtime panic message on the source `as`/`return`.
 
-// One `as`-cast into a ranged alias, recorded where it was written.
+// One `as`-cast into a ranged alias, recorded where it was written. `block` is the function-local
+// BlockId the cast is EVALUATED in (the parser's on-the-fly-SSA current block at the `as`) — the guard
+// must split THAT block, not the value's DEFINITION block. An int->int cast is a representational no-op
+// with no Std op to anchor to, so without the block a cast of a value defined earlier (a parameter, or a
+// value from a dominating block) would place its guard at the definition — which runs UNCONDITIONALLY,
+// even when the cast sits in an unselected ternary arm / if-branch. BlockIds survive `lowerMaxonToStd`
+// (blocks are cloned 1:1 keeping their id), so the Std pass finds the same block by id.
 export type RangeCheckCastSite
 	export var value as ValueId
 	export var aliasName as ByteArray
+	export var block as BlockId
 	export var line as LineNumber
 	export var column as ColumnNumber
 
-	export static function create(value ValueId, aliasName ByteArray, line LineNumber, column ColumnNumber) returns RangeCheckCastSite
-		return Self{value: value, aliasName: aliasName, line: line, column: column}
+	export static function create(value ValueId, aliasName ByteArray, block BlockId, line LineNumber, column ColumnNumber) returns RangeCheckCastSite
+		return Self{value: value, aliasName: aliasName, block: block, line: line, column: column}
 	end 'create'
 end 'RangeCheckCastSite'
 

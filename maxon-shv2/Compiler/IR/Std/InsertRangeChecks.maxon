@@ -118,7 +118,7 @@ type RangeCheckEmitter
 		if not self.needsRuntimeGuard(site.value, alias: alias, aliasName: site.aliasName, line: site.line, column: site.column, filePath: filePath, constMap: constMap) 'noGuard'
 			return
 		end 'noGuard'
-		self.emitGuardAt(self.castGuardSite(site.value), value: site.value, low: alias.low, high: alias.high, message: self.rangeCheckMessage(filePath, line: site.line, aliasName: site.aliasName))
+		self.emitGuardAt(self.castGuardSite(site), value: site.value, low: alias.low, high: alias.high, message: self.rangeCheckMessage(filePath, line: site.line, aliasName: site.aliasName))
 	end 'guardCast'
 
 	// ---- return sites ----
@@ -273,31 +273,18 @@ type RangeCheckEmitter
 		return RangeAliasLookup.some(try self.project.typeAliases.get(aliasName) otherwise panic("boundsOf: contains said yes but get failed for '{String.from(aliasName)}'"))
 	end 'boundsOf'
 
-	// Where a CAST guard goes: after all params (a cast of a parameter, the common case — the guard must
-	// not split the param run), else right after the value's defining op.
-	function castGuardSite(value ValueId) returns GuardSite
-		if value < self.func.paramCount 'param'
-			let entryRef = try self.func.blockRefs.get(0) otherwise panic("castGuardSite: function '{String.from(self.func.name)}' has no entry block")
-			let entry = self.module.getBlock(entryRef)
-			return GuardSite.create(entry, position: leadingParamCount(self.module, block: entry))
-		end 'param'
-		return self.defGuardSite(value)
+	// Where a CAST guard goes: at the END of the block the cast was EVALUATED in (before that block's
+	// terminator), so the guard runs on the path the cast is on and NOWHERE else — a cast in an unselected
+	// ternary arm / if-branch does not fire it. An int->int cast emits no Std op to anchor to, so the block
+	// is the one the parser recorded (`site.block`, its on-the-fly-SSA current block at the `as`), and the
+	// cast's value is available there (a parameter, a value from a dominating block, or one defined earlier
+	// in this block — the cast reads it, so it is already defined). For a straight-line function the cast's
+	// block IS entry, so end-of-body equals the post-param point the older anchoring used — those goldens
+	// are unchanged; only a cast inside a branch moves.
+	function castGuardSite(site RangeCheckCastSite) returns GuardSite
+		let block = try self.module.getBlockByIdIn(self.func, id: site.block) otherwise panic("castGuardSite: cast block {site.block} is not in '{String.from(self.func.name)}' — the parser records a live block id and lowerMaxonToStd preserves it")
+		return GuardSite.create(block, position: block.opRefs.count())
 	end 'castGuardSite'
-
-	// The guard site for a non-parameter cast value: its defining op's block, one past that op.
-	function defGuardSite(value ValueId) returns GuardSite
-		for blockRef in self.func.blockRefs 'eachBlock'
-			let block = self.module.getBlock(blockRef)
-			for i in 0 upto block.opRefs.count() 'eachOp'
-				let opIdx = try block.opRefs.get(i) otherwise panic("defGuardSite: opRefs.get OOB at {i}")
-				let op = try self.module.ops.get(opIdx) otherwise panic("defGuardSite: opIdx {opIdx} not in module.ops")
-				if stdOpDefinedIdOrZero(op) == value and stdOpDefinesValue(op) 'def'
-					return GuardSite.create(block, position: i + 1)
-				end 'def'
-			end 'eachOp'
-		end 'eachBlock'
-		panic("defGuardSite: cast value v{value} is defined by no op in '{String.from(self.func.name)}' — a recorded cast site names a value the function does not define")
-	end 'defGuardSite'
 
 	// The block whose terminator is `ret(value)`.
 	function findRetBlock(value ValueId) returns RetBlockLookup
@@ -366,29 +353,6 @@ function boundChecks(low ParsedInt, high ParsedInt) returns RangeBoundCheckArray
 	end 'upper'
 	return checks
 end 'boundChecks'
-
-// The number of leading `param` ops in a block — where a cast guard on a parameter goes (after them
-// all, so the param run is never split).
-function leadingParamCount(module StdModule, block IrBlock) returns BlockOpPos
-	var count = 0 as BlockOpPos
-	for i in 0 upto block.opRefs.count() 'eachOp'
-		let opIdx = try block.opRefs.get(i) otherwise panic("leadingParamCount: opRefs.get OOB at {i}")
-		let op = try module.ops.get(opIdx) otherwise panic("leadingParamCount: opIdx {opIdx} not in module.ops")
-		if not stdOpIsParam(op) 'notParam'
-			return count
-		end 'notParam'
-		count = count + 1
-	end 'eachOp'
-	return count
-end 'leadingParamCount'
-
-function stdOpIsParam(op StdOp) returns bool
-	return match op 'p'
-		const to ret gives false
-		param gives true
-		call to osRangePanic gives false
-	end 'p'
-end 'stdOpIsParam'
 
 // Record a negated-constant result: `neg` of a recorded constant `operand` is `-operand`. Any other
 // unary opcode is not an integer constant this check reads, so nothing is recorded.
