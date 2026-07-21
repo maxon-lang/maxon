@@ -1,27 +1,28 @@
-// Test: function-param-return
-typealias Score = int(0 to 100)
+// Test: runtime-check-pass
+typealias Integer = int(i64.min to i64.max)
+typealias Age = int(0 to 150)
 
-function double(s Score) returns Score
-	return s * 2
-end 'double'
+function makeAge(n Integer) returns Integer
+	let a = n as Age
+	return a
+end 'makeAge'
 
 function main() returns ExitCode
-	return double(21)
+	return makeAge(50)
 end 'main'
 ---
-ExitCode: 42
+ExitCode: 50
 ---
-func @double {
+func @makeAge {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
-    x64.imulRegRegImm32 r8, rcx, 2
-    x64.cmpRegImm32 r8, 0
+    x64.cmpRegImm32 rcx, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
   __rc_chk:
-    x64.cmpRegImm32 r8, 100
+    x64.cmpRegImm32 rcx, 150
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
@@ -32,6 +33,7 @@ func @double {
     x64.popReg rbp
     x64.ret
   __rc_ok:
+    x64.movRegReg r8, rcx
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
@@ -42,8 +44,8 @@ func @main {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
-    x64.movRegImm32 rcx, 21
-    x64.callDirect double
+    x64.movRegImm32 rcx, 50
+    x64.callDirect makeAge
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
