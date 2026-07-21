@@ -627,6 +627,17 @@ typealias DescriptorNeedMap = Map with (ByteArray, bool)
 // descriptor-need fixpoint (`solveDescriptorNeedFixpoint`) propagates over.
 typealias SelfCalleesMap = Map with (ByteArray, ByteArrayArray)
 
+// A generic method's bare name -> its dense index in the type's method list (P1.6-B1). The descriptor-need
+// fixpoint reverses the self-call graph into flat integer arrays (CSR) keyed by this index, so it stays
+// borrow-safe (the ownership model forbids appending to an array stored inside a map).
+typealias MethodIndexMap = Map with (ByteArray, MethodIndex)
+
+// A dense method index, and a flat array of them — the CSR reverse-adjacency backbone of the descriptor-need
+// fixpoint (`solveDescriptorNeedFixpoint`): row offsets, per-callee caller lists, and the BFS worklist. Ranged
+// like `TokenIndex` (a count with no fixed compile-time bound).
+typealias MethodIndex = int(0 to u64.max)
+typealias MethodIndexArray = Array with MethodIndex
+
 // A single shared EMPTY descriptor-need map, held as the INITIAL `Parser.typeDescriptorNeeds` so a parser
 // allocates none of its own (a per-file sweep parser never touches the field at all). A generic type REPLACES
 // the field with a fresh map (`computeTypeDescriptorNeeds`), and a non-generic method never reads it (gated on
@@ -2615,35 +2626,109 @@ export type Parser
 		return self.kindAt(selfPos + 1) == TokenKind.dot and self.kindAt(selfPos + 2) == TokenKind.identifier and self.kindAt(selfPos + 3) == TokenKind.leftParen
 	end 'isSelfMethodCallAt'
 
-	// Iterate the descriptor-need relation to its least fixpoint: a method needs the descriptor if it directly
-	// reads sizeof(T) (the seed) or self-calls a method that needs one. Bounded by the method count (each round
-	// can only turn more bits on), and method counts per type are tiny.
+	// Solve the descriptor-need relation to its least fixpoint: a method needs the descriptor iff it directly
+	// reads sizeof(T) (a seed) OR self-calls a method that needs one — equivalently, iff it can REACH a seed
+	// over the self-call edges. So REVERSE the graph once and mark reachability BACKWARD from the seeds:
+	// each method enters the worklist at most once (the first time its bit flips on) and each self-call edge
+	// is walked once, for O(methods + self-calls). The earlier iterate-to-stable re-scanned every method each
+	// round at O(methods x (methods + self-calls)) — QUADRATIC on a deep self-call chain (a machine-generated
+	// wide generic type: mN reads sizeof(T), m(i) calls m(i+1), so need propagates one hop per round against
+	// declaration order, forcing O(methods) rounds).
+	//
+	// The reversal is a counting sort into FLAT integer arrays (CSR), not a map of growing per-callee lists:
+	// the ownership model forbids appending to an array stored inside a map (`get` yields an immutable borrow),
+	// and a copy-on-append rebuild would be quadratic on a high-in-degree method (a star: every sibling calls
+	// one). Method names are densely indexed so the whole graph lives in scalar arrays.
 	function solveDescriptorNeedFixpoint(methodNames ByteArrayArray, directSizeof DescriptorNeedMap, selfCallees SelfCalleesMap)
-		for m in methodNames 'seed'
-			let seed = try directSizeof.get(m) otherwise false
-			self.typeDescriptorNeeds.upsert(m, value: seed)
+		let methodCount = methodNames.count()
+
+		// Dense index per method name, so the self-call graph reverses into flat integer arrays below.
+		var nameToIndex = MethodIndexMap.create()
+		for i in 0 upto methodCount 'index'
+			nameToIndex.upsert(try methodNames.get(i) otherwise panic("solveDescriptorNeedFixpoint: methodNames.get({i}) OOB below count {methodCount}"), value: i as MethodIndex)
+		end 'index'
+
+		// CSR pass A — count how many siblings call each method (its reverse in-degree). A self-call to a name
+		// that is not a sibling method is never a real edge, so it is skipped in BOTH passes, in lockstep.
+		var callerCount = MethodIndexArray.create()
+		for _ in 0 upto methodCount 'zeroCounts'
+			callerCount.push(0)
+		end 'zeroCounts'
+		for i in 0 upto methodCount 'countPass'
+			for calleeName in self.calleesOf(methodNames, selfCallees: selfCallees, callerIndex: i) 'edge'
+				if let c = try nameToIndex.get(calleeName) 'realEdge'
+					try callerCount.set(c, value: (try callerCount.get(c) otherwise panic("callerCount.get({c})")) + 1) otherwise panic("callerCount.set({c})")
+				end 'realEdge'
+			end 'edge'
+		end 'countPass'
+
+		// Prefix sums -> row starts (methodCount + 1 entries); `edgeTotal` is the real self-call edge count.
+		var rowStart = MethodIndexArray.create()
+		rowStart.push(0)
+		var edgeTotal = 0 as MethodIndex
+		for c in 0 upto methodCount 'prefix'
+			edgeTotal = edgeTotal + (try callerCount.get(c) otherwise panic("callerCount.get({c}) in prefix"))
+			rowStart.push(edgeTotal)
+		end 'prefix'
+
+		// CSR pass B — scatter each caller into its callee's row; `cursor` is the moving write head per row.
+		var cursor = MethodIndexArray.create()
+		for c in 0 upto methodCount 'cursorInit'
+			cursor.push(try rowStart.get(c) otherwise panic("rowStart.get({c})"))
+		end 'cursorInit'
+		var flatCallers = MethodIndexArray.create()
+		for _ in 0 upto edgeTotal 'zeroFlat'
+			flatCallers.push(0)
+		end 'zeroFlat'
+		for i in 0 upto methodCount 'fillPass'
+			for calleeName in self.calleesOf(methodNames, selfCallees: selfCallees, callerIndex: i) 'edge'
+				if let c = try nameToIndex.get(calleeName) 'realEdge'
+					let slot = try cursor.get(c) otherwise panic("cursor.get({c})")
+					try flatCallers.set(slot, value: i as MethodIndex) otherwise panic("flatCallers.set({slot})")
+					try cursor.set(c, value: slot + 1) otherwise panic("cursor.set({c})")
+				end 'realEdge'
+			end 'edge'
+		end 'fillPass'
+
+		// Seed `needs` with each method's direct-sizeof bit; the directly-needing methods prime the worklist.
+		var needs = BoolArray.create()
+		var worklist = MethodIndexArray.create()
+		for i in 0 upto methodCount 'seed'
+			let seed = try directSizeof.get(try methodNames.get(i) otherwise panic("methodNames.get({i}) in seed")) otherwise false
+			needs.push(seed)
+			if seed 'root'
+				worklist.push(i as MethodIndex)
+			end 'root'
 		end 'seed'
 
-		var changed = true
-		while changed 'iterate'
-			changed = false
-			for m in methodNames 'eachMethod'
-				let alreadyNeeds = try self.typeDescriptorNeeds.get(m) otherwise false
-				if alreadyNeeds 'skip'
-					continue
-				end 'skip'
-				let callees = try selfCallees.get(m) otherwise ByteArrayArray.create()
-				for callee in callees 'eachCallee'
-					let calleeNeeds = try self.typeDescriptorNeeds.get(callee) otherwise false
-					if calleeNeeds 'propagate'
-						self.typeDescriptorNeeds.upsert(m, value: true)
-						changed = true
-						break
-					end 'propagate'
-				end 'eachCallee'
-			end 'eachMethod'
-		end 'iterate'
+		// Reverse-reachability BFS over the CSR rows: a needing method turns on every sibling that calls it.
+		// The worklist is drained by a head cursor (each index is enqueued at most once), so this is O(edges).
+		var head = 0 as MethodIndex
+		while head < worklist.count() 'drain'
+			let needed = try worklist.get(head) otherwise panic("worklist.get({head})")
+			head = head + 1
+			let rowEnd = try rowStart.get(needed + 1) otherwise panic("rowStart.get({needed}+1)")
+			for k in (try rowStart.get(needed) otherwise panic("rowStart.get({needed})")) upto rowEnd 'caller'
+				let caller = try flatCallers.get(k) otherwise panic("flatCallers.get({k})")
+				if not (try needs.get(caller) otherwise panic("needs.get({caller})")) 'newlyNeeds'
+					try needs.set(caller, value: true) otherwise panic("needs.set({caller})")
+					worklist.push(caller)
+				end 'newlyNeeds'
+			end 'caller'
+		end 'drain'
+
+		// Publish each method's final need bit, keyed by name — what `parseFunction` reads to reserve the slot.
+		for i in 0 upto methodCount 'publish'
+			self.typeDescriptorNeeds.upsert(try methodNames.get(i) otherwise panic("methodNames.get({i}) in publish"), value: try needs.get(i) otherwise panic("needs.get({i}) in publish"))
+		end 'publish'
 	end 'solveDescriptorNeedFixpoint'
+
+	// The sibling methods `methodNames[callerIndex]` calls on `self` — the forward self-call edges out of one
+	// method. A thin read-only view onto `selfCallees` shared by the descriptor-need fixpoint's two CSR passes
+	// (count, then scatter) so the edge iteration is written once, not twice.
+	function calleesOf(methodNames ByteArrayArray, selfCallees SelfCalleesMap, callerIndex ElementCount) returns ByteArrayArray
+		return try selfCallees.get(try methodNames.get(callerIndex) otherwise panic("calleesOf: methodNames.get({callerIndex}) OOB")) otherwise ByteArrayArray.create()
+	end 'calleesOf'
 
 	// Is the `sizeof` at `sizeofPos` a `sizeof(<typeParam>)` — the 4 contiguous tokens `sizeof ( ident )`
 	// whose identifier names an enclosing type parameter? `parseSizeof` consumes exactly this shape with no
