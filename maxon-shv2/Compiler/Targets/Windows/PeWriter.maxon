@@ -102,7 +102,15 @@ let ImportThunkPasses = 2  // the IAT and the ILT hold identical thunks
 // the Std tier asks for PAGES, and only this file — the Windows PE writer — knows that pages come
 // from `VirtualAlloc` through an import table. A `mmap`/`memory.grow` backend names its own, here.
 //
-// ⚠ All five are kernel32, so this is still ONE DLL and `Kernel32DirEntries` stays 1 —
+// `QueryPerformanceCounter`/`QueryPerformanceFrequency`/`Sleep` (P1.5 mid-body-yield) are the green-thread
+// SLEEP substrate's clock and netpoll wait: `__gt_now_ns` reads the monotonic high-resolution counter
+// (QPC ticks scaled by the QPF frequency — NOT `GetTickCount64`, whose ~15.6 ms coarseness makes a
+// tick-derived deadline expire early), and the scheduler's netpoll waits on the earliest timer deadline
+// with a real `Sleep(ms)` rather than busy-spinning. They lower from the Std `osReadClock`/`osSleepMs` ops.
+// APPENDED AFTER `VirtualAlloc` so every existing slot INDEX (and hence every existing `iatCall`
+// relocation) is unchanged — a reorder would silently repoint every prior import.
+//
+// ⚠ All eight are kernel32, so this is still ONE DLL and `Kernel32DirEntries` stays 1 —
 // that constant counts import DIRECTORY entries (DLLs), not imports.
 export enum IatSlot
 	ExitProcess
@@ -110,6 +118,9 @@ export enum IatSlot
 	WriteFile
 	AddVectoredExceptionHandler
 	VirtualAlloc
+	QueryPerformanceCounter
+	QueryPerformanceFrequency
+	Sleep
 end 'IatSlot'
 
 // The IAT slot index of an import — the `slotIndex` an `iatCall` records and the PE writer

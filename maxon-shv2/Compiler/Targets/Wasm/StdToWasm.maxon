@@ -416,7 +416,7 @@ function internIndirectCallTypeFor(op StdOp, map IndirectCallTypeIdxMap, builder
 	match op 'k'
 		const to funcAddr then break 'k'
 		callIndirect(_, _, args) then internIndirectCallType(map, builder: builder, argCount: args.count())
-		osRangePanic then break 'k'
+		osRangePanic to osSleepMs then break 'k'
 	end 'k'
 end 'internIndirectCallTypeFor'
 
@@ -683,7 +683,7 @@ function recordDefValtype(op StdOp, valtypes WasmValTypeArray, depResult ValueId
 		// function value — unlike a `globalAddr`/`rdataAddr`, an i32 address consumed in place.
 		funcAddr(resultId, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
 		callIndirect(resultId, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
-		osRangePanic then break 'def'
+		osRangePanic to osSleepMs then break 'def'
 	end 'def'
 end 'recordDefValtype'
 
@@ -912,7 +912,7 @@ type WasmFuncEmitter
 			// mirror of the `call`/`tryCall` arms above (P1.5-A1).
 			funcAddr then panic("emitStraightLineTerminator: a `funcAddr` is a value-producing body op, never a terminator")
 			callIndirect then panic("emitStraightLineTerminator: a `callIndirect` is a value-producing body op, never a terminator")
-			osRangePanic then panic("emitStraightLineTerminator: an `osRangePanic` is a body op, never a terminator")
+			osRangePanic to osSleepMs then panic("emitStraightLineTerminator: an `osRangePanic` is a body op, never a terminator")
 		end 'term'
 	end 'emitStraightLineTerminator'
 
@@ -980,7 +980,7 @@ type WasmFuncEmitter
 			// mirror of the `call`/`tryCall` arms above (P1.5-A1).
 			funcAddr then panic("emitDispatcherTerminator: a `funcAddr` is a value-producing body op, never a terminator")
 			callIndirect then panic("emitDispatcherTerminator: a `callIndirect` is a value-producing body op, never a terminator")
-			osRangePanic then panic("emitDispatcherTerminator: an `osRangePanic` is a body op, never a terminator")
+			osRangePanic to osSleepMs then panic("emitDispatcherTerminator: an `osRangePanic` is a body op, never a terminator")
 		end 'term'
 	end 'emitDispatcherTerminator'
 
@@ -1023,6 +1023,11 @@ type WasmFuncEmitter
 			funcAddr(resultId, funcName) then self.emitFuncAddr(resultId, funcName: funcName)
 			callIndirect(resultId, calleeReg, args) then self.emitCallIndirect(resultId, calleeReg: calleeReg, args: args)
 			osRangePanic then self.emitRangePanic()
+			// P1.5 mid-body-yield: the green-thread sleep substrate (`osReadClock`/`osSleepMs`) is x64-windows
+			// only — its QueryPerformanceCounter clock and Windows `Sleep` have no wasm primitive, and a
+			// `sleep` program is spec-gated to x64-windows, so neither op ever reaches the wasm emitter.
+			osReadClock then panic("emitBodyOp: `osReadClock` is x64-windows only — the green-thread sleep substrate is x64-windows-gated at this rung")
+			osSleepMs then panic("emitBodyOp: `osSleepMs` is x64-windows only — the green-thread sleep substrate is x64-windows-gated at this rung")
 		end 'body'
 	end 'emitBodyOp'
 
@@ -1879,7 +1884,7 @@ function decideDispatcher(module StdModule, func IrFunction) returns bool
 		// invariant `tryCall`/`osExit` assert (P1.5-A1).
 		funcAddr then panic("decideDispatcher: a `funcAddr` is a value-producing body op, never a terminator")
 		callIndirect then panic("decideDispatcher: a `callIndirect` is a value-producing body op, never a terminator")
-		osRangePanic then panic("decideDispatcher: an `osRangePanic` is a body op, never a terminator")
+		osRangePanic to osSleepMs then panic("decideDispatcher: an `osRangePanic` is a body op, never a terminator")
 	end 'k'
 	return false
 end 'decideDispatcher'

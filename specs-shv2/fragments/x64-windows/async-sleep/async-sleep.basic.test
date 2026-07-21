@@ -1,16 +1,10 @@
-// Test: async-scheduler.basic
-
-function compute() returns int
-	return 42
-end 'compute'
-
+// Test: async-sleep.basic
 function main() returns ExitCode
-	let p = async compute()
-	let r = await p
-	return r as ExitCode
+	sleep(50)
+	return 7
 end 'main'
 ---
-ExitCode: 42
+ExitCode: 7
 ---
 data {
   __slab_cursor@0 = i64 0
@@ -27,27 +21,14 @@ data {
   __gt_clock_freq@88 = i64 0
 }
 
-func @compute {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.movRegImm32 r8, 42
-    x64.popReg rbp
-    x64.ret
-}
-
 func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
-    x64.movRegImm32 rcx, 48
-    x64.callDirect __slab_alloc
-    x64.leaRegFunc rcx, [rip + compute]
-    x64.movRegReg rdx, r8
-    x64.callDirect __gt_spawn
-    x64.movRegReg rcx, r8
-    x64.callDirect __gt_await
+    x64.movRegImm32 rcx, 50
+    x64.callDirect __gt_sleep
+    x64.movRegImm32 r8, 7
     x64.epilogue 32
     x64.popReg rbp
     x64.ret

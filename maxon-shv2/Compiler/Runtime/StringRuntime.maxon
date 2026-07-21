@@ -334,6 +334,13 @@ function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 	if isRuntimeCallee(callee) 'heap'
 		usage.usesHeap = true
 	end 'heap'
+	// A DIRECT `__gt_*` runtime call carries the whole green-thread scheduler (P1.5 mid-body-yield). `async`/
+	// `await`/`try await` are detected by op KIND above because their `__gt_*` calls do not exist until
+	// lowering, but `sleep(ms)` lowers in the FRONT END to a `call __gt_sleep`, which IS a Maxon `call` this
+	// scan sees — so any `__gt_*` callee here turns on the scheduler (and, via `recordGtUsage`, the heap).
+	if isGtRuntimeCallee(callee) 'gt'
+		recordGtUsage(usage)
+	end 'gt'
 	if callee.equals(PrintStringName) 'print'
 		usage.usesPrint = true
 	end 'print'

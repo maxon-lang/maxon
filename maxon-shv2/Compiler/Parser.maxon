@@ -1128,6 +1128,14 @@ let PrintBuiltinName = b"print"
 // states it as both the check and the diagnostic's `expected`.
 let PrintArity = 1 as ParamCount
 
+// **THE `sleep` BUILTIN** (P1.5 mid-body-yield). Like `print`/`trunc`, recognized by name after its arguments
+// are parsed: it takes ordinary call syntax but emits no `MaxonOp.call` to a user function — it routes to the
+// `__gt_sleep(ms)` scheduler runtime entry (which parks the current green thread on a timer and yields).
+let SleepBuiltinName = b"sleep"
+// `sleep` takes exactly one INTEGER argument — the duration in milliseconds (per `specs/sleep.md`) — and
+// returns void.
+let SleepArity = 1 as ParamCount
+
 // **THE BUILTIN STRING METHODS** (P1.2 wave D). `append` grows a `var` String in place; `byteLength` reads
 // its byte count. String is the one non-struct type with methods at this rung, dispatched by name in
 // `parseStringMethodCall` off a String-typed receiver.
@@ -13420,6 +13428,10 @@ export type Parser
 			return try self.emitPrint(args, calleeTok: anchor, resultUsed: resultUsed)
 		end 'printBuiltin'
 
+		if callee.equals(SleepBuiltinName) 'sleepBuiltin'
+			return try self.emitSleep(args, calleeTok: anchor, resultUsed: resultUsed)
+		end 'sleepBuiltin'
+
 		return try self.emitCall(callee, anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, rparenTok: rparenTok, resultUsed: resultUsed)
 	end 'parseCallNamed'
 
@@ -13490,6 +13502,33 @@ export type Parser
 		callArgs.push(arg)
 		return self.emitRuntimeCall(PrintStringName, args: callArgs, resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(calleeTok))
 	end 'emitPrint'
+
+	// `sleep(ms)` — **SUSPEND THE CURRENT GREEN THREAD** for `ms` milliseconds, yielding to the scheduler
+	// (P1.5 mid-body-yield). A compiler BUILTIN like `print`: ordinary call syntax, but it emits no
+	// `MaxonOp.call` to a user function — it routes to the `__gt_sleep` scheduler runtime entry (which parks the
+	// running GT on a timer and yields). It requires exactly one INTEGER argument (the duration; a float/String/
+	// bool is refused) and returns VOID, so a call in value position is rejected exactly as a void user-call is.
+	function emitSleep(args ValueIdArray, calleeTok Token, resultUsed bool) returns ValueId throws ParseError
+		if args.count() != SleepArity 'arity'
+			throw ParseError.builtinArity(String.from(SleepBuiltinName), expected: SleepArity, got: args.count(), line: calleeTok.line, column: calleeTok.column)
+		end 'arity'
+
+		let arg = try args.get(0) otherwise panic("emitSleep: args.count() == SleepArity just checked but get(0) failed")
+		let argTag = self.tagOf(arg)
+		if not typeClassAdmits(TypeClass.numeric, tag: argTag) or tagIsFloat(argTag) 'notAnInt'
+			throw ParseError.builtinOperandType(String.from(SleepBuiltinName), required: "integer", got: typeTagName(argTag), line: calleeTok.line, column: calleeTok.column)
+		end 'notAnInt'
+
+		// `sleep` returns nothing, so using its result is using a value that is not there — the same error a
+		// void user-call gets in value position.
+		if resultUsed 'noValueToUse'
+			throw ParseError.voidCallResultUsed(String.from(SleepBuiltinName), line: calleeTok.line, column: calleeTok.column)
+		end 'noValueToUse'
+
+		var callArgs = ValueIdArray.create()
+		callArgs.push(arg)
+		return self.emitRuntimeCall(GtSleepName, args: callArgs, resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(calleeTok))
+	end 'emitSleep'
 
 	// Parse a comma-separated argument list into the parallel `args`/`argLabels`/
 	// `argRanges` lists (all empty for `()`). The caller has consumed `(`; this leaves

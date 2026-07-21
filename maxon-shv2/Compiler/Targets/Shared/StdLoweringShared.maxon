@@ -320,8 +320,10 @@ function recordOpResultClass(op StdOp, column ValueClassColumn, calleeResultClas
 		osWriteStdout then break 'result'
 		// `errorReturn` (a terminator) and `osExit` define no value (P1.4b).
 		errorReturn to osExit then break 'result'
-		// `osRangePanic` defines no value (P1.9) — it aborts.
-		osRangePanic then break 'result'
+		// `osRangePanic` defines no value (P1.9) — it aborts. `osReadClock`/`osSleepMs` (P1.5 mid-body-yield)
+		// define no value either: the clock read writes its results to caller-provided out-param buffers, and
+		// the OS sleep returns nothing.
+		osRangePanic to osSleepMs then break 'result'
 	end 'result'
 end 'recordOpResultClass'
 

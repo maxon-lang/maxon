@@ -1,11 +1,12 @@
-// Test: async-scheduler.basic
+// Test: async-sleep.resume-state
 
-function compute() returns int
-	return 42
-end 'compute'
+function worker(base int) returns int
+	sleep(30)
+	return base + 2
+end 'worker'
 
 function main() returns ExitCode
-	let p = async compute()
+	let p = async worker(40)
 	let r = await p
 	return r as ExitCode
 end 'main'
@@ -27,11 +28,18 @@ data {
   __gt_clock_freq@88 = i64 0
 }
 
-func @compute {
+func @worker {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.movRegImm32 r8, 42
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegImm32 rcx, 30
+    x64.callDirect __gt_sleep
+    x64.leaRegRegImm32 r8, rbx, 2
+    x64.epilogue 40
+    x64.popReg rbx
     x64.popReg rbp
     x64.ret
 }
@@ -40,15 +48,19 @@ func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.prologue 32
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegImm32 rbx, 40
     x64.movRegImm32 rcx, 48
     x64.callDirect __slab_alloc
-    x64.leaRegFunc rcx, [rip + compute]
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.leaRegFunc rcx, [rip + worker]
     x64.movRegReg rdx, r8
     x64.callDirect __gt_spawn
     x64.movRegReg rcx, r8
     x64.callDirect __gt_await
-    x64.epilogue 32
+    x64.epilogue 40
+    x64.popReg rbx
     x64.popReg rbp
     x64.ret
 }

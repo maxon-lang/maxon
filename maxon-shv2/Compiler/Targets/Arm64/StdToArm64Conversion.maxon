@@ -390,6 +390,11 @@ type StdToArm64Lowering
 			funcAddr(resultId, funcName) then self.emit(dstRef, op: TargetOp.arm64LeaFuncAddr(TargetVReg.virtual(resultId), funcName: funcName))
 			callIndirect(resultId, calleeReg, args) then self.lowerCallIndirect(resultId, calleeReg: calleeReg, args: args, dstRef: dstRef)
 			osRangePanic then self.lowerRangePanic(dstRef)
+			// P1.5 mid-body-yield: the green-thread sleep substrate (`osReadClock`/`osSleepMs`) is x64-windows
+			// only at this rung — its QueryPerformanceCounter clock and Windows `Sleep` have no arm64 primitive
+			// yet, and a `sleep` program is spec-gated to x64-windows, so neither op ever reaches arm64 lowering.
+			osReadClock then panic("lowerStdToArm64: `osReadClock` is x64-windows only — the green-thread sleep substrate is x64-windows-gated at this rung")
+			osSleepMs then panic("lowerStdToArm64: `osSleepMs` is x64-windows only — the green-thread sleep substrate is x64-windows-gated at this rung")
 		end 'lower'
 	end 'lowerBodyOp'
 
@@ -419,6 +424,8 @@ type StdToArm64Lowering
 			funcAddr then panic("lowerStdToArm64: a `funcAddr` op appeared as a block terminator (lowering bug — a function address is a value-producing body op)")
 			callIndirect then panic("lowerStdToArm64: a `callIndirect` op appeared as a block terminator (lowering bug — an indirect call is a value-producing body op)")
 			osRangePanic then panic("lowerStdToArm64: an `osRangePanic` op appeared as a block terminator (lowering bug — a range panic is a body op followed by a dead return)")
+			osReadClock then panic("lowerStdToArm64: an `osReadClock` op appeared as a block terminator (lowering bug — a clock read is a value-consuming body op; also x64-windows only)")
+			osSleepMs then panic("lowerStdToArm64: an `osSleepMs` op appeared as a block terminator (lowering bug — an OS sleep is a body op; also x64-windows only)")
 		end 'lower'
 	end 'lowerTerminatorOp'
 

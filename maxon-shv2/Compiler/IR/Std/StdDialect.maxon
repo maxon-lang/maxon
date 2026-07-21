@@ -662,6 +662,32 @@ export union StdOp
 	// (the invariant working in the reviewer's favour). Its `category: system` places it logically,
 	// independent of this tail position.
 	osRangePanic(label ByteArray) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+	// --- P1.5 mid-body-yield: the two OS-import primitives the green-thread SLEEP substrate needs ---
+	//
+	// ⚠ APPENDED PAST THE END OF THE UNION (`osRangePanic` was the last variant), per the band-append
+	// invariant: every stale `… to osRangePanic` full-tail range arm now FAILS TO COMPILE until it is
+	// consciously extended (the invariant working in the reviewer's favour). Their `category: system`
+	// places them logically in the system band, independent of this tail position.
+	//
+	// Both are `system`-band ops for the SAME two reasons `osAllocPages`/`osWriteStdout` are: they say WHAT
+	// is wanted (read the monotonic clock into two out-param buffers; sleep the OS thread N milliseconds) and
+	// let each backend say HOW (x64-windows: `QueryPerformanceFrequency`/`QueryPerformanceCounter`/`Sleep`
+	// through the IAT, `Targets/Windows/PeWriter.maxon`; arm64/wasm/x64-linux have no clock/sleep primitive
+	// at this rung and reject it), keeping the Win32 import table out of the target-neutral tier. Full
+	// call-barrier metadata: each IS an indirect call once lowered, exactly like `osAllocPages`.
+	//
+	// `osReadClock(ticksPtr, freqPtr)` writes QueryPerformanceCounter's tick count to `[ticksPtr]` and
+	// QueryPerformanceFrequency's frequency to `[freqPtr]` — two VALUE operands (the out-param addresses,
+	// computed by the builder via `globalAddr` of two `.data` scratch slots), no result. The
+	// ticks→nanoseconds arithmetic stays BUILDER-BUILT (`__gt_now_ns` in GtRuntime.maxon) using the split
+	// identity `ns = (ticks/freq)*1e9 + ((ticks mod freq)*1e9)/freq`, which is overflow-safe in plain 64-bit
+	// Std ops for any realistic QPF (≤ a few GHz) and centuries of uptime — so no 128-bit MUL/DIV, and no new
+	// Target op, is needed. It keeps the clock math in the Std tier the rewrite's thesis puts it in.
+	osReadClock(ticksPtrId ValueId, freqPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+	// `osSleepMs(ms)` sleeps the OS thread for `ms` milliseconds (Windows `Sleep(ms)`) — the netpoller's real
+	// wait on the earliest timer deadline (never a busy-spin). One VALUE operand (the millisecond count), no
+	// result. APPENDED at the END of the union, after `osReadClock`.
+	osSleepMs(msId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 end 'StdOp'
 
 export typealias StdOpArray = Array with StdOp
@@ -762,6 +788,11 @@ export function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 		// A range panic reads nothing — its `label` is a NAME (an `.rdata` symbol), not a value, and it
 		// defines nothing.
 		osRangePanic then break 'u'
+		// Both out-param ADDRESSES are real value operands (the builder's `globalAddr` results); this op
+		// defines nothing. The `ms` count is the one value `osSleepMs` reads. Both must be reported here or
+		// the allocator would free the address/count registers early and the OS call would read garbage.
+		osReadClock(ticksPtrId, freqPtrId) then insertUsePair(referenced, a: ticksPtrId, b: freqPtrId)
+		osSleepMs(msId) then referenced.insert(msId)
 	end 'u'
 end 'collectStdOpUses'
 
@@ -841,6 +872,10 @@ module function remapStdOpUses(op StdOp, subst ValueIdArray) returns StdOp
 		// `osRangePanic` reads no value (its `label` is a name), so it rewrites nothing and is handed back
 		// unchanged — the mirror of `funcAddr`/`rdataAddr`.
 		osRangePanic gives op
+		// The exact mirror of `collectStdOpUses`: `osReadClock` rewrites both out-param addresses it reads,
+		// `osSleepMs` rewrites its millisecond count. Both define nothing.
+		osReadClock(ticksPtrId, freqPtrId) gives StdOp.osReadClock(remappedValue(ticksPtrId, subst: subst), freqPtrId: remappedValue(freqPtrId, subst: subst))
+		osSleepMs(msId) gives StdOp.osSleepMs(remappedValue(msId, subst: subst))
 	end 'r'
 end 'remapStdOpUses'
 

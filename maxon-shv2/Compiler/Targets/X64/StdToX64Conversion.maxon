@@ -159,7 +159,7 @@ function stdOpOutgoingArgBytes(op StdOp) returns StackSize
 		// outgoing args. None reserves stack argument space at this rung.
 		// A `funcAddr` is a register-only `lea`; a `callIndirect` passes its args in registers exactly
 		// like `call`. Neither reserves outgoing stack-argument space at this rung.
-		tryCall to osRangePanic gives 0
+		tryCall to osSleepMs gives 0
 	end 'o'
 end 'stdOpOutgoingArgBytes'
 
@@ -716,7 +716,7 @@ type StdToX64Lowering
 				branch to rdataAddr then break 'term'
 				// `funcAddr`/`callIndirect` are value-producing body ops, never a block terminator — a
 				// non-`condBranch` terminator fuses nothing, so like every other arm here it breaks (P1.5-A1).
-				tryCall to osRangePanic then break 'term'
+				tryCall to osSleepMs then break 'term'
 			end 'term'
 		end 'eachBlock'
 	end 'computeFusedCmps'
@@ -767,7 +767,7 @@ type StdToX64Lowering
 				// is not the compare, so the scan stops and no fusion is recorded (declining is always safe).
 				// `funcAddr` sets no flags (a `lea`), so the loop guard skips it before it reaches here — it
 				// is named rather than swallowed. (P1.5-A1)
-				tryCall to osRangePanic then break 'isTheCompare'
+				tryCall to osSleepMs then break 'isTheCompare'
 			end 'isTheCompare'
 			return
 		end 'scanBackward'
@@ -832,7 +832,7 @@ type StdToX64Lowering
 			branch to rdataAddr gives false
 			// A `funcAddr`/`callIndirect` is never a block terminator — only a `condBranch` gets a
 			// non-false answer here (P1.5-A1).
-			tryCall to osRangePanic gives false
+			tryCall to osSleepMs gives false
 		end 'term'
 	end 'terminatorReadsFusedFlags'
 
@@ -868,6 +868,9 @@ type StdToX64Lowering
 			funcAddr(resultId, funcName) then self.targetModule.appendOp(dstBlock, op: TargetOp.leaRegFunc(TargetVReg.virtual(resultId), funcName: funcName))
 			callIndirect(resultId, calleeReg, args) then self.lowerCallIndirect(resultId, calleeReg: calleeReg, args: args, dstBlock: dstBlock)
 			osRangePanic(label) then self.lowerRangePanic(label, dstBlock: dstBlock)
+			// P1.5 mid-body-yield: the green-thread sleep substrate's clock read and OS wait.
+			osReadClock(ticksPtrId, freqPtrId) then self.lowerOsReadClock(ticksPtrId, freqPtrId: freqPtrId, dstBlock: dstBlock)
+			osSleepMs(msId) then self.lowerOsSleepMs(msId, dstBlock: dstBlock)
 		end 'lower'
 	end 'lowerBodyOp'
 
@@ -901,6 +904,8 @@ type StdToX64Lowering
 			funcAddr then panic("lowerStdToX64: a `funcAddr` op appeared as a block terminator (lowering bug — a function address is a value-producing body op)")
 			callIndirect then panic("lowerStdToX64: a `callIndirect` op appeared as a block terminator (lowering bug — an indirect call is a value-producing body op)")
 			osRangePanic then panic("lowerStdToX64: an `osRangePanic` op appeared as a block terminator (lowering bug — a range panic is a body op followed by a dead return)")
+			osReadClock then panic("lowerStdToX64: an `osReadClock` op appeared as a block terminator (lowering bug — a clock read is a value-consuming body op)")
+			osSleepMs then panic("lowerStdToX64: an `osSleepMs` op appeared as a block terminator (lowering bug — an OS sleep is a body op)")
 		end 'lower'
 	end 'lowerTerminatorOp'
 
@@ -1505,6 +1510,46 @@ type StdToX64Lowering
 		self.targetModule.appendOp(dstBlock, op: TargetOp.x64Syscall(LinuxSyscallWrite))
 	end 'lowerOsWriteStdoutLinux'
 
+	// Lower `osReadClock(ticksPtr, freqPtr)` to the x64-windows MONOTONIC clock reads (P1.5 mid-body-yield):
+	// `QueryPerformanceFrequency(&freq)` then `QueryPerformanceCounter(&ticks)`, both through the IAT. Each
+	// takes a single LARGE_INTEGER out-param pointer in rcx (Win64's first argument register) and writes 8
+	// bytes there; the builder (`__gt_now_ns`) hands in the two `.data` scratch addresses as value operands
+	// and reads the results back with ordinary loads. Everything routes through the clobber-correct `iatCall`
+	// exactly as `lowerOsAllocPages`/`lowerOsWriteStdout` do — so the address operand live across the first
+	// call is spilled or forced callee-saved by the allocator with no hand-holding.
+	//
+	// ⭐ x64-WINDOWS ONLY. The QPC/QPF counter is a Win32 concept; a linux/arm64/wasm sleep is a later slice,
+	// so the syscall route REJECTS rather than inventing a fake clock. (Sleep is x64-windows-gated by spec.)
+	function lowerOsReadClock(ticksPtrId ValueId, freqPtrId ValueId, dstBlock IrBlock)
+		match x64OsCallKind(self.target.os) 'route'
+			importCall then self.lowerOsReadClockWin64(ticksPtrId, freqPtrId: freqPtrId, dstBlock: dstBlock)
+			syscall then panic("lowerOsReadClock: the QueryPerformanceCounter/Frequency clock is x64-windows only — the green-thread sleep substrate is x64-windows-gated at this rung")
+		end 'route'
+	end 'lowerOsReadClock'
+
+	// Win64: `QueryPerformanceFrequency(&freq)` then `QueryPerformanceCounter(&ticks)`, each with its out-param
+	// pointer in rcx. Frequency FIRST so the ticks read is the most recent instant returned to the caller.
+	function lowerOsReadClockWin64(ticksPtrId ValueId, freqPtrId ValueId, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(freqPtrId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.QueryPerformanceFrequency)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(ticksPtrId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.QueryPerformanceCounter)))
+	end 'lowerOsReadClockWin64'
+
+	// Lower `osSleepMs(ms)` to Windows `Sleep(ms)` through the IAT — the netpoller's real wait on the earliest
+	// timer deadline (never a busy-spin). `ms` moves into rcx (Win64's first argument register); Sleep is void.
+	function lowerOsSleepMs(msId ValueId, dstBlock IrBlock)
+		match x64OsCallKind(self.target.os) 'route'
+			importCall then self.lowerOsSleepMsWin64(msId, dstBlock: dstBlock)
+			syscall then panic("lowerOsSleepMs: Windows `Sleep` is x64-windows only — the green-thread sleep substrate is x64-windows-gated at this rung")
+		end 'route'
+	end 'lowerOsSleepMs'
+
+	function lowerOsSleepMsWin64(msId ValueId, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(msId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.Sleep)))
+	end 'lowerOsSleepMsWin64'
+
 	// Lower a Std `cmpImm` (constant right operand) to `cmp reg, imm32` — the same two-part
 	// protocol `lowerCmp` uses, so the fold that moved the right operand into an immediate
 	// changes only the compare INSTRUCTION, never what the compare MEANS. The literal
@@ -1828,7 +1873,7 @@ type StdToX64Lowering
 			branch to rdataAddr gives false
 			// A `funcAddr`/`callIndirect` is never a block terminator — only a `condBranch` gets a
 			// non-false answer here (P1.5-A1).
-			tryCall to osRangePanic gives false
+			tryCall to osSleepMs gives false
 		end 'term'
 	end 'settleFloatEqualityBranch'
 
@@ -1962,7 +2007,7 @@ type StdToX64Lowering
 			branch to rdataAddr panic("condBranchFieldsOf: the terminator of block ref {blockRef} is not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			// A `funcAddr`/`callIndirect` is never a block terminator; like every non-`condBranch`
 			// arm here it cannot occur and panics (P1.5-A1).
-			tryCall to osRangePanic panic("condBranchFieldsOf: the terminator of block ref {blockRef} is not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
+			tryCall to osSleepMs panic("condBranchFieldsOf: the terminator of block ref {blockRef} is not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 		end 'term'
 	end 'condBranchFieldsOf'
 
