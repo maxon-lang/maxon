@@ -364,7 +364,7 @@ E3006 SemanticDuplicateDefinition
 	csharp SemanticDuplicateDefinition
 	selfhosted semanticDuplicateDefinition
 	shv2 duplicateFunction
-	doc A name is declared twice where exactly one binding is legal: two functions with the same signature, or a local shadowing a 'self' field.
+	doc A name is declared twice where exactly one binding is legal: two functions with the same signature, a top-level `let`/`var` declared twice in a file, or a local shadowing a 'self' field.
 	doc a duplicate definition or a local-vs-self-field shadow. Two
 	doc shapes share the code: (a) two function definitions with the same
 	doc name and signature -- fires from `reportDuplicateFunction` in the
@@ -372,7 +372,10 @@ E3006 SemanticDuplicateDefinition
 	doc registration for cross-file `main` collisions; (b) a local
 	doc declaration inside an instance method whose name collides with a
 	doc `self.field` (matches the C# bootstrap's broader interpretation of
-	doc "duplicate definition" -- the local would silently shadow the field).
+	doc "duplicate definition" -- the local would silently shadow the field);
+	doc (c) two top-level `let`/`var` declarations of one name in a file --
+	doc fires from `isRedeclaredBinding` at the real parse (shv2 only; the
+	doc bootstrap silently first-wins), the top-level twin of (a).
 
 E3007 SemanticAmbiguousFunctionCall
 	csharp SemanticAmbiguousFunctionCall

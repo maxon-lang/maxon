@@ -1429,11 +1429,11 @@ export type ProgramSignatures
 	// `evaluateInitializers` supplies that once every file has been folded in.
 	//
 	// FIRST-WINS on a duplicate storage key, matching the bootstrap's `decls.FirstOrDefault(d =>
-	// d.Name == name)` (2-Parser.cs:4950). ⚠ A file that declares the same name twice is NOT yet
-	// diagnosed — the second declaration is silently unreachable. That is a real gap and it is not
-	// this rung's: it needs the positioned duplicate check `commitFuncSignatures` does for functions
-	// (E3006), and no spec case covers it. It is NOT the cross-file same-name case, which is legal and
-	// which `topLevelStorageKey` handles by giving the two decls different keys.
+	// d.Name == name)` (2-Parser.cs:4950). A file that declares the same name twice — `let A = 1` then
+	// `let A = 2`, or a `let`/`var` collision — keeps the FIRST here and is diagnosed E3006 by the real
+	// parse (`isRedeclaredBinding` → `Parser.raiseBindingFailure`), the top-level twin of the positioned
+	// duplicate-FUNCTION check `commitFuncSignatures` makes. It is NOT the cross-file same-name case,
+	// which is legal and which `topLevelStorageKey` handles by giving the two decls different keys.
 	function recordDecl(decl TopLevelDecl)
 		if self.declIndex.contains(decl.storageKey) 'duplicate'
 			return
@@ -1748,21 +1748,58 @@ export type ProgramSignatures
 		return entries
 	end 'declaredGlobals'
 
-	// What the DECLARATION the real parse just read came to — the door `Parser.raiseConstantFailure`
-	// asks through, keyed on the decl's own storage key rather than on a bare name (a declaration
-	// resolves to ITSELF, never through the scoped-then-bare probe a USE goes through).
+	// The recorded arena entry a top-level `decl` resolves to, keyed on the decl's OWN storage key
+	// rather than on a bare name (a declaration resolves to ITSELF, never through the scoped-then-bare
+	// probe a USE goes through). The single get-or-panic that `declaredOutcome` and `isRedeclaredBinding`
+	// share, so the drift guard below reads exactly one way at both.
 	//
 	// **THE DRIFT GUARD LIVES HERE.** The sweep decides what is top level by counting block depth over
 	// tokens (`Parser.foldDeclaredSignaturesInto`); the real parse decides it by actually parsing.
 	// Those are two readings of one question, and a miss means they disagreed — after which the
-	// constant is absent from the index, every use of it reports "undefined variable", and a correct
+	// declaration is absent from the index, every use of it reports "undefined variable", and a correct
 	// program is rejected for a reason that names nothing the user wrote. It panics instead, naming
 	// the drift, in the discipline `mergeArtifact`'s span-lockstep assert follows.
+	function recordedDeclFor(decl TopLevelDecl) returns TopLevelDecl
+		let index = try self.declIndex.get(decl.storageKey) otherwise panic("ProgramSignatures.recordedDeclFor: the declaration sweep never recorded top-level '{String.from(decl.name)}' of {decl.declFilePath.toString()}, which the parser is dispatching at top level — the sweep's block-depth gate and the parser's structure disagree about what is top level")
+		return self.declAt(index)
+	end 'recordedDeclFor'
+
+	// What the DECLARATION the real parse just read came to — the door `Parser.raiseBindingFailure`
+	// asks through.
 	export function declaredOutcome(decl TopLevelDecl) returns TopLevelConstant
-		let index = try self.declIndex.get(decl.storageKey) otherwise panic("ProgramSignatures.declaredOutcome: the declaration sweep never recorded top-level constant '{String.from(decl.name)}' of {decl.declFilePath.toString()}, which the parser is dispatching at top level — the sweep's block-depth gate and the parser's structure disagree about what is top level")
-		let declared = self.declAt(index)
-		return declared.outcome
+		return self.recordedDeclFor(decl).outcome
 	end 'declaredOutcome'
+
+	// ⭐ **IS `decl` A REDECLARATION — a top-level name the sweep already recorded under the same storage
+	// key from a DIFFERENT source position?** `recordDecl` is first-wins, so the winner is the earliest
+	// declaration and every later `let`/`var` of that name is a duplicate. The real parse asks this for
+	// each top-level binding statement (`raiseBindingFailure`) and reports E3006 at the later one — the
+	// top-level twin of the duplicate-FUNCTION check `commitFuncSignatures` makes, positioned the same
+	// way (at the offending later declaration).
+	//
+	// ⚠ SCOPED TO ONE FILE, and — for an EXPORTED name — BOUNDED BY THE GLOBAL WINNER. Same storage key
+	// means same name; for a FILE-PRIVATE name the key includes the path, so the winner is THIS file's
+	// first declaration and same-file detection is complete. For an EXPORTED name the key is the bare
+	// name (`topLevelStorageKey`), so the winner is the globally-first `export let A` across ALL files:
+	// when it lives in another file the `crossFileExported` guard returns false — correctly for the pure
+	// cross-file collision (which belongs to cross-file name resolution, see `commitStructTypes`), but it
+	// ALSO misses a genuine SAME-FILE exported duplicate whenever another file's export wins the key
+	// (order-dependent on file sort). That completeness rides with the same deferred cross-file rung; it
+	// never falsely rejects a legal program and adds no wrong runtime answer. Re-deriving each side's
+	// file-qualified key makes the guard a pure FILE comparison (equal names). Two distinct declarations
+	// in one file cannot share a source position, so a differing `(line, column)` is exactly a
+	// redeclaration.
+	export function isRedeclaredBinding(decl TopLevelDecl) returns bool
+		let winner = self.recordedDeclFor(decl)
+
+		let winnerFileKey = fileScopedDeclKey(winner.name, declFilePath: winner.declFilePath)
+		let declFileKey = fileScopedDeclKey(decl.name, declFilePath: decl.declFilePath)
+		if not winnerFileKey.equals(declFileKey) 'crossFileExported'
+			return false
+		end 'crossFileExported'
+
+		return winner.nameLine != decl.nameLine or winner.nameColumn != decl.nameColumn
+	end 'isRedeclaredBinding'
 
 	function resolvedValueOf(index TopLevelDeclIndex) returns TopLevelConstantLookup
 		let decl = self.declAt(index)

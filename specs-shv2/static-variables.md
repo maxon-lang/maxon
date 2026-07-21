@@ -697,3 +697,38 @@ end 'main'
 ```maxoncstderr
 error E2045: <fragment>:8:13: Function calls are not allowed in global variable initializers; 'getDefault()' is not a constant expression
 ```
+
+<!-- test: top-level-let-duplicate-declaration-error -->
+Declaring the same top-level `let` name twice is a duplicate definition (E3006), positioned at the
+LATER declaration — the top-level twin of the duplicate-function check. `recordDecl` is first-wins, so
+the first declaration keeps the name and the diagnostic names the redeclaration to remove. Both
+compilers reject a duplicate FUNCTION this way; the bootstrap silently first-wins a duplicate top-level
+`let`, so shv2 is deliberately stricter here (OPEN.md #4b).
+
+```maxon
+let A = 1
+let A = 2
+
+function main() returns ExitCode
+	return A
+end 'main'
+```
+```maxoncstderr
+error E3006: <fragment>:3:5: duplicate definition of 'A'
+```
+
+<!-- test: top-level-var-let-duplicate-declaration-error -->
+The storage key is kind-independent, so a `var` and a `let` sharing one name in one file collide the
+same way — the second declaration is the duplicate.
+
+```maxon
+var counter = 0
+let counter = 5
+
+function main() returns ExitCode
+	return counter
+end 'main'
+```
+```maxoncstderr
+error E3006: <fragment>:3:5: duplicate definition of 'counter'
+```

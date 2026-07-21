@@ -293,6 +293,14 @@ export union ParseError implements Error
 	// is a valid but MULTI-BYTE character — `'é'`, an emoji — is not this: it is a
 	// legitimate program shv2 cannot yet compile, so it reports as `unsupported`.)
 	invalidCharacterLiteral(reason String, line LineNumber, column ColumnNumber)
+	// A top-level name DECLARED more than once in one file — `let A = 1` then `let A = 2`, or a
+	// `let`/`var` collision on one name. Unlike the constant-evaluator arms below (raised during the
+	// sweep, recorded on the decl, re-thrown), this is raised DIRECTLY by the real parse when it reaches
+	// the later declaration (`raiseBindingFailure` via `ProgramSignatures.isRedeclaredBinding`). Renders
+	// as E3006, positioned at the LATER declaration's name — the top-level twin of the duplicate-FUNCTION
+	// check `commitFuncSignatures` makes. `recordDecl` is first-wins, so the first declaration keeps the
+	// name and this names the redeclaration the author should remove.
+	duplicateTopLevelDeclaration(name String, line LineNumber, column ColumnNumber)
 	// --- The top-level constant arms (P1.0d.5a) ---
 	//
 	// All three are raised by the CONSTANT EVALUATOR, which runs inside the whole-program
@@ -3031,6 +3039,14 @@ export type Parser
 	// `declaredOutcome` carries the DRIFT GUARD: a `let` the real parse dispatches at top
 	// level must be one the sweep recorded, and a miss panics rather than compiling.
 	function raiseBindingFailure(decl TopLevelDecl) throws ParseError
+		// A REDECLARATION is reported HERE, at the later declaration — the top-level twin of the
+		// duplicate-FUNCTION E3006 `commitFuncSignatures` raises. Checked BEFORE the outcome match
+		// because a duplicate is an error independent of whether the first declaration's initializer
+		// also failed: that failure reports at the FIRST declaration's own statement, this at the later.
+		if self.signatures.isRedeclaredBinding(decl) 'redeclared'
+			throw ParseError.duplicateTopLevelDeclaration(String.from(decl.name), line: decl.nameLine, column: decl.nameColumn)
+		end 'redeclared'
+
 		// ⚠ The outcome is bound to a LOCAL before the match, and the match's payload is bound to a
 		// second one before the throw. Neither is style. Matching the CALL directly and throwing the
 		// arm's binding —

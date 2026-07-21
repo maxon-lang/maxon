@@ -175,7 +175,7 @@ public enum ErrorCode {
   /// </summary>
   SemanticTypeMismatch = 3005,
   /// <summary>
-  /// A name is declared twice where exactly one binding is legal: two functions with the same signature, or a local shadowing a 'self' field.
+  /// A name is declared twice where exactly one binding is legal: two functions with the same signature, a top-level `let`/`var` declared twice in a file, or a local shadowing a 'self' field.
   /// a duplicate definition or a local-vs-self-field shadow. Two
   /// shapes share the code: (a) two function definitions with the same
   /// name and signature -- fires from `reportDuplicateFunction` in the
@@ -183,7 +183,10 @@ public enum ErrorCode {
   /// registration for cross-file `main` collisions; (b) a local
   /// declaration inside an instance method whose name collides with a
   /// `self.field` (matches the C# bootstrap's broader interpretation of
-  /// "duplicate definition" -- the local would silently shadow the field).
+  /// "duplicate definition" -- the local would silently shadow the field);
+  /// (c) two top-level `let`/`var` declarations of one name in a file --
+  /// fires from `isRedeclaredBinding` at the real parse (shv2 only; the
+  /// bootstrap silently first-wins), the top-level twin of (a).
   /// </summary>
   SemanticDuplicateDefinition = 3006,
   /// <summary>
