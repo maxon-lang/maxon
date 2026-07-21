@@ -1,0 +1,79 @@
+// Test: async-scheduler.parallel
+
+function ten() returns int
+	return 10
+end 'ten'
+
+function twenty() returns int
+	return 20
+end 'twenty'
+
+function main() returns ExitCode
+	let a = async ten()
+	let b = async twenty()
+	let ra = await a
+	let rb = await b
+	return (ra + rb) as ExitCode
+end 'main'
+---
+ExitCode: 30
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+  __gt_current_gt@24 = i64 0
+  __gt_run_queue_head@32 = i64 0
+  __gt_run_queue_tail@40 = i64 0
+  __gt_init_done@48 = i64 0
+}
+
+func @ten {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 10
+    x64.popReg rbp
+    x64.ret
+}
+
+func @twenty {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 20
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm32 rcx, 48
+    x64.callDirect __slab_alloc
+    x64.leaRegFunc rcx, [rip + ten]
+    x64.movRegReg rdx, r8
+    x64.callDirect __gt_spawn
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 48
+    x64.callDirect __slab_alloc
+    x64.leaRegFunc rcx, [rip + twenty]
+    x64.movRegReg rdx, r8
+    x64.callDirect __gt_spawn
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __gt_await
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, r12
+    x64.callDirect __gt_await
+    x64.leaRegRegReg r8, rbx, r8
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

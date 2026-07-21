@@ -482,6 +482,19 @@ export function tagIsFloat(tag ValueTypeTag) returns bool
 	return tag == ValueTypeTag.float
 end 'tagIsFloat'
 
+// ⭐ **IS THIS TAG A GPR SCALAR AN `async`/`await` CAN CARRY?** (P1.5-B1a). The green-thread trampoline
+// passes arguments through the integer arg registers and captures the result from R8, so an async call's
+// arguments, the callee's parameters, and its result must all be integer/bool — a `float` travels in XMM,
+// and a `String`/struct/boxed-union is a managed heap pointer the B1a runtime has no channel for. ONE
+// predicate for the SAME question the parser asks of the callee's RETURN (pre-resolution `MaxonType`) and
+// SemanticCheck asks of its declared PARAMETERS (post-resolution `MaxonType`), so the two tiers cannot
+// drift on what "a scalar an async call can carry" means. (A ranged-int alias — a `named` before
+// resolution, `integer` after — is deliberately NOT accepted at the pre-resolution return site: a
+// ranged-int async result is a B1a follow-up, and over-rejecting it is safe where miscompiling is not.)
+export function tagIsAsyncScalar(tag ValueTypeTag) returns bool
+	return tag == ValueTypeTag.integer or tag == ValueTypeTag.boolean
+end 'tagIsAsyncScalar'
+
 // The three operators whose MEANING follows their operands' type. `shl`/`shr` are absent: a
 // shift is integral by definition, on both sides.
 export function wordOperator(op MaxonBinOp) returns bool

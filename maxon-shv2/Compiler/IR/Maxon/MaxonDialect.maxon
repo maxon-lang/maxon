@@ -697,6 +697,22 @@ export union MaxonOp
 	// miscompile that forces the indirection (a tail-slot `Array` binding in a large match corrupts the
 	// scrutinee's decref). A design fact about how this op is CONSUMED, recorded where it is DECLARED.
 	indirectCall(result ValueId, callee ValueId, args ValueIdArray) = MaxonOpMeta{category: OpCategory.callFree}
+	// --- P1.5-B1a: async / await (green-thread scheduler) ---
+	//
+	// ⚠ APPENDED AT THE END OF THE UNION, past `indirectCall`, per the band-append invariant: a mid-union
+	// insert is silently swallowed by any range arm. Their `OpCategory.awaiting` (the band declared and
+	// empty since M1) is metadata independent of this tail position.
+	//
+	// SPAWN a green thread running `callee(args…)` and yield a Promise handle. The Maxon-tier twin of `call`
+	// — same (callee NAME, args, `name:` labels, ranges) shape, so lowering slots the labelled args into
+	// parameter order exactly as `lowerCall` does — but instead of RUNNING the call it lowers to
+	// `__gt_spawn(funcAddr(callee), argBuf)`, spilling the scalar args into `argBuf`. `result` is the i64
+	// promise handle (the spawned GT's pointer). The parser rejects a managed/float async arg or result
+	// (E2015) before this op is emitted, so every `args` value and the callee's return are GPR scalars.
+	asyncCall(result ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray) = MaxonOpMeta{category: OpCategory.awaiting}
+	// AWAIT `promise`'s green thread and yield its result. `promise` is the i64 handle `asyncCall` produced;
+	// `result` is the awaited scalar. Lowers to `__gt_await(promise)`.
+	await(result ValueId, promise ValueId) = MaxonOpMeta{category: OpCategory.awaiting}
 end 'MaxonOp'
 
 // The dual-register error-flag ABI BIAS (P1.4b). The error flag is `0` for "no error in flight" and

@@ -166,7 +166,10 @@ end 'stdOpOutgoingArgBytes'
 // The physical register argument `index` occupies. An index past the register file is
 // a parser-cap violation (parseFunctionParameters rejects >6 parameters), so it is a
 // compiler-invariant break here, not a user error.
-function argRegisterAt(index ParamCount) returns X64Register
+// Exported so the GT trampoline (X64GtRuntime) loads its arguments in the SAME register order the ABI
+// passes them — the trampoline's arg-load order IS the arg-register order, and a second copy of the
+// `[rcx, rdx, rax, r9, rsi, rdi]` list would be the one-fact-written-twice bug this file's header warns of.
+export function argRegisterAt(index ParamCount) returns X64Register
 	return try argRegisters.get(index) otherwise panic("argRegisterAt: argument index {index} exceeds the {argRegisters.count()} register-argument slots — the parser caps parameters at that count until stack arguments land")
 end 'argRegisterAt'
 

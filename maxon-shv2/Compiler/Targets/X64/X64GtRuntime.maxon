@@ -1,0 +1,113 @@
+// X64GtRuntime — the two GREEN-THREAD runtime functions that MUST be hand-assembled bytes rather than Std
+// ops (P1.5-B1a). Everything else in the scheduler is a builder-built `StdModule` (Runtime/GtRuntime.maxon);
+// only these two manipulate rsp/rbp and physical callee-saved registers, or are entered by a `ret` into a
+// frame no prologue built — none of which the Std tier can spell. They mirror the `mrt_*` panic runtime's
+// hand-assembly (X64Runtime.maxon): a `FunctionCodeChunk` built by calling X64Backend's encoders directly.
+//
+// ⭐ NEITHER TOUCHES A `.data` GLOBAL. The context switch passes the `to` GT through in rdx unchanged, so
+// the trampoline reads its own GT from rdx (not from `__gt_current_gt`); and the drivers own the current-GT
+// global (see GtRuntime.maxon's header). So both chunks are pure register/stack code with no rdata
+// relocation — exactly the shape the panic runtime already ships.
+//
+// CALLING CONVENTION — Maxon's internal ABI (StdToX64Conversion): integer arguments in
+// [rcx, rdx, rax, r9, rsi, rdi], primary return in R8; callee-saved GPRs are rbx, r12-r15
+// (RegisterAllocator.calleeSavedMask), plus rsp/rbp (the frame). The context switch saves EXACTLY that
+// callee-saved set — a `call __gt_context_switch` is an ordinary call, so from a suspending function's view
+// it must preserve precisely what any call preserves, no more (rsi/rdi/rax are ARGUMENT registers here, hence
+// caller-saved, hence NOT saved — the one place shv2's ABI diverges from v1's, whose rsi/rdi are callee-saved).
+
+// The callee-saved GPRs the context switch saves and restores, in push order. The pop order is the exact
+// reverse. This ORDER is the contract `__gt_spawn`'s initial frame layout byte-matches: `GtInitialFrameBytes`
+// = these five words + the return-address word, and the trampoline address sits in that top word so the
+// first switch-in's `ret` enters the trampoline.
+let GtCalleeSavedPushOrder = [X64Register.rbx, X64Register.r12, X64Register.r13, X64Register.r14, X64Register.r15]
+
+// The register the context switch reads `from` (arg 0) and `to` (arg 1) from — the ABI's first two integer
+// argument registers. `to` rides through UNMODIFIED so a fresh GT's trampoline reads its GT from rdx.
+let GtSwitchFromReg = X64Register.rcx
+let GtSwitchToReg = X64Register.rdx
+
+// The scratch registers the trampoline holds across the straight-line body: r12 = the GT (callee-saved, so it
+// survives the user call), r10 = the argument buffer, r11 = the function pointer. None is an argument register,
+// so the six arg-register loads below cannot clobber them.
+let GtTrampGtReg = X64Register.r12
+let GtTrampArgBufReg = X64Register.r10
+let GtTrampFuncPtrReg = X64Register.r11
+
+// `__gt_context_switch(from = rcx, to = rdx)` — save the current GT's callee-saved register + rsp/rbp state
+// into `from`, restore `to`'s, and `ret` into `to`'s saved return address (a resumed GT's await-loop
+// continuation, or — for a fresh GT — the trampoline). No frame, no `.data`.
+function buildGtContextSwitchChunk() returns FunctionCodeChunk
+	var code = ByteArray.create()
+
+	// Save callee-saved on the current (from) stack, in push order.
+	for reg in GtCalleeSavedPushOrder 'push'
+		encodePushReg(code, reg: reg)
+	end 'push'
+
+	// from->sp = rsp ; from->fp = rbp.
+	encodeStoreBaseDispReg(code, base: GtSwitchFromReg, disp: GtOffSp as Imm32, srcReg: X64Register.rsp)
+	encodeStoreBaseDispReg(code, base: GtSwitchFromReg, disp: GtOffFp as Imm32, srcReg: X64Register.rbp)
+	// rsp = to->sp ; rbp = to->fp — now on the destination stack.
+	encodeLoadRegBaseDisp(code, destReg: X64Register.rsp, base: GtSwitchToReg, disp: GtOffSp as Imm32, wide: true)
+	encodeLoadRegBaseDisp(code, destReg: X64Register.rbp, base: GtSwitchToReg, disp: GtOffFp as Imm32, wide: true)
+
+	// Restore callee-saved from the new stack, in reverse push order, then `ret` into to's saved return addr.
+	for i in 0 upto GtCalleeSavedPushOrder.count() 'pop'
+		let reg = try GtCalleeSavedPushOrder.get(GtCalleeSavedPushOrder.count() - 1 - i) otherwise panic("buildGtContextSwitchChunk: pop index derived from count is in range")
+		encodePopReg(code, reg: reg)
+	end 'pop'
+	code.push(OpcodeRet)
+
+	return FunctionCodeChunk.createWith(GtContextSwitchName, code: code, callFixups: CallFixupArray.create(), rdataRelocs: RdataRelocationArray.create(), iatRelocs: RelocationArray.create(), rdataConstants: GlobalDataTable.create())
+end 'buildGtContextSwitchChunk'
+
+// `__gt_trampoline` — the entry a FRESH green thread `ret`s into on its first switch-in. NOT a normal call:
+// no incoming register arguments and no prologue built for it. It reads its own GT from rdx (which the
+// context switch left holding `to`), loads the async function + arg buffer from the GT, loads all
+// MaxAsyncArgs argument slots into the ABI argument registers, calls the function, captures its R8 result
+// and marks the GT completed, then context-switches to the GT's waiter (always set by the driver that ran it).
+//
+// The stack is 16-aligned on entry (`__gt_spawn` lays `gt.sp` so the switch-in `ret` lands with rsp = stack
+// top, a page boundary), so `sub rsp, ShadowSpaceBytes` — a multiple of 16 — keeps every `call` below aligned
+// while reserving the Win64 shadow space the user call may clobber.
+function buildGtTrampolineChunk() returns FunctionCodeChunk
+	var code = ByteArray.create()
+	var callFixups = CallFixupArray.create()
+
+	// gt = rdx (the context switch's `to`, unmodified). Held in a callee-saved register across the user call.
+	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: GtTrampGtReg, src: GtSwitchToReg, wide: true)
+	encodeLoadRegBaseDisp(code, destReg: GtTrampArgBufReg, base: GtTrampGtReg, disp: GtOffArgBuf as Imm32, wide: true)
+	encodeLoadRegBaseDisp(code, destReg: GtTrampFuncPtrReg, base: GtTrampGtReg, disp: GtOffFuncPtr as Imm32, wide: true)
+
+	// Reserve the user call's shadow space (see the alignment note above).
+	encodePrologue(code, stackSize: ShadowSpaceBytes)
+
+	// Load every argument slot into its ABI argument register. The callee reads only the slots it declared;
+	// the rest are the arg buffer's slab zeros in unread registers. `argRegisterAt` is the ABI's own
+	// arg-register oracle, so this load order cannot drift from a call site's arg order.
+	for k in 0 upto MaxAsyncArgs 'args'
+		encodeLoadRegBaseDisp(code, destReg: argRegisterAt(k as ParamCount), base: GtTrampArgBufReg, disp: (k * GtArgSlotBytes) as Imm32, wide: true)
+	end 'args'
+
+	// Call the async function; capture its R8 result into the GT; mark completed.
+	encodeCallReg(code, reg: GtTrampFuncPtrReg)
+	encodeStoreBaseDispReg(code, base: GtTrampGtReg, disp: GtOffResult as Imm32, srcReg: X64Register.r8)
+	encodeMovRegImm32(code, dest: X64Register.rax, value: GtStatusCompleted)
+	encodeStoreBaseDispReg(code, base: GtTrampGtReg, disp: GtOffStatus as Imm32, srcReg: X64Register.rax)
+
+	// context_switch(from = gt, to = gt.waiter) — never returns (the GT is completed).
+	encodeLoadRegBaseDisp(code, destReg: GtSwitchToReg, base: GtTrampGtReg, disp: GtOffWaiter as Imm32, wide: true)
+	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: GtSwitchFromReg, src: GtTrampGtReg, wide: true)
+	encodeCallDirect(code, callFixups: callFixups, targetName: GtContextSwitchName)
+
+	return FunctionCodeChunk.createWith(GtTrampolineName, code: code, callFixups: callFixups, rdataRelocs: RdataRelocationArray.create(), iatRelocs: RelocationArray.create(), rdataConstants: GlobalDataTable.create())
+end 'buildGtTrampolineChunk'
+
+// Append the two hand-assembled GT chunks — called by BackendDispatch when the module spawns a green thread,
+// alongside `appendX64RuntimeChunks` for the panic runtime. They lay out above user code like every other
+// runtime chunk, so `mrt_start` stays at `.text` offset 0.
+export function appendX64GtRuntimeChunks(chunks FunctionCodeChunkArray)
+	chunks.push(buildGtContextSwitchChunk())
+	chunks.push(buildGtTrampolineChunk())
+end 'appendX64GtRuntimeChunks'

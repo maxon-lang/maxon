@@ -180,9 +180,24 @@ end 'floatParamMaskOf'
 // value-class column): one door, so the argument's destination register and its allocation class
 // cannot disagree. Mirrors `calleeResultClass`.
 export function calleeParamClass(calleeParamClasses CalleeParamClassMap, callee ByteArray, paramIndex ParamCount) returns RegClass
-	let mask = try calleeParamClasses.get(callee) otherwise panic("calleeParamClass: no Std function is named '{String.from(callee)}' — every callee reaching the lowering is one LowerMaxonToStd resolved against the merged module")
+	let mask = try calleeParamClasses.get(callee) otherwise 'runtimeChunk'
+		return runtimeChunkFallbackClass(callee, context: "calleeParamClass")
+	end 'runtimeChunk'
 	return RegClass.xmm if ((mask shr paramIndex) and 1) != 0 else RegClass.gpr
 end 'calleeParamClass'
+
+// The register FILE fallback for a callee that is NOT a Std function in the merged module. A `__`-prefixed
+// such callee is a HAND-ASSEMBLED runtime chunk — the mrt_* panic runtime, or the GT `__gt_context_switch`
+// that a builder-built `__gt_await` calls across the Std→chunk boundary. Every runtime chunk uses the
+// GPR-only internal ABI (i64 arguments, R8 result) by construction (see X64Runtime / X64GtRuntime headers),
+// so both its parameters and its result are GPR. A callee WITHOUT that prefix and without a Std function is
+// a genuine resolution bug and still panics — the safety this fallback narrows rather than removes.
+function runtimeChunkFallbackClass(callee ByteArray, context String) returns RegClass
+	if not isCompilerInternalCallee(callee) 'notRuntimeChunk'
+		panic("{context}: no Std function is named '{String.from(callee)}' — every non-runtime callee reaching the lowering is one LowerMaxonToStd resolved against the merged module")
+	end 'notRuntimeChunk'
+	return RegClass.gpr
+end 'runtimeChunkFallbackClass'
 
 // The calling-convention SLOT index of parameter/argument `paramIndex`: the count of PRECEDING
 // parameters that share its register FILE. The integer and float ABI registers are counted by
@@ -316,5 +331,8 @@ end 'recordOpResultClass'
 // picks the SAME capture register (XMM0/d0 for a float result, else R8/x0) the column classes the
 // result under — one door, so the capture and the class cannot disagree.
 export function calleeResultClass(calleeResultClasses CalleeResultClassMap, callee ByteArray) returns RegClass
-	return try calleeResultClasses.get(callee) otherwise panic("calleeResultClass: no Std function is named '{String.from(callee)}' — every callee reaching the lowering is one LowerMaxonToStd resolved against the merged module")
+	let cls = try calleeResultClasses.get(callee) otherwise 'runtimeChunk'
+		return runtimeChunkFallbackClass(callee, context: "calleeResultClass")
+	end 'runtimeChunk'
+	return cls
 end 'calleeResultClass'

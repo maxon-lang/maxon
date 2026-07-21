@@ -1,0 +1,48 @@
+// Test: async-scheduler.spawn-immediately-awaited
+
+function answer() returns int
+	return 42
+end 'answer'
+
+function main() returns ExitCode
+	let r = await async answer()
+	return r as ExitCode
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+  __gt_current_gt@24 = i64 0
+  __gt_run_queue_head@32 = i64 0
+  __gt_run_queue_tail@40 = i64 0
+  __gt_init_done@48 = i64 0
+}
+
+func @answer {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 42
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 48
+    x64.callDirect __slab_alloc
+    x64.leaRegFunc rcx, [rip + answer]
+    x64.movRegReg rdx, r8
+    x64.callDirect __gt_spawn
+    x64.movRegReg rcx, r8
+    x64.callDirect __gt_await
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

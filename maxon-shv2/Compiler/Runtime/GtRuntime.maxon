@@ -1,0 +1,399 @@
+// Runtime/GtRuntime.maxon — the emitted GREEN-THREAD scheduler runtime (Workstream R3, slice P1.5-B1a).
+//
+// ⭐ SINGLE-M COOPERATIVE. One OS thread runs everything; a `.data` global holds the currently-running
+// GT and a single global FIFO run queue holds the ready ones. There are NO worker threads, NO
+// work-stealing, NO per-P sharding, NO atomics and NO TLS — every one of those is a LATER slice (B1b
+// multi-M). Porting v1's GMP scheduler here would be porting its cost curve (and its lock/TLS
+// machinery) into a runtime that has exactly one thread; v1 is DEBUGGED, not FAST, and none of that
+// machinery has a consumer at this rung. So this is v1's KNOWLEDGE — the GT/P struct offsets, the
+// context-switch frame shape, the await/complete protocol — with v1's multi-M apparatus left out.
+//
+// THE SPLIT (see PLAN.md's R-box + how shv2 already ships `mrt_start` alongside MmRuntime):
+//   HAND-ASSEMBLED raw bytes (X64GtRuntime.maxon) — `__gt_context_switch` and `__gt_trampoline` ONLY.
+//     rsp/rbp manipulation, pushing/popping physical callee-saved registers, and `ret`-into-a-fresh-frame
+//     are unrepresentable in Std, so they are bytes. Neither touches a `.data` global (see below).
+//   BUILDER-BUILT `StdModule` (here) — `__gt_init`/`__gt_spawn`/`__gt_enqueue`/`__gt_dequeue`/`__gt_await`.
+//     Ordinary loads, stores, arithmetic, compares, branches and calls, so they get register allocation,
+//     the frame layout and the leak-safe backend for free — exactly MmRuntime's reasoning one tier up.
+//
+// ⭐ WHY THE HAND CHUNKS NEED NO `.data`. `__gt_current_gt` is managed ENTIRELY by the builder-built
+// drivers: `__gt_init` seeds it to GT0 (the adopted main thread), and `__gt_await` sets it to the GT it
+// switches INTO and back to itself on resume — the only two places a switch is driven. The context
+// switch passes the `to` GT through in rdx (which it never modifies), so `__gt_trampoline` reads its own
+// GT from rdx rather than from a global; and the trampoline's completion switch always targets a waiter
+// the driver set, so it needs no fallback global either. That keeps both hand chunks pure register/stack
+// code — the same shape as the `mrt_*` panic runtime — with no `.data` relocation machinery to add.
+//
+// ⚠ SCALAR ONLY (B1a). An async call's arguments and its awaited result are integer/bool (GPR) values;
+// the parser REJECTS a managed (String/struct) or float async arg/result (E2015) rather than leak or
+// miscompile — the trampoline moves the result through R8 and the args through the GPR arg registers, so
+// a float (XMM) or a managed pointer would need a channel B1a does not build. Managed async is B1c.
+//
+// ⚠ NO MORESTACK. Each GT gets a FIXED 1 MiB `osAllocPages` (VirtualAlloc MEM_COMMIT, demand-paged so the
+// unused pages cost nothing) stack, big enough for any B1a coroutine. The relocating-morestack that grows
+// a stack on a guard fault is an isolated later slice (B1a′); frame pointers are already on every function
+// for it, so deferring it costs nothing already spent. The GT struct + stack + arg buffer are
+// `__slab_alloc`'d / `osAllocPages`'d — INVISIBLE to the `__mm_alloc_count` leak gate — so an un-awaited
+// `async f()` (which never runs) reclaims nothing yet but cannot trip the leak gate.
+
+// --- GreenThread struct offsets ---
+// A SMALLER struct than the authoritative 0xD8 GtLayout (which carries the multi-M / fault-diagnostic
+// fields B1a does not build), but the offsets it DOES use are byte-identical to that layout
+// (Arm64MacosGreenThread.maxon:83-92), so the B1a′/B1b ports graft on without moving a field.
+// The seven offsets the hand-assembled chunks (X64GtRuntime) read/write are EXPORTED so the byte code and
+// this builder name one struct layout — the offsets are a contract the two sides share, not a fact each
+// restates. `GtOffStackBase`/`GtOffStackSize`/`GtOffNext` are written only from Std here, so they stay local.
+export let GtOffSp = 0x00  // saved stack pointer at the context-switch point
+export let GtOffFp = 0x08  // saved frame pointer (rbp) at the context-switch point
+export let GtOffStatus = 0x10  // GtStatus* below
+let GtOffStackBase = 0x18  // low address of the osAllocPages'd stack (0 for GT0, which uses the OS stack)
+let GtOffStackSize = 0x20
+export let GtOffResult = 0x28  // the R8 return value, captured by the trampoline when the GT completes
+export let GtOffWaiter = 0x30  // the GT to context-switch back to when this GT completes (set by the driver)
+let GtOffNext = 0x38  // run-queue FIFO chain
+export let GtOffFuncPtr = 0x40  // the async function's address
+export let GtOffArgBuf = 0x48  // the __slab_alloc'd argument buffer (MaxAsyncArgs i64 slots)
+export let GtStructSize = 0x50  // 80 bytes — must be a multiple of 8 (whole-word fields)
+
+// --- GT status ---
+// Only `ready` (the slab-zeroed initial state) and `completed` (set by the trampoline, read by
+// `__gt_await`) are load-bearing in B1a; `running`/`waiting` are declared for parity with the reference
+// and are not written, because nothing reads them here.
+let GtStatusReady = 0
+export let GtStatusCompleted = 2
+
+// The green-thread stack: a fixed 1 MiB region (see the header note on morestack).
+export let GtStackSize = 0x100000
+
+// The saved-register frame `__gt_context_switch` builds on a GT stack: five callee-saved GPRs
+// (rbx, r12, r13, r14, r15 — shv2's callee-saved set, `RegisterAllocator.calleeSavedMask`) plus the
+// return-address slot = 6 words = 48 bytes. `__gt_spawn` lays a fresh such frame whose TOP word is
+// `&__gt_trampoline`, so the first switch-in's final `ret` enters the trampoline. It MUST byte-match the
+// context switch's push/pop order — a mismatch is a wild `ret` — which is why the count lives here, read
+// by both the frame layout below and (implicitly) the hand-assembled switch.
+let GtSwitchFramePushBytes = 40  // 5 callee-saved GPR words
+export let GtInitialFrameBytes = 48  // + the return-address word
+
+// The argument buffer holds MaxAsyncArgs i64 slots. The trampoline loads ALL of them into the GPR
+// argument registers unconditionally (a callee reads only the slots it declares; the rest are the
+// slab's zeros in unread registers), so there is no arg COUNT to carry and the trampoline needs no
+// count-guarded loads. MaxAsyncArgs equals the parser's parameter cap.
+export let MaxAsyncArgs = 6
+// One argument buffer slot per argument, i64-wide. The stride the lowering STORES at, the trampoline LOADS
+// at, and `ArgBufBytes` sizes by — one fact, so the three cannot drift.
+export let GtArgSlotBytes = 8
+export let ArgBufBytes = MaxAsyncArgs * GtArgSlotBytes
+
+// --- Runtime function names ---
+export let GtContextSwitchName = b"__gt_context_switch"
+export let GtTrampolineName = b"__gt_trampoline"
+export let GtInitName = b"__gt_init"
+export let GtSpawnName = b"__gt_spawn"
+export let GtEnqueueName = b"__gt_enqueue"
+export let GtDequeueName = b"__gt_dequeue"
+export let GtAwaitName = b"__gt_await"
+
+// --- `.data` globals (all i64, zero-initialized) ---
+// The zero image IS the initial state: no current GT, an empty run queue, init not yet run — exactly as
+// MmRuntime's zeroed slab cursor means "no arena yet". So there is nothing to run before `main`.
+let GtCurrentGtLabel = b"__gt_current_gt"  // the running GT; drivers own it (see the header)
+let GtRunQueueHeadLabel = b"__gt_run_queue_head"
+let GtRunQueueTailLabel = b"__gt_run_queue_tail"
+let GtInitDoneLabel = b"__gt_init_done"  // idempotency guard for __gt_init
+
+// The prefix every GT runtime entry point shares — the "does this program spawn a green thread?" test.
+let GtRuntimeCallPrefix = b"__gt_"
+
+// ⭐ **DOES THIS CALLEE REACH THE GT SCHEDULER?** The `__gt_`-only test that decides whether the program
+// carries the scheduler runtime + its `.data` globals + the two hand-assembled chunks. Deliberately
+// narrower than MmRuntime's `isRuntimeCallee`: a `__gt_*` call implies the whole scheduler (spawn enqueues,
+// await drives, both context-switch), and it also implies the HEAP (spawn `__slab_alloc`s the GT struct and
+// the arg buffer), which is why `scanRuntimeUsage` turns on `usesHeap` alongside `usesGt`.
+export function isGtRuntimeCallee(callee ByteArray) returns bool
+	return bytesStartWith(callee, prefix: GtRuntimeCallPrefix)
+end 'isGtRuntimeCallee'
+
+// The GT runtime's `.data` slots, appended to the user's globals before `layOut` orders them — ordinary
+// i64 slots in every respect, exactly like MmRuntime's `runtimeGlobals()`.
+export function gtRuntimeGlobals() returns DataSectionEntryArray
+	var out = DataSectionEntryArray.create()
+	out.push(DataSectionEntry.create(String.from(GtCurrentGtLabel), valueType: StdType.i64, value: 0))
+	out.push(DataSectionEntry.create(String.from(GtRunQueueHeadLabel), valueType: StdType.i64, value: 0))
+	out.push(DataSectionEntry.create(String.from(GtRunQueueTailLabel), valueType: StdType.i64, value: 0))
+	out.push(DataSectionEntry.create(String.from(GtInitDoneLabel), valueType: StdType.i64, value: 0))
+	return out
+end 'gtRuntimeGlobals'
+
+// Install the GT scheduler into the lowered Std module. Called only when `moduleUsesGt` held. The two
+// hand-assembled chunks (`__gt_context_switch`, `__gt_trampoline`) are appended separately at the Target
+// tier (X64GtRuntime.appendX64GtRuntimeChunks) — they are bytes, not Std ops.
+export function installGtRuntime(module StdModule)
+	buildGtInit(module)
+	buildGtSpawn(module)
+	buildGtEnqueue(module)
+	buildGtDequeue(module)
+	buildGtAwait(module)
+end 'installGtRuntime'
+
+// A two-argument `ValueIdArray` — the shape `__gt_spawn(funcPtr, argBuf)` and `__gt_context_switch(from, to)`
+// share. MmRuntime's `argsOf` is the one-argument twin; the zero-argument call (`__gt_init`, `__gt_dequeue`)
+// passes `ValueIdArray.create()` directly.
+function args2(first ValueId, second ValueId) returns ValueIdArray
+	var args = ValueIdArray.create()
+	args.push(first)
+	args.push(second)
+	return args
+end 'args2'
+
+// `__gt_init()` — one-time scheduler init, idempotent via `__gt_init_done`. Allocates GT0 (the struct that
+// will hold the MAIN thread's execution context: the first `__gt_await`'s `__gt_context_switch(GT0, g)`
+// saves main's real rsp/rbp into GT0, so GT0 IS main from then on) and publishes it as the current GT.
+// GT0 has stackBase 0 — it runs on the real OS stack and is never freed.
+function buildGtInit(module StdModule)
+	var func = IrFunction.createFromStd(GtInitName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var ids = ValueMinter.create(0)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var doInit = module.addBlock(func, label: b"doinit")
+	var doneBlock = module.addBlock(func, label: b"done")
+
+	let initDoneAddr = ids.mint()
+	module.appendOp(entry, op: StdOp.globalAddr(initDoneAddr, label: GtInitDoneLabel))
+	let initDone = ids.mint()
+	module.appendOp(entry, op: StdOp.loadIndirect(initDone, addrId: initDoneAddr, offset: 0, valueType: StdType.i64))
+	let zeroConst = ids.mint()
+	module.appendOp(entry, op: StdOp.const(zeroConst, value: 0, valueType: StdType.i64))
+	let already = ids.mint()
+	module.appendOp(entry, op: StdOp.cmp(already, lhs: initDone, rhs: zeroConst, pred: StdCmpPred.ne, operandType: StdType.i64))
+	module.setTerminator(entry, op: StdOp.condBranch(already, thenBlockId: doneBlock.id, elseBlockId: doInit.id))
+
+	// GT0 = __slab_alloc(GtStructSize). Slab-zeroed, so status is `ready` and every pointer field is null;
+	// GT0 needs no stack or initial frame (it is already running as main).
+	let sizeConst = ids.mint()
+	module.appendOp(doInit, op: StdOp.const(sizeConst, value: GtStructSize, valueType: StdType.i64))
+	let gt0 = ids.mint()
+	module.appendOp(doInit, op: StdOp.call(gt0, callee: SlabAllocName, args: argsOf(sizeConst)))
+	// __gt_current_gt = GT0.
+	let curAddr = ids.mint()
+	module.appendOp(doInit, op: StdOp.globalAddr(curAddr, label: GtCurrentGtLabel))
+	module.appendOp(doInit, op: StdOp.storeIndirect(curAddr, offset: 0, valueId: gt0, valueType: StdType.i64))
+	// __gt_init_done = 1.
+	let oneConst = ids.mint()
+	module.appendOp(doInit, op: StdOp.const(oneConst, value: 1, valueType: StdType.i64))
+	module.appendOp(doInit, op: StdOp.storeIndirect(initDoneAddr, offset: 0, valueId: oneConst, valueType: StdType.i64))
+	module.setTerminator(doInit, op: StdOp.branch(doneBlock.id))
+
+	module.setTerminator(doneBlock, op: StdOp.retVoid)
+	module.functions.push(func)
+end 'buildGtInit'
+
+// `__gt_spawn(funcPtr, argBuf) -> gt` — create a ready green thread and enqueue it. Allocates the GT struct
+// and its stack, lays the initial context-switch frame so the first switch-in `ret`s into the trampoline,
+// records the function + arg buffer, and enqueues the GT. Returns the GT pointer as the promise handle.
+//
+// It does NOT run the GT — a spawned GT runs only when a driver (`__gt_await`) dequeues and switches into
+// it. `argCount` is not a parameter: the arg buffer is a fixed MaxAsyncArgs slots and the trampoline loads
+// all of them (see the header).
+function buildGtSpawn(module StdModule)
+	var func = IrFunction.createFromStd(GtSpawnName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry")
+	emitParams(module, block: entry, count: 2)
+	let funcPtr = 0 as ValueId
+	let argBuf = 1 as ValueId
+
+	// Lazy one-time scheduler init. A void call still mints an (unread) result id, as `__mm_decref`'s
+	// `__mm_free` call does.
+	let initResult = ids.mint()
+	module.appendOp(entry, op: StdOp.call(initResult, callee: GtInitName, args: ValueIdArray.create()))
+
+	// gt = __slab_alloc(GtStructSize) — zeroed, so status=ready, waiter/next/result=0.
+	let structSize = ids.mint()
+	module.appendOp(entry, op: StdOp.const(structSize, value: GtStructSize, valueType: StdType.i64))
+	let gt = ids.mint()
+	module.appendOp(entry, op: StdOp.call(gt, callee: SlabAllocName, args: argsOf(structSize)))
+
+	// stackBase = osAllocPages(GtStackSize) — a fresh 1 MiB stack, zero-filled by MEM_COMMIT.
+	let stackSizeVal = ids.mint()
+	module.appendOp(entry, op: StdOp.const(stackSizeVal, value: GtStackSize, valueType: StdType.i64))
+	let stackBase = ids.mint()
+	module.appendOp(entry, op: StdOp.osAllocPages(stackBase, sizeId: stackSizeVal))
+
+	// Record the fields the trampoline and completion read. status/waiter/next/result/fp are already the
+	// zeros the slab guarantees, so only these four are written.
+	module.appendOp(entry, op: StdOp.storeIndirect(gt, offset: GtOffStackBase, valueId: stackBase, valueType: StdType.i64))
+	module.appendOp(entry, op: StdOp.storeIndirect(gt, offset: GtOffStackSize, valueId: stackSizeVal, valueType: StdType.i64))
+	module.appendOp(entry, op: StdOp.storeIndirect(gt, offset: GtOffFuncPtr, valueId: funcPtr, valueType: StdType.i64))
+	module.appendOp(entry, op: StdOp.storeIndirect(gt, offset: GtOffArgBuf, valueId: argBuf, valueType: StdType.i64))
+
+	// Lay the initial context-switch frame at the TOP of the stack. stackTop = stackBase + GtStackSize.
+	let stackTop = ids.mint()
+	module.appendOp(entry, op: StdOp.binOp(stackTop, lhs: stackBase, rhs: stackSizeVal, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	// [stackTop - 8] = &__gt_trampoline (the return address the first `ret` pops). The five callee-saved
+	// slots below it ([stackTop-48 .. stackTop-8)) are already the slab/MEM_COMMIT zeros the switch pops.
+	let eightConst = ids.mint()
+	module.appendOp(entry, op: StdOp.const(eightConst, value: 8, valueType: StdType.i64))
+	let retSlotAddr = ids.mint()
+	module.appendOp(entry, op: StdOp.binOp(retSlotAddr, lhs: stackTop, rhs: eightConst, opcode: StdBinOpcode.sub, operandType: StdType.i64))
+	let trampAddr = ids.mint()
+	module.appendOp(entry, op: StdOp.funcAddr(trampAddr, funcName: GtTrampolineName))
+	module.appendOp(entry, op: StdOp.storeIndirect(retSlotAddr, offset: 0, valueId: trampAddr, valueType: StdType.i64))
+	// gt.sp = stackTop - GtInitialFrameBytes (points at the lowest saved-register slot); gt.fp is 0 (slab).
+	let frameConst = ids.mint()
+	module.appendOp(entry, op: StdOp.const(frameConst, value: GtInitialFrameBytes, valueType: StdType.i64))
+	let spVal = ids.mint()
+	module.appendOp(entry, op: StdOp.binOp(spVal, lhs: stackTop, rhs: frameConst, opcode: StdBinOpcode.sub, operandType: StdType.i64))
+	module.appendOp(entry, op: StdOp.storeIndirect(gt, offset: GtOffSp, valueId: spVal, valueType: StdType.i64))
+
+	// Enqueue as ready and return the GT as the promise handle.
+	let enqResult = ids.mint()
+	module.appendOp(entry, op: StdOp.call(enqResult, callee: GtEnqueueName, args: argsOf(gt)))
+	module.setTerminator(entry, op: StdOp.ret(gt))
+
+	module.functions.push(func)
+end 'buildGtSpawn'
+
+// `__gt_enqueue(g)` — append `g` to the tail of the global FIFO run queue.
+function buildGtEnqueue(module StdModule)
+	var func = IrFunction.createFromStd(GtEnqueueName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var appendBlock = module.addBlock(func, label: b"append")
+	var emptyBlock = module.addBlock(func, label: b"empty")
+
+	emitParams(module, block: entry, count: 1)
+	let g = 0 as ValueId
+
+	// g.next = 0.
+	let zeroConst = ids.mint()
+	module.appendOp(entry, op: StdOp.const(zeroConst, value: 0, valueType: StdType.i64))
+	module.appendOp(entry, op: StdOp.storeIndirect(g, offset: GtOffNext, valueId: zeroConst, valueType: StdType.i64))
+
+	let tailAddr = ids.mint()
+	module.appendOp(entry, op: StdOp.globalAddr(tailAddr, label: GtRunQueueTailLabel))
+	let tail = ids.mint()
+	module.appendOp(entry, op: StdOp.loadIndirect(tail, addrId: tailAddr, offset: 0, valueType: StdType.i64))
+	let tailNull = ids.mint()
+	module.appendOp(entry, op: StdOp.cmp(tailNull, lhs: tail, rhs: zeroConst, pred: StdCmpPred.eq, operandType: StdType.i64))
+	module.setTerminator(entry, op: StdOp.condBranch(tailNull, thenBlockId: emptyBlock.id, elseBlockId: appendBlock.id))
+
+	// Non-empty: tail.next = g; tail = g.
+	module.appendOp(appendBlock, op: StdOp.storeIndirect(tail, offset: GtOffNext, valueId: g, valueType: StdType.i64))
+	module.appendOp(appendBlock, op: StdOp.storeIndirect(tailAddr, offset: 0, valueId: g, valueType: StdType.i64))
+	module.setTerminator(appendBlock, op: StdOp.retVoid)
+
+	// Empty: head = tail = g.
+	let headAddr = ids.mint()
+	module.appendOp(emptyBlock, op: StdOp.globalAddr(headAddr, label: GtRunQueueHeadLabel))
+	module.appendOp(emptyBlock, op: StdOp.storeIndirect(headAddr, offset: 0, valueId: g, valueType: StdType.i64))
+	module.appendOp(emptyBlock, op: StdOp.storeIndirect(tailAddr, offset: 0, valueId: g, valueType: StdType.i64))
+	module.setTerminator(emptyBlock, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildGtEnqueue'
+
+// `__gt_dequeue() -> g` — pop the head green thread off the global FIFO run queue, or 0 if empty.
+function buildGtDequeue(module StdModule)
+	var func = IrFunction.createFromStd(GtDequeueName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var ids = ValueMinter.create(0)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var popBlock = module.addBlock(func, label: b"pop")
+	var clearTail = module.addBlock(func, label: b"cleartail")
+	var doneBlock = module.addBlock(func, label: b"done")
+
+	let headAddr = ids.mint()
+	module.appendOp(entry, op: StdOp.globalAddr(headAddr, label: GtRunQueueHeadLabel))
+	let head = ids.mint()
+	module.appendOp(entry, op: StdOp.loadIndirect(head, addrId: headAddr, offset: 0, valueType: StdType.i64))
+	let zeroConst = ids.mint()
+	module.appendOp(entry, op: StdOp.const(zeroConst, value: 0, valueType: StdType.i64))
+	let headNull = ids.mint()
+	module.appendOp(entry, op: StdOp.cmp(headNull, lhs: head, rhs: zeroConst, pred: StdCmpPred.eq, operandType: StdType.i64))
+	// head is minted in entry (dominates every block), so `done` returns it in both cases: 0 when empty,
+	// the popped GT otherwise.
+	module.setTerminator(entry, op: StdOp.condBranch(headNull, thenBlockId: doneBlock.id, elseBlockId: popBlock.id))
+
+	// head = head.next; if the new head is null the queue is empty → clear the tail too.
+	let next = ids.mint()
+	module.appendOp(popBlock, op: StdOp.loadIndirect(next, addrId: head, offset: GtOffNext, valueType: StdType.i64))
+	module.appendOp(popBlock, op: StdOp.storeIndirect(headAddr, offset: 0, valueId: next, valueType: StdType.i64))
+	let nextNull = ids.mint()
+	module.appendOp(popBlock, op: StdOp.cmp(nextNull, lhs: next, rhs: zeroConst, pred: StdCmpPred.eq, operandType: StdType.i64))
+	module.setTerminator(popBlock, op: StdOp.condBranch(nextNull, thenBlockId: clearTail.id, elseBlockId: doneBlock.id))
+
+	let tailAddr = ids.mint()
+	module.appendOp(clearTail, op: StdOp.globalAddr(tailAddr, label: GtRunQueueTailLabel))
+	module.appendOp(clearTail, op: StdOp.storeIndirect(tailAddr, offset: 0, valueId: zeroConst, valueType: StdType.i64))
+	module.setTerminator(clearTail, op: StdOp.branch(doneBlock.id))
+
+	module.setTerminator(doneBlock, op: StdOp.ret(head))
+	module.functions.push(func)
+end 'buildGtDequeue'
+
+// `__gt_await(promise) -> result` — THE COOPERATIVE SCHEDULER DRIVE, and the only place a switch is
+// driven. `self` = the running GT (`__gt_current_gt`). While the promise has not completed, dequeue a
+// ready GT, set it to return to `self`, publish it as current, and switch into it; it runs to completion
+// (B1a async functions never yield mid-body — E3073 is deferred) and its trampoline switches back to
+// `self`. When the promise's own GT is the one that ran, its status becomes `completed` and we extract.
+//
+// Because a spawned GT is enqueued at spawn and cannot vanish, the awaited promise is always reachable by
+// draining the queue, so the loop terminates. A `__gt_dequeue` miss (empty queue, promise not completed)
+// cannot arise in B1a's cooperative model; it bails to `extract` rather than spin, so a future deadlock is
+// a wrong answer to diagnose (B2's real park/deadlock detection) rather than a hang.
+function buildGtAwait(module StdModule)
+	var func = IrFunction.createFromStd(GtAwaitName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var loopHdr = module.addBlock(func, label: b"loophdr")
+	var drive = module.addBlock(func, label: b"drive")
+	var run = module.addBlock(func, label: b"run")
+	var extract = module.addBlock(func, label: b"extract")
+
+	emitParams(module, block: entry, count: 1)
+	let promise = 0 as ValueId
+
+	// selfGt = __gt_current_gt (the GT that called await — GT0 for main, or a nested async GT).
+	let curAddr = ids.mint()
+	module.appendOp(entry, op: StdOp.globalAddr(curAddr, label: GtCurrentGtLabel))
+	let selfGt = ids.mint()
+	module.appendOp(entry, op: StdOp.loadIndirect(selfGt, addrId: curAddr, offset: 0, valueType: StdType.i64))
+	module.setTerminator(entry, op: StdOp.branch(loopHdr.id))
+
+	// loophdr: if promise.status == completed → extract, else → drive.
+	let status = ids.mint()
+	module.appendOp(loopHdr, op: StdOp.loadIndirect(status, addrId: promise, offset: GtOffStatus, valueType: StdType.i64))
+	let completedConst = ids.mint()
+	module.appendOp(loopHdr, op: StdOp.const(completedConst, value: GtStatusCompleted, valueType: StdType.i64))
+	let isDone = ids.mint()
+	module.appendOp(loopHdr, op: StdOp.cmp(isDone, lhs: status, rhs: completedConst, pred: StdCmpPred.eq, operandType: StdType.i64))
+	module.setTerminator(loopHdr, op: StdOp.condBranch(isDone, thenBlockId: extract.id, elseBlockId: drive.id))
+
+	// drive: g = __gt_dequeue(); if g == 0 → extract (unreachable in B1a), else → run.
+	let g = ids.mint()
+	module.appendOp(drive, op: StdOp.call(g, callee: GtDequeueName, args: ValueIdArray.create()))
+	let zeroConst = ids.mint()
+	module.appendOp(drive, op: StdOp.const(zeroConst, value: 0, valueType: StdType.i64))
+	let gNull = ids.mint()
+	module.appendOp(drive, op: StdOp.cmp(gNull, lhs: g, rhs: zeroConst, pred: StdCmpPred.eq, operandType: StdType.i64))
+	module.setTerminator(drive, op: StdOp.condBranch(gNull, thenBlockId: extract.id, elseBlockId: run.id))
+
+	// run: g.waiter = selfGt (so g's trampoline switches BACK to us); __gt_current_gt = g; switch into g;
+	// on resume, restore __gt_current_gt = selfGt and re-check the promise.
+	module.appendOp(run, op: StdOp.storeIndirect(g, offset: GtOffWaiter, valueId: selfGt, valueType: StdType.i64))
+	module.appendOp(run, op: StdOp.storeIndirect(curAddr, offset: 0, valueId: g, valueType: StdType.i64))
+	let switchResult = ids.mint()
+	module.appendOp(run, op: StdOp.call(switchResult, callee: GtContextSwitchName, args: args2(selfGt, second: g)))
+	module.appendOp(run, op: StdOp.storeIndirect(curAddr, offset: 0, valueId: selfGt, valueType: StdType.i64))
+	module.setTerminator(run, op: StdOp.branch(loopHdr.id))
+
+	// extract: result = promise.result.
+	let result = ids.mint()
+	module.appendOp(extract, op: StdOp.loadIndirect(result, addrId: promise, offset: GtOffResult, valueType: StdType.i64))
+	module.setTerminator(extract, op: StdOp.ret(result))
+
+	module.functions.push(func)
+end 'buildGtAwait'

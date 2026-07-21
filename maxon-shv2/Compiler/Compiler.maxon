@@ -178,6 +178,15 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 			declaredGlobals.push(entry)
 		end 'each'
 	end 'heapGlobals'
+	// The green-thread scheduler's `.data` slots (current GT, run-queue head/tail, init guard) — same
+	// pre-lowering timing and same reason as the heap slots: a `globalAddr` the backend resolves needs them
+	// laid out first. `usesGt` already implies `usesHeap` (spawn `__slab_alloc`s the GT struct), but the GT
+	// slots are its OWN, so they ride their own bit.
+	if usage.usesGt 'gtGlobals'
+		for entry in gtRuntimeGlobals() 'each'
+			declaredGlobals.push(entry)
+		end 'each'
+	end 'gtGlobals'
 	project.globalData.layOut(declaredGlobals)
 
 	var pipeline = PassPipeline.create(project, maxonModule: module)
@@ -195,6 +204,13 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	if usage.usesHeap 'installMm'
 		installMmRuntime(pipeline.stdModule)
 	end 'installMm'
+	// The green-thread scheduler (`__gt_init`/`__gt_spawn`/`__gt_enqueue`/`__gt_dequeue`/`__gt_await`),
+	// installed the same way — already-lowered Std, appended after the pipeline so it is never re-optimized.
+	// Its two hand-assembled chunks (`__gt_context_switch`/`__gt_trampoline`) are appended separately at the
+	// Target tier (BackendDispatch), because they are bytes rather than Std ops.
+	if usage.usesGt 'installGt'
+		installGtRuntime(pipeline.stdModule)
+	end 'installGt'
 	// The String runtime (`__print_string`/`__str_eq`) is installed the SAME way and for the same
 	// reason — already-lowered Std, appended after the pipeline so it is never re-optimized — but it is
 	// keyed on its OWN usage bits, not on `usesHeap`: a Wave-A literal is immortal rdata, so a

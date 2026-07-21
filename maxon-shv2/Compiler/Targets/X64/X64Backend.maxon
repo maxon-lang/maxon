@@ -1091,6 +1091,14 @@ export function encodeCallDirect(code ByteArray, callFixups CallFixupArray, targ
 	writeDword(code, value: 0)
 end 'encodeCallDirect'
 
+// `call r/m64` through a register — group-5 `/2`. The ONE home of the call-through-register
+// byte shape, shared by the `callReg` TargetOp arm (a `callIndirect`'s colored callee) and the
+// GT trampoline chunk, which calls the spawned function through a pointer held in a register.
+// REX.W is ignored for a near call in long mode, so `48 FF D0` decodes as `call rax`.
+export function encodeCallReg(code ByteArray, reg X64Register)
+	encodeModRmExtDirect(code, opcode: OpcodeCallIndirect, ext: Grp5ExtCall, rmField: reg)
+end 'encodeCallReg'
+
 // call [rip+disp32] through an IAT slot. The disp32 is left zero and an IAT
 // Relocation records its offset + slot; the PE writer patches it to the IAT
 // entry's RVA once section layout is fixed.
@@ -1272,7 +1280,7 @@ function emitTargetOp(op TargetOp, code ByteArray, callFixups CallFixupArray, ia
 		// `call rax` and REX.B still selects r8..r15 — the same reg-direct group-5 encoding `iatCall` uses
 		// in its RIP-relative form.
 		leaRegFunc(dest, funcName) then encodeLeaRegFuncAddr(code, callFixups: callFixups, dest: resolveGpr(dest), targetName: funcName)
-		callReg(reg) then encodeModRmExtDirect(code, opcode: OpcodeCallIndirect, ext: Grp5ExtCall, rmField: resolveGpr(reg))
+		callReg(reg) then encodeCallReg(code, reg: resolveGpr(reg))
 		// x64-linux: a raw `syscall`. The number is the op's immediate (`mov eax, number`); its arguments
 		// were pre-moved into rdi/rsi/rdx/r10/r8/r9 by the OS-primitive lowering, exactly as a call's are.
 		x64Syscall(number) then encodeX64Syscall(code, number: number)

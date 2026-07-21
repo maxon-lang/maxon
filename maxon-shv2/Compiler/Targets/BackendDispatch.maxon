@@ -143,6 +143,12 @@ function buildX64Backend(stdModule StdModule, target Target, globalData GlobalDa
 		linux then break 'panicRuntime'
 		macos to wasi then panic("buildX64Backend: augmentWithRuntime should have rejected {targetToString(target)} before the encode phase")
 	end 'panicRuntime'
+	// The two hand-assembled green-thread chunks (`__gt_context_switch`, `__gt_trampoline`) join only when
+	// the program spawns a green thread — asked of the MODULE (does it carry `__gt_spawn`?) rather than
+	// threaded down as a flag, exactly as the leak gate asks about `__mm_leak_check`.
+	if moduleHasFunction(targetModule, name: GtSpawnName) 'gtChunks'
+		appendX64GtRuntimeChunks(chunks)
+	end 'gtChunks'
 	recordPhase(project, phase: CompilePhase.encode, probe: encodeProbe)
 
 	let linkProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.link)

@@ -1,0 +1,53 @@
+// Test: async-scheduler.spawn-arg
+
+function sixtimes(x int) returns int
+	return x * 6
+end 'sixtimes'
+
+function main() returns ExitCode
+	let p = async sixtimes(7)
+	let r = await p
+	return r as ExitCode
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+  __gt_current_gt@24 = i64 0
+  __gt_run_queue_head@32 = i64 0
+  __gt_run_queue_tail@40 = i64 0
+  __gt_init_done@48 = i64 0
+}
+
+func @sixtimes {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.imulRegRegImm32 r8, rcx, 6
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegImm32 rbx, 7
+    x64.movRegImm32 rcx, 48
+    x64.callDirect __slab_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.leaRegFunc rcx, [rip + sixtimes]
+    x64.movRegReg rdx, r8
+    x64.callDirect __gt_spawn
+    x64.movRegReg rcx, r8
+    x64.callDirect __gt_await
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

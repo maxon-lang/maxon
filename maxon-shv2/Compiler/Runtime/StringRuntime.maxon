@@ -267,6 +267,11 @@ export typealias DestructorSet = Set with ByteArray
 
 export type RuntimeUsage
 	export var usesHeap as bool
+	// The program spawns a green thread (`async`/`await`). Drives `installGtRuntime` + the GT `.data`
+	// globals + the two hand-assembled backend chunks. Set alongside `usesHeap` (spawn `__slab_alloc`s the
+	// GT struct + arg buffer), from the `asyncCall`/`await` Maxon ops rather than a callee name — the async
+	// ops are their own op kind, and their `__gt_*` calls do not exist until lowering.
+	export var usesGt as bool
 	export var usesPrint as bool
 	export var usesStrEq as bool
 	export var usesStrCopy as bool
@@ -282,7 +287,7 @@ export type RuntimeUsage
 	export var neededDestructors as DestructorSet
 
 	static function create() returns RuntimeUsage
-		return Self{usesHeap: false, usesPrint: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesBoolToString: false, usesStrAppend: false, usesStrDecref: false, neededDestructors: DestructorSet.create()}
+		return Self{usesHeap: false, usesGt: false, usesPrint: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesBoolToString: false, usesStrAppend: false, usesStrDecref: false, neededDestructors: DestructorSet.create()}
 	end 'create'
 end 'RuntimeUsage'
 
@@ -311,8 +316,19 @@ function classifyRuntimeCall(op MaxonOp, usage RuntimeUsage)
 		// P1.5-A1: a `functionRef` is a `lea` and an `indirectCall` calls through a code POINTER — neither
 		// names a runtime callee (`__mm_*`/`__str_*`/`print`), so neither records any runtime usage.
 		functionRef to indirectCall then break 'op'
+		// P1.5-B1a: `async`/`await` carry the green-thread scheduler. Detected by OP KIND (their `__gt_*`
+		// calls do not exist until lowering), and imply the HEAP too — `__gt_spawn` `__slab_alloc`s the GT
+		// struct and the argument buffer.
+		asyncCall to await then recordGtUsage(usage)
 	end 'op'
 end 'classifyRuntimeCall'
+
+// An `async`/`await` op turns on both scheduler and heap: the scheduler runs the green threads, and the
+// heap floor supplies the `__slab_alloc` that `__gt_spawn` and the async arg-buffer spill need.
+function recordGtUsage(usage RuntimeUsage)
+	usage.usesGt = true
+	usage.usesHeap = true
+end 'recordGtUsage'
 
 function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 	if isRuntimeCallee(callee) 'heap'

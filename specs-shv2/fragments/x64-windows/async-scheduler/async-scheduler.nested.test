@@ -1,0 +1,73 @@
+// Test: async-scheduler.nested
+
+function leaf() returns int
+	return 20
+end 'leaf'
+
+function middle() returns int
+	let inner = async leaf()
+	let got = await inner
+	return got + 22
+end 'middle'
+
+function main() returns ExitCode
+	let p = async middle()
+	let r = await p
+	return r as ExitCode
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+  __gt_current_gt@24 = i64 0
+  __gt_run_queue_head@32 = i64 0
+  __gt_run_queue_tail@40 = i64 0
+  __gt_init_done@48 = i64 0
+}
+
+func @leaf {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 20
+    x64.popReg rbp
+    x64.ret
+}
+
+func @middle {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 48
+    x64.callDirect __slab_alloc
+    x64.leaRegFunc rcx, [rip + leaf]
+    x64.movRegReg rdx, r8
+    x64.callDirect __gt_spawn
+    x64.movRegReg rcx, r8
+    x64.callDirect __gt_await
+    x64.leaRegRegImm32 r8, r8, 22
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 48
+    x64.callDirect __slab_alloc
+    x64.leaRegFunc rcx, [rip + middle]
+    x64.movRegReg rdx, r8
+    x64.callDirect __gt_spawn
+    x64.movRegReg rcx, r8
+    x64.callDirect __gt_await
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

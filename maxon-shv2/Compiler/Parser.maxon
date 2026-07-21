@@ -1827,6 +1827,19 @@ export type Parser
 	// makes each query O(1); its one added bool per value is strictly linear and dwarfed by the four sibling
 	// columns already carried per value. Reset per function.
 	var valueOwnsHeap as BoolArray
+	// ⭐ **THE PROMISE MARK (P1.5-B1a)** — true iff value `v` is an `async` spawn's handle. A per-value bool
+	// column in the SAME lockstep as `valueOwnsHeap` (pushed `false` in `mintValue`/`recordValueType`, set by
+	// `markValuePromise` on the one value `emitAsyncCall` mints, read by `valueIsPromise`). The handle's TAG
+	// already carries its awaited scalar type (int/bool — a managed/float result is rejected before the handle
+	// is minted), so `await` reads the result type off `tagOf` and this bit only distinguishes an awaitable
+	// handle from a bare int of the same tag. Reset per function and SWAPPED across a closure body's context.
+	//
+	// ⚠ A DENSE COLUMN, not a sparse Set, EVEN THOUGH a promise is RARE — measured, not assumed: a per-function
+	// empty Set's initial hash table costs about as much as the dense bit does across the whole corpus (a sparse
+	// Set MEASURED +7,364 allocs / +292K bytes WORSE at scale-rung5), because both allocate one object per
+	// function and most functions are small. So the column is simpler (mirrors `valueOwnsHeap`), marginally
+	// cheaper, and honest — the sparse-is-cheaper premise did not survive the instrument.
+	var valuePromiseMarks as BoolArray
 	// ⭐ **THE CAPTURING-CLOSURE MARK AND ITS ENVIRONMENT (P1.5-A2b), carried ON THE VALUE — not in a
 	// mutable sidetable.** Two per-value columns in the same lockstep as `valueOwnsHeap`/`valueConstKnown`:
 	// `valueIsCapturingClosure[v]` is true iff value `v` is a closure that CAPTURES; `valueClosureEnv[v]` is
@@ -2003,6 +2016,7 @@ export type Parser
 			valueConsts: ParsedIntArray.create(),
 			valueConstKnown: BoolArray.create(),
 			valueOwnsHeap: BoolArray.create(),
+			valuePromiseMarks: BoolArray.create(),
 			valueIsCapturingClosure: BoolArray.create(),
 			valueClosureEnv: ValueIdArray.create(),
 			captureNames: ByteArrayArray.create(),
@@ -3620,6 +3634,7 @@ export type Parser
 		self.valueConsts = ParsedIntArray.create()
 		self.valueConstKnown = BoolArray.create()
 		self.valueOwnsHeap = BoolArray.create()
+		self.valuePromiseMarks = BoolArray.create()
 		self.valueIsCapturingClosure = BoolArray.create()
 		self.valueClosureEnv = ValueIdArray.create()
 		// P1.9 range-check accumulators, reset per function (see the field header). The return-alias
@@ -5255,7 +5270,7 @@ export type Parser
 			// Extended to `indirectCall` (P1.5-A1): only a DIRECT `call` can be `try`ed. An `indirectCall`
 			// is never throwing — a throwing function cannot be a function value (E3101) — and a
 			// `functionRef` is not a call at all, so both reject `try` exactly as the other non-call ops do.
-			literal to indirectCall gives try self.rejectTryTarget(tryTok)
+			literal to await gives try self.rejectTryTarget(tryTok)
 		end 'rewrite'
 	end 'rewriteLastCallToTryCall'
 
@@ -5923,6 +5938,16 @@ export type Parser
 	function markValueOwnsHeap(value ValueId)
 		try self.valueOwnsHeap.set(value, value: true) otherwise panic("markValueOwnsHeap: v{value} has no owned-heap slot — every SSA value must be minted through mintValue, which seeds the column")
 	end 'markValueOwnsHeap'
+
+	// Mark `value` as an `async` spawn's promise handle (P1.5-B1a), and read that mark back. `await` uses the
+	// read to reject a non-promise operand and to know it may unwrap the handle to its awaited scalar.
+	function markValuePromise(value ValueId)
+		try self.valuePromiseMarks.set(value, value: true) otherwise panic("markValuePromise: v{value} has no promise slot — every SSA value must be minted through mintValue, which seeds the column")
+	end 'markValuePromise'
+
+	function valueIsPromise(value ValueId) returns bool
+		return try self.valuePromiseMarks.get(value) otherwise panic("valueIsPromise: v{value} has no promise slot — every SSA value must be minted through mintValue, which seeds the column")
+	end 'valueIsPromise'
 
 	// ⭐ **THE ONE DEFINITION OF "OWNED": does `value` own a droppable heap allocation it must transfer or
 	// drop?** The single predicate the DECLARATION (`parseBinding`), the REASSIGNMENT
@@ -8531,6 +8556,9 @@ export type Parser
 		// on the one value an interpolation allocates. The slot must exist before that call, exactly as
 		// the constant slot must exist before `recordConst`.
 		self.valueOwnsHeap.push(false)
+		// The promise mark rides the same lockstep, seeded NOT-a-promise; set by `markValuePromise` on the
+		// one value an `async` spawn produces.
+		self.valuePromiseMarks.push(false)
 		// The capturing-closure mark + its env ride the same lockstep, seeded NOT-a-capture / no-env; set by
 		// `parseClosureExpression` on the one value a capturing closure produces (see the field header).
 		self.valueIsCapturingClosure.push(false)
@@ -8567,6 +8595,8 @@ export type Parser
 		// A parameter is never a fresh interpolation result, so it starts NOT owned — but its slot must
 		// exist so the column stays indexable by every ValueId, params included.
 		self.valueOwnsHeap.push(false)
+		// A parameter is never an async spawn's handle; the slot must exist so the column stays indexable.
+		self.valuePromiseMarks.push(false)
 		// A parameter is never a capturing closure; the slots must exist so the columns stay indexable by
 		// every ValueId, params (including a lifted closure's trailing `__env`) included.
 		self.valueIsCapturingClosure.push(false)
@@ -9311,6 +9341,20 @@ export type Parser
 				nonIntegralOperand then throw ParseError.nonIntegralOperands(opTok.kind.rawValue, operand: typeTagName(operandTag), line: opTok.line, column: opTok.column)
 			end 'which'
 		end 'not'
+
+		// `async <call>` SPAWNS a green thread and yields a Promise (P1.5-B1a); `await <expr>` blocks on one.
+		// Both are prefix operators, alongside `-`/`not`. `async` must be followed by a free call; `await`
+		// takes a unary operand (so `await async f()` — spawn then immediately await — parses).
+		if self.at(TokenKind.async) 'async'
+			try self.consume(TokenKind.async)
+			return try self.parseAsyncCall(func)
+		end 'async'
+
+		if self.at(TokenKind.await) 'await'
+			let awaitTok = try self.consume(TokenKind.await)
+			let promise = try self.parseUnary(func)
+			return try self.emitAwait(promise, awaitTok: awaitTok)
+		end 'await'
 
 		return try self.parsePostfix(func, value: try self.parsePrimary(func))
 	end 'parseUnary'
@@ -12040,6 +12084,7 @@ export type Parser
 		let savedValueConsts = self.valueConsts
 		let savedValueConstKnown = self.valueConstKnown
 		let savedValueOwnsHeap = self.valueOwnsHeap
+		let savedValuePromiseMarks = self.valuePromiseMarks
 		let savedOwnedBindings = self.ownedBindings
 		let savedPendingTempDrops = self.pendingTempDrops
 		// The last-field-read record is ONE fact spread over FOUR fields, and ALL FOUR are saved/restored as
@@ -12095,6 +12140,7 @@ export type Parser
 		self.valueConsts = ParsedIntArray.create()
 		self.valueConstKnown = BoolArray.create()
 		self.valueOwnsHeap = BoolArray.create()
+		self.valuePromiseMarks = BoolArray.create()
 		self.valueIsCapturingClosure = BoolArray.create()
 		self.valueClosureEnv = ValueIdArray.create()
 		self.captureNames = ByteArrayArray.create()
@@ -12197,6 +12243,7 @@ export type Parser
 		self.valueConsts = savedValueConsts
 		self.valueConstKnown = savedValueConstKnown
 		self.valueOwnsHeap = savedValueOwnsHeap
+		self.valuePromiseMarks = savedValuePromiseMarks
 		self.ownedBindings = savedOwnedBindings
 		self.pendingTempDrops = savedPendingTempDrops
 		// Restore the whole last-field-read record, not just its `Valid` flag — see the save block: the
@@ -12985,6 +13032,84 @@ export type Parser
 		self.artifact.emitOp(self.currentBlock, op: MaxonOp.call(result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges), range: SourceRange.between(anchor, last: rparenTok))
 		return result
 	end 'emitCall'
+
+	// ⭐ **`async f(args…)` — SPAWN A GREEN THREAD** (P1.5-B1a). The cursor sits just past `async`, on the
+	// callee name. B1a supports a FREE call only (`async f(…)`), so the callee name is followed directly by
+	// `(` — a qualified `async Type.method(…)` fails at the `(` consume and is refused, which is the intended
+	// B1a boundary. The argument grammar and `name:` label rules are `parseCallArgs`, shared with an ordinary
+	// call, so a labelled async argument slots exactly as a plain one does.
+	function parseAsyncCall(func IrFunction) returns ValueId throws ParseError
+		if not self.at(TokenKind.identifier) 'notCall'
+			let tok = self.current()
+			throw ParseError.unsupported("`async` must be applied to a call — `async f(…)` (got '{tok.kind.rawValue}')", line: tok.line, column: tok.column)
+		end 'notCall'
+		let calleeTok = self.current()
+		try self.consume(TokenKind.identifier)
+		try self.consume(TokenKind.leftParen)
+
+		var args = ValueIdArray.create()
+		var argLabels = ByteArrayArray.create()
+		var argRanges = SourceRangeArray.create()
+		try self.parseCallArgs(func, args: args, argLabels: argLabels, argRanges: argRanges)
+		let rparenTok = try self.consume(TokenKind.rightParen)
+
+		return try self.emitAsyncCall(calleeTok.value, anchor: calleeTok, args: args, argLabels: argLabels, argRanges: argRanges, rparenTok: rparenTok)
+	end 'parseAsyncCall'
+
+	// Mint the Promise handle an `async` spawn defines and emit the `asyncCall` op. B1a is SCALAR ONLY: the
+	// trampoline passes arguments through the GPR arg registers and captures the result from R8, so a
+	// managed/float ARGUMENT or a managed/float/void RESULT is REFUSED here (E2015) rather than leaked or
+	// miscompiled. The callee's PARAMETER types are checked by SemanticCheck, which alone holds the resolved
+	// signature. The handle's TAG is its awaited scalar type — set here so `await` reads the result type off
+	// `tagOf` — and it is a GPR scalar (int/bool), so it owns no heap and enrols in no drop.
+	function emitAsyncCall(callee ByteArray, anchor Token, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, rparenTok Token) returns ValueId throws ParseError
+		for i in 0 upto args.count() 'eachArg'
+			let argValue = try args.get(i) otherwise panic("emitAsyncCall: args.get OOB at {i} — args are pushed in lockstep by parseCallArgs")
+			if not tagIsAsyncScalar(self.tagOf(argValue)) 'managedArg'
+				throw ParseError.unsupported("an `async` call argument must be a scalar (int/bool) — a managed (String/struct) or float argument travels in a register file the green-thread trampoline cannot fill at this rung (managed async is P1.5-B1c)", line: anchor.line, column: anchor.column)
+			end 'managedArg'
+		end 'eachArg'
+
+		let innerTag = try self.asyncResultTag(callee, anchor: anchor)
+		let result = self.mintValue(innerTag, nameId: UnnamedTypeId)
+		self.markValuePromise(result)
+		self.artifact.emitOp(self.currentBlock, op: MaxonOp.asyncCall(result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges), range: SourceRange.between(anchor, last: rparenTok))
+		return result
+	end 'emitAsyncCall'
+
+	// The awaited-result TAG for `async callee(…)` — the callee's declared return type, which must be a GPR
+	// scalar. `returnTypeOf` answers PRE-resolution, so a union/alias/struct return is `named`/`structRef`
+	// here and correctly refused. An UNDECLARED callee defers to SemanticCheck's E3004 (an integer placeholder
+	// keeps parsing going; the doomed program is rejected before lowering).
+	function asyncResultTag(callee ByteArray, anchor Token) returns ValueTypeTag throws ParseError
+		return match self.signatures.returnTypeOf(callee, into: self.artifact.typeNames) 'r'
+			declared(returnType) gives try self.requireAsyncResultTag(returnType, callee: callee, anchor: anchor)
+			undeclared gives ValueTypeTag.integer
+		end 'r'
+	end 'asyncResultTag'
+
+	function requireAsyncResultTag(returnType MaxonReturnType, callee ByteArray, anchor Token) returns ValueTypeTag throws ParseError
+		let innerTag = match returnType 'rt'
+			value(inner) gives maxonTypeTag(inner)
+			void gives ValueTypeTag.void
+		end 'rt'
+		if not tagIsAsyncScalar(innerTag) 'nonScalarResult'
+			throw ParseError.unsupported("`async {String.from(callee)}(…)` must return a scalar (int/bool) — the green-thread runtime captures the result through R8, so a managed (String/struct), float or void result has no channel to await at this rung (managed async is P1.5-B1c)", line: anchor.line, column: anchor.column)
+		end 'nonScalarResult'
+		return innerTag
+	end 'requireAsyncResultTag'
+
+	// ⭐ **`await p` — BLOCK ON A PROMISE** (P1.5-B1a). The operand must be an `async` spawn's handle (the
+	// promise mark, keyed on the VALUE), and the result is its awaited scalar — the handle's own tag, set at
+	// `emitAsyncCall` to the callee's return scalar. A GPR scalar, so the result owns no heap.
+	function emitAwait(promise ValueId, awaitTok Token) returns ValueId throws ParseError
+		if not self.valueIsPromise(promise) 'notPromise'
+			throw ParseError.unsupported("`await` applies to a Promise produced by an `async` call — the operand here is not an async spawn's result", line: awaitTok.line, column: awaitTok.column)
+		end 'notPromise'
+		let result = self.mintValue(self.tagOf(promise), nameId: self.valueNameId(promise))
+		self.artifact.emitOp(self.currentBlock, op: MaxonOp.await(result, promise: promise), range: SourceRange.ofToken(awaitTok))
+		return result
+	end 'emitAwait'
 
 	// ⭐ **TRANSFER OWNERSHIP OF EVERY CONSUMED ARGUMENT** (P1.4a wave 2). For a callee that consumes at
 	// least one parameter, slot each SOURCE argument to its parameter position (positional by index,
