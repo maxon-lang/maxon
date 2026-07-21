@@ -616,8 +616,7 @@ f64 2.5
 i8 1
 ```
 
-<!-- disabled-test: top-level-var-byte-ranged-type -->
-<!-- P1.9 `as` cast -->
+<!-- test: top-level-var-byte-ranged-type -->
 Module-level var with a byte-sized ranged type.
 ```maxon
 typealias SmallInt = int(0 to u8.max)

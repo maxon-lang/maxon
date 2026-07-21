@@ -453,7 +453,7 @@ end 'main'
 error E2004: specs/fragments/export-keyword/error.non-exported-enum-cross-file.test:10:10: Undefined variable 'InternalStatus'
 ```
 
-<!-- disabled-test: exported-typealias-cross-file -->
+<!-- test: exported-typealias-cross-file -->
 <!-- P1.9 ranged typealiases — the cross-file half already works (the alias registry is
      whole-program), but `42 as Score` does not parse at all: `Unsupported: as statement`.
      The `as` CAST is the missing piece, not the export. -->

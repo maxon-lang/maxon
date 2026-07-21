@@ -274,8 +274,7 @@ end 'main'
 32
 ```
 
-<!-- disabled-test: file-private-same-name-cross-file -->
-<!-- P1.9 as-casts — both `getA`/`getB` bodies `return SHARED as ExitCode` -->
+<!-- test: file-private-same-name-cross-file -->
 A file-private (non-exported) top-level `let` is scoped to its declaring file, so two files may declare the same bare name with different values. Each file's reads resolve to its OWN constant.
 ```maxon
 // --- file: featA/a.maxon

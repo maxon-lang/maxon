@@ -115,8 +115,7 @@ The compiler validates that ranges are representable:
 
 ### Basic ranged typealias declaration and construction
 
-<!-- disabled-test: basic-declaration -->
-<!-- P1.9 `as` cast (ExpandCastRangeChecks) -->
+<!-- test: basic-declaration -->
 ```maxon
 typealias Score = int(0 to 100)
 
@@ -131,8 +130,7 @@ end 'main'
 
 ### Literal range check at compile time
 
-<!-- disabled-test: literal-in-range -->
-<!-- P1.9 `as` cast -->
+<!-- test: literal-in-range -->
 ```maxon
 typealias SmallInt = int(0 to 10)
 
@@ -147,8 +145,7 @@ end 'main'
 
 ### Negative range bounds
 
-<!-- disabled-test: negative-range -->
-<!-- P1.9 `as` cast -->
+<!-- test: negative-range -->
 ```maxon
 typealias Temp = int(-50 to 50)
 
@@ -163,8 +160,7 @@ end 'main'
 
 ### Type-qualified min/max keyword bounds
 
-<!-- disabled-test: min-max-bounds -->
-<!-- P1.9 `as` cast -->
+<!-- test: min-max-bounds -->
 ```maxon
 typealias FullInt = int(i64.min to i64.max)
 
@@ -195,8 +191,7 @@ end 'main'
 
 ### Exclusive upper bound with upto
 
-<!-- disabled-test: upto-exclusive -->
-<!-- P1.9 `as` cast -->
+<!-- test: upto-exclusive -->
 ```maxon
 typealias Idx = int(0 upto 10)
 
@@ -211,8 +206,7 @@ end 'main'
 
 ### Arithmetic between same-type ranged values
 
-<!-- disabled-test: same-type-arithmetic -->
-<!-- P1.9 `as` cast -->
+<!-- test: same-type-arithmetic -->
 ```maxon
 typealias Score = int(0 to 100)
 
@@ -246,8 +240,7 @@ end 'main'
 
 ### Runtime range check passes
 
-<!-- disabled-test: runtime-check-pass -->
-<!-- P1.9 `as` cast -->
+<!-- test: runtime-check-pass -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias Age = int(0 to 150)
@@ -267,8 +260,8 @@ end 'main'
 
 ### Runtime range check fails (panic)
 
-<!-- disabled-test: runtime-check-fail -->
-<!-- P1.9 `as` cast + the runtime range check -->
+<!-- test: runtime-check-fail -->
+<!-- targets: x64-windows -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias Age = int(0 to 150)
@@ -295,8 +288,7 @@ Stack trace:
 
 ### Byte ranged typealias
 
-<!-- disabled-test: byte-range -->
-<!-- P1.9 `as` cast -->
+<!-- test: byte-range -->
 ```maxon
 typealias AsciiCode = int(0 to 127)
 
@@ -386,8 +378,8 @@ end 'main'
 
 ### Return value range check: runtime panic
 
-<!-- disabled-test: return-runtime-check-fail -->
-<!-- P1.9 return-value range check (InsertRangeChecks) -->
+<!-- test: return-runtime-check-fail -->
+<!-- targets: x64-windows -->
 ```maxon
 typealias Score = int(0 to 100)
 
@@ -432,8 +424,7 @@ end 'main'
 
 ### Error: return literal out of range
 
-<!-- disabled-test: error.return-literal-out-of-range -->
-<!-- P1.9 compile-time range check (E3005) -->
+<!-- test: error.return-literal-out-of-range -->
 ```maxon
 typealias SmallInt = int(0 to 10)
 
@@ -451,8 +442,7 @@ error E3005: specs/fragments/ranged-typealias/error.return-literal-out-of-range.
 
 ### Error: literal out of range
 
-<!-- disabled-test: error.literal-out-of-range -->
-<!-- P1.9 `as` cast + E3005 -->
+<!-- test: error.literal-out-of-range -->
 ```maxon
 typealias SmallInt = int(0 to 10)
 
@@ -467,8 +457,7 @@ error E3005: specs/fragments/ranged-typealias/error.literal-out-of-range.test:5:
 
 ### Error: negative literal out of range
 
-<!-- disabled-test: error.negative-out-of-range -->
-<!-- P1.9 `as` cast + E3005 -->
+<!-- test: error.negative-out-of-range -->
 ```maxon
 typealias Positive = int(1 to 100)
 
@@ -483,8 +472,7 @@ error E3005: specs/fragments/ranged-typealias/error.negative-out-of-range.test:5
 
 ### Type-qualified bound: u32.max
 
-<!-- disabled-test: type-qualified-u32-max -->
-<!-- P1.9 `as` cast -->
+<!-- test: type-qualified-u32-max -->
 ```maxon
 typealias Handle = int(0 to u32.max)
 
@@ -523,8 +511,7 @@ end 'main'
 
 ### Type-qualified bound: i8 range
 
-<!-- disabled-test: type-qualified-i8-range -->
-<!-- P1.9 `as` cast -->
+<!-- test: type-qualified-i8-range -->
 ```maxon
 typealias SmallSigned = int(i8.min to i8.max)
 
@@ -539,8 +526,7 @@ end 'main'
 
 ### Type-qualified bound: u16.max
 
-<!-- disabled-test: type-qualified-u16-max -->
-<!-- P1.9 `as` cast -->
+<!-- test: type-qualified-u16-max -->
 ```maxon
 typealias Port = int(0 to u16.max)
 
@@ -555,8 +541,7 @@ end 'main'
 
 ### u32 range alias
 
-<!-- disabled-test: u32-range -->
-<!-- P1.9 `as` cast -->
+<!-- test: u32-range -->
 ```maxon
 typealias Handle = int(0 to u32.max)
 
@@ -571,8 +556,7 @@ end 'main'
 
 ### i8 range alias
 
-<!-- disabled-test: i8-range -->
-<!-- P1.9 `as` cast -->
+<!-- test: i8-range -->
 ```maxon
 typealias SmallInt = int(i8.min to i8.max)
 
@@ -675,8 +659,7 @@ end 'main'
 
 ### Hex literal in range bound
 
-<!-- disabled-test: hex-range-bound -->
-<!-- P1.9 `as` cast -->
+<!-- test: hex-range-bound -->
 ```maxon
 typealias Handle = int(0 to 0xFFFF)
 
@@ -848,8 +831,7 @@ space when `Alias`'s lower bound is non-negative, matching the runtime cast and
 the value-load range check. Mirrors the compiler's own
 `CONSUME_NO_VALUE = (-1) as ValueId` sentinel.
 
-<!-- disabled-test: unsigned-domain-negative-sentinel-cast -->
-<!-- P1.9 `as` cast + top-level `let` globals -->
+<!-- test: unsigned-domain-negative-sentinel-cast -->
 ```maxon
 typealias Slot = int(0 to u64.max)
 
@@ -870,8 +852,7 @@ end 'main'
 7
 ```
 
-<!-- disabled-test: cast-to-stdlib-internal-typealias -->
-<!-- P1.9 `as` cast + the stdlib cone (`ElementCount`) -->
+<!-- test: cast-to-stdlib-internal-typealias -->
 A typealias declared inside the stdlib is reachable as a cast target from any
 file, regardless of its source-level visibility modifier. The stdlib's internal
 ranged aliases (`ElementCount`, `NodeIndex`, …) appear in the public collection

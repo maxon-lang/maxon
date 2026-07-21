@@ -1,30 +1,28 @@
-// Test: return-runtime-check-pass
-typealias Score = int(0 to 100)
+// Test: runtime-check-fail
+typealias Integer = int(i64.min to i64.max)
+typealias Age = int(0 to 150)
 
-function half(s Score) returns Score
-	return s / 2
-end 'half'
+function makeAge(n Integer) returns Integer
+	let a = n as Age
+	return a
+end 'makeAge'
 
 function main() returns ExitCode
-	return half(84)
+	return makeAge(200)
 end 'main'
 ---
-ExitCode: 42
+ExitCode: 1
 ---
-func @half {
+func @makeAge {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
-    x64.movRegImm32 rsi, 2
-    x64.movRegReg rax, rcx
-    x64.cqo
-    x64.idivReg rsi
-    x64.cmpRegImm32 rax, 0
+    x64.cmpRegImm32 rcx, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
   __rc_chk:
-    x64.cmpRegImm32 rax, 100
+    x64.cmpRegImm32 rcx, 150
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
@@ -35,7 +33,7 @@ func @half {
     x64.popReg rbp
     x64.ret
   __rc_ok:
-    x64.movRegReg r8, rax
+    x64.movRegReg r8, rcx
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
@@ -46,8 +44,8 @@ func @main {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
-    x64.movRegImm32 rcx, 84
-    x64.callDirect half
+    x64.movRegImm32 rcx, 200
+    x64.callDirect makeAge
     x64.epilogue 32
     x64.popReg rbp
     x64.ret

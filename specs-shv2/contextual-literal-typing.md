@@ -93,8 +93,7 @@ end 'main'
 
 ## Tests
 
-<!-- disabled-test: int-literal-vs-byte-valid -->
-<!-- P1.9 `as` — a cast in a BODY is `E2015: Unsupported: as statement`; only a range bound and a top-level constant parse one today -->
+<!-- test: int-literal-vs-byte-valid -->
 ```maxon
 
 typealias Byte = int(0 to u8.max)
@@ -169,8 +168,7 @@ end 'main'
 error E3005: specs/fragments/contextual-literal-typing/float-literal-vs-int-error.test:4:7: type mismatch: 'cannot compare int with float'
 ```
 
-<!-- disabled-test: explicit-cast-int-to-float -->
-<!-- P1.9 `as` — a cast in a BODY is `E2015: Unsupported: as statement`; only a range bound and a top-level constant parse one today -->
+<!-- test: explicit-cast-int-to-float -->
 ```maxon
 
 typealias Float = float(f64.min to f64.max)
@@ -188,8 +186,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: explicit-cast-float-to-int -->
-<!-- P1.9 `as` — a cast in a BODY is `E2015: Unsupported: as statement`; only a range bound and a top-level constant parse one today -->
+<!-- test: explicit-cast-float-to-int -->
 ```maxon
 function main() returns ExitCode
 	let x = 5
@@ -229,8 +226,7 @@ end 'main'
 4
 ```
 
-<!-- disabled-test: byte-vs-byte -->
-<!-- P1.9 `as` — a cast in a BODY is `E2015: Unsupported: as statement`; only a range bound and a top-level constant parse one today -->
+<!-- test: byte-vs-byte -->
 ```maxon
 
 typealias Byte = int(0 to u8.max)

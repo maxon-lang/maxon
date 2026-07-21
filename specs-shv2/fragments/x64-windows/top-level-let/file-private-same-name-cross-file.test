@@ -1,0 +1,56 @@
+// Test: file-private-same-name-cross-file
+// --- file: featA/a.maxon
+let SHARED = 99
+
+export function getA() returns ExitCode
+	return SHARED as ExitCode
+end 'getA'
+
+// --- file: featB/b.maxon
+let SHARED = 7
+
+export function getB() returns ExitCode
+	return SHARED as ExitCode
+end 'getB'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return getA() - getB()
+end 'main'
+---
+ExitCode: 92
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.callDirect getA
+    x64.movRegReg rbx, r8
+    x64.callDirect getB
+    x64.subRegReg rbx, rbx, r8
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @getA {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 99
+    x64.popReg rbp
+    x64.ret
+}
+
+func @getB {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 7
+    x64.popReg rbp
+    x64.ret
+}

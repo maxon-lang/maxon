@@ -200,8 +200,7 @@ end 'main'
 22
 ```
 
-<!-- disabled-test: short-circuit-in-if-condition -->
-<!-- P1.9 `as` cast. Globals landed at P1.0d.5b and the seven cases that needed only those are ENABLED; these two also cast (`trace as ExitCode` / a ranged alias), which the `as` operator gates. -->
+<!-- test: short-circuit-in-if-condition -->
 ```maxon
 typealias Integer = int(0 to u64.max)
 
@@ -248,8 +247,7 @@ end 'main'
 101
 ```
 
-<!-- disabled-test: nested-short-circuit -->
-<!-- P1.9 `as` cast. Globals landed at P1.0d.5b and the seven cases that needed only those are ENABLED; these two also cast (`trace as ExitCode` / a ranged alias), which the `as` operator gates. -->
+<!-- test: nested-short-circuit -->
 ```maxon
 var calls = 0
 
