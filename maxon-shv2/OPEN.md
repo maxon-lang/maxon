@@ -4,6 +4,15 @@
 **ladder** — what to build next). Everything here was found by **running code shv2 did not write**, and
 almost every one is a **wrong answer, not a crash**. Recorded 2026-07-14.
 
+> **⛔ The bar for an entry here.** This ledger is for a finding genuinely OUTSIDE the rung that hit it:
+> a **`maxon-sharp`** bug (needs the C# suite as its gate), a **distinct feature** that needs its own
+> `PLAN.md` rung, a **measured-linear perf debt**, or a **follow-on slice a rung's plan sanctioned up
+> front**. **A wrong answer or a leak in the finding rung's OWN mechanism does NOT belong here — it is
+> fixed or cleanly rejected before that rung merges** (the `rung` skill's HALT list and its OPEN.md-ledger
+> section own this rule). **Filing a task-related bug instead of fixing it is the one thing this file must
+> never become a place to do.** An agent never adds a row on its own authority; the coordinator triages,
+> and fix-now is the default for anything the rung's own specs would exercise.
+
 > **The through-line, and the thing to internalise:** nearly every real bug below is **one fact written
 > down twice**. A promise's error type distilled into two bits, with the type discarded. A return op
 > derived from the token *and* from the declared type. The spec pool's parent and worker each deciding

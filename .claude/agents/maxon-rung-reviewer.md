@@ -60,17 +60,21 @@ wrong narrow bound is a runtime panic; wide is fine where there is no real bound
 - **Fix what you find**, in the worktree, then re-verify and commit as a **SEPARATE commit** on the same
   branch (so the review is legible as its own diff).
 - **Check exit codes; never grep for a success string.** Exit **101** = memory leak.
-- **A leak you find by PROBING is still a blocker — report it as fix-or-cleanly-reject, NEVER "defer to a
-  later rung".** *Leaks are not ok*, even latent ones the committed suite is green over: a reachable leak
-  is fixed, or the construct that causes it is turned into a clean compile error, before this rung merges.
-  (This exists because a boxed-union return leak was once recommended for deferral here; the right call was
-  to reject it.)
+- **A DEFECT you find by PROBING is still a blocker — a WRONG ANSWER as much as a leak — fix-or-cleanly-
+  reject, NEVER "defer to a later rung".** *Leaks are not ok, and neither is a wrong answer in code this
+  rung owns*, even latent ones the committed suite is green over: a reachable leak, or a construct that
+  miscompiles, is fixed, or turned into a clean compile error, before this rung merges. (This exists
+  because a boxed-union return leak was once recommended for deferral here; the right call was to reject
+  it — and the same call binds a wrong answer.)
 - ⚠ **NEVER run `./bin/maxon.exe fmt` with arguments** — it reformats the whole tree in place. Several
   agents have destroyed unrelated files this way.
 - **Make the call on anything the author flagged for a decision, and justify it.**
-- If you find something real but too big/risky to ride along on a review (e.g. it needs the full C#
-  suite as its gate, or would move fragment goldens), **say so and leave it** — report it as its own
-  piece of work rather than smuggling it in.
+- If you find something real but genuinely OUTSIDE this rung — a **`maxon-sharp` bug** (needs the full C#
+  suite as its gate), a **distinct feature** for its own ladder rung, or a **measured-linear perf debt** —
+  **say so and leave it for the coordinator to triage**, rather than smuggling it in OR filing it to
+  OPEN.md on your own authority. ⚠ **"Too big to ride along" is NOT the same as "a wrong answer in the
+  files I just reviewed"** — that one you fix, exactly like a leak. Do not let this bullet become an
+  escape hatch for a defect the rung owns.
 
 ## Report
 Every issue with `file:line`; what you fixed; what you deliberately left, and why; the real output of

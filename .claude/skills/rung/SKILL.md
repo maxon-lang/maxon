@@ -30,14 +30,19 @@ have marched straight past that and built P1.1 on it.)*
 
 - **Any gate is red** — a non-zero build, a non-green suite, a worker-count mismatch, exit **101**, or an
   unjustified **`M`** on a pre-existing fragment. **Never turn a gate green by narrowing what it tests.**
-- **A reachable leak — even one the SUITE is GREEN over.** The leak gate ("no run exits 101") checks the
-  *committed suite*; the leaks that matter most are the ones a suite run never reaches — a `let m = f()`
-  that exits **101** only when *you* probe it. **Leaks are not ok**: a latent/reachable leak is **FIXED**,
-  or the leak-causing construct is **REJECTED cleanly** (turned into a compile error), *before merge* —
-  **NEVER deferred to a later rung as a live leak.** *(Precedent: an owned-String RETURN leaked — OPEN #37;
-  the option to "defer the leak to P1.4" was overruled, the convention pulled forward. At P1.3 Slice 1 a
-  boxed-union RETURN leaked; it was rejected (E2015) symmetric with the already-deferred param, not shipped
-  leaking. The suite was green over BOTH — only adversarial probing found them.)*
+- **A reachable DEFECT in this rung's own mechanism — a WRONG ANSWER as much as a leak — even one the
+  SUITE is GREEN over.** The leak gate ("no run exits 101") checks the *committed suite*; the defects that
+  matter most are the ones a suite run never reaches — a `let m = f()` that exits **101**, or a correct
+  program that compiles and returns the wrong number, only when *you* probe it. **Leaks are not ok, and
+  neither are wrong answers you own**: a latent/reachable leak, or a construct this rung enables that
+  miscompiles, is **FIXED**, or the causing construct is **REJECTED cleanly** (turned into a compile
+  error), *before merge* — **NEVER filed to OPEN.md as a live bug.** A defect lives in "your rung's
+  mechanism" if a file you changed, a construct your rung enables, or a spec on your own acceptance path
+  can reach it. **Filing a task-related defect instead of fixing it is a habit this process exists to
+  break.** *(Precedent: an owned-String RETURN leaked — OPEN #37; the option to "defer the leak to P1.4"
+  was overruled, the convention pulled forward. At P1.3 Slice 1 a boxed-union RETURN leaked; it was
+  rejected (E2015) symmetric with the already-deferred param, not shipped leaking. The suite was green
+  over BOTH — only adversarial probing found them.)*
 - **A DESIGN RULING is needed** — the corpus contradicts itself, the two references disagree and the plan
   cannot settle it, or the spec is genuinely ambiguous. **You must not guess.** *(`/specs` said both
   "lossy conversions are not allowed" **and** `takeInt(3.7)` ⇒ silently `3` — and the bootstrap passed
@@ -53,6 +58,33 @@ have marched straight past that and built P1.1 on it.)*
 **Everything else runs unattended.** Landing a clean rung — the plan, the wave, the gates, the merge,
 **the push (step 10)**, and the `PLAN.md` update (step 11) — needs no permission. Report what you did;
 ask only when the list above fires.
+
+## OPEN.md — the coordinator's ledger, not an agent's escape hatch
+
+**OPEN.md is for findings genuinely OUTSIDE the rung that found them, and filing to it is YOUR call, made
+in the plan — never an agent's mid-rung escape.** Agents (implementer, optimizer, reviewer) trip over bugs
+constantly; that is the corpus doing its job. **What happens next is the whole game, and the default is
+FIX, not FILE.**
+
+- **A defect in the rung's own mechanism is FIXED, or cleanly REJECTED, before merge** (see the HALT
+  list). It is never filed. *"I found it while doing something else"* / *"it wasn't what I was asked to
+  do"* is **not** a reason to defer — it is the reason the bug is now yours.
+- **Only four kinds of finding legitimately reach the ledger**, and each has a real reason it cannot ride
+  along on this rung:
+  1. a **bootstrap (`maxon-sharp`) bug** — it needs the full C# suite as its gate (unless this IS a
+     bootstrap rung);
+  2. a **distinct feature** that needs its own contract / IR ops / spec-port list — that belongs on
+     **`PLAN.md`'s ladder with a number**, not only in OPEN.md;
+  3. a **correctness-neutral perf debt the optimizer has MEASURED linear-in-practice** — a superlinearity
+     you can still *trigger* on a realistic input is fixed, not filed;
+  4. a **follow-on slice this rung's plan sanctioned UP FRONT** (e.g. the P1.5 async residuals held for
+     B1c) — sanctioned by you, in the plan, before the wave, not invented by an agent at the code.
+- **An agent that trips over anything else STOPS and reports it to you** — the same reflex as a wrong plan
+  or an out-of-file-list edit. **You triage: fix-now is the default for anything the rung's own specs
+  would exercise.** An agent never adds a row to OPEN.md on its own authority.
+
+This is the leak rule (*"leaks are not ok"*) generalized: a leak may not be deferred because it is a
+defect the rung owns — and **a wrong answer the rung owns is no different.**
 
 ## 0. Which rung, and orient
 
