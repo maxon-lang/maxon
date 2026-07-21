@@ -1,0 +1,39 @@
+// Test: ternary-expression.chained
+function main() returns ExitCode
+	let a = false
+	let b = true
+	let x = 1 if a else 2 if b else 3
+	return x
+end 'main'
+---
+ExitCode: 2
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 rax, 0
+    x64.movRegImm32 rcx, 1
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, ternarytrue
+    x64.jmp ternaryfalse
+  ternarytrue:
+    x64.movRegImm32 r8, 1
+    x64.jmp matchcont
+  ternaryfalse:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, ternarytrue
+    x64.jmp ternaryfalse
+  ternarytrue:
+    x64.movRegImm32 rax, 2
+    x64.jmp matchcont
+  ternaryfalse:
+    x64.movRegImm32 rax, 3
+    x64.jmp matchcont
+  matchcont:
+    x64.movRegReg r8, rax
+    x64.jmp matchcont
+  matchcont:
+    x64.popReg rbp
+    x64.ret
+}

@@ -1,0 +1,17 @@
+// Test: first-class-function.capturing-closure-in-ternary-used-in-frame-errors
+
+typealias Integer = int(i64.min to i64.max)
+
+function dbl(n Integer) returns Integer
+	return n * 2
+end 'dbl'
+
+function main() returns ExitCode
+	let bump = 20
+	let f = function(n Integer) gives n + bump
+	let h = f if bump > 0 else dbl
+	return h(22)
+end 'main'
+---
+CompilerError:
+error E3099: <fragment>:12:12: cannot use a closure that captures as an arm of a conditional expression: a merge joins its arms through a single slot that carries the function pointer but not the capture environment, so the closure would be called with no environment. Use a function reference, or a closure that captures nothing

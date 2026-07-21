@@ -1,0 +1,27 @@
+// Test: ternary-expression.with-variable-condition
+function main() returns ExitCode
+	let flag = true
+	let x = 1 if flag else 0
+	return x
+end 'main'
+---
+ExitCode: 1
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 rax, 1
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, ternarytrue
+    x64.jmp ternaryfalse
+  ternarytrue:
+    x64.movRegImm32 r8, 1
+    x64.jmp matchcont
+  ternaryfalse:
+    x64.movRegImm32 r8, 0
+    x64.jmp matchcont
+  matchcont:
+    x64.popReg rbp
+    x64.ret
+}

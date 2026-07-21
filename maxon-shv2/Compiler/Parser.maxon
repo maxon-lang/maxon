@@ -1402,6 +1402,26 @@ type MoveMark
 	end 'create'
 end 'MoveMark'
 
+// The union of two move marks' `movedFrom` bits — the move state of a path that ran BOTH the moves `a`
+// records and the moves `b` records. Its one use is the inline-conditional's TRUE path: the true arm's
+// own moves (`a`), plus the unconditionally-evaluated condition's (`b`), which parse in the opposite
+// order to how they run (`parseTernaryExpression`). Both marks are positional over the SAME owned-binding
+// stack — its height is stable across a ternary, since an expression declares no binding — so the union is
+// per-position. Values are identical between the two (an expression reassigns no binding's value), so
+// either's serve.
+function orMoveMarks(a MoveMark, b MoveMark) returns MoveMark
+	if a.moved.count() != b.moved.count() 'drifted'
+		panic("orMoveMarks: mark heights {a.moved.count()} and {b.moved.count()} differ — the owned-binding stack moved between captures")
+	end 'drifted'
+	var moved = BoolArray.create()
+	for i in 0 upto a.moved.count() 'each'
+		let am = try a.moved.get(i) otherwise panic("orMoveMarks: a.moved.get OOB at {i}")
+		let bm = try b.moved.get(i) otherwise panic("orMoveMarks: b.moved.get OOB at {i}")
+		moved.push(am or bm)
+	end 'each'
+	return MoveMark.create(moved, values: b.values)
+end 'orMoveMarks'
+
 // How a `try … otherwise …`'s error handler affects the merge (P1.4b). The success (`ok`) block always
 // carries the tryCall's `result`; the error block's shape is one of:
 //   • `value(v)`      — `otherwise <expr>` produced a fallback value; both edges merge into a result phi.
@@ -1940,6 +1960,14 @@ export type Parser
 	// closure nested inside a closure detects a capture of any enclosing frame, not just its immediate
 	// parent — which is what stops an outer local silently resolving to a same-named global.
 	var closureCaptureScopes as ScopeArray
+	// ⭐ **THE PRE-TERNARY MOVE BASE FOR A CODE PATH WITH NO OWNED BINDINGS (P1.5-A2c).** An inline
+	// conditional `<t> if <c> else <f>` parses its TRUE arm before the `if` reveals the form, so the
+	// pre-arm move state must be snapshotted at the top of EVERY full expression to rewind the FALSE
+	// arm to it (`parseTernaryExpression`). When no owned binding is in scope a ternary arm cannot move
+	// one, so the snapshot is this shared empty mark — read-only (`restoreMoveMark`/`reconcileMovesAtMerge`
+	// no-op at height 0) and allocated ONCE, so the scale corpus (all scalar, no owned bindings) pays
+	// nothing per expression.
+	let emptyMoveMark as MoveMark
 
 	export static function create(tokens TokenArray, filePath FilePath, namespace String, signatures ProgramSignatures) returns Parser
 		return Self{
@@ -1975,7 +2003,8 @@ export type Parser
 			lastFieldReadBox: 0,
 			lastFieldReadOffset: 0,
 			closureReturns: FuncReturnTypeMap.create(),
-			closureCaptureScopes: ScopeArray.create()
+			closureCaptureScopes: ScopeArray.create(),
+			emptyMoveMark: MoveMark.create(BoolArray.create(), values: ValueIdArray.create())
 		}
 	end 'create'
 
@@ -8499,10 +8528,185 @@ export type Parser
 	// `parseBoolCondition` below, not a second grammar.
 	//
 	// Seeds `currentBlock`, which every emit below targets — see the field.
+	//
+	// ⭐ **THE INLINE CONDITIONAL `<t> if <c> else <f>` IS HOOKED HERE (P1.5-A2c)** — a value-position
+	// ternary that binds LOOSER than every binary operator, so it wraps the WHOLE `parseBinary` result and
+	// is checked only after the climber has run. `parseBinary`'s RHS recursion never reaches this point, so
+	// `a + b if c else d` is `(a + b) if c else (a + b's sibling)`; the `else` arm is a full `parseExpression`
+	// again, so `1 if a else 2 if b else 3` right-associates. The block-form `if` cannot collide: it is a
+	// STATEMENT keyword `parseStatement` catches at statement start, whereas a ternary `if` only follows an
+	// operand — the same split both reference compilers draw (2-Parser.cs:5128).
+	//
+	// The true arm parses before the `if` announces the form, so two facts about the block ARE captured up
+	// front, allocation-free: the IR-detach mark (the start block plus its op/block-ref counts, so
+	// `parseTernaryExpression` can lift the arm's ops off the unconditional path into the true branch — only
+	// the SELECTED arm may run) and the pre-arm MOVE state (rewound onto the false arm). `captureMoveMark`
+	// runs only when an owned binding is in scope; scalar code shares the empty mark and pays nothing.
 	function parseExpression(func IrFunction, block IrBlock) returns ValueId throws ParseError
 		self.currentBlock = block
-		return try self.parseBinary(func, minPrec: OrPrecedence)
+		return try self.parseValueExpression(func)
 	end 'parseExpression'
+
+	// The climber PLUS the trailing inline conditional, over `self.currentBlock` as it already stands —
+	// the entry every value context that must NOT re-seed `currentBlock` calls in place of the bare
+	// `parseBinary`. A call argument, a struct-field value, a union-payload value and a parenthesised
+	// group are each parsed INSIDE an expression that already moved `currentBlock` (an earlier sibling
+	// short-circuited), so seeding it afresh — which `parseExpression` does — would discard that move.
+	// They still need the ternary, though (`f(a if c else b)`, `T{x: a if c else b}`, `(a if c else b)`),
+	// so the hook lives HERE, below the seed, and those sites call this directly. The mark is recorded off
+	// the current block so `parseTernaryExpression` detaches the true arm from wherever control actually is.
+	function parseValueExpression(func IrFunction) returns ValueId throws ParseError
+		let block = self.currentBlock
+
+		let markOpRefCount = block.opRefs.count()
+		let markBlockRefCount = func.blockRefs.count()
+		var preMoveMark = self.emptyMoveMark
+		if self.ownedBindings.count() > 0 'ownedInScope'
+			preMoveMark = self.captureMoveMark()
+		end 'ownedInScope'
+
+		let value = try self.parseBinary(func, minPrec: OrPrecedence)
+
+		if self.at(TokenKind.if) 'ternary'
+			return try self.parseTernaryExpression(func, trueValue: value, startBlock: block, markOpRefCount: markOpRefCount, markBlockRefCount: markBlockRefCount, preMoveMark: preMoveMark)
+		end 'ternary'
+
+		return value
+	end 'parseValueExpression'
+
+	// ⭐ **THE INLINE CONDITIONAL `<t> if <c> else <f>` (P1.5-A2c).** Called with the TRUE arm already
+	// parsed (into `startBlock` since the mark) and the current token at `if`. Two obligations shape it:
+	//
+	//   **ONLY THE SELECTED ARM IS EVALUATED.** `0 if d == 0 else n / d` must not divide when d is 0, so
+	//   neither arm may sit on the unconditional path. The false arm is easy — parsed straight into its own
+	//   block. The true arm is not: nothing announced the ternary until the `if` that follows it, so it was
+	//   emitted into the fall-through path and is DETACHED here and re-attached inside the true branch. The
+	//   IR moves (its `module.ops` indices are unchanged; only the block referencing them changes); nothing
+	//   is re-parsed, so no value id is minted twice and no closure is lifted twice — the bootstrap makes the
+	//   identical move (2-Parser.cs:ParseTernaryExpression), by necessity, for the identical reason.
+	//
+	//   **THE TWO ARMS MERGE THROUGH ONE PHI**, exactly as a `match` expression's `gives` arms do — so the
+	//   merge is `finalizeMatchMerge` over a two-arm reaching set with no carried vars. That reuse is the
+	//   whole point: the give-type agreement (E3005, OPEN #54C), the cross-register-class refusal (OPEN #31),
+	//   the owned-give normalisation, and the conditional-move reconciliation are ONE implementation for both
+	//   forms, so a ternary cannot drift from a match on any of them.
+	//
+	// A CAPTURING closure may not be an arm: the phi carries the function pointer but not the capture
+	// environment (the same merge hazard the match `gives` arm and the `otherwise` fallback are refused for),
+	// so it is rejected E3099 at the `if` — the shared anchor for both arms, where each reference compiler
+	// anchors it.
+	function parseTernaryExpression(func IrFunction, trueValue ValueId, startBlock IrBlock, markOpRefCount ElementCount, markBlockRefCount ElementCount, preMoveMark MoveMark) returns ValueId throws ParseError
+		let ifTok = try self.consume(TokenKind.if)
+
+		// The E3099 refusal for a capturing closure in EITHER arm — the route-specific prefix over the
+		// shared merge suffix (the same shape `parseArmBody`'s `gives` refusal builds), computed once and
+		// used for both arms. Anchored at the `if`, the shared point of the two arms, where each reference
+		// compiler anchors it.
+		let armEscapeMessage = "cannot use a closure that captures as an arm of a conditional expression: {CapturingClosureMergeSuffix}"
+		try self.rejectEscapingClosure(trueValue, message: armEscapeMessage, tok: ifTok)
+
+		// Where the true arm's VALUE lives: `startBlock` when the arm emitted only straight-line ops, or the
+		// arm's own exit block when it grew control flow (a short-circuit, a nested ternary, a match).
+		let armExit = self.currentBlock
+
+		// The true arm's owned give leaves its owner (so the merge, not the arm, drops it) — done now, so the
+		// transfer's own poison is captured into the true arm's move state below.
+		try self.transferGiveToPhi(trueValue, anchor: ifTok)
+
+		// ⭐ **THE CONDITION RUNS FIRST AT RUNTIME, THOUGH IT PARSES SECOND.** The true arm was parsed before
+		// the `if` revealed the form, so any binding it MOVED (an owned value into a struct field, say) is
+		// poisoned now — but the condition, which runs BEFORE the true arm, must see that binding LIVE
+		// (`Box.create(k) if isSet(k) else …` reads a live `k`). So the true arm's move state is snapshotted
+		// and REWOUND to the pre-ternary state; the condition then parses from there, and the true path's mark
+		// is re-formed below as the union of the two.
+		let afterTrueArm = self.captureMoveMark()
+		self.restoreMoveMark(preMoveMark)
+
+		// ⭐ **DETACH THE TRUE ARM off the unconditional path.** Its ops are the tail of `startBlock`'s
+		// `opRefs` since the mark; its terminator and outgoing edges (present only when the arm grew control
+		// flow — unset/empty for a straight-line arm, since `startBlock` was unterminated at the mark) and its
+		// inner blocks (the `func.blockRefs` tail since the mark) go with them. The ops keep their
+		// `module.ops` indices; only the block that references them changes.
+		var relocatedOpRefs = OpIndexArray.create()
+		for i in markOpRefCount upto startBlock.opRefs.count() 'collectOps'
+			relocatedOpRefs.push(try startBlock.opRefs.get(i) otherwise panic("parseTernaryExpression: startBlock.opRefs.get OOB at {i}"))
+		end 'collectOps'
+		while startBlock.opRefs.count() > markOpRefCount 'truncOps'
+			_ = try startBlock.opRefs.pop() otherwise panic("parseTernaryExpression: startBlock.opRefs.pop above the mark {markOpRefCount} failed")
+		end 'truncOps'
+
+		let savedTerminator = startBlock.terminator
+		let savedEdges = startBlock.branchEdges
+		startBlock.terminator = Terminator.unset
+		startBlock.branchEdges = BranchEdgeArray.create()
+
+		var armInnerBlockRefs = BlockRefArray.create()
+		for i in markBlockRefCount upto func.blockRefs.count() 'collectBlocks'
+			armInnerBlockRefs.push(try func.blockRefs.get(i) otherwise panic("parseTernaryExpression: func.blockRefs.get OOB at {i}"))
+		end 'collectBlocks'
+		while func.blockRefs.count() > markBlockRefCount 'truncBlocks'
+			_ = try func.blockRefs.pop() otherwise panic("parseTernaryExpression: func.blockRefs.pop above the mark {markBlockRefCount} failed")
+		end 'truncBlocks'
+
+		// ⭐ **THE CONDITION IS THE ONE THING THAT IS UNCONDITIONAL** — it lands where the true arm was and
+		// runs before the branch. It may short-circuit and move `currentBlock`, so the two-way branch belongs
+		// at the end of whichever block it left (`condExit`), exactly as `parseIfStatement` re-reads its entry
+		// after the condition.
+		self.currentBlock = startBlock
+		let cond = try self.parseBoolCondition(func, block: startBlock, kwTok: ifTok)
+		let condExit = self.currentBlock
+
+		// The move state after the (unconditional) condition — the base BOTH arms build on. The TRUE path is
+		// that base PLUS the true arm's own moves (rewound above); the FALSE path is that base plus the false
+		// arm's, and it inherits `condBase` as the live state directly, since the false arm parses next.
+		let condBase = self.captureMoveMark()
+		let trueMoveMark = orMoveMarks(afterTrueArm, b: condBase)
+
+		try self.consume(TokenKind.else)
+
+		// Reattach the true arm inside a fresh branch, physically after the condition's blocks. `trueExit` is
+		// where its value lives now: the true branch itself when the arm was straight-line, else the arm's own
+		// (relocated) exit block.
+		var trueBranch = self.newBlock(func, label: b"ternarytrue", line: ifTok.line)
+		trueBranch.opRefs = relocatedOpRefs
+		trueBranch.terminator = savedTerminator
+		trueBranch.branchEdges = savedEdges
+		for br in armInnerBlockRefs 'reattach'
+			func.blockRefs.push(br)
+		end 'reattach'
+		var trueExit = trueBranch
+		if armExit.id != startBlock.id 'multiBlockArm'
+			trueExit = armExit
+		end 'multiBlockArm'
+
+		// The false arm parses straight into its own block, so it never runs on the true path — from the
+		// post-condition move state (`condBase`, the current live state), never the true arm's moves. A full
+		// `parseExpression` — a chained `… else b if c2 else d` right-associates here.
+		var falseBranch = self.newBlock(func, label: b"ternaryfalse", line: ifTok.line)
+		let falseValue = try self.parseExpression(func, block: falseBranch)
+		try self.rejectEscapingClosure(falseValue, message: armEscapeMessage, tok: ifTok)
+		let falseExit = self.currentBlock
+		try self.transferGiveToPhi(falseValue, anchor: ifTok)
+		let falseMoveMark = self.captureMoveMark()
+
+		// The merge is the SAME block-arg join a `match` expression uses (see the header). Two reaching arms,
+		// no carried vars; `finalizeMatchMerge` runs every give-agreement/ownership rule and mints the result
+		// phi and both edges. The ternary supplies only the branch out of the condition, emitted after so
+		// `condExit` is still open when the merge's per-arm reconciliation runs.
+		let carried = VarInfoArray.create()
+		var reachingArms = MatchArmExitArray.create()
+		reachingArms.push(MatchArmExit.create(trueExit, exitVals: ValueIdArray.create(), give: MatchGiveValue.value(trueValue), moveMark: trueMoveMark))
+		reachingArms.push(MatchArmExit.create(falseExit, exitVals: ValueIdArray.create(), give: MatchGiveValue.value(falseValue), moveMark: falseMoveMark))
+		let outcome = try self.finalizeMatchMerge(func, matchTok: ifTok, carried: carried, reachingArms: reachingArms, isExpression: true)
+
+		self.emitCondBranch(condExit, cond: cond, thenId: trueBranch.id, elseId: falseBranch.id, ifTok: ifTok)
+
+		self.currentBlock = outcome.cont
+		match outcome.result 'r'
+			value(id) then return id
+			none then panic("parseTernaryExpression: the merge produced no value — both arms give a value, so the result phi is always present")
+		end 'r'
+	end 'parseTernaryExpression'
 
 	// An `if` / `while` condition: an ordinary expression that must have type `bool`.
 	//
@@ -9253,13 +9457,13 @@ export type Parser
 	// The parentheses produce NO op: the group's value IS the inner expression's, so the
 	// only thing they change is the shape of the tree the climber builds.
 	//
-	// It re-enters the climber at the LOOSEST level, so a parenthesis restores every operator
-	// — `not (a or b)` is the `or` of two bools, `(x > 0) and (y > 0)` groups explicitly. It
-	// does NOT go through `parseExpression`, which would re-seed `currentBlock` and undo any
-	// short-circuit that moved it.
+	// It re-enters the climber at the LOOSEST level (via `parseValueExpression`, so `(a if c else b)`
+	// groups a ternary), restoring every operator — `not (a or b)` is the `or` of two bools, `(x > 0)
+	// and (y > 0)` groups explicitly. It does NOT go through `parseExpression`, which would re-seed
+	// `currentBlock` and undo any short-circuit that moved it.
 	function parseParenthesizedExpression(func IrFunction) returns ValueId throws ParseError
 		try self.consume(TokenKind.leftParen)
-		let value = try self.parseBinary(func, minPrec: OrPrecedence)
+		let value = try self.parseValueExpression(func)
 		try self.consume(TokenKind.rightParen)
 		return value
 	end 'parseParenthesizedExpression'
@@ -9682,13 +9886,14 @@ export type Parser
 				throw ParseError.duplicateFieldInitializer(String.from(layout.name), fieldName: String.from(nameTok.value), line: nameTok.line, column: nameTok.column)
 			end 'duplicate'
 
-			// The climber, not `parseExpression`, for `parseCallArgs`' reason: a field's value is
-			// parsed INSIDE an expression that has already seeded `currentBlock`, and re-seeding it
-			// would discard a short-circuit an earlier field performed. The value's start position is
+			// `parseValueExpression` (the climber plus a trailing ternary), not `parseExpression`, for
+			// `parseCallArgs`' reason: a field's value is parsed INSIDE an expression that has already
+			// seeded `currentBlock`, and re-seeding it would discard a short-circuit an earlier field
+			// performed — while `T{f: a if c else b}` still needs the ternary. The value's start position is
 			// captured first so `rhsWasBareLocalReference` can decide, after the value is parsed, whether
 			// it was a bare local — a managed field's move-in poisons that source.
 			let valueStart = self.pos
-			let value = try self.parseBinary(func, minPrec: OrPrecedence)
+			let value = try self.parseValueExpression(func)
 			try self.requireFieldType(layout, index: index, value: value, anchor: nameTok)
 
 			// ⭐ **ESCAPE (P1.5-A2b): a capturing closure may not fill a struct field at CONSTRUCTION either** —
@@ -10053,12 +10258,13 @@ export type Parser
 				throw ParseError.duplicateFieldInitializer(String.from(layout.name), fieldName: String.from(label), line: labelTok.line, column: labelTok.column)
 			end 'duplicate'
 
-			// The climber, not `parseExpression`, for `parseStructLiteralFields`' reason: an argument is
-			// parsed INSIDE an expression that already seeded `currentBlock`. The value's start position is
+			// `parseValueExpression` (the climber plus a trailing ternary), not `parseExpression`, for
+			// `parseStructLiteralFields`' reason: an argument is parsed INSIDE an expression that already
+			// seeded `currentBlock`. The value's start position is
 			// captured first so `rhsWasBareLocalReference` can decide, after the value is parsed, whether it
 			// was a bare local — a managed payload's move-in poisons that source.
 			let valueStart = self.pos
-			let value = try self.parseBinary(func, minPrec: OrPrecedence)
+			let value = try self.parseValueExpression(func)
 
 			// ⭐ **ESCAPE (P1.5-A2b): a capturing closure may not fill a union PAYLOAD** — the payload is a heap
 			// box slot that outlives the frame, so it would carry a closure whose env is gone (exactly a struct
@@ -12474,10 +12680,10 @@ export type Parser
 			// value's first token — anchors this argument's diagnostic span.
 			let argFirstTok = self.current()
 			let label = try self.consumeArgLabel(argIndex)
-			// The climber, not `parseExpression`: an argument is parsed INSIDE an expression
-			// that has already seeded `currentBlock`, and re-seeding it would discard a
-			// short-circuit an EARLIER argument performed.
-			let value = try self.parseBinary(func, minPrec: OrPrecedence)
+			// `parseValueExpression` (the climber plus a trailing ternary — `f(a if c else b)`), not
+			// `parseExpression`: an argument is parsed INSIDE an expression that has already seeded
+			// `currentBlock`, and re-seeding it would discard a short-circuit an EARLIER argument performed.
+			let value = try self.parseValueExpression(func)
 
 			// A capturing closure handed DOWN to a direct callee is now SUPPORTED (P1.5-A2b-2): its environment
 			// travels as the companion argument the lowering appends at the function-typed parameter position
@@ -12688,8 +12894,8 @@ export type Parser
 
 	// The POSITIONAL arguments of an indirect call — comma-separated expressions, no labels (a function
 	// TYPE has no parameter names, so `indirectCall` carries no `argLabels`/`argRanges`; see MaxonDialect).
-	// The climber (`parseBinary`), not `parseExpression`, for `parseCallArgs`' reason: an argument is
-	// parsed inside an expression that already seeded `currentBlock`.
+	// `parseValueExpression` (the climber plus a trailing ternary), not `parseExpression`, for
+	// `parseCallArgs`' reason: an argument is parsed inside an expression that already seeded `currentBlock`.
 	function parseIndirectCallArgs(func IrFunction) returns ValueIdArray throws ParseError
 		var args = ValueIdArray.create()
 		if self.at(TokenKind.rightParen) 'noArgs'
@@ -12698,7 +12904,7 @@ export type Parser
 
 		while true 'argLoop'
 			let argTok = self.current()
-			let argValue = try self.parseBinary(func, minPrec: OrPrecedence)
+			let argValue = try self.parseValueExpression(func)
 
 			// The same refusal the direct-call path makes: a capturing closure passed as an argument (here to
 			// an indirect callee) has no env at the callee. Asked before the arg is appended, so the env the

@@ -1514,8 +1514,8 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: first-class-function.capturing-closure-in-ternary-arm-errors -->
-<!-- P1.5-A2 (closures + escape) -->
+<!-- test: first-class-function.capturing-closure-in-ternary-arm-errors -->
+<!-- targets: x64-windows, wasm32-wasi -->
 A capturing closure as a ternary ARM is refused. This one also RETURNS the result, which is the
 shape that made the defect visible: it compiled clean and nil-dereffed inside `_$closure_0` —
 the exact failure the escape rule exists to prevent, reached by laundering the closure through a
@@ -1537,11 +1537,11 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3099: specs/fragments/first-class-functions/first-class-function.capturing-closure-in-ternary-arm-errors.test:9:13: cannot use a closure that captures as an arm of a conditional expression: the two arms merge through a single slot, which carries the function pointer but not the capture environment, so the closure would be called with no environment. Use a function reference, or a closure that captures nothing
+error E3099: specs/fragments/first-class-functions/first-class-function.capturing-closure-in-ternary-arm-errors.test:9:13: cannot use a closure that captures as an arm of a conditional expression: a merge joins its arms through a single slot that carries the function pointer but not the capture environment, so the closure would be called with no environment. Use a function reference, or a closure that captures nothing
 ```
 
-<!-- disabled-test: first-class-function.capturing-closure-in-ternary-to-global-errors -->
-<!-- P1.5-A2 (closures + escape) -->
+<!-- test: first-class-function.capturing-closure-in-ternary-to-global-errors -->
+<!-- targets: x64-windows, wasm32-wasi -->
 The same laundering, into a GLOBAL. Through the ternary this was an internal `StdPtr`/`StdI64`
 cast crash at lowering rather than a diagnostic.
 ```maxon
@@ -1562,11 +1562,11 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3099: specs/fragments/first-class-functions/first-class-function.capturing-closure-in-ternary-to-global-errors.test:14:14: cannot use a closure that captures as an arm of a conditional expression: the two arms merge through a single slot, which carries the function pointer but not the capture environment, so the closure would be called with no environment. Use a function reference, or a closure that captures nothing
+error E3099: specs/fragments/first-class-functions/first-class-function.capturing-closure-in-ternary-to-global-errors.test:14:14: cannot use a closure that captures as an arm of a conditional expression: a merge joins its arms through a single slot that carries the function pointer but not the capture environment, so the closure would be called with no environment. Use a function reference, or a closure that captures nothing
 ```
 
-<!-- disabled-test: first-class-function.capturing-closure-in-ternary-used-in-frame-errors -->
-<!-- P1.5-A2 (closures + escape) -->
+<!-- test: first-class-function.capturing-closure-in-ternary-used-in-frame-errors -->
+<!-- targets: x64-windows, wasm32-wasi -->
 Refused even when the result NEVER LEAVES THE FRAME. This is what makes the merge different
 from an escape route: the environment is dropped by the merge itself, so `h(22)` here called a
 closure with `env=0` and nil-dereffed without escaping anything.
@@ -1586,7 +1586,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3099: specs/fragments/first-class-functions/first-class-function.capturing-closure-in-ternary-used-in-frame-errors.test:12:12: cannot use a closure that captures as an arm of a conditional expression: the two arms merge through a single slot, which carries the function pointer but not the capture environment, so the closure would be called with no environment. Use a function reference, or a closure that captures nothing
+error E3099: specs/fragments/first-class-functions/first-class-function.capturing-closure-in-ternary-used-in-frame-errors.test:12:12: cannot use a closure that captures as an arm of a conditional expression: a merge joins its arms through a single slot that carries the function pointer but not the capture environment, so the closure would be called with no environment. Use a function reference, or a closure that captures nothing
 ```
 
 <!-- test: first-class-function.capturing-closure-in-match-arm-errors -->
@@ -1690,8 +1690,8 @@ end 'main'
 error E3099: specs/fragments/first-class-functions/first-class-function.capturing-closure-returned-from-other-block-errors.test:13:3: cannot return a closure that captures: captures are taken by reference to the enclosing function's frame, so a closure that captures cannot outlive that frame. Use a function reference, or a closure that captures nothing
 ```
 
-<!-- disabled-test: first-class-function.non-capturing-closure-through-ternary -->
-<!-- inline conditional expression `a if c else b` (NOT closures) — shv2 does not parse it yet; a separate front-end rung -->
+<!-- test: first-class-function.non-capturing-closure-through-ternary -->
+<!-- targets: x64-windows, wasm32-wasi -->
 The accept side of the ternary rule. A closure that captures NOTHING has no environment to
 lose, so it merges through a ternary like any other function value — and the merged result is
 callable, which requires the signature to have survived the merge.
