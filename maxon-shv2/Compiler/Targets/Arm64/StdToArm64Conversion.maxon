@@ -81,6 +81,9 @@ let MmapAnonPrivateMacos = 0x1002  // Darwin:  MAP_ANON (0x1000)      | MAP_PRIV
 let MmapAnonPrivateLinux = 0x22  // Linux:   MAP_ANONYMOUS (0x20)   | MAP_PRIVATE (0x2)
 let MmapAnonFd = 0xFFFFFFFFFFFFFFFF  // fd = -1 (two's-complement): MAP_ANON names no file.
 let MmapNoOffset = 0x0  // offset = 0 (ignored for an anonymous mapping).
+// The exit code a range-check violation aborts with — the arm64 twin of x64's `PanicExitCode` (1). No
+// message/backtrace here (arm64 has no panic runtime); see `lowerRangePanic`.
+let RangePanicExitCode = 0x1
 
 // The anonymous-private mapping flag word for `os`. Routed through `arm64OsCallKind` rather than a
 // second `match os`, so the set of OSes this backend serves is stated in exactly one place.
@@ -394,9 +397,7 @@ type StdToArm64Lowering
 			// restricted to `x64-windows, wasm32-wasi` and arm64 function-value codegen is a follow-up rung.
 			funcAddr(resultId, funcName) then self.emit(dstRef, op: TargetOp.arm64LeaFuncAddr(TargetVReg.virtual(resultId), funcName: funcName))
 			callIndirect(resultId, calleeReg, args) then self.lowerCallIndirect(resultId, calleeReg: calleeReg, args: args, dstRef: dstRef)
-			// P1.9: arm64 has NO panic runtime yet (`Arm64Backend` grows one with a later rung), so the two
-			// range-check-panic spec cases are restricted to `x64-windows`. A range panic must not reach here.
-			osRangePanic then panic("lowerStdToArm64: no arm64 panic runtime yet — the range-check-panic spec cases are restricted to x64-windows (see Arm64Backend / X64Runtime.mrt_panic)")
+			osRangePanic then self.lowerRangePanic(dstRef)
 		end 'lower'
 	end 'lowerBodyOp'
 
@@ -830,6 +831,16 @@ type StdToArm64Lowering
 		self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(Arm64Register.x0), srcReg: TargetVReg.virtual(codeId)))
 		self.emitOsPrimitiveCall(dstRef, importSlot: OsImportSlot.exit, syscallNumber: LinuxSyscallExitGroup)
 	end 'lowerOsExit'
+
+	// Lower `osRangePanic` (a P1.9 range-check violation) on arm64 to a BARE EXIT with code 1. arm64 has
+	// no panic runtime / backtrace (`X64Runtime.mrt_panic` is x64-only, and the two runtime-panic spec
+	// cases are restricted to `x64-windows`), so a violated guard aborts WITHOUT the message + backtrace
+	// the x64 path prints. Every case that RUNS on arm64 keeps its guard's value in range, so this exit
+	// is dead code — it exists only so the guard COMPILES. Same primitive as `lowerOsExit`, code hardcoded.
+	function lowerRangePanic(dstRef BlockRef)
+		self.emit(dstRef, op: TargetOp.arm64MovImm(arm64PhysReg(Arm64Register.x0), value: RangePanicExitCode))
+		self.emitOsPrimitiveCall(dstRef, importSlot: OsImportSlot.exit, syscallNumber: LinuxSyscallExitGroup)
+	end 'lowerRangePanic'
 
 	// Lower `osAllocPages(size)` to the POSIX page source `mmap(NULL, size, PROT_READ|PROT_WRITE,
 	// MAP_ANON|MAP_PRIVATE, -1, 0)` — the arm64 twin of x64's `lowerOsAllocPages` (VirtualAlloc), and FAR

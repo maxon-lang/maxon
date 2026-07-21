@@ -141,6 +141,10 @@ end 'wasmMemoryMinPages'
 // i32 is unreachable, but the validator requires the `(result i32)` on the stack at the end.
 let RunOkResult = 0 as Imm32
 
+// The status a range-check violation exits with — the wasm twin of x64's `PanicExitCode` (1). No
+// message/backtrace (wasm has no panic runtime); see `emitRangePanic`.
+let RangePanicExitCode = 1 as Imm32
+
 // The entry function the synthesized `$run` calls. `main` returns `ExitCode`; `$run` wraps it
 // to i32 and hands it to `exit-with-code`.
 let WasmMainFunctionName = b"main"
@@ -1018,9 +1022,7 @@ type WasmFuncEmitter
 			// call THROUGH one (`callIndirect`). See the two emitters for the funcref-table lowering.
 			funcAddr(resultId, funcName) then self.emitFuncAddr(resultId, funcName: funcName)
 			callIndirect(resultId, calleeReg, args) then self.emitCallIndirect(resultId, calleeReg: calleeReg, args: args)
-			// P1.9: wasm has no panic runtime, so the two range-check-panic spec cases are restricted to
-			// x64-windows. A range panic must not reach the wasm emitter.
-			osRangePanic then panic("StdToWasm: no wasm panic runtime — the range-check-panic spec cases are restricted to x64-windows (see X64Runtime.mrt_panic)")
+			osRangePanic then self.emitRangePanic()
 		end 'body'
 	end 'emitBodyOp'
 
@@ -1487,6 +1489,16 @@ type WasmFuncEmitter
 		self.body.call(ExitImportFuncIdx)
 		self.body.unreachable()
 	end 'emitOsExit'
+
+	// `osRangePanic` (a P1.9 range-check violation) on wasm — a BARE `exit-with-code 1`, no message or
+	// backtrace (wasm has no panic runtime; the two runtime-panic spec cases are restricted to
+	// x64-windows). Every case that RUNS on wasm keeps its guard's value in range, so this is dead code —
+	// it exists only so the guard COMPILES. Same shape as `emitOsExit` with a constant status.
+	function emitRangePanic()
+		self.body.i32Const(RangePanicExitCode)
+		self.body.call(ExitImportFuncIdx)
+		self.body.unreachable()
+	end 'emitRangePanic'
 
 	// ----------------------------------------------------------------------
 	// Memory band: top-level `var` globals (globalAddr / loadIndirect / storeIndirect)
