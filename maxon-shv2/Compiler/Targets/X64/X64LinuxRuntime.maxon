@@ -63,3 +63,34 @@ export let LinuxSyscallExitGroup = 231
 // `write(1, buf, len)` — the stdout primitive `lowerOsWriteStdout` emits on Linux. FAR simpler than
 // Windows's GetStdHandle+WriteFile: no handle call, no bytes-written out-param, no stack args.
 export let WriteStdoutFd = 0x1  // fd = 1 (STDOUT_FILENO).
+
+// --- Linux fault runtime (the SIGFPE handler for a divide-by-zero) ---
+//
+// The x64-linux twin of the Windows VEH fault handler (`X64Runtime.buildFaultThunkChunk`). On x86-64 an
+// `idiv` by zero raises #DE, which the kernel delivers as SIGFPE; a handler registered here catches it,
+// prints the panic diagnostic + symbolized backtrace, and `exit_group`s — so a divide-by-zero is a clean
+// `exit 1`, not a process killed by signal. See `X64Runtime.appendX64RuntimeChunks` (the linux arm) and
+// `BackendDispatch.prependLinuxEntryStub` (which calls `mrt_runtime_init` before `main`).
+export let LinuxSyscallRtSigaction = 13  // rt_sigaction(signum, act, oldact, sigsetsize).
+export let LinuxSyscallRtSigreturn = 15  // rt_sigreturn — the sa_restorer trampoline returns through it.
+export let LinuxSignalFpe = 8  // SIGFPE — the signal an integer #DE fault is delivered as.
+// sa_flags = SA_SIGINFO (0x4 — the handler receives (sig, siginfo*, ucontext*)) | SA_RESTORER (0x04000000).
+// ⚠ x86-64 has NO kernel-provided signal trampoline, so SA_RESTORER + a valid `sa_restorer` are MANDATORY:
+// without them the kernel raises a KERNEL SIGSEGV building the signal return frame — BEFORE the handler
+// runs, and even for a handler that never returns (measured: strace showed SIGFPE then SI_KERNEL SIGSEGV).
+export let LinuxSigactionFlags = 0x04000004
+export let LinuxRtSigsetSize = 8  // rt_sigaction's sigsetsize argument: the kernel's sigset_t is 8 bytes.
+export let StderrFd = 0x2  // fd = 2 (STDERR_FILENO) — where the panic diagnostic goes.
+
+// x86-64 kernel `struct sigaction` field offsets (32 bytes).
+export let SigactionOffHandler = 0  // sa_sigaction (with SA_SIGINFO)
+export let SigactionOffFlags = 8  // sa_flags
+export let SigactionOffRestorer = 16  // sa_restorer — the rt_sigreturn trampoline (mandatory on x86-64)
+export let SigactionOffMask = 24  // sa_mask (8-byte sigset)
+
+// x86-64 `ucontext_t` offsets to the general registers a backtrace needs. `uc_mcontext` sits at offset 40
+// (past uc_flags/uc_link/uc_stack) and its `gregs[]` array starts there; the greg indices are REG_RBP=10,
+// REG_RSP=15, REG_RIP=16, i.e. `40 + index*8` into the ucontext the handler receives in rdx.
+export let UContextRipOffset = 168  // 40 + REG_RIP(16)*8 — the faulting instruction pointer.
+export let UContextRbpOffset = 120  // 40 + REG_RBP(10)*8 — the faulting frame pointer (seeds the walk).
+export let UContextRspOffset = 160  // 40 + REG_RSP(15)*8 — the faulting stack pointer (bounds the walk).

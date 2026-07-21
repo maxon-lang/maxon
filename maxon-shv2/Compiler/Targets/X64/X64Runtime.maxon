@@ -181,6 +181,14 @@ let PrintFrameName = b"mrt_panic_print_frame"
 let WalkFramesName = b"mrt_panic_walk_frames"
 let FaultBacktraceName = b"mrt_fault_backtrace"
 let FaultThunkName = b"mrt_fault_thunk"
+// The x64-LINUX fault entry — the SIGFPE handler `mrt_runtime_init` registers via rt_sigaction. Its own
+// name (distinct from the Windows `mrt_fault_thunk`) because the two are reached differently; only the
+// Linux `runtime_init` references it, by taking its address.
+let LinuxFaultHandlerName = b"mrt_fault_handler"
+// The rt_sigreturn trampoline `sa_restorer` points at. x86-64 has no kernel signal trampoline, so the
+// kernel demands a restorer address to build the return frame — mandatory even though this handler never
+// returns through it. Just `mov eax, 15; syscall` (rt_sigreturn).
+let LinuxSigreturnName = b"mrt_rt_sigreturn"
 // The callable SOFTWARE panic entry (P1.9 range checks). EXPORTED so `StdToX64Conversion.lowerRangePanic`
 // names the SAME chunk the `osRangePanic` guard's `callDirect` targets — one string, one fixup.
 export let PanicName = b"mrt_panic"
@@ -903,9 +911,166 @@ end 'buildPanicChunk'
 // Assembly
 // ==========================================================================
 
-// Append every panic-runtime chunk. Called after the module's own functions are encoded, so
-// the runtime lays out above user code; `__symtable` closes `.text` after all of it.
-export function appendX64RuntimeChunks(chunks FunctionCodeChunkArray)
+// ==========================================================================
+// The Linux (x64) fault runtime
+// ==========================================================================
+//
+// THE LINUX TWIN OF THE WINDOWS FAULT RUNTIME, and it reuses most of it. `mrt_fault_backtrace`,
+// `mrt_panic_walk_frames`, `mrt_panic_print_frame` and `mrt_write_hex64` are OS-NEUTRAL — they call each
+// other and `mrt_write_cstr_stderr` BY NAME and touch no IAT — so the Linux runtime appends them
+// unchanged. Only THREE chunks differ from Windows, all because Linux reaches the OS through raw syscalls
+// rather than kernel32 imports: the stderr writer (`write` vs GetStdHandle+WriteFile), the fault ENTRY (a
+// SIGFPE handler reading the ucontext vs a VEH callback reading EXCEPTION_POINTERS), and `runtime_init`
+// (rt_sigaction vs AddVectoredExceptionHandler). The first and last carry the SAME names as their Windows
+// twins (`mrt_write_cstr_stderr`, `mrt_runtime_init`), so the reused chunks and `mrt_start` resolve to
+// whichever the OS build appended — never both in one binary.
+
+// mrt_rt_sigreturn — the `sa_restorer` trampoline. Raw `mov eax, 15; syscall`, with NO prologue: the
+// kernel enters a restorer with the signal frame already on the stack, so a push/frame would corrupt it.
+// Built directly (not through X64RuntimeAsm, which opens a frame). Never actually executed while this
+// handler exits, but the kernel demands the address exists to build the return frame at all.
+function buildLinuxSigreturnTrampolineChunk() returns FunctionCodeChunk
+	var code = ByteArray.create()
+	encodeX64Syscall(code, number: LinuxSyscallRtSigreturn)
+	return FunctionCodeChunk.createWith(LinuxSigreturnName, code: code, callFixups: CallFixupArray.create(), rdataRelocs: RdataRelocationArray.create(), iatRelocs: RelocationArray.create(), rdataConstants: GlobalDataTable.create())
+end 'buildLinuxSigreturnTrampolineChunk'
+
+// mrt_write_cstr_stderr (LINUX) — rcx = NUL-terminated string. The Linux twin of `buildWriteStderrChunk`:
+// the same strlen, then a single `write(2, cstr, len)` syscall instead of GetStdHandle+WriteFile through
+// the IAT. Keeps the file's internal Win64 convention (the string arrives in rcx).
+function buildLinuxWriteStderrChunk() returns FunctionCodeChunk
+	var asm = X64RuntimeAsm.beginFunction(0)
+
+	let lenLoop = asm.newLabel()
+	let lenDone = asm.newLabel()
+	let done = asm.newLabel()
+
+	// strlen: walk rax from the start (rcx, held untouched) to the NUL; len = rax - rcx.
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rax, src: X64Register.rcx, wide: true)
+	asm.placeLabel(lenLoop)
+	encodeMovzxRegByteBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rax, disp: 0)
+	emitCmpRegImm(asm, reg: X64Register.rdx, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: lenDone)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rax, base: X64Register.rax, disp: 1)
+	encodeJmp(asm.code, rel32Fixups: asm.rel32Fixups, targetBlockId: lenLoop)
+	asm.placeLabel(lenDone)
+	encodeRmRegDirect(asm.code, opcode: OpcodeSubRmReg, dest: X64Register.rax, src: X64Register.rcx, wide: true)
+
+	// An empty string is a no-op — skip `write(2, buf, 0)`.
+	emitCmpRegImm(asm, reg: X64Register.rax, imm: 0)
+	encodeJcc(asm.code, rel32Fixups: asm.rel32Fixups, cond: X64CondCode.equal, targetBlockId: done)
+
+	// write(2, cstr, len): args go in rdi/rsi/rdx. Move len (rax) and cstr (rcx) into place BEFORE the
+	// syscall number overwrites eax.
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rdx, src: X64Register.rax, wide: true)
+	encodeRmRegDirect(asm.code, opcode: OpcodeMovRmReg, dest: X64Register.rsi, src: X64Register.rcx, wide: true)
+	encodeMovRegImm32(asm.code, dest: X64Register.rdi, value: StderrFd)
+	encodeX64Syscall(asm.code, number: LinuxSyscallWrite)
+
+	asm.placeLabel(done)
+	return asm.finishFunction(WriteStderrName)
+end 'buildLinuxWriteStderrChunk'
+
+// mrt_fault_handler (LINUX) — the SIGFPE handler. Kernel SA_SIGINFO entry ABI: rdi=signum, rsi=siginfo*,
+// rdx=ucontext*. The Linux twin of `buildFaultThunkChunk`: reads the faulting RIP/RBP/RSP from the
+// ucontext (not a Windows CONTEXT), prints the SAME panic line + backtrace, and terminates with
+// exit_group(1) (not ExitProcess). It NEVER returns, which is why the sigaction needs no restorer.
+//
+// The scalar core's only fault is an idiv-by-zero, so it prints "integer divide by zero" without
+// inspecting siginfo->si_code — no other SIGFPE is raised. Slots: 0=rip, 1=rbp, 2=rsp.
+function buildLinuxFaultHandlerChunk() returns FunctionCodeChunk
+	let SlotRip = 0
+	let SlotRbp = 1
+	let SlotRsp = 2
+	var asm = X64RuntimeAsm.beginFunction(3)
+
+	// Stash the faulting RIP/RBP/RSP from the ucontext (rdx) BEFORE any call clobbers rdx.
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rdx, disp: UContextRipOffset, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotRip), srcReg: X64Register.rax)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rdx, disp: UContextRbpOffset, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotRbp), srcReg: X64Register.rax)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rax, base: X64Register.rdx, disp: UContextRspOffset, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotRsp), srcReg: X64Register.rax)
+
+	// The panic line — the SAME text the Windows thunk prints, so the harness's strip-from-` at rip=0x`
+	// leaves the identical `panic: integer divide by zero`.
+	emitPrintString(asm, bytes: b"panic: integer divide by zero at rip=0x")
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotRip), wide: true)
+	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: WriteHexName)
+	emitPrintString(asm, bytes: b" diag_base=0x")
+	emitLeaTextBase(asm, dest: X64Register.rcx)
+	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: WriteHexName)
+	emitPrintString(asm, bytes: b"\n")
+
+	// mrt_fault_backtrace(rcx=rip, rdx=rbp, r8=rsp) — the reused OS-neutral chunk. Prints `Stack trace:`,
+	// frame 0 from the fault rip, then walks the saved-rbp chain (main -> the frameless mrt_start's return
+	// address -> the kernel-zeroed rbp that ends it).
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rcx, base: X64Register.rbp, disp: asm.slotDisp(SlotRip), wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.rdx, base: X64Register.rbp, disp: asm.slotDisp(SlotRbp), wide: true)
+	encodeLoadRegBaseDisp(asm.code, destReg: X64Register.r8, base: X64Register.rbp, disp: asm.slotDisp(SlotRsp), wide: true)
+	encodeCallDirect(asm.code, callFixups: asm.callFixups, targetName: FaultBacktraceName)
+
+	// exit_group(1) — never returns. A converted fault is terminal (no recover(), no scheduler).
+	encodeMovRegImm32(asm.code, dest: X64Register.rdi, value: PanicExitCode)
+	encodeX64Syscall(asm.code, number: LinuxSyscallExitGroup)
+
+	return asm.finishFunction(LinuxFaultHandlerName)
+end 'buildLinuxFaultHandlerChunk'
+
+// mrt_runtime_init (LINUX) — registers the SIGFPE handler via rt_sigaction. `mrt_start` calls this before
+// `main`, so the first user instruction is already covered. The Linux twin of `buildRuntimeInitChunk`.
+// Builds a `struct sigaction` on the stack: the handler address, SA_SIGINFO (so the handler receives the
+// ucontext), a NULL restorer (the handler exits, so rt_sigreturn is never reached), and an empty mask —
+// then rt_sigaction(SIGFPE, &act, NULL, 8). Slots 0..3 are the 32-byte struct, ascending from the LOWEST
+// slot so `&act` (= the lowest field, sa_handler) is `slotDisp(3)`.
+function buildLinuxRuntimeInitChunk() returns FunctionCodeChunk
+	let SlotHandler = 3  // rbp-32 = &act = sa_handler (offset 0)
+	let SlotFlags = 2  // rbp-24 = sa_flags (offset 8)
+	let SlotRestorer = 1  // rbp-16 = sa_restorer (offset 16)
+	let SlotMask = 0  // rbp-8 = sa_mask (offset 24)
+	var asm = X64RuntimeAsm.beginFunction(4)
+
+	encodeLeaRegFuncAddr(asm.code, callFixups: asm.callFixups, dest: X64Register.rax, targetName: LinuxFaultHandlerName)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotHandler), srcReg: X64Register.rax)
+	encodeMovRegImm32(asm.code, dest: X64Register.rax, value: LinuxSigactionFlags)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotFlags), srcReg: X64Register.rax)
+	// sa_restorer = &mrt_rt_sigreturn — MANDATORY on x86-64: the kernel builds the signal return frame from
+	// it, and a missing/NULL restorer is a KERNEL SIGSEGV during delivery (measured), before the handler.
+	encodeLeaRegFuncAddr(asm.code, callFixups: asm.callFixups, dest: X64Register.rax, targetName: LinuxSigreturnName)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotRestorer), srcReg: X64Register.rax)
+	// sa_mask = 0 (block nothing additional during the handler).
+	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: X64Register.rax, src: X64Register.rax, wide: true)
+	encodeStoreBaseDispReg(asm.code, base: X64Register.rbp, disp: asm.slotDisp(SlotMask), srcReg: X64Register.rax)
+
+	// rt_sigaction(SIGFPE, &act, NULL, 8): rdi=SIGFPE, rsi=&act (the lowest field's address), rdx=0
+	// (oldact), r10=8 (the kernel's sigset_t size).
+	encodeMovRegImm32(asm.code, dest: X64Register.rdi, value: LinuxSignalFpe)
+	encodeLeaRegRegImm32(asm.code, dest: X64Register.rsi, base: X64Register.rbp, disp: asm.slotDisp(SlotHandler))
+	encodeRmRegDirect(asm.code, opcode: OpcodeXorRmReg, dest: X64Register.rdx, src: X64Register.rdx, wide: true)
+	encodeMovRegImm32(asm.code, dest: X64Register.r10, value: LinuxRtSigsetSize)
+	encodeX64Syscall(asm.code, number: LinuxSyscallRtSigaction)
+
+	return asm.finishFunction(RuntimeInitName)
+end 'buildLinuxRuntimeInitChunk'
+
+// ==========================================================================
+// Assembly
+// ==========================================================================
+
+// Append the x64 fault runtime for `target`'s OS. Called after the module's own functions are encoded, so
+// the runtime lays out above user code; `__symtable` closes `.text` after all of it. `macos`/`wasi` never
+// reach here — `buildX64Backend` appends this only for windows/linux.
+export function appendX64RuntimeChunks(chunks FunctionCodeChunkArray, target Target)
+	match target.os 'os'
+		windows then appendX64WindowsRuntimeChunks(chunks)
+		linux then appendX64LinuxRuntimeChunks(chunks)
+		macos to wasi then panic("appendX64RuntimeChunks: no x64 fault runtime for {targetToString(target)} — this is appended only for windows/linux")
+	end 'os'
+end 'appendX64RuntimeChunks'
+
+// The Windows fault runtime: the VEH `runtime_init`/`fault_thunk`, the software `mrt_panic`, and the
+// shared backtrace/hex chunks over a GetStdHandle+WriteFile stderr writer.
+function appendX64WindowsRuntimeChunks(chunks FunctionCodeChunkArray)
 	chunks.push(buildRuntimeInitChunk())
 	chunks.push(buildPanicChunk())
 	chunks.push(buildFaultThunkChunk())
@@ -914,4 +1079,19 @@ export function appendX64RuntimeChunks(chunks FunctionCodeChunkArray)
 	chunks.push(buildPrintFrameChunk())
 	chunks.push(buildWriteHexChunk())
 	chunks.push(buildWriteStderrChunk())
-end 'appendX64RuntimeChunks'
+end 'appendX64WindowsRuntimeChunks'
+
+// The Linux fault runtime: the rt_sigaction `runtime_init` + the SIGFPE `fault_handler`, the SAME shared
+// backtrace/hex/print chunks the Windows path uses, over a `write`-syscall stderr writer. NO `mrt_panic`:
+// the software-panic entry is a range-guard target, and no x64-linux test emits `call mrt_panic` (the
+// suite is green with no runtime at all today); it grows back with the range-panic diagnostic if needed.
+function appendX64LinuxRuntimeChunks(chunks FunctionCodeChunkArray)
+	chunks.push(buildLinuxRuntimeInitChunk())
+	chunks.push(buildLinuxSigreturnTrampolineChunk())
+	chunks.push(buildLinuxFaultHandlerChunk())
+	chunks.push(buildFaultBacktraceChunk())
+	chunks.push(buildWalkFramesChunk())
+	chunks.push(buildPrintFrameChunk())
+	chunks.push(buildWriteHexChunk())
+	chunks.push(buildLinuxWriteStderrChunk())
+end 'appendX64LinuxRuntimeChunks'

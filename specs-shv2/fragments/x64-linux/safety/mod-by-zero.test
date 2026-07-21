@@ -1,0 +1,21 @@
+// Test: mod-by-zero
+function main() returns ExitCode
+	let zero = 0
+	let result = 5 mod zero
+	return result
+end 'main'
+---
+ExitCode: 1
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 rcx, 0
+    x64.movRegImm32 rax, 5
+    x64.cqo
+    x64.idivReg rcx
+    x64.movRegReg r8, rdx
+    x64.popReg rbp
+    x64.ret
+}

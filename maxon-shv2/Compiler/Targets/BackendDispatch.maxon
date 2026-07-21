@@ -133,14 +133,13 @@ function buildX64Backend(stdModule StdModule, target Target, globalData GlobalDa
 	// "walk a saved-RBP chain" at this milestone (see X64Runtime's header). It appends AFTER
 	// user code, which keeps `mrt_start` at `.text` offset 0 where the backtrace needs it.
 	//
-	// ⚠ WINDOWS ONLY. The panic runtime installs a Windows Vectored Exception Handler and terminates
-	// through ExitProcess — both x64-windows facts. Linux's scalar core has no fault handler (the
-	// divide-by-zero and force-segfault tests are windows-gated) and reaches the OS through raw syscalls,
-	// so it appends no runtime floor at all — exactly as the arm64-linux backend appends only its entry
-	// stub. macos/wasi never reach here for an x64 module: `augmentWithRuntime` above already rejected them.
+	// x64-windows installs a Windows Vectored Exception Handler; x64-linux installs a SIGFPE handler via
+	// rt_sigaction (`appendX64RuntimeChunks` branches on the OS). Both catch the idiv-by-zero #DE and turn
+	// it into a `panic: integer divide by zero` diagnostic + symbolized backtrace + exit 1 — the arm64
+	// backends instead define `sdiv`-by-0 as 0 and need no fault handler. macos/wasi never reach here for
+	// an x64 module: `augmentWithRuntime` above already rejected them.
 	match target.os 'panicRuntime'
-		windows then appendX64RuntimeChunks(chunks)
-		linux then break 'panicRuntime'
+		windows to linux then appendX64RuntimeChunks(chunks, target: target)
 		macos to wasi then panic("buildX64Backend: augmentWithRuntime should have rejected {targetToString(target)} before the encode phase")
 	end 'panicRuntime'
 	// The two hand-assembled green-thread chunks (`__gt_context_switch`, `__gt_trampoline`) join only when
@@ -262,6 +261,7 @@ end 'appendLeakGate'
 // asserts the stub leads `.text`). The Linux twin of `prependEntryStub`, and CARRYING NO FRAME, for
 // reasons that all point the same way:
 //
+//   call mrt_runtime_init installs the SIGFPE handler (rt_sigaction) — appendX64LinuxRuntimeChunks
 //   call main            main returns its ExitCode in R8 (custom ABI)
 //   [leak gate]          mov rcx, r8 ; call __mm_leak_check  ->  adjusted code / 101 in R8
 //   mov edi, r8d         hand R8's low 32 bits to exit_group's rdi (Linux syscall arg 0)
@@ -274,14 +274,20 @@ end 'appendLeakGate'
 // `call`). So `call main` from the kernel's alignment lands `main` at rsp ≡ 8 (mod 16) — exactly what a
 // shv2 function expects — with no push to invert the parity. The Windows stub's `push rbp` (which opens
 // the backtrace chain) would flip it the WRONG way here and misalign `main`. And the stub needs no
-// frame: there is no panic-runtime backtrace to chain this rung, no Win64 shadow space to reserve (raw
-// syscalls carry no imports, and shv2 functions spill to their OWN frames), and exit_group never
-// returns. The kernel also zeroes rbp at entry (SysV ABI), so any callee's saved-rbp chain terminates
-// cleanly without this stub setting one up.
+// frame: the SIGFPE backtrace chains through MAIN's frame (main's saved rbp is the kernel-zeroed rbp
+// this frameless stub left, so the trace is `in main` -> `in mrt_start` -> ends), there is no Win64
+// shadow space to reserve (raw syscalls carry no imports, and shv2 functions spill to their OWN frames),
+// and exit_group never returns. The kernel zeroes rbp at entry (SysV ABI), so the saved-rbp chain
+// terminates cleanly without this stub setting one up.
 function prependLinuxEntryStub(module TargetModule, checkLeaks bool)
 	var func = IrFunction.createFromStd(EntryPointName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
 	var block = module.addBlock(func, label: b"entry")
 
+	// Install the SIGFPE fault handler (rt_sigaction) before any user code runs, exactly as the Windows
+	// stub calls `mrt_runtime_init` first. `RuntimeInitName` resolves to the LINUX init
+	// `appendX64LinuxRuntimeChunks` appended; it runs from the kernel's 16-aligned entry and returns with
+	// rsp restored, so the following `call main` still lands main at rsp≡8 (mod 16).
+	module.appendOp(block, op: TargetOp.callDirect(RuntimeInitName))
 	module.appendOp(block, op: TargetOp.callDirect(UserEntryName))
 	appendLeakGate(module, block: block, checkLeaks: checkLeaks)
 

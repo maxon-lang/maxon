@@ -42,7 +42,7 @@ asserted. arm64-macOS has no frame-walking fault diagnostic yet, so its tests
 assert only the panic line.
 
 <!-- test: divide-by-zero -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, x64-linux -->
 ### Integer divide-by-zero produces a clean panic
 ```maxon
 function main() returns ExitCode
@@ -62,7 +62,7 @@ Stack trace:
 ```
 
 <!-- test: mod-by-zero -->
-<!-- targets: x64-windows -->
+<!-- targets: x64-windows, x64-linux -->
 ### Integer modulo-by-zero produces a clean panic
 ```maxon
 function main() returns ExitCode
