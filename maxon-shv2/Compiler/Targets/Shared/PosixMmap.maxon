@@ -1,0 +1,19 @@
+// PosixMmap — the `mmap(NULL, size, PROT_READ|PROT_WRITE, MAP_ANONYMOUS|MAP_PRIVATE, -1, 0)`
+// parameters `osAllocPages` bottoms out in on every POSIX target. Written ONCE and consumed by BOTH
+// Linux isels (x64's `X64LinuxRuntime`/`StdToX64Conversion` and arm64's `StdToArm64Conversion`), so the
+// ABI is one fact rather than two copies with nothing checking them (OPEN #83).
+//
+// Four of these are POSIX-UNIVERSAL — identical on Darwin and Linux (base, prot, fd, offset). The fifth,
+// `MmapAnonPrivateLinux`, is the LINUX flag word; Darwin's differs (`MAP_ANON` is 0x1000 there, 0x20 on
+// Linux, over a shared `MAP_PRIVATE` of 0x2 — so 0x1002 vs 0x22), and that Darwin word stays with the
+// arm64-macOS isel (`StdToArm64Conversion.MmapAnonPrivateMacos`), the only target that needs it — x64
+// never targets macOS.
+//
+// ⭐ MAP_ANON IS WHAT MAKES THE ZEROING CONTRACT TRUE: an anonymous mapping is kernel-zeroed on first
+// touch, which is the slab's zeroing contract (exactly as Windows's MEM_COMMIT is). A MAP_ANON mapping
+// must name NO file, which is why `fd` is -1.
+export let MmapKernelChoosesBase = 0x0  // addr = NULL: the kernel picks the base.
+export let MmapProtReadWrite = 0x3  // PROT_READ (0x1) | PROT_WRITE (0x2)
+export let MmapAnonPrivateLinux = 0x22  // Linux: MAP_ANONYMOUS (0x20) | MAP_PRIVATE (0x2)
+export let MmapAnonFd = 0xFFFFFFFFFFFFFFFF  // fd = -1 (two's-complement): MAP_ANON names no file.
+export let MmapNoOffset = 0x0  // offset = 0 (ignored for an anonymous mapping).

@@ -62,25 +62,17 @@ let Arm64FloatReturnReg = Arm64Register.d0
 let Arm64FlagReturnReg = Arm64Register.x9
 
 // The `mmap` call shape `lowerOsAllocPages` emits: `mmap(NULL, size, PROT_READ|PROT_WRITE,
-// MAP_ANON|MAP_PRIVATE, -1, 0)` — the POSIX twin of x64's VirtualAlloc constants. Named rather than
-// spelled as bare hex at the call site: `0x1002` is unreadable and `MAP_ANON|MAP_PRIVATE` is the fact.
+// MAP_ANON|MAP_PRIVATE, -1, 0)`. The POSIX-shared parameters (`MmapKernelChoosesBase`/`MmapProtReadWrite`/
+// `MmapAnonPrivateLinux`/`MmapAnonFd`/`MmapNoOffset`) live in `Targets/Shared/PosixMmap.maxon`, one fact
+// shared with the x64 isel (OPEN #83).
 //
-// ⭐ MAP_ANON IS WHAT MAKES THE ZEROING CONTRACT TRUE. An anonymous mapping is kernel-zeroed on first
-// touch, which is the entire basis for `__slab_alloc` handing out bump slots without memzeroing them —
-// exactly the role `MEM_COMMIT` plays for x64's VirtualAlloc. MAP_PRIVATE travels with it, and a
-// MAP_ANON mapping must name NO file, which is why `fd` is -1.
-//
-// ⚠ THE FLAG WORD IS THE ONE NUMBER THAT DIFFERS BETWEEN THE TWO OSes — everything else about the
-// call (argument order, prot bits, the -1 fd, the zero offset) is identical. `MAP_ANON` is 0x1000 on
-// Darwin and `MAP_ANONYMOUS` is 0x20 on Linux, over a shared `MAP_PRIVATE` of 0x2, so the words are
-// 0x1002 and 0x22. A blanket value would map a FILE on one of the two and hand the slab a mapping
-// that is neither anonymous nor zeroed.
-let MmapKernelChoosesBase = 0x0  // addr = NULL: the kernel picks the base.
-let MmapProtReadWrite = 0x3  // PROT_READ (0x1) | PROT_WRITE (0x2)
-let MmapAnonPrivateMacos = 0x1002  // Darwin:  MAP_ANON (0x1000)      | MAP_PRIVATE (0x2)
-let MmapAnonPrivateLinux = 0x22  // Linux:   MAP_ANONYMOUS (0x20)   | MAP_PRIVATE (0x2)
-let MmapAnonFd = 0xFFFFFFFFFFFFFFFF  // fd = -1 (two's-complement): MAP_ANON names no file.
-let MmapNoOffset = 0x0  // offset = 0 (ignored for an anonymous mapping).
+// ⚠ THE FLAG WORD IS THE ONE NUMBER THAT DIFFERS BETWEEN THE TWO OSes this backend serves — everything
+// else about the call is POSIX-universal. `MAP_ANON` is 0x1000 on Darwin (`MAP_ANONYMOUS` is 0x20 on
+// Linux), over a shared `MAP_PRIVATE` of 0x2 — so the words are 0x1002 and 0x22. The Darwin word stays
+// HERE because x64 never targets macOS, so arm64 is the only backend that needs it; the Linux word is
+// shared. A blanket value would map a FILE on one OS and hand the slab a mapping that is neither
+// anonymous nor zeroed.
+let MmapAnonPrivateMacos = 0x1002  // Darwin: MAP_ANON (0x1000) | MAP_PRIVATE (0x2). arm64-macOS only.
 // The exit code a range-check violation aborts with — the arm64 twin of x64's `PanicExitCode` (1). No
 // message/backtrace here (arm64 has no panic runtime); see `lowerRangePanic`.
 let RangePanicExitCode = 0x1

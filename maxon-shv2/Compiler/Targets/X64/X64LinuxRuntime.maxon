@@ -52,19 +52,13 @@ export let LinuxSyscallWrite = 1
 export let LinuxSyscallMmap = 9
 export let LinuxSyscallExitGroup = 231
 
-// --- Linux mmap parameters (shared POSIX ABI) ---
+// --- Linux mmap parameters ---
 //
 // The `mmap(NULL, size, PROT_READ|PROT_WRITE, MAP_ANONYMOUS|MAP_PRIVATE, -1, 0)` `lowerOsAllocPages`
 // emits on Linux — the raw-syscall twin of the Windows `VirtualAlloc(NULL, size, MEM_COMMIT|MEM_RESERVE,
-// PAGE_READWRITE)`. MAP_ANONYMOUS returns ZEROED pages, which is the slab's zeroing contract (exactly as
-// Windows's MEM_COMMIT is). These are the same POSIX values `StdToArm64Conversion` names for arm64-linux
-// (the flag word differs on Darwin, which x64 never targets); duplicated rather than shared because
-// arm64's are module-private to that file — see the report's follow-up note.
-export let MmapKernelChoosesBase = 0x0  // addr = NULL: the kernel picks the base.
-export let MmapProtReadWrite = 0x3  // PROT_READ (0x1) | PROT_WRITE (0x2)
-export let MmapAnonPrivateLinux = 0x22  // MAP_ANONYMOUS (0x20) | MAP_PRIVATE (0x2)
-export let MmapAnonFd = 0xFFFFFFFFFFFFFFFF  // fd = -1 (two's-complement): MAP_ANONYMOUS names no file.
-export let MmapNoOffset = 0x0  // offset = 0 (ignored for an anonymous mapping).
+// PAGE_READWRITE)`. The ABI constants (`MmapKernelChoosesBase`/`MmapProtReadWrite`/`MmapAnonPrivateLinux`/
+// `MmapAnonFd`/`MmapNoOffset`) live in `Targets/Shared/PosixMmap.maxon`, shared with the arm64 isel so
+// the mmap ABI is one fact, not two copies (OPEN #83).
 
 // `write(1, buf, len)` — the stdout primitive `lowerOsWriteStdout` emits on Linux. FAR simpler than
 // Windows's GetStdHandle+WriteFile: no handle call, no bytes-written out-param, no stack args.
