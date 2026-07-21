@@ -1987,10 +1987,11 @@ export type Parser
 	// keeps a ranged alias like `ExitCode` from allocating on the hot real-parse path; only an actual
 	// generic-instance typealias — rare, and absent from the scale corpus — ever pushes an entry.
 	var genericAliasScratch as GenericAliasEntryArray
-	// The SHARED empty type-parameter-flag array (P1.6-A) returned by `paramTypeParamFlagsIn` for every
-	// receiver-less function OUTSIDE a generic type — which is all of them on the generics-free corpus. It
-	// is never mutated (`paramIsTypeParamTyped` only reads it, OOB-safe), so one allocation per parser
-	// serves every non-generic function's consume scan, keeping that hot path allocation-free.
+	// The SHARED empty type-parameter-flag array (P1.6-A) the consume scan passes as `typeParamFlags` for
+	// every receiver-less function OUTSIDE a generic type — which is all of them on the generics-free
+	// corpus. It is never mutated (`paramNamesIn` skips the flag work when `collectTypeParamFlags` is false,
+	// and `paramIsTypeParamTyped` only reads it, OOB-safe), so one allocation per parser serves every
+	// non-generic function's consume scan, keeping that hot path allocation-free.
 	var emptyTypeParamFlags as BoolArray
 	// The SHARED empty type-parameter-name list (P1.6-A) that `enclosingTypeParams` holds outside a
 	// generic type — which is every type on the generics-free corpus. `openTypeParamScope` points at it
@@ -2364,7 +2365,17 @@ export type Parser
 		// method inside a type whose `function` keyword is not preceded by `static` (captured above).
 		let takesReceiver = not self.enclosingType.isEmpty() and not hasStaticModifier
 		if not takesReceiver 'receiverless'
-			self.scanConsumeBits(funcName, paramNames: self.paramNamesIn(paramsStart), typeParamTyped: self.paramTypeParamFlagsIn(paramsStart), bodyStart: self.pos, paramConsumes: paramConsumes)
+			// A parameter can be type-parameter-typed ONLY inside a generic type's body (a non-empty `uses`
+			// list); a top-level function and a non-generic type's method have none. Off the generic path the
+			// flags stay the SHARED empty array (⚡ no per-function `BoolArray`) and `paramNamesIn` skips the
+			// flag work — `paramIsTypeParamTyped` reads every missing index as `false`.
+			let collectTypeParamFlags = not self.enclosingTypeParams.isEmpty()
+			var typeParamFlags = self.emptyTypeParamFlags
+			if collectTypeParamFlags 'genericScope'
+				typeParamFlags = BoolArray.create()
+			end 'genericScope'
+			let paramNames = self.paramNamesIn(paramsStart, typeParamFlagsOut: typeParamFlags, collectTypeParamFlags: collectTypeParamFlags)
+			self.scanConsumeBits(funcName, paramNames: paramNames, typeParamTyped: typeParamFlags, bodyStart: self.pos, paramConsumes: paramConsumes)
 		end 'receiverless'
 	end 'recordScannedSignature'
 
@@ -2382,9 +2393,9 @@ export type Parser
 	// uses and leaves the transitive case (a parameter forwarded to a consuming CALLEE — a `:` at a `(`
 	// level, or a call argument) to the borrowed-value refusal. Parens are stripped exactly as the real
 	// parse's `rhsWasBareLocalReference` strips them, so the two agree on what a bare-parameter value is.
-	// Is parameter `index` type-parameter-typed, per `paramTypeParamFlagsIn`? SAFE against a short flag
-	// array: `paramTypeParamFlagsIn` returns an EMPTY array when the enclosing scope has no type params, so
-	// every out-of-range index is a plain (non-type-param) parameter — false.
+	// Is parameter `index` type-parameter-typed, per the flags `paramNamesIn` filled? SAFE against a short
+	// flag array: the flags are the SHARED EMPTY array outside a generic type (`collectTypeParamFlags`
+	// false), so every out-of-range index is a plain (non-type-param) parameter — false.
 	function paramIsTypeParamTyped(flags BoolArray, index ParamCount) returns bool
 		return try flags.get(index) otherwise false
 	end 'paramIsTypeParamTyped'
@@ -2511,11 +2522,22 @@ export type Parser
 		return paramNames.count()
 	end 'paramIndexIn'
 
-	// Read the ordered parameter NAMES out of the `(…)` beginning at `parenPos` — peek-only (the cursor is
-	// untouched). Each parameter is `name Type`, so the first token after `(` or a top-level `,` is the name
-	// and the type runs to the next top-level `,` or the closing `)`. Paren depth is tracked because a type
-	// may itself contain parens (`int(0 to 100)`, `function(X) returns Y`).
-	function paramNamesIn(parenPos TokenIndex) returns ByteArrayArray
+	// ⭐ **READ A PARAMETER LIST IN ONE WALK (P1.6-A)** — the ordered NAMES out of the `(…)` beginning at
+	// `parenPos` (returned), and IN THE SAME PASS whether each parameter's declared type is a bare type
+	// parameter, pushed into `typeParamFlagsOut`. Peek-only (the cursor is untouched). Each parameter is
+	// `name Type`, so the first token after `(` or a top-level `,` is the name and the type runs to the
+	// next top-level `,` or the closing `)`; `skipParamType` finds that end (paren depth tracked, because a
+	// type may itself contain parens — `int(0 to 100)`, `function(X) returns Y`).
+	//
+	// ⚠ **NAME AND TYPE-PARAM FLAG ARE PRODUCED TOGETHER, SO `names[i]` AND `typeParamFlags[i]` ALWAYS
+	// DESCRIBE THE SAME PARAMETER.** The consume-scan exclusion reads the flag to decide whether parameter
+	// `i` was moved (`Self{f: p}`) or merely aliased (a trivial type-param store) — a MISALIGNMENT would
+	// fire the exclusion on the wrong parameter and leak (or double-move) a value. Two independent walks
+	// would agree only by coincidence; ONE walk makes the alignment structural. When
+	// `collectTypeParamFlags` is false — every function OUTSIDE a generic type, i.e. all of them on the
+	// generics-free corpus — the flag work is skipped and `typeParamFlagsOut` is left untouched (the caller
+	// passes the SHARED empty array, ⚡ so the hot path allocates no per-function `BoolArray`).
+	function paramNamesIn(parenPos TokenIndex, typeParamFlagsOut BoolArray, collectTypeParamFlags bool) returns ByteArrayArray
 		var names = ByteArrayArray.create()
 		var q = parenPos
 		if self.kindAt(q) != TokenKind.leftParen 'noParens'
@@ -2531,7 +2553,11 @@ export type Parser
 			// legal parameter name; the type reader that follows is what tells them apart, and the sweep only
 			// needs the text, not the kind).
 			names.push(self.tokenAt(q).value)
-			let typeEnd = self.skipParamType(q + 1)
+			let typeStart = q + 1
+			let typeEnd = self.skipParamType(typeStart)
+			if collectTypeParamFlags 'flag'
+				typeParamFlagsOut.push(self.paramTypeIsTypeParam(typeStart, typeEnd: typeEnd))
+			end 'flag'
 			if self.kindAt(typeEnd) != TokenKind.comma 'endList'
 				return names
 			end 'endList'
@@ -2540,11 +2566,16 @@ export type Parser
 		panic("paramNamesIn: the parameter loop only exits by returning at the closing `)` or at EOF")
 	end 'paramNamesIn'
 
+	// Is the parameter type spanning `[typeStart, typeEnd)` a bare TYPE PARAMETER (P1.6-A) — a SINGLE
+	// identifier (`typeEnd == typeStart + 1`) whose text names a `uses` parameter of the enclosing type?
+	// The consume-scan exclusion's whole predicate, split out so the one walk stays readable.
+	function paramTypeIsTypeParam(typeStart TokenIndex, typeEnd TokenIndex) returns bool
+		return typeEnd == typeStart + 1 and self.kindAt(typeStart) == TokenKind.identifier and self.typeParamPositionOf(self.tokenAt(typeStart).value) < self.enclosingTypeParams.count()
+	end 'paramTypeIsTypeParam'
+
 	// Advance past ONE parameter's TYPE — from the token AFTER the parameter's name to the token that
 	// ENDS the type: the `,` before the next parameter, the `)` closing the list, or EOF on a malformed
-	// list. Balanced over nested `(...)` (a `function(…)`-typed parameter). SHARED by the two param-list
-	// scanners (`paramNamesIn` and `paramTypeParamFlagsIn`), so they cannot come to disagree about where a
-	// parameter's type ends — the one fact they both walk over.
+	// list. Balanced over nested `(...)` (a `function(…)`-typed parameter).
 	function skipParamType(fromType TokenIndex) returns TokenIndex
 		var q = fromType
 		var depth = 0
@@ -2569,48 +2600,6 @@ export type Parser
 		end 'skip'
 		panic("skipParamType: the loop only exits by returning at `,`, `)` or EOF")
 	end 'skipParamType'
-
-	// ⭐ **WHICH PARAMETERS ARE TYPE-PARAMETER-TYPED (P1.6-A)** — one bool per parameter, parallel to
-	// `paramNamesIn`, true where the declared type is a bare `T` in the enclosing type's `uses` list. THE
-	// consume-scan exclusion reads it: a parameter of an OPAQUE type parameter is stored TRIVIALLY into a
-	// generic field (`Self{value: v}` on `type Box uses T`), so the callee does NOT take ownership of it —
-	// marking such a parameter consumed would move (and leak) a managed argument the trivial destructor
-	// never drops. A type parameter is exactly a single identifier ending at the next `,`/`)` whose text
-	// is a `uses` name. Empty enclosing scope ⇒ every flag false (a top-level function has no type params).
-	function paramTypeParamFlagsIn(parenPos TokenIndex) returns BoolArray
-		// ⚡ ZERO-COST OFF THE GENERIC PATH. A parameter can be type-parameter-typed ONLY inside a generic
-		// type's body (a non-empty `uses` list); a top-level function and a non-generic type's method have
-		// no type parameter for any parameter to name. Every such caller returns the SHARED empty flags —
-		// no per-function `BoolArray` — so the consume scan pays nothing extra on the generics-free scale
-		// corpus (`paramIsTypeParamTyped` reads a missing index as `false`).
-		if self.enclosingTypeParams.isEmpty() 'noTypeParams'
-			return self.emptyTypeParamFlags
-		end 'noTypeParams'
-
-		var flags = BoolArray.create()
-		var q = parenPos
-		if self.kindAt(q) != TokenKind.leftParen 'noParens'
-			return flags
-		end 'noParens'
-		q = q + 1
-		if self.kindAt(q) == TokenKind.rightParen 'noParams'
-			return flags
-		end 'noParams'
-
-		while true 'params'
-			let typeStart = q + 1
-			let typeEnd = self.skipParamType(typeStart)
-			// A type parameter is a SINGLE identifier (`typeEnd == typeStart + 1`) whose text names a `uses`
-			// parameter of the enclosing type.
-			let isTypeParam = typeEnd == typeStart + 1 and self.kindAt(typeStart) == TokenKind.identifier and self.typeParamPositionOf(self.tokenAt(typeStart).value) < self.enclosingTypeParams.count()
-			flags.push(isTypeParam)
-			if self.kindAt(typeEnd) != TokenKind.comma 'endList'
-				return flags
-			end 'endList'
-			q = typeEnd + 1
-		end 'params'
-		panic("paramTypeParamFlagsIn: the parameter loop only exits by returning at the closing `)` or at EOF")
-	end 'paramTypeParamFlagsIn'
 
 	// The name a `function <nameTok>` is DECLARED under: its own, at file scope; `Point.create`
 	// inside `type Point`.
@@ -3279,15 +3268,23 @@ export type Parser
 	// non-generic base does not also report a spurious arity or managed-arg error against the same site.
 	function checkGenericInstance(baseTok Token, args MaxonTypeArray)
 		match self.signatures.structOf(baseTok.value) 'base'
-			undeclared then self.recordArtifactDiagnostic(ErrorCode.genericBaseNotGeneric, message: "Type '{String.from(baseTok.value)}' has no associated types", tok: baseTok)
+			undeclared then self.recordBaseNotGeneric(baseTok)
 			declared(layout) then self.checkGenericInstanceAgainst(layout, baseTok: baseTok, args: args)
 		end 'base'
 	end 'checkGenericInstance'
 
+	// The "has no associated types" verdict (E2055), from its ONE home (P1.6-A). Reached by BOTH halves
+	// of the base check — a `Base` that is not a declared type at all (`structOf` undeclared) and a `Base`
+	// that is a declared type with an empty `uses` list (`typeParamCount() == 0`) — which are the same
+	// diagnostic. Bound here rather than spelled at each site so the two callers cannot drift the message.
+	function recordBaseNotGeneric(baseTok Token)
+		self.recordArtifactDiagnostic(ErrorCode.genericBaseNotGeneric, message: "Type '{String.from(baseTok.value)}' has no associated types", tok: baseTok)
+	end 'recordBaseNotGeneric'
+
 	// The declared-base half of `checkGenericInstance` — arity, then per-argument managed rejection.
 	function checkGenericInstanceAgainst(layout StructLayout, baseTok Token, args MaxonTypeArray)
 		if layout.typeParamCount() == 0 'notGeneric'
-			self.recordArtifactDiagnostic(ErrorCode.genericBaseNotGeneric, message: "Type '{String.from(baseTok.value)}' has no associated types", tok: baseTok)
+			self.recordBaseNotGeneric(baseTok)
 			return
 		end 'notGeneric'
 
