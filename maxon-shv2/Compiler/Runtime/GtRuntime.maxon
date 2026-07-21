@@ -168,6 +168,14 @@ let ProcInfoHThreadOffset = 8
 // as a zero-extended u32 (a 4-byte read that ignores the high dword, so a dirty high half cannot corrupt it).
 let ExitCodeSlotBytes = 8
 let TrailingNulBytes = 1  // the one extra byte for the cmdline's NUL terminator (slab-zeroed → free)
+// The exit code `__gt_process_run` aborts the whole process with when `CreateProcessA` FAILS (a command whose
+// first token is not a runnable executable). On failure CreateProcessA leaves the slab-zeroed
+// PROCESS_INFORMATION untouched, so `hProcess == 0` detects it — and the runtime MUST NOT park on a null handle,
+// which would busy-spin the netpoll forever (WaitForMultipleObjects on a NULL handle returns WAIT_FAILED
+// immediately, so the poll never fires). A hard `ExitProcess`-style abort is the honest fatal response (a
+// message-carrying panic would need the parser's `.rdata` interner, which the builder-built runtime has no handle
+// to at this rung — a richer diagnostic is a follow-up). `runProcess` on a valid command never reaches here.
+let SpawnFailedExitCode = 1
 
 // --- Monotonic clock (P1.5 mid-body-yield) ---
 // `ns = ticks * 1e9 / freq`, evaluated as the OVERFLOW-SAFE split identity
@@ -1359,6 +1367,8 @@ function buildGtProcessRun(module StdModule)
 	var copyHdr = module.addBlock(func, label: b"copyhdr")
 	var copyBody = module.addBlock(func, label: b"copybody")
 	var afterCopy = module.addBlock(func, label: b"aftercopy")
+	var spawnFailed = module.addBlock(func, label: b"spawnfailed")
+	var spawnOk = module.addBlock(func, label: b"spawnok")
 	var selfDrive = module.addBlock(func, label: b"selfdrive")
 	var parkSwitch = module.addBlock(func, label: b"parkswitch")
 	var reap = module.addBlock(func, label: b"reap")
@@ -1425,30 +1435,47 @@ function buildGtProcessRun(module StdModule)
 	module.setTerminator(copyBody, op: StdOp.branch(copyHdr.id))
 	copyBody.branchEdges.push(BranchEdge.create(copyHdr.id, argIds: argsOf(iNext)))
 
-	// afterCopy: spawn the child, close the (unneeded) thread handle, park the current GT on the process, and hand
-	// control to the scheduler. Mirrors `__gt_sleep`'s park: a top-level GT0 (waiter == 0) SELF-DRIVES until its
-	// own timer/process fires; a spawned GT switches back to the driver that ran it and resumes on re-schedule.
+	// afterCopy: spawn the child. On FAILURE (`hProcess == 0` — CreateProcessA left the slab-zeroed
+	// PROCESS_INFORMATION untouched) → `spawnFailed` (abort, never park on a null handle). On success → `spawnOk`.
 	module.appendOp(afterCopy, op: StdOp.osProcessSpawn(cmBuf, startupPtrId: startupPtr, procInfoPtrId: procInfoPtr))
 	let hProcess = ids.mint()
 	module.appendOp(afterCopy, op: StdOp.loadIndirect(hProcess, addrId: procInfoPtr, offset: ProcInfoHProcessOffset, valueType: StdType.i64))
+	let spawnZeroConst = ids.mint()
+	module.appendOp(afterCopy, op: StdOp.const(spawnZeroConst, value: 0, valueType: StdType.i64))
+	let spawnFailedCmp = ids.mint()
+	module.appendOp(afterCopy, op: StdOp.cmp(spawnFailedCmp, lhs: hProcess, rhs: spawnZeroConst, pred: StdCmpPred.eq, operandType: StdType.i64))
+	module.setTerminator(afterCopy, op: StdOp.condBranch(spawnFailedCmp, thenBlockId: spawnFailed.id, elseBlockId: spawnOk.id))
+
+	// spawnFailed: the command names no runnable executable. Abort the whole process rather than park on a null
+	// handle (see `SpawnFailedExitCode`). `osExit` diverges, so the trailing `ret` is a dead terminator.
+	let failCodeConst = ids.mint()
+	module.appendOp(spawnFailed, op: StdOp.const(failCodeConst, value: SpawnFailedExitCode, valueType: StdType.i64))
+	module.appendOp(spawnFailed, op: StdOp.osExit(failCodeConst))
+	let deadFailConst = ids.mint()
+	module.appendOp(spawnFailed, op: StdOp.const(deadFailConst, value: 0, valueType: StdType.i64))
+	module.setTerminator(spawnFailed, op: StdOp.ret(deadFailConst))
+
+	// spawnOk: close the (unneeded) thread handle, park the current GT on the process, and hand control to the
+	// scheduler. Mirrors `__gt_sleep`'s park: a top-level GT0 (waiter == 0) SELF-DRIVES until its own
+	// timer/process fires; a spawned GT switches back to the driver that ran it and resumes on re-schedule.
 	let hThread = ids.mint()
-	module.appendOp(afterCopy, op: StdOp.loadIndirect(hThread, addrId: procInfoPtr, offset: ProcInfoHThreadOffset, valueType: StdType.i64))
-	module.appendOp(afterCopy, op: StdOp.osCloseHandle(hThread))
+	module.appendOp(spawnOk, op: StdOp.loadIndirect(hThread, addrId: procInfoPtr, offset: ProcInfoHThreadOffset, valueType: StdType.i64))
+	module.appendOp(spawnOk, op: StdOp.osCloseHandle(hThread))
 	// selfGt = __gt_current_gt ; park it on the child (`__gt_proc_add` sets status=waiting, io_handle=hProcess).
 	let curAddr = ids.mint()
-	module.appendOp(afterCopy, op: StdOp.globalAddr(curAddr, label: GtCurrentGtLabel))
+	module.appendOp(spawnOk, op: StdOp.globalAddr(curAddr, label: GtCurrentGtLabel))
 	let selfGt = ids.mint()
-	module.appendOp(afterCopy, op: StdOp.loadIndirect(selfGt, addrId: curAddr, offset: 0, valueType: StdType.i64))
+	module.appendOp(spawnOk, op: StdOp.loadIndirect(selfGt, addrId: curAddr, offset: 0, valueType: StdType.i64))
 	let addResult = ids.mint()
-	module.appendOp(afterCopy, op: StdOp.call(addResult, callee: GtProcAddName, args: args2(selfGt, second: hProcess)))
+	module.appendOp(spawnOk, op: StdOp.call(addResult, callee: GtProcAddName, args: args2(selfGt, second: hProcess)))
 	// waiter == 0 (top-level GT0) → self-drive; else (spawned GT) → switch back to the driver.
 	let waiter = ids.mint()
-	module.appendOp(afterCopy, op: StdOp.loadIndirect(waiter, addrId: selfGt, offset: GtOffWaiter, valueType: StdType.i64))
+	module.appendOp(spawnOk, op: StdOp.loadIndirect(waiter, addrId: selfGt, offset: GtOffWaiter, valueType: StdType.i64))
 	let zeroWaiterConst = ids.mint()
-	module.appendOp(afterCopy, op: StdOp.const(zeroWaiterConst, value: 0, valueType: StdType.i64))
+	module.appendOp(spawnOk, op: StdOp.const(zeroWaiterConst, value: 0, valueType: StdType.i64))
 	let waiterNull = ids.mint()
-	module.appendOp(afterCopy, op: StdOp.cmp(waiterNull, lhs: waiter, rhs: zeroWaiterConst, pred: StdCmpPred.eq, operandType: StdType.i64))
-	module.setTerminator(afterCopy, op: StdOp.condBranch(waiterNull, thenBlockId: selfDrive.id, elseBlockId: parkSwitch.id))
+	module.appendOp(spawnOk, op: StdOp.cmp(waiterNull, lhs: waiter, rhs: zeroWaiterConst, pred: StdCmpPred.eq, operandType: StdType.i64))
+	module.setTerminator(spawnOk, op: StdOp.condBranch(waiterNull, thenBlockId: selfDrive.id, elseBlockId: parkSwitch.id))
 
 	// selfDrive: drive the scheduler until our own process fires (our status → ready), then reap. The drive's
 	// netpoll blocks the single M on the child's handle (and any timer delta) — a real wait, never a busy-spin.

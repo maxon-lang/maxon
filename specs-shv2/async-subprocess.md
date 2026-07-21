@@ -36,6 +36,9 @@ thread's child is still running.
 `String` command line — borrowed, not consumed; a `float`/`int`/`bool` is refused at compile time. Its result is
 an integer (the exit code), so — unlike `sleep` — it may be used in value position.
 
+If the command names no runnable executable (`CreateProcessA` fails outright), `runProcess` aborts the process
+with exit code 1 rather than parking on a non-existent child — a deterministic fatal error, never a hang.
+
 ## Tests
 
 <!-- test: async-subprocess.exit-code -->
@@ -140,6 +143,21 @@ end 'main'
 ```
 ```exitcode
 25
+```
+
+<!-- test: async-subprocess.spawn-failure-aborts -->
+<!-- targets: x64-windows -->
+A command that names no runnable executable makes `CreateProcessA` fail outright, leaving a null child handle.
+The runtime detects it and aborts with exit code 1 rather than parking on the null handle — which would busy-spin
+the netpoller forever. A deterministic fatal error, never a hang.
+```maxon
+function main() returns ExitCode
+	let code = runProcess("nonexistentprogram_xyz_12345")
+	return code as ExitCode
+end 'main'
+```
+```exitcode
+1
 ```
 
 <!-- test: async-subprocess.error.non-string-arg-rejected -->
