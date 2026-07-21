@@ -86,39 +86,39 @@ export function spec_test_sharp() returns ExitCode
 	return 0
 end 'spec_test_sharp'
 
-/// Compile the self-hosted compiler using the bootstrap compiler.
-export function build_selfhosted() returns ExitCode
-	let sharpExe = try FilePath.from("./bin/maxon{exeExt}") otherwise panic("build_selfhosted: literal path should be valid")
+/// Compile the shv2 compiler using the bootstrap compiler.
+export function build_shv2() returns ExitCode
+	let sharpExe = try FilePath.from("./bin/maxon{exeExt}") otherwise panic("build_shv2: literal path should be valid")
 	var argv = StringArray.create()
 	argv.push("build")
-	argv.push("maxon-selfhosted")
-	let result = run("Compiling self-hosted compiler", exe: Executable.path(sharpExe), argv: argv, timeoutMs: 120000)
+	argv.push("maxon-shv2")
+	let result = run("Compiling shv2 compiler", exe: Executable.path(sharpExe), argv: argv, timeoutMs: 120000)
 	if result != 0 'failed'
 		return result
 	end 'failed'
-	print("Self-hosted compiler built successfully\n")
+	print("shv2 compiler built successfully\n")
 	return 0
-end 'build_selfhosted'
+end 'build_shv2'
 
-/// Compile the self-hosted compiler and run its spec tests.
-export function spec_test_selfhosted() returns ExitCode
-	let compileResult = build_selfhosted()
+/// Compile the shv2 compiler and run its spec tests.
+export function spec_test_shv2() returns ExitCode
+	let compileResult = build_shv2()
 	if compileResult != 0 'failed'
 		return compileResult
 	end 'failed'
 
-	let selfExe = try FilePath.from("./maxon-selfhosted/.maxon/maxon-selfhosted{exeExt}") otherwise panic("spec_test_selfhosted: literal path should be valid")
+	let shv2Exe = try FilePath.from("./maxon-shv2/.maxon/maxon-shv2{exeExt}") otherwise panic("spec_test_shv2: literal path should be valid")
 	var argv = StringArray.create()
 	argv.push("spec-test")
 	argv.append(forwardedArgs())
-	let testResult = run("Running self-hosted spec tests", exe: Executable.path(selfExe), argv: argv, timeoutMs: 600000)
+	let testResult = run("Running shv2 spec tests", exe: Executable.path(shv2Exe), argv: argv, timeoutMs: 600000)
 	if testResult != 0 'failed2'
 		return testResult
 	end 'failed2'
 
-	print("All self-hosted spec tests passed\n")
+	print("All shv2 spec tests passed\n")
 	return 0
-end 'spec_test_selfhosted'
+end 'spec_test_shv2'
 
 /// Build the maxon-dev MCP server (the Claude Code tool host).
 // Depends on the C# bootstrap; the server is a Maxon project built through
@@ -171,23 +171,23 @@ export function test_dev_mcp() returns ExitCode
 	return 0
 end 'test_dev_mcp'
 
-/// Compile the self-hosted compiler and run its Wasm spec tests.
+/// Compile the shv2 compiler and run its Wasm spec tests.
 export function spec_test_wasm() returns ExitCode
-	let compileResult = build_selfhosted()
+	let compileResult = build_shv2()
 	if compileResult != 0 'failed'
 		return compileResult
 	end 'failed'
 
-	let selfExe = try FilePath.from("./maxon-selfhosted/.maxon/maxon-selfhosted{exeExt}") otherwise panic("spec_test_wasm: literal path should be valid")
+	let shv2Exe = try FilePath.from("./maxon-shv2/.maxon/maxon-shv2{exeExt}") otherwise panic("spec_test_wasm: literal path should be valid")
 	var argv = StringArray.create()
 	argv.push("spec-test")
 	argv.push("--target=wasm32-wasi")
 	argv.append(forwardedArgs())
-	let testResult = run("Running self-hosted Wasm spec tests", exe: Executable.path(selfExe), argv: argv, timeoutMs: 600000)
+	let testResult = run("Running shv2 Wasm spec tests", exe: Executable.path(shv2Exe), argv: argv, timeoutMs: 600000)
 	if testResult != 0 'failed2'
 		return testResult
 	end 'failed2'
 
-	print("All self-hosted Wasm spec tests passed\n")
+	print("All shv2 Wasm spec tests passed\n")
 	return 0
 end 'spec_test_wasm'
