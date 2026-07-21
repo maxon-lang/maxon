@@ -30,7 +30,10 @@ export function semanticCheck(project Project, module MaxonModule)
 	// from the merged module and read at every call site to decide whether a plain call needs a `try`
 	// (E3057). The parser handled the mirror rule (E3055, `try` on a non-throwing call) at the `try` token.
 	let throwsMap = buildThrowsMap(module)
-	checkCalls(project, module: module, throwsMap: throwsMap)
+	// The interprocedural closure-escape summary (P1.5-A2b-2) — built once, read at every call site to refuse
+	// a capturing closure passed to a callee that persists the parameter.
+	let escapeSummary = buildEscapeSummary(module)
+	checkCalls(project, module: module, throwsMap: throwsMap, escapeSummary: escapeSummary)
 end 'semanticCheck'
 
 // E3054 — `main` cannot declare `throws`: there is no caller left to handle the error. Scans the merged
@@ -55,11 +58,142 @@ function buildThrowsMap(module MaxonModule) returns FuncThrowsMap
 	return throwsMap
 end 'buildThrowsMap'
 
+// ⭐ **THE INTERPROCEDURAL CLOSURE-ESCAPE SUMMARY (P1.5-A2b-2)** — for each function, which of its
+// FUNCTION-TYPED parameters the body PERSISTS (stores into a field/global/union payload, returns, or passes
+// on to another call), keyed by the callee's mangled name. Read at every call site: a CAPTURING closure
+// passed to a persisted parameter would keep only its fn-ptr, so its captured environment dangles the moment
+// the passing frame dies (a use-after-free = the OPEN #13 interprocedural escape A2b-1 blocked and A2b-2 must
+// re-close now that pass-DOWN is allowed).
+//
+// A parameter is SAFE iff its ValueId is used ONLY as the callee of an indirect call (`f(x)` — the env
+// travels as a synchronous companion argument, valid for the call). Every other use — stored, returned,
+// passed as an argument — is treated as an ESCAPE. Passing it on is treated as escaping WITHOUT consulting
+// the target (the conservative default the transitive case wants): it may over-refuse an exotic
+// pass-through-that-only-calls chain, sound and with no corpus coverage. A function absent from the map has
+// no escaping parameter — the same "absence is the answer" `buildThrowsMap` uses, so the overwhelming
+// first-order function costs no entry.
+typealias ParamEscapeSummary = Map with (ByteArray, BoolArray)
+
+function buildEscapeSummary(module MaxonModule) returns ParamEscapeSummary
+	var summary = ParamEscapeSummary.create()
+	for func in module.functions 'eachFunc'
+		if not functionHasFunctionParam(func) 'noFunctionParam'
+			continue
+		end 'noFunctionParam'
+		let bits = escapingParamBits(func, module: module)
+		if boolArrayAny(bits) 'hasEscape'
+			summary.upsert(func.name, value: bits)
+		end 'hasEscape'
+	end 'eachFunc'
+	return summary
+end 'buildEscapeSummary'
+
+// Does `func` take at least one `function`-typed parameter? The cheap gate that keeps the escape scan (and
+// its per-function `BoolArray`) off the overwhelming first-order function — a bounded tag check, no allocation.
+function functionHasFunctionParam(func IrFunction) returns bool
+	for i in 0 upto func.paramCount 'eachParam'
+		if i < func.valueTags.count() and (try func.valueTags.get(i) otherwise ValueTypeTag.void) == ValueTypeTag.function 'isFunction'
+			return true
+		end 'isFunction'
+	end 'eachParam'
+	return false
+end 'functionHasFunctionParam'
+
+// The per-parameter escape bits — true only for a `function`-typed parameter the body persists. A non-function
+// parameter is never `true` (no closure targets it, so its escape is irrelevant), which keeps the map keyed on
+// what a call site can actually refuse.
+function escapingParamBits(func IrFunction, module MaxonModule) returns BoolArray
+	var bits = BoolArray.create()
+	for i in 0 upto func.paramCount 'eachParam'
+		let isFunctionParam = i < func.valueTags.count() and (try func.valueTags.get(i) otherwise ValueTypeTag.void) == ValueTypeTag.function
+		bits.push(isFunctionParam and paramEscapesInBody(func, module: module, param: i as ValueId))
+	end 'eachParam'
+	return bits
+end 'escapingParamBits'
+
+// Does `func`'s body use parameter `param` anywhere OTHER than as the callee of an indirect call? Scans every
+// body op, each block's terminator, AND every branch edge's phi-incoming values; the ONLY safe use is
+// `indirectCall`'s callee slot (a call, whose env is threaded synchronously). The branch-edge scan is
+// load-bearing, not belt-and-braces: a parameter flowed into a phi — `var h = f` carried across a loop, then
+// `return h` — reaches a return through the block ARGUMENT, not an op operand, so an op-only scan misses it and
+// the escaped closure segfaults. A parameter that appears in ANY phi input is treated as escaping
+// (conservative: the phi may itself be returned or stored).
+function paramEscapesInBody(func IrFunction, module MaxonModule, param ValueId) returns bool
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("paramEscapesInBody: blockRef from func.blockRefs not in module.blocks")
+		for opIdx in block.opRefs 'eachOp'
+			if opEscapesParam(try module.ops.get(opIdx) otherwise panic("paramEscapesInBody: opIdx {opIdx} not in module.ops"), param: param) 'escapes'
+				return true
+			end 'escapes'
+		end 'eachOp'
+		if block.hasTerminatorOp() and terminatorEscapesParam(try module.ops.get(block.terminatorIndex()) otherwise panic("paramEscapesInBody: terminatorIndex not in module.ops"), param: param) 'termEscapes'
+			return true
+		end 'termEscapes'
+		for edge in block.branchEdges 'eachEdge'
+			if valueIdInArray(edge.argIds, value: param) 'edgeEscapes'
+				return true
+			end 'edgeEscapes'
+		end 'eachEdge'
+	end 'eachBlock'
+	return false
+end 'paramEscapesInBody'
+
+// Does BODY op `op` persist `param`? A function value can only leave a frame through a STORE (its value slot),
+// a direct/try/indirect CALL ARGUMENT, or a RETURN (the terminator, handled separately). It is the callee of
+// an indirect call that is SAFE, so `indirectCall` binds only its args (the `_` callee is ignored). The
+// non-persisting bands range to `break` — a newly appended op FAILS TO COMPILE here rather than silently
+// escaping the scan (the band-append invariant).
+function opEscapesParam(op MaxonOp, param ValueId) returns bool
+	match op 'op'
+		call(_, _, args, _, _) then return valueIdInArray(args, value: param)
+		literal to loadIndirect then break 'op'
+		storeIndirect(_, _, value, _) then return value == param
+		stringLiteral then break 'op'
+		tryCall(_, _, _, args, _, _) then return valueIdInArray(args, value: param)
+		throwError to functionRef then break 'op'
+		indirectCall(_, _, args) then return valueIdInArray(args, value: param)
+	end 'op'
+	return false
+end 'opEscapesParam'
+
+// Does the TERMINATOR `term` persist `param`? Only a `ret` of the bare parameter does — a `condBranch`
+// condition is a bool, a `branch`/`retVoid` carries no value, and an error terminator carries an error, never
+// a function value. The bands range to `break` for the band-append invariant.
+function terminatorEscapesParam(term MaxonOp, param ValueId) returns bool
+	match term 'term'
+		call to literal then break 'term'
+		ret(value) then return value == param
+		retVoid to indirectCall then break 'term'
+	end 'term'
+	return false
+end 'terminatorEscapesParam'
+
+// Membership of a ValueId in an argument array — a bounded scan (argument counts are register-capped).
+function valueIdInArray(args ValueIdArray, value ValueId) returns bool
+	for a in args 'each'
+		if a == value 'found'
+			return true
+		end 'found'
+	end 'each'
+	return false
+end 'valueIdInArray'
+
+// True iff any bit is set — the "does this function persist any parameter?" test that decides whether it earns
+// a map entry.
+function boolArrayAny(bits BoolArray) returns bool
+	for b in bits 'each'
+		if b 'set'
+			return true
+		end 'set'
+	end 'each'
+	return false
+end 'boolArrayAny'
+
 // Validate every `call` op against its callee's signature. Walked by FUNCTION (not the
 // flat op array) so each call's diagnostic can name its declaring file (`func.sourceFilePath`);
 // the flat op INDEX still keys the call-site span in `project.opRanges`. Calls are body
 // ops (never terminators), so only `block.opRefs` is scanned.
-function checkCalls(project Project, module MaxonModule, throwsMap FuncThrowsMap)
+function checkCalls(project Project, module MaxonModule, throwsMap FuncThrowsMap, escapeSummary ParamEscapeSummary)
 	for func in module.functions 'eachFunc'
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise panic("checkCalls: blockRef from func.blockRefs not in module.blocks")
@@ -69,7 +203,7 @@ function checkCalls(project Project, module MaxonModule, throwsMap FuncThrowsMap
 					// A PLAIN call — its args are validated, and a call to a THROWING callee that is not
 					// under a `try` is E3057 (it is a `call`, not a `tryCall`, precisely because no `try`
 					// covered it).
-					call(_, callee, args, argLabels, argRanges) then validatePlainCall(project, func: func, opIndex: opIdx, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, throwsMap: throwsMap)
+					call(_, callee, args, argLabels, argRanges) then validatePlainCall(project, func: func, opIndex: opIdx, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, throwsMap: throwsMap, escapeSummary: escapeSummary)
 					// Extended past `branch` to take in the varAccess band and the `stringLiteral` op: a
 					// global's address/load/store and a string literal are not calls and have nothing for
 					// this check to say. Their CALLEE-shaped question — "does this name resolve?" — was
@@ -78,7 +212,7 @@ function checkCalls(project Project, module MaxonModule, throwsMap FuncThrowsMap
 					literal to stringLiteral then break 'op'
 					// A `tryCall`'s args are validated exactly like a `call`'s (it IS a call plus a flag);
 					// its throws-compatibility (E3055) was checked by the parser at the `try` token.
-					tryCall(_, _, callee, args, argLabels, argRanges) then validateCall(project, func: func, opIndex: opIdx, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges)
+					tryCall(_, _, callee, args, argLabels, argRanges) then validateCall(project, func: func, opIndex: opIdx, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, escapeSummary: escapeSummary)
 					// The error terminators and the panic op read no callee signature.
 					throwError to panicAbort then break 'op'
 					// P1.5-A1: a `functionRef`'s "does this function name resolve?" was answered by the parser
@@ -94,8 +228,8 @@ end 'checkCalls'
 
 // A plain call: validate its arguments, then — if it targets a THROWING callee — report E3057 (a throwing
 // call made without `try`). The `tryCall` path skips this: it IS the `try`.
-function validatePlainCall(project Project, func IrFunction, opIndex OpIndex, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, throwsMap FuncThrowsMap)
-	validateCall(project, func: func, opIndex: opIndex, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges)
+function validatePlainCall(project Project, func IrFunction, opIndex OpIndex, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, throwsMap FuncThrowsMap, escapeSummary ParamEscapeSummary)
+	validateCall(project, func: func, opIndex: opIndex, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, escapeSummary: escapeSummary)
 	if isCompilerInternalCallee(callee) 'internal'
 		return
 	end 'internal'
@@ -113,7 +247,7 @@ end 'validatePlainCall'
 // cleanly slotted call, the per-argument TYPES). The call site's own span
 // (`project.opRanges[opIndex]`) anchors the callee/arity/type errors; an argument's own span
 // (`argRanges[argIndex]`) anchors a per-argument label error.
-function validateCall(project Project, func IrFunction, opIndex OpIndex, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray)
+function validateCall(project Project, func IrFunction, opIndex OpIndex, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, escapeSummary ParamEscapeSummary)
 	let callRange = project.opRanges.get(opIndex)
 	let filePath = func.sourceFilePath
 
@@ -134,7 +268,7 @@ function validateCall(project Project, func IrFunction, opIndex OpIndex, callee 
 
 	let sig = try project.funcSignatures.get(callee) otherwise panic("validateCall: contains('{String.from(callee)}') true but get failed")
 	match slotCallArgs(sig, args: args, argLabels: argLabels) 'slot'
-		ordered(argIds) then checkArgTypes(project, func: func, sig: sig, argIds: argIds, callRange: callRange, filePath: filePath)
+		ordered(argIds) then checkSlottedCall(project, func: func, callee: callee, sig: sig, argIds: argIds, escapeSummary: escapeSummary, callRange: callRange, filePath: filePath)
 		arityMismatch(expected, got) then reportPositioned(project, code: ErrorCode.callArgCountMismatch, message: "'{String.from(callee)}' expects {expected} argument(s) but {got} were provided", line: callRange.line, column: callRange.column, filePath: filePath)
 		unknownLabel(argIndex, label) then reportArgError(project, code: ErrorCode.callUnknownArgLabel, message: "'{String.from(callee)}' has no parameter named '{label}'", argRanges: argRanges, argIndex: argIndex, filePath: filePath)
 		duplicateArg(argIndex, paramName) then reportArgError(project, code: ErrorCode.callDuplicateArg, message: "duplicate argument for parameter '{paramName}' of '{String.from(callee)}'", argRanges: argRanges, argIndex: argIndex, filePath: filePath)
@@ -162,6 +296,36 @@ end 'validateCall'
 // `\treturn takeInt(b)` — the `takeInt` token, not the `b`. It names the PARAMETER rather than
 // the callee, which is also the reference's text — the parameter is what the argument failed to
 // match, and the call site already says which function it belongs to.
+// A cleanly-slotted call: check per-argument TYPES, then refuse any CAPTURING closure passed to a parameter
+// the callee PERSISTS (P1.5-A2b-2). Both read `argIds` in declaration order, so both pair `argIds[i]` with
+// parameter `i` — the slotting is done once, by `slotCallArgs`, and neither re-derives it.
+function checkSlottedCall(project Project, func IrFunction, callee ByteArray, sig FuncSignature, argIds ValueIdArray, escapeSummary ParamEscapeSummary, callRange SourceRange, filePath FilePath)
+	checkArgTypes(project, func: func, sig: sig, argIds: argIds, callRange: callRange, filePath: filePath)
+	checkCapturingClosureEscape(project, func: func, callee: callee, argIds: argIds, escapeSummary: escapeSummary, callRange: callRange, filePath: filePath)
+end 'checkSlottedCall'
+
+// ⭐ **REFUSE A CAPTURING CLOSURE PASSED TO A PERSISTED PARAMETER (P1.5-A2b-2, E3099).** The closure's
+// environment belongs to THIS frame; a callee that stores or returns the parameter keeps the closure alive
+// past this frame's death, and only the fn-ptr survives — the captured env dangles (OPEN #13's interprocedural
+// escape). The refusal keys on the passed VALUE being a capturing-closure LITERAL (`valueIsCapturingClosure`)
+// AND the parameter being one the callee's summary marks escaping: a NON-capturing function value (a plain
+// reference / non-capturing closure) has no env to lose and passes freely, so `Handler.create(double)` and the
+// `field-*` cases stay green; a capturing closure passed to a parameter that is only CALLED
+// (`apply(f, x) → f(x)`) is not in the summary and passes freely, keeping the pass-DOWN accepts green.
+function checkCapturingClosureEscape(project Project, func IrFunction, callee ByteArray, argIds ValueIdArray, escapeSummary ParamEscapeSummary, callRange SourceRange, filePath FilePath)
+	let escapeBits = try escapeSummary.get(callee) otherwise return
+	for i in 0 upto argIds.count() 'eachArg'
+		if i >= escapeBits.count() or not (try escapeBits.get(i) otherwise false) 'paramSafe'
+			continue
+		end 'paramSafe'
+		let argId = try argIds.get(i) otherwise panic("checkCapturingClosureEscape: argIds.get OOB at {i}")
+		if argId < func.valueIsCapturingClosure.count() and (try func.valueIsCapturingClosure.get(argId) otherwise false) 'capturingEscapes'
+			reportPositioned(project, code: ErrorCode.capturingClosureEscapes, message: "cannot pass a closure that captures to '{String.from(callee)}', which stores or returns it: captures are taken by reference to the enclosing function's frame, so a closure that captures cannot outlive that frame. Use a function reference, or a closure that captures nothing", line: callRange.line, column: callRange.column, filePath: filePath)
+			return
+		end 'capturingEscapes'
+	end 'eachArg'
+end 'checkCapturingClosureEscape'
+
 function checkArgTypes(project Project, func IrFunction, sig FuncSignature, argIds ValueIdArray, callRange SourceRange, filePath FilePath)
 	for i in 0 upto argIds.count() 'eachArg'
 		let argId = try argIds.get(i) otherwise panic("checkArgTypes: argIds.get OOB at {i}")

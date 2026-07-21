@@ -1,0 +1,22 @@
+// Test: first-class-function.capturing-closure-stored-by-callee-errors
+
+typealias Integer = int(i64.min to i64.max)
+typealias UnaryOp = function(Integer) returns Integer
+
+type Handler
+	export var op as UnaryOp
+
+	export static function create(op UnaryOp) returns Self
+		return Self{op: op}
+	end 'create'
+end 'Handler'
+
+function main() returns ExitCode
+	let bump = 20
+	let f = function(n Integer) gives n + bump
+	let h = Handler.create(f)
+	return h.op(21)
+end 'main'
+---
+CompilerError:
+error E3099: <fragment>:17:10: cannot pass a closure that captures to 'Handler.create', which stores or returns it: captures are taken by reference to the enclosing function's frame, so a closure that captures cannot outlive that frame. Use a function reference, or a closure that captures nothing

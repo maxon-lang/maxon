@@ -1126,10 +1126,11 @@ error E3099: specs/fragments/first-class-functions/first-class-function.capturin
 
 <!-- test: first-class-function.capturing-closure-used-in-frame -->
 <!-- targets: x64-windows, wasm32-wasi -->
-The would-be ACCEPT side: a capturing closure called directly AND passed DOWN to a callee that only
-CALLS it. The direct call `f(2)` works today, but the pass-down `apply(f, …)` does not — the env does
-not travel with the closure across the call boundary in A2b-1, so it is refused rather than compiled
-into the nil-deref it used to be.
+The ACCEPT side: a capturing closure called directly AND passed DOWN to a callee that only CALLS it. The
+env travels with the value across the call boundary — `apply` receives a companion environment parameter,
+and its `f(x)` threads it — so `apply(f, …)` returns the captured `bump` correctly. A callee that only
+calls the closure never persists it, so the pass-down is safe (the reject twins below cover a callee that
+STORES or RETURNS it).
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -1148,6 +1149,67 @@ end 'main'
 ```
 ```exitcode
 62
+```
+
+<!-- test: first-class-function.capturing-closure-stored-by-callee-errors -->
+<!-- targets: x64-windows, wasm32-wasi -->
+The INTERPROCEDURAL escape reject (P1.5-A2b-2). Pass-down to a callee that only CALLS the closure is safe
+(above), but a callee that PERSISTS it — here `Handler.create` STORES the parameter into a struct field —
+keeps only the fn-ptr; the captured environment belongs to `main`'s frame and dangles the moment `main`
+returns (a use-after-free, the OPEN #13 interprocedural escape that A2b-1 blocked at the direct routes and
+A2b-2 must re-close now that pass-down is allowed). The whole-program escape summary marks
+`Handler.create`'s parameter escaping (its body stores it), so the capturing closure passed to it is
+refused. A PLAIN function reference at the same position is fine (no env to lose) — see `field-*`. This
+compiled clean and SEGFAULTED (139) until the escape summary landed.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+typealias UnaryOp = function(Integer) returns Integer
+
+type Handler
+	export var op as UnaryOp
+
+	export static function create(op UnaryOp) returns Self
+		return Self{op: op}
+	end 'create'
+end 'Handler'
+
+function main() returns ExitCode
+	let bump = 20
+	let f = function(n Integer) gives n + bump
+	let h = Handler.create(f)
+	return h.op(21)
+end 'main'
+```
+```maxoncstderr
+error E3099: specs/fragments/first-class-functions/first-class-function.capturing-closure-stored-by-callee-errors.test:17:10: cannot pass a closure that captures to 'Handler.create', which stores or returns it: captures are taken by reference to the enclosing function's frame, so a closure that captures cannot outlive that frame. Use a function reference, or a closure that captures nothing
+```
+
+<!-- test: first-class-function.capturing-closure-returned-by-callee-errors -->
+<!-- targets: x64-windows, wasm32-wasi -->
+The other interprocedural escape route: a callee that RETURNS the parameter (`identity(f) → return f`)
+persists it past the passing frame exactly as a store does — the returned fn-ptr outlives `main`'s frame,
+whose environment the closure captured. The escape summary marks `identity`'s parameter escaping (its body
+returns it), so the capturing closure is refused; a plain function reference returned the same way is fine.
+This compiled clean and SEGFAULTED (139) until the escape summary landed.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+typealias UnaryOp = function(Integer) returns Integer
+
+function identity(f UnaryOp) returns UnaryOp
+	return f
+end 'identity'
+
+function main() returns ExitCode
+	let bump = 20
+	let f = function(n Integer) gives n + bump
+	let g = identity(f)
+	return g(21)
+end 'main'
+```
+```maxoncstderr
+error E3099: specs/fragments/first-class-functions/first-class-function.capturing-closure-returned-by-callee-errors.test:13:10: cannot pass a closure that captures to 'identity', which stores or returns it: captures are taken by reference to the enclosing function's frame, so a closure that captures cannot outlive that frame. Use a function reference, or a closure that captures nothing
 ```
 
 <!-- test: first-class-function.capturing-closure-called-from-nested-block -->

@@ -137,6 +137,15 @@ export type IrFunction
 	// arguments land at function-typed parameters, so it publishes each value's environment here and the
 	// lowering reads it. Empty on a Std-phase function (`createFromStd`).
 	export var valueClosureEnv as ValueIdArray
+	// ⭐ **THE CAPTURING-CLOSURE-LITERAL MARK (P1.5-A2b-2), DENSE by ValueId in lockstep with `valueTags`.**
+	// True iff a value is a capturing closure LITERAL born in this function (its env is this frame's — see
+	// `Parser.markCapturingClosure`). PUBLISHED (like `valueClosureEnv`) because the INTERPROCEDURAL escape
+	// check runs at SemanticCheck (`buildEscapeSummary`/`checkArgTypes`), the first whole-program point that
+	// holds every callee's body: a capturing closure passed to a callee that PERSISTS the parameter (stores or
+	// returns it) would keep only the fn-ptr, so its captured env dangles once the frame dies — refused there.
+	// It marks the LITERAL, not a function-typed parameter (which also carries an env): a param passed onward is
+	// not refused, because the refusal lands at the site that passes the literal. Empty on a Std-phase function.
+	export var valueIsCapturingClosure as BoolArray
 	// `throws E` clause from the declaration; `ThrowsClause.none` for non-throwing.
 	export var throwsTypeName as ThrowsClause
 	// Persistent per-function symbol table, handed off by the parser. Std-phase
@@ -181,7 +190,7 @@ export type IrFunction
 	// lockstep — as the body's values are minted. Constructing empty ones here and having the parser
 	// overwrite them at the end of the body would leave dead arrays per function on the heap
 	// (`scale-test` charged that exactly: +48 allocations on the smallest rung, doubling with the corpus).
-	export static function create(name ByteArray, maxonReturnType MaxonReturnType, paramCount ParamCount, maxonParamTypes MaxonTypeArray, valueTags ValueTypeTagArray, valueNameIds TypeNameIdArray, valueClosureEnv ValueIdArray, returnLine LineNumber, throwsTypeName ThrowsClause = ThrowsClause.none) returns IrFunction
+	export static function create(name ByteArray, maxonReturnType MaxonReturnType, paramCount ParamCount, maxonParamTypes MaxonTypeArray, valueTags ValueTypeTagArray, valueNameIds TypeNameIdArray, valueClosureEnv ValueIdArray, valueIsCapturingClosure BoolArray, returnLine LineNumber, throwsTypeName ThrowsClause = ThrowsClause.none) returns IrFunction
 		return Self{
 			name: name,
 			namespace: "",
@@ -198,6 +207,7 @@ export type IrFunction
 			valueTags: valueTags,
 			valueNameIds: valueNameIds,
 			valueClosureEnv: valueClosureEnv,
+			valueIsCapturingClosure: valueIsCapturingClosure,
 			throwsTypeName: throwsTypeName,
 			scope: Scope.create(),
 			returnType: StdReturnType.void,
@@ -231,6 +241,7 @@ export type IrFunction
 			valueTags: ValueTypeTagArray.create(),
 			valueNameIds: TypeNameIdArray.create(),
 			valueClosureEnv: ValueIdArray.create(),
+			valueIsCapturingClosure: BoolArray.create(),
 			throwsTypeName: throwsTypeName,
 			scope: Scope.create(),
 			returnType: returnType,
@@ -268,6 +279,7 @@ export type IrFunction
 			valueTags: src.valueTags,
 			valueNameIds: src.valueNameIds,
 			valueClosureEnv: src.valueClosureEnv,
+			valueIsCapturingClosure: src.valueIsCapturingClosure,
 			throwsTypeName: src.throwsTypeName,
 			scope: src.scope,
 			returnType: src.returnType,
