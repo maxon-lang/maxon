@@ -352,6 +352,29 @@ function emitElementDestroyRange(module StdModule, func IrFunction, cur IrBlock,
 	return done
 end 'emitElementDestroyRange'
 
+// ⭐ **GATE THE MANAGED-ELEMENT DESTROY WALK on `element_destroy@40` (P1.7 slice 3a).** Load the array's stamped
+// element destructor and, when it is non-zero (a MANAGED-element array), DESTROY `[start, stop)` through
+// `emitElementDestroyRange`; a TRIVIAL-element array (destructor 0) skips the walk untouched. Returns the block
+// both paths converge on. This is the ONE home of the "must these slots be destroyed, and if so destroy them"
+// decision — shared by `__arr_decref` (drop `[0, length)`), `__arr_set` (the ONE overwritten slot), `__arr_clear`
+// (`[0, length)`) and `__arr_resize`'s shrink (`[n, oldLen)`) — so a trivial-element array can never
+// `callIndirect(0)` and every mutator that VACATES a live managed slot destroys it exactly once instead of
+// leaking it. Threads `cur` (sets its terminator); `record` is the array whose `element_destroy@40` is read,
+// `buffer` its element storage.
+function emitDestroyRangeIfManaged(module StdModule, func IrFunction, cur IrBlock, record ValueId, buffer ValueId, start ValueId, stop ValueId, elementSize ValueId, ids ValueMinter) returns IrBlock
+	let dtor = emitLoadField(module, block: cur, arr: record, offset: ArrElementDestroyOffset, ids: ids)
+	let zeroDtor = emitConst(module, block: cur, value: 0, ids: ids)
+	let hasDtor = emitCmp(module, block: cur, a: dtor, b: zeroDtor, pred: StdCmpPred.ne, ids: ids)
+	var walk = module.addBlock(func, label: b"mwalk")
+	let cont = module.addBlock(func, label: b"mcont")
+	module.setTerminator(cur, op: StdOp.condBranch(hasDtor, thenBlockId: walk.id, elseBlockId: cont.id))
+
+	var afterWalk = emitElementDestroyRange(module, func: func, cur: walk, buffer: buffer, start: start, stop: stop, elementSize: elementSize, destroy: dtor, ids: ids)
+	module.setTerminator(afterWalk, op: StdOp.branch(cont.id))
+
+	return cont
+end 'emitDestroyRangeIfManaged'
+
 // Store the low `size` bytes of the register `value` at `addr`, little-endian — a push/set/insert of a
 // trivial element word. Byte `i` is `(value >>logical i·8)` stored as a `u8` (which keeps the low byte).
 function emitStoreElem(module StdModule, func IrFunction, cur IrBlock, addr ValueId, value ValueId, size ValueId, ids ValueMinter) returns IrBlock
@@ -787,8 +810,15 @@ function buildArrSet(module StdModule)
 
 	let buffer = emitLoadField(module, block: store, arr: arr, offset: ArrBufferOffset, ids: ids)
 	let es = emitLoadField(module, block: store, arr: arr, offset: ArrElementSizeOffset, ids: ids)
-	let slot = emitSlotAddr(module, block: store, buffer: buffer, index: index, elementSize: es, ids: ids)
-	var afterStore = emitStoreElem(module, func: func, cur: store, addr: slot, value: value, size: es, ids: ids)
+	// ⭐ **DESTROY THE OCCUPANT `set` OVERWRITES (P1.7 slice 3a).** A managed array's `set` moves a new owner into
+	// a LIVE slot, so the element it replaces must be destroyed first or it leaks (the parser consumes the new
+	// value into the array — nothing else drops the old one). Destroy exactly the one slot `[index, index+1)`
+	// through the shared gate (a trivial-element array skips it and stores directly), THEN store the new value.
+	let one = emitConst(module, block: store, value: 1, ids: ids)
+	let indexPlusOne = emitBin(module, block: store, a: index, b: one, opcode: StdBinOpcode.add, ids: ids)
+	var doStore = emitDestroyRangeIfManaged(module, func: func, cur: store, record: arr, buffer: buffer, start: index, stop: indexPlusOne, elementSize: es, ids: ids)
+	let slot = emitSlotAddr(module, block: doStore, buffer: buffer, index: index, elementSize: es, ids: ids)
+	var afterStore = emitStoreElem(module, func: func, cur: doStore, addr: slot, value: value, size: es, ids: ids)
 	let okVal = emitConst(module, block: afterStore, value: 0, ids: ids)
 	emitOkReturn(module, block: afterStore, value: okVal, ids: ids)
 
@@ -874,11 +904,15 @@ function buildArrResize(module StdModule)
 
 	let es = emitLoadField(module, block: doZero, arr: arr, offset: ArrElementSizeOffset, ids: ids)
 	let buffer = emitLoadField(module, block: doZero, arr: arr, offset: ArrBufferOffset, ids: ids)
-	let startOff = emitBin(module, block: doZero, a: n, b: es, opcode: StdBinOpcode.mul, ids: ids)
-	let endOff = emitBin(module, block: doZero, a: oldLen, b: es, opcode: StdBinOpcode.mul, ids: ids)
-	let zeroBytes = emitBin(module, block: doZero, a: endOff, b: startOff, opcode: StdBinOpcode.sub, ids: ids)
-	let startAddr = emitBin(module, block: doZero, a: buffer, b: startOff, opcode: StdBinOpcode.add, ids: ids)
-	var afterZero = emitZeroRange(module, func: func, cur: doZero, dest: startAddr, byteCount: zeroBytes, ids: ids)
+	// ⭐ **DESTROY THE VACATED MANAGED ELEMENTS `[n, oldLen)` BEFORE ZEROING (P1.7 slice 3a).** A shrink drops the
+	// tail `[n, oldLen)`, so each managed element there must be destroyed or it leaks; the destroy MUST precede the
+	// zero-fill (a zeroed slot is a NULL the walk would skip). A trivial-element array skips straight to the zero.
+	var afterDestroy = emitDestroyRangeIfManaged(module, func: func, cur: doZero, record: arr, buffer: buffer, start: n, stop: oldLen, elementSize: es, ids: ids)
+	let startOff = emitBin(module, block: afterDestroy, a: n, b: es, opcode: StdBinOpcode.mul, ids: ids)
+	let endOff = emitBin(module, block: afterDestroy, a: oldLen, b: es, opcode: StdBinOpcode.mul, ids: ids)
+	let zeroBytes = emitBin(module, block: afterDestroy, a: endOff, b: startOff, opcode: StdBinOpcode.sub, ids: ids)
+	let startAddr = emitBin(module, block: afterDestroy, a: buffer, b: startOff, opcode: StdBinOpcode.add, ids: ids)
+	var afterZero = emitZeroRange(module, func: func, cur: afterDestroy, dest: startAddr, byteCount: zeroBytes, ids: ids)
 	module.setTerminator(afterZero, op: StdOp.branch(setLen.id))
 
 	emitStoreField(module, block: setLen, arr: arr, offset: ArrLengthOffset, value: n)
@@ -988,9 +1022,14 @@ function buildArrClear(module StdModule)
 
 	let length = emitLoadField(module, block: entry, arr: arr, offset: ArrLengthOffset, ids: ids)
 	let es = emitLoadField(module, block: entry, arr: arr, offset: ArrElementSizeOffset, ids: ids)
-	let byteCount = emitBin(module, block: entry, a: length, b: es, opcode: StdBinOpcode.mul, ids: ids)
 	let buffer = emitLoadField(module, block: entry, arr: arr, offset: ArrBufferOffset, ids: ids)
-	var afterZero = emitZeroRange(module, func: func, cur: entry, dest: buffer, byteCount: byteCount, ids: ids)
+	// ⭐ **DESTROY THE LIVE MANAGED ELEMENTS `[0, length)` BEFORE ZEROING (P1.7 slice 3a).** `clear` drops the
+	// whole live region, so each managed element must be destroyed or it leaks; the destroy MUST run before the
+	// zero-fill (a zeroed slot is a NULL the walk would skip). A trivial-element array skips straight to the zero.
+	let start = emitConst(module, block: entry, value: 0, ids: ids)
+	var afterDestroy = emitDestroyRangeIfManaged(module, func: func, cur: entry, record: arr, buffer: buffer, start: start, stop: length, elementSize: es, ids: ids)
+	let byteCount = emitBin(module, block: afterDestroy, a: length, b: es, opcode: StdBinOpcode.mul, ids: ids)
+	var afterZero = emitZeroRange(module, func: func, cur: afterDestroy, dest: buffer, byteCount: byteCount, ids: ids)
 	let zero = emitConst(module, block: afterZero, value: 0, ids: ids)
 	emitStoreField(module, block: afterZero, arr: arr, offset: ArrLengthOffset, value: zero)
 	module.setTerminator(afterZero, op: StdOp.retVoid)
@@ -1142,18 +1181,12 @@ function buildArrDecref(module StdModule)
 	let hasBuf = emitCmp(module, block: checkBuf, a: buffer, b: zero, pred: StdCmpPred.ne, ids: ids)
 	module.setTerminator(checkBuf, op: StdOp.condBranch(hasBuf, thenBlockId: checkDtor.id, elseBlockId: freeRec.id))
 
-	// checkDtor: a managed-element array (`element_destroy@40 != 0`) walks and destroys its live elements
-	// before the buffer free; a trivial-element array frees the buffer directly.
-	let dtor = emitLoadField(module, block: checkDtor, arr: record, offset: ArrElementDestroyOffset, ids: ids)
-	let zeroDtor = emitConst(module, block: checkDtor, value: 0, ids: ids)
-	let hasDtor = emitCmp(module, block: checkDtor, a: dtor, b: zeroDtor, pred: StdCmpPred.ne, ids: ids)
+	// checkDtor: destroy the live managed elements `[0, length)` before the buffer free (the shared gate skips a
+	// trivial-element array, which frees the buffer directly).
 	let length = emitLoadField(module, block: checkDtor, arr: record, offset: ArrLengthOffset, ids: ids)
 	let es = emitLoadField(module, block: checkDtor, arr: record, offset: ArrElementSizeOffset, ids: ids)
 	let start = emitConst(module, block: checkDtor, value: 0, ids: ids)
-	var walkStart = module.addBlock(func, label: b"walk")
-	module.setTerminator(checkDtor, op: StdOp.condBranch(hasDtor, thenBlockId: walkStart.id, elseBlockId: freeBuf.id))
-
-	var afterWalk = emitElementDestroyRange(module, func: func, cur: walkStart, buffer: buffer, start: start, stop: length, elementSize: es, destroy: dtor, ids: ids)
+	var afterWalk = emitDestroyRangeIfManaged(module, func: func, cur: checkDtor, record: record, buffer: buffer, start: start, stop: length, elementSize: es, ids: ids)
 	module.setTerminator(afterWalk, op: StdOp.branch(freeBuf.id))
 
 	let bufFreed = ids.mint()

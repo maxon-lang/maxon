@@ -450,3 +450,82 @@ end 'main'
 ```
 ```stdout
 ```
+
+### Cross-Argument Double-Consume of One Owned Value (E3102)
+
+`Pair.create(box, b: box)` hands the SAME owned `box` to TWO CONSUMING factory parameters. shv2 is
+move-only (no `__mm_incref`), so the second owner would drop a box the first already owns — a double-free
+(it compiled and exited 101 before this guard). It is the CALL analog of the struct-literal
+double-owning-store guard (`Self{a: v, b: v}`), routed through the same repeat-detection core
+(`rejectRepeatedOwningMove`) to the same E3102 verdict, positioned on the second argument. (The reference
+oracle refcounts and would accept this, so `struct-enum-array-grow/shared-nested-struct-in-literal` stays
+disabled for that divergence; this bespoke test pins shv2's move-only rejection instead.)
+
+<!-- test: error.call-arg-double-consume -->
+```maxon
+type Box
+	export var name as String
+
+	static function create(name String) returns Self
+		return Self{name: name}
+	end 'create'
+end 'Box'
+
+type Pair
+	export var a as Box
+	export var b as Box
+
+	static function create(a Box, b Box) returns Self
+		return Self{a: a, b: b}
+	end 'create'
+end 'Pair'
+
+function main() returns ExitCode
+	let box = Box.create("a long string that needs real heap allocation for the box")
+	let p = Pair.create(box, b: box)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:21:27: use of moved value 'box': its ownership moved to another binding at an earlier bind or assignment
+```
+
+### Same Owned Value at Two BORROW Parameters (Positive Control)
+
+The double-consume guard fires ONLY when BOTH argument positions CONSUME. `firstOf(a, b)` only READS its
+parameters (they borrow), so passing the same owned `box` to both is legal — nothing is moved, and `box`
+drops exactly once at scope exit. Prints the label twice and returns 0.
+
+<!-- test: same-owned-at-two-borrow-params -->
+```maxon
+type Box
+	export var name as String
+
+	static function create(name String) returns Self
+		return Self{name: name}
+	end 'create'
+
+	function label() returns String
+		return self.name
+	end 'label'
+end 'Box'
+
+function firstOf(a Box, b Box) returns String
+	print("{b.label()}\n")
+	return a.label()
+end 'firstOf'
+
+function main() returns ExitCode
+	let box = Box.create("owned managed box string long enough to require heap now")
+	let s = firstOf(box, b: box)
+	print("{s}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+owned managed box string long enough to require heap now
+owned managed box string long enough to require heap now
+```

@@ -12067,14 +12067,31 @@ export type Parser
 		if not (self.valueIsOwnedHeap(value) or maxonTypeTag(fieldType) == ValueTypeTag.typeParameter) 'copiedOrPromoted'
 			return
 		end 'copiedOrPromoted'
+		if self.isRepeatedOwningMove(movedOwningValues, value: value) 'doubleMove'
+			let valueTok = self.tokenAt(valueStart)
+			throw ParseError.useAfterMove(String.from(valueTok.value), line: valueTok.line, column: valueTok.column)
+		end 'doubleMove'
+	end 'rejectDoubleOwningStore'
+
+	// ⭐ **THE ONE "same owned value moved into two owning destinations" DETECTOR (P1.7 slice 3a).** shv2 is
+	// move-only (no `__mm_incref`), so a single owned value cannot be OWNED by two destinations — the second owner
+	// would drop a value the first already owns (a double-free). Returns true when `value` was ALREADY recorded in
+	// `movedOwningValues` (a REPEAT owning move — the caller throws its own positioned E3102), else records it and
+	// returns false. Shared by the STRUCT-LITERAL guard (`rejectDoubleOwningStore` — `Self{a: v, b: v}`) and the
+	// CALL-ARGUMENT double-consume guard (`transferConsumedArgs` — `Pair.create(box, b: box)`), so the two sites
+	// cannot drift on what a repeated owning move IS. Each caller keeps its own "is this destination OWNING?" gate
+	// (an owned-heap or type-parameter field; a consuming argument position holding an owned-heap value) and its
+	// own diagnostic name+position — the name is resolved only on a repeat, where the value is always a bound
+	// local (a temporary is minted by one expression and cannot reach two destinations), never an anonymous temp.
+	function isRepeatedOwningMove(movedOwningValues ValueIdArray, value ValueId) returns bool
 		for prior in movedOwningValues 'eachPrior'
 			if prior == value 'doubleMove'
-				let valueTok = self.tokenAt(valueStart)
-				throw ParseError.useAfterMove(String.from(valueTok.value), line: valueTok.line, column: valueTok.column)
+				return true
 			end 'doubleMove'
 		end 'eachPrior'
 		movedOwningValues.push(value)
-	end 'rejectDoubleOwningStore'
+		return false
+	end 'isRepeatedOwningMove'
 
 	// The `<Struct>.<field>` label a managed-field type mismatch names.
 	function fieldSiteName(layout StructLayout, index FieldIndex) returns String
@@ -15629,7 +15646,7 @@ export type Parser
 		// CONSUMES — a plain-field store, or a type-parameter field of a concrete instance whose argument owns
 		// managed heap — is moved (poisoned / drained); a borrowed one is refused. Done BEFORE the op is
 		// emitted so a refused call emits nothing.
-		try self.applyCallerConsume(callee, args: args, argLabels: argLabels, anchor: anchor, constructorInstance: constructorInstance)
+		try self.applyCallerConsume(callee, args: args, argLabels: argLabels, argRanges: argRanges, anchor: anchor, constructorInstance: constructorInstance)
 		self.artifact.emitOp(self.currentBlock, op: MaxonOp.call(result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges), range: SourceRange.between(anchor, last: rparenTok))
 		return result
 	end 'emitCall'
@@ -15757,10 +15774,10 @@ export type Parser
 	// drained if it is a temporary), a BORROWED struct/union is refused (`E2015` — the transitive-consume
 	// case), a scalar is inert. The overwhelming common callee `borrowsAll`, so this is a single `match` and
 	// returns.
-	function applyCallerConsume(callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, anchor Token, constructorInstance ConstructorInstance) throws ParseError
+	function applyCallerConsume(callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, anchor Token, constructorInstance ConstructorInstance) throws ParseError
 		match self.signatures.consumeOf(callee) 'c'
 			borrowsAll then break 'c'
-			consumes(info) then try self.transferConsumedArgs(info, args: args, argLabels: argLabels, anchor: anchor, constructorInstance: constructorInstance)
+			consumes(info) then try self.transferConsumedArgs(info, args: args, argLabels: argLabels, argRanges: argRanges, anchor: anchor, constructorInstance: constructorInstance)
 		end 'c'
 	end 'applyCallerConsume'
 
@@ -15769,7 +15786,14 @@ export type Parser
 	// `slotCallArgs` uses — but at parse time, where the `FuncSignature` does not yet exist. A malformed call
 	// (an arity mismatch, an unknown label) leaves the position `>= paramNames.count()`, which `isConsumed`
 	// answers false, so it is left untouched here and reported by SemanticCheck against the real registry.
-	function transferConsumedArgs(info ParamConsumeInfo, args ValueIdArray, argLabels ByteArrayArray, anchor Token, constructorInstance ConstructorInstance) throws ParseError
+	function transferConsumedArgs(info ParamConsumeInfo, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, anchor Token, constructorInstance ConstructorInstance) throws ParseError
+		// shv2 is move-only, so one OWNED value consumed at TWO argument positions of a single call would be
+		// dropped twice — a double-free — the call analog of the struct-literal `rejectDoubleOwningStore`
+		// (`Self{a: v, b: v}`). Track each owned value moved in at a CONSUMING position; a repeat is
+		// use-after-move (E3102), positioned on the second occurrence. A BORROWED consumed arg is promoted to a
+		// FRESH owned copy per position (`transferConsumedArg`), so it never aliases and is not tracked; a scalar
+		// is inert. A two-BORROW call (`sum(box, b: box)`) reaches no consuming position, so it is never rejected.
+		var consumedOwned = ValueIdArray.create()
 		for i in 0 upto args.count() 'eachArg'
 			let label = try argLabels.get(i) otherwise panic("transferConsumedArgs: argLabels.get OOB at {i} — args and argLabels are pushed in lockstep")
 			let position = i as ParamCount if label.isEmpty() else info.indexOfParam(label)
@@ -15777,6 +15801,14 @@ export type Parser
 				continue
 			end 'borrowed'
 			let argValue = try args.get(i) otherwise panic("transferConsumedArgs: args.get OOB at {i}")
+			// Only an OWNED managed value can double-free: it MOVES (no per-position copy), so the same value at a
+			// second consuming position is the double-consume. A borrowed arg is promoted per position and a scalar
+			// is inert, so neither is tracked. The gate mirrors `transferConsumedArg`'s own owned-move path. The name
+			// is resolved only on a repeat (`consumedArgName`), where the value is always a bound local.
+			if self.valueIsOwnedHeap(argValue) and self.isRepeatedOwningMove(consumedOwned, value: argValue) 'doubleConsume'
+				let range = try argRanges.get(i) otherwise panic("transferConsumedArgs: argRanges.get OOB at {i} — args and argRanges are pushed in lockstep")
+				throw ParseError.useAfterMove(String.from(self.consumedArgName(argValue)), line: range.line, column: range.column)
+			end 'doubleConsume'
 			// A borrowed String consumed arg is PROMOTED to an owned copy the callee can keep — `transferConsumedArg`
 			// returns that copy, which must replace the borrowed original in the call's args so the op carries the
 			// owned value (`applyCallerConsume` runs BEFORE the op is emitted). An owned/scalar arg returns itself.
@@ -15784,6 +15816,20 @@ export type Parser
 			try args.set(i, value: transferred) otherwise panic("transferConsumedArgs: args.set OOB at {i}")
 		end 'eachArg'
 	end 'transferConsumedArgs'
+
+	// The declared name of the owning binding a consumed argument value came from — the source name the
+	// cross-argument double-consume diagnostic (`transferConsumedArgs`' E3102) reports. A value passed at TWO
+	// argument positions is always a bare local referenced twice (a temporary is minted by ONE expression and
+	// cannot appear at two positions), so its owning binding — live, or already poisoned by the first position's
+	// move — is always present, and the poison leaves its `boundValue` unchanged.
+	function consumedArgName(value ValueId) returns ByteArray
+		for binding in self.ownedBindings 'each'
+			if binding.boundValue == value 'found'
+				return binding.name
+			end 'found'
+		end 'each'
+		panic("consumedArgName: v{value} consumed at two argument positions has no owning binding — a value at two positions is a bare local referenced twice, which is always an owned binding")
+	end 'consumedArgName'
 
 	// Is the argument at parameter `position` consumed by this call — a plain-field consume (`bits`, whatever
 	// the concrete type), OR a P1.6-B2 type-parameter FEED whose concrete instance argument OWNS managed heap.
