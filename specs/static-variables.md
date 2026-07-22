@@ -752,3 +752,51 @@ end 'main'
 ```stdout
 h.name=fld! untouched=fld
 ```
+
+<!-- test: top-level-let-duplicate-declaration-error -->
+Declaring the same top-level `let` name twice in one file is a duplicate definition (E3006),
+positioned at the LATER declaration — the top-level twin of the duplicate-FUNCTION check. Top-level
+value storage is first-wins, so the first declaration keeps the name and the diagnostic names the
+redeclaration to remove.
+```maxon
+let A = 1
+let A = 2
+
+function main() returns ExitCode
+	return A
+end 'main'
+```
+```maxoncstderr
+error E3006: specs/fragments/static-variables/top-level-let-duplicate-declaration-error.test:3:5: duplicate definition of 'A'
+```
+
+<!-- test: top-level-var-duplicate-declaration-error -->
+The same rule applies to a mutable `var`: two top-level `var` declarations of one name in one file
+collide, and the second is the duplicate.
+```maxon
+var counter = 0
+var counter = 5
+
+function main() returns ExitCode
+	return counter
+end 'main'
+```
+```maxoncstderr
+error E3006: specs/fragments/static-variables/top-level-var-duplicate-declaration-error.test:3:5: duplicate definition of 'counter'
+```
+
+<!-- test: top-level-var-let-duplicate-declaration-error -->
+Top-level value storage is kind-independent, so a `var` and a `let` sharing one name in one file
+collide the same way — the second declaration is the duplicate regardless of which keyword introduces
+it.
+```maxon
+var counter = 0
+let counter = 5
+
+function main() returns ExitCode
+	return counter
+end 'main'
+```
+```maxoncstderr
+error E3006: specs/fragments/static-variables/top-level-var-let-duplicate-declaration-error.test:3:5: duplicate definition of 'counter'
+```

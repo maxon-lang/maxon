@@ -1900,6 +1900,12 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
   private void CollectAndEvaluateTopLevelDecls(IrModule<MaxonOp> module) {
     var ownDecls = new List<TopLevelConstantDecl>();
+    // Every top-level `let`/`var` name declared IN THIS FILE, across all four storage buckets
+    // (constant, deferred var, complex-init let, complex-init var). A repeat is a duplicate
+    // definition regardless of kind — a `let` and a `var` share one storage key — so this is the
+    // top-level twin of the duplicate-FUNCTION check, and it is per-file: two files may each hold a
+    // private constant of the same name (that homonym is resolved per declarer's perspective).
+    var declaredValueNames = new HashSet<string>();
     int savedPos = _pos;
 
     PreRegisterTopLevelTypeAliasNames();
@@ -1915,6 +1921,13 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         bool isMutable = Check(TokenType.Var);
         var scanned = ScanTopLevelValueDecl();
         var decl = scanned with { IsExported = isExported, IsModuleVisible = isModuleVisible };
+        // Reject a second top-level value declaration of the same name, blaming the LATER decl at its
+        // name position — the redeclaration is the one to remove. Without this the byName maps below
+        // are first-wins and the duplicate silently vanishes (E3006, matching duplicate functions).
+        if (!declaredValueNames.Add(decl.Name)) {
+          throw new CompileError(ErrorCode.SemanticDuplicateDefinition,
+            $"duplicate definition of '{decl.Name}'", decl.Line, decl.Column);
+        }
         if (IsComplexInitializer(decl.TokenStart)) {
           (isMutable ? _deferredExprVars : _deferredExprLets).Add(decl);
           module.DeferredGlobalInits.Add(new DeferredGlobalInit(
