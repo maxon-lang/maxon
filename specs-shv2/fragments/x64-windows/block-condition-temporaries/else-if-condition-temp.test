@@ -1,0 +1,85 @@
+// Test: else-if-condition-temp
+typealias Integer = int(i64.min to i64.max)
+
+function main() returns ExitCode
+	var flag = 0 as Integer
+	if [1].count() == 99 'a'
+		flag = 1
+	end 'a' else if [1, 2].count() == 99 'b'
+		flag = 2
+	end 'b' else 'c'
+		flag = 3
+	end 'c'
+	return flag
+end 'main'
+---
+ExitCode: 3
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __arr_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rdx, 1
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_push
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_count
+    x64.cmpRegImm32 r8, 99
+    x64.setccReg equal, r12
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_decref
+    x64.cmpRegImm32 r12, 0
+    x64.jcc notEqual, a
+    x64.jmp ifelse
+  a:
+    x64.movRegImm32 r8, 1
+    x64.jmp ifcont
+  ifelse:
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __arr_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rdx, 1
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_push
+    x64.movRegImm32 rdx, 2
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_push
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_count
+    x64.cmpRegImm32 r8, 99
+    x64.setccReg equal, r12
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_decref
+    x64.cmpRegImm32 r12, 0
+    x64.jcc notEqual, b
+    x64.jmp ifelse
+  b:
+    x64.movRegImm32 rax, 2
+    x64.jmp ifcont
+  ifelse:
+    x64.movRegImm32 rax, 3
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegReg r8, rax
+    x64.jmp ifcont
+  ifcont:
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

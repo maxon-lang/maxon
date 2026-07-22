@@ -1825,6 +1825,18 @@ typealias BindingMark = int(0 to u64.max)
 // recorded height instead, releasing only what it declared.
 let WholeFunctionScopeFloor = 0 as BindingMark
 
+// A height in the PENDING-TEMPORARY list — the twin of `BindingMark` for owned temporaries rather than
+// owned bindings. A branching construct records the height before it parses a region (a condition, a
+// scrutinee, a match arm, a short-circuit's right-hand side) and releases everything enrolled ABOVE it
+// once that region's control flow is still single-threaded. See `drainPendingTemps`.
+typealias TempDropMark = int(0 to u64.max)
+
+// The floor `drainPendingTemps` releases down to when the WHOLE list goes — a statement's own tail drain
+// and a hand-off exit (`return`/`throw`) both end every temporary the statement owns. A region passes its
+// own recorded height instead, releasing only what IT built. Named for `WholeFunctionScopeFloor`'s reason:
+// a bare `0` at a call site reads as an index into the list rather than as "all of them".
+let WholeStatementTempFloor = 0 as TempDropMark
+
 // What a lexical block must be unwound to — the heights of BOTH per-binding lists the parser
 // keeps beside `Scope`.
 //
@@ -5749,7 +5761,7 @@ export type Parser
 		// calling it per statement would be one allocation on every line of the whole compiler. Almost no
 		// statement enrolls a temporary, so the common path skips the call entirely.
 		if not self.currentBlock.isTerminated() and self.pendingTempDrops.count() > 0 'dropTemps'
-			self.drainPendingTemps(stmtTok)
+			self.drainPendingTemps(WholeStatementTempFloor, anchor: stmtTok)
 		end 'dropTemps'
 
 		return self.currentBlock
@@ -6941,9 +6953,9 @@ export type Parser
 		// and no handle is taken at all, which is what makes the rule unbreakable rather than remembered.
 		if self.pendingTempDrops.count() > 0 'forkTemps'
 			self.currentBlock = okBlock
-			self.emitTempDrops(self.pendingTempDrops, anchor: tryTok)
+			self.emitTempDrops(self.pendingTempDrops, floor: WholeStatementTempFloor, anchor: tryTok)
 			self.currentBlock = errBlock
-			self.emitTempDrops(self.pendingTempDrops, anchor: tryTok)
+			self.emitTempDrops(self.pendingTempDrops, floor: WholeStatementTempFloor, anchor: tryTok)
 			self.pendingTempDrops = ValueIdArray.create()
 		end 'forkTemps'
 
@@ -7804,7 +7816,7 @@ export type Parser
 		end 'movedOut'
 
 		if self.pendingTempDrops.count() > 0 'dropExitTemps'
-			self.drainPendingTemps(anchor)
+			self.drainPendingTemps(WholeStatementTempFloor, anchor: anchor)
 		end 'dropExitTemps'
 
 		self.emitScopeDrops(WholeFunctionScopeFloor, anchor: anchor)
@@ -7970,19 +7982,50 @@ export type Parser
 	//
 	// `anchor` is the statement's own token; no source token spawns a drop, so it rides the statement that
 	// made control leave the temporary's lifetime, exactly as `emitScopeDrops` rides the `return`.
-	function drainPendingTemps(anchor Token)
-		self.emitTempDrops(self.pendingTempDrops, anchor: anchor)
-		self.pendingTempDrops = ValueIdArray.create()
+	// ⭐ **RELEASE EVERY PENDING TEMPORARY ABOVE `floor`, AND FORGET THEM.** `WholeStatementTempFloor` ends
+	// the whole list (a statement's tail, a hand-off exit); a REGION passes the height it recorded before
+	// parsing itself, so it releases what IT built and leaves the enclosing statement's temporaries alone.
+	// That distinction is the whole point: an `if` inside `let v = f("{x}", …)` must not release the
+	// interpolation `f` has not been handed yet.
+	//
+	// A floor ABOVE the current count is not an error and does nothing — the list is *shorter* than the
+	// region's start only when something already released past it (a `return` inside a match arm drains the
+	// whole list on its own edge), and there is then nothing left for the region to release.
+	//
+	// ⚠ **THE REGIONS THAT MUST CALL THIS, WRITTEN DOWN ONCE — TEACH A NEW ONE HERE.** Every construct that
+	// FORKS owes its own temporaries a release in a block their definitions dominate; miss one and the shape
+	// is a leak (a release on too few paths) or a release of a value the taken path never built (which the
+	// register allocator reports, several passes later, as "a use dominates its def"):
+	//   • `parseIfStatement` / `parseWhileStatement` — the condition, in its exit block before the branch;
+	//   • `parseMatchCommon` — the scrutinee before the first test, and each ARM at its own exit
+	//     (`finishArmValues`);
+	//   • `parseTernaryExpression` — the condition, and each of the two arms;
+	//   • `emitShortCircuit` — the right-hand side, which runs on one path only;
+	//   • `desugarTry` — the odd one out, and deliberately: its fork temporaries belong to the ENCLOSING
+	//     statement and are still live past the fork, so they are released once per EDGE rather than swept
+	//     here (see there).
+	// There is no automatic check behind this list, and that is a known gap rather than an oversight: the
+	// flat list is always drained by *something* downstream, so an end-of-parse "nothing left over" assertion
+	// cannot see a release that landed in the wrong BLOCK — the defect this discipline exists to prevent. A
+	// real guard needs a def-block per temporary plus a dominance query. `specs-shv2/block-condition-temporaries.md`
+	// pins one case per region in the meantime, and the leak gate (`!= 0`, so it catches an over-release too)
+	// is what makes those cases fail loudly.
+	function drainPendingTemps(floor TempDropMark, anchor Token)
+		self.emitTempDrops(self.pendingTempDrops, floor: floor, anchor: anchor)
+		while self.pendingTempDrops.count() > floor 'forget'
+			_ = try self.pendingTempDrops.pop() otherwise panic("drainPendingTemps: pop above floor {floor} failed on a list of {self.pendingTempDrops.count()} — the loop pops strictly while the count exceeds the floor")
+		end 'forget'
 	end 'drainPendingTemps'
 
-	// Emit the `__mm_decref` for each of `temps`, in REVERSE creation order, into `currentBlock`. The drop
-	// LOOP, split from `drainPendingTemps` so the `try` fork — which drops the SAME temporaries into TWO
-	// blocks and clears the list exactly once (`desugarTry`) — reuses it instead of spelling the reverse walk
-	// a second time. A second copy is how the two would come to disagree on the order, and the order is a rule
-	// (`emitScopeDrops`' convention: the last built is the first torn down).
-	function emitTempDrops(temps ValueIdArray, anchor Token)
+	// Emit the `__mm_decref` for each of `temps` above `floor`, in REVERSE creation order, into
+	// `currentBlock`, WITHOUT touching the list. The drop LOOP, split out so the `try` fork — which releases
+	// the SAME temporaries into TWO blocks, one per edge, and forgets them once (`desugarTry`) — reuses it
+	// instead of spelling the reverse walk a second time. A second copy is how the two would come to disagree
+	// on the order, and the order is a rule (`emitScopeDrops`' convention: the last built is the first torn
+	// down).
+	function emitTempDrops(temps ValueIdArray, floor TempDropMark, anchor Token)
 		var i = temps.count()
-		while i > 0 'eachTemp'
+		while i > floor 'eachTemp'
 			i = i - 1
 			let temp = try temps.get(i) otherwise panic("emitTempDrops: temps.get OOB at {i} — the list is walked strictly downwards from its own count")
 			self.emitDecref(temp, range: SourceRange.ofToken(anchor))
@@ -8043,12 +8086,23 @@ export type Parser
 		let ifEnd = self.blockStatementEndIndex(ifIndex, continuesAtElse: true)
 		let assignedBindings = self.assignedBindingsIn(ifIndex, endIndex: ifEnd)
 
+		let condTempFloor = self.pendingTempDrops.count()
 		let cond = try self.parseBoolCondition(func, block: block, kwTok: ifTok)
 		// The condition's own blocks: a short-circuit `and`/`or` in it (`if a() and b()`)
 		// has already branched, and control now sits in ITS merge block. That — not the
 		// block the `if` started in — is where the two-way branch belongs, and it is the
 		// `if`'s true entry for every purpose below.
 		var entry = self.currentBlock
+
+		// ⭐ **THE CONDITION'S TEMPORARIES DIE HERE, IN `entry`, BEFORE THE BRANCH.** `if [10,20,30].count()
+		// == 99` builds an array that nothing owns once `count()` has read it, and `entry` is the last block
+		// on the single path through the condition — it dominates the then branch, the else branch and the
+		// continuation alike, so ONE release here is one release on every path. Releasing it anywhere later
+		// cannot be: the branches are the two halves of a fork (a drop in the body runs only when the body
+		// does — the leak), and the continuation is reached from both (a drop there runs twice, or on a path
+		// that returned early, never at all).
+		self.drainPendingTemps(condTempFloor, anchor: ifTok)
+
 		let thenLabel = try self.consume(TokenKind.charLiteral)
 
 		// Values entering the branches (the condition only reads, so `entry`'s values
@@ -8387,8 +8441,18 @@ export type Parser
 		// header and the two-way branch; `condExit` is the block it ends in, and that is
 		// where the branch — and the exit's incoming edge — belong. The header stays the
 		// loop's entry, so nothing about `continue` or the back edge changes.
+		let condTempFloor = self.pendingTempDrops.count()
 		let cond = try self.parseBoolCondition(func, block: header, kwTok: whileTok)
 		var condExit = self.currentBlock
+
+		// ⭐ **PER ITERATION, NOT PER LOOP** — and that is why the release goes HERE rather than in the exit
+		// block. The condition is re-evaluated on every trip (the back edge and `continue` both target the
+		// header), so it builds a FRESH temporary each time; `condExit` is inside the loop, so the release
+		// rides round with it and the live count stays flat. Hoisted to `exit` it would run once for N
+		// allocations — a leak that grows with the trip count. The `if` reasoning applies unchanged for the
+		// two edges: `condExit` dominates both the body and the exit.
+		self.drainPendingTemps(condTempFloor, anchor: whileTok)
+
 		let loopLabelTok = try self.consume(TokenKind.charLiteral)
 
 		var body = self.newBlock(func, label: loopLabelTok.value, line: loopLabelTok.line)
@@ -8503,6 +8567,10 @@ export type Parser
 	// block (`otherwiseOpensBlock`). The rest (`ignore`, a fallback value, a single-statement
 	// return/break/continue/throw/panic) open nothing, so counting a bare `otherwise` would
 	// leave an `end` unaccounted for — the very miscount OPEN #62 was.
+	//
+	// ⚠ A construct added here almost certainly has a CONDITION or SCRUTINEE, and an expression can build an
+	// owned temporary — so it owes that temporary a release too. See `drainPendingTemps`, which keeps the
+	// list of regions that settle their own.
 	function opensBlockAt(index TokenIndex) returns bool
 		let kind = self.kindAt(index)
 		if kind == TokenKind.while or kind == TokenKind.match 'alwaysOpens'
@@ -8866,6 +8934,7 @@ export type Parser
 
 		// The scrutinee. It may itself short-circuit and move `currentBlock`, so the first arm's
 		// test goes into wherever the scrutinee left control — its exit block, not `block`.
+		let scrutTempFloor = self.pendingTempDrops.count()
 		let scrut = try self.parseExpression(func, block: block)
 		let scrutTag = self.tagOf(scrut)
 
@@ -8946,6 +9015,15 @@ export type Parser
 			self.removeFromPendingTemps(scrut)
 		end 'enrollTempScrutinee'
 
+		// ⭐ **AND THE SCRUTINEE EXPRESSION'S OTHER TEMPORARIES DIE HERE, BEFORE THE FIRST CASE TEST.** The
+		// enrolment above rescues the scrutinee VALUE when it is itself an owned box; it says nothing about
+		// what the expression built on the way to producing it — `match [1,2,3].count()` yields a plain
+		// integer and abandons an array. Left in the list, that array is released by whichever arm's body
+		// drains first, on that arm's path alone (the same arm-order-dependent leak the enrolment comment
+		// above describes, one level down). `currentBlock` is the scrutinee's exit block, which dominates
+		// every arm test, every arm body and the merge — so one release here covers all of them.
+		self.drainPendingTemps(scrutTempFloor, anchor: matchTok)
+
 		// The move state entering the arms — captured after the temp-scrutinee enrolment so the scrutinee
 		// binding is included. Each FRESH arm is parsed from it (`restoreMoveMark` at the arm-restore sites,
 		// the twin of `restoreBindings`), and each reaching arm captures its own exit move state for the
@@ -9002,13 +9080,10 @@ export type Parser
 						let layout = requireEnumLayout(enumMatch)
 						throw ParseError.matchDefaultEnumMustThrow(layout.kindWord(), typeName: String.from(layout.name), line: defTok.line, column: defTok.column)
 					end 'enumPlainDefault'
+					let defaultTempFloor = self.pendingTempDrops.count()
 					let defaultArmBody = try self.parseArmBody(func, bodyBlock: defaultBody, isExpression: isExpression, carried: carried)
-					// A `default gives …` arm's OWNED give escapes to the result phi — move it out of its
-					// owner so the post-match drain does not free it (the pattern-arm rule, for the
-					// catch-all arm).
-					if isExpression 'transferDefaultGive'
-						try self.transferGiveToPhi(self.giveValueOf(defaultArmBody.give), anchor: matchTok)
-					end 'transferDefaultGive'
+					// The catch-all arm settles its give and its temporaries exactly as a pattern arm does.
+					try self.finishArmValues(defaultArmBody, tempFloor: defaultTempFloor, isExpression: isExpression, anchor: matchTok)
 					// `default` is the last arm, so a fall-through has no next arm to reach — it simply
 					// continues to the merge. So the test is "did control leave?", not `reachesMerge`.
 					if not defaultArmBody.exitBlock.isTerminated() 'defaultReaches'
@@ -9074,6 +9149,7 @@ export type Parser
 					end 'consumed'
 				end 'openArmBindings'
 
+				let armTempFloor = self.pendingTempDrops.count()
 				let armBody = try self.parseArmBody(func, bodyBlock: bodyBlock, isExpression: isExpression, carried: carried)
 
 				if hasPayloadBindings 'closeArmBindings'
@@ -9084,10 +9160,9 @@ export type Parser
 				// BEFORE `dropArmScopedOwned` — else a `text(s) gives s` arm would drop the payload it is
 				// handing back (a use-after-free), and an owned-interpolation give would be double-freed by
 				// the post-match drain. A gives arm always reaches the merge (an expression cannot terminate
-				// its block), so the transfer is unconditional for `isExpression`.
-				if isExpression 'transferPatternGive'
-					try self.transferGiveToPhi(self.giveValueOf(armBody.give), anchor: patternTok)
-				end 'transferPatternGive'
+				// its block), so the transfer is unconditional for `isExpression`. The arm's abandoned
+				// TEMPORARIES leave by the same door and into the same exit block — see `finishArmValues`.
+				try self.finishArmValues(armBody, tempFloor: armTempFloor, isExpression: isExpression, anchor: patternTok)
 				self.dropArmScopedOwned(armOwnedFloor, exitBlock: armBody.exitBlock, anchor: patternTok)
 
 				if armBody.fellThrough 'fellThrough'
@@ -9629,6 +9704,31 @@ export type Parser
 	// (the payload binding of `text(s) gives s`, or an outer owned binding) is poisoned so `emitScopeDrops`
 	// skips its drop and a later read of it is use-after-move. A borrowed/scalar give owns nothing, so both
 	// calls are no-ops — a borrowed String is promoted at the merge instead, where phi ownership is decided.
+	// ⭐ **SETTLE ONE MATCH ARM'S OWN VALUES BEFORE ITS EDGE LEAVES.** Two things an arm owes, which used to
+	// be one thing done twice (the give transfer was spelled at both the pattern-arm and default-arm sites)
+	// and one thing done nowhere:
+	//
+	//   • an OWNED `gives` value ESCAPES to the result phi, so it leaves its owner here — the merge drops it,
+	//     not the arm (`transferGiveToPhi`);
+	//   • every TEMPORARY the arm body built and abandoned is released in the arm's OWN exit block, which is
+	//     the only block those definitions dominate. An arm runs on one edge, so a release after the merge
+	//     would free a value the other arms never built — the short-circuit mistake, in a wider construct.
+	//     The give is transferred FIRST, so an escaping value is out of the list before the sweep.
+	//
+	// Inert for a `then` arm: its body is a STATEMENT, and the statement tail already released the whole list
+	// on its own edge, leaving nothing above the floor. It is the `gives` arm of a match EXPRESSION — which
+	// parses an expression and so has no statement tail — that this exists for.
+	function finishArmValues(armBody MatchArmBody, tempFloor TempDropMark, isExpression bool, anchor Token) throws ParseError
+		if isExpression 'transferGive'
+			try self.transferGiveToPhi(self.giveValueOf(armBody.give), anchor: anchor)
+		end 'transferGive'
+
+		let resumeBlock = self.currentBlock
+		self.currentBlock = armBody.exitBlock
+		self.drainPendingTemps(tempFloor, anchor: anchor)
+		self.currentBlock = resumeBlock
+	end 'finishArmValues'
+
 	function transferGiveToPhi(give ValueId, anchor Token) throws ParseError
 		if not self.valueIsOwnedHeap(give) 'borrowed'
 			return
@@ -10555,6 +10655,10 @@ export type Parser
 
 		let markOpRefCount = block.opRefs.count()
 		let markBlockRefCount = func.blockRefs.count()
+		// The pending-temporary height at the same instant as the op/block marks — everything enrolled above
+		// it while the value below parses belongs to what may turn out to be a ternary's TRUE ARM, and is
+		// released inside that arm rather than on the unconditional path (see `parseTernaryExpression`).
+		let markTempCount = self.pendingTempDrops.count()
 		var preMoveMark = self.emptyMoveMark
 		if self.ownedBindings.count() > 0 'ownedInScope'
 			preMoveMark = self.captureMoveMark()
@@ -10563,7 +10667,7 @@ export type Parser
 		let value = try self.parseBinary(func, minPrec: OrPrecedence)
 
 		if self.at(TokenKind.if) 'ternary'
-			return try self.parseTernaryExpression(func, trueValue: value, startBlock: block, markOpRefCount: markOpRefCount, markBlockRefCount: markBlockRefCount, preMoveMark: preMoveMark)
+			return try self.parseTernaryExpression(func, trueValue: value, startBlock: block, markOpRefCount: markOpRefCount, markBlockRefCount: markBlockRefCount, markTempCount: markTempCount, preMoveMark: preMoveMark)
 		end 'ternary'
 
 		return value
@@ -10590,7 +10694,7 @@ export type Parser
 	// environment (the same merge hazard the match `gives` arm and the `otherwise` fallback are refused for),
 	// so it is rejected E3099 at the `if` — the shared anchor for both arms, where each reference compiler
 	// anchors it.
-	function parseTernaryExpression(func IrFunction, trueValue ValueId, startBlock IrBlock, markOpRefCount ElementCount, markBlockRefCount ElementCount, preMoveMark MoveMark) returns ValueId throws ParseError
+	function parseTernaryExpression(func IrFunction, trueValue ValueId, startBlock IrBlock, markOpRefCount ElementCount, markBlockRefCount ElementCount, markTempCount TempDropMark, preMoveMark MoveMark) returns ValueId throws ParseError
 		let ifTok = try self.consume(TokenKind.if)
 
 		// The E3099 refusal for a capturing closure in EITHER arm — the route-specific prefix over the
@@ -10607,6 +10711,18 @@ export type Parser
 		// The true arm's owned give leaves its owner (so the merge, not the arm, drops it) — done now, so the
 		// transfer's own poison is captured into the true arm's move state below.
 		try self.transferGiveToPhi(trueValue, anchor: ifTok)
+
+		// ⭐ **THE TRUE ARM'S TEMPORARIES ARE RELEASED WHILE THE ARM IS STILL DETACHABLE, AND TRAVEL WITH IT.**
+		// The arm was parsed onto the unconditional path before the `if` revealed the form, so its temporaries
+		// (`[1,2].count() if c else …` builds one) are enrolled as though they were the enclosing statement's —
+		// and after the relocation below the arm runs on ONE edge, where a release on the unconditional path
+		// would free a value the false path never built. Emitting the release HERE, before the ops are
+		// collected, puts it in the tail of `startBlock` that `relocatedOpRefs` sweeps into `trueBranch` (or,
+		// for an arm that grew control flow, into the arm's own inner exit block, which is relocated too). So
+		// the drop rides the SAME relocation the arm does and needs no second mechanism to follow it.
+		// `transferGiveToPhi` above has already taken an owned give out of the list, so the arm's VALUE is
+		// never released here — only what it built and abandoned.
+		self.drainPendingTemps(markTempCount, anchor: ifTok)
 
 		// ⭐ **THE CONDITION RUNS FIRST AT RUNTIME, THOUGH IT PARSES SECOND.** The true arm was parsed before
 		// the `if` revealed the form, so any binding it MOVED (an owned value into a struct field, say) is
@@ -10659,6 +10775,10 @@ export type Parser
 		end 'nonBoolCondition'
 		let condExit = self.currentBlock
 
+		// The CONDITION is unconditional, so its own temporaries die on the single path, in the block the
+		// condition left control in — the `if`-statement rule, applied to the ternary's condition.
+		self.drainPendingTemps(markTempCount, anchor: ifTok)
+
 		// The move state after the (unconditional) condition — the base BOTH arms build on. The TRUE path is
 		// that base PLUS the true arm's own moves (rewound above); the FALSE path is that base plus the false
 		// arm's, and it inherits `condBase` as the live state directly, since the false arm parses next.
@@ -10690,6 +10810,11 @@ export type Parser
 		try self.rejectEscapingClosure(falseValue, message: armEscapeMessage, tok: ifTok)
 		let falseExit = self.currentBlock
 		try self.transferGiveToPhi(falseValue, anchor: ifTok)
+
+		// The false arm's own temporaries, released in ITS exit block — the mirror of the true arm's, and for
+		// the same reason: the arm runs on one edge only. `currentBlock` is `falseExit` here.
+		self.drainPendingTemps(markTempCount, anchor: ifTok)
+
 		let falseMoveMark = self.captureMoveMark()
 
 		// The merge is the SAME block-arg join a `match` expression uses (see the header). Two reaching arms,
@@ -11025,11 +11150,22 @@ export type Parser
 
 		let rhsBlock = self.newBlock(func, label: shortCircuitLabel(takesRhsWhenTrue), line: opTok.line)
 		self.currentBlock = rhsBlock
+		let rhsTempFloor = self.pendingTempDrops.count()
 		let rhsValue = try self.parseBinary(func, minPrec: rhsMinPrec)
 		// NOT `rhsBlock`: the rhs may itself have short-circuited (`a or b or c`), leaving
 		// control in a merge block of its own. That is the block the value is defined in, and
 		// the one that must branch here.
 		var rhsEnd = self.currentBlock
+
+		// ⭐ **THE RIGHT-HAND SIDE RUNS ON ONE PATH, SO ITS TEMPORARIES DIE ON THAT PATH.** `a or [4,5].count()
+		// == 2` builds its array only when the lhs was false; on the short-circuit path the value does not
+		// exist at all. Releasing it after the merge is therefore not a leak but the OPPOSITE mistake — a
+		// release of something never built, which is a use of a register the skipped path never wrote. It was
+		// caught downstream, loudly, by the allocator's dominance invariant ("a use dominates its def"), which
+		// is exactly the right complaint: `rhsEnd` is the only block the rhs's definitions dominate, so this
+		// is the only place the release can go. A bool operand is never owned heap, so `rhsValue` itself is
+		// never in this list and cannot be released out from under the merge phi.
+		self.drainPendingTemps(rhsTempFloor, anchor: opTok)
 
 		// The SHORT-CIRCUIT half of the same rule `emitBinOp` enforces — ASKED, not restated
 		// (see `requireBinOpOperands`). The left operand is already known to be a bool: that is
