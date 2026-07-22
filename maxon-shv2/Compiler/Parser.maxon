@@ -5616,7 +5616,7 @@ export type Parser
 			// here like any other bare-call statement — is dropped by the statement's `drainPendingTemps`
 			// tail when it owns heap. Treating `cb` as a direct call instead is what misreported it E3004.
 			if self.calleeIsFunctionTypedLocal() 'functionLocalCallStmt'
-				_ = try self.parsePostfix(func, value: try self.parseVariableReference())
+				_ = try self.parsePostfix(func, value: try self.parseVariableReference(), resultUsed: false)
 			end 'functionLocalCallStmt' else 'directCallStmt'
 				_ = try self.parseCall(func, resultUsed: false)
 			end 'directCallStmt'
@@ -6632,7 +6632,7 @@ export type Parser
 		// `call __arr_get` as the last op for `rewriteLastCallToTryCall` to convert. The array temp drops at
 		// statement end (after the try), on every path.
 		if self.at(TokenKind.leftBracket) 'arrayLiteralTarget'
-			return try self.parsePostfix(func, value: try self.parseArrayLiteral(func))
+			return try self.parsePostfix(func, value: try self.parseArrayLiteral(func), resultUsed: true)
 		end 'arrayLiteralTarget'
 		// `try b"…".get(0) otherwise …` — a throwing method on a byte-string LITERAL (P1.7 slice 2), the exact
 		// analogue of the array-literal target above: the literal parses to an owned `Array with Byte` temp and
@@ -6642,7 +6642,7 @@ export type Parser
 		// accepted, so the two literal kinds must be enrolled here together. The temp drops at statement end
 		// (after the try), on every path.
 		if self.at(TokenKind.byteStringLiteral) 'byteStringLiteralTarget'
-			return try self.parsePostfix(func, value: try self.parseByteStringLiteral())
+			return try self.parsePostfix(func, value: try self.parseByteStringLiteral(), resultUsed: true)
 		end 'byteStringLiteralTarget'
 		let tok = self.current()
 		throw ParseError.unsupported("`try` must be applied to a call — `try f(…)`, `try obj.method(…)`, or `try await p` (got '{tok.kind.rawValue}')", line: tok.line, column: tok.column)
@@ -10894,7 +10894,7 @@ export type Parser
 	function parseUnary(func IrFunction) returns ValueId throws ParseError
 		if self.at(TokenKind.minus) 'neg'
 			let opTok = try self.consume(TokenKind.minus)
-			let operand = try self.parsePostfix(func, value: try self.parsePrimary(func))
+			let operand = try self.parsePostfix(func, value: try self.parsePrimary(func), resultUsed: true)
 			let operandTag = self.tagOf(operand)
 			if not typeClassAdmits(TypeClass.numeric, tag: operandTag) 'notANumber'
 				throw ParseError.nonNumericNegation(typeTagName(operandTag), line: opTok.line, column: opTok.column)
@@ -10932,7 +10932,7 @@ export type Parser
 			return try self.emitAwait(func, promise: promise, awaitTok: awaitTok)
 		end 'await'
 
-		return try self.parsePostfix(func, value: try self.parsePrimary(func))
+		return try self.parsePostfix(func, value: try self.parsePrimary(func), resultUsed: true)
 	end 'parseUnary'
 
 	// A primary followed by any trailing INDIRECT CALL `(args)` through a function VALUE (P1.5-A1). This
@@ -10946,14 +10946,20 @@ export type Parser
 	// ⚠ The `as`-CAST is NOT handled here — it is a LOOSER operator than unary `-` (see `parseCast`), so
 	// `-5 as Age` is `(-5) as Age`. An indirect call, by contrast, binds TIGHTER than `-` (`-f()` is
 	// `-(f())`), which is why it stays in this postfix band and the cast does not.
-	function parsePostfix(func IrFunction, value ValueId) returns ValueId throws ParseError
+	//
+	// `resultUsed` is whether this postfix chain's FINAL value is read — `false` only for a bare-call
+	// STATEMENT (`callStmt`), `true` in every expression. It gates ONLY a VOID indirect-call/array-method
+	// result: a void result is always TERMINAL (the loop continues only on a `function`/`Array` value, and
+	// void is neither), so the outer `resultUsed` is exactly the one the terminal call sees, and forwarding
+	// it uniformly to every hop is correct — an intermediate hop's value is never void.
+	function parsePostfix(func IrFunction, value ValueId, resultUsed bool) returns ValueId throws ParseError
 		var current = value
 		while true 'postfix'
 			// A trailing `(` on a FUNCTION value is an indirect call; on anything else it is not a postfix
 			// operator at all and the loop ends (a `(` after a non-function value is left for the caller,
 			// which is a syntax error there — calling a non-function).
 			if self.at(TokenKind.leftParen) and self.tagOf(current) == ValueTypeTag.function 'indirectCall'
-				current = try self.parseIndirectCall(func, callee: current)
+				current = try self.parseIndirectCall(func, callee: current, resultUsed: resultUsed)
 				continue
 			end 'indirectCall'
 
@@ -10962,7 +10968,7 @@ export type Parser
 			// an `Array` instance; a non-array `.method` in postfix position is left for the caller exactly as
 			// before (a plain struct's method call reaches the binding path, not this loop).
 			if self.at(TokenKind.dot) and self.tagOf(current) == ValueTypeTag.genericInstance and self.signatures.isArrayInstance(self.valueNameId(current)) 'arrayMethod'
-				current = try self.parseArrayMethodOnValue(func, arr: current, giid: self.valueNameId(current), resultUsed: true)
+				current = try self.parseArrayMethodOnValue(func, arr: current, giid: self.valueNameId(current), resultUsed: resultUsed)
 				continue
 			end 'arrayMethod'
 
@@ -15639,7 +15645,7 @@ export type Parser
 	// a functionRef, a param, a field load, or another call). Arguments are POSITIONAL: a function type's
 	// parameter names are documentation only, so there is nothing to label — `f(a, b)` is two positional
 	// args, which a direct call would reject (rest-labelled), so indirect calls have their own arg parser.
-	function parseIndirectCall(func IrFunction, callee ValueId) returns ValueId throws ParseError
+	function parseIndirectCall(func IrFunction, callee ValueId, resultUsed bool) returns ValueId throws ParseError
 		let anchor = self.current()
 		try self.consume(TokenKind.leftParen)
 
@@ -15655,7 +15661,7 @@ export type Parser
 		// once, keyed on the value.
 		args.push(self.emitClosureEnvArg(callee, range: SourceRange.between(anchor, last: rparenTok)))
 
-		let result = self.mintIndirectCallResult(callee)
+		let result = try self.mintIndirectCallResult(callee, resultUsed: resultUsed, anchor: anchor)
 		self.artifact.emitOp(self.currentBlock, op: MaxonOp.indirectCall(result, callee: callee, args: args), range: SourceRange.between(anchor, last: rparenTok))
 		return result
 	end 'parseIndirectCall'
@@ -15689,16 +15695,32 @@ export type Parser
 	end 'parseIndirectCallArgs'
 
 	// Mint the SSA value an indirect call defines, typed from the CALLEE FUNCTION VALUE's return type —
-	// the mirror of `mintCallResult` for a direct call, which reads `returnTypeOf(callee-name)`. Here the
-	// return type is recovered from the callee value's OWN function type (its governing name), and the tag
-	// tail (`mintOwnedCallResult`) is shared, so an indirect call binds its result exactly as a direct one
-	// does. A VOID function type called in value position mints a `void` value, which a value-position use
-	// rejects downstream exactly as a void direct call does.
-	function mintIndirectCallResult(callee ValueId) returns ValueId
-		return match self.functionValueReturnType(callee) 'r'
-			value(inner) gives self.mintOwnedCallResult(inner)
-			void gives self.mintValue(ValueTypeTag.void, nameId: UnnamedTypeId)
+	// the mirror of `mintDeclaredCallResult` for a direct call. Here the return type is recovered from the
+	// callee value's OWN function type (its governing name), and the value-returning tail
+	// (`mintOwnedCallResult`) is shared, so an indirect call binds its result exactly as a direct one does.
+	//
+	// ⭐ A VOID FUNCTION VALUE IS REJECTED AT THE CALL WHEN ITS RESULT IS USED, exactly as a void DIRECT
+	// call is (`resultUsed`, mirroring `mintDeclaredCallResult`). This UPHOLDS the invariant that
+	// `maxonTypeOfTag`/`valueTagToStdType` assert — a `void` value is minted ONLY as a discarded statement
+	// result, NEVER in a position that reads it. Without the guard, `let cb = doIt; let x = cb()` minted a
+	// void value that reached `typeOf` and PANICKED, where the void DIRECT call `let x = doIt()` cleanly
+	// reports E2004. Statement position (`resultUsed: false`, the point of #68) still mints the discarded
+	// void value; every value position (`resultUsed: true` — a binding, `return`, an operand, an argument)
+	// reports E2004 HERE, at the call, the same anchor and text the direct-call diagnostic uses.
+	function mintIndirectCallResult(callee ValueId, resultUsed bool, anchor Token) returns ValueId throws ParseError
+		match self.functionValueReturnType(callee) 'r'
+			value(inner) then return self.mintOwnedCallResult(inner)
+			void then break 'r'
 		end 'r'
+
+		// A VOID function value used where a value belongs. Reported with the callee's governing function
+		// name (`functionValueReturnType` proved it resolvable to reach the `void` arm), the E2004 spelling
+		// `mintDeclaredCallResult` renders for a void direct call.
+		if resultUsed 'noValueToUse'
+			throw ParseError.voidCallResultUsed(String.from(self.internedName(self.valueNameId(callee))), line: anchor.line, column: anchor.column)
+		end 'noValueToUse'
+
+		return self.mintValue(ValueTypeTag.void, nameId: UnnamedTypeId)
 	end 'mintIndirectCallResult'
 
 	// The RETURN type of a function VALUE, recovered from its governing name (see MaxonType's `function`
