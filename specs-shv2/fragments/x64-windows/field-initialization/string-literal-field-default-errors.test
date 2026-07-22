@@ -1,0 +1,17 @@
+// Test: string-literal-field-default-errors
+
+type Box
+	export var name = "hello"
+
+	export static function create() returns Self
+		return Self{}
+	end 'create'
+end 'Box'
+
+function main() returns ExitCode
+	let b = Box.create()
+	return 0
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:4:20: Unsupported: 'string literal' as a field default (only a LITERAL default is parsed — `= 5`, `= 50.0`, `= true`, optionally signed. An arbitrary expression is evaluated once per struct literal, which needs the initializer captured at the declaration and replayed at every literal that omits the field, and arrives with the rung that has a case needing one)

@@ -144,6 +144,31 @@ end 'main'
 42
 ```
 
+<!-- test: string-literal-field-default-errors -->
+A field default may only be a numeric or boolean LITERAL (`= 5`, `= 50.0`, `= true`, optionally
+signed) — an arbitrary expression or a STRING-literal default is refused rather than silently
+accepted. It is a pure PARSE error, so the compiler tears its half-built parse down on the error path;
+the always-on leak gate makes this case a standing guard that the rejection frees everything it
+allocated (a leak there would flip the suite to exit 101).
+```maxon
+
+type Box
+	export var name = "hello"
+
+	export static function create() returns Self
+		return Self{}
+	end 'create'
+end 'Box'
+
+function main() returns ExitCode
+	let b = Box.create()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: specs/fragments/field-initialization/string-literal-field-default-errors.test:4:20: Unsupported: 'string literal' as a field default (only a LITERAL default is parsed — `= 5`, `= 50.0`, `= true`, optionally signed. An arbitrary expression is evaluated once per struct literal, which needs the initializer captured at the declaration and replayed at every literal that omits the field, and arrives with the rung that has a case needing one)
+```
+
 <!-- disabled-test: empty-literal-no-defaults-errors -->
 <!-- TWO blockers: (1) the `_ =` discard binding (`_ = P.make()` ⇒ E2004 `Undefined variable '_'`); (2) the expectation pins the BOOTSTRAP's E3086 wording, which shv2 does not produce — shv2 reports one field per diagnostic ("field 'x' of 'P' is not initialized by this literal, and it has no default value"). The wording question belongs to the rung that lands `_ =`. -->
 ```maxon
