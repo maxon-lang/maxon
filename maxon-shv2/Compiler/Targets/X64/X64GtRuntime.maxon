@@ -62,6 +62,18 @@ function emitLoadTibFromGt(code ByteArray, gtReg X64Register, scratch X64Registe
 	encodeMovGsAbsReg(code, disp: TibStackLimitDisp, srcReg: scratch)
 end 'emitLoadTibFromGt'
 
+// Repoint the NT_TIB at the single SYSTEM stack `[topReg - GtSystemStackSize, topReg)` — `gs:[0x08] = top`,
+// `gs:[0x10] = top - size`. The two sites that switch a kernel call onto the system stack — the syscall shim
+// (before an `iatCall`) and `__gt_morestack` (step 3, for its own VirtualAlloc/VirtualFree) — compute those
+// TWO TIB words the SAME way, so the `top - size` structure is spelled ONCE here rather than open-coded twice,
+// where an edit to one could silently repoint one stack differently from the other. `topReg` is DESTROYED (it
+// becomes `top - size`); both callers hold `top` in a register they are otherwise done with.
+function emitRepointTibToSystemStack(code ByteArray, topReg X64Register)
+	encodeMovGsAbsReg(code, disp: TibStackBaseDisp, srcReg: topReg)
+	encodeGrp1RegImm32(code, ext: Grp1ExtSub, reg: topReg, imm: GtSystemStackSize as Imm32)
+	encodeMovGsAbsReg(code, disp: TibStackLimitDisp, srcReg: topReg)
+end 'emitRepointTibToSystemStack'
+
 // The scratch registers the trampoline holds across the straight-line body: r12 = the GT (callee-saved, so it
 // survives the user call), r10 = the argument buffer, r11 = the function pointer. None is an argument register,
 // so the six arg-register loads below cannot clobber them.
@@ -300,10 +312,9 @@ function emitGtShimmedIatCall(code ByteArray, iatRelocs RelocationArray, rdataRe
 		encodeStoreBaseDispReg(code, base: X64Register.rsp, disp: dstDisp, srcReg: ShimGtReg)
 	end 'copyArg'
 
-	// Repoint the TIB at the system stack for the call (rax = system-stack top).
-	encodeMovGsAbsReg(code, disp: TibStackBaseDisp, srcReg: X64Register.rax)
-	encodeGrp1RegImm32(code, ext: Grp1ExtSub, reg: X64Register.rax, imm: GtSystemStackSize as Imm32)
-	encodeMovGsAbsReg(code, disp: TibStackLimitDisp, srcReg: X64Register.rax)
+	// Repoint the TIB at the system stack for the call (rax = system-stack top, destroyed here — it is dead
+	// before the call, which clobbers the caller-saved rax anyway).
+	emitRepointTibToSystemStack(code, topReg: X64Register.rax)
 
 	encodeIatCall(code, iatRelocs: iatRelocs, slotIndex: slotIndex)
 
@@ -440,11 +451,9 @@ function buildGtMorestackChunk() returns FunctionCodeChunk
 	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: GtMoreGtReg, src: ShimGtReg, wide: true)  // rbx = gt
 
 	// Step 3: repoint the TIB at the system stack for THIS routine's own VirtualAlloc/VirtualFree (r10 =
-	// systemStackTop still). rax is free (saved on the stack) — use it for the StackLimit computation.
-	encodeMovGsAbsReg(code, disp: TibStackBaseDisp, srcReg: ShimGtRspReg)  // gs:[0x08] = systemStackTop
-	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: X64Register.rax, src: ShimGtRspReg, wide: true)
-	encodeGrp1RegImm32(code, ext: Grp1ExtSub, reg: X64Register.rax, imm: GtSystemStackSize as Imm32)
-	encodeMovGsAbsReg(code, disp: TibStackLimitDisp, srcReg: X64Register.rax)  // gs:[0x10] = systemStackTop - size
+	// systemStackTop still). r10 is CONSUMED here — it is dead until the walk (step 8) clobbers it and step 12
+	// reloads it, so the shared helper may destroy it rather than spend a scratch register preserving it.
+	emitRepointTibToSystemStack(code, topReg: ShimGtRspReg)  // gs:[0x08] = top ; gs:[0x10] = top - size
 
 	// Step 4: r12 = old_base ; r13 = old_size ; r14 = new_size = old_size * 2.
 	encodeLoadRegBaseDisp(code, destReg: GtMoreOldBaseReg, base: GtMoreGtReg, disp: GtOffStackBase as Imm32, wide: true)
