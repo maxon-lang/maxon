@@ -525,13 +525,16 @@ public static partial class MaxonToStandardConversion {
       if (op.IsStructElement) {
         // Load the struct pointer — ownership transfer, NO incref.
         // The buffer's reference is handed to the caller.
+        //
+        // The slot is NOT erased here, and used to be: an inline 8-byte store landed on
+        // buffer[index] before the shift, to keep the teardown walk off the pointer just
+        // handed out. Every byte of it is overwritten before anything can observe it — the
+        // shift below copies [index+1, length) down over slot `index`, and when there is
+        // nothing to copy (a pop, index == newLength) the single erase after the shift lands
+        // on that very slot. Two writes to one slot is how the width drifted apart in the
+        // first place; the one that survives is the one that derives its width.
         var loadOp = new StdLoadIndirectOp(addr, 0, IrType.I64);
         block.AddOp(loadOp);
-
-        // Zero the slot to prevent mm_decref_managed_elements from touching it
-        var zeroOp = new StdConstI64Op(0);
-        block.AddOp(zeroOp);
-        block.AddOp(new StdStoreIndirectOp(zeroOp.Result, addr, 0, IrType.I64));
 
         var tempId = IrContext.Current.NextId();
         var tempName = temps.CreateTemp("callret", tempId, op.StructElementTypeName ?? "unknown", OwnershipFlags.Orphan);

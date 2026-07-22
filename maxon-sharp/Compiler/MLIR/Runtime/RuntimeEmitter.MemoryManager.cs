@@ -2037,20 +2037,47 @@ public partial class RuntimeEmitter {
   /// the release leaks the element. Callers: clear (0, length) and the shrink
   /// path of setLength (newLength, oldLength).
   ///
+  /// SKIPPED for a buffer this record does not own (capacity &lt; 0), on the same
+  /// terms and for the same reason as its twin mm_zero_element_range: the slots
+  /// are not ours to write, and the elements in them are not ours to release —
+  /// a borrowed buffer's +1 refs belong to whoever owns the buffer, so releasing
+  /// them here would be a double-free rather than a leak avoided.
+  ///
+  /// The two runtime helpers are the two arms of ONE dispatcher
+  /// (EmitVacateElementRange), which hands them the same (record, start, end)
+  /// and differs only in whether the departing elements are also released. They
+  /// must therefore agree on WHOSE memory they may touch. Only the scalar arm
+  /// used to carry the check, so the answer depended on the element class: safe
+  /// for a byte array, an out-of-bounds write plus a stray decref for a managed
+  /// one. It was unreachable — the only records with a negative capacity are
+  /// rdata literals and the zero-copy views chained off them, and rdata is only
+  /// ever emitted for byte/int/bool/short elements — but that is a property of
+  /// four other files (ConstantArrayAnalysisPass, the string-literal record, the
+  /// slice arms in Strings.cs), not of this one, and the setLength clamp made
+  /// setLength(0) on a non-owned record newly reachable. A guard that costs one
+  /// compare per CALL (not per element) buys the invariant locally.
+  ///
   /// Managed elements are always 8-byte heap pointers, so the stride is fixed.
   /// </summary>
   // Stack slots: 0=managed_ptr, 1=start, 2=end, 3=buf, 4=idx
   public void EmitMmVacateManagedElements(bool mmTrace) {
     _b.FunctionStart("mm_vacate_managed_elements", 3, 0x60);
-    _b.LoadLocal(VReg.Scratch0, 0);
-    _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, MmemOffBuffer);
-    _b.StoreLocal(3, VReg.Scratch1);
-    _b.LoadLocal(VReg.Scratch0, 1); // start
-    _b.StoreLocal(4, VReg.Scratch0); // idx = start
 
     var loopLabel = UniqueLabel("mm_vacate_elems_loop");
     var doneLabel = UniqueLabel("mm_vacate_elems_done");
     var zeroLabel = UniqueLabel("mm_vacate_elems_zero");
+
+    // capacity < 0 => rdata / read-only view: neither the slots nor the elements
+    // in them are this record's to touch.
+    _b.LoadLocal(VReg.Scratch0, 0); // managed_ptr
+    _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, MmemOffCapacity);
+    _b.CmpRegImm(VReg.Scratch1, 0);
+    _b.JumpIf(Condition.Less, doneLabel);
+
+    _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, MmemOffBuffer);
+    _b.StoreLocal(3, VReg.Scratch1);
+    _b.LoadLocal(VReg.Scratch0, 1); // start
+    _b.StoreLocal(4, VReg.Scratch0); // idx = start
 
     _b.DefineLabel(loopLabel);
     _b.LoadLocal(VReg.Scratch0, 4); // idx

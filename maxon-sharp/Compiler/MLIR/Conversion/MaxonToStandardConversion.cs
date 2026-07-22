@@ -1709,9 +1709,19 @@ public static partial class MaxonToStandardConversion {
                 // to zero slots and the allocator refused the zero-byte request. A borrowed
                 // buffer owns no writable slot, so the answer that keeps every caller's
                 // arithmetic sound is 0.
-                valueMap[fieldAccess.Result] = fieldAccess.ClampNegativeSentinel
-                  ? EmitClampCapacityNonNeg(newBlock, (StdI64)loaded)
-                  : loaded;
+                if (fieldAccess.ClampNegativeSentinel) {
+                  // The clamp is signed arithmetic on the loaded word, so a narrower field would
+                  // silently mean something else here. Name the mismatch instead of letting the
+                  // cast raise InvalidCastException from inside a lowering.
+                  if (loaded is not StdI64 capacityWord)
+                    throw new InvalidOperationException(
+                      $"ClampNegativeSentinel is set on '{fieldAccess.TypeName}.{fieldAccess.FieldName}', "
+                      + $"which loads as {loaded.GetType().Name}; only an i64 field carries the negative "
+                      + "non-owned sentinel this clamp exists to remove");
+                  valueMap[fieldAccess.Result] = EmitClampCapacityNonNeg(newBlock, capacityWord);
+                } else {
+                  valueMap[fieldAccess.Result] = loaded;
+                }
               }
               break;
             }

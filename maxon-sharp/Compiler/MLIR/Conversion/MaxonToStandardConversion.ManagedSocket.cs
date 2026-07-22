@@ -55,13 +55,26 @@ public static partial class MaxonToStandardConversion {
     Dictionary<string, string> varTypes,
     MaxonValue? errorFlagValue) {
     // args: [handle, buf+offset (adjusted ptr), length, capacity]
-    // The parser already computed buf+offset so the lowering receives a raw pointer and remaining capacity.
+    // The parser folded `offset` into the POINTER only — `capacity` arrives as the record's raw
+    // field, not as the extent remaining after the offset.
     var handle = (StdI64)valueMap[args[0]];
     var ptr = (StdI64)valueMap[args[1]];
     var length = (StdI64)valueMap[args[2]];
     var capacity = (StdI64)valueMap[args[3]];
 
-    // Pre-check: length must not exceed capacity (the remaining capacity after offset was applied by parser).
+    // Pre-check: `length > capacity`. NOTE this is WEAKER than the documented contract
+    // (docs/STDLIB_REFERENCE.md and specs/managed-socket.md both say it throws bufferOutOfBounds
+    // when `offset + length > capacity`) in two ways, and both are latent rather than live:
+    //   - `offset` is not in the comparison at all, so a large offset with a small length passes;
+    //   - `capacity` is the RAW field, so for a borrowed buffer (rdata literal: -2) the unsigned
+    //     bound is UINT64_MAX-1 and NOTHING can exceed it — the check is dead for exactly the
+    //     records the contract names. It is deliberately NOT clamped here: clamping to 0 makes
+    //     every send out of a string literal throw (it regressed tcp-client.echo / async-tcp.echo),
+    //     because what this bound wants is the buffer's ADDRESSABLE EXTENT, which the capacity
+    //     field does not carry for a record that borrows its buffer.
+    // No wrong answer is reachable today: `TcpClient.send` is the only route to sendFrom
+    // (`__ManagedSocket` cannot be constructed from user code, E3072) and its loop invariant
+    // supplies exactly the bound this check fails to enforce.
     var overflow = new StdCmpU64Op("ugt", length, capacity);
     block.AddOp(overflow);
     EmitBoundsCheckErrorFlag(block, overflow.Result, MsErrBufferOutOfBounds + 1, valueMap, varTypes, errorFlagValue);

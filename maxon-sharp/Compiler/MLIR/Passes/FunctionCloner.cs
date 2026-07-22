@@ -386,7 +386,7 @@ internal class FunctionCloner {
       // Type name substitution
       case MaxonStructParamOp sp: { var c = new MaxonStructParamOp(sp.Index, sp.Name, SubName(sp.StructTypeName)); RegisterResult(sp.Result, c.Result); return c; }
       case MaxonStructVarRefOp sv: { var c = new MaxonStructVarRefOp(sv.VarName, SubName(sv.StructTypeName)); RegisterResult(sv.Result, c.Result); return c; }
-      case MaxonFieldAccessOp fa: { var c = new MaxonFieldAccessOp(MapValue(fa.StructValue), SubName(fa.TypeName), fa.FieldName, fa.ResultKind, fa.ResultStructTypeName != null ? SubName(fa.ResultStructTypeName) : null) { ClampNegativeSentinel = fa.ClampNegativeSentinel }; RegisterResult(fa.Result, c.Result); return c; }
+      case MaxonFieldAccessOp fa: { var c = fa.CloneWith(MapValue(fa.StructValue), SubName(fa.TypeName), fa.ResultStructTypeName != null ? SubName(fa.ResultStructTypeName) : null); RegisterResult(fa.Result, c.Result); return c; }
       case MaxonFieldAssignOp fa: return new MaxonFieldAssignOp(MapValue(fa.StructValue), SubName(fa.TypeName), fa.FieldName, MapValue(fa.NewValue));
 
       // Control flow

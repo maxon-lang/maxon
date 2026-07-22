@@ -994,19 +994,30 @@ public sealed class MaxonFieldAccessOp(MaxonValue structValue, string typeName, 
   /// sentinel deliberately (the COW check), or they want the buffer's addressable extent rather
   /// than its owned slot count (`__ManagedSocket.sendFrom`'s range pre-check, which legitimately
   /// sends out of a read-only string literal).
-  /// Copied by FunctionCloner and MonomorphizationPass — `Array.capacity()` is generic, so a clone
-  /// that dropped this would silently restore the sentinel leak. That is not left to memory: every
-  /// `Array` a program uses is a monomorphized instance, so `specs/arrays.md`'s
-  /// `array-literal-resize-to-zero` (which needs `reserve(0)` on a literal-backed `__Array_i64` to
-  /// decline to grow) fails the moment a clone loses this.
   public bool ClampNegativeSentinel { get; init; }
   public MaxonValue Result { get; } = resultKind switch {
     MaxonValueKind.Struct => new MaxonStruct(IrContext.Current.NextId(), resultStructTypeName!),
     MaxonValueKind.Enum => new MaxonEnum(IrContext.Current.NextId(), resultStructTypeName!),
     _ => resultKind.CreateValue()
   };
+
   public override IReadOnlyList<MaxonValue> Results => [Result];
   public override IReadOnlyList<MaxonValue> Operands => [StructValue];
+
+  /// Rebuild this read against a substituted operand and type names — THE way a clone of this op
+  /// is assembled, for FunctionCloner and MonomorphizationPass alike.
+  ///
+  /// It exists because the two of them are two copies of one fact. `ClampNegativeSentinel` does
+  /// not go through the constructor, so each cloner had to carry its own line copying it, and a
+  /// clone that silently dropped it would restore the capacity-sentinel leak in exactly the
+  /// programs that matter (`Array.capacity()` is generic, so EVERY array a program uses is a
+  /// monomorphized clone). Nothing made the two agree; now there is only one of them, and it sits
+  /// in the class that owns the property, so the next property added here is one edit rather than
+  /// a remembered pair.
+  public MaxonFieldAccessOp CloneWith(MaxonValue structValue, string typeName, string? resultStructTypeName) =>
+    new(structValue, typeName, FieldName, ResultKind, resultStructTypeName) {
+      ClampNegativeSentinel = ClampNegativeSentinel
+    };
 }
 
 // Assigns to a field: p.x = 30
