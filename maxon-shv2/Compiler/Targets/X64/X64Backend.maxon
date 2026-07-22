@@ -91,6 +91,11 @@ let SibScaleShift = 6
 let SibScale1 = 0
 let SibNoIndexField = 4
 
+// SIB base field 101 with mod=00 means "NO base register — a disp32-only absolute address" (the same bit
+// pattern as rbp/r13's low-3, which is exactly why an rbp/r13 base is forced to mod=01 above). Used by
+// `encodeMovGsAbsReg` for the segment-relative `gs:[disp32]` TIB writes.
+let SibBaseDisp32Field = 5
+
 // A base register whose low-3-bits are 101 (rbp / r13): with mod=00 the ModR/M or SIB
 // base field 101 means "no base", so an rbp/r13 base MUST use mod=01 (disp8, zero when
 // there is no real displacement). R13 is x64's silent-lea-miscompile trap.
@@ -111,6 +116,10 @@ export let OpcodeRet = 0xC3
 export let OpcodeMovRmReg = 0x89  // mov r/m, r  (reg field = source) — the STORE form (spill)
 let OpcodeMovRegRm = 0x8B  // mov r, r/m  (reg field = dest)   — the LOAD form (reload)
 let OpcodeMovRm8Reg8 = 0x88  // mov r/m8, r8 (reg field = source) — the BYTE store form
+// test r/m, r (85 /r) — a bitwise AND that sets flags and discards the result. `test reg, reg` sets ZF iff
+// reg is zero, which is how the GT syscall shim checks `currentGt`/`stackBase` for null. EXPORTED because the
+// shim (X64GtRuntime, hand-assembled) drives it through `encodeRmRegDirect` like the other reg-reg forms.
+export let OpcodeTestRmReg = 0x85
 export let OpcodeSubRmReg = 0x29  // sub r/m, r  (reg field = source), same shape as mov
 export let OpcodeCmpRmReg = 0x39  // cmp r/m, r  (reg field = source), same shape as sub
 let OpcodeAndRmReg = 0x21  // and r/m, r  (reg field = source), same shape as sub
@@ -213,6 +222,11 @@ end 'SseMandatoryPrefix'
 let SsePrefixScalarDoubleByte = 0xF2
 let SsePrefixPackedDoubleByte = 0x66
 
+// The GS segment-override legacy prefix (0x65). On Win64 `gs:` addresses the Thread Information Block, whose
+// StackBase/StackLimit the GT syscall shim repoints for a kernel call (see `encodeMovGsAbsReg`). Like the SSE
+// mandatory prefixes it precedes the REX byte.
+let GsSegmentPrefix = 0x65
+
 // Emit an SSE instruction's mandatory prefix, if it has one. The shared ModR/M assemblers
 // call this BEFORE `emitRex` — see `SseMandatoryPrefix` for why that order is load-bearing.
 function emitSseMandatoryPrefix(code ByteArray, prefix SseMandatoryPrefix)
@@ -232,7 +246,7 @@ let OpcodeImul2ndByte = 0xAF
 let Grp1ExtAdd = 0  // ADD
 let Grp1ExtOr = 1  // OR  (the `or r/m, imm` immediate form)
 export let Grp1ExtAnd = 4  // AND (the `and r/m, imm` immediate form)
-let Grp1ExtSub = 5  // SUB
+export let Grp1ExtSub = 5  // SUB — exported: the GT syscall shim computes the TIB StackLimit as `sub rax, GtSystemStackSize`
 let Grp1ExtXor = 6  // XOR (the `xor r/m, imm` immediate form — also the LOGICAL `not`)
 export let Grp1ExtCmp = 7  // CMP (the `cmp r/m, imm` immediate form)
 
@@ -1109,6 +1123,36 @@ export function encodeIatCall(code ByteArray, iatRelocs RelocationArray, slotInd
 	writeDword(code, value: 0)
 end 'encodeIatCall'
 
+// `mov gs:[disp32], srcReg` (64-bit) — a store to an ABSOLUTE address in the GS segment. On Win64 GS points at
+// the Thread Information Block, so this writes NT_TIB.StackBase (disp 0x08) or StackLimit (disp 0x10) — the GT
+// syscall shim's TIB repoint. Encoding: the GS prefix, REX.W (+REX.R for an r8-r15 source), `89 /r`, a ModR/M
+// of mod=00 reg=src rm=100 (a SIB follows), a SIB of scale=1 index=none base=disp32, then the disp32. It cannot
+// ride `encodeStoreBaseDispReg` (which addresses `[base + disp]`, a register base): the `[disp32]` no-base form
+// needs the SIB with base=101, and the segment override has no home in that encoder. `emitRex`'s `rmField` is
+// `rax` so REX.B stays clear — in this SIB form the base is a disp32, not a register, so REX.B must not be set.
+export function encodeMovGsAbsReg(code ByteArray, disp Imm32, srcReg X64Register)
+	code.push(GsSegmentPrefix)
+	emitRex(code, wide: true, regField: srcReg, rmField: X64Register.rax)
+	code.push(OpcodeMovRmReg)
+	code.push(ModRmMod00 or (regLow3(srcReg) shl 3) or ModRmRmSibFollows)
+	code.push((SibScale1 shl SibScaleShift) or (SibNoIndexField shl 3) or SibBaseDisp32Field)
+	writeImm32Signed(code, value: disp)
+end 'encodeMovGsAbsReg'
+
+// `mov destReg, gs:[disp32]` (64-bit) — a LOAD from an absolute GS-segment address, the read twin of
+// `encodeMovGsAbsReg`. The GT context switch reads the current NT_TIB StackBase/StackLimit through it to save
+// them into the suspending GT before repointing the TIB at the resumed GT's stack, so the TIB always describes
+// the stack actually executing. Same addressing form as the store (only the direction opcode differs, `89`→
+// `8B`); `emitRex`'s `rmField` is `rax` so REX.B stays clear for the SIB disp32-base with no register base.
+export function encodeMovRegGsAbs(code ByteArray, dest X64Register, disp Imm32)
+	code.push(GsSegmentPrefix)
+	emitRex(code, wide: true, regField: dest, rmField: X64Register.rax)
+	code.push(OpcodeMovRegRm)
+	code.push(ModRmMod00 or (regLow3(dest) shl 3) or ModRmRmSibFollows)
+	code.push((SibScale1 shl SibScaleShift) or (SibNoIndexField shl 3) or SibBaseDisp32Field)
+	writeImm32Signed(code, value: disp)
+end 'encodeMovRegGsAbs'
+
 // A raw Linux x86-64 supervisor call: `mov eax, number` then `syscall` (0F 05). The x86-64 Linux ABI
 // puts the number in eax/rax and arguments in rdi/rsi/rdx/r10/r8/r9 (which the isel pre-moved, exactly
 // as it pre-moves a call's arguments), and returns the result in rax. Exported so the Linux entry stub
@@ -1184,7 +1228,7 @@ end 'slotDisplacement'
 // every block's offset is known (see resolveChunkRel32Fixups). `spillBaseDisp` is the
 // function's spill-area base offset from rsp (see spillSlotBaseDisp), added to each
 // spill/reload slot displacement.
-function emitTargetOp(op TargetOp, code ByteArray, callFixups CallFixupArray, iatRelocs RelocationArray, rdataRelocs RdataRelocationArray, rel32Fixups ChunkRel32FixupArray, spillBaseDisp StackSize)
+function emitTargetOp(op TargetOp, code ByteArray, callFixups CallFixupArray, iatRelocs RelocationArray, rdataRelocs RdataRelocationArray, rel32Fixups ChunkRel32FixupArray, spillBaseDisp StackSize, usesGt bool)
 	match op 'emit'
 		prologue(stackSize) then encodePrologue(code, stackSize: stackSize)
 		epilogue(stackSize) then encodeEpilogue(code, stackSize: stackSize)
@@ -1209,7 +1253,11 @@ function emitTargetOp(op TargetOp, code ByteArray, callFixups CallFixupArray, ia
 		// `xchg xmm, xmm` at all (see `emitRegRegSwap`).
 		xchgRegReg(a, b) then emitRegRegSwap(code, a: resolvePhysical(a), b: resolvePhysical(b))
 		callDirect(targetName) then encodeCallDirect(code, callFixups: callFixups, targetName: targetName)
-		iatCall(slotIndex) then encodeIatCall(code, iatRelocs: iatRelocs, slotIndex: slotIndex)
+		// In a GT-scheduler module every Win32 IAT call is wrapped in the system-stack shim (P1.5-B1a′): a GT
+		// stack is too small for the kernel's deep usage, so the call runs on the global system stack. The shim
+		// is a runtime no-op off a GT stack (`currentGt == 0 || stackBase == 0` → direct), so wrapping every call
+		// is correct; a non-GT module has no `__gt_current_gt` global to reference, so it stays a bare `iatCall`.
+		iatCall(slotIndex) then emitGtGatedIatCall(code, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, slotIndex: slotIndex, usesGt: usesGt)
 		cqo then encodeCqo(code)
 		idivReg(divisor) then encodeGrp3Reg(code, ext: Grp3ExtIdiv, reg: resolveGpr(divisor))
 		pushReg(reg) then encodePushReg(code, reg: requireClass(reg, class: RegClass.gpr))
@@ -1298,7 +1346,10 @@ end 'emitTargetOp'
 // rel32 is chunk-local and independent of where concat places the chunk. Each block's
 // chunk-local start offset is recorded as it is emitted, then `resolveChunkRel32Fixups`
 // patches every pending branch (including forward jumps to blocks emitted later).
-export function emitFunctionChunk(module TargetModule, func IrFunction) returns FunctionCodeChunk
+// `usesGt` (whether the MODULE carries the GT scheduler) is passed in — computed ONCE by the caller from
+// `moduleHasFunction(GtSpawnName)`, never re-derived per function, so this stays O(1) per function. It gates
+// the Win32 syscall shim on every `iatCall` (see `emitGtGatedIatCall`).
+export function emitFunctionChunk(module TargetModule, func IrFunction, usesGt bool) returns FunctionCodeChunk
 	var code = ByteArray.create()
 	var callFixups = CallFixupArray.create()
 	var iatRelocs = RelocationArray.create()
@@ -1323,12 +1374,12 @@ export function emitFunctionChunk(module TargetModule, func IrFunction) returns 
 
 		for opIdx in block.opRefs 'eachOp'
 			let op = try module.ops.get(opIdx) otherwise panic("emitFunctionChunk: opIdx {opIdx} not in module.ops")
-			emitTargetOp(op, code: code, callFixups: callFixups, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, rel32Fixups: rel32Fixups, spillBaseDisp: spillBaseDisp)
+			emitTargetOp(op, code: code, callFixups: callFixups, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, rel32Fixups: rel32Fixups, spillBaseDisp: spillBaseDisp, usesGt: usesGt)
 		end 'eachOp'
 
 		if block.hasTerminatorOp() 'hasTerm'
 			let termOp = try module.ops.get(block.terminatorIndex()) otherwise panic("emitFunctionChunk: terminator not in module.ops")
-			emitTargetOp(termOp, code: code, callFixups: callFixups, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, rel32Fixups: rel32Fixups, spillBaseDisp: spillBaseDisp)
+			emitTargetOp(termOp, code: code, callFixups: callFixups, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, rel32Fixups: rel32Fixups, spillBaseDisp: spillBaseDisp, usesGt: usesGt)
 		end 'hasTerm'
 	end 'eachBlock'
 

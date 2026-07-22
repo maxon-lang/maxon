@@ -1,13 +1,19 @@
-// X64GtRuntime — the two GREEN-THREAD runtime functions that MUST be hand-assembled bytes rather than Std
-// ops (P1.5-B1a). Everything else in the scheduler is a builder-built `StdModule` (Runtime/GtRuntime.maxon);
-// only these two manipulate rsp/rbp and physical callee-saved registers, or are entered by a `ret` into a
-// frame no prologue built — none of which the Std tier can spell. They mirror the `mrt_*` panic runtime's
-// hand-assembly (X64Runtime.maxon): a `FunctionCodeChunk` built by calling X64Backend's encoders directly.
+// X64GtRuntime — the hand-assembled GREEN-THREAD backend code that MUST be raw bytes rather than Std ops
+// (P1.5-B1a / B1a′). Everything else in the scheduler is a builder-built `StdModule` (Runtime/GtRuntime.maxon).
+// Two standalone `FunctionCodeChunk`s — `__gt_context_switch` and `__gt_trampoline` — manipulate rsp/rbp and
+// physical callee-saved registers or are entered by a `ret` into a frame no prologue built; plus the INLINE
+// syscall shim (`emitGtShimmedIatCall`, P1.5-B1a′) that X64Backend wraps around every `iatCall` of a GT module.
+// None is expressible in Std (no register/rsp/gs-segment spelling), so all are built by calling X64Backend's
+// encoders directly, like the `mrt_*` panic runtime (X64Runtime.maxon).
 //
-// ⭐ NEITHER TOUCHES A `.data` GLOBAL. The context switch passes the `to` GT through in rdx unchanged, so
-// the trampoline reads its own GT from rdx (not from `__gt_current_gt`); and the drivers own the current-GT
-// global (see GtRuntime.maxon's header). So both chunks are pure register/stack code with no rdata
-// relocation — exactly the shape the panic runtime already ships.
+// ⭐ THE TWO CHUNKS TOUCH NO `.data` GLOBAL. The context switch passes the `to` GT through in rdx unchanged, so
+// the trampoline reads its own GT from rdx (not from `__gt_current_gt`); the drivers own the current-GT global
+// (see GtRuntime.maxon's header). The context switch also repoints the NT_TIB stack bounds on every switch
+// (`gs:[0x08]`/`gs:[0x10]`, and the `to`/`from` GTs' saved-bounds fields via their rdx/rcx pointers) — a SEGMENT
+// and register-pointer accesses, still no rdata relocation, so both chunks stay pure register/stack/segment
+// code exactly like the panic runtime. The INLINE shim, by contrast, DOES reference the `__gt_current_gt` /
+// `__gt_system_stack_top` `.data` globals — through the ordinary `encodeLeaRegGlobal` rdata-relocation path the
+// backend already resolves, so no new relocation machinery is added for it.
 //
 // CALLING CONVENTION — Maxon's internal ABI (StdToX64Conversion): integer arguments in
 // [rcx, rdx, rax, r9, rsi, rdi], primary return in R8; callee-saved GPRs are rbx, r12-r15
@@ -27,6 +33,33 @@
 // argument registers. `to` rides through UNMODIFIED so a fresh GT's trampoline reads its GT from rdx.
 let GtSwitchFromReg = X64Register.rcx
 let GtSwitchToReg = X64Register.rdx
+// The scratch the context switch shuttles the NT_TIB stack bounds through (save `from`'s, load `to`'s). rax is
+// caller-saved and is not read across a switch by any resumed continuation, so clobbering it here is invisible.
+let GtSwitchTibScratchReg = X64Register.rax
+
+// NT_TIB stack-bound fields in the GS segment (Win64). A kernel call probes these and faults when RSP is
+// outside `[StackLimit, StackBase)`. Both the syscall shim (repoint at the system stack for a call) and the
+// context switch (repoint at the resumed GT's stack) write them, so they are named once here.
+let TibStackBaseDisp = 0x08 as Imm32   // NT_TIB.StackBase  — gs:[0x08]
+let TibStackLimitDisp = 0x10 as Imm32  // NT_TIB.StackLimit — gs:[0x10]
+
+// The NT_TIB stack bounds are a PAIR (base, limit); these two helpers spell that two-word structure ONCE for
+// the three sites that move it — the context switch's save + load, and the shim's after-call restore (which is
+// exactly a load). `scratch` shuttles each word (`gtReg` and `scratch` must differ); neither helper touches any
+// other register.
+function emitSaveTibIntoGt(code ByteArray, gtReg X64Register, scratch X64Register)
+	encodeMovRegGsAbs(code, dest: scratch, disp: TibStackBaseDisp)
+	encodeStoreBaseDispReg(code, base: gtReg, disp: GtOffTibStackBase as Imm32, srcReg: scratch)
+	encodeMovRegGsAbs(code, dest: scratch, disp: TibStackLimitDisp)
+	encodeStoreBaseDispReg(code, base: gtReg, disp: GtOffTibStackLimit as Imm32, srcReg: scratch)
+end 'emitSaveTibIntoGt'
+
+function emitLoadTibFromGt(code ByteArray, gtReg X64Register, scratch X64Register)
+	encodeLoadRegBaseDisp(code, destReg: scratch, base: gtReg, disp: GtOffTibStackBase as Imm32, wide: true)
+	encodeMovGsAbsReg(code, disp: TibStackBaseDisp, srcReg: scratch)
+	encodeLoadRegBaseDisp(code, destReg: scratch, base: gtReg, disp: GtOffTibStackLimit as Imm32, wide: true)
+	encodeMovGsAbsReg(code, disp: TibStackLimitDisp, srcReg: scratch)
+end 'emitLoadTibFromGt'
 
 // The scratch registers the trampoline holds across the straight-line body: r12 = the GT (callee-saved, so it
 // survives the user call), r10 = the argument buffer, r11 = the function pointer. None is an argument register,
@@ -65,9 +98,21 @@ function buildGtContextSwitchChunk() returns FunctionCodeChunk
 	// from->sp = rsp ; from->fp = rbp.
 	encodeStoreBaseDispReg(code, base: GtSwitchFromReg, disp: GtOffSp as Imm32, srcReg: X64Register.rsp)
 	encodeStoreBaseDispReg(code, base: GtSwitchFromReg, disp: GtOffFp as Imm32, srcReg: X64Register.rbp)
+	// ⭐ SAVE the CURRENT NT_TIB stack bounds into `from`, so the TIB always describes the stack that is actually
+	// executing. Without this, the syscall shim's after-call restore (which sets the TIB to `currentGt`'s bounds)
+	// would leave the TIB describing the OUTGOING GT's stack after a switch, and the RESUMED GT's next kernel call
+	// would probe a TIB that does not contain its RSP and fault. This is also what SEEDS GT0's bounds: GT0 never
+	// runs the shim (its `stackBase == 0`), so the first switch AWAY from GT0 is the only place its real
+	// main-thread TIB bounds are captured. Uses rax as scratch — caller-saved and not read across a switch.
+	emitSaveTibIntoGt(code, gtReg: GtSwitchFromReg, scratch: GtSwitchTibScratchReg)
+
 	// rsp = to->sp ; rbp = to->fp — now on the destination stack.
 	encodeLoadRegBaseDisp(code, destReg: X64Register.rsp, base: GtSwitchToReg, disp: GtOffSp as Imm32, wide: true)
 	encodeLoadRegBaseDisp(code, destReg: X64Register.rbp, base: GtSwitchToReg, disp: GtOffFp as Imm32, wide: true)
+	// LOAD the resumed GT's saved TIB bounds into the NT_TIB, matching the stack we just switched to (`__gt_spawn`
+	// seeds a fresh GT's bounds; the save above keeps every GT's fresh). The pair keeps `gs:[0x08]`/`gs:[0x10]`
+	// consistent with RSP across every switch.
+	emitLoadTibFromGt(code, gtReg: GtSwitchToReg, scratch: GtSwitchTibScratchReg)
 
 	// Restore callee-saved from the new stack, in reverse push order, then `ret` into to's saved return addr.
 	for i in 0 upto calleeSavedOrder.count() 'pop'
@@ -127,6 +172,166 @@ function buildGtTrampolineChunk() returns FunctionCodeChunk
 
 	return FunctionCodeChunk.createWith(GtTrampolineName, code: code, callFixups: callFixups, rdataRelocs: RdataRelocationArray.create(), iatRelocs: RelocationArray.create(), rdataConstants: GlobalDataTable.create())
 end 'buildGtTrampolineChunk'
+
+// --- The Win32 syscall shim (P1.5-B1a′ slice 1) ---
+//
+// A green thread's kernel call runs on the single global 64 KB SYSTEM stack, not the GT's own small stack:
+// heavy Win32 calls (CreateProcessA, WriteFile) use deep stack and probe the Windows TIB, and would fault a
+// small GT stack. This slice keeps GT stacks at 1 MiB (kernel calls do not fault today), so it is TRANSPARENT
+// infrastructure whose correctness proof is "every spec stays green through it"; slice 2's 2 KB GT stacks are
+// what make the switch load-bearing. Emitted inline around EVERY `iatCall` of a GT module (the runtime gate
+// makes it a no-op off a GT stack), so a program that never touches the scheduler is unchanged.
+//
+// ⭐ WHY IT COPIES THE STACK ARGS instead of writing them AFTER the switch (v1/bootstrap's way). v1 and the C#
+// bootstrap switch RSP first, THEN write the call's stack args on the system stack — sound only because THEIR
+// `__print_string`/subprocess runtime is HAND-ASSEMBLED, with no register allocator. shv2's are builder-built
+// Std, REGISTER-ALLOCATED, and shv2 addresses both spills and outgoing args RSP-relative (X64Backend spills;
+// `win64OutgoingArgDisp`). Switching RSP before the arg-setup ops would make any spill RELOAD the allocator
+// inserts for an arg operand read the SYSTEM stack — a silent miscompile. So the shim wraps ONLY the `iatCall`
+// with RSP unchanged through all arg-setup (spills/arg-stores land on the GT frame at `[rsp+0x20+k*8]` exactly
+// as today), then COPIES the N outgoing stack-arg words onto the system stack after the switch. RSP moves only
+// inside the shim's own bytes and is restored before the next TargetOp — invisible to the register allocator.
+//
+// ⭐ REGISTER DISCIPLINE. Win64 passes integer args in rcx/rdx/r8/r9 and returns in rax; the shim preserves
+// those. It uses ONLY rax/rcx/r10/r11 as scratch — every one caller-saved and in `iatCall`'s `implicitDefs`
+// (RegisterAllocator.callerSavedMask), so the allocator already treats them as call-destroyed and the shim's
+// use is invisible. The args (rcx/rdx/r8/r9) are untouched BEFORE the call; the result (rax) is untouched
+// AFTER it — the post-call TIB restore uses rcx, which is dead once the call has returned.
+//
+// ⚠ NO NESTING. The shim switches to the FIXED `__gt_system_stack_top` (reset every entry, not a bump
+// pointer). Safe only because a kernel call is a LEAF that never re-enters guarded Maxon code, and single-M
+// runs one thing at a time — a shimmed call must never reach another shimmed call on the same thread.
+
+// A pushed 64-bit register is 8 bytes. The shim pushes two such words (the caller's r10 on the GT stack, then
+// the saved GT rsp on the system stack). This is BOTH the offset from `r10` — which points at the first pushed
+// word after `push r10 ; mov r10, rsp` — up to the original RSP where the GT-frame stack args sit, AND the pad
+// the reserved system-stack frame adds so the second push leaves RSP 16-aligned at the `call`.
+let ShimPushedWordBytes = 8 as StackSize
+
+// True Win64 STACK arguments (args 5+, which the kernel reads from `[rsp+0x20..]`) per shimmed import — the
+// words the shim copies from the GT frame to the system stack. Register-only calls (≤4 args) copy nothing.
+// CreateProcessA passes all six of its args 5-10 on the stack; WriteFile passes ONE (arg 5, lpOverlapped) —
+// its other outgoing slot (lpNumberOfBytesWritten) is a register-pointed out-param, not a stack arg, so the
+// kernel does not read it from the stack and it is not copied.
+let CreateProcessStackArgWords = 6 as StackSize
+let WriteFileStackArgWords = 1 as StackSize
+
+// The shim's scratch registers (see the header's register discipline). None is a Win64 argument register.
+let ShimGtReg = X64Register.r11       // currentGt in the guard, then the stack-arg copy shuttle, then reloaded post-call
+let ShimGtRspReg = X64Register.r10    // the GT's RSP across the switch (push/pop-balanced)
+let ShimTibScratchReg = X64Register.rcx  // post-call TIB-restore scratch; dead after the call, so rax (the result) survives
+
+// The shim's own forward-branch targets, resolved by `resolveChunkRel32Fixups` against a shim-LOCAL fixup list
+// and offset map — the same machinery the panic runtime's assembler uses, scoped here so the ids are looked up
+// only in the shim's own map and never collide with the enclosing function's block ids.
+let ShimDirectLabel = 0 as BlockId
+let ShimDoneLabel = 1 as BlockId
+
+// The count of true Win64 stack arguments (args 5+) a shimmed import takes — keyed on the import so the copy
+// count cannot drift from `win64OutgoingArgBytes`'s view of the same two calls.
+function gtShimStackArgWords(slotIndex RelocSlotIndex) returns StackSize
+	if slotIndex == iatSlotIndex(IatSlot.CreateProcessA) 'createProcess'
+		return CreateProcessStackArgWords
+	end 'createProcess'
+
+	if slotIndex == iatSlotIndex(IatSlot.WriteFile) 'writeFile'
+		return WriteFileStackArgWords
+	end 'writeFile'
+
+	return 0
+end 'gtShimStackArgWords'
+
+// Emit an `iatCall`, wrapped in the system-stack shim iff the module carries the GT scheduler (see the header).
+export function emitGtGatedIatCall(code ByteArray, iatRelocs RelocationArray, rdataRelocs RdataRelocationArray, slotIndex RelocSlotIndex, usesGt bool)
+	if usesGt 'shim'
+		emitGtShimmedIatCall(code, iatRelocs: iatRelocs, rdataRelocs: rdataRelocs, slotIndex: slotIndex)
+	end 'shim' else 'plain'
+		encodeIatCall(code, iatRelocs: iatRelocs, slotIndex: slotIndex)
+	end 'plain'
+end 'emitGtGatedIatCall'
+
+// The shim itself. RSP is 16-aligned at entry (shv2's frame invariant at every call), and the switch makes RSP
+// 16-aligned at the `call` INDEPENDENTLY of the caller's alignment (it sets RSP = the page-aligned system-stack
+// top and reserves a frame chosen to land on 16). Disassembly of the CreateProcessA (6 stack args) path:
+//   lea r11,[rip+__gt_current_gt] ; mov r11,[r11] ; test r11,r11 ; jz direct   (no scheduler → direct)
+//   mov r11,[r11+0x18]            ; test r11,r11 ; jz direct                   (GT0/main, stackBase==0 → direct)
+//   push r10 ; mov r10,rsp ; lea rax,[rip+__gt_system_stack_top] ; mov rax,[rax] ; mov rsp,rax
+//   push r10 ; sub rsp,0x58                                                    (shadow 0x20 + 6 args 0x30 + pad 8)
+//   (mov r11,[r10+0x28+k*8] ; mov [rsp+0x20+k*8],r11) for k in 0..6            (6 args → [rsp+0x20..0x48])
+//   mov gs:[0x08],rax ; sub rax,0x10000 ; mov gs:[0x10],rax                    (repoint TIB at the system stack)
+//   call [CreateProcessA]
+//   lea r11,[rip+__gt_current_gt] ; mov r11,[r11]
+//   mov rcx,[r11+0x90] ; mov gs:[0x08],rcx ; mov rcx,[r11+0x98] ; mov gs:[0x10],rcx   (restore TIB to this GT)
+//   add rsp,0x58 ; pop r10 ; mov rsp,r10 ; pop r10 ; jmp done                  (switch back to the GT stack)
+//   direct: call [CreateProcessA]
+//   done:
+function emitGtShimmedIatCall(code ByteArray, iatRelocs RelocationArray, rdataRelocs RdataRelocationArray, slotIndex RelocSlotIndex)
+	let stackArgWords = gtShimStackArgWords(slotIndex)
+	// reserve = (16-aligned shadow + stack args) + one pushed word — lands RSP 16-aligned at the `call` after
+	// the two pushes. Matches the C# bootstrap's `EmitSystemStackEnter(frameSize)` doing `sub rsp, frameSize+8`.
+	let frameSize = alignUp(ShadowSpaceBytes + (stackArgWords * (GtArgSlotBytes as StackSize)), alignment: StackFrameAlignment)
+	let reserve = frameSize + ShimPushedWordBytes
+
+	var shimFixups = ChunkRel32FixupArray.create()
+	var shimLabels = ChunkLabelOffsetMap.create()
+
+	// Guard: no scheduler yet (currentGt == 0) or GT0/main thread (stackBase == 0) → run the call directly.
+	encodeLeaRegGlobal(code, rdataRelocs: rdataRelocs, dest: ShimGtReg, label: GtCurrentGtLabel)
+	encodeLoadRegBaseDisp(code, destReg: ShimGtReg, base: ShimGtReg, disp: 0, wide: true)
+	encodeRmRegDirect(code, opcode: OpcodeTestRmReg, dest: ShimGtReg, src: ShimGtReg, wide: true)
+	encodeJcc(code, rel32Fixups: shimFixups, cond: X64CondCode.equal, targetBlockId: ShimDirectLabel)
+	encodeLoadRegBaseDisp(code, destReg: ShimGtReg, base: ShimGtReg, disp: GtOffStackBase as Imm32, wide: true)
+	encodeRmRegDirect(code, opcode: OpcodeTestRmReg, dest: ShimGtReg, src: ShimGtReg, wide: true)
+	encodeJcc(code, rel32Fixups: shimFixups, cond: X64CondCode.equal, targetBlockId: ShimDirectLabel)
+
+	// Switch RSP to the system stack. r10 = the GT rsp anchor (points at the pushed caller-r10 word); rax holds
+	// the system-stack top through the copy and the TIB repoint below.
+	encodePushReg(code, reg: ShimGtRspReg)
+	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: ShimGtRspReg, src: X64Register.rsp, wide: true)
+	encodeLeaRegGlobal(code, rdataRelocs: rdataRelocs, dest: X64Register.rax, label: GtSystemStackTopLabel)
+	encodeLoadRegBaseDisp(code, destReg: X64Register.rax, base: X64Register.rax, disp: 0, wide: true)
+	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: X64Register.rsp, src: X64Register.rax, wide: true)
+	encodePushReg(code, reg: ShimGtRspReg)
+	encodePrologue(code, stackSize: reserve)  // sub rsp, reserve — the outgoing-arg frame on the system stack
+
+	// Copy the N true stack args from the GT frame (`[r10 + 8 + 0x20 + k*8]`, the anchor being 8 below the GT
+	// rsp) to the system stack (`[rsp + 0x20 + k*8]`), so the kernel reads its args from where it runs.
+	for k in 0 upto stackArgWords 'copyArg'
+		let srcDisp = (ShimPushedWordBytes + ShadowSpaceBytes + (k * (GtArgSlotBytes as StackSize))) as Imm32
+		let dstDisp = (ShadowSpaceBytes + (k * (GtArgSlotBytes as StackSize))) as Imm32
+		encodeLoadRegBaseDisp(code, destReg: ShimGtReg, base: ShimGtRspReg, disp: srcDisp, wide: true)
+		encodeStoreBaseDispReg(code, base: X64Register.rsp, disp: dstDisp, srcReg: ShimGtReg)
+	end 'copyArg'
+
+	// Repoint the TIB at the system stack for the call (rax = system-stack top).
+	encodeMovGsAbsReg(code, disp: TibStackBaseDisp, srcReg: X64Register.rax)
+	encodeGrp1RegImm32(code, ext: Grp1ExtSub, reg: X64Register.rax, imm: GtSystemStackSize as Imm32)
+	encodeMovGsAbsReg(code, disp: TibStackLimitDisp, srcReg: X64Register.rax)
+
+	encodeIatCall(code, iatRelocs: iatRelocs, slotIndex: slotIndex)
+
+	// Restore the TIB to this GT's own bounds. Reload currentGt (the call clobbered r11) and use rcx as scratch,
+	// so rax — the kernel call's result, read by the op after the shim — survives. The restore IS a TIB-from-GT
+	// load, the same operation the context switch does on switch-in.
+	encodeLeaRegGlobal(code, rdataRelocs: rdataRelocs, dest: ShimGtReg, label: GtCurrentGtLabel)
+	encodeLoadRegBaseDisp(code, destReg: ShimGtReg, base: ShimGtReg, disp: 0, wide: true)
+	emitLoadTibFromGt(code, gtReg: ShimGtReg, scratch: ShimTibScratchReg)
+
+	// Switch RSP back to the GT stack, restore the caller's r10, and skip the direct-call path.
+	encodeEpilogue(code, stackSize: reserve)  // add rsp, reserve
+	encodePopReg(code, reg: ShimGtRspReg)  // r10 = the saved GT rsp (points at the pushed caller-r10)
+	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: X64Register.rsp, src: ShimGtRspReg, wide: true)
+	encodePopReg(code, reg: ShimGtRspReg)  // restore the caller's r10
+	encodeJmp(code, rel32Fixups: shimFixups, targetBlockId: ShimDoneLabel)
+
+	// direct: the non-switched call (main thread / no scheduler).
+	shimLabels.upsert(ShimDirectLabel, value: code.count())
+	encodeIatCall(code, iatRelocs: iatRelocs, slotIndex: slotIndex)
+
+	// done: patch the shim's own forward branches now that both labels' offsets are known.
+	shimLabels.upsert(ShimDoneLabel, value: code.count())
+	resolveChunkRel32Fixups(code, labelOffsets: shimLabels, rel32Fixups: shimFixups)
+end 'emitGtShimmedIatCall'
 
 // Append the two hand-assembled GT chunks — called by BackendDispatch when the module spawns a green thread,
 // alongside `appendX64RuntimeChunks` for the panic runtime. They lay out above user code like every other

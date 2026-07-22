@@ -124,9 +124,13 @@ function buildX64Backend(stdModule StdModule, target Target, globalData GlobalDa
 	recordPhase(project, phase: CompilePhase.runtimeAugment, probe: runtimeProbe)
 
 	let encodeProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.encode)
+	// Does the module carry the GT scheduler? Computed ONCE here — the same question the `'gtChunks'` gate below
+	// asks — and threaded into every `emitFunctionChunk` so the Win32 syscall shim (P1.5-B1a′) is gated O(1) per
+	// function rather than re-scanning `module.functions` inside the encode loop.
+	let moduleUsesGt = moduleHasFunction(targetModule, name: GtSpawnName)
 	var chunks = FunctionCodeChunkArray.create()
 	for func in targetModule.functions 'eachFunc'
-		chunks.push(emitFunctionChunk(targetModule, func: func))
+		chunks.push(emitFunctionChunk(targetModule, func: func, usesGt: moduleUsesGt))
 	end 'eachFunc'
 	// The panic runtime is hand-assembled bytes, not TargetOps, so it joins here rather than
 	// in `augmentWithRuntime` — there is no Std or Target spelling of "read CONTEXT.Rip" or
@@ -145,7 +149,7 @@ function buildX64Backend(stdModule StdModule, target Target, globalData GlobalDa
 	// The two hand-assembled green-thread chunks (`__gt_context_switch`, `__gt_trampoline`) join only when
 	// the program spawns a green thread — asked of the MODULE (does it carry `__gt_spawn`?) rather than
 	// threaded down as a flag, exactly as the leak gate asks about `__mm_leak_check`.
-	if moduleHasFunction(targetModule, name: GtSpawnName) 'gtChunks'
+	if moduleUsesGt 'gtChunks'
 		appendX64GtRuntimeChunks(chunks)
 	end 'gtChunks'
 	recordPhase(project, phase: CompilePhase.encode, probe: encodeProbe)

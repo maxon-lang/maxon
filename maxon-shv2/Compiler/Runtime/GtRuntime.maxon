@@ -40,13 +40,15 @@
 // A SMALLER struct than the authoritative 0xD8 GtLayout (which carries the multi-M / fault-diagnostic
 // fields B1a does not build), but the offsets it DOES use are byte-identical to that layout
 // (Arm64MacosGreenThread.maxon:83-92), so the B1a′/B1b ports graft on without moving a field.
-// The seven offsets the hand-assembled chunks (X64GtRuntime) read/write are EXPORTED so the byte code and
-// this builder name one struct layout — the offsets are a contract the two sides share, not a fact each
-// restates. `GtOffStackBase`/`GtOffStackSize`/`GtOffNext` are written only from Std here, so they stay local.
+// The offsets the hand-assembled chunks (X64GtRuntime — the context switch, the trampoline, and now the
+// syscall shim) read/write are EXPORTED so the byte code and this builder name one struct layout — the
+// offsets are a contract the two sides share, not a fact each restates. `GtOffStackBase` is exported
+// because the shim's GT-stack guard reads it (`stackBase == 0` ⇒ run the kernel call directly, no switch);
+// `GtOffStackSize`/`GtOffNext`/`GtOffIoHandle` are written only from Std here, so they stay local.
 export let GtOffSp = 0x00  // saved stack pointer at the context-switch point
 export let GtOffFp = 0x08  // saved frame pointer (rbp) at the context-switch point
 export let GtOffStatus = 0x10  // GtStatus* below
-let GtOffStackBase = 0x18  // low address of the osAllocPages'd stack (0 for GT0, which uses the OS stack)
+export let GtOffStackBase = 0x18  // low address of the osAllocPages'd stack (0 for GT0, which uses the OS stack)
 let GtOffStackSize = 0x20
 export let GtOffResult = 0x28  // the R8 return value, captured by the trampoline when the GT completes
 export let GtOffWaiter = 0x30  // the GT to context-switch back to when this GT completes (set by the driver)
@@ -66,6 +68,17 @@ export let GtOffThrew = 0x58
 // note below), so the later IOCP/subprocess-pipe slices graft on without moving a field. Written and read only
 // from Std here, so — like `GtOffStackBase`/`GtOffNext` — it stays local, not exported to the hand-asm chunks.
 let GtOffIoHandle = 0x80
+// The GT's OWN Windows TIB stack bounds, saved so the syscall shim (P1.5-B1a′) can repoint `gs:[0x08]`
+// (NT_TIB.StackBase) / `gs:[0x10]` (NT_TIB.StackLimit) at the system stack for a kernel call and RESTORE
+// them to this GT's stack afterwards — heavy kernel calls probe the TIB and fault when RSP is outside its
+// bounds. `__gt_spawn` seeds them to the GT's own stack (`tibStackBase = stackBase + GtStackSize`,
+// `tibStackLimit = stackBase`); GT0 keeps 0/0 from the slab-zero (the shim never runs for GT0 — its
+// `stackBase == 0`). EXPORTED because the shim (a hand-assembled Target-tier chunk) reads them. Offsets
+// 0x90/0x98 are byte-identical to the authoritative GtLayout's `tib_stack_base`/`tib_stack_limit`
+// (`GtLayout.cs:82-83` / `Arm64MacosGreenThread.maxon`), so the B1b multi-M port grafts on without moving a
+// field; they fill two words of the 0x60–0xA0 reserved gap this rung otherwise leaves zeroed.
+export let GtOffTibStackBase = 0x90
+export let GtOffTibStackLimit = 0x98
 // The PARKED flag (P1.5 mid-body-yield). Set by `__gt_sleep` just before a SPAWNED GT switches back to its
 // driver ("I am off my run queue, suspended in the timer heap"); cleared on resume. Offset 0xA8 is the SAME
 // slot the authoritative GtLayout (`Arm64MacosGreenThread.maxon` / v1 `GtLayout`) calls `io_yielded`, so the
@@ -92,6 +105,14 @@ let GtStatusWaiting = 3
 
 // The green-thread stack: a fixed 1 MiB region (see the header note on morestack).
 export let GtStackSize = 0x100000
+
+// The single global SYSTEM (scratch) stack a green thread's kernel calls run on (P1.5-B1a′ slice 1): a 64 KB
+// region allocated once in `__gt_init`, its TOP published to `__gt_system_stack_top`. The syscall shim
+// switches RSP here for a Win32 call so the kernel's deep stack usage (RPC, TIB probes) never touches the
+// GT's own small stack — the infrastructure that makes slice 2's 2 KB GT stacks safe. 0x10000 is byte-
+// identical to the authoritative layout's `PSystemStackSize` (`GtLayout.cs:178`). EXPORTED because the shim
+// subtracts it from the system-stack top to compute the TIB StackLimit it publishes for the call.
+export let GtSystemStackSize = 0x10000
 
 // The saved-register frame `__gt_context_switch` builds on a GT stack: the five callee-saved GPRs
 // (rbx, r12, r13, r14, r15 — shv2's callee-saved set, `RegisterAllocator.calleeSavedMask`, spelled once as
@@ -219,10 +240,18 @@ let GtProcCheckName = b"__gt_proc_check"
 // --- `.data` globals (all i64, zero-initialized) ---
 // The zero image IS the initial state: no current GT, an empty run queue, init not yet run — exactly as
 // MmRuntime's zeroed slab cursor means "no arena yet". So there is nothing to run before `main`.
-let GtCurrentGtLabel = b"__gt_current_gt"  // the running GT; drivers own it (see the header)
+// EXPORTED because the syscall shim (X64GtRuntime, a Target-tier hand-assembled chunk) loads the running GT
+// from it to gate the stack switch and to restore the TIB after the call. One label, named once, shared by
+// the Std drivers that own the slot and the shim that reads it.
+export let GtCurrentGtLabel = b"__gt_current_gt"  // the running GT; drivers own it (see the header)
 let GtRunQueueHeadLabel = b"__gt_run_queue_head"
 let GtRunQueueTailLabel = b"__gt_run_queue_tail"
 let GtInitDoneLabel = b"__gt_init_done"  // idempotency guard for __gt_init
+// The TOP of the single global 64 KB system (scratch) stack, published by `__gt_init` (`base +
+// GtSystemStackSize`). EXPORTED because the syscall shim reads it to switch RSP for a kernel call. A FIXED
+// top, reset every entry (NOT a bump pointer): the shim and slice 2's morestack both switch to it, safe only
+// because they never nest (kernel calls are leaf and single-M runs one thing at a time — see the shim's note).
+export let GtSystemStackTopLabel = b"__gt_system_stack_top"
 // ⭐ THE STACK FREE-LIST HEAD (P1.5-B1a, stack recycling). A LIFO of idle 1 MiB GT stacks, chained
 // INTRUSIVELY: a freed stack's first word (`[stackBase]`, the lowest address — the stack grows DOWN from the
 // top, so the bottom word is never touched by a running GT unless it overflows, which is out of scope) holds
@@ -266,6 +295,7 @@ export function gtRuntimeGlobals() returns DataSectionEntryArray
 	out.push(DataSectionEntry.create(String.from(GtRunQueueHeadLabel), valueType: StdType.i64, value: 0))
 	out.push(DataSectionEntry.create(String.from(GtRunQueueTailLabel), valueType: StdType.i64, value: 0))
 	out.push(DataSectionEntry.create(String.from(GtInitDoneLabel), valueType: StdType.i64, value: 0))
+	out.push(DataSectionEntry.create(String.from(GtSystemStackTopLabel), valueType: StdType.i64, value: 0))
 	out.push(DataSectionEntry.create(String.from(GtStackFreeHeadLabel), valueType: StdType.i64, value: 0))
 	// P1.5 mid-body-yield: the timer store's count + heap base, and the clock out-param scratch words.
 	out.push(DataSectionEntry.create(String.from(GtTimerCountLabel), valueType: StdType.i64, value: 0))
@@ -367,6 +397,20 @@ function buildGtInit(module StdModule)
 	let procGtsBaseAddr = ids.mint()
 	module.appendOp(doInit, op: StdOp.globalAddr(procGtsBaseAddr, label: GtProcGtsBaseLabel))
 	module.appendOp(doInit, op: StdOp.storeIndirect(procGtsBaseAddr, offset: 0, valueId: procGtsBase, valueType: StdType.i64))
+	// The single 64 KB SYSTEM (scratch) stack the syscall shim runs kernel calls on (P1.5-B1a′). `osAllocPages`
+	// (not `__slab_alloc`) so the region is its own PAGE-aligned commit — the top (`base + GtSystemStackSize`) is
+	// then 16-aligned, which the shim relies on to land RSP 16-aligned at the `call`. Its top is published to
+	// `__gt_system_stack_top`. This runs on GT0 (the main thread, `stackBase == 0`), so the `osAllocPages` here is
+	// itself NOT shimmed — no chicken-and-egg where allocating the system stack would need the system stack.
+	let sysStackSizeConst = ids.mint()
+	module.appendOp(doInit, op: StdOp.const(sysStackSizeConst, value: GtSystemStackSize, valueType: StdType.i64))
+	let sysStackBase = ids.mint()
+	module.appendOp(doInit, op: StdOp.osAllocPages(sysStackBase, sizeId: sysStackSizeConst))
+	let sysStackTop = ids.mint()
+	module.appendOp(doInit, op: StdOp.binOp(sysStackTop, lhs: sysStackBase, rhs: sysStackSizeConst, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	let sysStackTopAddr = ids.mint()
+	module.appendOp(doInit, op: StdOp.globalAddr(sysStackTopAddr, label: GtSystemStackTopLabel))
+	module.appendOp(doInit, op: StdOp.storeIndirect(sysStackTopAddr, offset: 0, valueId: sysStackTop, valueType: StdType.i64))
 	// __gt_init_done = 1.
 	let oneConst = ids.mint()
 	module.appendOp(doInit, op: StdOp.const(oneConst, value: 1, valueType: StdType.i64))
@@ -448,6 +492,12 @@ function buildGtSpawn(module StdModule)
 	// stackTop = stackBase + GtStackSize.
 	let stackTop = ids.mint()
 	module.appendOp(haveStack, op: StdOp.binOp(stackTop, lhs: stackBase, rhs: stackSizeVal, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	// Seed this GT's saved TIB bounds so the syscall shim's after-call restore repoints the Windows TIB to THIS
+	// GT's own stack: `tibStackBase = stackTop` (high address), `tibStackLimit = stackBase` (low). Written for
+	// EVERY spawned GT — a recycled stack's tib fields carry the previous tenant's bounds and must be refreshed,
+	// and the GT's bounds are `[stackBase, stackTop)` regardless of which branch acquired the stack.
+	module.appendOp(haveStack, op: StdOp.storeIndirect(gt, offset: GtOffTibStackBase, valueId: stackTop, valueType: StdType.i64))
+	module.appendOp(haveStack, op: StdOp.storeIndirect(gt, offset: GtOffTibStackLimit, valueId: stackBase, valueType: StdType.i64))
 	// [stackTop - 8] = &__gt_trampoline (the return address the first `ret` pops). On a FRESH stack the five
 	// callee-saved slots below it are the MEM_COMMIT zeros; on a RECYCLED stack they are the previous tenant's
 	// bytes — either way DON'T-CARE, because they become this GT's initial callee-saved registers, which the
