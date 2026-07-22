@@ -47,17 +47,47 @@ let LeastSubnormalBinaryExponent = -1074
 let MaxFiniteDecimalExponent = 308
 let LeastRoundableDecimalExponent = -324
 
+// How far OUTSIDE the window above an `e` exponent must be clamped before it is safely out of range.
+// The scanner has to clamp somewhere — the exponent accumulates through an i64 multiply-add, and
+// `1.0e99999999999999999999` would wrap one — but the clamp competes with `decExp`, so where it
+// lands is a correctness question, not a comfort one:
+//
+//   magnitudeExp = (sigDigits - 1) + decExp + sciExp
+//
+// `sigDigits - 1` tops out at `SignificantDigitBudget - 1` and the window bottoms at
+// `LeastRoundableDecimalExponent`, so this span clears both ends of it — and `decExp` moves by ONE
+// PER DIGIT, so the literal's own byte count bounds it and `decExp` cannot exceed it. The ceiling is
+// therefore this span PLUS `bytes.count()`, per literal, and a clamped exponent is then one no
+// `decExp` that same literal can build is able to drag back into range.
+//
+// ⚠ A FIXED ceiling is NOT safe, and a fixed 100000 was the bug here: an exponent needs only 20
+// characters to reach 1e20 while a `decExp` needs 200000 of them to reach -200000, so the two are
+// not comparable and the smaller one lost. `0.<200001 zeros>1e999999999` — true magnitude 1e999799997
+// — cancelled the clamped 100000 against a -200002 `decExp`, landed at -100002, and compiled to
+// SILENT +0. The mirror image, `1<200000 zeros>.0e-999999999`, is a true +0 and was rejected E2011.
+// Both now read the same on the clamped exponent as on the true one (verified against the bootstrap).
+let DecimalWindowSpan = SignificantDigitBudget - LeastRoundableDecimalExponent
+
 // ⭐ How many significant digits are KEPT. Past this the digits are dropped and only the fact that a
 // non-zero one WAS dropped is remembered (`droppedNonZeroDigit`), which is enough to round every
 // literal correctly — and the bound is not a guess:
 //
-// A rounding boundary for a binary64 is a midpoint `m * 2^e` with `e >= -1075`, and its magnitude is
-// at least 2^-1075 (~2.47e-324). Written out in full it therefore TERMINATES within 752 significant
-// decimal digits. A kept prefix of 768 digits and a midpoint are consequently both integer multiples
-// of the same 10^(magnitude-767), so they are either EQUAL or at least one such unit apart — while
-// the digits we dropped are worth strictly LESS than that unit. So the true value and the prefix
-// always fall on the same side of every midpoint, EXCEPT when the prefix lands exactly ON one, and
-// there `droppedNonZeroDigit` is precisely the bit that turns a tie into a round-up.
+// A rounding boundary for a binary64 is a midpoint `m * 2^-n` with `m` ODD and `n <= 1075` (the
+// spacing bottoms out at 2^-1074, so a half-spacing bottoms out at 2^-1075). Written out in full it
+// is `m * 5^n` scaled by 10^-n, so it TERMINATES — and its width is the width of that product.
+//
+// ⚠ `5^1075` ALONE is 752 digits, and 752 is NOT the bound: `m` runs up to 2^54 - 1 and multiplies
+// another 16 digits onto it. The widest boundary in the whole binary64 space is (2^54 - 1) * 2^-1075,
+// and it needs exactly **768**. So this budget is TIGHT, not round: 767 would be WRONG, and a reader
+// who takes 752 for the answer would shave 16 digits off a bound that has none to give.
+//
+// Given 768, a kept prefix and a midpoint are both integer multiples of the same 10^(magnitude-767),
+// so they are either EQUAL or at least one such unit apart — while the digits we dropped are worth
+// strictly LESS than that unit. So the true value and the prefix always fall on the same side of
+// every midpoint, EXCEPT when the prefix lands exactly ON one, and there `droppedNonZeroDigit` is
+// precisely the bit that turns a tie into a round-up. `float-literal-magnitude.md`'s
+// `tight-budget-768-digit-midpoint` is the case that holds this number down: it is a midpoint with
+// exactly 768 significant digits whose tie rounds DOWN, so a budget of 767 flips its second half.
 //
 // It was 18 for as long as the significand lived in an i64 — the cell, not the arithmetic, set the
 // budget. That justification died with the i64, and 18 digits was measurably wrong: 3 of 203 random
@@ -95,6 +125,10 @@ export function parseFloatBits(bytes ByteArray) returns ParsedInt throws ParserE
 	var sigDigits = 0
 	var leadingFracZeros = 0  // count of fractional zeros before the first non-zero significant digit
 
+	// This literal's exponent ceiling. It is per-literal because the `decExp` it has to out-rank is
+	// bounded by the literal's LENGTH and by nothing else — see `DecimalWindowSpan`.
+	let maxSciExp = bytes.count() + DecimalWindowSpan
+
 	var pi = 0
 	while pi < bytes.count() 'parse'
 		let b = try bytes.get(pi) otherwise panic("parseFloatBits: pi < bytes.count() by loop guard but get({pi}) failed")
@@ -107,8 +141,8 @@ export function parseFloatBits(bytes ByteArray) returns ParsedInt throws ParserE
 		if inExponent 'expPart'
 			if b >= '0' and b <= '9' 'expDigit'
 				sciExp = sciExp * 10 + (b - '0')
-				if sciExp > 100000 'capExp'
-					sciExp = 100000
+				if sciExp > maxSciExp 'capExp'
+					sciExp = maxSciExp
 				end 'capExp'
 			end 'expDigit'
 		end 'expPart' else 'mantissaPart'
@@ -354,22 +388,40 @@ let MaxBigLimbs = 144
 // subtractions of two bit lengths, and narrowing would only move the check to a cast at each call.
 typealias BigBitCount = int(0 to u64.max)
 
-// A power of ten to scale a magnitude by. Bounded by the decimal guards to 341.
+// A power of ten to scale a magnitude by. Bounded by the decimal guards to 1091 — the same figure
+// `MaxBigLimbs` is derived from, and it is quoted rather than re-derived for exactly that reason.
 typealias DecimalScaleExponent = int(0 to u64.max)
 
 // -1, 0 or 1 as the left magnitude is below, equal to, or above the right.
 typealias MagnitudeOrder = int(-1 to 1)
 
 // The largest power of ten that fits a limb, so `bigMulPow10` scales in 9-digit strides instead of
-// one digit at a time — a 341-digit scaling costs ~38 passes rather than 341.
+// one digit at a time — the worst-case 1091-digit scaling costs 122 passes rather than 1091.
 let Pow10ChunkDigits = 9
 
-// Every site that GROWS a magnitude ends here, so the budget is one fact in one place.
+// Every site that GROWS a magnitude ends here, so the budget is one fact in one place. There are
+// exactly two shapes of growth and both are routed: a carry out the top (`bigPushCarry`) and a
+// whole-limb shift's `growFilled` (checked at the end of `bigShiftLeft`).
 function requireLimbBudget(limbs ParsedIntArray)
 	if limbs.count() > MaxBigLimbs 'overBudget'
 		panic("float-literal magnitude grew to {limbs.count()} limbs, past the {MaxBigLimbs}-limb budget — a decimal guard in parseFloatBits was widened without widening MaxBigLimbs")
 	end 'overBudget'
 end 'requireLimbBudget'
+
+// Flush a pending carry out the top of `limbs` as new high limbs. THE one place a magnitude gets
+// wider at the top: `bigAddSmall`, `bigMulSmall` and `bigShiftLeft` all finish this way, and each
+// used to spell "push the masked carry, shift it down, check the budget" for itself. Nothing made
+// those three agree — one of them dropping the mask, or the budget check, would be a silently
+// corrupt high limb rather than a compile error.
+function bigPushCarry(limbs ParsedIntArray, carry ParsedInt)
+	var remaining = carry
+	while remaining > 0 'carryOut'
+		limbs.push(remaining and LimbMask)
+		remaining = remaining shr LimbBits
+	end 'carryOut'
+
+	requireLimbBudget(limbs)
+end 'bigPushCarry'
 
 // 10^`digits`, for a `digits` no wider than a limb. The one place a power of ten is built, so the
 // chunk stride and the scaling loop cannot come to disagree about what a 9-digit step is worth.
@@ -401,11 +453,7 @@ function bigAddSmall(limbs ParsedIntArray, addend ParsedInt)
 		i = i + 1
 	end 'addEach'
 
-	while carry > 0 'carryOut'
-		limbs.push(carry and LimbMask)
-		carry = carry shr LimbBits
-	end 'carryOut'
-	requireLimbBudget(limbs)
+	bigPushCarry(limbs, carry: carry)
 end 'bigAddSmall'
 
 // `limbs` *= `multiplier`, in place. `multiplier` must fit a limb so that `limb * multiplier + carry`
@@ -419,11 +467,8 @@ function bigMulSmall(limbs ParsedIntArray, multiplier ParsedInt)
 		carry = widened shr LimbBits
 		i = i + 1
 	end 'scaleEach'
-	while carry > 0 'carryOut'
-		limbs.push(carry and LimbMask)
-		carry = carry shr LimbBits
-	end 'carryOut'
-	requireLimbBudget(limbs)
+
+	bigPushCarry(limbs, carry: carry)
 end 'bigMulSmall'
 
 // `limbs` *= 10^`exponent`, in place.
@@ -457,9 +502,7 @@ function bigShiftLeft(limbs ParsedIntArray, bits BigBitCount)
 			i = i + 1
 		end 'shiftEach'
 
-		if carry != 0 'carryOut'
-			limbs.push(carry)
-		end 'carryOut'
+		bigPushCarry(limbs, carry: carry)
 	end 'partialLimb'
 
 	// The whole-limb part moves every limb up in ONE pass. Repeated `insert(0, …)` would be
