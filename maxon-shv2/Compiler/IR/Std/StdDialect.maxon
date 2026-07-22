@@ -86,11 +86,14 @@ end 'stdTypeIsFloat'
 
 // A per-ARGUMENT float bitmask carried by `callIndirect` — bit k set iff argument k is a float (an f64,
 // which a backend routes to a float argument register / declares as an f64 wasm valtype rather than a GPR
-// i64). Only the low arg-count bits are meaningful; the storage is a full machine word (a call's argument
-// list is capped well under 64). A SCALAR, so the op stays at one managed field (P1.5 #78 — see
+// i64). Only the low arg-count bits are meaningful; the storage is a full machine word, and `1 shl k` can
+// never overflow it because the parser caps a call's arguments (user params + the companion env) at
+// `MaxRegisterParams` = 6, far below 64. A SCALAR, so the op stays at one managed field (P1.5 #78 — see
 // `callIndirect`). It is the Std-tier, call-SITE twin of the Targets-tier, callee-side `ParamFloatMask`:
-// the two answer the identical float-vs-GPR question on opposite sides of a call, but sit on opposite sides
-// of the Std→Target tier boundary, so neither can name the other's typealias.
+// the two answer the identical float-vs-GPR question on opposite sides of a call. The boundary is one-way —
+// a Targets-tier lowering may name this Std typealias (the backends carry it, and `calleeArgFloatMask`
+// produces it for a direct call), but the Std tier must not name the Targets-tier `ParamFloatMask`, so the
+// two stay separate rather than one being reused across the Std→Target boundary.
 export typealias ArgFloatMask = int(0 to u64.max)
 
 // Bit k of an `ArgFloatMask` — true iff argument k travels in a float register / is an f64 valtype. The one

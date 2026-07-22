@@ -186,6 +186,25 @@ export function calleeParamClass(calleeParamClasses CalleeParamClassMap, callee 
 	return RegClass.xmm if ((mask shr paramIndex) and 1) != 0 else RegClass.gpr
 end 'calleeParamClass'
 
+// The per-ARGUMENT float mask for a DIRECT call to `callee`: bit k set iff parameter k is XMM-classed in
+// the callee's declared param file (each bit decided by `calleeParamClass`, so its runtime-chunk fallback —
+// and its panic on a genuinely-unresolved callee — is inherited unchanged). It is the name-keyed twin of the
+// `ArgFloatMask` an indirect `callIndirect` carries ON THE OP: building the direct call's mask here lets the
+// DIRECT and INDIRECT argument-move loops share ONE slotting+emit path (`emitArgMovesByFloatMask` in each
+// backend), so the two can differ ONLY in where the mask comes from — a callee NAME here, the op there — and
+// never in how an argument is slotted onto its file's counter or emitted. Without this shared door the two
+// loops were byte-identical forks whose slotting could silently diverge (a wrong register file, not a
+// compile error). Same `calleeParamClass` call count as the old per-argument loop, so it is emission-neutral.
+export function calleeArgFloatMask(calleeParamClasses CalleeParamClassMap, callee ByteArray, argCount ParamCount) returns ArgFloatMask
+	var mask = 0 as ArgFloatMask
+	for k in 0 upto argCount 'eachArg'
+		if calleeParamClass(calleeParamClasses, callee: callee, paramIndex: k) == RegClass.xmm 'floatArg'
+			mask = mask or (1 shl k)
+		end 'floatArg'
+	end 'eachArg'
+	return mask
+end 'calleeArgFloatMask'
+
 // The register FILE fallback for a callee that is NOT a Std function in the merged module. A `__`-prefixed
 // such callee is a HAND-ASSEMBLED runtime chunk — the mrt_* panic runtime, or the GT `__gt_context_switch`
 // that a builder-built `__gt_await` calls across the Std→chunk boundary. Every runtime chunk uses the

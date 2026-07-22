@@ -1304,37 +1304,14 @@ type StdToX64Lowering
 		return X64Register.xmm0 if calleeResultClass(self.calleeResultClasses, callee: callee) == RegClass.xmm else X64Register.r8
 	end 'callResultRegister'
 
-	// Move each argument into its ABI register — a FLOAT argument to an XMM arg register chosen by a
-	// SEPARATE FP counter, an integer argument to a GPR arg register chosen by a separate GPR counter.
-	// The two counters count INDEPENDENTLY (a float argument that follows an integer one is FP-slot 0),
-	// which is the running-counter twin of the callee's `computeParamSlotIndex`: both encode "separate
-	// int/FP counters" and both read the callee's declared parameter types, so they assign the SAME slot
-	// to the same parameter — a float written to xmm0 here is read back from xmm0 there. Each argument's
-	// file is the CALLEE's PARAM class from the `calleeParamClasses` index (`calleeParamClass`), the same
-	// door the value-class column classes a float result under. Shared by `lowerCall` and `lowerTryCall`,
-	// whose argument passing is identical (extracted so the two cannot drift).
-	//
-	// SOUND without an explicit parallel-copy sequencer, for BOTH files: each `mov argReg, arg_k` is a
-	// physical def that the liveness pass adds to `forbiddenPhys` for every value LIVE ACROSS it — the
-	// mechanism is keyed on `RegNum` and is class-agnostic — so an argument live into a later same-file
-	// argument move can never be colored to an EARLIER argument register, and forward-order emission then
-	// reads each argument's register before any later move overwrites it (the read-after-clobber class
-	// `project_call_arg_parallel_copy_fix` names, now covering the XMM arg registers too). The `callDirect`
-	// carries no explicit operands, so its caller-saved `implicitDefs` clobber is applied ONLY to values
-	// live across the call (never to the just-established argument registers).
+	// The DIRECT-call argument moves: each argument's register FILE is the CALLEE's declared PARAM class,
+	// looked up by name and collected into an `ArgFloatMask` (`calleeArgFloatMask`), then slotted and emitted
+	// through the shared `emitArgMovesByFloatMask`. Reading the callee's own parameter files is what makes a
+	// float written to xmm0 here read back from xmm0 in the callee (the running-counter twin of the callee's
+	// `computeParamSlotIndex`). Shared by `lowerCall` and `lowerTryCall`, whose argument passing is identical
+	// (extracted so the two cannot drift).
 	function emitCallArgMoves(callee ByteArray, args ValueIdArray, dstBlock IrBlock)
-		var gprSlot = 0 as ParamCount
-		var fpSlot = 0 as ParamCount
-		for k in 0 upto args.count() 'eachArg'
-			let argId = try args.get(k) otherwise panic("emitCallArgMoves: args.get OOB at {k}")
-			if calleeParamClass(self.calleeParamClasses, callee: callee, paramIndex: k) == RegClass.xmm 'floatArg'
-				self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(argFpRegisterAt(fpSlot)), srcReg: TargetVReg.virtual(argId)))
-				fpSlot = fpSlot + 1
-			end 'floatArg' else 'intArg'
-				self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(argRegisterAt(gprSlot)), srcReg: TargetVReg.virtual(argId)))
-				gprSlot = gprSlot + 1
-			end 'intArg'
-		end 'eachArg'
+		self.emitArgMovesByFloatMask(args, argFloatMask: calleeArgFloatMask(self.calleeParamClasses, callee: callee, argCount: args.count()), dstBlock: dstBlock)
 	end 'emitCallArgMoves'
 
 	// Lower a Std `call` to the x64 call sequence: move each argument into its ABI register
@@ -1354,27 +1331,33 @@ type StdToX64Lowering
 	// arguments against, so both come from the function value's SIGNATURE carried on the op (P1.5 #78): a
 	// float result is captured from XMM0 (else R8), and each argument is routed by its own type.
 	function lowerCallIndirect(resultId ValueId, calleeReg ValueId, args ValueIdArray, resultType StdType, argFloatMask ArgFloatMask, dstBlock IrBlock)
-		self.emitIndirectCallArgMoves(args, argFloatMask: argFloatMask, dstBlock: dstBlock)
+		self.emitArgMovesByFloatMask(args, argFloatMask: argFloatMask, dstBlock: dstBlock)
 		self.targetModule.appendOp(dstBlock, op: TargetOp.callReg(TargetVReg.virtual(calleeReg)))
 		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: x64PhysReg(indirectResultRegister(resultType))))
 	end 'lowerCallIndirect'
 
-	// Move each indirect-call argument into its ABI register — a FLOAT argument to an XMM arg register on a
-	// SEPARATE FP counter, everything else to a GPR arg register on the GPR counter, exactly as
-	// `emitCallArgMoves` does for a direct call. The two are kept separate because the class SOURCE differs:
-	// a direct call reads the CALLEE's declared param file by name (`calleeParamClass`), while an indirect
-	// callee has no name, so each argument's file comes from `argFloatMask` — the function value's signature
-	// the op carries (P1.5 #78). The two counters run independently (the running twin of
+	// Move each argument into its ABI register given a per-argument float mask (bit k set iff argument k is a
+	// float): a FLOAT argument to an XMM arg register on a SEPARATE FP counter, everything else to a GPR arg
+	// register on the GPR counter. The two counters run independently (the running twin of
 	// `computeParamSlotIndex`), which is what puts a float arg in FP slot 0 whether or not an integer arg
-	// precedes it. Forward-order emission is sound for the same reason `emitCallArgMoves`' is: each
-	// `mov argReg, arg_k` is a physical def liveness forbids to any value live across it (keyed on `RegNum`,
-	// class-agnostic), so an argument live into a later same-file move can never be coloured to an earlier
-	// argument register.
-	function emitIndirectCallArgMoves(args ValueIdArray, argFloatMask ArgFloatMask, dstBlock IrBlock)
+	// precedes it. The ONE slotting+emit path both a DIRECT call (`emitCallArgMoves`, mask from the callee's
+	// declared param files) and an INDIRECT call (`lowerCallIndirect`, mask carried on the op) route through,
+	// so the two differ ONLY in where the mask comes from and can never drift in how an argument is slotted
+	// or emitted.
+	//
+	// SOUND without an explicit parallel-copy sequencer, for BOTH files: each `mov argReg, arg_k` is a
+	// physical def that the liveness pass adds to `forbiddenPhys` for every value LIVE ACROSS it — the
+	// mechanism is keyed on `RegNum` and is class-agnostic — so an argument live into a later same-file
+	// argument move can never be colored to an EARLIER argument register, and forward-order emission then
+	// reads each argument's register before any later move overwrites it (the read-after-clobber class
+	// `project_call_arg_parallel_copy_fix` names, now covering the XMM arg registers too). The `callDirect` /
+	// `callReg` carries no explicit operands, so its caller-saved `implicitDefs` clobber is applied ONLY to
+	// values live across the call (never to the just-established argument registers).
+	function emitArgMovesByFloatMask(args ValueIdArray, argFloatMask ArgFloatMask, dstBlock IrBlock)
 		var gprSlot = 0 as ParamCount
 		var fpSlot = 0 as ParamCount
 		for k in 0 upto args.count() 'eachArg'
-			let argId = try args.get(k) otherwise panic("emitIndirectCallArgMoves: args.get OOB at {k}")
+			let argId = try args.get(k) otherwise panic("emitArgMovesByFloatMask: args.get OOB at {k}")
 			if argIsFloat(argFloatMask, argIndex: k) 'floatArg'
 				self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(argFpRegisterAt(fpSlot)), srcReg: TargetVReg.virtual(argId)))
 				fpSlot = fpSlot + 1
@@ -1383,7 +1366,7 @@ type StdToX64Lowering
 				gprSlot = gprSlot + 1
 			end 'intArg'
 		end 'eachArg'
-	end 'emitIndirectCallArgMoves'
+	end 'emitArgMovesByFloatMask'
 
 	// Lower a throwing `tryCall`: the arguments and `callDirect` exactly as `lowerCall` (via the shared
 	// `emitCallArgMoves`), then capture BOTH return registers — the primary value from

@@ -740,29 +740,13 @@ type StdToArm64Lowering
 		return Arm64FloatReturnReg if calleeResultClass(self.calleeResultClasses, callee: callee) == RegClass.xmm else Arm64IntReturnReg
 	end 'callResultRegister'
 
-	// Move each argument into its ABI register — a FLOAT argument to a SIMD arg register (d0..d7) chosen
-	// by a SEPARATE FP counter, an integer argument to a GPR arg register (x0..x7) by a separate GPR
-	// counter. The two counters are independent (the running-counter twin of `computeParamSlotIndex`), and
-	// each argument's file is the CALLEE's PARAM class from the `calleeParamClasses` index
-	// (`calleeParamClass`). Shared by `lowerCall` and `lowerTryCall`, whose argument passing is identical.
-	//
-	// Forward-order emission is sound without an explicit parallel-copy sequencer, for BOTH files: each
-	// `mov argReg, arg_k` is a physical def that liveness forbids to every value live ACROSS it (keyed on
-	// `RegNum`, class-agnostic), so an argument live into a later same-file move can never be coloured to an
-	// earlier argument register (the read-after-clobber class), now covering the SIMD arg registers too.
+	// The DIRECT-call argument moves: each argument's register FILE is the CALLEE's declared PARAM class,
+	// looked up by name and collected into an `ArgFloatMask` (`calleeArgFloatMask`), then slotted and emitted
+	// through the shared `emitArgMovesByFloatMask`. Reading the callee's own parameter files is what makes a
+	// float written to d0 here read back from d0 in the callee (the running-counter twin of the callee's
+	// `computeParamSlotIndex`). Shared by `lowerCall` and `lowerTryCall`, whose argument passing is identical.
 	function emitCallArgMoves(callee ByteArray, args ValueIdArray, dstRef BlockRef)
-		var gprSlot = 0 as ParamCount
-		var fpSlot = 0 as ParamCount
-		for k in 0 upto args.count() 'eachArg'
-			let argId = try args.get(k) otherwise panic("emitCallArgMoves: args.get OOB at {k}")
-			if calleeParamClass(self.calleeParamClasses, callee: callee, paramIndex: k) == RegClass.xmm 'floatArg'
-				self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(arm64FpArgRegisterAt(fpSlot)), srcReg: TargetVReg.virtual(argId)))
-				fpSlot = fpSlot + 1
-			end 'floatArg' else 'intArg'
-				self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(arm64ArgRegisterAt(gprSlot)), srcReg: TargetVReg.virtual(argId)))
-				gprSlot = gprSlot + 1
-			end 'intArg'
-		end 'eachArg'
+		self.emitArgMovesByFloatMask(args, argFloatMask: calleeArgFloatMask(self.calleeParamClasses, callee: callee, argCount: args.count()), dstRef: dstRef)
 	end 'emitCallArgMoves'
 
 	// Lower a Std `call`: move each argument into its ABI register (`emitCallArgMoves`), `bl` the callee,
@@ -780,25 +764,25 @@ type StdToArm64Lowering
 	// function value's SIGNATURE carried on the op (P1.5 #78) — a float result is captured from **d0** (else
 	// **x0**), and each argument is routed by its own type (a float to d0..d7, else x0..x7).
 	function lowerCallIndirect(resultId ValueId, calleeReg ValueId, args ValueIdArray, resultType StdType, argFloatMask ArgFloatMask, dstRef BlockRef)
-		self.emitIndirectCallArgMoves(args, argFloatMask: argFloatMask, dstRef: dstRef)
+		self.emitArgMovesByFloatMask(args, argFloatMask: argFloatMask, dstRef: dstRef)
 		self.emit(dstRef, op: TargetOp.arm64BranchLinkReg(TargetVReg.virtual(calleeReg)))
 		self.emit(dstRef, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: arm64PhysReg(arm64IndirectResultRegister(resultType))))
 	end 'lowerCallIndirect'
 
-	// Move each indirect-call argument into its ABI register — the arm64 twin of the x64
-	// `emitIndirectCallArgMoves` — a FLOAT argument to a SIMD arg register (d0..d7) on a SEPARATE FP
-	// counter, everything else to a GPR arg register (x0..x7) on the GPR counter, exactly as
-	// `emitCallArgMoves` does for a direct call. Kept separate from `emitCallArgMoves` because the class
-	// SOURCE differs: an indirect callee has no name, so each argument's file comes from `argFloatMask` (the
-	// function value's signature the op carries — P1.5 #78) rather than the callee's name-keyed
-	// `calleeParamClasses`. The two counters run independently (the running twin of `computeParamSlotIndex`).
-	// Forward-order emission is sound for `emitCallArgMoves`' reason (each physical arg-register def liveness
-	// forbids to values live across it).
-	function emitIndirectCallArgMoves(args ValueIdArray, argFloatMask ArgFloatMask, dstRef BlockRef)
+	// Move each argument into its ABI register given a per-argument float mask (bit k set iff argument k is a
+	// float) — the arm64 twin of x64's `emitArgMovesByFloatMask` — a FLOAT argument to a SIMD arg register
+	// (d0..d7) on a SEPARATE FP counter, everything else to a GPR arg register (x0..x7) on the GPR counter.
+	// The two counters run independently (the running twin of `computeParamSlotIndex`). The ONE slotting+emit
+	// path both a DIRECT call (`emitCallArgMoves`, mask from the callee's declared param files) and an
+	// INDIRECT call (`lowerCallIndirect`, mask carried on the op) route through, so the two differ ONLY in
+	// where the mask comes from and can never drift in how an argument is slotted or emitted.
+	// Forward-order emission is sound (each physical arg-register def liveness forbids to values live across
+	// it, keyed on `RegNum` and class-agnostic), now covering the SIMD arg registers too.
+	function emitArgMovesByFloatMask(args ValueIdArray, argFloatMask ArgFloatMask, dstRef BlockRef)
 		var gprSlot = 0 as ParamCount
 		var fpSlot = 0 as ParamCount
 		for k in 0 upto args.count() 'eachArg'
-			let argId = try args.get(k) otherwise panic("emitIndirectCallArgMoves: args.get OOB at {k}")
+			let argId = try args.get(k) otherwise panic("emitArgMovesByFloatMask: args.get OOB at {k}")
 			if argIsFloat(argFloatMask, argIndex: k) 'floatArg'
 				self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(arm64FpArgRegisterAt(fpSlot)), srcReg: TargetVReg.virtual(argId)))
 				fpSlot = fpSlot + 1
@@ -807,7 +791,7 @@ type StdToArm64Lowering
 				gprSlot = gprSlot + 1
 			end 'intArg'
 		end 'eachArg'
-	end 'emitIndirectCallArgMoves'
+	end 'emitArgMovesByFloatMask'
 
 	// The arm64 twin of x64's `lowerTryCall` (P1.4b): args + `bl` as `lowerCall`, then capture BOTH return
 	// registers — the primary value from `callResultRegister(callee)` (**d0** for a float-returning callee,
