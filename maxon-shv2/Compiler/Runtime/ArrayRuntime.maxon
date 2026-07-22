@@ -14,7 +14,18 @@
 // ⚠ THE ARRAY IS TWO ALLOCATIONS, not one: the 48-byte record (`__mm_alloc`, a managed box with the MM
 // header + refcount before it) and a SEPARATE external element buffer (`buffer@0` → a raw `__mm_alloc`'d
 // span, destructor 0). This mirrors a DETACHED String, not the inline one — an array grows, so its bytes
-// cannot live behind the record. `__arr_decref` frees both.
+// cannot live behind the record. `__arr_decref` releases both.
+//
+// ⭐⭐ **AND THAT SPLIT IS WHAT MAKES A ZERO-COPY SLICE POSSIBLE (P1.7 COW slice B).** Because the element
+// buffer is its OWN `__mm_alloc` allocation, it has its OWN refcount word, and a non-zero count there says
+// exactly one thing: **someone is viewing these bytes.** Both reference compilers refcount the RECORD
+// instead, where a count of 2 cannot tell "two owners of this array" from "someone is viewing my buffer" —
+// which is why the bootstrap gives up and eager-copies an owned slice outright
+// (`MaxonToStandardConversion.Strings.cs:1480`: "heap-allocated source cannot be zero-copy because
+// struct-level COW can't distinguish slice refs from normal refs"). shv2 is MOVE-ONLY, so a RECORD never
+// has two owners and the BUFFER's count is unambiguous. `.slice()`/`.clone()` are therefore O(1) — a fresh
+// 48-byte record over the parent's bytes — and `__arr_cow_detach` restores independence at the first write,
+// in BOTH directions (the viewer's and the owner's).
 
 // --- The fused 48-byte Array backing record ---
 //
@@ -28,12 +39,18 @@ export let ArrParentOffset = 32 as ByteOffset
 export let ArrElementDestroyOffset = 40 as ByteOffset
 export let ArrRecordBytes = 48 as ByteCount
 
-// `parent@32` is reserved (a shared-buffer array would name the record it borrows from; nothing writes it
-// today — `slice`/`clone` COPY, and the rdata literal's non-owned buffer is flagged by the capacity sentinel
-// below rather than by a parent). `element_destroy@40` is the per-element destructor a
-// managed-element array will carry (P1.7 slice 3); at THIS slice every element is trivial, so it is
-// always 0 and the drop path frees the buffer without walking. Both come pre-zeroed from `__mm_alloc`,
-// so `__arr_create` never writes them — the same zeroing contract `__mm_alloc` itself relies on.
+// ⭐ **`parent@32` IS THE BASE POINTER OF THE SHARED ALLOCATION THIS RECORD OWES A DECREF TO** — the
+// address `__mm_alloc` RETURNED, so `__mm_decref` finds its header at `base - HeaderBytes`. 0 means "this
+// record owes nothing" (an owner, or an rdata literal). It is deliberately NOT the parent RECORD and NOT
+// the view's own `buffer@0`: `buffer@0` is an INTERIOR pointer (`base + start·element_size`) whose
+// `-8` word is the parent's DATA, not a refcount, and a parent record would make a CHAIN. ⭐ **NESTED
+// SLICES FLATTEN**: a slice of a view stores the same base and increfs it again, so nothing ever walks a
+// chain and a view's lifetime never depends on the record it was cut from. (Both references flatten too —
+// the bootstrap stores `source.parentPtr`, not `source`.)
+//
+// `element_destroy@40` is the per-element destructor a managed-element array carries (P1.7 slice 3); for a
+// TRIVIAL element it is 0 and the drop path releases the buffer without walking. Both come pre-zeroed from
+// `__mm_alloc`, so `__arr_create` never writes them — the same zeroing contract `__mm_alloc` relies on.
 let TrivialElementDestroy = 0 as ParsedInt
 
 // --- Byte-string literal (`b"…"`, P1.7 slice 2) ---
@@ -49,6 +66,22 @@ let TrivialElementDestroy = 0 as ParsedInt
 // model drops through `__arr_decref` — which, on the sentinel, frees the record and skips the blob.
 export let ArrRdataCapacitySentinel = 0 - 2 as ParsedInt
 export let ByteStringElementSize = 1 as ParsedInt
+
+// --- Zero-copy view (`.slice`/`.clone`, P1.7 COW slice B) ---
+//
+// ⭐ **THE SECOND NON-OWNED-BUFFER KIND.** A view is a record of its own (its own `length@8`,
+// `element_size@24`, `element_destroy@40`) whose `buffer@0` points INTO another allocation's bytes, at
+// `base + start·element_size`. `capacity@16` is this sentinel and `parent@32` is that allocation's BASE.
+//
+// ⭐ **THE SENTINEL AND THE PARENT ANSWER DIFFERENT QUESTIONS, AND KEEPING THEM APART IS THE ENCODING.**
+// The SIGN of `capacity` answers *"is this buffer mine to write and to free?"* — the one question
+// `emitBufferNotOwned` asks, and the only one the mutators and the drop path need. `parent@32` answers
+// *"which allocation do I owe a `__mm_decref` to?"*, and 0 is a perfectly ordinary answer (an rdata blob is
+// immortal; an empty parent never allocated a buffer). So the two sentinels never have to be told apart at
+// runtime: each simply records WHERE the record came from — `-2` is written only by the byte-string literal
+// lowering (`LowerMaxonToStd`), `-1` only by `__arr_slice`. Keeping the whole negative range meaning "not
+// mine" is what let this arrive as one more value rather than as a new test at every reader.
+export let ArrViewCapacitySentinel = 0 - 1 as ParsedInt
 
 // The `.rdata` label prefix a byte-string literal's blob registers under. `__`-prefixed so it never
 // collides with a user name and stays out of the spec goldens (`isRuntimeFunction`'s data twin), and
@@ -184,10 +217,11 @@ export let ArrRemoveName = b"__arr_remove"
 export let ArrDecrefName = b"__arr_decref"
 
 // The whole-array copy operations (P1.7 slice 4). `slice` is THROWING (bounds/inverted-range → `ArrayError`),
-// `clone`/`append` are not. `slice`/`clone` return a NEW INDEPENDENT array (a fresh record + buffer with the
-// range's bytes copied in — never a zero-copy view); `append`
-// grows `self` and block-copies `other`'s bytes in, leaving `other` untouched. TRIVIAL elements only — a
-// managed element would need a per-element deep clone (the parser rejects the managed cases, P1.7 slice 4).
+// `clone`/`append` are not. `slice`/`clone` return an array that BEHAVES as an independent copy but is an
+// O(1) zero-copy VIEW over the source's buffer until either side writes (P1.7 COW slice B — see
+// `emitArrayView`); `append` grows `self` and block-copies `other`'s bytes in, leaving `other` untouched.
+// TRIVIAL elements only — a managed element would need a per-element deep clone (the parser rejects the
+// managed cases, P1.7 slice 4).
 export let ArrSliceName = b"__arr_slice"
 export let ArrCloneName = b"__arr_clone"
 export let ArrAppendName = b"__arr_append"
@@ -234,6 +268,10 @@ export function installArrayRuntime(module StdModule, usage RuntimeUsage)
 	if not usage.usesArray 'noArray'
 		return
 	end 'noArray'
+	// `__mm_incref` is installed HERE and not by `installMmRuntime` because the zero-copy view is its only
+	// caller — see that function's note. `usesArray` implies `usesHeap` (`isArrayRuntimeCallee`), so the
+	// header geometry it reads is always present alongside it.
+	buildMmIncref(module)
 	buildArrCowDetach(module)
 	buildArrGrownCap(module)
 	buildArrGrow(module)
@@ -597,19 +635,87 @@ function emitCowDetach(module StdModule, block IrBlock, arr ValueId, ids ValueMi
 	module.appendOp(block, op: StdOp.call(detached, callee: ArrCowDetachName, args: argsOf(arr)))
 end 'emitCowDetach'
 
-// `capacity@16 < 0` — the record's buffer is the byte-string literal's IMMORTAL `.rdata` blob rather than an
-// allocation of its own (`ArrRdataCapacitySentinel`). ⭐ THE ONE HOME OF THE SENTINEL TEST, asked by the two
-// places that must act on it and reached by no third: `__arr_cow_detach` (an rdata buffer cannot be WRITTEN,
-// so replace it) and `__arr_decref` (an rdata buffer was never `__mm_alloc`'d, so do not FREE it). Their
-// conclusions differ and are meant to — what must never differ is the test, because a record misjudged by
-// either one is a fault: a write into read-only memory, or a `__mm_free` of an address the allocator never
-// handed out. The test is `< 0` rather than `== ArrRdataCapacitySentinel` so the whole negative range stays
-// available for a further non-owned-buffer kind without every reader having to learn its name.
-function emitBufferIsRdata(module StdModule, block IrBlock, arr ValueId, ids ValueMinter) returns ValueId
+// `capacity@16 < 0` — the record's `buffer@0` is NOT its own allocation: it is either the byte-string
+// literal's IMMORTAL `.rdata` blob (`ArrRdataCapacitySentinel`) or an INTERIOR pointer into an allocation a
+// zero-copy view shares (`ArrViewCapacitySentinel`). ⭐ THE ONE HOME OF THE NOT-MINE TEST, asked by the
+// three places that must act on it and reached by no fourth: `__arr_cow_detach` (such a buffer cannot be
+// WRITTEN in place, so replace it), `__arr_decref` (it must not be `__mm_free`d — it was either never
+// allocated or is still being read by someone else) and `emitSharedAllocationBase` (which of two fields
+// names the allocation this record owes a decref to). Their conclusions differ and are meant to — what must
+// never differ is the test, because a record misjudged by any one of them is a fault: a write into
+// read-only memory or into bytes another array is reading, or a `__mm_free` of an address the allocator
+// never handed out.
+//
+// ⚠ **IT IS ALSO THE ONE TEST THAT MAY BE ASKED BEFORE A HEADER READ IS SAFE**, and that is the reason it
+// tests the record's own `capacity@16` and nothing else. A view's `buffer@0` is INTERIOR, so the word at
+// `buffer - 8` is the parent's DATA, not a refcount; anything that wants to read a buffer's `__mm_alloc`
+// header must clear this test first. `__arr_cow_detach` is exactly such a reader, and its arms are ordered
+// accordingly. The test is `< 0` rather than `== <a sentinel>` so a further non-owned-buffer kind arrives
+// as one more value rather than as a new test at every reader — which is precisely how the view kind did.
+function emitBufferNotOwned(module StdModule, block IrBlock, arr ValueId, ids ValueMinter) returns ValueId
 	let capacity = emitLoadField(module, block: block, arr: arr, offset: ArrCapacityOffset, ids: ids)
 	let zero = emitConst(module, block: block, value: 0, ids: ids)
 	return emitCmp(module, block: block, a: capacity, b: zero, pred: StdCmpPred.lt, ids: ids)
-end 'emitBufferIsRdata'
+end 'emitBufferNotOwned'
+
+// ⭐ **THE ALLOCATION THIS RECORD OWES A `__mm_decref` TO — 0 when it owes nothing (P1.7 COW slice B).**
+// An OWNER's is its own `buffer@0` (the pointer `__mm_alloc` returned, which may be 0 if the array never
+// grew); a NON-OWNED record's is `parent@32` (a view's shared base, or 0 for an immortal `.rdata` blob).
+// ⭐ THE ONE HOME OF THAT CHOICE, read by the three places whose correctness depends on picking the same
+// field: `__arr_slice` (which allocation to INCREF for the new view), `__arr_cow_detach` (which one to
+// RELEASE once the record has copied its bytes out) and `__arr_decref` (which one to release at death).
+// A disagreement between any two of them is a double-free or a leak, so it is written once.
+//
+// It threads `cur` (sets its terminator) and returns the base as a BLOCK ARG on the caller-owned `join`,
+// which is why `join` is passed IN: the caller resumes there and the two arms are otherwise identical.
+function emitSharedAllocationBase(module StdModule, func IrFunction, cur IrBlock, join IrBlock, record ValueId, ids ValueMinter) returns ValueId
+	var viewBase = module.addBlock(func, label: b"vbase")
+	var ownBase = module.addBlock(func, label: b"obase")
+
+	let notOwned = emitBufferNotOwned(module, block: cur, arr: record, ids: ids)
+	module.setTerminator(cur, op: StdOp.condBranch(notOwned, thenBlockId: viewBase.id, elseBlockId: ownBase.id))
+
+	let base = ids.mint()
+	join.blockArgs.push(IrBlockArg.create(base, argType: StdType.i64))
+
+	let parent = emitLoadField(module, block: viewBase, arr: record, offset: ArrParentOffset, ids: ids)
+	module.setTerminator(viewBase, op: StdOp.branch(join.id))
+	viewBase.branchEdges.push(BranchEdge.create(join.id, argIds: argsOf(parent)))
+
+	let buffer = emitLoadField(module, block: ownBase, arr: record, offset: ArrBufferOffset, ids: ids)
+	module.setTerminator(ownBase, op: StdOp.branch(join.id))
+	ownBase.branchEdges.push(BranchEdge.create(join.id, argIds: argsOf(buffer)))
+
+	return base
+end 'emitSharedAllocationBase'
+
+// `if base != 0 then <callee>(base)` — the null-guarded refcount step every share and every release of a
+// shared allocation makes, since 0 ("this record owes nothing") is an ordinary answer from
+// `emitSharedAllocationBase`. Threads `cur` and returns the continuation block. ONE home for the guard, in
+// both directions: `__arr_slice` raises the count with `__mm_incref`, `__arr_cow_detach`/`__arr_decref`/
+// `__arr_grow` lower it with `__mm_decref`.
+//
+// ⭐ **A BUFFER IS RELEASED WITH `__mm_decref`, NEVER `__mm_free`, AND THAT IS THE WHOLE OF THE DROP RULE.**
+// It may still be under a view, so only the LAST owner may reclaim it — which is exactly what `__mm_decref`
+// decides. It is also the safer failure mode: if some future path ever reached here with a count it should
+// not have, a decref merely keeps the buffer alive and the leak gate reports 101, where a `__mm_free` would
+// silently hand a live allocation back and become a use-after-free the day a free list exists. v1 paid for
+// the twin of this omission three times (`stdlib/Internals.maxon:3465-3472`): a new non-owned-buffer kind
+// must be taught to the DROP path, not only to the write check.
+function emitRefcountSharedBase(module StdModule, func IrFunction, cur IrBlock, base ValueId, callee ByteArray, ids ValueMinter) returns IrBlock
+	var step = module.addBlock(func, label: b"rcstep")
+	let cont = module.addBlock(func, label: b"rccont")
+
+	let zero = emitConst(module, block: cur, value: 0, ids: ids)
+	let shares = emitCmp(module, block: cur, a: base, b: zero, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(cur, op: StdOp.condBranch(shares, thenBlockId: step.id, elseBlockId: cont.id))
+
+	let counted = ids.mint()
+	module.appendOp(step, op: StdOp.call(counted, callee: callee, args: argsOf(base)))
+	module.setTerminator(step, op: StdOp.branch(cont.id))
+
+	return cont
+end 'emitRefcountSharedBase'
 
 // Abort the process with `code` from a VOID runtime function — the file's "a corrupt operation must never
 // proceed" exit (`__arr_grow`'s capacity overflow, `__arr_resize`'s negative length, `__arr_append`'s
@@ -661,40 +767,58 @@ function emitOkReturn(module StdModule, block IrBlock, value ValueId, ids ValueM
 	module.setTerminator(block, op: StdOp.errorReturn(value, errorFlagId: flag))
 end 'emitOkReturn'
 
-// ⭐ **BUILD A FRESH INDEPENDENT ARRAY holding `srcRecord`'s elements `[start, start+sliceLen)` (P1.7 slice 4).**
+// ⭐⭐ **BUILD AN O(1) ZERO-COPY VIEW of `srcRecord`'s elements `[start, start+sliceLen)` (P1.7 COW slice B).**
 // The shared body of `__arr_clone` (start 0, sliceLen = length) and `__arr_slice` (a bounds-checked sub-range).
-// A slice is EAGERLY COPIED, not a zero-copy view: the result is ALWAYS a new `__mm_alloc`'d record + buffer
-// with the range's bytes copied in, so no two array records ever share a heap buffer. (`__arr_cow_detach`
-// exists for the ONE non-owned buffer that does exist — the byte-string literal's immortal `.rdata` blob —
-// not to make a shared view safe; the bootstrap's `maxon_cow_check`-per-mutation-site design is not ported.)
-// A later mutation of either array therefore cannot reach the other (`slice-cow-modify-slice`/`-original`
-// pass by copy semantics: the buffers are disjoint).
-// It reuses `__arr_create` (a fresh record, carrying the SAME `element_size` and `element_destroy` as the source)
-// and `__arr_reserve` (a buffer sized for `sliceLen`) so the record/grow logic lives in ONE place; then it block-
-// copies `sliceLen · elementSize` bytes and publishes `length`. TRIVIAL elements only — the byte copy duplicates
-// heap POINTERS without a per-element deep clone, so a managed element would double-free; the parser rejects the
-// managed cases. `exit` is caller-owned (passed IN, the `emitLoadElem` shape): the new record is minted in `cur`
-// which dominates `exit`, so it is live there for the caller's `ret`/`errorReturn`. Threads `cur` (branches its
-// tail to `exit`) and returns the new record value.
-function emitArrayRangeCopy(module StdModule, func IrFunction, cur IrBlock, exit IrBlock, srcRecord ValueId, start ValueId, sliceLen ValueId, ids ValueMinter) returns ValueId
+//
+// ⭐ **NOTHING IS COPIED, AND THE COST DOES NOT DEPEND ON `sliceLen`.** The result is a fresh 48-byte record
+// (`__arr_create`, carrying the SAME `element_size` and `element_destroy` as the source) whose `buffer@0` is
+// the INTERIOR pointer `srcBuffer + start·element_size`, whose `capacity@16` is `ArrViewCapacitySentinel`,
+// and whose `parent@32` is the shared allocation's BASE — increfed here, released by `__arr_cow_detach` or
+// `__arr_decref`. That is ONE fixed-size allocation and no loop, where the previous eager copy allocated a
+// second buffer of `sliceLen · element_size` bytes and moved every one of them.
+//
+// ⭐ **INDEPENDENCE IS PRESERVED BY DETACH-ON-WRITE, IN BOTH DIRECTIONS**, which is what lets the sharing be
+// invisible: a write through the VIEW detaches it (`capacity < 0`), and a write through the OWNER detaches
+// the owner (its buffer's refcount is non-zero). `slice-cow-modify-slice` and `slice-cow-modify-original`
+// pin exactly those two directions, and they are unchanged by this — which is the point.
+//
+// ⭐ **NESTED SLICES FLATTEN.** `srcBuffer` is read straight out of the source, so slicing a VIEW windows
+// within the view; and the base comes from `emitSharedAllocationBase`, which for a view is its own
+// `parent@32`. So a slice of a slice increfs the ORIGINAL allocation and stores it directly — no chain
+// exists, and nothing ever walks one.
+//
+// A base of 0 ("owes nothing") is ordinary and needs no special case beyond the incref's null guard: it is
+// what a view over an immortal `.rdata` blob, or over an array that never allocated a buffer, correctly has.
+//
+// TRIVIAL elements only — the view duplicates heap POINTERS without a per-element retain, so a managed
+// element would be destroyed twice; `requireTrivialArrayElementForCopy` rejects the managed cases (E2015).
+// `exit` is caller-owned (passed IN, the `emitLoadElem` shape): the new record is minted in `cur`, which
+// dominates `exit`, so it is live there for the caller's `ret`/`errorReturn`. Threads `cur` and returns the
+// new record value.
+function emitArrayView(module StdModule, func IrFunction, cur IrBlock, exit IrBlock, srcRecord ValueId, start ValueId, sliceLen ValueId, ids ValueMinter) returns ValueId
+	var baseJoin = module.addBlock(func, label: b"vwbase")
+
 	let es = emitLoadField(module, block: cur, arr: srcRecord, offset: ArrElementSizeOffset, ids: ids)
 	let dtor = emitLoadField(module, block: cur, arr: srcRecord, offset: ArrElementDestroyOffset, ids: ids)
 	let newRec = ids.mint()
 	module.appendOp(cur, op: StdOp.call(newRec, callee: ArrCreateName, args: twoArgs(es, second: dtor)))
-	let reserved = ids.mint()
-	module.appendOp(cur, op: StdOp.call(reserved, callee: ArrReserveName, args: twoArgs(newRec, second: sliceLen)))
 
-	// Reload both buffers AFTER the reserve (it may have allocated the new one), then copy `[start, start+sliceLen)`.
 	let srcBuffer = emitLoadField(module, block: cur, arr: srcRecord, offset: ArrBufferOffset, ids: ids)
-	let newBuffer = emitLoadField(module, block: cur, arr: newRec, offset: ArrBufferOffset, ids: ids)
-	let srcAddr = emitSlotAddr(module, block: cur, buffer: srcBuffer, index: start, elementSize: es, ids: ids)
-	let byteCount = emitBin(module, block: cur, a: sliceLen, b: es, opcode: StdBinOpcode.mul, ids: ids)
-	var afterCopy = emitForwardCopy(module, func: func, cur: cur, dest: newBuffer, src: srcAddr, byteCount: byteCount, ids: ids)
+	let viewBuffer = emitSlotAddr(module, block: cur, buffer: srcBuffer, index: start, elementSize: es, ids: ids)
+	emitStoreField(module, block: cur, arr: newRec, offset: ArrBufferOffset, value: viewBuffer)
+	emitStoreField(module, block: cur, arr: newRec, offset: ArrLengthOffset, value: sliceLen)
+	let sentinel = emitConst(module, block: cur, value: ArrViewCapacitySentinel, ids: ids)
+	emitStoreField(module, block: cur, arr: newRec, offset: ArrCapacityOffset, value: sentinel)
 
-	emitStoreField(module, block: afterCopy, arr: newRec, offset: ArrLengthOffset, value: sliceLen)
-	module.setTerminator(afterCopy, op: StdOp.branch(exit.id))
+	let base = emitSharedAllocationBase(module, func: func, cur: cur, join: baseJoin, record: srcRecord, ids: ids)
+
+	// baseJoin: record the debt, then take out the second ownership it names.
+	emitStoreField(module, block: baseJoin, arr: newRec, offset: ArrParentOffset, value: base)
+	var afterIncref = emitRefcountSharedBase(module, func: func, cur: baseJoin, base: base, callee: MmIncrefName, ids: ids)
+	module.setTerminator(afterIncref, op: StdOp.branch(exit.id))
+
 	return newRec
-end 'emitArrayRangeCopy'
+end 'emitArrayView'
 
 // --- The runtime functions ---
 
@@ -703,12 +827,28 @@ end 'emitArrayRangeCopy'
 // copy of the array's LIVE bytes. Every in-place mutator calls this before its first buffer write, so a write
 // can never reach memory the record does not own.
 //
-// The only non-owned buffer that exists at this slice is the byte-string literal's IMMORTAL `.rdata` blob,
-// which `emitBufferIsRdata` recognizes; anything else is private and writable and returns untouched. Slice B
-// adds a second trigger — a heap buffer whose own refcount says it is SHARED — as another arm of THIS test,
-// without moving the check or touching a call site. (It is a second arm here and NOT in `emitBufferIsRdata`:
-// a shared heap buffer is un-WRITABLE but still perfectly freeable, so it is not the same question the
-// sentinel answers, and merging the two would hand `__arr_decref` a buffer it must release and never free.)
+// ⭐ **THERE ARE TWO TRIGGERS, AND THEY ARE THE TWO DIRECTIONS OF SHARING (P1.7 COW slice B).** Slice A
+// shipped the first and promised the second would arrive as another arm of THIS test, without moving the
+// check or touching a call site; it did.
+//
+//  1. **`capacity@16 < 0` — the buffer is NOT this record's** (`emitBufferNotOwned`): a byte-string
+//     literal's immortal `.rdata` blob, or a zero-copy VIEW's interior pointer into someone else's
+//     allocation. Writing either in place is a fault or a corruption of another array's elements.
+//  2. **`capacity@16 >= 0` AND THE BUFFER'S OWN REFCOUNT IS NON-ZERO — an OWNER whose bytes are being
+//     VIEWED.** The record may write its own buffer in general; it may not while a view is reading it.
+//
+// ⭐ **ARM 2 IS THE HALF NEITHER REFERENCE HAS, AND IT IS WHY SHARING CAN BE REAL AT ALL.** A COW check
+// that fires only for the viewer protects the parent from the slice and leaves the slice unprotected from
+// the parent — a one-directional hole. The bootstrap's would-be equivalent, `maxon_cow_struct_detach`,
+// tests `refcount != 1`, is emitted into every binary, and is CALLED FROM NOWHERE; v1's `cow_check` is
+// likewise only ever reached from the copy's side. `slice-cow-modify-original` is the spec that says the
+// hole is not acceptable, and this arm is what answers it: the parent detaches, keeps its own identity, and
+// leaves the old bytes to the views that are still reading them.
+//
+// ⚠ **THE SENTINEL IS TESTED BEFORE ANY HEADER READ, AND THE ORDER IS LOAD-BEARING.** Arm 2 asks
+// `emitIsSharedAllocation`, which reads a refcount that only exists when the pointer is one `__mm_alloc`
+// RETURNED. A view's `buffer@0` is INTERIOR, so the word it would read is the parent's element DATA;
+// asking arm 2 first would detach (or not) on the value of an element.
 //
 // ⭐ **THE CHECK LIVES HERE, NOT AT THE CALL SITES — and that is a deliberate departure from BOTH references.**
 // The bootstrap emits its COW check per mutation site (`MaxonToStandardConversion.ManagedMemory.cs`) and v1
@@ -738,44 +878,73 @@ end 'emitArrayRangeCopy'
 //  3. **The fresh buffer comes from `__mm_alloc`**, which zeroes — the `[length, capacity)`-reads-ZERO
 //     invariant the whole file leans on. Here it is trivially satisfied (`capacity` is set to `length`, so
 //     that range is empty), but the allocation must never become a raw non-zeroing one.
-//  4. **`length · element_size` LIVE bytes are copied, not `capacity`'s worth** — an rdata blob has no slack
-//     to read anyway, and slice B's shared heap buffer will.
-//  5. **The OLD buffer is NOT freed.** It was never `__mm_alloc`'d, so `__mm_free` on it corrupts the
-//     allocator. `__arr_grow` used to gate its old-buffer free on its own inline copy of the sentinel test
-//     for exactly this reason, and no longer needs one at all — after the detach at its head, the buffer it
-//     is replacing is always owned.
+//  4. **`length · element_size` LIVE bytes are copied, not `capacity`'s worth** — and for a VIEW that is
+//     exactly its own window, because `buffer@0` already points at the view's first element. There is no
+//     `start` arithmetic here and there must not be: the record's `length@8` IS the window's length.
+//  5. **The OLD buffer is RELEASED, NOT FREED, AND ONLY AFTER THE COPY.** It is released through
+//     `emitReleaseSharedBase`, so an rdata blob (base 0) is left alone, a view's parent is decref'd, and an
+//     owner detaching from its own viewed buffer gives up its share of it. ⚠ The release MUST follow the
+//     copy: a view whose parent has already dropped is the LAST owner of those bytes, so the decref frees
+//     them, and reading them afterwards is a use-after-free.
 //
 // The published `capacity@16` is `length` — the buffer holds exactly the live elements and no slack, which is
-// also what the reference compiler reports after it detaches (`b"hi"`, then `set`, then `capacity()` → 2).
+// also what the reference compiler reports after it detaches (`b"hi"`, then `set`, then `capacity()` → 2) —
+// and `parent@32` returns to 0, because a record that has just copied its bytes out owes nothing to anyone.
 function buildArrCowDetach(module StdModule)
 	var func = IrFunction.createFromStd(ArrCowDetachName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry")
+	var checkShared = module.addBlock(func, label: b"chkshared")
+	var checkRc = module.addBlock(func, label: b"chkrc")
 	var detach = module.addBlock(func, label: b"detach")
+	var baseJoin = module.addBlock(func, label: b"basejoin")
 	let done = module.addBlock(func, label: b"done")
 
 	emitParams(module, block: entry, count: 1)
 	let arr = 0 as ValueId
 
-	// entry: an already-private buffer needs nothing.
-	let isRdata = emitBufferIsRdata(module, block: entry, arr: arr, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(isRdata, thenBlockId: detach.id, elseBlockId: done.id))
+	// entry — ARM 1: a buffer that is not this record's must be replaced before any write. Asked FIRST, so
+	// the header read below is only ever reached on a pointer that HAS a header (see the ordering note).
+	let notOwned = emitBufferNotOwned(module, block: entry, arr: arr, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(notOwned, thenBlockId: detach.id, elseBlockId: checkShared.id))
 
-	// detach: allocate a private buffer sized to the live bytes and copy them across.
-	let length = emitLoadField(module, block: detach, arr: arr, offset: ArrLengthOffset, ids: ids)
-	let es = emitLoadField(module, block: detach, arr: arr, offset: ArrElementSizeOffset, ids: ids)
-	let liveBytes = emitBin(module, block: detach, a: length, b: es, opcode: StdBinOpcode.mul, ids: ids)
-	let bufferDtor = emitConst(module, block: detach, value: TrivialElementDestroy, ids: ids)
+	// checkShared: an owner with no buffer at all (an array that never grew) has nothing to share and
+	// nothing to write; the mutator that follows will grow it.
+	let ownBuf = emitLoadField(module, block: checkShared, arr: arr, offset: ArrBufferOffset, ids: ids)
+	let zeroBuf = emitConst(module, block: checkShared, value: 0, ids: ids)
+	let hasBuf = emitCmp(module, block: checkShared, a: ownBuf, b: zeroBuf, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(checkShared, op: StdOp.condBranch(hasBuf, thenBlockId: checkRc.id, elseBlockId: done.id))
+
+	// checkRc — ARM 2: the buffer is this record's, but is anyone else holding it? `emitIsSharedAllocation`
+	// owns what the count means (`owners - 1`, so sole ownership is 0), and the only thing that can hold a
+	// second reference to an element buffer is a VIEW — so "shared" here reads literally as "someone is
+	// reading these bytes", and the write must go elsewhere.
+	let viewed = emitIsSharedAllocation(module, block: checkRc, ptr: ownBuf, ids: ids)
+	module.setTerminator(checkRc, op: StdOp.condBranch(viewed, thenBlockId: detach.id, elseBlockId: done.id))
+
+	// detach: read the allocation this record owes a release to BEFORE anything is republished — the answer
+	// is derived from the very `capacity`/`buffer`/`parent` fields the publish below overwrites.
+	let base = emitSharedAllocationBase(module, func: func, cur: detach, join: baseJoin, record: arr, ids: ids)
+
+	// baseJoin: allocate a private buffer sized to the live bytes and copy them across.
+	let length = emitLoadField(module, block: baseJoin, arr: arr, offset: ArrLengthOffset, ids: ids)
+	let es = emitLoadField(module, block: baseJoin, arr: arr, offset: ArrElementSizeOffset, ids: ids)
+	let liveBytes = emitBin(module, block: baseJoin, a: length, b: es, opcode: StdBinOpcode.mul, ids: ids)
+	let bufferDtor = emitConst(module, block: baseJoin, value: TrivialElementDestroy, ids: ids)
 	let newBuf = ids.mint()
-	module.appendOp(detach, op: StdOp.call(newBuf, callee: MmAllocName, args: twoArgs(liveBytes, second: bufferDtor)))
-	let oldBuf = emitLoadField(module, block: detach, arr: arr, offset: ArrBufferOffset, ids: ids)
-	var afterCopy = emitForwardCopy(module, func: func, cur: detach, dest: newBuf, src: oldBuf, byteCount: liveBytes, ids: ids)
+	module.appendOp(baseJoin, op: StdOp.call(newBuf, callee: MmAllocName, args: twoArgs(liveBytes, second: bufferDtor)))
+	let oldBuf = emitLoadField(module, block: baseJoin, arr: arr, offset: ArrBufferOffset, ids: ids)
+	var afterCopy = emitForwardCopy(module, func: func, cur: baseJoin, dest: newBuf, src: oldBuf, byteCount: liveBytes, ids: ids)
 
-	// afterCopy: publish the private buffer. The old one is left alone — see trap 5.
+	// afterCopy: publish the private buffer, then release the old allocation — in that order, and never
+	// before the copy (see trap 5). `base` is a `baseJoin` block arg, and `baseJoin` dominates here.
 	emitStoreField(module, block: afterCopy, arr: arr, offset: ArrBufferOffset, value: newBuf)
 	emitStoreField(module, block: afterCopy, arr: arr, offset: ArrCapacityOffset, value: length)
-	module.setTerminator(afterCopy, op: StdOp.branch(done.id))
+	let noParent = emitConst(module, block: afterCopy, value: 0, ids: ids)
+	emitStoreField(module, block: afterCopy, arr: arr, offset: ArrParentOffset, value: noParent)
+	var afterRelease = emitRefcountSharedBase(module, func: func, cur: afterCopy, base: base, callee: MmDecrefName, ids: ids)
+	module.setTerminator(afterRelease, op: StdOp.branch(done.id))
 
 	module.setTerminator(done, op: StdOp.retVoid)
 
@@ -863,8 +1032,6 @@ function buildArrGrow(module StdModule)
 	var grow = module.addBlock(func, label: b"grow")
 	var sizeOverflow = module.addBlock(func, label: b"overflow")
 	var alloc = module.addBlock(func, label: b"alloc")
-	var freeOld = module.addBlock(func, label: b"freeold")
-	var publish = module.addBlock(func, label: b"publish")
 	let done = module.addBlock(func, label: b"done")
 
 	emitParams(module, block: entry, count: 2)
@@ -908,21 +1075,19 @@ function buildArrGrow(module StdModule)
 	let oldBytes = emitBin(module, block: alloc, a: oldLen, b: es, opcode: StdBinOpcode.mul, ids: ids)
 	var afterCopy = emitForwardCopy(module, func: func, cur: alloc, dest: newBuf, src: oldBuf, byteCount: oldBytes, ids: ids)
 
-	// afterCopy: free the OLD buffer if there was one, else publish. It needs no "is this buffer MINE to free?"
-	// test: the detach at `entry` already replaced any non-owned buffer, so whatever is here was `__mm_alloc`'d.
-	// That test used to live here as a second `emitBufferIsRdata` in all but name; the remaining `oldBuf != 0`
-	// guard is a different question — an array that never grew has no buffer at all.
-	let zero = emitConst(module, block: afterCopy, value: 0, ids: ids)
-	let hadBuf = emitCmp(module, block: afterCopy, a: oldBuf, b: zero, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(afterCopy, op: StdOp.condBranch(hadBuf, thenBlockId: freeOld.id, elseBlockId: publish.id))
+	// afterCopy: release the OLD buffer if there was one, then publish the new one. It needs no "is this
+	// buffer MINE?" test: the detach at `entry` already replaced any non-owned buffer, so whatever is here
+	// was `__mm_alloc`'d and this record owns it. That test used to live here as a second
+	// `emitBufferNotOwned` in all but name; what remains is the ordinary null-guarded release every owner
+	// owes on its base, which is why it is the shared `emitRefcountSharedBase` rather than a fourth copy —
+	// an array that never grew simply has a base of 0. (Post-detach this record IS the last owner, so
+	// `__mm_decref` and `__mm_free` are equivalent here today; using the one rule everywhere is what stops
+	// them diverging tomorrow, and a mistaken decref leaks loudly where a mistaken free corrupts silently.)
+	var afterRelease = emitRefcountSharedBase(module, func: func, cur: afterCopy, base: oldBuf, callee: MmDecrefName, ids: ids)
 
-	let oldFreed = ids.mint()
-	module.appendOp(freeOld, op: StdOp.call(oldFreed, callee: MmFreeName, args: argsOf(oldBuf)))
-	module.setTerminator(freeOld, op: StdOp.branch(publish.id))
-
-	emitStoreField(module, block: publish, arr: arr, offset: ArrBufferOffset, value: newBuf)
-	emitStoreField(module, block: publish, arr: arr, offset: ArrCapacityOffset, value: newCap)
-	module.setTerminator(publish, op: StdOp.branch(done.id))
+	emitStoreField(module, block: afterRelease, arr: arr, offset: ArrBufferOffset, value: newBuf)
+	emitStoreField(module, block: afterRelease, arr: arr, offset: ArrCapacityOffset, value: newCap)
+	module.setTerminator(afterRelease, op: StdOp.branch(done.id))
 
 	module.setTerminator(done, op: StdOp.retVoid)
 
@@ -1411,23 +1576,34 @@ function buildArrRemove(module StdModule)
 	module.functions.push(func)
 end 'buildArrRemove'
 
-// `__arr_slice(arr, start, end) -> (newArrPtr, flag)` — a NEW independent array over elements `[start, end)`
-// (throwing). The range is out of bounds — throws `ArrayError.indexOutOfBounds` — when `end > length` OR
+// `__arr_slice(arr, start, end) -> (newArrPtr, flag)` — a new array over elements `[start, end)`, observably
+// independent and built in O(1) as a zero-copy view (throwing). The range is out of bounds — throws `ArrayError.indexOutOfBounds` — when `end > length` OR
 // `start > end` OR either index is NEGATIVE. `end > length` / `start > end` mirror the reference compiler's
 // `LowerManagedMemSlice` (and `stdlib/Array.maxon`'s `slice`) and together also catch `start > length` (if
 // `start <= end` then `end >= start > length` trips `end > length`; otherwise `start > end` trips), so
 // `slice(5, endIndex: 5)` on a length-3 array throws via `end > length`. The explicit `start < 0` / `end < 0`
 // guards are what stop a NEGATIVE index — signed compares never catch it (`end > length` is `-1 > 3` = FALSE,
 // and `start > end` misses `slice(-1, endIndex: 2)` since `-1 > 2` is FALSE), so it would otherwise address
-// `srcBuffer + start·elementSize` BEFORE the buffer (an OOB read). An empty slice (`start == end`, in bounds)
-// yields a valid length-0 array. `emitArrayRangeCopy` does the copy; the result is never a view.
+// `srcBuffer + start·elementSize` BEFORE the buffer (an OOB read). `emitArrayView` builds the result.
+//
+// ⭐ **A VIEW'S BOUNDS ARE ITS OWN `length@8`, WHICH IS WHAT KEEPS A SLICE FROM BECOMING AN OOB READ.**
+// `get`/`set`/`first`/`last`/`remove` bounds-check against the record they are handed and stride from that
+// record's `buffer@0` — which for a view is already its first element — so `sub.get(i)` can address the
+// window and nothing else. `sub` cannot see its parent's tail even though the bytes are right there.
+//
+// ⚠ **AN EMPTY SLICE (`start == end`, in bounds) SHARES like any other**, rather than short-circuiting to a
+// fresh empty array: it is a length-0 view holding one reference to the parent's allocation. That is the
+// deliberate choice — a special case here would be a second construction of a record to keep correct, and
+// the general path is already right (its `emitSlotAddr` is `base + start·es`, never dereferenced at length
+// 0, and its `parent@32` is simply 0 when the source never allocated a buffer). The cost is that an empty
+// slice keeps its parent's bytes alive until it drops, which no program can observe.
 function buildArrSlice(module StdModule)
 	var func = IrFunction.createFromStd(ArrSliceName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(3)
 
 	var entry = module.addBlock(func, label: b"entry")
 	var oob = module.addBlock(func, label: b"oob")
-	var copy = module.addBlock(func, label: b"copy")
+	var view = module.addBlock(func, label: b"view")
 	var ret = module.addBlock(func, label: b"ret")
 
 	emitParams(module, block: entry, count: 3)
@@ -1445,20 +1621,21 @@ function buildArrSlice(module StdModule)
 	let anyErr = emitBin(module, block: entry, a: badRange, b: negativeIndex, opcode: StdBinOpcode.bitOr, ids: ids)
 	let zero = emitConst(module, block: entry, value: 0, ids: ids)
 	let violated = emitCmp(module, block: entry, a: anyErr, b: zero, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(violated, thenBlockId: oob.id, elseBlockId: copy.id))
+	module.setTerminator(entry, op: StdOp.condBranch(violated, thenBlockId: oob.id, elseBlockId: view.id))
 
 	emitOobReturn(module, block: oob, ids: ids)
 
-	let sliceLen = emitBin(module, block: copy, a: endIndex, b: start, opcode: StdBinOpcode.sub, ids: ids)
-	let newRec = emitArrayRangeCopy(module, func: func, cur: copy, exit: ret, srcRecord: arr, start: start, sliceLen: sliceLen, ids: ids)
+	let sliceLen = emitBin(module, block: view, a: endIndex, b: start, opcode: StdBinOpcode.sub, ids: ids)
+	let newRec = emitArrayView(module, func: func, cur: view, exit: ret, srcRecord: arr, start: start, sliceLen: sliceLen, ids: ids)
 	emitOkReturn(module, block: ret, value: newRec, ids: ids)
 
 	module.functions.push(func)
 end 'buildArrSlice'
 
-// `__arr_clone(arr) -> newArrPtr` — a fresh INDEPENDENT deep copy of the whole array (non-throwing). It is
-// `slice(0, length)` — always in bounds — so it reuses `emitArrayRangeCopy` directly with `start = 0`,
-// `sliceLen = length` and needs no bounds check (the reference `Array.clone` is literally `slice(0, len)`).
+// `__arr_clone(arr) -> newArrPtr` — an observably independent copy of the whole array (non-throwing), built
+// in O(1) as a zero-copy view that detaches at the first write from either side. It is `slice(0, length)` —
+// always in bounds — so it reuses `emitArrayView` directly with `start = 0`, `sliceLen = length` and needs
+// no bounds check (the reference `Array.clone` is literally `slice(0, len)`).
 function buildArrClone(module StdModule)
 	var func = IrFunction.createFromStd(ArrCloneName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
@@ -1471,7 +1648,7 @@ function buildArrClone(module StdModule)
 
 	let length = emitLoadField(module, block: entry, arr: arr, offset: ArrLengthOffset, ids: ids)
 	let start = emitConst(module, block: entry, value: 0, ids: ids)
-	let newRec = emitArrayRangeCopy(module, func: func, cur: entry, exit: ret, srcRecord: arr, start: start, sliceLen: length, ids: ids)
+	let newRec = emitArrayView(module, func: func, cur: entry, exit: ret, srcRecord: arr, start: start, sliceLen: length, ids: ids)
 	module.setTerminator(ret, op: StdOp.ret(newRec))
 
 	module.functions.push(func)
@@ -1544,18 +1721,30 @@ end 'buildArrAppend'
 // takes the direct buffer free unchanged (no golden moves — the array helpers are `__`-prefixed, out of the
 // spec fragments, so this whole restructuring is invisible to them).
 //
-// ⚠ **THE RDATA-BUFFER SEAM (P1.7 slice 2).** A byte-string literal (`b"…"`) is an owned heap record whose
-// `buffer@0` points into IMMORTAL `.rdata` and whose `capacity@16` is the sentinel `ArrRdataCapacitySentinel`
-// (< 0). Freeing that buffer would `__mm_free` a `.rdata` address that was never `__mm_alloc`'d (a fault), so
-// the last owner frees the RECORD alone when the capacity is negative — the buffer free is gated on
-// `capacity >= 0` (an OWNED, grown buffer). A byte-string is `Array with Byte`, a TRIVIAL element, so it never
-// reaches the managed walk. An owned array (capacity >= 0) reaches the existing buffer path unchanged.
+// ⭐ **THE BUFFER IS RELEASED THROUGH THE SENTINEL LADDER, NOT FREED DIRECTLY** (P1.7 slices 2 and COW B).
+// `emitSharedAllocationBase` answers which allocation — if any — this record owes a `__mm_decref` to, and
+// `emitReleaseSharedBase` pays it. That one call covers all three record kinds and is the same pair
+// `__arr_cow_detach` uses, so the two cannot disagree about what a record owns:
 //
-// The sentinel test itself is `emitBufferIsRdata`, shared with `__arr_cow_detach`; what differs is the
-// conclusion drawn from it — "do not FREE this at death" here, "replace it before a WRITE" there. Sharing the
-// test is what makes the pair correct in sequence: a literal that was MUTATED detached first, so it no longer
-// answers to the sentinel and the buffer freed here is the private one the detach allocated, never the blob;
-// a literal that was only READ still answers to it and still frees the record alone.
+//   * an OWNER's base is its own `buffer@0` — `__mm_decref` reclaims it at the LAST owner, so a buffer still
+//     under a view survives its parent record's death and the view keeps reading valid bytes;
+//   * a VIEW's base is `parent@32` — the shared allocation, released here; its own interior `buffer@0` is
+//     never freed, and must not be, since `__mm_free` wants the pointer `__mm_alloc` returned;
+//   * a byte-string LITERAL's base is 0 — the `.rdata` blob was never `__mm_alloc`'d, so nothing is owed and
+//     nothing is freed (`__mm_free`ing a `.rdata` address faults).
+//
+// ⚠ v1 paid for the twin of this three times (`stdlib/Internals.maxon:3465-3472`): a new non-owned-buffer
+// kind must be taught to the DROP path, not only to the write check. The ladder is shared precisely so that
+// teaching it once is enough — a literal that was MUTATED detached first and is now an owner with a private
+// buffer; one that was only READ still owes nothing.
+//
+// ⚠ The managed-element walk runs UNCONDITIONALLY (behind its own `element_destroy@40` gate) rather than
+// only for the last owner of the buffer, and that is sound rather than lucky: a managed-element array can
+// never be SHARED, because `requireTrivialArrayElementForCopy` rejects `slice`/`clone`/`append` on one
+// (E2015) and those are the only operations that mint a view. Its buffer's refcount is therefore always 0
+// here. Gating the walk on that would be a branch no program can execute, which is the one thing this
+// runtime consistently refuses to emit; the day managed elements can be viewed, this is the note that says
+// what has to change.
 function buildArrDecref(module StdModule)
 	var func = IrFunction.createFromStd(ArrDecrefName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
@@ -1563,9 +1752,8 @@ function buildArrDecref(module StdModule)
 	var entry = module.addBlock(func, label: b"entry")
 	var lower = module.addBlock(func, label: b"lower")
 	var release = module.addBlock(func, label: b"release")
-	var checkBuf = module.addBlock(func, label: b"checkbuf")
-	var checkDtor = module.addBlock(func, label: b"checkdtor")
-	var freeBuf = module.addBlock(func, label: b"freebuf")
+	var releaseBuf = module.addBlock(func, label: b"relbuf")
+	var baseJoin = module.addBlock(func, label: b"basejoin")
 	var freeRec = module.addBlock(func, label: b"freerec")
 
 	emitParams(module, block: entry, count: 1)
@@ -1573,29 +1761,19 @@ function buildArrDecref(module StdModule)
 
 	emitRefcountCheckToLastOwner(module, entry: entry, lower: lower, record: record, lastOwner: release, ids: ids)
 
-	// release: an rdata-backed buffer is immortal and must NOT be freed — skip straight to freeing the record.
-	// An owned buffer falls to `checkBuf`.
-	let isRdata = emitBufferIsRdata(module, block: release, arr: record, ids: ids)
-	module.setTerminator(release, op: StdOp.condBranch(isRdata, thenBlockId: freeRec.id, elseBlockId: checkBuf.id))
+	// release: destroy the live managed elements `[0, length)` before the buffer goes (the shared gate skips a
+	// trivial-element array). An array that never allocated a buffer has length 0, so the walk is empty and
+	// needs no separate guard.
+	let buffer = emitLoadField(module, block: release, arr: record, offset: ArrBufferOffset, ids: ids)
+	let length = emitLoadField(module, block: release, arr: record, offset: ArrLengthOffset, ids: ids)
+	let es = emitLoadField(module, block: release, arr: record, offset: ArrElementSizeOffset, ids: ids)
+	let start = emitConst(module, block: release, value: 0, ids: ids)
+	var afterWalk = emitDestroyRangeIfManaged(module, func: func, cur: release, record: record, buffer: buffer, start: start, stop: length, elementSize: es, ids: ids)
+	module.setTerminator(afterWalk, op: StdOp.branch(releaseBuf.id))
 
-	// checkBuf: an empty array never allocated a buffer (nor any element) — free the record directly. An
-	// allocated buffer falls to `checkDtor`, which decides whether its elements must be destroyed first.
-	let buffer = emitLoadField(module, block: checkBuf, arr: record, offset: ArrBufferOffset, ids: ids)
-	let zero = emitConst(module, block: checkBuf, value: 0, ids: ids)
-	let hasBuf = emitCmp(module, block: checkBuf, a: buffer, b: zero, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(checkBuf, op: StdOp.condBranch(hasBuf, thenBlockId: checkDtor.id, elseBlockId: freeRec.id))
-
-	// checkDtor: destroy the live managed elements `[0, length)` before the buffer free (the shared gate skips a
-	// trivial-element array, which frees the buffer directly).
-	let length = emitLoadField(module, block: checkDtor, arr: record, offset: ArrLengthOffset, ids: ids)
-	let es = emitLoadField(module, block: checkDtor, arr: record, offset: ArrElementSizeOffset, ids: ids)
-	let start = emitConst(module, block: checkDtor, value: 0, ids: ids)
-	var afterWalk = emitDestroyRangeIfManaged(module, func: func, cur: checkDtor, record: record, buffer: buffer, start: start, stop: length, elementSize: es, ids: ids)
-	module.setTerminator(afterWalk, op: StdOp.branch(freeBuf.id))
-
-	let bufFreed = ids.mint()
-	module.appendOp(freeBuf, op: StdOp.call(bufFreed, callee: MmFreeName, args: argsOf(buffer)))
-	module.setTerminator(freeBuf, op: StdOp.branch(freeRec.id))
+	let base = emitSharedAllocationBase(module, func: func, cur: releaseBuf, join: baseJoin, record: record, ids: ids)
+	var afterRelease = emitRefcountSharedBase(module, func: func, cur: baseJoin, base: base, callee: MmDecrefName, ids: ids)
+	module.setTerminator(afterRelease, op: StdOp.branch(freeRec.id))
 
 	let recFreed = ids.mint()
 	module.appendOp(freeRec, op: StdOp.call(recFreed, callee: MmFreeName, args: argsOf(record)))

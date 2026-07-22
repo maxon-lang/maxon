@@ -42,11 +42,14 @@
 let HeaderDestructorOffset = 0 as ByteOffset
 let HeaderSizeOffset = 8 as ByteOffset
 
-// Exported so `StringRuntime.__str_decref` reads the refcount word through the SAME header
-// layout `__mm_decref` does — one source of the header geometry, so the String's own drop and
-// the generic decref cannot disagree about where the refcount lives.
-export let HeaderRefcountOffset = 16 as ByteOffset
-export let HeaderBytes = 24
+// ⭐ **THE HEADER GEOMETRY IS PRIVATE TO THIS FILE, AND STAYS THAT WAY.** Every reader outside it —
+// `StringRuntime.__str_decref`, `ArrayRuntime.__arr_cow_detach`, the struct/union/instance destructor
+// cascades — reaches the refcount through the exported BUILDERS below (`emitRefcountCheckToLastOwner`,
+// `emitIsSharedAllocation`), never by respelling `ptr - HeaderBytes + HeaderRefcountOffset`. That is what
+// makes "where the refcount lives" one fact rather than one per caller: a header that grew a field would
+// be a change to `emitHeaderBase` and nothing else, and a caller that got it wrong could not compile.
+let HeaderRefcountOffset = 16 as ByteOffset
+let HeaderBytes = 24
 
 // The arena a single `osAllocPages` request commits. 64 KiB is Windows' allocation granularity, so
 // a smaller request would round up to it anyway and simply waste the difference.
@@ -64,9 +67,8 @@ export let SlabCursorLabel = b"__slab_cursor"
 export let SlabEndLabel = b"__slab_end"
 export let MmAllocCountLabel = b"__mm_alloc_count"
 
-// No `MmIncrefName`: there is no `__mm_incref` until P1.4 gives it a caller — see `buildMmDecref`'s
-// neighbour note for why it cannot be written correctly before that ruling exists.
 export let SlabAllocName = b"__slab_alloc"
+export let MmIncrefName = b"__mm_incref"
 export let MmAllocName = b"__mm_alloc"
 export let MmDecrefName = b"__mm_decref"
 export let MmFreeName = b"__mm_free"
@@ -175,6 +177,14 @@ end 'ValueMinter'
 // The functions are APPENDED, not prepended: only `mrt_start` must lay out first (its `.text`
 // offset is the PE entry point), and that is `augmentWithRuntime`'s job at the Target tier. Order
 // among the rest is free.
+//
+// ⚠ `__mm_incref` IS DELIBERATELY NOT IN THIS LIST. Every function here has a caller in every
+// heap-using program (a drop calls `__mm_decref`, which calls `__mm_free`; the exit path calls the leak
+// check), so installing them together costs nothing dead. `__mm_incref`'s ONLY caller is the array
+// runtime's zero-copy view, so it is installed by `installArrayRuntime` — with its consumer, under the
+// `usesArray` bit — rather than becoming 31 unreachable bytes in every heap program that never touches
+// an array. That is the same "vocabulary ships with its consumer" rule that deleted it in the first
+// place, applied to WHERE it is installed rather than to WHETHER it exists.
 export function installMmRuntime(module StdModule)
 	buildSlabAlloc(module)
 	buildMmAlloc(module)
@@ -359,30 +369,90 @@ function buildMmAlloc(module StdModule)
 	module.functions.push(func)
 end 'buildMmAlloc'
 
-// ⛔ **THERE IS NO `__mm_incref`, AND ITS ABSENCE IS THE POINT — IT COMES BACK AT P1.4.**
+// ⭐ **`__mm_incref(ptr)` — ONE MORE OWNER. IT IS BACK, WITH THE CONSUMER ITS ABSENCE WAS WAITING FOR.**
 //
-// It was built here and NOTHING CALLED IT. Not one `callq __mm_incref` in any emitted binary: 31
-// bytes of `.text` in every heap-using program, never executed, never proven right. That is this
-// rung's own founding lesson worn as a mistake — the `mintPhi` shape the contract spent a
-// paragraph warning against and then committed anyway, which is why `funcAddr`/`callIndirect` are
-// deferred to P1.2 for the identical reason: **vocabulary must not ship ahead of its consumer.**
+// It was deleted because NOTHING CALLED IT — 31 bytes of `.text` in every heap-using program, never
+// executed, never proven right — under this file's founding rule: **vocabulary must not ship ahead of
+// its consumer.** The rule is unchanged; what changed is that the consumer now exists.
 //
-// ⭐ ITS CONSUMER IS A SECOND OWNER, AND NOTHING AT THIS RUNG CAN MAKE ONE. A box gets a second
-// owner only by being ALIASED (`q = p`) or by CROSSING A CALL BOUNDARY — and which of those
-// increfs, the caller or the callee, IS shv2's ownership calling convention, **deferred to P1.4 by
-// user ruling** (the two reference compilers disagree: the C# bootstrap BORROWS + retains-on-store,
-// v1 CONSUMES). So incref cannot be written correctly here even in principle: the rule that would
-// say WHERE to call it does not exist yet. It returns at P1.4 with that ruling, a call site, and a
-// test that executes it.
+// ⭐ **THE CONSUMER IS `__arr_slice`'s ZERO-COPY VIEW (P1.7 COW slice B).** A view is a second owner of
+// the parent's ELEMENT BUFFER — a separate `__mm_alloc` allocation from either record — so taking a slice
+// increfs that buffer and dropping (or detaching) a view decrefs it. Note WHAT is counted: the buffer, not
+// the record. Both reference compilers refcount the RECORD, where a count of 2 cannot distinguish "two
+// owners of this array" from "someone is viewing my bytes", which is exactly why the bootstrap gives up and
+// eager-copies an owned slice (`MaxonToStandardConversion.Strings.cs:1480`). shv2 is MOVE-ONLY, so a
+// record never has two owners and the buffer's own count is unambiguous: non-zero means "someone is
+// viewing these bytes", which is precisely what `__arr_cow_detach` must ask before an in-place write.
 //
-// ⚠⚠ **WHEN IT RETURNS, IT IS NON-ATOMIC AND THAT IS A DECISION, NOT AN OVERSIGHT** — the same one
-// the shared refcount read-modify-write below already carries, which is why the note lives there now
-// rather than leaving with this function. See `emitRefcountCheckToLastOwner`.
+// ⚠⚠ **NON-ATOMIC, DELIBERATELY** — the same decision the decref read-modify-write below carries, and it
+// becomes `LOCK`-prefixed on the same day for the same reason. See `emitRefcountCheckToLastOwner`.
+//
+// There is no overflow check: the count is `owners - 1` in an i64, and a program cannot hold 2^63 views.
+export function buildMmIncref(module StdModule)
+	var func = IrFunction.createFromStd(MmIncrefName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
 
-// **THE REFCOUNT READ-MODIFY-WRITE EVERY DECREF SHARES.** Read the count through the shared header
-// geometry (`emitHeaderBase`/`HeaderRefcountOffset`, so the header LAYOUT is one fact); on `rc == 0`
-// this is the FINAL owner and control branches to `lastOwner` — the caller's block, which reclaims
-// whatever it must before the memory dies — otherwise the count is lowered by one and the box kept.
+	var entry = module.addBlock(func, label: b"entry")
+	emitParams(module, block: entry, count: 1)
+	let ptr = 0 as ValueId
+
+	emitAdjustRefcount(module, block: entry, ptr: ptr, opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(entry, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildMmIncref'
+
+// The refcount word of the box `ptr` addresses — `[ptr - HeaderBytes + HeaderRefcountOffset]`. ONE of the
+// two places the header geometry is spelled (the other is the store in `emitAdjustRefcount`), so nothing
+// outside this file has to know a header exists.
+function emitLoadRefcount(module StdModule, block IrBlock, ptr ValueId, ids ValueMinter) returns ValueId
+	let header = emitHeaderBase(module, block: block, ptr: ptr, ids: ids)
+	let rc = ids.mint()
+	module.appendOp(block, op: StdOp.loadIndirect(rc, addrId: header, offset: HeaderRefcountOffset, valueType: StdType.i64))
+	return rc
+end 'emitLoadRefcount'
+
+// `refcount <opcode>= 1` — one more owner (`add`) or one fewer (`sub`). The incref and the not-last-owner
+// decref are the SAME four ops differing only in the opcode, so they are written once: a change to how the
+// count is maintained cannot be applied to one direction and missed on the other. The header address is
+// recomputed for the store rather than threaded out of `emitLoadRefcount`, which costs one `sub` and keeps
+// the geometry from leaking into either caller.
+function emitAdjustRefcount(module StdModule, block IrBlock, ptr ValueId, opcode StdBinOpcode, ids ValueMinter)
+	let rc = emitLoadRefcount(module, block: block, ptr: ptr, ids: ids)
+	let oneConst = ids.mint()
+	module.appendOp(block, op: StdOp.const(oneConst, value: 1, valueType: StdType.i64))
+	let adjusted = ids.mint()
+	module.appendOp(block, op: StdOp.binOp(adjusted, lhs: rc, rhs: oneConst, opcode: opcode, operandType: StdType.i64))
+	let header = emitHeaderBase(module, block: block, ptr: ptr, ids: ids)
+	module.appendOp(block, op: StdOp.storeIndirect(header, offset: HeaderRefcountOffset, valueId: adjusted, valueType: StdType.i64))
+end 'emitAdjustRefcount'
+
+// ⭐ **DOES ANYONE BESIDES THIS OWNER HOLD `ptr`?** — ⭐ **THE ONE HOME OF THE `owners - 1` CONVENTION.**
+// A box is born at refcount 0 meaning ONE owner (see `emitRefcountCheckToLastOwner` for why), so "shared"
+// is `rc != 0` and "sole owner" is its negation. Both readers of that convention derive from HERE:
+// `emitRefcountCheckToLastOwner` branches on it, and `ArrayRuntime.__arr_cow_detach` asks it of an array's
+// element BUFFER to decide whether a view is reading the bytes it is about to write.
+//
+// ⚠ Those two live in different files, which is exactly why this is a function and not a comment: were the
+// convention ever to change to a plain owner count, a `rc != 0` open-coded in the array runtime would go on
+// compiling and start answering the opposite question — a shared buffer mutated in place, which is a wrong
+// answer and a corruption, not an error anything reports.
+//
+// ⚠ The caller must already know `ptr` is a pointer `__mm_alloc` RETURNED. An INTERIOR pointer (a view's
+// `buffer@0`) has no header, and the word this reads would be the previous element's data.
+export function emitIsSharedAllocation(module StdModule, block IrBlock, ptr ValueId, ids ValueMinter) returns ValueId
+	let rc = emitLoadRefcount(module, block: block, ptr: ptr, ids: ids)
+	let zeroConst = ids.mint()
+	module.appendOp(block, op: StdOp.const(zeroConst, value: 0, valueType: StdType.i64))
+	let shared = ids.mint()
+	module.appendOp(block, op: StdOp.cmp(shared, lhs: rc, rhs: zeroConst, pred: StdCmpPred.ne, operandType: StdType.i64))
+	return shared
+end 'emitIsSharedAllocation'
+
+// **THE REFCOUNT READ-MODIFY-WRITE EVERY DECREF SHARES.** Ask `emitIsSharedAllocation` (which owns both
+// the header geometry and what the count MEANS); when nobody else holds the box this is the FINAL owner
+// and control branches to `lastOwner` — the caller's block, which reclaims whatever it must before the
+// memory dies — otherwise the count is lowered by one and the box kept.
 // It fills `entry` (the check) and `lower` (the not-last decrement), wiring `entry`'s conditional
 // branch to the caller-supplied `lastOwner`/`lower`. The caller creates all three blocks so their
 // order — and thus its own last-owner blocks — is its to choose.
@@ -406,7 +476,7 @@ end 'buildMmAlloc'
 // ⚠⚠ **NON-ATOMIC, DELIBERATELY, AND THIS COMMENT IS THE DECISION RATHER THAN ITS ABSENCE.** The
 // bootstrap's refcount is `LOCK`-prefixed because it must be; shv2 is SINGLE-THREADED until **R3 @
 // P1.5** brings green threads, and a plain `sub` is the whole cost until then. **THE DAY GREEN
-// THREADS LAND, THIS — AND THE `__mm_incref` THAT RETURNS AT P1.4 — MUST BECOME `LOCK`-PREFIXED**:
+// THREADS LAND, THIS — AND THE `__mm_incref` ABOVE — MUST BECOME `LOCK`-PREFIXED**:
 // a shared box refcounted by two threads with a plain read-modify-write loses updates and frees a
 // live object, which is a use-after-free that no test reproduces reliably. It is written here so
 // that day is reached by READING rather than by a race. (PLAN.md's R1 box exists to stop inertia
@@ -419,20 +489,14 @@ end 'buildMmAlloc'
 // the same day for the same reason: a counter that loses an update reports a leak that did not
 // happen, or hides one that did.
 export function emitRefcountCheckToLastOwner(module StdModule, entry IrBlock, lower IrBlock, record ValueId, lastOwner IrBlock, ids ValueMinter)
-	let header = emitHeaderBase(module, block: entry, ptr: record, ids: ids)
-	let rc = ids.mint()
-	module.appendOp(entry, op: StdOp.loadIndirect(rc, addrId: header, offset: HeaderRefcountOffset, valueType: StdType.i64))
-	let zeroConst = ids.mint()
-	module.appendOp(entry, op: StdOp.const(zeroConst, value: 0, valueType: StdType.i64))
-	let isLast = ids.mint()
-	module.appendOp(entry, op: StdOp.cmp(isLast, lhs: rc, rhs: zeroConst, pred: StdCmpPred.eq, operandType: StdType.i64))
-	module.setTerminator(entry, op: StdOp.condBranch(isLast, thenBlockId: lastOwner.id, elseBlockId: lower.id))
+	// The test is `emitIsSharedAllocation` with its arms swapped, so "0 means one owner" is asserted in one
+	// place and read here rather than restated. `lower` reloads the count instead of threading it out of
+	// `entry`, which costs two ops on a path only a SHARED box takes — and under move-only ownership a
+	// RECORD is never shared, so at this rung that path belongs to array element buffers under a view.
+	let shared = emitIsSharedAllocation(module, block: entry, ptr: record, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(shared, thenBlockId: lower.id, elseBlockId: lastOwner.id))
 
-	let oneConst = ids.mint()
-	module.appendOp(lower, op: StdOp.const(oneConst, value: 1, valueType: StdType.i64))
-	let lowered = ids.mint()
-	module.appendOp(lower, op: StdOp.binOp(lowered, lhs: rc, rhs: oneConst, opcode: StdBinOpcode.sub, operandType: StdType.i64))
-	module.appendOp(lower, op: StdOp.storeIndirect(header, offset: HeaderRefcountOffset, valueId: lowered, valueType: StdType.i64))
+	emitAdjustRefcount(module, block: lower, ptr: record, opcode: StdBinOpcode.sub, ids: ids)
 	module.setTerminator(lower, op: StdOp.retVoid)
 end 'emitRefcountCheckToLastOwner'
 
@@ -969,9 +1033,9 @@ end 'buildMmLeakCheck'
 
 // `ptr - HeaderBytes` — the header's base address. Every header access goes through it, so the one
 // place the payload/header relationship is expressed is here. See the header-layout note above for
-// why this is a subtraction rather than a negative `loadIndirect` offset. Exported so `__str_decref`
-// reaches the refcount through the same subtraction rather than respelling the header geometry.
-export function emitHeaderBase(module StdModule, block IrBlock, ptr ValueId, ids ValueMinter) returns ValueId
+// why this is a subtraction rather than a negative `loadIndirect` offset. Private, like the offsets it
+// pairs with: callers outside this file reach the refcount through the exported builders instead.
+function emitHeaderBase(module StdModule, block IrBlock, ptr ValueId, ids ValueMinter) returns ValueId
 	let headerConst = ids.mint()
 	module.appendOp(block, op: StdOp.const(headerConst, value: HeaderBytes, valueType: StdType.i64))
 	let header = ids.mint()

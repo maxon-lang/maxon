@@ -870,6 +870,332 @@ end 'main'
 0
 ```
 
+### Zero-copy slices
+
+`.slice()` and `.clone()` are **O(1)**: the result shares the source's element buffer until either side
+writes, at which point that side copies out. The sharing is invisible — every case below is valued against
+the reference compiler, which eagerly copies and therefore answers what a correct copy-on-write must too.
+
+<!-- test: slice-capacity-is-a-view-until-written -->
+A slice reports a negative capacity — its buffer is not its own — until a write gives it a private one
+sized to its live elements. This is the one place the sharing is directly observable, and it is what says
+no buffer was allocated: an eager copy would report a grown positive capacity from the moment it was made.
+```maxon
+function main() returns ExitCode
+	let arr = [10, 20, 30, 40, 50]
+	var sub = try arr.slice(1, endIndex: 4) otherwise return 1
+	let notMine = 0 - 1
+	let asView = sub.capacity()
+	try sub.set(0, value: 99) otherwise panic("index 0 is in bounds")
+	let afterWrite = sub.capacity()
+	if asView == notMine and afterWrite == 3 'ok'
+		return 0
+	end 'ok'
+	return 2
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: slice-outlives-its-parent -->
+The parent array dies while the slice is still being read. A view holds a reference to the shared buffer,
+not to the parent record, so the bytes outlive the array they were cut from.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function makeParent() returns IntArray
+	var a = IntArray.create()
+	a.push(10)
+	a.push(20)
+	a.push(30)
+	a.push(40)
+	return a
+end 'makeParent'
+
+function tail(v IntArray) returns IntArray
+	return try v.slice(1, endIndex: 4) otherwise IntArray.create()
+end 'tail'
+
+function main() returns ExitCode
+	let sub = tail(makeParent())
+	let a = try sub.get(0) otherwise 0
+	let b = try sub.get(1) otherwise 0
+	let c = try sub.get(2) otherwise 0
+	return a + b + c
+end 'main'
+```
+```exitcode
+90
+```
+
+<!-- test: slice-bounds-are-its-own-window -->
+A slice is bounded by its OWN length, not the parent's, even though the parent's remaining elements sit
+immediately after it in the same buffer. Reading past the window throws rather than reading a neighbour.
+```maxon
+function main() returns ExitCode
+	let arr = [10, 20, 30, 40, 50]
+	let sub = try arr.slice(1, endIndex: 4) otherwise return 1
+	let past = try sub.get(3) otherwise 77
+	return past
+end 'main'
+```
+```exitcode
+77
+```
+
+<!-- test: slice-of-slice-flattens -->
+Slicing a slice windows within the window, and writing to the inner one leaves the outer one alone.
+```maxon
+function main() returns ExitCode
+	let arr = [10, 20, 30, 40, 50, 60]
+	let s1 = try arr.slice(1, endIndex: 5) otherwise return 1
+	var s2 = try s1.slice(1, endIndex: 3) otherwise return 2
+	let a = try s2.get(0) otherwise 0
+	let b = try s2.get(1) otherwise 0
+	try s2.set(0, value: 7) otherwise panic("index 0 is in bounds")
+	let after = try s1.get(1) otherwise 0
+	if a == 30 and b == 40 and after == 30 and s2.count() == 2 'ok'
+		return 0
+	end 'ok'
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: two-slices-then-write-parent -->
+Two live slices of one array, then writes at both ends of the parent. The parent copies out once; both
+slices keep reading the original bytes.
+```maxon
+function main() returns ExitCode
+	var arr = [10, 20, 30, 40]
+	let v1 = try arr.slice(0, endIndex: 2) otherwise return 1
+	let v2 = try arr.slice(2, endIndex: 4) otherwise return 2
+	try arr.set(0, value: 99) otherwise panic("index 0 is in bounds")
+	try arr.set(3, value: 88) otherwise panic("index 3 is in bounds")
+	let a = try v1.get(0) otherwise 0
+	let b = try v2.get(1) otherwise 0
+	let c = try arr.get(0) otherwise 0
+	let d = try arr.get(3) otherwise 0
+	if a == 10 and b == 40 and c == 99 and d == 88 'ok'
+		return 0
+	end 'ok'
+	return 3
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: slice-parent-grows-while-view-lives -->
+Pushing onto the parent reallocates its buffer. The slice keeps the old one.
+```maxon
+function main() returns ExitCode
+	var arr = [10, 20, 30]
+	let sub = try arr.slice(0, endIndex: 3) otherwise return 1
+	arr.push(40)
+	arr.push(50)
+	let s0 = try sub.get(0) otherwise 0
+	let s2 = try sub.get(2) otherwise 0
+	let a3 = try arr.get(3) otherwise 0
+	if s0 == 10 and s2 == 30 and sub.count() == 3 and a3 == 40 and arr.count() == 5 'ok'
+		return 0
+	end 'ok'
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: append-a-slice-of-self -->
+`append` reads its source AFTER growing its destination, so appending a slice of an array to that same
+array is coherent: the destination copies out first and the slice still names the original bytes.
+```maxon
+function main() returns ExitCode
+	var arr = [1, 2, 3]
+	let sub = try arr.slice(0, endIndex: 2) otherwise return 1
+	arr.append(sub)
+	var sum = 0
+	var i = 0
+	while i < arr.count() 'loop'
+		sum = sum + (try arr.get(i) otherwise 0)
+		i = i + 1
+	end 'loop'
+	let s0 = try sub.get(0) otherwise 0
+	if sum == 9 and arr.count() == 5 and s0 == 1 'ok'
+		return 0
+	end 'ok'
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: slice-of-empty-array-then-push -->
+An empty slice of an array that never allocated a buffer owes nothing to anyone, and still grows normally.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function main() returns ExitCode
+	let empty = IntArray.create()
+	var e = try empty.slice(0, endIndex: 0) otherwise return 1
+	e.push(5)
+	let v = try e.get(0) otherwise 0
+	if v == 5 and e.count() == 1 and empty.count() == 0 'ok'
+		return 0
+	end 'ok'
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: slice-of-byte-string-literal -->
+A slice of a `b"…"` literal views the immortal `.rdata` blob — nothing is owed and nothing is freed — and
+writing to it copies the window out first.
+```maxon
+function main() returns ExitCode
+	let lit = b"hello"
+	var mid = try lit.slice(1, endIndex: 4) otherwise return 1
+	try mid.set(0, value: 88) otherwise panic("index 0 is in bounds")
+	let m0 = try mid.get(0) otherwise 0
+	let m1 = try mid.get(1) otherwise 0
+	let l1 = try lit.get(1) otherwise 0
+	if m0 == 88 and m1 == 108 and l1 == 101 and mid.count() == 3 'ok'
+		return 0
+	end 'ok'
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: both-sides-detach-parent-first -->
+Both sides write. The parent copies out first and gives up the shared buffer, leaving the slice as its
+sole owner; the slice then copies out and reclaims it. A release that ran before the copy would read freed
+bytes here.
+```maxon
+function main() returns ExitCode
+	var arr = [10, 20, 30, 40, 50]
+	var sub = try arr.slice(1, endIndex: 4) otherwise return 1
+	try arr.set(1, value: 91) otherwise panic("index 1 is in bounds")
+	try sub.set(0, value: 92) otherwise panic("index 0 is in bounds")
+	let s0 = try sub.get(0) otherwise 0
+	let s1 = try sub.get(1) otherwise 0
+	let a1 = try arr.get(1) otherwise 0
+	if s0 == 92 and s1 == 30 and a1 == 91 'ok'
+		return 0
+	end 'ok'
+	return 2
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: both-sides-detach-slice-first -->
+The same pair in the other order.
+```maxon
+function main() returns ExitCode
+	var arr = [10, 20, 30, 40, 50]
+	var sub = try arr.slice(1, endIndex: 4) otherwise return 1
+	try sub.set(0, value: 92) otherwise panic("index 0 is in bounds")
+	try arr.set(1, value: 91) otherwise panic("index 1 is in bounds")
+	let s0 = try sub.get(0) otherwise 0
+	let a1 = try arr.get(1) otherwise 0
+	let a2 = try arr.get(2) otherwise 0
+	if s0 == 92 and a1 == 91 and a2 == 30 'ok'
+		return 0
+	end 'ok'
+	return 2
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: every-mutator-detaches-a-view -->
+Every in-place mutator, applied to a slice of one shared array. Each must copy out before it writes, so
+none of the nine writes below may reach the source — the gate is that the source reads back untouched.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function make() returns IntArray
+	var a = IntArray.create()
+	var i = 0
+	while i < 8 'fill'
+		a.push(i)
+		i = i + 1
+	end 'fill'
+	return a
+end 'make'
+
+function main() returns ExitCode
+	let src = make()
+
+	var vClear = try src.slice(1, endIndex: 5) otherwise return 1
+	vClear.clear()
+
+	var vPop = try src.slice(1, endIndex: 5) otherwise return 2
+	let popped = try vPop.pop() otherwise 0 - 1
+
+	var vRemove = try src.slice(2, endIndex: 6) otherwise return 3
+	let removed = try vRemove.remove(0) otherwise 0 - 1
+
+	var vInsert = try src.slice(0, endIndex: 3) otherwise return 4
+	vInsert.insert(1, value: 99)
+
+	var vResize = try src.slice(0, endIndex: 4) otherwise return 5
+	vResize.resize(2)
+
+	var vGrow = try src.slice(0, endIndex: 2) otherwise return 6
+	vGrow.reserve(64)
+	vGrow.push(1000)
+
+	// Not one of those writes may have reached the shared source.
+	var k = 0
+	while k < 8 'check'
+		if (try src.get(k) otherwise 0 - 1) != k 'mismatch'
+			return 7
+		end 'mismatch'
+		k = k + 1
+	end 'check'
+
+	let ok = vClear.count() == 0 and popped == 4 and vPop.count() == 3 and removed == 2 and vRemove.count() == 3 and (try vInsert.get(1) otherwise 0) == 99 and vInsert.count() == 4 and vResize.count() == 2 and vGrow.count() == 3 and (try vGrow.get(2) otherwise 0) == 1000
+	return 0 if ok else 8
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: clone-of-byte-string-literal -->
+```maxon
+function main() returns ExitCode
+	let lit = b"abc"
+	var copy = lit.clone()
+	try copy.set(0, value: 90) otherwise panic("index 0 is in bounds")
+	let c0 = try copy.get(0) otherwise 0
+	let l0 = try lit.get(0) otherwise 0
+	if c0 == 90 and l0 == 97 and copy.count() == 3 'ok'
+		return 0
+	end 'ok'
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+
 <!-- test: array-literal-return-from-function -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
