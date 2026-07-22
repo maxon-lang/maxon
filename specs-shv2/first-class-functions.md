@@ -79,6 +79,31 @@ end 'main'
 42
 ```
 
+## Calling a Function Value as a Statement
+
+A function value is called for its EFFECT the same way a named function is — as a bare-call
+statement, with its result discarded. This is the position a function value whose signature returns
+nothing is called in (a table of callbacks or compiler passes, each stored as a function value and
+driven for effect), and a value-returning function value called this way simply drops its result:
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function record(n Integer) returns Integer
+	return n
+end 'record'
+
+function main() returns ExitCode
+	let f = record
+	f(1)                 // called as a statement; the result is discarded
+	return 0 as ExitCode
+end 'main'
+```
+
+A bare name that is not a function value stays an ordinary call: `frob()` where nothing named `frob`
+is a function-typed local is still resolved as a direct call, so an undefined callee is an
+undefined-function error, not an indirect call.
+
 ## Passing Functions as Arguments
 
 Functions can be passed to other functions via a function-type alias:
@@ -797,6 +822,70 @@ end 'main'
 ```
 ```exitcode
 42
+```
+
+<!-- test: first-class-function.void-value-called-as-statement -->
+<!-- targets: x64-windows, wasm32-wasi -->
+A VOID function value is called at STATEMENT position, for its effect, with no result to bind — the
+call the statement position exists for, and the shape a table of void callbacks is driven by. A void
+function value used to be misreported E3004 ("call to undefined function") because the
+statement-position call path treated the local's name as a direct callee; it now diverts to the same
+indirect-call lowering the expression position uses. The side effect (two increments of a module
+`var`) proves the call actually RAN, not merely that it compiled — a no-op would return 0.
+```maxon
+var sideEffect = 0
+
+function bump()
+	sideEffect = sideEffect + 7
+end 'bump'
+
+function main() returns ExitCode
+	let cb = bump
+	cb()
+	cb()
+	return sideEffect as ExitCode
+end 'main'
+```
+```exitcode
+14
+```
+
+<!-- test: first-class-function.value-called-as-statement-discarded -->
+<!-- targets: x64-windows, wasm32-wasi -->
+A VALUE-returning function value called at statement position discards its result, exactly as a
+value-returning DIRECT call does there. Discarding the first result must not disturb a later call:
+`f(10)` is dropped, `f(41)` yields 42.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function inc(n Integer) returns Integer
+	return n + 1
+end 'inc'
+
+function main() returns ExitCode
+	let f = inc
+	f(10)
+	return f(41)
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: first-class-function.undefined-value-called-as-statement-errors -->
+<!-- targets: x64-windows, wasm32-wasi -->
+The over-acceptance guard. The statement-position indirect-call diversion fires ONLY for a
+function-typed local; a bare name that is no such binding stays a direct call, so a genuinely
+undefined callee at statement position is still E3004 — the diversion widens what compiles, never
+what is silently accepted.
+```maxon
+function main() returns ExitCode
+	cb()
+	return 0 as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:3:2: call to undefined function 'cb'
 ```
 
 <!-- test: first-class-function.field-cross-file -->

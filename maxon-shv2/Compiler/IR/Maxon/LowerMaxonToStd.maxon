@@ -371,11 +371,18 @@ type MaxonToStdLowering
 		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), funcSignatures: project.funcSignatures, signatures: signatures, layoutNeedingFuncs: LayoutNeedingFuncSet.create(), layoutDescriptors: LayoutDescriptorRegistry.create(), globalData: project.globalData, valueTags: ValueTypeTagArray.create(), valueClosureEnv: ValueIdArray.create(), valueNameIds: TypeNameIdArray.create(), currentFuncName: EmptySourceText, implicitLayoutValueId: 0, hasImplicitLayout: false, currentThrows: ThrowsClause.none, currentReturnType: StdReturnType.void, nextValueId: 0}
 	end 'create'
 
+	// The Maxon type TAG a value carries, from the column `lower` pointed at the CURRENT function. The one
+	// read+panic for "this value has a recorded tag" — every SSA value is minted through `Parser.mintValue`
+	// and the column is dense over every ValueId, so a miss is a lowering bug (a value never minted, or
+	// `lower` failing to re-point `valueTags` at the function being walked).
+	function valueTagOf(value ValueId) returns ValueTypeTag
+		return try self.valueTags.get(value) otherwise panic("valueTagOf: value v{value} has no recorded type — every SSA value must be minted through Parser.mintValue, and `lower` must point `valueTags` at the function being walked")
+	end 'valueTagOf'
+
 	// The Std type a VALUE computes in — the truth the arith band's `operandType` carries, and a
 	// single indexed read of the column `lower` pointed at this function.
 	function stdTypeOf(value ValueId) returns StdType
-		let tag = try self.valueTags.get(value) otherwise panic("stdTypeOf: value v{value} has no recorded type — every SSA value must be minted through Parser.mintValue, and `lower` must point `valueTags` at the function being walked")
-		return valueTagToStdType(tag)
+		return valueTagToStdType(self.valueTagOf(value))
 	end 'stdTypeOf'
 
 	function lower() returns StdModule
@@ -754,7 +761,7 @@ type MaxonToStdLowering
 	// FORWARD the caller's own layout slot. B1's acceptance calls come from a non-generic `main` on a
 	// concrete instance, so the forward arm is reached only by a generic-to-generic call.
 	function materializeLayoutArg(receiver ValueId, callee ByteArray, dstBlock IrBlock) returns ValueId
-		let tag = try self.valueTags.get(receiver) otherwise panic("materializeLayoutArg: receiver v{receiver} has no type tag — the column is dense over every ValueId")
+		let tag = self.valueTagOf(receiver)
 		if tag == ValueTypeTag.genericInstance 'concrete'
 			let gid = try self.valueNameIds.get(receiver) otherwise panic("materializeLayoutArg: genericInstance receiver v{receiver} has no name-id (its GenericInstanceId) — the two type columns are dense and in lockstep")
 			let descId = self.mintStdValueId()
@@ -897,7 +904,7 @@ type MaxonToStdLowering
 	// shares its callee parameter's type). A helper because `lowerIndirectCall`'s arm must hand `args` to a
 	// function and touch it no other way (see there).
 	function appendCallIndirect(dstBlock IrBlock, result ValueId, callee ValueId, args ValueIdArray)
-		let resultType = self.stdTypeOf(result)
+		let resultType = self.indirectResultType(result)
 		var argFloatMask = 0 as ArgFloatMask
 		for k in 0 upto args.count() 'eachArg'
 			let arg = try args.get(k) otherwise panic("appendCallIndirect: args.get OOB at {k}")
@@ -907,6 +914,19 @@ type MaxonToStdLowering
 		end 'eachArg'
 		self.stdModule.appendOp(dstBlock, op: StdOp.callIndirect(result, calleeReg: callee, resultType: resultType, argFloatMask: argFloatMask, args: args))
 	end 'appendCallIndirect'
+
+	// The Std type an indirect call CAPTURES its result in — normally the result value's own type. But a
+	// VOID function value (`let cb = doIt; cb()` at statement position, P1.5 #68) has NO result to capture:
+	// like a void DIRECT call, whose return register holds a garbage integer nobody reads
+	// (StdLoweringShared.calleeResultClass), its result is captured as a garbage i64. `stdTypeOf`/
+	// `valueTagToStdType` deliberately PANIC on a void tag — a void value can never be an OPERAND — but a
+	// call RESULT is a def, not an operand, so the void case is handled here rather than by widening that
+	// guard. The `__fnref_` thunk of a void target returns exactly this dummy i64 (Runtime/FnRefThunk), so
+	// the capture register (native) and the `call_indirect` result functype (wasm) agree with it.
+	function indirectResultType(result ValueId) returns StdType
+		let tag = self.valueTagOf(result)
+		return StdType.i64 if tag == ValueTypeTag.void else valueTagToStdType(tag)
+	end 'indirectResultType'
 
 	// ⭐ **`async f(args…)` → SPAWN A GREEN THREAD** (P1.5-B1a). The arguments are slotted to parameter order
 	// (`slotCallArgs`, exactly as `lowerCall`), then spilled into a fixed-size slab argument buffer — one

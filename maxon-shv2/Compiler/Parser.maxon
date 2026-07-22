@@ -5608,7 +5608,18 @@ export type Parser
 			// An identifier followed by `(` is a bare-call statement — the call is evaluated for its
 			// effect and its result discarded (M5). `resultUsed: false` is what makes a VOID call legal
 			// HERE and nowhere else: this is the position that wants no value.
-			_ = try self.parseCall(func, resultUsed: false)
+			//
+			// A FUNCTION-TYPED LOCAL called here (`let cb = doIt; cb()`) is an INDIRECT call through the
+			// value — the SAME diversion `parsePrimary` makes in expression position (P1.5-A1, #68).
+			// Resolve it as a variable reference and let `parsePostfix` apply the trailing `(args)` as an
+			// indirect call, exactly as the expression path does; its result — void, or a value discarded
+			// here like any other bare-call statement — is dropped by the statement's `drainPendingTemps`
+			// tail when it owns heap. Treating `cb` as a direct call instead is what misreported it E3004.
+			if self.calleeIsFunctionTypedLocal() 'functionLocalCallStmt'
+				_ = try self.parsePostfix(func, value: try self.parseVariableReference())
+			end 'functionLocalCallStmt' else 'directCallStmt'
+				_ = try self.parseCall(func, resultUsed: false)
+			end 'directCallStmt'
 		end 'callStmt' else 'unsupported'
 			let tok = self.current()
 			throw ParseError.unsupported("{tok.kind.rawValue} statement", line: tok.line, column: tok.column)
@@ -11249,6 +11260,21 @@ export type Parser
 		return self.emitRuntimeCall(StrEqName, args: args, resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(opTok))
 	end 'emitStrEqCall'
 
+	// ⭐ **IS THE IDENTIFIER AT THE CURSOR A FUNCTION-TYPED LOCAL — the callee of an INDIRECT call?** A
+	// call on such a name (`let f = double; f(21)`) goes THROUGH the value (P1.5-A1), not to a function
+	// NAMED by the identifier. It is the ONE diversion that turns `<name>(` from a direct call into an
+	// indirect one, and it must read the SAME in both positions the grammar reaches a bare `<name>(`:
+	// EXPRESSION position (`parsePrimary`'s `namedPrimary`) and STATEMENT position (`parseStatement`'s
+	// `callStmt`). A non-function local of the same name keeps the direct-call path (`x(5)` with an int
+	// `x` is still "call function x", E3004), and a name that is no local at all is a plain direct call —
+	// so a genuinely undefined statement-position call is still E3004, not silently accepted.
+	//
+	// The cursor must sit on the identifier: both callers guard with `at(identifier)` and a `(` peeked
+	// behind it, so `current().value` is the callee name and `getInfo` is reached only past `contains`.
+	function calleeIsFunctionTypedLocal() returns bool
+		return self.scope.contains(self.current().value) and maxonTypeTag(self.scope.getInfo(self.current().value).varType) == ValueTypeTag.function
+	end 'calleeIsFunctionTypedLocal'
+
 	// A primary expression: an integer literal, a `true`/`false` literal, a CHARACTER literal,
 	// a parenthesized sub-expression, a type-qualified numeric bound (`u16.max`), a call, or a
 	// variable reference. Anything else where an operand is required (an operator, a delimiter,
@@ -11351,10 +11377,9 @@ export type Parser
 				// A LOCAL binding of FUNCTION type shadowed by the same name is called THROUGH its value
 				// — an INDIRECT call (`f(21)` where `let f = double`), not a direct call to a function
 				// NAMED `f` (P1.5-A1). Resolve it as a variable reference and let the postfix loop
-				// (`parsePostfix`) apply the `(args)`. A non-function local named the same as a call
-				// keeps the direct-call path (`x(5)` with an int `x` is still "call function x", E3004),
-				// so only a function-typed local diverts here.
-				if self.scope.contains(self.current().value) and maxonTypeTag(self.scope.getInfo(self.current().value).varType) == ValueTypeTag.function 'functionLocalCall'
+				// (`parsePostfix`) apply the `(args)`. The same diversion — reading the SAME predicate —
+				// runs at statement position (`parseStatement`'s `callStmt`); see `calleeIsFunctionTypedLocal`.
+				if self.calleeIsFunctionTypedLocal() 'functionLocalCall'
 					return try self.parseVariableReference()
 				end 'functionLocalCall'
 

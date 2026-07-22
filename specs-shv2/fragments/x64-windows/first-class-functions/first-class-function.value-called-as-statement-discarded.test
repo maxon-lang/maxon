@@ -1,0 +1,42 @@
+// Test: first-class-function.value-called-as-statement-discarded
+typealias Integer = int(i64.min to i64.max)
+
+function inc(n Integer) returns Integer
+	return n + 1
+end 'inc'
+
+function main() returns ExitCode
+	let f = inc
+	f(10)
+	return f(41)
+end 'main'
+---
+ExitCode: 42
+---
+func @inc {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.leaRegRegImm32 r8, rcx, 1
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.leaRegFunc rbx, [rip + __fnref_inc]
+    x64.movRegImm32 rcx, 10
+    x64.movRegImm32 rdx, 0
+    x64.callReg rbx
+    x64.movRegImm32 rcx, 41
+    x64.movRegImm32 rdx, 0
+    x64.callReg rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

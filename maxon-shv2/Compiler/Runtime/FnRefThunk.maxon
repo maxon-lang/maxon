@@ -121,15 +121,7 @@ function synthesizeFnRefThunk(module StdModule, project Project, targetName Byte
 	let ret = try project.funcReturnTypes.get(targetName) otherwise panic("synthesizeFnRefThunk: no return type for '{String.from(targetName)}'")
 	let userParamCount = sig.paramCount()
 	let thunkParamCount = (userParamCount + 1) as ParamCount
-	let stdReturn = maxonReturnTypeToStdReturnType(ret)
-
-	// A void-returning function value cannot satisfy the indirect signature (its result slot names a value),
-	// and it is uncallable as a value anyway (OPEN #68 — statement-position indirect calls are unsupported).
-	// No `functionRef` of a void function is reached; guard it loudly if one ever is.
-	match stdReturn 'r'
-		value then break 'r'
-		void then panic("synthesizeFnRefThunk: void-returning '{String.from(targetName)}' cannot be used as a first-class value (OPEN #68 — a void function type is uncallable through the uniform indirect ABI)")
-	end 'r'
+	let targetReturn = maxonReturnTypeToStdReturnType(ret)
 
 	var paramTypes = StdTypeArray.create()
 	for i in 0 upto userParamCount 'eachUserParamType'
@@ -138,7 +130,16 @@ function synthesizeFnRefThunk(module StdModule, project Project, targetName Byte
 	// The trailing companion `__env` pointer is always an i64 machine word.
 	paramTypes.push(StdType.i64)
 
-	let func = IrFunction.createFromStd(fnRefThunkName(targetName), returnType: stdReturn, paramCount: thunkParamCount, paramTypes: paramTypes, returnLine: 0)
+	// ⭐ THE UNIFORM `(userargs, env) -> R` INDIRECT ABI ALWAYS YIELDS ONE MACHINE WORD (P1.5 #68). A
+	// value-returning target forwards its result; a VOID target's word is a DUMMY the caller discards —
+	// mirroring a void DIRECT call, whose return register holds a garbage integer nobody reads
+	// (StdLoweringShared.calleeResultClass). The single result slot is not optional: on wasm the
+	// `call_indirect` type check demands the funcref present exactly the one result the caller declares
+	// (`emitCallIndirect` always `local.set`s it), and `LowerMaxonToStd.indirectResultType` declares that
+	// result an i64 for a void function value — so the thunk must return an i64 to match. This is what makes
+	// `let cb = doIt; cb()` callable, where a `panic` stood while statement-position indirect calls were
+	// unsupported.
+	let func = IrFunction.createFromStd(fnRefThunkName(targetName), returnType: fnRefThunkReturnType(targetReturn), paramCount: thunkParamCount, paramTypes: paramTypes, returnLine: 0)
 	var entry = module.addBlock(func, label: b"entry")
 	emitTypedParams(module, block: entry, paramTypes: paramTypes)
 
@@ -147,12 +148,40 @@ function synthesizeFnRefThunk(module StdModule, project Project, targetName Byte
 		forwardArgs.push(i as ValueId)
 	end 'eachArg'
 
-	let result = thunkParamCount
-	module.appendOp(entry, op: StdOp.call(result, callee: targetName, args: forwardArgs))
-	module.setTerminator(entry, op: StdOp.ret(result))
+	let callResult = thunkParamCount
+	module.appendOp(entry, op: StdOp.call(callResult, callee: targetName, args: forwardArgs))
+	emitFnRefThunkReturn(module, block: entry, targetReturn: targetReturn, callResult: callResult)
 
 	module.functions.push(func)
 end 'synthesizeFnRefThunk'
+
+// The thunk's OWN Std return type: a value-returning target's is forwarded unchanged; a VOID target's is
+// `value(i64)`, because the uniform indirect ABI presents exactly one result and `void` would present none
+// (see `synthesizeFnRefThunk`).
+function fnRefThunkReturnType(targetReturn StdReturnType) returns StdReturnType
+	return match targetReturn 'r'
+		value gives targetReturn
+		void gives StdReturnType.value(StdType.i64)
+	end 'r'
+end 'fnRefThunkReturnType'
+
+// Emit the thunk's terminator. A value-returning target returns the forwarded call's result; a VOID target
+// returns a garbage i64 the caller discards (see `emitVoidThunkReturn`). `callResult` is the highest id
+// minted so far, so `callResult + 1` is free for the void case's dummy.
+function emitFnRefThunkReturn(module StdModule, block IrBlock, targetReturn StdReturnType, callResult ValueId)
+	match targetReturn 'r'
+		value then module.setTerminator(block, op: StdOp.ret(callResult))
+		void then emitVoidThunkReturn(module, block: block, dummy: (callResult + 1) as ValueId)
+	end 'r'
+end 'emitFnRefThunkReturn'
+
+// A VOID target's thunk returns a garbage i64 the caller discards — a fresh `const 0` supplies the one
+// machine word the uniform `(userargs, env) -> R` indirect ABI must present, since the forwarded void
+// `call`'s own result slot names no readable value (see `synthesizeFnRefThunk`).
+function emitVoidThunkReturn(module StdModule, block IrBlock, dummy ValueId)
+	module.appendOp(block, op: StdOp.const(dummy, value: 0, valueType: StdType.i64))
+	module.setTerminator(block, op: StdOp.ret(dummy))
+end 'emitVoidThunkReturn'
 
 // The Std type the thunk gives one forwarded USER parameter (P1.5 #78): an f64 for a FLOAT parameter — the
 // one case whose register file (XMM/SIMD) differs from the i64 GPR every other function-value argument uses
