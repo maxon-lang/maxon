@@ -1181,11 +1181,10 @@ type StdToX64Lowering
 			siToFp then self.targetModule.appendOp(dstBlock, op: TargetOp.cvtsi2sdRegReg(dest, src: src))
 			fpToSi then self.targetModule.appendOp(dstBlock, op: TargetOp.cvttsd2siRegReg(dest, src: src))
 			// The MATH INTRINSICS. `sqrtsd` is its own instruction; the other three are ONE
-			// instruction — `roundsd` — separated only by their rounding mode, so they are one arm
-			// each into the same op rather than three near-identical appends.
-			floor then self.targetModule.appendOp(dstBlock, op: TargetOp.roundsdRegReg(dest, src: src, mode: FloatRoundMode.towardNegative))
-			ceil then self.targetModule.appendOp(dstBlock, op: TargetOp.roundsdRegReg(dest, src: src, mode: FloatRoundMode.towardPositive))
-			round then self.targetModule.appendOp(dstBlock, op: TargetOp.roundsdRegReg(dest, src: src, mode: FloatRoundMode.nearestTiesToEven))
+			// instruction — `roundsd` — differing only in the rounding they ask for, and WHICH rounding
+			// each asks for is not an x64 fact: `floatRoundModeFor` answers it once for both native
+			// isels, so this arm states the INSTRUCTION and never re-decides the mode.
+			floor to round then self.targetModule.appendOp(dstBlock, op: TargetOp.roundsdRegReg(dest, src: src, mode: floatRoundModeFor(opcode)))
 			sqrt then self.targetModule.appendOp(dstBlock, op: TargetOp.sqrtsdRegReg(dest, src: src))
 		end 'op'
 	end 'lowerUnaryOp'

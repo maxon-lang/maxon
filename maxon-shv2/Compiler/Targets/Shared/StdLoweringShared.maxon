@@ -110,6 +110,32 @@ function unaryResultClass(opcode StdUnaryOpcode, operandType StdType) returns Re
 	end 'k'
 end 'unaryResultClass'
 
+// ⭐⭐ **WHICH ROUNDING `floor`/`ceil`/`round` ASK FOR** — the ONE place that decision is made, for the
+// same reason `accessWidthFor` and `unaryResultClass` live in this file: it reads a Std OPCODE and
+// nothing else, so it is target-independent by construction, and BOTH native isels need it.
+//
+// ⚠⚠ IT WAS FORKED, AND THE FORK WAS THE DANGEROUS KIND. `StdToX64Conversion` and
+// `StdToArm64Conversion` each spelled the same three `opcode → FloatRoundMode` pairs into their own
+// `match`, one ISA apart, with nothing making the copies agree. `FloatRoundMode` being a shared enum
+// does NOT make the MAPPING shared — it only makes both copies spell the same member names. Change
+// `ceil` to `towardNegative` in one isel and neither site reads as wrong: x64 would quietly compute
+// `floor` where the program said `ceil` while arm64 stayed correct, and the answer — not the build —
+// is what breaks. Worse asymmetrically: the x64 half is pinned by committed goldens
+// (`roundsdRegReg.towardPositive`), the arm64 half only by goldens no Windows or Linux host can
+// regenerate, so the copy with the weaker gate is the one free to drift.
+//
+// `sqrt` is deliberately absent: it is not a `roundsd`/`frint` at all but its own instruction on both
+// ISAs, so asking this function for its rounding is a lowering bug, not a missing arm.
+export function floatRoundModeFor(opcode StdUnaryOpcode) returns FloatRoundMode
+	match opcode 'k'
+		floor then return FloatRoundMode.towardNegative
+		ceil then return FloatRoundMode.towardPositive
+		round then return FloatRoundMode.nearestTiesToEven
+		neg to fpToSi then panic("floatRoundModeFor: Std unary opcode {opcode.name} performs no rounding — only floor/ceil/round lower to a rounding instruction (`roundsd` on x64, `frint` on arm64), and the isels route only those three here")
+		sqrt then panic("floatRoundModeFor: `sqrt` is its own instruction on both ISAs (`sqrtsd` / `fsqrt`), not a rounding mode — an isel asking for its rounding has routed it to the wrong op")
+	end 'k'
+end 'floatRoundModeFor'
+
 // The class a function's RETURN lands in. `void` is `gpr` because a void call still defines a value —
 // see `calleeResultClass`.
 function returnTypeResultClass(returnType StdReturnType) returns RegClass

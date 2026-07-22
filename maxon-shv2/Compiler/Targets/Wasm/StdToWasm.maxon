@@ -586,6 +586,13 @@ end 'setValtype'
 // class (an f64 result recorded i64, or the reverse) — see StdUnaryOpcode's header.
 function unaryResultValType(opcode StdUnaryOpcode, operandType StdType) returns WasmValType
 	return match opcode 'k'
+		// ⚠ MEASURED AND KEPT: collapsing these three identical arms into a range costs the bootstrap's
+		// jump table (it forms one only from 4+ INDIVIDUALLY-NAMED arms dense from ordinal 0, so a
+		// leading range demotes this to a ≤4-compare chain). Kept anyway, and the reason is not
+		// "the cost is small" — it is that `StdLoweringShared.unaryResultClass` is this table's twin,
+		// answers the same question for the native targets, and already reads `neg to logicalNot`.
+		// Leaving one collapsed and the other not is one fact written down twice in two shapes, which
+		// is the divergence a later editor trips on. Compile-time only, wasm-lowering only.
 		neg to logicalNot gives wasmValTypeOf(operandType)
 		siToFp gives WasmValType.f64
 		fpToSi gives WasmValType.i64

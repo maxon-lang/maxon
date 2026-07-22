@@ -550,13 +550,11 @@ type StdToArm64Lowering
 			logicalNot then self.emit(dstRef, op: TargetOp.arm64EorImm(dest, src: src, imm: Arm64LogicalNotMask))
 			siToFp then self.emit(dstRef, op: TargetOp.arm64Scvtf(dest, src: src))
 			fpToSi then self.emit(dstRef, op: TargetOp.arm64Fcvtzs(dest, src: src))
-			// The MATH INTRINSICS, mode for mode with the x64 isel: `fsqrt` is its own instruction and
-			// `frintm`/`frintp`/`frintn` are one instruction with three rounding modes, so the three
-			// name the SAME `FloatRoundMode` members x64's `roundsd` does — the rounding decision is
-			// made once for the language and encoded twice, never decided twice.
-			floor then self.emit(dstRef, op: TargetOp.arm64Frint(dest, src: src, mode: FloatRoundMode.towardNegative))
-			ceil then self.emit(dstRef, op: TargetOp.arm64Frint(dest, src: src, mode: FloatRoundMode.towardPositive))
-			round then self.emit(dstRef, op: TargetOp.arm64Frint(dest, src: src, mode: FloatRoundMode.nearestTiesToEven))
+			// The MATH INTRINSICS: `fsqrt` is its own instruction, and `frintm`/`frintp`/`frintn` are ONE
+			// instruction differing only in its `rmode` field. This arm reads the SAME
+			// `floatRoundModeFor` the x64 isel does — the rounding is decided once for the language and
+			// encoded twice (`arm64FrintOpcode`, `roundsdImm8`), never decided twice.
+			floor to round then self.emit(dstRef, op: TargetOp.arm64Frint(dest, src: src, mode: floatRoundModeFor(opcode)))
 			sqrt then self.emit(dstRef, op: TargetOp.arm64Fsqrt(dest, src: src))
 		end 'op'
 	end 'lowerUnaryOp'
