@@ -128,7 +128,16 @@ let RangePanicExitCode = 1 as MachineWord
 // SpillSlotBytes rather than being respelled as a literal.
 let WriteFileOverlappedSlot = 0
 let WriteFileBytesWrittenSlot = 1
-let WriteFileOutgoingSlots = 2
+// ⭐ THE STACK-ARGUMENT COUNT, stated ONCE. lpOverlapped (slot 0) is the ONLY word the KERNEL reads from the
+// stack — one true stack argument. lpNumberOfBytesWritten (slot 1) is an out-param the kernel WRITES through
+// the r9 pointer, so it needs a reserved scratch slot but is NOT a stack argument. The GT syscall shim copies
+// exactly `WriteFileStackArgWords` words — the low, real-argument slots — from the GT frame onto the system
+// stack (`X64GtRuntime.gtShimStackArgWords`); this file reserves those PLUS the scratch slot. Both the shim's
+// copy count and the reservation derive from this one constant, so the shim can never silently disagree with
+// the arg layout about how many words CreateProcessA/WriteFile pass on the stack.
+export let WriteFileStackArgWords = 1 as MachineWord  // lpOverlapped (slot 0)
+let WriteFileScratchSlots = 1 as MachineWord  // lpNumberOfBytesWritten out-param scratch (slot 1) — not a stack arg
+let WriteFileOutgoingSlots = (WriteFileStackArgWords + WriteFileScratchSlots) as MachineWord
 
 // The six CreateProcessA outgoing stack SLOTS `__gt_process_run`'s frame reserves, past the shadow space.
 // CreateProcessA takes TEN arguments; the first four (lpApplicationName, lpCommandLine, lpProcessAttributes,
@@ -136,13 +145,18 @@ let WriteFileOutgoingSlots = 2
 // values (the STARTUPINFOA and PROCESS_INFORMATION pointers); the middle four are FALSE/0/NULL. SLOT INDICES,
 // not byte displacements — `win64OutgoingArgDisp` turns each into `[rsp + shadow + slot*8]` — so the byte
 // layout lives with ShadowSpaceBytes/SpillSlotBytes rather than being respelled as a literal.
+// ⭐ THE STACK-ARGUMENT COUNT, stated ONCE (like WriteFile above). All six of args 5-10 are real stack
+// arguments the kernel reads — there is NO scratch out-param slot — so the outgoing reservation IS the
+// stack-argument count. The GT syscall shim copies `CreateProcessStackArgWords` words from the GT frame onto
+// the system stack; deriving the reservation from the same constant keeps the shim's copy count from drifting.
+export let CreateProcessStackArgWords = 6 as MachineWord  // args 5-10, all real stack arguments
 let CreateProcessInheritHandlesSlot = 0  // arg5 bInheritHandles = FALSE
 let CreateProcessCreationFlagsSlot = 1   // arg6 dwCreationFlags = 0
 let CreateProcessEnvironmentSlot = 2     // arg7 lpEnvironment = NULL
 let CreateProcessCurrentDirSlot = 3      // arg8 lpCurrentDirectory = NULL
 let CreateProcessStartupInfoSlot = 4     // arg9 lpStartupInfo
 let CreateProcessProcInfoSlot = 5        // arg10 lpProcessInformation
-let CreateProcessOutgoingSlots = 6
+let CreateProcessOutgoingSlots = CreateProcessStackArgWords
 
 // The `[rsp + disp]` displacement of a Win64 OUTGOING stack-argument slot — past the 32-byte shadow space,
 // one `SpillSlotBytes`-sized slot per index. The Win64 ABI fact shared by EVERY >4-argument import call the

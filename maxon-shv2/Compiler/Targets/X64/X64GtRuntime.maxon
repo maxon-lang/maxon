@@ -208,14 +208,6 @@ end 'buildGtTrampolineChunk'
 // the reserved system-stack frame adds so the second push leaves RSP 16-aligned at the `call`.
 let ShimPushedWordBytes = 8 as StackSize
 
-// True Win64 STACK arguments (args 5+, which the kernel reads from `[rsp+0x20..]`) per shimmed import — the
-// words the shim copies from the GT frame to the system stack. Register-only calls (≤4 args) copy nothing.
-// CreateProcessA passes all six of its args 5-10 on the stack; WriteFile passes ONE (arg 5, lpOverlapped) —
-// its other outgoing slot (lpNumberOfBytesWritten) is a register-pointed out-param, not a stack arg, so the
-// kernel does not read it from the stack and it is not copied.
-let CreateProcessStackArgWords = 6 as StackSize
-let WriteFileStackArgWords = 1 as StackSize
-
 // The shim's scratch registers (see the header's register discipline). None is a Win64 argument register.
 let ShimGtReg = X64Register.r11       // currentGt in the guard, then the stack-arg copy shuttle, then reloaded post-call
 let ShimGtRspReg = X64Register.r10    // the GT's RSP across the switch (push/pop-balanced)
@@ -227,15 +219,19 @@ let ShimTibScratchReg = X64Register.rcx  // post-call TIB-restore scratch; dead 
 let ShimDirectLabel = 0 as BlockId
 let ShimDoneLabel = 1 as BlockId
 
-// The count of true Win64 stack arguments (args 5+) a shimmed import takes — keyed on the import so the copy
-// count cannot drift from `win64OutgoingArgBytes`'s view of the same two calls.
+// The count of true Win64 stack arguments (args 5+) a shimmed import takes — the words the shim copies from the
+// GT frame onto the system stack. Read from the ISEL's `*StackArgWords` single source (StdToX64Conversion), the
+// SAME constant that sizes each call's outgoing-arg reservation — so the copy count is DERIVED from the arg
+// layout it must match, never a second copy that could drift into a silent CreateProcessA/WriteFile miscompile
+// (too few words copied ⇒ the kernel reads garbage stack args). A ≤4-arg (register-only) import passes nothing
+// on the stack and copies nothing.
 function gtShimStackArgWords(slotIndex RelocSlotIndex) returns StackSize
 	if slotIndex == iatSlotIndex(IatSlot.CreateProcessA) 'createProcess'
-		return CreateProcessStackArgWords
+		return CreateProcessStackArgWords as StackSize
 	end 'createProcess'
 
 	if slotIndex == iatSlotIndex(IatSlot.WriteFile) 'writeFile'
-		return WriteFileStackArgWords
+		return WriteFileStackArgWords as StackSize
 	end 'writeFile'
 
 	return 0
