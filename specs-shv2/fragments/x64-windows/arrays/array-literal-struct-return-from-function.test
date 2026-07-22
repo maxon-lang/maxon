@@ -103,6 +103,7 @@ func @main {
     x64.movRegImm32 rdx, 0
     x64.movRegReg rcx, rbx
     x64.callDirect __arr_get
+    x64.movRegReg r12, r8
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
@@ -111,16 +112,16 @@ func @main {
     x64.movRegImm32 rdx, 0
     x64.callDirect Point.create
     x64.movRegReg r12, r8
-    x64.movRegReg rcx, r12
-    x64.callDirect __mm_decref
     x64.jmp trycont
   tryok:
-    x64.movRegReg r12, r8
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_incref
     x64.jmp trycont
   trycont:
     x64.movRegImm32 rdx, 1
     x64.movRegReg rcx, rbx
     x64.callDirect __arr_get
+    x64.movRegReg r13, r8
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
@@ -128,21 +129,23 @@ func @main {
     x64.movRegImm32 rcx, 0
     x64.movRegImm32 rdx, 0
     x64.callDirect Point.create
-    x64.movRegReg r13, r8
-    x64.movRegReg rcx, r13
-    x64.callDirect __mm_decref
-    x64.movRegReg rax, r13
+    x64.movRegReg rcx, r8
     x64.jmp trycont
   tryok:
-    x64.movRegReg rax, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __mm_incref
+    x64.movRegReg rcx, r13
     x64.jmp trycont
   trycont:
-    x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
-    x64.loadRegBaseDisp.word64 rax, [rax + 8]
-    x64.leaRegRegReg r12, rcx, rax
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.loadRegBaseDisp.word64 rdx, [rcx + 8]
+    x64.leaRegRegReg r13, rax, rdx
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_decref
     x64.movRegReg rcx, rbx
     x64.callDirect __arr_decref
-    x64.movRegReg r8, r12
+    x64.movRegReg r8, r13
     x64.epilogue 40
     x64.popReg r13
     x64.popReg r12

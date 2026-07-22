@@ -7018,28 +7018,68 @@ export type Parser
 		// of the result's type, so the only borrowed case reaching here is a promotable String literal. A
 		// SCALAR result keeps the borrowed phi the Wave-1 path built — nothing is owned, nothing is dropped.
 		var errEdgeValue = otherwiseValue
+		var phiOwned = false
 		if self.valueIsOwnedHeap(result) 'managedResultPhi'
 			if not self.valueIsOwnedHeap(otherwiseValue) 'promoteBorrowedFallback'
 				errEdgeValue = self.promoteToOwnedString(otherwiseValue, range: SourceRange.ofToken(tryTok))
 			end 'promoteBorrowedFallback'
 			self.removeFromPendingTemps(errEdgeValue)
-			self.trackOwnedTemp(phiId)
+			phiOwned = true
 		end 'managedResultPhi' else 'borrowResult'
 			// ⭐ **A BORROW try-result merged with an OWNED fallback** (`try arr.get(i) otherwise Item.create(…)`,
-			// P1.7 slice 3). A managed-array `get` yields a BORROW — the array owns the element and its
-			// `__arr_decref` walk drops it — so the merge phi is a BORROW and MUST NOT be dropped, or it
-			// double-frees the array's element. shv2 is move-only (no `__mm_incref`), so the ok edge cannot
-			// become a second owner to match the owned fallback; instead the fallback is DROPPED on the ERROR
-			// EDGE (the only edge it is live on — it is created inside `errEnd`, and the ok edge short-circuits
-			// past it), and the phi stays borrowed. On the ok path nothing is dropped (the array owns the
-			// element); on the error path the fallback is dropped exactly once. The result is leak-free and
-			// double-free-free on both taken paths. `currentBlock` is `errEnd` here (`desugarTry` set it and the
-			// handler parse left it), so `emitDecref` lands the drop in the error block before its branch to `cont`.
+			// P1.7 slice 3). A managed-array `get`/`first`/`last` yields a BORROW — the array owns the element
+			// and its `__arr_decref` walk drops it — while the `otherwise` fallback is a FRESH OWNED box. The
+			// two edges merge into ONE binding, which has ONE drop discipline, so they MUST agree on ownership.
+			//
+			// ⚠ **THE OK BORROW IS INCREF'D SO THE PHI IS OWNED — do NOT compensate for the fallback with an
+			// error-edge drop.** Making the phi a borrow (never dropped) leaks the owned fallback; the earlier
+			// cure — `emitDecref(otherwiseValue)` on the error edge — freed the fallback BEFORE the merged
+			// binding was read, a use-after-free the non-reclaiming bump allocator (#108) hid until a poisoning
+			// `__mm_free` exposed it (four `array-slots` reads came back `0x3F3F…`). Instead the ok edge takes a
+			// SECOND owner of the borrowed element with `__mm_incref`, so the phi owns a reference on BOTH edges
+			// and is dropped exactly ONCE at the binding's scope exit — after the last read, on every path.
+			// incref and every managed drop (`__mm_decref`/`__str_decref`/`__arr_decref`/`__destruct_*`) share the
+			// one header-refcount protocol (`emitRefcountCheckToLastOwner`), so the array's own decref walk and
+			// this scope-exit drop balance regardless of which runs last: the element ends at refcount 0 with
+			// exactly one free. The incref goes into `okBlock` (single-threaded, before its branch to `cont`);
+			// `currentBlock` is `errEnd` and is restored after.
+			//
+			// A SCALAR result with a scalar fallback owns nothing on either edge, so the guard is false and the
+			// Wave-1 borrowed phi stands — nothing incref'd, nothing dropped.
 			if self.valueIsOwnedHeap(otherwiseValue) 'ownedFallbackIntoBorrow'
+				let resumeBlock = self.currentBlock
+				self.currentBlock = okBlock
+				_ = self.emitRuntimeCall(MmIncrefName, args: singletonArgs(result), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(tryTok))
+				self.currentBlock = resumeBlock
+
 				self.removeFromPendingTemps(otherwiseValue)
-				self.emitDecref(otherwiseValue, range: SourceRange.ofToken(tryTok))
+				phiOwned = true
 			end 'ownedFallbackIntoBorrow'
 		end 'borrowResult'
+
+		// ⭐ **THE FALLBACK EXPRESSION'S ABANDONED TEMPORARIES DIE ON THE ERROR EDGE — the `otherwise <value>`
+		// region, the one fork this rung's per-region drop list omitted.** The fallback runs on the error edge
+		// ALONE, so a temporary it built and did not hand back (`[1,2]` in `otherwise [1,2].count()`) is exactly a
+		// ternary/match arm's abandoned temp, one construct over: releasing it at the shared statement tail —
+		// which sits in `cont`, reached from the ok edge too — releases a value that edge never built, the
+		// register allocator's "a use dominates its def" (a compiler panic on a valid program). `currentBlock` is
+		// `errEnd` (or the block the fallback left control in), which dominates the err→`cont` edge, so the drops
+		// ride the single-threaded error path. The floor is `WholeStatementTempFloor`: `desugarTry` cleared the
+		// pending list at the fork, so everything enrolled since is the fallback's own, and the fallback VALUE was
+		// pulled out just above (into the phi) — the phi is enrolled AFTER this drain so it is not swept here.
+		//
+		// ⚠ SKIPPED when the phi is a BORROW of a still-live source (`phiOwned` false AND the fallback is a
+		// managed pointer): such a fallback can BORROW into one of these temporaries (`otherwise makeX().field`),
+		// and dropping the temporary would free what the phi reads. That shape needs the source incref'd, not
+		// dropped — a narrower case left for its own change; draining here would trade the pre-existing panic for
+		// a use-after-free. A scalar fallback borrows nothing, so the common `otherwise <expr>.count()` is safe.
+		if phiOwned or not self.valueIsManagedHeap(otherwiseValue) 'dropFallbackTemps'
+			self.drainPendingTemps(WholeStatementTempFloor, anchor: tryTok)
+		end 'dropFallbackTemps'
+
+		if phiOwned 'enrolPhi'
+			self.trackOwnedTemp(phiId)
+		end 'enrolPhi'
 
 		var okArgs = ValueIdArray.create()
 		okArgs.push(result)
