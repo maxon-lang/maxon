@@ -494,8 +494,7 @@ error E3062: specs/fragments/arrays/error.unused-array-typealias.test:3:11: unus
 
 ### String Array Literals
 
-<!-- disabled-test: string-array-literal-basic -->
-<!-- P1.7-s3 String element -->
+<!-- test: string-array-literal-basic -->
 ```maxon
 function main() returns ExitCode
 	let arr = ["hello", "world"]
@@ -851,8 +850,7 @@ end 'main'
 30
 ```
 
-<!-- disabled-test: array-literal-struct-return-from-function -->
-<!-- P1.7-s3 struct element -->
+<!-- test: array-literal-struct-return-from-function -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)

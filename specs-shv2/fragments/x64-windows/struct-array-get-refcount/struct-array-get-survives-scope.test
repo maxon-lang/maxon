@@ -1,0 +1,223 @@
+// Test: struct-array-get-survives-scope
+typealias Integer = int(i64.min to i64.max)
+
+type Node
+		export var value as Integer
+		export var next as Integer
+
+		static function create(value Integer, next Integer) returns Self
+			return Self{value: value, next: next}
+		end 'create'
+end 'Node'
+
+typealias NodeArray = Array with Node
+
+type List
+		export var nodes as NodeArray
+		export var head as Integer
+
+		function pushFront(value Integer)
+				let node = Node.create(value, next: self.head)
+				self.nodes.push(node)
+				self.head = self.nodes.count() - 1
+		end 'pushFront'
+
+		function walk()
+				var current = self.head
+				while current != -1 'w'
+						let node = try self.nodes.get(current) otherwise Node.create(0, next: -1)
+						current = node.next
+				end 'w'
+		end 'walk'
+
+		static function create(nodes NodeArray, head Integer) returns Self
+			return Self{nodes: nodes, head: head}
+		end 'create'
+end 'List'
+
+function main() returns ExitCode
+		var list = List.create(NodeArray.create(), head: -1)
+		list.pushFront(10)
+		list.pushFront(20)
+		list.walk()
+		list.pushFront(30)
+		let n1 = try list.nodes.get(1) otherwise Node.create(0, next: -1)
+		return n1.value
+end 'main'
+---
+ExitCode: 20
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @Node.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.storeBaseDispReg.word64 [r8 + 8], r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @List.pushFront {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.loadRegBaseDisp.word64 rax, [rbx + 8]
+    x64.movRegReg rcx, rdx
+    x64.movRegReg rdx, rax
+    x64.callDirect Node.create
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.movRegReg rdx, r8
+    x64.callDirect __arr_push
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.callDirect __arr_count
+    x64.leaRegRegImm32 rax, r8, -1
+    x64.storeBaseDispReg.word64 [rbx + 8], rax
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @List.walk {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegReg rbx, rcx
+    x64.loadRegBaseDisp.word64 rdx, [rbx + 8]
+    x64.jmp whilehdr
+  whilehdr:
+    x64.movRegImm32 rax, 1
+    x64.negReg rax, rax
+    x64.cmpRegReg rdx, rax
+    x64.jcc notEqual, w
+    x64.jmp whileexit
+  w:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.callDirect __arr_get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 rcx, 0
+    x64.movRegImm32 rdx, 1
+    x64.negReg rdx, rdx
+    x64.callDirect Node.create
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_decref
+    x64.movRegReg rax, r12
+    x64.jmp trycont
+  tryok:
+    x64.movRegReg rax, r8
+    x64.jmp trycont
+  trycont:
+    x64.loadRegBaseDisp.word64 rdx, [rax + 8]
+    x64.jmp whilehdr
+  whileexit:
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @List.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.storeBaseDispReg.word64 [r8 + 8], r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __mm_decref]
+    x64.callDirect __arr_create
+    x64.movRegImm32 rdx, 1
+    x64.negReg rdx, rdx
+    x64.movRegReg rcx, r8
+    x64.callDirect List.create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rdx, 10
+    x64.movRegReg rcx, rbx
+    x64.callDirect List.pushFront
+    x64.movRegImm32 rdx, 20
+    x64.movRegReg rcx, rbx
+    x64.callDirect List.pushFront
+    x64.movRegReg rcx, rbx
+    x64.callDirect List.walk
+    x64.movRegImm32 rdx, 30
+    x64.movRegReg rcx, rbx
+    x64.callDirect List.pushFront
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.movRegImm32 rdx, 1
+    x64.callDirect __arr_get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 rcx, 0
+    x64.movRegImm32 rdx, 1
+    x64.negReg rdx, rdx
+    x64.callDirect Node.create
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_decref
+    x64.movRegReg rax, r12
+    x64.jmp trycont
+  tryok:
+    x64.movRegReg rax, r8
+    x64.jmp trycont
+  trycont:
+    x64.loadRegBaseDisp.word64 r12, [rax + 0]
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_List
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

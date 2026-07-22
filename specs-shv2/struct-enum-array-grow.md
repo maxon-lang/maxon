@@ -82,8 +82,7 @@ end 'main'
 20
 ```
 
-<!-- disabled-test: array-of-struct-with-enum-field -->
-<!-- P1.7-s3 managed/struct-element array field -->
+<!-- test: array-of-struct-with-enum-field -->
 Array of structs containing enum fields, with array growth.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -124,7 +123,7 @@ end 'main'
 ```
 
 <!-- disabled-test: nested-struct-enum-array-grow -->
-<!-- P1.7-s3 managed/struct-element array field -->
+<!-- P1.7 nested union payload (union-in-union) — pre-existing union feature, orthogonal to arrays -->
 Deeply nested struct with enum field and multiple arrays.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -178,8 +177,7 @@ end 'main'
 5
 ```
 
-<!-- disabled-test: deeply-nested-struct-many-arrays -->
-<!-- P1.7-s3 managed/struct-element array field -->
+<!-- test: deeply-nested-struct-many-arrays -->
 Struct containing another struct with many array fields, push into arrays.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -227,7 +225,7 @@ end 'main'
 ```
 
 <!-- disabled-test: shared-nested-struct-in-literal -->
-<!-- P1.7-s3 managed/struct-element array field -->
+<!-- P1.7 move-only sharing: the same owned struct (with an array field) passed to TWO consuming fields — shv2 is move-only (no incref), so it cannot share; a pre-existing consume-analysis divergence (call-arg double-consume, the call analog of rejectDoubleOwningStore) -->
 Same nested struct reference used for two fields of another struct.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -270,7 +268,7 @@ end 'main'
 ```
 
 <!-- disabled-test: large-returned-struct-many-arrays -->
-<!-- P1.7-s3 managed/struct-element array field -->
+<!-- P1.7 >6 parameters (M5 register-only ABI, stack args a later milestone) — pre-existing, orthogonal to arrays -->
 Large returned struct with many array fields and nested structs with enum fields.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -418,8 +416,7 @@ end 'main'
 6
 ```
 
-<!-- disabled-test: array-of-struct-with-string-enum -->
-<!-- P1.7-s3 managed/struct-element array field -->
+<!-- test: array-of-struct-with-string-enum -->
 Array of structs where struct has enum fields with String associated values.
 ```maxon
 export union QueryKey
@@ -571,7 +568,7 @@ end 'main'
 ```
 
 <!-- disabled-test: returned-struct-with-enum-and-arrays -->
-<!-- P1.7-s3 managed/struct-element array field -->
+<!-- P1.7 nested union payload (union-in-union) — pre-existing union feature, orthogonal to arrays -->
 Returned struct with enum field and arrays that grow.
 ```maxon
 typealias Integer = int(i64.min to i64.max)

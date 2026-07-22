@@ -1023,6 +1023,13 @@ let ByteElementTypeName = b"Byte"
 // validates a `Array with …` against.
 export let ArrayTypeParamCount = 1 as FieldIndex
 
+// The `element_size@24` of a MANAGED-element array (P1.7 slice 3) — a managed element (String / struct /
+// union / instance / nested Array) is a HEAP BOX addressed by a POINTER, so a slot holds the 8-byte pointer,
+// NOT the element's full logical size. A trivial element is stored inline and strides by its own size (an
+// `int` 8, a `Byte` 8 word-slot). This is why `arrayElementSize` cannot simply be the source `sizeof`: the
+// STORAGE width of a managed element is the pointer, and the drop walk / accessors move exactly that.
+let ManagedArrayElementBytes = 8 as ByteOffset
+
 // The one-element `[integer]` argument list of the `Array with integer` literal instance — built fresh
 // per call (a `MaxonTypeArray` is owned by the instance it is interned into).
 function singletonInteger() returns MaxonTypeArray
@@ -2589,12 +2596,37 @@ export type ProgramSignatures
 		return self.typeIsManaged(self.arrayElementType(id))
 	end 'arrayElementIsManaged'
 
-	// The byte size of one element of `Array with T` — the sole argument's full source `sizeof`, the value
-	// `element_size@24` is stamped with and every array helper strides by. `Array with Byte` ⇒ 1, `Array
-	// with Integer` ⇒ 8. Reuses the single-arg logical-size door (which reads args, not a base layout).
+	// Is `Array with T`'s element an OPAQUE TYPE PARAMETER — a `T` from an enclosing generic type's shared body
+	// (`type W uses T { var xs as Array with T }`), NOT a concrete type (P1.7 slice 3a). A concrete managed
+	// element knows its destructor at the construction site (the `funcAddr` stamp into `element_destroy@40`); an
+	// opaque `T` does not — its element destructor lives in the layout descriptor's `destroyFunc@40`, reached
+	// through the rdata reloc path, which is slice 3b. Rejected with a positioned E2015 until then.
+	export function arrayElementIsOpaque(id GenericInstanceId) returns bool
+		return maxonTypeTag(self.arrayElementType(id)) == ValueTypeTag.typeParameter
+	end 'arrayElementIsOpaque'
+
+	// The byte size of one element of `Array with T` — the value `element_size@24` is stamped with and every
+	// array helper strides by. A MANAGED element (String / struct / union / instance / nested Array) is a heap
+	// box stored as an 8-byte POINTER (`ManagedArrayElementBytes`), so its slot is the pointer, NOT the
+	// element's full logical size — the drop walk destroys the pointer, the accessors load/store it. A TRIVIAL
+	// element is stored inline and strides by its source `sizeof` (`Array with Integer` ⇒ 8). Reuses the
+	// single-arg logical-size door for the trivial case (which reads args, not a base layout).
 	export function arrayElementSize(id GenericInstanceId) returns ByteOffset
+		if self.arrayElementIsManaged(id) 'managed'
+			return ManagedArrayElementBytes
+		end 'managed'
 		return self.genericInstanceSoleArgLogicalSize(id)
 	end 'arrayElementSize'
+
+	// The element DESTRUCTOR callee for a managed-element `Array with T` (P1.7 slice 3) — the runtime entry the
+	// drop walk calls on each live slot: a String → `__str_decref`, a struct/union that owns managed heap → its
+	// `__destruct_<T>` (a scalar-only struct/union box → the trivial `__mm_decref`), a nested Array → `__arr_decref`.
+	// Routed through the SHARED `managedFieldDropCallee` over the element type, so the stamped element destructor
+	// equals the drop callee any managed FIELD of the same type gets — the moved-in set and the dropped set agree
+	// by construction. Precondition: `arrayElementIsManaged`.
+	export function arrayElementDropCallee(id GenericInstanceId) returns ByteArray
+		return managedFieldDropCallee(self, typeNames: self.typeNames, fieldType: self.arrayElementType(id))
+	end 'arrayElementDropCallee'
 
 	// ⭐ **THE `Array with integer` INSTANCE FOR A BARE `[…]` ARRAY LITERAL (P1.7 slice 1).** A literal has
 	// no typealias to intern from, so the SWEEP interns this ONE well-known instance whenever a file's tokens
@@ -2622,6 +2654,40 @@ export type ProgramSignatures
 		args.push(MaxonType.named(self.typeNames.intern(ByteElementTypeName)))
 		return self.genericInstances.intern(self.typeNames.intern(ArrayBuiltinBaseName), args: args)
 	end 'internArrayByteInstance'
+
+	// ⭐ **THE `Array with String` / `Array with <aggregate>` INSTANCES FOR A MANAGED-ELEMENT LITERAL (P1.7
+	// slice 3).** A bare `["a","b"]` / `[p1,p2]` has no typealias to intern from, and — unlike the int/Byte
+	// literals above — its element type is not fixed by the token, so the SWEEP over-interns the possible
+	// element instances (`internArrayLiteralAggregateInstances`) and the parser looks up whichever the first
+	// element resolves to. Both are keyed the way a `typealias Array with T` interns its arg (a String as
+	// `MaxonType.string`, a struct/union by `named(<name>)`), so a literal and a typealias-backed value of the
+	// same element type share ONE gid. Idempotent, so the sweep is the WRITE and the parser a pure READ.
+	export function arrayInstanceForString() returns GenericInstanceId
+		var args = MaxonTypeArray.create()
+		args.push(MaxonType.string)
+		return self.genericInstances.intern(self.typeNames.intern(ArrayBuiltinBaseName), args: args)
+	end 'arrayInstanceForString'
+
+	export function arrayInstanceForNamedElement(name ByteArray) returns GenericInstanceId
+		var args = MaxonTypeArray.create()
+		args.push(MaxonType.named(self.typeNames.intern(name)))
+		return self.genericInstances.intern(self.typeNames.intern(ArrayBuiltinBaseName), args: args)
+	end 'arrayInstanceForNamedElement'
+
+	// Over-intern `Array with <T>` for the possible element types of a `[<identifier>…]` array literal (P1.7
+	// slice 3): a local identifier's type is unknowable from the sweep's tokens, so `Array with String` and one
+	// instance per declared struct/union are interned, and the parser looks up whichever the first element
+	// resolves to. An UNREFERENCED instance gets no descriptor or destructor synthesized (both gate on usage),
+	// so this is bounded registry entries — not codegen — and it leaves int-only-array programs' goldens untouched.
+	export function internArrayLiteralAggregateInstances()
+		_ = self.arrayInstanceForString()
+		for (name, _) in self.structTypes 'eachStruct'
+			_ = self.arrayInstanceForNamedElement(name)
+		end 'eachStruct'
+		for (name, _) in self.enumTypes 'eachUnion'
+			_ = self.arrayInstanceForNamedElement(name)
+		end 'eachUnion'
+	end 'internArrayLiteralAggregateInstances'
 
 	// --- Layout-descriptor sizing (P1.6-B1) ---
 	//

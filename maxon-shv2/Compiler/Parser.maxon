@@ -675,6 +675,7 @@ let sharedEmptyTypeParamFeeds = TypeParamFeedArray.create()
 // parse fan-out — exactly the invariant `sharedEmptyDescriptorNeeds`/`sharedEmptyTypeParamFeeds` rely on.
 let sharedEmptyInnerAliases = InnerAliasNameSet.create()
 let sharedEmptyInstanceAliasMap = ValueInstanceAliasMap.create()
+
 // The NAME-keyed twin delivered to SemanticCheck for a function that has range checks but constructs no
 // instance — read-only and STORED into `FunctionRangeChecks` (increfed, so sharing is safe), never mutated.
 let sharedEmptyInstanceAliasNames = ValueInstanceAliasNameMap.create()
@@ -801,10 +802,10 @@ let I64MaxBound = i64.max as ParsedInt
 // `f32.max = 5727507168572555263` (= 0x4F7C316C97453FFF), which decodes to 7.97e74 — GARBAGE, never
 // the f32 extreme 3.4e38. v1 never caught it because a full-range alias is exempt from range checks,
 // so nothing ever read the bound. v1's f64 pair IS correct and matches below.
-let F64MaxBound = 9218868437227405311 as ParsedInt    // 0x7FEF_FFFF_FFFF_FFFF  = +1.7976931348623157e308
-let F64MinBound = -4503599627370497 as ParsedInt      // 0xFFEF_FFFF_FFFF_FFFF  = -1.7976931348623157e308
-let F32MaxBound = 5183643170566569984 as ParsedInt    // 0x47EF_FFFF_E000_0000  = +3.4028234663852886e38
-let F32MinBound = -4039728866288205824 as ParsedInt   // 0xC7EF_FFFF_E000_0000  = -3.4028234663852886e38
+let F64MaxBound = 9218868437227405311 as ParsedInt  // 0x7FEF_FFFF_FFFF_FFFF  = +1.7976931348623157e308
+let F64MinBound = -4503599627370497 as ParsedInt  // 0xFFEF_FFFF_FFFF_FFFF  = -1.7976931348623157e308
+let F32MaxBound = 5183643170566569984 as ParsedInt  // 0x47EF_FFFF_E000_0000  = +3.4028234663852886e38
+let F32MinBound = -4039728866288205824 as ParsedInt  // 0xC7EF_FFFF_E000_0000  = -3.4028234663852886e38
 
 // The `.min` / `.max` field names a type-qualified bound may carry.
 let MinBoundField = b"min"
@@ -1305,6 +1306,7 @@ let ArrayPopMethod = b"pop"
 let ArrayClearMethod = b"clear"
 let ArrayInsertMethod = b"insert"
 let ArrayRemoveMethod = b"remove"
+
 // The label the two-argument mutators (`set`/`insert`) give their VALUE argument: `arr.set(0, value: 9)`.
 let ArrayValueLabel = b"value"
 
@@ -1559,10 +1561,12 @@ let NulByte = 0 as Byte
 // multi-byte UTF-8 sequence. A byte-string codepoint must fit in `[0, ByteCodepointMax]` (Latin-1).
 let AsciiCeiling = 128 as Byte
 let ByteCodepointMax = 255 as ParsedInt
+
 // The low byte of a codepoint (its Latin-1 encoding for a valid one; a harmless recovery value otherwise).
 let ByteMask = 255 as ParsedInt
 let LowerX = 120 as Byte
 let LowerU = 117 as Byte
+
 // A hex nibble is 4 bits; `\xNN` = `\` `x` + 2 hex digits (4 bytes), `\uNNNN` = `\` `u` + 4 hex digits (6).
 let HexNibbleBits = 4 as ParsedInt
 let HexEscapeDigits = 2 as ByteOffset
@@ -2653,9 +2657,22 @@ export type Parser
 		// `Array with Byte` (P1.7 slice 2). The sweep interns that one well-known instance so the parser can
 		// read its giid back at literal time (a byte-string, like a bare `[…]`, has no typealias to intern from).
 		var hasByteStringLiteral = false
+		// A MANAGED-element array literal (P1.7 slice 3): a `[` followed by a STRING literal is `Array with String`;
+		// a `[` followed by an IDENTIFIER (a local whose type the sweep cannot see) may be a String / struct / union
+		// element, so the possible aggregate instances are over-interned. The parser reads back whichever the first
+		// element resolves to. A `[` + int-literal stays the int-array default and interns none of these.
+		var hasStringArrayLiteral = false
+		var hasAggregateArrayLiteral = false
 		while not self.isEof() 'scan'
 			if self.at(TokenKind.leftBracket) 'arrayLiteralToken'
 				hasIntArrayLiteral = true
+				let afterKind = self.kindAt(self.pos + 1)
+				if afterKind == TokenKind.stringLiteral 'stringElement'
+					hasStringArrayLiteral = true
+				end 'stringElement'
+				if afterKind == TokenKind.identifier 'aggregateElement'
+					hasAggregateArrayLiteral = true
+				end 'aggregateElement'
 			end 'arrayLiteralToken'
 
 			if self.at(TokenKind.byteStringLiteral) 'byteStringToken'
@@ -2727,6 +2744,16 @@ export type Parser
 		if hasByteStringLiteral 'internByteStrLiteral'
 			_ = index.internArrayByteInstance()
 		end 'internByteStrLiteral'
+
+		// Intern the managed-element literal instances — `Array with String` for a `["…"]`, plus every declared
+		// struct/union for a `[<identifier>…]` (whose element type the sweep cannot see). After `foldFile` so the
+		// aggregate loop reads the folded structs/unions and so the giids follow the file's named instances (P1.7 slice 3).
+		if hasStringArrayLiteral 'internStringArrayLiteral'
+			_ = index.arrayInstanceForString()
+		end 'internStringArrayLiteral'
+		if hasAggregateArrayLiteral 'internAggregateArrayLiteral'
+			index.internArrayLiteralAggregateInstances()
+		end 'internAggregateArrayLiteral'
 	end 'foldDeclaredSignaturesInto'
 
 	// Is the cursor on a `let` or a `var` — the two keywords that introduce a top-level binding?
@@ -6607,6 +6634,15 @@ export type Parser
 	// then converts. `resultUsed: false` on the free-call path so a VOID throwing callee is not rejected
 	// here (whether the try's VALUE is usable is decided in `parseTry` from the try's own position).
 	function parseTryCallTarget(func IrFunction) returns ValueId throws ParseError
+		// `try bag.items.get(0) otherwise …` / `try self.nodes.get(i) otherwise …` — a throwing method on an
+		// ARRAY reached through a 2+-hop field chain (P1.7 slice 3). Checked FIRST: a single-hop `self.m(…)` /
+		// `obj.m(…)` is not a field chain (`fieldChainMethodCallAt` needs 2+ hops) and falls to the arms below;
+		// a 2+-hop chain resolves to the array field and applies the method, leaving the `call __arr_get` as the
+		// last op for `rewriteLastCallToTryCall`. `resultUsed: false` for the free-call arm's reason (the try's
+		// own position decides whether its value is usable).
+		if self.fieldChainMethodCallAt(self.pos) 'fieldChainTarget'
+			return try self.parseFieldChainArrayMethod(func, resultUsed: false)
+		end 'fieldChainTarget'
 		if self.at(TokenKind.self) 'selfCall'
 			return try self.parseSelfPrimary(func)
 		end 'selfCall'
@@ -6815,7 +6851,22 @@ export type Parser
 			end 'promoteBorrowedFallback'
 			self.removeFromPendingTemps(errEdgeValue)
 			self.trackOwnedTemp(phiId)
-		end 'managedResultPhi'
+		end 'managedResultPhi' else 'borrowResult'
+			// ⭐ **A BORROW try-result merged with an OWNED fallback** (`try arr.get(i) otherwise Item.create(…)`,
+			// P1.7 slice 3). A managed-array `get` yields a BORROW — the array owns the element and its
+			// `__arr_decref` walk drops it — so the merge phi is a BORROW and MUST NOT be dropped, or it
+			// double-frees the array's element. shv2 is move-only (no `__mm_incref`), so the ok edge cannot
+			// become a second owner to match the owned fallback; instead the fallback is DROPPED on the ERROR
+			// EDGE (the only edge it is live on — it is created inside `errEnd`, and the ok edge short-circuits
+			// past it), and the phi stays borrowed. On the ok path nothing is dropped (the array owns the
+			// element); on the error path the fallback is dropped exactly once. The result is leak-free and
+			// double-free-free on both taken paths. `currentBlock` is `errEnd` here (`desugarTry` set it and the
+			// handler parse left it), so `emitDecref` lands the drop in the error block before its branch to `cont`.
+			if self.valueIsOwnedHeap(otherwiseValue) 'ownedFallbackIntoBorrow'
+				self.removeFromPendingTemps(otherwiseValue)
+				self.emitDecref(otherwiseValue, range: SourceRange.ofToken(tryTok))
+			end 'ownedFallbackIntoBorrow'
+		end 'borrowResult'
 
 		var okArgs = ValueIdArray.create()
 		okArgs.push(result)
@@ -12475,8 +12526,16 @@ export type Parser
 		if not payloadClassIsManaged(class) 'scalar'
 			return arg
 		end 'scalar'
+		return try self.moveManagedValueInto(arg, argBareLocal: argBareLocal, isString: payloadClassIsString(class), anchor: anchor, range: range)
+	end 'moveInPayload'
 
-		if payloadClassIsString(class) 'string'
+	// ⭐ **MOVE AN ALREADY-CLASSIFIED-MANAGED VALUE INTO DURABLE STORAGE** — the core of `moveInPayload`,
+	// factored out so a struct field / union payload (`moveInPayload`) and an ARRAY element (P1.7 slice 3,
+	// `moveElementIntoArray`) share the ONE transfer rule and cannot drift on it. A borrowed String is promoted
+	// to an owned copy (a fresh temp de-listed); an owned managed value is transferred (bare local poisoned,
+	// temp de-listed); a borrowed struct/union is refused (no clone). Precondition: the value is managed.
+	function moveManagedValueInto(arg ValueId, argBareLocal bool, isString bool, anchor Token, range SourceRange) returns ValueId throws ParseError
+		if isString 'string'
 			if not self.valueIsOwnedHeap(arg) 'promoteBorrowed'
 				// A borrowed String literal/param — copy its bytes into a fresh owned record the box can drop.
 				let owned = self.promoteToOwnedString(arg, range: range)
@@ -12485,14 +12544,14 @@ export type Parser
 			end 'promoteBorrowed'
 		end 'string' else 'structOrUnion'
 			if not self.valueIsOwnedHeap(arg) 'borrowedManaged'
-				throw ParseError.unsupported("moving a borrowed struct/union value into durable storage (a struct field or a union payload) — a struct/union has no `clone`, so ownership must transfer, and a borrowed value's owner keeps a live reference; passing a borrowed parameter at a consuming position is the transitive-consume case handled by the call-graph fixpoint (P1.4a wave 2+)", line: anchor.line, column: anchor.column)
+				throw ParseError.unsupported("moving a borrowed struct/union value into durable storage (a struct field, a union payload, or an array element) — a struct/union has no `clone`, so ownership must transfer, and a borrowed value's owner keeps a live reference; passing a borrowed parameter at a consuming position is the transitive-consume case handled by the call-graph fixpoint (P1.4a wave 2+)", line: anchor.line, column: anchor.column)
 			end 'borrowedManaged'
 		end 'structOrUnion'
 
 		// An already-owned managed value moves out of its source into the box.
 		try self.transferOwnedInto(arg, argBareLocal: argBareLocal, anchor: anchor)
 		return arg
-	end 'moveInPayload'
+	end 'moveManagedValueInto'
 
 	// Transfer an already-OWNED managed value into durable storage: a bare-local reference to a binding is
 	// POISONED (`movedFrom` — E3102 on later use); an owned temporary is removed from the statement's pending
@@ -12986,19 +13045,55 @@ export type Parser
 	// carries no element to infer a type from and is rejected (use `Array with T` + `.create()`).
 	function parseArrayLiteral(func IrFunction) returns ValueId throws ParseError
 		let openTok = try self.consume(TokenKind.leftBracket)
-		let giid = self.signatures.internArrayIntegerInstance()
 		let range = SourceRange.ofToken(openTok)
-		let arr = self.emitArrayCreateOp(giid, range: range)
 
 		if self.at(TokenKind.rightBracket) 'empty'
 			throw ParseError.unsupported("an empty array literal `[]` — its element type cannot be inferred; use `Array with T` + `.create()` for an empty typed array", line: openTok.line, column: openTok.column)
 		end 'empty'
 
+		// ⭐ **THE INT-LITERAL FAST PATH keeps slice 1's op ORDER (create the record BEFORE evaluating any
+		// element)**, so the pre-existing int-array-literal goldens do not move. It is taken when the first
+		// element is a numeric literal — an `[…]` of integers, the slice-1 case. A MANAGED / inferred literal
+		// (`["…"]`, `[p1,p2]`) cannot: its record's element_destroy stamp needs the element type, which is only
+		// known after the first element is parsed, so that path evaluates the first element first.
+		if self.at(TokenKind.intLiteral) 'intFastPath'
+			return try self.parseIntArrayLiteralBody(func, range: range)
+		end 'intFastPath'
+
+		let firstTok = self.current()
+		let firstStart = self.pos
+		let first = try self.parseExpression(func, block: self.currentBlock)
+		let giid = try self.arrayLiteralInstanceFor(first, elemTok: firstTok)
+		let arr = self.emitArrayCreateOp(giid, range: range)
+		try self.pushArrayLiteralElement(arr, elem: first, giid: giid, valueStart: firstStart, range: range)
+
+		while self.at(TokenKind.comma) 'moreElements'
+			try self.consume(TokenKind.comma)
+			let elemTok = self.current()
+			let elemStart = self.pos
+			let elem = try self.parseExpression(func, block: self.currentBlock)
+			try self.requireArrayLiteralElementMatches(elem, giid: giid, elemTok: elemTok)
+			try self.pushArrayLiteralElement(arr, elem: elem, giid: giid, valueStart: elemStart, range: range)
+		end 'moreElements'
+		try self.consume(TokenKind.rightBracket)
+
+		self.trackOwnedTemp(arr)
+		return arr
+	end 'parseArrayLiteral'
+
+	// The int-array-literal body (`[10, 20, 30]`) — the record is created FIRST (element type is `integer`,
+	// known without parsing), then each element is parsed and pushed; every element must be integer. This is
+	// slice 1's exact op order, kept so the pre-existing int-literal goldens do not move; the shared
+	// `pushArrayLiteralElement`/`requireArrayLiteralElementMatches` emit the same ops a trivial element always did.
+	function parseIntArrayLiteralBody(func IrFunction, range SourceRange) returns ValueId throws ParseError
+		let giid = self.signatures.internArrayIntegerInstance()
+		let arr = self.emitArrayCreateOp(giid, range: range)
 		while true 'elements'
 			let elemTok = self.current()
+			let elemStart = self.pos
 			let elem = try self.parseExpression(func, block: self.currentBlock)
-			try self.requireIntegerArrayElement(elem, tok: elemTok)
-			_ = self.emitRuntimeCall(ArrPushName, args: pairArgs(arr, second: elem), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+			try self.requireArrayLiteralElementMatches(elem, giid: giid, elemTok: elemTok)
+			try self.pushArrayLiteralElement(arr, elem: elem, giid: giid, valueStart: elemStart, range: range)
 			if not self.at(TokenKind.comma) 'done'
 				break
 			end 'done'
@@ -13008,21 +13103,83 @@ export type Parser
 
 		self.trackOwnedTemp(arr)
 		return arr
-	end 'parseArrayLiteral'
+	end 'parseIntArrayLiteralBody'
 
-	// Emit `__arr_create(elementSize, 0)` for instance `giid`, yielding the array record — the shared
-	// producer for a literal and an `IntArray.create()`. Element size is a compile-time constant here (a
-	// concrete instance); the element destructor is 0 (trivial elements, slice 1). NOT tracked owned — the
-	// caller decides that (a literal tracks after its pushes, a `create()` immediately).
+	// Push one already-parsed array-literal element, moving a managed element in (the array owns it; a trivial
+	// element passes through) — `moveElementIntoArray` off the value's start position so a bare local is poisoned.
+	function pushArrayLiteralElement(arr ValueId, elem ValueId, giid GenericInstanceId, valueStart TokenIndex, range SourceRange) throws ParseError
+		let stored = try self.moveElementIntoArray(elem, giid: giid, valueStart: valueStart)
+		_ = self.emitRuntimeCall(ArrPushName, args: pairArgs(arr, second: stored), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+	end 'pushArrayLiteralElement'
+
+	// The `Array with T` instance a literal's FIRST element fixes (P1.7 slice 3) — an integer element → the
+	// int instance, a String → `Array with String`, a struct/boxed-union → `Array with <name>`. All are
+	// interned by the sweep (`internArrayIntegerInstance` / `internArrayLiteralAggregateInstances`), so this is a
+	// pure lookup. A float/function/other element is not a supported literal element yet (E2015).
+	function arrayLiteralInstanceFor(elem ValueId, elemTok Token) returns GenericInstanceId throws ParseError
+		let tag = self.tagOf(elem)
+		if tag == ValueTypeTag.integer 'int'
+			return self.signatures.internArrayIntegerInstance()
+		end 'int'
+		if tagIsText(tag) 'string'
+			return self.signatures.arrayInstanceForString()
+		end 'string'
+		if tagIsStructRef(tag) or tag == ValueTypeTag.named 'aggregate'
+			return self.signatures.arrayInstanceForNamedElement(try self.artifact.typeNames.nameOf(self.valueNameId(elem)) otherwise panic("arrayLiteralInstanceFor: a struct/union element's name id is not in this file's interner"))
+		end 'aggregate'
+		throw ParseError.unsupported("an array literal element of type '{typeTagName(tag)}' — a literal's elements are an integer, a String, a struct, or a boxed union (a bare `[…]` infers the type from the first element)", line: elemTok.line, column: elemTok.column)
+	end 'arrayLiteralInstanceFor'
+
+	// Every element after the first must have the SAME element type — its inferred instance must equal the
+	// first's. A mismatch is an array literal with mixed element types (E2015).
+	function requireArrayLiteralElementMatches(elem ValueId, giid GenericInstanceId, elemTok Token) throws ParseError
+		if (try self.arrayLiteralInstanceFor(elem, elemTok: elemTok)) != giid 'mismatch'
+			throw ParseError.unsupported("an array literal with mixed element types — every element must have the same type as the first", line: elemTok.line, column: elemTok.column)
+		end 'mismatch'
+	end 'requireArrayLiteralElementMatches'
+
+	// Emit `__arr_create(elementSize, elementDestroy)` for instance `giid`, yielding the array record — the
+	// shared producer for a literal and an `IntArray.create()`. Element size is a compile-time constant here
+	// (a concrete instance). The element destructor is the ADDRESS of the element's drop callee for a MANAGED
+	// element (P1.7 slice 3), stamped into `element_destroy@40` before any element move (v1 trap #3: `__arr_create`
+	// stores it inside its body, so it is set at birth); 0 for a trivial element. NOT tracked owned — the caller
+	// decides that (a literal tracks after its pushes, a `create()` immediately).
 	function emitArrayCreateOp(giid GenericInstanceId, range SourceRange) returns ValueId
 		let sizeVal = self.emitLiteral(self.signatures.arrayElementSize(giid) as ParsedInt, valueType: MaxonType.integer, range: range)
-		let destroyVal = self.emitLiteral(TrivialDestructor, valueType: MaxonType.integer, range: range)
+		let destroyVal = self.arrayElementDestroyValue(giid, range: range)
 		return self.emitRuntimeCall(ArrCreateName, args: pairArgs(sizeVal, second: destroyVal), resultTag: ValueTypeTag.genericInstance, resultNameId: giid, range: range)
 	end 'emitArrayCreateOp'
 
+	// ⭐ **THE `element_destroy@40` STAMP VALUE (P1.7 slice 3).** For a MANAGED-element array it is the RAW
+	// `.text` ADDRESS of the element's drop callee (`__str_decref` / `__destruct_<T>` / `__mm_decref` / nested
+	// `__arr_decref`), which `__arr_decref`'s last-owner walk calls through a `callIndirect` on each live slot;
+	// for a trivial element it is 0 (an inline element owns nothing, so the walk is skipped). A CONCRETE site
+	// knows the element type, so the address is the existing P1.5-A1 `funcAddr` code→register path — no rdata
+	// reloc, no descriptor `destroyFunc@40` (those are the opaque-`T`-in-a-generic-body case, slice 3b).
+	function arrayElementDestroyValue(giid GenericInstanceId, range SourceRange) returns ValueId
+		if self.signatures.arrayElementIsManaged(giid) 'managed'
+			return self.emitRuntimeFuncAddr(self.signatures.arrayElementDropCallee(giid), range: range)
+		end 'managed'
+		return self.emitLiteral(TrivialDestructor, valueType: MaxonType.integer, range: range)
+	end 'arrayElementDestroyValue'
+
+	// Emit the RAW `.text` address of a COMPILER-INTERNAL runtime function (`__str_decref`, `__destruct_<T>`,
+	// `__arr_decref`, `__mm_decref`) as a value (P1.7 slice 3). It rides P1.5-A1's `functionRef` → `funcAddr`
+	// path, but names a `__`-prefixed runtime callee — which `LowerMaxonToStd.lowerFunctionRef` materializes as
+	// the BARE address (NOT the `__fnref_` env thunk: the destructor is invoked through a plain `callIndirect(ptr)`
+	// in the drop walk, not the uniform `(userargs, env)` closure ABI) and `scanRuntimeUsage` records so the named
+	// destructor is installed (its transitive `__str_decref`/`__mm_free`/nested-cascade needs then close through
+	// `noteDestructorUsage`, exactly as a scope-exit `__destruct_<T>` drop's do). The `__` prefix is the ONE
+	// discriminator every site reads, so a compiler-internal address and a user function value never cross.
+	function emitRuntimeFuncAddr(name ByteArray, range SourceRange) returns ValueId
+		let result = self.mintValue(ValueTypeTag.function, nameId: self.artifact.typeNames.intern(name))
+		self.artifact.emitOp(self.currentBlock, op: MaxonOp.functionRef(result, funcName: name), range: range)
+		return result
+	end 'emitRuntimeFuncAddr'
+
 	// `IntArray.create()` — the one `Array` static factory at this slice. Yields an OWNED empty array.
 	function parseArrayStaticCall(aliasTok Token, giid GenericInstanceId) returns ValueId throws ParseError
-		try self.requireTrivialArrayElement(giid, tok: aliasTok)
+		try self.requireConcreteArrayElement(giid, tok: aliasTok)
 		try self.consume(TokenKind.dot)
 		let methodTok = try self.consume(TokenKind.identifier)
 		if not methodTok.value.equals(ArrayCreateMethod) 'unknownStatic'
@@ -13085,46 +13242,56 @@ export type Parser
 	// chain-method at this slice (a nested struct method `o.inner.m()` is a later slice), which the field
 	// chain already enforced by stopping at the array.
 	function parseFieldChainMethodCallStatement(func IrFunction) throws ParseError
+		_ = try self.parseFieldChainArrayMethod(func, resultUsed: false)
+	end 'parseFieldChainMethodCallStatement'
+
+	// Resolve a field chain to its ARRAY field (a borrowed load; the struct owns and drops it) and dispatch the
+	// array method, returning its result. Shared by the STATEMENT form (`b.ops.push(1)`, `resultUsed: false`)
+	// and the `try`-TARGET form (`try self.nodes.get(i) otherwise …`, P1.7 slice 3), which leaves the throwing
+	// `call __arr_get` as the last op for `rewriteLastCallToTryCall`. Only an array field carries a chain-method
+	// at this slice (the field chain stopped at the array); a non-array field chain (`o.inner.m()`) is a later slice.
+	function parseFieldChainArrayMethod(func IrFunction, resultUsed bool) returns ValueId throws ParseError
 		let receiver = try self.parseFieldAccess()
 		if self.tagOf(receiver) == ValueTypeTag.genericInstance and self.signatures.isArrayInstance(self.valueNameId(receiver)) 'arrayReceiver'
-			_ = try self.parseArrayMethodOnValue(func, arr: receiver, giid: self.valueNameId(receiver), resultUsed: false)
-			return
+			return try self.parseArrayMethodOnValue(func, arr: receiver, giid: self.valueNameId(receiver), resultUsed: resultUsed)
 		end 'arrayReceiver'
 		let tok = self.current()
 		throw ParseError.unsupported("a method call on a non-array field chain — a nested struct method (`o.inner.m()`) is a later slice", line: tok.line, column: tok.column)
-	end 'parseFieldChainMethodCallStatement'
+	end 'parseFieldChainArrayMethod'
 
 	// Dispatch a builtin `Array` method — cursor on the method NAME, `arr` the (borrowed) receiver record.
 	// Shared by the binding receiver (`arr.push(x)`) and a value receiver (`[…].get(0)`).
 	function dispatchArrayMethod(func IrFunction, arr ValueId, giid GenericInstanceId, resultUsed bool) returns ValueId throws ParseError
-		try self.requireTrivialArrayElement(giid, tok: self.current())
+		try self.requireConcreteArrayElement(giid, tok: self.current())
 		let methodTok = try self.consume(TokenKind.identifier)
 		let range = SourceRange.ofToken(methodTok)
 
 		// Throwing accessors — a plain `call` the enclosing `try` rewrites; result is the element (get/first/
 		// last/pop/remove) or a discarded dummy (set). `resultUsed` is the try's concern, not checked here.
+		// ⭐ get/first/last yield a BORROW of the element (the array keeps ownership — the caller must not drop
+		// it); pop/remove MOVE the element OUT (the runtime nulls its slot), so their result is OWNED (P1.7 slice 3).
 		if methodTok.value.equals(ArrayGetMethod) 'get'
 			let index = try self.parseArrayOneArg(func)
-			return self.emitRuntimeCall(ArrGetName, args: pairArgs(arr, second: index), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+			return self.emitArrayElementAccessor(ArrGetName, args: pairArgs(arr, second: index), giid: giid, owned: false, range: range)
 		end 'get'
 		if methodTok.value.equals(ArraySetMethod) 'set'
-			return try self.parseArraySetOrInsert(func, arr: arr, callee: ArrSetName, throwing: true, range: range)
+			return try self.parseArraySetOrInsert(func, arr: arr, giid: giid, callee: ArrSetName, throwing: true, range: range)
 		end 'set'
 		if methodTok.value.equals(ArrayFirstMethod) 'first'
 			try self.parseArrayNoArgs()
-			return self.emitRuntimeCall(ArrFirstName, args: singletonArgs(arr), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+			return self.emitArrayElementAccessor(ArrFirstName, args: singletonArgs(arr), giid: giid, owned: false, range: range)
 		end 'first'
 		if methodTok.value.equals(ArrayLastMethod) 'last'
 			try self.parseArrayNoArgs()
-			return self.emitRuntimeCall(ArrLastName, args: singletonArgs(arr), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+			return self.emitArrayElementAccessor(ArrLastName, args: singletonArgs(arr), giid: giid, owned: false, range: range)
 		end 'last'
 		if methodTok.value.equals(ArrayPopMethod) 'pop'
 			try self.parseArrayNoArgs()
-			return self.emitRuntimeCall(ArrPopName, args: singletonArgs(arr), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+			return self.emitArrayElementAccessor(ArrPopName, args: singletonArgs(arr), giid: giid, owned: true, range: range)
 		end 'pop'
 		if methodTok.value.equals(ArrayRemoveMethod) 'remove'
 			let index = try self.parseArrayOneArg(func)
-			return self.emitRuntimeCall(ArrRemoveName, args: pairArgs(arr, second: index), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+			return self.emitArrayElementAccessor(ArrRemoveName, args: pairArgs(arr, second: index), giid: giid, owned: true, range: range)
 		end 'remove'
 
 		// Non-throwing value accessors.
@@ -13144,7 +13311,7 @@ export type Parser
 		// Non-throwing void mutators — rejected in value position (E3059).
 		try self.requireArrayVoidStatement(resultUsed, methodTok: methodTok)
 		if methodTok.value.equals(ArrayPushMethod) 'push'
-			let value = try self.parseArrayOneArg(func)
+			let value = try self.parseArrayElementArg(func, giid: giid)
 			return self.emitArrayVoidCall(ArrPushName, args: pairArgs(arr, second: value), receiver: arr, range: range)
 		end 'push'
 		if methodTok.value.equals(ArrayReserveMethod) 'reserve'
@@ -13160,7 +13327,7 @@ export type Parser
 			return self.emitArrayVoidCall(ArrClearName, args: singletonArgs(arr), receiver: arr, range: range)
 		end 'clear'
 		if methodTok.value.equals(ArrayInsertMethod) 'insert'
-			return try self.parseArraySetOrInsert(func, arr: arr, callee: ArrInsertName, throwing: false, range: range)
+			return try self.parseArraySetOrInsert(func, arr: arr, giid: giid, callee: ArrInsertName, throwing: false, range: range)
 		end 'insert'
 
 		throw ParseError.unsupported("`Array` method '{String.from(methodTok.value)}' — P1.7 slice 1 provides create/push/get/set/count/capacity/isEmpty/reserve/resize/first/last/pop/clear/insert/remove; the rest (slice/append/clone/map/contains/…) arrive later", line: methodTok.line, column: methodTok.column)
@@ -13172,6 +13339,52 @@ export type Parser
 		_ = self.emitRuntimeCall(callee, args: args, resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 		return receiver
 	end 'emitArrayVoidCall'
+
+	// ⭐ **EMIT A MANAGED-AWARE ELEMENT ACCESSOR** (`get`/`first`/`last`/`pop`/`remove`, P1.7 slice 3). The
+	// result is typed as the element's VALUE type for a managed element — a struct → `structRef` so
+	// `first.name` resolves, a boxed union → `named` so `match first` dispatches, a String → text, an instance
+	// → `genericInstance` — or `integer` for a trivial element (slice 1, unchanged). Ownership:
+	//   • get/first/last yield a BORROW (`owned: false`): the array keeps the element, so the result is NOT
+	//     tracked owned and is dropped by nothing here — the array's `__arr_decref` walk destroys it. A borrow
+	//     merged with an OWNED `otherwise` fallback is reconciled by `finishValueTry` (the fallback drops on the
+	//     error edge; see there).
+	//   • pop/remove MOVE the element OUT (`owned: true`): the runtime NULLS the slot it hands back (so the
+	//     array walk skips it), so the caller becomes the sole owner and the result is tracked owned.
+	function emitArrayElementAccessor(callee ByteArray, args ValueIdArray, giid GenericInstanceId, owned bool, range SourceRange) returns ValueId
+		if not self.signatures.arrayElementIsManaged(giid) 'trivial'
+			return self.emitRuntimeCall(callee, args: args, resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+		end 'trivial'
+		let elementValueType = self.arrayElementValueType(giid)
+		let result = self.emitRuntimeCall(callee, args: args, resultTag: maxonTypeTag(elementValueType), resultNameId: typeNameIdOf(elementValueType), range: range)
+		if owned 'moveOut'
+			self.trackOwnedTemp(result)
+		end 'moveOut'
+		return result
+	end 'emitArrayElementAccessor'
+
+	// The VALUE type a managed element is loaded as — the element's declared type retyped to its usable value
+	// form (a struct → `structRef`, a boxed union → its `named(<union>)`, a String → text, a nested Array /
+	// instance → `genericInstance` so `retrieved.count()` dispatches). A NESTED ARRAY element arrives as a
+	// `named` generic alias (`ByteArray` = `Array with Byte`) — the sweep recorded the layout before the alias
+	// interned — so it is resolved to its `genericInstance` here (the same alias→instance step
+	// `managedFieldDropCallee` takes for the drop). Every other element routes through the SAME
+	// `classifyUnionPayload`/`payloadValueTypeOf` the union-payload and struct-field reads use. The element id
+	// lives in signatures' interner, so it is adopted into this file's interner first (a ranged alias that
+	// shifted the interning order would otherwise misresolve — OPEN #52).
+	function arrayElementValueType(giid GenericInstanceId) returns MaxonType
+		let declared = self.signatures.adoptType(self.signatures.arrayElementType(giid), into: self.artifact.typeNames)
+		let tag = maxonTypeTag(declared)
+		if tag == ValueTypeTag.genericInstance 'instance'
+			return declared
+		end 'instance'
+		if tag == ValueTypeTag.named 'named'
+			let name = try self.artifact.typeNames.nameOf(typeNameIdOf(declared)) otherwise panic("arrayElementValueType: an adopted `named` element type's id is not in this file's interner")
+			if self.signatures.isGenericAlias(name) 'genericAlias'
+				return MaxonType.genericInstance(self.signatures.genericAliasInstance(name))
+			end 'genericAlias'
+		end 'named'
+		return payloadValueTypeOf(classifyUnionPayload(self.signatures, typeNames: self.artifact.typeNames, fieldType: declared), declared: declared)
+	end 'arrayElementValueType'
 
 	// `(` `)` — a no-argument array method (`count`, `first`, `pop`, `clear`, …).
 	function parseArrayNoArgs() throws ParseError
@@ -13191,7 +13404,7 @@ export type Parser
 	// `__arr_set`/`__arr_insert` call (throwing for `set`, void for `insert`) and returns its result. The
 	// value argument is parsed AFTER the index so the throwing `set`'s call is the last op the enclosing
 	// `try` rewrites.
-	function parseArraySetOrInsert(func IrFunction, arr ValueId, callee ByteArray, throwing bool, range SourceRange) returns ValueId throws ParseError
+	function parseArraySetOrInsert(func IrFunction, arr ValueId, giid GenericInstanceId, callee ByteArray, throwing bool, range SourceRange) returns ValueId throws ParseError
 		try self.consume(TokenKind.leftParen)
 		let index = try self.parseExpression(func, block: self.currentBlock)
 		try self.consume(TokenKind.comma)
@@ -13200,7 +13413,13 @@ export type Parser
 			throw ParseError.unsupported("the value argument of a two-argument array mutator must be labelled `value:` (got '{String.from(labelTok.value)}:')", line: labelTok.line, column: labelTok.column)
 		end 'wrongLabel'
 		try self.consume(TokenKind.colon)
-		let value = try self.parseExpression(func, block: self.currentBlock)
+		// The value is a managed-element MOVE-IN (`set`/`insert`), so it is consumed exactly as `push` is —
+		// `moveElementIntoArray` promotes a borrowed String, transfers an owned value, refuses a borrowed
+		// aggregate. `__arr_set` destroys the LIVE occupant it overwrites (its element_destroy walk of one
+		// slot), so no leak; `__arr_insert` shifts the tail (a relocation) and stores into the vacated slot.
+		let valueStart = self.pos
+		let raw = try self.parseExpression(func, block: self.currentBlock)
+		let value = try self.moveElementIntoArray(raw, giid: giid, valueStart: valueStart)
 		try self.consume(TokenKind.rightParen)
 
 		if throwing 'throwing'
@@ -13208,6 +13427,38 @@ export type Parser
 		end 'throwing'
 		return self.emitArrayVoidCall(callee, args: tripleArgs(arr, second: index, third: value), receiver: arr, range: range)
 	end 'parseArraySetOrInsert'
+
+	// `( expr )` — a single element-VALUE argument (`push(x)`), parsed then MOVED into the array (P1.7 slice 3):
+	// a managed element is consumed so the array owns it (its decref walk destroys it), a trivial element passes
+	// through. The value's start position is captured so a bare-local source can be poisoned (E3102).
+	function parseArrayElementArg(func IrFunction, giid GenericInstanceId) returns ValueId throws ParseError
+		try self.consume(TokenKind.leftParen)
+		let valueStart = self.pos
+		let value = try self.parseExpression(func, block: self.currentBlock)
+		// The move-in MUST run before the `)` is consumed: `rhsWasBareLocalReference` reads `[valueStart, self.pos)`
+		// to decide whether the arg is a bare local to POISON, and a consumed `)` would widen that window past a
+		// single-identifier arg (`push(node)`) — the poison would silently not fire and the moved binding would
+		// drop a second time at scope exit (a double-free / over-release, exit 101).
+		let moved = try self.moveElementIntoArray(value, giid: giid, valueStart: valueStart)
+		try self.consume(TokenKind.rightParen)
+		return moved
+	end 'parseArrayElementArg'
+
+	// ⭐ **MOVE A PARSED ELEMENT INTO A MANAGED-ELEMENT ARRAY (P1.7 slice 3).** The array becomes the element's
+	// sole owner (its `__arr_decref` walk destroys it), so the source is consumed exactly as a struct-field /
+	// union-payload move-in (`moveManagedValueInto`): a borrowed String literal is promoted to an owned copy,
+	// an owned value is transferred (bare local poisoned / temp de-listed), a borrowed struct/union is refused
+	// (no clone). A TRIVIAL-element array's value owns no heap and passes through unchanged. Shared by
+	// push/set/insert. `valueStart` locates the value's first token — its bare-local source and the diagnostic
+	// anchor both.
+	function moveElementIntoArray(value ValueId, giid GenericInstanceId, valueStart TokenIndex) returns ValueId throws ParseError
+		if not self.signatures.arrayElementIsManaged(giid) 'trivial'
+			return value
+		end 'trivial'
+		let anchor = self.tokenAt(valueStart)
+		let isString = tagIsText(maxonTypeTag(self.signatures.arrayElementType(giid)))
+		return try self.moveManagedValueInto(value, argBareLocal: self.rhsWasBareLocalReference(valueStart), isString: isString, anchor: anchor, range: SourceRange.ofToken(anchor))
+	end 'moveElementIntoArray'
 
 	// A non-throwing void array mutator (`push`/`reserve`/`resize`/`clear`/`insert`) has no value, so a
 	// value-position call is E3059, exactly as a void free call or `String.append` in value position is.
@@ -13217,21 +13468,17 @@ export type Parser
 		end 'valueUsed'
 	end 'requireArrayVoidStatement'
 
-	// Reject a MANAGED-element array (String / struct / union / nested Array) at any array op site — P1.7
-	// slice 1 is trivial elements only; managed elements need the element-destroy walk (slice 3).
-	function requireTrivialArrayElement(giid GenericInstanceId, tok Token) throws ParseError
-		if self.signatures.arrayElementIsManaged(giid) 'managed'
-			throw ParseError.unsupported("an `Array` with a managed element (String / struct / union / nested Array) — P1.7 slice 1 supports trivial elements (int / Byte / ranged-int / bool) only; managed elements arrive at P1.7 slice 3", line: tok.line, column: tok.column)
-		end 'managed'
-	end 'requireTrivialArrayElement'
-
-	// An array LITERAL element must be integer-typed at this slice (a bare `[…]` interns `Array with
-	// integer`); a String / struct / bool / Byte element literal is a later slice.
-	function requireIntegerArrayElement(elem ValueId, tok Token) throws ParseError
-		if self.tagOf(elem) != ValueTypeTag.integer 'notInt'
-			throw ParseError.unsupported("an array literal element of type '{typeTagName(self.tagOf(elem))}' — P1.7 slice 1 array literals hold integer elements only (String / struct / bool / Byte element literals are a later slice)", line: tok.line, column: tok.column)
-		end 'notInt'
-	end 'requireIntegerArrayElement'
+	// A managed-element array must have a CONCRETE element type at this slice (P1.7 slice 3a): the construction
+	// site stamps `element_destroy@40` with the ADDRESS of the element's destructor (`funcAddr`), which needs
+	// the concrete element type known statically. An OPAQUE type parameter (`Array with T` inside a generic
+	// type's shared body) does not know its element destructor statically — it lives in the layout descriptor
+	// (`destroyFunc@40`, reached by the rdata reloc), which is slice 3b — so it is rejected with a positioned
+	// E2015 until then. A trivial or concrete-managed element passes.
+	function requireConcreteArrayElement(giid GenericInstanceId, tok Token) throws ParseError
+		if self.signatures.arrayElementIsOpaque(giid) 'opaque'
+			throw ParseError.unsupported("an `Array` with an opaque type-parameter element (`Array with T` inside a generic type's body) — P1.7 slice 3a supports an array with a CONCRETE element type; an opaque `T` element needs the layout-descriptor element destructor (P1.7 slice 3b)", line: tok.line, column: tok.column)
+		end 'opaque'
+	end 'requireConcreteArrayElement'
 
 	// The SCOPE name a base token denotes. `self` is a keyword, so it carries no binding name of its
 	// own; it names the receiver parameter, which is bound under `SelfParamName`. Every other base
@@ -13273,10 +13520,26 @@ export type Parser
 	// the owning struct's field, valid while the base binding lives, so no ownership is taken and nothing is
 	// dropped. The cursor is left on the token AFTER the last field name (the `=` of a write, or wherever the
 	// read's expression continues).
+	// Consume a field-chain base token — the receiver `self` (a keyword) or a local identifier. `self` names the
+	// receiver parameter (resolved by `baseBindingName` to `SelfParamName`); every other base names itself.
+	function consumeChainBaseToken() returns Token throws ParseError
+		if self.at(TokenKind.self) 'selfBase'
+			let tok = self.current()
+			self.advance()
+			return tok
+		end 'selfBase'
+		return try self.consume(TokenKind.identifier)
+	end 'consumeChainBaseToken'
+
 	function resolveFieldChain() returns FieldChainStep throws ParseError
-		let baseTok = try self.consume(TokenKind.identifier)
-		if self.scope.contains(baseTok.value) 'localBase'
-			let baseBinding = self.scope.getInfo(baseTok.value)
+		// The base is a local identifier (`b.ops.push`) OR the receiver `self` (`self.nodes.push` — P1.7 slice 3):
+		// `self` is a keyword, not an identifier, and it names the receiver parameter bound under `SelfParamName`,
+		// which `baseBindingName` maps. A single-hop `self.field` read/write resolves elsewhere; this is the 2+-hop
+		// chain and the chain-method-call spine, which `fieldChainMethodCallAt` already admits a `self` base to.
+		let baseTok = try self.consumeChainBaseToken()
+		let baseName = self.baseBindingName(baseTok)
+		if self.scope.contains(baseName) 'localBase'
+			let baseBinding = self.scope.getInfo(baseName)
 			let base = try self.requireStructBase(baseBinding, baseTok: baseTok)
 			return try self.resolveFieldChainFrom(base.box, layout: base.layout, baseTok: baseTok, baseBinding: baseBinding)
 		end 'localBase'
@@ -15514,7 +15777,11 @@ export type Parser
 				continue
 			end 'borrowed'
 			let argValue = try args.get(i) otherwise panic("transferConsumedArgs: args.get OOB at {i}")
-			try self.transferConsumedArg(argValue, anchor: anchor)
+			// A borrowed String consumed arg is PROMOTED to an owned copy the callee can keep — `transferConsumedArg`
+			// returns that copy, which must replace the borrowed original in the call's args so the op carries the
+			// owned value (`applyCallerConsume` runs BEFORE the op is emitted). An owned/scalar arg returns itself.
+			let transferred = try self.transferConsumedArg(argValue, anchor: anchor)
+			try args.set(i, value: transferred) otherwise panic("transferConsumedArgs: args.set OOB at {i}")
 		end 'eachArg'
 	end 'transferConsumedArgs'
 
@@ -15548,22 +15815,31 @@ export type Parser
 		end 'f'
 	end 'instanceFeedConsumesFor'
 
-	// Transfer one consumed argument out of its owner. A SCALAR argument owns no heap and the consume is
-	// inert. An OWNED managed value moves — a live owned BINDING is poisoned (E3102 on later use), an owned
-	// TEMPORARY is drained from the statement's pending drops (the callee owns it now); `poisonMoveSource`
-	// and `removeFromPendingTemps` are each a no-op on the other's case, so both run without a bare-local
-	// flag to gate them. A BORROWED managed value (a borrowed parameter, a borrowed field read, a borrowed
-	// String literal) cannot transfer ownership — its own owner keeps a live reference — so it is refused,
-	// the transitive-consume case the call-graph fixpoint owns.
-	function transferConsumedArg(argValue ValueId, anchor Token) throws ParseError
+	// Transfer one consumed argument out of its owner, returning the value the call must actually carry. A
+	// SCALAR argument owns no heap and the consume is inert (returns itself). An OWNED managed value moves — a
+	// live owned BINDING is poisoned (E3102 on later use), an owned TEMPORARY is drained from the statement's
+	// pending drops (the callee owns it now); `poisonMoveSource` and `removeFromPendingTemps` are each a no-op
+	// on the other's case, so both run without a bare-local flag to gate them (returns itself). A BORROWED
+	// STRING (a long rdata literal, or a borrowed String parameter/field) has a cheap owning copy, so it is
+	// PROMOTED into a fresh owned record the callee can move into its field — exactly as a DIRECT struct-field /
+	// union-payload move-in does (`moveManagedValueInto`) — and THAT copy is returned to replace the borrowed
+	// arg. A borrowed STRUCT/UNION has no clone and stays refused (the transitive-consume case the call-graph
+	// fixpoint owns).
+	function transferConsumedArg(argValue ValueId, anchor Token) returns ValueId throws ParseError
 		if not self.valueIsManagedHeap(argValue) 'scalar'
-			return
+			return argValue
 		end 'scalar'
 		if not self.valueIsOwnedHeap(argValue) 'borrowedManaged'
-			throw ParseError.unsupported("passing a borrowed struct/String value at a CONSUMING argument position — the callee moves it into durable storage, so ownership must transfer, and a borrowed value's owner keeps a live reference the callee's field would dangle behind; forwarding a borrowed parameter to a consuming callee is the transitive-consume case handled by the call-graph fixpoint (P1.4a wave 2+)", line: anchor.line, column: anchor.column)
+			if tagIsText(self.tagOf(argValue)) 'string'
+				let owned = self.promoteToOwnedString(argValue, range: SourceRange.ofToken(anchor))
+				self.removeFromPendingTemps(owned)
+				return owned
+			end 'string'
+			throw ParseError.unsupported("passing a borrowed struct/union value at a CONSUMING argument position — the callee moves it into durable storage, so ownership must transfer, and a borrowed struct/union has no `clone`, so its owner keeps a live reference the callee's field would dangle behind; forwarding a borrowed aggregate parameter to a consuming callee is the transitive-consume case handled by the call-graph fixpoint (P1.4a wave 2+)", line: anchor.line, column: anchor.column)
 		end 'borrowedManaged'
 		try self.poisonMoveSource(argValue, anchor: anchor)
 		self.removeFromPendingTemps(argValue)
+		return argValue
 	end 'transferConsumedArg'
 
 	// Mint the SSA value a call to `calleeTok` defines, typed from the WHOLE-PROGRAM signature index

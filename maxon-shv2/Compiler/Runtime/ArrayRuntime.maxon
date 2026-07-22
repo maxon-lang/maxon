@@ -109,6 +109,7 @@ let NoErrorFlag = 0 as ParsedInt
 // comment names: it no longer exists in the bootstrap.)
 let GrowthThreshold = 256 as ParsedInt
 let MinimumCapacity = 4 as ParsedInt
+
 // The easing step is `capacity + (capacity + 3·GrowthThreshold)/4`. The `3` and the `4` are named (and
 // the `3·GrowthThreshold` addend is derived from `GrowthThreshold` in the IR, not written as a second
 // literal 768) so the formula reads as the policy and no fact is written twice.
@@ -135,6 +136,7 @@ export let ArrClearName = b"__arr_clear"
 export let ArrInsertName = b"__arr_insert"
 export let ArrRemoveName = b"__arr_remove"
 export let ArrDecrefName = b"__arr_decref"
+
 // Internal helpers the public ones call: `__arr_grown_cap` is the policy, `__arr_grow` reallocs to fit.
 let ArrGrownCapName = b"__arr_grown_cap"
 let ArrGrowName = b"__arr_grow"
@@ -306,6 +308,50 @@ function emitZeroRange(module StdModule, func IrFunction, cur IrBlock, dest Valu
 	return done
 end 'emitZeroRange'
 
+// ⭐ **THE MANAGED-ELEMENT DESTROY WALK (P1.7 slice 3).** Walk `[start, end)` of `buffer` (stride
+// `elementSize`, always 8 for a managed element — a heap pointer) and DESTROY each NON-NULL slot by calling
+// the `destroy` function pointer on it through a `callIndirect`. ONE home for the null-guarded per-slot
+// destroy loop, shared by `__arr_decref` (drop, `[0, length)`), `__arr_clear` (`[0, length)`) and
+// `__arr_resize`'s shrink (`[n, oldLen)`). The null-guard skips a MOVED-OUT slot (a `pop`/`remove` nulls the
+// slot it hands to the caller). `destroy` is the element's own destroy function (`__str_decref` /
+// `__destruct_<T>` / `__mm_decref` / `__arr_decref`), so each element is destroyed ONCE — shv2's move-only
+// model, NOT v1's `&__mm_decref` refcount net. Threads through `cur` (sets its terminator) and returns the
+// continuation block. Caller guards `destroy != 0` (a trivial-element array never reaches here).
+function emitElementDestroyRange(module StdModule, func IrFunction, cur IrBlock, buffer ValueId, start ValueId, stop ValueId, elementSize ValueId, destroy ValueId, ids ValueMinter) returns IrBlock
+	var header = module.addBlock(func, label: b"dtorh")
+	var body = module.addBlock(func, label: b"dtorb")
+	var doDrop = module.addBlock(func, label: b"dtordo")
+	var step = module.addBlock(func, label: b"dtorstep")
+	let done = module.addBlock(func, label: b"dtordone")
+
+	module.setTerminator(cur, op: StdOp.branch(header.id))
+
+	let i = ids.mint()
+	header.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
+	cur.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(start)))
+	let atEnd = ids.mint()
+	module.appendOp(header, op: StdOp.cmp(atEnd, lhs: i, rhs: stop, pred: StdCmpPred.ge, operandType: StdType.i64))
+	module.setTerminator(header, op: StdOp.condBranch(atEnd, thenBlockId: done.id, elseBlockId: body.id))
+
+	let slot = emitSlotAddr(module, block: body, buffer: buffer, index: i, elementSize: elementSize, ids: ids)
+	let elem = ids.mint()
+	module.appendOp(body, op: StdOp.loadIndirect(elem, addrId: slot, offset: 0, valueType: StdType.i64))
+	let zero = emitConst(module, block: body, value: 0, ids: ids)
+	let nonNull = emitCmp(module, block: body, a: elem, b: zero, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(body, op: StdOp.condBranch(nonNull, thenBlockId: doDrop.id, elseBlockId: step.id))
+
+	let dropped = ids.mint()
+	module.appendOp(doDrop, op: StdOp.callIndirect(dropped, calleeReg: destroy, args: argsOf(elem)))
+	module.setTerminator(doDrop, op: StdOp.branch(step.id))
+
+	let one = emitConst(module, block: step, value: 1, ids: ids)
+	let iNext = emitBin(module, block: step, a: i, b: one, opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(step, op: StdOp.branch(header.id))
+	step.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(iNext)))
+
+	return done
+end 'emitElementDestroyRange'
+
 // Store the low `size` bytes of the register `value` at `addr`, little-endian — a push/set/insert of a
 // trivial element word. Byte `i` is `(value >>logical i·8)` stored as a `u8` (which keeps the low byte).
 function emitStoreElem(module StdModule, func IrFunction, cur IrBlock, addr ValueId, value ValueId, size ValueId, ids ValueMinter) returns IrBlock
@@ -390,12 +436,34 @@ function emitLoadElem(module StdModule, func IrFunction, cur IrBlock, exit IrBlo
 	return acc
 end 'emitLoadElem'
 
-// Load the element at `addr` (size `size`) and throw-RETURN it as the OK value — the get/first/last tail.
-// Creates the loop-exit block (a `var` it owns) and terminates it with the ok return.
-function emitLoadElemAndOkReturn(module StdModule, func IrFunction, cur IrBlock, addr ValueId, size ValueId, ids ValueMinter)
-	var exit = module.addBlock(func, label: b"lded")
-	let value = emitLoadElem(module, func: func, cur: cur, exit: exit, addr: addr, size: size, ids: ids)
-	emitOkReturn(module, block: exit, value: value, ids: ids)
+// Load the element at `addr` (size `size`) from array `record` and throw-RETURN it — the get/first/last tail.
+// ⭐ **EMPTY-SLOT DETECTION for a MANAGED element (P1.7 slice 3).** A managed array grown by `resize` has NULL
+// slots inside `[0, length)` (never written — the buffer is zeroed), and a null pointer is not a valid element:
+// reading its fields would fault. So for a managed element (`element_destroy@40 != 0`) a NULL loaded value is
+// treated as an empty slot and THROWS `indexOutOfBounds`, routing the caller's `try … otherwise` to its
+// fallback. A TRIVIAL element's 0 is a genuine value (not empty), so the null-check is gated on the destructor
+// and never fires for a trivial array — its ok-return is unchanged.
+function emitLoadElemAndOkReturn(module StdModule, func IrFunction, cur IrBlock, record ValueId, addr ValueId, size ValueId, ids ValueMinter)
+	var checkDtor = module.addBlock(func, label: b"gchkdtor")
+	let value = emitLoadElem(module, func: func, cur: cur, exit: checkDtor, addr: addr, size: size, ids: ids)
+
+	var checkNull = module.addBlock(func, label: b"gchknull")
+	var ok = module.addBlock(func, label: b"gok")
+	var empty = module.addBlock(func, label: b"gempty")
+
+	// checkDtor: a trivial element (destructor 0) skips the null-check; a managed one falls to checkNull.
+	let dtor = emitLoadField(module, block: checkDtor, arr: record, offset: ArrElementDestroyOffset, ids: ids)
+	let zeroDtor = emitConst(module, block: checkDtor, value: 0, ids: ids)
+	let managed = emitCmp(module, block: checkDtor, a: dtor, b: zeroDtor, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(checkDtor, op: StdOp.condBranch(managed, thenBlockId: checkNull.id, elseBlockId: ok.id))
+
+	// checkNull: a NULL managed slot is empty → throw; a live one returns ok.
+	let zeroVal = emitConst(module, block: checkNull, value: 0, ids: ids)
+	let isNull = emitCmp(module, block: checkNull, a: value, b: zeroVal, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(checkNull, op: StdOp.condBranch(isNull, thenBlockId: empty.id, elseBlockId: ok.id))
+
+	emitOobReturn(module, block: empty, ids: ids)
+	emitOkReturn(module, block: ok, value: value, ids: ids)
 end 'emitLoadElemAndOkReturn'
 
 // --- Small shared emit helpers over a single block ---
@@ -692,7 +760,7 @@ function buildArrGet(module StdModule)
 	let buffer = emitLoadField(module, block: load, arr: arr, offset: ArrBufferOffset, ids: ids)
 	let es = emitLoadField(module, block: load, arr: arr, offset: ArrElementSizeOffset, ids: ids)
 	let slot = emitSlotAddr(module, block: load, buffer: buffer, index: index, elementSize: es, ids: ids)
-	emitLoadElemAndOkReturn(module, func: func, cur: load, addr: slot, size: es, ids: ids)
+	emitLoadElemAndOkReturn(module, func: func, cur: load, record: arr, addr: slot, size: es, ids: ids)
 
 	module.functions.push(func)
 end 'buildArrGet'
@@ -840,7 +908,7 @@ function buildArrFirst(module StdModule)
 
 	let buffer = emitLoadField(module, block: load, arr: arr, offset: ArrBufferOffset, ids: ids)
 	let es = emitLoadField(module, block: load, arr: arr, offset: ArrElementSizeOffset, ids: ids)
-	emitLoadElemAndOkReturn(module, func: func, cur: load, addr: buffer, size: es, ids: ids)
+	emitLoadElemAndOkReturn(module, func: func, cur: load, record: arr, addr: buffer, size: es, ids: ids)
 
 	module.functions.push(func)
 end 'buildArrFirst'
@@ -869,7 +937,7 @@ function buildArrLast(module StdModule)
 	let buffer = emitLoadField(module, block: load, arr: arr, offset: ArrBufferOffset, ids: ids)
 	let es = emitLoadField(module, block: load, arr: arr, offset: ArrElementSizeOffset, ids: ids)
 	let slot = emitSlotAddr(module, block: load, buffer: buffer, index: lastIdx, elementSize: es, ids: ids)
-	emitLoadElemAndOkReturn(module, func: func, cur: load, addr: slot, size: es, ids: ids)
+	emitLoadElemAndOkReturn(module, func: func, cur: load, record: arr, addr: slot, size: es, ids: ids)
 
 	module.functions.push(func)
 end 'buildArrLast'
@@ -1022,21 +1090,27 @@ function buildArrRemove(module StdModule)
 	module.functions.push(func)
 end 'buildArrRemove'
 
-// `__arr_decref(arr)` — an array's drop: the shared refcount RMW, then on the last owner free the external
-// element buffer (if any) and the record.
+// `__arr_decref(arr)` — an array's drop: the shared refcount RMW, then on the last owner DESTROY each managed
+// element, free the external element buffer (if any) and the record.
 //
-// ⭐ **THE SLICE-3 SEAM.** At this trivial slice `element_destroy@40` is always 0, so the last owner frees
-// the buffer without touching the elements. A MANAGED-element array (P1.7 slice 3) will, on the last
-// owner, first WALK `[0, length)` calling `element_destroy@40` on each slot BEFORE freeing the buffer —
-// the field and the free path are already shaped for it; only the walk is unwritten. The drop is
-// single-sited (routed here by tag, `decrefCalleeFor`), so that walk lands in exactly one place.
+// ⭐ **THE MANAGED-ELEMENT WALK (P1.7 slice 3).** When `element_destroy@40 != 0` the array's elements are
+// managed heap POINTERS (a String / struct / union / instance / nested-Array box), so before the buffer is
+// freed the last owner WALKS `[0, length)` and calls `element_destroy@40` on each NON-NULL slot through a
+// `callIndirect`. ⭐ **The shv2 departure from v1:** `element_destroy@40` holds the element's DESTROY function
+// (`__str_decref` / `__destruct_<T>` / `__mm_decref` / `__arr_decref`), NOT v1's `&__mm_decref` — shv2 is
+// MOVE-ONLY (a slot holds the sole owner's +0 reference), so the walk destroys each element ONCE, it does not
+// net a refcount. The null-guard skips a MOVED-OUT slot (a `pop`/`remove` nulls the slot it hands out) and a
+// never-written `[length, capacity)` slot the walk never reaches (it strides only `[0, length)`, and the
+// capacity-slot invariant keeps those zero anyway). A TRIVIAL-element array has `element_destroy@40 == 0` and
+// takes the direct buffer free unchanged (no golden moves — the array helpers are `__`-prefixed, out of the
+// spec fragments, so this whole restructuring is invisible to them).
 //
 // ⚠ **THE RDATA-BUFFER SEAM (P1.7 slice 2).** A byte-string literal (`b"…"`) is an owned heap record whose
 // `buffer@0` points into IMMORTAL `.rdata` and whose `capacity@16` is the sentinel `ArrRdataCapacitySentinel`
 // (< 0). Freeing that buffer would `__mm_free` a `.rdata` address that was never `__mm_alloc`'d (a fault), so
 // the last owner frees the RECORD alone when the capacity is negative — the buffer free is gated on
-// `capacity >= 0` (an OWNED, grown buffer). An owned array (capacity >= 0) reaches the existing buffer path
-// unchanged, so no slice-1 golden moves.
+// `capacity >= 0` (an OWNED, grown buffer). A byte-string is `Array with Byte`, a TRIVIAL element, so it never
+// reaches the managed walk. An owned array (capacity >= 0) reaches the existing buffer path unchanged.
 function buildArrDecref(module StdModule)
 	var func = IrFunction.createFromStd(ArrDecrefName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
@@ -1045,6 +1119,7 @@ function buildArrDecref(module StdModule)
 	var lower = module.addBlock(func, label: b"lower")
 	var release = module.addBlock(func, label: b"release")
 	var checkBuf = module.addBlock(func, label: b"checkbuf")
+	var checkDtor = module.addBlock(func, label: b"checkdtor")
 	var freeBuf = module.addBlock(func, label: b"freebuf")
 	var freeRec = module.addBlock(func, label: b"freerec")
 
@@ -1060,11 +1135,26 @@ function buildArrDecref(module StdModule)
 	let isRdata = emitCmp(module, block: release, a: capacity, b: zeroCap, pred: StdCmpPred.lt, ids: ids)
 	module.setTerminator(release, op: StdOp.condBranch(isRdata, thenBlockId: freeRec.id, elseBlockId: checkBuf.id))
 
-	// checkBuf: free the external buffer only if one was allocated (an empty array never allocated one).
+	// checkBuf: an empty array never allocated a buffer (nor any element) — free the record directly. An
+	// allocated buffer falls to `checkDtor`, which decides whether its elements must be destroyed first.
 	let buffer = emitLoadField(module, block: checkBuf, arr: record, offset: ArrBufferOffset, ids: ids)
 	let zero = emitConst(module, block: checkBuf, value: 0, ids: ids)
 	let hasBuf = emitCmp(module, block: checkBuf, a: buffer, b: zero, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(checkBuf, op: StdOp.condBranch(hasBuf, thenBlockId: freeBuf.id, elseBlockId: freeRec.id))
+	module.setTerminator(checkBuf, op: StdOp.condBranch(hasBuf, thenBlockId: checkDtor.id, elseBlockId: freeRec.id))
+
+	// checkDtor: a managed-element array (`element_destroy@40 != 0`) walks and destroys its live elements
+	// before the buffer free; a trivial-element array frees the buffer directly.
+	let dtor = emitLoadField(module, block: checkDtor, arr: record, offset: ArrElementDestroyOffset, ids: ids)
+	let zeroDtor = emitConst(module, block: checkDtor, value: 0, ids: ids)
+	let hasDtor = emitCmp(module, block: checkDtor, a: dtor, b: zeroDtor, pred: StdCmpPred.ne, ids: ids)
+	let length = emitLoadField(module, block: checkDtor, arr: record, offset: ArrLengthOffset, ids: ids)
+	let es = emitLoadField(module, block: checkDtor, arr: record, offset: ArrElementSizeOffset, ids: ids)
+	let start = emitConst(module, block: checkDtor, value: 0, ids: ids)
+	var walkStart = module.addBlock(func, label: b"walk")
+	module.setTerminator(checkDtor, op: StdOp.condBranch(hasDtor, thenBlockId: walkStart.id, elseBlockId: freeBuf.id))
+
+	var afterWalk = emitElementDestroyRange(module, func: func, cur: walkStart, buffer: buffer, start: start, stop: length, elementSize: es, destroy: dtor, ids: ids)
+	module.setTerminator(afterWalk, op: StdOp.branch(freeBuf.id))
 
 	let bufFreed = ids.mint()
 	module.appendOp(freeBuf, op: StdOp.call(bufFreed, callee: MmFreeName, args: argsOf(buffer)))

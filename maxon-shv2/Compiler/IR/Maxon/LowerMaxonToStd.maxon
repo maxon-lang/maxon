@@ -548,7 +548,7 @@ type MaxonToStdLowering
 			// thread; `await p` drives the scheduler until the promise completes. `args` is safe to bind in
 			// this big match because a later field (`argLabels`/`argRanges`) follows it — see lowerIndirectCall.
 			asyncCall(result, callee, args, argLabels, _) then self.lowerAsyncCall(result, callee: callee, args: args, argLabels: argLabels, dstBlock: dstBlock)
-			await(result, promise) then self.lowerAwait(result, promise: promise, dstBlock: dstBlock)
+			await (result, promise) then self.lowerAwait(result, promise: promise, dstBlock: dstBlock)
 			tryAwait(result, errorFlag, promise) then self.lowerTryAwait(result, errorFlag: errorFlag, promise: promise, dstBlock: dstBlock)
 			// `sizeof(T)` — a runtime read of the enclosing instance's layout descriptor (P1.6-B1). The
 			// parser folds every CONCRETE sizeof to a literal, so this op only ever carries a typeParameter.
@@ -994,13 +994,18 @@ type MaxonToStdLowering
 	end 'lowerTryAwait'
 
 	// Materialize a function value's `.text` address (P1.5-A2b-2). Under the uniform `(userargs, env) -> R`
-	// ABI every function value is called through the SAME indirect signature, so the address must name a
+	// ABI every USER function value is called through the SAME indirect signature, so the address must name a
 	// function of that shape. A LIFTED CLOSURE already is one (its trailing `__env` parameter). A PLAIN named
 	// function is not, and its direct calls must stay unchurned — so its value use materializes the address of
 	// its `__fnref_` thunk instead, which `installFnRefThunks` synthesizes with the env-carrying signature.
 	// The thunk names cannot drift: `fnRefThunkName` is the ONE builder both this site and the synthesis read.
+	//
+	// A COMPILER-INTERNAL callee (`__`-prefixed — an array element destructor stamped into `element_destroy@40`,
+	// P1.7 slice 3) takes the BARE address: it is invoked through a plain `callIndirect(ptr)` in the drop walk,
+	// NOT the uniform closure ABI, so it needs no env thunk (and none is synthesized for it — `collectFnRefThunkTargets`
+	// skips `__`-prefixed names). The `__` prefix is the discriminator both this site and the thunk collector read.
 	function lowerFunctionRef(result ValueId, funcName ByteArray, dstBlock IrBlock)
-		let target = funcName if isLiftedClosureName(funcName) else fnRefThunkName(funcName)
+		let target = funcName if (isLiftedClosureName(funcName) or isCompilerInternalCallee(funcName)) else fnRefThunkName(funcName)
 		self.stdModule.appendOp(dstBlock, op: StdOp.funcAddr(result, funcName: target))
 	end 'lowerFunctionRef'
 

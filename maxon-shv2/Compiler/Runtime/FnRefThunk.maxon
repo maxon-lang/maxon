@@ -80,11 +80,15 @@ function noteIfFunctionRef(op MaxonOp, seen FnRefThunkSet, targets ByteArrayArra
 	end 'op'
 end 'noteIfFunctionRef'
 
-// A plain (non-closure) target seen for the first time joins the ordered thunk list.
+// A plain (non-closure) target seen for the first time joins the ordered thunk list. A lifted closure
+// carries its own `__env` and needs no thunk; a COMPILER-INTERNAL callee (`__`-prefixed — an array element
+// destructor addressed for `element_destroy@40`, P1.7 slice 3) is invoked through a bare `callIndirect(ptr)`
+// in the drop walk, not the uniform closure ABI, so it gets no `__fnref_` thunk either (`lowerFunctionRef`
+// takes its bare address). The `__` prefix is the same discriminator that lowering reads.
 function noteFnRefTarget(funcName ByteArray, seen FnRefThunkSet, targets ByteArrayArray)
-	if isLiftedClosureName(funcName) 'closure'
+	if isLiftedClosureName(funcName) or isCompilerInternalCallee(funcName) 'noThunk'
 		return
-	end 'closure'
+	end 'noThunk'
 	if seen.contains(funcName) 'already'
 		return
 	end 'already'

@@ -569,8 +569,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: push-string-literals -->
-<!-- P1.7-s3 String element -->
+<!-- test: push-string-literals -->
 Push string literals into an array and retrieve them.
 
 ```maxon
@@ -599,8 +598,7 @@ helloworld
 0
 ```
 
-<!-- disabled-test: push-string-literals-long -->
-<!-- P1.7-s3 String element -->
+<!-- test: push-string-literals-long -->
 Push longer string literals (heap-allocated) into an array.
 
 ```maxon
@@ -629,8 +627,7 @@ hello this is a longer stringworld this is also a longer string
 0
 ```
 
-<!-- disabled-test: push-string-variables -->
-<!-- P1.7-s3 String element -->
+<!-- test: push-string-variables -->
 Push string variables into an array.
 
 ```maxon
@@ -683,8 +680,7 @@ abc
 0
 ```
 
-<!-- disabled-test: string-array-get -->
-<!-- P1.7-s3 String element -->
+<!-- test: string-array-get -->
 Get strings from array using get method.
 
 ```maxon
@@ -708,8 +704,7 @@ two
 0
 ```
 
-<!-- disabled-test: string-array-memory -->
-<!-- P1.7-s3 String element -->
+<!-- test: string-array-memory -->
 Verify string array memory is properly managed (no leaks).
 
 ```maxon
@@ -1265,8 +1260,7 @@ end 'main'
 
 ### Insert and Remove with Managed Types
 
-<!-- disabled-test: insert-strings -->
-<!-- P1.7-s3 String element -->
+<!-- test: insert-strings -->
 Insert a string into the middle of a string array. Verifies shiftRight handles refcounted types.
 
 ```maxon
@@ -1299,8 +1293,7 @@ alphabetagamma
 0
 ```
 
-<!-- disabled-test: remove-strings -->
-<!-- P1.7-s3 String element -->
+<!-- test: remove-strings -->
 Remove a string from the middle of a string array. Verifies shiftLeft handles refcounted types.
 
 ```maxon
@@ -1333,8 +1326,7 @@ yxz
 0
 ```
 
-<!-- disabled-test: insert-remove-structs -->
-<!-- P1.7-s3 struct element -->
+<!-- test: insert-remove-structs -->
 Insert and remove structs from an array. Exercises shift operations with managed struct types.
 
 ```maxon

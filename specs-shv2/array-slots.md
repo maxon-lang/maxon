@@ -14,8 +14,7 @@ This only applies to struct-element arrays. Primitive arrays (int, float, byte, 
 
 ## Tests
 
-<!-- disabled-test: get-empty-slot-basic -->
-<!-- P1.7-s3 struct element (empty-slot detection) -->
+<!-- test: get-empty-slot-basic -->
 ### Get on empty slot uses otherwise path
 Create an array, push one item, resize to 3, then `try arr.get(1) otherwise` should use the otherwise path since slot 1 is empty.
 ```maxon
@@ -43,8 +42,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: get-valid-slot-not-empty -->
-<!-- P1.7-s3 struct element (empty-slot detection) -->
+<!-- test: get-valid-slot-not-empty -->
 ### Get on a populated slot works fine
 Getting an element from a slot that was populated via push should work without error.
 ```maxon
@@ -92,8 +90,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: get-empty-slot-try-otherwise-value -->
-<!-- P1.7-s3 struct element (empty-slot detection) -->
+<!-- test: get-empty-slot-try-otherwise-value -->
 ### Try/otherwise returns default struct value when slot is empty
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -119,8 +116,7 @@ end 'main'
 99
 ```
 
-<!-- disabled-test: first-empty-slot -->
-<!-- P1.7-s3 struct element (empty-slot detection) -->
+<!-- test: first-empty-slot -->
 ### first() on array where slot 0 is empty
 Resize to 3 without pushing any elements. `first()` should use the otherwise path.
 ```maxon
@@ -149,8 +145,7 @@ end 'main'
 77
 ```
 
-<!-- disabled-test: last-empty-slot -->
-<!-- P1.7-s3 struct element (empty-slot detection) -->
+<!-- test: last-empty-slot -->
 ### last() on array where last slot is empty
 Resize to 3, only push 1 item. `last()` should use the otherwise path since slot 2 is empty.
 ```maxon
@@ -179,7 +174,7 @@ end 'main'
 ```
 
 <!-- disabled-test: try-otherwise-error-binding -->
-<!-- P1.7-s3 struct element (empty-slot detection) -->
+<!-- P1.7 enum-case match pattern (match on the caught error binds an enum case) — a pre-existing match-pattern feature (enum-case patterns), orthogonal to arrays -->
 ### Try/otherwise with error binding and match on ArrayError.indexOutOfBounds
 Calling get(0) on a resized-but-unfilled struct array throws ArrayError.indexOutOfBounds —
 the resize zeros every slot, and a null slot is reported as out-of-bounds by the array

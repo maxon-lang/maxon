@@ -1,0 +1,149 @@
+---
+feature: challenge-array-of-structs
+status: stable
+keywords: array, struct, elements, memory
+category: semantics
+---
+# Challenge Array Of Structs
+
+## Documentation
+
+## Arrays of Structs
+
+Arrays can contain struct values. Each element is a complete copy of the struct.
+
+## Tests
+
+<!-- test: array-of-structs-literal -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+type Point
+	export var x as Integer
+	export var y as Integer
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
+end 'Point'
+
+function main() returns ExitCode
+	let p1 = Point.create(1, y: 2)
+	let p2 = Point.create(3, y: 4)
+	let points = [p1, p2]
+	let pt0 = try points.get(0) otherwise Point.create(0, y: 0)
+	let pt1 = try points.get(1) otherwise Point.create(0, y: 0)
+	return pt0.x + pt1.y
+end 'main'
+```
+```exitcode
+5
+```
+
+<!-- test: array-of-structs-indexed-access -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+type Pair
+	export var first as Integer
+	export var second as Integer
+
+	static function create(first Integer, second Integer) returns Self
+		return Self{first: first, second: second}
+	end 'create'
+end 'Pair'
+
+function main() returns ExitCode
+	let p = Pair.create(10, second: 20)
+	let arr = [p]
+	let elem = try arr.get(0) otherwise Pair.create(0, second: 0)
+	return elem.first + elem.second
+end 'main'
+```
+```exitcode
+30
+```
+
+<!-- disabled-test: array-of-structs-with-enum-field -->
+<!-- P1.7 enum-field .rawValue via a field chain (item.color.rawValue) — a pre-existing shv2 gap (p.color.rawValue fails without any array), an enum-field-access feature orthogonal to arrays -->
+```maxon
+// Regression test: structs with enum fields stored correctly in arrays
+// Previously, 8-byte structs were stored by pointer instead of by value
+enum Color
+	red
+	green
+	blue
+end 'Color'
+
+type Item
+	export var color as Color
+
+	static function create(color Color) returns Self
+		return Self{color: color}
+	end 'create'
+end 'Item'
+
+typealias ItemArray = Array with Item
+
+function main() returns ExitCode
+	var items = ItemArray.create()
+	items.push(Item.create(Color.red))
+	items.push(Item.create(Color.green))
+	items.push(Item.create(Color.blue))
+
+	// Verify enum values are stored correctly (not pointers)
+	let item0 = try items.get(0) otherwise Item.create(Color.blue)
+	let item1 = try items.get(1) otherwise Item.create(Color.blue)
+	let item2 = try items.get(2) otherwise Item.create(Color.red)
+
+	// red=0, green=1, blue=2 — base-5 packing keeps the result inside ExitCode (0..125)
+	return item0.color.rawValue + item1.color.rawValue * 5 + item2.color.rawValue * 25
+end 'main'
+```
+```exitcode
+55
+```
+
+<!-- disabled-test: array-of-structs-enum-for-in-loop -->
+<!-- P1.8 for-in -->
+```maxon
+// Regression test: enum match works in for-in loop over struct array
+enum Status
+	pending
+	active
+	done
+end 'Status'
+
+type Task
+	export var status as Status
+
+	static function create(status Status) returns Self
+		return Self{status: status}
+	end 'create'
+end 'Task'
+
+typealias TaskArray = Array with Task
+
+function main() returns ExitCode
+	var tasks = TaskArray.create()
+	tasks.push(Task.create(Status.pending))
+	tasks.push(Task.create(Status.active))
+	tasks.push(Task.create(Status.done))
+
+	var activeCount = 0
+	for task in tasks 'loop'
+		match task.status 'check'
+			active then activeCount = activeCount + 1
+			pending then break
+			done then break
+		end 'check'
+	end 'loop'
+
+	return activeCount
+end 'main'
+```
+```exitcode
+1
+```
