@@ -40,6 +40,21 @@ public static partial class MaxonToStandardConversion {
   private const int MinTableDensityNumerator = 2;
   private const int MinTableDensityDenominator = 5;
 
+  /// Slots a table may spend per interval it removes a compare for.
+  ///
+  /// Density alone cannot judge a table, because the two sides of the trade scale with
+  /// different quantities: a table COSTS one slot per value in the span, but only BUYS the
+  /// compares it replaces — and that is the interval COUNT, not the covered-value count. A
+  /// plan of a few WIDE arms (`1 to 2000`, `3000 to 4000`, `5`, `7`) is 75% dense and well
+  /// inside the span cap, yet trades 16 KiB of mostly-identical slots for the four compares a
+  /// binary search would have done in two levels.
+  ///
+  /// 32 slots (a 128-byte cache-line pair) per compare removed is the budget. It keeps the
+  /// cases where a wide arm genuinely pays — `specs/match-statements` `grade`, 5 range arms
+  /// covering 0…100, is 101 slots against a budget of 160 — and rejects the degenerate one
+  /// above, which would need 1000.
+  private const int MaxTableSlotsPerInterval = 32;
+
   /// <summary>
   /// Lowers one <see cref="MaxonSwitchOp"/>. The scrutinee is loaded ONCE, into
   /// <paramref name="block"/>, and every comparison the strategy emits reads that one value.
@@ -200,6 +215,10 @@ public static partial class MaxonToStandardConversion {
       if (width >= MaxTableSpanSlots) return false;
 
       span = (int)width + 1;
+
+      // The table must earn its slots against the compares it removes, not merely against the
+      // values it covers — see MaxTableSlotsPerInterval.
+      if ((long)span > (long)(to - from) * MaxTableSlotsPerInterval) return false;
 
       long coveredSlots = 0;
       for (int i = from; i < to; i++) {

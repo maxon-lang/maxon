@@ -18,8 +18,14 @@ Maxon→Standard conversion:
 | Condition | Strategy |
 |---|---|
 | fewer than 4 intervals | linear compare chain |
-| span ≤ 4096 slots **and** covered/span ≥ 0.4 | jump table, **biased by the minimum value** |
+| span ≤ 4096 slots **and** covered/span ≥ 0.4 **and** span ≤ 32 × intervals | jump table, **biased by the minimum value** |
 | otherwise | binary search over the intervals, recursing (a dense subrange of ≥ 4 becomes a table at a leaf) |
+
+The third table condition is a separate test from density because the two sides of the
+trade scale with different quantities: a table **costs** one slot per value in the span,
+but only **buys** the compares it replaces — and that is the interval *count*, not the
+covered-value count. Without it, a plan of a few very wide arms is dense enough to pass
+yet spends thousands of near-identical slots to remove three compares.
 
 Consequences that are visible from the language:
 
@@ -28,6 +34,8 @@ Consequences that are visible from the language:
 - A **range arm** and an **`or`-list** fill their several slots in the table, so one range
   arm no longer forces the whole match onto a linear chain.
 - A **sparse** case set gets a binary search instead of a linear scan.
+- A handful of **very wide** range arms is dense, but still gets a binary search — the
+  table would spend more slots than the compares it saves are worth.
 - The scrutinee is loaded **once** for the whole dispatch, not once per comparison.
 
 Arms whose patterns are not integer-like — a `String`, a `Character` (a variable-length
@@ -1455,6 +1463,235 @@ module {
     x64.prologue stack_size=16
     x64.mov rcx, 8
     x64.call classify
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+}
+```
+
+### Shape: a few wide arms do not buy a table
+
+Four intervals spanning 3900 slots at 77% density: dense enough and inside the span cap,
+but the table would cost 3900 slots to remove three compares, so the budget of 32 slots
+per interval rejects it and a binary search is emitted instead. The counterpart is the
+`grade` match in `match-statements` — 5 arms over a span of 101, well inside its budget
+of 160 — which does form a table.
+
+<!-- test: dispatch.shape-wide-arms-no-table -->
+```maxon
+typealias Val = int(0 to 200000)
+typealias Code = int(0 to 255)
+
+function pick(v Val) returns Code
+	match v 'p'
+		1 to 2000 then return 1
+		2500 to 3500 then return 2
+		3800 then return 3
+		3900 then return 4
+		default then return 0
+	end 'p'
+end 'pick'
+
+function main() returns ExitCode
+	return pick(3000)
+end 'main'
+```
+```exitcode
+2
+```
+```RequiredIR:x64-windows
+=== maxon
+module {
+  func @pick(v: i64) -> i64 {
+  entry:
+    %0 = maxon.param {index = 0 : i32} {name = v} {type = i64}
+    maxon.assign %0 {var = __match_p_0} {kind = i64} {decl = 1 : i1}
+    maxon.switch __match_p_0 [1..2000:p_0.case0, 2500..3500:p_0.case1, 3800:p_0.case2, 3900:p_0.case3] default=p_0.case4
+  p_0.case0:
+    %8 = maxon.literal {value = 1 : i64}
+    maxon.scope_end [v, __match_p_0]
+    maxon.return %8
+  p_0.case1:
+    %16 = maxon.literal {value = 2 : i64}
+    maxon.scope_end [v, __match_p_0]
+    maxon.return %16
+  p_0.case2:
+    %20 = maxon.literal {value = 3 : i64}
+    maxon.scope_end [v, __match_p_0]
+    maxon.return %20
+  p_0.case3:
+    %24 = maxon.literal {value = 4 : i64}
+    maxon.scope_end [v, __match_p_0]
+    maxon.return %24
+  p_0.case4:
+    %25 = maxon.literal {value = 0 : i64}
+    maxon.scope_end [v, __match_p_0]
+    maxon.return %25
+  p_0.merge:
+  }
+  func @main() -> i64 {
+  entry:
+    %26 = maxon.literal {value = 3000 : i64}
+    %27 = maxon.call @pick %26
+    %28 = maxon.literal {value = 0 : i64}
+    %29 = maxon.binop %27, %28 {op = lt}
+    %30 = maxon.literal {value = 4294967295 : i64}
+    %31 = maxon.binop %27, %30 {op = gt}
+    %32 = maxon.binop %29, %31 {op = or}
+    maxon.cond_br %32 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    maxon.panic "panic at dispatch.shape-wide-arms-no-table.test:16: Range check failed: value outside typealias 'ExitCode'"
+  __range_ok_0:
+    maxon.scope_end []
+    maxon.return %27
+  }
+}
+=== standard
+module {
+  func @pick(v: i64) -> u8 {
+  entry:
+    %0 = func.param v : StdI64
+    memref.store %0, __match_p_0
+    %1 = memref.load __match_p_0 : i64
+    %2 = arith.constant {value = 3800 : i64}
+    %3 = arith.cmpi lt %1, %2
+    cf.cond_br %3 [then: p_0.dispatch0, else: p_0.dispatch1]
+  p_0.dispatch0:
+    %4 = arith.constant {value = 1 : i64}
+    %5 = arith.subi %1, %4
+    %6 = arith.constant {value = 1999 : i64}
+    %7 = arith.cmpui ugt %5, %6
+    cf.cond_br %7 [then: p_0.dispatch2, else: p_0.case0]
+  p_0.dispatch2:
+    %8 = arith.constant {value = 2500 : i64}
+    %9 = arith.subi %1, %8
+    %10 = arith.constant {value = 1000 : i64}
+    %11 = arith.cmpui ugt %9, %10
+    cf.cond_br %11 [then: p_0.dispatch3, else: p_0.case1]
+  p_0.dispatch3:
+    cf.br p_0.case4
+  p_0.dispatch1:
+    %12 = arith.constant {value = 3800 : i64}
+    %13 = arith.cmpi ne %1, %12
+    cf.cond_br %13 [then: p_0.dispatch4, else: p_0.case2]
+  p_0.dispatch4:
+    %14 = arith.constant {value = 3900 : i64}
+    %15 = arith.cmpi ne %1, %14
+    cf.cond_br %15 [then: p_0.dispatch5, else: p_0.case3]
+  p_0.dispatch5:
+    cf.br p_0.case4
+  p_0.case0:
+    %16 = arith.constant {value = 1 : i64}
+    func.return %16
+  p_0.case1:
+    %17 = arith.constant {value = 2 : i64}
+    func.return %17
+  p_0.case2:
+    %18 = arith.constant {value = 3 : i64}
+    func.return %18
+  p_0.case3:
+    %19 = arith.constant {value = 4 : i64}
+    func.return %19
+  p_0.case4:
+    %20 = arith.constant {value = 0 : i64}
+    func.return %20
+  p_0.merge:
+  }
+  func @main() -> u32 {
+  entry:
+    %21 = arith.constant {value = 3000 : i64}
+    %22 = func.call @pick %21
+    %23 = arith.constant {value = 0 : i64}
+    %24 = arith.cmpi lt %22, %23
+    %25 = arith.constant {value = 4294967295 : i64}
+    %26 = arith.cmpi gt %22, %25
+    %27 = arith.ori1 %24, %26
+    cf.cond_br %27 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    %28 = memref.lea_symdata __panic_msg_0
+    %29 = std.ptr_to_i64 %28
+    std.call_runtime @mrt_panic %29
+  __range_ok_0:
+    func.return %22
+  }
+}
+=== x86
+module {
+  func @pick(v: i64) -> u8 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, 3800
+    x64.cmp rax, rcx
+    x64.jge pick.p_0.dispatch1
+  p_0.dispatch0:
+    x64.mov rax, 1
+    x64.mov rdx, [rbp-8]
+    x64.sub rdx, rax
+    x64.mov rbx, 1999
+    x64.cmp rdx, rbx
+    x64.jbe pick.p_0.case0
+  p_0.dispatch2:
+    x64.mov rax, 2500
+    x64.mov rdx, [rbp-8]
+    x64.sub rdx, rax
+    x64.mov rbx, 1000
+    x64.cmp rdx, rbx
+    x64.jbe pick.p_0.case1
+  p_0.dispatch3:
+    x64.jmp pick.p_0.case4
+  p_0.dispatch1:
+    x64.mov rax, 3800
+    x64.mov rcx, [rbp-8]
+    x64.cmp rcx, rax
+    x64.je pick.p_0.case2
+  p_0.dispatch4:
+    x64.mov rax, 3900
+    x64.mov rcx, [rbp-8]
+    x64.cmp rcx, rax
+    x64.je pick.p_0.case3
+  p_0.dispatch5:
+    x64.jmp pick.p_0.case4
+  p_0.case0:
+    x64.mov rax, 1
+    x64.epilogue
+    x64.ret
+  p_0.case1:
+    x64.mov rax, 2
+    x64.epilogue
+    x64.ret
+  p_0.case2:
+    x64.mov rax, 3
+    x64.epilogue
+    x64.ret
+  p_0.case3:
+    x64.mov rax, 4
+    x64.epilogue
+    x64.ret
+  p_0.case4:
+    x64.xor eax, eax
+    x64.epilogue
+    x64.ret
+  p_0.merge:
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rcx, 3000
+    x64.call pick
     x64.xor ecx, ecx
     x64.mov edx, 4294967295
     x64.cmp rax, rdx
