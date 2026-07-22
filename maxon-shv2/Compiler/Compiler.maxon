@@ -128,6 +128,15 @@ end 'loadProject'
 export function compileToCodeResult(project Project) returns CodeResult throws CompileError
 	let module = try queryAllModule(project)
 
+	// ⭐ **FUNCTION-VALUE MERGE SIGNATURE AGREEMENT (P1.5 #81) — HERE, before the pipeline.** Every
+	// function-value ternary/match recorded its arms' names at parse; now that `queryAllModule` has merged
+	// every file's `funcSignatures`, the arms are compared whole-program — catching a forward-referenced or
+	// cross-file mismatch a same-file check could not. It runs BEFORE the pipeline's `resolveTypes` so the
+	// diagnostic can print the source alias names (`Integer`) that resolution erases to `int`. Any diagnostic
+	// it emits is caught by the pipeline's own error gate below (after `resolveTypes`), exactly as an
+	// accumulated parse diagnostic is.
+	checkValueMergeSignatures(project)
+
 	// ⭐ LAY OUT THE `.data` SECTION — once per compile, and HERE rather than inside
 	// `queryProgramSignatures`.
 	//

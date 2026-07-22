@@ -1854,17 +1854,6 @@ enum MergeConstruct
 	ternary
 end 'MergeConstruct'
 
-// A function VALUE arm's signature, recovered from THIS file's parse-time registries for the #81
-// signature-agreement check. `recovered` carries the pre-resolution parameter types and return type (both
-// still naming their aliases, so the diagnostic prints `Integer` not `int`); `unrecovered` is a
-// forward-referenced or cross-file function whose parameter types the whole-program token sweep does not
-// carry — such a merge is accepted unchecked, exactly as it was before this check existed (see
-// `recoverFunctionSignature`).
-union RecoveredFnSig
-	recovered(paramTypes MaxonTypeArray, returnType MaxonReturnType)
-	unrecovered
-end 'RecoveredFnSig'
-
 // How control left one arm's body, plus the exit snapshot the merge (or the next arm's
 // fallthrough phi) needs. `fellThrough` and `reachesMerge` are mutually exclusive with each
 // other and with a terminated exit: an arm either flows to the next arm's body (`and
@@ -3122,7 +3111,7 @@ export type Parser
 	// routine consumes the `typealias` keyword before it can fail, so the cursor always advances and
 	// the caller's loop cannot spin.
 	function recordScannedTypeAlias(aliases RangedTypeAliasArray, functionAliases FunctionTypeAliasArray, genericAliases GenericAliasEntryArray)
-		try self.readTypeAliasDeclaration(aliases, functionOut: functionAliases, genericOut: genericAliases) otherwise return
+		try self.readTypeAliasDeclaration(aliases, functionOut: functionAliases, genericOut: genericAliases, buildFunctionDisplay: false) otherwise return
 	end 'recordScannedTypeAlias'
 
 	// Cursor is AT `type`. Append the struct it declares, plus a `FuncReturnTypeEntry` for each
@@ -3503,7 +3492,7 @@ export type Parser
 			// A FILE-scope function takes no receiver: there is no enclosing type for one to be.
 			try self.parseFunction(visibility, takesReceiver: false)
 		end 'isFunction' else if self.at(TokenKind.typealias) 'isTypeAlias'
-			try self.readTypeAliasDeclaration(self.artifact.typeAliases, functionOut: self.artifact.functionTypeAliases, genericOut: self.genericAliasScratch)
+			try self.readTypeAliasDeclaration(self.artifact.typeAliases, functionOut: self.artifact.functionTypeAliases, genericOut: self.genericAliasScratch, buildFunctionDisplay: true)
 		end 'isTypeAlias' else if self.at(TokenKind.type) 'isTypeDecl'
 			try self.parseTypeDeclaration()
 		end 'isTypeDecl' else if self.at(TokenKind.enum) or self.at(TokenKind.union) 'isEnumDecl'
@@ -3669,7 +3658,7 @@ export type Parser
 	// checked at run time, and that check is a later milestone. It IS read, and by more than the
 	// registry — a range whose low bound is 0 declares an UNSIGNED type, and that decides how every
 	// `shr` on a value of it fills (TypeRules' `rangeIsUnsigned`).
-	function readTypeAliasDeclaration(rangedOut RangedTypeAliasArray, functionOut FunctionTypeAliasArray, genericOut GenericAliasEntryArray) throws ParseError
+	function readTypeAliasDeclaration(rangedOut RangedTypeAliasArray, functionOut FunctionTypeAliasArray, genericOut GenericAliasEntryArray, buildFunctionDisplay bool) throws ParseError
 		try self.consume(TokenKind.typealias)
 		let nameTok = try self.consume(TokenKind.identifier)
 		try self.requireUnreservedName(nameTok)
@@ -3677,9 +3666,11 @@ export type Parser
 
 		// A FUNCTION typealias — `function(paramTypes) [returns T]` (P1.5-A1). The literal `function(…)`
 		// form is legal ONLY as a typealias RHS (the spec), so this is the one place it is parsed as a
-		// type. It records its own registry (`FunctionTypeAlias`), not the ranged one.
+		// type. It records its own registry (`FunctionTypeAlias`), not the ranged one. `buildFunctionDisplay`
+		// is the real parse's signal that this alias's `#81` display string is wanted (it will be merged and
+		// read by the value-merge check); the sweep and the nested-alias reader pass false.
 		if self.at(TokenKind.function) 'functionAlias'
-			functionOut.push(try self.readFunctionTypeAlias(nameTok))
+			functionOut.push(try self.readFunctionTypeAlias(nameTok, buildDisplay: buildFunctionDisplay))
 			return
 		end 'functionAlias'
 
@@ -3739,7 +3730,7 @@ export type Parser
 		var ranged = RangedTypeAliasArray.create()
 		var functionAliases = FunctionTypeAliasArray.create()
 		var generics = GenericAliasEntryArray.create()
-		try self.readTypeAliasDeclaration(ranged, functionOut: functionAliases, genericOut: generics)
+		try self.readTypeAliasDeclaration(ranged, functionOut: functionAliases, genericOut: generics, buildFunctionDisplay: false)
 
 		if ranged.count() != 1 'notRanged'
 			throw ParseError.unsupported("a nested typealias inside a generic type must be a ranged `int`/`float` alias (`typealias Idx = int(0 to u64.max)`) to gain per-instance identity; a nested function or generic-instance alias is a later slice", line: aliasTok.line, column: aliasTok.column)
@@ -3884,17 +3875,27 @@ export type Parser
 	end 'checkGenericInstanceAgainst'
 
 	// Parse `function(paramTypes) [returns T]` on a typealias RHS (P1.5-A1), the cursor sitting on
-	// `function`. A1 stores only the RETURN type — an indirect call needs it to type its result; arg-type
-	// and arity checking against the PARAMETER types is a later rung, so the params are parsed (to consume
-	// the syntax and to reject a malformed one) and DISCARDED. An absent `returns` clause is a void
-	// function type. The return type is stored INTERNER-FREE (tag + name) so it rides the no-remap fold.
-	function readFunctionTypeAlias(nameTok Token) returns FunctionTypeAlias throws ParseError
+	// `function`. The RETURN type is stored INTERNER-FREE (tag + name) so it rides the no-remap fold, and an
+	// indirect call needs it to type its result. The PARAMETER types are not needed by a call (arg-type/arity
+	// checking against a function-typed place is a later rung), but the #81 merge check needs the WHOLE
+	// signature to compare a `f UnaryOp` arm — so they are collected here into the `fn(…) returns …` DISPLAY
+	// STRING (also interner-free), which is the only thing that carries the params past this point. An absent
+	// `returns` clause is a void function type.
+	function readFunctionTypeAlias(nameTok Token, buildDisplay bool) returns FunctionTypeAlias throws ParseError
 		try self.consume(TokenKind.function)
 		try self.consume(TokenKind.leftParen)
 
+		// The parameter TYPES are collected only to build the `#81` display string, and ONLY the real parse
+		// needs it (the whole-program token sweep and the nested-alias reader discard the function alias, so
+		// they pass `buildDisplay: false` and pay for neither the array nor the string). The params are still
+		// PARSED either way — the syntax must be consumed, and a malformed one rejected.
+		var paramTypes = MaxonTypeArray.create()
 		if not self.at(TokenKind.rightParen) 'params'
 			while true 'paramLoop'
-				try self.readFunctionTypeParam()
+				let paramType = try self.readFunctionTypeParam()
+				if buildDisplay 'collectParam'
+					paramTypes.push(paramType)
+				end 'collectParam'
 				if not self.at(TokenKind.comma) 'endParams'
 					break
 				end 'endParams'
@@ -3906,26 +3907,31 @@ export type Parser
 
 		var returnTag = ValueTypeTag.void
 		var returnTypeName = EmptySourceText
+		var returnForDisplay = MaxonReturnType.void
 		if self.at(TokenKind.returns) 'hasReturn'
 			try self.consume(TokenKind.returns)
 			let returnType = try self.parseTypeReference()
 			returnTag = maxonTypeTag(returnType)
 			returnTypeName = self.functionAliasReturnName(returnType)
+			returnForDisplay = MaxonReturnType.value(returnType)
 		end 'hasReturn'
 
-		return FunctionTypeAlias.create(nameTok.value, returnTag: returnTag, returnTypeName: returnTypeName)
+		var display = EmptySourceText
+		if buildDisplay 'display'
+			display = formatFnTypeDisplay(paramTypes, returnType: returnForDisplay, typeNames: self.artifact.typeNames).toByteArray()
+		end 'display'
+		return FunctionTypeAlias.create(nameTok.value, returnTag: returnTag, returnTypeName: returnTypeName, display: display)
 	end 'readFunctionTypeAlias'
 
-	// One parameter of a function-type signature — an optional NAME followed by a type, or a bare type.
-	// Parameter names are documentation only (the spec), so both the name and the type are DISCARDED at
-	// A1; only the return type of a function alias is recorded. A `name Type` param is one where an
-	// identifier is followed by another type-starting token (`function(x Score)`); otherwise the token IS
-	// the type (`function(Integer)`, `function(Integer, Integer)`).
-	function readFunctionTypeParam() throws ParseError
+	// One parameter of a function-type signature — an optional NAME followed by its type, or a bare type,
+	// returning the parameter's TYPE (the #81 display needs it; the NAME is documentation only, discarded).
+	// A `name Type` param is one where an identifier is followed by another type-starting token
+	// (`function(x Score)`); otherwise the token IS the type (`function(Integer)`, `function(Integer, Integer)`).
+	function readFunctionTypeParam() returns MaxonType throws ParseError
 		if self.at(TokenKind.identifier) and self.peekStartsType() 'namedParam'
 			try self.consume(TokenKind.identifier)
 		end 'namedParam'
-		_ = try self.parseTypeReference()
+		return try self.parseTypeReference()
 	end 'readFunctionTypeParam'
 
 	// True when the token ONE past the cursor can BEGIN a type reference — an identifier (a named type
@@ -8909,29 +8915,29 @@ export type Parser
 			end 'scanGiveType'
 		end 'checkGiveTypes'
 
-		// ⭐ **FUNCTION-VALUE ARMS MUST AGREE IN SIGNATURE (P1.5 #81).** `checkGiveTypes` proves every arm
-		// shares the FIRST arm's class, so if the first give is a `function` every arm is — but a `function`
-		// tag carries no arity or parameter types, so `unary if c else binary` slips it: both arms are the
-		// `function` class, no aggregate, and the merge would silently adopt the FIRST arm's signature for the
-		// phi. A caller then checks its indirect call against `unary`'s one parameter while the value at
-		// runtime is `binary`, which reads a garbage second argument — a stack-corruption the class check
-		// cannot see. So the two signatures are compared STRUCTURALLY (arity, each parameter type, the return
-		// type), and a mismatch is the construct's type-mismatch diagnostic naming each arm's `fn(…) returns …`
-		// signature — the bootstrap's `MergeTernaryArmFnTypes` (2-Parser.cs:16149), recovered from shv2's
-		// file-local signature registry rather than off the value (shv2 carries only a name + `function` tag).
-		if isExpression 'checkFunctionSignatures'
-			let firstGive = self.giveValueOf(firstArm.give)
-			if self.tagOf(firstGive) == ValueTypeTag.function 'firstArmIsFunction'
-				let firstSig = self.recoverFunctionSignature(firstGive)
-				for i in 1 upto reachingArms.count() 'scanFnSig'
+		// ⭐ **FUNCTION-VALUE ARMS MUST AGREE IN SIGNATURE — RECORDED HERE, CHECKED WHOLE-PROGRAM (P1.5 #81).**
+		// `checkGiveTypes` proves every arm shares the FIRST arm's class, so if the first give is a `function`
+		// every arm is — but a `function` tag carries no arity or parameter types, so `unary if c else binary`
+		// slips it: both arms are the `function` class, no aggregate, and the merge silently adopts the FIRST
+		// arm's signature for the phi. A caller then checks its indirect call against `unary`'s one parameter
+		// while the value at runtime is `binary`, which reads a garbage second argument — a stack corruption
+		// the class check cannot see. The signatures CANNOT be compared here: a forward-referenced or cross-file
+		// arm's parameter types are not in any registry the parser has at parse time (`self.artifact` holds only
+		// THIS file's functions parsed so far; the whole-program `project.funcSignatures` is not assembled until
+		// merge). So the arms' governing NAMES + the anchor + the noun are RECORDED, and the agreement is drained
+		// whole-program in `checkValueMergeSignatures` — before `resolveTypes` erases the alias names the
+		// diagnostic prints. This is v1's model (`PendingTernaryArmCheck` drained in TypeResolution) and the
+		// reference oracle's whole-program `MergeTernaryArmFnTypes` (2-Parser.cs:16149).
+		if isExpression 'recordFnMergeCheck'
+			if self.tagOf(self.giveValueOf(firstArm.give)) == ValueTypeTag.function 'firstArmIsFunction'
+				var armNames = ByteArrayArray.create()
+				for i in 0 upto reachingArms.count() 'collectArmNames'
 					let arm = try reachingArms.get(i) otherwise panic("finalizeMatchMerge: reachingArms.get OOB at {i}")
-					let otherSig = self.recoverFunctionSignature(self.giveValueOf(arm.give))
-					if self.functionSignaturesDisagree(firstSig, other: otherSig) 'signatureMismatch'
-						throw self.valueMergeMismatchWith(construct, expectedDisplay: self.fnTypeDisplay(firstSig), gotDisplay: self.fnTypeDisplay(otherSig), matchTok: matchTok)
-					end 'signatureMismatch'
-				end 'scanFnSig'
+					armNames.push(self.internedName(self.valueNameId(self.giveValueOf(arm.give))))
+				end 'collectArmNames'
+				self.artifact.pendingFnMergeChecks.push(PendingFnMergeCheck.create(armNames, line: matchTok.line, column: matchTok.column, filePath: self.filePath, isTernary: construct == MergeConstruct.ternary))
 			end 'firstArmIsFunction'
-		end 'checkFunctionSignatures'
+		end 'recordFnMergeCheck'
 
 		// ⭐ **OWNED-GIVE OWNERSHIP TRANSFER (P1.3).** If any reaching arm gives an OWNED value the result
 		// phi takes over ownership (`resultOwned` → the phi is marked owned below): each arm's give value has
@@ -9092,152 +9098,6 @@ export type Parser
 		end 'ternaryFalseArm'
 		return self.valueMergeMismatchWith(construct, expectedDisplay: self.giveDisplayName(self.giveValueOf(firstArm.give)), gotDisplay: self.giveDisplayName(self.giveValueOf(displayArm.give)), matchTok: matchTok)
 	end 'valueMergeGiveMismatch'
-
-	// ⭐ **RECOVER A FUNCTION-VALUE ARM'S SIGNATURE for the #81 agreement check.** A function value carries
-	// only its governing NAME + the `function` tag (shv2 does not put the full type on the value the way the
-	// bootstrap does), so the parameter types and return type are looked up by name in THIS file's parse-time
-	// registries — where a top-level function AND a lifted closure both record theirs (`recordFuncSignature`
-	// / `recordFuncReturnType`). A forward-referenced or cross-file function is NOT here: the whole-program
-	// token sweep records return types and consume bits, not parameter types, so its arity is unknowable at
-	// parse time. Such an arm is `unrecovered`, and its merge is accepted UNCHECKED — precisely today's
-	// behaviour before this check, so no regression; closing that residual needs whole-program parameter
-	// types in the sweep, a separate change.
-	function recoverFunctionSignature(value ValueId) returns RecoveredFnSig
-		let name = self.internedName(self.valueNameId(value))
-		for entry in self.artifact.funcSignatures 'eachSignature'
-			if entry.name.equals(name) 'hit'
-				return RecoveredFnSig.recovered(entry.signature.paramTypes, returnType: self.localFuncReturnType(name))
-			end 'hit'
-		end 'eachSignature'
-		return RecoveredFnSig.unrecovered
-	end 'recoverFunctionSignature'
-
-	// This file's recorded return type for `name`. Called only for a name already found in
-	// `funcSignatures`, and the two registries are written together for every function and closure
-	// (`recordFuncSignature` beside `recordFuncReturnType`), so a miss is a parser invariant break.
-	function localFuncReturnType(name ByteArray) returns MaxonReturnType
-		for entry in self.artifact.funcReturnTypes 'eachReturn'
-			if entry.name.equals(name) 'hit'
-				return entry.returnType
-			end 'hit'
-		end 'eachReturn'
-		panic("localFuncReturnType: '{String.from(name)}' is in funcSignatures but not funcReturnTypes — the two are recorded together for every function and closure")
-	end 'localFuncReturnType'
-
-	// Do two function-value arms' signatures DISAGREE (P1.5 #81)? Only a merge whose BOTH arms resolve to a
-	// file-local signature is checked — either arm `unrecovered` means "cannot verify", which accepts the
-	// merge (see `recoverFunctionSignature`). When both resolve, agreement is STRUCTURAL: same arity, each
-	// parameter type agreeing, and the return type agreeing.
-	function functionSignaturesDisagree(first RecoveredFnSig, other RecoveredFnSig) returns bool
-		match first 'firstSignature'
-			unrecovered then return false
-			recovered(paramsA, returnA) then return self.recoveredSignatureDisagrees(paramsA, returnA: returnA, other: other)
-		end 'firstSignature'
-	end 'functionSignaturesDisagree'
-
-	// The second half of `functionSignaturesDisagree`, split out because Maxon forbids a nested `match` as a
-	// match-arm body (E2049): the first arm resolved to `paramsA`/`returnA`, so this matches the OTHER arm
-	// and compares. An `unrecovered` other arm accepts (cannot verify).
-	function recoveredSignatureDisagrees(paramsA MaxonTypeArray, returnA MaxonReturnType, other RecoveredFnSig) returns bool
-		match other 'otherSignature'
-			unrecovered then return false
-			recovered(paramsB, returnB) then return not self.signaturesStructurallyAgree(paramsA, returnA: returnA, paramsB: paramsB, returnB: returnB)
-		end 'otherSignature'
-	end 'recoveredSignatureDisagrees'
-
-	// The structural agreement two recovered signatures are compared under: equal arity, each parameter type
-	// agreeing, and the return type agreeing — each pair judged by `mergeTypesAgree`, the same class +
-	// aggregate-identity rule the give-type check uses (so an ABI-compatible parameter pair such as two
-	// distinct ranged-int aliases agrees, while two distinct unions or a different arity does not).
-	function signaturesStructurallyAgree(paramsA MaxonTypeArray, returnA MaxonReturnType, paramsB MaxonTypeArray, returnB MaxonReturnType) returns bool
-		if paramsA.count() != paramsB.count() 'arity'
-			return false
-		end 'arity'
-		for i in 0 upto paramsA.count() 'eachParam'
-			let a = try paramsA.get(i) otherwise panic("signaturesStructurallyAgree: paramsA.get OOB at {i}")
-			let b = try paramsB.get(i) otherwise panic("signaturesStructurallyAgree: paramsB.get OOB at {i}")
-			if not self.mergeTypesAgree(a, right: b) 'paramMismatch'
-				return false
-			end 'paramMismatch'
-		end 'eachParam'
-		return self.mergeReturnTypesAgree(returnA, right: returnB)
-	end 'signaturesStructurallyAgree'
-
-	// Do two source-level types agree for the signature merge — same register class AND same aggregate
-	// identity? The `MaxonType` form of `checkGiveTypes`' tag-level rule, so `Integer` and a distinct
-	// ranged alias (both numeric, neither an aggregate) agree while `Cat` and `Dog` (distinct aggregates)
-	// do not.
-	function mergeTypesAgree(left MaxonType, right MaxonType) returns bool
-		let leftTag = maxonTypeTag(left)
-		let rightTag = maxonTypeTag(right)
-		if not typesAgree(leftTag, right: rightTag) 'classMismatch'
-			return false
-		end 'classMismatch'
-		let leftAggregate = self.aggregateNameOf(leftTag, nameId: typeNameIdOf(left))
-		let rightAggregate = self.aggregateNameOf(rightTag, nameId: typeNameIdOf(right))
-		return not self.signatures.aggregatesConflict(leftAggregate, got: rightAggregate)
-	end 'mergeTypesAgree'
-
-	// Do two functions' return types agree for the signature merge? `void` agrees only with `void`; two
-	// value returns agree by `mergeTypesAgree`.
-	function mergeReturnTypesAgree(left MaxonReturnType, right MaxonReturnType) returns bool
-		let leftVoid = maxonReturnTypeIsVoid(left)
-		let rightVoid = maxonReturnTypeIsVoid(right)
-		if leftVoid or rightVoid 'eitherVoid'
-			// Both void → agree; exactly one void → disagree (a value return cannot merge with `void`).
-			return leftVoid and rightVoid
-		end 'eitherVoid'
-		return self.mergeTypesAgree(self.requireReturnValueType(left), right: self.requireReturnValueType(right))
-	end 'mergeReturnTypesAgree'
-
-	// The inner type of a value-producing return, guarded by `maxonReturnTypeIsVoid` at the one call site —
-	// a `void` return has no inner type, so reaching this on one is a caller-guard break.
-	function requireReturnValueType(returnType MaxonReturnType) returns MaxonType
-		match returnType 'returnValue'
-			value(inner) then return inner
-			void then panic("requireReturnValueType: called on a void return — guard with maxonReturnTypeIsVoid")
-		end 'returnValue'
-	end 'requireReturnValueType'
-
-	// A recovered signature's `fn(P1, P2) returns R` display, for the #81 mismatch diagnostic. Called only on
-	// a signature that resolved — a mismatch is reported only when BOTH arms did — so `unrecovered` is a
-	// caller-guard break.
-	function fnTypeDisplay(sig RecoveredFnSig) returns String
-		match sig 'signature'
-			recovered(paramTypes, returnType) then return self.formatFnType(paramTypes, returnType: returnType)
-			unrecovered then panic("fnTypeDisplay: an unrecovered signature reached the display — a mismatch is reported only when both arms recovered")
-		end 'signature'
-	end 'fnTypeDisplay'
-
-	// Render `fn(P1, P2, …) returns R` from a recovered signature's parameter and return types. A void
-	// return carries no `returns` clause.
-	function formatFnType(paramTypes MaxonTypeArray, returnType MaxonReturnType) returns String
-		var rendered = "fn("
-		for i in 0 upto paramTypes.count() 'eachParam'
-			if i > 0 'separator'
-				rendered = "{rendered}, "
-			end 'separator'
-			rendered = "{rendered}{self.maxonTypeDisplayName(try paramTypes.get(i) otherwise panic("formatFnType: paramTypes.get OOB at {i}"))}"
-		end 'eachParam'
-		rendered = "{rendered})"
-
-		match returnType 'return'
-			value(returnValue) then rendered = "{rendered} returns {self.maxonTypeDisplayName(returnValue)}"
-			void then break 'return'
-		end 'return'
-		return rendered
-	end 'formatFnType'
-
-	// A source-level type's name for the `fn(…) returns …` display: a declared alias/struct/union by its
-	// interned NAME (so a `Integer` parameter prints `Integer`, matching the oracle, not `int` — which is
-	// what `typeTagName(named)` would give), and a bare primitive by its keyword.
-	function maxonTypeDisplayName(t MaxonType) returns String
-		let tag = maxonTypeTag(t)
-		if tag == ValueTypeTag.named or tag == ValueTypeTag.structRef 'namedType'
-			return String.from(self.internedName(typeNameIdOf(t)))
-		end 'namedType'
-		return typeTagName(tag)
-	end 'maxonTypeDisplayName'
 
 	// The name a `gives` value prints under in a match type-agreement diagnostic: a declared struct or
 	// union by its interned aggregate NAME, and every scalar — an `int`, a `bool`, a `String`, a

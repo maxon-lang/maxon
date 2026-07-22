@@ -804,6 +804,40 @@ export function payloadValueTypeOf(class PayloadClass, declared MaxonType) retur
 	end 'c'
 end 'payloadValueTypeOf'
 
+// ⭐ **A SOURCE-LEVEL TYPE'S NAME for a function-type display (P1.5 #81).** A declared alias/struct/union by
+// its interned NAME (so a `Integer` parameter prints `Integer`, matching the reference oracle — NOT `int`,
+// which `typeTagName(named)` would give), and a bare primitive by its keyword. Reads the type's id out of
+// `typeNames` — pass the interner the type's ids live in (`project.typeNames` at the whole-program merge
+// site). Fed PRE-RESOLUTION types (a ranged alias is still `named(Integer)`), which is exactly why the check
+// that uses it drains before `resolveTypes` erases those names to `integer`.
+export function maxonTypeName(t MaxonType, typeNames TypeNameInterner) returns String
+	let tag = maxonTypeTag(t)
+	if tag == ValueTypeTag.named or tag == ValueTypeTag.structRef 'namedType'
+		return String.from(try typeNames.nameOf(typeNameIdOf(t)) otherwise panic("maxonTypeName: type-name id {typeNameIdOf(t)} is not in the interner — pass the interner the type's ids live in"))
+	end 'namedType'
+	return typeTagName(tag)
+end 'maxonTypeName'
+
+// Render a function type as `fn(P1, P2, …) returns R` from its parameter and return types (P1.5 #81). A void
+// return carries no `returns` clause. The canonical signature STRING the merge check compares by name — the
+// reference oracle's `MergeTernaryArmFnTypes` model, where two functions agree iff this string is equal.
+export function formatFnTypeDisplay(paramTypes MaxonTypeArray, returnType MaxonReturnType, typeNames TypeNameInterner) returns String
+	var rendered = "fn("
+	for i in 0 upto paramTypes.count() 'eachParam'
+		if i > 0 'separator'
+			rendered = "{rendered}, "
+		end 'separator'
+		rendered = "{rendered}{maxonTypeName(try paramTypes.get(i) otherwise panic("formatFnTypeDisplay: paramTypes.get OOB at {i}"), typeNames: typeNames)}"
+	end 'eachParam'
+	rendered = "{rendered})"
+
+	match returnType 'return'
+		value(returnValue) then rendered = "{rendered} returns {maxonTypeName(returnValue, typeNames: typeNames)}"
+		void then break 'return'
+	end 'return'
+	return rendered
+end 'formatFnTypeDisplay'
+
 export typealias PayloadClassArray = Array with PayloadClass
 
 export typealias TypeParamIdArray = Array with TypeParamId

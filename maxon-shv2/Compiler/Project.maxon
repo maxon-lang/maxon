@@ -298,9 +298,18 @@ export type FunctionTypeAlias
 	export let name as ByteArray
 	export let returnTag as ValueTypeTag
 	export let returnTypeName as ByteArray
+	// ⭐ **THE `fn(P1, P2) returns R` DISPLAY STRING (P1.5 #81).** The full canonical signature — parameter
+	// types included — computed at parse (where the param types are still in hand, with THIS file's
+	// interner, so a `named` alias reads as `Integer`) and stored as a plain ByteArray. It is what lets a
+	// function-value merge whose arm is a function-TYPED PARAMETER (`f UnaryOp`) be signature-compared:
+	// shv2 carries no full function type on a value, and the return type alone cannot tell `fn(Integer)`
+	// from `fn(Integer, Integer)`. Interner-free, so it rides the no-remap alias fold exactly as the
+	// return type does; the whole-program merge check (`checkValueMergeSignatures`) compares it by NAME
+	// against a declared function's display built the same way.
+	export let display as ByteArray
 
-	export static function create(name ByteArray, returnTag ValueTypeTag, returnTypeName ByteArray) returns FunctionTypeAlias
-		return Self{name: name, returnTag: returnTag, returnTypeName: returnTypeName}
+	export static function create(name ByteArray, returnTag ValueTypeTag, returnTypeName ByteArray, display ByteArray) returns FunctionTypeAlias
+		return Self{name: name, returnTag: returnTag, returnTypeName: returnTypeName, display: display}
 	end 'create'
 end 'FunctionTypeAlias'
 
@@ -736,6 +745,29 @@ end 'FuncSignature'
 // validation) and lowerCall (label→positional arg slotting).
 export typealias FuncSignatureMap = Map with (ByteArray, FuncSignature)
 
+// ⭐ **A RECORDED FUNCTION-VALUE MERGE awaiting whole-program signature agreement (P1.5 #81).** A ternary
+// or match EXPRESSION whose arms are function values (`unary if c else binary`) needs every arm to name a
+// function of the SAME type, but the parser cannot check it: a forward-referenced or cross-file arm's
+// parameter types are in no registry the parser has at parse time. So the parser records the arms'
+// governing NAMES (interner-free ByteArrays, keys into `funcSignatures`/`funcReturnTypes`), the anchor
+// (the `if`/`match` position), the FILE (for the diagnostic), and whether it is a ternary (the E2028
+// noun) vs a match (E3005). `checkValueMergeSignatures` drains these whole-program, after merge and
+// BEFORE `resolveTypes` erases the alias names the diagnostic prints. The NAMES travel plain (no interner
+// id — like `paramAggregateNames`), so the record survives the merge with no remap.
+export type PendingFnMergeCheck
+	export var armNames as ByteArrayArray
+	export var line as LineNumber
+	export var column as ColumnNumber
+	export var filePath as FilePath
+	export var isTernary as bool
+
+	export static function create(armNames ByteArrayArray, line LineNumber, column ColumnNumber, filePath FilePath, isTernary bool) returns PendingFnMergeCheck
+		return Self{armNames: armNames, line: line, column: column, filePath: filePath, isTernary: isTernary}
+	end 'create'
+end 'PendingFnMergeCheck'
+
+export typealias PendingFnMergeCheckArray = Array with PendingFnMergeCheck
+
 // The outcome of slotting a call's arguments to its callee's parameter positions.
 // `ordered` carries the arg SSA values in DECLARATION order (label reordering applied);
 // every other arm is a call error the caller renders as a positioned diagnostic. This
@@ -806,6 +838,10 @@ export type Project
 	// Declared function parameter signatures (names + types), keyed by name.
 	// The M5 parse-staging registry the call machinery reads (see FuncSignature).
 	export var funcSignatures as FuncSignatureMap
+	// ⭐ Recorded function-value merges awaiting whole-program signature agreement (P1.5 #81). Filled by
+	// `mergeArtifact` (each file's `pendingFnMergeChecks` appended in order); drained by
+	// `checkValueMergeSignatures` before the pipeline runs. Reset with the other merge targets.
+	export var pendingFnMergeChecks as PendingFnMergeCheckArray
 	// Declared ranged typealiases, keyed by name (see RangedTypeAlias). The registry
 	// TypeResolution resolves every `MaxonType.named` against.
 	export var typeAliases as RangedTypeAliasMap
@@ -877,6 +913,7 @@ export type Project
 			db: db,
 			funcReturnTypes: FuncReturnTypeMap.create(),
 			funcSignatures: FuncSignatureMap.create(),
+			pendingFnMergeChecks: PendingFnMergeCheckArray.create(),
 			typeAliases: RangedTypeAliasMap.create(),
 			rangeChecks: RangeCheckPlanMap.create(),
 			functionTypeAliases: FunctionTypeAliasMap.create(),

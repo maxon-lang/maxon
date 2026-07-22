@@ -233,6 +233,93 @@ export function queryAllModule(project Project) returns MaxonModule throws Compi
 	return merged
 end 'queryAllModule'
 
+// ⭐ **WHOLE-PROGRAM FUNCTION-VALUE MERGE SIGNATURE AGREEMENT (P1.5 #81).** Every function-value ternary /
+// match EXPRESSION recorded a `PendingFnMergeCheck` at parse — its arms' governing names, the anchor, and
+// the noun — because a FORWARD-REFERENCED or CROSS-FILE arm's signature is not knowable at parse (the
+// whole-program `funcSignatures` is not assembled until merge). This drains those records: after
+// `queryAllModule` has merged every file's signatures, and BEFORE the pipeline's `resolveTypes` erases the
+// alias names (`Integer`→`int`) the diagnostic prints, so a same-file, forward-referenced and cross-file
+// arm are all checked identically. Agreement is NOMINAL — the `fn(…) returns …` display strings — matching
+// the reference oracle's `MergeTernaryArmFnTypes` (2-Parser.cs:16149), which rejects two DISTINCT same-range
+// aliases. The diagnostic lands in `project.diagnostics`; `compileToCodeResult`'s pipeline gate stops the
+// build before lowering. Called once per compile from `compileToCodeResult` (NOT inside the memoized
+// `queryAllModule`, so a warm rebuild re-reports).
+export function checkValueMergeSignatures(project Project)
+	for check in project.pendingFnMergeChecks 'eachCheck'
+		checkOneValueMergeSignature(project, check: check)
+	end 'eachCheck'
+end 'checkValueMergeSignatures'
+
+// One recorded merge: compare the FIRST arm's fn-type display against every other arm's, reporting the
+// FIRST mismatch (as the parse-time give-type check reported its first). An arm whose governing name is not
+// a declared function/closure — a function-typed parameter, field, or call result, whose full type shv2
+// does not carry on the value — cannot be compared and is REJECTED (never silently accepted), because a
+// silent pass is the very wrong-answer this check exists to close.
+function checkOneValueMergeSignature(project Project, check PendingFnMergeCheck)
+	let firstName = try check.armNames.get(0) otherwise panic("checkOneValueMergeSignature: a recorded function-value merge has no arms")
+	if not armFnTypeResolvable(project, name: firstName) 'firstUnverifiable'
+		reportUnverifiableFnMerge(project, check: check)
+		return
+	end 'firstUnverifiable'
+	let firstDisplay = armFnTypeDisplay(project, name: firstName)
+
+	for i in 1 upto check.armNames.count() 'eachArm'
+		let otherName = try check.armNames.get(i) otherwise panic("checkOneValueMergeSignature: armNames.get OOB at {i}")
+		if not armFnTypeResolvable(project, name: otherName) 'otherUnverifiable'
+			reportUnverifiableFnMerge(project, check: check)
+			return
+		end 'otherUnverifiable'
+		let otherDisplay = armFnTypeDisplay(project, name: otherName)
+		if not firstDisplay.equals(otherDisplay) 'mismatch'
+			reportFnMergeMismatch(project, check: check, first: firstDisplay, other: otherDisplay)
+			return
+		end 'mismatch'
+	end 'eachArm'
+end 'checkOneValueMergeSignature'
+
+// Can `name` — a function value's governing name — be resolved to a comparable function TYPE? True for a
+// declared function/closure (its signature is in `funcSignatures`) OR a function-TYPED value whose name is
+// a function alias (`f UnaryOp` names `UnaryOp` — see `Parser.functionValueReturnType`, which recovers its
+// return the same way). False only for a function value with no nameable type (recovered from a field or a
+// call result), which the check refuses rather than silently accept.
+function armFnTypeResolvable(project Project, name ByteArray) returns bool
+	return project.funcSignatures.contains(name) or project.functionTypeAliases.contains(name)
+end 'armFnTypeResolvable'
+
+// The `fn(…) returns …` display for a resolvable arm (guarded by `armFnTypeResolvable`). A declared
+// function/closure's is built from its whole-program (still UNRESOLVED) parameter signature + return type;
+// a function-alias arm's is the `display` string the parser stored on the alias (params included). Both
+// build the same canonical string, so `f UnaryOp` and a `triple` that fits it compare EQUAL.
+function armFnTypeDisplay(project Project, name ByteArray) returns String
+	if let sig = try project.funcSignatures.get(name) 'declaredFn'
+		let returnType = try project.funcReturnTypes.get(name) otherwise panic("armFnTypeDisplay: '{String.from(name)}' is in funcSignatures but not funcReturnTypes — the two are committed together per function")
+		return formatFnTypeDisplay(sig.paramTypes, returnType: returnType, typeNames: project.typeNames)
+	end 'declaredFn'
+
+	let alias = try project.functionTypeAliases.get(name) otherwise panic("armFnTypeDisplay: '{String.from(name)}' is armFnTypeResolvable but in neither registry — this and armFnTypeResolvable disagree")
+	return String.from(alias.display)
+end 'armFnTypeDisplay'
+
+// Emit the construct-aware mismatch: a ternary names its TRUE (first) and FALSE (other) branches (E2028);
+// a match names the offending arm against the first (E3005). Built as a `ParseError` and routed through
+// `reportParseError` so the message text lives ONCE, in the shared render arms — the same E2028/E3005 the
+// parse-time give-type mismatch (#80) uses, so a function-signature mismatch and a give-type mismatch read
+// identically for the same construct.
+function reportFnMergeMismatch(project Project, check PendingFnMergeCheck, first String, other String)
+	var error = ParseError.giveTypeMismatch(other, expected: first, line: check.line, column: check.column)
+	if check.isTernary 'ternary'
+		error = ParseError.ternaryValueTypeMismatch(first, falseType: other, line: check.line, column: check.column)
+	end 'ternary'
+	reportParseError(project, path: check.filePath, error: error)
+end 'reportFnMergeMismatch'
+
+// Reject a function-value merge whose branches are not both NAMED functions — shv2 carries no full function
+// type on a value, so a function-typed parameter/field/call-result branch has no signature to compare.
+// Rejected rather than accepted (the coordinator's rule: never silently accept an unverifiable merge).
+function reportUnverifiableFnMerge(project Project, check PendingFnMergeCheck)
+	reportParseError(project, path: check.filePath, error: ParseError.unsupported("a conditional or match whose branches are function values that are not both NAMED functions (a top-level function or a closure) — shv2 cannot yet compare the signatures of function values recovered from a parameter, field, or call result, so it refuses the merge rather than risk one branch's signature standing in for the other's", line: check.line, column: check.column))
+end 'reportUnverifiableFnMerge'
+
 // Re-run the per-file queries (tokens, then parse) for every source file. The M2
 // warm-rebuild gate uses this to PROVE the per-file memos survived a whole-program
 // rebuild: after `queryAllModule` has populated them on a cold pass, a subsequent
@@ -258,6 +345,7 @@ end 'probeRebuildCacheHits'
 function resetMergeTargets(project Project)
 	project.funcReturnTypes = FuncReturnTypeMap.create()
 	project.funcSignatures = FuncSignatureMap.create()
+	project.pendingFnMergeChecks = PendingFnMergeCheckArray.create()
 	project.typeAliases = RangedTypeAliasMap.create()
 	project.rangeChecks = RangeCheckPlanMap.create()
 	project.structTypes = StructLayoutMap.create()

@@ -1253,3 +1253,31 @@ end 'main'
 ```maxoncstderr
 error E2028: specs/fragments/ternary-expression/ternary-expression.error.function-arm-signature-mismatch.test:14:16: ternary expression type mismatch: true branch is 'fn(Integer) returns Integer' but false branch is 'fn(Integer, Integer) returns Integer'
 ```
+
+<!-- test: ternary-expression.error.function-arm-signature-mismatch-forward-ref -->
+### Forward-referenced function arms are checked whole-program
+The helpers are declared BELOW `main`, so at parse the arms' parameter types are not yet in any
+registry the parser holds — signature agreement cannot be checked there. It is drained WHOLE-PROGRAM,
+after every file's signatures are merged, so a forward-referenced mismatch is caught exactly as a
+same-file backward one (and a cross-file one) is. Without this the merge silently adopted the first
+arm's signature and `h(21)` ran `binary` with one argument, reading an undefined second.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function main() returns ExitCode
+	let c = 1
+	let h = unary if c > 0 else binary
+	return h(21)
+end 'main'
+
+function unary(n Integer) returns Integer
+	return n * 2
+end 'unary'
+
+function binary(a Integer, b Integer) returns Integer
+	return a + b
+end 'binary'
+```
+```maxoncstderr
+error E2028: specs/fragments/ternary-expression/ternary-expression.error.function-arm-signature-mismatch-forward-ref.test:6:16: ternary expression type mismatch: true branch is 'fn(Integer) returns Integer' but false branch is 'fn(Integer, Integer) returns Integer'
+```

@@ -86,6 +86,10 @@ export type FileParseArtifact
 	export var funcReturnTypes as FuncReturnTypeEntryArray
 	// This file's `funcSignatures` registry contributions, in declaration order.
 	export var funcSignatures as FuncSignatureEntryArray
+	// This file's recorded function-value merges awaiting whole-program signature agreement (P1.5 #81).
+	// Appended to `project.pendingFnMergeChecks` by `commitPendingFnMergeChecks`; the check itself is
+	// drained after merge, before resolution (see PendingFnMergeCheck).
+	export var pendingFnMergeChecks as PendingFnMergeCheckArray
 	// This file's range-check contributions (P1.9), one per function that has a cast into a
 	// ranged alias or a ranged `return`. Folded into `project.rangeChecks` by `commitRangeChecks`.
 	export var rangeChecks as FunctionRangeCheckEntryArray
@@ -147,6 +151,7 @@ export type FileParseArtifact
 			valueOrigins: ValueOriginTable.create(),
 			funcReturnTypes: FuncReturnTypeEntryArray.create(),
 			funcSignatures: FuncSignatureEntryArray.create(),
+			pendingFnMergeChecks: PendingFnMergeCheckArray.create(),
 			rangeChecks: FunctionRangeCheckEntryArray.create(),
 			typeAliases: RangedTypeAliasArray.create(),
 			functionTypeAliases: FunctionTypeAliasArray.create(),
@@ -304,6 +309,7 @@ export function mergeArtifact(project Project, target MaxonModule, artifact File
 	project.valueOrigins.appendFrom(artifact.valueOrigins, funcOffset: funcOffset, opOffset: opOffset)
 	commitFuncReturnTypes(project, artifact: artifact)
 	commitFuncSignatures(project, artifact: artifact)
+	commitPendingFnMergeChecks(project, artifact: artifact)
 	commitRangeChecks(project, artifact: artifact)
 	commitTypeAliases(project, artifact: artifact)
 	commitFunctionTypeAliases(project, artifact: artifact)
@@ -466,3 +472,13 @@ function commitFuncSignatures(project Project, artifact FileParseArtifact)
 		project.funcSignatures.upsert(entry.name, value: entry.signature)
 	end 'each'
 end 'commitFuncSignatures'
+
+// Append this file's recorded function-value merge checks to the whole-program list (P1.5 #81). Unlike
+// the signature commit above there is NO dedup: each entry is a DISTINCT merge SITE (its own position),
+// so every one is drained. Kept an array (not a map) for the same reason the `*Entry` families are —
+// the drain order is the file/declaration order, deterministic and reviewable.
+function commitPendingFnMergeChecks(project Project, artifact FileParseArtifact)
+	for check in artifact.pendingFnMergeChecks 'each'
+		project.pendingFnMergeChecks.push(check)
+	end 'each'
+end 'commitPendingFnMergeChecks'
