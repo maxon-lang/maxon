@@ -48,20 +48,10 @@ export let StringElementSize = 1 as ParsedInt
 // record, in the SAME `__mm_alloc` payload (`buffer@0 = record + StringRecordBytes`). So the whole thing
 // is one allocation: `__mm_decref` → `__mm_free` reclaims the record AND its bytes together, and the
 // destructor a struct passes (`TrivialDestructor`, 0) is exactly right — there is no external buffer to
-// free. `capacity@16 = length` (the bytes are exact, never grown at this rung).
+// free. `capacity@16` is `InlineBufferCapacity` and `parent@32` is `NoOwedAllocation` (unwritten — the
+// zeroing contract supplies it), which is the shared encoding saying exactly that: not mine to write in
+// place, and no separate allocation owed. See `Parser.emitStringInterp`.
 //
-// ⚠⚠ **`parent_ptr = -3` IS WRITTEN BY `Parser.emitStringInterp` AND READ BY NOTHING — A KNOWN RESIDUAL,
-// NOT A DESIGN.** It was the bootstrap's inline marker (`MmParentInline`), kept here as a
-// "forward-compatible marker"; under the shared encoding (`BufferOwnership`) `parent@32` means *the
-// separate allocation this record owes a release to*, and an inline String owes NONE — so the honest value
-// there is `NoOwedAllocation`, which `__mm_alloc`'s zeroing already supplies for free. Nothing reads the
-// -3 (`emitStringOwedBase` answers the inline question from the LAYOUT), so it is inert; deleting it means
-// deleting the store in `Parser.emitStringInterp`, which is outside this rung's file list. The completing
-// change is reported rather than made: give `capacity@16` a NEGATIVE value there (a third provenance in
-// the shared table — "my bytes are part of my own box") and drop the `parent@32` store, after which the
-// inline arm below disappears and String's record states line up with the Array record's exactly.
-export let InlineParentSentinel = 0 - 3 as ParsedInt
-
 // The fixed bytes an owned interpolation result allocates BEYOND its text: the 48-byte record the bytes
 // live inline behind, plus one trailing NUL (which the slab's zeroing supplies for free — nothing writes
 // it). `Parser.emitStringInterp` sizes its one `__mm_alloc` as `totalLen + StringInterpOverheadBytes`.
@@ -157,60 +147,26 @@ export let StrAppendName = b"__str_append"
 export let StrDecrefName = b"__str_decref"
 
 // ⭐ **WHERE A STRING RECORD KEEPS THE BUFFER-OWNERSHIP ENCODING** (`BufferOwnership`) — the three slots
-// its predicates read, built from THIS file's offsets. A String has exactly two live provenances: its
-// bytes are INLINE in its own box (every owned String is born that way — `Parser.emitStringInterp`, which
-// `promoteToOwnedString` also routes through), or they are a separate `__mm_alloc`'d buffer this record
-// owns and must release (`__str_append` detached). A literal's rdata record is the third the FORMAT
-// admits, and it never reaches these functions: the parser promotes a `var` String at its declaration and
-// only an owned String is ever dropped.
+// its predicates read, built from THIS file's offsets. All three provenances the record format admits are
+// ordinary values of that encoding, and no String-only branch stands in front of it:
+//
+//   * INLINE (`capacity@16 = InlineBufferCapacity`, `parent@32 = NoOwedAllocation`) — every owned String
+//     is born this way (`Parser.emitStringInterp`, which `promoteToOwnedString` also routes through). Not
+//     mine to write in place, and no separate allocation owed: the record's own free takes the bytes.
+//   * DETACHED (`capacity@16 >= 0`) — a separate `__mm_alloc`'d buffer this record owns and must release,
+//     which is exactly what the encoding calls an OWNER, so its base is its own `buffer@0`.
+//   * RDATA (`capacity@16 = RdataBufferCapacity`) — a literal's immortal blob. It never reaches these two
+//     functions today: the parser promotes a `var` String at its declaration and only an owned String is
+//     ever dropped. It needs no arm of its own regardless — it is a non-owned buffer owing nothing, and
+//     both of those are already what the encoding says.
 //
 // ⚠ **THIS REPLACES `parent@32 == -1` ("a detached root"), AND THE BEHAVIOUR IT DECIDED IS UNCHANGED.**
 // That test was this file's own third spelling of "is this buffer mine?" — and, at the same offset as the
 // Array record's `parent@32`, it meant the OPPOSITE thing (there, *someone else's allocation I owe a
-// release to*). The detached root is now what the shared encoding already calls an owner —
-// `capacity@16 >= 0`, releasing its own `buffer@0` — so `parent@32` means one thing in both records and
-// nothing here has to be told which.
+// release to*). Now `parent@32` means one thing in both records and nothing here has to be told which.
 function stringBufferSlots() returns BufferRecordSlots
 	return BufferRecordSlots.create(StringBufferOffset, capacityOffset: StringCapacityOffset, parentOffset: StringParentPtrOffset)
 end 'stringBufferSlots'
-
-// ⭐ **THE ONE LAYOUT FACT THAT IS STRING'S ALONE: ITS BYTES MAY LIVE INSIDE ITS OWN BOX.** An inline
-// String is ONE `__mm_alloc` payload — the 48-byte record followed by its bytes — so it owes no SEPARATE
-// allocation a release; the record's own free reclaims both. Every other record kind's owner does owe one
-// (an Array grows, so its elements can never live behind its record), which is why the shared
-// `emitOwedAllocationBase` answers `buffer@0` for an owner and this ONE arm sits in front of it, here,
-// where the inline layout is declared — rather than as a branch inside the shared home that no Array could
-// ever take.
-//
-// ⭐ **INLINE-NESS IS DERIVED FROM THE LAYOUT, NOT READ FROM A MARKER**, because the layout already fixes
-// it: an inline String's `buffer@0` IS `record + StringRecordBytes`, written as that sum by
-// `Parser.emitStringInterp`. A SEPARATE buffer can never sit at that address — it is one past the end of
-// the record's own payload, where the NEXT box's HEADER begins, so the next payload starts strictly beyond
-// it, and an allocator that returned an address inside a live allocation would be broken outright. So the
-// test cannot be fooled, and it cannot drift from a stored flag that says otherwise (`parent@32`'s stale
-// `InlineParentSentinel` is exactly such a flag, and it is why nothing reads it).
-//
-// It threads `cur` and returns the base as a block arg on the caller-owned `join`, adding its arm as a
-// third predecessor of the join the shared helper set up. Two callers — the drop and the detach — so it is
-// no thin wrapper: both must agree about what an inline String owes, which is nothing.
-function emitStringOwedBase(module StdModule, func IrFunction, cur IrBlock, join IrBlock, record ValueId, ids ValueMinter) returns ValueId
-	var separate = module.addBlock(func, label: b"sepbase")
-	var inlineBytes = module.addBlock(func, label: b"inlbase")
-
-	let buffer = emitLoadField(module, block: cur, record: record, offset: StringBufferOffset, ids: ids)
-	let recordBytes = emitConst(module, block: cur, value: StringRecordBytes as ParsedInt, ids: ids)
-	let inlineAddr = emitBin(module, block: cur, a: record, b: recordBytes, opcode: StdBinOpcode.add, ids: ids)
-	let isInline = emitCmp(module, block: cur, a: buffer, b: inlineAddr, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(cur, op: StdOp.condBranch(isInline, thenBlockId: inlineBytes.id, elseBlockId: separate.id))
-
-	let base = emitOwedAllocationBase(module, func: func, cur: separate, join: join, record: record, slots: stringBufferSlots(), ids: ids)
-
-	let owesNothing = emitConst(module, block: inlineBytes, value: NoOwedAllocation, ids: ids)
-	module.setTerminator(inlineBytes, op: StdOp.branch(join.id))
-	inlineBytes.branchEdges.push(BranchEdge.create(join.id, argIds: argsOf(owesNothing)))
-
-	return base
-end 'emitStringOwedBase'
 
 // The bool `__str_eq` returns, as the i64 a Std `value(i64)` return carries: 1 when equal, 0 otherwise.
 let StrEqEqual = 1 as ParsedInt
@@ -857,15 +813,25 @@ end 'buildBoolToString'
 // shv2's fused record and static single-owner model (no refcount on the detach path).
 //
 // ⭐ **ONE TEST DECIDES THE DETACH, AND IT IS ARITHMETIC RATHER THAN A SECOND SPELLING OF "IS THIS BUFFER
-// MINE?".** The bytes must move to a fresh external buffer whenever `capacity@16 < requiredLen` — and that
-// single comparison already covers every non-owned buffer, because the shared encoding
-// (`BufferOwnership`) makes a non-owned `capacity` NEGATIVE and a required length is never below zero. So
-// an inline String (whose capacity is its exact length, with no room to grow) and a literal's immortal
-// `.rdata` blob both detach without this function naming either, and `emitBufferNotOwned` is deliberately
-// NOT called: asking the sign and then asking the size would be one question written twice.
+// MINE?".** The bytes must move to a fresh external buffer whenever `capacity@16 < requiredLen`, and that
+// single comparison already covers every non-owned buffer:
+//
+//   `requiredLen = selfLen + otherLen`, and a `length@8` is a byte COUNT that is only ever published from
+//   another length or from `requiredLen` itself, so `requiredLen >= 0`. The shared encoding
+//   (`BufferOwnership`) gives every non-owned buffer a NEGATIVE `capacity@16`. Every negative is below
+//   every non-negative, so `capacity < requiredLen` is UNCONDITIONALLY true for an inline String, for a
+//   literal's immortal `.rdata` blob, and for any non-owned kind added later — the detach cannot be
+//   skipped for one of them, whatever the two lengths are (`other` empty included).
+//
+// So `emitBufferNotOwned` is deliberately NOT called: asking the sign and then asking the size would be
+// one question written twice, and the size question already contains the sign one. ⚠ What the subsumption
+// RESTS on is that half of the encoding — "not mine ⇒ negative". A future non-owned provenance marked any
+// other way (a flag, a zero capacity) would slip past this test and be written in place, which is a write
+// into `.rdata` or into a box's own trailing bytes. That is why the encoding says NEGATIVE and why the
+// sentinels live in one table.
 //
 // ⚠ **THE OLD ALLOCATION IS RELEASED THROUGH THE SHARED PAIR, AND ONLY AFTER BOTH COPIES ARE DONE.**
-// `emitStringOwedBase` says WHICH allocation the record owes a release to before the detach republishes
+// `emitOwedAllocationBase` says WHICH allocation the record owes a release to before the detach republishes
 // the fields that answer it (an inline String owes nothing — its bytes are in its own box), and
 // `emitReleaseOwedBase` pays it, null-guarded, once the blit has finished reading. ⭐ The release rides a
 // BLOCK ARG into `blit` (0 on the in-place edge) rather than happening in the detach block, and that is
@@ -876,7 +842,7 @@ end 'buildBoolToString'
 // ⚠ **THE INVARIANT THIS RUNG USED TO SPELL AS `parent@32 == -1` IS UNCHANGED IN BEHAVIOUR**: a String
 // that has detached owns an external buffer and must release it, and one whose bytes are inline or in
 // `.rdata` must not. What changed is only WHERE that is written down — `capacity@16 >= 0` plus
-// `emitStringOwedBase`, the same encoding the Array record reads — so a String and an Array can no longer
+// `emitOwedAllocationBase`, the same encoding the Array record reads — so a String and an Array can no longer
 // disagree about what a record owns. Leave it wrong and the external buffer is never freed (a leak, exit
 // 101) or an interior pointer is released (an over-release, also 101).
 //
@@ -921,7 +887,7 @@ function buildStrAppend(module StdModule)
 	inPlace.branchEdges.push(BranchEdge.create(blit.id, argIds: argsOf(owesNothing)))
 
 	// detach: read what the record owes BEFORE the publish below overwrites the fields that answer it.
-	let base = emitStringOwedBase(module, func: func, cur: detach, join: baseJoin, record: selfPtr, ids: ids)
+	let base = emitOwedAllocationBase(module, func: func, cur: detach, join: baseJoin, record: selfPtr, slots: stringBufferSlots(), ids: ids)
 
 	// baseJoin: allocate a fresh external buffer (destructor 0 — raw bytes), copy the live bytes across,
 	// and publish it. `parent@32` returns to `NoOwedAllocation`: a record that has just copied its bytes
@@ -999,11 +965,12 @@ function buildStrDecref(module StdModule)
 	// release + baseJoin: the last owner asks the shared pair which separate allocation this record owes a
 	// release to and pays it, BEFORE the record itself dies — the whole reason this cannot simply call
 	// `__mm_decref`, which would reclaim the box while its `capacity`/`buffer` are still the answer. A
-	// String that detached owes its external buffer; one whose bytes are inline (or in an immortal `.rdata`
-	// blob) owes nothing, and the null guard inside the release step is what makes that an ordinary answer
-	// rather than a case. It is the SAME pair `__arr_decref` uses, so a String and an Array cannot disagree
-	// about what a record owns.
-	let base = emitStringOwedBase(module, func: func, cur: release, join: baseJoin, record: record, ids: ids)
+	// String that detached is an OWNER (`capacity@16 >= 0`) and owes its own `buffer@0`; one whose bytes are
+	// inline (or in an immortal `.rdata` blob) has a negative capacity and leaves through the `parent@32`
+	// arm holding `NoOwedAllocation`, which the null guard inside the release step turns into an ordinary
+	// answer rather than a case. It is the SAME pair `__arr_decref` uses, so a String and an Array cannot
+	// disagree about what a record owns.
+	let base = emitOwedAllocationBase(module, func: func, cur: release, join: baseJoin, record: record, slots: stringBufferSlots(), ids: ids)
 	var afterRelease = emitReleaseOwedBase(module, func: func, cur: baseJoin, base: base, callee: MmDecrefName, ids: ids)
 	module.setTerminator(afterRelease, op: StdOp.branch(freeRec.id))
 

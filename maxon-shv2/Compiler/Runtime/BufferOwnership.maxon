@@ -30,16 +30,24 @@
 // two fields rather than storing it twice is what keeps `buffer` and `parent` from being one fact in
 // two slots.
 //
-// ⚠ **`emitOwedAllocationBase` ASSUMES AN OWNER'S BUFFER IS A SEPARATE ALLOCATION, AND THAT IS THE ONE
-// PLACE A RECORD KIND'S LAYOUT CAN DIVERGE FROM THIS ENCODING.** It is true of every Array (an array
-// grows, so its elements can never live behind its record) and of every String that has detached; it is
-// NOT true of an INLINE String, whose bytes live at `record + StringRecordBytes` inside the record's own
-// `__mm_alloc` payload, so there is no separate allocation to release and the record's own free reclaims
-// both. That layout fact belongs to String and is kept there: `StringRuntime.emitStringOwedBase` wraps
-// this helper with the one arm that answers it. See that function for why it is derived from the layout
-// rather than stored, and for the residual that would delete it.
+// ⭐ **THE THREE PROVENANCES, and each is a record kind's answer to "where did these bytes come from?"**
+// A view windows another allocation's bytes; an rdata literal points at an immortal `.rdata` blob; an
+// INLINE String's bytes sit inside the record's OWN `__mm_alloc` payload, at `record + StringRecordBytes`,
+// so its own free reclaims them and there is no separate allocation to release. All three are simply
+// NEGATIVE, which is the whole of what any reader asks — the specific value is documentation for whoever
+// reads a hexdump, and no code compares against one.
+//
+// ⚠ **`InlineBufferCapacity` IS WHY THE ENCODING NEEDED NO EXCEPTION FOR STRING.** An inline String's
+// bytes are neither writable-in-place beyond their exact length nor separately releasable, which is
+// precisely what a negative capacity says; it therefore takes the SAME two arms every other non-owned
+// buffer takes. It briefly did not: the parser published `capacity@16 = length` (non-negative, so the
+// encoding read the record as an owner of a separate buffer) and marked inline-ness in `parent@32`
+// instead, which forced a String-only branch in front of `emitOwedAllocationBase` deriving inline-ness
+// from the layout. The branch is gone, and so is the marker — this is the fact, in the field the rest of
+// the encoding already lives in.
 export let ViewBufferCapacity = 0 - 1 as ParsedInt
 export let RdataBufferCapacity = 0 - 2 as ParsedInt
+export let InlineBufferCapacity = 0 - 3 as ParsedInt
 
 // `parent@32` when the record owes NOTHING: an owner (its debt is its own `buffer@0`), a byte-string or
 // String literal over an immortal `.rdata` blob, a String whose bytes are inline, or an array that never
@@ -94,10 +102,13 @@ end 'emitBufferNotOwned'
 // `__arr_decref`/`__str_decref` (which one to release at death). A disagreement between any two of them
 // is a double-free or a leak, so it is written once.
 //
+// ⭐ **TWO ARMS COVER EVERY RECORD KIND, AND NOTHING WRAPS THIS WITH A THIRD.** An owner's buffer is
+// always a separate allocation, because the only bytes that are NOT — an inline String's — are marked by
+// a negative `capacity@16` like every other non-owned buffer, so they leave through the `parent@32` arm
+// (`NoOwedAllocation`) with no special case here and none at the caller.
+//
 // It threads `cur` (sets its terminator) and returns the base as a BLOCK ARG on the caller-owned `join`,
 // which is why `join` is passed IN: the caller resumes there and the two arms are otherwise identical.
-// A caller with a THIRD answer of its own adds an arm by branching to the same `join` with its own value
-// (`StringRuntime.emitStringOwedBase` is the one such caller).
 //
 // ⚠ **IT IS DELIBERATELY NOT FUSED WITH `emitReleaseOwedBase` INTO ONE "release the base" HELPER**, even
 // though the drop paths call the two back to back. A DETACH must SPLIT them across its byte copy — the

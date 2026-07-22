@@ -11808,7 +11808,7 @@ export type Parser
 	// ⭐ **ASSEMBLE THE FUSED OWNED STRING.** Sum the part lengths, allocate ONE `__mm_alloc` record big
 	// enough for the 48-byte record + the bytes + a NUL, copy every part into the inline region at a running
 	// cursor, write the record fields, and free the scratch. The result is an owned temporary
-	// (`trackOwnedTemp`) — an inline String (`parent_ptr = InlineParentSentinel`) whose bytes die with the
+	// (`trackOwnedTemp`) — an INLINE String (`capacity@16 = InlineBufferCapacity`) whose bytes die with the
 	// record's slot, so its destructor is `TrivialDestructor` (0), exactly a struct's: `__mm_decref` →
 	// `__mm_free` reclaims record and bytes together, with no external buffer and no destructor cascade.
 	function emitStringInterp(partBufs ValueIdArray, partLens ValueIdArray, scratchIds ValueIdArray, range SourceRange) returns ValueId
@@ -11837,12 +11837,22 @@ export type Parser
 
 		self.emitStoreStringField(result, offset: StringBufferOffset, value: inlineBuf, range: range)
 		self.emitStoreStringField(result, offset: StringLengthOffset, value: totalLen, range: range)
-		// capacity == length: the bytes are exact and never grown at this rung. `append` (Wave D) detaches.
-		self.emitStoreStringField(result, offset: StringCapacityOffset, value: totalLen, range: range)
+		// ⭐ **`capacity@16 = InlineBufferCapacity` — the buffer-ownership encoding's INLINE provenance**
+		// (`BufferOwnership`), and the one fact the whole record has to publish about its bytes: they are
+		// part of this box, so they are neither writable in place beyond their exact length nor separately
+		// releasable. `__str_append` reads it (any negative capacity is below every required length, so an
+		// inline String always detaches into a private buffer before it grows) and `__str_decref` reads it
+		// (a negative capacity sends it to `parent@32`, which is `NoOwedAllocation` here, so the record's
+		// own free reclaims record and bytes together). It used to publish `length` — an ordinary
+		// NON-NEGATIVE capacity, which the shared encoding reads as "I own a separate buffer" — and marked
+		// inline-ness in `parent@32` instead, which nothing read: the drop path was correct only because
+		// `__str_decref` carried a String-only branch that re-derived inline-ness from the layout.
+		// `parent@32` needs no store at all now: `NoOwedAllocation` is 0, which `__mm_alloc`'s zeroing
+		// contract already supplies (the same reason `__arr_create` leaves four of its six fields alone).
+		let capacity = self.emitLiteral(InlineBufferCapacity, valueType: MaxonType.integer, range: range)
+		self.emitStoreStringField(result, offset: StringCapacityOffset, value: capacity, range: range)
 		let elementSize = self.emitLiteral(StringElementSize, valueType: MaxonType.integer, range: range)
 		self.emitStoreStringField(result, offset: StringElementSizeOffset, value: elementSize, range: range)
-		let parent = self.emitLiteral(InlineParentSentinel, valueType: MaxonType.integer, range: range)
-		self.emitStoreStringField(result, offset: StringParentPtrOffset, value: parent, range: range)
 		// `isAscii@40 = 0` (conservative) comes from the slab's zeroing — grapheme/ascii refinement is P1.7.
 
 		// Free the owned scratch now its bytes are copied. A `__mm_decref` (rc 0 → `__mm_free`), never a raw

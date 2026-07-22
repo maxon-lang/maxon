@@ -821,11 +821,14 @@ abcabc
 
 <!-- test: string-append-empty -->
 ### Append an Empty String
-An empty append needs no room, so the receiver's buffer already fits and nothing is reallocated — including
-for a String whose bytes are still INLINE in its own record, whose capacity is its exact length. The
-observable contract is only that the text and the byte length are unchanged, and that a later non-empty
-append still grows correctly off that untouched buffer. shv2-authored (the corpus has no empty-append case);
-the expected output is the bootstrap oracle's.
+Appending nothing must change nothing observable, and must leave the receiver in a state a LATER append can
+still grow correctly. Both halves are load-bearing and neither is obvious: a String whose bytes are INLINE
+in its own record cannot be written in place at all (its buffer is part of its box), so even an empty append
+detaches it onto a private buffer sized to the exact length — after which the next append has NO slack and
+must grow again. A `capacity` test that only asked whether the length increased would let that second append
+blit past the buffer it just sized, so this case is what pins the growth test to the capacity rather than to
+the length. shv2-authored (the corpus has no empty-append case); the expected output is the bootstrap
+oracle's.
 ```maxon
 function main() returns ExitCode
 	var t = "xy"
