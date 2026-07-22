@@ -1,0 +1,52 @@
+// Test: match-gives-same-type
+function main() returns ExitCode
+	let c = 0
+	let r = match c 'pick'
+		0 gives 10
+		default gives 20
+	end 'pick'
+	return r
+end 'main'
+---
+ExitCode: 10
+---
+// CompiledIR
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.xor eax, eax
+    x64.mov [rbp-8], rax
+    x64.jmp main.pick_0.cmp0
+  pick_0.cmp0:
+    x64.mov rax, [rbp-8]
+    x64.xor ecx, ecx
+    x64.cmp rax, rcx
+    x64.jne main.pick_0.case1
+  pick_0.case0:
+    x64.mov rax, 10
+    x64.mov [rbp-16], rax
+    x64.jmp main.pick_0.merge
+  pick_0.case1:
+    x64.mov rax, 20
+    x64.mov [rbp-16], rax
+    x64.jmp main.pick_0.merge
+  pick_0.merge:
+    x64.mov rax, [rbp-16]
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

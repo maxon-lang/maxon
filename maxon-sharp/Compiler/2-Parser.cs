@@ -15051,7 +15051,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   }
 
   private ExprResult.Direct ParseMatchExpression() {
-    Advance(); // consume 'match'
+    var matchToken = Advance(); // consume 'match'; anchors the arm-type-agreement diagnostic (E3005)
 
     var scrutineeExpr = ParseExpression();
 
@@ -15100,6 +15100,13 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     // (e.g. arm 0 gives Integer, arm 1 gives Float) can back-promote earlier
     // arms instead of leaving inconsistent kinds in the IR.
     MaxonValueKind? effectiveResultKind = null;
+    // The declared aggregate name (a struct/union/enum type, or the "String"
+    // builtin) of the running result, or null for a scalar result. Set by the
+    // first value-producing arm and carried so a later arm's give can be checked
+    // for type identity against it — two arms of the same kind but different
+    // concrete aggregate (`Box` vs `Cup`) are as incompatible as two arms of
+    // different kinds, and both are rejected below (E3005).
+    string? effectiveResultAggregateName = null;
     var priorValueArms = new List<(IrBlock<MaxonOp> Block, int AssignIdx)>();
 
     int caseIndex = 0;
@@ -15239,29 +15246,45 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
       var caseValue = ResolveExprValue(ParseExpression());
       var caseValueKind = DetermineValueKind(caseValue);
+      var caseAggregateName = GetManagedTypeName(caseValue);
 
       // Phase A auto-widening across match arms: reconcile this arm's kind
-      // with the running effectiveResultKind. Three cases:
-      //   1. First value-producing arm: adopt its kind.
+      // with the running effectiveResultKind. Four cases:
+      //   1. First value-producing arm: adopt its kind and aggregate identity.
       //   2. New kind widens to established: promote this arm's value down.
       //   3. Established widens to new kind: back-promote all prior arms.
-      // If neither widens (cross-kind narrowing, bool involvement), leave the
-      // arms unreconciled — the existing downstream pipeline will surface the
-      // mismatch (or, for today's silent-broken behavior, preserve it).
+      //   4. Neither widens, or the same kind names a different aggregate: the
+      //      arms give INCOMPATIBLE types — a `String` beside an `int`, a `bool`
+      //      beside an `int`, or two different structs/unions/enums. The result
+      //      slot is minted with the first arm's type, so an arm of another type
+      //      is wrong-typed through it: an `int` later read as a `String` pointer
+      //      (a segfault), or a struct dropped under the wrong destructor (a wild
+      //      free). This is the match-merge twin of the arm-agreement checks
+      //      `ParseTernaryExpression` already runs, rejected here with E3005 —
+      //      before the ill-typed value can reach a downstream cast or drop.
       if (effectiveResultKind == null) {
         effectiveResultKind = caseValueKind;
+        effectiveResultAggregateName = caseAggregateName;
       } else if (caseValueKind != effectiveResultKind.Value) {
         if (IsWideningCastSafe(caseValueKind, effectiveResultKind.Value)) {
           caseValue = PromoteValue(caseValue, effectiveResultKind.Value);
         } else if (IsWideningCastSafe(effectiveResultKind.Value, caseValueKind)) {
           BackPromotePriorMatchArms(priorValueArms, resultVarName, caseValueKind);
           effectiveResultKind = caseValueKind;
+          effectiveResultAggregateName = caseAggregateName;
+        } else {
+          throw MatchGiveTypeMismatch(caseValueKind, caseAggregateName,
+            effectiveResultKind.Value, effectiveResultAggregateName, matchToken);
         }
+      } else if (effectiveResultAggregateName != null && caseAggregateName != null
+                 && effectiveResultAggregateName != caseAggregateName) {
+        throw MatchGiveTypeMismatch(caseValueKind, caseAggregateName,
+          effectiveResultKind.Value, effectiveResultAggregateName, matchToken);
       }
       resultKind = effectiveResultKind.Value;
 
       // Update variable info to reflect the actual result type (may differ from initial Integer placeholder)
-      resultStructTypeName = GetManagedTypeName(caseValue);
+      resultStructTypeName = caseAggregateName;
       _variables[resultVarName] = new VarInfo(resultVarName, resultKind, true, caseValue, entryBlock, StructTypeName: resultStructTypeName);
 
       if (Check(TokenType.And)) {
@@ -15328,6 +15351,25 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
     return new ExprResult.Direct(resultValue);
   }
+
+  /// The E3005 a match expression raises when two `gives` arms yield values of
+  /// incompatible types. `got` names the mismatching arm and `expected` the
+  /// first arm, each rendered by its declared aggregate name (a struct, union,
+  /// or enum type) or, for a scalar, its primitive kind name — the same wording
+  /// the self-hosted compiler's `giveTypeMismatch` produces. Anchored at the
+  /// `match` keyword, matching where the ternary and self-hosted checks point.
+  private static CompileError MatchGiveTypeMismatch(
+      MaxonValueKind gotKind, string? gotAggregateName,
+      MaxonValueKind expectedKind, string? expectedAggregateName, Token matchToken) =>
+    new CompileError(ErrorCode.SemanticTypeMismatch,
+      $"match arms give incompatible types: '{MatchGiveTypeDisplay(gotKind, gotAggregateName)}' vs '{MatchGiveTypeDisplay(expectedKind, expectedAggregateName)}'",
+      matchToken.Line, matchToken.Column);
+
+  /// The name a match give value prints under in a type-agreement diagnostic:
+  /// a declared struct, union, or enum by its concrete type name, and every
+  /// scalar (int, bool, float, function, …) by its primitive kind name.
+  private static string MatchGiveTypeDisplay(MaxonValueKind kind, string? aggregateName) =>
+    aggregateName ?? KindToTypeName(kind);
 
   // ============================================================================
   // Expression parsing

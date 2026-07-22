@@ -1,0 +1,54 @@
+// Test: int-and-float-arms
+function main() returns ExitCode
+	let x = 1
+	let r = match x 'a'
+		1 gives 5
+		default gives 7.5
+	end 'a'
+	return trunc(r)
+end 'main'
+---
+ExitCode: 5
+---
+// CompiledIR
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rax, 1
+    x64.mov [rbp-8], rax
+    x64.jmp main.a_0.cmp0
+  a_0.cmp0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, 1
+    x64.cmp rax, rcx
+    x64.jne main.a_0.case1
+  a_0.case0:
+    x64.mov rax, 5
+    x64.cvtsi2sd xmm0, rax
+    x64.movsd [rbp-16], xmm0
+    x64.jmp main.a_0.merge
+  a_0.case1:
+    x64.movsd xmm0, [rip+__float_7.5]
+    x64.movsd [rbp-16], xmm0
+    x64.jmp main.a_0.merge
+  a_0.merge:
+    x64.movsd xmm0, [rbp-16]
+    x64.cvttsd2si rax, xmm0
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+}
+---
