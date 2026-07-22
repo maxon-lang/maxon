@@ -1634,6 +1634,19 @@ typealias LoopPhiVarArray = Array with LoopPhiVar
 // (`ByteArray` hashes and compares by content — see Token.value).
 typealias AssignedNameSet = Set with ByteArray
 
+// The bare member names of a generic type's inner ranged typealiases, in scope while its body is parsed
+// (P1.6-C, `Parser.enclosingInnerAliases`). Keyed by content like every other name set here.
+typealias InnerAliasNameSet = Set with ByteArray
+
+// A per-function map from an SSA value that is a generic INSTANCE (`WrapperA.create(…)`'s result, or a
+// `Self`-returning method result on such a receiver) to the interned NAME id of the instance ALIAS it
+// came from (`WrapperA`) — the alias name the value's shared `GenericInstanceId` cannot recover (P1.6-C).
+// It is the parse-time carrier the method-return retype and the per-instance argument check read: a
+// method's `Idx` return is re-qualified to `named("{alias}.Idx")`, and an inner-alias argument is checked
+// against the receiver's `{alias}`. A value with NO entry has no statically-known instance alias, so its
+// `Idx` results and arguments DECAY to plain (no per-instance identity) — which matches the oracle.
+typealias ValueInstanceAliasMap = Map with (ValueId, TypeNameId)
+
 // One enclosing loop on the parser's loop-context stack. `break`/`continue` read it
 // to find their targets (innermost, or by label) and to build the block-arg value
 // lists they carry to the exit / header. Because the header phis are created EAGERLY
@@ -1991,6 +2004,11 @@ export type Parser
 	// the sibling value columns.
 	var valueIsCapturingClosure as BoolArray
 	var valueClosureEnv as ValueIdArray
+	// ⭐ **THE PER-INSTANCE ALIAS PROVENANCE OF EACH GENERIC-INSTANCE VALUE (P1.6-C)** — see
+	// `ValueInstanceAliasMap`. Reset per function and SWAPPED across a closure body (its value ids are a
+	// fresh SSA space), exactly like the sibling value columns. A Map rather than a dense column because only
+	// the few generic-instance values a program constructs ever get an entry.
+	var valueInstanceAlias as ValueInstanceAliasMap
 	// ⭐ **THE CAPTURE SET OF THE CLOSURE CURRENTLY BEING PARSED (P1.5-A2b).** Populated by `captureEnclosing`
 	// as the body reads enclosing names (first-seen order = env slot order), read by `parseClosureExpression`
 	// after the body parse to build the env block (one `storeIndirect` per capture, by VALUE). SWAPPED across
@@ -2057,6 +2075,14 @@ export type Parser
 	// `typeParameter(POSITION)` — the position is the name's index in this list. Written and cleared in
 	// lockstep with `enclosingType` (`parseTypeDeclaration`/`recordScannedType` are the writers).
 	var enclosingTypeParams as ByteArrayArray
+	// ⭐ The BARE MEMBER NAMES of the INNER ranged typealiases declared in the type currently being parsed
+	// (P1.6-C) — `{Idx}` inside `type Wrapper` with `typealias Idx = int(0 to u64.max)`, empty otherwise. It
+	// is how `parseTypeReference` resolves a bare `Idx` in a field/return/parameter position to the
+	// base-qualified `named("Wrapper.Idx")` — recognized by NAME against this set, so the SWEEP and the real
+	// parse agree WITHOUT the whole-program `innerAliases` (which the sweep has not folded yet while it is
+	// still walking this very type). Written by the `typealias` member arm and cleared in lockstep with
+	// `enclosingType` (`parseTypeDeclaration`/`recordScannedType` are the writers).
+	var enclosingInnerAliases as InnerAliasNameSet
 	// ⭐ **WHICH METHODS OF THE GENERIC TYPE CURRENTLY BEING DECLARED NEED THE LAYOUT-DESCRIPTOR PARAM**
 	// (P1.6-B1), keyed by bare method name. Computed ONCE by `computeTypeDescriptorNeeds` when the type
 	// declaration opens — a TRANSITIVE fixpoint over the type's own methods: a method needs the descriptor
@@ -2084,6 +2110,22 @@ export type Parser
 	// (rather than allocating an empty `uses` list) for a type with no `uses`, and `closeTypeParamScope`
 	// restores it, so a non-generic type declaration allocates nothing here. Never mutated.
 	var emptyTypeParams as ByteArrayArray
+	// The SHARED empty inner-alias name set (P1.6-C) that `enclosingInnerAliases` holds for a type that
+	// declares no inner typealias — which is EVERY type on the generics-free corpus. `openTypeParamScope` /
+	// `closeTypeParamScope` point at it (rather than allocating an empty `Set` per type declaration, in BOTH
+	// the sweep and the real parse), and `readNestedRangedAlias` copy-on-writes a fresh set the first time it
+	// records a member. Never mutated.
+	var sharedEmptyInnerAliases as InnerAliasNameSet
+	// The SHARED empty per-value instance-alias map (P1.6-C) that `valueInstanceAlias` holds until a function
+	// actually constructs a generic instance — which is every function on the generics-free corpus. The
+	// per-function reset points at it (rather than allocating an empty Map), and `recordValueInstanceAlias`
+	// COPY-ON-WRITES a fresh map the first time it must write, so a function that constructs no instance
+	// allocates nothing here. Never mutated.
+	var sharedEmptyInstanceAliasMap as ValueInstanceAliasMap
+	// The SHARED empty NAME-keyed instance-alias map (P1.6-C) delivered to SemanticCheck for a function that
+	// has range checks but constructs no instance — read-only and STORED into `FunctionRangeChecks` (increfed,
+	// so sharing is safe), so it allocates nothing per function. Never mutated.
+	var sharedEmptyInstanceAliasNames as ValueInstanceAliasNameMap
 	// The struct-typed bindings currently IN SCOPE, in declaration order — the values a `return`
 	// must DROP (`emitScopeDrops`). Held as the `VarInfo` objects, exactly as `mutableVars` is, and
 	// drained off the end at a block's `end` by the same mark (see `closeBlock`). Reset per function.
@@ -2189,6 +2231,7 @@ export type Parser
 			valuePromiseMarks: BoolArray.create(),
 			valueIsCapturingClosure: BoolArray.create(),
 			valueClosureEnv: ValueIdArray.create(),
+			valueInstanceAlias: ValueInstanceAliasMap.create(),
 			captureNames: ByteArrayArray.create(),
 			captureValues: ValueIdArray.create(),
 			captureTypes: MaxonTypeArray.create(),
@@ -2199,10 +2242,14 @@ export type Parser
 			signatures: signatures,
 			enclosingType: EmptySourceText,
 			enclosingTypeParams: ByteArrayArray.create(),
+			enclosingInnerAliases: InnerAliasNameSet.create(),
 			typeDescriptorNeeds: sharedEmptyDescriptorNeeds,
 			genericAliasScratch: GenericAliasEntryArray.create(),
 			emptyTypeParamPositions: TypeParamIdArray.create(),
 			emptyTypeParams: ByteArrayArray.create(),
+			sharedEmptyInnerAliases: InnerAliasNameSet.create(),
+			sharedEmptyInstanceAliasMap: ValueInstanceAliasMap.create(),
+			sharedEmptyInstanceAliasNames: ValueInstanceAliasNameMap.create(),
 			ownedBindings: VarInfoArray.create(),
 			pendingTempDrops: ValueIdArray.create(),
 			inMatchArmBody: false,
@@ -2271,6 +2318,12 @@ export type Parser
 		// ⭐ Per-function `throws E` clauses (P1.4b) — the call-site dual of the return type, from the SAME
 		// token walk. One entry per THROWING function so a call site can decide whether it needs `try`.
 		var throwsEntries = ThrowsClauseEntryArray.create()
+		// ⭐ Inner ranged typealiases (P1.6-C) — one entry per `typealias Idx` declared inside a generic type,
+		// keyed whole-program by `base.member` so `Instance.Idx` resolves in any file.
+		var innerAliases = InnerAliasEntryArray.create()
+		// ⭐ Per-method inner-alias parameter info (P1.6-C) — one entry per method/factory that declares a bare
+		// inner-alias parameter, read by the per-instance argument check at concrete call sites.
+		var methodInnerAliasParams = MethodInnerAliasParamEntryArray.create()
 
 		let resume = self.pos
 		self.pos = 0
@@ -2300,7 +2353,7 @@ export type Parser
 				// read, because reading it moves the cursor past the `function` keyword.
 				depth = depth + 1
 				self.advance()
-				self.recordScannedSignature(entries, paramConsumes: paramConsumes, throwsEntries: throwsEntries)
+				self.recordScannedSignature(entries, paramConsumes: paramConsumes, throwsEntries: throwsEntries, methodInnerAliasParamOut: methodInnerAliasParams)
 				continue
 			end 'isFunction'
 
@@ -2322,7 +2375,7 @@ export type Parser
 			// array. It consumes the `type` keyword before it can fail, so the cursor always
 			// advances and this loop cannot spin.
 			if depth == 0 and self.at(TokenKind.type) 'isTypeDecl'
-				self.recordScannedType(structs, entries: entries, paramConsumes: paramConsumes, throwsEntries: throwsEntries)
+				self.recordScannedType(structs, entries: entries, paramConsumes: paramConsumes, throwsEntries: throwsEntries, innerAliasOut: innerAliases, methodInnerAliasParamOut: methodInnerAliasParams)
 				continue
 			end 'isTypeDecl'
 
@@ -2341,7 +2394,7 @@ export type Parser
 		end 'scan'
 		self.pos = resume
 
-		index.foldFile(entries, aliases: aliases, functionAliases: functionAliases, structs: structs, enums: enums, genericAliasEntries: genericAliases, bindings: bindings, paramConsumes: paramConsumes, throwsEntries: throwsEntries, fileTypeNames: self.artifact.typeNames)
+		index.foldFile(entries, aliases: aliases, functionAliases: functionAliases, structs: structs, enums: enums, genericAliasEntries: genericAliases, innerAliasEntries: innerAliases, methodInnerAliasParamEntries: methodInnerAliasParams, bindings: bindings, paramConsumes: paramConsumes, throwsEntries: throwsEntries, fileTypeNames: self.artifact.typeNames)
 	end 'foldDeclaredSignaturesInto'
 
 	// Is the cursor on a `let` or a `var` — the two keywords that introduce a top-level binding?
@@ -2409,7 +2462,7 @@ export type Parser
 	//
 	// The name is `declaredMethodName`'s, not the token's, so a factory inside `type Point` is
 	// recorded under the very key `Point.create(3, y: 4)` will look it up by — see there.
-	function recordScannedSignature(entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, throwsEntries ThrowsClauseEntryArray)
+	function recordScannedSignature(entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, throwsEntries ThrowsClauseEntryArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray)
 		if not self.at(TokenKind.identifier) 'noName'
 			return
 		end 'noName'
@@ -2439,6 +2492,18 @@ export type Parser
 			let throwsClause = try self.parseOptionalThrowsClause() otherwise return
 			throwsEntries.push(ThrowsClauseEntry.create(funcName, clause: throwsClause))
 		end 'throwing'
+
+		// ⭐ Record which SOURCE parameters are bare inner aliases (P1.6-C), so the parser's per-instance
+		// argument check can re-qualify them with a concrete receiver's instance alias at the call site. Only
+		// inside a generic type that declares inner aliases, and only a method/factory that HAS such a parameter
+		// gets an entry (the common case costs none). This is the ONE place the whole-program index learns a
+		// method's inner-alias parameters — the return-type read above SKIPS the parameter list.
+		if self.enclosingInnerAliases.count() != 0 'maybeInnerAliasParams'
+			let innerAliasInfo = self.innerAliasParamsIn(paramsStart)
+			if innerAliasInfo.hasInnerAliasMember() 'hasInnerAliasParam'
+				methodInnerAliasParamOut.push(MethodInnerAliasParamEntry.create(funcName, info: innerAliasInfo))
+			end 'hasInnerAliasParam'
+		end 'maybeInnerAliasParams'
 
 		// The cursor is now at the body start. Scan the body (peek-only, cursor untouched) for parameters
 		// this function moves into a struct field — its CONSUME set.
@@ -2884,6 +2949,46 @@ export type Parser
 		return self.enclosingTypeParams.count()
 	end 'paramTypeParamPosition'
 
+	// ⭐ The inner-alias PARAMETER shape of the parameter list at `parenPos` (P1.6-C) — its SOURCE parameter
+	// names and, per position, the bare inner-alias MEMBER (`Idx`) or `EmptySourceText`. It walks the list the
+	// way `paramNamesIn` does (the ONE parameter grammar) but reads the TYPE token span rather than skipping
+	// it. Only called inside a generic type that declares inner aliases.
+	function innerAliasParamsIn(parenPos TokenIndex) returns InnerAliasParamInfo
+		var names = ByteArrayArray.create()
+		var members = ByteArrayArray.create()
+		var q = parenPos
+		if self.kindAt(q) != TokenKind.leftParen 'noParens'
+			return InnerAliasParamInfo.create(names, members: members)
+		end 'noParens'
+		q = q + 1
+		if self.kindAt(q) == TokenKind.rightParen 'noParams'
+			return InnerAliasParamInfo.create(names, members: members)
+		end 'noParams'
+
+		while true 'params'
+			names.push(self.tokenAt(q).value)
+			let typeStart = q + 1
+			let typeEnd = self.skipParamType(typeStart)
+			members.push(self.innerAliasMemberOfParamType(typeStart, typeEnd: typeEnd))
+			if self.kindAt(typeEnd) != TokenKind.comma 'endList'
+				return InnerAliasParamInfo.create(names, members: members)
+			end 'endList'
+			q = typeEnd + 1
+		end 'params'
+		panic("innerAliasParamsIn: the parameter loop only exits by returning at the closing `)` or at EOF")
+	end 'innerAliasParamsIn'
+
+	// The bare inner-alias MEMBER a parameter type spanning `[typeStart, typeEnd)` names (P1.6-C), or
+	// `EmptySourceText`. A SINGLE identifier (`typeEnd == typeStart + 1`) in `enclosingInnerAliases` is a bare
+	// inner alias (`Idx`); anything else — a `T`, a plain alias, a qualified `Inst.Idx`, a `function(…)` — is
+	// not one and reads as empty.
+	function innerAliasMemberOfParamType(typeStart TokenIndex, typeEnd TokenIndex) returns ByteArray
+		if typeEnd == typeStart + 1 and self.kindAt(typeStart) == TokenKind.identifier and self.enclosingInnerAliases.contains(self.tokenAt(typeStart).value) 'innerAlias'
+			return self.tokenAt(typeStart).value
+		end 'innerAlias'
+		return EmptySourceText
+	end 'innerAliasMemberOfParamType'
+
 	// Advance past ONE parameter's TYPE — from the token AFTER the parameter's name to the token that
 	// ENDS the type: the `,` before the next parameter, the `)` closing the list, or EOF on a malformed
 	// list. Balanced over nested `(...)` (a `function(…)`-typed parameter).
@@ -2957,7 +3062,7 @@ export type Parser
 	// tell them apart. `depth` here is relative to the body — 0 is directly inside it — and
 	// `blockDepthAfter` is the same opener/closer rule the caller counts with, so a method's `if`
 	// and `while` nest correctly and its `end` cannot be mistaken for the type's.
-	function recordScannedType(structs StructLayoutArray, entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, throwsEntries ThrowsClauseEntryArray)
+	function recordScannedType(structs StructLayoutArray, entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, throwsEntries ThrowsClauseEntryArray, innerAliasOut InnerAliasEntryArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray)
 		let nameTok = try self.readTypeHeader() otherwise return
 		self.enclosingType = nameTok.value
 
@@ -2975,6 +3080,20 @@ export type Parser
 				break
 			end 'closesType'
 
+			// A NESTED (inner) ranged typealias (P1.6-C). Gated on depth 0 so a `typealias` inside a method
+			// body is left to the outer walk. Read into `enclosingInnerAliases` (so the rest of the body's bare
+			// `Idx` references resolve while the sweep is still building the whole-program index) AND keyed
+			// whole-program by `base.member`. Tolerant, like `readStructFieldInto`: a malformed nested alias is
+			// the real parse's to report, and stopping here leaves the remaining tokens to the robust outer walk.
+			if depth == 0 and self.atNestedTypeAlias() 'isInnerAlias'
+				if self.at(TokenKind.export) 'exportedInnerAlias'
+					self.advance()
+				end 'exportedInnerAlias'
+				let inner = try self.readNestedRangedAlias() otherwise break
+				innerAliasOut.push(InnerAliasEntry.create(self.enclosingType, alias: inner))
+				continue
+			end 'isInnerAlias'
+
 			if depth == 0 and self.atStructFieldKeyword() 'isField'
 				// A field the sweep cannot read leaves the layout SHORT, which would put every later
 				// field at the wrong offset — so the scan stops rather than recording a layout it
@@ -2989,7 +3108,7 @@ export type Parser
 				// loop does exactly this, for exactly this reason.
 				depth = depth + 1
 				self.advance()
-				self.recordScannedSignature(entries, paramConsumes: paramConsumes, throwsEntries: throwsEntries)
+				self.recordScannedSignature(entries, paramConsumes: paramConsumes, throwsEntries: throwsEntries, methodInnerAliasParamOut: methodInnerAliasParamOut)
 				continue
 			end 'isMethod'
 
@@ -3063,6 +3182,12 @@ export type Parser
 	// Commas separate the names (`uses A, B`), NO parentheses (the oracle's grammar). The loop stops at
 	// the first non-identifier (a newline opening the body), exactly as a top-level `uses` clause does.
 	function openTypeParamScope(layout StructLayout)
+		// The inner-alias name set is per-TYPE (P1.6-C) — reset here so a sibling type's `Idx` cannot leak into
+		// this one, and reset BEFORE the non-generic early return so every type body starts fresh. Points at the
+		// SHARED empty set until a nested typealias is recorded (`readNestedRangedAlias` copy-on-writes), so a
+		// type that declares none allocates nothing.
+		self.enclosingInnerAliases = self.sharedEmptyInnerAliases
+
 		// A NON-GENERIC type allocates nothing: it keeps the layout's create-time empty `typeParamNames`
 		// and points the parser's enclosing scope at the shared empty list. Only a `uses` clause builds a
 		// real list — which is the rare case, and absent from the scale corpus entirely.
@@ -3093,6 +3218,10 @@ export type Parser
 	function closeTypeParamScope()
 		self.enclosingType = EmptySourceText
 		self.enclosingTypeParams = self.emptyTypeParams
+		// Restored to the SHARED empty in lockstep (P1.6-C) so a bare `Idx` at file scope, after a type that
+		// declared one, resolves as an ordinary named type rather than a stale inner alias — and allocates
+		// nothing, exactly as `emptyTypeParams` restores.
+		self.enclosingInnerAliases = self.sharedEmptyInnerAliases
 	end 'closeTypeParamScope'
 
 	// Is the cursor on a FIELD declaration — `[export] (let|var) <name> as <Type>`?
@@ -3509,6 +3638,43 @@ export type Parser
 		let underlying = MaxonType.float if isFloat else MaxonType.integer
 		rangedOut.push(RangedTypeAlias.create(nameTok.value, underlying: underlying, low: low, high: high))
 	end 'readTypeAliasDeclaration'
+
+	// Is the cursor at a nested typealias declaration inside a type body (P1.6-C) — `typealias …` or the
+	// `export typealias …` the spec writes? A peek only; the caller consumes.
+	function atNestedTypeAlias() returns bool
+		if self.at(TokenKind.export) 'exported'
+			return self.kindAt(self.pos + 1) == TokenKind.typealias
+		end 'exported'
+		return self.at(TokenKind.typealias)
+	end 'atNestedTypeAlias'
+
+	// ⭐ **READ ONE NESTED (INNER) RANGED TYPEALIAS (P1.6-C)** — `typealias Idx = int(0 to u64.max)` inside a
+	// generic type body. The cursor sits at `typealias` (any `export` is consumed by the caller). It reuses
+	// `readTypeAliasDeclaration` — the ONE typealias grammar the sweep and the real parse share — and requires
+	// the RANGED form: only a ranged inner alias is a per-instance alias at this rung, so a nested function or
+	// generic-instance alias is rejected cleanly (a struct-shaped nested alias stays plain, and per-instance
+	// nesting of those is a later slice). It records the bare member into `enclosingInnerAliases` so the rest
+	// of the body's bare `Idx` references resolve, and returns the alias so the sweep can key it whole-program.
+	function readNestedRangedAlias() returns RangedTypeAlias throws ParseError
+		let aliasTok = self.current()
+		var ranged = RangedTypeAliasArray.create()
+		var functionAliases = FunctionTypeAliasArray.create()
+		var generics = GenericAliasEntryArray.create()
+		try self.readTypeAliasDeclaration(ranged, functionOut: functionAliases, genericOut: generics)
+
+		if ranged.count() != 1 'notRanged'
+			throw ParseError.unsupported("a nested typealias inside a generic type must be a ranged `int`/`float` alias (`typealias Idx = int(0 to u64.max)`) to gain per-instance identity; a nested function or generic-instance alias is a later slice", line: aliasTok.line, column: aliasTok.column)
+		end 'notRanged'
+
+		let alias = try ranged.get(0) otherwise panic("readNestedRangedAlias: ranged.count() == 1 but get(0) failed")
+		// COPY-ON-WRITE off the shared empty set: only a type that actually declares a nested typealias gets its
+		// own set here, so the generics-free corpus never allocates one (the reset points at the shared one).
+		if self.enclosingInnerAliases is self.sharedEmptyInnerAliases 'stillShared'
+			self.enclosingInnerAliases = InnerAliasNameSet.create()
+		end 'stillShared'
+		self.enclosingInnerAliases.insert(alias.name)
+		return alias
+	end 'readNestedRangedAlias'
 
 	// ⭐ **A GENERIC-INSTANCE TYPEALIAS (P1.6-A)** — `typealias IntBox = Box with Integer`. The cursor
 	// sits on the base identifier. It RECORDS the instance into `genericOut` (which `foldFile` interns
@@ -4167,6 +4333,20 @@ export type Parser
 			self.advance()
 		end 'staticMember'
 
+		// A NESTED (inner) ranged typealias (P1.6-C) — `export typealias Idx = int(0 to u64.max)`. The
+		// `export` (visibility) is already consumed above; a nested typealias takes no `static`. It records the
+		// bare member into `enclosingInnerAliases` so the rest of the body's bare `Idx` references resolve
+		// (whole-program recording is the sweep's — this artifact needs only the local set). Its visibility is
+		// inert at this rung (an inner alias erases to `integer`, so it names no cross-file value).
+		if self.at(TokenKind.typealias) 'nestedTypeAlias'
+			if isStatic 'staticInnerAlias'
+				let tok = self.current()
+				throw ParseError.unsupported("a nested typealias cannot be `static` — it is a per-type declaration, not a member function", line: tok.line, column: tok.column)
+			end 'staticInnerAlias'
+			_ = try self.readNestedRangedAlias()
+			return
+		end 'nestedTypeAlias'
+
 		if not self.at(TokenKind.function) 'notFunction'
 			let tok = self.current()
 			throw ParseError.unexpectedToken(TokenKind.function.rawValue, got: tok.kind.rawValue, line: tok.line, column: tok.column)
@@ -4302,6 +4482,10 @@ export type Parser
 		self.valuePromiseMarks = BoolArray.create()
 		self.valueIsCapturingClosure = BoolArray.create()
 		self.valueClosureEnv = ValueIdArray.create()
+		// Per-function, like the sibling value columns: a value's per-instance alias provenance names an id
+		// in THIS function's SSA space (P1.6-C). Points at the SHARED empty until the function constructs an
+		// instance (`recordValueInstanceAlias` copy-on-writes), so a generics-free function allocates nothing.
+		self.valueInstanceAlias = self.sharedEmptyInstanceAliasMap
 		// P1.9 range-check accumulators, reset per function (see the field header). The return-alias
 		// name is fixed by the DECLARED return type and known here, before the body is parsed; the two
 		// site lists fill as the body emits casts / returns.
@@ -4407,11 +4591,28 @@ export type Parser
 	// Files nothing when the function has no cast into a ranged alias AND no ranged return — the
 	// common case — so the registry stays proportional to the checks a program actually contains.
 	function commitRangeChecks(name ByteArray)
-		if self.rangeCheckCastSites.isEmpty() and self.rangeCheckReturnSites.isEmpty() 'noChecks'
+		// P1.6-C rides this per-function channel too (`FunctionRangeChecks.valueInstanceAliases`), so a
+		// function with NO range check but a generic-instance construction still files an entry. The presence
+		// gate reads `count()` (no allocation); only a function that actually constructs an instance packages a
+		// fresh map, every other filed entry carries the SHARED empty one.
+		let hasInstanceAliases = self.valueInstanceAlias.count() != 0
+		if self.rangeCheckCastSites.isEmpty() and self.rangeCheckReturnSites.isEmpty() and not hasInstanceAliases 'noSideData'
 			return
-		end 'noChecks'
-		self.artifact.recordFunctionRangeChecks(name, checks: FunctionRangeChecks.create(self.filePath, castSites: self.rangeCheckCastSites, returnAliasName: self.rangeCheckReturnAlias, returnSites: self.rangeCheckReturnSites))
+		end 'noSideData'
+		let instanceAliases = self.packagedInstanceAliases() if hasInstanceAliases else self.sharedEmptyInstanceAliasNames
+		self.artifact.recordFunctionRangeChecks(name, checks: FunctionRangeChecks.create(self.filePath, castSites: self.rangeCheckCastSites, returnAliasName: self.rangeCheckReturnAlias, returnSites: self.rangeCheckReturnSites, valueInstanceAliases: instanceAliases))
 	end 'commitRangeChecks'
+
+	// Package the parser's per-value instance-alias provenance (ValueId ⇒ interned alias id, file-local) into
+	// the NAME-keyed map SemanticCheck reads (P1.6-C) — names travel the merge with no id remap. Called only
+	// when the function actually constructed an instance (`commitRangeChecks` gates on `count()`).
+	function packagedInstanceAliases() returns ValueInstanceAliasNameMap
+		var out = ValueInstanceAliasNameMap.create()
+		for (value, aliasId) in self.valueInstanceAlias 'eachInstanceAlias'
+			out.upsert(value, value: self.internedName(aliasId))
+		end 'eachInstanceAlias'
+		return out
+	end 'packagedInstanceAliases'
 
 	// The name of the function's return type IF it is a ranged INT alias, else EMPTY. A float alias
 	// returns empty (float returns are not range-checked at this rung — the one case that would,
@@ -4739,6 +4940,20 @@ export type Parser
 
 		if self.at(TokenKind.identifier) 'named'
 			let tok = try self.consume(TokenKind.identifier)
+
+			// ⭐ A QUALIFIED PER-INSTANCE ALIAS REFERENCE (P1.6-C) — `StrWrapper.Idx` in a type position. An
+			// identifier followed by `.` and another identifier is `Instance.Member`, the ONE dotted type form,
+			// so this peek precedes every bare-identifier arm below (the `.` is what tells a qualified reference
+			// from a plain one). It resolves to `named(join)` in BOTH passes — the SHAPE is enough, needing no
+			// registry, so the tolerant sweep and the real parse answer identically while the index is still
+			// building. TypeResolution erases a registered per-instance `X.Y` to `integer` (keeping the nominal
+			// name in the value column) and reports an unregistered one as E3011.
+			if self.at(TokenKind.dot) and self.kindAt(self.pos + 1) == TokenKind.identifier 'qualifiedMember'
+				try self.consume(TokenKind.dot)
+				let memberTok = try self.consume(TokenKind.identifier)
+				return MaxonType.named(self.artifact.typeNames.intern(joinQualifiedName(tok.value, member: memberTok.value)))
+			end 'qualifiedMember'
+
 			// The `String` BUILTIN — recognized SYNTACTICALLY, like `Self` below, so it needs no registry
 			// and both the declaration sweep and the real parse answer it identically. It resolves to its
 			// own `MaxonType.string` arm (NEVER `named`), which is what tags a `String` parameter's value
@@ -4765,6 +4980,17 @@ export type Parser
 			if paramPos < self.enclosingTypeParams.count() 'typeParam'
 				return MaxonType.typeParameter(paramPos)
 			end 'typeParam'
+
+			// A BARE INNER ALIAS (P1.6-C) — `Idx` inside `type Wrapper` where `typealias Idx = int(0 to
+			// u64.max)`. Recognized by NAME against `enclosingInnerAliases` (populated while THIS type's body is
+			// parsed, so the sweep and the real parse agree without the whole-program `innerAliases`, which the
+			// sweep has not folded yet). It resolves to the BASE-QUALIFIED `named("Wrapper.Idx")` — the
+			// shared-body form a method return/parameter carries; TypeResolution erases it to `integer`, and the
+			// method-return retype re-qualifies it to a concrete instance at the call site. NEVER bare
+			// `named("Idx")`: a bare member name collides with a same-named inner alias of another generic type.
+			if self.enclosingInnerAliases.contains(tok.value) 'innerAlias'
+				return MaxonType.named(self.artifact.typeNames.intern(joinQualifiedName(self.enclosingType, member: tok.value)))
+			end 'innerAlias'
 
 			// A GENERIC-INSTANCE ALIAS (P1.6-A) — `IntBox` where `typealias IntBox = Box with Integer`.
 			// Resolved to `genericInstance(giid)` here in the REAL parse (the whole-program index is
@@ -5513,6 +5739,29 @@ export type Parser
 		return try self.valueNameIds.get(value) otherwise panic("Parser.valueNameId: value v{value} has no recorded type name — the two type columns fell out of lockstep")
 	end 'valueNameId'
 
+	// Record that `value` (a generic instance) came from instance alias `aliasName` (P1.6-C) — the
+	// provenance the shared `GenericInstanceId` cannot carry (`WrapperA` and `WrapperB` share one gid). An
+	// EMPTY `aliasName` records nothing: a value with no statically-known alias DECAYS (its `Idx` results and
+	// arguments lose per-instance identity), which matches the oracle.
+	function recordValueInstanceAlias(value ValueId, aliasName ByteArray)
+		if aliasName.isEmpty() 'noAlias'
+			return
+		end 'noAlias'
+		// COPY-ON-WRITE off the shared empty map: a function that constructs an instance gets its own map here,
+		// on first write, so the generics-free corpus never allocates one (the reset points at the shared one).
+		if self.valueInstanceAlias is self.sharedEmptyInstanceAliasMap 'stillShared'
+			self.valueInstanceAlias = ValueInstanceAliasMap.create()
+		end 'stillShared'
+		self.valueInstanceAlias.upsert(value, value: self.artifact.typeNames.intern(aliasName))
+	end 'recordValueInstanceAlias'
+
+	// The instance alias NAME `value` came from (`WrapperA`), or `EmptySourceText` when it has none — a
+	// `self` receiver, a value merged across branches, or any non-instance value (P1.6-C).
+	function instanceAliasNameOfValue(value ValueId) returns ByteArray
+		let aliasId = try self.valueInstanceAlias.get(value) otherwise return EmptySourceText
+		return self.internedName(aliasId)
+	end 'instanceAliasNameOfValue'
+
 	// ⭐ **THE INTERNED NAME OF THE DECLARED AGGREGATE A (tag, nameId) PAIR DENOTES, OR `EmptySourceText`
 	// FOR ANYTHING THAT IS NOT ONE** — a scalar, a ranged-int alias, a String. The parser-tier half of
 	// the OPEN #54 identity check, ported from v1's `namedStructOrEnumName` (SemanticCheck.maxon:2687),
@@ -5555,6 +5804,14 @@ export type Parser
 		if self.signatures.containsStruct(name) or self.signatures.containsEnum(name) 'registeredAggregate'
 			return name
 		end 'registeredAggregate'
+
+		// ⭐ A REGISTERED PER-INSTANCE ALIAS ("IntWrapper.Idx") is a nominal aggregate too (P1.6-C): a
+		// `named` value carrying one has an IDENTITY the tag check cannot see (two per-instance aliases share
+		// the `named` tag and the `integer` width). A BASE-TEMPLATE inner alias ("Wrapper.Idx") and a plain
+		// ranged alias are NOT nominal — `isPerInstanceAlias` answers false for both — so they stay structural.
+		if self.signatures.isPerInstanceAlias(name) 'perInstanceAlias'
+			return name
+		end 'perInstanceAlias'
 
 		return EmptySourceText
 	end 'aggregateNameOf'
@@ -10228,8 +10485,42 @@ export type Parser
 		end 'intToFloat'
 
 		self.recordCastSite(value, targetType: targetType, asTok: asTok)
+		self.retagPerInstanceCast(value, targetType: targetType)
 		return value
 	end 'applyCast'
+
+	// ⭐ **A PER-INSTANCE `as` STAMPS or STRIPS the per-instance identity (P1.6-C).** Two directions, both a
+	// deliberate departure from a plain ranged alias's no-retag (whose identity is structural, not nominal):
+	//
+	//   • **STAMP** — `x as StrWrapper.Idx` retags the value to `named("StrWrapper.Idx")` so it carries that
+	//     instance's per-instance identity. A plain field read stamped this way becomes a genuine per-instance
+	//     value (`as-conversion`); re-stamping a per-instance source is fine — this is the "just stamp" that
+	//     sidesteps the bootstrap's E3010 "unneeded cast" quirk between same-range per-instance aliases.
+	//   • **STRIP** — `idx as ExitCode` / `idx as Integer` on a per-instance SOURCE and a non-per-instance
+	//     TARGET retags the value to the plain target, DECAYING its per-instance identity. Without this, the
+	//     value stays `named("…Idx")` and a symmetric coercion site (a `return`, an assignment) reads it as an
+	//     aggregate meeting a non-aggregate and rejects it — a per-instance Idx IS numeric and must decay, as
+	//     the oracle does.
+	//
+	// A cast whose SOURCE and TARGET are both non-per-instance leaves the value untouched (the existing
+	// representational no-op). The retag is IN PLACE (the int→int cast mints no new Std value); the source
+	// binding is not re-read as its old type in the corpus, so no aliasing is observed.
+	//
+	// ⚠ The base-range compatibility check the spec names (`fooIdx as BarContainer.Idx` requires the SAME
+	// low/high) is inert at this rung — every inner alias is `int(0 to u64.max)` — and its diagnostic form is
+	// deferred with the first narrower inner range.
+	function retagPerInstanceCast(value ValueId, targetType MaxonType)
+		if maxonTypeTag(targetType) == ValueTypeTag.named and self.signatures.isPerInstanceAlias(self.internedName(typeNameIdOf(targetType))) 'stampTarget'
+			self.retypeValue(value, valueType: targetType)
+			return
+		end 'stampTarget'
+
+		// STRIP: a per-instance SOURCE decaying into a non-per-instance target retags to the plain target, so
+		// the value loses its per-instance identity and coerces like the ordinary integer it is.
+		if self.tagOf(value) == ValueTypeTag.named and self.signatures.isPerInstanceAlias(self.internedName(self.valueNameId(value))) 'stripSource'
+			self.retypeValue(value, valueType: targetType)
+		end 'stripSource'
+	end 'retagPerInstanceCast'
 
 	// Record a narrowing-check site for `value` when `targetType` is a ranged INT alias (P1.9). `block` is
 	// the CAST'S evaluation block (`self.currentBlock`), so the guard runs on the path the cast is on — an
@@ -11830,6 +12121,10 @@ export type Parser
 			return
 		end 'notThisBase'
 		self.retypeValue(result, valueType: MaxonType.genericInstance(gid))
+		// ⭐ Carry the FACTORY's instance-alias provenance onto the result (P1.6-C), so a later
+		// `w.getTag()` / `w.setTag(…)` on this value can re-qualify an inner-alias return/parameter to
+		// `WrapperA.Idx`. The shared gid cannot recover `WrapperA`; only the syntactic `aliasName` here can.
+		self.recordValueInstanceAlias(result, aliasName: aliasName)
 	end 'retypeGenericAliasConstructorResult'
 
 	// ⭐ **THE STRUCT A QUALIFIED CALL'S METHOD IS DECLARED ON (P1.6-A).** A generic-instance alias
@@ -11940,8 +12235,43 @@ export type Parser
 
 		try self.requireSelfForDescriptorForwarding(base, memberTok: memberTok)
 
-		return try self.parseCallNamed(func, callee: qualifiedMethodName(base.layout.name, methodName: memberTok.value), anchor: baseTok, receiver: ReceiverArg.value(base.box), resultUsed: resultUsed, constructorInstance: ConstructorInstance.none)
+		let result = try self.parseCallNamed(func, callee: qualifiedMethodName(base.layout.name, methodName: memberTok.value), anchor: baseTok, receiver: ReceiverArg.value(base.box), resultUsed: resultUsed, constructorInstance: ConstructorInstance.none)
+		self.retypeInstanceMethodResult(result, receiver: base.box)
+		return result
 	end 'dispatchMethodOnBase'
+
+	// ⭐ **RETYPE A METHOD RESULT TO CARRY PER-INSTANCE IDENTITY (P1.6-C).** When the receiver has a
+	// statically-known instance alias, two shapes gain it:
+	//   • an INNER-ALIAS return (`getTag() returns Idx`, resolved to `named("Wrapper.Idx")`) is re-qualified
+	//     to `named("{alias}.Idx")` — so `a.getTag()` is a `WrapperA.Idx` value the arg check compares by name;
+	//   • a `Self` return (`withTag() returns Self`, resolved to the base `structRef`) is re-tagged to the
+	//     receiver's OWN `genericInstance` and its alias propagated — so `w = w.withTag(7)` stays the same
+	//     instance and type-checks (the assignment would else reject `Wrapper` into a `genericInstance` var).
+	// A receiver with NO alias (a `self` receiver, a value merged across branches) leaves the result plain — it
+	// DECAYS, matching the oracle. `receiver` is BORROWED; only the result's type moves.
+	function retypeInstanceMethodResult(result ValueId, receiver ValueId)
+		let receiverAlias = self.instanceAliasNameOfValue(receiver)
+		if receiverAlias.isEmpty() 'noReceiverAlias'
+			return
+		end 'noReceiverAlias'
+
+		if self.tagOf(result) == ValueTypeTag.named 'namedReturn'
+			let member = self.signatures.innerAliasMember(self.internedName(self.valueNameId(result)))
+			if not member.isEmpty() 'innerAliasReturn'
+				self.retypeValue(result, valueType: MaxonType.named(self.artifact.typeNames.intern(joinQualifiedName(receiverAlias, member: member))))
+				return
+			end 'innerAliasReturn'
+		end 'namedReturn'
+
+		if self.tagOf(result) == ValueTypeTag.structRef and self.tagOf(receiver) == ValueTypeTag.genericInstance 'selfReturn'
+			let gid = self.valueNameId(receiver)
+			let baseId = self.artifact.typeNames.intern(self.signatures.genericInstanceBaseName(gid))
+			if self.valueNameId(result) == baseId 'sameBase'
+				self.retypeValue(result, valueType: MaxonType.genericInstance(gid))
+				self.recordValueInstanceAlias(result, aliasName: receiverAlias)
+			end 'sameBase'
+		end 'selfReturn'
+	end 'retypeInstanceMethodResult'
 
 	// ⚠ **B1 FORWARDS A LAYOUT DESCRIPTOR ONLY FROM `self`, NOT FROM A `Self`-RETURNING RESULT** (P1.6-B1). A
 	// method that reads `sizeof(T)` needs the descriptor threaded to it. When the receiver is a value of the
@@ -13150,6 +13480,7 @@ export type Parser
 		// the enclosing closure's.
 		let savedValueIsCapturingClosure = self.valueIsCapturingClosure
 		let savedValueClosureEnv = self.valueClosureEnv
+		let savedValueInstanceAlias = self.valueInstanceAlias
 		let savedCaptureNames = self.captureNames
 		let savedCaptureValues = self.captureValues
 		let savedCaptureTypes = self.captureTypes
@@ -13187,6 +13518,7 @@ export type Parser
 		self.valuePromiseMarks = BoolArray.create()
 		self.valueIsCapturingClosure = BoolArray.create()
 		self.valueClosureEnv = ValueIdArray.create()
+		self.valueInstanceAlias = self.sharedEmptyInstanceAliasMap
 		self.captureNames = ByteArrayArray.create()
 		self.captureValues = ValueIdArray.create()
 		self.captureTypes = MaxonTypeArray.create()
@@ -13300,6 +13632,7 @@ export type Parser
 		self.artifact.setCurrentFuncIndex(savedFuncIndex)
 		self.valueIsCapturingClosure = savedValueIsCapturingClosure
 		self.valueClosureEnv = savedValueClosureEnv
+		self.valueInstanceAlias = savedValueInstanceAlias
 		self.captureNames = savedCaptureNames
 		self.captureValues = savedCaptureValues
 		self.captureTypes = savedCaptureTypes

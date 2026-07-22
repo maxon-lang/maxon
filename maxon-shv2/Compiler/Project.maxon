@@ -251,6 +251,16 @@ end 'RangeCheckReturnSite'
 
 export typealias RangeCheckReturnSiteArray = Array with RangeCheckReturnSite
 
+// ⭐ Per-function map from a generic-INSTANCE value's function-local `ValueId` to the NAME of the
+// instance alias it came from (`WrapperA`) — the parse-time provenance the value's shared
+// `GenericInstanceId` cannot recover (P1.6-C). The NAME (not an interned id) so it survives merge with
+// no remap, exactly as `returnAliasName` does. SemanticCheck's per-instance argument check reads it off
+// the RECEIVER argument to re-qualify a method's inner-alias parameter (`WrapperB.setTag`'s `t Idx` ⇒
+// `WrapperB.Idx`). It rides `FunctionRangeChecks` because that is the ONE per-function side table the
+// parser fills and `mergeArtifact` copies whole (keyed by function name, id-stable) — a second such table
+// would be the same channel written twice.
+export typealias ValueInstanceAliasNameMap = Map with (ValueId, ByteArray)
+
 // Every range-check site in one function. `filePath` is stamped by `mergeArtifact` (the
 // function's file); `returnAliasName` is EMPTY unless the function returns a ranged INT alias.
 export type FunctionRangeChecks
@@ -258,9 +268,12 @@ export type FunctionRangeChecks
 	export var castSites as RangeCheckCastSiteArray
 	export var returnAliasName as ByteArray
 	export var returnSites as RangeCheckReturnSiteArray
+	// P1.6-C — see `ValueInstanceAliasNameMap`. Empty for a function that constructs no generic instance,
+	// which is every function outside the generics corpus.
+	export var valueInstanceAliases as ValueInstanceAliasNameMap
 
-	export static function create(filePath FilePath, castSites RangeCheckCastSiteArray, returnAliasName ByteArray, returnSites RangeCheckReturnSiteArray) returns FunctionRangeChecks
-		return Self{filePath: filePath, castSites: castSites, returnAliasName: returnAliasName, returnSites: returnSites}
+	export static function create(filePath FilePath, castSites RangeCheckCastSiteArray, returnAliasName ByteArray, returnSites RangeCheckReturnSiteArray, valueInstanceAliases ValueInstanceAliasNameMap) returns FunctionRangeChecks
+		return Self{filePath: filePath, castSites: castSites, returnAliasName: returnAliasName, returnSites: returnSites, valueInstanceAliases: valueInstanceAliases}
 	end 'create'
 end 'FunctionRangeChecks'
 

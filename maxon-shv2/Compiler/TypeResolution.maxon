@@ -210,6 +210,26 @@ function resolveNamedType(project Project, id TypeNameId) returns MaxonType
 		return MaxonType.integer
 	end 'isEnum'
 
+	// A PLAIN ranged alias ("Score") — checked FIRST after the aggregates, and BEFORE the qualified-alias
+	// path below, so the common case never pays the qualified split. A plain alias resolves to its underlying
+	// primitive: two aliases over the same range are the same type, an alias creates no nominal distinction.
+	if let alias = try project.typeAliases.get(name) 'isPlainAlias'
+		return alias.underlying
+	end 'isPlainAlias'
+
+	// ⭐ A QUALIFIED ALIAS (P1.6-C) — a base-template inner alias ("Wrapper.Idx", the shared-body form a
+	// generic method's `Idx` carries) OR a per-instance alias ("IntWrapper.Idx"). Both ERASE to their
+	// underlying primitive here, EXACTLY as a plain ranged alias does — so `maxonTypeToStdType` never sees a
+	// `named` residue in a signature or field type. The per-instance one's nominal name survives only in the
+	// VALUE column, where the front-end identity checks read it; a signature carries no identity. Reached only
+	// for a name that is NEITHER a plain alias nor an aggregate — a rare, dotted name — so the memoized
+	// `queryProgramSignatures` fetch and the qualified-name split never touch the plain-alias hot path.
+	let signatures = try queryProgramSignatures(project) otherwise panic("resolveNamedType: queryProgramSignatures failed inside resolveTypes — it is computed and memoized by compileToCodeResult before the pipeline runs, so it cannot fail fresh here")
+	match signatures.qualifiedAliasOf(name) 'qualified'
+		declared(alias) then return alias.underlying
+		undeclared then break 'qualified'
+	end 'qualified'
+
 	// A name in NONE of the sources is a USER error — a typo (`Scor` for `Score`), a bare
 	// sized type (`u8` is not a type in Maxon; a ranged alias over it is), or a
 	// user-defined type this slice does not have. It panicked until now, which was a
@@ -223,16 +243,13 @@ function resolveNamedType(project Project, id TypeNameId) returns MaxonType
 	// point at. Positioning it means threading that span from `parseTypeReference`
 	// through `FuncSignature` into the registry this pass reads, which is its own piece
 	// of work; a bare diagnostic beats a panic until it lands.
-	let alias = try project.typeAliases.get(name) otherwise 'unknown'
-		reportDiagnostic(project, diagnostic: Diagnostic.create(ErrorCode.unknownType, message: "Unknown type '{String.from(name)}'"))
+	reportDiagnostic(project, diagnostic: Diagnostic.create(ErrorCode.unknownType, message: "Unknown type '{String.from(name)}'"))
 
-		// A RECOVERY type, not a sentinel answer: `PassPipeline.run` gates on diagnostics
-		// after EVERY pass and `resolveTypes` IS a pass, so the build throws the moment
-		// this pass returns. Nothing downstream ever reads it — it exists only to keep
-		// the module structurally well-formed for the instant in between, so that the
-		// rest of this pass can go on to report the OTHER unknown types in the file
-		// rather than stopping at the first.
-		return MaxonType.integer
-	end 'unknown'
-	return alias.underlying
+	// A RECOVERY type, not a sentinel answer: `PassPipeline.run` gates on diagnostics
+	// after EVERY pass and `resolveTypes` IS a pass, so the build throws the moment
+	// this pass returns. Nothing downstream ever reads it — it exists only to keep
+	// the module structurally well-formed for the instant in between, so that the
+	// rest of this pass can go on to report the OTHER unknown types in the file
+	// rather than stopping at the first.
+	return MaxonType.integer
 end 'resolveNamedType'

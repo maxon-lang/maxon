@@ -620,8 +620,85 @@ end 'validateCall'
 // parameter `i` — the slotting is done once, by `slotCallArgs`, and neither re-derives it.
 function checkSlottedCall(project Project, func IrFunction, callee ByteArray, sig FuncSignature, argIds ValueIdArray, escapeSummary ParamEscapeSummary, callRange SourceRange, filePath FilePath)
 	checkArgTypes(project, func: func, sig: sig, argIds: argIds, callRange: callRange, filePath: filePath)
+	checkPerInstanceArgs(project, func: func, callee: callee, sig: sig, argIds: argIds, callRange: callRange, filePath: filePath)
 	checkCapturingClosureEscape(project, func: func, callee: callee, argIds: argIds, escapeSummary: escapeSummary, callRange: callRange, filePath: filePath)
 end 'checkSlottedCall'
+
+// ⭐ **THE PER-INSTANCE ARGUMENT CHECK (P1.6-C, E3005).** A method whose parameter is a bare inner alias
+// (`setTag(t Idx)`) wants that parameter QUALIFIED to the concrete receiver's instance (`WrapperB.setTag`
+// wants `WrapperB.Idx`). The shared method signature cannot carry that identity — `WrapperA` and `WrapperB`
+// share one gid and one `Wrapper.setTag` — so the check lives HERE, where the callee's inner-alias parameter
+// members are known (the sweep's `methodInnerAliasParams`) AND the caller's per-value instance-alias
+// provenance is delivered (`FunctionRangeChecks.valueInstanceAliases`, read off the RECEIVER argument). An
+// argument WITH a per-instance identity of the WRONG instance is E3005; an argument with NONE (a literal, a
+// field read, a plain integer) DECAYS and is accepted — which matches the oracle exactly. A factory call
+// (no receiver) is left to decay: its inner-alias arguments in the corpus are literals.
+function checkPerInstanceArgs(project Project, func IrFunction, callee ByteArray, sig FuncSignature, argIds ValueIdArray, callRange SourceRange, filePath FilePath)
+	let signatures = try queryProgramSignatures(project) otherwise panic("checkPerInstanceArgs: queryProgramSignatures failed inside semanticCheck — it is computed and memoized by compileToCodeResult before the pipeline runs, so it cannot fail fresh here")
+	match signatures.methodInnerAliasParamsOf(callee) 'lookup'
+		noInnerAliasParams then return
+		found(info) then checkPerInstanceArgsWith(project, func: func, sig: sig, argIds: argIds, info: info, callRange: callRange, filePath: filePath)
+	end 'lookup'
+end 'checkPerInstanceArgs'
+
+// The body of the per-instance argument check once the callee is known to declare an inner-alias parameter.
+// The receiver's instance alias re-qualifies each inner-alias parameter; the argument's own aggregate name
+// (its per-instance identity, or empty) is compared against it.
+function checkPerInstanceArgsWith(project Project, func IrFunction, sig FuncSignature, argIds ValueIdArray, info InnerAliasParamInfo, callRange SourceRange, filePath FilePath)
+	// A method prepends `__self` at real position 0; the sweep records inner-alias members over the SOURCE
+	// parameters (no `__self`), so a method's real position i maps to source i - 1. A static factory has no
+	// receiver here — its inner-alias arguments decay — so only a method is checked.
+	if not signatureTakesSelf(sig) 'noReceiver'
+		return
+	end 'noReceiver'
+
+	let receiverAlias = receiverInstanceAlias(project, func: func, argIds: argIds)
+	if receiverAlias.isEmpty() 'noReceiverAlias'
+		return
+	end 'noReceiverAlias'
+
+	for i in 1 upto argIds.count() 'eachArg'
+		let member = info.memberAt(i - 1)
+		if member.isEmpty() 'notInnerAliasParam'
+			continue
+		end 'notInnerAliasParam'
+		let argId = try argIds.get(i) otherwise panic("checkPerInstanceArgsWith: argIds.get OOB at {i}")
+		let argTag = try func.valueTags.get(argId) otherwise panic("checkPerInstanceArgsWith: value v{argId} of function '{String.from(func.name)}' has no recorded type")
+		let argNameId = try func.valueNameIds.get(argId) otherwise panic("checkPerInstanceArgsWith: value v{argId} of function '{String.from(func.name)}' has no recorded type name")
+		let got = aggregateNameFor(project, tag: argTag, nameId: argNameId)
+		if got.isEmpty() 'decays'
+			continue
+		end 'decays'
+		let expected = joinQualifiedName(receiverAlias, member: member)
+		if not got.equals(expected) 'wrongInstance'
+			let paramName = try sig.paramNames.get(i) otherwise panic("checkPerInstanceArgsWith: paramNames.get OOB at {i}")
+			reportPositioned(project, code: ErrorCode.typeMismatch, message: "argument type mismatch for '{String.from(paramName)}': expected '{String.from(expected)}', got '{String.from(got)}'", line: callRange.line, column: callRange.column, filePath: filePath)
+			return
+		end 'wrongInstance'
+	end 'eachArg'
+end 'checkPerInstanceArgsWith'
+
+// Does `sig`'s parameter 0 name the receiver (`__self`)? — i.e. is this an instance method, whose call-site
+// arguments are self-offset from its source parameter list.
+function signatureTakesSelf(sig FuncSignature) returns bool
+	if sig.paramCount() == 0 'noParams'
+		return false
+	end 'noParams'
+	let first = try sig.paramNames.get(0) otherwise panic("signatureTakesSelf: paramCount() > 0 but paramNames.get(0) failed")
+	return first.equals(SelfParamName)
+end 'signatureTakesSelf'
+
+// The instance alias the RECEIVER argument (`argIds[0]`) came from, read off the caller function's delivered
+// per-value provenance (`FunctionRangeChecks.valueInstanceAliases`). Empty when the receiver has none — a
+// `self` receiver, a value merged across branches — which makes the inner-alias arguments decay.
+function receiverInstanceAlias(project Project, func IrFunction, argIds ValueIdArray) returns ByteArray
+	if argIds.count() == 0 'noArgs'
+		return EmptySourceText
+	end 'noArgs'
+	let receiverId = try argIds.get(0) otherwise panic("receiverInstanceAlias: argIds.count() > 0 but get(0) failed")
+	let checks = try project.rangeChecks.get(func.name) otherwise return EmptySourceText
+	return try checks.valueInstanceAliases.get(receiverId) otherwise EmptySourceText
+end 'receiverInstanceAlias'
 
 // ⭐ **REFUSE A CAPTURING CLOSURE PASSED TO A PERSISTED PARAMETER (P1.5-A2b-2, E3099).** The closure's
 // environment belongs to THIS frame; a callee that stores or returns the parameter keeps the closure alive
@@ -739,6 +816,19 @@ function aggregateNameFor(project Project, tag ValueTypeTag, nameId TypeNameId) 
 	if project.structTypes.contains(name) or project.enumTypes.contains(name) 'registeredAggregate'
 		return name
 	end 'registeredAggregate'
+
+	// ⭐ A REGISTERED PER-INSTANCE ALIAS ("StrWrapper.Idx") is a nominal aggregate (P1.6-C) — the SemanticCheck
+	// twin of the parser's `aggregateNameOf` arm, so a per-instance argument meeting a per-instance parameter
+	// compares by name here exactly as it does at the parser's coercion sites. Read through the memoized
+	// whole-program index (`queryProgramSignatures`), where the inner aliases live; a base-template or plain
+	// ranged alias answers false and stays structural. Gated on the allocation-free `containsQualifier` so a
+	// plain named argument (`Score`) — the overwhelming case — pays only a byte scan, not the index fetch.
+	if containsQualifier(name) 'maybePerInstance'
+		let signatures = try queryProgramSignatures(project) otherwise panic("aggregateNameFor: queryProgramSignatures failed inside semanticCheck — it is computed and memoized by compileToCodeResult before the pipeline runs, so it cannot fail fresh here")
+		if signatures.isPerInstanceAlias(name) 'perInstanceAlias'
+			return name
+		end 'perInstanceAlias'
+	end 'maybePerInstance'
 
 	return EmptySourceText
 end 'aggregateNameFor'

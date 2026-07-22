@@ -188,6 +188,11 @@ let DeclShapeTypeParam = 32 as ContentHash
 let FeedShapeFeeds = 38 as ContentHash
 let FeedShapeNone = 39 as ContentHash
 
+// A generic type's INNER ranged typealias shape discriminator (P1.6-C) — `DeclShapeAlias`'s twin, for its
+// reason: a change to `type Wrapper`'s `typealias Idx` (its range, or whether it exists) changes what
+// `Instance.Idx` resolves and type-checks against in ANY file, so a reader's parse memo must move with it.
+let DeclShapeInnerAlias = 40 as ContentHash
+
 // The separator between a file's path and a constant's bare name in a FILE-PRIVATE constant's
 // storage key. `|` is legal in neither a Maxon identifier nor a Windows path, so the composite is
 // unambiguous. Ported verbatim from v1's `fileScopedTopLevelKey` (Project.maxon:189-191), which
@@ -1072,6 +1077,139 @@ end 'GenericAliasEntry'
 
 export typealias GenericAliasEntryArray = Array with GenericAliasEntry
 
+// One RANGED typealias declared INSIDE a generic type (P1.6-C): `type Wrapper uses T` with
+// `export typealias Idx = int(0 to u64.max)` ⇒ `(Wrapper, Idx=int(0..u64.max))`. The sweep
+// (`recordScannedType`) collects one per nested ranged alias; `foldFile` keys it by `base.member`
+// ("Wrapper.Idx") into `innerAliases`. It carries NO type-name ids — a ranged alias's underlying is
+// the `int`/`float` KEYWORD — so it travels by name like `RangedTypeAlias` and needs no remap.
+export type InnerAliasEntry
+	export var baseName as ByteArray
+	export var alias as RangedTypeAlias
+
+	export static function create(baseName ByteArray, alias RangedTypeAlias) returns InnerAliasEntry
+		return Self{baseName: baseName, alias: alias}
+	end 'create'
+end 'InnerAliasEntry'
+
+export typealias InnerAliasEntryArray = Array with InnerAliasEntry
+
+// The inner-alias PARAMETER shape of one method/factory (P1.6-C) — its SOURCE parameter names, and per
+// source position the bare inner-alias MEMBER (`Idx`) or `EmptySourceText` for a non-inner-alias
+// parameter. The two arrays move in lockstep (one entry per source parameter). Recorded per method that
+// has at least one inner-alias parameter, so the parser's per-instance argument check can re-qualify the
+// parameter with the concrete receiver's instance alias at the call site.
+export type InnerAliasParamInfo
+	export var paramNames as ByteArrayArray
+	export var members as ByteArrayArray
+
+	export static function create(paramNames ByteArrayArray, members ByteArrayArray) returns InnerAliasParamInfo
+		return Self{paramNames: paramNames, members: members}
+	end 'create'
+
+	// The number of source parameters this info describes — the lockstep length of both columns.
+	export function paramCount() returns ParamCount
+		return self.paramNames.count()
+	end 'paramCount'
+
+	// Does any source parameter carry a bare inner-alias member? The gate that decides whether a method earns
+	// an index entry (a method with none is the common case and costs nothing).
+	export function hasInnerAliasMember() returns bool
+		for member in self.members 'eachMember'
+			if not member.isEmpty() 'found'
+				return true
+			end 'found'
+		end 'eachMember'
+		return false
+	end 'hasInnerAliasMember'
+
+	// The bare inner-alias member at source position `index` (`Idx`), or `EmptySourceText` for a
+	// non-inner-alias parameter. Out-of-range reads empty (a slotted argument past the recorded columns is
+	// not an inner-alias parameter — the arity error is SemanticCheck's to report).
+	export function memberAt(index ParamCount) returns ByteArray
+		return try self.members.get(index) otherwise EmptySourceText
+	end 'memberAt'
+end 'InnerAliasParamInfo'
+
+export typealias InnerAliasParamInfoMap = Map with (ByteArray, InnerAliasParamInfo)
+
+// What the index knows about a method's inner-alias parameters (P1.6-C) — `DeclaredAlias`'s twin, a union
+// for the same reason: "this method has no inner-alias parameter" is an ANSWER (the common case), not a
+// failure, and the parser's per-instance argument check simply does nothing for it.
+export union InnerAliasParamLookup
+	found(info InnerAliasParamInfo)
+	noInnerAliasParams
+end 'InnerAliasParamLookup'
+
+// One method's inner-alias parameter info, as the sweep found it (P1.6-C) — the qualified method name
+// (`Wrapper.setTag`) and its `InnerAliasParamInfo`. `foldFile` keys it into `methodInnerAliasParams`.
+// It travels by name (no ids), the way every whole-program registry entry does.
+export type MethodInnerAliasParamEntry
+	export var methodName as ByteArray
+	export var info as InnerAliasParamInfo
+
+	export static function create(methodName ByteArray, info InnerAliasParamInfo) returns MethodInnerAliasParamEntry
+		return Self{methodName: methodName, info: info}
+	end 'create'
+end 'MethodInnerAliasParamEntry'
+
+export typealias MethodInnerAliasParamEntryArray = Array with MethodInnerAliasParamEntry
+
+// The "." that joins a per-instance / inner alias's parts (P1.6-C). Its own constant so the JOIN and the
+// SPLIT below cannot spell the qualifier two ways; it is also what `Parser.parseTypeReference` reads an
+// `Instance.Member` type reference off, so all three agree by construction.
+let QualifiedAliasSeparator = "."
+
+// The BYTE value of `QualifiedAliasSeparator` (ASCII '.'), for the allocation-free pre-check
+// `containsQualifier`. Named so the byte and the string form of the separator cannot drift.
+let QualifiedAliasSeparatorByte = 46
+
+// ⭐ Does `name` contain the qualifier byte at all? The cheap, ALLOCATION-FREE guard that keeps the
+// per-instance machinery off the plain-alias hot path (P1.6-C): a plain name (`Score`) has no ".", so this
+// scans its bytes and returns false WITHOUT the `String.from(...).split(...)` that `splitQualifiedName`
+// would otherwise allocate on every named-type resolution and every aggregate coercion. Every qualified
+// per-instance/inner name contains exactly one ".".
+export function containsQualifier(name ByteArray) returns bool
+	// An INDEX loop over a byte range, not `for b in name`: this is a per-named-value-coercion hot path, and an
+	// index range allocates no iterator object where the collection form might.
+	for i in 0 upto name.count() 'scan'
+		if (try name.get(i) otherwise panic("containsQualifier: get OOB despite i < count()")) == QualifiedAliasSeparatorByte 'found'
+			return true
+		end 'found'
+	end 'scan'
+	return false
+end 'containsQualifier'
+
+// `prefix.member` — the base-qualified name of an inner alias ("Wrapper.Idx") and the qualified name of a
+// per-instance alias ("IntWrapper.Idx"), built the ONE way so the value column, the registries and the
+// checks cannot disagree. `prefix`/`member` are identifiers and carry no ".", so `splitQualifiedName`
+// inverts it exactly.
+export function joinQualifiedName(prefix ByteArray, member ByteArray) returns ByteArray
+	return "{String.from(prefix)}{QualifiedAliasSeparator}{String.from(member)}".toByteArray()
+end 'joinQualifiedName'
+
+// The (prefix, member) of a `prefix.member` name, or `notQualified`. An identifier carries no ".", so a
+// two-segment split is EXACT: a plain alias (`Score`) or a name that never was qualified yields
+// `notQualified`, and a genuine per-instance/inner name yields its two parts.
+export union QualifiedNameParts
+	parts(prefix ByteArray, member ByteArray)
+	notQualified
+end 'QualifiedNameParts'
+
+export function splitQualifiedName(name ByteArray) returns QualifiedNameParts
+	// The allocation-free short-circuit: a name with no "." is not qualified, so it never reaches the
+	// `String.from(...).split(...)` allocation — the plain-alias hot path pays only the byte scan.
+	if not containsQualifier(name) 'notQualified'
+		return QualifiedNameParts.notQualified
+	end 'notQualified'
+	let segments = String.from(name).split(QualifiedAliasSeparator)
+	if segments.count() != 2 'notTwoSegments'
+		return QualifiedNameParts.notQualified
+	end 'notTwoSegments'
+	let prefix = try segments.get(0) otherwise panic("splitQualifiedName: segment count is 2 but get(0) failed")
+	let member = try segments.get(1) otherwise panic("splitQualifiedName: segment count is 2 but get(1) failed")
+	return QualifiedNameParts.parts(prefix.toByteArray(), member: member.toByteArray())
+end 'splitQualifiedName'
+
 export type ProgramSignatures
 	// Function name -> its declared return type. Last-wins on a duplicate name, exactly as the
 	// project's own `funcReturnTypes` registry is; the duplicate itself is reported by
@@ -1123,6 +1261,22 @@ export type ProgramSignatures
 	// through, and the one the instantiation checks read the base + args from. It carries no ids of its
 	// own (the giid indexes `genericInstances`), so it travels by name.
 	var genericAliases as GenericAliasMap
+	// ⭐ INNER ranged typealias registry (P1.6-C) — a RANGED `typealias Idx` declared INSIDE a generic
+	// type, keyed by its BASE-QUALIFIED name ("Wrapper.Idx"). It is what makes a per-instance alias
+	// (`IntWrapper.Idx`) nominal: `isPerInstanceAlias` composes an instance alias's base with this
+	// registry to decide whether `Instance.Member` names one. Like `typeAliases` it carries no ids and
+	// travels by name. The stored `RangedTypeAlias.name` is the BARE member ("Idx") — the piece the
+	// method-return retype re-qualifies with a concrete receiver's alias.
+	var innerAliases as RangedTypeAliasMap
+	// ⭐ Per-method INNER-ALIAS PARAMETER info (P1.6-C) — for a method/factory that declares a parameter
+	// whose type is a bare inner alias of the enclosing generic type (`setTag(t Idx)`), the source
+	// parameter NAMES and, per source position, the inner-alias MEMBER (`Idx`) or empty. Keyed by the
+	// method's qualified name (`Wrapper.setTag`). THE door the parser's per-instance argument check asks
+	// through at a concrete call site: the shared method signature is opaque to the receiver's instance,
+	// so the check needs the parameter's inner-alias member here (params are SKIPPED by the sweep's
+	// return-type read, so nothing else records them at this phase). Only methods that HAVE such a
+	// parameter get an entry — absence is "no inner-alias parameter", the common case.
+	var methodInnerAliasParams as InnerAliasParamInfoMap
 	// The interner every `named` id in `returnTypes` belongs to. PRIVATE, and it has to be: an id
 	// may not leave this type. `returnTypeOf` re-interns it into the caller's own table.
 	var typeNames as TypeNameInterner
@@ -1171,7 +1325,7 @@ export type ProgramSignatures
 	export var hash as ContentHash
 
 	export static function create() returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedTypeAliasMap.create(), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), enumTypes: EnumLayoutMap.create(), genericInstances: GenericInstanceRegistry.create(), genericAliases: GenericAliasMap.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), hash: fnvOffsetBasis()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedTypeAliasMap.create(), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), enumTypes: EnumLayoutMap.create(), genericInstances: GenericInstanceRegistry.create(), genericAliases: GenericAliasMap.create(), innerAliases: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), hash: fnvOffsetBasis()}
 	end 'create'
 
 	// Fold ONE file's scanned declarations into the index. Called in SOURCE-PATH order, so the
@@ -1183,10 +1337,25 @@ export type ProgramSignatures
 	// machinery `mergeArtifact` uses for the identical job — `TypeNameInterner.foldInto` +
 	// `remapMaxonReturnType`. One mechanism, two callers: a second copy of "reconcile a file's ids
 	// into a bigger table" would be free to disagree with this one about what an id means.
-	export function foldFile(scanned FuncReturnTypeEntryArray, aliases RangedTypeAliasArray, functionAliases FunctionTypeAliasArray, structs StructLayoutArray, enums EnumLayoutArray, genericAliasEntries GenericAliasEntryArray, bindings TopLevelDeclArray, paramConsumes ParamConsumeEntryArray, throwsEntries ThrowsClauseEntryArray, fileTypeNames TypeNameInterner)
+	export function foldFile(scanned FuncReturnTypeEntryArray, aliases RangedTypeAliasArray, functionAliases FunctionTypeAliasArray, structs StructLayoutArray, enums EnumLayoutArray, genericAliasEntries GenericAliasEntryArray, innerAliasEntries InnerAliasEntryArray, methodInnerAliasParamEntries MethodInnerAliasParamEntryArray, bindings TopLevelDeclArray, paramConsumes ParamConsumeEntryArray, throwsEntries ThrowsClauseEntryArray, fileTypeNames TypeNameInterner)
 		for alias in aliases 'eachAlias'
 			self.recordAlias(alias)
 		end 'eachAlias'
+
+		// Inner ranged typealiases (P1.6-C) travel by NAME (a ranged alias's underlying is the `int`/
+		// `float` keyword — no ids), so they fold alongside the ranged aliases, before the interner
+		// reconciliation. Keyed by base-qualified name so `Wrapper.Idx` and a same-named inner alias of
+		// another generic type stay distinct.
+		for innerAlias in innerAliasEntries 'eachInnerAlias'
+			self.recordInnerAlias(innerAlias.baseName, alias: innerAlias.alias)
+		end 'eachInnerAlias'
+
+		// Per-method inner-alias parameter info (P1.6-C) travels by NAME (member strings, no ids), so it
+		// folds here too. Last-wins on a duplicate method name (a duplicate function is E3006, reported
+		// elsewhere), exactly as `returnTypes` is.
+		for methodEntry in methodInnerAliasParamEntries 'eachMethodInnerAlias'
+			self.methodInnerAliasParams.upsert(methodEntry.methodName, value: methodEntry.info)
+		end 'eachMethodInnerAlias'
 
 		// Function aliases travel by NAME and carry no interner ids (their return type is stored as a
 		// tag + a name ByteArray), so they fold here alongside the ranged aliases, before the interner
@@ -1544,6 +1713,23 @@ export type ProgramSignatures
 		let named = mixBytes(mix(self.hash, value: DeclShapeAlias), bytes: alias.name)
 		self.hash = mix(mix(named, value: low), value: high)
 	end 'recordAlias'
+
+	// Add one INNER ranged typealias (P1.6-C) under its BASE-QUALIFIED name AND fold it into the hash —
+	// `recordAlias`'s twin. The RANGE rides for `recordAlias`'s reason (widening changes what a `shr` on a
+	// value of the alias means), and the qualified name rides so that a rename or a new inner alias moves
+	// every reader's parse memo — `Instance.Idx` resolves and type-checks against this in any file. The
+	// stored `RangedTypeAlias.name` stays the BARE member (`Idx`); the key is `base.member`.
+	function recordInnerAlias(baseName ByteArray, alias RangedTypeAlias)
+		let qualified = joinQualifiedName(baseName, member: alias.name)
+		self.innerAliases.upsert(qualified, value: alias)
+
+		// Bound to locals for `recordAlias`'s reason (the bootstrap's E3010 false positive on an inline cast).
+		let low = alias.low as ContentHash
+		let high = alias.high as ContentHash
+
+		let named = mixBytes(mix(self.hash, value: DeclShapeInnerAlias), bytes: qualified)
+		self.hash = mix(mix(named, value: low), value: high)
+	end 'recordInnerAlias'
 
 	// Add one FUNCTION typealias to the index AND fold it into the hash — the one write, for
 	// `recordAlias`'s reason. The RETURN type rides the hash (its tag, then its name): a caller that
@@ -2131,6 +2317,80 @@ export type ProgramSignatures
 		let alias = try self.typeAliases.get(name) otherwise return DeclaredAlias.undeclared
 		return DeclaredAlias.declared(alias)
 	end 'aliasOf'
+
+	// --- Inner + per-instance ranged aliases (P1.6-C) ---
+
+	// Is `name` a BASE-TEMPLATE inner alias ("Wrapper.Idx") — the shared-body form a generic method's bare
+	// `Idx` return/parameter resolves to? Membership in `innerAliases`.
+	export function isInnerAlias(name ByteArray) returns bool
+		return self.innerAliases.contains(name)
+	end 'isInnerAlias'
+
+	// The inner alias `name` names ("Wrapper.Idx"), or `undeclared`. Its stored `.name` is the BARE member
+	// (`Idx`) the method-return retype re-qualifies with a concrete receiver's instance alias.
+	export function innerAliasOf(name ByteArray) returns DeclaredAlias
+		let alias = try self.innerAliases.get(name) otherwise return DeclaredAlias.undeclared
+		return DeclaredAlias.declared(alias)
+	end 'innerAliasOf'
+
+	// The BARE member of the base-qualified inner alias `name` (`Wrapper.Idx` ⇒ `Idx`), or `EmptySourceText`
+	// when `name` is not an inner alias. What the method-return retype re-qualifies (`{receiverAlias}.{member}`).
+	export function innerAliasMember(name ByteArray) returns ByteArray
+		return match self.innerAliasOf(name) 'm'
+			declared(alias) gives alias.name
+			undeclared gives EmptySourceText
+		end 'm'
+	end 'innerAliasMember'
+
+	// ⭐ **IS `name` A REGISTERED PER-INSTANCE ALIAS ("IntWrapper.Idx")?** — the nominal-identity gate the
+	// aggregate check reads. Its prefix must be a generic-instance ALIAS whose base declares the inner alias
+	// named by its member. Keyed on the INSTANCE-ALIAS NAME, not the gid: `WrapperA` and `WrapperB` share one
+	// gid yet are distinct aliases, so `WrapperA.Idx ≠ WrapperB.Idx` — the whole point of the rung.
+	export function isPerInstanceAlias(name ByteArray) returns bool
+		return match self.perInstanceAliasOf(name) 'p'
+			declared gives true
+			undeclared gives false
+		end 'p'
+	end 'isPerInstanceAlias'
+
+	// The inner alias a per-instance `name` resolves to (its RANGE + bare member), or `undeclared`. The one
+	// door `isPerInstanceAlias` and the erasure both read, so "is it per-instance?" and "what does it erase
+	// to?" answer from one place.
+	export function perInstanceAliasOf(name ByteArray) returns DeclaredAlias
+		return match splitQualifiedName(name) 'split'
+			notQualified gives DeclaredAlias.undeclared
+			parts(prefix, member) gives self.perInstanceAliasFromParts(prefix, member: member)
+		end 'split'
+	end 'perInstanceAliasOf'
+
+	// The inner alias a per-instance name's (prefix, member) resolves to — `undeclared` unless `prefix` is a
+	// generic-instance alias whose base declares an inner alias `member`.
+	function perInstanceAliasFromParts(prefix ByteArray, member ByteArray) returns DeclaredAlias
+		if not self.isGenericAlias(prefix) 'notInstanceAlias'
+			return DeclaredAlias.undeclared
+		end 'notInstanceAlias'
+		let base = self.genericInstanceBaseName(self.genericAliasInstance(prefix))
+		return self.innerAliasOf(joinQualifiedName(base, member: member))
+	end 'perInstanceAliasFromParts'
+
+	// The underlying primitive of a qualified alias (base-template OR per-instance) — TypeResolution's
+	// erasure door: both collapse to their `int`/`float` underlying before lowering, exactly as a plain
+	// ranged alias does; only the per-instance one ALSO carries nominal identity (kept in the value column).
+	export function qualifiedAliasOf(name ByteArray) returns DeclaredAlias
+		match self.innerAliasOf(name) 'inner'
+			declared(alias) then return DeclaredAlias.declared(alias)
+			undeclared then break 'inner'
+		end 'inner'
+		return self.perInstanceAliasOf(name)
+	end 'qualifiedAliasOf'
+
+	// The inner-alias parameter info of `methodName` (`Wrapper.setTag`), or `noInnerAliasParams` when the
+	// method declares no bare-inner-alias parameter — the common case, which costs no map entry. THE door the
+	// parser's per-instance argument check asks through at a concrete call site.
+	export function methodInnerAliasParamsOf(methodName ByteArray) returns InnerAliasParamLookup
+		let info = try self.methodInnerAliasParams.get(methodName) otherwise return InnerAliasParamLookup.noInnerAliasParams
+		return InnerAliasParamLookup.found(info)
+	end 'methodInnerAliasParamsOf'
 
 	// ⭐ **IS `name` A FUNCTION TYPEALIAS, AND WHAT DOES IT RETURN?** (P1.5-A1). THE door
 	// `Parser.parseTypeReference` re-tags a `named` reference `MaxonType.function` through, and the one an
