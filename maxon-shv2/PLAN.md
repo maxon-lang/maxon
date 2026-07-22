@@ -1943,6 +1943,23 @@ suite as its gate:
   Noticed incidentally by the P1.0d.4-A review; needs the full C# suite as its gate.
 - **#112 — malformed-exponent wording**: `1.5e1_0` gives shv2 `E2007 Unexpected end of input` vs the
   bootstrap's `E2001 unexpected token: '_0'`. Both REJECT, so behaviour agrees; only the message differs.
+- **⭐ #113 — the bootstrap resolves stdlib `#if os(...)` against the HOST, not `--target`, so cross-target
+  goldens are only regenerable on their native host.** ROOT CAUSE (verified twice, by two independent agents):
+  `maxon-sharp/Compiler/0-Compiler.cs:869` parses the stdlib once with `CompileTarget.Default` and caches it,
+  so every host-conditional typealias evaluates against the host OS regardless of `--target`. `ExitCode` is the
+  visible one — cross-compiling to `arm64-macos` from Windows emits `func @main() -> u32` where the target wants
+  `-> u8` (`stdlib/Process.maxon:7-16`). Structural proof: committed goldens are **arm64 `u32`=0/`u8`=2711 · wasm
+  `u32`=0/`u8`=2534 · x64-windows `u32`=2733/`u8`=7** — each host stamped its own width. This is WHY
+  `shv2-cross-target-golden-hosts` needs a Mac/WSL for the other-host goldens, and it needs its own rung (fix:
+  thread `--target` into the cached stdlib parse). Found 2026-07-22 by the P1.0d.4-D1 review.
+- **#114 — part of `/specs`' wasm corner is UNREGENERABLE by any building compiler.** The committed
+  `specs/fragments-wasm32-wasi/builtins-type/builtins-type.float-to-bits.test` golden is **v1 MIR** dialect
+  (`mir.bitcast.f64.i64`). `maxon-sharp` has no MIR and no wasm backend (`build --target=wasm32-wasi` throws
+  `Unknown OS 'wasi'`); those goldens came from `maxon-selfhosted`, which no longer builds. So new
+  `__Builtins.*` cases cannot get a wasm fragment from the bootstrap — D1 correctly shipped x64-only fragments
+  and did not fabricate a wasm one. (Related minor: `build --target=wasm32-wasi` on the bootstrap throws an
+  unhandled `ArgumentException` in `GetOutputExtension` rather than a clean "unsupported target".) Found
+  2026-07-22 by the P1.0d.4-D1 review.
 
 ### ⚠ Measured debt — recorded with its trigger, NOT fixed (2026-07-22, P1.0d.4 A+C)
 
