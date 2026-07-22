@@ -1451,15 +1451,23 @@ export type ProgramSignatures
 	// Resolve an alias entry's flat pre-order arg tree to concrete `MaxonType`s in THIS index's interner
 	// (P1.6-B2) — interning nested instances DEPTH-FIRST. A leaf remaps its file-interner type through
 	// `remap`; a nested instance header resolves its own args (advancing the shared cursor), interns the
-	// instance, and yields `genericInstance(gid)`.
+	// instance, and yields `genericInstance(gid)`. The top-level list starts a FRESH cursor; a nested
+	// instance shares its parent's, so both walk the flat tree through the one `resolveArgList` loop.
 	function resolveGenericArgs(entry GenericAliasEntry, remap TypeNameRemap) returns MaxonTypeArray
 		var cursor = ArgCursor.create()
+		return self.resolveArgList(entry.args, count: entry.argCount, cursor: cursor, remap: remap)
+	end 'resolveGenericArgs'
+
+	// Resolve `count` consecutive pre-order arg nodes from `nodes` at `cursor`, advancing it past each — the
+	// ONE loop the top-level alias args and a nested instance's args share (they differ only in whether the
+	// cursor is fresh or their parent's). A nested instance is interned before the outer arg that holds it.
+	function resolveArgList(nodes GenericArgNodeArray, count FieldIndex, cursor ArgCursor, remap TypeNameRemap) returns MaxonTypeArray
 		var out = MaxonTypeArray.create()
-		for _ in 0 upto entry.argCount 'each'
-			out.push(self.resolveArgNode(entry.args, cursor: cursor, remap: remap))
+		for _ in 0 upto count 'each'
+			out.push(self.resolveArgNode(nodes, cursor: cursor, remap: remap))
 		end 'each'
 		return out
-	end 'resolveGenericArgs'
+	end 'resolveArgList'
 
 	function resolveArgNode(nodes GenericArgNodeArray, cursor ArgCursor, remap TypeNameRemap) returns MaxonType
 		let node = try nodes.get(cursor.pos) otherwise panic("ProgramSignatures.resolveArgNode: cursor {cursor.pos} out of range for a {nodes.count()}-node arg tree — the pre-order flattening and its counts disagree")
@@ -1472,10 +1480,7 @@ export type ProgramSignatures
 
 	function internNestedNode(baseName ByteArray, argCount FieldIndex, nodes GenericArgNodeArray, cursor ArgCursor, remap TypeNameRemap) returns MaxonType
 		let baseId = self.typeNames.intern(baseName)
-		var args = MaxonTypeArray.create()
-		for _ in 0 upto argCount 'each'
-			args.push(self.resolveArgNode(nodes, cursor: cursor, remap: remap))
-		end 'each'
+		let args = self.resolveArgList(nodes, count: argCount, cursor: cursor, remap: remap)
 		return MaxonType.genericInstance(self.genericInstances.intern(baseId, args: args))
 	end 'internNestedNode'
 
