@@ -11076,12 +11076,13 @@ export type Parser
 	//     target is a ranged INT alias, that site is recorded so `InsertRangeChecks` guards / E3005s it.
 	function applyCast(value ValueId, targetType MaxonType, asTok Token) returns ValueId throws ParseError
 		// ⭐ REJECT A FUNDAMENTALLY-INCOMPATIBLE KIND CAST FIRST (E3009), before any conversion is chosen. A
-		// managed aggregate (String/struct/function) crossing to or from a scalar has no conversion; letting
-		// it reach the float/no-op branches below would emit a `promoteToFloat` or a range check on a POINTER.
-		// See `castCrossesAggregateScalarBoundary` and `ParseError.invalidCast`.
+		// managed aggregate (String/struct/function) has no conversion to or from a scalar, nor to a
+		// DIFFERENT aggregate; letting such a cast reach the float/no-op branches below would emit a
+		// `promoteToFloat` or a range check on a POINTER, or leave a mismatched drop (a String drop run on a
+		// struct box — a double free). See `castHasNoLegalConversion` and `ParseError.invalidCast`.
 		let sourceTag = self.tagOf(value)
 		let targetTag = maxonTypeTag(targetType)
-		if castCrossesAggregateScalarBoundary(sourceTag, target: targetTag) 'incompatibleKinds'
+		if castHasNoLegalConversion(sourceTag, target: targetTag) 'incompatibleKinds'
 			throw ParseError.invalidCast(typeTagName(sourceTag), targetType: typeTagName(targetTag), line: asTok.line, column: asTok.column)
 		end 'incompatibleKinds'
 

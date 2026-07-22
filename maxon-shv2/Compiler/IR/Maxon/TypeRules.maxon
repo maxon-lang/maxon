@@ -180,26 +180,39 @@ export function typeClassAdmits(required TypeClass, tag ValueTypeTag) returns bo
 	return typeClassesAgree(required, right: typeClassOf(tag))
 end 'typeClassAdmits'
 
-// ⭐ **A CAST BETWEEN A MANAGED AGGREGATE AND A SCALAR HAS NO CONVERSION (E3009).** `"x" as Age`,
-// `p as Age`, `f as Age`, and their reverses cross the pointer/scalar boundary in a single `as`, and
-// there is nothing for the cast to DO — a String pointer is not a number and cannot become one. So the
-// cast is rejected outright, exactly as the lossy `5.0 as int` is (`Parser.applyCast` → E3009), rather
-// than let through as a representational no-op — which typed the aggregate's pointer as the numeric
-// target and either miscompiled (a range check on a struct pointer) or was caught only downstream at
-// the next type-checked position.
+// ⭐ **A CAST HAS NO LEGAL CONVERSION WHEN IT CROSSES BETWEEN INCOMPATIBLE KINDS (E3009).** A managed
+// AGGREGATE — a String (`text`), a struct/generic instance (`structRef`), a function value (`function`) —
+// is a POINTER. There is no number it *is* (`"x" as Age`, `p as Age`, `f as Age`, `42 as SomeString`) and
+// no OTHER aggregate it *is* (`p as String`, `f as String`): the cast describes no conversion, so it is
+// rejected outright rather than let through as a representational no-op. The no-op was the bug — it typed
+// the aggregate's pointer as the target and either miscompiled (a range check on a struct pointer; or a
+// String drop run on a struct box, a DOUBLE FREE that faults the runtime MM) or surfaced only downstream
+// at the next type-checked position.
 //
-// It is the ONE cast-legality rule stated over `TypeClass`, and it is DELIBERATELY narrow: a
-// scalar↔scalar `as` is a real conversion (int↔int no-op, int↔float promote/trunc, handled in
-// `applyCast`); an aggregate↔aggregate `as`, and any cast touching an opaque `T` (`typeParameter`) or an
-// unresolved type, are out of scope and left to the existing rules. The two directions are one rule — a
-// cast is symmetric in what it may cross — which is why both crossings are tested here at once.
-export function castCrossesAggregateScalarBoundary(source ValueTypeTag, target ValueTypeTag) returns bool
+// It is the ONE cast-legality rule stated over `TypeClass`, and it is bounded to what a TAG can decide:
+//   • BOTH ends must be CONCRETE (an aggregate or a scalar). A cast touching an opaque `T`
+//     (`typeParameter`) or an unresolved type (`unknown`/`noValue`) is left to the existing rules — NOT
+//     rejected here.
+//   • The SAME class is a real or identity conversion left alone: a scalar↔scalar `as` (int↔int no-op,
+//     int↔float promote/trunc, handled in `applyCast`), and the `structRef` COARSENESS a tag cannot yet
+//     split — two different structs share `structRef`, so `Point as Rect` is not caught here (that needs
+//     the `valueNameIds` publication `TypeClass.structRef` already names as its fix).
+//   • Different concrete classes convert ONLY when both are scalars (int↔float, bool↔int); if EITHER end
+//     is an aggregate there is no conversion. Symmetric in the two ends — a cast is symmetric in what it
+//     may cross — which is why the aggregate test is applied to each end.
+export function castHasNoLegalConversion(source ValueTypeTag, target ValueTypeTag) returns bool
 	let sourceClass = typeClassOf(source)
 	let targetClass = typeClassOf(target)
-	let sourceCrossesToScalar = typeClassIsAggregate(sourceClass) and typeClassIsScalar(targetClass)
-	let targetCrossesToScalar = typeClassIsScalar(sourceClass) and typeClassIsAggregate(targetClass)
-	return sourceCrossesToScalar or targetCrossesToScalar
-end 'castCrossesAggregateScalarBoundary'
+	let sourceConcrete = typeClassIsAggregate(sourceClass) or typeClassIsScalar(sourceClass)
+	let targetConcrete = typeClassIsAggregate(targetClass) or typeClassIsScalar(targetClass)
+	if not sourceConcrete or not targetConcrete 'opaque'
+		return false
+	end 'opaque'
+	if sourceClass == targetClass 'sameClass'
+		return false
+	end 'sameClass'
+	return typeClassIsAggregate(sourceClass) or typeClassIsAggregate(targetClass)
+end 'castHasNoLegalConversion'
 
 // A managed AGGREGATE type class — a String (`text`), a struct or generic instance (`structRef`), or a
 // function value (`function`): a pointer, not a scalar. Exhaustive over `TypeClass`, so a new class

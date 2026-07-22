@@ -69,6 +69,28 @@ end 'main'
 error E3009: specs/fragments/invalid-cast/error.struct-to-int.test:15:14: Cannot cast from struct to int
 ```
 
+<!-- test: error.struct-to-string -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Point
+	export var x as Integer
+
+	export static function make() returns Self
+		return Self{x: 1}
+	end 'make'
+end 'Point'
+
+function main() returns ExitCode
+	let p = Point.make()
+	let bad = p as String
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3009: specs/fragments/invalid-cast/error.struct-to-string.test:14:14: Cannot cast from struct to String
+```
+
 <!-- test: error.function-to-int -->
 ```maxon
 typealias Age = int(0 to 200)
