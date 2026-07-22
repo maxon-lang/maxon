@@ -546,6 +546,8 @@ type MaxonToStdLowering
 			// `sizeof(T)` — a runtime read of the enclosing instance's layout descriptor (P1.6-B1). The
 			// parser folds every CONCRETE sizeof to a literal, so this op only ever carries a typeParameter.
 			sizeofType(result, targetType) then self.lowerSizeofType(result, targetType: targetType, dstBlock: dstBlock)
+			// P1.7 slice 2: a `b"…"` literal — an owned heap `Array with Byte` record over an immortal rdata blob.
+			byteStringLiteral(result, bytes) then self.lowerByteStringLiteral(result, bytes: bytes, dstBlock: dstBlock)
 		end 'lower'
 	end 'lowerOp'
 
@@ -572,6 +574,7 @@ type MaxonToStdLowering
 			indirectCall then panic("lowerMaxonToStd: an `indirectCall` op appeared as a block terminator (parser bug — an indirect call is a value-producing body op, never a terminator)")
 			asyncCall to tryAwait then panic("lowerMaxonToStd: an async/await op appeared as a block terminator (parser bug — `async`/`await`/`try await` are value-producing body ops, never terminators)")
 			sizeofType then panic("lowerMaxonToStd: a `sizeofType` op appeared as a block terminator (parser bug — sizeof is a value-producing body op, never a terminator)")
+			byteStringLiteral then panic("lowerMaxonToStd: a `byteStringLiteral` op appeared as a block terminator (parser bug — a byte-string literal is a value-producing body op, never a terminator)")
 		end 'lower'
 	end 'lowerTerminator'
 
@@ -605,6 +608,56 @@ type MaxonToStdLowering
 		self.globalData.recordStringBufferFixup(recordLabel, blobLabel: blobLabel)
 		self.stdModule.appendOp(dstBlock, op: StdOp.rdataAddr(result, label: recordLabel.toByteArray()))
 	end 'lowerStringLiteral'
+
+	// ⭐ **A `b"…"` BYTE-STRING LITERAL (P1.7 slice 2)** — the Array analogue of `lowerStringLiteral`, and it
+	// DIVERGES from it in exactly one place: a String literal is a FULLY rdata record (immortal, never
+	// dropped), while a byte-string is a first-class OWNED `Array with Byte` — so the RECORD is `__mm_alloc`'d
+	// (giving it the MM header + refcount the ownership model drops through `__arr_decref`) while only the
+	// element BUFFER stays in immortal `.rdata`. `capacity@16` is the negative rdata sentinel `__arr_decref`
+	// reads to skip freeing that buffer; `element_size@24` is 1 so the byte-packed blob strides one byte per
+	// element. `bytes` is already Latin-1-decoded (`Parser.decodeByteStringLiteral`), so this is pure emission.
+	//
+	// Only the FOUR non-zero fields are stamped: `parent@32` and `element_destroy@40` come pre-zeroed from
+	// `__mm_alloc`'s zeroing contract (the same one `__arr_create` relies on to leave them unwritten).
+	function lowerByteStringLiteral(result ValueId, bytes ByteArray, dstBlock IrBlock)
+		let blobLabel = registerByteArrayLiteralBlob(self.globalData, bytes: bytes)
+
+		// result = __mm_alloc(ArrRecordBytes, 0) — the owned heap 48-byte record (MM header + refcount before it).
+		let recordSize = self.mintStdValueId()
+		self.stdModule.appendOp(dstBlock, op: StdOp.const(recordSize, value: ArrRecordBytes as ParsedInt, valueType: StdType.i64))
+		let recordDtor = self.mintStdValueId()
+		self.stdModule.appendOp(dstBlock, op: StdOp.const(recordDtor, value: 0, valueType: StdType.i64))
+		var allocArgs = ValueIdArray.create()
+		allocArgs.push(recordSize)
+		allocArgs.push(recordDtor)
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: MmAllocName, args: allocArgs))
+
+		// buffer@0 = &blob (immortal `.rdata`, materialized by a RIP-relative lea — never freed).
+		let blobAddr = self.mintStdValueId()
+		self.stdModule.appendOp(dstBlock, op: StdOp.rdataAddr(blobAddr, label: blobLabel.toByteArray()))
+		self.emitByteStringField(result, offset: ArrBufferOffset, value: blobAddr, dstBlock: dstBlock)
+
+		// length@8 = the byte count.
+		let lengthId = self.mintStdValueId()
+		self.stdModule.appendOp(dstBlock, op: StdOp.const(lengthId, value: bytes.count() as ParsedInt, valueType: StdType.i64))
+		self.emitByteStringField(result, offset: ArrLengthOffset, value: lengthId, dstBlock: dstBlock)
+
+		// capacity@16 = the rdata sentinel (< 0) — tells `__arr_decref` the buffer is immortal.
+		let capacityId = self.mintStdValueId()
+		self.stdModule.appendOp(dstBlock, op: StdOp.const(capacityId, value: ArrRdataCapacitySentinel, valueType: StdType.i64))
+		self.emitByteStringField(result, offset: ArrCapacityOffset, value: capacityId, dstBlock: dstBlock)
+
+		// element_size@24 = 1 (a byte is one byte, so the blob is byte-packed and `.get(i)` strides by 1).
+		let elementSizeId = self.mintStdValueId()
+		self.stdModule.appendOp(dstBlock, op: StdOp.const(elementSizeId, value: ByteStringElementSize, valueType: StdType.i64))
+		self.emitByteStringField(result, offset: ArrElementSizeOffset, value: elementSizeId, dstBlock: dstBlock)
+	end 'lowerByteStringLiteral'
+
+	// Store `value` into the byte-string record's `offset` field (an 8-byte slot). The one store shape the
+	// four field stamps share, so the record layout is written in one place.
+	function emitByteStringField(record ValueId, offset ByteOffset, value ValueId, dstBlock IrBlock)
+		self.stdModule.appendOp(dstBlock, op: StdOp.storeIndirect(record, offset: offset, valueId: value, valueType: StdType.i64))
+	end 'emitByteStringField'
 
 	// Emit one `StdOp.param` per parameter at the function's ENTRY block, before any
 	// body op. Parameter `i` is ValueId `i` (the ids the parser reserved), of the

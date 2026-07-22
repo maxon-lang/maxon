@@ -304,6 +304,13 @@ export union ParseError implements Error
 	// is a valid but MULTI-BYTE character — `'é'`, an emoji — is not this: it is a
 	// legitimate program shv2 cannot yet compile, so it reports as `unsupported`.)
 	invalidCharacterLiteral(reason String, line LineNumber, column ColumnNumber)
+	// A `b"…"` byte-string literal names a codepoint above 0xFF — a literal character or a `\uNNNN` escape
+	// with no single-byte Latin-1 encoding (`b"Ā"`, `b"Ā"`, an emoji). Renders as E1004, the same
+	// `LexerInvalidEscape` code v1 uses. It carries the FULLY-BUILT message (`byteStringCodepointRangeMessage`,
+	// with the codepoint hex-formatted at the decode site): the diagnostic is rendered ANCHOR-LESS (see
+	// `reportParseError`) because the /specs codepoint-range spec pins a message-only expected with no
+	// `<file>:line:col:` prefix, so there is no line/column to carry.
+	byteStringCodepointRange(message String)
 	// A top-level name DECLARED more than once in one file — `let A = 1` then `let A = 2`, or a
 	// `let`/`var` collision on one name. Unlike the constant-evaluator arms below (raised during the
 	// sweep, recorded on the decl, re-thrown), this is raised DIRECTLY by the real parse when it reaches
@@ -594,6 +601,7 @@ function asyncCalleeIfMatch(op MaxonOp, promise ValueId) returns AsyncCalleeLook
 		asyncCall(result, callee, _, _, _) gives foundCalleeIfEqual(result, callee: callee, promise: promise)
 		await to tryAwait gives AsyncCalleeLookup.none
 		sizeofType gives AsyncCalleeLookup.none
+		byteStringLiteral gives AsyncCalleeLookup.none
 	end 'op'
 end 'asyncCalleeIfMatch'
 
@@ -1538,6 +1546,230 @@ let TabByte = 9 as Byte
 let CarriageReturnByte = 13 as Byte
 let NulByte = 0 as Byte
 
+// --- Byte-string literal decode (`b"…"`, P1.7 slice 2) ---
+//
+// A byte-string decodes DIFFERENTLY from a String literal: a String keeps its source UTF-8 bytes verbatim,
+// while a byte-string maps each SOURCE CODEPOINT to one Latin-1 byte — so a two-byte UTF-8 `À` becomes the
+// single byte 0xC0. Escapes resolve as in a string (`escapeByte`) plus the byte-exact `\xNN` and the
+// `\uNNNN` codepoint escape. A codepoint above 0xFF (`b"Ā"`, a `\uNNNN` naming one, an emoji) has no
+// single-byte encoding and is REJECTED E1004 — the self-hosted oracle behaviour (the C# bootstrap silently
+// best-fit-transliterates it, which shv2 must not). Ported from `maxon-selfhosted` Parser.maxon:11069-11284.
+
+// The high-bit threshold: a source byte `< AsciiCeiling` is a bare ASCII byte; `>= AsciiCeiling` opens a
+// multi-byte UTF-8 sequence. A byte-string codepoint must fit in `[0, ByteCodepointMax]` (Latin-1).
+let AsciiCeiling = 128 as Byte
+let ByteCodepointMax = 255 as ParsedInt
+// The low byte of a codepoint (its Latin-1 encoding for a valid one; a harmless recovery value otherwise).
+let ByteMask = 255 as ParsedInt
+let LowerX = 120 as Byte
+let LowerU = 117 as Byte
+// A hex nibble is 4 bits; `\xNN` = `\` `x` + 2 hex digits (4 bytes), `\uNNNN` = `\` `u` + 4 hex digits (6).
+let HexNibbleBits = 4 as ParsedInt
+let HexEscapeDigits = 2 as ByteOffset
+let UniEscapeDigits = 4 as ByteOffset
+let EscapeMarkerBytes = 2 as ByteOffset
+
+// UTF-8 continuation/lead masks and thresholds (RFC 3629). `Utf8ContinuationMask` keeps the low 6 payload
+// bits of a continuation byte; the lead masks keep 5/4/3 payload bits of a 2/3/4-byte lead.
+let Utf8LeadTwoByteFloor = 0xC0 as ParsedInt
+let Utf8LeadThreeByteFloor = 0xE0 as ParsedInt
+let Utf8LeadFourByteFloor = 0xF0 as ParsedInt
+let Utf8ContinuationMask = 0x3F as ParsedInt
+let Utf8LeadTwoByteMask = 0x1F as ParsedInt
+let Utf8LeadThreeByteMask = 0x0F as ParsedInt
+let Utf8LeadFourByteMask = 0x07 as ParsedInt
+let Utf8ContinuationBits = 6 as ParsedInt
+let Utf8ThreeByteHighShift = 12 as ParsedInt
+let Utf8FourByteHighShift = 18 as ParsedInt
+
+// The lowercase hex digits and the minimum width a `U+NNNN` codepoint renders at.
+let HexDigitsLower = "0123456789abcdef"
+let HexRadix = 16 as ParsedInt
+let CodepointHexMinDigits = 4 as ByteOffset
+let AsciiZeroByte = 48 as Byte
+
+// One decoded UTF-8 sequence: the codepoint and how many source bytes it occupied (1..4).
+type Utf8Sequence
+	export let codepoint as ParsedInt
+	export let byteLength as ByteOffset
+
+	static function of(codepoint ParsedInt, byteLength ByteOffset) returns Self
+		return Self{codepoint: codepoint, byteLength: byteLength}
+	end 'of'
+end 'Utf8Sequence'
+
+// ⭐ Decode a `b"…"` literal body (the raw bytes between the quotes, escapes undecoded) to its Latin-1 byte
+// payload. `tok` positions the E2015 an UNKNOWN escape raises (the byte-string twin of `decodeEscapes`'
+// `unknownEscape`); a codepoint-range rejection is E1004 and rendered anchor-less (see `reportParseError`).
+function decodeByteStringLiteral(raw ByteArray, tok Token) returns ByteArray throws ParseError
+	var buf = ByteArray.create()
+	let len = raw.count()
+	var i = 0 as ByteOffset
+	while i < len 'decode'
+		let ch = try raw.get(i) otherwise panic("decodeByteStringLiteral: i < len just held but get({i}) failed")
+		if ch != Backslash or i + 1 >= len 'notEscape'
+			i = try appendLiteralByteStringByte(buf, raw: raw, at: i, ch: ch)
+			continue
+		end 'notEscape'
+		i = try appendByteStringEscape(buf, raw: raw, at: i, len: len, tok: tok)
+	end 'decode'
+	return buf
+end 'decodeByteStringLiteral'
+
+// A NON-escape byte at `at`: a bare ASCII byte is emitted verbatim; a `>= AsciiCeiling` byte opens a
+// multi-byte UTF-8 sequence collapsed to its ONE Latin-1 byte (codepoint > 0xFF ⇒ E1004). Returns the
+// index of the next byte to decode.
+function appendLiteralByteStringByte(buf ByteArray, raw ByteArray, at ByteOffset, ch Byte) returns ByteOffset throws ParseError
+	if ch < AsciiCeiling 'ascii'
+		buf.push(ch)
+		return at + 1
+	end 'ascii'
+	let seq = decodeUtf8Sequence(raw, start: at)
+	try requireByteCodepoint(seq.codepoint)
+	buf.push((seq.codepoint and ByteMask) as Byte)
+	return at + seq.byteLength
+end 'appendLiteralByteStringByte'
+
+// An escape at `at` (`raw[at]` is `\`, and `at + 1 < len`). `\xNN` emits an exact raw byte; `\uNNNN` maps a
+// codepoint to one Latin-1 byte (> 0xFF ⇒ E1004); every other `\c` resolves through the shared `escapeByte`
+// table (an unknown one is E2015). Returns the index of the next byte to decode.
+function appendByteStringEscape(buf ByteArray, raw ByteArray, at ByteOffset, len ByteOffset, tok Token) returns ByteOffset throws ParseError
+	let next = try raw.get(at + 1) otherwise panic("appendByteStringEscape: at + 1 < len just held but get({at + 1}) failed")
+	if next == LowerX 'hexEscape'
+		try requireByteStringHexEscape(raw, at: at, len: len, digitCount: HexEscapeDigits, tok: tok)
+		buf.push(hexEscapeByte(raw, at: at))
+		return at + EscapeMarkerBytes + HexEscapeDigits
+	end 'hexEscape'
+	if next == LowerU 'uniEscape'
+		try requireByteStringHexEscape(raw, at: at, len: len, digitCount: UniEscapeDigits, tok: tok)
+		let cp = uniEscapeCodepoint(raw, at: at)
+		try requireByteCodepoint(cp)
+		buf.push((cp and ByteMask) as Byte)
+		return at + EscapeMarkerBytes + UniEscapeDigits
+	end 'uniEscape'
+	match escapeByte(next) 'esc'
+		byte(b) then buf.push(b)
+		unknown then throw ParseError.unsupported("the escape sequence '\\{String.from(byteSlice(next))}' in a byte string literal is not a recognized escape", line: tok.line, column: tok.column)
+	end 'esc'
+	return at + EscapeMarkerBytes
+end 'appendByteStringEscape'
+
+// Reject a codepoint with no single-byte Latin-1 encoding (`> 0xFF`) as E1004. The message names the
+// codepoint in the oracle's `U+NNNN` (lowercase-hex, ≥ 4-digit) form and is rendered anchor-less.
+function requireByteCodepoint(codepoint ParsedInt) throws ParseError
+	if codepoint > ByteCodepointMax 'tooBig'
+		throw ParseError.byteStringCodepointRange(byteStringCodepointRangeMessage(codepoint))
+	end 'tooBig'
+end 'requireByteCodepoint'
+
+// The exact E1004 text v1 emits (`reportByteStringCodepointRange`), including the literal `\xNN` guidance.
+function byteStringCodepointRangeMessage(codepoint ParsedInt) returns String
+	return "Codepoint U+{formatCodepointHex(codepoint)} exceeds the byte range 0-255 in byte string literal; use a \\xNN hex escape to embed a raw byte"
+end 'byteStringCodepointRangeMessage'
+
+// Render `codepoint` as lowercase hex, zero-padded to at least `CodepointHexMinDigits` — the `U+0100` /
+// `U+1f600` form the diagnostic uses. Built least-significant-digit first, then reversed.
+function formatCodepointHex(codepoint ParsedInt) returns String
+	let digits = HexDigitsLower.toByteArray()
+	var lowFirst = ByteArray.create()
+	var v = codepoint
+	while v > 0 'emit'
+		let nibble = v mod HexRadix
+		lowFirst.push(try digits.get(nibble) otherwise panic("formatCodepointHex: nibble {nibble} out of the 16-digit table"))
+		v = v / HexRadix
+	end 'emit'
+	while lowFirst.count() < CodepointHexMinDigits 'pad'
+		lowFirst.push(AsciiZeroByte)
+	end 'pad'
+	var out = ByteArray.create()
+	var i = lowFirst.count()
+	while i > 0 'reverse'
+		i = i - 1
+		out.push(try lowFirst.get(i) otherwise panic("formatCodepointHex: reverse index {i} out of range"))
+	end 'reverse'
+	return String.from(out)
+end 'formatCodepointHex'
+
+// Validate that a `\x`/`\u` escape at `at` is followed by exactly `digitCount` hex digits in bounds; an
+// ill-formed one is E2015 (positioned). No enabled spec hits this — it is the correctness floor that keeps a
+// malformed escape a clean reject rather than a silent mis-decode.
+function requireByteStringHexEscape(raw ByteArray, at ByteOffset, len ByteOffset, digitCount ByteOffset, tok Token) throws ParseError
+	let firstDigit = at + EscapeMarkerBytes
+	let afterDigits = firstDigit + digitCount
+	if afterDigits > len or not hexDigitsPresent(raw, from: firstDigit, to: afterDigits) 'malformed'
+		throw ParseError.unsupported("a malformed hex/unicode escape in a byte string literal: `\\x`/`\\u` must be followed by {digitCount} hex digits", line: tok.line, column: tok.column)
+	end 'malformed'
+end 'requireByteStringHexEscape'
+
+function hexDigitsPresent(raw ByteArray, from ByteOffset, to ByteOffset) returns bool
+	var i = from
+	while i < to 'each'
+		if not isHexDigit(try raw.get(i) otherwise panic("hexDigitsPresent: i < to <= len but get({i}) failed")) 'notHex'
+			return false
+		end 'notHex'
+		i = i + 1
+	end 'each'
+	return true
+end 'hexDigitsPresent'
+
+// The 0..15 value of a hex-digit byte — caller must have validated it via `hexDigitsPresent`.
+function hexDigitValue(b Byte) returns ParsedInt
+	if b >= '0' and b <= '9' 'digit'
+		return (b - '0') as ParsedInt
+	end 'digit'
+	if b >= 'a' and b <= 'f' 'lower'
+		return (b - 'a' + 10) as ParsedInt
+	end 'lower'
+	if b >= 'A' and b <= 'F' 'upper'
+		return (b - 'A' + 10) as ParsedInt
+	end 'upper'
+	panic("hexDigitValue: byte {b} is not a hex digit (caller must validate via hexDigitsPresent)")
+end 'hexDigitValue'
+
+// The raw byte a `\xNN` escape at `at` denotes: `(hi << 4) | lo`.
+function hexEscapeByte(raw ByteArray, at ByteOffset) returns Byte
+	let hi = hexDigitValue(try raw.get(at + 2) otherwise panic("hexEscapeByte: validated digit at {at + 2} missing"))
+	let lo = hexDigitValue(try raw.get(at + 3) otherwise panic("hexEscapeByte: validated digit at {at + 3} missing"))
+	return ((hi shl HexNibbleBits) or lo) as Byte
+end 'hexEscapeByte'
+
+// The codepoint a `\uNNNN` escape at `at` names (4 validated hex digits at `at+2 .. at+5`).
+function uniEscapeCodepoint(raw ByteArray, at ByteOffset) returns ParsedInt
+	let d1 = hexDigitValue(try raw.get(at + 2) otherwise panic("uniEscapeCodepoint: validated digit at {at + 2} missing"))
+	let d2 = hexDigitValue(try raw.get(at + 3) otherwise panic("uniEscapeCodepoint: validated digit at {at + 3} missing"))
+	let d3 = hexDigitValue(try raw.get(at + 4) otherwise panic("uniEscapeCodepoint: validated digit at {at + 4} missing"))
+	let d4 = hexDigitValue(try raw.get(at + 5) otherwise panic("uniEscapeCodepoint: validated digit at {at + 5} missing"))
+	return (d1 shl 12) or (d2 shl 8) or (d3 shl HexNibbleBits) or d4
+end 'uniEscapeCodepoint'
+
+// Decode the UTF-8 sequence starting at `start` to its codepoint + byte length (1..4). A malformed or
+// truncated sequence decodes as its lone lead byte (length 1) so the decode stays aligned — a byte-string
+// with genuinely broken UTF-8 is rare and its lead byte is `<= 0xFF`, so it degrades to a raw byte rather
+// than desyncing. Ported from `maxon-selfhosted` Parser.maxon:11239-11264.
+function decodeUtf8Sequence(raw ByteArray, start ByteOffset) returns Utf8Sequence
+	let n = raw.count()
+	let b0 = (try raw.get(start) otherwise panic("decodeUtf8Sequence: start {start} out of bounds")) as ParsedInt
+	if b0 < Utf8LeadTwoByteFloor or start + 1 >= n 'loneLead'
+		return Utf8Sequence.of(b0, byteLength: 1)
+	end 'loneLead'
+	let b1 = (try raw.get(start + 1) otherwise panic("decodeUtf8Sequence: continuation 1 out of bounds")) as ParsedInt
+	if b0 < Utf8LeadThreeByteFloor 'twoByte'
+		return Utf8Sequence.of(((b0 and Utf8LeadTwoByteMask) shl Utf8ContinuationBits) or (b1 and Utf8ContinuationMask), byteLength: 2)
+	end 'twoByte'
+	if start + 2 >= n 'truncated3'
+		return Utf8Sequence.of(b0, byteLength: 1)
+	end 'truncated3'
+	let b2 = (try raw.get(start + 2) otherwise panic("decodeUtf8Sequence: continuation 2 out of bounds")) as ParsedInt
+	if b0 < Utf8LeadFourByteFloor 'threeByte'
+		return Utf8Sequence.of(((b0 and Utf8LeadThreeByteMask) shl Utf8ThreeByteHighShift) or ((b1 and Utf8ContinuationMask) shl Utf8ContinuationBits) or (b2 and Utf8ContinuationMask), byteLength: 3)
+	end 'threeByte'
+	if start + 3 >= n 'truncated4'
+		return Utf8Sequence.of(b0, byteLength: 1)
+	end 'truncated4'
+	let b3 = (try raw.get(start + 3) otherwise panic("decodeUtf8Sequence: continuation 3 out of bounds")) as ParsedInt
+	return Utf8Sequence.of(((b0 and Utf8LeadFourByteMask) shl Utf8FourByteHighShift) or ((b1 and Utf8ContinuationMask) shl Utf8ThreeByteHighShift) or ((b2 and Utf8ContinuationMask) shl Utf8ContinuationBits) or (b3 and Utf8ContinuationMask), byteLength: 4)
+end 'decodeUtf8Sequence'
+
 // --- M4b loop / on-the-fly SSA support ---
 
 // How many bindings of a kind were in scope when a lexical block was opened. A `var`
@@ -2417,10 +2649,18 @@ export type Parser
 		// (P1.7 slice 1). The sweep interns that one well-known instance so the parser can read its giid back
 		// at literal time (a bare literal has no typealias to intern from). Set here, acted on after the walk.
 		var hasIntArrayLiteral = false
+		// A `b"…"` token appears ONLY in a byte-string literal, so seeing one means the program materializes an
+		// `Array with Byte` (P1.7 slice 2). The sweep interns that one well-known instance so the parser can
+		// read its giid back at literal time (a byte-string, like a bare `[…]`, has no typealias to intern from).
+		var hasByteStringLiteral = false
 		while not self.isEof() 'scan'
 			if self.at(TokenKind.leftBracket) 'arrayLiteralToken'
 				hasIntArrayLiteral = true
 			end 'arrayLiteralToken'
+
+			if self.at(TokenKind.byteStringLiteral) 'byteStringToken'
+				hasByteStringLiteral = true
+			end 'byteStringToken'
 
 			if depth == 0 and self.atTopLevelBindingKeyword() 'isTopLevelBinding'
 				self.recordScannedBinding(bindings)
@@ -2480,6 +2720,13 @@ export type Parser
 		if hasIntArrayLiteral 'internArrayLiteral'
 			_ = index.internArrayIntegerInstance()
 		end 'internArrayLiteral'
+
+		// Intern the `Array with Byte` instance if this file materializes a byte-string literal — after
+		// `foldFile`, exactly as the int-array literal instance above, so its giid follows the file's named
+		// generic instances (a stable, source-path-ordered assignment).
+		if hasByteStringLiteral 'internByteStrLiteral'
+			_ = index.internArrayByteInstance()
+		end 'internByteStrLiteral'
 	end 'foldDeclaredSignaturesInto'
 
 	// Is the cursor on a `let` or a `var` — the two keywords that introduce a top-level binding?
@@ -6405,6 +6652,7 @@ export type Parser
 			literal to asyncCall gives try self.rejectTryTarget(tryTok)
 			tryAwait gives try self.rejectTryTarget(tryTok)
 			sizeofType gives try self.rejectTryTarget(tryTok)
+			byteStringLiteral gives try self.rejectTryTarget(tryTok)
 		end 'rewrite'
 	end 'rewriteLastCallToTryCall'
 
@@ -11023,6 +11271,12 @@ export type Parser
 			return try self.parseStringLiteral(func)
 		end 'strLit'
 
+		// A `b"…"` BYTE-STRING LITERAL (P1.7 slice 2) — its own token kind, so it cannot ride the string arm
+		// above. It materializes as an owned `Array with Byte` over an immortal rdata blob.
+		if self.at(TokenKind.byteStringLiteral) 'byteStrLit'
+			return try self.parseByteStringLiteral()
+		end 'byteStrLit'
+
 		// `[a, b, c]` — an ARRAY LITERAL (P1.7 slice 1). Its own arm because `[` is its own token. It
 		// desugars to `__arr_create` + a `__arr_push` per element, yielding an owned `Array with integer`.
 		if self.at(TokenKind.leftBracket) 'arrayLiteral'
@@ -11270,6 +11524,27 @@ export type Parser
 		self.artifact.emitOp(self.currentBlock, op: MaxonOp.stringLiteral(result, bytes: bytes), range: range)
 		return result
 	end 'emitStringLiteral'
+
+	// ⭐ **`b"hello"`, `b""`, `b"\xc0"`, `b"À"` — a BYTE-STRING LITERAL in operand position (P1.7 slice 2).**
+	// It decodes to a raw byte sequence (escapes resolved, one Latin-1 byte per source codepoint) and
+	// materializes as an OWNED `Array with Byte` value: a `byteStringLiteral` op that lowers to a heap 48-byte
+	// Array record over an IMMORTAL rdata blob (see `LowerMaxonToStd.lowerByteStringLiteral`). Its value type
+	// is pinned to the concrete `Array with Byte` gid so `.count()`/`.get()` dispatch through a real generic
+	// instance — a bare `named(Array)` would trip the generics machinery. Enrolled as an owned temp so a
+	// scope-exit / statement-end drop (`__arr_decref`) frees the record (the rdata buffer is left alone).
+	//
+	// A codepoint above 0xFF (`b"Ā"`, a `\uNNNN` naming one, an emoji) has no single-byte encoding and is
+	// REJECTED with E1004 — the self-hosted oracle's behaviour, deliberately UNLIKE the C# bootstrap, which
+	// silently Latin-1 best-fit-transliterates the codepoint away. Use `\xNN` to embed an exact raw byte.
+	function parseByteStringLiteral() returns ValueId throws ParseError
+		let tok = try self.consume(TokenKind.byteStringLiteral)
+		let bytes = try decodeByteStringLiteral(tok.value, tok: tok)
+		let giid = self.signatures.internArrayByteInstance()
+		let result = self.mintValue(ValueTypeTag.genericInstance, nameId: giid)
+		self.artifact.emitOp(self.currentBlock, op: MaxonOp.byteStringLiteral(result, bytes: bytes), range: SourceRange.ofToken(tok))
+		self.trackOwnedTemp(result)
+		return result
+	end 'parseByteStringLiteral'
 
 	// ⭐⭐ **`"prefix {x} suffix"` — WHERE THE FIRST OWNED HEAP STRING IS BUILT.** An interpolation lowers to
 	// ONE `__mm_alloc`'d fused record: the 48-byte String record with its UTF-8 bytes INLINE right behind it

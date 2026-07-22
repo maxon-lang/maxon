@@ -797,6 +797,22 @@ export union MaxonOp
 	// runtime load of the enclosing instance's layout descriptor `elementLogicalSize@56` slot (the
 	// dictionary-passing model — see LayoutDescriptor). `result` is the integer it defines.
 	sizeofType(result ValueId, targetType MaxonType) = MaxonOpMeta{category: OpCategory.plain}
+	// --- P1.7 slice 2: `b"…"` byte-string literals ---
+	//
+	// ⚠ APPENDED AT THE END OF THE UNION, past `sizeofType`, per the band-append invariant: a mid-union
+	// insert is silently swallowed by any range arm (`literal to storeIndirect`, the category ranges).
+	// Its `OpCategory.plain` (it stands alone, matched by variant — like `stringLiteral`) is metadata
+	// independent of this tail position.
+	//
+	// A `b"…"` literal — an `Array with Byte` whose bytes are a compile-time constant. `bytes` is the
+	// DECODED Latin-1 payload (`Parser.decodeByteStringLiteral`: escapes resolved, each source codepoint
+	// mapped to one byte, a codepoint above 0xFF already rejected E1004). It lowers to a heap 48-byte
+	// Array record (`__mm_alloc`) whose `buffer@0` points at the bytes in immortal `.rdata` and whose
+	// `capacity@16` is the rdata sentinel `-2` (the buffer is never freed) — the Array analogue of a
+	// String literal's immortal blob, but with an owned heap RECORD so the value is a first-class owned
+	// `Array with Byte` the ownership model drops through `__arr_decref` (which skips the rdata buffer on
+	// the `capacity < 0` sentinel). `result` is the record pointer. Category `plain` (stands alone).
+	byteStringLiteral(result ValueId, bytes ByteArray) = MaxonOpMeta{category: OpCategory.plain}
 end 'MaxonOp'
 
 // The dual-register error-flag ABI BIAS (P1.4b). The error flag is `0` for "no error in flight" and

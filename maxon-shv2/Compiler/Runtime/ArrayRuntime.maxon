@@ -34,6 +34,46 @@ export let ArrRecordBytes = 48 as ByteCount
 // so `__arr_create` never writes them — the same zeroing contract `__mm_alloc` itself relies on.
 let TrivialElementDestroy = 0 as ParsedInt
 
+// --- Byte-string literal (`b"…"`, P1.7 slice 2) ---
+//
+// A `b"…"` literal is the Array analogue of a String literal: a HEAP 48-byte record over an IMMORTAL
+// `.rdata` byte blob. `capacity@16` is the rdata SENTINEL below — a negative capacity that tells
+// `__arr_decref` the buffer lives in read-only `.rdata` and must NOT be freed (`freeing .rdata` faults).
+// `element_size@24` is 1 (a byte is one byte, so the blob is byte-packed and `.get(i)` strides by 1 —
+// UNLIKE a slice-1 `Array with Byte` whose ranged-alias element still occupies a machine word). The
+// record is a real `__mm_alloc` box so the value is a first-class owned `Array with Byte` the ownership
+// model drops through `__arr_decref` — which, on the sentinel, frees the record and skips the blob.
+export let ArrRdataCapacitySentinel = 0 - 2 as ParsedInt
+export let ByteStringElementSize = 1 as ParsedInt
+
+// The `.rdata` label prefix a byte-string literal's blob registers under. `__`-prefixed so it never
+// collides with a user name and stays out of the spec goldens (`isRuntimeFunction`'s data twin), and
+// distinct from `__str_blob_` so a reader of the section can tell the two apart.
+let ByteArrayBlobPrefix = "__barr_blob_"
+
+// Every blob is padded to an 8-byte multiple, the same reason `StringRuntime.stringBlobBytes` pads: a
+// future arm64 record fixup links its rebased slots by a 4-byte-granular delta, so keeping the rdata
+// cursor 8-aligned across the section keeps every following slot encodable. The padding bytes sit BEYOND
+// `length@8`, so no Array read (which strides `[0, length)`) ever observes them, and it is free on x64.
+let ByteArrayBlobAlignment = 8 as ByteCount
+let ByteArrayBlobPadByte = 0 as Byte
+
+// Register a byte-string literal's payload as an immortal `.rdata` blob and return its label. The bytes
+// are ALREADY decoded (escapes resolved, one Latin-1 byte per source codepoint — `Parser.decodeByteStringLiteral`),
+// so this is a pure `.rdata` registration: identical literals dedup to one blob (`registerRdataConstant`).
+export function registerByteArrayLiteralBlob(globalData GlobalDataTable, bytes ByteArray) returns String
+	return globalData.registerRdataConstant(ByteArrayBlobPrefix, bytes: paddedByteArrayBlob(bytes))
+end 'registerByteArrayLiteralBlob'
+
+function paddedByteArrayBlob(bytes ByteArray) returns ByteArray
+	var blob = ByteArray.create()
+	blob.append(bytes)
+	while blob.count() mod ByteArrayBlobAlignment != 0 'pad'
+		blob.push(ByteArrayBlobPadByte)
+	end 'pad'
+	return blob
+end 'paddedByteArrayBlob'
+
 // The exit code `__arr_create` diverges with when handed a 0 element size — a compiler bug (a concrete
 // literal is never 0, a descriptor read never yields 0), mirroring v1's `__mm_panic_element_size_zero`
 // runtime guard so a zero cannot silently make `__arr_grow` allocate a zero-byte buffer and corrupt.
@@ -979,6 +1019,13 @@ end 'buildArrRemove'
 // owner, first WALK `[0, length)` calling `element_destroy@40` on each slot BEFORE freeing the buffer —
 // the field and the free path are already shaped for it; only the walk is unwritten. The drop is
 // single-sited (routed here by tag, `decrefCalleeFor`), so that walk lands in exactly one place.
+//
+// ⚠ **THE RDATA-BUFFER SEAM (P1.7 slice 2).** A byte-string literal (`b"…"`) is an owned heap record whose
+// `buffer@0` points into IMMORTAL `.rdata` and whose `capacity@16` is the sentinel `ArrRdataCapacitySentinel`
+// (< 0). Freeing that buffer would `__mm_free` a `.rdata` address that was never `__mm_alloc`'d (a fault), so
+// the last owner frees the RECORD alone when the capacity is negative — the buffer free is gated on
+// `capacity >= 0` (an OWNED, grown buffer). An owned array (capacity >= 0) reaches the existing buffer path
+// unchanged, so no slice-1 golden moves.
 function buildArrDecref(module StdModule)
 	var func = IrFunction.createFromStd(ArrDecrefName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
@@ -986,6 +1033,7 @@ function buildArrDecref(module StdModule)
 	var entry = module.addBlock(func, label: b"entry")
 	var lower = module.addBlock(func, label: b"lower")
 	var release = module.addBlock(func, label: b"release")
+	var checkBuf = module.addBlock(func, label: b"checkbuf")
 	var freeBuf = module.addBlock(func, label: b"freebuf")
 	var freeRec = module.addBlock(func, label: b"freerec")
 
@@ -994,11 +1042,18 @@ function buildArrDecref(module StdModule)
 
 	emitRefcountCheckToLastOwner(module, entry: entry, lower: lower, record: record, lastOwner: release, ids: ids)
 
-	// release: free the external buffer only if one was allocated (an empty array never allocated one).
-	let buffer = emitLoadField(module, block: release, arr: record, offset: ArrBufferOffset, ids: ids)
-	let zero = emitConst(module, block: release, value: 0, ids: ids)
-	let hasBuf = emitCmp(module, block: release, a: buffer, b: zero, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(release, op: StdOp.condBranch(hasBuf, thenBlockId: freeBuf.id, elseBlockId: freeRec.id))
+	// release: an rdata-backed buffer (`capacity < 0`, the byte-string sentinel) is immortal `.rdata` and must
+	// NOT be freed — skip straight to freeing the record. An owned buffer (`capacity >= 0`) falls to `checkBuf`.
+	let capacity = emitLoadField(module, block: release, arr: record, offset: ArrCapacityOffset, ids: ids)
+	let zeroCap = emitConst(module, block: release, value: 0, ids: ids)
+	let isRdata = emitCmp(module, block: release, a: capacity, b: zeroCap, pred: StdCmpPred.lt, ids: ids)
+	module.setTerminator(release, op: StdOp.condBranch(isRdata, thenBlockId: freeRec.id, elseBlockId: checkBuf.id))
+
+	// checkBuf: free the external buffer only if one was allocated (an empty array never allocated one).
+	let buffer = emitLoadField(module, block: checkBuf, arr: record, offset: ArrBufferOffset, ids: ids)
+	let zero = emitConst(module, block: checkBuf, value: 0, ids: ids)
+	let hasBuf = emitCmp(module, block: checkBuf, a: buffer, b: zero, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(checkBuf, op: StdOp.condBranch(hasBuf, thenBlockId: freeBuf.id, elseBlockId: freeRec.id))
 
 	let bufFreed = ids.mint()
 	module.appendOp(freeBuf, op: StdOp.call(bufFreed, callee: MmFreeName, args: argsOf(buffer)))

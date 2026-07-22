@@ -328,6 +328,7 @@ function classifyRuntimeCall(op MaxonOp, usage RuntimeUsage)
 		// `sizeof(T)` lowers to a plain `loadIndirect` of the layout descriptor — it names no runtime callee
 		// and pulls in no runtime floor (the descriptor is pure `.rdata`), so it records no usage (P1.6-B1).
 		sizeofType then break 'op'
+		byteStringLiteral then recordByteStringUsage(usage)
 	end 'op'
 end 'classifyRuntimeCall'
 
@@ -337,6 +338,14 @@ function recordGtUsage(usage RuntimeUsage)
 	usage.usesGt = true
 	usage.usesHeap = true
 end 'recordGtUsage'
+
+// A `b"…"` byte-string literal turns on both the Array runtime and the heap under it — the same pair any
+// `__arr_*` call declares (`recordCallUsage`'s array arm), because the literal IS an owned Array record
+// (`__mm_alloc`) whose `.count()`/`.get()`/drop go through the array runtime.
+function recordByteStringUsage(usage RuntimeUsage)
+	usage.usesArray = true
+	usage.usesHeap = true
+end 'recordByteStringUsage'
 
 function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 	if isRuntimeCallee(callee) 'heap'

@@ -1013,6 +1013,12 @@ end 'unionNameDropCallee'
 // and every `Array`-instance query — one speller, so the two cannot drift. See `isArrayBaseName`.
 export let ArrayBuiltinBaseName = b"Array"
 
+// The element type name of a `b"…"` byte-string literal's `Array with Byte` instance — the same `Byte`
+// spelling a user's `typealias Byte = int(0 to u8.max)` uses, so a byte-string's gid matches a
+// `ByteArray`-typed value's gid (type identity). A bare `named` reference: the element's own resolution
+// is never needed (a byte-string stamps `element_size = 1` directly and never reads `arrayElementSize`).
+let ByteElementTypeName = b"Byte"
+
 // The single type parameter `Array` declares (`Array with Element`) — the arity `checkGenericInstance`
 // validates a `Array with …` against.
 export let ArrayTypeParamCount = 1 as FieldIndex
@@ -2603,6 +2609,19 @@ export type ProgramSignatures
 	export function internArrayIntegerInstance() returns GenericInstanceId
 		return self.genericInstances.intern(self.typeNames.intern(ArrayBuiltinBaseName), args: singletonInteger())
 	end 'internArrayIntegerInstance'
+
+	// ⭐ **THE `Array with Byte` INSTANCE FOR A `b"…"` BYTE-STRING LITERAL (P1.7 slice 2).** A byte-string
+	// literal has no typealias to intern from (`b"hi"` names no type), so — like the `[…]` int-array literal
+	// above — the SWEEP interns this ONE well-known instance whenever a file's tokens contain a byte-string
+	// literal (`Parser.foldDeclaredSignaturesInto`), and the parser reads the giid back at literal time.
+	// Interning is IDEMPOTENT, so the sweep is the WRITE and every parser call a pure READ. The element is
+	// `named("Byte")` — the SAME reference a user `typealias ByteArray = Array with Byte` interns, so a
+	// byte-string and a `ByteArray`-typed value share one gid and are type-identical.
+	export function internArrayByteInstance() returns GenericInstanceId
+		var args = MaxonTypeArray.create()
+		args.push(MaxonType.named(self.typeNames.intern(ByteElementTypeName)))
+		return self.genericInstances.intern(self.typeNames.intern(ArrayBuiltinBaseName), args: args)
+	end 'internArrayByteInstance'
 
 	// --- Layout-descriptor sizing (P1.6-B1) ---
 	//

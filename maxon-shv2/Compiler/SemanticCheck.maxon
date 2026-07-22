@@ -159,6 +159,7 @@ function opEscapesParam(op MaxonOp, param ValueId) returns bool
 		asyncCall(_, _, args, _, _) then return valueIdInArray(args, value: param)
 		await to tryAwait then break 'op'
 		sizeofType then break 'op'
+		byteStringLiteral then break 'op'
 	end 'op'
 	return false
 end 'opEscapesParam'
@@ -172,6 +173,7 @@ function terminatorEscapesParam(term MaxonOp, param ValueId) returns bool
 		ret(value) then return value == param
 		retVoid to tryAwait then break 'term'
 		sizeofType then break 'term'
+		byteStringLiteral then break 'term'
 	end 'term'
 	return false
 end 'terminatorEscapesParam'
@@ -264,6 +266,7 @@ function functionHasAwait(func IrFunction, module MaxonModule) returns bool
 				asyncCall then break 'op'
 				await to tryAwait then return true
 				sizeofType then break 'op'
+				byteStringLiteral then break 'op'
 			end 'op'
 		end 'eachOp'
 	end 'eachBlock'
@@ -299,6 +302,7 @@ function collectAwaitSites(func IrFunction, module MaxonModule) returns AwaitSit
 				// is a property of the green thread, not of whether the error is caught — so it is an await site.
 				tryAwait(_, _, promise) then sites.push(AwaitSite.create(block, pos: pos, promise: promise))
 				sizeofType then break 'op'
+				byteStringLiteral then break 'op'
 			end 'op'
 		end 'eachOp'
 	end 'eachBlock'
@@ -433,6 +437,7 @@ function classifyOpForPromise(op MaxonOp, promise ValueId) returns OpAwaitRole
 		// A `try await` of the tracked promise is a re-await exactly as a plain `await` is.
 		tryAwait(_, _, awaited) then return roleIfEqual(awaited, promise: promise, role: OpAwaitRole.reawaitOf)
 		sizeofType then break 'op'
+		byteStringLiteral then break 'op'
 	end 'op'
 	return OpAwaitRole.unrelated
 end 'classifyOpForPromise'
@@ -459,6 +464,7 @@ function collectAwaitSuccessors(module MaxonModule, block IrBlock, into BlockIdA
 		branch(targetBlockId) then into.push(targetBlockId)
 		globalAddr to tryAwait then break 'term'
 		sizeofType then break 'term'
+		byteStringLiteral then break 'term'
 	end 'term'
 end 'collectAwaitSuccessors'
 
@@ -508,6 +514,7 @@ function checkCalls(project Project, module MaxonModule, throwsMap FuncThrowsMap
 					// (E3057 plain-await, E3059 propagate mismatch) is checked by the parser at the await/try token.
 					await to tryAwait then break 'op'
 					sizeofType then break 'op'
+					byteStringLiteral then break 'op'
 				end 'op'
 			end 'eachOp'
 		end 'eachBlock'
