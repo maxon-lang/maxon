@@ -2373,6 +2373,27 @@ export type ProgramSignatures
 		return self.innerAliasOf(joinQualifiedName(base, member: member))
 	end 'perInstanceAliasFromParts'
 
+	// ⭐ **THE PER-INSTANCE-AWARE AGGREGATE CONFLICT RULE (P1.6-C)** — the ONE authority every symmetric
+	// coercion site (return, reassignment, `otherwise`, match arm, union-payload / struct-literal store)
+	// shares, so they cannot come to disagree about when a per-instance value decays.
+	//
+	// A per-instance `Idx` is a NOMINAL wrapper over a SCALAR int, so it DECAYS to plain int wherever a
+	// non-per-instance numeric is expected — exactly as a per-instance argument into a plain-numeric parameter
+	// decays. So the per-instance conflict fires ONLY when the TARGET (`expected`) is itself a per-instance
+	// alias: a per-instance SOURCE (`got`) meeting a non-per-instance target is accepted (no conflict).
+	//
+	// ⚠ This does NOT loosen struct/union checks. A struct/union `got` is NOT a per-instance alias, so it
+	// never decays here — and a struct value into a plain-numeric target is caught by the TAG check that runs
+	// BEFORE every one of these sites (`structRef` != `int`), never reaching this rule. What is left for this
+	// rule is exactly the two overloaded-`named` scalars — a per-instance alias (decays) and a boxed union
+	// (a real conflict, deferred to the base rule) — the base `namedAggregatesConflict` cannot tell apart.
+	export function aggregatesConflict(expected ByteArray, got ByteArray) returns bool
+		if not got.isEmpty() and self.isPerInstanceAlias(got) and not self.isPerInstanceAlias(expected) 'perInstanceDecays'
+			return false
+		end 'perInstanceDecays'
+		return namedAggregatesConflict(expected, got: got)
+	end 'aggregatesConflict'
+
 	// The underlying primitive of a qualified alias (base-template OR per-instance) — TypeResolution's
 	// erasure door: both collapse to their `int`/`float` underlying before lowering, exactly as a plain
 	// ranged alias does; only the per-instance one ALSO carries nominal identity (kept in the value column).

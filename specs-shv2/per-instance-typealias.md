@@ -350,3 +350,79 @@ end 'main'
 ```maxoncstderr
 error E3005: specs/fragments/per-instance-typealias/error.cast-does-not-launder-source.test:32:2: argument type mismatch for 't': expected 'WB.Idx', got 'WA.Idx'
 ```
+
+### Per-instance Idx decays to plain int on return
+
+A per-instance `Idx` is a nominal wrapper over a SCALAR int, so it DECAYS to plain int wherever a
+non-per-instance numeric is expected — a `return` included. `getTag()` returns `IW.Idx`, and returning
+it from an `ExitCode` function is accepted (no narrowing: the range fits), yielding the value.
+
+<!-- test: return-decays-to-plain -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Wrapper uses T
+	export typealias Idx = int(0 to 200)
+
+	export var value as T
+	export var tag as Idx
+
+	export static function create(value T, tag Idx) returns Self
+		return Self{value: value, tag: tag}
+	end 'create'
+
+	export function getTag() returns Idx
+		return self.tag
+	end 'getTag'
+end 'Wrapper'
+
+typealias IW = Wrapper with Integer
+
+function main() returns ExitCode
+	let w = IW.create(1, tag: 42)
+	return w.getTag()
+end 'main'
+```
+```exitcode
+42
+```
+
+### Per-instance Idx decays when reassigned into a plain int var
+
+The decay is not special to `return` — a per-instance `Idx` assigned into a plain `int` variable decays
+just the same, as it does when passed to a plain-int parameter.
+
+<!-- test: reassign-decays-to-plain -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Wrapper uses T
+	export typealias Idx = int(0 to u64.max)
+
+	export var value as T
+	export var tag as Idx
+
+	export static function create(value T, tag Idx) returns Self
+		return Self{value: value, tag: tag}
+	end 'create'
+
+	export function getTag() returns Idx
+		return self.tag
+	end 'getTag'
+end 'Wrapper'
+
+typealias IW = Wrapper with Integer
+
+function main() returns ExitCode
+	let w = IW.create(1, tag: 7)
+	var n = 0
+	n = w.getTag()
+	if n == 7 'ok'
+		return 0
+	end 'ok'
+	return 1
+end 'main'
+```
+```exitcode
+0
+```

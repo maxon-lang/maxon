@@ -5527,7 +5527,7 @@ export type Parser
 		// `giveTypeName` prints the scalar side's primitive, not an empty name.
 		let declaredAggregate = self.aggregateNameOf(declaredTag, nameId: typeNameIdOf(binding.varType))
 		let assignedAggregate = self.aggregateNameOf(valueTag, nameId: self.valueNameId(value))
-		if namedAggregatesConflict(declaredAggregate, got: assignedAggregate) 'aggregateReassignMismatch'
+		if self.signatures.aggregatesConflict(declaredAggregate, got: assignedAggregate) 'aggregateReassignMismatch'
 			throw ParseError.assignTypeMismatch(String.from(nameTok.value), got: self.giveTypeName(valueTag, aggregateName: assignedAggregate), expected: self.giveTypeName(declaredTag, aggregateName: declaredAggregate), line: nameTok.line, column: nameTok.column)
 		end 'aggregateReassignMismatch'
 
@@ -5996,7 +5996,7 @@ export type Parser
 		// scalar side's primitive (`int`), not an empty name.
 		let declaredReturnName = self.aggregateNameOf(declaredTag, nameId: declaredNameId)
 		let returnedName = self.aggregateNameOf(retTag, nameId: self.valueNameId(retVal))
-		if namedAggregatesConflict(declaredReturnName, got: returnedName) 'aggregateReturnMismatch'
+		if self.signatures.aggregatesConflict(declaredReturnName, got: returnedName) 'aggregateReturnMismatch'
 			throw ParseError.returnTypeMismatch(self.giveTypeName(retTag, aggregateName: returnedName), expected: self.giveTypeName(declaredTag, aggregateName: declaredReturnName), line: retTok.line, column: retTok.column)
 		end 'aggregateReturnMismatch'
 
@@ -6568,7 +6568,7 @@ export type Parser
 		// scalar side's primitive, not an empty name.
 		let resultAggregate = self.aggregateNameOf(self.tagOf(result), nameId: self.valueNameId(result))
 		let fallbackAggregate = self.aggregateNameOf(self.tagOf(otherwiseValue), nameId: self.valueNameId(otherwiseValue))
-		if namedAggregatesConflict(resultAggregate, got: fallbackAggregate) 'aggregateOtherwiseMismatch'
+		if self.signatures.aggregatesConflict(resultAggregate, got: fallbackAggregate) 'aggregateOtherwiseMismatch'
 			throw ParseError.errorTypeMismatch("otherwise type '{self.giveTypeName(self.tagOf(otherwiseValue), aggregateName: fallbackAggregate)}' does not match expected type '{self.giveTypeName(self.tagOf(result), aggregateName: resultAggregate)}'", line: tryTok.line, column: tryTok.column)
 		end 'aggregateOtherwiseMismatch'
 
@@ -8771,7 +8771,7 @@ export type Parser
 				let giveAggregate = self.aggregateNameOf(giveTag, nameId: self.valueNameId(giveVal))
 
 				let classDisagrees = not typesAgree(giveTag, right: firstTag)
-				let nameDisagrees = namedAggregatesConflict(firstAggregate, got: giveAggregate)
+				let nameDisagrees = self.signatures.aggregatesConflict(firstAggregate, got: giveAggregate)
 				if classDisagrees or nameDisagrees 'giveTypeMismatch'
 					throw ParseError.giveTypeMismatch(self.giveTypeName(giveTag, aggregateName: giveAggregate), expected: self.giveTypeName(firstTag, aggregateName: firstAggregate), line: matchTok.line, column: matchTok.column)
 				end 'giveTypeMismatch'
@@ -11483,7 +11483,7 @@ export type Parser
 		// distinct aggregates, and `giveTypeName` prints the scalar side's primitive rather than an empty name.
 		let wantName = self.aggregateNameOf(maxonTypeTag(storage), nameId: typeNameIdOf(storage))
 		let gotName = self.aggregateNameOf(self.tagOf(value), nameId: self.valueNameId(value))
-		if namedAggregatesConflict(wantName, got: gotName) 'nameMismatch'
+		if self.signatures.aggregatesConflict(wantName, got: gotName) 'nameMismatch'
 			throw ParseError.assignTypeMismatch(siteName, got: self.giveTypeName(got, aggregateName: gotName), expected: self.giveTypeName(wantTag, aggregateName: wantName), line: anchor.line, column: anchor.column)
 		end 'nameMismatch'
 	end 'requireManagedValueMatches'
