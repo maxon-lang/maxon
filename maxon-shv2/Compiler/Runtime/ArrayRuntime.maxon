@@ -87,6 +87,18 @@ let ElementSizeZeroExitCode = 70 as ParsedInt
 // NON-zero value. It is the capacity twin of `ElementSizeZeroExitCode`: both stop a corrupt allocation.
 let CapacityOverflowExitCode = 71 as ParsedInt
 
+// The exit code `__arr_append` diverges with when `dest` and `src` have DIFFERENT runtime `element_size@24`
+// values — an incoherent byte blit. `__arr_append` is the ONE array op that strides TWO records by a SINGLE
+// element size (it reads `dest`'s and applies it to `src`), so it is correct only when the two agree. Two
+// arrays of the same STATIC element type normally share a runtime element size, so a well-typed `append`
+// never trips this — the ONE exception is a byte-string literal (`b"…"`), whose buffer is byte-PACKED
+// (`element_size@24 == 1`, `ByteStringElementSize`) while a heap-grown `Array with Byte` strides by a machine
+// word. Blitting `srcLen · dest.element_size` bytes across that seam OVER-READS the packed source and splices
+// garbage in (a wrong answer, and a heap/rdata over-read). Aborting is the same "a corrupt operation must
+// never proceed" guard `ElementSizeZeroExitCode`/`CapacityOverflowExitCode` use. Making such an append WORK
+// (an element-wise WIDENING value copy across differing strides) is a distinct mechanism, not slice 4's.
+let AppendElementSizeMismatchExitCode = 72 as ParsedInt
+
 // The error flag `__arr_get`/`__arr_set`/`__arr_first`/`__arr_last`/`__arr_pop`/`__arr_remove` throw on an
 // out-of-bounds index — the dual-register `errorReturn` flag (an error case's `ordinal + 1`, so 1 is
 // `ArrayError.indexOutOfBounds`, ordinal 0). `try … otherwise` only tests `flag != 0`, so any nonzero
@@ -1243,27 +1255,48 @@ end 'buildArrClone'
 // raw byte copy duplicates heap pointers, so a managed element would leave both arrays owning the same elements
 // (a double-free); the parser rejects the managed cases. `dest.buffer` is reloaded AFTER the reserve because a
 // grow may have replaced it. An empty `src` copies nothing (the forward-copy header guard holds at once).
+//
+// ⚠ **THE ELEMENT-SIZE SEAM.** The blit strides BOTH records by `dest`'s runtime `element_size`, so it is only
+// coherent when `src`'s element size equals it. Same-static-type arrays normally agree; a byte-string literal
+// (`element_size@24 == 1`, byte-packed) mixed with a machine-word `Array with Byte` does NOT, and blitting
+// across that seam over-reads the packed source. `entry` guards the two element sizes equal and diverges
+// (`AppendElementSizeMismatchExitCode`) otherwise — the file's "a corrupt operation must never proceed" shape.
 function buildArrAppend(module StdModule)
 	var func = IrFunction.createFromStd(ArrAppendName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry")
+	var mismatch = module.addBlock(func, label: b"esmismatch")
+	var append = module.addBlock(func, label: b"append")
+
 	emitParams(module, block: entry, count: 2)
 	let dest = 0 as ValueId
 	let src = 1 as ValueId
 
-	let destLen = emitLoadField(module, block: entry, arr: dest, offset: ArrLengthOffset, ids: ids)
-	let srcLen = emitLoadField(module, block: entry, arr: src, offset: ArrLengthOffset, ids: ids)
-	let newLen = emitBin(module, block: entry, a: destLen, b: srcLen, opcode: StdBinOpcode.add, ids: ids)
-	let reserved = ids.mint()
-	module.appendOp(entry, op: StdOp.call(reserved, callee: ArrReserveName, args: twoArgs(dest, second: newLen)))
+	// entry: the two records must stride by the same element size (see THE ELEMENT-SIZE SEAM above).
+	let destEs = emitLoadField(module, block: entry, arr: dest, offset: ArrElementSizeOffset, ids: ids)
+	let srcEs = emitLoadField(module, block: entry, arr: src, offset: ArrElementSizeOffset, ids: ids)
+	let esDiffers = emitCmp(module, block: entry, a: destEs, b: srcEs, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(esDiffers, thenBlockId: mismatch.id, elseBlockId: append.id))
 
-	let es = emitLoadField(module, block: entry, arr: dest, offset: ArrElementSizeOffset, ids: ids)
-	let destBuffer = emitLoadField(module, block: entry, arr: dest, offset: ArrBufferOffset, ids: ids)
-	let srcBuffer = emitLoadField(module, block: entry, arr: src, offset: ArrBufferOffset, ids: ids)
-	let destAddr = emitSlotAddr(module, block: entry, buffer: destBuffer, index: destLen, elementSize: es, ids: ids)
-	let byteCount = emitBin(module, block: entry, a: srcLen, b: es, opcode: StdBinOpcode.mul, ids: ids)
-	var afterCopy = emitForwardCopy(module, func: func, cur: entry, dest: destAddr, src: srcBuffer, byteCount: byteCount, ids: ids)
+	// mismatch: abort — an incoherent cross-stride blit must never proceed (the `__arr_grow` overflow shape:
+	// an `osExit` body op followed by a dead `retVoid` terminator that keeps the void block well-formed).
+	let mismatchCode = emitConst(module, block: mismatch, value: AppendElementSizeMismatchExitCode, ids: ids)
+	module.appendOp(mismatch, op: StdOp.osExit(mismatchCode))
+	module.setTerminator(mismatch, op: StdOp.retVoid)
+
+	let destLen = emitLoadField(module, block: append, arr: dest, offset: ArrLengthOffset, ids: ids)
+	let srcLen = emitLoadField(module, block: append, arr: src, offset: ArrLengthOffset, ids: ids)
+	let newLen = emitBin(module, block: append, a: destLen, b: srcLen, opcode: StdBinOpcode.add, ids: ids)
+	let reserved = ids.mint()
+	module.appendOp(append, op: StdOp.call(reserved, callee: ArrReserveName, args: twoArgs(dest, second: newLen)))
+
+	let es = emitLoadField(module, block: append, arr: dest, offset: ArrElementSizeOffset, ids: ids)
+	let destBuffer = emitLoadField(module, block: append, arr: dest, offset: ArrBufferOffset, ids: ids)
+	let srcBuffer = emitLoadField(module, block: append, arr: src, offset: ArrBufferOffset, ids: ids)
+	let destAddr = emitSlotAddr(module, block: append, buffer: destBuffer, index: destLen, elementSize: es, ids: ids)
+	let byteCount = emitBin(module, block: append, a: srcLen, b: es, opcode: StdBinOpcode.mul, ids: ids)
+	var afterCopy = emitForwardCopy(module, func: func, cur: append, dest: destAddr, src: srcBuffer, byteCount: byteCount, ids: ids)
 
 	emitStoreField(module, block: afterCopy, arr: dest, offset: ArrLengthOffset, value: newLen)
 	module.setTerminator(afterCopy, op: StdOp.retVoid)
