@@ -311,6 +311,26 @@ end 'main'
 4
 ```
 
+<!-- test: byte-string-literal.try-literal-accessor -->
+
+A throwing `.get()` applied directly to a byte-string literal, with no intermediate binding — the
+`try` target parse must accept the byte-string literal exactly as it accepts an array literal, and the
+literal's owned temp must drop on both the in-bounds and the caught out-of-bounds path.
+```maxon
+function main() returns ExitCode
+		let ok = try b"AB".get(1) otherwise 0
+		let oob = try b"AB".get(9) otherwise 200
+		print("{ok} {oob}")
+		return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+66 200
+```
+
 <!-- test: byte-string-literal.latin1-char -->
 
 ```maxon

@@ -6623,6 +6623,16 @@ export type Parser
 		if self.at(TokenKind.leftBracket) 'arrayLiteralTarget'
 			return try self.parsePostfix(func, value: try self.parseArrayLiteral(func))
 		end 'arrayLiteralTarget'
+		// `try b"…".get(0) otherwise …` — a throwing method on a byte-string LITERAL (P1.7 slice 2), the exact
+		// analogue of the array-literal target above: the literal parses to an owned `Array with Byte` temp and
+		// the postfix loop applies the `.get(…)`, leaving the `call __arr_get` as the last op for
+		// `rewriteLastCallToTryCall` to convert. Without this arm the byte-string primary falls through to the
+		// throw below and a legal `try b"…".get(…)` is rejected as "not a call" — the array-literal form is
+		// accepted, so the two literal kinds must be enrolled here together. The temp drops at statement end
+		// (after the try), on every path.
+		if self.at(TokenKind.byteStringLiteral) 'byteStringLiteralTarget'
+			return try self.parsePostfix(func, value: try self.parseByteStringLiteral())
+		end 'byteStringLiteralTarget'
 		let tok = self.current()
 		throw ParseError.unsupported("`try` must be applied to a call — `try f(…)`, `try obj.method(…)`, or `try await p` (got '{tok.kind.rawValue}')", line: tok.line, column: tok.column)
 	end 'parseTryCallTarget'
