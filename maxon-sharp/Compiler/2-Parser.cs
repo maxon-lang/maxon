@@ -15426,7 +15426,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       var targetKind = ParseTypeKeyword();
       var inputVal = ResolveExprValue(lhs);
       var sourceKind = DetermineValueKind(inputVal);
-      ValidateCast(sourceKind, targetKind, asToken);
+      ValidateCast(inputVal, sourceKind, targetKind, asToken);
       // When casting to a ranged type, validate the input against its
       // declared range — compile-time check for literals (errors out-of-range
       // as SemanticTypeMismatch), runtime check otherwise. This makes
@@ -19115,11 +19115,18 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       (MaxonValueKind.Float, MaxonValueKind.Bool) => false,
       (MaxonValueKind.Float32, MaxonValueKind.Bool) => false,
       (MaxonValueKind.Byte, MaxonValueKind.Bool) => false,
-      _ => throw new InvalidOperationException($"Unhandled cast combination: {source} -> {target}")
+      // A pair the numeric widening table does not name is, by definition, not a widening cast —
+      // so it is `false`, not a crash. The `_` is reached only when one side is a NON-numeric kind
+      // (Struct/String, Enum, Function, CString): `"x" as Age`, `p as Age`, `f as Age`. Those are
+      // fundamentally-incompatible kinds with no conversion, and the caller (`ValidateCast`,
+      // `DetermineValueKind`) rejects them with a clean E3009 / E2004 at the cast/operator site.
+      // Throwing here turned an ordinary invalid cast into an INTERNAL COMPILER ERROR (E9001) —
+      // the #99 crash — which is never the right answer to a user's bad program.
+      _ => false
     };
   }
 
-  private void ValidateCast(MaxonValueKind sourceKind, MaxonValueKind targetKind, Token asToken) {
+  private void ValidateCast(MaxonValue sourceValue, MaxonValueKind sourceKind, MaxonValueKind targetKind, Token asToken) {
     if (sourceKind == targetKind) return;
 
     // Allow int literal in 0-255 range to cast to byte (check lastOp rather
@@ -19136,10 +19143,20 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     if (!IsWideningCast(sourceKind, targetKind)) {
       throw new CompileError(
         ErrorCode.SemanticUnsafeCast,
-        $"Cannot cast from {KindToTypeName(sourceKind)} to {KindToTypeName(targetKind)}",
+        $"Cannot cast from {CastSourceTypeName(sourceValue, sourceKind)} to {KindToTypeName(targetKind)}",
         asToken.Line, asToken.Column);
     }
   }
+
+  /// The name a cast diagnostic gives the SOURCE value. A String is named "String"
+  /// (not the generic "struct" its kind maps to), so the E3009 an invalid `"x" as Age`
+  /// produces is byte-identical to shv2's — both compilers name a String "String".
+  /// Every other aggregate (a declared struct, a function value) is named by its KIND,
+  /// matching shv2's tag-level `typeTagName`; a scalar (int/float/bool) has no managed
+  /// name and so is likewise named by kind, leaving the existing scalar-cast messages
+  /// (`Cannot cast from float to int`) unchanged.
+  private static string CastSourceTypeName(MaxonValue value, MaxonValueKind kind) =>
+    GetManagedTypeName(value) == StringTypeName ? StringTypeName : KindToTypeName(kind);
 
 
   private void ValidateTypeParameterConstraints(ExprResult lhs, ExprResult rhs, MaxonBinOperator op, Token opToken) {

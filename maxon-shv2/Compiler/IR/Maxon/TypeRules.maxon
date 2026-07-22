@@ -180,6 +180,59 @@ export function typeClassAdmits(required TypeClass, tag ValueTypeTag) returns bo
 	return typeClassesAgree(required, right: typeClassOf(tag))
 end 'typeClassAdmits'
 
+// ⭐ **A CAST BETWEEN A MANAGED AGGREGATE AND A SCALAR HAS NO CONVERSION (E3009).** `"x" as Age`,
+// `p as Age`, `f as Age`, and their reverses cross the pointer/scalar boundary in a single `as`, and
+// there is nothing for the cast to DO — a String pointer is not a number and cannot become one. So the
+// cast is rejected outright, exactly as the lossy `5.0 as int` is (`Parser.applyCast` → E3009), rather
+// than let through as a representational no-op — which typed the aggregate's pointer as the numeric
+// target and either miscompiled (a range check on a struct pointer) or was caught only downstream at
+// the next type-checked position.
+//
+// It is the ONE cast-legality rule stated over `TypeClass`, and it is DELIBERATELY narrow: a
+// scalar↔scalar `as` is a real conversion (int↔int no-op, int↔float promote/trunc, handled in
+// `applyCast`); an aggregate↔aggregate `as`, and any cast touching an opaque `T` (`typeParameter`) or an
+// unresolved type, are out of scope and left to the existing rules. The two directions are one rule — a
+// cast is symmetric in what it may cross — which is why both crossings are tested here at once.
+export function castCrossesAggregateScalarBoundary(source ValueTypeTag, target ValueTypeTag) returns bool
+	let sourceClass = typeClassOf(source)
+	let targetClass = typeClassOf(target)
+	let sourceCrossesToScalar = typeClassIsAggregate(sourceClass) and typeClassIsScalar(targetClass)
+	let targetCrossesToScalar = typeClassIsScalar(sourceClass) and typeClassIsAggregate(targetClass)
+	return sourceCrossesToScalar or targetCrossesToScalar
+end 'castCrossesAggregateScalarBoundary'
+
+// A managed AGGREGATE type class — a String (`text`), a struct or generic instance (`structRef`), or a
+// function value (`function`): a pointer, not a scalar. Exhaustive over `TypeClass`, so a new class
+// cannot slip through as a silent `false`.
+function typeClassIsAggregate(c TypeClass) returns bool
+	return match c 'c'
+		structRef gives true
+		text gives true
+		function gives true
+		boolean gives false
+		numeric gives false
+		unknown gives false
+		noValue gives false
+		typeParameter gives false
+	end 'c'
+end 'typeClassIsAggregate'
+
+// A SCALAR type class — a number (`numeric`: int/float/ranged-alias/ExitCode) or a `bool`. A scalar
+// fits in a register; the two classes an `as` may legally convert BETWEEN, and the two that make a
+// nonsense cast when crossed with an aggregate. Exhaustive over `TypeClass`.
+function typeClassIsScalar(c TypeClass) returns bool
+	return match c 'c'
+		numeric gives true
+		boolean gives true
+		structRef gives false
+		text gives false
+		function gives false
+		unknown gives false
+		noValue gives false
+		typeParameter gives false
+	end 'c'
+end 'typeClassIsScalar'
+
 // --- The COERCION SITES ---
 //
 // ⭐ **A COERCION SITE IS NOT A SYMMETRIC ONE, AND THE DIFFERENCE IS THE WHOLE OF THIS SECTION.**

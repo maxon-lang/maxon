@@ -242,6 +242,17 @@ export union ParseError implements Error
 	// a `returns Integer` function). Renders as E3005 with the spec's exact text — "Cannot return
 	// 'function' from function declared to return '{returnType}': …" — positioned at the `return`.
 	functionValueReturned(returnType String, line LineNumber, column ColumnNumber)
+	// An `as` cast between FUNDAMENTALLY-INCOMPATIBLE KINDS, where no conversion exists: a managed
+	// aggregate (a String, a struct, a function value) cast to or from a scalar number (`"x" as Age`,
+	// `p as Age`, `f as Age`, `n as SomeStructAlias`). Renders as E3009 — the SAME code the lossy
+	// `5.0 as int` gets, because it is the same fact (a cast that is not a legal conversion), and the
+	// same code the bootstrap emits — with the bootstrap's exact text (`Cannot cast from {src} to
+	// {tgt}`, 2-Parser.cs `ValidateCast`), positioned at the `as`. `src`/`tgt` are the two types'
+	// `typeTagName`s (`String`/`struct`/`function`/`int`), so the two compilers name the pair
+	// identically. Before this, `applyCast` let the cast through as a representational no-op, so the
+	// aggregate's POINTER flowed on typed as the numeric target and either miscompiled (a range check
+	// on a struct pointer) or was caught only downstream at the next type-checked position.
+	invalidCast(sourceType String, targetType String, line LineNumber, column ColumnNumber)
 	// P1.5-A1: a THROWING function referenced as a VALUE (`let f = risky`). A function type has no throws
 	// clause, so the binding would drop it and there is no indirect try-call to carry it back. Renders as
 	// E3101, positioned at the function name. `errorType` is the thrown enum's name (the callee's `throws
@@ -11064,6 +11075,16 @@ export type Parser
 	//     and the alias name a narrowing check needs rides the recorded site, not the value tag. When the
 	//     target is a ranged INT alias, that site is recorded so `InsertRangeChecks` guards / E3005s it.
 	function applyCast(value ValueId, targetType MaxonType, asTok Token) returns ValueId throws ParseError
+		// ⭐ REJECT A FUNDAMENTALLY-INCOMPATIBLE KIND CAST FIRST (E3009), before any conversion is chosen. A
+		// managed aggregate (String/struct/function) crossing to or from a scalar has no conversion; letting
+		// it reach the float/no-op branches below would emit a `promoteToFloat` or a range check on a POINTER.
+		// See `castCrossesAggregateScalarBoundary` and `ParseError.invalidCast`.
+		let sourceTag = self.tagOf(value)
+		let targetTag = maxonTypeTag(targetType)
+		if castCrossesAggregateScalarBoundary(sourceTag, target: targetTag) 'incompatibleKinds'
+			throw ParseError.invalidCast(typeTagName(sourceTag), targetType: typeTagName(targetTag), line: asTok.line, column: asTok.column)
+		end 'incompatibleKinds'
+
 		let sourceIsFloat = tagIsFloat(self.tagOf(value))
 		let targetIsFloat = self.typeIsFloatDomain(targetType)
 
