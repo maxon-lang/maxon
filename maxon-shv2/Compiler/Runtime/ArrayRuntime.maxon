@@ -153,11 +153,11 @@ end 'paddedByteArrayBlob'
 // check a negative INDEX at runtime rather than inheriting `ElementIndex`'s range), so the range has to be
 // re-asserted here. This guard is that assertion, in the one place shv2 can currently make it.
 //
-// ⚠ THE REFERENCE COMPILER, meanwhile, has no coherent answer: handed a negative resize it PANICS on an owned
-// array (`panic at Array.maxon:334: Array.resize: setLength OOB — reserve ensured capacity for newLength`,
-// exit 1) but silently publishes `count() == -2` for a byte-string literal, because its own growth check is
-// satisfied by the negative rdata sentinel and the assert is therefore never reached. Both measured against
-// the bootstrap. Aborting matches the half of its behaviour that acts.
+// ⚠ THE REFERENCE COMPILER once had no coherent answer here — it PANICKED on an owned array but silently
+// published `count() == -2` for a byte-string literal, because its negative rdata capacity sentinel satisfied
+// its own growth check and the assert was never reached. That bootstrap bug is FIXED as of `115fdcfc3`
+// (#102): it now panics uniformly for both storage strategies. shv2 aborts (this exit code) uniformly, which
+// agrees with the bootstrap's fixed behaviour on "a negative length is not an accepted value".
 
 // The error flag `__arr_get`/`__arr_set`/`__arr_first`/`__arr_last`/`__arr_pop`/`__arr_remove` throw on an
 // out-of-bounds index — the dual-register `errorReturn` flag (an error case's `ordinal + 1`, so 1 is
