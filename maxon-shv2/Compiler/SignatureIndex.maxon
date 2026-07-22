@@ -1045,6 +1045,17 @@ end 'singletonInteger'
 export typealias GenericInstanceIndexMap = Map with (ByteArray, GenericInstanceId)
 export typealias GenericAliasMap = Map with (ByteArray, GenericInstanceId)
 
+// The element type NAMES whose `Array with <name>` literal instance the sweep has ALREADY over-interned
+// (P1.7 slice 3). `internArrayLiteralAggregateInstances` runs once per file that materializes a
+// `[<identifier>…]` literal and over-interns `Array with <every declared struct/union>`; because the
+// struct/union tables ACCUMULATE across files, a naive re-walk re-interns every already-seen type at every
+// such file — O(files × types) allocations (each `arrayInstanceForNamedElement` builds a `MaxonTypeArray`,
+// a `MaxonType.named` and an instance key only to hit the interner and discard them). This set skips a name
+// whose instance already exists, so the FIRST intern of each `Array with <name>` — the one that assigns its
+// gid — happens in the identical file-and-iteration order it did before (the skipped calls were idempotent
+// no-ops that assigned nothing), leaving the emitted gids byte-identical while the interning is O(types).
+typealias ArrayLiteralElementNameSet = Set with ByteArray
+
 // ⭐ **THE GENERIC-INSTANCE INTERNER (P1.6-A)** — `Box with Integer` ⇒ a `GenericInstanceId`, with the
 // `(baseId, argTypes)` payload held OUT OF LINE (inlining args into `MaxonType` would make the union
 // recursively aggregate — E4014). Two instances with the same base and structurally equal args share
@@ -1327,6 +1338,10 @@ export type ProgramSignatures
 	// remaps each entry's args into `typeNames` before interning. Read by the parser to resolve a
 	// generic-alias call base and to check a generic instance's arity / managed args.
 	var genericInstances as GenericInstanceRegistry
+	// The element type names whose `Array with <name>` managed-literal instance has already been over-interned
+	// by an earlier file's sweep (P1.7 slice 3) — the dedup that keeps `internArrayLiteralAggregateInstances`
+	// O(types) rather than O(files × types). See `ArrayLiteralElementNameSet`.
+	var arrayLiteralElementsInterned as ArrayLiteralElementNameSet
 	// ⭐ Generic-instance TYPEALIAS name ⇒ its interned instance (P1.6-A) — `IntBox` ⇒ the giid for
 	// `Box with Integer`. THE door `Parser.parseQualifiedCall` resolves `IntBox.create` to `Box.create`
 	// through, and the one the instantiation checks read the base + args from. It carries no ids of its
@@ -1396,7 +1411,7 @@ export type ProgramSignatures
 	export var hash as ContentHash
 
 	export static function create() returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedTypeAliasMap.create(), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), enumTypes: EnumLayoutMap.create(), genericInstances: GenericInstanceRegistry.create(), genericAliases: GenericAliasMap.create(), innerAliases: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), hash: fnvOffsetBasis()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedTypeAliasMap.create(), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), enumTypes: EnumLayoutMap.create(), genericInstances: GenericInstanceRegistry.create(), arrayLiteralElementsInterned: ArrayLiteralElementNameSet.create(), genericAliases: GenericAliasMap.create(), innerAliases: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), hash: fnvOffsetBasis()}
 	end 'create'
 
 	// Fold ONE file's scanned declarations into the index. Called in SOURCE-PATH order, so the
@@ -2681,13 +2696,36 @@ export type ProgramSignatures
 	// so this is bounded registry entries — not codegen — and it leaves int-only-array programs' goldens untouched.
 	export function internArrayLiteralAggregateInstances()
 		_ = self.arrayInstanceForString()
+
+		// The struct/union tables ACCUMULATE across files, so a naive re-walk re-interns every already-seen
+		// element type at EVERY `[<identifier>…]`-bearing file — O(files × types) throwaway allocations. Once
+		// `arrayLiteralElementsInterned` holds every declared struct/union (the common shape: types declared,
+		// then used in literals) this whole pass is a single count compare; otherwise only the types NEW since
+		// the last such file are interned (`internArrayLiteralElement` skips the rest). The gid each `Array with
+		// <name>` receives is unchanged — a skipped name is an idempotent interner hit that assigns nothing.
+		if self.arrayLiteralElementsInterned.count() == self.structTypes.count() + self.enumTypes.count() 'allInterned'
+			return
+		end 'allInterned'
+
 		for (name, _) in self.structTypes 'eachStruct'
-			_ = self.arrayInstanceForNamedElement(name)
+			self.internArrayLiteralElement(name)
 		end 'eachStruct'
 		for (name, _) in self.enumTypes 'eachUnion'
-			_ = self.arrayInstanceForNamedElement(name)
+			self.internArrayLiteralElement(name)
 		end 'eachUnion'
 	end 'internArrayLiteralAggregateInstances'
+
+	// Over-intern `Array with <name>` for ONE managed-literal element type, unless an earlier file's sweep
+	// already did. The dedup keeps `internArrayLiteralAggregateInstances` O(types), not O(files × types); the
+	// skip elides only a redundant interner hit, never a gid assignment (the first intern of each name still
+	// happens in its original file-and-iteration order). See `ArrayLiteralElementNameSet`.
+	function internArrayLiteralElement(name ByteArray)
+		if self.arrayLiteralElementsInterned.contains(name) 'already'
+			return
+		end 'already'
+		_ = self.arrayInstanceForNamedElement(name)
+		self.arrayLiteralElementsInterned.insert(name)
+	end 'internArrayLiteralElement'
 
 	// --- Layout-descriptor sizing (P1.6-B1) ---
 	//
