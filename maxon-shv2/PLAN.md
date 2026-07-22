@@ -1695,13 +1695,24 @@ suite as its gate:
   joined `lowerOp`). Worked around in shv2 by a dedicated `lowerIndirectCall`.
 - **#72 — a helper storing into ~11 aliased `self` array-fields double-frees at shv2 self-compile time**
   (`__destruct_FuncSignature`). Forces shv2 to keep the per-body column reset inline. Same class as #70.
-- **#58 — a mixed-type `match … gives` internal-errors** (`E9001: Value cannot be null`, a C# null-ref, not
-  a clean diagnostic). shv2's side is E3005 (via #54 Slice C); correct bootstrap behavior mirrors it.
-- **#95 — a match/ternary EXPRESSION whose arms are function VALUES internal-errors** (`E9001: Cannot
-  determine function type from MaxonVarRefOp`, a C# throw, not a clean diagnostic — DISTINCT from #58's
-  null-ref). shv2 is strictly better: the P1.5 value-merge cluster rejects a mismatched function-value merge
-  with E2028 (ternary) / E3005 (match), so the bootstrap cannot serve as shv2's oracle for that form. Found
-  2026-07-22 by the value-merge reviewer. Fix = mirror shv2's whole-program merge signature check.
+- **✅ #58 — mixed-type `match … gives` crash → clean E3005 — CLOSED 2026-07-22** (main `9d0d88f3f`, C# suite
+  3051→3060/0, shv2 unaffected). The bootstrap's `ParseMatchExpression` reconciled arm kinds by widening but
+  left an INCOMPATIBLE pair unreconciled — the ill-typed value flowed downstream and crashed E9001 (an
+  unhandled cast, or the null-ref). Added the give-type-consistency check the ternary path already had (class
+  + aggregate disagreement → E3005, byte-identical to shv2); the review single-sourced the aggregate-conflict
+  + type-display decisions the match and ternary paths had duplicated.
+- **#95 — two function-VALUE arms of DIFFERENT signatures in a match/ternary EXPRESSION crash** (`E9001:
+  Cannot determine function type from MaxonVarRefOp`, at the `let` reading back the merged fn type). ⇒ **#58
+  PARTIALLY covered this**: function-vs-NON-function arms (`'int' vs 'function'`) are now clean E3005; the
+  two-function-value remainder still crashes (both `Function` kind, no aggregate, so the give-type check
+  passes — the crash is reading the merged fn signature, the SAME failure the bootstrap's ternary `let h = f
+  if c else g` has). shv2 rejects both cleanly (whole-program `pendingFnMergeChecks`). Fix = mirror shv2's
+  fn-signature merge in the bootstrap's match AND ternary read-back. Its own rung.
+- **#99 — a plain `as` cast to a non-numeric combination crashes** (`let s = "hi"; return s as ExitCode` →
+  `E9001: Unhandled cast combination: Struct → Integer` at `IsWideningCast`←`ValidateCast`, no match
+  involved). Should be the clean `E3009` unsafe-cast the numeric paths give. One-line fix (`IsWideningCast`'s
+  `_ => throw` → `_ => false` routes non-numeric combos to E3009), but it touches shared cast-validation and
+  wants its own red-before-green spec. Found 2026-07-22 during #58 (now unreachable THROUGH a match).
 - **#4i — E3097 (enum-accessor comparison) is fully defeated by any NARROWING `as` cast** (`c.rawValue as
   Ordinal` interposes a range-check value that hides the accessor; a WIDE cast does not). Key the rule on the
   QUESTION, not the producing-op identity. (shv2 does not emit E3097 yet — a future shv2 rule too.)
