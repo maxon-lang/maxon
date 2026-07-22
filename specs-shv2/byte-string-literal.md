@@ -625,11 +625,15 @@ end 'main'
 
 <!-- test: byte-string-literal.negative-resize-aborts -->
 
-A NEGATIVE `resize` is the one mutator that could write outside its buffer entirely. `resize(-2)` on a
-byte-string literal leaves the growth check satisfied (`-2 >= -2`), so nothing reallocates and nothing
-detaches, and the shrink then zeroes from `buffer + n·element_size` — an address BEFORE the buffer —
-straight into `.rdata`. It aborts instead: a length can never be negative, and a corrupt operation must
-never proceed (the `__arr_create` zero-element-size and `__arr_append` element-size-mismatch shape).
+A NEGATIVE `resize` is the one mutator that could write outside its buffer entirely, and the one the detach
+cannot rescue — detaching moves the write to a different allocation, it does not bring it back inside one.
+Without this guard, `resize(-2)` on a byte-string literal DOES detach (the detach at the head of the grow is
+unconditional), the growth check is then satisfied (`3 >= -2`) so nothing reallocates, and the shrink zeroes
+from `buffer + n·element_size` — two bytes BELOW the freshly allocated private buffer — over the allocation
+header. Measured with the guard stubbed out: the process exits 0, the leak gate stays green, `capacity()`
+reads 3 and `count()` publishes -2. It aborts instead: a length can never be negative, and a corrupt
+operation must never proceed (the `__arr_create` zero-element-size and `__arr_append` element-size-mismatch
+shape).
 ```maxon
 function main() returns ExitCode
 		var a = b"hey"

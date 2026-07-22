@@ -106,11 +106,18 @@ let AppendElementSizeMismatchExitCode = 72 as ParsedInt
 // The exit code `__arr_resize` diverges with when asked for a NEGATIVE length. A length is a count, so a
 // negative one is never a value the record may hold — and the reason this is an abort rather than a merely
 // cosmetic wrong answer is that the shrink path zeroes `[n·es, oldLen·es)` starting at `buffer + n·es`,
-// which for a negative `n` is an address BEFORE the buffer. On a byte-string literal that write lands in
-// read-only `.rdata` and faults; on an owned array it silently erases the `__mm_alloc` header sitting just
-// below the payload. It is also the one out-of-buffer write a DETACH cannot fix — detaching only moves the
-// write to a different allocation — so it is rejected here, by the same "a corrupt operation must never
-// proceed" guard `ElementSizeZeroExitCode`/`CapacityOverflowExitCode`/`AppendElementSizeMismatchExitCode` are.
+// which for a negative `n` is an address BEFORE the buffer, erasing the `__mm_alloc` header that sits just
+// below the payload. It is the one out-of-buffer write a DETACH cannot fix — detaching only moves the write
+// to a different allocation — so it is rejected here, by the same "a corrupt operation must never proceed"
+// guard `ElementSizeZeroExitCode`/`CapacityOverflowExitCode`/`AppendElementSizeMismatchExitCode` are.
+//
+// ⚠ A BYTE-STRING LITERAL IS NOT A SEPARATE CASE HERE, and it is worth saying because it USED to be: before
+// the COW slice the under-write landed in read-only `.rdata` and faulted loudly. It no longer does.
+// `__arr_resize` reaches its shrink through `__arr_grow`, whose FIRST op is the unconditional detach, so by
+// the time the zero range is computed the record is already on a private HEAP buffer and a literal corrupts
+// the allocator exactly like an owned array — QUIETLY. Measured with this guard stubbed out: `b"hey"` then
+// `resize(-2)` exits 0, the leak gate stays green, `capacity()` reads 3 (proving the detach fired) and
+// `count()` publishes -2. A louder failure mode became a silent one, which is why the guard is here.
 //
 // ⭐ THE CANONICAL CONTRACT ALREADY SAYS SO, IN A TYPE: `stdlib/Array.maxon`'s `resize(newLength ElementCount)`
 // takes `ElementCount = int(0 to u64.max)` (`:11`), so a negative length is not a value the operation accepts
@@ -120,9 +127,10 @@ let AppendElementSizeMismatchExitCode = 72 as ParsedInt
 // re-asserted here. This guard is that assertion, in the one place shv2 can currently make it.
 //
 // ⚠ THE REFERENCE COMPILER, meanwhile, has no coherent answer: handed a negative resize it PANICS on an owned
-// array (`Array.reserve: grow failed — minCapacity > cap guaranteed`, exit 1) but silently publishes
-// `count() == -2` for a byte-string literal, because its own growth check is satisfied by the negative rdata
-// sentinel and the assert is therefore never reached. Aborting matches the half of its behaviour that acts.
+// array (`panic at Array.maxon:334: Array.resize: setLength OOB — reserve ensured capacity for newLength`,
+// exit 1) but silently publishes `count() == -2` for a byte-string literal, because its own growth check is
+// satisfied by the negative rdata sentinel and the assert is therefore never reached. Both measured against
+// the bootstrap. Aborting matches the half of its behaviour that acts.
 let NegativeResizeExitCode = 73 as ParsedInt
 
 // The error flag `__arr_get`/`__arr_set`/`__arr_first`/`__arr_last`/`__arr_pop`/`__arr_remove` throw on an
