@@ -565,26 +565,53 @@ function buildMmDecref(module StdModule)
 	module.functions.push(func)
 end 'buildMmDecref'
 
+// The byte written over every freed payload. `0x3F` is chosen for what it does when a
+// use-after-free READS the dead memory it should not have: as a small integer it is a
+// conspicuous 63 (never the 0 a correct freshly-zeroed slot would hold), and as a POINTER a word
+// of it is `0x3F3F3F3F3F3F3F3F` — a non-canonical x64 address, so dereferencing it FAULTS rather
+// than silently reads. Either way the bug becomes loud at the read instead of invisible.
+let PoisonByte = 0x3F
+
 // `__mm_free(ptr)` — the death of a box.
 //
 // It reclaims NOTHING, and that is the honest shape of a bump allocator rather than a gap: there is
 // no free list for a slot to return to, so the memory stays where it is until the process exits.
-// What it does do is the part that is observable — drop the live count — which is what the leak
-// gate reads.
+// It does two observable things: drop the live count (which the leak gate reads), and **POISON the
+// payload**.
 //
-// ⭐ THIS IS WHERE THE DESTRUCTOR CASCADE LANDS AT P1.2. The header already carries the destructor
-// (`__mm_alloc` stored it), so the change is local: load `[header + HeaderDestructorOffset]`, and
-// if it is non-null, call it through `callIndirect` before reclaiming. It is NOT written now
-// because every struct at this rung is trivially owned, so the pointer is always 0 and the call
-// would be code that no test can execute — emitted, never taken, and never proven right. That is
-// the `mintPhi` failure exactly, and it is the reason this rung ships one op instead of three.
+// ⭐ **POISON-ON-FREE, ALWAYS ON (Workstream R / #108).** The bump allocator never reuses a slot, so
+// freed memory keeps its bytes intact until the process exits — which means a use-after-free reads
+// exactly the value it wrote before the free and is INVISIBLE to every test. Overwriting the payload
+// with `PoisonByte` the instant it dies turns that whole class loud: a read-after-free now returns 63
+// or faults on a poisoned pointer instead of the stale-but-correct bytes. This is deliberately not a
+// flag — it is unconditional, so the class cannot hide in a build nobody thought to enable it for, and
+// so the committed suite is a standing gate against it. **The size is in the header** (`__mm_alloc`
+// stored it at `HeaderSizeOffset`), so the poisoned range is exactly `[ptr, ptr + size)` — the payload,
+// not the header (a freed header is only ever consulted by double-free detection, which the count owns).
+// ⚠ **It pairs with the zeroing contract, and the pairing is why it must land BEFORE a recycling free
+// list:** today alloc always hands out fresh zeroed slab memory, so poison-on-free is never seen by a
+// later alloc. The day `__mm_free` returns a slot to a free list, the reused slot must be re-zeroed on
+// the way out of `__mm_alloc` (poison then zero), or the `[length, capacity)`-reads-zero invariant
+// breaks. See PLAN.md #108.
+//
+// ⭐ THE DESTRUCTOR CASCADE ALSO LANDS HERE AT P1.2 (still deferred): the header carries the destructor
+// (`__mm_alloc` stored it at `HeaderDestructorOffset`); loading it and calling it through `callIndirect`
+// before the poison is the local change. It is NOT written now — every struct at this rung is trivially
+// owned, so the pointer is always 0 and the call would be emitted-but-never-taken, the `mintPhi` failure
+// exactly.
 function buildMmFree(module StdModule)
 	var func = IrFunction.createFromStd(MmFreeName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry")
-	emitParams(module, block: entry, count: 1)
+	var poisonHeader = module.addBlock(func, label: b"psnh")
+	var poisonBody = module.addBlock(func, label: b"psnb")
+	let done = module.addBlock(func, label: b"done")
 
+	emitParams(module, block: entry, count: 1)
+	let ptr = 0 as ValueId
+
+	// Drop the live count — the one number the leak gate reads.
 	let countAddr = ids.mint()
 	module.appendOp(entry, op: StdOp.globalAddr(countAddr, label: MmAllocCountLabel))
 	let count = ids.mint()
@@ -594,7 +621,38 @@ function buildMmFree(module StdModule)
 	let lowered = ids.mint()
 	module.appendOp(entry, op: StdOp.binOp(lowered, lhs: count, rhs: oneConst, opcode: StdBinOpcode.sub, operandType: StdType.i64))
 	module.appendOp(entry, op: StdOp.storeIndirect(countAddr, offset: 0, valueId: lowered, valueType: StdType.i64))
-	module.setTerminator(entry, op: StdOp.retVoid)
+
+	// The payload size the alloc recorded in the header; the range to poison is `[ptr, ptr + size)`.
+	let header = emitHeaderBase(module, block: entry, ptr: ptr, ids: ids)
+	let size = ids.mint()
+	module.appendOp(entry, op: StdOp.loadIndirect(size, addrId: header, offset: HeaderSizeOffset, valueType: StdType.i64))
+
+	// A byte-granular fill loop (payload sizes are not all 8-multiples — a `b"hi"` buffer is 2 bytes).
+	// `size == 0` (an empty allocation) exits on the first compare, poisoning nothing.
+	let zero = ids.mint()
+	module.appendOp(entry, op: StdOp.const(zero, value: 0, valueType: StdType.i64))
+	module.setTerminator(entry, op: StdOp.branch(poisonHeader.id))
+
+	let i = ids.mint()
+	poisonHeader.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
+	entry.branchEdges.push(BranchEdge.create(poisonHeader.id, argIds: argsOf(zero)))
+	let atEnd = ids.mint()
+	module.appendOp(poisonHeader, op: StdOp.cmp(atEnd, lhs: i, rhs: size, pred: StdCmpPred.ge, operandType: StdType.i64))
+	module.setTerminator(poisonHeader, op: StdOp.condBranch(atEnd, thenBlockId: done.id, elseBlockId: poisonBody.id))
+
+	let dstAddr = ids.mint()
+	module.appendOp(poisonBody, op: StdOp.binOp(dstAddr, lhs: ptr, rhs: i, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	let poisonVal = ids.mint()
+	module.appendOp(poisonBody, op: StdOp.const(poisonVal, value: PoisonByte, valueType: StdType.i64))
+	module.appendOp(poisonBody, op: StdOp.storeIndirect(dstAddr, offset: 0, valueId: poisonVal, valueType: StdType.u8))
+	let one = ids.mint()
+	module.appendOp(poisonBody, op: StdOp.const(one, value: 1, valueType: StdType.i64))
+	let iNext = ids.mint()
+	module.appendOp(poisonBody, op: StdOp.binOp(iNext, lhs: i, rhs: one, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	module.setTerminator(poisonBody, op: StdOp.branch(poisonHeader.id))
+	poisonBody.branchEdges.push(BranchEdge.create(poisonHeader.id, argIds: argsOf(iNext)))
+
+	module.setTerminator(done, op: StdOp.retVoid)
 
 	module.functions.push(func)
 end 'buildMmFree'
