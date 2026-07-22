@@ -10484,43 +10484,47 @@ export type Parser
 			return self.promoteToFloat(value, opTok: asTok)
 		end 'intToFloat'
 
+		// ⭐ **A PER-INSTANCE `as` IS A CONVERSION, NOT A RE-TAG (P1.6-C).** It yields a DISTINCT result value
+		// of the target type and leaves the SOURCE untouched — because the source binding stays usable under
+		// its own identity (`let b = aTag as WB.Idx` must not corrupt `aTag`, which is still `WA.Idx`). A plain
+		// ranged-alias `as` stays the representational no-op below (no new value).
+		if self.castConvertsPerInstance(value, targetType: targetType) 'perInstanceCast'
+			return self.emitPerInstanceCastValue(value, targetType: targetType, asTok: asTok)
+		end 'perInstanceCast'
+
 		self.recordCastSite(value, targetType: targetType, asTok: asTok)
-		self.retagPerInstanceCast(value, targetType: targetType)
 		return value
 	end 'applyCast'
 
-	// ⭐ **A PER-INSTANCE `as` STAMPS or STRIPS the per-instance identity (P1.6-C).** Two directions, both a
-	// deliberate departure from a plain ranged alias's no-retag (whose identity is structural, not nominal):
-	//
-	//   • **STAMP** — `x as StrWrapper.Idx` retags the value to `named("StrWrapper.Idx")` so it carries that
-	//     instance's per-instance identity. A plain field read stamped this way becomes a genuine per-instance
-	//     value (`as-conversion`); re-stamping a per-instance source is fine — this is the "just stamp" that
-	//     sidesteps the bootstrap's E3010 "unneeded cast" quirk between same-range per-instance aliases.
-	//   • **STRIP** — `idx as ExitCode` / `idx as Integer` on a per-instance SOURCE and a non-per-instance
-	//     TARGET retags the value to the plain target, DECAYING its per-instance identity. Without this, the
-	//     value stays `named("…Idx")` and a symmetric coercion site (a `return`, an assignment) reads it as an
-	//     aggregate meeting a non-aggregate and rejects it — a per-instance Idx IS numeric and must decay, as
-	//     the oracle does.
-	//
-	// A cast whose SOURCE and TARGET are both non-per-instance leaves the value untouched (the existing
-	// representational no-op). The retag is IN PLACE (the int→int cast mints no new Std value); the source
-	// binding is not re-read as its old type in the corpus, so no aliasing is observed.
+	// Does this int→int `as` convert per-instance identity (P1.6-C) — either STAMPING a per-instance target
+	// onto the result (`x as StrWrapper.Idx`) or STRIPPING a per-instance source into a plain target
+	// (`idx as ExitCode`)? Only then does the cast mint a distinct value; a plain-to-plain `as` stays a no-op.
+	function castConvertsPerInstance(value ValueId, targetType MaxonType) returns bool
+		if maxonTypeTag(targetType) == ValueTypeTag.named and self.signatures.isPerInstanceAlias(self.internedName(typeNameIdOf(targetType))) 'stampTarget'
+			return true
+		end 'stampTarget'
+		return self.tagOf(value) == ValueTypeTag.named and self.signatures.isPerInstanceAlias(self.internedName(self.valueNameId(value)))
+	end 'castConvertsPerInstance'
+
+	// ⭐ **EMIT A PER-INSTANCE CAST AS A DISTINCT VALUE (P1.6-C).** The conversion is representationally a no-op
+	// (int→int), so its RESULT is `value + 0` — one op, minted with a FRESH ValueId typed as the target — which
+	// leaves the source ValueId's identity untouched (an in-place re-tag would corrupt `aTag` when a later use
+	// reads it as `WA.Idx`). Both directions ride it: STAMP (`x as StrWrapper.Idx`, result typed the per-instance
+	// alias, sidestepping the bootstrap's E3010 "unneeded cast" quirk) and STRIP (`idx as ExitCode`, result the
+	// plain target, so a per-instance Idx decays to the numeric it is). The extra op appears ONLY in per-instance
+	// programs, so existing goldens are byte-identical; `foldConstOperands` folds it to a single `binOpImm add
+	// 0`. The RESULT (not the source) is the range-check site, so a narrower ranged target still guards correctly.
 	//
 	// ⚠ The base-range compatibility check the spec names (`fooIdx as BarContainer.Idx` requires the SAME
 	// low/high) is inert at this rung — every inner alias is `int(0 to u64.max)` — and its diagnostic form is
 	// deferred with the first narrower inner range.
-	function retagPerInstanceCast(value ValueId, targetType MaxonType)
-		if maxonTypeTag(targetType) == ValueTypeTag.named and self.signatures.isPerInstanceAlias(self.internedName(typeNameIdOf(targetType))) 'stampTarget'
-			self.retypeValue(value, valueType: targetType)
-			return
-		end 'stampTarget'
-
-		// STRIP: a per-instance SOURCE decaying into a non-per-instance target retags to the plain target, so
-		// the value loses its per-instance identity and coerces like the ordinary integer it is.
-		if self.tagOf(value) == ValueTypeTag.named and self.signatures.isPerInstanceAlias(self.internedName(self.valueNameId(value))) 'stripSource'
-			self.retypeValue(value, valueType: targetType)
-		end 'stripSource'
-	end 'retagPerInstanceCast'
+	function emitPerInstanceCastValue(value ValueId, targetType MaxonType, asTok Token) returns ValueId
+		let result = self.mintValueOfType(targetType)
+		let zero = self.emitLiteral(0, valueType: MaxonType.integer, range: SourceRange.ofToken(asTok))
+		self.artifact.emitOp(self.currentBlock, op: MaxonOp.binOp(result, lhs: value, rhs: zero, op: MaxonBinOp.add), range: SourceRange.ofToken(asTok))
+		self.recordCastSite(result, targetType: targetType, asTok: asTok)
+		return result
+	end 'emitPerInstanceCastValue'
 
 	// Record a narrowing-check site for `value` when `targetType` is a ranged INT alias (P1.9). `block` is
 	// the CAST'S evaluation block (`self.currentBlock`), so the guard runs on the path the cast is on — an

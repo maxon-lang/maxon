@@ -253,3 +253,100 @@ end 'main'
 ```exitcode
 0
 ```
+
+### Cast preserves the source's identity
+
+An `as` between per-instance aliases is a CONVERSION: it yields a distinct value of the target
+type and leaves the SOURCE unchanged. So after `let bTag = aTag as WB.Idx`, `aTag` is still
+`WA.Idx` and remains usable everywhere `WA.Idx` is expected — the cast did not mutate it.
+
+<!-- test: cast-preserves-source -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Wrapper uses T
+	export typealias Idx = int(0 to u64.max)
+
+	export var value as T
+	export var tag as Idx
+
+	export static function create(value T, tag Idx) returns Self
+		return Self{value: value, tag: tag}
+	end 'create'
+
+	export function getTag() returns Idx
+		return self.tag
+	end 'getTag'
+
+	export function setTag(t Idx)
+		self.tag = t
+	end 'setTag'
+end 'Wrapper'
+
+typealias WA = Wrapper with Integer
+typealias WB = Wrapper with Integer
+
+function main() returns ExitCode
+	let a = WA.create(1, tag: 5)
+	let aTag = a.getTag()
+	let bTag = aTag as WB.Idx
+	var a2 = WA.create(9, tag: 0)
+	a2.setTag(aTag)
+	let check = a2.getTag()
+	if bTag == 5 'converted'
+		if check == 5 'preserved'
+			return 0
+		end 'preserved'
+	end 'converted'
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+
+### Cast does not launder the source's instance
+
+The `as` produces `bTag` (a `WB.Idx`), but `aTag` is STILL a `WA.Idx` — the cast is not an in-place
+retag. So `bTag` is accepted where `WB.Idx` is expected, while the SOURCE `aTag` passed to the same
+slot is the genuine cross-instance mismatch.
+
+<!-- test: error.cast-does-not-launder-source -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Wrapper uses T
+	export typealias Idx = int(0 to u64.max)
+
+	export var value as T
+	export var tag as Idx
+
+	export static function create(value T, tag Idx) returns Self
+		return Self{value: value, tag: tag}
+	end 'create'
+
+	export function getTag() returns Idx
+		return self.tag
+	end 'getTag'
+
+	export function setTag(t Idx)
+		self.tag = t
+	end 'setTag'
+end 'Wrapper'
+
+typealias WA = Wrapper with Integer
+typealias WB = Wrapper with Integer
+
+function main() returns ExitCode
+	let a = WA.create(1, tag: 5)
+	let aTag = a.getTag()
+	let bTag = aTag as WB.Idx
+	var b = WB.create(2, tag: 0)
+	b.setTag(bTag)
+	b.setTag(aTag)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/per-instance-typealias/error.cast-does-not-launder-source.test:32:2: argument type mismatch for 't': expected 'WB.Idx', got 'WA.Idx'
+```
