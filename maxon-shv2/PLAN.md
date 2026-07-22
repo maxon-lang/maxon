@@ -1674,9 +1674,16 @@ suite as its gate:
 - **#17 — two file-private `var`s of the same name alias into ONE `.data` slot** (`getA()+getB()` returns
   200 not 107): the name resolver is file-scoped but the global label is bare-name (`_globalLabels[name]`).
   Fix = file-qualify the global label in both emitters + the registry.
-- **#90 — a duplicate top-level `let`/`var` is silently first-wins (exit 0)** while a duplicate FUNCTION is
-  E3006 — inconsistent with itself (`ConstantDeclSet.From` uses `byName.TryAdd`). shv2 rejects E3006. Fix =
-  raise E3006 at the later decl.
+- **✅ #90 — duplicate top-level `let`/`var` → E3006 — CLOSED 2026-07-22** (main `8dab48de0`, C# suite 3048→3051/0,
+  shv2 1140/0 unchanged). Fixed in `2-Parser.cs` `CollectAndEvaluateTopLevelDecls` (a per-file
+  `HashSet<declaredValueNames>` gating the first-wins `byName` maps — kind-independent: a `let` and a `var`
+  share one storage key; per-file: cross-file homonyms untouched). Message byte-identical to shv2 ("duplicate
+  definition of 'X'"). The review also corrected the `error-codes.txt` E3006 doc the rung had falsified.
+  ⚠ **The value-vs-FUNCTION/TYPE cross-kind homonym (`let A` + `function A`) still coexists silently — in BOTH
+  compilers, consistently** — pre-existing, out of scope (a distinct rule if ever wanted).
+- **#98 — the C# bootstrap cannot `spec-test --target=wasm32-wasi`** (any test): `CompileTarget.parserOs`
+  throws `E9001 Unknown OS 'wasi'` before parsing. Bootstrap-wide, pre-existing; low-priority (the wasm oracle
+  is shv2 over `specs-shv2`, not the bootstrap). Found 2026-07-22 during #90.
 - **#46 — the whole-program mutating-parameter fixpoint does not converge** as the call graph grows,
   alternately demanding `let` (E3019) then `var` (E3077) on the SAME binding. Worked around in shv2 by a
   direct `branchEdges.push`. Fix = make `ParameterMutationAnalysisPass.SequentialFixpoint` converge.
