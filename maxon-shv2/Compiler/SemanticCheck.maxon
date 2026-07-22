@@ -652,7 +652,10 @@ end 'checkPerInstanceArgs'
 
 // The body of the per-instance argument check once the callee is known to declare an inner-alias parameter.
 // The receiver's instance alias re-qualifies each inner-alias parameter; the argument's own aggregate name
-// (its per-instance identity, or empty) is compared against it.
+// (its per-instance identity, or empty) is compared against it with the SAME `namedAggregatesConflict` rule
+// and `aggregateArgDisplay` wording `checkArgTypes` uses on its own `aggregateNameFor` result — a
+// per-instance alias IS a nominal aggregate here, so the two aggregate-argument checks stay one rule (a
+// future narrower-range compatibility rule lands in one place, not two).
 function checkPerInstanceArgsWith(project Project, func IrFunction, sig FuncSignature, argIds ValueIdArray, info InnerAliasParamInfo, callRange SourceRange, filePath FilePath)
 	// A method prepends `__self` at real position 0; the sweep records inner-alias members over the SOURCE
 	// parameters (no `__self`), so a method's real position i maps to source i - 1. A static factory has no
@@ -679,9 +682,9 @@ function checkPerInstanceArgsWith(project Project, func IrFunction, sig FuncSign
 			continue
 		end 'decays'
 		let expected = joinQualifiedName(receiverAlias, member: member)
-		if not got.equals(expected) 'wrongInstance'
+		if namedAggregatesConflict(expected, got: got) 'wrongInstance'
 			let paramName = try sig.paramNames.get(i) otherwise panic("checkPerInstanceArgsWith: paramNames.get OOB at {i}")
-			reportPositioned(project, code: ErrorCode.typeMismatch, message: "argument type mismatch for '{String.from(paramName)}': expected '{String.from(expected)}', got '{String.from(got)}'", line: callRange.line, column: callRange.column, filePath: filePath)
+			reportPositioned(project, code: ErrorCode.typeMismatch, message: "argument type mismatch for '{String.from(paramName)}': expected '{String.from(expected)}', got '{aggregateArgDisplay(got, tag: argTag)}'", line: callRange.line, column: callRange.column, filePath: filePath)
 			return
 		end 'wrongInstance'
 	end 'eachArg'
