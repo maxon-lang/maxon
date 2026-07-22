@@ -42,7 +42,7 @@ ladder tables further down. When a status here and the detail below disagree, th
 | **P1.0d** | complete the SCALAR CORE | ✅ | 126→355 | umbrella; slices below |
 | P1.0d.2 | `not`/`and`/`or` · bitwise · chars | ✅ | — | — |
 | P1.0d.3 | `a / 0` ⇒ clean panic | ✅ | 279→281 | — |
-| P1.0d.4 | floats (f64) + F1/F2/F3 number-type story | ◑ | →1249 | ✅ A (exact float literals) + ✅ C (`floor`/`ceil`/`round`/`sqrt`) merged 2026-07-22. REMAIN: **B** = #19 float RANGE CHECKS · **D** = float const-fold + an `i64↔f64` reinterpret · **A′** = `Parser.maxon` (`i64-min-literal`; thread the literal text into the 2 overflow diagnostics) |
+| P1.0d.4 | floats (f64) + F1/F2/F3 number-type story | ◑ | →1278 | ✅ A (exact float literals) · ✅ C (`floor`/`ceil`/`round`/`sqrt`) · ✅ D1 (`maxon-sharp` inverse bitcast `bitsToFloat`) · ✅ B (#19 float RANGE CHECKS) · ✅ A′ (`i64-min-literal` + literal-text overflow diagnostics + `-N` fold). **REMAIN: D2** = shv2 float const-fold (`let X = 1.0 + 2.0`), now UNBLOCKED by D1's bitcast — the LAST P1.0d.4 residual |
 | P1.0d.5a | top-level `let` | ✅ | 281→295 | — |
 | P1.0d.5b | top-level `var` (globals) | ✅ | 295→317 | — |
 | **P1.0r** | R1-core — allocator + refcounting runtime | ✅ | 355→357 | — |
@@ -1960,6 +1960,19 @@ suite as its gate:
   and did not fabricate a wasm one. (Related minor: `build --target=wasm32-wasi` on the bootstrap throws an
   unhandled `ArgumentException` in `GetOutputExtension` rather than a clean "unsupported target".) Found
   2026-07-22 by the P1.0d.4-D1 review.
+- **⭐ #115 — shv2 does NOT range-check a `main() returns ExitCode` return, so an out-of-`[0,255]` exit code is
+  a SILENT WRONG ANSWER.** `main` returning `id(0) - 50` exits **4294967246** (−50 as u32) on shv2 where the
+  bootstrap PANICS `Range check failed: value outside typealias 'ExitCode'` exit 1 (verified both, pure INT — no
+  float). ⚠ **This is an shv2 gap, not a bootstrap bug** — and it is NARROW: the P1.0d.4-B review confirmed a
+  USER int/float ranged return DOES panic cleanly, so only the `main`/`ExitCode` return path bypasses the guard
+  (likely the `mrt_start` exit path, which no rung has range-checked). PRE-EXISTING (B+A′ left the ExitCode
+  cascade byte-identical; reproduces with zero float), so it did not hold P1.0d.4 (the floats phase) — but it is
+  a real silent miscompile and a **strong candidate for the next rung**, being range-check-adjacent to the
+  P1.9 / `InsertRangeChecks` machinery. Found 2026-07-22 by the P1.0d.4-B review.
+- **#116 — the bootstrap ICEs on a negated radix literal `-0x10` / `-0b101`** (`E9001` "not in a correct
+  format" — its negated-literal path feeds a hex/binary token to a decimal parser) where **shv2 is RIGHT**
+  (`-0x10` → 16, `-0b101` → 5). A `maxon-sharp` bug; needs the full C# suite as its gate. Found 2026-07-22 by
+  the P1.0d.4-B review.
 
 ### ⚠ Measured debt — recorded with its trigger, NOT fixed (2026-07-22, P1.0d.4 A+C)
 
@@ -1972,7 +1985,7 @@ suite as its gate:
   case only empties `argsList`. shv2's own lowering does the identical thing (verified from emitted IR).
   Correctness-neutral and linear ⇒ debt, not a fix-now. **Trigger to revisit: any rung that makes parse
   allocation a bottleneck, or the self-host gate.**
-- **`bigMulPow10` + the digit accumulation are Θ(strides × limbs)** — quadratic in exponent and digit count,
+- **`bigMulPow` + the digit accumulation are Θ(strides × limbs)** — quadratic in exponent and digit count,
   **linear in practice** only because the real corpus tops out at 21 significant digits.
   **Trigger: a WIDER FLOAT TYPE.** binary128 pushes the decimal exponent 308→4932, the digit budget 768→~11,500
   and `MaxBigLimbs` 144→~1,700, growing both quadratic terms ~15× per dimension (~225×).
