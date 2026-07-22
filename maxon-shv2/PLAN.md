@@ -42,7 +42,7 @@ ladder tables further down. When a status here and the detail below disagree, th
 | **P1.0d** | complete the SCALAR CORE | ✅ | 126→355 | umbrella; slices below |
 | P1.0d.2 | `not`/`and`/`or` · bitwise · chars | ✅ | — | — |
 | P1.0d.3 | `a / 0` ⇒ clean panic | ✅ | 279→281 | — |
-| P1.0d.4 | floats (f64) + F1/F2/F3 number-type story | ◑ | →767 | #19 `f64→f32` narrowing · `floor`/`ceil`/`round` · float const-fold |
+| P1.0d.4 | floats (f64) + F1/F2/F3 number-type story | ◑ | →1249 | ✅ A (exact float literals) + ✅ C (`floor`/`ceil`/`round`/`sqrt`) merged 2026-07-22. REMAIN: **B** = #19 float RANGE CHECKS · **D** = float const-fold + an `i64↔f64` reinterpret · **A′** = `Parser.maxon` (`i64-min-literal`; thread the literal text into the 2 overflow diagnostics) |
 | P1.0d.5a | top-level `let` | ✅ | 281→295 | — |
 | P1.0d.5b | top-level `var` (globals) | ✅ | 295→317 | — |
 | **P1.0r** | R1-core — allocator + refcounting runtime | ✅ | 355→357 | — |
@@ -352,6 +352,57 @@ was missing grouping, `true`/`false`, `not`/`and`/`or`, block scoping, void func
 > A ranged `typealias Idx = int(…)` declared inside a generic type is NOMINALLY DISTINCT per instantiation: `WrapperA.Idx ≠ WrapperB.Idx` even when both are `Wrapper with Integer` — distinctness keyed on the INSTANCE-ALIAS NAME, not the type args. Referenced as `Instance.Idx`; cross-instance misuse → E3005; `as` converts between compatible per-instance aliases; a per-instance Idx DECAYS to plain int where a plain numeric is expected. The Idx is a scalar → erases to i64 before lowering, so NO codegen, no new IR op (P1.6-A's "front-end only" envelope). **DESIGN = Option B** — ride `MaxonType.named` with a qualified REGISTERED name, reusing the struct/boxed-union nominal-identity machinery (`namedAggregatesConflict`/`aggregateNameOf`), settled vs a new arm. The bootstrap is the behavior oracle (v1 mirrors it).
 > ⭐ **THE MODEL MISMATCH the implementer STOP-and-reported: `WrapperA` and `WrapperB` intern to ONE `GenericInstanceId` (keyed `(baseId,args)`) and method dispatch produces ONE shared `Wrapper.setTag` signature — so the alias NAME is NOT recoverable from a value's gid; it is a PARSE-TIME source fact.** Coordinator greenlit a parser-side `valueInstanceAlias` map (value→originating-alias-name, propagated through `Self`-returning methods, delivered per-function via `FunctionRangeChecks`) + a parse-time method-arg check; free-function syntactically-qualified params (`takeStrTag(t StrWrapper.Idx)`) keep the SemanticCheck route. Rejected: distinct gids (breaks descriptor/destructor dedup), a per-value IrFunction column (can't produce the EXPECTED name for a shared method), monomorphized signatures (breaks the shared-body thesis).
 > ### 🔴 THE FINDS (coordinator oracle-probing + review — the process working): **TWO reachable front-end wrong-answers the green suite hid, both FIXED:** (1) the `as`-cast RETAGGED ITS SOURCE in place → `let b = aTag as WB.Idx` corrupted `aTag`'s nominal type → a later valid use of `aTag` false-E3005'd; FIXED to emit a DISTINCT `value + 0` result (source preserved). (2) a per-instance value OVER-REJECTED on RETURN/reassignment/coercion instead of DECAYING to plain int (`return w.getTag()` from an `int` fn → false E3005 where the oracle exits 42); FIXED with ONE `aggregatesConflict` authority — the per-instance conflict fires ONLY when the TARGET is itself a per-instance alias (a per-instance source into a plain numeric decays; struct/union unaffected, caught by the tag check first). Optimizer REFUTED the implementer's "allocates nothing" claim (a REAL +2,505..+56,197 alloc regression: `Parser.create` minted 5 collections/construction + a per-call union box) → FIXED allocation-neutral (module-global shared-empty COW + a `hasInnerAliasParams()` gate), ~99.4% removed. Review traced the module-global COW invariant sound (all writes behind an is-identity guard) + consolidated the aggregate-conflict rule. Acceptance: the 5 canonical `per-instance-typealias.md` cases + bespoke `cast-preserves-source` / `error.cast-does-not-launder-source` / `return-decays-to-plain` / `reassign-decays-to-plain`. ⏭ **BOUNDED (matches the oracle, NOT a defect):** factory/constructor inner-alias args aren't nominally checked (`WB.create(tag: aWAIdx)` decays — the bootstrap does too) — a future strictness slice. **⇒ P1.6 IS COMPLETE. NEXT = P1.7 `Array` (= P1.6 ∘ P1.2), which also picks up the DEFERRED descriptor-`@40`/`funcAbs64InRdata` opaque-`T` runtime drop.**
+> ### ✅ **`P1.0d.4` SLICES A + C ARE CLOSED (2026-07-22, merged `b57395995` + `a307ae4ac`, 1175 → 1249/0 host) — EXACT float LITERALS and the `floor`/`ceil`/`round`/`sqrt` intrinsics. ⚠ P1.0d.4 STAYS ◑ — slices B, D and A′ remain (see the glance table).**
+>
+> **SLICE A — the literal decoder was returning WRONG ANSWERS AND HANGING THE COMPILER, and no test could see it.**
+> `parseFloatBits` applied the decimal exponent by repeated `*10` in an **i64**. `10^k` contains `2^k`, so:
+> `1.0e20` → wrapped garbage · `1.0e64` → **silently `0.0`** (`k ≥ 64` is exactly 0 mod 2^64) · **`1.0e63` → the
+> compiler SPINS FOREVER** (`10^63 ≡ 2^63 ≡ i64.min`, negative, so the `shiftUp` loop doubles a negative without
+> bound). Invisible because **`specs-shv2/` contained no float exponent literal at all** — the largest exponent
+> anywhere in `/specs` is `e3`. ⭐ **NOT A PORT, and this is the lesson:** v1's `NumberParsing.maxon:13-226` is
+> **byte-identical** to shv2's *including the bug* — shv2 inherited a defect by copying — and the bootstrap
+> sidesteps it entirely via .NET `double.Parse`. Neither reference had an algorithm to take. Replaced with
+> bounded-width base-2^32 limb magnitudes, a 768-significant-digit budget + a **sticky** bit feeding
+> round-to-nearest-even, `MaxBigLimbs = 144` enforced by a panicking `requireLimbBudget`; **subnormals and
+> underflow-to-zero added (neither existed)**; overflow decided by the CONVERTED VALUE, not a decimal estimate.
+> ⚠ **The independent review found a BLOCKER the suite was green over**: `sciExp` was clamped at a FIXED 100000,
+> but it competes with `decExp`, which moves **one per digit** — so a long enough digit run out-pulls the clamp
+> and flips the verdict BOTH ways. `0.<200001 zeros>1e999999999` (magnitude 1e999799997, astronomically past
+> `f64.max`) was **accepted and compiled to `0.0`**; the mirror case got a spurious E2011. Both confirmed against
+> the oracle; regression tests **proven to have teeth** by reintroducing the clamp. The review also deduped a
+> carry flush written THREE times (one spelling pushed UNMASKED) and **corrected the 768 bound's own
+> justification** — the claimed 752 is the width of `5^1075` ALONE, ignoring the odd significand up to `2^54-1`;
+> the true widest rounding boundary `(2^54-1)·2^-1075` needs **exactly 768**, so the budget has ZERO slack while
+> its stated reason would have justified shaving 16 digits off it.
+>
+> **SLICE C — `floor`/`ceil`/`round`/`sqrt` across 3 tiers and 5 targets.** x64 `roundsd 66 0F 3A 0B /r imm8`
+> (floor `01`, ceil `02`, round `00`) through a NEW `encodeRoundsdRegReg` — a three-byte opcode plus a trailing
+> imm8 that `encodeSseRegReg` structurally cannot express; `sqrtsd` on the existing path; arm64
+> `frintm`/`frintp`/`frintn`/`fsqrt`; wasm `f64.floor`/`ceil`/`nearest`/`sqrt`. **`round` is ties-to-EVEN** on all
+> three targets — both references agree and `specs/round.md`'s `round.halfway` pins `round(2.5) == 2`, so the bare
+> hardware instruction is already correct and **no correction layer was added**. Took the bootstrap's plain
+> immediates, **left** v1's `0x08/0x09/0x0A` (the extra bit is the Precision Mask: changes no value, and shv2
+> reads no MXCSR flag). ⚠ **shv2's x64 baseline moves SSE2 → SSE4.1 HERE AND NOWHERE ELSE.** The review found the
+> `StdUnaryOpcode → FloatRoundMode` mapping **FORKED** across the two isels — with the arm64 comment *asserting*
+> the property the code lacked — where respelling one arm makes x64 silently compute `floor` for `ceil`, a wrong
+> answer and not a build break, and asymmetrically so because **arm64's goldens can be regenerated on no host we
+> have**; un-forked into `floatRoundModeFor`. It also byte-verified the encoder in the register range the suite
+> **structurally cannot reach** (committed tests only touch xmm0-xmm2, so REX on `roundsd` was untested).
+>
+> ⇒ **REMAINING for P1.0d.4: slice B** (float RANGE CHECKS — #19 proper; the oracle already settles the rule by
+> running: compile-time E3005 for a literal, a runtime panic guard for a non-literal, exactly the int rule P1.9
+> ruled — shv2 simply never built the float arm, and the parser filters float aliases out at ONE place,
+> `Parser.maxon:5052-5059`; **v1 HAS a float arm worth porting**, including that `0 to N` unsigned folding is
+> ineligible for floats because IEEE ordering ≠ unsigned ordering — but **do NOT port v1's `f32.min`/`f32.max`,
+> which are garbage ≈7.97e74 where shv2's are correct**). **Slice D** (float const-fold; the guard's stated
+> reason — "needs software IEEE-754" — is wrong: the real blocker is that shv2 has no `i64↔f64` **reinterpret**,
+> which is ~1 instruction on each of 5 targets and also unblocks `stdlib/PrimitiveExtensions.maxon:32`).
+> **Slice A′** (`Parser.maxon`: `i64-min-literal` — `parseIntLiteral` passes `negated: false` unconditionally at
+> `:16233`, wrongly rejecting `-9223372036854775808`; and thread the literal TEXT into `integerOverflow` /
+> `floatLiteralOverflow`, which carry only `(line, column)` so `Queries.maxon` cannot render the oracle's
+> message — 5 corpus cases blocked on it, and the tempting shortcut of re-deriving the text from `(line,column)`
+> at render time was correctly REFUSED as re-deriving a fact the throw site held).
+
 > ### ◑ **`P1.7` Slice 4 — Array `.slice`/`.append`/`.clone` (trivial elements) — CLOSED (2026-07-22, merged `3c65ccde2`, rebased over parallel maxon-sharp #90 → 1140 → 1162/0). ⭐ THIS IS THE LAST BUILDABLE P1.7 SLICE — P1.7 stays ◑ (the opaque-`T` reloc is deferred to a generics-depth rung; the borrow-on-get UAF is a user thesis decision).**
 > `.slice(start, endIndex:)` (throwing, `end>length OR start>end`), `.clone()` (= `slice(0,length)`), `.append(other)` (reserve-once + block-copy, `other` preserved) — **EAGER INDEPENDENT COPIES — but this is an INTERIM. ⚠⚠ CORRECTION (user ruling 2026-07-22): COW IS WANTED — "slices should be nearly free". The earlier "NO COW is the shv2 departure" framing was WRONG and is retracted.** Eager-copy is behavior-CORRECT (the `slice-cow-modify-*` specs test only INDEPENDENCE, which disjoint buffers give) but O(n)/slice; **COW is an IMMEDIATE P1.7 RESIDUAL — build NEXT, not a future defer (user ruling 2026-07-22: "worked in as early as possible; a residual if it can be implemented immediately"). It CAN: mechanism A (refcount the COW-shared record) has NO deferred prerequisite** — shv2's MM header already carries the refcount slot + `__mm_decref` frees only the last owner; the only missing piece is `__mm_incref`, which `MmRuntime.maxon` explicitly anticipates re-adding "when there's a caller" — COW IS that caller (the sanctioned "refcount only where escape/sharing requires it"). Eager-copy stays as the correct fallback until COW lands, so P1.7 is ◑ (Slice 4 has this residual). The bootstrap's `capacity=-1/-2` view sentinels + `maxon_cow_check` (detach-on-write) are the reference to PORT this time. See the COW design + the A-vs-B fork in the residual entry. Shared `emitArrayRangeCopy` (slice+clone) + the one `emitForwardCopy` block-copy builder (also used by grow/remove). Optimizer: allocation-neutral (inert on the array-free corpus). **⭐ MANAGED slice/append/clone DEFERRED** (a distinct mechanism — needs a managed-value deep-clone primitive `__str_clone`/`__struct_clone` that P1.2 deferred; `append-preserves-originals` forbids moving, and a raw pointer copy would double-free) → cleanly REJECTED (E2015 `requireTrivialArrayElementForCopy`); the 5 managed cases disabled with a P1.8 reason.
 > ### 🔴 THE FINDS (independent review + a coordinator bounds-hardening pass): **(1) `__arr_append` CROSS-STRIDE byte over-read — the element_size 8-vs-1 residual biting through `.append`**: a word-array (`element_size=8`) `.append(b"…")` (byte-packed `element_size=1`) — same static type — blitted at the wrong stride (read "AB" as one word + past the rdata blob). FIXED: abort exit 72 on `dest.element_size != src.element_size` (a safe stopgap; the proper fix is the element_size unification / a widening append). **(2) SYSTEMIC negative-index OOB read/write** — every accessor bounds-checked only `index >= length` (signed), so a NEGATIVE index slipped through → `[10,20,30].get(-1)` returned 0 (garbage), `.set(-1)`/`.insert(-1)` wrote before the buffer. Pre-existing since Slice 1 (shv2's `StdCmpPred` has no unsigned compare). **The coordinator FIXED it before merge** (a live OOB read/write is a wrong-answer we own): single-homed `emitIsNegative`/`emitIndexOutOfRange` (`index<0 OR index>=length`) across get/set/remove/slice → throw; `insert` CLAMPS a negative index to 0 (matching `stdlib/Array.maxon`'s documented "clamps to [0,count]" — making it throw would fire E3057 on 20+ existing insert specs); 6 pinned `arrays.md` negative-index tests (1156→1162/0). **⇒ SPEC PORT (Slice 4):** `arrays.md` 14 trivial slice/append/COW + 6 negative-index; `array-clone-element-size.md` 2. **RESIDUALS (named):** managed slice/append/clone (deep-clone primitive → P1.8); byte-string↔word `.append` widening (the abort-72 makes the incoherent case safe; the real fix is element_size unification); ⚠ **`let`-receiver mutator asymmetry** — array mutators (`.push`/`.set`/`.append`) silently mutate a `let` array whereas `String.append` on a `let` is E3019 (pre-existing, uniform — a coordinator/user ruling). **⇒ P1.7's BUILDABLE work is COMPLETE (all four slices' trivial + concrete-managed cores landed → 1011→1162/0, +151). P1.7 stays ◑ for the two deferrals below.**
@@ -1881,6 +1932,40 @@ suite as its gate:
 - **#34 — union `E2026`/`E2046` say "enum"** (a hardcode oversight — the bootstrap's own E3034 IS
   `IsUnion`-conditional) where shv2 says "union" via `EnumLayout.kindWord()`. Nothing pins either; align the
   bootstrap's wording, or author an shv2 spec pinning "union".
+- **#109 — `sqrt(true)` CRASHES the bootstrap with an internal `E9001` + a C# stack trace**
+  (`LowerUnaryFloat: unexpected input type StdBool`) where a positioned type diagnostic belongs. shv2 answers
+  `E3005: 'sqrt' requires a number, but its argument is bool`. **shv2 is right; the oracle leaks an internal
+  failure.** Found 2026-07-22 by the P1.0d.4-C review.
+- **#110 — the bootstrap CRASHES with `E9001: all FP registers occupied`** on a 20-simultaneously-live-float
+  probe that shv2 compiles correctly (returns 255, matching wasm). A register-allocator limit surfacing as an
+  internal error rather than a spill. Found 2026-07-22 by the P1.0d.4-C review.
+- **#111 — the bootstrap rejects `int(-9223372036854775808 to 0)` as a range bound** where shv2 accepts it.
+  Noticed incidentally by the P1.0d.4-A review; needs the full C# suite as its gate.
+- **#112 — malformed-exponent wording**: `1.5e1_0` gives shv2 `E2007 Unexpected end of input` vs the
+  bootstrap's `E2001 unexpected token: '_0'`. Both REJECT, so behaviour agrees; only the message differs.
+
+### ⚠ Measured debt — recorded with its trigger, NOT fixed (2026-07-22, P1.0d.4 A+C)
+
+- **A payload-free union case STILL HEAP-ALLOCATES, in BOTH codegens — so the cost SURVIVES SELF-HOSTING.**
+  `parseCallNamed` constructs **two** such boxes per parsed call — `ReceiverArg.none` **and**
+  `ConstructorInstance.none` on the same line ([Parser.maxon:15507](maxon-shv2/Compiler/Parser.maxon#L15507);
+  `ReceiverArg.none` also at `:12786`) — costing 174/310/582/1,126/2,214/**4,390** allocations across rungs 0-5,
+  **LINEAR** (increments 68/136/272/544/1088 double exactly), 0.042 % of rung-5. Bootstrap side:
+  `MaxonToStandardConversion.cs:533-541` calls `EmitAlloc(8 + maxPayload*8)` **unconditionally** — the zero-arg
+  case only empties `argsList`. shv2's own lowering does the identical thing (verified from emitted IR).
+  Correctness-neutral and linear ⇒ debt, not a fix-now. **Trigger to revisit: any rung that makes parse
+  allocation a bottleneck, or the self-host gate.**
+- **`bigMulPow10` + the digit accumulation are Θ(strides × limbs)** — quadratic in exponent and digit count,
+  **linear in practice** only because the real corpus tops out at 21 significant digits.
+  **Trigger: a WIDER FLOAT TYPE.** binary128 pushes the decimal exponent 308→4932, the digit budget 768→~11,500
+  and `MaxBigLimbs` 144→~1,700, growing both quadratic terms ~15× per dimension (~225×).
+- **⭐ A TREE-WIDE TENSION BETWEEN TWO PROJECT RULES, measured and left for a user decision.** The bootstrap
+  forms a jump table only for **≥4 dense, individually-named** match arms
+  (`JumpTableFormationPass.cs:12,55,59` — `Threshold = 4`, ordinals dense from 0), so **any `to` range arm
+  demotes a whole match to a linear compare chain** (probe: 9 named arms → a 9-case `x64.jump_table`; the same
+  enum with two range arms → a linear `cmp` chain). CLAUDE.md's *"Consolidate redundant match arms"* rule
+  therefore systematically demotes jump tables across this compiler. Not acted on: **whether that rule wants a
+  carve-out for hot dispatch matches is the user's call, not a rung's.**
 
 ---
 
