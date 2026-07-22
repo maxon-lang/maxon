@@ -39,6 +39,14 @@ let TrivialElementDestroy = 0 as ParsedInt
 // runtime guard so a zero cannot silently make `__arr_grow` allocate a zero-byte buffer and corrupt.
 let ElementSizeZeroExitCode = 70 as ParsedInt
 
+// The exit code `__arr_grow` diverges with when `capacity·element_size` overflows i64. Without the guard a
+// large `reserve`/`resize` wraps the byte count to a small (or zero) value, `__mm_alloc` hands back a
+// buffer far too small for the capacity the record now claims, and the next element write runs off its end
+// — a silent heap overflow. Aborting is what the reference compiler does (`__ManagedMemory: realloc size
+// must be > 0`); this is the same guard, one arithmetic step earlier so it also catches a wrap to a small
+// NON-zero value. It is the capacity twin of `ElementSizeZeroExitCode`: both stop a corrupt allocation.
+let CapacityOverflowExitCode = 71 as ParsedInt
+
 // The error flag `__arr_get`/`__arr_set`/`__arr_first`/`__arr_last`/`__arr_pop`/`__arr_remove` throw on an
 // out-of-bounds index — the dual-register `errorReturn` flag (an error case's `ordinal + 1`, so 1 is
 // `ArrayError.indexOutOfBounds`, ordinal 0). `try … otherwise` only tests `flag != 0`, so any nonzero
@@ -98,6 +106,19 @@ let ArrayRuntimePrefix = b"__arr_"
 export function isArrayRuntimeCallee(callee ByteArray) returns bool
 	return bytesStartWith(callee, prefix: ArrayRuntimePrefix)
 end 'isArrayRuntimeCallee'
+
+// The THROWING array accessors — `get`/`set`/`first`/`last`/`pop`/`remove` return via the dual-register
+// `errorReturn` ABI and can throw `ArrayError.indexOutOfBounds`, so a call to one MUST become a `tryCall`
+// (it is under a `try`, which `rewriteLastCallToTryCall` converts). SemanticCheck reads THIS predicate to
+// report E3057 on a bare `call` to one — the same "throwing call needs `try`" rule it applies to a user
+// function, which its blanket compiler-internal skip would otherwise hide. Without it the plain call reads
+// only the value register and drops the error flag, so an out-of-bounds `get` silently returns 0 (a wrong
+// answer, and a divergence from the reference compiler, which rejects it). THE ONE home of "which array
+// callee throws": `Parser.dispatchArrayMethod` emits exactly these six through its throwing path, and the
+// two lists name the same six `Arr*Name` constants so they cannot drift.
+export function isThrowingArrayRuntimeCallee(callee ByteArray) returns bool
+	return callee.equals(ArrGetName) or callee.equals(ArrSetName) or callee.equals(ArrFirstName) or callee.equals(ArrLastName) or callee.equals(ArrPopName) or callee.equals(ArrRemoveName)
+end 'isThrowingArrayRuntimeCallee'
 
 // A byte width used to shift a byte into (or out of) its position in a little-endian element word. `i*8`
 // is the bit offset of element byte `i`; `BitsPerByte` names the 8.
@@ -473,6 +494,8 @@ function buildArrGrow(module StdModule)
 
 	var entry = module.addBlock(func, label: b"entry")
 	var grow = module.addBlock(func, label: b"grow")
+	var sizeOverflow = module.addBlock(func, label: b"overflow")
+	var alloc = module.addBlock(func, label: b"alloc")
 	var freeOld = module.addBlock(func, label: b"freeold")
 	var publish = module.addBlock(func, label: b"publish")
 	let done = module.addBlock(func, label: b"done")
@@ -486,18 +509,32 @@ function buildArrGrow(module StdModule)
 	let enough = emitCmp(module, block: entry, a: capacity, b: required, pred: StdCmpPred.ge, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(enough, thenBlockId: done.id, elseBlockId: grow.id))
 
-	// grow: pick the new capacity, allocate the new buffer, and copy the live bytes forward.
+	// grow: pick the new capacity and verify `newCap·es` does not overflow the byte count — a wrapped small
+	// value would under-allocate and let the next write run off the buffer (a heap overflow). `es >= 1`
+	// (`__arr_create` diverges on a 0 element size), so the round-trip division is safe and equals `newCap`
+	// exactly when the multiply did not wrap.
 	let newCap = ids.mint()
 	module.appendOp(grow, op: StdOp.call(newCap, callee: ArrGrownCapName, args: twoArgs(capacity, second: required)))
 	let es = emitLoadField(module, block: grow, arr: arr, offset: ArrElementSizeOffset, ids: ids)
 	let newBytes = emitBin(module, block: grow, a: newCap, b: es, opcode: StdBinOpcode.mul, ids: ids)
-	let zeroDtor = emitConst(module, block: grow, value: 0, ids: ids)
+	let roundTrip = ids.mint()
+	module.appendOp(grow, op: StdOp.div(roundTrip, lhs: newBytes, rhs: es))
+	let overflowed = emitCmp(module, block: grow, a: roundTrip, b: newCap, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(grow, op: StdOp.condBranch(overflowed, thenBlockId: sizeOverflow.id, elseBlockId: alloc.id))
+
+	// overflow: abort — a corrupt allocation must never be published (`__arr_create`'s zero-size guard shape).
+	let overflowCode = emitConst(module, block: sizeOverflow, value: CapacityOverflowExitCode, ids: ids)
+	module.appendOp(sizeOverflow, op: StdOp.osExit(overflowCode))
+	module.setTerminator(sizeOverflow, op: StdOp.retVoid)
+
+	// alloc: allocate the new buffer and copy the live bytes forward.
+	let zeroDtor = emitConst(module, block: alloc, value: 0, ids: ids)
 	let newBuf = ids.mint()
-	module.appendOp(grow, op: StdOp.call(newBuf, callee: MmAllocName, args: twoArgs(newBytes, second: zeroDtor)))
-	let oldBuf = emitLoadField(module, block: grow, arr: arr, offset: ArrBufferOffset, ids: ids)
-	let oldLen = emitLoadField(module, block: grow, arr: arr, offset: ArrLengthOffset, ids: ids)
-	let oldBytes = emitBin(module, block: grow, a: oldLen, b: es, opcode: StdBinOpcode.mul, ids: ids)
-	var afterCopy = emitForwardCopy(module, func: func, cur: grow, dest: newBuf, src: oldBuf, byteCount: oldBytes, ids: ids)
+	module.appendOp(alloc, op: StdOp.call(newBuf, callee: MmAllocName, args: twoArgs(newBytes, second: zeroDtor)))
+	let oldBuf = emitLoadField(module, block: alloc, arr: arr, offset: ArrBufferOffset, ids: ids)
+	let oldLen = emitLoadField(module, block: alloc, arr: arr, offset: ArrLengthOffset, ids: ids)
+	let oldBytes = emitBin(module, block: alloc, a: oldLen, b: es, opcode: StdBinOpcode.mul, ids: ids)
+	var afterCopy = emitForwardCopy(module, func: func, cur: alloc, dest: newBuf, src: oldBuf, byteCount: oldBytes, ids: ids)
 
 	// afterCopy: free the OLD buffer if it existed, then publish the new one.
 	let zero = emitConst(module, block: afterCopy, value: 0, ids: ids)

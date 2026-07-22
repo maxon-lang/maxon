@@ -275,6 +275,20 @@ export function lowerMaxonToStd(maxonModule MaxonModule, project Project) return
 	return MaxonToStdLowering.create(maxonModule, project: project).lower()
 end 'lowerMaxonToStd'
 
+// The label guard shared by `lowerRuntimeCall` (a plain `call`) and the compiler-internal arm of
+// `lowerTryCall` (a throwing `tryCall`): a runtime entry point is declared by nothing, so there is no
+// signature to slot a label against — a label would silently fill the position it was WRITTEN in, a wrong
+// answer with no diagnostic anywhere. `Parser.emitRuntimeCall` builds an all-empty label column, so a
+// label here means someone taught the parser to write one. It panics at the one place that could still
+// see it. ONE home so the non-throwing and throwing runtime-call paths cannot drift on this rule.
+function requireRuntimeCallPositional(callee ByteArray, argLabels ByteArrayArray)
+	for label in argLabels 'eachLabel'
+		if not label.isEmpty() 'labelled'
+			panic("requireRuntimeCallPositional: the runtime call to '{String.from(callee)}' carries the argument label '{String.from(label)}' — a runtime entry point is declared by nothing, so there is no signature to slot a label against and the argument would silently fill the position it was WRITTEN in. Runtime calls are positional: see Parser.emitRuntimeCall")
+		end 'labelled'
+	end 'eachLabel'
+end 'requireRuntimeCallPositional'
+
 type MaxonToStdLowering
 	var maxonModule as MaxonModule
 	var stdModule as StdModule
@@ -783,12 +797,7 @@ type MaxonToStdLowering
 	// than the one it named. That is a wrong answer with no diagnostic anywhere, so it panics at the
 	// one place that could still see it.
 	function lowerRuntimeCall(result ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, dstBlock IrBlock)
-		for label in argLabels 'eachLabel'
-			if not label.isEmpty() 'labelled'
-				panic("lowerRuntimeCall: the call to '{String.from(callee)}' carries the argument label '{String.from(label)}' — a runtime entry point is declared by nothing, so there is no signature to slot a label against and the argument would silently fill the position it was WRITTEN in. Runtime calls are positional: see Parser.emitRuntimeCall")
-			end 'labelled'
-		end 'eachLabel'
-
+		requireRuntimeCallPositional(callee, argLabels: argLabels)
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: callee, args: args))
 	end 'lowerRuntimeCall'
 
@@ -1210,11 +1219,7 @@ type MaxonToStdLowering
 	// construction, so a label would silently mis-slot.
 	function lowerTryCall(result ValueId, errorFlag ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, dstBlock IrBlock)
 		if isCompilerInternalCallee(callee) 'compilerOwnTryCall'
-			for label in argLabels 'eachLabel'
-				if not label.isEmpty() 'labelled'
-					panic("lowerTryCall: the throwing runtime call to '{String.from(callee)}' carries the argument label '{String.from(label)}' — a runtime entry point has no signature to slot a label against; runtime calls are positional (see Parser.emitRuntimeCall)")
-				end 'labelled'
-			end 'eachLabel'
+			requireRuntimeCallPositional(callee, argLabels: argLabels)
 			self.stdModule.appendOp(dstBlock, op: StdOp.tryCall(result, errorFlagId: errorFlag, callee: callee, args: args))
 			return
 		end 'compilerOwnTryCall'

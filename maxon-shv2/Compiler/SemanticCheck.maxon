@@ -549,6 +549,17 @@ end 'requireAsyncScalarParams'
 // call made without `try`). The `tryCall` path skips this: it IS the `try`.
 function validatePlainCall(project Project, func IrFunction, opIndex OpIndex, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, throwsMap FuncThrowsMap, escapeSummary ParamEscapeSummary)
 	validateCall(project, func: func, opIndex: opIndex, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, escapeSummary: escapeSummary)
+	// A THROWING array accessor (`__arr_get`/`__arr_set`/`__arr_first`/`__arr_last`/`__arr_pop`/`__arr_remove`)
+	// reaching here as a plain `call` — not a `tryCall` — was written WITHOUT a `try`, so its error flag would
+	// be silently dropped and an out-of-bounds read would return a dummy 0 (a wrong answer). It is a
+	// compiler-internal callee, so the blanket skip below would hide it; the same E3057 "throwing call needs
+	// try" rule a user function gets is applied here first. A correctly `try`ed accessor is a `tryCall` and
+	// never reaches `validatePlainCall`.
+	if isThrowingArrayRuntimeCallee(callee) 'throwingArrayAccessor'
+		let callRange = project.opRanges.get(opIndex)
+		reportPositioned(project, code: ErrorCode.throwingFunctionRequiresTry, message: "throwing array accessor requires try: wrap it as `try …(…) otherwise …` — a bare call drops the out-of-bounds error", line: callRange.line, column: callRange.column, filePath: func.sourceFilePath)
+		return
+	end 'throwingArrayAccessor'
 	if isCompilerInternalCallee(callee) 'internal'
 		return
 	end 'internal'
