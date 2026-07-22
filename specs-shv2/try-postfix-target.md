@@ -1,0 +1,337 @@
+---
+feature: try-postfix-target
+status: experimental
+keywords: [try, otherwise, postfix, chain, method, throws, Error]
+category: error-handling
+---
+
+# `try` Binds the OUTERMOST Call of a Postfix Chain
+
+## Documentation
+
+`try <expr>` catches the error of the call the expression as a whole performs —
+the **last** call it evaluates, not the first one it mentions. In
+
+```maxon
+let s = try make().slice(1, endIndex: 3) otherwise return 9
+```
+
+the throwing operation is `.slice(…)`; `make()` is merely how its receiver was
+produced. The `try` therefore binds to `slice`, and `make` not throwing is not an
+error — it is not the thing being tried.
+
+The rule is uniform over the whole postfix family:
+
+| expression | the call `try` binds to |
+|---|---|
+| `try f()` | `f` |
+| `try f().g()` | `g` |
+| `try f().g().h()` | `h` |
+| `try f(g())` | `f` — `g` is an ARGUMENT, evaluated before the call `try` guards |
+| `try obj.field.method()` | `method` |
+
+Because the binding is to the outermost call, the non-throwing check (**E3055**)
+asks about *that* call. `try make().count()` is rejected — `count` cannot fail —
+even though `make` is chained in front of it, and `try th().count()` is rejected
+even though `th` throws, because the `try` does not guard `th`.
+
+A builtin (`count`, `capacity`, `isEmpty`, `push`, `print`, `String.append`, …)
+cannot fail either, so a `try` on one is E3055 exactly as a `try` on a
+non-throwing user function is. Only a `throws` function and the bounds-checked
+array accessors (`get`/`set`/`first`/`last`/`pop`/`remove`/`slice`) can be tried.
+
+### Ownership on the error edge
+
+`try make().slice(…)` produces an owned temporary — the array `make()` returned —
+that the `try` does NOT own: it is the receiver, and it belongs to the enclosing
+statement. It must be released exactly once whichever edge is taken, including
+the error edge, where the `try`'s own result register is null.
+
+### One `try`, one throwing call
+
+A `try` opens exactly ONE error edge, so exactly one call in its chain may throw
+— the outermost one. A chain with a throwing call *before* the tail
+(`try a.slice(…).get(…)`) is rejected with **E3057** against that inner call: its
+error flag has nowhere to go, and reading its null result is a use of memory the
+throw never produced. (The reference compiler accepts that program and
+segfaults on the inner throw, dereferencing the null record `slice` left behind.)
+
+## Tests
+
+<!-- test: chained-throwing-method -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function make() returns IntArray
+	var arr = IntArray.create()
+	arr.push(10)
+	arr.push(20)
+	arr.push(30)
+	return arr
+end 'make'
+
+function main() returns ExitCode
+	let s = try make().slice(1, endIndex: 3) otherwise return 9
+	return s.count()
+end 'main'
+```
+```exitcode
+2
+```
+
+<!-- test: chained-two-hop -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function make() returns IntArray
+	var arr = IntArray.create()
+	arr.push(10)
+	arr.push(20)
+	arr.push(30)
+	return arr
+end 'make'
+
+function main() returns ExitCode
+	let v = try make().clone().get(1) otherwise return 9
+	return v
+end 'main'
+```
+```exitcode
+20
+```
+
+<!-- test: chained-error-edge-drops-receiver -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function make() returns IntArray
+	var arr = IntArray.create()
+	arr.push(10)
+	return arr
+end 'make'
+
+function main() returns ExitCode
+	let v = try make().get(5) otherwise return 9
+	return v
+end 'main'
+```
+```exitcode
+9
+```
+
+<!-- test: chained-error-edge-drops-two-temps -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function make() returns IntArray
+	var arr = IntArray.create()
+	arr.push(10)
+	arr.push(20)
+	arr.push(30)
+	return arr
+end 'make'
+
+function main() returns ExitCode
+	let v = try make().clone().get(9) otherwise return 7
+	return v
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: chained-on-array-literal -->
+```maxon
+function main() returns ExitCode
+	let v = try [10, 20, 30, 40].clone().get(1) otherwise return 9
+	return v
+end 'main'
+```
+```exitcode
+20
+```
+
+<!-- test: void-throwing-static-and-instance -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+enum E implements Error
+	bad
+end 'E'
+
+type Gate
+	var n as Integer
+
+	static function check(v Integer) throws E
+		if v < 0 'neg'
+			throw E.bad
+		end 'neg'
+	end 'check'
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	function bump(v Integer) throws E
+		if v < 0 'neg'
+			throw E.bad
+		end 'neg'
+	end 'bump'
+end 'Gate'
+
+function main() returns ExitCode
+	var g = Gate.create()
+	try Gate.check(1) otherwise return 9
+	try g.bump(1) otherwise return 8
+	try Gate.check(-1) otherwise return 5
+	return 0
+end 'main'
+```
+```exitcode
+5
+```
+
+<!-- test: error.two-throwing-calls-in-one-chain -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function make() returns IntArray
+	var arr = IntArray.create()
+	arr.push(10)
+	arr.push(20)
+	arr.push(30)
+	return arr
+end 'make'
+
+function main() returns ExitCode
+	let v = try make().slice(1, endIndex: 3).get(0) otherwise return 9
+	return v
+end 'main'
+```
+```maxoncstderr
+error E3057: specs/fragments/try-postfix-target/error.two-throwing-calls-in-one-chain.test:14:21: throwing array accessor requires try: wrap it as `try …(…) otherwise …` — a bare call drops the out-of-bounds error
+```
+
+<!-- test: error.chained-non-throwing-method -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function make() returns IntArray
+	var arr = IntArray.create()
+	arr.push(10)
+	return arr
+end 'make'
+
+function main() returns ExitCode
+	let n = try make().count() otherwise return 9
+	return n
+end 'main'
+```
+```maxoncstderr
+error E3055: specs/fragments/try-postfix-target/error.chained-non-throwing-method.test:12:10: try requires a throwing function: this builtin call cannot fail
+```
+
+<!-- test: error.non-throwing-array-accessor -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function main() returns ExitCode
+	var arr = IntArray.create()
+	arr.push(10)
+	let n = try arr.count() otherwise return 9
+	return n
+end 'main'
+```
+```maxoncstderr
+error E3055: specs/fragments/try-postfix-target/error.non-throwing-array-accessor.test:8:10: try requires a throwing function: this builtin call cannot fail
+```
+
+<!-- test: error.non-throwing-builtin-static-constructor -->
+
+`Array.create()` cannot fail, so `try` on it is E3055 exactly as `try arr.count()`
+is. ⚠ The reference compiler ACCEPTS this program and gets it WRONG: it emits a
+`tryCall` on a callee that never writes an error flag, reads whatever the ABI
+left in the flag register, and takes the ERROR path — returning 9 where the only
+correct answer is 0. Its own E3055 check misses it because a synthesized
+constructor is absent from the function registry, which is the very blind spot
+this rule closes. shv2 rejecting it is the deliberate divergence.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function main() returns ExitCode
+	let a = try IntArray.create() otherwise return 9
+	return a.count()
+end 'main'
+```
+```maxoncstderr
+error E3055: specs/fragments/try-postfix-target/error.non-throwing-builtin-static-constructor.test:6:10: try requires a throwing function: this builtin call cannot fail
+```
+
+<!-- test: error.non-throwing-builtin-print -->
+```maxon
+function main() returns ExitCode
+	try print("x\n") otherwise ignore
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3055: specs/fragments/try-postfix-target/error.non-throwing-builtin-print.test:3:2: try requires a throwing function: this builtin call cannot fail
+```
+
+<!-- test: error.throwing-argument-non-throwing-callee -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+enum MyError implements Error
+	failed
+end 'MyError'
+
+function g() returns Integer throws MyError
+	return 5
+end 'g'
+
+function f(x Integer) returns Integer
+	return x + 1
+end 'f'
+
+function main() returns ExitCode
+	let n = try f(try g() otherwise 0) otherwise return 9
+	return n
+end 'main'
+```
+```maxoncstderr
+error E3055: specs/fragments/try-postfix-target/error.throwing-argument-non-throwing-callee.test:17:10: try requires a throwing function: 'f' does not throw'
+```
+
+<!-- test: error.chained-non-throwing-after-throwing -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+enum MyError implements Error
+	failed
+end 'MyError'
+
+function th() returns IntArray throws MyError
+	var arr = IntArray.create()
+	arr.push(10)
+	return arr
+end 'th'
+
+function main() returns ExitCode
+	let n = try th().count() otherwise return 9
+	return n
+end 'main'
+```
+```maxoncstderr
+error E3055: specs/fragments/try-postfix-target/error.chained-non-throwing-after-throwing.test:16:10: try requires a throwing function: this builtin call cannot fail
+```

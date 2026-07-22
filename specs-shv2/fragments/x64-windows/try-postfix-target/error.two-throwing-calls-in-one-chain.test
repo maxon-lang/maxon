@@ -1,0 +1,19 @@
+// Test: error.two-throwing-calls-in-one-chain
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function make() returns IntArray
+	var arr = IntArray.create()
+	arr.push(10)
+	arr.push(20)
+	arr.push(30)
+	return arr
+end 'make'
+
+function main() returns ExitCode
+	let v = try make().slice(1, endIndex: 3).get(0) otherwise return 9
+	return v
+end 'main'
+---
+CompilerError:
+error E3057: <fragment>:14:21: throwing array accessor requires try: wrap it as `try …(…) otherwise …` — a bare call drops the out-of-bounds error

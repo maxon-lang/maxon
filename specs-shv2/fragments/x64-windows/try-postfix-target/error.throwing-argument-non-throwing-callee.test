@@ -1,0 +1,22 @@
+// Test: error.throwing-argument-non-throwing-callee
+typealias Integer = int(i64.min to i64.max)
+
+enum MyError implements Error
+	failed
+end 'MyError'
+
+function g() returns Integer throws MyError
+	return 5
+end 'g'
+
+function f(x Integer) returns Integer
+	return x + 1
+end 'f'
+
+function main() returns ExitCode
+	let n = try f(try g() otherwise 0) otherwise return 9
+	return n
+end 'main'
+---
+CompilerError:
+error E3055: <fragment>:17:10: try requires a throwing function: 'f' does not throw'

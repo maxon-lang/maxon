@@ -586,6 +586,14 @@ export union ParseError implements Error
 	// parser holds that token — the emitted `tryCall` op's span anchors on the callee, and the append-only
 	// span table cannot be retargeted after the fact. `callee` names the non-throwing function.
 	tryOnNonThrowing(callee String, line LineNumber, column ColumnNumber)
+	// A `try` applied to a BUILTIN call that cannot throw — `try arr.count()`, `try print("x")`,
+	// `try s.append(t)`, `try arr.push(1)`. Renders as **E3055** at the `try` token, exactly as its
+	// user-function sibling above does; it is a second MESSAGE on one code, the same way `errorTypeMismatch`
+	// carries three. It names NO callee on purpose: what the parser holds here is the emitted runtime symbol
+	// (`__arr_count`), which the user never wrote and which the `__` reservation exists to keep out of user
+	// space — the same reason `SemanticCheck`'s mirror E3057 for a bare throwing accessor describes the CLASS
+	// instead of naming the symbol.
+	tryOnNonThrowingBuiltin(line LineNumber, column ColumnNumber)
 	// A plain `await p` of a promise whose thunk THROWS — `await` lowers to `__gt_await`, which drops the
 	// error flag (P1.5-B2b). Renders as **E3057** (the throwing-call-needs-`try` code SemanticCheck reports
 	// for an ordinary throwing call), positioned at the `await` token. It is a PARSE error because only the
@@ -6685,12 +6693,7 @@ export type Parser
 		let flag = self.mintValue(ValueTypeTag.integer, nameId: UnnamedTypeId)
 		let callee = try self.rewriteLastCallToTryCall(func, flag: flag, tryTok: tryTok)
 
-		// E3055 — `try` on a call that cannot throw. Checked here (not SemanticCheck) so it anchors on the
-		// `try` token. A callee NO file declares is left to SemanticCheck's E3004 (a `try <typo>` is an
-		// unknown function, not a non-throwing one), so the check is gated on the callee being declared.
-		if self.calleeIsDeclared(callee) and not throwsClauseIsThrowing(self.signatures.throwsOf(callee)) 'nonThrowing'
-			throw ParseError.tryOnNonThrowing(String.from(callee), line: tryTok.line, column: tryTok.column)
-		end 'nonThrowing'
+		try self.requireThrowingTryTarget(callee, tryTok: tryTok)
 
 		// A value-position `try` on a VOID callee has no value to yield (E3059).
 		if resultUsed and self.tagOf(result) == ValueTypeTag.void 'voidInValue'
@@ -6700,17 +6703,53 @@ export type Parser
 		return try self.desugarTry(func, tryTok: tryTok, result: result, flag: flag, callee: callee, resultUsed: resultUsed)
 	end 'parseTry'
 
-	// Parse the throwing call target after `try` — a free call `f(…)`, a method/qualified call
-	// `obj.m(…)` / `Type.m(…)`, or a `self.m(…)`. Emits an ordinary `call` op that `rewriteLastCallToTryCall`
-	// then converts. `resultUsed: false` on the free-call path so a VOID throwing callee is not rejected
-	// here (whether the try's VALUE is usable is decided in `parseTry` from the try's own position).
+	// Parse the throwing call target after `try` — a primary call form followed by its WHOLE POSTFIX CHAIN
+	// (`try make().slice(1, endIndex: 3)`, `try [10,20,30].get(0)`, `try pick()(21)`). Emits an ordinary
+	// `call` op that `rewriteLastCallToTryCall` then converts.
+	//
+	// ⭐ **THE `try` BINDS TO THE OUTERMOST CALL, WHICH IS WHY THE CHAIN MUST BE PARSED TO ITS END.**
+	// `rewriteLastCallToTryCall` converts the LAST op the target emitted, so stopping at the primary hands it
+	// the WRONG call: `try make().slice(…)` left `.slice(…)` unconsumed and rewrote `make`'s call, then
+	// rejected the whole thing as "'make' does not throw" (OPEN #107) — a program the reference compiler
+	// accepts and runs. The reference reaches the same rule from the other end: its `try` parses a whole
+	// primary (postfix included) and rewrites the tail op. `try f(g())` is unaffected and must stay so — `g`
+	// is an ARGUMENT, emitted BEFORE `f`'s call, so the tail op is still `f`.
+	//
+	// `resultUsed: false` at every arm, and that is the one thing the try target decides differently from an
+	// ordinary expression: whether the try's VALUE is usable is settled ONCE, by `parseTry`, from the try's
+	// own position (the void-callee E3059). A second copy of that question inside the target answers it from
+	// the wrong place — reporting "this call's value cannot be used" for a `try f().push(1)` STATEMENT, whose
+	// value is not used at all — where the real fault is that `push` cannot throw (E3055).
 	function parseTryCallTarget(func IrFunction) returns ValueId throws ParseError
+		// P1.5-B2b: `try await p` — the awaited THROWING promise is the try target (the AWAIT is the throwing
+		// operation). Emit the `await` op via the SHARED `emitAwaitOp`, WITHOUT the plain-await E3057 reject:
+		// catching the thrown error is exactly what `try await` does. `rewriteLastCallToTryCall` then converts
+		// the `await` into a `tryAwait`, and `parseTry`'s E3055 check refuses a NON-throwing promise here.
+		//
+		// TERMINAL — no postfix chain is applied to the awaited value, and deliberately so: `emitAwaitOp` was
+		// entered WITHOUT the E3057 reject on the promise, so a trailing `.method(…)` would make the METHOD the
+		// try target and leave the throwing await unguarded, silently dropping its error flag. `parseUnary`
+		// already consumed any postfix on the PROMISE operand itself, so nothing legal is lost here.
+		if self.at(TokenKind.await) 'awaitTarget'
+			let awaitTok = try self.consume(TokenKind.await)
+			let promise = try self.parseUnary(func)
+			return try self.emitAwaitOp(func, promise: promise, awaitTok: awaitTok)
+		end 'awaitTarget'
+
+		return try self.parsePostfix(func, value: try self.parseTryCallReceiver(func), resultUsed: false)
+	end 'parseTryCallTarget'
+
+	// The PRIMARY a `try` target's postfix chain starts from — a free call `f(…)`, a method/qualified call
+	// `obj.m(…)` / `Type.m(…)`, a `self.m(…)`, a field-chain call, or an array / byte-string LITERAL receiver.
+	// Split from `parseTryCallTarget` so the postfix continuation is applied to EVERY form in one place rather
+	// than per arm (it was applied to the two literal arms only, which is how the free-call arm came to stop
+	// at the first callee — OPEN #107).
+	function parseTryCallReceiver(func IrFunction) returns ValueId throws ParseError
 		// `try bag.items.get(0) otherwise …` / `try self.nodes.get(i) otherwise …` — a throwing method on an
 		// ARRAY reached through a 2+-hop field chain (P1.7 slice 3). Checked FIRST: a single-hop `self.m(…)` /
 		// `obj.m(…)` is not a field chain (`fieldChainMethodCallAt` needs 2+ hops) and falls to the arms below;
 		// a 2+-hop chain resolves to the array field and applies the method, leaving the `call __arr_get` as the
-		// last op for `rewriteLastCallToTryCall`. `resultUsed: false` for the free-call arm's reason (the try's
-		// own position decides whether its value is usable).
+		// last op for `rewriteLastCallToTryCall`.
 		if self.fieldChainMethodCallAt(self.pos) 'fieldChainTarget'
 			return try self.parseFieldChainCall(func, resultUsed: false)
 		end 'fieldChainTarget'
@@ -6722,38 +6761,23 @@ export type Parser
 				return try self.parseCall(func, resultUsed: false)
 			end 'freeCall'
 			if self.peekKind() == TokenKind.dot 'dotted'
-				return try self.parseDottedPrimary(func)
+				return try self.parseDottedPrimary(func, resultUsed: false)
 			end 'dotted'
 		end 'named'
-		// P1.5-B2b: `try await p` — the awaited THROWING promise is the try target (the AWAIT is the throwing
-		// operation). Emit the `await` op via the SHARED `emitAwaitOp`, WITHOUT the plain-await E3057 reject:
-		// catching the thrown error is exactly what `try await` does. `rewriteLastCallToTryCall` then converts
-		// the `await` into a `tryAwait`, and `parseTry`'s E3055 check refuses a NON-throwing promise here.
-		if self.at(TokenKind.await) 'awaitTarget'
-			let awaitTok = try self.consume(TokenKind.await)
-			let promise = try self.parseUnary(func)
-			return try self.emitAwaitOp(func, promise: promise, awaitTok: awaitTok)
-		end 'awaitTarget'
-		// `try [10,20,30].get(0) otherwise …` — a throwing method on an array LITERAL (P1.7 slice 1). The
-		// literal is parsed to an owned array temp and the postfix loop applies the `.get(…)`, leaving the
-		// `call __arr_get` as the last op for `rewriteLastCallToTryCall` to convert. The array temp drops at
-		// statement end (after the try), on every path.
+		// `try [10,20,30].get(0) otherwise …` — a throwing method on an array LITERAL (P1.7 slice 1), and its
+		// exact byte-string analogue `try b"…".get(0)` (P1.7 slice 2). Each parses to an owned array temp that
+		// the postfix chain applies its method to; the temp is a FORK temporary, dropped once per edge by
+		// `desugarTry`. Both literal kinds are enrolled together — accepting one and not the other would
+		// reject a legal `try b"…".get(…)` as "not a call".
 		if self.at(TokenKind.leftBracket) 'arrayLiteralTarget'
-			return try self.parsePostfix(func, value: try self.parseArrayLiteral(func), resultUsed: true)
+			return try self.parseArrayLiteral(func)
 		end 'arrayLiteralTarget'
-		// `try b"…".get(0) otherwise …` — a throwing method on a byte-string LITERAL (P1.7 slice 2), the exact
-		// analogue of the array-literal target above: the literal parses to an owned `Array with Byte` temp and
-		// the postfix loop applies the `.get(…)`, leaving the `call __arr_get` as the last op for
-		// `rewriteLastCallToTryCall` to convert. Without this arm the byte-string primary falls through to the
-		// throw below and a legal `try b"…".get(…)` is rejected as "not a call" — the array-literal form is
-		// accepted, so the two literal kinds must be enrolled here together. The temp drops at statement end
-		// (after the try), on every path.
 		if self.at(TokenKind.byteStringLiteral) 'byteStringLiteralTarget'
-			return try self.parsePostfix(func, value: try self.parseByteStringLiteral(), resultUsed: true)
+			return try self.parseByteStringLiteral()
 		end 'byteStringLiteralTarget'
 		let tok = self.current()
 		throw ParseError.unsupported("`try` must be applied to a call — `try f(…)`, `try obj.method(…)`, or `try await p` (got '{tok.kind.rawValue}')", line: tok.line, column: tok.column)
-	end 'parseTryCallTarget'
+	end 'parseTryCallReceiver'
 
 	// Rewrite the just-emitted `call` op in `currentBlock` into a `tryCall` defining `errorFlag` as its
 	// second result. Returns the callee name (for the E3059/E3055 diagnostics). v1 rewrites the terminal
@@ -6823,6 +6847,33 @@ export type Parser
 		return AsyncCalleeLookup.none
 	end 'asyncCallCalleeOf'
 
+	// **E3055 — the `try` target's terminal call must be one that CAN throw.** Anchored on the `try` token,
+	// which is why it lives here and not in SemanticCheck (see `ParseError.tryOnNonThrowing`).
+	//
+	// ⭐ **THERE ARE TWO CALLEE CLASSES, AND ONLY ONE OF THEM WAS BEING ASKED.** A COMPILER-INTERNAL callee
+	// (`__arr_count`, `__print_string`, `__str_append`) is in no signature registry, so `calleeIsDeclared`
+	// answers `false` for it and the check used to wave every non-throwing builtin through: `try arr.count()`
+	// and `try print("x")` compiled, and the desugar then branched on an error-flag register the callee never
+	// wrote — a `try` that takes its error path on whatever the ABI left in R10. The reference compiler
+	// rejects both. `isThrowingArrayRuntimeCallee` is THE ONE home of "which builtin throws", and this is the
+	// exact mirror of `SemanticCheck.validatePlainCall`, which reads the SAME predicate to report the opposite
+	// mistake (E3057 — a throwing accessor called WITHOUT `try`). Neither can drift from the other.
+	//
+	// A callee NO file declares is left to SemanticCheck's E3004: a `try <typo>` is an unknown function, not a
+	// non-throwing one.
+	function requireThrowingTryTarget(callee ByteArray, tryTok Token) throws ParseError
+		if isCompilerInternalCallee(callee) 'builtin'
+			if isThrowingArrayRuntimeCallee(callee) 'throwingAccessor'
+				return
+			end 'throwingAccessor'
+			throw ParseError.tryOnNonThrowingBuiltin(tryTok.line, column: tryTok.column)
+		end 'builtin'
+
+		if self.calleeIsDeclared(callee) and not throwsClauseIsThrowing(self.signatures.throwsOf(callee)) 'nonThrowing'
+			throw ParseError.tryOnNonThrowing(String.from(callee), line: tryTok.line, column: tryTok.column)
+		end 'nonThrowing'
+	end 'requireThrowingTryTarget'
+
 	// The expression after `try` was not a call. Typed `returns ByteArray` so it slots into
 	// `rewriteLastCallToTryCall`'s `match`, but it always throws.
 	function rejectTryTarget(tryTok Token) returns ByteArray throws ParseError
@@ -6856,6 +6907,45 @@ export type Parser
 		if self.valueIsOwnedHeap(result) 'managedResultOffEntry'
 			self.removeFromPendingTemps(result)
 		end 'managedResultOffEntry'
+
+		// ⭐ **THE FORK'S TEMPORARIES ARE LIVE ON BOTH EDGES, SO EACH EDGE DROPS THEM ONCE — IN ITS OWN BLOCK.**
+		// Whatever the enclosing statement still owed when the `try` forked (the receiver `make()` built for a
+		// `try make().slice(…)`, the `[10,20,30]` an array-literal target parsed, an interpolation passed as an
+		// argument) was created BEFORE the branch, so it is live on `tryok` AND on `tryerr` — and the single
+		// downstream drain that used to release it reaches only ONE of them. Every way that went wrong was a
+		// leak the gate reports as exit 101, and there was one per handler form:
+		//   • `otherwise return`/`throw` — the handler's `emitHandoffExitDrops` drained the SHARED list into the
+		//     error block and CLEARED it, so the ok path, which still owed them, dropped nothing;
+		//   • a handler BLOCK — the first statement inside it drained the shared list for the same reason,
+		//     with the same result;
+		//   • `propagate` (a bare `try f()`) and `otherwise break`/`continue` — these never drained at all, so
+		//     the ERROR edge leaked them instead.
+		// Dropping per edge, at the fork, settles all four with one rule and no per-form knowledge: the error
+		// edge's drops go in at the top of `errBlock`, the ok edge's at the top of `okBlock`, and the handler
+		// parses against a FRESH list so its own temporaries stay its own and it can no longer steal these.
+		// It cannot be done in the CONTINUATION instead — `otherwise <value>` and a fell-through block merge
+		// both edges there, so one drop in the merge is one drop too few on the other path.
+		//
+		// Dropping the receiver at the top of `okBlock` (rather than at statement end) is safe for a VIEW
+		// result: `__arr_slice` increfs the shared base allocation, so releasing the source RECORD leaves the
+		// bytes the view reads alive — the same guarantee that already made the statement-end drop safe.
+		//
+		// Guarded on a non-empty list: almost no `try` has a pending temporary, and the guard keeps the common
+		// one from paying for a fresh array.
+		//
+		// ⚠ **THE LIST IS REPLACED LAST, AFTER BOTH WALKS, AND THAT ORDER IS LOAD-BEARING.** Written the other
+		// way round — replace first, then walk a handle taken before the replace — this crashed the parser:
+		// `emitTempDrops` read a POINTER-shaped word where a `ValueId` belonged and `tagOf` panicked, because
+		// the store had released the array the handle still named. Measured both ways: a handle is harmless
+		// while the field still holds the list and fatal once it does not, so the walks stay ahead of the store
+		// and no handle is taken at all, which is what makes the rule unbreakable rather than remembered.
+		if self.pendingTempDrops.count() > 0 'forkTemps'
+			self.currentBlock = okBlock
+			self.emitTempDrops(self.pendingTempDrops, anchor: tryTok)
+			self.currentBlock = errBlock
+			self.emitTempDrops(self.pendingTempDrops, anchor: tryTok)
+			self.pendingTempDrops = ValueIdArray.create()
+		end 'forkTemps'
 
 		self.currentBlock = errBlock
 		let handler = try self.parseOtherwiseHandler(func, result: result, flag: flag, callee: callee, resultUsed: resultUsed, tryTok: tryTok)
@@ -7881,14 +7971,23 @@ export type Parser
 	// `anchor` is the statement's own token; no source token spawns a drop, so it rides the statement that
 	// made control leave the temporary's lifetime, exactly as `emitScopeDrops` rides the `return`.
 	function drainPendingTemps(anchor Token)
-		var i = self.pendingTempDrops.count()
-		while i > 0 'eachTemp'
-			i = i - 1
-			let temp = try self.pendingTempDrops.get(i) otherwise panic("drainPendingTemps: pendingTempDrops.get OOB at {i} — the list is only appended to and drained here")
-			self.emitDecref(temp, range: SourceRange.ofToken(anchor))
-		end 'eachTemp'
+		self.emitTempDrops(self.pendingTempDrops, anchor: anchor)
 		self.pendingTempDrops = ValueIdArray.create()
 	end 'drainPendingTemps'
+
+	// Emit the `__mm_decref` for each of `temps`, in REVERSE creation order, into `currentBlock`. The drop
+	// LOOP, split from `drainPendingTemps` so the `try` fork — which drops the SAME temporaries into TWO
+	// blocks and clears the list exactly once (`desugarTry`) — reuses it instead of spelling the reverse walk
+	// a second time. A second copy is how the two would come to disagree on the order, and the order is a rule
+	// (`emitScopeDrops`' convention: the last built is the first torn down).
+	function emitTempDrops(temps ValueIdArray, anchor Token)
+		var i = temps.count()
+		while i > 0 'eachTemp'
+			i = i - 1
+			let temp = try temps.get(i) otherwise panic("emitTempDrops: temps.get OOB at {i} — the list is walked strictly downwards from its own count")
+			self.emitDecref(temp, range: SourceRange.ofToken(anchor))
+		end 'eachTemp'
+	end 'emitTempDrops'
 
 	// Parse an `if` statement (M4):
 	//   if <cond> 'thenLabel'
@@ -11548,7 +11647,7 @@ export type Parser
 				return try self.parseStructLiteral(func)
 			end 'structLiteral'
 			if self.peekKind() == TokenKind.dot 'dotted'
-				return try self.parseDottedPrimary(func)
+				return try self.parseDottedPrimary(func, resultUsed: true)
 			end 'dotted'
 			return try self.parseVariableReference()
 		end 'namedPrimary'
@@ -12354,7 +12453,16 @@ export type Parser
 	// sized type before knowing `p` is a local, and `sizedTypeBound` answers `notASizedType` for
 	// every struct — so `p.x` would have reported "expected a sized numeric type (u8/u16/…)" for a
 	// perfectly good field read.
-	function parseDottedPrimary(func IrFunction) returns ValueId throws ParseError
+	//
+	// `resultUsed` is passed through to the two CALL forms (the method call and the qualified static call)
+	// and means what it means everywhere else: is this call's value read? It is `true` from expression
+	// position and `false` from a `try` TARGET, where the try's own position decides value usability
+	// (`parseTryCallTarget`). Threaded rather than pre-dispatched by the caller: an arm order lives in ONE
+	// place, so a form added ahead of the method arm here cannot be silently skipped by a second copy of
+	// the split. Hard-coding it `true` is what rejected a VOID throwing static under `try` — `try
+	// Gate.check(1)` reported E2004 "does not return a value" for a statement whose value nobody wanted,
+	// while its instance twin `try g.bump(1)` was accepted; the reference compiler takes both.
+	function parseDottedPrimary(func IrFunction, resultUsed bool) returns ValueId throws ParseError
 		// ⭐ **A BOUND BASE IS A VALUE, AND A VALUE OUTRANKS A TYPE NAME.** `p.x` and `p.add(10)` are
 		// an instance's field and an instance's METHOD; `Point.create(10)` is a static method, and
 		// `u16.max` is a bound. The base being IN SCOPE is what tells the first two from the last
@@ -12368,7 +12476,7 @@ export type Parser
 		// is right there in the type. `methodCallsAt` is where that scope test lives, shared with the
 		// statement dispatcher.
 		if self.methodCallsAt(self.pos) 'methodCall'
-			return try self.parseMethodCall(func, resultUsed: true)
+			return try self.parseMethodCall(func, resultUsed: resultUsed)
 		end 'methodCall'
 
 		if self.scope.contains(self.baseBindingName(self.current())) 'fieldAccess'
@@ -12402,7 +12510,7 @@ export type Parser
 		end 'enumRef'
 
 		if self.kindAt(self.pos + 3) == TokenKind.leftParen 'qualifiedCall'
-			return try self.parseQualifiedCall(func)
+			return try self.parseQualifiedCall(func, resultUsed: resultUsed)
 		end 'qualifiedCall'
 
 		return try self.parseTypeQualifiedBoundExpression()
@@ -12837,7 +12945,7 @@ export type Parser
 	// so it is recorded rather than invented here. (The COUNTS that E3036 carries are inflated by
 	// the receiver, which is not this routine's doing and is not restated here — see the receiver
 	// prepend in `parseCallNamed`, the one place that causes it, for both callers.)
-	function parseQualifiedCall(func IrFunction) returns ValueId throws ParseError
+	function parseQualifiedCall(func IrFunction, resultUsed bool) returns ValueId throws ParseError
 		let typeTok = try self.consume(TokenKind.identifier)
 
 		// `IntArray.create()` — a static call on an `Array` instance alias (P1.7 slice 1). Intercepted before
@@ -12848,7 +12956,7 @@ export type Parser
 		end 'arrayStatic'
 
 		try self.consume(TokenKind.dot)
-		let result = try self.parseCallNamed(func, callee: qualifiedMethodName(self.qualifiedCallBaseName(typeTok.value), methodName: self.current().value), anchor: typeTok, receiver: ReceiverArg.none, resultUsed: true, constructorInstance: self.constructorInstanceOf(typeTok.value))
+		let result = try self.parseCallNamed(func, callee: qualifiedMethodName(self.qualifiedCallBaseName(typeTok.value), methodName: self.current().value), anchor: typeTok, receiver: ReceiverArg.none, resultUsed: resultUsed, constructorInstance: self.constructorInstanceOf(typeTok.value))
 		self.retypeGenericAliasConstructorResult(result, aliasName: typeTok.value)
 		return result
 	end 'parseQualifiedCall'
