@@ -198,7 +198,7 @@ let TimerNoDeadline = 0
 //
 // ⚠ CAPACITY IS `MAXIMUM_WAIT_OBJECTS` = 64, and it is a HARD, ENFORCED bound — not a comment. `WaitForMultipleObjects`
 // refuses an `nCount` above 64, so at most 64 children may be parked SIMULTANEOUSLY. `__gt_proc_add` CHECKS
-// `count >= ProcStoreCapacity` before every append and aborts (`ProcStoreOverflowExitCode`) rather than writing
+// `count >= ProcStoreCapacity` before every append and aborts (`RuntimeAbort.processStoreOverflow`) rather than writing
 // `procHandles[64]`/`procGts[64]` past the 64-slot slab arrays — an unchecked append would be heap corruption, and
 // then `emitProcWait` would pass `pc > 64` to `WaitForMultipleObjects`, which fails → the same null-handle busy-spin
 // class. The subprocess-seed specs park ≤3 at once (three concurrent children; one process + one sleeper in the
@@ -230,21 +230,25 @@ let ProcInfoHThreadOffset = 8
 let ExitCodeSlotBytes = 8
 let TrailingNulBytes = 1  // the one extra byte for the cmdline's NUL terminator (slab-zeroed → free)
 
-// The exit code `__gt_process_run` aborts the whole process with when `CreateProcessA` FAILS (a command whose
-// first token is not a runnable executable). On failure CreateProcessA leaves the slab-zeroed
-// PROCESS_INFORMATION untouched, so `hProcess == 0` detects it — and the runtime MUST NOT park on a null handle,
-// which would busy-spin the netpoll forever (WaitForMultipleObjects on a NULL handle returns WAIT_FAILED
-// immediately, so the poll never fires). A hard `ExitProcess`-style abort is the honest fatal response (a
-// message-carrying panic would need the parser's `.rdata` interner, which the builder-built runtime has no handle
-// to at this rung — a richer diagnostic is a follow-up). `runProcess` on a valid command never reaches here.
-let SpawnFailedExitCode = 1
-
-// The exit code `__gt_proc_add` aborts with when the process store is FULL (a program parks more than
-// `ProcStoreCapacity` = 64 children concurrently — beyond `WaitForMultipleObjects`'s `MAXIMUM_WAIT_OBJECTS`). A
-// DISTINCT value from `SpawnFailedExitCode` and from every subprocess-spec child exit code (1/2/3/4/5/25/45/123),
-// so the store-overflow regression test can pin exactly this path. Aborting is the honest SAFE response to hitting
-// the seed's documented concurrency ceiling; real >64-way fan-in is the later IOCP rung.
-let ProcStoreOverflowExitCode = 70
+// ⭐ **THE TWO ABORT CODES THIS FILE DIVERGES WITH ARE `RuntimeAbort`'s, NOT ITS OWN**, and this file is half
+// the reason that registry exists: its `ProcStoreOverflowExitCode` and `ArrayRuntime`'s element-size-zero code
+// were both 70, each picked against a list that could not see the other. The numbers now live in one enum whose
+// duplicate check is the language's (E3031), so "distinct from every other abort" is proven rather than argued.
+//
+//   * `RuntimeAbort.subprocessSpawnFailed` — `__gt_process_run` when `CreateProcessA` FAILS (a command whose
+//     first token is not a runnable executable). On failure CreateProcessA leaves the slab-zeroed
+//     PROCESS_INFORMATION untouched, so `hProcess == 0` detects it — and the runtime MUST NOT park on a null
+//     handle, which would busy-spin the netpoll forever (WaitForMultipleObjects on a NULL handle returns
+//     WAIT_FAILED immediately, so the poll never fires). A hard `ExitProcess`-style abort is the honest fatal
+//     response (a message-carrying panic would need the parser's `.rdata` interner, which the builder-built
+//     runtime has no handle to at this rung — a richer diagnostic is a follow-up). `runProcess` on a valid
+//     command never reaches here.
+//   * `RuntimeAbort.processStoreOverflow` — `__gt_proc_add` when the process store is FULL (a program parks
+//     more than `ProcStoreCapacity` = 64 children concurrently, beyond `WaitForMultipleObjects`'s
+//     `MAXIMUM_WAIT_OBJECTS`). It is distinct from every subprocess-spec child exit code
+//     (1/2/3/4/5/25/45/123), so the store-overflow regression test pins exactly this path. Aborting is the
+//     honest SAFE response to hitting the seed's documented concurrency ceiling; real >64-way fan-in is the
+//     later IOCP rung.
 
 // --- Monotonic clock (P1.5 mid-body-yield) ---
 // `ns = ticks * 1e9 / freq`, evaluated as the OVERFLOW-SAFE split identity
@@ -1243,7 +1247,7 @@ end 'buildGtSleep'
 // append (like `__gt_timer_add`), but — unlike the timer store — CAPACITY-GUARDED: parking a 65th child
 // concurrently would write `procHandles[64]`/`procGts[64]` one slot PAST the 64-slot slab arrays (heap
 // corruption), and then hand `WaitForMultipleObjects` a `pc > MAXIMUM_WAIT_OBJECTS` it refuses. So `count >=
-// ProcStoreCapacity` aborts (`ProcStoreOverflowExitCode`) rather than corrupt the heap — the seed's documented
+// ProcStoreCapacity` aborts (`RuntimeAbort.processStoreOverflow`) rather than corrupt the heap — the seed's documented
 // concurrency ceiling made a hard, safe bound (see `ProcStoreCapacity`).
 function buildGtProcAdd(module StdModule)
 	var func = IrFunction.createFromStd(GtProcAddName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
@@ -1267,12 +1271,8 @@ function buildGtProcAdd(module StdModule)
 	module.appendOp(entry, op: StdOp.cmp(isFull, lhs: count, rhs: capacityConst, pred: StdCmpPred.ge, operandType: StdType.i64))
 	module.setTerminator(entry, op: StdOp.condBranch(isFull, thenBlockId: overflow.id, elseBlockId: doAdd.id))
 
-	// overflow: the store is full — abort rather than write past the 64-slot arrays. `osExit` diverges, so the
-	// trailing `retVoid` is a dead terminator (mirrors `__gt_process_run`'s `spawnFailed`).
-	let overflowCodeConst = ids.mint()
-	module.appendOp(overflow, op: StdOp.const(overflowCodeConst, value: ProcStoreOverflowExitCode, valueType: StdType.i64))
-	module.appendOp(overflow, op: StdOp.osExit(overflowCodeConst))
-	module.setTerminator(overflow, op: StdOp.retVoid)
+	// overflow: the store is full — abort rather than write past the 64-slot arrays.
+	emitRuntimeAbort(module, func: func, block: overflow, abort: RuntimeAbort.processStoreOverflow, ids: ids)
 
 	// doAdd: append the entry to both parallel arrays, bump the count, and mark the GT waiting.
 	let slotBytesConst = ids.mint()
@@ -1553,13 +1553,9 @@ function buildGtProcessRun(module StdModule)
 	module.setTerminator(afterCopy, op: StdOp.condBranch(spawnFailedCmp, thenBlockId: spawnFailed.id, elseBlockId: spawnOk.id))
 
 	// spawnFailed: the command names no runnable executable. Abort the whole process rather than park on a null
-	// handle (see `SpawnFailedExitCode`). `osExit` diverges, so the trailing `ret` is a dead terminator.
-	let failCodeConst = ids.mint()
-	module.appendOp(spawnFailed, op: StdOp.const(failCodeConst, value: SpawnFailedExitCode, valueType: StdType.i64))
-	module.appendOp(spawnFailed, op: StdOp.osExit(failCodeConst))
-	let deadFailConst = ids.mint()
-	module.appendOp(spawnFailed, op: StdOp.const(deadFailConst, value: 0, valueType: StdType.i64))
-	module.setTerminator(spawnFailed, op: StdOp.ret(deadFailConst))
+	// handle (see `RuntimeAbort.subprocessSpawnFailed`). This function RETURNS a value, so its dead terminator
+	// carries one — which `emitRuntimeAbort` derives from `func.returnType`.
+	emitRuntimeAbort(module, func: func, block: spawnFailed, abort: RuntimeAbort.subprocessSpawnFailed, ids: ids)
 
 	// spawnOk: close the (unneeded) thread handle, park the current GT on the process, and hand control to the
 	// scheduler. Mirrors `__gt_sleep`'s park: a top-level GT0 (waiter == 0) SELF-DRIVES until its own

@@ -84,11 +84,6 @@ export function destructorSymbol(unionName ByteArray) returns ByteArray
 	return "{String.from(DestructorPrefix)}{String.from(unionName)}".toByteArray()
 end 'destructorSymbol'
 
-// The exit code a leaked program reports. It is the project-wide leak-gate code: a `spec-test`
-// worker is itself a leak-gated Maxon program, and `SpecWorkerPool.LeakCheckExitCode` is the same
-// number read from the other end.
-let LeakExitCode = 101
-
 // The prefix every HEAP runtime entry point shares — the single test for "does this program touch the
 // heap at all?", which `StringRuntime.scanRuntimeUsage` reads for its `usesHeap` bit.
 let RuntimeCallPrefix = b"__mm_"
@@ -242,6 +237,48 @@ export function emitTypedParams(module StdModule, block IrBlock, paramTypes StdT
 		module.appendOp(block, op: StdOp.param(k, index: k, paramType: paramType))
 	end 'each'
 end 'emitTypedParams'
+
+// --- The single-op emit helpers every runtime builder shares ---
+//
+// Each is one `StdOp` over one block, minted into a fresh value. They live HERE, beside `emitParams`
+// and `argsOf`, because three files build Std graphs by hand (`MmRuntime`, `StringRuntime`,
+// `ArrayRuntime`) plus the two shared homes over them (`BufferOwnership`, `RuntimeAbort`), and a
+// `ids.mint()` + `module.appendOp` pair written out at each of a few hundred sites is the same four
+// tokens of noise every time. They were `ArrayRuntime`'s private helpers until `BufferOwnership` and the
+// String runtime needed the same four ops to ask the same questions of the same record slots.
+
+// Load `record`'s field at `offset` into a fresh value.
+export function emitLoadField(module StdModule, block IrBlock, record ValueId, offset ByteOffset, ids ValueMinter) returns ValueId
+	let v = ids.mint()
+	module.appendOp(block, op: StdOp.loadIndirect(v, addrId: record, offset: offset, valueType: StdType.i64))
+	return v
+end 'emitLoadField'
+
+// Store `value` into `record`'s field at `offset`.
+export function emitStoreField(module StdModule, block IrBlock, record ValueId, offset ByteOffset, value ValueId)
+	module.appendOp(block, op: StdOp.storeIndirect(record, offset: offset, valueId: value, valueType: StdType.i64))
+end 'emitStoreField'
+
+// `a <op> b` into a fresh value.
+export function emitBin(module StdModule, block IrBlock, a ValueId, b ValueId, opcode StdBinOpcode, ids ValueMinter) returns ValueId
+	let v = ids.mint()
+	module.appendOp(block, op: StdOp.binOp(v, lhs: a, rhs: b, opcode: opcode, operandType: StdType.i64))
+	return v
+end 'emitBin'
+
+// A fresh i64 constant.
+export function emitConst(module StdModule, block IrBlock, value ParsedInt, ids ValueMinter) returns ValueId
+	let v = ids.mint()
+	module.appendOp(block, op: StdOp.const(v, value: value, valueType: StdType.i64))
+	return v
+end 'emitConst'
+
+// `a <pred> b` into a fresh value (a flag).
+export function emitCmp(module StdModule, block IrBlock, a ValueId, b ValueId, pred StdCmpPred, ids ValueMinter) returns ValueId
+	let v = ids.mint()
+	module.appendOp(block, op: StdOp.cmp(v, lhs: a, rhs: b, pred: pred, operandType: StdType.i64))
+	return v
+end 'emitCmp'
 
 // `__slab_alloc(size) -> ptr` — the bump allocator.
 //
@@ -1022,8 +1059,14 @@ function buildMmLeakCheck(module StdModule)
 	module.appendOp(entry, op: StdOp.cmp(isLeaked, lhs: count, rhs: zeroConst, pred: StdCmpPred.ne, operandType: StdType.i64))
 	module.setTerminator(entry, op: StdOp.condBranch(isLeaked, thenBlockId: leaked.id, elseBlockId: clean.id))
 
+	// The exit code a leaked program reports lives in `RuntimeAbort` with every other abort code the
+	// emitted runtime spends, so the number space has one home and one duplicate check. ⚠ It is ALSO
+	// spelled by `SpecWorkerPool.LeakCheckExitCode`, which reads it from the other end (a spec-test worker
+	// is itself a leak-gated Maxon program) — that file is outside this rung's list, so the two are still
+	// two spellings of one number.
+	let leakCode = RuntimeAbort.leakDetected.rawValue as ParsedInt
 	let leakConst = ids.mint()
-	module.appendOp(leaked, op: StdOp.const(leakConst, value: LeakExitCode, valueType: StdType.i64))
+	module.appendOp(leaked, op: StdOp.const(leakConst, value: leakCode, valueType: StdType.i64))
 	module.setTerminator(leaked, op: StdOp.ret(leakConst))
 
 	module.setTerminator(clean, op: StdOp.ret(exitCode))

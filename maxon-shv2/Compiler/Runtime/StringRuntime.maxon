@@ -35,27 +35,31 @@ export let StringIsAsciiOffset = 40 as ByteOffset
 export let StringRecordBytes = 48 as ByteCount
 let StringFieldBytes = 8 as ByteCount
 
-// `capacity = -2` is the RDATA SENTINEL: read-only, never grown, never freed. `parent_ptr = 0` marks a
-// literal with no owning parent. `element_size = 1` — a String's elements are bytes. These are the
-// values the (Wave-B) destructor will read to decide "free nothing"; at Wave A nothing reads them,
-// they are simply the honest contents of the record.
-let RdataCapacitySentinel = 0 - 2 as ParsedInt
-let RdataParentPtr = 0 as ParsedInt
+// `element_size = 1` — a String's elements are bytes.
+//
+// ⭐ **A LITERAL'S `capacity@16`/`parent@32` ARE THE SHARED BUFFER-OWNERSHIP ENCODING'S** (`BufferOwnership`),
+// not this file's invention and not the Array record's either: `RdataBufferCapacity` says the buffer is an
+// immortal `.rdata` blob that is not this record's to write or to release, and `NoOwedAllocation` says the
+// record owes no separate allocation a release. The Array record's byte-string literal writes exactly the
+// same pair for exactly the same reason.
 export let StringElementSize = 1 as ParsedInt
 
 // ⭐ AN OWNED INTERPOLATION RESULT IS A HEAP STRING, and its bytes live INLINE — right after the 48-byte
 // record, in the SAME `__mm_alloc` payload (`buffer@0 = record + StringRecordBytes`). So the whole thing
 // is one allocation: `__mm_decref` → `__mm_free` reclaims the record AND its bytes together, and the
 // destructor a struct passes (`TrivialDestructor`, 0) is exactly right — there is no external buffer to
-// free. `capacity@16 = length` (the bytes are exact, never grown at this rung) and `parent_ptr@32 =
-// InlineParentSentinel`.
+// free. `capacity@16 = length` (the bytes are exact, never grown at this rung).
 //
-// `parent_ptr = -3` is the value the bootstrap writes for an inline String (`MmParentInline`) and the one
-// a future destructor / `append` reads to mean "the bytes die with the record's slot; free no external
-// buffer, and DETACH before growing". Nothing reads it at THIS rung — an inline String needs no
-// destructor cascade, because the bump allocator reclaims nothing and the bytes are part of the record's
-// own payload — so it is an honest forward-compatible marker rather than a live branch selector. See
-// `Parser.emitStringInterp`.
+// ⚠⚠ **`parent_ptr = -3` IS WRITTEN BY `Parser.emitStringInterp` AND READ BY NOTHING — A KNOWN RESIDUAL,
+// NOT A DESIGN.** It was the bootstrap's inline marker (`MmParentInline`), kept here as a
+// "forward-compatible marker"; under the shared encoding (`BufferOwnership`) `parent@32` means *the
+// separate allocation this record owes a release to*, and an inline String owes NONE — so the honest value
+// there is `NoOwedAllocation`, which `__mm_alloc`'s zeroing already supplies for free. Nothing reads the
+// -3 (`emitStringOwedBase` answers the inline question from the LAYOUT), so it is inert; deleting it means
+// deleting the store in `Parser.emitStringInterp`, which is outside this rung's file list. The completing
+// change is reported rather than made: give `capacity@16` a NEGATIVE value there (a third provenance in
+// the shared table — "my bytes are part of my own box") and drop the `parent@32` store, after which the
+// inline arm below disappears and String's record states line up with the Array record's exactly.
 export let InlineParentSentinel = 0 - 3 as ParsedInt
 
 // The fixed bytes an owned interpolation result allocates BEYOND its text: the 48-byte record the bytes
@@ -152,12 +156,61 @@ export let BoolToStringName = b"__bool_to_string"
 export let StrAppendName = b"__str_append"
 export let StrDecrefName = b"__str_decref"
 
-// `parent_ptr == -1` — a DETACHED ROOT: `buffer@0` is an external `__mm_alloc`'d buffer this String owns
-// and must free. It is the ONE parent value that frees an external buffer; inline (`-3`), rdata literal
-// (`0`) and a borrowed slice (`-1` is taken, slices are P1.4) free nothing beyond the record. `__str_append`
-// WRITES it on detach and `__str_decref` READS it to decide the buffer free — one fact, the load-bearing
-// invariant of this rung, so it is named once here and read from both ends.
-export let DetachedRootParent = 0 - 1 as ParsedInt
+// ⭐ **WHERE A STRING RECORD KEEPS THE BUFFER-OWNERSHIP ENCODING** (`BufferOwnership`) — the three slots
+// its predicates read, built from THIS file's offsets. A String has exactly two live provenances: its
+// bytes are INLINE in its own box (every owned String is born that way — `Parser.emitStringInterp`, which
+// `promoteToOwnedString` also routes through), or they are a separate `__mm_alloc`'d buffer this record
+// owns and must release (`__str_append` detached). A literal's rdata record is the third the FORMAT
+// admits, and it never reaches these functions: the parser promotes a `var` String at its declaration and
+// only an owned String is ever dropped.
+//
+// ⚠ **THIS REPLACES `parent@32 == -1` ("a detached root"), AND THE BEHAVIOUR IT DECIDED IS UNCHANGED.**
+// That test was this file's own third spelling of "is this buffer mine?" — and, at the same offset as the
+// Array record's `parent@32`, it meant the OPPOSITE thing (there, *someone else's allocation I owe a
+// release to*). The detached root is now what the shared encoding already calls an owner —
+// `capacity@16 >= 0`, releasing its own `buffer@0` — so `parent@32` means one thing in both records and
+// nothing here has to be told which.
+function stringBufferSlots() returns BufferRecordSlots
+	return BufferRecordSlots.create(StringBufferOffset, capacityOffset: StringCapacityOffset, parentOffset: StringParentPtrOffset)
+end 'stringBufferSlots'
+
+// ⭐ **THE ONE LAYOUT FACT THAT IS STRING'S ALONE: ITS BYTES MAY LIVE INSIDE ITS OWN BOX.** An inline
+// String is ONE `__mm_alloc` payload — the 48-byte record followed by its bytes — so it owes no SEPARATE
+// allocation a release; the record's own free reclaims both. Every other record kind's owner does owe one
+// (an Array grows, so its elements can never live behind its record), which is why the shared
+// `emitOwedAllocationBase` answers `buffer@0` for an owner and this ONE arm sits in front of it, here,
+// where the inline layout is declared — rather than as a branch inside the shared home that no Array could
+// ever take.
+//
+// ⭐ **INLINE-NESS IS DERIVED FROM THE LAYOUT, NOT READ FROM A MARKER**, because the layout already fixes
+// it: an inline String's `buffer@0` IS `record + StringRecordBytes`, written as that sum by
+// `Parser.emitStringInterp`. A SEPARATE buffer can never sit at that address — it is one past the end of
+// the record's own payload, where the NEXT box's HEADER begins, so the next payload starts strictly beyond
+// it, and an allocator that returned an address inside a live allocation would be broken outright. So the
+// test cannot be fooled, and it cannot drift from a stored flag that says otherwise (`parent@32`'s stale
+// `InlineParentSentinel` is exactly such a flag, and it is why nothing reads it).
+//
+// It threads `cur` and returns the base as a block arg on the caller-owned `join`, adding its arm as a
+// third predecessor of the join the shared helper set up. Two callers — the drop and the detach — so it is
+// no thin wrapper: both must agree about what an inline String owes, which is nothing.
+function emitStringOwedBase(module StdModule, func IrFunction, cur IrBlock, join IrBlock, record ValueId, ids ValueMinter) returns ValueId
+	var separate = module.addBlock(func, label: b"sepbase")
+	var inlineBytes = module.addBlock(func, label: b"inlbase")
+
+	let buffer = emitLoadField(module, block: cur, record: record, offset: StringBufferOffset, ids: ids)
+	let recordBytes = emitConst(module, block: cur, value: StringRecordBytes as ParsedInt, ids: ids)
+	let inlineAddr = emitBin(module, block: cur, a: record, b: recordBytes, opcode: StdBinOpcode.add, ids: ids)
+	let isInline = emitCmp(module, block: cur, a: buffer, b: inlineAddr, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(cur, op: StdOp.condBranch(isInline, thenBlockId: inlineBytes.id, elseBlockId: separate.id))
+
+	let base = emitOwedAllocationBase(module, func: func, cur: separate, join: join, record: record, slots: stringBufferSlots(), ids: ids)
+
+	let owesNothing = emitConst(module, block: inlineBytes, value: NoOwedAllocation, ids: ids)
+	module.setTerminator(inlineBytes, op: StdOp.branch(join.id))
+	inlineBytes.branchEdges.push(BranchEdge.create(join.id, argIds: argsOf(owesNothing)))
+
+	return base
+end 'emitStringOwedBase'
 
 // The bool `__str_eq` returns, as the i64 a Std `value(i64)` return carries: 1 when equal, 0 otherwise.
 let StrEqEqual = 1 as ParsedInt
@@ -206,9 +259,9 @@ export function buildStringRecordBytes(blobOffset ByteOffset, byteLength ByteCou
 	var record = ByteArray.create()
 	appendRecordField(record, expectedOffset: StringBufferOffset, value: blobOffset as ParsedInt)
 	appendRecordField(record, expectedOffset: StringLengthOffset, value: byteLength as ParsedInt)
-	appendRecordField(record, expectedOffset: StringCapacityOffset, value: RdataCapacitySentinel)
+	appendRecordField(record, expectedOffset: StringCapacityOffset, value: RdataBufferCapacity)
 	appendRecordField(record, expectedOffset: StringElementSizeOffset, value: StringElementSize)
-	appendRecordField(record, expectedOffset: StringParentPtrOffset, value: RdataParentPtr)
+	appendRecordField(record, expectedOffset: StringParentPtrOffset, value: NoOwedAllocation)
 	appendRecordField(record, expectedOffset: StringIsAsciiOffset, value: asciiFlagValue(isAscii))
 
 	if record.count() != StringRecordBytes 'sizeDrift'
@@ -803,18 +856,29 @@ end 'buildBoolToString'
 // allocation. Adapted from v1's `__managed_mem_cow_check`+`grow` (`stdlib/Internals.maxon:3432-3491`) to
 // shv2's fused record and static single-owner model (no refcount on the detach path).
 //
-// ⭐ **ONE DETACH CONDITION, ONE FREE GUARD, THREE SOURCE PROVENANCES.** The bytes must move to a fresh
-// external buffer whenever `self` does not already own a big-enough external ROOT — i.e. `parent != -1`
-// (the bytes are inline `-3` or a borrowed rdata literal `0`, neither writable-in-place) OR `capacity <
-// requiredLen` (an owned root that is too small — a grow). The OLD buffer is freed ONLY when it was itself
-// a root (`parent == -1`): an inline source's bytes belong to the record's own slot and an rdata literal's
-// are immortal, so neither is freed. That single guard collapses the three cases the record format admits
-// into one path — there is no per-provenance branch, and so no dead one.
+// ⭐ **ONE TEST DECIDES THE DETACH, AND IT IS ARITHMETIC RATHER THAN A SECOND SPELLING OF "IS THIS BUFFER
+// MINE?".** The bytes must move to a fresh external buffer whenever `capacity@16 < requiredLen` — and that
+// single comparison already covers every non-owned buffer, because the shared encoding
+// (`BufferOwnership`) makes a non-owned `capacity` NEGATIVE and a required length is never below zero. So
+// an inline String (whose capacity is its exact length, with no room to grow) and a literal's immortal
+// `.rdata` blob both detach without this function naming either, and `emitBufferNotOwned` is deliberately
+// NOT called: asking the sign and then asking the size would be one question written twice.
 //
-// ⚠ **THE LOAD-BEARING INVARIANT: detach WRITES `parent@32 = -1`, and `__str_decref` READS it to free the
-// buffer.** Leave `parent` at its pre-detach value and the owned external buffer is never freed — a leak
-// (exit 101). The value written here and the value read there are ONE fact (`DetachedRootParent`), named
-// once so the writer and the reader cannot drift.
+// ⚠ **THE OLD ALLOCATION IS RELEASED THROUGH THE SHARED PAIR, AND ONLY AFTER BOTH COPIES ARE DONE.**
+// `emitStringOwedBase` says WHICH allocation the record owes a release to before the detach republishes
+// the fields that answer it (an inline String owes nothing — its bytes are in its own box), and
+// `emitReleaseOwedBase` pays it, null-guarded, once the blit has finished reading. ⭐ The release rides a
+// BLOCK ARG into `blit` (0 on the in-place edge) rather than happening in the detach block, and that is
+// load-bearing rather than tidy: `s.append(s)` aliases `other` to `self`'s OLD buffer, so releasing before
+// the blit is a read-after-release. It is invisible today — `__mm_free` reclaims nothing under the bump
+// allocator (PLAN.md #108) — and it is a use-after-free the day it does.
+//
+// ⚠ **THE INVARIANT THIS RUNG USED TO SPELL AS `parent@32 == -1` IS UNCHANGED IN BEHAVIOUR**: a String
+// that has detached owns an external buffer and must release it, and one whose bytes are inline or in
+// `.rdata` must not. What changed is only WHERE that is written down — `capacity@16 >= 0` plus
+// `emitStringOwedBase`, the same encoding the Array record reads — so a String and an Array can no longer
+// disagree about what a record owns. Leave it wrong and the external buffer is never freed (a leak, exit
+// 101) or an interior pointer is released (an over-release, also 101).
 //
 // Growth is EXACT (`requiredLen`): the specs pin the output, the byte length and the absence of a leak,
 // none of which a geometric policy would change — and exact size keeps the alloc/free count trivially
@@ -824,95 +888,73 @@ function buildStrAppend(module StdModule)
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry")
-	var checkCap = module.addBlock(func, label: b"checkCap")
+	var inPlace = module.addBlock(func, label: b"inPlace")
 	var detach = module.addBlock(func, label: b"detach")
-	var freeOld = module.addBlock(func, label: b"freeOld")
-	var afterDetach = module.addBlock(func, label: b"afterDetach")
+	var baseJoin = module.addBlock(func, label: b"baseJoin")
 	var blit = module.addBlock(func, label: b"blit")
 	var clearAscii = module.addBlock(func, label: b"clearAscii")
-	var done = module.addBlock(func, label: b"done")
+	let done = module.addBlock(func, label: b"done")
 
 	emitParams(module, block: entry, count: 2)
 	let selfPtr = 0 as ValueId
 	let otherPtr = 1 as ValueId
 
 	// entry: load the fields every block reads (entry dominates all of them, so these need no phi),
-	// compute the required length, and branch on whether `self` already owns an external root buffer.
-	let selfLen = ids.mint()
-	module.appendOp(entry, op: StdOp.loadIndirect(selfLen, addrId: selfPtr, offset: StringLengthOffset, valueType: StdType.i64))
-	let selfBuf = ids.mint()
-	module.appendOp(entry, op: StdOp.loadIndirect(selfBuf, addrId: selfPtr, offset: StringBufferOffset, valueType: StdType.i64))
-	let selfParent = ids.mint()
-	module.appendOp(entry, op: StdOp.loadIndirect(selfParent, addrId: selfPtr, offset: StringParentPtrOffset, valueType: StdType.i64))
-	let otherLen = ids.mint()
-	module.appendOp(entry, op: StdOp.loadIndirect(otherLen, addrId: otherPtr, offset: StringLengthOffset, valueType: StdType.i64))
-	let otherBuf = ids.mint()
-	module.appendOp(entry, op: StdOp.loadIndirect(otherBuf, addrId: otherPtr, offset: StringBufferOffset, valueType: StdType.i64))
-	let otherAscii = ids.mint()
-	module.appendOp(entry, op: StdOp.loadIndirect(otherAscii, addrId: otherPtr, offset: StringIsAsciiOffset, valueType: StdType.i64))
-	let requiredLen = ids.mint()
-	module.appendOp(entry, op: StdOp.binOp(requiredLen, lhs: selfLen, rhs: otherLen, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	let rootConst = ids.mint()
-	module.appendOp(entry, op: StdOp.const(rootConst, value: DetachedRootParent, valueType: StdType.i64))
-	let isRoot = ids.mint()
-	module.appendOp(entry, op: StdOp.cmp(isRoot, lhs: selfParent, rhs: rootConst, pred: StdCmpPred.eq, operandType: StdType.i64))
-	module.setTerminator(entry, op: StdOp.condBranch(isRoot, thenBlockId: checkCap.id, elseBlockId: detach.id))
+	// compute the required length, and branch on whether the buffer already has room for it.
+	let selfLen = emitLoadField(module, block: entry, record: selfPtr, offset: StringLengthOffset, ids: ids)
+	let selfBuf = emitLoadField(module, block: entry, record: selfPtr, offset: StringBufferOffset, ids: ids)
+	let otherLen = emitLoadField(module, block: entry, record: otherPtr, offset: StringLengthOffset, ids: ids)
+	let otherBuf = emitLoadField(module, block: entry, record: otherPtr, offset: StringBufferOffset, ids: ids)
+	let otherAscii = emitLoadField(module, block: entry, record: otherPtr, offset: StringIsAsciiOffset, ids: ids)
+	let selfCap = emitLoadField(module, block: entry, record: selfPtr, offset: StringCapacityOffset, ids: ids)
+	let requiredLen = emitBin(module, block: entry, a: selfLen, b: otherLen, opcode: StdBinOpcode.add, ids: ids)
+	let tooSmall = emitCmp(module, block: entry, a: selfCap, b: requiredLen, pred: StdCmpPred.lt, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(tooSmall, thenBlockId: detach.id, elseBlockId: inPlace.id))
 
-	// checkCap: an owned root still detaches (grows) when it is too small for the combined length.
-	let selfCap = ids.mint()
-	module.appendOp(checkCap, op: StdOp.loadIndirect(selfCap, addrId: selfPtr, offset: StringCapacityOffset, valueType: StdType.i64))
-	let tooSmall = ids.mint()
-	module.appendOp(checkCap, op: StdOp.cmp(tooSmall, lhs: selfCap, rhs: requiredLen, pred: StdCmpPred.lt, operandType: StdType.i64))
-	module.setTerminator(checkCap, op: StdOp.condBranch(tooSmall, thenBlockId: detach.id, elseBlockId: blit.id))
+	// The allocation the blit owes a release to once it has finished reading: the pre-detach one, or none
+	// at all when the bytes go into the buffer that is already there.
+	let owedBase = ids.mint()
+	blit.blockArgs.push(IrBlockArg.create(owedBase, argType: StdType.i64))
 
-	// detach: allocate a fresh external buffer (destructor 0 — raw bytes, `__str_decref` frees it
-	// directly), copy the live bytes in, and free the OLD buffer only if it was itself a root.
-	let zeroDtor = ids.mint()
-	module.appendOp(detach, op: StdOp.const(zeroDtor, value: 0, valueType: StdType.i64))
+	let owesNothing = emitConst(module, block: inPlace, value: NoOwedAllocation, ids: ids)
+	module.setTerminator(inPlace, op: StdOp.branch(blit.id))
+	inPlace.branchEdges.push(BranchEdge.create(blit.id, argIds: argsOf(owesNothing)))
+
+	// detach: read what the record owes BEFORE the publish below overwrites the fields that answer it.
+	let base = emitStringOwedBase(module, func: func, cur: detach, join: baseJoin, record: selfPtr, ids: ids)
+
+	// baseJoin: allocate a fresh external buffer (destructor 0 — raw bytes), copy the live bytes across,
+	// and publish it. `parent@32` returns to `NoOwedAllocation`: a record that has just copied its bytes
+	// into an allocation of its own owes nothing to anyone else, exactly as `__arr_cow_detach` leaves it.
+	let zeroDtor = emitConst(module, block: baseJoin, value: 0, ids: ids)
 	let newBuf = ids.mint()
-	module.appendOp(detach, op: StdOp.call(newBuf, callee: MmAllocName, args: twoArgs(requiredLen, second: zeroDtor)))
+	module.appendOp(baseJoin, op: StdOp.call(newBuf, callee: MmAllocName, args: twoArgs(requiredLen, second: zeroDtor)))
 	let copied = ids.mint()
-	module.appendOp(detach, op: StdOp.call(copied, callee: StrCopyName, args: threeArgs(newBuf, second: selfBuf, third: selfLen)))
-	let rootConst2 = ids.mint()
-	module.appendOp(detach, op: StdOp.const(rootConst2, value: DetachedRootParent, valueType: StdType.i64))
-	let wasRoot = ids.mint()
-	module.appendOp(detach, op: StdOp.cmp(wasRoot, lhs: selfParent, rhs: rootConst2, pred: StdCmpPred.eq, operandType: StdType.i64))
-	module.setTerminator(detach, op: StdOp.condBranch(wasRoot, thenBlockId: freeOld.id, elseBlockId: afterDetach.id))
+	module.appendOp(baseJoin, op: StdOp.call(copied, callee: StrCopyName, args: threeArgs(newBuf, second: selfBuf, third: selfLen)))
+	emitStoreField(module, block: baseJoin, record: selfPtr, offset: StringBufferOffset, value: newBuf)
+	emitStoreField(module, block: baseJoin, record: selfPtr, offset: StringCapacityOffset, value: requiredLen)
+	let noParent = emitConst(module, block: baseJoin, value: NoOwedAllocation, ids: ids)
+	emitStoreField(module, block: baseJoin, record: selfPtr, offset: StringParentPtrOffset, value: noParent)
+	module.setTerminator(baseJoin, op: StdOp.branch(blit.id))
+	baseJoin.branchEdges.push(BranchEdge.create(blit.id, argIds: argsOf(base)))
 
-	// freeOld: the old external root is being replaced by a bigger one — release it (a grow).
-	let oldFreed = ids.mint()
-	module.appendOp(freeOld, op: StdOp.call(oldFreed, callee: MmFreeName, args: argsOf(selfBuf)))
-	module.setTerminator(freeOld, op: StdOp.branch(afterDetach.id))
-
-	// afterDetach: publish the new buffer, its capacity, and the ROOT provenance — the record now owns
-	// an external buffer, exactly as a prior grow leaves it. `newBuf` is defined in `detach`, which
-	// dominates here on both incoming edges.
-	module.appendOp(afterDetach, op: StdOp.storeIndirect(selfPtr, offset: StringBufferOffset, valueId: newBuf, valueType: StdType.i64))
-	module.appendOp(afterDetach, op: StdOp.storeIndirect(selfPtr, offset: StringCapacityOffset, valueId: requiredLen, valueType: StdType.i64))
-	let rootParent = ids.mint()
-	module.appendOp(afterDetach, op: StdOp.const(rootParent, value: DetachedRootParent, valueType: StdType.i64))
-	module.appendOp(afterDetach, op: StdOp.storeIndirect(selfPtr, offset: StringParentPtrOffset, valueId: rootParent, valueType: StdType.i64))
-	module.setTerminator(afterDetach, op: StdOp.branch(blit.id))
-
-	// blit: append `other`'s bytes at the end of `self`'s CURRENT buffer (reloaded, since detach may
-	// have replaced it) using the OLD length as the write cursor, then publish the new length. Reached
-	// in place (from `checkCap`) and grown (from `afterDetach`) alike.
-	let curBuf = ids.mint()
-	module.appendOp(blit, op: StdOp.loadIndirect(curBuf, addrId: selfPtr, offset: StringBufferOffset, valueType: StdType.i64))
-	let dstAddr = ids.mint()
-	module.appendOp(blit, op: StdOp.binOp(dstAddr, lhs: curBuf, rhs: selfLen, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	// blit: append `other`'s bytes at the end of `self`'s CURRENT buffer (reloaded, since detach may have
+	// replaced it) using the OLD length as the write cursor, then publish the new length. Reached in place
+	// and grown alike. Only now is the old allocation released — see the aliasing note above.
+	let curBuf = emitLoadField(module, block: blit, record: selfPtr, offset: StringBufferOffset, ids: ids)
+	let dstAddr = emitBin(module, block: blit, a: curBuf, b: selfLen, opcode: StdBinOpcode.add, ids: ids)
 	let blitted = ids.mint()
 	module.appendOp(blit, op: StdOp.call(blitted, callee: StrCopyName, args: threeArgs(dstAddr, second: otherBuf, third: otherLen)))
-	module.appendOp(blit, op: StdOp.storeIndirect(selfPtr, offset: StringLengthOffset, valueId: requiredLen, valueType: StdType.i64))
-	// `isAscii` is maintained incrementally: the concatenation stays ASCII only if `other` is too.
-	let zeroAscii = ids.mint()
-	module.appendOp(blit, op: StdOp.const(zeroAscii, value: 0, valueType: StdType.i64))
-	let otherNonAscii = ids.mint()
-	module.appendOp(blit, op: StdOp.cmp(otherNonAscii, lhs: otherAscii, rhs: zeroAscii, pred: StdCmpPred.eq, operandType: StdType.i64))
-	module.setTerminator(blit, op: StdOp.condBranch(otherNonAscii, thenBlockId: clearAscii.id, elseBlockId: done.id))
+	emitStoreField(module, block: blit, record: selfPtr, offset: StringLengthOffset, value: requiredLen)
+	var afterRelease = emitReleaseOwedBase(module, func: func, cur: blit, base: owedBase, callee: MmDecrefName, ids: ids)
+
+	// afterRelease: `isAscii` is maintained incrementally — the concatenation stays ASCII only if `other` is.
+	let zeroAscii = emitConst(module, block: afterRelease, value: AsciiFlagFalse, ids: ids)
+	let otherNonAscii = emitCmp(module, block: afterRelease, a: otherAscii, b: zeroAscii, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(afterRelease, op: StdOp.condBranch(otherNonAscii, thenBlockId: clearAscii.id, elseBlockId: done.id))
 
 	// clearAscii: `other` carried a non-ASCII byte, so the result is not ASCII.
-	module.appendOp(clearAscii, op: StdOp.storeIndirect(selfPtr, offset: StringIsAsciiOffset, valueId: zeroAscii, valueType: StdType.i64))
+	emitStoreField(module, block: clearAscii, record: selfPtr, offset: StringIsAsciiOffset, value: zeroAscii)
 	module.setTerminator(clearAscii, op: StdOp.branch(done.id))
 
 	module.setTerminator(done, op: StdOp.retVoid)
@@ -921,10 +963,10 @@ function buildStrAppend(module StdModule)
 end 'buildStrAppend'
 
 // `__str_decref(record)` — a String's DROP. It is `__mm_decref` (dec the refcount; free at the last
-// owner) plus the one thing the generic decref structurally cannot do: free the EXTERNAL buffer of a
+// owner) plus the one thing the generic decref structurally cannot do: release the EXTERNAL buffer of a
 // detached String BEFORE the record. The parser routes every owned-String drop here by TAG (`emitDecref`),
 // so a struct box and a raw scratch buffer still drop through `__mm_decref`; only a String record, which
-// alone carries the `parent@32`/`buffer@0` pair, drops through here.
+// alone carries the buffer-ownership encoding, drops through here.
 //
 // ⭐ **STATIC DISPATCH, NOT A DESTRUCTOR POINTER.** The record stores NO destructor — the parser knows the
 // static type at every drop, so there is nothing to dispatch dynamically, and `funcAddr`/`callIndirect`
@@ -944,35 +986,28 @@ function buildStrDecref(module StdModule)
 	var entry = module.addBlock(func, label: b"entry")
 	var lower = module.addBlock(func, label: b"lower")
 	var release = module.addBlock(func, label: b"release")
-	var freeBuf = module.addBlock(func, label: b"freeBuf")
+	var baseJoin = module.addBlock(func, label: b"baseJoin")
 	var freeRec = module.addBlock(func, label: b"freeRec")
 
 	emitParams(module, block: entry, count: 1)
 	let record = 0 as ValueId
 
 	// entry + lower: the shared refcount check. `rc == 0` (the last owner) branches to `release`, where a
-	// String does the one thing the generic decref structurally cannot — free a detached buffer first.
+	// String does the one thing the generic decref structurally cannot — release a detached buffer first.
 	emitRefcountCheckToLastOwner(module, entry: entry, lower: lower, record: record, lastOwner: release, ids: ids)
 
-	// release: the last owner. A DETACHED ROOT (`parent == -1`) owns an external buffer that must be
-	// freed before the record; inline/rdata/borrowed frees nothing beyond it.
-	let parent = ids.mint()
-	module.appendOp(release, op: StdOp.loadIndirect(parent, addrId: record, offset: StringParentPtrOffset, valueType: StdType.i64))
-	let rootConst = ids.mint()
-	module.appendOp(release, op: StdOp.const(rootConst, value: DetachedRootParent, valueType: StdType.i64))
-	let isRoot = ids.mint()
-	module.appendOp(release, op: StdOp.cmp(isRoot, lhs: parent, rhs: rootConst, pred: StdCmpPred.eq, operandType: StdType.i64))
-	module.setTerminator(release, op: StdOp.condBranch(isRoot, thenBlockId: freeBuf.id, elseBlockId: freeRec.id))
+	// release + baseJoin: the last owner asks the shared pair which separate allocation this record owes a
+	// release to and pays it, BEFORE the record itself dies — the whole reason this cannot simply call
+	// `__mm_decref`, which would reclaim the box while its `capacity`/`buffer` are still the answer. A
+	// String that detached owes its external buffer; one whose bytes are inline (or in an immortal `.rdata`
+	// blob) owes nothing, and the null guard inside the release step is what makes that an ordinary answer
+	// rather than a case. It is the SAME pair `__arr_decref` uses, so a String and an Array cannot disagree
+	// about what a record owns.
+	let base = emitStringOwedBase(module, func: func, cur: release, join: baseJoin, record: record, ids: ids)
+	var afterRelease = emitReleaseOwedBase(module, func: func, cur: baseJoin, base: base, callee: MmDecrefName, ids: ids)
+	module.setTerminator(afterRelease, op: StdOp.branch(freeRec.id))
 
-	// freeBuf: release the external buffer, then fall into the record free.
-	let buffer = ids.mint()
-	module.appendOp(freeBuf, op: StdOp.loadIndirect(buffer, addrId: record, offset: StringBufferOffset, valueType: StdType.i64))
-	let bufFreed = ids.mint()
-	module.appendOp(freeBuf, op: StdOp.call(bufFreed, callee: MmFreeName, args: argsOf(buffer)))
-	module.setTerminator(freeBuf, op: StdOp.branch(freeRec.id))
-
-	// freeRec: release the record itself. Reached from `release` (nothing beyond it) and `freeBuf`
-	// (external buffer already gone) alike.
+	// freeRec: release the record itself, its external bytes (if it had any) already released.
 	let recFreed = ids.mint()
 	module.appendOp(freeRec, op: StdOp.call(recFreed, callee: MmFreeName, args: argsOf(record)))
 	module.setTerminator(freeRec, op: StdOp.retVoid)

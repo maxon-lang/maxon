@@ -1,0 +1,100 @@
+// Runtime/RuntimeAbort.maxon — ⭐ **THE ONE HOME OF THE PROCESS EXIT CODES THE EMITTED RUNTIME ABORTS
+// WITH**, and the one shape those aborts are emitted in.
+//
+// ⚠ **IT EXISTS BECAUSE THE SPACE HAD ALREADY COLLIDED.** `GtRuntime.ProcStoreOverflowExitCode` and
+// `ArrayRuntime.ElementSizeZeroExitCode` were BOTH 70 — two unrelated aborts wearing one number, each
+// picked against a different file-local list of "codes I can see from here". Nothing was broken by it
+// (a program cannot reach both), but the next number added was a coin flip, and a runtime abort that
+// reports another abort's code is a debugging session that starts by reading the wrong function.
+//
+// ⭐ **THE FIX IS THE SHAPE THE 4-DIGIT ERROR CODES ALREADY PROVE: ONE DECLARATION SITE PLUS A CHECK
+// THAT FAILS THE BUILD ON A DUPLICATE** — except that here the check needs no tooling, because the
+// LANGUAGE already is one. An enum's raw values must be distinct, so a second claimant on a number is
+// **E3031 `duplicate raw value`** from the bootstrap that compiles this file: the collision cannot be
+// committed, let alone shipped. That is why these are enum CASES and not seven `let`s.
+//
+// ⚠ **THIS IS NOT THE 4-DIGIT ERROR REGISTRY AND MUST NOT BE FOLDED INTO IT.** `docs/error-codes.txt`
+// numbers DIAGNOSTICS the compiler prints at compile time; these are PROCESS EXIT CODES a compiled
+// program dies with at run time. Different space, different consumers (a shell / a spec's `exitcode`
+// block), different lifetimes.
+//
+// ⭐ **HOW TO PICK THE NEXT ONE: take the next free number ABOVE 70.** The band below is not ours —
+// 0-69 are ordinary program exit codes (a Maxon `main` returns one), and the subprocess specs' children
+// already use 1/2/3/4/5/25/45/123 — so an abort down there is indistinguishable from a program that
+// simply returned. `subprocessSpawnFailed` is the one exception and it is deliberate (see its note).
+// 101 and 134 are the two the compiler already spends outside this band and they are declared here so
+// the enum's own duplicate check covers them.
+export enum RuntimeAbort
+	// `__gt_process_run`: `CreateProcessA` FAILED (a command whose first token is not a runnable
+	// executable). ⚠ DELIBERATELY 1, not a code from the band: this abort stands in for the child that
+	// never started, and 1 is what a shell reads as "that command failed". Pinned by
+	// `async-subprocess.spawn-failure-aborts`.
+	subprocessSpawnFailed = 1
+	// `__gt_proc_add`: the 64-slot process store is FULL (a program parks more children than
+	// `ProcStoreCapacity`, beyond `WaitForMultipleObjects`'s `MAXIMUM_WAIT_OBJECTS`). Aborting is the
+	// honest safe response to hitting the seed's documented concurrency ceiling — the alternative is a
+	// write past the parallel arrays. Pinned by `async-subprocess.store-overflow-aborts`.
+	processStoreOverflow = 70
+	// `__arr_grow`: `capacity·element_size` overflowed i64. Without the guard the wrapped byte count
+	// under-allocates and the next element write runs off the buffer — a silent heap overflow.
+	arrayCapacityOverflow = 71
+	// `__arr_append`: `dest` and `src` disagree on `element_size@24`, so the single-stride blit would
+	// over-read the packed source and splice garbage in.
+	arrayAppendElementSizeMismatch = 72
+	// `__arr_resize`: a NEGATIVE length. The shrink's zero range starts at `buffer + n·es`, which for a
+	// negative `n` is an address BELOW the buffer — the one out-of-buffer write a detach cannot fix.
+	// Pinned by `byte-string-literal.negative-resize-aborts`.
+	arrayNegativeResize = 73
+	// `__arr_create`: a 0 element size, which is a COMPILER bug rather than a program's (a concrete
+	// literal is never 0 and a descriptor read never yields 0) — it would make `__arr_grow` allocate a
+	// zero-byte buffer and corrupt. ⚠ It was 70 until this registry landed, colliding with
+	// `processStoreOverflow`; it is the one that moved because the other is spec-pinned and this is
+	// unreachable from any source program.
+	arrayElementSizeZero = 74
+	// `__mm_leak_check`: the live allocation count was not zero at exit — a LEAK, or (a negative count)
+	// an over-release. It is the project-wide leak-gate code, read from the other end by
+	// `SpecWorkerPool.LeakCheckExitCode`.
+	leakDetected = 101
+	// A user `panic(…)`. ⚠ **CLAIMED, NOT READ, AND THAT IS A RESIDUAL.** The emitter is
+	// `LowerMaxonToStd.UserPanicExitCode`, which still spells the number itself — that file is outside
+	// this rung's file list, so the number is RESERVED here (it occupies the space, so the next abort
+	// cannot take it and the enum's duplicate check covers it) and the one-line change that makes that
+	// site read this case instead is reported to the coordinator rather than made behind their back.
+	userPanic = 134
+end 'RuntimeAbort'
+
+// ⭐ **ABORT THE PROCESS FROM A BUILDER-BUILT RUNTIME FUNCTION — THE ONE HOME OF THE ABORT SHAPE.**
+// `osExit` DIVERGES, so the block it sits in never falls out; but a block must still carry a
+// terminator, so a DEAD one follows. That fact was open-coded four times (`ArrayRuntime.emitVoidAbort`
+// plus `GtRuntime`'s `__gt_proc_add` and `__gt_process_run`, and `ArrayRuntime.__arr_create`), and it
+// is written here once.
+//
+// ⭐ **THE TERMINATOR KIND IS DERIVED FROM THE FUNCTION, NOT PASSED IN.** A void function's dead
+// terminator is `retVoid` and a value-returning one's is `ret <0>`; that is exactly what
+// `func.returnType` already says, so it is read rather than restated. A caller therefore cannot pick
+// the wrong one — which is the failure the previous split into a void helper plus two open-coded
+// value-returning copies left available. (A THROWING runtime function returns `value(i64)` through the
+// dual-register ABI; its `ret` is dead too, so the same answer is right there.)
+export function emitRuntimeAbort(module StdModule, func IrFunction, block IrBlock, abort RuntimeAbort, ids ValueMinter)
+	// Bound to a local FIRST: the bootstrap's union-case argument type-checker cannot lower an
+	// `EnumMember.rawValue` written directly as a case argument (E9001) — the same reason
+	// `StdToArm64Conversion.vregOf` binds `reg.rawValue` before using it.
+	let code = abort.rawValue as ParsedInt
+	let codeId = ids.mint()
+	module.appendOp(block, op: StdOp.const(codeId, value: code, valueType: StdType.i64))
+	module.appendOp(block, op: StdOp.osExit(codeId))
+
+	match func.returnType 'deadTerminator'
+		void then module.setTerminator(block, op: StdOp.retVoid)
+		value then emitDeadValueReturn(module, block: block, ids: ids)
+	end 'deadTerminator'
+end 'emitRuntimeAbort'
+
+// The dead `ret 0` a value-returning function's abort block carries. The value is unread by
+// construction — `osExit` above it never returns — so a plain 0 is the honest filler. It is a function
+// rather than two lines inside the arm above because a `match` arm is ONE statement.
+function emitDeadValueReturn(module StdModule, block IrBlock, ids ValueMinter)
+	let deadId = ids.mint()
+	module.appendOp(block, op: StdOp.const(deadId, value: 0, valueType: StdType.i64))
+	module.setTerminator(block, op: StdOp.ret(deadId))
+end 'emitDeadValueReturn'

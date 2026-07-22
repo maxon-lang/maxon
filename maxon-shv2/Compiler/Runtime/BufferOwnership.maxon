@@ -1,0 +1,154 @@
+// Runtime/BufferOwnership.maxon — ⭐⭐ **ONE ENCODING OF "IS THIS BUFFER MINE?", READ BY BOTH RECORDS.**
+//
+// A String record and an Array record are DISTINCT 48-byte record types, but they carry the same
+// problem: each one holds a `buffer@0` that may or may not be the record's own to write and to release,
+// and every mutator and every drop path has to ask which. This file owns that question — the values
+// that answer it and the two predicates that read them — so the String runtime and the Array runtime
+// cannot answer it differently.
+//
+// ⚠ **THEY DID.** Array answered it with the SIGN of `capacity@16` while String answered it with
+// `parent@32 == -1`, so the SAME FIELD at the SAME OFFSET meant OPPOSITE things in the two records: for
+// an Array `parent@32` is *someone else's allocation that I owe a release to*, for a String it was *I
+// own an external buffer*. One record's "this field is set" was the other's "this field is not". On top
+// of that String carried a `capacity@16 = -2` that nothing ever tested and a `parent@32 = -3` that
+// nothing ever read. Three spellings of one question across two runtimes, at one offset.
+//
+// --- THE ENCODING, stated once ---
+//
+// **`capacity@16` answers "IS THIS BUFFER MINE TO WRITE, AND MINE TO RELEASE?"**
+//   * `>= 0` — YES. `buffer@0` is a SEPARATE allocation this record owns; it may be written in place
+//     within `capacity` elements, and the record owes it a release when it dies or detaches.
+//   * `< 0` — NO. The record must copy its bytes somewhere private before any in-place write, and must
+//     not release `buffer@0`. WHICH negative value says only where the buffer came from (below); no
+//     reader compares against a specific one, and that is deliberate — a further non-owned-buffer kind
+//     then arrives as one more value rather than as a new test at every reader, which is exactly how
+//     the zero-copy view arrived after the rdata literal.
+//
+// **`parent@32` answers "WHICH SEPARATE ALLOCATION DO I OWE A RELEASE TO?"** — the address `__mm_alloc`
+// RETURNED (so `__mm_decref` finds its header just below it), or `NoOwedAllocation` for "none". It is
+// consulted only when `capacity@16 < 0`; an owner's answer is its own `buffer@0`, and reading it out of
+// two fields rather than storing it twice is what keeps `buffer` and `parent` from being one fact in
+// two slots.
+//
+// ⚠ **`emitOwedAllocationBase` ASSUMES AN OWNER'S BUFFER IS A SEPARATE ALLOCATION, AND THAT IS THE ONE
+// PLACE A RECORD KIND'S LAYOUT CAN DIVERGE FROM THIS ENCODING.** It is true of every Array (an array
+// grows, so its elements can never live behind its record) and of every String that has detached; it is
+// NOT true of an INLINE String, whose bytes live at `record + StringRecordBytes` inside the record's own
+// `__mm_alloc` payload, so there is no separate allocation to release and the record's own free reclaims
+// both. That layout fact belongs to String and is kept there: `StringRuntime.emitStringOwedBase` wraps
+// this helper with the one arm that answers it. See that function for why it is derived from the layout
+// rather than stored, and for the residual that would delete it.
+export let ViewBufferCapacity = 0 - 1 as ParsedInt
+export let RdataBufferCapacity = 0 - 2 as ParsedInt
+
+// `parent@32` when the record owes NOTHING: an owner (its debt is its own `buffer@0`), a byte-string or
+// String literal over an immortal `.rdata` blob, a String whose bytes are inline, or an array that never
+// allocated a buffer at all. It is an ORDINARY answer, not an error case, which is why every release
+// step is null-guarded.
+export let NoOwedAllocation = 0 as ParsedInt
+
+// ⭐ **WHICH SLOTS A RECORD KIND KEEPS THE ENCODING IN.** The two predicates below take this rather than
+// a record pointer alone, because the String record and the Array record are different types that each
+// declare their own offsets (`StringRuntime`, `ArrayRuntime`) — the two sets coincide today and nothing
+// here relies on that. Each runtime builds this ONCE, from its own constants, so the shared question is
+// asked over explicit arguments and the layout knowledge stays where the layout is declared.
+export type BufferRecordSlots
+	export var bufferOffset as ByteOffset
+	export var capacityOffset as ByteOffset
+	export var parentOffset as ByteOffset
+
+	export static function create(bufferOffset ByteOffset, capacityOffset ByteOffset, parentOffset ByteOffset) returns BufferRecordSlots
+		return Self{bufferOffset: bufferOffset, capacityOffset: capacityOffset, parentOffset: parentOffset}
+	end 'create'
+end 'BufferRecordSlots'
+
+// `capacity < 0` — ⭐ **THE ONE HOME OF THE NOT-MINE TEST**, asked by the places that must act on it and
+// reached by no other: `__arr_cow_detach` (such a buffer cannot be WRITTEN in place, so replace it),
+// `__arr_decref` (it must not be released — it was either never allocated or is still being read by
+// someone else) and `emitOwedAllocationBase` (which of two fields names the allocation this record owes
+// a release to). Their conclusions differ and are meant to — what must never differ is the test, because
+// a record misjudged by any one of them is a fault: a write into read-only memory or into bytes another
+// array is reading, or a release of an address the allocator never handed out.
+//
+// ⚠ **IT IS ALSO THE ONE TEST THAT MAY BE ASKED BEFORE A HEADER READ IS SAFE**, and that is why it reads
+// the record's own `capacity@16` and nothing else. A view's `buffer@0` is INTERIOR, so the word at
+// `buffer - 8` is the parent's element DATA, not a refcount; anything that wants to read a buffer's
+// `__mm_alloc` header must clear this test first. `__arr_cow_detach` is exactly such a reader, and its
+// arms are ordered accordingly.
+//
+// ⚠ `StringRuntime.__str_append` does NOT call this, and its comment says why: its own `capacity <
+// requiredLen` growth test already subsumes the sign (every negative capacity is below every required
+// length), so asking both would be one test written twice.
+export function emitBufferNotOwned(module StdModule, block IrBlock, record ValueId, slots BufferRecordSlots, ids ValueMinter) returns ValueId
+	let capacity = emitLoadField(module, block: block, record: record, offset: slots.capacityOffset, ids: ids)
+	let zero = emitConst(module, block: block, value: 0, ids: ids)
+	return emitCmp(module, block: block, a: capacity, b: zero, pred: StdCmpPred.lt, ids: ids)
+end 'emitBufferNotOwned'
+
+// ⭐ **THE SEPARATE ALLOCATION THIS RECORD OWES A RELEASE TO — `NoOwedAllocation` when it owes nothing.**
+// An OWNER's is its own `buffer@0` (the pointer `__mm_alloc` returned, which may be 0 if the record never
+// allocated one); a NON-OWNED record's is `parent@32` (a view's shared base, or 0 for an immortal `.rdata`
+// blob). ⭐ THE ONE HOME OF THAT CHOICE, read by every place whose correctness depends on picking the same
+// field: `__arr_slice` (which allocation to INCREF for the new view), `__arr_cow_detach` and
+// `__str_append` (which one to RELEASE once the record has copied its bytes out) and
+// `__arr_decref`/`__str_decref` (which one to release at death). A disagreement between any two of them
+// is a double-free or a leak, so it is written once.
+//
+// It threads `cur` (sets its terminator) and returns the base as a BLOCK ARG on the caller-owned `join`,
+// which is why `join` is passed IN: the caller resumes there and the two arms are otherwise identical.
+// A caller with a THIRD answer of its own adds an arm by branching to the same `join` with its own value
+// (`StringRuntime.emitStringOwedBase` is the one such caller).
+//
+// ⚠ **IT IS DELIBERATELY NOT FUSED WITH `emitReleaseOwedBase` INTO ONE "release the base" HELPER**, even
+// though the drop paths call the two back to back. A DETACH must SPLIT them across its byte copy — the
+// base is read before the record is republished and spent only after the copy — so a fused helper would
+// serve some call sites and quietly invite the ones that must not fuse them to do so.
+export function emitOwedAllocationBase(module StdModule, func IrFunction, cur IrBlock, join IrBlock, record ValueId, slots BufferRecordSlots, ids ValueMinter) returns ValueId
+	var viewBase = module.addBlock(func, label: b"vbase")
+	var ownBase = module.addBlock(func, label: b"obase")
+
+	let notOwned = emitBufferNotOwned(module, block: cur, record: record, slots: slots, ids: ids)
+	module.setTerminator(cur, op: StdOp.condBranch(notOwned, thenBlockId: viewBase.id, elseBlockId: ownBase.id))
+
+	let base = ids.mint()
+	join.blockArgs.push(IrBlockArg.create(base, argType: StdType.i64))
+
+	let parent = emitLoadField(module, block: viewBase, record: record, offset: slots.parentOffset, ids: ids)
+	module.setTerminator(viewBase, op: StdOp.branch(join.id))
+	viewBase.branchEdges.push(BranchEdge.create(join.id, argIds: argsOf(parent)))
+
+	let buffer = emitLoadField(module, block: ownBase, record: record, offset: slots.bufferOffset, ids: ids)
+	module.setTerminator(ownBase, op: StdOp.branch(join.id))
+	ownBase.branchEdges.push(BranchEdge.create(join.id, argIds: argsOf(buffer)))
+
+	return base
+end 'emitOwedAllocationBase'
+
+// `if base != NoOwedAllocation then <callee>(base)` — the null-guarded refcount step every share and
+// every release of an owed allocation makes, since "this record owes nothing" is an ordinary answer from
+// `emitOwedAllocationBase`. Threads `cur` and returns the continuation block. ONE home for the guard, in
+// both directions: `__arr_slice` raises the count with `__mm_incref`, the detach and drop paths lower it
+// with `__mm_decref`.
+//
+// ⭐ **A BUFFER IS RELEASED WITH `__mm_decref`, NEVER `__mm_free`, AND THAT IS THE WHOLE OF THE DROP
+// RULE.** It may still be under a view, so only the LAST owner may reclaim it — which is exactly what
+// `__mm_decref` decides. It is also the safer failure mode: if some future path ever reached here with a
+// count it should not have, a decref merely keeps the buffer alive and the leak gate reports 101, where
+// a `__mm_free` would silently hand a live allocation back and become a use-after-free the day a free
+// list exists. v1 paid for the twin of this omission three times
+// (`stdlib/Internals.maxon:3465-3472`): a new non-owned-buffer kind must be taught to the DROP path, not
+// only to the write check.
+export function emitReleaseOwedBase(module StdModule, func IrFunction, cur IrBlock, base ValueId, callee ByteArray, ids ValueMinter) returns IrBlock
+	var step = module.addBlock(func, label: b"rcstep")
+	let cont = module.addBlock(func, label: b"rccont")
+
+	let zero = emitConst(module, block: cur, value: NoOwedAllocation, ids: ids)
+	let shares = emitCmp(module, block: cur, a: base, b: zero, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(cur, op: StdOp.condBranch(shares, thenBlockId: step.id, elseBlockId: cont.id))
+
+	let counted = ids.mint()
+	module.appendOp(step, op: StdOp.call(counted, callee: callee, args: argsOf(base)))
+	module.setTerminator(step, op: StdOp.branch(cont.id))
+
+	return cont
+end 'emitReleaseOwedBase'

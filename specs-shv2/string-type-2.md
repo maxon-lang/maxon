@@ -797,6 +797,55 @@ end 'main'
 [1+2]
 ```
 
+<!-- test: string-append-self -->
+### Append a String to Itself
+`s.append(s)` ALIASES the argument to the receiver's own bytes, so the source of the blit is the buffer the
+grow has just replaced. The result must still be the doubled text, and the run must stay leak-free: the old
+allocation may only be released once BOTH the grow's copy and the blit have finished reading it. shv2-authored
+(the corpus has no self-append case); the expected output is the bootstrap oracle's, which produces `abcabc`
+for the same program.
+```maxon
+function main() returns ExitCode
+	var s = "abc"
+	s.append(s)
+	print("{s}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+abcabc
+```
+
+<!-- test: string-append-empty -->
+### Append an Empty String
+An empty append needs no room, so the receiver's buffer already fits and nothing is reallocated — including
+for a String whose bytes are still INLINE in its own record, whose capacity is its exact length. The
+observable contract is only that the text and the byte length are unchanged, and that a later non-empty
+append still grows correctly off that untouched buffer. shv2-authored (the corpus has no empty-append case);
+the expected output is the bootstrap oracle's.
+```maxon
+function main() returns ExitCode
+	var t = "xy"
+	t.append("")
+	print("{t}|{t.byteLength()}\n")
+	var u = ""
+	u.append("")
+	u.append("q")
+	print("{u}|{u.byteLength()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+xy|2
+q|1
+```
+
 <!-- disabled-test: tobytearray-is-independent-of-an-owned-source -->
 <!-- P1.8: string methods -->
 `toByteArray()` returns a NEW INDEPENDENT `ByteArray`. Writing to it must not touch the string.

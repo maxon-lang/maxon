@@ -39,14 +39,16 @@ export let ArrParentOffset = 32 as ByteOffset
 export let ArrElementDestroyOffset = 40 as ByteOffset
 export let ArrRecordBytes = 48 as ByteCount
 
-// ⭐ **`parent@32` IS THE BASE POINTER OF THE SHARED ALLOCATION THIS RECORD OWES A DECREF TO** — the
-// address `__mm_alloc` RETURNED, so `__mm_decref` finds its header at `base - HeaderBytes`. 0 means "this
-// record owes nothing" (an owner, or an rdata literal). It is deliberately NOT the parent RECORD and NOT
-// the view's own `buffer@0`: `buffer@0` is an INTERIOR pointer (`base + start·element_size`) whose
-// `-8` word is the parent's DATA, not a refcount, and a parent record would make a CHAIN. ⭐ **NESTED
-// SLICES FLATTEN**: a slice of a view stores the same base and increfs it again, so nothing ever walks a
-// chain and a view's lifetime never depends on the record it was cut from. (Both references flatten too —
-// the bootstrap stores `source.parentPtr`, not `source`.)
+// ⭐ **`capacity@16` AND `parent@32` CARRY THE BUFFER-OWNERSHIP ENCODING, WHICH IS NOT THIS FILE'S TO
+// DEFINE — `BufferOwnership` owns it, and the String record answers the same two questions the same
+// way.** The sign of `capacity@16` says whether the buffer is this record's to write and to release;
+// `parent@32` is the address `__mm_alloc` RETURNED for the allocation this record owes a release to
+// (`NoOwedAllocation` for none), so `__mm_decref` finds its header just below it. It is deliberately NOT
+// the parent RECORD and NOT the view's own `buffer@0`: `buffer@0` is an INTERIOR pointer
+// (`base + start·element_size`) whose `-8` word is the parent's DATA, not a refcount, and a parent record
+// would make a CHAIN. ⭐ **NESTED SLICES FLATTEN**: a slice of a view stores the same base and increfs it
+// again, so nothing ever walks a chain and a view's lifetime never depends on the record it was cut from.
+// (Both references flatten too — the bootstrap stores `source.parentPtr`, not `source`.)
 //
 // `element_destroy@40` is the per-element destructor a managed-element array carries (P1.7 slice 3); for a
 // TRIVIAL element it is 0 and the drop path releases the buffer without walking. Both come pre-zeroed from
@@ -56,32 +58,25 @@ let TrivialElementDestroy = 0 as ParsedInt
 // --- Byte-string literal (`b"…"`, P1.7 slice 2) ---
 //
 // A `b"…"` literal is the Array analogue of a String literal: a HEAP 48-byte record over an IMMORTAL
-// `.rdata` byte blob. `capacity@16` is the rdata SENTINEL below — a negative capacity that says the buffer
-// is NOT the record's to write or to free. `__arr_decref` reads it to skip the free (`freeing .rdata`
-// faults) and `__arr_cow_detach` reads it to replace the blob with a private copy before any in-place write
-// (writing `.rdata` faults just as hard); those are the only two readers, and it is the one fact both ask.
+// `.rdata` byte blob. Its `capacity@16` is `RdataBufferCapacity` — the shared encoding's negative value
+// for "this buffer is not the record's to write or to release" — written by the byte-string literal
+// lowering (`LowerMaxonToStd`) and read by `emitBufferNotOwned` alone, never compared against.
 // `element_size@24` is 1 (a byte is one byte, so the blob is byte-packed and `.get(i)` strides by 1 —
 // UNLIKE a slice-1 `Array with Byte` whose ranged-alias element still occupies a machine word). The
 // record is a real `__mm_alloc` box so the value is a first-class owned `Array with Byte` the ownership
-// model drops through `__arr_decref` — which, on the sentinel, frees the record and skips the blob.
-export let ArrRdataCapacitySentinel = 0 - 2 as ParsedInt
+// model drops through `__arr_decref` — which, on that capacity, frees the record and skips the blob.
 export let ByteStringElementSize = 1 as ParsedInt
 
-// --- Zero-copy view (`.slice`/`.clone`, P1.7 COW slice B) ---
-//
-// ⭐ **THE SECOND NON-OWNED-BUFFER KIND.** A view is a record of its own (its own `length@8`,
-// `element_size@24`, `element_destroy@40`) whose `buffer@0` points INTO another allocation's bytes, at
-// `base + start·element_size`. `capacity@16` is this sentinel and `parent@32` is that allocation's BASE.
-//
-// ⭐ **THE SENTINEL AND THE PARENT ANSWER DIFFERENT QUESTIONS, AND KEEPING THEM APART IS THE ENCODING.**
-// The SIGN of `capacity` answers *"is this buffer mine to write and to free?"* — the one question
-// `emitBufferNotOwned` asks, and the only one the mutators and the drop path need. `parent@32` answers
-// *"which allocation do I owe a `__mm_decref` to?"*, and 0 is a perfectly ordinary answer (an rdata blob is
-// immortal; an empty parent never allocated a buffer). So the two sentinels never have to be told apart at
-// runtime: each simply records WHERE the record came from — `-2` is written only by the byte-string literal
-// lowering (`LowerMaxonToStd`), `-1` only by `__arr_slice`. Keeping the whole negative range meaning "not
-// mine" is what let this arrive as one more value rather than as a new test at every reader.
-export let ArrViewCapacitySentinel = 0 - 1 as ParsedInt
+// ⭐ **WHERE AN ARRAY RECORD KEEPS THE BUFFER-OWNERSHIP ENCODING** (`BufferOwnership`) — the three slots
+// its two predicates read, built from THIS file's offsets so the shared question is asked over the layout
+// declared here. The zero-copy view (`.slice`/`.clone`, P1.7 COW slice B) is the second non-owned-buffer
+// kind it answers for: a view is a record of its own (its own `length@8`, `element_size@24`,
+// `element_destroy@40`) whose `buffer@0` points INTO another allocation's bytes at
+// `base + start·element_size`, whose `capacity@16` is `ViewBufferCapacity` and whose `parent@32` is that
+// allocation's BASE.
+function arrayBufferSlots() returns BufferRecordSlots
+	return BufferRecordSlots.create(ArrBufferOffset, capacityOffset: ArrCapacityOffset, parentOffset: ArrParentOffset)
+end 'arrayBufferSlots'
 
 // The `.rdata` label prefix a byte-string literal's blob registers under. `__`-prefixed so it never
 // collides with a user name and stays out of the spec goldens (`isRuntimeFunction`'s data twin), and
@@ -111,38 +106,37 @@ function paddedByteArrayBlob(bytes ByteArray) returns ByteArray
 	return blob
 end 'paddedByteArrayBlob'
 
-// The exit code `__arr_create` diverges with when handed a 0 element size — a compiler bug (a concrete
-// literal is never 0, a descriptor read never yields 0), mirroring v1's `__mm_panic_element_size_zero`
-// runtime guard so a zero cannot silently make `__arr_grow` allocate a zero-byte buffer and corrupt.
-let ElementSizeZeroExitCode = 70 as ParsedInt
+// ⭐ **THE ABORT CODES THIS FILE DIVERGES WITH ARE `RuntimeAbort`'s, NOT ITS OWN.** They used to be four
+// file-local `let`s picked against a file-local list, which is how this file's element-size-zero code and
+// `GtRuntime.ProcStoreOverflowExitCode` both came to be 70. The registry is one declaration site whose
+// duplicate check is the language's (an enum's raw values must be distinct — E3031), so the collision
+// cannot recur. Four aborts live here, each stopping an operation that must never proceed:
+//
+//   * `arrayElementSizeZero` — `__arr_create` handed a 0 element size, which is a COMPILER bug (a
+//     concrete literal is never 0, a descriptor read never yields 0), mirroring v1's
+//     `__mm_panic_element_size_zero`: a zero would silently make `__arr_grow` allocate a zero-byte buffer.
+//   * `arrayCapacityOverflow` — `__arr_grow`'s `capacity·element_size` wrapped i64, so `__mm_alloc` would
+//     hand back a buffer far too small for the capacity the record then claims and the next element write
+//     would run off its end (a silent heap overflow). The reference compiler aborts here too
+//     (`__ManagedMemory: realloc size must be > 0`); this is the same guard one arithmetic step earlier,
+//     so it also catches a wrap to a small NON-zero value.
+//   * `arrayAppendElementSizeMismatch` — `__arr_append`'s two records disagree on `element_size@24`.
+//     `append` is the ONE array op that strides TWO records by a SINGLE element size (it reads `dest`'s
+//     and applies it to `src`), so it is correct only when they agree. Same-static-type arrays normally
+//     do; the ONE exception is a byte-string literal (`b"…"`), byte-PACKED at `element_size@24 == 1`
+//     while a heap-grown `Array with Byte` strides by a machine word — blitting `srcLen ·
+//     dest.element_size` bytes across that seam OVER-READS the packed source and splices garbage in.
+//     Making such an append WORK (an element-wise WIDENING copy across differing strides) is a distinct
+//     mechanism, not slice 4's.
+//   * `arrayNegativeResize` — the one with a contract argument behind it, immediately below.
 
-// The exit code `__arr_grow` diverges with when `capacity·element_size` overflows i64. Without the guard a
-// large `reserve`/`resize` wraps the byte count to a small (or zero) value, `__mm_alloc` hands back a
-// buffer far too small for the capacity the record now claims, and the next element write runs off its end
-// — a silent heap overflow. Aborting is what the reference compiler does (`__ManagedMemory: realloc size
-// must be > 0`); this is the same guard, one arithmetic step earlier so it also catches a wrap to a small
-// NON-zero value. It is the capacity twin of `ElementSizeZeroExitCode`: both stop a corrupt allocation.
-let CapacityOverflowExitCode = 71 as ParsedInt
-
-// The exit code `__arr_append` diverges with when `dest` and `src` have DIFFERENT runtime `element_size@24`
-// values — an incoherent byte blit. `__arr_append` is the ONE array op that strides TWO records by a SINGLE
-// element size (it reads `dest`'s and applies it to `src`), so it is correct only when the two agree. Two
-// arrays of the same STATIC element type normally share a runtime element size, so a well-typed `append`
-// never trips this — the ONE exception is a byte-string literal (`b"…"`), whose buffer is byte-PACKED
-// (`element_size@24 == 1`, `ByteStringElementSize`) while a heap-grown `Array with Byte` strides by a machine
-// word. Blitting `srcLen · dest.element_size` bytes across that seam OVER-READS the packed source and splices
-// garbage in (a wrong answer, and a heap/rdata over-read). Aborting is the same "a corrupt operation must
-// never proceed" guard `ElementSizeZeroExitCode`/`CapacityOverflowExitCode` use. Making such an append WORK
-// (an element-wise WIDENING value copy across differing strides) is a distinct mechanism, not slice 4's.
-let AppendElementSizeMismatchExitCode = 72 as ParsedInt
-
-// The exit code `__arr_resize` diverges with when asked for a NEGATIVE length. A length is a count, so a
+// `arrayNegativeResize` — `__arr_resize` asked for a NEGATIVE length. A length is a count, so a
 // negative one is never a value the record may hold — and the reason this is an abort rather than a merely
 // cosmetic wrong answer is that the shrink path zeroes `[n·es, oldLen·es)` starting at `buffer + n·es`,
 // which for a negative `n` is an address BEFORE the buffer, erasing the `__mm_alloc` header that sits just
 // below the payload. It is the one out-of-buffer write a DETACH cannot fix — detaching only moves the write
 // to a different allocation — so it is rejected here, by the same "a corrupt operation must never proceed"
-// guard `ElementSizeZeroExitCode`/`CapacityOverflowExitCode`/`AppendElementSizeMismatchExitCode` are.
+// guard the other three above are.
 //
 // ⚠ A BYTE-STRING LITERAL IS NOT A SEPARATE CASE HERE, and it is worth saying because it USED to be: before
 // the COW slice the under-write landed in read-only `.rdata` and faulted loudly. It no longer does.
@@ -164,7 +158,6 @@ let AppendElementSizeMismatchExitCode = 72 as ParsedInt
 // exit 1) but silently publishes `count() == -2` for a byte-string literal, because its own growth check is
 // satisfied by the negative rdata sentinel and the assert is therefore never reached. Both measured against
 // the bootstrap. Aborting matches the half of its behaviour that acts.
-let NegativeResizeExitCode = 73 as ParsedInt
 
 // The error flag `__arr_get`/`__arr_set`/`__arr_first`/`__arr_last`/`__arr_pop`/`__arr_remove` throw on an
 // out-of-bounds index — the dual-register `errorReturn` flag (an error case's `ordinal + 1`, so 1 is
@@ -465,7 +458,7 @@ end 'emitElementDestroyRange'
 // leaking it. Threads `cur` (sets its terminator); `record` is the array whose `element_destroy@40` is read,
 // `buffer` its element storage.
 function emitDestroyRangeIfManaged(module StdModule, func IrFunction, cur IrBlock, record ValueId, buffer ValueId, start ValueId, stop ValueId, elementSize ValueId, ids ValueMinter) returns IrBlock
-	let dtor = emitLoadField(module, block: cur, arr: record, offset: ArrElementDestroyOffset, ids: ids)
+	let dtor = emitLoadField(module, block: cur, record: record, offset: ArrElementDestroyOffset, ids: ids)
 	let zeroDtor = emitConst(module, block: cur, value: 0, ids: ids)
 	let hasDtor = emitCmp(module, block: cur, a: dtor, b: zeroDtor, pred: StdCmpPred.ne, ids: ids)
 	var walk = module.addBlock(func, label: b"mwalk")
@@ -578,7 +571,7 @@ function emitLoadElemAndOkReturn(module StdModule, func IrFunction, cur IrBlock,
 	var empty = module.addBlock(func, label: b"gempty")
 
 	// checkDtor: a trivial element (destructor 0) skips the null-check; a managed one falls to checkNull.
-	let dtor = emitLoadField(module, block: checkDtor, arr: record, offset: ArrElementDestroyOffset, ids: ids)
+	let dtor = emitLoadField(module, block: checkDtor, record: record, offset: ArrElementDestroyOffset, ids: ids)
 	let zeroDtor = emitConst(module, block: checkDtor, value: 0, ids: ids)
 	let managed = emitCmp(module, block: checkDtor, a: dtor, b: zeroDtor, pred: StdCmpPred.ne, ids: ids)
 	module.setTerminator(checkDtor, op: StdOp.condBranch(managed, thenBlockId: checkNull.id, elseBlockId: ok.id))
@@ -592,41 +585,6 @@ function emitLoadElemAndOkReturn(module StdModule, func IrFunction, cur IrBlock,
 	emitOkReturn(module, block: ok, value: value, ids: ids)
 end 'emitLoadElemAndOkReturn'
 
-// --- Small shared emit helpers over a single block ---
-
-// Load `arr`'s field at `offset` into a fresh value.
-function emitLoadField(module StdModule, block IrBlock, arr ValueId, offset ByteOffset, ids ValueMinter) returns ValueId
-	let v = ids.mint()
-	module.appendOp(block, op: StdOp.loadIndirect(v, addrId: arr, offset: offset, valueType: StdType.i64))
-	return v
-end 'emitLoadField'
-
-// Store `value` into `arr`'s field at `offset`.
-function emitStoreField(module StdModule, block IrBlock, arr ValueId, offset ByteOffset, value ValueId)
-	module.appendOp(block, op: StdOp.storeIndirect(arr, offset: offset, valueId: value, valueType: StdType.i64))
-end 'emitStoreField'
-
-// `a <op> b` into a fresh value.
-function emitBin(module StdModule, block IrBlock, a ValueId, b ValueId, opcode StdBinOpcode, ids ValueMinter) returns ValueId
-	let v = ids.mint()
-	module.appendOp(block, op: StdOp.binOp(v, lhs: a, rhs: b, opcode: opcode, operandType: StdType.i64))
-	return v
-end 'emitBin'
-
-// A fresh i64 constant.
-function emitConst(module StdModule, block IrBlock, value ParsedInt, ids ValueMinter) returns ValueId
-	let v = ids.mint()
-	module.appendOp(block, op: StdOp.const(v, value: value, valueType: StdType.i64))
-	return v
-end 'emitConst'
-
-// `a <pred> b` into a fresh value (a flag).
-function emitCmp(module StdModule, block IrBlock, a ValueId, b ValueId, pred StdCmpPred, ids ValueMinter) returns ValueId
-	let v = ids.mint()
-	module.appendOp(block, op: StdOp.cmp(v, lhs: a, rhs: b, pred: pred, operandType: StdType.i64))
-	return v
-end 'emitCmp'
-
 // Call `__arr_cow_detach(arr)` — the one obligation every in-place mutator owes before it touches the
 // buffer (see `buildArrCowDetach` for the rule and for which mutators call this directly). The callee is
 // void, so the minted result is unread; it exists because a `call` op always defines a value.
@@ -634,104 +592,6 @@ function emitCowDetach(module StdModule, block IrBlock, arr ValueId, ids ValueMi
 	let detached = ids.mint()
 	module.appendOp(block, op: StdOp.call(detached, callee: ArrCowDetachName, args: argsOf(arr)))
 end 'emitCowDetach'
-
-// `capacity@16 < 0` — the record's `buffer@0` is NOT its own allocation: it is either the byte-string
-// literal's IMMORTAL `.rdata` blob (`ArrRdataCapacitySentinel`) or an INTERIOR pointer into an allocation a
-// zero-copy view shares (`ArrViewCapacitySentinel`). ⭐ THE ONE HOME OF THE NOT-MINE TEST, asked by the
-// three places that must act on it and reached by no fourth: `__arr_cow_detach` (such a buffer cannot be
-// WRITTEN in place, so replace it), `__arr_decref` (it must not be `__mm_free`d — it was either never
-// allocated or is still being read by someone else) and `emitSharedAllocationBase` (which of two fields
-// names the allocation this record owes a decref to). Their conclusions differ and are meant to — what must
-// never differ is the test, because a record misjudged by any one of them is a fault: a write into
-// read-only memory or into bytes another array is reading, or a `__mm_free` of an address the allocator
-// never handed out.
-//
-// ⚠ **IT IS ALSO THE ONE TEST THAT MAY BE ASKED BEFORE A HEADER READ IS SAFE**, and that is the reason it
-// tests the record's own `capacity@16` and nothing else. A view's `buffer@0` is INTERIOR, so the word at
-// `buffer - 8` is the parent's DATA, not a refcount; anything that wants to read a buffer's `__mm_alloc`
-// header must clear this test first. `__arr_cow_detach` is exactly such a reader, and its arms are ordered
-// accordingly. The test is `< 0` rather than `== <a sentinel>` so a further non-owned-buffer kind arrives
-// as one more value rather than as a new test at every reader — which is precisely how the view kind did.
-function emitBufferNotOwned(module StdModule, block IrBlock, arr ValueId, ids ValueMinter) returns ValueId
-	let capacity = emitLoadField(module, block: block, arr: arr, offset: ArrCapacityOffset, ids: ids)
-	let zero = emitConst(module, block: block, value: 0, ids: ids)
-	return emitCmp(module, block: block, a: capacity, b: zero, pred: StdCmpPred.lt, ids: ids)
-end 'emitBufferNotOwned'
-
-// ⭐ **THE ALLOCATION THIS RECORD OWES A `__mm_decref` TO — 0 when it owes nothing (P1.7 COW slice B).**
-// An OWNER's is its own `buffer@0` (the pointer `__mm_alloc` returned, which may be 0 if the array never
-// grew); a NON-OWNED record's is `parent@32` (a view's shared base, or 0 for an immortal `.rdata` blob).
-// ⭐ THE ONE HOME OF THAT CHOICE, read by the three places whose correctness depends on picking the same
-// field: `__arr_slice` (which allocation to INCREF for the new view), `__arr_cow_detach` (which one to
-// RELEASE once the record has copied its bytes out) and `__arr_decref` (which one to release at death).
-// A disagreement between any two of them is a double-free or a leak, so it is written once.
-//
-// It threads `cur` (sets its terminator) and returns the base as a BLOCK ARG on the caller-owned `join`,
-// which is why `join` is passed IN: the caller resumes there and the two arms are otherwise identical.
-//
-// ⚠ **IT IS DELIBERATELY NOT FUSED WITH `emitRefcountSharedBase` INTO ONE "release the base" HELPER**, even
-// though `__arr_decref` calls the two back to back. `__arr_cow_detach` must SPLIT them across its byte copy
-// — the base is read before the record is republished and spent only after the copy (see its trap 5) — so a
-// fused helper would serve exactly one call site, which is the thin wrapper this codebase forbids, and it
-// would quietly invite the one caller that must not fuse them to do so.
-function emitSharedAllocationBase(module StdModule, func IrFunction, cur IrBlock, join IrBlock, record ValueId, ids ValueMinter) returns ValueId
-	var viewBase = module.addBlock(func, label: b"vbase")
-	var ownBase = module.addBlock(func, label: b"obase")
-
-	let notOwned = emitBufferNotOwned(module, block: cur, arr: record, ids: ids)
-	module.setTerminator(cur, op: StdOp.condBranch(notOwned, thenBlockId: viewBase.id, elseBlockId: ownBase.id))
-
-	let base = ids.mint()
-	join.blockArgs.push(IrBlockArg.create(base, argType: StdType.i64))
-
-	let parent = emitLoadField(module, block: viewBase, arr: record, offset: ArrParentOffset, ids: ids)
-	module.setTerminator(viewBase, op: StdOp.branch(join.id))
-	viewBase.branchEdges.push(BranchEdge.create(join.id, argIds: argsOf(parent)))
-
-	let buffer = emitLoadField(module, block: ownBase, arr: record, offset: ArrBufferOffset, ids: ids)
-	module.setTerminator(ownBase, op: StdOp.branch(join.id))
-	ownBase.branchEdges.push(BranchEdge.create(join.id, argIds: argsOf(buffer)))
-
-	return base
-end 'emitSharedAllocationBase'
-
-// `if base != 0 then <callee>(base)` — the null-guarded refcount step every share and every release of a
-// shared allocation makes, since 0 ("this record owes nothing") is an ordinary answer from
-// `emitSharedAllocationBase`. Threads `cur` and returns the continuation block. ONE home for the guard, in
-// both directions: `__arr_slice` raises the count with `__mm_incref`, `__arr_cow_detach`/`__arr_decref`/
-// `__arr_grow` lower it with `__mm_decref`.
-//
-// ⭐ **A BUFFER IS RELEASED WITH `__mm_decref`, NEVER `__mm_free`, AND THAT IS THE WHOLE OF THE DROP RULE.**
-// It may still be under a view, so only the LAST owner may reclaim it — which is exactly what `__mm_decref`
-// decides. It is also the safer failure mode: if some future path ever reached here with a count it should
-// not have, a decref merely keeps the buffer alive and the leak gate reports 101, where a `__mm_free` would
-// silently hand a live allocation back and become a use-after-free the day a free list exists. v1 paid for
-// the twin of this omission three times (`stdlib/Internals.maxon:3465-3472`): a new non-owned-buffer kind
-// must be taught to the DROP path, not only to the write check.
-function emitRefcountSharedBase(module StdModule, func IrFunction, cur IrBlock, base ValueId, callee ByteArray, ids ValueMinter) returns IrBlock
-	var step = module.addBlock(func, label: b"rcstep")
-	let cont = module.addBlock(func, label: b"rccont")
-
-	let zero = emitConst(module, block: cur, value: 0, ids: ids)
-	let shares = emitCmp(module, block: cur, a: base, b: zero, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(cur, op: StdOp.condBranch(shares, thenBlockId: step.id, elseBlockId: cont.id))
-
-	let counted = ids.mint()
-	module.appendOp(step, op: StdOp.call(counted, callee: callee, args: argsOf(base)))
-	module.setTerminator(step, op: StdOp.branch(cont.id))
-
-	return cont
-end 'emitRefcountSharedBase'
-
-// Abort the process with `code` from a VOID runtime function — the file's "a corrupt operation must never
-// proceed" exit (`__arr_grow`'s capacity overflow, `__arr_resize`'s negative length, `__arr_append`'s
-// element-size mismatch). `osExit` diverges, so the trailing `retVoid` is a dead terminator that exists only
-// to keep the block well-formed; writing that fact once is why this is a function and not three copies.
-function emitVoidAbort(module StdModule, block IrBlock, code ParsedInt, ids ValueMinter)
-	let exitCode = emitConst(module, block: block, value: code, ids: ids)
-	module.appendOp(block, op: StdOp.osExit(exitCode))
-	module.setTerminator(block, op: StdOp.retVoid)
-end 'emitVoidAbort'
 
 // The element slot ADDRESS `buffer + index·elementSize` — the byte where element `index` starts.
 function emitSlotAddr(module StdModule, block IrBlock, buffer ValueId, index ValueId, elementSize ValueId, ids ValueMinter) returns ValueId
@@ -778,7 +638,7 @@ end 'emitOkReturn'
 //
 // ⭐ **NOTHING IS COPIED, AND THE COST DOES NOT DEPEND ON `sliceLen`.** The result is a fresh 48-byte record
 // (`__arr_create`, carrying the SAME `element_size` and `element_destroy` as the source) whose `buffer@0` is
-// the INTERIOR pointer `srcBuffer + start·element_size`, whose `capacity@16` is `ArrViewCapacitySentinel`,
+// the INTERIOR pointer `srcBuffer + start·element_size`, whose `capacity@16` is `ViewBufferCapacity`,
 // and whose `parent@32` is the shared allocation's BASE — increfed here, released by `__arr_cow_detach` or
 // `__arr_decref`. That is ONE fixed-size allocation and no loop, where the previous eager copy allocated a
 // second buffer of `sliceLen · element_size` bytes and moved every one of them.
@@ -789,7 +649,7 @@ end 'emitOkReturn'
 // pin exactly those two directions, and they are unchanged by this — which is the point.
 //
 // ⭐ **NESTED SLICES FLATTEN.** `srcBuffer` is read straight out of the source, so slicing a VIEW windows
-// within the view; and the base comes from `emitSharedAllocationBase`, which for a view is its own
+// within the view; and the base comes from `emitOwedAllocationBase`, which for a view is its own
 // `parent@32`. So a slice of a slice increfs the ORIGINAL allocation and stores it directly — no chain
 // exists, and nothing ever walks one.
 //
@@ -804,23 +664,23 @@ end 'emitOkReturn'
 function emitArrayView(module StdModule, func IrFunction, cur IrBlock, exit IrBlock, srcRecord ValueId, start ValueId, sliceLen ValueId, ids ValueMinter) returns ValueId
 	var baseJoin = module.addBlock(func, label: b"vwbase")
 
-	let es = emitLoadField(module, block: cur, arr: srcRecord, offset: ArrElementSizeOffset, ids: ids)
-	let dtor = emitLoadField(module, block: cur, arr: srcRecord, offset: ArrElementDestroyOffset, ids: ids)
+	let es = emitLoadField(module, block: cur, record: srcRecord, offset: ArrElementSizeOffset, ids: ids)
+	let dtor = emitLoadField(module, block: cur, record: srcRecord, offset: ArrElementDestroyOffset, ids: ids)
 	let newRec = ids.mint()
 	module.appendOp(cur, op: StdOp.call(newRec, callee: ArrCreateName, args: twoArgs(es, second: dtor)))
 
-	let srcBuffer = emitLoadField(module, block: cur, arr: srcRecord, offset: ArrBufferOffset, ids: ids)
+	let srcBuffer = emitLoadField(module, block: cur, record: srcRecord, offset: ArrBufferOffset, ids: ids)
 	let viewBuffer = emitSlotAddr(module, block: cur, buffer: srcBuffer, index: start, elementSize: es, ids: ids)
-	emitStoreField(module, block: cur, arr: newRec, offset: ArrBufferOffset, value: viewBuffer)
-	emitStoreField(module, block: cur, arr: newRec, offset: ArrLengthOffset, value: sliceLen)
-	let sentinel = emitConst(module, block: cur, value: ArrViewCapacitySentinel, ids: ids)
-	emitStoreField(module, block: cur, arr: newRec, offset: ArrCapacityOffset, value: sentinel)
+	emitStoreField(module, block: cur, record: newRec, offset: ArrBufferOffset, value: viewBuffer)
+	emitStoreField(module, block: cur, record: newRec, offset: ArrLengthOffset, value: sliceLen)
+	let sentinel = emitConst(module, block: cur, value: ViewBufferCapacity, ids: ids)
+	emitStoreField(module, block: cur, record: newRec, offset: ArrCapacityOffset, value: sentinel)
 
-	let base = emitSharedAllocationBase(module, func: func, cur: cur, join: baseJoin, record: srcRecord, ids: ids)
+	let base = emitOwedAllocationBase(module, func: func, cur: cur, join: baseJoin, record: srcRecord, slots: arrayBufferSlots(), ids: ids)
 
 	// baseJoin: record the debt, then take out the second ownership it names.
-	emitStoreField(module, block: baseJoin, arr: newRec, offset: ArrParentOffset, value: base)
-	var afterIncref = emitRefcountSharedBase(module, func: func, cur: baseJoin, base: base, callee: MmIncrefName, ids: ids)
+	emitStoreField(module, block: baseJoin, record: newRec, offset: ArrParentOffset, value: base)
+	var afterIncref = emitReleaseOwedBase(module, func: func, cur: baseJoin, base: base, callee: MmIncrefName, ids: ids)
 	module.setTerminator(afterIncref, op: StdOp.branch(exit.id))
 
 	return newRec
@@ -888,7 +748,7 @@ end 'emitArrayView'
 //     exactly its own window, because `buffer@0` already points at the view's first element. There is no
 //     `start` arithmetic here and there must not be: the record's `length@8` IS the window's length.
 //  5. **The OLD buffer is RELEASED, NOT FREED, AND ONLY AFTER THE COPY.** It is released through
-//     `emitSharedAllocationBase` + `emitRefcountSharedBase`, so an rdata blob (base 0) is left alone, a
+//     `emitOwedAllocationBase` + `emitReleaseOwedBase`, so an rdata blob (base 0) is left alone, a
 //     view's parent is decref'd, and an owner detaching from its own viewed buffer gives up its share of
 //     it. ⚠ The release MUST follow the copy: a view whose parent has already dropped is the LAST owner of
 //     those bytes, so the decref frees them, and reading them afterwards is a use-after-free.
@@ -920,12 +780,12 @@ function buildArrCowDetach(module StdModule)
 
 	// entry — ARM 1: a buffer that is not this record's must be replaced before any write. Asked FIRST, so
 	// the header read below is only ever reached on a pointer that HAS a header (see the ordering note).
-	let notOwned = emitBufferNotOwned(module, block: entry, arr: arr, ids: ids)
+	let notOwned = emitBufferNotOwned(module, block: entry, record: arr, slots: arrayBufferSlots(), ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(notOwned, thenBlockId: detach.id, elseBlockId: checkShared.id))
 
 	// checkShared: an owner with no buffer at all (an array that never grew) has nothing to share and
 	// nothing to write; the mutator that follows will grow it.
-	let ownBuf = emitLoadField(module, block: checkShared, arr: arr, offset: ArrBufferOffset, ids: ids)
+	let ownBuf = emitLoadField(module, block: checkShared, record: arr, offset: ArrBufferOffset, ids: ids)
 	let zeroBuf = emitConst(module, block: checkShared, value: 0, ids: ids)
 	let hasBuf = emitCmp(module, block: checkShared, a: ownBuf, b: zeroBuf, pred: StdCmpPred.ne, ids: ids)
 	module.setTerminator(checkShared, op: StdOp.condBranch(hasBuf, thenBlockId: checkRc.id, elseBlockId: done.id))
@@ -939,25 +799,25 @@ function buildArrCowDetach(module StdModule)
 
 	// detach: read the allocation this record owes a release to BEFORE anything is republished — the answer
 	// is derived from the very `capacity`/`buffer`/`parent` fields the publish below overwrites.
-	let base = emitSharedAllocationBase(module, func: func, cur: detach, join: baseJoin, record: arr, ids: ids)
+	let base = emitOwedAllocationBase(module, func: func, cur: detach, join: baseJoin, record: arr, slots: arrayBufferSlots(), ids: ids)
 
 	// baseJoin: allocate a private buffer sized to the live bytes and copy them across.
-	let length = emitLoadField(module, block: baseJoin, arr: arr, offset: ArrLengthOffset, ids: ids)
-	let es = emitLoadField(module, block: baseJoin, arr: arr, offset: ArrElementSizeOffset, ids: ids)
+	let length = emitLoadField(module, block: baseJoin, record: arr, offset: ArrLengthOffset, ids: ids)
+	let es = emitLoadField(module, block: baseJoin, record: arr, offset: ArrElementSizeOffset, ids: ids)
 	let liveBytes = emitBin(module, block: baseJoin, a: length, b: es, opcode: StdBinOpcode.mul, ids: ids)
 	let bufferDtor = emitConst(module, block: baseJoin, value: TrivialElementDestroy, ids: ids)
 	let newBuf = ids.mint()
 	module.appendOp(baseJoin, op: StdOp.call(newBuf, callee: MmAllocName, args: twoArgs(liveBytes, second: bufferDtor)))
-	let oldBuf = emitLoadField(module, block: baseJoin, arr: arr, offset: ArrBufferOffset, ids: ids)
+	let oldBuf = emitLoadField(module, block: baseJoin, record: arr, offset: ArrBufferOffset, ids: ids)
 	var afterCopy = emitForwardCopy(module, func: func, cur: baseJoin, dest: newBuf, src: oldBuf, byteCount: liveBytes, ids: ids)
 
 	// afterCopy: publish the private buffer, then release the old allocation — in that order, and never
 	// before the copy (see trap 5). `base` is a `baseJoin` block arg, and `baseJoin` dominates here.
-	emitStoreField(module, block: afterCopy, arr: arr, offset: ArrBufferOffset, value: newBuf)
-	emitStoreField(module, block: afterCopy, arr: arr, offset: ArrCapacityOffset, value: length)
+	emitStoreField(module, block: afterCopy, record: arr, offset: ArrBufferOffset, value: newBuf)
+	emitStoreField(module, block: afterCopy, record: arr, offset: ArrCapacityOffset, value: length)
 	let noParent = emitConst(module, block: afterCopy, value: 0, ids: ids)
-	emitStoreField(module, block: afterCopy, arr: arr, offset: ArrParentOffset, value: noParent)
-	var afterRelease = emitRefcountSharedBase(module, func: func, cur: afterCopy, base: base, callee: MmDecrefName, ids: ids)
+	emitStoreField(module, block: afterCopy, record: arr, offset: ArrParentOffset, value: noParent)
+	var afterRelease = emitReleaseOwedBase(module, func: func, cur: afterCopy, base: base, callee: MmDecrefName, ids: ids)
 	module.setTerminator(afterRelease, op: StdOp.branch(done.id))
 
 	module.setTerminator(done, op: StdOp.retVoid)
@@ -1060,7 +920,7 @@ function buildArrGrow(module StdModule)
 	emitCowDetach(module, block: entry, arr: arr, ids: ids)
 
 	// entry: already big enough ⇒ nothing to do.
-	let capacity = emitLoadField(module, block: entry, arr: arr, offset: ArrCapacityOffset, ids: ids)
+	let capacity = emitLoadField(module, block: entry, record: arr, offset: ArrCapacityOffset, ids: ids)
 	let enough = emitCmp(module, block: entry, a: capacity, b: required, pred: StdCmpPred.ge, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(enough, thenBlockId: done.id, elseBlockId: grow.id))
 
@@ -1070,7 +930,7 @@ function buildArrGrow(module StdModule)
 	// exactly when the multiply did not wrap.
 	let newCap = ids.mint()
 	module.appendOp(grow, op: StdOp.call(newCap, callee: ArrGrownCapName, args: twoArgs(capacity, second: required)))
-	let es = emitLoadField(module, block: grow, arr: arr, offset: ArrElementSizeOffset, ids: ids)
+	let es = emitLoadField(module, block: grow, record: arr, offset: ArrElementSizeOffset, ids: ids)
 	let newBytes = emitBin(module, block: grow, a: newCap, b: es, opcode: StdBinOpcode.mul, ids: ids)
 	let roundTrip = ids.mint()
 	module.appendOp(grow, op: StdOp.div(roundTrip, lhs: newBytes, rhs: es))
@@ -1078,14 +938,14 @@ function buildArrGrow(module StdModule)
 	module.setTerminator(grow, op: StdOp.condBranch(overflowed, thenBlockId: sizeOverflow.id, elseBlockId: alloc.id))
 
 	// overflow: abort — a corrupt allocation must never be published.
-	emitVoidAbort(module, block: sizeOverflow, code: CapacityOverflowExitCode, ids: ids)
+	emitRuntimeAbort(module, func: func, block: sizeOverflow, abort: RuntimeAbort.arrayCapacityOverflow, ids: ids)
 
 	// alloc: allocate the new buffer and copy the live bytes forward.
 	let zeroDtor = emitConst(module, block: alloc, value: 0, ids: ids)
 	let newBuf = ids.mint()
 	module.appendOp(alloc, op: StdOp.call(newBuf, callee: MmAllocName, args: twoArgs(newBytes, second: zeroDtor)))
-	let oldBuf = emitLoadField(module, block: alloc, arr: arr, offset: ArrBufferOffset, ids: ids)
-	let oldLen = emitLoadField(module, block: alloc, arr: arr, offset: ArrLengthOffset, ids: ids)
+	let oldBuf = emitLoadField(module, block: alloc, record: arr, offset: ArrBufferOffset, ids: ids)
+	let oldLen = emitLoadField(module, block: alloc, record: arr, offset: ArrLengthOffset, ids: ids)
 	let oldBytes = emitBin(module, block: alloc, a: oldLen, b: es, opcode: StdBinOpcode.mul, ids: ids)
 	var afterCopy = emitForwardCopy(module, func: func, cur: alloc, dest: newBuf, src: oldBuf, byteCount: oldBytes, ids: ids)
 
@@ -1093,14 +953,14 @@ function buildArrGrow(module StdModule)
 	// buffer MINE?" test: the detach at `entry` already replaced any non-owned buffer, so whatever is here
 	// was `__mm_alloc`'d and this record owns it. That test used to live here as a second
 	// `emitBufferNotOwned` in all but name; what remains is the ordinary null-guarded release every owner
-	// owes on its base, which is why it is the shared `emitRefcountSharedBase` rather than a fourth copy —
+	// owes on its base, which is why it is the shared `emitReleaseOwedBase` rather than a fourth copy —
 	// an array that never grew simply has a base of 0. (Post-detach this record IS the last owner, so
 	// `__mm_decref` and `__mm_free` are equivalent here today; using the one rule everywhere is what stops
 	// them diverging tomorrow, and a mistaken decref leaks loudly where a mistaken free corrupts silently.)
-	var afterRelease = emitRefcountSharedBase(module, func: func, cur: afterCopy, base: oldBuf, callee: MmDecrefName, ids: ids)
+	var afterRelease = emitReleaseOwedBase(module, func: func, cur: afterCopy, base: oldBuf, callee: MmDecrefName, ids: ids)
 
-	emitStoreField(module, block: afterRelease, arr: arr, offset: ArrBufferOffset, value: newBuf)
-	emitStoreField(module, block: afterRelease, arr: arr, offset: ArrCapacityOffset, value: newCap)
+	emitStoreField(module, block: afterRelease, record: arr, offset: ArrBufferOffset, value: newBuf)
+	emitStoreField(module, block: afterRelease, record: arr, offset: ArrCapacityOffset, value: newCap)
 	module.setTerminator(afterRelease, op: StdOp.branch(done.id))
 
 	module.setTerminator(done, op: StdOp.retVoid)
@@ -1127,20 +987,19 @@ function buildArrCreate(module StdModule)
 	let isZeroSize = emitCmp(module, block: entry, a: elementSize, b: zero, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(isZeroSize, thenBlockId: badSize.id, elseBlockId: ok.id))
 
-	// The value-returning twin of `emitVoidAbort` — same abort, but this function returns a record pointer, so
-	// its dead terminator must carry a value. It is spelled out rather than shared because it is the file's
-	// ONE value-returning abort; a helper with a single caller would only move it.
-	let exitCode = emitConst(module, block: badSize, value: ElementSizeZeroExitCode, ids: ids)
-	module.appendOp(badSize, op: StdOp.osExit(exitCode))
-	let deadRet = emitConst(module, block: badSize, value: 0, ids: ids)
-	module.setTerminator(badSize, op: StdOp.ret(deadRet))
+	// This function RETURNS a record pointer, so its abort's dead terminator must carry a value — which
+	// `emitRuntimeAbort` derives from `func.returnType` rather than being told. It used to be spelled out
+	// here, on the argument that it was the file's ONE value-returning abort and a helper with a single
+	// caller would only move it; `__gt_process_run`'s spawn failure was the second, in another file, and
+	// that argument expired the moment the abort shape acquired a home of its own.
+	emitRuntimeAbort(module, func: func, block: badSize, abort: RuntimeAbort.arrayElementSizeZero, ids: ids)
 
 	let recordSize = emitConst(module, block: ok, value: ArrRecordBytes as ParsedInt, ids: ids)
 	let recordDtor = emitConst(module, block: ok, value: TrivialElementDestroy, ids: ids)
 	let record = ids.mint()
 	module.appendOp(ok, op: StdOp.call(record, callee: MmAllocName, args: twoArgs(recordSize, second: recordDtor)))
-	emitStoreField(module, block: ok, arr: record, offset: ArrElementSizeOffset, value: elementSize)
-	emitStoreField(module, block: ok, arr: record, offset: ArrElementDestroyOffset, value: elementDestroy)
+	emitStoreField(module, block: ok, record: record, offset: ArrElementSizeOffset, value: elementSize)
+	emitStoreField(module, block: ok, record: record, offset: ArrElementDestroyOffset, value: elementDestroy)
 	module.setTerminator(ok, op: StdOp.ret(record))
 
 	module.functions.push(func)
@@ -1156,19 +1015,19 @@ function buildArrPush(module StdModule)
 	let arr = 0 as ValueId
 	let value = 1 as ValueId
 
-	let length = emitLoadField(module, block: entry, arr: arr, offset: ArrLengthOffset, ids: ids)
+	let length = emitLoadField(module, block: entry, record: arr, offset: ArrLengthOffset, ids: ids)
 	let one = emitConst(module, block: entry, value: 1, ids: ids)
 	let required = emitBin(module, block: entry, a: length, b: one, opcode: StdBinOpcode.add, ids: ids)
 	let grown = ids.mint()
 	module.appendOp(entry, op: StdOp.call(grown, callee: ArrGrowName, args: twoArgs(arr, second: required)))
 	// Reload buffer AFTER grow (it may have replaced it); `length`/`es` are unchanged by a grow.
-	let buffer = emitLoadField(module, block: entry, arr: arr, offset: ArrBufferOffset, ids: ids)
-	let es = emitLoadField(module, block: entry, arr: arr, offset: ArrElementSizeOffset, ids: ids)
+	let buffer = emitLoadField(module, block: entry, record: arr, offset: ArrBufferOffset, ids: ids)
+	let es = emitLoadField(module, block: entry, record: arr, offset: ArrElementSizeOffset, ids: ids)
 	let slot = emitSlotAddr(module, block: entry, buffer: buffer, index: length, elementSize: es, ids: ids)
 	var afterStore = emitStoreElem(module, func: func, cur: entry, addr: slot, value: value, size: es, ids: ids)
 
 	let newLen = emitBin(module, block: afterStore, a: length, b: one, opcode: StdBinOpcode.add, ids: ids)
-	emitStoreField(module, block: afterStore, arr: arr, offset: ArrLengthOffset, value: newLen)
+	emitStoreField(module, block: afterStore, record: arr, offset: ArrLengthOffset, value: newLen)
 	module.setTerminator(afterStore, op: StdOp.retVoid)
 
 	module.functions.push(func)
@@ -1187,14 +1046,14 @@ function buildArrGet(module StdModule)
 	let arr = 0 as ValueId
 	let index = 1 as ValueId
 
-	let length = emitLoadField(module, block: entry, arr: arr, offset: ArrLengthOffset, ids: ids)
+	let length = emitLoadField(module, block: entry, record: arr, offset: ArrLengthOffset, ids: ids)
 	let outOfRange = emitIndexOutOfRange(module, block: entry, index: index, length: length, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(outOfRange, thenBlockId: oob.id, elseBlockId: load.id))
 
 	emitOobReturn(module, block: oob, ids: ids)
 
-	let buffer = emitLoadField(module, block: load, arr: arr, offset: ArrBufferOffset, ids: ids)
-	let es = emitLoadField(module, block: load, arr: arr, offset: ArrElementSizeOffset, ids: ids)
+	let buffer = emitLoadField(module, block: load, record: arr, offset: ArrBufferOffset, ids: ids)
+	let es = emitLoadField(module, block: load, record: arr, offset: ArrElementSizeOffset, ids: ids)
 	let slot = emitSlotAddr(module, block: load, buffer: buffer, index: index, elementSize: es, ids: ids)
 	emitLoadElemAndOkReturn(module, func: func, cur: load, record: arr, addr: slot, size: es, ids: ids)
 
@@ -1215,7 +1074,7 @@ function buildArrSet(module StdModule)
 	let index = 1 as ValueId
 	let value = 2 as ValueId
 
-	let length = emitLoadField(module, block: entry, arr: arr, offset: ArrLengthOffset, ids: ids)
+	let length = emitLoadField(module, block: entry, record: arr, offset: ArrLengthOffset, ids: ids)
 	let outOfRange = emitIndexOutOfRange(module, block: entry, index: index, length: length, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(outOfRange, thenBlockId: oob.id, elseBlockId: store.id))
 
@@ -1224,8 +1083,8 @@ function buildArrSet(module StdModule)
 	// Detach BEFORE the buffer pointer is loaded (`__arr_cow_detach` trap 1), and after the bounds check, so a
 	// throwing `set` — which writes nothing — allocates nothing.
 	emitCowDetach(module, block: store, arr: arr, ids: ids)
-	let buffer = emitLoadField(module, block: store, arr: arr, offset: ArrBufferOffset, ids: ids)
-	let es = emitLoadField(module, block: store, arr: arr, offset: ArrElementSizeOffset, ids: ids)
+	let buffer = emitLoadField(module, block: store, record: arr, offset: ArrBufferOffset, ids: ids)
+	let es = emitLoadField(module, block: store, record: arr, offset: ArrElementSizeOffset, ids: ids)
 	// ⭐ **DESTROY THE OCCUPANT `set` OVERWRITES (P1.7 slice 3a).** A managed array's `set` moves a new owner into
 	// a LIVE slot, so the element it replaces must be destroyed first or it leaks (the parser consumes the new
 	// value into the array — nothing else drops the old one). Destroy exactly the one slot `[index, index+1)`
@@ -1247,7 +1106,7 @@ function buildArrCount(module StdModule)
 	var ids = ValueMinter.create(1)
 	var entry = module.addBlock(func, label: b"entry")
 	emitParams(module, block: entry, count: 1)
-	let length = emitLoadField(module, block: entry, arr: 0 as ValueId, offset: ArrLengthOffset, ids: ids)
+	let length = emitLoadField(module, block: entry, record: 0 as ValueId, offset: ArrLengthOffset, ids: ids)
 	module.setTerminator(entry, op: StdOp.ret(length))
 	module.functions.push(func)
 end 'buildArrCount'
@@ -1258,7 +1117,7 @@ function buildArrCapacity(module StdModule)
 	var ids = ValueMinter.create(1)
 	var entry = module.addBlock(func, label: b"entry")
 	emitParams(module, block: entry, count: 1)
-	let capacity = emitLoadField(module, block: entry, arr: 0 as ValueId, offset: ArrCapacityOffset, ids: ids)
+	let capacity = emitLoadField(module, block: entry, record: 0 as ValueId, offset: ArrCapacityOffset, ids: ids)
 	module.setTerminator(entry, op: StdOp.ret(capacity))
 	module.functions.push(func)
 end 'buildArrCapacity'
@@ -1272,7 +1131,7 @@ function buildArrIsEmpty(module StdModule)
 	var yes = module.addBlock(func, label: b"yes")
 	var no = module.addBlock(func, label: b"no")
 	emitParams(module, block: entry, count: 1)
-	let length = emitLoadField(module, block: entry, arr: 0 as ValueId, offset: ArrLengthOffset, ids: ids)
+	let length = emitLoadField(module, block: entry, record: 0 as ValueId, offset: ArrLengthOffset, ids: ids)
 	let zero = emitConst(module, block: entry, value: 0, ids: ids)
 	let isEmpty = emitCmp(module, block: entry, a: length, b: zero, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(isEmpty, thenBlockId: yes.id, elseBlockId: no.id))
@@ -1301,7 +1160,7 @@ end 'buildArrReserve'
 // newCap)` is already zero; an ungrown one's `[length, capacity)` is zero by the invariant), so only the
 // SHRINK path must actively zero the vacated `[n, oldLen)` region to keep the invariant.
 //
-// ⚠ **A NEGATIVE `n` IS REJECTED, not clamped** (`NegativeResizeExitCode`) — it is the one array write that
+// ⚠ **A NEGATIVE `n` IS REJECTED, not clamped** (`RuntimeAbort.arrayNegativeResize`) — it is the one array write that
 // lands OUTSIDE the buffer in both directions and that a detach cannot make safe, because the shrink's zero
 // range starts at `buffer + n·es`. `StdCmpPred` is signed, so the existing `n < oldLen` shrink test happily
 // accepts it; `emitIsNegative` is the file's one home for the guard that does not. It is a REJECT rather than
@@ -1326,16 +1185,16 @@ function buildArrResize(module StdModule)
 	module.setTerminator(entry, op: StdOp.condBranch(negative, thenBlockId: badLength.id, elseBlockId: resize.id))
 
 	// badLength: abort — a negative length can never be published.
-	emitVoidAbort(module, block: badLength, code: NegativeResizeExitCode, ids: ids)
+	emitRuntimeAbort(module, func: func, block: badLength, abort: RuntimeAbort.arrayNegativeResize, ids: ids)
 
 	let grown = ids.mint()
 	module.appendOp(resize, op: StdOp.call(grown, callee: ArrGrowName, args: twoArgs(arr, second: n)))
-	let oldLen = emitLoadField(module, block: resize, arr: arr, offset: ArrLengthOffset, ids: ids)
+	let oldLen = emitLoadField(module, block: resize, record: arr, offset: ArrLengthOffset, ids: ids)
 	let shrink = emitCmp(module, block: resize, a: n, b: oldLen, pred: StdCmpPred.lt, ids: ids)
 	module.setTerminator(resize, op: StdOp.condBranch(shrink, thenBlockId: doZero.id, elseBlockId: setLen.id))
 
-	let es = emitLoadField(module, block: doZero, arr: arr, offset: ArrElementSizeOffset, ids: ids)
-	let buffer = emitLoadField(module, block: doZero, arr: arr, offset: ArrBufferOffset, ids: ids)
+	let es = emitLoadField(module, block: doZero, record: arr, offset: ArrElementSizeOffset, ids: ids)
+	let buffer = emitLoadField(module, block: doZero, record: arr, offset: ArrBufferOffset, ids: ids)
 	// ⭐ **DESTROY THE VACATED MANAGED ELEMENTS `[n, oldLen)` BEFORE ZEROING (P1.7 slice 3a).** A shrink drops the
 	// tail `[n, oldLen)`, so each managed element there must be destroyed or it leaks; the destroy MUST precede the
 	// zero-fill (a zeroed slot is a NULL the walk would skip). A trivial-element array skips straight to the zero.
@@ -1347,7 +1206,7 @@ function buildArrResize(module StdModule)
 	var afterZero = emitZeroRange(module, func: func, cur: afterDestroy, dest: startAddr, byteCount: zeroBytes, ids: ids)
 	module.setTerminator(afterZero, op: StdOp.branch(setLen.id))
 
-	emitStoreField(module, block: setLen, arr: arr, offset: ArrLengthOffset, value: n)
+	emitStoreField(module, block: setLen, record: arr, offset: ArrLengthOffset, value: n)
 	module.setTerminator(setLen, op: StdOp.retVoid)
 
 	module.functions.push(func)
@@ -1365,15 +1224,15 @@ function buildArrFirst(module StdModule)
 	emitParams(module, block: entry, count: 1)
 	let arr = 0 as ValueId
 
-	let length = emitLoadField(module, block: entry, arr: arr, offset: ArrLengthOffset, ids: ids)
+	let length = emitLoadField(module, block: entry, record: arr, offset: ArrLengthOffset, ids: ids)
 	let zero = emitConst(module, block: entry, value: 0, ids: ids)
 	let isEmpty = emitCmp(module, block: entry, a: length, b: zero, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(isEmpty, thenBlockId: oob.id, elseBlockId: load.id))
 
 	emitOobReturn(module, block: oob, ids: ids)
 
-	let buffer = emitLoadField(module, block: load, arr: arr, offset: ArrBufferOffset, ids: ids)
-	let es = emitLoadField(module, block: load, arr: arr, offset: ArrElementSizeOffset, ids: ids)
+	let buffer = emitLoadField(module, block: load, record: arr, offset: ArrBufferOffset, ids: ids)
+	let es = emitLoadField(module, block: load, record: arr, offset: ArrElementSizeOffset, ids: ids)
 	emitLoadElemAndOkReturn(module, func: func, cur: load, record: arr, addr: buffer, size: es, ids: ids)
 
 	module.functions.push(func)
@@ -1391,7 +1250,7 @@ function buildArrLast(module StdModule)
 	emitParams(module, block: entry, count: 1)
 	let arr = 0 as ValueId
 
-	let length = emitLoadField(module, block: entry, arr: arr, offset: ArrLengthOffset, ids: ids)
+	let length = emitLoadField(module, block: entry, record: arr, offset: ArrLengthOffset, ids: ids)
 	let zero = emitConst(module, block: entry, value: 0, ids: ids)
 	let isEmpty = emitCmp(module, block: entry, a: length, b: zero, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(isEmpty, thenBlockId: oob.id, elseBlockId: load.id))
@@ -1400,8 +1259,8 @@ function buildArrLast(module StdModule)
 
 	let one = emitConst(module, block: load, value: 1, ids: ids)
 	let lastIdx = emitBin(module, block: load, a: length, b: one, opcode: StdBinOpcode.sub, ids: ids)
-	let buffer = emitLoadField(module, block: load, arr: arr, offset: ArrBufferOffset, ids: ids)
-	let es = emitLoadField(module, block: load, arr: arr, offset: ArrElementSizeOffset, ids: ids)
+	let buffer = emitLoadField(module, block: load, record: arr, offset: ArrBufferOffset, ids: ids)
+	let es = emitLoadField(module, block: load, record: arr, offset: ArrElementSizeOffset, ids: ids)
 	let slot = emitSlotAddr(module, block: load, buffer: buffer, index: lastIdx, elementSize: es, ids: ids)
 	emitLoadElemAndOkReturn(module, func: func, cur: load, record: arr, addr: slot, size: es, ids: ids)
 
@@ -1421,7 +1280,7 @@ function buildArrPop(module StdModule)
 	emitParams(module, block: entry, count: 1)
 	let arr = 0 as ValueId
 
-	let length = emitLoadField(module, block: entry, arr: arr, offset: ArrLengthOffset, ids: ids)
+	let length = emitLoadField(module, block: entry, record: arr, offset: ArrLengthOffset, ids: ids)
 	let zero = emitConst(module, block: entry, value: 0, ids: ids)
 	let isEmpty = emitCmp(module, block: entry, a: length, b: zero, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(isEmpty, thenBlockId: oob.id, elseBlockId: pop.id))
@@ -1433,13 +1292,13 @@ function buildArrPop(module StdModule)
 	emitCowDetach(module, block: pop, arr: arr, ids: ids)
 	let one = emitConst(module, block: pop, value: 1, ids: ids)
 	let lastIdx = emitBin(module, block: pop, a: length, b: one, opcode: StdBinOpcode.sub, ids: ids)
-	let buffer = emitLoadField(module, block: pop, arr: arr, offset: ArrBufferOffset, ids: ids)
-	let es = emitLoadField(module, block: pop, arr: arr, offset: ArrElementSizeOffset, ids: ids)
+	let buffer = emitLoadField(module, block: pop, record: arr, offset: ArrBufferOffset, ids: ids)
+	let es = emitLoadField(module, block: pop, record: arr, offset: ArrElementSizeOffset, ids: ids)
 	let slot = emitSlotAddr(module, block: pop, buffer: buffer, index: lastIdx, elementSize: es, ids: ids)
 	var afterLoad = module.addBlock(func, label: b"poploaded")
 	let value = emitLoadElem(module, func: func, cur: pop, exit: afterLoad, addr: slot, size: es, ids: ids)
 	var afterZero = emitZeroRange(module, func: func, cur: afterLoad, dest: slot, byteCount: es, ids: ids)
-	emitStoreField(module, block: afterZero, arr: arr, offset: ArrLengthOffset, value: lastIdx)
+	emitStoreField(module, block: afterZero, record: arr, offset: ArrLengthOffset, value: lastIdx)
 	emitOkReturn(module, block: afterZero, value: value, ids: ids)
 
 	module.functions.push(func)
@@ -1458,9 +1317,9 @@ function buildArrClear(module StdModule)
 	// Detach BEFORE the buffer pointer is loaded (`__arr_cow_detach` trap 1). `clear` cannot throw, and an
 	// EMPTY literal detaches here too, into a zero-byte private buffer (trap 2).
 	emitCowDetach(module, block: entry, arr: arr, ids: ids)
-	let length = emitLoadField(module, block: entry, arr: arr, offset: ArrLengthOffset, ids: ids)
-	let es = emitLoadField(module, block: entry, arr: arr, offset: ArrElementSizeOffset, ids: ids)
-	let buffer = emitLoadField(module, block: entry, arr: arr, offset: ArrBufferOffset, ids: ids)
+	let length = emitLoadField(module, block: entry, record: arr, offset: ArrLengthOffset, ids: ids)
+	let es = emitLoadField(module, block: entry, record: arr, offset: ArrElementSizeOffset, ids: ids)
+	let buffer = emitLoadField(module, block: entry, record: arr, offset: ArrBufferOffset, ids: ids)
 	// ⭐ **DESTROY THE LIVE MANAGED ELEMENTS `[0, length)` BEFORE ZEROING (P1.7 slice 3a).** `clear` drops the
 	// whole live region, so each managed element must be destroyed or it leaks; the destroy MUST run before the
 	// zero-fill (a zeroed slot is a NULL the walk would skip). A trivial-element array skips straight to the zero.
@@ -1469,7 +1328,7 @@ function buildArrClear(module StdModule)
 	let byteCount = emitBin(module, block: afterDestroy, a: length, b: es, opcode: StdBinOpcode.mul, ids: ids)
 	var afterZero = emitZeroRange(module, func: func, cur: afterDestroy, dest: buffer, byteCount: byteCount, ids: ids)
 	let zero = emitConst(module, block: afterZero, value: 0, ids: ids)
-	emitStoreField(module, block: afterZero, arr: arr, offset: ArrLengthOffset, value: zero)
+	emitStoreField(module, block: afterZero, record: arr, offset: ArrLengthOffset, value: zero)
 	module.setTerminator(afterZero, op: StdOp.retVoid)
 
 	module.functions.push(func)
@@ -1503,7 +1362,7 @@ function buildArrInsert(module StdModule)
 	let value = 2 as ValueId
 
 	// entry: an index above `length` clamps to `length`; otherwise fall to the low-side check.
-	let length = emitLoadField(module, block: entry, arr: arr, offset: ArrLengthOffset, ids: ids)
+	let length = emitLoadField(module, block: entry, record: arr, offset: ArrLengthOffset, ids: ids)
 	let overLen = emitCmp(module, block: entry, a: index, b: length, pred: StdCmpPred.gt, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(overLen, thenBlockId: clampHigh.id, elseBlockId: checkLow.id))
 
@@ -1528,8 +1387,8 @@ function buildArrInsert(module StdModule)
 	let required = emitBin(module, block: afterClamp, a: length, b: one, opcode: StdBinOpcode.add, ids: ids)
 	let grown = ids.mint()
 	module.appendOp(afterClamp, op: StdOp.call(grown, callee: ArrGrowName, args: twoArgs(arr, second: required)))
-	let es = emitLoadField(module, block: afterClamp, arr: arr, offset: ArrElementSizeOffset, ids: ids)
-	let buffer = emitLoadField(module, block: afterClamp, arr: arr, offset: ArrBufferOffset, ids: ids)
+	let es = emitLoadField(module, block: afterClamp, record: arr, offset: ArrElementSizeOffset, ids: ids)
+	let buffer = emitLoadField(module, block: afterClamp, record: arr, offset: ArrBufferOffset, ids: ids)
 	let slot = emitSlotAddr(module, block: afterClamp, buffer: buffer, index: clamped, elementSize: es, ids: ids)
 	let destAddr = emitBin(module, block: afterClamp, a: slot, b: es, opcode: StdBinOpcode.add, ids: ids)
 	let moveCount = emitBin(module, block: afterClamp, a: length, b: clamped, opcode: StdBinOpcode.sub, ids: ids)
@@ -1537,7 +1396,7 @@ function buildArrInsert(module StdModule)
 	var afterShift = emitBackwardCopy(module, func: func, cur: afterClamp, dest: destAddr, src: slot, byteCount: moveBytes, ids: ids)
 	var afterStore = emitStoreElem(module, func: func, cur: afterShift, addr: slot, value: value, size: es, ids: ids)
 	let newLen = emitBin(module, block: afterStore, a: length, b: one, opcode: StdBinOpcode.add, ids: ids)
-	emitStoreField(module, block: afterStore, arr: arr, offset: ArrLengthOffset, value: newLen)
+	emitStoreField(module, block: afterStore, record: arr, offset: ArrLengthOffset, value: newLen)
 	module.setTerminator(afterStore, op: StdOp.retVoid)
 
 	module.functions.push(func)
@@ -1557,7 +1416,7 @@ function buildArrRemove(module StdModule)
 	let arr = 0 as ValueId
 	let index = 1 as ValueId
 
-	let length = emitLoadField(module, block: entry, arr: arr, offset: ArrLengthOffset, ids: ids)
+	let length = emitLoadField(module, block: entry, record: arr, offset: ArrLengthOffset, ids: ids)
 	let outOfRange = emitIndexOutOfRange(module, block: entry, index: index, length: length, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(outOfRange, thenBlockId: oob.id, elseBlockId: remove.id))
 
@@ -1566,8 +1425,8 @@ function buildArrRemove(module StdModule)
 	// Detach BEFORE the buffer pointer is loaded (`__arr_cow_detach` trap 1), and after the bounds check, so a
 	// throwing `remove` allocates nothing.
 	emitCowDetach(module, block: remove, arr: arr, ids: ids)
-	let es = emitLoadField(module, block: remove, arr: arr, offset: ArrElementSizeOffset, ids: ids)
-	let buffer = emitLoadField(module, block: remove, arr: arr, offset: ArrBufferOffset, ids: ids)
+	let es = emitLoadField(module, block: remove, record: arr, offset: ArrElementSizeOffset, ids: ids)
+	let buffer = emitLoadField(module, block: remove, record: arr, offset: ArrBufferOffset, ids: ids)
 	let slot = emitSlotAddr(module, block: remove, buffer: buffer, index: index, elementSize: es, ids: ids)
 	var afterLoad = module.addBlock(func, label: b"rmloaded")
 	let value = emitLoadElem(module, func: func, cur: remove, exit: afterLoad, addr: slot, size: es, ids: ids)
@@ -1582,7 +1441,7 @@ function buildArrRemove(module StdModule)
 
 	// afterShift: length--, then zero the now-unused last slot.
 	let newLen = emitBin(module, block: afterShift, a: length, b: one, opcode: StdBinOpcode.sub, ids: ids)
-	emitStoreField(module, block: afterShift, arr: arr, offset: ArrLengthOffset, value: newLen)
+	emitStoreField(module, block: afterShift, record: arr, offset: ArrLengthOffset, value: newLen)
 	let vacAddr = emitSlotAddr(module, block: afterShift, buffer: buffer, index: newLen, elementSize: es, ids: ids)
 	var afterZero = emitZeroRange(module, func: func, cur: afterShift, dest: vacAddr, byteCount: es, ids: ids)
 	emitOkReturn(module, block: afterZero, value: value, ids: ids)
@@ -1625,7 +1484,7 @@ function buildArrSlice(module StdModule)
 	let start = 1 as ValueId
 	let endIndex = 2 as ValueId
 
-	let length = emitLoadField(module, block: entry, arr: arr, offset: ArrLengthOffset, ids: ids)
+	let length = emitLoadField(module, block: entry, record: arr, offset: ArrLengthOffset, ids: ids)
 	let endTooLarge = emitCmp(module, block: entry, a: endIndex, b: length, pred: StdCmpPred.gt, ids: ids)
 	let startPastEnd = emitCmp(module, block: entry, a: start, b: endIndex, pred: StdCmpPred.gt, ids: ids)
 	let startNegative = emitIsNegative(module, block: entry, value: start, ids: ids)
@@ -1660,7 +1519,7 @@ function buildArrClone(module StdModule)
 	emitParams(module, block: entry, count: 1)
 	let arr = 0 as ValueId
 
-	let length = emitLoadField(module, block: entry, arr: arr, offset: ArrLengthOffset, ids: ids)
+	let length = emitLoadField(module, block: entry, record: arr, offset: ArrLengthOffset, ids: ids)
 	let start = emitConst(module, block: entry, value: 0, ids: ids)
 	let newRec = emitArrayView(module, func: func, cur: entry, exit: ret, srcRecord: arr, start: start, sliceLen: length, ids: ids)
 	module.setTerminator(ret, op: StdOp.ret(newRec))
@@ -1679,7 +1538,7 @@ end 'buildArrClone'
 // coherent when `src`'s element size equals it. Same-static-type arrays normally agree; a byte-string literal
 // (`element_size@24 == 1`, byte-packed) mixed with a machine-word `Array with Byte` does NOT, and blitting
 // across that seam over-reads the packed source. `entry` guards the two element sizes equal and diverges
-// (`AppendElementSizeMismatchExitCode`) otherwise — the file's "a corrupt operation must never proceed" shape.
+// (`RuntimeAbort.arrayAppendElementSizeMismatch`) otherwise — the file's "a corrupt operation must never proceed" shape.
 function buildArrAppend(module StdModule)
 	var func = IrFunction.createFromStd(ArrAppendName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(2)
@@ -1693,28 +1552,28 @@ function buildArrAppend(module StdModule)
 	let src = 1 as ValueId
 
 	// entry: the two records must stride by the same element size (see THE ELEMENT-SIZE SEAM above).
-	let destEs = emitLoadField(module, block: entry, arr: dest, offset: ArrElementSizeOffset, ids: ids)
-	let srcEs = emitLoadField(module, block: entry, arr: src, offset: ArrElementSizeOffset, ids: ids)
+	let destEs = emitLoadField(module, block: entry, record: dest, offset: ArrElementSizeOffset, ids: ids)
+	let srcEs = emitLoadField(module, block: entry, record: src, offset: ArrElementSizeOffset, ids: ids)
 	let esDiffers = emitCmp(module, block: entry, a: destEs, b: srcEs, pred: StdCmpPred.ne, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(esDiffers, thenBlockId: mismatch.id, elseBlockId: append.id))
 
 	// mismatch: abort — an incoherent cross-stride blit must never proceed.
-	emitVoidAbort(module, block: mismatch, code: AppendElementSizeMismatchExitCode, ids: ids)
+	emitRuntimeAbort(module, func: func, block: mismatch, abort: RuntimeAbort.arrayAppendElementSizeMismatch, ids: ids)
 
-	let destLen = emitLoadField(module, block: append, arr: dest, offset: ArrLengthOffset, ids: ids)
-	let srcLen = emitLoadField(module, block: append, arr: src, offset: ArrLengthOffset, ids: ids)
+	let destLen = emitLoadField(module, block: append, record: dest, offset: ArrLengthOffset, ids: ids)
+	let srcLen = emitLoadField(module, block: append, record: src, offset: ArrLengthOffset, ids: ids)
 	let newLen = emitBin(module, block: append, a: destLen, b: srcLen, opcode: StdBinOpcode.add, ids: ids)
 	let reserved = ids.mint()
 	module.appendOp(append, op: StdOp.call(reserved, callee: ArrReserveName, args: twoArgs(dest, second: newLen)))
 
-	let es = emitLoadField(module, block: append, arr: dest, offset: ArrElementSizeOffset, ids: ids)
-	let destBuffer = emitLoadField(module, block: append, arr: dest, offset: ArrBufferOffset, ids: ids)
-	let srcBuffer = emitLoadField(module, block: append, arr: src, offset: ArrBufferOffset, ids: ids)
+	let es = emitLoadField(module, block: append, record: dest, offset: ArrElementSizeOffset, ids: ids)
+	let destBuffer = emitLoadField(module, block: append, record: dest, offset: ArrBufferOffset, ids: ids)
+	let srcBuffer = emitLoadField(module, block: append, record: src, offset: ArrBufferOffset, ids: ids)
 	let destAddr = emitSlotAddr(module, block: append, buffer: destBuffer, index: destLen, elementSize: es, ids: ids)
 	let byteCount = emitBin(module, block: append, a: srcLen, b: es, opcode: StdBinOpcode.mul, ids: ids)
 	var afterCopy = emitForwardCopy(module, func: func, cur: append, dest: destAddr, src: srcBuffer, byteCount: byteCount, ids: ids)
 
-	emitStoreField(module, block: afterCopy, arr: dest, offset: ArrLengthOffset, value: newLen)
+	emitStoreField(module, block: afterCopy, record: dest, offset: ArrLengthOffset, value: newLen)
 	module.setTerminator(afterCopy, op: StdOp.retVoid)
 
 	module.functions.push(func)
@@ -1736,8 +1595,8 @@ end 'buildArrAppend'
 // spec fragments, so this whole restructuring is invisible to them).
 //
 // ⭐ **THE BUFFER IS RELEASED THROUGH THE SENTINEL LADDER, NOT FREED DIRECTLY** (P1.7 slices 2 and COW B).
-// `emitSharedAllocationBase` answers which allocation — if any — this record owes a `__mm_decref` to, and
-// `emitRefcountSharedBase` pays it. That pair covers all three record kinds and is the same pair
+// `emitOwedAllocationBase` answers which allocation — if any — this record owes a `__mm_decref` to, and
+// `emitReleaseOwedBase` pays it. That pair covers all three record kinds and is the same pair
 // `__arr_cow_detach` uses, so the two cannot disagree about what a record owns:
 //
 //   * an OWNER's base is its own `buffer@0` — `__mm_decref` reclaims it at the LAST owner, so a buffer still
@@ -1787,15 +1646,15 @@ function buildArrDecref(module StdModule)
 	// release: destroy the live managed elements `[0, length)` before the buffer goes (the shared gate skips a
 	// trivial-element array). An array that never allocated a buffer has length 0, so the walk is empty and
 	// needs no separate guard.
-	let buffer = emitLoadField(module, block: release, arr: record, offset: ArrBufferOffset, ids: ids)
-	let length = emitLoadField(module, block: release, arr: record, offset: ArrLengthOffset, ids: ids)
-	let es = emitLoadField(module, block: release, arr: record, offset: ArrElementSizeOffset, ids: ids)
+	let buffer = emitLoadField(module, block: release, record: record, offset: ArrBufferOffset, ids: ids)
+	let length = emitLoadField(module, block: release, record: record, offset: ArrLengthOffset, ids: ids)
+	let es = emitLoadField(module, block: release, record: record, offset: ArrElementSizeOffset, ids: ids)
 	let start = emitConst(module, block: release, value: 0, ids: ids)
 	var afterWalk = emitDestroyRangeIfManaged(module, func: func, cur: release, record: record, buffer: buffer, start: start, stop: length, elementSize: es, ids: ids)
 	module.setTerminator(afterWalk, op: StdOp.branch(releaseBuf.id))
 
-	let base = emitSharedAllocationBase(module, func: func, cur: releaseBuf, join: baseJoin, record: record, ids: ids)
-	var afterRelease = emitRefcountSharedBase(module, func: func, cur: baseJoin, base: base, callee: MmDecrefName, ids: ids)
+	let base = emitOwedAllocationBase(module, func: func, cur: releaseBuf, join: baseJoin, record: record, slots: arrayBufferSlots(), ids: ids)
+	var afterRelease = emitReleaseOwedBase(module, func: func, cur: baseJoin, base: base, callee: MmDecrefName, ids: ids)
 	module.setTerminator(afterRelease, op: StdOp.branch(freeRec.id))
 
 	let recFreed = ids.mint()
