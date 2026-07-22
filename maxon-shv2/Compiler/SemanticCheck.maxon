@@ -635,6 +635,15 @@ end 'checkSlottedCall'
 // (no receiver) is left to decay: its inner-alias arguments in the corpus are literals.
 function checkPerInstanceArgs(project Project, func IrFunction, callee ByteArray, sig FuncSignature, argIds ValueIdArray, callRange SourceRange, filePath FilePath)
 	let signatures = try queryProgramSignatures(project) otherwise panic("checkPerInstanceArgs: queryProgramSignatures failed inside semanticCheck — it is computed and memoized by compileToCodeResult before the pipeline runs, so it cannot fail fresh here")
+
+	// Allocation-free short-circuit: when no method in the program declares an inner-alias parameter — every
+	// generics-free program — the per-callee lookup below could not possibly find one, and it mints an
+	// `InnerAliasParamLookup` union box on EVERY call. Gate it out, exactly as the parser gates
+	// `innerAliasParamsIn` on `enclosingInnerAliases.count()` and `aggregateNameFor` gates on `containsQualifier`.
+	if not signatures.hasInnerAliasParams() 'noPerInstanceMethods'
+		return
+	end 'noPerInstanceMethods'
+
 	match signatures.methodInnerAliasParamsOf(callee) 'lookup'
 		noInnerAliasParams then return
 		found(info) then checkPerInstanceArgsWith(project, func: func, sig: sig, argIds: argIds, info: info, callRange: callRange, filePath: filePath)

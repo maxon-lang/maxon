@@ -646,6 +646,20 @@ let sharedEmptyDescriptorNeeds = DescriptorNeedMap.create()
 // program pays nothing per function OR per parser (`typeParamFeedOf` reads a missing index as `none`).
 let sharedEmptyTypeParamFeeds = TypeParamFeedArray.create()
 
+// The module-level shared EMPTY per-instance-alias placeholders (P1.6-C), held as the INITIAL value of the
+// `enclosingInnerAliases` / `valueInstanceAlias` working fields AND as the COW anchors the reset points at.
+// ONE allocation for the whole compile each (like `sharedEmptyDescriptorNeeds`), so a generics-free program
+// — which never declares a nested typealias nor constructs a generic instance — pays NOTHING per parser: a
+// parser INCREFS these rather than allocating its own. They are never mutated: `readNestedRangedAlias` and
+// `recordValueInstanceAlias` copy-on-write a fresh collection the first time they must write, keyed on the
+// `is`-identity of these very instances, so the shared ones stay empty and safe to share across the per-file
+// parse fan-out — exactly the invariant `sharedEmptyDescriptorNeeds`/`sharedEmptyTypeParamFeeds` rely on.
+let sharedEmptyInnerAliases = InnerAliasNameSet.create()
+let sharedEmptyInstanceAliasMap = ValueInstanceAliasMap.create()
+// The NAME-keyed twin delivered to SemanticCheck for a function that has range checks but constructs no
+// instance — read-only and STORED into `FunctionRangeChecks` (increfed, so sharing is safe), never mutated.
+let sharedEmptyInstanceAliasNames = ValueInstanceAliasNameMap.create()
+
 // The signals one method's body contributes to the descriptor-need fixpoint (P1.6-B1): whether it directly
 // reads `sizeof(T)`, the siblings it calls on `self`, and the token position just past its `end` (so the
 // type-body walk resumes there). Returned by `Parser.scanOneMethodDescriptorSignals`.
@@ -2110,22 +2124,10 @@ export type Parser
 	// (rather than allocating an empty `uses` list) for a type with no `uses`, and `closeTypeParamScope`
 	// restores it, so a non-generic type declaration allocates nothing here. Never mutated.
 	var emptyTypeParams as ByteArrayArray
-	// The SHARED empty inner-alias name set (P1.6-C) that `enclosingInnerAliases` holds for a type that
-	// declares no inner typealias — which is EVERY type on the generics-free corpus. `openTypeParamScope` /
-	// `closeTypeParamScope` point at it (rather than allocating an empty `Set` per type declaration, in BOTH
-	// the sweep and the real parse), and `readNestedRangedAlias` copy-on-writes a fresh set the first time it
-	// records a member. Never mutated.
-	var sharedEmptyInnerAliases as InnerAliasNameSet
-	// The SHARED empty per-value instance-alias map (P1.6-C) that `valueInstanceAlias` holds until a function
-	// actually constructs a generic instance — which is every function on the generics-free corpus. The
-	// per-function reset points at it (rather than allocating an empty Map), and `recordValueInstanceAlias`
-	// COPY-ON-WRITES a fresh map the first time it must write, so a function that constructs no instance
-	// allocates nothing here. Never mutated.
-	var sharedEmptyInstanceAliasMap as ValueInstanceAliasMap
-	// The SHARED empty NAME-keyed instance-alias map (P1.6-C) delivered to SemanticCheck for a function that
-	// has range checks but constructs no instance — read-only and STORED into `FunctionRangeChecks` (increfed,
-	// so sharing is safe), so it allocates nothing per function. Never mutated.
-	var sharedEmptyInstanceAliasNames as ValueInstanceAliasNameMap
+	// P1.6-C's shared-empty inner-alias / instance-alias placeholders are MODULE-LEVEL globals
+	// (`sharedEmptyInnerAliases`, `sharedEmptyInstanceAliasMap`, `sharedEmptyInstanceAliasNames`), not
+	// per-parser fields — one allocation for the whole compile, like `sharedEmptyDescriptorNeeds`. The
+	// working fields `enclosingInnerAliases` / `valueInstanceAlias` INCREF a global as their initial value.
 	// The struct-typed bindings currently IN SCOPE, in declaration order — the values a `return`
 	// must DROP (`emitScopeDrops`). Held as the `VarInfo` objects, exactly as `mutableVars` is, and
 	// drained off the end at a block's `end` by the same mark (see `closeBlock`). Reset per function.
@@ -2231,7 +2233,7 @@ export type Parser
 			valuePromiseMarks: BoolArray.create(),
 			valueIsCapturingClosure: BoolArray.create(),
 			valueClosureEnv: ValueIdArray.create(),
-			valueInstanceAlias: ValueInstanceAliasMap.create(),
+			valueInstanceAlias: sharedEmptyInstanceAliasMap,
 			captureNames: ByteArrayArray.create(),
 			captureValues: ValueIdArray.create(),
 			captureTypes: MaxonTypeArray.create(),
@@ -2242,14 +2244,11 @@ export type Parser
 			signatures: signatures,
 			enclosingType: EmptySourceText,
 			enclosingTypeParams: ByteArrayArray.create(),
-			enclosingInnerAliases: InnerAliasNameSet.create(),
+			enclosingInnerAliases: sharedEmptyInnerAliases,
 			typeDescriptorNeeds: sharedEmptyDescriptorNeeds,
 			genericAliasScratch: GenericAliasEntryArray.create(),
 			emptyTypeParamPositions: TypeParamIdArray.create(),
 			emptyTypeParams: ByteArrayArray.create(),
-			sharedEmptyInnerAliases: InnerAliasNameSet.create(),
-			sharedEmptyInstanceAliasMap: ValueInstanceAliasMap.create(),
-			sharedEmptyInstanceAliasNames: ValueInstanceAliasNameMap.create(),
 			ownedBindings: VarInfoArray.create(),
 			pendingTempDrops: ValueIdArray.create(),
 			inMatchArmBody: false,
@@ -3186,7 +3185,7 @@ export type Parser
 		// this one, and reset BEFORE the non-generic early return so every type body starts fresh. Points at the
 		// SHARED empty set until a nested typealias is recorded (`readNestedRangedAlias` copy-on-writes), so a
 		// type that declares none allocates nothing.
-		self.enclosingInnerAliases = self.sharedEmptyInnerAliases
+		self.enclosingInnerAliases = sharedEmptyInnerAliases
 
 		// A NON-GENERIC type allocates nothing: it keeps the layout's create-time empty `typeParamNames`
 		// and points the parser's enclosing scope at the shared empty list. Only a `uses` clause builds a
@@ -3221,7 +3220,7 @@ export type Parser
 		// Restored to the SHARED empty in lockstep (P1.6-C) so a bare `Idx` at file scope, after a type that
 		// declared one, resolves as an ordinary named type rather than a stale inner alias — and allocates
 		// nothing, exactly as `emptyTypeParams` restores.
-		self.enclosingInnerAliases = self.sharedEmptyInnerAliases
+		self.enclosingInnerAliases = sharedEmptyInnerAliases
 	end 'closeTypeParamScope'
 
 	// Is the cursor on a FIELD declaration — `[export] (let|var) <name> as <Type>`?
@@ -3669,7 +3668,7 @@ export type Parser
 		let alias = try ranged.get(0) otherwise panic("readNestedRangedAlias: ranged.count() == 1 but get(0) failed")
 		// COPY-ON-WRITE off the shared empty set: only a type that actually declares a nested typealias gets its
 		// own set here, so the generics-free corpus never allocates one (the reset points at the shared one).
-		if self.enclosingInnerAliases is self.sharedEmptyInnerAliases 'stillShared'
+		if self.enclosingInnerAliases is sharedEmptyInnerAliases 'stillShared'
 			self.enclosingInnerAliases = InnerAliasNameSet.create()
 		end 'stillShared'
 		self.enclosingInnerAliases.insert(alias.name)
@@ -4485,7 +4484,7 @@ export type Parser
 		// Per-function, like the sibling value columns: a value's per-instance alias provenance names an id
 		// in THIS function's SSA space (P1.6-C). Points at the SHARED empty until the function constructs an
 		// instance (`recordValueInstanceAlias` copy-on-writes), so a generics-free function allocates nothing.
-		self.valueInstanceAlias = self.sharedEmptyInstanceAliasMap
+		self.valueInstanceAlias = sharedEmptyInstanceAliasMap
 		// P1.9 range-check accumulators, reset per function (see the field header). The return-alias
 		// name is fixed by the DECLARED return type and known here, before the body is parsed; the two
 		// site lists fill as the body emits casts / returns.
@@ -4599,7 +4598,7 @@ export type Parser
 		if self.rangeCheckCastSites.isEmpty() and self.rangeCheckReturnSites.isEmpty() and not hasInstanceAliases 'noSideData'
 			return
 		end 'noSideData'
-		let instanceAliases = self.packagedInstanceAliases() if hasInstanceAliases else self.sharedEmptyInstanceAliasNames
+		let instanceAliases = self.packagedInstanceAliases() if hasInstanceAliases else sharedEmptyInstanceAliasNames
 		self.artifact.recordFunctionRangeChecks(name, checks: FunctionRangeChecks.create(self.filePath, castSites: self.rangeCheckCastSites, returnAliasName: self.rangeCheckReturnAlias, returnSites: self.rangeCheckReturnSites, valueInstanceAliases: instanceAliases))
 	end 'commitRangeChecks'
 
@@ -5749,7 +5748,7 @@ export type Parser
 		end 'noAlias'
 		// COPY-ON-WRITE off the shared empty map: a function that constructs an instance gets its own map here,
 		// on first write, so the generics-free corpus never allocates one (the reset points at the shared one).
-		if self.valueInstanceAlias is self.sharedEmptyInstanceAliasMap 'stillShared'
+		if self.valueInstanceAlias is sharedEmptyInstanceAliasMap 'stillShared'
 			self.valueInstanceAlias = ValueInstanceAliasMap.create()
 		end 'stillShared'
 		self.valueInstanceAlias.upsert(value, value: self.artifact.typeNames.intern(aliasName))
@@ -13522,7 +13521,7 @@ export type Parser
 		self.valuePromiseMarks = BoolArray.create()
 		self.valueIsCapturingClosure = BoolArray.create()
 		self.valueClosureEnv = ValueIdArray.create()
-		self.valueInstanceAlias = self.sharedEmptyInstanceAliasMap
+		self.valueInstanceAlias = sharedEmptyInstanceAliasMap
 		self.captureNames = ByteArrayArray.create()
 		self.captureValues = ValueIdArray.create()
 		self.captureTypes = MaxonTypeArray.create()

@@ -2384,6 +2384,16 @@ export type ProgramSignatures
 		return self.perInstanceAliasOf(name)
 	end 'qualifiedAliasOf'
 
+	// Does ANY method in the whole program declare a bare inner-alias parameter (P1.6-C)? The
+	// allocation-free bool gate the per-instance argument check reads BEFORE `methodInnerAliasParamsOf` —
+	// which mints an `InnerAliasParamLookup` union (a heap box in the bootstrap) on every call. When this
+	// answers false — every generics-free program, and any program with no per-instance method parameter —
+	// no callee could ever be found, so the check returns without the per-call box. Mirrors the parser's
+	// own `enclosingInnerAliases.count() != 0` gate and `aggregateNameFor`'s `containsQualifier` gate.
+	export function hasInnerAliasParams() returns bool
+		return self.methodInnerAliasParams.count() != 0
+	end 'hasInnerAliasParams'
+
 	// The inner-alias parameter info of `methodName` (`Wrapper.setTag`), or `noInnerAliasParams` when the
 	// method declares no bare-inner-alias parameter — the common case, which costs no map entry. THE door the
 	// parser's per-instance argument check asks through at a concrete call site.
