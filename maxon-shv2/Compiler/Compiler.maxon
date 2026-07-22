@@ -218,6 +218,14 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// `installStringRuntime` installs only the referenced functions (a no-op when neither is used).
 	installStringRuntime(pipeline.stdModule, usage: usage)
 
+	// The Array runtime (`__arr_create`/`__arr_push`/`__arr_get`/…) — installed the same way and for the
+	// same reason: already-lowered Std, appended after the pipeline so it is never re-optimized. Keyed on
+	// its own `usesArray` bit (any `__arr_*` reference), which also implied `usesHeap` above (the helpers
+	// `__mm_alloc`/`__mm_free` the record and its element buffer). It installs the WHOLE array runtime as
+	// one closure — the helpers call each other, and `__`-prefixed functions are excluded from the goldens,
+	// so an all-or-nothing install is golden-neutral and needs no per-helper dependency tracking (P1.7).
+	installArrayRuntime(pipeline.stdModule, usage: usage)
+
 	// The per-union (P1.3 slice 2) and per-struct (P1.4a wave 2) destructor cascades, installed the same way
 	// and for the same reason: already-lowered Std, appended after the pipeline so they are never
 	// re-optimized. Only the destructors the module actually CALLS — directly or through a nested cascade

@@ -200,6 +200,16 @@ export function twoI64Params() returns StdTypeArray
 	return types
 end 'twoI64Params'
 
+// Three i64 parameters — `__str_copy(dest, src, len)` and the Array runtime's `__arr_set(arr, index,
+// value)` / `__arr_insert(arr, index, value)`. Shared here so a runtime builder does not mint its own.
+export function threeI64Params() returns StdTypeArray
+	var types = StdTypeArray.create()
+	types.push(StdType.i64)
+	types.push(StdType.i64)
+	types.push(StdType.i64)
+	return types
+end 'threeI64Params'
+
 // Emit the `param` ops an entry block owes. A Std function's parameters are materialized once, at
 // entry, by the op whose `role` is `param` — the backend turns each into the move that captures the
 // incoming ABI register into its virtual register. Parameter `k` is ValueId `k`.
@@ -514,6 +524,11 @@ export function noteDestructorUsage(usage RuntimeUsage, project Project, signatu
 			if structHasStringField(signatures, structName: layout.name) 'hasString'
 				usage.usesStrDecref = true
 			end 'hasString'
+			// A struct destructor that drops an `Array` field calls `__arr_decref` inside its synthesized
+			// body (which the module scan cannot see), so the array runtime bit is declared here (P1.7).
+			if signatures.structHasArrayField(layout.name) 'hasArray'
+				usage.usesArray = true
+			end 'hasArray'
 		end 'referenced'
 	end 'eachStruct'
 
@@ -955,3 +970,21 @@ export function argsOf(only ValueId) returns ValueIdArray
 	args.push(only)
 	return args
 end 'argsOf'
+
+// The two- and three-argument branch-edge / call-argument builders — `argsOf`'s pair and triple
+// siblings, shared by the String, Array and GT runtimes (a `__mm_alloc(size, dtor)` is two, a
+// `__str_copy(dest, src, len)` three). One home so the runtime builders do not each mint their own.
+export function twoArgs(first ValueId, second ValueId) returns ValueIdArray
+	var args = ValueIdArray.create()
+	args.push(first)
+	args.push(second)
+	return args
+end 'twoArgs'
+
+export function threeArgs(first ValueId, second ValueId, third ValueId) returns ValueIdArray
+	var args = ValueIdArray.create()
+	args.push(first)
+	args.push(second)
+	args.push(third)
+	return args
+end 'threeArgs'

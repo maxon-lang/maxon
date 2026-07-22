@@ -1200,9 +1200,25 @@ type MaxonToStdLowering
 	end 'lowerPropagateError'
 
 	// A throwing free call `try callee(args…)` — the arg slotting is `lowerCall`'s exactly (it IS a call),
-	// plus the `errorFlag` second result. A `tryCall` never targets a compiler-internal callee (a builtin
-	// does not throw), and the parser has already rejected a non-throwing one (E3055).
+	// plus the `errorFlag` second result. The parser has already rejected a non-throwing USER callee (E3055).
+	//
+	// ⭐ **A COMPILER-INTERNAL THROWING CALLEE (`__arr_get`/`__arr_set`/`__arr_first`/…) HAS NO SIGNATURE TO
+	// SLOT AGAINST** — the parser wrote its arguments positionally (`emitRuntimeCall`), so they pass verbatim,
+	// exactly as `lowerCall` routes a non-throwing runtime call through `lowerRuntimeCall`. The array
+	// accessors are the first throwing builtins (P1.7 slice 1); before them no builtin threw, which is why
+	// this path is new. The label guard is `lowerRuntimeCall`'s: a runtime call is positional by
+	// construction, so a label would silently mis-slot.
 	function lowerTryCall(result ValueId, errorFlag ValueId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, dstBlock IrBlock)
+		if isCompilerInternalCallee(callee) 'compilerOwnTryCall'
+			for label in argLabels 'eachLabel'
+				if not label.isEmpty() 'labelled'
+					panic("lowerTryCall: the throwing runtime call to '{String.from(callee)}' carries the argument label '{String.from(label)}' — a runtime entry point has no signature to slot a label against; runtime calls are positional (see Parser.emitRuntimeCall)")
+				end 'labelled'
+			end 'eachLabel'
+			self.stdModule.appendOp(dstBlock, op: StdOp.tryCall(result, errorFlagId: errorFlag, callee: callee, args: args))
+			return
+		end 'compilerOwnTryCall'
+
 		let sig = try self.funcSignatures.get(callee) otherwise panic("lowerTryCall: throwing callee '{String.from(callee)}' has no signature — SemanticCheck must reject an unknown callee before lowering")
 		match slotCallArgs(sig, args: args, argLabels: argLabels) 'slot'
 			ordered(argIds) then self.stdModule.appendOp(dstBlock, op: StdOp.tryCall(result, errorFlagId: errorFlag, callee: callee, args: self.finalizeCallArgsWithLayout(argIds, sig: sig, callee: callee, dstBlock: dstBlock)))

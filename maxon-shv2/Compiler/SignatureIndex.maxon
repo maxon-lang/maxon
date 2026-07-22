@@ -935,6 +935,13 @@ export function managedFieldDropCallee(signatures ProgramSignatures, typeNames T
 		panic("managedFieldDropCallee: a field of tag '{typeTagName(tag)}' is not a managed heap reference — every caller classifies the field managed first")
 	end 'notManagedRef'
 	let name = try typeNames.nameOf(typeNameIdOf(fieldType)) otherwise panic("managedFieldDropCallee: a managed field's type id is not in the interner it was resolved against — pass the interner the field type's ids live in")
+	// A GENERIC-INSTANCE-alias field (an `Array`, a `Box`) arrives as a `named` (the sweep recorded the
+	// layout before the alias interned) — route it to the instance box drop callee (`__arr_decref` for an
+	// `Array`, `__mm_decref`/`__destruct_<T>` for a struct box), exactly as a re-tagged `genericInstance`
+	// field would. The gid is `signatures`' own, needing no interner.
+	if signatures.isGenericAlias(name) 'genericAlias'
+		return signatures.genericInstanceBoxDropCallee(signatures.genericAliasInstance(name))
+	end 'genericAlias'
 	return managedNameDropCallee(signatures, typeNames: typeNames, name: name)
 end 'managedFieldDropCallee'
 
@@ -966,6 +973,23 @@ function unionNameDropCallee(signatures ProgramSignatures, typeNames TypeNameInt
 end 'unionNameDropCallee'
 
 // --- Generic instances (P1.6-A) ---
+
+// The name of the builtin `Array` generic type (`Array with Integer`). Shared by the parser's
+// `Base with Args` check (which treats `Array` as a one-parameter generic without a `type` declaration)
+// and every `Array`-instance query — one speller, so the two cannot drift. See `isArrayBaseName`.
+export let ArrayBuiltinBaseName = b"Array"
+
+// The single type parameter `Array` declares (`Array with Element`) — the arity `checkGenericInstance`
+// validates a `Array with …` against.
+export let ArrayTypeParamCount = 1 as FieldIndex
+
+// The one-element `[integer]` argument list of the `Array with integer` literal instance — built fresh
+// per call (a `MaxonTypeArray` is owned by the instance it is interned into).
+function singletonInteger() returns MaxonTypeArray
+	var args = MaxonTypeArray.create()
+	args.push(MaxonType.integer)
+	return args
+end 'singletonInteger'
 
 // The composite-key index a `GenericInstanceRegistry` interns through, and the alias-name map that
 // resolves `IntBox` to its interned instance. Keyed on `ByteArray` — a cheap string key built from
@@ -2492,13 +2516,71 @@ export type ProgramSignatures
 		return self.nameOfId(self.genericInstances.instanceBaseId(id))
 	end 'genericInstanceBaseName'
 
+	// --- The `Array` builtin generic (P1.7 slice 1) ---
+	//
+	// `Array` is a BUILTIN generic type with one type parameter `Element` — there is no `type Array uses
+	// Element` declaration (shv2 does not read stdlib; the array runtime is synthesized like String's). So
+	// its instances (`Array with Integer`) intern like any other, but they have no base `StructLayout`, and
+	// every `genericInstance*` method that would read one (`baseLayoutOf`, box size, per-instance drop) must
+	// special-case them. The box is a FIXED 48-byte record (`ArrRecordBytes`, see ArrayRuntime), not
+	// `fieldCount·8`. The one home of "is this instance an `Array`?" so no site respells the base name.
+
+	// Is `name` the builtin `Array` type — the base of every array instance.
+	export function isArrayBaseName(name ByteArray) returns bool
+		return name.equals(ArrayBuiltinBaseName)
+	end 'isArrayBaseName'
+
+	// Is generic instance `id` an `Array with T`? (Reads the base NAME, which needs no base struct.)
+	export function isArrayInstance(id GenericInstanceId) returns bool
+		return self.isArrayBaseName(self.genericInstanceBaseName(id))
+	end 'isArrayInstance'
+
+	// The element TYPE of `Array with T` — its sole type argument, in this index's own interner.
+	export function arrayElementType(id GenericInstanceId) returns MaxonType
+		let args = self.genericInstances.instanceArgs(id)
+		return try args.get(0) otherwise panic("ProgramSignatures.arrayElementType: `Array` instance {id} has no type argument — arity (1) was checked at instantiation")
+	end 'arrayElementType'
+
+	// Is `Array with T`'s element itself managed (String / struct / boxed union / nested array) — the
+	// slice-1 boundary: a managed-element array needs the element-destroy walk (P1.7 slice 3) and is
+	// rejected with a clean E2015 until then. A trivial element (int / Byte / ranged-int / bool) is stored
+	// inline and owns nothing.
+	export function arrayElementIsManaged(id GenericInstanceId) returns bool
+		return self.typeIsManaged(self.arrayElementType(id))
+	end 'arrayElementIsManaged'
+
+	// The byte size of one element of `Array with T` — the sole argument's full source `sizeof`, the value
+	// `element_size@24` is stamped with and every array helper strides by. `Array with Byte` ⇒ 1, `Array
+	// with Integer` ⇒ 8. Reuses the single-arg logical-size door (which reads args, not a base layout).
+	export function arrayElementSize(id GenericInstanceId) returns ByteOffset
+		return self.genericInstanceSoleArgLogicalSize(id)
+	end 'arrayElementSize'
+
+	// ⭐ **THE `Array with integer` INSTANCE FOR A BARE `[…]` ARRAY LITERAL (P1.7 slice 1).** A literal has
+	// no typealias to intern from, so the SWEEP interns this ONE well-known instance whenever a file's tokens
+	// contain a `[` (`Parser.foldDeclaredSignaturesInto`), and the parser reads the same giid back at literal
+	// time. Interning is IDEMPOTENT — `TypeNameInterner.intern` and `GenericInstanceRegistry.intern` both
+	// return the existing entry without mutating when present — so the sweep's call is the WRITE and every
+	// parser call is a pure READ (the instance is always interned before any file is parsed). At this slice a
+	// literal's elements are all integer (a non-integer element literal is a later slice, rejected E2015), so
+	// one instance suffices; a wider element set would intern more here. It is deliberately NOT folded into
+	// the content hash: a file gaining an array literal re-parses on its OWN bytes, and no OTHER file's
+	// meaning depends on this shared, deterministic instance.
+	export function internArrayIntegerInstance() returns GenericInstanceId
+		return self.genericInstances.intern(self.typeNames.intern(ArrayBuiltinBaseName), args: singletonInteger())
+	end 'internArrayIntegerInstance'
+
 	// --- Layout-descriptor sizing (P1.6-B1) ---
 	//
 	// The box byteSize of a concrete generic instance — its BASE struct's own layout (`Box with Integer`
-	// has `Box`'s box). At this slice a `T` field is an opaque 8-byte slot like any other, so no argument
-	// is substituted into the layout and the base struct's `sizeBytes` IS the instance's box size. This is
-	// the descriptor's `size@0` field, and the interner-owning door lowering computes it through.
+	// has `Box`'s box), or the fixed 48-byte record for an `Array` (which has no base struct). At this slice
+	// a `T` field is an opaque 8-byte slot like any other, so no argument is substituted into the layout and
+	// the base struct's `sizeBytes` IS the instance's box size. This is the descriptor's `size@0` field, and
+	// the interner-owning door lowering computes it through.
 	export function genericInstanceBoxSize(id GenericInstanceId) returns ByteOffset
+		if self.isArrayInstance(id) 'array'
+			return ArrRecordBytes as ByteOffset
+		end 'array'
 		match self.structOf(self.genericInstanceBaseName(id)) 'base'
 			declared(layout) then return layout.sizeBytes()
 			undeclared then panic("genericInstanceBoxSize: generic instance {id}'s base is not a declared struct")
@@ -2666,6 +2748,13 @@ export type ProgramSignatures
 	// Does instance `id` own ANY managed field once substituted — the gate deciding whether it needs a
 	// `__destruct_<instance>` cascade at all (else its box drop is the trivial `__mm_decref`).
 	export function genericInstanceHasManagedField(id GenericInstanceId) returns bool
+		// An `Array` instance has NO base struct to iterate and is dropped through `__arr_decref` (routed by
+		// `genericInstanceBoxDropCallee`), NOT a synthesized per-instance `__destruct_<mangled>`. Answering
+		// `false` here keeps it out of `installGenericInstanceDestructors` and `noteDestructorUsage`'s
+		// instance loop (which would call `baseLayoutOf` and panic) — its own `__arr_decref` frees the box.
+		if self.isArrayInstance(id) 'array'
+			return false
+		end 'array'
 		for i in 0 upto self.genericInstanceFieldCount(id) 'eachField'
 			if self.genericInstanceFieldIsManaged(id, index: i) 'managed'
 				return true
@@ -2691,6 +2780,12 @@ export type ProgramSignatures
 	// the door `decrefCalleeFor` (a scope-exit drop) and a nested-instance field drop route through — over
 	// this index's own interner, so a caller never misresolves the instance's substituted-field ids.
 	export function genericInstanceBoxDropCallee(id GenericInstanceId) returns ByteArray
+		// An `Array` drops through `__arr_decref` — which frees its external element buffer (the one thing a
+		// generic `__mm_decref` cannot reach) and then the record, mirroring how a String drops through
+		// `__str_decref`. Its elements are trivial at this slice, so there is no element walk.
+		if self.isArrayInstance(id) 'array'
+			return ArrDecrefName
+		end 'array'
 		if self.genericInstanceHasManagedField(id) 'managed'
 			return destructorSymbol(self.mangleGenericInstance(id).toByteArray())
 		end 'managed'
@@ -2767,12 +2862,21 @@ export type ProgramSignatures
 		// HERE, over this index's own function-alias registry (P1.5-A1). One place, so every reader (a
 		// field READ, a `Self{op: op}` construction check, the store-width query) sees a function VALUE
 		// and not an int. Re-interned into `into` by NAME exactly as `adoptType`'s `named` arm is.
-		if maxonTypeTag(declared) == ValueTypeTag.named 'maybeFunctionAlias'
+		if maxonTypeTag(declared) == ValueTypeTag.named 'maybeAlias'
 			let name = self.nameOfId(typeNameIdOf(declared))
 			if self.isFunctionAlias(name) 'functionAlias'
 				return MaxonType.function(into.intern(name))
 			end 'functionAlias'
-		end 'maybeFunctionAlias'
+			// A GENERIC-INSTANCE-typed field (`export var ops as IntArray`, an `Array` instance) arrives as a
+			// `named` for the same reason a function alias does — the SWEEP recorded this layout before the
+			// generic alias was interned — so it is re-tagged `genericInstance` here, over this index's own
+			// generic-alias registry (P1.7). One place, so every reader (a field READ, a `Self{ops: ops}`
+			// construction check, the array method dispatch, the drop cascade) sees the instance and not an
+			// `int`. The gid is this index's own, needing no interner remap.
+			if self.isGenericAlias(name) 'genericAlias'
+				return MaxonType.genericInstance(self.genericAliasInstance(name))
+			end 'genericAlias'
+		end 'maybeAlias'
 
 		return self.adoptType(declared, into: into)
 	end 'fieldTypeOf'
@@ -2795,6 +2899,37 @@ export type ProgramSignatures
 		let fieldType = try layout.fieldTypes.get(index) otherwise panic("ProgramSignatures.structFieldIsManaged: field {index} is out of range for `type {String.from(structName)}`, which declares {layout.fieldCount()} — every index handed out came from `indexOfField`")
 		return self.typeIsManaged(fieldType)
 	end 'structFieldIsManaged'
+
+	// Does struct `structName` DIRECTLY own an `Array` field — the `usesArray` gate for its destructor (P1.7).
+	// The struct's `__destruct_<Struct>` drops such a field through `__arr_decref`, which the module scan
+	// cannot see (it lives in the synthesized body), so this is what turns the array runtime on. An array
+	// inside a nested struct field is dropped by that nested struct's destructor, not this one, so only a
+	// DIRECT array field counts — the `structHasStringField` twin. A field arrives as a `named` generic
+	// alias (the sweep recorded it before interning), so the alias is resolved to its instance and tested.
+	export function structHasArrayField(structName ByteArray) returns bool
+		let layout = try self.structTypes.get(structName) otherwise panic("ProgramSignatures.structHasArrayField: no `type {String.from(structName)}` is declared — every caller asks `structOf` first")
+		for i in 0 upto layout.fieldCount() 'eachField'
+			let fieldType = try layout.fieldTypes.get(i) otherwise panic("ProgramSignatures.structHasArrayField: fieldTypes.get OOB at {i}")
+			if self.fieldTypeIsArray(fieldType) 'array'
+				return true
+			end 'array'
+		end 'eachField'
+		return false
+	end 'structHasArrayField'
+
+	// Is a (possibly `named`-generic-alias) field type an `Array` instance — the shared "is this an array?"
+	// test over a RAW layout field type, resolving a `named` generic alias to its instance first.
+	function fieldTypeIsArray(fieldType MaxonType) returns bool
+		let tag = maxonTypeTag(fieldType)
+		if tag == ValueTypeTag.genericInstance 'instance'
+			return self.isArrayInstance(typeNameIdOf(fieldType))
+		end 'instance'
+		if tag != ValueTypeTag.named 'notNamed'
+			return false
+		end 'notNamed'
+		let name = self.nameOfId(typeNameIdOf(fieldType))
+		return self.genericAliases.contains(name) and self.isArrayInstance(self.genericAliasInstance(name))
+	end 'fieldTypeIsArray'
 
 	// ⭐ **THE ONE "does this type own droppable heap?" CLASSIFIER**, over `self.typeNames` — the interner
 	// every field/arg/payload id this index stores lives in. A String (`__str_decref`), a struct box (a
@@ -2823,7 +2958,11 @@ export type ProgramSignatures
 			return true
 		end 'namedStruct'
 		if not self.enumTypes.contains(name) 'notEnum'
-			return false
+			// A GENERIC-INSTANCE-alias field arrives as a `named` (the SWEEP recorded the layout before the
+			// alias was interned) — a generic instance is a heap box (an `Array`'s record + buffer, a `Box`'s
+			// box), so it is managed and dropped by the struct's cascade. Any other `named` (a ranged int/float
+			// alias) is a scalar and not managed.
+			return self.genericAliases.contains(name)
 		end 'notEnum'
 
 		let enumLayout = try self.enumTypes.get(name) otherwise panic("ProgramSignatures.typeIsManaged: enumTypes.contains({String.from(name)}) is true but get failed")

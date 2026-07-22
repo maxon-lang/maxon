@@ -1,0 +1,210 @@
+---
+feature: array-slots
+status: experimental
+keywords: [array, slot, empty, managed, error]
+category: memory-safety
+---
+# Array Slots - Empty Slot Detection
+
+## Documentation
+
+When an array of structs is resized beyond its populated elements, the new slots contain null (zero) pointers. Accessing these empty slots via `managed.get()` now throws `ArrayError.emptySlot` instead of dereferencing a null pointer.
+
+This only applies to struct-element arrays. Primitive arrays (int, float, byte, bool) store values inline, so a zero value is a valid element, not an empty slot.
+
+## Tests
+
+<!-- disabled-test: get-empty-slot-basic -->
+<!-- P1.7-s3 struct element (empty-slot detection) -->
+### Get on empty slot uses otherwise path
+Create an array, push one item, resize to 3, then `try arr.get(1) otherwise` should use the otherwise path since slot 1 is empty.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Slot
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Slot'
+
+typealias SlotArray = Array with Slot
+
+function main() returns ExitCode
+	var arr = SlotArray.create()
+	arr.push(Slot.create(10))
+	arr.resize(3)
+	let result = try arr.get(1) otherwise Slot.create(-1)
+	return result.value + 1
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- disabled-test: get-valid-slot-not-empty -->
+<!-- P1.7-s3 struct element (empty-slot detection) -->
+### Get on a populated slot works fine
+Getting an element from a slot that was populated via push should work without error.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Slot
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Slot'
+
+typealias SlotArray = Array with Slot
+
+function main() returns ExitCode
+	var arr = SlotArray.create()
+	arr.push(Slot.create(42))
+	let result = try arr.get(0) otherwise Slot.create(0)
+	return result.value
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: int-array-zero-not-empty -->
+### Int array containing zero does NOT throw emptySlot
+Primitive arrays store values inline. A zero value is a valid element, not an empty slot.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function main() returns ExitCode
+	var arr = IntArray.create()
+	arr.push(0)
+	arr.push(5)
+	arr.resize(4)
+	let val = try arr.get(0) otherwise -1
+	let val2 = try arr.get(2) otherwise -1
+	return val + val2
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- disabled-test: get-empty-slot-try-otherwise-value -->
+<!-- P1.7-s3 struct element (empty-slot detection) -->
+### Try/otherwise returns default struct value when slot is empty
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Slot
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Slot'
+
+typealias SlotArray = Array with Slot
+
+function main() returns ExitCode
+	var arr = SlotArray.create()
+	arr.resize(3)
+	let result = try arr.get(0) otherwise Slot.create(99)
+	return result.value
+end 'main'
+```
+```exitcode
+99
+```
+
+<!-- disabled-test: first-empty-slot -->
+<!-- P1.7-s3 struct element (empty-slot detection) -->
+### first() on array where slot 0 is empty
+Resize to 3 without pushing any elements. `first()` should use the otherwise path.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Slot
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Slot'
+
+typealias SlotArray = Array with Slot
+
+function main() returns ExitCode
+	var arr = SlotArray.create()
+	arr.push(Slot.create(1))
+	arr.resize(3)
+	try arr.remove(0) otherwise ignore
+	let result = try arr.first() otherwise Slot.create(77)
+	return result.value
+end 'main'
+```
+```exitcode
+77
+```
+
+<!-- disabled-test: last-empty-slot -->
+<!-- P1.7-s3 struct element (empty-slot detection) -->
+### last() on array where last slot is empty
+Resize to 3, only push 1 item. `last()` should use the otherwise path since slot 2 is empty.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Slot
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Slot'
+
+typealias SlotArray = Array with Slot
+
+function main() returns ExitCode
+	var arr = SlotArray.create()
+	arr.push(Slot.create(1))
+	arr.resize(3)
+	let result = try arr.last() otherwise Slot.create(55)
+	return result.value
+end 'main'
+```
+```exitcode
+55
+```
+
+<!-- disabled-test: try-otherwise-error-binding -->
+<!-- P1.7-s3 struct element (empty-slot detection) -->
+### Try/otherwise with error binding and match on ArrayError.indexOutOfBounds
+Calling get(0) on a resized-but-unfilled struct array throws ArrayError.indexOutOfBounds —
+the resize zeros every slot, and a null slot is reported as out-of-bounds by the array
+wrapper.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Slot
+	export var value as Integer
+end 'Slot'
+
+typealias SlotArray = Array with Slot
+
+function main() returns ExitCode
+	var arr = SlotArray.create()
+	arr.resize(2)
+	try arr.get(0) otherwise (e) 'handler'
+		match e 'check'
+			emptySlot then return 42
+			indexOutOfBounds then return 99
+		end 'check'
+	end 'handler'
+	return 0
+end 'main'
+```
+```exitcode
+99
+```

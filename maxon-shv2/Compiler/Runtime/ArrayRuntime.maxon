@@ -1,0 +1,975 @@
+// Runtime/ArrayRuntime.maxon — the `Array` value representation (P1.7 slice 1) and the native runtime
+// functions an array's storage substrate needs. The TRIVIAL-element core: elements are int / Byte /
+// ranged-int / bool (every one ≤ 8 bytes and self-owning), so nothing walks the elements on grow, drop,
+// insert or remove — `element_destroy@40` is always 0 at this slice.
+//
+// ⭐ THE SHAPE IS `StringRuntime`'s: one fused, `__mm_alloc`'d backing record whose fields the runtime
+// functions read and the lowering writes, plus a set of `__`-prefixed Std runtime functions built as
+// `StdOp` graphs (so they get register allocation, frames and the whole backend for free), installed
+// on demand from `RuntimeUsage`. It DIVERGES from `String` in the one place `Array` must: a String's
+// `element_size` is a compile-time constant 1, an Array's is a RUNTIME field (`element_size@24`) — the
+// first runtime-polymorphic element size in shv2 — so every helper reads it out of the record and moves
+// exactly that many bytes per element. A single set of helpers therefore serves every element type.
+//
+// ⚠ THE ARRAY IS TWO ALLOCATIONS, not one: the 48-byte record (`__mm_alloc`, a managed box with the MM
+// header + refcount before it) and a SEPARATE external element buffer (`buffer@0` → a raw `__mm_alloc`'d
+// span, destructor 0). This mirrors a DETACHED String, not the inline one — an array grows, so its bytes
+// cannot live behind the record. `__arr_decref` frees both.
+
+// --- The fused 48-byte Array backing record ---
+//
+// Every field is an 8-byte slot; the six offsets are 0/8/16/24/32/40 and the record is 48 bytes. It is a
+// DISTINCT record type from a String's (whose slot@40 is `isAscii`); do not reinterpret one as the other.
+export let ArrBufferOffset = 0 as ByteOffset
+export let ArrLengthOffset = 8 as ByteOffset
+export let ArrCapacityOffset = 16 as ByteOffset
+export let ArrElementSizeOffset = 24 as ByteOffset
+export let ArrParentOffset = 32 as ByteOffset
+export let ArrElementDestroyOffset = 40 as ByteOffset
+export let ArrRecordBytes = 48 as ByteCount
+
+// `parent@32` is reserved (COW/slices are P1.4). `element_destroy@40` is the per-element destructor a
+// managed-element array will carry (P1.7 slice 3); at THIS slice every element is trivial, so it is
+// always 0 and the drop path frees the buffer without walking. Both come pre-zeroed from `__mm_alloc`,
+// so `__arr_create` never writes them — the same zeroing contract `__mm_alloc` itself relies on.
+let TrivialElementDestroy = 0 as ParsedInt
+
+// The exit code `__arr_create` diverges with when handed a 0 element size — a compiler bug (a concrete
+// literal is never 0, a descriptor read never yields 0), mirroring v1's `__mm_panic_element_size_zero`
+// runtime guard so a zero cannot silently make `__arr_grow` allocate a zero-byte buffer and corrupt.
+let ElementSizeZeroExitCode = 70 as ParsedInt
+
+// The error flag `__arr_get`/`__arr_set`/`__arr_first`/`__arr_last`/`__arr_pop`/`__arr_remove` throw on an
+// out-of-bounds index — the dual-register `errorReturn` flag (an error case's `ordinal + 1`, so 1 is
+// `ArrayError.indexOutOfBounds`, ordinal 0). `try … otherwise` only tests `flag != 0`, so any nonzero
+// value routes to the handler; the specific code is the honest ordinal for the day a handler binds it.
+let ArrIndexOutOfBoundsFlag = 1 as ParsedInt
+let NoErrorFlag = 0 as ParsedInt
+
+// The growth policy — Go's `nextslicecap`, ported VERBATIM from `stdlib/Array.maxon:65-95`. Double below
+// `GrowthThreshold`, then ease toward 1.25× above it.
+//
+// ⚠ IT BENDS THE SCALE-TEST'S BYTE COLUMN, AND SAYING SO ONCE IS CHEAPER THAN THE NEXT AGENT HUNTING A
+// PHANTOM QUADRATIC (this comment is carried from stdlib/Array.maxon:14-55). Under plain doubling the
+// bytes a buffer allocates over its life are a FLAT 2·N whatever N is. Here the ratio `r` is a function
+// of the capacity — ×2.0 at the threshold, rising toward ×5 as it approaches 1.25× — so a phase whose
+// bytes are perfectly LINEAR in the program reads ABOVE ×2.00 per doubling while it climbs. The scale
+// ladder DOUBLES each rung, so buffers get bigger each rung and the multiple climbs each rung: a reading
+// of ×2.1 on a linear phase is the EXPECTED cost of this policy, NOT a new quadratic. It saturates (the
+// multiple stops at 5), so it is a TRANSIENT bend, not a superlinearity — but the ladder's six rungs sit
+// inside the transition. (Do NOT reintroduce the phantom `max(req+1, cap·2, 64)` doubling the stdlib
+// comment names: it no longer exists in the bootstrap.)
+let GrowthThreshold = 256 as ParsedInt
+let MinimumCapacity = 4 as ParsedInt
+// The easing step is `capacity + (capacity + 3·GrowthThreshold)/4`. The `3` and the `4` are named (and
+// the `3·GrowthThreshold` addend is derived from `GrowthThreshold` in the IR, not written as a second
+// literal 768) so the formula reads as the policy and no fact is written twice.
+let EaseNumeratorScale = 3 as ParsedInt
+let EaseDivisor = 4 as ParsedInt
+
+// The runtime entry points. `__`-prefixed (`isCompilerInternalCallee` routes their calls past the
+// user-function checks — no file declares them, so no E3004, no signature slotting) but NOT `__mm_`-
+// prefixed, so `isRuntimeCallee` leaves them out of the raw heap decision — instead `isArrayRuntimeCallee`
+// carries both `usesArray` AND `usesHeap` (they `__mm_alloc`/`__mm_free` inside their Std bodies).
+export let ArrCreateName = b"__arr_create"
+export let ArrPushName = b"__arr_push"
+export let ArrGetName = b"__arr_get"
+export let ArrSetName = b"__arr_set"
+export let ArrCountName = b"__arr_count"
+export let ArrCapacityName = b"__arr_capacity"
+export let ArrIsEmptyName = b"__arr_is_empty"
+export let ArrReserveName = b"__arr_reserve"
+export let ArrResizeName = b"__arr_resize"
+export let ArrFirstName = b"__arr_first"
+export let ArrLastName = b"__arr_last"
+export let ArrPopName = b"__arr_pop"
+export let ArrClearName = b"__arr_clear"
+export let ArrInsertName = b"__arr_insert"
+export let ArrRemoveName = b"__arr_remove"
+export let ArrDecrefName = b"__arr_decref"
+// Internal helpers the public ones call: `__arr_grown_cap` is the policy, `__arr_grow` reallocs to fit.
+let ArrGrownCapName = b"__arr_grown_cap"
+let ArrGrowName = b"__arr_grow"
+
+// The `__arr_` prefix that identifies EVERY array runtime entry point — the one test `scanRuntimeUsage`
+// reads to set `usesArray` (and `usesHeap`).
+let ArrayRuntimePrefix = b"__arr_"
+
+export function isArrayRuntimeCallee(callee ByteArray) returns bool
+	return bytesStartWith(callee, prefix: ArrayRuntimePrefix)
+end 'isArrayRuntimeCallee'
+
+// A byte width used to shift a byte into (or out of) its position in a little-endian element word. `i*8`
+// is the bit offset of element byte `i`; `BitsPerByte` names the 8.
+let BitsPerByte = 8 as ParsedInt
+
+// Install the array runtime into the lowered Std module — ALL of it, when the program touches any array.
+// Golden-neutral: `__`-prefixed functions are excluded from the spec goldens (`isRuntimeFunction`), so an
+// all-or-nothing install costs nothing in the fragments and needs no per-helper dependency tracking; the
+// helpers call each other (`push`→`grow`→`grown_cap`→`__mm_alloc`) so a dependency graph would only re-
+// derive the closure this install already is. Appended AFTER the pipeline (like `installMmRuntime`), so
+// they are never re-optimized.
+export function installArrayRuntime(module StdModule, usage RuntimeUsage)
+	if not usage.usesArray 'noArray'
+		return
+	end 'noArray'
+	buildArrGrownCap(module)
+	buildArrGrow(module)
+	buildArrCreate(module)
+	buildArrPush(module)
+	buildArrGet(module)
+	buildArrSet(module)
+	buildArrCount(module)
+	buildArrCapacity(module)
+	buildArrIsEmpty(module)
+	buildArrReserve(module)
+	buildArrResize(module)
+	buildArrFirst(module)
+	buildArrLast(module)
+	buildArrPop(module)
+	buildArrClear(module)
+	buildArrInsert(module)
+	buildArrRemove(module)
+	buildArrDecref(module)
+end 'installArrayRuntime'
+
+// --- The byte-loop builders: the runtime-polymorphic element_size lives HERE ---
+//
+// Every element move is byte-granular because `element_size` is a runtime field. Four primitives, each a
+// header-guarded loop (the `buildStrCopy` shape), threaded through `cur`: they set `cur`'s terminator and
+// return the continuation block (`emitLoadElem` also the loaded value). One implementation of each,
+// shared by every accessor, so the element-stride arithmetic lives in exactly one place per direction.
+
+// Copy `byteCount` bytes from `src` to `dest`, LOW address first — safe when `dest <= src` (a grow's
+// old→new copy, a remove's shift-left). `byteCount == 0` copies nothing (the header guard holds at once).
+function emitForwardCopy(module StdModule, func IrFunction, cur IrBlock, dest ValueId, src ValueId, byteCount ValueId, ids ValueMinter) returns IrBlock
+	var header = module.addBlock(func, label: b"cpyfh")
+	var body = module.addBlock(func, label: b"cpyfb")
+	let done = module.addBlock(func, label: b"cpyfd")
+
+	let zero = ids.mint()
+	module.appendOp(cur, op: StdOp.const(zero, value: 0, valueType: StdType.i64))
+	module.setTerminator(cur, op: StdOp.branch(header.id))
+
+	let i = ids.mint()
+	header.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
+	cur.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(zero)))
+	let atEnd = ids.mint()
+	module.appendOp(header, op: StdOp.cmp(atEnd, lhs: i, rhs: byteCount, pred: StdCmpPred.ge, operandType: StdType.i64))
+	module.setTerminator(header, op: StdOp.condBranch(atEnd, thenBlockId: done.id, elseBlockId: body.id))
+
+	let srcAddr = ids.mint()
+	module.appendOp(body, op: StdOp.binOp(srcAddr, lhs: src, rhs: i, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	let b = ids.mint()
+	module.appendOp(body, op: StdOp.loadIndirect(b, addrId: srcAddr, offset: 0, valueType: StdType.u8))
+	let dstAddr = ids.mint()
+	module.appendOp(body, op: StdOp.binOp(dstAddr, lhs: dest, rhs: i, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	module.appendOp(body, op: StdOp.storeIndirect(dstAddr, offset: 0, valueId: b, valueType: StdType.u8))
+	let one = ids.mint()
+	module.appendOp(body, op: StdOp.const(one, value: 1, valueType: StdType.i64))
+	let iNext = ids.mint()
+	module.appendOp(body, op: StdOp.binOp(iNext, lhs: i, rhs: one, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	module.setTerminator(body, op: StdOp.branch(header.id))
+	body.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(iNext)))
+
+	return done
+end 'emitForwardCopy'
+
+// Copy `byteCount` bytes from `src` to `dest`, HIGH address first — the overlap-safe direction when
+// `dest > src` (an insert's shift-right). The cursor `i` counts DOWN from `byteCount` to 0; each step
+// copies index `i-1`, so `i` doubles as the next iteration count.
+function emitBackwardCopy(module StdModule, func IrFunction, cur IrBlock, dest ValueId, src ValueId, byteCount ValueId, ids ValueMinter) returns IrBlock
+	var header = module.addBlock(func, label: b"cpybh")
+	var body = module.addBlock(func, label: b"cpybb")
+	let done = module.addBlock(func, label: b"cpybd")
+
+	module.setTerminator(cur, op: StdOp.branch(header.id))
+
+	let i = ids.mint()
+	header.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
+	cur.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(byteCount)))
+	let zero = ids.mint()
+	module.appendOp(header, op: StdOp.const(zero, value: 0, valueType: StdType.i64))
+	let atStart = ids.mint()
+	module.appendOp(header, op: StdOp.cmp(atStart, lhs: i, rhs: zero, pred: StdCmpPred.eq, operandType: StdType.i64))
+	module.setTerminator(header, op: StdOp.condBranch(atStart, thenBlockId: done.id, elseBlockId: body.id))
+
+	let one = ids.mint()
+	module.appendOp(body, op: StdOp.const(one, value: 1, valueType: StdType.i64))
+	let k = ids.mint()
+	module.appendOp(body, op: StdOp.binOp(k, lhs: i, rhs: one, opcode: StdBinOpcode.sub, operandType: StdType.i64))
+	let srcAddr = ids.mint()
+	module.appendOp(body, op: StdOp.binOp(srcAddr, lhs: src, rhs: k, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	let b = ids.mint()
+	module.appendOp(body, op: StdOp.loadIndirect(b, addrId: srcAddr, offset: 0, valueType: StdType.u8))
+	let dstAddr = ids.mint()
+	module.appendOp(body, op: StdOp.binOp(dstAddr, lhs: dest, rhs: k, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	module.appendOp(body, op: StdOp.storeIndirect(dstAddr, offset: 0, valueId: b, valueType: StdType.u8))
+	module.setTerminator(body, op: StdOp.branch(header.id))
+	body.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(k)))
+
+	return done
+end 'emitBackwardCopy'
+
+// Zero `byteCount` bytes at `dest` — the capacity-slot invariant enforcer: `clear`, a `resize` shrink and
+// `pop`/`remove`'s vacated slot all restore `[length, capacity)` to zero so the future element walk stays
+// safe. `byteCount == 0` writes nothing.
+function emitZeroRange(module StdModule, func IrFunction, cur IrBlock, dest ValueId, byteCount ValueId, ids ValueMinter) returns IrBlock
+	var header = module.addBlock(func, label: b"zroh")
+	var body = module.addBlock(func, label: b"zrob")
+	let done = module.addBlock(func, label: b"zrod")
+
+	let zero = ids.mint()
+	module.appendOp(cur, op: StdOp.const(zero, value: 0, valueType: StdType.i64))
+	module.setTerminator(cur, op: StdOp.branch(header.id))
+
+	let i = ids.mint()
+	header.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
+	cur.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(zero)))
+	let atEnd = ids.mint()
+	module.appendOp(header, op: StdOp.cmp(atEnd, lhs: i, rhs: byteCount, pred: StdCmpPred.ge, operandType: StdType.i64))
+	module.setTerminator(header, op: StdOp.condBranch(atEnd, thenBlockId: done.id, elseBlockId: body.id))
+
+	let dstAddr = ids.mint()
+	module.appendOp(body, op: StdOp.binOp(dstAddr, lhs: dest, rhs: i, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	let zByte = ids.mint()
+	module.appendOp(body, op: StdOp.const(zByte, value: 0, valueType: StdType.i64))
+	module.appendOp(body, op: StdOp.storeIndirect(dstAddr, offset: 0, valueId: zByte, valueType: StdType.u8))
+	let one = ids.mint()
+	module.appendOp(body, op: StdOp.const(one, value: 1, valueType: StdType.i64))
+	let iNext = ids.mint()
+	module.appendOp(body, op: StdOp.binOp(iNext, lhs: i, rhs: one, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	module.setTerminator(body, op: StdOp.branch(header.id))
+	body.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(iNext)))
+
+	return done
+end 'emitZeroRange'
+
+// Store the low `size` bytes of the register `value` at `addr`, little-endian — a push/set/insert of a
+// trivial element word. Byte `i` is `(value >>logical i·8)` stored as a `u8` (which keeps the low byte).
+function emitStoreElem(module StdModule, func IrFunction, cur IrBlock, addr ValueId, value ValueId, size ValueId, ids ValueMinter) returns IrBlock
+	var header = module.addBlock(func, label: b"steh")
+	var body = module.addBlock(func, label: b"steb")
+	let done = module.addBlock(func, label: b"sted")
+
+	let zero = ids.mint()
+	module.appendOp(cur, op: StdOp.const(zero, value: 0, valueType: StdType.i64))
+	module.setTerminator(cur, op: StdOp.branch(header.id))
+
+	let i = ids.mint()
+	header.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
+	cur.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(zero)))
+	let atEnd = ids.mint()
+	module.appendOp(header, op: StdOp.cmp(atEnd, lhs: i, rhs: size, pred: StdCmpPred.ge, operandType: StdType.i64))
+	module.setTerminator(header, op: StdOp.condBranch(atEnd, thenBlockId: done.id, elseBlockId: body.id))
+
+	let bitsConst = ids.mint()
+	module.appendOp(body, op: StdOp.const(bitsConst, value: BitsPerByte, valueType: StdType.i64))
+	let shiftAmt = ids.mint()
+	module.appendOp(body, op: StdOp.binOp(shiftAmt, lhs: i, rhs: bitsConst, opcode: StdBinOpcode.mul, operandType: StdType.i64))
+	let byteVal = ids.mint()
+	module.appendOp(body, op: StdOp.binOp(byteVal, lhs: value, rhs: shiftAmt, opcode: StdBinOpcode.shrLogical, operandType: StdType.i64))
+	let dstAddr = ids.mint()
+	module.appendOp(body, op: StdOp.binOp(dstAddr, lhs: addr, rhs: i, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	module.appendOp(body, op: StdOp.storeIndirect(dstAddr, offset: 0, valueId: byteVal, valueType: StdType.u8))
+	let one = ids.mint()
+	module.appendOp(body, op: StdOp.const(one, value: 1, valueType: StdType.i64))
+	let iNext = ids.mint()
+	module.appendOp(body, op: StdOp.binOp(iNext, lhs: i, rhs: one, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	module.setTerminator(body, op: StdOp.branch(header.id))
+	body.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(iNext)))
+
+	return done
+end 'emitStoreElem'
+
+// Load the `size` bytes at `addr` into a register word, zero-extended little-endian — a get/first/last/
+// pop/remove of a trivial element. Byte `i` is `load_u8(addr+i) <<logical i·8`, OR-accumulated. On
+// completion the loop branches to the caller-created `exit` block and the accumulated value is RETURNED
+// (the loop-header accumulator, which the header dominates, so it is live on `exit` — the same domination
+// `buildIntToString` relies on). The caller owns `exit` (a `var`), which is why it is passed IN rather
+// than returned: a returned block cannot then be re-mutated by the caller under the ownership model.
+function emitLoadElem(module StdModule, func IrFunction, cur IrBlock, exit IrBlock, addr ValueId, size ValueId, ids ValueMinter) returns ValueId
+	var header = module.addBlock(func, label: b"ldeh")
+	var body = module.addBlock(func, label: b"ldeb")
+
+	let zero = ids.mint()
+	module.appendOp(cur, op: StdOp.const(zero, value: 0, valueType: StdType.i64))
+	let accZero = ids.mint()
+	module.appendOp(cur, op: StdOp.const(accZero, value: 0, valueType: StdType.i64))
+	module.setTerminator(cur, op: StdOp.branch(header.id))
+
+	let i = ids.mint()
+	let acc = ids.mint()
+	header.blockArgs.push(IrBlockArg.create(i, argType: StdType.i64))
+	header.blockArgs.push(IrBlockArg.create(acc, argType: StdType.i64))
+	cur.branchEdges.push(BranchEdge.create(header.id, argIds: twoArgs(zero, second: accZero)))
+	let atEnd = ids.mint()
+	module.appendOp(header, op: StdOp.cmp(atEnd, lhs: i, rhs: size, pred: StdCmpPred.ge, operandType: StdType.i64))
+	module.setTerminator(header, op: StdOp.condBranch(atEnd, thenBlockId: exit.id, elseBlockId: body.id))
+
+	let srcAddr = ids.mint()
+	module.appendOp(body, op: StdOp.binOp(srcAddr, lhs: addr, rhs: i, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	let b = ids.mint()
+	module.appendOp(body, op: StdOp.loadIndirect(b, addrId: srcAddr, offset: 0, valueType: StdType.u8))
+	let bitsConst = ids.mint()
+	module.appendOp(body, op: StdOp.const(bitsConst, value: BitsPerByte, valueType: StdType.i64))
+	let shiftAmt = ids.mint()
+	module.appendOp(body, op: StdOp.binOp(shiftAmt, lhs: i, rhs: bitsConst, opcode: StdBinOpcode.mul, operandType: StdType.i64))
+	let shifted = ids.mint()
+	module.appendOp(body, op: StdOp.binOp(shifted, lhs: b, rhs: shiftAmt, opcode: StdBinOpcode.shl, operandType: StdType.i64))
+	let accNext = ids.mint()
+	module.appendOp(body, op: StdOp.binOp(accNext, lhs: acc, rhs: shifted, opcode: StdBinOpcode.bitOr, operandType: StdType.i64))
+	let one = ids.mint()
+	module.appendOp(body, op: StdOp.const(one, value: 1, valueType: StdType.i64))
+	let iNext = ids.mint()
+	module.appendOp(body, op: StdOp.binOp(iNext, lhs: i, rhs: one, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	module.setTerminator(body, op: StdOp.branch(header.id))
+	body.branchEdges.push(BranchEdge.create(header.id, argIds: twoArgs(iNext, second: accNext)))
+
+	return acc
+end 'emitLoadElem'
+
+// Load the element at `addr` (size `size`) and throw-RETURN it as the OK value — the get/first/last tail.
+// Creates the loop-exit block (a `var` it owns) and terminates it with the ok return.
+function emitLoadElemAndOkReturn(module StdModule, func IrFunction, cur IrBlock, addr ValueId, size ValueId, ids ValueMinter)
+	var exit = module.addBlock(func, label: b"lded")
+	let value = emitLoadElem(module, func: func, cur: cur, exit: exit, addr: addr, size: size, ids: ids)
+	emitOkReturn(module, block: exit, value: value, ids: ids)
+end 'emitLoadElemAndOkReturn'
+
+// --- Small shared emit helpers over a single block ---
+
+// Load `arr`'s field at `offset` into a fresh value.
+function emitLoadField(module StdModule, block IrBlock, arr ValueId, offset ByteOffset, ids ValueMinter) returns ValueId
+	let v = ids.mint()
+	module.appendOp(block, op: StdOp.loadIndirect(v, addrId: arr, offset: offset, valueType: StdType.i64))
+	return v
+end 'emitLoadField'
+
+// Store `value` into `arr`'s field at `offset`.
+function emitStoreField(module StdModule, block IrBlock, arr ValueId, offset ByteOffset, value ValueId)
+	module.appendOp(block, op: StdOp.storeIndirect(arr, offset: offset, valueId: value, valueType: StdType.i64))
+end 'emitStoreField'
+
+// `a <op> b` into a fresh value.
+function emitBin(module StdModule, block IrBlock, a ValueId, b ValueId, opcode StdBinOpcode, ids ValueMinter) returns ValueId
+	let v = ids.mint()
+	module.appendOp(block, op: StdOp.binOp(v, lhs: a, rhs: b, opcode: opcode, operandType: StdType.i64))
+	return v
+end 'emitBin'
+
+// A fresh i64 constant.
+function emitConst(module StdModule, block IrBlock, value ParsedInt, ids ValueMinter) returns ValueId
+	let v = ids.mint()
+	module.appendOp(block, op: StdOp.const(v, value: value, valueType: StdType.i64))
+	return v
+end 'emitConst'
+
+// `a <pred> b` into a fresh value (a flag).
+function emitCmp(module StdModule, block IrBlock, a ValueId, b ValueId, pred StdCmpPred, ids ValueMinter) returns ValueId
+	let v = ids.mint()
+	module.appendOp(block, op: StdOp.cmp(v, lhs: a, rhs: b, pred: pred, operandType: StdType.i64))
+	return v
+end 'emitCmp'
+
+// The element slot ADDRESS `buffer + index·elementSize` — the byte where element `index` starts.
+function emitSlotAddr(module StdModule, block IrBlock, buffer ValueId, index ValueId, elementSize ValueId, ids ValueMinter) returns ValueId
+	let offset = emitBin(module, block: block, a: index, b: elementSize, opcode: StdBinOpcode.mul, ids: ids)
+	return emitBin(module, block: block, a: buffer, b: offset, opcode: StdBinOpcode.add, ids: ids)
+end 'emitSlotAddr'
+
+// The out-of-bounds throw: `errorReturn(0, indexOutOfBounds)`. The primary value is unread on the throw
+// edge (the desugar's phi takes the `otherwise` value there), so a plain 0 is honest.
+function emitOobReturn(module StdModule, block IrBlock, ids ValueMinter)
+	let zeroVal = emitConst(module, block: block, value: 0, ids: ids)
+	let flag = emitConst(module, block: block, value: ArrIndexOutOfBoundsFlag, ids: ids)
+	module.setTerminator(block, op: StdOp.errorReturn(zeroVal, errorFlagId: flag))
+end 'emitOobReturn'
+
+// A successful throwing return: `errorReturn(value, 0)`.
+function emitOkReturn(module StdModule, block IrBlock, value ValueId, ids ValueMinter)
+	let flag = emitConst(module, block: block, value: NoErrorFlag, ids: ids)
+	module.setTerminator(block, op: StdOp.errorReturn(value, errorFlagId: flag))
+end 'emitOkReturn'
+
+// --- The runtime functions ---
+
+// `__arr_grown_cap(current, required) -> newCap` — the growth policy. Ported verbatim from
+// `stdlib/Array.maxon:grownCapacity`; see the `GrowthThreshold` note above for why it eases.
+function buildArrGrownCap(module StdModule)
+	var func = IrFunction.createFromStd(ArrGrownCapName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var takeAsk = module.addBlock(func, label: b"takeask")
+	var checkSmall = module.addBlock(func, label: b"chksmall")
+	var takeDoubled = module.addBlock(func, label: b"takedbl")
+	var easeInit = module.addBlock(func, label: b"easeinit")
+	var easeHeader = module.addBlock(func, label: b"easeh")
+	var easeBody = module.addBlock(func, label: b"easeb")
+	var easeDone = module.addBlock(func, label: b"eased")
+
+	emitParams(module, block: entry, count: 2)
+	let current = 0 as ValueId
+	let required = 1 as ValueId
+
+	// entry: an ask that outruns doubling is taken at face value.
+	let doubled = emitBin(module, block: entry, a: current, b: current, opcode: StdBinOpcode.add, ids: ids)
+	let overDouble = emitCmp(module, block: entry, a: required, b: doubled, pred: StdCmpPred.gt, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(overDouble, thenBlockId: takeAsk.id, elseBlockId: checkSmall.id))
+
+	emitAtLeastMinimumReturn(module, func: func, block: takeAsk, value: required, ids: ids)
+
+	// checkSmall: double while below the threshold.
+	let thresh = emitConst(module, block: checkSmall, value: GrowthThreshold, ids: ids)
+	let isSmall = emitCmp(module, block: checkSmall, a: current, b: thresh, pred: StdCmpPred.lt, ids: ids)
+	module.setTerminator(checkSmall, op: StdOp.condBranch(isSmall, thenBlockId: takeDoubled.id, elseBlockId: easeInit.id))
+
+	emitAtLeastMinimumReturn(module, func: func, block: takeDoubled, value: doubled, ids: ids)
+
+	// easeInit → easeHeader(cap = current): ease toward 1.25×.
+	module.setTerminator(easeInit, op: StdOp.branch(easeHeader.id))
+	let cap = ids.mint()
+	easeHeader.blockArgs.push(IrBlockArg.create(cap, argType: StdType.i64))
+	easeInit.branchEdges.push(BranchEdge.create(easeHeader.id, argIds: argsOf(current)))
+	let needMore = emitCmp(module, block: easeHeader, a: cap, b: required, pred: StdCmpPred.lt, ids: ids)
+	module.setTerminator(easeHeader, op: StdOp.condBranch(needMore, thenBlockId: easeBody.id, elseBlockId: easeDone.id))
+
+	let threshConst = emitConst(module, block: easeBody, value: GrowthThreshold, ids: ids)
+	let scaleConst = emitConst(module, block: easeBody, value: EaseNumeratorScale, ids: ids)
+	let addend = emitBin(module, block: easeBody, a: threshConst, b: scaleConst, opcode: StdBinOpcode.mul, ids: ids)
+	let numerator = emitBin(module, block: easeBody, a: cap, b: addend, opcode: StdBinOpcode.add, ids: ids)
+	let divisor = emitConst(module, block: easeBody, value: EaseDivisor, ids: ids)
+	let step = ids.mint()
+	module.appendOp(easeBody, op: StdOp.div(step, lhs: numerator, rhs: divisor))
+	let capNext = emitBin(module, block: easeBody, a: cap, b: step, opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(easeBody, op: StdOp.branch(easeHeader.id))
+	easeBody.branchEdges.push(BranchEdge.create(easeHeader.id, argIds: argsOf(capNext)))
+
+	module.setTerminator(easeDone, op: StdOp.ret(cap))
+
+	module.functions.push(func)
+end 'buildArrGrownCap'
+
+// Terminate `block` with `ret max(value, MinimumCapacity)` — the `atLeastMinimum` floor, emitted at each
+// of `grownCapacity`'s two face-value returns so a small ask does not bounce up through 1→2→3.
+function emitAtLeastMinimumReturn(module StdModule, func IrFunction, block IrBlock, value ValueId, ids ValueMinter)
+	var retFloor = module.addBlock(func, label: b"retfloor")
+	var retVal = module.addBlock(func, label: b"retval")
+	let floor = emitConst(module, block: block, value: MinimumCapacity, ids: ids)
+	let below = emitCmp(module, block: block, a: value, b: floor, pred: StdCmpPred.lt, ids: ids)
+	module.setTerminator(block, op: StdOp.condBranch(below, thenBlockId: retFloor.id, elseBlockId: retVal.id))
+	let floorRet = emitConst(module, block: retFloor, value: MinimumCapacity, ids: ids)
+	module.setTerminator(retFloor, op: StdOp.ret(floorRet))
+	module.setTerminator(retVal, op: StdOp.ret(value))
+end 'emitAtLeastMinimumReturn'
+
+// `__arr_grow(arr, required)` — ensure the buffer holds at least `required` elements, reallocating (and
+// copying the live bytes) when it does not. A fresh `__mm_alloc` is zeroed, and only `length·es` bytes
+// are copied in, so the new `[length, newCap)` slots read zero — the capacity-slot invariant, for free.
+function buildArrGrow(module StdModule)
+	var func = IrFunction.createFromStd(ArrGrowName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var grow = module.addBlock(func, label: b"grow")
+	var freeOld = module.addBlock(func, label: b"freeold")
+	var publish = module.addBlock(func, label: b"publish")
+	let done = module.addBlock(func, label: b"done")
+
+	emitParams(module, block: entry, count: 2)
+	let arr = 0 as ValueId
+	let required = 1 as ValueId
+
+	// entry: already big enough ⇒ nothing to do.
+	let capacity = emitLoadField(module, block: entry, arr: arr, offset: ArrCapacityOffset, ids: ids)
+	let enough = emitCmp(module, block: entry, a: capacity, b: required, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(enough, thenBlockId: done.id, elseBlockId: grow.id))
+
+	// grow: pick the new capacity, allocate the new buffer, and copy the live bytes forward.
+	let newCap = ids.mint()
+	module.appendOp(grow, op: StdOp.call(newCap, callee: ArrGrownCapName, args: twoArgs(capacity, second: required)))
+	let es = emitLoadField(module, block: grow, arr: arr, offset: ArrElementSizeOffset, ids: ids)
+	let newBytes = emitBin(module, block: grow, a: newCap, b: es, opcode: StdBinOpcode.mul, ids: ids)
+	let zeroDtor = emitConst(module, block: grow, value: 0, ids: ids)
+	let newBuf = ids.mint()
+	module.appendOp(grow, op: StdOp.call(newBuf, callee: MmAllocName, args: twoArgs(newBytes, second: zeroDtor)))
+	let oldBuf = emitLoadField(module, block: grow, arr: arr, offset: ArrBufferOffset, ids: ids)
+	let oldLen = emitLoadField(module, block: grow, arr: arr, offset: ArrLengthOffset, ids: ids)
+	let oldBytes = emitBin(module, block: grow, a: oldLen, b: es, opcode: StdBinOpcode.mul, ids: ids)
+	var afterCopy = emitForwardCopy(module, func: func, cur: grow, dest: newBuf, src: oldBuf, byteCount: oldBytes, ids: ids)
+
+	// afterCopy: free the OLD buffer if it existed, then publish the new one.
+	let zero = emitConst(module, block: afterCopy, value: 0, ids: ids)
+	let hadBuf = emitCmp(module, block: afterCopy, a: oldBuf, b: zero, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(afterCopy, op: StdOp.condBranch(hadBuf, thenBlockId: freeOld.id, elseBlockId: publish.id))
+
+	let oldFreed = ids.mint()
+	module.appendOp(freeOld, op: StdOp.call(oldFreed, callee: MmFreeName, args: argsOf(oldBuf)))
+	module.setTerminator(freeOld, op: StdOp.branch(publish.id))
+
+	emitStoreField(module, block: publish, arr: arr, offset: ArrBufferOffset, value: newBuf)
+	emitStoreField(module, block: publish, arr: arr, offset: ArrCapacityOffset, value: newCap)
+	module.setTerminator(publish, op: StdOp.branch(done.id))
+
+	module.setTerminator(done, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildArrGrow'
+
+// `__arr_create(elementSize, elementDestroy) -> arrPtr` — a fresh empty array. The record comes zeroed
+// from `__mm_alloc`, so only the two non-zero fields are stamped (`buffer`/`length`/`capacity`/`parent`
+// are the zeroing contract's job); a 0 element size is a compiler bug and diverges (v1's guard).
+function buildArrCreate(module StdModule)
+	var func = IrFunction.createFromStd(ArrCreateName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var badSize = module.addBlock(func, label: b"badsize")
+	var ok = module.addBlock(func, label: b"ok")
+
+	emitParams(module, block: entry, count: 2)
+	let elementSize = 0 as ValueId
+	let elementDestroy = 1 as ValueId
+
+	let zero = emitConst(module, block: entry, value: 0, ids: ids)
+	let isZeroSize = emitCmp(module, block: entry, a: elementSize, b: zero, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(isZeroSize, thenBlockId: badSize.id, elseBlockId: ok.id))
+
+	let exitCode = emitConst(module, block: badSize, value: ElementSizeZeroExitCode, ids: ids)
+	module.appendOp(badSize, op: StdOp.osExit(exitCode))
+	// `osExit` diverges, so this return is a dead terminator that keeps the block well-formed (the shape
+	// GtRuntime's overflow/spawn-failed blocks use — a process exit is a body op followed by a dead return).
+	let deadRet = emitConst(module, block: badSize, value: 0, ids: ids)
+	module.setTerminator(badSize, op: StdOp.ret(deadRet))
+
+	let recordSize = emitConst(module, block: ok, value: ArrRecordBytes as ParsedInt, ids: ids)
+	let recordDtor = emitConst(module, block: ok, value: TrivialElementDestroy, ids: ids)
+	let record = ids.mint()
+	module.appendOp(ok, op: StdOp.call(record, callee: MmAllocName, args: twoArgs(recordSize, second: recordDtor)))
+	emitStoreField(module, block: ok, arr: record, offset: ArrElementSizeOffset, value: elementSize)
+	emitStoreField(module, block: ok, arr: record, offset: ArrElementDestroyOffset, value: elementDestroy)
+	module.setTerminator(ok, op: StdOp.ret(record))
+
+	module.functions.push(func)
+end 'buildArrCreate'
+
+// `__arr_push(arr, value)` — append `value`, growing first if the buffer is full.
+function buildArrPush(module StdModule)
+	var func = IrFunction.createFromStd(ArrPushName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry")
+	emitParams(module, block: entry, count: 2)
+	let arr = 0 as ValueId
+	let value = 1 as ValueId
+
+	let length = emitLoadField(module, block: entry, arr: arr, offset: ArrLengthOffset, ids: ids)
+	let one = emitConst(module, block: entry, value: 1, ids: ids)
+	let required = emitBin(module, block: entry, a: length, b: one, opcode: StdBinOpcode.add, ids: ids)
+	let grown = ids.mint()
+	module.appendOp(entry, op: StdOp.call(grown, callee: ArrGrowName, args: twoArgs(arr, second: required)))
+	// Reload buffer AFTER grow (it may have replaced it); `length`/`es` are unchanged by a grow.
+	let buffer = emitLoadField(module, block: entry, arr: arr, offset: ArrBufferOffset, ids: ids)
+	let es = emitLoadField(module, block: entry, arr: arr, offset: ArrElementSizeOffset, ids: ids)
+	let slot = emitSlotAddr(module, block: entry, buffer: buffer, index: length, elementSize: es, ids: ids)
+	var afterStore = emitStoreElem(module, func: func, cur: entry, addr: slot, value: value, size: es, ids: ids)
+
+	let newLen = emitBin(module, block: afterStore, a: length, b: one, opcode: StdBinOpcode.add, ids: ids)
+	emitStoreField(module, block: afterStore, arr: arr, offset: ArrLengthOffset, value: newLen)
+	module.setTerminator(afterStore, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildArrPush'
+
+// `__arr_get(arr, index) -> (value, flag)` — bounds-checked element read (throws indexOutOfBounds).
+function buildArrGet(module StdModule)
+	var func = IrFunction.createFromStd(ArrGetName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var oob = module.addBlock(func, label: b"oob")
+	var load = module.addBlock(func, label: b"load")
+
+	emitParams(module, block: entry, count: 2)
+	let arr = 0 as ValueId
+	let index = 1 as ValueId
+
+	let length = emitLoadField(module, block: entry, arr: arr, offset: ArrLengthOffset, ids: ids)
+	let atOrOver = emitCmp(module, block: entry, a: index, b: length, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(atOrOver, thenBlockId: oob.id, elseBlockId: load.id))
+
+	emitOobReturn(module, block: oob, ids: ids)
+
+	let buffer = emitLoadField(module, block: load, arr: arr, offset: ArrBufferOffset, ids: ids)
+	let es = emitLoadField(module, block: load, arr: arr, offset: ArrElementSizeOffset, ids: ids)
+	let slot = emitSlotAddr(module, block: load, buffer: buffer, index: index, elementSize: es, ids: ids)
+	emitLoadElemAndOkReturn(module, func: func, cur: load, addr: slot, size: es, ids: ids)
+
+	module.functions.push(func)
+end 'buildArrGet'
+
+// `__arr_set(arr, index, value) -> (_, flag)` — bounds-checked element write (throws indexOutOfBounds).
+function buildArrSet(module StdModule)
+	var func = IrFunction.createFromStd(ArrSetName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(3)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var oob = module.addBlock(func, label: b"oob")
+	var store = module.addBlock(func, label: b"store")
+
+	emitParams(module, block: entry, count: 3)
+	let arr = 0 as ValueId
+	let index = 1 as ValueId
+	let value = 2 as ValueId
+
+	let length = emitLoadField(module, block: entry, arr: arr, offset: ArrLengthOffset, ids: ids)
+	let atOrOver = emitCmp(module, block: entry, a: index, b: length, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(atOrOver, thenBlockId: oob.id, elseBlockId: store.id))
+
+	emitOobReturn(module, block: oob, ids: ids)
+
+	let buffer = emitLoadField(module, block: store, arr: arr, offset: ArrBufferOffset, ids: ids)
+	let es = emitLoadField(module, block: store, arr: arr, offset: ArrElementSizeOffset, ids: ids)
+	let slot = emitSlotAddr(module, block: store, buffer: buffer, index: index, elementSize: es, ids: ids)
+	var afterStore = emitStoreElem(module, func: func, cur: store, addr: slot, value: value, size: es, ids: ids)
+	let okVal = emitConst(module, block: afterStore, value: 0, ids: ids)
+	emitOkReturn(module, block: afterStore, value: okVal, ids: ids)
+
+	module.functions.push(func)
+end 'buildArrSet'
+
+// `__arr_count(arr) -> length`.
+function buildArrCount(module StdModule)
+	var func = IrFunction.createFromStd(ArrCountName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+	var entry = module.addBlock(func, label: b"entry")
+	emitParams(module, block: entry, count: 1)
+	let length = emitLoadField(module, block: entry, arr: 0 as ValueId, offset: ArrLengthOffset, ids: ids)
+	module.setTerminator(entry, op: StdOp.ret(length))
+	module.functions.push(func)
+end 'buildArrCount'
+
+// `__arr_capacity(arr) -> capacity`.
+function buildArrCapacity(module StdModule)
+	var func = IrFunction.createFromStd(ArrCapacityName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+	var entry = module.addBlock(func, label: b"entry")
+	emitParams(module, block: entry, count: 1)
+	let capacity = emitLoadField(module, block: entry, arr: 0 as ValueId, offset: ArrCapacityOffset, ids: ids)
+	module.setTerminator(entry, op: StdOp.ret(capacity))
+	module.functions.push(func)
+end 'buildArrCapacity'
+
+// `__arr_is_empty(arr) -> bool` — length == 0, materialized to 0/1 through two return blocks (there is no
+// `setcc` in the tier).
+function buildArrIsEmpty(module StdModule)
+	var func = IrFunction.createFromStd(ArrIsEmptyName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+	var entry = module.addBlock(func, label: b"entry")
+	var yes = module.addBlock(func, label: b"yes")
+	var no = module.addBlock(func, label: b"no")
+	emitParams(module, block: entry, count: 1)
+	let length = emitLoadField(module, block: entry, arr: 0 as ValueId, offset: ArrLengthOffset, ids: ids)
+	let zero = emitConst(module, block: entry, value: 0, ids: ids)
+	let isEmpty = emitCmp(module, block: entry, a: length, b: zero, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(isEmpty, thenBlockId: yes.id, elseBlockId: no.id))
+	let trueVal = emitConst(module, block: yes, value: 1, ids: ids)
+	module.setTerminator(yes, op: StdOp.ret(trueVal))
+	let falseVal = emitConst(module, block: no, value: 0, ids: ids)
+	module.setTerminator(no, op: StdOp.ret(falseVal))
+	module.functions.push(func)
+end 'buildArrIsEmpty'
+
+// `__arr_reserve(arr, n)` — ensure capacity ≥ n. `__arr_grow` is a no-op when capacity already suffices.
+function buildArrReserve(module StdModule)
+	var func = IrFunction.createFromStd(ArrReserveName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(2)
+	var entry = module.addBlock(func, label: b"entry")
+	emitParams(module, block: entry, count: 2)
+	let arr = 0 as ValueId
+	let n = 1 as ValueId
+	let grown = ids.mint()
+	module.appendOp(entry, op: StdOp.call(grown, callee: ArrGrowName, args: twoArgs(arr, second: n)))
+	module.setTerminator(entry, op: StdOp.retVoid)
+	module.functions.push(func)
+end 'buildArrReserve'
+
+// `__arr_resize(arr, n)` — set length to n. Growing zero-fills the new tail (a grown buffer's `[length,
+// newCap)` is already zero; an ungrown one's `[length, capacity)` is zero by the invariant), so only the
+// SHRINK path must actively zero the vacated `[n, oldLen)` region to keep the invariant.
+function buildArrResize(module StdModule)
+	var func = IrFunction.createFromStd(ArrResizeName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var doZero = module.addBlock(func, label: b"dozero")
+	var setLen = module.addBlock(func, label: b"setlen")
+
+	emitParams(module, block: entry, count: 2)
+	let arr = 0 as ValueId
+	let n = 1 as ValueId
+
+	let grown = ids.mint()
+	module.appendOp(entry, op: StdOp.call(grown, callee: ArrGrowName, args: twoArgs(arr, second: n)))
+	let oldLen = emitLoadField(module, block: entry, arr: arr, offset: ArrLengthOffset, ids: ids)
+	let shrink = emitCmp(module, block: entry, a: n, b: oldLen, pred: StdCmpPred.lt, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(shrink, thenBlockId: doZero.id, elseBlockId: setLen.id))
+
+	let es = emitLoadField(module, block: doZero, arr: arr, offset: ArrElementSizeOffset, ids: ids)
+	let buffer = emitLoadField(module, block: doZero, arr: arr, offset: ArrBufferOffset, ids: ids)
+	let startOff = emitBin(module, block: doZero, a: n, b: es, opcode: StdBinOpcode.mul, ids: ids)
+	let endOff = emitBin(module, block: doZero, a: oldLen, b: es, opcode: StdBinOpcode.mul, ids: ids)
+	let zeroBytes = emitBin(module, block: doZero, a: endOff, b: startOff, opcode: StdBinOpcode.sub, ids: ids)
+	let startAddr = emitBin(module, block: doZero, a: buffer, b: startOff, opcode: StdBinOpcode.add, ids: ids)
+	var afterZero = emitZeroRange(module, func: func, cur: doZero, dest: startAddr, byteCount: zeroBytes, ids: ids)
+	module.setTerminator(afterZero, op: StdOp.branch(setLen.id))
+
+	emitStoreField(module, block: setLen, arr: arr, offset: ArrLengthOffset, value: n)
+	module.setTerminator(setLen, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildArrResize'
+
+// `__arr_first(arr) -> (value, flag)` — element 0 (throws on empty).
+function buildArrFirst(module StdModule)
+	var func = IrFunction.createFromStd(ArrFirstName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var oob = module.addBlock(func, label: b"oob")
+	var load = module.addBlock(func, label: b"load")
+
+	emitParams(module, block: entry, count: 1)
+	let arr = 0 as ValueId
+
+	let length = emitLoadField(module, block: entry, arr: arr, offset: ArrLengthOffset, ids: ids)
+	let zero = emitConst(module, block: entry, value: 0, ids: ids)
+	let isEmpty = emitCmp(module, block: entry, a: length, b: zero, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(isEmpty, thenBlockId: oob.id, elseBlockId: load.id))
+
+	emitOobReturn(module, block: oob, ids: ids)
+
+	let buffer = emitLoadField(module, block: load, arr: arr, offset: ArrBufferOffset, ids: ids)
+	let es = emitLoadField(module, block: load, arr: arr, offset: ArrElementSizeOffset, ids: ids)
+	emitLoadElemAndOkReturn(module, func: func, cur: load, addr: buffer, size: es, ids: ids)
+
+	module.functions.push(func)
+end 'buildArrFirst'
+
+// `__arr_last(arr) -> (value, flag)` — element length-1 (throws on empty).
+function buildArrLast(module StdModule)
+	var func = IrFunction.createFromStd(ArrLastName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var oob = module.addBlock(func, label: b"oob")
+	var load = module.addBlock(func, label: b"load")
+
+	emitParams(module, block: entry, count: 1)
+	let arr = 0 as ValueId
+
+	let length = emitLoadField(module, block: entry, arr: arr, offset: ArrLengthOffset, ids: ids)
+	let zero = emitConst(module, block: entry, value: 0, ids: ids)
+	let isEmpty = emitCmp(module, block: entry, a: length, b: zero, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(isEmpty, thenBlockId: oob.id, elseBlockId: load.id))
+
+	emitOobReturn(module, block: oob, ids: ids)
+
+	let one = emitConst(module, block: load, value: 1, ids: ids)
+	let lastIdx = emitBin(module, block: load, a: length, b: one, opcode: StdBinOpcode.sub, ids: ids)
+	let buffer = emitLoadField(module, block: load, arr: arr, offset: ArrBufferOffset, ids: ids)
+	let es = emitLoadField(module, block: load, arr: arr, offset: ArrElementSizeOffset, ids: ids)
+	let slot = emitSlotAddr(module, block: load, buffer: buffer, index: lastIdx, elementSize: es, ids: ids)
+	emitLoadElemAndOkReturn(module, func: func, cur: load, addr: slot, size: es, ids: ids)
+
+	module.functions.push(func)
+end 'buildArrLast'
+
+// `__arr_pop(arr) -> (value, flag)` — remove and return the last element (throws on empty). The vacated
+// slot is zeroed to keep `[length, capacity)` zero.
+function buildArrPop(module StdModule)
+	var func = IrFunction.createFromStd(ArrPopName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var oob = module.addBlock(func, label: b"oob")
+	var pop = module.addBlock(func, label: b"pop")
+
+	emitParams(module, block: entry, count: 1)
+	let arr = 0 as ValueId
+
+	let length = emitLoadField(module, block: entry, arr: arr, offset: ArrLengthOffset, ids: ids)
+	let zero = emitConst(module, block: entry, value: 0, ids: ids)
+	let isEmpty = emitCmp(module, block: entry, a: length, b: zero, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(isEmpty, thenBlockId: oob.id, elseBlockId: pop.id))
+
+	emitOobReturn(module, block: oob, ids: ids)
+
+	let one = emitConst(module, block: pop, value: 1, ids: ids)
+	let lastIdx = emitBin(module, block: pop, a: length, b: one, opcode: StdBinOpcode.sub, ids: ids)
+	let buffer = emitLoadField(module, block: pop, arr: arr, offset: ArrBufferOffset, ids: ids)
+	let es = emitLoadField(module, block: pop, arr: arr, offset: ArrElementSizeOffset, ids: ids)
+	let slot = emitSlotAddr(module, block: pop, buffer: buffer, index: lastIdx, elementSize: es, ids: ids)
+	var afterLoad = module.addBlock(func, label: b"poploaded")
+	let value = emitLoadElem(module, func: func, cur: pop, exit: afterLoad, addr: slot, size: es, ids: ids)
+	var afterZero = emitZeroRange(module, func: func, cur: afterLoad, dest: slot, byteCount: es, ids: ids)
+	emitStoreField(module, block: afterZero, arr: arr, offset: ArrLengthOffset, value: lastIdx)
+	emitOkReturn(module, block: afterZero, value: value, ids: ids)
+
+	module.functions.push(func)
+end 'buildArrPop'
+
+// `__arr_clear(arr)` — length ← 0, zeroing the whole live region (capacity-slot invariant). The buffer
+// and capacity are left in place for reuse.
+function buildArrClear(module StdModule)
+	var func = IrFunction.createFromStd(ArrClearName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	emitParams(module, block: entry, count: 1)
+	let arr = 0 as ValueId
+
+	let length = emitLoadField(module, block: entry, arr: arr, offset: ArrLengthOffset, ids: ids)
+	let es = emitLoadField(module, block: entry, arr: arr, offset: ArrElementSizeOffset, ids: ids)
+	let byteCount = emitBin(module, block: entry, a: length, b: es, opcode: StdBinOpcode.mul, ids: ids)
+	let buffer = emitLoadField(module, block: entry, arr: arr, offset: ArrBufferOffset, ids: ids)
+	var afterZero = emitZeroRange(module, func: func, cur: entry, dest: buffer, byteCount: byteCount, ids: ids)
+	let zero = emitConst(module, block: afterZero, value: 0, ids: ids)
+	emitStoreField(module, block: afterZero, arr: arr, offset: ArrLengthOffset, value: zero)
+	module.setTerminator(afterZero, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildArrClear'
+
+// `__arr_insert(arr, index, value)` — insert at `index` (clamped to `[0, length]`), shifting the tail
+// right by one slot (a backward byte copy, overlap-safe). Insert at `length` is a plain append.
+function buildArrInsert(module StdModule)
+	var func = IrFunction.createFromStd(ArrInsertName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(3)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var clampIt = module.addBlock(func, label: b"clamp")
+	var useIndex = module.addBlock(func, label: b"useidx")
+	var afterClamp = module.addBlock(func, label: b"aclamp")
+
+	emitParams(module, block: entry, count: 3)
+	let arr = 0 as ValueId
+	let index = 1 as ValueId
+	let value = 2 as ValueId
+
+	// entry: clamp index to length.
+	let length = emitLoadField(module, block: entry, arr: arr, offset: ArrLengthOffset, ids: ids)
+	let overLen = emitCmp(module, block: entry, a: index, b: length, pred: StdCmpPred.gt, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(overLen, thenBlockId: clampIt.id, elseBlockId: useIndex.id))
+
+	let clamped = ids.mint()
+	afterClamp.blockArgs.push(IrBlockArg.create(clamped, argType: StdType.i64))
+	module.setTerminator(clampIt, op: StdOp.branch(afterClamp.id))
+	clampIt.branchEdges.push(BranchEdge.create(afterClamp.id, argIds: argsOf(length)))
+	module.setTerminator(useIndex, op: StdOp.branch(afterClamp.id))
+	useIndex.branchEdges.push(BranchEdge.create(afterClamp.id, argIds: argsOf(index)))
+
+	// afterClamp: grow for one more, then shift `[clamped, length)` up one slot and store `value`.
+	let one = emitConst(module, block: afterClamp, value: 1, ids: ids)
+	let required = emitBin(module, block: afterClamp, a: length, b: one, opcode: StdBinOpcode.add, ids: ids)
+	let grown = ids.mint()
+	module.appendOp(afterClamp, op: StdOp.call(grown, callee: ArrGrowName, args: twoArgs(arr, second: required)))
+	let es = emitLoadField(module, block: afterClamp, arr: arr, offset: ArrElementSizeOffset, ids: ids)
+	let buffer = emitLoadField(module, block: afterClamp, arr: arr, offset: ArrBufferOffset, ids: ids)
+	let slot = emitSlotAddr(module, block: afterClamp, buffer: buffer, index: clamped, elementSize: es, ids: ids)
+	let destAddr = emitBin(module, block: afterClamp, a: slot, b: es, opcode: StdBinOpcode.add, ids: ids)
+	let moveCount = emitBin(module, block: afterClamp, a: length, b: clamped, opcode: StdBinOpcode.sub, ids: ids)
+	let moveBytes = emitBin(module, block: afterClamp, a: moveCount, b: es, opcode: StdBinOpcode.mul, ids: ids)
+	var afterShift = emitBackwardCopy(module, func: func, cur: afterClamp, dest: destAddr, src: slot, byteCount: moveBytes, ids: ids)
+	var afterStore = emitStoreElem(module, func: func, cur: afterShift, addr: slot, value: value, size: es, ids: ids)
+	let newLen = emitBin(module, block: afterStore, a: length, b: one, opcode: StdBinOpcode.add, ids: ids)
+	emitStoreField(module, block: afterStore, arr: arr, offset: ArrLengthOffset, value: newLen)
+	module.setTerminator(afterStore, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildArrInsert'
+
+// `__arr_remove(arr, index) -> (value, flag)` — remove and return element `index` (throws OOB), shifting
+// the tail left by one slot (a forward byte copy) and zeroing the vacated last slot.
+function buildArrRemove(module StdModule)
+	var func = IrFunction.createFromStd(ArrRemoveName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var oob = module.addBlock(func, label: b"oob")
+	var remove = module.addBlock(func, label: b"remove")
+
+	emitParams(module, block: entry, count: 2)
+	let arr = 0 as ValueId
+	let index = 1 as ValueId
+
+	let length = emitLoadField(module, block: entry, arr: arr, offset: ArrLengthOffset, ids: ids)
+	let atOrOver = emitCmp(module, block: entry, a: index, b: length, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(atOrOver, thenBlockId: oob.id, elseBlockId: remove.id))
+
+	emitOobReturn(module, block: oob, ids: ids)
+
+	let es = emitLoadField(module, block: remove, arr: arr, offset: ArrElementSizeOffset, ids: ids)
+	let buffer = emitLoadField(module, block: remove, arr: arr, offset: ArrBufferOffset, ids: ids)
+	let slot = emitSlotAddr(module, block: remove, buffer: buffer, index: index, elementSize: es, ids: ids)
+	var afterLoad = module.addBlock(func, label: b"rmloaded")
+	let value = emitLoadElem(module, func: func, cur: remove, exit: afterLoad, addr: slot, size: es, ids: ids)
+
+	// afterLoad: shift `[index+1, length)` down one slot into `slot`.
+	let srcAddr = emitBin(module, block: afterLoad, a: slot, b: es, opcode: StdBinOpcode.add, ids: ids)
+	let one = emitConst(module, block: afterLoad, value: 1, ids: ids)
+	let idxPlusOne = emitBin(module, block: afterLoad, a: index, b: one, opcode: StdBinOpcode.add, ids: ids)
+	let remaining = emitBin(module, block: afterLoad, a: length, b: idxPlusOne, opcode: StdBinOpcode.sub, ids: ids)
+	let moveBytes = emitBin(module, block: afterLoad, a: remaining, b: es, opcode: StdBinOpcode.mul, ids: ids)
+	var afterShift = emitForwardCopy(module, func: func, cur: afterLoad, dest: slot, src: srcAddr, byteCount: moveBytes, ids: ids)
+
+	// afterShift: length--, then zero the now-unused last slot.
+	let newLen = emitBin(module, block: afterShift, a: length, b: one, opcode: StdBinOpcode.sub, ids: ids)
+	emitStoreField(module, block: afterShift, arr: arr, offset: ArrLengthOffset, value: newLen)
+	let vacAddr = emitSlotAddr(module, block: afterShift, buffer: buffer, index: newLen, elementSize: es, ids: ids)
+	var afterZero = emitZeroRange(module, func: func, cur: afterShift, dest: vacAddr, byteCount: es, ids: ids)
+	emitOkReturn(module, block: afterZero, value: value, ids: ids)
+
+	module.functions.push(func)
+end 'buildArrRemove'
+
+// `__arr_decref(arr)` — an array's drop: the shared refcount RMW, then on the last owner free the external
+// element buffer (if any) and the record.
+//
+// ⭐ **THE SLICE-3 SEAM.** At this trivial slice `element_destroy@40` is always 0, so the last owner frees
+// the buffer without touching the elements. A MANAGED-element array (P1.7 slice 3) will, on the last
+// owner, first WALK `[0, length)` calling `element_destroy@40` on each slot BEFORE freeing the buffer —
+// the field and the free path are already shaped for it; only the walk is unwritten. The drop is
+// single-sited (routed here by tag, `decrefCalleeFor`), so that walk lands in exactly one place.
+function buildArrDecref(module StdModule)
+	var func = IrFunction.createFromStd(ArrDecrefName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var lower = module.addBlock(func, label: b"lower")
+	var release = module.addBlock(func, label: b"release")
+	var freeBuf = module.addBlock(func, label: b"freebuf")
+	var freeRec = module.addBlock(func, label: b"freerec")
+
+	emitParams(module, block: entry, count: 1)
+	let record = 0 as ValueId
+
+	emitRefcountCheckToLastOwner(module, entry: entry, lower: lower, record: record, lastOwner: release, ids: ids)
+
+	// release: free the external buffer only if one was allocated (an empty array never allocated one).
+	let buffer = emitLoadField(module, block: release, arr: record, offset: ArrBufferOffset, ids: ids)
+	let zero = emitConst(module, block: release, value: 0, ids: ids)
+	let hasBuf = emitCmp(module, block: release, a: buffer, b: zero, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(release, op: StdOp.condBranch(hasBuf, thenBlockId: freeBuf.id, elseBlockId: freeRec.id))
+
+	let bufFreed = ids.mint()
+	module.appendOp(freeBuf, op: StdOp.call(bufFreed, callee: MmFreeName, args: argsOf(buffer)))
+	module.setTerminator(freeBuf, op: StdOp.branch(freeRec.id))
+
+	let recFreed = ids.mint()
+	module.appendOp(freeRec, op: StdOp.call(recFreed, callee: MmFreeName, args: argsOf(record)))
+	module.setTerminator(freeRec, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildArrDecref'

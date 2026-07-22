@@ -715,6 +715,22 @@ function readFence(lines StringArray, openIndex LineIndex) returns FenceBlock
 			return FenceBlock.create(text.build(), nextIndex: i + 1)
 		end 'close'
 
+		// ⚠ **A CONTENT LINE THAT ENDS WITH THE CLOSING FENCE** — `42``` ` (the content `42` and the
+		// closing ` ``` ` on ONE line, no newline between them). It is malformed markdown, but the bootstrap's
+		// SpecParser tolerates it and the byte-identical corpus contains it (`specs/arrays.md`'s
+		// `array-with-reserve` exitcode), so the port must too or that exitcode is misread and the block
+		// scanner walks into the next test. The remainder before the fence is the final content line, then the
+		// block closes. Only fires when the line is NOT itself a bare fence (handled above), and no other spec
+		// has a genuine content line ending in ` ``` `, so this changes nothing else.
+		if line.endsWith(FenceClose) 'inlineClose'
+			var stop = line.startIndex()
+			for _ in 0 upto line.byteLength() - FenceClose.byteLength() 'toFence'
+				stop = try line.indexAfter(stop) otherwise panic("SpecParser.readFence: indexAfter failed before the inline closing fence — the byte length and the index walk disagree on an ASCII line")
+			end 'toFence'
+			text.push(line.slice(line.startIndex(), endIndex: stop))
+			return FenceBlock.create(text.build(), nextIndex: i + 1)
+		end 'inlineClose'
+
 		text.push(line)
 		i = i + 1
 	end 'read'

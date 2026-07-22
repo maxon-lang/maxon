@@ -1259,6 +1259,36 @@ function pairArgs(first ValueId, second ValueId) returns ValueIdArray
 	return args
 end 'pairArgs'
 
+// A three-element call argument list — `__arr_set(arr, index, value)`'s triple. `pairArgs`' sibling.
+function tripleArgs(first ValueId, second ValueId, third ValueId) returns ValueIdArray
+	var args = ValueIdArray.create()
+	args.push(first)
+	args.push(second)
+	args.push(third)
+	return args
+end 'tripleArgs'
+
+// **THE BUILTIN `Array` METHODS** (P1.7 slice 1). `create` is a static factory; the rest are instance
+// methods dispatched by name in `parseArrayMethodCall` off an `Array`-instance receiver. `get`/`set`/
+// `first`/`last`/`pop`/`remove` are THROWING (they ride `try … otherwise`); the rest are non-throwing.
+let ArrayCreateMethod = b"create"
+let ArrayPushMethod = b"push"
+let ArrayGetMethod = b"get"
+let ArraySetMethod = b"set"
+let ArrayCountMethod = b"count"
+let ArrayCapacityMethod = b"capacity"
+let ArrayIsEmptyMethod = b"isEmpty"
+let ArrayReserveMethod = b"reserve"
+let ArrayResizeMethod = b"resize"
+let ArrayFirstMethod = b"first"
+let ArrayLastMethod = b"last"
+let ArrayPopMethod = b"pop"
+let ArrayClearMethod = b"clear"
+let ArrayInsertMethod = b"insert"
+let ArrayRemoveMethod = b"remove"
+// The label the two-argument mutators (`set`/`insert`) give their VALUE argument: `arr.set(0, value: 9)`.
+let ArrayValueLabel = b"value"
+
 // Append one argument to a call's THREE PARALLEL COLUMNS — its value, its `name:` label (the empty
 // slice when positional), and its source span.
 //
@@ -2341,7 +2371,16 @@ export type Parser
 		// The gate is BELT AND BRACES, not the guarantee: `declaredOutcome` panics if this scan
 		// and the real parse ever disagree about which binding is top level.
 		var depth = 0 as BlockDepth
+		// A `[` token appears ONLY in an array literal (Maxon indexes with `.get()`, not `a[i]`), so seeing
+		// one anywhere in the file's tokens means the program materializes an `Array with integer` literal
+		// (P1.7 slice 1). The sweep interns that one well-known instance so the parser can read its giid back
+		// at literal time (a bare literal has no typealias to intern from). Set here, acted on after the walk.
+		var hasIntArrayLiteral = false
 		while not self.isEof() 'scan'
+			if self.at(TokenKind.leftBracket) 'arrayLiteralToken'
+				hasIntArrayLiteral = true
+			end 'arrayLiteralToken'
+
 			if depth == 0 and self.atTopLevelBindingKeyword() 'isTopLevelBinding'
 				self.recordScannedBinding(bindings)
 				continue
@@ -2394,6 +2433,12 @@ export type Parser
 		self.pos = resume
 
 		index.foldFile(entries, aliases: aliases, functionAliases: functionAliases, structs: structs, enums: enums, genericAliasEntries: genericAliases, innerAliasEntries: innerAliases, methodInnerAliasParamEntries: methodInnerAliasParams, bindings: bindings, paramConsumes: paramConsumes, throwsEntries: throwsEntries, fileTypeNames: self.artifact.typeNames)
+
+		// Intern the `Array with integer` literal instance if this file materializes one — after `foldFile`,
+		// so its giid follows the file's named generic instances (a stable, source-path-ordered assignment).
+		if hasIntArrayLiteral 'internArrayLiteral'
+			_ = index.internArrayIntegerInstance()
+		end 'internArrayLiteral'
 	end 'foldDeclaredSignaturesInto'
 
 	// Is the cursor on a `let` or a `var` — the two keywords that introduce a top-level binding?
@@ -3765,6 +3810,16 @@ export type Parser
 	// String / managed-struct / nested-instance argument is now legal. A nested instance validates itself at
 	// its own `with` (`parseGenericArgNode`), so this checks ONE level.
 	function checkGenericInstance(baseTok Token, argCount FieldIndex)
+		// `Array` is a BUILTIN generic with one type parameter `Element` — there is no `type Array uses
+		// Element` declaration (its runtime is synthesized, P1.7), so `structOf` finds nothing. Validate its
+		// arity here instead; the managed-element rejection (slice 1 is trivial elements only) is done where
+		// an array is materialized, which has the resolved element type in hand.
+		if self.signatures.isArrayBaseName(baseTok.value) 'array'
+			if argCount != ArrayTypeParamCount 'wrongArity'
+				self.recordArtifactDiagnostic(ErrorCode.genericArityMismatch, message: "generic type '{String.from(baseTok.value)}' expects {ArrayTypeParamCount} type argument(s), but {argCount} were supplied", tok: baseTok)
+			end 'wrongArity'
+			return
+		end 'array'
 		match self.signatures.structOf(baseTok.value) 'base'
 			undeclared then self.recordBaseNotGeneric(baseTok)
 			declared(layout) then self.checkGenericInstanceAgainst(layout, baseTok: baseTok, argCount: argCount)
@@ -5237,7 +5292,12 @@ export type Parser
 			// most of what a type declares, and this is the only position that wants no value, so
 			// `resultUsed: false` is what makes them callable at all.
 			_ = try self.parseMethodCall(func, resultUsed: false)
-		end 'methodCallStmt' else if self.at(TokenKind.identifier) and self.peekKind() == TokenKind.leftParen 'callStmt'
+		end 'methodCallStmt' else if self.fieldChainMethodCallAt(self.pos) 'fieldChainMethodStmt'
+			// `b.ops.push(1)` / `o.inner.items.push(10)` — a method call on an ARRAY FIELD reached through a
+			// field chain (P1.7 slice 1). `methodCallsAt` covers only a one-hop `b.push(…)`; this is the ≥2-hop
+			// case, dispatched for effect (`resultUsed: false`).
+			try self.parseFieldChainMethodCallStatement(func)
+		end 'fieldChainMethodStmt' else if self.at(TokenKind.identifier) and self.peekKind() == TokenKind.leftParen 'callStmt'
 			// An identifier followed by `(` is a bare-call statement — the call is evaluated for its
 			// effect and its result discarded (M5). `resultUsed: false` is what makes a VOID call legal
 			// HERE and nowhere else: this is the position that wants no value.
@@ -5484,6 +5544,18 @@ export type Parser
 	function parseAssignment(func IrFunction, block IrBlock) throws ParseError
 		let nameTok = try self.consume(TokenKind.identifier)
 		try self.consume(TokenKind.equals)
+
+		// `_ = <expr>` — a DISCARD assignment: evaluate the RHS for its effect and throw the value away. `_`
+		// binds nothing (`DiscardBindingName`, the same discard the match-payload `walk(_)` uses), so it is
+		// never a scope binding and would otherwise reach `undefinedVariable`. An owned RHS temporary drops at
+		// statement end through `drainPendingTemps`, exactly as a bare-call statement's result does. This is
+		// the value-position twin of the bare-call statement, reached by `_ = try arr.pop() otherwise 0` and
+		// any `_ = f(…)`.
+		if nameTok.value.equals(DiscardBindingName) 'discardResult'
+			_ = try self.parseExpression(func, block: block)
+			return
+		end 'discardResult'
+
 		if not self.scope.contains(nameTok.value) 'undeclared'
 			// Not a local. It may still name a top-level binding — a `var` (a STORE) or a `let` (an
 			// error, and a DIFFERENT error from "undefined"). LOCAL FIRST, exactly as
@@ -6237,6 +6309,13 @@ export type Parser
 			let promise = try self.parseUnary(func)
 			return try self.emitAwaitOp(func, promise: promise, awaitTok: awaitTok)
 		end 'awaitTarget'
+		// `try [10,20,30].get(0) otherwise …` — a throwing method on an array LITERAL (P1.7 slice 1). The
+		// literal is parsed to an owned array temp and the postfix loop applies the `.get(…)`, leaving the
+		// `call __arr_get` as the last op for `rewriteLastCallToTryCall` to convert. The array temp drops at
+		// statement end (after the try), on every path.
+		if self.at(TokenKind.leftBracket) 'arrayLiteralTarget'
+			return try self.parsePostfix(func, value: try self.parseArrayLiteral(func))
+		end 'arrayLiteralTarget'
 		let tok = self.current()
 		throw ParseError.unsupported("`try` must be applied to a call — `try f(…)`, `try obj.method(…)`, or `try await p` (got '{tok.kind.rawValue}')", line: tok.line, column: tok.column)
 	end 'parseTryCallTarget'
@@ -10449,6 +10528,15 @@ export type Parser
 				continue
 			end 'indirectCall'
 
+			// A `.method(…)` on an array-typed VALUE — a method on a fresh literal (`[10,20,30].get(0)`) or any
+			// array-valued expression, dispatched to the array runtime (P1.7 slice 1). Keyed on the value being
+			// an `Array` instance; a non-array `.method` in postfix position is left for the caller exactly as
+			// before (a plain struct's method call reaches the binding path, not this loop).
+			if self.at(TokenKind.dot) and self.tagOf(current) == ValueTypeTag.genericInstance and self.signatures.isArrayInstance(self.valueNameId(current)) 'arrayMethod'
+				current = try self.parseArrayMethodOnValue(func, arr: current, giid: self.valueNameId(current), resultUsed: true)
+				continue
+			end 'arrayMethod'
+
 			break
 		end 'postfix'
 		return current
@@ -10774,6 +10862,12 @@ export type Parser
 		if self.at(TokenKind.stringLiteral) 'strLit'
 			return try self.parseStringLiteral(func)
 		end 'strLit'
+
+		// `[a, b, c]` — an ARRAY LITERAL (P1.7 slice 1). Its own arm because `[` is its own token. It
+		// desugars to `__arr_create` + a `__arr_push` per element, yielding an owned `Array with integer`.
+		if self.at(TokenKind.leftBracket) 'arrayLiteral'
+			return try self.parseArrayLiteral(func)
+		end 'arrayLiteral'
 
 		if self.at(TokenKind.leftParen) 'group'
 			return try self.parseParenthesizedExpression(func)
@@ -12083,6 +12177,14 @@ export type Parser
 	// prepend in `parseCallNamed`, the one place that causes it, for both callers.)
 	function parseQualifiedCall(func IrFunction) returns ValueId throws ParseError
 		let typeTok = try self.consume(TokenKind.identifier)
+
+		// `IntArray.create()` — a static call on an `Array` instance alias (P1.7 slice 1). Intercepted before
+		// the generic-alias → base rewrite below (which would mangle it to `Array.create`, a callee no file
+		// declares): `Array` has no base struct, so its statics lower to the array runtime, not a user method.
+		if self.signatures.isGenericAlias(typeTok.value) and self.signatures.isArrayInstance(self.signatures.genericAliasInstance(typeTok.value)) 'arrayStatic'
+			return try self.parseArrayStaticCall(typeTok, giid: self.signatures.genericAliasInstance(typeTok.value))
+		end 'arrayStatic'
+
 		try self.consume(TokenKind.dot)
 		let result = try self.parseCallNamed(func, callee: qualifiedMethodName(self.qualifiedCallBaseName(typeTok.value), methodName: self.current().value), anchor: typeTok, receiver: ReceiverArg.none, resultUsed: true, constructorInstance: self.constructorInstanceOf(typeTok.value))
 		self.retypeGenericAliasConstructorResult(result, aliasName: typeTok.value)
@@ -12200,6 +12302,13 @@ export type Parser
 			if maxonTypeTag(binding.varType) == ValueTypeTag.string 'stringMethod'
 				return try self.parseStringMethodCall(func, binding: binding, baseTok: baseTok, resultUsed: resultUsed)
 			end 'stringMethod'
+
+			// An ARRAY RECEIVER (`arr.push(x)`, `arr.get(i)`) is dispatched to the array runtime rather than
+			// through `requireStructBase` (which would reject a generic instance as not a plain struct). The
+			// split is on the binding's genericInstance TAG being an `Array` instance — the parser's type oracle.
+			if maxonTypeTag(binding.varType) == ValueTypeTag.genericInstance and self.signatures.isArrayInstance(typeNameIdOf(binding.varType)) 'arrayMethod'
+				return try self.parseArrayMethodCall(func, binding: binding, baseTok: baseTok, giid: typeNameIdOf(binding.varType), resultUsed: resultUsed)
+			end 'arrayMethod'
 
 			self.advance()
 			try self.consume(TokenKind.dot)
@@ -12393,6 +12502,261 @@ export type Parser
 		return self.emitLoadStringField(binding.boundValue, offset: StringLengthOffset, range: SourceRange.ofToken(methodTok))
 	end 'parseStringByteLength'
 
+	// --- Builtin `Array` parsing (P1.7 slice 1) ---
+
+	// `[a, b, c]` — an array literal. Desugars to `__arr_create(elementSize, 0)` then one `__arr_push` per
+	// element, yielding an OWNED `Array with integer`. At this slice a literal's elements are all integer
+	// (a String / struct / bool / Byte element literal is a later slice, rejected E2015); an empty `[]`
+	// carries no element to infer a type from and is rejected (use `Array with T` + `.create()`).
+	function parseArrayLiteral(func IrFunction) returns ValueId throws ParseError
+		let openTok = try self.consume(TokenKind.leftBracket)
+		let giid = self.signatures.internArrayIntegerInstance()
+		let range = SourceRange.ofToken(openTok)
+		let arr = self.emitArrayCreateOp(giid, range: range)
+
+		if self.at(TokenKind.rightBracket) 'empty'
+			throw ParseError.unsupported("an empty array literal `[]` — its element type cannot be inferred; use `Array with T` + `.create()` for an empty typed array", line: openTok.line, column: openTok.column)
+		end 'empty'
+
+		while true 'elements'
+			let elemTok = self.current()
+			let elem = try self.parseExpression(func, block: self.currentBlock)
+			try self.requireIntegerArrayElement(elem, tok: elemTok)
+			_ = self.emitRuntimeCall(ArrPushName, args: pairArgs(arr, second: elem), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+			if not self.at(TokenKind.comma) 'done'
+				break
+			end 'done'
+			try self.consume(TokenKind.comma)
+		end 'elements'
+		try self.consume(TokenKind.rightBracket)
+
+		self.trackOwnedTemp(arr)
+		return arr
+	end 'parseArrayLiteral'
+
+	// Emit `__arr_create(elementSize, 0)` for instance `giid`, yielding the array record — the shared
+	// producer for a literal and an `IntArray.create()`. Element size is a compile-time constant here (a
+	// concrete instance); the element destructor is 0 (trivial elements, slice 1). NOT tracked owned — the
+	// caller decides that (a literal tracks after its pushes, a `create()` immediately).
+	function emitArrayCreateOp(giid GenericInstanceId, range SourceRange) returns ValueId
+		let sizeVal = self.emitLiteral(self.signatures.arrayElementSize(giid) as ParsedInt, valueType: MaxonType.integer, range: range)
+		let destroyVal = self.emitLiteral(TrivialDestructor, valueType: MaxonType.integer, range: range)
+		return self.emitRuntimeCall(ArrCreateName, args: pairArgs(sizeVal, second: destroyVal), resultTag: ValueTypeTag.genericInstance, resultNameId: giid, range: range)
+	end 'emitArrayCreateOp'
+
+	// `IntArray.create()` — the one `Array` static factory at this slice. Yields an OWNED empty array.
+	function parseArrayStaticCall(aliasTok Token, giid GenericInstanceId) returns ValueId throws ParseError
+		try self.requireTrivialArrayElement(giid, tok: aliasTok)
+		try self.consume(TokenKind.dot)
+		let methodTok = try self.consume(TokenKind.identifier)
+		if not methodTok.value.equals(ArrayCreateMethod) 'unknownStatic'
+			throw ParseError.unsupported("`Array` static method '{String.from(methodTok.value)}' — P1.7 slice 1 provides `create()` only", line: methodTok.line, column: methodTok.column)
+		end 'unknownStatic'
+		try self.consume(TokenKind.leftParen)
+		try self.consume(TokenKind.rightParen)
+		let arr = self.emitArrayCreateOp(giid, range: SourceRange.between(aliasTok, last: methodTok))
+		self.trackOwnedTemp(arr)
+		return arr
+	end 'parseArrayStaticCall'
+
+	// ⭐ **DISPATCH A BUILTIN `Array` METHOD off an instance receiver (P1.7 slice 1).** The array twin of
+	// `parseStringMethodCall`: the receiver is a live `Array` instance (a moved-from array touched here is
+	// use-after-move, E3102). `get`/`set`/`first`/`last`/`pop`/`remove` are THROWING — they emit a plain
+	// `call` that the enclosing `try …` rewrites to a `tryCall` (`rewriteLastCallToTryCall`), so they must be
+	// the last op emitted; the rest are non-throwing. A non-throwing VOID method (`push`/`reserve`/`resize`/
+	// `clear`/`insert`) in value position is E3059. The array record's ADDRESS is stable across a grow (only
+	// its `buffer@0` moves), so a mutating method never rebinds the receiver.
+	function parseArrayMethodCall(func IrFunction, binding VarInfo, baseTok Token, giid GenericInstanceId, resultUsed bool) returns ValueId throws ParseError
+		self.advance()
+		try self.consume(TokenKind.dot)
+		try self.requireBindingLive(binding, nameTok: baseTok)
+		return try self.dispatchArrayMethod(func, arr: binding.boundValue, giid: giid, resultUsed: resultUsed)
+	end 'parseArrayMethodCall'
+
+	// A method on an array-typed VALUE that is not a plain local binding — a fresh literal (`[10,20,30].get(0)`)
+	// or any array-valued expression, reached from the postfix loop and the `try` target. The cursor sits on
+	// the `.`; the receiver `arr` is already parsed (and, for a literal, already an owned pending temp that
+	// drops at statement end).
+	function parseArrayMethodOnValue(func IrFunction, arr ValueId, giid GenericInstanceId, resultUsed bool) returns ValueId throws ParseError
+		try self.consume(TokenKind.dot)
+		return try self.dispatchArrayMethod(func, arr: arr, giid: giid, resultUsed: resultUsed)
+	end 'parseArrayMethodOnValue'
+
+	// The token shape of a method call on an ARRAY FIELD reached through a field chain — `<base>(.<field>)+
+	// .<method>(` with AT LEAST TWO dots (a one-dot `b.m(…)` is `methodCallsAt`'s). `resolveFieldChainFrom`
+	// stops the chain at the array field, so the last hop is the method. The base must be a live local (or a
+	// captured enclosing struct), the same gate `methodCallsAt` uses.
+	function fieldChainMethodCallAt(index TokenIndex) returns bool
+		let baseKind = self.kindAt(index)
+		if baseKind != TokenKind.identifier and baseKind != TokenKind.self 'notABase'
+			return false
+		end 'notABase'
+		var q = index + 1
+		var hops = 0
+		while self.kindAt(q) == TokenKind.dot and self.kindAt(q + 1) == TokenKind.identifier 'hop'
+			hops = hops + 1
+			q = q + 2
+		end 'hop'
+		if hops < 2 or self.kindAt(q) != TokenKind.leftParen 'notChainMethod'
+			return false
+		end 'notChainMethod'
+		let baseTok = self.tokenAt(index)
+		return self.scope.contains(self.baseBindingName(baseTok)) or self.captureBinds(baseTok)
+	end 'fieldChainMethodCallAt'
+
+	// `b.ops.push(1)` as a STATEMENT — resolve the field chain to the array field (a borrowed load; the
+	// struct owns and drops it), then dispatch the array method for effect. Only an array field carries a
+	// chain-method at this slice (a nested struct method `o.inner.m()` is a later slice), which the field
+	// chain already enforced by stopping at the array.
+	function parseFieldChainMethodCallStatement(func IrFunction) throws ParseError
+		let receiver = try self.parseFieldAccess()
+		if self.tagOf(receiver) == ValueTypeTag.genericInstance and self.signatures.isArrayInstance(self.valueNameId(receiver)) 'arrayReceiver'
+			_ = try self.parseArrayMethodOnValue(func, arr: receiver, giid: self.valueNameId(receiver), resultUsed: false)
+			return
+		end 'arrayReceiver'
+		let tok = self.current()
+		throw ParseError.unsupported("a method call on a non-array field chain — a nested struct method (`o.inner.m()`) is a later slice", line: tok.line, column: tok.column)
+	end 'parseFieldChainMethodCallStatement'
+
+	// Dispatch a builtin `Array` method — cursor on the method NAME, `arr` the (borrowed) receiver record.
+	// Shared by the binding receiver (`arr.push(x)`) and a value receiver (`[…].get(0)`).
+	function dispatchArrayMethod(func IrFunction, arr ValueId, giid GenericInstanceId, resultUsed bool) returns ValueId throws ParseError
+		try self.requireTrivialArrayElement(giid, tok: self.current())
+		let methodTok = try self.consume(TokenKind.identifier)
+		let range = SourceRange.ofToken(methodTok)
+
+		// Throwing accessors — a plain `call` the enclosing `try` rewrites; result is the element (get/first/
+		// last/pop/remove) or a discarded dummy (set). `resultUsed` is the try's concern, not checked here.
+		if methodTok.value.equals(ArrayGetMethod) 'get'
+			let index = try self.parseArrayOneArg(func)
+			return self.emitRuntimeCall(ArrGetName, args: pairArgs(arr, second: index), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+		end 'get'
+		if methodTok.value.equals(ArraySetMethod) 'set'
+			return try self.parseArraySetOrInsert(func, arr: arr, callee: ArrSetName, throwing: true, range: range)
+		end 'set'
+		if methodTok.value.equals(ArrayFirstMethod) 'first'
+			try self.parseArrayNoArgs()
+			return self.emitRuntimeCall(ArrFirstName, args: singletonArgs(arr), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+		end 'first'
+		if methodTok.value.equals(ArrayLastMethod) 'last'
+			try self.parseArrayNoArgs()
+			return self.emitRuntimeCall(ArrLastName, args: singletonArgs(arr), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+		end 'last'
+		if methodTok.value.equals(ArrayPopMethod) 'pop'
+			try self.parseArrayNoArgs()
+			return self.emitRuntimeCall(ArrPopName, args: singletonArgs(arr), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+		end 'pop'
+		if methodTok.value.equals(ArrayRemoveMethod) 'remove'
+			let index = try self.parseArrayOneArg(func)
+			return self.emitRuntimeCall(ArrRemoveName, args: pairArgs(arr, second: index), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+		end 'remove'
+
+		// Non-throwing value accessors.
+		if methodTok.value.equals(ArrayCountMethod) 'count'
+			try self.parseArrayNoArgs()
+			return self.emitRuntimeCall(ArrCountName, args: singletonArgs(arr), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+		end 'count'
+		if methodTok.value.equals(ArrayCapacityMethod) 'capacity'
+			try self.parseArrayNoArgs()
+			return self.emitRuntimeCall(ArrCapacityName, args: singletonArgs(arr), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+		end 'capacity'
+		if methodTok.value.equals(ArrayIsEmptyMethod) 'isEmpty'
+			try self.parseArrayNoArgs()
+			return self.emitRuntimeCall(ArrIsEmptyName, args: singletonArgs(arr), resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: range)
+		end 'isEmpty'
+
+		// Non-throwing void mutators — rejected in value position (E3059).
+		try self.requireArrayVoidStatement(resultUsed, methodTok: methodTok)
+		if methodTok.value.equals(ArrayPushMethod) 'push'
+			let value = try self.parseArrayOneArg(func)
+			return self.emitArrayVoidCall(ArrPushName, args: pairArgs(arr, second: value), receiver: arr, range: range)
+		end 'push'
+		if methodTok.value.equals(ArrayReserveMethod) 'reserve'
+			let n = try self.parseArrayOneArg(func)
+			return self.emitArrayVoidCall(ArrReserveName, args: pairArgs(arr, second: n), receiver: arr, range: range)
+		end 'reserve'
+		if methodTok.value.equals(ArrayResizeMethod) 'resize'
+			let n = try self.parseArrayOneArg(func)
+			return self.emitArrayVoidCall(ArrResizeName, args: pairArgs(arr, second: n), receiver: arr, range: range)
+		end 'resize'
+		if methodTok.value.equals(ArrayClearMethod) 'clear'
+			try self.parseArrayNoArgs()
+			return self.emitArrayVoidCall(ArrClearName, args: singletonArgs(arr), receiver: arr, range: range)
+		end 'clear'
+		if methodTok.value.equals(ArrayInsertMethod) 'insert'
+			return try self.parseArraySetOrInsert(func, arr: arr, callee: ArrInsertName, throwing: false, range: range)
+		end 'insert'
+
+		throw ParseError.unsupported("`Array` method '{String.from(methodTok.value)}' — P1.7 slice 1 provides create/push/get/set/count/capacity/isEmpty/reserve/resize/first/last/pop/clear/insert/remove; the rest (slice/append/clone/map/contains/…) arrive later", line: methodTok.line, column: methodTok.column)
+	end 'dispatchArrayMethod'
+
+	// Emit a VOID array mutator call; return the receiver (what the statement still denotes, like
+	// `parseStringAppend`).
+	function emitArrayVoidCall(callee ByteArray, args ValueIdArray, receiver ValueId, range SourceRange) returns ValueId
+		_ = self.emitRuntimeCall(callee, args: args, resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+		return receiver
+	end 'emitArrayVoidCall'
+
+	// `(` `)` — a no-argument array method (`count`, `first`, `pop`, `clear`, …).
+	function parseArrayNoArgs() throws ParseError
+		try self.consume(TokenKind.leftParen)
+		try self.consume(TokenKind.rightParen)
+	end 'parseArrayNoArgs'
+
+	// `( expr )` — a single positional array-method argument (`push(x)`, `get(i)`, `reserve(n)`).
+	function parseArrayOneArg(func IrFunction) returns ValueId throws ParseError
+		try self.consume(TokenKind.leftParen)
+		let arg = try self.parseExpression(func, block: self.currentBlock)
+		try self.consume(TokenKind.rightParen)
+		return arg
+	end 'parseArrayOneArg'
+
+	// `set`/`insert` — `( index , value: X )`: the index positional, the value labelled `value:`. Emits the
+	// `__arr_set`/`__arr_insert` call (throwing for `set`, void for `insert`) and returns its result. The
+	// value argument is parsed AFTER the index so the throwing `set`'s call is the last op the enclosing
+	// `try` rewrites.
+	function parseArraySetOrInsert(func IrFunction, arr ValueId, callee ByteArray, throwing bool, range SourceRange) returns ValueId throws ParseError
+		try self.consume(TokenKind.leftParen)
+		let index = try self.parseExpression(func, block: self.currentBlock)
+		try self.consume(TokenKind.comma)
+		let labelTok = try self.consume(TokenKind.identifier)
+		if not labelTok.value.equals(ArrayValueLabel) 'wrongLabel'
+			throw ParseError.unsupported("the value argument of a two-argument array mutator must be labelled `value:` (got '{String.from(labelTok.value)}:')", line: labelTok.line, column: labelTok.column)
+		end 'wrongLabel'
+		try self.consume(TokenKind.colon)
+		let value = try self.parseExpression(func, block: self.currentBlock)
+		try self.consume(TokenKind.rightParen)
+
+		if throwing 'throwing'
+			return self.emitRuntimeCall(callee, args: tripleArgs(arr, second: index, third: value), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+		end 'throwing'
+		return self.emitArrayVoidCall(callee, args: tripleArgs(arr, second: index, third: value), receiver: arr, range: range)
+	end 'parseArraySetOrInsert'
+
+	// A non-throwing void array mutator (`push`/`reserve`/`resize`/`clear`/`insert`) has no value, so a
+	// value-position call is E3059, exactly as a void free call or `String.append` in value position is.
+	function requireArrayVoidStatement(resultUsed bool, methodTok Token) throws ParseError
+		if resultUsed 'valueUsed'
+			throw ParseError.voidCallResultUsed(String.from(methodTok.value), line: methodTok.line, column: methodTok.column)
+		end 'valueUsed'
+	end 'requireArrayVoidStatement'
+
+	// Reject a MANAGED-element array (String / struct / union / nested Array) at any array op site — P1.7
+	// slice 1 is trivial elements only; managed elements need the element-destroy walk (slice 3).
+	function requireTrivialArrayElement(giid GenericInstanceId, tok Token) throws ParseError
+		if self.signatures.arrayElementIsManaged(giid) 'managed'
+			throw ParseError.unsupported("an `Array` with a managed element (String / struct / union / nested Array) — P1.7 slice 1 supports trivial elements (int / Byte / ranged-int / bool) only; managed elements arrive at P1.7 slice 3", line: tok.line, column: tok.column)
+		end 'managed'
+	end 'requireTrivialArrayElement'
+
+	// An array LITERAL element must be integer-typed at this slice (a bare `[…]` interns `Array with
+	// integer`); a String / struct / bool / Byte element literal is a later slice.
+	function requireIntegerArrayElement(elem ValueId, tok Token) throws ParseError
+		if self.tagOf(elem) != ValueTypeTag.integer 'notInt'
+			throw ParseError.unsupported("an array literal element of type '{typeTagName(self.tagOf(elem))}' — P1.7 slice 1 array literals hold integer elements only (String / struct / bool / Byte element literals are a later slice)", line: tok.line, column: tok.column)
+		end 'notInt'
+	end 'requireIntegerArrayElement'
+
 	// The SCOPE name a base token denotes. `self` is a keyword, so it carries no binding name of its
 	// own; it names the receiver parameter, which is bound under `SelfParamName`. Every other base
 	// token names itself.
@@ -12476,21 +12840,34 @@ export type Parser
 
 		let index = try self.requireFieldIndex(layout, fieldTok: fieldTok)
 		try self.requireFieldAccessible(layout, index: index, fieldTok: fieldTok)
-		let nextLayout = try self.structLayoutOfField(layout, fieldTok: fieldTok, index: index)
+
+		// ⭐ **AN ARRAY FIELD ENDS THE CHAIN (P1.7 slice 1).** `b.ops.push(1)` / `o.inner.items.count()` — the
+		// `.` after an array field opens a METHOD call on the array VALUE, not a further field access (an array
+		// has no addressable sub-fields). Stop here, returning the array field as the chain's last field: the
+		// caller loads it and the postfix loop / statement dispatch applies the method. A STRUCT field is an
+		// intermediate box and the walk recurses; any other non-struct followed by `.` is refused by
+		// `structLayoutOfField` below, exactly as before.
+		let fieldType = self.signatures.fieldTypeOf(layout.name, index: index, into: self.artifact.typeNames)
+		if maxonTypeTag(fieldType) == ValueTypeTag.genericInstance and self.signatures.isArrayInstance(typeNameIdOf(fieldType)) 'arrayField'
+			return FieldChainStep.create(box, layout: layout, lastFieldTok: fieldTok, baseTok: baseTok, baseBinding: baseBinding)
+		end 'arrayField'
+
+		let nextLayout = try self.structLayoutOfField(layout, fieldTok: fieldTok, fieldType: fieldType)
 		let nextBox = self.emitFieldLoad(box, layout: layout, index: index, range: SourceRange.between(baseTok, last: fieldTok))
 		return try self.resolveFieldChainFrom(nextBox, layout: nextLayout, baseTok: baseTok, baseBinding: baseBinding)
 	end 'resolveFieldChainFrom'
 
-	// The `StructLayout` of field `index` of `baseLayout` — used to continue a field chain THROUGH a
-	// struct-typed field (`o.inner.x`). The field's declared type is resolved (`named(Inner)` → `structRef`)
-	// and must be a struct; a chain through a scalar or String field (`o.name.x`) is refused, since there is
-	// nothing to address a further field on.
-	function structLayoutOfField(baseLayout StructLayout, fieldTok Token, index FieldIndex) returns StructLayout throws ParseError
-		let fieldType = self.resolveNamedStruct(self.signatures.fieldTypeOf(baseLayout.name, index: index, into: self.artifact.typeNames))
-		if maxonTypeTag(fieldType) != ValueTypeTag.structRef 'notAStruct'
-			throw ParseError.unsupported("a field access through '{String.from(baseLayout.name)}.{String.from(fieldTok.value)}', which is declared '{typeTagName(maxonTypeTag(fieldType))}' and not a struct — only a struct field can carry a further field access", line: fieldTok.line, column: fieldTok.column)
+	// The `StructLayout` of a field whose already-resolved type `fieldType` is passed in — used to continue a
+	// field chain THROUGH a struct-typed field (`o.inner.x`). The type is resolved to a `structRef`
+	// (`named(Inner)` → `structRef`) and must be a struct; a chain through a scalar / String / array field is
+	// refused (an array is handled by the caller before this), since there is nothing to address a further
+	// field on. `fieldType` is threaded IN (the caller already computed it) so it is not read twice.
+	function structLayoutOfField(baseLayout StructLayout, fieldTok Token, fieldType MaxonType) returns StructLayout throws ParseError
+		let resolved = self.resolveNamedStruct(fieldType)
+		if maxonTypeTag(resolved) != ValueTypeTag.structRef 'notAStruct'
+			throw ParseError.unsupported("a field access through '{String.from(baseLayout.name)}.{String.from(fieldTok.value)}', which is declared '{typeTagName(maxonTypeTag(resolved))}' and not a struct — only a struct field can carry a further field access", line: fieldTok.line, column: fieldTok.column)
 		end 'notAStruct'
-		let name = try self.artifact.typeNames.nameOf(typeNameIdOf(fieldType)) otherwise panic("structLayoutOfField: a struct field's structRef name id is not in this file's interner — every structRef is interned from a recorded name")
+		let name = try self.artifact.typeNames.nameOf(typeNameIdOf(resolved)) otherwise panic("structLayoutOfField: a struct field's structRef name id is not in this file's interner — every structRef is interned from a recorded name")
 		match self.signatures.structOf(name) 'declared'
 			declared(layout) then return layout
 			undeclared then panic("structLayoutOfField: field '{String.from(fieldTok.value)}' is typed `structRef({String.from(name)})` but no file declares that struct — a structRef is only minted for a recorded type name")

@@ -279,6 +279,11 @@ export type RuntimeUsage
 	export var usesBoolToString as bool
 	export var usesStrAppend as bool
 	export var usesStrDecref as bool
+	// The program touches an `Array` (P1.7 slice 1). Any `__arr_*` runtime call turns this on — and, like
+	// the String helpers, turns on `usesHeap` too, because the array helpers `__mm_alloc`/`__mm_free` the
+	// backing record and its element buffer inside their Std bodies, which this Maxon-module scan cannot
+	// see. It drives `installArrayRuntime` (all the array helpers, appended already-lowered).
+	export var usesArray as bool
 	// The `__destruct_<U>` symbols this module CALLS (P1.3 slice 2) — collected from the drop sites so
 	// `installUnionDestructors` synthesizes only the referenced ones, and `noteUnionDestructorUsage`
 	// can classify their transitive `__str_decref`/`__mm_free` needs. Full symbols (not names): the
@@ -287,7 +292,7 @@ export type RuntimeUsage
 	export var neededDestructors as DestructorSet
 
 	static function create() returns RuntimeUsage
-		return Self{usesHeap: false, usesGt: false, usesPrint: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesBoolToString: false, usesStrAppend: false, usesStrDecref: false, neededDestructors: DestructorSet.create()}
+		return Self{usesHeap: false, usesGt: false, usesPrint: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesBoolToString: false, usesStrAppend: false, usesStrDecref: false, usesArray: false, neededDestructors: DestructorSet.create()}
 	end 'create'
 end 'RuntimeUsage'
 
@@ -372,6 +377,14 @@ function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 		usage.usesStrDecref = true
 		usage.usesHeap = true
 	end 'strdecref'
+	// Any `__arr_*` call carries the whole array runtime, and the heap under it: `__arr_create`/`__arr_grow`
+	// `__mm_alloc` the record and the element buffer, `__arr_decref` `__mm_free`s them — none of which this
+	// Maxon-module scan sees, since those calls live in the synthesized Std bodies. So a single reference
+	// declares both bits, exactly as `__str_append`/`__str_decref` do for their own transitive heap use.
+	if isArrayRuntimeCallee(callee) 'array'
+		usage.usesArray = true
+		usage.usesHeap = true
+	end 'array'
 	// A managed-payload union's scope-exit drop (`__destruct_<U>`). It frees the box (`__mm_free` — heap)
 	// and, for a String field, calls `__str_decref` — but those live in the SYNTHESIZED body this scan
 	// cannot see, so the symbol is recorded and its transitive needs are declared by
@@ -950,30 +963,8 @@ function storeConstByte(module StdModule, block IrBlock, ids ValueMinter, dest V
 	module.appendOp(block, op: StdOp.storeIndirect(dest, offset: offset, valueId: ch, valueType: StdType.u8))
 end 'storeConstByte'
 
-// Three i64 parameters — `__str_copy(dest, src, len)`. The one runtime function that needs a third; the
-// shared `oneI64Param`/`twoI64Params` cover the rest.
-function threeI64Params() returns StdTypeArray
-	var types = StdTypeArray.create()
-	types.push(StdType.i64)
-	types.push(StdType.i64)
-	types.push(StdType.i64)
-	return types
-end 'threeI64Params'
+// `threeI64Params` — `__str_copy(dest, src, len)`'s three-i64 signature — lives in `MmRuntime` next to
+// `oneI64Param`/`twoI64Params`, shared with the Array runtime (see MmRuntime).
 
-// The two-argument branch-edge helper — `argsOf`'s pair sibling, for the loops that carry two values.
-function twoArgs(first ValueId, second ValueId) returns ValueIdArray
-	var args = ValueIdArray.create()
-	args.push(first)
-	args.push(second)
-	return args
-end 'twoArgs'
-
-// The three-argument call helper — `argsOf`'s triple sibling, for the `__mm_alloc(size, dtor)` and
-// `__str_copy(dest, src, len)` calls `__str_append` makes. (`twoArgs` doubles as the two-value case.)
-function threeArgs(first ValueId, second ValueId, third ValueId) returns ValueIdArray
-	var args = ValueIdArray.create()
-	args.push(first)
-	args.push(second)
-	args.push(third)
-	return args
-end 'threeArgs'
+// `twoArgs` / `threeArgs` — the pair and triple call/branch-edge builders — live in `MmRuntime` next
+// to `argsOf`, shared by every runtime builder (see MmRuntime).
