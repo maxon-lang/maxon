@@ -1,0 +1,191 @@
+// Test: dispatch.shape-table-biased
+typealias Probe = int(0 to 1000)
+typealias Result = int(0 to 100)
+
+function classify(n Probe) returns Result
+	match n 'm'
+		100 then return 1
+		101 then return 2
+		102 then return 3
+		103 then return 4
+		104 then return 5
+		105 then return 6
+		default then return 0
+	end 'm'
+end 'classify'
+
+function main() returns ExitCode
+	return classify(103)
+end 'main'
+---
+ExitCode: 4
+RequiredIR: ```
+=== maxon
+module {
+  func @classify(n: i64) -> i64 {
+  entry:
+    %0 = maxon.param {index = 0 : i32} {name = n} {type = i64}
+    maxon.assign %0 {var = __match_m_0} {kind = i64} {decl = 1 : i1}
+    maxon.switch __match_m_0 [100:m_0.case0, 101:m_0.case1, 102:m_0.case2, 103:m_0.case3, 104:m_0.case4, 105:m_0.case5] default=m_0.case6
+  m_0.case0:
+    %4 = maxon.literal {value = 1 : i64}
+    maxon.scope_end [n, __match_m_0]
+    maxon.return %4
+  m_0.case1:
+    %8 = maxon.literal {value = 2 : i64}
+    maxon.scope_end [n, __match_m_0]
+    maxon.return %8
+  m_0.case2:
+    %12 = maxon.literal {value = 3 : i64}
+    maxon.scope_end [n, __match_m_0]
+    maxon.return %12
+  m_0.case3:
+    %16 = maxon.literal {value = 4 : i64}
+    maxon.scope_end [n, __match_m_0]
+    maxon.return %16
+  m_0.case4:
+    %20 = maxon.literal {value = 5 : i64}
+    maxon.scope_end [n, __match_m_0]
+    maxon.return %20
+  m_0.case5:
+    %24 = maxon.literal {value = 6 : i64}
+    maxon.scope_end [n, __match_m_0]
+    maxon.return %24
+  m_0.case6:
+    %25 = maxon.literal {value = 0 : i64}
+    maxon.scope_end [n, __match_m_0]
+    maxon.return %25
+  m_0.merge:
+  }
+  func @main() -> i64 {
+  entry:
+    %26 = maxon.literal {value = 103 : i64}
+    %27 = maxon.call @classify %26
+    %28 = maxon.literal {value = 0 : i64}
+    %29 = maxon.binop %27, %28 {op = lt}
+    %30 = maxon.literal {value = 4294967295 : i64}
+    %31 = maxon.binop %27, %30 {op = gt}
+    %32 = maxon.binop %29, %31 {op = or}
+    maxon.cond_br %32 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    maxon.panic "panic at dispatch.shape-table-biased.test:18: Range check failed: value outside typealias 'ExitCode'"
+  __range_ok_0:
+    maxon.scope_end []
+    maxon.return %27
+  }
+}
+=== standard
+module {
+  func @classify(n: i64) -> u8 {
+  entry:
+    %0 = func.param n : StdI64
+    memref.store %0, __match_m_0
+    %1 = memref.load __match_m_0 : i64
+    %2 = arith.constant {value = 100 : i64}
+    %3 = arith.subi %1, %2
+    cf.switch %3 [6 cases] default=m_0.case6
+  m_0.case0:
+    %4 = arith.constant {value = 1 : i64}
+    func.return %4
+  m_0.case1:
+    %5 = arith.constant {value = 2 : i64}
+    func.return %5
+  m_0.case2:
+    %6 = arith.constant {value = 3 : i64}
+    func.return %6
+  m_0.case3:
+    %7 = arith.constant {value = 4 : i64}
+    func.return %7
+  m_0.case4:
+    %8 = arith.constant {value = 5 : i64}
+    func.return %8
+  m_0.case5:
+    %9 = arith.constant {value = 6 : i64}
+    func.return %9
+  m_0.case6:
+    %10 = arith.constant {value = 0 : i64}
+    func.return %10
+  m_0.merge:
+  }
+  func @main() -> u32 {
+  entry:
+    %11 = arith.constant {value = 103 : i64}
+    %12 = func.call @classify %11
+    %13 = arith.constant {value = 0 : i64}
+    %14 = arith.cmpi lt %12, %13
+    %15 = arith.constant {value = 4294967295 : i64}
+    %16 = arith.cmpi gt %12, %15
+    %17 = arith.ori1 %14, %16
+    cf.cond_br %17 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    %18 = memref.lea_symdata __panic_msg_0
+    %19 = std.ptr_to_i64 %18
+    std.call_runtime @mrt_panic %19
+  __range_ok_0:
+    func.return %12
+  }
+}
+=== x86
+module {
+  func @classify(n: i64) -> u8 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, 100
+    x64.sub rax, rcx
+    x64.jump_table rax, 6 cases, default=classify.m_0.case6
+  m_0.case0:
+    x64.mov rax, 1
+    x64.epilogue
+    x64.ret
+  m_0.case1:
+    x64.mov rax, 2
+    x64.epilogue
+    x64.ret
+  m_0.case2:
+    x64.mov rax, 3
+    x64.epilogue
+    x64.ret
+  m_0.case3:
+    x64.mov rax, 4
+    x64.epilogue
+    x64.ret
+  m_0.case4:
+    x64.mov rax, 5
+    x64.epilogue
+    x64.ret
+  m_0.case5:
+    x64.mov rax, 6
+    x64.epilogue
+    x64.ret
+  m_0.case6:
+    x64.xor eax, eax
+    x64.epilogue
+    x64.ret
+  m_0.merge:
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rcx, 103
+    x64.call classify
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+}
+```
+---
+---

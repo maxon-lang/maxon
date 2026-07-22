@@ -699,7 +699,7 @@ public static class BlockAnalysis {
         .OfType<StdCallRuntimeOp>()
         .Any(op => op.Callee is "mrt_panic" or "mrt_panic_dynamic");
       bool hasTerminator = sourceBlocks[bi].Operations
-        .Any(op => op is StdCondBrOp or StdBrOp or StdReturnOp);
+        .Any(op => op is StdCondBrOp or StdBrOp or StdSwitchOp or StdReturnOp);
       if (!hasNoreturnCall || hasTerminator)
         continue;
 

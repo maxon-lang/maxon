@@ -1872,6 +1872,10 @@ public static partial class MaxonToStandardConversion {
               newBlock.AddOp(new StdBrOp(br.Target));
               break;
             }
+            case MaxonSwitchOp switchOp: {
+              LowerSwitch(switchOp, newFunc, newBlock);
+              break;
+            }
             case MaxonScopeEndOp scopeEnd: {
               // A value-tuple return hands the caller COPIES of the two halves, so it transfers
               // NOTHING — and this cleanup runs BEFORE the return op that reads them. Both facts

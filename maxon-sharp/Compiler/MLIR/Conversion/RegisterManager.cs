@@ -114,8 +114,11 @@ public class RegisterManager : RegisterManagerBase<X86Register, X86XmmRegister, 
     return new X86MovMemXmmOp(offset, reg, FloatPrecision.F64);
   }
 
+  /// A jump table IS a terminator — it ends in an indirect jump. Leaving it out put the
+  /// cross-block spills ResetForBlockTransition inserts AFTER the dispatch, where they are
+  /// unreachable, while the value they were meant to save was recorded as having a stack home.
   protected override bool IsTerminator(X86Op op) {
-    return op is X86JccOp or X86JmpOp or X86RetOp or X86EpilogueOp;
+    return op is X86JccOp or X86JmpOp or X86JumpTableOp or X86RetOp or X86EpilogueOp;
   }
 
   // --- X86-specific Emit methods ---

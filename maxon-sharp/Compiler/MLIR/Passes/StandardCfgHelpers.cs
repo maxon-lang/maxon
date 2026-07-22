@@ -14,6 +14,10 @@ internal static class StandardCfgHelpers {
     return lastOp switch {
       StdBrOp br => [br.Target],
       StdCondBrOp condBr => [condBr.ThenBlock, condBr.ElseBlock],
+      // A switch reaches every arm it names plus the default. Distinct targets only: the
+      // dataflow passes that consume this iterate the list once per successor, and a wide
+      // table repeats the same default label across hundreds of uncovered slots.
+      StdSwitchOp switchOp => [.. switchOp.CaseTargets.Append(switchOp.DefaultTarget).Distinct()],
       StdReturnOp => [],
       StdErrorReturnOp => [],
       // Block without a terminator: CfgBuilder treats an empty successor list
@@ -25,6 +29,6 @@ internal static class StandardCfgHelpers {
   public static bool EndsWithTerminator(IrBlock<StandardOp> block) {
     if (block.Operations.Count == 0) return false;
     var lastOp = block.Operations[^1];
-    return lastOp is StdBrOp or StdCondBrOp or StdReturnOp or StdErrorReturnOp;
+    return lastOp is StdBrOp or StdCondBrOp or StdSwitchOp or StdReturnOp or StdErrorReturnOp;
   }
 }

@@ -130,8 +130,10 @@ public class ARM64RegisterManager : RegisterManagerBase<ARM64Register, ARM64Floa
     return new ARM64FloatStoreToStackOp(offset, reg, FloatPrecision.F64);
   }
 
+  /// A jump table IS a terminator — it ends in a BR through the loaded target. See the x64
+  /// twin in RegisterManager for what leaving it out costs.
   protected override bool IsTerminator(ARM64Op op) {
-    return op is ARM64BranchOp or ARM64BranchCondOp or ARM64RetOp or ARM64EpilogueOp;
+    return op is ARM64BranchOp or ARM64BranchCondOp or ARM64JumpTableOp or ARM64RetOp or ARM64EpilogueOp;
   }
 
   // --- ARM64-specific Emit methods ---

@@ -680,6 +680,35 @@ end 'main'
 error E2001: specs/fragments/match-statements/error.match-expression-fallthrough.test:5:14: unexpected token: 'and'
 ```
 
+<!-- test: error.match-float-pattern-on-int -->
+```maxon
+function main() returns ExitCode
+	let x = 1
+	match x 'check'
+		1 then return 10
+		2.5 then return 20
+		default then return 0
+	end 'check'
+end 'main'
+```
+```maxoncstderr
+error E2028: specs/fragments/match-statements/error.match-float-pattern-on-int.test:6:3: pattern type 'float' does not match scrutinee type 'int'
+```
+
+<!-- test: error.match-float-range-endpoint-on-int -->
+```maxon
+function main() returns ExitCode
+	let x = 1
+	match x 'check'
+		1 to 2.5 then return 10
+		default then return 0
+	end 'check'
+end 'main'
+```
+```maxoncstderr
+error E2028: specs/fragments/match-statements/error.match-float-range-endpoint-on-int.test:5:8: pattern type 'float' does not match scrutinee type 'int'
+```
+
 <!-- test: error.match-fallthrough-with-return -->
 ```maxon
 function main() returns ExitCode

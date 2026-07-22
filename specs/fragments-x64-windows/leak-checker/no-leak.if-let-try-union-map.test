@@ -90,12 +90,17 @@ module {
     x64.mov [rbp-64], r8
     x64.mov r9, [rbp-88]
     x64.mov [rbp-72], r9
-    x64.jmp dispatch.unwrap_0.cmp0
-  unwrap_0.cmp0:
     x64.mov rax, [rbp-72]
     x64.xor ecx, ecx
     x64.cmp rax, rcx
-    x64.jne dispatch.unwrap_0.cmp1
+    x64.je dispatch.unwrap_0.case0
+  unwrap_0.dispatch0:
+    x64.mov rax, 1
+    x64.mov rcx, [rbp-72]
+    x64.cmp rcx, rax
+    x64.je dispatch.unwrap_0.case1
+  unwrap_0.dispatch1:
+    x64.jmp dispatch.unwrap_0.merge
   unwrap_0.case0:
     x64.mov rcx, 16
     x64.xor edx, edx
@@ -120,11 +125,6 @@ module {
     x64.mov rcx, [rbp-64]
     x64.call mm_incref
     x64.jmp dispatch.unwrap_0.merge
-  unwrap_0.cmp1:
-    x64.mov rax, [rbp-72]
-    x64.mov rcx, 1
-    x64.cmp rax, rcx
-    x64.jne dispatch.unwrap_0.merge
   unwrap_0.case1:
     x64.mov rax, [rbp-56]
     x64.mov rcx, [rax+8]
@@ -223,12 +223,22 @@ module {
     x64.xor ecx, ecx
     x64.mov [rbp-24], rcx
     x64.mov [rbp-32], rdx
-    x64.jmp decode.unwrap_0.cmp0
-  unwrap_0.cmp0:
-    x64.mov rax, [rbp-32]
-    x64.mov rcx, 2
-    x64.cmp rax, rcx
-    x64.jne decode.unwrap_0.cmp1
+    x64.mov rdx, [rbp-32]
+    x64.xor ebx, ebx
+    x64.cmp rdx, rbx
+    x64.je decode.unwrap_0.case1
+  unwrap_0.dispatch0:
+    x64.mov rax, 1
+    x64.mov rcx, [rbp-32]
+    x64.cmp rcx, rax
+    x64.je decode.unwrap_0.case2
+  unwrap_0.dispatch1:
+    x64.mov rax, 2
+    x64.mov rcx, [rbp-32]
+    x64.cmp rcx, rax
+    x64.je decode.unwrap_0.case0
+  unwrap_0.dispatch2:
+    x64.jmp decode.unwrap_0.merge
   unwrap_0.case0:
     x64.mov rax, [rbp-16]
     x64.mov rcx, [rax+8]
@@ -246,20 +256,10 @@ module {
   __range_ok_0:
     x64.mov [rbp-24], rcx
     x64.jmp decode.unwrap_0.merge
-  unwrap_0.cmp1:
-    x64.mov rax, [rbp-32]
-    x64.xor ecx, ecx
-    x64.cmp rax, rcx
-    x64.jne decode.unwrap_0.cmp2
   unwrap_0.case1:
     x64.mov rax, 1
     x64.mov [rbp-24], rax
     x64.jmp decode.unwrap_0.merge
-  unwrap_0.cmp2:
-    x64.mov rax, [rbp-32]
-    x64.mov rcx, 1
-    x64.cmp rax, rcx
-    x64.jne decode.unwrap_0.merge
   unwrap_0.case2:
     x64.mov rax, 2
     x64.mov [rbp-24], rax

@@ -2387,6 +2387,8 @@ public static class MonomorphizationPass {
         return new MaxonCondBrOp(mapValue(cb.Condition), cb.ThenBlock, cb.ElseBlock);
       case MaxonBrOp br:
         return new MaxonBrOp(br.Target);
+      case MaxonSwitchOp sw:
+        return new MaxonSwitchOp(sw.ScrutineeVarName, [.. sw.Intervals], sw.DefaultBlock, sw.DispatchLabelPrefix);
       case MaxonPanicOp p:
         return new MaxonPanicOp(p.Message, p.IsStdlib);
       case MaxonPanicDynamicOp pd:

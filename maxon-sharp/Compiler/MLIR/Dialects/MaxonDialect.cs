@@ -137,6 +137,7 @@ public enum MaxonOpKind {
   Max,
   CondBr,
   Br,
+  Switch,
   ScopeEnd,
   Return,
   Throw,
@@ -902,6 +903,43 @@ public sealed class MaxonBrOp(string target) : MaxonOp {
   public override string Mnemonic => $"maxon.br {Target}";
   public string Target { get; } = target;
   /// Reads nothing — a leaf op (a literal, a parameter, a var reference, or a jump).
+  public override IReadOnlyList<MaxonValue> Results => [];
+  public override IReadOnlyList<MaxonValue> Operands => [];
+}
+
+/// One closed interval of a match's switch plan and the arm that owns it. Both ends are
+/// inclusive; <see cref="long.MinValue"/> and <see cref="long.MaxValue"/> are the open ends of
+/// a `min to x` / `x to max` arm rather than sentinels — they are the values those arms match.
+public sealed record MaxonSwitchInterval(long Lo, long Hi, string TargetBlock) {
+  public override string ToString() => Lo == Hi ? $"{Lo}:{TargetBlock}" : $"{Lo}..{Hi}:{TargetBlock}";
+}
+
+/// <summary>
+/// The whole dispatch of a `match` whose every arm tests an integer — an exact value, an enum
+/// case's tag, or an integer range. It carries the plan the LOWERING knows rather than leaving
+/// a compare chain for a later pass to recognize back into a switch: the chain and the plan
+/// would then be the same fact written twice, and the recognizer's guards (zero-based ordinals
+/// only, `eq` predicates only) were that duplication's symptom.
+///
+/// <see cref="Intervals"/> is sorted by <see cref="MaxonSwitchInterval.Lo"/> and pairwise
+/// DISJOINT: arm priority is already resolved into it, so an earlier arm owns any value two
+/// arms both name and the strategy below is free to test the intervals in any order.
+///
+/// The scrutinee is named rather than passed as a value so the dispatch owns exactly ONE load
+/// of it, wherever the plan's comparisons end up. A plan is only ever built for an i64
+/// scrutinee (see Parser.TryBuildSwitchPlan), which is why no kind is carried here.
+/// </summary>
+public sealed class MaxonSwitchOp(string scrutineeVarName, List<MaxonSwitchInterval> intervals,
+    string defaultBlock, string dispatchLabelPrefix) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.Switch;
+  public override string Mnemonic =>
+    $"maxon.switch {ScrutineeVarName} [{string.Join(", ", Intervals)}] default={DefaultBlock}";
+  public string ScrutineeVarName { get; } = scrutineeVarName;
+  public List<MaxonSwitchInterval> Intervals { get; } = intervals;
+  public string DefaultBlock { get; } = defaultBlock;
+  /// Unique prefix (the match's label) for the block names the dispatch lowering mints.
+  public string DispatchLabelPrefix { get; } = dispatchLabelPrefix;
+  /// Reads nothing as an SSA value — the scrutinee is reached by name, like every var_ref.
   public override IReadOnlyList<MaxonValue> Results => [];
   public override IReadOnlyList<MaxonValue> Operands => [];
 }

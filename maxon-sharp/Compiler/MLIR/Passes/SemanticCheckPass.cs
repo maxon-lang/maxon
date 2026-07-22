@@ -447,6 +447,11 @@ public static class SemanticCheckPass {
         yield return condBr.ThenBlock;
         yield return condBr.ElseBlock;
         break;
+      case MaxonSwitchOp switchOp:
+        foreach (var target in switchOp.Intervals.Select(i => i.TargetBlock).Distinct())
+          yield return target;
+        yield return switchOp.DefaultBlock;
+        break;
     }
   }
 

@@ -88,12 +88,17 @@ module {
     x64.call mm_incref
     x64.mov rax, [rbp-64]
     x64.mov [rbp-40], rax
-    x64.jmp main.update_0.cmp0
-  update_0.cmp0:
     x64.mov rax, [rbp-40]
-    x64.mov rcx, 1
+    x64.xor ecx, ecx
     x64.cmp rax, rcx
-    x64.jne main.update_0.cmp1
+    x64.je main.update_0.case1
+  update_0.dispatch0:
+    x64.mov rax, 1
+    x64.mov rcx, [rbp-40]
+    x64.cmp rcx, rax
+    x64.je main.update_0.case0
+  update_0.dispatch1:
+    x64.jmp main.update_0.merge
   update_0.case0:
     x64.mov rax, [rbp-32]
     x64.mov rcx, [rax+8]
@@ -127,11 +132,6 @@ module {
     x64.xor eax, eax
     x64.mov [rbp-8], rax
     x64.jmp main.update_0.merge
-  update_0.cmp1:
-    x64.mov rax, [rbp-40]
-    x64.xor ecx, ecx
-    x64.cmp rax, rcx
-    x64.jne main.update_0.merge
   update_0.case1:
     x64.mov rax, [rbp-32]
     x64.test rax, rax
@@ -164,12 +164,17 @@ module {
     x64.call mm_incref
     x64.mov rsi, [rbp-64]
     x64.mov [rbp-56], rsi
-    x64.jmp main.read_0.cmp0
-  read_0.cmp0:
-    x64.mov rax, [rbp-56]
-    x64.mov rcx, 1
-    x64.cmp rax, rcx
-    x64.jne main.read_0.cmp1
+    x64.mov rdi, [rbp-56]
+    x64.xor r8d, r8d
+    x64.cmp rdi, r8
+    x64.je main.read_0.case1
+  read_0.dispatch0:
+    x64.mov rax, 1
+    x64.mov rcx, [rbp-56]
+    x64.cmp rcx, rax
+    x64.je main.read_0.case0
+  read_0.dispatch1:
+    x64.jmp main.read_0.merge
   read_0.case0:
     x64.mov rax, [rbp-48]
     x64.mov rcx, [rax+8]
@@ -235,11 +240,6 @@ module {
     x64.mov rax, [rbp-72]
     x64.epilogue
     x64.ret
-  read_0.cmp1:
-    x64.mov rax, [rbp-56]
-    x64.xor ecx, ecx
-    x64.cmp rax, rcx
-    x64.jne main.read_0.merge
   read_0.case1:
     x64.mov rax, [rbp-48]
     x64.test rax, rax

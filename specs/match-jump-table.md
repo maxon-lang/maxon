@@ -9,13 +9,12 @@ category: control-flow
 
 ## Documentation
 
-Enum match statements with 4 or more simple cases are optimized to use a jump table instead of a linear comparison chain. This provides O(1) dispatch instead of O(n) sequential comparisons.
+Enum match statements with 4 or more cases are optimized to use a jump table instead of a linear comparison chain. This provides O(1) dispatch instead of O(n) sequential comparisons.
 
-The optimization applies when:
-- The match is on an enum (simple or enum tag)
-- There are 4 or more cases
-- All cases are simple enum case patterns (no multi-pattern OR, no ranges)
-- Ordinals are dense (0 to N-1)
+The optimization applies when the enum's tags are dense enough to index directly — see
+[match-dispatch](match-dispatch.md) for the full strategy contract, which covers integer
+scrutinees as well as enums and admits `or`-lists, range arms and case sets that do not start
+at zero. The tests below pin the enum half of it.
 
 ## Tests
 

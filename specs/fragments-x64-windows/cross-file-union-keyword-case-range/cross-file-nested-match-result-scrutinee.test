@@ -50,12 +50,17 @@ module {
     x64.mov [rbp-32], rdx
     x64.mov rbx, [rbp-88]
     x64.mov [rbp-40], rbx
-    x64.jmp classify.unwrap_0.cmp0
-  unwrap_0.cmp0:
-    x64.mov rax, [rbp-40]
-    x64.xor ecx, ecx
-    x64.cmp rax, rcx
-    x64.jne classify.unwrap_0.cmp1
+    x64.mov rsi, [rbp-40]
+    x64.xor edi, edi
+    x64.cmp rsi, rdi
+    x64.je classify.unwrap_0.case0
+  unwrap_0.dispatch0:
+    x64.mov rax, 1
+    x64.mov rcx, [rbp-40]
+    x64.cmp rcx, rax
+    x64.je classify.unwrap_0.case1
+  unwrap_0.dispatch1:
+    x64.jmp classify.unwrap_0.merge
   unwrap_0.case0:
     x64.mov rcx, 16
     x64.xor edx, edx
@@ -80,11 +85,6 @@ module {
     x64.mov rcx, [rbp-32]
     x64.call mm_incref
     x64.jmp classify.unwrap_0.merge
-  unwrap_0.cmp1:
-    x64.mov rax, [rbp-40]
-    x64.mov rcx, 1
-    x64.cmp rax, rcx
-    x64.jne classify.unwrap_0.merge
   unwrap_0.case1:
     x64.mov rax, [rbp-24]
     x64.mov rcx, [rax+8]
@@ -130,12 +130,22 @@ module {
     x64.xor edi, edi
     x64.mov [rbp-72], rdi
     x64.mov [rbp-80], rbx
-    x64.jmp classify.r_0.cmp0
-  r_0.cmp0:
-    x64.mov rax, [rbp-80]
-    x64.mov rcx, 1
-    x64.cmp rax, rcx
-    x64.jne classify.r_0.cmp1
+    x64.mov r8, [rbp-80]
+    x64.xor r9d, r9d
+    x64.cmp r8, r9
+    x64.je classify.r_0.case2
+  r_0.dispatch0:
+    x64.mov rax, 1
+    x64.mov rcx, [rbp-80]
+    x64.cmp rcx, rax
+    x64.je classify.r_0.case0
+  r_0.dispatch1:
+    x64.mov rax, 2
+    x64.mov rcx, [rbp-80]
+    x64.cmp rcx, rax
+    x64.je classify.r_0.case1
+  r_0.dispatch2:
+    x64.jmp classify.r_0.merge
   r_0.case0:
     x64.mov rax, [rbp-64]
     x64.mov rcx, [rax+8]
@@ -149,11 +159,6 @@ module {
     x64.xor ebx, ebx
     x64.mov [rbp-8], rbx
     x64.jmp classify.r_0.merge
-  r_0.cmp1:
-    x64.mov rax, [rbp-80]
-    x64.mov rcx, 2
-    x64.cmp rax, rcx
-    x64.jne classify.r_0.cmp2
   r_0.case1:
     x64.mov rax, [rbp-64]
     x64.mov rcx, [rax+8]
@@ -167,11 +172,6 @@ module {
     x64.xor ebx, ebx
     x64.mov [rbp-8], rbx
     x64.jmp classify.r_0.merge
-  r_0.cmp2:
-    x64.mov rax, [rbp-80]
-    x64.xor ecx, ecx
-    x64.cmp rax, rcx
-    x64.jne classify.r_0.merge
   r_0.case2:
     x64.xor eax, eax
     x64.mov [rbp-72], rax

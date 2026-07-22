@@ -1,0 +1,167 @@
+// Test: dispatch.shape-range-arm-table
+typealias Probe = int(0 to 1000)
+typealias Result = int(0 to 100)
+
+function classify(n Probe) returns Result
+	match n 'm'
+		1 then return 1
+		2 to 5 then return 2
+		6 then return 3
+		7 then return 4
+		default then return 0
+	end 'm'
+end 'classify'
+
+function main() returns ExitCode
+	return classify(4)
+end 'main'
+---
+ExitCode: 2
+RequiredIR: ```
+=== maxon
+module {
+  func @classify(n: i64) -> i64 {
+  entry:
+    %0 = maxon.param {index = 0 : i32} {name = n} {type = i64}
+    maxon.assign %0 {var = __match_m_0} {kind = i64} {decl = 1 : i1}
+    maxon.switch __match_m_0 [1:m_0.case0, 2..5:m_0.case1, 6:m_0.case2, 7:m_0.case3] default=m_0.case4
+  m_0.case0:
+    %4 = maxon.literal {value = 1 : i64}
+    maxon.scope_end [n, __match_m_0]
+    maxon.return %4
+  m_0.case1:
+    %12 = maxon.literal {value = 2 : i64}
+    maxon.scope_end [n, __match_m_0]
+    maxon.return %12
+  m_0.case2:
+    %16 = maxon.literal {value = 3 : i64}
+    maxon.scope_end [n, __match_m_0]
+    maxon.return %16
+  m_0.case3:
+    %20 = maxon.literal {value = 4 : i64}
+    maxon.scope_end [n, __match_m_0]
+    maxon.return %20
+  m_0.case4:
+    %21 = maxon.literal {value = 0 : i64}
+    maxon.scope_end [n, __match_m_0]
+    maxon.return %21
+  m_0.merge:
+  }
+  func @main() -> i64 {
+  entry:
+    %22 = maxon.literal {value = 4 : i64}
+    %23 = maxon.call @classify %22
+    %24 = maxon.literal {value = 0 : i64}
+    %25 = maxon.binop %23, %24 {op = lt}
+    %26 = maxon.literal {value = 4294967295 : i64}
+    %27 = maxon.binop %23, %26 {op = gt}
+    %28 = maxon.binop %25, %27 {op = or}
+    maxon.cond_br %28 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    maxon.panic "panic at dispatch.shape-range-arm-table.test:16: Range check failed: value outside typealias 'ExitCode'"
+  __range_ok_0:
+    maxon.scope_end []
+    maxon.return %23
+  }
+}
+=== standard
+module {
+  func @classify(n: i64) -> u8 {
+  entry:
+    %0 = func.param n : StdI64
+    memref.store %0, __match_m_0
+    %1 = memref.load __match_m_0 : i64
+    %2 = arith.constant {value = 1 : i64}
+    %3 = arith.subi %1, %2
+    cf.switch %3 [7 cases] default=m_0.case4
+  m_0.case0:
+    %4 = arith.constant {value = 1 : i64}
+    func.return %4
+  m_0.case1:
+    %5 = arith.constant {value = 2 : i64}
+    func.return %5
+  m_0.case2:
+    %6 = arith.constant {value = 3 : i64}
+    func.return %6
+  m_0.case3:
+    %7 = arith.constant {value = 4 : i64}
+    func.return %7
+  m_0.case4:
+    %8 = arith.constant {value = 0 : i64}
+    func.return %8
+  m_0.merge:
+  }
+  func @main() -> u32 {
+  entry:
+    %9 = arith.constant {value = 4 : i64}
+    %10 = func.call @classify %9
+    %11 = arith.constant {value = 0 : i64}
+    %12 = arith.cmpi lt %10, %11
+    %13 = arith.constant {value = 4294967295 : i64}
+    %14 = arith.cmpi gt %10, %13
+    %15 = arith.ori1 %12, %14
+    cf.cond_br %15 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    %16 = memref.lea_symdata __panic_msg_0
+    %17 = std.ptr_to_i64 %16
+    std.call_runtime @mrt_panic %17
+  __range_ok_0:
+    func.return %10
+  }
+}
+=== x86
+module {
+  func @classify(n: i64) -> u8 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, 1
+    x64.sub rax, rcx
+    x64.jump_table rax, 7 cases, default=classify.m_0.case4
+  m_0.case0:
+    x64.mov rax, 1
+    x64.epilogue
+    x64.ret
+  m_0.case1:
+    x64.mov rax, 2
+    x64.epilogue
+    x64.ret
+  m_0.case2:
+    x64.mov rax, 3
+    x64.epilogue
+    x64.ret
+  m_0.case3:
+    x64.mov rax, 4
+    x64.epilogue
+    x64.ret
+  m_0.case4:
+    x64.xor eax, eax
+    x64.epilogue
+    x64.ret
+  m_0.merge:
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rcx, 4
+    x64.call classify
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+}
+```
+---
+---

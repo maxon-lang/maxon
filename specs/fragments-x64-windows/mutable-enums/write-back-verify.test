@@ -38,12 +38,17 @@ module {
     x64.call mm_incref
     x64.mov rdx, [rbp-32]
     x64.mov [rbp-24], rdx
-    x64.jmp readValue.r_0.cmp0
-  r_0.cmp0:
-    x64.mov rax, [rbp-24]
-    x64.mov rcx, 1
-    x64.cmp rax, rcx
-    x64.jne readValue.r_0.cmp1
+    x64.mov rbx, [rbp-24]
+    x64.xor esi, esi
+    x64.cmp rbx, rsi
+    x64.je readValue.r_0.case1
+  r_0.dispatch0:
+    x64.mov rax, 1
+    x64.mov rcx, [rbp-24]
+    x64.cmp rcx, rax
+    x64.je readValue.r_0.case0
+  r_0.dispatch1:
+    x64.jmp readValue.r_0.merge
   r_0.case0:
     x64.mov rax, [rbp-16]
     x64.mov rcx, [rax+8]
@@ -57,11 +62,6 @@ module {
     x64.mov rax, [rbp-32]
     x64.epilogue
     x64.ret
-  r_0.cmp1:
-    x64.mov rax, [rbp-24]
-    x64.xor ecx, ecx
-    x64.cmp rax, rcx
-    x64.jne readValue.r_0.merge
   r_0.case1:
     x64.mov rax, [rbp-16]
     x64.test rax, rax
@@ -93,22 +93,22 @@ module {
     x64.mov rsi, [rbp-8]
     x64.mov rdi, [rsi+0]
     x64.mov [rbp-16], rdi
-    x64.jmp main.mutate_0.cmp0
-  mutate_0.cmp0:
-    x64.mov rax, [rbp-16]
-    x64.mov rcx, 1
-    x64.cmp rax, rcx
-    x64.jne main.mutate_0.cmp1
+    x64.mov r8, [rbp-16]
+    x64.xor r9d, r9d
+    x64.cmp r8, r9
+    x64.je main.mutate_0.case1
+  mutate_0.dispatch0:
+    x64.mov rax, 1
+    x64.mov rcx, [rbp-16]
+    x64.cmp rcx, rax
+    x64.je main.mutate_0.case0
+  mutate_0.dispatch1:
+    x64.jmp main.mutate_0.merge
   mutate_0.case0:
     x64.mov rax, 99
     x64.mov rcx, [rbp-8]
     x64.mov [rcx+8], rax
     x64.jmp main.mutate_0.merge
-  mutate_0.cmp1:
-    x64.mov rax, [rbp-16]
-    x64.xor ecx, ecx
-    x64.cmp rax, rcx
-    x64.jne main.mutate_0.merge
   mutate_0.case1:
     x64.mov rax, [rbp-8]
     x64.test rax, rax

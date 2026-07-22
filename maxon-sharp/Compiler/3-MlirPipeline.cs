@@ -89,7 +89,6 @@ public class IrPipeline {
       sw.Restart(); ParameterRetentionAnalysisPass.Run(stdModule);         StageTimer.Record(timings, "paramRet",     sw.ElapsedMilliseconds);
       sw.Restart(); RefcountOptimizationPass.Run(stdModule);               StageTimer.Record(timings, "refcount",     sw.ElapsedMilliseconds);
       sw.Restart(); DeadStoreEliminationPass.Run(stdModule);               StageTimer.Record(timings, "dse",          sw.ElapsedMilliseconds);
-      sw.Restart(); JumpTableFormationPass.Run(stdModule);                 StageTimer.Record(timings, "jumpTab",      sw.ElapsedMilliseconds);
     } else {
       stdModule = MaxonToStandardConversion.Run(module, target);
       Logger.Debug(LogCategory.Ir, "Lowered Maxon to Standard");
@@ -98,7 +97,6 @@ public class IrPipeline {
       ParameterRetentionAnalysisPass.Run(stdModule);
       RefcountOptimizationPass.Run(stdModule);
       DeadStoreEliminationPass.Run(stdModule); // cleanup after refcount opt
-      JumpTableFormationPass.Run(stdModule);
     }
 
     // Capture standard stage

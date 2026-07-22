@@ -7092,13 +7092,14 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     return last switch {
       MaxonBrOp br => [br.Target],
       MaxonCondBrOp cb => [cb.ThenBlock, cb.ElseBlock],
+      MaxonSwitchOp sw => [.. sw.Intervals.Select(i => i.TargetBlock).Append(sw.DefaultBlock).Distinct()],
       _ => []
     };
   }
 
   private static bool EndsWithMaxonTerminator(IrBlock<MaxonOp> block) {
     var last = block.Operations.Count > 0 ? block.Operations[^1] : null;
-    return last is MaxonBrOp or MaxonCondBrOp or MaxonReturnOp or MaxonThrowOp or MaxonPanicOp;
+    return last is MaxonBrOp or MaxonCondBrOp or MaxonSwitchOp or MaxonReturnOp or MaxonThrowOp or MaxonPanicOp;
   }
 
   /// Produces the E3086 message. `definiteAssignmentFailure=true` is used when
@@ -13153,7 +13154,8 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   private static bool BlockEndsWithTerminator(IrBlock<MaxonOp> block) {
     if (block.Operations.Count == 0) return false;
     var lastOp = block.Operations[^1];
-    return lastOp is MaxonReturnOp or MaxonBrOp or MaxonCondBrOp or MaxonThrowOp or MaxonPanicOp or MaxonPanicDynamicOp;
+    return lastOp is MaxonReturnOp or MaxonBrOp or MaxonCondBrOp or MaxonSwitchOp
+      or MaxonThrowOp or MaxonPanicOp or MaxonPanicDynamicOp;
   }
 
   /// <summary>
@@ -13445,6 +13447,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         }
         TryParseSignedNumericLiteral(out var num, "expected numeric literal after '-' in match pattern");
         if (num.IsFloat) {
+          RejectFloatPatternOnIntegerScrutinee(compareKind, enumTypeName, patternLine, patternCol);
           patterns.Add(ParseFloatPatternOrRange(num.FloatValue, compareKind, seenPatternKeys, patternLine, patternCol));
         } else {
           patterns.Add(ParseIntPatternOrRange(num.IntValue, compareKind, seenPatternKeys, patternLine, patternCol));
@@ -13619,15 +13622,36 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   }
 
   private RangeBound ParseRangeEndpoint(MaxonValueKind compareKind) {
+    int endpointLine = Current().Line;
+    int endpointCol = Current().Column;
     if (!TryParseSignedNumericLiteral(out var num, $"Expected range endpoint, got '{Current().Value}'")) {
       throw new CompileError(ErrorCode.ParserExpectedExpression,
         $"Expected range endpoint, got '{Current().Value}'",
-        Current().Line, Current().Column);
+        endpointLine, endpointCol);
     }
-    if (num.IsFloat) return new FloatRangeBound(num.FloatValue);
+    if (num.IsFloat) {
+      RejectFloatPatternOnIntegerScrutinee(compareKind, enumTypeName: null, endpointLine, endpointCol);
+      return new FloatRangeBound(num.FloatValue);
+    }
     if (compareKind is MaxonValueKind.Float or MaxonValueKind.Float32)
       return new FloatRangeBound(num.IntValue);
     return new IntRangeBound(num.IntValue);
+  }
+
+  /// <summary>
+  /// A float literal can only be a pattern for a float scrutinee. Everywhere else it produced an
+  /// f64 compared against an i64 — a mismatch nothing checked, which reached the Standard
+  /// lowering as an unhandled `StdF64 → StdI64` cast and crashed the compiler (E9001) on a
+  /// program whose only fault was `2.5` in a `match` on an `int`. A range endpoint is the same
+  /// mistake wearing a second shape: `1 to 2.5` built one Int and one Float bound, which the
+  /// single-value-range check then met as a pair it had no case for.
+  /// </summary>
+  private static void RejectFloatPatternOnIntegerScrutinee(
+      MaxonValueKind compareKind, string? enumTypeName, int patternLine, int patternCol) {
+    if (compareKind is MaxonValueKind.Float or MaxonValueKind.Float32) return;
+    throw new CompileError(ErrorCode.ParserMatchTypeMismatch,
+      $"pattern type 'float' does not match scrutinee type '{enumTypeName ?? KindToTypeName(compareKind)}'",
+      patternLine, patternCol);
   }
 
   private static string RangeBoundDisplay(RangeBound bound) {
@@ -13959,15 +13983,10 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         // For associated-value enums, the tag is always i64 (raw value for int-backed, ordinal otherwise).
         var refOp = new MaxonVarRefOp(scrutTempName, compareKind);
         _currentBlock!.AddOp(refOp);
-        MaxonLiteralOp patLit;
-        bool hasAssocValues = enumCasePat.AssociatedValues is { Count: > 0 };
-        if (!hasAssocValues && enumCasePat.RawValue is double dv) {
-          patLit = new MaxonLiteralOp(dv);
-        } else if (enumCasePat.RawValue is long lv) {
-          patLit = new MaxonLiteralOp(lv);
-        } else {
-          patLit = new MaxonLiteralOp((long)enumCasePat.Ordinal);
-        }
+        var tag = EnumCasePatternTag(enumCasePat);
+        MaxonLiteralOp patLit = tag is long tagValue
+          ? new MaxonLiteralOp(tagValue)
+          : new MaxonLiteralOp((double)enumCasePat.RawValue!);
         _currentBlock!.AddOp(patLit);
         var cmpOp = new MaxonBinOp(MaxonBinOperator.Eq, refOp.Result, patLit.Result, compareKind);
         _currentBlock!.AddOp(cmpOp);
@@ -13979,6 +13998,22 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       default:
         throw new InvalidOperationException($"Unknown pattern type: {pattern.GetType().Name}");
     }
+  }
+
+  /// The INTEGER tag an enum-case pattern is compared against, or null when the case is
+  /// compared as a double instead (a float-backed enum with no associated values — its raw
+  /// value IS the f64 the compare loads).
+  ///
+  /// The three-way choice is subtle enough that it must exist once: an associated-value case
+  /// always compares its ORDINAL tag even when the enum declares raw values, an int-backed case
+  /// compares its raw value, and everything else compares its ordinal. Both the comparison
+  /// emitter and the switch-plan builder read it, so neither can form its own opinion about
+  /// what a case's tag is.
+  private static long? EnumCasePatternTag(EnumCasePattern pattern) {
+    bool hasAssociatedValues = pattern.AssociatedValues is { Count: > 0 };
+    if (!hasAssociatedValues && pattern.RawValue is double) return null;
+    if (pattern.RawValue is long rawValue) return rawValue;
+    return pattern.Ordinal;
   }
 
   private MaxonValue EmitRangeComparison(RangePattern rangePat, string scrutTempName,
@@ -14242,25 +14277,55 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   }
 
   /// <summary>
-  /// Patches the comparison chain after all cases are parsed.
-  /// Each comparison block's false branch goes to the next comparison, or default, or merge.
+  /// Finishes a match's dispatch once every arm is parsed. When every arm tests an integer
+  /// the entry block gets ONE <see cref="MaxonSwitchOp"/> carrying the plan and the emitted
+  /// comparison blocks are dropped; otherwise the comparison chain is wired up as before —
+  /// each comparison block's false branch going to the next comparison, or default, or merge.
   /// </summary>
-  private static void PatchComparisonChain(
+  private void PatchComparisonChain(
       IrBlock<MaxonOp> entryBlock, string matchLabel,
       List<IrBlock<MaxonOp>?> cmpBlocks, List<bool> caseIsDefault,
-      string mergeLabel) {
+      string mergeLabel, Dictionary<int, List<MatchPattern>> armPatterns,
+      string scrutTempName, MaxonValueKind compareKind) {
     int firstCmpIndex = -1;
     int defaultIndex = -1;
     for (int i = 0; i < caseIsDefault.Count; i++) {
       if (!caseIsDefault[i] && firstCmpIndex < 0) firstCmpIndex = i;
       if (caseIsDefault[i] && defaultIndex < 0) defaultIndex = i;
     }
+    string defaultLabel = defaultIndex >= 0 ? $"{matchLabel}.case{defaultIndex}" : mergeLabel;
+
+    var plan = TryBuildSwitchPlan(matchLabel, caseIsDefault, armPatterns, compareKind);
+    if (plan != null) {
+      entryBlock.AddOp(new MaxonSwitchOp(scrutTempName, plan, defaultLabel, matchLabel));
+
+      // The comparison blocks were emitted arm-by-arm, before the last arm revealed that the
+      // whole match is switchable. They are unreachable now — the switch names the case bodies
+      // directly — and leaving them would be the duplication this op exists to remove.
+      var deadCmpBlocks = new HashSet<IrBlock<MaxonOp>>();
+      foreach (var cmpBlock in cmpBlocks) {
+        if (cmpBlock == null) continue;
+
+        // A comparison block only ever holds a scope_end when the comparison itself allocated a
+        // managed temporary — a String or Character literal. Those patterns are exactly the ones
+        // TryBuildSwitchPlan refuses, so this is unreachable; it is checked rather than argued
+        // because dropping the block would drop the cleanup with it and leak, silently.
+        if (cmpBlock.Operations.Any(op => op is MaxonScopeEndOp))
+          throw new InvalidOperationException(
+            $"switch plan for '{matchLabel}' would discard the cleanup in '{cmpBlock.Name}': "
+            + "a switchable pattern must not allocate a managed temporary");
+
+        deadCmpBlocks.Add(cmpBlock);
+      }
+      _currentFunction!.Body.Blocks.RemoveAll(deadCmpBlocks.Contains);
+      return;
+    }
 
     // Entry block branches to first comparison (or default body if only default)
     if (firstCmpIndex >= 0) {
       entryBlock.AddOp(new MaxonBrOp($"{matchLabel}.cmp{firstCmpIndex}"));
     } else if (defaultIndex >= 0) {
-      entryBlock.AddOp(new MaxonBrOp($"{matchLabel}.case{defaultIndex}"));
+      entryBlock.AddOp(new MaxonBrOp(defaultLabel));
     }
 
     // Patch each comparison block's false target
@@ -14271,22 +14336,131 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       var condBr = (MaxonCondBrOp)cmpBlock.Operations[^1];
 
       // Find next comparison or fall to default/merge
-      string falseTarget;
       int nextCmpIndex = -1;
       for (int j = i + 1; j < cmpBlocks.Count; j++) {
         if (!caseIsDefault[j]) { nextCmpIndex = j; break; }
       }
 
-      if (nextCmpIndex >= 0) {
-        falseTarget = $"{matchLabel}.cmp{nextCmpIndex}";
-      } else if (defaultIndex >= 0) {
-        falseTarget = $"{matchLabel}.case{defaultIndex}";
-      } else {
-        falseTarget = mergeLabel;
-      }
+      string falseTarget = nextCmpIndex >= 0 ? $"{matchLabel}.cmp{nextCmpIndex}" : defaultLabel;
 
       cmpBlock.Operations.RemoveAt(cmpBlock.Operations.Count - 1);
       cmpBlock.AddOp(new MaxonCondBrOp(condBr.Condition, condBr.ThenBlock, falseTarget));
+    }
+  }
+
+  /// <summary>
+  /// Builds the sorted, disjoint interval plan a <see cref="MaxonSwitchOp"/> carries, or null
+  /// when this match cannot be a switch and must keep its comparison chain.
+  ///
+  /// A plan needs an i64 scrutinee — a `String`, a `Character` (a variable-length grapheme
+  /// cluster compared byte-wise, not a code point) and a float are all compared by something
+  /// no integer dispatch can express — and every non-default arm must contribute at least the
+  /// possibility of an interval.
+  ///
+  /// Overlap is resolved HERE, not left to the strategy: arms are walked in source order and
+  /// each one only claims the values no earlier arm already claimed, which is exactly the
+  /// first-match-wins the comparison chain gives. Downstream can then test the intervals in
+  /// any order it likes, which is what lets a jump table exist at all.
+  /// </summary>
+  private static List<MaxonSwitchInterval>? TryBuildSwitchPlan(
+      string matchLabel, List<bool> caseIsDefault,
+      Dictionary<int, List<MatchPattern>> armPatterns, MaxonValueKind compareKind) {
+    if (compareKind != MaxonValueKind.Integer) return null;
+
+    var plan = new List<MaxonSwitchInterval>();
+    for (int i = 0; i < caseIsDefault.Count; i++) {
+      if (caseIsDefault[i]) continue;
+      if (!armPatterns.TryGetValue(i, out var patterns) || patterns.Count == 0) return null;
+
+      var targetBlock = $"{matchLabel}.case{i}";
+      foreach (var pattern in patterns) {
+        if (!TryPatternInterval(pattern, out var interval)) return null;
+        if (interval is { } covered) AddPlanInterval(plan, covered.Lo, covered.Hi, targetBlock);
+      }
+    }
+
+    if (plan.Count == 0) return null;
+    MergeAdjacentPlanIntervals(plan);
+    return plan;
+  }
+
+  /// <summary>
+  /// The closed integer interval a single pattern covers. Returns false when the pattern is not
+  /// an integer test at all (the match keeps its comparison chain); returns true with a null
+  /// interval when the pattern IS an integer test that covers no value — an empty `5 upto 5`
+  /// range, which the comparison chain would emit as a condition that is never true.
+  /// </summary>
+  private static bool TryPatternInterval(MatchPattern pattern, out (long Lo, long Hi)? interval) {
+    interval = null;
+    switch (pattern) {
+      case ExactIntPattern exactInt:
+        interval = (exactInt.Value, exactInt.Value);
+        return true;
+
+      case EnumCasePattern enumCase: {
+        if (EnumCasePatternTag(enumCase) is not long tag) return false;
+        interval = (tag, tag);
+        return true;
+      }
+
+      case RangePattern range: {
+        if (range.Lower is FloatRangeBound or CharRangeBound
+            || range.Upper is FloatRangeBound or CharRangeBound) return false;
+
+        // An absent bound is `min`/`max`, which is not a sentinel: those arms really do match
+        // every value down to i64.min / up to i64.max.
+        long lo = range.Lower is IntRangeBound lowerBound ? lowerBound.Value : long.MinValue;
+        if (range.Upper is not IntRangeBound upperBound) {
+          interval = (lo, long.MaxValue);
+          return true;
+        }
+        if (!range.UpperInclusive && upperBound.Value == long.MinValue) return true;
+        long hi = range.UpperInclusive ? upperBound.Value : upperBound.Value - 1;
+        if (hi >= lo) interval = (lo, hi);
+        return true;
+      }
+
+      case ExactFloatPattern or ExactStringPattern or ExactCharPattern:
+        return false;
+
+      default:
+        throw new InvalidOperationException($"Unknown pattern type: {pattern.GetType().Name}");
+    }
+  }
+
+  /// Adds `[lo, hi] -> target` to a sorted, disjoint plan, keeping only the parts no earlier
+  /// arm already claimed. The ±1 adjustments cannot overflow: each is guarded by a strict
+  /// inequality against the value being adjusted.
+  private static void AddPlanInterval(List<MaxonSwitchInterval> plan, long lo, long hi, string targetBlock) {
+    var pieces = new List<(long Lo, long Hi)> { (lo, hi) };
+    foreach (var claimed in plan) {
+      var remaining = new List<(long Lo, long Hi)>(pieces.Count + 1);
+      foreach (var (pieceLo, pieceHi) in pieces) {
+        if (claimed.Hi < pieceLo || claimed.Lo > pieceHi) {
+          remaining.Add((pieceLo, pieceHi));
+          continue;
+        }
+        if (pieceLo < claimed.Lo) remaining.Add((pieceLo, claimed.Lo - 1));
+        if (pieceHi > claimed.Hi) remaining.Add((claimed.Hi + 1, pieceHi));
+      }
+      pieces = remaining;
+    }
+
+    foreach (var (pieceLo, pieceHi) in pieces) {
+      plan.Add(new MaxonSwitchInterval(pieceLo, pieceHi, targetBlock));
+    }
+    plan.Sort((a, b) => a.Lo.CompareTo(b.Lo));
+  }
+
+  /// Fuses touching intervals that go to the same arm, so `1 or 2 or 3` is one interval rather
+  /// than three — fewer comparisons in a linear or binary-search dispatch, identical table.
+  private static void MergeAdjacentPlanIntervals(List<MaxonSwitchInterval> plan) {
+    for (int i = plan.Count - 1; i > 0; i--) {
+      var previous = plan[i - 1];
+      if (previous.Hi == long.MaxValue) continue;
+      if (previous.Hi + 1 != plan[i].Lo || previous.TargetBlock != plan[i].TargetBlock) continue;
+      plan[i - 1] = previous with { Hi = plan[i].Hi };
+      plan.RemoveAt(i);
     }
   }
 
@@ -14376,6 +14550,10 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     var caseOuterScopes = new List<List<string>>();
     // One entry per case: non-default cases have their comparison block, default has null
     var cmpBlocks = new List<IrBlock<MaxonOp>?>();
+    // Case index → the arm's patterns, for the non-default arms only. This is the structured
+    // truth PatchComparisonChain turns into a switch plan; without it the plan would have to be
+    // reconstructed from the emitted compares, which is the duplication MaxonSwitchOp removes.
+    var armPatterns = new Dictionary<int, List<MatchPattern>>();
     var seenPatternKeys = new HashSet<string>();
     var seenEnumCases = new HashSet<string>();
     bool hasDefault = false;
@@ -14462,6 +14640,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         }
         cmpBlock.AddOp(new MaxonCondBrOp(combinedCmp, caseBodyLabel, ""));
         cmpBlocks.Add(cmpBlock);
+        armPatterns[caseIndex] = patterns;
       } else {
         cmpBlocks.Add(null);
         caseBodyBlock = _currentFunction!.Body.AddBlock(caseBodyLabel);
@@ -14522,7 +14701,8 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     // Always create merge block - case bodies that don't terminate branch here
     var mergeBlock = _currentFunction!.Body.AddBlock(mergeLabel);
 
-    PatchComparisonChain(entryBlock, matchLabel, cmpBlocks, caseIsDefault, mergeLabel);
+    PatchComparisonChain(entryBlock, matchLabel, cmpBlocks, caseIsDefault, mergeLabel,
+      armPatterns, scrutTempName, compareKind);
 
     // Wire case body blocks: branch to merge or fallthrough to next case body
     bool allTerminate = true;
@@ -15131,6 +15311,8 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     var caseBlocks = new List<IrBlock<MaxonOp>>();
     var caseIsDefault = new List<bool>();
     var cmpBlocks = new List<IrBlock<MaxonOp>?>();
+    // Case index → the arm's patterns, for the non-default arms only. See ParseMatch.
+    var armPatterns = new Dictionary<int, List<MatchPattern>>();
     var seenPatternKeys = new HashSet<string>();
     var seenEnumCases = new HashSet<string>();
     bool hasDefault = false;
@@ -15227,6 +15409,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         }
         armCmpBlock.AddOp(new MaxonCondBrOp(armCombinedCmp, armBodyLabel, ""));
         cmpBlocks.Add(armCmpBlock);
+        armPatterns[caseIndex] = patterns;
 
         _currentBlock = armBodyBlock;
         if (armPanics) {
@@ -15263,6 +15446,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         }
         cmpBlock.AddOp(new MaxonCondBrOp(combinedCmp, caseBodyLabel, ""));
         cmpBlocks.Add(cmpBlock);
+        armPatterns[caseIndex] = patterns;
       } else {
         cmpBlocks.Add(null);
         caseBodyBlock = _currentFunction!.Body.AddBlock(caseBodyLabel);
@@ -15380,7 +15564,8 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     }
 
     var mergeBlock = _currentFunction!.Body.AddBlock(mergeLabel);
-    PatchComparisonChain(entryBlock, matchLabel, cmpBlocks, caseIsDefault, mergeLabel);
+    PatchComparisonChain(entryBlock, matchLabel, cmpBlocks, caseIsDefault, mergeLabel,
+      armPatterns, scrutTempName, compareKind);
 
     _currentBlock = mergeBlock;
 
