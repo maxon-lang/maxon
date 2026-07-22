@@ -2412,7 +2412,9 @@ public static class MonomorphizationPass {
       }
       case MaxonFieldAccessOp fa: {
         var cloned = new MaxonFieldAccessOp(mapValue(fa.StructValue), sub.SubstituteName(fa.TypeName), fa.FieldName, fa.ResultKind,
-          fa.ResultStructTypeName != null ? sub.SubstituteName(fa.ResultStructTypeName) : null);
+          fa.ResultStructTypeName != null ? sub.SubstituteName(fa.ResultStructTypeName) : null) {
+          ClampNegativeSentinel = fa.ClampNegativeSentinel
+        };
         valueMap[fa.Result.Id] = cloned.Result;
         return cloned;
       }

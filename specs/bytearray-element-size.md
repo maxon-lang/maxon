@@ -33,6 +33,23 @@ built from non-constant narrow elements) is covered separately in
 post-TypeResolution pass, a capability the C# bootstrap's parse-time value-kind
 front-end lacks, so that test is `status: selfhosted`.
 
+### Every write is exactly `element_size` bytes wide — including the ERASES
+
+The stride is only half of it. An operation that VACATES a slot must erase
+exactly that slot, and an erase is a write like any other: at `element_size = 1`
+a slot is ONE byte, so erasing it with a machine word destroys the seven
+elements that follow. `insert` is where this shows, because it erases the slot
+its right-shift duplicated before writing the new element into it:
+
+```text
+var a = b"hey"
+a.insert(1, value: 88)   // -> b"hXey", NOT b"hX\0\0"
+```
+
+The tail bytes `e` and `y` had already been copied one slot right when the erase
+runs, so an over-wide erase silently overwrites live data and the array's own
+`count()` still reports the correct length — a wrong answer with no diagnostic.
+
 ## Tests
 
 <!-- test: bytearray-slice-roundtrip -->
@@ -117,6 +134,67 @@ function main() returns ExitCode
 		bytes(d) gives d.byteLength()
 	end 'i'
 	return e + i
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: bytearray-insert-preserves-tail -->
+### `insert` into a byte-string literal keeps the elements it shifted
+`b"hey"` is backed by read-only rdata, so the insert COWs it to the heap first;
+the shift and the erase then run against a 1-byte stride. The erase must clear
+one byte. An 8-byte erase wipes the just-shifted `e` and `y` and the array reads
+back `h X \0 \0` with `count() == 4` — corrupt data behind a successful exit.
+```maxon
+function main() returns ExitCode
+	var bytes = b"hey"
+	bytes.insert(1, value: 88)
+	if bytes.count() != 4 'cnt'
+		return 1
+	end 'cnt'
+	return 0 if String.from(bytes) == "hXey" else 2
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: bytearray-insert-preserves-tail-heap-backed -->
+### The same `insert`, on a `ByteArray` that was never a literal
+The twin of the test above with the bytes pushed one at a time, so the buffer is
+heap-owned from birth and no copy-on-write ever runs. It must give the identical
+answer: the erase width follows `element_size`, not where the buffer came from.
+```maxon
+function main() returns ExitCode
+	var bytes = ByteArray.create()
+	bytes.push(104)
+	bytes.push(101)
+	bytes.push(121)
+	bytes.insert(1, value: 88)
+	if bytes.count() != 4 'cnt'
+		return 1
+	end 'cnt'
+	return 0 if String.from(bytes) == "hXey" else 2
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: bytearray-insert-at-front-preserves-all -->
+### `insert(0, ...)` shifts the whole array and keeps all of it
+Inserting at the front shifts every element, so the erased slot is followed by
+the maximum number of live neighbours — five here, so an over-wide erase loses
+all five rather than the two `insert(1, ...)` loses.
+```maxon
+function main() returns ExitCode
+	var bytes = b"axbxc"
+	bytes.insert(0, value: 90)
+	if bytes.count() != 6 'cnt'
+		return 1
+	end 'cnt'
+	return 0 if String.from(bytes) == "Zaxbxc" else 2
 end 'main'
 ```
 ```exitcode

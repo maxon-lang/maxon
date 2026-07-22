@@ -52,6 +52,33 @@ buffer.reserve(100)  // Capacity is 100, length is still 0
 buffer.push(42)      // Now length is 1
 ```
 
+### Where the storage came from is never observable
+
+An array literal's elements may be materialized into read-only static data
+rather than a heap buffer, and the array then holds a borrowed view of it until
+the first write copies it out. That is an allocation strategy, not a type: a
+literal-backed array is an ordinary `Array` and answers `resize`, `reserve`,
+`push` and `count` exactly as one built by `create()` + `push` does.
+
+```text
+var a = [10, 20, 30]
+a.resize(0)   // count() == 0, and `a` is still a usable array
+a.push(7)     // count() == 1
+```
+
+### `resize` accepts only a length it can produce
+
+`resize(newLength ElementCount)` takes an `ElementCount`, which is
+`int(0 to u64.max)` — the count of elements the array will have afterwards. A
+value that cannot be a length, such as a negative literal, is not a request the
+operation can honour, and it does not: `resize` cannot report failure to its
+caller (it does not `throw`), so it PANICS. It never quietly publishes the
+impossible length, because every later `count()`, `get` and `for..in` would then
+be reasoning about an array that does not exist.
+
+The rule belongs to the operation, not to the storage: a literal-backed array
+and a pushed-into array reject the same lengths for the same reason.
+
 ## Element Access
 
 Access array elements using the `.get()` method with a zero-based index.
@@ -861,4 +888,127 @@ end 'main'
 ```
 ```exitcode
 5
+```
+
+<!-- test: array-literal-resize-to-zero -->
+Emptying a literal-backed array with `resize(0)`, then reusing it. The literal's
+elements live in read-only static data, so the array owns NO writable slots —
+but `resize(0)` asks for none, so it must simply succeed. (It used to route
+through a grow, which asked the allocator for a zero-byte buffer and panicked.)
+```maxon
+function main() returns ExitCode
+	var a = [10, 20, 30]
+	a.resize(0)
+	if a.count() != 0 'emptied'
+		return 1
+	end 'emptied'
+	a.push(7)
+	if a.count() != 1 'regrown'
+		return 2
+	end 'regrown'
+	return try a.get(0) otherwise 3
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: array-literal-resize-shrink-and-grow -->
+The same array literal shrunk to a nonzero length and grown back. The slots the
+shrink gave up read as zero when the array grows over them again — the
+capacity-slot invariant holds for a literal-backed array too.
+```maxon
+function main() returns ExitCode
+	var a = [10, 20, 30]
+	a.resize(1)
+	if a.count() != 1 'shrunk'
+		return 1
+	end 'shrunk'
+	a.resize(3)
+	if a.count() != 3 'regrown'
+		return 2
+	end 'regrown'
+	let kept = try a.get(0) otherwise 0
+	let vacated = try a.get(2) otherwise 0
+	return 0 if kept == 10 and vacated == 0 else 3
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: array-literal-resize-out-of-range-panics -->
+A length `resize` cannot produce is refused, and it is refused the same way
+whatever the array is backed by. This is the literal-backed half; the twin below
+is the same call on an array built by `push`. Publishing the length instead
+would hand every later `count()` a value no array can have.
+```maxon
+function main() returns ExitCode
+	var a = [10, 20, 30]
+	a.resize(-2)
+	print("resized to {a.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at Array.maxon:334: Array.resize: setLength OOB — reserve ensured capacity for newLength
+Stack trace:
+  in __Array_i64.resize
+  in main
+  in mrt_start
+```
+
+<!-- test: array-pushed-resize-out-of-range-panics -->
+The heap-backed twin of the test above: an array built by `push` refuses the
+same length, at the same place, with the same message.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function main() returns ExitCode
+	var a = IntArray.create()
+	a.push(10)
+	a.push(20)
+	a.push(30)
+	a.resize(-2)
+	print("resized to {a.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at Array.maxon:334: Array.resize: setLength OOB — reserve ensured capacity for newLength
+Stack trace:
+  in IntArray.resize
+  in main
+  in mrt_start
+```
+
+<!-- test: array-literal-reserve-never-shrinks -->
+`reserve` ensures capacity; it never takes any away. On a literal-backed array the
+request goes through a copy-on-write that promotes the borrowed elements into an
+owned buffer, and a request for FEWER slots than the array already holds must not
+reallocate under the elements that copy just rescued — that would publish
+`capacity() < count()`, and every read past the new capacity would be off the end
+of the allocation.
+```maxon
+function main() returns ExitCode
+	var a = [10, 20, 30]
+	a.reserve(1)
+	if a.count() != 3 'cnt'
+		return 1
+	end 'cnt'
+	if a.capacity() < a.count() 'cap'
+		return 2
+	end 'cap'
+	return try a.get(2) otherwise 3
+end 'main'
+```
+```exitcode
+30
 ```

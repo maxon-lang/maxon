@@ -1,0 +1,146 @@
+// Test: array-literal-reserve-never-shrinks
+function main() returns ExitCode
+	var a = [10, 20, 30]
+	a.reserve(1)
+	if a.count() != 3 'cnt'
+		return 1
+	end 'cnt'
+	if a.capacity() < a.count() 'cap'
+		return 2
+	end 'cap'
+	return try a.get(2) otherwise 3
+end 'main'
+---
+ExitCode: 30
+---
+// CompiledIR
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=32
+    x64.xor eax, eax
+    x64.mov rcx, 3
+    x64.xor edx, edx
+    x64.mov rbx, 8
+    x64.xor esi, esi
+    x64.lea_func rdi, [__destruct___Array_i64]
+    x64.mov r8, rdi
+    x64.mov rdx, r8
+    x64.mov rcx, 40
+    x64.mov r8, 2
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.mov r9, [rbp-8]
+    x64.xor eax, eax
+    x64.mov [r9+0], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, 3
+    x64.mov [rax+8], rcx
+    x64.mov rax, [rbp-8]
+    x64.xor ecx, ecx
+    x64.mov [rax+16], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, 8
+    x64.mov [rax+24], rcx
+    x64.mov rax, [rbp-8]
+    x64.xor ecx, ecx
+    x64.mov [rax+32], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+24]
+    x64.lea_symdata rax, [__mm_panic_element_size_zero]
+    x64.mov rdx, rax
+    x64.mov r8, rdx
+    x64.mov rdx, rcx
+    x64.xor ecx, ecx
+    x64.call maxon_bounds_check
+    x64.lea_rdata rax, [__const_array_main_a]
+    x64.mov rcx, rax
+    x64.mov rax, [rbp-8]
+    x64.mov [rax+0], rcx
+    x64.mov rax, -2
+    x64.mov rcx, [rbp-8]
+    x64.mov [rcx+16], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, 1
+    x64.call __Array_i64.reserve
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call __Array_i64.count
+    x64.mov rcx, 3
+    x64.cmp rax, rcx
+    x64.je main.cnt_0.after
+  cnt_0:
+    x64.mov rax, [rbp-8]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rax, 1
+    x64.epilogue
+    x64.ret
+  cnt_0.after:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call __Array_i64.capacity
+    x64.mov rcx, [rbp-8]
+    x64.mov [rbp-32], rax
+    x64.call __Array_i64.count
+    x64.mov rdx, [rbp-32]
+    x64.cmp rdx, rax
+    x64.jge main.cap_0.after
+  cap_0:
+    x64.mov rax, [rbp-8]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_1
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_1
+    x64.mov rax, 2
+    x64.epilogue
+    x64.ret
+  cap_0.after:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, 2
+    x64.call __Array_i64.get
+    x64.mov rcx, 3
+    x64.mov [rbp-16], rcx
+    x64.mov [rbp-24], rax
+    x64.xor eax, eax
+    x64.cmp rdx, rax
+    x64.je main.otherwise_default_continue_0
+  otherwise_default_error_0:
+    x64.mov rax, [rbp-16]
+    x64.mov [rbp-24], rax
+    x64.jmp main.otherwise_default_continue_0
+  otherwise_default_continue_0:
+    x64.mov rax, [rbp-24]
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rbx, [rbp-8]
+    x64.test rbx, rbx
+    x64.jz __nonnull_skip_2
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_2
+    x64.mov rax, [rbp-24]
+    x64.epilogue
+    x64.ret
+  }
+}
+---

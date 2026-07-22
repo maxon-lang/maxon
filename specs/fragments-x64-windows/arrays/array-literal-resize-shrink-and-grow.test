@@ -1,0 +1,197 @@
+// Test: array-literal-resize-shrink-and-grow
+function main() returns ExitCode
+	var a = [10, 20, 30]
+	a.resize(1)
+	if a.count() != 1 'shrunk'
+		return 1
+	end 'shrunk'
+	a.resize(3)
+	if a.count() != 3 'regrown'
+		return 2
+	end 'regrown'
+	let kept = try a.get(0) otherwise 0
+	let vacated = try a.get(2) otherwise 0
+	return 0 if kept == 10 and vacated == 0 else 3
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=80
+    x64.xor eax, eax
+    x64.mov rcx, 3
+    x64.xor edx, edx
+    x64.mov rbx, 8
+    x64.xor esi, esi
+    x64.lea_func rdi, [__destruct___Array_i64]
+    x64.mov r8, rdi
+    x64.mov rdx, r8
+    x64.mov rcx, 40
+    x64.mov r8, 2
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.mov r9, [rbp-8]
+    x64.xor eax, eax
+    x64.mov [r9+0], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, 3
+    x64.mov [rax+8], rcx
+    x64.mov rax, [rbp-8]
+    x64.xor ecx, ecx
+    x64.mov [rax+16], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, 8
+    x64.mov [rax+24], rcx
+    x64.mov rax, [rbp-8]
+    x64.xor ecx, ecx
+    x64.mov [rax+32], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+24]
+    x64.lea_symdata rax, [__mm_panic_element_size_zero]
+    x64.mov rdx, rax
+    x64.mov r8, rdx
+    x64.mov rdx, rcx
+    x64.xor ecx, ecx
+    x64.call maxon_bounds_check
+    x64.lea_rdata rax, [__const_array_main_a]
+    x64.mov rcx, rax
+    x64.mov rax, [rbp-8]
+    x64.mov [rax+0], rcx
+    x64.mov rax, -2
+    x64.mov rcx, [rbp-8]
+    x64.mov [rcx+16], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, 1
+    x64.call __Array_i64.resize
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call __Array_i64.count
+    x64.mov rcx, 1
+    x64.cmp rax, rcx
+    x64.je main.shrunk_0.after
+  shrunk_0:
+    x64.mov rax, [rbp-8]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rax, 1
+    x64.epilogue
+    x64.ret
+  shrunk_0.after:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, 3
+    x64.call __Array_i64.resize
+    x64.mov rcx, [rbp-8]
+    x64.call __Array_i64.count
+    x64.mov rdx, 3
+    x64.cmp rax, rdx
+    x64.je main.regrown_0.after
+  regrown_0:
+    x64.mov rax, [rbp-8]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_1
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_1
+    x64.mov rax, 2
+    x64.epilogue
+    x64.ret
+  regrown_0.after:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.xor edx, edx
+    x64.call __Array_i64.get
+    x64.xor ecx, ecx
+    x64.mov [rbp-16], rcx
+    x64.mov [rbp-24], rax
+    x64.xor eax, eax
+    x64.cmp rdx, rax
+    x64.je main.otherwise_default_continue_0
+  otherwise_default_error_0:
+    x64.mov rax, [rbp-16]
+    x64.mov [rbp-24], rax
+    x64.jmp main.otherwise_default_continue_0
+  otherwise_default_continue_0:
+    x64.mov rax, [rbp-24]
+    x64.mov [rbp-32], rax
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, 2
+    x64.call __Array_i64.get
+    x64.xor ecx, ecx
+    x64.mov [rbp-40], rcx
+    x64.mov [rbp-48], rax
+    x64.xor eax, eax
+    x64.cmp rdx, rax
+    x64.je main.otherwise_default_continue_1
+  otherwise_default_error_1:
+    x64.mov rax, [rbp-40]
+    x64.mov [rbp-48], rax
+    x64.jmp main.otherwise_default_continue_1
+  otherwise_default_continue_1:
+    x64.mov rax, [rbp-48]
+    x64.mov [rbp-56], rax
+    x64.mov rcx, 10
+    x64.mov rdx, [rbp-32]
+    x64.cmp rdx, rcx
+    x64.sete rbx
+    x64.movzx rbx, rbxb
+    x64.xor esi, esi
+    x64.mov [rbp-57], rsi
+    x64.test rbx, rbx
+    x64.je main.shortAnd_0.merge
+  shortAnd_0.rhs:
+    x64.xor eax, eax
+    x64.mov rcx, [rbp-56]
+    x64.cmp rcx, rax
+    x64.sete rdx
+    x64.movzx rdx, rdxb
+    x64.mov [rbp-57], rdx
+    x64.jmp main.shortAnd_0.merge
+  shortAnd_0.merge:
+    x64.mov rax, [rbp-57]
+    x64.test rax, rax
+    x64.je main.ternary_0.false
+  ternary_0.true:
+    x64.xor eax, eax
+    x64.mov [rbp-65], rax
+    x64.jmp main.ternary_0.merge
+  ternary_0.false:
+    x64.mov rax, 3
+    x64.mov [rbp-65], rax
+    x64.jmp main.ternary_0.merge
+  ternary_0.merge:
+    x64.mov rax, [rbp-65]
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rbx, [rbp-8]
+    x64.test rbx, rbx
+    x64.jz __nonnull_skip_2
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_2
+    x64.mov rax, [rbp-65]
+    x64.epilogue
+    x64.ret
+  }
+}
+---

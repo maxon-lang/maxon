@@ -1688,20 +1688,30 @@ public static partial class MaxonToStandardConversion {
                 }
               } else {
                 // Scalar field access
+                StdValue loaded;
                 if (fieldDef != null && valueMap[fieldAccess.StructValue] is StdStackPtr stackPtr
                     && stackPtr.VarName != null && stackVarTags.TryGetValue(stackPtr.VarName, out var faTag)) {
                   // Stack struct: load directly from BulkZero slot (no pointer indirection)
                   var faStructType = (IrStructType)module.TypeDefs[stackPtr.TypeName];
-                  var loaded = EmitLoad(newBlock, StackSlotName(faTag, faStructType, fieldDef.Offset), varTypes);
-                  valueMap[fieldAccess.Result] = loaded;
+                  loaded = EmitLoad(newBlock, StackSlotName(faTag, faStructType, fieldDef.Offset), varTypes);
                 } else if (fieldDef != null) {
-                  var loaded = EmitStructFieldLoad(newBlock, structName, fieldDef.Offset, fieldDef.Type, varTypes);
-                  valueMap[fieldAccess.Result] = loaded;
+                  loaded = EmitStructFieldLoad(newBlock, structName, fieldDef.Offset, fieldDef.Type, varTypes);
                 } else {
                   // Fallback: try loading as a named variable (legacy path)
-                  var loaded = EmitLoad(newBlock, $"{structName}.{fieldAccess.FieldName}", varTypes);
-                  valueMap[fieldAccess.Result] = loaded;
+                  loaded = EmitLoad(newBlock, $"{structName}.{fieldAccess.FieldName}", varTypes);
                 }
+                // THE CAPACITY SENTINEL STOPS HERE. A record that borrows its buffer stores a
+                // NEGATIVE capacity (-2 rdata, -1 view) to mark it non-owned, and
+                // `__ManagedMemory.capacity()` is the one read that hands that value to Maxon
+                // source — as a declared `int(0 to u64.max)` that `Array.reserve` and
+                // `ensureCapacity` immediately do arithmetic on. `minCapacity > cap` read -2 as
+                // "smaller than anything", so `[10, 20, 30].resize(0)` concluded it had to GROW
+                // to zero slots and the allocator refused the zero-byte request. A borrowed
+                // buffer owns no writable slot, so the answer that keeps every caller's
+                // arithmetic sound is 0.
+                valueMap[fieldAccess.Result] = fieldAccess.ClampNegativeSentinel
+                  ? EmitClampCapacityNonNeg(newBlock, (StdI64)loaded)
+                  : loaded;
               }
               break;
             }

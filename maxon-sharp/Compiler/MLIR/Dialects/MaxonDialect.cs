@@ -987,6 +987,19 @@ public sealed class MaxonFieldAccessOp(MaxonValue structValue, string typeName, 
   public string FieldName { get; } = fieldName;
   public MaxonValueKind ResultKind { get; } = resultKind;
   public string? ResultStructTypeName { get; set; } = resultStructTypeName;
+  /// This read hands the field's value to MAXON SOURCE, so a negative internal sentinel must be
+  /// clamped to 0 on the way out. Set only for `__ManagedMemory.capacity()`, whose result is a
+  /// declared `int(0 to u64.max)` and is then done ARITHMETIC on by `Array.reserve` /
+  /// `ensureCapacity`. The compiler's own reads of the same field are NOT this: they read the
+  /// sentinel deliberately (the COW check), or they want the buffer's addressable extent rather
+  /// than its owned slot count (`__ManagedSocket.sendFrom`'s range pre-check, which legitimately
+  /// sends out of a read-only string literal).
+  /// Copied by FunctionCloner and MonomorphizationPass — `Array.capacity()` is generic, so a clone
+  /// that dropped this would silently restore the sentinel leak. That is not left to memory: every
+  /// `Array` a program uses is a monomorphized instance, so `specs/arrays.md`'s
+  /// `array-literal-resize-to-zero` (which needs `reserve(0)` on a literal-backed `__Array_i64` to
+  /// decline to grow) fails the moment a clone loses this.
+  public bool ClampNegativeSentinel { get; init; }
   public MaxonValue Result { get; } = resultKind switch {
     MaxonValueKind.Struct => new MaxonStruct(IrContext.Current.NextId(), resultStructTypeName!),
     MaxonValueKind.Enum => new MaxonEnum(IrContext.Current.NextId(), resultStructTypeName!),

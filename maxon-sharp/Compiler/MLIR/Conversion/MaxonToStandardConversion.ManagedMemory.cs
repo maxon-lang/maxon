@@ -515,13 +515,9 @@ public static partial class MaxonToStandardConversion {
       var finalNewLen = (StdI64)EmitLoad(block, newLenVar, varTypes);
       // Clear the bit the shift vacated at the top — a bool array's slots above
       // `length` must read false, same capacity-slot invariant as every other
-      // element width.
-      var oneSlotPastBit = new StdConstI64Op(1);
-      block.AddOp(oneSlotPastBit);
-      var bitRangeEnd = new StdAddI64Op(finalNewLen, oneSlotPastBit.Result);
-      block.AddOp(bitRangeEnd);
-      EmitVacateElementRange(block, managedVarName, finalNewLen, bitRangeEnd.Result,
-        isStructElement: false, varTypes);
+      // element width. A bit-packed element is never a managed one, so this erases
+      // through the same one-slot path the other widths use.
+      EmitZeroElementSlot(block, managedVarName, finalNewLen, varTypes);
       EmitStructFieldStore(block, finalNewLen, managedVarName, ManagedFieldLength, IrType.I64, varTypes);
     } else {
       var addr = ComputeElementAddress(block, buffer, index, elemSize);
@@ -580,17 +576,11 @@ public static partial class MaxonToStandardConversion {
       // owns and the teardown walk would decref it a second time. Zeroing it also
       // gives the scalar case its documented "resize exposes zeros" behaviour.
       // See the capacity-slot invariant on EmitMmVacateManagedElements.
-      if (op.IsStructElement) {
-        var lastAddr = ComputeElementAddress(block, buffer, newLength.Result, elemSize);
-        var zeroOp2 = new StdConstI64Op(0);
-        block.AddOp(zeroOp2);
-        block.AddOp(new StdStoreIndirectOp(zeroOp2.Result, lastAddr, 0, IrType.I64));
-      } else {
-        var oneSlotPast = new StdAddI64Op(newLength.Result, oneConst.Result);
-        block.AddOp(oneSlotPast);
-        EmitVacateElementRange(block, managedVarName, newLength.Result, oneSlotPast.Result,
-          isStructElement: false, varTypes);
-      }
+      //
+      // ERASE, never vacate, for BOTH element classes: the departing element was
+      // handed to the caller or duplicated one slot down, so releasing it here
+      // would be the double-free this erase exists to prevent.
+      EmitZeroElementSlot(block, managedVarName, newLength.Result, varTypes);
 
       // Update length
       EmitStructFieldStore(block, newLength.Result, managedVarName, ManagedFieldLength, IrType.I64, varTypes);
@@ -834,6 +824,22 @@ public static partial class MaxonToStandardConversion {
 
     EmitCowCheck(block, managedVarName, varTypes, elemSize, isBitPacked: op.IsBitPacked);
 
+    // A COW promoted a BORROWED buffer to an owned copy of the live elements and set the
+    // capacity to that length — so the record may now hold MORE slots than the caller asked
+    // for, and reallocating down to the ask would strand the elements the copy just rescued
+    // outside the allocation (`[10, 20, 30].reserve(1)` published capacity 1 over a length of
+    // 3, and the vacate that `resize(1)` runs next then zeroed 16 bytes past the buffer).
+    //
+    // The shrink guard above cannot catch this: it runs BEFORE the COW, when the capacity is
+    // still the non-owned sentinel, and the clamp makes every request look like an increase.
+    // `grow` only ever grows, so take the larger of the two — for an already-owned buffer the
+    // guard has already proven the ask is the larger, and this is a no-op.
+    var capAfterCow = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldCapacity, IrType.I64, varTypes);
+    var asksForFewer = new StdCmpI64Op("lt", newCap, capAfterCow);
+    block.AddOp(asksForFewer);
+    var grownCap = new StdSelectI64Op(asksForFewer.Result, capAfterCow, newCap);
+    block.AddOp(grownCap);
+
     // Load buffer pointer (now guaranteed to be heap-allocated after COW check)
     var oldBuffer = LoadManagedBuffer(block, managedVarName, varTypes);
 
@@ -841,9 +847,9 @@ public static partial class MaxonToStandardConversion {
     StdI64 newByteSize;
     if (op.IsBitPacked) {
       // Bit-packed bool: byte size = (newCap + 7) >> 3
-      newByteSize = ComputeBitPackedByteSize(block, newCap);
+      newByteSize = ComputeBitPackedByteSize(block, grownCap.Result);
     } else {
-      var newByteSizeOp = new StdMulI64Op(newCap, elemSize);
+      var newByteSizeOp = new StdMulI64Op(grownCap.Result, elemSize);
       block.AddOp(newByteSizeOp);
       newByteSize = newByteSizeOp.Result;
     }
@@ -857,7 +863,7 @@ public static partial class MaxonToStandardConversion {
     // Update managed struct fields through heap pointer
     var newBufReload = newBufferResult;
     EmitStructFieldStore(block, newBufReload, managedVarName, ManagedFieldBuffer, IrType.I64, varTypes);
-    EmitStructFieldStore(block, newCap, managedVarName, ManagedFieldCapacity, IrType.I64, varTypes);
+    EmitStructFieldStore(block, grownCap.Result, managedVarName, ManagedFieldCapacity, IrType.I64, varTypes);
     // No write-through needed: with heap refs, all field stores go through
     // the heap pointer directly, so the caller sees changes automatically.
 
@@ -1012,64 +1018,77 @@ public static partial class MaxonToStandardConversion {
 
         block = func.Body.AddBlock(loopExitLabel);
       }
-    } else if (op.ShiftRight) {
-      // Shift right: copy from [index+count-1] down to [index], moving each one position right
-      // Effectively: for i in (count-1)..0: buffer[index+i+1] = buffer[index+i]
-      // We implement this as a memcopy of count elements starting at index, shifted by +1
-      var totalOffsetOp = new StdMulI64Op(index, elemSize);
-      block.AddOp(totalOffsetOp);
-      var srcAddr = new StdAddI64Op(buffer, totalOffsetOp.Result);
-      block.AddOp(srcAddr);
-      // Save srcAddr to a local before memcopy (rep movsb clobbers RSI/RDI/RCX)
-      var srcAddrVarName = $"__shift_src_{IrContext.Current.NextId()}";
-      EmitStore(block, srcAddr.Result, srcAddrVarName, varTypes);
-      // Dest is src + elementSize (one position to the right)
-      var dstAddr = new StdAddI64Op(srcAddr.Result, elemSize);
-      block.AddOp(dstAddr);
-      // Byte count
-      var bytesOp = new StdMulI64Op(count, elemSize);
-      block.AddOp(bytesOp);
-      // Use reverse copy for overlapping shift-right (dst > src)
-      block.AddOp(new StdMemCopyReverseOp(srcAddr.Result, dstAddr.Result, bytesOp.Result));
-      // Zero the source slot at buffer[index] to prevent the subsequent set() from
-      // decrefing a stale duplicate pointer (the original was copied to buffer[index+1])
-      var reloadedSrcAddr = EmitLoad(block, srcAddrVarName, varTypes);
-      var zeroOp = new StdConstI64Op(0);
-      block.AddOp(zeroOp);
-      block.AddOp(new StdStoreIndirectOp(zeroOp.Result, reloadedSrcAddr, 0, IrType.I64));
     } else {
-      // Shift left: copy from [index+1] forward, moving each one position left
-      var oneConst = new StdConstI64Op(1);
-      block.AddOp(oneConst);
-      var srcIndex = new StdAddI64Op(index, oneConst.Result);
-      block.AddOp(srcIndex);
-      var srcOffset = new StdMulI64Op(srcIndex.Result, elemSize);
-      block.AddOp(srcOffset);
-      var srcAddr = new StdAddI64Op(buffer, srcOffset.Result);
-      block.AddOp(srcAddr);
-      var dstOffset = new StdMulI64Op(index, elemSize);
-      block.AddOp(dstOffset);
-      var dstAddr = new StdAddI64Op(buffer, dstOffset.Result);
-      block.AddOp(dstAddr);
+      // Byte-strided elements: one bulk copy, then erase the slot the copy vacated.
+      //
+      // The vacated slot is the one whose contents now live in a NEIGHBOUR: buffer[index]
+      // for a right shift (its occupant moved to index+1), buffer[index+count] for a left
+      // one (it was overwritten from index+count+1... upward, leaving a duplicate of the
+      // last element copied). Erasing it is what stops the duplicate from being released
+      // twice — Array.insert's following set() decrefs whatever it finds in the slot, and
+      // a slot left above `length` is re-adopted by the next regrow and then decref'd
+      // again by the teardown walk. It also gives the scalar case the documented "the
+      // slots above length read zero" behaviour (the capacity-slot invariant, see
+      // EmitMmVacateManagedElements).
+      StdI64 vacatedSlot;
+      if (op.ShiftRight) {
+        vacatedSlot = index;
+      } else {
+        var pastEndOp = new StdAddI64Op(index, count);
+        block.AddOp(pastEndOp);
+        vacatedSlot = pastEndOp.Result;
+      }
+      // The slot INDEX is what survives the copy, not an address: rep movsb clobbers the
+      // scratch registers, so it is spilled here and the address recomputed afterwards.
+      var vacatedSlotVar = $"__shift_vacated_{IrContext.Current.NextId()}";
+      EmitStore(block, vacatedSlot, vacatedSlotVar, varTypes);
       var bytesOp = new StdMulI64Op(count, elemSize);
       block.AddOp(bytesOp);
-      // Spill dstAddr and byteCount to stack before memcopy — the copy operation
-      // may consume these SSA values, and we need them again to zero the trailing slot.
-      var dstAddrVarName = $"__shift_dst_{IrContext.Current.NextId()}";
-      EmitStore(block, dstAddr.Result, dstAddrVarName, varTypes);
-      var bytesVarName = $"__shift_bytes_{IrContext.Current.NextId()}";
-      EmitStore(block, bytesOp.Result, bytesVarName, varTypes);
-      block.AddOp(new StdMemCopyOp(srcAddr.Result, dstAddr.Result, bytesOp.Result));
-      // Zero the trailing slot at buffer[index+count] to prevent stale duplicate
-      // pointer from causing double-decref when the buffer is freed or reused
-      var reloadedDstAddr = EmitLoad(block, dstAddrVarName, varTypes);
-      var reloadedBytes = EmitLoad(block, bytesVarName, varTypes);
-      var lastSlotAddr = new StdAddI64Op((StdI64)reloadedDstAddr, (StdI64)reloadedBytes);
-      block.AddOp(lastSlotAddr);
-      var zeroOp = new StdConstI64Op(0);
-      block.AddOp(zeroOp);
-      block.AddOp(new StdStoreIndirectOp(zeroOp.Result, lastSlotAddr.Result, 0, IrType.I64));
+
+      if (op.ShiftRight) {
+        // Copy [index, index+count) one position right. Reverse copy because dst > src.
+        var srcAddr = ComputeElementAddress(block, buffer, index, elemSize);
+        var dstAddr = new StdAddI64Op(srcAddr, elemSize);
+        block.AddOp(dstAddr);
+        block.AddOp(new StdMemCopyReverseOp(srcAddr, dstAddr.Result, bytesOp.Result));
+      } else {
+        // Copy [index+1, index+1+count) one position left.
+        var oneConst = new StdConstI64Op(1);
+        block.AddOp(oneConst);
+        var srcIndex = new StdAddI64Op(index, oneConst.Result);
+        block.AddOp(srcIndex);
+        var srcAddr = ComputeElementAddress(block, buffer, srcIndex.Result, elemSize);
+        var dstAddr = ComputeElementAddress(block, buffer, index, elemSize);
+        block.AddOp(new StdMemCopyOp(srcAddr, dstAddr, bytesOp.Result));
+      }
+
+      EmitZeroElementSlot(block, managedVarName, (StdI64)EmitLoad(block, vacatedSlotVar, varTypes), varTypes);
     }
+  }
+
+  /// <summary>
+  /// Erase the ONE slot at <paramref name="slotIndex"/> — THE single way this file says
+  /// "a copy vacated this slot", shared by `insert`'s right shift, `shiftLeft`, and
+  /// `remove`'s left shift.
+  ///
+  /// It goes through mm_zero_element_range so the erase is exactly `element_size` bytes
+  /// wide, DERIVED from the same record field the copy's stride came from rather than
+  /// assumed. Each of these sites used to hand-roll an 8-byte store instead, which is
+  /// right only for a pointer-width element: at element_size 1 it erased the slot AND the
+  /// seven live elements after it, so `b"hey".insert(1, value: 88)` read back
+  /// `104 88 0 0` — the shifted `e` and `y` destroyed, with count() still reporting 4 and
+  /// the process exiting 0.
+  /// </summary>
+  private static void EmitZeroElementSlot(
+    IrBlock<StandardOp> block,
+    string managedVarName,
+    StdI64 slotIndex,
+    Dictionary<string, string> varTypes) {
+    var oneConst = new StdConstI64Op(1);
+    block.AddOp(oneConst);
+    var end = new StdAddI64Op(slotIndex, oneConst.Result);
+    block.AddOp(end);
+    EmitZeroElementRange(block, managedVarName, slotIndex, end.Result, varTypes);
   }
 
   /// <summary>
@@ -1565,9 +1584,33 @@ public static partial class MaxonToStandardConversion {
     StdI64 end,
     bool isStructElement,
     Dictionary<string, string> varTypes) {
+    if (!isStructElement) {
+      EmitZeroElementRange(block, managedVarName, start, end, varTypes);
+      return;
+    }
     var managedPtr = (StdI64)EmitLoad(block, managedVarName, varTypes);
-    var runtimeFn = isStructElement ? "mm_vacate_managed_elements" : "mm_zero_element_range";
-    block.AddOp(new StdCallRuntimeOp(runtimeFn, [managedPtr, start, end], null));
+    block.AddOp(new StdCallRuntimeOp("mm_vacate_managed_elements", [managedPtr, start, end], null));
+  }
+
+  /// <summary>
+  /// Erase the slots [start, end) WITHOUT releasing what was in them — the erase half of
+  /// EmitVacateElementRange on its own. That is what a MOVE wants: the element that left
+  /// the range was not dropped, it was copied into a neighbouring slot or handed to the
+  /// caller, so exactly one of the two references must survive and releasing the other
+  /// here would be the double-free. Vacating is for an element that is genuinely GONE;
+  /// this is for one that merely lives somewhere else now.
+  ///
+  /// The range is measured in ELEMENTS and the runtime scales it by the record's own
+  /// element_size, so the erase can never be a different width from the slots it names.
+  /// </summary>
+  private static void EmitZeroElementRange(
+    IrBlock<StandardOp> block,
+    string managedVarName,
+    StdI64 start,
+    StdI64 end,
+    Dictionary<string, string> varTypes) {
+    var managedPtr = (StdI64)EmitLoad(block, managedVarName, varTypes);
+    block.AddOp(new StdCallRuntimeOp("mm_zero_element_range", [managedPtr, start, end], null));
   }
 
   /// <summary>
@@ -1584,6 +1627,14 @@ public static partial class MaxonToStandardConversion {
   /// is using this call to publish them (push = set-then-setLength). The exposed
   /// slots are safe because they are already zero — see the capacity-slot
   /// invariant on EmitMmVacateManagedElements.
+  ///
+  /// A NON-OWNED buffer (capacity &lt; 0: rdata or a read-only view) therefore
+  /// admits exactly ONE length, zero, because it owns no writable slot. The
+  /// clamp below is what says so. Left unclamped, `capacity + 1` for the rdata
+  /// sentinel -2 is -1, which as the unsigned bound of the test below is
+  /// UINT64_MAX — the largest value there is, so NOTHING compares at-or-above it
+  /// and the guard admitted every length including the negative ones it exists to
+  /// refuse (`b"hey".resize(-2)` published count() == -2 and exited 0).
   /// </summary>
   private static void LowerManagedMemSetLength(
     MaxonManagedMemSetLengthOp op,
@@ -1593,7 +1644,8 @@ public static partial class MaxonToStandardConversion {
     Dictionary<string, string> varTypes,
     MaxonValue? errorFlagValue = null) {
     var managedVarName = ResolveManagedVarName(op.ManagedStruct, valueMap);
-    var capacity = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldCapacity, IrType.I64, varTypes);
+    var rawCapacity = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldCapacity, IrType.I64, varTypes);
+    var capacity = EmitClampCapacityNonNeg(block, rawCapacity);
     var newLength = (StdI64)valueMap[op.NewLength];
     // Check newLength <= capacity: reframe as newLength < capacity + 1
     var oneConst = new StdConstI64Op(1);

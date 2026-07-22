@@ -11156,7 +11156,11 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         return (true, op.Result);
       }
       case "capacity": {
-        var op = new MaxonFieldAccessOp(selfValue, "__ManagedMemory", "capacity", MaxonValueKind.Integer);
+        // The one capacity read that reaches Maxon source, so the one that clamps the
+        // non-owned-buffer sentinel away — see MaxonFieldAccessOp.ClampNegativeSentinel.
+        var op = new MaxonFieldAccessOp(selfValue, "__ManagedMemory", "capacity", MaxonValueKind.Integer) {
+          ClampNegativeSentinel = true
+        };
         _currentBlock!.AddOp(op);
         return (true, op.Result);
       }
