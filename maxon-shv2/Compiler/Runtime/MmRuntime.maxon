@@ -525,6 +525,19 @@ export function noteDestructorUsage(usage RuntimeUsage, project Project, signatu
 			end 'hasString'
 		end 'referenced'
 	end 'eachUnion'
+
+	// A REFERENCED managed generic instance's `__destruct_<mangled>` (P1.6-B2) frees its box (`__mm_free` —
+	// heap) and, for a directly-substituted String field, calls `__str_decref` — both inside the synthesized
+	// body the Maxon scan cannot see, so the bits are declared here. A String inside a nested struct/instance
+	// field is dropped by that nested destructor, so only a DIRECT substituted String turns on `usesStrDecref`.
+	for id in 0 upto signatures.genericInstanceCount() 'eachInstance'
+		if usage.neededDestructors.contains(destructorSymbol(signatures.mangleGenericInstance(id).toByteArray())) 'referenced'
+			usage.usesHeap = true
+			if signatures.genericInstanceHasStringField(id) 'hasString'
+				usage.usesStrDecref = true
+			end 'hasString'
+		end 'referenced'
+	end 'eachInstance'
 end 'noteDestructorUsage'
 
 // Grow `usage.neededDestructors` to a fixpoint over destructor NESTING: for every referenced managed
@@ -546,6 +559,15 @@ function closeDestructorNeeds(usage RuntimeUsage, project Project, signatures Pr
 				changed = true
 			end 'grew'
 		end 'eachUnion'
+		// A REFERENCED managed instance destructor whose SUBSTITUTED field is itself a nested struct/union/
+		// instance calls that field's own `__destruct_<T>`, which the module names nowhere the scan can see —
+		// so `Box with (Box with String)`, reached only through the outer cascade, still gets the inner
+		// instance destructor synthesized. Monotonic, like the struct/union closure above.
+		for id in 0 upto signatures.genericInstanceCount() 'eachInstance'
+			if usage.neededDestructors.contains(destructorSymbol(signatures.mangleGenericInstance(id).toByteArray())) and addNestedInstanceDestructors(usage, id: id, signatures: signatures) 'grew'
+				changed = true
+			end 'grew'
+		end 'eachInstance'
 	end 'fixpoint'
 end 'closeDestructorNeeds'
 
@@ -595,6 +617,23 @@ function addNestedUnionDestructors(usage RuntimeUsage, layout EnumLayout, projec
 	end 'eachCase'
 	return grew
 end 'addNestedUnionDestructors'
+
+// The instance twin of `addNestedStructDestructors` (P1.6-B2) — add the nested `__destruct_<T>` of each
+// managed SUBSTITUTED field of instance `id` (a nested struct/union/instance) to the needed set. A String
+// field's `__str_decref` and a trivial box's `__mm_decref` are leaf drops and add nothing. No `project`:
+// every fact is answered inside `signatures`, over its own interner.
+function addNestedInstanceDestructors(usage RuntimeUsage, id GenericInstanceId, signatures ProgramSignatures) returns bool
+	var grew = false
+	for i in 0 upto signatures.genericInstanceFieldCount(id) 'eachField'
+		if not signatures.genericInstanceFieldIsManaged(id, index: i) 'scalar'
+			continue
+		end 'scalar'
+		if insertIfDestructorSymbol(usage, callee: signatures.genericInstanceFieldDropCallee(id, index: i)) 'added'
+			grew = true
+		end 'added'
+	end 'eachField'
+	return grew
+end 'addNestedInstanceDestructors'
 
 // Insert `callee` into the needed set iff it is a `__destruct_<T>` symbol not already present; return
 // whether it was newly added. A `__str_decref`/`__mm_decref` callee (a leaf drop) is not a destructor and
@@ -705,18 +744,90 @@ export function installStructDestructors(module StdModule, project Project, sign
 	end 'each'
 end 'installStructDestructors'
 
-// Emit `__destruct_<Struct>(box)`:
+// Emit `__destruct_<Struct>(box)` — the field list is built here and the entry/lower/drop/free skeleton
+// runs in the shared `emitFieldCascadeDestructor`:
+//
+//   drop:  drop each managed field, in declaration order, behind a NULL-guard (a moved-out field slot is
+//          null), each through `managedFieldDropCallee`.
+//
+// A struct has NO tag — every field is always present — so the cascade drops unconditionally rather than
+// under a tag switch. It shares its skeleton with the generic-instance cascade (P1.6-B2), which is the same
+// tagless box shape over a substituted field list.
+function synthesizeStructDestructor(module StdModule, layout StructLayout, project Project, signatures ProgramSignatures)
+	var drops = ManagedFieldDropArray.create()
+	for i in 0 upto layout.fieldCount() 'eachField'
+		if not signatures.structFieldIsManaged(layout.name, index: i) 'scalarField'
+			continue
+		end 'scalarField'
+		drops.push(ManagedFieldDrop.create(layout.offsetOfField(i), callee: managedStructFieldDropCallee(layout, index: i, project: project, signatures: signatures)))
+	end 'eachField'
+	emitFieldCascadeDestructor(module, symbolName: destructorSymbol(layout.name), drops: drops)
+end 'synthesizeStructDestructor'
+
+// ⭐⭐ **THE PER-INSTANCE DESTRUCTOR CASCADE (P1.6-B2).** A generic instance is a monomorphized base struct
+// that OWNS its managed type arguments (moved in at the concrete call site), so `__destruct_<mangled>` drops
+// each SUBSTITUTED managed field then frees the box — `Box with String` drops the String, `Box with Holder`
+// drops the Holder (through its own `__destruct_Holder`), `Box with (Box with String)` drops the inner box
+// (through ITS instance destructor, which drops the String). The base struct's own `__destruct_Box` is NOT
+// what a managed instance uses: `Box`'s shared body compiles once against opaque `T` (a borrow, dropping
+// nothing), so a per-instance cascade is what makes the type-arg drop concrete. Installed for a REFERENCED
+// managed instance only (like the struct/union cascades), appended already-lowered so it is never
+// re-optimized. No `project` needed — the instance's every fact is answered inside `signatures`.
+function synthesizeGenericInstanceDestructor(module StdModule, id GenericInstanceId, signatures ProgramSignatures)
+	var drops = ManagedFieldDropArray.create()
+	for i in 0 upto signatures.genericInstanceFieldCount(id) 'eachField'
+		if not signatures.genericInstanceFieldIsManaged(id, index: i) 'scalarField'
+			continue
+		end 'scalarField'
+		drops.push(ManagedFieldDrop.create(signatures.genericInstanceFieldOffset(id, index: i), callee: signatures.genericInstanceFieldDropCallee(id, index: i)))
+	end 'eachField'
+	emitFieldCascadeDestructor(module, symbolName: destructorSymbol(signatures.mangleGenericInstance(id).toByteArray()), drops: drops)
+end 'synthesizeGenericInstanceDestructor'
+
+// ⭐ **THE PER-INSTANCE DESTRUCTOR INSTALLER (P1.6-B2)** — the generic-instance twin of
+// `installStructDestructors`: synthesize `__destruct_<mangled>` for every managed instance whose destructor
+// is REFERENCED (directly by a `decrefCalleeFor` scope-exit drop, or through a nested cascade
+// `closeDestructorNeeds` grew the set over). Appended already-lowered after the pipeline.
+export function installGenericInstanceDestructors(module StdModule, signatures ProgramSignatures, needed DestructorSet)
+	for id in 0 upto signatures.genericInstanceCount() 'each'
+		if not signatures.genericInstanceHasManagedField(id) 'noManaged'
+			continue
+		end 'noManaged'
+		if not needed.contains(destructorSymbol(signatures.mangleGenericInstance(id).toByteArray())) 'notReferenced'
+			continue
+		end 'notReferenced'
+		synthesizeGenericInstanceDestructor(module, id: id, signatures: signatures)
+	end 'each'
+end 'installGenericInstanceDestructors'
+
+// One managed field a TAGLESS box destructor must drop: its byte offset in the box, and the runtime callee
+// that releases it. The struct (P1.4a) and generic-instance (P1.6-B2) cascades each build a list of these
+// and hand it to `emitFieldCascadeDestructor`, so the entry/lower/drop/free skeleton lives in ONE place.
+type ManagedFieldDrop
+	export let offset as ByteOffset
+	export let callee as ByteArray
+
+	static function create(offset ByteOffset, callee ByteArray) returns ManagedFieldDrop
+		return Self{offset: offset, callee: callee}
+	end 'create'
+end 'ManagedFieldDrop'
+
+typealias ManagedFieldDropArray = Array with ManagedFieldDrop
+
+// Emit `<symbolName>(box)` for a TAGLESS box (a struct, or a monomorphized generic instance) — every field
+// is always present, so the cascade drops each managed field unconditionally behind a null-guard (a
+// moved-out slot is null and falls through), then frees the box:
 //
 //   entry + lower: the shared refcount RMW (`emitRefcountCheckToLastOwner`) — `rc == 0` is the last owner
 //     and branches to `drop`; otherwise the count is lowered and the box kept.
-//   drop:  drop each managed field, in declaration order, behind a NULL-guard (a moved-out field slot is
-//          null), each through `managedFieldDropCallee` — then fall to `free`.
+//   drop:  each `drops` spec through `emitNullGuardedDrop`, then fall to `free`.
 //   free:  `__mm_free(box)`; ret.
 //
-// No tag load and no case chain: a struct's fields are all live at once. Otherwise identical to the union
-// cascade, which is why both share `emitNullGuardedDrop` and the same `(i64) -> void` static-dispatch shape.
-function synthesizeStructDestructor(module StdModule, layout StructLayout, project Project, signatures ProgramSignatures)
-	let func = IrFunction.createFromStd(destructorSymbol(layout.name), returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+// A void `(i64) -> void` static-dispatch signature (the drop callee is picked statically, so there is no
+// `call_indirect` type to satisfy and no `i64` return the way v1's header destructor had). It is the same
+// skeleton the union cascade uses too, minus the tag switch — hence the shared `emitNullGuardedDrop`.
+function emitFieldCascadeDestructor(module StdModule, symbolName ByteArray, drops ManagedFieldDropArray)
+	let func = IrFunction.createFromStd(symbolName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry")
@@ -730,13 +841,9 @@ function synthesizeStructDestructor(module StdModule, layout StructLayout, proje
 	emitRefcountCheckToLastOwner(module, entry: entry, lower: lower, record: box, lastOwner: drop, ids: ids)
 
 	var cur = drop
-	for i in 0 upto layout.fieldCount() 'eachField'
-		if not signatures.structFieldIsManaged(layout.name, index: i) 'scalarField'
-			continue
-		end 'scalarField'
-		let callee = managedStructFieldDropCallee(layout, index: i, project: project, signatures: signatures)
-		cur = emitNullGuardedDrop(module, cur: cur, box: box, offset: layout.offsetOfField(i), callee: callee, ids: ids, func: func)
-	end 'eachField'
+	for spec in drops 'eachDrop'
+		cur = emitNullGuardedDrop(module, cur: cur, box: box, offset: spec.offset, callee: spec.callee, ids: ids, func: func)
+	end 'eachDrop'
 	module.setTerminator(cur, op: StdOp.branch(free.id))
 
 	let freed = ids.mint()
@@ -744,7 +851,7 @@ function synthesizeStructDestructor(module StdModule, layout StructLayout, proje
 	module.setTerminator(free, op: StdOp.retVoid)
 
 	module.functions.push(func)
-end 'synthesizeStructDestructor'
+end 'emitFieldCascadeDestructor'
 
 // Drop every MANAGED field of case `ci` from `startBlock`, each behind a NULL-guard (a moved-out slot is
 // null and must not be decref'd as a bogus pointer), then branch to `dest`. The drop callee comes off

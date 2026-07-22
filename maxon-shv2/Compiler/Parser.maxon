@@ -640,6 +640,12 @@ typealias MethodIndexMap = Map with (ByteArray, CsrIndex)
 // safe to share across the per-file parse fan-out.
 let sharedEmptyDescriptorNeeds = DescriptorNeedMap.create()
 
+// The module-level shared empty type-parameter-FEED array (P1.6-B2) every non-generic consuming function's
+// `ParamConsumeInfo` holds — a feed requires a type parameter, so such a function never fills one and it is
+// never mutated. ONE allocation for the whole compile (like `sharedEmptyDescriptorNeeds`), so a generics-free
+// program pays nothing per function OR per parser (`typeParamFeedOf` reads a missing index as `none`).
+let sharedEmptyTypeParamFeeds = TypeParamFeedArray.create()
+
 // The signals one method's body contributes to the descriptor-need fixpoint (P1.6-B1): whether it directly
 // reads `sizeof(T)`, the siblings it calls on `self`, and the token position just past its `end` (so the
 // type-body walk resumes there). Returned by `Parser.scanOneMethodDescriptorSignals`.
@@ -674,6 +680,15 @@ union ReceiverArg
 	none
 	value(id ValueId)
 end 'ReceiverArg'
+
+// ⭐ **THE CONCRETE GENERIC INSTANCE A STATIC CONSTRUCTOR CALL BUILDS (P1.6-B2)**, or `none`. Only a
+// generic-alias constructor (`StrBox.create(…)`) carries one — it is what tells the caller-side consume
+// which argument OWNS its box's managed content and must be MOVED in. Every other call (a plain free call,
+// an instance method) borrows its arguments exactly as before.
+union ConstructorInstance
+	instance(id GenericInstanceId)
+	none
+end 'ConstructorInstance'
 
 // The BOX a field access goes through, paired with the LAYOUT that says what is inside it.
 //
@@ -1185,6 +1200,7 @@ let SleepArity = 1 as ParamCount
 // `__gt_process_run(strPtr)` scheduler runtime entry (which spawns a Windows child, parks the current green
 // thread with a YIELDING wait, and returns the child's scalar exit code once it finishes).
 let RunProcessBuiltinName = b"runProcess"
+
 // `runProcess` takes exactly one STRING argument — the command line — and returns an INTEGER (the child's exit
 // code), so unlike `sleep` its result IS usable in value position.
 let RunProcessArity = 1 as ParamCount
@@ -2057,12 +2073,12 @@ export type Parser
 	// keeps a ranged alias like `ExitCode` from allocating on the hot real-parse path; only an actual
 	// generic-instance typealias — rare, and absent from the scale corpus — ever pushes an entry.
 	var genericAliasScratch as GenericAliasEntryArray
-	// The SHARED empty type-parameter-flag array (P1.6-A) the consume scan passes as `typeParamFlags` for
-	// every receiver-less function OUTSIDE a generic type — which is all of them on the generics-free
-	// corpus. It is never mutated (`paramNamesIn` skips the flag work when `collectTypeParamFlags` is false,
-	// and `paramIsTypeParamTyped` only reads it, OOB-safe), so one allocation per parser serves every
-	// non-generic function's consume scan, keeping that hot path allocation-free.
-	var emptyTypeParamFlags as BoolArray
+	// The SHARED empty type-parameter-POSITION array (P1.6-A/B2) the consume scan passes for every
+	// receiver-less function OUTSIDE a generic type — which is all of them on the generics-free corpus. It is
+	// never mutated (`paramNamesIn` skips the position work when `collectTypeParamFlags` is false, and
+	// `paramIsTypeParamTyped`/`paramTypeParamPositionAt` only read it, OOB-safe), so one allocation per parser
+	// serves every non-generic function's consume scan, keeping that hot path allocation-free.
+	var emptyTypeParamPositions as TypeParamIdArray
 	// The SHARED empty type-parameter-name list (P1.6-A) that `enclosingTypeParams` holds outside a
 	// generic type — which is every type on the generics-free corpus. `openTypeParamScope` points at it
 	// (rather than allocating an empty `uses` list) for a type with no `uses`, and `closeTypeParamScope`
@@ -2185,7 +2201,7 @@ export type Parser
 			enclosingTypeParams: ByteArrayArray.create(),
 			typeDescriptorNeeds: sharedEmptyDescriptorNeeds,
 			genericAliasScratch: GenericAliasEntryArray.create(),
-			emptyTypeParamFlags: BoolArray.create(),
+			emptyTypeParamPositions: TypeParamIdArray.create(),
 			emptyTypeParams: ByteArrayArray.create(),
 			ownedBindings: VarInfoArray.create(),
 			pendingTempDrops: ValueIdArray.create(),
@@ -2441,12 +2457,12 @@ export type Parser
 			// flags stay the SHARED empty array (⚡ no per-function `BoolArray`) and `paramNamesIn` skips the
 			// flag work — `paramIsTypeParamTyped` reads every missing index as `false`.
 			let collectTypeParamFlags = not self.enclosingTypeParams.isEmpty()
-			var typeParamFlags = self.emptyTypeParamFlags
+			var typeParamPositions = self.emptyTypeParamPositions
 			if collectTypeParamFlags 'genericScope'
-				typeParamFlags = BoolArray.create()
+				typeParamPositions = TypeParamIdArray.create()
 			end 'genericScope'
-			let paramNames = self.paramNamesIn(paramsStart, typeParamFlagsOut: typeParamFlags, collectTypeParamFlags: collectTypeParamFlags)
-			self.scanConsumeBits(funcName, paramNames: paramNames, typeParamTyped: typeParamFlags, bodyStart: self.pos, paramConsumes: paramConsumes)
+			let paramNames = self.paramNamesIn(paramsStart, typeParamPositionsOut: typeParamPositions, collectTypeParamFlags: collectTypeParamFlags)
+			self.scanConsumeBits(funcName, paramNames: paramNames, typeParamPositions: typeParamPositions, bodyStart: self.pos, paramConsumes: paramConsumes)
 		end 'receiverless'
 	end 'recordScannedSignature'
 
@@ -2464,14 +2480,21 @@ export type Parser
 	// uses and leaves the transitive case (a parameter forwarded to a consuming CALLEE — a `:` at a `(`
 	// level, or a call argument) to the borrowed-value refusal. Parens are stripped exactly as the real
 	// parse's `rhsWasBareLocalReference` strips them, so the two agree on what a bare-parameter value is.
-	// Is parameter `index` type-parameter-typed, per the flags `paramNamesIn` filled? SAFE against a short
-	// flag array: the flags are the SHARED EMPTY array outside a generic type (`collectTypeParamFlags`
-	// false), so every out-of-range index is a plain (non-type-param) parameter — false.
-	function paramIsTypeParamTyped(flags BoolArray, index ParamCount) returns bool
-		return try flags.get(index) otherwise false
+	// The type-parameter position parameter `index` was declared with (P1.6-B2), or `enclosingTypeParams.count()`
+	// (the "not a type parameter" sentinel `typeParamPositionOf` uses) when it is a plain type or out of range.
+	// SAFE against the SHARED EMPTY positions array outside a generic type (`collectTypeParamFlags` false): a
+	// missing index reads as the sentinel — a plain parameter.
+	function paramTypeParamPositionAt(positions TypeParamIdArray, index ParamCount) returns TypeParamId
+		return try positions.get(index) otherwise self.enclosingTypeParams.count()
+	end 'paramTypeParamPositionAt'
+
+	// Is parameter `index` type-parameter-typed, per the positions `paramNamesIn` filled? A position below the
+	// type-parameter count names a real `uses` parameter; the sentinel (or a short/empty array) is a plain one.
+	function paramIsTypeParamTyped(positions TypeParamIdArray, index ParamCount) returns bool
+		return self.paramTypeParamPositionAt(positions, index: index) < self.enclosingTypeParams.count()
 	end 'paramIsTypeParamTyped'
 
-	function scanConsumeBits(funcName ByteArray, paramNames ByteArrayArray, typeParamTyped BoolArray, bodyStart TokenIndex, paramConsumes ParamConsumeEntryArray)
+	function scanConsumeBits(funcName ByteArray, paramNames ByteArrayArray, typeParamPositions TypeParamIdArray, bodyStart TokenIndex, paramConsumes ParamConsumeEntryArray)
 		if paramNames.count() == 0 'noParams'
 			return
 		end 'noParams'
@@ -2480,6 +2503,13 @@ export type Parser
 		for _ in 0 upto paramNames.count() 'initBits'
 			consumed.push(false)
 		end 'initBits'
+		// The type-parameter FEED map is a fresh array pre-filled with `none` ONLY inside a generic type's
+		// body — a feed requires a type-parameter-typed field, so a top-level function and a non-generic type's
+		// method (all of them on the generics-free corpus) keep the SHARED empty array (⚡ no per-function
+		// allocation; a missing index reads as `none`). `feeds.set` below is reached only through the feed
+		// branch, which itself requires a below-count position, so the shared empty array is never mutated.
+		let genericScope = self.enclosingTypeParams.count() > 0
+		var feeds = self.initialTypeParamFeeds(paramNames.count(), genericScope: genericScope)
 		var any = false
 		// The bracket stack: `true` for a `{` (struct literal), `false` for a `(`/`[`. The innermost open
 		// bracket being a `{` is what distinguishes a struct-field `:` from a labelled-call-argument one.
@@ -2506,15 +2536,24 @@ export type Parser
 
 			if kind == TokenKind.colon and self.braceStackInnermostIsBrace(braceStack) 'fieldSep'
 				let idx = self.consumedParamAfterColon(q, paramNames: paramNames)
-				// A TYPE-PARAMETER-typed parameter is EXCLUDED (P1.6-A): `Self{value: v}` on `type Box uses
-				// T` stores `v` TRIVIALLY (an opaque 8-byte word), so the constructor does not take ownership
-				// of it — the box merely aliases it, and the caller keeps the +1. Marking it consumed would
-				// move (and leak) a managed argument the trivial destructor never drops. A scalar-field
-				// consume (a monomorphic `Self{value: v}` into an `Integer` field) is unaffected: its bit is
-				// set, but a scalar argument makes it inert at the call site anyway.
-				if idx < paramNames.count() and not self.paramIsTypeParamTyped(typeParamTyped, index: idx) 'isParam'
-					try consumed.set(idx, value: true) otherwise panic("scanConsumeBits: consumed.set OOB at {idx} despite idx < paramNames.count()")
-					any = true
+				if idx < paramNames.count() 'isParam'
+					let feedPos = self.paramTypeParamPositionAt(typeParamPositions, index: idx)
+					if feedPos < self.enclosingTypeParams.count() 'typeParamField'
+						// ⭐ **A TYPE-PARAMETER-typed store is a FEED, not a plain consume (P1.6-A/B2).**
+						// `Self{value: v}` on `type Box uses T` stores `v` into `T`, whose managed-ness the shared
+						// body cannot see (it is opaque here). P1.6-A EXCLUDED it (the box borrowed, the caller kept
+						// the +1); B2 records WHICH type parameter it feeds instead, so the CONCRETE call site — which
+						// knows the instance's argument at that position — consumes it iff that argument OWNS managed
+						// heap (`Box with String`) and borrows it otherwise (`Box with Point`, byte-identical to A).
+						try feeds.set(idx, value: TypeParamFeed.feeds(feedPos)) otherwise panic("scanConsumeBits: feeds.set OOB at {idx} despite idx < paramNames.count()")
+						any = true
+					end 'typeParamField' else 'plainField'
+						// A NON-type-parameter field store (a monomorphic `Self{value: v}` into an `Integer` field,
+						// or a direct `String`/struct field) — the callee OWNS it whatever the concrete type, so the
+						// plain consume bit is set. A scalar argument makes it inert at the call site anyway.
+						try consumed.set(idx, value: true) otherwise panic("scanConsumeBits: consumed.set OOB at {idx} despite idx < paramNames.count()")
+						any = true
+					end 'plainField'
 				end 'isParam'
 			end 'fieldSep'
 
@@ -2530,9 +2569,23 @@ export type Parser
 		end 'walk'
 
 		if any 'consumes'
-			paramConsumes.push(ParamConsumeEntry.create(funcName, info: ParamConsumeInfo.create(paramNames, bits: consumed)))
+			paramConsumes.push(ParamConsumeEntry.create(funcName, info: ParamConsumeInfo.create(paramNames, bits: consumed, feeds: feeds)))
 		end 'consumes'
 	end 'scanConsumeBits'
+
+	// The type-parameter-feed array `scanConsumeBits` starts from: the SHARED empty array outside a generic
+	// type (no feed is possible, ⚡ no allocation), or a fresh `count`-long array pre-filled with `none` inside
+	// one (which the feed branch then `set`s). Single-assignment, so it needs no cross-block `var`.
+	function initialTypeParamFeeds(count ParamCount, genericScope bool) returns TypeParamFeedArray
+		if not genericScope 'nonGeneric'
+			return sharedEmptyTypeParamFeeds
+		end 'nonGeneric'
+		var feeds = TypeParamFeedArray.create()
+		for _ in 0 upto count 'fill'
+			feeds.push(TypeParamFeed.none)
+		end 'fill'
+		return feeds
+	end 'initialTypeParamFeeds'
 
 	// ⭐ **THE TRANSITIVE LAYOUT-DESCRIPTOR-NEED FIXPOINT** (P1.6-B1) — populate `typeDescriptorNeeds` for the
 	// generic type whose body the cursor sits at. A method needs the hidden descriptor param iff it directly
@@ -2773,22 +2826,23 @@ export type Parser
 		return paramNames.count()
 	end 'paramIndexIn'
 
-	// ⭐ **READ A PARAMETER LIST IN ONE WALK (P1.6-A)** — the ordered NAMES out of the `(…)` beginning at
-	// `parenPos` (returned), and IN THE SAME PASS whether each parameter's declared type is a bare type
-	// parameter, pushed into `typeParamFlagsOut`. Peek-only (the cursor is untouched). Each parameter is
-	// `name Type`, so the first token after `(` or a top-level `,` is the name and the type runs to the
-	// next top-level `,` or the closing `)`; `skipParamType` finds that end (paren depth tracked, because a
-	// type may itself contain parens — `int(0 to 100)`, `function(X) returns Y`).
+	// ⭐ **READ A PARAMETER LIST IN ONE WALK (P1.6-A/B2)** — the ordered NAMES out of the `(…)` beginning at
+	// `parenPos` (returned), and IN THE SAME PASS the type-parameter POSITION each parameter's declared type
+	// names (the sentinel `enclosingTypeParams.count()` for a plain type), pushed into
+	// `typeParamPositionsOut`. Peek-only (the cursor is untouched). Each parameter is `name Type`, so the
+	// first token after `(` or a top-level `,` is the name and the type runs to the next top-level `,` or the
+	// closing `)`; `skipParamType` finds that end (paren depth tracked, because a type may itself contain
+	// parens — `int(0 to 100)`, `function(X) returns Y`).
 	//
-	// ⚠ **NAME AND TYPE-PARAM FLAG ARE PRODUCED TOGETHER, SO `names[i]` AND `typeParamFlags[i]` ALWAYS
-	// DESCRIBE THE SAME PARAMETER.** The consume-scan exclusion reads the flag to decide whether parameter
-	// `i` was moved (`Self{f: p}`) or merely aliased (a trivial type-param store) — a MISALIGNMENT would
-	// fire the exclusion on the wrong parameter and leak (or double-move) a value. Two independent walks
-	// would agree only by coincidence; ONE walk makes the alignment structural. When
+	// ⚠ **NAME AND TYPE-PARAM POSITION ARE PRODUCED TOGETHER, SO `names[i]` AND `positions[i]` ALWAYS
+	// DESCRIBE THE SAME PARAMETER.** The consume scan reads the position to decide whether parameter `i` was
+	// moved into a plain field (`Self{f: p}` — consumed), fed a type parameter (a concrete-site managed
+	// consume, B2), or merely aliased — a MISALIGNMENT would fire on the wrong parameter and leak or
+	// double-move. Two independent walks would agree only by coincidence; ONE walk makes it structural. When
 	// `collectTypeParamFlags` is false — every function OUTSIDE a generic type, i.e. all of them on the
-	// generics-free corpus — the flag work is skipped and `typeParamFlagsOut` is left untouched (the caller
-	// passes the SHARED empty array, ⚡ so the hot path allocates no per-function `BoolArray`).
-	function paramNamesIn(parenPos TokenIndex, typeParamFlagsOut BoolArray, collectTypeParamFlags bool) returns ByteArrayArray
+	// generics-free corpus — the position work is skipped and `typeParamPositionsOut` is left untouched (the
+	// caller passes the SHARED empty array, ⚡ so the hot path allocates no per-function array).
+	function paramNamesIn(parenPos TokenIndex, typeParamPositionsOut TypeParamIdArray, collectTypeParamFlags bool) returns ByteArrayArray
 		var names = ByteArrayArray.create()
 		var q = parenPos
 		if self.kindAt(q) != TokenKind.leftParen 'noParens'
@@ -2807,7 +2861,7 @@ export type Parser
 			let typeStart = q + 1
 			let typeEnd = self.skipParamType(typeStart)
 			if collectTypeParamFlags 'flag'
-				typeParamFlagsOut.push(self.paramTypeIsTypeParam(typeStart, typeEnd: typeEnd))
+				typeParamPositionsOut.push(self.paramTypeParamPosition(typeStart, typeEnd: typeEnd))
 			end 'flag'
 			if self.kindAt(typeEnd) != TokenKind.comma 'endList'
 				return names
@@ -2817,12 +2871,18 @@ export type Parser
 		panic("paramNamesIn: the parameter loop only exits by returning at the closing `)` or at EOF")
 	end 'paramNamesIn'
 
-	// Is the parameter type spanning `[typeStart, typeEnd)` a bare TYPE PARAMETER (P1.6-A) — a SINGLE
-	// identifier (`typeEnd == typeStart + 1`) whose text names a `uses` parameter of the enclosing type?
-	// The consume-scan exclusion's whole predicate, split out so the one walk stays readable.
-	function paramTypeIsTypeParam(typeStart TokenIndex, typeEnd TokenIndex) returns bool
-		return typeEnd == typeStart + 1 and self.kindAt(typeStart) == TokenKind.identifier and self.typeParamPositionOf(self.tokenAt(typeStart).value) < self.enclosingTypeParams.count()
-	end 'paramTypeIsTypeParam'
+	// The TYPE-PARAMETER POSITION the parameter type spanning `[typeStart, typeEnd)` names (P1.6-A/B2) — a
+	// SINGLE identifier (`typeEnd == typeStart + 1`) whose text is a `uses` parameter of the enclosing type
+	// resolves to its position; anything else yields the "not a type parameter" sentinel
+	// (`enclosingTypeParams.count()`, what `typeParamPositionOf` returns for a non-parameter name). The
+	// consume scan reads it BOTH as "is it a type parameter?" (position below count) and, for B2, as the
+	// feed position — one walk, one fact.
+	function paramTypeParamPosition(typeStart TokenIndex, typeEnd TokenIndex) returns TypeParamId
+		if typeEnd == typeStart + 1 and self.kindAt(typeStart) == TokenKind.identifier 'singleIdent'
+			return self.typeParamPositionOf(self.tokenAt(typeStart).value)
+		end 'singleIdent'
+		return self.enclosingTypeParams.count()
+	end 'paramTypeParamPosition'
 
 	// Advance past ONE parameter's TYPE — from the token AFTER the parameter's name to the token that
 	// ENDS the type: the `,` before the next parameter, the `)` closing the list, or EOF on a malformed
@@ -3471,9 +3531,10 @@ export type Parser
 	function readGenericInstanceAlias(aliasTok Token, genericOut GenericAliasEntryArray) throws ParseError
 		let baseTok = try self.consume(TokenKind.identifier)
 		try self.consume(TokenKind.with)
-		let args = try self.parseGenericInstanceArgs()
-		genericOut.push(GenericAliasEntry.create(aliasTok.value, baseName: baseTok.value, args: args))
-		self.checkGenericInstance(baseTok, args: args)
+		var args = GenericArgNodeArray.create()
+		let argCount = try self.parseGenericArgNodes(args)
+		genericOut.push(GenericAliasEntry.create(aliasTok.value, baseName: baseTok.value, argCount: argCount, args: args))
+		self.checkGenericInstance(baseTok, argCount: argCount)
 	end 'readGenericInstanceAlias'
 
 	// Record a whole-program semantic DIAGNOSTIC the pure parser detected, WITHOUT unwinding the parse
@@ -3486,49 +3547,62 @@ export type Parser
 	// The argument list of a `Base with Args` (P1.6-A) — a single arg (`Box with Integer`) or a
 	// parenthesized comma list (`Pair with (Integer, Bool)`). Each arg is an ordinary type reference,
 	// so `Box with Integer` binds `[Integer]` and `Pair with (A, B)` binds `[A, B]`.
-	function parseGenericInstanceArgs() returns MaxonTypeArray throws ParseError
-		var args = MaxonTypeArray.create()
-		if self.at(TokenKind.leftParen) 'parenList'
-			try self.consume(TokenKind.leftParen)
-			while true 'argLoop'
-				args.push(try self.parseGenericInstanceArg())
-				if not self.at(TokenKind.comma) 'doneArgs'
-					break
-				end 'doneArgs'
-				try self.consume(TokenKind.comma)
-			end 'argLoop'
-			try self.consume(TokenKind.rightParen)
-		end 'parenList' else 'singleArg'
-			args.push(try self.parseGenericInstanceArg())
+	// Parse a `Base with Args` argument LIST — `Box with Integer` (a single arg) or `Pair with (A, B)` (a
+	// parenthesized comma list) — appending its pre-order nodes to `nodes` and returning the number of
+	// TOP-LEVEL arguments (the arity `checkGenericInstance` validates).
+	function parseGenericArgNodes(nodes GenericArgNodeArray) returns FieldIndex throws ParseError
+		if not self.at(TokenKind.leftParen) 'singleArg'
+			try self.parseGenericArgNode(nodes)
+			return 1
 		end 'singleArg'
-		return args
-	end 'parseGenericInstanceArgs'
+		try self.consume(TokenKind.leftParen)
+		var count = 0 as FieldIndex
+		while true 'argLoop'
+			try self.parseGenericArgNode(nodes)
+			count = count + 1
+			if not self.at(TokenKind.comma) 'doneArgs'
+				break
+			end 'doneArgs'
+			try self.consume(TokenKind.comma)
+		end 'argLoop'
+		try self.consume(TokenKind.rightParen)
+		return count
+	end 'parseGenericArgNodes'
 
-	// ONE generic-instance argument (P1.6-A) — an ordinary type reference. A NESTED instance
-	// (`Box with (Box with Integer)`) is refused with a positioned diagnostic rather than parsed: an
-	// instance value is a managed struct box the trivial destructor does not drop, so nesting it is the
-	// same soundness question a managed argument is, deferred to slice B's descriptors.
-	function parseGenericInstanceArg() returns MaxonType throws ParseError
-		let arg = try self.parseTypeReference()
-		if self.at(TokenKind.with) 'nested'
-			let tok = self.current()
-			throw ParseError.unsupported("a NESTED generic instance as a type argument (`Base with (Inner with X)`) — an instance value is a managed struct box the trivial destructor does not drop, deferred to P1.6-B", line: tok.line, column: tok.column)
+	// ⭐ **ONE generic-instance argument (P1.6-A/B2)** — a LEAF type reference (`Integer`, `Point`,
+	// `String`), or a NESTED instance `Inner with (…)` now that managed instances are owned and dropped. A
+	// nested instance's gid is not known at parse time (interning lives in `recordGenericAlias`), so it is
+	// FLATTENED pre-order: an `instanceHeader(base, k)` node followed by its `k` args' nodes. It is VALIDATED
+	// here, at its own `with`, so a malformed nested base (`Box with (Plain with Integer)`, wrong arity) is
+	// diagnosed with the tolerant sweep's index-complete answer, exactly as the outer instance is
+	// (`checkGenericInstance` records, never throws). The header is pushed BEFORE its sub-args (parsed into a
+	// temp so the header's count is known), preserving pre-order.
+	function parseGenericArgNode(nodes GenericArgNodeArray) throws ParseError
+		if self.at(TokenKind.identifier) and self.kindAt(self.pos + 1) == TokenKind.with 'nested'
+			let baseTok = try self.consume(TokenKind.identifier)
+			try self.consume(TokenKind.with)
+			var subNodes = GenericArgNodeArray.create()
+			let subCount = try self.parseGenericArgNodes(subNodes)
+			self.checkGenericInstance(baseTok, argCount: subCount)
+			nodes.push(GenericArgNode.instanceHeader(baseTok.value, argCount: subCount))
+			nodes.append(subNodes)
+			return
 		end 'nested'
-		return arg
-	end 'parseGenericInstanceArg'
+		nodes.push(GenericArgNode.leaf(try self.parseTypeReference()))
+	end 'parseGenericArgNode'
 
-	// ⭐ **CHECK A `Base with Args` INSTANTIATION (P1.6-A)** — reads the whole-program index (complete in
-	// the real parse). Three rejections, in the order the reader most wants to hear them, each RECORDED as
-	// a diagnostic (not thrown — see `readGenericInstanceAlias`):
-	//   1. `Base` is not a generic type — E2003-equivalent "has no associated types";
-	//   2. wrong arity — `Pair with Integer` for a two-parameter `Pair`;
-	//   3. a MANAGED argument — the soundness gate for the trivial shared destructor.
-	// One diagnostic per instantiation: the first issue found is recorded and the check returns, so a
-	// non-generic base does not also report a spurious arity or managed-arg error against the same site.
-	function checkGenericInstance(baseTok Token, args MaxonTypeArray)
+	// ⭐ **CHECK A `Base with Args` INSTANTIATION (P1.6-A/B2)** — reads the whole-program index (complete in
+	// the real parse). Two rejections, in the order the reader most wants to hear them, each RECORDED as a
+	// diagnostic (not thrown — see `readGenericInstanceAlias`):
+	//   1. `Base` is not a generic type — E2055 "has no associated types";
+	//   2. wrong arity — `Pair with Integer` for a two-parameter `Pair` (E2056).
+	// The P1.6-A managed-argument rejection (E2057) is GONE: B2 owns and drops managed type arguments, so a
+	// String / managed-struct / nested-instance argument is now legal. A nested instance validates itself at
+	// its own `with` (`parseGenericInstanceArg`), so this checks ONE level.
+	function checkGenericInstance(baseTok Token, argCount FieldIndex)
 		match self.signatures.structOf(baseTok.value) 'base'
 			undeclared then self.recordBaseNotGeneric(baseTok)
-			declared(layout) then self.checkGenericInstanceAgainst(layout, baseTok: baseTok, args: args)
+			declared(layout) then self.checkGenericInstanceAgainst(layout, baseTok: baseTok, argCount: argCount)
 		end 'base'
 	end 'checkGenericInstance'
 
@@ -3540,68 +3614,19 @@ export type Parser
 		self.recordArtifactDiagnostic(ErrorCode.genericBaseNotGeneric, message: "Type '{String.from(baseTok.value)}' has no associated types", tok: baseTok)
 	end 'recordBaseNotGeneric'
 
-	// The declared-base half of `checkGenericInstance` — arity, then per-argument managed rejection.
-	function checkGenericInstanceAgainst(layout StructLayout, baseTok Token, args MaxonTypeArray)
+	// The declared-base half of `checkGenericInstance` — base-is-generic, then arity. The P1.6-A per-argument
+	// managed rejection is GONE (B2 owns and drops managed type arguments).
+	function checkGenericInstanceAgainst(layout StructLayout, baseTok Token, argCount FieldIndex)
 		if layout.typeParamCount() == 0 'notGeneric'
 			self.recordBaseNotGeneric(baseTok)
 			return
 		end 'notGeneric'
 
-		if args.count() != layout.typeParamCount() 'wrongArity'
-			self.recordArtifactDiagnostic(ErrorCode.genericArityMismatch, message: "generic type '{String.from(baseTok.value)}' expects {layout.typeParamCount()} type argument(s), but {args.count()} were supplied", tok: baseTok)
+		if argCount != layout.typeParamCount() 'wrongArity'
+			self.recordArtifactDiagnostic(ErrorCode.genericArityMismatch, message: "generic type '{String.from(baseTok.value)}' expects {layout.typeParamCount()} type argument(s), but {argCount} were supplied", tok: baseTok)
 			return
 		end 'wrongArity'
-
-		for arg in args 'eachArg'
-			if self.genericArgIsManaged(arg) 'managed'
-				self.recordArtifactDiagnostic(ErrorCode.genericManagedArg, message: "generic type argument '{self.genericArgDisplay(arg)}' of '{String.from(baseTok.value)}' is a managed type (a String, or a struct with a managed field), which is not yet supported (deferred to P1.6-B)", tok: baseTok)
-				return
-			end 'managed'
-		end 'eachArg'
 	end 'checkGenericInstanceAgainst'
-
-	// ⭐ **IS A TYPE ARGUMENT MANAGED (P1.6-A)?** — the soundness boundary that keeps the trivial shared
-	// destructor correct. A `String` is managed; a struct that has ANY managed field is managed; a
-	// scalar (int/bool/float/ExitCode, a ranged alias, a payload-free enum) and a trivial (all-scalar)
-	// struct are NOT. It reads the whole-program index for a struct arg's fields — complete in the real
-	// parse, where this runs.
-	function genericArgIsManaged(arg MaxonType) returns bool
-		let tag = maxonTypeTag(arg)
-		if tag == ValueTypeTag.string 'stringArg'
-			return true
-		end 'stringArg'
-		// A struct argument (a bare `Point`) arrives as `named` — `parseTypeReference` re-tags only the
-		// enclosing type's own name to `structRef`, so an OTHER struct stays `named` until resolution. A
-		// `structRef` arg (a `Self` argument) is handled by the same name lookup. Both carry an id in this
-		// file's interner; a `named` that is NOT a declared struct (a ranged alias, an enum) is trivial.
-		if tag == ValueTypeTag.named or tag == ValueTypeTag.structRef 'namedOrStruct'
-			return self.namedArgStructHasManagedField(typeNameIdOf(arg))
-		end 'namedOrStruct'
-		// Primitives, `ExitCode`, a type parameter (opaque i64), and a generic instance (rejected at
-		// parse as a nested arg before it reaches here) are all NON-managed by this boundary.
-		return false
-	end 'genericArgIsManaged'
-
-	// Does the type named by `id` (a file-local interner id) denote a declared struct with a managed
-	// field? False for every non-struct name (a ranged alias, an enum, an unknown) — those are trivial.
-	function namedArgStructHasManagedField(id TypeNameId) returns bool
-		let name = try self.artifact.typeNames.nameOf(id) otherwise panic("namedArgStructHasManagedField: a `named`/`structRef` arg's id is not in this file's interner — parseTypeReference interned it from a name in the same table")
-		return self.signatures.containsStruct(name) and self.signatures.structHasManagedField(name)
-	end 'namedArgStructHasManagedField'
-
-	// The display name of a type argument for the managed-argument diagnostic (P1.6-A) — the builtin's
-	// name for a `String`, the struct/type name for a `named`/`structRef`, else the resolved-primitive
-	// kind (`typeTagName`), which is all a scalar needs.
-	function genericArgDisplay(arg MaxonType) returns String
-		let tag = maxonTypeTag(arg)
-		if tag == ValueTypeTag.string 'stringArg'
-			return typeTagName(ValueTypeTag.string)
-		end 'stringArg'
-		if tag == ValueTypeTag.named or tag == ValueTypeTag.structRef 'namedArg'
-			return String.from(try self.artifact.typeNames.nameOf(typeNameIdOf(arg)) otherwise panic("genericArgDisplay: a `named`/`structRef` arg's id is not in this file's interner"))
-		end 'namedArg'
-		return typeTagName(tag)
-	end 'genericArgDisplay'
 
 	// Parse `function(paramTypes) [returns T]` on a typealias RHS (P1.5-A1), the cursor sitting on
 	// `function`. A1 stores only the RETURN type — an indirect call needs it to type its result; arg-type
@@ -4853,22 +4878,28 @@ export type Parser
 	// the SWEEP that recorded them ran before the function alias was known: a call RESULT
 	// (`returnTypeOf` → `let f = pickDouble()`) and a struct-FIELD read (`fieldTypeOf` → `let f = h.op`).
 	// `parseTypeReference` already re-tags a PARAMETER/return/annotation directly (the sweep is complete
-	// by the real parse), so this catches only the sweep-sourced types. A `named` that is NOT a function
-	// alias, and every non-`named` type, pass through untouched — so this is idempotent and safe to fold
-	// alongside `resolveNamedStruct`/`resolveFloatAliasType` (a name is a struct, a float alias, a
-	// function alias or a ranged int, never two of them).
-	function resolveFunctionAlias(t MaxonType) returns MaxonType
+	// by the real parse), so this catches only the sweep-sourced types. A `named` that is neither a function
+	// alias (`function`) NOR a generic-instance alias (`genericInstance(gid)`, P1.6-B2 — `returns StrBox`, so
+	// `let b = make()` binds a real generic instance with its type-arg managed drop, not an opaque `named` a
+	// field access rejects), and every non-`named` type, pass through untouched. The SWEEP records a return
+	// type before the index knows its aliases, so both arrive here `named`; a name is a struct, a float
+	// alias, a function alias, a generic alias or a ranged int — NEVER two — so ONE `nameOf` decides which,
+	// idempotent and foldable alongside `resolveNamedStruct`/`resolveFloatAliasType`.
+	function resolveNamedAlias(t MaxonType) returns MaxonType
 		if maxonTypeTag(t) != ValueTypeTag.named 'notNamed'
 			return t
 		end 'notNamed'
 
 		let id = typeNameIdOf(t)
-		let name = try self.artifact.typeNames.nameOf(id) otherwise panic("resolveFunctionAlias: a `named` type's id is not in this file's interner — `parseTypeReference`/`fieldTypeOf` interned it from a name in the same table")
+		let name = try self.artifact.typeNames.nameOf(id) otherwise panic("resolveNamedAlias: a `named` type's id is not in this file's interner — `parseTypeReference`/`fieldTypeOf` interned it from a name in the same table")
 		if self.signatures.isFunctionAlias(name) 'fa'
 			return MaxonType.function(id)
 		end 'fa'
+		if self.signatures.isGenericAlias(name) 'genericAlias'
+			return MaxonType.genericInstance(self.signatures.genericAliasInstance(name))
+		end 'genericAlias'
 		return t
-	end 'resolveFunctionAlias'
+	end 'resolveNamedAlias'
 
 	// `resolveNamedStruct` folded over a parameter-type list — the whole struct-`named` → `structRef`
 	// rewrite for one function's parameters, done ONCE after they are parsed so every downstream reader
@@ -5971,7 +6002,7 @@ export type Parser
 			// P1.5-B2b: `try await p` — rewrite the `await` op into a `tryAwait` defining the error flag,
 			// exactly as `call` → `tryCall`. The awaited callee (recovered from the promise) is returned for
 			// the desugar's E3055/E3059 checks and its `otherwise` error-type binding.
-			await(result, promise) gives self.commitTryAwaitRewrite(func, opIdx: opIdx, result: result, flag: flag, promise: promise)
+			await (result, promise) gives self.commitTryAwaitRewrite(func, opIdx: opIdx, result: result, flag: flag, promise: promise)
 			// Only a DIRECT `call` or an `await` can be `try`ed. An `indirectCall`/`functionRef` (P1.5-A1) is
 			// never throwing — a throwing function cannot be a function value (E3101) — an `asyncCall` (a spawn)
 			// is not the throwing operation (the AWAIT is), and a `tryAwait` cannot be a fresh try target. All
@@ -6631,6 +6662,14 @@ export type Parser
 		if tagIsStructRef(tag) 'struct'
 			return managedFieldDropCallee(self.signatures, typeNames: self.artifact.typeNames, fieldType: self.typeOf(value))
 		end 'struct'
+		// ⭐ A GENERIC-INSTANCE box (`Box with String`, P1.6-B2) drops through its own `__destruct_<mangled>`
+		// cascade when the instance owns managed heap, else the trivial `__mm_decref`. The gid is on the value's
+		// name column (the same access `materializeLayoutArg` reads at lowering); the drop callee is decided
+		// INSIDE `ProgramSignatures` over the instance's own registry/interner — a trivial instance (`IntBox`)
+		// answers `__mm_decref`, byte-identical to the pre-B2 fall-through, so existing goldens do not move.
+		if tag == ValueTypeTag.genericInstance 'instance'
+			return self.signatures.genericInstanceBoxDropCallee(self.valueNameId(value))
+		end 'instance'
 		// ⚠ **THE `named` PRE-CHECK IS A HOT-PATH ALLOCATION GUARD, NOT A TIDY EARLY RETURN** — the exact
 		// one `valueIsUnion` documents. This runs for EVERY dropped owned value (an interpolation buffer),
 		// and `enumMatchFor` returns a `DeclaredEnum` — a heap-boxed Maxon union VALUE even for its
@@ -11722,10 +11761,22 @@ export type Parser
 	function parseQualifiedCall(func IrFunction) returns ValueId throws ParseError
 		let typeTok = try self.consume(TokenKind.identifier)
 		try self.consume(TokenKind.dot)
-		let result = try self.parseCallNamed(func, callee: qualifiedMethodName(self.qualifiedCallBaseName(typeTok.value), methodName: self.current().value), anchor: typeTok, receiver: ReceiverArg.none, resultUsed: true)
+		let result = try self.parseCallNamed(func, callee: qualifiedMethodName(self.qualifiedCallBaseName(typeTok.value), methodName: self.current().value), anchor: typeTok, receiver: ReceiverArg.none, resultUsed: true, constructorInstance: self.constructorInstanceOf(typeTok.value))
 		self.retypeGenericAliasConstructorResult(result, aliasName: typeTok.value)
 		return result
 	end 'parseQualifiedCall'
+
+	// The concrete instance a `Type.method(…)` call constructs (P1.6-B2) — an `instance(gid)` when `Type` is
+	// a generic-instance alias (`StrBox`), so the caller-side consume can move its managed arguments into the
+	// owning box; `none` for a plain type's static method. It reads the whole-program index, complete in the
+	// real parse (during the tolerant sweep `isGenericAlias` answers no, so the consume simply does not fire —
+	// which is sound: the sweep's artifact is discarded).
+	function constructorInstanceOf(baseName ByteArray) returns ConstructorInstance
+		if self.signatures.isGenericAlias(baseName) 'genericAlias'
+			return ConstructorInstance.instance(self.signatures.genericAliasInstance(baseName))
+		end 'genericAlias'
+		return ConstructorInstance.none
+	end 'constructorInstanceOf'
 
 	// ⭐ **A GENERIC-ALIAS CONSTRUCTOR'S RESULT IS THE INSTANCE, not the base struct (P1.6-B1).**
 	// `BoolSizer.create(…)` links to `Sizer.create`, which returns `Self` — the BASE struct `Sizer`
@@ -11860,7 +11911,7 @@ export type Parser
 
 		try self.requireSelfForDescriptorForwarding(base, memberTok: memberTok)
 
-		return try self.parseCallNamed(func, callee: qualifiedMethodName(base.layout.name, methodName: memberTok.value), anchor: baseTok, receiver: ReceiverArg.value(base.box), resultUsed: resultUsed)
+		return try self.parseCallNamed(func, callee: qualifiedMethodName(base.layout.name, methodName: memberTok.value), anchor: baseTok, receiver: ReceiverArg.value(base.box), resultUsed: resultUsed, constructorInstance: ConstructorInstance.none)
 	end 'dispatchMethodOnBase'
 
 	// ⚠ **B1 FORWARDS A LAYOUT DESCRIPTOR ONLY FROM `self`, NOT FROM A `Self`-RETURNING RESULT** (P1.6-B1). A
@@ -12597,6 +12648,16 @@ export type Parser
 		let declared = self.signatures.fieldTypeOf(layout.name, index: index, into: self.artifact.typeNames)
 		let offset = layout.offsetOfField(index)
 		let result = self.emitIndirectLoad(declared, box: box, offset: offset, storageType: self.fieldStorageType(declared), range: range)
+
+		// ⭐ **RETYPE-OF-T AT A CONCRETE FIELD READ (P1.6-B2).** A `b.value` read on a concrete `Box with String`
+		// loads a field the shared body typed opaque `T` (`typeParameter`). Retype the result to the instance's
+		// SUBSTITUTED concrete argument (`String`) so it is usable as what it actually is — but ONLY the type
+		// moves: the read is a BORROW (`emitFieldLoad` never marks it owned-heap), so the box keeps its +1 and
+		// drops the value at ITS scope exit; a `let s = b.value` re-reads a live pointer and is never
+		// double-dropped. `adoptType` re-interns any named argument into this file's interner.
+		if maxonTypeTag(declared) == ValueTypeTag.typeParameter and self.tagOf(box) == ValueTypeTag.genericInstance 'concreteTypeParamRead'
+			self.retypeValue(result, valueType: self.signatures.adoptType(self.signatures.substitutedInstanceArg(self.valueNameId(box), position: typeNameIdOf(declared)), into: self.artifact.typeNames))
+		end 'concreteTypeParamRead'
 
 		// ⭐ **RECORD A BOXED-UNION-CANDIDATE FIELD READ**, so a THROW of it can MOVE it out of the container
 		// (`emitThrowError` nulls this slot — shv2's only transfer for a borrowed error). Gated on the `named`
@@ -13804,8 +13865,9 @@ export type Parser
 	// here and not in a later pass.
 	function parseCall(func IrFunction, resultUsed bool) returns ValueId throws ParseError
 		let calleeTok = self.current()
-		// A free call has no receiver: there is no value to its left.
-		return try self.parseCallNamed(func, callee: calleeTok.value, anchor: calleeTok, receiver: ReceiverArg.none, resultUsed: resultUsed)
+		// A free call has no receiver and constructs no generic instance: there is no value to its left, and
+		// a generic type is instantiated only through a `Type.method` qualified call.
+		return try self.parseCallNamed(func, callee: calleeTok.value, anchor: calleeTok, receiver: ReceiverArg.none, resultUsed: resultUsed, constructorInstance: ConstructorInstance.none)
 	end 'parseCall'
 
 	// The call parser proper, taking the callee's NAME rather than reading it — because two call
@@ -13818,7 +13880,7 @@ export type Parser
 	// caller has already consumed any qualification. `anchor` is the token diagnostics point at,
 	// which for a qualified call is the TYPE name — the start of what the user wrote, and the same
 	// anchor the span runs from.
-	function parseCallNamed(func IrFunction, callee ByteArray, anchor Token, receiver ReceiverArg, resultUsed bool) returns ValueId throws ParseError
+	function parseCallNamed(func IrFunction, callee ByteArray, anchor Token, receiver ReceiverArg, resultUsed bool, constructorInstance ConstructorInstance) returns ValueId throws ParseError
 		try self.consume(TokenKind.identifier)
 		try self.consume(TokenKind.leftParen)
 
@@ -13885,7 +13947,7 @@ export type Parser
 			return try self.emitRunProcess(args, calleeTok: anchor)
 		end 'runProcessBuiltin'
 
-		return try self.emitCall(callee, anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, rparenTok: rparenTok, resultUsed: resultUsed)
+		return try self.emitCall(callee, anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, rparenTok: rparenTok, resultUsed: resultUsed, constructorInstance: constructorInstance)
 	end 'parseCallNamed'
 
 	// `trunc(x)` — **THE f64 → int BRIDGE**, and a compiler BUILTIN rather than a stdlib function.
@@ -14080,12 +14142,13 @@ export type Parser
 	// The result is minted BEFORE the op is appended, because the op stores its id — and it is
 	// minted through `mintCallResult`, which can REFUSE (a void call in value position), so nothing
 	// is emitted for a call the program is not allowed to make.
-	function emitCall(callee ByteArray, anchor Token, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, rparenTok Token, resultUsed bool) returns ValueId throws ParseError
+	function emitCall(callee ByteArray, anchor Token, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, rparenTok Token, resultUsed bool, constructorInstance ConstructorInstance) returns ValueId throws ParseError
 		let result = try self.mintCallResult(callee, anchor: anchor, resultUsed: resultUsed)
-		// The CALLER SIDE of consume-by-use (P1.4a wave 2): an owned argument at a position the callee
-		// CONSUMES is moved (poisoned / drained); a borrowed one is refused. Done BEFORE the op is emitted so
-		// a refused call emits nothing.
-		try self.applyCallerConsume(callee, args: args, argLabels: argLabels, anchor: anchor)
+		// The CALLER SIDE of consume-by-use (P1.4a wave 2, P1.6-B2): an owned argument at a position the callee
+		// CONSUMES — a plain-field store, or a type-parameter field of a concrete instance whose argument owns
+		// managed heap — is moved (poisoned / drained); a borrowed one is refused. Done BEFORE the op is
+		// emitted so a refused call emits nothing.
+		try self.applyCallerConsume(callee, args: args, argLabels: argLabels, anchor: anchor, constructorInstance: constructorInstance)
 		self.artifact.emitOp(self.currentBlock, op: MaxonOp.call(result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges), range: SourceRange.between(anchor, last: rparenTok))
 		return result
 	end 'emitCall'
@@ -14213,10 +14276,10 @@ export type Parser
 	// drained if it is a temporary), a BORROWED struct/union is refused (`E2015` — the transitive-consume
 	// case), a scalar is inert. The overwhelming common callee `borrowsAll`, so this is a single `match` and
 	// returns.
-	function applyCallerConsume(callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, anchor Token) throws ParseError
+	function applyCallerConsume(callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, anchor Token, constructorInstance ConstructorInstance) throws ParseError
 		match self.signatures.consumeOf(callee) 'c'
 			borrowsAll then break 'c'
-			consumes(info) then try self.transferConsumedArgs(info, args: args, argLabels: argLabels, anchor: anchor)
+			consumes(info) then try self.transferConsumedArgs(info, args: args, argLabels: argLabels, anchor: anchor, constructorInstance: constructorInstance)
 		end 'c'
 	end 'applyCallerConsume'
 
@@ -14225,17 +14288,47 @@ export type Parser
 	// `slotCallArgs` uses — but at parse time, where the `FuncSignature` does not yet exist. A malformed call
 	// (an arity mismatch, an unknown label) leaves the position `>= paramNames.count()`, which `isConsumed`
 	// answers false, so it is left untouched here and reported by SemanticCheck against the real registry.
-	function transferConsumedArgs(info ParamConsumeInfo, args ValueIdArray, argLabels ByteArrayArray, anchor Token) throws ParseError
+	function transferConsumedArgs(info ParamConsumeInfo, args ValueIdArray, argLabels ByteArrayArray, anchor Token, constructorInstance ConstructorInstance) throws ParseError
 		for i in 0 upto args.count() 'eachArg'
 			let label = try argLabels.get(i) otherwise panic("transferConsumedArgs: argLabels.get OOB at {i} — args and argLabels are pushed in lockstep")
 			let position = i as ParamCount if label.isEmpty() else info.indexOfParam(label)
-			if not info.isConsumed(position) 'borrowed'
+			if not self.argIsConsumedAt(info, position: position, constructorInstance: constructorInstance) 'borrowed'
 				continue
 			end 'borrowed'
 			let argValue = try args.get(i) otherwise panic("transferConsumedArgs: args.get OOB at {i}")
 			try self.transferConsumedArg(argValue, anchor: anchor)
 		end 'eachArg'
 	end 'transferConsumedArgs'
+
+	// Is the argument at parameter `position` consumed by this call — a plain-field consume (`bits`, whatever
+	// the concrete type), OR a P1.6-B2 type-parameter FEED whose concrete instance argument OWNS managed heap.
+	// A trivial type-parameter feed (`Box with Point`/`IntBox`) answers false, so it is borrowed exactly as at
+	// P1.6-A.
+	function argIsConsumedAt(info ParamConsumeInfo, position ParamCount, constructorInstance ConstructorInstance) returns bool
+		if info.isConsumed(position) 'plainConsume'
+			return true
+		end 'plainConsume'
+		return self.instanceFeedConsumes(info, position: position, constructorInstance: constructorInstance)
+	end 'argIsConsumedAt'
+
+	// Does the concrete instance's argument at parameter `position`'s type-parameter feed own managed heap
+	// (P1.6-B2)? Only a generic-alias constructor carries an instance; only a fed parameter has a position; a
+	// borrowed (trivial) argument answers false.
+	function instanceFeedConsumes(info ParamConsumeInfo, position ParamCount, constructorInstance ConstructorInstance) returns bool
+		match constructorInstance 'ci'
+			none then return false
+			instance(gid) then return self.instanceFeedConsumesFor(gid, info: info, position: position)
+		end 'ci'
+	end 'instanceFeedConsumes'
+
+	// The instance-in-hand half of `instanceFeedConsumes` — the parameter is consumed iff it feeds a type
+	// parameter whose concrete argument owns managed heap.
+	function instanceFeedConsumesFor(gid GenericInstanceId, info ParamConsumeInfo, position ParamCount) returns bool
+		match info.typeParamFeedOf(position) 'f'
+			none then return false
+			feeds(tpPos) then return self.signatures.genericInstanceArgIsOwned(gid, position: tpPos)
+		end 'f'
+	end 'instanceFeedConsumesFor'
 
 	// Transfer one consumed argument out of its owner. A SCALAR argument owns no heap and the consume is
 	// inert. An OWNED managed value moves — a live owned BINDING is poisoned (E3102 on later use), an owned
@@ -14322,7 +14415,7 @@ export type Parser
 		// compose cleanly — a type is a struct, a float alias, an int alias or a scalar, never two — so the
 		// result of a `returns Float` callee binds a `float` (XMM) value that `trunc` truncates and `return`
 		// moves cleanly, rather than a `named` value the tag says is an int while the backend files it in XMM.
-		let result = self.mintValueOfType(self.resolveFunctionAlias(self.resolveFloatAliasType(self.resolveNamedStruct(inner))))
+		let result = self.mintValueOfType(self.resolveNamedAlias(self.resolveFloatAliasType(self.resolveNamedStruct(inner))))
 		if self.valueIsManagedHeap(result) 'adoptsHeapBox'
 			self.trackOwnedTemp(result)
 		end 'adoptsHeapBox'

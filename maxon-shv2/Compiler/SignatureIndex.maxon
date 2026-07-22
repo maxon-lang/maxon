@@ -182,6 +182,12 @@ let DeclShapeGenericAlias = 30 as ContentHash
 // are the right arity in any file, so a reader's parse memo must move with the count.
 let DeclShapeTypeParam = 32 as ContentHash
 
+// A constructor parameter's TYPE-PARAMETER-FEED shape discriminators (P1.6-B2). Which type-parameter
+// position a parameter feeds decides whether a caller consumes a managed argument there, so a change to a
+// constructor's feed map must move a caller's parse memo — the consume twin of `ConsumeBitSet`/`Clear`.
+let FeedShapeFeeds = 38 as ContentHash
+let FeedShapeNone = 39 as ContentHash
+
 // The separator between a file's path and a constant's bare name in a FILE-PRIVATE constant's
 // storage key. `|` is legal in neither a Maxon identifier nor a Windows path, so the composite is
 // unambiguous. Ported verbatim from v1's `fileScopedTopLevelKey` (Project.maxon:189-191), which
@@ -648,9 +654,12 @@ export function classifyUnionPayload(signatures ProgramSignatures, typeNames Typ
 		// implies (the box holds a pointer it does not own) is only ever a trivial scalar or a caller-owned
 		// trivial struct — never a String or a managed-field struct that would leak here.
 		typeParameter then return PayloadClass.scalar(fieldType)
-		// A generic-INSTANCE field is treated the same opaque way — its concrete drop is deferred to
-		// slice B's descriptors, so at this slice it is a trivial 8-byte slot (a caller-owned borrow).
-		genericInstance then return PayloadClass.scalar(fieldType)
+		// A generic-INSTANCE payload is an OWNED base-struct box (P1.6-B2), exactly like a `structRef`
+		// payload: construct MOVES it in, a match binds it out, the cascade drops it through its own
+		// `__destruct_<instance>` / `__mm_decref` (`managedFieldDropCallee` routes the `genericInstance`
+		// tag). Its storage is the `genericInstance` type itself, which `maxonTypeToStdType` gives an i64
+		// (a pointer), so `payloadStorageOf`/`payloadValueTypeOf` lower it like any managed pointer.
+		genericInstance then return PayloadClass.managed(fieldType, isString: false)
 		named then break 'kind'
 	end 'kind'
 
@@ -792,18 +801,38 @@ end 'payloadValueTypeOf'
 
 export typealias PayloadClassArray = Array with PayloadClass
 
-// ⭐ **A FUNCTION'S PER-PARAMETER CONSUME FACTS (P1.4a wave 2)** — the ordered `paramNames` (so a call
-// site can slot a LABELLED argument `inner: i` to its position without the `FuncSignature`, which is not
-// yet built at parse time) and the `bits` (`bits[i]` true iff parameter `i` is CONSUMED — moved into a
-// struct field by the function's own body). The sweep computes them from tokens (the only whole-program
-// input a pure per-file parse may read), one entry per CONSUMING function, and travels by NAME with no
-// interner (a name and a bool are not ids), exactly like `enumTypes`.
+export typealias TypeParamIdArray = Array with TypeParamId
+
+// ⭐ **A CONSTRUCTOR PARAMETER'S TYPE-PARAMETER FEED (P1.6-B2)** — for a parameter MOVED into a
+// type-PARAMETER field (`Box.create(v T)` → `Self{value: v}`, `v` feeds `T` at position 0), the type
+// parameter POSITION it fills; `none` for every other parameter (a scalar, a direct-field store, an
+// unstored one). The shared body cannot decide whether `T` is managed (it is opaque there), so this
+// carries the mapping OUT to the CONCRETE call site, which knows the instance's argument at that position
+// and consumes the argument iff it OWNS managed heap (`genericInstanceArgIsOwned`). Trivial arguments
+// (`PointBox`/`IntBox`) feed too, but the call site borrows them — the feed is inert unless the argument
+// owns heap, so `generic-trivial-struct-arg` is byte-identical.
+export union TypeParamFeed
+	feeds(position TypeParamId)
+	none
+end 'TypeParamFeed'
+
+export typealias TypeParamFeedArray = Array with TypeParamFeed
+
+// ⭐ **A FUNCTION'S PER-PARAMETER CONSUME FACTS (P1.4a wave 2, P1.6-B2)** — the ordered `paramNames` (so a
+// call site can slot a LABELLED argument `inner: i` to its position without the `FuncSignature`, which is
+// not yet built at parse time), the `bits` (`bits[i]` true iff parameter `i` is CONSUMED — moved into a
+// NON-type-parameter struct field, so the callee owns it whatever the concrete type), and the `feeds`
+// (`feeds[i]` names the type-parameter position parameter `i` fills, for the concrete-site managed consume).
+// The sweep computes them from tokens (the only whole-program input a pure per-file parse may read), one
+// entry per function that consumes OR feeds, and travels by NAME with no interner (names, bools, positions —
+// no ids), exactly like `enumTypes`. `feeds` is EMPTY for a non-generic function (the common case).
 export type ParamConsumeInfo
 	export let paramNames as ByteArrayArray
 	export let bits as BoolArray
+	export let feeds as TypeParamFeedArray
 
-	export static function create(paramNames ByteArrayArray, bits BoolArray) returns ParamConsumeInfo
-		return Self{paramNames: paramNames, bits: bits}
+	export static function create(paramNames ByteArrayArray, bits BoolArray, feeds TypeParamFeedArray) returns ParamConsumeInfo
+		return Self{paramNames: paramNames, bits: bits, feeds: feeds}
 	end 'create'
 
 	// The declaration index of the parameter named `name`, or `paramNames.count()` when absent — the
@@ -825,6 +854,16 @@ export type ParamConsumeInfo
 		end 'past'
 		return try self.bits.get(index) otherwise panic("ParamConsumeInfo.isConsumed: bits.get OOB at {index} despite index < count")
 	end 'isConsumed'
+
+	// The type-parameter position parameter `index` feeds, or `none` — the concrete-site managed-consume
+	// map. Out of range (a non-generic function's empty `feeds`, an unknown label) answers `none`, exactly
+	// as `isConsumed` answers `false` for its short `bits`.
+	export function typeParamFeedOf(index ParamCount) returns TypeParamFeed
+		if index >= self.feeds.count() 'past'
+			return TypeParamFeed.none
+		end 'past'
+		return try self.feeds.get(index) otherwise panic("ParamConsumeInfo.typeParamFeedOf: feeds.get OOB at {index} despite index < count")
+	end 'typeParamFeedOf'
 end 'ParamConsumeInfo'
 
 export type ParamConsumeEntry
@@ -880,6 +919,13 @@ export function managedFieldDropCallee(signatures ProgramSignatures, typeNames T
 	if tagIsText(tag) 'string'
 		return StrDecrefName
 	end 'string'
+	// A nested generic-INSTANCE field (`Box with (Box with String)`, P1.6-B2) is an owned base-struct box:
+	// it drops through ITS OWN `__destruct_<instance>` cascade when the instance owns managed heap, else the
+	// trivial `__mm_decref` — resolved inside `signatures` over its own registry/interner (a gid is not an
+	// interner id), exactly as a struct/union field name is resolved through `managedNameDropCallee`.
+	if tag == ValueTypeTag.genericInstance 'instance'
+		return signatures.genericInstanceBoxDropCallee(typeNameIdOf(fieldType))
+	end 'instance'
 	if not (tagIsStructRef(tag) or tag == ValueTypeTag.named) 'notManagedRef'
 		panic("managedFieldDropCallee: a field of tag '{typeTagName(tag)}' is not a managed heap reference — every caller classifies the field managed first")
 	end 'notManagedRef'
@@ -975,19 +1021,52 @@ export type GenericInstanceRegistry
 	export function instanceArgs(id GenericInstanceId) returns MaxonTypeArray
 		return try self.argLists.get(id) otherwise panic("GenericInstanceRegistry.instanceArgs: argLists desync at GenericInstanceId {id}")
 	end 'instanceArgs'
+
+	// The number of interned instances — the iteration bound the B2 destructor-synthesis and needs-closure
+	// passes walk (`0 upto count()` enumerates every gid).
+	export function count() returns GenericInstanceId
+		return self.baseIds.count()
+	end 'count'
 end 'GenericInstanceRegistry'
 
+// ⭐ **ONE NODE OF A `Base with Args` ARGUMENT TREE, PRE-ORDER FLATTENED (P1.6-A/B2)** — a LEAF is an
+// ordinary type reference (a primitive, a struct name, a ranged alias) whose `MaxonType` the parser already
+// produced; a NESTED instance (`Box with (Box with Integer)`) is an `instanceHeader(baseName, argCount)`
+// followed IN THE LIST by its `argCount` args' nodes (recursively). The tree is FLATTENED rather than
+// self-referential because a directly recursive union is rejected (E4014); the gid is not known at parse
+// time anyway — interning lives in `recordGenericAlias`, which walks the flat list DEPTH-FIRST (the inner
+// instance interned before the outer, so the outer's arg is a real `genericInstance(innerGid)`), exactly
+// what the composite key's "nested-instance giid" and `mangleTypeArg`'s nested arm already anticipated.
+export union GenericArgNode
+	leaf(argType MaxonType)
+	instanceHeader(baseName ByteArray, argCount FieldIndex)
+end 'GenericArgNode'
+
+export typealias GenericArgNodeArray = Array with GenericArgNode
+
+// A mutable read cursor over a flat `GenericArgNodeArray` — `resolveGenericArgs` walks the pre-order tree by
+// advancing it (Maxon lacks tuples, so the recursion threads position through this shared reference).
+export type ArgCursor
+	export var pos as FieldIndex
+
+	export static function create() returns ArgCursor
+		return Self{pos: 0}
+	end 'create'
+end 'ArgCursor'
+
 // One generic-instance TYPEALIAS the sweep found (P1.6-A): `typealias IntBox = Box with Integer` ⇒
-// `(IntBox, Box, [Integer])`. The args are `MaxonType`s minted against the SCANNING file's interner;
-// `foldFile` remaps them into the index's interner before interning the instance. It travels by NAME
-// (alias name + base name), the way every whole-program registry entry does.
+// `(IntBox, Box, argCount 1, [leaf(Integer)])`. `argCount` is the number of TOP-LEVEL arguments (the flat
+// `args` list also holds nested instances' nodes); a leaf's `MaxonType` is minted against the SCANNING
+// file's interner, which `foldFile` remaps into the index's (and interns nested instances) before interning
+// the instance. It travels by NAME (alias name + base name), the way every whole-program registry entry does.
 export type GenericAliasEntry
 	export var aliasName as ByteArray
 	export var baseName as ByteArray
-	export var args as MaxonTypeArray
+	export var argCount as FieldIndex
+	export var args as GenericArgNodeArray
 
-	export static function create(aliasName ByteArray, baseName ByteArray, args MaxonTypeArray) returns GenericAliasEntry
-		return Self{aliasName: aliasName, baseName: baseName, args: args}
+	export static function create(aliasName ByteArray, baseName ByteArray, argCount FieldIndex, args GenericArgNodeArray) returns GenericAliasEntry
+		return Self{aliasName: aliasName, baseName: baseName, argCount: argCount, args: args}
 	end 'create'
 end 'GenericAliasEntry'
 
@@ -1221,8 +1300,26 @@ export type ProgramSignatures
 			let bit = info.isConsumed(i)
 			state = mix(mixBytes(state, bytes: paramName), value: ConsumeBitSet if bit else ConsumeBitClear)
 		end 'eachName'
+		// The TYPE-PARAMETER FEEDS ride too (P1.6-B2): which position a parameter feeds decides whether a
+		// caller consumes a managed argument there, so a change to it must move the caller's parse memo. Only a
+		// generic constructor HAS a feed list (a non-generic function's `feeds` is EMPTY, so this loop does not
+		// run and adds nothing — matching that such a function can never feed a type parameter). The STORED
+		// feeds are read directly, never through `typeParamFeedOf`, whose out-of-range `none` would box a union
+		// value per parameter on every consuming function in the program.
+		for i in 0 upto info.feeds.count() 'eachFeed'
+			state = self.mixTypeParamFeed(state, feed: try info.feeds.get(i) otherwise panic("recordParamConsume: feeds.get OOB at {i} despite i < count"))
+		end 'eachFeed'
 		self.hash = state
 	end 'recordParamConsume'
+
+	// Fold one parameter's type-parameter feed into the hash — `feeds(position)` mixes its position, `none`
+	// its own discriminator (so a parameter that GAINED a feed hashes distinctly from one that never had one).
+	function mixTypeParamFeed(state ContentHash, feed TypeParamFeed) returns ContentHash
+		return match feed 'f'
+			feeds(position) gives mix(mix(state, value: FeedShapeFeeds), value: position)
+			none gives mix(state, value: FeedShapeNone)
+		end 'f'
+	end 'mixTypeParamFeed'
 
 	// ⭐ **DOES `callee` CONSUME (take ownership of) ITS ARGUMENT AT POSITION `index`?** THE door the
 	// callee-side enrollment asks per parameter. A callee with no recorded entry, or an index past its
@@ -1338,10 +1435,7 @@ export type ProgramSignatures
 	// alias (a duplicate typealias is reported elsewhere), exactly as `recordAlias` is.
 	function recordGenericAlias(entry GenericAliasEntry, remap TypeNameRemap)
 		let baseId = self.typeNames.intern(entry.baseName)
-		var args = MaxonTypeArray.create()
-		for arg in entry.args 'eachArg'
-			args.push(remapMaxonType(arg, remap: remap))
-		end 'eachArg'
+		let args = self.resolveGenericArgs(entry, remap: remap)
 		let giid = self.genericInstances.intern(baseId, args: args)
 		self.genericAliases.upsert(entry.aliasName, value: giid)
 
@@ -1353,6 +1447,37 @@ export type ProgramSignatures
 		end 'eachHash'
 		self.hash = state
 	end 'recordGenericAlias'
+
+	// Resolve an alias entry's flat pre-order arg tree to concrete `MaxonType`s in THIS index's interner
+	// (P1.6-B2) — interning nested instances DEPTH-FIRST. A leaf remaps its file-interner type through
+	// `remap`; a nested instance header resolves its own args (advancing the shared cursor), interns the
+	// instance, and yields `genericInstance(gid)`.
+	function resolveGenericArgs(entry GenericAliasEntry, remap TypeNameRemap) returns MaxonTypeArray
+		var cursor = ArgCursor.create()
+		var out = MaxonTypeArray.create()
+		for _ in 0 upto entry.argCount 'each'
+			out.push(self.resolveArgNode(entry.args, cursor: cursor, remap: remap))
+		end 'each'
+		return out
+	end 'resolveGenericArgs'
+
+	function resolveArgNode(nodes GenericArgNodeArray, cursor ArgCursor, remap TypeNameRemap) returns MaxonType
+		let node = try nodes.get(cursor.pos) otherwise panic("ProgramSignatures.resolveArgNode: cursor {cursor.pos} out of range for a {nodes.count()}-node arg tree — the pre-order flattening and its counts disagree")
+		cursor.pos = cursor.pos + 1
+		return match node 'k'
+			leaf(argType) gives remapMaxonType(argType, remap: remap)
+			instanceHeader(baseName, argCount) gives self.internNestedNode(baseName, argCount: argCount, nodes: nodes, cursor: cursor, remap: remap)
+		end 'k'
+	end 'resolveArgNode'
+
+	function internNestedNode(baseName ByteArray, argCount FieldIndex, nodes GenericArgNodeArray, cursor ArgCursor, remap TypeNameRemap) returns MaxonType
+		let baseId = self.typeNames.intern(baseName)
+		var args = MaxonTypeArray.create()
+		for _ in 0 upto argCount 'each'
+			args.push(self.resolveArgNode(nodes, cursor: cursor, remap: remap))
+		end 'each'
+		return MaxonType.genericInstance(self.genericInstances.intern(baseId, args: args))
+	end 'internNestedNode'
 
 	// Fold one case's NAME and TAG into the enum's hash. Split out so the SIGNED tag (`ParsedInt`)
 	// crosses to the UNSIGNED hash domain through a local — `recordAlias`/`mixDefaultPayload` have
@@ -2015,7 +2140,7 @@ export type ProgramSignatures
 	// Is `name` a declared FUNCTION typealias — the `bool` half of `functionAliasOf`, and a HOT-PATH
 	// allocation guard, exactly like `containsStruct`/`containsEnum` are for their `*Of` twins. Asked of
 	// EVERY `named` type REFERENCE (`parseTypeReference`), field READ (`fieldTypeOf`) and call RESULT
-	// (`resolveFunctionAlias`) — most of them ranged int aliases, none of them function aliases — so it
+	// (`resolveNamedAlias`) — most of them ranged int aliases, none of them function aliases — so it
 	// must not pay `functionAliasOf`'s `DeclaredFunctionAlias` box (a Maxon union value is a heap object
 	// EVERY case, `undeclared` included) just to throw it away. A `Map.contains` allocates nothing. Only
 	// the cold indirect-call return-type recovery, which needs the alias itself, calls `functionAliasOf`.
@@ -2143,6 +2268,158 @@ export type ProgramSignatures
 		return out
 	end 'mangleGenericInstance'
 
+	// --- Generic-instance managed drop (P1.6-B2) ---
+	//
+	// A generic instance is a monomorphized base struct: its box is `Box`'s box, and a managed type
+	// argument is MOVED into it (consumed at the concrete call site), so the box OWNS that content and
+	// `__destruct_<mangled-instance>` drops it exactly once. These queries substitute the instance's args
+	// for the base struct's type parameters and answer the drop cascade's three questions — is a field
+	// managed, what drops it, at what offset — over THIS index's own interner (the args and the base
+	// layout's field types both live in `self.typeNames`), so a caller never has to choose the interner.
+
+	// The `StructLayout` of instance `id`'s base struct. Precondition: `id` is an interned instance, whose
+	// base is a declared generic type.
+	function baseLayoutOf(id GenericInstanceId) returns StructLayout
+		let baseName = self.genericInstanceBaseName(id)
+		return try self.structTypes.get(baseName) otherwise panic("ProgramSignatures.baseLayoutOf: generic instance {id}'s base struct '{String.from(baseName)}' is not declared — an instance is only interned for a declared generic type")
+	end 'baseLayoutOf'
+
+	// The base struct's field `index` type with the instance's args substituted for the type parameters —
+	// a `typeParameter(pos)` field becomes `args[pos]` (the concrete arg), every other field stays. This is
+	// what turns `Box`'s opaque `value as T` into `String` for a `Box with String`, so the cascade can
+	// classify and drop it. `typeNameIdOf(typeParameter(pos))` is the parameter POSITION; arity was checked
+	// at instantiation (E2056), so the position indexes the args in range.
+	function substituteInstanceFieldType(id GenericInstanceId, index FieldIndex) returns MaxonType
+		let fieldType = try self.baseLayoutOf(id).fieldTypes.get(index) otherwise panic("ProgramSignatures.substituteInstanceFieldType: field {index} out of range for instance {id}'s base struct")
+		if maxonTypeTag(fieldType) != ValueTypeTag.typeParameter 'notTypeParam'
+			return fieldType
+		end 'notTypeParam'
+		return self.substitutedInstanceArg(id, position: typeNameIdOf(fieldType))
+	end 'substituteInstanceFieldType'
+
+	// Instance `id`'s concrete type argument at type-parameter `position` (P1.6-B2) — what a `T`-typed field
+	// read on a concrete receiver retypes to. `adoptType` re-interns it into the caller's interner. Arity was
+	// checked at instantiation (E2056), so a `typeParameter(position)` field indexes the args in range.
+	export function substitutedInstanceArg(id GenericInstanceId, position TypeParamId) returns MaxonType
+		let args = self.genericInstances.instanceArgs(id)
+		return try args.get(position) otherwise panic("ProgramSignatures.substitutedInstanceArg: type-parameter position {position} out of range for instance {id}'s {args.count()} argument(s) — arity was checked at instantiation (E2056)")
+	end 'substitutedInstanceArg'
+
+	// The number of fields instance `id` carries — its base struct's field count.
+	export function genericInstanceFieldCount(id GenericInstanceId) returns FieldIndex
+		return self.baseLayoutOf(id).fieldCount()
+	end 'genericInstanceFieldCount'
+
+	// The byte offset of instance field `index` in the box — its base struct's own field offset.
+	export function genericInstanceFieldOffset(id GenericInstanceId, index FieldIndex) returns ByteOffset
+		return self.baseLayoutOf(id).offsetOfField(index)
+	end 'genericInstanceFieldOffset'
+
+	// ⭐ **DOES A TYPE ARGUMENT OWN MANAGED HEAP THE BOX MUST DROP (P1.6-B2)?** — the OWN/BORROW boundary,
+	// and DELIBERATELY NARROWER than `typeIsManaged`. A `T` field is a BORROW at P1.6-A: a TRIVIAL type
+	// argument (a scalar, or an all-scalar struct/instance like `Point`/`IntBox`) is passed opaque and the
+	// caller keeps + drops it, so `Box with Point` must NOT drop its `value` field (or it double-frees the
+	// caller's `p`, and `PointBox.create(p); … p.getX()` would need a use-after-move consume). B2 flips this
+	// ONLY for an argument that itself owns managed heap — a `String`, a struct WITH a managed field, a
+	// boxed union, or a nested instance that owns managed heap — which the box then consumes and drops. This
+	// is exactly the boundary P1.6-A's managed-argument rejection used (a String or a struct-with-a-managed-
+	// field), now extended over `self.typeNames` and recursed into a nested instance rather than rejecting.
+	// (Contrast `typeIsManaged`: a DIRECT struct/instance FIELD is always owned — only a type PARAMETER field
+	// borrows a trivial argument.)
+	export function typeArgIsOwned(t MaxonType) returns bool
+		let tag = maxonTypeTag(t)
+		if tagIsText(tag) 'string'
+			return true
+		end 'string'
+		if tag == ValueTypeTag.genericInstance 'instance'
+			return self.genericInstanceHasManagedField(typeNameIdOf(t))
+		end 'instance'
+		if tag != ValueTypeTag.named and not tagIsStructRef(tag) 'notNamedStruct'
+			return false
+		end 'notNamedStruct'
+		let name = self.nameOfId(typeNameIdOf(t))
+		if self.structTypes.contains(name) 'struct'
+			return self.structHasManagedField(name)
+		end 'struct'
+		if not self.enumTypes.contains(name) 'notEnum'
+			return false
+		end 'notEnum'
+		return (try self.enumTypes.get(name) otherwise panic("ProgramSignatures.typeArgIsOwned: enumTypes.contains({String.from(name)}) is true but get failed")).isBoxed()
+	end 'typeArgIsOwned'
+
+	// Is instance field `index` DROPPED by the box once its args are substituted — the per-field drop gate.
+	// A type-PARAMETER field is dropped iff its substituted argument OWNS managed heap (`typeArgIsOwned` — a
+	// trivial `Box with Point` borrows its `Point`); a DIRECT field (a base struct's own `tag as String`) is
+	// owned by the box and dropped like any struct field (`typeIsManaged`). The two classifiers differ only
+	// on a trivial struct/instance, which a type parameter borrows and a direct field owns.
+	export function genericInstanceFieldIsManaged(id GenericInstanceId, index FieldIndex) returns bool
+		let baseFieldType = try self.baseLayoutOf(id).fieldTypes.get(index) otherwise panic("ProgramSignatures.genericInstanceFieldIsManaged: field {index} out of range for instance {id}'s base struct")
+		if maxonTypeTag(baseFieldType) == ValueTypeTag.typeParameter 'typeParamField'
+			return self.typeArgIsOwned(self.substituteInstanceFieldType(id, index: index))
+		end 'typeParamField'
+		return self.typeIsManaged(baseFieldType)
+	end 'genericInstanceFieldIsManaged'
+
+	// The drop callee for managed instance field `index` — routed through the shared `managedFieldDropCallee`
+	// over the SUBSTITUTED concrete type (a String → `__str_decref`, a struct/boxed-union → its
+	// `__destruct_<T>`, a nested instance → its instance destructor). Precondition: the field is managed.
+	export function genericInstanceFieldDropCallee(id GenericInstanceId, index FieldIndex) returns ByteArray
+		return managedFieldDropCallee(self, typeNames: self.typeNames, fieldType: self.substituteInstanceFieldType(id, index: index))
+	end 'genericInstanceFieldDropCallee'
+
+	// Does instance `id` own ANY managed field once substituted — the gate deciding whether it needs a
+	// `__destruct_<instance>` cascade at all (else its box drop is the trivial `__mm_decref`).
+	export function genericInstanceHasManagedField(id GenericInstanceId) returns bool
+		for i in 0 upto self.genericInstanceFieldCount(id) 'eachField'
+			if self.genericInstanceFieldIsManaged(id, index: i) 'managed'
+				return true
+			end 'managed'
+		end 'eachField'
+		return false
+	end 'genericInstanceHasManagedField'
+
+	// Does instance `id` DIRECTLY own a String field once substituted — the `usesStrDecref` gate for its
+	// destructor. A String inside a nested struct/instance field is dropped by that nested destructor, not
+	// this one, so only a directly-substituted String counts (the struct/union `structHasStringField` twin).
+	export function genericInstanceHasStringField(id GenericInstanceId) returns bool
+		for i in 0 upto self.genericInstanceFieldCount(id) 'eachField'
+			if tagIsText(maxonTypeTag(self.substituteInstanceFieldType(id, index: i))) 'string'
+				return true
+			end 'string'
+		end 'eachField'
+		return false
+	end 'genericInstanceHasStringField'
+
+	// ⭐ **THE DROP CALLEE FOR AN OWNED INSTANCE BOX** — its own `__destruct_<mangled>` cascade when it owns
+	// managed heap, else the trivial `__mm_decref`. The generic-instance twin of `unionBoxDropCallee`, and
+	// the door `decrefCalleeFor` (a scope-exit drop) and a nested-instance field drop route through — over
+	// this index's own interner, so a caller never misresolves the instance's substituted-field ids.
+	export function genericInstanceBoxDropCallee(id GenericInstanceId) returns ByteArray
+		if self.genericInstanceHasManagedField(id) 'managed'
+			return destructorSymbol(self.mangleGenericInstance(id).toByteArray())
+		end 'managed'
+		return MmDecrefName
+	end 'genericInstanceBoxDropCallee'
+
+	// Does instance `id`'s type argument at `position` OWN managed heap — the CALL-SITE CONSUME gate (P1.6-B2).
+	// An owning argument is MOVED into the box (the box drops it, so the caller must not); a trivial argument
+	// is BORROWED (the P1.6-A behaviour, unchanged — `PointBox.create(p)` keeps `p` usable). It reads exactly
+	// the `typeArgIsOwned` boundary the destructor drops on, so the consumed set equals the dropped set by
+	// construction — no double-free, no leak.
+	export function genericInstanceArgIsOwned(id GenericInstanceId, position TypeParamId) returns bool
+		let args = self.genericInstances.instanceArgs(id)
+		if position >= args.count() 'oob'
+			return false
+		end 'oob'
+		return self.typeArgIsOwned(try args.get(position) otherwise panic("ProgramSignatures.genericInstanceArgIsOwned: instanceArgs.get out of range at {position} despite position < count"))
+	end 'genericInstanceArgIsOwned'
+
+	// The number of interned generic instances — the iteration bound the B2 destructor-synthesis and
+	// needs-closure passes walk (`0 upto genericInstanceCount()` enumerates every gid).
+	export function genericInstanceCount() returns GenericInstanceId
+		return self.genericInstances.count()
+	end 'genericInstanceCount'
+
 	// The enum/union `name` denotes, declared in ANY file — `structOf`'s twin, and the door the
 	// PARSER asks every enum question through: is this scrutinee an enum? what tag is a case? which
 	// cases does a range arm cover? The layout it hands back carries plain NAMES and INTS (no ids),
@@ -2220,16 +2497,32 @@ export type ProgramSignatures
 	export function structFieldIsManaged(structName ByteArray, index FieldIndex) returns bool
 		let layout = try self.structTypes.get(structName) otherwise panic("ProgramSignatures.structFieldIsManaged: no `type {String.from(structName)}` is declared — every caller asks `structOf` first")
 		let fieldType = try layout.fieldTypes.get(index) otherwise panic("ProgramSignatures.structFieldIsManaged: field {index} is out of range for `type {String.from(structName)}`, which declares {layout.fieldCount()} — every index handed out came from `indexOfField`")
+		return self.typeIsManaged(fieldType)
+	end 'structFieldIsManaged'
 
+	// ⭐ **THE ONE "does this type own droppable heap?" CLASSIFIER**, over `self.typeNames` — the interner
+	// every field/arg/payload id this index stores lives in. A String (`__str_decref`), a struct box (a
+	// struct is always a heap box, dropped through its `__destruct_<T>` or the trivial `__mm_decref`), a
+	// boxed union, and a GENERIC INSTANCE (a base-struct box, P1.6-B2, dropped through its own instance
+	// destructor or `__mm_decref`) are managed; a scalar (int/bool/float/ExitCode, a ranged alias, a
+	// payload-free enum), a function code pointer, and an opaque type PARAMETER (a borrow at this rung) are
+	// not. `structFieldIsManaged` (a struct field), `classifyUnionPayload` (a union payload) and the
+	// generic-instance field classification all delegate here, so "managed" means ONE thing across struct,
+	// union and instance — the dropped set, the moved-in set and the usage gates agree by construction.
+	//
+	// It is answered allocation-free for the overwhelming scalar-field majority (a tag test, then a
+	// `Map.contains`), exactly as the code it replaced was — which matters because a scalar field must reach
+	// the `false` return without boxing a `DeclaredStruct`/`DeclaredEnum`.
+	export function typeIsManaged(fieldType MaxonType) returns bool
 		let tag = maxonTypeTag(fieldType)
-		if tagIsText(tag) or tagIsStructRef(tag) 'stringOrStruct'
+		if tagIsText(tag) or tagIsStructRef(tag) or tag == ValueTypeTag.genericInstance 'stringStructOrInstance'
 			return true
-		end 'stringOrStruct'
+		end 'stringStructOrInstance'
 		if tag != ValueTypeTag.named 'notNamed'
 			return false
 		end 'notNamed'
 
-		let name = try self.typeNames.nameOf(typeNameIdOf(fieldType)) otherwise panic("ProgramSignatures.structFieldIsManaged: a `named` field type's id is not in this index's interner — the layout's types were minted against exactly this table")
+		let name = try self.typeNames.nameOf(typeNameIdOf(fieldType)) otherwise panic("ProgramSignatures.typeIsManaged: a `named` type's id is not in this index's interner — every field/arg type this index stores was minted against exactly this table")
 		if self.structTypes.contains(name) 'namedStruct'
 			return true
 		end 'namedStruct'
@@ -2237,9 +2530,9 @@ export type ProgramSignatures
 			return false
 		end 'notEnum'
 
-		let enumLayout = try self.enumTypes.get(name) otherwise panic("ProgramSignatures.structFieldIsManaged: enumTypes.contains({String.from(name)}) is true but get failed")
+		let enumLayout = try self.enumTypes.get(name) otherwise panic("ProgramSignatures.typeIsManaged: enumTypes.contains({String.from(name)}) is true but get failed")
 		return enumLayout.isBoxed()
-	end 'structFieldIsManaged'
+	end 'typeIsManaged'
 
 	// Does struct `structName` own droppable heap in ANY field — the union-side `unionHasManagedField`
 	// generalised to a struct, and the gate that decides whether the struct needs a `__destruct_<Struct>`

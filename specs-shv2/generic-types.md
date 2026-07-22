@@ -56,14 +56,16 @@ let b = IntBox.create(42)
 let v = b.get()
 ```
 
-### This slice: trivial type arguments only
+### Type arguments: trivial (borrowed) and managed (owned)
 
-This is the trivial base of the dictionary-passing design. A type argument must be a TRIVIAL
-type — a scalar (`int`/`bool`/`float`/`ExitCode`, a ranged alias) or a struct whose fields are
-all trivial. A MANAGED argument (a `String`, or a struct with a managed field) is rejected
-until the layout descriptors of a later slice, because the shared trivial destructor drops
-nothing and a managed argument would leak. A non-generic base, or the wrong number of
-arguments, is likewise rejected.
+A **trivial** type argument — a scalar (`int`/`bool`/`float`/`ExitCode`, a ranged alias) or a
+struct/instance whose fields are all trivial — is passed opaque and **borrowed**: the box aliases
+it and the caller keeps and drops it (`PointBox.create(p)` leaves `p` usable). A **managed** type
+argument — a `String`, a struct with a managed field, a boxed union, or a nested instance that owns
+managed heap — is **owned**: the concrete constructor call MOVES it into the box, and the box drops
+it exactly once through its synthesized `__destruct_<instance>` cascade (P1.6-B2). So a returned or
+escaping managed instance carries VALID content, and there is no leak or double-free. A non-generic
+base, or the wrong number of arguments, is rejected.
 
 ## Tests
 
@@ -229,7 +231,7 @@ end 'main'
 error E2056: <fragment>:7:17: generic type 'Pair' expects 2 type argument(s), but 1 were supplied
 ```
 
-<!-- test: error.managed-string-arg -->
+<!-- test: managed-string-arg -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 type Box uses T
@@ -240,19 +242,24 @@ type Box uses T
 end 'Box'
 typealias StrBox = Box with String
 function main() returns ExitCode
+	let s = "{42}"
+	let b = StrBox.create(s)
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E2057: <fragment>:9:20: generic type argument 'String' of 'Box' is a managed type (a String, or a struct with a managed field), which is not yet supported (deferred to P1.6-B)
+```exitcode
+0
 ```
 
-<!-- test: error.managed-struct-field-arg -->
+<!-- test: managed-struct-field-arg -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 type Holder
 	export var label as String
 	export var n as Integer
+	export static function create(l String, n Integer) returns Self
+		return Self{label: l, n: n}
+	end 'create'
 end 'Holder'
 type Box uses T
 	export var value as T
@@ -262,15 +269,16 @@ type Box uses T
 end 'Box'
 typealias HolderBox = Box with Holder
 function main() returns ExitCode
+	let h = Holder.create("{9}", n: 3)
+	let b = HolderBox.create(h)
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E2057: <fragment>:13:23: generic type argument 'Holder' of 'Box' is a managed type (a String, or a struct with a managed field), which is not yet supported (deferred to P1.6-B)
+```exitcode
+0
 ```
 
-<!-- disabled-test: generic-nested-trivial -->
-<!-- P1.6-B: a nested generic instance `Box with (Box with Integer)` is a managed struct box the trivial destructor does not drop; the parser rejects it (E2015) until the layout descriptors of P1.6-B. -->
+<!-- test: generic-nested-trivial -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 type Box uses T
@@ -287,6 +295,119 @@ typealias BoxBox = Box with (Box with Integer)
 function main() returns ExitCode
 	let inner = IntBox.create(5)
 	let outer = BoxBox.create(inner)
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: managed-string-arg-loop -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+type Box uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+end 'Box'
+typealias StrBox = Box with String
+function main() returns ExitCode
+	var i = 0
+	while i < 100 'loop'
+		let b = StrBox.create("{i}")
+		i = i + 1
+	end 'loop'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: managed-string-arg-moved-not-double-freed -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+type Box uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+end 'Box'
+typealias StrBox = Box with String
+function main() returns ExitCode
+	let s = "{42}"
+	let a = StrBox.create(s)
+	let b = a
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: managed-instance-escape-owns-content -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+type Box uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+end 'Box'
+typealias StrBox = Box with String
+function make() returns StrBox
+	let s = "{7}"
+	return StrBox.create(s)
+end 'make'
+function main() returns ExitCode
+	let b = make()
+	let sv = b.value
+	return sv.byteLength() - 1
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: nested-managed-cascade -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+type Box uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+end 'Box'
+typealias StrBox = Box with String
+typealias BoxBox = Box with (Box with String)
+function main() returns ExitCode
+	var i = 0
+	while i < 50 'loop'
+		let inner = StrBox.create("{i}")
+		let outer = BoxBox.create(inner)
+		i = i + 1
+	end 'loop'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: generic-string-member-via-generic -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+type Tagged uses T
+	export var value as T
+	export var tag as String
+	export static function create(v T, tag String) returns Self
+		return Self{value: v, tag: tag}
+	end 'create'
+end 'Tagged'
+typealias IntTagged = Tagged with Integer
+function main() returns ExitCode
+	let t = IntTagged.create(5, tag: "{3}")
 	return 0
 end 'main'
 ```
