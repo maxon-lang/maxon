@@ -671,6 +671,88 @@ end 'main'
 42
 ```
 
+### Negative index
+
+A negative index passes an at-or-over-length bounds test (`StdCmpPred` is signed, so `-1 >= 3` is FALSE) and
+would address BEFORE the buffer — an OOB heap read/write. The throwing accessors (`get`/`set`/`remove`/`slice`)
+reject it; `insert`, which clamps rather than throws, clamps it to the front.
+
+<!-- test: get-negative-index-throws -->
+```maxon
+function main() returns ExitCode
+	let arr = [10, 20, 30]
+	let val = try arr.get(-1) otherwise 99
+	return val
+end 'main'
+```
+```exitcode
+99
+```
+
+<!-- test: set-negative-index-throws -->
+```maxon
+function main() returns ExitCode
+	var arr = [10, 20, 30]
+	try arr.set(-1, value: 5) otherwise return 99
+	return 0
+end 'main'
+```
+```exitcode
+99
+```
+
+<!-- test: remove-negative-index-throws -->
+```maxon
+function main() returns ExitCode
+	var arr = [10, 20, 30]
+	let removed = try arr.remove(-1) otherwise return 99
+	return removed
+end 'main'
+```
+```exitcode
+99
+```
+
+<!-- test: slice-negative-start-throws -->
+```maxon
+function main() returns ExitCode
+	let arr = [10, 20, 30]
+	let sub = try arr.slice(-1, endIndex: 2) otherwise return 99
+	return sub.count()
+end 'main'
+```
+```exitcode
+99
+```
+
+<!-- test: slice-negative-end-throws -->
+```maxon
+function main() returns ExitCode
+	let arr = [10, 20, 30]
+	let sub = try arr.slice(-2, endIndex: -1) otherwise return 99
+	return sub.count()
+end 'main'
+```
+```exitcode
+99
+```
+
+<!-- test: insert-negative-index-clamps-to-front -->
+```maxon
+function main() returns ExitCode
+	var arr = [10, 20, 30]
+	arr.insert(-1, value: 99)
+	let a = try arr.get(0) otherwise 0
+	let b = try arr.get(1) otherwise 0
+	let c = try arr.get(2) otherwise 0
+	let d = try arr.get(3) otherwise 0
+	return a + b + c + d
+end 'main'
+```
+```exitcode
+159
+```
+
 ### Append
 
 <!-- test: append-basic -->

@@ -558,6 +558,26 @@ function emitSlotAddr(module StdModule, block IrBlock, buffer ValueId, index Val
 	return emitBin(module, block: block, a: buffer, b: offset, opcode: StdBinOpcode.add, ids: ids)
 end 'emitSlotAddr'
 
+// `value < 0` — the SIGNED-negative test. ⚠ shv2's `StdCmpPred` has NO unsigned compare, so a negative user
+// index slips past every at-or-over-length bounds test (`index >= length` / `end > length`): signed, `-1 >= 3`
+// is FALSE and the index reads as "in bounds", then `buffer + index·elementSize` addresses BEFORE the buffer
+// (an OOB heap read/write). This explicit guard is the ONE home of "reject a negative index" — shared by
+// `emitIndexOutOfRange` (get/set/remove) and `buildArrSlice`/`buildArrInsert`, so the fact is written once.
+function emitIsNegative(module StdModule, block IrBlock, value ValueId, ids ValueMinter) returns ValueId
+	let zero = emitConst(module, block: block, value: 0, ids: ids)
+	return emitCmp(module, block: block, a: value, b: zero, pred: StdCmpPred.lt, ids: ids)
+end 'emitIsNegative'
+
+// A user index is OUT OF RANGE for a length-`length` array when it is NEGATIVE or at/above the length — the
+// ONE home of the "reject this index" test `__arr_get`/`__arr_set`/`__arr_remove` share. The negative guard is
+// OR-ed into the existing at-or-over-length test (both are 0/1 booleans, so the `bitOr` is a 0/1 boolean the
+// `condBranch` to the OOB block truth-tests directly).
+function emitIndexOutOfRange(module StdModule, block IrBlock, index ValueId, length ValueId, ids ValueMinter) returns ValueId
+	let negative = emitIsNegative(module, block: block, value: index, ids: ids)
+	let atOrOver = emitCmp(module, block: block, a: index, b: length, pred: StdCmpPred.ge, ids: ids)
+	return emitBin(module, block: block, a: negative, b: atOrOver, opcode: StdBinOpcode.bitOr, ids: ids)
+end 'emitIndexOutOfRange'
+
 // The out-of-bounds throw: `errorReturn(0, indexOutOfBounds)`. The primary value is unread on the throw
 // edge (the desugar's phi takes the `otherwise` value there), so a plain 0 is honest.
 function emitOobReturn(module StdModule, block IrBlock, ids ValueMinter)
@@ -836,8 +856,8 @@ function buildArrGet(module StdModule)
 	let index = 1 as ValueId
 
 	let length = emitLoadField(module, block: entry, arr: arr, offset: ArrLengthOffset, ids: ids)
-	let atOrOver = emitCmp(module, block: entry, a: index, b: length, pred: StdCmpPred.ge, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(atOrOver, thenBlockId: oob.id, elseBlockId: load.id))
+	let outOfRange = emitIndexOutOfRange(module, block: entry, index: index, length: length, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(outOfRange, thenBlockId: oob.id, elseBlockId: load.id))
 
 	emitOobReturn(module, block: oob, ids: ids)
 
@@ -864,8 +884,8 @@ function buildArrSet(module StdModule)
 	let value = 2 as ValueId
 
 	let length = emitLoadField(module, block: entry, arr: arr, offset: ArrLengthOffset, ids: ids)
-	let atOrOver = emitCmp(module, block: entry, a: index, b: length, pred: StdCmpPred.ge, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(atOrOver, thenBlockId: oob.id, elseBlockId: store.id))
+	let outOfRange = emitIndexOutOfRange(module, block: entry, index: index, length: length, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(outOfRange, thenBlockId: oob.id, elseBlockId: store.id))
 
 	emitOobReturn(module, block: oob, ids: ids)
 
@@ -1100,12 +1120,23 @@ end 'buildArrClear'
 
 // `__arr_insert(arr, index, value)` — insert at `index` (clamped to `[0, length]`), shifting the tail
 // right by one slot (a backward byte copy, overlap-safe). Insert at `length` is a plain append.
+//
+// ⭐ **`insert` CLAMPS, it does NOT throw** — deliberately, mirroring the reference `stdlib/Array.maxon`'s
+// `insert` ("clamps index to [0, count]"), which is why it stays a NON-throwing void mutator (unlike the
+// throwing `get`/`set`/`remove`/`slice`, whose out-of-range index is an ERROR). So an out-of-range index is
+// CLAMPED both ways: above `length` → append at `length`; BELOW 0 → insert at the front (0). The low clamp is
+// not cosmetic — without it a negative index reaches `emitSlotAddr` and addresses `buffer + index·elementSize`
+// BEFORE the buffer (an OOB heap WRITE, plus a backward-copy of `length - index` — a wrong count — slots).
+// `StdCmpPred` is signed, so `index < 0` catches it; the pre-existing `index > length` never could (`-1 > 3`
+// is FALSE). This makes the implementation honor its own long-documented `[0, length]` clamp contract.
 function buildArrInsert(module StdModule)
 	var func = IrFunction.createFromStd(ArrInsertName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(3)
 
 	var entry = module.addBlock(func, label: b"entry")
-	var clampIt = module.addBlock(func, label: b"clamp")
+	var clampHigh = module.addBlock(func, label: b"clamphigh")
+	var checkLow = module.addBlock(func, label: b"chklow")
+	var clampLow = module.addBlock(func, label: b"clamplow")
 	var useIndex = module.addBlock(func, label: b"useidx")
 	var afterClamp = module.addBlock(func, label: b"aclamp")
 
@@ -1114,15 +1145,24 @@ function buildArrInsert(module StdModule)
 	let index = 1 as ValueId
 	let value = 2 as ValueId
 
-	// entry: clamp index to length.
+	// entry: an index above `length` clamps to `length`; otherwise fall to the low-side check.
 	let length = emitLoadField(module, block: entry, arr: arr, offset: ArrLengthOffset, ids: ids)
 	let overLen = emitCmp(module, block: entry, a: index, b: length, pred: StdCmpPred.gt, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(overLen, thenBlockId: clampIt.id, elseBlockId: useIndex.id))
+	module.setTerminator(entry, op: StdOp.condBranch(overLen, thenBlockId: clampHigh.id, elseBlockId: checkLow.id))
 
 	let clamped = ids.mint()
 	afterClamp.blockArgs.push(IrBlockArg.create(clamped, argType: StdType.i64))
-	module.setTerminator(clampIt, op: StdOp.branch(afterClamp.id))
-	clampIt.branchEdges.push(BranchEdge.create(afterClamp.id, argIds: argsOf(length)))
+	module.setTerminator(clampHigh, op: StdOp.branch(afterClamp.id))
+	clampHigh.branchEdges.push(BranchEdge.create(afterClamp.id, argIds: argsOf(length)))
+
+	// checkLow: a negative index clamps to the front (0); an in-range index is used as-is.
+	let negative = emitIsNegative(module, block: checkLow, value: index, ids: ids)
+	module.setTerminator(checkLow, op: StdOp.condBranch(negative, thenBlockId: clampLow.id, elseBlockId: useIndex.id))
+
+	let frontIndex = emitConst(module, block: clampLow, value: 0, ids: ids)
+	module.setTerminator(clampLow, op: StdOp.branch(afterClamp.id))
+	clampLow.branchEdges.push(BranchEdge.create(afterClamp.id, argIds: argsOf(frontIndex)))
+
 	module.setTerminator(useIndex, op: StdOp.branch(afterClamp.id))
 	useIndex.branchEdges.push(BranchEdge.create(afterClamp.id, argIds: argsOf(index)))
 
@@ -1161,8 +1201,8 @@ function buildArrRemove(module StdModule)
 	let index = 1 as ValueId
 
 	let length = emitLoadField(module, block: entry, arr: arr, offset: ArrLengthOffset, ids: ids)
-	let atOrOver = emitCmp(module, block: entry, a: index, b: length, pred: StdCmpPred.ge, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(atOrOver, thenBlockId: oob.id, elseBlockId: remove.id))
+	let outOfRange = emitIndexOutOfRange(module, block: entry, index: index, length: length, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(outOfRange, thenBlockId: oob.id, elseBlockId: remove.id))
 
 	emitOobReturn(module, block: oob, ids: ids)
 
@@ -1191,12 +1231,15 @@ function buildArrRemove(module StdModule)
 end 'buildArrRemove'
 
 // `__arr_slice(arr, start, end) -> (newArrPtr, flag)` — a NEW independent array over elements `[start, end)`
-// (throwing). The bounds check mirrors the reference compiler's `LowerManagedMemSlice` (and `stdlib/Array.maxon`'s
-// `slice`): `end > length` OR `start > end` throws `ArrayError.indexOutOfBounds`. Those two predicates together
-// also catch `start > length` (if `start <= end` then `end >= start > length` trips `end > length`; otherwise
-// `start > end` trips), so no third check is needed — `slice(5, endIndex: 5)` on a length-3 array throws via
-// `end > length`. An empty slice (`start == end`, in bounds) yields a valid length-0 array. `emitArrayRangeCopy`
-// does the copy; shv2 always COPIES (no COW / view).
+// (throwing). The range is out of bounds — throws `ArrayError.indexOutOfBounds` — when `end > length` OR
+// `start > end` OR either index is NEGATIVE. `end > length` / `start > end` mirror the reference compiler's
+// `LowerManagedMemSlice` (and `stdlib/Array.maxon`'s `slice`) and together also catch `start > length` (if
+// `start <= end` then `end >= start > length` trips `end > length`; otherwise `start > end` trips), so
+// `slice(5, endIndex: 5)` on a length-3 array throws via `end > length`. The explicit `start < 0` / `end < 0`
+// guards are what stop a NEGATIVE index — signed compares never catch it (`end > length` is `-1 > 3` = FALSE,
+// and `start > end` misses `slice(-1, endIndex: 2)` since `-1 > 2` is FALSE), so it would otherwise address
+// `srcBuffer + start·elementSize` BEFORE the buffer (an OOB read). An empty slice (`start == end`, in bounds)
+// yields a valid length-0 array. `emitArrayRangeCopy` does the copy; shv2 always COPIES (no COW / view).
 function buildArrSlice(module StdModule)
 	var func = IrFunction.createFromStd(ArrSliceName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(3)
@@ -1214,7 +1257,11 @@ function buildArrSlice(module StdModule)
 	let length = emitLoadField(module, block: entry, arr: arr, offset: ArrLengthOffset, ids: ids)
 	let endTooLarge = emitCmp(module, block: entry, a: endIndex, b: length, pred: StdCmpPred.gt, ids: ids)
 	let startPastEnd = emitCmp(module, block: entry, a: start, b: endIndex, pred: StdCmpPred.gt, ids: ids)
-	let anyErr = emitBin(module, block: entry, a: endTooLarge, b: startPastEnd, opcode: StdBinOpcode.bitOr, ids: ids)
+	let startNegative = emitIsNegative(module, block: entry, value: start, ids: ids)
+	let endNegative = emitIsNegative(module, block: entry, value: endIndex, ids: ids)
+	let badRange = emitBin(module, block: entry, a: endTooLarge, b: startPastEnd, opcode: StdBinOpcode.bitOr, ids: ids)
+	let negativeIndex = emitBin(module, block: entry, a: startNegative, b: endNegative, opcode: StdBinOpcode.bitOr, ids: ids)
+	let anyErr = emitBin(module, block: entry, a: badRange, b: negativeIndex, opcode: StdBinOpcode.bitOr, ids: ids)
 	let zero = emitConst(module, block: entry, value: 0, ids: ids)
 	let violated = emitCmp(module, block: entry, a: anyErr, b: zero, pred: StdCmpPred.ne, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(violated, thenBlockId: oob.id, elseBlockId: copy.id))
