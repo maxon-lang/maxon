@@ -341,7 +341,10 @@ function emitElementDestroyRange(module StdModule, func IrFunction, cur IrBlock,
 	module.setTerminator(body, op: StdOp.condBranch(nonNull, thenBlockId: doDrop.id, elseBlockId: step.id))
 
 	let dropped = ids.mint()
-	module.appendOp(doDrop, op: StdOp.callIndirect(dropped, calleeReg: destroy, args: argsOf(elem)))
+	// The element destructor is `(i64) -> void`: its result slot is unused (i64, matching every other
+	// scalar indirect call) and its single element-pointer argument is never a float (mask 0). Post-P1.5
+	// #78, `callIndirect` carries the callee's result type + a per-arg float mask.
+	module.appendOp(doDrop, op: StdOp.callIndirect(dropped, calleeReg: destroy, resultType: StdType.i64, argFloatMask: 0 as ArgFloatMask, args: argsOf(elem)))
 	module.setTerminator(doDrop, op: StdOp.branch(step.id))
 
 	let one = emitConst(module, block: step, value: 1, ids: ids)
