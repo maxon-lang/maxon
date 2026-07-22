@@ -9178,6 +9178,18 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     value is MaxonEnum me ? me.TypeName
     : value is MaxonStruct ms ? ms.TypeName : null;
 
+  /// Two value arms name INCOMPATIBLE types when they carry different concrete
+  /// aggregate names (`Box` vs `Cup`, or a struct vs the `String` builtin). A
+  /// null name is a scalar, whose agreement is settled by KIND, not by name — so
+  /// a null on either side is never a conflict here (an `int` arm beside a
+  /// `String` arm is caught by the kind check, not this one). This is the ONE
+  /// definition of "same register class, different concrete type is still
+  /// incompatible" shared by the match-merge (`ParseMatchExpression`) and ternary
+  /// (`ParseTernaryExpression`) arm-agreement checks — nothing else forces those
+  /// two diagnostics to agree, so a rule added here reaches both at once.
+  private static bool ManagedAggregatesConflict(string? aName, string? bName) =>
+    aName != null && bName != null && aName != bName;
+
   /// <summary>
   /// Emits the correct var ref op for loading a variable, handling struct/enum/primitive types.
   /// </summary>
@@ -13674,13 +13686,17 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     _ => throw new InvalidOperationException($"Unknown value kind: {kind}")
   };
 
-  private static string ArgTypeName(MaxonValue value, MaxonValueKind kind) {
-    return value switch {
-      MaxonStruct ms => ms.TypeName,
-      MaxonEnum me => me.TypeName,
-      _ => KindToTypeName(kind)
-    };
-  }
+  /// The name a value prints under in a type diagnostic: a declared struct,
+  /// union, or enum by its concrete type name, and every scalar (int, bool,
+  /// float, function, …) by its primitive kind name. The single place the
+  /// aggregate-vs-scalar display split is decided, so the argument-mismatch
+  /// (`ArgTypeName`) and match-give-mismatch (`MatchGiveTypeMismatch`)
+  /// diagnostics render identically and cannot drift apart.
+  private static string TypeDisplayName(MaxonValueKind kind, string? aggregateName) =>
+    aggregateName ?? KindToTypeName(kind);
+
+  private static string ArgTypeName(MaxonValue value, MaxonValueKind kind) =>
+    TypeDisplayName(kind, GetManagedTypeName(value));
 
   /// <summary>
   /// Returns the ranged typealias name for a primitive argument value, if it has one.
@@ -15276,8 +15292,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
           throw MatchGiveTypeMismatch(caseValueKind, caseAggregateName,
             effectiveResultKind.Value, effectiveResultAggregateName, matchToken);
         }
-      } else if (effectiveResultAggregateName != null && caseAggregateName != null
-                 && effectiveResultAggregateName != caseAggregateName) {
+      } else if (ManagedAggregatesConflict(effectiveResultAggregateName, caseAggregateName)) {
         throw MatchGiveTypeMismatch(caseValueKind, caseAggregateName,
           effectiveResultKind.Value, effectiveResultAggregateName, matchToken);
       }
@@ -15362,14 +15377,8 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
       MaxonValueKind gotKind, string? gotAggregateName,
       MaxonValueKind expectedKind, string? expectedAggregateName, Token matchToken) =>
     new CompileError(ErrorCode.SemanticTypeMismatch,
-      $"match arms give incompatible types: '{MatchGiveTypeDisplay(gotKind, gotAggregateName)}' vs '{MatchGiveTypeDisplay(expectedKind, expectedAggregateName)}'",
+      $"match arms give incompatible types: '{TypeDisplayName(gotKind, gotAggregateName)}' vs '{TypeDisplayName(expectedKind, expectedAggregateName)}'",
       matchToken.Line, matchToken.Column);
-
-  /// The name a match give value prints under in a type-agreement diagnostic:
-  /// a declared struct, union, or enum by its concrete type name, and every
-  /// scalar (int, bool, float, function, …) by its primitive kind name.
-  private static string MatchGiveTypeDisplay(MaxonValueKind kind, string? aggregateName) =>
-    aggregateName ?? KindToTypeName(kind);
 
   // ============================================================================
   // Expression parsing
@@ -16124,7 +16133,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     // crashes in lowering when the merged result is read with the wrong
     // field set. For managed arms, require the concrete type names to match.
     var falseStructTypeName = GetManagedTypeName(falseVal);
-    if (resultStructTypeName != null && falseStructTypeName != null && resultStructTypeName != falseStructTypeName) {
+    if (ManagedAggregatesConflict(resultStructTypeName, falseStructTypeName)) {
       throw new CompileError(ErrorCode.ParserMatchTypeMismatch,
         $"ternary expression type mismatch: true branch is '{resultStructTypeName}' but false branch is '{falseStructTypeName}'",
         ifToken.Line, ifToken.Column);
