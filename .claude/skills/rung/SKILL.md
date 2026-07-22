@@ -36,10 +36,10 @@ have marched straight past that and built P1.1 on it.)*
   program that compiles and returns the wrong number, only when *you* probe it. **Leaks are not ok, and
   neither are wrong answers you own**: a latent/reachable leak, or a construct this rung enables that
   miscompiles, is **FIXED**, or the causing construct is **REJECTED cleanly** (turned into a compile
-  error), *before merge* — **NEVER filed to OPEN.md as a live bug.** A defect lives in "your rung's
+  error), *before merge* — **NEVER deferred.** A defect lives in "your rung's
   mechanism" if a file you changed, a construct your rung enables, or a spec on your own acceptance path
-  can reach it. **Filing a task-related defect instead of fixing it is a habit this process exists to
-  break.** *(Precedent: an owned-String RETURN leaked — OPEN #37; the option to "defer the leak to P1.4"
+  can reach it. **Deferring a task-related defect instead of fixing it is a habit this process exists to
+  break.** *(Precedent: an owned-String RETURN leaked at P1.2; the option to "defer the leak to P1.4"
   was overruled, the convention pulled forward. At P1.3 Slice 1 a boxed-union RETURN leaked; it was
   rejected (E2015) symmetric with the already-deferred param, not shipped leaking. The suite was green
   over BOTH — only adversarial probing found them.)*
@@ -59,32 +59,45 @@ have marched straight past that and built P1.1 on it.)*
 **the push (step 10)**, and the `PLAN.md` update (step 11) — needs no permission. Report what you did;
 ask only when the list above fires.
 
-## OPEN.md — the coordinator's ledger, not an agent's escape hatch
+## Deferred work lives in PLAN.md — there is NO separate backlog file
 
-**OPEN.md is for findings genuinely OUTSIDE the rung that found them, and filing to it is YOUR call, made
-in the plan — never an agent's mid-rung escape.** Agents (implementer, optimizer, reviewer) trip over bugs
-constantly; that is the corpus doing its job. **What happens next is the whole game, and the default is
-FIX, not FILE.**
+**A finding that genuinely cannot ride this rung becomes a numbered entry on `PLAN.md` — a future rung or
+an accepted-debt note — and putting it there is YOUR call, made in the plan, never an agent's mid-rung
+escape.** *(There used to be an `OPEN.md` ledger. It was retired 2026-07-21: a standing backlog **invites**
+deferral, and nearly every entry in it turned out to be a defect a rung had tripped over and filed instead
+of fixing. Its live findings were folded into `PLAN.md` — each into the section it belongs to, so a step's
+open work sits WITH the step.)* Agents (implementer, optimizer, reviewer) trip over bugs constantly; that
+is the corpus doing its job. **What happens next is the whole game, and the default is FIX, not FILE.**
+
+> **⭐ A STEP WITH RESIDUALS IS NOT COMPLETE.** If a rung generates a residual it does not close, the rung
+> is **not done** — however green its suite — and its `PLAN.md` status says so (**◑**, not ✅). *"Core
+> landed"* is not *"complete."* The residual lives with the rung (or its workstream), and the rung stays on
+> the ladder until it closes. (Accepted debt measured linear-in-practice and a deliberate divergence are
+> DECISIONS, not residuals — they do not hold a rung open.)
 
 - **A defect in the rung's own mechanism is FIXED, or cleanly REJECTED, before merge** (see the HALT
-  list). It is never filed. *"I found it while doing something else"* / *"it wasn't what I was asked to
+  list). It is never deferred. *"I found it while doing something else"* / *"it wasn't what I was asked to
   do"* is **not** a reason to defer — it is the reason the bug is now yours.
-- **Only four kinds of finding legitimately reach the ledger**, and each has a real reason it cannot ride
-  along on this rung:
+- **Only four kinds of finding legitimately become a future rung**, and each has a real reason it cannot
+  ride along on this rung. Each has a specific home in `PLAN.md`:
   1. a **bootstrap (`maxon-sharp`) bug** — it needs the full C# suite as its gate (unless this IS a
-     bootstrap rung);
-  2. a **distinct feature** that needs its own contract / IR ops / spec-port list — that belongs on
-     **`PLAN.md`'s ladder with a number**, not only in OPEN.md;
+     bootstrap rung) ⇒ the **"Bootstrap oracle bugs"** list beside PLAN.md's "Traps that survive";
+  2. a **distinct feature** that needs its own contract / IR ops / spec-port list ⇒ its own **numbered
+     rung on the ladder** (the "Future rungs" list until it is sequenced);
   3. a **correctness-neutral perf debt the optimizer has MEASURED linear-in-practice** — a superlinearity
-     you can still *trigger* on a realistic input is fixed, not filed;
+     you can still *trigger* on a realistic input is fixed, not filed ⇒ the **"Measured debt"** list in
+     PLAN.md's Workstream O, WITH the measurement and the re-measure trigger;
   4. a **follow-on slice this rung's plan sanctioned UP FRONT** (e.g. the P1.5 async residuals held for
-     B1c) — sanctioned by you, in the plan, before the wave, not invented by an agent at the code.
+     B1c) — sanctioned by you, in the plan, before the wave ⇒ a **named residual on the rung / its
+     workstream** (and the rung is **not** marked complete while it is open).
 - **An agent that trips over anything else STOPS and reports it to you** — the same reflex as a wrong plan
   or an out-of-file-list edit. **You triage: fix-now is the default for anything the rung's own specs
-  would exercise.** An agent never adds a row to OPEN.md on its own authority.
+  would exercise.** An agent never writes a deferral into PLAN.md on its own authority.
 
 This is the leak rule (*"leaks are not ok"*) generalized: a leak may not be deferred because it is a
-defect the rung owns — and **a wrong answer the rung owns is no different.**
+defect the rung owns — and **a wrong answer the rung owns is no different.** The only change from the old
+regime is the DESTINATION of a legitimate deferral: a **numbered future rung in PLAN.md**, decided by the
+coordinator up front — not a row in a backlog file that anyone could quietly append to.
 
 ## 0. Which rung, and orient
 
@@ -267,8 +280,11 @@ Remove the worktree and delete the branch.
 
 ## 11. Close the loop
 
-Update `maxon-shv2/PLAN.md` (a rung's deliverable is the set of `disabled-test:` markers it flipped to
-`test:`) and record anything durable in memory.
+Update `maxon-shv2/PLAN.md`: a rung's deliverable is the set of `disabled-test:` markers it flipped to
+`test:`. **Mark the rung done ONLY if it has no open residuals** — if the plan sanctioned any deferral in
+step 2, the rung is **not** complete (status **◑**, not ✅), and each residual must be written into the
+appropriate PLAN.md section (a future rung, a workstream residual, or the bootstrap-oracle / "Measured
+debt" notes), not left implicit. Record anything durable in memory.
 
 ---
 

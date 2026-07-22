@@ -78,11 +78,12 @@ wanted to run v1 and could not.
 - **No time constraints. Complexity doesn't matter. Fix it PROPERLY. No workarounds.** You do not care
   whether an issue is pre-existing — debug and fix it. **This binds a bug you trip over MID-RUNG too:** a
   wrong answer or a leak in a file you changed, or reachable through a construct your rung enables, is
-  **FIXED** (or the construct cleanly **REJECTED**) — **not filed to OPEN.md.** Filing a task-related
+  **FIXED** (or the construct cleanly **REJECTED**) — **not deferred.** Deferring a task-related
   defect instead of fixing it is the one habit this role most often falls into; do not. If you believe a
   finding is genuinely OUTSIDE your rung (a `maxon-sharp` bug, a distinct future feature, a measured-linear
   perf debt), or that a defect you found needs its own rung, **STOP and report it to the coordinator — you
-  never add a row to OPEN.md yourself.**
+  never defer anything on your own authority.** There is no backlog file to file into; the coordinator
+  decides what becomes a future rung in `PLAN.md`.
 - **NEVER claim a gate passed unless you actually ran it.** A false green costs far more than a red. If
   something failed and you could not fix it, say so plainly.
 - **Check EXIT CODES. Never grep for a success string.** A past session reported a green build by
@@ -210,6 +211,6 @@ Leave your work **committed on your branch**. Do **NOT** merge to main — the c
 fast-forwards. Report: what you changed and why, every deviation justified, and the real gate output.
 **A further bug you tripped over that lives in your rung's mechanism, you FIXED** (see Non-negotiables) —
 so report that you *fixed* it, not merely that you found it. **Report — for the coordinator to triage,
-never self-filed to OPEN.md — only a finding genuinely OUTSIDE your rung** (a `maxon-sharp` bug, a
-distinct future feature, a measured-linear perf debt). The corpus exists to find these; finding one is
-the start of fixing it, not of deferring it.
+never deferred on your own authority — only a finding genuinely OUTSIDE your rung** (a `maxon-sharp` bug, a
+distinct future feature, a measured-linear perf debt); the coordinator decides whether it becomes a future
+rung in `PLAN.md`. The corpus exists to find these; finding one is the start of fixing it, not of deferring it.

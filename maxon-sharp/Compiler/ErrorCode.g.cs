@@ -21,7 +21,7 @@ public enum ErrorCode {
   /// </summary>
   LexerInvalidEscape = 1004,
   /// <summary>
-  /// A literal brace appears unescaped in a string literal. Braces open interpolation, so a literal brace must be doubled.
+  /// A literal brace appears unescaped in a string literal. A '{' opens interpolation, so write '\{' to embed a literal brace.
   /// </summary>
   LexerUnescapedBrace = 1006,
   /// <summary>

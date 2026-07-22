@@ -88,9 +88,11 @@ making it.
   a clever O(n).
 - **A superlinearity you can TRIGGER on a realistic input is FIXED, not filed.** Only a term you have
   **measured** linear-in-practice across the real corpus (like `SplitLiveRanges`' K², max K = 8) is
-  filed as debt — to OPEN.md and the trend log, WITH the measurement that shows it linear today and the
-  trigger that would make it bend (an inliner, a machine-generated wide type). A curve you have not
-  measured is not yet a debt; it is a defect to run down.
+  filed as debt — reported to the coordinator for the "Measured debt" list in PLAN.md's Workstream O, and
+  to the trend log, WITH the measurement that shows it linear today and the trigger that would make it bend
+  (an inliner, a machine-generated wide type). A curve you have not measured is not yet a debt; it is a
+  defect to run down. **You never write a deferral yourself — there is no backlog file; the coordinator
+  owns PLAN.md.**
 - **Check exit codes; never grep for a success string.** Exit **101** = memory leak.
 - ⚠ **NEVER run `./bin/maxon.exe fmt` with arguments** — it reformats the whole tree in place.
 - Commit as a **SEPARATE commit** on the same branch.
