@@ -668,6 +668,12 @@ end 'emitBufferNotOwned'
 //
 // It threads `cur` (sets its terminator) and returns the base as a BLOCK ARG on the caller-owned `join`,
 // which is why `join` is passed IN: the caller resumes there and the two arms are otherwise identical.
+//
+// ⚠ **IT IS DELIBERATELY NOT FUSED WITH `emitRefcountSharedBase` INTO ONE "release the base" HELPER**, even
+// though `__arr_decref` calls the two back to back. `__arr_cow_detach` must SPLIT them across its byte copy
+// — the base is read before the record is republished and spent only after the copy (see its trap 5) — so a
+// fused helper would serve exactly one call site, which is the thin wrapper this codebase forbids, and it
+// would quietly invite the one caller that must not fuse them to do so.
 function emitSharedAllocationBase(module StdModule, func IrFunction, cur IrBlock, join IrBlock, record ValueId, ids ValueMinter) returns ValueId
 	var viewBase = module.addBlock(func, label: b"vbase")
 	var ownBase = module.addBlock(func, label: b"obase")
@@ -882,10 +888,18 @@ end 'emitArrayView'
 //     exactly its own window, because `buffer@0` already points at the view's first element. There is no
 //     `start` arithmetic here and there must not be: the record's `length@8` IS the window's length.
 //  5. **The OLD buffer is RELEASED, NOT FREED, AND ONLY AFTER THE COPY.** It is released through
-//     `emitReleaseSharedBase`, so an rdata blob (base 0) is left alone, a view's parent is decref'd, and an
-//     owner detaching from its own viewed buffer gives up its share of it. ⚠ The release MUST follow the
-//     copy: a view whose parent has already dropped is the LAST owner of those bytes, so the decref frees
-//     them, and reading them afterwards is a use-after-free.
+//     `emitSharedAllocationBase` + `emitRefcountSharedBase`, so an rdata blob (base 0) is left alone, a
+//     view's parent is decref'd, and an owner detaching from its own viewed buffer gives up its share of
+//     it. ⚠ The release MUST follow the copy: a view whose parent has already dropped is the LAST owner of
+//     those bytes, so the decref frees them, and reading them afterwards is a use-after-free.
+//
+//     ⚠⚠ **AND NO TEST CAN CATCH A REVERSAL OF THAT ORDER — MEASURED, NOT ASSUMED.** Reversing it (release
+//     emitted before `emitForwardCopy`) was built and run during review: the suite stayed 1197/0, because
+//     `__mm_free` RECLAIMS NOTHING under the bump allocator (it only lowers the live count), so the freed
+//     bytes read back intact. The ordering is therefore a RULE this function keeps on its own, not one a
+//     gate protects — it is what makes the function still correct on the day `__mm_free` reuses memory, and
+//     that is the day it also becomes testable. Do not "simplify" the two halves back together; the split
+//     across the copy is the whole point of `base` being read at `detach` and spent at `afterCopy`.
 //
 // The published `capacity@16` is `length` — the buffer holds exactly the live elements and no slack, which is
 // also what the reference compiler reports after it detaches (`b"hi"`, then `set`, then `capacity()` → 2) —
@@ -1723,7 +1737,7 @@ end 'buildArrAppend'
 //
 // ⭐ **THE BUFFER IS RELEASED THROUGH THE SENTINEL LADDER, NOT FREED DIRECTLY** (P1.7 slices 2 and COW B).
 // `emitSharedAllocationBase` answers which allocation — if any — this record owes a `__mm_decref` to, and
-// `emitReleaseSharedBase` pays it. That one call covers all three record kinds and is the same pair
+// `emitRefcountSharedBase` pays it. That pair covers all three record kinds and is the same pair
 // `__arr_cow_detach` uses, so the two cannot disagree about what a record owns:
 //
 //   * an OWNER's base is its own `buffer@0` — `__mm_decref` reclaims it at the LAST owner, so a buffer still
@@ -1745,6 +1759,15 @@ end 'buildArrAppend'
 // here. Gating the walk on that would be a branch no program can execute, which is the one thing this
 // runtime consistently refuses to emit; the day managed elements can be viewed, this is the note that says
 // what has to change.
+//
+// ⭐ **AND THE TWO HALVES OF THAT ARGUMENT ARE ONE FACT, NOT TWO THAT HAPPEN TO AGREE** — which is the only
+// reason it may rest on a comment. The runtime gate here fires on `element_destroy@40 != 0`, and the parser
+// gate rejects `slice`/`clone`/`append`; BOTH are `SignatureIndex.arrayElementIsManaged(giid)`, read at
+// `Parser.arrayElementDestroyValue` (which stamps the field) and at `requireTrivialArrayElementForCopy`
+// (which raises E2015). There is no third spelling to drift. ⚠ So the thing that would break this is NOT
+// someone editing one copy — it is LIFTING the E2015 restriction (P1.7 slice 3b's deep-clone primitive)
+// without also teaching the walk to run only for the buffer's last owner. Failure mode: a double destroy of
+// every element under the shorter of two windows. Wrong answer, not an error.
 function buildArrDecref(module StdModule)
 	var func = IrFunction.createFromStd(ArrDecrefName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)

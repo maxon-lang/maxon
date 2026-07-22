@@ -880,6 +880,8 @@ the reference compiler, which eagerly copies and therefore answers what a correc
 A slice reports a negative capacity — its buffer is not its own — until a write gives it a private one
 sized to its live elements. This is the one place the sharing is directly observable, and it is what says
 no buffer was allocated: an eager copy would report a grown positive capacity from the moment it was made.
+Observable does not mean divergent: the reference compiler answers `-1` here too (verified), because it
+also flags a not-yet-owned buffer rather than reporting a capacity it does not have.
 ```maxon
 function main() returns ExitCode
 	let arr = [10, 20, 30, 40, 50]
@@ -960,6 +962,64 @@ function main() returns ExitCode
 		return 0
 	end 'ok'
 	return 1
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: slice-of-a-dead-slice-still-reads -->
+Flattening, pinned by killing the record in the middle. The inner slice is cut from a slice that dies
+inside the callee, and the array both were cut from dies with it — yet the inner one still reads. This is
+what says `parent@32` holds the shared ALLOCATION and not the parent RECORD: a chain would have the inner
+view depending on a record that is already gone.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function build() returns IntArray
+	var a = IntArray.create()
+	var i = 0
+	while i < 10 'fill'
+		a.push(i * 10)
+		i = i + 1
+	end 'fill'
+	return a
+end 'build'
+
+function innerOf(a IntArray) returns IntArray
+	let mid = try a.slice(2, endIndex: 8) otherwise IntArray.create()
+	return try mid.slice(1, endIndex: 4) otherwise IntArray.create()
+end 'innerOf'
+
+function main() returns ExitCode
+	let inner = innerOf(build())
+	let a = try inner.get(0) otherwise 0
+	let b = try inner.get(1) otherwise 0
+	let c = try inner.get(2) otherwise 0
+	return (a + b + c) / 10
+end 'main'
+```
+```exitcode
+12
+```
+
+<!-- test: many-views-detach-one-by-one -->
+One buffer held by an owner, two slices and a slice-of-a-slice, then all four write in turn. The shared
+count has to walk all the way down and reclaim exactly once — every arm of the detach (owner-with-viewers,
+viewer, viewer-of-a-viewer) runs, and each side keeps the bytes it had when it copied out.
+```maxon
+function main() returns ExitCode
+	var arr = [1, 2, 3, 4, 5, 6]
+	var a = try arr.slice(0, endIndex: 3) otherwise return 1
+	var b = try arr.slice(3, endIndex: 6) otherwise return 2
+	var c = try a.slice(0, endIndex: 2) otherwise return 3
+	try arr.set(0, value: 100) otherwise panic("index 0 is in bounds")
+	try b.set(0, value: 200) otherwise panic("index 0 is in bounds")
+	try c.set(0, value: 300) otherwise panic("index 0 is in bounds")
+	try a.set(1, value: 400) otherwise panic("index 1 is in bounds")
+	let ok = (try arr.get(0) otherwise 0) == 100 and (try arr.get(3) otherwise 0) == 4 and (try b.get(0) otherwise 0) == 200 and (try b.get(1) otherwise 0) == 5 and (try c.get(0) otherwise 0) == 300 and (try c.get(1) otherwise 0) == 2 and (try a.get(0) otherwise 0) == 1 and (try a.get(1) otherwise 0) == 400
+	return 0 if ok else 9
 end 'main'
 ```
 ```exitcode
@@ -1080,8 +1140,11 @@ end 'main'
 
 <!-- test: both-sides-detach-parent-first -->
 Both sides write. The parent copies out first and gives up the shared buffer, leaving the slice as its
-sole owner; the slice then copies out and reclaims it. A release that ran before the copy would read freed
-bytes here.
+sole owner; the slice then copies out and reclaims it. This case reaches the path where a detach's release
+frees the bytes it just copied — but it cannot *catch* a detach that released BEFORE copying, because
+`__mm_free` reclaims nothing under the bump allocator, so freed bytes still read back intact (measured:
+reversing that order leaves the suite at 1197/0). The ordering is a rule `__arr_cow_detach` keeps on its
+own; it becomes testable the day the allocator reuses memory.
 ```maxon
 function main() returns ExitCode
 	var arr = [10, 20, 30, 40, 50]
@@ -1123,8 +1186,9 @@ end 'main'
 ```
 
 <!-- test: every-mutator-detaches-a-view -->
-Every in-place mutator, applied to a slice of one shared array. Each must copy out before it writes, so
-none of the nine writes below may reach the source — the gate is that the source reads back untouched.
+Every in-place mutator that is not already covered by `set` above, applied to a slice of one shared array:
+`clear`, `pop`, `remove`, `insert`, `resize`, `reserve`, `push`. Each must copy out before it writes, so
+none of those seven writes may reach the source — the gate is that the source reads back untouched.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
