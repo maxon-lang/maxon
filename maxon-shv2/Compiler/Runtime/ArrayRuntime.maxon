@@ -137,6 +137,15 @@ export let ArrInsertName = b"__arr_insert"
 export let ArrRemoveName = b"__arr_remove"
 export let ArrDecrefName = b"__arr_decref"
 
+// The whole-array copy operations (P1.7 slice 4). `slice` is THROWING (bounds/inverted-range → `ArrayError`),
+// `clone`/`append` are not. `slice`/`clone` return a NEW INDEPENDENT array (a fresh record + buffer with the
+// range's bytes copied in — shv2 is MOVE-ONLY, so there is NO copy-on-write and NO zero-copy view); `append`
+// grows `self` and block-copies `other`'s bytes in, leaving `other` untouched. TRIVIAL elements only — a
+// managed element would need a per-element deep clone (the parser rejects the managed cases, P1.7 slice 4).
+export let ArrSliceName = b"__arr_slice"
+export let ArrCloneName = b"__arr_clone"
+export let ArrAppendName = b"__arr_append"
+
 // Internal helpers the public ones call: `__arr_grown_cap` is the policy, `__arr_grow` reallocs to fit.
 let ArrGrownCapName = b"__arr_grown_cap"
 let ArrGrowName = b"__arr_grow"
@@ -149,17 +158,18 @@ export function isArrayRuntimeCallee(callee ByteArray) returns bool
 	return bytesStartWith(callee, prefix: ArrayRuntimePrefix)
 end 'isArrayRuntimeCallee'
 
-// The THROWING array accessors — `get`/`set`/`first`/`last`/`pop`/`remove` return via the dual-register
+// The THROWING array accessors — `get`/`set`/`first`/`last`/`pop`/`remove`/`slice` return via the dual-register
 // `errorReturn` ABI and can throw `ArrayError.indexOutOfBounds`, so a call to one MUST become a `tryCall`
 // (it is under a `try`, which `rewriteLastCallToTryCall` converts). SemanticCheck reads THIS predicate to
 // report E3057 on a bare `call` to one — the same "throwing call needs `try`" rule it applies to a user
 // function, which its blanket compiler-internal skip would otherwise hide. Without it the plain call reads
 // only the value register and drops the error flag, so an out-of-bounds `get` silently returns 0 (a wrong
 // answer, and a divergence from the reference compiler, which rejects it). THE ONE home of "which array
-// callee throws": `Parser.dispatchArrayMethod` emits exactly these six through its throwing path, and the
-// two lists name the same six `Arr*Name` constants so they cannot drift.
+// callee throws": `Parser.dispatchArrayMethod` emits exactly these seven through its throwing path, and the
+// two lists name the same seven `Arr*Name` constants so they cannot drift. `slice` (P1.7 slice 4) throws on
+// an out-of-bounds or inverted range.
 export function isThrowingArrayRuntimeCallee(callee ByteArray) returns bool
-	return callee.equals(ArrGetName) or callee.equals(ArrSetName) or callee.equals(ArrFirstName) or callee.equals(ArrLastName) or callee.equals(ArrPopName) or callee.equals(ArrRemoveName)
+	return callee.equals(ArrGetName) or callee.equals(ArrSetName) or callee.equals(ArrFirstName) or callee.equals(ArrLastName) or callee.equals(ArrPopName) or callee.equals(ArrRemoveName) or callee.equals(ArrSliceName)
 end 'isThrowingArrayRuntimeCallee'
 
 // A byte width used to shift a byte into (or out of) its position in a little-endian element word. `i*8`
@@ -193,6 +203,9 @@ export function installArrayRuntime(module StdModule, usage RuntimeUsage)
 	buildArrClear(module)
 	buildArrInsert(module)
 	buildArrRemove(module)
+	buildArrSlice(module)
+	buildArrClone(module)
+	buildArrAppend(module)
 	buildArrDecref(module)
 end 'installArrayRuntime'
 
@@ -546,6 +559,39 @@ function emitOkReturn(module StdModule, block IrBlock, value ValueId, ids ValueM
 	let flag = emitConst(module, block: block, value: NoErrorFlag, ids: ids)
 	module.setTerminator(block, op: StdOp.errorReturn(value, errorFlagId: flag))
 end 'emitOkReturn'
+
+// ⭐ **BUILD A FRESH INDEPENDENT ARRAY holding `srcRecord`'s elements `[start, start+sliceLen)` (P1.7 slice 4).**
+// The shared body of `__arr_clone` (start 0, sliceLen = length) and `__arr_slice` (a bounds-checked sub-range).
+// shv2 is MOVE-ONLY with NO copy-on-write and NO zero-copy views — the bootstrap's `capacity=-1`/`-2` view
+// sentinels and `maxon_cow_check` are bootstrap-specific and NOT ported — so the result is ALWAYS a new
+// `__mm_alloc`'d record + buffer with the range's bytes COPIED in. A later mutation of either array therefore
+// cannot reach the other (`slice-cow-modify-slice`/`-original` pass by copy semantics: the buffers are disjoint).
+// It reuses `__arr_create` (a fresh record, carrying the SAME `element_size` and `element_destroy` as the source)
+// and `__arr_reserve` (a buffer sized for `sliceLen`) so the record/grow logic lives in ONE place; then it block-
+// copies `sliceLen · elementSize` bytes and publishes `length`. TRIVIAL elements only — the byte copy duplicates
+// heap POINTERS without a per-element deep clone, so a managed element would double-free; the parser rejects the
+// managed cases. `exit` is caller-owned (passed IN, the `emitLoadElem` shape): the new record is minted in `cur`
+// which dominates `exit`, so it is live there for the caller's `ret`/`errorReturn`. Threads `cur` (branches its
+// tail to `exit`) and returns the new record value.
+function emitArrayRangeCopy(module StdModule, func IrFunction, cur IrBlock, exit IrBlock, srcRecord ValueId, start ValueId, sliceLen ValueId, ids ValueMinter) returns ValueId
+	let es = emitLoadField(module, block: cur, arr: srcRecord, offset: ArrElementSizeOffset, ids: ids)
+	let dtor = emitLoadField(module, block: cur, arr: srcRecord, offset: ArrElementDestroyOffset, ids: ids)
+	let newRec = ids.mint()
+	module.appendOp(cur, op: StdOp.call(newRec, callee: ArrCreateName, args: twoArgs(es, second: dtor)))
+	let reserved = ids.mint()
+	module.appendOp(cur, op: StdOp.call(reserved, callee: ArrReserveName, args: twoArgs(newRec, second: sliceLen)))
+
+	// Reload both buffers AFTER the reserve (it may have allocated the new one), then copy `[start, start+sliceLen)`.
+	let srcBuffer = emitLoadField(module, block: cur, arr: srcRecord, offset: ArrBufferOffset, ids: ids)
+	let newBuffer = emitLoadField(module, block: cur, arr: newRec, offset: ArrBufferOffset, ids: ids)
+	let srcAddr = emitSlotAddr(module, block: cur, buffer: srcBuffer, index: start, elementSize: es, ids: ids)
+	let byteCount = emitBin(module, block: cur, a: sliceLen, b: es, opcode: StdBinOpcode.mul, ids: ids)
+	var afterCopy = emitForwardCopy(module, func: func, cur: cur, dest: newBuffer, src: srcAddr, byteCount: byteCount, ids: ids)
+
+	emitStoreField(module, block: afterCopy, arr: newRec, offset: ArrLengthOffset, value: sliceLen)
+	module.setTerminator(afterCopy, op: StdOp.branch(exit.id))
+	return newRec
+end 'emitArrayRangeCopy'
 
 // --- The runtime functions ---
 
@@ -1131,6 +1177,99 @@ function buildArrRemove(module StdModule)
 
 	module.functions.push(func)
 end 'buildArrRemove'
+
+// `__arr_slice(arr, start, end) -> (newArrPtr, flag)` — a NEW independent array over elements `[start, end)`
+// (throwing). The bounds check mirrors the reference compiler's `LowerManagedMemSlice` (and `stdlib/Array.maxon`'s
+// `slice`): `end > length` OR `start > end` throws `ArrayError.indexOutOfBounds`. Those two predicates together
+// also catch `start > length` (if `start <= end` then `end >= start > length` trips `end > length`; otherwise
+// `start > end` trips), so no third check is needed — `slice(5, endIndex: 5)` on a length-3 array throws via
+// `end > length`. An empty slice (`start == end`, in bounds) yields a valid length-0 array. `emitArrayRangeCopy`
+// does the copy; shv2 always COPIES (no COW / view).
+function buildArrSlice(module StdModule)
+	var func = IrFunction.createFromStd(ArrSliceName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(3)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var oob = module.addBlock(func, label: b"oob")
+	var copy = module.addBlock(func, label: b"copy")
+	var ret = module.addBlock(func, label: b"ret")
+
+	emitParams(module, block: entry, count: 3)
+	let arr = 0 as ValueId
+	let start = 1 as ValueId
+	let endIndex = 2 as ValueId
+
+	let length = emitLoadField(module, block: entry, arr: arr, offset: ArrLengthOffset, ids: ids)
+	let endTooLarge = emitCmp(module, block: entry, a: endIndex, b: length, pred: StdCmpPred.gt, ids: ids)
+	let startPastEnd = emitCmp(module, block: entry, a: start, b: endIndex, pred: StdCmpPred.gt, ids: ids)
+	let anyErr = emitBin(module, block: entry, a: endTooLarge, b: startPastEnd, opcode: StdBinOpcode.bitOr, ids: ids)
+	let zero = emitConst(module, block: entry, value: 0, ids: ids)
+	let violated = emitCmp(module, block: entry, a: anyErr, b: zero, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(violated, thenBlockId: oob.id, elseBlockId: copy.id))
+
+	emitOobReturn(module, block: oob, ids: ids)
+
+	let sliceLen = emitBin(module, block: copy, a: endIndex, b: start, opcode: StdBinOpcode.sub, ids: ids)
+	let newRec = emitArrayRangeCopy(module, func: func, cur: copy, exit: ret, srcRecord: arr, start: start, sliceLen: sliceLen, ids: ids)
+	emitOkReturn(module, block: ret, value: newRec, ids: ids)
+
+	module.functions.push(func)
+end 'buildArrSlice'
+
+// `__arr_clone(arr) -> newArrPtr` — a fresh INDEPENDENT deep copy of the whole array (non-throwing). It is
+// `slice(0, length)` — always in bounds — so it reuses `emitArrayRangeCopy` directly with `start = 0`,
+// `sliceLen = length` and needs no bounds check (the reference `Array.clone` is literally `slice(0, len)`).
+function buildArrClone(module StdModule)
+	var func = IrFunction.createFromStd(ArrCloneName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var ret = module.addBlock(func, label: b"ret")
+
+	emitParams(module, block: entry, count: 1)
+	let arr = 0 as ValueId
+
+	let length = emitLoadField(module, block: entry, arr: arr, offset: ArrLengthOffset, ids: ids)
+	let start = emitConst(module, block: entry, value: 0, ids: ids)
+	let newRec = emitArrayRangeCopy(module, func: func, cur: entry, exit: ret, srcRecord: arr, start: start, sliceLen: length, ids: ids)
+	module.setTerminator(ret, op: StdOp.ret(newRec))
+
+	module.functions.push(func)
+end 'buildArrClone'
+
+// `__arr_append(dest, src)` — append `src`'s elements to `dest`; `dest` grows, `src` is READ-ONLY (borrowed and
+// preserved, `append-preserves-originals`). Reserve `dest.length + src.length` up front (one grow, never per-
+// element), then block-copy `src.length · element_size` bytes past `dest`'s live end. TRIVIAL elements only — a
+// raw byte copy duplicates heap pointers, so a managed element would leave both arrays owning the same elements
+// (a double-free); the parser rejects the managed cases. `dest.buffer` is reloaded AFTER the reserve because a
+// grow may have replaced it. An empty `src` copies nothing (the forward-copy header guard holds at once).
+function buildArrAppend(module StdModule)
+	var func = IrFunction.createFromStd(ArrAppendName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry")
+	emitParams(module, block: entry, count: 2)
+	let dest = 0 as ValueId
+	let src = 1 as ValueId
+
+	let destLen = emitLoadField(module, block: entry, arr: dest, offset: ArrLengthOffset, ids: ids)
+	let srcLen = emitLoadField(module, block: entry, arr: src, offset: ArrLengthOffset, ids: ids)
+	let newLen = emitBin(module, block: entry, a: destLen, b: srcLen, opcode: StdBinOpcode.add, ids: ids)
+	let reserved = ids.mint()
+	module.appendOp(entry, op: StdOp.call(reserved, callee: ArrReserveName, args: twoArgs(dest, second: newLen)))
+
+	let es = emitLoadField(module, block: entry, arr: dest, offset: ArrElementSizeOffset, ids: ids)
+	let destBuffer = emitLoadField(module, block: entry, arr: dest, offset: ArrBufferOffset, ids: ids)
+	let srcBuffer = emitLoadField(module, block: entry, arr: src, offset: ArrBufferOffset, ids: ids)
+	let destAddr = emitSlotAddr(module, block: entry, buffer: destBuffer, index: destLen, elementSize: es, ids: ids)
+	let byteCount = emitBin(module, block: entry, a: srcLen, b: es, opcode: StdBinOpcode.mul, ids: ids)
+	var afterCopy = emitForwardCopy(module, func: func, cur: entry, dest: destAddr, src: srcBuffer, byteCount: byteCount, ids: ids)
+
+	emitStoreField(module, block: afterCopy, arr: dest, offset: ArrLengthOffset, value: newLen)
+	module.setTerminator(afterCopy, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildArrAppend'
 
 // `__arr_decref(arr)` — an array's drop: the shared refcount RMW, then on the last owner DESTROY each managed
 // element, free the external element buffer (if any) and the record.

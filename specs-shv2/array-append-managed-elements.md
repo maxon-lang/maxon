@@ -1,0 +1,166 @@
+---
+feature: array-append-managed-elements
+status: stable
+keywords: [array, append, managed, refcount, use-after-free]
+category: memory
+---
+# Array Append Must Incref Managed Elements
+
+## Documentation
+
+When `Array.append` copies elements from one array to another via `managed.append()`,
+managed elements (structs, enums, strings) must have their reference counts incremented.
+The current implementation uses a raw `memcpy` which copies heap pointers without adjusting
+refcounts. When the source array is later freed, its destructor decrements each element's
+refcount — potentially freeing elements that the destination array still references.
+
+## Tests
+
+<!-- disabled-test: append-struct-source-freed -->
+<!-- P1.8 managed deep-clone primitive -->
+### Append structs with managed fields, source freed before access
+The helper function creates a source array and appends it into dest. When the
+helper returns, the source array is freed. If append didn't incref, the
+elements in dest are now dangling pointers.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Item
+		export var name as String
+		export var value as Integer
+
+		static function create(name String, value Integer) returns Self
+			return Self{name: name, value: value}
+		end 'create'
+end 'Item'
+
+typealias ItemArray = Array with Item
+
+function appendFromHelper(dest ItemArray)
+		var src = ItemArray.create()
+		src.push(Item.create("hello from source that is long enough", value: 10))
+		src.push(Item.create("second item from source long enough", value: 20))
+		src.push(Item.create("third item from source long enough", value: 30))
+		dest.append(src)
+		// src is freed when this function returns
+end 'appendFromHelper'
+
+function main() returns ExitCode
+		var dest = ItemArray.create()
+		dest.push(Item.create("dest item that is long enough for heap", value: 1))
+		appendFromHelper(dest)
+
+		// Source array is freed. dest should still have valid elements.
+		if dest.count() != 4 'badCount'
+				return 99
+		end 'badCount'
+
+		let item = try dest.get(1) otherwise Item.create("", value: 0)
+		return item.value
+end 'main'
+```
+```exitcode
+10
+```
+
+<!-- disabled-test: append-enum-source-freed -->
+<!-- P1.8 managed deep-clone primitive -->
+### Append enums, source freed before access
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+union Op
+		add(value Integer)
+		sub(value Integer)
+		nop
+end 'Op'
+
+typealias OpArray = Array with Op
+
+function appendOps(dest OpArray)
+		var src = OpArray.create()
+		src.push(Op.add(10))
+		src.push(Op.sub(20))
+		src.push(Op.add(30))
+		dest.append(src)
+end 'appendOps'
+
+function main() returns ExitCode
+		var dest = OpArray.create()
+		dest.push(Op.nop)
+		appendOps(dest)
+
+		if dest.count() != 4 'badCount'
+				return 99
+		end 'badCount'
+
+		let op = try dest.get(1) otherwise Op.nop
+		match op 'check'
+				add(v) then return v
+				sub then return 98
+				nop then return 97
+		end 'check'
+end 'main'
+```
+```exitcode
+10
+```
+
+<!-- disabled-test: merge-modules-source-freed -->
+<!-- P1.8 managed deep-clone primitive -->
+### Merge pattern: source module freed, access merged elements
+Mirrors the self-hosted compiler pattern. A helper merges a parsed module
+into an accumulator. The parsed module is freed when the helper returns.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+type Func
+		export var name as String
+		export var body as IntArray
+
+		static function create(name String, body IntArray) returns Self
+			return Self{name: name, body: body}
+		end 'create'
+end 'Func'
+
+typealias FuncArray = Array with Func
+
+type Module
+		export var functions as FuncArray
+
+		static function create(functions FuncArray) returns Self
+			return Self{functions: functions}
+		end 'create'
+end 'Module'
+
+function createModule() returns Module
+		return Module.create(FuncArray.create())
+end 'createModule'
+
+function parseAndMerge(dest Module, name String)
+		var source = createModule()
+		source.functions.push(Func.create(name, body: IntArray.create()))
+		dest.functions.append(source.functions)
+		// source is freed when this function returns
+end 'parseAndMerge'
+
+function main() returns ExitCode
+		var allModule = createModule()
+		parseAndMerge(allModule, name: "func_a_with_long_name_for_heap")
+		parseAndMerge(allModule, name: "func_b_with_long_name_for_heap")
+
+		if allModule.functions.count() != 2 'badCount'
+				return 99
+		end 'badCount'
+
+		let first = try allModule.functions.get(0) otherwise Func.create("", body: IntArray.create())
+		if first.name == "func_a_with_long_name_for_heap" 'correct'
+				return 0
+		end 'correct'
+		return 1
+end 'main'
+```
+```exitcode
+0
+```

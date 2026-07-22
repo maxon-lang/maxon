@@ -1,0 +1,153 @@
+// Test: slice-cow-modify-slice
+function main() returns ExitCode
+	let arr = [10, 20, 30, 40, 50]
+	var sub = try arr.slice(1, endIndex: 4) otherwise return 1
+	try sub.set(0, value: 99) otherwise panic("test invariant: set OOB")
+	// Original should be unchanged
+	let original = try arr.get(1) otherwise 0
+	let modified = try sub.get(0) otherwise 0
+	if original == 20 'check'
+		if modified == 99 'check2'
+			return 0
+		end 'check2'
+	end 'check'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __arr_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rdx, 10
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_push
+    x64.movRegImm32 rdx, 20
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_push
+    x64.movRegImm32 rdx, 30
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_push
+    x64.movRegImm32 rdx, 40
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_push
+    x64.movRegImm32 rdx, 50
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_push
+    x64.movRegImm32 rdx, 1
+    x64.movRegImm32 rax, 4
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_slice
+    x64.movRegReg r12, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 r12, 1
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.movRegImm32 rdx, 0
+    x64.movRegImm32 rax, 99
+    x64.movRegReg rcx, r12
+    x64.callDirect __arr_set
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.leaRegRdata rax, [rip + __str_rec_1]
+    x64.movRegImm32 rcx, 134
+    x64.movReg32Reg32 rcx, rcx
+    x64.iatCall 0
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.movRegImm32 rdx, 1
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 r13, 0
+    x64.jmp trycont
+  tryok:
+    x64.movRegReg r13, r8
+    x64.jmp trycont
+  trycont:
+    x64.movRegImm32 rdx, 0
+    x64.movRegReg rcx, r12
+    x64.callDirect __arr_get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 rax, 0
+    x64.jmp trycont
+  tryok:
+    x64.movRegReg rax, r8
+    x64.jmp trycont
+  trycont:
+    x64.cmpRegImm32 r13, 20
+    x64.jcc equal, check
+    x64.jmp ifcont
+  check:
+    x64.cmpRegImm32 rax, 99
+    x64.jcc equal, check2
+    x64.jmp ifcont
+  check2:
+    x64.movRegImm32 r13, 0
+    x64.movRegReg rcx, r12
+    x64.callDirect __arr_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_decref
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.jmp ifcont
+  ifcont:
+    x64.movRegImm32 r13, 1
+    x64.movRegReg rcx, r12
+    x64.callDirect __arr_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_decref
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

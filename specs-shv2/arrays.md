@@ -567,8 +567,7 @@ end 'main'
 
 ### Slice
 
-<!-- disabled-test: slice-basic -->
-<!-- P1.7-s4 slice -->
+<!-- test: slice-basic -->
 ```maxon
 function main() returns ExitCode
 	let arr = [10, 20, 30, 40, 50]
@@ -583,8 +582,7 @@ end 'main'
 90
 ```
 
-<!-- disabled-test: slice-from-start -->
-<!-- P1.7-s4 slice -->
+<!-- test: slice-from-start -->
 ```maxon
 function main() returns ExitCode
 	let arr = [10, 20, 30, 40, 50]
@@ -596,8 +594,7 @@ end 'main'
 3
 ```
 
-<!-- disabled-test: slice-to-end -->
-<!-- P1.7-s4 slice -->
+<!-- test: slice-to-end -->
 ```maxon
 function main() returns ExitCode
 	let arr = [10, 20, 30, 40, 50]
@@ -611,8 +608,7 @@ end 'main'
 90
 ```
 
-<!-- disabled-test: slice-empty -->
-<!-- P1.7-s4 slice -->
+<!-- test: slice-empty -->
 ```maxon
 function main() returns ExitCode
 	let arr = [10, 20, 30]
@@ -624,8 +620,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: slice-full -->
-<!-- P1.7-s4 slice -->
+<!-- test: slice-full -->
 ```maxon
 function main() returns ExitCode
 	let arr = [10, 20, 30]
@@ -640,8 +635,7 @@ end 'main'
 60
 ```
 
-<!-- disabled-test: slice-throws-invalid-end -->
-<!-- P1.7-s4 slice -->
+<!-- test: slice-throws-invalid-end -->
 ```maxon
 function main() returns ExitCode
 	let arr = [10, 20, 30]
@@ -653,8 +647,7 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: slice-throws-inverted-range -->
-<!-- P1.7-s4 slice -->
+<!-- test: slice-throws-inverted-range -->
 ```maxon
 function main() returns ExitCode
 	let arr = [10, 20, 30]
@@ -666,8 +659,7 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: slice-throws-invalid-start -->
-<!-- P1.7-s4 slice -->
+<!-- test: slice-throws-invalid-start -->
 ```maxon
 function main() returns ExitCode
 	let arr = [10, 20, 30]
@@ -681,8 +673,7 @@ end 'main'
 
 ### Append
 
-<!-- disabled-test: append-basic -->
-<!-- P1.7-s4 append -->
+<!-- test: append-basic -->
 ```maxon
 function main() returns ExitCode
 	var a = [1, 2, 3]
@@ -701,8 +692,7 @@ end 'main'
 21
 ```
 
-<!-- disabled-test: append-empty-to-nonempty -->
-<!-- P1.7-s4 append -->
+<!-- test: append-empty-to-nonempty -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
@@ -718,8 +708,7 @@ end 'main'
 3
 ```
 
-<!-- disabled-test: append-nonempty-to-empty -->
-<!-- P1.7-s4 append -->
+<!-- test: append-nonempty-to-empty -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
@@ -737,8 +726,7 @@ end 'main'
 30
 ```
 
-<!-- disabled-test: append-preserves-originals -->
-<!-- P1.7-s4 append -->
+<!-- test: append-preserves-originals -->
 ```maxon
 function main() returns ExitCode
 	var a = [1, 2]
@@ -756,8 +744,7 @@ end 'main'
 
 ### Copy-on-Write
 
-<!-- disabled-test: slice-cow-modify-slice -->
-<!-- P1.7-s4 slice -->
+<!-- test: slice-cow-modify-slice -->
 Modifying a slice must not affect the original array.
 ```maxon
 function main() returns ExitCode
@@ -779,8 +766,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: slice-cow-modify-original -->
-<!-- P1.7-s4 slice -->
+<!-- test: slice-cow-modify-original -->
 Modifying the original array must not affect an existing slice.
 ```maxon
 function main() returns ExitCode

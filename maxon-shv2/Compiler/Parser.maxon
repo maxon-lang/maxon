@@ -1307,6 +1307,17 @@ let ArrayClearMethod = b"clear"
 let ArrayInsertMethod = b"insert"
 let ArrayRemoveMethod = b"remove"
 
+// The whole-array copy methods (P1.7 slice 4). `slice` is THROWING (bounds/inverted-range → `ArrayError`) and
+// returns a NEW independent array; `clone` returns a NEW independent array (non-throwing); `append` mutates the
+// receiver, borrowing and preserving its argument. TRIVIAL elements only — a managed element needs a deep-clone
+// primitive shv2 does not have (P1.2 deferred `.clone` for managed values), so the managed cases are rejected.
+let ArraySliceMethod = b"slice"
+let ArrayCloneMethod = b"clone"
+let ArrayAppendMethod = b"append"
+
+// The label `slice`'s SECOND argument gives its end index: `arr.slice(1, endIndex: 4)`.
+let ArrayEndIndexLabel = b"endIndex"
+
 // The label the two-argument mutators (`set`/`insert`) give their VALUE argument: `arr.set(0, value: 9)`.
 let ArrayValueLabel = b"value"
 
@@ -13310,6 +13321,10 @@ export type Parser
 			let index = try self.parseArrayOneArg(func)
 			return self.emitArrayElementAccessor(ArrRemoveName, args: pairArgs(arr, second: index), giid: giid, owned: true, range: range)
 		end 'remove'
+		if methodTok.value.equals(ArraySliceMethod) 'slice'
+			try self.requireTrivialArrayElementForCopy(giid, methodTok: methodTok)
+			return try self.parseArraySlice(func, arr: arr, giid: giid, range: range)
+		end 'slice'
 
 		// Non-throwing value accessors.
 		if methodTok.value.equals(ArrayCountMethod) 'count'
@@ -13324,6 +13339,11 @@ export type Parser
 			try self.parseArrayNoArgs()
 			return self.emitRuntimeCall(ArrIsEmptyName, args: singletonArgs(arr), resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: range)
 		end 'isEmpty'
+		if methodTok.value.equals(ArrayCloneMethod) 'clone'
+			try self.requireTrivialArrayElementForCopy(giid, methodTok: methodTok)
+			try self.parseArrayNoArgs()
+			return self.emitArrayInstanceAccessor(ArrCloneName, args: singletonArgs(arr), giid: giid, range: range)
+		end 'clone'
 
 		// Non-throwing void mutators — rejected in value position (E3059).
 		try self.requireArrayVoidStatement(resultUsed, methodTok: methodTok)
@@ -13346,8 +13366,12 @@ export type Parser
 		if methodTok.value.equals(ArrayInsertMethod) 'insert'
 			return try self.parseArraySetOrInsert(func, arr: arr, giid: giid, callee: ArrInsertName, throwing: false, range: range)
 		end 'insert'
+		if methodTok.value.equals(ArrayAppendMethod) 'append'
+			try self.requireTrivialArrayElementForCopy(giid, methodTok: methodTok)
+			return try self.parseArrayAppend(func, arr: arr, giid: giid, range: range)
+		end 'append'
 
-		throw ParseError.unsupported("`Array` method '{String.from(methodTok.value)}' — P1.7 slice 1 provides create/push/get/set/count/capacity/isEmpty/reserve/resize/first/last/pop/clear/insert/remove; the rest (slice/append/clone/map/contains/…) arrive later", line: methodTok.line, column: methodTok.column)
+		throw ParseError.unsupported("`Array` method '{String.from(methodTok.value)}' — P1.7 slice 1 provides create/push/get/set/count/capacity/isEmpty/reserve/resize/first/last/pop/clear/insert/remove and slice 4 adds slice/clone/append; the rest (map/contains/…) arrive later", line: methodTok.line, column: methodTok.column)
 	end 'dispatchArrayMethod'
 
 	// Emit a VOID array mutator call; return the receiver (what the statement still denotes, like
@@ -13378,6 +13402,77 @@ export type Parser
 		end 'moveOut'
 		return result
 	end 'emitArrayElementAccessor'
+
+	// ⭐ **EMIT A WHOLE-ARRAY ACCESSOR that yields a NEW OWNED array** (`slice`/`clone`, P1.7 slice 4). Unlike an
+	// element accessor, the result is a fresh `Array` instance (`__mm_alloc`'d record + buffer), so it is typed
+	// `genericInstance` at the SAME `giid` as the receiver — `sub.get(0)`/`sub.count()` dispatch on it — and
+	// enrolled as an OWNED temp exactly like an array literal (`[10,20,30]`): the caller owns it and its scope-exit
+	// drop routes through `genericInstanceBoxDropCallee` → `__arr_decref`, which frees the fresh record + buffer.
+	// Shared by `slice` (throwing — the enclosing `try` rewrites this last `call` to a `tryCall`, and `finishValueTry`
+	// reconciles the OWNED result with the OWNED `otherwise` fallback: both drop once, on their own edge) and `clone`
+	// (non-throwing — the owned temp is bound by `parseBinding` or dropped at statement end).
+	function emitArrayInstanceAccessor(callee ByteArray, args ValueIdArray, giid GenericInstanceId, range SourceRange) returns ValueId
+		let result = self.emitRuntimeCall(callee, args: args, resultTag: ValueTypeTag.genericInstance, resultNameId: giid, range: range)
+		self.trackOwnedTemp(result)
+		return result
+	end 'emitArrayInstanceAccessor'
+
+	// `slice(start, endIndex: end)` — the index positional, the end labelled `endIndex:` (mirroring `set`'s
+	// `value:`). Emits the throwing `__arr_slice(arr, start, end)` as the LAST op so the enclosing `try` rewrites
+	// it; returns the fresh owned array. Neither argument is a managed move-in (both are plain indices).
+	function parseArraySlice(func IrFunction, arr ValueId, giid GenericInstanceId, range SourceRange) returns ValueId throws ParseError
+		try self.consume(TokenKind.leftParen)
+		let start = try self.parseExpression(func, block: self.currentBlock)
+		try self.consumeArrayArgLabel(ArrayEndIndexLabel)
+		let endIndex = try self.parseExpression(func, block: self.currentBlock)
+		try self.consume(TokenKind.rightParen)
+		return self.emitArrayInstanceAccessor(ArrSliceName, args: tripleArgs(arr, second: start, third: endIndex), giid: giid, range: range)
+	end 'parseArraySlice'
+
+	// `append(other)` — append `other`'s elements to `self`. `other` is BORROWED (read-only, not moved): it is a
+	// live array whose elements `__arr_append` copies out by value, so it stays owned by its own binding and is
+	// preserved (`append-preserves-originals`). Its element type must match the receiver's (same array instance),
+	// which `requireArrayAppendArg` enforces. Emits the void `__arr_append(self, other)` and returns the receiver
+	// (what the statement still denotes).
+	function parseArrayAppend(func IrFunction, arr ValueId, giid GenericInstanceId, range SourceRange) returns ValueId throws ParseError
+		try self.consume(TokenKind.leftParen)
+		let otherTok = self.current()
+		let other = try self.parseExpression(func, block: self.currentBlock)
+		try self.requireArrayAppendArg(other, giid: giid, otherTok: otherTok)
+		try self.consume(TokenKind.rightParen)
+		return self.emitArrayVoidCall(ArrAppendName, args: pairArgs(arr, second: other), receiver: arr, range: range)
+	end 'parseArrayAppend'
+
+	// The argument to `append` must be an `Array` instance of the SAME element type as the receiver — the copy is a
+	// raw byte blit sized by the receiver's `element_size`, so a mismatched element width would splice bytes. Same
+	// element-managedness + element size is exactly "same array shape" for the trivial-element cases slice 4 covers
+	// (a managed receiver was already rejected by `requireTrivialArrayElementForCopy`, so `other` is required trivial
+	// too). `[1,2,3]` and an `Array with Integer` binding share this shape even when their giids differ by how the
+	// element interned, so this is the honest compatibility test rather than a strict giid identity.
+	function requireArrayAppendArg(other ValueId, giid GenericInstanceId, otherTok Token) throws ParseError
+		if self.tagOf(other) != ValueTypeTag.genericInstance or not self.signatures.isArrayInstance(self.valueNameId(other)) 'notArray'
+			throw ParseError.unsupported("`append` takes another `Array` of the same element type — got '{typeTagName(self.tagOf(other))}'", line: otherTok.line, column: otherTok.column)
+		end 'notArray'
+		let otherGiid = self.valueNameId(other)
+		if self.signatures.arrayElementIsManaged(otherGiid) or self.signatures.arrayElementSize(otherGiid) != self.signatures.arrayElementSize(giid) 'mismatch'
+			throw ParseError.unsupported("`append` requires an `Array` with the same element type as the receiver", line: otherTok.line, column: otherTok.column)
+		end 'mismatch'
+	end 'requireArrayAppendArg'
+
+	// ⭐ **REJECT `slice`/`clone`/`append` ON A MANAGED-ELEMENT ARRAY (P1.7 slice 4 — the deferred half).** An
+	// INDEPENDENT slice/clone/append of a managed-element array needs an independent COPY of each element (the
+	// reference compiler increfs; `append-preserves-originals` forbids MOVING them out of the source). Under
+	// shv2's move-only model with no refcount, that requires a per-element DEEP-CLONE primitive (`__str_clone` /
+	// `__struct_clone`) that shv2 deliberately does NOT have (P1.2 deferred `.clone` for managed values). A raw
+	// byte copy would duplicate heap pointers and double-free. So a managed-element `slice`/`clone`/`append` is
+	// a positioned E2015 until that primitive exists (a distinct mechanism — the coordinator's to schedule).
+	// TRIVIAL / ranged-int elements (`element_destroy@40 == 0`, self-owning ≤8-byte words) pass — a byte copy is
+	// correct for them, which is the whole of slice 4.
+	function requireTrivialArrayElementForCopy(giid GenericInstanceId, methodTok Token) throws ParseError
+		if self.signatures.arrayElementIsManaged(giid) 'managed'
+			throw ParseError.unsupported("`{String.from(methodTok.value)}` on an array with a MANAGED element type (String / struct / enum) needs a per-element deep-clone primitive shv2 does not have yet (move-only, no refcount); slice 4 supports slice/clone/append over TRIVIAL elements (int / Byte / ranged-int)", line: methodTok.line, column: methodTok.column)
+		end 'managed'
+	end 'requireTrivialArrayElementForCopy'
 
 	// The VALUE type a managed element is loaded as — the element's declared type retyped to its usable value
 	// form (a struct → `structRef`, a boxed union → its `named(<union>)`, a String → text, a nested Array /
@@ -13417,6 +13512,19 @@ export type Parser
 		return arg
 	end 'parseArrayOneArg'
 
+	// The ` , <label> : ` separating a two-argument array method's positional first argument from its LABELLED
+	// second — `set`/`insert`'s `value:`, `slice`'s `endIndex:`. ONE home for that shape, so a two-arg array
+	// method names its label and inherits the same "must be labelled `<label>:`" diagnostic; the cursor is left
+	// on the token that begins the second argument's value.
+	function consumeArrayArgLabel(label ByteArray) throws ParseError
+		try self.consume(TokenKind.comma)
+		let labelTok = try self.consume(TokenKind.identifier)
+		if not labelTok.value.equals(label) 'wrongLabel'
+			throw ParseError.unsupported("the second argument of a two-argument array method must be labelled `{String.from(label)}:` (got '{String.from(labelTok.value)}:')", line: labelTok.line, column: labelTok.column)
+		end 'wrongLabel'
+		try self.consume(TokenKind.colon)
+	end 'consumeArrayArgLabel'
+
 	// `set`/`insert` — `( index , value: X )`: the index positional, the value labelled `value:`. Emits the
 	// `__arr_set`/`__arr_insert` call (throwing for `set`, void for `insert`) and returns its result. The
 	// value argument is parsed AFTER the index so the throwing `set`'s call is the last op the enclosing
@@ -13424,12 +13532,7 @@ export type Parser
 	function parseArraySetOrInsert(func IrFunction, arr ValueId, giid GenericInstanceId, callee ByteArray, throwing bool, range SourceRange) returns ValueId throws ParseError
 		try self.consume(TokenKind.leftParen)
 		let index = try self.parseExpression(func, block: self.currentBlock)
-		try self.consume(TokenKind.comma)
-		let labelTok = try self.consume(TokenKind.identifier)
-		if not labelTok.value.equals(ArrayValueLabel) 'wrongLabel'
-			throw ParseError.unsupported("the value argument of a two-argument array mutator must be labelled `value:` (got '{String.from(labelTok.value)}:')", line: labelTok.line, column: labelTok.column)
-		end 'wrongLabel'
-		try self.consume(TokenKind.colon)
+		try self.consumeArrayArgLabel(ArrayValueLabel)
 		// The value is a managed-element MOVE-IN (`set`/`insert`), so it is consumed exactly as `push` is —
 		// `moveElementIntoArray` promotes a borrowed String, transfers an owned value, refuses a borrowed
 		// aggregate. `__arr_set` destroys the LIVE occupant it overwrites (its element_destroy walk of one

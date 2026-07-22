@@ -1,0 +1,234 @@
+// Test: clone-preserves-narrow-ranged-element-width
+typealias Narrow = int(0 to 16)
+typealias Wide = int(0 to u64.max)
+typealias NarrowCol = Array with Narrow
+typealias WideCol = Array with Wide
+
+function main() returns ExitCode
+	var n = NarrowCol.create()
+	n.push(1)
+	n.push(2)
+	n.push(3)
+
+	var w = WideCol.create()
+	w.push(9)
+
+	var c = n.clone()
+	let c0 = try c.get(0) otherwise 0
+	let c1 = try c.get(1) otherwise 0
+	let c2 = try c.get(2) otherwise 0
+
+	var s = try n.slice(1, endIndex: 3) otherwise panic("slice 1..3 is in bounds")
+	let s0 = try s.get(0) otherwise 0
+	let s1 = try s.get(1) otherwise 0
+
+	let ok = c0 == 1 and c1 == 2 and c2 == 3 and s0 == 2 and s1 == 3
+	return 0 if ok else 1
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 56
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __arr_create
+    x64.movRegReg rbx, r8
+    x64.storeSlotReg slot0, rbx
+    x64.movRegImm32 rdx, 1
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_push
+    x64.movRegImm32 rdx, 2
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_push
+    x64.movRegImm32 rdx, 3
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_push
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __arr_create
+    x64.storeSlotReg slot1, r8
+    x64.movRegImm32 rdx, 9
+    x64.movRegReg rcx, r8
+    x64.callDirect __arr_push
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_clone
+    x64.movRegReg r12, r8
+    x64.storeSlotReg slot2, r12
+    x64.movRegImm32 rdx, 0
+    x64.movRegReg rcx, r12
+    x64.callDirect __arr_get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 r13, 0
+    x64.jmp trycont
+  tryok:
+    x64.movRegReg r13, r8
+    x64.jmp trycont
+  trycont:
+    x64.movRegImm32 rdx, 1
+    x64.movRegReg rcx, r12
+    x64.callDirect __arr_get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 r14, 0
+    x64.jmp trycont
+  tryok:
+    x64.movRegReg r14, r8
+    x64.jmp trycont
+  trycont:
+    x64.movRegImm32 rdx, 2
+    x64.movRegReg rcx, r12
+    x64.callDirect __arr_get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 r12, 0
+    x64.jmp trycont
+  tryok:
+    x64.movRegReg r12, r8
+    x64.jmp trycont
+  trycont:
+    x64.movRegImm32 rdx, 1
+    x64.movRegImm32 rax, 3
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_slice
+    x64.movRegReg rbx, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.leaRegRdata rax, [rip + __str_rec_1]
+    x64.movRegImm32 rcx, 134
+    x64.movReg32Reg32 rcx, rcx
+    x64.iatCall 0
+    x64.movRegImm32 r8, 0
+    x64.epilogue 56
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.movRegImm32 rdx, 0
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 r15, 0
+    x64.jmp trycont
+  tryok:
+    x64.movRegReg r15, r8
+    x64.jmp trycont
+  trycont:
+    x64.movRegImm32 rdx, 1
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 rax, 0
+    x64.jmp trycont
+  tryok:
+    x64.movRegReg rax, r8
+    x64.jmp trycont
+  trycont:
+    x64.cmpRegImm32 r13, 1
+    x64.movRegImm32 rcx, 0
+    x64.jcc equal, andrhs
+    x64.jmp critsplit
+  andrhs:
+    x64.cmpRegImm32 r14, 2
+    x64.setccReg equal, rcx
+    x64.jmp scmerge
+  critsplit:
+    x64.jmp scmerge
+  scmerge:
+    x64.movRegImm32 rdx, 0
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, andrhs
+    x64.jmp critsplit
+  andrhs:
+    x64.cmpRegImm32 r12, 3
+    x64.setccReg equal, rcx
+    x64.jmp scmerge
+  critsplit:
+    x64.movRegReg rcx, rdx
+    x64.jmp scmerge
+  scmerge:
+    x64.movRegImm32 rdx, 0
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, andrhs
+    x64.jmp critsplit
+  andrhs:
+    x64.cmpRegImm32 r15, 2
+    x64.setccReg equal, rcx
+    x64.jmp scmerge
+  critsplit:
+    x64.movRegReg rcx, rdx
+    x64.jmp scmerge
+  scmerge:
+    x64.movRegImm32 rdx, 0
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, andrhs
+    x64.jmp critsplit
+  andrhs:
+    x64.cmpRegImm32 rax, 3
+    x64.setccReg equal, rax
+    x64.jmp scmerge
+  critsplit:
+    x64.movRegReg rax, rdx
+    x64.jmp scmerge
+  scmerge:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, ternarytrue
+    x64.jmp ternaryfalse
+  ternarytrue:
+    x64.movRegImm32 r12, 0
+    x64.jmp matchcont
+  ternaryfalse:
+    x64.movRegImm32 r12, 1
+    x64.jmp matchcont
+  matchcont:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_decref
+    x64.loadRegSlot rcx, slot2
+    x64.callDirect __arr_decref
+    x64.loadRegSlot rcx, slot1
+    x64.callDirect __arr_decref
+    x64.loadRegSlot rcx, slot0
+    x64.callDirect __arr_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 56
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
