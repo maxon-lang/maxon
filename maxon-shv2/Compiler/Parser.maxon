@@ -266,6 +266,17 @@ export union ParseError implements Error
 	// class, the interned aggregate name for two structs/unions) — the same shape `returnTypeMismatch`
 	// carries, so the three coercion-site messages phrase one rule one way.
 	giveTypeMismatch(got String, expected String, line LineNumber, column ColumnNumber)
+	// P1.5 #80/#81: a TERNARY (`a if c else b`) whose two branches produce different types — the ternary
+	// twin of `giveTypeMismatch`, split off because its E2028 wording names the TRUE and FALSE branches by
+	// position where a match names the offending arm. Renders as E2028, positioned at the `if`.
+	// `trueType`/`falseType` are each already the printable name: a scalar class, an aggregate name, or
+	// (the #81 function-arm case) a `fn(…) returns …` signature string. Matches the reference oracle's
+	// `ParseTernaryExpression` E2028 (2-Parser.cs:16060/16162).
+	ternaryValueTypeMismatch(trueType String, falseType String, line LineNumber, column ColumnNumber)
+	// P1.5 #80: a TERNARY whose CONDITION is not a bool (`x if 42 else y`). The ternary twin of
+	// `nonBoolCondition`, split off because it renders as E2028 (not E3005) and anchors at the `if`,
+	// exactly as the reference oracle does (2-Parser.cs:15997). `got` is the condition's printable type.
+	ternaryNonBoolCondition(got String, line LineNumber, column ColumnNumber)
 	// A `not` whose operand's type the parser cannot determine. Since the whole-program signature
 	// index landed, that is reachable only for a call to a function NO FILE DECLARES — a program
 	// already doomed (E3004). Renders as E3005, positioned at the `not`. It is a REJECTION rather
@@ -1829,6 +1840,30 @@ type MatchArmExit
 end 'MatchArmExit'
 
 typealias MatchArmExitArray = Array with MatchArmExit
+
+// ⭐ **WHICH VALUE-MERGE CONSTRUCT `finalizeMatchMerge` is finishing (P1.5 #80).** The three share ONE
+// merge — the phi, the give-agreement rules, the ownership normalisation — but they must NOT share their
+// DIAGNOSTIC NOUN: a `match` reports "match arms give incompatible types" (E3005) naming the offending
+// arm, while a ternary reports "ternary expression type mismatch" (E2028) naming the TRUE and FALSE
+// branches by position. `isExpression` alone cannot tell a match EXPRESSION from a ternary — both give a
+// value — so the construct rides explicitly. `matchStatement`'s presence is what lets `isExpression` be
+// DERIVED here (`!= matchStatement`) rather than passed alongside, so the two can never disagree.
+enum MergeConstruct
+	matchStatement
+	matchExpression
+	ternary
+end 'MergeConstruct'
+
+// A function VALUE arm's signature, recovered from THIS file's parse-time registries for the #81
+// signature-agreement check. `recovered` carries the pre-resolution parameter types and return type (both
+// still naming their aliases, so the diagnostic prints `Integer` not `int`); `unrecovered` is a
+// forward-referenced or cross-file function whose parameter types the whole-program token sweep does not
+// carry — such a merge is accepted unchecked, exactly as it was before this check existed (see
+// `recoverFunctionSignature`).
+union RecoveredFnSig
+	recovered(paramTypes MaxonTypeArray, returnType MaxonReturnType)
+	unrecovered
+end 'RecoveredFnSig'
 
 // How control left one arm's body, plus the exit snapshot the merge (or the next arm's
 // fallthrough phi) needs. `fellThrough` and `reachesMerge` are mutually exclusive with each
@@ -8619,7 +8654,7 @@ export type Parser
 			self.markScrutineePartiallyMoved(scrut)
 		end 'consumeScrut'
 
-		let outcome = try self.finalizeMatchMerge(func, matchTok: matchTok, carried: carried, reachingArms: reachingArms, isExpression: isExpression)
+		let outcome = try self.finalizeMatchMerge(func, matchTok: matchTok, carried: carried, reachingArms: reachingArms, construct: MergeConstruct.matchExpression if isExpression else MergeConstruct.matchStatement)
 		self.currentBlock = outcome.cont
 		return outcome
 	end 'parseMatchCommon'
@@ -8768,7 +8803,13 @@ export type Parser
 	// into it. An empty set means every arm terminated — the merge is `dead`. Otherwise mint the
 	// block-args in order — the result phi (expression form) first, then one phi per carried var
 	// that differs across the reaching arms — and record each arm's edge in the SAME order.
-	function finalizeMatchMerge(func IrFunction, matchTok Token, carried VarInfoArray, reachingArms MatchArmExitArray, isExpression bool) returns MatchOutcome throws ParseError
+	function finalizeMatchMerge(func IrFunction, matchTok Token, carried VarInfoArray, reachingArms MatchArmExitArray, construct MergeConstruct) returns MatchOutcome throws ParseError
+		// Every value-producing construct (a match EXPRESSION and a ternary) runs the give-agreement,
+		// promotion and ownership rules below; a match STATEMENT gives no value and skips them. So the one
+		// value/statement bit is DERIVED from the construct rather than passed beside it — the two cannot
+		// then disagree — and `construct` itself only ever matters where the DIAGNOSTIC NOUN differs (#80).
+		let isExpression = construct != MergeConstruct.matchStatement
+
 		var merge = self.newBlock(func, label: b"matchcont", line: matchTok.line)
 
 		if reachingArms.count() == 0 'allTerminate'
@@ -8784,35 +8825,46 @@ export type Parser
 		// it exists).
 		let firstArm = try reachingArms.get(0) otherwise panic("finalizeMatchMerge: reachingArms.get(0) failed after count check")
 
-		// ⚠ **A CROSS-REGISTER-CLASS EXPRESSION MATCH IS REFUSED HERE, LOUDLY — it must not reach the
-		// backend.** Every arm's `gives` value is fed into ONE result phi, and a value's register file
-		// (GP vs XMM) is fixed by its type at birth. So an integer give and a float give in the same
-		// match hand the phi two values from different files; the allocator cannot color that move and
-		// `X64Backend.emitRegRegMove` panics ("crosses register files") — a compiler crash on a user
-		// program, not a diagnostic. The reference oracle UNIFIES such arms, promoting the integer
-		// arms to float (`cvtsi2sd`) so the result is uniformly float; shv2 has that instruction
-		// (`promoteToFloat`) and lattice already, but the *result* of such a match is a float value,
-		// and a float has no nameable type in shv2 yet (`typealias F = float(…)` is itself still
-		// E2015). Building the promotion before floats are nameable would be a value nothing can hold.
-		// ⇒ refused as "not yet", positioned, exactly as every other unbuilt scalar surface is — and
-		// recorded in OPEN.md as the promotion the float rung supplies. Same-class arms (int + bool)
-		// share a file, need no promotion, and never reach this throw.
-		if isExpression 'checkGiveClass'
+		// ⭐ **CROSS-REGISTER-CLASS ARMS ARE UNIFIED TO FLOAT (P1.5 #31), not refused.** Every arm's `gives`
+		// value feeds ONE result phi, and a value's register file (GP vs XMM) is fixed by its type at birth —
+		// so an integer give and a float give hand the phi two values from different files, which the
+		// allocator cannot color (`X64Backend.emitRegRegMove` panics "crosses register files"). The reference
+		// oracle promotes the INTEGER arms to float (`cvtsi2sd`) so the result is uniformly float, and now
+		// that floats are a nameable, working type in shv2 (the stale blocker this once cited is gone) shv2
+		// does the same with the instruction it already has (`promoteToFloat`). The promote lands in the
+		// ARM'S OWN exit block — its value is computed there, and the branch to the merge is not emitted until
+		// below — so the pure `cvtsi2sd` is on the conditional path, never hoisted before the branch. A float
+		// arm meeting a NON-numeric arm (a bool/String/struct/union/type-parameter give) is not promotable and
+		// is a genuine type mismatch, reported HERE before any phi is built: `checkGiveTypes` below cannot be
+		// its backstop, because a `typeParameter`/`unresolved` give AGREES with the float and would slip
+		// through to the mixed-class phi. Statement matches give no value and skip this, as they skip every
+		// give rule below.
+		if isExpression 'unifyRegisterClass'
 			var anyFloat = false
-			var anyNonFloat = false
-			for i in 0 upto reachingArms.count() 'scanClass'
+			for i in 0 upto reachingArms.count() 'scanFloat'
 				let a = try reachingArms.get(i) otherwise panic("finalizeMatchMerge: reachingArms.get OOB at {i}")
-				if tagIsFloat(self.tagOf(self.giveValueOf(a.give))) 'isFloat'
+				if tagIsFloat(self.tagOf(self.giveValueOf(a.give))) 'floatArm'
 					anyFloat = true
-				end 'isFloat' else 'notFloat'
-					anyNonFloat = true
-				end 'notFloat'
-			end 'scanClass'
+				end 'floatArm'
+			end 'scanFloat'
 
-			if anyFloat and anyNonFloat 'crossClass'
-				throw ParseError.unsupported("a match expression whose arms give values of different register classes (a float arm and a non-float arm) — unifying them promotes the integer arms to float, whose result has no nameable type until the float type system lands (a `float` typealias is itself not yet parsed), and it arrives with that rung", line: matchTok.line, column: matchTok.column)
-			end 'crossClass'
-		end 'checkGiveClass'
+			if anyFloat 'promoteIntegerArms'
+				for i in 0 upto reachingArms.count() 'eachArm'
+					var arm = try reachingArms.get(i) otherwise panic("finalizeMatchMerge: reachingArms.get OOB at {i}")
+					let give = self.giveValueOf(arm.give)
+					if not tagIsFloat(self.tagOf(give)) 'notYetFloat'
+						if not self.giveIsPromotableToFloat(give) 'nonNumericArm'
+							throw self.valueMergeGiveMismatch(construct, reachingArms: reachingArms, firstArm: firstArm, gotArm: arm, matchTok: matchTok)
+						end 'nonNumericArm'
+						let saved = self.currentBlock
+						self.currentBlock = arm.exitBlock
+						let promoted = self.promoteToFloat(give, opTok: matchTok)
+						self.currentBlock = saved
+						arm.give = MatchGiveValue.value(promoted)
+					end 'notYetFloat'
+				end 'eachArm'
+			end 'promoteIntegerArms'
+		end 'unifyRegisterClass'
 
 		// ⭐ **OPEN #54 SLICE C — EVERY REACHING `gives` ARM MUST YIELD THE FIRST ARM'S TYPE.** The result
 		// phi minted below takes the FIRST arm's type (`mintPhi` off `firstGive`), and a value's type is
@@ -8852,10 +8904,34 @@ export type Parser
 				let classDisagrees = not typesAgree(giveTag, right: firstTag)
 				let nameDisagrees = self.signatures.aggregatesConflict(firstAggregate, got: giveAggregate)
 				if classDisagrees or nameDisagrees 'giveTypeMismatch'
-					throw ParseError.giveTypeMismatch(self.giveTypeName(giveTag, aggregateName: giveAggregate), expected: self.giveTypeName(firstTag, aggregateName: firstAggregate), line: matchTok.line, column: matchTok.column)
+					throw self.valueMergeGiveMismatch(construct, reachingArms: reachingArms, firstArm: firstArm, gotArm: arm, matchTok: matchTok)
 				end 'giveTypeMismatch'
 			end 'scanGiveType'
 		end 'checkGiveTypes'
+
+		// ⭐ **FUNCTION-VALUE ARMS MUST AGREE IN SIGNATURE (P1.5 #81).** `checkGiveTypes` proves every arm
+		// shares the FIRST arm's class, so if the first give is a `function` every arm is — but a `function`
+		// tag carries no arity or parameter types, so `unary if c else binary` slips it: both arms are the
+		// `function` class, no aggregate, and the merge would silently adopt the FIRST arm's signature for the
+		// phi. A caller then checks its indirect call against `unary`'s one parameter while the value at
+		// runtime is `binary`, which reads a garbage second argument — a stack-corruption the class check
+		// cannot see. So the two signatures are compared STRUCTURALLY (arity, each parameter type, the return
+		// type), and a mismatch is the construct's type-mismatch diagnostic naming each arm's `fn(…) returns …`
+		// signature — the bootstrap's `MergeTernaryArmFnTypes` (2-Parser.cs:16149), recovered from shv2's
+		// file-local signature registry rather than off the value (shv2 carries only a name + `function` tag).
+		if isExpression 'checkFunctionSignatures'
+			let firstGive = self.giveValueOf(firstArm.give)
+			if self.tagOf(firstGive) == ValueTypeTag.function 'firstArmIsFunction'
+				let firstSig = self.recoverFunctionSignature(firstGive)
+				for i in 1 upto reachingArms.count() 'scanFnSig'
+					let arm = try reachingArms.get(i) otherwise panic("finalizeMatchMerge: reachingArms.get OOB at {i}")
+					let otherSig = self.recoverFunctionSignature(self.giveValueOf(arm.give))
+					if self.functionSignaturesDisagree(firstSig, other: otherSig) 'signatureMismatch'
+						throw self.valueMergeMismatchWith(construct, expectedDisplay: self.fnTypeDisplay(firstSig), gotDisplay: self.fnTypeDisplay(otherSig), matchTok: matchTok)
+					end 'signatureMismatch'
+				end 'scanFnSig'
+			end 'firstArmIsFunction'
+		end 'checkFunctionSignatures'
 
 		// ⭐ **OWNED-GIVE OWNERSHIP TRANSFER (P1.3).** If any reaching arm gives an OWNED value the result
 		// phi takes over ownership (`resultOwned` → the phi is marked owned below): each arm's give value has
@@ -8953,6 +9029,215 @@ export type Parser
 
 		return MatchOutcome.create(merge, result: result)
 	end 'finalizeMatchMerge'
+
+	// ⭐ **IS THIS MERGE ARM'S GIVE VALUE AN INTEGER-DOMAIN NUMBER a float arm promotes to float (P1.5 #31)?**
+	// True for a plain `int`, an `ExitCode`, or a ranged-INT alias — everything `cvtsi2sd` reads soundly.
+	// False for a `float` or ranged-float alias (ALREADY in the float domain — no promotion), for a
+	// bool/String/function/type-parameter (NON-numeric — a genuine type mismatch), and for a `named`
+	// AGGREGATE, which is numeric-CLASSED (`typeClassOf(named) == numeric`) but is a POINTER to a box that
+	// `cvtsi2sd` would corrupt — told apart from a numeric alias by `aggregateNameOf`, exactly as
+	// `checkGiveTypes` tells them apart. Reads the tag/name columns only, materialising no `MaxonType`.
+	function giveIsPromotableToFloat(give ValueId) returns bool
+		let tag = self.tagOf(give)
+		let nameId = self.valueNameId(give)
+
+		// A plain `int` or an `ExitCode` is an integer-domain number — always promotable.
+		if tagIsInteger(tag) or tag == ValueTypeTag.exitCode 'plainInteger'
+			return true
+		end 'plainInteger'
+
+		// A `named` value is a ranged alias OR a declared aggregate. A ranged-FLOAT alias is already
+		// float-domain (no promotion); a declared aggregate (union/enum/per-instance alias) is a POINTER,
+		// not a number, that `cvtsi2sd` would corrupt (`aggregateNameOf` names it); only a plain ranged-INT
+		// alias — numeric, no aggregate name — promotes.
+		if tag == ValueTypeTag.named 'namedType'
+			if self.namedIsFloatAlias(nameId) 'floatAlias'
+				return false
+			end 'floatAlias'
+			return self.aggregateNameOf(tag, nameId: nameId).isEmpty()
+		end 'namedType'
+
+		// A `float` (already float-domain), bool, String, function, struct, type parameter, generic
+		// instance, unresolved or void give is not an integer-domain number and does not promote.
+		return false
+	end 'giveIsPromotableToFloat'
+
+	// The printable type name a merge arm's give value carries — a scalar class (`int`/`bool`/`String`/…) or
+	// a declared aggregate's interned name — the same column `checkGiveTypes` names a mismatch by.
+	function giveDisplayName(give ValueId) returns String
+		let tag = self.tagOf(give)
+		return self.giveTypeName(tag, aggregateName: self.aggregateNameOf(tag, nameId: self.valueNameId(give)))
+	end 'giveDisplayName'
+
+	// ⭐ **THE ONE CONSTRUCT-AWARE VALUE-MERGE MISMATCH (P1.5 #80).** A ternary and a match share the merge
+	// but not the diagnostic noun: a ternary names its TWO branches by position (E2028), a match names the
+	// offending arm against the first (E3005). Every mismatch site — the cross-class promotion, the
+	// give-type check, and the function-signature check — routes its two already-formatted type strings
+	// through here, so the noun is decided in exactly ONE place and the three sites cannot drift on it.
+	function valueMergeMismatchWith(construct MergeConstruct, expectedDisplay String, gotDisplay String, matchTok Token) returns ParseError
+		if construct == MergeConstruct.ternary 'ternary'
+			return ParseError.ternaryValueTypeMismatch(expectedDisplay, falseType: gotDisplay, line: matchTok.line, column: matchTok.column)
+		end 'ternary'
+		return ParseError.giveTypeMismatch(gotDisplay, expected: expectedDisplay, line: matchTok.line, column: matchTok.column)
+	end 'valueMergeMismatchWith'
+
+	// A give-type mismatch between the FIRST arm and `gotArm`, phrased for `construct`. A ternary always
+	// names its FALSE (second) branch whichever arm actually mismatched — it has exactly two arms and the
+	// message reads them in source order — so the displayed "got" arm is arm 1 for a ternary and the
+	// mismatching arm itself for a match.
+	function valueMergeGiveMismatch(construct MergeConstruct, reachingArms MatchArmExitArray, firstArm MatchArmExit, gotArm MatchArmExit, matchTok Token) returns ParseError
+		var displayArm = gotArm
+		if construct == MergeConstruct.ternary 'ternaryFalseArm'
+			displayArm = try reachingArms.get(1) otherwise panic("valueMergeGiveMismatch: a ternary merge has no second (false) arm")
+		end 'ternaryFalseArm'
+		return self.valueMergeMismatchWith(construct, expectedDisplay: self.giveDisplayName(self.giveValueOf(firstArm.give)), gotDisplay: self.giveDisplayName(self.giveValueOf(displayArm.give)), matchTok: matchTok)
+	end 'valueMergeGiveMismatch'
+
+	// ⭐ **RECOVER A FUNCTION-VALUE ARM'S SIGNATURE for the #81 agreement check.** A function value carries
+	// only its governing NAME + the `function` tag (shv2 does not put the full type on the value the way the
+	// bootstrap does), so the parameter types and return type are looked up by name in THIS file's parse-time
+	// registries — where a top-level function AND a lifted closure both record theirs (`recordFuncSignature`
+	// / `recordFuncReturnType`). A forward-referenced or cross-file function is NOT here: the whole-program
+	// token sweep records return types and consume bits, not parameter types, so its arity is unknowable at
+	// parse time. Such an arm is `unrecovered`, and its merge is accepted UNCHECKED — precisely today's
+	// behaviour before this check, so no regression; closing that residual needs whole-program parameter
+	// types in the sweep, a separate change.
+	function recoverFunctionSignature(value ValueId) returns RecoveredFnSig
+		let name = self.internedName(self.valueNameId(value))
+		for entry in self.artifact.funcSignatures 'eachSignature'
+			if entry.name.equals(name) 'hit'
+				return RecoveredFnSig.recovered(entry.signature.paramTypes, returnType: self.localFuncReturnType(name))
+			end 'hit'
+		end 'eachSignature'
+		return RecoveredFnSig.unrecovered
+	end 'recoverFunctionSignature'
+
+	// This file's recorded return type for `name`. Called only for a name already found in
+	// `funcSignatures`, and the two registries are written together for every function and closure
+	// (`recordFuncSignature` beside `recordFuncReturnType`), so a miss is a parser invariant break.
+	function localFuncReturnType(name ByteArray) returns MaxonReturnType
+		for entry in self.artifact.funcReturnTypes 'eachReturn'
+			if entry.name.equals(name) 'hit'
+				return entry.returnType
+			end 'hit'
+		end 'eachReturn'
+		panic("localFuncReturnType: '{String.from(name)}' is in funcSignatures but not funcReturnTypes — the two are recorded together for every function and closure")
+	end 'localFuncReturnType'
+
+	// Do two function-value arms' signatures DISAGREE (P1.5 #81)? Only a merge whose BOTH arms resolve to a
+	// file-local signature is checked — either arm `unrecovered` means "cannot verify", which accepts the
+	// merge (see `recoverFunctionSignature`). When both resolve, agreement is STRUCTURAL: same arity, each
+	// parameter type agreeing, and the return type agreeing.
+	function functionSignaturesDisagree(first RecoveredFnSig, other RecoveredFnSig) returns bool
+		match first 'firstSignature'
+			unrecovered then return false
+			recovered(paramsA, returnA) then return self.recoveredSignatureDisagrees(paramsA, returnA: returnA, other: other)
+		end 'firstSignature'
+	end 'functionSignaturesDisagree'
+
+	// The second half of `functionSignaturesDisagree`, split out because Maxon forbids a nested `match` as a
+	// match-arm body (E2049): the first arm resolved to `paramsA`/`returnA`, so this matches the OTHER arm
+	// and compares. An `unrecovered` other arm accepts (cannot verify).
+	function recoveredSignatureDisagrees(paramsA MaxonTypeArray, returnA MaxonReturnType, other RecoveredFnSig) returns bool
+		match other 'otherSignature'
+			unrecovered then return false
+			recovered(paramsB, returnB) then return not self.signaturesStructurallyAgree(paramsA, returnA: returnA, paramsB: paramsB, returnB: returnB)
+		end 'otherSignature'
+	end 'recoveredSignatureDisagrees'
+
+	// The structural agreement two recovered signatures are compared under: equal arity, each parameter type
+	// agreeing, and the return type agreeing — each pair judged by `mergeTypesAgree`, the same class +
+	// aggregate-identity rule the give-type check uses (so an ABI-compatible parameter pair such as two
+	// distinct ranged-int aliases agrees, while two distinct unions or a different arity does not).
+	function signaturesStructurallyAgree(paramsA MaxonTypeArray, returnA MaxonReturnType, paramsB MaxonTypeArray, returnB MaxonReturnType) returns bool
+		if paramsA.count() != paramsB.count() 'arity'
+			return false
+		end 'arity'
+		for i in 0 upto paramsA.count() 'eachParam'
+			let a = try paramsA.get(i) otherwise panic("signaturesStructurallyAgree: paramsA.get OOB at {i}")
+			let b = try paramsB.get(i) otherwise panic("signaturesStructurallyAgree: paramsB.get OOB at {i}")
+			if not self.mergeTypesAgree(a, right: b) 'paramMismatch'
+				return false
+			end 'paramMismatch'
+		end 'eachParam'
+		return self.mergeReturnTypesAgree(returnA, right: returnB)
+	end 'signaturesStructurallyAgree'
+
+	// Do two source-level types agree for the signature merge — same register class AND same aggregate
+	// identity? The `MaxonType` form of `checkGiveTypes`' tag-level rule, so `Integer` and a distinct
+	// ranged alias (both numeric, neither an aggregate) agree while `Cat` and `Dog` (distinct aggregates)
+	// do not.
+	function mergeTypesAgree(left MaxonType, right MaxonType) returns bool
+		let leftTag = maxonTypeTag(left)
+		let rightTag = maxonTypeTag(right)
+		if not typesAgree(leftTag, right: rightTag) 'classMismatch'
+			return false
+		end 'classMismatch'
+		let leftAggregate = self.aggregateNameOf(leftTag, nameId: typeNameIdOf(left))
+		let rightAggregate = self.aggregateNameOf(rightTag, nameId: typeNameIdOf(right))
+		return not self.signatures.aggregatesConflict(leftAggregate, got: rightAggregate)
+	end 'mergeTypesAgree'
+
+	// Do two functions' return types agree for the signature merge? `void` agrees only with `void`; two
+	// value returns agree by `mergeTypesAgree`.
+	function mergeReturnTypesAgree(left MaxonReturnType, right MaxonReturnType) returns bool
+		let leftVoid = maxonReturnTypeIsVoid(left)
+		let rightVoid = maxonReturnTypeIsVoid(right)
+		if leftVoid or rightVoid 'eitherVoid'
+			// Both void → agree; exactly one void → disagree (a value return cannot merge with `void`).
+			return leftVoid and rightVoid
+		end 'eitherVoid'
+		return self.mergeTypesAgree(self.requireReturnValueType(left), right: self.requireReturnValueType(right))
+	end 'mergeReturnTypesAgree'
+
+	// The inner type of a value-producing return, guarded by `maxonReturnTypeIsVoid` at the one call site —
+	// a `void` return has no inner type, so reaching this on one is a caller-guard break.
+	function requireReturnValueType(returnType MaxonReturnType) returns MaxonType
+		match returnType 'returnValue'
+			value(inner) then return inner
+			void then panic("requireReturnValueType: called on a void return — guard with maxonReturnTypeIsVoid")
+		end 'returnValue'
+	end 'requireReturnValueType'
+
+	// A recovered signature's `fn(P1, P2) returns R` display, for the #81 mismatch diagnostic. Called only on
+	// a signature that resolved — a mismatch is reported only when BOTH arms did — so `unrecovered` is a
+	// caller-guard break.
+	function fnTypeDisplay(sig RecoveredFnSig) returns String
+		match sig 'signature'
+			recovered(paramTypes, returnType) then return self.formatFnType(paramTypes, returnType: returnType)
+			unrecovered then panic("fnTypeDisplay: an unrecovered signature reached the display — a mismatch is reported only when both arms recovered")
+		end 'signature'
+	end 'fnTypeDisplay'
+
+	// Render `fn(P1, P2, …) returns R` from a recovered signature's parameter and return types. A void
+	// return carries no `returns` clause.
+	function formatFnType(paramTypes MaxonTypeArray, returnType MaxonReturnType) returns String
+		var rendered = "fn("
+		for i in 0 upto paramTypes.count() 'eachParam'
+			if i > 0 'separator'
+				rendered = "{rendered}, "
+			end 'separator'
+			rendered = "{rendered}{self.maxonTypeDisplayName(try paramTypes.get(i) otherwise panic("formatFnType: paramTypes.get OOB at {i}"))}"
+		end 'eachParam'
+		rendered = "{rendered})"
+
+		match returnType 'return'
+			value(returnValue) then rendered = "{rendered} returns {self.maxonTypeDisplayName(returnValue)}"
+			void then break 'return'
+		end 'return'
+		return rendered
+	end 'formatFnType'
+
+	// A source-level type's name for the `fn(…) returns …` display: a declared alias/struct/union by its
+	// interned NAME (so a `Integer` parameter prints `Integer`, matching the oracle, not `int` — which is
+	// what `typeTagName(named)` would give), and a bare primitive by its keyword.
+	function maxonTypeDisplayName(t MaxonType) returns String
+		let tag = maxonTypeTag(t)
+		if tag == ValueTypeTag.named or tag == ValueTypeTag.structRef 'namedType'
+			return String.from(self.internedName(typeNameIdOf(t)))
+		end 'namedType'
+		return typeTagName(tag)
+	end 'maxonTypeDisplayName'
 
 	// The name a `gives` value prints under in a match type-agreement diagnostic: a declared struct or
 	// union by its interned aggregate NAME, and every scalar — an `int`, a `bool`, a `String`, a
@@ -10006,7 +10291,15 @@ export type Parser
 		// at the end of whichever block it left (`condExit`), exactly as `parseIfStatement` re-reads its entry
 		// after the condition.
 		self.currentBlock = startBlock
-		let cond = try self.parseBoolCondition(func, block: startBlock, kwTok: ifTok)
+		// The condition is an ordinary expression that must be a bool — NOT `parseBoolCondition`, whose
+		// E3005 "'if' requires a bool condition" is shared with the `if`/`while` STATEMENTS. A ternary's
+		// non-bool condition is E2028 "ternary expression requires a bool condition" (#80), anchored at the
+		// `if` (where `parseBoolCondition` anchors at the condition token) — matching the reference oracle.
+		let cond = try self.parseExpression(func, block: startBlock)
+		let condTag = self.tagOf(cond)
+		if not typeClassAdmits(TypeClass.boolean, tag: condTag) 'nonBoolCondition'
+			throw ParseError.ternaryNonBoolCondition(typeTagName(condTag), line: ifTok.line, column: ifTok.column)
+		end 'nonBoolCondition'
 		let condExit = self.currentBlock
 
 		// The move state after the (unconditional) condition — the base BOTH arms build on. The TRUE path is
@@ -10050,7 +10343,7 @@ export type Parser
 		var reachingArms = MatchArmExitArray.create()
 		reachingArms.push(MatchArmExit.create(trueExit, exitVals: ValueIdArray.create(), give: MatchGiveValue.value(trueValue), moveMark: trueMoveMark))
 		reachingArms.push(MatchArmExit.create(falseExit, exitVals: ValueIdArray.create(), give: MatchGiveValue.value(falseValue), moveMark: falseMoveMark))
-		let outcome = try self.finalizeMatchMerge(func, matchTok: ifTok, carried: carried, reachingArms: reachingArms, isExpression: true)
+		let outcome = try self.finalizeMatchMerge(func, matchTok: ifTok, carried: carried, reachingArms: reachingArms, construct: MergeConstruct.ternary)
 
 		self.emitCondBranch(condExit, cond: cond, thenId: trueBranch.id, elseId: falseBranch.id, ifTok: ifTok)
 

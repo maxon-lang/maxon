@@ -1,0 +1,32 @@
+// Test: float-then-int-arms
+function main() returns ExitCode
+	let x = 1
+	let r = match x 'a'
+		1 gives 2.5
+		default gives 9
+	end 'a'
+	return trunc(r)
+end 'main'
+---
+ExitCode: 2
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 rax, 1
+    x64.cmpRegImm32 rax, 1
+    x64.jcc equal, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.movsdRegRip xmm0, [rip + __fconst_0]
+    x64.jmp matchcont
+  matchnext:
+    x64.movRegImm32 rax, 9
+    x64.cvtsi2sdRegReg xmm0, rax
+    x64.jmp matchcont
+  matchcont:
+    x64.cvttsd2siRegReg r8, xmm0
+    x64.popReg rbp
+    x64.ret
+}

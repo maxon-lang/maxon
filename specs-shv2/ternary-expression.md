@@ -237,6 +237,23 @@ end 'main'
 1
 ```
 
+<!-- test: ternary-expression.mixed-int-float-promotes -->
+The two branches cross register classes — a `float` `1.0` and an `int` `2` — so the integer branch
+is promoted to float (`cvtsi2sd`) and the result is uniformly float, exactly as the reference oracle
+does (the old E2015 "different register classes" refusal is gone now that floats are a nameable,
+working type). `trunc` reads the float result back to an int for the exit code. With the condition
+true the float branch is selected, so `trunc(1.0)` is 1.
+```maxon
+function main() returns ExitCode
+	let c = true
+	let x = 1.0 if c else 2
+	return trunc(x)
+end 'main'
+```
+```exitcode
+1
+```
+
 <!-- test: ternary-expression.with-bools -->
 ```maxon
 function main() returns ExitCode
@@ -492,7 +509,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/ternary-expression/ternary-expression.error.type-mismatch.test:3:13: match arms give incompatible types: 'String' vs 'int'
+error E2028: specs/fragments/ternary-expression/ternary-expression.error.type-mismatch.test:3:13: ternary expression type mismatch: true branch is 'int' but false branch is 'String'
 ```
 
 <!-- test: ternary-expression.error.non-bool-condition -->
@@ -503,7 +520,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/ternary-expression/ternary-expression.error.non-bool-condition.test:3:16: 'if' requires a bool condition, got 'int'
+error E2028: specs/fragments/ternary-expression/ternary-expression.error.non-bool-condition.test:3:13: ternary expression requires a bool condition, got 'int'
 ```
 
 <!-- test: ternary-expression.error.struct-type-mismatch -->
@@ -539,7 +556,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/ternary-expression/ternary-expression.error.struct-type-mismatch.test:22:23: match arms give incompatible types: 'Dog' vs 'Cat'
+error E2028: specs/fragments/ternary-expression/ternary-expression.error.struct-type-mismatch.test:22:23: ternary expression type mismatch: true branch is 'Cat' but false branch is 'Dog'
 ```
 
 <!-- test: ternary-expression.logical-op-condition -->
@@ -1212,8 +1229,7 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: ternary-expression.error.function-arm-signature-mismatch -->
-<!-- shv2's shared give-type check (checkGiveTypes) agrees on the `function` class but does not compare function SIGNATURES, so a mismatched-signature function merge is accepted (verified: the equivalent `match … gives` accepts it too). Function-signature agreement in a value merge is a separate, unbuilt check — shared with match, not a ternary-specific gap. -->
+<!-- test: ternary-expression.error.function-arm-signature-mismatch -->
 ### The two function arms must have the SAME signature
 The merged slot holds one signature and either arm may end up in it, so a caller checked
 against one arm's signature could be handed the other's.
