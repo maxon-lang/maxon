@@ -536,6 +536,7 @@ function buildArrGrow(module StdModule)
 	var grow = module.addBlock(func, label: b"grow")
 	var sizeOverflow = module.addBlock(func, label: b"overflow")
 	var alloc = module.addBlock(func, label: b"alloc")
+	var checkOwned = module.addBlock(func, label: b"checkowned")
 	var freeOld = module.addBlock(func, label: b"freeold")
 	var publish = module.addBlock(func, label: b"publish")
 	let done = module.addBlock(func, label: b"done")
@@ -576,10 +577,20 @@ function buildArrGrow(module StdModule)
 	let oldBytes = emitBin(module, block: alloc, a: oldLen, b: es, opcode: StdBinOpcode.mul, ids: ids)
 	var afterCopy = emitForwardCopy(module, func: func, cur: alloc, dest: newBuf, src: oldBuf, byteCount: oldBytes, ids: ids)
 
-	// afterCopy: free the OLD buffer if it existed, then publish the new one.
+	// afterCopy: free the OLD buffer if it existed (checkOwned decides whether it MAY be freed), else publish.
 	let zero = emitConst(module, block: afterCopy, value: 0, ids: ids)
 	let hadBuf = emitCmp(module, block: afterCopy, a: oldBuf, b: zero, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(afterCopy, op: StdOp.condBranch(hadBuf, thenBlockId: freeOld.id, elseBlockId: publish.id))
+	module.setTerminator(afterCopy, op: StdOp.condBranch(hadBuf, thenBlockId: checkOwned.id, elseBlockId: publish.id))
+
+	// ⚠ **THE RDATA-BUFFER SEAM, GROW SIDE (P1.7 slice 2).** A byte-string literal's `buffer@0` is immortal
+	// `.rdata` and its `capacity@16` is the negative sentinel `__arr_decref` also reads. Growing it copies the
+	// live bytes into the fresh heap buffer above and then republishes a POSITIVE capacity below — but the old
+	// buffer must NOT be `__mm_free`'d, because the rdata blob was never `__mm_alloc`'d (that free corrupts the
+	// allocator). So the old-buffer free is gated on an OWNED buffer (`capacity >= 0`), the SAME sentinel the
+	// drop path honors — the "don't free an rdata buffer" fact must hold at EVERY free site, not just the drop.
+	let capacityNow = emitLoadField(module, block: checkOwned, arr: arr, offset: ArrCapacityOffset, ids: ids)
+	let ownedBuf = emitCmp(module, block: checkOwned, a: capacityNow, b: zero, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(checkOwned, op: StdOp.condBranch(ownedBuf, thenBlockId: freeOld.id, elseBlockId: publish.id))
 
 	let oldFreed = ids.mint()
 	module.appendOp(freeOld, op: StdOp.call(oldFreed, callee: MmFreeName, args: argsOf(oldBuf)))

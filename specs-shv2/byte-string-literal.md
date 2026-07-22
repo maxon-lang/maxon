@@ -331,6 +331,28 @@ end 'main'
 66 200
 ```
 
+<!-- test: byte-string-literal.push-grows-off-rdata -->
+
+Pushing onto a byte-string literal grows it off its immortal `.rdata` buffer: the original bytes are
+copied into a fresh heap buffer and the rdata blob is left unfreed — `__arr_grow` must honor the same
+`capacity < 0` rdata sentinel the drop path does, or it `__mm_free`s a never-allocated `.rdata` address
+and the run reports a leak. The grown array then drops leak-free.
+```maxon
+function main() returns ExitCode
+		var a = b"hi"
+		a.push(88)
+		let g = try a.get(2) otherwise 0
+		print("{a.count()} {g}")
+		return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+3 88
+```
+
 <!-- test: byte-string-literal.latin1-char -->
 
 ```maxon
