@@ -52,14 +52,18 @@ export enum RuntimeAbort
 	// unreachable from any source program.
 	arrayElementSizeZero = 74
 	// `__mm_leak_check`: the live allocation count was not zero at exit — a LEAK, or (a negative count)
-	// an over-release. It is the project-wide leak-gate code, read from the other end by
-	// `SpecWorkerPool.LeakCheckExitCode`.
+	// an over-release. ⚠ **`Testing/SpecWorkerPool.LeakCheckExitCode` SPELLS 101 TOO, AND FOLDING IT INTO
+	// THIS CASE WOULD BE WRONG.** That constant reads the exit code of a WORKER, and a worker is the shv2
+	// binary — compiled by the C# BOOTSTRAP, so the 101 it reads is emitted by `maxon-sharp`'s leak gate,
+	// not by the runtime this enum describes. Pointing the harness at this case would make it look
+	// single-sourced while its actual producer sat in another compiler. 101 is a PROJECT-WIDE CONVENTION
+	// with three independent producers; this enum owns shv2's, and its job here is to stop a second shv2
+	// abort taking the number.
 	leakDetected = 101
-	// A user `panic(…)`. ⚠ **CLAIMED, NOT READ, AND THAT IS A RESIDUAL.** The emitter is
-	// `LowerMaxonToStd.UserPanicExitCode`, which still spells the number itself — that file is outside
-	// this rung's file list, so the number is RESERVED here (it occupies the space, so the next abort
-	// cannot take it and the enum's duplicate check covers it) and the one-line change that makes that
-	// site read this case instead is reported to the coordinator rather than made behind their back.
+	// A user `panic(…)`, emitted by `LowerMaxonToStd.lowerPanicAbort` — the conventional 128 + SIGABRT.
+	// It is the one abort a SOURCE PROGRAM asks for rather than the runtime deciding, which is exactly
+	// why it belongs in this space and not beside its emitter: it ends the process the same way, so a
+	// later abort must not be allowed to take 134.
 	userPanic = 134
 end 'RuntimeAbort'
 

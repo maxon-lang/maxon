@@ -812,23 +812,13 @@ end 'buildBoolToString'
 // allocation. Adapted from v1's `__managed_mem_cow_check`+`grow` (`stdlib/Internals.maxon:3432-3491`) to
 // shv2's fused record and static single-owner model (no refcount on the detach path).
 //
-// ⭐ **ONE TEST DECIDES THE DETACH, AND IT IS ARITHMETIC RATHER THAN A SECOND SPELLING OF "IS THIS BUFFER
-// MINE?".** The bytes must move to a fresh external buffer whenever `capacity@16 < requiredLen`, and that
-// single comparison already covers every non-owned buffer:
-//
-//   `requiredLen = selfLen + otherLen`, and a `length@8` is a byte COUNT that is only ever published from
-//   another length or from `requiredLen` itself, so `requiredLen >= 0`. The shared encoding
-//   (`BufferOwnership`) gives every non-owned buffer a NEGATIVE `capacity@16`. Every negative is below
-//   every non-negative, so `capacity < requiredLen` is UNCONDITIONALLY true for an inline String, for a
-//   literal's immortal `.rdata` blob, and for any non-owned kind added later — the detach cannot be
-//   skipped for one of them, whatever the two lengths are (`other` empty included).
-//
-// So `emitBufferNotOwned` is deliberately NOT called: asking the sign and then asking the size would be
-// one question written twice, and the size question already contains the sign one. ⚠ What the subsumption
-// RESTS on is that half of the encoding — "not mine ⇒ negative". A future non-owned provenance marked any
-// other way (a flag, a zero capacity) would slip past this test and be written in place, which is a write
-// into `.rdata` or into a box's own trailing bytes. That is why the encoding says NEGATIVE and why the
-// sentinels live in one table.
+// ⭐ **ONE TEST DECIDES THE DETACH — `emitBufferCannotHold`, WHICH IS THE SHARED ENCODING'S OWN, NOT A
+// SECOND SPELLING OF "IS THIS BUFFER MINE?".** The bytes must move to a fresh external buffer whenever
+// `capacity@16 < requiredLen`, and that single comparison covers the ordinary grow AND every non-owned
+// buffer at once. WHY it covers the second is not stated here: it is a property of the capacity values,
+// so it is written where they are declared (`BufferOwnership`), against a type that stops at `-1` so a
+// provenance CANNOT be added that slips past this test. `requiredLen = selfLen + otherLen` is this
+// function's half of that contract — a sum of two `length@8` byte counts, hence never negative.
 //
 // ⚠ **THE OLD ALLOCATION IS RELEASED THROUGH THE SHARED PAIR, AND ONLY AFTER BOTH COPIES ARE DONE.**
 // `emitOwedAllocationBase` says WHICH allocation the record owes a release to before the detach republishes
@@ -872,9 +862,8 @@ function buildStrAppend(module StdModule)
 	let otherLen = emitLoadField(module, block: entry, record: otherPtr, offset: StringLengthOffset, ids: ids)
 	let otherBuf = emitLoadField(module, block: entry, record: otherPtr, offset: StringBufferOffset, ids: ids)
 	let otherAscii = emitLoadField(module, block: entry, record: otherPtr, offset: StringIsAsciiOffset, ids: ids)
-	let selfCap = emitLoadField(module, block: entry, record: selfPtr, offset: StringCapacityOffset, ids: ids)
 	let requiredLen = emitBin(module, block: entry, a: selfLen, b: otherLen, opcode: StdBinOpcode.add, ids: ids)
-	let tooSmall = emitCmp(module, block: entry, a: selfCap, b: requiredLen, pred: StdCmpPred.lt, ids: ids)
+	let tooSmall = emitBufferCannotHold(module, block: entry, record: selfPtr, slots: stringBufferSlots(), requiredLen: requiredLen, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(tooSmall, thenBlockId: detach.id, elseBlockId: inPlace.id))
 
 	// The allocation the blit owes a release to once it has finished reading: the pre-detach one, or none

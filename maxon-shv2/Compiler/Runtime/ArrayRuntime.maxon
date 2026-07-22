@@ -763,7 +763,8 @@ end 'emitArrayView'
 //
 // The published `capacity@16` is `length` — the buffer holds exactly the live elements and no slack, which is
 // also what the reference compiler reports after it detaches (`b"hi"`, then `set`, then `capacity()` → 2) —
-// and `parent@32` returns to 0, because a record that has just copied its bytes out owes nothing to anyone.
+// and `parent@32` returns to `NoOwedAllocation`, because a record that has just copied its bytes out owes
+// nothing to anyone.
 function buildArrCowDetach(module StdModule)
 	var func = IrFunction.createFromStd(ArrCowDetachName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
@@ -815,7 +816,7 @@ function buildArrCowDetach(module StdModule)
 	// before the copy (see trap 5). `base` is a `baseJoin` block arg, and `baseJoin` dominates here.
 	emitStoreField(module, block: afterCopy, record: arr, offset: ArrBufferOffset, value: newBuf)
 	emitStoreField(module, block: afterCopy, record: arr, offset: ArrCapacityOffset, value: length)
-	let noParent = emitConst(module, block: afterCopy, value: 0, ids: ids)
+	let noParent = emitConst(module, block: afterCopy, value: NoOwedAllocation, ids: ids)
 	emitStoreField(module, block: afterCopy, record: arr, offset: ArrParentOffset, value: noParent)
 	var afterRelease = emitReleaseOwedBase(module, func: func, cur: afterCopy, base: base, callee: MmDecrefName, ids: ids)
 	module.setTerminator(afterRelease, op: StdOp.branch(done.id))

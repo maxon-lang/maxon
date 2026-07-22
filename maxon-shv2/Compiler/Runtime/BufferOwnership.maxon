@@ -3,7 +3,7 @@
 // A String record and an Array record are DISTINCT 48-byte record types, but they carry the same
 // problem: each one holds a `buffer@0` that may or may not be the record's own to write and to release,
 // and every mutator and every drop path has to ask which. This file owns that question — the values
-// that answer it and the two predicates that read them — so the String runtime and the Array runtime
+// that answer it and the emitters that read them — so the String runtime and the Array runtime
 // cannot answer it differently.
 //
 // ⚠ **THEY DID.** Array answered it with the SIGN of `capacity@16` while String answered it with
@@ -20,9 +20,16 @@
 //     within `capacity` elements, and the record owes it a release when it dies or detaches.
 //   * `< 0` — NO. The record must copy its bytes somewhere private before any in-place write, and must
 //     not release `buffer@0`. WHICH negative value says only where the buffer came from (below); no
-//     reader compares against a specific one, and that is deliberate — a further non-owned-buffer kind
-//     then arrives as one more value rather than as a new test at every reader, which is exactly how
-//     the zero-copy view arrived after the rdata literal.
+//     COMPILER-SIDE reader compares against a specific one, and that is deliberate — a further
+//     non-owned-buffer kind then arrives as one more value rather than as a new test at every reader,
+//     which is exactly how the zero-copy view arrived after the rdata literal.
+//
+// ⚠ **THE VALUES ARE NOT PRIVATE, THOUGH: `__arr_capacity` HANDS `capacity@16` STRAIGHT TO USER CODE**,
+// so a Maxon program can read one, and `arrays.md:slice-capacity-is-a-view-until-written` pins
+// `ViewBufferCapacity` at exactly `-1` — matching the reference compiler, which also answers `-1` for a
+// buffer it does not yet own. So these three are RENUMBERABLE only in the sense that the suite will say
+// so: change `ViewBufferCapacity` and that spec goes red. That is the right failure (loud, at the gate),
+// but it is not "nothing observes the value".
 //
 // **`parent@32` answers "WHICH SEPARATE ALLOCATION DO I OWE A RELEASE TO?"** — the address `__mm_alloc`
 // RETURNED (so `__mm_decref` finds its header just below it), or `NoOwedAllocation` for "none". It is
@@ -34,8 +41,8 @@
 // A view windows another allocation's bytes; an rdata literal points at an immortal `.rdata` blob; an
 // INLINE String's bytes sit inside the record's OWN `__mm_alloc` payload, at `record + StringRecordBytes`,
 // so its own free reclaims them and there is no separate allocation to release. All three are simply
-// NEGATIVE, which is the whole of what any reader asks — the specific value is documentation for whoever
-// reads a hexdump, and no code compares against one.
+// NEGATIVE, which is the whole of what any reader inside the compiler asks — the specific value is there
+// for whoever reads a hexdump, or a `capacity()` a program printed (see the note above).
 //
 // ⚠ **`InlineBufferCapacity` IS WHY THE ENCODING NEEDED NO EXCEPTION FOR STRING.** An inline String's
 // bytes are neither writable-in-place beyond their exact length nor separately releasable, which is
@@ -45,9 +52,20 @@
 // instead, which forced a String-only branch in front of `emitOwedAllocationBase` deriving inline-ness
 // from the layout. The branch is gone, and so is the marker — this is the fact, in the field the rest of
 // the encoding already lives in.
-export let ViewBufferCapacity = 0 - 1 as ParsedInt
-export let RdataBufferCapacity = 0 - 2 as ParsedInt
-export let InlineBufferCapacity = 0 - 3 as ParsedInt
+//
+// ⭐⭐ **THE TYPE IS WHAT MAKES "NOT MINE ⇒ NEGATIVE" A RULE RATHER THAN A HABIT.** Every provenance below
+// is declared at this type, whose range STOPS at `-1`, so a fourth one written `= 4` — or `= 0` — does not
+// compile. That matters because `StringRuntime.__str_append` does not test the sign at all: it tests
+// `capacity < requiredLen` and relies on every non-owned capacity being below every byte count. Under a
+// bare `ParsedInt` that reliance rested on three separate literals staying negative by convention, and a
+// convention that is only written in a comment is a test nobody wrote — the exact shape of every bug this
+// file exists to end. Here the compiler that builds shv2 checks it, once per provenance, at the
+// declaration.
+export typealias NotOwnedBufferCapacity = int(i64.min to -1)
+
+export let ViewBufferCapacity = (0 - 1) as NotOwnedBufferCapacity
+export let RdataBufferCapacity = (0 - 2) as NotOwnedBufferCapacity
+export let InlineBufferCapacity = (0 - 3) as NotOwnedBufferCapacity
 
 // `parent@32` when the record owes NOTHING: an owner (its debt is its own `buffer@0`), a byte-string or
 // String literal over an immortal `.rdata` blob, a String whose bytes are inline, or an array that never
@@ -55,7 +73,7 @@ export let InlineBufferCapacity = 0 - 3 as ParsedInt
 // step is null-guarded.
 export let NoOwedAllocation = 0 as ParsedInt
 
-// ⭐ **WHICH SLOTS A RECORD KIND KEEPS THE ENCODING IN.** The two predicates below take this rather than
+// ⭐ **WHICH SLOTS A RECORD KIND KEEPS THE ENCODING IN.** Every emitter below takes this rather than
 // a record pointer alone, because the String record and the Array record are different types that each
 // declare their own offsets (`StringRuntime`, `ArrayRuntime`) — the two sets coincide today and nothing
 // here relies on that. Each runtime builds this ONCE, from its own constants, so the shared question is
@@ -84,14 +102,35 @@ end 'BufferRecordSlots'
 // `__mm_alloc` header must clear this test first. `__arr_cow_detach` is exactly such a reader, and its
 // arms are ordered accordingly.
 //
-// ⚠ `StringRuntime.__str_append` does NOT call this, and its comment says why: its own `capacity <
-// requiredLen` growth test already subsumes the sign (every negative capacity is below every required
-// length), so asking both would be one test written twice.
+// ⚠ `emitBufferCannotHold` below is the same question ASKED WIDER, not a second copy of it — see there.
 export function emitBufferNotOwned(module StdModule, block IrBlock, record ValueId, slots BufferRecordSlots, ids ValueMinter) returns ValueId
 	let capacity = emitLoadField(module, block: block, record: record, offset: slots.capacityOffset, ids: ids)
 	let zero = emitConst(module, block: block, value: 0, ids: ids)
 	return emitCmp(module, block: block, a: capacity, b: zero, pred: StdCmpPred.lt, ids: ids)
 end 'emitBufferNotOwned'
+
+// `capacity@16 < requiredLen` — ⭐ **"MUST THESE BYTES MOVE TO A PRIVATE BUFFER BIG ENOUGH TO HOLD
+// `requiredLen` OF THEM?"** — `emitBufferNotOwned`'s question widened, and the ONE place a caller is
+// allowed to fuse the two. It answers YES for an owner that is merely too small (an ordinary grow) AND
+// for every non-owned buffer whatever the sizes, because:
+//
+//   `requiredLen` is a byte COUNT, so it is `>= 0`; `NotOwnedBufferCapacity` stops at `-1`, so every
+//   non-owned capacity is `< 0`. Every negative is below every non-negative, so the comparison is
+//   UNCONDITIONALLY true for an inline String, for a literal's immortal `.rdata` blob, for a view, and
+//   for any provenance added later — which cannot opt out, because it cannot be declared non-negative.
+//
+// ⭐ **IT LIVES HERE, NEXT TO THE VALUES IT RESTS ON, AND THAT SITING IS THE POINT.** Its one caller is
+// `StringRuntime.__str_append`, and a single-caller helper would normally just move code; this one moves
+// a DEPENDENCY to where it can be seen. Left open-coded in the String runtime, "the sign test is already
+// inside the size test" was a claim in one file about constants declared in another — so whoever added a
+// fourth provenance had no reason to read it. Here it is three lines under them.
+//
+// ⚠ It deliberately does NOT also call `emitBufferNotOwned`: an `OR` whose left arm can never be the
+// deciding one is a branch no input reaches, and this file already refuses to emit those.
+export function emitBufferCannotHold(module StdModule, block IrBlock, record ValueId, slots BufferRecordSlots, requiredLen ValueId, ids ValueMinter) returns ValueId
+	let capacity = emitLoadField(module, block: block, record: record, offset: slots.capacityOffset, ids: ids)
+	return emitCmp(module, block: block, a: capacity, b: requiredLen, pred: StdCmpPred.lt, ids: ids)
+end 'emitBufferCannotHold'
 
 // ⭐ **THE SEPARATE ALLOCATION THIS RECORD OWES A RELEASE TO — `NoOwedAllocation` when it owes nothing.**
 // An OWNER's is its own `buffer@0` (the pointer `__mm_alloc` returned, which may be 0 if the record never

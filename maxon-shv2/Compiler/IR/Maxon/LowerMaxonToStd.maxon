@@ -274,10 +274,6 @@ end 'signatureHasFunctionParam'
 // and never touched the project. Dictionary-passing forced it: a `sizeof(T)` call site must materialise
 // the receiver instance's descriptor, which needs the whole-program `(baseId, args)` payload that lives
 // only on `ProgramSignatures`, and that is reachable only through the project.
-// The process exit code a user `panic(…)` terminates with — a conventional abort code (128 + SIGABRT).
-// The value is untested by the corpus (no Wave-1 panic is ever reached at runtime); it must only be
-// non-zero so a reached panic is observably a failure.
-let UserPanicExitCode = 134 as ParsedInt
 
 // The set of qualified function names whose body reads `sizeof(T)` and therefore carries a hidden
 // trailing layout-descriptor parameter (P1.6-B1). Built once per lowering by an op-scan; read at a call
@@ -1364,9 +1360,18 @@ type MaxonToStdLowering
 	// succeeding call), so the message text is untested; printing it is a follow-up. The exit — via
 	// `ExitProcess`, always imported by the entry stub — is what makes a reached panic observably a
 	// failure, and that IS emitted.
+	//
+	// ⚠ **THE NUMBER IS `RuntimeAbort`'s, NOT THIS FILE'S.** It used to be a local `UserPanicExitCode =
+	// 134` beside a comment calling it "a conventional abort code", which is precisely how
+	// `ArrayRuntime` and `GtRuntime` came to spend 70 twice: a number picked against whatever list the
+	// picker could see from where they stood. A user panic and a runtime abort end the same process the
+	// same way, so they share one space, and that space now has one declaration site whose duplicate
+	// check is the language's (E3031). Bound to a local first for the same E9001 reason
+	// `emitRuntimeAbort` documents.
 	function lowerPanicAbort(dstBlock IrBlock)
+		let panicCode = RuntimeAbort.userPanic.rawValue as ParsedInt
 		let code = self.mintStdValueId()
-		self.stdModule.appendOp(dstBlock, op: StdOp.const(code, value: UserPanicExitCode, valueType: StdType.i64))
+		self.stdModule.appendOp(dstBlock, op: StdOp.const(code, value: panicCode, valueType: StdType.i64))
 		self.stdModule.appendOp(dstBlock, op: StdOp.osExit(code))
 	end 'lowerPanicAbort'
 
