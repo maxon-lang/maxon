@@ -191,3 +191,56 @@ end 'main'
 ```exitcode
 2
 ```
+
+<!-- test: otherwise-live-binding-not-double-freed -->
+When the `otherwise` fallback is a live owned BINDING that is read again after the `try`, the error edge ALIASES it rather than moving it — so the merge binding `r` and the source binding `fallback` name the SAME box. If the phi is made owned by moving (the temporary rule), both `r` and `fallback` decref that one box at scope exit — a double-free the leak count catches as exit 101. The cure is the error-edge twin of the ok-edge borrow incref: incref the aliased binding so `r` owns its own reference and `fallback` keeps its own. Unlike the poison-only guards above, this is a genuine red-before-green — it exits **101** without the fix — and it needs no poison, because a double-free drives the leak count NEGATIVE. `fallback` must still read `99` after the try.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Node
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Node'
+
+typealias NodeArray = Array with Node
+
+function main() returns ExitCode
+	var a = NodeArray.create()
+	a.push(Node.create(10))
+	let fallback = Node.create(99)
+	let r = try a.get(9) otherwise fallback
+	return r.value + fallback.value
+end 'main'
+```
+```exitcode
+198
+```
+
+<!-- test: otherwise-live-binding-owned-result -->
+The same aliased-binding double-free reached through the OTHER arm — an OWNED try-result (`pop` moves the element out) merged with a live-binding fallback. It also exits **101** without the incref, and it exercises a program that would compile with no array-slice site, so it also pins that `__mm_incref` installs whenever the parser emits it (not only under the array runtime). `fallback` reads `99` after the try; `pop` on an empty array takes the error edge.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Node
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Node'
+
+typealias NodeArray = Array with Node
+
+function main() returns ExitCode
+	var a = NodeArray.create()
+	let fallback = Node.create(99)
+	let r = try a.pop() otherwise fallback
+	return r.value + fallback.value
+end 'main'
+```
+```exitcode
+198
+```

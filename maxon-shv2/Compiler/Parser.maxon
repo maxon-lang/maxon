@@ -7010,20 +7010,20 @@ export type Parser
 
 		// ⭐ **A MANAGED RESULT PHI IS OWNED — reconcile both edges to owned before wiring them in.** When the
 		// try-result owns heap, the phi is the sole owner of whichever value reaches the merge and is dropped
-		// once at its scope exit, so each edge's contribution must transfer ownership IN: the ok `result` was
-		// already pulled off the entry drop set (`desugarTry`), and the err `otherwiseValue` — an owned call
-		// result, or a borrowed String literal PROMOTED to an owned copy in `errEnd` (currentBlock here), the
-		// same reconciliation an expression `match`'s result phi makes — leaves its pending list into the phi.
-		// `parseUnboundOtherwiseForm` already refused a fallback that could not become an owned managed value
-		// of the result's type, so the only borrowed case reaching here is a promotable String literal. A
-		// SCALAR result keeps the borrowed phi the Wave-1 path built — nothing is owned, nothing is dropped.
+		// once at its scope exit, so each edge's contribution must transfer ONE owned reference IN: the ok
+		// `result` was already pulled off the entry drop set (`desugarTry`), and the err `otherwiseValue` — an
+		// owned call result, a borrowed String literal PROMOTED to an owned copy in `errEnd` (currentBlock
+		// here), or a live owned BINDING aliased into the merge — is reconciled by `transferFallbackToPhi`
+		// (move a temp, incref a binding). `parseUnboundOtherwiseForm` already refused a fallback that could not
+		// become an owned managed value of the result's type. A SCALAR result keeps the borrowed phi the Wave-1
+		// path built — nothing is owned, nothing is dropped.
 		var errEdgeValue = otherwiseValue
 		var phiOwned = false
 		if self.valueIsOwnedHeap(result) 'managedResultPhi'
 			if not self.valueIsOwnedHeap(otherwiseValue) 'promoteBorrowedFallback'
 				errEdgeValue = self.promoteToOwnedString(otherwiseValue, range: SourceRange.ofToken(tryTok))
 			end 'promoteBorrowedFallback'
-			self.removeFromPendingTemps(errEdgeValue)
+			self.transferFallbackToPhi(errEdgeValue, tryTok: tryTok)
 			phiOwned = true
 		end 'managedResultPhi' else 'borrowResult'
 			// ⭐ **A BORROW try-result merged with an OWNED fallback** (`try arr.get(i) otherwise Item.create(…)`,
@@ -7044,6 +7044,10 @@ export type Parser
 			// exactly one free. The incref goes into `okBlock` (single-threaded, before its branch to `cont`);
 			// `currentBlock` is `errEnd` and is restored after.
 			//
+			// The ERROR edge owes the phi a reference too, by the SAME rule: `transferFallbackToPhi` moves an
+			// owned temp or increfs an aliased binding, so a `try arr.get(i) otherwise fallbackBinding` (the
+			// binding read again after the try) no longer double-frees the box the phi and the binding share.
+			//
 			// A SCALAR result with a scalar fallback owns nothing on either edge, so the guard is false and the
 			// Wave-1 borrowed phi stands — nothing incref'd, nothing dropped.
 			if self.valueIsOwnedHeap(otherwiseValue) 'ownedFallbackIntoBorrow'
@@ -7052,7 +7056,7 @@ export type Parser
 				_ = self.emitRuntimeCall(MmIncrefName, args: singletonArgs(result), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(tryTok))
 				self.currentBlock = resumeBlock
 
-				self.removeFromPendingTemps(otherwiseValue)
+				self.transferFallbackToPhi(otherwiseValue, tryTok: tryTok)
 				phiOwned = true
 			end 'ownedFallbackIntoBorrow'
 		end 'borrowResult'
@@ -7094,6 +7098,28 @@ export type Parser
 		self.currentBlock = cont
 		return phiId
 	end 'finishValueTry'
+
+	// ⭐ **HAND THE MERGE PHI EXACTLY ONE OWNED REFERENCE FROM THE ERROR EDGE.** `finishValueTry` drops the
+	// phi once at the binding's scope exit, so the value flowing in on the error edge must give the phi a
+	// reference it can own outright — and the two fallback shapes owe that reference differently:
+	//   • an unconsumed owned TEMPORARY (`otherwise Slot.create(…)`) already owns its one reference and is
+	//     handed off — MOVE it into the phi by dropping it from the pending list; nothing else drops it.
+	//   • a live owned BINDING or consumed param (`otherwise fallback`, aliased and read again after the
+	//     `try`) keeps its OWN reference and drops it at its own scope exit — so the phi needs a SECOND
+	//     reference, taken with `__mm_incref` on the error edge (`currentBlock` is `errEnd` at both callers).
+	// Getting it backwards is a wrong answer either way: increfing a temp LEAKS (its extra reference is
+	// dropped by nobody — no binding owns it), moving a binding DOUBLE-FREES (the phi and the binding each
+	// drop the one box, the leak count goes negative → exit 101). `pendingTempsContain` is the discriminator:
+	// the two owned homes are disjoint by construction (a transfer to a binding calls `removeFromPendingTemps`
+	// first), so a value still in the pending list is owned by no binding. This is the error-edge twin of the
+	// ok-edge borrow incref above.
+	function transferFallbackToPhi(errEdgeValue ValueId, tryTok Token)
+		if self.pendingTempsContain(errEdgeValue) 'movedTemp'
+			self.removeFromPendingTemps(errEdgeValue)
+		end 'movedTemp' else 'aliasedBinding'
+			_ = self.emitRuntimeCall(MmIncrefName, args: singletonArgs(errEdgeValue), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(tryTok))
+		end 'aliasedBinding'
+	end 'transferFallbackToPhi'
 
 	// `otherwise ignore` or a block handler that FELL THROUGH — both edges reach a fresh continuation
 	// with no try-value. Merge the carried vars a block handler may have reassigned (`mergeAtContinuation`

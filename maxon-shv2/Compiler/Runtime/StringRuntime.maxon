@@ -293,6 +293,13 @@ export type RuntimeUsage
 	// backing record and its element buffer inside their Std bodies, which this Maxon-module scan cannot
 	// see. It drives `installArrayRuntime` (all the array helpers, appended already-lowered).
 	export var usesArray as bool
+	// The program takes a SECOND owner of a heap box (`__mm_incref`). Two producers: the array runtime's
+	// zero-copy slice (a view increfs the parent's element buffer — implied by `usesArray`, since the call
+	// lives in a Std body this scan cannot see), and the PARSER's `try … otherwise` reconciliation, which
+	// increfs an ok-edge borrow or an aliased error-edge binding so both merge into one owned phi — a `call
+	// __mm_incref` this scan DOES see. Drives `installMmRuntime` to build `__mm_incref`; a program that never
+	// increfs (the common one) keeps it out. Set alongside `usesHeap` (an incref is on a `__mm_alloc`'d box).
+	export var usesIncref as bool
 	// The `__destruct_<U>` symbols this module CALLS (P1.3 slice 2) — collected from the drop sites so
 	// `installUnionDestructors` synthesizes only the referenced ones, and `noteUnionDestructorUsage`
 	// can classify their transitive `__str_decref`/`__mm_free` needs. Full symbols (not names): the
@@ -301,7 +308,7 @@ export type RuntimeUsage
 	export var neededDestructors as DestructorSet
 
 	static function create() returns RuntimeUsage
-		return Self{usesHeap: false, usesGt: false, usesPrint: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesBoolToString: false, usesStrAppend: false, usesStrDecref: false, usesArray: false, neededDestructors: DestructorSet.create()}
+		return Self{usesHeap: false, usesGt: false, usesPrint: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesBoolToString: false, usesStrAppend: false, usesStrDecref: false, usesArray: false, usesIncref: false, neededDestructors: DestructorSet.create()}
 	end 'create'
 end 'RuntimeUsage'
 
@@ -411,6 +418,13 @@ function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 		usage.usesStrDecref = true
 		usage.usesHeap = true
 	end 'strdecref'
+	// A `__mm_incref` the PARSER emitted (the `try … otherwise` phi reconciliation) — install the incref
+	// helper for it, not only for the array runtime's `usesArray`. `usesHeap` follows because the box it
+	// increfs was `__mm_alloc`'d (which set `usesHeap` at its own call site anyway).
+	if callee.equals(MmIncrefName) 'incref'
+		usage.usesIncref = true
+		usage.usesHeap = true
+	end 'incref'
 	// Any `__arr_*` call carries the whole array runtime, and the heap under it: `__arr_create`/`__arr_grow`
 	// `__mm_alloc` the record and the element buffer, `__arr_decref` `__mm_free`s them — none of which this
 	// Maxon-module scan sees, since those calls live in the synthesized Std bodies. So a single reference

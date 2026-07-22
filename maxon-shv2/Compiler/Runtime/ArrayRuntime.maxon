@@ -261,10 +261,10 @@ export function installArrayRuntime(module StdModule, usage RuntimeUsage)
 	if not usage.usesArray 'noArray'
 		return
 	end 'noArray'
-	// `__mm_incref` is installed HERE and not by `installMmRuntime` because the zero-copy view is its only
-	// caller — see that function's note. `usesArray` implies `usesHeap` (`isArrayRuntimeCallee`), so the
-	// header geometry it reads is always present alongside it.
-	buildMmIncref(module)
+	// `__mm_incref` is built by `installMmRuntime` (under `usesIncref || usesArray`), not here: the parser
+	// now emits `__mm_incref` too (the `try … otherwise` phi reconciliation) in programs that touch no
+	// array, so its install can no longer live behind `usesArray` alone — see that function's note.
+	// `usesArray` implies `usesHeap` (`isArrayRuntimeCallee`), so `installMmRuntime` has already run.
 	buildArrCowDetach(module)
 	buildArrGrownCap(module)
 	buildArrGrow(module)

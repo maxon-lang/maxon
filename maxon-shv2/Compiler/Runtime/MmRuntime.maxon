@@ -173,19 +173,24 @@ end 'ValueMinter'
 // offset is the PE entry point), and that is `augmentWithRuntime`'s job at the Target tier. Order
 // among the rest is free.
 //
-// ⚠ `__mm_incref` IS DELIBERATELY NOT IN THIS LIST. Every function here has a caller in every
-// heap-using program (a drop calls `__mm_decref`, which calls `__mm_free`; the exit path calls the leak
-// check), so installing them together costs nothing dead. `__mm_incref`'s ONLY caller is the array
-// runtime's zero-copy view, so it is installed by `installArrayRuntime` — with its consumer, under the
-// `usesArray` bit — rather than becoming 31 unreachable bytes in every heap program that never touches
-// an array. That is the same "vocabulary ships with its consumer" rule that deleted it in the first
-// place, applied to WHERE it is installed rather than to WHETHER it exists.
-export function installMmRuntime(module StdModule)
+// ⚠ `__mm_incref` IS CONDITIONAL, not in the unconditional list. Every function above has a caller in
+// every heap-using program (a drop calls `__mm_decref`, which calls `__mm_free`; the exit path calls the
+// leak check), so installing them together costs nothing dead. `__mm_incref` does NOT: a heap program
+// that never takes a SECOND owner never references it, and it would be 31 unreachable bytes there. It now
+// has TWO consumers — the array runtime's zero-copy view (`usesArray`) and the parser's `try … otherwise`
+// phi reconciliation (`usesIncref`, a `call __mm_incref` `scanRuntimeUsage` sees directly) — so it is
+// built here, under either bit, rather than by `installArrayRuntime` alone: the parser can emit it in a
+// program that touches no array. Same "vocabulary ships with its consumer" rule, one home now that the
+// consumers are two files apart.
+export function installMmRuntime(module StdModule, usage RuntimeUsage)
 	buildSlabAlloc(module)
 	buildMmAlloc(module)
 	buildMmDecref(module)
 	buildMmFree(module)
 	buildMmLeakCheck(module)
+	if usage.usesIncref or usage.usesArray 'incref'
+		buildMmIncref(module)
+	end 'incref'
 end 'installMmRuntime'
 
 // One i64 parameter — the shape five of the six runtime functions share. Exported: the String
