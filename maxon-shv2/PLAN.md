@@ -1165,9 +1165,12 @@ number when it is sequenced (each also has a `disabled-test:` or oracle-divergen
   an undefined name still E3004. The void case earned its keep: it exposed + FIXED two latent void panics
   (`appendCallIndirect`/`stdTypeOf` on a void result; `synthesizeFnRefThunk` on a void target — its comment
   cited "OPEN #68"), and the review caught a void-function-value-in-VALUE-position compiler panic (now a
-  clean E2004 at the call, `resultUsed` threaded). **NEW #97: a function-typed FIELD or call-RESULT callee
-  at statement position (`obj.handler()`, `getFn()()`) is E2015 "Unsupported"** — pre-existing, bare-local
-  only; the statement dispatcher would need field-load-then-indirect-call. Its own rung.
+  clean E2004 at the call, `resultUsed` threaded). **✅ #97 — postfix callee at statement position — CLOSED
+  2026-07-22** (main `d717fb5f0`, 1162→1170/0): `h.op()` (function-typed FIELD), `o.inner.op()` (chain), and
+  `getFn()()` (call-result) at statement position now route through the SAME `parsePostfix`/indirect-call path
+  expression position uses (0 goldens moved — existing method/direct calls byte-identical). ⚠ DELIBERATE
+  SUPERSET: shv2's uniform-postfix design ACCEPTS a call-result callee `getFn()()` that the bootstrap oracle
+  REJECTS (an oracle parser limitation) — it runs correctly (verified), never miscompiles.
 - **#4b — the constant top-level-decl DFS is UNBOUNDED** (native-stack recursion → SIGSEGV at ~700 deep, no
   diagnostic, defeats E2012; inherited — the bootstrap overflows earlier). Fix = an explicit WORKLIST in BOTH
   compilers (NOT the dependency-graph pre-scan — that would be a third evaluator). *(Its other two sub-bullets
