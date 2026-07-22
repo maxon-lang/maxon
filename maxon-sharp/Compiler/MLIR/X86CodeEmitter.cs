@@ -289,6 +289,9 @@ public partial class X86CodeEmitter() {
       case X86MovqXmmToGprOp movq:
         EmitMovqXmmToGpr(movq.Dest, movq.Src);
         break;
+      case X86MovqGprToXmmOp movq:
+        EmitMovqGprToXmm(movq.Dest, movq.Src);
+        break;
       case X86CvtSi2FloatOp cvt:
         EmitCvtSi2Float(cvt.Dest, cvt.Src, cvt.Precision);
         break;
@@ -1721,15 +1724,32 @@ public partial class X86CodeEmitter() {
     EmitByte((byte)(0xC0 | ((s & 7) << 3) | (d & 7)));
   }
 
-  private void EmitCvtSi2Float(X86XmmRegister dest, X86Register src, FloatPrecision precision) {
-    RequireGpr(src, nameof(EmitCvtSi2Float));
-    // CVTSI2[SD/SS] xmm, r64: prefix REX.W 0F 2A /r
+  /// <summary>
+  /// Emit a REX.W two-byte-opcode instruction whose ModRM.reg field holds an XMM
+  /// register and whose ModRM.r/m field holds a GPR — the operand layout shared by
+  /// CVTSI2SD/SS and MOVQ xmm, r64. REX.R therefore extends the XMM and REX.B the
+  /// GPR; getting that pair backwards encodes the wrong registers silently, and
+  /// only above xmm7/r7 where the extension bits actually differ.
+  /// </summary>
+  private void EmitXmmFromGprOp(byte prefix, byte opcode, X86XmmRegister dest, X86Register src, string caller) {
+    RequireGpr(src, caller);
     var d = XmmRegCode(dest);
     var s = RegCode(src);
-    EmitByte(PrecPrefix(precision));
+    EmitByte(prefix);
     Rex.W().Reg(d).Rm(src).Emit(this);
-    EmitBytes(0x0F, 0x2A);
+    EmitBytes(0x0F, opcode);
     EmitByte((byte)(0xC0 | ((d & 7) << 3) | (s & 7)));
+  }
+
+  private void EmitCvtSi2Float(X86XmmRegister dest, X86Register src, FloatPrecision precision) {
+    // CVTSI2[SD/SS] xmm, r64: prefix REX.W 0F 2A /r
+    EmitXmmFromGprOp(PrecPrefix(precision), 0x2A, dest, src, nameof(EmitCvtSi2Float));
+  }
+
+  private void EmitMovqGprToXmm(X86XmmRegister dest, X86Register src) {
+    // MOVQ xmm, r64: 66 REX.W 0F 6E /r. The inverse of MOVQ r64, xmm (0F 7E);
+    // both reinterpret bits, unlike CVTSI2SD which converts numerically.
+    EmitXmmFromGprOp(0x66, 0x6E, dest, src, nameof(EmitMovqGprToXmm));
   }
 
   private void EmitCvtSd2Ss(X86XmmRegister dest, X86XmmRegister src) {

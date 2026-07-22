@@ -465,6 +465,12 @@ public class RegisterManager : RegisterManagerBase<X86Register, X86XmmRegister, 
     block.AddOp(new X86MovqXmmToGprOp(destGpr, srcXmm));
   }
 
+  public void EmitMovqGprToXmm(StdValue input, StdValue result, IrBlock<X86Op> block) {
+    var srcGpr = EnsureInRegister(input, block);
+    var destXmm = AllocateFpRegister(result);
+    block.AddOp(new X86MovqGprToXmmOp(destXmm, srcGpr));
+  }
+
   public void EmitCvtSi2Sd(StdValue input, StdValue result, IrBlock<X86Op> block) {
     var srcGpr = EnsureInRegister(input, block);
     var destXmm = AllocateFpRegister(result);

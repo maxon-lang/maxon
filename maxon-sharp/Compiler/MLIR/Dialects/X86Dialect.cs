@@ -51,6 +51,7 @@ public enum X86OpKind {
   DivXmm,
   CvttFloat2Si,
   MovqXmmToGpr,
+  MovqGprToXmm,
   CvtSi2Float,
   CvtSd2Ss,
   CvtSs2Sd,
@@ -378,6 +379,13 @@ public sealed class X86MovqXmmToGprOp(X86Register dest, X86XmmRegister src) : X8
   public override X86OpKind Kind => X86OpKind.MovqXmmToGpr;
   public X86Register Dest { get; } = dest;
   public X86XmmRegister Src { get; } = src;
+  public override string Mnemonic => $"x64.movq {Dest.ToString().ToLower()}, {Src.ToString().ToLower()}";
+}
+
+public sealed class X86MovqGprToXmmOp(X86XmmRegister dest, X86Register src) : X86Op {
+  public override X86OpKind Kind => X86OpKind.MovqGprToXmm;
+  public X86XmmRegister Dest { get; } = dest;
+  public X86Register Src { get; } = src;
   public override string Mnemonic => $"x64.movq {Dest.ToString().ToLower()}, {Src.ToString().ToLower()}";
 }
 

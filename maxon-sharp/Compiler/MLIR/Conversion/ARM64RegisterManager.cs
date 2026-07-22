@@ -370,6 +370,12 @@ public class ARM64RegisterManager : RegisterManagerBase<ARM64Register, ARM64Floa
     block.AddOp(new ARM64FmovToGprOp(destGpr, srcFp, FloatPrecision.F64));
   }
 
+  public void EmitBitcastI64ToF64(StdValue input, StdValue result, IrBlock<ARM64Op> block) {
+    var srcGpr = EnsureInRegister(input, block);
+    var destFp = AllocateFpRegister(result);
+    block.AddOp(new ARM64FmovToFloatOp(destFp, srcGpr, FloatPrecision.F64));
+  }
+
   // --- Sign extension ---
 
   public void EmitSignExtendI32ToI64(StdValue input, StdValue result, IrBlock<ARM64Op> block) {

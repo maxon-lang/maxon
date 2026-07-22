@@ -132,6 +132,7 @@ public enum MaxonOpKind {
   Ceil,
   Round,
   BitcastF64ToI64,
+  BitcastI64ToF64,
   Min,
   Max,
   CondBr,
@@ -850,6 +851,15 @@ public sealed class MaxonBitcastF64ToI64Op(MaxonValue input) : MaxonOp {
   public override string Mnemonic => "maxon.bitcast_f64_to_i64";
   public MaxonValue Input { get; } = input;
   public MaxonInteger Result { get; } = new MaxonInteger(IrContext.Current.NextId());
+  public override IReadOnlyList<MaxonValue> Results => [Result];
+  public override IReadOnlyList<MaxonValue> Operands => [Input];
+}
+
+public sealed class MaxonBitcastI64ToF64Op(MaxonValue input) : MaxonOp {
+  public override MaxonOpKind Kind => MaxonOpKind.BitcastI64ToF64;
+  public override string Mnemonic => "maxon.bitcast_i64_to_f64";
+  public MaxonValue Input { get; } = input;
+  public MaxonFloat Result { get; } = new MaxonFloat(IrContext.Current.NextId());
   public override IReadOnlyList<MaxonValue> Results => [Result];
   public override IReadOnlyList<MaxonValue> Operands => [Input];
 }

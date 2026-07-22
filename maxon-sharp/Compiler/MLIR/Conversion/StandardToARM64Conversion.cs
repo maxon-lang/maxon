@@ -463,6 +463,10 @@ public static class StandardToARM64Conversion {
         regManager.EmitBitcastF64ToI64(bitcast.Input, bitcast.Result, block);
         break;
 
+      case StdBitcastI64ToF64Op bitcast:
+        regManager.EmitBitcastI64ToF64(bitcast.Input, bitcast.Result, block);
+        break;
+
       // === Float rounding ===
       case StdFloorF64Op floorF64:
         regManager.EmitFpUnary(floorF64.Input, floorF64.Result, block,

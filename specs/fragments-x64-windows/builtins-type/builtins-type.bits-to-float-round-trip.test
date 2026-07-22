@@ -1,0 +1,148 @@
+// Test: builtins-type.bits-to-float-round-trip
+// Negative zero's pattern is 0x8000000000000000, so the alias must span the
+// full signed 64-bit range to carry every IEEE 754 double's bits.
+typealias FloatBits = int(i64.min to i64.max)
+
+function roundTripBits(bits FloatBits) returns FloatBits
+	return __Builtins.floatToBits(__Builtins.bitsToFloat(bits))
+end 'roundTripBits'
+
+function main() returns ExitCode
+	// Smallest positive subnormal (0x0000000000000001). Numeric conversion of
+	// the integer 1 would give 1.0, whose bits are 4607182418800017408.
+	if roundTripBits(1) != 1 'subnormalMin'
+		return 1
+	end 'subnormalMin'
+
+	// Largest subnormal (0x000FFFFFFFFFFFFF).
+	if roundTripBits(4503599627370495) != 4503599627370495 'subnormalMax'
+		return 2
+	end 'subnormalMax'
+
+	// Positive zero (0x0000000000000000).
+	if roundTripBits(0) != 0 'positiveZero'
+		return 3
+	end 'positiveZero'
+
+	// 1.0 (0x3FF0000000000000).
+	if roundTripBits(4607182418800017408) != 4607182418800017408 'one'
+		return 4
+	end 'one'
+
+	// Negative zero: its bit pattern is 0x8000000000000000, which `==` on
+	// floats cannot detect because -0.0 == 0.0. Comparing bits does.
+	let negativeZeroBits = __Builtins.floatToBits(-0.0)
+	if roundTripBits(negativeZeroBits) != negativeZeroBits 'negativeZero'
+		return 5
+	end 'negativeZero'
+
+	// Sign bit through the float-first composition.
+	if __Builtins.bitsToFloat(__Builtins.floatToBits(-2.5)) != -2.5 'negativeValue'
+		return 6
+	end 'negativeValue'
+
+	if __Builtins.bitsToFloat(__Builtins.floatToBits(0.5)) != 0.5 'half'
+		return 7
+	end 'half'
+
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+// CompiledIR
+module {
+  func @roundTripBits(bits: i64) -> i64 {
+  entry:
+    x64.movq xmm0, rcx
+    x64.movq rax, xmm0
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rcx, 1
+    x64.call roundTripBits
+    x64.mov rcx, 1
+    x64.cmp rax, rcx
+    x64.je main.subnormalMin_0.after
+  subnormalMin_0:
+    x64.mov rax, 1
+    x64.epilogue
+    x64.ret
+  subnormalMin_0.after:
+    x64.mov rcx, 4503599627370495
+    x64.call roundTripBits
+    x64.mov rcx, 4503599627370495
+    x64.cmp rax, rcx
+    x64.je main.subnormalMax_0.after
+  subnormalMax_0:
+    x64.mov rax, 2
+    x64.epilogue
+    x64.ret
+  subnormalMax_0.after:
+    x64.xor ecx, ecx
+    x64.call roundTripBits
+    x64.xor ecx, ecx
+    x64.cmp rax, rcx
+    x64.je main.positiveZero_0.after
+  positiveZero_0:
+    x64.mov rax, 3
+    x64.epilogue
+    x64.ret
+  positiveZero_0.after:
+    x64.mov rcx, 4607182418800017408
+    x64.call roundTripBits
+    x64.mov rcx, 4607182418800017408
+    x64.cmp rax, rcx
+    x64.je main.one_0.after
+  one_0:
+    x64.mov rax, 4
+    x64.epilogue
+    x64.ret
+  one_0.after:
+    x64.movsd xmm0, [rip+__float_-0]
+    x64.movq rax, xmm0
+    x64.mov [rbp-8], rax
+    x64.mov rcx, [rbp-8]
+    x64.call roundTripBits
+    x64.mov rcx, [rbp-8]
+    x64.cmp rax, rcx
+    x64.je main.negativeZero_0.after
+  negativeZero_0:
+    x64.mov rax, 5
+    x64.epilogue
+    x64.ret
+  negativeZero_0.after:
+    x64.movsd xmm0, [rip+__float_-2.5]
+    x64.movq rax, xmm0
+    x64.movq xmm1, rax
+    x64.movsd xmm2, [rip+__float_-2.5]
+    x64.ucomisd xmm1, xmm2
+    x64.jp main.__fcmp_ne_skip_0
+    x64.je main.negativeValue_0.after
+  __fcmp_ne_skip_0:
+  negativeValue_0:
+    x64.mov rax, 6
+    x64.epilogue
+    x64.ret
+  negativeValue_0.after:
+    x64.movsd xmm0, [rip+__float_0.5]
+    x64.movq rax, xmm0
+    x64.movq xmm1, rax
+    x64.movsd xmm2, [rip+__float_0.5]
+    x64.ucomisd xmm1, xmm2
+    x64.jp main.__fcmp_ne_skip_1
+    x64.je main.half_0.after
+  __fcmp_ne_skip_1:
+  half_0:
+    x64.mov rax, 7
+    x64.epilogue
+    x64.ret
+  half_0.after:
+    x64.xor eax, eax
+    x64.epilogue
+    x64.ret
+  }
+}
+---

@@ -10474,9 +10474,18 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     ["floatToBits"] = new(
       "Reinterprets a float's IEEE 754 bit pattern as an integer (bitcast).\n\n`__Builtins.floatToBits(value) returns int`",
       p => {
-        var value = p.ResolveExprValue(p.ParseExpression());
+        var value = p.ParseTypedRuntimeArgs("floatToBits", ["f64"])[0];
         p.Expect(TokenType.RightParen);
         var op = new MaxonBitcastF64ToI64Op(value);
+        p._currentBlock!.AddOp(op);
+        return op.Result;
+      }),
+    ["bitsToFloat"] = new(
+      "Reinterprets an integer as a float's IEEE 754 bit pattern (bitcast). The exact inverse of floatToBits.\n\n`__Builtins.bitsToFloat(bits) returns float`",
+      p => {
+        var bits = p.ParseTypedRuntimeArgs("bitsToFloat", ["i64"])[0];
+        p.Expect(TokenType.RightParen);
+        var op = new MaxonBitcastI64ToF64Op(bits);
         p._currentBlock!.AddOp(op);
         return op.Result;
       }),
@@ -10641,8 +10650,21 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
   private void CheckRuntimeArgType(string runtimeName, int argIndex, string expectedName,
       MaxonValue actual, Token argToken) {
     // Integer params: accept any integer-class MaxonValue but NOT MaxonCString.
+    // Rejecting MaxonStruct here is load-bearing rather than cosmetic: a managed
+    // value survives to the Standard tier as StdHeapPtr, which derives from
+    // StdI64, so nothing downstream would notice a pointer standing in for an
+    // integer — it would simply be reinterpreted.
     if (expectedName == "i64") {
       if (actual is MaxonInteger or MaxonByte or MaxonShort) return;
+      FailArgType(runtimeName, argIndex, expectedName, actual, argToken);
+      return;
+    }
+
+    // Float params: MaxonFloat is the only f64-class value. An integer must NOT
+    // be accepted here — the two bit-pattern intrinsics are inverses, so a
+    // silently-tolerated int would reinterpret a pattern that was never a float.
+    if (expectedName == "f64") {
+      if (actual is MaxonFloat) return;
       FailArgType(runtimeName, argIndex, expectedName, actual, argToken);
       return;
     }

@@ -415,6 +415,7 @@ internal class FunctionCloner {
       case MaxonIntToFloatOp i: { var c = new MaxonIntToFloatOp(MapValue(i.Input)); RegisterResult(i.Result, c.Result); return c; }
       case MaxonCastOp ca: { var c = new MaxonCastOp(MapValue(ca.Input), ca.TargetKind, ca.SourceOptimalType); RegisterResult(ca.Result, c.Result); return c; }
       case MaxonBitcastF64ToI64Op bc: { var c = new MaxonBitcastF64ToI64Op(MapValue(bc.Input)); RegisterResult(bc.Result, c.Result); return c; }
+      case MaxonBitcastI64ToF64Op bc: { var c = new MaxonBitcastI64ToF64Op(MapValue(bc.Input)); RegisterResult(bc.Result, c.Result); return c; }
       case MaxonSizeofOp sz: { var c = new MaxonSizeofOp(SubName(sz.TypeName)); RegisterResult(sz.Result, c.Result); return c; }
       case MaxonAbsOp a: { var c = new MaxonAbsOp(MapValue(a.Input)); RegisterResult(a.Result, c.Result); return c; }
       case MaxonSqrtOp s: { var c = new MaxonSqrtOp(MapValue(s.Input)); RegisterResult(s.Result, c.Result); return c; }

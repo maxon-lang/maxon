@@ -54,6 +54,7 @@ User code should use the `Subprocess` stdlib type rather than calling these buil
 
 **Primitive:**
 - `__Builtins.floatToBits(value)` returns int - Bitcast float to int
+- `__Builtins.bitsToFloat(bits)` returns float - Bitcast int to float (the exact inverse of `floatToBits`)
 
 ## Tests
 
@@ -128,6 +129,139 @@ end 'main'
 ```
 ```exitcode
 0
+```
+
+<!-- test: builtins-type.bits-to-float -->
+```maxon
+function main() returns ExitCode
+	let value = __Builtins.bitsToFloat(4607182418800017408)
+	// IEEE 754: 0x3FF0000000000000 = 4607182418800017408 is exactly 1.0.
+	// A numeric conversion would instead yield ~4.6e18, so this distinguishes
+	// a bitcast from a widening int-to-float conversion.
+	if value == 1.0 'check'
+		return 0
+	end 'check'
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: builtins-type.bits-to-float-round-trip -->
+`bitsToFloat` and `floatToBits` are exact inverses, so composing them in either
+order is the identity. Round-tripping bit patterns that no numeric conversion
+could reproduce — the smallest subnormal, the largest subnormal, negative zero —
+proves neither direction is converting numerically.
+```maxon
+// Negative zero's pattern is 0x8000000000000000, so the alias must span the
+// full signed 64-bit range to carry every IEEE 754 double's bits.
+typealias FloatBits = int(i64.min to i64.max)
+
+function roundTripBits(bits FloatBits) returns FloatBits
+	return __Builtins.floatToBits(__Builtins.bitsToFloat(bits))
+end 'roundTripBits'
+
+function main() returns ExitCode
+	// Smallest positive subnormal (0x0000000000000001). Numeric conversion of
+	// the integer 1 would give 1.0, whose bits are 4607182418800017408.
+	if roundTripBits(1) != 1 'subnormalMin'
+		return 1
+	end 'subnormalMin'
+
+	// Largest subnormal (0x000FFFFFFFFFFFFF).
+	if roundTripBits(4503599627370495) != 4503599627370495 'subnormalMax'
+		return 2
+	end 'subnormalMax'
+
+	// Positive zero (0x0000000000000000).
+	if roundTripBits(0) != 0 'positiveZero'
+		return 3
+	end 'positiveZero'
+
+	// 1.0 (0x3FF0000000000000).
+	if roundTripBits(4607182418800017408) != 4607182418800017408 'one'
+		return 4
+	end 'one'
+
+	// Negative zero: its bit pattern is 0x8000000000000000, which `==` on
+	// floats cannot detect because -0.0 == 0.0. Comparing bits does.
+	let negativeZeroBits = __Builtins.floatToBits(-0.0)
+	if roundTripBits(negativeZeroBits) != negativeZeroBits 'negativeZero'
+		return 5
+	end 'negativeZero'
+
+	// Sign bit through the float-first composition.
+	if __Builtins.bitsToFloat(__Builtins.floatToBits(-2.5)) != -2.5 'negativeValue'
+		return 6
+	end 'negativeValue'
+
+	if __Builtins.bitsToFloat(__Builtins.floatToBits(0.5)) != 0.5 'half'
+		return 7
+	end 'half'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+### Bitcast argument types — rejections
+
+The two bitcast intrinsics are each other's inverse, so their argument types are
+not interchangeable. Passing the wrong one is always a mistake, and is rejected
+rather than reinterpreted.
+
+<!-- test: builtins-type.error.bits-to-float-float-arg -->
+A `float` argument to `bitsToFloat` is almost always a `floatToBits` that was
+meant instead.
+```maxon
+function main() returns ExitCode
+	let v = __Builtins.bitsToFloat(1.0)
+	return trunc(v)
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/builtins-type/builtins-type.error.bits-to-float-float-arg.test:3:33: type mismatch: __Builtins.bitsToFloat argument 0 expects 'i64' but got 'float'
+```
+
+<!-- test: builtins-type.error.bits-to-float-managed-arg -->
+A managed value is a heap pointer, and a heap pointer is not a float's bit
+pattern. This one matters most: the pointer shares the integer representation,
+so before the check existed this program compiled clean and bitcast the String's
+handle into a garbage double.
+```maxon
+function main() returns ExitCode
+	let v = __Builtins.bitsToFloat("x")
+	return trunc(v)
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/builtins-type/builtins-type.error.bits-to-float-managed-arg.test:3:33: type mismatch: __Builtins.bitsToFloat argument 0 expects 'i64' but got 'String'
+```
+
+<!-- test: builtins-type.error.bits-to-float-bool-arg -->
+```maxon
+function main() returns ExitCode
+	let v = __Builtins.bitsToFloat(true)
+	return trunc(v)
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/builtins-type/builtins-type.error.bits-to-float-bool-arg.test:3:33: type mismatch: __Builtins.bitsToFloat argument 0 expects 'i64' but got 'bool'
+```
+
+<!-- test: builtins-type.error.float-to-bits-int-arg -->
+The mirror rejection: `floatToBits` takes the float, not the pattern.
+```maxon
+function main() returns ExitCode
+	let v = __Builtins.floatToBits(7)
+	return v
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/builtins-type/builtins-type.error.float-to-bits-int-arg.test:3:33: type mismatch: __Builtins.floatToBits argument 0 expects 'f64' but got 'int'
 ```
 
 <!-- test: builtins-type.direct-write-stdout -->

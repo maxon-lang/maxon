@@ -73,6 +73,7 @@ public enum StdOpKind {
   FpToSi,
   FpToUi,
   BitcastF64ToI64,
+  BitcastI64ToF64,
   SiToFp,
   UiToFp,
   FpToSiF32,
@@ -719,6 +720,17 @@ public sealed class StdBitcastF64ToI64Op(StdF64 input) : StandardOp {
   public override string Mnemonic => "arith.bitcast_f64_to_i64";
   public StdF64 Input { get; } = input;
   public StdI64 Result { get; } = new StdI64(IrContext.Current.NextStdId());
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  public override IReadOnlyList<string> PrintableOperands => [Input.ToString()];
+  public override List<StdValue> ReadValues => [Input];
+  public override int PureResultId => Result.Id;
+}
+
+public sealed class StdBitcastI64ToF64Op(StdI64 input) : StandardOp {
+  public override StdOpKind Kind => StdOpKind.BitcastI64ToF64;
+  public override string Mnemonic => "arith.bitcast_i64_to_f64";
+  public StdI64 Input { get; } = input;
+  public StdF64 Result { get; } = new StdF64(IrContext.Current.NextStdId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyList<string> PrintableOperands => [Input.ToString()];
   public override List<StdValue> ReadValues => [Input];

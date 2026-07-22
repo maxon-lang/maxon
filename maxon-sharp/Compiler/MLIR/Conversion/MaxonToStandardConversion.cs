@@ -2038,6 +2038,13 @@ public static partial class MaxonToStandardConversion {
               valueMap[bitcastOp.Result] = stdOp.Result;
               break;
             }
+            case MaxonBitcastI64ToF64Op bitcastOp: {
+              var input = (StdI64)valueMap[bitcastOp.Input];
+              var stdOp = new StdBitcastI64ToF64Op(input);
+              newBlock.AddOp(stdOp);
+              valueMap[bitcastOp.Result] = stdOp.Result;
+              break;
+            }
             case MaxonIntToFloatOp intToFloatOp: {
               var input = (StdI64)valueMap[intToFloatOp.Input];
               var stdOp = new StdSiToFpOp(input);
