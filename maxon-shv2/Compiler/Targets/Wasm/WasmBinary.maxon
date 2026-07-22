@@ -767,8 +767,10 @@ function writeI32ConstOffsetExpr(buf ByteArray, offset ParsedInt)
 end 'writeI32ConstOffsetExpr'
 
 // Encode one functype: form byte, ULEB128 param count + param valtype bytes, then the same
-// for results.
-function encodeFuncType(params WasmValTypeArray, results WasmValTypeArray) returns ByteArray
+// for results. Exported so `StdToWasm.buildIndirectCallTypeIdxMap`/`emitCallIndirect` can key an indirect
+// call's pre-interned functype by the SAME encoded bytes `internFuncType` dedups on (P1.5 #78) — one
+// encoder, so the intern-time key and the emit-time lookup key cannot disagree.
+export function encodeFuncType(params WasmValTypeArray, results WasmValTypeArray) returns ByteArray
 	var enc = ByteArray.create()
 	enc.push(wasmFunctypeForm)
 

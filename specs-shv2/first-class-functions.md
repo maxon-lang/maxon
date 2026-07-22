@@ -1929,3 +1929,150 @@ end 'main'
 ```exitcode
 42
 ```
+
+### Float function values carry the callee's float result and param types (P1.5 #78)
+
+A function VALUE returns and takes floats exactly as a direct call does. The indirect-call
+lowering carries the function value's own signature, so a float RESULT is captured from the
+float return register (xmm0/d0, or a wasm f64 result) instead of the integer one, and a float
+ARGUMENT travels in a float argument register (its own separate counter) instead of a GPR. An
+integer function value is untouched — the tests above are the no-regression anchor.
+
+<!-- test: first-class-function.float-return-called-indirectly -->
+<!-- targets: x64-windows, wasm32-wasi -->
+A function value that RETURNS a float, called indirectly. Before #78 the indirect call assumed
+an integer result and captured xmm0's value from the integer return register, which colored a
+move across register files (x64: `r8` → `xmm0` panic; wasm: an `i64` → `f64` coerce panic).
+```maxon
+
+typealias Ratio = float(0.0 to 1000.0)
+typealias FloatFn = function() returns Ratio
+
+function getVal() returns Ratio
+	return 3.75
+end 'getVal'
+
+function callIt(f FloatFn) returns Ratio
+	return f()
+end 'callIt'
+
+function main() returns ExitCode
+	let fn = getVal
+	let r = callIt(fn)
+	return trunc(r) as ExitCode
+end 'main'
+```
+```exitcode
+3
+```
+
+<!-- test: first-class-function.float-param-called-indirectly -->
+<!-- targets: x64-windows, wasm32-wasi -->
+A function value that TAKES a float parameter, called indirectly through its `__fnref_` thunk.
+The float argument travels in a float argument register, and the thunk types its forwarded
+parameter as the target's real float type so the register files agree caller-to-callee.
+```maxon
+
+typealias Ratio = float(0.0 to 1000.0)
+typealias ScaleFn = function(Ratio) returns Ratio
+
+function scale(x Ratio) returns Ratio
+	return x * 2.0
+end 'scale'
+
+function apply(f ScaleFn, v Ratio) returns Ratio
+	return f(v)
+end 'apply'
+
+function main() returns ExitCode
+	let fn = scale
+	let r = apply(fn, v: 10.5)
+	return trunc(r) as ExitCode
+end 'main'
+```
+```exitcode
+21
+```
+
+<!-- test: first-class-function.mixed-int-float-params-indirect -->
+<!-- targets: x64-windows, wasm32-wasi -->
+An INT parameter followed by a FLOAT one, called indirectly: the int rides a GPR argument
+register and the float rides a float one, each on its own counter, so the callee reads each
+back from the file the caller wrote it to.
+```maxon
+
+typealias Ratio = float(0.0 to 1000.0)
+typealias Count = int(0 to 1000)
+typealias MixFn = function(Count, Ratio) returns Ratio
+
+function combine(n Count, x Ratio) returns Ratio
+	if n > 0 'pos'
+		return x * 2.0
+	end 'pos'
+	return x
+end 'combine'
+
+function apply(f MixFn, n Count, x Ratio) returns Ratio
+	return f(n, x)
+end 'apply'
+
+function main() returns ExitCode
+	let fn = combine
+	let r = apply(fn, n: 3, x: 5.25)
+	return trunc(r) as ExitCode
+end 'main'
+```
+```exitcode
+10
+```
+
+<!-- test: first-class-function.float-then-int-params-indirect -->
+<!-- targets: x64-windows, wasm32-wasi -->
+The reverse order — a FLOAT parameter followed by an INT — proves the separate int/float
+argument counters, not a shared positional one: a shared counter would put the float in float
+slot 0 but the int in GPR slot 1, and the callee reads the int from GPR slot 0.
+```maxon
+
+typealias Ratio = float(0.0 to 1000.0)
+typealias Count = int(0 to 1000)
+typealias MixFn = function(Ratio, Count) returns Ratio
+
+function combine(x Ratio, n Count) returns Ratio
+	if n > 1 'pos'
+		return x * 4.0
+	end 'pos'
+	return x
+end 'combine'
+
+function apply(f MixFn, x Ratio, n Count) returns Ratio
+	return f(x, n)
+end 'apply'
+
+function main() returns ExitCode
+	let fn = combine
+	let r = apply(fn, x: 2.5, n: 5)
+	return trunc(r) as ExitCode
+end 'main'
+```
+```exitcode
+10
+```
+
+<!-- test: first-class-function.float-closure-param-and-return -->
+<!-- targets: x64-windows, wasm32-wasi -->
+A closure (no `__fnref_` thunk) taking and returning a float, called indirectly: the lifted
+closure already declares its float parameter, so the caller's float-argument routing must agree
+with the closure's own float-parameter capture.
+```maxon
+
+typealias Ratio = float(0.0 to 1000.0)
+
+function main() returns ExitCode
+	let f = function(x Ratio) gives x * 2.0
+	let r = f(10.5)
+	return trunc(r) as ExitCode
+end 'main'
+```
+```exitcode
+21
+```

@@ -71,14 +71,16 @@ typealias CalleeFuncIdxMap = Map with (ByteArray, Wasm32Index)
 typealias CalleeReturnTypeMap = Map with (ByteArray, StdReturnType)
 typealias CalleeParamTypesMap = Map with (ByteArray, WasmValTypeArray)
 
-// An indirect call's ARG COUNT → the interned wasm functype index for its `(i64^n) -> i64` signature
-// (P1.5-A1). The Std `callIndirect` op carries NO signature, and none needs to reach the wasm tier on it:
-// every A1 function value is `(i64^n) -> i64` (its params and return are integer/named types, all of which
-// collapse to i64; void and non-integer function values are out of the A1 slice), so the arg count fully
-// determines the type. Built once per module — pre-interned into the WasmModuleBuilder before body emission
-// — and read by `emitCallIndirect`, which cannot mutate the shared builder mid-emit. Empty ⟺ the module has
-// no indirect call, in which case no funcref table is declared.
-typealias IndirectCallTypeIdxMap = Map with (ParamCount, Wasm32Index)
+// An indirect call's ENCODED FUNCTYPE (its `encodeFuncType` bytes) → the interned wasm functype index for
+// that signature. Keyed by the SIGNATURE, not the arg count, because a function value now carries floats
+// (P1.5 #78): `(f64) -> f64` and `(i64) -> i64` are distinct functypes of the same arity, and
+// `call_indirect` runtime-checks the funcref against exactly the declared type. Each call's signature comes
+// from the `resultType`/`argFloatMask` the Std `callIndirect` carries (a float → f64, everything else — incl.
+// the trailing uniform-ABI env pointer — i64). Built once per module — pre-interned into the
+// WasmModuleBuilder before body emission — and read by `emitCallIndirect`, which recovers the index by the
+// SAME key without mutating the shared builder mid-emit. Empty ⟺ the module has no indirect call, in which
+// case no funcref table is declared.
+typealias IndirectCallTypeIdxMap = Map with (ByteArray, Wasm32Index)
 
 // A dependent op's result value id → the value id whose width it inherits (its `lhs`). Only
 // `binOpImm`/`div`/`mod` populate it — the three ops whose result width the Std tier does not
@@ -387,11 +389,12 @@ function buildCalleeParamTypesMap(module StdModule) returns CalleeParamTypesMap
 	return map
 end 'buildCalleeParamTypesMap'
 
-// Scan every live op for `callIndirect`s and pre-intern one wasm functype per distinct ARG COUNT — the
-// `(i64^n) -> i64` shape every A1 function value has (see `IndirectCallTypeIdxMap`). Pre-interning here,
-// BEFORE any body is emitted, lets `emitCallIndirect` look the type index up by arg count instead of
-// mutating the shared `builder` while it is threading bytes into a body. Returns the arg-count → type-index
-// map; empty when the module has no indirect call — the signal that no funcref table is needed.
+// Scan every live op for `callIndirect`s and pre-intern one wasm functype per distinct SIGNATURE — the
+// `(argValTypes) -> resultType` shape each function value carries (see `IndirectCallTypeIdxMap`; a float →
+// f64, else i64). Pre-interning here, BEFORE any body is emitted, lets `emitCallIndirect` look the type
+// index up by the signature key instead of mutating the shared `builder` while it is threading bytes into a
+// body. Returns the signature → type-index map; empty when the module has no indirect call — the signal that
+// no funcref table is needed.
 function buildIndirectCallTypeIdxMap(module StdModule, builder WasmModuleBuilder) returns IndirectCallTypeIdxMap
 	var map = IndirectCallTypeIdxMap.create()
 	for funcIdx in 0 upto module.funcCount() 'eachFunc'
@@ -407,7 +410,7 @@ function buildIndirectCallTypeIdxMap(module StdModule, builder WasmModuleBuilder
 	return map
 end 'buildIndirectCallTypeIdxMap'
 
-// If `op` is a `callIndirect`, intern the functype for its arg count into `map`; ignore any other op. The
+// If `op` is a `callIndirect`, intern the functype for its SIGNATURE into `map`; ignore any other op. The
 // two-arm range match leans on the band-append invariant: `callIndirect` is the LAST StdOp variant, so
 // `const to funcAddr` covers every other variant and a newly-appended one FAILS TO COMPILE here rather than
 // being silently swept into the ignore arm. Only body ops carry a `callIndirect` (never a terminator), so
@@ -415,27 +418,29 @@ end 'buildIndirectCallTypeIdxMap'
 function internIndirectCallTypeFor(op StdOp, map IndirectCallTypeIdxMap, builder WasmModuleBuilder)
 	match op 'k'
 		const to funcAddr then break 'k'
-		callIndirect(_, _, args) then internIndirectCallType(map, builder: builder, argCount: args.count())
+		callIndirect(_, _, resultType, argFloatMask, args) then internIndirectCallType(map, builder: builder, resultType: resultType, argFloatMask: argFloatMask, argCount: args.count())
 		osRangePanic to osFreePages then break 'k'
 	end 'k'
 end 'internIndirectCallTypeFor'
 
-// Intern the wasm functype `(i64^argCount) -> i64` for indirect calls of `argCount` arguments and record
-// its index in `map`. `internFuncType` dedups by the encoded bytes, so a repeated arg count re-derives the
-// SAME index (and a signature that equals a real function's own type shares one type-section entry). The
-// single door that builds an indirect call's wasm signature, so the pre-interned type and the call-site
-// `call_indirect` immediate cannot disagree.
-function internIndirectCallType(map IndirectCallTypeIdxMap, builder WasmModuleBuilder, argCount ParamCount)
-	let typeIdx = builder.internFuncType(indirectCallParamValTypes(argCount), results: singletonValTypes(WasmValType.i64))
-	map.upsert(argCount, value: typeIdx)
+// Intern the wasm functype `(argValTypes) -> resultType` for one indirect-call signature and record its index
+// under the encoded-functype key. `internFuncType` dedups by the encoded bytes, so a repeated signature
+// re-derives the SAME index (and a signature that equals a real function's own type — e.g. a `__fnref_`
+// thunk's — shares one type-section entry). The single door that builds an indirect call's wasm signature,
+// so the pre-interned type and the call-site `call_indirect` immediate cannot disagree (P1.5 #78).
+function internIndirectCallType(map IndirectCallTypeIdxMap, builder WasmModuleBuilder, resultType StdType, argFloatMask ArgFloatMask, argCount ParamCount)
+	let params = indirectCallParamValTypes(argFloatMask, argCount: argCount)
+	let results = singletonValTypes(wasmValTypeOf(resultType))
+	let typeIdx = builder.internFuncType(params, results: results)
+	map.upsert(encodeFuncType(params, results: results), value: typeIdx)
 end 'internIndirectCallType'
 
-// The wasm parameter valtypes of an A1 indirect call: `argCount` copies of i64 (see
-// `IndirectCallTypeIdxMap` for why every function value is `(i64^n) -> i64`).
-function indirectCallParamValTypes(argCount ParamCount) returns WasmValTypeArray
+// The wasm parameter valtypes of an indirect call, one per argument in order — a float argument (bit set in
+// `argFloatMask`) is an f64, everything else (incl. the trailing uniform-ABI env pointer) an i64 (P1.5 #78).
+function indirectCallParamValTypes(argFloatMask ArgFloatMask, argCount ParamCount) returns WasmValTypeArray
 	var params = WasmValTypeArray.create()
-	for _ in 0 upto argCount 'each'
-		params.push(WasmValType.i64)
+	for k in 0 upto argCount 'each'
+		params.push(WasmValType.f64 if argIsFloat(argFloatMask, argIndex: k) else WasmValType.i64)
 	end 'each'
 	return params
 end 'indirectCallParamValTypes'
@@ -675,14 +680,15 @@ function recordDefValtype(op StdOp, valtypes WasmValTypeArray, depResult ValueId
 		tryCall(resultId, errorFlagId, callee, _) then recordTryCallDefs(valtypes, resultId: resultId, errorFlagId: errorFlagId, callee: callee, calleeReturnType: calleeReturnType)
 		errorReturn then break 'def'
 		osExit then break 'def'
-		// P1.5-A1 non-capturing function values. A function value is a machine word (its Std type collapses
-		// to i64 — valueTagToStdType), so BOTH a `funcAddr` (which materializes the callee's table index)
-		// and a `callIndirect` result (the callee's i64 return — every A1 function value returns an
-		// integer/named type) are i64. `funcAddr` is narrowed to the i32 `call_indirect` table-index operand
-		// only at the call itself (`emitFuncAddr`/`emitCallIndirect`), so it FLOWS as i64 like every other
-		// function value — unlike a `globalAddr`/`rdataAddr`, an i32 address consumed in place.
+		// P1.5-A1 non-capturing function values. A function value itself is a machine word (its Std type
+		// collapses to i64 — valueTagToStdType), so a `funcAddr` (the callee's table index) is i64; it is
+		// narrowed to the i32 `call_indirect` table-index operand only at the call itself
+		// (`emitFuncAddr`/`emitCallIndirect`), so it FLOWS as i64 unlike a `globalAddr`/`rdataAddr` (an i32
+		// address consumed in place). A `callIndirect` RESULT takes the function value's own return width
+		// (P1.5 #78): f64 for a float-returning function value, else i64 — the `resultType` the op carries,
+		// which is also the valtype the `call_indirect` functype declares as its result.
 		funcAddr(resultId, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
-		callIndirect(resultId, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
+		callIndirect(resultId, _, resultType, _, _) then setValtype(valtypes, v: resultId, vt: wasmValTypeOf(resultType))
 		osRangePanic to osFreePages then break 'def'
 	end 'def'
 end 'recordDefValtype'
@@ -1021,7 +1027,7 @@ type WasmFuncEmitter
 			// P1.5-A1 non-capturing function values: materialize a function's table index (`funcAddr`) and
 			// call THROUGH one (`callIndirect`). See the two emitters for the funcref-table lowering.
 			funcAddr(resultId, funcName) then self.emitFuncAddr(resultId, funcName: funcName)
-			callIndirect(resultId, calleeReg, args) then self.emitCallIndirect(resultId, calleeReg: calleeReg, args: args)
+			callIndirect(resultId, calleeReg, resultType, argFloatMask, args) then self.emitCallIndirect(resultId, calleeReg: calleeReg, args: args, resultType: resultType, argFloatMask: argFloatMask)
 			osRangePanic then self.emitRangePanic()
 			// P1.5 mid-body-yield: the green-thread sleep substrate (`osReadClock`/`osSleepMs`) is x64-windows
 			// only — its QueryPerformanceCounter clock and Windows `Sleep` have no wasm primitive, and a
@@ -1412,28 +1418,33 @@ type WasmFuncEmitter
 	end 'emitFuncAddr'
 
 	// A call THROUGH a function value (`callIndirect`, P1.5-A1): `resultId = calleeReg(args…)`. Marshal each
-	// argument coerced to i64 (the function-value parameter width), push the table index (the function value,
-	// wrapped from its i64 flow-width down to the i32 `call_indirect` operand), then `call_indirect (type
-	// $sig) (table 0)`. `$sig` is the pre-interned `(i64^n) -> i64` functype for this arg count, which wasm
-	// checks at runtime against the funcref's OWN type — and since every target function's parameters and
-	// return are the same integer/named types, the two match. The result is the callee's i64 return.
+	// argument coerced to ITS wasm valtype (a float → f64, else i64 — the function-value parameter width),
+	// push the table index (the function value, wrapped from its i64 flow-width down to the i32
+	// `call_indirect` operand), then `call_indirect (type $sig) (table 0)`. `$sig` is the pre-interned
+	// `(paramTypes) -> resultType` functype for THIS signature, which wasm checks at runtime against the
+	// funcref's OWN type — and since the callee thunk / lifted closure declares the same param/return
+	// valtypes, the two match. The result takes the function value's own return width.
 	//
-	// ⭐ WHY the signature is derivable WITHOUT the function type on the op. The Std `callIndirect` carries no
-	// signature (a cross-tier field would touch x64/arm64 too), and none is needed: a function value's
-	// params and return are integer/named types, all of which the Maxon→Std collapse maps to i64
-	// (valueTagToStdType), and void / non-integer function values are out of the A1 slice — so every A1
-	// function value is `(i64^n) -> i64` for n = args.count(), a wasm-tier-local fact. This is the SAME
-	// slice invariant x64's `lowerCallIndirect` relies on ("A1 function values pass INTEGER arguments and
-	// return an INTEGER" → GPR arguments, R8 result).
-	function emitCallIndirect(resultId ValueId, calleeReg ValueId, args ValueIdArray)
+	// ⭐ WHY the signature reaches the wasm tier ON THE OP (P1.5 #78). A function value now carries floats,
+	// so the old "every function value is `(i64^n) -> i64`" fact no longer holds: `(f64) -> f64` and
+	// `(i64) -> i64` are distinct wasm functypes of the same arity, and pushing a float arg as i64 or
+	// declaring the result i64 would mismatch the funcref's real type at the `call_indirect` type check. The
+	// Std `callIndirect` therefore carries `resultType`/`argFloatMask` (recovered by the front end from the
+	// already-typed result and arg values), the SAME facts x64/arm64 use to pick the result's and each arg's
+	// register file. `pushOperandAt` widens a narrower value to the declared arg valtype exactly as a direct
+	// `call` does; a float arg already sits at f64, so its coercion is a no-op.
+	function emitCallIndirect(resultId ValueId, calleeReg ValueId, args ValueIdArray, resultType StdType, argFloatMask ArgFloatMask)
 		for argIdx in 0 upto args.count() 'eachArg'
 			let arg = try args.get(argIdx) otherwise panic("emitCallIndirect: args.get OOB at {argIdx}")
-			self.pushOperandAt(arg, targetVt: WasmValType.i64)
+			let argVt = WasmValType.f64 if argIsFloat(argFloatMask, argIndex: argIdx) else WasmValType.i64
+			self.pushOperandAt(arg, targetVt: argVt)
 		end 'eachArg'
 
 		self.pushOperandAt(calleeReg, targetVt: WasmValType.i32)
 
-		let typeIdx = try self.indirectCallTypeIdx.get(args.count()) otherwise panic("emitCallIndirect: no interned functype for a {args.count()}-argument indirect call — buildIndirectCallTypeIdxMap missed it")
+		let params = indirectCallParamValTypes(argFloatMask, argCount: args.count())
+		let sigKey = encodeFuncType(params, results: singletonValTypes(wasmValTypeOf(resultType)))
+		let typeIdx = try self.indirectCallTypeIdx.get(sigKey) otherwise panic("emitCallIndirect: no interned functype for this {args.count()}-argument indirect call signature — buildIndirectCallTypeIdxMap missed it")
 		self.body.callIndirect(typeIdx)
 
 		self.body.localSet(resultId as Wasm32Index)

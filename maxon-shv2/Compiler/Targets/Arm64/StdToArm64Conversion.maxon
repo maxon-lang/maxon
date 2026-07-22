@@ -141,6 +141,15 @@ function arm64FpArgRegisterAt(index ParamCount) returns Arm64Register
 	return try arm64FpArgRegisters.get(index) otherwise panic("arm64FpArgRegisterAt: float argument slot {index} exceeds the {arm64FpArgRegisters.count()} SIMD register-argument slots — the parser caps parameters at that count until stack arguments land")
 end 'arm64FpArgRegisterAt'
 
+// The physical register a callIndirect captures its result from — **d0** for a float-returning function
+// value, **x0** otherwise (P1.5 #78). The indirect twin of `callResultRegister`, keyed on the `resultType`
+// the op carries rather than a callee name (an indirect callee has none). It must agree with the value-class
+// column, which classes the result via the SAME `stdTypeIsFloat(resultType)`, so the capture `movRegReg`
+// sees two same-file ends (an `fmov` for a float) instead of a cross-file move.
+function arm64IndirectResultRegister(resultType StdType) returns Arm64Register
+	return Arm64FloatReturnReg if stdTypeIsFloat(resultType) else Arm64IntReturnReg
+end 'arm64IndirectResultRegister'
+
 // Map a Std comparison predicate to the arm64 condition code its `b.cond`/`cset` tests, in the DIRECT
 // (predicate-holds) sense — every compare here materialises with `cset(cond)` and every branch takes
 // its then-target when `cond` holds.
@@ -389,7 +398,7 @@ type StdToArm64Lowering
 			// panics LOUDLY at that encoder rather than miscompiling — which is exactly why A1's cases are
 			// restricted to `x64-windows, wasm32-wasi` and arm64 function-value codegen is a follow-up rung.
 			funcAddr(resultId, funcName) then self.emit(dstRef, op: TargetOp.arm64LeaFuncAddr(TargetVReg.virtual(resultId), funcName: funcName))
-			callIndirect(resultId, calleeReg, args) then self.lowerCallIndirect(resultId, calleeReg: calleeReg, args: args, dstRef: dstRef)
+			callIndirect(resultId, calleeReg, resultType, argFloatMask, args) then self.lowerCallIndirect(resultId, calleeReg: calleeReg, args: args, resultType: resultType, argFloatMask: argFloatMask, dstRef: dstRef)
 			osRangePanic then self.lowerRangePanic(dstRef)
 			// P1.5 mid-body-yield: the green-thread sleep substrate (`osReadClock`/`osSleepMs`) is x64-windows
 			// only at this rung — its QueryPerformanceCounter clock and Windows `Sleep` have no arm64 primitive
@@ -766,25 +775,37 @@ type StdToArm64Lowering
 
 	// Lower a Std `callIndirect` (P1.5-A1): move each argument into its ABI register, `blr` THROUGH the
 	// callee register (`arm64BranchLinkReg` carries `calleeReg` as an explicit USE, so the allocator keeps
-	// the callee address live to the call), then move the x0 return value into the result. The mirror of
-	// `lowerCall`: A1 function values pass INTEGER arguments and return an INTEGER, so the result is x0 and
-	// every argument is a GPR argument register (x0..x5). Per-argument float classification arrives with
-	// floats-in-function-values (the function TYPE would then carry the param types a name-keyed direct
-	// call reads from `calleeParamClasses`).
-	function lowerCallIndirect(resultId ValueId, calleeReg ValueId, args ValueIdArray, dstRef BlockRef)
-		self.emitIndirectCallArgMoves(args, dstRef: dstRef)
+	// the callee address live to the call), then capture the return value into the result. The mirror of
+	// `lowerCall`: there is no callee NAME to class the result or arguments against, so both come from the
+	// function value's SIGNATURE carried on the op (P1.5 #78) — a float result is captured from **d0** (else
+	// **x0**), and each argument is routed by its own type (a float to d0..d7, else x0..x7).
+	function lowerCallIndirect(resultId ValueId, calleeReg ValueId, args ValueIdArray, resultType StdType, argFloatMask ArgFloatMask, dstRef BlockRef)
+		self.emitIndirectCallArgMoves(args, argFloatMask: argFloatMask, dstRef: dstRef)
 		self.emit(dstRef, op: TargetOp.arm64BranchLinkReg(TargetVReg.virtual(calleeReg)))
-		self.emit(dstRef, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: arm64PhysReg(Arm64IntReturnReg)))
+		self.emit(dstRef, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: arm64PhysReg(arm64IndirectResultRegister(resultType))))
 	end 'lowerCallIndirect'
 
-	// Move each indirect-call argument into its GPR argument register, positionally — the arm64 twin of the
-	// x64 `emitIndirectCallArgMoves`. A1 function values pass INTEGER arguments only, so every argument is a
-	// GPR (x0..x5); the soundness argument is `emitCallArgMoves`' (each `mov argReg, arg_k` is a physical
-	// def liveness forbids to values live across it, so forward-order emission is correct).
-	function emitIndirectCallArgMoves(args ValueIdArray, dstRef BlockRef)
+	// Move each indirect-call argument into its ABI register — the arm64 twin of the x64
+	// `emitIndirectCallArgMoves` — a FLOAT argument to a SIMD arg register (d0..d7) on a SEPARATE FP
+	// counter, everything else to a GPR arg register (x0..x7) on the GPR counter, exactly as
+	// `emitCallArgMoves` does for a direct call. Kept separate from `emitCallArgMoves` because the class
+	// SOURCE differs: an indirect callee has no name, so each argument's file comes from `argFloatMask` (the
+	// function value's signature the op carries — P1.5 #78) rather than the callee's name-keyed
+	// `calleeParamClasses`. The two counters run independently (the running twin of `computeParamSlotIndex`).
+	// Forward-order emission is sound for `emitCallArgMoves`' reason (each physical arg-register def liveness
+	// forbids to values live across it).
+	function emitIndirectCallArgMoves(args ValueIdArray, argFloatMask ArgFloatMask, dstRef BlockRef)
+		var gprSlot = 0 as ParamCount
+		var fpSlot = 0 as ParamCount
 		for k in 0 upto args.count() 'eachArg'
 			let argId = try args.get(k) otherwise panic("emitIndirectCallArgMoves: args.get OOB at {k}")
-			self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(arm64ArgRegisterAt(k as ParamCount)), srcReg: TargetVReg.virtual(argId)))
+			if argIsFloat(argFloatMask, argIndex: k) 'floatArg'
+				self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(arm64FpArgRegisterAt(fpSlot)), srcReg: TargetVReg.virtual(argId)))
+				fpSlot = fpSlot + 1
+			end 'floatArg' else 'intArg'
+				self.emit(dstRef, op: TargetOp.movRegReg(arm64PhysReg(arm64ArgRegisterAt(gprSlot)), srcReg: TargetVReg.virtual(argId)))
+				gprSlot = gprSlot + 1
+			end 'intArg'
 		end 'eachArg'
 	end 'emitIndirectCallArgMoves'
 

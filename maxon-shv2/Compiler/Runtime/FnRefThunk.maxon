@@ -107,11 +107,15 @@ end 'installFnRefThunks'
 //   entry: materialize each parameter (the trailing `__env` is discarded), `call <name>(userargs...)`,
 //          `ret` the result.
 //
-// The thunk's parameters are ALL i64 — a function value's uniform ABI is `(i64^n) -> i64` (the wasm
-// `call_indirect` functype is arg-count-derived to exactly this shape), and every function-value argument at
-// this rung is int / named / String / struct-pointer width. The forwarded call is a DIRECT `call` to the
-// target by name (a wasm `call`, arity-checked against the target's OWN `(userargs) -> R` functype), so the
-// thunk is precisely what bridges the two signatures.
+// ⭐ EACH USER PARAMETER TAKES THE TARGET'S REAL TYPE, the trailing `__env` an i64 (P1.5 #78). A FLOAT
+// parameter is an f64: the thunk must capture it from a float argument register and forward it to the
+// target — which reads it from a float register too — so a float user param typed i64 here would forward
+// a GPR value into the target's XMM parameter (a cross-register-file move). Everything else (int / named /
+// String / struct-pointer) is an i64 machine word exactly as before. The caller's indirect-call argument
+// routing uses this same float classification (the `argFloatMask` the `callIndirect` carries), so caller, thunk, and target
+// agree on every argument's register file. The forwarded call is a DIRECT `call` to the target by name (a
+// wasm `call`, arity- and type-checked against the target's OWN `(userargs) -> R` functype), so the thunk
+// is precisely what bridges the uniform indirect signature to the target's direct one.
 function synthesizeFnRefThunk(module StdModule, project Project, targetName ByteArray)
 	let sig = try project.funcSignatures.get(targetName) otherwise panic("synthesizeFnRefThunk: no signature for '{String.from(targetName)}' — a functionRef must name a registered function")
 	let ret = try project.funcReturnTypes.get(targetName) otherwise panic("synthesizeFnRefThunk: no return type for '{String.from(targetName)}'")
@@ -119,22 +123,24 @@ function synthesizeFnRefThunk(module StdModule, project Project, targetName Byte
 	let thunkParamCount = (userParamCount + 1) as ParamCount
 	let stdReturn = maxonReturnTypeToStdReturnType(ret)
 
-	// A void-returning function value cannot satisfy the `(i64^n) -> i64` indirect signature (its result
-	// slot is i64), and it is uncallable as a value anyway (OPEN #68 — statement-position indirect calls are
-	// unsupported). No `functionRef` of a void function is reached; guard it loudly if one ever is.
+	// A void-returning function value cannot satisfy the indirect signature (its result slot names a value),
+	// and it is uncallable as a value anyway (OPEN #68 — statement-position indirect calls are unsupported).
+	// No `functionRef` of a void function is reached; guard it loudly if one ever is.
 	match stdReturn 'r'
 		value then break 'r'
-		void then panic("synthesizeFnRefThunk: void-returning '{String.from(targetName)}' cannot be used as a first-class value (OPEN #68 — a void function type is uncallable through the uniform (i64^n) -> i64 indirect ABI)")
+		void then panic("synthesizeFnRefThunk: void-returning '{String.from(targetName)}' cannot be used as a first-class value (OPEN #68 — a void function type is uncallable through the uniform indirect ABI)")
 	end 'r'
 
 	var paramTypes = StdTypeArray.create()
-	for _ in 0 upto thunkParamCount 'eachParamType'
-		paramTypes.push(StdType.i64)
-	end 'eachParamType'
+	for i in 0 upto userParamCount 'eachUserParamType'
+		paramTypes.push(thunkUserParamStdType(try sig.paramTypes.get(i) otherwise panic("synthesizeFnRefThunk: sig.paramTypes.get OOB at {i} for '{String.from(targetName)}'")))
+	end 'eachUserParamType'
+	// The trailing companion `__env` pointer is always an i64 machine word.
+	paramTypes.push(StdType.i64)
 
 	let func = IrFunction.createFromStd(fnRefThunkName(targetName), returnType: stdReturn, paramCount: thunkParamCount, paramTypes: paramTypes, returnLine: 0)
 	var entry = module.addBlock(func, label: b"entry")
-	emitParams(module, block: entry, count: thunkParamCount)
+	emitTypedParams(module, block: entry, paramTypes: paramTypes)
 
 	var forwardArgs = ValueIdArray.create()
 	for i in 0 upto userParamCount 'eachArg'
@@ -147,3 +153,12 @@ function synthesizeFnRefThunk(module StdModule, project Project, targetName Byte
 
 	module.functions.push(func)
 end 'synthesizeFnRefThunk'
+
+// The Std type the thunk gives one forwarded USER parameter (P1.5 #78): an f64 for a FLOAT parameter — the
+// one case whose register file (XMM/SIMD) differs from the i64 GPR every other function-value argument uses
+// — and an i64 machine word for everything else (int / named / String / struct-pointer). Decided off the
+// resolved MaxonType's TAG rather than `maxonTypeToStdType`, so a struct/named param (which that collapse
+// panics on but which is still an i64 pointer) keeps its i64 exactly as before this rung.
+function thunkUserParamStdType(paramType MaxonType) returns StdType
+	return StdType.f64 if maxonTypeTag(paramType) == ValueTypeTag.float else StdType.i64
+end 'thunkUserParamStdType'

@@ -747,8 +747,10 @@ export union MaxonOp
 	// ⚠ **NO `argLabels`/`argRanges` (a DEVIATION from `call`, DELIBERATE).** A1 indirect calls are
 	// POSITIONAL — a function TYPE has no parameter names, so there is nothing to label — and this rung does
 	// not validate an indirect call's arguments, so per-argument labels and spans would be dead weight:
-	// always empty and read by nothing. This mirrors the Std `callIndirect(resultId, calleeReg, args)` it
-	// lowers to, which carries neither. `args` alone is what an indirect call needs.
+	// always empty and read by nothing. `args` alone is what an indirect call needs. The Std
+	// `callIndirect` it lowers to DOES carry the function value's signature (`resultType`/`argFloatMask`, for
+	// the float result/arg register files — P1.5 #78), but `lowerIndirectCall` derives that from the
+	// already-typed result and arg VALUES (`stdTypeOf`), so no signature rides this Maxon op either.
 	//
 	// ⚠ Its `args` (an `Array with ValueId`) must be BOUND in a SMALL match, never destructured by
 	// `lowerMaxonToStd.lowerOp`'s big one — see `LowerMaxonToStd.lowerIndirectCall` for the bootstrap

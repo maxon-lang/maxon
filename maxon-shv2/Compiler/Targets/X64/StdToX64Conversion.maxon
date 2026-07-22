@@ -235,6 +235,15 @@ function argFpRegisterAt(index ParamCount) returns X64Register
 	return try argFpRegisters.get(index) otherwise panic("argFpRegisterAt: float argument slot {index} exceeds the {argFpRegisters.count()} XMM register-argument slots — the parser caps parameters at that count until stack arguments land")
 end 'argFpRegisterAt'
 
+// The physical register a callIndirect captures its result from — **XMM0** for a float-returning
+// function value, **R8** otherwise (P1.5 #78). The indirect twin of `callResultRegister`, but keyed on
+// the `resultType` the op carries rather than a callee name (an indirect callee has none). It must agree
+// with the value-class column, which classes the result via the SAME `stdTypeIsFloat(resultType)`, so the
+// capture `movRegReg` sees two same-file ends (a `movsd` for a float) instead of a cross-file move.
+function indirectResultRegister(resultType StdType) returns X64Register
+	return X64Register.xmm0 if stdTypeIsFloat(resultType) else X64Register.r8
+end 'indirectResultRegister'
+
 // Maps the SSA value a FUSED `cmp` defines to the predicate it compared with. Populated
 // when a fusable `cmp` is lowered and consumed at the `condBranch` terminating its block —
 // the two become `cmp` + `jcc`, and no boolean is written to a register. Keyed by ValueId,
@@ -919,7 +928,7 @@ type StdToX64Lowering
 			osExit(codeId) then self.lowerOsExit(codeId, dstBlock: dstBlock)
 			// P1.5-A1: a function's address (`lea dest, [rip+func]`), and a call THROUGH a function value.
 			funcAddr(resultId, funcName) then self.targetModule.appendOp(dstBlock, op: TargetOp.leaRegFunc(TargetVReg.virtual(resultId), funcName: funcName))
-			callIndirect(resultId, calleeReg, args) then self.lowerCallIndirect(resultId, calleeReg: calleeReg, args: args, dstBlock: dstBlock)
+			callIndirect(resultId, calleeReg, resultType, argFloatMask, args) then self.lowerCallIndirect(resultId, calleeReg: calleeReg, args: args, resultType: resultType, argFloatMask: argFloatMask, dstBlock: dstBlock)
 			osRangePanic(label) then self.lowerRangePanic(label, dstBlock: dstBlock)
 			// P1.5 mid-body-yield: the green-thread sleep substrate's clock read and OS wait.
 			osReadClock(ticksPtrId, freqPtrId) then self.lowerOsReadClock(ticksPtrId, freqPtrId: freqPtrId, dstBlock: dstBlock)
@@ -1338,29 +1347,41 @@ type StdToX64Lowering
 	end 'lowerCall'
 
 	// Lower a Std `callIndirect` to the x64 call-through-register sequence (P1.5-A1): move each argument
-	// into its ABI register, `callReg` THROUGH the callee register, then move the R8 return value into the
-	// result. The mirror of `lowerCall` with two differences: the call goes through a register (`callReg`
-	// carries `calleeReg` as an explicit USE, so the allocator keeps the callee address live to the call
-	// in a register the argument moves have not written), and there is no callee NAME to class the result
-	// or arguments against — A1 function values pass INTEGER arguments and return an INTEGER, so the
-	// result is R8 and every argument is a GPR argument register.
-	function lowerCallIndirect(resultId ValueId, calleeReg ValueId, args ValueIdArray, dstBlock IrBlock)
-		self.emitIndirectCallArgMoves(args, dstBlock: dstBlock)
+	// into its ABI register, `callReg` THROUGH the callee register, then capture the return value into the
+	// result. The mirror of `lowerCall` with one difference: the call goes through a register (`callReg`
+	// carries `calleeReg` as an explicit USE, so the allocator keeps the callee address live to the call in
+	// a register the argument moves have not written). There is no callee NAME to class the result or
+	// arguments against, so both come from the function value's SIGNATURE carried on the op (P1.5 #78): a
+	// float result is captured from XMM0 (else R8), and each argument is routed by its own type.
+	function lowerCallIndirect(resultId ValueId, calleeReg ValueId, args ValueIdArray, resultType StdType, argFloatMask ArgFloatMask, dstBlock IrBlock)
+		self.emitIndirectCallArgMoves(args, argFloatMask: argFloatMask, dstBlock: dstBlock)
 		self.targetModule.appendOp(dstBlock, op: TargetOp.callReg(TargetVReg.virtual(calleeReg)))
-		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: x64PhysReg(X64Register.r8)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(TargetVReg.virtual(resultId), srcReg: x64PhysReg(indirectResultRegister(resultType))))
 	end 'lowerCallIndirect'
 
-	// Move each indirect-call argument into its GPR argument register, positionally. A1 function values
-	// pass INTEGER arguments only (a function type's params are int at this rung), so there is no float
-	// classification to do — every argument is a GPR. Per-argument float classification (an XMM argument
-	// to a function value) arrives with floats-in-function-values, which needs the callee's param types the
-	// function TYPE would then carry (a direct call reads them from `calleeParamClasses` by name; an
-	// indirect call has no name). The soundness argument is `emitCallArgMoves`': each `mov argReg, arg_k`
-	// is a physical def liveness forbids to values live across it, so forward-order emission is correct.
-	function emitIndirectCallArgMoves(args ValueIdArray, dstBlock IrBlock)
+	// Move each indirect-call argument into its ABI register — a FLOAT argument to an XMM arg register on a
+	// SEPARATE FP counter, everything else to a GPR arg register on the GPR counter, exactly as
+	// `emitCallArgMoves` does for a direct call. The two are kept separate because the class SOURCE differs:
+	// a direct call reads the CALLEE's declared param file by name (`calleeParamClass`), while an indirect
+	// callee has no name, so each argument's file comes from `argFloatMask` — the function value's signature
+	// the op carries (P1.5 #78). The two counters run independently (the running twin of
+	// `computeParamSlotIndex`), which is what puts a float arg in FP slot 0 whether or not an integer arg
+	// precedes it. Forward-order emission is sound for the same reason `emitCallArgMoves`' is: each
+	// `mov argReg, arg_k` is a physical def liveness forbids to any value live across it (keyed on `RegNum`,
+	// class-agnostic), so an argument live into a later same-file move can never be coloured to an earlier
+	// argument register.
+	function emitIndirectCallArgMoves(args ValueIdArray, argFloatMask ArgFloatMask, dstBlock IrBlock)
+		var gprSlot = 0 as ParamCount
+		var fpSlot = 0 as ParamCount
 		for k in 0 upto args.count() 'eachArg'
 			let argId = try args.get(k) otherwise panic("emitIndirectCallArgMoves: args.get OOB at {k}")
-			self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(argRegisterAt(k as ParamCount)), srcReg: TargetVReg.virtual(argId)))
+			if argIsFloat(argFloatMask, argIndex: k) 'floatArg'
+				self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(argFpRegisterAt(fpSlot)), srcReg: TargetVReg.virtual(argId)))
+				fpSlot = fpSlot + 1
+			end 'floatArg' else 'intArg'
+				self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(argRegisterAt(gprSlot)), srcReg: TargetVReg.virtual(argId)))
+				gprSlot = gprSlot + 1
+			end 'intArg'
 		end 'eachArg'
 	end 'emitIndirectCallArgMoves'
 

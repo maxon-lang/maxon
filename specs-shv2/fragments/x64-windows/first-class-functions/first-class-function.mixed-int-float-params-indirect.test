@@ -1,0 +1,73 @@
+// Test: first-class-function.mixed-int-float-params-indirect
+
+typealias Ratio = float(0.0 to 1000.0)
+typealias Count = int(0 to 1000)
+typealias MixFn = function(Count, Ratio) returns Ratio
+
+function combine(n Count, x Ratio) returns Ratio
+	if n > 0 'pos'
+		return x * 2.0
+	end 'pos'
+	return x
+end 'combine'
+
+function apply(f MixFn, n Count, x Ratio) returns Ratio
+	return f(n, x)
+end 'apply'
+
+function main() returns ExitCode
+	let fn = combine
+	let r = apply(fn, n: 3, x: 5.25)
+	return trunc(r) as ExitCode
+end 'main'
+---
+ExitCode: 10
+---
+func @combine {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc greater, pos
+    x64.jmp ifcont
+  pos:
+    x64.movsdRegRip xmm1, [rip + __fconst_0]
+    x64.mulsdRegReg xmm0, xmm0, xmm1
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.popReg rbp
+    x64.ret
+}
+
+func @apply {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegReg rcx, rdx
+    x64.movRegReg rdx, rax
+    x64.callReg rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.leaRegFunc rcx, [rip + __fnref_combine]
+    x64.movRegImm32 rdx, 3
+    x64.movsdRegRip xmm0, [rip + __fconst_1]
+    x64.movRegImm32 rax, 0
+    x64.callDirect apply
+    x64.cvttsd2siRegReg r8, xmm0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

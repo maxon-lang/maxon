@@ -854,9 +854,13 @@ type MaxonToStdLowering
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: callee, args: args))
 	end 'lowerRuntimeCall'
 
-	// Lower a Maxon `indirectCall` to `StdOp.callIndirect` (P1.5-A1). There is NO signature to slot
+	// Lower a Maxon `indirectCall` to `StdOp.callIndirect` (P1.5-A1). There is NO signature to SLOT
 	// against — a function TYPE has no parameter names, so the arguments are already in call order (the
-	// parser parsed them positionally, and the op carries no labels). The callee value passes through as
+	// parser parsed them positionally, and the op carries no labels). But the Std op DOES carry the
+	// function value's register-file signature (`resultType`/`argFloatMask`, P1.5 #78) so a float result is
+	// captured from the float return register and a float arg travels in a float argument register: both
+	// are read straight off the already-typed result and arg VALUES (`stdTypeOf`, via `appendCallIndirect`),
+	// with no callee name to look them up under. The callee value passes through as
 	// the register the call goes through. Routed through this helper, not constructed inline in `lowerOp`'s
 	// `match` arm, for the same shape `lowerCall` uses: the C# reference miscompiles the SCRUTINEE's decref
 	// when the arm binds a managed array (`args`) and consumes it inline (measured: a `mm_decref` on a
@@ -873,10 +877,36 @@ type MaxonToStdLowering
 	// compiler will not need it, but the bootstrap does today.
 	function lowerIndirectCall(op MaxonOp, dstBlock IrBlock)
 		match op 'ic'
-			indirectCall(result, callee, args) then self.stdModule.appendOp(dstBlock, op: StdOp.callIndirect(result, calleeReg: callee, args: args))
+			// ⚠ The arm HANDS `args` straight to a helper and does nothing else with it — the bootstrap
+			// miscompile the file header warns of (a tail-slot `Array` bound in this arm) is sidestepped only
+			// while the arm's body is a single function call, so the `stdTypeOf`/`indirectCallParamTypes` work
+			// (which also reads `args`) MUST live in the helper, not inline here. Inlining it re-triggered the
+			// scrutinee-decref corruption (a `mm_decref` underflow tearing the module down).
+			indirectCall(result, callee, args) then self.appendCallIndirect(dstBlock, result: result, callee: callee, args: args)
 			default panic("lowerIndirectCall: expected an `indirectCall` op, got a different MaxonOp variant — `lowerOp` routes only `indirectCall` here")
 		end 'ic'
 	end 'lowerIndirectCall'
+
+	// Build the Std `callIndirect`, recovering the function value's register-file signature from the
+	// already-typed result and arg VALUES (P1.5 #78): `resultType` is the result value's Std type (a float
+	// result is captured from the float return register), and `argFloatMask` has bit k set iff argument k is
+	// a float — a float argument travels in a float argument register, everything else (incl. the trailing
+	// uniform-ABI companion env pointer, `Parser.emitClosureEnvArg`, an i64) in a GPR. Both come from
+	// `stdTypeOf`, the per-value type the parser recorded, so the indirect call's placement matches the
+	// callee thunk's / lifted closure's declared parameter types by construction (a well-typed argument
+	// shares its callee parameter's type). A helper because `lowerIndirectCall`'s arm must hand `args` to a
+	// function and touch it no other way (see there).
+	function appendCallIndirect(dstBlock IrBlock, result ValueId, callee ValueId, args ValueIdArray)
+		let resultType = self.stdTypeOf(result)
+		var argFloatMask = 0 as ArgFloatMask
+		for k in 0 upto args.count() 'eachArg'
+			let arg = try args.get(k) otherwise panic("appendCallIndirect: args.get OOB at {k}")
+			if stdTypeIsFloat(self.stdTypeOf(arg)) 'floatArg'
+				argFloatMask = argFloatMask or (1 shl k)
+			end 'floatArg'
+		end 'eachArg'
+		self.stdModule.appendOp(dstBlock, op: StdOp.callIndirect(result, calleeReg: callee, resultType: resultType, argFloatMask: argFloatMask, args: args))
+	end 'appendCallIndirect'
 
 	// ⭐ **`async f(args…)` → SPAWN A GREEN THREAD** (P1.5-B1a). The arguments are slotted to parameter order
 	// (`slotCallArgs`, exactly as `lowerCall`), then spilled into a fixed-size slab argument buffer — one

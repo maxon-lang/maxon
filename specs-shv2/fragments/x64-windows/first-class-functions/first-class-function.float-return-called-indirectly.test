@@ -1,0 +1,58 @@
+// Test: first-class-function.float-return-called-indirectly
+
+typealias Ratio = float(0.0 to 1000.0)
+typealias FloatFn = function() returns Ratio
+
+function getVal() returns Ratio
+	return 3.75
+end 'getVal'
+
+function callIt(f FloatFn) returns Ratio
+	return f()
+end 'callIt'
+
+function main() returns ExitCode
+	let fn = getVal
+	let r = callIt(fn)
+	return trunc(r) as ExitCode
+end 'main'
+---
+ExitCode: 3
+---
+func @getVal {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movsdRegRip xmm0, [rip + __fconst_0]
+    x64.popReg rbp
+    x64.ret
+}
+
+func @callIt {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegReg rcx, rdx
+    x64.callReg rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.leaRegFunc rcx, [rip + __fnref_getVal]
+    x64.movRegImm32 rdx, 0
+    x64.callDirect callIt
+    x64.cvttsd2siRegReg r8, xmm0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

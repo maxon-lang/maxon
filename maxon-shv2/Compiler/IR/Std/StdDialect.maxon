@@ -84,6 +84,21 @@ export function stdTypeIsFloat(t StdType) returns bool
 	return t.rawValue.isFloat
 end 'stdTypeIsFloat'
 
+// A per-ARGUMENT float bitmask carried by `callIndirect` — bit k set iff argument k is a float (an f64,
+// which a backend routes to a float argument register / declares as an f64 wasm valtype rather than a GPR
+// i64). Only the low arg-count bits are meaningful; the storage is a full machine word (a call's argument
+// list is capped well under 64). A SCALAR, so the op stays at one managed field (P1.5 #78 — see
+// `callIndirect`). It is the Std-tier, call-SITE twin of the Targets-tier, callee-side `ParamFloatMask`:
+// the two answer the identical float-vs-GPR question on opposite sides of a call, but sit on opposite sides
+// of the Std→Target tier boundary, so neither can name the other's typealias.
+export typealias ArgFloatMask = int(0 to u64.max)
+
+// Bit k of an `ArgFloatMask` — true iff argument k travels in a float register / is an f64 valtype. The one
+// door the three backends read a `callIndirect`'s per-argument register file through.
+export function argIsFloat(mask ArgFloatMask, argIndex ParamCount) returns bool
+	return ((mask shr argIndex) and 1) != 0
+end 'argIsFloat'
+
 // How many bytes a value of `t` occupies in memory — see `StdTypeInfo.storageBytes`.
 export function stdTypeStorageBytes(t StdType) returns ByteCount
 	return t.rawValue.storageBytes
@@ -645,8 +660,26 @@ export union StdOp
 	// the code pointer (from a `funcAddr`, a param, or a field load), NOT a name — the whole reason it is
 	// distinct from `call`. Metadata identical to `call`: full call-barrier semantics. The x64/arm64
 	// lowering moves each arg into its ABI register, calls THROUGH the callee register (`callReg` /
-	// `arm64BranchLinkReg`), then moves the R8/x0 return value into `resultId`.
-	callIndirect(resultId ValueId, calleeReg ValueId, args ValueIdArray) = StdOpMeta{category: StdOpCategory.call, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+	// `arm64BranchLinkReg`), then moves the return value into `resultId`.
+	//
+	// ⭐ IT CARRIES THE FUNCTION VALUE'S SIGNATURE — `resultType` (the result's Std type) and
+	// `argFloatMask` (bit k set iff argument k is a float) — because, unlike a direct `call`, there is NO
+	// callee NAME to recover it from (`calleeResultClasses` / `calleeParamClasses` are keyed by name).
+	// Without it every backend assumed an INTEGER result and integer args, so a float-returning or
+	// float-taking function value colored a move across register files (P1.5 #78). The FRONT END already
+	// types the result value and every arg value, so `lowerIndirectCall` reads both straight off `stdTypeOf`
+	// — no parser or Maxon-op change. A backend routes arg `k` to a float or GPR register by bit `k` of the
+	// mask (`args`'s trailing entry, the uniform-ABI env pointer, is never float) and captures the result by
+	// `resultType`, exactly as a direct call reads the callee's declared types.
+	//
+	// ⚠ BOTH ARE SCALARS, DELIBERATELY. A per-arg `StdTypeArray` here would be a SECOND managed field on the
+	// variant, which the bootstrap that compiles shv2 mishandles in the union's synthesized destructor — a
+	// wild free surfacing as an unrelated `mm_decref` underflow at teardown, on EVERY indirect call. The
+	// scalar `argFloatMask` keeps `callIndirect` at ONE managed field (`args`) exactly like its original
+	// shape, and is the same allocation-flat idiom `CalleeParamClassMap`'s `ParamFloatMask` uses caller-side
+	// for the identical question. `args` stays LAST (the one managed field), scalars first. Both are METADATA,
+	// not value operands: `collectStdOpUses`/`remapStdOpUses` leave them untouched.
+	callIndirect(resultId ValueId, calleeReg ValueId, resultType StdType, argFloatMask ArgFloatMask, args ValueIdArray) = StdOpMeta{category: StdOpCategory.call, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 	// A ranged-typealias RANGE-CHECK PANIC (P1.9): abort with the interned message at `.rdata` label
 	// `label`, printing it plus a symbolized backtrace and exiting 1. A `system`-band op — the same
 	// shape and rationale as `osExit`/`osWriteStdout`: it says WHAT is wanted (panic with this message)
@@ -845,8 +878,9 @@ export function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 		// `funcAddr` reads nothing — its `funcName` is a NAME, not a value (its result is a def), exactly
 		// like `globalAddr`/`rdataAddr`.
 		funcAddr then break 'u'
-		// An indirect call reads the callee register AND its arguments; `resultId` is a def.
-		callIndirect(_, calleeReg, args) then insertUseCalleeAndArgs(referenced, calleeReg: calleeReg, args: args)
+		// An indirect call reads the callee register AND its arguments; `resultId` is a def, and
+		// `resultType`/`argFloatMask` are metadata (not value operands).
+		callIndirect(_, calleeReg, _, _, args) then insertUseCalleeAndArgs(referenced, calleeReg: calleeReg, args: args)
 		// A range panic reads nothing — its `label` is a NAME (an `.rdata` symbol), not a value, and it
 		// defines nothing.
 		osRangePanic then break 'u'
@@ -946,8 +980,8 @@ module function remapStdOpUses(op StdOp, subst ValueIdArray) returns StdOp
 		// unchanged — the exact mirror of `collectStdOpUses`'s `globalAddr`/`rdataAddr`/`funcAddr` arms.
 		funcAddr gives op
 		// The exact mirror of `collectStdOpUses`: `callIndirect` rewrites its callee register and its args
-		// (its result is a def).
-		callIndirect(resultId, calleeReg, args) gives StdOp.callIndirect(resultId, calleeReg: remappedValue(calleeReg, subst: subst), args: remappedArgs(args, subst: subst))
+		// (its result is a def); `resultType`/`argFloatMask` are metadata carried through unchanged.
+		callIndirect(resultId, calleeReg, resultType, argFloatMask, args) gives StdOp.callIndirect(resultId, calleeReg: remappedValue(calleeReg, subst: subst), resultType: resultType, argFloatMask: argFloatMask, args: remappedArgs(args, subst: subst))
 		// `osRangePanic` reads no value (its `label` is a name), so it rewrites nothing and is handed back
 		// unchanged — the mirror of `funcAddr`/`rdataAddr`.
 		osRangePanic gives op

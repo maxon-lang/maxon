@@ -212,12 +212,26 @@ end 'threeI64Params'
 
 // Emit the `param` ops an entry block owes. A Std function's parameters are materialized once, at
 // entry, by the op whose `role` is `param` — the backend turns each into the move that captures the
-// incoming ABI register into its virtual register. Parameter `k` is ValueId `k`.
+// incoming ABI register into its virtual register. Parameter `k` is ValueId `k`. All-i64: every
+// hand-assembled runtime chunk uses the GPR-only internal ABI. A chunk with a NON-i64 parameter (a
+// `__fnref_` thunk forwarding a float — P1.5 #78) uses `emitTypedParams` instead.
 export function emitParams(module StdModule, block IrBlock, count ParamCount)
 	for k in 0 upto count 'each'
 		module.appendOp(block, op: StdOp.param(k as ValueId, index: k, paramType: StdType.i64))
 	end 'each'
 end 'emitParams'
+
+// Emit the `param` ops for a synthesized function whose parameters are NOT all i64 — the `__fnref_` thunk,
+// whose float user parameters must be captured from a float argument register (P1.5 #78). Parameter `k` is
+// ValueId `k`, typed `paramTypes[k]`, so the value-class column classes it in the file its type names and
+// the entry capture reads it from the matching ABI register. The all-i64 twin of `emitParams`, for the one
+// runtime builder whose parameter files vary.
+export function emitTypedParams(module StdModule, block IrBlock, paramTypes StdTypeArray)
+	for k in 0 upto paramTypes.count() 'each'
+		let paramType = try paramTypes.get(k) otherwise panic("emitTypedParams: paramTypes.get OOB at {k}")
+		module.appendOp(block, op: StdOp.param(k, index: k, paramType: paramType))
+	end 'each'
+end 'emitTypedParams'
 
 // `__slab_alloc(size) -> ptr` — the bump allocator.
 //
