@@ -1854,6 +1854,23 @@ enum MergeConstruct
 	ternary
 end 'MergeConstruct'
 
+// ⭐ **THE ONE CONSTRUCT→DIAGNOSTIC MAPPING for a value-merge type mismatch (P1.5 #80).** A ternary and a
+// match share the merge but not the diagnostic noun: a ternary names its TRUE and FALSE branches by
+// position (E2028), a match names the offending arm against the first (E3005). BOTH sides of the
+// parse/merge boundary route through here — the parse-time give-type/promotion checks
+// (`Parser.valueMergeGiveMismatch`) AND the whole-program fn-signature drain
+// (`Queries.checkOneValueMergeSignature`) — so the noun is decided in exactly ONE place. Nothing else
+// makes those two sites agree (one keys on `MergeConstruct`, the other on a stored `isTernary` bit, and
+// they sit in different files), so a future change to the mapping that touched only one would silently
+// diverge the two constructs' diagnostics; keeping it here is what forecloses that. `expectedDisplay` is
+// the FIRST branch's already-formatted type, `gotDisplay` the mismatching one.
+export function valueMergeMismatchError(isTernary bool, expectedDisplay String, gotDisplay String, line LineNumber, column ColumnNumber) returns ParseError
+	if isTernary 'ternary'
+		return ParseError.ternaryValueTypeMismatch(expectedDisplay, falseType: gotDisplay, line: line, column: column)
+	end 'ternary'
+	return ParseError.giveTypeMismatch(gotDisplay, expected: expectedDisplay, line: line, column: column)
+end 'valueMergeMismatchError'
+
 // How control left one arm's body, plus the exit snapshot the merge (or the next arm's
 // fallthrough phi) needs. `fellThrough` and `reachesMerge` are mutually exclusive with each
 // other and with a terminated exit: an arm either flows to the next arm's body (`and
@@ -3886,9 +3903,11 @@ export type Parser
 		try self.consume(TokenKind.leftParen)
 
 		// The parameter TYPES are collected only to build the `#81` display string, and ONLY the real parse
-		// needs it (the whole-program token sweep and the nested-alias reader discard the function alias, so
-		// they pass `buildDisplay: false` and pay for neither the array nor the string). The params are still
-		// PARSED either way — the syntax must be consumed, and a malformed one rejected.
+		// needs it: the whole-program token sweep and the nested-alias reader discard the function alias, so
+		// they pass `buildDisplay: false`, push nothing into `paramTypes`, and build no display string. The
+		// empty `paramTypes` they still construct grows no heap buffer — an `Array`'s backing storage is
+		// allocated lazily on the first `push`, which the sweep never makes. The params are PARSED either
+		// way — the syntax must be consumed, and a malformed one rejected.
 		var paramTypes = MaxonTypeArray.create()
 		if not self.at(TokenKind.rightParen) 'params'
 			while true 'paramLoop'
@@ -9075,28 +9094,16 @@ export type Parser
 		return self.giveTypeName(tag, aggregateName: self.aggregateNameOf(tag, nameId: self.valueNameId(give)))
 	end 'giveDisplayName'
 
-	// ⭐ **THE ONE CONSTRUCT-AWARE VALUE-MERGE MISMATCH (P1.5 #80).** A ternary and a match share the merge
-	// but not the diagnostic noun: a ternary names its TWO branches by position (E2028), a match names the
-	// offending arm against the first (E3005). Every mismatch site — the cross-class promotion, the
-	// give-type check, and the function-signature check — routes its two already-formatted type strings
-	// through here, so the noun is decided in exactly ONE place and the three sites cannot drift on it.
-	function valueMergeMismatchWith(construct MergeConstruct, expectedDisplay String, gotDisplay String, matchTok Token) returns ParseError
-		if construct == MergeConstruct.ternary 'ternary'
-			return ParseError.ternaryValueTypeMismatch(expectedDisplay, falseType: gotDisplay, line: matchTok.line, column: matchTok.column)
-		end 'ternary'
-		return ParseError.giveTypeMismatch(gotDisplay, expected: expectedDisplay, line: matchTok.line, column: matchTok.column)
-	end 'valueMergeMismatchWith'
-
-	// A give-type mismatch between the FIRST arm and `gotArm`, phrased for `construct`. A ternary always
-	// names its FALSE (second) branch whichever arm actually mismatched — it has exactly two arms and the
-	// message reads them in source order — so the displayed "got" arm is arm 1 for a ternary and the
-	// mismatching arm itself for a match.
+	// A give-type mismatch between the FIRST arm and `gotArm`, phrased for `construct` through the shared
+	// `valueMergeMismatchError` mapping. A ternary always names its FALSE (second) branch whichever arm
+	// actually mismatched — it has exactly two arms and the message reads them in source order — so the
+	// displayed "got" arm is arm 1 for a ternary and the mismatching arm itself for a match.
 	function valueMergeGiveMismatch(construct MergeConstruct, reachingArms MatchArmExitArray, firstArm MatchArmExit, gotArm MatchArmExit, matchTok Token) returns ParseError
 		var displayArm = gotArm
 		if construct == MergeConstruct.ternary 'ternaryFalseArm'
 			displayArm = try reachingArms.get(1) otherwise panic("valueMergeGiveMismatch: a ternary merge has no second (false) arm")
 		end 'ternaryFalseArm'
-		return self.valueMergeMismatchWith(construct, expectedDisplay: self.giveDisplayName(self.giveValueOf(firstArm.give)), gotDisplay: self.giveDisplayName(self.giveValueOf(displayArm.give)), matchTok: matchTok)
+		return valueMergeMismatchError(construct == MergeConstruct.ternary, expectedDisplay: self.giveDisplayName(self.giveValueOf(firstArm.give)), gotDisplay: self.giveDisplayName(self.giveValueOf(displayArm.give)), line: matchTok.line, column: matchTok.column)
 	end 'valueMergeGiveMismatch'
 
 	// The name a `gives` value prints under in a match type-agreement diagnostic: a declared struct or

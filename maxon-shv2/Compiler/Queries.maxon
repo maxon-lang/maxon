@@ -271,7 +271,10 @@ function checkOneValueMergeSignature(project Project, check PendingFnMergeCheck)
 		end 'otherUnverifiable'
 		let otherDisplay = armFnTypeDisplay(project, name: otherName)
 		if not firstDisplay.equals(otherDisplay) 'mismatch'
-			reportFnMergeMismatch(project, check: check, first: firstDisplay, other: otherDisplay)
+			// The construct→E2028/E3005 noun is decided by the ONE shared mapping (`valueMergeMismatchError`),
+			// the same the parse-time give-type mismatch (#80) uses — so a whole-program function-signature
+			// mismatch and a parse-time give mismatch read identically for the same construct.
+			reportParseError(project, path: check.filePath, error: valueMergeMismatchError(check.isTernary, expectedDisplay: firstDisplay, gotDisplay: otherDisplay, line: check.line, column: check.column))
 			return
 		end 'mismatch'
 	end 'eachArm'
@@ -299,19 +302,6 @@ function armFnTypeDisplay(project Project, name ByteArray) returns String
 	let alias = try project.functionTypeAliases.get(name) otherwise panic("armFnTypeDisplay: '{String.from(name)}' is armFnTypeResolvable but in neither registry — this and armFnTypeResolvable disagree")
 	return String.from(alias.display)
 end 'armFnTypeDisplay'
-
-// Emit the construct-aware mismatch: a ternary names its TRUE (first) and FALSE (other) branches (E2028);
-// a match names the offending arm against the first (E3005). Built as a `ParseError` and routed through
-// `reportParseError` so the message text lives ONCE, in the shared render arms — the same E2028/E3005 the
-// parse-time give-type mismatch (#80) uses, so a function-signature mismatch and a give-type mismatch read
-// identically for the same construct.
-function reportFnMergeMismatch(project Project, check PendingFnMergeCheck, first String, other String)
-	var error = ParseError.giveTypeMismatch(other, expected: first, line: check.line, column: check.column)
-	if check.isTernary 'ternary'
-		error = ParseError.ternaryValueTypeMismatch(first, falseType: other, line: check.line, column: check.column)
-	end 'ternary'
-	reportParseError(project, path: check.filePath, error: error)
-end 'reportFnMergeMismatch'
 
 // Reject a function-value merge whose branches are not both NAMED functions — shv2 carries no full function
 // type on a value, so a function-typed parameter/field/call-result branch has no signature to compare.
