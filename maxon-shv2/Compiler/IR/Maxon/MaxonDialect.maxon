@@ -540,12 +540,33 @@ end 'MaxonBinOp'
 //   • `promoteToFloat` — COMPILER-INSERTED, never written by a user: int → f64 (x64 `cvtsi2sd`).
 //                        It is what makes `5 + 2.0` mean 7.0, and `TypeRules.arithResultTag`
 //                        answering `float` is the promise this op keeps.
+//
+// P1.0d.4-C appends the FOUR ARITY-1 FLOAT MATH INTRINSICS — `floor`, `ceil`, `round`, `sqrt`
+// (specs/{floor,ceil,round,sqrt}.md). They are unary ops for the dialect's own reason: one operand
+// in, one result out, non-trapping, so the SHAPE decides. Both reference compilers agree — v1 maps
+// its whole math-intrinsic set onto `StdArithUnaryOpcode` (LowerMaxonToStd.maxon:13872), the
+// bootstrap onto arity-1 Maxon ops with a `MaxonFloat Result` (MaxonDialect.cs:812-848).
+//
+// ⭐ THEY ARE f64 → f64, WHICH IS WHAT MAKES `trunc` THE WRONG TEMPLATE FOR THEM. `trunc` leaves
+// the float domain; these stay inside it, so they get NO int identity short-circuit (`sqrt(16)` is
+// `sqrt` of a PROMOTED 16.0, answering 4.0, not 16) and they are not conversions — `lowerUnaryOp`'s
+// `assertConversionCrossesDomain` must never see one. What they share with `trunc` is only that
+// their result tag is stated explicitly at the emit site.
+//
+// ⭐ `round` IS TIES-TO-EVEN, NOT HALF-AWAY-FROM-ZERO. x64 `roundsd imm8=0`, arm64 `frintn` and
+// wasm `f64.nearest` are all round-to-nearest/ties-to-even, both references agree, and
+// `specs/round.md`'s `round.halfway` case pins it: `round(2.5)` is **2**. The bare hardware
+// instruction is already correct on all three targets — there is no correction layer.
 export enum MaxonUnaryOp
 	neg
 	bitNot
 	logicalNot
 	trunc
 	promoteToFloat
+	floor
+	ceil
+	round
+	sqrt
 end 'MaxonUnaryOp'
 
 // The comparison operators the Maxon tier represents (M4). A comparison SPLITS OUT

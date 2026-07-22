@@ -253,6 +253,11 @@ function formatTargetOp(op TargetOp, blocks IrBlockArray, cpu CpuArch) returns S
 		movsdRegRip(dest, label) gives "movsdRegRip {vregName(dest)}, [rip + {String.from(label)}]"
 		cvtsi2sdRegReg(dest, src) gives "cvtsi2sdRegReg {vregName(dest)}, {vregName(src)}"
 		cvttsd2siRegReg(dest, src) gives "cvttsd2siRegReg {vregName(dest)}, {vregName(src)}"
+		// The MATH INTRINSICS. `roundsd`'s MODE is printed by its `FloatRoundMode` member name rather
+		// than its imm8: what the golden must pin is the ROUNDING, and `0x01` cannot be reviewed
+		// without the manual open beside it.
+		sqrtsdRegReg(dest, src) gives "sqrtsdRegReg {vregName(dest)}, {vregName(src)}"
+		roundsdRegReg(dest, src, mode) gives "roundsdRegReg.{mode.name} {vregName(dest)}, {vregName(src)}"
 		// The LABEL is printed for the same reason `leaRegGlobal`'s is: a fragment showing which
 		// `.rdata` record a `lea` names makes a wrong record a reviewable diff.
 		leaRegRdata(dest, label) gives "leaRegRdata {vregName(dest)}, [rip + {String.from(label)}]"
@@ -306,6 +311,11 @@ function formatTargetOp(op TargetOp, blocks IrBlockArray, cpu CpuArch) returns S
 		arm64Fcmp(lhs, rhs) gives "fcmp {arm64VregName(lhs)}, {arm64VregName(rhs)}"
 		arm64Scvtf(dest, src) gives "scvtf {arm64VregName(dest)}, {arm64VregName(src)}"
 		arm64Fcvtzs(dest, src) gives "fcvtzs {arm64VregName(dest)}, {arm64VregName(src)}"
+		arm64Fsqrt(dest, src) gives "fsqrt {arm64VregName(dest)}, {arm64VregName(src)}"
+		// The arm64 arms print REAL MNEMONICS (`fcvtzs`, `scvtf`, …), and `FRINT<r>`'s rounding is part
+		// of its mnemonic rather than a printed operand — so the mode resolves to the letter the
+		// assembler would show.
+		arm64Frint(dest, src, mode) gives "{arm64FrintMnemonic(mode)} {arm64VregName(dest)}, {arm64VregName(src)}"
 		arm64FpLoadRdata(dest, label) gives "fpLoadRdata {arm64VregName(dest)}, [rdata + {String.from(label)}]"
 		arm64ImportCall(slotIndex) gives "importCall {slotIndex}"
 		arm64Syscall(number) gives "syscall {number}"
@@ -411,6 +421,18 @@ function accessWidthName(width X64AccessWidth) returns String
 		word64 gives "word64"
 	end 'w'
 end 'accessWidthName'
+
+// The arm64 mnemonic for each rounding mode `arm64Frint` can carry. Unlike x64's `roundsd`, whose
+// mode is a printed imm8 operand, arm64 spells the rounding INTO the mnemonic — so a golden reads
+// `frintm` where the x64 golden reads `roundsdRegReg.towardNegative`, and each matches what its own
+// assembler would show.
+function arm64FrintMnemonic(mode FloatRoundMode) returns String
+	return match mode 'm'
+		nearestTiesToEven gives "frintn"
+		towardNegative gives "frintm"
+		towardPositive gives "frintp"
+	end 'm'
+end 'arm64FrintMnemonic'
 
 // The mnemonic name of each condition code a fused `jcc` can carry. Exhaustive
 // over X64CondCode so a new comparison predicate forces a printable name.

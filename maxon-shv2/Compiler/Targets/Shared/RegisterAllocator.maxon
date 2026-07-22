@@ -1401,6 +1401,11 @@ export function colorTargetOp(op TargetOp, alloc Allocation) returns TargetOp
 		movsdRegRip(dest, label) then return TargetOp.movsdRegRip(colorVRegWith(dest, alloc: alloc), label: label)
 		cvtsi2sdRegReg(dest, src) then return TargetOp.cvtsi2sdRegReg(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc))
 		cvttsd2siRegReg(dest, src) then return TargetOp.cvttsd2siRegReg(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc))
+		// The MATH INTRINSICS (P1.0d.4-C) — two XMM operands each, colored like the converts. The
+		// rounding MODE is not a register, so it passes through, exactly as an immediate or a cond code
+		// does.
+		sqrtsdRegReg(dest, src) then return TargetOp.sqrtsdRegReg(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc))
+		roundsdRegReg(dest, src, mode) then return TargetOp.roundsdRegReg(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc), mode: mode)
 		// The `.rdata` address `lea` (P1.2 wave A) — colors its GPR dest, exactly like `leaRegGlobal`.
 		leaRegRdata(dest, label) then return TargetOp.leaRegRdata(colorVRegWith(dest, alloc: alloc), label: label)
 		// --- arm64 SCALAR-CORE band ---
@@ -1454,6 +1459,8 @@ export function colorTargetOp(op TargetOp, alloc Allocation) returns TargetOp
 		arm64Fcmp(lhs, rhs) then return TargetOp.arm64Fcmp(colorVRegWith(lhs, alloc: alloc), rhs: colorVRegWith(rhs, alloc: alloc))
 		arm64Scvtf(dest, src) then return TargetOp.arm64Scvtf(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc))
 		arm64Fcvtzs(dest, src) then return TargetOp.arm64Fcvtzs(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc))
+		arm64Fsqrt(dest, src) then return TargetOp.arm64Fsqrt(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc))
+		arm64Frint(dest, src, mode) then return TargetOp.arm64Frint(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc), mode: mode)
 		arm64FpLoadRdata(dest, label) then return TargetOp.arm64FpLoadRdata(colorVRegWith(dest, alloc: alloc), label: label)
 		// Neither OS-call form names a register operand (their args are pre-moved into x0..), so both
 		// pass through unchanged, exactly like `arm64BranchLink` and x64's `iatCall`.

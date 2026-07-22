@@ -538,9 +538,9 @@ type StdToArm64Lowering
 	// The two conversions cross files: `siToFp` → `scvtf` (int → f64), `fpToSi` → `fcvtzs` (f64 → int,
 	// TRUNCATING toward zero — the `z`, which is why it is right for `trunc()`).
 	function lowerUnaryOp(resultId ValueId, operand ValueId, opcode StdUnaryOpcode, operandType StdType, dstRef BlockRef)
-		if stdTypeIsFloat(operandType) and not arm64UnaryCrossesFiles(opcode) 'float'
-			panic("lowerUnaryOp: no float form of {opcode.rawValue} — an f64 negate flips the sign bit (a different instruction), not the integer `neg`, and nothing lowers to one yet (negative floats are reached through `0.0 - x`)")
-		end 'float'
+		if stdTypeIsFloat(operandType) != stdUnaryOperandIsFloat(opcode) 'domain'
+			panic("lowerUnaryOp: no arm64 form of {opcode.name} over Std type {operandType.name} — an opcode's operand DOMAIN is part of the opcode (`stdUnaryOperandIsFloat`), and an f64 negate in particular flips the sign bit (a different instruction), not the integer `neg`; nothing lowers to one yet (negative floats are reached through `0.0 - x`)")
+		end 'domain'
 
 		let dest = TargetVReg.virtual(resultId)
 		let src = TargetVReg.virtual(operand)
@@ -550,16 +550,16 @@ type StdToArm64Lowering
 			logicalNot then self.emit(dstRef, op: TargetOp.arm64EorImm(dest, src: src, imm: Arm64LogicalNotMask))
 			siToFp then self.emit(dstRef, op: TargetOp.arm64Scvtf(dest, src: src))
 			fpToSi then self.emit(dstRef, op: TargetOp.arm64Fcvtzs(dest, src: src))
+			// The MATH INTRINSICS, mode for mode with the x64 isel: `fsqrt` is its own instruction and
+			// `frintm`/`frintp`/`frintn` are one instruction with three rounding modes, so the three
+			// name the SAME `FloatRoundMode` members x64's `roundsd` does — the rounding decision is
+			// made once for the language and encoded twice, never decided twice.
+			floor then self.emit(dstRef, op: TargetOp.arm64Frint(dest, src: src, mode: FloatRoundMode.towardNegative))
+			ceil then self.emit(dstRef, op: TargetOp.arm64Frint(dest, src: src, mode: FloatRoundMode.towardPositive))
+			round then self.emit(dstRef, op: TargetOp.arm64Frint(dest, src: src, mode: FloatRoundMode.nearestTiesToEven))
+			sqrt then self.emit(dstRef, op: TargetOp.arm64Fsqrt(dest, src: src))
 		end 'op'
 	end 'lowerUnaryOp'
-
-	// The unary opcodes that CROSS the register files — the two conversions, and only them.
-	function arm64UnaryCrossesFiles(opcode StdUnaryOpcode) returns bool
-		return match opcode 'k'
-			neg to logicalNot gives false
-			siToFp to fpToSi gives true
-		end 'k'
-	end 'arm64UnaryCrossesFiles'
 
 	// Lower a `binOpImm` (constant right operand) to its arm64 immediate form. arm64's immediate ALU
 	// ops are 3-address (dest independent of src), so plain defs — unlike x64's two-address imm forms.

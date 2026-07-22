@@ -47,11 +47,22 @@ function emitArm64Rrr(code ByteArray, opcode MachineWord, rd MachineWord, rn Mac
 	emitArm64Insn(code, insn: opcode or (rm shl Arm64RmShift) or (rn shl Arm64RnShift) or rd)
 end 'emitArm64Rrr'
 
-// A 2-register instruction `op Rd, Rn` (NEG/MVN/FMOV/SCVTF/FCVTZS and the ORR-based MOV) — Rm is
-// fixed in the opcode (XZR for NEG/MVN, none for the FP unary/convert forms).
+// A 2-register instruction `op Rd, Rn` (NEG/MVN/FMOV/SCVTF/FCVTZS/FSQRT/FRINT and the ORR-based
+// MOV) — Rm is fixed in the opcode (XZR for NEG/MVN, none for the FP unary/convert forms).
 function emitArm64Rr(code ByteArray, opcode MachineWord, rd MachineWord, rn MachineWord)
 	emitArm64Insn(code, insn: opcode or (rn shl Arm64RnShift) or rd)
 end 'emitArm64Rr'
+
+// The `FRINT<r>` word for a rounding mode — the arm64 half of the mapping x64's `roundsdImm8` is the
+// other half of, and the ONE place the target-neutral `FloatRoundMode` becomes AArch64 bits.
+function arm64FrintOpcode(mode FloatRoundMode) returns MachineWord
+	let rmode = match mode 'm'
+		nearestTiesToEven gives Arm64FrintRmodeNearest
+		towardNegative gives Arm64FrintRmodeDown
+		towardPositive gives Arm64FrintRmodeUp
+	end 'm'
+	return Arm64OpFrintDBase or (rmode shl Arm64FrintRmodeShift)
+end 'arm64FrintOpcode'
 
 // --- Data-processing (register) base opcodes, 64-bit ---
 let Arm64OpAdd = 0x8B000000
@@ -210,6 +221,21 @@ let Arm64OpFcmpD = 0x1E602000
 let Arm64OpScvtfD = 0x9E620000
 let Arm64OpFcvtzsD = 0x9E780000
 let Arm64OpFmovD = 0x1E604000
+
+// The MATH INTRINSICS (P1.0d.4-C). `FSQRT Dd, Dn` is its own opcode; the three roundings are ONE
+// instruction, `FRINT<r> Dd, Dn`, whose rounding rides a 3-bit `rmode` field at [17:15] — so the
+// base opcode is written once and `arm64FrintOpcode` ORs in the mode. (Spelling the three as three
+// full constants would state the shared 29 bits three times, and the ROUNDING is the only thing
+// that differs.)
+//
+// The resulting words are the ones the references pin: `frintn` 0x1E644000, `frintp` 0x1E64C000,
+// `frintm` 0x1E654000 (maxon-sharp ARM64CodeEmitter.cs), and `fsqrt` 0x1E61C000.
+let Arm64OpFsqrtD = 0x1E61C000
+let Arm64OpFrintDBase = 0x1E644000
+let Arm64FrintRmodeShift = 15
+let Arm64FrintRmodeNearest = 0  // frintn — to nearest, TIES TO EVEN
+let Arm64FrintRmodeUp = 1  // frintp — toward +inf (`ceil`)
+let Arm64FrintRmodeDown = 2  // frintm — toward -inf (`floor`)
 
 // Vector EOR (8B) — a scratch-free three-instruction register SWAP for a SIMD pair, the `xchg`
 // cycle-break's float arm (AArch64 has no `fmov`-based swap and no reserved FP scratch, exactly as
@@ -930,6 +956,10 @@ function emitArm64TargetOp(op TargetOp, code ByteArray, callFixups CallFixupArra
 		arm64Fcmp(lhs, rhs) then emitArm64Insn(code, insn: Arm64OpFcmpD or (arm64FpField(rhs) shl Arm64RmShift) or (arm64FpField(lhs) shl Arm64RnShift))
 		arm64Scvtf(dest, src) then emitArm64Rr(code, opcode: Arm64OpScvtfD, rd: arm64FpField(dest), rn: arm64GprField(src))
 		arm64Fcvtzs(dest, src) then emitArm64Rr(code, opcode: Arm64OpFcvtzsD, rd: arm64GprField(dest), rn: arm64FpField(src))
+		// The MATH INTRINSICS — both are FP-to-FP 2-register forms, so both ride `emitArm64Rr`
+		// unchanged; only `frint`'s rounding rides an opcode field.
+		arm64Fsqrt(dest, src) then emitArm64Rr(code, opcode: Arm64OpFsqrtD, rd: arm64FpField(dest), rn: arm64FpField(src))
+		arm64Frint(dest, src, mode) then emitArm64Rr(code, opcode: arm64FrintOpcode(mode), rd: arm64FpField(dest), rn: arm64FpField(src))
 		arm64FpLoadRdata(dest, label) then arm64EmitFpLoadRdata(code, rdataRelocs: rdataRelocs, dest: arm64FpField(dest), label: label)
 		// The GOT-indirect libSystem import call (`osAllocPages`→mmap, `osWriteStdout`→write). The same
 		// `arm64EmitImportCall` the hand-assembled entry stub uses for `_exit`, so a call inside a

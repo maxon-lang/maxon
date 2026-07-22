@@ -206,8 +206,7 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: math-intrinsic-int-promotion -->
-<!-- P1.0d.4 deferred: `sqrt` — the float REGISTER CLASS lands at P1.0d.4, but sqrt/abs/floor/ceil/round are each their own spec file and their own decision (abs needs a 16-byte andpd sign mask; floor/ceil/round need roundsd, i.e. SSE4.1 and a three-byte 0F 3A escape). Unlocked by whichever rung takes specs/math-functions.md. -->
+<!-- test: math-intrinsic-int-promotion -->
 ```maxon
 function main() returns ExitCode
 	let result = sqrt(16)

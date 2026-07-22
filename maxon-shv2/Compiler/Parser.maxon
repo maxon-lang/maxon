@@ -1209,10 +1209,12 @@ end 'requireBinOpOperands'
 // of its own names in user source.
 let TruncBuiltinName = b"trunc"
 
-// `trunc` takes exactly one argument. Named because `emitTrunc` states it twice — once as the
-// check and once as the message's `expected` — and a bare `1` in either would be a magic value in
-// the more literal sense: the number that says what the builtin IS.
-let TruncArity = 1 as ParamCount
+// Every ARITY-1 NUMERIC builtin — `trunc` and the four math intrinsics — takes exactly one argument.
+// ONE constant, because `numericBuiltinOperand` is the one function that states it (as both the check
+// and the message's `expected`), and a bare `1` there would be a magic value in the more literal
+// sense: the number that says what these builtins ARE. (`print`/`sleep`/`runProcess` keep their own,
+// because each has its own emit and its own operand rule.)
+let NumericBuiltinArity = 1 as ParamCount
 
 // **THE `String` BUILTIN TYPE'S NAME** (P1.2 wave A). Recognized SYNTACTICALLY in `parseTypeReference`
 // — like `Self`, a pure token test with no registry — so `function f(s String)` tags `s`'s value
@@ -1249,6 +1251,19 @@ let RunProcessBuiltinName = b"runProcess"
 // `runProcess` takes exactly one STRING argument — the command line — and returns an INTEGER (the child's exit
 // code), so unlike `sleep` its result IS usable in value position.
 let RunProcessArity = 1 as ParamCount
+
+// **THE ARITY-1 FLOAT MATH INTRINSICS** (P1.0d.4-C) — `specs/{floor,ceil,round,sqrt}.md`. Builtins for the
+// same reason `trunc` is: each lowers to ONE instruction on every target, so a stdlib function would be a
+// call/ret wrapped around a single `sqrtsd`/`roundsd`/`fsqrt`/`frint`/`f64.sqrt`. Both reference compilers
+// make them builtins too (the bootstrap's `BuiltinOps1` table, 2-Parser.cs:829; v1's `isMathIntrinsicName`,
+// TypeResolution.maxon:11613).
+//
+// ⚠ Like `trunc`, each name is RESERVED wherever a call is parsed: a user `function sqrt` is shadowed by
+// this and never linked, undiagnosed. v1 has the identical property for the identical set.
+let FloorBuiltinName = b"floor"
+let CeilBuiltinName = b"ceil"
+let RoundBuiltinName = b"round"
+let SqrtBuiltinName = b"sqrt"
 
 // **THE BUILTIN STRING METHODS** (P1.2 wave D). `append` grows a `var` String in place; `byteLength` reads
 // its byte count. String is the one non-struct type with methods at this rung, dispatched by name in
@@ -15584,6 +15599,35 @@ export type Parser
 			return try self.emitRunProcess(args, calleeTok: anchor)
 		end 'runProcessBuiltin'
 
+		// The four MATH INTRINSICS. Only the DISPATCH repeats — the emit itself (arity, operand class,
+		// the int→float promotion, the op) is written once in `emitMathIntrinsic`, so each of these is
+		// a single line naming its opcode. They are the same `if callee.equals(…)` entries the four
+		// builtins above are; this is the builtin table, and a table's rows are data.
+		//
+		// ⚠⚠ A `union MathIntrinsic{notAnIntrinsic, op(MaxonUnaryOp)}` returned by a name→op resolver
+		// would read better and was written first. It was REVERTED ON MEASUREMENT: **a payload-FREE
+		// union case still heap-allocates**, so returning `notAnIntrinsic` cost ONE allocation per
+		// PARSED CALL — +85/+153/+289/+561/+1105/+2193 allocations across the six scale rungs, a
+		// linear constant factor on the hottest path in the parser, for a call that is not an
+		// intrinsic 99.99% of the time. These four `equals` allocate nothing and `scale-test` returns
+		// to bit-for-bit parity with main. (The `flat union` rule in ARCHITECTURE.md is about NESTING
+		// costing a box per level; this is the same accounting one level down.)
+		if callee.equals(FloorBuiltinName) 'floorBuiltin'
+			return try self.emitMathIntrinsic(args, op: MaxonUnaryOp.floor, name: callee, calleeTok: anchor)
+		end 'floorBuiltin'
+
+		if callee.equals(CeilBuiltinName) 'ceilBuiltin'
+			return try self.emitMathIntrinsic(args, op: MaxonUnaryOp.ceil, name: callee, calleeTok: anchor)
+		end 'ceilBuiltin'
+
+		if callee.equals(RoundBuiltinName) 'roundBuiltin'
+			return try self.emitMathIntrinsic(args, op: MaxonUnaryOp.round, name: callee, calleeTok: anchor)
+		end 'roundBuiltin'
+
+		if callee.equals(SqrtBuiltinName) 'sqrtBuiltin'
+			return try self.emitMathIntrinsic(args, op: MaxonUnaryOp.sqrt, name: callee, calleeTok: anchor)
+		end 'sqrtBuiltin'
+
 		return try self.emitCall(callee, anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, rparenTok: rparenTok, resultUsed: resultUsed, constructorInstance: constructorInstance)
 	end 'parseCallNamed'
 
@@ -15608,23 +15652,58 @@ export type Parser
 	// shadowed by this and never linked. v1 has the same property for its whole math-intrinsic
 	// set, and the same absence of a diagnostic for it.
 	function emitTrunc(args ValueIdArray, calleeTok Token) returns ValueId throws ParseError
-		if args.count() != TruncArity 'arity'
-			throw ParseError.builtinArity(String.from(TruncBuiltinName), expected: TruncArity, got: args.count(), line: calleeTok.line, column: calleeTok.column)
-		end 'arity'
-
-		let operand = try args.get(0) otherwise panic("emitTrunc: args.count() == TruncArity just checked but get(0) failed")
-		let operandTag = self.tagOf(operand)
-		if not typeClassAdmits(TypeClass.numeric, tag: operandTag) 'notANumber'
-			throw ParseError.builtinOperandType(String.from(TruncBuiltinName), required: "number", got: typeTagName(operandTag), line: calleeTok.line, column: calleeTok.column)
-		end 'notANumber'
+		let operand = try self.numericBuiltinOperand(args, name: TruncBuiltinName, calleeTok: calleeTok)
 
 		// Already an integer: `trunc` has nothing to truncate. See the precision note above.
-		if not tagIsFloat(operandTag) 'identity'
+		if not tagIsFloat(self.tagOf(operand)) 'identity'
 			return operand
 		end 'identity'
 
 		return self.emitUnaryOp(operand, op: MaxonUnaryOp.trunc, resultTag: ValueTypeTag.integer, opTok: calleeTok)
 	end 'emitTrunc'
+
+	// ⭐ **THE ARITY AND OPERAND-CLASS CHECK EVERY ARITY-1 NUMERIC BUILTIN MAKES**, written once and
+	// returning the validated operand. `trunc` and the four math intrinsics ask exactly the same two
+	// questions in exactly the same words — one argument, and it is a number — and only what they DO
+	// with the answer differs. Restating the pair per builtin is how the five would come to disagree
+	// about the wording of a rejection nobody asked for.
+	//
+	// `name` is the callee's own bytes, so the diagnostic quotes what the user wrote — which is also
+	// what lets one function serve four names.
+	function numericBuiltinOperand(args ValueIdArray, name ByteArray, calleeTok Token) returns ValueId throws ParseError
+		if args.count() != NumericBuiltinArity 'arity'
+			throw ParseError.builtinArity(String.from(name), expected: NumericBuiltinArity, got: args.count(), line: calleeTok.line, column: calleeTok.column)
+		end 'arity'
+
+		let operand = try args.get(0) otherwise panic("numericBuiltinOperand: args.count() == NumericBuiltinArity just checked but get(0) failed")
+		let operandTag = self.tagOf(operand)
+		if not typeClassAdmits(TypeClass.numeric, tag: operandTag) 'notANumber'
+			throw ParseError.builtinOperandType(String.from(name), required: "number", got: typeTagName(operandTag), line: calleeTok.line, column: calleeTok.column)
+		end 'notANumber'
+
+		return operand
+	end 'numericBuiltinOperand'
+
+	// `floor(x)` / `ceil(x)` / `round(x)` / `sqrt(x)` — the arity-1 FLOAT math intrinsics, written
+	// ONCE for all four because everything but the opcode is identical (specs/{floor,ceil,round,sqrt}.md).
+	//
+	// ⭐ THE ONE PLACE IT DIVERGES FROM `emitTrunc`, AND IT IS THE WHOLE DIFFERENCE BETWEEN THE TWO:
+	// `trunc` LEAVES the float domain, so an integer argument is the IDENTITY and is answered with the
+	// operand itself. These STAY inside it — `sqrt(16)` is 4, not 16 — so an integer argument is
+	// PROMOTED, not short-circuited. That promotion is what `specs/implicit-type-conversion.md`'s
+	// `math-intrinsic-int-promotion` case pins, and it is also what keeps the Std opcode's
+	// f64-operand precondition true (`assertUnaryOperandDomain`). v1 promotes at the same point for
+	// the same reason (`lowerMathIntrinsic`, LowerMaxonToStd.maxon:7784).
+	//
+	// The result is a FLOAT, per every one of the four spec files' signature (`floor(x float) float`),
+	// which is why each of their tests ends on `trunc(...)` to reach an ExitCode.
+	//
+	// `name` is the callee's own bytes rather than a name derived from `op`: the caller already holds
+	// them, and a diagnostic must quote what the user wrote.
+	function emitMathIntrinsic(args ValueIdArray, op MaxonUnaryOp, name ByteArray, calleeTok Token) returns ValueId throws ParseError
+		let operand = try self.numericBuiltinOperand(args, name: name, calleeTok: calleeTok)
+		return self.emitUnaryOp(self.promoteToFloat(operand, opTok: calleeTok), op: op, resultTag: ValueTypeTag.float, opTok: calleeTok)
+	end 'emitMathIntrinsic'
 
 	// `print(s)` — **WRITE A STRING TO STDOUT**, no trailing newline (P1.2 wave A). A compiler BUILTIN
 	// like `trunc`: it takes ordinary call syntax but emits no `MaxonOp.call` to a user function — it

@@ -201,8 +201,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: math-intrinsic-with-int -->
-<!-- Whichever rung takes specs/math-functions.md — `sqrt`/`floor`/`ceil`/`round` are each their own decision (roundsd is SSE4.1 and a three-byte 0F 3A escape); the float REGISTER CLASS landed at P1.0d.4 but the math cone did not -->
+<!-- test: math-intrinsic-with-int -->
 ```maxon
 function main() returns ExitCode
 	let x = 16
@@ -214,8 +213,7 @@ end 'main'
 4
 ```
 
-<!-- disabled-test: math-intrinsic-with-float-literal -->
-<!-- Whichever rung takes specs/math-functions.md — `sqrt`/`floor`/`ceil`/`round` are each their own decision (roundsd is SSE4.1 and a three-byte 0F 3A escape); the float REGISTER CLASS landed at P1.0d.4 but the math cone did not -->
+<!-- test: math-intrinsic-with-float-literal -->
 ```maxon
 function main() returns ExitCode
 	let x = sqrt(16.0)

@@ -334,9 +334,9 @@ end 'checkDeclaredType'
 // explicit `5.0 as int`.
 //
 // `round`/`floor`/`ceil` are named because they are the LANGUAGE's answer (type-casting.md lists
-// all four), not shv2's — shv2 has only `trunc` until whichever rung takes specs/math-functions.md.
-// Naming a function the reader cannot call yet is the lesser evil: the alternative is a message
-// that goes stale the day the others land, and `trunc` — the one that works — is named first.
+// all four) — and as of P1.0d.4-C all four are shv2's too (specs/{floor,ceil,round,sqrt}.md), so
+// every function this message names is one the reader can call. `trunc` is named first because it
+// is the one that answers the question the rejection actually asked.
 export function implicitNarrowingMessage(sourceType String, targetType String) returns String
 	return "cannot implicitly convert '{sourceType}' to '{targetType}': the conversion is lossy and must be explicit — use trunc(x) to truncate toward zero (or round/floor/ceil)"
 end 'implicitNarrowingMessage'
@@ -1005,7 +1005,14 @@ export function foldIntUnaryOp(op MaxonUnaryOp, operand ParsedInt) returns Folde
 		// float by construction. Constant-folding a promotion would mean computing an IEEE
 		// encoding at compile time — a real thing to want, and a `ParsedInt` column that cannot
 		// say which of its entries are bit patterns is not the place to put it.
-		trunc to promoteToFloat gives FoldedInt.notFoldable
+		//
+		// The four MATH INTRINSICS are unreachable for `promoteToFloat`'s structural reason, twice
+		// over: their result tag is float by construction, and `Parser.emitMathIntrinsic` has already
+		// promoted an integer argument, so neither the result nor the operand is an integer by the
+		// time this folder could run. Folding them would mean evaluating `sqrt`/`floor`/`ceil`/`round`
+		// on IEEE bit patterns at compile time — a real thing to want, and not something a `ParsedInt`
+		// column that cannot say which entries are bit patterns may do.
+		trunc to sqrt gives FoldedInt.notFoldable
 	end 'o'
 end 'foldIntUnaryOp'
 

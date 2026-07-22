@@ -1159,9 +1159,9 @@ type StdToX64Lowering
 	// emitting an integer `neg` on a float register, which the class check would catch anyway, but
 	// later and further from the cause.
 	function lowerUnaryOp(resultId ValueId, operand ValueId, opcode StdUnaryOpcode, operandType StdType, dstBlock IrBlock)
-		if stdTypeIsFloat(operandType) and not unaryOpcodeCrossesFiles(opcode) 'float'
-			panic("lowerUnaryOp: no float form of {opcode.rawValue} — an f64 negate flips the sign bit (`xorpd` against a .rdata mask), not the integer `neg`, and nothing lowers to one yet (P1.0d.4 reaches negative floats through `0.0 - x`)")
-		end 'float'
+		if stdTypeIsFloat(operandType) != stdUnaryOperandIsFloat(opcode) 'domain'
+			panic("lowerUnaryOp: no x64 form of {opcode.name} over Std type {operandType.name} — an opcode's operand DOMAIN is part of the opcode (`stdUnaryOperandIsFloat`), and an f64 negate in particular flips the sign bit (`xorpd` against a .rdata mask), not the integer `neg`; nothing lowers to one yet (negative floats are reached through `0.0 - x`)")
+		end 'domain'
 
 		let dest = TargetVReg.virtual(resultId)
 		let src = TargetVReg.virtual(operand)
@@ -1180,19 +1180,15 @@ type StdToX64Lowering
 			// mnemonics one letter apart, and a wrong answer between them.
 			siToFp then self.targetModule.appendOp(dstBlock, op: TargetOp.cvtsi2sdRegReg(dest, src: src))
 			fpToSi then self.targetModule.appendOp(dstBlock, op: TargetOp.cvttsd2siRegReg(dest, src: src))
+			// The MATH INTRINSICS. `sqrtsd` is its own instruction; the other three are ONE
+			// instruction — `roundsd` — separated only by their rounding mode, so they are one arm
+			// each into the same op rather than three near-identical appends.
+			floor then self.targetModule.appendOp(dstBlock, op: TargetOp.roundsdRegReg(dest, src: src, mode: FloatRoundMode.towardNegative))
+			ceil then self.targetModule.appendOp(dstBlock, op: TargetOp.roundsdRegReg(dest, src: src, mode: FloatRoundMode.towardPositive))
+			round then self.targetModule.appendOp(dstBlock, op: TargetOp.roundsdRegReg(dest, src: src, mode: FloatRoundMode.nearestTiesToEven))
+			sqrt then self.targetModule.appendOp(dstBlock, op: TargetOp.sqrtsdRegReg(dest, src: src))
 		end 'op'
 	end 'lowerUnaryOp'
-
-	// The unary opcodes that CROSS the register files — the two conversions, and only them.
-	// Everything else computes IN one file, which is what the float guard above is about: a float
-	// `operandType` on `neg` is an unsupported float negate, but a float `operandType` on `fpToSi`
-	// is not merely legal, it is REQUIRED — that op reads an f64 by definition.
-	function unaryOpcodeCrossesFiles(opcode StdUnaryOpcode) returns bool
-		return match opcode 'k'
-			neg to logicalNot gives false
-			siToFp to fpToSi gives true
-		end 'k'
-	end 'unaryOpcodeCrossesFiles'
 
 	// Lower a Std `binOpImm` (constant right operand) to a copy-free immediate form:
 	// `add`/`sub` to `lea dest, [lhs + disp]` (disp = imm for add, −imm for sub — the

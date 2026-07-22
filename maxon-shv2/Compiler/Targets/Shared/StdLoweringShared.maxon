@@ -100,6 +100,13 @@ function unaryResultClass(opcode StdUnaryOpcode, operandType StdType) returns Re
 		siToFp gives RegClass.xmm
 		// f64 -> int: the result lives in a GPR though `operandType` is f64.
 		fpToSi gives RegClass.gpr
+		// ⚠ The MATH INTRINSICS need their OWN arm even though their result class IS their operand's,
+		// and that is the whole trap of appending past `fpToSi`: `regClassForStdType(operandType)` would
+		// be the right answer, but the arm that computes it stops at `logicalNot` and cannot be extended
+		// to reach here without swallowing both conversions on the way. Stating `xmm` outright is also
+		// the stronger claim — these are f64 → f64 by definition (`stdUnaryOperandIsFloat`), so the
+		// class does not depend on `operandType` at all.
+		floor to sqrt gives RegClass.xmm
 	end 'k'
 end 'unaryResultClass'
 

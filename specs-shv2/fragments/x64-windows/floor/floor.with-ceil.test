@@ -1,0 +1,23 @@
+// Test: floor.with-ceil
+function main() returns ExitCode
+	let x = 3.7
+	let a = trunc(floor(x))
+	let b = trunc(ceil(x))
+	return a + b
+end 'main'
+---
+ExitCode: 7
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movsdRegRip xmm0, [rip + __fconst_0]
+    x64.roundsdRegReg.towardNegative xmm1, xmm0
+    x64.cvttsd2siRegReg rax, xmm1
+    x64.roundsdRegReg.towardPositive xmm0, xmm0
+    x64.cvttsd2siRegReg rcx, xmm0
+    x64.leaRegRegReg r8, rax, rcx
+    x64.popReg rbp
+    x64.ret
+}

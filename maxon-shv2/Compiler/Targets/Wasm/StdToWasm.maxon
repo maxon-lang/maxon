@@ -586,11 +586,14 @@ end 'setValtype'
 // class (an f64 result recorded i64, or the reverse) — see StdUnaryOpcode's header.
 function unaryResultValType(opcode StdUnaryOpcode, operandType StdType) returns WasmValType
 	return match opcode 'k'
-		neg gives wasmValTypeOf(operandType)
-		bitNot gives wasmValTypeOf(operandType)
-		logicalNot gives wasmValTypeOf(operandType)
+		neg to logicalNot gives wasmValTypeOf(operandType)
 		siToFp gives WasmValType.f64
 		fpToSi gives WasmValType.i64
+		// ⚠ The MATH INTRINSICS need their OWN arm even though `wasmValTypeOf(operandType)` would give
+		// the same answer: they sit PAST `fpToSi`, so the arm that computes it cannot be extended to
+		// reach them without swallowing both conversions. `f64` outright is also the stronger claim —
+		// they are f64 → f64 by definition (`stdUnaryOperandIsFloat`).
+		floor to sqrt gives WasmValType.f64
 	end 'k'
 end 'unaryResultValType'
 
@@ -1178,6 +1181,9 @@ type WasmFuncEmitter
 			logicalNot then self.emitLogicalNotExpr(operand)
 			siToFp then self.emitSiToFp(operand, operandType: operandType)
 			fpToSi then self.emitFpToSi(operand, operandType: operandType)
+			// The MATH INTRINSICS. Each is ONE native wasm instruction over the same f64 operand, so
+			// the operand push and the domain check are written once and only the opcode differs.
+			floor to sqrt then self.emitMathIntrinsic(operand, operandType: operandType, opcode: opcode)
 		end 'op'
 		self.body.localSet(resultId as Wasm32Index)
 	end 'emitUnaryOp'
@@ -1205,6 +1211,24 @@ type WasmFuncEmitter
 		self.pushOperandAt(operand, targetVt: WasmValType.f64)
 		self.body.i64TruncF64S()
 	end 'emitFpToSi'
+
+	// f64 → f64 — the four MATH INTRINSICS. Unlike the conversions above, `operandType` here is BOTH
+	// the source and the result: these stay inside the float domain, which is what
+	// `stdUnaryOperandIsFloat` says and what the valtype table records (`floor to sqrt` → f64).
+	//
+	// ⚠ `round` is `f64.nearest`, which is TIES TO EVEN — `round(2.5)` is 2. The three native
+	// backends' instructions agree; there is no correction layer on any of them.
+	function emitMathIntrinsic(operand ValueId, operandType StdType, opcode StdUnaryOpcode)
+		requireF64(operandType, what: "math intrinsic source")
+		self.pushOperandAt(operand, targetVt: WasmValType.f64)
+		match opcode 'k'
+			floor then self.body.f64Floor()
+			ceil then self.body.f64Ceil()
+			round then self.body.f64Nearest()
+			sqrt then self.body.f64Sqrt()
+			neg to fpToSi then panic("emitMathIntrinsic: Std unary opcode {opcode.name} is not a math intrinsic — `emitUnaryOp` routes only floor/ceil/round/sqrt here")
+		end 'k'
+	end 'emitMathIntrinsic'
 
 	// Integer negate as `0 - operand` (wasm has no unary negate). The operand is coerced to the op's
 	// width (from `operandType`, which the result also carries): the frontend can leave it a different

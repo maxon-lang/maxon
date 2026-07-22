@@ -2667,6 +2667,10 @@ function substituteValueInOp(op TargetOp, from ValueId, to ValueId) returns Targ
 		movsdRegRip(dest, label) then return TargetOp.movsdRegRip(substituteVReg(dest, from: from, to: to), label: label)
 		cvtsi2sdRegReg(dest, src) then return TargetOp.cvtsi2sdRegReg(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to))
 		cvttsd2siRegReg(dest, src) then return TargetOp.cvttsd2siRegReg(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to))
+		// The MATH INTRINSICS (P1.0d.4-C) — two XMM operands each; the rounding MODE is not a register
+		// and passes through, exactly as an immediate or a cond code does.
+		sqrtsdRegReg(dest, src) then return TargetOp.sqrtsdRegReg(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to))
+		roundsdRegReg(dest, src, mode) then return TargetOp.roundsdRegReg(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to), mode: mode)
 		// The `.rdata` address `lea` (P1.2 wave A) — substitutes its GPR dest, exactly like `leaRegGlobal`.
 		leaRegRdata(dest, label) then return TargetOp.leaRegRdata(substituteVReg(dest, from: from, to: to), label: label)
 		// --- arm64 SCALAR-CORE band ---
@@ -2721,6 +2725,8 @@ function substituteValueInOp(op TargetOp, from ValueId, to ValueId) returns Targ
 		arm64Fcmp(lhs, rhs) then return TargetOp.arm64Fcmp(substituteVReg(lhs, from: from, to: to), rhs: substituteVReg(rhs, from: from, to: to))
 		arm64Scvtf(dest, src) then return TargetOp.arm64Scvtf(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to))
 		arm64Fcvtzs(dest, src) then return TargetOp.arm64Fcvtzs(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to))
+		arm64Fsqrt(dest, src) then return TargetOp.arm64Fsqrt(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to))
+		arm64Frint(dest, src, mode) then return TargetOp.arm64Frint(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to), mode: mode)
 		arm64FpLoadRdata(dest, label) then return TargetOp.arm64FpLoadRdata(substituteVReg(dest, from: from, to: to), label: label)
 		// No register operand to substitute — both OS-call forms take their args pre-moved into x0..
 		// (like `arm64BranchLink` and `iatCall`).

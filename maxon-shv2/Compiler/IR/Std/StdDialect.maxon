@@ -242,13 +242,53 @@ end 'StdBinOpcode'
 // `cvtsd2si`) is the whole reason it is the right one: `cvtsd2si` rounds under MXCSR's
 // current mode — banker's rounding by default — so `trunc(3.99)` would answer **4**.
 // The spec says 3. The two mnemonics differ by one letter and by a wrong answer.
+//
+// ⭐ P1.0d.4-C appends the FOUR MATH INTRINSICS — `floor`/`ceil`/`round`/`sqrt`. They are the
+// mirror image of the conversion pair above and the reason to read the two bands together:
+// a conversion's operand and result are in DIFFERENT files, these two are in the SAME one, and
+// neither is `operandType`'s naive reading. **All four read an f64 and produce an f64**, so
+// `operandType` happens to name the result as well — but only because the domains coincide, and a
+// table that says so must say it deliberately (see `unaryResultClass` / `unaryResultValType`,
+// where they need their own arms precisely because they sit PAST `fpToSi` in this enum).
+//
+// Each is ONE instruction on every target — x64 `sqrtsd` / `roundsd imm8`, arm64 `fsqrt` /
+// `frint{n,p,m}`, wasm `f64.{sqrt,nearest,ceil,floor}` — so there is no opcode here that a backend
+// has to synthesize.
+//
+// ⭐ `round` IS TIES-TO-EVEN (banker's rounding), which is what all three of those instruction
+// families do natively and what `specs/round.md` pins (`round(2.5)` is 2). It is NOT C's `round()`.
 export enum StdUnaryOpcode
 	neg
 	bitNot
 	logicalNot
 	siToFp
 	fpToSi
+	floor
+	ceil
+	round
+	sqrt
 end 'StdUnaryOpcode'
+
+// ⭐⭐ **THE ONE ANSWER TO "does this unary opcode READ a float?"** — and the reason it lives beside
+// the enum rather than in a backend is that it is a property OF THE OPCODE, not of any one target.
+// Three callers ask it and none of them may re-derive it: the Maxon→Std boundary asserts the
+// operand it was handed agrees (`assertUnaryOperandDomain`), and the x64 and arm64 isels each
+// refuse an integer-only instruction over an f64 register. Those two backends carried a private
+// copy each (`unaryOpcodeCrossesFiles` / `arm64UnaryCrossesFiles`) — the same fact written down
+// twice, one register file apart.
+//
+// ⚠ IT IS THE OPERAND'S DOMAIN, NOT THE RESULT'S, and on the conversion pair those differ: `siToFp`
+// answers **false** (it reads the INT side; its RESULT is the float) and `fpToSi` **true**. Read it
+// as "what register file does this instruction's SOURCE come out of" and every arm is obvious.
+export function stdUnaryOperandIsFloat(opcode StdUnaryOpcode) returns bool
+	return match opcode 'k'
+		// `neg`/`bitNot`/`logicalNot` are integer/bool instructions, and `siToFp` reads the integer
+		// half of the conversion pair.
+		neg to siToFp gives false
+		// `fpToSi` reads the float half, and the four math intrinsics are f64 → f64.
+		fpToSi to sqrt gives true
+	end 'k'
+end 'stdUnaryOperandIsFloat'
 
 // The Std-tier comparison predicates carried by `StdOp.cmp` (M4). Signed integer
 // comparisons: the x64 lowering maps each to a signed setcc/jcc condition (`lt`→JL,

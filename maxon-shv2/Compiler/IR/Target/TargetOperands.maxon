@@ -309,6 +309,12 @@ export function targetOpOperands(op TargetOp, buf OperandList)
 		// value's class is answered from its own Std type.
 		cvtsi2sdRegReg(dest, src) then pushDefFromUse(buf, dest: dest, src: src)
 		cvttsd2siRegReg(dest, src) then pushDefFromUse(buf, dest: dest, src: src)
+		// The MATH INTRINSICS (P1.0d.4-C). PLAIN defs, NOT the two-address reuse the four SSE ALU
+		// ops above declare: `sqrtsd`/`roundsd` write dest[63:0] from SRC alone, so `dest` does not
+		// read its own previous value and the allocator needs no seed copy. Same shape as the
+		// converts — one def, one use, and the model says nothing about which file either is in.
+		sqrtsdRegReg(dest, src) then pushDefFromUse(buf, dest: dest, src: src)
+		roundsdRegReg(dest, src, _) then pushDefFromUse(buf, dest: dest, src: src)
 		// The `.rdata` address `lea` (P1.2 wave A) — one plain def, no uses, exactly like
 		// `leaRegGlobal`: a RIP-relative `lea` reads no allocatable register.
 		leaRegRdata(dest, _) then pushDef(buf, vreg: dest)
@@ -367,6 +373,10 @@ export function targetOpOperands(op TargetOp, buf OperandList)
 		arm64Fcmp(lhs, rhs) then pushCmpOperands(buf, lhs: lhs, rhs: rhs)
 		arm64Scvtf(dest, src) then pushDefFromUse(buf, dest: dest, src: src)
 		arm64Fcvtzs(dest, src) then pushDefFromUse(buf, dest: dest, src: src)
+		// The MATH INTRINSICS (P1.0d.4-C) — 2-address plain defs, the same shape as `fsqrt`'s x64
+		// counterpart and as `scvtf`/`fcvtzs` beside them.
+		arm64Fsqrt(dest, src) then pushDefFromUse(buf, dest: dest, src: src)
+		arm64Frint(dest, src, _) then pushDefFromUse(buf, dest: dest, src: src)
 		arm64FpLoadRdata(dest, _) then pushDef(buf, vreg: dest)
 		// Neither OS-call form names an explicit register operand — arguments are pre-moved into x0..
 		// and the caller-saved clobbers ride `TargetOpMeta.implicitDefs`, exactly as `iatCall` and

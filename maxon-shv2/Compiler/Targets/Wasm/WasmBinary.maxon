@@ -240,6 +240,18 @@ let opF64Div = 0xA3
 let opI64TruncF64S = 0xB0
 let opF64ConvertI64S = 0xB9
 
+// The MATH INTRINSICS (P1.0d.4-C), f64 → f64 — the whole rung, on wasm, is these four opcodes: wasm
+// has each as a NATIVE instruction, so there is nothing to synthesize and no `.rdata` constant (the
+// native backends need an SSE4.1 `roundsd` and an AArch64 `frint`; wasm needs one byte each).
+//
+// ⚠ `f64.nearest` is round-to-nearest **TIES TO EVEN** — the same rounding x64 `roundsd imm8=0` and
+// arm64 `frintn` do, and what `specs/round.md`'s `round.halfway` case pins (`round(2.5)` is 2). It
+// is NOT C's `round()`. Values taken from `maxon-selfhosted`'s wasm backend (MirToWasm.maxon:2362).
+let opF64Ceil = 0x9B
+let opF64Floor = 0x9C
+let opF64Nearest = 0x9E
+let opF64Sqrt = 0x9F
+
 // The memory-access band (the top-level-`var` milestone, then the heap-String one), appended the way
 // v1's WasmBinary grew each time a milestone needed new opcodes. A load/store carries a MEMARG — an
 // `align` ULEB then an `offset` ULEB. The WORD forms below (an `int`/pointer is i64, a `float` is f64)
@@ -633,6 +645,24 @@ export type WasmBody
 	export function i64TruncF64S()
 		self.buf.push(opI64TruncF64S)
 	end 'i64TruncF64S'
+
+	// The MATH INTRINSICS (one f64 in, one f64 out). `f64Nearest` is TIES TO EVEN — see the opcode
+	// band; it is what `round()` means in this language and it is not C's `round()`.
+	export function f64Floor()
+		self.buf.push(opF64Floor)
+	end 'f64Floor'
+
+	export function f64Ceil()
+		self.buf.push(opF64Ceil)
+	end 'f64Ceil'
+
+	export function f64Nearest()
+		self.buf.push(opF64Nearest)
+	end 'f64Nearest'
+
+	export function f64Sqrt()
+		self.buf.push(opF64Sqrt)
+	end 'f64Sqrt'
 
 	// Data-section loads/stores. Each carries a MEMARG (`align` then `offset`, both ULEB); the
 	// dynamic base address is the i32 already on the stack (a load consumes it; a store consumes

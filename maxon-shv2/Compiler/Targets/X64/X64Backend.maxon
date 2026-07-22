@@ -187,6 +187,40 @@ let OpcodeCvtsi2sd = 0x2A
 // form would answer 3 there and 4 for `3.99`, so the two are not interchangeable.
 let OpcodeCvttsd2si = 0x2C
 
+// sqrtsd xmm, xmm/m64 (F2 0F 51 /r) — an ordinary two-byte scalar-double form, so it shares
+// `encodeSseRegReg` with `addsd` and friends. NO REX.W: both operands are XMM, and the mandatory F2
+// has already selected scalar-double.
+let OpcodeSqrtsd = 0x51
+
+// --- `roundsd`: the ONE three-byte opcode in this file (SSE4.1) ---
+//
+// `roundsd xmm, xmm/m64, imm8` is `66 0F 3A 0B /r ib`. TWO things make it unlike every other SSE
+// form here, and each is why it cannot ride `encodeSseRegReg`:
+//   • its opcode is THREE bytes — the 0F escape, then a SECOND escape byte (0x3A), then 0x0B. The
+//     shared `encodeModRmDirect` emits at most one escape (`twoByteEscape`), by design: bending it
+//     into "0, 1 or 2 escapes plus an optional trailing immediate" would complicate the byte
+//     assembler every GPR instruction in the file goes through, for one instruction.
+//   • it carries a TRAILING IMM8 the shared assembler has no notion of.
+// ⇒ It assembles its own prefix/escape bytes and then reuses the shared REX + ModR/M primitives, so
+// the register-numbering and REX.R/REX.B rules are still spelled exactly once.
+//
+// ⚠ SSE4.1 — the first instruction in shv2's x64 output that is not SSE2. Every x86-64 part since
+// ~2008 (Penryn / Bulldozer) has it; the baseline moves here and nowhere else.
+let OpcodeThreeByteEscape3A = 0x3A
+let OpcodeRoundsd = 0x0B
+
+// `roundsd`'s imm8. Bits [1:0] are the rounding mode when bit 2 is clear; bit 3 is the PRECISION
+// MASK, which suppresses the inexact (#P) exception.
+//
+// ⚠ BIT 3 IS DELIBERATELY NOT SET, and that is a divergence from `maxon-selfhosted` (which emits
+// 0x08/0x09/0x0A). The VALUES are identical either way — the mask changes only whether an MXCSR
+// flag is raised, and shv2 reads no MXCSR flag anywhere. The bootstrap, which is the oracle these
+// results are matched against, emits the plain 0x00/0x01/0x02, so shv2 does too: a bit nobody reads
+// is a fact written down for no reason.
+let RoundsdImm8Nearest = 0x00  // round to nearest, TIES TO EVEN — `round(2.5)` is 2, not 3
+let RoundsdImm8Down = 0x01  // toward -inf — `floor`
+let RoundsdImm8Up = 0x02  // toward +inf — `ceil`
+
 // Base of the two-byte `jcc rel32` opcode: after the 0x0F escape, `0x80 | cc` gives
 // the conditional-jump opcode (e.g. `0x80 | 0x4` = 0x84 = JE). The `cc` nibble comes
 // from X64CondCode's backing value.
@@ -568,6 +602,39 @@ end 'encodeSetccReg'
 function encodeSseRegReg(code ByteArray, prefix SseMandatoryPrefix, opcode MachineWord, dest X64Register, src X64Register, wide bool)
 	encodeModRmDirect(code, twoByteEscape: true, opcode: opcode, regField: dest, rmField: src, wide: wide, ssePrefix: prefix)
 end 'encodeSseRegReg'
+
+// `roundsd dest, src, imm8` (66 0F 3A 0B /r ib) — the ONE instruction here that `encodeSseRegReg`
+// cannot assemble, for the two reasons `OpcodeRoundsd`'s comment gives in full: a THREE-byte opcode
+// (a second escape byte the shared assembler emits no notion of) and a TRAILING imm8.
+//
+// It still spells nothing twice. The REX byte and the ModR/M byte come from the SAME primitives
+// every other instruction in this file uses (`emitRex`, `emitModRmRegReg`), so the REX.R/REX.B
+// register-extension rules and the reg/rm field mapping are stated exactly once for the whole
+// backend; only the two bytes that are genuinely `roundsd`'s — its extra escape and its immediate —
+// are written here.
+//
+// The ModR/M reg field is the DESTINATION and r/m the SOURCE (the `r, r/m` mapping, like every SSE
+// form). ⚠ NO REX.W: both operands are XMM, and the mandatory 66 has already selected the form —
+// REX.W would only lengthen the encoding and stop the bytes matching an assembler's.
+function encodeRoundsdRegReg(code ByteArray, dest X64Register, src X64Register, mode FloatRoundMode)
+	emitSseMandatoryPrefix(code, prefix: SseMandatoryPrefix.packedDouble)
+	emitRex(code, wide: false, regField: dest, rmField: src)
+	code.push(TwoByteOpcodeEscape)
+	code.push(OpcodeThreeByteEscape3A)
+	code.push(OpcodeRoundsd)
+	emitModRmRegReg(code, regField: dest, rmField: src)
+	code.push(roundsdImm8(mode))
+end 'encodeRoundsdRegReg'
+
+// `roundsd`'s imm8 for a rounding mode — the ONE place the target-neutral `FloatRoundMode` becomes
+// x86 bits, which is what lets the isel state the rounding once for both native targets.
+function roundsdImm8(mode FloatRoundMode) returns MachineWord
+	return match mode 'm'
+		nearestTiesToEven gives RoundsdImm8Nearest
+		towardNegative gives RoundsdImm8Down
+		towardPositive gives RoundsdImm8Up
+	end 'm'
+end 'roundsdImm8'
 
 // `movsd destXmm, [base + disp]` (F2 0F 10 /r) — the XMM twin of `encodeLoadRegBaseDisp`,
 // through the SAME `[base + disp]` assembler, so the rsp-SIB and rbp-disp8 traps are spelled
@@ -1333,6 +1400,11 @@ function emitTargetOp(op TargetOp, code ByteArray, callFixups CallFixupArray, ia
 		// operand size the mandatory prefix already chose.
 		cvtsi2sdRegReg(dest, src) then encodeSseRegReg(code, prefix: SseMandatoryPrefix.scalarDouble, opcode: OpcodeCvtsi2sd, dest: resolveXmm(dest), src: resolveGpr(src), wide: true)
 		cvttsd2siRegReg(dest, src) then encodeSseRegReg(code, prefix: SseMandatoryPrefix.scalarDouble, opcode: OpcodeCvttsd2si, dest: resolveGpr(dest), src: resolveXmm(src), wide: true)
+		// The MATH INTRINSICS (P1.0d.4-C). `sqrtsd` is an ordinary two-byte SSE form and rides the
+		// shared `encodeSseRegReg` with only its opcode changed; `roundsd` is three-byte-plus-imm8
+		// and has its own encoder (see `encodeRoundsdRegReg`).
+		sqrtsdRegReg(dest, src) then encodeSseRegReg(code, prefix: SseMandatoryPrefix.scalarDouble, opcode: OpcodeSqrtsd, dest: resolveXmm(dest), src: resolveXmm(src), wide: false)
+		roundsdRegReg(dest, src, mode) then encodeRoundsdRegReg(code, dest: resolveXmm(dest), src: resolveXmm(src), mode: mode)
 		// The `.rdata` address `lea` (P1.2 wave A) — `leaRegGlobal`'s twin, GPR dest, its label filed
 		// as an `.rdata` relocation. See `encodeLeaRegRdata`.
 		leaRegRdata(dest, label) then encodeLeaRegRdata(code, rdataRelocs: rdataRelocs, dest: resolveGpr(dest), label: label)
