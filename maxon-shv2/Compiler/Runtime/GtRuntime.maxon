@@ -29,12 +29,14 @@
 // miscompile — the trampoline moves the result through R8 and the args through the GPR arg registers, so
 // a float (XMM) or a managed pointer would need a channel B1a does not build. Managed async is B1c.
 //
-// ⚠ NO MORESTACK. Each GT gets a FIXED 1 MiB `osAllocPages` (VirtualAlloc MEM_COMMIT, demand-paged so the
-// unused pages cost nothing) stack, big enough for any B1a coroutine. The relocating-morestack that grows
-// a stack on a guard fault is an isolated later slice (B1a′); frame pointers are already on every function
-// for it, so deferring it costs nothing already spent. The GT struct + stack + arg buffer are
-// `__slab_alloc`'d / `osAllocPages`'d — INVISIBLE to the `__mm_alloc_count` leak gate — so an un-awaited
-// `async f()` (which never runs) reclaims nothing yet but cannot trip the leak gate.
+// ⭐ RELOCATING MORESTACK (P1.5-B1a′ slice 2). Each GT gets a tiny `GtStackSize` (2 KB) `osAllocPages` seed
+// stack; every guarded function's prologue projects its frame against `gt.stackGuard` (X64GtRuntime's
+// `emitGtStackGuard`) and, when it would overflow, calls the hand-assembled `__gt_morestack` to allocate a 2x
+// stack, COPY the old one onto it, walk the saved-rbp chain fixing every interior pointer by the relocation
+// offset, and continue on the larger stack. So deep recursion inside an `async` body just works; the seed is a
+// floor, not a ceiling. The GT struct + stack + arg buffer are `__slab_alloc`'d / `osAllocPages`'d — INVISIBLE
+// to the `__mm_alloc_count` leak gate — so an un-awaited `async f()` (which never runs) leaks only its 2 KB
+// seed (OPEN #88), and an awaited GT's grown stack is RELEASED on completion (`__gt_drive_until` → `osFreePages`).
 
 // --- GreenThread struct offsets ---
 // A SMALLER struct than the authoritative 0xD8 GtLayout (which carries the multi-M / fault-diagnostic
@@ -49,12 +51,25 @@ export let GtOffSp = 0x00  // saved stack pointer at the context-switch point
 export let GtOffFp = 0x08  // saved frame pointer (rbp) at the context-switch point
 export let GtOffStatus = 0x10  // GtStatus* below
 export let GtOffStackBase = 0x18  // low address of the osAllocPages'd stack (0 for GT0, which uses the OS stack)
-let GtOffStackSize = 0x20
+
+// EXPORTED because the relocating morestack (P1.5-B1a′, X64GtRuntime) reads the CURRENT stack size to compute
+// the doubled size and the memcpy count, and writes the new size back here after growing.
+export let GtOffStackSize = 0x20
 export let GtOffResult = 0x28  // the R8 return value, captured by the trampoline when the GT completes
 export let GtOffWaiter = 0x30  // the GT to context-switch back to when this GT completes (set by the driver)
 let GtOffNext = 0x38  // run-queue FIFO chain
 export let GtOffFuncPtr = 0x40  // the async function's address
 export let GtOffArgBuf = 0x48  // the __slab_alloc'd argument buffer (MaxAsyncArgs i64 slots)
+
+// The green-thread stack GUARD (P1.5-B1a′): the low-water address a function's PROLOGUE compares its projected
+// rsp against — `projectedRsp < stackGuard` means the frame would overflow, so the prologue calls `__gt_morestack`
+// to grow+relocate the stack first. `__gt_spawn` seeds it to `stackBase + GtStackGuardMargin`; `__gt_morestack`
+// updates it to `newBase + GtStackGuardMargin` after a grow; GT0 keeps the slab-zero (0), so its guard-compare
+// (`projectedRsp >= 0` unsigned) always passes — GT0 runs on the real OS stack and never grows. EXPORTED because
+// the hand-assembled prologue guard (X64GtRuntime) reads it and `__gt_morestack` writes it. Offset 0x50 is the FREE
+// word between `argBuf@0x48` and `threw@0x58`, so it fills the reserved gap without moving any field.
+export let GtOffStackGuard = 0x50
+
 // The dual-register ERROR FLAG the trampoline captures from R10 when a THROWING async thunk returns
 // (P1.5-B2b): 0 = success, non-zero = threw (a scalar error's `ordinal + ErrorFlagOrdinalBias`, or a boxed
 // union's box pointer — whatever the thunk left in R10). Read ONLY by `__gt_try_await`, which returns it as
@@ -62,12 +77,14 @@ export let GtOffArgBuf = 0x48  // the __slab_alloc'd argument buffer (MaxAsyncAr
 // non-throwing thunk leaving garbage in R10 here is harmless. Offset 0x58 (a one-word gap at 0x50) is
 // byte-identical to the authoritative GtLayout (`Arm64MacosGreenThread.maxon:93`), so a later port grafts on.
 export let GtOffThrew = 0x58
+
 // The child process HANDLE the running GT is parked on (P1.5 subprocess seed). Written by `__gt_proc_add` when a
 // GT parks on `runProcess`, read back after the GT resumes to reap the exit code and close the handle. Offset
 // 0x80 is exactly the `io_handle` slot the authoritative GtLayout names in the 0x60–0xA0 reserved gap (see the
 // note below), so the later IOCP/subprocess-pipe slices graft on without moving a field. Written and read only
 // from Std here, so — like `GtOffStackBase`/`GtOffNext` — it stays local, not exported to the hand-asm chunks.
 let GtOffIoHandle = 0x80
+
 // The GT's OWN Windows TIB stack bounds, saved so the syscall shim (P1.5-B1a′) can repoint `gs:[0x08]`
 // (NT_TIB.StackBase) / `gs:[0x10]` (NT_TIB.StackLimit) at the system stack for a kernel call and RESTORE
 // them to this GT's stack afterwards — heavy kernel calls probe the TIB and fault when RSP is outside its
@@ -79,6 +96,7 @@ let GtOffIoHandle = 0x80
 // field; they fill two words of the 0x60–0xA0 reserved gap this rung otherwise leaves zeroed.
 export let GtOffTibStackBase = 0x90
 export let GtOffTibStackLimit = 0x98
+
 // The PARKED flag (P1.5 mid-body-yield). Set by `__gt_sleep` just before a SPAWNED GT switches back to its
 // driver ("I am off my run queue, suspended in the timer heap"); cleared on resume. Offset 0xA8 is the SAME
 // slot the authoritative GtLayout (`Arm64MacosGreenThread.maxon` / v1 `GtLayout`) calls `io_yielded`, so the
@@ -87,6 +105,7 @@ export let GtOffTibStackLimit = 0x98
 // rung is documentation + the resume contract; single-M has no race, so it is a plain flag, not the
 // multi-M park-gate the reference uses it for.
 export let GtOffIoYielded = 0xA8
+
 // 0xB0 = 176 bytes. Grows from B2b's 0x60 to keep `io_yielded` byte-identical to GtLayout at 0xA8; the words
 // 0x60–0xA0 are RESERVED (the reference's io_result/io_handle/cancel/tib/trace fields), slab-zeroed and unused
 // until the subprocess/IOCP slice fills them. Must be a multiple of 8 (whole-word fields).
@@ -103,8 +122,21 @@ let GtStatusReady = 0
 export let GtStatusCompleted = 2
 let GtStatusWaiting = 3
 
-// The green-thread stack: a fixed 1 MiB region (see the header note on morestack).
-export let GtStackSize = 0x100000
+// The green-thread stack: the INITIAL region a spawned GT gets. The relocating morestack (P1.5-B1a′) grows it
+// on demand (2x per guard fault, copy + rbp-chain relocation), so this is a small SEED, not a ceiling — the
+// syscall shim (slice 1) already moved every kernel call off this stack onto the 64 KB system stack, which is
+// what makes a tiny GT stack safe. ⚠ BRING-UP: kept at 0x100000 (1 MiB) while the guard is proven inert, then
+// shrunk to 0x800 (2 KB) once morestack is disassembly-verified — see this file's git history / the B1a′ brief.
+export let GtStackSize = 0x800
+
+// The GUARD MARGIN (P1.5-B1a′): the cushion a function's prologue projects below its frame before comparing
+// against the stack guard, and the offset `__gt_spawn`/`__gt_morestack` place the guard above the stack base. It
+// appears TWICE in the effective trigger (`projectedRsp = rsp - frameBytes - GtStackGuardMargin`, guard =
+// `stackBase + GtStackGuardMargin`), so morestack fires while `rsp - frameBytes` is still `2*GtStackGuardMargin`
+// above the true overflow point — the slack that covers the guarded function's pushes plus any UN-guarded runtime
+// (`__`/`mrt_`) frames that free-ride on the caller's margin between guard checkpoints. 0x3A0 (928 B) is v1's
+// value (`X64Backend.maxon:7293`), carried because the same frames it was sized for run here.
+export let GtStackGuardMargin = 0x3A0
 
 // The single global SYSTEM (scratch) stack a green thread's kernel calls run on (P1.5-B1a′ slice 1): a 64 KB
 // region allocated once in `__gt_init`, its TOP published to `__gt_system_stack_top`. The syscall shim
@@ -129,6 +161,7 @@ export let GtInitialFrameBytes = 48  // 5 callee-saved words + the return-addres
 // slab's zeros in unread registers), so there is no arg COUNT to carry and the trampoline needs no
 // count-guarded loads. MaxAsyncArgs equals the parser's parameter cap.
 export let MaxAsyncArgs = 6
+
 // One argument buffer slot per argument, i64-wide. The stride the lowering STORES at, the trampoline LOADS
 // at, and `ArgBufBytes` sizes by — one fact, so the three cannot drift.
 export let GtArgSlotBytes = 8
@@ -149,6 +182,7 @@ let TimerEntrySize = 16
 let TimerOffDeadline = 0
 let TimerOffGt = 8
 let TimerHeapBytes = TimerHeapCapacity * TimerEntrySize
+
 // The empty-store sentinel `__gt_timer_earliest` returns: a real deadline is `now_ns() + ms*1e6`, a huge
 // positive nanosecond instant, so 0 unambiguously means "no timers".
 let TimerNoDeadline = 0
@@ -180,18 +214,22 @@ let ProcStoreBytes = ProcStoreCapacity * ProcSlotBytes
 let WaitObject0 = 0
 let WaitPollTimeout = 0  // WaitForSingleObject timeout=0 — poll, never block (the netpoll owns the blocking wait)
 let WaitInfinite = 0xFFFFFFFF  // INFINITE — the netpoll's block when no timer bounds the wait
+
 // STARTUPINFOA is 0x68 bytes; its first field `cb` must equal that size. Every other field is 0 (slab-zeroed),
 // so `dwFlags = 0` and the child inherits the parent console — `cmd /c exit N` runs and exits with its code.
 let StartupInfoSize = 0x68
 let StartupInfoCbOffset = 0
+
 // PROCESS_INFORMATION is 0x18 bytes: hProcess@0, hThread@8 (dwProcessId@16, dwThreadId@20 are unused here).
 let ProcInfoSize = 0x18
 let ProcInfoHProcessOffset = 0
 let ProcInfoHThreadOffset = 8
+
 // The 8-byte slab slot `GetExitCodeProcess` writes the child's DWORD exit code into; the runtime reads it back
 // as a zero-extended u32 (a 4-byte read that ignores the high dword, so a dirty high half cannot corrupt it).
 let ExitCodeSlotBytes = 8
 let TrailingNulBytes = 1  // the one extra byte for the cmdline's NUL terminator (slab-zeroed → free)
+
 // The exit code `__gt_process_run` aborts the whole process with when `CreateProcessA` FAILS (a command whose
 // first token is not a runnable executable). On failure CreateProcessA leaves the slab-zeroed
 // PROCESS_INFORMATION untouched, so `hProcess == 0` detects it — and the runtime MUST NOT park on a null handle,
@@ -200,6 +238,7 @@ let TrailingNulBytes = 1  // the one extra byte for the cmdline's NUL terminator
 // message-carrying panic would need the parser's `.rdata` interner, which the builder-built runtime has no handle
 // to at this rung — a richer diagnostic is a follow-up). `runProcess` on a valid command never reaches here.
 let SpawnFailedExitCode = 1
+
 // The exit code `__gt_proc_add` aborts with when the process store is FULL (a program parks more than
 // `ProcStoreCapacity` = 64 children concurrently — beyond `WaitForMultipleObjects`'s `MAXIMUM_WAIT_OBJECTS`). A
 // DISTINCT value from `SpawnFailedExitCode` and from every subprocess-spec child exit code (1/2/3/4/5/25/45/123),
@@ -216,12 +255,18 @@ let NanosPerMilli = 1000000
 // --- Runtime function names ---
 export let GtContextSwitchName = b"__gt_context_switch"
 export let GtTrampolineName = b"__gt_trampoline"
+
+// The relocating stack-grower (P1.5-B1a′). A hand-assembled chunk (X64GtRuntime), NOT a builder-built Std
+// function — it manipulates rsp and walks the saved-rbp chain, unrepresentable in Std. EXPORTED because the
+// prologue guard's `call __gt_morestack` (X64Backend) and the chunk's own name must agree — one spelling.
+export let GtMorestackName = b"__gt_morestack"
 export let GtInitName = b"__gt_init"
 export let GtSpawnName = b"__gt_spawn"
 export let GtEnqueueName = b"__gt_enqueue"
 export let GtDequeueName = b"__gt_dequeue"
 export let GtAwaitName = b"__gt_await"
 export let GtTryAwaitName = b"__gt_try_await"
+
 // P1.5 mid-body-yield entry points. `__gt_sleep` is the front-end target for `sleep(ms)`; the rest are the
 // scheduler internals it and the await drivers share.
 export let GtSleepName = b"__gt_sleep"
@@ -230,6 +275,7 @@ let GtNowNsName = b"__gt_now_ns"
 let GtTimerAddName = b"__gt_timer_add"
 let GtTimerCheckName = b"__gt_timer_check"
 let GtTimerEarliestName = b"__gt_timer_earliest"
+
 // P1.5 subprocess seed. `__gt_process_run` is the front-end target for `runProcess(cmd)`; the rest are the
 // scheduler internals it and the netpoll share.
 export let GtProcessRunName = b"__gt_process_run"
@@ -247,28 +293,34 @@ export let GtCurrentGtLabel = b"__gt_current_gt"  // the running GT; drivers own
 let GtRunQueueHeadLabel = b"__gt_run_queue_head"
 let GtRunQueueTailLabel = b"__gt_run_queue_tail"
 let GtInitDoneLabel = b"__gt_init_done"  // idempotency guard for __gt_init
+
 // The TOP of the single global 64 KB system (scratch) stack, published by `__gt_init` (`base +
 // GtSystemStackSize`). EXPORTED because the syscall shim reads it to switch RSP for a kernel call. A FIXED
 // top, reset every entry (NOT a bump pointer): the shim and slice 2's morestack both switch to it, safe only
 // because they never nest (kernel calls are leaf and single-M runs one thing at a time — see the shim's note).
 export let GtSystemStackTopLabel = b"__gt_system_stack_top"
-// ⭐ THE STACK FREE-LIST HEAD (P1.5-B1a, stack recycling). A LIFO of idle 1 MiB GT stacks, chained
-// INTRUSIVELY: a freed stack's first word (`[stackBase]`, the lowest address — the stack grows DOWN from the
-// top, so the bottom word is never touched by a running GT unless it overflows, which is out of scope) holds
-// the previous free head. `__gt_await` pushes a completed GT's stack here after the switch off it; `__gt_spawn`
-// pops one instead of committing a fresh 1 MiB. This bounds a spawn/await LOOP to ONE resident stack — without
-// it every spawn leaks a 1 MiB `osAllocPages` commit, invisible to the `__mm` gate (measured: 15000 spawns →
-// 14.27 GB). The GT STRUCT is deliberately NOT recycled (it stays resident for re-await) — see OPEN.md.
-let GtStackFreeHeadLabel = b"__gt_stack_free_head"
+
+// ⭐ THE FIXED-SIZE STACK FREE-LIST IS GONE (P1.5-B1a′). B1a recycled a completed GT's stack onto a LIFO because
+// every stack was a uniform 1 MiB; the morestack makes stacks VARIABLE-SIZED (2 KB, doubled on demand), so a
+// fixed-size free-list would hand a 2 KB-believing `__gt_spawn` an 8 KB grown stack (or vice versa) — a size the
+// spawner records as `GtStackSize` while the reservation is something else, which the guard then mis-projects
+// against and morestack mis-copies. So the lifecycle is now ALLOC-FRESH-ON-SPAWN + FREE-ON-COMPLETE: `__gt_spawn`
+// commits a fresh `GtStackSize` seed, `__gt_morestack` releases the OLD stack when it grows, and `__gt_drive_until`
+// releases the completed GT's (possibly grown) stack via `osFreePages` — so a spawn/await loop stays bounded by
+// alloc+free churn rather than a recycle. (A same-size 2 KB free-list for spawn reuse is a pure optimization left
+// to a later pass.) The GT STRUCT is still not reclaimed (OPEN #87); the never-awaited stack still leaks its seed
+// (OPEN #88), now 2 KB not 1 MiB.
 // P1.5 mid-body-yield timer store: the live entry COUNT and the base address of the `__slab_alloc`'d heap
 // region (both 0 until `__gt_init` allocates the region and seeds the base).
 let GtTimerCountLabel = b"__gt_timer_count"
 let GtTimerHeapBaseLabel = b"__gt_timer_heap_base"
+
 // Single-M scratch words the QueryPerformanceCounter/Frequency out-params write to (`osReadClock` hands their
 // addresses to the imports; `__gt_now_ns` reads them straight back). Safe as shared globals because
 // `__gt_now_ns` is straight-line with no yield point inside it — it cannot be re-entered mid-read.
 let GtClockTicksLabel = b"__gt_clock_ticks"
 let GtClockFreqLabel = b"__gt_clock_freq"
+
 // P1.5 subprocess store: the live parked-child COUNT and the base addresses of the two `__slab_alloc`'d parallel
 // arrays (handles + waiting GTs). All 0 until `__gt_init` allocates the regions and seeds the bases.
 let GtProcCountLabel = b"__gt_proc_count"
@@ -279,7 +331,7 @@ let GtProcGtsBaseLabel = b"__gt_proc_gts_base"
 let GtRuntimeCallPrefix = b"__gt_"
 
 // ⭐ **DOES THIS CALLEE REACH THE GT SCHEDULER?** The `__gt_`-only test that decides whether the program
-// carries the scheduler runtime + its `.data` globals + the two hand-assembled chunks. Deliberately
+// carries the scheduler runtime + its `.data` globals + the three hand-assembled chunks. Deliberately
 // narrower than MmRuntime's `isRuntimeCallee`: a `__gt_*` call implies the whole scheduler (spawn enqueues,
 // await drives, both context-switch), and it also implies the HEAP (spawn `__slab_alloc`s the GT struct and
 // the arg buffer), which is why `scanRuntimeUsage` turns on `usesHeap` alongside `usesGt`.
@@ -296,7 +348,6 @@ export function gtRuntimeGlobals() returns DataSectionEntryArray
 	out.push(DataSectionEntry.create(String.from(GtRunQueueTailLabel), valueType: StdType.i64, value: 0))
 	out.push(DataSectionEntry.create(String.from(GtInitDoneLabel), valueType: StdType.i64, value: 0))
 	out.push(DataSectionEntry.create(String.from(GtSystemStackTopLabel), valueType: StdType.i64, value: 0))
-	out.push(DataSectionEntry.create(String.from(GtStackFreeHeadLabel), valueType: StdType.i64, value: 0))
 	// P1.5 mid-body-yield: the timer store's count + heap base, and the clock out-param scratch words.
 	out.push(DataSectionEntry.create(String.from(GtTimerCountLabel), valueType: StdType.i64, value: 0))
 	out.push(DataSectionEntry.create(String.from(GtTimerHeapBaseLabel), valueType: StdType.i64, value: 0))
@@ -309,9 +360,9 @@ export function gtRuntimeGlobals() returns DataSectionEntryArray
 	return out
 end 'gtRuntimeGlobals'
 
-// Install the GT scheduler into the lowered Std module. Called only when `moduleUsesGt` held. The two
-// hand-assembled chunks (`__gt_context_switch`, `__gt_trampoline`) are appended separately at the Target
-// tier (X64GtRuntime.appendX64GtRuntimeChunks) — they are bytes, not Std ops.
+// Install the GT scheduler into the lowered Std module. Called only when `moduleUsesGt` held. The three
+// hand-assembled chunks (`__gt_context_switch`, `__gt_trampoline`, `__gt_morestack`) are appended separately at
+// the Target tier (X64GtRuntime.appendX64GtRuntimeChunks) — they are bytes, not Std ops.
 export function installGtRuntime(module StdModule)
 	buildGtInit(module)
 	buildGtSpawn(module)
@@ -433,9 +484,6 @@ function buildGtSpawn(module StdModule)
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry")
-	var reuseStack = module.addBlock(func, label: b"reusestack")
-	var allocStack = module.addBlock(func, label: b"allocstack")
-	var haveStack = module.addBlock(func, label: b"havestack")
 
 	emitParams(module, block: entry, count: 2)
 	let funcPtr = 0 as ValueId
@@ -452,74 +500,54 @@ function buildGtSpawn(module StdModule)
 	let gt = ids.mint()
 	module.appendOp(entry, op: StdOp.call(gt, callee: SlabAllocName, args: argsOf(structSize)))
 
-	// ⭐ ACQUIRE THE 1 MiB STACK — pop a recycled one off the free-list, else commit a fresh one. This is what
-	// bounds a spawn/await loop to one resident stack. `stackBase` differs by branch, so each branch STORES it
-	// into `gt.stackBase` and `haveStack` reloads it — a memory round-trip rather than a builder-tier phi
-	// (MmRuntime's builders are phi-free; a load is cheaper than teaching them block args for one value).
+	// ⭐ COMMIT A FRESH GtStackSize STACK (P1.5-B1a′). No free-list any more: with a growable/relocating stack the
+	// size is variable, so a completed GT's stack is RELEASED (`__gt_drive_until`), not recycled — a fresh seed is
+	// committed here every spawn (`MEM_COMMIT`, demand-paged so the untouched pages cost nothing until the GT runs).
 	let stackSizeVal = ids.mint()
 	module.appendOp(entry, op: StdOp.const(stackSizeVal, value: GtStackSize, valueType: StdType.i64))
-	let freeHeadAddr = ids.mint()
-	module.appendOp(entry, op: StdOp.globalAddr(freeHeadAddr, label: GtStackFreeHeadLabel))
-	let freeHead = ids.mint()
-	module.appendOp(entry, op: StdOp.loadIndirect(freeHead, addrId: freeHeadAddr, offset: 0, valueType: StdType.i64))
-	let zeroConst = ids.mint()
-	module.appendOp(entry, op: StdOp.const(zeroConst, value: 0, valueType: StdType.i64))
-	let freeEmpty = ids.mint()
-	module.appendOp(entry, op: StdOp.cmp(freeEmpty, lhs: freeHead, rhs: zeroConst, pred: StdCmpPred.eq, operandType: StdType.i64))
-	module.setTerminator(entry, op: StdOp.condBranch(freeEmpty, thenBlockId: allocStack.id, elseBlockId: reuseStack.id))
-
-	// reuseStack: pop the LIFO — free head = the popped stack's intrusive link at [freeHead]; stackBase = freeHead.
-	let poppedNext = ids.mint()
-	module.appendOp(reuseStack, op: StdOp.loadIndirect(poppedNext, addrId: freeHead, offset: 0, valueType: StdType.i64))
-	module.appendOp(reuseStack, op: StdOp.storeIndirect(freeHeadAddr, offset: 0, valueId: poppedNext, valueType: StdType.i64))
-	module.appendOp(reuseStack, op: StdOp.storeIndirect(gt, offset: GtOffStackBase, valueId: freeHead, valueType: StdType.i64))
-	module.setTerminator(reuseStack, op: StdOp.branch(haveStack.id))
-
-	// allocStack: commit a fresh 1 MiB stack (zero-filled by MEM_COMMIT).
-	let freshBase = ids.mint()
-	module.appendOp(allocStack, op: StdOp.osAllocPages(freshBase, sizeId: stackSizeVal))
-	module.appendOp(allocStack, op: StdOp.storeIndirect(gt, offset: GtOffStackBase, valueId: freshBase, valueType: StdType.i64))
-	module.setTerminator(allocStack, op: StdOp.branch(haveStack.id))
-
-	// haveStack: the stack is now in gt.stackBase whichever branch ran. Record the remaining fields and lay the
-	// initial context-switch frame at the TOP of the stack. status/waiter/next/result/fp are the slab's zeros.
 	let stackBase = ids.mint()
-	module.appendOp(haveStack, op: StdOp.loadIndirect(stackBase, addrId: gt, offset: GtOffStackBase, valueType: StdType.i64))
-	module.appendOp(haveStack, op: StdOp.storeIndirect(gt, offset: GtOffStackSize, valueId: stackSizeVal, valueType: StdType.i64))
-	module.appendOp(haveStack, op: StdOp.storeIndirect(gt, offset: GtOffFuncPtr, valueId: funcPtr, valueType: StdType.i64))
-	module.appendOp(haveStack, op: StdOp.storeIndirect(gt, offset: GtOffArgBuf, valueId: argBuf, valueType: StdType.i64))
+	module.appendOp(entry, op: StdOp.osAllocPages(stackBase, sizeId: stackSizeVal))
+	module.appendOp(entry, op: StdOp.storeIndirect(gt, offset: GtOffStackBase, valueId: stackBase, valueType: StdType.i64))
+	module.appendOp(entry, op: StdOp.storeIndirect(gt, offset: GtOffStackSize, valueId: stackSizeVal, valueType: StdType.i64))
+	module.appendOp(entry, op: StdOp.storeIndirect(gt, offset: GtOffFuncPtr, valueId: funcPtr, valueType: StdType.i64))
+	module.appendOp(entry, op: StdOp.storeIndirect(gt, offset: GtOffArgBuf, valueId: argBuf, valueType: StdType.i64))
 
 	// stackTop = stackBase + GtStackSize.
 	let stackTop = ids.mint()
-	module.appendOp(haveStack, op: StdOp.binOp(stackTop, lhs: stackBase, rhs: stackSizeVal, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	module.appendOp(entry, op: StdOp.binOp(stackTop, lhs: stackBase, rhs: stackSizeVal, opcode: StdBinOpcode.add, operandType: StdType.i64))
 	// Seed this GT's saved TIB bounds so the syscall shim's after-call restore repoints the Windows TIB to THIS
-	// GT's own stack: `tibStackBase = stackTop` (high address), `tibStackLimit = stackBase` (low). Written for
-	// EVERY spawned GT — a recycled stack's tib fields carry the previous tenant's bounds and must be refreshed,
-	// and the GT's bounds are `[stackBase, stackTop)` regardless of which branch acquired the stack.
-	module.appendOp(haveStack, op: StdOp.storeIndirect(gt, offset: GtOffTibStackBase, valueId: stackTop, valueType: StdType.i64))
-	module.appendOp(haveStack, op: StdOp.storeIndirect(gt, offset: GtOffTibStackLimit, valueId: stackBase, valueType: StdType.i64))
-	// [stackTop - 8] = &__gt_trampoline (the return address the first `ret` pops). On a FRESH stack the five
-	// callee-saved slots below it are the MEM_COMMIT zeros; on a RECYCLED stack they are the previous tenant's
-	// bytes — either way DON'T-CARE, because they become this GT's initial callee-saved registers, which the
-	// user function establishes before it reads them. Only the trampoline return-address slot must be written.
+	// GT's own stack: `tibStackBase = stackTop` (high address), `tibStackLimit = stackBase` (low). The GT's bounds
+	// are `[stackBase, stackTop)`; `__gt_morestack` updates them (and the guard) when it grows the stack.
+	module.appendOp(entry, op: StdOp.storeIndirect(gt, offset: GtOffTibStackBase, valueId: stackTop, valueType: StdType.i64))
+	module.appendOp(entry, op: StdOp.storeIndirect(gt, offset: GtOffTibStackLimit, valueId: stackBase, valueType: StdType.i64))
+	// gt.stackGuard = stackBase + GtStackGuardMargin — the low-water mark the guarded function's prologue compares
+	// its projected rsp against (P1.5-B1a′). Below it, the prologue calls `__gt_morestack` to grow+relocate first.
+	let guardMarginConst = ids.mint()
+	module.appendOp(entry, op: StdOp.const(guardMarginConst, value: GtStackGuardMargin, valueType: StdType.i64))
+	let stackGuard = ids.mint()
+	module.appendOp(entry, op: StdOp.binOp(stackGuard, lhs: stackBase, rhs: guardMarginConst, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	module.appendOp(entry, op: StdOp.storeIndirect(gt, offset: GtOffStackGuard, valueId: stackGuard, valueType: StdType.i64))
+	// [stackTop - 8] = &__gt_trampoline (the return address the first `ret` pops). The five callee-saved slots below
+	// it are the MEM_COMMIT zeros — DON'T-CARE, because they become this GT's initial callee-saved registers, which
+	// the user function establishes before it reads them. Only the trampoline return-address slot must be written.
 	let eightConst = ids.mint()
-	module.appendOp(haveStack, op: StdOp.const(eightConst, value: 8, valueType: StdType.i64))
+	module.appendOp(entry, op: StdOp.const(eightConst, value: 8, valueType: StdType.i64))
 	let retSlotAddr = ids.mint()
-	module.appendOp(haveStack, op: StdOp.binOp(retSlotAddr, lhs: stackTop, rhs: eightConst, opcode: StdBinOpcode.sub, operandType: StdType.i64))
+	module.appendOp(entry, op: StdOp.binOp(retSlotAddr, lhs: stackTop, rhs: eightConst, opcode: StdBinOpcode.sub, operandType: StdType.i64))
 	let trampAddr = ids.mint()
-	module.appendOp(haveStack, op: StdOp.funcAddr(trampAddr, funcName: GtTrampolineName))
-	module.appendOp(haveStack, op: StdOp.storeIndirect(retSlotAddr, offset: 0, valueId: trampAddr, valueType: StdType.i64))
+	module.appendOp(entry, op: StdOp.funcAddr(trampAddr, funcName: GtTrampolineName))
+	module.appendOp(entry, op: StdOp.storeIndirect(retSlotAddr, offset: 0, valueId: trampAddr, valueType: StdType.i64))
 	// gt.sp = stackTop - GtInitialFrameBytes (points at the lowest saved-register slot); gt.fp is 0 (slab).
 	let frameConst = ids.mint()
-	module.appendOp(haveStack, op: StdOp.const(frameConst, value: GtInitialFrameBytes, valueType: StdType.i64))
+	module.appendOp(entry, op: StdOp.const(frameConst, value: GtInitialFrameBytes, valueType: StdType.i64))
 	let spVal = ids.mint()
-	module.appendOp(haveStack, op: StdOp.binOp(spVal, lhs: stackTop, rhs: frameConst, opcode: StdBinOpcode.sub, operandType: StdType.i64))
-	module.appendOp(haveStack, op: StdOp.storeIndirect(gt, offset: GtOffSp, valueId: spVal, valueType: StdType.i64))
+	module.appendOp(entry, op: StdOp.binOp(spVal, lhs: stackTop, rhs: frameConst, opcode: StdBinOpcode.sub, operandType: StdType.i64))
+	module.appendOp(entry, op: StdOp.storeIndirect(gt, offset: GtOffSp, valueId: spVal, valueType: StdType.i64))
 
 	// Enqueue as ready and return the GT as the promise handle.
 	let enqResult = ids.mint()
-	module.appendOp(haveStack, op: StdOp.call(enqResult, callee: GtEnqueueName, args: argsOf(gt)))
-	module.setTerminator(haveStack, op: StdOp.ret(gt))
+	module.appendOp(entry, op: StdOp.call(enqResult, callee: GtEnqueueName, args: argsOf(gt)))
+	module.setTerminator(entry, op: StdOp.ret(gt))
 
 	module.functions.push(func)
 end 'buildGtSpawn'
@@ -950,7 +978,7 @@ function buildGtDriveUntil(module StdModule)
 	var drive = module.addBlock(func, label: b"drive")
 	var run = module.addBlock(func, label: b"run")
 	var recycle = module.addBlock(func, label: b"recycle")
-	var pushStack = module.addBlock(func, label: b"pushstack")
+	var freeStack = module.addBlock(func, label: b"freestack")
 	var netpoll = module.addBlock(func, label: b"netpoll")
 	var timerOnly = module.addBlock(func, label: b"timeronly")
 	var timerDecide = module.addBlock(func, label: b"timerdecide")
@@ -1003,21 +1031,20 @@ function buildGtDriveUntil(module StdModule)
 	// ⭐ RECYCLE ONLY A COMPLETED g. A merely-parked (waiting) g keeps its stack — it will resume on it.
 	module.setTerminator(run, op: StdOp.condBranch(gCompleted, thenBlockId: recycle.id, elseBlockId: loopHdr.id))
 
-	// recycle: g completed → its 1 MiB stack is idle. Skip GT0/main (stackBase 0); else push it to the free-list.
+	// recycle: g completed → its (possibly grown) stack is idle. Skip GT0/main (stackBase 0, runs on the OS stack
+	// and is never freed); else RELEASE it. `osFreePages` is an `iatCall` inside this `__gt_` function, so slice 1's
+	// syscall shim wraps it onto the system stack automatically — the `VirtualFree` runs off the driver's own GT
+	// stack, and it releases g's stack (a different region), which g has already switched off of.
 	let gStackBase = ids.mint()
 	module.appendOp(recycle, op: StdOp.loadIndirect(gStackBase, addrId: g, offset: GtOffStackBase, valueType: StdType.i64))
 	let gStackNull = ids.mint()
 	module.appendOp(recycle, op: StdOp.cmp(gStackNull, lhs: gStackBase, rhs: zeroConst, pred: StdCmpPred.eq, operandType: StdType.i64))
-	module.setTerminator(recycle, op: StdOp.condBranch(gStackNull, thenBlockId: loopHdr.id, elseBlockId: pushStack.id))
+	module.setTerminator(recycle, op: StdOp.condBranch(gStackNull, thenBlockId: loopHdr.id, elseBlockId: freeStack.id))
 
-	// pushStack: push g's idle stack onto the free-list via its intrusive bottom-word link.
-	let freeHeadAddr = ids.mint()
-	module.appendOp(pushStack, op: StdOp.globalAddr(freeHeadAddr, label: GtStackFreeHeadLabel))
-	let oldHead = ids.mint()
-	module.appendOp(pushStack, op: StdOp.loadIndirect(oldHead, addrId: freeHeadAddr, offset: 0, valueType: StdType.i64))
-	module.appendOp(pushStack, op: StdOp.storeIndirect(gStackBase, offset: 0, valueId: oldHead, valueType: StdType.i64))
-	module.appendOp(pushStack, op: StdOp.storeIndirect(freeHeadAddr, offset: 0, valueId: gStackBase, valueType: StdType.i64))
-	module.setTerminator(pushStack, op: StdOp.branch(loopHdr.id))
+	// freeStack: release g's completed stack (whatever size the morestack grew it to — `VirtualFree(MEM_RELEASE)`
+	// frees the whole reservation from its base). This bounds a spawn/await loop by alloc+free churn.
+	module.appendOp(freeStack, op: StdOp.osFreePages(gStackBase))
+	module.setTerminator(freeStack, op: StdOp.branch(loopHdr.id))
 
 	// netpoll: the run queue is empty. Block the single M until something becomes ready — a parked TIMER fires or a
 	// parked CHILD exits. `pc` = parked children, `earliest` = the nearest timer deadline (0 = none). When BOTH are

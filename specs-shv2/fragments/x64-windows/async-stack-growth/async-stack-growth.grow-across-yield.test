@@ -1,21 +1,24 @@
-// Test: async-subprocess.sequence
-function childA() returns int
-	return runProcess("cmd /c exit 4")
-end 'childA'
+// Test: async-stack-growth.grow-across-yield
 
-function childB() returns int
-	return runProcess("cmd /c exit 5")
-end 'childB'
+function deepRecurse(n int) returns int
+	if n == 0 'base'
+		return 0
+	end 'base'
+	return deepRecurse(n - 1) + 1
+end 'deepRecurse'
+
+function yieldThenRecurse() returns int
+	sleep(1)
+	return deepRecurse(200)
+end 'yieldThenRecurse'
 
 function main() returns ExitCode
-	let pa = async childA()
-	let a = await pa
-	let pb = async childB()
-	let b = await pb
-	return (a * 10 + b) as ExitCode
+	let p = async yieldThenRecurse()
+	let r = await p
+	return r as ExitCode
 end 'main'
 ---
-ExitCode: 45
+ExitCode: 200
 ---
 data {
   __slab_cursor@0 = i64 0
@@ -35,25 +38,37 @@ data {
   __gt_proc_gts_base@112 = i64 0
 }
 
-func @childA {
+func @deepRecurse {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
-    x64.leaRegRdata rcx, [rip + __str_rec_1]
-    x64.callDirect __gt_process_run
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, base
+    x64.jmp ifcont
+  base:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.leaRegRegImm32 rcx, rcx, -1
+    x64.callDirect deepRecurse
+    x64.leaRegRegImm32 r8, r8, 1
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }
 
-func @childB {
+func @yieldThenRecurse {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
-    x64.leaRegRdata rcx, [rip + __str_rec_3]
-    x64.callDirect __gt_process_run
+    x64.movRegImm32 rcx, 1
+    x64.callDirect __gt_sleep
+    x64.movRegImm32 rcx, 200
+    x64.callDirect deepRecurse
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
@@ -63,27 +78,15 @@ func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.prologue 40
+    x64.prologue 32
     x64.movRegImm32 rcx, 48
     x64.callDirect __slab_alloc
-    x64.leaRegFunc rcx, [rip + childA]
+    x64.leaRegFunc rcx, [rip + yieldThenRecurse]
     x64.movRegReg rdx, r8
     x64.callDirect __gt_spawn
     x64.movRegReg rcx, r8
     x64.callDirect __gt_await
-    x64.movRegReg rbx, r8
-    x64.movRegImm32 rcx, 48
-    x64.callDirect __slab_alloc
-    x64.leaRegFunc rcx, [rip + childB]
-    x64.movRegReg rdx, r8
-    x64.callDirect __gt_spawn
-    x64.movRegReg rcx, r8
-    x64.callDirect __gt_await
-    x64.imulRegRegImm32 rax, rbx, 10
-    x64.leaRegRegReg r8, rax, r8
-    x64.epilogue 40
-    x64.popReg rbx
+    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }

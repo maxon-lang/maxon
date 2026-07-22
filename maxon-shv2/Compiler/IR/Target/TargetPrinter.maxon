@@ -108,7 +108,13 @@ end 'printTargetModule'
 // source): the entry stub `mrt_start` and — from Workstream R (Stage 2's 2.4) — the
 // emitted `__`-prefixed runtime (`__slab_*`, `__mm_*`, `__destruct_*`, …). Maxon
 // reserves `__` for compiler-internal names, so a user function can never collide.
-function isRuntimeFunction(name ByteArray) returns bool
+//
+// EXPORTED because it is the SAME set the P1.5-B1a′ GT stack guard EXEMPTS (X64Backend's
+// `emitFunctionChunk`): a runtime function must never trigger `__gt_morestack` — the scheduler core
+// runs the grower, and its own kernel calls are already shimmed onto the system stack (slice 1) — so
+// "which functions are compiler-emitted runtime" is one predicate, shared by the golden-skip here and
+// the guard exemption there, not two copies free to drift.
+export function isRuntimeFunction(name ByteArray) returns bool
 	return bytesStartWith(name, prefix: b"mrt_") or bytesStartWith(name, prefix: b"__")
 end 'isRuntimeFunction'
 

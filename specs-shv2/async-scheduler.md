@@ -201,10 +201,12 @@ end 'main'
 
 <!-- test: async-scheduler.await-loop-bounded -->
 <!-- targets: x64-windows -->
-A spawn/await loop reuses ONE recycled 1 MiB stack rather than committing a fresh one per spawn — so 5000
-iterations stay bounded and exit cleanly. Without the stack free-list this leaks ~1 MiB of committed memory
-per spawn (measured: 15000 spawns → 14.27 GB pre-fix vs 0.4 MB post-fix), which exhausts commit and crashes
-on a bounded-pagefile machine.
+A spawn/await loop stays bounded: each spawn commits a fresh green-thread stack and each completed thread's
+stack is RELEASED (`osFreePages`/VirtualFree) as the driver reaps it, so 5000 iterations hold at most one
+resident stack at a time and exit cleanly. (P1.5-B1a′ replaced B1a's fixed-size 1 MiB free-list with
+alloc-fresh-on-spawn + free-on-complete, because the relocating morestack makes stacks variable-sized; the
+bound is now alloc+free churn rather than a recycle. Without either, every spawn would leak its stack
+commit — invisible to the `__mm` leak gate — and exhaust commit on a bounded-pagefile machine.)
 ```maxon
 
 function noop() returns int

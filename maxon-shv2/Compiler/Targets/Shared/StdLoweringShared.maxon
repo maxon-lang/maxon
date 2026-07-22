@@ -328,6 +328,10 @@ function recordOpResultClass(op StdOp, column ValueClassColumn, calleeResultClas
 		// `osProcessExitCode`, `osWaitHandles`, `osCloseHandle`) join the range — they consume their `BOOL` via
 		// memory or ignore it, so none defines a value (`osWaitHandle`, which does, is named just above).
 		osRangePanic to osCloseHandle then break 'result'
+		// `osFreePages` (P1.5-B1a′) defines no value — it releases a page region and returns nothing (its
+		// `VirtualFree` BOOL is ignored, like `osCloseHandle`'s). It sits past `osWaitHandle` in the union, so
+		// it takes its own break arm rather than joining the range above.
+		osFreePages then break 'result'
 	end 'result'
 end 'recordOpResultClass'
 

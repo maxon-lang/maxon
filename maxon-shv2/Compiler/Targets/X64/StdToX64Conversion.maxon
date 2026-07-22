@@ -99,8 +99,19 @@ let argFpRegisters = [X64Register.xmm0, X64Register.xmm1, X64Register.xmm2, X64R
 // without committing would hand back untouched address space, and the first read of a bump slot
 // would fault rather than answer 0. The two flags travel together for that reason.
 let VirtualAllocLetOsChooseBase = 0x0
-let VirtualAllocCommitAndReserve = 0x3000  // MEM_COMMIT (0x1000) | MEM_RESERVE (0x2000)
-let VirtualAllocPageReadWrite = 0x4  // PAGE_READWRITE
+
+// EXPORTED because the hand-assembled `__gt_morestack` chunk (X64GtRuntime) makes the SAME
+// `VirtualAlloc(NULL, size, MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE)` call to grow a GT stack — one
+// spelling of the two flags, shared by the Std lowering here and the byte code there, not two copies.
+export let VirtualAllocCommitAndReserve = 0x3000  // MEM_COMMIT (0x1000) | MEM_RESERVE (0x2000)
+export let VirtualAllocPageReadWrite = 0x4  // PAGE_READWRITE
+
+// The `VirtualFree(addr, 0, MEM_RELEASE)` shape `lowerOsFreePages` and the hand-assembled `__gt_morestack`
+// chunk both emit (P1.5-B1a′). `MEM_RELEASE` releases the WHOLE reservation from its base — which is why
+// `dwSize` MUST be 0 and `osFreePages` needs no size operand. EXPORTED for the same one-spelling reason as
+// the two flags above.
+export let VirtualFreeMemRelease = 0x8000  // MEM_RELEASE
+export let VirtualFreeSizeMustBeZero = 0x0  // dwSize is 0 for a MEM_RELEASE (release the whole reservation)
 
 // `GetStdHandle(STD_OUTPUT_HANDLE)` — the handle `osWriteStdout` writes to (P1.2 wave A). The
 // parameter is a DWORD, so the 32-bit `mov` (which zero-extends) puts exactly (DWORD)-11 in ECX. The
@@ -128,6 +139,7 @@ let RangePanicExitCode = 1 as MachineWord
 // SpillSlotBytes rather than being respelled as a literal.
 let WriteFileOverlappedSlot = 0
 let WriteFileBytesWrittenSlot = 1
+
 // ⭐ THE STACK-ARGUMENT COUNT, stated ONCE. lpOverlapped (slot 0) is the ONLY word the KERNEL reads from the
 // stack — one true stack argument. lpNumberOfBytesWritten (slot 1) is an out-param the kernel WRITES through
 // the r9 pointer, so it needs a reserved scratch slot but is NOT a stack argument. The GT syscall shim copies
@@ -151,11 +163,11 @@ let WriteFileOutgoingSlots = (WriteFileStackArgWords + WriteFileScratchSlots) as
 // the system stack; deriving the reservation from the same constant keeps the shim's copy count from drifting.
 export let CreateProcessStackArgWords = 6 as MachineWord  // args 5-10, all real stack arguments
 let CreateProcessInheritHandlesSlot = 0  // arg5 bInheritHandles = FALSE
-let CreateProcessCreationFlagsSlot = 1   // arg6 dwCreationFlags = 0
-let CreateProcessEnvironmentSlot = 2     // arg7 lpEnvironment = NULL
-let CreateProcessCurrentDirSlot = 3      // arg8 lpCurrentDirectory = NULL
-let CreateProcessStartupInfoSlot = 4     // arg9 lpStartupInfo
-let CreateProcessProcInfoSlot = 5        // arg10 lpProcessInformation
+let CreateProcessCreationFlagsSlot = 1  // arg6 dwCreationFlags = 0
+let CreateProcessEnvironmentSlot = 2  // arg7 lpEnvironment = NULL
+let CreateProcessCurrentDirSlot = 3  // arg8 lpCurrentDirectory = NULL
+let CreateProcessStartupInfoSlot = 4  // arg9 lpStartupInfo
+let CreateProcessProcInfoSlot = 5  // arg10 lpProcessInformation
 let CreateProcessOutgoingSlots = CreateProcessStackArgWords
 
 // The `[rsp + disp]` displacement of a Win64 OUTGOING stack-argument slot — past the 32-byte shadow space,
@@ -199,7 +211,8 @@ function stdOpOutgoingArgBytes(op StdOp) returns StackSize
 		// like `call`. Neither reserves outgoing stack-argument space at this rung.
 		tryCall to osSleepMs gives 0
 		// The four ≤4-argument subprocess ops (spawn is named above) reserve no outgoing stack space.
-		osProcessExitCode to osWaitHandle gives 0
+		// `osFreePages`'s `VirtualFree(addr, 0, MEM_RELEASE)` is three register args, so it reserves none either.
+		osProcessExitCode to osFreePages gives 0
 	end 'o'
 end 'stdOpOutgoingArgBytes'
 
@@ -756,7 +769,7 @@ type StdToX64Lowering
 				branch to rdataAddr then break 'term'
 				// `funcAddr`/`callIndirect` are value-producing body ops, never a block terminator — a
 				// non-`condBranch` terminator fuses nothing, so like every other arm here it breaks (P1.5-A1).
-				tryCall to osWaitHandle then break 'term'
+				tryCall to osFreePages then break 'term'
 			end 'term'
 		end 'eachBlock'
 	end 'computeFusedCmps'
@@ -807,7 +820,7 @@ type StdToX64Lowering
 				// is not the compare, so the scan stops and no fusion is recorded (declining is always safe).
 				// `funcAddr` sets no flags (a `lea`), so the loop guard skips it before it reaches here — it
 				// is named rather than swallowed. (P1.5-A1)
-				tryCall to osWaitHandle then break 'isTheCompare'
+				tryCall to osFreePages then break 'isTheCompare'
 			end 'isTheCompare'
 			return
 		end 'scanBackward'
@@ -872,7 +885,7 @@ type StdToX64Lowering
 			branch to rdataAddr gives false
 			// A `funcAddr`/`callIndirect` is never a block terminator — only a `condBranch` gets a
 			// non-false answer here (P1.5-A1).
-			tryCall to osWaitHandle gives false
+			tryCall to osFreePages gives false
 		end 'term'
 	end 'terminatorReadsFusedFlags'
 
@@ -917,6 +930,8 @@ type StdToX64Lowering
 			osWaitHandles(handleArrayPtrId, countId, timeoutMsId) then self.lowerOsWaitHandles(handleArrayPtrId, countId: countId, timeoutMsId: timeoutMsId, dstBlock: dstBlock)
 			osCloseHandle(handleId) then self.lowerOsCloseHandle(handleId, dstBlock: dstBlock)
 			osWaitHandle(resultId, handleId, timeoutMsId) then self.lowerOsWaitHandle(resultId, handleId: handleId, timeoutMsId: timeoutMsId, dstBlock: dstBlock)
+			// P1.5-B1a′ relocating morestack: release a completed GT's (possibly grown) stack.
+			osFreePages(addrId) then self.lowerOsFreePages(addrId, dstBlock: dstBlock)
 		end 'lower'
 	end 'lowerBodyOp'
 
@@ -953,6 +968,7 @@ type StdToX64Lowering
 			osReadClock then panic("lowerStdToX64: an `osReadClock` op appeared as a block terminator (lowering bug — a clock read is a value-consuming body op)")
 			osSleepMs then panic("lowerStdToX64: an `osSleepMs` op appeared as a block terminator (lowering bug — an OS sleep is a body op)")
 			osProcessSpawn to osWaitHandle then panic("lowerStdToX64: a P1.5 subprocess op appeared as a block terminator (lowering bug — spawn/wait/exit-code/close are all body ops)")
+			osFreePages then panic("lowerStdToX64: an `osFreePages` op appeared as a block terminator (lowering bug — a page release is a body op)")
 		end 'lower'
 	end 'lowerTerminatorOp'
 
@@ -1669,6 +1685,30 @@ type StdToX64Lowering
 		end 'route'
 	end 'lowerOsCloseHandle'
 
+	// Lower `osFreePages(addr)` to `VirtualFree(addr, 0, MEM_RELEASE)` through the IAT — args rcx/rdx/r8, result
+	// ignored. The green-thread scheduler releases a completed GT's (possibly grown) stack here.
+	//
+	// ⭐ x64-WINDOWS ONLY, like the whole green-thread substrate: `osFreePages` is emitted ONLY inside
+	// `__gt_drive_until`, which never lowers on a non-x64-windows target (its subprocess/clock ops reject first),
+	// so a `munmap`/`memory`-shrink path here would be untested dead code no test could reach. The syscall route
+	// rejects, exactly like the five subprocess ops and the two sleep ops.
+	function lowerOsFreePages(addrId ValueId, dstBlock IrBlock)
+		match x64OsCallKind(self.target.os) 'route'
+			importCall then self.lowerOsFreePagesWin64(addrId, dstBlock: dstBlock)
+			syscall then panic("lowerOsFreePages: VirtualFree is x64-windows only — the green-thread substrate (the only `osFreePages` producer) is x64-windows-gated at this rung")
+		end 'route'
+	end 'lowerOsFreePages'
+
+	// Win64: `VirtualFree(lpAddress = addr, dwSize = 0, dwFreeType = MEM_RELEASE)`, args rcx/rdx/r8. `addr` — the
+	// ONE operand — is not live across the call (the completion path is done with the freed stack), so it moves
+	// forward soundly under the allocator's per-arg-register def liveness, exactly as `lowerOsCloseHandle`'s does.
+	function lowerOsFreePagesWin64(addrId ValueId, dstBlock IrBlock)
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(addrId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rdx), value: VirtualFreeSizeMustBeZero))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r8), value: VirtualFreeMemRelease))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.VirtualFree)))
+	end 'lowerOsFreePagesWin64'
+
 	// Lower `osWaitHandle(handle, timeoutMs)` to `WaitForSingleObject(handle, timeoutMs)` — args rcx/rdx — and
 	// CAPTURE the wait result from RAX (the one subprocess op whose result is read: `__gt_proc_check` polls with
 	// `timeoutMs = 0` and tests `== WAIT_OBJECT_0`).
@@ -2024,7 +2064,7 @@ type StdToX64Lowering
 			branch to rdataAddr gives false
 			// A `funcAddr`/`callIndirect` is never a block terminator — only a `condBranch` gets a
 			// non-false answer here (P1.5-A1).
-			tryCall to osWaitHandle gives false
+			tryCall to osFreePages gives false
 		end 'term'
 	end 'settleFloatEqualityBranch'
 
@@ -2158,7 +2198,7 @@ type StdToX64Lowering
 			branch to rdataAddr panic("condBranchFieldsOf: the terminator of block ref {blockRef} is not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			// A `funcAddr`/`callIndirect` is never a block terminator; like every non-`condBranch`
 			// arm here it cannot occur and panics (P1.5-A1).
-			tryCall to osWaitHandle panic("condBranchFieldsOf: the terminator of block ref {blockRef} is not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
+			tryCall to osFreePages panic("condBranchFieldsOf: the terminator of block ref {blockRef} is not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 		end 'term'
 	end 'condBranchFieldsOf'
 

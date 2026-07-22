@@ -103,6 +103,8 @@ function insertFrameForFunction(module TargetModule, func IrFunction)
 	let usedCallee = usedCalleeSavedRegs(module, func: func)
 	let makesCall = functionMakesCall(module, func: func)
 
+	// The SAME `computeFrameBytes` the GT stack guard reaches through `computeGuardFrameBytes` — one formula, two
+	// callers, so the guard's projected rsp and this `sub rsp, N` can never disagree.
 	let frameBytes = computeFrameBytes(func, makesCall: makesCall, pushCount: usedCallee.count())
 
 	var isFirstBlock = true
@@ -119,6 +121,16 @@ function insertFrameForFunction(module TargetModule, func IrFunction)
 		end 'returnBlock'
 	end 'eachBlock'
 end 'insertFrameForFunction'
+
+// The frame this function's prologue reserves with `sub rsp, N` — the SINGLE source of that number, so the
+// prologue pass and the GT stack guard (X64Backend's `emitFunctionChunk`, which projects rsp by exactly this
+// much) cannot derive two different frame sizes for one function. It is the `computeFrameBytes` expression
+// `insertFrameForFunction` used inline, lifted here and exported because the guard needs the same answer.
+export function computeGuardFrameBytes(module TargetModule, func IrFunction) returns StackSize
+	let makesCall = functionMakesCall(module, func: func)
+	let pushCount = usedCalleeSavedRegs(module, func: func).count()
+	return computeFrameBytes(func, makesCall: makesCall, pushCount: pushCount)
+end 'computeGuardFrameBytes'
 
 // The bytes to reserve with `sub rsp, N`.
 //   • A CALLER must leave rsp 16-byte aligned AT the call. Entry rsp ≡ 8 (mod 16) — the

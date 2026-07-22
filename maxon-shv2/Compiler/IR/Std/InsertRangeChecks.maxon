@@ -348,7 +348,7 @@ type RangeCheckEmitter
 				// (a domain conversion, a bitwise `not`) is left to the runtime path.
 				binOp then break 'c'
 				unaryOp(resultId, operand, opcode, _) then recordConstNeg(constMap, resultId: resultId, operand: operand, opcode: opcode)
-				cmp to osWaitHandle then break 'c'
+				cmp to osFreePages then break 'c'
 			end 'c'
 		end 'eachOp'
 		return constMap
@@ -412,7 +412,7 @@ function retMatchesValue(term StdOp, target ValueId) returns bool
 	return match term 'term'
 		const to branch gives false
 		ret(retValId) gives retValId == target
-		param to osWaitHandle gives false
+		param to osFreePages gives false
 	end 'term'
 end 'retMatchesValue'
 
@@ -465,6 +465,8 @@ function stdOpDefinesValue(op StdOp) returns bool
 		// consume their `BOOL` via memory or ignore it (see StdDialect's ⭐ note).
 		osWaitHandle gives true
 		osRangePanic to osCloseHandle gives false
+		// `osFreePages` (P1.5-B1a′) defines no value; it sits past `osWaitHandle` in the union, so its own arm.
+		osFreePages gives false
 	end 'd'
 end 'stdOpDefinesValue'
 
@@ -498,6 +500,8 @@ function stdOpDefinedIdOrZero(op StdOp) returns ValueId
 		// P1.5 subprocess: `osWaitHandle` defines the wait result; the other four define nothing (see above).
 		osWaitHandle(resultId, _, _) gives resultId
 		osRangePanic to osCloseHandle gives 0
+		// `osFreePages` (P1.5-B1a′) defines nothing; it sits past `osWaitHandle` in the union, so its own arm.
+		osFreePages gives 0
 	end 'r'
 end 'stdOpDefinedIdOrZero'
 

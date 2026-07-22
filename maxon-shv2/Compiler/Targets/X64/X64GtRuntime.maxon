@@ -33,6 +33,7 @@
 // argument registers. `to` rides through UNMODIFIED so a fresh GT's trampoline reads its GT from rdx.
 let GtSwitchFromReg = X64Register.rcx
 let GtSwitchToReg = X64Register.rdx
+
 // The scratch the context switch shuttles the NT_TIB stack bounds through (save `from`'s, load `to`'s). rax is
 // caller-saved and is not read across a switch by any resumed continuation, so clobbering it here is invisible.
 let GtSwitchTibScratchReg = X64Register.rax
@@ -40,7 +41,7 @@ let GtSwitchTibScratchReg = X64Register.rax
 // NT_TIB stack-bound fields in the GS segment (Win64). A kernel call probes these and faults when RSP is
 // outside `[StackLimit, StackBase)`. Both the syscall shim (repoint at the system stack for a call) and the
 // context switch (repoint at the resumed GT's stack) write them, so they are named once here.
-let TibStackBaseDisp = 0x08 as Imm32   // NT_TIB.StackBase  — gs:[0x08]
+let TibStackBaseDisp = 0x08 as Imm32  // NT_TIB.StackBase  — gs:[0x08]
 let TibStackLimitDisp = 0x10 as Imm32  // NT_TIB.StackLimit — gs:[0x10]
 
 // The NT_TIB stack bounds are a PAIR (base, limit); these two helpers spell that two-word structure ONCE for
@@ -209,8 +210,8 @@ end 'buildGtTrampolineChunk'
 let ShimPushedWordBytes = 8 as StackSize
 
 // The shim's scratch registers (see the header's register discipline). None is a Win64 argument register.
-let ShimGtReg = X64Register.r11       // currentGt in the guard, then the stack-arg copy shuttle, then reloaded post-call
-let ShimGtRspReg = X64Register.r10    // the GT's RSP across the switch (push/pop-balanced)
+let ShimGtReg = X64Register.r11  // currentGt in the guard, then the stack-arg copy shuttle, then reloaded post-call
+let ShimGtRspReg = X64Register.r10  // the GT's RSP across the switch (push/pop-balanced)
 let ShimTibScratchReg = X64Register.rcx  // post-call TIB-restore scratch; dead after the call, so rax (the result) survives
 
 // The shim's own forward-branch targets, resolved by `resolveChunkRel32Fixups` against a shim-LOCAL fixup list
@@ -329,10 +330,297 @@ function emitGtShimmedIatCall(code ByteArray, iatRelocs RelocationArray, rdataRe
 	resolveChunkRel32Fixups(code, labelOffsets: shimLabels, rel32Fixups: shimFixups)
 end 'emitGtShimmedIatCall'
 
-// Append the two hand-assembled GT chunks — called by BackendDispatch when the module spawns a green thread,
+// --- The relocating stack GROWER (P1.5-B1a′ slice 2) ---
+//
+// ⭐ THE HIGHEST-RISK PIECE IN THE LADDER: a chain-walk bug is a silent stack-corruption use-after-free. Ported
+// line-by-line from v1 `maxon-selfhosted/Compiler/Targets/X64/X64Backend.maxon:7102` (`emitX64GtMorestack`) and
+// its walk `:7226` (`emitX64GtMorestackWalkBody`), adapted to shv2's single-M model and register discipline.
+//
+// SOUNDNESS (established, do not re-derive): shv2 has NO addressable stack slots — the spiller spills VALUES
+// rsp-relative (never a stack pointer), rbp is non-allocatable and used ONLY as the saved-rbp chain link, and
+// the only address-producing ops name non-stack sections. So the ONLY stack→stack pointers are (a) the saved-rbp
+// chain links and (b) `gt.sp`/`gt.fp` in the heap GT struct; return addresses point into `.text` (unmoved).
+// ⇒ Relocation = copy the stack + rebase the live rbp + WALK the saved-rbp chain adding the relocation offset to
+// each interior link. Complete and sound — this is what frame-pointers-on-every-function was paid for. x64 does
+// NOT fix `gt.sp`/`gt.fp` (they are stale-but-overwritten on the next context switch; only arm64 would).
+//
+// ENTRY CONTRACT (from the prologue guard): r11 = the current GT, r10 = the system-stack top (both non-arg
+// scratch the guard loaded, so this chunk needs no `.data` of its own for them), rsp = the GT stack pointing at
+// the return address the guard's `call` pushed. It PRESERVES EVERY register the guarded function's incoming args
+// and caller-saved chain occupy (rax/rcx/rdx/r8/r9/rsi/rdi + rbx/rbp/r12-r15) — saved on the SYSTEM stack, so the
+// tiny GT stack the guard is protecting never holds this frame — and returns onto the RELOCATED (2x) stack.
+
+// The GPRs `__gt_morestack` saves on the system stack, in PUSH order (pop = reverse). v1's exact 13-register set
+// (`X64Backend.maxon:7113`), a SUPERSET of everything live at a shv2 prologue: the six arg registers
+// [rcx, rdx, rax, r9, rsi, rdi], the five callee-saved [rbx, r12-r15] whose CALLER values the guarded function
+// has not yet pushed, and rbp (the chain link) + r8 (harmless to save). rbp MUST be first: its saved slot is read
+// back by a fixed displacement to write the rebased live rbp (see `savedRbpDisp` in `buildGtMorestackChunk`).
+let morestackSavedGprOrder = [X64Register.rbp, X64Register.rbx, X64Register.r12, X64Register.r13, X64Register.r14, X64Register.r15, X64Register.rcx, X64Register.rdx, X64Register.r8, X64Register.r9, X64Register.rsi, X64Register.rdi, X64Register.rax]
+
+// The ferried entry-rsp word sits one machine word below the system-stack top (`[systemStackTop - 8]`), and rsp
+// is positioned there before the pushes begin.
+let MorestackFerryDisp = (0 - GtArgSlotBytes) as Imm32
+
+// The `+8 rsp` that skips the ferried entry-rsp slot after the GPR pops, before switching to the new GT stack.
+let MorestackFerrySkipBytes = GtArgSlotBytes as Imm32
+
+// The two frame-slot displacements are DERIVED from the saved-register count at build time (`morestackSavedGprOrder`
+// is a runtime array, so its `.count()` cannot appear in a top-level `let`) — see `buildGtMorestackChunk`.
+
+// The walk's own forward/backward branch targets, resolved against a WALK-LOCAL fixup list + offset map (the same
+// machinery the shim and the block assembler use), scoped so the ids never collide with anything else.
+let WalkHeadLabel = 0 as BlockId
+let WalkNextLabel = 1 as BlockId
+let WalkDoneLabel = 2 as BlockId
+
+// The guard's single forward target (its two `skip` jumps), in a GUARD-LOCAL map — never collides with the
+// enclosing function's block ids (the guard resolves against its own map before the function's blocks emit).
+let GuardSkipLabel = 0 as BlockId
+
+// The live-rbp rebase's single forward skip target (`__gt_morestack` step 7), in its OWN local map resolved
+// before the chain walk — distinct from `WalkDoneLabel` so the two label scopes never read as one.
+let RbpAdjustSkipLabel = 0 as BlockId
+
+// The registers `__gt_morestack`'s body holds its persistent values in — all callee-saved (so they are among the
+// 13 GPRs saved on the system stack) plus rax for the relocation offset, mirroring v1's assignment. Named so the
+// steps read as data flow rather than raw register letters.
+let GtMoreGtReg = X64Register.rbx  // the current GT (moved from r11 after the pushes)
+let GtMoreOldBaseReg = X64Register.r12  // old stack base
+let GtMoreOldSizeReg = X64Register.r13  // old stack size
+let GtMoreNewSizeReg = X64Register.r14  // new stack size = old * 2
+let GtMoreNewBaseReg = X64Register.r15  // new stack base (VirtualAlloc result)
+let GtMoreOffsetReg = X64Register.rax  // the relocation offset = new_top - old_top
+
+// The string-copy opcodes `__gt_morestack`'s memcpy uses — `cld` (clear DF, so `movsb` ascends), then the
+// `rep movsb` pair (F3 prefix + A4). Nothing else in shv2 emits a string op, so they live here rather than in the
+// shared opcode table.
+let OpcodeCld = 0xFC
+let OpcodeRepPrefix = 0xF3
+let OpcodeMovsb = 0xA4
+
+// `__gt_morestack` — grow the current GT's stack to 2x, copy the old stack to the TOP of the new one, rebase the
+// saved-rbp chain + the entry rsp by the relocation offset, update the GT struct + TIB, free the old stack, and
+// `ret` onto the new (larger) stack so the prologue guard that called us now passes. All of it runs on the system
+// stack (entered r10 = system-stack top), so the near-overflow GT stack never holds this frame.
+function buildGtMorestackChunk() returns FunctionCodeChunk
+	var code = ByteArray.create()
+	var iatRelocs = RelocationArray.create()
+
+	// Two frame slots are read back by fixed displacement, both DERIVED from the saved-register count so a change
+	// to `morestackSavedGprOrder` cannot leave a stale magic offset:
+	//   • the rebased LIVE rbp is written to rbp's saved slot BEFORE the shadow is released — `ShadowSpaceBytes`
+	//     above the `count-1` words below rbp (rbp is the FIRST push, so it is the top saved GPR).
+	//   • the ferried ENTRY rsp is read AFTER the shadow is released — `count` words above the post-release rsp.
+	let savedGprCount = morestackSavedGprOrder.count()
+	let savedRbpDisp = (ShadowSpaceBytes + ((savedGprCount - 1) * (GtArgSlotBytes as StackSize))) as Imm32
+	let entryRspDisp = (savedGprCount * (GtArgSlotBytes as StackSize)) as Imm32
+
+	// ⭐ 16-byte alignment at the VirtualAlloc/VirtualFree calls, enforced so a future register added to
+	// `morestackSavedGprOrder` cannot silently break it (feedback: DERIVE > CHECK > COMMENT). The ferry sets rsp to
+	// `systemStackTop - 8` (the top is 16-aligned, so rsp ≡ 8), then the GPR pushes and the 16-aligned shadow move
+	// it; rsp lands 16-aligned at the calls iff `1 ferried word + savedGprCount` GPR words is EVEN. A misalignment
+	// is a crash inside kernel32's SSE, arbitrarily far from the cause — so it is a compile-time panic here.
+	if (1 + savedGprCount) mod 2 != 0 'alignment'
+		panic("__gt_morestack misaligned: 1 ferried word + {savedGprCount} saved GPRs = {1 + savedGprCount} words; must be EVEN so rsp is 16-aligned at the VirtualAlloc/VirtualFree calls — restore the parity when changing morestackSavedGprOrder")
+	end 'alignment'
+
+	// Step 1: switch to the system stack, ferrying the GT entry rsp (rsp on entry — the guard's return-addr slot)
+	// as the top word of the system-stack frame. `[r10 - 8] = entryRsp` then `rsp = r10 - 8`. r11 = gt and
+	// r10 = systemStackTop both survive (neither the store, the lea, nor the pushes below touch them).
+	encodeStoreBaseDispReg(code, base: ShimGtRspReg, disp: MorestackFerryDisp, srcReg: X64Register.rsp)  // [r10-8] = entryRsp
+	encodeLeaRegRegImm32(code, dest: X64Register.rsp, base: ShimGtRspReg, disp: MorestackFerryDisp)  // rsp = r10 - 8
+
+	// Step 2: save the 13 GPRs, then reserve the shadow space (rsp lands 16-aligned at the calls below).
+	for reg in morestackSavedGprOrder 'push'
+		encodePushReg(code, reg: reg)
+	end 'push'
+	encodePrologue(code, stackSize: ShadowSpaceBytes)
+
+	// gt is still in r11 (nothing above clobbered it) — move it to rbx for the body, freeing r11 for the walk.
+	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: GtMoreGtReg, src: ShimGtReg, wide: true)  // rbx = gt
+
+	// Step 3: repoint the TIB at the system stack for THIS routine's own VirtualAlloc/VirtualFree (r10 =
+	// systemStackTop still). rax is free (saved on the stack) — use it for the StackLimit computation.
+	encodeMovGsAbsReg(code, disp: TibStackBaseDisp, srcReg: ShimGtRspReg)  // gs:[0x08] = systemStackTop
+	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: X64Register.rax, src: ShimGtRspReg, wide: true)
+	encodeGrp1RegImm32(code, ext: Grp1ExtSub, reg: X64Register.rax, imm: GtSystemStackSize as Imm32)
+	encodeMovGsAbsReg(code, disp: TibStackLimitDisp, srcReg: X64Register.rax)  // gs:[0x10] = systemStackTop - size
+
+	// Step 4: r12 = old_base ; r13 = old_size ; r14 = new_size = old_size * 2.
+	encodeLoadRegBaseDisp(code, destReg: GtMoreOldBaseReg, base: GtMoreGtReg, disp: GtOffStackBase as Imm32, wide: true)
+	encodeLoadRegBaseDisp(code, destReg: GtMoreOldSizeReg, base: GtMoreGtReg, disp: GtOffStackSize as Imm32, wide: true)
+	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: GtMoreNewSizeReg, src: GtMoreOldSizeReg, wide: true)
+	encodeRmRegDirect(code, opcode: OpcodeAddRmReg, dest: GtMoreNewSizeReg, src: GtMoreNewSizeReg, wide: true)  // r14 += r14
+
+	// Step 5: new_base = VirtualAlloc(NULL, new_size, MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE) ; r15 = new_base.
+	encodeRmRegDirect(code, opcode: OpcodeXorRmReg, dest: X64Register.rcx, src: X64Register.rcx, wide: true)  // lpAddress = NULL
+	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: X64Register.rdx, src: GtMoreNewSizeReg, wide: true)  // dwSize = new_size
+	encodeMovRegImm32(code, dest: X64Register.r8, value: VirtualAllocCommitAndReserve)
+	encodeMovRegImm32(code, dest: X64Register.r9, value: VirtualAllocPageReadWrite)
+	encodeIatCall(code, iatRelocs: iatRelocs, slotIndex: iatSlotIndex(IatSlot.VirtualAlloc))
+	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: GtMoreNewBaseReg, src: X64Register.rax, wide: true)  // r15 = new_base
+
+	// Step 6: memcpy old → TOP of new. rdi = new_base + new_size - old_size (dst top), rsi = old_base, rcx = old_size.
+	code.push(OpcodeCld)
+	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: X64Register.rdi, src: GtMoreNewBaseReg, wide: true)
+	encodeRmRegDirect(code, opcode: OpcodeAddRmReg, dest: X64Register.rdi, src: GtMoreNewSizeReg, wide: true)
+	encodeRmRegDirect(code, opcode: OpcodeSubRmReg, dest: X64Register.rdi, src: GtMoreOldSizeReg, wide: true)
+	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: X64Register.rsi, src: GtMoreOldBaseReg, wide: true)
+	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: X64Register.rcx, src: GtMoreOldSizeReg, wide: true)
+	code.push(OpcodeRepPrefix)
+	code.push(OpcodeMovsb)
+
+	// Step 7: offset (rax) = new_top - old_top = (r15 + r14) - (r12 + r13).
+	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: GtMoreOffsetReg, src: GtMoreNewBaseReg, wide: true)
+	encodeRmRegDirect(code, opcode: OpcodeAddRmReg, dest: GtMoreOffsetReg, src: GtMoreNewSizeReg, wide: true)
+	encodeRmRegDirect(code, opcode: OpcodeSubRmReg, dest: GtMoreOffsetReg, src: GtMoreOldSizeReg, wide: true)
+	encodeRmRegDirect(code, opcode: OpcodeSubRmReg, dest: GtMoreOffsetReg, src: GtMoreOldBaseReg, wide: true)
+
+	// Rebase the LIVE rbp iff it is inside [old_base, old_top), then write it back to its saved slot so the pop
+	// restores the relocated value. rcx = old_top for the upper-bound compare.
+	var rbpFixups = ChunkRel32FixupArray.create()
+	var rbpLabels = ChunkLabelOffsetMap.create()
+	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: X64Register.rcx, src: GtMoreOldBaseReg, wide: true)
+	encodeRmRegDirect(code, opcode: OpcodeAddRmReg, dest: X64Register.rcx, src: GtMoreOldSizeReg, wide: true)  // rcx = old_top
+	encodeRmRegDirect(code, opcode: OpcodeCmpRmReg, dest: X64Register.rbp, src: GtMoreOldBaseReg, wide: true)  // rbp - old_base
+	encodeJcc(code, rel32Fixups: rbpFixups, cond: X64CondCode.below, targetBlockId: RbpAdjustSkipLabel)  // rbp < old_base → skip
+	encodeRmRegDirect(code, opcode: OpcodeCmpRmReg, dest: X64Register.rbp, src: X64Register.rcx, wide: true)  // rbp - old_top
+	encodeJcc(code, rel32Fixups: rbpFixups, cond: X64CondCode.aboveEqual, targetBlockId: RbpAdjustSkipLabel)  // rbp >= old_top → skip
+	encodeRmRegDirect(code, opcode: OpcodeAddRmReg, dest: X64Register.rbp, src: GtMoreOffsetReg, wide: true)  // rbp += offset
+	rbpLabels.upsert(RbpAdjustSkipLabel, value: code.count())
+	resolveChunkRel32Fixups(code, labelOffsets: rbpLabels, rel32Fixups: rbpFixups)
+	encodeStoreBaseDispReg(code, base: X64Register.rsp, disp: savedRbpDisp, srcReg: X64Register.rbp)  // [rsp+rbpSlot] = rbp
+
+	// Step 8: walk the saved-rbp chain on the new stack, adjusting each interior link. rcx = walker (= rbp),
+	// r8 = new_low, r9 = new_high, rax = offset, r12 = old_base, r13 = old_size (all live for the walk body).
+	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: X64Register.rcx, src: X64Register.rbp, wide: true)
+	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: X64Register.r8, src: GtMoreNewBaseReg, wide: true)
+	encodeRmRegDirect(code, opcode: OpcodeAddRmReg, dest: X64Register.r8, src: GtMoreNewSizeReg, wide: true)
+	encodeRmRegDirect(code, opcode: OpcodeSubRmReg, dest: X64Register.r8, src: GtMoreOldSizeReg, wide: true)  // r8 = new_low
+	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: X64Register.r9, src: GtMoreNewBaseReg, wide: true)
+	encodeRmRegDirect(code, opcode: OpcodeAddRmReg, dest: X64Register.r9, src: GtMoreNewSizeReg, wide: true)  // r9 = new_high
+	emitGtMorestackChainWalk(code)
+
+	// Step 9: update the GT struct + TIB for the new stack. stackBase = r15, stackSize = r14,
+	// stackGuard = new_base + margin, tib_base = new_top, tib_limit = new_base.
+	encodeStoreBaseDispReg(code, base: GtMoreGtReg, disp: GtOffStackBase as Imm32, srcReg: GtMoreNewBaseReg)
+	encodeStoreBaseDispReg(code, base: GtMoreGtReg, disp: GtOffStackSize as Imm32, srcReg: GtMoreNewSizeReg)
+	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: X64Register.rcx, src: GtMoreNewBaseReg, wide: true)
+	encodeGrp1RegImm32(code, ext: Grp1ExtAdd, reg: X64Register.rcx, imm: GtStackGuardMargin as Imm32)  // rcx = new_base + margin
+	encodeStoreBaseDispReg(code, base: GtMoreGtReg, disp: GtOffStackGuard as Imm32, srcReg: X64Register.rcx)
+	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: X64Register.rcx, src: GtMoreNewBaseReg, wide: true)
+	encodeRmRegDirect(code, opcode: OpcodeAddRmReg, dest: X64Register.rcx, src: GtMoreNewSizeReg, wide: true)  // rcx = new_top
+	encodeStoreBaseDispReg(code, base: GtMoreGtReg, disp: GtOffTibStackBase as Imm32, srcReg: X64Register.rcx)
+	encodeStoreBaseDispReg(code, base: GtMoreGtReg, disp: GtOffTibStackLimit as Imm32, srcReg: GtMoreNewBaseReg)
+
+	// Step 10: VirtualFree(old_base, 0, MEM_RELEASE). Stash the offset in rbp across the call (rbp's live value is
+	// already saved at its stack slot, so the register is free scratch), restore it to rax afterwards. The TIB
+	// still describes the system stack (set in step 3) and rsp is still on it, so this kernel call is consistent.
+	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: X64Register.rbp, src: GtMoreOffsetReg, wide: true)  // rbp = offset (stash)
+	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: X64Register.rcx, src: GtMoreOldBaseReg, wide: true)  // lpAddress = old_base
+	encodeMovRegImm32(code, dest: X64Register.rdx, value: VirtualFreeSizeMustBeZero)  // dwSize = 0
+	encodeMovRegImm32(code, dest: X64Register.r8, value: VirtualFreeMemRelease)  // dwFreeType = MEM_RELEASE
+	encodeIatCall(code, iatRelocs: iatRelocs, slotIndex: iatSlotIndex(IatSlot.VirtualFree))
+	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: GtMoreOffsetReg, src: X64Register.rbp, wide: true)  // rax = offset (restore)
+
+	// Step 11: set the TIB to the NEW GT-stack bounds (reuse the slice-1 helper, reading the struct fields step 9
+	// wrote) BEFORE we pop rbx=gt. rcx is free scratch. After this, gs:[] describes the stack we return onto.
+	emitLoadTibFromGt(code, gtReg: GtMoreGtReg, scratch: X64Register.rcx)
+
+	// Step 12: tear down + return onto the RELOCATED GT stack. new GT rsp = entry rsp (ferried) + offset.
+	encodeEpilogue(code, stackSize: ShadowSpaceBytes)  // add rsp, shadow
+	encodeLoadRegBaseDisp(code, destReg: ShimGtRspReg, base: X64Register.rsp, disp: entryRspDisp, wide: true)  // r10 = entryRsp
+	encodeRmRegDirect(code, opcode: OpcodeAddRmReg, dest: ShimGtRspReg, src: GtMoreOffsetReg, wide: true)  // r10 += offset
+	for i in 0 upto morestackSavedGprOrder.count() 'pop'
+		let reg = try morestackSavedGprOrder.get(morestackSavedGprOrder.count() - 1 - i) otherwise panic("buildGtMorestackChunk: pop index derived from count is in range")
+		encodePopReg(code, reg: reg)
+	end 'pop'
+	encodeGrp1RegImm32(code, ext: Grp1ExtAdd, reg: X64Register.rsp, imm: MorestackFerrySkipBytes)  // add rsp, 8 (skip ferried slot)
+	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: X64Register.rsp, src: ShimGtRspReg, wide: true)  // rsp = relocated GT rsp
+	code.push(OpcodeRet)  // ret into the copied return address, now on the new stack
+
+	return FunctionCodeChunk.createWith(GtMorestackName, code: code, callFixups: CallFixupArray.create(), rdataRelocs: RdataRelocationArray.create(), iatRelocs: iatRelocs, rdataConstants: GlobalDataTable.create())
+end 'buildGtMorestackChunk'
+
+// The saved-rbp chain walk (P1.5-B1a′), ported from v1 `emitX64GtMorestackWalkBody` (:7226). Entered with
+// rcx = walker (the rebased live rbp), r8 = new_low, r9 = new_high, rax = offset, r12 = old_base, r13 = old_size;
+// clobbers rcx (walker) and r10/r11 (temps). For each frame whose rbp slot is in [old_base, old_top), it adds the
+// relocation offset — so `[rbp]` links that pointed into the OLD stack now point into the copied NEW stack — then
+// follows the (now-adjusted) link to the next frame. Terminates when the walker leaves [new_low, new_high) or hits
+// a null/foreign saved rbp (the trampoline boundary, whose rbp is 0). This is the correctness crux; the branch
+// targets resolve against a WALK-LOCAL fixup list so they never collide with the enclosing chunk's ids.
+function emitGtMorestackChainWalk(code ByteArray)
+	var walkFixups = ChunkRel32FixupArray.create()
+	var walkLabels = ChunkLabelOffsetMap.create()
+
+	// L_head: stop if the walker is null or outside the new stack; else load the saved rbp at [walker].
+	walkLabels.upsert(WalkHeadLabel, value: code.count())
+	encodeRmRegDirect(code, opcode: OpcodeTestRmReg, dest: X64Register.rcx, src: X64Register.rcx, wide: true)
+	encodeJcc(code, rel32Fixups: walkFixups, cond: X64CondCode.equal, targetBlockId: WalkDoneLabel)  // jz done
+	encodeRmRegDirect(code, opcode: OpcodeCmpRmReg, dest: X64Register.rcx, src: X64Register.r8, wide: true)  // walker - new_low
+	encodeJcc(code, rel32Fixups: walkFixups, cond: X64CondCode.below, targetBlockId: WalkDoneLabel)  // jb done
+	encodeRmRegDirect(code, opcode: OpcodeCmpRmReg, dest: X64Register.rcx, src: X64Register.r9, wide: true)  // walker - new_high
+	encodeJcc(code, rel32Fixups: walkFixups, cond: X64CondCode.aboveEqual, targetBlockId: WalkDoneLabel)  // jae done
+	encodeLoadRegBaseDisp(code, destReg: X64Register.r11, base: X64Register.rcx, disp: 0, wide: true)  // r11 = saved_rbp = [walker]
+
+	// Adjust the saved rbp iff it points into [old_base, old_top); else leave it (a foreign/boundary link).
+	encodeRmRegDirect(code, opcode: OpcodeCmpRmReg, dest: X64Register.r11, src: GtMoreOldBaseReg, wide: true)  // saved - old_base
+	encodeJcc(code, rel32Fixups: walkFixups, cond: X64CondCode.below, targetBlockId: WalkNextLabel)  // jb next (below old_base)
+	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: X64Register.r10, src: GtMoreOldBaseReg, wide: true)
+	encodeRmRegDirect(code, opcode: OpcodeAddRmReg, dest: X64Register.r10, src: GtMoreOldSizeReg, wide: true)  // r10 = old_top
+	encodeRmRegDirect(code, opcode: OpcodeCmpRmReg, dest: X64Register.r11, src: X64Register.r10, wide: true)  // saved - old_top
+	encodeJcc(code, rel32Fixups: walkFixups, cond: X64CondCode.aboveEqual, targetBlockId: WalkNextLabel)  // jae next (>= old_top)
+	encodeRmRegDirect(code, opcode: OpcodeAddRmReg, dest: X64Register.r11, src: GtMoreOffsetReg, wide: true)  // saved += offset
+	encodeStoreBaseDispReg(code, base: X64Register.rcx, disp: 0, srcReg: X64Register.r11)  // [walker] = adjusted saved
+
+	// L_next: advance to the next frame via the (possibly adjusted) link, then loop.
+	walkLabels.upsert(WalkNextLabel, value: code.count())
+	encodeLoadRegBaseDisp(code, destReg: X64Register.rcx, base: X64Register.rcx, disp: 0, wide: true)  // walker = [walker]
+	encodeJmp(code, rel32Fixups: walkFixups, targetBlockId: WalkHeadLabel)  // jmp head
+
+	// L_done.
+	walkLabels.upsert(WalkDoneLabel, value: code.count())
+	resolveChunkRel32Fixups(code, labelOffsets: walkLabels, rel32Fixups: walkFixups)
+end 'emitGtMorestackChainWalk'
+
+// The prologue stack GUARD (P1.5-B1a′), ported from v1 `emitX64GtStackGuard` (:7286). Emitted by X64Backend at the
+// very START of a guarded function's entry block — BEFORE `push rbp` — iff the module carries the GT scheduler,
+// the function is NOT a runtime (`__`/`mrt_`) function, and it reserves a frame. When the running GT's projected
+// rsp would dip below its stack guard, it calls `__gt_morestack` to grow+relocate first; otherwise it is a handful
+// of instructions that fall through. A no-op for GT0/main (stackGuard 0 ⇒ `jae` always taken) and off a GT
+// entirely (currentGt 0 ⇒ `jz` taken). Clobbers ONLY r10/r11 (volatile, non-arg), so the incoming argument
+// registers (rcx/rdx/rax/r9/rsi/rdi) are untouched, and `__gt_morestack` preserves everything.
+export function emitGtStackGuard(code ByteArray, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, frameBytes StackSize)
+	var guardFixups = ChunkRel32FixupArray.create()
+	var guardLabels = ChunkLabelOffsetMap.create()
+
+	// r11 = currentGt ; no scheduler yet (0) → skip.
+	encodeLeaRegGlobal(code, rdataRelocs: rdataRelocs, dest: ShimGtReg, label: GtCurrentGtLabel)
+	encodeLoadRegBaseDisp(code, destReg: ShimGtReg, base: ShimGtReg, disp: 0, wide: true)
+	encodeRmRegDirect(code, opcode: OpcodeTestRmReg, dest: ShimGtReg, src: ShimGtReg, wide: true)
+	encodeJcc(code, rel32Fixups: guardFixups, cond: X64CondCode.equal, targetBlockId: GuardSkipLabel)
+
+	// projectedRsp (r10) = rsp - (frameBytes + margin) ; enough room (>= stackGuard) → skip.
+	encodeRmRegDirect(code, opcode: OpcodeMovRmReg, dest: ShimGtRspReg, src: X64Register.rsp, wide: true)
+	encodeGrp1RegImm32(code, ext: Grp1ExtSub, reg: ShimGtRspReg, imm: (frameBytes + (GtStackGuardMargin as StackSize)) as Imm32)
+	encodeCmpRegBaseDisp(code, destReg: ShimGtRspReg, base: ShimGtReg, disp: GtOffStackGuard as Imm32)  // projected - stackGuard
+	encodeJcc(code, rel32Fixups: guardFixups, cond: X64CondCode.aboveEqual, targetBlockId: GuardSkipLabel)
+
+	// Cold path: r10 = system-stack top (the scratch stack __gt_morestack runs on), then grow.
+	encodeLeaRegGlobal(code, rdataRelocs: rdataRelocs, dest: ShimGtRspReg, label: GtSystemStackTopLabel)
+	encodeLoadRegBaseDisp(code, destReg: ShimGtRspReg, base: ShimGtRspReg, disp: 0, wide: true)
+	encodeCallDirect(code, callFixups: callFixups, targetName: GtMorestackName)
+
+	// skip:
+	guardLabels.upsert(GuardSkipLabel, value: code.count())
+	resolveChunkRel32Fixups(code, labelOffsets: guardLabels, rel32Fixups: guardFixups)
+end 'emitGtStackGuard'
+
+// Append the three hand-assembled GT chunks — called by BackendDispatch when the module spawns a green thread,
 // alongside `appendX64RuntimeChunks` for the panic runtime. They lay out above user code like every other
 // runtime chunk, so `mrt_start` stays at `.text` offset 0.
 export function appendX64GtRuntimeChunks(chunks FunctionCodeChunkArray)
 	chunks.push(buildGtContextSwitchChunk())
 	chunks.push(buildGtTrampolineChunk())
+	chunks.push(buildGtMorestackChunk())
 end 'appendX64GtRuntimeChunks'

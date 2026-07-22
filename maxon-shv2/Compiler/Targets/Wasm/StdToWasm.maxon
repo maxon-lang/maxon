@@ -416,7 +416,7 @@ function internIndirectCallTypeFor(op StdOp, map IndirectCallTypeIdxMap, builder
 	match op 'k'
 		const to funcAddr then break 'k'
 		callIndirect(_, _, args) then internIndirectCallType(map, builder: builder, argCount: args.count())
-		osRangePanic to osWaitHandle then break 'k'
+		osRangePanic to osFreePages then break 'k'
 	end 'k'
 end 'internIndirectCallTypeFor'
 
@@ -683,7 +683,7 @@ function recordDefValtype(op StdOp, valtypes WasmValTypeArray, depResult ValueId
 		// function value — unlike a `globalAddr`/`rdataAddr`, an i32 address consumed in place.
 		funcAddr(resultId, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
 		callIndirect(resultId, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
-		osRangePanic to osWaitHandle then break 'def'
+		osRangePanic to osFreePages then break 'def'
 	end 'def'
 end 'recordDefValtype'
 
@@ -912,7 +912,7 @@ type WasmFuncEmitter
 			// mirror of the `call`/`tryCall` arms above (P1.5-A1).
 			funcAddr then panic("emitStraightLineTerminator: a `funcAddr` is a value-producing body op, never a terminator")
 			callIndirect then panic("emitStraightLineTerminator: a `callIndirect` is a value-producing body op, never a terminator")
-			osRangePanic to osWaitHandle then panic("emitStraightLineTerminator: an `osRangePanic` is a body op, never a terminator")
+			osRangePanic to osFreePages then panic("emitStraightLineTerminator: an `osRangePanic` is a body op, never a terminator")
 		end 'term'
 	end 'emitStraightLineTerminator'
 
@@ -980,7 +980,7 @@ type WasmFuncEmitter
 			// mirror of the `call`/`tryCall` arms above (P1.5-A1).
 			funcAddr then panic("emitDispatcherTerminator: a `funcAddr` is a value-producing body op, never a terminator")
 			callIndirect then panic("emitDispatcherTerminator: a `callIndirect` is a value-producing body op, never a terminator")
-			osRangePanic to osWaitHandle then panic("emitDispatcherTerminator: an `osRangePanic` is a body op, never a terminator")
+			osRangePanic to osFreePages then panic("emitDispatcherTerminator: an `osRangePanic` is a body op, never a terminator")
 		end 'term'
 	end 'emitDispatcherTerminator'
 
@@ -1031,6 +1031,10 @@ type WasmFuncEmitter
 			// P1.5 subprocess: CreateProcessA and the wait/handle imports are x64-windows only, and an
 			// `async runProcess` program is spec-gated to x64-windows, so none reaches the wasm emitter.
 			osProcessSpawn to osWaitHandle then panic("emitBodyOp: the P1.5 subprocess ops are x64-windows only — the green-thread subprocess substrate is x64-windows-gated at this rung")
+			// P1.5-B1a′ `osFreePages` (the relocating morestack's page release) is x64-windows only — it is emitted
+			// ONLY inside the x64-windows-gated green-thread substrate, so it never reaches the wasm emitter; and
+			// wasm linear memory cannot be shrunk anyway (`memory.grow` only grows).
+			osFreePages then panic("emitBodyOp: `osFreePages` is x64-windows only (and wasm linear memory cannot shrink) — the green-thread substrate is x64-windows-gated at this rung")
 		end 'body'
 	end 'emitBodyOp'
 
@@ -1887,7 +1891,7 @@ function decideDispatcher(module StdModule, func IrFunction) returns bool
 		// invariant `tryCall`/`osExit` assert (P1.5-A1).
 		funcAddr then panic("decideDispatcher: a `funcAddr` is a value-producing body op, never a terminator")
 		callIndirect then panic("decideDispatcher: a `callIndirect` is a value-producing body op, never a terminator")
-		osRangePanic to osWaitHandle then panic("decideDispatcher: an `osRangePanic` is a body op, never a terminator")
+		osRangePanic to osFreePages then panic("decideDispatcher: an `osRangePanic` is a body op, never a terminator")
 	end 'k'
 	return false
 end 'decideDispatcher'
