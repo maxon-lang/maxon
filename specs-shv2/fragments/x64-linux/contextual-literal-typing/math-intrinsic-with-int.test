@@ -1,0 +1,20 @@
+// Test: math-intrinsic-with-int
+function main() returns ExitCode
+	let x = 16
+	let result = sqrt(x)
+	return trunc(result)
+end 'main'
+---
+ExitCode: 4
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 rax, 16
+    x64.cvtsi2sdRegReg xmm0, rax
+    x64.sqrtsdRegReg xmm0, xmm0
+    x64.cvttsd2siRegReg r8, xmm0
+    x64.popReg rbp
+    x64.ret
+}

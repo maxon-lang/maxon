@@ -97,9 +97,16 @@ type RangeCheckEmitter
 	var module as StdModule
 	var func as IrFunction
 	var nextId as ValueId
+	// The function's compile-time constants, PARTITIONED BY DOMAIN: an integer `const`'s payload is a
+	// number, a float `const`'s is an IEEE-754 bit pattern, and the two must never be read as each
+	// other. Filled by `collectConsts` at the top of `run`; a site consults the map that matches its
+	// alias's domain, so a domain mismatch simply is not a literal and falls through to the runtime
+	// guard (which is also what the bootstrap does — see `needsRuntimeGuard`).
+	var intConsts as ConstValueMap
+	var floatConsts as ConstValueMap
 
 	static function create(project Project, module StdModule, func IrFunction) returns RangeCheckEmitter
-		return Self{project: project, module: module, func: func, nextId: nextFreeValueId(module, func: func)}
+		return Self{project: project, module: module, func: func, nextId: nextFreeValueId(module, func: func), intConsts: ConstValueMap.create(), floatConsts: ConstValueMap.create()}
 	end 'create'
 
 	// A fresh ValueId for a guard op. The colored register file / dense value columns downstream grow to
@@ -116,66 +123,75 @@ type RangeCheckEmitter
 	// have moved a `ret` terminator). The literal/const map is built ONCE over the original ops — the
 	// values a site checks are original, never the guard consts this pass appends afterward.
 	function run(checks FunctionRangeChecks)
-		let constMap = self.buildConstMap()
+		self.collectConsts()
 		for site in checks.castSites 'eachCast'
-			self.processCastSite(site, filePath: checks.filePath, constMap: constMap)
+			self.processCastSite(site, filePath: checks.filePath)
 		end 'eachCast'
 		if not checks.returnAliasName.isEmpty() 'rangedReturn'
-			self.processReturnSites(checks.returnAliasName, sites: checks.returnSites, filePath: checks.filePath, constMap: constMap)
+			self.processReturnSites(checks.returnAliasName, sites: checks.returnSites, filePath: checks.filePath)
 		end 'rangedReturn'
 	end 'run'
 
 	// ---- cast sites ----
 
-	function processCastSite(site RangeCheckCastSite, filePath FilePath, constMap ConstValueMap)
+	function processCastSite(site RangeCheckCastSite, filePath FilePath)
 		match self.boundsOf(site.aliasName) 'bounds'
 			none then return
-			some(alias) then self.guardCast(site, alias: alias, filePath: filePath, constMap: constMap)
+			some(alias) then self.guardCast(site, alias: alias, filePath: filePath)
 		end 'bounds'
 	end 'processCastSite'
 
-	function guardCast(site RangeCheckCastSite, alias RangedTypeAlias, filePath FilePath, constMap ConstValueMap)
-		if not self.needsRuntimeGuard(site.value, alias: alias, aliasName: site.aliasName, line: site.line, column: site.column, filePath: filePath, constMap: constMap) 'noGuard'
+	function guardCast(site RangeCheckCastSite, alias RangedTypeAlias, filePath FilePath)
+		if not self.needsRuntimeGuard(site.value, alias: alias, aliasName: site.aliasName, line: site.line, column: site.column, filePath: filePath) 'noGuard'
 			return
 		end 'noGuard'
-		self.emitGuardAt(self.castGuardSite(site), value: site.value, low: alias.low, high: alias.high, message: self.rangeCheckMessage(filePath, line: site.line, aliasName: site.aliasName))
+		self.emitGuardAt(self.castGuardSite(site), value: site.value, alias: alias, message: self.rangeCheckMessage(filePath, line: site.line, aliasName: site.aliasName))
 	end 'guardCast'
 
 	// ---- return sites ----
 
-	function processReturnSites(returnAliasName ByteArray, sites RangeCheckReturnSiteArray, filePath FilePath, constMap ConstValueMap)
+	function processReturnSites(returnAliasName ByteArray, sites RangeCheckReturnSiteArray, filePath FilePath)
 		match self.boundsOf(returnAliasName) 'bounds'
 			none then return
-			some(alias) then self.guardReturns(alias, aliasName: returnAliasName, sites: sites, filePath: filePath, constMap: constMap)
+			some(alias) then self.guardReturns(alias, aliasName: returnAliasName, sites: sites, filePath: filePath)
 		end 'bounds'
 	end 'processReturnSites'
 
-	function guardReturns(alias RangedTypeAlias, aliasName ByteArray, sites RangeCheckReturnSiteArray, filePath FilePath, constMap ConstValueMap)
+	function guardReturns(alias RangedTypeAlias, aliasName ByteArray, sites RangeCheckReturnSiteArray, filePath FilePath)
 		for site in sites 'eachSite'
-			if not self.needsRuntimeGuard(site.value, alias: alias, aliasName: aliasName, line: site.line, column: site.column, filePath: filePath, constMap: constMap) 'noGuard'
+			if not self.needsRuntimeGuard(site.value, alias: alias, aliasName: aliasName, line: site.line, column: site.column, filePath: filePath) 'noGuard'
 				continue
 			end 'noGuard'
 			match self.findRetBlock(site.value) 'ret'
 				notFound then break 'ret'
-				found(retBlock) then self.emitGuardAt(GuardSite.create(retBlock, position: retBlock.opRefs.count()), value: site.value, low: alias.low, high: alias.high, message: self.rangeCheckMessage(filePath, line: site.line, aliasName: aliasName))
+				found(retBlock) then self.emitGuardAt(GuardSite.create(retBlock, position: retBlock.opRefs.count()), value: site.value, alias: alias, message: self.rangeCheckMessage(filePath, line: site.line, aliasName: aliasName))
 			end 'ret'
 		end 'eachSite'
 	end 'guardReturns'
 
 	// ---- the shared decision ----
 
-	// Whether a site needs a RUNTIME guard. A full-range alias never does; a literal never does (its
-	// out-of-range use is reported here as a compile-time E3005, its in-range use needs no code); a
-	// non-literal into a non-full range does.
-	function needsRuntimeGuard(value ValueId, alias RangedTypeAlias, aliasName ByteArray, line LineNumber, column ColumnNumber, filePath FilePath, constMap ConstValueMap) returns bool
-		if rangeIsFullI64(alias.low, high: alias.high) 'full'
+	// Whether a site needs a RUNTIME guard. A full-range alias never does; a literal of the alias's OWN
+	// domain never does (its out-of-range use is reported here as a compile-time E3005, its in-range use
+	// needs no code); everything else does.
+	//
+	// ⚠ THE DOMAIN TEST IS PART OF THE LITERAL TEST, not decoration. `collectConsts` records every
+	// `const`'s payload with no regard for its type, and a FLOAT const's payload is an IEEE-754 bit
+	// pattern — so a float const reaching an integer alias (or the reverse) would be compared as a
+	// number it is not. Falling through to the runtime guard for a domain mismatch is also what the
+	// bootstrap does: `ValidateAndEmitRangeCheck` compile-time-checks a float ranged type only against a
+	// FLOAT literal and emits a runtime check otherwise.
+	function needsRuntimeGuard(value ValueId, alias RangedTypeAlias, aliasName ByteArray, line LineNumber, column ColumnNumber, filePath FilePath) returns bool
+		let isFloat = aliasIsFloat(alias)
+		if rangeIsFull(alias.low, high: alias.high, isFloat: isFloat) 'full'
 			return false
 		end 'full'
 
-		if constMap.contains(value) 'literal'
-			let v = constMap.constantOf(value)
-			if not literalInRange(v, low: alias.low, high: alias.high) 'outOfRange'
-				reportPositioned(self.project, code: ErrorCode.typeMismatch, message: literalOutOfRangeMessage(v, aliasName: String.from(aliasName), low: alias.low, high: alias.high), line: line, column: column, filePath: filePath)
+		let literals = self.floatConsts if isFloat else self.intConsts
+		if literals.contains(value) 'literal'
+			let v = literals.constantOf(value)
+			if not literalInRange(v, low: alias.low, high: alias.high, isFloat: isFloat) 'outOfRange'
+				reportPositioned(self.project, code: ErrorCode.typeMismatch, message: literalOutOfRangeMessage(v, aliasName: String.from(aliasName), low: alias.low, high: alias.high, isFloat: isFloat), line: line, column: column, filePath: filePath)
 			end 'outOfRange'
 			return false
 		end 'literal'
@@ -184,8 +200,9 @@ type RangeCheckEmitter
 	end 'needsRuntimeGuard'
 
 	// Split the site's block, emit the panic block, and thread the compare cascade between them.
-	function emitGuardAt(site GuardSite, value ValueId, low ParsedInt, high ParsedInt, message ByteArray)
-		let checks = boundChecks(low, high: high)
+	function emitGuardAt(site GuardSite, value ValueId, alias RangedTypeAlias, message ByteArray)
+		let isFloat = aliasIsFloat(alias)
+		let checks = boundChecks(alias.low, high: alias.high, isFloat: isFloat)
 		if checks.isEmpty() 'noBoundNeeded'
 			// Both bounds elide (a signed range whose only stored bound is a negative upper) — nothing to
 			// guard. Matches the bootstrap's both-elided path, which returns the value unchecked.
@@ -194,7 +211,7 @@ type RangeCheckEmitter
 
 		let ok = self.splitBlock(site.block, position: site.position)
 		let panicBlock = self.emitPanicBlock(message)
-		self.emitCascade(site.block, value: value, checks: checks, panicId: panicBlock.id, okId: ok.id)
+		self.emitCascade(site.block, value: value, checks: checks, panicId: panicBlock.id, okId: ok.id, isFloat: isFloat)
 	end 'emitGuardAt'
 
 	// Split `head` at `position`: ops before it stay in `head`; ops from it on, plus `head`'s
@@ -262,15 +279,20 @@ type RangeCheckEmitter
 	// out-of-range check and `okId` for an in-range one (see `RangeCheckEdge`); the FALSE edge falls
 	// through to the next check, or to `okId` for the last one. The `const` is left as a register
 	// operand — `foldConstOperands`, which runs after this pass, folds it into the `cmp`'s immediate.
-	function emitCascade(head IrBlock, value ValueId, checks RangeBoundCheckArray, panicId BlockId, okId BlockId)
+	function emitCascade(head IrBlock, value ValueId, checks RangeBoundCheckArray, panicId BlockId, okId BlockId, isFloat bool)
+		// A float alias's bounds are f64 bit patterns and its guarded value lives in an XMM register, so
+		// BOTH the materialized bound and the compare carry the f64 type. `foldConstOperands` refuses to
+		// fold a float compare's operand into an immediate (there is no SSE immediate form), so the
+		// `const` correctly stays a register operand here where an integer one would be folded away.
+		let operandType = StdType.f64 if isFloat else StdType.i64
 		var current = head
 		let lastIndex = checks.count() - 1
 		for i in 0 upto checks.count() 'eachCheck'
 			let check = try checks.get(i) otherwise panic("emitCascade: checks.get OOB at {i}")
 			let boundId = self.mintId()
-			self.module.appendOp(current, op: StdOp.const(boundId, value: check.bound, valueType: StdType.i64))
+			self.module.appendOp(current, op: StdOp.const(boundId, value: check.bound, valueType: operandType))
 			let condId = self.mintId()
-			self.module.appendOp(current, op: StdOp.cmp(condId, lhs: value, rhs: boundId, pred: check.pred, operandType: StdType.i64))
+			self.module.appendOp(current, op: StdOp.cmp(condId, lhs: value, rhs: boundId, pred: check.pred, operandType: operandType))
 
 			let trueTarget = okId if check.onTrue == RangeCheckEdge.inRange else panicId
 			if i == lastIndex 'lastCheck'
@@ -334,25 +356,37 @@ type RangeCheckEmitter
 
 	// Map each `const` result value id to its constant — the literals whose out-of-range use is the
 	// compile-time E3005 and whose in-range use needs no runtime code. Built once per function over the
-	// pre-guard ops.
-	function buildConstMap() returns ConstValueMap
-		var constMap = ConstValueMap.create()
+	// pre-guard ops, and PARTITIONED BY THE CONST'S OWN TYPE (see the `intConsts`/`floatConsts` fields):
+	// the payloads are numbers on one side and IEEE-754 bit patterns on the other, and nothing
+	// downstream could tell them apart from the payload alone.
+	function collectConsts()
 		for opIdx in self.module.liveOpIndices(self.func) 'eachOp'
-			let op = try self.module.ops.get(opIdx) otherwise panic("buildConstMap: live op index {opIdx} not in module.ops")
+			let op = try self.module.ops.get(opIdx) otherwise panic("collectConsts: live op index {opIdx} not in module.ops")
 			match op 'c'
-				const(resultId, value, _) then constMap.upsert(resultId, value: value)
-				// A NEGATED literal (`-5 as Positive`) survives lowering as `unaryOp neg` over a `const`, not
-				// a folded `const`, so the E3005 literal check would miss it and emit a runtime guard where the
-				// spec expects a COMPILE error. Fold it here — the `const` operand is already recorded (it is
-				// emitted before the `neg`, and ops are walked in order). Only `neg` folds; every other unary
-				// (a domain conversion, a bitwise `not`) is left to the runtime path.
+				const(resultId, value, valueType) then self.recordConst(resultId, value: value, valueType: valueType)
+				// A NEGATED INTEGER literal (`-5 as Positive`) survives lowering as `unaryOp neg` over a
+				// `const`, not a folded `const`, so the E3005 literal check would miss it and emit a runtime
+				// guard where the spec expects a COMPILE error. Fold it here — the `const` operand is already
+				// recorded (it is emitted before the `neg`, and ops are walked in order). Only `neg` folds;
+				// every other unary (a domain conversion, a bitwise `not`) is left to the runtime path.
+				//
+				// A negated FLOAT literal needs nothing here: the parser folds `-<float literal>` into a
+				// single literal carrying the sign-flipped bits (`parseNegatedNumericLiteral`), so it arrives
+				// as a plain `const` — and `neg` is the INTEGER negate, which is why this stays int-only.
 				binOp then break 'c'
-				unaryOp(resultId, operand, opcode, _) then recordConstNeg(constMap, resultId: resultId, operand: operand, opcode: opcode)
+				unaryOp(resultId, operand, opcode, _) then recordConstNeg(self.intConsts, resultId: resultId, operand: operand, opcode: opcode)
 				cmp to osFreePages then break 'c'
 			end 'c'
 		end 'eachOp'
-		return constMap
-	end 'buildConstMap'
+	end 'collectConsts'
+
+	function recordConst(resultId ValueId, value ParsedInt, valueType StdType)
+		if stdTypeIsFloat(valueType) 'float'
+			self.floatConsts.upsert(resultId, value: value)
+			return
+		end 'float'
+		self.intConsts.upsert(resultId, value: value)
+	end 'recordConst'
 end 'RangeCheckEmitter'
 
 // The result of a ranged-alias lookup — a bounds struct or "not a checkable range".
@@ -370,7 +404,7 @@ let SignBoundary = 0 as ParsedInt
 // on both sides in signed space — which only the full-range case reaches before this (elided
 // earlier), or a signed range with a negative upper (matched to the bootstrap's both-elided path).
 // See TypeRules' `rangeNeedsLowerCheck` / `rangeNeedsUpperCheck`.
-function boundChecks(low ParsedInt, high ParsedInt) returns RangeBoundCheckArray
+function boundChecks(low ParsedInt, high ParsedInt, isFloat bool) returns RangeBoundCheckArray
 	var checks = RangeBoundCheckArray.create()
 
 	// ⭐ THE UNSIGNED-MAX UPPER SHAPE — `int(N to u64.max)` over a non-negative low bound. Signed
@@ -378,18 +412,30 @@ function boundChecks(low ParsedInt, high ParsedInt) returns RangeBoundCheckArray
 	// value < low`: a negative (bit-63-set) value is a huge unsigned IN range, a non-negative value
 	// below `low` is out. The cascade is `value < 0 → in range` then `value < low → panic`, which the
 	// backend fuses to `cmp value,0; jl ok; cmp value,low; jl panic; jmp ok`. The full-unsigned
-	// `int(0 to u64.max)` (low == 0) never reaches here — `rangeIsFullI64` elides it in
+	// `int(0 to u64.max)` (low == 0) never reaches here — `rangeIsFull` elides it in
 	// `needsRuntimeGuard` — so the only shape this arm serves is a POSITIVE low bound.
-	if rangeIsUnsignedMaxUpper(low, high: high) 'unsignedMaxUpper'
+	//
+	// ⚠ A FLOAT IS NEVER ELIGIBLE, and this is v1's one behavioural divergence worth carrying over
+	// verbatim (InsertRangeChecks.maxon:141, `and not typeInfo.isFloat`). The shape reinterprets a
+	// signed bound as an unsigned one; IEEE-754 ordering is sign-and-magnitude and matches neither,
+	// so a float bound whose pattern happens to equal -1 (which is a NaN, not `u64.max`) must take
+	// the ordinary two-bound path.
+	if not isFloat and rangeIsUnsignedMaxUpper(low, high: high) 'unsignedMaxUpper'
 		checks.push(RangeBoundCheck.createInRange(StdCmpPred.lt, bound: SignBoundary))
 		checks.push(RangeBoundCheck.create(StdCmpPred.lt, bound: low))
 		return checks
 	end 'unsignedMaxUpper'
 
-	if rangeNeedsLowerCheck(low) 'lower'
+	// ⚠ A NaN PASSES a float guard, and that is the MEASURED behaviour of both compilers rather than an
+	// oversight here. `lt`/`gt` lower to the NaN-correct SWAPPED `ucomisd`+`ja` form, which answers
+	// FALSE for an unordered compare — so neither bound fires and the value is admitted. The bootstrap
+	// admits it too: `sqrt(-1.0) as Pct` runs to completion under both, verified by running. Rejecting a
+	// NaN would need a check whose FALSE edge is the panic (`value >= low` failing on unordered), which
+	// the cascade deliberately does not have, and would DIVERGE from the oracle.
+	if rangeNeedsLowerCheck(low, isFloat: isFloat) 'lower'
 		checks.push(RangeBoundCheck.create(StdCmpPred.lt, bound: low))
 	end 'lower'
-	if rangeNeedsUpperCheck(high) 'upper'
+	if rangeNeedsUpperCheck(high, isFloat: isFloat) 'upper'
 		checks.push(RangeBoundCheck.create(StdCmpPred.gt, bound: high))
 	end 'upper'
 	return checks
@@ -524,5 +570,5 @@ end 'lastSegment'
 // to the literal it materializes, so a cast/return of a literal is a compile-time decision (E3005 or
 // nothing) rather than a runtime guard. It was a byte-identical private copy here (`RangeConstMap`);
 // it is now the ONE exported container both Std passes share. Only the POPULATE walk stays this pass's
-// own — `buildConstMap`, which additionally folds a `neg` of a `const` (`recordConstNeg`) that
-// FoldConstOperands has no reason to.
+// own — `collectConsts`, which keeps ONE MAP PER DOMAIN (a float payload is a bit pattern) and
+// additionally folds a `neg` of a `const` (`recordConstNeg`) that FoldConstOperands has no reason to.

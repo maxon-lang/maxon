@@ -1,0 +1,53 @@
+// Test: return-float-range-check
+typealias Float = float(f64.min to f64.max)
+typealias Pct = float(0.0 to 100.0)
+
+function clampedPct(x Float) returns Pct
+	return x
+end 'clampedPct'
+
+function main() returns ExitCode
+	return trunc(clampedPct(42.5))
+end 'main'
+---
+ExitCode: 42
+---
+func @clampedPct {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movsdRegRip xmm1, [rip + __fconst_1]
+    x64.ucomisdRegReg xmm1, xmm0
+    x64.jcc above, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.movsdRegRip xmm1, [rip + __fconst_2]
+    x64.ucomisdRegReg xmm0, xmm1
+    x64.jcc above, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.movRegImm32 rdi, 1
+    x64.x64Syscall 231
+    x64.movsdRegRip xmm0, [rip + __fconst_1]
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movsdRegRip xmm0, [rip + __fconst_3]
+    x64.callDirect clampedPct
+    x64.cvttsd2siRegReg r8, xmm0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

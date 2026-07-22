@@ -87,9 +87,9 @@ let CapturingClosureEscapeSuffix = "captures are taken by reference to the enclo
 let CapturingClosureMergeSuffix = "a merge joins its arms through a single slot that carries the function pointer but not the capture environment, so the closure would be called with no environment. Use a function reference, or a closure that captures nothing"
 
 // The parser's failure modes. Distinct from NumberParsing's `ParserError` (which
-// `parseIntLiteral` catches and re-raises as `integerOverflow`). queryParseOps
-// turns a thrown `ParseError` into a project diagnostic — the parser itself never
-// touches `Project`.
+// `intLiteralValue` / `floatLiteralBits` catch and re-raise, positioned, as
+// `integerOverflow` / `floatLiteralOverflow`). queryParseOps turns a thrown
+// `ParseError` into a project diagnostic — the parser itself never touches `Project`.
 export union ParseError implements Error
 	unexpectedToken(expected String, got String, line LineNumber, column ColumnNumber)
 	// A primary expression was required but the token stream had something else
@@ -99,12 +99,16 @@ export union ParseError implements Error
 	// — `- -x` fails at the second `-`, since a unary operand is a PRIMARY.
 	expectedExpression(got String, line LineNumber, column ColumnNumber)
 	unexpectedEof(line LineNumber, column ColumnNumber)
-	integerOverflow(line LineNumber, column ColumnNumber)
+	// An integer literal whose magnitude does not fit an i64. `literal` is the token's RAW TEXT —
+	// radix prefix and `_` separators intact — because the diagnostic quotes what the source WROTE
+	// (`0x1ff_ffffffffffffff`), which the decoded value can no longer say.
+	integerOverflow(literal String, line LineNumber, column ColumnNumber)
 	// A float literal whose magnitude exceeds what an f64 can represent (`1e400`). A SEPARATE
 	// variant from `integerOverflow` rather than a reuse of it: they share an error CODE (the
 	// literal is out of its type's range either way), and they must not share a MESSAGE, because
-	// "Integer literal out of range" pointed at `1e400` names the wrong type and the wrong limit.
-	floatLiteralOverflow(line LineNumber, column ColumnNumber)
+	// the limit each names is a DIFFERENT limit — an integer's is the i64 span, spelled out; a
+	// float's is `f64.max`, which no i64 span describes. Same raw-text rule as its integer twin.
+	floatLiteralOverflow(literal String, line LineNumber, column ColumnNumber)
 	// An INTEGRAL-ONLY operator (`mod`, the bit band, or a prefix `not`) applied to a float. Both
 	// the binary and the unary raiser reach it, because it is one rule — see
 	// `TypeRules.operatorIsIntegral`, which is where the operator set is decided, and
@@ -388,8 +392,11 @@ export union ParseError implements Error
 	// exists), so its only failure is the compile-time one; the runtime cascade a body cast can also
 	// emit has no place to live here. The body-cast check happens in the Std pass off the recorded
 	// site; a top-level `let` is not a function and records no site, so the const evaluator makes the
-	// same call itself. `low`/`high` ride along so the message renders through the one `formatRangeDisplay`.
-	constantCastOutOfRange(value ParsedInt, aliasName String, low ParsedInt, high ParsedInt, line LineNumber, column ColumnNumber)
+	// same call itself. `low`/`high` ride along so the message renders through the one
+	// `formatRangeDisplay`, and `isFloat` with them — `value`, `low` and `high` are IEEE-754 BIT
+	// PATTERNS for a float alias and numbers for an integer one, and the renderer cannot tell from the
+	// payloads which it has been handed.
+	constantCastOutOfRange(value ParsedInt, aliasName String, low ParsedInt, high ParsedInt, isFloat bool, line LineNumber, column ColumnNumber)
 	// --- The struct arms (P1.0r) ---
 	//
 	// A struct literal (`Point{…}`) written outside the type's OWN methods. Renders as E3076,
@@ -793,30 +800,15 @@ let I16MinBound = i16.min as ParsedInt
 let I16MaxBound = i16.max as ParsedInt
 let I32MinBound = i32.min as ParsedInt
 let I32MaxBound = i32.max as ParsedInt
-let I64MinBound = i64.min as ParsedInt
-let I64MaxBound = i64.max as ParsedInt
+// Exported because the integer-literal overflow diagnostic names this same span — the range a BARE
+// literal must fit — and a second spelling of the i64 extremes could drift from the one `parseInt`
+// actually enforces.
+export let I64MinBound = i64.min as ParsedInt
+export let I64MaxBound = i64.max as ParsedInt
 
-// The finite extremes `f32`/`f64`'s `.min` / `.max` denote in a `float(...)` range declaration,
-// carried as the IEEE-754 **f64** bit pattern the `ParsedInt` bound field holds. A float alias
-// resolves to `MaxonType.float` (= f64) with NO width narrowing (v1 TypeResolution.maxon:90 does the
-// same — int narrows via an optimal-width choice, float never does), so an `f32` alias's bounds are
-// the f64 VALUES of the f32 extremes, not an f32 encoding. `.min` is the most-negative finite and
-// `.max` the most-positive — the sign bit apart, which is why `negatedFloatBits` relates the pair.
-//
-// Spelled as decimal bit patterns rather than `f64.max as ParsedInt`: an `as` cast would TRUNCATE the
-// float VALUE to an integer, not reinterpret its bits, so the type-identifier spelling the integer
-// bounds use (`u32.max as ParsedInt`) cannot express a float bound. A `.min`/`.max` pair differs only
-// in the sign bit (`negatedFloatBits` is the runtime form of that relation), but a top-level `let`
-// takes no call, so each is written out.
-//
-// ⚠ These are NOT v1's `floatTypeBoundsTable` f32 values (Parser.maxon:21112): v1 stored
-// `f32.max = 5727507168572555263` (= 0x4F7C316C97453FFF), which decodes to 7.97e74 — GARBAGE, never
-// the f32 extreme 3.4e38. v1 never caught it because a full-range alias is exempt from range checks,
-// so nothing ever read the bound. v1's f64 pair IS correct and matches below.
-let F64MaxBound = 9218868437227405311 as ParsedInt  // 0x7FEF_FFFF_FFFF_FFFF  = +1.7976931348623157e308
-let F64MinBound = -4503599627370497 as ParsedInt  // 0xFFEF_FFFF_FFFF_FFFF  = -1.7976931348623157e308
-let F32MaxBound = 5183643170566569984 as ParsedInt  // 0x47EF_FFFF_E000_0000  = +3.4028234663852886e38
-let F32MinBound = -4039728866288205824 as ParsedInt  // 0xC7EF_FFFF_E000_0000  = -3.4028234663852886e38
+// The finite extremes `f32`/`f64`'s `.min` / `.max` denote in a `float(...)` range declaration live
+// in TypeRules (`F64MaxBound` and friends), beside the range predicates that COMPARE against them —
+// `rangeIsFull` has to recognize the full f64 span, and the parser has to resolve `f64.max` to it.
 
 // The `.min` / `.max` field names a type-qualified bound may carry.
 let MinBoundField = b"min"
@@ -1163,9 +1155,10 @@ end 'maxonReturnTypeNameId'
 // and leaves the other 63 alone, which is negation for every float including zero and infinity.
 let FloatSignBit = i64.min as ParsedInt
 
-// `-<float literal>` — the bits of the literal's negation. The declaration sweep needs this and the
-// expression parser does not: a body's `-x` is `emitFloatNegation` (a real `0.0 - x` op), while a
-// field default has no code to emit into and must be a NUMBER by the time the layout is hashed.
+// `-<float literal>` — the bits of the literal's negation. THE one spelling of a float's sign flip,
+// shared by the declaration sweep (a field default has no code to emit into and must be a NUMBER by
+// the time the layout is hashed), the range-bound reader, and the expression parser's negated-literal
+// fold (`parseNegatedNumericLiteral`). A body's `-x` over a non-literal is still `emitFloatNegation`.
 function negatedFloatBits(bits ParsedInt) returns ParsedInt
 	return bits xor FloatSignBit
 end 'negatedFloatBits'
@@ -3733,7 +3726,7 @@ export type Parser
 
 		if self.at(TokenKind.floatLiteral) 'floatLit'
 			let tok = try self.consume(TokenKind.floatLiteral)
-			let bits = try parseFloatBits(tok.value) otherwise throw ParseError.floatLiteralOverflow(tok.line, column: tok.column)
+			let bits = try self.floatLiteralBits(tok)
 			return ConstValue.create(negatedFloatBits(bits) if negated else bits, tag: ValueTypeTag.float)
 		end 'floatLit'
 
@@ -4357,13 +4350,13 @@ export type Parser
 		if self.at(TokenKind.minus) 'negative'
 			try self.consume(TokenKind.minus)
 			let tok = try self.consume(TokenKind.floatLiteral)
-			let bits = try parseFloatBits(tok.value) otherwise throw ParseError.floatLiteralOverflow(tok.line, column: tok.column)
+			let bits = try self.floatLiteralBits(tok)
 			return negatedFloatBits(bits)
 		end 'negative'
 
 		if self.at(TokenKind.floatLiteral) 'literal'
 			let tok = try self.consume(TokenKind.floatLiteral)
-			return try parseFloatBits(tok.value) otherwise throw ParseError.floatLiteralOverflow(tok.line, column: tok.column)
+			return try self.floatLiteralBits(tok)
 		end 'literal'
 
 		return try self.parseTypeQualifiedBound(true)
@@ -4381,10 +4374,44 @@ export type Parser
 	// the one bound that most needs to work.
 	function intLiteralValue(tok Token, negated bool) returns ParsedInt throws ParseError
 		if negated 'negative'
-			return try parseNegatedInt(tok.value) otherwise throw ParseError.integerOverflow(tok.line, column: tok.column)
+			return try parseNegatedInt(tok.value) otherwise (err) 'rejected'
+				throw self.literalDecodeError(err, tok: tok, isFloat: false)
+			end 'rejected'
 		end 'negative'
-		return try parseInt(tok.value) otherwise throw ParseError.integerOverflow(tok.line, column: tok.column)
+		return try parseInt(tok.value) otherwise (err) 'rejected'
+			throw self.literalDecodeError(err, tok: tok, isFloat: false)
+		end 'rejected'
 	end 'intLiteralValue'
+
+	// The float twin of `intLiteralValue`: THE one place a float literal's text becomes BITS. Six
+	// sites used to spell `try parseFloatBits(tok.value) otherwise throw …` for themselves — a field
+	// default, both float range bounds, an enum raw value, a constant initializer and the expression
+	// parser — which is the same fact written down six times, and the integer side had already been
+	// centralized for exactly that reason.
+	function floatLiteralBits(tok Token) returns ParsedInt throws ParseError
+		return try parseFloatBits(tok.value) otherwise (err) 'rejected'
+			throw self.literalDecodeError(err, tok: tok, isFloat: true)
+		end 'rejected'
+	end 'floatLiteralBits'
+
+	// Turn a NumberParsing failure into the POSITIONED parse error that reports it, quoting the
+	// token's RAW TEXT — the radix prefix and `_` separators the source wrote, which the decoded
+	// value can no longer say.
+	//
+	// ⚠ `malformed` is NOT reported: it is unreachable from source. `Lexer.scanNumber` hands a
+	// literal token nothing but digits, `_`, `.`, `e`/`E` and an exponent sign, so a byte the number
+	// grammar refuses means the lexer and `parseFloatBits`/`parseInt` have come to disagree about
+	// what a literal IS — a compiler defect, not a program's. (The variant exists for
+	// `Testing/PeSectionReader`, which parses spec-file text no lexer guards; see `ParserError`.)
+	function literalDecodeError(err ParserError, tok Token, isFloat bool) returns ParseError
+		match err 'kind'
+			overflow then break 'kind'
+			malformed then panic("literalDecodeError: the number parser rejected '{String.from(tok.value)}' as malformed, but Lexer.scanNumber only ever emits a literal token of digits, '_', '.', 'e'/'E' and an exponent sign — the lexer and the number parser have diverged")
+		end 'kind'
+
+		let literal = String.from(tok.value)
+		return ParseError.floatLiteralOverflow(literal, line: tok.line, column: tok.column) if isFloat else ParseError.integerOverflow(literal, line: tok.line, column: tok.column)
+	end 'literalDecodeError'
 
 	// A type-qualified numeric bound — `<sized>.min` / `<sized>.max`, three tokens
 	// (identifier, `.`, identifier). Shared by the range-declaration parser and the
@@ -4623,7 +4650,7 @@ export type Parser
 		// as an int tag is), and its display is the float's source text.
 		if self.at(TokenKind.floatLiteral) 'floatValue'
 			let floatTok = try self.consume(TokenKind.floatLiteral)
-			let bits = try parseFloatBits(floatTok.value) otherwise throw ParseError.floatLiteralOverflow(floatTok.line, column: floatTok.column)
+			let bits = try self.floatLiteralBits(floatTok)
 			try self.requireFloatBacking(state, caseTok: nameTok)
 			try self.appendEnumCase(layout, caseName: caseName, tag: bits, rawDisplay: String.from(floatTok.value), caseTok: nameTok, payloads: PayloadFieldArray.create())
 			return
@@ -5039,12 +5066,16 @@ export type Parser
 		return out
 	end 'packagedInstanceAliases'
 
-	// The name of the function's return type IF it is a ranged INT alias, else EMPTY. A float alias
-	// returns empty (float returns are not range-checked at this rung — the one case that would,
-	// `return-float-range-check`, is gated on the float ABI), as does `ExitCode`/a bare primitive/void
-	// (none is a user ranged alias). Asked once per function, off the DECLARED return type, before
-	// `resolveTypes` collapses the alias away — which is the whole reason the pass reads a side table
-	// rather than the resolved return type.
+	// The name of the function's return type IF it is a ranged alias — integer or float — else EMPTY
+	// (`ExitCode`, a bare primitive, void: none is a user ranged alias). Asked once per function, off
+	// the DECLARED return type, before `resolveTypes` collapses the alias away — which is the whole
+	// reason the pass reads a side table rather than the resolved return type.
+	//
+	// ⭐ A FLOAT ALIAS USED TO BE EXCLUDED HERE, and removing that exclusion is what closed #19. The
+	// carve-out was the ONLY thing keeping float bit patterns away from `InsertRangeChecks`' signed
+	// integer compares — which made the pass's correctness rest on a caller's discretion. The pass now
+	// carries its own float arm (`aliasIsFloat` and the predicates it forks), so the domain is decided
+	// where the bounds are read rather than where the site is recorded.
 	function rangedReturnAliasName(returnType MaxonReturnType) returns ByteArray
 		return match returnType 'r'
 			void gives EmptySourceText
@@ -5052,26 +5083,17 @@ export type Parser
 		end 'r'
 	end 'rangedReturnAliasName'
 
-	// The ranged-INT-alias name a `named` type denotes, else EMPTY. Shared by the return path above
+	// The ranged-alias name a `named` type denotes, else EMPTY. Shared by the return path above
 	// and the `as`-cast path so both read a name's alias-ness through one door.
 	function rangedAliasNameOfType(t MaxonType) returns ByteArray
 		if maxonTypeTag(t) != ValueTypeTag.named 'notNamed'
 			return EmptySourceText
 		end 'notNamed'
 		return match self.signatures.aliasOf(self.internedName(typeNameIdOf(t))) 'a'
-			declared(alias) gives self.rangedIntAliasName(alias)
+			declared(alias) gives alias.name
 			undeclared gives EmptySourceText
 		end 'a'
 	end 'rangedAliasNameOfType'
-
-	// The alias's NAME when it is an INTEGER ranged alias, else EMPTY — a float alias is not
-	// range-checked here. Split out so `rangedReturnAliasName` reads as one expression.
-	function rangedIntAliasName(alias RangedTypeAlias) returns ByteArray
-		if tagIsFloat(maxonTypeTag(alias.underlying)) 'float'
-			return EmptySourceText
-		end 'float'
-		return alias.name
-	end 'rangedIntAliasName'
 
 	// Close a function body. `bodyEnd` is the block its last statement left control in;
 	// when that block has no terminator, control can FALL OFF THE END of the function
@@ -10994,6 +11016,24 @@ export type Parser
 	function parseUnary(func IrFunction) returns ValueId throws ParseError
 		if self.at(TokenKind.minus) 'neg'
 			let opTok = try self.consume(TokenKind.minus)
+
+			// ⭐ **A LEADING `-` ON A LITERAL IS PART OF THE LITERAL**, not an operator over it. Two
+			// separate wrong answers came from treating it as an operator, and both are fixed here:
+			//
+			//   • `-9223372036854775808` is exactly `i64.min`, but its MAGNITUDE (`i64.max + 1`) does
+			//     not fit a positive i64 — so reading the magnitude first reported E2011 on a literal
+			//     that is perfectly in range. `parseNegatedInt` already knew this; only the range-bound
+			//     reader was asking it. Now the expression parser asks the same decoder.
+			//   • `-0.0` compiled to `0.0 - 0.0`, which IEEE-754 says is `+0.0`. A sign flip is
+			//     `negatedFloatBits`, and the declaration/range-bound paths always spelled it that way;
+			//     only the expression path went through `emitFloatNegation` and lost the zero's sign.
+			//
+			// It also costs one op fewer for every negative literal, which is why the emitted code for
+			// `let x = -5` changes from `mov 5; neg` to a single negative immediate.
+			if self.at(TokenKind.intLiteral) or self.at(TokenKind.floatLiteral) 'negatedLiteral'
+				return try self.parseNegatedNumericLiteral(opTok)
+			end 'negatedLiteral'
+
 			let operand = try self.parsePostfix(func, value: try self.parsePrimary(func), resultUsed: true)
 			let operandTag = self.tagOf(operand)
 			if not typeClassAdmits(TypeClass.numeric, tag: operandTag) 'notANumber'
@@ -11159,10 +11199,10 @@ export type Parser
 		return result
 	end 'emitPerInstanceCastValue'
 
-	// Record a narrowing-check site for `value` when `targetType` is a ranged INT alias (P1.9). `block` is
-	// the CAST'S evaluation block (`self.currentBlock`), so the guard runs on the path the cast is on — an
-	// unselected ternary arm / if-branch does not fire it. A non-ranged target (a float alias, `ExitCode`,
-	// a bare primitive) records nothing.
+	// Record a narrowing-check site for `value` when `targetType` is a ranged alias, integer or float
+	// (P1.9, and #19 for the float half). `block` is the CAST'S evaluation block (`self.currentBlock`),
+	// so the guard runs on the path the cast is on — an unselected ternary arm / if-branch does not fire
+	// it. A non-ranged target (`ExitCode`, a bare primitive) records nothing.
 	function recordCastSite(value ValueId, targetType MaxonType, asTok Token)
 		let aliasName = self.rangedAliasNameOfType(targetType)
 		if aliasName.isEmpty() 'notRanged'
@@ -15288,15 +15328,13 @@ export type Parser
 	end 'applyConstCast'
 
 	// Compile-time range check for a constant `as` cast — the top-level `let` half of the narrowing
-	// E3005, mirroring `InsertRangeChecks.needsRuntimeGuard`'s literal path. It fires only for an
-	// INTEGER literal cast into a ranged INT alias: a bare `int`/`bool`/`float` primitive target has no
-	// range; a non-integer const carries no integer to test (a float const is an IEEE bit pattern, not
-	// a number); a name that is not a ranged int alias (a struct, a float alias, an undeclared name) is
-	// not a checkable range. The out-of-range verdict is `literalInRange`'s — the same decider the body
-	// path uses, so the const and runtime casts cannot disagree — and the message is the shared one,
-	// anchored at the `as` token as the body cast is.
+	// E3005, mirroring `InsertRangeChecks.needsRuntimeGuard`'s literal path. It fires only for a
+	// NUMERIC literal cast into a ranged alias: a bare `int`/`bool`/`float` primitive target has no
+	// range, and a bool const carries no number to test. The out-of-range verdict is `literalInRange`'s
+	// — the same decider the body path uses, so the const and runtime casts cannot disagree — and the
+	// message is the shared one, anchored at the `as` token as the body cast is.
 	function checkConstCastRange(value ConstValue, targetTok Token, asTok Token) throws ConstEvalError
-		if targetTok.kind != TokenKind.identifier or not tagIsInteger(value.tag) 'notCheckable'
+		if targetTok.kind != TokenKind.identifier or not typeClassAdmits(TypeClass.numeric, tag: value.tag) 'notCheckable'
 			return
 		end 'notCheckable'
 
@@ -15306,20 +15344,25 @@ export type Parser
 		end 'a'
 	end 'checkConstCastRange'
 
-	// Raise the E3005 when `value` is outside `alias`. A FLOAT alias is not range-checked here (its
-	// bounds are f64 bit patterns and an int literal into it is a promotion, not a narrowing); that
-	// carve-out is `rangedIntAliasName`'s — the ONE place a float alias is excluded — reused here rather
-	// than re-tested, so an empty name means "not a ranged int alias" and the check is skipped.
+	// Raise the E3005 when `value` is outside `alias`.
+	//
+	// ⚠ THE CONST AND THE ALIAS MUST BE IN THE SAME DOMAIN. A float const's payload is an IEEE-754 bit
+	// pattern and an integer const's is a number, so testing one against the other's bounds compares
+	// numbers that were never the same kind of thing. A MISMATCH IS NOT A DEFECT to report here — an
+	// int const into a float alias is a promotion, which is legal and simply unchecked — so the
+	// mismatched pair is skipped, exactly as `InsertRangeChecks.needsRuntimeGuard` falls through to the
+	// runtime guard for the same pair, and exactly as the bootstrap does.
 	function reportConstCastIfOutOfRange(value ConstValue, alias RangedTypeAlias, asTok Token) throws ConstEvalError
-		if self.rangedIntAliasName(alias).isEmpty() 'notRangedInt'
+		let isFloat = aliasIsFloat(alias)
+		if tagIsFloat(value.tag) != isFloat 'domainMismatch'
 			return
-		end 'notRangedInt'
+		end 'domainMismatch'
 
-		if literalInRange(value.payload, low: alias.low, high: alias.high) 'inRange'
+		if literalInRange(value.payload, low: alias.low, high: alias.high, isFloat: isFloat) 'inRange'
 			return
 		end 'inRange'
 
-		throw ConstEvalError.defective(ParseError.constantCastOutOfRange(value.payload, aliasName: String.from(alias.name), low: alias.low, high: alias.high, line: asTok.line, column: asTok.column))
+		throw ConstEvalError.defective(ParseError.constantCastOutOfRange(value.payload, aliasName: String.from(alias.name), low: alias.low, high: alias.high, isFloat: isFloat, line: asTok.line, column: asTok.column))
 	end 'reportConstCastIfOutOfRange'
 
 	// Consume `kind` in the constant evaluator, wrapping a mismatch as a `ConstEvalError`.
@@ -15412,7 +15455,7 @@ export type Parser
 
 	// A float literal in a constant initializer — `let PI = 3.14`, `var zeroA = 0.0`. It carries
 	// the IEEE-754 bit pattern in the same `ParsedInt` payload every other constant uses, exactly
-	// as `parseFloatLiteral` does in an expression, and through the same `parseFloatBits` — so the
+	// as `parseFloatLiteral` does in an expression, and through the same `floatLiteralBits` — so the
 	// bits of a float in a `let` and a float in a body cannot come to differ.
 	//
 	// ⚠ It is the ONLY float a constant can contain, and `requireConstNotFloat` is what enforces
@@ -15421,9 +15464,9 @@ export type Parser
 	function evalConstFloatLiteral() returns ConstValue throws ConstEvalError
 		let tok = self.current()
 		self.advance()
-		let bits = try parseFloatBits(tok.value) otherwise 'overflow'
-			throw ConstEvalError.defective(ParseError.floatLiteralOverflow(tok.line, column: tok.column))
-		end 'overflow'
+		let bits = try self.floatLiteralBits(tok) otherwise (err) 'rejected'
+			throw ConstEvalError.defective(err)
+		end 'rejected'
 
 		return ConstValue.create(bits, tag: ValueTypeTag.float)
 	end 'evalConstFloatLiteral'
@@ -16338,9 +16381,25 @@ export type Parser
 	// anything else, silently, at compile time.
 	function parseFloatLiteral() returns ValueId throws ParseError
 		let tok = try self.consume(TokenKind.floatLiteral)
-		let bits = try parseFloatBits(tok.value) otherwise throw ParseError.floatLiteralOverflow(tok.line, column: tok.column)
+		let bits = try self.floatLiteralBits(tok)
 		return self.emitLiteral(bits, valueType: MaxonType.float, range: SourceRange.ofToken(tok))
 	end 'parseFloatLiteral'
+
+	// `-<numeric literal>` as ONE literal — see `parseUnary`'s note for why the negation belongs to
+	// the literal rather than to an operator over it. Both halves read through the SAME decoders the
+	// un-negated forms use (`intLiteralValue` with `negated: true`, `negatedFloatBits` over
+	// `floatLiteralBits`), which is what makes a negated literal in an expression mean exactly what
+	// the same text means in a range bound or a field default. The source range anchors on the `-`,
+	// because that is where the literal now starts.
+	function parseNegatedNumericLiteral(minusTok Token) returns ValueId throws ParseError
+		if self.at(TokenKind.floatLiteral) 'float'
+			let tok = try self.consume(TokenKind.floatLiteral)
+			return self.emitLiteral(negatedFloatBits(try self.floatLiteralBits(tok)), valueType: MaxonType.float, range: SourceRange.ofToken(minusTok))
+		end 'float'
+
+		let tok = try self.consume(TokenKind.intLiteral)
+		return self.emitLiteral(try self.intLiteralValue(tok, negated: true), valueType: MaxonType.integer, range: SourceRange.ofToken(minusTok))
+	end 'parseNegatedNumericLiteral'
 
 	// Append a `literal` op into the CURRENT block; return the ValueId it defines.
 	function emitLiteral(value ParsedInt, valueType MaxonType, range SourceRange) returns ValueId

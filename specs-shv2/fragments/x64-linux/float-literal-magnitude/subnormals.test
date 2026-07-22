@@ -1,0 +1,59 @@
+// Test: subnormals
+function main() returns ExitCode
+	var r = 0
+	if 1.0e-310 > 0.0 'e310IsPositive'
+		r = r + 1
+	end 'e310IsPositive'
+	if 1.0e-320 > 0.0 'e320IsPositive'
+		r = r + 2
+	end 'e320IsPositive'
+	if 1.0e-310 > 1.0e-320 'ordered'
+		r = r + 4
+	end 'ordered'
+	return r
+end 'main'
+---
+ExitCode: 7
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 rax, 0
+    x64.movsdRegRip xmm0, [rip + __fconst_0]
+    x64.movsdRegRip xmm1, [rip + __fconst_1]
+    x64.ucomisdRegReg xmm0, xmm1
+    x64.jcc above, e310IsPositive
+    x64.jmp critsplit
+  e310IsPositive:
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.jmp ifcont
+  critsplit:
+    x64.jmp ifcont
+  ifcont:
+    x64.movsdRegRip xmm0, [rip + __fconst_2]
+    x64.movsdRegRip xmm1, [rip + __fconst_1]
+    x64.ucomisdRegReg xmm0, xmm1
+    x64.jcc above, e320IsPositive
+    x64.jmp critsplit
+  e320IsPositive:
+    x64.leaRegRegImm32 rax, rax, 2
+    x64.jmp ifcont
+  critsplit:
+    x64.jmp ifcont
+  ifcont:
+    x64.movsdRegRip xmm0, [rip + __fconst_0]
+    x64.movsdRegRip xmm1, [rip + __fconst_2]
+    x64.ucomisdRegReg xmm0, xmm1
+    x64.jcc above, ordered
+    x64.jmp critsplit
+  ordered:
+    x64.leaRegRegImm32 r8, rax, 4
+    x64.jmp ifcont
+  critsplit:
+    x64.movRegReg r8, rax
+    x64.jmp ifcont
+  ifcont:
+    x64.popReg rbp
+    x64.ret
+}

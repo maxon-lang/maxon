@@ -189,6 +189,263 @@ end 'main'
 75
 ```
 
+### Float range check: literal out of range
+
+A float alias narrows exactly as an integer one does, and an out-of-range float
+LITERAL is the same compile-time E3005 an out-of-range integer literal gets.
+
+<!-- test: error.float-cast-out-of-range -->
+```maxon
+typealias Pct = float(0.0 to 100.0)
+
+function main() returns ExitCode
+	let p = 500.0 as Pct
+	return trunc(p)
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/ranged-typealias/error.float-cast-out-of-range.test:5:16: Value 500 is outside the range of 'Pct' (float(0 to 100))
+```
+
+### Float range check: NEGATIVE bounds
+
+A double's BIT PATTERN does not order like its value once a sign bit is
+involved — among negatives the integer order is REVERSED. Two positive bounds
+would pass under an integer compare, so these two cases (an all-negative range
+and one straddling zero) are what actually hold the float comparison honest.
+
+<!-- test: error.float-negative-bound-out-of-range -->
+```maxon
+typealias Neg = float(-100.0 to -1.0)
+
+function main() returns ExitCode
+	let p = -200.0 as Neg
+	return trunc(-p)
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/ranged-typealias/error.float-negative-bound-out-of-range.test:5:17: Value -200 is outside the range of 'Neg' (float(-100 to -1))
+```
+
+<!-- test: float-negative-bound-in-range -->
+```maxon
+typealias Neg = float(-100.0 to -1.0)
+
+function main() returns ExitCode
+	let p = -50.0 as Neg
+	return trunc(-p)
+end 'main'
+```
+```exitcode
+50
+```
+
+<!-- test: error.float-straddling-zero-out-of-range -->
+```maxon
+typealias Unit = float(-1.0 to 1.0)
+
+function main() returns ExitCode
+	let u = -2.5 as Unit
+	return trunc(-u)
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/ranged-typealias/error.float-straddling-zero-out-of-range.test:5:15: Value -2.5 is outside the range of 'Unit' (float(-1 to 1))
+```
+
+<!-- test: float-straddling-zero-in-range -->
+```maxon
+typealias Unit = float(-1.0 to 1.0)
+
+function main() returns ExitCode
+	let u = -0.5 as Unit
+	return trunc(-u * 100.0)
+end 'main'
+```
+```exitcode
+50
+```
+
+### Float range check: runtime guard on a non-literal
+
+<!-- test: float-runtime-range-panic -->
+<!-- targets: x64-windows -->
+```maxon
+typealias Pct = float(0.0 to 100.0)
+typealias Wide = float(f64.min to f64.max)
+
+function scale(x Wide) returns Wide
+	return x * 2.0
+end 'scale'
+
+function main() returns ExitCode
+	let big = scale(300.0)
+	let p = big as Pct
+	return trunc(p)
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at float-runtime-range-panic.test:11: Range check failed: value outside typealias 'Pct'
+Stack trace:
+  in main
+  in mrt_start
+```
+
+<!-- test: float-runtime-negative-bound-panic -->
+<!-- targets: x64-windows -->
+```maxon
+typealias Neg = float(-100.0 to -1.0)
+typealias Wide = float(f64.min to f64.max)
+
+function scale(x Wide) returns Wide
+	return x * 2.0
+end 'scale'
+
+function main() returns ExitCode
+	let v = scale(-200.0)
+	let n = v as Neg
+	return trunc(-n)
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at float-runtime-negative-bound-panic.test:11: Range check failed: value outside typealias 'Neg'
+Stack trace:
+  in main
+  in mrt_start
+```
+
+<!-- test: float-runtime-negative-bound-in-range -->
+```maxon
+typealias Neg = float(-100.0 to -1.0)
+typealias Wide = float(f64.min to f64.max)
+
+function scale(x Wide) returns Wide
+	return x * 2.0
+end 'scale'
+
+function main() returns ExitCode
+	let v = scale(-25.0)
+	let n = v as Neg
+	return trunc(-n)
+end 'main'
+```
+```exitcode
+50
+```
+
+### Float range check: f64 narrowed to f32 bounds
+
+The narrowing an `f32`-bounded alias promises, checked at run time — a value an
+f64 holds comfortably but an f32 cannot.
+
+<!-- test: float-narrow-f64-to-f32 -->
+<!-- targets: x64-windows -->
+```maxon
+typealias Wide = float(f64.min to f64.max)
+typealias Narrow = float(f32.min to f32.max)
+
+function narrow(x Wide) returns Narrow
+	return x
+end 'narrow'
+
+function main() returns ExitCode
+	return trunc(narrow(1.0e300))
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at float-narrow-f64-to-f32.test:6: Range check failed: value outside typealias 'Narrow'
+Stack trace:
+  in narrow
+  in main
+  in mrt_start
+```
+
+### Float range check: a full-range alias is NOT guarded
+
+`float(f64.min to f64.max)` admits every finite double, so no guard is emitted
+at all. A guard that compared the f64 BIT PATTERNS as signed integers would
+reject this value; the elision is what stops it.
+
+<!-- test: float-full-range-guard-elided -->
+```maxon
+typealias Pct = float(0.0 to 100.0)
+typealias Wide = float(f64.min to f64.max)
+
+function widen(x Pct) returns Wide
+	return x * 1.0e299
+end 'widen'
+
+function main() returns ExitCode
+	let big = widen(10.0)
+	if big > 1.0e299 'huge'
+		return 42
+	end 'huge'
+	return 0
+end 'main'
+```
+```exitcode
+42
+```
+
+### Error: return float literal out of range
+
+<!-- test: error.return-float-literal-out-of-range -->
+```maxon
+typealias Pct = float(0.0 to 100.0)
+
+function getPct() returns Pct
+	return 500.0
+end 'getPct'
+
+function main() returns ExitCode
+	return trunc(getPct())
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/ranged-typealias/error.return-float-literal-out-of-range.test:5:2: Value 500 is outside the range of 'Pct' (float(0 to 100))
+```
+
+### Error: top-level let float cast out of range
+
+<!-- test: error.top-level-float-cast-out-of-range -->
+<!-- targets: x64-windows -->
+```maxon
+typealias Pct = float(0.0 to 100.0)
+
+let BAD = 500.0 as Pct
+
+function main() returns ExitCode
+	return trunc(BAD)
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/ranged-typealias/error.top-level-float-cast-out-of-range.test:4:17: Value 500 is outside the range of 'Pct' (float(0 to 100))
+```
+
+<!-- test: top-level-float-cast-in-range -->
+<!-- targets: x64-windows -->
+```maxon
+typealias Pct = float(0.0 to 100.0)
+
+let GOOD = 50.0 as Pct
+
+function main() returns ExitCode
+	return trunc(GOOD)
+end 'main'
+```
+```exitcode
+50
+```
+
 ### Exclusive upper bound with upto
 
 <!-- test: upto-exclusive -->
@@ -404,8 +661,7 @@ Stack trace:
 
 ### Return value range check: float return
 
-<!-- disabled-test: return-float-range-check -->
-<!-- F2 float ABI: a float PARAMETER (xmm arg slot) and float RETURN (xmm0) across a call boundary. Float aliases are nameable as of F1; the blocker is now the ABI, not the type. -->
+<!-- test: return-float-range-check -->
 ```maxon
 typealias Float = float(f64.min to f64.max)
 typealias Pct = float(0.0 to 100.0)

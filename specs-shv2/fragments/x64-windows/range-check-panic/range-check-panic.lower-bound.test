@@ -1,0 +1,47 @@
+// Test: range-check-panic.lower-bound
+typealias Natural = int(0 to i64.max)
+
+function check(n Natural) returns Natural
+  return n
+end 'check'
+
+function main() returns ExitCode
+  let result = check(-1)
+  return result
+end 'main'
+---
+ExitCode: 1
+---
+func @check {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg r8, rcx
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm rcx, -1
+    x64.callDirect check
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

@@ -1,0 +1,37 @@
+// Test: byte-enum-comparison.enum-eq-byte
+
+typealias Byte = int(0 to u8.max)
+
+enum Ascii
+	underscore = 95
+	space = 32
+	zero = 48
+end 'Ascii'
+
+function main() returns ExitCode
+	let s = 32 as Byte
+	if Ascii.space == s 'match'
+		return 0
+	end 'match'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 rax, 32
+    x64.cmpRegImm32 rax, 32
+    x64.jcc equal, match
+    x64.jmp ifcont
+  match:
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+}

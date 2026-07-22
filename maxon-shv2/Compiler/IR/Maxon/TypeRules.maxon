@@ -757,20 +757,90 @@ let UnsignedFullUpperPattern = (0 - 1) as ParsedInt
 // bound via `(ulong)`.
 let UnsignedFullUpperDecimal = "18446744073709551615"
 
-// True when the alias covers EVERY i64 bit pattern, so no value can be out of range and NO
-// guard — nor compile-time literal check — is needed. Two spans cover the whole 64-bit space:
-// the signed-full `int(i64.min to i64.max)` and the unsigned-full `int(0 to u64.max)` (whose
-// upper rides as the signed `-1`). A byte/u16/u32 sub-range is NOT full here: shv2 flows every
-// ranged value at the i64 base with no per-alias storage width, so only the two 64-bit spans
-// are unconditionally safe. `ExitCode`/`Byte`-style sub-ranges therefore still take a check for
-// a NON-literal value — every enabled case that casts into one uses a literal, so the
-// compile-time path elides it and no runtime code differs.
-export function rangeIsFullI64(low ParsedInt, high ParsedInt) returns bool
+// The finite extremes `f32`/`f64`'s `.min` / `.max` denote in a `float(...)` range declaration,
+// carried as the IEEE-754 **f64** bit pattern the `ParsedInt` bound field holds. A float alias
+// resolves to `MaxonType.float` (= f64) with NO width narrowing (v1 TypeResolution.maxon:90 does the
+// same — int narrows via an optimal-width choice, float never does), so an `f32` alias's bounds are
+// the f64 VALUES of the f32 extremes, not an f32 encoding. `.min` is the most-negative finite and
+// `.max` the most-positive — the sign bit apart, which is why `negatedFloatBits` relates the pair.
+//
+// Spelled as decimal bit patterns rather than `f64.max as ParsedInt`: an `as` cast would TRUNCATE the
+// float VALUE to an integer, not reinterpret its bits, so the type-identifier spelling the integer
+// bounds use (`u32.max as ParsedInt`) cannot express a float bound. A `.min`/`.max` pair differs only
+// in the sign bit (`negatedFloatBits` is the runtime form of that relation), but a top-level `let`
+// takes no call, so each is written out.
+//
+// They live HERE rather than in the parser because TWO parties read them: the parser, resolving a
+// `f64.max` bound token, and `rangeIsFull` below, recognizing the span that needs no guard.
+//
+// ⚠ These are NOT v1's `floatTypeBoundsTable` f32 values (Parser.maxon:21112): v1 stored
+// `f32.max = 5727507168572555263` (= 0x4F7C316C97453FFF), which decodes to 7.97e74 — GARBAGE, never
+// the f32 extreme 3.4e38. v1 never caught it because a full-range alias is exempt from range checks,
+// so nothing ever read the bound. v1's f64 pair IS correct and matches below.
+export let F64MaxBound = 9218868437227405311 as ParsedInt  // 0x7FEF_FFFF_FFFF_FFFF  = +1.7976931348623157e308
+export let F64MinBound = -4503599627370497 as ParsedInt  // 0xFFEF_FFFF_FFFF_FFFF  = -1.7976931348623157e308
+export let F32MaxBound = 5183643170566569984 as ParsedInt  // 0x47EF_FFFF_E000_0000  = +3.4028234663852886e38
+export let F32MinBound = -4039728866288205824 as ParsedInt  // 0xC7EF_FFFF_E000_0000  = -3.4028234663852886e38
+
+// ⭐ **IS THIS ALIAS'S DOMAIN THE FLOAT ONE?** THE one place that is decided, because EVERY range
+// predicate below forks on it and the fork is not cosmetic: an integer alias's `low`/`high` are
+// NUMBERS, a float alias's are IEEE-754 BIT PATTERNS, and the two do not compare the same way.
+//
+// It reads `underlying` — the `int`/`float` keyword the alias was declared over — which
+// `RangedTypeAlias` has always carried and which the guard emitter simply never asked. Until this
+// rung the question had no second asker: the parser filtered float aliases out before a check site
+// could be recorded, so `InsertRangeChecks` never met one. That filter is gone, and this is what
+// replaced it.
+export function aliasIsFloat(alias RangedTypeAlias) returns bool
+	return tagIsFloat(maxonTypeTag(alias.underlying))
+end 'aliasIsFloat'
+
+// ⚠⚠ **A DOUBLE'S BIT PATTERN DOES NOT ORDER LIKE ITS VALUE.** IEEE-754 is sign-and-magnitude, so
+// among NEGATIVES the integer order is exactly REVERSED (-1.0's pattern is numerically larger than
+// -100.0's), and `-0.0`'s pattern is `i64.min` while `+0.0`'s is zero. This maps a pattern to an i64
+// that orders the way the VALUE does: a non-negative pattern keeps its bits, and a negative one is
+// reflected through `i64.min`, which both restores the ordering among negatives and puts every
+// negative below every non-negative. `-0.0` and `+0.0` both map to 0, so they compare EQUAL — which
+// is what IEEE-754 says and what a range bound needs.
+//
+// The reflection cannot overflow: `bits` is in `[i64.min, -1]` on that path, so `i64.min - bits` is
+// in `[0, i64.min + 1]`.
+//
+// NaN has no place in this order and none can reach it: a literal that overflows is E2011 before it
+// becomes one, and no writable bound names one. shv2 documents the same trap for the constant folder
+// (`Parser.requireConstNotFloat`), the Std dialect (`StdDialect`'s `binOpImm`) and `FoldConstOperands`
+// — this is the fourth party that has to know it, and the first that can actually answer it.
+export function floatOrderKey(bits ParsedInt) returns ParsedInt
+	if bits >= 0 'positive'
+		return bits
+	end 'positive'
+	return i64.min - bits
+end 'floatOrderKey'
+
+// True when the alias covers every value its underlying type can hold, so no value can be out of
+// range and NO guard — nor compile-time literal check — is needed.
+//
+// INTEGER: two spans cover the whole 64-bit space — the signed-full `int(i64.min to i64.max)` and
+// the unsigned-full `int(0 to u64.max)` (whose upper rides as the signed `-1`). A byte/u16/u32
+// sub-range is NOT full here: shv2 flows every ranged value at the i64 base with no per-alias
+// storage width, so only the two 64-bit spans are unconditionally safe. `ExitCode`/`Byte`-style
+// sub-ranges therefore still take a check for a NON-literal value — every enabled case that casts
+// into one uses a literal, so the compile-time path elides it and no runtime code differs.
+//
+// FLOAT: the full span is `float(f64.min to f64.max)`, compared against the f64 BIT PATTERNS — the
+// integer test would answer `false` for it (`F64MinBound` is a small negative i64, nowhere near
+// `i64.min`) and every full-range float alias would then carry a pointless guard whose signed
+// compares would REJECT ordinary values. `float(f32.min to f32.max)` is deliberately NOT full: it is
+// exactly the narrowing #19 is about.
+export function rangeIsFull(low ParsedInt, high ParsedInt, isFloat bool) returns bool
+	if isFloat 'float'
+		return low == F64MinBound and high == F64MaxBound
+	end 'float'
 	if low == i64.min and high == i64.max 'signedFull'
 		return true
 	end 'signedFull'
 	return low == 0 and high == UnsignedFullUpperPattern
-end 'rangeIsFullI64'
+end 'rangeIsFull'
 
 // **THE UNSIGNED-MAX UPPER SHAPE** — a range whose upper is `u64.max` (riding as the signed
 // `-1`) over a non-negative low bound: `int(0 to u64.max)`, `int(5 to u64.max)`. THE one place
@@ -780,39 +850,66 @@ end 'rangeIsFullI64'
 // A non-negative low bound (`rangeIsUnsigned`) is what makes the range purely UNSIGNED: every
 // admissible value is non-negative in unsigned terms, and a bit-63-set value (negative signed)
 // is a huge unsigned that the range ADMITS. The full-unsigned `int(0 to u64.max)` (low == 0)
-// is included: `rangeIsFullI64` elides it before the runtime cascade ever asks, but the literal
+// is included: `rangeIsFull` elides it before the runtime cascade ever asks, but the literal
 // check calls this directly with no such gate, and there the low == 0 reading — in range for
 // every value — is exactly right.
 export function rangeIsUnsignedMaxUpper(low ParsedInt, high ParsedInt) returns bool
 	return high == UnsignedFullUpperPattern and rangeIsUnsigned(low)
 end 'rangeIsUnsignedMaxUpper'
 
-// Does the LOWER bound need a runtime compare? Only when it is above the smallest i64 — a
-// `low == i64.min` can never be violated. (Bootstrap: `IntLower > long.MinValue`.)
-export function rangeNeedsLowerCheck(low ParsedInt) returns bool
+// Does the LOWER bound need a runtime compare?
+//
+// INTEGER: only when it is above the smallest i64 — a `low == i64.min` can never be violated.
+// (Bootstrap: `IntLower > long.MinValue`.)
+//
+// FLOAT: only when it is above the most-negative finite double. `F64MinBound` is a small NEGATIVE
+// i64 as a bit pattern, so the integer test would call every float lower bound necessary — and, far
+// worse, would call `float(f64.min to X)`'s bound necessary while comparing the wrong way round.
+export function rangeNeedsLowerCheck(low ParsedInt, isFloat bool) returns bool
+	if isFloat 'float'
+		return low != F64MinBound
+	end 'float'
 	return low > i64.min
 end 'rangeNeedsLowerCheck'
 
-// Does the UPPER bound need a runtime compare? Only for a NON-NEGATIVE bound below i64.max. A
-// negative stored upper is the wrapped `u64.max`-family (unbounded in signed space); eliding
-// the upper compare keeps it from firing on a value the range actually admits. (Bootstrap:
-// `IntUpper >= 0 && IntUpper < long.MaxValue`.) For the `int(N>0 to u64.max)` shape this elision
-// is deliberate — the unsigned upper is genuinely unbounded — and `boundChecks` supplies the
-// matching lower half (`value >= 0 → in range`) so the elided upper does not leave a naive
-// signed lower check that would reject bit-63-set values (see `rangeIsUnsignedMaxUpper`).
-export function rangeNeedsUpperCheck(high ParsedInt) returns bool
+// Does the UPPER bound need a runtime compare?
+//
+// INTEGER: only for a NON-NEGATIVE bound below i64.max. A negative stored upper is the wrapped
+// `u64.max`-family (unbounded in signed space); eliding the upper compare keeps it from firing on a
+// value the range actually admits. (Bootstrap: `IntUpper >= 0 && IntUpper < long.MaxValue`.) For the
+// `int(N>0 to u64.max)` shape this elision is deliberate — the unsigned upper is genuinely
+// unbounded — and `boundChecks` supplies the matching lower half (`value >= 0 → in range`) so the
+// elided upper does not leave a naive signed lower check that would reject bit-63-set values (see
+// `rangeIsUnsignedMaxUpper`).
+//
+// FLOAT: only below the largest finite double. The sign test the integer rule makes is meaningless
+// on a bit pattern — `float(-1.0 to -0.5)`'s upper is a NEGATIVE i64 and is a perfectly real bound
+// that must be checked.
+export function rangeNeedsUpperCheck(high ParsedInt, isFloat bool) returns bool
+	if isFloat 'float'
+		return high != F64MaxBound
+	end 'float'
 	return high >= 0 and high < i64.max
 end 'rangeNeedsUpperCheck'
 
 // Is a literal `value` within `[low, high]` (inclusive)? The compile-time E3005 test, and the
 // same verdict the bootstrap's LITERAL check gives (which reads the bound unsigned).
 //
+// FLOAT: the three patterns go through `floatOrderKey` so they compare as the VALUES they encode.
+// A raw integer compare passes for two positive bounds and quietly inverts for a negative one —
+// `float(-100.0 to -1.0)` would admit nothing and reject everything — which is precisely why
+// `ranged-typealias.md` pins a negative range and a zero-straddling one.
+//
 // For the unsigned-max upper shape the range is UNSIGNED and its upper is unbounded, so in-range
 // is `value < 0 OR value >= low`: a bit-63-set value (negative signed) is a huge unsigned that
 // the range admits, and a non-negative value is in range iff it is at least `low`. Every OTHER
-// range is the ordinary inclusive `[low, high]` — correct because a negative literal fails the
-// signed lower bound exactly as its huge unsigned image would fail a modest positive upper.
-export function literalInRange(value ParsedInt, low ParsedInt, high ParsedInt) returns bool
+// integer range is the ordinary inclusive `[low, high]` — correct because a negative literal fails
+// the signed lower bound exactly as its huge unsigned image would fail a modest positive upper.
+export function literalInRange(value ParsedInt, low ParsedInt, high ParsedInt, isFloat bool) returns bool
+	if isFloat 'float'
+		let key = floatOrderKey(value)
+		return key >= floatOrderKey(low) and key <= floatOrderKey(high)
+	end 'float'
 	if rangeIsUnsignedMaxUpper(low, high: high) 'unsignedUpper'
 		return value < 0 or value >= low
 	end 'unsignedUpper'
@@ -824,27 +921,38 @@ end 'literalInRange'
 // the top-level const-cast path (`Parser.applyConstCast`, via the re-raised ParseError). The two
 // report the same defect from different tiers and must not phrase it two ways; the bounds spell
 // through `formatRangeDisplay`, the one place a range renders.
-export function literalOutOfRangeMessage(value ParsedInt, aliasName String, low ParsedInt, high ParsedInt) returns String
-	return "Value {value} is outside the range of '{aliasName}' ({formatRangeDisplay(low, high: high)})"
+export function literalOutOfRangeMessage(value ParsedInt, aliasName String, low ParsedInt, high ParsedInt, isFloat bool) returns String
+	return "Value {formatBound(value, isFloat: isFloat)} is outside the range of '{aliasName}' ({formatRangeDisplay(low, high: high, isFloat: isFloat)})"
 end 'literalOutOfRangeMessage'
 
-// A single range bound as source text: the `u64.max` sentinel (stored as the signed -1) renders
-// as its unsigned decimal, every other bound as its signed value. Applied to BOTH bounds
-// defensively, though only `high` reaches the sentinel in practice.
-function formatBound(bound ParsedInt) returns String
+// A single range bound (or the offending value) as source text.
+//
+// INTEGER: the `u64.max` sentinel (stored as the signed -1) renders as its unsigned decimal, every
+// other bound as its signed value. Applied to BOTH bounds defensively, though only `high` reaches
+// the sentinel in practice.
+//
+// FLOAT: the bound is an f64 BIT PATTERN, so it renders through `formatFloatBits` — the shortest
+// decimal that reads back as the same double, which is what the bootstrap prints. Printing the
+// pattern itself would name a number nobody wrote.
+function formatBound(bound ParsedInt, isFloat bool) returns String
+	if isFloat 'float'
+		return formatFloatBits(bound)
+	end 'float'
 	if bound == UnsignedFullUpperPattern 'unsigned'
 		return UnsignedFullUpperDecimal
 	end 'unsigned'
 	return "{bound}"
 end 'formatBound'
 
-// The `int(<lo> to <hi>)` spelling for an E3005 message (`Value N is outside the range of
-// 'Alias' (int(lo to hi))`). Each bound renders through `formatBound`, so a `u64.max` upper
-// shows as its unsigned decimal — matching the bootstrap's `FormatRange` — rather than the raw
-// signed -1. An exclusive `upto` alias is normalized to `high - 1` at parse and no enabled case
-// surfaces one here, so the `to` spelling is the only one reached.
-export function formatRangeDisplay(low ParsedInt, high ParsedInt) returns String
-	return "int({formatBound(low)} to {formatBound(high)})"
+// The `int(<lo> to <hi>)` / `float(<lo> to <hi>)` spelling for an E3005 message (`Value N is outside
+// the range of 'Alias' (int(lo to hi))`). Each bound renders through `formatBound`, so a `u64.max`
+// upper shows as its unsigned decimal and a float bound as its decimal value — matching the
+// bootstrap's `FormatRange` — rather than the raw pattern. An exclusive `upto` alias is normalized to
+// `high - 1` at parse and no enabled case surfaces one here, so the `to` spelling is the only one
+// reached.
+export function formatRangeDisplay(low ParsedInt, high ParsedInt, isFloat bool) returns String
+	let keyword = "float" if isFloat else "int"
+	return "{keyword}({formatBound(low, isFloat: isFloat)} to {formatBound(high, isFloat: isFloat)})"
 end 'formatRangeDisplay'
 
 // **DOES THIS SHIFT FILL WITH THE SIGN, OR WITH ZEROS?** THE one place THAT is answered — the

@@ -11,11 +11,21 @@ export typealias ParsedInt = int(i64.min to i64.max)
 // the other.
 export typealias ParsedIntArray = Array with ParsedInt
 
+// How a literal's text can fail to become a number. EXACTLY the two failures `parseInt` /
+// `parseFloatBits` actually raise — `unhandledToken`, `typeError` and `unexpectedEof` sat here
+// unthrown and unmatched, and a dead arm in an error union is a case every handler has to invent a
+// story for. There is now no arm without a raiser.
 export union ParserError
-	unhandledToken
-	typeError
 	overflow
-	unexpectedEof
+	// ⚠ A byte the number grammar does not admit — `3,14`, `1.0x`, a value with no digit at all.
+	// DISTINCT from `overflow`, and the distinction is load-bearing rather than cosmetic: the two
+	// have different CAUSES and therefore different correct responses. An overflow is a real program
+	// saying a real thing too big to hold; a malformed literal cannot come from the lexer at all
+	// (`Lexer.scanNumber` hands over digits, `_`, `.`, `e`/`E` and an exponent sign, and nothing
+	// else), so from the parser it is a compiler invariant violation — while from
+	// `Testing/PeSectionReader`, which parses spec-file text that NO lexer guards, it is exactly the
+	// typo that must be REJECTED rather than silently read as some other number.
+	malformed
 end 'ParserError'
 
 // The i64 boundary magnitudes, as digit bytes, for the overflow checks below. Built ONCE:
@@ -122,6 +132,9 @@ export function parseFloatBits(bytes ByteArray) returns ParsedInt throws ParserE
 	var sciExpNeg = false
 	var inExponent = false
 	var hasNonZeroDigit = false
+	// Whether ANY digit was seen, zero or not. `hasNonZeroDigit` cannot serve: `0.0` has no non-zero
+	// digit and is still a number, while `""` and `"abc"` are not numbers at all.
+	var sawAnyDigit = false
 	var sigDigits = 0
 	var leadingFracZeros = 0  // count of fractional zeros before the first non-zero significant digit
 
@@ -140,11 +153,17 @@ export function parseFloatBits(bytes ByteArray) returns ParsedInt throws ParserE
 
 		if inExponent 'expPart'
 			if b >= '0' and b <= '9' 'expDigit'
+				sawAnyDigit = true
 				sciExp = sciExp * 10 + (b - '0')
 				if sciExp > maxSciExp 'capExp'
 					sciExp = maxSciExp
 				end 'capExp'
-			end 'expDigit'
+			end 'expDigit' else 'notExpDigit'
+				// The exponent's own sign is consumed by the `peekSign` below, so by here every
+				// remaining byte must be a digit. Anything else is a malformed literal, not a
+				// character to ignore — see `ParserError.malformed`.
+				throw ParserError.malformed
+			end 'notExpDigit'
 		end 'expPart' else 'mantissaPart'
 			if b == 'e' or b == 'E' 'startExp'
 				inExponent = true
@@ -162,6 +181,7 @@ export function parseFloatBits(bytes ByteArray) returns ParsedInt throws ParserE
 					pastDot = true
 				end 'isDot' else 'notDot'
 					if b >= '0' and b <= '9' 'isDigit'
+						sawAnyDigit = true
 						let digitVal = b - '0'
 						if not hasNonZeroDigit and digitVal == 0 'leading'
 							// Leading zeros: skip mantissa accumulation entirely;
@@ -201,7 +221,14 @@ export function parseFloatBits(bytes ByteArray) returns ParsedInt throws ParserE
 								end 'intExcess'
 							end 'overBudget'
 						end 'normalDigit'
-					end 'isDigit'
+					end 'isDigit' else 'notADigit'
+						// `_`, `.` and `e`/`E` are all handled above, so a byte reaching here is
+						// outside the number grammar entirely. Ignoring it — which this branch used
+						// to do by having no `else` at all — makes `3,14` read as `314`, and
+						// `Testing/PeSectionReader` (whose input NO lexer guards) then bakes a wrong
+						// expected value into a passing spec.
+						throw ParserError.malformed
+					end 'notADigit'
 				end 'notDot'
 			end 'notExp'
 		end 'mantissaPart'
@@ -225,6 +252,13 @@ export function parseFloatBits(bytes ByteArray) returns ParsedInt throws ParserE
 		signedSciExp = -signedSciExp
 	end 'negSci'
 	let totalExp = decExp + signedSciExp
+
+	// Text carrying no digit at all is not a number — `""`, `"e5"`, a `RequiredData f64` line whose
+	// value went missing. It has to be rejected BEFORE the zero shortcut below, which would otherwise
+	// answer `+0` for it.
+	if not sawAnyDigit 'noDigits'
+		throw ParserError.malformed
+	end 'noDigits'
 
 	// A literal with no significant digit is zero however it is scaled, `0.0e999` included — which is
 	// why this precedes the range guards rather than following them.
@@ -255,9 +289,9 @@ export function parseFloatBits(bytes ByteArray) returns ParsedInt throws ParserE
 	var denominator = ParsedIntArray.create()
 	denominator.push(1)
 	if totalExp > 0 'scaleNumerator'
-		bigMulPow10(numerator, exponent: totalExp)
+		bigMulPow(numerator, base: 10, chunkFactors: Pow10ChunkDigits, exponent: totalExp)
 	end 'scaleNumerator' else if totalExp < 0 'scaleDenominator'
-		bigMulPow10(denominator, exponent: -totalExp)
+		bigMulPow(denominator, base: 10, chunkFactors: Pow10ChunkDigits, exponent: -totalExp)
 	end 'scaleDenominator'
 
 	// Normalize the ratio into [1, 2) and keep the power of two that was factored out. A ratio of two
@@ -380,6 +414,9 @@ let LimbMask = 0xFFFFFFFF
 // is CHECKED rather than assumed, because exceeding it means a guard upstream was widened without
 // widening this, and an unbounded silent grow is precisely the failure mode this representation
 // exists to remove.
+//
+// `formatFloatBits` shares the budget and stays well under it: its widest magnitude is the least
+// subnormal's exact expansion, `1 * 5^1074` — about 2494 bits, 78 limbs.
 let MaxBigLimbs = 144
 
 // A bit position or shift distance inside a magnitude. Non-negative — every caller either passes a
@@ -395,9 +432,12 @@ typealias DecimalScaleExponent = int(0 to u64.max)
 // -1, 0 or 1 as the left magnitude is below, equal to, or above the right.
 typealias MagnitudeOrder = int(-1 to 1)
 
-// The largest power of ten that fits a limb, so `bigMulPow10` scales in 9-digit strides instead of
-// one digit at a time — the worst-case 1091-digit scaling costs 122 passes rather than 1091.
+// The largest power of each base that fits a limb, so a scaling runs in strides instead of one
+// factor at a time — the worst-case 1091-digit decimal scaling costs 122 passes rather than 1091.
+// Ten is `parseFloatBits`' scaling base; five is `formatFloatBits`' (an f64 with a negative binary
+// exponent is EXACTLY `m * 5^-e * 10^e`, so five is what makes the decimal expansion exact).
 let Pow10ChunkDigits = 9
+let Pow5ChunkDigits = 13
 
 // Every site that GROWS a magnitude ends here, so the budget is one fact in one place. There are
 // exactly two shapes of growth and both are routed: a carry out the top (`bigPushCarry`) and a
@@ -423,22 +463,23 @@ function bigPushCarry(limbs ParsedIntArray, carry ParsedInt)
 	requireLimbBudget(limbs)
 end 'bigPushCarry'
 
-// 10^`digits`, for a `digits` no wider than a limb. The one place a power of ten is built, so the
-// chunk stride and the scaling loop cannot come to disagree about what a 9-digit step is worth.
-function pow10(digits DecimalScaleExponent) returns ParsedInt
+// `base`^`exponent`, for a result no wider than a limb. The one place a small power is built, so a
+// chunk stride and the scaling loop that consumes it cannot come to disagree about what a step is
+// worth.
+function powOf(base ParsedInt, exponent DecimalScaleExponent) returns ParsedInt
 	var factor = 1
 	var i = 0
-	while i < digits 'multiply'
-		factor = factor * 10
+	while i < exponent 'multiply'
+		factor = factor * base
 		i = i + 1
 	end 'multiply'
 	return factor
-end 'pow10'
+end 'powOf'
 
 // Shift `digits` decimal places into `limbs` and drop `chunk` into the space that opens up — the
 // digit-accumulation step, done a chunk at a time rather than a digit at a time.
 function bigAppendDigits(limbs ParsedIntArray, chunk ParsedInt, digits DecimalScaleExponent)
-	bigMulSmall(limbs, multiplier: pow10(digits))
+	bigMulSmall(limbs, multiplier: powOf(10, exponent: digits))
 	bigAddSmall(limbs, addend: chunk)
 end 'bigAppendDigits'
 
@@ -471,19 +512,109 @@ function bigMulSmall(limbs ParsedIntArray, multiplier ParsedInt)
 	bigPushCarry(limbs, carry: carry)
 end 'bigMulSmall'
 
-// `limbs` *= 10^`exponent`, in place.
-function bigMulPow10(limbs ParsedIntArray, exponent DecimalScaleExponent)
+// `limbs` *= `base`^`exponent`, in place, in strides of `chunkFactors` factors — one shared loop for
+// the decimal scaling `parseFloatBits` needs and the base-five scaling `formatFloatBits` needs.
+function bigMulPow(limbs ParsedIntArray, base ParsedInt, chunkFactors DecimalScaleExponent, exponent DecimalScaleExponent)
 	var remaining = exponent
 	while remaining > 0 'chunks'
-		var digits = Pow10ChunkDigits
-		if remaining < digits 'lastChunk'
-			digits = remaining
+		var factors = chunkFactors
+		if remaining < factors 'lastChunk'
+			factors = remaining
 		end 'lastChunk'
 
-		bigMulSmall(limbs, multiplier: pow10(digits))
-		remaining = remaining - digits
+		bigMulSmall(limbs, multiplier: powOf(base, exponent: factors))
+		remaining = remaining - factors
 	end 'chunks'
-end 'bigMulPow10'
+end 'bigMulPow'
+
+// `limbs` /= `divisor`, in place, returning the remainder. `divisor` must fit a limb so that the
+// running `remainder * 2^32 + limb` dividend stays inside an i64 — the mirror of the obligation
+// `bigMulSmall` carries. Restores the no-leading-zero-limb invariant, so an exhausted magnitude
+// becomes the empty (zero) one.
+function bigDivModSmall(limbs ParsedIntArray, divisor ParsedInt) returns ParsedInt
+	var remainder = 0
+	var i = limbs.count()
+	while i > 0 'divideEach'
+		i = i - 1
+		let dividend = (remainder shl LimbBits) or (try limbs.get(i) otherwise panic("bigDivModSmall: i < count() by loop guard but get({i}) failed"))
+		let quotient = try (dividend / divisor) otherwise panic("bigDivModSmall: divisor is zero — every caller passes a positive power of ten")
+		try limbs.set(i, value: quotient) otherwise panic("bigDivModSmall: set({i}) failed at an index get just accepted")
+		remainder = try (dividend mod divisor) otherwise panic("bigDivModSmall: divisor is zero — every caller passes a positive power of ten")
+	end 'divideEach'
+
+	var used = limbs.count()
+	while used > 0 and (try limbs.get(used - 1) otherwise panic("bigDivModSmall: used > 0 by loop guard but get({used - 1}) failed")) == 0 'trimLeadingZeroLimbs'
+		used = used - 1
+	end 'trimLeadingZeroLimbs'
+	limbs.resize(used)
+	return remainder
+end 'bigDivModSmall'
+
+// A magnitude holding one non-negative scalar. `formatFloatBits` starts from an f64's 53-bit
+// significand, which is two limbs at most.
+function bigFromScalar(value ParsedInt) returns ParsedIntArray
+	var limbs = ParsedIntArray.create()
+	var remaining = value
+	while remaining > 0 'eachLimb'
+		limbs.push(remaining and LimbMask)
+		remaining = remaining shr LimbBits
+	end 'eachLimb'
+	return limbs
+end 'bigFromScalar'
+
+// A magnitude's decimal digits, most significant first, with no leading zero (empty magnitude ⇒
+// `"0"`). CONSUMES `limbs` — the repeated division that produces the digits is what destroys it.
+function bigToDecimalDigits(limbs ParsedIntArray) returns ByteArray
+	let groupDivisor = powOf(10, exponent: Pow10ChunkDigits)
+	var groups = ParsedIntArray.create()
+	while not limbs.isEmpty() 'eachGroup'
+		groups.push(bigDivModSmall(limbs, divisor: groupDivisor))
+	end 'eachGroup'
+
+	if groups.isEmpty() 'zero'
+		return b"0"
+	end 'zero'
+
+	var digits = ByteArray.create()
+	var gi = groups.count()
+	while gi > 0 'emitGroups'
+		gi = gi - 1
+		let group = try groups.get(gi) otherwise panic("bigToDecimalDigits: gi < groups.count() by loop guard but get({gi}) failed")
+		// Every group but the most significant is a FIXED-WIDTH field: its leading zeros are real
+		// digits of the number, and dropping them would silently divide the value by a power of ten.
+		appendDecimalGroup(digits, value: group, width: Pow10ChunkDigits if gi < groups.count() - 1 else decimalWidthOf(group))
+	end 'emitGroups'
+	return digits
+end 'bigToDecimalDigits'
+
+// How many decimal digits `value` (0 to 10^9 - 1) needs, at least one.
+function decimalWidthOf(value ParsedInt) returns DecimalScaleExponent
+	var width = 1
+	var remaining = value / 10
+	while remaining > 0 'count'
+		width = width + 1
+		remaining = remaining / 10
+	end 'count'
+	return width
+end 'decimalWidthOf'
+
+// Append `value` as exactly `width` decimal digits, zero-padded on the left. Digits fall out
+// least-significant first, so they are gathered and then emitted in reverse — which also keeps every
+// divisor a LITERAL ten, and so keeps the whole routine free of a can-throw division.
+function appendDecimalGroup(digits ByteArray, value ParsedInt, width DecimalScaleExponent)
+	var reversed = ByteArray.create()
+	var remaining = value
+	for _ in 0 upto width 'eachDigit'
+		reversed.push('0' + (remaining mod 10))
+		remaining = remaining / 10
+	end 'eachDigit'
+
+	var i = reversed.count()
+	while i > 0 'emitInOrder'
+		i = i - 1
+		digits.push(try reversed.get(i) otherwise panic("appendDecimalGroup: i < reversed.count() by loop guard but get({i}) failed"))
+	end 'emitInOrder'
+end 'appendDecimalGroup'
 
 // `limbs` <<= `bits`, in place.
 function bigShiftLeft(limbs ParsedIntArray, bits BigBitCount)
@@ -594,6 +725,247 @@ function bigSubtract(a ParsedIntArray, subtrahend ParsedIntArray)
 	end 'trimLeadingZeroLimbs'
 	a.resize(used)
 end 'bigSubtract'
+
+// --- `formatFloatBits`: an f64 bit pattern back to decimal TEXT ---
+//
+// ⭐ **WHY THE COMPILER NEEDS THIS AT ALL.** A ranged FLOAT alias carries its bounds as f64 BIT
+// PATTERNS (`RangedTypeAlias`), and so does a float literal's constant payload. The narrowing
+// diagnostic has to say `Value 500 is outside the range of 'Pct' (float(0 to 100))` — three
+// DOUBLES rendered as numbers. Nothing else in shv2 turns a double into text: the runtime's own
+// float printing is P1.2's and belongs to the emitted program, not to the compiler.
+//
+// ⭐ **SHORTEST ROUND-TRIP, and the round-trip is CHECKED rather than argued.** The answer is the
+// shortest digit string that reads back as the same double, which is what the bootstrap prints
+// (.NET's default `double.ToString()`), and it is found by asking `parseFloatBits` — the exact,
+// correctly-rounded parser that sits directly above — whether each candidate reads back. So this
+// cannot drift from the parser: it is defined in terms of it. No Grisu/Ryu bound tables to get
+// subtly wrong, and no second opinion about what a literal MEANS.
+//
+// The search is sound as well as simple: if ANY p-digit decimal lies inside a double's rounding
+// interval, then the p-digit decimal NEAREST the double lies inside it too (the interval is centred
+// on the value), and the nearest one is exactly what correctly-rounded truncation to p digits
+// produces. So testing only the rounded candidate at each p finds the true shortest.
+
+// The bit fields of a binary64, past the widths `parseFloatBits` already names. The exponent field
+// is all-ones for an infinity or a NaN — a pattern no literal and no writable bound can produce.
+let ExponentFieldMask = 0x7FF
+let SignificandFieldMask = 0x000FFFFFFFFFFFFF
+let InfiniteExponentField = 0x7FF
+
+// Everything below the sign bit. A `ParsedInt` is SIGNED, so `i64.max` IS the 63-bit mask, spelled
+// as the number Maxon can write — the mirror of `Parser.FloatSignBit` being spelled `i64.min`.
+let FloatMagnitudeMask = i64.max as ParsedInt
+
+// The most significant digits a binary64 can need to round-trip. Also the search's upper bound: a
+// 17-digit candidate always reads back, so the loop cannot fall off the end.
+let RoundTripDigitBudget = 17
+
+// ⭐ WHERE FIXED-POINT NOTATION GIVES WAY TO SCIENTIFIC, matching .NET's general format — which is
+// what the bootstrap prints and therefore what a diagnostic has to say. `scale` is the position of
+// the decimal point relative to the digit string (value = 0.<digits> × 10^scale), and the notation
+// is fixed for `-3 <= scale <= 17` and scientific outside it. Both ends are MEASURED against the
+// bootstrap, not guessed: `1e16` (scale 17) prints `10000000000000000` while `1e17` (scale 18)
+// prints `1E+17`, and `0.0001` (scale -3) prints in full while `0.00001` (scale -4) prints `1E-05`.
+let FixedNotationMaxScale = 17
+let FixedNotationMinScale = -3
+
+// A scientific exponent is written with a sign and at least two digits (`1E-05`, `1E+300`).
+let ScientificExponentMinDigits = 2
+
+// The decimal text of the double `bits` encodes: the shortest string that reads back as the same
+// double, in the notation the bootstrap uses. Finite values only — see `InfiniteExponentField`.
+export function formatFloatBits(bits ParsedInt) returns String
+	let negative = bits < 0
+	let magnitude = bits and FloatMagnitudeMask
+	let exponentField = (magnitude shr SignificandFieldBits) and ExponentFieldMask
+	if exponentField == InfiniteExponentField 'notFinite'
+		panic("formatFloatBits: {magnitude} is an infinity or a NaN — a float literal overflows to E2011 before it can become one, and no writable range bound names one, so nothing should reach here")
+	end 'notFinite'
+
+	let sign = "-" if negative else ""
+	let fraction = magnitude and SignificandFieldMask
+	if exponentField == 0 and fraction == 0 'zero'
+		// `-0.0` keeps its sign, exactly as the bootstrap prints it.
+		return "{sign}0"
+	end 'zero'
+
+	// A subnormal's exponent field is pinned at zero and its leading one is spelled out inside the
+	// significand; a normal's is implicit. `value = significand * 2^binaryExponent` either way.
+	let significand = fraction if exponentField == 0 else fraction + ImplicitLeadingBit
+	let binaryExponent = LeastSubnormalBinaryExponent if exponentField == 0 else exponentField - ExponentBias - SignificandFieldBits
+
+	// The EXACT decimal expansion, as an integer times a power of ten. A non-negative binary exponent
+	// scales an integer by a power of two and stays one; a negative one is `m / 2^k`, which is
+	// `m * 5^k / 10^k` — exact, and the reason base five earns its own chunk stride.
+	var digitsMagnitude = bigFromScalar(significand)
+	var pointExponent = 0
+	if binaryExponent >= 0 'scaleUp'
+		bigShiftLeft(digitsMagnitude, bits: binaryExponent)
+	end 'scaleUp' else 'scaleDown'
+		bigMulPow(digitsMagnitude, base: 5, chunkFactors: Pow5ChunkDigits, exponent: -binaryExponent)
+		pointExponent = binaryExponent
+	end 'scaleDown'
+
+	let exactDigits = bigToDecimalDigits(digitsMagnitude)
+	// value = 0.<exactDigits> × 10^scale. Trailing zeros carry no information and are dropped, which
+	// leaves `scale` untouched (it counts from the FRONT).
+	let scale = exactDigits.count() + pointExponent
+	let digits = withoutTrailingZeros(exactDigits)
+
+	return "{sign}{shortestRoundTrip(digits, scale: scale, target: magnitude)}"
+end 'formatFloatBits'
+
+// The shortest correctly-rounded prefix of `digits` that reads back as `target`, rendered.
+function shortestRoundTrip(digits ByteArray, scale DecimalPointScale, target ParsedInt) returns String
+	let longest = digits.count() if digits.count() < RoundTripDigitBudget else RoundTripDigitBudget
+	for kept in 1 to longest 'eachLength'
+		let candidate = roundedToLength(digits, kept: kept, scale: scale)
+		let probe = scientificText(candidate.digits, scale: candidate.scale)
+		let readBack = try parseFloatBits(probe.toByteArray()) otherwise panic("shortestRoundTrip: parseFloatBits rejected '{probe}', a candidate built from digits and a scale — the two number paths have diverged")
+		if readBack == target 'roundTrips'
+			return renderDecimal(candidate.digits, scale: candidate.scale)
+		end 'roundTrips'
+	end 'eachLength'
+
+	// Unreachable for a real double: 17 significant digits always round-trip, and a double's exact
+	// expansion is never shorter than its shortest round-tripping prefix.
+	panic("shortestRoundTrip: no prefix of {String.from(digits)} up to {RoundTripDigitBudget} digits read back as {target}, but 17 significant digits round-trip every binary64")
+end 'shortestRoundTrip'
+
+// A digit string with its decimal-point scale — `value = 0.<digits> × 10^scale`. Rounding can carry
+// out of the top (`999` to 4 digits becomes `1` at one higher scale), so the two travel together.
+type ScaledDigits
+	export var digits as ByteArray
+	export var scale as DecimalPointScale
+
+	static function create(digits ByteArray, scale DecimalPointScale) returns ScaledDigits
+		return Self{digits: digits, scale: scale}
+	end 'create'
+end 'ScaledDigits'
+
+// Where the decimal point sits relative to a digit string: `value = 0.<digits> × 10^scale`. Runs
+// from about -323 (the least subnormal) to 309 (past f64.max), but written open-ended because it is
+// an i64 sum of a digit count and a binary-derived exponent.
+typealias DecimalPointScale = int(i64.min to i64.max)
+
+// `digits` correctly rounded to `kept` significant digits, round-half-EVEN — the rule that makes the
+// result the NEAREST `kept`-digit decimal, which is what makes testing only this candidate sound.
+function roundedToLength(digits ByteArray, kept DecimalScaleExponent, scale DecimalPointScale) returns ScaledDigits
+	if kept >= digits.count() 'wholeString'
+		return ScaledDigits.create(digits, scale: scale)
+	end 'wholeString'
+
+	var prefix = try digits.slice(0, endIndex: kept) otherwise panic("roundedToLength: kept < digits.count() by the guard above but slice(0, {kept}) failed")
+	if not roundsUp(digits, kept: kept) 'roundDown'
+		return ScaledDigits.create(withoutTrailingZeros(prefix), scale: scale)
+	end 'roundDown'
+
+	var carry = kept
+	while carry > 0 'propagate'
+		carry = carry - 1
+		let digit = try prefix.get(carry) otherwise panic("roundedToLength: carry < kept = prefix.count() but get({carry}) failed")
+		if digit != '9' 'noCarryOut'
+			try prefix.set(carry, value: digit + 1) otherwise panic("roundedToLength: set({carry}) failed at an index get just accepted")
+			let carried = try prefix.slice(0, endIndex: carry + 1) otherwise panic("roundedToLength: carry + 1 <= kept = prefix.count() but slice(0, {carry + 1}) failed")
+			return ScaledDigits.create(withoutTrailingZeros(carried), scale: scale)
+		end 'noCarryOut'
+	end 'propagate'
+
+	// Every kept digit was a nine, so the round-up carries out of the string entirely: `999` becomes
+	// `1` one decimal place further left.
+	return ScaledDigits.create(b"1", scale: scale + 1)
+end 'roundedToLength'
+
+// Does the tail past `kept` digits round the prefix UP? Above half rounds up, below half rounds
+// down, and an exact half goes to the even last kept digit.
+function roundsUp(digits ByteArray, kept DecimalScaleExponent) returns bool
+	let first = try digits.get(kept) otherwise panic("roundsUp: kept < digits.count() by caller's guard but get({kept}) failed")
+	if first != '5' 'notHalfway'
+		return first > '5'
+	end 'notHalfway'
+
+	let tailStart = kept + 1
+	for i in tailStart upto digits.count() 'restOfTail'
+		if (try digits.get(i) otherwise panic("roundsUp: i < digits.count() by loop guard but get({i}) failed")) != '0' 'aboveHalfway'
+			return true
+		end 'aboveHalfway'
+	end 'restOfTail'
+
+	let lastKept = try digits.get(kept - 1) otherwise panic("roundsUp: kept >= 1 but get({kept - 1}) failed")
+	return (lastKept - '0') mod 2 == 1
+end 'roundsUp'
+
+// `digits` with its trailing zeros removed; a string of nothing but zeros reduces to `"0"`. A
+// magnitude's trailing zeros are already accounted for by `scale`, so keeping them would only make
+// the round-trip search start longer than it needs to.
+function withoutTrailingZeros(digits ByteArray) returns ByteArray
+	var used = digits.count()
+	while used > 1 and (try digits.get(used - 1) otherwise panic("withoutTrailingZeros: used > 1 by loop guard but get({used - 1}) failed")) == '0' 'trim'
+		used = used - 1
+	end 'trim'
+	return try digits.slice(0, endIndex: used) otherwise panic("withoutTrailingZeros: used <= digits.count() but slice(0, {used}) failed")
+end 'withoutTrailingZeros'
+
+// `0.<digits>e<scale>` — the round-trip probe's spelling, chosen because it states the scale
+// explicitly and so needs no notation rules at all. Never shown to a user.
+function scientificText(digits ByteArray, scale DecimalPointScale) returns String
+	return "0.{String.from(digits)}e{scale}"
+end 'scientificText'
+
+// The DISPLAY spelling: fixed-point inside the window, scientific outside it (see
+// `FixedNotationMaxScale`).
+function renderDecimal(digits ByteArray, scale DecimalPointScale) returns String
+	if scale > FixedNotationMaxScale or scale < FixedNotationMinScale 'scientific'
+		return scientificDisplay(digits, scale: scale)
+	end 'scientific'
+	return fixedDisplay(digits, scale: scale)
+end 'renderDecimal'
+
+// `d1[.d2…]E±ee` — one digit before the point, the exponent signed and at least two digits wide.
+function scientificDisplay(digits ByteArray, scale DecimalPointScale) returns String
+	let lead = String.from(digitSlice(digits, start: 0, endIndex: 1))
+	let rest = "" if digits.count() == 1 else ".{String.from(digitSlice(digits, start: 1, endIndex: digits.count()))}"
+	let exponent = scale - 1
+	let exponentSign = "-" if exponent < 0 else "+"
+	return "{lead}{rest}E{exponentSign}{paddedExponent(exponent if exponent >= 0 else -exponent)}"
+end 'scientificDisplay'
+
+// The exponent's magnitude, left-padded with zeros to `ScientificExponentMinDigits`.
+function paddedExponent(magnitude DecimalScaleExponent) returns String
+	var text = "{magnitude}"
+	while text.count() < ScientificExponentMinDigits 'pad'
+		text = "0{text}"
+	end 'pad'
+	return text
+end 'paddedExponent'
+
+// Ordinary decimal notation: the point sits `scale` digits in, with zeros filling whichever side is
+// short.
+function fixedDisplay(digits ByteArray, scale DecimalPointScale) returns String
+	if scale <= 0 'leadingZeros'
+		return "0.{zeros(-scale)}{String.from(digits)}"
+	end 'leadingZeros'
+
+	if scale >= digits.count() 'trailingZeros'
+		return "{String.from(digits)}{zeros(scale - digits.count())}"
+	end 'trailingZeros'
+
+	return "{String.from(digitSlice(digits, start: 0, endIndex: scale))}.{String.from(digitSlice(digits, start: scale, endIndex: digits.count()))}"
+end 'fixedDisplay'
+
+// A slice of a digit string whose bounds the caller has already established. Named so the four
+// display sites do not each carry their own `otherwise panic`.
+function digitSlice(digits ByteArray, start DecimalScaleExponent, endIndex DecimalScaleExponent) returns ByteArray
+	return try digits.slice(start, endIndex: endIndex) otherwise panic("digitSlice: [{start}, {endIndex}) is not inside a {digits.count()}-digit string — the caller's bound is wrong")
+end 'digitSlice'
+
+function zeros(count DecimalScaleExponent) returns String
+	var text = ""
+	for _ in 0 upto count 'each'
+		text = "{text}0"
+	end 'each'
+	return text
+end 'zeros'
 
 // Parse an integer literal. Throws ParserError.overflow if the value exceeds i64 range.
 // Handles decimal, hex (0x), binary (0b), and octal (0o) prefixes.

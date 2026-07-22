@@ -1,0 +1,120 @@
+// Test: struct-enum-field-nested-array-push
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+export union Instruction
+		load(slot Integer)
+		store(slot Integer)
+		nop
+end 'Instruction'
+
+export type Function
+		export var name as Integer
+		export var body as IntArray
+		export var terminator as Instruction
+		export var hasTerminator as bool
+
+		static function create(name Integer, body IntArray, terminator Instruction, hasTerminator bool) returns Self
+			return Self{name: name, body: body, terminator: terminator, hasTerminator: hasTerminator}
+		end 'create'
+end 'Function'
+
+function main() returns ExitCode
+		var f = Function.create(1, body: IntArray.create(), terminator: Instruction.load(99), hasTerminator: true)
+		var i = 0
+		while i < 20 'fill'
+				f.body.push(i)
+				i = i + 1
+		end 'fill'
+		return f.body.count()
+end 'main'
+---
+ExitCode: 20
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @Function.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.prologue 32
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+    x64.movRegReg r13, rax
+    x64.movRegReg r14, r9
+    x64.movRegImm32 rcx, 32
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.storeBaseDispReg.word64 [r8 + 8], r12
+    x64.storeBaseDispReg.word64 [r8 + 16], r13
+    x64.storeBaseDispReg.byte [r8 + 24], r14
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegImm32 rbx, 1
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __arr_create
+    x64.movRegReg r12, r8
+    x64.movRegImm32 r13, 99
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r8 + 0], rax
+    x64.storeBaseDispReg.word64 [r8 + 8], r13
+    x64.movRegImm32 r9, 1
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, r8
+    x64.callDirect Function.create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 r12, 0
+    x64.jmp whilehdr
+  whilehdr:
+    x64.cmpRegImm32 r12, 20
+    x64.jcc less, fill
+    x64.jmp whileexit
+  fill:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
+    x64.movRegReg rdx, r12
+    x64.callDirect __arr_push
+    x64.leaRegRegImm32 r12, r12, 1
+    x64.jmp whilehdr
+  whileexit:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
+    x64.callDirect __arr_count
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_Function
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

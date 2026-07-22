@@ -298,8 +298,7 @@ end 'main'
 
 ### Overflow Errors
 
-<!-- disabled-test: error.int-overflow -->
-<!-- shv2 emits E2011 at the right token with the right code, but its MESSAGE text differs from the reference's: `Integer literal out of range` versus the reference's `Integer literal '<lit>' is outside the range of int (…)`. The wording is `ParseError.integerOverflow`'s rendering in Compiler/Queries.maxon, not the literal parser's, so aligning it is a diagnostic-text decision (and one shared with the three other integer radices below and the float case) rather than anything about how a literal is read. -->
+<!-- test: error.int-overflow -->
 ```maxon
 function main() returns ExitCode
 	let x = 99999999999999999999
@@ -310,8 +309,7 @@ end 'main'
 error E2011: specs/fragments/literals/error.int-overflow.test:3:10: Integer literal '99999999999999999999' is outside the range of int (-9223372036854775808 to 9223372036854775807)
 ```
 
-<!-- disabled-test: error.hex-overflow -->
-<!-- shv2 emits E2011 at the right token with the right code, but its MESSAGE text differs from the reference's: `Integer literal out of range` versus the reference's `Integer literal '<lit>' is outside the range of int (…)`. The wording is `ParseError.integerOverflow`'s rendering in Compiler/Queries.maxon, not the literal parser's, so aligning it is a diagnostic-text decision (and one shared with the three other integer radices below and the float case) rather than anything about how a literal is read. -->
+<!-- test: error.hex-overflow -->
 ```maxon
 function main() returns ExitCode
 	let x = 0x1ffffffffffffffff
@@ -322,8 +320,7 @@ end 'main'
 error E2011: specs/fragments/literals/error.hex-overflow.test:3:10: Integer literal '0x1ffffffffffffffff' is outside the range of int (-9223372036854775808 to 9223372036854775807)
 ```
 
-<!-- disabled-test: error.binary-overflow -->
-<!-- shv2 emits E2011 at the right token with the right code, but its MESSAGE text differs from the reference's: `Integer literal out of range` versus the reference's `Integer literal '<lit>' is outside the range of int (…)`. The wording is `ParseError.integerOverflow`'s rendering in Compiler/Queries.maxon, not the literal parser's, so aligning it is a diagnostic-text decision (and one shared with the three other integer radices below and the float case) rather than anything about how a literal is read. -->
+<!-- test: error.binary-overflow -->
 ```maxon
 function main() returns ExitCode
 	let x = 0b10000000000000000000000000000000000000000000000000000000000000000
@@ -334,8 +331,7 @@ end 'main'
 error E2011: specs/fragments/literals/error.binary-overflow.test:3:10: Integer literal '0b10000000000000000000000000000000000000000000000000000000000000000' is outside the range of int (-9223372036854775808 to 9223372036854775807)
 ```
 
-<!-- disabled-test: error.octal-overflow -->
-<!-- shv2 emits E2011 at the right token with the right code, but its MESSAGE text differs from the reference's: `Integer literal out of range` versus the reference's `Integer literal '<lit>' is outside the range of int (…)`. The wording is `ParseError.integerOverflow`'s rendering in Compiler/Queries.maxon, not the literal parser's, so aligning it is a diagnostic-text decision (and one shared with the three other integer radices below and the float case) rather than anything about how a literal is read. -->
+<!-- test: error.octal-overflow -->
 ```maxon
 function main() returns ExitCode
 	let x = 0o2000000000000000000000
@@ -346,8 +342,7 @@ end 'main'
 error E2011: specs/fragments/literals/error.octal-overflow.test:3:10: Integer literal '0o2000000000000000000000' is outside the range of int (-9223372036854775808 to 9223372036854775807)
 ```
 
-<!-- disabled-test: error.float-overflow -->
-<!-- Same diagnostic-TEXT divergence as the four integer-overflow cases above, not a conversion gap: shv2 rejects `1.0e999` with E2011 at 3:10, but words it `Float literal out of range (a float is an IEEE-754 double; its magnitude cannot exceed f64.max)` — deliberately, per ParseError.floatLiteralOverflow's comment in Compiler/Parser.maxon. specs-shv2/float-literal-magnitude.md gates the same rejection on shv2's own wording so the mechanism is not left uncovered. -->
+<!-- test: error.float-overflow -->
 ```maxon
 function main() returns ExitCode
 	let x = 1.0e999
@@ -358,8 +353,7 @@ end 'main'
 error E2011: specs/fragments/literals/error.float-overflow.test:3:10: Float literal '1.0e999' is outside the range of float
 ```
 
-<!-- disabled-test: i64-min-literal -->
-<!-- shv2 routes `parseNegatedInt` only from `parseRangeBound` (a typealias bound), so an EXPRESSION-position `-9223372036854775808` is parsed as unary minus over the bare magnitude — which overflows a positive i64 and reports E2011. Parser.parseIntLiteral passes `negated: false` unconditionally; making the expression parser fold a leading `-` into the literal token is its own change, in Parser.maxon. -->
+<!-- test: i64-min-literal -->
 `-9223372036854775808` is exactly `i64.min`. Its magnitude (`9223372036854775808`
 = `i64.max + 1`) overflows a positive i64, so a negated literal must be parsed as
 a single unit: parsing the bare magnitude first would wrongly report E2011. (An

@@ -1,0 +1,37 @@
+// Test: error.cast-does-not-launder-source
+typealias Integer = int(i64.min to i64.max)
+
+type Wrapper uses T
+	export typealias Idx = int(0 to u64.max)
+
+	export var value as T
+	export var tag as Idx
+
+	export static function create(value T, tag Idx) returns Self
+		return Self{value: value, tag: tag}
+	end 'create'
+
+	export function getTag() returns Idx
+		return self.tag
+	end 'getTag'
+
+	export function setTag(t Idx)
+		self.tag = t
+	end 'setTag'
+end 'Wrapper'
+
+typealias WA = Wrapper with Integer
+typealias WB = Wrapper with Integer
+
+function main() returns ExitCode
+	let a = WA.create(1, tag: 5)
+	let aTag = a.getTag()
+	let bTag = aTag as WB.Idx
+	var b = WB.create(2, tag: 0)
+	b.setTag(bTag)
+	b.setTag(aTag)
+	return 0
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:32:2: argument type mismatch for 't': expected 'WB.Idx', got 'WA.Idx'

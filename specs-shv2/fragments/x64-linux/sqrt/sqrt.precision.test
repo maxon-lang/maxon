@@ -1,0 +1,22 @@
+// Test: sqrt.precision
+function main() returns ExitCode
+	let x = sqrt(2.0)
+	// sqrt(2) * sqrt(2) should be approximately 2
+	let check = x * x
+	// Trunc to get integer 2
+	return trunc(check)
+end 'main'
+---
+ExitCode: 2
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movsdRegRip xmm0, [rip + __fconst_0]
+    x64.sqrtsdRegReg xmm0, xmm0
+    x64.mulsdRegReg xmm0, xmm0, xmm0
+    x64.cvttsd2siRegReg r8, xmm0
+    x64.popReg rbp
+    x64.ret
+}
