@@ -11064,6 +11064,12 @@ export type Parser
 			return
 		end 'noFields'
 
+		// ⭐ **THE VALUES ALREADY MOVED INTO AN OWNING FIELD OF THIS LITERAL (P1.6-B2 double-free fix).** shv2
+		// is move-only (no `__mm_incref`), so a single value cannot be OWNED by two fields — `Self{a: v, b: v}`
+		// would drop the same String twice (refcount underflow / double-free). Each value moved into an owning
+		// field is recorded here; a second reference to it at an owning field is a USE-AFTER-MOVE (E3102).
+		var movedOwningValues = ValueIdArray.create()
+
 		while true 'fieldLoop'
 			let nameTok = try self.consume(TokenKind.identifier)
 			try self.consume(TokenKind.colon)
@@ -11083,7 +11089,9 @@ export type Parser
 			// it was a bare local — a managed field's move-in poisons that source.
 			let valueStart = self.pos
 			let value = try self.parseValueExpression(func)
-			try self.requireFieldType(layout, index: index, value: value, anchor: nameTok)
+			let fieldType = self.signatures.fieldTypeOf(layout.name, index: index, into: self.artifact.typeNames)
+			try self.requireFieldType(layout, index: index, fieldType: fieldType, value: value, anchor: nameTok)
+			try self.rejectDoubleOwningStore(movedOwningValues, value: value, fieldType: fieldType, valueStart: valueStart)
 
 			// ⭐ **ESCAPE (P1.5-A2b): a capturing closure may not fill a struct field at CONSTRUCTION either** —
 			// a `Self{op: closure}` box is the same heap slot `x.op = closure` writes (one carries only the
@@ -11113,8 +11121,7 @@ export type Parser
 	// It is the parser's to check and not SemanticCheck's, unlike a call ARGUMENT: a call's callee
 	// may be declared in another file, but a struct literal's layout is already in hand here — the
 	// parser had to have it to know the field exists at all.
-	function requireFieldType(layout StructLayout, index FieldIndex, value ValueId, anchor Token) throws ParseError
-		let fieldType = self.signatures.fieldTypeOf(layout.name, index: index, into: self.artifact.typeNames)
+	function requireFieldType(layout StructLayout, index FieldIndex, fieldType MaxonType, value ValueId, anchor Token) throws ParseError
 		let class = classifyUnionPayload(self.signatures, typeNames: self.artifact.typeNames, fieldType: fieldType)
 		if payloadClassIsManaged(class) 'managed'
 			try self.requireManagedValueMatches(payloadStorageOf(class), isString: payloadClassIsString(class), value: value, siteName: self.fieldSiteName(layout, index: index), anchor: anchor)
@@ -11131,6 +11138,28 @@ export type Parser
 			end 'declared'
 		end 'scalarField'
 	end 'requireFieldType'
+
+	// ⭐ **REJECT A DOUBLE-MOVE OF ONE VALUE INTO TWO OWNING FIELDS (P1.6-B2)** — the move-only guard that
+	// makes `Self{a: v, b: v}` a clean E3102 instead of a double-free. A value stored into an OWNING field is
+	// MOVED, not copied: an OWNED managed value (its heap object would be aliased and dropped twice), or ANY
+	// TYPE-PARAMETER field (opaque in the shared body — for a MANAGED instance both fields alias and the
+	// instance destructor drops both; rejected even for a trivial instance, since the body is compiled once
+	// and move-only has no clone). A SCALAR field COPIES its value, and a BORROWED managed value is PROMOTED
+	// to a fresh owned copy per field (`moveInPayload`), so neither aliases — both stay legal. It runs at
+	// PARSE, before any move-in, so the value is still live at both references; `valueStart`'s token names and
+	// positions the second use.
+	function rejectDoubleOwningStore(movedOwningValues ValueIdArray, value ValueId, fieldType MaxonType, valueStart TokenIndex) throws ParseError
+		if not (self.valueIsOwnedHeap(value) or maxonTypeTag(fieldType) == ValueTypeTag.typeParameter) 'copiedOrPromoted'
+			return
+		end 'copiedOrPromoted'
+		for prior in movedOwningValues 'eachPrior'
+			if prior == value 'doubleMove'
+				let valueTok = self.tokenAt(valueStart)
+				throw ParseError.useAfterMove(String.from(valueTok.value), line: valueTok.line, column: valueTok.column)
+			end 'doubleMove'
+		end 'eachPrior'
+		movedOwningValues.push(value)
+	end 'rejectDoubleOwningStore'
 
 	// The `<Struct>.<field>` label a managed-field type mismatch names.
 	function fieldSiteName(layout StructLayout, index FieldIndex) returns String
@@ -12196,7 +12225,7 @@ export type Parser
 
 		let valueStart = self.pos
 		let value = try self.parseExpression(func, block: block)
-		try self.requireFieldType(layout, index: index, value: value, anchor: fieldTok)
+		try self.requireFieldType(layout, index: index, fieldType: self.signatures.fieldTypeOf(layout.name, index: index, into: self.artifact.typeNames), value: value, anchor: fieldTok)
 
 		// Routed through `emitFieldWrite`, exactly as `parseFieldAssignment` is: a MANAGED self-field
 		// (`name = n`) must drop its old value and MOVE the new one in (a borrowed String is promoted, a
@@ -12337,7 +12366,7 @@ export type Parser
 		// MANAGED field, whether the new value is a bare-local reference to poison.
 		let valueStart = self.pos
 		let value = try self.parseExpression(func, block: block)
-		try self.requireFieldType(step.layout, index: index, value: value, anchor: step.lastFieldTok)
+		try self.requireFieldType(step.layout, index: index, fieldType: self.signatures.fieldTypeOf(step.layout.name, index: index, into: self.artifact.typeNames), value: value, anchor: step.lastFieldTok)
 
 		try self.emitFieldWrite(step.box, layout: step.layout, index: index, value: value, argBareLocal: self.rhsWasBareLocalReference(valueStart), anchor: step.lastFieldTok, range: SourceRange.between(step.baseTok, last: step.lastFieldTok))
 	end 'parseFieldAssignment'

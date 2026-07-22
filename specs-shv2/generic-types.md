@@ -414,3 +414,42 @@ end 'main'
 ```exitcode
 0
 ```
+
+<!-- test: error.generic-double-store-managed -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+type DPair uses T
+	export var a as T
+	export var b as T
+	export static function create(v T) returns Self
+		return Self{a: v, b: v}
+	end 'create'
+end 'DPair'
+typealias StrDPair = DPair with String
+function main() returns ExitCode
+	let p = StrDPair.create("{7}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:7:24: use of moved value 'v': its ownership moved to another binding at an earlier bind or assignment
+```
+
+<!-- test: scalar-double-store -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+type IntPair
+	export var a as Integer
+	export var b as Integer
+	export static function create(n Integer) returns Self
+		return Self{a: n, b: n}
+	end 'create'
+end 'IntPair'
+function main() returns ExitCode
+	let p = IntPair.create(7)
+	return p.a - 7
+end 'main'
+```
+```exitcode
+0
+```

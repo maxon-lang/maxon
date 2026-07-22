@@ -320,6 +320,31 @@ end 'main'
 error E3102: specs/fragments/struct-managed-field/error.consume-then-reuse.test:23:9: use of moved value 'i': its ownership moved to another binding at an earlier bind or assignment
 ```
 
+<!-- test: error.managed-double-store -->
+Storing one managed value into TWO owning fields of a struct literal is use-after-move.
+shv2 is move-only (no incref), so a single String cannot be owned by two fields — dropping
+it twice would double-free — so the second store is `E3102`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Pair
+	export var a as String
+	export var b as String
+
+	static function create(v String) returns Self
+		return Self{a: v, b: v}
+	end 'create'
+end 'Pair'
+
+function main() returns ExitCode
+	let p = Pair.create("{7}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3102: <fragment>:9:24: use of moved value 'v': its ownership moved to another binding at an earlier bind or assignment
+```
+
 <!-- disabled-test: error.borrowed-param-consumed -->
 <!-- P1.4a wave 2+ — the transitive-consume case: a borrowed parameter forwarded to a consuming callee position needs the call-graph fixpoint (`wrap` consumes `i` because `Wrapper.create` does). Refused with E2015 until then. -->
 ```maxon
