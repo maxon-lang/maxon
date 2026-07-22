@@ -888,6 +888,287 @@ end 'main'
 error E3004: <fragment>:3:2: call to undefined function 'cb'
 ```
 
+### Calling a Postfix Callee as a Statement
+
+A function value produced by a POSTFIX expression — a function-typed FIELD read (`h.op`), a field reached
+through a chain (`o.inner.op`), or a call whose result is itself a function (`pick()`) — is called for its
+EFFECT at statement position exactly as a bare-name function value is. The statement dispatcher used to
+parse the postfix expression and then reject the trailing `(` as `( statement`; it now applies the trailing
+`(args)` through the SAME indirect-call lowering the expression position uses. Only a postfix FOLLOWED BY
+`(` becomes a call statement — a bare field read (`h.op`) is not a statement and stays an error.
+
+<!-- test: first-class-function.field-void-called-as-statement -->
+<!-- targets: x64-windows, wasm32-wasi -->
+A VOID function-typed FIELD called at STATEMENT position, for its effect (#97) — the shape a table of
+callbacks or compiler passes keyed by a struct field is driven by, each entry a function value called for
+effect. The statement dispatcher parsed `h.op` as a field load and then rejected the trailing `(` as
+`( statement`; it now applies the trailing call through the indirect-call lowering. The side effect (two
+increments of a module `var`) proves the call RAN — a no-op would return 0.
+```maxon
+var sideEffect = 0
+
+typealias Task = function()
+
+type Holder
+	export var op as Task
+
+	static function create(t Task) returns Self
+		return Self{op: t}
+	end 'create'
+end 'Holder'
+
+function bump()
+	sideEffect = sideEffect + 7
+end 'bump'
+
+function main() returns ExitCode
+	let h = Holder.create(bump)
+	h.op()
+	h.op()
+	return sideEffect as ExitCode
+end 'main'
+```
+```exitcode
+14
+```
+
+<!-- test: first-class-function.field-value-called-as-statement-discarded -->
+<!-- targets: x64-windows, wasm32-wasi -->
+A VALUE-returning function-typed field called at statement position discards its result, exactly as a
+value-returning DIRECT call does there. Discarding the first result must not disturb a later call: `h.op(10)`
+is dropped, `h.op(41)` yields 42.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+typealias UnaryOp = function(Integer) returns Integer
+
+type Handler
+	export var op as UnaryOp
+
+	static function create(op UnaryOp) returns Self
+		return Self{op: op}
+	end 'create'
+end 'Handler'
+
+function inc(n Integer) returns Integer
+	return n + 1
+end 'inc'
+
+function main() returns ExitCode
+	let h = Handler.create(inc)
+	h.op(10)
+	return h.op(41)
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: first-class-function.field-two-fields-called-as-statements -->
+<!-- targets: x64-windows, wasm32-wasi -->
+A struct with TWO function-typed fields, each called at statement position. Each call must dispatch through
+its OWN field — `p.first` runs `bumpA` (+10) and `p.second` runs `bumpB` (+4) — so the total is 14 only when
+the two field loads are not confused.
+```maxon
+var effA = 0
+var effB = 0
+
+typealias Task = function()
+
+type Pair
+	export var first as Task
+	export var second as Task
+
+	static function create(first Task, second Task) returns Self
+		return Self{first: first, second: second}
+	end 'create'
+end 'Pair'
+
+function bumpA()
+	effA = effA + 10
+end 'bumpA'
+
+function bumpB()
+	effB = effB + 4
+end 'bumpB'
+
+function main() returns ExitCode
+	let p = Pair.create(bumpA, second: bumpB)
+	p.first()
+	p.second()
+	return (effA + effB) as ExitCode
+end 'main'
+```
+```exitcode
+14
+```
+
+<!-- test: first-class-function.field-nested-void-called-as-statement -->
+<!-- targets: x64-windows, wasm32-wasi -->
+The receiver of a field call may itself be reached through a field CHAIN. `o.inner.op()` resolves the chain
+to the function-typed field and applies the trailing call for effect — the statement-position twin of the
+value-position `o.inner.op(21)`. The side effect (two increments) proves it ran.
+```maxon
+var sideEffect = 0
+
+typealias Task = function()
+
+type Holder
+	export var op as Task
+
+	static function create(t Task) returns Self
+		return Self{op: t}
+	end 'create'
+end 'Holder'
+
+type Outer
+	export var inner as Holder
+
+	static function create(inner Holder) returns Self
+		return Self{inner: inner}
+	end 'create'
+end 'Outer'
+
+function bump()
+	sideEffect = sideEffect + 5
+end 'bump'
+
+function main() returns ExitCode
+	let o = Outer.create(Holder.create(bump))
+	o.inner.op()
+	o.inner.op()
+	return sideEffect as ExitCode
+end 'main'
+```
+```exitcode
+10
+```
+
+<!-- test: first-class-function.call-result-called-as-statement -->
+<!-- targets: x64-windows, wasm32-wasi -->
+A call whose RESULT is a function value is itself called at statement position, for its effect. `pickBump()`
+yields the `bump` function and the trailing `()` calls it — the statement-position twin of the value-position
+`pick()(21)`, and the chaining `parsePostfix` already does in expression position. The side effect (two
+increments) proves both hops ran.
+```maxon
+var sideEffect = 0
+
+typealias Task = function()
+
+function bump()
+	sideEffect = sideEffect + 6
+end 'bump'
+
+function pickBump() returns Task
+	return bump
+end 'pickBump'
+
+function main() returns ExitCode
+	pickBump()()
+	pickBump()()
+	return sideEffect as ExitCode
+end 'main'
+```
+```exitcode
+12
+```
+
+<!-- test: first-class-function.field-string-result-called-as-statement-leak-free -->
+<!-- targets: x64-windows, wasm32-wasi -->
+The managed-result-discard guard. A function-typed field whose signature returns a STRING is called at
+statement position and its result DISCARDED. The owned heap String is adopted as a statement temp and dropped
+by `drainPendingTemps` — twice — so a leak would trip the runtime's exit-101 balance check. Exit 0 is the
+pass: the discarded managed result is freed, not leaked.
+```maxon
+typealias Msg = function() returns String
+
+type Holder
+	export var op as Msg
+
+	static function create(op Msg) returns Self
+		return Self{op: op}
+	end 'create'
+end 'Holder'
+
+function greet() returns String
+	return "hello world this is a heap string"
+end 'greet'
+
+function main() returns ExitCode
+	let h = Holder.create(greet)
+	h.op()
+	h.op()
+	return 0 as ExitCode
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: first-class-function.field-read-statement-still-errors -->
+<!-- targets: x64-windows, wasm32-wasi -->
+The over-acceptance guard for a postfix callee: ONLY a postfix FOLLOWED BY `(` becomes a call statement. A
+bare function-typed field READ (`h.op` with no `(`) is not a call and not a statement, so it stays the
+unsupported-statement error it was — the fix widens what compiles, never what is silently accepted.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias UnaryOp = function(Integer) returns Integer
+
+type Handler
+	export var op as UnaryOp
+
+	static function create(op UnaryOp) returns Self
+		return Self{op: op}
+	end 'create'
+end 'Handler'
+
+function inc(n Integer) returns Integer
+	return n + 1
+end 'inc'
+
+function main() returns ExitCode
+	let h = Handler.create(inc)
+	h.op
+	return 0 as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:19:2: Unsupported: identifier statement
+```
+
+<!-- test: first-class-function.method-call-statement-still-direct -->
+<!-- targets: x64-windows, wasm32-wasi -->
+The no-regression anchor: a real instance METHOD called at statement position stays a DIRECT method
+dispatch, not routed through the indirect-call path. `c.tick()` is a method on `Counter`, not a
+function-typed field, so it must keep dispatching exactly as before. Two calls (+3 each) prove it ran.
+```maxon
+var sideEffect = 0
+
+typealias Ticks = int(i64.min to i64.max)
+
+type Counter
+	export var n as Ticks
+
+	static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	function tick()
+		sideEffect = sideEffect + 3
+	end 'tick'
+end 'Counter'
+
+function main() returns ExitCode
+	let c = Counter.create()
+	c.tick()
+	c.tick()
+	return sideEffect as ExitCode
+end 'main'
+```
+```exitcode
+6
+```
+
 <!-- test: first-class-function.field-cross-file -->
 <!-- targets: x64-windows, x64-linux, wasm32-wasi -->
 A function-typed field declared in another file is called the same way: the field's

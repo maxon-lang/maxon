@@ -5636,12 +5636,20 @@ export type Parser
 			// `c.increment()` / `self.increment()` — a method call for its EFFECT. Void methods are
 			// most of what a type declares, and this is the only position that wants no value, so
 			// `resultUsed: false` is what makes them callable at all.
-			_ = try self.parseMethodCall(func, resultUsed: false)
+			//
+			// A FUNCTION-TYPED FIELD reached the same way (`h.op()`, `self.op()`) is NOT a method (#97):
+			// `dispatchMethodOnBase` LOADS the field (a `function` value) and leaves the trailing `(args)` for the
+			// postfix loop, exactly as it does in expression position. `parsePostfix` applies it as an INDIRECT call
+			// (the #68/#78 lowering), so the trailing `(` is not left to be misread as a `( statement` on the next
+			// iteration. A real method call consumes its own `(args)`, so `parsePostfix` then sees no trailing `(`
+			// and is a no-op — the emitted IR of every existing method-call statement is unchanged.
+			_ = try self.parsePostfix(func, value: try self.parseMethodCall(func, resultUsed: false), resultUsed: false)
 		end 'methodCallStmt' else if self.fieldChainMethodCallAt(self.pos) 'fieldChainMethodStmt'
-			// `b.ops.push(1)` / `o.inner.items.push(10)` — a method call on an ARRAY FIELD reached through a
-			// field chain (P1.7 slice 1). `methodCallsAt` covers only a one-hop `b.push(…)`; this is the ≥2-hop
-			// case, dispatched for effect (`resultUsed: false`).
-			try self.parseFieldChainMethodCallStatement(func)
+			// `b.ops.push(1)` / `o.inner.op()` — a call reached through a ≥2-hop field chain, on an ARRAY FIELD's
+			// method or a FUNCTION-typed FIELD (#97). `methodCallsAt` covers only the one-hop `b.push(…)` / `h.op()`;
+			// this is the chain case, dispatched for effect (`resultUsed: false`). A function field's trailing
+			// `(args)` goes through `parsePostfix` exactly as the one-hop `methodCallStmt` above.
+			_ = try self.parseFieldChainCall(func, resultUsed: false)
 		end 'fieldChainMethodStmt' else if self.at(TokenKind.identifier) and self.peekKind() == TokenKind.leftParen 'callStmt'
 			// An identifier followed by `(` is a bare-call statement — the call is evaluated for its
 			// effect and its result discarded (M5). `resultUsed: false` is what makes a VOID call legal
@@ -5656,7 +5664,11 @@ export type Parser
 			if self.calleeIsFunctionTypedLocal() 'functionLocalCallStmt'
 				_ = try self.parsePostfix(func, value: try self.parseVariableReference(), resultUsed: false)
 			end 'functionLocalCallStmt' else 'directCallStmt'
-				_ = try self.parseCall(func, resultUsed: false)
+				// A trailing `(` on the call's RESULT is a call-result callee (`getFn()()`) — the result is itself a
+				// `function` value, applied by `parsePostfix` as an indirect call, the statement-position twin of the
+				// value-position `pick()(21)` (#97). A plain direct call leaves no trailing `(`, so `parsePostfix` is a
+				// no-op and every existing direct-call statement lowers to the same IR.
+				_ = try self.parsePostfix(func, value: try self.parseCall(func, resultUsed: false), resultUsed: false)
 			end 'directCallStmt'
 		end 'callStmt' else 'unsupported'
 			let tok = self.current()
@@ -6652,7 +6664,7 @@ export type Parser
 		// last op for `rewriteLastCallToTryCall`. `resultUsed: false` for the free-call arm's reason (the try's
 		// own position decides whether its value is usable).
 		if self.fieldChainMethodCallAt(self.pos) 'fieldChainTarget'
-			return try self.parseFieldChainArrayMethod(func, resultUsed: false)
+			return try self.parseFieldChainCall(func, resultUsed: false)
 		end 'fieldChainTarget'
 		if self.at(TokenKind.self) 'selfCall'
 			return try self.parseSelfPrimary(func)
@@ -13265,27 +13277,29 @@ export type Parser
 		return self.scope.contains(self.baseBindingName(baseTok)) or self.captureBinds(baseTok)
 	end 'fieldChainMethodCallAt'
 
-	// `b.ops.push(1)` as a STATEMENT — resolve the field chain to the array field (a borrowed load; the
-	// struct owns and drops it), then dispatch the array method for effect. Only an array field carries a
-	// chain-method at this slice (a nested struct method `o.inner.m()` is a later slice), which the field
-	// chain already enforced by stopping at the array.
-	function parseFieldChainMethodCallStatement(func IrFunction) throws ParseError
-		_ = try self.parseFieldChainArrayMethod(func, resultUsed: false)
-	end 'parseFieldChainMethodCallStatement'
-
-	// Resolve a field chain to its ARRAY field (a borrowed load; the struct owns and drops it) and dispatch the
-	// array method, returning its result. Shared by the STATEMENT form (`b.ops.push(1)`, `resultUsed: false`)
-	// and the `try`-TARGET form (`try self.nodes.get(i) otherwise …`, P1.7 slice 3), which leaves the throwing
-	// `call __arr_get` as the last op for `rewriteLastCallToTryCall`. Only an array field carries a chain-method
-	// at this slice (the field chain stopped at the array); a non-array field chain (`o.inner.m()`) is a later slice.
-	function parseFieldChainArrayMethod(func IrFunction, resultUsed bool) returns ValueId throws ParseError
+	// Resolve a field chain to its final field and apply the trailing call, returning its result — an ARRAY
+	// field's METHOD (`b.ops.push(1)`, a borrowed load; the struct owns and drops it) or a FUNCTION-typed field's
+	// INDIRECT call (`o.inner.op()`, #97). Shared by the STATEMENT form (`resultUsed: false`) and the `try`-TARGET
+	// form (`try self.nodes.get(i) otherwise …`, P1.7 slice 3), which leaves the throwing `call __arr_get` as the
+	// last op for `rewriteLastCallToTryCall`.
+	//
+	// The dispatch is on the resolved receiver's TAG, exactly as expression position dispatches a postfix chain: an
+	// array receiver takes an array method; a `function` receiver takes the trailing `(args)` through `parsePostfix`
+	// (the #68/#78 indirect-call path). A `function` receiver reaches the `try`-target caller only through
+	// `try o.inner.op() otherwise`, whose indirect call is non-throwing and is cleanly rejected by
+	// `rewriteLastCallToTryCall` (`rejectTryTarget`), so both callers stay correct. Any other final field followed
+	// by `(` is neither an array method nor callable and is refused.
+	function parseFieldChainCall(func IrFunction, resultUsed bool) returns ValueId throws ParseError
 		let receiver = try self.parseFieldAccess()
 		if self.tagOf(receiver) == ValueTypeTag.genericInstance and self.signatures.isArrayInstance(self.valueNameId(receiver)) 'arrayReceiver'
 			return try self.parseArrayMethodOnValue(func, arr: receiver, giid: self.valueNameId(receiver), resultUsed: resultUsed)
 		end 'arrayReceiver'
+		if self.tagOf(receiver) == ValueTypeTag.function 'functionFieldReceiver'
+			return try self.parsePostfix(func, value: receiver, resultUsed: resultUsed)
+		end 'functionFieldReceiver'
 		let tok = self.current()
 		throw ParseError.unsupported("a method call on a non-array field chain — a nested struct method (`o.inner.m()`) is a later slice", line: tok.line, column: tok.column)
-	end 'parseFieldChainArrayMethod'
+	end 'parseFieldChainCall'
 
 	// Dispatch a builtin `Array` method — cursor on the method NAME, `arr` the (borrowed) receiver record.
 	// Shared by the binding receiver (`arr.push(x)`) and a value receiver (`[…].get(0)`).
