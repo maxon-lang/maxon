@@ -1,0 +1,64 @@
+// Test: valid.compatible-casts-still-compile
+typealias Small = int(0 to 100)
+typealias Big = int(0 to 1000)
+typealias Ratio = float(f64.min to f64.max)
+
+function isPositive(r Ratio) returns bool
+	return r > 0.0
+end 'isPositive'
+
+function main() returns ExitCode
+	let big = 42 as Big
+	let small = big as Small
+	let r = 42 as Ratio
+	if isPositive(r) 'ok'
+		return small
+	end 'ok'
+	return 0
+end 'main'
+---
+ExitCode: 42
+---
+// CompiledIR
+module {
+  func @isPositive(r: f64) -> i1 {
+  entry:
+    x64.movsd xmm1, [rip+__float_0]
+    x64.ucomisd xmm0, xmm1
+    x64.seta rax
+    x64.movzx rax, raxb
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rax, 42
+    x64.mov [rbp-8], rax
+    x64.mov rcx, 42
+    x64.cvtsi2sd xmm0, rcx
+    x64.call isPositive
+    x64.test rax, rax
+    x64.je main.ok_0.after
+  ok_0:
+    x64.mov rax, [rbp-8]
+    x64.xor ecx, ecx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  ok_0.after:
+    x64.xor eax, eax
+    x64.epilogue
+    x64.ret
+  }
+}
+---
