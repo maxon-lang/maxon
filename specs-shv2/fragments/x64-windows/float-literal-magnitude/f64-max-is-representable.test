@@ -1,0 +1,63 @@
+// Test: f64-max-is-representable
+function main() returns ExitCode
+	var r = 0
+	if 1.7976931348623157e308 > 1.0e308 'aboveOneE308'
+		r = r + 1
+	end 'aboveOneE308'
+	if 1.7976931348623157e308 * 2.0 > 1.7976931348623157e308 'doublingEscapes'
+		r = r + 2
+	end 'doublingEscapes'
+	if 1.0e308 * 10.0 > 1.7976931348623157e308 'tenTimesOverflows'
+		r = r + 4
+	end 'tenTimesOverflows'
+	return r
+end 'main'
+---
+ExitCode: 7
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 rax, 0
+    x64.movsdRegRip xmm0, [rip + __fconst_0]
+    x64.movsdRegRip xmm1, [rip + __fconst_1]
+    x64.ucomisdRegReg xmm0, xmm1
+    x64.jcc above, aboveOneE308
+    x64.jmp critsplit
+  aboveOneE308:
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.jmp ifcont
+  critsplit:
+    x64.jmp ifcont
+  ifcont:
+    x64.movsdRegRip xmm0, [rip + __fconst_0]
+    x64.movsdRegRip xmm1, [rip + __fconst_2]
+    x64.mulsdRegReg xmm0, xmm0, xmm1
+    x64.movsdRegRip xmm1, [rip + __fconst_0]
+    x64.ucomisdRegReg xmm0, xmm1
+    x64.jcc above, doublingEscapes
+    x64.jmp critsplit
+  doublingEscapes:
+    x64.leaRegRegImm32 rax, rax, 2
+    x64.jmp ifcont
+  critsplit:
+    x64.jmp ifcont
+  ifcont:
+    x64.movsdRegRip xmm0, [rip + __fconst_1]
+    x64.movsdRegRip xmm1, [rip + __fconst_3]
+    x64.mulsdRegReg xmm0, xmm0, xmm1
+    x64.movsdRegRip xmm1, [rip + __fconst_0]
+    x64.ucomisdRegReg xmm0, xmm1
+    x64.jcc above, tenTimesOverflows
+    x64.jmp critsplit
+  tenTimesOverflows:
+    x64.leaRegRegImm32 r8, rax, 4
+    x64.jmp ifcont
+  critsplit:
+    x64.movRegReg r8, rax
+    x64.jmp ifcont
+  ifcont:
+    x64.popReg rbp
+    x64.ret
+}

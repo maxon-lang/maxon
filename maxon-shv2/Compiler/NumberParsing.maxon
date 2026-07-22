@@ -24,6 +24,29 @@ end 'ParserError'
 let I64MaxDigits = b"9223372036854775807"
 let I64MinMagnitudeDigits = b"9223372036854775808"
 
+// --- IEEE 754 binary64 layout and range ---
+// The field widths and the two exponent extremes the conversion below has to land inside. Named
+// because every one of them is consulted from more than one place, and because a bare `1023` in the
+// middle of a shift is indistinguishable from a bare `1023` that means something else.
+let SignificandFieldBits = 52
+let ExponentBias = 1023
+let ImplicitLeadingBit = 0x0010000000000000
+let InfinityBits = 0x7FF0000000000000
+
+// Normals run 2^-1022 … 2^1023. Below that the exponent FIELD pins at zero and the significand
+// loses one bit per further halving, down to the least subnormal 2^-1074.
+let MinNormalBinaryExponent = -1022
+let MaxNormalBinaryExponent = 1023
+let LeastSubnormalBinaryExponent = -1074
+
+// The decimal magnitude window a literal must fall in, as floor(log10(value)). Above the upper
+// bound the value exceeds f64.max (~1.7977e308) and is an error; below the lower bound it is under
+// HALF the least subnormal (~4.94e-324), so round-to-nearest gives +0 and that is NOT an error —
+// strtod agrees. Both bounds also CAP the magnitudes built during the conversion, which is what
+// keeps the fixed-width arithmetic below inside its budget.
+let MaxFiniteDecimalExponent = 308
+let LeastRoundableDecimalExponent = -324
+
 // Convert a decimal float string (e.g. "3.14", "1.5e2", "2.0e-3") to IEEE 754 double raw bits.
 // Throws ParserError.overflow if the value exceeds float64 range.
 //
@@ -31,11 +54,19 @@ let I64MinMagnitudeDigits = b"9223372036854775808"
 // where the decimal point falls), and track the implicit decimal exponent
 // separately in `decExp` (≤0 for fractional shifts, ≥0 for trailing-zero
 // shifts). After parsing, the literal's value is `intPart * 10^decExp` times
-// the user-supplied scientific exponent. This keeps the int64 cells from
-// overflowing on long literals like `3.14159265358979323846` (21 sig digits)
-// and `0.0000000000000000001` (1e-19) — significant digits past the 18-digit
-// budget are silently dropped exactly like strtod, but their position is
-// preserved so the magnitude stays correct.
+// the user-supplied scientific exponent. Significant digits past the 18-digit
+// budget are dropped, but their POSITION is preserved in `decExp`, so a literal
+// like `3.14159265358979323846` (21 sig digits) or `0.0000000000000000001`
+// (1e-19) keeps its magnitude. Truncating the digits is what bounds `intPart` to
+// an i64; the SCALED value is not bounded by anything an i64 can hold, which is
+// why the conversion below runs on the limb magnitudes at the foot of this file.
+//
+// KNOWN LIMIT of the 18-digit budget: a literal carrying MORE than 18
+// significant digits is converted from its truncated prefix, so it can land one
+// ULP below the correctly-rounded result that a full-precision strtod (and hence
+// the C# bootstrap, which delegates to one) produces. Everything at or under 18
+// digits — which is every float literal in the corpus, and more digits than a
+// double can distinguish — is exact.
 export function parseFloatBits(bytes ByteArray) returns ParsedInt throws ParserError
 	let DIGIT_BUDGET = 18
 	var intPart = 0  // accumulated significant digits (capped at budget)
@@ -128,115 +159,321 @@ export function parseFloatBits(bytes ByteArray) returns ParsedInt throws ParserE
 	end 'negSci'
 	let totalExp = decExp + signedSciExp
 
-	// float64 range: max ~1.8e308. Approximate magnitude exponent = (sigDigits-1) + totalExp.
-	if hasNonZeroDigit 'checkOverflow'
-		let effectiveExp = sigDigits - 1 + totalExp
-		if effectiveExp > 308 'overflow'
-			throw ParserError.overflow
-		end 'overflow'
-	end 'checkOverflow'
-
-	var numerator = intPart
-	var denominator = 1
-
-	// Apply totalExp by scaling numerator (positive exp) or denominator (negative).
-	if totalExp > 0 'positiveExp'
-		var i = 0
-		while i < totalExp 'mulLoop'
-			numerator = numerator * 10
-			i = i + 1
-		end 'mulLoop'
-	end 'positiveExp' else if totalExp < 0 'negativeExp'
-		var i = 0
-		while i < -totalExp 'divLoop'
-			denominator = denominator * 10
-			i = i + 1
-		end 'divLoop'
-	end 'negativeExp'
-
-	if numerator == 0 'isZero'
+	// A literal with no significant digit is zero however it is scaled, `0.0e999` included — which is
+	// why this precedes the range guards rather than following them.
+	if not hasNonZeroDigit 'isZero'
 		return 0
 	end 'isZero'
 
-	// Normalize so numerator / denominator falls in [1, 2). i64 gives only
-	// ~63 bits of headroom: once a side passes HALF_MAX, doubling it would
-	// wrap to negative, so we halve the *other* side instead — each step
-	// still bumps `exponent` by the same amount and preserves the ratio.
-	// The loop condition is `denominator <= halfNum` rather than the
-	// natural `numerator >= 2 * denominator` because the latter computes
-	// `2 * denominator` first and overflows on the very last step (e.g.
-	// for `9223372036854775807.0`, the exact i64.max-magnitude case).
-	// The mantissa-extraction loop further down doubles `numerator` once
-	// per iteration, so after normalizing we scale both sides down enough
-	// that the loop's doublings stay in-range.
-	let HALF_MAX = 4611686018427387904  // i64.max / 2 + 1, the largest value safe to double
-	var exponent = 0
-	var halfNum = numerator / 2
-	while denominator <= halfNum 'shiftDown'
-		if denominator >= HALF_MAX 'denomNearMax'
-			numerator = numerator / 2
-			halfNum = numerator / 2
-		end 'denomNearMax' else 'safeDoubleDenom'
-			denominator = denominator * 2
-		end 'safeDoubleDenom'
-		exponent = exponent + 1
-	end 'shiftDown'
-	while numerator < denominator 'shiftUp'
-		if numerator < HALF_MAX 'numSafeToDouble'
-			numerator = numerator * 2
-		end 'numSafeToDouble' else 'shrinkDenom'
-			denominator = denominator / 2
-		end 'shrinkDenom'
+	// `intPart` holds exactly `sigDigits` digits and its leading one is non-zero (leading zeros are
+	// skipped above), so the value lies in [10^m, 10^(m+1)) and `m` is EXACTLY floor(log10(value)) —
+	// not an estimate. Dropping digits past DIGIT_BUDGET cannot move it: truncation only clears
+	// low-order digits.
+	let magnitudeExp = sigDigits - 1 + totalExp
+	if magnitudeExp > MaxFiniteDecimalExponent 'aboveFloatRange'
+		throw ParserError.overflow
+	end 'aboveFloatRange'
+	if magnitudeExp < LeastRoundableDecimalExponent 'belowFloatRange'
+		// Under half the least subnormal, so `+0` IS the correctly-rounded answer and there is nothing
+		// to diagnose. Returning here is also what bounds the denominator built below: without it the
+		// `sciExp` cap alone would admit `1.0e-100000` and ask for a 100,000-digit magnitude.
+		return 0
+	end 'belowFloatRange'
+
+	// The literal's value is now the EXACT rational `numerator / denominator`, and stays exact all
+	// the way to the significand. The limb representation, and why an i64 pair cannot do this job,
+	// are at BOUNDED-WIDTH MAGNITUDES below.
+	var numerator = bigFromInt(intPart)
+	var denominator = bigFromInt(1)
+	if totalExp > 0 'scaleNumerator'
+		bigMulPow10(numerator, exponent: totalExp)
+	end 'scaleNumerator' else if totalExp < 0 'scaleDenominator'
+		bigMulPow10(denominator, exponent: -totalExp)
+	end 'scaleDenominator'
+
+	// Normalize the ratio into [1, 2) and keep the power of two that was factored out. A ratio of two
+	// magnitudes whose bit lengths are `nb` and `db` lies in [2^(nb-db-1), 2^(nb-db+1)), so ONE shift
+	// of the smaller side by `nb - db` lands it in [1/2, 2) and at most one further doubling
+	// finishes — no per-step loop to run away, and (unlike the i64 halving dance this replaced) no
+	// precision thrown away to keep a cell in range.
+	var exponent = bigBitLength(numerator) - bigBitLength(denominator)
+	if exponent >= 0 'liftDenominator'
+		bigShiftLeft(denominator, bits: exponent)
+	end 'liftDenominator' else 'liftNumerator'
+		bigShiftLeft(numerator, bits: -exponent)
+	end 'liftNumerator'
+	if bigCompare(numerator, against: denominator) < 0 'stillBelowOne'
+		bigShiftLeft(numerator, bits: 1)
 		exponent = exponent - 1
-	end 'shiftUp'
-	// Headroom for the mantissa loop below — it doubles numerator each iter
-	// and `numerator < denominator` already holds, so we need denominator
-	// <= HALF_MAX for the doubling to stay in-range. Scaling both sides
-	// down by the same power of 2 preserves the ratio that drives the
-	// mantissa-bit extraction.
-	while denominator >= HALF_MAX 'mantissaHeadroom'
-		numerator = numerator / 2
-		denominator = denominator / 2
-	end 'mantissaHeadroom'
+	end 'stillBelowOne'
 
-	numerator = numerator - denominator
-	var mantissa = 0
-	var bit = 51
-	while bit >= 0 'mantissaBits'
-		numerator = numerator * 2
-		if numerator >= denominator 'hasBit'
-			mantissa = mantissa + (1 shl bit)
-			numerator = numerator - denominator
-		end 'hasBit'
-		bit = bit - 1
-	end 'mantissaBits'
+	// How many significand bits follow the leading one: 52 for a normal, and one fewer for every
+	// power of two below 2^-1022, because a subnormal's exponent field is pinned at zero and the
+	// leading one has to be spelled out inside the field instead of being implied.
+	var significandBits = SignificandFieldBits
+	let isSubnormal = exponent < MinNormalBinaryExponent
+	if isSubnormal 'denormalize'
+		significandBits = exponent - LeastSubnormalBinaryExponent
+	end 'denormalize'
 
-	// Round-to-nearest-even: produce one more bit and use it (plus the
-	// remaining residue) to decide whether to round up. Without this the
-	// truncation drops up to half a ULP — e.g. 3.14 ended up at 0x...851E
+	// Below 2^-1074 there is no significand left at all — the entire value is the round bit. Moving
+	// the shortfall onto the denominator keeps the division below dividing a proper fraction, so the
+	// one rounding rule still decides between +0 and the least subnormal.
+	if significandBits < 0 'belowLeastSubnormal'
+		bigShiftLeft(denominator, bits: -significandBits)
+		significandBits = 0
+	end 'belowLeastSubnormal'
+
+	// Long-division: one bit per step, exactly as the i64 version did, but over magnitudes wide
+	// enough to hold the operands. The leading bit is taken separately because it is implicit in a
+	// normal's encoding and explicit in a subnormal's.
+	var significand = 0
+	if bigCompare(numerator, against: denominator) >= 0 'leadingOne'
+		significand = 1
+		bigSubtract(numerator, subtrahend: denominator)
+	end 'leadingOne'
+	var produced = 0
+	while produced < significandBits 'divideBits'
+		bigShiftLeft(numerator, bits: 1)
+		significand = significand * 2
+		if bigCompare(numerator, against: denominator) >= 0 'bitSet'
+			significand = significand + 1
+			bigSubtract(numerator, subtrahend: denominator)
+		end 'bitSet'
+		produced = produced + 1
+	end 'divideBits'
+
+	// Round-to-nearest-even: produce one more bit and use it, plus whatever residue is left, to
+	// decide. Without it the truncation drops up to half a ULP — e.g. 3.14 ended up at 0x...851E
 	// (3.1399999999999997) instead of the correctly-rounded 0x...851F.
-	numerator = numerator * 2
-	let roundBit = 1 if numerator >= denominator else 0
-	if roundBit == 1 'maybeRoundUp'
-		numerator = numerator - denominator
-	end 'maybeRoundUp'
-	let hasRemainder = numerator > 0
-	if roundBit == 1 'doRound'
-		// Round up when the discarded tail exceeds half a ULP, or it is
-		// exactly half a ULP and the kept mantissa LSB is odd (round-half-
-		// to-even). On overflow into the implicit leading 1, bumping the
-		// mantissa carries into the exponent automatically because the
-		// IEEE 754 layout puts mantissa adjacent to the exponent field.
-		let mantissaOdd = (mantissa and 1) == 1
-		if hasRemainder or mantissaOdd 'roundUp'
-			mantissa = mantissa + 1
+	bigShiftLeft(numerator, bits: 1)
+	if bigCompare(numerator, against: denominator) >= 0 'halfwayOrAbove'
+		bigSubtract(numerator, subtrahend: denominator)
+		let aboveHalfway = not numerator.isEmpty()
+		if aboveHalfway or (significand and 1) == 1 'roundUp'
+			significand = significand + 1
 		end 'roundUp'
-	end 'doRound'
+	end 'halfwayOrAbove'
 
-	// IEEE 754 double layout: sign(1) | exponent+1023(11) | mantissa(52)
-	let biasedExp = exponent + 1023
-	return (biasedExp shl 52) + mantissa
+	if isSubnormal 'subnormalEncoding'
+		// Exponent field zero, significand taken whole. A round-up that carried into bit 52 lands
+		// exactly on the smallest NORMAL value, which is the right answer and needs no special case:
+		// the two encodings are contiguous, so the same integer already spells it.
+		return significand
+	end 'subnormalEncoding'
+
+	// The magnitude guard above admits values up to 10^309, which is past f64.max, so the exponent
+	// can still be out of range here — and a biased exponent past 11 bits would run into the sign
+	// bit rather than merely reading as infinity, so it is checked before the shift, not after.
+	if exponent > MaxNormalBinaryExponent 'binaryExponentAboveRange'
+		throw ParserError.overflow
+	end 'binaryExponentAboveRange'
+
+	// IEEE 754 double layout: sign(1) | exponent+1023(11) | significand(52). The sign is the
+	// CALLER's (see `negatedFloatBits`). Dropping the implicit leading one by subtraction lets a
+	// significand that rounded up to 2^53 carry into the exponent field on its own, which is exactly
+	// the renormalization that case wants — and the only way it can then reach the infinity pattern
+	// is a genuine overflow of the literal.
+	let bits = ((exponent + ExponentBias) shl SignificandFieldBits) + (significand - ImplicitLeadingBit)
+	if bits >= InfinityBits 'roundedToInfinity'
+		throw ParserError.overflow
+	end 'roundedToInfinity'
+	return bits
 end 'parseFloatBits'
+
+// --- Bounded-width magnitudes for the conversion above ---
+//
+// `parseFloatBits` is exact rational arithmetic, and that only works if the two cells can actually
+// hold `intPart * 10^±exp`. An i64 cannot: `10^k` carries the factor `2^k`, so in 64 bits `10^19`
+// already wraps, `10^63` lands on `i64.min` — NEGATIVE, which used to send the normalization loop
+// doubling a negative value forever and HANG the compiler on a literal as ordinary as `1.0e63` — and
+// `10^64` is exactly zero. Every literal past |exponent| ≈ 19 was silently wrong.
+//
+// So a magnitude is an array of base-2^32 limbs, little-endian, with NO leading zero limb: an EMPTY
+// array is zero, which makes `isEmpty()` the zero test and keeps every operation's cost proportional
+// to the value rather than to a fixed width. The radix is 2^32 and not 2^64 because every operation
+// here forms a WIDER intermediate before masking back down (`limb * 10^9 + carry` needs 62 bits) and
+// Maxon has no cell to form a 128-bit one in.
+
+let LimbBits = 32
+let LimbMask = 0xFFFFFFFF
+
+// The widest magnitude the decimal guards in `parseFloatBits` admit: a numerator below 10^309
+// (< 2^1027) and a denominator below 10^341 (< 2^1133), either of which normalization then lifts to
+// the other's bit length — about 1140 bits, or 36 limbs. The headroom is deliberate and the bound is
+// CHECKED rather than assumed, because exceeding it means a guard upstream was widened without
+// widening this, and an unbounded silent grow is precisely the failure mode this representation
+// exists to remove.
+let MaxBigLimbs = 48
+
+// A bit position or shift distance inside a magnitude. Non-negative — every caller either passes a
+// literal or negates a value it has just tested as negative — and bounded in practice by
+// `MaxBigLimbs * LimbBits`, but written open-ended like `CharOffset`: the producers are i64
+// subtractions of two bit lengths, and narrowing would only move the check to a cast at each call.
+typealias BigBitCount = int(0 to u64.max)
+
+// A power of ten to scale a magnitude by. Bounded by the decimal guards to 341.
+typealias DecimalScaleExponent = int(0 to u64.max)
+
+// -1, 0 or 1 as the left magnitude is below, equal to, or above the right.
+typealias MagnitudeOrder = int(-1 to 1)
+
+// The largest power of ten that fits a limb, so `bigMulPow10` scales in 9-digit strides instead of
+// one digit at a time — a 341-digit scaling costs ~38 passes rather than 341.
+let Pow10ChunkDigits = 9
+
+// Every site that GROWS a magnitude ends here, so the budget is one fact in one place.
+function requireLimbBudget(limbs ParsedIntArray)
+	if limbs.count() > MaxBigLimbs 'overBudget'
+		panic("float-literal magnitude grew to {limbs.count()} limbs, past the {MaxBigLimbs}-limb budget — a decimal guard in parseFloatBits was widened without widening MaxBigLimbs")
+	end 'overBudget'
+end 'requireLimbBudget'
+
+// `value` as limbs. It is never negative here: every caller passes an accumulated digit magnitude.
+function bigFromInt(value ParsedInt) returns ParsedIntArray
+	var limbs = ParsedIntArray.create()
+	var rest = value
+	while rest > 0 'splitLimbs'
+		limbs.push(rest and LimbMask)
+		rest = rest shr LimbBits
+	end 'splitLimbs'
+	return limbs
+end 'bigFromInt'
+
+// `limbs` *= `multiplier`, in place. `multiplier` must fit a limb so that `limb * multiplier + carry`
+// stays inside an i64 — the one obligation the whole representation rests on.
+function bigMulSmall(limbs ParsedIntArray, multiplier ParsedInt)
+	var carry = 0
+	var i = 0
+	while i < limbs.count() 'scaleEach'
+		let widened = (try limbs.get(i) otherwise panic("bigMulSmall: i < count() by loop guard but get({i}) failed")) * multiplier + carry
+		try limbs.set(i, value: widened and LimbMask) otherwise panic("bigMulSmall: set({i}) failed at an index get just accepted")
+		carry = widened shr LimbBits
+		i = i + 1
+	end 'scaleEach'
+	while carry > 0 'carryOut'
+		limbs.push(carry and LimbMask)
+		carry = carry shr LimbBits
+	end 'carryOut'
+	requireLimbBudget(limbs)
+end 'bigMulSmall'
+
+// `limbs` *= 10^`exponent`, in place.
+function bigMulPow10(limbs ParsedIntArray, exponent DecimalScaleExponent)
+	var remaining = exponent
+	while remaining > 0 'chunks'
+		var digits = Pow10ChunkDigits
+		if remaining < digits 'lastChunk'
+			digits = remaining
+		end 'lastChunk'
+
+		var factor = 1
+		var i = 0
+		while i < digits 'buildFactor'
+			factor = factor * 10
+			i = i + 1
+		end 'buildFactor'
+
+		bigMulSmall(limbs, multiplier: factor)
+		remaining = remaining - digits
+	end 'chunks'
+end 'bigMulPow10'
+
+// `limbs` <<= `bits`, in place.
+function bigShiftLeft(limbs ParsedIntArray, bits BigBitCount)
+	if limbs.isEmpty() or bits == 0 'nothingToShift'
+		return
+	end 'nothingToShift'
+
+	let withinLimb = bits mod LimbBits
+	if withinLimb != 0 'partialLimb'
+		var carry = 0
+		var i = 0
+		while i < limbs.count() 'shiftEach'
+			let widened = ((try limbs.get(i) otherwise panic("bigShiftLeft: i < count() by loop guard but get({i}) failed")) shl withinLimb) or carry
+			try limbs.set(i, value: widened and LimbMask) otherwise panic("bigShiftLeft: set({i}) failed at an index get just accepted")
+			carry = widened shr LimbBits
+			i = i + 1
+		end 'shiftEach'
+
+		if carry != 0 'carryOut'
+			limbs.push(carry)
+		end 'carryOut'
+	end 'partialLimb'
+
+	var wholeLimbs = bits / LimbBits
+	while wholeLimbs > 0 'prependZeroLimbs'
+		limbs.insert(0, value: 0)
+		wholeLimbs = wholeLimbs - 1
+	end 'prependZeroLimbs'
+
+	requireLimbBudget(limbs)
+end 'bigShiftLeft'
+
+// The position of the highest set bit, counting from one. Zero has bit length zero.
+function bigBitLength(limbs ParsedIntArray) returns BigBitCount
+	if limbs.isEmpty() 'zero'
+		return 0
+	end 'zero'
+
+	let topIndex = limbs.count() - 1
+	var top = try limbs.get(topIndex) otherwise panic("bigBitLength: topIndex = count() - 1 but get({topIndex}) failed")
+	var bitsInTop = 0
+	while top > 0 'countTopBits'
+		bitsInTop = bitsInTop + 1
+		top = top shr 1
+	end 'countTopBits'
+	return topIndex * LimbBits + bitsInTop
+end 'bigBitLength'
+
+// Ordering. The no-leading-zero-limb invariant is what makes the width comparison decisive.
+function bigCompare(a ParsedIntArray, against ParsedIntArray) returns MagnitudeOrder
+	if a.count() != against.count() 'differentWidths'
+		return -1 if a.count() < against.count() else 1
+	end 'differentWidths'
+
+	var i = a.count()
+	while i > 0 'compareLimbs'
+		i = i - 1
+		let av = try a.get(i) otherwise panic("bigCompare: i < a.count() but get({i}) failed")
+		let bv = try against.get(i) otherwise panic("bigCompare: counts are equal but against.get({i}) failed")
+		if av != bv 'differs'
+			return -1 if av < bv else 1
+		end 'differs'
+	end 'compareLimbs'
+	return 0
+end 'bigCompare'
+
+// `a` -= `subtrahend`, in place. The caller guarantees `a >= subtrahend`; every call site has just
+// compared the two.
+function bigSubtract(a ParsedIntArray, subtrahend ParsedIntArray)
+	var borrow = 0
+	var i = 0
+	while i < a.count() 'subtractEach'
+		var diff = (try a.get(i) otherwise panic("bigSubtract: i < count() by loop guard but a.get({i}) failed")) - borrow
+		if i < subtrahend.count() 'hasSubtrahendLimb'
+			diff = diff - (try subtrahend.get(i) otherwise panic("bigSubtract: i < subtrahend.count() just checked but get({i}) failed"))
+		end 'hasSubtrahendLimb'
+
+		if diff < 0 'borrowFromNext'
+			diff = diff + LimbMask + 1
+			borrow = 1
+		end 'borrowFromNext' else 'noBorrow'
+			borrow = 0
+		end 'noBorrow'
+
+		try a.set(i, value: diff) otherwise panic("bigSubtract: set({i}) failed at an index get just accepted")
+		i = i + 1
+	end 'subtractEach'
+
+	// A subtraction can only shrink a magnitude, so restoring the no-leading-zero-limb invariant is
+	// the only normalization it needs.
+	var used = a.count()
+	while used > 0 and (try a.get(used - 1) otherwise panic("bigSubtract: used > 0 by loop guard but get({used - 1}) failed")) == 0 'trimLeadingZeroLimbs'
+		used = used - 1
+	end 'trimLeadingZeroLimbs'
+	a.resize(used)
+end 'bigSubtract'
 
 // Parse an integer literal. Throws ParserError.overflow if the value exceeds i64 range.
 // Handles decimal, hex (0x), binary (0b), and octal (0o) prefixes.

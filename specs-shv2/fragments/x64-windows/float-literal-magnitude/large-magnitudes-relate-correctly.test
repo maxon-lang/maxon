@@ -1,0 +1,79 @@
+// Test: large-magnitudes-relate-correctly
+function main() returns ExitCode
+	var r = 0
+	if 1.0e300 > 0.0 'positiveBig'
+		r = r + 1
+	end 'positiveBig'
+	if 1.0e-300 > 0.0 'positiveSmall'
+		r = r + 2
+	end 'positiveSmall'
+	if 1.0e150 * 1.0e150 > 1.0e300 / 2.0 'squareIsSameDecade'
+		r = r + 4
+	end 'squareIsSameDecade'
+	if 1.0e300 * 1.0e-300 > 0.5 'reciprocalIsOne'
+		r = r + 8
+	end 'reciprocalIsOne'
+	return r
+end 'main'
+---
+ExitCode: 15
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 rax, 0
+    x64.movsdRegRip xmm0, [rip + __fconst_0]
+    x64.movsdRegRip xmm1, [rip + __fconst_1]
+    x64.ucomisdRegReg xmm0, xmm1
+    x64.jcc above, positiveBig
+    x64.jmp critsplit
+  positiveBig:
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.jmp ifcont
+  critsplit:
+    x64.jmp ifcont
+  ifcont:
+    x64.movsdRegRip xmm0, [rip + __fconst_2]
+    x64.movsdRegRip xmm1, [rip + __fconst_1]
+    x64.ucomisdRegReg xmm0, xmm1
+    x64.jcc above, positiveSmall
+    x64.jmp critsplit
+  positiveSmall:
+    x64.leaRegRegImm32 rax, rax, 2
+    x64.jmp ifcont
+  critsplit:
+    x64.jmp ifcont
+  ifcont:
+    x64.movsdRegRip xmm0, [rip + __fconst_3]
+    x64.movsdRegRip xmm1, [rip + __fconst_3]
+    x64.mulsdRegReg xmm0, xmm0, xmm1
+    x64.movsdRegRip xmm1, [rip + __fconst_0]
+    x64.movsdRegRip xmm2, [rip + __fconst_4]
+    x64.divsdRegReg xmm1, xmm1, xmm2
+    x64.ucomisdRegReg xmm0, xmm1
+    x64.jcc above, squareIsSameDecade
+    x64.jmp critsplit
+  squareIsSameDecade:
+    x64.leaRegRegImm32 rax, rax, 4
+    x64.jmp ifcont
+  critsplit:
+    x64.jmp ifcont
+  ifcont:
+    x64.movsdRegRip xmm0, [rip + __fconst_0]
+    x64.movsdRegRip xmm1, [rip + __fconst_2]
+    x64.mulsdRegReg xmm0, xmm0, xmm1
+    x64.movsdRegRip xmm1, [rip + __fconst_5]
+    x64.ucomisdRegReg xmm0, xmm1
+    x64.jcc above, reciprocalIsOne
+    x64.jmp critsplit
+  reciprocalIsOne:
+    x64.leaRegRegImm32 r8, rax, 8
+    x64.jmp ifcont
+  critsplit:
+    x64.movRegReg r8, rax
+    x64.jmp ifcont
+  ifcont:
+    x64.popReg rbp
+    x64.ret
+}

@@ -1,0 +1,31 @@
+// Test: zero-mantissa-ignores-a-wild-exponent
+function main() returns ExitCode
+	if 0.0e999 == 0.0 'isZero'
+		return 1
+	end 'isZero'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movsdRegRip xmm0, [rip + __fconst_0]
+    x64.movsdRegRip xmm1, [rip + __fconst_0]
+    x64.ucomisdRegReg xmm0, xmm1
+    x64.jcc parity, ifcont
+    x64.jmp fordered
+  fordered:
+    x64.jcc equal, isZero
+    x64.jmp ifcont
+  isZero:
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}
