@@ -428,3 +428,215 @@ end 'main'
 ```stdout
 3 65 192 66
 ```
+
+<!-- test: byte-string-literal.set-detaches-from-rdata -->
+
+An in-place `set` on a byte-string literal writes through `buffer@0`, which points into read-only
+`.rdata` — so it must first DETACH: give the record a private, writable copy of its live bytes. Without
+the detach the store faults (`0xC0000005`, no stderr), because `.rdata` is mapped read-only. Detaching
+copies only `length · element_size` live bytes, so the other elements survive the move.
+```maxon
+function main() returns ExitCode
+		var a = b"hi"
+		try a.set(0, value: 88) otherwise panic("test invariant: index 0 is in bounds")
+		let v = try a.get(0) otherwise 0
+		let w = try a.get(1) otherwise 0
+		print("{v} {w} {a.count()}")
+		return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+88 105 2
+```
+
+<!-- test: byte-string-literal.clear-detaches-from-rdata -->
+
+`clear` zeroes the whole live region in place, so on a byte-string literal it writes into `.rdata` and
+faults unless the record detaches first. The cleared array must remain a usable, writable array — the
+push below lands in the detached buffer, not back in the blob.
+```maxon
+function main() returns ExitCode
+		var a = b"hey"
+		a.clear()
+		a.push(65)
+		let z = try a.get(0) otherwise 0
+		print("{a.count()} {z}")
+		return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1 65
+```
+
+<!-- test: byte-string-literal.remove-detaches-from-rdata -->
+
+`remove` shifts the tail down one slot — an in-place write — so it detaches before the shift. The
+removed element is read out of the buffer and the survivors are compacted in the private copy.
+```maxon
+function main() returns ExitCode
+		var a = b"hey"
+		let r = try a.remove(0) otherwise panic("test invariant: index 0 is in bounds")
+		let f = try a.get(0) otherwise 0
+		print("{r} {a.count()} {f}")
+		return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+104 2 101
+```
+
+<!-- test: byte-string-literal.pop-detaches-from-rdata -->
+
+`pop` zeroes the slot it vacates (the `[length, capacity)`-is-zero invariant), so it too writes the
+buffer and must detach first.
+```maxon
+function main() returns ExitCode
+		var a = b"yo"
+		let p = try a.pop() otherwise panic("test invariant: a two-element array is not empty")
+		let f = try a.get(0) otherwise 0
+		print("{p} {a.count()} {f}")
+		return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+111 1 121
+```
+
+<!-- test: byte-string-literal.detach-happens-once -->
+
+The detach is CONDITIONAL: once the record owns a private buffer it must be left alone. A second write
+that detached again would allocate a fresh buffer and abandon the first one — the leak check would exit
+101 — and the grow below would then be reallocating a buffer that had just been replaced. Both writes
+must land in the same private buffer, and the grow must carry all three earlier bytes forward.
+```maxon
+function main() returns ExitCode
+		var a = b"abc"
+		try a.set(0, value: 88) otherwise panic("test invariant: index 0 is in bounds")
+		try a.set(2, value: 90) otherwise panic("test invariant: index 2 is in bounds")
+		a.push(89)
+		let v0 = try a.get(0) otherwise 0
+		let v1 = try a.get(1) otherwise 0
+		let v2 = try a.get(2) otherwise 0
+		let v3 = try a.get(3) otherwise 0
+		print("{v0} {v1} {v2} {v3} {a.count()}")
+		return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+88 98 90 89 4
+```
+
+<!-- test: byte-string-literal.detached-literal-drops-clean -->
+
+A detached literal's `capacity@16` is no longer the rdata sentinel, so its drop now legitimately frees
+the buffer — the one it allocated, never the blob. Five detach-and-drop rounds make either mistake loud:
+a missed free leaks (exit 101) and a freed blob corrupts the allocator.
+```maxon
+function detachAndRead(n int) returns int
+		var a = b"hi"
+		try a.set(0, value: n) otherwise panic("test invariant: index 0 is in bounds")
+		return try a.get(0) otherwise 0
+end 'detachAndRead'
+
+function main() returns ExitCode
+		var total = 0
+		var i = 0
+		while i < 5 'round'
+				total = total + detachAndRead(i)
+				i = i + 1
+		end 'round'
+		print("{total}")
+		return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+10
+```
+
+<!-- test: byte-string-literal.untouched-literal-drops-clean -->
+
+The other half of the same rule: a literal that is only READ never detaches, so its `capacity@16` stays
+the sentinel and its drop must still skip the buffer free. `__mm_free` on a `.rdata` address that was
+never allocated corrupts the allocator; three rounds make it loud.
+```maxon
+function main() returns ExitCode
+		var total = 0
+		var i = 0
+		while i < 3 'round'
+				var a = b"hi"
+				let v = try a.get(0) otherwise 0
+				total = total + v
+				i = i + 1
+		end 'round'
+		print("{total}")
+		return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+312
+```
+
+<!-- test: byte-string-literal.empty-literal-detaches -->
+
+A ZERO-LENGTH detach must still happen. Skipping it as an optimization leaves the rdata pointer in the
+record with the sentinel capacity still in place, and the next reallocation then reads a header that
+does not exist. `b""` has no writable in-place mutator (`set`/`remove`/`pop` all throw on empty), so the
+zero-byte detach is reached through the grow path: `resize` publishes two zero-filled slots that the
+`set`s below then write.
+```maxon
+function main() returns ExitCode
+		var a = b""
+		a.resize(2)
+		try a.set(0, value: 65) otherwise panic("test invariant: index 0 is in bounds")
+		try a.set(1, value: 66) otherwise panic("test invariant: index 1 is in bounds")
+		let v0 = try a.get(0) otherwise 0
+		let v1 = try a.get(1) otherwise 0
+		print("{a.count()} {v0} {v1}")
+		return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+2 65 66
+```
+
+<!-- test: byte-string-literal.negative-resize-aborts -->
+
+A NEGATIVE `resize` is the one mutator that could write outside its buffer entirely. `resize(-2)` on a
+byte-string literal leaves the growth check satisfied (`-2 >= -2`), so nothing reallocates and nothing
+detaches, and the shrink then zeroes from `buffer + n·element_size` — an address BEFORE the buffer —
+straight into `.rdata`. It aborts instead: a length can never be negative, and a corrupt operation must
+never proceed (the `__arr_create` zero-element-size and `__arr_append` element-size-mismatch shape).
+```maxon
+function main() returns ExitCode
+		var a = b"hey"
+		a.resize(-2)
+		return 0
+end 'main'
+```
+```exitcode
+73
+```

@@ -28,7 +28,9 @@ export let ArrParentOffset = 32 as ByteOffset
 export let ArrElementDestroyOffset = 40 as ByteOffset
 export let ArrRecordBytes = 48 as ByteCount
 
-// `parent@32` is reserved (COW/slices are P1.4). `element_destroy@40` is the per-element destructor a
+// `parent@32` is reserved (a shared-buffer array would name the record it borrows from; nothing writes it
+// today — `slice`/`clone` COPY, and the rdata literal's non-owned buffer is flagged by the capacity sentinel
+// below rather than by a parent). `element_destroy@40` is the per-element destructor a
 // managed-element array will carry (P1.7 slice 3); at THIS slice every element is trivial, so it is
 // always 0 and the drop path frees the buffer without walking. Both come pre-zeroed from `__mm_alloc`,
 // so `__arr_create` never writes them — the same zeroing contract `__mm_alloc` itself relies on.
@@ -37,8 +39,10 @@ let TrivialElementDestroy = 0 as ParsedInt
 // --- Byte-string literal (`b"…"`, P1.7 slice 2) ---
 //
 // A `b"…"` literal is the Array analogue of a String literal: a HEAP 48-byte record over an IMMORTAL
-// `.rdata` byte blob. `capacity@16` is the rdata SENTINEL below — a negative capacity that tells
-// `__arr_decref` the buffer lives in read-only `.rdata` and must NOT be freed (`freeing .rdata` faults).
+// `.rdata` byte blob. `capacity@16` is the rdata SENTINEL below — a negative capacity that says the buffer
+// is NOT the record's to write or to free. `__arr_decref` reads it to skip the free (`freeing .rdata`
+// faults) and `__arr_cow_detach` reads it to replace the blob with a private copy before any in-place write
+// (writing `.rdata` faults just as hard); those are the only two readers, and it is the one fact both ask.
 // `element_size@24` is 1 (a byte is one byte, so the blob is byte-packed and `.get(i)` strides by 1 —
 // UNLIKE a slice-1 `Array with Byte` whose ranged-alias element still occupies a machine word). The
 // record is a real `__mm_alloc` box so the value is a first-class owned `Array with Byte` the ownership
@@ -99,6 +103,28 @@ let CapacityOverflowExitCode = 71 as ParsedInt
 // (an element-wise WIDENING value copy across differing strides) is a distinct mechanism, not slice 4's.
 let AppendElementSizeMismatchExitCode = 72 as ParsedInt
 
+// The exit code `__arr_resize` diverges with when asked for a NEGATIVE length. A length is a count, so a
+// negative one is never a value the record may hold — and the reason this is an abort rather than a merely
+// cosmetic wrong answer is that the shrink path zeroes `[n·es, oldLen·es)` starting at `buffer + n·es`,
+// which for a negative `n` is an address BEFORE the buffer. On a byte-string literal that write lands in
+// read-only `.rdata` and faults; on an owned array it silently erases the `__mm_alloc` header sitting just
+// below the payload. It is also the one out-of-buffer write a DETACH cannot fix — detaching only moves the
+// write to a different allocation — so it is rejected here, by the same "a corrupt operation must never
+// proceed" guard `ElementSizeZeroExitCode`/`CapacityOverflowExitCode`/`AppendElementSizeMismatchExitCode` are.
+//
+// ⭐ THE CANONICAL CONTRACT ALREADY SAYS SO, IN A TYPE: `stdlib/Array.maxon`'s `resize(newLength ElementCount)`
+// takes `ElementCount = int(0 to u64.max)` (`:11`), so a negative length is not a value the operation accepts
+// — the reference stdlib expresses that as a RANGE and gets the rejection from the type system. shv2's builtin
+// array methods pass their argument through as a plain integer (the same reason `get`/`set`/`remove` bounds-
+// check a negative INDEX at runtime rather than inheriting `ElementIndex`'s range), so the range has to be
+// re-asserted here. This guard is that assertion, in the one place shv2 can currently make it.
+//
+// ⚠ THE REFERENCE COMPILER, meanwhile, has no coherent answer: handed a negative resize it PANICS on an owned
+// array (`Array.reserve: grow failed — minCapacity > cap guaranteed`, exit 1) but silently publishes
+// `count() == -2` for a byte-string literal, because its own growth check is satisfied by the negative rdata
+// sentinel and the assert is therefore never reached. Aborting matches the half of its behaviour that acts.
+let NegativeResizeExitCode = 73 as ParsedInt
+
 // The error flag `__arr_get`/`__arr_set`/`__arr_first`/`__arr_last`/`__arr_pop`/`__arr_remove` throw on an
 // out-of-bounds index — the dual-register `errorReturn` flag (an error case's `ordinal + 1`, so 1 is
 // `ArrayError.indexOutOfBounds`, ordinal 0). `try … otherwise` only tests `flag != 0`, so any nonzero
@@ -151,16 +177,18 @@ export let ArrDecrefName = b"__arr_decref"
 
 // The whole-array copy operations (P1.7 slice 4). `slice` is THROWING (bounds/inverted-range → `ArrayError`),
 // `clone`/`append` are not. `slice`/`clone` return a NEW INDEPENDENT array (a fresh record + buffer with the
-// range's bytes copied in — shv2 is MOVE-ONLY, so there is NO copy-on-write and NO zero-copy view); `append`
+// range's bytes copied in — never a zero-copy view); `append`
 // grows `self` and block-copies `other`'s bytes in, leaving `other` untouched. TRIVIAL elements only — a
 // managed element would need a per-element deep clone (the parser rejects the managed cases, P1.7 slice 4).
 export let ArrSliceName = b"__arr_slice"
 export let ArrCloneName = b"__arr_clone"
 export let ArrAppendName = b"__arr_append"
 
-// Internal helpers the public ones call: `__arr_grown_cap` is the policy, `__arr_grow` reallocs to fit.
+// Internal helpers the public ones call: `__arr_grown_cap` is the policy, `__arr_grow` reallocs to fit,
+// `__arr_cow_detach` gives the record a private writable buffer before any in-place write (P1.7 COW slice A).
 let ArrGrownCapName = b"__arr_grown_cap"
 let ArrGrowName = b"__arr_grow"
+let ArrCowDetachName = b"__arr_cow_detach"
 
 // The `__arr_` prefix that identifies EVERY array runtime entry point — the one test `scanRuntimeUsage`
 // reads to set `usesArray` (and `usesHeap`).
@@ -198,6 +226,7 @@ export function installArrayRuntime(module StdModule, usage RuntimeUsage)
 	if not usage.usesArray 'noArray'
 		return
 	end 'noArray'
+	buildArrCowDetach(module)
 	buildArrGrownCap(module)
 	buildArrGrow(module)
 	buildArrCreate(module)
@@ -552,6 +581,38 @@ function emitCmp(module StdModule, block IrBlock, a ValueId, b ValueId, pred Std
 	return v
 end 'emitCmp'
 
+// Call `__arr_cow_detach(arr)` — the one obligation every in-place mutator owes before it touches the
+// buffer (see `buildArrCowDetach` for the rule and for which mutators call this directly). The callee is
+// void, so the minted result is unread; it exists because a `call` op always defines a value.
+function emitCowDetach(module StdModule, block IrBlock, arr ValueId, ids ValueMinter)
+	let detached = ids.mint()
+	module.appendOp(block, op: StdOp.call(detached, callee: ArrCowDetachName, args: argsOf(arr)))
+end 'emitCowDetach'
+
+// `capacity@16 < 0` — the record's buffer is the byte-string literal's IMMORTAL `.rdata` blob rather than an
+// allocation of its own (`ArrRdataCapacitySentinel`). ⭐ THE ONE HOME OF THE SENTINEL TEST, asked by the two
+// places that must act on it and reached by no third: `__arr_cow_detach` (an rdata buffer cannot be WRITTEN,
+// so replace it) and `__arr_decref` (an rdata buffer was never `__mm_alloc`'d, so do not FREE it). Their
+// conclusions differ and are meant to — what must never differ is the test, because a record misjudged by
+// either one is a fault: a write into read-only memory, or a `__mm_free` of an address the allocator never
+// handed out. The test is `< 0` rather than `== ArrRdataCapacitySentinel` so the whole negative range stays
+// available for a further non-owned-buffer kind without every reader having to learn its name.
+function emitBufferIsRdata(module StdModule, block IrBlock, arr ValueId, ids ValueMinter) returns ValueId
+	let capacity = emitLoadField(module, block: block, arr: arr, offset: ArrCapacityOffset, ids: ids)
+	let zero = emitConst(module, block: block, value: 0, ids: ids)
+	return emitCmp(module, block: block, a: capacity, b: zero, pred: StdCmpPred.lt, ids: ids)
+end 'emitBufferIsRdata'
+
+// Abort the process with `code` from a VOID runtime function — the file's "a corrupt operation must never
+// proceed" exit (`__arr_grow`'s capacity overflow, `__arr_resize`'s negative length, `__arr_append`'s
+// element-size mismatch). `osExit` diverges, so the trailing `retVoid` is a dead terminator that exists only
+// to keep the block well-formed; writing that fact once is why this is a function and not three copies.
+function emitVoidAbort(module StdModule, block IrBlock, code ParsedInt, ids ValueMinter)
+	let exitCode = emitConst(module, block: block, value: code, ids: ids)
+	module.appendOp(block, op: StdOp.osExit(exitCode))
+	module.setTerminator(block, op: StdOp.retVoid)
+end 'emitVoidAbort'
+
 // The element slot ADDRESS `buffer + index·elementSize` — the byte where element `index` starts.
 function emitSlotAddr(module StdModule, block IrBlock, buffer ValueId, index ValueId, elementSize ValueId, ids ValueMinter) returns ValueId
 	let offset = emitBin(module, block: block, a: index, b: elementSize, opcode: StdBinOpcode.mul, ids: ids)
@@ -594,10 +655,12 @@ end 'emitOkReturn'
 
 // ⭐ **BUILD A FRESH INDEPENDENT ARRAY holding `srcRecord`'s elements `[start, start+sliceLen)` (P1.7 slice 4).**
 // The shared body of `__arr_clone` (start 0, sliceLen = length) and `__arr_slice` (a bounds-checked sub-range).
-// shv2 is MOVE-ONLY with NO copy-on-write and NO zero-copy views — the bootstrap's `capacity=-1`/`-2` view
-// sentinels and `maxon_cow_check` are bootstrap-specific and NOT ported — so the result is ALWAYS a new
-// `__mm_alloc`'d record + buffer with the range's bytes COPIED in. A later mutation of either array therefore
-// cannot reach the other (`slice-cow-modify-slice`/`-original` pass by copy semantics: the buffers are disjoint).
+// A slice is EAGERLY COPIED, not a zero-copy view: the result is ALWAYS a new `__mm_alloc`'d record + buffer
+// with the range's bytes copied in, so no two array records ever share a heap buffer. (`__arr_cow_detach`
+// exists for the ONE non-owned buffer that does exist — the byte-string literal's immortal `.rdata` blob —
+// not to make a shared view safe; the bootstrap's `maxon_cow_check`-per-mutation-site design is not ported.)
+// A later mutation of either array therefore cannot reach the other (`slice-cow-modify-slice`/`-original`
+// pass by copy semantics: the buffers are disjoint).
 // It reuses `__arr_create` (a fresh record, carrying the SAME `element_size` and `element_destroy` as the source)
 // and `__arr_reserve` (a buffer sized for `sliceLen`) so the record/grow logic lives in ONE place; then it block-
 // copies `sliceLen · elementSize` bytes and publishes `length`. TRIVIAL elements only — the byte copy duplicates
@@ -626,6 +689,90 @@ function emitArrayRangeCopy(module StdModule, func IrFunction, cur IrBlock, exit
 end 'emitArrayRangeCopy'
 
 // --- The runtime functions ---
+
+// ⭐ **`__arr_cow_detach(arr)` — GIVE THE RECORD A PRIVATE, WRITABLE BUFFER (P1.7 COW slice A).** If `arr`'s
+// buffer is already privately owned and writable, do nothing; otherwise replace it with a fresh `__mm_alloc`'d
+// copy of the array's LIVE bytes. Every in-place mutator calls this before its first buffer write, so a write
+// can never reach memory the record does not own.
+//
+// The only non-owned buffer that exists at this slice is the byte-string literal's IMMORTAL `.rdata` blob,
+// which `emitBufferIsRdata` recognizes; anything else is private and writable and returns untouched. Slice B
+// adds a second trigger — a heap buffer whose own refcount says it is SHARED — as another arm of THIS test,
+// without moving the check or touching a call site. (It is a second arm here and NOT in `emitBufferIsRdata`:
+// a shared heap buffer is un-WRITABLE but still perfectly freeable, so it is not the same question the
+// sentinel answers, and merging the two would hand `__arr_decref` a buffer it must release and never free.)
+//
+// ⭐ **THE CHECK LIVES HERE, NOT AT THE CALL SITES — and that is a deliberate departure from BOTH references.**
+// The bootstrap emits its COW check per mutation site (`MaxonToStandardConversion.ManagedMemory.cs`) and v1
+// emits it at each of its six, and both have holes because the list drifted: the bootstrap's `clear` and
+// `setLength` mutate a shared buffer with no check at all, and v1's `shift_left`/`shift_right` are protected
+// only by an arithmetic accident. shv2 has real emitted runtime functions that already take the record
+// pointer, so putting the detach INSIDE them makes "every mutation site is gated" a property of the runtime
+// rather than of a checklist a future mutator can be added without reading.
+//
+// ⭐ **THE GATING RULE, stated once: a mutator either calls `__arr_grow` before it touches the buffer, or it
+// calls `__arr_cow_detach` itself.** `__arr_grow`'s FIRST op is an unconditional detach — placed ahead of its
+// own `capacity >= required` early-out precisely so the guarantee does not depend on the growth arithmetic —
+// so `push`/`reserve`/`resize`/`insert`/`append` are gated by construction through the call they already make,
+// and `set`/`clear`/`remove`/`pop`, which write without ever growing, call it directly. Those five are the
+// only call sites, and a sixth in (say) `insert` would be an unreachable branch: by the time it ran, `grow`
+// would already have made `capacity >= 0`, so it could never do anything. `get`/`first`/`last`/`count`/
+// `capacity`/`is_empty` are READS and must NOT detach; `__arr_append`'s `src` is borrowed and read-only, so
+// only its `dest` is gated.
+//
+// ⚠ **THE TRAPS, each one already paid for elsewhere:**
+//  1. **The buffer is loaded AFTER the detach, never before** — a pointer read ahead of the check is the
+//     stale shared one, and the write goes to the buffer the record no longer uses.
+//  2. **A ZERO-LENGTH array still detaches.** There is deliberately no `liveBytes == 0` early-out: skipping it
+//     leaves the rdata pointer in place with the sentinel capacity, and the next reallocation then reads an
+//     `__mm_alloc` header that does not exist. `__mm_alloc(0, 0)` is a legal empty box, so the general path
+//     already handles it.
+//  3. **The fresh buffer comes from `__mm_alloc`**, which zeroes — the `[length, capacity)`-reads-ZERO
+//     invariant the whole file leans on. Here it is trivially satisfied (`capacity` is set to `length`, so
+//     that range is empty), but the allocation must never become a raw non-zeroing one.
+//  4. **`length · element_size` LIVE bytes are copied, not `capacity`'s worth** — an rdata blob has no slack
+//     to read anyway, and slice B's shared heap buffer will.
+//  5. **The OLD buffer is NOT freed.** It was never `__mm_alloc`'d, so `__mm_free` on it corrupts the
+//     allocator. `__arr_grow` used to gate its old-buffer free on its own inline copy of the sentinel test
+//     for exactly this reason, and no longer needs one at all — after the detach at its head, the buffer it
+//     is replacing is always owned.
+//
+// The published `capacity@16` is `length` — the buffer holds exactly the live elements and no slack, which is
+// also what the reference compiler reports after it detaches (`b"hi"`, then `set`, then `capacity()` → 2).
+function buildArrCowDetach(module StdModule)
+	var func = IrFunction.createFromStd(ArrCowDetachName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var detach = module.addBlock(func, label: b"detach")
+	let done = module.addBlock(func, label: b"done")
+
+	emitParams(module, block: entry, count: 1)
+	let arr = 0 as ValueId
+
+	// entry: an already-private buffer needs nothing.
+	let isRdata = emitBufferIsRdata(module, block: entry, arr: arr, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(isRdata, thenBlockId: detach.id, elseBlockId: done.id))
+
+	// detach: allocate a private buffer sized to the live bytes and copy them across.
+	let length = emitLoadField(module, block: detach, arr: arr, offset: ArrLengthOffset, ids: ids)
+	let es = emitLoadField(module, block: detach, arr: arr, offset: ArrElementSizeOffset, ids: ids)
+	let liveBytes = emitBin(module, block: detach, a: length, b: es, opcode: StdBinOpcode.mul, ids: ids)
+	let bufferDtor = emitConst(module, block: detach, value: TrivialElementDestroy, ids: ids)
+	let newBuf = ids.mint()
+	module.appendOp(detach, op: StdOp.call(newBuf, callee: MmAllocName, args: twoArgs(liveBytes, second: bufferDtor)))
+	let oldBuf = emitLoadField(module, block: detach, arr: arr, offset: ArrBufferOffset, ids: ids)
+	var afterCopy = emitForwardCopy(module, func: func, cur: detach, dest: newBuf, src: oldBuf, byteCount: liveBytes, ids: ids)
+
+	// afterCopy: publish the private buffer. The old one is left alone — see trap 5.
+	emitStoreField(module, block: afterCopy, arr: arr, offset: ArrBufferOffset, value: newBuf)
+	emitStoreField(module, block: afterCopy, arr: arr, offset: ArrCapacityOffset, value: length)
+	module.setTerminator(afterCopy, op: StdOp.branch(done.id))
+
+	module.setTerminator(done, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildArrCowDetach'
 
 // `__arr_grown_cap(current, required) -> newCap` — the growth policy. Ported verbatim from
 // `stdlib/Array.maxon:grownCapacity`; see the `GrowthThreshold` note above for why it eases.
@@ -708,7 +855,6 @@ function buildArrGrow(module StdModule)
 	var grow = module.addBlock(func, label: b"grow")
 	var sizeOverflow = module.addBlock(func, label: b"overflow")
 	var alloc = module.addBlock(func, label: b"alloc")
-	var checkOwned = module.addBlock(func, label: b"checkowned")
 	var freeOld = module.addBlock(func, label: b"freeold")
 	var publish = module.addBlock(func, label: b"publish")
 	let done = module.addBlock(func, label: b"done")
@@ -716,6 +862,13 @@ function buildArrGrow(module StdModule)
 	emitParams(module, block: entry, count: 2)
 	let arr = 0 as ValueId
 	let required = 1 as ValueId
+
+	// ⭐ **DETACH FIRST, UNCONDITIONALLY, AHEAD OF THE EARLY-OUT.** Every mutator that reaches the buffer
+	// through a grow (`push`/`reserve`/`resize`/`insert`/`append`) is gated by THIS call, so it must not
+	// depend on whether the growth check happens to fire — a `resize` whose `required` is below the rdata
+	// sentinel would otherwise return from `done` with the record still pointing at read-only `.rdata`, and
+	// the caller would write there. `capacity` is read AFTERWARDS because the detach republishes it.
+	emitCowDetach(module, block: entry, arr: arr, ids: ids)
 
 	// entry: already big enough ⇒ nothing to do.
 	let capacity = emitLoadField(module, block: entry, arr: arr, offset: ArrCapacityOffset, ids: ids)
@@ -735,10 +888,8 @@ function buildArrGrow(module StdModule)
 	let overflowed = emitCmp(module, block: grow, a: roundTrip, b: newCap, pred: StdCmpPred.ne, ids: ids)
 	module.setTerminator(grow, op: StdOp.condBranch(overflowed, thenBlockId: sizeOverflow.id, elseBlockId: alloc.id))
 
-	// overflow: abort — a corrupt allocation must never be published (`__arr_create`'s zero-size guard shape).
-	let overflowCode = emitConst(module, block: sizeOverflow, value: CapacityOverflowExitCode, ids: ids)
-	module.appendOp(sizeOverflow, op: StdOp.osExit(overflowCode))
-	module.setTerminator(sizeOverflow, op: StdOp.retVoid)
+	// overflow: abort — a corrupt allocation must never be published.
+	emitVoidAbort(module, block: sizeOverflow, code: CapacityOverflowExitCode, ids: ids)
 
 	// alloc: allocate the new buffer and copy the live bytes forward.
 	let zeroDtor = emitConst(module, block: alloc, value: 0, ids: ids)
@@ -749,20 +900,13 @@ function buildArrGrow(module StdModule)
 	let oldBytes = emitBin(module, block: alloc, a: oldLen, b: es, opcode: StdBinOpcode.mul, ids: ids)
 	var afterCopy = emitForwardCopy(module, func: func, cur: alloc, dest: newBuf, src: oldBuf, byteCount: oldBytes, ids: ids)
 
-	// afterCopy: free the OLD buffer if it existed (checkOwned decides whether it MAY be freed), else publish.
+	// afterCopy: free the OLD buffer if there was one, else publish. It needs no "is this buffer MINE to free?"
+	// test: the detach at `entry` already replaced any non-owned buffer, so whatever is here was `__mm_alloc`'d.
+	// That test used to live here as a second `emitBufferIsRdata` in all but name; the remaining `oldBuf != 0`
+	// guard is a different question — an array that never grew has no buffer at all.
 	let zero = emitConst(module, block: afterCopy, value: 0, ids: ids)
 	let hadBuf = emitCmp(module, block: afterCopy, a: oldBuf, b: zero, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(afterCopy, op: StdOp.condBranch(hadBuf, thenBlockId: checkOwned.id, elseBlockId: publish.id))
-
-	// ⚠ **THE RDATA-BUFFER SEAM, GROW SIDE (P1.7 slice 2).** A byte-string literal's `buffer@0` is immortal
-	// `.rdata` and its `capacity@16` is the negative sentinel `__arr_decref` also reads. Growing it copies the
-	// live bytes into the fresh heap buffer above and then republishes a POSITIVE capacity below — but the old
-	// buffer must NOT be `__mm_free`'d, because the rdata blob was never `__mm_alloc`'d (that free corrupts the
-	// allocator). So the old-buffer free is gated on an OWNED buffer (`capacity >= 0`), the SAME sentinel the
-	// drop path honors — the "don't free an rdata buffer" fact must hold at EVERY free site, not just the drop.
-	let capacityNow = emitLoadField(module, block: checkOwned, arr: arr, offset: ArrCapacityOffset, ids: ids)
-	let ownedBuf = emitCmp(module, block: checkOwned, a: capacityNow, b: zero, pred: StdCmpPred.ge, ids: ids)
-	module.setTerminator(checkOwned, op: StdOp.condBranch(ownedBuf, thenBlockId: freeOld.id, elseBlockId: publish.id))
+	module.setTerminator(afterCopy, op: StdOp.condBranch(hadBuf, thenBlockId: freeOld.id, elseBlockId: publish.id))
 
 	let oldFreed = ids.mint()
 	module.appendOp(freeOld, op: StdOp.call(oldFreed, callee: MmFreeName, args: argsOf(oldBuf)))
@@ -796,10 +940,11 @@ function buildArrCreate(module StdModule)
 	let isZeroSize = emitCmp(module, block: entry, a: elementSize, b: zero, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(isZeroSize, thenBlockId: badSize.id, elseBlockId: ok.id))
 
+	// The value-returning twin of `emitVoidAbort` — same abort, but this function returns a record pointer, so
+	// its dead terminator must carry a value. It is spelled out rather than shared because it is the file's
+	// ONE value-returning abort; a helper with a single caller would only move it.
 	let exitCode = emitConst(module, block: badSize, value: ElementSizeZeroExitCode, ids: ids)
 	module.appendOp(badSize, op: StdOp.osExit(exitCode))
-	// `osExit` diverges, so this return is a dead terminator that keeps the block well-formed (the shape
-	// GtRuntime's overflow/spawn-failed blocks use — a process exit is a body op followed by a dead return).
 	let deadRet = emitConst(module, block: badSize, value: 0, ids: ids)
 	module.setTerminator(badSize, op: StdOp.ret(deadRet))
 
@@ -889,6 +1034,9 @@ function buildArrSet(module StdModule)
 
 	emitOobReturn(module, block: oob, ids: ids)
 
+	// Detach BEFORE the buffer pointer is loaded (`__arr_cow_detach` trap 1), and after the bounds check, so a
+	// throwing `set` — which writes nothing — allocates nothing.
+	emitCowDetach(module, block: store, arr: arr, ids: ids)
 	let buffer = emitLoadField(module, block: store, arr: arr, offset: ArrBufferOffset, ids: ids)
 	let es = emitLoadField(module, block: store, arr: arr, offset: ArrElementSizeOffset, ids: ids)
 	// ⭐ **DESTROY THE OCCUPANT `set` OVERWRITES (P1.7 slice 3a).** A managed array's `set` moves a new owner into
@@ -965,11 +1113,20 @@ end 'buildArrReserve'
 // `__arr_resize(arr, n)` — set length to n. Growing zero-fills the new tail (a grown buffer's `[length,
 // newCap)` is already zero; an ungrown one's `[length, capacity)` is zero by the invariant), so only the
 // SHRINK path must actively zero the vacated `[n, oldLen)` region to keep the invariant.
+//
+// ⚠ **A NEGATIVE `n` IS REJECTED, not clamped** (`NegativeResizeExitCode`) — it is the one array write that
+// lands OUTSIDE the buffer in both directions and that a detach cannot make safe, because the shrink's zero
+// range starts at `buffer + n·es`. `StdCmpPred` is signed, so the existing `n < oldLen` shrink test happily
+// accepts it; `emitIsNegative` is the file's one home for the guard that does not. It is a REJECT rather than
+// `insert`'s clamp because `insert` documents a `[0, length]` clamping contract and `resize` documents none —
+// a caller asking for a negative length has a bug, and silently resizing to empty would hide it.
 function buildArrResize(module StdModule)
 	var func = IrFunction.createFromStd(ArrResizeName, returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry")
+	var badLength = module.addBlock(func, label: b"badlen")
+	var resize = module.addBlock(func, label: b"resize")
 	var doZero = module.addBlock(func, label: b"dozero")
 	var setLen = module.addBlock(func, label: b"setlen")
 
@@ -977,11 +1134,18 @@ function buildArrResize(module StdModule)
 	let arr = 0 as ValueId
 	let n = 1 as ValueId
 
+	// entry: a negative length can never be published (see the note above).
+	let negative = emitIsNegative(module, block: entry, value: n, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(negative, thenBlockId: badLength.id, elseBlockId: resize.id))
+
+	// badLength: abort — a negative length can never be published.
+	emitVoidAbort(module, block: badLength, code: NegativeResizeExitCode, ids: ids)
+
 	let grown = ids.mint()
-	module.appendOp(entry, op: StdOp.call(grown, callee: ArrGrowName, args: twoArgs(arr, second: n)))
-	let oldLen = emitLoadField(module, block: entry, arr: arr, offset: ArrLengthOffset, ids: ids)
-	let shrink = emitCmp(module, block: entry, a: n, b: oldLen, pred: StdCmpPred.lt, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(shrink, thenBlockId: doZero.id, elseBlockId: setLen.id))
+	module.appendOp(resize, op: StdOp.call(grown, callee: ArrGrowName, args: twoArgs(arr, second: n)))
+	let oldLen = emitLoadField(module, block: resize, arr: arr, offset: ArrLengthOffset, ids: ids)
+	let shrink = emitCmp(module, block: resize, a: n, b: oldLen, pred: StdCmpPred.lt, ids: ids)
+	module.setTerminator(resize, op: StdOp.condBranch(shrink, thenBlockId: doZero.id, elseBlockId: setLen.id))
 
 	let es = emitLoadField(module, block: doZero, arr: arr, offset: ArrElementSizeOffset, ids: ids)
 	let buffer = emitLoadField(module, block: doZero, arr: arr, offset: ArrBufferOffset, ids: ids)
@@ -1077,6 +1241,9 @@ function buildArrPop(module StdModule)
 
 	emitOobReturn(module, block: oob, ids: ids)
 
+	// Detach BEFORE the buffer pointer is loaded (`__arr_cow_detach` trap 1), and after the empty check, so a
+	// throwing `pop` allocates nothing.
+	emitCowDetach(module, block: pop, arr: arr, ids: ids)
 	let one = emitConst(module, block: pop, value: 1, ids: ids)
 	let lastIdx = emitBin(module, block: pop, a: length, b: one, opcode: StdBinOpcode.sub, ids: ids)
 	let buffer = emitLoadField(module, block: pop, arr: arr, offset: ArrBufferOffset, ids: ids)
@@ -1101,6 +1268,9 @@ function buildArrClear(module StdModule)
 	emitParams(module, block: entry, count: 1)
 	let arr = 0 as ValueId
 
+	// Detach BEFORE the buffer pointer is loaded (`__arr_cow_detach` trap 1). `clear` cannot throw, and an
+	// EMPTY literal detaches here too, into a zero-byte private buffer (trap 2).
+	emitCowDetach(module, block: entry, arr: arr, ids: ids)
 	let length = emitLoadField(module, block: entry, arr: arr, offset: ArrLengthOffset, ids: ids)
 	let es = emitLoadField(module, block: entry, arr: arr, offset: ArrElementSizeOffset, ids: ids)
 	let buffer = emitLoadField(module, block: entry, arr: arr, offset: ArrBufferOffset, ids: ids)
@@ -1206,6 +1376,9 @@ function buildArrRemove(module StdModule)
 
 	emitOobReturn(module, block: oob, ids: ids)
 
+	// Detach BEFORE the buffer pointer is loaded (`__arr_cow_detach` trap 1), and after the bounds check, so a
+	// throwing `remove` allocates nothing.
+	emitCowDetach(module, block: remove, arr: arr, ids: ids)
 	let es = emitLoadField(module, block: remove, arr: arr, offset: ArrElementSizeOffset, ids: ids)
 	let buffer = emitLoadField(module, block: remove, arr: arr, offset: ArrBufferOffset, ids: ids)
 	let slot = emitSlotAddr(module, block: remove, buffer: buffer, index: index, elementSize: es, ids: ids)
@@ -1239,7 +1412,7 @@ end 'buildArrRemove'
 // guards are what stop a NEGATIVE index — signed compares never catch it (`end > length` is `-1 > 3` = FALSE,
 // and `start > end` misses `slice(-1, endIndex: 2)` since `-1 > 2` is FALSE), so it would otherwise address
 // `srcBuffer + start·elementSize` BEFORE the buffer (an OOB read). An empty slice (`start == end`, in bounds)
-// yields a valid length-0 array. `emitArrayRangeCopy` does the copy; shv2 always COPIES (no COW / view).
+// yields a valid length-0 array. `emitArrayRangeCopy` does the copy; the result is never a view.
 function buildArrSlice(module StdModule)
 	var func = IrFunction.createFromStd(ArrSliceName, returnType: StdReturnType.value(StdType.i64), paramCount: 3, paramTypes: threeI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(3)
@@ -1326,11 +1499,8 @@ function buildArrAppend(module StdModule)
 	let esDiffers = emitCmp(module, block: entry, a: destEs, b: srcEs, pred: StdCmpPred.ne, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(esDiffers, thenBlockId: mismatch.id, elseBlockId: append.id))
 
-	// mismatch: abort — an incoherent cross-stride blit must never proceed (the `__arr_grow` overflow shape:
-	// an `osExit` body op followed by a dead `retVoid` terminator that keeps the void block well-formed).
-	let mismatchCode = emitConst(module, block: mismatch, value: AppendElementSizeMismatchExitCode, ids: ids)
-	module.appendOp(mismatch, op: StdOp.osExit(mismatchCode))
-	module.setTerminator(mismatch, op: StdOp.retVoid)
+	// mismatch: abort — an incoherent cross-stride blit must never proceed.
+	emitVoidAbort(module, block: mismatch, code: AppendElementSizeMismatchExitCode, ids: ids)
 
 	let destLen = emitLoadField(module, block: append, arr: dest, offset: ArrLengthOffset, ids: ids)
 	let srcLen = emitLoadField(module, block: append, arr: src, offset: ArrLengthOffset, ids: ids)
@@ -1372,6 +1542,12 @@ end 'buildArrAppend'
 // the last owner frees the RECORD alone when the capacity is negative — the buffer free is gated on
 // `capacity >= 0` (an OWNED, grown buffer). A byte-string is `Array with Byte`, a TRIVIAL element, so it never
 // reaches the managed walk. An owned array (capacity >= 0) reaches the existing buffer path unchanged.
+//
+// The sentinel test itself is `emitBufferIsRdata`, shared with `__arr_cow_detach`; what differs is the
+// conclusion drawn from it — "do not FREE this at death" here, "replace it before a WRITE" there. Sharing the
+// test is what makes the pair correct in sequence: a literal that was MUTATED detached first, so it no longer
+// answers to the sentinel and the buffer freed here is the private one the detach allocated, never the blob;
+// a literal that was only READ still answers to it and still frees the record alone.
 function buildArrDecref(module StdModule)
 	var func = IrFunction.createFromStd(ArrDecrefName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
@@ -1389,11 +1565,9 @@ function buildArrDecref(module StdModule)
 
 	emitRefcountCheckToLastOwner(module, entry: entry, lower: lower, record: record, lastOwner: release, ids: ids)
 
-	// release: an rdata-backed buffer (`capacity < 0`, the byte-string sentinel) is immortal `.rdata` and must
-	// NOT be freed — skip straight to freeing the record. An owned buffer (`capacity >= 0`) falls to `checkBuf`.
-	let capacity = emitLoadField(module, block: release, arr: record, offset: ArrCapacityOffset, ids: ids)
-	let zeroCap = emitConst(module, block: release, value: 0, ids: ids)
-	let isRdata = emitCmp(module, block: release, a: capacity, b: zeroCap, pred: StdCmpPred.lt, ids: ids)
+	// release: an rdata-backed buffer is immortal and must NOT be freed — skip straight to freeing the record.
+	// An owned buffer falls to `checkBuf`.
+	let isRdata = emitBufferIsRdata(module, block: release, arr: record, ids: ids)
 	module.setTerminator(release, op: StdOp.condBranch(isRdata, thenBlockId: freeRec.id, elseBlockId: checkBuf.id))
 
 	// checkBuf: an empty array never allocated a buffer (nor any element) — free the record directly. An
