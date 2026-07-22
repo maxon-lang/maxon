@@ -1216,8 +1216,18 @@ public partial class ARM64CodeEmitter() {
   private void EmitJumpTableDispatch(ARM64JumpTableOp jt) {
     var indexReg = jt.IndexReg;
 
-    // 1. Bounds check: CMP Xn, #caseCount (unsigned — catches negative values too)
-    EmitWord(0xF100001F | ((uint)jt.CaseCount << 10) | (Reg(indexReg) << 5));
+    // 1. Bounds check: CMP Xn, caseCount (unsigned — catches negative values too).
+    //    caseCount is materialized into a scratch register rather than encoded as a CMP
+    //    immediate: the imm12 field holds only 0..4095, but the strategy selector's span cap
+    //    admits a table of exactly 4096 slots, and 4096 (0x1000 << 10) spills into the LSL #12
+    //    shift bit — the CMP would silently compare against 0 and send every value to the
+    //    default. Encoding the immediate directly would tie this emitter's correctness to a
+    //    constant in another file (bump MaxTableSpanSlots and arm64 breaks again); the register
+    //    form is correct for any count. X16 is free here — it is not written until the LDRSW at
+    //    step 4, and the live index reg is provably neither X16 nor X17 (both are overwritten as
+    //    dispatch scratch below while the index must survive to step 4).
+    EmitMovRegImm(ARM64Register.X16, jt.CaseCount);
+    EmitCmpRegReg(indexReg, ARM64Register.X16);
     // 2. B.HS defaultTarget (out of bounds → default)
     _condBranchFixups.Add((_code.Count, jt.DefaultTarget));
     EmitWord(0x54000000 | CondCode(ARM64ConditionCode.Hs));

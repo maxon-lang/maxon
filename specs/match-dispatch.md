@@ -1709,3 +1709,178 @@ module {
   }
 }
 ```
+
+### A 4096-slot table dispatches correctly (arm64 bounds-check boundary)
+
+128 dense width-32 range arms cover exactly 0…4095 — a span of 4096, the largest
+table the strategy selector admits. On arm64 the bound was once encoded as a `CMP`
+immediate, whose 12-bit field cannot hold 4096: the value spilled into the `LSL #12`
+shift bit and the check compared against 0, sending every input to the default. This
+is the canonical byte-dispatch shape; it must land on the right arm for values across
+the whole span and reject the neighbours just outside it. Runs natively on arm64 CI.
+
+<!-- test: dispatch.table-span-4096 -->
+```maxon
+typealias Full = int(0 to 100000)
+typealias Result = int(0 to 200)
+
+function classify(n Full) returns Result
+	match n 'm'
+		0 to 31 then return 1
+		32 to 63 then return 2
+		64 to 95 then return 3
+		96 to 127 then return 4
+		128 to 159 then return 5
+		160 to 191 then return 6
+		192 to 223 then return 7
+		224 to 255 then return 8
+		256 to 287 then return 9
+		288 to 319 then return 10
+		320 to 351 then return 11
+		352 to 383 then return 12
+		384 to 415 then return 13
+		416 to 447 then return 14
+		448 to 479 then return 15
+		480 to 511 then return 16
+		512 to 543 then return 17
+		544 to 575 then return 18
+		576 to 607 then return 19
+		608 to 639 then return 20
+		640 to 671 then return 21
+		672 to 703 then return 22
+		704 to 735 then return 23
+		736 to 767 then return 24
+		768 to 799 then return 25
+		800 to 831 then return 26
+		832 to 863 then return 27
+		864 to 895 then return 28
+		896 to 927 then return 29
+		928 to 959 then return 30
+		960 to 991 then return 31
+		992 to 1023 then return 32
+		1024 to 1055 then return 33
+		1056 to 1087 then return 34
+		1088 to 1119 then return 35
+		1120 to 1151 then return 36
+		1152 to 1183 then return 37
+		1184 to 1215 then return 38
+		1216 to 1247 then return 39
+		1248 to 1279 then return 40
+		1280 to 1311 then return 41
+		1312 to 1343 then return 42
+		1344 to 1375 then return 43
+		1376 to 1407 then return 44
+		1408 to 1439 then return 45
+		1440 to 1471 then return 46
+		1472 to 1503 then return 47
+		1504 to 1535 then return 48
+		1536 to 1567 then return 49
+		1568 to 1599 then return 50
+		1600 to 1631 then return 51
+		1632 to 1663 then return 52
+		1664 to 1695 then return 53
+		1696 to 1727 then return 54
+		1728 to 1759 then return 55
+		1760 to 1791 then return 56
+		1792 to 1823 then return 57
+		1824 to 1855 then return 58
+		1856 to 1887 then return 59
+		1888 to 1919 then return 60
+		1920 to 1951 then return 61
+		1952 to 1983 then return 62
+		1984 to 2015 then return 63
+		2016 to 2047 then return 64
+		2048 to 2079 then return 65
+		2080 to 2111 then return 66
+		2112 to 2143 then return 67
+		2144 to 2175 then return 68
+		2176 to 2207 then return 69
+		2208 to 2239 then return 70
+		2240 to 2271 then return 71
+		2272 to 2303 then return 72
+		2304 to 2335 then return 73
+		2336 to 2367 then return 74
+		2368 to 2399 then return 75
+		2400 to 2431 then return 76
+		2432 to 2463 then return 77
+		2464 to 2495 then return 78
+		2496 to 2527 then return 79
+		2528 to 2559 then return 80
+		2560 to 2591 then return 81
+		2592 to 2623 then return 82
+		2624 to 2655 then return 83
+		2656 to 2687 then return 84
+		2688 to 2719 then return 85
+		2720 to 2751 then return 86
+		2752 to 2783 then return 87
+		2784 to 2815 then return 88
+		2816 to 2847 then return 89
+		2848 to 2879 then return 90
+		2880 to 2911 then return 91
+		2912 to 2943 then return 92
+		2944 to 2975 then return 93
+		2976 to 3007 then return 94
+		3008 to 3039 then return 95
+		3040 to 3071 then return 96
+		3072 to 3103 then return 97
+		3104 to 3135 then return 98
+		3136 to 3167 then return 99
+		3168 to 3199 then return 100
+		3200 to 3231 then return 101
+		3232 to 3263 then return 102
+		3264 to 3295 then return 103
+		3296 to 3327 then return 104
+		3328 to 3359 then return 105
+		3360 to 3391 then return 106
+		3392 to 3423 then return 107
+		3424 to 3455 then return 108
+		3456 to 3487 then return 109
+		3488 to 3519 then return 110
+		3520 to 3551 then return 111
+		3552 to 3583 then return 112
+		3584 to 3615 then return 113
+		3616 to 3647 then return 114
+		3648 to 3679 then return 115
+		3680 to 3711 then return 116
+		3712 to 3743 then return 117
+		3744 to 3775 then return 118
+		3776 to 3807 then return 119
+		3808 to 3839 then return 120
+		3840 to 3871 then return 121
+		3872 to 3903 then return 122
+		3904 to 3935 then return 123
+		3936 to 3967 then return 124
+		3968 to 3999 then return 125
+		4000 to 4031 then return 126
+		4032 to 4063 then return 127
+		4064 to 4095 then return 128
+		default then return 0
+	end 'm'
+end 'classify'
+
+function main() returns ExitCode
+	// walk the two edges, both interval boundaries, and the just-outside neighbours
+	if classify(0) != 1 'a'
+		return 101
+	end 'a'
+	if classify(31) != 1 'b'
+		return 102
+	end 'b'
+	if classify(32) != 2 'c'
+		return 103
+	end 'c'
+	if classify(2048) != 65 'd'
+		return 104
+	end 'd'
+	if classify(4095) != 128 'e'
+		return 105
+	end 'e'
+	if classify(4096) != 0 'f'
+		return 106
+	end 'f'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
