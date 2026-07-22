@@ -1777,11 +1777,25 @@ suite as its gate:
   passes — the crash is reading the merged fn signature, the SAME failure the bootstrap's ternary `let h = f
   if c else g` has). shv2 rejects both cleanly (whole-program `pendingFnMergeChecks`). Fix = mirror shv2's
   fn-signature merge in the bootstrap's match AND ternary read-back. Its own rung.
-- **#99 — a plain `as` cast to a non-numeric combination crashes** (`let s = "hi"; return s as ExitCode` →
-  `E9001: Unhandled cast combination: Struct → Integer` at `IsWideningCast`←`ValidateCast`, no match
-  involved). Should be the clean `E3009` unsafe-cast the numeric paths give. One-line fix (`IsWideningCast`'s
-  `_ => throw` → `_ => false` routes non-numeric combos to E3009), but it touches shared cast-validation and
-  wants its own red-before-green spec. Found 2026-07-22 during #58 (now unreachable THROUGH a match).
+- **✅ #99 — invalid `as` casts reject cleanly (E3009), not a crash/no-op — CLOSED 2026-07-22** (user-directed;
+  main `9adc5f6de`, C# 3060→3064/0, shv2 1170→1175/0). A cast between fundamentally-incompatible kinds (a
+  managed aggregate — String/struct/union/function value — crossing to/from a scalar number, OR to a DIFFERENT
+  aggregate) CRASHED the bootstrap (`E9001` in `IsWideningCast`) and was silently NO-OP'd by shv2. Both now
+  reject at the cast site with byte-identical **E3009 "Cannot cast from {src} to {tgt}"**. Bootstrap:
+  `IsWideningCast` `_ => throw` → `_ => false` → E3009 (also turned a sibling arithmetic-path crash into a clean
+  E2004). shv2: `castHasNoLegalConversion` (TypeRules). ⚠ The review CAUGHT A REACHABLE DOUBLE-FREE the first
+  pass missed: `p as String` (struct→String) no-op'd → a String drop ran on the struct box → exit 101; the
+  generalized predicate fixes it (opaque-`T`/scalar↔scalar untouched, provably minimal).
+- **#100 — shv2 mis-resolves a struct/aggregate TYPE used as a cast TARGET to `integer`** (`int as Point`
+  compiles as a no-op exit 0; `String as Point` errors E3009 with a WRONG "…to int" message — the target's
+  `maxonTypeTag` resolves a struct to integer). Distinct from #99 (the aggregate SOURCE); a cast-TARGET
+  type-resolution bug, not memory-unsafe. Found 2026-07-22 by the #99 review.
+- **#101 — cross-compiler grammar asymmetry on aggregate cast TARGETS + the float→int explicit-`as` divergence
+  (RULING).** Bootstrap rejects `x as String`/`x as Point` at PARSE (`E2003`), shv2 accepts an aggregate target
+  (why #99's struct→String test is shv2-only). And a **float→int explicit `as` DIVERGES — needs a RULING (same
+  class as #19)**: shv2 TRUNCATES `5.9 as Whole` (exit 5), the bootstrap REJECTS it (`E3009`, "use trunc").
+  (`structRef` coarseness — `Point as Rect`, two structs share `structRef` so the tag can't split them — is a
+  documented deferred gap.) Found 2026-07-22 by the #99 review.
 - **#4i — E3097 (enum-accessor comparison) is fully defeated by any NARROWING `as` cast** (`c.rawValue as
   Ordinal` interposes a range-check value that hides the accessor; a WIDE cast does not). Key the rule on the
   QUESTION, not the producing-op identity. (shv2 does not emit E3097 yet — a future shv2 rule too.)
