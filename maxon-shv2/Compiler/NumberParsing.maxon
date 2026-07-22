@@ -47,30 +47,46 @@ let LeastSubnormalBinaryExponent = -1074
 let MaxFiniteDecimalExponent = 308
 let LeastRoundableDecimalExponent = -324
 
+// ⭐ How many significant digits are KEPT. Past this the digits are dropped and only the fact that a
+// non-zero one WAS dropped is remembered (`droppedNonZeroDigit`), which is enough to round every
+// literal correctly — and the bound is not a guess:
+//
+// A rounding boundary for a binary64 is a midpoint `m * 2^e` with `e >= -1075`, and its magnitude is
+// at least 2^-1075 (~2.47e-324). Written out in full it therefore TERMINATES within 752 significant
+// decimal digits. A kept prefix of 768 digits and a midpoint are consequently both integer multiples
+// of the same 10^(magnitude-767), so they are either EQUAL or at least one such unit apart — while
+// the digits we dropped are worth strictly LESS than that unit. So the true value and the prefix
+// always fall on the same side of every midpoint, EXCEPT when the prefix lands exactly ON one, and
+// there `droppedNonZeroDigit` is precisely the bit that turns a tie into a round-up.
+//
+// It was 18 for as long as the significand lived in an i64 — the cell, not the arithmetic, set the
+// budget. That justification died with the i64, and 18 digits was measurably wrong: 3 of 203 random
+// literals carrying 19-30 significant digits landed a full ULP off the correctly-rounded value.
+let SignificantDigitBudget = 768
+
 // Convert a decimal float string (e.g. "3.14", "1.5e2", "2.0e-3") to IEEE 754 double raw bits.
 // Throws ParserError.overflow if the value exceeds float64 range.
 //
-// Accumulator strategy: keep all significant digits in `intPart` (regardless of
-// where the decimal point falls), and track the implicit decimal exponent
-// separately in `decExp` (≤0 for fractional shifts, ≥0 for trailing-zero
-// shifts). After parsing, the literal's value is `intPart * 10^decExp` times
-// the user-supplied scientific exponent. Significant digits past the 18-digit
-// budget are dropped, but their POSITION is preserved in `decExp`, so a literal
-// like `3.14159265358979323846` (21 sig digits) or `0.0000000000000000001`
-// (1e-19) keeps its magnitude. Truncating the digits is what bounds `intPart` to
-// an i64; the SCALED value is not bounded by anything an i64 can hold, which is
-// why the conversion below runs on the limb magnitudes at the foot of this file.
+// The result is CORRECTLY ROUNDED for every input — bit-for-bit what a full-precision strtod (and
+// so the C# bootstrap, which delegates to one) produces.
 //
-// KNOWN LIMIT of the 18-digit budget: a literal carrying MORE than 18
-// significant digits is converted from its truncated prefix, so it can land one
-// ULP below the correctly-rounded result that a full-precision strtod (and hence
-// the C# bootstrap, which delegates to one) produces. Everything at or under 18
-// digits — which is every float literal in the corpus, and more digits than a
-// double can distinguish — is exact.
+// Accumulator strategy: keep the significant digits in `significandDigits` (regardless of where the
+// decimal point falls), and track the implicit decimal exponent separately in `decExp` (≤0 for
+// fractional shifts, ≥0 for trailing-zero shifts). After parsing, the literal's value is
+// `significandDigits * 10^decExp` times the user-supplied scientific exponent. Digits past
+// `SignificantDigitBudget` are dropped, but their POSITION is preserved in `decExp` and the fact
+// that a NON-ZERO one was dropped is preserved in `droppedNonZeroDigit`, so a literal like
+// `3.14159265358979323846` (21 sig digits) or `0.0000000000000000001` (1e-19) keeps both its
+// magnitude and its rounding.
+//
+// Digits arrive one at a time but a magnitude is scaled in 9-digit strides (the widest power of ten
+// a limb holds), so they are gathered in `pendingChunk` and folded in a chunk at a time.
 export function parseFloatBits(bytes ByteArray) returns ParsedInt throws ParserError
-	let DIGIT_BUDGET = 18
-	var intPart = 0  // accumulated significant digits (capped at budget)
-	var decExp = 0  // implicit decimal exponent for intPart
+	var significandDigits = ParsedIntArray.create()  // kept significant digits, as a magnitude
+	var pendingChunk = 0  // digits gathered but not yet folded into `significandDigits`
+	var pendingCount = 0
+	var droppedNonZeroDigit = false  // the sticky bit: a dropped digit past the budget was non-zero
+	var decExp = 0  // implicit decimal exponent for the accumulated digits
 	var pastDot = false
 	var sciExp = 0
 	var sciExpNeg = false
@@ -123,17 +139,29 @@ export function parseFloatBits(bytes ByteArray) returns ParsedInt throws ParserE
 							end 'leadFrac'
 						end 'leading' else 'normalDigit'
 							hasNonZeroDigit = true
-							if sigDigits < DIGIT_BUDGET 'inBudget'
-								intPart = intPart * 10 + digitVal
+							if sigDigits < SignificantDigitBudget 'inBudget'
+								pendingChunk = pendingChunk * 10 + digitVal
+								pendingCount = pendingCount + 1
+								if pendingCount == Pow10ChunkDigits 'chunkFull'
+									bigAppendDigits(significandDigits, chunk: pendingChunk, digits: pendingCount)
+									pendingChunk = 0
+									pendingCount = 0
+								end 'chunkFull'
 								sigDigits = sigDigits + 1
 								if pastDot 'fracSig'
 									decExp = decExp - 1
 								end 'fracSig'
 							end 'inBudget' else 'overBudget'
-								// Drop digits past the budget. Integer-part
-								// excess bumps the decimal exponent; fractional
-								// excess just gets dropped (its scale is
-								// already encoded in decExp from prior digits).
+								// Drop digits past the budget, but never drop the KNOWLEDGE
+								// of one: a non-zero digit down here is what breaks a tie
+								// the kept prefix lands exactly on. Integer-part excess
+								// bumps the decimal exponent; fractional excess needs no
+								// bump (its scale is already encoded in decExp from prior
+								// digits).
+								if digitVal != 0 'droppedSignificand'
+									droppedNonZeroDigit = true
+								end 'droppedSignificand'
+
 								if not pastDot 'intExcess'
 									decExp = decExp + 1
 								end 'intExcess'
@@ -146,13 +174,18 @@ export function parseFloatBits(bytes ByteArray) returns ParsedInt throws ParserE
 		pi = pi + 1
 	end 'parse'
 
+	// The digits that did not fill a whole chunk are still in hand.
+	if pendingCount > 0 'flushPendingChunk'
+		bigAppendDigits(significandDigits, chunk: pendingChunk, digits: pendingCount)
+	end 'flushPendingChunk'
+
 	// Fold the leading-zero fractional run into decExp now (was kept separate
 	// to avoid mixing magnitude-tracking with mantissa accumulation above).
 	decExp = decExp - leadingFracZeros
 
 	// Combine the user-supplied scientific exponent with the implicit decimal
 	// exponent we accumulated. totalExp is the signed power of 10 by which
-	// intPart must be scaled to recover the literal's value.
+	// the accumulated digits must be scaled to recover the literal's value.
 	var signedSciExp = sciExp
 	if sciExpNeg 'negSci'
 		signedSciExp = -signedSciExp
@@ -165,10 +198,11 @@ export function parseFloatBits(bytes ByteArray) returns ParsedInt throws ParserE
 		return 0
 	end 'isZero'
 
-	// `intPart` holds exactly `sigDigits` digits and its leading one is non-zero (leading zeros are
-	// skipped above), so the value lies in [10^m, 10^(m+1)) and `m` is EXACTLY floor(log10(value)) —
-	// not an estimate. Dropping digits past DIGIT_BUDGET cannot move it: truncation only clears
-	// low-order digits.
+	// `significandDigits` holds exactly `sigDigits` digits and its leading one is non-zero (leading
+	// zeros are skipped above), so the value lies in [10^m, 10^(m+1)) and `m` is EXACTLY
+	// floor(log10(value)) — not an estimate. It is exact for the TRUE value too, dropped digits and
+	// all: they can only push it up by less than one unit in the last kept place, which is strictly
+	// inside the same decade.
 	let magnitudeExp = sigDigits - 1 + totalExp
 	if magnitudeExp > MaxFiniteDecimalExponent 'aboveFloatRange'
 		throw ParserError.overflow
@@ -180,11 +214,12 @@ export function parseFloatBits(bytes ByteArray) returns ParsedInt throws ParserE
 		return 0
 	end 'belowFloatRange'
 
-	// The literal's value is now the EXACT rational `numerator / denominator`, and stays exact all
-	// the way to the significand. The limb representation, and why an i64 pair cannot do this job,
-	// are at BOUNDED-WIDTH MAGNITUDES below.
-	var numerator = bigFromInt(intPart)
-	var denominator = bigFromInt(1)
+	// The literal's kept prefix is now the EXACT rational `numerator / denominator`, and stays exact
+	// all the way to the significand; `droppedNonZeroDigit` carries everything below it. The limb
+	// representation, and why an i64 pair cannot do this job, are at BOUNDED-WIDTH MAGNITUDES below.
+	var numerator = significandDigits
+	var denominator = ParsedIntArray.create()
+	denominator.push(1)
 	if totalExp > 0 'scaleNumerator'
 		bigMulPow10(numerator, exponent: totalExp)
 	end 'scaleNumerator' else if totalExp < 0 'scaleDenominator'
@@ -246,10 +281,15 @@ export function parseFloatBits(bytes ByteArray) returns ParsedInt throws ParserE
 	// Round-to-nearest-even: produce one more bit and use it, plus whatever residue is left, to
 	// decide. Without it the truncation drops up to half a ULP — e.g. 3.14 ended up at 0x...851E
 	// (3.1399999999999997) instead of the correctly-rounded 0x...851F.
+	//
+	// `droppedNonZeroDigit` joins the residue here and NOWHERE else, which is the whole point of the
+	// 768-digit budget: a prefix that long can only disagree with the true value about a rounding
+	// boundary when it sits exactly ON one, and then the residue is zero and the sticky bit alone
+	// says the true value is above it.
 	bigShiftLeft(numerator, bits: 1)
 	if bigCompare(numerator, against: denominator) >= 0 'halfwayOrAbove'
 		bigSubtract(numerator, subtrahend: denominator)
-		let aboveHalfway = not numerator.isEmpty()
+		let aboveHalfway = not numerator.isEmpty() or droppedNonZeroDigit
 		if aboveHalfway or (significand and 1) == 1 'roundUp'
 			significand = significand + 1
 		end 'roundUp'
@@ -298,13 +338,15 @@ end 'parseFloatBits'
 let LimbBits = 32
 let LimbMask = 0xFFFFFFFF
 
-// The widest magnitude the decimal guards in `parseFloatBits` admit: a numerator below 10^309
-// (< 2^1027) and a denominator below 10^341 (< 2^1133), either of which normalization then lifts to
-// the other's bit length — about 1140 bits, or 36 limbs. The headroom is deliberate and the bound is
-// CHECKED rather than assumed, because exceeding it means a guard upstream was widened without
+// The widest magnitude the decimal guards in `parseFloatBits` admit. The DENOMINATOR sets it: with
+// `magnitudeExp` floored at -324 and `SignificantDigitBudget` digits kept, `totalExp` bottoms out at
+// -(324 + 768 - 1), so the denominator reaches 10^1091 — 3625 bits, 114 limbs — and normalization
+// then lifts the numerator to the same width. (The numerator alone never exceeds 10^309 / 2^1027,
+// because the guard bounds the VALUE, not the digit count.) The headroom is deliberate and the bound
+// is CHECKED rather than assumed, because exceeding it means a guard upstream was widened without
 // widening this, and an unbounded silent grow is precisely the failure mode this representation
 // exists to remove.
-let MaxBigLimbs = 48
+let MaxBigLimbs = 144
 
 // A bit position or shift distance inside a magnitude. Non-negative — every caller either passes a
 // literal or negates a value it has just tested as negative — and bounded in practice by
@@ -329,16 +371,42 @@ function requireLimbBudget(limbs ParsedIntArray)
 	end 'overBudget'
 end 'requireLimbBudget'
 
-// `value` as limbs. It is never negative here: every caller passes an accumulated digit magnitude.
-function bigFromInt(value ParsedInt) returns ParsedIntArray
-	var limbs = ParsedIntArray.create()
-	var rest = value
-	while rest > 0 'splitLimbs'
-		limbs.push(rest and LimbMask)
-		rest = rest shr LimbBits
-	end 'splitLimbs'
-	return limbs
-end 'bigFromInt'
+// 10^`digits`, for a `digits` no wider than a limb. The one place a power of ten is built, so the
+// chunk stride and the scaling loop cannot come to disagree about what a 9-digit step is worth.
+function pow10(digits DecimalScaleExponent) returns ParsedInt
+	var factor = 1
+	var i = 0
+	while i < digits 'multiply'
+		factor = factor * 10
+		i = i + 1
+	end 'multiply'
+	return factor
+end 'pow10'
+
+// Shift `digits` decimal places into `limbs` and drop `chunk` into the space that opens up — the
+// digit-accumulation step, done a chunk at a time rather than a digit at a time.
+function bigAppendDigits(limbs ParsedIntArray, chunk ParsedInt, digits DecimalScaleExponent)
+	bigMulSmall(limbs, multiplier: pow10(digits))
+	bigAddSmall(limbs, addend: chunk)
+end 'bigAppendDigits'
+
+// `limbs` += `addend`, in place. `addend` must fit a limb.
+function bigAddSmall(limbs ParsedIntArray, addend ParsedInt)
+	var carry = addend
+	var i = 0
+	while carry > 0 and i < limbs.count() 'addEach'
+		let widened = (try limbs.get(i) otherwise panic("bigAddSmall: i < count() by loop guard but get({i}) failed")) + carry
+		try limbs.set(i, value: widened and LimbMask) otherwise panic("bigAddSmall: set({i}) failed at an index get just accepted")
+		carry = widened shr LimbBits
+		i = i + 1
+	end 'addEach'
+
+	while carry > 0 'carryOut'
+		limbs.push(carry and LimbMask)
+		carry = carry shr LimbBits
+	end 'carryOut'
+	requireLimbBudget(limbs)
+end 'bigAddSmall'
 
 // `limbs` *= `multiplier`, in place. `multiplier` must fit a limb so that `limb * multiplier + carry`
 // stays inside an i64 — the one obligation the whole representation rests on.
@@ -367,14 +435,7 @@ function bigMulPow10(limbs ParsedIntArray, exponent DecimalScaleExponent)
 			digits = remaining
 		end 'lastChunk'
 
-		var factor = 1
-		var i = 0
-		while i < digits 'buildFactor'
-			factor = factor * 10
-			i = i + 1
-		end 'buildFactor'
-
-		bigMulSmall(limbs, multiplier: factor)
+		bigMulSmall(limbs, multiplier: pow10(digits))
 		remaining = remaining - digits
 	end 'chunks'
 end 'bigMulPow10'
@@ -401,11 +462,27 @@ function bigShiftLeft(limbs ParsedIntArray, bits BigBitCount)
 		end 'carryOut'
 	end 'partialLimb'
 
-	var wholeLimbs = bits / LimbBits
-	while wholeLimbs > 0 'prependZeroLimbs'
-		limbs.insert(0, value: 0)
-		wholeLimbs = wholeLimbs - 1
-	end 'prependZeroLimbs'
+	// The whole-limb part moves every limb up in ONE pass. Repeated `insert(0, …)` would be
+	// Θ(wholeLimbs × count), and normalization shifts by up to the operand's full width — precisely
+	// the shape that turns that into a quadratic.
+	let wholeLimbs = bits / LimbBits
+	if wholeLimbs > 0 'wholeLimbShift'
+		let usedBefore = limbs.count()
+		limbs.growFilled(usedBefore + wholeLimbs, value: 0)
+
+		var src = usedBefore
+		while src > 0 'moveUp'
+			src = src - 1
+			let limb = try limbs.get(src) otherwise panic("bigShiftLeft: src < usedBefore <= count() but get({src}) failed")
+			try limbs.set(src + wholeLimbs, value: limb) otherwise panic("bigShiftLeft: growFilled sized for src + wholeLimbs but set({src + wholeLimbs}) failed")
+		end 'moveUp'
+
+		var vacated = 0
+		while vacated < wholeLimbs 'clearVacated'
+			try limbs.set(vacated, value: 0) otherwise panic("bigShiftLeft: vacated < wholeLimbs <= count() but set({vacated}) failed")
+			vacated = vacated + 1
+		end 'clearVacated'
+	end 'wholeLimbShift'
 
 	requireLimbBudget(limbs)
 end 'bigShiftLeft'

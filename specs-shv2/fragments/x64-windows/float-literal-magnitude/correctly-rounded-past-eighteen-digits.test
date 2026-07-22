@@ -1,0 +1,113 @@
+// Test: correctly-rounded-past-eighteen-digits
+function main() returns ExitCode
+	var r = 0
+	if 7.46658662666203984963311900685e13 == 74665866266620.4 'thirtyDigits'
+		r = r + 1
+	end 'thirtyDigits'
+	if 2.3744998132743940991053240e-19 == 2.3744998132743943e-19 'twentyFiveDigits'
+		r = r + 2
+	end 'twentyFiveDigits'
+	if 2.755371525302782724e-4 == 0.0002755371525302783 'nineteenDigits'
+		r = r + 4
+	end 'nineteenDigits'
+	if 3.14159265358979323846 == 3.141592653589793 'piAsWrittenInTheTree'
+		r = r + 8
+	end 'piAsWrittenInTheTree'
+	if 2.71828182845904523536 == 2.718281828459045 'eAsWrittenInTheTree'
+		r = r + 16
+	end 'eAsWrittenInTheTree'
+	return r
+end 'main'
+---
+ExitCode: 31
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 rax, 0
+    x64.movsdRegRip xmm0, [rip + __fconst_0]
+    x64.movsdRegRip xmm1, [rip + __fconst_0]
+    x64.ucomisdRegReg xmm0, xmm1
+    x64.jcc parity, critsplit
+    x64.jmp fordered
+  critsplit:
+    x64.jmp ifcont
+  fordered:
+    x64.jcc equal, thirtyDigits
+    x64.jmp critsplit
+  thirtyDigits:
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.jmp ifcont
+  critsplit:
+    x64.jmp ifcont
+  ifcont:
+    x64.movsdRegRip xmm0, [rip + __fconst_1]
+    x64.movsdRegRip xmm1, [rip + __fconst_1]
+    x64.ucomisdRegReg xmm0, xmm1
+    x64.jcc parity, critsplit
+    x64.jmp fordered
+  critsplit:
+    x64.jmp ifcont
+  fordered:
+    x64.jcc equal, twentyFiveDigits
+    x64.jmp critsplit
+  twentyFiveDigits:
+    x64.leaRegRegImm32 rax, rax, 2
+    x64.jmp ifcont
+  critsplit:
+    x64.jmp ifcont
+  ifcont:
+    x64.movsdRegRip xmm0, [rip + __fconst_2]
+    x64.movsdRegRip xmm1, [rip + __fconst_2]
+    x64.ucomisdRegReg xmm0, xmm1
+    x64.jcc parity, critsplit
+    x64.jmp fordered
+  critsplit:
+    x64.jmp ifcont
+  fordered:
+    x64.jcc equal, nineteenDigits
+    x64.jmp critsplit
+  nineteenDigits:
+    x64.leaRegRegImm32 rax, rax, 4
+    x64.jmp ifcont
+  critsplit:
+    x64.jmp ifcont
+  ifcont:
+    x64.movsdRegRip xmm0, [rip + __fconst_3]
+    x64.movsdRegRip xmm1, [rip + __fconst_3]
+    x64.ucomisdRegReg xmm0, xmm1
+    x64.jcc parity, critsplit
+    x64.jmp fordered
+  critsplit:
+    x64.jmp ifcont
+  fordered:
+    x64.jcc equal, piAsWrittenInTheTree
+    x64.jmp critsplit
+  piAsWrittenInTheTree:
+    x64.leaRegRegImm32 rax, rax, 8
+    x64.jmp ifcont
+  critsplit:
+    x64.jmp ifcont
+  ifcont:
+    x64.movsdRegRip xmm0, [rip + __fconst_4]
+    x64.movsdRegRip xmm1, [rip + __fconst_4]
+    x64.ucomisdRegReg xmm0, xmm1
+    x64.jcc parity, critsplit
+    x64.jmp fordered
+  critsplit:
+    x64.movRegReg r8, rax
+    x64.jmp ifcont
+  fordered:
+    x64.jcc equal, eAsWrittenInTheTree
+    x64.jmp critsplit
+  eAsWrittenInTheTree:
+    x64.leaRegRegImm32 r8, rax, 16
+    x64.jmp ifcont
+  critsplit:
+    x64.movRegReg r8, rax
+    x64.jmp ifcont
+  ifcont:
+    x64.popReg rbp
+    x64.ret
+}

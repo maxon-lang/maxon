@@ -30,6 +30,14 @@ let small = 1.0e-320   // finite, subnormal
 let zero = 1.0e-400    // exactly 0.0, no diagnostic
 ```
 
+The conversion is **correctly rounded for every input**, not merely for short ones. A literal may
+carry any number of significant digits; the first 768 are kept and anything past them is dropped,
+but the fact that a dropped digit was non-zero is remembered. That is enough, and the bound is not a
+guess: a rounding boundary for a double is a midpoint `m * 2^e` with `e >= -1075`, so written out in
+full it terminates within 752 significant digits — a 768-digit prefix therefore either sits exactly
+on a midpoint (where the remembered bit decides) or is far enough from one that the dropped tail
+cannot reach it.
+
 The corpus otherwise never leaves `e3` — `specs/literals.md`'s largest exponent is `1.0E3` — so
 nothing before this file reached the scaling at all. What it was hiding: the scaling ran in an
 i64, and `10^k` carries the factor `2^k`, so `10^19` wrapped, `10^63` landed on `i64.min`
@@ -237,4 +245,60 @@ end 'main'
 ```
 ```exitcode
 10
+```
+
+<!-- test: correctly-rounded-past-eighteen-digits -->
+A literal carrying MORE significant digits than a double can distinguish must still land on the
+correctly-rounded double — the same one its shortest round-trip spelling names. Each comparison here
+puts a long literal against a <=17-digit form of the same value, so the short side was always exact
+and only the long side is under test.
+
+Regression for a real wrong answer: while the converter kept just 18 significant digits and dropped
+the rest, the first three of these landed a full ULP off and this returned 24 instead of 31.
+```maxon
+function main() returns ExitCode
+	var r = 0
+	if 7.46658662666203984963311900685e13 == 74665866266620.4 'thirtyDigits'
+		r = r + 1
+	end 'thirtyDigits'
+	if 2.3744998132743940991053240e-19 == 2.3744998132743943e-19 'twentyFiveDigits'
+		r = r + 2
+	end 'twentyFiveDigits'
+	if 2.755371525302782724e-4 == 0.0002755371525302783 'nineteenDigits'
+		r = r + 4
+	end 'nineteenDigits'
+	if 3.14159265358979323846 == 3.141592653589793 'piAsWrittenInTheTree'
+		r = r + 8
+	end 'piAsWrittenInTheTree'
+	if 2.71828182845904523536 == 2.718281828459045 'eAsWrittenInTheTree'
+		r = r + 16
+	end 'eAsWrittenInTheTree'
+	return r
+end 'main'
+```
+```exitcode
+31
+```
+
+<!-- test: over-budget-digits-round-through-the-sticky-bit -->
+`9007199254740993` is 2^53 + 1 — EXACTLY the midpoint between two adjacent doubles, so it is the one
+place a dropped digit can change the answer. Both literals below carry ~796 significant digits, far
+past the 768 the converter keeps, so their tails are dropped and nothing survives them but the
+record that a non-zero digit WAS dropped. The first is exactly the midpoint and must round to even
+(down); the second differs from it only in its 796th digit and must round up. Telling those two
+apart is the entire job of that one bit.
+```maxon
+function main() returns ExitCode
+	var r = 0
+	if 9007199254740993.000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000 == 9007199254740992.0 'tieRoundsToEven'
+		r = r + 1
+	end 'tieRoundsToEven'
+	if 9007199254740993.000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001 == 9007199254740994.0 'stickyBitRoundsUp'
+		r = r + 2
+	end 'stickyBitRoundsUp'
+	return r
+end 'main'
+```
+```exitcode
+3
 ```
