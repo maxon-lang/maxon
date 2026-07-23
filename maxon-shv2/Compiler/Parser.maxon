@@ -3503,17 +3503,29 @@ export type Parser
 		return name.equals(ArrayPopMethod) or name.equals(ArrayRemoveMethod)
 	end 'arrayMoveOutMethodAt'
 
+	// ⭐ **THE `self . <field> =` REASSIGNMENT HEAD — ONE token-shape recognizer (P1.7 Finding A).** Both the
+	// descriptor-need scan (`opaqueFieldReassignAt`, real parse) and the sweep feed (`markOpaqueFieldReassignFeed`,
+	// pre-layout) must agree on what OPENS a self field reassignment, or one enrolls the reassigned parameter owned
+	// while the other fails to reserve the method's layout descriptor — an owned value then drops through a
+	// `__drop_type_param` whose descriptor was never reserved, a fault. So the three tokens after `self` — `.`
+	// `<ident>` `=` — are recognized in ONE place, ~240 lines from the other caller; each caller adds only its own
+	// tail (the scan checks the field's managed-ness, the feed checks the RHS is a bare type-parameter parameter).
+	// `self` is never a value, so a match here is always a field WRITE head, and the trailing `=` separates it from
+	// a `self.<field>` READ (`x = self.saved`) and from a nested `self.a.b = …` (a `.`, not `=`, follows the field).
+	function fieldReassignHeadAt(selfPos TokenIndex) returns bool
+		return self.kindAt(selfPos + 1) == TokenKind.dot and self.kindAt(selfPos + 2) == TokenKind.identifier and self.kindAt(selfPos + 3) == TokenKind.equals
+	end 'fieldReassignHeadAt'
+
 	// Is the token at `selfPos` the start of a `self.<field> = ` REASSIGNMENT of a bare opaque type-parameter
-	// field that some instantiation makes MANAGED (P1.7 Finding A)? `self` `.` `<ident>` `=`, four contiguous
-	// tokens whose `<ident>` is a `typeParameter` field of the enclosing generic type with a managed
-	// instantiation (`isManagedOpaqueTypeParamField`). The following `=` is what makes it a WRITE: it separates
-	// the reassignment from a `self.<field>` READ (`x = self.saved`, no `=` after the field) and from a nested
-	// `self.a.b = …` (a `.`, not `=`, follows the first field). Only such a reassignment drops the field's old
-	// opaque value through `__drop_type_param`, so it is what reserves the layout descriptor — the field-STORE
-	// twin of `arrayMoveOutMethodAt`'s move-out call. Runs in the real parse (`computeTypeDescriptorNeeds`, after
-	// the whole-program sweep), so the layout AND the instance registry the managed-ness gate reads are complete.
+	// field that some instantiation makes MANAGED (P1.7 Finding A)? The `self . <ident> =` head is recognized by
+	// the shared `fieldReassignHeadAt`; here the `<ident>` must additionally be a `typeParameter` field of the
+	// enclosing generic type with a managed instantiation (`isManagedOpaqueTypeParamField`). Only such a
+	// reassignment drops the field's old opaque value through `__drop_type_param`, so it is what reserves the
+	// layout descriptor — the field-STORE twin of `arrayMoveOutMethodAt`'s move-out call. Runs in the real parse
+	// (`computeTypeDescriptorNeeds`, after the whole-program sweep), so the layout AND the instance registry the
+	// managed-ness gate reads are complete.
 	function opaqueFieldReassignAt(selfPos TokenIndex) returns bool
-		if self.kindAt(selfPos + 1) != TokenKind.dot or self.kindAt(selfPos + 2) != TokenKind.identifier or self.kindAt(selfPos + 3) != TokenKind.equals 'notReassignShape'
+		if not self.fieldReassignHeadAt(selfPos) 'notReassignShape'
 			return false
 		end 'notReassignShape'
 		return self.signatures.isManagedOpaqueTypeParamField(self.enclosingType, fieldName: self.tokenAt(selfPos + 2).value)
@@ -3754,7 +3766,7 @@ export type Parser
 		// lives in the descriptor scan (`opaqueFieldReassignAt`) and the emit (`emitOpaqueFieldReassign`), which
 		// run in the real parse where the layout is known — the two agree on a valid program, and disagree only
 		// on one the real parse already refuses.
-		if self.kindAt(selfPos + 1) != TokenKind.dot or self.kindAt(selfPos + 2) != TokenKind.identifier or self.kindAt(selfPos + 3) != TokenKind.equals or self.kindAt(selfPos + 4) != TokenKind.identifier 'notReassignShape'
+		if not self.fieldReassignHeadAt(selfPos) or self.kindAt(selfPos + 4) != TokenKind.identifier 'notReassignShape'
 			return false
 		end 'notReassignShape'
 		// The RHS must be JUST the parameter — a `.`/`(` after it would make it `next.x`/`next(...)`, a type error
