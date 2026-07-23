@@ -590,6 +590,10 @@ function validatePlainCall(project Project, func IrFunction, opIndex OpIndex, ca
 	// `tryCall` and never reaches `validatePlainCall`.
 	if isThrowingRuntimeCallee(callee) 'throwingBuiltin'
 		let callRange = project.opRanges.get(opIndex)
+		// Exactly TWO throwing runtime families exist (the GT/subprocess one and the array accessors), so this
+		// binary GT-else-array selection is exhaustive. A THIRD family added to `isThrowingRuntimeCallee` must
+		// add its own arm here — otherwise it would silently inherit the array wording (correct E3057 code,
+		// wrong construct named).
 		let message = "throwing subprocess call requires try: wrap `runProcess(…)` as `try runProcess(…) otherwise …` — a bare call drops the spawn-failure error" if isThrowingGtRuntimeCallee(callee) else "throwing array accessor requires try: wrap it as `try …(…) otherwise …` — a bare call drops the out-of-bounds error"
 		reportPositioned(project, code: ErrorCode.throwingFunctionRequiresTry, message: message, line: callRange.line, column: callRange.column, filePath: func.sourceFilePath)
 		return

@@ -1,7 +1,7 @@
 ---
 feature: async-subprocess
 status: stable
-keywords: [subprocess, process, spawn, async, await, runProcess, green-threads, scheduler, netpoll, yield, concurrency, throws, try, SubprocessError]
+keywords: [subprocess, process, spawn, async, await, runProcess, green-threads, scheduler, netpoll, yield, concurrency, throws, try]
 category: concurrency
 ---
 
@@ -14,11 +14,12 @@ thread** while the child runs, and returns the child's integer exit code once it
 wait: the thread parks on the child, hands control back to the scheduler, and RESUMES with its exit code once the
 child has exited — so other green threads run while a child is pending.
 
-`runProcess` is a **throwing** builtin (P1.5 #93): it throws `SubprocessError` and so must be called under `try`,
-exactly as a throwing array accessor is. It rides the same dual-register error ABI (`errorReturn`) an ordinary
-throwing call uses — the exit code in R8, the error flag in R10 — so `try runProcess(cmd) otherwise <handler>`
-catches the two failure paths (`spawnFailed`, `storeOverflow`) that used to abort the process, and a program can
-recover from them instead of dying.
+`runProcess` is a **throwing** builtin (P1.5 #93): its two failure paths — a spawn failure and a full process
+store — THROW rather than abort, so it must be called under `try`, exactly as a throwing array accessor is. It
+rides the same dual-register error ABI (`errorReturn`) an ordinary throwing call uses — the exit code in R8, the
+error flag in R10 — so `try runProcess(cmd) otherwise <handler>` catches the two failures that used to abort the
+process, and a program can recover from them instead of dying. Recovery today is by VALUE — any error routes to
+the `otherwise` handler; binding `otherwise (e)` to a specific case is a deferred P1.7 feature, as for `ArrayError`.
 
 ```text
 function runChild() returns int
@@ -42,10 +43,10 @@ thread's child is still running.
 `String` command line — borrowed, not consumed; a `float`/`int`/`bool` is refused at compile time. Its result is
 an integer (the exit code), so — unlike `sleep` — it may be used in value position (under `try`).
 
-If the command names no runnable executable (`CreateProcessA` fails outright), `runProcess` throws
-`SubprocessError.spawnFailed` rather than parking on a non-existent child — a deterministic error the caller
-catches, never a hang. Parking more than the store's 64-slot capacity concurrently throws
-`SubprocessError.storeOverflow` rather than corrupting the parallel arrays.
+If the command names no runnable executable (`CreateProcessA` fails outright), `runProcess` throws its
+**spawn-failure** error rather than parking on a non-existent child — a deterministic error the caller catches,
+never a hang. Parking more than the store's 64-slot capacity concurrently throws its **store-overflow** error
+rather than corrupting the parallel arrays. Both used to abort the process (exit 1 / exit 70); now they recover.
 
 ## Tests
 
@@ -221,7 +222,7 @@ end 'main'
 <!-- test: async-subprocess.spawn-failure-caught -->
 <!-- targets: x64-windows -->
 A command that names no runnable executable makes `CreateProcessA` fail outright, leaving a null child handle. The
-runtime now THROWS `SubprocessError.spawnFailed` (P1.5 #93) rather than aborting the process — so the direct
+runtime now THROWS its spawn-failure error (P1.5 #93) rather than aborting the process — so the direct
 `try runProcess(bad) otherwise 42` on GT0 catches it and returns the fallback 42. Before #93 this aborted with exit
 1; now the program runs to a normal return, proving the spawn failure is recoverable, not fatal.
 ```maxon
@@ -258,7 +259,7 @@ concurrently must NOT write past the 64-slot parallel arrays. Sixty-five childre
 before any await (since P1.5-B2 #88 a DISCARDED promise is dropped-cancelled, so the children must be kept alive by
 distinct bindings). `await p64` drives them in run-queue order: the first sixty-four (`p00`..`p63`) each park on the
 process store (slots 0..63), and the sixty-fifth park (`p64`) finds the store full — so `__gt_process_run` THROWS
-`SubprocessError.storeOverflow` (P1.5 #93) rather than aborting with exit 70. `p64`'s `child` catches it via
+its store-overflow error (P1.5 #93) rather than aborting with exit 70. `p64`'s `child` catches it via
 `otherwise 88` and completes with 88, which `await p64` returns — proving the 64-slot bound is now a RECOVERABLE
 error, not a fatal abort. The other sixty-four promises are still parked at scope exit and are dropped-cancelled
 (#88), so the live count balances. This is heavier than the other cases (~64 real child spawns before the overflow)
@@ -357,7 +358,7 @@ error E3005: <fragment>:3:2: 'runProcess' requires a String, but its argument is
 
 <!-- test: async-subprocess.error.bare-call-requires-try -->
 <!-- targets: x64-windows -->
-`runProcess` is a throwing builtin (P1.5 #93), so a bare call that drops its `SubprocessError` is refused (E3057) —
+`runProcess` is a throwing builtin (P1.5 #93), so a bare call that drops its error flag is refused (E3057) —
 the exact mirror of the throwing-array-accessor rule. A bare `runProcess` would read only the exit code (R8) and
 silently drop the spawn-failure/store-overflow flag (R10), so the compiler forces a `try`.
 ```maxon

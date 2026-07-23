@@ -212,7 +212,7 @@ let TimerNoDeadline = 0
 // ⚠ CAPACITY IS `MAXIMUM_WAIT_OBJECTS` = 64, and it is a HARD, ENFORCED bound — not a comment. `WaitForMultipleObjects`
 // refuses an `nCount` above 64, so at most 64 children may be parked SIMULTANEOUSLY. `__gt_proc_add` CHECKS
 // `count >= ProcStoreCapacity` before every append and reports the `storeOverflow` flag — which `__gt_process_run`
-// throws as `SubprocessError.storeOverflow` (P1.5 #93) — rather than writing `procHandles[64]`/`procGts[64]` past the
+// throws as `RunProcessError.storeOverflow` (P1.5 #93) — rather than writing `procHandles[64]`/`procGts[64]` past the
 // 64-slot slab arrays; an unchecked append would be heap corruption, and then `emitProcWait` would pass `pc > 64` to
 // `WaitForMultipleObjects`, which fails → the same null-handle busy-spin class. The subprocess-seed specs park ≤3 at
 // once (three concurrent children; one process + one sleeper in the interleave case), far below the cap, and the
@@ -248,39 +248,52 @@ let TrailingNulBytes = 1  // the one extra byte for the cmdline's NUL terminator
 
 // ⭐ **`runProcess` IS A THROWING BUILTIN (P1.5 #93) — its two USER-REACHABLE failure paths THROW, they no
 // longer ABORT.** Both used to `emitRuntimeAbort` (spawn failure exit 1, store overflow exit 70); now each hands
-// the caller a `SubprocessError` through the dual-register `errorReturn` ABI, exactly as a throwing array
+// the caller a `RunProcessError` through the dual-register `errorReturn` ABI, exactly as a throwing array
 // accessor hands back an `ArrayError` — so `try runProcess(cmd) otherwise <h>` catches them and the program
 // RECOVERS rather than dying. The two paths:
 //
-//   * `SubprocessError.spawnFailed` — `__gt_process_run` when `CreateProcessA` FAILS (a command whose first token
+//   * `RunProcessError.spawnFailed` — `__gt_process_run` when `CreateProcessA` FAILS (a command whose first token
 //     is not a runnable executable). On failure CreateProcessA leaves the slab-zeroed PROCESS_INFORMATION
 //     untouched, so `hProcess == 0` detects it — and the runtime MUST NOT park on a null handle, which would
 //     busy-spin the netpoll forever (WaitForMultipleObjects on a NULL handle returns WAIT_FAILED immediately, so
 //     the poll never fires). Throwing hands the caller a catchable error instead of the seed's old hard abort.
-//   * `SubprocessError.storeOverflow` — `__gt_proc_add` reports the process store is FULL (a program parks more
+//   * `RunProcessError.storeOverflow` — `__gt_proc_add` reports the process store is FULL (a program parks more
 //     than `ProcStoreCapacity` = 64 children concurrently, beyond `WaitForMultipleObjects`'s `MAXIMUM_WAIT_OBJECTS`),
 //     and `__gt_process_run` propagates it as a throw rather than writing past the 64-slot parallel arrays. A safe,
 //     RECOVERABLE response to the seed's documented concurrency ceiling; real >64-way fan-in is the later IOCP rung.
 //
 // The throws-type NAME is a bare label on the clause (like `ArrayRuntime.ArrayErrorTypeName`) — the compiler
-// recognizes `__gt_process_run` as a throwing runtime callee by name, and recovery today is via `otherwise
-// <value>` (any nonzero flag routes to the handler). Binding `otherwise (e)` to a `SubprocessError` CASE and
-// `match e`ing it is deferred exactly as it is for `ArrayError` (a P1.7 enum-case-pattern feature).
-let SubprocessErrorTypeName = "SubprocessError"
+// recognizes `__gt_process_run` as a throwing runtime callee by CALLEE name (not by this label), and recovery
+// today is via `otherwise <value>` (any nonzero flag routes to the handler). Binding `otherwise (e)` to a case
+// and `match e`ing it is deferred exactly as it is for `ArrayError` (a P1.7 enum-case-pattern feature).
+//
+// ⚠ **THE NAME IS `"RunProcessError"`, DELIBERATELY *NOT* `"SubprocessError"` — DO NOT "FIX" IT BACK.**
+// `stdlib/Subprocess.maxon` already declares `export union SubprocessError implements Error`, a BOXED,
+// String-carrying union with a DIFFERENT case set (`executableNotFound`/`spawnFailed`/`ioFailed`/`timeout`/
+// `inputTooLarge`, no `storeOverflow`), and shv2 COMPILES it (it is in the stdlib cone). That union is the
+// eventual USER-FACING subprocess error type (`Subprocess.run` throws it), reachable only once managed-error
+// async lands (Design B, deferred). This seed's error is a SCALAR stand-in with its OWN two ordinals; sharing
+// the union's name would be the project's signature ONE-NAME-TWICE bug AND a wild-free trap — the day an
+// `otherwise (e)` binding resolved a builtin's throws-label `"SubprocessError"` to that boxed union it would
+// bind the R10 flag (1/2) as a heap pointer and free `0x1`/`0x2`. A distinct name that names NO declared union
+// makes that unrepresentable: `throwsTypeIsBoxedUnion("RunProcessError")` is false, so an `otherwise (e)`
+// decode lands on the scalar ordinals below (correct), never a box. Reconciling `runProcess` onto the real
+// `SubprocessError` union is the full-Subprocess-API / managed-error rung.
+let RunProcessErrorTypeName = "RunProcessError"
 
-// The `SubprocessError` case ORDINALS — they ride R10 as `ordinal + ErrorFlagOrdinalBias`, the SAME scalar-error
+// The `RunProcessError` case ORDINALS — they ride R10 as `ordinal + ErrorFlagOrdinalBias`, the SAME scalar-error
 // encoding a source `throw E.case` uses (`LowerMaxonToStd.lowerThrowError`), so the day an `otherwise (e)` binding
 // lands its decode (`e = flag - bias`, `parseOtherwiseBlock`) recovers the right case with no third copy of the
 // bias. `0` is reserved by the bias for "no error in flight".
-let SubprocessSpawnFailedOrdinal = 0 as ParsedInt
-let SubprocessStoreOverflowOrdinal = 1 as ParsedInt
+let RunProcessSpawnFailedOrdinal = 0 as ParsedInt
+let RunProcessStoreOverflowOrdinal = 1 as ParsedInt
 
 // The R10 error-flag VALUES the two throws emit and a successful `runProcess` clears — the ordinals biased by the
 // one `ErrorFlagOrdinalBias` (never a second literal, so the runtime encode cannot drift from the parser decode),
-// and `SubprocessNoError` (0) alongside a real exit code, exactly as `ArrayRuntime.NoErrorFlag` is for an accessor.
-let SubprocessSpawnFailedFlag = SubprocessSpawnFailedOrdinal + ErrorFlagOrdinalBias
-let SubprocessStoreOverflowFlag = SubprocessStoreOverflowOrdinal + ErrorFlagOrdinalBias
-let SubprocessNoError = 0 as ParsedInt
+// and `RunProcessNoError` (0) alongside a real exit code, exactly as `ArrayRuntime.NoErrorFlag` is for an accessor.
+let RunProcessSpawnFailedFlag = RunProcessSpawnFailedOrdinal + ErrorFlagOrdinalBias
+let RunProcessStoreOverflowFlag = RunProcessStoreOverflowOrdinal + ErrorFlagOrdinalBias
+let RunProcessNoError = 0 as ParsedInt
 
 // --- Monotonic clock (P1.5 mid-body-yield) ---
 // `ns = ticks * 1e9 / freq`, evaluated as the OVERFLOW-SAFE split identity
@@ -434,10 +447,16 @@ export function isGtRuntimeCallee(callee ByteArray) returns bool
 end 'isGtRuntimeCallee'
 
 // The THROWING GT runtime callees (P1.5 #93). `__gt_process_run` returns via the dual-register `errorReturn` ABI
-// and can throw `SubprocessError` (`spawnFailed`/`storeOverflow`), so a `runProcess` call MUST become a `tryCall`
+// and can throw `RunProcessError` (`spawnFailed`/`storeOverflow`), so a `runProcess` call MUST become a `tryCall`
 // (under a `try`, which `rewriteLastCallToTryCall` converts). The GT-side twin of
 // `ArrayRuntime.isThrowingArrayRuntimeCallee`: the two are composed by `isThrowingRuntimeCallee`, read at the ONE
 // call site in the parser (E3055 accept) and the ONE in SemanticCheck (E3057 reject) so those two cannot drift.
+// ⚠ This names `__gt_process_run` as throwing; `buildGtProcessRun` stamps its `throws` clause. Those two facts
+// must agree, and — unlike `ArrayRuntime.verifyThrowingAccessorsMatchPredicate` — there is no install-time guard
+// tying them. That is deliberate and proportionate: there is exactly ONE throwing GT callee, both sides key on
+// the SAME `GtProcessRunName` constant (not a copied literal), and subprocess is x64-only, so the wasm-signature
+// drift the array guard protects against cannot arise here (E3074 rejects subprocess on wasm). If a SECOND
+// throwing GT callee is ever added, add the guard rather than a second name in this `or`.
 export function isThrowingGtRuntimeCallee(callee ByteArray) returns bool
 	return callee.equals(GtProcessRunName)
 end 'isThrowingGtRuntimeCallee'
@@ -1862,10 +1881,10 @@ end 'buildGtSleep'
 // corruption), and then hand `WaitForMultipleObjects` a `pc > MAXIMUM_WAIT_OBJECTS` it refuses.
 //
 // ⭐ **A FULL STORE REPORTS the `storeOverflow` FLAG rather than aborting (P1.5 #93).** It returns
-// `SubprocessNoError` (0) when the child was parked and `SubprocessStoreOverflowFlag` when the store was full and
+// `RunProcessNoError` (0) when the child was parked and `RunProcessStoreOverflowFlag` when the store was full and
 // NOTHING was appended (the GT stays un-parked). Its sole caller `__gt_process_run` propagates that flag verbatim
-// as a `SubprocessError.storeOverflow` throw — so the seed's documented concurrency ceiling is now a RECOVERABLE
-// error, not a hard, safe bound abort (see `SubprocessErrorTypeName`, `ProcStoreCapacity`).
+// as a `RunProcessError.storeOverflow` throw — so the seed's documented concurrency ceiling is now a RECOVERABLE
+// error, not a hard, safe bound abort (see `RunProcessErrorTypeName`, `ProcStoreCapacity`).
 function buildGtProcAdd(module StdModule)
 	var func = IrFunction.createFromStd(GtProcAddName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(2)
@@ -1891,7 +1910,7 @@ function buildGtProcAdd(module StdModule)
 	// overflow: the store is full — return the `storeOverflow` flag rather than write past the 64-slot arrays.
 	// Nothing is appended and the GT is NOT marked waiting, so `__gt_process_run` must throw instead of parking.
 	let overflowFlag = ids.mint()
-	module.appendOp(overflow, op: StdOp.const(overflowFlag, value: SubprocessStoreOverflowFlag, valueType: StdType.i64))
+	module.appendOp(overflow, op: StdOp.const(overflowFlag, value: RunProcessStoreOverflowFlag, valueType: StdType.i64))
 	module.setTerminator(overflow, op: StdOp.ret(overflowFlag))
 
 	// doAdd: append the entry to both parallel arrays, bump the count, and mark the GT waiting.
@@ -1928,7 +1947,7 @@ function buildGtProcAdd(module StdModule)
 	module.appendOp(doAdd, op: StdOp.storeIndirect(gt, offset: GtOffIoHandle, valueId: handle, valueType: StdType.i64))
 	// The child was parked — report no error so the caller yields and later reaps.
 	let addedOk = ids.mint()
-	module.appendOp(doAdd, op: StdOp.const(addedOk, value: SubprocessNoError, valueType: StdType.i64))
+	module.appendOp(doAdd, op: StdOp.const(addedOk, value: RunProcessNoError, valueType: StdType.i64))
 	module.setTerminator(doAdd, op: StdOp.ret(addedOk))
 
 	module.functions.push(func)
@@ -2075,14 +2094,14 @@ end 'buildGtProcCheck'
 // as `__print_string` does; ownership stays with the caller. Lazily runs `__gt_init` first (a top-level
 // `runProcess` may reach here without ever having spawned a green thread).
 //
-// ⭐ **A THROWING FUNCTION (P1.5 #93)** — its `throws SubprocessError` clause makes the x64/wasm backends give it
+// ⭐ **A THROWING FUNCTION (P1.5 #93)** — its `throws RunProcessError` clause makes the x64/wasm backends give it
 // the dual-register `errorReturn` ABI (exit code in R8, error flag in R10), the same shape a throwing array
-// accessor uses. Every exit is an `errorReturn`: the reap path returns `(code, SubprocessNoError)`, a
-// `CreateProcessA` failure returns `(0, SubprocessSpawnFailedFlag)`, and a full process store propagates
+// accessor uses. Every exit is an `errorReturn`: the reap path returns `(code, RunProcessNoError)`, a
+// `CreateProcessA` failure returns `(0, RunProcessSpawnFailedFlag)`, and a full process store propagates
 // `__gt_proc_add`'s `storeOverflow` flag verbatim (`(0, flag)`). The front end recognizes `__gt_process_run` as a
 // throwing runtime callee (`isThrowingGtRuntimeCallee`), so a `runProcess` call must be a `tryCall`.
 function buildGtProcessRun(module StdModule)
-	var func = IrFunction.createFromStd(GtProcessRunName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, throwsTypeName: ThrowsClause.throwing(SubprocessErrorTypeName))
+	var func = IrFunction.createFromStd(GtProcessRunName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, throwsTypeName: ThrowsClause.throwing(RunProcessErrorTypeName))
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry")
@@ -2208,17 +2227,17 @@ function buildGtProcessRun(module StdModule)
 	module.appendOp(afterCopy, op: StdOp.cmp(spawnFailedCmp, lhs: hProcess, rhs: spawnZeroConst, pred: StdCmpPred.eq, operandType: StdType.i64))
 	module.setTerminator(afterCopy, op: StdOp.condBranch(spawnFailedCmp, thenBlockId: spawnFailed.id, elseBlockId: spawnOk.id))
 
-	// spawnFailed: the command names no runnable executable — THROW `SubprocessError.spawnFailed` (P1.5 #93) rather
+	// spawnFailed: the command names no runnable executable — THROW `RunProcessError.spawnFailed` (P1.5 #93) rather
 	// than park on a null handle. The primary register carries a `0` sentinel the catcher ignores (the flag is
-	// non-zero), and the flag is `SubprocessSpawnFailedFlag`.
+	// non-zero), and the flag is `RunProcessSpawnFailedFlag`.
 	let spawnFailSentinel = ids.mint()
 	module.appendOp(spawnFailed, op: StdOp.const(spawnFailSentinel, value: 0, valueType: StdType.i64))
 	let spawnFailFlag = ids.mint()
-	module.appendOp(spawnFailed, op: StdOp.const(spawnFailFlag, value: SubprocessSpawnFailedFlag, valueType: StdType.i64))
+	module.appendOp(spawnFailed, op: StdOp.const(spawnFailFlag, value: RunProcessSpawnFailedFlag, valueType: StdType.i64))
 	module.setTerminator(spawnFailed, op: StdOp.errorReturn(spawnFailSentinel, errorFlagId: spawnFailFlag))
 
 	// spawnOk: close the (unneeded) thread handle, then park the current GT on the process. `__gt_proc_add` returns
-	// `SubprocessNoError` (parked) or the `storeOverflow` flag (store full, nothing appended) — on overflow →
+	// `RunProcessNoError` (parked) or the `storeOverflow` flag (store full, nothing appended) — on overflow →
 	// `overflowReturn` (throw), else → `parkOk` (hand control to the scheduler).
 	let hThread = ids.mint()
 	module.appendOp(spawnOk, op: StdOp.loadIndirect(hThread, addrId: procInfoPtr, offset: ProcInfoHThreadOffset, valueType: StdType.i64))
@@ -2231,12 +2250,12 @@ function buildGtProcessRun(module StdModule)
 	let addResult = ids.mint()
 	module.appendOp(spawnOk, op: StdOp.call(addResult, callee: GtProcAddName, args: args2(selfGt, second: hProcess)))
 	let addZeroConst = ids.mint()
-	module.appendOp(spawnOk, op: StdOp.const(addZeroConst, value: SubprocessNoError, valueType: StdType.i64))
+	module.appendOp(spawnOk, op: StdOp.const(addZeroConst, value: RunProcessNoError, valueType: StdType.i64))
 	let addOverflowed = ids.mint()
 	module.appendOp(spawnOk, op: StdOp.cmp(addOverflowed, lhs: addResult, rhs: addZeroConst, pred: StdCmpPred.ne, operandType: StdType.i64))
 	module.setTerminator(spawnOk, op: StdOp.condBranch(addOverflowed, thenBlockId: overflowReturn.id, elseBlockId: parkOk.id))
 
-	// overflowReturn: the process store was full, so the GT could not park — THROW `SubprocessError.storeOverflow`
+	// overflowReturn: the process store was full, so the GT could not park — THROW `RunProcessError.storeOverflow`
 	// (P1.5 #93), propagating `__gt_proc_add`'s flag VERBATIM. The child WAS spawned, so close its handle to abandon
 	// it (it runs to completion independently, exactly as the parked-drop cancel abandons a child) — an un-parked
 	// GT never reaches `reap` to close the handle.
@@ -2299,9 +2318,9 @@ function buildGtProcessRun(module StdModule)
 	module.appendOp(reap, op: StdOp.loadIndirect(code, addrId: codePtr, offset: 0, valueType: StdType.i64))
 	module.appendOp(reap, op: StdOp.osCloseHandle(reapHandle))
 	// A THROWING function's successful exit still writes BOTH registers (P1.5 #93) — the child's exit code in the
-	// primary, `SubprocessNoError` in the flag — so the `try` caller reads flag 0 and takes the success path.
+	// primary, `RunProcessNoError` in the flag — so the `try` caller reads flag 0 and takes the success path.
 	let reapNoError = ids.mint()
-	module.appendOp(reap, op: StdOp.const(reapNoError, value: SubprocessNoError, valueType: StdType.i64))
+	module.appendOp(reap, op: StdOp.const(reapNoError, value: RunProcessNoError, valueType: StdType.i64))
 	module.setTerminator(reap, op: StdOp.errorReturn(code, errorFlagId: reapNoError))
 
 	module.functions.push(func)
