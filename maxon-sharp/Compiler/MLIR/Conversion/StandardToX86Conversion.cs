@@ -47,9 +47,15 @@ public static class StandardToX86Conversion {
     // The merge preserves deterministic output: functions are added in order and
     // rdata is appended in order, replicating the only cross-function dedup
     // (AbsMaskLabel). ConvertFunction itself touches no shared module state.
+    // Snapshot the debug-info flag on THIS (orchestrating) thread. `Compiler.DebugInfo` is
+    // [ThreadStatic] and set only on the main thread, so the parallel workers below would otherwise
+    // read its default (false) and silently drop every source span for whichever functions lowered
+    // off-thread — a nondeterministic, per-function loss of line rows in the .mxdbg (the exe is
+    // unaffected). Captured once here, it is correct on every worker.
+    bool debugInfo = Compiler.DebugInfo;
     var converted = ParallelFunctions.Map(module.Functions, func => {
       try {
-        return ConvertFunction(func);
+        return ConvertFunction(func, debugInfo);
       } catch (Exception ex) {
         throw new InvalidOperationException($"Error converting function '{func.Name}': {ex.Message}", ex);
       }
@@ -70,7 +76,7 @@ public static class StandardToX86Conversion {
     return result;
   }
 
-  private static (IrFunction<X86Op> Func, List<(string label, byte[] bytes, int alignment)> Rdata) ConvertFunction(IrFunction<StandardOp> func) {
+  private static (IrFunction<X86Op> Func, List<(string label, byte[] bytes, int alignment)> Rdata) ConvertFunction(IrFunction<StandardOp> func, bool debugInfo) {
     // Per-function rdata buffer — merged into the output module sequentially by
     // Run so parallel conversion never races on the shared rdata list.
     var rdataEntries = new List<(string label, byte[] bytes, int alignment)>();
@@ -80,12 +86,9 @@ public static class StandardToX86Conversion {
     // module-global and atomic (see field declarations); they are not reset.
     _inStdlib = func.IsStdlib;
     var newFunc = new IrFunction<X86Op>(func.Name, func.ParamNames, func.ParamTypes, func.ReturnType, func.ThrowsType) {
-      IsStdlib = func.IsStdlib,
-      // Carry the source anchor forward for the debug-info line table (file is a per-function fact).
-      SourceFilePath = func.SourceFilePath,
-      SourceLine = func.SourceLine,
-      SourceColumn = func.SourceColumn
+      IsStdlib = func.IsStdlib
     };
+    newFunc.CopySourceAnchorFrom(func);
 
     // Pre-scan: find which variables are actually loaded (read back from stack).
     // A variable is "live" if it appears in a load op, or if it's referenced
@@ -251,7 +254,9 @@ public static class StandardToX86Conversion {
       var x86Block = newFunc.Body.AddBlock(srcBlock.Name);
 
       // Debug-info span propagation (metadata only): mark where each Standard op's X86 ops begin.
-      var spanMarks = Compiler.DebugInfo ? new List<(int, SourceSpan)>() : null;
+      // Uses the flag captured on the orchestrating thread (see Run) — NOT the ThreadStatic, which
+      // reads false on parallel workers.
+      var spanMarks = debugInfo ? new List<(int, SourceSpan)>() : null;
 
       if (blockIdx == 0 || prevX86Block == null) {
         regManager.Reset();

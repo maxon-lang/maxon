@@ -236,13 +236,9 @@ public static partial class MaxonToStandardConversion {
         throw new InvalidOperationException($"Unhandled return type: {func.ReturnType.GetType().Name} in function '{func.Name}'");
       }
       var newFunc = new IrFunction<StandardOp>(func.Name, newParamNames, newParamTypes, newReturnType, func.ThrowsType) {
-        IsStdlib = func.IsStdlib,
-        // Carry the source anchor forward so the emitter can resolve this function's file for the
-        // debug-info line table (a function is single-file; its file lives here, not on each op).
-        SourceFilePath = func.SourceFilePath,
-        SourceLine = func.SourceLine,
-        SourceColumn = func.SourceColumn
+        IsStdlib = func.IsStdlib
       };
+      newFunc.CopySourceAnchorFrom(func);
       var valueMap = new Dictionary<MaxonValue, StdValue>();
       var literalMap = new Dictionary<MaxonValue, MaxonLiteralOp>();
       var varTypes = new Dictionary<string, string>();

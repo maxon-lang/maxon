@@ -18,22 +18,24 @@ public static class StandardToARM64Conversion {
     result.DebugStreamNames = module.DebugStreamNames;
     foreach (var (k, v) in module.TypeDefs) result.TypeDefs[k] = v;
 
+    // Snapshot the debug-info flag once on this thread. It is [ThreadStatic] (see
+    // StandardToX86Conversion for the failure mode). This loop is sequential today so reading it here
+    // is equivalent — but capturing and passing it keeps both target lowerings uniform and correct if
+    // this loop is ever parallelized like x64's.
+    bool debugInfo = Compiler.DebugInfo;
     foreach (var func in module.Functions) {
-      var newFunc = ConvertFunction(func, result);
+      var newFunc = ConvertFunction(func, result, debugInfo);
       result.AddFunction(newFunc);
     }
 
     return result;
   }
 
-  private static IrFunction<ARM64Op> ConvertFunction(IrFunction<StandardOp> func, IrModule<ARM64Op> outputModule) {
+  private static IrFunction<ARM64Op> ConvertFunction(IrFunction<StandardOp> func, IrModule<ARM64Op> outputModule, bool debugInfo) {
     var newFunc = new IrFunction<ARM64Op>(func.Name, func.ParamNames, func.ParamTypes, func.ReturnType, func.ThrowsType) {
-      IsStdlib = func.IsStdlib,
-      // Carry the source anchor forward for the debug-info line table (file is a per-function fact).
-      SourceFilePath = func.SourceFilePath,
-      SourceLine = func.SourceLine,
-      SourceColumn = func.SourceColumn
+      IsStdlib = func.IsStdlib
     };
+    newFunc.CopySourceAnchorFrom(func);
 
     // Pre-scan: find which variables are actually loaded
     var loadedVariables = new HashSet<string>();
@@ -131,7 +133,8 @@ public static class StandardToARM64Conversion {
       var armBlock = newFunc.Body.AddBlock(srcBlock.Name);
 
       // Debug-info span propagation (metadata only): mark where each Standard op's ARM64 ops begin.
-      var spanMarks = Compiler.DebugInfo ? new List<(int, SourceSpan)>() : null;
+      // Uses the flag captured on the orchestrating thread (see Run), not the ThreadStatic.
+      var spanMarks = debugInfo ? new List<(int, SourceSpan)>() : null;
 
       if (blockIdx == 0 || prevBlock == null) {
         regManager.Reset();

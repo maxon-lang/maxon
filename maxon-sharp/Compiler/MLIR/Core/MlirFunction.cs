@@ -69,14 +69,21 @@ public class IrFunction<TOp>(string name, List<string> paramNames, List<IrType> 
   // "pure observer" contract — it is why the sidecar can be produced without perturbing .text.
   private Dictionary<TOp, SourceSpan>? _debugSpans;
 
-  public bool HasDebugSpans => _debugSpans is { Count: > 0 };
-
   public void SetDebugSpan(TOp op, SourceSpan span) => (_debugSpans ??= [])[op] = span;
 
   public bool TryGetDebugSpan(TOp op, out SourceSpan span) {
     if (_debugSpans != null) return _debugSpans.TryGetValue(op, out span);
     span = default;
     return false;
+  }
+
+  /// Carry the source anchor (file/line/column) forward from the function this one lowers. The file
+  /// is a per-function fact with one home, so each lowering pass copies it once through here rather
+  /// than repeating the three-field assignment in its new-function initializer.
+  public void CopySourceAnchorFrom<TOther>(IrFunction<TOther> source) where TOther : IPrintableOp {
+    SourceFilePath = source.SourceFilePath;
+    SourceLine = source.SourceLine;
+    SourceColumn = source.SourceColumn;
   }
 
   /// Create an independent deep copy of this function.
