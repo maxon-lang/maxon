@@ -8100,10 +8100,14 @@ public partial class ARM64CodeEmitter {
   /// maxon_subprocess_wait_collect(handle, timeoutMs) -> result | -1.
   /// Waits for the child (honouring timeoutMs), drains stdout then stderr,
   /// decodes status, builds the result. timeoutMs > 0 polls with a 1ms nanosleep
-  /// and SIGKILLs the child on the deadline (status reported as timedOut/124);
-  /// timeoutMs <= 0 blocks until exit. The wait runs BEFORE the drain so a
-  /// timed-out child is killed — its pipe write ends closed — before we read its
-  /// stdout/stderr to EOF (draining a live child would block until it exits).
+  /// until the child exits or the WALL-CLOCK deadline elapses — the loop tests
+  /// (maxon_current_time_ms() - startMs) >= timeoutMs, not an iteration count, so
+  /// a real timeout returns in ~timeoutMs rather than dilating under load — then
+  /// SIGKILLs the child (status reported as timedOut/124); timeoutMs <= 0 blocks
+  /// until exit. The wait runs BEFORE the drain so a timed-out child is killed —
+  /// its pipe write ends closed — before we read its stdout/stderr to EOF
+  /// (draining a live child would block until it exits). The result's durationMs
+  /// is the wall-clock elapsed (endMs - startMs), matching the x64/Windows twin.
   private void EmitMaxonSubprocessWaitCollectPosix() {
     EmitRuntimeFunctionStart("maxon_subprocess_wait_collect", 2, 0xA0);
     int n = _uniqueLabelCounter++;
@@ -8122,7 +8126,7 @@ public partial class ARM64CodeEmitter {
     string waitDone = $"__subp_wc_wd_{n}";
     // locals: 0x18 handle 0x28 outScratch 0x30 outLen 0x38 errScratch 0x40 errLen
     //   0x48 statusSlot 0x58 outMm 0x60 errMm 0x68 kind 0x70 code
-    //   0x78 timeoutMs 0x80 timedOutFlag 0x88 pollIter 0x90/0x98 nanosleep timespec
+    //   0x78 timeoutMs 0x80 timedOutFlag 0x88 startMs→elapsedMs 0x90/0x98 nanosleep timespec
     EmitReloadArg(1);                                            // timeoutMs → X1 (read before 0x18 is reused)
     EmitStoreToStack(0x78, ARM64Register.X1, 8);
     EmitReloadArg(0);
@@ -8130,19 +8134,24 @@ public partial class ARM64CodeEmitter {
     EmitStoreToStack(0x18, ARM64Register.X0, 8);
     EmitMovRegImm(ARM64Register.X0, 0);
     EmitStoreToStack(0x80, ARM64Register.X0, 8);                 // timedOutFlag = 0
+    EmitBranchLink("maxon_current_time_ms");                     // X0 = startMs (wall clock)
+    EmitStoreToStack(0x88, ARM64Register.X0, 8);                 // startMs
 
     // --- wait for the child, honouring timeoutMs ---
     EmitLoadFromStack(ARM64Register.X0, 0x78, 8);               // timeoutMs
     EmitCmpImm(ARM64Register.X0, 0);
     EmitBranchCond(ARM64ConditionCode.Le, blockingWait);
 
-    EmitMovRegImm(ARM64Register.X0, 0);
-    EmitStoreToStack(0x88, ARM64Register.X0, 8);                 // pollIter = 0
     DefineLabel(pollLoop);
-    EmitLoadFromStack(ARM64Register.X9, 0x88, 8);               // pollIter
-    EmitLoadFromStack(ARM64Register.X10, 0x78, 8);              // timeoutMs
+    // Wall-clock deadline: (now - startMs) >= timeoutMs → timed out. Counting poll
+    // iterations would dilate the deadline, since each iteration is a full waitpid
+    // syscall plus a 1ms nanosleep, not a 1ms tick.
+    EmitBranchLink("maxon_current_time_ms");                     // X0 = now
+    EmitLoadFromStack(ARM64Register.X1, 0x88, 8);              // startMs
+    EmitAluRegReg(0xCB000000, ARM64Register.X9, ARM64Register.X0, ARM64Register.X1); // X9 = now - startMs
+    EmitLoadFromStack(ARM64Register.X10, 0x78, 8);             // timeoutMs
     EmitCmpRegReg(ARM64Register.X9, ARM64Register.X10);
-    EmitBranchCond(ARM64ConditionCode.Ge, pollTimeout);         // deadline elapsed
+    EmitBranchCond(ARM64ConditionCode.Ge, pollTimeout);         // wall-clock deadline elapsed
     EmitLoadFromStack(ARM64Register.X0, 0x18, 8);
     EmitLoadIndirect(ARM64Register.X0, ARM64Register.X0, 0, 8);  // pid
     EmitAddSubImm(ARM64Register.X1, ARM64Register.X29, 0x48, isAdd: true); // &status
@@ -8158,9 +8167,6 @@ public partial class ARM64CodeEmitter {
     EmitAddSubImm(ARM64Register.X0, ARM64Register.X29, 0x90, isAdd: true);
     EmitMovRegImm(ARM64Register.X1, 0);
     EmitCallImport("nanosleep");
-    EmitLoadFromStack(ARM64Register.X9, 0x88, 8);
-    EmitAddSubImm(ARM64Register.X9, ARM64Register.X9, 1, isAdd: true);
-    EmitStoreToStack(0x88, ARM64Register.X9, 8);                 // pollIter++
     EmitBranch(pollLoop);
 
     // deadline: SIGKILL the child, flag the timeout, then blocking-reap it.
@@ -8306,6 +8312,15 @@ public partial class ARM64CodeEmitter {
     EmitCallImport("munmap");
     DefineLabel(skipMunmapErr);
 
+    // Wall-clock elapsed = now - startMs, computed BEFORE the result alloc: X9
+    // holds the result pointer through the store loop with no call between, and
+    // maxon_current_time_ms is a call — computing it here and stashing elapsed in
+    // the now-dead startMs slot keeps the alloc→store window call-free.
+    EmitBranchLink("maxon_current_time_ms");                     // X0 = endMs
+    EmitLoadFromStack(ARM64Register.X1, 0x88, 8);              // startMs
+    EmitAluRegReg(0xCB000000, ARM64Register.X0, ARM64Register.X0, ARM64Register.X1); // X0 = endMs - startMs
+    EmitStoreToStack(0x88, ARM64Register.X0, 8);                 // elapsedMs (reuses startMs slot)
+
     // build result (0x38): kind, code, stdoutBuf, stdoutLen, stderrBuf, stderrLen, duration
     EmitMovRegImm(ARM64Register.X0, 0x38);
     EmitBranchLink("mm_raw_alloc", zeroSecondArg: true);
@@ -8322,8 +8337,8 @@ public partial class ARM64CodeEmitter {
     EmitStoreIndirect(ARM64Register.X9, 32, ARM64Register.X1, 8); // stderrBuf
     EmitLoadFromStack(ARM64Register.X1, 0x40, 8);
     EmitStoreIndirect(ARM64Register.X9, 40, ARM64Register.X1, 8); // stderrLen
-    EmitMovRegImm(ARM64Register.X1, 0);
-    EmitStoreIndirect(ARM64Register.X9, 48, ARM64Register.X1, 8); // duration
+    EmitLoadFromStack(ARM64Register.X1, 0x88, 8);              // elapsedMs
+    EmitStoreIndirect(ARM64Register.X9, 48, ARM64Register.X1, 8); // durationMs
     EmitMovRegReg(ARM64Register.X0, ARM64Register.X9);
     EmitRuntimeFunctionEnd();
 
